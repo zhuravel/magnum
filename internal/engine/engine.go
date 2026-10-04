@@ -56,6 +56,8 @@ type GitHub interface {
 	// the since_review fallback when Details' latestReviews was truncated.
 	ReviewsWithMarker(ctx context.Context, owner, repo string, number int, marker string) ([]github.Review, error)
 	DismissReview(ctx context.Context, owner, repo string, number int, reviewID int64, message string) error
+	// CreateReview posts a manual verdict (verdict.go).
+	CreateReview(ctx context.Context, owner, repo string, number int, commitID, event, body string) (github.RESTReview, error)
 }
 
 // Herdr is the part of *herdr.Client the tick reads: one snapshot per tick

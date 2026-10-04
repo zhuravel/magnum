@@ -554,7 +554,8 @@ func (rd *round) dismissStale(ctx context.Context, event string, newID int64, ne
 	prev := rd.in.Previous
 	if rd.in.DryRun || prev == nil || prev.ID == 0 || prev.ID == newID || !rd.idCfg.DismissStale() ||
 		!isChangesRequested(prev.Event) || isChangesRequested(event) ||
-		prev.Former { // a former login's: the engine dismisses it as that identity
+		prev.Former || // a former login's: the engine dismisses it as that identity
+		prev.Manual { // the reviewer's own verdict stands until they change it
 		return
 	}
 	msg := fmt.Sprintf("Superseded by the newer magnum review of %s: %s", short(rd.in.TargetSHA), newURL)

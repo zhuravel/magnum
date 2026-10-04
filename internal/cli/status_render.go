@@ -6,6 +6,7 @@ package cli
 // errors, pause details, pane lines) goes through statusSafe first.
 
 import (
+	"cmp"
 	"fmt"
 	"io"
 	"slices"
@@ -444,6 +445,9 @@ func statusRenderDetail(w io.Writer, d statusDetail, now time.Time) {
 		}
 	}
 	fmt.Fprintf(w, "  head:      %s\n", statusSafe(head, 0))
+	if f := d.Findings; f != nil {
+		fmt.Fprintf(w, "  findings:  %s\n", statusSafe(findingsSentence(*f), 0))
+	}
 	switch {
 	case d.Slot != nil:
 		sha := store.Deref(d.Slot.Slot.CheckedOutSHA)
@@ -581,6 +585,28 @@ func statusRenderHistory(w io.Writer, runs []store.Run, now time.Time, isJudge f
 func inspOrDash(s string) string {
 	if s == "" {
 		return "-"
+	}
+	return s
+}
+
+// findingsSentence is a review summary on one line: the decision (and what
+// was posted instead), the findings by priority, the simplifications and the
+// earlier findings.
+func findingsSentence(f store.ReviewSummary) string {
+	decision := map[string]string{store.VerdictBlocking: "request changes", store.VerdictNonBlocking: "comment",
+		store.VerdictClean: "approve"}[f.Verdict]
+	want := map[string]string{store.VerdictBlocking: "REQUEST_CHANGES", store.VerdictNonBlocking: "COMMENT",
+		store.VerdictClean: "APPROVE"}[f.Verdict]
+	s := cmp.Or(decision, f.Verdict)
+	if f.Event != "" && want != "" && !strings.EqualFold(f.Event, want) {
+		s += " (posted as " + strings.ToLower(strings.ReplaceAll(f.Event, "_", " ")) + ")"
+	}
+	s += fmt.Sprintf(" at %s: P0 %d · P1 %d · P2 %d · P3 %d", sha7(f.SHA), f.Counts[0], f.Counts[1], f.Counts[2], f.Counts[3])
+	if f.Simplifications > 0 {
+		s += fmt.Sprintf(" · %d simplifications", f.Simplifications)
+	}
+	if f.Fixed+f.Open+f.Answered > 0 {
+		s += fmt.Sprintf("; earlier: %d fixed, %d open, %d answered", f.Fixed, f.Open, f.Answered)
 	}
 	return s
 }

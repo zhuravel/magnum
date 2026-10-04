@@ -299,6 +299,8 @@ type statusDetail struct {
 	LastRound  *tui.RoundTimings   `json:"last_round,omitempty"` // stage timings of the last round
 	// Attention explains why a PR in needs_attention needs the user.
 	Attention *attention.Reason `json:"attention,omitempty"`
+	// Findings is what magnum's latest posted review concluded.
+	Findings *store.ReviewSummary `json:"findings,omitempty"`
 
 	isJudge func(role string) bool // a configured judge's role name (actIsJudge)
 }

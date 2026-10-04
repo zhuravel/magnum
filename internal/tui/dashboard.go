@@ -143,6 +143,10 @@ type DashboardActions interface {
 	Unmute(ctx context.Context, ref string) (string, error)
 	Abort(ctx context.Context, ref string) (string, error)  // kill the PR's running review
 	Ignore(ctx context.Context, ref string) (string, error) // abort, mute and free the slot
+	// Approve and RequestChanges post the reviewer's own verdict on the head
+	// magnum reviewed (magnum approve / request-changes).
+	Approve(ctx context.Context, ref string) (string, error)
+	RequestChanges(ctx context.Context, ref string) (string, error)
 	Attention(ctx context.Context) (string, error)
 	OpenBrowser(ctx context.Context, url string) error
 }

@@ -250,6 +250,14 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 			}
 			out = append(out, row)
 		}
+		if sums, err := st.LastReviewSummaries(ctx, ids); err == nil {
+			for i := range out {
+				if s, ok := sums[ids[i]]; ok {
+					out[i].Findings = &tui.FindingsInfo{Counts: s.Counts, Simplifications: s.Simplifications,
+						Fixed: s.Fixed, Open: s.Open, Answered: s.Answered, Verdict: s.Verdict, Posted: s.Event, SHA: s.SHA}
+				}
+			}
+		}
 		if err := timings.fill(ctx, st, cfg, ids, out, inspNow()); err != nil {
 			return nil, err
 		}

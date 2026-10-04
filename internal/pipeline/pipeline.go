@@ -185,6 +185,9 @@ type PreviousReview struct {
 	SubmittedAt time.Time
 	// Login posted it ("" = unknown), for the record.
 	Login string
+	// Manual: the reviewer posted it by hand (magnum approve /
+	// request-changes): a round never dismisses it as its own stale review.
+	Manual bool
 	// Former: a former login of the PR posted it (RoundInput.FormerLogins).
 	// It is history the round reads, never a review it dismisses with its
 	// own credentials (the engine dismisses it as that identity). The engine

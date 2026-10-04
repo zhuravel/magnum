@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/tui"
 )
 
@@ -127,6 +128,22 @@ func (s *screenActions) Mute(ctx context.Context, ref string) (string, error) {
 
 func (s *screenActions) Unmute(ctx context.Context, ref string) (string, error) {
 	return s.target(ctx, "unmute", ref)
+}
+
+// Approve posts the reviewer's APPROVE on the reviewed head; the screen
+// asked first.
+func (s *screenActions) Approve(ctx context.Context, ref string) (string, error) {
+	return s.do(ctx, "approve", func(ctx context.Context, c *Context, d *actDeps) int {
+		return verdictMain(ctx, c, d, "approve", engine.ReqApprove, ref, verdictOpts{})
+	})
+}
+
+// RequestChanges posts the reviewer's REQUEST_CHANGES on the reviewed head;
+// the screen asked first.
+func (s *screenActions) RequestChanges(ctx context.Context, ref string) (string, error) {
+	return s.do(ctx, "request-changes", func(ctx context.Context, c *Context, d *actDeps) int {
+		return verdictMain(ctx, c, d, "request-changes", engine.ReqRequestChanges, ref, verdictOpts{})
+	})
 }
 
 // Abort kills the PR's running review; the screen asked first.

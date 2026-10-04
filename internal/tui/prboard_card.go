@@ -41,7 +41,7 @@ func (p prbPainter) helpContent(width int) []string {
 		{"i", "review with /simplify (asks y/N)"}, {"o", "open the " + judgeName(p.judge) + " pane"},
 		{"b", "open in the browser"}, {"p / u", "pin / unpin"}, {"M / U", "mute / unmute (asks y/N)"},
 		{"x", "release (asks y/N)"}, {"K", "kill the running review (asks y/N)"},
-		{"I", "ignore: kill, mute, free slot; U undoes"}, {"a", "jump to what needs attention"},
+		{"I", "ignore: kill, mute, free slot; U undoes"}, {"A / C", "approve / request changes (asks y/N)"}, {"a", "jump to what needs attention"},
 		{"y", "answer yes; any other key, enter too, cancels"},
 	})
 	keys := lipgloss.JoinHorizontal(lipgloss.Top, nav, "     ", acts)
@@ -249,6 +249,20 @@ func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
 	if r.Note != "" {
 		add("  " + p.st.Dim.Render(r.Note))
 	}
+	if f := r.Findings; f != nil {
+		add("", p.st.Section.Render("FINDINGS"))
+		for _, l := range findingsLines(*f) {
+			for _, w := range strings.Split(lipgloss.NewStyle().Width(max(inner-2, 10)).Render(l), "\n") {
+				add("  " + w)
+			}
+		}
+	}
+	if normState(r.State) == "baseline" {
+		add("", p.st.Section.Render("NOT REVIEWED"))
+		for _, w := range strings.Split(lipgloss.NewStyle().Width(max(inner-2, 10)).Render(notReviewedSentence), "\n") {
+			add("  " + w)
+		}
+	}
 	if t := r.LastRound; t != nil {
 		head := fmt.Sprintf("LAST ROUND (%d", t.Round)
 		if t.Kind != "" {
@@ -297,7 +311,10 @@ func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
 
 	acts := []hint{hint{"r", "review"}, hint{"R", "fresh review"}, hint{"i", "simplify"}, hint{"o", "open pane"}, hint{"b", "browser"},
 		hint{"p", "pin"}, hint{"u", "unpin"}, hint{"M", "mute"}, hint{"U", "unmute"}, hint{"x", "release"},
-		hint{"K", "kill review"}, hint{"I", "ignore"}, hint{"esc", "back"}}
+		hint{"K", "kill review"}, hint{"I", "ignore"}, hint{"A", "approve"}, hint{"C", "request changes"}, hint{"esc", "back"}}
+	if r.Findings == nil { // nothing magnum reviewed to approve or reject
+		acts = slices.DeleteFunc(acts, func(h hint) bool { return h.key == "A" || h.key == "C" })
+	}
 	if normState(r.State) == "ignored" { // U undoes the ignore; ignoring again means nothing
 		acts = slices.DeleteFunc(acts, func(h hint) bool { return h.key == "I" })
 		for i := range acts {
@@ -439,4 +456,46 @@ func (p prbPainter) timingParts(t RoundTimings) []string {
 		out = append(out, part(s.Name, s.Duration, s.Running, s.Failed))
 	}
 	return append(out, part("total", t.Total, t.Running, false))
+}
+
+// notReviewedSentence explains a baseline PR on its card.
+const notReviewedSentence = "Open before magnum began watching this repository, so magnum has not reviewed it. " +
+	"A push, a review request for you or a posting identity, or R (fresh review) starts one."
+
+// findingsLines say what the latest review concluded: the decision (and
+// what was posted instead, when the repository only lets it comment), the
+// findings by priority with the simplifications, and the earlier findings.
+func findingsLines(f FindingsInfo) []string {
+	decision := map[string]string{
+		"blocking":     "request changes",
+		"non_blocking": "comment (nothing blocks the merge)",
+		"clean":        "approve",
+	}[f.Verdict]
+	if decision == "" {
+		decision = f.Verdict
+	}
+	want := map[string]string{"blocking": "REQUEST_CHANGES", "non_blocking": "COMMENT", "clean": "APPROVE"}[f.Verdict]
+	line := "Decision: " + decision
+	if f.Posted != "" && want != "" && !strings.EqualFold(f.Posted, want) {
+		line += "; posted as " + strings.ToLower(strings.ReplaceAll(f.Posted, "_", " ")) +
+			" (A approves, C requests changes)"
+	}
+	out := []string{line}
+	var parts []string
+	for i, n := range f.Counts {
+		parts = append(parts, fmt.Sprintf("P%d %d", i, n))
+	}
+	counts := strings.Join(parts, " · ")
+	switch f.Simplifications {
+	case 0:
+	case 1:
+		counts += " · 1 simplification suggested"
+	default:
+		counts += fmt.Sprintf(" · %d simplifications suggested", f.Simplifications)
+	}
+	out = append(out, counts)
+	if f.Fixed+f.Open+f.Answered > 0 {
+		out = append(out, fmt.Sprintf("Earlier findings: %d fixed, %d still open, %d answered", f.Fixed, f.Open, f.Answered))
+	}
+	return out
 }

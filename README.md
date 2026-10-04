@@ -345,6 +345,7 @@ code; `magnum stats` reports them per role.
 | `magnum pick` | Filterable PR picker; the herdr popup and ctrl+click on PR links use it. |
 | `magnum pin\|unpin\|release\|mute\|unmute <ref>` | Hold a PR's slot and sessions, hand them back, stop automation for a PR. |
 | `magnum abort <ref>` | Kill a PR's running review: its agents are interrupted, its runs abandoned, its sessions parked and a pool slot handed back. The PR returns to reviewed (or baseline) until the next push. |
+| `magnum approve <ref> [-m TEXT] [--force]`, `magnum request-changes <ref> [-m TEXT] [--force]` | Your own verdict on the head magnum reviewed, posted by the daemon as the PR's posting identity with a body that names magnum's review and its findings: for repositories where magnum only comments, or when you decide differently. The head must still be the reviewed one unless `--force`. A manual approval follows the head like magnum's own; magnum's later rounds never dismiss a manual verdict as their own stale review. Board keys `A` and `C`. |
 | `magnum ignore <ref>` | Abort, then mute the PR as ignored and free its slot: the daemon never queues it again until `magnum unmute <ref>`, which undoes the ignore. |
 | `magnum notes <repo> [--edit]` | The repository notes every role reads first and the judge rewrites after a round that taught it something (`state/notes/<owner>/<repo>.md`): what the repo is, how to test and QA it, known pitfalls. |
 | `magnum cleanup [--dry-run] [--pr <ref>] [--slot <name>] [--orphans [--slug X]] [--shrink] [--external --slot repoN]` | Storage cleanup with a reviewable plan: closed PRs, orphan databases, idle slots, manual worktrees. |
@@ -367,8 +368,15 @@ badge, the last review (who, verdict, age, ⟳ when the head moved since), what 
 per-reviewer table and the last round's stage timings (fetch/checkout, each role, verify, total); `/`
 filters; `v` cycles the views; `s`/`S` sort; `r`, `R`, `i` start review variants; `o` opens the pane;
 `p`/`u` pin; `x` releases; `M`/`U` mute; `K` kills the running review; `I` ignores the PR (an ignored
-row is greyed with its title struck through, and `U` unmutes it, which stops ignoring it); `b` opens the
-browser; `tab` switches to the status dashboard. Every action that stops or starts work asks y/N first.
+row is greyed with its title struck through, and `U` unmutes it, which stops ignoring it); `A` approves
+and `C` requests changes as the PR's posting identity (see `magnum approve`); `b` opens the browser;
+`tab` switches to the status dashboard. Every action that stops or starts work asks y/N first.
+
+FINDINGS shows what magnum's latest review concluded, also where its repository lets it only comment:
+the verdict (✗ blocking, ● comment, ✔ clean), the findings by priority (`P1 P2×3`) and the optional
+simplifications it suggested (`✂4`); the card spells out the decision, what was posted instead, the
+counts and the earlier findings. A PR that was open before magnum began watching its repository reads
+"not reviewed": a push, a review request for you or a posting identity, or `R` starts its first review.
 
 The views are `all`, `magnum` (what Magnum reviewed or is reviewing: not baseline or ineligible), `mine`
 (assigned to you or your review requested) and `ready` (approved, no changes requested, not a draft); the

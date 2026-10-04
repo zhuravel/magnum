@@ -57,6 +57,7 @@ func RenderPRBoard(rows []PRBoardRow, width int, opts PRBoardOptions) string {
 // prbGlyphs are the symbols the board draws, in Unicode or plain ASCII.
 type prbGlyphs struct {
 	approved, changes, commented, pending, dismissed, other string
+	nonBlocking, simplify, times                            string
 	stale, mine, pin, errMark, fail, ok                     string
 	cursor, dash, minus, atLeast, rule, up, down, dot       string
 	sortDesc, sortAsc, refresh, sep, chipSep                string
@@ -68,6 +69,7 @@ func newPRBGlyphs(ascii bool) prbGlyphs {
 		return prbGlyphs{
 			approved: "+", changes: "x", commented: "c", pending: "?", dismissed: "-", other: "*",
 			stale: "~", mine: "*", pin: "pin", errMark: "!", fail: "x", ok: "+",
+			nonBlocking: "~", simplify: "s", times: "x",
 			cursor: ">", dash: "-", minus: "-", atLeast: ">=", rule: "-", up: "^", down: "v", dot: "",
 			sortDesc: "v", sortAsc: "^", refresh: "at", sep: " | ", chipSep: ":",
 			spinner: spinner.Line,
@@ -76,6 +78,7 @@ func newPRBGlyphs(ascii bool) prbGlyphs {
 	return prbGlyphs{
 		approved: "✔", changes: "✗", commented: "💬", pending: "◌", dismissed: "⊘", other: "•",
 		stale: "⟳", mine: "★", pin: "📌", errMark: "!", fail: "✗", ok: "✔",
+		nonBlocking: "●", simplify: "✂", times: "×",
 		cursor: "▌", dash: "—", minus: "−", atLeast: "≥", rule: "─", up: "▲", down: "▼", dot: "●",
 		sortDesc: "↓", sortAsc: "↑", refresh: "↻", sep: " · ",
 		spinner: spinner.MiniDot,
@@ -132,6 +135,8 @@ func newPRBPalette(st styles) prbPalette {
 // prbStateLabels are the state names the board shows.
 var prbStateLabels = map[string]string{
 	"rereview_pending": "re-review", "needs_attention": "attention",
+	// baseline: open before magnum began watching the repository (the card says what starts a review)
+	"baseline": "not reviewed",
 }
 
 func stateLabel(state string) string {
@@ -352,20 +357,21 @@ const (
 	colUpdated
 	colState
 	colLastReview
+	colFindings
 	colSince
 	colReviewers
 	prbNumCols
 )
 
-var prbColTitles = [prbNumCols]string{"REPO", "#", "TITLE", "AUTHOR", "ASSIGNEE", "UPDATED", "STATE", "LAST REVIEW", "SINCE REVIEW", "REVIEWERS"}
+var prbColTitles = [prbNumCols]string{"REPO", "#", "TITLE", "AUTHOR", "ASSIGNEE", "UPDATED", "STATE", "LAST REVIEW", "FINDINGS", "SINCE REVIEW", "REVIEWERS"}
 
 var (
 	// prbDropOrder is which columns give way, in turn, on a narrow screen.
-	prbDropOrder = []prbCol{colAssignee, colSince, colAuthor, colUpdated, colLastReview, colReviewers}
+	prbDropOrder = []prbCol{colAssignee, colSince, colAuthor, colUpdated, colLastReview, colReviewers, colFindings}
 	// prbFlexMin is the narrowest the flexible columns get; the others
 	// keep their content's width (up to prbCap).
 	prbFlexMin = map[prbCol]int{colTitle: 18, colReviewers: 12}
-	prbCap     = map[prbCol]int{colRef: 28, colNum: 7, colAuthor: 14, colAssignee: 14, colLastReview: 22, colReviewers: 44}
+	prbCap     = map[prbCol]int{colRef: 28, colNum: 7, colAuthor: 14, colAssignee: 14, colLastReview: 22, colFindings: 22, colReviewers: 44}
 )
 
 const prbMarkW = 2 // the cursor mark before each row
@@ -460,6 +466,7 @@ func (p prbPainter) cells(r PRBoardRow, since [3]int) prbCells {
 	cs.c[colUpdated] = p.ageCell(r.UpdatedAt)
 	cs.c[colState] = p.stateWaitCell(r)
 	cs.c[colLastReview] = p.lastReviewCell(r.LastReview)
+	cs.c[colFindings] = p.findingsCell(r.Findings)
 	cs.c[colSince] = p.sinceCell(r.SinceReview, since)
 	cs.revs = p.reviewerChips(r.Reviewers)
 	return cs
@@ -580,6 +587,47 @@ func (p prbPainter) stateCell(state string) cell {
 		return p.dash()
 	}
 	return cell{{" " + stateLabel(s) + " ", p.pal.pills[s]}}
+}
+
+// findingsCell is the latest review's verdict glyph, its findings by
+// priority ("P1 P2×3") and its simplifications ("✂4"): what the review
+// concluded, also where it could only comment.
+func (p prbPainter) findingsCell(f *FindingsInfo) cell {
+	if f == nil {
+		return p.dash()
+	}
+	var c cell
+	switch f.Verdict {
+	case "blocking":
+		c = append(c, seg{p.g.changes + " ", p.pal.red})
+	case "non_blocking":
+		c = append(c, seg{p.g.nonBlocking + " ", p.pal.yellow})
+	default:
+		c = append(c, seg{p.g.ok + " ", p.pal.green})
+	}
+	styles := [4]lipgloss.Style{p.pal.red, p.pal.red, p.pal.yellow, p.st.Dim}
+	listed := false
+	for i, n := range f.Counts {
+		if n <= 0 {
+			continue
+		}
+		if listed {
+			c = append(c, seg{" ", lipgloss.Style{}})
+		}
+		listed = true
+		t := fmt.Sprintf("P%d", i)
+		if n > 1 {
+			t += p.g.times + strconv.Itoa(n)
+		}
+		c = append(c, seg{t, styles[i]})
+	}
+	if !listed {
+		c = append(c, seg{"clean", p.pal.green})
+	}
+	if f.Simplifications > 0 {
+		c = append(c, seg{" " + p.g.simplify + strconv.Itoa(f.Simplifications), p.st.Dim})
+	}
+	return c
 }
 
 // verdict is a verdict's glyph, its short and long names and its color.
@@ -785,7 +833,7 @@ func (l prbLayout) total() int {
 type prbWidths [prbNumCols]int
 
 // prbColNames name the columns for ColumnWidths.
-var prbColNames = [prbNumCols]string{"repo", "num", "title", "author", "assignee", "updated", "state", "last_review", "since_review", "reviewers"}
+var prbColNames = [prbNumCols]string{"repo", "num", "title", "author", "assignee", "updated", "state", "last_review", "findings", "since_review", "reviewers"}
 
 // prbWidthsFrom reads kept widths by column name.
 func prbWidthsFrom(m map[string]int) prbWidths {
@@ -872,7 +920,7 @@ func (p prbPainter) fit(n prbNatural, width int, over prbWidths) prbLayout {
 		}
 		return t
 	}
-	cols := []prbCol{colRef, colNum, colTitle, colAuthor, colAssignee, colUpdated, colState, colLastReview, colSince, colReviewers}
+	cols := []prbCol{colRef, colNum, colTitle, colAuthor, colAssignee, colUpdated, colState, colLastReview, colFindings, colSince, colReviewers}
 	for _, d := range prbDropOrder {
 		if width <= 0 || need(cols) <= width {
 			break

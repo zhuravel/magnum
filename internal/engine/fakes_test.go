@@ -82,6 +82,8 @@ type fakeGH struct {
 	confirmErr error                   // ConfirmStates fails
 	allReviews map[int][]github.Review // number -> ReviewsWithMarker, oldest first
 	dismissErr error                   // DismissReview fails
+	createErr  error                   // CreateReview fails
+	created    []string                // CreateReview calls: "<event>@<sha>:<body>"
 	// files answers CompareFiles by "base...head" (absent = ErrNotFound).
 	files map[string][]github.FileDelta
 	calls []string
@@ -103,6 +105,18 @@ func (g *fakeGH) DismissReview(_ context.Context, owner, repo string, number int
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.dismissErr
+}
+
+func (g *fakeGH) CreateReview(_ context.Context, owner, repo string, number int, commitID, event, body string) (github.RESTReview, error) {
+	g.record(fmt.Sprintf("review:%s/%s#%d:%s", owner, repo, number, event))
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.createErr != nil {
+		return github.RESTReview{}, g.createErr
+	}
+	g.created = append(g.created, event+"@"+commitID+":"+body)
+	return github.RESTReview{ID: int64(9000 + len(g.created)), UserLogin: "talkable[bot]", State: event, CommitID: commitID,
+		HTMLURL: fmt.Sprintf("https://github.com/%s/%s/pull/%d#pullrequestreview-%d", owner, repo, number, 9000+len(g.created))}, nil
 }
 
 // fail sets the Details and ConfirmStates errors (nil clears them).

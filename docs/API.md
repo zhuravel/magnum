@@ -3143,6 +3143,15 @@ const (
     kv keys of the daemon's own operations, read by `magnum status`.
 
 const (
+	ReqApprove        = "approve"
+	ReqRequestChanges = "request_changes"
+)
+    Manual verdicts: `magnum approve` and `magnum request-changes` (and
+    the board's A and C) post the reviewer's own verdict on the head magnum
+    reviewed, as the PR's posting identity, for a repository whose policy only
+    lets magnum comment or when the reviewer disagrees with its event.
+
+const (
 	WaitQuiet         = "quiet"          // the push quiet period
 	WaitBurst         = "burst"          // the longer quiet period after a burst of pushes
 	WaitInterval      = "interval"       // the minimum re-review interval since the last round
@@ -3271,6 +3280,11 @@ func KVPRFormerIdentities(prID int64) string
 func KVPRIdentityPinned(prID int64) string
     KVPRIdentityPinned holds the identity `magnum review --as` pinned the PR to;
     a pinned PR never migrates.
+
+func KVPRManualVerdict(prID int64) string
+    KVPRManualVerdict holds the id of the review a manual verdict posted: rounds
+    never dismiss it as their own stale review (it is the reviewer's decision),
+    while an approval still follows the head (approval.go).
 
 func KVPRRequestAt(prID int64) string
     KVPRRequestAt holds the time of the newest review request magnum handled
@@ -3576,6 +3590,8 @@ type GitHub interface {
 	// the since_review fallback when Details' latestReviews was truncated.
 	ReviewsWithMarker(ctx context.Context, owner, repo string, number int, marker string) ([]github.Review, error)
 	DismissReview(ctx context.Context, owner, repo string, number int, reviewID int64, message string) error
+	// CreateReview posts a manual verdict (verdict.go).
+	CreateReview(ctx context.Context, owner, repo string, number int, commitID, event, body string) (github.RESTReview, error)
 }
     GitHub is the part of *github.Client the engine uses (one client per
     identity): the poller's reads, and the dismissal of an App approval the head
@@ -3757,6 +3773,15 @@ func ParseTrivialSkip(s string) (TrivialSkip, bool)
 func (t TrivialSkip) Note() string
     Note is the PR card's line for the skip, e.g. "comment-only push skipped
     (a7b3f8c → 602da9d)".
+
+type VerdictPayload struct {
+	PRTarget
+	// Message is the reviewer's own words, put before magnum's line.
+	Message string `json:"message,omitempty"`
+	// Force posts on the reviewed head although the PR moved on since.
+	Force bool `json:"force,omitempty"`
+}
+    VerdictPayload is a manual verdict request.
 
 type Wait struct {
 	Reason   string    `json:"reason"`
@@ -4315,6 +4340,14 @@ func (c *Client) ConfirmStates(ctx context.Context, owner, repo string, numbers 
     requests that disappeared from the radar's OPEN list. Numbers GitHub cannot
     resolve are returned in notFound (callers treat them as UNKNOWN and never
     clean them up); any other error fails the call.
+
+func (c *Client) CreateReview(ctx context.Context, owner, repo string, number int, commitID, event, body string) (RESTReview, error)
+    CreateReview submits a review without inline comments (POST
+    /repos/{o}/{r}/pulls/{n}/reviews) on commitID as the client's identity.
+    event is APPROVE, REQUEST_CHANGES or COMMENT; GitHub wants a body for the
+    last two. GitHub counts each reviewer's latest review, so a new APPROVE
+    or REQUEST_CHANGES supersedes the identity's earlier verdict. It is marked
+    Mutates, so execx.DryRun only plans it.
 
 func (c *Client) DeletePendingReview(ctx context.Context, owner, repo string, number int, reviewID int64) error
     DeletePendingReview deletes a review that was never submitted (DELETE
@@ -6814,6 +6847,9 @@ type PreviousReview struct {
 	SubmittedAt time.Time
 	// Login posted it ("" = unknown), for the record.
 	Login string
+	// Manual: the reviewer posted it by hand (magnum approve /
+	// request-changes): a round never dismisses it as its own stale review.
+	Manual bool
 	// Former: a former login of the PR posted it (RoundInput.FormerLogins).
 	// It is history the round reads, never a review it dismisses with its
 	// own credentials (the engine dismisses it as that identity). The engine
@@ -7910,6 +7946,14 @@ const (
 )
     SinceReview.Source values: what Base is.
 
+const (
+	VerdictBlocking    = "blocking"     // at least one P0 or P1: request changes
+	VerdictNonBlocking = "non_blocking" // only P2 and P3: comment
+	VerdictClean       = "clean"        // nothing to fix: approve
+)
+    Verdicts: what a review concluded, whatever its repository lets it post
+    (ReviewSummary.Verdict).
+
 const TeamReviewerPrefix = "team:"
     TeamReviewerPrefix marks a team in requested_reviewers_json ("team:<slug>").
 
@@ -8015,6 +8059,14 @@ func KVWatchPaused(owner string) string
 func LatestSchemaVersion() int
     LatestSchemaVersion is the highest migration version embedded in this
     binary.
+
+func ParseReviewResult(data []byte, sum *ReviewSummary) bool
+    ParseReviewResult fills sum from a judge result file (the skill's section
+    8 JSON): findings by priority, simplifications suggested (the candidates'
+    `suggested`), earlier findings, the posted event and the verdict. A result
+    without a verdict (written before the skill had one) gets it from the
+    counts: P0 or P1 blocks, other findings or still-open earlier ones comment,
+    none is clean. It reports false when data is not a result.
 
 func ParseTime(s string) (time.Time, error)
     ParseTime parses any RFC3339 timestamp (with or without a fraction) and
@@ -8310,6 +8362,28 @@ type Request struct {
 }
     Request is a CLI → daemon work item.
 
+type ReviewSummary struct {
+	RunID           string    `json:"run_id"`
+	SHA             string    `json:"sha"`   // the reviewed head
+	Event           string    `json:"event"` // what was posted: APPROVE, REQUEST_CHANGES or COMMENT
+	URL             string    `json:"url,omitempty"`
+	At              time.Time `json:"at"`
+	Counts          [4]int    `json:"counts"`          // P0..P3 posted this round
+	Simplifications int       `json:"simplifications"` // optional suggestions posted this round
+	Fixed           int       `json:"fixed"`           // earlier findings fixed (a re-review)
+	Open            int       `json:"open"`            // earlier findings still open
+	Answered        int       `json:"answered"`        // earlier findings answered with a reason
+	Verdict         string    `json:"verdict"`         // VerdictBlocking, VerdictNonBlocking or VerdictClean
+}
+    ReviewSummary is what a PR's latest posted review round concluded,
+    read from the judge's result file the round stored (runs.result_json):
+    the findings it posted by priority, the simplifications it suggested,
+    how the earlier findings stood, and its verdict. A repository whose policy
+    only comments still has a verdict here: what the review would have decided.
+
+func (s ReviewSummary) Findings() int
+    Findings is the number of findings posted this round.
+
 type RoundRun struct {
 	Run
 	Repo   string `json:"repo"`
@@ -8583,6 +8657,11 @@ func (s *Store) FreeSlots(ctx context.Context, repoFullName string, preferPRID i
 
 func (s *Store) GetKV(ctx context.Context, key string) (string, bool, error)
     GetKV returns the value for key and whether it exists.
+
+func (s *Store) LastReviewSummaries(ctx context.Context, prIDs []int64) (map[int64]ReviewSummary, error)
+    LastReviewSummaries returns the ReviewSummary of each PR's latest posted
+    round, for the PRs that have one. A result file that does not parse is
+    skipped (the round still counts as posted elsewhere).
 
 func (s *Store) LatestRoundRuns(ctx context.Context, prIDs ...int64) (map[int64][]Run, error)
     LatestRoundRuns returns, per PR, the runs of its highest round, oldest
@@ -9011,6 +9090,10 @@ type DashboardActions interface {
 	Unmute(ctx context.Context, ref string) (string, error)
 	Abort(ctx context.Context, ref string) (string, error)  // kill the PR's running review
 	Ignore(ctx context.Context, ref string) (string, error) // abort, mute and free the slot
+	// Approve and RequestChanges post the reviewer's own verdict on the head
+	// magnum reviewed (magnum approve / request-changes).
+	Approve(ctx context.Context, ref string) (string, error)
+	RequestChanges(ctx context.Context, ref string) (string, error)
 	Attention(ctx context.Context) (string, error)
 	OpenBrowser(ctx context.Context, url string) error
 }
@@ -9049,6 +9132,22 @@ type DiskInfo struct {
 	MinGB  int
 }
     DiskInfo is the free space where slots live; FreeGB <= 0 means unknown.
+
+type FindingsInfo struct {
+	Counts          [4]int // P0..P3 findings posted
+	Simplifications int    // optional simplification suggestions posted
+	Fixed, Open     int    // earlier findings fixed / still open (a re-review)
+	Answered        int    // earlier findings answered with a reason
+	// Verdict is the review's decision whatever its repository lets it
+	// post: blocking (request changes), non_blocking (comment) or clean
+	// (approve).
+	Verdict string
+	Posted  string // the event it posted: APPROVE, REQUEST_CHANGES or COMMENT
+	SHA     string // the reviewed head
+}
+    PRBoardRow is one pull request on the PR board. Ref is what actions receive;
+    Owner, Repo and Number label the row (Ref is parsed when they are empty).
+    FindingsInfo is what magnum's latest posted review of a PR concluded.
 
 type GitHubInfo struct {
 	Remaining, Limit int
@@ -9104,11 +9203,15 @@ type PRBoardRow struct {
 	// State is magnum's state: baseline, queued, reviewing, reviewed,
 	// rereview_pending, needs_attention, paused, closed, released,
 	// ineligible or ignored (magnum ignore).
-	State          string
-	GHState        string // GitHub's state: OPEN, CLOSED, MERGED
-	UpdatedAt      time.Time
-	HeadSHA        string
-	LastReview     *ReviewInfo    // the latest review magnum knows of; nil when none
+	State      string
+	GHState    string // GitHub's state: OPEN, CLOSED, MERGED
+	UpdatedAt  time.Time
+	HeadSHA    string
+	LastReview *ReviewInfo // the latest review magnum knows of; nil when none
+	// Findings is what magnum's latest posted review concluded (its findings
+	// by priority, simplifications and verdict), also where it could only
+	// comment; nil when magnum has not reviewed the PR.
+	Findings       *FindingsInfo
 	Reviewers      []ReviewerInfo // everyone who reviewed or was asked to
 	SinceReview    *ReviewDelta   // what changed since the last review; nil when unknown
 	Slot           string         // folder of the review slot holding the PR, if any
@@ -9133,8 +9236,6 @@ type PRBoardRow struct {
 	// on the card (e.g. "comment-only push skipped (a7b3f8c → 602da9d)").
 	Note string
 }
-    PRBoardRow is one pull request on the PR board. Ref is what actions receive;
-    Owner, Repo and Number label the row (Ref is parsed when they are empty).
 
 func FilterPRBoard(rows []PRBoardRow, v PRView, selfLogins []string) []PRBoardRow
     FilterPRBoard returns the rows of rows in view v; selfLogins are the logins

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -76,6 +77,39 @@ func abortQuestion(ref string) string {
 // ignoreQuestion asks before ignoring ref.
 func ignoreQuestion(ref string) string {
 	return "Ignore " + ref + ": kill its review, mute it and free its slot?"
+}
+
+// verdictQuestion asks before posting the reviewer's verdict on r: it says
+// on which head and what magnum's review concluded, so the decision is an
+// informed one.
+func verdictQuestion(ref string, approve bool, r PRBoardRow) string {
+	verb := "Request changes on"
+	if approve {
+		verb = "Approve"
+	}
+	q := verb + " " + ref
+	f := r.Findings
+	if f == nil {
+		return q + "?"
+	}
+	if f.SHA != "" {
+		q += " at " + f.SHA[:min(7, len(f.SHA))]
+	}
+	var parts []string
+	for i, n := range f.Counts {
+		if n > 0 {
+			parts = append(parts, fmt.Sprintf("%d P%d", n, i))
+		}
+	}
+	found := "no findings"
+	if len(parts) > 0 {
+		found = strings.Join(parts, ", ")
+	}
+	q += "? magnum found " + found
+	if r.HeadSHA != "" && f.SHA != "" && r.HeadSHA != f.SHA {
+		q += "; the head moved since (review again first)"
+	}
+	return q
 }
 
 // unmuteIgnoredQuestion asks before unmuting a PR `magnum ignore` muted,

@@ -98,6 +98,12 @@ func (f *fakeActions) Unmute(_ context.Context, ref string) (string, error) {
 func (f *fakeActions) Abort(_ context.Context, ref string) (string, error) {
 	return f.record("abort " + ref)
 }
+func (f *fakeActions) Approve(_ context.Context, ref string) (string, error) {
+	return f.record("approve " + ref)
+}
+func (f *fakeActions) RequestChanges(_ context.Context, ref string) (string, error) {
+	return f.record("request-changes " + ref)
+}
 func (f *fakeActions) Ignore(_ context.Context, ref string) (string, error) {
 	return f.record("ignore " + ref)
 }

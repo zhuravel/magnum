@@ -352,11 +352,12 @@ func TestBoardRightClickMenu(t *testing.T) {
 		"review": true, "fresh review": true, "simplify review": true, "kill review": false, "ignore": true,
 		"open pane": true, "browser": true, "pin": false, "unpin": true, "release": true,
 		"mute": true, "unmute": false, "details": true, "reset column widths": false,
+		"approve": false, "request changes": false, // the fixture has no findings for #11920
 	}
 	if got := menuState(m.menuItems()); !maps.Equal(got, want) {
 		t.Errorf("menu of #11920:\n got %v\nwant %v", got, want)
 	}
-	if len(m.menuItems()) != 14 {
+	if len(m.menuItems()) != 16 {
 		t.Errorf("%d items", len(m.menuItems()))
 	}
 
@@ -508,7 +509,7 @@ func TestMouseToggle(t *testing.T) {
 // while it is off) keep the frame.
 func TestBoardFrameCacheFollowsTheMouse(t *testing.T) {
 	m := stormBoard(t, 60)
-	x, w := boardCol(t, m, colAuthor)
+	x, w := boardCol(t, m, colFindings)
 	state, _ := boardCol(t, m, colState)
 	gap := x + w
 	steps := []step{
@@ -533,7 +534,7 @@ func TestBoardFrameCacheFollowsTheMouse(t *testing.T) {
 		t.Fatal("empty key")
 	}
 	a, b := m, m
-	b.widths[colAuthor] = 20
+	b.widths[colFindings] = 20
 	if a.rowsKey(120) == b.rowsKey(120) || a.frameKey() == b.frameKey() {
 		t.Error("the layout and frame keys must include the widths")
 	}

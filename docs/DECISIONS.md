@@ -553,3 +553,25 @@ editing history. Code, config comments and prompts reference these by their head
   registry (PR authors, assignees, requested reviewers) except `MAGNUM_OWN_LOGINS`/`MAGNUM_LOGIN_ALLOW`,
   and skips without a registry. Rejected: a hand-kept list in `MAGNUM_PRIVATE_PATTERNS` (it misses the
   next new colleague).
+- **A review's verdict is recorded apart from what it posts, and shown** (2026-10-04, the maintainer:
+  "I should still see the decision even if it was not posted ... count of P1, P2, P3 and potential
+  simplifications"). The judge's result file carries `verdict` (`blocking`, `non_blocking`, `clean`), its
+  decision whatever `blocking_event`/`no_findings_event` or self-authorship let it post; results from before
+  the field derive it from the counts (P0/P1 block, other or still-open findings comment, none is clean).
+  `store.LastReviewSummaries` reads each PR's latest posted round (`runs.result_json`): the board's
+  FINDINGS column and card, and `magnum status <ref>`, show the verdict, P0–P3, the simplifications
+  suggested and the earlier findings. Rejected: inferring it from the posted event (a comment-only
+  repository always says COMMENT).
+- **The reviewer posts the verdict magnum could not** (2026-10-04). `magnum approve` / `request-changes`
+  (board `A` / `C`, asked y/N with the findings recalled) post a body-only APPROVE or REQUEST_CHANGES on the
+  reviewed head as the PR's posting identity, naming magnum's review and findings and carrying
+  `<!-- magnum:verdict=… -->`; the daemon does it (one writer, the identities' tokens). It refuses an
+  unreviewed PR, a round in flight, and a moved head unless `--force`. The review becomes the PR's
+  latest (so an approval follows the head and is withdrawn on real new commits unless `keep_approvals`),
+  and is marked manual (`pr.<id>.manual_verdict`): a later round never dismisses it as its own stale
+  change request. Rejected: a forced re-run with an overridden event (an agent round for a decision the
+  reviewer already made) and editing magnum's posted review (GitHub cannot change a review's event).
+- **Open before magnum reads "not reviewed"** (2026-10-04). The `baseline` state keeps its name in the
+  registry, filters and JSON; the board shows "not reviewed" and the card says the PR was open before
+  magnum began watching and what starts a review; `magnum status` says the same. Rejected: renaming the
+  state (every stored row, filter and test names it).

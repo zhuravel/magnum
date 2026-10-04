@@ -451,7 +451,7 @@ func statusNext(pr store.PR, now time.Time) string {
 	future := func(t *time.Time) bool { return t != nil && t.After(now) }
 	switch pr.State {
 	case store.PRBaseline:
-		return "waiting for a new push (or `magnum review`)"
+		return "not reviewed: open before magnum began watching; a push, a review request or `magnum review` starts a review"
 	case store.PRIneligible:
 		return "skipped: " + store.Deref(pr.SkipReason) + " (`magnum review` forces a round)"
 	case store.PRQueued, store.PRRereviewPending:
@@ -526,6 +526,11 @@ func statusGatherDetail(ctx context.Context, d statusDeps, r statusReport, ref s
 		det.Repo = t.Repo.FullName()
 		if why, ok := prAttention(ctx, d.Store, pr, inspPRLabel(det.Repo, pr.Number)); ok {
 			det.Attention = &why
+		}
+		if sums, err := d.Store.LastReviewSummaries(ctx, []int64{pr.ID}); err == nil {
+			if s, ok := sums[pr.ID]; ok {
+				det.Findings = &s
+			}
 		}
 		det.Notes = notesExist(d.Layout, t.Repo.Owner, t.Repo.Name)
 	}

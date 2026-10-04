@@ -101,7 +101,7 @@ func newRoot(c *Context) *cobra.Command {
 		root.AddCommand(newTargetCmd(c, k))
 	}
 	root.AddCommand(
-		newAbortCmd(c), newIgnoreCmd(c),
+		newAbortCmd(c), newIgnoreCmd(c), newApproveCmd(c), newRequestChangesCmd(c),
 		newAttentionCmd(c), newPickCmd(c), newCleanupCmd(c), newKickCmd(c),
 		newPauseCmd(c), newResumeCmd(c), newUICmd(c),
 		// Daemon

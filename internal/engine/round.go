@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -437,6 +438,9 @@ func (e *Engine) previousReview(ctx context.Context, pr store.PR, login string, 
 	// last_review_login drops "[bot]": without a run that names the login,
 	// a review any former login could have posted counts as a former one's.
 	prev.Former = slices.ContainsFunc(former, func(f string) bool { return github.SameLogin(prev.Login, f) })
+	if v, ok := e.getKV(ctx, KVPRManualVerdict(pr.ID)); ok && prev.ID != 0 && v == strconv.FormatInt(prev.ID, 10) {
+		prev.Manual = true
+	}
 	if prev.ID == 0 || login == "" {
 		return prev
 	}

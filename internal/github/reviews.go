@@ -108,29 +108,67 @@ func (c *Client) ReviewREST(ctx context.Context, owner, repo string, number int,
 	if number <= 0 || id <= 0 {
 		return RESTReview{}, fmt.Errorf("github: invalid review %d on pull request %d", id, number)
 	}
-	var r struct {
-		ID     int64  `json:"id"`
-		NodeID string `json:"node_id"`
-		User   *struct {
-			Login string `json:"login"`
-			Type  string `json:"type"`
-		} `json:"user"`
-		State       string    `json:"state"`
-		Body        string    `json:"body"`
-		HTMLURL     string    `json:"html_url"`
-		CommitID    string    `json:"commit_id"`
-		SubmittedAt time.Time `json:"submitted_at"`
-	}
+	var r restReviewJSON
 	path := fmt.Sprintf("repos/%s/%s/pulls/%d/reviews/%d", owner, repo, number, id)
 	op := fmt.Sprintf("review %s/%s#%d/%d", owner, repo, number, id)
 	if err := c.rest(ctx, op, "GET", path, nil, false, &r); err != nil {
 		return RESTReview{}, err
 	}
+	return r.review(), nil
+}
+
+// restReviewJSON is a review as REST returns it.
+type restReviewJSON struct {
+	ID     int64  `json:"id"`
+	NodeID string `json:"node_id"`
+	User   *struct {
+		Login string `json:"login"`
+		Type  string `json:"type"`
+	} `json:"user"`
+	State       string    `json:"state"`
+	Body        string    `json:"body"`
+	HTMLURL     string    `json:"html_url"`
+	CommitID    string    `json:"commit_id"`
+	SubmittedAt time.Time `json:"submitted_at"`
+}
+
+func (r restReviewJSON) review() RESTReview {
 	out := RESTReview{ID: r.ID, NodeID: r.NodeID, State: r.State, Body: r.Body, HTMLURL: r.HTMLURL, CommitID: r.CommitID, SubmittedAt: r.SubmittedAt}
 	if r.User != nil {
 		out.UserLogin, out.UserType = r.User.Login, r.User.Type
 	}
-	return out, nil
+	return out
+}
+
+// CreateReview submits a review without inline comments (POST
+// /repos/{o}/{r}/pulls/{n}/reviews) on commitID as the client's identity.
+// event is APPROVE, REQUEST_CHANGES or COMMENT; GitHub wants a body for the
+// last two. GitHub counts each reviewer's latest review, so a new APPROVE
+// or REQUEST_CHANGES supersedes the identity's earlier verdict. It is
+// marked Mutates, so execx.DryRun only plans it.
+func (c *Client) CreateReview(ctx context.Context, owner, repo string, number int, commitID, event, body string) (RESTReview, error) {
+	if err := checkRepo(owner, repo); err != nil {
+		return RESTReview{}, err
+	}
+	switch event {
+	case "APPROVE", "REQUEST_CHANGES", "COMMENT":
+	default:
+		return RESTReview{}, fmt.Errorf("github: review event %q is not APPROVE, REQUEST_CHANGES or COMMENT", event)
+	}
+	if number <= 0 || len(commitID) != 40 {
+		return RESTReview{}, fmt.Errorf("github: a review needs a pull request number and a full commit id")
+	}
+	if event != "APPROVE" && strings.TrimSpace(body) == "" {
+		return RESTReview{}, fmt.Errorf("github: a %s review needs a body", event)
+	}
+	var r restReviewJSON
+	path := fmt.Sprintf("repos/%s/%s/pulls/%d/reviews", owner, repo, number)
+	op := fmt.Sprintf("review %s/%s#%d (%s)", owner, repo, number, event)
+	fields := [][2]string{{"commit_id", commitID}, {"event", event}, {"body", body}}
+	if err := c.rest(ctx, op, "POST", path, fields, true, &r); err != nil {
+		return RESTReview{}, err
+	}
+	return r.review(), nil
 }
 
 // DismissReview dismisses a review (PUT /repos/{o}/{r}/pulls/{n}/reviews/{id}/dismissals)

@@ -265,16 +265,17 @@ func TestPRBoardSortKeys(t *testing.T) {
 	}
 }
 
-// Narrow screens hide Assignee, then Since review, then Author; no line is
-// ever wider than the screen.
+// Narrow screens hide Assignee, then Since review, then Author, then
+// Updated; Findings stays as long as the reviewers do. No line is ever wider
+// than the screen.
 func TestPRBoardColumnsHideByWidth(t *testing.T) {
 	cases := []struct {
 		width         int
 		shown, hidden []string
 	}{
-		{160, []string{"REPO", "#", "TITLE", "AUTHOR", "ASSIGNEE", "UPDATED", "STATE", "LAST REVIEW", "SINCE REVIEW", "REVIEWERS"}, nil},
-		{120, []string{"TITLE", "AUTHOR", "UPDATED", "STATE", "LAST REVIEW", "REVIEWERS"}, []string{"ASSIGNEE", "SINCE REVIEW"}},
-		{100, []string{"TITLE", "UPDATED", "STATE", "LAST REVIEW", "REVIEWERS"}, []string{"ASSIGNEE", "SINCE REVIEW", "AUTHOR"}},
+		{170, []string{"REPO", "#", "TITLE", "AUTHOR", "ASSIGNEE", "UPDATED", "STATE", "LAST REVIEW", "FINDINGS", "SINCE REVIEW", "REVIEWERS"}, nil},
+		{120, []string{"TITLE", "UPDATED", "STATE", "LAST REVIEW", "FINDINGS", "REVIEWERS"}, []string{"ASSIGNEE", "SINCE REVIEW", "AUTHOR"}},
+		{100, []string{"TITLE", "STATE", "LAST REVIEW", "FINDINGS", "REVIEWERS"}, []string{"ASSIGNEE", "SINCE REVIEW", "AUTHOR", "UPDATED"}},
 	}
 	for _, c := range cases {
 		m, _, _ := newBoard(t, c.width, 20, PRBoardOptions{})
@@ -1025,4 +1026,60 @@ func TestPRBoardIgnoredRowsAreStruckAndUnmutedWithU(t *testing.T) {
 	v := viewOf(c)
 	mustContain(t, v, "U unmute: stop ignoring")
 	mustNotContain(t, v, "I ignore")
+}
+
+// What magnum's latest review concluded shows even where it could only
+// comment: the FINDINGS column (verdict glyph, findings by priority,
+// simplifications), the card's decision and counts, and A / C post the
+// reviewer's own verdict after a question that recalls the findings.
+func TestPRBoardShowsFindingsAndPostsAVerdict(t *testing.T) {
+	m, _, act := newBoard(t, 170, 24, PRBoardOptions{})
+	row := PRBoardRow{Ref: "talkable/talkable#8", Owner: "talkable", Repo: "talkable", Number: 8, Title: "Refund metrics",
+		State: "reviewed", GHState: "OPEN", UpdatedAt: ago(time.Hour), HeadSHA: "abcdef1234",
+		LastReview: &ReviewInfo{Login: "talkable[bot]", Event: "COMMENTED", SubmittedAt: ago(time.Hour), CommitSHA: "abcdef1234"},
+		Findings:   &FindingsInfo{Counts: [4]int{0, 1, 3, 0}, Simplifications: 4, Open: 1, Verdict: "blocking", Posted: "COMMENT", SHA: "abcdef1234"}}
+	clean := row
+	clean.Ref, clean.Number, clean.Title = "talkable/talkable#9", 9, "Copy fix"
+	clean.Findings = &FindingsInfo{Verdict: "clean", Posted: "COMMENT", SHA: "abcdef1234"}
+	m, _ = send(t, m, prbDataMsg{rows: []PRBoardRow{row, clean}})
+	v := viewOf(m)
+	mustContain(t, v, "FINDINGS", "✗ P1 P2×3 ✂4", "✔ clean")
+
+	c, _, _ := newBoard(t, 170, 70, PRBoardOptions{})
+	c, _ = send(t, c, prbDataMsg{rows: []PRBoardRow{row, clean}})
+	c, _ = send(t, c, keyMsg("enter"))
+	mustContain(t, viewOf(c), "FINDINGS", "Decision: request changes; posted as comment (A approves, C requests changes)",
+		"P0 0 · P1 1 · P2 3 · P3 0 · 4 simplifications suggested", "Earlier findings: 0 fixed, 1 still open, 0 answered",
+		"A approve", "C request changes")
+
+	m, _ = send(t, m, keyMsg("C"))
+	mustContain(t, viewOf(m), "Request changes on talkable#8 at abcdef1? magnum found 1 P1, 3 P2")
+	m, _ = boardAct(t, m, "y")
+	if got := act.last(); got != "request-changes talkable/talkable#8" {
+		t.Fatalf("C called %q", got)
+	}
+	m, _ = send(t, m, keyMsg("j"), keyMsg("A"))
+	mustContain(t, viewOf(m), "Approve talkable#9 at abcdef1? magnum found no findings")
+	m, _ = boardAct(t, m, "y")
+	if got := act.last(); got != "approve talkable/talkable#9" {
+		t.Fatalf("A called %q", got)
+	}
+}
+
+// A PR open before magnum watched its repository reads "not reviewed", and
+// its card says what starts a review; A has nothing to approve on it.
+func TestPRBoardNotReviewedRows(t *testing.T) {
+	m, _, act := newBoard(t, 170, 30, PRBoardOptions{})
+	row := PRBoardRow{Ref: "talkable/talkable#5", Owner: "talkable", Repo: "talkable", Number: 5, Title: "Old feature",
+		State: "baseline", GHState: "OPEN", UpdatedAt: ago(time.Hour)}
+	m, _ = send(t, m, prbDataMsg{rows: []PRBoardRow{row}})
+	mustContain(t, viewOf(m), "not reviewed")
+	m, _ = send(t, m, keyMsg("A"))
+	mustContain(t, viewOf(m), "magnum has not reviewed this PR: nothing to approve on")
+	if got := act.last(); got != "" {
+		t.Fatalf("A on an unreviewed PR called %q", got)
+	}
+	c, _ := send(t, m, keyMsg("enter"))
+	mustContain(t, viewOf(c), "NOT REVIEWED", "Open before magnum began watching this repository")
+	mustNotContain(t, viewOf(c), "A approve")
 }

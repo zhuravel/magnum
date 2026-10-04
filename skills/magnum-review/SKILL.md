@@ -218,7 +218,7 @@ After a posted or planned review, update the repository notes when the prompt as
 ```json
 {"status":"posted|dry_run|blocked|identity_error|closed|stopped|error",
  "run_id":"…","pr":"owner/repo#N","head_sha":"…",
- "review_id":123,"review_url":"…","event":"REQUEST_CHANGES",
+ "review_id":123,"review_url":"…","event":"REQUEST_CHANGES","verdict":"blocking",
  "findings":{"P0":0,"P1":0,"P2":2,"P3":1},
  "provenance":[
    {"id":"F1","severity":"P2","path":"app/models/order.rb","line":42,"sources":["claude-review","judge"],"verdict":"posted"},
@@ -231,6 +231,8 @@ After a posted or planned review, update the repository notes when the prompt as
  "environment_failures":[{"cmd":"bin/rspec spec/y_spec.rb","error":"Table 'app_test.snapshots' doesn't exist"}],
  "blocker":null,"planned_review":null,"planned_replies":null}
 ```
+
+`verdict` is your decision whatever this repository lets you post: `blocking` (at least one `P0` or `P1`, a still-open earlier finding included), `non_blocking` (only `P2` and `P3`), `clean` (no findings; optional simplifications do not count). Write it on every review, also when `blocking_event` or `no_findings_event` make you post `COMMENT` and when `self_authored` does: magnum shows it to the reviewer, who may approve or request changes by hand.
 
 `provenance` is the ledger of section 3: an `id` unique in the file (`F1`, `F2`, …), `severity`, `path` and `line` (`null` for a finding in the body), `sources`, `verdict` and, for a rejection, `reason_code`. Its posted entries add up to `findings`. `previous_findings.rebutted` counts the still-open findings you rebutted in their thread this round. magnum keeps the provenance of every posted review for `magnum stats`.
 

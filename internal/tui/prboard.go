@@ -18,6 +18,20 @@ import (
 // PRBoardRow is one pull request on the PR board. Ref is what actions
 // receive; Owner, Repo and Number label the row (Ref is parsed when they
 // are empty).
+// FindingsInfo is what magnum's latest posted review of a PR concluded.
+type FindingsInfo struct {
+	Counts          [4]int // P0..P3 findings posted
+	Simplifications int    // optional simplification suggestions posted
+	Fixed, Open     int    // earlier findings fixed / still open (a re-review)
+	Answered        int    // earlier findings answered with a reason
+	// Verdict is the review's decision whatever its repository lets it
+	// post: blocking (request changes), non_blocking (comment) or clean
+	// (approve).
+	Verdict string
+	Posted  string // the event it posted: APPROVE, REQUEST_CHANGES or COMMENT
+	SHA     string // the reviewed head
+}
+
 type PRBoardRow struct {
 	Ref, Owner, Repo   string
 	Number             int
@@ -27,11 +41,15 @@ type PRBoardRow struct {
 	// State is magnum's state: baseline, queued, reviewing, reviewed,
 	// rereview_pending, needs_attention, paused, closed, released,
 	// ineligible or ignored (magnum ignore).
-	State          string
-	GHState        string // GitHub's state: OPEN, CLOSED, MERGED
-	UpdatedAt      time.Time
-	HeadSHA        string
-	LastReview     *ReviewInfo    // the latest review magnum knows of; nil when none
+	State      string
+	GHState    string // GitHub's state: OPEN, CLOSED, MERGED
+	UpdatedAt  time.Time
+	HeadSHA    string
+	LastReview *ReviewInfo // the latest review magnum knows of; nil when none
+	// Findings is what magnum's latest posted review concluded (its findings
+	// by priority, simplifications and verdict), also where it could only
+	// comment; nil when magnum has not reviewed the PR.
+	Findings       *FindingsInfo
 	Reviewers      []ReviewerInfo // everyone who reviewed or was asked to
 	SinceReview    *ReviewDelta   // what changed since the last review; nil when unknown
 	Slot           string         // folder of the review slot holding the PR, if any
@@ -974,6 +992,20 @@ func (m prBoardModel) tableKey(k string) (prBoardModel, tea.Cmd) {
 	case "K":
 		return m.askOnRow("abort", func(r PRBoardRow, ref string) string { return abortQuestion(m.questionLabel(r, ref)) },
 			func(ctx context.Context, a DashboardActions, ref string) (string, error) { return a.Abort(ctx, ref) })
+	case "A", "C":
+		approve := k == "A"
+		name := map[bool]string{true: "approve", false: "request changes"}[approve]
+		if r, ok := m.selected(); !ok || r.Findings == nil {
+			cmd := m.note("magnum has not reviewed this PR: nothing to " + name + " on")
+			return m, cmd
+		}
+		return m.askOnRow(name, func(r PRBoardRow, ref string) string { return verdictQuestion(m.questionLabel(r, ref), approve, r) },
+			func(ctx context.Context, a DashboardActions, ref string) (string, error) {
+				if approve {
+					return a.Approve(ctx, ref)
+				}
+				return a.RequestChanges(ctx, ref)
+			})
 	case "I":
 		return m.askOnRow("ignore", func(r PRBoardRow, ref string) string { return ignoreQuestion(m.questionLabel(r, ref)) },
 			func(ctx context.Context, a DashboardActions, ref string) (string, error) { return a.Ignore(ctx, ref) })

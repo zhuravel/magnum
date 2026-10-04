@@ -187,6 +187,11 @@ func (e *Engine) handleRequest(ctx context.Context, req store.Request) {
 		answer(e, ctx, req, func(ctx context.Context, p TargetPayload) (string, error) {
 			return e.requestMute(ctx, p, req.Kind == ReqMute)
 		})
+	case ReqApprove, ReqRequestChanges:
+		event := map[string]string{ReqApprove: "APPROVE", ReqRequestChanges: "REQUEST_CHANGES"}[req.Kind]
+		answer(e, ctx, req, func(ctx context.Context, p VerdictPayload) (string, error) {
+			return e.requestVerdict(ctx, p, event)
+		})
 	case ReqAbort, ReqIgnore: // abort.go
 		if p, ok := payload[TargetPayload](e, ctx, req); ok {
 			e.requestAbort(ctx, req.ID, p, req.Kind == ReqIgnore)

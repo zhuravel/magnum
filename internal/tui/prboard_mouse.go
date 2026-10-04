@@ -239,6 +239,8 @@ func (m prBoardModel) menuItems() []menuItem {
 		{"simplify review", "i", "i", open},
 		{"kill review", "K", "K", acts && st == "reviewing"},
 		{"ignore", "I", "I", open && st != "ignored"},
+		{"approve", "A", "A", open && r.Findings != nil},
+		{"request changes", "C", "C", open && r.Findings != nil},
 		{"open pane", "o", "o", acts},
 		{"browser", "b", "b", acts && prURL(r) != ""},
 		{"pin", "p", "p", acts && !r.Pinned},
