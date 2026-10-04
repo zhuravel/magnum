@@ -56,8 +56,14 @@ type WorkflowCI struct {
 	Passed, Failed, Pending, Total int
 }
 
-// CheckState is one required check and its state.
-type CheckState struct{ Name, State string }
+// CheckState is one required check and its state: Name as configured
+// ("ci / *", "workflow:CI"), Label the short name the board's cell shows
+// ("" = Name), Total the checks it matched on the head and Done those that
+// finished (Total 0: none, or the head's are not known yet).
+type CheckState struct {
+	Name, Label, State string
+	Done, Total        int
+}
 
 // Badge marks a PR that carries a GitHub label: Text (e.g. "🚩") shows
 // before the title, Label names it on the card.
@@ -568,7 +574,8 @@ func sanitizeRow(r PRBoardRow) PRBoardRow {
 		}
 		ci.Required = slices.Clone(ci.Required)
 		for i := range ci.Required {
-			ci.Required[i].Name, ci.Required[i].State = cleanText(ci.Required[i].Name), cleanText(ci.Required[i].State)
+			r := &ci.Required[i]
+			r.Name, r.Label, r.State = cleanText(r.Name), cleanText(r.Label), cleanText(r.State)
 		}
 		r.CI = &ci
 	}

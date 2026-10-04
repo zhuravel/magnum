@@ -58,11 +58,12 @@ func prsCI(ci *store.CIStatus, head string, req store.RequiredChecks) *tui.CIInf
 		out.Workflows = append(out.Workflows, *w)
 	}
 	for _, pattern := range req.Checks {
-		st := requiredState(ci.Checks, pattern)
-		if out.Stale && st != store.CheckFailed {
-			st = store.CheckPending // the checks are an older commit's: the head's are not known yet
+		c := requiredCheck(ci.Checks, pattern)
+		if out.Stale && c.State != store.CheckFailed {
+			// The checks are an older commit's: the head's are not known yet.
+			c.State, c.Done, c.Total = store.CheckPending, 0, 0
 		}
-		out.Required = append(out.Required, tui.CheckState{Name: pattern, State: st})
+		out.Required = append(out.Required, c)
 	}
 	return out
 }
@@ -83,12 +84,13 @@ func ciState(failed, pending int, allSkipped bool, checks int) string {
 	return "passed"
 }
 
-// requiredState is the state of one required check on the head: a name
-// glob ("Completion", "rspec*") matched across workflows, the latest run of
-// each matching name counting (a check posted through the API lands in
-// another workflow's suite, next to an older run), or "workflow:<glob>" for
-// every check of the matching workflows. "missing" when nothing matched.
-func requiredState(checks []store.CheckResult, pattern string) string {
+// requiredCheck is one required check on the head: a name glob
+// ("Completion", "rspec*") matched across workflows, the latest run of each
+// matching name counting (a check posted through the API lands in another
+// workflow's suite, next to an older run), or "workflow:<glob>" for every
+// check of the matching workflows. State "missing" when nothing matched.
+func requiredCheck(checks []store.CheckResult, pattern string) tui.CheckState {
+	out := tui.CheckState{Name: pattern, Label: checkLabel(pattern)}
 	var matched []store.CheckResult
 	if glob, ok := strings.CutPrefix(pattern, config.RequiredWorkflowPrefix); ok {
 		for _, c := range checks {
@@ -110,8 +112,10 @@ func requiredState(checks []store.CheckResult, pattern string) string {
 			matched = append(matched, c)
 		}
 	}
-	if len(matched) == 0 {
-		return "missing"
+	out.Total = len(matched)
+	if out.Total == 0 {
+		out.State = "missing"
+		return out
 	}
 	var failed, pending, skipped int
 	for _, c := range matched {
@@ -124,15 +128,33 @@ func requiredState(checks []store.CheckResult, pattern string) string {
 			skipped++
 		}
 	}
+	out.Done = out.Total - pending
 	switch {
 	case failed > 0:
-		return store.CheckFailed
+		out.State = store.CheckFailed
 	case pending > 0:
-		return store.CheckPending
+		out.State = store.CheckPending
 	case skipped == len(matched):
-		return store.CheckSkipped
+		out.State = store.CheckSkipped
+	default:
+		out.State = store.CheckPassed
 	}
-	return store.CheckPassed
+	return out
+}
+
+// checkLabel is a required check's short name on the board: without the
+// "workflow:" prefix, and a glob without its trailing wildcards and the
+// separators before them ("ci / *" → "ci", "rspec*" → "rspec"); the pattern
+// itself when nothing would be left ("*").
+func checkLabel(pattern string) string {
+	s := strings.TrimPrefix(pattern, config.RequiredWorkflowPrefix)
+	if t := strings.TrimRight(s, "*?"); t != s {
+		s = strings.TrimRight(t, " /:-_")
+	}
+	if s == "" {
+		return pattern
+	}
+	return s
 }
 
 // newer reports whether run a is newer than b: a run not started yet (zero

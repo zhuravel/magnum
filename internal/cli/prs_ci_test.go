@@ -25,8 +25,9 @@ func TestPRsCIRequiredChecks(t *testing.T) {
 	}}
 	req := store.RequiredChecks{Checks: []string{"Completion", "workflow:ci", "build", "rspec*"}, Source: store.RequiredFromGitHub}
 	got := prsCI(ci, "h1", req)
-	want := []tui.CheckState{{Name: "Completion", State: "passed"}, {Name: "workflow:ci", State: "failed"},
-		{Name: "build", State: "missing"}, {Name: "rspec*", State: "failed"}}
+	want := []tui.CheckState{{Name: "Completion", Label: "Completion", State: "passed", Done: 1, Total: 1},
+		{Name: "workflow:ci", Label: "ci", State: "failed", Done: 3, Total: 3},
+		{Name: "build", Label: "build", State: "missing"}, {Name: "rspec*", Label: "rspec", State: "failed", Done: 1, Total: 1}}
 	if len(got.Required) != len(want) {
 		t.Fatalf("required %+v", got.Required)
 	}
@@ -53,11 +54,23 @@ func TestPRsCIRequiredChecks(t *testing.T) {
 	}
 	stale := prsCI(&store.CIStatus{SHA: "old", Total: 1, Passed: 1, Checks: []store.CheckResult{{Name: "build", State: store.CheckPassed}}},
 		"new", store.RequiredChecks{Checks: []string{"build"}})
-	if !stale.Stale || stale.Required[0].State != "pending" {
+	if !stale.Stale || stale.Required[0].State != "pending" || stale.Required[0].Total != 0 {
 		t.Fatalf("an older commit's checks: %+v", stale)
 	}
 	if prsCI(nil, "h1", req) != nil {
 		t.Fatal("unknown CI is not nil")
+	}
+}
+
+// A glob's label drops its trailing wildcards and the separator before them,
+// so the board reads "ci 3/3" rather than "ci / *"; a workflow pattern drops
+// its prefix.
+func TestCheckLabel(t *testing.T) {
+	for pattern, want := range map[string]string{"ci / *": "ci", "rspec*": "rspec", "Workers Builds: *": "Workers Builds",
+		"workflow:CI": "CI", "workflow:ci-*": "ci", "Completion": "Completion", "build_": "build_", "*": "*", "workflow:*": "workflow:*"} {
+		if got := checkLabel(pattern); got != want {
+			t.Errorf("checkLabel(%q) = %q, want %q", pattern, got, want)
+		}
 	}
 }
 

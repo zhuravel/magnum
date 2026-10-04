@@ -618,7 +618,11 @@ func (p prbPainter) ciLines(ci CIInfo) []string {
 	skipped := false
 	for i, c := range ci.Required {
 		l := p.ciLook(c.State)
-		items[i] = marked(mark(c.State), l.textSt.Render(orDash(c.Name)+" "+orDash(l.word)))
+		text := orDash(c.Name) + " " + orDash(l.word)
+		if n := checkCount(c); n != "" {
+			text += " " + n
+		}
+		items[i] = marked(mark(c.State), l.textSt.Render(text))
 		skipped = skipped || normCI(c.State) == "skipped"
 	}
 	line := "Required: " + strings.Join(items, p.st.Dim.Render(p.g.sep))

@@ -684,9 +684,11 @@ func (p prbPainter) ciCell(ci *CIInfo) cell {
 	if len(ci.Required) > 0 {
 		worst := slices.MinFunc(ci.Required, func(a, b CheckState) int { return cmp.Compare(ciRank(a.State), ciRank(b.State)) })
 		l := p.ciLook(worst.State)
-		c = cell{{marked(l.glyph, ""), l.glyphSt}, {orDash(worst.Name), l.textSt}}
+		c = cell{{marked(l.glyph, ""), l.glyphSt}, {orDash(cmp.Or(worst.Label, worst.Name)), l.textSt}}
 		if s := normCI(worst.State); s == "missing" || s == "skipped" {
 			c = append(c, seg{" " + l.word, l.textSt})
+		} else if n := checkCount(worst); n != "" {
+			c = append(c, seg{" " + n, l.textSt})
 		}
 		if n := len(ci.Required) - 1; n > 0 {
 			c = append(c, seg{" +" + strconv.Itoa(n), p.st.Dim})
@@ -728,6 +730,16 @@ func ciRank(state string) int {
 		return i
 	}
 	return 5
+}
+
+// checkCount is "done/total" for a passed or pending required check that
+// matched several checks ("3/3", "1/3"); "" otherwise (one check, none, or a
+// failure the card names).
+func checkCount(c CheckState) string {
+	if s := normCI(c.State); c.Total < 2 || (s != "passed" && s != "pending") {
+		return ""
+	}
+	return strconv.Itoa(c.Done) + "/" + strconv.Itoa(c.Total)
 }
 
 // ciStyle is how a check state draws: its glyph, the glyph's and the

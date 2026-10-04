@@ -91,11 +91,16 @@ func TestPRBoardCICell(t *testing.T) {
 		req  []CheckState
 		want string
 	}{
-		{[]CheckState{{"a", "passed"}, {"b", "pending"}, {"c", "missing"}}, "– c not run +2"},
-		{[]CheckState{{"a", "pending"}, {"b", "skipped"}}, "⊘ b skipped +1"},
-		{[]CheckState{{"a", "pending"}, {"b", "passed"}}, "◌ a +1"},
-		{[]CheckState{{"a", "missing"}, {"b", "failed"}, {"c", "failed"}}, "✗ b +2"},
-		{[]CheckState{{"a", "passed"}, {"b", "passed"}}, "✓ a +1"},
+		{[]CheckState{{Name: "a", State: "passed"}, {Name: "b", State: "pending"}, {Name: "c", State: "missing"}}, "– c not run +2"},
+		{[]CheckState{{Name: "a", State: "pending"}, {Name: "b", State: "skipped"}}, "⊘ b skipped +1"},
+		{[]CheckState{{Name: "a", State: "pending"}, {Name: "b", State: "passed"}}, "◌ a +1"},
+		{[]CheckState{{Name: "a", State: "missing"}, {Name: "b", State: "failed"}, {Name: "c", State: "failed"}}, "✗ b +2"},
+		{[]CheckState{{Name: "a", State: "passed"}, {Name: "b", State: "passed"}}, "✓ a +1"},
+		// A glob shows its label and how many of its checks finished.
+		{[]CheckState{{Name: "ci / *", Label: "ci", State: "passed", Done: 3, Total: 3}}, "✓ ci 3/3"},
+		{[]CheckState{{Name: "ci / *", Label: "ci", State: "pending", Done: 1, Total: 3}}, "◌ ci 1/3"},
+		{[]CheckState{{Name: "ci / *", Label: "ci", State: "failed", Done: 3, Total: 3}}, "✗ ci"},
+		{[]CheckState{{Name: "ci / *", Label: "ci", State: "missing"}}, "– ci not run"},
 	} {
 		if got := ansi.Strip(p0(pal).ciCell(&CIInfo{State: "passed", Required: tc.req}).render(nil)); got != tc.want {
 			t.Errorf("required %v: %q, want %q", tc.req, got, tc.want)

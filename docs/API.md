@@ -103,6 +103,12 @@ const (
     Timeouts used against herdr and the CLIs.
 
 const (
+	EventHooksTrusted  = "agents.hooks_trusted"
+	EventHooksDeclined = "agents.hooks_declined"
+)
+    Event kinds recorded each time magnum answers a hooks review.
+
+const (
 	// DefaultModelLimitCooldown is used when daemon.model_limit_cooldown is
 	// unset (zero).
 	DefaultModelLimitCooldown = 5 * time.Hour
@@ -195,10 +201,6 @@ const EventDefaultModelRestored = "agent.default_model_restored"
     EventDefaultModelRestored is recorded when SwitchModel put the Claude
     settings' default model back (data: session, role, file, model, found;
     model and found are null when the key was absent).
-
-const EventHooksDeclined = "agents.hooks_declined"
-    EventHooksDeclined is the event kind recorded each time magnum declines a
-    hooks review.
 
 const EventTrustDialogAnswered = "agents.trust_dialog_answered"
     EventTrustDialogAnswered is the event kind recorded (subject
@@ -1867,6 +1869,19 @@ const (
     Kind.OnPermissionPrompt values.
 
 const (
+	// HooksTrustOwn: pick "Trust all and continue" when the checkout carries
+	// no hooks of its own (no .codex/hooks.json, no hooks or plugins in its
+	// .codex/config.toml), so every hook listed comes from the user's Codex
+	// home or an installed plugin; "Continue without trusting" otherwise.
+	HooksTrustOwn = "trust_own"
+	// HooksDecline: always "Continue without trusting": the session runs
+	// without the untrusted hooks until the user trusts them in their own
+	// Codex.
+	HooksDecline = "decline"
+)
+    Kind.OnHooksReview values.
+
+const (
 	// KindShell is the Role.Kind of a role that types a shell command into
 	// a plain pane instead of driving an agent CLI (codex-review).
 	KindShell = "shell"
@@ -1995,12 +2010,13 @@ func DefaultKinds() map[string]Kind
       - omp (18.4): resume ["--resume={session}"], model ["--model={model}"],
         effort ["--thinking={effort}"]; no login check.
 
-    All use wrapper "auto", session_source "herdr", on_permission_prompt "deny",
-    DefaultAfterDenyPrompt and DefaultHealthPatterns. The codex and claude args
-    make a plain binary run without approval prompts and (codex) without its
-    sandbox, as the user's zsh wrappers do: review agents run tests and `gh`,
-    and magnum answers every approval prompt No. Args apply only without a
-    wrapper, so a wrapper's own flags are never doubled.
+    All use wrapper "auto", session_source "herdr", on_permission_prompt
+    "deny", on_hooks_review "trust_own", DefaultAfterDenyPrompt and
+    DefaultHealthPatterns. The codex and claude args make a plain binary run
+    without approval prompts and (codex) without its sandbox, as the user's
+    zsh wrappers do: review agents run tests and `gh`, and magnum answers every
+    approval prompt No. Args apply only without a wrapper, so a wrapper's own
+    flags are never doubled.
 
 func LocalOverlayPath(file string) string
     LocalOverlayPath returns the legacy overlay next to a config
@@ -2440,6 +2456,12 @@ type Kind struct {
 	// PermissionDeny). The first-launch folder-trust dialog is handled
 	// separately either way.
 	OnPermissionPrompt string `toml:"on_permission_prompt"`
+	// OnHooksReview: how magnum answers Codex's startup hooks review (hooks
+	// new or changed since Codex last trusted them): "trust_own" (default)
+	// trusts them when the checkout declares no hooks of its own, so all are
+	// the user's, and declines them otherwise; "decline" always declines
+	// (see HooksTrustOwn). Only a kind whose CLI shows that dialog uses it.
+	OnHooksReview string `toml:"on_hooks_review"`
 	// AfterDenyPrompt: the message sent (once per denied prompt, through
 	// herdr agent.prompt, within the same run) when an agent whose
 	// permission prompt magnum denied stops its turn and goes idle, so it
@@ -9331,8 +9353,14 @@ type CIInfo struct {
 }
     CIInfo is the head commit's CI as the board shows it.
 
-type CheckState struct{ Name, State string }
-    CheckState is one required check and its state.
+type CheckState struct {
+	Name, Label, State string
+	Done, Total        int
+}
+    CheckState is one required check and its state: Name as configured ("ci /
+    *", "workflow:CI"), Label the short name the board's cell shows ("" = Name),
+    Total the checks it matched on the head and Done those that finished (Total
+    0: none, or the head's are not known yet).
 
 type CleanupAction struct {
 	ID      string // stable id the caller maps back to its own action
