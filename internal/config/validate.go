@@ -63,6 +63,9 @@ func (c *Config) Validate() error {
 		if w.Owner == "" || len(w.Include) == 0 {
 			errs = append(errs, fmt.Errorf("watch %q needs owner and include", w.Owner))
 		}
+		for _, msg := range trackerProblems("watch "+w.Owner, w.Trackers) {
+			errs = append(errs, errors.New(msg))
+		}
 		if _, ok := ids[w.Identity]; !ok {
 			errs = append(errs, fmt.Errorf("watch %s: unknown identity %q", w.Owner, w.Identity))
 		}
@@ -245,6 +248,9 @@ func (c *Config) validateRepos() []error {
 			} else if _, err := path.Match(glob, ""); err != nil {
 				errs = append(errs, fmt.Errorf("repo %s: required_checks pattern %q: %w", r.Repo, g, err))
 			}
+		}
+		for _, msg := range trackerProblems("repo "+r.Repo, r.Trackers) {
+			errs = append(errs, errors.New(msg))
 		}
 		errs = append(errs, validateReadiness("repo "+r.Repo, r.Prepare, r.Ready, r.ReadyTimeout)...)
 		errs = append(errs, validateVerdicts("repo "+r.Repo, r.NoFindingsEvent, r.BlockingEvent)...)

@@ -21,7 +21,8 @@ type Board struct {
 	// the issue key's prefix ("https://linear.app/example/issue/DMA-{num}",
 	// "https://example.atlassian.net/browse/PS-{num}"). The first issue key
 	// of any of them in a PR's title ("[PS-38553] …") names the issue: t on
-	// the board opens it, the card shows it.
+	// the board opens it, the card shows it. A [[watch]] or [[repo]] block's
+	// trackers win for its PRs (Config.TrackersFor).
 	Trackers []string `toml:"trackers"`
 }
 
@@ -57,13 +58,25 @@ func ParseTracker(tmpl string) (Tracker, error) {
 	return Tracker{Prefix: m[1], URL: u, key: regexp.MustCompile(`\b` + regexp.QuoteMeta(m[1]) + `([0-9]+)\b`)}, nil
 }
 
-// ParsedTrackers are the Trackers that parse, in order (validate reports
+// parseTrackers are the templates that parse, in order (Validate reports
 // the others).
-func (b Board) ParsedTrackers() []Tracker {
+func parseTrackers(templates []string) []Tracker {
 	var out []Tracker
-	for _, tmpl := range b.Trackers {
+	for _, tmpl := range templates {
 		if t, err := ParseTracker(tmpl); err == nil {
 			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// trackerProblems are the templates that do not parse, labelled by where
+// they are configured ("board", "watch talkable", "repo talkable/x").
+func trackerProblems(where string, templates []string) []string {
+	var out []string
+	for _, tmpl := range templates {
+		if _, err := ParseTracker(tmpl); err != nil {
+			out = append(out, where+": trackers: "+err.Error())
 		}
 	}
 	return out
@@ -136,10 +149,5 @@ func (b Board) validate() []string {
 			out = append(out, fmt.Sprintf("board.badges[%q]: color %q is not one of %s", label, spec.Color, strings.Join(BadgeColors[:7], ", ")))
 		}
 	}
-	for _, tmpl := range b.Trackers {
-		if _, err := ParseTracker(tmpl); err != nil {
-			out = append(out, "board.trackers: "+err.Error())
-		}
-	}
-	return out
+	return append(out, trackerProblems("board", b.Trackers)...)
 }

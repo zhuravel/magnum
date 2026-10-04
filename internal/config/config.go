@@ -299,6 +299,11 @@ type Watch struct {
 	// dismisses them until the re-review posts). A [[repo]] block's
 	// keep_approvals overrides it.
 	KeepApprovals bool `toml:"keep_approvals"`
+	// Trackers are [board] trackers templates for the watch's PRs: an issue
+	// key prefix named here wins over [board]'s ("PR-" in another tracker
+	// than the other owners'); a [[repo]] block's wins over these. See
+	// Config.TrackersFor.
+	Trackers []string `toml:"trackers"`
 	// SkipTrivialDeltas overrides [daemon] skip_trivial_deltas for the
 	// watch's PRs: nil (unset) keeps the daemon's, [] re-reviews every push.
 	SkipTrivialDeltas []string `toml:"skip_trivial_deltas"`
@@ -486,6 +491,11 @@ type Repo struct {
 	// GitHub Actions workflow names (every check of the workflow). The board
 	// shows their state (see Config.RequiredChecks).
 	RequiredChecks []string `toml:"required_checks"`
+
+	// Trackers are [board] trackers templates for this repository's PRs; an
+	// issue key prefix named here wins over its watch's and [board]'s (see
+	// Config.TrackersFor).
+	Trackers []string `toml:"trackers"`
 }
 
 // RequiredWorkflowPrefix marks a required_checks entry naming a whole
@@ -493,8 +503,8 @@ type Repo struct {
 const RequiredWorkflowPrefix = "workflow:"
 
 // worktreeKeys reports whether the block sets any per-PR worktree key
-// (everything but repo, the verdicts, readiness, keep_approvals and
-// required_checks).
+// (everything but repo, the verdicts, readiness, keep_approvals,
+// required_checks and trackers).
 func (r Repo) worktreeKeys() bool {
 	return len(r.Setup) > 0 || len(r.Teardown) > 0 || r.WTHooks != nil || len(r.CopyFiles) > 0 || len(r.StripEnv) > 0 || len(r.Env) > 0
 }
@@ -890,6 +900,31 @@ func (c *Config) KeepApprovals(fullName string) bool {
 		return w.KeepApprovals
 	}
 	return false
+}
+
+// TrackersFor returns the issue trackers of repository fullName's PRs: the
+// [[repo]] block's, then the covering [[watch]]'s, then [board]'s, each
+// issue key prefix taken from the first of them that names it. So one
+// owner's "PR-" may lead to Linear while every other owner's leads to
+// Jira. Templates that do not parse are left out (Validate reports them).
+func (c *Config) TrackersFor(fullName string) []Tracker {
+	var levels [][]string
+	if r := c.RepoFor(fullName); r != nil {
+		levels = append(levels, r.Trackers)
+	}
+	if w := c.WatchFor(fullName); w != nil {
+		levels = append(levels, w.Trackers)
+	}
+	levels = append(levels, c.Board.Trackers)
+	var out []Tracker
+	for _, level := range levels {
+		for _, t := range parseTrackers(level) {
+			if !slices.ContainsFunc(out, func(o Tracker) bool { return o.Prefix == t.Prefix }) {
+				out = append(out, t)
+			}
+		}
+	}
+	return out
 }
 
 // RequiredChecks returns the [[repo]] block's required_checks for

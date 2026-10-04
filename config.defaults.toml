@@ -247,6 +247,8 @@ aliases = ["simplify"]
 # rereview_min_lines = 0                # overrides [daemon] rereview_min_lines / rereview_max_wait (0: no threshold)
 # request_teams = ["backend"]           # review requests for these team slugs start a round like one for you
 # roles = ["codex-judge", "claude-review", "codex-review", "claude-simplify"]   # omitted or [] = every [[role]]
+# trackers = ["https://linear.app/your-org/issue/PR-{num}"]   # [board] trackers for this owner's PRs: an issue key
+#                                       # prefix named here wins over [board]'s (another org's PR- in another tracker)
 #
 # [[pool]]                                # a big app with its own databases: a pool of warm slots
 # repo = "your-org/your-app"
@@ -294,6 +296,8 @@ aliases = ["simplify"]
 #                                         # Actions workflow); replaces the list GitHub's rulesets declare, which
 #                                         # magnum reads by itself; needed where GitHub will not tell (private repos
 #                                         # on a free plan); the board shows their state
+# trackers = ["https://your-org.atlassian.net/browse/APP-{num}"]   # [board] trackers for this repository's PRs;
+#                                         # its key prefixes win over the watch's and [board]'s
 # prepare = ["bin/rails db:test:prepare"] # readiness, as on [[pool]]
 # ready = ["bin/rails runner 'ActiveRecord::Base.connection'"]
 # ready_timeout = "5m"

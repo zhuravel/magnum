@@ -689,3 +689,10 @@ editing history. Code, config comments and prompts reference these by their head
   template with them in place of `{num}`, so a title cannot steer where `t` leads. Rejected: reading the
   head branch or body (teams put the key in the title) and a regexp per tracker (the template already
   names the prefix).
+- **Trackers are scoped like the other per-owner settings** (2026-10-04, amends the entry above: two
+  organizations may both have a `PR-` project, one in Jira and one in Linear). `trackers` is also a
+  `[[watch]]` and a `[[repo]]` key; a PR's trackers are its repository's, then its watch's, then
+  `[board]`'s, and each issue key prefix comes from the most specific level that names it, the others
+  falling through (a watch may move `PR-` to Linear and keep `[board]`'s `PS-`). Rejected: an
+  owner filter on each `[board]` entry (a second way to say what `[[watch]]` already scopes) and
+  replacing whole lists per level (one override would have to repeat every other prefix).

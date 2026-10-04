@@ -2078,14 +2078,11 @@ type Board struct {
 	// the issue key's prefix ("https://linear.app/example/issue/DMA-{num}",
 	// "https://example.atlassian.net/browse/PS-{num}"). The first issue key
 	// of any of them in a PR's title ("[PS-38553] …") names the issue: t on
-	// the board opens it, the card shows it.
+	// the board opens it, the card shows it. A [[watch]] or [[repo]] block's
+	// trackers win for its PRs (Config.TrackersFor).
 	Trackers []string `toml:"trackers"`
 }
     Board tunes the PR board ([board]).
-
-func (b Board) ParsedTrackers() []Tracker
-    ParsedTrackers are the Trackers that parse, in order (validate reports the
-    others).
 
 type Claude struct {
 	WrapperMode string   `toml:"wrapper_mode"`
@@ -2271,6 +2268,13 @@ func (c *Config) ThrottleFor(w *Watch) Daemon
     ThrottleFor is the [daemon] section with w's burst and re-review delta
     overrides applied: the throttle settings (eligibility.Throttle) of w's PRs.
     A nil w is the daemon's.
+
+func (c *Config) TrackersFor(fullName string) []Tracker
+    TrackersFor returns the issue trackers of repository fullName's PRs:
+    the [[repo]] block's, then the covering [[watch]]'s, then [board]'s,
+    each issue key prefix taken from the first of them that names it. So one
+    owner's "PR-" may lead to Linear while every other owner's leads to Jira.
+    Templates that do not parse are left out (Validate reports them).
 
 func (c *Config) TrivialDeltas(w *Watch) []string
     TrivialDeltas is the skip_trivial_deltas that applies to w's PRs:
@@ -2693,6 +2697,11 @@ type Repo struct {
 	// GitHub Actions workflow names (every check of the workflow). The board
 	// shows their state (see Config.RequiredChecks).
 	RequiredChecks []string `toml:"required_checks"`
+
+	// Trackers are [board] trackers templates for this repository's PRs; an
+	// issue key prefix named here wins over its watch's and [board]'s (see
+	// Config.TrackersFor).
+	Trackers []string `toml:"trackers"`
 }
     Repo is a [[repo]] block: the repository's verdicts (any watched repository,
     pooled or not) and setup for the per-PR worktrees of a repository
@@ -2963,6 +2972,11 @@ type Watch struct {
 	// dismisses them until the re-review posts). A [[repo]] block's
 	// keep_approvals overrides it.
 	KeepApprovals bool `toml:"keep_approvals"`
+	// Trackers are [board] trackers templates for the watch's PRs: an issue
+	// key prefix named here wins over [board]'s ("PR-" in another tracker
+	// than the other owners'); a [[repo]] block's wins over these. See
+	// Config.TrackersFor.
+	Trackers []string `toml:"trackers"`
 	// SkipTrivialDeltas overrides [daemon] skip_trivial_deltas for the
 	// watch's PRs: nil (unset) keeps the daemon's, [] re-reviews every push.
 	SkipTrivialDeltas []string `toml:"skip_trivial_deltas"`

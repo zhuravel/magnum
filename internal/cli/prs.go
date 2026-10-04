@@ -241,10 +241,7 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 		}
 		notes := map[string]bool{}
 		required := map[string]store.RequiredChecks{} // per repository, for this load
-		var trackers []config.Tracker
-		if cfg != nil {
-			trackers = cfg.Board.ParsedTrackers()
-		}
+		trackers := map[string][]config.Tracker{}     // per repository, for this load
 		out := make([]tui.PRBoardRow, 0, len(rows))
 		ids := make([]int64, 0, len(rows))
 		for _, r := range rows {
@@ -264,7 +261,14 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 			if cfg != nil {
 				row.Badges = prsBadges(r.Labels, cfg.Board.Badges)
 			}
-			row.Issue, row.IssueURL = config.Issue(r.Title, trackers)
+			if cfg != nil {
+				ts, ok := trackers[full]
+				if !ok {
+					ts = cfg.TrackersFor(full)
+					trackers[full] = ts
+				}
+				row.Issue, row.IssueURL = config.Issue(r.Title, ts)
+			}
 			has, seen := notes[full]
 			if !seen {
 				has = notesExist(layout, r.Owner, r.Name)

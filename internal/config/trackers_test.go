@@ -17,7 +17,7 @@ func TestIssue(t *testing.T) {
 		"https://example.atlassian.net/browse/PS-{num}",
 		"https://example.atlassian.net/browse/PR-{num}",
 	}}
-	trackers := b.ParsedTrackers()
+	trackers := parseTrackers(b.Trackers)
 	if len(trackers) != 3 || trackers[0].Prefix != "DMA-" {
 		t.Fatalf("trackers %+v", trackers)
 	}
@@ -54,11 +54,11 @@ func TestTrackersValidate(t *testing.T) {
 		t.Fatalf("problems %q, want 4", got)
 	}
 	for i, want := range []string{"not an http(s) URL", "must contain {num} once", "must follow the issue key's prefix", "must contain {num} once"} {
-		if !strings.Contains(got[i], want) || !strings.HasPrefix(got[i], "board.trackers: ") {
+		if !strings.Contains(got[i], want) || !strings.HasPrefix(got[i], "board: trackers: ") {
 			t.Errorf("problem %d = %q, want %q", i, got[i], want)
 		}
 	}
-	if len(b.ParsedTrackers()) != 1 {
+	if len(parseTrackers(b.Trackers)) != 1 {
 		t.Fatal("only the valid template is used")
 	}
 }
@@ -79,10 +79,47 @@ func TestFullExampleLoads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load config.full.example.toml: %v", err)
 	}
-	if len(cfg.Board.Badges) == 0 || len(cfg.Board.ParsedTrackers()) != len(cfg.Board.Trackers) || len(cfg.Board.Trackers) == 0 {
+	if len(cfg.Board.Badges) == 0 || len(parseTrackers(cfg.Board.Trackers)) != len(cfg.Board.Trackers) || len(cfg.Board.Trackers) == 0 {
 		t.Fatalf("[board] = %+v", cfg.Board)
 	}
 	if problems := cfg.Board.validate(); len(problems) > 0 {
 		t.Fatalf("[board]: %q", problems)
+	}
+}
+
+// Two owners may use one issue key prefix in different trackers: a
+// [[watch]]'s trackers win over [board]'s for its PRs, a [[repo]]'s over
+// its watch's, prefix by prefix; the prefixes a level does not name come
+// from the broader ones. Templates that do not parse fail validation where
+// they are configured.
+func TestTrackersFor(t *testing.T) {
+	c := &Config{
+		Board: Board{Trackers: []string{"https://example.atlassian.net/browse/PR-{num}", "https://example.atlassian.net/browse/PS-{num}"}},
+		Watches: []Watch{
+			{Owner: "talkable", Include: []string{"*"}},
+			{Owner: "example", Include: []string{"*"}, Trackers: []string{"https://linear.app/example/issue/PR-{num}"}},
+		},
+		Repos: []Repo{{Repo: "example/legacy", Trackers: []string{"https://example.youtrack.cloud/issue/PR-{num}"}}},
+	}
+	for _, tc := range []struct{ repo, title, want string }{
+		{"talkable/talkable", "[PR-12] x", "https://example.atlassian.net/browse/PR-12"},
+		{"example/app", "[PR-12] x", "https://linear.app/example/issue/PR-12"},
+		{"example/app", "[PS-7] x", "https://example.atlassian.net/browse/PS-7"}, // not named by the watch: [board]'s
+		{"example/legacy", "[PR-12] x", "https://example.youtrack.cloud/issue/PR-12"},
+		{"other/repo", "[PR-12] x", "https://example.atlassian.net/browse/PR-12"}, // no watch: [board]'s
+	} {
+		if _, url := Issue(tc.title, c.TrackersFor(tc.repo)); url != tc.want {
+			t.Errorf("%s %q: %q, want %q", tc.repo, tc.title, url, tc.want)
+		}
+	}
+
+	c.Watches[1].Trackers = append(c.Watches[1].Trackers, "linear.app/example/issue/ENG-{num}")
+	c.Repos[0].Trackers = append(c.Repos[0].Trackers, "https://example.youtrack.cloud/issue/{num}")
+	err := c.Validate()
+	for _, want := range []string{"watch example: trackers: \"linear.app/example/issue/ENG-{num}\" is not an http(s) URL",
+		"repo example/legacy: trackers: \"https://example.youtrack.cloud/issue/{num}\": {num} must follow the issue key's prefix"} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("Validate: %v\nwant %s", err, want)
+		}
 	}
 }

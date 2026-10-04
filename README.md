@@ -391,7 +391,9 @@ before the title and is counted in the summary. `[board] trackers` links PRs to 
 with `{num}` right after the issue key's prefix, such as
 `["https://example.atlassian.net/browse/PS-{num}", "https://linear.app/example/issue/ENG-{num}"]`. The first
 issue key in the title that a template knows (`[PS-38553] …` → `…/browse/PS-38553`) is what `t` opens
-and what the card shows as Issue; a key is matched whole, so `XPS-1` is not `PS-1`.
+and what the card shows as Issue; a key is matched whole, so `XPS-1` is not `PS-1`. `trackers` on a
+`[[watch]]` or `[[repo]]` applies to its PRs and wins prefix by prefix (`[[repo]]`, then `[[watch]]`, then
+`[board]`), so two organizations can both have `PR-` issues in different trackers.
 
 FINDINGS shows what magnum's latest review concluded, also where its repository lets it only comment:
 the verdict (✗ blocking, ● comment, ✔ clean), the findings by priority (`P1 P2×3`) and the optional
