@@ -132,6 +132,38 @@ func doctorByName(cs []doctorCheck) map[string]doctorCheck {
 	return m
 }
 
+// The shell probes run detached from the terminal (NoTTY): from a CLI in a
+// terminal an interactive zsh shares it from a background process group,
+// where shell startup that touches it stops zsh until the timeout.
+func TestDoctorShellProbesHaveNoTerminal(t *testing.T) {
+	_, d, _, _ := doctorFixture(t)
+	doctorRun(context.Background(), d)
+	probes := d.Run.(*execx.Fake).CallsWithPrefix("zsh", "-ic")
+	if len(probes) == 0 {
+		t.Fatal("no zsh probe ran")
+	}
+	for _, c := range probes {
+		if !c.NoTTY {
+			t.Errorf("%s runs on the terminal", c.String())
+		}
+	}
+}
+
+// A zsh probe that does not answer is not a missing CLI: the fix says what
+// to check in the shell's startup, and the login check says why it did not run.
+func TestDoctorShellProbeTimeoutSaysWhatToCheck(t *testing.T) {
+	_, d, _, _ := doctorFixture(t)
+	fake := d.Run.(*execx.Fake)
+	fake.Rules = append([]execx.Rule{{Prefix: []string{"zsh", "-ic", "whence -w codex"}, Err: context.DeadlineExceeded}}, fake.Rules...)
+	m := doctorByName(doctorRun(context.Background(), d))
+	if c := m["codex"]; c.Status != doctorFail || !strings.Contains(c.Fix, "must answer within seconds") || strings.Contains(c.Fix, "install") {
+		t.Fatalf("codex = %+v", c)
+	}
+	if c := m["codex login"]; c.Status != "SKIP" || !strings.Contains(c.Detail, "not run: zsh did not say where codex is") {
+		t.Fatalf("codex login = %+v", c)
+	}
+}
+
 func TestDoctorHealthy(t *testing.T) {
 	_, d, _, _ := doctorFixture(t)
 	cs := doctorRun(context.Background(), d)

@@ -206,6 +206,24 @@ func doctorExecGit(ctx context.Context, d doctorDeps, timeout time.Duration, env
 	return res.Out(), nil
 }
 
+// doctorShellProbe asks an interactive zsh (`zsh -ic script`) what the user's
+// shell config defines, detached from the terminal doctor runs in (NoTTY),
+// as the daemon asks it under launchd.
+func doctorShellProbe(ctx context.Context, d doctorDeps, timeout time.Duration, script string) (string, error) {
+	if d.Run == nil {
+		return "", errors.New("no runner")
+	}
+	res, err := d.Run.Run(ctx, execx.Cmd{Name: "zsh", Args: []string{"-ic", script}, Timeout: timeout, NoTTY: true, Label: "doctor"})
+	if err != nil {
+		var ee *execx.ExitError
+		if errors.As(err, &ee) && strings.TrimSpace(ee.Stderr) != "" {
+			return res.Out(), fmt.Errorf("%s", inspFirstLine(execx.Redact(ee.Stderr)))
+		}
+		return res.Out(), err
+	}
+	return res.Out(), nil
+}
+
 func doctorExec(ctx context.Context, d doctorDeps, timeout time.Duration, dir string, env map[string]string, name string, args ...string) (string, error) {
 	if d.Run == nil {
 		return "", errors.New("no runner")

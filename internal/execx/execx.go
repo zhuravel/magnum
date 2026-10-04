@@ -50,6 +50,12 @@ type Cmd struct {
 	// this a git repository? does this ref exist?): a failed exit is logged
 	// at Debug instead of Warn. Start failures and timeouts still warn.
 	Probe bool
+	// NoTTY starts the process in a new session, without a controlling
+	// terminal (setsid), as launchd starts the daemon. An interactive shell
+	// (`zsh -ic`) run from a CLI in a terminal otherwise shares that
+	// terminal from a background process group, where shell startup that
+	// touches the terminal stops it until the timeout.
+	NoTTY bool
 }
 
 // Result is the outcome of a finished subprocess.
@@ -201,7 +207,7 @@ func (r *Real) Run(ctx context.Context, c Cmd) (Result, error) {
 	cmd := exec.CommandContext(ctx, c.Name, c.Args...)
 	cmd.Dir = c.Dir
 	cmd.Env = mergeEnv(r.baseEnv(), c.Env, c.Unset)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.SysProcAttr = procAttr(c)
 	var killer atomic.Pointer[time.Timer]
 	cmd.Cancel = func() error {
 		// Signal the whole group, not just the leader: SIGTERM first so git
@@ -438,4 +444,14 @@ func hasPrefix(argv, prefix []string) bool {
 		}
 	}
 	return true
+}
+
+// procAttr puts the process in its own process group, which the timeout
+// signals as a whole; with NoTTY the group leads a new session, which has
+// no controlling terminal.
+func procAttr(c Cmd) *syscall.SysProcAttr {
+	if c.NoTTY {
+		return &syscall.SysProcAttr{Setsid: true}
+	}
+	return &syscall.SysProcAttr{Setpgid: true}
 }

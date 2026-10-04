@@ -266,6 +266,20 @@ func TestWrapperProbeFailureDefaultsToWrapperAndRetries(t *testing.T) {
 	}
 }
 
+// The wrapper probe runs zsh detached from any terminal (NoTTY), as the
+// daemon does under launchd, so a CLI run in a terminal gets the same answer
+// instead of an interactive zsh stopped on that terminal.
+func TestWrapperProbeHasNoTerminal(t *testing.T) {
+	e := newEnv(t)
+	if _, err := e.m.Wrapper(e.ctx, KindCodex); err != nil {
+		t.Fatal(err)
+	}
+	probes := e.run.CallsWithPrefix("zsh", "-ic")
+	if len(probes) != 1 || !probes[0].NoTTY {
+		t.Fatalf("probes = %+v", probes)
+	}
+}
+
 func TestRecordSessionID(t *testing.T) {
 	e := newEnv(t)
 	e.started()

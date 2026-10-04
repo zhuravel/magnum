@@ -301,7 +301,7 @@ func (m *Manager) Wrapper(ctx context.Context, kind string) (bool, error) {
 		return v, nil
 	}
 	res, _ := m.d.Runner.Run(ctx, execx.Cmd{Name: "zsh", Args: []string{"-ic", "whence -w " + kind},
-		Timeout: WrapperProbeTimeout, Label: "probe " + kind + " wrapper"})
+		Timeout: WrapperProbeTimeout, NoTTY: true, Label: "probe " + kind + " wrapper"})
 	v, ok = parseWhence(string(res.Stdout), kind)
 	if !ok {
 		return true, nil

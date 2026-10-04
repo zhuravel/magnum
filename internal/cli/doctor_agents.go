@@ -27,7 +27,7 @@ func doctorInstall(kind string) string {
 // doctorWhence asks the user's zsh what kind names, as herdr's panes see it:
 // "function", "alias", "command", "builtin", ... or "none".
 func doctorWhence(ctx context.Context, d doctorDeps, kind string) (string, error) {
-	out, err := doctorExec(ctx, d, 15*time.Second, "", nil, "zsh", "-ic", "whence -w "+kind)
+	out, err := doctorShellProbe(ctx, d, 15*time.Second, "whence -w "+kind)
 	for _, line := range strings.Split(out, "\n") {
 		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), kind+":"); ok {
 			return strings.TrimSpace(rest), nil
@@ -110,10 +110,14 @@ func doctorAgentChecks(ctx context.Context, d doctorDeps) []doctorCheck {
 		users := strings.Join(rolesUsers(d.Config, kind), ", ")
 		what, werr := doctorWhence(ctx, d, kind)
 		onPath := werr == nil && what != "none"
+		skipLogin := "" // why the login check cannot run
 		switch {
 		case werr != nil:
-			out = append(out, doctorFailed(kind, fmt.Sprintf("could not ask zsh for %s (used by %s): %s", kind, users, werr.Error()), doctorInstall(kind)))
+			skipLogin = "zsh did not say where " + kind + " is"
+			out = append(out, doctorFailed(kind, fmt.Sprintf("could not ask zsh for %s (used by %s): %s", kind, users, werr.Error()),
+				fmt.Sprintf("`zsh -ic 'whence -w %s' </dev/null` must answer within seconds; when it does not, something in your zsh startup files waits (for input, the network or the terminal)", kind)))
 		case !onPath:
+			skipLogin = kind + " is not on PATH"
 			out = append(out, doctorFailed(kind, fmt.Sprintf("%s (used by %s) is not on PATH in zsh", kind, users), doctorInstall(kind)))
 		default:
 			label := kind
@@ -122,7 +126,7 @@ func doctorAgentChecks(ctx context.Context, d doctorDeps) []doctorCheck {
 			}
 			out = append(out, doctorOK(kind, fmt.Sprintf("%s is on PATH (zsh %s; used by %s)", label, what, users)))
 		}
-		out = append(out, doctorLogin(ctx, d, kind, k, onPath))
+		out = append(out, doctorLogin(ctx, d, kind, k, skipLogin))
 
 		mode := k.Wrapper
 		section := "[kinds." + kind + "]"
@@ -142,16 +146,17 @@ func doctorAgentChecks(ctx context.Context, d doctorDeps) []doctorCheck {
 }
 
 // doctorLogin runs a kind's login check (config.Kind.LoginArgv, read by
-// config.Kind.LoggedIn).
-func doctorLogin(ctx context.Context, d doctorDeps, kind string, k config.Kind, onPath bool) doctorCheck {
+// config.Kind.LoggedIn); skip says why a check that runs kind itself cannot
+// run ("" = it can).
+func doctorLogin(ctx context.Context, d doctorDeps, kind string, k config.Kind, skip string) doctorCheck {
 	name := kind + " login"
 	argv := k.LoginArgv()
 	check := strings.Join(argv, " ")
 	switch {
 	case len(argv) == 0:
 		return doctorSkipped(name, fmt.Sprintf("%s has no login check ([kinds.%s] login_check)", kind, kind))
-	case !onPath && argv[0] == kind:
-		return doctorSkipped(name, fmt.Sprintf("`%s` not run: %s is not on PATH", check, kind))
+	case skip != "" && argv[0] == kind:
+		return doctorSkipped(name, fmt.Sprintf("`%s` not run: %s", check, skip))
 	case d.Run == nil:
 		return doctorSkipped(name, fmt.Sprintf("`%s` not run: no runner", check))
 	}

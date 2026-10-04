@@ -127,3 +127,33 @@ func TestRealCapsOutput(t *testing.T) {
 		t.Fatalf("small output: %q truncated=%v %v", small.Out(), small.Truncated, err)
 	}
 }
+
+// NoTTY starts the process in a new session (no controlling terminal: an
+// interactive zsh run from a CLI in a terminal then cannot stop on it); a
+// timeout still stops the process and its children.
+func TestRealNoTTYStartsANewSession(t *testing.T) {
+	if a := procAttr(Cmd{NoTTY: true}); !a.Setsid || a.Setpgid {
+		t.Fatalf("NoTTY: %+v", a)
+	}
+	if a := procAttr(Cmd{}); a.Setsid || !a.Setpgid {
+		t.Fatalf("default: %+v", a)
+	}
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("no python3 to ask for the session")
+	}
+	r := &Real{}
+	leader := "import os; print('leader' if os.getsid(0) == os.getpid() else 'member')"
+	for want, c := range map[string]Cmd{
+		"leader": {Name: "python3", Args: []string{"-c", leader}, NoTTY: true},
+		"member": {Name: "python3", Args: []string{"-c", leader}},
+	} {
+		if res, err := r.Run(context.Background(), c); err != nil || res.Out() != want {
+			t.Errorf("NoTTY=%v: %q %v, want %s", c.NoTTY, res.Out(), err, want)
+		}
+	}
+	res, err := r.Run(context.Background(), Cmd{Name: "sh", Args: []string{"-c", "sleep 30 & echo $!; wait"}, Timeout: 300 * time.Millisecond, NoTTY: true})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("want deadline, got %v", err)
+	}
+	waitGone(t, firstPID(t, res.Stdout), 3*time.Second)
+}
