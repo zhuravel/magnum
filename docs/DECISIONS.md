@@ -633,3 +633,10 @@ editing history. Code, config comments and prompts reference these by their head
   board's owner scope (all, then each owner with PRs, the default repository's first), kept across a trip
   to the dashboard. Rejected: hiding skipped PRs (they stay findable for a forced review) and sorting
   badged PRs first (the sort is the reviewer's choice; the badge and the count make them visible).
+- **`h` hides ignored and skipped PRs; badges may be colored** (2026-10-04). `h` toggles hiding the rows
+  `magnum ignore` muted and the configuration skips; the title says "N hidden (h)" so nothing disappears
+  silently, and the choice is kept in the registry (`board.hide_skipped`). A `[board] badges` entry is a
+  text or `{ text, color }` with the board's ANSI colors (red, green, yellow, blue, magenta, cyan, gray), so
+  an icon such as the Nerd Font database for schema migrations reads like the yellow re-review pill.
+  Rejected: ⌘⇧. (terminals keep ⌘ for themselves) and arbitrary hex colors (the board sticks to the 16
+  ANSI colors so themes stay readable).

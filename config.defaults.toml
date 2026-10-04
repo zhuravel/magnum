@@ -62,7 +62,9 @@ icons = "unicode"                 # unicode | nerd (Nerd Font icons and colour e
 
 [board]
 # badges = { "Flagged" = "🚩" }     # GitHub label → what the PR board shows before the title (case and leading
-                                  # emoji ignored: "Flagged" matches "🚩 Flagged"); the summary counts them
+                                  # emoji ignored: "Flagged" matches "🚩 Flagged"); the summary counts them; a
+                                  # colored one: { "Schema Migration" = { text = "\uf1c0", color = "yellow" } }
+                                  # (red, green, yellow, blue, magenta, cyan, gray)
 
 [github]
 transport = "gh"                  # App JWT/token calls run as `gh api` (gh | direct); direct = Go net/http,

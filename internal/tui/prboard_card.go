@@ -34,7 +34,7 @@ func (p prbPainter) helpContent(width int) []string {
 		{"enter", "details card"}, {"s / S", "next sort / reverse it"}, {"/", "filter (fuzzy)"},
 		{"v / O", "next view / next owner (all, then each)"},
 		{"esc", "back, clear the filter, quit"}, {"ctrl+r / F5", "refresh now"}, {"tab", "status dashboard"},
-		{"W", "reset the column widths"}, {"?", "this help"}, {"q", "quit"},
+		{"h / W", "hide ignored and skipped / reset widths"}, {"?", "this help"}, {"q", "quit"},
 	})
 	acts := section("Act on the PR", []hint{
 		{"r", "review now (asks y/N)"}, {"R", "fresh review in new agent sessions (asks y/N)"},

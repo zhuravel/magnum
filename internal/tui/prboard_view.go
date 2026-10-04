@@ -49,7 +49,7 @@ func RenderPRBoard(rows []PRBoardRow, width int, opts PRBoardOptions) string {
 	if w <= 0 {
 		w = lay.total()
 	}
-	lines := []string{p.titleLine(w, opts.Title, opts.Repo, owner, view, len(sorted), "", len(sorted), ""), p.summaryLine(w), p.headerLine(lay, w), p.rule(w, 0, false)}
+	lines := []string{p.titleLine(w, opts.Title, opts.Repo, owner, view, len(sorted), "", len(sorted), 0, ""), p.summaryLine(w), p.headerLine(lay, w), p.rule(w, 0, false)}
 	for _, r := range sorted {
 		lines = append(lines, p.rowLine(r, lay, w, false))
 	}
@@ -66,6 +66,9 @@ type prbPalette struct {
 
 	ruleColor, dim, selBg color.Color
 	pills, dots           map[string]lipgloss.Style
+	// named are the colors a badge may ask for ([board] badges color):
+	// red, green, yellow, blue, magenta, cyan and gray, as the pills use them.
+	named map[string]lipgloss.Style
 }
 
 func newPRBPalette(st styles) prbPalette {
@@ -84,7 +87,10 @@ func newPRBPalette(st styles) prbPalette {
 	pill := func(c color.Color) lipgloss.Style { return lipgloss.NewStyle().Bold(true).Foreground(c).Reverse(true) }
 	yellowPill, redPill := pill(yellow), pill(red)
 	gone := fg(dim).Italic(true)
+	cyan := pick(lipgloss.Cyan, lipgloss.BrightCyan)
 	return prbPalette{
+		named: map[string]lipgloss.Style{"red": fg(red), "green": fg(green), "yellow": fg(yellow), "blue": fg(blue),
+			"magenta": fg(magenta), "cyan": fg(cyan), "gray": fg(dim), "grey": fg(dim)},
 		rule: fg(faint), mine: fg(magenta), num: lipgloss.NewStyle().Bold(true),
 		add: fg(green), del: fg(red), green: fg(green), red: fg(red), yellow: fg(yellow),
 		tag:       fg(dim).Italic(true),
@@ -496,7 +502,7 @@ func (p prbPainter) titleCell(r PRBoardRow) cell {
 		c = append(c, seg{p.g.errMark + " ", p.st.Err})
 	}
 	for _, b := range r.Badges {
-		c = append(c, seg{b.Text + " ", lipgloss.Style{}})
+		c = append(c, seg{b.Text, p.pal.named[b.Color]}, seg{" ", lipgloss.Style{}})
 	}
 	if r.Draft {
 		c = append(c, seg{"draft", p.pal.tag}, seg{" ", lipgloss.Style{}})
@@ -1225,7 +1231,7 @@ func (p prbPainter) footerRule(width int, msg string, below int) string {
 // count, the owner scope ("all owners" when the rows span several), the
 // view (with inView, its row count), the sort and the filter, with right
 // (the refresh time) on the right.
-func (p prbPainter) titleLine(width int, title, repo, owner string, view PRView, inView int, filter string, shown int, right string) string {
+func (p prbPainter) titleLine(width int, title, repo, owner string, view PRView, inView int, filter string, shown, hidden int, right string) string {
 	scope := "all repos"
 	if repo != "" {
 		scope = repo
@@ -1278,6 +1284,9 @@ func (p prbPainter) titleLine(width int, title, repo, owner string, view PRView,
 		}
 		if match != "" {
 			parts = append(parts, match)
+		}
+		if hidden > 0 {
+			parts = append(parts, p.st.Dim.Render(fmt.Sprintf("%d hidden (h)", hidden)))
 		}
 		left = " " + strings.Join(parts, p.st.Dim.Render(p.g.sep))
 		if width <= 0 || ansi.StringWidth(left)+1+ansi.StringWidth(right) <= width {

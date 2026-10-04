@@ -3,7 +3,7 @@
 # keys you need into ~/.config/magnum/config.toml. Secrets (App private keys) live in the checkout's gitignored
 # .mise.local.toml. Your config's [[watch]], [[identity]], [[pool]] and [[repo]] blocks are appended to the
 # defaults, any key it sets under [daemon], [herdr], [terminal], [board]
-badges = { "Flagged" = "🚩", "Schema Migration" = "\uf1c0" }   # 🚩 a flagged Jira issue; \uf1c0 = Nerd Font database icon
+badges = { "Flagged" = "🚩", "Schema Migration" = { text = "\uf1c0", color = "yellow" } }   # 🚩 a flagged Jira issue; \uf1c0 = Nerd Font database icon
 
 [github], [pipeline] or [kinds.<name>]
 # overrides the default, and its [[role]] blocks override the role of the same name key by key (other names

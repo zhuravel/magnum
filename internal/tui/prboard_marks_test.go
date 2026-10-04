@@ -158,3 +158,53 @@ func TestPRBoardBadges(t *testing.T) {
 		t.Errorf("sanitized badges = %+v", r.Badges)
 	}
 }
+
+// h hides the ignored and skipped rows (and shows them again), the title
+// counts what it hides, and the choice is reported for keeping.
+func TestPRBoardHHidesIgnoredAndSkipped(t *testing.T) {
+	var kept []bool
+	m, _, _ := newBoard(t, 170, 24, PRBoardOptions{HideToggled: func(h bool) { kept = append(kept, h) }})
+	rows := []PRBoardRow{
+		{Ref: "talkable/talkable#1", Owner: "talkable", Repo: "talkable", Number: 1, Title: "Live work", State: "reviewed", GHState: "OPEN", UpdatedAt: ago(time.Hour)},
+		{Ref: "talkable/talkable#2", Owner: "talkable", Repo: "talkable", Number: 2, Title: "Bump gems", State: "ineligible", SkipReason: "bot author", GHState: "OPEN", UpdatedAt: ago(time.Hour)},
+		{Ref: "talkable/talkable#3", Owner: "talkable", Repo: "talkable", Number: 3, Title: "Old idea", State: "ignored", Muted: true, GHState: "OPEN", UpdatedAt: ago(time.Hour)},
+	}
+	m, _ = send(t, m, prbDataMsg{rows: rows})
+	mustContain(t, viewOf(m), "Live work", "Bump gems", "Old idea")
+	m, _ = send(t, m, keyMsg("h"))
+	v := viewOf(m)
+	mustContain(t, v, "Live work", "2 hidden (h)", "hiding ignored and skipped PRs: 2")
+	mustNotContain(t, v, "Bump gems", "Old idea")
+	m, _ = send(t, m, keyMsg("h"))
+	mustContain(t, viewOf(m), "Bump gems", "Old idea")
+	mustNotContain(t, viewOf(m), "hidden (h)")
+	if len(kept) != 2 || !kept[0] || kept[1] {
+		t.Fatalf("toggles reported %v", kept)
+	}
+	s, _, _ := newBoard(t, 170, 24, PRBoardOptions{HideSkipped: true})
+	s, _ = send(t, s, prbDataMsg{rows: rows})
+	mustNotContain(t, viewOf(s), "Bump gems")
+}
+
+// A badge with a color is drawn in it (the board's ANSI yellow, as the
+// re-review pill); one without keeps the terminal's.
+func TestPRBoardBadgeColor(t *testing.T) {
+	m, _, _ := newBoard(t, 170, 24, PRBoardOptions{})
+	p := m.painter()
+	r := PRBoardRow{Title: "Schema change", Badges: []Badge{{Label: "Schema Migration", Text: "\uf1c0", Color: "yellow"}, {Label: "Flagged", Text: "🚩"}}}
+	var colored, plain lipgloss.Style
+	for _, s := range p.titleCell(r) {
+		switch s.text {
+		case "\uf1c0":
+			colored = s.st
+		case "🚩":
+			plain = s.st
+		}
+	}
+	if colored.GetForeground() != p.pal.yellow.GetForeground() {
+		t.Fatalf("the yellow badge is drawn in %v", colored.GetForeground())
+	}
+	if _, none := plain.GetForeground().(lipgloss.NoColor); !none {
+		t.Fatalf("an uncolored badge got %v", plain.GetForeground())
+	}
+}

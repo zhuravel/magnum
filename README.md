@@ -383,8 +383,10 @@ CI shows the head's checks: the repository's required checks when it has some (r
 rulesets, or `[[repo]] required_checks`; `✗ Completion`, `– Completion not run` when it never ran on the
 head, `⊘ Completion skipped`), else the counts (`✓ 65/65`, `✗ 2 failed`, `◌ 40/65`); the card lists the
 checks per workflow and names every failed job. Rows the configuration skips (bots, `skip_authors`,
-labels, forks, authors who left) read "skipped · bot" and are dimmed; `R` still reviews one. A label in
-`[board] badges` (`{ "Flagged" = "🚩" }`) shows as its badge before the title and is counted in the summary.
+labels, forks, authors who left) read "skipped · bot" and are dimmed; `R` still reviews one, and `h` hides
+the skipped and ignored rows (the title says how many; the choice is kept). A label in `[board] badges`
+(`{ "Flagged" = "🚩" }`, or `{ text = "\uf1c0", color = "yellow" }` for a colored one) shows as its badge
+before the title and is counted in the summary.
 
 FINDINGS shows what magnum's latest review concluded, also where its repository lets it only comment:
 the verdict (✗ blocking, ● comment, ✔ clean), the findings by priority (`P1 P2×3`) and the optional

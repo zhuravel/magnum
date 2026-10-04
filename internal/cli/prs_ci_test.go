@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"github.com/zhuravel/magnum/internal/config"
 	"testing"
 	"time"
 
@@ -62,9 +63,9 @@ func TestPRsCIRequiredChecks(t *testing.T) {
 
 // Badges match labels whatever the case and leading emoji or symbols.
 func TestPRsBadges(t *testing.T) {
-	badges := map[string]string{"Flagged": "🚩", "schema migration": "\uf1c0"}
+	badges := map[string]config.BadgeSpec{"Flagged": {Text: "🚩"}, "schema migration": {Text: "\uf1c0", Color: "yellow"}}
 	got := prsBadges([]string{"Bug", "⚠️ Schema Migration", "🚩 Flagged"}, badges)
-	if len(got) != 2 || got[0] != (tui.Badge{Label: "🚩 Flagged", Text: "🚩"}) || got[1] != (tui.Badge{Label: "⚠️ Schema Migration", Text: "\uf1c0"}) {
+	if len(got) != 2 || got[0] != (tui.Badge{Label: "🚩 Flagged", Text: "🚩"}) || got[1] != (tui.Badge{Label: "⚠️ Schema Migration", Text: "\uf1c0", Color: "yellow"}) {
 		t.Fatalf("badges %+v", got)
 	}
 	if prsBadges([]string{"Bug"}, badges) != nil || prsBadges([]string{"🚩 Flagged"}, nil) != nil {

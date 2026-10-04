@@ -150,7 +150,7 @@ func newer(a, b store.CheckResult) bool {
 // prsBadges are the configured badges ([board] badges) a PR's labels carry,
 // in the badges' label order. A badge key matches a label whatever their
 // case and leading emoji or symbols ("Flagged" matches "🚩 Flagged").
-func prsBadges(labels []string, badges map[string]string) []tui.Badge {
+func prsBadges(labels []string, badges map[string]config.BadgeSpec) []tui.Badge {
 	if len(badges) == 0 || len(labels) == 0 {
 		return nil
 	}
@@ -163,7 +163,7 @@ func prsBadges(labels []string, badges map[string]string) []tui.Badge {
 	for _, k := range keys {
 		for _, l := range labels {
 			if badgeKey(l) == badgeKey(k) {
-				out = append(out, tui.Badge{Label: l, Text: badges[k]})
+				out = append(out, tui.Badge{Label: l, Text: badges[k].Text, Color: badges[k].Color})
 				break
 			}
 		}

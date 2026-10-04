@@ -61,7 +61,12 @@ type CheckState struct{ Name, State string }
 
 // Badge marks a PR that carries a GitHub label: Text (e.g. "🚩") shows
 // before the title, Label names it on the card.
-type Badge struct{ Label, Text string }
+type Badge struct {
+	Label, Text string
+	// Color is one of red, green, yellow, blue, magenta, cyan or gray ("" =
+	// the terminal's; an emoji keeps its own colors).
+	Color string
+}
 
 // PRBoardRow is one pull request on the PR board. Ref is what actions
 // receive; Owner, Repo and Number label the row (Ref is parsed when they
@@ -234,6 +239,11 @@ type PRBoardOptions struct {
 	// NoMouse starts with mouse support off ([terminal] mouse = false);
 	// m turns it on and off either way.
 	NoMouse bool
+	// HideSkipped starts the board with the ignored and skipped PRs hidden
+	// (h toggles it); HideToggled, when set, hears every h so the choice
+	// can be kept.
+	HideSkipped bool
+	HideToggled func(hide bool)
 	// MouseToggled, when set, hears every m, so the next screen can start
 	// the same way.
 	MouseToggled func(on bool)
@@ -524,7 +534,7 @@ func sanitizeRow(r PRBoardRow) PRBoardRow {
 		badges := make([]Badge, 0, len(r.Badges))
 		for _, b := range r.Badges {
 			if b.Text = cleanText(b.Text); b.Text != "" {
-				badges = append(badges, Badge{Label: cleanText(b.Label), Text: b.Text})
+				badges = append(badges, Badge{Label: cleanText(b.Label), Text: b.Text, Color: cleanText(b.Color)})
 			}
 		}
 		r.Badges = badges
@@ -634,6 +644,8 @@ type prBoardModel struct {
 	desc      bool
 	boardView PRView // the preset subset of the rows (v cycles)
 	owner     string // the owner whose rows show (O cycles); "" shows every owner
+	hide      bool   // ignored and skipped rows are hidden (h toggles)
+	hidden    int    // how many rows hide hides in the owner scope
 	filter    textinput.Model
 	filtering bool // the filter input has the keyboard
 
@@ -669,6 +681,7 @@ type prbRowsKey struct {
 	width      int
 	sort       PRSort
 	owner      string // the owner scope: the rows, their counts and refs follow it
+	hide       bool   // ignored and skipped rows hidden: the rows and counts follow it
 	desc, dark bool
 	clock      int64
 	widths     prbWidths // dragged widths; zero in the natural widths' key
@@ -702,7 +715,7 @@ type prbFrameKey struct {
 }
 
 func (m prBoardModel) rowsKey(w int) prbRowsKey {
-	return prbRowsKey{gen: m.gen, width: w, sort: m.sort, owner: m.owner, desc: m.desc, dark: m.st.dark, clock: clockKey(m.opts.Now), widths: m.widths}
+	return prbRowsKey{gen: m.gen, width: w, sort: m.sort, owner: m.owner, hide: m.hide, desc: m.desc, dark: m.st.dark, clock: clockKey(m.opts.Now), widths: m.widths}
 }
 
 func (m prBoardModel) frameKey() prbFrameKey {
@@ -753,7 +766,7 @@ func newPRBoardModel(ctx context.Context, src PRBoardSource, act DashboardAction
 	m := prBoardModel{
 		actionBar: newActionBar(ctx, act), src: src, opts: opts, g: g, spin: sp, filter: in, cache: &prbCache{},
 		self: selfSet(opts.SelfLogins), sort: opts.DefaultSort, desc: true, boardView: opts.DefaultView,
-		owner:   strings.TrimSpace(opts.DefaultOwner),
+		owner: strings.TrimSpace(opts.DefaultOwner), hide: opts.HideSkipped,
 		loading: true, spinning: true, // Init starts the first load and the spinner
 		saver: newWidthSaver(opts.Widths, widthsBoard),
 	}
@@ -895,6 +908,12 @@ func (m *prBoardModel) rebuild() {
 	if m.owner != "" {
 		m.all = ownedBy(m.loaded, m.owner)
 	}
+	m.hidden = 0
+	if m.hide {
+		before := len(m.all)
+		m.all = slices.DeleteFunc(slices.Clone(m.all), hiddenRow)
+		m.hidden = before - len(m.all)
+	}
 	q := parsePRQuery(m.filter.Value())
 	rows := make([]PRBoardRow, 0, len(m.all))
 	m.inView = 0
@@ -918,6 +937,16 @@ func (m *prBoardModel) rebuild() {
 		}
 	}
 	m.moveTo(m.cursor)
+}
+
+// hiddenRow reports a row h hides: one `magnum ignore` muted or the
+// configuration skips.
+func hiddenRow(r PRBoardRow) bool {
+	switch normState(r.State) {
+	case "ignored", "ineligible":
+		return true
+	}
+	return false
 }
 
 // rowOwner is the user or organization owning the row's repository.
@@ -1114,6 +1143,18 @@ func (m prBoardModel) tableKey(k string) (prBoardModel, tea.Cmd) {
 		}
 	case "O":
 		return m.nextOwner()
+	case "h":
+		m.hide = !m.hide
+		if m.opts.HideToggled != nil {
+			m.opts.HideToggled(m.hide)
+		}
+		m.rebuild()
+		msg := "showing ignored and skipped PRs (h hides them)"
+		if m.hide {
+			msg = fmt.Sprintf("hiding ignored and skipped PRs: %d (h shows them)", m.hidden)
+		}
+		cmd := m.note(msg)
+		return m, cmd
 	case "/":
 		m.filtering = true
 		m.mode = prbTable
@@ -1390,7 +1431,7 @@ func (m prBoardModel) render() string {
 		right = m.spin.View() + " " + right
 	}
 	out := []string{
-		p.titleLine(w, m.opts.Title, m.opts.Repo, m.owner, m.boardView, m.inView, m.filter.Value(), len(m.view), right),
+		p.titleLine(w, m.opts.Title, m.opts.Repo, m.owner, m.boardView, m.inView, m.filter.Value(), len(m.view), m.hidden, right),
 		m.cache.summaryFor(m.rowsKey(w), func() string { return p.summaryLine(w) }),
 	}
 

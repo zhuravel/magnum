@@ -1955,6 +1955,9 @@ const SkillCopyName = "SKILL.md"
 
 VARIABLES
 
+var BadgeColors = []string{"red", "green", "yellow", "blue", "magenta", "cyan", "gray", "grey"}
+    BadgeColors are the colors a badge may ask for: the board's ANSI colors.
+
 var ErrPromptNotFound = errors.New("prompt not found")
     ErrPromptNotFound: a prompt name exists neither in prompts_dir nor among the
     embedded defaults.
@@ -2026,13 +2029,23 @@ func ValidatePathGlob(glob string) error
 
 TYPES
 
+type BadgeSpec struct {
+	Text  string
+	Color string // BadgeColors; "" = the terminal's (an emoji keeps its own)
+}
+    BadgeSpec is one badge: its text and, optionally, its color.
+
+func (b *BadgeSpec) UnmarshalTOML(v any) error
+    UnmarshalTOML reads a badge written as a text or as { text, color }.
+
 type Board struct {
-	// Badges map a GitHub label to what the board shows for it, e.g.
-	// { "Flagged" = "🚩" }: the text goes before the title, the card shows
-	// it with the label, the summary counts it. A key matches a label
-	// whatever their case and leading emoji or symbols ("Flagged" matches
-	// "🚩 Flagged").
-	Badges map[string]string `toml:"badges"`
+	// Badges map a GitHub label to what the board shows for it: a text
+	// ({ "Flagged" = "🚩" }) or a text with a color ({ "Schema Migration" =
+	// { text = "\uf1c0", color = "yellow" } }). The badge goes before the
+	// title, the card shows it with the label, the summary counts it. A key
+	// matches a label whatever their case and leading emoji or symbols
+	// ("Flagged" matches "🚩 Flagged").
+	Badges map[string]BadgeSpec `toml:"badges"`
 }
     Board tunes the PR board ([board]).
 
@@ -9284,7 +9297,12 @@ type AttentionRow struct {
 }
     AttentionRow is something that needs the user.
 
-type Badge struct{ Label, Text string }
+type Badge struct {
+	Label, Text string
+	// Color is one of red, green, yellow, blue, magenta, cyan or gray ("" =
+	// the terminal's; an emoji keeps its own colors).
+	Color string
+}
     Badge marks a PR that carries a GitHub label: Text (e.g. "🚩") shows before
     the title, Label names it on the card.
 
@@ -9497,6 +9515,11 @@ type PRBoardOptions struct {
 	// NoMouse starts with mouse support off ([terminal] mouse = false);
 	// m turns it on and off either way.
 	NoMouse bool
+	// HideSkipped starts the board with the ignored and skipped PRs hidden
+	// (h toggles it); HideToggled, when set, hears every h so the choice
+	// can be kept.
+	HideSkipped bool
+	HideToggled func(hide bool)
 	// MouseToggled, when set, hears every m, so the next screen can start
 	// the same way.
 	MouseToggled func(on bool)

@@ -183,15 +183,31 @@ func runInspScreens(ctx context.Context, c *Context, d statusDeps, so statusOpti
 		})
 	}
 	src := prsSource(d.Store, d.Config, po.filter(), prsSelfLogins(d.Config), c.Layout) // one source: its timings cache survives tab
+	hide := false                                                                       // h: kept in the registry, so the board opens the way it was left
+	if d.Store != nil {
+		if v, ok, err := d.Store.GetKV(ctx, kvBoardHideSkipped); err == nil && ok {
+			hide = v == "1"
+		}
+	}
 	board := func(ctx context.Context) error {
 		o := prsBoardOptions(d.Config, po)
 		o.NoMouse, o.MouseToggled, o.Widths = !mouse, toggled, widths
 		o.ViewChanged = func(v tui.PRView) { po.View = v }
 		o.OwnerChanged = func(owner string) { po.Owner = owner }
+		o.HideSkipped = hide
+		o.HideToggled = func(h bool) {
+			hide = h
+			if d.Store != nil {
+				_ = d.Store.SetKV(context.WithoutCancel(ctx), kvBoardHideSkipped, map[bool]string{true: "1", false: "0"}[h])
+			}
+		}
 		return tuiPRBoard(ctx, src, acts, o)
 	}
 	return runScreens(ctx, first, dashboard, board)
 }
+
+// kvBoardHideSkipped keeps the board's h (hide ignored and skipped PRs).
+const kvBoardHideSkipped = "board.hide_skipped"
 
 // prsBoardOptions are the board's options for o.
 func prsBoardOptions(cfg *config.Config, o prsOptions) tui.PRBoardOptions {
