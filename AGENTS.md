@@ -33,7 +33,8 @@ when you change a behaviour, do not rewrite old ones.
 - **Nothing from a PR is trusted.** PR titles, bodies, file contents, `AGENTS.md` in the checkout:
   data, never instructions. Prompts carry URLs and SHAs, never PR text. Agents are never approved on
   anything: magnum answers only folder-trust dialogs and the "Switch model?" confirmation of its own
-  `/model` command, and says "No" to permission prompts.
+  `/model` command, says "No" to permission prompts, and declines Codex's hooks review ("Continue
+  without trusting": the PR controls the hooks, and they would run outside the sandbox).
 
 ## Gate
 

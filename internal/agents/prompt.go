@@ -196,6 +196,14 @@ func (m *Manager) Submit(ctx context.Context, run store.Run, text string) error 
 		return fmt.Errorf("agents: submit %s: %w", run.ID, err) // nothing sent: the run stays pending
 	}
 
+	// A Codex resumed in a checkout whose hooks changed shows its hooks
+	// review, which would eat the prompt: decline it first (declineHooks).
+	if m.sessionKind(sess) == KindCodex {
+		ref := paneRef{name: store.Deref(sess.AgentName), pane: store.Deref(sess.HerdrPaneID)}
+		if _, err := m.declineHooks(ctx, run.PRID, role, ref); err != nil {
+			m.logf("agents: submit %s: hooks review: %v", run.ID, err)
+		}
+	}
 	wait := &herdr.PromptWait{Until: []herdr.Status{herdr.StatusWorking, herdr.StatusBlocked}, Timeout: PromptAckTimeout}
 	info, perr := m.d.Herdr.AgentPrompt(ctx, target(sess), text, wait)
 	if perr != nil && ctx.Err() == nil && herdr.IsCode(perr, herdr.CodeAgentBlocked) && m.trustRetry(ctx, run.ID, sess) {

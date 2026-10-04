@@ -196,6 +196,10 @@ const EventDefaultModelRestored = "agent.default_model_restored"
     settings' default model back (data: session, role, file, model, found;
     model and found are null when the key was absent).
 
+const EventHooksDeclined = "agents.hooks_declined"
+    EventHooksDeclined is the event kind recorded each time magnum declines a
+    hooks review.
+
 const EventTrustDialogAnswered = "agents.trust_dialog_answered"
     EventTrustDialogAnswered is the event kind recorded (subject
     "pr:<owner>/<name>#<N>") each time a trust dialog is answered.

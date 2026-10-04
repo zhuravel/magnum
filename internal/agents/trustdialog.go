@@ -345,12 +345,19 @@ func (m *Manager) AnswerTrustDialog(ctx context.Context, s store.Session) (bool,
 	return true, nil
 }
 
-// trustRetry answers a trust dialog in run's session (AnswerTrustDialog)
-// and reports whether the run's rejected prompt may be sent again.
+// trustRetry answers a trust dialog in run's session (AnswerTrustDialog),
+// or declines a Codex hooks review (declineHooks), and reports whether the
+// run's rejected prompt may be sent again.
 func (m *Manager) trustRetry(ctx context.Context, runID string, sess store.Session) bool {
 	ok, err := m.AnswerTrustDialog(ctx, sess)
 	if err != nil {
 		m.logf("agents: run %s: trust dialog fallback: %v", runID, err)
+	}
+	if !ok && m.sessionKind(sess) == KindCodex {
+		ref := paneRef{name: store.Deref(sess.AgentName), pane: store.Deref(sess.HerdrPaneID)}
+		if ok, err = m.declineHooks(ctx, sess.PRID, Role(sess.Role), ref); err != nil {
+			m.logf("agents: run %s: hooks review: %v", runID, err)
+		}
 	}
 	return ok
 }
@@ -361,6 +368,13 @@ func (m *Manager) startAfterTrustDialog(ctx context.Context, prID int64, role Ro
 	ok, err := m.answerTrust(ctx, prID, role, kind, ref, gate)
 	if err != nil {
 		m.logf("agents: start %s: trust dialog fallback: %v", ref, err)
+	}
+	if kind == KindCodex { // a resumed or fresh Codex may stop at its hooks review (after the trust dialog, too)
+		declined, err := m.declineHooks(ctx, prID, role, ref)
+		if err != nil {
+			m.logf("agents: start %s: hooks review: %v", ref, err)
+		}
+		ok = ok || declined
 	}
 	if !ok {
 		return herdr.AgentInfo{}, false

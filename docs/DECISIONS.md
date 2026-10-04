@@ -640,3 +640,12 @@ editing history. Code, config comments and prompts reference these by their head
   an icon such as the Nerd Font database for schema migrations reads like the yellow re-review pill.
   Rejected: ⌘⇧. (terminals keep ⌘ for themselves) and arbitrary hex colors (the board sticks to the 16
   ANSI colors so themes stay readable).
+- **Codex's hooks review is declined, never trusted** (2026-10-04, after talkable#11483's re-review: the
+  resumed judge showed "Hooks need review" because the PR changed the repository's Codex hooks, the
+  prompt went into the dialog, magnum took the idle agent for a judge that stopped, nudged it and parked
+  the PR in needs_attention). Before every prompt to a Codex agent, after a prompt herdr rejected as
+  blocked, and when a Codex start stops at a dialog, magnum reads the screen; on the hooks review it moves
+  the cursor to "Continue without trusting (hooks won't run)", confirms it got there, presses Enter, records
+  `agents.hooks_declined` and waits for the agent to be idle before prompting. Rejected: trusting them (the
+  hooks come from the PR and run outside the sandbox) and leaving the dialog for a human (every PR that
+  touches the hooks would stall its round).

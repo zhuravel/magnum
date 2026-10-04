@@ -193,7 +193,7 @@ func TestStartAgentAnswersCodexTrustDialog(t *testing.T) {
 	if got := e.keysSent(); len(got) != 1 || got[0] != name+":enter" {
 		t.Fatalf("keys = %v, want one enter", got)
 	}
-	if reads := e.h.callsWith("AgentRead " + name + " visible"); len(reads) != 1 {
+	if reads := e.h.callsWith("AgentRead " + name + " visible"); len(reads) == 0 { // the hooks review is looked for too
 		t.Fatalf("visible reads = %v", e.h.calls)
 	}
 	s := e.session(RoleJudge)
@@ -358,8 +358,10 @@ func TestSubmitTrustRetryOnlyOnceAndOnlyEarly(t *testing.T) {
 	if _, err := e2.m.Prompt(e2.ctx, e2.pr, RoleJudge, store.RunInitial, "go"); !errors.Is(err, ErrBlocked) {
 		t.Fatalf("err = %v, want ErrBlocked", err)
 	}
-	if len(e2.h.prompts) != 1 || len(e2.keysSent()) != 0 || len(e2.h.callsWith("AgentRead")) != 0 {
-		t.Fatalf("late block: prompts %d, keys %v, reads %v", len(e2.h.prompts), e2.keysSent(), e2.h.callsWith("AgentRead"))
+	// The screen is read for a hooks review (declineHooks), but the trust
+	// dialog on it is left alone: nothing is pressed, nothing re-sent.
+	if len(e2.h.prompts) != 1 || len(e2.keysSent()) != 0 {
+		t.Fatalf("late block: prompts %d, keys %v", len(e2.h.prompts), e2.keysSent())
 	}
 }
 
@@ -381,8 +383,8 @@ func TestTrustDialogFallbackOnlyBeforeFirstPrompt(t *testing.T) {
 	if r := e.run1(id); r.State != store.RunFailed || len(e.h.prompts) != 2 {
 		t.Fatalf("run %+v, prompts %d: no re-send", r, len(e.h.prompts))
 	}
-	if keys := e.keysSent(); len(keys) != 0 || len(e.h.callsWith("AgentRead")) != 0 {
-		t.Fatalf("keys %v, reads %v: a prompted session's screen is never answered", keys, e.h.callsWith("AgentRead"))
+	if keys := e.keysSent(); len(keys) != 0 {
+		t.Fatalf("keys %v: a prompted session's trust dialog is never answered", keys)
 	}
 }
 
