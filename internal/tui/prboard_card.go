@@ -530,8 +530,8 @@ func (p prbPainter) findingsLines(f FindingsInfo) []string {
 	want := map[string]string{"blocking": "REQUEST_CHANGES", "non_blocking": "COMMENT", "clean": "APPROVE"}[f.Verdict]
 	line := "Decision: " + decision
 	if p.g.rich {
-		glyph, _ := p.findingsVerdict(f.Verdict)
-		line = glyph + " " + line
+		glyph, st := p.findingsVerdict(f.Verdict)
+		line = st.Render(glyph) + " " + line
 	}
 	if f.Posted != "" && want != "" && !strings.EqualFold(f.Posted, want) {
 		line += "; posted as " + strings.ToLower(strings.ReplaceAll(f.Posted, "_", " ")) +

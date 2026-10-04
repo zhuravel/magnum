@@ -113,20 +113,20 @@ func TestNerdIconsMarkStatesVerdictsAndPriorities(t *testing.T) {
 	mustContain(t, viewOf(b),
 		"🔴 2 attention", "🔵 1 reviewing", "🟢 1 reviewed", "⚪ 1 not reviewed", // the summary
 		" \uf441 reviewing ", " \uf421 attention ", " \uf4c5 not reviewed ", // the pills
-		"❌ 🔥P0 🔴P1 🟠P2×3 ⚪P3 \uf0c4 2", // FINDINGS, whole
-		"✅ approved", "alice❌", "bob\uf468 \uf464", "eve⏳", "\uf51f zhuravel✅", // verdicts and chips
+		"\ueb43 🔥P0 🔴P1 🟠P2×3 ⚪P3 \uf0c4 2",                                                                // FINDINGS, whole
+		"\U000F012C approved", "alice\ueb43", "bob\uf468 \uf464", "eve\ue641", "\uf51f zhuravel\U000F012C", // verdicts and chips: gh-dash's icons
 		"\uf435 Fix referral", "\uf530 Referral analytics") // pin and failure
 
 	c := iconBoard(t, IconsNerd, 200, 90, findingsRow())
 	c, _ = send(t, c, keyMsg("enter"))
 	mustContain(t, viewOf(c), "\uf4e3 WAITING", "\uf417 SINCE REVIEW", "\uf4af LAST REVIEW", "\uf46f FINDINGS",
 		"\uf520 LAST ROUND (2, full)", "\uf4fd REVIEWERS (2)", "\uf421 NEEDS YOU", "\uf427 ACTIONS",
-		"❌ Decision: request changes; posted as comment",
+		"\ueb43 Decision: request changes; posted as comment",
 		"🔥 P0 1 · 🔴 P1 1 · 🟠 P2 3 · ⚪ P3 1 · \uf0c4 2 simplifications suggested")
 
 	h, _ := send(t, b, tea.WindowSizeMsg{Width: 240, Height: 60}, keyMsg("?"))
-	mustContain(t, viewOf(h), "✅ approved", "❌ changes requested", "⏳ requested", "\uf464 stale", "\uf51f yours",
-		"❌ blocking", "💬 non-blocking", "✅ clean", "🔥P0 🔴P1 🟠P2 ⚪P3 by priority", "\uf0c4 simplifications",
+	mustContain(t, viewOf(h), "\U000F012C approved", "\ueb43 changes requested", "\ue641 requested", "\uf464 stale", "\uf51f yours",
+		"\ueb43 blocking", "\uf27b non-blocking", "\uf058 clean", "🔥P0 🔴P1 🟠P2 ⚪P3 by priority", "\uf0c4 simplifications",
 		"🔴  \uf421 attention ", "🚫  \uf466 ignored ")
 
 	d := iconDash(t, IconsNerd, 120, 40)

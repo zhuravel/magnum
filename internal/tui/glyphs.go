@@ -80,21 +80,31 @@ func newGlyphs(mode IconMode) glyphs {
 		}
 	case IconsNerd:
 		return glyphs{
-			mode:     IconsNerd,
-			approved: "✅", changes: "❌", commented: "💬", pending: "⏳",
-			dismissed:   "\uf468", // nf-oct-circle_slash
-			other:       "\uf444", // nf-oct-dot_fill
-			nonBlocking: "💬", times: "×",
-			ciPass: "\uf49e", ciFail: "\uf52f", ciPending: "\uf43a", // nf-oct-check_circle, x_circle, clock
-			ciMissing: "\uf48b", ciSkip: "\uf517", // nf-oct-dash, skip
-			simplify: "\uf0c4",     // nf-fa-scissors
-			stale:    "\uf464",     // nf-oct-history
-			mine:     "\uf51f",     // nf-oct-star_fill
-			bot:      "\U000F06A9", // nf-md-robot
-			pin:      "\uf435",     // nf-oct-pin
-			errMark:  "\uf530",     // nf-oct-x_circle_fill
-			fail:     "❌", ok: "✅",
-			cursor: "▌", dash: "—", minus: "−", atLeast: "≥", rule: "─", up: "▲", down: "▼", dot: "●",
+			mode: IconsNerd,
+			// The review and check states are gh-dash's icons (v4.26
+			// internal/tui/constants), so both boards read alike.
+			approved:    "\U000F012C", // nf-md-check: gh-dash ApprovedIcon
+			changes:     "\ueb43",     // codicon request-changes: gh-dash ChangesRequestedIcon
+			commented:   "\uf27b",     // nf-fa-commenting_o: gh-dash CommentIcon
+			pending:     "\ue641",     // gh-dash WaitingIcon
+			dismissed:   "\uf468",     // nf-oct-circle_slash
+			other:       "\uf444",     // nf-oct-dot_fill
+			nonBlocking: "\uf27b",     // a comment verdict: as commented
+			times:       "×",
+			ciPass:      "\uf058",     // nf-fa-check_circle: gh-dash SuccessIcon
+			ciFail:      "\U000F0159", // nf-md-close_circle: gh-dash FailureIcon
+			ciPending:   "\ue641",     // gh-dash WaitingIcon
+			ciMissing:   "\uf48b",     // nf-oct-dash
+			ciSkip:      "\uf517",     // nf-oct-skip
+			simplify:    "\uf0c4",     // nf-fa-scissors
+			stale:       "\uf464",     // nf-oct-history
+			mine:        "\uf51f",     // nf-oct-star_fill
+			bot:         "\U000F06A9", // nf-md-robot
+			pin:         "\uf435",     // nf-oct-pin
+			errMark:     "\uf530",     // nf-oct-x_circle_fill
+			fail:        "\U000F0159", // gh-dash FailureIcon
+			ok:          "\uf058",     // gh-dash SuccessIcon
+			cursor:      "▌", dash: "—", minus: "−", atLeast: "≥", rule: "─", up: "▲", down: "▼", dot: "●",
 			sortDesc: "\uf51a", // nf-oct-sort_desc
 			sortAsc:  "\uf519", // nf-oct-sort_asc
 			refresh:  "\uf43a", // nf-oct-clock
@@ -128,7 +138,6 @@ func newGlyphs(mode IconMode) glyphs {
 				"broken": "🔴", "lost": "🔴", "observed": "⚪", "removing": "⚫", "removed": "⚫",
 			},
 			priority: [4]string{"🔥", "🔴", "🟠", "⚪"},
-			ciMark:   map[string]string{"passed": "✅", "failed": "❌", "pending": "⏳", "missing": "➖", "skipped": "⏩"},
 			running:  [2]string{"🔴", "🟢"},
 			heading: map[string]string{
 				"WAITING":          "\uf4e3", // nf-oct-hourglass

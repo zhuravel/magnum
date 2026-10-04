@@ -57,7 +57,7 @@ func TestPRBoardCICell(t *testing.T) {
 	want := map[IconMode][]string{
 		IconsUnicode: {"✗ Completion +1 ⟳", "✓ 65/65", "◌ 40/65", "✗ 2 failed", "—", "✓ Completion",
 			"– Completion not run", "⊘ Completion skipped +1", "– not run", "—"},
-		IconsNerd: {"\uf52f Completion +1 \uf464", "\uf49e 65/65", "\uf43a 40/65", "\uf52f 2 failed", "—", "\uf49e Completion",
+		IconsNerd: {"\U000F0159 Completion +1 \uf464", "\uf058 65/65", "\ue641 40/65", "\U000F0159 2 failed", "—", "\uf058 Completion",
 			"\uf48b Completion not run", "\uf517 Completion skipped +1", "\uf48b not run", "—"},
 		IconsASCII: {"x Completion +1 ~", "+ 65/65", "o 40/65", "x 2 failed", "-", "+ Completion",
 			"- Completion not run", "/ Completion skipped +1", "- not run", "-"},
@@ -151,10 +151,10 @@ func TestPRBoardCardShowsCI(t *testing.T) {
 		"(GitHub accepts a skipped required check; a cancelled dependency skips it)")
 	mustContain(t, card(IconsUnicode, 8), "– not run")
 	mustNotContain(t, card(IconsUnicode, 6), "GitHub accepts")
-	mustContain(t, card(IconsNerd, 0), "\uf52e CI (older commit)", "❌ CI 59/63 passed", "✅ other checks 2/2 passed",
-		"Required: ⏳ workflow:CI pending · ❌ Completion failed")
-	mustContain(t, card(IconsNerd, 6), "➖ Completion not run")
-	mustContain(t, card(IconsNerd, 7), "⏩ Completion skipped")
+	mustContain(t, card(IconsNerd, 0), "\uf52e CI (older commit)", "\U000F0159 CI 59/63 passed", "\uf058 other checks 2/2 passed",
+		"Required: \ue641 workflow:CI pending · \U000F0159 Completion failed")
+	mustContain(t, card(IconsNerd, 6), "\uf48b Completion not run")
+	mustContain(t, card(IconsNerd, 7), "\uf517 Completion skipped")
 	mustContain(t, card(IconsASCII, 0), "x CI 59/63 passed", "Required: o workflow:CI pending | x Completion failed")
 	mustContain(t, card(IconsASCII, 7), "/ Completion skipped")
 
@@ -168,7 +168,7 @@ func TestPRBoardCardShowsCI(t *testing.T) {
 func TestPRBoardHelpExplainsCI(t *testing.T) {
 	for mode, want := range map[IconMode][]string{
 		IconsUnicode: {"CI   ✓ passed   ✗ failed   ◌ pending   – not run   ⊘ skipped", "⟳ of an older commit"},
-		IconsNerd:    {"CI   \uf49e passed   \uf52f failed   \uf43a pending   \uf48b not run   \uf517 skipped", "\uf464 of an older commit"},
+		IconsNerd:    {"CI   \uf058 passed   \U000F0159 failed   \ue641 pending   \uf48b not run   \uf517 skipped", "\uf464 of an older commit"},
 		IconsASCII:   {"CI   + passed   x failed   o pending   - not run   / skipped", "~ of an older commit"},
 	} {
 		m := iconBoard(t, mode, 200, 90, ciRows()...)

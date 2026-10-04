@@ -696,3 +696,11 @@ editing history. Code, config comments and prompts reference these by their head
   falling through (a watch may move `PR-` to Linear and keep `[board]`'s `PS-`). Rejected: an
   owner filter on each `[board]` entry (a second way to say what `[[watch]]` already scopes) and
   replacing whole lists per level (one override would have to repeat every other prefix).
+- **The Nerd Font mode draws verdicts and checks with gh-dash's icons** (2026-10-04, the user runs
+  gh-dash next to the board). Approved, changes requested, commented and waiting are gh-dash v4.26's
+  ApprovedIcon (U+F012C), ChangesRequestedIcon (U+EB43), CommentIcon (U+F27B) and WaitingIcon (U+E641);
+  passed and failed checks and the flash marks its SuccessIcon (U+F058) and FailureIcon (U+F0159). They
+  replace the ✅ ❌ 💬 ⏳ emoji, which drew the same states in another style than the CI column's icons,
+  and take the verdict's color (an emoji brought its own). The colored circles for magnum's states
+  and the finding priorities stay emoji: gh-dash has no counterpart, and they are what makes a row
+  stand out.
