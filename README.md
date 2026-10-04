@@ -81,47 +81,35 @@ flowchart LR
 ## Quick start
 
 Requirements: macOS (see [Linux](#linux) below), [herdr](https://herdr.dev) 0.9.3+ running, `gh` logged
-in, the agent CLIs you want to use (`codex`, `claude`, `droid`, `omp`) and Go 1.27.
-[mise](https://mise.jdx.dev) only for a pool whose worktrees use it; MySQL only for a `[[pool]]` that
-declares databases.
-
-Install with Homebrew (built from source; while the repository is private, git fetches it with your
-GitHub credentials), or build from a checkout as below:
+in and the agent CLIs you want to use (`codex`, `claude`, `droid`, `omp`). MySQL only for a `[[pool]]`
+that declares databases; [mise](https://mise.jdx.dev) only for a pool whose worktrees use it.
 
 ```bash
-brew install zhuravel/tap/magnum                 # then: magnum init, magnum install --plugin
-```
-
-A new machine reviews its first PR without a pool or a database:
-
-```bash
-git clone <this repository> ~/Projects/magnum && cd ~/Projects/magnum
-make build                                   # bin/magnum
-bin/magnum init                              # ~/.config/magnum/config.toml: your gh login, one repository, who posts
-bin/magnum doctor                            # what this setup uses, with the exact fix for each problem
-bin/magnum daemon                            # in a second terminal or herdr pane: the daemon in the foreground
-bin/magnum review owner/repo#123 --wait      # one review of that repository's PR, start to finish
+brew install zhuravel/tap/magnum             # built from source by Homebrew
+magnum init                                  # ~/.config/magnum/config.toml: your gh login, one repository, who posts
+magnum doctor                                # what this setup uses, with the exact fix for each problem
+magnum daemon                                # in a second terminal or herdr pane: the daemon in the foreground
+magnum review owner/repo#123 --wait          # one review of that repository's PR, start to finish
 ```
 
 When the review has posted, hand the daemon to launchd (`install` stops the foreground one) and add the
 extras you want:
 
 ```bash
-make install                                 # launchd agent + herdr plugin
-bin/magnum install --gh --no-launchd         # optional: `gh magnum …`
-bin/magnum completion zsh > "${fpath[1]}/_magnum"
+magnum install --plugin                      # launchd agent + herdr plugin
+magnum install --gh --no-launchd             # optional: `gh magnum …`
+magnum completion zsh > "${fpath[1]}/_magnum"
 ```
 
-`magnum init` refuses to replace an existing config without `--force` (the old file is kept as
-`config.toml.bak`); [config.example.toml](config.example.toml) is the same minimal setup to copy by hand. To post as a GitHub App, answer 2 when init asks who posts: it asks for the App's
-ids and names the file to save its private key as, `~/.config/magnum/keys/<app>.pem` (it never asks for
-the key); `bin/magnum identities check` verifies the App. A big repository with its own databases gets a pool of warm slots: add a `[[pool]]`
-(see below), then `bin/magnum slots provision --count 6`.
+To upgrade: `brew upgrade magnum && magnum daemon-restart --drain` (the daemon keeps running the old
+binary until it restarts; `--drain` waits for the rounds in flight).
 
-Releasing: `make release VERSION=v0.2.0` on a pushed, clean master runs the gate, tags, publishes the
-GitHub release and points the tap's formula ([packaging/homebrew/magnum.rb](packaging/homebrew/magnum.rb),
-pushed to github.com/zhuravel/homebrew-tap) at the new tag. CI (`.github/workflows/ci.yml`) runs the gate on
-macOS for every push to master and every pull request.
+`magnum init` refuses to replace an existing config without `--force` (the old file is kept as
+`config.toml.bak`); [config.example.toml](config.example.toml) is the same minimal setup to copy by hand.
+To post as a GitHub App, answer 2 when init asks who posts: it asks for the App's ids and names the file
+to save its private key as, `~/.config/magnum/keys/<app>.pem` (it never asks for the key); `magnum
+identities check` verifies the App. A big repository with its own databases gets a pool of warm slots:
+add a `[[pool]]` (see below), then `magnum slots provision --count 6`.
 
 ## Configuration
 
@@ -384,7 +372,7 @@ code; `magnum stats` reports them per role.
 | `magnum slots [list\|provision\|remove\|repair\|adopt\|pin\|unpin]` | Pool management. |
 | `magnum where <ref>` | `cd $(magnum where 123)`. |
 | `magnum pause\|resume`, `magnum logs [<ref>] [-f]`, `magnum doctor`, `magnum identities check`, `magnum kick` | Operations. |
-| `magnum daemon [--once] [--dry-run]`, `magnum install\|uninstall\|daemon-restart\|daemon-stop [--now]`, `magnum migrate-home` | The daemon and its launchd job (`migrate-home` moves a checkout's `state/` to the XDG places, see Configuration). Stop and restart refuse while review rounds are in flight unless `--now`; `daemon-restart --drain` and `install --drain` stop new rounds, wait for those in flight (at most `--timeout`, default 2h) and then restart. `daemon-restart` and `install` first run `bin/magnum config`, which validates the configuration and renders every prompt with the build that will run, and refuse when it fails; the daemon refuses to start on the same errors (written to `daemon.log` and `launchd.log`). After a build that adds a registry migration, other commands refuse to run while the older daemon is up (they would migrate the registry under it) and point at `daemon-restart --drain`. |
+| `magnum daemon [--once] [--dry-run]`, `magnum install\|uninstall\|daemon-restart\|daemon-stop [--now]`, `magnum migrate-home` | The daemon and its launchd job (`migrate-home` moves a checkout's `state/` to the XDG places, see Configuration). Stop and restart refuse while review rounds are in flight unless `--now`; `daemon-restart --drain` and `install --drain` stop new rounds, wait for those in flight (at most `--timeout`, default 2h) and then restart. `daemon-restart` and `install` first run `magnum config` with the binary launchd will run, which validates the configuration and renders every prompt with the build that will run, and refuse when it fails; the daemon refuses to start on the same errors (written to `daemon.log` and `launchd.log`). After a build that adds a registry migration, other commands refuse to run while the older daemon is up (they would migrate the registry under it) and point at `daemon-restart --drain`. |
 
 Shell completion is dynamic: PR references complete from the registry with their titles, slots,
 identities, roles and sorts from config.
@@ -499,12 +487,31 @@ for the session (`on_hooks_review = "decline"` declines them all).
 
 ## Development
 
+Work on magnum from a checkout, and run that checkout's build instead of a Homebrew one (one or the other
+runs the daemon; both use the same files in `~/.config`, `~/.local/share` and `~/.local/state`). Go 1.27
+is needed:
+
+```bash
+git clone https://github.com/zhuravel/magnum ~/Projects/magnum && cd ~/Projects/magnum
+make link        # build, and link ~/.local/bin/magnum to bin/magnum: `magnum` anywhere runs this build
+make install     # launchd runs this checkout's bin/magnum, herdr links this checkout as its plugin
+```
+
+Then the loop is: edit, `make build && magnum daemon-restart --drain` (the daemon loads the prompts and
+the skill from the checkout when it starts, so a prompt edit needs the restart too). `make unlink` removes
+the link; `brew install zhuravel/tap/magnum && magnum install --plugin` switches to the released build.
+
 ```bash
 make test        # gofmt, go vet, hermetic tests (fakes for git, gh, herdr, MySQL)
 make api-doc     # regenerate docs/API.md
-mise run dev     # air: rebuild and restart the foreground daemon on save (bin/magnum install hands it back)
-bin/magnum daemon --once --dry-run   # one tick, every decision printed, no side effects
+mise run dev     # air: rebuild and restart the foreground daemon on save (`magnum install` hands it back)
+magnum daemon --once --dry-run   # one tick, every decision printed, no side effects
 ```
+
+Releasing: `make release VERSION=v0.2.0` on a pushed, clean master runs the gate, tags, publishes the
+GitHub release and points the tap's formula ([packaging/homebrew/magnum.rb](packaging/homebrew/magnum.rb),
+pushed to github.com/zhuravel/homebrew-tap) at the new tag. CI (`.github/workflows/ci.yml`) runs the gate on
+macOS for every push to master and every pull request.
 
 To measure a change to the prompts, the skill or a model before the daemon picks it up, keep a corpus
 of PRs whose defects you know in `~/.config/magnum/eval.toml` (a checkout's gitignored `eval.local.toml` still

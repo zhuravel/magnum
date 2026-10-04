@@ -6,7 +6,7 @@ BIN           ?= bin/magnum
 VERSION       ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 INSTALL_FLAGS ?= --plugin
 
-.PHONY: build test check-private install api-doc release
+.PHONY: build test check-private install api-doc release link unlink
 
 ## build: compile bin/magnum (the binary launchd and the herdr plugin run)
 build:
@@ -45,3 +45,14 @@ api-doc:
 ## release: tag the pushed master as $(VERSION) (vX.Y.Z), publish the GitHub release, update the Homebrew tap
 release:
 	scripts/release.sh $(VERSION)
+
+## link: put this checkout's build on PATH as ~/.local/bin/magnum (a symlink, so every `make build` updates it)
+link: build
+	@mkdir -p $(HOME)/.local/bin
+	@ln -sfn $(CURDIR)/$(BIN) $(HOME)/.local/bin/magnum
+	@echo "~/.local/bin/magnum -> $(CURDIR)/$(BIN)"
+
+## unlink: remove ~/.local/bin/magnum when it is this checkout's link
+unlink:
+	@if [ "$$(readlink $(HOME)/.local/bin/magnum)" = "$(CURDIR)/$(BIN)" ]; then rm $(HOME)/.local/bin/magnum && echo "removed ~/.local/bin/magnum"; \
+	else echo "~/.local/bin/magnum is not this checkout's link; left alone"; fi
