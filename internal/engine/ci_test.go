@@ -170,7 +170,8 @@ func TestRequiredChecksReadFromGitHub(t *testing.T) {
 		t.Fatalf("reads on the first sync = %d (calls %v)", n, h.gh.calls)
 	}
 	first := h.clock.Now()
-	if r := required(); !reflect.DeepEqual(r, store.RequiredChecks{Checks: []string{"Completion"}, Source: store.RequiredFromGitHub, FetchedAt: first}) {
+	if r := required(); !r.FetchedAt.Equal(first) || // read back from the registry in UTC; the clock is local
+		!reflect.DeepEqual(r.Checks, []string{"Completion"}) || r.Source != store.RequiredFromGitHub {
 		t.Fatalf("required = %+v", r)
 	}
 	if !h.hasEvent("repo:talkable/talkable", "repo.required_checks") {

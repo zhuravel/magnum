@@ -39,7 +39,7 @@ func TestPollStoresBoardFieldsAndWholePRSize(t *testing.T) {
 	// Nothing reviewed by the PR's identity: the whole PR, sized by Details, no Compare.
 	want := store.SinceReview{Source: store.SinceFromBase, Base: fakeBaseOid, Head: "a1", Commits: 1, Files: 1,
 		Additions: 10, Deletions: 1, ComputedAt: now}
-	if pr.SinceReview == nil || !reflect.DeepEqual(*pr.SinceReview, want) {
+	if pr.SinceReview == nil || !equalSince(*pr.SinceReview, want) {
 		t.Fatalf("since review = %+v, want %+v", pr.SinceReview, want)
 	}
 	if n := h.gh.count("compare:"); n != 0 {
@@ -110,7 +110,7 @@ func TestSinceReviewFollowsReviewedSHA(t *testing.T) {
 	pr = h.wantState(2, store.PRRereviewPending)
 	want := store.SinceReview{Source: store.SinceFromReviewed, Base: "b1", Head: "b2", Commits: 1, Files: 2, Additions: 7,
 		Deletions: 3, ComputedAt: h.clock.Now()}
-	if pr.SinceReview == nil || !reflect.DeepEqual(*pr.SinceReview, want) {
+	if pr.SinceReview == nil || !equalSince(*pr.SinceReview, want) {
 		t.Fatalf("since review = %+v, want %+v", pr.SinceReview, want)
 	}
 	// Further polls (unchanged, or updated without a push) never compare the same pair again.
@@ -233,4 +233,15 @@ func TestDepartedAuthorsAreNotReviewed(t *testing.T) {
 	if pr := h.pr(3); deref(pr.AuthorAssociation) != "COLLABORATOR" {
 		t.Fatalf("backfilled association %q", deref(pr.AuthorAssociation))
 	}
+}
+
+// equalSince compares two SinceReview values with ComputedAt as an instant:
+// a time read back from the registry's JSON is in UTC, the test clock's in
+// the local zone, which DeepEqual tells apart when the zone is UTC.
+func equalSince(a, b store.SinceReview) bool {
+	if !a.ComputedAt.Equal(b.ComputedAt) {
+		return false
+	}
+	a.ComputedAt, b.ComputedAt = time.Time{}, time.Time{}
+	return reflect.DeepEqual(a, b)
 }
