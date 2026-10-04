@@ -3,10 +3,8 @@ go = "1.27"
 air = "latest"
 
 [env]
-# Real values live in the gitignored .mise.local.toml. Each [[identity]] of kind "app" names its key's
-# variable in `private_key_env`: either the PEM text (multiline TOML string) or a path to a 0600 file.
-# The placeholder below matches config.toml.example; add one per App you declare.
-MAGNUM_TALKABLE_APP_PRIVATE_KEY = "you-must-configure-this-in-your-.mise.local.toml"
+# Real values live in the gitignored .mise.local.toml. App keys do not: an [[identity]] of kind "app"
+# names its PEM file in `private_key_file` (~/.config/magnum/keys/<app>.pem, chmod 600).
 # grep -E pattern of names that must never appear in tracked files (`make check-private`, part of `make test`).
 MAGNUM_PRIVATE_PATTERNS = ""
 
