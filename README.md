@@ -422,9 +422,10 @@ to be `m`).
 
 `[terminal] icons` picks the screens' symbols: `unicode` (the default), `nerd` for a
 [Nerd Font](https://www.nerdfonts.com) terminal (an icon on every state, verdict and section; review
-verdicts and check states use gh-dash's icons, so both boards read alike; colour emoji make states and
-finding priorities easy to spot: 🔴 attention, 🟡 queued, 🔵 reviewing, 🟢 reviewed, 🔥 P0, 🟠 P2), or
-`ascii`. `?` shows the legend for the mode in use.
+verdicts and check states use gh-dash's icons, so both boards read alike; finding priorities are a flame
+for P0 and a dot for P1 to P3 in the priority's color; colour emoji make the summary's states easy to
+spot: 🔴 attention, 🟡 queued, 🔵 reviewing, 🟢 reviewed), or `ascii`. Outside ASCII a reviewing PR's state
+pill spins (herdr-radar's braille spinner) while its round runs. `?` shows the legend for the mode in use.
 
 ## Integrations
 

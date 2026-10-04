@@ -704,3 +704,11 @@ editing history. Code, config comments and prompts reference these by their head
   and take the verdict's color (an emoji brought its own). The colored circles for magnum's states
   and the finding priorities stay emoji: gh-dash has no counterpart, and they are what makes a row
   stand out.
+- **Finding priorities are colored icons; a reviewing pill spins** (2026-10-04, amends the entry
+  above: the user found the 🔥 🔴 🟠 ⚪ emoji drew too much attention). P0 is nf-oct-flame (U+F490),
+  P1 to P3 nf-oct-dot_fill (U+F444), in the priority's color (red, red, yellow, dim), so a row shows its
+  worst finding by color without four colour emoji shouting. The reviewing (claiming, verifying) state
+  pill shows herdr-radar's eight-dot braille spinner (⣷ ⣯ ⣟ ⡿ ⢿ ⣻ ⣽ ⣾, MIT) instead of a still eye,
+  eight frames a second, only while some PR in scope is in such a state: the frame chain ends with the
+  last one, and the frame is part of the rows' cache key only then, so a still board keeps its cached
+  frames. Badge counts in the summary and the card's badges take the badge's color, as rows did.

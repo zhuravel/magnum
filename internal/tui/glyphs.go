@@ -62,6 +62,10 @@ type glyphs struct {
 	heading   map[string]string // before a section heading (card, dashboard)
 	running   [2]string         // before the daemon's state: stopped, running (dashboard)
 	spinner   spinner.Spinner
+	// working are the frames of the spinner a reviewing PR's state pill
+	// shows instead of a still icon (herdr-radar's eight-dot braille, the gap
+	// walking round the cell); nil = still.
+	working []string
 }
 
 func newGlyphs(mode IconMode) glyphs {
@@ -137,7 +141,9 @@ func newGlyphs(mode IconMode) glyphs {
 				"provisioning": "🟡", "releasing": "🟡", "dirty_schema": "🟠",
 				"broken": "🔴", "lost": "🔴", "observed": "⚪", "removing": "⚫", "removed": "⚫",
 			},
-			priority: [4]string{"🔥", "🔴", "🟠", "⚪"},
+			// Finding priorities: icons in the priority's color (red,
+			// red, yellow, dim), quieter than colour emoji.
+			priority: [4]string{"\uf490", "\uf444", "\uf444", "\uf444"}, // nf-oct-flame, nf-oct-dot_fill
 			running:  [2]string{"🔴", "🟢"},
 			heading: map[string]string{
 				"WAITING":          "\uf4e3", // nf-oct-hourglass
@@ -158,6 +164,7 @@ func newGlyphs(mode IconMode) glyphs {
 				"MANUAL WORKTREES": "\uf425", // nf-oct-tools
 			},
 			spinner: spinner.MiniDot,
+			working: workingFrames,
 		}
 	}
 	return glyphs{
@@ -169,8 +176,14 @@ func newGlyphs(mode IconMode) glyphs {
 		cursor: "▌", dash: "—", minus: "−", atLeast: "≥", rule: "─", up: "▲", down: "▼", dot: "●",
 		sortDesc: "↓", sortAsc: "↑", refresh: "↻", sep: " · ",
 		spinner: spinner.MiniDot,
+		working: workingFrames,
 	}
 }
+
+// workingFrames are herdr-radar's spinner for a working agent (MIT,
+// lib/config.js): a full braille cell reads as motion from across the
+// screen, which a lighter mark does not.
+var workingFrames = []string{"⣷", "⣯", "⣟", "⡿", "⢿", "⣻", "⣽", "⣾"}
 
 // marked is text behind mark and a space; text alone when the mode has no
 // mark there ("").

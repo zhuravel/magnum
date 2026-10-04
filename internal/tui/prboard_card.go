@@ -73,7 +73,7 @@ func (p prbPainter) helpContent(width int) []string {
 	}, "   ", inner)...)
 	prios := make([]string, len(g.priority))
 	for i := range prios {
-		prios[i] = p.priorityStyle(i).Render(g.priority[i] + fmt.Sprintf("P%d", i))
+		prios[i] = p.priorityStyle(i).Render(p.priorityMark(i) + fmt.Sprintf("P%d", i))
 	}
 	lines = append(lines, flow([]string{
 		p.st.Header.Render("FINDINGS"), p.pal.red.Render(g.changes) + " blocking", p.pal.yellow.Render(g.nonBlocking) + " non-blocking",
@@ -155,7 +155,7 @@ func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
 		flags = append(flags, p.pinStyle().Render(p.g.pin)+" pinned")
 	}
 	for _, b := range r.Badges {
-		flags = append(flags, strings.TrimSpace(b.Text+" "+b.Label))
+		flags = append(flags, strings.TrimSpace(p.pal.named[b.Color].Render(b.Text)+" "+b.Label))
 	}
 	if r.Draft {
 		flags = append(flags, p.pal.tag.Render("draft"))
@@ -540,7 +540,7 @@ func (p prbPainter) findingsLines(f FindingsInfo) []string {
 	out := []string{line}
 	var parts []string
 	for i, n := range f.Counts {
-		parts = append(parts, marked(p.g.priority[i], fmt.Sprintf("P%d %d", i, n)))
+		parts = append(parts, p.priorityStyle(i).Render(p.priorityMark(i))+fmt.Sprintf("P%d %d", i, n))
 	}
 	counts := strings.Join(parts, " · ")
 	scissors := ""

@@ -498,7 +498,12 @@ type (
 		err  error
 	}
 	prbTickMsg struct{}
+	prbAnimMsg struct{} // the next frame of the reviewing pills' spinner
 )
+
+// prbAnimEvery is the reviewing spinner's frame time: its eight frames turn
+// once a second.
+const prbAnimEvery = 125 * time.Millisecond
 
 // scrollKey moves a scroll offset for a key: a line, a page, the top or
 // the bottom (clamped later, once the content's length is known).
@@ -650,6 +655,9 @@ type prBoardModel struct {
 	refreshedAt time.Time
 	spin        spinner.Model
 	spinning    bool
+	working     bool // some row in scope has a review round running: its pill spins
+	anim        int  // the spinner's frame
+	animating   bool // a prbAnimMsg is pending
 
 	sort      PRSort
 	desc      bool
@@ -690,6 +698,7 @@ type prbCache struct {
 type prbRowsKey struct {
 	gen        int64
 	width      int
+	anim       int // the reviewing spinner's frame; 0 while nothing spins
 	sort       PRSort
 	owner      string // the owner scope: the rows, their counts and refs follow it
 	hide       bool   // ignored and skipped rows hidden: the rows and counts follow it
@@ -726,7 +735,7 @@ type prbFrameKey struct {
 }
 
 func (m prBoardModel) rowsKey(w int) prbRowsKey {
-	return prbRowsKey{gen: m.gen, width: w, sort: m.sort, owner: m.owner, hide: m.hide, desc: m.desc, dark: m.st.dark, clock: clockKey(m.opts.Now), widths: m.widths}
+	return prbRowsKey{gen: m.gen, width: w, anim: m.animFrame(), sort: m.sort, owner: m.owner, hide: m.hide, desc: m.desc, dark: m.st.dark, clock: clockKey(m.opts.Now), widths: m.widths}
 }
 
 func (m prBoardModel) frameKey() prbFrameKey {
@@ -834,6 +843,29 @@ func (m *prBoardModel) startLoad() tea.Cmd {
 	return tea.Batch(m.loadCmd(), m.startSpinner())
 }
 
+// startAnim starts the reviewing spinner's frames when a row needs them
+// and none are pending; prbAnimMsg ends the chain once no row does.
+func (m *prBoardModel) startAnim() tea.Cmd {
+	if m.animating || !m.working || len(m.g.working) == 0 {
+		return nil
+	}
+	m.animating = true
+	return m.animCmd()
+}
+
+func (m prBoardModel) animCmd() tea.Cmd {
+	return tea.Tick(prbAnimEvery, func(time.Time) tea.Msg { return prbAnimMsg{} })
+}
+
+// animFrame is the spinner's frame for the cache keys: 0 while nothing
+// spins, so a still board keeps its cached frames.
+func (m prBoardModel) animFrame() int {
+	if !m.working || len(m.g.working) == 0 {
+		return 0
+	}
+	return m.anim % len(m.g.working)
+}
+
 func (m *prBoardModel) startSpinner() tea.Cmd {
 	if m.spinning {
 		return nil
@@ -869,10 +901,18 @@ func (m prBoardModel) update(msg tea.Msg) (prBoardModel, tea.Cmd) {
 			m.setOwner("")
 		}
 		m.rebuild()
-		return m, cmd
+		anim := m.startAnim() // before m is returned: it marks the chain started
+		return m, tea.Batch(cmd, anim)
 	case prbTickMsg:
 		cmd := tea.Batch(m.startLoad(), m.tickCmd())
 		return m, cmd
+	case prbAnimMsg:
+		if !m.working {
+			m.animating = false // let the frame chain end
+			return m, nil
+		}
+		m.anim++
+		return m, m.animCmd()
 	case spinner.TickMsg:
 		if !m.loading && m.busy == "" {
 			m.spinning = false // let the tick chain end
@@ -938,6 +978,7 @@ func (m *prBoardModel) rebuild() {
 		}
 	}
 	m.view = SortPRBoard(rows, m.sort, m.desc)
+	m.working = slices.ContainsFunc(m.all, func(r PRBoardRow) bool { return workingState(r.State) })
 	m.gen = nextGen()
 	if m.selKey != "" {
 		for i, r := range m.view {
@@ -1447,7 +1488,7 @@ func (m prBoardModel) View() tea.View {
 
 func (m prBoardModel) painter() prbPainter {
 	p := newPRBPainter(m.st, m.pal, m.g, m.opts.Now(), m.self, m.all, m.sort, m.desc)
-	p.judge = m.opts.Judge
+	p.judge, p.frame = m.opts.Judge, m.animFrame()
 	return p
 }
 

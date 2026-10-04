@@ -208,3 +208,56 @@ func TestPRBoardBadgeColor(t *testing.T) {
 		t.Fatalf("an uncolored badge got %v", plain.GetForeground())
 	}
 }
+
+// The summary's badge counts and the card's header draw a colored badge in
+// its color too, as the row does.
+func TestPRBoardBadgeColorInSummaryAndCard(t *testing.T) {
+	m, _, _ := newBoard(t, 170, 24, PRBoardOptions{})
+	r := PRBoardRow{Ref: "talkable/talkable#1", Title: "Schema change", State: "reviewed", UpdatedAt: boardNow,
+		Badges: []Badge{{Label: "Schema Migration", Text: "\uf1c0", Color: "yellow"}}}
+	p := newPRBPainter(m.st, m.pal, m.g, boardNow, nil, []PRBoardRow{r}, SortUpdated, true)
+	yellow := p.pal.yellow.Render("\uf1c0")
+	if s := p.summaryLine(170); !strings.Contains(s, yellow+" ") {
+		t.Errorf("summary %q lacks the yellow badge %q", s, yellow)
+	}
+	lines, _ := p.card(r, 170, 60, 0)
+	if c := strings.Join(lines, "\n"); !strings.Contains(c, yellow+" Schema Migration") {
+		t.Errorf("card lacks the yellow badge %q:\n%s", yellow, c)
+	}
+}
+
+// A reviewing PR's pill spins (herdr-radar's braille frames): each frame
+// tick draws the next frame, past the frame cache, and asks for another;
+// once no PR is reviewing the chain ends and the board stays still, and the
+// next reviewing PR starts it again.
+func TestPRBoardReviewingPillSpins(t *testing.T) {
+	m, _, _ := newBoard(t, 170, 24, PRBoardOptions{}) // the fixture has a reviewing PR
+	if !m.animating {
+		t.Fatal("the fixture's reviewing PR did not start the spinner")
+	}
+	reviewing := PRBoardRow{Ref: "talkable/talkable#1", Title: "Live work", State: "reviewing", UpdatedAt: boardNow}
+	done := reviewing
+	done.State = "reviewed"
+
+	m, _ = send(t, m, prbDataMsg{rows: []PRBoardRow{done}})
+	m, cmd := send(t, m, prbAnimMsg{})
+	if cmd != nil || m.animating {
+		t.Fatal("the spinner kept ticking with nothing reviewing")
+	}
+	if m.rowsKey(170).anim != 0 {
+		t.Fatal("a still board keys its rows by a spinner frame")
+	}
+
+	m, cmd = send(t, m, prbDataMsg{rows: []PRBoardRow{reviewing}})
+	if cmd == nil || !m.animating {
+		t.Fatal("a reviewing PR did not start the spinner again")
+	}
+	mustContain(t, viewOf(m), "⣷ reviewing")
+	m, cmd = send(t, m, prbAnimMsg{})
+	if cmd == nil {
+		t.Fatal("the spinner stopped while a PR is reviewing")
+	}
+	v := viewOf(m)
+	mustContain(t, v, "⣯ reviewing")
+	mustNotContain(t, v, "⣷ reviewing")
+}

@@ -397,6 +397,7 @@ type prbPainter struct {
 	sort    PRSort
 	desc    bool
 	judge   string // PRBoardOptions.Judge
+	frame   int    // the frame of the reviewing pills' spinner (glyphs.working)
 }
 
 func newPRBPainter(st styles, pal prbPalette, g glyphs, now time.Time, self map[string]bool, all []PRBoardRow, by PRSort, desc bool) prbPainter {
@@ -630,7 +631,21 @@ func (p prbPainter) stateCell(state string) cell {
 	if s == "" {
 		return p.dash()
 	}
-	return cell{{" " + marked(p.g.stateIcon[s], stateLabel(s)) + " ", p.pal.pills[s]}}
+	icon := p.g.stateIcon[s]
+	if workingState(s) && len(p.g.working) > 0 {
+		icon = p.g.working[p.frame%len(p.g.working)]
+	}
+	return cell{{" " + marked(icon, stateLabel(s)) + " ", p.pal.pills[s]}}
+}
+
+// workingState reports whether a PR in state s has a review round running:
+// its pill spins.
+func workingState(s string) bool {
+	switch normState(s) {
+	case "claiming", "reviewing", "verifying":
+		return true
+	}
+	return false
 }
 
 // findingsCell is the latest review's verdict glyph, its findings by
@@ -652,7 +667,7 @@ func (p prbPainter) findingsCell(f *FindingsInfo) cell {
 			c = append(c, seg{" ", lipgloss.Style{}})
 		}
 		listed = true
-		t := p.g.priority[i] + fmt.Sprintf("P%d", i)
+		t := p.priorityMark(i) + fmt.Sprintf("P%d", i)
 		if n > 1 {
 			t += p.g.times + strconv.Itoa(n)
 		}
@@ -680,6 +695,15 @@ func (p prbPainter) findingsVerdict(v string) (string, lipgloss.Style) {
 }
 
 // priorityStyle is the color of findings of priority P<i>.
+// priorityMark is the mark before "P<i>" and the gap after it; "" in the
+// modes without one.
+func (p prbPainter) priorityMark(i int) string {
+	if m := p.g.priority[min(max(i, 0), 3)]; m != "" {
+		return m + p.g.gap
+	}
+	return ""
+}
+
 func (p prbPainter) priorityStyle(i int) lipgloss.Style {
 	return [4]lipgloss.Style{p.pal.red, p.pal.red, p.pal.yellow, p.st.Dim}[min(max(i, 0), 3)]
 }
@@ -1375,7 +1399,7 @@ func (p prbPainter) summaryLine(width int) string {
 		right = append(right, p.pinStyle().Render(p.g.pin)+" "+p.pal.bold.Render(strconv.Itoa(pinned))+" "+p.st.Dim.Render("pinned"))
 	}
 	for _, b := range badgeCounts(p.all) {
-		right = append(right, b.text+" "+p.pal.bold.Render(strconv.Itoa(b.n)))
+		right = append(right, p.pal.named[b.color].Render(b.text)+" "+p.pal.bold.Render(strconv.Itoa(b.n)))
 	}
 	r := strings.Join(right, "   ")
 	if r != "" {
@@ -1402,10 +1426,11 @@ func (p prbPainter) summaryLine(width int) string {
 	return spread(left, r, width)
 }
 
-// badgeCount is how many rows carry a badge text.
+// badgeCount is how many rows carry a badge text, drawn in the color its
+// first badge asks for.
 type badgeCount struct {
-	text string
-	n    int
+	text, color string
+	n           int
 }
 
 // badgeCounts counts the rows carrying each badge text (a row once per
@@ -1422,7 +1447,7 @@ func badgeCounts(rows []PRBoardRow) []badgeCount {
 			if i := slices.IndexFunc(out, func(c badgeCount) bool { return c.text == b.Text }); i >= 0 {
 				out[i].n++
 			} else {
-				out = append(out, badgeCount{b.Text, 1})
+				out = append(out, badgeCount{b.Text, b.Color, 1})
 			}
 		}
 	}
