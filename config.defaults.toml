@@ -65,6 +65,9 @@ icons = "unicode"                 # unicode | nerd (Nerd Font icons and colour e
                                   # emoji ignored: "Flagged" matches "🚩 Flagged"); the summary counts them; a
                                   # colored one: { "Schema Migration" = { text = "\uf1c0", color = "yellow" } }
                                   # (red, green, yellow, blue, magenta, cyan, gray)
+# trackers = ["https://example.atlassian.net/browse/PS-{num}"]   # issue links: t on the PR board opens the
+                                  # first issue key of the title ("[PS-38553] …") a template knows; {num} follows
+                                  # the key's prefix (Linear: "https://linear.app/<workspace>/issue/ENG-{num}")
 
 [github]
 transport = "gh"                  # App JWT/token calls run as `gh api` (gh | direct); direct = Go net/http,

@@ -679,3 +679,13 @@ editing history. Code, config comments and prompts reference these by their head
   more. The board still counts both the user and magnum's identities as "mine" (★); the narrow columns
   mark a bot's login with 🤖 (Nerd Font robot, `[bot]` in ASCII) and the card prints it in full. The
   user's own PRs stay self-authored for the user's App (it comments, never approves its owner's PR).
+- **Issue links come from the title, by URL template** (2026-10-04). `[board] trackers` lists URL
+  templates with `{num}` after the issue key's prefix ("https://linear.app/example/issue/ENG-{num}"); the
+  prefix before `{num}` is the key magnum looks for, so one string says both what to find and where it
+  leads, for Jira, Linear or anything else that puts the key in the URL. The leftmost key of any template
+  in the PR title wins (a title naming several issues opens the first), matched whole and case-sensitively
+  (issue keys are upper-case; `XPS-1`, `PS-1a` and `ps-1` are not PS-1). The board's `t` opens it, the card
+  shows it; no tracker API is called. Only the digits come from the PR: the URL is the configured
+  template with them in place of `{num}`, so a title cannot steer where `t` leads. Rejected: reading the
+  head branch or body (teams put the key in the title) and a regexp per tracker (the template already
+  names the prefix).

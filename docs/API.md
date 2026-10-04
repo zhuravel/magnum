@@ -1963,6 +1963,9 @@ const DefaultSimplifyRerunLines = 150
 const DefaultSkill = "{{repo}}/skills/magnum-review/SKILL.md"
     DefaultSkill is the judge's default skill path ({{repo}} = magnum's home).
 
+const PlaceholderNum = "{num}"
+    PlaceholderNum is the issue number in a [board] trackers template.
+
 const RequiredWorkflowPrefix = "workflow:"
     RequiredWorkflowPrefix marks a required_checks entry naming a whole GitHub
     Actions workflow ("workflow:CI").
@@ -2018,6 +2021,11 @@ func DefaultKinds() map[string]Kind
     approval prompt No. Args apply only without a wrapper, so a wrapper's own
     flags are never doubled.
 
+func Issue(title string, trackers []Tracker) (key, url string)
+    Issue finds the first issue key in title that one of trackers knows
+    (leftmost; at one position, the earlier tracker) and returns the key
+    ("PS-38553") and its URL; "" and "" when there is none.
+
 func LocalOverlayPath(file string) string
     LocalOverlayPath returns the legacy overlay next to a config
     file (config.local.toml) when it exists, else "". The user config
@@ -2066,8 +2074,18 @@ type Board struct {
 	// matches a label whatever their case and leading emoji or symbols
 	// ("Flagged" matches "🚩 Flagged").
 	Badges map[string]BadgeSpec `toml:"badges"`
+	// Trackers link a PR to its issue: URL templates with {num} right after
+	// the issue key's prefix ("https://linear.app/example/issue/DMA-{num}",
+	// "https://example.atlassian.net/browse/PS-{num}"). The first issue key
+	// of any of them in a PR's title ("[PS-38553] …") names the issue: t on
+	// the board opens it, the card shows it.
+	Trackers []string `toml:"trackers"`
 }
     Board tunes the PR board ([board]).
+
+func (b Board) ParsedTrackers() []Tracker
+    ParsedTrackers are the Trackers that parse, in order (validate reports the
+    others).
 
 type Claude struct {
 	WrapperMode string   `toml:"wrapper_mode"`
@@ -2881,6 +2899,17 @@ type Terminal struct {
 	// any font has (the default, also when empty), "ascii" plain ASCII.
 	Icons string `toml:"icons"`
 }
+
+type Tracker struct {
+	Prefix string // the issue key before the number: "DMA-"
+	URL    string // the template
+	// Has unexported fields.
+}
+    Tracker is one [board] trackers template, ready to find its issue keys.
+
+func ParseTracker(tmpl string) (Tracker, error)
+    ParseTracker reads a [board] trackers template: an http(s) URL with {num}
+    once, right after the issue key's prefix.
 
 type Usage struct {
 	// CodexSoft: at or above this share (percent) of the Codex budget used,
@@ -9584,8 +9613,11 @@ type PRBoardRow struct {
 	Ref, Owner, Repo   string
 	Number             int
 	Title, Author, URL string
-	Draft              bool
-	Labels, Assignees  []string
+	// Issue is the first issue key in the title a [board] trackers template
+	// knows ("PS-38553"), IssueURL its page; "" when the title names none.
+	Issue, IssueURL   string
+	Draft             bool
+	Labels, Assignees []string
 	// State is magnum's state: baseline, queued, reviewing, reviewed,
 	// rereview_pending, needs_attention, paused, closed, released,
 	// ineligible (the configuration skips it; the board says "skipped") or

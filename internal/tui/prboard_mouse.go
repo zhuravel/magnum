@@ -243,6 +243,7 @@ func (m prBoardModel) menuItems() []menuItem {
 		{"request changes", "C", "C", open && r.Findings != nil},
 		{"open pane", "o", "o", acts},
 		{"browser", "b", "b", acts && prURL(r) != ""},
+		{"tracker", "t", "t", acts && r.IssueURL != ""},
 		{"pin", "p", "p", acts && !r.Pinned},
 		{"unpin", "u", "u", acts && r.Pinned},
 		{"release", "x", "x", acts && r.Slot != ""},

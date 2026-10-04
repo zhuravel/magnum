@@ -378,7 +378,7 @@ filters; `v` cycles the views; `s`/`S` sort; `r`, `R`, `i` start review variants
 `p`/`u` pin; `x` releases; `M`/`U` mute; `K` kills the running review; `I` ignores the PR (an ignored
 row is greyed with its title struck through, and `U` unmutes it, which stops ignoring it); `A` approves
 and `C` requests changes as the PR's posting identity (see `magnum approve`); `b` opens the browser;
-`tab` switches to the status dashboard. Every action that stops or starts work asks y/N first.
+`t` opens the PR's issue in its tracker (below); `tab` switches to the status dashboard. Every action that stops or starts work asks y/N first.
 
 CI shows the head's checks: the repository's required checks when it has some (read from GitHub's
 rulesets, or `[[repo]] required_checks`; `✗ Completion`, `– Completion not run` when it never ran on the
@@ -387,7 +387,11 @@ checks per workflow and names every failed job. Rows the configuration skips (bo
 labels, forks, authors who left) read "skipped · bot" and are dimmed; `R` still reviews one, and `h` hides
 the skipped and ignored rows (the title says how many; the choice is kept). A label in `[board] badges`
 (`{ "Flagged" = "🚩" }`, or `{ text = "\uf1c0", color = "yellow" }` for a colored one) shows as its badge
-before the title and is counted in the summary.
+before the title and is counted in the summary. `[board] trackers` links PRs to their issues: URL templates
+with `{num}` right after the issue key's prefix, such as
+`["https://example.atlassian.net/browse/PS-{num}", "https://linear.app/example/issue/ENG-{num}"]`. The first
+issue key in the title that a template knows (`[PS-38553] …` → `…/browse/PS-38553`) is what `t` opens
+and what the card shows as Issue; a key is matched whole, so `XPS-1` is not `PS-1`.
 
 FINDINGS shows what magnum's latest review concluded, also where its repository lets it only comment:
 the verdict (✗ blocking, ● comment, ✔ clean), the findings by priority (`P1 P2×3`) and the optional

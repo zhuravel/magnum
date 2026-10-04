@@ -350,14 +350,14 @@ func TestBoardRightClickMenu(t *testing.T) {
 	}
 	want := map[string]bool{
 		"review": true, "fresh review": true, "simplify review": true, "kill review": false, "ignore": true,
-		"open pane": true, "browser": true, "pin": false, "unpin": true, "release": true,
+		"open pane": true, "browser": true, "tracker": false, "pin": false, "unpin": true, "release": true,
 		"mute": true, "unmute": false, "details": true, "reset column widths": false,
 		"approve": false, "request changes": false, // the fixture has no findings for #11920
 	}
 	if got := menuState(m.menuItems()); !maps.Equal(got, want) {
 		t.Errorf("menu of #11920:\n got %v\nwant %v", got, want)
 	}
-	if len(m.menuItems()) != 16 {
+	if len(m.menuItems()) != 17 {
 		t.Errorf("%d items", len(m.menuItems()))
 	}
 

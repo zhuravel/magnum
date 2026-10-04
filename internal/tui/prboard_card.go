@@ -39,7 +39,7 @@ func (p prbPainter) helpContent(width int) []string {
 	acts := section("Act on the PR", []hint{
 		{"r", "review now (asks y/N)"}, {"R", "fresh review in new agent sessions (asks y/N)"},
 		{"i", "review with /simplify (asks y/N)"}, {"o", "open the " + judgeName(p.judge) + " pane"},
-		{"b", "open in the browser"}, {"p / u", "pin / unpin"}, {"M / U", "mute / unmute (asks y/N)"},
+		{"b / t", "open the PR / its issue in the browser"}, {"p / u", "pin / unpin"}, {"M / U", "mute / unmute (asks y/N)"},
 		{"x", "release (asks y/N)"}, {"K", "kill the running review (asks y/N)"},
 		{"I", "ignore: kill, mute, free slot; U undoes"}, {"A / C", "approve / request changes (asks y/N)"}, {"a", "jump to what needs attention"},
 		{"y", "answer yes; any other key, enter too, cancels"},
@@ -217,10 +217,15 @@ func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
 	if len(r.Labels) > 0 {
 		labels = p.st.Accent.Render(strings.Join(r.Labels, ", "))
 	}
+	issue := dash
+	if r.IssueURL != "" {
+		issue = p.st.Accent.Render(r.Issue) + p.st.Dim.Render(" · "+r.IssueURL)
+	}
 	facts := [][2]string{
 		{"Author", logins([]string{r.Author})},
 		{"Assignees", logins(r.Assignees)},
 		{"Labels", labels},
+		{"Issue", issue},
 		{"Updated", when(r.UpdatedAt)},
 		{"GitHub", gh},
 		{"Head", orDim(shortSHA(r.HeadSHA))},
@@ -353,11 +358,14 @@ func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
 		}
 	}
 
-	acts := []hint{hint{"r", "review"}, hint{"R", "fresh review"}, hint{"i", "simplify"}, hint{"o", "open pane"}, hint{"b", "browser"},
+	acts := []hint{hint{"r", "review"}, hint{"R", "fresh review"}, hint{"i", "simplify"}, hint{"o", "open pane"}, hint{"b", "browser"}, hint{"t", "tracker"},
 		hint{"p", "pin"}, hint{"u", "unpin"}, hint{"M", "mute"}, hint{"U", "unmute"}, hint{"x", "release"},
 		hint{"K", "kill review"}, hint{"I", "ignore"}, hint{"A", "approve"}, hint{"C", "request changes"}, hint{"esc", "back"}}
 	if r.Findings == nil { // nothing magnum reviewed to approve or reject
 		acts = slices.DeleteFunc(acts, func(h hint) bool { return h.key == "A" || h.key == "C" })
+	}
+	if r.IssueURL == "" {
+		acts = slices.DeleteFunc(acts, func(h hint) bool { return h.key == "t" })
 	}
 	if normState(r.State) == "ignored" { // U undoes the ignore; ignoring again means nothing
 		acts = slices.DeleteFunc(acts, func(h hint) bool { return h.key == "I" })

@@ -2,10 +2,7 @@
 # defaults (config.defaults.toml); copy the [[identity]], [[watch]], [[pool]] blocks and the [daemon]/[terminal]
 # keys you need into ~/.config/magnum/config.toml. Secrets (App private keys) live in the checkout's gitignored
 # .mise.local.toml. Your config's [[watch]], [[identity]], [[pool]] and [[repo]] blocks are appended to the
-# defaults, any key it sets under [daemon], [herdr], [terminal], [board]
-badges = { "Flagged" = "🚩", "Schema Migration" = { text = "\uf1c0", color = "yellow" } }   # 🚩 a flagged Jira issue; \uf1c0 = Nerd Font database icon
-
-[github], [pipeline] or [kinds.<name>]
+# defaults, any key it sets under [daemon], [herdr], [terminal], [board], [github], [pipeline] or [kinds.<name>]
 # overrides the default, and its [[role]] blocks override the role of the same name key by key (other names
 # are appended).
 # Durations use Go syntax: "30s", "5m", "2h", with whole days in front: "7d", "1d12h".
@@ -62,6 +59,13 @@ launcher = ""                     # custom: template with {herdr} {args} {comman
 reveal_on_attention = false
 # mouse = true                    # board and dashboard: wheel, click, double-click, heading sort,
                                   # column drag, right-click menu; m toggles it live (default true)
+
+[board]
+badges = { "Flagged" = "🚩", "Schema Migration" = { text = "\uf1c0", color = "yellow" } }   # 🚩 a flagged Jira issue; \uf1c0 = Nerd Font database icon
+trackers = [                      # t on the PR board opens the first issue key of the title: {num} follows the key's prefix
+  "https://talkable.atlassian.net/browse/PS-{num}",
+  "https://talkable.atlassian.net/browse/PR-{num}",
+]
 
 [github]
 transport = "gh"                  # App JWT/token calls run as `gh api` (gh | direct); direct = Go net/http,

@@ -81,8 +81,11 @@ type PRBoardRow struct {
 	Ref, Owner, Repo   string
 	Number             int
 	Title, Author, URL string
-	Draft              bool
-	Labels, Assignees  []string
+	// Issue is the first issue key in the title a [board] trackers template
+	// knows ("PS-38553"), IssueURL its page; "" when the title names none.
+	Issue, IssueURL   string
+	Draft             bool
+	Labels, Assignees []string
 	// State is magnum's state: baseline, queued, reviewing, reviewed,
 	// rereview_pending, needs_attention, paused, closed, released,
 	// ineligible (the configuration skips it; the board says "skipped") or
@@ -532,6 +535,7 @@ func scopeRows(rows []PRBoardRow, repo string) []PRBoardRow {
 func sanitizeRow(r PRBoardRow) PRBoardRow {
 	r.Ref, r.Owner, r.Repo = cleanText(r.Ref), cleanText(r.Owner), cleanText(r.Repo)
 	r.Title, r.Author, r.URL = cleanText(r.Title), cleanText(r.Author), cleanText(r.URL)
+	r.Issue, r.IssueURL = cleanText(r.Issue), cleanText(r.IssueURL)
 	r.State, r.GHState, r.Slot, r.LastError = cleanText(r.State), cleanText(r.GHState), cleanText(r.Slot), cleanText(r.LastError)
 	r.HeadSHA = cleanText(r.HeadSHA)
 	r.Wait, r.WaitDetail = cleanText(r.Wait), cleanText(r.WaitDetail)
@@ -1220,6 +1224,8 @@ func (m prBoardModel) tableKey(k string) (prBoardModel, tea.Cmd) {
 			func(ctx context.Context, a DashboardActions, ref string) (string, error) { return a.Release(ctx, ref) })
 	case "b":
 		return m.browse()
+	case "t":
+		return m.openIssue()
 	case "m":
 		m.toggleMouse()
 		if m.opts.MouseToggled != nil {
@@ -1356,6 +1362,24 @@ func (m prBoardModel) browse() (prBoardModel, tea.Cmd) {
 			return "", err
 		}
 		return "opened " + url, nil
+	})
+}
+
+// openIssue opens the selected PR's issue (Issue) in the browser.
+func (m prBoardModel) openIssue() (prBoardModel, tea.Cmd) {
+	r, ok := m.selected()
+	if !ok {
+		return m.fail("nothing selected")
+	}
+	if r.IssueURL == "" {
+		return m.fail("the title names no issue: [board] trackers lists the issue keys and their URLs")
+	}
+	url := r.IssueURL
+	return m.run("tracker", func(ctx context.Context, a DashboardActions) (string, error) {
+		if err := a.OpenBrowser(ctx, url); err != nil {
+			return "", err
+		}
+		return "opened " + r.Issue + ": " + url, nil
 	})
 }
 
@@ -1578,7 +1602,7 @@ func (m prBoardModel) hintLine(w int) string {
 	case prbDetail:
 		left = m.st.fitHints(w,
 			[]hint{{"esc", "back"}, {"j/k", "scroll"}, {"r", "review"}, {"R", "fresh"}, {"i", "simplify"}, {"o", "open"},
-				{"b", "browser"}, {"p/u", "pin"}, {"M/U", "mute"}, {"x", "release"}, {"K", "kill"}, {"I", "ignore"}, {"?", "help"}},
+				{"b", "browser"}, {"t", "tracker"}, {"p/u", "pin"}, {"M/U", "mute"}, {"x", "release"}, {"K", "kill"}, {"I", "ignore"}, {"?", "help"}},
 			[]hint{{"esc", "back"}, {"r", "review"}, {"R", "fresh"}, {"i", "simplify"}, {"o", "open"}, {"b", "browser"},
 				{"p/u", "pin"}, {"M/U", "mute"}, {"x", "release"}, {"?", "help"}},
 			[]hint{{"esc", "back"}, {"r", "review"}, {"o", "open"}, {"b", "browser"}, {"?", "help"}},
@@ -1593,7 +1617,7 @@ func (m prBoardModel) hintLine(w int) string {
 		}
 		room := max(w-ansi.StringWidth(pos)-2, 10)
 		sets := [][]hint{
-			{{"enter", "details"}, {"r", "review"}, {"R", "fresh"}, {"i", "simplify"}, {"o", "open"}, {"b", "browser"},
+			{{"enter", "details"}, {"r", "review"}, {"R", "fresh"}, {"i", "simplify"}, {"o", "open"}, {"b", "browser"}, {"t", "tracker"},
 				{"p/u", "pin"}, {"x", "release"}, {"/", "filter"}, {"v", "view"}, {"O", "owner"}, {"s/S", "sort"}, {"tab", "overview"}, {"?", "help"}, {"q", "quit"}},
 			{{"enter", "details"}, {"r", "review"}, {"R", "fresh"}, {"i", "simplify"}, {"o", "open"}, {"b", "browser"},
 				{"p/u", "pin"}, {"x", "release"}, {"/", "filter"}, {"v", "view"}, {"s/S", "sort"}, {"tab", "overview"}, {"?", "help"}, {"q", "quit"}},

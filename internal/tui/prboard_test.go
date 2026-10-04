@@ -1098,3 +1098,30 @@ func TestLoginTextMarksBots(t *testing.T) {
 		}
 	}
 }
+
+// t opens the issue the PR's title names in its tracker; the card shows it.
+// A row whose title names none opens nothing and says why.
+func TestPRBoardOpensTheIssue(t *testing.T) {
+	withIssue := PRBoardRow{Ref: "talkable/talkable#11483", Title: "[PR-26788] Campaign snapshots", State: "reviewed", UpdatedAt: boardNow,
+		Issue: "PR-26788", IssueURL: "https://example.atlassian.net/browse/PR-26788"}
+	without := PRBoardRow{Ref: "talkable/talkable#11484", Title: "No issue", State: "reviewed", UpdatedAt: boardNow.Add(-time.Hour)}
+
+	m, _, act := newBoard(t, 160, 24, PRBoardOptions{})
+	m, _ = send(t, m, prbDataMsg{rows: []PRBoardRow{withIssue, without}})
+	m, _ = boardAct(t, m, "t")
+	if got, want := act.last(), "browser https://example.atlassian.net/browse/PR-26788"; got != want {
+		t.Fatalf("t called %q, want %q", got, want)
+	}
+	mustContain(t, viewOf(m), "opened PR-26788: https://example.atlassian.net/browse/PR-26788")
+
+	m, _ = send(t, m, keyMsg("enter"))
+	mustContain(t, viewOf(m), "Issue", "PR-26788 · https://example.atlassian.net/browse/PR-26788", "t tracker")
+
+	m, _, act = newBoard(t, 160, 24, PRBoardOptions{})
+	m, _ = send(t, m, prbDataMsg{rows: []PRBoardRow{without}})
+	m, _ = send(t, m, keyMsg("t"))
+	if act.last() != "" {
+		t.Fatalf("t on a row without an issue called %q", act.last())
+	}
+	mustContain(t, viewOf(m), "the title names no issue")
+}
