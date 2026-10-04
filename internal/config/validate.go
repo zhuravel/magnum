@@ -47,8 +47,8 @@ func (c *Config) Validate() error {
 		switch id.Kind {
 		case "gh":
 		case "app":
-			if id.AppID == 0 || id.InstallationID == 0 || id.PrivateKeyEnv == "" {
-				errs = append(errs, fmt.Errorf("identity %s: app needs app_id, installation_id, private_key_env", id.Name))
+			if id.AppID == 0 || id.InstallationID == 0 || (id.PrivateKeyEnv == "" && id.PrivateKeyFile == "") {
+				errs = append(errs, fmt.Errorf("identity %s: app needs app_id, installation_id and private_key_file (or private_key_env)", id.Name))
 			}
 			if id.ClientID == "" {
 				errs = append(errs, fmt.Errorf("identity %s: app needs client_id (JWT iss)", id.Name))

@@ -1,12 +1,17 @@
 package cli
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/zhuravel/magnum"
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/launchd"
 	"github.com/zhuravel/magnum/internal/paths"
 )
 
@@ -40,6 +45,7 @@ func installRules(pluginList string) []execx.Rule {
 
 func TestInstallWritesPlistLoadsItAndLinksPlugin(t *testing.T) {
 	dt := newDaemonGroupTest(t, installRules(herdrPluginListEmpty)...)
+	dt.useMiseKey(t)
 	dt.writeBinary(t)
 	if code := dt.run("install", "--plugin"); code != 0 {
 		t.Fatalf("exit %d, stderr: %s", code, dt.stderr)
@@ -195,6 +201,7 @@ func TestInstallFallsBackToHomebrewMiseAndPinsCustomConfig(t *testing.T) {
 	rules := installRules(herdrPluginListEmpty)
 	rules[0] = daemonRuleExit([]string{"/bin/sh", "-c", "command -v mise"}, 1, "")
 	dt.fake.Rules = append(rules, daemonRuleOK([]string{dt.ctx.Layout.Binary(), "config", "--config", "/etc/magnum/custom.toml"}, ""))
+	dt.useMiseKey(t)
 	dt.writeBinary(t)
 	dt.ctx.cfgPath = "/etc/magnum/custom.toml"
 	if code := dt.run("install"); code != 0 {
@@ -238,16 +245,79 @@ func TestInstallLaunchdFailureNamesTheFix(t *testing.T) {
 func TestPlistCarriesTheShellsSSHAgentSocket(t *testing.T) {
 	layout := paths.Layout{Home: "/Users/x/Projects/magnum"}
 	t.Setenv("SSH_AUTH_SOCK", "/Users/x/Library/Group Containers/agent.sock")
-	env := magnumPlistOptions(layout, "/Users/x", "/opt/homebrew/bin/mise", "/tmp/herdr.sock", "").Env
+	env := magnumPlistOptions(layout, "/Users/x", nil, "/tmp/herdr.sock", "").Env
 	if env["SSH_AUTH_SOCK"] != "/Users/x/Library/Group Containers/agent.sock" {
 		t.Fatalf("SSH_AUTH_SOCK = %q", env["SSH_AUTH_SOCK"])
 	}
 	t.Setenv("SSH_AUTH_SOCK", "/private/tmp/com.apple.launchd.abc/Listeners")
-	if _, ok := magnumPlistOptions(layout, "/Users/x", "/opt/homebrew/bin/mise", "/tmp/herdr.sock", "").Env["SSH_AUTH_SOCK"]; ok {
+	if _, ok := magnumPlistOptions(layout, "/Users/x", nil, "/tmp/herdr.sock", "").Env["SSH_AUTH_SOCK"]; ok {
 		t.Fatal("Apple's launchd listener must not be pinned into the plist")
 	}
 	t.Setenv("SSH_AUTH_SOCK", "")
-	if _, ok := magnumPlistOptions(layout, "/Users/x", "/opt/homebrew/bin/mise", "/tmp/herdr.sock", "").Env["SSH_AUTH_SOCK"]; ok {
+	if _, ok := magnumPlistOptions(layout, "/Users/x", nil, "/tmp/herdr.sock", "").Env["SSH_AUTH_SOCK"]; ok {
 		t.Fatal("no socket in the shell, none in the plist")
+	}
+}
+
+// launchd (and the gh shim) go through mise only while an App's key comes
+// from the checkout's mise environment; with key files, or installed
+// without a checkout, the binary runs itself (Homebrew's stable bin/ link,
+// not the versioned Cellar path). MAGNUM_HOME is set only for the checkout
+// layout, which it selects.
+func TestLaunchRunsTheBinaryDirectlyUnlessAKeyComesFromMise(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.WriteFile(filepath.Join(repo, ".mise.toml"), []byte("[env]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{Identities: []config.Identity{{Name: "app", Kind: "app", PrivateKeyEnv: "K"}}}
+	checkout := paths.Layout{Home: repo}
+	if got := launchPrefix(checkout, cfg, "/m/mise"); !slices.Equal(got, []string{"/m/mise", "-C", repo, "exec", "--"}) {
+		t.Fatalf("an env key: %q", got)
+	}
+	cfg.Identities[0].PrivateKeyFile = "/k/app.pem"
+	if got := launchPrefix(checkout, cfg, "/m/mise"); got != nil {
+		t.Fatalf("a key file: %q", got)
+	}
+
+	installed := paths.Layout{DataDir: "/d/magnum", StateDir: "/s/magnum", Exe: "/opt/homebrew/Cellar/magnum/1.0.0/bin/magnum"}
+	if got := launchPrefix(installed, cfg, "/m/mise"); got != nil {
+		t.Fatalf("no checkout: %q", got)
+	}
+	o := magnumPlistOptions(installed, "/Users/x", nil, "/tmp/h.sock", "")
+	if !slices.Equal(o.ProgramArguments, []string{"/opt/homebrew/bin/magnum", "daemon"}) || o.WorkingDir != "/Users/x" ||
+		o.StdoutPath != launchd.LogPath("/s/magnum/logs") {
+		t.Fatalf("installed: %+v", o)
+	}
+	if _, ok := o.Env["MAGNUM_HOME"]; ok {
+		t.Fatal("an installed layout pinned MAGNUM_HOME")
+	}
+	if got := magnumPlistOptions(checkout, "/Users/x", nil, "/tmp/h.sock", "").Env["MAGNUM_HOME"]; got != repo {
+		t.Fatalf("checkout layout: MAGNUM_HOME = %q", got)
+	}
+}
+
+// An installed binary has no checkout to link: `install --plugin` writes the
+// plugin it embeds under the data directory and links that copy.
+func TestInstallPluginWritesTheEmbeddedPluginWithoutACheckout(t *testing.T) {
+	dt := newDaemonGroupTest(t, installRules(herdrPluginListEmpty)...)
+	data := t.TempDir()
+	dt.ctx.Layout = paths.Layout{DataDir: data, StateDir: t.TempDir(), Exe: filepath.Join(t.TempDir(), "magnum")}
+	if code := dt.run("install", "--plugin", "--no-launchd"); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, dt.stderr)
+	}
+	dir := filepath.Join(data, "herdr-plugin")
+	for rel, want := range map[string][]byte{"herdr-plugin.toml": magnum.PluginManifest, "scripts/magnum-ctl.sh": magnum.PluginScript} {
+		if b, err := os.ReadFile(filepath.Join(dir, rel)); err != nil || !bytes.Equal(b, want) {
+			t.Fatalf("%s: %v", rel, err)
+		}
+	}
+	if fi, err := os.Stat(filepath.Join(dir, "scripts", "magnum-ctl.sh")); err != nil || fi.Mode().Perm() != 0o755 {
+		t.Fatalf("script mode: %v %v", fi.Mode(), err)
+	}
+	if links := dt.fake.CallsWithPrefix("herdr", "plugin", "link", dir); len(links) != 1 {
+		t.Fatalf("herdr plugin link calls = %+v", dt.fake.CallsWithPrefix("herdr"))
+	}
+	if wrote, err := writePluginFiles(dir); wrote || err != nil {
+		t.Fatalf("an unchanged plugin was rewritten: %v %v", wrote, err)
 	}
 }

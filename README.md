@@ -77,8 +77,8 @@ flowchart LR
 
 Requirements: macOS (see [Linux](#linux) below), [herdr](https://herdr.dev) 0.9.3+ running, `gh` logged
 in, the agent CLIs you want to use (`codex`, `claude`, `droid`, `omp`) and Go 1.27.
-[mise](https://mise.jdx.dev) is needed once you install the daemon under launchd (`make install` runs it
-through mise) or add a pool; MySQL only for a `[[pool]]` that declares databases.
+[mise](https://mise.jdx.dev) only for a pool whose worktrees use it; MySQL only for a `[[pool]]` that
+declares databases.
 
 A new machine reviews its first PR without a pool or a database:
 
@@ -95,21 +95,20 @@ When the review has posted, hand the daemon to launchd (`install` stops the fore
 extras you want:
 
 ```bash
-make install                                 # launchd agent (runs via mise) + herdr plugin
+make install                                 # launchd agent + herdr plugin
 bin/magnum install --gh --no-launchd         # optional: `gh magnum …`
 bin/magnum completion zsh > "${fpath[1]}/_magnum"
 ```
 
 `magnum init` refuses to replace an existing config without `--force` (the old file is kept as
 `config.toml.bak`); [config.example.toml](config.example.toml) is the same minimal setup to copy by hand. To post as a GitHub App, answer 2 when init asks who posts: it asks for the App's
-ids and prints the `.mise.local.toml` line for its private key (it never asks for the key), and every
-command then runs through `mise exec -- bin/magnum …`; `mise exec -- bin/magnum identities check`
-verifies the App. A big repository with its own databases gets a pool of warm slots: add a `[[pool]]`
+ids and names the file to save its private key as, `~/.config/magnum/keys/<app>.pem` (it never asks for
+the key); `bin/magnum identities check` verifies the App. A big repository with its own databases gets a pool of warm slots: add a `[[pool]]`
 (see below), then `bin/magnum slots provision --count 6`.
 
 ## Configuration
 
-Two layers and a secrets file:
+Two layers and the App keys:
 
 - The built-in defaults: [config.defaults.toml](config.defaults.toml), embedded in the binary. The
   daemon defaults, the agent kinds and the review roles, every key documented; it names no account,
@@ -121,8 +120,17 @@ Two layers and a secrets file:
   `[kinds.<name>]` entries override key by key. [config.full.example.toml](config.full.example.toml) is
   a complete, working setup (Talkable's) to copy from. `magnum config` and `magnum doctor` say which
   files were read.
-- `.mise.local.toml` (gitignored, in the checkout): secrets such as GitHub App private keys, which reach
-  the daemon through mise.
+- App private keys: PEM files the identity's `private_key_file` names, by convention
+  `~/.config/magnum/keys/<identity>.pem` (chmod 600; doctor warns about a looser mode). The older
+  `private_key_env` (an environment variable holding the PEM or its path, e.g. from a checkout's
+  `.mise.local.toml`) still works; launchd then runs the daemon through `mise exec`.
+
+Magnum keeps its own files where XDG says: the registry, review reports and repository notes in
+`~/.local/share/magnum` (`$XDG_DATA_HOME`), logs, locks, the identities' gh config dirs and the tab-bar
+file in `~/.local/state/magnum` (`$XDG_STATE_HOME`); `magnum config` prints both. A checkout that kept them
+in its `state/` keeps using it until `magnum migrate-home` moves them (it stops the daemon, renames every
+item, links nothing back, removes the emptied `state/` and restarts launchd's job); `MAGNUM_HOME=<checkout>`
+keeps that layout on purpose, for development.
 
 `--config FILE` (or `$MAGNUM_CONFIG`) replaces the built-in defaults with a complete file of your own.
 A `config.local.toml` in the checkout, where settings lived before, is still read when
@@ -203,7 +211,7 @@ login = "your-app[bot]"
 app_id = 123456
 client_id = "Iv23liXXXXXXXXXXXXXX"
 installation_id = 12345678
-private_key_env = "MAGNUM_REVIEWER_APP_PRIVATE_KEY"
+private_key_file = "~/.config/magnum/keys/reviewer-app.pem"
 no_findings_event = "COMMENT"      # never let a bot approval unlock a merge by accident
 ```
 
@@ -343,7 +351,7 @@ code; `magnum stats` reports them per role.
 | `magnum prs [--repo …] [--view all\|magnum\|mine\|ready] [--sort updated\|last-review\|reviewer-activity\|changes\|state] [--all] [--json]` | The PR board: every watched PR with its last review, each reviewer's verdict (with staleness), what changed since the last review, assignees. `--view` keeps what Magnum reviewed, what is yours or what is ready to merge. Live screen on a terminal, table or JSON otherwise. |
 | `magnum status [<ref>\|<slot>] [--all] [--sizes] [--json] [--watch]` | Daemon, slots, queue, pauses; a PR's detail card with its review history and the last round's stage timings. `--watch` is the live dashboard (`tab` flips to the PR board). |
 | `magnum stats [--since 7d] [--repo owner/name] [--json]` | Review statistics per local day and repository over a window (`--since` takes `7d`, `36h`, `90m` or a date; default 7d): rounds started and how they ended, findings posted by priority, median and p90 durations per role and per round, how many findings each source raised, had posted, had posted alone or had rejected (with reason codes), and model switches, denied prompts and round restarts. |
-| `magnum eval run\|score\|list\|show` | Measure a prompt, skill or model change: `run` replays the PRs with known defects in `eval.local.toml` (see `eval.toml.example`) at their pinned heads as blind dry runs and reports, per case, the seeded defects the planned review found, at what severity, and its other findings (noise), next to the previous run. `score` re-scores a run after a match rule is fixed, without the agents. |
+| `magnum eval run\|score\|list\|show` | Measure a prompt, skill or model change: `run` replays the PRs with known defects in `~/.config/magnum/eval.toml` (see `eval.toml.example`) at their pinned heads as blind dry runs and reports, per case, the seeded defects the planned review found, at what severity, and its other findings (noise), next to the previous run. `score` re-scores a run after a match rule is fixed, without the agents. |
 | `magnum review <url\|owner/repo#N\|repo#N\|N> [--fresh] [--role <role>] [--simplify] [--as <identity>] [--no-post] [--wait] [--timeout <duration>]` | Force a round now, bypassing throttles. `--role` (repeatable) also runs an on-demand role this round; `--simplify` is its shorthand for the role aliased `simplify` (claude-simplify by default). `--wait` follows the round; `--timeout` stops following after that long while the round goes on. |
 | `magnum open <ref> [--role <role>]` | Focus the PR's pane in herdr and reveal the herdr client (focus the existing iTerm2 tab, or open a new one). |
 | `magnum watch <ref> [--role <role>] [--ansi]` | Read-only live mirror of a pane in any terminal. |
@@ -354,12 +362,12 @@ code; `magnum stats` reports them per role.
 | `magnum abort <ref>` | Kill a PR's running review: its agents are interrupted, its runs abandoned, its sessions parked and a pool slot handed back. The PR returns to reviewed (or baseline) until the next push. |
 | `magnum approve <ref> [-m TEXT] [--force]`, `magnum request-changes <ref> [-m TEXT] [--force]` | Your own verdict on the head magnum reviewed, posted by the daemon as the PR's posting identity with a body that names magnum's review and its findings: for repositories where magnum only comments, or when you decide differently. The head must still be the reviewed one unless `--force`. A manual approval follows the head like magnum's own; magnum's later rounds never dismiss a manual verdict as their own stale review. Board keys `A` and `C`. |
 | `magnum ignore <ref>` | Abort, then mute the PR as ignored and free its slot: the daemon never queues it again until `magnum unmute <ref>`, which undoes the ignore. |
-| `magnum notes <repo> [--edit]` | The repository notes every role reads first and the judge rewrites after a round that taught it something (`state/notes/<owner>/<repo>.md`): what the repo is, how to test and QA it, known pitfalls. |
+| `magnum notes <repo> [--edit]` | The repository notes every role reads first and the judge rewrites after a round that taught it something (`~/.local/share/magnum/notes/<owner>/<repo>.md`): what the repo is, how to test and QA it, known pitfalls. |
 | `magnum cleanup [--dry-run] [--pr <ref>] [--slot <name>] [--orphans [--slug X]] [--shrink] [--external --slot repoN]` | Storage cleanup with a reviewable plan: closed PRs, orphan databases, idle slots, manual worktrees. |
 | `magnum slots [list\|provision\|remove\|repair\|adopt\|pin\|unpin]` | Pool management. |
 | `magnum where <ref>` | `cd $(magnum where 123)`. |
 | `magnum pause\|resume`, `magnum logs [<ref>] [-f]`, `magnum doctor`, `magnum identities check`, `magnum kick` | Operations. |
-| `magnum daemon [--once] [--dry-run]`, `magnum install\|uninstall\|daemon-restart\|daemon-stop [--now]` | The daemon and its launchd job. Stop and restart refuse while review rounds are in flight unless `--now`; `daemon-restart --drain` and `install --drain` stop new rounds, wait for those in flight (at most `--timeout`, default 2h) and then restart. `daemon-restart` and `install` first run `bin/magnum config`, which validates the configuration and renders every prompt with the build that will run, and refuse when it fails; the daemon refuses to start on the same errors (written to `daemon.log` and `launchd.log`). After a build that adds a registry migration, other commands refuse to run while the older daemon is up (they would migrate the registry under it) and point at `daemon-restart --drain`. |
+| `magnum daemon [--once] [--dry-run]`, `magnum install\|uninstall\|daemon-restart\|daemon-stop [--now]`, `magnum migrate-home` | The daemon and its launchd job (`migrate-home` moves a checkout's `state/` to the XDG places, see Configuration). Stop and restart refuse while review rounds are in flight unless `--now`; `daemon-restart --drain` and `install --drain` stop new rounds, wait for those in flight (at most `--timeout`, default 2h) and then restart. `daemon-restart` and `install` first run `bin/magnum config`, which validates the configuration and renders every prompt with the build that will run, and refuse when it fails; the daemon refuses to start on the same errors (written to `daemon.log` and `launchd.log`). After a build that adds a registry migration, other commands refuse to run while the older daemon is up (they would migrate the registry under it) and point at `daemon-restart --drain`. |
 
 Shell completion is dynamic: PR references complete from the registry with their titles, slots,
 identities, roles and sorts from config.
@@ -482,9 +490,10 @@ bin/magnum daemon --once --dry-run   # one tick, every decision printed, no side
 ```
 
 To measure a change to the prompts, the skill or a model before the daemon picks it up, keep a corpus
-of PRs whose defects you know in `eval.local.toml` (gitignored; the format is in `eval.toml.example`)
+of PRs whose defects you know in `~/.config/magnum/eval.toml` (a checkout's gitignored `eval.local.toml` still
+works; the format is in `eval.toml.example`)
 and run `magnum eval run --label "<the change>"`. Each case replays the PR at its pinned head with the
-watch's roles, in a scratch registry and a detached worktree under `state/eval/<run>/`, with agents
+watch's roles, in a scratch registry and a detached worktree under `~/.local/state/magnum/eval/<run>/`, with agents
 named apart from the PR's own; the roles are told not to read the PR's reviews, comments or later
 commits, and nothing is posted. The report gives recall of the seeded defects and the noise count, and
 compares them with the previous run; `magnum eval score` re-applies the corpus after you fix a match

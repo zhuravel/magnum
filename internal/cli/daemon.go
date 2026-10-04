@@ -105,7 +105,7 @@ func runDaemonCmd(c *Context, f daemonFlags, pos []string) int {
 func refuseDaemonStart(c *Context, err error) {
 	fix := fmt.Sprintf("correct the config file (default %s) or the prompt files, check with `magnum config`, then `magnum daemon-restart`", c.Layout.Config())
 	fmt.Fprintf(c.Stderr, "magnum daemon: refusing to start: %v\nfix: %s\n", err, fix)
-	if c.Layout.Home == "" {
+	if !c.Layout.Valid() {
 		return
 	}
 	path := c.Layout.DaemonLog()
@@ -143,6 +143,13 @@ func runDaemonEngine(ctx context.Context, c *Context, o daemonOptions) (daemonDr
 	a, err := app.New(c.Config, c.Layout, daemonAppOptions(c, o))
 	if err != nil {
 		return daemonDryRunReport{}, err
+	}
+	// An installed binary's herdr plugin copy follows the binary: an upgrade
+	// brings new actions to a plugin `magnum install --plugin` wrote.
+	if dir := pluginDir(c.Layout); !o.DryRun && dir != c.Layout.Home && fileExists(filepath.Join(dir, "herdr-plugin.toml")) {
+		if _, err := writePluginFiles(dir); err != nil {
+			fmt.Fprintf(c.Stderr, "magnum daemon: refresh the herdr plugin in %s: %v\n", dir, err)
+		}
 	}
 	defer a.Close()
 	e := engine.FromApp(a)

@@ -122,7 +122,7 @@ func (e *Engine) heartbeat() {
 // writeTabBar writes the tab-bar file (WriteTabBarFile) with the last line
 // tabBar built.
 func (e *Engine) writeTabBar() {
-	if e.d.Layout.Home == "" {
+	if !e.d.Layout.Valid() {
 		return
 	}
 	interval := e.cfg.Daemon.PollInterval.Duration

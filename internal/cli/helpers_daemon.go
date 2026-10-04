@@ -10,10 +10,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/launchd"
@@ -146,6 +148,28 @@ func resolveMisePath(ctx context.Context, run execx.Runner) string {
 	return defaultMisePath
 }
 
+// launchPrefix is what a bare environment (the LaunchAgent, the gh
+// extension) puts before the binary: `mise -C <checkout> exec --` while an
+// App identity reads its key from an env var (private_key_env without
+// private_key_file) that the checkout's mise environment provides, else
+// nothing, so an install whose keys are files runs the binary directly.
+func launchPrefix(layout paths.Layout, cfg *config.Config, misePath string) []string {
+	if layout.Home == "" || cfg == nil || misePath == "" {
+		return nil
+	}
+	if !fileExists(filepath.Join(layout.Home, ".mise.toml")) && !fileExists(filepath.Join(layout.Home, ".mise.local.toml")) {
+		return nil
+	}
+	for _, id := range cfg.Identities {
+		if id.Kind == "app" && id.PrivateKeyFile == "" && id.PrivateKeyEnv != "" {
+			return []string{misePath, "-C", layout.Home, "exec", "--"}
+		}
+	}
+	return nil
+}
+
+func fileExists(p string) bool { _, err := os.Stat(p); return err == nil }
+
 // launchdPATH is the PATH the LaunchAgent gets (launchd's own is bare).
 func launchdPATH(userHome string) string {
 	return strings.Join([]string{
@@ -154,20 +178,26 @@ func launchdPATH(userHome string) string {
 	}, ":")
 }
 
-// magnumPlistOptions describes the LaunchAgent: `mise -C <repo> exec --
-// <repo>/bin/magnum daemon`, restarted only after an abnormal exit. The
-// daemon writes and rotates state/logs/daemon.log itself; launchd's capture
-// of stdout/stderr (crashes, output before the logger exists) goes to
-// state/logs/launchd.log so the two never write one file. configFile is
-// non-empty only for a non-default config (see daemonConfigOverride). Never
-// put secrets here: the plist is world-readable and the daemon gets its
-// credentials from mise.
-func magnumPlistOptions(layout paths.Layout, userHome, misePath, herdrSocket, configFile string) launchd.Options {
+// magnumPlistOptions describes the LaunchAgent: `<prefix> <binary> daemon`
+// (prefix: launchPrefix), restarted only after an abnormal exit. The
+// daemon writes and rotates logs/daemon.log itself; launchd's capture of
+// stdout/stderr (crashes, output before the logger exists) goes to
+// logs/launchd.log so the two never write one file. MAGNUM_HOME is set only
+// for the checkout layout, which it selects. configFile is non-empty only
+// for a non-default config (see daemonConfigOverride). Never put secrets
+// here: the plist is world-readable; keys are files or come from mise.
+func magnumPlistOptions(layout paths.Layout, userHome string, prefix []string, herdrSocket, configFile string) launchd.Options {
 	env := map[string]string{
 		"PATH":              launchdPATH(userHome),
 		"HOME":              userHome,
 		"HERDR_SOCKET_PATH": herdrSocket,
-		"MAGNUM_HOME":       layout.Home,
+	}
+	if layout.CheckoutLayout() && layout.Home != "" {
+		env["MAGNUM_HOME"] = layout.Home
+	}
+	workDir := layout.Home
+	if workDir == "" {
+		workDir = userHome
 	}
 	if configFile != "" {
 		env["MAGNUM_CONFIG"] = configFile
@@ -182,8 +212,8 @@ func magnumPlistOptions(layout paths.Layout, userHome, misePath, herdrSocket, co
 	}
 	return launchd.Options{
 		Label:            launchd.DefaultLabel,
-		ProgramArguments: launchd.DefaultArgs(layout.Home, misePath, layout.Binary()),
-		WorkingDir:       layout.Home,
+		ProgramArguments: append(slices.Clone(prefix), layout.Binary(), "daemon"),
+		WorkingDir:       workDir,
 		Env:              env,
 		StdoutPath:       launchd.LogPath(layout.Logs()),
 		StderrPath:       launchd.LogPath(layout.Logs()),

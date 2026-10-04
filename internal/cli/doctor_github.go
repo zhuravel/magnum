@@ -39,9 +39,12 @@ func doctorIdentities(ctx context.Context, d doctorDeps) []doctorCheck {
 		name := "identity " + id.Name
 		head := fmt.Sprintf("identity %s (%s, %s)", id.Name, id.Kind, id.Login)
 		if id.Kind == "app" && id.PrivateKeyEnv != "" && d.Getenv != nil && d.Getenv(id.PrivateKeyEnv) == "" {
+			key := "~/.config/magnum/keys/" + id.Name + ".pem"
+			if dir := d.Layout.ConfigDir(); dir != "" {
+				key = inspTilde(filepath.Join(dir, "keys", id.Name+".pem"))
+			}
 			out = append(out, doctorWarned(name, head+": "+id.PrivateKeyEnv+" is not set in this environment",
-				"put the App PEM into "+inspTilde(filepath.Join(d.Layout.Home, ".mise.local.toml"))+" ([env] "+id.PrivateKeyEnv+
-					") and run magnum through mise (`mise exec -- bin/magnum …`); then `magnum identities check --name "+id.Name+"`"))
+				"save the App PEM as "+key+" (chmod 600) and set private_key_file = \""+key+"\" on the identity; then `magnum identities check --name "+id.Name+"`"))
 			continue
 		}
 		switch kv(store.KVIdentityCheck(id.Name)) {

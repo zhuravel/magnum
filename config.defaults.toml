@@ -88,7 +88,9 @@ transport = "gh"                  # App JWT/token calls run as `gh api` (gh | di
 # fallbacks for the keys below.
 
 [pipeline]
-prompts_dir = "{{repo}}/prompts"  # a prompt name reads prompts_dir/<name>, else magnum's built-in copy
+prompts_dir = "{{repo}}/prompts"  # a prompt name reads prompts_dir/<name>, else magnum's built-in copy;
+                                  # {{repo}} is the checkout magnum runs from, none for an installed binary
+                                  # (built-in prompts; point it at e.g. ~/.config/magnum/prompts to override)
 
 # Agent CLIs: codex, claude, droid and omp are built in (values below are their defaults); every key is
 # optional and overrides only itself. Any other herdr agent kind (pi, gemini, ...) can be declared too.
@@ -158,7 +160,7 @@ judge = true                          # exactly one judge per watch
 effort = "xhigh"                      # -c model_reasoning_effort=xhigh (the zsh codex function passes the same)
 rereview_effort = "high"              # re-reviews of new commits; codex sets effort at launch only, so a live
                                       # session is asked for it in the prompt ("" = effort)
-skill = "{{repo}}/skills/magnum-review/SKILL.md"
+skill = "{{repo}}/skills/magnum-review/SKILL.md"   # without a checkout: the binary's built-in copy
 prompt = "judge-initial.md"
 rereview = "judge-rereview.md"
 continue_prompt = "judge-continue.md"
@@ -224,7 +226,9 @@ aliases = ["simplify"]
 # app_id = 123456
 # client_id = "Iv23liXXXXXXXXXXXXXX"
 # installation_id = 12345678
-# private_key_env = "MAGNUM_REVIEWER_APP_PRIVATE_KEY"   # PEM text or a path, from .mise.local.toml
+# private_key_file = "~/.config/magnum/keys/reviewer-app.pem"   # the App's PEM (chmod 600); a relative path
+#                                         # is under the config's directory; or private_key_env = "NAME", an
+#                                         # env var holding the PEM's text or path (e.g. from a checkout's mise)
 # no_findings_event = "COMMENT"           # never let a bot approval unlock a merge by accident
 # blocking_event = "REQUEST_CHANGES"
 #

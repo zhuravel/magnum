@@ -125,16 +125,15 @@ func TestInitAppIdentity(t *testing.T) {
 		"123456",           // app id
 		"Iv23liEXAMPLE",    // client id
 		"7890",             // installation id
-		"",                 // the default key variable
 	}, "\n") + "\n"
 	if code := it.run(t, input); code != 0 {
 		t.Fatalf("code %d\nstdout %s\nstderr %s", code, it.out.String(), it.err.String())
 	}
 	out := it.out.String()
+	key := inspTilde(filepath.Join(filepath.Dir(it.local()), "keys", "example-reviewer-app.pem"))
 	for _, want := range []string{"an answer is needed", "a GitHub login", "answer 1 or 2", "a positive number",
-		"[MAGNUM_EXAMPLE_REVIEWER_APP_PRIVATE_KEY]",
-		"  [env]\n  MAGNUM_EXAMPLE_REVIEWER_APP_PRIVATE_KEY = \"~/.config/magnum/example-reviewer.pem\"",
-		"mise exec -- bin/magnum identities check", "mise exec -- bin/magnum review example/widgets#<N> --wait"} {
+		"Save the App's private key (the .pem GitHub gave you) as " + key,
+		"chmod 600 " + key, "`magnum identities check` verifies the App", "bin/magnum review example/widgets#<N> --wait"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}
@@ -145,7 +144,7 @@ func TestInitAppIdentity(t *testing.T) {
 	}
 	app := cfg.IdentityByName("example-reviewer-app")
 	if len(cfg.Identities) != 2 || app == nil || app.Kind != "app" || app.Login != "example-reviewer[bot]" || app.AppID != 123456 ||
-		app.ClientID != "Iv23liEXAMPLE" || app.InstallationID != 7890 || app.PrivateKeyEnv != "MAGNUM_EXAMPLE_REVIEWER_APP_PRIVATE_KEY" {
+		app.ClientID != "Iv23liEXAMPLE" || app.InstallationID != 7890 || app.PrivateKeyEnv != "" || app.PrivateKeyFile != paths.Expand(key) {
 		t.Fatalf("identities %+v", cfg.Identities)
 	}
 	if w := cfg.Watches[0]; w.Identity != "example-reviewer-app" || w.PollIdentity != "octo-cat" {
@@ -171,9 +170,6 @@ func TestInitStopsWithoutWriting(t *testing.T) {
 }
 
 func TestInitRenderQuotesAndKeyEnv(t *testing.T) {
-	if got := initKeyEnv("my.app-2[bot]"); got != "MAGNUM_MY_APP_2_APP_PRIVATE_KEY" {
-		t.Errorf("initKeyEnv = %q", got)
-	}
 	for in, want := range map[string]string{
 		"example/widgets": "example/widgets", "github.com/example/widgets/": "example/widgets",
 		"git@github.com:example/widgets.git": "example/widgets", "http://github.com/example/w.x": "example/w.x",

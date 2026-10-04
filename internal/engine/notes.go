@@ -62,10 +62,10 @@ func NotesLockPath(l paths.Layout, owner, repo string) string {
 	return dir + ".lock"
 }
 
-// NotesRoot is the directory holding every repository's notes, "" when l has
-// no home.
+// NotesRoot is the directory holding every repository's notes, "" when l
+// names no place (paths.Layout.Valid).
 func NotesRoot(l paths.Layout) string {
-	if l.Home == "" {
+	if !l.Valid() {
 		return ""
 	}
 	return l.Notes()

@@ -245,7 +245,7 @@ func doctorConfig(ctx context.Context, d doctorDeps) []doctorCheck {
 			out = append(out, doctorWarned("config location", "your settings are read from the legacy "+inspTilde(s),
 				fmt.Sprintf("mkdir -p %s && mv %s %s", inspTilde(filepath.Dir(d.Layout.UserConfig)), inspTilde(s), inspTilde(d.Layout.UserConfig))))
 		}
-		if s == filepath.Join(d.Layout.Home, "config.toml") {
+		if legacy := d.Layout.Config(); legacy != "" && s == legacy {
 			out = append(out, doctorWarned("config location", inspTilde(s)+" replaces the built-in defaults (a checkout from before they were built in)",
 				"keep your settings in "+inspTilde(d.Layout.UserConfig)+" and remove "+inspTilde(s)+" unless it is a complete config on purpose"))
 		}
@@ -254,8 +254,11 @@ func doctorConfig(ctx context.Context, d doctorDeps) []doctorCheck {
 		out = append(out, doctorWarned("config warning", w, ""))
 	}
 	if _, err := os.Stat(d.Layout.Binary()); err != nil {
-		out = append(out, doctorWarned("binary", "no built binary at "+inspTilde(d.Layout.Binary())+" (launchd runs it)",
-			"cd "+inspTilde(d.Layout.Home)+" && go build -o bin/magnum ./cmd/magnum"))
+		fix := "brew reinstall zhuravel/tap/magnum"
+		if d.Layout.Home != "" {
+			fix = "cd " + inspTilde(d.Layout.Home) + " && go build -o bin/magnum ./cmd/magnum"
+		}
+		out = append(out, doctorWarned("binary", "no binary at "+inspTilde(d.Layout.Binary())+" (launchd runs it)", fix))
 	}
 	return out
 }

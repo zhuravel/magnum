@@ -20,7 +20,8 @@ when you change a behaviour, do not rewrite old ones.
   Tests are hermetic: fakes for git, gh, herdr and MySQL; the live tests are opt-in by environment
   variable.
 - **Prompts are loaded at daemon startup.** The daemon reads `prompts/*.md` and copies
-  `skills/magnum-review/SKILL.md` (to `state/skill/<hash>/`) once, when it starts, right after
+  `skills/magnum-review/SKILL.md` (to `<state dir>/skill/<hash>/`; a binary without a checkout uses the
+  prompts and skill it embeds) once, when it starts, right after
   checking that its build renders them; an edit reaches rounds only after
   `make build && bin/magnum daemon-restart`, and `magnum status` counts the files changed on disk
   since. Restart when no round is in flight (the command refuses otherwise; `--drain` waits, `--now`
@@ -63,6 +64,11 @@ describe any new key, command or key binding.
 | `internal/cli`, `internal/tui` | cobra commands, Bubble Tea v2 screens |
 | `internal/github`, `identity`, `herdr`, `gitx`, `mysqlx`, `execx` | the outside world, each behind a fake |
 | `docs/` | API doc (generated), decisions, probe notes (`spikes.md`), gh-dash keys |
+
+Where a running magnum keeps its files (`internal/paths`): the user config and App keys in
+`~/.config/magnum`, the registry, reports and notes in `~/.local/share/magnum`, logs, locks and the gh
+config dirs in `~/.local/state/magnum`. `MAGNUM_HOME=<checkout>` (and a checkout whose `state/` still holds
+the registry, until `magnum migrate-home`) keeps everything under `<checkout>/state/`.
 
 ## Conventions
 

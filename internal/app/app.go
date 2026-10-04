@@ -120,7 +120,7 @@ func New(cfg *config.Config, layout paths.Layout, opts Options) (*App, error) {
 	if cfg == nil {
 		return nil, errors.New("app: config is required")
 	}
-	if layout.Home == "" {
+	if !layout.Valid() {
 		layout = cfg.Layout
 	}
 	if err := layout.EnsureDirs(); err != nil {

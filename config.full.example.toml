@@ -1,7 +1,7 @@
 # A complete, working magnum configuration (Talkable's setup) as an example. The binary ships generic
 # defaults (config.defaults.toml); copy the [[identity]], [[watch]], [[pool]] blocks and the [daemon]/[terminal]
-# keys you need into ~/.config/magnum/config.toml. Secrets (App private keys) live in the checkout's gitignored
-# .mise.local.toml. Your config's [[watch]], [[identity]], [[pool]] and [[repo]] blocks are appended to the
+# keys you need into ~/.config/magnum/config.toml. App private keys are files next to it (~/.config/magnum/keys/,
+# chmod 600). Your config's [[watch]], [[identity]], [[pool]] and [[repo]] blocks are appended to the
 # defaults, any key it sets under [daemon], [herdr], [terminal], [board], [github], [pipeline] or [kinds.<name>]
 # overrides the default, and its [[role]] blocks override the role of the same name key by key (other names
 # are appended).
@@ -216,7 +216,7 @@ login = "talkable[bot]"
 app_id = 2700610
 client_id = "Iv23licS9bkgs7IGVSoS"
 installation_id = 105365229
-private_key_env = "MAGNUM_TALKABLE_APP_PRIVATE_KEY"   # PEM text or a path, from .mise.local.toml
+private_key_file = "~/.config/magnum/keys/talkable-app.pem"   # the App's PEM, chmod 600
 no_findings_event = "COMMENT"
 blocking_event = "REQUEST_CHANGES"
 

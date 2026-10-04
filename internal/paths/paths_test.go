@@ -253,3 +253,64 @@ func TestEnsureDirsTightensExistingDirs(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// An installed magnum keeps its data where XDG says; MAGNUM_HOME keeps the
+// checkout layout; an install whose registry still sits in a checkout's
+// state/ (the binary's checkout, else ~/Projects/magnum) keeps using it until
+// `magnum migrate-home` moves it, rather than starting over empty.
+func TestResolveLayouts(t *testing.T) {
+	user := realTemp(t)
+	env := func(kv map[string]string) func(string) string { return func(k string) string { return kv[k] } }
+	brewExe := filepath.Join(user, "homebrew", "Cellar", "magnum", "1.2.0", "bin", "magnum")
+	write(t, brewExe, "")
+
+	l, err := resolve(env(nil), brewExe, user)
+	if err != nil || l.Home != "" || l.CheckoutLayout() || !l.Valid() {
+		t.Fatalf("installed: %+v %v", l, err)
+	}
+	for got, want := range map[string]string{
+		l.DB():                          filepath.Join(user, ".local/share/magnum/magnum.db"),
+		l.ReviewDir("o", "r", 1, "abc"): filepath.Join(user, ".local/share/magnum/reviews/o/r/1/abc"),
+		l.Notes():                       filepath.Join(user, ".local/share/magnum/notes"),
+		l.Logs():                        filepath.Join(user, ".local/state/magnum/logs"),
+		l.GhConfigDir("app"):            filepath.Join(user, ".local/state/magnum/gh/app"),
+		l.UserConfig:                    filepath.Join(user, ".config/magnum/config.toml"),
+		l.ConfigDir():                   filepath.Join(user, ".config/magnum"),
+		l.Binary():                      filepath.Join(user, "homebrew", "bin", "magnum"), // not the versioned Cellar path
+		l.Skill() + "|" + l.Config():    "|",
+	} {
+		if got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	}
+
+	x := realTemp(t)
+	l, _ = resolve(env(map[string]string{"XDG_DATA_HOME": x + "/data", "XDG_STATE_HOME": x + "/state", "XDG_CONFIG_HOME": "relative"}), brewExe, user)
+	if l.DB() != x+"/data/magnum/magnum.db" || l.Lock() != x+"/state/magnum/magnum.lock" || l.UserConfig != filepath.Join(user, ".config/magnum/config.toml") {
+		t.Fatalf("XDG variables: %+v", l)
+	}
+
+	// The registry still in ~/Projects/magnum/state: that layout, until it moves.
+	legacy := filepath.Join(user, "Projects", "magnum")
+	write(t, filepath.Join(legacy, "state", "magnum.db"), "")
+	if l, _ = resolve(env(nil), brewExe, user); l.Home != legacy || !l.CheckoutLayout() || l.DB() != legacy+"/state/magnum.db" {
+		t.Fatalf("legacy registry: %+v", l)
+	}
+	write(t, filepath.Join(user, ".local/share/magnum/magnum.db"), "")
+	if l, _ = resolve(env(nil), brewExe, user); l.CheckoutLayout() {
+		t.Fatalf("both registries: the XDG one wins, got %+v", l)
+	}
+
+	// A binary in a checkout: Home for its sources, data in XDG.
+	co := filepath.Join(realTemp(t), "magnum")
+	write(t, filepath.Join(co, "go.mod"), "module "+modulePath+"\n")
+	write(t, filepath.Join(co, "bin", "magnum"), "")
+	if l, _ = resolve(env(nil), filepath.Join(co, "bin", "magnum"), user); l.Home != co || l.CheckoutLayout() || l.Binary() != filepath.Join(co, "bin", "magnum") || l.Skill() == "" {
+		t.Fatalf("checkout binary: %+v", l)
+	}
+
+	// MAGNUM_HOME: the checkout layout whatever else exists.
+	if l, _ = resolve(env(map[string]string{"MAGNUM_HOME": co}), brewExe, user); l.Home != co || !l.CheckoutLayout() || l.DB() != co+"/state/magnum.db" {
+		t.Fatalf("MAGNUM_HOME: %+v", l)
+	}
+}

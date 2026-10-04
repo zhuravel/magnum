@@ -95,7 +95,7 @@ func (rd *round) checkLocalPaths(ctx context.Context, p *postedReview) {
 	if p == nil || p.id == 0 {
 		return
 	}
-	literal := []string{rd.in.SlotPath, rd.r.Layout.Home}
+	literal := []string{rd.in.SlotPath, rd.r.Layout.Home, rd.r.Layout.Data(), rd.r.Layout.State()}
 	type hit struct {
 		Where string   `json:"where"`
 		Paths []string `json:"paths"`

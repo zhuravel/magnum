@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -33,7 +34,10 @@ type daemonGroupTest struct {
 // uid 501, a temp user home, no real signals and no sleeping.
 func newDaemonGroupTest(t *testing.T, rules ...execx.Rule) *daemonGroupTest {
 	t.Helper()
-	repo := t.TempDir()
+	repo := t.TempDir() // a checkout: the herdr plugin manifest marks it
+	if err := os.WriteFile(filepath.Join(repo, "herdr-plugin.toml"), []byte("id = \"zhuravel.magnum\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	cfg := config.Defaults()
 	cfg.Layout = paths.Layout{Home: repo}
 	cfg.Herdr.Socket = "/tmp/herdr-test.sock"
@@ -65,6 +69,20 @@ func newDaemonGroupTest(t *testing.T, rules ...execx.Rule) *daemonGroupTest {
 		},
 	}
 	return dt
+}
+
+// useMiseKey makes the checkout's mise environment hold an App's key
+// (.mise.toml, an App identity with private_key_env and no
+// private_key_file): launchd and the gh shim then go through mise.
+func (dt *daemonGroupTest) useMiseKey(t *testing.T) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dt.ctx.Layout.Home, ".mise.toml"), []byte("[env]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := *dt.ctx.Config
+	cfg.Identities = append(slices.Clone(cfg.Identities), config.Identity{Name: "app", Kind: "app", Login: "example[bot]",
+		AppID: 1, ClientID: "c", InstallationID: 2, PrivateKeyEnv: "MAGNUM_TEST_APP_KEY"})
+	dt.ctx.Config = &cfg
 }
 
 func (dt *daemonGroupTest) run(name string, args ...string) int {

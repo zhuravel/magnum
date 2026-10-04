@@ -93,9 +93,10 @@ func isPlaceholderKey(v string) bool {
 // reported as such (ErrPlaceholderKey), never read as a path. Errors never
 // echo the value.
 func loadPrivateKey(envName, value string) (*rsa.PrivateKey, error) {
+	source := "$" + envName
 	v := strings.TrimSpace(value)
 	if v == "" {
-		return nil, fmt.Errorf("$%s is empty", envName)
+		return nil, fmt.Errorf("%s is empty", source)
 	}
 	var data []byte
 	if strings.Contains(v, "-----BEGIN") {
@@ -113,18 +114,35 @@ func loadPrivateKey(envName, value string) (*rsa.PrivateKey, error) {
 			if errors.As(err, &pe) {
 				err = pe.Err // drop the path: the value might be key material, not a path
 			}
-			return nil, fmt.Errorf("read private key file named by $%s: %w", envName, err)
+			return nil, fmt.Errorf("read private key file named by %s: %w", source, err)
 		}
 		data = b
 	}
+	return parsePrivateKey(data, source)
+}
+
+// loadPrivateKeyFile parses the App key in the PEM file at path (an
+// identity's private_key_file).
+func loadPrivateKeyFile(path string) (*rsa.PrivateKey, error) {
+	source := "private_key_file " + path
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", source, err)
+	}
+	return parsePrivateKey(b, source)
+}
+
+// parsePrivateKey parses PEM data read from source ("$NAME", "private_key_file
+// <path>"), which names it in errors.
+func parsePrivateKey(data []byte, source string) (*rsa.PrivateKey, error) {
 	block, _ := pem.Decode(data)
 	if block == nil {
-		return nil, fmt.Errorf("parse private key from $%s: no PEM block", envName)
+		return nil, fmt.Errorf("parse private key from %s: no PEM block", source)
 	}
 	if block.Type == "RSA PRIVATE KEY" {
 		k, err := x509.ParsePKCS1PrivateKey(block.Bytes)
 		if err != nil {
-			return nil, fmt.Errorf("parse private key from $%s (PKCS#1): %w", envName, err)
+			return nil, fmt.Errorf("parse private key from %s (PKCS#1): %w", source, err)
 		}
 		return k, nil
 	}
@@ -133,11 +151,11 @@ func loadPrivateKey(envName, value string) (*rsa.PrivateKey, error) {
 		if k1, err1 := x509.ParsePKCS1PrivateKey(block.Bytes); err1 == nil {
 			return k1, nil
 		}
-		return nil, fmt.Errorf("parse private key from $%s (%s): %w", envName, block.Type, err)
+		return nil, fmt.Errorf("parse private key from %s (%s): %w", source, block.Type, err)
 	}
 	rk, ok := k.(*rsa.PrivateKey)
 	if !ok {
-		return nil, fmt.Errorf("private key from $%s is not an RSA key (%T)", envName, k)
+		return nil, fmt.Errorf("private key from %s is not an RSA key (%T)", source, k)
 	}
 	return rk, nil
 }

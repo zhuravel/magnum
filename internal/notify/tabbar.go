@@ -23,8 +23,8 @@ import (
 // file already holds exactly this content nothing is written, so calling it
 // every daemon tick costs one small read.
 func (n *Notifier) WriteTabBar(text string) error {
-	if n.Layout.Home == "" {
-		return fmt.Errorf("notify: tab bar: layout has no home directory")
+	if !n.Layout.Valid() {
+		return fmt.Errorf("notify: tab bar: the layout names no state directory")
 	}
 	path := n.Layout.TabBar()
 	data := tabBarContent(text)

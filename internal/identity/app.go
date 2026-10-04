@@ -2,6 +2,7 @@ package identity
 
 import (
 	"context"
+	"crypto/rsa"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -274,8 +275,25 @@ func (a *App) issuer() string {
 	return strconv.FormatInt(a.cfg.AppID, 10)
 }
 
+// privateKey loads the App's key: from private_key_file when set, else
+// from the env var private_key_env.
+func (a *App) privateKey() (*rsa.PrivateKey, error) {
+	if a.cfg.PrivateKeyFile != "" {
+		return loadPrivateKeyFile(a.cfg.PrivateKeyFile)
+	}
+	return loadPrivateKey(a.cfg.PrivateKeyEnv, a.getenv(a.cfg.PrivateKeyEnv))
+}
+
+// keySource names where the App's key comes from, for messages.
+func (a *App) keySource() string {
+	if a.cfg.PrivateKeyFile != "" {
+		return "private_key_file " + a.cfg.PrivateKeyFile
+	}
+	return "$" + a.cfg.PrivateKeyEnv
+}
+
 func (a *App) privateKeyJWT() (string, error) {
-	key, err := loadPrivateKey(a.cfg.PrivateKeyEnv, a.getenv(a.cfg.PrivateKeyEnv))
+	key, err := a.privateKey()
 	if err != nil {
 		return "", err
 	}

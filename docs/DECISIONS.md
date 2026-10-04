@@ -719,3 +719,20 @@ editing history. Code, config comments and prompts reference these by their head
   state and the daemon's status show nf-oct-dot_fill in theirs (prbPalette dots and slotDots). The
   help legend's pills lose their emoji prefix: the pill carries its icon. The dashboard's selected row
   draws its text without the marks' colors, since a color's reset would end the row's highlight.
+- **An installed magnum keeps its files where XDG says; the checkout is for development** (2026-10-04,
+  preparing a Homebrew formula: a binary in /opt/homebrew/bin has no checkout to keep `state/` in). The
+  registry, reports and notes go to `$XDG_DATA_HOME/magnum`, logs, locks, the gh config dirs, the
+  tab-bar file and the skill copies to `$XDG_STATE_HOME/magnum`, the user config, App keys
+  (`private_key_file`) and the eval corpus to `~/.config/magnum`; the binary embeds the judge skill and
+  the herdr plugin as it already embedded the prompts and defaults (`magnum install --plugin` writes the
+  plugin out under the data dir, and a daemon start refreshes that copy). `MAGNUM_HOME` keeps the checkout
+  layout for development, and a checkout whose `state/` still holds the registry keeps using it until
+  `magnum migrate-home` moves it, so rebuilding never starts a live install over with an empty registry.
+  migrate-home stops the daemon, checkpoints the registry's WAL (a read-only connection may have
+  recreated -wal/-shm, which a list made earlier would miss and the registry would move without),
+  renames every item (rolling back on a failure), links nothing back and removes the emptied `state/`:
+  prompts carry `gh_config_dir` and the report paths every round, so a pane created before the move only
+  keeps a stale `GH_CONFIG_DIR`, under which a bare `gh` fails ("not logged in") instead of posting as the
+  user. launchd runs `magnum daemon` directly unless an App key still comes from a checkout's mise
+  environment, and pins `MAGNUM_HOME` only for the checkout layout. Rejected: compatibility symlinks at
+  the old paths (one-time leftovers nobody finds later) and copying instead of renaming (two registries).

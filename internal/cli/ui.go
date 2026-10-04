@@ -117,7 +117,7 @@ func uiOpen(ctx context.Context, c *Context, d *actDeps, entry string, o uiOpts)
 	}
 	pane, err := d.Herdr.PluginPaneOpen(ctx, opts)
 	if err != nil {
-		return cmdFail(c, "ui", fmt.Errorf("open the %s popup: %w (is the plugin linked? `herdr plugin link %s`)", entry, d.herdrErr(err), d.Layout.Home))
+		return cmdFail(c, "ui", fmt.Errorf("open the %s popup: %w (is the plugin linked? `magnum install --plugin`)", entry, d.herdrErr(err)))
 	}
 	if pane.Pane.ID != "" {
 		fmt.Fprintf(c.Stdout, "opened %s (pane %s)\n", entry, pane.Pane.ID)

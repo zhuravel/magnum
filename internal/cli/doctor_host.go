@@ -64,7 +64,7 @@ func doctorDisk(_ context.Context, d doctorDeps) []doctorCheck {
 	}
 	path := d.UserHome
 	if path == "" {
-		path = d.Layout.Home
+		path = d.Layout.State()
 	}
 	if d.DiskFree == nil {
 		return nil

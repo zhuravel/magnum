@@ -2,14 +2,23 @@
 # Thin herdr plugin launcher: every verb delegates to the magnum binary. No logic lives here.
 set -euo pipefail
 
+# The plugin is either a magnum checkout (linked for development) or the copy
+# `magnum install --plugin` writes from an installed binary. Either way the
+# binary finds its own files (MAGNUM_HOME is left to the caller).
 PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PLUGIN_ID="${HERDR_PLUGIN_ID:-zhuravel.magnum}"
 HERDR="${HERDR_BIN_PATH:-herdr}"
-export MAGNUM_HOME="${MAGNUM_HOME:-$PLUGIN_ROOT}"
 
 resolve_magnum() {
   if [ -n "${MAGNUM_BIN:-}" ] && [ -x "$MAGNUM_BIN" ]; then echo "$MAGNUM_BIN"; return; fi
   if [ -x "$PLUGIN_ROOT/bin/magnum" ]; then echo "$PLUGIN_ROOT/bin/magnum"; return; fi
+  if [ ! -f "$PLUGIN_ROOT/go.mod" ]; then # an installed plugin: the installed binary
+    for m in "$(command -v magnum 2>/dev/null || true)" /opt/homebrew/bin/magnum /usr/local/bin/magnum "$HOME/.local/bin/magnum"; do
+      if [ -n "$m" ] && [ -x "$m" ]; then echo "$m"; return; fi
+    done
+    echo "magnum binary not found; install it: brew install zhuravel/tap/magnum" >&2
+    exit 1
+  fi
   if command -v go >/dev/null 2>&1; then
     (cd "$PLUGIN_ROOT" && go build -o bin/magnum ./cmd/magnum) >/dev/null 2>&1 && echo "$PLUGIN_ROOT/bin/magnum" && return
   fi

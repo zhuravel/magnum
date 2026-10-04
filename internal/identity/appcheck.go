@@ -5,12 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"path/filepath"
+	"os"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/paths"
 )
 
 type ghAccount struct {
@@ -81,10 +82,17 @@ func (c *appCheck) transport(what string, err error) (bool, error) {
 
 func (c *appCheck) privateKey(context.Context) (bool, error) {
 	a := c.a
-	value := a.getenv(a.cfg.PrivateKeyEnv)
-	key, err := loadPrivateKey(a.cfg.PrivateKeyEnv, value)
+	value := a.cfg.PrivateKeyFile
+	if value == "" {
+		value = a.getenv(a.cfg.PrivateKeyEnv)
+	}
+	key, err := a.privateKey()
 	if err != nil {
-		fix := fmt.Sprintf("set %s (PEM text or a file path) under [env] in %s", a.cfg.PrivateKeyEnv, filepath.Join(a.layout.Home, ".mise.local.toml"))
+		fix := fmt.Sprintf("save the App's PEM as %s (chmod 600)", inConfigDir(a.layout, "keys/"+a.cfg.Name+".pem"))
+		if a.cfg.PrivateKeyEnv != "" && a.cfg.PrivateKeyFile == "" {
+			fix = fmt.Sprintf("set %s (PEM text or a file path) in magnum's environment, or save the PEM as %s and set private_key_file = %q",
+				a.cfg.PrivateKeyEnv, inConfigDir(a.layout, "keys/"+a.cfg.Name+".pem"), inConfigDir(a.layout, "keys/"+a.cfg.Name+".pem"))
+		}
 		if errors.Is(err, ErrPlaceholderKey) {
 			c.r.fail(err.Error(), fix) // already says "the private key in $…"
 		} else {
@@ -92,9 +100,9 @@ func (c *appCheck) privateKey(context.Context) (bool, error) {
 		}
 		return true, nil
 	}
-	c.r.pass(fmt.Sprintf("private key from $%s (RSA %d bits)", a.cfg.PrivateKeyEnv, key.N.BitLen()))
+	c.r.pass(fmt.Sprintf("private key from %s (RSA %d bits)", a.keySource(), key.N.BitLen()))
 	if path, mode := looseKeyFile(value); path != "" {
-		c.r.warn(fmt.Sprintf("private key file named by $%s is readable by other users (mode %04o)", a.cfg.PrivateKeyEnv, mode),
+		c.r.warn(fmt.Sprintf("private key file of %s is readable by other users (mode %04o)", a.keySource(), mode),
 			"chmod 600 "+execx.ShellQuote(path))
 	}
 	c.jwt, err = signJWT(key, a.issuer(), a.now())
@@ -384,4 +392,17 @@ func summarize(names []string, total, limit int) string {
 func ownedBy(fullName, owner string) bool {
 	o, _, ok := strings.Cut(fullName, "/")
 	return ok && strings.EqualFold(o, owner)
+}
+
+// inConfigDir is rel under the user config's directory (~/.config/magnum),
+// in ~ form; "~/.config/magnum/<rel>" when the layout names none.
+func inConfigDir(l paths.Layout, rel string) string {
+	dir := l.ConfigDir()
+	if dir == "" {
+		return "~/.config/magnum/" + rel
+	}
+	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(dir, home+"/") {
+		dir = "~" + strings.TrimPrefix(dir, home)
+	}
+	return dir + "/" + rel
 }

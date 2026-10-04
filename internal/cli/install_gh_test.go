@@ -9,6 +9,7 @@ import (
 
 func TestInstallGhWritesTheShim(t *testing.T) {
 	dt := newDaemonGroupTest(t, installRules(herdrPluginListEmpty)...)
+	dt.useMiseKey(t)
 	dt.writeBinary(t)
 	if code := dt.run("install", "--gh", "--no-launchd"); code != 0 {
 		t.Fatalf("exit %d, stderr: %s", code, dt.stderr)
@@ -130,6 +131,7 @@ func TestInstallGhLeavesForeignExtensionsAlone(t *testing.T) {
 
 func TestInstallGhDryRunWritesNothing(t *testing.T) {
 	dt := newDaemonGroupTest(t, installRules(herdrPluginListEmpty)...)
+	dt.useMiseKey(t)
 	if code := dt.run("install", "--gh", "--no-launchd", "--dry-run"); code != 0 {
 		t.Fatalf("exit %d, stderr: %s", code, dt.stderr)
 	}

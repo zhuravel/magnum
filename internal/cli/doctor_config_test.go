@@ -49,10 +49,10 @@ func TestConfigCommandPrintsLoadedFileAndWarnings(t *testing.T) {
 				t.Fatalf("exit %d: %s", code, f.Err.String())
 			}
 			out := f.Out.String()
-			if !strings.Contains(out, "config:  "+tc.want+"\n") {
+			if !strings.Contains(out, "config:   "+tc.want+"\n") {
 				t.Errorf("stdout lacks the loaded file %s:\n%s", tc.want, out)
 			}
-			if !strings.Contains(out, "skill:   "+filepath.Join(f.Home, "skills", "magnum-review", "SKILL.md")+"\n") {
+			if !strings.Contains(out, "skill:    "+filepath.Join(f.Home, "skills", "magnum-review", "SKILL.md")+"\n") {
 				t.Errorf("stdout lacks the judge skill:\n%s", out)
 			}
 			stderr := f.Err.String()

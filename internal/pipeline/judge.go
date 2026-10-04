@@ -582,13 +582,7 @@ func (rd *round) dismissStale(ctx context.Context, event string, newID int64, ne
 func (rd *round) judgeData(run store.Run, marker string) agents.JudgeData {
 	in := rd.in
 	nf, be := rd.r.Config.VerdictsFor(rd.owner+"/"+rd.name, &rd.idCfg)
-	skill := rd.judge.Skill
-	switch {
-	case skill == "":
-		skill = rd.r.Layout.Skill()
-	case strings.Contains(skill, "{{repo}}"): // config.Defaults keeps it unexpanded
-		skill = strings.ReplaceAll(skill, "{{repo}}", rd.r.Layout.Home)
-	}
+	skill := config.SkillPath(rd.judge.Skill, rd.r.Layout) // config.Defaults keeps {{repo}} unexpanded
 	base := in.BaseRef
 	if base == "" {
 		base = in.Repo.DefaultBranch

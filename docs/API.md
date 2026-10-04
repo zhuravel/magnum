@@ -1963,6 +1963,10 @@ const DefaultSimplifyRerunLines = 150
 const DefaultSkill = "{{repo}}/skills/magnum-review/SKILL.md"
     DefaultSkill is the judge's default skill path ({{repo}} = magnum's home).
 
+const EmbeddedSkill = "builtin:skills/magnum-review/SKILL.md"
+    EmbeddedSkill names the binary's own copy of the judge skill (magnum.Skill)
+    as a skill source: what a judge gets without a checkout.
+
 const PlaceholderNum = "{num}"
     PlaceholderNum is the issue number in a [board] trackers template.
 
@@ -2044,9 +2048,10 @@ func ParseDuration(s string) (time.Duration, error)
     "30d", "1d12h". A day is 24 hours.
 
 func SkillPath(skill string, layout paths.Layout) string
-    SkillPath is a judge's skill file as a round names it: skill with {{repo}}
-    replaced by layout's home, or layout.Skill() when skill is "" (Load expands
-    {{repo}} and ~ already; Defaults keeps them).
+    SkillPath is a judge's skill as a round names it: skill with {{repo}}
+    replaced by layout's checkout, or layout.Skill() when skill is ""; the
+    embedded skill (EmbeddedSkill) when either needs a checkout the layout lacks
+    (Load expands {{repo}} and ~ already; Defaults keeps them).
 
 func ValidatePathGlob(glob string) error
     ValidatePathGlob checks a skip_paths entry: it must not be blank,
@@ -2423,7 +2428,8 @@ type Identity struct {
 	AppID           int64  `toml:"app_id"`
 	ClientID        string `toml:"client_id"`
 	InstallationID  int64  `toml:"installation_id"`
-	PrivateKeyEnv   string `toml:"private_key_env"`
+	PrivateKeyEnv   string `toml:"private_key_env"`   // the env var holding the PEM (text or a path)
+	PrivateKeyFile  string `toml:"private_key_file"`  // the PEM file (~ and paths relative to the user config's directory resolved); wins over private_key_env
 	NoFindingsEvent string `toml:"no_findings_event"` // APPROVE | COMMENT
 	BlockingEvent   string `toml:"blocking_event"`    // REQUEST_CHANGES | COMMENT
 	DismissOwnStale *bool  `toml:"dismiss_own_stale_change_requests"`
@@ -3492,8 +3498,8 @@ func NotesPath(l paths.Layout, owner, repo string) string
     "." or "..", or containing a path separator), which GitHub names never are.
 
 func NotesRoot(l paths.Layout) string
-    NotesRoot is the directory holding every repository's notes, "" when l has
-    no home.
+    NotesRoot is the directory holding every repository's notes, "" when l names
+    no place (paths.Layout.Valid).
 
 func ProcessCommand(ctx context.Context, run execx.Runner, pid int) (comm, args string, err error)
     ProcessCommand reads what ps knows about pid: comm (`ps -o comm=`, the
@@ -6802,9 +6808,21 @@ func (n *Notifier) WriteTabBar(text string) error
 ```text
 package paths // import "github.com/zhuravel/magnum/internal/paths"
 
-Package paths defines magnum's on-disk layout. Everything lives inside the
-repository checkout (MAGNUM_HOME, default ~/Projects/magnum): config.toml next
-to the code, runtime state under state/ (gitignored).
+Package paths defines magnum's on-disk layout. An installed magnum keeps its
+files where XDG says: the user config in ~/.config/magnum, the registry,
+review reports and notes in ~/.local/share/magnum, logs, locks and the
+identities' gh config in ~/.local/state/magnum. A checkout layout (everything
+under <checkout>/state, gitignored) remains for development (MAGNUM_HOME)
+and for an install whose registry has not moved yet (see Resolve and `magnum
+migrate-home`).
+
+CONSTANTS
+
+const LegacyHome = "~/Projects/magnum"
+    LegacyHome is where magnum's checkout lived before it was installable:
+    an install whose registry is still under <LegacyHome>/state keeps using it
+    until `magnum migrate-home` moves it.
+
 
 FUNCTIONS
 
@@ -6820,7 +6838,19 @@ func UserConfigPath() string
 TYPES
 
 type Layout struct {
-	Home string // repository root (MAGNUM_HOME)
+	// Home is the repository checkout magnum runs from (MAGNUM_HOME, or the
+	// checkout holding the binary); "" for an installed binary. In the
+	// checkout layout (DataDir and StateDir empty) everything lives under
+	// Home/state.
+	Home string
+	// DataDir holds the registry, the review reports and the repository
+	// notes ($XDG_DATA_HOME/magnum); StateDir the logs, locks, pidfile, the
+	// identities' gh config, the tab-bar file and the skill copies
+	// ($XDG_STATE_HOME/magnum). Both empty: the checkout layout.
+	DataDir, StateDir string
+	// Exe is the running binary as it was invoked ("" when unknown): what
+	// launchd runs when no checkout binary exists (Binary).
+	Exe string
 	// UserConfig is the user's config file, layered over the built-in
 	// defaults: $XDG_CONFIG_HOME/magnum/config.toml, else
 	// ~/.config/magnum/config.toml (Resolve sets it; UserConfigPath). ""
@@ -6835,22 +6865,44 @@ type Layout struct {
     Layout resolves every path magnum reads or writes.
 
 func Resolve() (Layout, error)
-    Resolve picks the home directory: MAGNUM_HOME, else the directory that
-    contains config.toml or magnum's own go.mod walking up from the executable
-    (symlinks resolved), else the default checkout location.
+    Resolve picks the layout:
 
-    MAGNUM_HOME is expanded (~), made absolute and symlink-free (see
-    canonicalDir): magnum hands paths under Home (GH_CONFIG_DIR, the report
-    directory) to agents whose working directory is a PR checkout, where a
-    relative or symlinked path would mean something else.
+      - MAGNUM_HOME set: the checkout layout under it (development, tests).
+        It is expanded (~), made absolute and symlink-free (see canonicalDir):
+        magnum hands paths under it (GH_CONFIG_DIR, the report directory) to
+        agents whose working directory is a PR checkout, where a relative or
+        symlinked path would mean something else.
+      - Else the XDG layout, with Home the checkout holding the binary, if any
+        (it has config.toml, config.defaults.toml or magnum's own go.mod within
+        four levels up, symlinks resolved).
+      - Except while the XDG registry does not exist and a checkout's does (the
+        binary's checkout, else LegacyHome): that checkout layout, so an install
+        keeps its registry until `magnum migrate-home` moves it instead of
+        starting over empty.
 
 func (l Layout) Binary() string
+    Binary is what launchd runs: the checkout's bin/magnum when there is one,
+    else the running binary (a Homebrew install's stable bin/ link rather than
+    its versioned Cellar path, which an upgrade removes).
+
+func (l Layout) CheckoutLayout() bool
+    CheckoutLayout reports whether everything lives under Home/state (the
+    development layout, or an install that has not run `magnum migrate-home`).
 
 func (l Layout) Config() string
+    Config is the checkout's legacy full config (Home/config.toml); "" without a
+    checkout.
+
+func (l Layout) ConfigDir() string
+    ConfigDir is the user config's directory (~/.config/magnum): eval.toml,
+    App keys, prompt overrides; "" without one.
 
 func (l Layout) DB() string
 
 func (l Layout) DaemonLog() string
+
+func (l Layout) Data() string
+    Data is where the registry, reports and notes live (see data).
 
 func (l Layout) EnsureDirs() error
     EnsureDirs creates the state tree and makes every directory in it private
@@ -6863,6 +6915,10 @@ func (l Layout) GhConfigDir(id string) string
 
 func (l Layout) GhRoot() string
 
+func (l Layout) Installed() (Layout, error)
+    Installed is l moved to the XDG data and state directories (what Resolve
+    picks once the registry lives there); Home, UserConfig and Exe stay.
+
 func (l Layout) Lock() string
 
 func (l Layout) Logs() string
@@ -6874,6 +6930,7 @@ func (l Layout) OpsLock() string
 func (l Layout) Pid() string
 
 func (l Layout) Plugin() string
+    Plugin is the checkout's herdr plugin manifest; "" without a checkout.
 
 func (l Layout) ReviewDir(owner, repo string, number int, sha string) string
     ReviewDir is where one review round's reports live.
@@ -6881,10 +6938,18 @@ func (l Layout) ReviewDir(owner, repo string, number int, sha string) string
 func (l Layout) Reviews() string
 
 func (l Layout) Skill() string
+    Skill is the checkout's judge skill; "" without a checkout (the binary's
+    embedded copy is used).
 
 func (l Layout) State() string
+    State is where logs, locks, the pidfile and the gh config dirs live:
+    StateDir, else Home/state.
 
 func (l Layout) TabBar() string
+
+func (l Layout) Valid() bool
+    Valid reports whether the layout names where magnum's files live (a zero
+    Layout, as tests build, does not).
 
 ```
 

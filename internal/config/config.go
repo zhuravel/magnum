@@ -247,7 +247,8 @@ type Identity struct {
 	AppID           int64  `toml:"app_id"`
 	ClientID        string `toml:"client_id"`
 	InstallationID  int64  `toml:"installation_id"`
-	PrivateKeyEnv   string `toml:"private_key_env"`
+	PrivateKeyEnv   string `toml:"private_key_env"`   // the env var holding the PEM (text or a path)
+	PrivateKeyFile  string `toml:"private_key_file"`  // the PEM file (~ and paths relative to the user config's directory resolved); wins over private_key_env
 	NoFindingsEvent string `toml:"no_findings_event"` // APPROVE | COMMENT
 	BlockingEvent   string `toml:"blocking_event"`    // REQUEST_CHANGES | COMMENT
 	DismissOwnStale *bool  `toml:"dismiss_own_stale_change_requests"`
@@ -740,15 +741,35 @@ func Defaults() *Config {
 	return c
 }
 
+// repoPath expands ~ and {{repo}} (the checkout) in a configured path; ""
+// when it names the checkout and there is none (an installed binary): the
+// embedded prompts and skill stand in.
+func (c *Config) repoPath(p string) string {
+	if strings.Contains(p, "{{repo}}") {
+		if c.Layout.Home == "" {
+			return ""
+		}
+		p = strings.ReplaceAll(p, "{{repo}}", c.Layout.Home)
+	}
+	return paths.Expand(p)
+}
+
 // expand resolves ~ and {{repo}} in paths and fills per-watch and per-pool
 // defaults. It runs before Normalize, which reads prompts from prompts_dir.
 func (c *Config) expand() {
 	c.Herdr.Socket = paths.Expand(c.Herdr.Socket)
 	c.Usage.CodexHome = paths.Expand(c.Usage.CodexHome)
-	c.Codex.SkillPath = paths.Expand(strings.ReplaceAll(c.Codex.SkillPath, "{{repo}}", c.Layout.Home))
-	c.Pipeline.PromptsDir = paths.Expand(strings.ReplaceAll(c.Pipeline.PromptsDir, "{{repo}}", c.Layout.Home))
+	c.Codex.SkillPath = c.repoPath(c.Codex.SkillPath)
+	c.Pipeline.PromptsDir = c.repoPath(c.Pipeline.PromptsDir)
 	if d := c.Pipeline.PromptsDir; d != "" && !filepath.IsAbs(d) && c.Layout.Home != "" {
 		c.Pipeline.PromptsDir = filepath.Join(c.Layout.Home, d)
+	}
+	for i := range c.Identities {
+		if f := paths.Expand(c.Identities[i].PrivateKeyFile); f != "" && !filepath.IsAbs(f) && c.Layout.ConfigDir() != "" {
+			c.Identities[i].PrivateKeyFile = filepath.Join(c.Layout.ConfigDir(), f)
+		} else {
+			c.Identities[i].PrivateKeyFile = f
+		}
 	}
 	for i := range c.Watches {
 		c.Watches[i].CloneRoot = paths.Expand(c.Watches[i].CloneRoot)

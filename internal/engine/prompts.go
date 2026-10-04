@@ -58,7 +58,7 @@ func PromptsLine(loadedAt time.Time, changed int) string {
 // A dry run copies no skill (it writes nothing outside its store).
 func (e *Engine) loadPrompts(ctx context.Context) error {
 	skillDir := ""
-	if !e.d.DryRun && e.d.Layout.Home != "" {
+	if !e.d.DryRun && e.d.Layout.Valid() {
 		skillDir = SkillCopyDir(e.d.Layout.State())
 	}
 	snap, err := e.cfg.SnapshotPrompts(skillDir, e.now(), agents.FallbackPromptName)

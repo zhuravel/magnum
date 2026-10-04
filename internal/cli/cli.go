@@ -106,7 +106,7 @@ func newRoot(c *Context) *cobra.Command {
 		newAttentionCmd(c), newPickCmd(c), newCleanupCmd(c), newKickCmd(c),
 		newPauseCmd(c), newResumeCmd(c), newUICmd(c),
 		// Daemon
-		newDaemonCmd(c), newDaemonRestartCmd(c), newDaemonStopCmd(c), newInstallCmd(c), newUninstallCmd(c),
+		newDaemonCmd(c), newDaemonRestartCmd(c), newDaemonStopCmd(c), newMigrateHomeCmd(c), newInstallCmd(c), newUninstallCmd(c),
 	)
 	noFileCompletionByDefault(root)
 	return root
@@ -247,8 +247,13 @@ func newConfigCmd(c *Context) *cobra.Command {
 				return 1
 			}
 			n, _ := engine.CheckPrompts(c.Config)
-			fmt.Fprintf(c.Stdout, "home:    %s\nconfig:  %s\nstate:   %s\nskill:   %s\nwatches: %d  identities: %d  pools: %d\nprompts: %d renders ok\n",
-				c.Layout.Home, configSources(c.Config, configFileInUse(c), c.Layout), c.Layout.State(), c.Config.JudgeFor(nil).Skill, len(c.Config.Watches), len(c.Config.Identities), len(c.Config.Pools), n)
+			checkout := c.Layout.Home
+			if checkout == "" {
+				checkout = "-"
+			}
+			skill := config.SkillPath(c.Config.JudgeFor(nil).Skill, c.Layout)
+			fmt.Fprintf(c.Stdout, "checkout: %s\nconfig:   %s\ndata:     %s\nstate:    %s\nskill:    %s\nwatches: %d  identities: %d  pools: %d\nprompts: %d renders ok\n",
+				checkout, configSources(c.Config, configFileInUse(c), c.Layout), c.Layout.Data(), c.Layout.State(), skill, len(c.Config.Watches), len(c.Config.Identities), len(c.Config.Pools), n)
 			for _, w := range c.Config.Warnings() {
 				fmt.Fprintln(c.Stderr, "warning:", w)
 			}

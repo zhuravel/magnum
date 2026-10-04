@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/zhuravel/magnum"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/launchd"
 	"github.com/zhuravel/magnum/internal/paths"
@@ -20,7 +23,7 @@ func newInstallCmd(c *Context) *cobra.Command {
 	var f installFlags
 	cmd := newCommand(groupDaemon, installUsage, "create state dirs, load the launchd agent, optionally link the herdr plugin",
 		"Create the state directories, write the launchd agent (~/Library/LaunchAgents/zhuravel.magnum.plist, "+
-			"running `mise exec -- bin/magnum daemon` in this checkout) and load it, which also restarts a "+
+			"running `magnum daemon`, through `mise exec` while an App key comes from mise) and load it, which also restarts a "+
 			"running daemon on the new binary. --plugin links this checkout as the herdr plugin; --gh writes the "+
 			"gh extension shim gh-magnum, so `gh magnum <command>` runs this checkout's binary (gh-dash keybindings "+
 			"use it, see docs/gh-dash.yml); --dry-run prints what would be written and run. `make install` runs "+
@@ -107,7 +110,7 @@ func installLaunchAgent(ctx context.Context, c *Context, run execx.Runner, dry b
 	out := c.Stdout
 	bin := c.Layout.Binary()
 	if _, err := os.Stat(bin); err != nil {
-		msg := fmt.Sprintf("%s is missing\nfix: build it with `make build` (or `go build -o bin/magnum ./cmd/magnum`) in %s, then re-run magnum install", bin, c.Layout.Home)
+		msg := fmt.Sprintf("%s is missing\nfix: install magnum (brew install zhuravel/tap/magnum), or build it with `make build` in the checkout, then re-run magnum install", bin)
 		if !dry {
 			fmt.Fprintln(c.Stderr, "magnum install: "+msg)
 			return 1
@@ -119,8 +122,8 @@ func installLaunchAgent(ctx context.Context, c *Context, run execx.Runner, dry b
 		fmt.Fprintf(c.Stderr, "magnum install: find your home directory: %v\nfix: set HOME, then re-run magnum install\n", err)
 		return 1
 	}
-	misePath := resolveMisePath(ctx, run)
-	plist := launchd.Plist(magnumPlistOptions(c.Layout, userHome, misePath, c.Config.Herdr.Socket, daemonConfigOverride(c)))
+	prefix := launchPrefix(c.Layout, c.Config, resolveMisePath(ctx, run))
+	plist := launchd.Plist(magnumPlistOptions(c.Layout, userHome, prefix, c.Config.Herdr.Socket, daemonConfigOverride(c)))
 	label := launchd.DefaultLabel
 	path := launchd.AgentPath(userHome, label)
 	uid := daemonSys.UID()
@@ -159,7 +162,11 @@ func installLaunchAgent(ctx context.Context, c *Context, run execx.Runner, dry b
 			err, uid, label, c.Layout.DaemonLog(), launchd.LogPath(c.Layout.Logs()))
 		return 1
 	}
-	fmt.Fprintf(out, "launchd: loaded %s from %s (mise %s)\n", label, path, misePath)
+	how := "the binary directly"
+	if len(prefix) > 0 {
+		how = "through `" + strings.Join(prefix, " ") + "` (an App key comes from mise)"
+	}
+	fmt.Fprintf(out, "launchd: loaded %s from %s, running %s\n", label, path, how)
 	if st, err := launchd.Status(ctx, run, uid, label); err == nil {
 		fmt.Fprintf(out, "launchd: %s\n", describeLaunchdState(st))
 	}
@@ -167,11 +174,54 @@ func installLaunchAgent(ctx context.Context, c *Context, run execx.Runner, dry b
 	return 0
 }
 
-// linkMagnumPlugin links this checkout as the herdr plugin unless it already
-// is (idempotent: `herdr plugin list` first).
+// pluginDir is the herdr plugin magnum links: the checkout when it holds the
+// manifest (development), else the copy WritePluginFiles keeps under the
+// data directory.
+func pluginDir(l paths.Layout) string {
+	if p := l.Plugin(); p != "" && fileExists(p) {
+		return l.Home
+	}
+	return filepath.Join(l.Data(), "herdr-plugin")
+}
+
+// writePluginFiles writes the embedded herdr plugin (manifest and script)
+// into dir, each only when it differs; it reports whether it wrote any.
+func writePluginFiles(dir string) (bool, error) {
+	wrote := false
+	for _, f := range []struct {
+		rel  string
+		data []byte
+		mode os.FileMode
+	}{{"herdr-plugin.toml", magnum.PluginManifest, 0o644}, {"scripts/magnum-ctl.sh", magnum.PluginScript, 0o755}} {
+		p := filepath.Join(dir, f.rel)
+		if cur, err := os.ReadFile(p); err == nil && bytes.Equal(cur, f.data) {
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			return wrote, err
+		}
+		if err := os.WriteFile(p+".tmp", f.data, f.mode); err != nil {
+			return wrote, err
+		}
+		if err := os.Rename(p+".tmp", p); err != nil {
+			return wrote, err
+		}
+		wrote = true
+	}
+	return wrote, nil
+}
+
+// linkMagnumPlugin links the herdr plugin (pluginDir; an installed binary
+// writes its copy first) unless it already is (idempotent: `herdr plugin
+// list` first).
 func linkMagnumPlugin(ctx context.Context, c *Context, run execx.Runner, dry bool) error {
 	out := c.Stdout
-	home := c.Layout.Home
+	home := pluginDir(c.Layout)
+	if home != c.Layout.Home && !dry {
+		if _, err := writePluginFiles(home); err != nil {
+			return fmt.Errorf("write the herdr plugin to %s: %w\nfix: check that the directory is writable, then re-run magnum install --plugin", home, err)
+		}
+	}
 	socket := c.Config.Herdr.Socket
 	p, found, err := findHerdrPlugin(ctx, run, socket, pluginID)
 	if err != nil {
@@ -179,7 +229,7 @@ func linkMagnumPlugin(ctx context.Context, c *Context, run execx.Runner, dry boo
 	}
 	if found {
 		if !p.linkedFrom(home) {
-			return fmt.Errorf("herdr plugin %s is already installed from %s, not from this checkout %s\nfix: herdr plugin unlink %s && magnum install --plugin",
+			return fmt.Errorf("herdr plugin %s is already installed from %s, not from %s\nfix: herdr plugin unlink %s && magnum install --plugin",
 				pluginID, p.Root, home, pluginID)
 		}
 		fmt.Fprintf(out, "herdr plugin %s: already linked from %s (re-run `herdr plugin link %s` after editing herdr-plugin.toml)\n",
@@ -233,13 +283,17 @@ func ghExtensionsDir(userHome string) string {
 
 // ghShimScript is the shim: run this checkout's binary through mise (as the
 // launchd agent does), with every argument passed on.
-func ghShimScript(misePath, home, bin, configOverride string) string {
+func ghShimScript(prefix []string, bin, configOverride string) string {
 	var b bytes.Buffer
 	fmt.Fprintf(&b, "#!/bin/sh\n%s\n", ghShimMarker)
 	if configOverride != "" {
 		fmt.Fprintf(&b, "MAGNUM_CONFIG=%s\nexport MAGNUM_CONFIG\n", actShellQuote(configOverride))
 	}
-	fmt.Fprintf(&b, "exec %s -C %s exec -- %s \"$@\"\n", actShellQuote(misePath), actShellQuote(home), actShellQuote(bin))
+	b.WriteString("exec ")
+	for _, a := range append(slices.Clone(prefix), bin) {
+		b.WriteString(actShellQuote(a) + " ")
+	}
+	b.WriteString("\"$@\"\n")
 	return b.String()
 }
 
@@ -254,7 +308,7 @@ func installGhShim(ctx context.Context, c *Context, run execx.Runner, dry bool) 
 	dir := filepath.Join(ghExtensionsDir(userHome), ghShimName)
 	path := filepath.Join(dir, ghShimName)
 	bin := c.Layout.Binary()
-	script := ghShimScript(resolveMisePath(ctx, run), c.Layout.Home, bin, daemonConfigOverride(c))
+	script := ghShimScript(launchPrefix(c.Layout, c.Config, resolveMisePath(ctx, run)), bin, daemonConfigOverride(c))
 	if _, err := os.Stat(bin); err != nil {
 		fmt.Fprintf(out, "warning: %s is missing; build it (`make build`) before running gh magnum\n", bin)
 	}

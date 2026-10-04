@@ -316,7 +316,7 @@ func (m *Manager) runLogged(ctx context.Context, c execx.Cmd, logName string) er
 
 // transcript appends redacted text to a log file under layout.Logs(); best effort.
 func (m *Manager) transcript(logName, text string) {
-	if m.d.Layout.Home == "" || logName == "" {
+	if !m.d.Layout.Valid() || logName == "" {
 		return
 	}
 	dir := m.d.Layout.Logs()

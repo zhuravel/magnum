@@ -39,8 +39,10 @@ import (
 const (
 	evalUsage    = "run|score|list|show"
 	evalRunUsage = "[--corpus FILE] [--case NAME]... [--label TEXT] [--no-notes] [--keep] [--force]"
-	// evalCorpusFile is the default corpus, in the checkout and gitignored.
-	evalCorpusFile = "eval.local.toml"
+	// evalCorpusFile is the default corpus, in the user config's directory
+	// (~/.config/magnum); evalLegacyCorpusFile its old place in a checkout.
+	evalCorpusFile       = "eval.toml"
+	evalLegacyCorpusFile = "eval.local.toml"
 	// evalAgentTag tags eval agents (agents.Deps.Tag).
 	evalAgentTag = "eval"
 	// evalReleaseTimeout bounds quitting a case's agents after its round.
@@ -56,7 +58,7 @@ func newEvalCmd(c *Context) *cobra.Command {
 			"`magnum eval run` replays each case at its pinned head as a blind dry run (nothing is posted, the roles "+
 			"are told not to read the PR's reviews, comments or later commits) and reports, per case, how many of the "+
 			"seeded defects the planned review found, at what severity, and how many other findings it made.\n\n"+
-			"The corpus is "+evalCorpusFile+" next to config.toml (gitignored; see eval.toml.example). Each case runs "+
+			"The corpus is ~/.config/magnum/"+evalCorpusFile+" (a checkout's eval.local.toml still works; see eval.toml.example). Each case runs "+
 			"in a scratch registry and report tree under state/eval/<run>/ and a detached worktree of the repository's "+
 			"clone, with agents named apart from the PR's own; the live registry, reports and notes are never "+
 			"written. The prompts and the skill are read from disk, so an edit is measured before the daemon restarts.\n\n"+
@@ -136,7 +138,15 @@ func evalCorpusPath(c *Context, flag string) string {
 	if flag != "" {
 		return flag
 	}
-	return filepath.Join(c.Layout.Home, evalCorpusFile)
+	dir := c.Layout.ConfigDir()
+	if dir == "" {
+		dir = filepath.Join(paths.Expand("~"), ".config", "magnum")
+	}
+	user := filepath.Join(dir, evalCorpusFile)
+	if legacy := filepath.Join(c.Layout.Home, evalLegacyCorpusFile); c.Layout.Home != "" && !fileExists(user) && fileExists(legacy) {
+		return legacy
+	}
+	return user
 }
 
 func runEvalRun(c *Context, f evalRunFlags) int {
@@ -245,7 +255,8 @@ func (r *evalRunner) runCase(ctx context.Context, ec eval.Case, cr eval.CaseRun)
 	}
 
 	scratch := filepath.Join(r.dir, "cases", ec.Name)
-	layout := paths.Layout{Home: r.c.Layout.Home, Scratch: scratch}
+	layout := r.c.Layout // logs, locks and the gh config dirs stay the install's
+	layout.Scratch = scratch
 	if err := layout.EnsureDirs(); err != nil {
 		return fail("error", err)
 	}
@@ -403,6 +414,9 @@ func evalModels(cfg *config.Config) map[string]string {
 // evalMagnumCommit is the checkout's short HEAD and whether it has
 // uncommitted changes (prompts or skill edits being measured).
 func evalMagnumCommit(ctx context.Context, c *Context) (string, bool) {
+	if c.Layout.Home == "" {
+		return c.Version, false // an installed binary: its version names the prompts and skill it embeds
+	}
 	g := gitx.New(&execx.Real{})
 	sha, err := g.RevParse(ctx, c.Layout.Home, "HEAD")
 	if err != nil {

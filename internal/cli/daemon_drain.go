@@ -44,8 +44,12 @@ func verifyBuild(ctx context.Context, c *Context, run execx.Runner, cmd string) 
 	if f := daemonConfigOverride(c); f != "" {
 		args = append(args, "--config", f)
 	}
+	env := map[string]string{}
+	if c.Layout.CheckoutLayout() && c.Layout.Home != "" {
+		env["MAGNUM_HOME"] = c.Layout.Home // the layout the daemon will use
+	}
 	res, err := run.Run(ctx, execx.Cmd{
-		Name: bin, Args: args, Env: map[string]string{"MAGNUM_HOME": c.Layout.Home},
+		Name: bin, Args: args, Env: env,
 		Timeout: verifyBuildTimeout, Label: "magnum config (the build that will run)",
 	})
 	if err == nil {

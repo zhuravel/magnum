@@ -3,7 +3,7 @@ package cli
 // `magnum init`: write the user's config (~/.config/magnum/config.toml) for a new machine from three
 // questions (the gh login, one repository, who posts), validate it with the
 // committed config and print what to do next. It never asks for a key:
-// an App's private key goes into .mise.local.toml by hand.
+// an App's private key is saved by hand as the file the config names.
 
 import (
 	"context"
@@ -31,11 +31,10 @@ func newInitCmd(c *Context) *cobra.Command {
 	cmd := newCommand(groupAct, "init "+initUsage, "write ~/.config/magnum/config.toml for this machine: your gh login, one repository, who posts",
 		"Ask three questions and write your config, ~/.config/magnum/config.toml ($XDG_CONFIG_HOME/magnum when set), which layers over the built-in defaults: your gh login (the default comes "+
 			"from `gh api user`), one repository to watch (owner/name) and who posts the reviews, your gh login or a "+
-			"GitHub App (then its app id, client id, installation id and the name of the variable that will hold its "+
-			"private key). The result is the smallest valid setup: one identity (plus the App when it posts), one "+
+			"GitHub App (then its app id, client id and installation id). The result is the smallest valid setup: one identity (plus the App when it posts), one "+
 			"watch of that repository, no pool and no database, with daemon.default_repo set so `magnum review 123` "+
 			"works. It is validated with config.toml before it is written. An App's private key is never asked for: "+
-			"init prints the .mise.local.toml line to add. An existing config is refused unless --force "+
+			"init names the file to save it as (~/.config/magnum/keys/<app>.pem, chmod 600). An existing config is refused unless --force "+
 			"(the old file is kept as config.toml.bak). ctrl+c or an empty input stops without writing.",
 		func(pos []string) int { return runInit(c, force, pos) })
 	cmd.Flags().BoolVar(&force, "force", false, "replace an existing config (kept as <file>.bak)")
@@ -50,8 +49,9 @@ type initAnswers struct {
 
 // initApp is a GitHub App identity's settings.
 type initApp struct {
-	login, clientID, keyEnv string
-	appID, installationID   int64
+	login, clientID       string
+	keyFile               string // where the App's PEM is to be saved (~ form), next to the config
+	appID, installationID int64
 }
 
 var (
@@ -59,7 +59,6 @@ var (
 	initRepoRe   = regexp.MustCompile(`^([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))/([A-Za-z0-9._-]{1,100})$`)
 	initBotRe    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]*\[bot\]$`)
 	initClientRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
-	initEnvRe    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 )
 
 func runInit(c *Context, force bool, pos []string) int {
@@ -83,6 +82,9 @@ func runInit(c *Context, force bool, pos []string) int {
 	if err != nil {
 		fmt.Fprintf(c.Stderr, "magnum init: cancelled (%v); nothing was written\n", err)
 		return 1
+	}
+	if ans.app != nil {
+		ans.app.keyFile = inspTilde(filepath.Join(filepath.Dir(local), "keys", initAppName(ans.app.login)+".pem"))
 	}
 	content := initRender(ans, time.Now())
 	if err := initValidate(c, file, content); err != nil {
@@ -111,6 +113,9 @@ func initTarget(c *Context, file string) string {
 		return filepath.Join(filepath.Dir(file), "config.local.toml")
 	case c.Layout.UserConfig != "":
 		return c.Layout.UserConfig
+	}
+	if c.Layout.Home == "" {
+		return ""
 	}
 	return filepath.Join(c.Layout.Home, "config.local.toml")
 }
@@ -174,14 +179,6 @@ func initAsk(ctx context.Context, w io.Writer, in *promptIn, defLogin string) (i
 	if app.installationID, err = initAskID(ctx, w, in, "Installation id (the number in the installation's URL)"); err != nil {
 		return a, err
 	}
-	if app.keyEnv, err = in.ask(ctx, w, "Variable that will hold the private key", initKeyEnv(app.login), func(s string) (string, error) {
-		if !initEnvRe.MatchString(s) {
-			return "", errors.New("an environment variable name: letters, digits and '_', not starting with a digit")
-		}
-		return s, nil
-	}); err != nil {
-		return a, err
-	}
 	a.app = app
 	return a, nil
 }
@@ -230,22 +227,6 @@ func initCheckBot(s string) (string, error) {
 	return s, nil
 }
 
-// initKeyEnv is the default key variable for a bot login:
-// MAGNUM_<SLUG>_APP_PRIVATE_KEY.
-func initKeyEnv(bot string) string {
-	slug := strings.TrimSuffix(bot, "[bot]")
-	slug = strings.Map(func(r rune) rune {
-		if r >= 'a' && r <= 'z' {
-			return r - 'a' + 'A'
-		}
-		if r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
-			return r
-		}
-		return '_'
-	}, slug)
-	return "MAGNUM_" + slug + "_APP_PRIVATE_KEY"
-}
-
 // initAppName names the App identity: its slug and "-app".
 func initAppName(bot string) string { return strings.TrimSuffix(bot, "[bot]") + "-app" }
 
@@ -267,7 +248,7 @@ func initRender(a initAnswers, now time.Time) string {
 		post = initAppName(a.app.login)
 		fmt.Fprintf(&b, "[[identity]]\nname = %s\nkind = \"app\"                # a GitHub App: posts the reviews\nlogin = %s\n", q(post), q(a.app.login))
 		fmt.Fprintf(&b, "app_id = %d\nclient_id = %s\ninstallation_id = %d\n", a.app.appID, q(a.app.clientID), a.app.installationID)
-		fmt.Fprintf(&b, "private_key_env = %s   # set in .mise.local.toml: the PEM's path or text\n\n", q(a.app.keyEnv))
+		fmt.Fprintf(&b, "private_key_file = %s   # the App's PEM (chmod 600); magnum never asks for it\n\n", q(a.app.keyFile))
 	}
 	fmt.Fprintf(&b, "[[watch]]\nowner = %s\ninclude = [%s]\nidentity = %s\npoll_identity = %s\n", q(a.owner), q(a.name), q(post), q(a.login))
 	b.WriteString("# clone_root = \"~/Projects\"   # where the clone is found, or created; reviews run in a worktree next to it\n")
@@ -340,15 +321,11 @@ func initReport(w io.Writer, path string, a initAnswers, cfg *config.Config) {
 	fmt.Fprintf(w, "\nwrote %s: %d identities, %d watch (%s), no pool; config is valid\n",
 		inspTilde(path), len(cfg.Identities), len(cfg.Watches), repo)
 	if a.app != nil {
-		fmt.Fprintf(w, "\nAdd the App's private key to .mise.local.toml (gitignored) in %s; magnum never asks for it:\n\n", inspTilde(filepath.Dir(path)))
-		fmt.Fprintf(w, "  [env]\n  %s = \"~/.config/magnum/%s.pem\"   # the PEM's path (chmod 600) or its text\n\n",
-			a.app.keyEnv, strings.TrimSuffix(a.app.login, "[bot]"))
-		fmt.Fprintln(w, "Run magnum through mise so it sees the key; `mise exec -- bin/magnum identities check` verifies the App.")
+		fmt.Fprintf(w, "\nSave the App's private key (the .pem GitHub gave you) as %s; magnum never asks for it:\n\n", a.app.keyFile)
+		fmt.Fprintf(w, "  mkdir -p %s && mv <downloaded>.pem %s && chmod 600 %s\n\n", filepath.Dir(a.app.keyFile), a.app.keyFile, a.app.keyFile)
+		fmt.Fprintln(w, "`magnum identities check` verifies the App.")
 	}
 	bin := "bin/magnum"
-	if a.app != nil {
-		bin = "mise exec -- bin/magnum"
-	}
 	steps := [][2]string{
 		{bin + " doctor", "what is missing, with the fix"},
 		{bin + " daemon", "in a second terminal: the daemon in the foreground"},

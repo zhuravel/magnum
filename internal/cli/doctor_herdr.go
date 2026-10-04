@@ -107,7 +107,7 @@ func doctorPluginCheck(ctx context.Context, d doctorDeps) []doctorCheck {
 			Enabled  bool   `json:"enabled"`
 		} `json:"plugins"`
 	}
-	link := "herdr plugin link " + inspTilde(d.Layout.Home) + " (or `magnum install --plugin`)"
+	link := "`magnum install --plugin`"
 	if err := d.Herdr.Call(ctx, "plugin.list", map[string]any{}, &out); err != nil {
 		return []doctorCheck{doctorWarned("plugin", "could not list herdr plugins: "+err.Error(), "start herdr, then "+link)}
 	}

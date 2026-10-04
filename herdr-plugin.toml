@@ -6,8 +6,8 @@ description = "Automated GitHub PR reviews in Codex and Claude panes, with a fol
 platforms = ["macos"]
 
 # This plugin is a thin launcher (collie pattern): the daemon runs under launchd and every action
-# delegates to the `magnum` binary built in this repo (bin/magnum). Link the repo itself:
-#   herdr plugin link /Users/bohdan/Projects/magnum
+# delegates to the `magnum` binary: an installed one (`magnum install --plugin` writes this plugin
+# out and links it), or a checkout's bin/magnum (`herdr plugin link <checkout>` for development).
 
 # After a session restore, nudge the daemon so it rebinds panes now instead of on the next tick.
 [[startup]]

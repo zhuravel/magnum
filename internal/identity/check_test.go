@@ -220,7 +220,7 @@ func TestAppCheckMissingKey(t *testing.T) {
 	}
 	assertLines(t, r,
 		"FAIL private key: $MAGNUM_TEST_APP_KEY is empty",
-		"     fix: set MAGNUM_TEST_APP_KEY (PEM text or a file path) under [env] in "+filepath.Join(layout.Home, ".mise.local.toml"),
+		"     fix: set MAGNUM_TEST_APP_KEY (PEM text or a file path) in magnum's environment, or save the PEM as ~/.config/magnum/keys/talkable-app.pem and set private_key_file = \"~/.config/magnum/keys/talkable-app.pem\"",
 	)
 }
 
@@ -393,7 +393,7 @@ func TestAppCheckKeyFileMode(t *testing.T) {
 			if !r.Pass {
 				t.Fatalf("a loose key mode is a warning, not a failure:\n%s", r)
 			}
-			warn := fmt.Sprintf("WARN private key file named by $MAGNUM_TEST_APP_KEY is readable by other users (mode %04o)", tc.mode)
+			warn := fmt.Sprintf("WARN private key file of $MAGNUM_TEST_APP_KEY is readable by other users (mode %04o)", tc.mode)
 			if tc.wantWarn {
 				assertLines(t, r, warn, "     fix: chmod 600 "+keyFile)
 			} else if strings.Contains(strings.Join(r.Lines, "\n"), "WARN") {
@@ -509,7 +509,7 @@ func TestAppCheckPlaceholderKey(t *testing.T) {
 	}
 	assertLines(t, r,
 		"FAIL the private key in $MAGNUM_TEST_APP_KEY is the placeholder from .mise.toml; put the PEM in .mise.local.toml",
-		"     fix: set MAGNUM_TEST_APP_KEY (PEM text or a file path) under [env] in "+filepath.Join(layout.Home, ".mise.local.toml"),
+		"     fix: set MAGNUM_TEST_APP_KEY (PEM text or a file path) in magnum's environment, or save the PEM as ~/.config/magnum/keys/talkable-app.pem and set private_key_file = \"~/.config/magnum/keys/talkable-app.pem\"",
 	)
 }
 
@@ -524,5 +524,36 @@ func TestAppTokenMintingNamesThePlaceholder(t *testing.T) {
 	}
 	if f.mintCount() != 0 {
 		t.Errorf("minted with a placeholder key")
+	}
+}
+
+// private_key_file names the PEM directly, with no environment (what an
+// installed magnum uses: launchd runs it without mise); it wins over
+// private_key_env and gets the same mode warning.
+func TestAppCheckPrivateKeyFile(t *testing.T) {
+	clock := newClock()
+	f := newFakeGitHub(t, clock)
+	keyFile := filepath.Join(t.TempDir(), "app.pem")
+	if err := os.WriteFile(keyFile, []byte(pkcs1PEM(testKey(t))), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(keyFile, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	id := f.id
+	id.PrivateKeyFile = keyFile // private_key_env stays set, unset in the environment
+	app := NewApp(id, newLayout(t), f.server.Client(), func(string) string { return "" }, clock.Now, WithBaseURL(f.server.URL))
+	r, err := app.Check(context.Background())
+	if err != nil || !r.Pass {
+		t.Fatalf("check: %v\n%s", err, r)
+	}
+	assertLines(t, r, "PASS private key from private_key_file "+keyFile+" (RSA 2048 bits)",
+		"WARN private key file of private_key_file "+keyFile+" is readable by other users (mode 0644)", "     fix: chmod 600 "+keyFile)
+	assertNoSecrets(t, r)
+
+	id.PrivateKeyFile = filepath.Join(t.TempDir(), "missing.pem")
+	app = NewApp(id, newLayout(t), f.server.Client(), func(string) string { return "" }, clock.Now, WithBaseURL(f.server.URL))
+	if r, _ = app.Check(context.Background()); r.Pass || !strings.Contains(strings.Join(r.Lines, "\n"), "read private_key_file "+id.PrivateKeyFile) {
+		t.Fatalf("a missing key file:\n%s", r)
 	}
 }

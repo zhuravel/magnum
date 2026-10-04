@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
-	"github.com/zhuravel/magnum/internal/paths"
 )
 
 // The review pipeline is configuration, "a Procfile of agents": [kinds.<name>]
@@ -122,7 +121,7 @@ func cloneOrNil[E any](s []E) []E {
 func (c *Config) expandPipeline() {
 	for i := range c.Roles {
 		if s := c.Roles[i].Skill; s != "" {
-			c.Roles[i].Skill = paths.Expand(strings.ReplaceAll(s, "{{repo}}", c.Layout.Home))
+			c.Roles[i].Skill = c.repoPath(s)
 		}
 	}
 }

@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -83,8 +84,14 @@ func runUninstallCmd(c *Context, dry, now bool, pos []string) int {
 		}
 	}
 
-	fmt.Fprintf(out, "kept %s (registry, logs, reviews, gh config dirs) and %s; delete them by hand to remove every trace\n",
-		c.Layout.State(), c.Layout.Config())
+	kept := []string{c.Layout.Data() + " (registry, reviews, notes)"}
+	if c.Layout.State() != c.Layout.Data() {
+		kept = append(kept, c.Layout.State()+" (logs, gh config dirs)")
+	}
+	if c.Layout.UserConfig != "" {
+		kept = append(kept, c.Layout.UserConfig)
+	}
+	fmt.Fprintf(out, "kept %s; delete them by hand to remove every trace\n", strings.Join(kept, ", "))
 	if failed {
 		return 1
 	}

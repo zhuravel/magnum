@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zhuravel/magnum"
 	"github.com/zhuravel/magnum/internal/paths"
 )
 
@@ -49,9 +50,10 @@ type snapSkill struct {
 // fileStamp identifies a file's content cheaply: same size and modification
 // time means unchanged without reading it; otherwise the hash decides.
 type fileStamp struct {
-	size int64
-	mod  time.Time
-	sum  [sha256.Size]byte
+	size     int64
+	mod      time.Time
+	sum      [sha256.Size]byte
+	embedded bool // the binary's own copy: never changes under a running daemon
 }
 
 // readStamped reads the file at path and stamps it.
@@ -74,6 +76,9 @@ func readStamped(path string) ([]byte, fileStamp, error) {
 
 // same reports whether path still holds the content st stamped.
 func (st fileStamp) same(path string) bool {
+	if st.embedded {
+		return true
+	}
 	fi, err := os.Stat(path)
 	if err != nil {
 		return false
@@ -95,13 +100,22 @@ const skillCopyKeep = 7 * 24 * time.Hour
 
 var skillCopyDirRe = regexp.MustCompile(`^[0-9a-f]{12}$`)
 
-// SkillPath is a judge's skill file as a round names it: skill with
-// {{repo}} replaced by layout's home, or layout.Skill() when skill is ""
-// (Load expands {{repo}} and ~ already; Defaults keeps them).
+// EmbeddedSkill names the binary's own copy of the judge skill
+// (magnum.Skill) as a skill source: what a judge gets without a checkout.
+const EmbeddedSkill = "builtin:skills/magnum-review/SKILL.md"
+
+// SkillPath is a judge's skill as a round names it: skill with {{repo}}
+// replaced by layout's checkout, or layout.Skill() when skill is ""; the
+// embedded skill (EmbeddedSkill) when either needs a checkout the layout
+// lacks (Load expands {{repo}} and ~ already; Defaults keeps them).
 func SkillPath(skill string, layout paths.Layout) string {
 	switch {
-	case skill == "":
+	case skill == "" && layout.Skill() != "":
 		return layout.Skill()
+	case skill == "":
+		return EmbeddedSkill
+	case strings.Contains(skill, "{{repo}}") && layout.Home == "":
+		return EmbeddedSkill
 	case strings.Contains(skill, "{{repo}}"):
 		return strings.ReplaceAll(skill, "{{repo}}", layout.Home)
 	}
@@ -168,11 +182,16 @@ func (c *Config) SnapshotPrompts(skillDir string, now time.Time, extra ...string
 	return s, nil
 }
 
-// copySkill copies the skill file src to dir/<hash>/SkillCopyName (kept as
-// is when that copy already holds the same text).
+// copySkill copies the skill file src (EmbeddedSkill: the binary's copy) to
+// dir/<hash>/SkillCopyName (kept as is when that copy already holds the
+// same text).
 func copySkill(src, dir string) (snapSkill, error) {
-	b, st, err := readStamped(src)
-	if err != nil {
+	var b []byte
+	var st fileStamp
+	var err error
+	if src == EmbeddedSkill {
+		b, st = magnum.Skill, fileStamp{embedded: true, sum: sha256.Sum256(magnum.Skill)}
+	} else if b, st, err = readStamped(src); err != nil {
 		return snapSkill{}, err
 	}
 	sum := hex.EncodeToString(st.sum[:])[:12]
