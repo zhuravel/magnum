@@ -1944,6 +1944,10 @@ const DefaultSimplifyRerunLines = 150
 const DefaultSkill = "{{repo}}/skills/magnum-review/SKILL.md"
     DefaultSkill is the judge's default skill path ({{repo}} = magnum's home).
 
+const RequiredWorkflowPrefix = "workflow:"
+    RequiredWorkflowPrefix marks a required_checks entry naming a whole GitHub
+    Actions workflow ("workflow:CI").
+
 const SkillCopyName = "SKILL.md"
     SkillCopyName is the file name of a judge skill's startup copy (<skill
     dir>/<first 12 hex of its SHA-256>/SKILL.md).
@@ -2022,6 +2026,16 @@ func ValidatePathGlob(glob string) error
 
 TYPES
 
+type Board struct {
+	// Badges map a GitHub label to what the board shows for it, e.g.
+	// { "Flagged" = "🚩" }: the text goes before the title, the card shows
+	// it with the label, the summary counts it. A key matches a label
+	// whatever their case and leading emoji or symbols ("Flagged" matches
+	// "🚩 Flagged").
+	Badges map[string]string `toml:"badges"`
+}
+    Board tunes the PR board ([board]).
+
 type Claude struct {
 	WrapperMode string   `toml:"wrapper_mode"`
 	Args        []string `toml:"args"`
@@ -2058,6 +2072,7 @@ type Config struct {
 	GitHub     GitHub     `toml:"github"`
 	Pipeline   Pipeline   `toml:"pipeline"`
 	Usage      Usage      `toml:"usage"`
+	Board      Board      `toml:"board"`
 	Identities []Identity `toml:"identity"`
 	Watches    []Watch    `toml:"watch"`
 	Pools      []Pool     `toml:"pool"`
@@ -2143,6 +2158,11 @@ func (c *Config) ReadinessFor(fullName string) Readiness
 
 func (c *Config) RepoFor(fullName string) *Repo
     RepoFor returns the [[repo]] block for owner/name, or nil.
+
+func (c *Config) RequiredChecks(fullName string) []string
+    RequiredChecks returns the [[repo]] block's required_checks for repository
+    fullName (nil when none): check-name globs and "workflow:<glob>" entries
+    that replace GitHub's list (store.Store.RequiredChecks).
 
 func (c *Config) ResolvePrompt(name string) (Prompt, error)
     ResolvePrompt reads a prompt by name: <pipeline.prompts_dir>/<name> when
@@ -2607,6 +2627,15 @@ type Repo struct {
 	// re-review posts. Overrides the watch's keep_approvals (see
 	// Config.KeepApprovals).
 	KeepApprovals *bool `toml:"keep_approvals"`
+
+	// RequiredChecks are the checks a PR must pass to be ready, replacing
+	// the ones GitHub requires on the default branch (rulesets or branch
+	// protection, which a private repository on a free plan does not
+	// expose): globs (path.Match, case-sensitive) over check run names and
+	// commit status contexts, or RequiredWorkflowPrefix and a glob over
+	// GitHub Actions workflow names (every check of the workflow). The board
+	// shows their state (see Config.RequiredChecks).
+	RequiredChecks []string `toml:"required_checks"`
 }
     Repo is a [[repo]] block: the repository's verdicts (any watched repository,
     pooled or not) and setup for the per-PR worktrees of a repository
@@ -3325,6 +3354,10 @@ func KVPRRequestAt(prID int64) string
     request's actor (else the reviewer it named), or RequestReadyForReview.
 
 func KVPRRequestBy(prID int64) string
+func KVPRSkippedBaseline(prID int64) string
+    KVPRSkippedBaseline marks a baseline PR skipBaseline made ineligible:
+    its value is the head it was skipped on.
+
 func KVPRTrivial(prID int64) string
     KVPRTrivial holds the last push magnum skipped as trivial for a PR
     (TrivialSkip as JSON), for the PR card; a review posted afterwards deletes
@@ -3625,6 +3658,8 @@ type GitHub interface {
 	DismissReview(ctx context.Context, owner, repo string, number int, reviewID int64, message string) error
 	// CreateReview posts a manual verdict (verdict.go).
 	CreateReview(ctx context.Context, owner, repo string, number int, commitID, event, body string) (github.RESTReview, error)
+	// RequiredChecks reads the checks a branch requires (required.go).
+	RequiredChecks(ctx context.Context, owner, repo, branch string) ([]string, bool, error)
 }
     GitHub is the part of *github.Client the engine uses (one client per
     identity): the poller's reads, and the dismissal of an App approval the head
@@ -4286,6 +4321,14 @@ caller refresh an identity's credentials after a 401.
 
 CONSTANTS
 
+const (
+	CheckPassed  = "passed"  // a check run's SUCCESS or NEUTRAL, a status's SUCCESS
+	CheckFailed  = "failed"  // FAILURE, TIMED_OUT, CANCELLED, ACTION_REQUIRED, STARTUP_FAILURE, STALE; a status's FAILURE or ERROR
+	CheckPending = "pending" // a check run not COMPLETED, a status PENDING or EXPECTED
+	CheckSkipped = "skipped" // SKIPPED
+)
+    Check.State values.
+
 const CompareFileLimit = 300
     CompareFileLimit is the most files GitHub lists for one comparison;
     a comparison listing exactly this many is treated as truncated.
@@ -4336,6 +4379,34 @@ func (e *APIError) Error() string
 
 func (e *APIError) Is(target error) bool
     Is maps the error onto the package sentinels.
+
+type CIRollup struct {
+	SHA   string // the commit; "" when GitHub listed none
+	State string // GitHub's rollup: SUCCESS | FAILURE | PENDING | ERROR | EXPECTED; "" when the commit has no checks
+	// Total is len(Checks) plus the checks GitHub did not return (past its
+	// page of 100).
+	Total int
+	// Complete is true when Checks is every check: GitHub returned a single
+	// page of at most 100.
+	Complete bool
+	// Checks is the latest run of each (Workflow, Name), in GitHub's order;
+	// never nil. A re-run, or a SKIPPED run left from a draft, supersedes or
+	// is superseded by the same job's other runs.
+	Checks []Check
+}
+    CIRollup is the status check rollup of a pull request's head commit.
+
+type Check struct {
+	Name  string // the check run's name or the status's context
+	State string // CheckPassed | CheckFailed | CheckPending | CheckSkipped
+	// Workflow is the GitHub Actions workflow whose run the check belongs
+	// to; "" for a commit status or another app's check run.
+	Workflow string
+	// At is when the check finished, else started (a check run), or was
+	// posted (a commit status); zero for a check run not started yet.
+	At time.Time
+}
+    Check is one check run or commit status of a CIRollup.
 
 type Client struct {
 	// Run executes gh. Required.
@@ -4423,6 +4494,16 @@ func (c *Client) Radar(ctx context.Context, org string) ([]RepoRadar, RateLimit,
     The returned RateLimit sums Cost over all calls; the other fields are the
     most conservative snapshot seen. When a later page fails it still carries
     what the earlier pages reported, so the caller can pause on a low budget.
+
+func (c *Client) RequiredChecks(ctx context.Context, owner, repo, branch string) (checks []string, known bool, err error)
+    RequiredChecks reads the status checks a pull request into
+    branch of owner/repo must pass: the contexts of the rulesets'
+    required_status_checks rules (GET /repos/{o}/{r}/rules/branches/{branch},
+    readable with read access), else of the classic branch protection
+    (.../branches/{branch}/protection/required_status_checks, which usually
+    answers 404 without admin access). known is false when GitHub does not say:
+    403 (a private repository on a free plan) or 404 from the endpoint that
+    would have to answer. Any other failure is an error.
 
 func (c *Client) ReviewComments(ctx context.Context, owner, repo string, number int, reviewID int64) ([]ReviewComment, error)
     ReviewComments lists the inline comments of a review (GET
@@ -4538,6 +4619,8 @@ type PRDetails struct {
 	Deletions    int
 	ChangedFiles int
 	Commits      int
+	// CI is the head commit's checks.
+	CI CIRollup
 }
     PRDetails is what the poller stores for a pull request whose radar row
     changed. Logins are GraphQL logins, which never carry the "[bot]" suffix;
@@ -4550,8 +4633,16 @@ type PRRadar struct {
 	UpdatedAt   time.Time
 	HeadRefOid  string
 	BaseRefName string
+	// CIState is the head commit's check rollup (SUCCESS, FAILURE, PENDING,
+	// ERROR, EXPECTED), "" when it has no checks. It is read through the head
+	// branch, so it is known (CIKnown) only for a pull request from a branch
+	// of the repository itself whose tip is HeadRefOid: a fork's branch
+	// carries the fork's checks, not the ones the pull request runs.
+	CIState string
+	CIKnown bool
 }
-    PRRadar is the scalar-only view of an open pull request the poller diffs.
+    PRRadar is the connection-free view of an open pull request the poller
+    diffs.
 
 type PRState struct {
 	State      string // OPEN | CLOSED | MERGED
@@ -4589,6 +4680,7 @@ type RepoRadar struct {
 	NodeID        string
 	NameWithOwner string    // "talkable/talkable"
 	PushedAt      time.Time // zero for an empty repository
+	DefaultBranch string    // "" for an empty repository
 	PRs           []PRRadar
 }
     RepoRadar is one non-archived repository of an organization or user with its
@@ -7983,11 +8075,25 @@ const (
     Event kinds and phases used by the steps helper.
 
 const (
+	CheckPassed  = "passed"
+	CheckFailed  = "failed"
+	CheckPending = "pending"
+	CheckSkipped = "skipped"
+)
+    CheckResult.State values (github.Check's).
+
+const (
 	SinceFromReviewed = "reviewed" // prs.reviewed_sha: magnum's last verified review
 	SinceFromReview   = "review"   // the commit of the PR identity's latest GitHub review (no reviewed_sha yet)
 	SinceFromBase     = "base"     // the base branch tip: nothing reviewed yet, so the whole PR
 )
     SinceReview.Source values: what Base is.
+
+const (
+	RequiredFromConfig = "config" // the [[repo]] block's required_checks
+	RequiredFromGitHub = "github" // the default branch's rulesets or branch protection
+)
+    RequiredChecks.Source values.
 
 const (
 	VerdictBlocking    = "blocking"     // at least one P0 or P1: request changes
@@ -8075,6 +8181,10 @@ func KVPRSessionsIdentity(prID int64) string
 func KVPRSimplify(prID int64) string
     KVPRSimplify is "1" when the PR's next round runs /simplify (magnum review
     --simplify).
+
+func KVRepoRequiredChecks(fullName string) string
+    KVRepoRequiredChecks holds a repository's GitHubRequiredChecks (JSON),
+    written by the poller.
 
 func KVScreenWidths(screen string) string
     KVScreenWidths holds the column widths dragged with the mouse on a screen
@@ -8180,10 +8290,50 @@ type BoardRow struct {
 	NextEligibleAt     time.Time      `json:"next_eligible_at"`
 	LastError          string         `json:"last_error"`
 	RoundsToday        int            `json:"rounds_today"` // 0 when the stored count is from an earlier day
+	// CIState is the head's check rollup as last seen (prs.ci_state; "" =
+	// none or not seen yet) and CI the last Details' checks (nil until
+	// fetched). CI.SHA differs from HeadSHA until the Details of a new head
+	// are fetched; CI.State trails CIState while a Details fetch fails.
+	CIState string    `json:"ci_state"`
+	CI      *CIStatus `json:"ci"`
 }
     BoardRow is one PR as the board shows it: the prs row flattened with its
     repository and its current slot. Empty strings, zero times and nil pointers
     mean "none".
+
+type CIStatus struct {
+	SHA string `json:"sha"` // the commit the checks ran on
+	// State is GitHub's rollup (SUCCESS | FAILURE | PENDING | ERROR |
+	// EXPECTED; "" = no checks), which the radar compares; it counts
+	// superseded runs too and calls a draft whose checks all skipped
+	// SUCCESS. Read the counts and AllSkipped for what ran.
+	State string `json:"state"`
+	// Total is len(Checks) plus the checks GitHub did not return; the
+	// counts below cover Checks.
+	Total   int `json:"total"`
+	Passed  int `json:"passed"`
+	Failed  int `json:"failed"`
+	Pending int `json:"pending"`
+	Skipped int `json:"skipped"`
+	// AllSkipped is true when there are checks and every one skipped: the
+	// CI did not really run (a draft).
+	AllSkipped bool `json:"all_skipped"`
+	// Complete is true when Checks lists every check (GitHub returns at
+	// most 100).
+	Complete bool `json:"complete"`
+	// Checks holds the latest run of each (Workflow, Name). The same name
+	// can still appear under several workflows (a check posted through the
+	// API attaches to another workflow's suite): At tells the latest.
+	Checks []CheckResult `json:"checks"`
+}
+    CIStatus is prs.ci_json: the checks of a PR's head commit. Its State can
+    trail prs.ci_state, which the radar refreshes, until the next Details fetch.
+    A required check absent from Checks has no run on SHA (a repository whose CI
+    runs only when the PR is opened): it is missing on this head, not pending.
+
+func (c *CIStatus) Tally()
+    Tally sets Passed, Failed, Pending, Skipped and AllSkipped from Checks (and
+    makes a nil Checks empty).
 
 type CandidateParams struct {
 	Now              time.Time
@@ -8195,6 +8345,16 @@ type CandidateParams struct {
 }
     CandidateParams are the throttle settings Candidates applies (mirroring
     config.Daemon). Zero durations and a zero cap disable that gate.
+
+type CheckResult struct {
+	Name     string `json:"name"`               // the check run's name or the status's context
+	State    string `json:"state"`              // CheckPassed | CheckFailed | CheckPending | CheckSkipped
+	Workflow string `json:"workflow,omitempty"` // the GitHub Actions workflow; "" for a status or another app's check
+	// At is when the check finished, else started, or the status was
+	// posted; zero for a check run not started yet (the newest run).
+	At time.Time `json:"at,omitzero"`
+}
+    CheckResult is one check run or commit status of a CIStatus.
 
 type Event struct {
 	ID      int64           `json:"id"`
@@ -8263,6 +8423,11 @@ type GitHubPR struct {
 	DetailsAt *time.Time
 	// AuthorAssociation is the Details' authorAssociation (nil = keep).
 	AuthorAssociation *string
+	// CIState is the head's check rollup, from the radar or the Details, and
+	// CI the Details' checks (nil = keep). Like DetailsAt they are not
+	// Changed: CI moving changes no eligibility and queues nothing.
+	CIState *string
+	CI      *CIStatus
 
 	// InitialState and Identity are used only when the PR is new.
 	InitialState string
@@ -8271,6 +8436,21 @@ type GitHubPR struct {
     GitHubPR is what the poller knows about a PR. Pointer fields (and nil
     Labels, empty GHState) mean "not fetched this time": the stored value is
     kept. Number, URL, HeadSHA and IsDraft are always present in the radar.
+
+type GitHubRequiredChecks struct {
+	Branch string   `json:"branch"`
+	Checks []string `json:"checks"` // contexts, i.e. check run names or status contexts
+	// Known is false when GitHub would not tell (403 on a private repository
+	// of a free plan, 404 without admin access to the branch protection).
+	Known     bool      `json:"known"`
+	FetchedAt time.Time `json:"fetched_at,omitzero"` // the last read GitHub answered
+	CheckedAt time.Time `json:"checked_at"`          // the last attempt
+	// Error is why the last attempt failed; the fields above are what the
+	// reads before it found.
+	Error string `json:"error,omitempty"`
+}
+    GitHubRequiredChecks is what the poller last read of the status checks a
+    repository's default branch requires.
 
 type LatestReview struct {
 	Login       string     `json:"login"`                  // GraphQL login, no "[bot]" suffix; "" for a ghost
@@ -8350,6 +8530,13 @@ type PR struct {
 	// AuthorAssociation (migration 0006) is GitHub's authorAssociation of the
 	// author with the repository; nil until the next Details fetch.
 	AuthorAssociation *string `json:"author_association"`
+	// CIState (migration 0007) is the head's check rollup as last seen
+	// (SUCCESS | FAILURE | PENDING | ERROR | EXPECTED; "" = no checks); nil
+	// until the poller saw it.
+	CIState *string `json:"ci_state"`
+	// CI (ci_json) is the head's checks as the last Details fetch saw them;
+	// nil until then.
+	CI *CIStatus `json:"ci"`
 }
     PR is one pull request and its automation state.
 
@@ -8404,6 +8591,17 @@ type Request struct {
 	HandledAt *time.Time      `json:"handled_at"`
 }
     Request is a CLI → daemon work item.
+
+type RequiredChecks struct {
+	// Checks are check-name globs (path.Match, case-sensitive); entries from
+	// the configuration may also be "workflow:<glob>", a whole GitHub
+	// Actions workflow.
+	Checks    []string  `json:"checks"`
+	Source    string    `json:"source"`              // RequiredFromConfig | RequiredFromGitHub | "" (unknown)
+	FetchedAt time.Time `json:"fetched_at,omitzero"` // when GitHub's list was read; zero for the configuration's
+}
+    RequiredChecks is the list of checks a repository's PRs must pass to be
+    ready, and where it comes from.
 
 type ReviewSummary struct {
 	RunID           string    `json:"run_id"`
@@ -8701,6 +8899,10 @@ func (s *Store) FreeSlots(ctx context.Context, repoFullName string, preferPRID i
 func (s *Store) GetKV(ctx context.Context, key string) (string, bool, error)
     GetKV returns the value for key and whether it exists.
 
+func (s *Store) GitHubRequiredChecks(ctx context.Context, fullName string) (GitHubRequiredChecks, bool, error)
+    GitHubRequiredChecks returns the cached GitHub list of repository fullName
+    ("owner/name") and whether there is one.
+
 func (s *Store) LastReviewSummaries(ctx context.Context, prIDs []int64) (map[int64]ReviewSummary, error)
     LastReviewSummaries returns the ReviewSummary of each PR's latest posted
     round, for the PRs that have one. A result file that does not parse is
@@ -8797,6 +8999,13 @@ func (s *Store) RepoByID(ctx context.Context, id int64) (Repo, error)
 func (s *Store) RequestByID(ctx context.Context, id int64) (Request, error)
     RequestByID looks up a request by id.
 
+func (s *Store) RequiredChecks(ctx context.Context, fullName string, configured []string) (RequiredChecks, error)
+    RequiredChecks returns the checks PRs of repository fullName must pass:
+    configured (config.Config.RequiredChecks) when it is not empty, else
+    GitHub's as the poller last read them (Source "" and no checks when GitHub
+    would not tell or was never asked). GitHub requiring nothing is Source
+    RequiredFromGitHub with no checks.
+
 func (s *Store) RoleRanBefore(ctx context.Context, prID int64, role string) (bool, error)
     RoleRanBefore reports whether a PR already has an ended or verified run
     of role, the "runs = first" test: a role configured to run once per PR
@@ -8829,6 +9038,9 @@ func (s *Store) SessionByID(ctx context.Context, id int64) (Session, error)
 
 func (s *Store) SessionsByPR(ctx context.Context, prID int64) ([]Session, error)
     SessionsByPR returns every session of a PR, oldest first.
+
+func (s *Store) SetGitHubRequiredChecks(ctx context.Context, fullName string, g GitHubRequiredChecks) error
+    SetGitHubRequiredChecks caches g for repository fullName.
 
 func (s *Store) SetKV(ctx context.Context, key, value string) error
     SetKV stores value under key. Never store secrets here.
@@ -9018,8 +9230,9 @@ func IsTerminal(f *os.File) bool
 func RenderPRBoard(rows []PRBoardRow, width int, opts PRBoardOptions) string
     RenderPRBoard renders the board once, for output that is not interactive and
     for tests: the title bar, the state summary, the column headings and every
-    row (in opts.DefaultSort order, largest first), fitted to width (0 = no
-    limit). It uses the dark palette and no cursor; ages count from opts.Now.
+    row of opts.DefaultView and opts.DefaultOwner (in opts.DefaultSort order,
+    largest first), fitted to width (0 = no limit). It uses the dark palette and
+    no cursor; ages count from opts.Now.
 
 func RunDashboard(ctx context.Context, src DashboardSource, act DashboardActions, opts DashboardOptions) error
     RunDashboard shows the live status dashboard until the user quits or
@@ -9070,6 +9283,34 @@ type AttentionRow struct {
 	Fix                    string // optional
 }
     AttentionRow is something that needs the user.
+
+type Badge struct{ Label, Text string }
+    Badge marks a PR that carries a GitHub label: Text (e.g. "🚩") shows before
+    the title, Label names it on the card.
+
+type CIInfo struct {
+	// State is "passed" | "failed" | "pending" | "skipped" (every check
+	// skipped: none ran) | "none" (no checks).
+	State                                   string
+	Total, Passed, Failed, Pending, Skipped int
+	// Failing names the failed checks, "workflow / job" when the workflow is known.
+	Failing []string
+	// Workflows summarises the checks per GitHub Actions workflow ("" = checks outside a workflow).
+	Workflows []WorkflowCI
+	// Required are the repository's required checks with their state: Name
+	// as GitHub or [[repo]] required_checks names it ("Completion",
+	// "workflow:CI"), State "passed" | "failed" | "pending" | "skipped" |
+	// "missing" (never ran on this head).
+	Required []CheckState
+	// RequiredSource says who requires them: "github" (the repository's
+	// rulesets) or "config" ([[repo]] required_checks overrides them).
+	RequiredSource string
+	Stale          bool // describes an older commit than the PR's head
+}
+    CIInfo is the head commit's CI as the board shows it.
+
+type CheckState struct{ Name, State string }
+    CheckState is one required check and its state.
 
 type CleanupAction struct {
 	ID      string // stable id the caller maps back to its own action
@@ -9193,8 +9434,6 @@ type FindingsInfo struct {
 	Posted  string // the event it posted: APPROVE, REQUEST_CHANGES or COMMENT
 	SHA     string // the reviewed head
 }
-    PRBoardRow is one pull request on the PR board. Ref is what actions receive;
-    Owner, Repo and Number label the row (Ref is parsed when they are empty).
     FindingsInfo is what magnum's latest posted review of a PR concluded.
 
 type GitHubInfo struct {
@@ -9240,10 +9479,19 @@ type PRBoardOptions struct {
 	SelfLogins  []string
 	DefaultSort PRSort // default SortUpdated
 	DefaultView PRView // the view the board opens in; default ViewAll
+	// DefaultOwner is the owner scope the board opens in; "" (the default)
+	// shows every owner, as does an owner without PRs.
+	DefaultOwner string
+	// OwnerChanged, when set, hears every change of the owner scope (O, or
+	// its owner's last PR leaving), so the next board can open in it.
+	OwnerChanged func(owner string)
 	// ViewChanged, when set, hears every v, so the next board can open in
 	// the same view.
 	ViewChanged func(PRView)
-	Repo        string   // show only this repository ("name" or "owner/name"); empty shows all
+	Repo        string // show only this repository ("name" or "owner/name"); empty shows all
+	// DefaultRepo is daemon.default_repo ("owner/name"): its owner comes
+	// first when O cycles the owners.
+	DefaultRepo string
 	Icons       IconMode // the symbols: unicode (default), nerd (Nerd Font icons and emoji) or ascii
 	Judge       string   // the judge role's name in the help ("open the <Judge> pane"); default "judge"
 	// NoMouse starts with mouse support off ([terminal] mouse = false);
@@ -9266,8 +9514,14 @@ type PRBoardRow struct {
 	Labels, Assignees  []string
 	// State is magnum's state: baseline, queued, reviewing, reviewed,
 	// rereview_pending, needs_attention, paused, closed, released,
-	// ineligible or ignored (magnum ignore).
-	State      string
+	// ineligible (the configuration skips it; the board says "skipped") or
+	// ignored (magnum ignore).
+	State string
+	// SkipReason says why the configuration skips an ineligible PR ("bot
+	// author", `author "x" is in skip_authors`, ...).
+	SkipReason string
+	// Badges are the PR's labels that [board] badges marks, in its order.
+	Badges     []Badge
 	GHState    string // GitHub's state: OPEN, CLOSED, MERGED
 	UpdatedAt  time.Time
 	HeadSHA    string
@@ -9275,7 +9529,9 @@ type PRBoardRow struct {
 	// Findings is what magnum's latest posted review concluded (its findings
 	// by priority, simplifications and verdict), also where it could only
 	// comment; nil when magnum has not reviewed the PR.
-	Findings       *FindingsInfo
+	Findings *FindingsInfo
+	// CI is the head commit's checks; nil when unknown.
+	CI             *CIInfo
 	Reviewers      []ReviewerInfo // everyone who reviewed or was asked to
 	SinceReview    *ReviewDelta   // what changed since the last review; nil when unknown
 	Slot           string         // folder of the review slot holding the PR, if any
@@ -9300,6 +9556,8 @@ type PRBoardRow struct {
 	// on the card (e.g. "comment-only push skipped (a7b3f8c → 602da9d)").
 	Note string
 }
+    PRBoardRow is one pull request on the PR board. Ref is what actions receive;
+    Owner, Repo and Number label the row (Ref is parsed when they are empty).
 
 func FilterPRBoard(rows []PRBoardRow, v PRView, selfLogins []string) []PRBoardRow
     FilterPRBoard returns the rows of rows in view v; selfLogins are the logins
@@ -9356,7 +9614,7 @@ const (
 	ViewAll    PRView = "all"    // every row
 	ViewMagnum PRView = "magnum" // rows magnum reviewed or is reviewing: state not baseline or ineligible
 	ViewMine   PRView = "mine"   // assigned to one of the self logins, or their review is requested
-	ViewReady  PRView = "ready"  // open, not a draft, approved and no changes requested
+	ViewReady  PRView = "ready"  // open, not a draft, approved on the head, nothing blocking, required checks passed
 )
     The board's views, in the order v cycles through them.
 
@@ -9549,6 +9807,12 @@ type WatchOptions struct {
 	Now      func() time.Time // clock for the header age; default time.Now
 }
     WatchOptions tunes RunWatch.
+
+type WorkflowCI struct {
+	Name, State                    string
+	Passed, Failed, Pending, Total int
+}
+    WorkflowCI is one workflow's checks on the head commit.
 
 ```
 

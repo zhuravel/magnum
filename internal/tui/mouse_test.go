@@ -233,10 +233,10 @@ func TestBoardClickSelectsAndDoubleClickOpens(t *testing.T) {
 // come back on the next start; W resets them.
 func TestBoardDragResizesAndKeepsWidths(t *testing.T) {
 	kept := &fakeWidths{}
-	m, _, _ := newBoard(t, 160, 30, PRBoardOptions{Widths: kept})
+	m, _, _ := newBoard(t, 170, 30, PRBoardOptions{Widths: kept})
 	x, w := boardCol(t, m, colAuthor)
 	gap := x + w
-	cols := len(m.tableLayout(m.painter(), 160).cols)
+	cols := len(m.tableLayout(m.painter(), 170).cols)
 	m, _ = send(t, m, leftClick(gap, boardHeadingY))
 	if m.sort != SortUpdated {
 		t.Fatal("a click on a gap sorted")
@@ -250,11 +250,11 @@ func TestBoardDragResizesAndKeepsWidths(t *testing.T) {
 		t.Fatalf("drag far left: author %d, want the minimum %d", got, minColWidth)
 	}
 	m, _ = send(t, m, motion(gap+1000, boardHeadingY))
-	lay := m.tableLayout(m.painter(), 160)
-	if len(lay.cols) != cols || lay.total() > 160 {
+	lay := m.tableLayout(m.painter(), 170)
+	if len(lay.cols) != cols || lay.total() > 170 {
 		t.Fatalf("drag far right pushed columns off: %d of %d shown, %d cells", len(lay.cols), cols, lay.total())
 	}
-	if maxLineWidth(viewOf(m)) > 160 {
+	if maxLineWidth(viewOf(m)) > 170 {
 		t.Fatal("a line overflows the screen")
 	}
 	if kept.saves != 0 {
@@ -277,7 +277,7 @@ func TestBoardDragResizesAndKeepsWidths(t *testing.T) {
 	}
 
 	// The next board starts with the kept widths.
-	next, _, _ := newBoard(t, 160, 30, PRBoardOptions{Widths: kept})
+	next, _, _ := newBoard(t, 170, 30, PRBoardOptions{Widths: kept})
 	next = run(t, next, next.saver.load(next.ctx))
 	if _, got := boardCol(t, next, colAuthor); got != w+7 {
 		t.Fatalf("reloaded author %d, want %d", got, w+7)
@@ -511,6 +511,11 @@ func TestBoardFrameCacheFollowsTheMouse(t *testing.T) {
 	m := stormBoard(t, 60)
 	x, w := boardCol(t, m, colFindings)
 	state, _ := boardCol(t, m, colState)
+	// Sorting by state takes the arrow off UPDATED, which then fits again
+	// and moves STATE to the right.
+	sorted, _ := send(t, m, leftClick(state+1, boardHeadingY))
+	stateSorted, _ := boardCol(t, sorted, colState)
+	findingsSorted, _ := boardCol(t, sorted, colFindings)
 	gap := x + w
 	steps := []step{
 		{name: "press on a gap", msgs: []tea.Msg{leftClick(gap, boardHeadingY)}, same: true},
@@ -524,8 +529,8 @@ func TestBoardFrameCacheFollowsTheMouse(t *testing.T) {
 		{name: "menu close", msgs: keys("esc")},
 		{name: "reset widths", msgs: keys("W"), want: "column widths reset"},
 		{name: "heading sort", msgs: []tea.Msg{leftClick(state+1, boardHeadingY)}, want: "STATE ↓"},
-		{name: "heading reverse", msgs: []tea.Msg{leftClick(state+1, boardHeadingY)}, want: "STATE ↑"},
-		{name: "heading without a sort", msgs: []tea.Msg{leftClick(x+1, boardHeadingY)}, same: true},
+		{name: "heading reverse", msgs: []tea.Msg{leftClick(stateSorted+1, boardHeadingY)}, want: "STATE ↑"},
+		{name: "heading without a sort", msgs: []tea.Msg{leftClick(findingsSorted+1, boardHeadingY)}, same: true},
 		{name: "mouse off", msgs: keys("m"), want: "mouse off"},
 		{name: "wheel while off", msgs: []tea.Msg{wheelDown()}, same: true},
 	}

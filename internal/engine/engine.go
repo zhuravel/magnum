@@ -58,6 +58,8 @@ type GitHub interface {
 	DismissReview(ctx context.Context, owner, repo string, number int, reviewID int64, message string) error
 	// CreateReview posts a manual verdict (verdict.go).
 	CreateReview(ctx context.Context, owner, repo string, number int, commitID, event, body string) (github.RESTReview, error)
+	// RequiredChecks reads the checks a branch requires (required.go).
+	RequiredChecks(ctx context.Context, owner, repo, branch string) ([]string, bool, error)
 }
 
 // Herdr is the part of *herdr.Client the tick reads: one snapshot per tick

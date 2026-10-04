@@ -606,3 +606,30 @@ editing history. Code, config comments and prompts reference these by their head
   40 to 200 columns with no line wider or taller than the screen. The mode is fixed per process, so the
   render caches need no key for it. Rejected: guessing a Nerd Font from TERM (no terminal reports its font)
   and emoji-only symbols (their widths vary; icons stay one cell).
+- **CI on the board, gated by the checks GitHub requires** (2026-10-04, after surveying the 32 watched
+  repositories). The radar reads each PR head's rollup state at no extra cost (through `headRef`, not
+  `commits(last: 1)`, which made the radar 100 times dearer); a rollup change, or a head the stored checks do
+  not describe, fetches the PR's Details, which list up to 100 checks with their workflow and time,
+  deduplicated to the latest run per workflow and name (`store.CIStatus`, migration 0007). A CI change never
+  counts as a push. Required checks come from the repository's rulesets (`rules/branches/<default>`, read
+  with read access, cached 6 h; classic protection as a fallback) and `[[repo]] required_checks` overrides
+  them (private repositories on a free plan answer 403); names are globs matched across workflows with the
+  latest run winning (a dispatched `Completion` lands in another workflow's suite), `workflow:<glob>` takes
+  a whole workflow. The board's CI column shows the required checks when there are some, else counts; a
+  required check that never ran on the head is "not run", a skipped one "skipped", and neither is passed.
+  Rejected: "all checks green" (optional pronto and audit checks fail often, legacy statuses stay pending),
+  the rollup alone (it calls a draft whose checks all skipped SUCCESS, and in talkable/talkable most heads
+  after the first push carry no CI at all) and polling each PR's checks (a call per PR per poll).
+- **"Ready" means mergeable now, not once approved** (2026-10-04). The view keeps open, non-draft PRs with
+  an approval of the current head (a stale one does not count), no change request (stale or not: GitHub
+  keeps them), no blocking verdict from magnum's latest review, and every required check passed; a
+  repository without required checks is not held back by its CI. Rejected: counting stale approvals (24 of
+  50 approved merges landed commits newer than the approval).
+- **Skipped PRs look skipped; labels can be badges; owners rotate** (2026-10-04). A PR the configuration
+  skips is "skipped · bot/author/label/draft/fork/left org", dimmed without the strikethrough of `magnum
+  ignore`, and a baseline PR the configuration skips becomes skipped at daemon start (back to baseline,
+  not into the queue, when the configuration stops skipping it before any push). `[board] badges` maps a
+  label to a badge (matched ignoring case and leading emoji: "Flagged" matches "🚩 Flagged"). `O` cycles the
+  board's owner scope (all, then each owner with PRs, the default repository's first), kept across a trip
+  to the dashboard. Rejected: hiding skipped PRs (they stay findable for a forced review) and sorting
+  badged PRs first (the sort is the reviewer's choice; the badge and the count make them visible).

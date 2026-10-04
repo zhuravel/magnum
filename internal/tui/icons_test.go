@@ -54,10 +54,11 @@ func iconBoard(t *testing.T, mode IconMode, w, h int, rows ...PRBoardRow) prBoar
 
 // iconViews are every screen of mode at w x h: the board, each row's card
 // (top and bottom), the help (top and bottom, where the legend is), the
-// one-shot render, the dashboard and its help.
+// one-shot render, the dashboard and its help. The rows include every
+// kind of CI (ciRows), badges and a skipped PR.
 func iconViews(t *testing.T, mode IconMode, w, h int) map[string]string {
 	t.Helper()
-	rows := append(boardRows(), findingsRow())
+	rows := append(append(boardRows(), findingsRow(), badgeRow(), skippedRow()), ciRows()...)
 	b := iconBoard(t, mode, w, h, rows...)
 	views := map[string]string{
 		"board":  viewOf(b),

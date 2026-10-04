@@ -67,6 +67,7 @@ type Config struct {
 	GitHub     GitHub     `toml:"github"`
 	Pipeline   Pipeline   `toml:"pipeline"`
 	Usage      Usage      `toml:"usage"`
+	Board      Board      `toml:"board"`
 	Identities []Identity `toml:"identity"`
 	Watches    []Watch    `toml:"watch"`
 	Pools      []Pool     `toml:"pool"`
@@ -476,10 +477,24 @@ type Repo struct {
 	// re-review posts. Overrides the watch's keep_approvals (see
 	// Config.KeepApprovals).
 	KeepApprovals *bool `toml:"keep_approvals"`
+
+	// RequiredChecks are the checks a PR must pass to be ready, replacing
+	// the ones GitHub requires on the default branch (rulesets or branch
+	// protection, which a private repository on a free plan does not
+	// expose): globs (path.Match, case-sensitive) over check run names and
+	// commit status contexts, or RequiredWorkflowPrefix and a glob over
+	// GitHub Actions workflow names (every check of the workflow). The board
+	// shows their state (see Config.RequiredChecks).
+	RequiredChecks []string `toml:"required_checks"`
 }
 
+// RequiredWorkflowPrefix marks a required_checks entry naming a whole
+// GitHub Actions workflow ("workflow:CI").
+const RequiredWorkflowPrefix = "workflow:"
+
 // worktreeKeys reports whether the block sets any per-PR worktree key
-// (everything but repo, the verdicts, readiness and keep_approvals).
+// (everything but repo, the verdicts, readiness, keep_approvals and
+// required_checks).
 func (r Repo) worktreeKeys() bool {
 	return len(r.Setup) > 0 || len(r.Teardown) > 0 || r.WTHooks != nil || len(r.CopyFiles) > 0 || len(r.StripEnv) > 0 || len(r.Env) > 0
 }
@@ -645,6 +660,7 @@ func (c *Config) applyOverlay(path string) (*layer, error) {
 	overlaySection(md, "github", &c.GitHub, &o.GitHub)
 	overlaySection(md, "pipeline", &c.Pipeline, &o.Pipeline)
 	overlaySection(md, "usage", &c.Usage, &o.Usage)
+	overlaySection(md, "board", &c.Board, &o.Board)
 	l, err := readLayer(path, md, o.Kinds, o.Roles)
 	if err != nil {
 		return nil, fmt.Errorf("config overlay %s: %w", path, err)
@@ -874,4 +890,15 @@ func (c *Config) KeepApprovals(fullName string) bool {
 		return w.KeepApprovals
 	}
 	return false
+}
+
+// RequiredChecks returns the [[repo]] block's required_checks for
+// repository fullName (nil when none): check-name globs and
+// "workflow:<glob>" entries that replace GitHub's list
+// (store.Store.RequiredChecks).
+func (c *Config) RequiredChecks(fullName string) []string {
+	if r := c.RepoFor(fullName); r != nil {
+		return r.RequiredChecks
+	}
+	return nil
 }

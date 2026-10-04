@@ -32,7 +32,7 @@ func (p prbPainter) helpContent(width int) []string {
 	nav := section("Move and view", []hint{
 		{"j/k ↑/↓", "move"}, {"g / G", "first / last PR"}, {"pgup/pgdn", "a page up / down"},
 		{"enter", "details card"}, {"s / S", "next sort / reverse it"}, {"/", "filter (fuzzy)"},
-		{"v", "next view: all, magnum, mine, ready"},
+		{"v / O", "next view / next owner (all, then each)"},
 		{"esc", "back, clear the filter, quit"}, {"ctrl+r / F5", "refresh now"}, {"tab", "status dashboard"},
 		{"W", "reset the column widths"}, {"?", "this help"}, {"q", "quit"},
 	})
@@ -52,7 +52,7 @@ func (p prbPainter) helpContent(width int) []string {
 	lines = append(lines, "", p.st.Section.Render("Views and filter"))
 	for _, l := range []string{
 		"magnum: what magnum reviewed or is reviewing · mine: assigned to you or your review requested · " +
-			"ready: approved, no changes requested, not a draft",
+			"ready: approved on the head, no changes requested, magnum not blocking, required checks passed, not a draft",
 		"/ words match fuzzily; state:<s> assignee:<login> author:<login> (@me: you) review:requested narrow it; " +
 			"a,b lists alternatives",
 	} {
@@ -79,6 +79,11 @@ func (p prbPainter) helpContent(width int) []string {
 		p.st.Header.Render("FINDINGS"), p.pal.red.Render(g.changes) + " blocking", p.pal.yellow.Render(g.nonBlocking) + " non-blocking",
 		p.pal.green.Render(g.ok) + " clean", strings.Join(prios, " ") + " by priority, " + g.times + "n how many",
 		p.st.Dim.Render(g.simplify) + " simplifications",
+	}, "   ", inner)...)
+	lines = append(lines, flow([]string{
+		p.st.Header.Render("CI"), p.pal.green.Render(g.ciPass) + " passed", p.pal.red.Render(g.ciFail) + " failed",
+		p.pal.yellow.Render(g.ciPending) + " pending", p.pal.yellow.Render(g.ciMissing) + " not run", p.pal.yellow.Render(g.ciSkip) + " skipped",
+		"65/65 checks done", "Completion +1: the worst required check and how many more", p.pal.yellow.Render(g.stale) + " of an older commit",
 	}, "   ", inner)...)
 	ex := &ReviewDelta{Base: "reviewed", Commits: 3, Additions: 41, Deletions: 7}
 	since := p.sinceCell(ex, p.sinceWidths([]PRBoardRow{{SinceReview: ex}})).render(nil) +
@@ -148,6 +153,9 @@ func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
 	var flags []string
 	if r.Pinned {
 		flags = append(flags, p.pinStyle().Render(p.g.pin)+" pinned")
+	}
+	for _, b := range r.Badges {
+		flags = append(flags, strings.TrimSpace(b.Text+" "+b.Label))
 	}
 	if r.Draft {
 		flags = append(flags, p.pal.tag.Render("draft"))
@@ -269,6 +277,29 @@ func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
 				add("  " + w)
 			}
 		}
+	}
+	if ci := r.CI; ci != nil {
+		head := p.st.Section.Render(p.g.headed("CI"))
+		if ci.Stale {
+			head += " " + p.pal.yellow.Render("(older commit)")
+		}
+		add("", head)
+		for _, l := range p.ciLines(*ci) {
+			for _, w := range strings.Split(lipgloss.NewStyle().Width(max(inner-2, 10)).Render(l), "\n") {
+				add("  " + w)
+			}
+		}
+	}
+	if skipped(r) {
+		add("", p.st.Section.Render(p.g.headed("SKIPPED")))
+		why := "magnum's configuration skips this PR"
+		if r.SkipReason != "" {
+			why += ": " + r.SkipReason
+		}
+		for _, w := range strings.Split(lipgloss.NewStyle().Width(max(inner-2, 10)).Render(why), "\n") {
+			add("  " + w)
+		}
+		add("  " + p.st.Key.Render("R") + " reviews it anyway (asks y/N)")
 	}
 	if normState(r.State) == "baseline" {
 		add("", p.st.Section.Render(p.g.headed("NOT REVIEWED")))
@@ -518,6 +549,102 @@ func (p prbPainter) findingsLines(f FindingsInfo) []string {
 	out = append(out, counts)
 	if f.Fixed+f.Open+f.Answered > 0 {
 		out = append(out, fmt.Sprintf("Earlier findings: %d fixed, %d still open, %d answered", f.Fixed, f.Open, f.Answered))
+	}
+	return out
+}
+
+// ciLines say what the head's checks did: each workflow's counts (the
+// whole run's when no workflow is known), the failed checks by name and
+// the required checks' states, who requires them and, when one was
+// skipped, why that matters. The nerd mode marks each state with its
+// emoji.
+func (p prbPainter) ciLines(ci CIInfo) []string {
+	mark := func(state string) string {
+		if m := p.g.ciMark[normCI(state)]; m != "" {
+			return m
+		}
+		l := p.ciLook(state)
+		if l.glyph == "" {
+			return ""
+		}
+		return l.glyphSt.Render(l.glyph)
+	}
+	counts := func(state, name string, passed, failed, pending, skipped, total int) string {
+		if normCI(state) == "skipped" { // every check skipped: nothing ran
+			m := p.g.ciMark["missing"]
+			if m == "" {
+				m = p.st.Dim.Render(p.g.ciMissing)
+			}
+			return marked(m, marked(name, p.st.Dim.Render("not run")))
+		}
+		s := fmt.Sprintf("%d/%d passed", passed, total)
+		if failed > 0 {
+			s += p.st.Dim.Render(p.g.sep) + p.pal.red.Render(fmt.Sprintf("%d failed", failed))
+		}
+		if pending > 0 {
+			s += p.st.Dim.Render(p.g.sep) + p.pal.yellow.Render(fmt.Sprintf("%d pending", pending))
+		}
+		if skipped > 0 {
+			s += p.st.Dim.Render(fmt.Sprintf("%s%d skipped", p.g.sep, skipped))
+		}
+		return marked(mark(state), marked(name, s))
+	}
+	var out []string
+	for _, w := range ci.Workflows {
+		name := w.Name
+		if name == "" {
+			name = "other checks"
+		}
+		out = append(out, counts(w.State, p.pal.bold.Render(name), w.Passed, w.Failed, w.Pending, 0, w.Total))
+	}
+	switch {
+	case len(ci.Workflows) > 0:
+	case ci.Total > 0:
+		out = append(out, counts(ci.State, "", ci.Passed, ci.Failed, ci.Pending, ci.Skipped, ci.Total))
+	default:
+		out = append(out, p.st.Dim.Render("no checks"))
+	}
+	if len(ci.Failing) > 0 {
+		names := ci.Failing
+		if len(ci.Workflows) > 0 {
+			names = failingNames(names)
+		}
+		out = append(out, p.pal.red.Render("Failed:")+" "+strings.Join(names, ", "))
+	}
+	if len(ci.Required) == 0 {
+		return out
+	}
+	items := make([]string, len(ci.Required))
+	skipped := false
+	for i, c := range ci.Required {
+		l := p.ciLook(c.State)
+		items[i] = marked(mark(c.State), l.textSt.Render(orDash(c.Name)+" "+orDash(l.word)))
+		skipped = skipped || normCI(c.State) == "skipped"
+	}
+	line := "Required: " + strings.Join(items, p.st.Dim.Render(p.g.sep))
+	if src := map[string]string{"github": "GitHub", "config": "config"}[normCI(ci.RequiredSource)]; src != "" {
+		line += p.st.Dim.Render(" (required by " + src + ")")
+	}
+	out = append(out, line)
+	if skipped {
+		out = append(out, p.st.Dim.Render("(GitHub accepts a skipped required check; a cancelled dependency skips it)"))
+	}
+	return out
+}
+
+// failingNames are the failed checks' names, without their workflow
+// ("CI / rspec (3)" is "rspec (3)") when one workflow holds them all: its
+// line above says which.
+func failingNames(names []string) []string {
+	wf, _, ok := strings.Cut(names[0], " / ")
+	for _, n := range names {
+		if !ok || !strings.HasPrefix(n, wf+" / ") {
+			return names
+		}
+	}
+	out := make([]string, len(names))
+	for i, n := range names {
+		out[i] = strings.TrimPrefix(n, wf+" / ")
 	}
 	return out
 }

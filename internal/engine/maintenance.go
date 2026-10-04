@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/cleanup"
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/inventory"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -279,12 +280,15 @@ func (e *Engine) maintainPool(ctx context.Context, repo string, inv *inventory.I
 	return nil
 }
 
-// reclassifyIneligible applies the watches' filters, as configured now, to
-// the open ineligible PRs: the config is read at startup and may have
-// relaxed a filter since they were classified, while the poller only
-// re-classifies a PR when GitHub reports a change. (Waiting PRs a filter now
-// rejects are caught at dispatch: reclassify.)
+// reclassifyIneligible applies the watches' filters, as configured now, at
+// startup: baseline PRs a filter rejects become ineligible (skipBaseline),
+// ineligible ones skipBaseline moved go back to baseline when no filter
+// rejects them any more (restoreBaseline), and the other ineligible PRs are
+// classified again, since the config may have relaxed a filter while the
+// poller only re-classifies a PR when GitHub reports a change. (Waiting PRs
+// a filter now rejects are caught at dispatch: reclassify.)
 func (e *Engine) reclassifyIneligible(ctx context.Context) {
+	e.skipBaseline(ctx)
 	prs, err := e.st.ListPRs(ctx, store.PRFilter{States: []string{store.PRIneligible}})
 	if err != nil {
 		e.log.Warn("ineligible PRs", "err", err)
@@ -302,10 +306,80 @@ func (e *Engine) reclassifyIneligible(ctx context.Context) {
 		if w == nil {
 			continue
 		}
+		if e.restoreBaseline(ctx, repo, *w, pr) {
+			continue
+		}
 		if err := e.onSeenPR(ctx, repo, *w, pr, store.PRUpsert{PR: pr, Changed: true}, e.now()); err != nil {
 			e.log.Warn("reclassify ineligible PR", "subject", prSubject(repo, pr.Number), "err", err)
 		}
 	}
+}
+
+// KVPRSkippedBaseline marks a baseline PR skipBaseline made ineligible: its
+// value is the head it was skipped on.
+func KVPRSkippedBaseline(prID int64) string { return fmt.Sprintf("pr.%d.skipped_baseline", prID) }
+
+// skipBaseline makes the baseline PRs (open before magnum watched their
+// repository, never reviewed) that the configuration skips read as skipped:
+// ineligible with the rule's reason, instead of "not reviewed". Only a push
+// reclassifies a baseline PR otherwise, so without this a bot's PR from
+// before the first sync looked like any other.
+func (e *Engine) skipBaseline(ctx context.Context) {
+	prs, err := e.st.ListPRs(ctx, store.PRFilter{States: []string{store.PRBaseline}})
+	if err != nil {
+		e.log.Warn("baseline PRs", "err", err)
+		return
+	}
+	now := e.now()
+	for _, pr := range prs {
+		if pr.GHState != store.GHOpen || pr.DetailsAt == nil {
+			continue
+		}
+		repo, err := e.st.RepoByID(ctx, pr.RepoID)
+		if err != nil {
+			continue
+		}
+		w := e.cfg.WatchFor(repo.FullName())
+		if w == nil {
+			continue
+		}
+		dec := e.classify(ctx, *w, pr, now)
+		if dec.Eligible {
+			continue
+		}
+		if err := e.markIneligible(ctx, pr, []string{store.PRBaseline}, dec.Reason, false, now); err != nil {
+			e.log.Info("skip baseline PR", "subject", prSubject(repo, pr.Number), "err", err)
+			continue
+		}
+		e.setKV(ctx, KVPRSkippedBaseline(pr.ID), pr.HeadSHA)
+	}
+}
+
+// restoreBaseline undoes skipBaseline for a PR the configuration no longer
+// skips and nobody pushed to since: it goes back to baseline ("not
+// reviewed"), not in line for a review, so a configuration change never
+// starts reviews of old PRs. It reports whether it handled pr.
+func (e *Engine) restoreBaseline(ctx context.Context, repo store.Repo, w config.Watch, pr store.PR) bool {
+	head, ok := e.getKV(ctx, KVPRSkippedBaseline(pr.ID))
+	if !ok {
+		return false
+	}
+	if head != pr.HeadSHA || deref(pr.ReviewedSHA) != "" { // pushed to since: the normal rules apply
+		e.delKV(ctx, KVPRSkippedBaseline(pr.ID))
+		return false
+	}
+	if !e.classify(ctx, w, pr, e.now()).Eligible {
+		return true // still skipped
+	}
+	if err := e.st.TransitionPR(ctx, pr.ID, []string{store.PRIneligible}, store.PRBaseline, func(u *store.PRUpdate) {
+		u.Set("skip_reason", nil)
+	}); err != nil {
+		e.log.Info("restore baseline PR", "subject", prSubject(repo, pr.Number), "err", err)
+		return true
+	}
+	e.delKV(ctx, KVPRSkippedBaseline(pr.ID))
+	e.event(ctx, "info", prSubject(repo, pr.Number), "pr.baseline", "ineligible → baseline: the configuration no longer skips it", nil)
+	return true
 }
 
 // recoverRows re-evaluates rows a previous daemon left mid-flight, before

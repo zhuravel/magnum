@@ -44,6 +44,7 @@ type glyphs struct {
 	mode                                                    IconMode
 	approved, changes, commented, pending, dismissed, other string
 	nonBlocking, simplify, times                            string
+	ciPass, ciFail, ciPending, ciMissing, ciSkip            string // a check's state: the CI column and card
 	stale, mine, pin, errMark, fail, ok                     string
 	cursor, dash, minus, atLeast, rule, up, down, dot       string
 	sortDesc, sortAsc, refresh, sep, chipSep                string
@@ -56,6 +57,7 @@ type glyphs struct {
 	stateMark map[string]string // before a PR state elsewhere (summary, dashboard, legend)
 	slotMark  map[string]string // before a slot state (dashboard)
 	priority  [4]string         // before P0..P3
+	ciMark    map[string]string // before a check state on the card
 	heading   map[string]string // before a section heading (card, dashboard)
 	running   [2]string         // before the daemon's state: stopped, running (dashboard)
 	spinner   spinner.Spinner
@@ -69,6 +71,7 @@ func newGlyphs(mode IconMode) glyphs {
 			approved: "+", changes: "x", commented: "c", pending: "?", dismissed: "-", other: "*",
 			stale: "~", mine: "*", pin: "pin", errMark: "!", fail: "x", ok: "+",
 			nonBlocking: "~", simplify: "s", times: "x",
+			ciPass: "+", ciFail: "x", ciPending: "o", ciMissing: "-", ciSkip: "/",
 			cursor: ">", dash: "-", minus: "-", atLeast: ">=", rule: "-", up: "^", down: "v", dot: "",
 			sortDesc: "v", sortAsc: "^", refresh: "at", sep: " | ", chipSep: ":",
 			pinAccent: true,
@@ -81,6 +84,8 @@ func newGlyphs(mode IconMode) glyphs {
 			dismissed:   "\uf468", // nf-oct-circle_slash
 			other:       "\uf444", // nf-oct-dot_fill
 			nonBlocking: "💬", times: "×",
+			ciPass: "\uf49e", ciFail: "\uf52f", ciPending: "\uf43a", // nf-oct-check_circle, x_circle, clock
+			ciMissing: "\uf48b", ciSkip: "\uf517", // nf-oct-dash, skip
 			simplify: "\uf0c4", // nf-fa-scissors
 			stale:    "\uf464", // nf-oct-history
 			mine:     "\uf51f", // nf-oct-star_fill
@@ -121,13 +126,16 @@ func newGlyphs(mode IconMode) glyphs {
 				"broken": "🔴", "lost": "🔴", "observed": "⚪", "removing": "⚫", "removed": "⚫",
 			},
 			priority: [4]string{"🔥", "🔴", "🟠", "⚪"},
+			ciMark:   map[string]string{"passed": "✅", "failed": "❌", "pending": "⏳", "missing": "➖", "skipped": "⏩"},
 			running:  [2]string{"🔴", "🟢"},
 			heading: map[string]string{
 				"WAITING":          "\uf4e3", // nf-oct-hourglass
 				"SINCE REVIEW":     "\uf417", // nf-oct-git_commit
 				"LAST REVIEW":      "\uf4af", // nf-oct-code_review
 				"FINDINGS":         "\uf46f", // nf-oct-bug
+				"CI":               "\uf52e", // nf-oct-workflow
 				"NOT REVIEWED":     "\uf4c5", // nf-oct-eye_closed
+				"SKIPPED":          "\uf517", // nf-oct-skip
 				"LAST ROUND":       "\uf520", // nf-oct-stopwatch
 				"REVIEWERS":        "\uf4fd", // nf-oct-people
 				"NEEDS YOU":        "\uf421", // nf-oct-alert
@@ -146,6 +154,7 @@ func newGlyphs(mode IconMode) glyphs {
 		approved: "✔", changes: "✗", commented: "💬", pending: "◌", dismissed: "⊘", other: "•",
 		stale: "⟳", mine: "★", pin: "📌", errMark: "!", fail: "✗", ok: "✔",
 		nonBlocking: "●", simplify: "✂", times: "×",
+		ciPass: "✓", ciFail: "✗", ciPending: "◌", ciMissing: "–", ciSkip: "⊘",
 		cursor: "▌", dash: "—", minus: "−", atLeast: "≥", rule: "─", up: "▲", down: "▼", dot: "●",
 		sortDesc: "↓", sortAsc: "↑", refresh: "↻", sep: " · ",
 		spinner: spinner.MiniDot,

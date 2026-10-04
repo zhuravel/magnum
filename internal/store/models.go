@@ -3,6 +3,7 @@ package store
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -208,6 +209,92 @@ type PR struct {
 	// AuthorAssociation (migration 0006) is GitHub's authorAssociation of the
 	// author with the repository; nil until the next Details fetch.
 	AuthorAssociation *string `json:"author_association"`
+	// CIState (migration 0007) is the head's check rollup as last seen
+	// (SUCCESS | FAILURE | PENDING | ERROR | EXPECTED; "" = no checks); nil
+	// until the poller saw it.
+	CIState *string `json:"ci_state"`
+	// CI (ci_json) is the head's checks as the last Details fetch saw them;
+	// nil until then.
+	CI *CIStatus `json:"ci"`
+}
+
+// CIStatus is prs.ci_json: the checks of a PR's head commit. Its State can
+// trail prs.ci_state, which the radar refreshes, until the next Details
+// fetch. A required check absent from Checks has no run on SHA (a
+// repository whose CI runs only when the PR is opened): it is missing on
+// this head, not pending.
+type CIStatus struct {
+	SHA string `json:"sha"` // the commit the checks ran on
+	// State is GitHub's rollup (SUCCESS | FAILURE | PENDING | ERROR |
+	// EXPECTED; "" = no checks), which the radar compares; it counts
+	// superseded runs too and calls a draft whose checks all skipped
+	// SUCCESS. Read the counts and AllSkipped for what ran.
+	State string `json:"state"`
+	// Total is len(Checks) plus the checks GitHub did not return; the
+	// counts below cover Checks.
+	Total   int `json:"total"`
+	Passed  int `json:"passed"`
+	Failed  int `json:"failed"`
+	Pending int `json:"pending"`
+	Skipped int `json:"skipped"`
+	// AllSkipped is true when there are checks and every one skipped: the
+	// CI did not really run (a draft).
+	AllSkipped bool `json:"all_skipped"`
+	// Complete is true when Checks lists every check (GitHub returns at
+	// most 100).
+	Complete bool `json:"complete"`
+	// Checks holds the latest run of each (Workflow, Name). The same name
+	// can still appear under several workflows (a check posted through the
+	// API attaches to another workflow's suite): At tells the latest.
+	Checks []CheckResult `json:"checks"`
+}
+
+// CheckResult is one check run or commit status of a CIStatus.
+type CheckResult struct {
+	Name     string `json:"name"`               // the check run's name or the status's context
+	State    string `json:"state"`              // CheckPassed | CheckFailed | CheckPending | CheckSkipped
+	Workflow string `json:"workflow,omitempty"` // the GitHub Actions workflow; "" for a status or another app's check
+	// At is when the check finished, else started, or the status was
+	// posted; zero for a check run not started yet (the newest run).
+	At time.Time `json:"at,omitzero"`
+}
+
+// CheckResult.State values (github.Check's).
+const (
+	CheckPassed  = "passed"
+	CheckFailed  = "failed"
+	CheckPending = "pending"
+	CheckSkipped = "skipped"
+)
+
+// Tally sets Passed, Failed, Pending, Skipped and AllSkipped from Checks
+// (and makes a nil Checks empty).
+func (c *CIStatus) Tally() {
+	if c.Checks == nil {
+		c.Checks = []CheckResult{}
+	}
+	c.Passed, c.Failed, c.Pending, c.Skipped = 0, 0, 0, 0
+	for _, ch := range c.Checks {
+		switch ch.State {
+		case CheckPassed:
+			c.Passed++
+		case CheckFailed:
+			c.Failed++
+		case CheckPending:
+			c.Pending++
+		case CheckSkipped:
+			c.Skipped++
+		}
+	}
+	c.AllSkipped = len(c.Checks) > 0 && c.Skipped == len(c.Checks)
+}
+
+func (c CIStatus) equal(o CIStatus) bool {
+	return c.SHA == o.SHA && c.State == o.State && c.Total == o.Total && c.Passed == o.Passed && c.Failed == o.Failed &&
+		c.Pending == o.Pending && c.Skipped == o.Skipped && c.AllSkipped == o.AllSkipped && c.Complete == o.Complete &&
+		slices.EqualFunc(c.Checks, o.Checks, func(a, b CheckResult) bool {
+			return a.Name == b.Name && a.State == b.State && a.Workflow == b.Workflow && a.At.Equal(b.At)
+		})
 }
 
 // TeamReviewerPrefix marks a team in requested_reviewers_json ("team:<slug>").
@@ -394,7 +481,9 @@ var (
 		"assignees_json", "requested_reviewers_json", "latest_reviews_json", "since_review_json",
 		"last_review_login", "base_sha", "details_at",
 		// 0006_author_association
-		"author_association"}
+		"author_association",
+		// 0007_ci
+		"ci_state", "ci_json"}
 	slotColumns = []string{"id", "name", "repo_id", "repo_full_name", "kind", "path", "main_clone",
 		"placeholder_branch", "db_slug", "state", "pr_id", "pinned", "dirty_schema", "checked_out_sha",
 		"hold_reason", "lock_sha", "last_used_at", "last_error", "created_at", "updated_at"}
@@ -446,7 +535,7 @@ func scanPR(sc scanner) (PR, error) {
 		&p.LastError, &p.Pinned, &p.Muted, &p.SimplifyDone, nullTime(&p.HumanActiveAt),
 		timeCol(&p.CreatedAt), timeCol(&p.UpdatedAt),
 		jsonCol(&p.Assignees), jsonCol(&p.RequestedReviewers), jsonCol(&p.LatestReviews), jsonCol(&p.SinceReview),
-		&p.LastReviewLogin, &p.BaseSHA, nullTime(&p.DetailsAt), &p.AuthorAssociation)
+		&p.LastReviewLogin, &p.BaseSHA, nullTime(&p.DetailsAt), &p.AuthorAssociation, &p.CIState, jsonCol(&p.CI))
 	return p, err
 }
 

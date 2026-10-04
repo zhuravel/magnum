@@ -637,3 +637,68 @@ ready_timeout = "-1m"
 		wantError(t, err, "repo example/app", "ready_timeout must not be negative")
 	})
 }
+
+// required_checks loads from TOML for a pooled and a per-PR repository;
+// Config.RequiredChecks finds the block by name, case-insensitively.
+func TestRequiredChecks(t *testing.T) {
+	cfg, err := loadFiles(t, t.TempDir(), map[string]string{"config.toml": `
+[[identity]]
+name = "z"
+kind = "gh"
+login = "z"
+[[watch]]
+owner = "example"
+include = ["*"]
+identity = "z"
+[[pool]]
+repo = "example/big"
+main_clone = "/p/big"
+slot_name = "r{n}"
+slot_path = "/p/big.r{n}"
+max = 1
+[[repo]]
+repo = "example/big"
+required_checks = ["completion", "rspec (*)", "workflow:CI"]
+[[repo]]
+repo = "example/app"
+keep_approvals = true
+`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.RequiredChecks("Example/Big"); !slices.Equal(got, []string{"completion", "rspec (*)", "workflow:CI"}) {
+		t.Errorf("example/big = %q", got)
+	}
+	for _, repo := range []string{"example/app", "example/other", "talkable/big"} {
+		if got := cfg.RequiredChecks(repo); got != nil {
+			t.Errorf("%s = %q, want none", repo, got)
+		}
+	}
+
+	valid := func() *Config {
+		cfg := validPipelineConfig()
+		cfg.Watches = []Watch{{Owner: "example", Include: []string{"*"}, Identity: "z", PollIdentity: "z"}}
+		return cfg
+	}
+	cases := map[string]struct {
+		checks []string
+		want   []string
+	}{
+		"malformed glob":          {[]string{"completion", "rspec ["}, []string{"repo example/app", `required_checks pattern "rspec ["`, "syntax error in pattern"}},
+		"malformed workflow glob": {[]string{"workflow:CI ["}, []string{"repo example/app", `required_checks pattern "workflow:CI ["`, "syntax error in pattern"}},
+		"empty entry":             {[]string{" "}, []string{"repo example/app", "empty required_checks entry"}},
+		"empty workflow":          {[]string{"workflow:"}, []string{"repo example/app", `empty required_checks entry "workflow:"`}},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg := valid()
+			cfg.Repos = []Repo{{Repo: "example/app", RequiredChecks: tc.checks}}
+			wantError(t, cfg.Validate(), tc.want...)
+		})
+	}
+	cfg = valid()
+	cfg.Repos = []Repo{{Repo: "example/app", RequiredChecks: []string{"completion", "rspec (?)", "lint-*", "workflow:CI", "workflow:Deploy *"}}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("well-formed globs: %v", err)
+	}
+}

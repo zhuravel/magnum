@@ -27,13 +27,14 @@ func TestCheckPromptsRendersEveryConfiguredPrompt(t *testing.T) {
 	}
 }
 
-// TestShippedConfigAndPromptFilesRender: the committed config.toml with the
-// checkout's prompts/ (what the daemon reads at prompt time) renders with
-// this build: a prompt edit that needs a new template field fails here.
+// TestShippedConfigAndPromptFilesRender: the committed config.defaults.toml
+// with the checkout's prompts/ (what the daemon reads at prompt time)
+// renders with this build: a prompt edit that needs a new template field
+// fails here.
 func TestShippedConfigAndPromptFilesRender(t *testing.T) {
 	_, f, _, _ := runtime.Caller(0)
 	root := filepath.Clean(filepath.Join(filepath.Dir(f), "..", ".."))
-	cfg, err := config.LoadWithOptions(paths.Layout{Home: root}, filepath.Join(root, "config.toml"), config.LoadOptions{NoOverlay: true})
+	cfg, err := config.LoadWithOptions(paths.Layout{Home: root}, filepath.Join(root, "config.defaults.toml"), config.LoadOptions{NoOverlay: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +87,7 @@ func TestNextPromptsRender(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	cfg, err := config.LoadWithOptions(paths.Layout{Home: root}, filepath.Join(root, "config.toml"), config.LoadOptions{NoOverlay: true})
+	cfg, err := config.LoadWithOptions(paths.Layout{Home: root}, filepath.Join(root, "config.defaults.toml"), config.LoadOptions{NoOverlay: true})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -32,6 +32,9 @@ func (c *Config) Warnings() []string {
 // Validate checks cross references and required fields.
 func (c *Config) Validate() error {
 	var errs []error
+	for _, msg := range c.Board.validate() {
+		errs = append(errs, errors.New(msg))
+	}
 	ids := map[string]Identity{}
 	for _, id := range c.Identities {
 		if id.Name == "" || id.Login == "" {
@@ -212,8 +215,8 @@ func validateRereviewDelta(prefix string, minLines *int, maxWait Duration) []err
 var envKeyRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // validateRepos checks the [[repo]] blocks: owner/name covered by a watch,
-// not a pool repository, no duplicates, shell-safe env keys and copy_files
-// that stay inside the clone.
+// not a pool repository, no duplicates, shell-safe env keys, copy_files
+// that stay inside the clone and well-formed required_checks globs.
 func (c *Config) validateRepos() []error {
 	var errs []error
 	seen := map[string]bool{}
@@ -232,7 +235,16 @@ func (c *Config) validateRepos() []error {
 			errs = append(errs, fmt.Errorf("repo %s: no [[watch]] covers it", r.Repo))
 		}
 		if c.PoolFor(r.Repo) != nil && r.worktreeKeys() {
-			errs = append(errs, fmt.Errorf("repo %s: has a [[pool]]; only no_findings_event, blocking_event, prepare, ready, ready_timeout and keep_approvals apply to it (setup, teardown, wt_hooks, copy_files, strip_env and env configure per-PR worktrees; use the pool's)", r.Repo))
+			errs = append(errs, fmt.Errorf("repo %s: has a [[pool]]; only no_findings_event, blocking_event, prepare, ready, ready_timeout, keep_approvals and required_checks apply to it (setup, teardown, wt_hooks, copy_files, strip_env and env configure per-PR worktrees; use the pool's)", r.Repo))
+		}
+		for _, g := range r.RequiredChecks {
+			// A malformed glob would match no check; Match reports it even for "".
+			glob := strings.TrimPrefix(g, RequiredWorkflowPrefix)
+			if strings.TrimSpace(glob) == "" {
+				errs = append(errs, fmt.Errorf("repo %s: empty required_checks entry %q", r.Repo, g))
+			} else if _, err := path.Match(glob, ""); err != nil {
+				errs = append(errs, fmt.Errorf("repo %s: required_checks pattern %q: %w", r.Repo, g, err))
+			}
 		}
 		errs = append(errs, validateReadiness("repo "+r.Repo, r.Prepare, r.Ready, r.ReadyTimeout)...)
 		errs = append(errs, validateVerdicts("repo "+r.Repo, r.NoFindingsEvent, r.BlockingEvent)...)

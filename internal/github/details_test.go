@@ -353,3 +353,101 @@ func TestDetailsReportsTruncatedConnections(t *testing.T) {
 		})
 	}
 }
+
+// details_ci.json is synthetic, in the shape GitHub answered the fragment
+// with on 2026-10-04: #101 has check runs and commit statuses in every
+// state, re-runs and a job of the same name in two workflows, #102 no
+// checks, #103 more than one page of them, #104 (a draft) only skipped ones.
+func TestDetailsCIFixture(t *testing.T) {
+	f := &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"gh", "api", "graphql"}, Result: execx.Result{Stdout: fixture(t, "details_ci.json")}}}}
+	got, missing, err := (&Client{Run: f}).Details(context.Background(), "talkable", "talkable", []int{101, 102, 103, 104})
+	if err != nil || len(missing) != 0 || len(got) != 4 {
+		t.Fatalf("got %d, missing %v, err %v", len(got), missing, err)
+	}
+	q := oneLine(decodeReq(t, f.Calls[0]).Query)
+	for _, want := range []string{"commits { totalCount }", "headCommit: commits(last: 1) { nodes { commit { oid statusCheckRollup { state",
+		"contexts(first: 100) { totalCount pageInfo { hasNextPage }",
+		"... on CheckRun { name status conclusion startedAt completedAt checkSuite { workflowRun { workflow { name } } } }",
+		"... on StatusContext { context state createdAt }"} {
+		if !strings.Contains(q, want) {
+			t.Errorf("query lacks %q: %s", want, q)
+		}
+	}
+
+	at := func(hm string) time.Time {
+		ts, err := time.Parse(time.RFC3339, "2026-10-04T"+hm+":00Z")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ts
+	}
+	want := CIRollup{SHA: "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", State: "FAILURE", Total: 15, Complete: true, Checks: []Check{
+		{"rspec (1)", CheckPassed, "CI", at("09:10")},
+		{"rspec (2)", CheckPassed, "CI", at("09:40")}, // the re-run replaces the timeout
+		{"rspec (3)", CheckFailed, "CI", at("09:15")}, // a stale SKIPPED run listed later does not
+		{"jest", CheckPending, "CI", at("09:05")},     // started, not finished
+		{"lint", CheckPassed, "CI", at("09:10")},      // NEUTRAL
+		{"deploy-preview", CheckSkipped, "CI", at("09:01")},
+		{"cancelled-job", CheckFailed, "CI", at("09:02")},
+		{"e2e", CheckPending, "CI", time.Time{}}, // a queued re-run is the newest
+		{"Completion", CheckSkipped, "CI", at("08:00")},
+		{"Completion", CheckPassed, "Pronto", at("09:30")}, // same name, another workflow: kept
+		{"danger", CheckPassed, "", at("09:12")},           // not an Actions run
+		{"completion", CheckPending, "", at("09:00")},
+		{"coverage", CheckFailed, "", at("09:01")},
+		{"license", CheckPassed, "", at("09:02")},
+		{"expected-context", CheckPending, "", at("09:03")},
+	}}
+	if ci := got[101].CI; !reflect.DeepEqual(ci, want) {
+		t.Errorf("#101 CI =\n%+v\nwant\n%+v", ci, want)
+	}
+	if got[101].Commits != 2 {
+		t.Errorf("the aliased head commit must leave commits.totalCount alone: %d", got[101].Commits)
+	}
+	none := CIRollup{SHA: "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2", Complete: true, Checks: []Check{}}
+	if ci := got[102].CI; !reflect.DeepEqual(ci, none) {
+		t.Errorf("#102 without checks = %+v", ci)
+	}
+	if ci := got[103].CI; ci.State != "PENDING" || ci.Total != 130 || ci.Complete || len(ci.Checks) != 2 {
+		t.Errorf("#103 with a second page = %+v", ci)
+	}
+	if ci := got[104].CI; ci.State != "SUCCESS" || ci.Total != 2 || len(ci.Checks) != 2 ||
+		ci.Checks[0].State != CheckSkipped || ci.Checks[1].State != CheckSkipped {
+		t.Errorf("#104 all skipped = %+v", ci)
+	}
+
+	// A fixture captured before the field existed reads as no commit.
+	old := &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"gh", "api", "graphql"},
+		Result: execx.Result{Stdout: fixture(t, "details.json"), Stderr: fixture(t, "details.stderr"), Code: 1}}}}
+	prev, _, err := (&Client{Run: old}).Details(context.Background(), "talkable", "talkable", []int{11975})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ci := prev[11975].CI; !reflect.DeepEqual(ci, CIRollup{Complete: true, Checks: []Check{}}) {
+		t.Errorf("absent headCommit = %+v", ci)
+	}
+}
+
+func TestCheckStateNormalization(t *testing.T) {
+	runs := map[string][][2]string{ // want -> status, conclusion
+		CheckPassed:  {{"COMPLETED", "SUCCESS"}, {"COMPLETED", "NEUTRAL"}},
+		CheckSkipped: {{"COMPLETED", "SKIPPED"}},
+		CheckFailed: {{"COMPLETED", "FAILURE"}, {"COMPLETED", "TIMED_OUT"}, {"COMPLETED", "CANCELLED"}, {"COMPLETED", "ACTION_REQUIRED"},
+			{"COMPLETED", "STARTUP_FAILURE"}, {"COMPLETED", "STALE"}, {"COMPLETED", "SOMETHING_NEW"}},
+		CheckPending: {{"QUEUED", ""}, {"IN_PROGRESS", ""}, {"WAITING", ""}, {"REQUESTED", ""}, {"PENDING", ""}},
+	}
+	for want, ins := range runs {
+		for _, in := range ins {
+			if got := checkRunState(in[0], in[1]); got != want {
+				t.Errorf("check run %s/%s = %s, want %s", in[0], in[1], got, want)
+			}
+		}
+	}
+	statuses := map[string]string{"SUCCESS": CheckPassed, "FAILURE": CheckFailed, "ERROR": CheckFailed,
+		"PENDING": CheckPending, "EXPECTED": CheckPending}
+	for in, want := range statuses {
+		if got := statusState(in); got != want {
+			t.Errorf("status %s = %s, want %s", in, got, want)
+		}
+	}
+}

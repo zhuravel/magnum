@@ -236,6 +236,9 @@ func TestBoardFrameCacheFollowsEveryChange(t *testing.T) {
 		{name: "flash", msgs: []tea.Msg{actionDoneMsg{what: "pin", text: "pinned it"}}, want: "pinned it"},
 		{name: "another flash", msgs: []tea.Msg{actionDoneMsg{what: "unpin", text: "unpinned it"}}, want: "unpinned it"},
 		{name: "stale flash timer", msgs: []tea.Msg{flashExpireMsg{seq: -1}}, same: true},
+		{name: "owner", msgs: keys("O"), want: "owner: example"},
+		{name: "next owner", msgs: keys("O"), want: "owner: talkable"},
+		{name: "every owner", msgs: keys("O"), want: "owner: all"},
 	}
 	runSteps(t, m, uncachedBoard, steps)
 }

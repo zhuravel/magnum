@@ -2,7 +2,10 @@
 # defaults (config.defaults.toml); copy the [[identity]], [[watch]], [[pool]] blocks and the [daemon]/[terminal]
 # keys you need into ~/.config/magnum/config.toml. Secrets (App private keys) live in the checkout's gitignored
 # .mise.local.toml. Your config's [[watch]], [[identity]], [[pool]] and [[repo]] blocks are appended to the
-# defaults, any key it sets under [daemon], [herdr], [terminal], [github], [pipeline] or [kinds.<name>]
+# defaults, any key it sets under [daemon], [herdr], [terminal], [board]
+badges = { "Flagged" = "🚩", "Schema Migration" = "\uf1c0" }   # 🚩 a flagged Jira issue; \uf1c0 = Nerd Font database icon
+
+[github], [pipeline] or [kinds.<name>]
 # overrides the default, and its [[role]] blocks override the role of the same name key by key (other names
 # are appended).
 # Durations use Go syntax: "30s", "5m", "2h", with whole days in front: "7d", "1d12h".

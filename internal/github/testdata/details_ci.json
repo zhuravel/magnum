@@ -1,0 +1,568 @@
+{
+  "data": {
+    "rateLimit": {
+      "limit": 5000,
+      "cost": 1,
+      "remaining": 4990,
+      "used": 10,
+      "resetAt": "2026-10-04T10:00:00Z"
+    },
+    "repository": {
+      "p101": {
+        "id": "PR_ci101",
+        "number": 101,
+        "title": "Checks of every kind",
+        "url": "https://github.com/talkable/talkable/pull/101",
+        "author": {
+          "login": "alice",
+          "__typename": "User"
+        },
+        "authorAssociation": "MEMBER",
+        "labels": {
+          "totalCount": 0,
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "headRefName": "alice-ci-101",
+        "baseRefName": "master",
+        "isCrossRepository": false,
+        "state": "OPEN",
+        "merged": false,
+        "mergedAt": null,
+        "closedAt": null,
+        "updatedAt": "2026-10-04T09:00:00Z",
+        "isDraft": false,
+        "headRefOid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+        "baseRefOid": "1111111111111111111111111111111111111111",
+        "additions": 12,
+        "deletions": 3,
+        "changedFiles": 2,
+        "commits": {
+          "totalCount": 2
+        },
+        "assignees": {
+          "nodes": []
+        },
+        "reviewRequests": {
+          "nodes": []
+        },
+        "latestReviews": {
+          "totalCount": 0,
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "timelineItems": {
+          "nodes": []
+        },
+        "headCommit": {
+          "nodes": [
+            {
+              "commit": {
+                "oid": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+                "statusCheckRollup": {
+                  "state": "FAILURE",
+                  "contexts": {
+                    "totalCount": 18,
+                    "pageInfo": {
+                      "hasNextPage": false
+                    },
+                    "nodes": [
+                      {
+                        "__typename": "CheckRun",
+                        "name": "rspec (1)",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "startedAt": "2026-10-04T09:00:00Z",
+                        "completedAt": "2026-10-04T09:10:00Z",
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "CI"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "rspec (2)",
+                        "status": "COMPLETED",
+                        "conclusion": "TIMED_OUT",
+                        "startedAt": "2026-10-04T09:00:00Z",
+                        "completedAt": "2026-10-04T09:20:00Z",
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "CI"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "rspec (3)",
+                        "status": "COMPLETED",
+                        "conclusion": "FAILURE",
+                        "startedAt": "2026-10-04T09:00:00Z",
+                        "completedAt": "2026-10-04T09:15:00Z",
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "CI"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "jest",
+                        "status": "IN_PROGRESS",
+                        "conclusion": null,
+                        "startedAt": "2026-10-04T09:05:00Z",
+                        "completedAt": null,
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "CI"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "lint",
+                        "status": "COMPLETED",
+                        "conclusion": "NEUTRAL",
+                        "startedAt": "2026-10-04T09:00:00Z",
+                        "completedAt": "2026-10-04T09:10:00Z",
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "CI"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "deploy-preview",
+                        "status": "COMPLETED",
+                        "conclusion": "SKIPPED",
+                        "startedAt": "2026-10-04T09:01:00Z",
+                        "completedAt": "2026-10-04T09:01:00Z",
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "CI"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "cancelled-job",
+                        "status": "COMPLETED",
+                        "conclusion": "CANCELLED",
+                        "startedAt": "2026-10-04T09:00:00Z",
+                        "completedAt": "2026-10-04T09:02:00Z",
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "CI"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "e2e",
+                        "status": "COMPLETED",
+                        "conclusion": "FAILURE",
+                        "startedAt": "2026-10-04T09:00:00Z",
+                        "completedAt": "2026-10-04T09:10:00Z",
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "CI"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Completion",
+                        "status": "COMPLETED",
+                        "conclusion": "SKIPPED",
+                        "startedAt": "2026-10-04T08:00:00Z",
+                        "completedAt": "2026-10-04T08:00:00Z",
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "CI"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "rspec (2)",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "startedAt": "2026-10-04T09:25:00Z",
+                        "completedAt": "2026-10-04T09:40:00Z",
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "CI"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "rspec (3)",
+                        "status": "COMPLETED",
+                        "conclusion": "SKIPPED",
+                        "startedAt": "2026-10-04T08:00:00Z",
+                        "completedAt": "2026-10-04T08:00:00Z",
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "CI"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "e2e",
+                        "status": "QUEUED",
+                        "conclusion": null,
+                        "startedAt": null,
+                        "completedAt": null,
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "CI"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Completion",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "startedAt": "2026-10-04T09:29:00Z",
+                        "completedAt": "2026-10-04T09:30:00Z",
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "Pronto"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "danger",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "startedAt": "2026-10-04T09:11:00Z",
+                        "completedAt": "2026-10-04T09:12:00Z",
+                        "checkSuite": {
+                          "workflowRun": null
+                        }
+                      },
+                      {
+                        "__typename": "StatusContext",
+                        "context": "completion",
+                        "state": "PENDING",
+                        "createdAt": "2026-10-04T09:00:00Z"
+                      },
+                      {
+                        "__typename": "StatusContext",
+                        "context": "coverage",
+                        "state": "ERROR",
+                        "createdAt": "2026-10-04T09:01:00Z"
+                      },
+                      {
+                        "__typename": "StatusContext",
+                        "context": "license",
+                        "state": "SUCCESS",
+                        "createdAt": "2026-10-04T09:02:00Z"
+                      },
+                      {
+                        "__typename": "StatusContext",
+                        "context": "expected-context",
+                        "state": "EXPECTED",
+                        "createdAt": "2026-10-04T09:03:00Z"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "p102": {
+        "id": "PR_ci102",
+        "number": 102,
+        "title": "No checks",
+        "url": "https://github.com/talkable/talkable/pull/102",
+        "author": {
+          "login": "alice",
+          "__typename": "User"
+        },
+        "authorAssociation": "MEMBER",
+        "labels": {
+          "totalCount": 0,
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "headRefName": "alice-ci-102",
+        "baseRefName": "master",
+        "isCrossRepository": false,
+        "state": "OPEN",
+        "merged": false,
+        "mergedAt": null,
+        "closedAt": null,
+        "updatedAt": "2026-10-04T09:00:00Z",
+        "isDraft": false,
+        "headRefOid": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+        "baseRefOid": "1111111111111111111111111111111111111111",
+        "additions": 12,
+        "deletions": 3,
+        "changedFiles": 2,
+        "commits": {
+          "totalCount": 2
+        },
+        "assignees": {
+          "nodes": []
+        },
+        "reviewRequests": {
+          "nodes": []
+        },
+        "latestReviews": {
+          "totalCount": 0,
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "timelineItems": {
+          "nodes": []
+        },
+        "headCommit": {
+          "nodes": [
+            {
+              "commit": {
+                "oid": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+                "statusCheckRollup": null
+              }
+            }
+          ]
+        }
+      },
+      "p103": {
+        "id": "PR_ci103",
+        "number": 103,
+        "title": "More checks than one page",
+        "url": "https://github.com/talkable/talkable/pull/103",
+        "author": {
+          "login": "alice",
+          "__typename": "User"
+        },
+        "authorAssociation": "MEMBER",
+        "labels": {
+          "totalCount": 0,
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "headRefName": "alice-ci-103",
+        "baseRefName": "master",
+        "isCrossRepository": false,
+        "state": "OPEN",
+        "merged": false,
+        "mergedAt": null,
+        "closedAt": null,
+        "updatedAt": "2026-10-04T09:00:00Z",
+        "isDraft": false,
+        "headRefOid": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+        "baseRefOid": "1111111111111111111111111111111111111111",
+        "additions": 12,
+        "deletions": 3,
+        "changedFiles": 2,
+        "commits": {
+          "totalCount": 2
+        },
+        "assignees": {
+          "nodes": []
+        },
+        "reviewRequests": {
+          "nodes": []
+        },
+        "latestReviews": {
+          "totalCount": 0,
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "timelineItems": {
+          "nodes": []
+        },
+        "headCommit": {
+          "nodes": [
+            {
+              "commit": {
+                "oid": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+                "statusCheckRollup": {
+                  "state": "PENDING",
+                  "contexts": {
+                    "totalCount": 130,
+                    "pageInfo": {
+                      "hasNextPage": true
+                    },
+                    "nodes": [
+                      {
+                        "__typename": "CheckRun",
+                        "name": "rspec (1)",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "startedAt": "2026-10-04T09:00:00Z",
+                        "completedAt": "2026-10-04T09:10:00Z",
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "CI"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "StatusContext",
+                        "context": "completion",
+                        "state": "PENDING",
+                        "createdAt": "2026-10-04T09:00:00Z"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "p104": {
+        "id": "PR_ci104",
+        "number": 104,
+        "title": "A draft whose checks all skipped",
+        "url": "https://github.com/talkable/talkable/pull/104",
+        "author": {
+          "login": "alice",
+          "__typename": "User"
+        },
+        "authorAssociation": "MEMBER",
+        "labels": {
+          "totalCount": 0,
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "headRefName": "alice-ci-104",
+        "baseRefName": "master",
+        "isCrossRepository": false,
+        "state": "OPEN",
+        "merged": false,
+        "mergedAt": null,
+        "closedAt": null,
+        "updatedAt": "2026-10-04T09:00:00Z",
+        "isDraft": true,
+        "headRefOid": "d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4",
+        "baseRefOid": "1111111111111111111111111111111111111111",
+        "additions": 12,
+        "deletions": 3,
+        "changedFiles": 2,
+        "commits": {
+          "totalCount": 2
+        },
+        "assignees": {
+          "nodes": []
+        },
+        "reviewRequests": {
+          "nodes": []
+        },
+        "latestReviews": {
+          "totalCount": 0,
+          "pageInfo": {
+            "hasNextPage": false
+          },
+          "nodes": []
+        },
+        "timelineItems": {
+          "nodes": []
+        },
+        "headCommit": {
+          "nodes": [
+            {
+              "commit": {
+                "oid": "d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4",
+                "statusCheckRollup": {
+                  "state": "SUCCESS",
+                  "contexts": {
+                    "totalCount": 2,
+                    "pageInfo": {
+                      "hasNextPage": false
+                    },
+                    "nodes": [
+                      {
+                        "__typename": "CheckRun",
+                        "name": "rspec (1)",
+                        "status": "COMPLETED",
+                        "conclusion": "SKIPPED",
+                        "startedAt": "2026-10-04T08:00:00Z",
+                        "completedAt": "2026-10-04T08:00:00Z",
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "CI"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Completion",
+                        "status": "COMPLETED",
+                        "conclusion": "SKIPPED",
+                        "startedAt": "2026-10-04T08:00:00Z",
+                        "completedAt": "2026-10-04T08:01:00Z",
+                        "checkSuite": {
+                          "workflowRun": {
+                            "workflow": {
+                              "name": "CI"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

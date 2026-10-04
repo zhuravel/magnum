@@ -617,6 +617,7 @@ func TestPRsView(t *testing.T) {
 	inspSeedPR(t, st, "talkable/talkable", 11950, store.PRReviewed, func(u *store.PRUpdate) {
 		u.Set("gh_updated_at", store.FormatTime(time.Now().Add(-5*time.Hour)))
 		u.Set("requested_reviewers_json", `["zhuravel"]`)
+		u.Set("head_sha", "x") // approved on its current head: not stale, so the ready view keeps it
 		u.Set("latest_reviews_json", `[{"login":"ann","state":"APPROVED","submitted_at":"`+store.FormatTime(time.Now())+`","commit_sha":"x"}]`)
 	})
 	st.Close()

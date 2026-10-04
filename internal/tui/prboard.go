@@ -15,9 +15,6 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// PRBoardRow is one pull request on the PR board. Ref is what actions
-// receive; Owner, Repo and Number label the row (Ref is parsed when they
-// are empty).
 // FindingsInfo is what magnum's latest posted review of a PR concluded.
 type FindingsInfo struct {
 	Counts          [4]int // P0..P3 findings posted
@@ -32,6 +29,43 @@ type FindingsInfo struct {
 	SHA     string // the reviewed head
 }
 
+// CIInfo is the head commit's CI as the board shows it.
+type CIInfo struct {
+	// State is "passed" | "failed" | "pending" | "skipped" (every check
+	// skipped: none ran) | "none" (no checks).
+	State                                   string
+	Total, Passed, Failed, Pending, Skipped int
+	// Failing names the failed checks, "workflow / job" when the workflow is known.
+	Failing []string
+	// Workflows summarises the checks per GitHub Actions workflow ("" = checks outside a workflow).
+	Workflows []WorkflowCI
+	// Required are the repository's required checks with their state: Name
+	// as GitHub or [[repo]] required_checks names it ("Completion",
+	// "workflow:CI"), State "passed" | "failed" | "pending" | "skipped" |
+	// "missing" (never ran on this head).
+	Required []CheckState
+	// RequiredSource says who requires them: "github" (the repository's
+	// rulesets) or "config" ([[repo]] required_checks overrides them).
+	RequiredSource string
+	Stale          bool // describes an older commit than the PR's head
+}
+
+// WorkflowCI is one workflow's checks on the head commit.
+type WorkflowCI struct {
+	Name, State                    string
+	Passed, Failed, Pending, Total int
+}
+
+// CheckState is one required check and its state.
+type CheckState struct{ Name, State string }
+
+// Badge marks a PR that carries a GitHub label: Text (e.g. "🚩") shows
+// before the title, Label names it on the card.
+type Badge struct{ Label, Text string }
+
+// PRBoardRow is one pull request on the PR board. Ref is what actions
+// receive; Owner, Repo and Number label the row (Ref is parsed when they
+// are empty).
 type PRBoardRow struct {
 	Ref, Owner, Repo   string
 	Number             int
@@ -40,8 +74,14 @@ type PRBoardRow struct {
 	Labels, Assignees  []string
 	// State is magnum's state: baseline, queued, reviewing, reviewed,
 	// rereview_pending, needs_attention, paused, closed, released,
-	// ineligible or ignored (magnum ignore).
-	State      string
+	// ineligible (the configuration skips it; the board says "skipped") or
+	// ignored (magnum ignore).
+	State string
+	// SkipReason says why the configuration skips an ineligible PR ("bot
+	// author", `author "x" is in skip_authors`, ...).
+	SkipReason string
+	// Badges are the PR's labels that [board] badges marks, in its order.
+	Badges     []Badge
 	GHState    string // GitHub's state: OPEN, CLOSED, MERGED
 	UpdatedAt  time.Time
 	HeadSHA    string
@@ -49,7 +89,9 @@ type PRBoardRow struct {
 	// Findings is what magnum's latest posted review concluded (its findings
 	// by priority, simplifications and verdict), also where it could only
 	// comment; nil when magnum has not reviewed the PR.
-	Findings       *FindingsInfo
+	Findings *FindingsInfo
+	// CI is the head commit's checks; nil when unknown.
+	CI             *CIInfo
 	Reviewers      []ReviewerInfo // everyone who reviewed or was asked to
 	SinceReview    *ReviewDelta   // what changed since the last review; nil when unknown
 	Slot           string         // folder of the review slot holding the PR, if any
@@ -174,10 +216,19 @@ type PRBoardOptions struct {
 	SelfLogins  []string
 	DefaultSort PRSort // default SortUpdated
 	DefaultView PRView // the view the board opens in; default ViewAll
+	// DefaultOwner is the owner scope the board opens in; "" (the default)
+	// shows every owner, as does an owner without PRs.
+	DefaultOwner string
+	// OwnerChanged, when set, hears every change of the owner scope (O, or
+	// its owner's last PR leaving), so the next board can open in it.
+	OwnerChanged func(owner string)
 	// ViewChanged, when set, hears every v, so the next board can open in
 	// the same view.
 	ViewChanged func(PRView)
-	Repo        string   // show only this repository ("name" or "owner/name"); empty shows all
+	Repo        string // show only this repository ("name" or "owner/name"); empty shows all
+	// DefaultRepo is daemon.default_repo ("owner/name"): its owner comes
+	// first when O cycles the owners.
+	DefaultRepo string
 	Icons       IconMode // the symbols: unicode (default), nerd (Nerd Font icons and emoji) or ascii
 	Judge       string   // the judge role's name in the help ("open the <Judge> pane"); default "judge"
 	// NoMouse starts with mouse support off ([terminal] mouse = false);
@@ -468,7 +519,16 @@ func sanitizeRow(r PRBoardRow) PRBoardRow {
 	r.State, r.GHState, r.Slot, r.LastError = cleanText(r.State), cleanText(r.GHState), cleanText(r.Slot), cleanText(r.LastError)
 	r.HeadSHA = cleanText(r.HeadSHA)
 	r.Wait, r.WaitDetail = cleanText(r.Wait), cleanText(r.WaitDetail)
-	r.Note = cleanText(r.Note)
+	r.Note, r.SkipReason = cleanText(r.Note), cleanText(r.SkipReason)
+	if r.Badges != nil {
+		badges := make([]Badge, 0, len(r.Badges))
+		for _, b := range r.Badges {
+			if b.Text = cleanText(b.Text); b.Text != "" {
+				badges = append(badges, Badge{Label: cleanText(b.Label), Text: b.Text})
+			}
+		}
+		r.Badges = badges
+	}
 	r.ErrorFix, r.ErrorDetail = cleanText(r.ErrorFix), cleanAll(r.ErrorDetail)
 	r.Labels, r.Assignees = cleanAll(r.Labels), cleanAll(r.Assignees)
 	if r.LastReview != nil {
@@ -488,6 +548,19 @@ func sanitizeRow(r PRBoardRow) PRBoardRow {
 		d := *r.SinceReview
 		d.Base, d.BaseSHA = cleanText(d.Base), cleanText(d.BaseSHA)
 		r.SinceReview = &d
+	}
+	if r.CI != nil {
+		ci := *r.CI
+		ci.State, ci.RequiredSource, ci.Failing = cleanText(ci.State), cleanText(ci.RequiredSource), cleanAll(ci.Failing)
+		ci.Workflows = slices.Clone(ci.Workflows)
+		for i := range ci.Workflows {
+			ci.Workflows[i].Name, ci.Workflows[i].State = cleanText(ci.Workflows[i].Name), cleanText(ci.Workflows[i].State)
+		}
+		ci.Required = slices.Clone(ci.Required)
+		for i := range ci.Required {
+			ci.Required[i].Name, ci.Required[i].State = cleanText(ci.Required[i].Name), cleanText(ci.Required[i].State)
+		}
+		r.CI = &ci
 	}
 	if r.LastRound != nil {
 		lr := *r.LastRound
@@ -546,7 +619,8 @@ type prBoardModel struct {
 
 	width, height int
 
-	all         []PRBoardRow // the rows in opts.Repo, as the source sent them
+	loaded      []PRBoardRow // the rows in opts.Repo, as the source sent them
+	all         []PRBoardRow // loaded, in the owner scope
 	view        []PRBoardRow // all, in boardView, filtered and sorted
 	inView      int          // how many of all are in boardView (before the filter)
 	haveData    bool
@@ -559,6 +633,7 @@ type prBoardModel struct {
 	sort      PRSort
 	desc      bool
 	boardView PRView // the preset subset of the rows (v cycles)
+	owner     string // the owner whose rows show (O cycles); "" shows every owner
 	filter    textinput.Model
 	filtering bool // the filter input has the keyboard
 
@@ -593,6 +668,7 @@ type prbRowsKey struct {
 	gen        int64
 	width      int
 	sort       PRSort
+	owner      string // the owner scope: the rows, their counts and refs follow it
 	desc, dark bool
 	clock      int64
 	widths     prbWidths // dragged widths; zero in the natural widths' key
@@ -626,7 +702,7 @@ type prbFrameKey struct {
 }
 
 func (m prBoardModel) rowsKey(w int) prbRowsKey {
-	return prbRowsKey{gen: m.gen, width: w, sort: m.sort, desc: m.desc, dark: m.st.dark, clock: clockKey(m.opts.Now), widths: m.widths}
+	return prbRowsKey{gen: m.gen, width: w, sort: m.sort, owner: m.owner, desc: m.desc, dark: m.st.dark, clock: clockKey(m.opts.Now), widths: m.widths}
 }
 
 func (m prBoardModel) frameKey() prbFrameKey {
@@ -677,6 +753,7 @@ func newPRBoardModel(ctx context.Context, src PRBoardSource, act DashboardAction
 	m := prBoardModel{
 		actionBar: newActionBar(ctx, act), src: src, opts: opts, g: g, spin: sp, filter: in, cache: &prbCache{},
 		self: selfSet(opts.SelfLogins), sort: opts.DefaultSort, desc: true, boardView: opts.DefaultView,
+		owner:   strings.TrimSpace(opts.DefaultOwner),
 		loading: true, spinning: true, // Init starts the first load and the spinner
 		saver: newWidthSaver(opts.Widths, widthsBoard),
 	}
@@ -760,9 +837,15 @@ func (m prBoardModel) update(msg tea.Msg) (prBoardModel, tea.Cmd) {
 			m.loadErr = msg.err
 			return m, nil
 		}
-		m.all = scopeRows(msg.rows, m.opts.Repo)
+		m.loaded = scopeRows(msg.rows, m.opts.Repo)
 		m.haveData, m.loadErr, m.refreshedAt = true, nil, m.opts.Now()
+		var cmd tea.Cmd
+		if m.owner != "" && len(ownedBy(m.loaded, m.owner)) == 0 { // its last PR left: back to every owner
+			cmd = m.note("owner: all (" + m.owner + " has no pull requests now)")
+			m.setOwner("")
+		}
 		m.rebuild()
+		return m, cmd
 	case prbTickMsg:
 		cmd := tea.Batch(m.startLoad(), m.tickCmd())
 		return m, cmd
@@ -805,9 +888,13 @@ func (m prBoardModel) update(msg tea.Msg) (prBoardModel, tea.Cmd) {
 	return m, nil
 }
 
-// rebuild keeps the rows of the view that match the filter, sorts them and
-// keeps the cursor on the same PR when it is still listed.
+// rebuild keeps the rows of the owner scope, the view and the filter,
+// sorts them and keeps the cursor on the same PR when it is still listed.
 func (m *prBoardModel) rebuild() {
+	m.all = m.loaded
+	if m.owner != "" {
+		m.all = ownedBy(m.loaded, m.owner)
+	}
 	q := parsePRQuery(m.filter.Value())
 	rows := make([]PRBoardRow, 0, len(m.all))
 	m.inView = 0
@@ -831,6 +918,75 @@ func (m *prBoardModel) rebuild() {
 		}
 	}
 	m.moveTo(m.cursor)
+}
+
+// rowOwner is the user or organization owning the row's repository.
+func rowOwner(r PRBoardRow) string {
+	owner, _, _ := prRefParts(r)
+	return owner
+}
+
+// owners are the owners with loaded rows (as the first of them spells
+// it): the default repository's owner first, then alphabetically.
+func (m prBoardModel) owners() []string {
+	home := m.opts.DefaultRepo
+	if home == "" {
+		home = m.opts.Repo
+	}
+	home, _, _ = strings.Cut(home, "/")
+	var out []string
+	for _, r := range m.loaded {
+		if o := rowOwner(r); o != "" && !slices.ContainsFunc(out, func(s string) bool { return strings.EqualFold(s, o) }) {
+			out = append(out, o)
+		}
+	}
+	slices.SortFunc(out, func(a, b string) int {
+		if ha, hb := strings.EqualFold(a, home), strings.EqualFold(b, home); ha != hb {
+			if ha {
+				return -1
+			}
+			return 1
+		}
+		return cmp.Compare(strings.ToLower(a), strings.ToLower(b))
+	})
+	return out
+}
+
+// ownedBy are the rows of owner (case does not matter); none for "".
+func ownedBy(rows []PRBoardRow, owner string) []PRBoardRow {
+	if owner == "" {
+		return nil
+	}
+	return slices.DeleteFunc(slices.Clone(rows), func(r PRBoardRow) bool { return !strings.EqualFold(rowOwner(r), owner) })
+}
+
+// setOwner changes the owner scope and tells opts.OwnerChanged.
+func (m *prBoardModel) setOwner(owner string) {
+	m.owner = owner
+	if m.opts.OwnerChanged != nil {
+		m.opts.OwnerChanged(owner)
+	}
+}
+
+// nextOwner moves the owner scope on: every owner, then each owner with
+// rows (owners), then every owner again.
+func (m prBoardModel) nextOwner() (prBoardModel, tea.Cmd) {
+	owners := m.owners()
+	if len(owners) == 0 {
+		cmd := m.note("no owner to show alone")
+		return m, cmd
+	}
+	switch i := slices.IndexFunc(owners, func(o string) bool { return strings.EqualFold(o, m.owner) }); {
+	case m.owner == "":
+		m.setOwner(owners[0])
+	case i < 0 || i == len(owners)-1:
+		m.setOwner("")
+	default:
+		m.setOwner(owners[i+1])
+	}
+	m.rebuild()
+	cmd := m.note("owner: " + cmp.Or(m.owner, "all"))
+	return m, cmd
 }
 
 func (m *prBoardModel) moveTo(i int) {
@@ -956,6 +1112,8 @@ func (m prBoardModel) tableKey(k string) (prBoardModel, tea.Cmd) {
 		if m.opts.ViewChanged != nil {
 			m.opts.ViewChanged(m.boardView)
 		}
+	case "O":
+		return m.nextOwner()
 	case "/":
 		m.filtering = true
 		m.mode = prbTable
@@ -1232,7 +1390,7 @@ func (m prBoardModel) render() string {
 		right = m.spin.View() + " " + right
 	}
 	out := []string{
-		p.titleLine(w, m.opts.Title, m.opts.Repo, m.boardView, m.inView, m.filter.Value(), len(m.view), right),
+		p.titleLine(w, m.opts.Title, m.opts.Repo, m.owner, m.boardView, m.inView, m.filter.Value(), len(m.view), right),
 		m.cache.summaryFor(m.rowsKey(w), func() string { return p.summaryLine(w) }),
 	}
 
@@ -1387,6 +1545,8 @@ func (m prBoardModel) hintLine(w int) string {
 		}
 		room := max(w-ansi.StringWidth(pos)-2, 10)
 		sets := [][]hint{
+			{{"enter", "details"}, {"r", "review"}, {"R", "fresh"}, {"i", "simplify"}, {"o", "open"}, {"b", "browser"},
+				{"p/u", "pin"}, {"x", "release"}, {"/", "filter"}, {"v", "view"}, {"O", "owner"}, {"s/S", "sort"}, {"tab", "overview"}, {"?", "help"}, {"q", "quit"}},
 			{{"enter", "details"}, {"r", "review"}, {"R", "fresh"}, {"i", "simplify"}, {"o", "open"}, {"b", "browser"},
 				{"p/u", "pin"}, {"x", "release"}, {"/", "filter"}, {"v", "view"}, {"s/S", "sort"}, {"tab", "overview"}, {"?", "help"}, {"q", "quit"}},
 			{{"enter", "details"}, {"r", "review"}, {"o", "open"}, {"b", "browser"}, {"/", "filter"}, {"v", "view"}, {"s", "sort"},

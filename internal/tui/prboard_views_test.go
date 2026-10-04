@@ -2,6 +2,7 @@ package tui
 
 import (
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -23,8 +24,8 @@ func TestFilterPRBoardViews(t *testing.T) {
 		{ViewMine, boardSelf, []string{"talkable#11950"}},
 		// dan's review is requested on #11920; bob is its assignee.
 		{ViewMine, []string{"dan", "bob"}, []string{"talkable#11920"}},
-		// Approved, nothing blocking, open, not a draft: #11920 and #11902
-		// carry a CHANGES_REQUESTED, #11800 is merged.
+		// Approved on the head, nothing blocking, open, not a draft: #11920
+		// and #11902 carry a CHANGES_REQUESTED, #11800 is merged.
 		{ViewReady, boardSelf, []string{"talkable#11950"}},
 	} {
 		got := sorted(FilterPRBoard(boardRows(), tc.view, tc.self))
@@ -37,6 +38,71 @@ func TestFilterPRBoardViews(t *testing.T) {
 	if got := sorted(FilterPRBoard(boardRows(), ViewMine, []string{"bob"})); !slices.Equal(got, []string{"talkable#11920"}) {
 		t.Errorf("mine for bob = %v", got)
 	}
+}
+
+// The ready view keeps what looks ready to merge: open and not a draft,
+// approved on the current head with no changes requested (stale or not),
+// magnum's review not blocking and every required check passed (skipped,
+// not run and pending ones do not count). Without required checks CI does
+// not decide.
+func TestReadyViewRules(t *testing.T) {
+	approved := ReviewerInfo{Login: "alice", Verdict: "approved", CommitSHA: "abcdef1"}
+	staleApproval := ReviewerInfo{Login: "alice", Verdict: "approved", CommitSHA: "1234567", Stale: true}
+	blocker := ReviewerInfo{Login: "bob", Verdict: "changes_requested", CommitSHA: "abcdef1"}
+	staleBlocker := ReviewerInfo{Login: "bob", Verdict: "changes_requested", CommitSHA: "1234567", Stale: true}
+	base := func() PRBoardRow {
+		return PRBoardRow{Ref: "talkable/example#1", Number: 1, State: "reviewed", GHState: "OPEN", HeadSHA: "abcdef1",
+			Reviewers: []ReviewerInfo{approved}}
+	}
+	required := func(states ...string) *CIInfo {
+		ci := &CIInfo{State: "failed", Total: 9, Failed: 1, RequiredSource: "github"} // the other checks do not matter
+		for i, s := range states {
+			ci.Required = append(ci.Required, CheckState{Name: "Check" + strconv.Itoa(i), State: s})
+		}
+		return ci
+	}
+	for _, tc := range []struct {
+		name  string
+		edit  func(*PRBoardRow)
+		ready bool
+	}{
+		{"approved, nothing else known", func(*PRBoardRow) {}, true},
+		{"draft", func(r *PRBoardRow) { r.Draft = true }, false},
+		{"merged", func(r *PRBoardRow) { r.GHState = "MERGED" }, false},
+		{"closed", func(r *PRBoardRow) { r.GHState = "CLOSED" }, false},
+		{"nobody reviewed", func(r *PRBoardRow) { r.Reviewers = nil }, false},
+		{"only commented", func(r *PRBoardRow) { r.Reviewers = []ReviewerInfo{{Login: "alice", Verdict: "commented"}} }, false},
+		{"approval of an older commit", func(r *PRBoardRow) { r.Reviewers = []ReviewerInfo{staleApproval} }, false},
+		{"a current and a stale approval", func(r *PRBoardRow) { r.Reviewers = []ReviewerInfo{staleApproval, approved} }, true},
+		{"changes requested", func(r *PRBoardRow) { r.Reviewers = append(r.Reviewers, blocker) }, false},
+		{"stale changes requested", func(r *PRBoardRow) { r.Reviewers = append(r.Reviewers, staleBlocker) }, false},
+		{"magnum blocking", func(r *PRBoardRow) { r.Findings = &FindingsInfo{Counts: [4]int{0, 1}, Verdict: "blocking"} }, false},
+		{"magnum non-blocking", func(r *PRBoardRow) { r.Findings = &FindingsInfo{Counts: [4]int{0, 0, 2}, Verdict: "non_blocking"} }, true},
+		{"magnum clean", func(r *PRBoardRow) { r.Findings = &FindingsInfo{Verdict: "clean"} }, true},
+		// Without required checks CI is shown, never decides.
+		{"CI passed", func(r *PRBoardRow) { r.CI = &CIInfo{State: "passed", Total: 3, Passed: 3} }, true},
+		{"no checks", func(r *PRBoardRow) { r.CI = &CIInfo{State: "none"} }, true},
+		{"every check skipped", func(r *PRBoardRow) { r.CI = &CIInfo{State: "skipped", Total: 2, Skipped: 2} }, true},
+		{"optional check failed", func(r *PRBoardRow) { r.CI = &CIInfo{State: "failed", Total: 3, Passed: 2, Failed: 1} }, true},
+		{"optional check pending", func(r *PRBoardRow) { r.CI = &CIInfo{State: "pending", Total: 3, Passed: 2, Pending: 1} }, true},
+		// With them, every one must have passed.
+		{"required checks passed, others failed", func(r *PRBoardRow) { r.CI = required("passed", "passed") }, true},
+		{"a required check failed", func(r *PRBoardRow) { r.CI = required("passed", "failed") }, false},
+		{"a required check pending", func(r *PRBoardRow) { r.CI = required("pending", "passed") }, false},
+		{"a required check never ran", func(r *PRBoardRow) { r.CI = required("passed", "missing") }, false},
+		{"a required check skipped", func(r *PRBoardRow) { r.CI = required("skipped", "passed") }, false},
+	} {
+		r := base()
+		tc.edit(&r)
+		if got := len(FilterPRBoard([]PRBoardRow{r}, ViewReady, nil)) == 1; got != tc.ready {
+			t.Errorf("%s: ready = %v, want %v", tc.name, got, tc.ready)
+		}
+	}
+
+	// The help says what ready means.
+	m, _, _ := newBoard(t, 240, 80, PRBoardOptions{})
+	m, _ = send(t, m, keyMsg("?"))
+	mustContain(t, viewOf(m), "ready: approved on the head, no changes requested, magnum not blocking, required checks passed, not a draft")
 }
 
 func TestParsePRView(t *testing.T) {

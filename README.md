@@ -379,6 +379,13 @@ row is greyed with its title struck through, and `U` unmutes it, which stops ign
 and `C` requests changes as the PR's posting identity (see `magnum approve`); `b` opens the browser;
 `tab` switches to the status dashboard. Every action that stops or starts work asks y/N first.
 
+CI shows the head's checks: the repository's required checks when it has some (read from GitHub's
+rulesets, or `[[repo]] required_checks`; `✗ Completion`, `– Completion not run` when it never ran on the
+head, `⊘ Completion skipped`), else the counts (`✓ 65/65`, `✗ 2 failed`, `◌ 40/65`); the card lists the
+checks per workflow and names every failed job. Rows the configuration skips (bots, `skip_authors`,
+labels, forks, authors who left) read "skipped · bot" and are dimmed; `R` still reviews one. A label in
+`[board] badges` (`{ "Flagged" = "🚩" }`) shows as its badge before the title and is counted in the summary.
+
 FINDINGS shows what magnum's latest review concluded, also where its repository lets it only comment:
 the verdict (✗ blocking, ● comment, ✔ clean), the findings by priority (`P1 P2×3`) and the optional
 simplifications it suggested (`✂4`); the card spells out the decision, what was posted instead, the
@@ -386,8 +393,12 @@ counts and the earlier findings. A PR that was open before magnum began watching
 "not reviewed": a push, a review request for you or a posting identity, or `R` starts its first review.
 
 The views are `all`, `magnum` (what Magnum reviewed or is reviewing: not baseline or ineligible), `mine`
-(assigned to you or your review requested) and `ready` (approved, no changes requested, not a draft); the
-title bar names the current one and `magnum prs --view` picks the one the board opens in. The filter
+(assigned to you or your review requested) and `ready`: open and not a draft, approved on the current
+head (a stale approval does not count), no changes requested, magnum's latest review not blocking, and
+every required check passed (a skipped, missing or pending required check is not passed; a repository
+without required checks is not held back by its CI). `v` cycles the views and `O` the owners (all, then
+each user or organization with PRs); the title bar names both and `magnum prs --view` picks the view the
+board opens in. The filter
 matches words fuzzily against the reference, title, author, reviewers and labels, and takes
 `state:<state>` (a prefix is enough: `state:needs`), `assignee:<login>`, `author:<login>` (`@me` means
 you) and `review:requested` (your review is requested); a comma lists alternatives (`state:queued,reviewing`).

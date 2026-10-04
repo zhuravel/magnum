@@ -282,21 +282,21 @@ func TestLoadRejectsInvalidSchedulingKeys(t *testing.T) {
 	}
 }
 
-// The committed config.toml mirrors the built-in defaults for the keys that
-// decide when a round runs, so editing one side without the other changes
-// what users get from the file the repository ships.
+// The committed config.defaults.toml mirrors the Go defaults for the keys
+// that decide when a round runs, so editing one side without the other
+// changes what users get from the file the binary embeds.
 func TestCommittedConfigAgreesWithSchedulingDefaults(t *testing.T) {
 	root := repoRoot(t)
-	cfg, err := LoadWithOptions(paths.Layout{Home: root}, filepath.Join(root, "config.toml"), LoadOptions{NoOverlay: true})
+	cfg, err := LoadWithOptions(paths.Layout{Home: root}, filepath.Join(root, "config.defaults.toml"), LoadOptions{NoOverlay: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	got, want := cfg.Daemon, Defaults().Daemon
 	if got.MaxRoundsPerPRPerDay != want.MaxRoundsPerPRPerDay {
-		t.Errorf("config.toml max_rounds_per_pr_per_day = %d, the built-in default is %d", got.MaxRoundsPerPRPerDay, want.MaxRoundsPerPRPerDay)
+		t.Errorf("config.defaults.toml max_rounds_per_pr_per_day = %d, the built-in default is %d", got.MaxRoundsPerPRPerDay, want.MaxRoundsPerPRPerDay)
 	}
 	if got.RequestDebounce != want.RequestDebounce || got.RereviewMinLines != want.RereviewMinLines || got.RereviewMaxWait != want.RereviewMaxWait {
-		t.Errorf("config.toml request_debounce/rereview_min_lines/rereview_max_wait = %s/%d/%s, defaults %s/%d/%s",
+		t.Errorf("config.defaults.toml request_debounce/rereview_min_lines/rereview_max_wait = %s/%d/%s, defaults %s/%d/%s",
 			got.RequestDebounce, got.RereviewMinLines, got.RereviewMaxWait, want.RequestDebounce, want.RereviewMinLines, want.RereviewMaxWait)
 	}
 }

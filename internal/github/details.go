@@ -58,7 +58,45 @@ type PRDetails struct {
 	Deletions    int
 	ChangedFiles int
 	Commits      int
+	// CI is the head commit's checks.
+	CI CIRollup
 }
+
+// CIRollup is the status check rollup of a pull request's head commit.
+type CIRollup struct {
+	SHA   string // the commit; "" when GitHub listed none
+	State string // GitHub's rollup: SUCCESS | FAILURE | PENDING | ERROR | EXPECTED; "" when the commit has no checks
+	// Total is len(Checks) plus the checks GitHub did not return (past its
+	// page of 100).
+	Total int
+	// Complete is true when Checks is every check: GitHub returned a single
+	// page of at most 100.
+	Complete bool
+	// Checks is the latest run of each (Workflow, Name), in GitHub's order;
+	// never nil. A re-run, or a SKIPPED run left from a draft, supersedes or
+	// is superseded by the same job's other runs.
+	Checks []Check
+}
+
+// Check is one check run or commit status of a CIRollup.
+type Check struct {
+	Name  string // the check run's name or the status's context
+	State string // CheckPassed | CheckFailed | CheckPending | CheckSkipped
+	// Workflow is the GitHub Actions workflow whose run the check belongs
+	// to; "" for a commit status or another app's check run.
+	Workflow string
+	// At is when the check finished, else started (a check run), or was
+	// posted (a commit status); zero for a check run not started yet.
+	At time.Time
+}
+
+// Check.State values.
+const (
+	CheckPassed  = "passed"  // a check run's SUCCESS or NEUTRAL, a status's SUCCESS
+	CheckFailed  = "failed"  // FAILURE, TIMED_OUT, CANCELLED, ACTION_REQUIRED, STARTUP_FAILURE, STALE; a status's FAILURE or ERROR
+	CheckPending = "pending" // a check run not COMPLETED, a status PENDING or EXPECTED
+	CheckSkipped = "skipped" // SKIPPED
+)
 
 // Reviewer is a requested reviewer. For Type "Team", Login is the team slug.
 type Reviewer struct {
@@ -84,9 +122,13 @@ type PRState struct {
 	HeadRefOid string
 }
 
-// detailsFragment reads labels and latestReviews in one page of 100 (GitHub's
-// maximum); pageInfo and totalCount tell whether that page was everything
-// (PRDetails.LabelsComplete, PRDetails.LatestReviewsComplete).
+// detailsFragment reads labels, latestReviews and the head commit's checks in
+// one page of 100 (GitHub's maximum); pageInfo and totalCount tell whether
+// that page was everything (PRDetails.LabelsComplete,
+// PRDetails.LatestReviewsComplete, CIRollup.Complete). The checks add two
+// connections per pull request (3 points instead of 2 for a batch of 40);
+// with each check's workflow (three objects) a batch stays under 30k of
+// GitHub's 500k nodes.
 const detailsFragment = `fragment PRDetails on PullRequest {
   id number title url
   author { login __typename } authorAssociation
@@ -98,6 +140,7 @@ const detailsFragment = `fragment PRDetails on PullRequest {
   reviewRequests(first: 30) { nodes { requestedReviewer { __typename ... on User { login } ... on Bot { login } ... on Mannequin { login } ... on Team { slug } } } }
   latestReviews(first: 100) { totalCount pageInfo { hasNextPage } nodes { state submittedAt author { login __typename } commit { oid } } }
   timelineItems(itemTypes: [REVIEW_REQUESTED_EVENT], last: 10) { nodes { ... on ReviewRequestedEvent { createdAt actor { login } requestedReviewer { __typename ... on User { login } ... on Bot { login } ... on Mannequin { login } ... on Team { slug } } } } }
+  headCommit: commits(last: 1) { nodes { commit { oid statusCheckRollup { state contexts(first: 100) { totalCount pageInfo { hasNextPage } nodes { __typename ... on CheckRun { name status conclusion startedAt completedAt checkSuite { workflowRun { workflow { name } } } } ... on StatusContext { context state createdAt } } } } } } }
 }`
 
 const stateFragment = `fragment PRState on PullRequest { number state merged mergedAt closedAt headRefOid }`
@@ -177,6 +220,37 @@ type detailsJSON struct {
 		} `json:"nodes"`
 	} `json:"latestReviews"`
 	ReviewRequested reviewRequestsJSON `json:"timelineItems"`
+	HeadCommit      struct {
+		Nodes []struct {
+			Commit struct {
+				Oid               string `json:"oid"`
+				StatusCheckRollup *struct {
+					State    string `json:"state"`
+					Contexts struct {
+						connInfo
+						Nodes []struct {
+							Typename    string    `json:"__typename"`
+							Name        string    `json:"name"`        // CheckRun
+							Status      string    `json:"status"`      // CheckRun
+							Conclusion  string    `json:"conclusion"`  // CheckRun
+							StartedAt   time.Time `json:"startedAt"`   // CheckRun
+							CompletedAt time.Time `json:"completedAt"` // CheckRun
+							CheckSuite  *struct {
+								WorkflowRun *struct {
+									Workflow struct {
+										Name string `json:"name"`
+									} `json:"workflow"`
+								} `json:"workflowRun"`
+							} `json:"checkSuite"` // CheckRun
+							Context   string    `json:"context"`   // StatusContext
+							State     string    `json:"state"`     // StatusContext
+							CreatedAt time.Time `json:"createdAt"` // StatusContext
+						} `json:"nodes"`
+					} `json:"contexts"`
+				} `json:"statusCheckRollup"`
+			} `json:"commit"`
+		} `json:"nodes"`
+	} `json:"headCommit"`
 }
 
 func (d detailsJSON) details() PRDetails {
@@ -241,7 +315,93 @@ func (d detailsJSON) details() PRDetails {
 		out.LatestReviews = append(out.LatestReviews, lr)
 	}
 	out.ReviewRequestEvents = d.ReviewRequested.events()
+	out.CI = d.ci()
 	return out
+}
+
+// ci is the rollup of the head commit (the last of commits(last: 1)).
+func (d detailsJSON) ci() CIRollup {
+	out := CIRollup{Complete: true, Checks: []Check{}}
+	nodes := d.HeadCommit.Nodes
+	if len(nodes) == 0 {
+		return out
+	}
+	c := nodes[len(nodes)-1].Commit
+	out.SHA = c.Oid
+	r := c.StatusCheckRollup
+	if r == nil {
+		return out
+	}
+	out.State = r.State
+	out.Complete = r.Contexts.complete(len(r.Contexts.Nodes))
+	type key struct{ workflow, name string }
+	at := map[key]int{} // index in out.Checks
+	for _, n := range r.Contexts.Nodes {
+		var c Check
+		switch n.Typename {
+		case "CheckRun":
+			c = Check{Name: n.Name, State: checkRunState(n.Status, n.Conclusion), At: n.CompletedAt}
+			if c.At.IsZero() {
+				c.At = n.StartedAt
+			}
+			if n.CheckSuite != nil && n.CheckSuite.WorkflowRun != nil {
+				c.Workflow = n.CheckSuite.WorkflowRun.Workflow.Name
+			}
+		case "StatusContext":
+			c = Check{Name: n.Context, State: statusState(n.State), At: n.CreatedAt}
+		default:
+			continue
+		}
+		k := key{c.Workflow, c.Name}
+		if i, ok := at[k]; !ok {
+			at[k] = len(out.Checks)
+			out.Checks = append(out.Checks, c)
+		} else if !olderRun(c, out.Checks[i]) {
+			out.Checks[i] = c
+		}
+	}
+	out.Total = len(out.Checks) + max(0, r.Contexts.TotalCount-len(r.Contexts.Nodes))
+	return out
+}
+
+// olderRun reports whether check a ran before b, two runs of the same job: a
+// run not started yet (zero At) is the newest, and of two equal times the
+// later listed wins.
+func olderRun(a, b Check) bool {
+	switch {
+	case a.At.IsZero():
+		return false
+	case b.At.IsZero():
+		return true
+	}
+	return a.At.Before(b.At)
+}
+
+// checkRunState normalizes a check run: not COMPLETED is pending; a
+// conclusion that is neither a pass nor SKIPPED (including one GitHub adds
+// later) is a failure.
+func checkRunState(status, conclusion string) string {
+	if status != "COMPLETED" {
+		return CheckPending
+	}
+	switch conclusion {
+	case "SUCCESS", "NEUTRAL":
+		return CheckPassed
+	case "SKIPPED":
+		return CheckSkipped
+	}
+	return CheckFailed
+}
+
+// statusState normalizes a commit status (StatusContext.state).
+func statusState(state string) string {
+	switch state {
+	case "SUCCESS":
+		return CheckPassed
+	case "PENDING", "EXPECTED":
+		return CheckPending
+	}
+	return CheckFailed
 }
 
 // Details fetches the full view of the given pull requests of owner/repo,

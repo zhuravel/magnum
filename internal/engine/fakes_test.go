@@ -68,6 +68,12 @@ type prSpec struct {
 	// labelsTruncated and reviewsTruncated make Details report a cut-off
 	// label or latestReviews page (LabelsComplete, LatestReviewsComplete).
 	labelsTruncated, reviewsTruncated bool
+	// ci is the head's check rollup ("" = no checks) the radar and Details
+	// report, checks the Details' checks; ciUnknown makes the radar unable to
+	// read the rollup (a fork's PR).
+	ci        string
+	checks    []github.Check
+	ciUnknown bool
 }
 
 type fakeGH struct {
@@ -86,7 +92,22 @@ type fakeGH struct {
 	created    []string                // CreateReview calls: "<event>@<sha>:<body>"
 	// files answers CompareFiles by "base...head" (absent = ErrNotFound).
 	files map[string][]github.FileDelta
-	calls []string
+	// required answers RequiredChecks by full name (absent = GitHub does not
+	// say); requiredErr fails it.
+	required    map[string][]string
+	requiredErr error
+	calls       []string
+}
+
+func (g *fakeGH) RequiredChecks(_ context.Context, owner, repo, branch string) ([]string, bool, error) {
+	g.record(fmt.Sprintf("required:%s/%s@%s", owner, repo, branch))
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.requiredErr != nil {
+		return nil, false, g.requiredErr
+	}
+	checks, ok := g.required[owner+"/"+repo]
+	return slices.Clone(checks), ok, nil
 }
 
 func (g *fakeGH) CompareFiles(_ context.Context, owner, repo, base, head string) ([]github.FileDelta, error) {
@@ -174,10 +195,10 @@ func (g *fakeGH) Radar(_ context.Context, org string) ([]github.RepoRadar, githu
 		if !strings.HasPrefix(full, org+"/") {
 			continue
 		}
-		rr := github.RepoRadar{NodeID: "R_" + full, NameWithOwner: full}
+		rr := github.RepoRadar{NodeID: "R_" + full, NameWithOwner: full, DefaultBranch: "main"}
 		for _, p := range g.repos[full] {
 			rr.PRs = append(rr.PRs, github.PRRadar{NodeID: fmt.Sprintf("PR_%s_%d", full, p.n), Number: p.n,
-				IsDraft: p.draft, UpdatedAt: p.updated, HeadRefOid: p.head, BaseRefName: "master"})
+				IsDraft: p.draft, UpdatedAt: p.updated, HeadRefOid: p.head, BaseRefName: "master", CIState: p.ci, CIKnown: !p.ciUnknown})
 		}
 		out = append(out, rr)
 	}
@@ -215,7 +236,8 @@ func (g *fakeGH) Details(_ context.Context, owner, repo string, numbers []int) (
 				HeadRefName: "feature", BaseRefName: "master", State: "OPEN", IsDraft: p.draft,
 				HeadRefOid: p.head, BaseRefOid: fakeBaseOid, Assignees: append([]string{}, p.assignees...),
 				ReviewRequests: []github.Reviewer{}, LatestReviews: append([]github.LatestReview{}, p.reviews...),
-				Additions: 10 * n, Deletions: n, ChangedFiles: n, Commits: 1}
+				Additions: 10 * n, Deletions: n, ChangedFiles: n, Commits: 1,
+				CI: github.CIRollup{SHA: p.head, State: p.ci, Total: len(p.checks), Complete: true, Checks: append([]github.Check{}, p.checks...)}}
 			if p.request {
 				d.ReviewRequests = []github.Reviewer{{Type: "User", Login: "zhuravel"}, {Type: "Team", Login: "engineers"}}
 			}

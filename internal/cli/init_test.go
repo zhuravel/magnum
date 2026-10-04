@@ -25,7 +25,7 @@ func newInitTest(t *testing.T, ghLogin string) *initTest {
 	t.Helper()
 	t.Setenv("MAGNUM_CONFIG", "")
 	it := &initTest{home: t.TempDir(), fake: &execx.Fake{}}
-	base, err := os.ReadFile(filepath.Join("..", "..", "config.toml"))
+	base, err := os.ReadFile(filepath.Join("..", "..", "config.defaults.toml"))
 	if err != nil {
 		t.Fatal(err)
 	}

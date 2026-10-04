@@ -165,6 +165,13 @@ func (e *Engine) pollRepo(ctx context.Context, w config.Watch, gh GitHub, rr git
 		byNode[p.NodeID] = p
 	}
 
+	if len(rr.PRs) > 0 {
+		branch := rr.DefaultBranch
+		if branch == "" {
+			branch = repo.DefaultBranch
+		}
+		e.refreshRequiredChecks(ctx, gh, repo, branch, firstSync, now)
+	}
 	details, needed := e.fetchDetails(ctx, gh, full, rr.PRs, byNode)
 	errs, inRadar := e.applyRadarPRs(ctx, w, gh, repo, rr.PRs, byNode, details, needed, firstSync, now)
 
@@ -192,6 +199,9 @@ func (e *Engine) pollRepo(ctx context.Context, w config.Watch, gh GitHub, rr git
 // fetchDetails fetches the Details of the radar PRs that are new or changed
 // (or never had them) in one call; needed lists every PR asked for. A
 // failure is reported once per distinct error (the next poll asks again).
+// A finished CI run does not move a PR's updatedAt: its checks are fetched
+// again when the radar's rollup differs from the stored checks' or those
+// are not the head's.
 func (e *Engine) fetchDetails(ctx context.Context, gh GitHub, full string, prs []github.PRRadar, byNode map[string]store.PR) (map[int]github.PRDetails, map[int]bool) {
 	var need []int
 	needed := map[int]bool{}
@@ -200,8 +210,10 @@ func (e *Engine) fetchDetails(ctx context.Context, gh GitHub, full string, prs [
 		// DetailsAt == nil: a PR recorded before the board fields existed
 		// gets its Details (assignees, reviewers, size) once.
 		// AuthorAssociation == nil: one fetch fills it (skip_departed_authors).
+		// CI == nil: likewise for its checks.
 		if !ok || cur.HeadSHA != p.HeadRefOid || cur.IsDraft != p.IsDraft || cur.Title == nil || cur.DetailsAt == nil ||
 			cur.AuthorAssociation == nil ||
+			cur.CI == nil || cur.CI.SHA != p.HeadRefOid || (p.CIKnown && cur.CI.State != p.CIState) ||
 			cur.GHState != store.GHOpen || cur.GHUpdatedAt == nil || !cur.GHUpdatedAt.Equal(p.UpdatedAt) {
 			need = append(need, p.Number)
 			needed[p.Number] = true
@@ -249,6 +261,9 @@ func (e *Engine) applyRadarPRs(ctx context.Context, w config.Watch, gh GitHub, r
 		}
 		if !p.UpdatedAt.IsZero() && (hasD || !needed[p.Number]) {
 			in.GHUpdatedAt = store.Ptr(p.UpdatedAt) // else: details missed, fetch them next poll
+		}
+		if p.CIKnown {
+			in.CIState = store.Ptr(p.CIState) // fillDetails replaces it with the Details' (newer) one
 		}
 		if exists {
 			in.URL = cur.URL
@@ -405,6 +420,8 @@ func fillDetails(in *store.GitHubPR, d github.PRDetails, logins []string, now ti
 	in.AuthorType = store.Ptr(d.AuthorType)
 	in.AuthorAssociation = store.Ptr(d.AuthorAssociation) // "" = fetched but unknown: never fetched again for it
 	in.HeadRef = store.Ptr(d.HeadRefName)
+	in.CI = ciStatus(d)
+	in.CIState = store.Ptr(in.CI.State)
 	if d.BaseRefName != "" {
 		in.BaseRef = store.Ptr(d.BaseRefName)
 	}
@@ -426,6 +443,20 @@ func fillDetails(in *store.GitHubPR, d github.PRDetails, logins []string, now ti
 		}
 	}
 	in.ReviewRequested = store.Ptr(req)
+}
+
+// ciStatus is the registry's view of the Details' head checks.
+func ciStatus(d github.PRDetails) *store.CIStatus {
+	ci := &store.CIStatus{SHA: d.CI.SHA, State: d.CI.State, Total: d.CI.Total, Complete: d.CI.Complete,
+		Checks: make([]store.CheckResult, 0, len(d.CI.Checks))}
+	if ci.SHA == "" {
+		ci.SHA = d.HeadRefOid // GitHub listed no commit: the head has no checks to wait for
+	}
+	for _, c := range d.CI.Checks {
+		ci.Checks = append(ci.Checks, store.CheckResult{Name: c.Name, State: c.State, Workflow: c.Workflow, At: c.At})
+	}
+	ci.Tally()
+	return ci
 }
 
 // prFromInput builds the PR row a new PR is about to get (for Classify).

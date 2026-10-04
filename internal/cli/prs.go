@@ -74,6 +74,7 @@ type prsFlags struct {
 // prsOptions are what the board and the printed rows show.
 type prsOptions struct {
 	Repo  string
+	Owner string // the board's owner scope (O), kept across a tab round-trip; "" = all
 	View  tui.PRView
 	Sort  tui.PRSort
 	Desc  bool
@@ -186,6 +187,7 @@ func runInspScreens(ctx context.Context, c *Context, d statusDeps, so statusOpti
 		o := prsBoardOptions(d.Config, po)
 		o.NoMouse, o.MouseToggled, o.Widths = !mouse, toggled, widths
 		o.ViewChanged = func(v tui.PRView) { po.View = v }
+		o.OwnerChanged = func(owner string) { po.Owner = owner }
 		return tuiPRBoard(ctx, src, acts, o)
 	}
 	return runScreens(ctx, first, dashboard, board)
@@ -194,7 +196,7 @@ func runInspScreens(ctx context.Context, c *Context, d statusDeps, so statusOpti
 // prsBoardOptions are the board's options for o.
 func prsBoardOptions(cfg *config.Config, o prsOptions) tui.PRBoardOptions {
 	return tui.PRBoardOptions{SelfLogins: prsSelfLogins(cfg), DefaultSort: o.Sort, DefaultView: o.View, Repo: o.Repo, Now: inspNow,
-		Judge: rolesJudgeName(cfg), Icons: screenIcons(cfg)}
+		Judge: rolesJudgeName(cfg), Icons: screenIcons(cfg), DefaultRepo: defaultRepo(cfg), DefaultOwner: o.Owner}
 }
 
 // screenIcons is the screens' symbols, [terminal] icons: the screens read
@@ -221,12 +223,26 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 			return nil, err
 		}
 		notes := map[string]bool{}
+		required := map[string]store.RequiredChecks{} // per repository, for this load
 		out := make([]tui.PRBoardRow, 0, len(rows))
 		ids := make([]int64, 0, len(rows))
 		for _, r := range rows {
 			ids = append(ids, r.PRID)
 			row := prsBoardRow(r, self)
 			full := r.Owner + "/" + r.Name
+			req, ok := required[full]
+			if !ok {
+				var configured []string
+				if cfg != nil {
+					configured = cfg.RequiredChecks(full)
+				}
+				req, _ = st.RequiredChecks(ctx, full, configured)
+				required[full] = req
+			}
+			row.CI = prsCI(r.CI, r.HeadSHA, req)
+			if cfg != nil {
+				row.Badges = prsBadges(r.Labels, cfg.Board.Badges)
+			}
 			has, seen := notes[full]
 			if !seen {
 				has = notesExist(layout, r.Owner, r.Name)
@@ -364,7 +380,7 @@ func prsBoardRow(b store.BoardRow, self []string) tui.PRBoardRow {
 		Labels: b.Labels, Assignees: b.Assignees,
 		State: prsRowState(b), GHState: b.GHState, UpdatedAt: b.UpdatedAt, HeadSHA: b.HeadSHA,
 		Slot: b.Slot, Pinned: b.Pinned, Muted: b.Muted, NextEligibleAt: b.NextEligibleAt,
-		LastError: b.LastError, RoundsToday: b.RoundsToday,
+		LastError: b.LastError, RoundsToday: b.RoundsToday, SkipReason: b.SkipReason,
 	}
 	if r.Ref == "" && b.Owner != "" && b.Name != "" && b.Number > 0 {
 		r.Ref = fmt.Sprintf("%s/%s#%d", b.Owner, b.Name, b.Number)
@@ -456,7 +472,7 @@ func prsRender(w io.Writer, rows []tui.PRBoardRow, defaultRepo string, now time.
 		return
 	}
 	tw := inspTable(w)
-	fmt.Fprintln(tw, "REF\tTITLE\tAUTHOR\tASSIGNEE\tUPDATED\tSTATE\tLAST REVIEW\tFINDINGS\tSINCE\tREVIEWERS")
+	fmt.Fprintln(tw, "REF\tTITLE\tAUTHOR\tASSIGNEE\tUPDATED\tSTATE\tLAST REVIEW\tFINDINGS\tCI\tSINCE\tREVIEWERS")
 	for _, r := range rows {
 		cells := []string{
 			prsRefLabel(r, defaultRepo),
@@ -467,6 +483,7 @@ func prsRender(w io.Writer, rows []tui.PRBoardRow, defaultRepo string, now time.
 			prsStateCell(r),
 			prsLastReviewCell(r.LastReview, now),
 			prsFindingsCell(r.Findings),
+			prsCICell(r.CI),
 			prsSinceCell(r.SinceReview),
 			prsReviewersCell(r.Reviewers),
 		}
@@ -500,6 +517,38 @@ func prsStateCell(r tui.PRBoardRow) string {
 		if f.on {
 			s += "," + f.name
 		}
+	}
+	return s
+}
+
+// prsCICell is the head's CI: the required checks when the repository has
+// some ("Completion:missing ci / *:passed"), else the counts ("passed
+// 65/65", "failed 2/65", "pending 40/65"); "-" when unknown.
+func prsCICell(ci *tui.CIInfo) string {
+	if ci == nil {
+		return "-"
+	}
+	var s string
+	if len(ci.Required) > 0 {
+		parts := make([]string, len(ci.Required))
+		for i, r := range ci.Required {
+			parts[i] = r.Name + ":" + r.State
+		}
+		s = strings.Join(parts, " ")
+	} else {
+		switch ci.State {
+		case "failed":
+			s = fmt.Sprintf("failed %d/%d", ci.Failed, ci.Total)
+		case "pending":
+			s = fmt.Sprintf("pending %d/%d", ci.Total-ci.Pending, ci.Total)
+		case "passed":
+			s = fmt.Sprintf("passed %d/%d", ci.Passed, ci.Total)
+		default:
+			s = ci.State
+		}
+	}
+	if ci.Stale {
+		s += " (older commit)"
 	}
 	return s
 }

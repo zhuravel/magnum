@@ -125,8 +125,8 @@ func TestRadarQueryIsScalarOnly(t *testing.T) {
 		"ownerAffiliations: OWNER",
 		"isArchived: false",
 		"pullRequests(states: OPEN, first: $prFirst)",
-		"nodes { id number isDraft updatedAt headRefOid baseRefName }",
-		"id nameWithOwner pushedAt",
+		"nodes { id number isDraft updatedAt headRefOid baseRefName isCrossRepository headRef { target { oid ... on Commit { statusCheckRollup { state } } } } }",
+		"id nameWithOwner pushedAt defaultBranchRef { name }",
 		"pageInfo { hasNextPage endCursor }",
 		"rateLimit { limit cost remaining used resetAt }",
 	} {
@@ -138,6 +138,55 @@ func TestRadarQueryIsScalarOnly(t *testing.T) {
 		if strings.Contains(q, banned) {
 			t.Errorf("radar query must stay scalar-only, found %q", banned)
 		}
+	}
+	// A connection under pullRequests is priced once per pull request
+	// (commits(last: 1): 101 points a page instead of 1).
+	for _, banned := range []string{"commits", "contexts", "last:"} {
+		if strings.Contains(q, banned) {
+			t.Errorf("radar query must not open a connection per pull request, found %q", banned)
+		}
+	}
+}
+
+// TestRadarCIRollup: the head branch's rollup is the pull request's CI only
+// for a branch of the repository whose tip is the head. The repository's
+// default branch comes along.
+func TestRadarCIRollup(t *testing.T) {
+	node := func(n int, cross bool, headRef string) string {
+		return fmt.Sprintf(`{"id":"PR_%d","number":%d,"isDraft":false,"updatedAt":"2026-10-04T09:00:00Z","headRefOid":"h%d","baseRefName":"master","isCrossRepository":%v,"headRef":%s}`,
+			n, n, n, cross, headRef)
+	}
+	body := compact(t, `{"data":{"rateLimit":{"limit":5000,"cost":1,"remaining":4999,"used":1,"resetAt":"2026-10-04T10:00:00Z"},
+		"repositoryOwner":{"repositories":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"id":"R_1","nameWithOwner":"talkable/app","pushedAt":"2026-10-04T09:00:00Z","defaultBranchRef":{"name":"main"},
+		"pullRequests":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[`+strings.Join([]string{
+		node(1, false, `{"target":{"oid":"h1","statusCheckRollup":{"state":"FAILURE"}}}`),
+		node(2, false, `{"target":{"oid":"h2","statusCheckRollup":null}}`),
+		node(3, true, `{"target":{"oid":"h3","statusCheckRollup":{"state":"SUCCESS"}}}`),
+		node(4, false, `{"target":{"oid":"newer","statusCheckRollup":{"state":"PENDING"}}}`),
+		node(5, false, `null`),
+	}, ",")+`]}}]}}}}`)
+	f := &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"gh", "api", "graphql"}, Result: execx.Result{Stdout: body}}}}
+	repos, _, err := (&Client{Run: f}).Radar(context.Background(), "talkable")
+	if err != nil || len(repos) != 1 || repos[0].DefaultBranch != "main" {
+		t.Fatalf("repos = %+v, %v", repos, err)
+	}
+	type ci struct {
+		state string
+		known bool
+	}
+	var got []ci
+	for _, p := range repos[0].PRs {
+		got = append(got, ci{p.CIState, p.CIKnown})
+	}
+	want := []ci{
+		{"FAILURE", true}, // the branch's tip is the head
+		{"", true},        // no checks
+		{"", false},       // a fork's branch carries the fork's checks
+		{"", false},       // the branch moved past the head the radar read
+		{"", false},       // the branch is gone
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("CI = %+v, want %+v", got, want)
 	}
 }
 

@@ -15,8 +15,8 @@ import (
 
 // RenderPRBoard renders the board once, for output that is not
 // interactive and for tests: the title bar, the state summary, the column
-// headings and every row (in opts.DefaultSort order, largest first),
-// fitted to width (0 = no limit). It uses the dark palette and no cursor;
+// headings and every row of opts.DefaultView and opts.DefaultOwner (in
+// opts.DefaultSort order, largest first), fitted to width (0 = no limit). It uses the dark palette and no cursor;
 // ages count from opts.Now.
 func RenderPRBoard(rows []PRBoardRow, width int, opts PRBoardOptions) string {
 	if opts.Now == nil {
@@ -34,6 +34,12 @@ func RenderPRBoard(rows []PRBoardRow, width int, opts PRBoardOptions) string {
 		view = ViewAll
 	}
 	scoped := scopeRows(rows, opts.Repo)
+	owner := strings.TrimSpace(opts.DefaultOwner)
+	if owned := ownedBy(scoped, owner); len(owned) > 0 {
+		scoped = owned
+	} else {
+		owner = "" // an owner without PRs shows every owner, as on the live board
+	}
 	st := defaultStyles
 	p := newPRBPainter(st, newPRBPalette(st), newGlyphs(opts.Icons), opts.Now(), selfSet(opts.SelfLogins), scoped, by, true)
 	p.judge = opts.Judge
@@ -43,7 +49,7 @@ func RenderPRBoard(rows []PRBoardRow, width int, opts PRBoardOptions) string {
 	if w <= 0 {
 		w = lay.total()
 	}
-	lines := []string{p.titleLine(w, opts.Title, opts.Repo, view, len(sorted), "", len(sorted), ""), p.summaryLine(w), p.headerLine(lay, w), p.rule(w, 0, false)}
+	lines := []string{p.titleLine(w, opts.Title, opts.Repo, owner, view, len(sorted), "", len(sorted), ""), p.summaryLine(w), p.headerLine(lay, w), p.rule(w, 0, false)}
 	for _, r := range sorted {
 		lines = append(lines, p.rowLine(r, lay, w, false))
 	}
@@ -105,6 +111,8 @@ var prbStateLabels = map[string]string{
 	"rereview_pending": "re-review", "needs_attention": "attention",
 	// baseline: open before magnum began watching the repository (the card says what starts a review)
 	"baseline": "not reviewed",
+	// ineligible: the configuration skips it (SkipReason says why)
+	"ineligible": "skipped",
 }
 
 func stateLabel(state string) string {
@@ -171,7 +179,11 @@ func (c cell) width() int {
 }
 
 // fit cuts c to w cells, ending in an ellipsis when it had to cut.
-func (c cell) fit(w int) cell {
+func (c cell) fit(w int) cell { return c.fitWhole(w, 0) }
+
+// fitWhole is fit that never cuts the first whole runs: one that does not
+// fit is left out, the ellipsis taking its place.
+func (c cell) fitWhole(w, whole int) cell {
 	if w <= 0 {
 		return nil
 	}
@@ -181,15 +193,17 @@ func (c cell) fit(w int) cell {
 	room := w - 1
 	var out cell
 	var last lipgloss.Style
-	for _, s := range c {
+	for i, s := range c {
 		last = s.st
 		if sw := ansi.StringWidth(s.text); sw <= room {
 			out = append(out, s)
 			room -= sw
 			continue
 		}
-		if cut := strings.TrimRight(ansi.Truncate(s.text, room, ""), " "); cut != "" {
-			out = append(out, seg{cut, s.st})
+		if i >= whole {
+			if cut := strings.TrimRight(ansi.Truncate(s.text, room, ""), " "); cut != "" {
+				out = append(out, seg{cut, s.st})
+			}
 		}
 		break
 	}
@@ -326,20 +340,21 @@ const (
 	colState
 	colLastReview
 	colFindings
+	colCI
 	colSince
 	colReviewers
 	prbNumCols
 )
 
-var prbColTitles = [prbNumCols]string{"REPO", "#", "TITLE", "AUTHOR", "ASSIGNEE", "UPDATED", "STATE", "LAST REVIEW", "FINDINGS", "SINCE REVIEW", "REVIEWERS"}
+var prbColTitles = [prbNumCols]string{"REPO", "#", "TITLE", "AUTHOR", "ASSIGNEE", "UPDATED", "STATE", "LAST REVIEW", "FINDINGS", "CI", "SINCE REVIEW", "REVIEWERS"}
 
 var (
 	// prbDropOrder is which columns give way, in turn, on a narrow screen.
-	prbDropOrder = []prbCol{colAssignee, colSince, colAuthor, colUpdated, colLastReview, colReviewers, colFindings}
+	prbDropOrder = []prbCol{colAssignee, colSince, colAuthor, colUpdated, colCI, colLastReview, colReviewers, colFindings}
 	// prbFlexMin is the narrowest the flexible columns get; the others
 	// keep their content's width (up to prbCap).
 	prbFlexMin = map[prbCol]int{colTitle: 18, colReviewers: 12}
-	prbCap     = map[prbCol]int{colRef: 28, colNum: 7, colAuthor: 14, colAssignee: 14, colLastReview: 22, colFindings: 22, colReviewers: 44}
+	prbCap     = map[prbCol]int{colRef: 28, colNum: 7, colAuthor: 14, colAssignee: 14, colLastReview: 22, colFindings: 22, colCI: 24, colReviewers: 44}
 	// prbRichFindingsCap is the findings' cap when priorities carry marks
 	// (two cells each) and the verdict is an emoji.
 	prbRichFindingsCap = 32
@@ -438,6 +453,7 @@ func (p prbPainter) cells(r PRBoardRow, since [3]int) prbCells {
 	cs.c[colState] = p.stateWaitCell(r)
 	cs.c[colLastReview] = p.lastReviewCell(r.LastReview)
 	cs.c[colFindings] = p.findingsCell(r.Findings)
+	cs.c[colCI] = p.ciCell(r.CI)
 	cs.c[colSince] = p.sinceCell(r.SinceReview, since)
 	cs.revs = p.reviewerChips(r.Reviewers)
 	return cs
@@ -468,8 +484,9 @@ func (p prbPainter) numCell(r PRBoardRow) cell {
 	return cell{{"#" + strconv.Itoa(n), p.pal.num}}
 }
 
-// titleCell is the title after the row's tags: 📌 pinned, ! failed, draft,
-// muted. The title is the last run (the cursor row bolds it).
+// titleCell is the title after the row's tags: 📌 pinned, ! failed, the
+// label badges, draft, muted. The title is the last run (the cursor row
+// bolds it; titleFit cuts only it).
 func (p prbPainter) titleCell(r PRBoardRow) cell {
 	var c cell
 	if r.Pinned {
@@ -477,6 +494,9 @@ func (p prbPainter) titleCell(r PRBoardRow) cell {
 	}
 	if r.LastError != "" {
 		c = append(c, seg{p.g.errMark + " ", p.st.Err})
+	}
+	for _, b := range r.Badges {
+		c = append(c, seg{b.Text + " ", lipgloss.Style{}})
 	}
 	if r.Draft {
 		c = append(c, seg{"draft", p.pal.tag}, seg{" ", lipgloss.Style{}})
@@ -548,13 +568,41 @@ func (p prbPainter) ageCell(t time.Time) cell {
 }
 
 // stateWaitCell is the state pill followed, for a PR waiting for a round,
-// by what holds it and until when, dimmed ("quiet → 14:09").
+// by what holds it and until when, dimmed ("quiet → 14:09"), and for a
+// skipped PR by why in a word ("· bot").
 func (p prbPainter) stateWaitCell(r PRBoardRow) cell {
 	c := p.stateCell(r.State)
 	if _, rest, ok := strings.Cut(r.Wait, " · "); ok && rest != "" {
 		c = append(c, seg{" " + rest, p.st.Dim})
 	}
+	if why := skipWord(r); why != "" {
+		c = append(c, seg{"· " + why, p.st.Dim})
+	}
 	return c
+}
+
+// skipped reports whether the configuration skips r (state ineligible).
+func skipped(r PRBoardRow) bool { return normState(r.State) == "ineligible" }
+
+// skipWord is why the configuration skips r in a word or two, from its
+// SkipReason: bot, author, label, draft, fork or left org; "" when the
+// reason says none of them.
+func skipWord(r PRBoardRow) string {
+	if !skipped(r) {
+		return ""
+	}
+	why := strings.ToLower(r.SkipReason)
+	for _, w := range []struct{ word, short string }{
+		// The setting names come first: an author "dependabot" in
+		// skip_authors is skipped as an author, a label "draft" as a label.
+		{"departed", "left org"}, {" left ", "left org"}, {"skip_authors", "author"}, {"skip_labels", "label"},
+		{"bot", "bot"}, {"draft", "draft"}, {"fork", "fork"}, {"label", "label"}, {"author", "author"},
+	} {
+		if strings.Contains(why, w.word) {
+			return w.short
+		}
+	}
+	return ""
 }
 
 func (p prbPainter) stateCell(state string) cell {
@@ -614,6 +662,94 @@ func (p prbPainter) findingsVerdict(v string) (string, lipgloss.Style) {
 // priorityStyle is the color of findings of priority P<i>.
 func (p prbPainter) priorityStyle(i int) lipgloss.Style {
 	return [4]lipgloss.Style{p.pal.red, p.pal.red, p.pal.yellow, p.st.Dim}[min(max(i, 0), 3)]
+}
+
+// ciCell is the head's CI: with required checks, the worst one's state
+// and name ("✗ Completion +1": one more required check; one that did not
+// run or was skipped says so: "– Completion not run", "⊘ Completion
+// skipped"); otherwise the counts ("✓ 65/65", "✗ 2 failed", "◌ 40/65"
+// done while pending, "– not run" when every check skipped). ⟳ marks a CI
+// of an older commit than the head.
+func (p prbPainter) ciCell(ci *CIInfo) cell {
+	if ci == nil {
+		return p.dash()
+	}
+	var c cell
+	if len(ci.Required) > 0 {
+		worst := slices.MinFunc(ci.Required, func(a, b CheckState) int { return cmp.Compare(ciRank(a.State), ciRank(b.State)) })
+		l := p.ciLook(worst.State)
+		c = cell{{marked(l.glyph, ""), l.glyphSt}, {orDash(worst.Name), l.textSt}}
+		if s := normCI(worst.State); s == "missing" || s == "skipped" {
+			c = append(c, seg{" " + l.word, l.textSt})
+		}
+		if n := len(ci.Required) - 1; n > 0 {
+			c = append(c, seg{" +" + strconv.Itoa(n), p.st.Dim})
+		}
+	} else {
+		l := p.ciLook(ci.State)
+		switch normCI(ci.State) {
+		case "passed", "pending":
+			done := l.word
+			if ci.Total > 0 {
+				done = fmt.Sprintf("%d/%d", ci.Total-ci.Pending, ci.Total)
+			}
+			c = cell{{marked(l.glyph, done), l.textSt}}
+		case "failed":
+			n := l.word
+			if ci.Failed > 0 {
+				n = strconv.Itoa(ci.Failed) + " failed"
+			}
+			c = cell{{marked(l.glyph, n), l.textSt}}
+		case "skipped":
+			c = cell{{marked(p.g.ciMissing, "not run"), p.st.Dim}}
+		default:
+			c = p.dash()
+		}
+	}
+	if ci.Stale {
+		c = append(c, seg{" " + p.g.stale, p.pal.yellow})
+	}
+	return c
+}
+
+// normCI folds a check state's case and spaces.
+func normCI(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
+
+// ciRank orders check states worst first: failed, not run, skipped,
+// pending, passed.
+func ciRank(state string) int {
+	if i := slices.Index([]string{"failed", "missing", "skipped", "pending", "passed"}, normCI(state)); i >= 0 {
+		return i
+	}
+	return 5
+}
+
+// ciStyle is how a check state draws: its glyph, the glyph's and the
+// text's colors and the word for it.
+type ciStyle struct {
+	glyph           string
+	glyphSt, textSt lipgloss.Style
+	word            string
+}
+
+// ciLook is a check state's looks: failed red, pending and skipped
+// yellow, not run (missing: it never ran on the head) a yellow mark on
+// dim text, passed green; no glyph for anything else.
+func (p prbPainter) ciLook(state string) ciStyle {
+	switch s := normCI(state); s {
+	case "failed":
+		return ciStyle{p.g.ciFail, p.pal.red, p.pal.red, s}
+	case "pending":
+		return ciStyle{p.g.ciPending, p.pal.yellow, p.pal.yellow, s}
+	case "skipped":
+		return ciStyle{p.g.ciSkip, p.pal.yellow, p.pal.yellow, s}
+	case "missing":
+		return ciStyle{p.g.ciMissing, p.pal.yellow, p.st.Dim, "not run"}
+	case "passed":
+		return ciStyle{p.g.ciPass, p.pal.green, p.pal.green, s}
+	default:
+		return ciStyle{"", p.st.Dim, p.st.Dim, s}
+	}
 }
 
 // verdict is a verdict's glyph, its short and long names and its color.
@@ -819,7 +955,7 @@ func (l prbLayout) total() int {
 type prbWidths [prbNumCols]int
 
 // prbColNames name the columns for ColumnWidths.
-var prbColNames = [prbNumCols]string{"repo", "num", "title", "author", "assignee", "updated", "state", "last_review", "findings", "since_review", "reviewers"}
+var prbColNames = [prbNumCols]string{"repo", "num", "title", "author", "assignee", "updated", "state", "last_review", "findings", "ci", "since_review", "reviewers"}
 
 // prbWidthsFrom reads kept widths by column name.
 func prbWidthsFrom(m map[string]int) prbWidths {
@@ -909,7 +1045,7 @@ func (p prbPainter) fit(n prbNatural, width int, over prbWidths) prbLayout {
 		}
 		return t
 	}
-	cols := []prbCol{colRef, colNum, colTitle, colAuthor, colAssignee, colUpdated, colState, colLastReview, colFindings, colSince, colReviewers}
+	cols := []prbCol{colRef, colNum, colTitle, colAuthor, colAssignee, colUpdated, colState, colLastReview, colFindings, colCI, colSince, colReviewers}
 	for _, d := range prbDropOrder {
 		if width <= 0 || need(cols) <= width {
 			break
@@ -1015,6 +1151,8 @@ func (p prbPainter) rowLine(r PRBoardRow, lay prbLayout, width int, selected boo
 		switch c {
 		case colReviewers:
 			cl = p.fitChips(cs.revs, w)
+		case colTitle:
+			cl = cs.c[c].fitWhole(w, len(cs.c[c])-1) // a badge or a tag shows whole or not at all
 		case colRef:
 			cl = cs.c[c].fitLeft(w) // keep the distinctive end of a long repository name
 		default:
@@ -1047,7 +1185,7 @@ func (p prbPainter) rowLine(r PRBoardRow, lay prbLayout, width int, selected boo
 		}
 		line = line.fit(width)
 	}
-	return line.render(p.overlay(selected, r.Muted))
+	return line.render(p.overlay(selected, r.Muted || skipped(r)))
 }
 
 // rule is a full-width separator; n > 0 marks "▲ n more" (up) or "▼ n
@@ -1084,9 +1222,10 @@ func (p prbPainter) footerRule(width int, msg string, below int) string {
 }
 
 // titleLine is the title bar: the title, the repository scope, the open
-// count, the view (with inView, its row count), the sort and the filter,
-// with right (the refresh time) on the right.
-func (p prbPainter) titleLine(width int, title, repo string, view PRView, inView int, filter string, shown int, right string) string {
+// count, the owner scope ("all owners" when the rows span several), the
+// view (with inView, its row count), the sort and the filter, with right
+// (the refresh time) on the right.
+func (p prbPainter) titleLine(width int, title, repo, owner string, view PRView, inView int, filter string, shown int, right string) string {
 	scope := "all repos"
 	if repo != "" {
 		scope = repo
@@ -1106,7 +1245,8 @@ func (p prbPainter) titleLine(width int, title, repo string, view PRView, inView
 		right += " "
 	}
 	// From the fullest to the barest: narrow screens drop the "all repos"
-	// scope, then the "sorted by" words, before anything is cut.
+	// and "all owners" scopes, then the "sorted by" and "owner" words,
+	// before anything is cut.
 	var left string
 	for _, full := range []bool{true, false} {
 		parts := []string{p.st.Title.Render(title)}
@@ -1114,6 +1254,14 @@ func (p prbPainter) titleLine(width int, title, repo string, view PRView, inView
 			parts = append(parts, scope)
 		}
 		parts = append(parts, p.pal.bold.Render(strconv.Itoa(open))+" open")
+		switch {
+		case owner != "" && full:
+			parts = append(parts, p.st.Dim.Render("owner ")+p.st.Accent.Render(owner))
+		case owner != "":
+			parts = append(parts, p.st.Accent.Render(owner))
+		case full && p.owners:
+			parts = append(parts, "all owners")
+		}
 		viewName := p.st.Accent.Render(string(view))
 		if view != ViewAll {
 			viewName += " " + p.pal.bold.Render(strconv.Itoa(inView))
@@ -1191,6 +1339,9 @@ func (p prbPainter) summaryLine(width int) string {
 	if pinned > 0 {
 		right = append(right, p.pinStyle().Render(p.g.pin)+" "+p.pal.bold.Render(strconv.Itoa(pinned))+" "+p.st.Dim.Render("pinned"))
 	}
+	for _, b := range badgeCounts(p.all) {
+		right = append(right, b.text+" "+p.pal.bold.Render(strconv.Itoa(b.n)))
+	}
 	r := strings.Join(right, "   ")
 	if r != "" {
 		r += " "
@@ -1214,6 +1365,33 @@ func (p prbPainter) summaryLine(width int) string {
 		left = next
 	}
 	return spread(left, r, width)
+}
+
+// badgeCount is how many rows carry a badge text.
+type badgeCount struct {
+	text string
+	n    int
+}
+
+// badgeCounts counts the rows carrying each badge text (a row once per
+// text), in the order the texts first appear.
+func badgeCounts(rows []PRBoardRow) []badgeCount {
+	var out []badgeCount
+	for _, r := range rows {
+		var seen []string
+		for _, b := range r.Badges {
+			if slices.Contains(seen, b.Text) {
+				continue
+			}
+			seen = append(seen, b.Text)
+			if i := slices.IndexFunc(out, func(c badgeCount) bool { return c.text == b.Text }); i >= 0 {
+				out[i].n++
+			} else {
+				out = append(out, badgeCount{b.Text, 1})
+			}
+		}
+	}
+	return out
 }
 
 // flow packs styled items into lines of at most width cells, sep

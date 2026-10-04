@@ -18,7 +18,7 @@ const (
 	ViewAll    PRView = "all"    // every row
 	ViewMagnum PRView = "magnum" // rows magnum reviewed or is reviewing: state not baseline or ineligible
 	ViewMine   PRView = "mine"   // assigned to one of the self logins, or their review is requested
-	ViewReady  PRView = "ready"  // open, not a draft, approved and no changes requested
+	ViewReady  PRView = "ready"  // open, not a draft, approved on the head, nothing blocking, required checks passed
 )
 
 var prViewOrder = []PRView{ViewAll, ViewMagnum, ViewMine, ViewReady}
@@ -63,21 +63,37 @@ func (v PRView) has(r PRBoardRow, self map[string]bool) bool {
 	case ViewMine:
 		return slices.ContainsFunc(r.Assignees, func(a string) bool { return self[normLogin(a)] }) || reviewRequestedFrom(r, self)
 	case ViewReady:
-		if r.Draft || !isOpen(r) {
-			return false
-		}
-		approved := false
-		for _, rv := range r.Reviewers {
-			switch normVerdict(rv.Verdict) {
-			case "changes_requested":
-				return false
-			case "approved":
-				approved = true
-			}
-		}
-		return approved
+		return readyToMerge(r)
 	}
 	return true
+}
+
+// readyToMerge reports whether r looks ready to merge: open and not a
+// draft; approved by someone on the current head (an approval of an older
+// commit does not count) and nobody's latest verdict is changes requested
+// (stale or not: GitHub keeps blocking on it); magnum's latest review is
+// not blocking; and every required check passed. A skipped required check
+// does not count as passed although GitHub accepts it (a skipped
+// aggregator hides a cancelled or failed dependency), nor does one that
+// never ran. Without required checks CI does not decide: optional checks
+// are often noisy (advisory audits, statuses stuck pending).
+func readyToMerge(r PRBoardRow) bool {
+	if r.Draft || !isOpen(r) {
+		return false
+	}
+	approved := false
+	for _, rv := range r.Reviewers {
+		switch normVerdict(rv.Verdict) {
+		case "changes_requested":
+			return false
+		case "approved":
+			approved = approved || !rv.Stale
+		}
+	}
+	if !approved || (r.Findings != nil && r.Findings.Verdict == "blocking") {
+		return false
+	}
+	return r.CI == nil || !slices.ContainsFunc(r.CI.Required, func(c CheckState) bool { return normCI(c.State) != "passed" })
 }
 
 // reviewRequestedFrom reports whether a review of r is requested from one
@@ -173,7 +189,7 @@ func loginMatches(login, want string, self map[string]bool) bool {
 
 // match reports whether r satisfies every qualifier and every word fuzzily
 // matches (its letters in order, close together) the row's ref, title,
-// author, a reviewer or a label.
+// author, a reviewer, a label or a badge (its label or its text).
 func (q prQuery) match(r PRBoardRow, self map[string]bool) bool {
 	for _, f := range q.quals {
 		if !f(r, self) {
@@ -191,6 +207,9 @@ func (q prQuery) match(r PRBoardRow, self map[string]bool) bool {
 		fields = append(fields, v.Login)
 	}
 	fields = append(fields, r.Labels...)
+	for _, b := range r.Badges {
+		fields = append(fields, b.Label, b.Text)
+	}
 	for i := range fields {
 		fields[i] = strings.ToLower(fields[i])
 	}

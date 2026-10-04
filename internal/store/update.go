@@ -197,6 +197,12 @@ func dbValue(v any) (any, error) {
 		}
 		b, err := json.Marshal(x)
 		return string(b), err
+	case *CIStatus:
+		if x == nil {
+			return nil, nil
+		}
+		b, err := json.Marshal(x)
+		return string(b), err
 	default:
 		return nil, fmt.Errorf("unsupported value type %T", v)
 	}

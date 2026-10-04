@@ -60,13 +60,13 @@ func roleNames(roles []Role) []string {
 	return out
 }
 
-// The four [[role]] blocks written out in config.toml are exactly the
-// built-in defaults: loading the repo config and a config without any
+// The four [[role]] blocks written out in config.defaults.toml are exactly
+// the built-in defaults: loading that file and a config without any
 // pipeline keys (same home) yields the same kinds, roles and legacy mirrors.
 func TestDefaultsEqualExplicitConfig(t *testing.T) {
 	root := repoRoot(t)
-	// NoOverlay: the developer's gitignored config.local.toml must not leak in.
-	explicit, err := LoadWithOptions(paths.Layout{Home: root}, filepath.Join(root, "config.toml"), LoadOptions{NoOverlay: true})
+	// NoOverlay: the developer's user config must not leak in.
+	explicit, err := LoadWithOptions(paths.Layout{Home: root}, filepath.Join(root, "config.defaults.toml"), LoadOptions{NoOverlay: true})
 	if err != nil {
 		t.Fatal(err)
 	}

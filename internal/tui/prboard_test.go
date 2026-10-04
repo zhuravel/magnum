@@ -266,16 +266,16 @@ func TestPRBoardSortKeys(t *testing.T) {
 }
 
 // Narrow screens hide Assignee, then Since review, then Author, then
-// Updated; Findings stays as long as the reviewers do. No line is ever wider
-// than the screen.
+// Updated, then CI; Findings stays as long as the reviewers do. No line is
+// ever wider than the screen.
 func TestPRBoardColumnsHideByWidth(t *testing.T) {
 	cases := []struct {
 		width         int
 		shown, hidden []string
 	}{
-		{170, []string{"REPO", "#", "TITLE", "AUTHOR", "ASSIGNEE", "UPDATED", "STATE", "LAST REVIEW", "FINDINGS", "SINCE REVIEW", "REVIEWERS"}, nil},
-		{120, []string{"TITLE", "UPDATED", "STATE", "LAST REVIEW", "FINDINGS", "REVIEWERS"}, []string{"ASSIGNEE", "SINCE REVIEW", "AUTHOR"}},
-		{100, []string{"TITLE", "STATE", "LAST REVIEW", "FINDINGS", "REVIEWERS"}, []string{"ASSIGNEE", "SINCE REVIEW", "AUTHOR", "UPDATED"}},
+		{170, []string{"REPO", "#", "TITLE", "AUTHOR", "ASSIGNEE", "UPDATED", "STATE", "LAST REVIEW", "FINDINGS", "CI", "SINCE REVIEW", "REVIEWERS"}, nil},
+		{120, []string{"TITLE", "UPDATED", "STATE", "LAST REVIEW", "FINDINGS", "CI", "REVIEWERS"}, []string{"ASSIGNEE", "SINCE REVIEW", "AUTHOR"}},
+		{100, []string{"TITLE", "STATE", "LAST REVIEW", "FINDINGS", "REVIEWERS"}, []string{"ASSIGNEE", "SINCE REVIEW", "AUTHOR", "UPDATED", "CI"}},
 	}
 	for _, c := range cases {
 		m, _, _ := newBoard(t, c.width, 20, PRBoardOptions{})

@@ -135,6 +135,11 @@ type GitHubPR struct {
 	DetailsAt *time.Time
 	// AuthorAssociation is the Details' authorAssociation (nil = keep).
 	AuthorAssociation *string
+	// CIState is the head's check rollup, from the radar or the Details, and
+	// CI the Details' checks (nil = keep). Like DetailsAt they are not
+	// Changed: CI moving changes no eligibility and queues nothing.
+	CIState *string
+	CI      *CIStatus
 
 	// InitialState and Identity are used only when the PR is new.
 	InitialState string
@@ -214,7 +219,9 @@ func (s *Store) UpsertPRFromGitHub(ctx context.Context, in GitHubPR) (PRUpsert, 
 		setIf("author_association", in.AuthorAssociation != nil &&
 			(cur.AuthorAssociation == nil || *in.AuthorAssociation != *cur.AuthorAssociation), in.AuthorAssociation)
 		changed := len(u.sets) > 0
-		setIf("details_at", in.DetailsAt != nil && (changed || cur.DetailsAt == nil), in.DetailsAt)
+		setIf("ci_state", in.CIState != nil && (cur.CIState == nil || *in.CIState != *cur.CIState), in.CIState)
+		setIf("ci_json", in.CI != nil && (cur.CI == nil || !in.CI.equal(*cur.CI)), in.CI)
+		setIf("details_at", in.DetailsAt != nil && (len(u.sets) > 0 || cur.DetailsAt == nil), in.DetailsAt)
 		if len(u.sets) == 0 && u.err == nil {
 			res.PR = cur
 			return nil
@@ -256,13 +263,15 @@ func (s *Store) insertPR(ctx context.Context, tx *sql.Tx, in GitHubPR) (int64, e
 INSERT INTO prs (repo_id, node_id, number, url, title, author_login, author_type, head_ref, base_ref,
   head_sha, head_changed_at, is_draft, is_cross_repo, review_requested, labels_json, gh_state, gh_updated_at,
   merged_at, closed_at, state, identity, created_at, updated_at,
-  assignees_json, requested_reviewers_json, latest_reviews_json, base_sha, details_at, author_association)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  assignees_json, requested_reviewers_json, latest_reviews_json, base_sha, details_at, author_association,
+  ci_state, ci_json)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		in.RepoID, in.NodeID, in.Number, in.URL, in.Title, in.AuthorLogin, in.AuthorType, in.HeadRef, in.BaseRef,
 		in.HeadSHA, now, boolInt(in.IsDraft), boolInt(Deref(in.IsCrossRepo)),
 		boolInt(Deref(in.ReviewRequested)), mustDB(labels), ghState,
 		mustDB(in.GHUpdatedAt), mustDB(in.MergedAt), mustDB(in.ClosedAt), in.InitialState, in.Identity, now, now,
-		mustDB(assignees), mustDB(requested), mustDB(in.LatestReviews), in.BaseSHA, mustDB(in.DetailsAt), in.AuthorAssociation)
+		mustDB(assignees), mustDB(requested), mustDB(in.LatestReviews), in.BaseSHA, mustDB(in.DetailsAt), in.AuthorAssociation,
+		in.CIState, mustDB(in.CI))
 	if err != nil {
 		return 0, mapErr(err)
 	}
