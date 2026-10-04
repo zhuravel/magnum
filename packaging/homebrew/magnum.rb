@@ -14,7 +14,7 @@ class Magnum < Formula
   depends_on :macos
 
   def install
-    system "go", "build", *std_go_args(ldflags: "-s -w -X main.version=#{version}"), "./cmd/magnum"
+    system "go", "build", *std_go_args(ldflags: "-X main.version=#{version}"), "./cmd/magnum"
   end
 
   def caveats
