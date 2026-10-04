@@ -1,0 +1,38 @@
+# magnum eval corpus: pull requests with known defects, replayed at a pinned
+# head by `magnum eval run` as blind dry runs (nothing is posted). Copy this
+# file to eval.local.toml (gitignored) and describe real cases there: a corpus
+# names defects in real code, so it never belongs in a public repository.
+#
+# A case's PR must be in a watched repository with a local clone (the pool's
+# main clone, or one under the watch's clone_root); its roles, identity and
+# readiness probes are the watch's.
+
+[[case]]
+name = "signature-check"                             # [a-z0-9-], unique
+pr = "talkable/talkable#1234"                        # owner/repo#N
+head = "0123456789abcdef0123456789abcdef01234567"    # the full commit id to review
+# base = "master"                                    # the PR's base when GitHub's has changed since
+why = "a human reviewer found the missing signature check on this head"
+
+# A defect counts as found when an inline comment of the planned review sits
+# on one of `paths` (globs, `**` spans directories), within `lines` (head
+# side, 3 lines of slack) when given, and matches one of `match`
+# (case-insensitive regular expressions). `body = true` also accepts a
+# mention in the review body. `severity` is the weakest one that still counts
+# as right. Inline comments that match no defect count as noise;
+# "Simplification (optional)" suggestions are counted apart.
+[[case.defect]]
+id = "signature-skip"
+title = "The callback accepts requests without verifying their signature"
+severity = "P1"
+paths = ["app/controllers/**/callbacks_controller.rb"]
+lines = [40, 75]
+match = ["signature", "hmac", "verif"]
+
+[[case.defect]]
+id = "coupon-reuse"
+title = "A refunded order's coupon can be applied again"
+severity = "P2"
+paths = ["app/models/coupon*.rb", "app/services/**/refund*.rb"]
+match = ["reus", "twice", "again"]
+body = true

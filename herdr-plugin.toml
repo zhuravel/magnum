@@ -1,0 +1,119 @@
+id = "zhuravel.magnum"
+name = "Magnum"
+version = "0.1.0"
+min_herdr_version = "0.9.3"
+description = "Automated GitHub PR reviews in Codex and Claude panes, with a folder/PR/database registry"
+platforms = ["macos"]
+
+# This plugin is a thin launcher (collie pattern): the daemon runs under launchd and every action
+# delegates to the `magnum` binary built in this repo (bin/magnum). Link the repo itself:
+#   herdr plugin link /Users/bohdan/Projects/magnum
+
+# After a session restore, nudge the daemon so it rebinds panes now instead of on the next tick.
+[[startup]]
+command = ["bash", "scripts/magnum-ctl.sh", "on-startup"]
+
+[[actions]]
+id = "review"
+title = "Magnum: review a pull request…"
+contexts = ["global", "workspace", "pane"]
+command = ["bash", "scripts/magnum-ctl.sh", "picker"]
+
+[[actions]]
+id = "review-link"
+title = "Magnum: review this pull request"
+contexts = ["global"]
+command = ["bash", "scripts/magnum-ctl.sh", "picker-link"]
+
+[[actions]]
+id = "attention"
+title = "Magnum: jump to the review that needs me"
+contexts = ["global", "workspace", "pane"]
+command = ["bash", "scripts/magnum-ctl.sh", "attention"]
+
+[[actions]]
+id = "rereview"
+title = "Magnum: re-review this workspace's PR now"
+contexts = ["workspace", "pane"]
+command = ["bash", "scripts/magnum-ctl.sh", "here", "review"]
+
+[[actions]]
+id = "pin"
+title = "Magnum: keep this review (pin)"
+contexts = ["workspace", "pane"]
+command = ["bash", "scripts/magnum-ctl.sh", "here", "pin"]
+
+[[actions]]
+id = "unpin"
+title = "Magnum: hand control back (unpin)"
+contexts = ["workspace", "pane"]
+command = ["bash", "scripts/magnum-ctl.sh", "here", "unpin"]
+
+[[actions]]
+id = "release"
+title = "Magnum: hand back this slot"
+contexts = ["workspace", "pane"]
+command = ["bash", "scripts/magnum-ctl.sh", "here", "release"]
+
+[[actions]]
+id = "status"
+title = "Magnum: status"
+contexts = ["global", "workspace"]
+command = ["bash", "scripts/magnum-ctl.sh", "popup", "status"]
+
+[[actions]]
+id = "cleanup"
+title = "Magnum: clean up storage…"
+contexts = ["global", "workspace"]
+command = ["bash", "scripts/magnum-ctl.sh", "popup", "cleanup"]
+
+[[actions]]
+id = "doctor"
+title = "Magnum: doctor"
+contexts = ["global"]
+command = ["bash", "scripts/magnum-ctl.sh", "popup", "doctor"]
+
+[[actions]]
+id = "daemon-restart"
+title = "Magnum: restart daemon"
+contexts = ["global"]
+command = ["bash", "scripts/magnum-ctl.sh", "daemon-restart"]
+
+[[panes]]
+id = "picker"
+title = "Magnum — review a PR"
+placement = "popup"
+width = "90%"
+height = "60%"
+command = ["bash", "scripts/magnum-ctl.sh", "_picker"]
+
+[[panes]]
+id = "status"
+title = "Magnum — status"
+placement = "popup"
+width = "95%"
+height = "80%"
+command = ["bash", "scripts/magnum-ctl.sh", "_status"]
+
+[[panes]]
+id = "cleanup"
+title = "Magnum — cleanup"
+placement = "popup"
+width = "95%"
+height = "80%"
+command = ["bash", "scripts/magnum-ctl.sh", "_cleanup"]
+
+[[panes]]
+id = "doctor"
+title = "Magnum — doctor"
+placement = "popup"
+width = "95%"
+height = "80%"
+command = ["bash", "scripts/magnum-ctl.sh", "_doctor"]
+
+# ctrl+click on any GitHub PR URL opens the picker prefilled (unwatched repos are refused with a message); the picker always offers "open in browser".
+[[link_handlers]]
+id = "github-pr"
+title = "Magnum: review this PR"
+pattern = '^https://github\.com/[^/]+/[^/]+/pull/[0-9]+(/(files|commits|changes))?/?([#?].*)?$'
+action = "review-link"

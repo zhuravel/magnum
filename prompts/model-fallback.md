@@ -1,0 +1,1 @@
+Your previous model hit its usage cap; magnum switched this session to {{.Model}}. Continue exactly where you stopped and finish the task as originally instructed for head `{{.HeadSHA}}`{{if .ReportPath}} (same report path: {{.ReportPath}}){{end}}.

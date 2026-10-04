@@ -1,0 +1,4 @@
+interface:
+  display_name: "Magnum Review"
+  short_description: "Judge candidate findings, prove them, post one PR review as the configured identity"
+  default_prompt: "Use $magnum-review with the <magnum> context block provided by the magnum daemon."

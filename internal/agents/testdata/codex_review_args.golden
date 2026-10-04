@@ -1,0 +1,1 @@
+set -o pipefail; command codex review --base origin/feature/base-pr -c model_reasoning_effort=high | tee '/tmp/with space/codex-review.md'; printf '\nMAGNUM_DONE_r-20261003T120000-9 %d\n' "$?"

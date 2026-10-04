@@ -1,0 +1,355 @@
+package github
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"reflect"
+	"sort"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/zhuravel/magnum/internal/execx"
+)
+
+func TestDetailsFixture(t *testing.T) {
+	f := &execx.Fake{Rules: []execx.Rule{{
+		Prefix: []string{"gh", "api", "graphql"},
+		// gh exits 1 when any alias is NOT_FOUND but still prints data.
+		Result: execx.Result{Stdout: fixture(t, "details.json"), Stderr: fixture(t, "details.stderr"), Code: 1},
+	}}}
+	c := &Client{Run: f}
+	got, missing, err := c.Details(context.Background(), "talkable", "talkable", []int{11975, 11983, 11980, 11982, 99999999})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(missing, []int{99999999}) {
+		t.Errorf("missing = %v", missing)
+	}
+	if len(got) != 4 {
+		t.Fatalf("details = %d", len(got))
+	}
+
+	req := decodeReq(t, f.Calls[0])
+	if req.Variables["owner"] != "talkable" || req.Variables["name"] != "talkable" {
+		t.Errorf("variables = %v", req.Variables)
+	}
+	if a := aliases(req.Query); !reflect.DeepEqual(a, []string{"11975", "11980", "11982", "11983", "99999999"}) {
+		t.Errorf("aliases = %v", a)
+	}
+
+	bot := got[11975]
+	if bot.AuthorLogin != "dependabot" || bot.AuthorType != "Bot" || !IsBot(bot.AuthorType, bot.AuthorLogin) {
+		t.Errorf("dependabot author = %q/%q", bot.AuthorLogin, bot.AuthorType)
+	}
+	if !SameLogin(bot.AuthorLogin, "dependabot[bot]") {
+		t.Error("GraphQL bot login must match the REST [bot] login")
+	}
+	if !reflect.DeepEqual(bot.Labels, []string{"dependencies", "github_actions"}) {
+		t.Errorf("labels = %v", bot.Labels)
+	}
+	if !reflect.DeepEqual(bot.ReviewRequests, []Reviewer{{Type: "User", Login: "zhuravel"}}) {
+		t.Errorf("review requests = %+v", bot.ReviewRequests)
+	}
+	wantLatest := []LatestReview{{
+		State:       "COMMENTED",
+		SubmittedAt: time.Date(2026, 10, 1, 2, 34, 24, 0, time.UTC),
+		AuthorLogin: "chatgpt-codex-connector",
+		AuthorType:  "Bot",
+		CommitOid:   "f2b92820612a2a8f6fb2e5436cf71db085eea1c9",
+	}}
+	if !reflect.DeepEqual(bot.LatestReviews, wantLatest) {
+		t.Errorf("latest reviews = %+v", bot.LatestReviews)
+	}
+	if bot.NodeID != "PR_kwDOABr8DM8AAAABGAyEvA" || bot.Number != 11975 ||
+		bot.URL != "https://github.com/talkable/talkable/pull/11975" ||
+		bot.HeadRefName != "dependabot/github_actions/github-actions-b8fa58e0c8" || bot.BaseRefName != "master" ||
+		bot.HeadRefOid != "b59dd4879e8d454f83a1284a24ec790a90594a2e" || bot.State != "OPEN" ||
+		bot.Merged || bot.IsDraft || bot.IsCrossRepository || !bot.MergedAt.IsZero() || !bot.ClosedAt.IsZero() ||
+		!bot.UpdatedAt.Equal(time.Date(2026, 10, 2, 9, 4, 36, 0, time.UTC)) ||
+		!strings.HasPrefix(bot.Title, "Bump the github-actions group") {
+		t.Errorf("11975 = %+v", bot)
+	}
+
+	user := got[11983]
+	if user.AuthorLogin != "zhuravel" || user.AuthorType != "User" || IsBot(user.AuthorType, user.AuthorLogin) {
+		t.Errorf("user author = %q/%q", user.AuthorLogin, user.AuthorType)
+	}
+	if len(user.ReviewRequests) != 2 || user.ReviewRequests[1].Login != "a-long-login-1" {
+		t.Errorf("review requests = %+v", user.ReviewRequests)
+	}
+	if user.LatestReviews == nil || len(user.LatestReviews) != 0 {
+		t.Errorf("no reviews must be an empty, non-nil slice: %#v", user.LatestReviews)
+	}
+
+	if !got[11980].IsDraft || !reflect.DeepEqual(got[11980].Labels, []string{"WIP", "Review effort 3/5"}) {
+		t.Errorf("11980 = %+v", got[11980])
+	}
+	merged := got[11982]
+	mergedAt := time.Date(2026, 10, 2, 14, 24, 50, 0, time.UTC)
+	if merged.State != "MERGED" || !merged.Merged || !merged.MergedAt.Equal(mergedAt) || !merged.ClosedAt.Equal(mergedAt) {
+		t.Errorf("11982 = %+v", merged)
+	}
+}
+
+func TestDetailsTeamAndGhostReviewers(t *testing.T) {
+	body := compact(t, `{"data":{"rateLimit":{"limit":5000,"cost":1,"remaining":4990,"used":10,"resetAt":"2026-10-02T21:50:10Z"},
+	"repository":{"p5":{"id":"PR_x","number":5,"title":"t","url":"u","author":null,"labels":{"nodes":[]},
+	"headRefName":"h","baseRefName":"master","isCrossRepository":true,"state":"OPEN","merged":false,"mergedAt":null,
+	"closedAt":null,"updatedAt":"2026-10-02T09:04:36Z","isDraft":false,"headRefOid":"abc",
+	"reviewRequests":{"nodes":[{"requestedReviewer":{"__typename":"Team","slug":"backend"}},{"requestedReviewer":{"__typename":"Bot","login":"copilot"}},{"requestedReviewer":null}]},
+	"latestReviews":{"nodes":[{"state":"APPROVED","submittedAt":"2026-10-01T02:34:24Z","author":null,"commit":null}]}}}}}`)
+	f := &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"gh"}, Result: execx.Result{Stdout: body}}}}
+	got, missing, err := (&Client{Run: f}).Details(context.Background(), "o", "r", []int{5})
+	if err != nil || len(missing) != 0 {
+		t.Fatalf("err = %v missing = %v", err, missing)
+	}
+	d := got[5]
+	if d.AuthorLogin != "" || d.AuthorType != "" || !d.IsCrossRepository {
+		t.Errorf("ghost author = %+v", d)
+	}
+	want := []Reviewer{{Type: "Team", Login: "backend"}, {Type: "Bot", Login: "copilot"}}
+	if !reflect.DeepEqual(d.ReviewRequests, want) {
+		t.Errorf("review requests = %+v", d.ReviewRequests)
+	}
+	if len(d.LatestReviews) != 1 || d.LatestReviews[0].AuthorLogin != "" || d.LatestReviews[0].CommitOid != "" {
+		t.Errorf("latest = %+v", d.LatestReviews)
+	}
+}
+
+// synthBatch answers any batched query with a minimal PR per alias, leaving
+// the numbers in absent as NOT_FOUND.
+func synthBatch(t *testing.T, absent map[int]bool, sizes *[]int) execx.Rule {
+	return gqlRule(t, func(c execx.Cmd, req gqlReq) (execx.Result, error) {
+		as := aliases(req.Query)
+		*sizes = append(*sizes, len(as))
+		var parts, errs []string
+		for _, a := range as {
+			var n int
+			fmt.Sscan(a, &n)
+			if absent[n] {
+				parts = append(parts, fmt.Sprintf(`"p%d":null`, n))
+				errs = append(errs, fmt.Sprintf(`{"type":"NOT_FOUND","path":["repository","p%d"],"message":"Could not resolve to a PullRequest with the number of %d."}`, n, n))
+				continue
+			}
+			parts = append(parts, fmt.Sprintf(`"p%d":{"id":"PR_%d","number":%d,"state":"OPEN","merged":false,"mergedAt":null,"closedAt":null,"headRefOid":"sha%d","labels":{"nodes":[]},"reviewRequests":{"nodes":[]},"latestReviews":{"nodes":[]}}`, n, n, n, n))
+		}
+		body := `{"data":{"rateLimit":{"limit":5000,"cost":1,"remaining":4000,"used":1000,"resetAt":"2026-10-02T21:50:10Z"},"repository":{` + strings.Join(parts, ",") + `}}`
+		if len(errs) > 0 {
+			body += `,"errors":[` + strings.Join(errs, ",") + `]`
+			return failResult(c, []byte(body+"}"), []byte("gh: Could not resolve to a PullRequest\n"))
+		}
+		return okResult([]byte(body + "}"))
+	})
+}
+
+func TestDetailsBatchesOf40(t *testing.T) {
+	var sizes []int
+	absent := map[int]bool{7: true, 83: true}
+	f := &execx.Fake{Rules: []execx.Rule{synthBatch(t, absent, &sizes)}}
+	var numbers []int
+	for n := 85; n >= 1; n-- {
+		numbers = append(numbers, n)
+	}
+	numbers = append(numbers, 3, 3, 50) // duplicates are queried once
+	got, missing, err := (&Client{Run: f}).Details(context.Background(), "talkable", "talkable", numbers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(sizes, []int{40, 40, 5}) {
+		t.Errorf("batch sizes = %v", sizes)
+	}
+	if len(got) != 83 || !reflect.DeepEqual(missing, []int{7, 83}) {
+		t.Errorf("got %d, missing %v", len(got), missing)
+	}
+	if got[42].HeadRefOid != "sha42" || got[42].Number != 42 {
+		t.Errorf("42 = %+v", got[42])
+	}
+}
+
+func TestDetailsEmptyAndInvalid(t *testing.T) {
+	f := &execx.Fake{}
+	c := &Client{Run: f}
+	got, missing, err := c.Details(context.Background(), "talkable", "talkable", nil)
+	if err != nil || len(got) != 0 || len(missing) != 0 || got == nil {
+		t.Errorf("empty input = %v %v %v", got, missing, err)
+	}
+	if _, _, err := c.Details(context.Background(), "talkable", "talkable", []int{1, 0}); err == nil {
+		t.Error("non-positive number accepted")
+	}
+	if len(f.Calls) != 0 {
+		t.Errorf("calls = %d", len(f.Calls))
+	}
+}
+
+func TestDetailsNonNotFoundErrorFails(t *testing.T) {
+	body := compact(t, `{"data":{"repository":{"p1":null}},"errors":[{"type":"FORBIDDEN","path":["repository","p1"],"message":"Resource not accessible by integration"}]}`)
+	f := &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"gh"}, Result: execx.Result{Stdout: body, Code: 1}}}}
+	_, _, err := (&Client{Run: f}).Details(context.Background(), "o", "r", []int{1})
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf("err = %v, want ErrForbidden", err)
+	}
+	if errors.Is(err, ErrNotFound) {
+		t.Error("FORBIDDEN must not read as not found")
+	}
+}
+
+func TestConfirmStatesFixture(t *testing.T) {
+	f := &execx.Fake{Rules: []execx.Rule{{
+		Prefix: []string{"gh", "api", "graphql"},
+		Result: execx.Result{Stdout: fixture(t, "confirm.json"), Stderr: fixture(t, "confirm.stderr"), Code: 1},
+	}}}
+	got, notFound, err := (&Client{Run: f}).ConfirmStates(context.Background(), "talkable", "talkable", []int{11982, 11965, 11984, 99999999})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(notFound, []int{99999999}) {
+		t.Errorf("notFound = %v", notFound)
+	}
+	want := map[int]PRState{
+		11982: {State: "MERGED", Merged: true, MergedAt: time.Date(2026, 10, 2, 14, 24, 50, 0, time.UTC), ClosedAt: time.Date(2026, 10, 2, 14, 24, 50, 0, time.UTC), HeadRefOid: "d2bdbcf862fbc3f586c00b0cb66f6db6b38bdcb9"},
+		11965: {State: "CLOSED", ClosedAt: time.Date(2026, 9, 30, 14, 3, 37, 0, time.UTC), HeadRefOid: "1eb72bdac4ebb6b4072b60835ab4b78d1216fdc9"},
+		11984: {State: "OPEN", HeadRefOid: "3cdf82c3f06b32e07dcee9396ae32e904ff33ae3"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("states =\n%+v\nwant\n%+v", got, want)
+	}
+	q := oneLine(decodeReq(t, f.Calls[0]).Query)
+	if !strings.Contains(q, "number state merged mergedAt closedAt headRefOid") || strings.Contains(q, "latestReviews") {
+		t.Errorf("confirm query should be scalar-only: %s", q)
+	}
+}
+
+func TestConfirmStatesRepoNotFound(t *testing.T) {
+	f := &execx.Fake{Rules: []execx.Rule{{
+		Prefix: []string{"gh", "api", "graphql"},
+		Result: execx.Result{Stdout: fixture(t, "confirm_norepo.json"), Stderr: fixture(t, "confirm_norepo.stderr"), Code: 1},
+	}}}
+	got, notFound, err := (&Client{Run: f}).ConfirmStates(context.Background(), "talkable", "no-such-repo-magnum", []int{3, 1, 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sort.Ints(notFound)
+	if len(got) != 0 || !reflect.DeepEqual(notFound, []int{1, 2, 3}) {
+		t.Errorf("got %v notFound %v; a missing repo means every PR is unknown", got, notFound)
+	}
+}
+
+// details_board.json was captured on 2026-10-03 with the current fragment
+// (assignees, baseRefOid, PR size) for #11922 (team request), #11980 (two
+// assignees, draft), #11975 (bot author) and a missing number.
+func TestDetailsBoardFieldsFixture(t *testing.T) {
+	f := &execx.Fake{Rules: []execx.Rule{{
+		Prefix: []string{"gh", "api", "graphql"},
+		Result: execx.Result{Stdout: fixture(t, "details_board.json"), Stderr: fixture(t, "details_board.stderr"), Code: 1},
+	}}}
+	got, missing, err := (&Client{Run: f}).Details(context.Background(), "talkable", "talkable", []int{11922, 11980, 11975, 99999999})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(missing, []int{99999999}) || len(got) != 3 {
+		t.Fatalf("got %d, missing %v", len(got), missing)
+	}
+	q := oneLine(decodeReq(t, f.Calls[0]).Query)
+	for _, want := range []string{"baseRefOid", "additions deletions changedFiles commits { totalCount }", "assignees(first: 10) { nodes { login } }",
+		"reviewRequests(first: 30)", "labels(first: 100) { totalCount pageInfo { hasNextPage } nodes { name } }",
+		"latestReviews(first: 100) { totalCount pageInfo { hasNextPage } nodes {"} {
+		if !strings.Contains(q, want) {
+			t.Errorf("query lacks %q: %s", want, q)
+		}
+	}
+
+	team := got[11922]
+	if !reflect.DeepEqual(team.ReviewRequests, []Reviewer{{Type: "Team", Login: "engineers"}}) {
+		t.Errorf("team request = %+v", team.ReviewRequests)
+	}
+	if !reflect.DeepEqual(team.Assignees, []string{"rev-ann"}) {
+		t.Errorf("assignees = %v", team.Assignees)
+	}
+	if team.BaseRefOid != "44cb4c7c7b200bd9cddb16457d1e17c72639b835" || team.HeadRefOid != "bca3f44adc43c2d07bd4e9ca131a1b838a68580f" {
+		t.Errorf("oids = %s...%s", team.BaseRefOid, team.HeadRefOid)
+	}
+	if team.Additions != 1523 || team.Deletions != 138 || team.ChangedFiles != 17 || team.Commits != 12 {
+		t.Errorf("size = +%d -%d files %d commits %d", team.Additions, team.Deletions, team.ChangedFiles, team.Commits)
+	}
+	if len(team.LatestReviews) != 4 {
+		t.Fatalf("latest reviews = %+v", team.LatestReviews)
+	}
+	approved := team.LatestReviews[3]
+	if approved.State != "APPROVED" || approved.AuthorLogin != "rev-ann" || approved.CommitOid != team.HeadRefOid ||
+		!approved.SubmittedAt.Equal(time.Date(2026, 9, 25, 11, 8, 57, 0, time.UTC)) {
+		t.Errorf("approval = %+v", approved)
+	}
+	if bot := team.LatestReviews[2]; bot.AuthorType != "Bot" || bot.AuthorLogin != "chatgpt-codex-connector" {
+		t.Errorf("bot review = %+v", bot)
+	}
+
+	draft := got[11980]
+	if !draft.IsDraft || !reflect.DeepEqual(draft.Assignees, []string{"zhuravel", "a-long-login-1"}) ||
+		draft.ReviewRequests == nil || len(draft.ReviewRequests) != 0 {
+		t.Errorf("11980 = %+v", draft)
+	}
+	if draft.LatestReviews[0].State != "CHANGES_REQUESTED" || draft.LatestReviews[0].AuthorLogin != "zhuravel" {
+		t.Errorf("11980 reviews = %+v", draft.LatestReviews)
+	}
+	if bot := got[11975]; !reflect.DeepEqual(bot.Assignees, []string{"zhuravel"}) || bot.Commits != 1 {
+		t.Errorf("11975 = %+v", bot)
+	}
+}
+
+func TestDetailsOldFixtureHasEmptyAssignees(t *testing.T) {
+	f := &execx.Fake{Rules: []execx.Rule{{
+		Prefix: []string{"gh", "api", "graphql"},
+		Result: execx.Result{Stdout: fixture(t, "details.json"), Stderr: fixture(t, "details.stderr"), Code: 1},
+	}}}
+	got, _, err := (&Client{Run: f}).Details(context.Background(), "talkable", "talkable", []int{11975})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := got[11975]; d.Assignees == nil || len(d.Assignees) != 0 || d.BaseRefOid != "" || d.Commits != 0 {
+		t.Errorf("absent fields must decode to empty values: %+v", d)
+	}
+}
+
+// connBody is a one-PR details answer whose labels and latestReviews carry the
+// given connection metadata (a JSON object body without the nodes).
+func connBody(t *testing.T, labelsMeta, reviewsMeta string) []byte {
+	return compact(t, `{"data":{"rateLimit":{"limit":5000,"cost":1,"remaining":4990,"used":10,"resetAt":"2026-10-02T21:50:10Z"},
+	"repository":{"p5":{"id":"PR_x","number":5,"title":"t","url":"u","author":{"login":"a","__typename":"User"},
+	"labels":{`+labelsMeta+`"nodes":[{"name":"WIP"},{"name":"hold"}]},
+	"headRefName":"h","baseRefName":"master","isCrossRepository":false,"state":"OPEN","merged":false,"mergedAt":null,
+	"closedAt":null,"updatedAt":"2026-10-02T09:04:36Z","isDraft":false,"headRefOid":"abc",
+	"reviewRequests":{"nodes":[]},
+	"latestReviews":{`+reviewsMeta+`"nodes":[{"state":"APPROVED","submittedAt":"2026-10-01T02:34:24Z","author":{"login":"b","__typename":"User"},"commit":{"oid":"c1"}}]}}}}}`)
+}
+
+func TestDetailsReportsTruncatedConnections(t *testing.T) {
+	cases := []struct {
+		name                  string
+		labelsMeta, revMeta   string
+		wantLabels, wantRevws bool
+	}{
+		{"single pages", `"totalCount":2,"pageInfo":{"hasNextPage":false},`, `"totalCount":1,"pageInfo":{"hasNextPage":false},`, true, true},
+		{"no metadata (old fixtures)", ``, ``, true, true},
+		{"labels have another page", `"totalCount":150,"pageInfo":{"hasNextPage":true},`, `"totalCount":1,"pageInfo":{"hasNextPage":false},`, false, true},
+		{"reviews have another page", `"totalCount":2,"pageInfo":{"hasNextPage":false},`, `"totalCount":120,"pageInfo":{"hasNextPage":true},`, true, false},
+		{"totalCount alone reveals truncation", `"totalCount":3,"pageInfo":{"hasNextPage":false},`, `"totalCount":2,"pageInfo":{"hasNextPage":false},`, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"gh"}, Result: execx.Result{Stdout: connBody(t, tc.labelsMeta, tc.revMeta)}}}}
+			got, _, err := (&Client{Run: f}).Details(context.Background(), "o", "r", []int{5})
+			if err != nil {
+				t.Fatal(err)
+			}
+			d := got[5]
+			if d.LabelsComplete != tc.wantLabels || d.LatestReviewsComplete != tc.wantRevws {
+				t.Errorf("LabelsComplete=%v LatestReviewsComplete=%v, want %v and %v", d.LabelsComplete, d.LatestReviewsComplete, tc.wantLabels, tc.wantRevws)
+			}
+			if !reflect.DeepEqual(d.Labels, []string{"WIP", "hold"}) || len(d.LatestReviews) != 1 {
+				t.Errorf("fetched nodes are still returned: %+v / %+v", d.Labels, d.LatestReviews)
+			}
+		})
+	}
+}

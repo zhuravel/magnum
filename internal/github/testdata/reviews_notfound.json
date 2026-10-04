@@ -1,0 +1,30 @@
+{
+  "data": {
+    "rateLimit": {
+      "limit": 5000,
+      "cost": 1,
+      "remaining": 4962,
+      "used": 38,
+      "resetAt": "2026-10-02T21:50:10Z"
+    },
+    "repository": {
+      "pullRequest": null
+    }
+  },
+  "errors": [
+    {
+      "type": "NOT_FOUND",
+      "path": [
+        "repository",
+        "pullRequest"
+      ],
+      "locations": [
+        {
+          "line": 1,
+          "column": 146
+        }
+      ],
+      "message": "Could not resolve to a PullRequest with the number of 99999999."
+    }
+  ]
+}

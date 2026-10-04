@@ -1,0 +1,23 @@
+{
+  "errors": [
+    {
+      "path": [
+        "query",
+        "rateLimit",
+        "nosuchfield"
+      ],
+      "extensions": {
+        "code": "undefinedField",
+        "typeName": "RateLimit",
+        "fieldName": "nosuchfield"
+      },
+      "locations": [
+        {
+          "line": 1,
+          "column": 21
+        }
+      ],
+      "message": "Field 'nosuchfield' doesn't exist on type 'RateLimit'"
+    }
+  ]
+}

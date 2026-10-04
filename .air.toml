@@ -1,0 +1,26 @@
+# Live-reload for daemon development: `mise run dev` (unloads the launchd job first).
+# Rebuilds bin/magnum and restarts `magnum daemon` on every save under cmd/ and internal/,
+# or when config.toml / config.local.toml / embedded templates change.
+root = "."
+tmp_dir = "state/air"
+
+[build]
+cmd = "go build -o bin/magnum ./cmd/magnum"
+bin = "bin/magnum"
+args_bin = ["daemon", "--log-level", "debug"]
+include_dir = ["cmd", "internal"]
+include_ext = ["go", "toml", "tmpl"]
+include_file = ["config.toml", "config.local.toml"]
+exclude_dir = ["state", "docs", "bin", "skills", "scripts", ".git"]
+exclude_regex = ["_test\\.go$"]
+delay = 1000
+send_interrupt = true   # SIGINT lets the daemon stop cleanly (rounds and heavy jobs are cancelled)
+kill_delay = "10s"
+stop_on_error = false
+log = "state/air/build.log"
+
+[log]
+time = true
+
+[misc]
+clean_on_exit = false

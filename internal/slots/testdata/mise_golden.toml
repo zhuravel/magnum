@@ -1,0 +1,29 @@
+# magnum: rendered from the main clone's .mise.local.toml (secret keys stripped, slot env set); rewritten on every render
+min_version = "2024.9.5"
+
+[env]
+CONDUCTOR_WORKSPACE_NAME = ""
+FAKE_AWS = "1"
+NOTES = "GITHUB_PERSONAL_ACCESS_TOKEN = \"inside a string stays\"\n[still not a table]\n"
+PORT = 3000
+WIDGETS_API_KEY = "x"
+WT_BRANCH = "review3"
+[env._]
+file = ".env"
+path = ["bin", "node_modules/.bin"]
+
+[settings]
+experimental = true
+jobs = 4
+
+[shell_alias]
+GITHUB_PERSONAL_ACCESS_TOKEN = "not in [env], kept"
+ttyd = "ttyd -W zsh"
+
+[tools]
+node = "22"
+python = ["3.12", "3.11"]
+[tools.ruby]
+version = "3.3"
+[tools.ruby.install_env]
+RUBY_CONFIGURE_OPTS = "--with-jemalloc"

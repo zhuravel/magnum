@@ -1,0 +1,341 @@
+package cli
+
+// `magnum init`: write config.local.toml for a new machine from three
+// questions (the gh login, one repository, who posts), validate it with the
+// committed config and print what to do next. It never asks for a key:
+// an App's private key goes into .mise.local.toml by hand.
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/spf13/cobra"
+
+	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/execx"
+)
+
+const initUsage = "[--force]"
+
+func newInitCmd(c *Context) *cobra.Command {
+	var force bool
+	cmd := newCommand(groupAct, "init "+initUsage, "write config.local.toml for this machine: your gh login, one repository, who posts",
+		"Ask three questions and write config.local.toml next to config.toml: your gh login (the default comes "+
+			"from `gh api user`), one repository to watch (owner/name) and who posts the reviews, your gh login or a "+
+			"GitHub App (then its app id, client id, installation id and the name of the variable that will hold its "+
+			"private key). The result is the smallest valid setup: one identity (plus the App when it posts), one "+
+			"watch of that repository, no pool and no database, with daemon.default_repo set so `magnum review 123` "+
+			"works. It is validated with config.toml before it is written. An App's private key is never asked for: "+
+			"init prints the .mise.local.toml line to add. An existing config.local.toml is refused unless --force "+
+			"(the old file is kept as config.local.toml.bak). ctrl+c or an empty input stops without writing.",
+		func(pos []string) int { return runInit(c, force, pos) })
+	cmd.Flags().BoolVar(&force, "force", false, "replace an existing config.local.toml (kept as config.local.toml.bak)")
+	return cmd
+}
+
+// initAnswers are what init asked.
+type initAnswers struct {
+	login, owner, name string
+	app                *initApp // nil: reviews are posted as login
+}
+
+// initApp is a GitHub App identity's settings.
+type initApp struct {
+	login, clientID, keyEnv string
+	appID, installationID   int64
+}
+
+var (
+	initLoginRe  = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$`)
+	initRepoRe   = regexp.MustCompile(`^([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))/([A-Za-z0-9._-]{1,100})$`)
+	initBotRe    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]*\[bot\]$`)
+	initClientRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+	initEnvRe    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+)
+
+func runInit(c *Context, force bool, pos []string) int {
+	if len(pos) > 0 {
+		return inspUsage(c, "init", fmt.Sprintf("unexpected argument %q", pos[0]), initUsage)
+	}
+	file := configFileInUse(c)
+	local := filepath.Join(filepath.Dir(file), "config.local.toml")
+	if _, err := os.Stat(local); err == nil && !force {
+		fmt.Fprintf(c.Stderr, "magnum init: %s exists\nfix: edit it (config.toml.example has every key), or re-run with --force to replace it (the old file is kept as %s)\n",
+			inspTilde(local), filepath.Base(local)+".bak")
+		return 1
+	}
+	if _, err := config.LoadWithOptions(c.Layout, file, config.LoadOptions{NoOverlay: true}); err != nil {
+		fmt.Fprintf(c.Stderr, "magnum init: the committed config does not load: %v\nfix: restore config.toml (git checkout config.toml)\n", err)
+		return 1
+	}
+	ctx, cancel := signalContext()
+	defer cancel()
+	ans, err := initAsk(ctx, c.Stdout, inspPrompt(), initGHLogin(ctx))
+	if err != nil {
+		fmt.Fprintf(c.Stderr, "magnum init: cancelled (%v); nothing was written\n", err)
+		return 1
+	}
+	content := initRender(ans, time.Now())
+	if err := initValidate(c, file, content); err != nil {
+		fmt.Fprintf(c.Stderr, "magnum init: the answers do not make a valid config, nothing was written: %v\n", err)
+		return 1
+	}
+	if err := initWrite(local, content); err != nil {
+		fmt.Fprintf(c.Stderr, "magnum init: %v\n", err)
+		return 1
+	}
+	cfg, err := config.Load(c.Layout, file)
+	if err != nil { // validated above; only a race with another writer gets here
+		fmt.Fprintf(c.Stderr, "magnum init: wrote %s, but it does not validate: %v\n", inspTilde(local), err)
+		return 1
+	}
+	initReport(c.Stdout, local, ans, cfg)
+	return 0
+}
+
+// initGHLogin is the login gh is logged in as; "" when gh cannot tell.
+func initGHLogin(ctx context.Context) string {
+	run := daemonSys.Runner
+	if run == nil {
+		run = &execx.Real{}
+	}
+	res, err := run.Run(ctx, execx.Cmd{Name: "gh", Args: []string{"api", "user", "--jq", ".login"}, Timeout: 15 * time.Second, Label: "init gh login"})
+	if err != nil {
+		return ""
+	}
+	if l := res.Out(); initLoginRe.MatchString(l) {
+		return l
+	}
+	return ""
+}
+
+// initAsk asks the questions; defLogin is the default gh login.
+func initAsk(ctx context.Context, w io.Writer, in *promptIn, defLogin string) (initAnswers, error) {
+	var a initAnswers
+	fmt.Fprintln(w, "magnum init writes config.local.toml: one identity, one watched repository, no pool. Empty input stops.")
+	var err error
+	if a.login, err = in.ask(ctx, w, "Your GitHub login (gh polls GitHub as it)", defLogin, initCheckLogin); err != nil {
+		return a, err
+	}
+	repo, err := in.ask(ctx, w, "Repository to review (owner/name)", "", initCheckRepo)
+	if err != nil {
+		return a, err
+	}
+	a.owner, a.name, _ = strings.Cut(repo, "/")
+	who, err := in.ask(ctx, w, "Post reviews as 1) your login "+a.login+" or 2) a GitHub App", "1", func(s string) (string, error) {
+		switch strings.ToLower(s) {
+		case "1", "gh", "me", a.login:
+			return "gh", nil
+		case "2", "app":
+			return "app", nil
+		}
+		return "", errors.New("answer 1 or 2")
+	})
+	if err != nil || who == "gh" {
+		return a, err
+	}
+	app := &initApp{}
+	if app.login, err = in.ask(ctx, w, "The App's bot login (<slug>[bot], as its reviews show)", "", initCheckBot); err != nil {
+		return a, err
+	}
+	if app.appID, err = initAskID(ctx, w, in, "App id (the App's settings page)"); err != nil {
+		return a, err
+	}
+	if app.clientID, err = in.ask(ctx, w, "Client id (Iv23…)", "", func(s string) (string, error) {
+		if !initClientRe.MatchString(s) {
+			return "", errors.New("letters, digits, '.', '_' and '-' only")
+		}
+		return s, nil
+	}); err != nil {
+		return a, err
+	}
+	if app.installationID, err = initAskID(ctx, w, in, "Installation id (the number in the installation's URL)"); err != nil {
+		return a, err
+	}
+	if app.keyEnv, err = in.ask(ctx, w, "Variable that will hold the private key", initKeyEnv(app.login), func(s string) (string, error) {
+		if !initEnvRe.MatchString(s) {
+			return "", errors.New("an environment variable name: letters, digits and '_', not starting with a digit")
+		}
+		return s, nil
+	}); err != nil {
+		return a, err
+	}
+	a.app = app
+	return a, nil
+}
+
+func initAskID(ctx context.Context, w io.Writer, in *promptIn, q string) (int64, error) {
+	s, err := in.ask(ctx, w, q, "", func(s string) (string, error) {
+		if n, err := strconv.ParseInt(s, 10, 64); err != nil || n <= 0 {
+			return "", errors.New("a positive number")
+		}
+		return s, nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return strconv.ParseInt(s, 10, 64)
+}
+
+func initCheckLogin(s string) (string, error) {
+	s = strings.TrimPrefix(s, "@")
+	if !initLoginRe.MatchString(s) {
+		return "", errors.New("a GitHub login: letters, digits and '-'")
+	}
+	return s, nil
+}
+
+// initCheckRepo takes owner/name, also as a github.com URL.
+func initCheckRepo(s string) (string, error) {
+	for _, p := range []string{"https://", "http://", "github.com/", "git@github.com:"} {
+		s = strings.TrimPrefix(s, p)
+	}
+	s = strings.TrimSuffix(strings.TrimSuffix(s, "/"), ".git")
+	if !initRepoRe.MatchString(s) {
+		return "", errors.New("owner/name, for example talkable/talkable")
+	}
+	return s, nil
+}
+
+// initCheckBot takes the App's bot login, adding a missing "[bot]".
+func initCheckBot(s string) (string, error) {
+	if !strings.HasSuffix(s, "[bot]") {
+		s += "[bot]"
+	}
+	if !initBotRe.MatchString(s) {
+		return "", errors.New("<slug>[bot], for example example-reviewer[bot]")
+	}
+	return s, nil
+}
+
+// initKeyEnv is the default key variable for a bot login:
+// MAGNUM_<SLUG>_APP_PRIVATE_KEY.
+func initKeyEnv(bot string) string {
+	slug := strings.TrimSuffix(bot, "[bot]")
+	slug = strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' {
+			return r - 'a' + 'A'
+		}
+		if r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
+			return r
+		}
+		return '_'
+	}, slug)
+	return "MAGNUM_" + slug + "_APP_PRIVATE_KEY"
+}
+
+// initAppName names the App identity: its slug and "-app".
+func initAppName(bot string) string { return strings.TrimSuffix(bot, "[bot]") + "-app" }
+
+// initRender is the config.local.toml for a. Every value was validated to
+// a plain character set, so strconv.Quote yields valid TOML strings.
+func initRender(a initAnswers, now time.Time) string {
+	q := strconv.Quote
+	var b strings.Builder
+	fmt.Fprintf(&b, "# This machine's identities and watches, written by `magnum init` on %s (gitignored).\n", now.Format("2006-01-02"))
+	b.WriteString("# config.toml.example has every key in a worked setup; `magnum config` validates the result.\n\n")
+	fmt.Fprintf(&b, "[daemon]\ndefault_repo = %s   # `magnum review 123` means this repository\n\n", q(a.owner+"/"+a.name))
+	fmt.Fprintf(&b, "[[identity]]\nname = %s\nkind = \"gh\"                 # your gh login: polls GitHub", q(a.login))
+	if a.app == nil {
+		b.WriteString(" and posts the reviews")
+	}
+	fmt.Fprintf(&b, "\nlogin = %s\n\n", q(a.login))
+	post := a.login
+	if a.app != nil {
+		post = initAppName(a.app.login)
+		fmt.Fprintf(&b, "[[identity]]\nname = %s\nkind = \"app\"                # a GitHub App: posts the reviews\nlogin = %s\n", q(post), q(a.app.login))
+		fmt.Fprintf(&b, "app_id = %d\nclient_id = %s\ninstallation_id = %d\n", a.app.appID, q(a.app.clientID), a.app.installationID)
+		fmt.Fprintf(&b, "private_key_env = %s   # set in .mise.local.toml: the PEM's path or text\n\n", q(a.app.keyEnv))
+	}
+	fmt.Fprintf(&b, "[[watch]]\nowner = %s\ninclude = [%s]\nidentity = %s\npoll_identity = %s\n", q(a.owner), q(a.name), q(post), q(a.login))
+	b.WriteString("# clone_root = \"~/Projects\"   # where the clone is found, or created; reviews run in a worktree next to it\n")
+	return b.String()
+}
+
+// initValidate loads the committed config file with content as its
+// config.local.toml, in a scratch directory, so nothing is written unless
+// the result is valid.
+func initValidate(c *Context, file, content string) error {
+	dir, err := os.MkdirTemp("", "magnum-init-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	base, err := os.ReadFile(file)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.toml"), base, 0o600); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.local.toml"), []byte(content), 0o600); err != nil {
+		return err
+	}
+	_, err = config.Load(c.Layout, filepath.Join(dir, "config.toml"))
+	return err
+}
+
+// initWrite writes content to path (0600) through a temporary file; an
+// existing file is kept as path.bak first.
+func initWrite(path, content string) error {
+	if old, err := os.ReadFile(path); err == nil {
+		if err := os.WriteFile(path+".bak", old, 0o600); err != nil {
+			return fmt.Errorf("keep the old %s: %w", filepath.Base(path), err)
+		}
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".config.local.toml.*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.WriteString(content); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp.Name(), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
+}
+
+// initReport says what was written and what to do next.
+func initReport(w io.Writer, path string, a initAnswers, cfg *config.Config) {
+	repo := a.owner + "/" + a.name
+	fmt.Fprintf(w, "\nwrote %s: %d identities, %d watch (%s), no pool; config is valid\n",
+		inspTilde(path), len(cfg.Identities), len(cfg.Watches), repo)
+	if a.app != nil {
+		fmt.Fprintf(w, "\nAdd the App's private key to .mise.local.toml (gitignored) in %s; magnum never asks for it:\n\n", inspTilde(filepath.Dir(path)))
+		fmt.Fprintf(w, "  [env]\n  %s = \"~/.config/magnum/%s.pem\"   # the PEM's path (chmod 600) or its text\n\n",
+			a.app.keyEnv, strings.TrimSuffix(a.app.login, "[bot]"))
+		fmt.Fprintln(w, "Run magnum through mise so it sees the key; `mise exec -- bin/magnum identities check` verifies the App.")
+	}
+	bin := "bin/magnum"
+	if a.app != nil {
+		bin = "mise exec -- bin/magnum"
+	}
+	steps := [][2]string{
+		{bin + " doctor", "what is missing, with the fix"},
+		{bin + " daemon", "in a second terminal: the daemon in the foreground"},
+		{bin + " review " + repo + "#<N> --wait", "one review, start to finish"},
+		{"make install", "then the daemon under launchd and the herdr plugin"},
+	}
+	width := 0
+	for _, st := range steps {
+		width = max(width, len(st[0]))
+	}
+	fmt.Fprintln(w, "\nNext:")
+	for _, st := range steps {
+		fmt.Fprintf(w, "  %-*s   # %s\n", width, st[0], st[1])
+	}
+}

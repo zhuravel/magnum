@@ -1,0 +1,1 @@
+You stopped without posting a review or writing {{.ResultFile}}. If something blocks you, write {"status":"blocked","blocker":"<one sentence>"} there and stop. Otherwise finish the $magnum-review workflow for {{.URL}} (run_id {{.RunID}}, head `{{.HeadSHA}}`) now.

@@ -1,0 +1,29 @@
+{
+  "data": {
+    "rateLimit": {
+      "limit": 5000,
+      "cost": 1,
+      "remaining": 4978,
+      "used": 22,
+      "resetAt": "2026-10-02T21:50:10Z"
+    },
+    "node": {
+      "pullRequests": {
+        "pageInfo": {
+          "hasNextPage": false,
+          "endCursor": "Y3Vyc29yOnYyOpHPAAAAARlXyNk="
+        },
+        "nodes": [
+          {
+            "id": "PR_kwDOLQ7yrc8AAAABGVfI2Q",
+            "number": 728,
+            "isDraft": true,
+            "updatedAt": "2026-10-02T18:46:18Z",
+            "headRefOid": "ec92fb159de3f396691cfbc38e7e80019907f38b",
+            "baseRefName": "main"
+          }
+        ]
+      }
+    }
+  }
+}

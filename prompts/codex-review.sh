@@ -1,0 +1,1 @@
+{{if .Title}}printf '\033]0;%s\007' {{.Title}}; DISABLE_AUTO_TITLE=true; {{end}}set -o pipefail; command codex review --base {{if .BaseSHA}}{{.BaseSHA}}{{else}}{{.BaseRef}}{{end}}{{range .ExtraArgs}} {{.}}{{end}} | tee {{.ReportPath}}; printf '\n{{.Marker}} %d\n' "$?"

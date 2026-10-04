@@ -1,0 +1,593 @@
+package engine
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"slices"
+	"sort"
+	"time"
+
+	"github.com/zhuravel/magnum/internal/agents"
+	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/eligibility"
+	"github.com/zhuravel/magnum/internal/pipeline"
+	"github.com/zhuravel/magnum/internal/slots"
+	"github.com/zhuravel/magnum/internal/store"
+)
+
+// roundJob is one round the dispatcher decided to run.
+type roundJob struct {
+	pr     store.PR
+	repo   store.Repo
+	watch  config.Watch
+	pool   *config.Pool
+	slot   store.Slot
+	hasSlo bool
+	kind   string // initial | rereview | continue
+
+	// continue
+	round         int
+	continueRunID string
+	target        string
+
+	// requested: a review request no round has served yet (pendingRequest)
+	// started this round; like a forced one, it does not count against the
+	// daily cap.
+	requested bool
+
+	// The round's start (enterReviewing, refund.go): whether it recorded
+	// last_round_started_at (started) and counted against the daily cap
+	// (counted), on which day, the start time it recorded and the one before.
+	started    bool
+	counted    bool
+	countedDay string
+	startedAt  time.Time
+	prevStart  *time.Time
+
+	// evalHead is set for a magnum eval replay (RunEval): the caller checked
+	// it out in the slot, the round is blind and never restarts. evalNotes
+	// gives that round the scratch layout's notes.
+	evalHead  string
+	evalNotes bool
+}
+
+// roundHandle tracks a round goroutine or a `magnum open` restore.
+type roundHandle struct {
+	cancel context.CancelFunc
+	open   bool      // a magnum open restore, not a review round
+	stop   roundStop // magnum abort / ignore requests (abort.go)
+}
+
+// activeRounds counts the round and open goroutines.
+func (e *Engine) activeRounds() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return len(e.rounds)
+}
+
+// reviewRounds counts the review rounds (opens left out): what
+// max_concurrent_reviews limits and the tab bar shows.
+func (e *Engine) reviewRounds() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	n := 0
+	for _, h := range e.rounds {
+		if !h.open {
+			n++
+		}
+	}
+	return n
+}
+
+func (e *Engine) roundActive(prID int64) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	_, ok := e.rounds[prID]
+	return ok
+}
+
+// reserve registers h for the PR unless a round, an open or an eviction
+// already holds it. Every slot operation on a PR's slot (a round's checkout,
+// a restore, an eviction's park and release) runs under such a reservation,
+// so they never overlap.
+func (e *Engine) reserve(prID int64, h *roundHandle) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if _, ok := e.rounds[prID]; ok || e.evicting[prID] != "" {
+		return false
+	}
+	e.rounds[prID] = h
+	return true
+}
+
+// unreserve drops the PR's round reservation and cancels its context.
+func (e *Engine) unreserve(prID int64) {
+	e.mu.Lock()
+	h := e.rounds[prID]
+	delete(e.rounds, prID)
+	e.mu.Unlock()
+	if h != nil {
+		h.cancel()
+	}
+}
+
+// reserveEviction marks the PR's slot as being evicted unless a round, an
+// open or other slot work holds the PR (reserve then refuses the PR until
+// endEviction).
+func (e *Engine) reserveEviction(prID int64) bool {
+	return e.reserveSlotWork(prID, "its slot is being evicted")
+}
+
+// reserveSlotWork is reserveEviction for any background work on the PR's
+// slot or sessions; why is what dispatch shows meanwhile (heldReason).
+func (e *Engine) reserveSlotWork(prID int64, why string) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if _, ok := e.rounds[prID]; ok || e.evicting[prID] != "" {
+		return false
+	}
+	e.evicting[prID] = why
+	return true
+}
+
+func (e *Engine) endEviction(prID int64) {
+	e.mu.Lock()
+	delete(e.evicting, prID)
+	e.mu.Unlock()
+}
+
+// heldReason is why reserve refuses the PR now.
+func (e *Engine) heldReason(prID int64) string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if why := e.evicting[prID]; why != "" {
+		return why
+	}
+	return "round in progress"
+}
+
+// dispatch starts rounds while every gate allows it: paused PRs whose pause
+// ended first (they continue their judge turn), then store.Candidates. A PR
+// that waits records why (store.KVPRGate) for `magnum status`.
+func (e *Engine) dispatch(ctx context.Context, ts tickState) {
+	e.dryRounds = 0
+	if reason := e.pauseReason(ctx); reason != "" {
+		e.log.Debug("dispatch paused", "reason", reason)
+		return
+	}
+	if !ts.herdrUp {
+		e.log.Debug("dispatch waits for herdr")
+		return
+	}
+	now := e.now()
+	quiet := eligibility.QuietHours(e.cfg.Daemon.QuietHours, now.Local())
+
+	cands, err := e.continueCandidates(ctx, now)
+	if err != nil {
+		e.log.Warn("paused PRs", "err", err)
+	}
+	params := store.CandidateParams{
+		Now:              now,
+		QuietPeriod:      e.cfg.Daemon.PushQuietPeriod.Duration,
+		MinInterval:      e.cfg.Daemon.MinRereviewInterval.Duration,
+		DraftMinInterval: e.cfg.Daemon.DraftMinRereviewInterval.Duration,
+		MaxRoundsPerDay:  e.cfg.Daemon.MaxRoundsPerPRPerDay,
+		Day:              store.DayKey(now),
+	}
+	queued, err := e.st.Candidates(ctx, params)
+	if err != nil {
+		e.log.Warn("candidates", "err", err)
+	}
+	cands = append(cands, queued...)
+	cands = append(cands, e.relaxedCandidates(ctx, params, queued, now)...)
+
+	working := ts.workingCodex
+	for _, pr := range cands {
+		if limit := e.cfg.Daemon.MaxConcurrentReviews; limit > 0 && e.reviewRounds()+e.plannedRounds() >= limit {
+			// The rest wait for a running round to end; say so (noteWaits).
+			e.noteGate(ctx, pr.ID, fmt.Sprintf("%s%d rounds running (max_concurrent_reviews %d)", gateCapacity, e.reviewRounds()+e.plannedRounds(), limit))
+			continue
+		}
+		if quiet && !pr.Forced {
+			continue
+		}
+		repo, err := e.st.RepoByID(ctx, pr.RepoID)
+		if err != nil {
+			e.log.Warn("dispatch: repo", "pr", pr.ID, "err", err)
+			continue
+		}
+		w := e.cfg.WatchFor(repo.FullName())
+		if e.reclassify(ctx, pr, w, now) {
+			continue
+		}
+		e.migrateIdentity(ctx, &pr, repo, w)
+		reason := e.prGate(ctx, pr, repo, w, ts, now)
+		started, codex := false, 0
+		if reason == "" {
+			started, codex, reason = e.startRound(ctx, pr, repo, w, working)
+		}
+		switch {
+		case reason != "":
+			e.log.Debug("candidate skipped", "pr", pr.ID, "reason", reason)
+			e.noteGate(ctx, pr.ID, reason)
+		default:
+			e.delKV(ctx, kvPRGate(pr.ID), KVPRWait(pr.ID))
+		}
+		if started {
+			working += codex
+		}
+	}
+}
+
+// relaxedCandidates lists the rereview_pending PRs that store.Candidates'
+// backstop (the daemon's quiet period, re-review interval and daily cap)
+// holds back although the throttle lets them through, and that the
+// candidates in have lack: a requested round (pendingRequest) skips all of
+// those rules, and a head that arrived during the PR's last review
+// (arrivedDuringReview) skips the interval. They are read again without the
+// backstop and kept when eligibility.Throttle, under their watch, says ready.
+func (e *Engine) relaxedCandidates(ctx context.Context, p store.CandidateParams, have []store.PR, now time.Time) []store.PR {
+	if p.QuietPeriod == 0 && p.MinInterval == 0 && p.DraftMinInterval == 0 && p.MaxRoundsPerDay <= 0 {
+		return nil
+	}
+	p.QuietPeriod, p.MinInterval, p.DraftMinInterval, p.MaxRoundsPerDay = 0, 0, 0, 0
+	all, err := e.st.Candidates(ctx, p)
+	if err != nil {
+		e.log.Warn("candidates without the backstop", "err", err)
+		return nil
+	}
+	var out []store.PR
+	for _, pr := range all {
+		if pr.State != store.PRRereviewPending || slices.ContainsFunc(have, func(x store.PR) bool { return x.ID == pr.ID }) {
+			continue
+		}
+		if _, requested := e.pendingRequest(ctx, pr); !requested && !arrivedDuringReview(pr) {
+			continue
+		}
+		repo, err := e.st.RepoByID(ctx, pr.RepoID)
+		if err != nil {
+			continue
+		}
+		w := e.cfg.WatchFor(repo.FullName())
+		if w == nil || !e.throttle(ctx, *w, pr, e.factsFor(pr, *w, now), now).Ready {
+			continue
+		}
+		out = append(out, pr)
+	}
+	return out
+}
+
+// arrivedDuringReview reports whether the head a PR waits to have reviewed
+// was pushed before its last review was recorded: the review covers an
+// older head, and the re-review interval does not apply.
+func arrivedDuringReview(pr store.PR) bool {
+	return pr.PendingSince != nil && pr.ReviewedAt != nil && !pr.PendingSince.After(*pr.ReviewedAt)
+}
+
+// noteGate records why the PR waits (store.KVPRGate) when that changed.
+func (e *Engine) noteGate(ctx context.Context, prID int64, reason string) {
+	if prev, _ := e.getKV(ctx, kvPRGate(prID)); prev != reason {
+		e.setKV(ctx, kvPRGate(prID), reason)
+	}
+}
+
+// noteLastError shows why on the PR (prs.last_error) when it changed; dry
+// runs only decide.
+func (e *Engine) noteLastError(ctx context.Context, pr store.PR, why string) {
+	if deref(pr.LastError) != why && !e.d.DryRun {
+		_ = e.st.UpdatePR(ctx, pr.ID, func(u *store.PRUpdate) { u.Set("last_error", why) })
+	}
+}
+
+// reclassify applies the watch's current filters to a waiting candidate (the
+// watch config may have changed since the poller classified it, and the
+// poller only re-classifies on GitHub changes): a PR they now reject moves
+// to ineligible and reports true. Forced and paused PRs, PRs of unwatched
+// repositories and PRs without their Details yet (prGate holds those) are
+// left alone.
+func (e *Engine) reclassify(ctx context.Context, pr store.PR, w *config.Watch, now time.Time) bool {
+	if w == nil || pr.Forced || pr.State == store.PRPaused || pr.DetailsAt == nil {
+		return false
+	}
+	dec := e.classify(ctx, *w, pr, now)
+	if dec.Eligible {
+		return false
+	}
+	if err := e.markIneligible(ctx, pr, []string{pr.State}, dec.Reason, false, now); err != nil {
+		e.log.Info("dispatch: reclassify", "pr", pr.ID, "err", err)
+	}
+	return true
+}
+
+// plannedRounds counts dry-run dispatch decisions this tick (they take
+// capacity like real rounds).
+func (e *Engine) plannedRounds() int {
+	if !e.d.DryRun {
+		return 0
+	}
+	return e.dryRounds
+}
+
+// prGate is why one PR may not start a round now ("" = go).
+func (e *Engine) prGate(ctx context.Context, pr store.PR, repo store.Repo, w *config.Watch, ts tickState, now time.Time) string {
+	if e.roundActive(pr.ID) {
+		return "round in progress"
+	}
+	if ts.busyPR[pr.ID] {
+		return "an agent of the PR is working or blocked"
+	}
+	if pr.HumanActiveAt != nil && now.Before(pr.HumanActiveAt.Add(e.cfg.Daemon.HumanCooldown.Duration)) {
+		return "human active in the PR's panes"
+	}
+	if w == nil {
+		return "repository " + repo.FullName() + " is no longer watched (no [[watch]] covers it)"
+	}
+	if pr.DetailsAt == nil && !pr.Forced {
+		// Author, labels and fork status are unknown until a Details fetch
+		// succeeds: the watch's filters cannot be applied yet.
+		return "waiting for the PR's details from GitHub"
+	}
+	if ok, why := e.identityHealthy(ctx, pr.Identity); !ok {
+		e.noteLastError(ctx, pr, why)
+		return why
+	}
+	if v, ok := e.getKV(ctx, KVWatchPaused(repo.WatchOwner)); ok && v != "" {
+		return "watch " + repo.WatchOwner + " paused: " + v
+	}
+	return ""
+}
+
+// continueCandidates are paused PRs whose retry time passed: they continue
+// the judge's turn (or restart the round when the judge was never prompted).
+func (e *Engine) continueCandidates(ctx context.Context, now time.Time) ([]store.PR, error) {
+	prs, err := e.st.ListPRs(ctx, store.PRFilter{States: []string{store.PRPaused}})
+	if err != nil {
+		return nil, err
+	}
+	var out []store.PR
+	for _, pr := range prs {
+		if pr.GHState != store.GHOpen || (pr.Muted && !pr.Forced) {
+			continue
+		}
+		if pr.NextAttemptAt != nil && now.Before(*pr.NextAttemptAt) {
+			continue
+		}
+		out = append(out, pr)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].UpdatedAt.Before(out[j].UpdatedAt) })
+	return out, nil
+}
+
+// slotOf returns the PR's current (not removed) slot.
+func (e *Engine) slotOf(ctx context.Context, prID int64) (store.Slot, bool, error) {
+	sl, err := e.st.SlotByPR(ctx, prID)
+	if errors.Is(err, store.ErrNotFound) {
+		return store.Slot{}, false, nil
+	}
+	if err != nil {
+		return store.Slot{}, false, err
+	}
+	return sl, true, nil
+}
+
+// startRound acquires a slot for pr (its own claimed/held slot, a free pool
+// slot, or a per-PR worktree created by the round) and launches the round
+// goroutine. It reports whether a round was started (or planned), the Codex
+// agents its roles add, and why the PR waits ("" when it started or waits
+// silently, for example for a slot being provisioned).
+func (e *Engine) startRound(ctx context.Context, pr store.PR, repo store.Repo, w *config.Watch, workingCodex int) (bool, int, string) {
+	full := repo.FullName()
+	subject := prSubject(repo, pr.Number)
+	job := &roundJob{pr: pr, repo: repo, watch: *w, pool: e.cfg.PoolFor(full), kind: kindFor(pr)}
+	if !pr.Forced {
+		_, job.requested = e.pendingRequest(ctx, pr)
+	}
+	from := store.ClaimableStates
+	if pr.State == store.PRPaused {
+		from = []string{store.PRPaused}
+		if !e.prepareContinue(ctx, job) {
+			return false, 0, ""
+		}
+	}
+
+	rctx, cancel := context.WithCancel(ctx)
+	if !e.reserve(pr.ID, &roundHandle{cancel: cancel}) {
+		cancel()
+		return false, 0, e.heldReason(pr.ID)
+	}
+	launched := false
+	defer func() {
+		if !launched {
+			e.unreserve(pr.ID)
+		}
+	}()
+
+	slot, has, err := e.slotOf(ctx, pr.ID)
+	if err != nil {
+		e.log.Warn("dispatch: slots", "err", err)
+		return false, 0, ""
+	}
+	if has {
+		if why := e.slotGate(ctx, job, &slot, subject); why != "" {
+			return false, 0, why
+		}
+		job.slot, job.hasSlo = slot, true
+	}
+	if job.kind == kindContinue && !has {
+		// The paused round's checkout is gone: start over on the current head.
+		job.kind = kindFor(pr)
+		job.continueRunID, job.round, job.target = "", 0, ""
+	}
+
+	// The roles the round runs decide which pauses and Codex limit apply.
+	toRun, err := pipeline.RolesToRun(ctx, e.st, e.cfg, pr, e.cfg.RolesFor(w), e.requestedRoles(ctx, pr.ID), job.kind)
+	if err != nil {
+		e.log.Warn("dispatch: roles", "subject", subject, "err", err)
+		return false, 0, ""
+	}
+	if why := e.kindPauseReason(ctx, agentKinds(toRun)); why != "" {
+		return false, 0, why
+	}
+	codex := codexRoles(toRun)
+	if why := e.budgetGate(job.kind, pr.Forced, codex); why != "" {
+		return false, 0, why
+	}
+	if limit := e.cfg.Daemon.MaxTotalWorkingCodex; limit > 0 && codex > 0 && workingCodex+min(codex, limit) > limit {
+		return false, 0, fmt.Sprintf("working Codex agents at the limit (%d working, max_total_working_codex %d)", workingCodex, limit)
+	}
+
+	if e.d.DryRun {
+		return e.planStart(ctx, job, subject), codex, ""
+	}
+
+	switch {
+	case has || job.pool == nil:
+		if err := e.st.TransitionPR(ctx, pr.ID, from, store.PRClaiming, nil); err != nil {
+			e.log.Debug("dispatch: claim PR", "subject", subject, "err", err)
+			return false, 0, ""
+		}
+	default:
+		if pr.State == store.PRPaused {
+			if err := e.st.TransitionPR(ctx, pr.ID, from, claimableState(pr), nil); err != nil {
+				return false, 0, ""
+			}
+			pr.State = claimableState(pr)
+			job.pr = pr
+		}
+		sl, err := e.d.Slots.Claim(ctx, pr, *job.pool)
+		switch {
+		case errors.Is(err, slots.ErrNoFreeSlot):
+			e.needSlot(ctx, *job.pool, subject)
+			return false, 0, gateNoFreeSlot + job.pool.Repo + " pool"
+		case err != nil:
+			e.log.Info("dispatch: claim", "subject", subject, "err", err)
+			return false, 0, ""
+		}
+		job.slot, job.hasSlo = sl, true
+		e.event(ctx, "info", subject, "slot.claimed", "claimed "+sl.Name, nil)
+	}
+	launched = true
+	e.launch(rctx, job)
+	return true, codex, ""
+}
+
+// slotGate checks the PR's own slot before a round: "" when the round can
+// use it, else why the PR waits. A busy slot is left over from a round whose
+// busy → held write failed (the PR is reserved, so no round runs in it) and
+// is repaired; a per-PR worktree that is provisioning, lost or broken is
+// (re)created by the round; a pool slot whose release stalled gets the
+// release resumed; a broken or lost pool slot needs `magnum slots repair`.
+func (e *Engine) slotGate(ctx context.Context, job *roundJob, slot *store.Slot, subject string) string {
+	perPR := slot.Kind == store.SlotKindPerPR
+	switch {
+	case slot.State == store.SlotClaimed || slot.State == store.SlotHeld:
+	case perPR && slices.Contains(recreatedPerPR, slot.State):
+	case slot.State == store.SlotBusy:
+		if !e.d.DryRun {
+			if err := e.st.TransitionSlot(ctx, slot.ID, []string{store.SlotBusy}, store.SlotHeld, nil); err != nil {
+				return fmt.Sprintf("slot %s is busy without a round: %v", slot.Name, err)
+			}
+			e.event(ctx, "warn", "slot:"+slot.Name, "slot.repaired", slot.Name+" was busy without a round; back to held", nil)
+		}
+		slot.State = store.SlotHeld
+	case !perPR && (slot.State == store.SlotReleasing || slot.State == store.SlotDirtySchema):
+		if job.pool != nil {
+			e.resumeRelease(ctx, *job.pool, *slot, subject)
+		}
+		return "slot " + slot.Name + " is being released"
+	case slot.State == store.SlotBroken || slot.State == store.SlotLost:
+		why := fmt.Sprintf("slot %s is %s", slot.Name, slot.State)
+		if le := deref(slot.LastError); le != "" {
+			why += ": " + le
+		}
+		why += " (magnum slots repair " + slot.Name + ")"
+		e.noteLastError(ctx, job.pr, why)
+		return why
+	default:
+		return fmt.Sprintf("slot %s is %s", slot.Name, slot.State)
+	}
+	if slot.Pinned || slot.HoldReason != nil {
+		why := "slot " + slot.Name + " is pinned (magnum unpin)"
+		if slot.HoldReason != nil {
+			why = "slot " + slot.Name + " is held: " + *slot.HoldReason + " (magnum unpin)"
+		}
+		e.noteLastError(ctx, job.pr, why)
+		return why
+	}
+	return ""
+}
+
+// recreatedPerPR are the states of a per-PR worktree row the round's
+// CreatePRWorktree (re)creates.
+var recreatedPerPR = []string{store.SlotProvisioning, store.SlotLost, store.SlotBroken}
+
+// kindPauseReason is why a round whose roles use kinds must wait: the first
+// of them that is paused ("" = none). A pause of one kind leaves rounds that
+// do not use it alone.
+func (e *Engine) kindPauseReason(ctx context.Context, kinds []string) string {
+	now := e.now()
+	for _, kind := range kinds {
+		if p, ok := e.toolPause(ctx, kind); ok && now.Before(p.Until) {
+			return fmt.Sprintf("%s paused (%s) until %s", kind, p.Reason, p.Until.Local().Format("15:04"))
+		}
+	}
+	return ""
+}
+
+// codexRoles counts the roles that run a Codex agent.
+func codexRoles(roles []config.Role) int {
+	n := 0
+	for _, r := range roles {
+		if r.AgentKind() == agents.KindCodex {
+			n++
+		}
+	}
+	return n
+}
+
+// planStart records what a dry run would do for job.
+func (e *Engine) planStart(ctx context.Context, job *roundJob, subject string) bool {
+	switch {
+	case job.hasSlo:
+		e.rec.Record(ctx, subject, "review", fmt.Sprintf("%s round in %s at %s", job.kind, job.slot.Name, short(job.pr.HeadSHA)))
+	case job.pool == nil:
+		e.rec.Record(ctx, subject, "review", fmt.Sprintf("%s round in a new per-PR worktree at %s", job.kind, short(job.pr.HeadSHA)))
+	default:
+		free, err := e.st.FreeSlots(ctx, job.pool.Repo, job.pr.ID)
+		if err != nil || len(free) == 0 {
+			e.needSlot(ctx, *job.pool, subject)
+			return false
+		}
+		e.rec.Record(ctx, subject, "review", fmt.Sprintf("%s round in %s (claim) at %s", job.kind, free[0].Name, short(job.pr.HeadSHA)))
+	}
+	e.dryRounds++
+	return true
+}
+
+// prepareContinue fills the paused round's identity: its round number,
+// marker (the judge run whose id the review carries) and target. A pause
+// before the judge was prompted restarts the round instead.
+func (e *Engine) prepareContinue(ctx context.Context, job *roundJob) bool {
+	runs, err := e.st.RunsByPR(ctx, job.pr.ID)
+	if err != nil {
+		e.log.Warn("continue: runs", "err", err)
+		return false
+	}
+	j := e.latestJudge(runs)
+	if j.prompted == nil {
+		job.kind = kindFor(job.pr)
+		return true
+	}
+	job.kind, job.round, job.continueRunID, job.target = kindContinue, j.round, j.marker.ID, j.marker.TargetSHA
+	return true
+}
+
+const kindContinue = "continue"
+
+func kindFor(pr store.PR) string {
+	if deref(pr.ReviewedSHA) != "" {
+		return "rereview"
+	}
+	return "initial"
+}

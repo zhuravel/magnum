@@ -1,0 +1,159 @@
+{
+  "data": {
+    "rateLimit": {
+      "limit": 5000,
+      "cost": 1,
+      "remaining": 4980,
+      "used": 20,
+      "resetAt": "2026-10-02T21:50:10Z"
+    },
+    "repositoryOwner": {
+      "repositories": {
+        "pageInfo": {
+          "hasNextPage": true,
+          "endCursor": "cursor-repo-page-1"
+        },
+        "nodes": [
+          {
+            "id": "R_kgDOS-UoeQ",
+            "nameWithOwner": "zhuravel/site",
+            "pushedAt": "2026-09-30T13:35:43Z",
+            "pullRequests": {
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": "Y3Vyc29yOnYyOpHPAAAAAReer44="
+              },
+              "nodes": [
+                {
+                  "id": "PR_kwDOS-Uoec8AAAABF5QZsw",
+                  "number": 36,
+                  "isDraft": true,
+                  "updatedAt": "2026-09-30T13:59:10Z",
+                  "headRefOid": "71a7d5c5fef9ba114763de7c35e581e1d41d2ade",
+                  "baseRefName": "main"
+                },
+                {
+                  "id": "PR_kwDOS-Uoec8AAAABF56vjg",
+                  "number": 37,
+                  "isDraft": false,
+                  "updatedAt": "2026-09-30T14:42:48Z",
+                  "headRefOid": "7d13097198024fd6b8b4f4b13f6bd9e5ea00bed5",
+                  "baseRefName": "main"
+                }
+              ]
+            }
+          },
+          {
+            "id": "R_kgDOSguf-g",
+            "nameWithOwner": "zhuravel/Anthropic-Cybersecurity-Skills",
+            "pushedAt": "2026-05-18T10:15:45Z",
+            "pullRequests": {
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": null
+              },
+              "nodes": []
+            }
+          },
+          {
+            "id": "R_kgDOSF-_4A",
+            "nameWithOwner": "zhuravel/studio",
+            "pushedAt": "2026-04-17T15:23:24Z",
+            "pullRequests": {
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": null
+              },
+              "nodes": []
+            }
+          },
+          {
+            "id": "R_kgDOPOKgaw",
+            "nameWithOwner": "zhuravel/demo-repository",
+            "pushedAt": "2025-07-17T13:18:06Z",
+            "pullRequests": {
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": null
+              },
+              "nodes": []
+            }
+          },
+          {
+            "id": "R_kgDOTEST0001",
+            "nameWithOwner": "zhuravel/zhuravel",
+            "pushedAt": "2026-10-02T18:45:54Z",
+            "pullRequests": {
+              "pageInfo": {
+                "hasNextPage": true,
+                "endCursor": "cursor-pr-page-1"
+              },
+              "nodes": [
+                {
+                  "id": "PR_kwDOLQ7yrc7pvBbC",
+                  "number": 649,
+                  "isDraft": true,
+                  "updatedAt": "2026-07-04T09:33:15Z",
+                  "headRefOid": "0c3126d1df78c39beabc21f9025f8f7b1e9c1bff",
+                  "baseRefName": "main"
+                },
+                {
+                  "id": "PR_kwDOLQ7yrc8AAAABFSfgGw",
+                  "number": 725,
+                  "isDraft": false,
+                  "updatedAt": "2026-10-02T14:03:03Z",
+                  "headRefOid": "2c52b95e9d1b0b141a8aeb6a9e2289e0cf30937c",
+                  "baseRefName": "main"
+                },
+                {
+                  "id": "PR_kwDOLQ7yrc8AAAABGH-N6g",
+                  "number": 727,
+                  "isDraft": true,
+                  "updatedAt": "2026-10-01T19:11:49Z",
+                  "headRefOid": "f5869090d4f5eb8cd6406419f96904ffd7fd15b1",
+                  "baseRefName": "main"
+                }
+              ]
+            }
+          },
+          {
+            "id": "R_kgDOSY7PbQ",
+            "nameWithOwner": "zhuravel/zhuravel-shopify-app",
+            "pushedAt": "2026-05-10T10:19:26Z",
+            "pullRequests": {
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": null
+              },
+              "nodes": []
+            }
+          },
+          {
+            "id": "R_kgDOPJp9yw",
+            "nameWithOwner": "zhuravel/dnsimple-services",
+            "pushedAt": "2025-07-09T15:28:42Z",
+            "pullRequests": {
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": null
+              },
+              "nodes": []
+            }
+          },
+          {
+            "id": "R_kgDOSzBYXw",
+            "nameWithOwner": "zhuravel/deployer",
+            "pushedAt": "2026-07-23T15:04:35Z",
+            "pullRequests": {
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": null
+              },
+              "nodes": []
+            }
+          }
+        ]
+      }
+    }
+  }
+}

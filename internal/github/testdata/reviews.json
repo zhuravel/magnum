@@ -1,0 +1,160 @@
+{
+  "data": {
+    "rateLimit": {
+      "limit": 5000,
+      "cost": 1,
+      "remaining": 4963,
+      "used": 37,
+      "resetAt": "2026-10-02T21:50:10Z"
+    },
+    "repository": {
+      "pullRequest": {
+        "headRefOid": "32ef2c21db667ce17a02cf5726560f5e3b83ffdf",
+        "reviews": {
+          "nodes": [
+            {
+              "databaseId": 5379658495,
+              "state": "APPROVED",
+              "body": "One small follow-up inline, about the AI assistant on Wallet sites.",
+              "url": "https://github.com/talkable/talkable/pull/11973#pullrequestreview-5379658495",
+              "submittedAt": "2026-10-01T13:09:45Z",
+              "commit": {
+                "oid": "61c18504b757fa03e6596add55a20c709f5ae47a"
+              },
+              "author": {
+                "login": "rev-ann",
+                "__typename": "User"
+              }
+            },
+            {
+              "databaseId": 5379752632,
+              "state": "COMMENTED",
+              "body": "\n### 💡 Codex Review\n\nHere are some automated review suggestions for this pull request.\n\n**Reviewed commit:** `61c18504b7`\n    \n\n<details> <summary>ℹ️ About Codex in GitHub</summary>\n<br/>\n\n[Your team has set up Codex to review pull requests in this repo](https://chatgpt.com/codex/cloud/settings/general). Reviews are triggered when you\n- Open a pull request for review\n- Mark a draft as ready\n- Comment \"@codex review\".\n\nIf Codex has suggestions, it will comment; otherwise it will react with 👍.\n\n\n\n\nCodex can also answer questions or update the PR. Try commenting \"@codex address that feedback\".\n            \n</details>",
+              "url": "https://github.com/talkable/talkable/pull/11973#pullrequestreview-5379752632",
+              "submittedAt": "2026-10-01T13:17:03Z",
+              "commit": {
+                "oid": "61c18504b757fa03e6596add55a20c709f5ae47a"
+              },
+              "author": {
+                "login": "chatgpt-codex-connector",
+                "__typename": "Bot"
+              }
+            },
+            {
+              "databaseId": 5380286730,
+              "state": "CHANGES_REQUESTED",
+              "body": "**2 problems block this PR. One smaller fix is also needed.**\n\nReviewed stacked `vo-PR-27516@d581df5` → `vo-PR-27507@61c1850` only.\n\n- `P2` Campaign tags include Wallet sales with no campaign.\n- `P2` Wallet-only settings cannot be saved.\n- `P3` Current-period failures hide previous Wallet revenue.\n\n**Checks**\n\n- Focused `FAKE_AWS=1 bin/rspec`: 155 examples, 22 failures. The local database lacks the parent PR's `wallet_link_click_sales` table. An earlier run stopped after concurrent database interference.\n- Focused Jest: 107 passed, 1 failed because the local generated API mock lacks Wallet defaults.\n- Targeted reproductions confirmed all three findings: campaign test returned $100 instead of $0; three UI probes passed.\n- `git diff --check d581df5...61c1850` passed.\n\nExisting review findings are not repeated.",
+              "url": "https://github.com/talkable/talkable/pull/11973#pullrequestreview-5380286730",
+              "submittedAt": "2026-10-01T13:57:51Z",
+              "commit": {
+                "oid": "61c18504b757fa03e6596add55a20c709f5ae47a"
+              },
+              "author": {
+                "login": "zhuravel",
+                "__typename": "User"
+              }
+            },
+            {
+              "databaseId": 5380954657,
+              "state": "COMMENTED",
+              "body": "",
+              "url": "https://github.com/talkable/talkable/pull/11973#pullrequestreview-5380954657",
+              "submittedAt": "2026-10-01T14:45:54Z",
+              "commit": {
+                "oid": "0dc43420f2ebb064ad1469d575c677889ec53f86"
+              },
+              "author": {
+                "login": "a-long-login-1",
+                "__typename": "User"
+              }
+            },
+            {
+              "databaseId": 5380955143,
+              "state": "COMMENTED",
+              "body": "",
+              "url": "https://github.com/talkable/talkable/pull/11973#pullrequestreview-5380955143",
+              "submittedAt": "2026-10-01T14:45:56Z",
+              "commit": {
+                "oid": "0dc43420f2ebb064ad1469d575c677889ec53f86"
+              },
+              "author": {
+                "login": "a-long-login-1",
+                "__typename": "User"
+              }
+            },
+            {
+              "databaseId": 5380955536,
+              "state": "COMMENTED",
+              "body": "",
+              "url": "https://github.com/talkable/talkable/pull/11973#pullrequestreview-5380955536",
+              "submittedAt": "2026-10-01T14:45:58Z",
+              "commit": {
+                "oid": "0dc43420f2ebb064ad1469d575c677889ec53f86"
+              },
+              "author": {
+                "login": "a-long-login-1",
+                "__typename": "User"
+              }
+            },
+            {
+              "databaseId": 5380955979,
+              "state": "COMMENTED",
+              "body": "",
+              "url": "https://github.com/talkable/talkable/pull/11973#pullrequestreview-5380955979",
+              "submittedAt": "2026-10-01T14:46:00Z",
+              "commit": {
+                "oid": "0dc43420f2ebb064ad1469d575c677889ec53f86"
+              },
+              "author": {
+                "login": "a-long-login-1",
+                "__typename": "User"
+              }
+            },
+            {
+              "databaseId": 5380956454,
+              "state": "COMMENTED",
+              "body": "",
+              "url": "https://github.com/talkable/talkable/pull/11973#pullrequestreview-5380956454",
+              "submittedAt": "2026-10-01T14:46:02Z",
+              "commit": {
+                "oid": "0dc43420f2ebb064ad1469d575c677889ec53f86"
+              },
+              "author": {
+                "login": "a-long-login-1",
+                "__typename": "User"
+              }
+            },
+            {
+              "databaseId": 5380956908,
+              "state": "COMMENTED",
+              "body": "",
+              "url": "https://github.com/talkable/talkable/pull/11973#pullrequestreview-5380956908",
+              "submittedAt": "2026-10-01T14:46:04Z",
+              "commit": {
+                "oid": "0dc43420f2ebb064ad1469d575c677889ec53f86"
+              },
+              "author": {
+                "login": "a-long-login-1",
+                "__typename": "User"
+              }
+            },
+            {
+              "databaseId": 5382071632,
+              "state": "APPROVED",
+              "body": "**No problems found in this PR.**\n\nReviewed stacked `vo-PR-27516@d581df5` → `vo-PR-27507@0dc4342` only.\n\nAll three previous findings are fixed: campaign-tag filtering, Wallet-only saves, and previous Wallet values after current-period failures.\n\n**Checks**\n\n- Focused `bin/rspec`: 157 examples passed, including the original campaign-tag reproducer. Used isolated test databases after another checkout disrupted the shared-database run.\n- `bin/rspec ./mocks/dashboard_tiles_spec.rb`: 13 examples passed.\n- Focused Jest: 112 tests passed across five suites.\n- `git diff --check d581df5...0dc4342`: passed.\n\nExisting follow-ups remain as documented in the PR and review threads.",
+              "url": "https://github.com/talkable/talkable/pull/11973#pullrequestreview-5382071632",
+              "submittedAt": "2026-10-01T16:06:04Z",
+              "commit": {
+                "oid": "0dc43420f2ebb064ad1469d575c677889ec53f86"
+              },
+              "author": {
+                "login": "zhuravel",
+                "__typename": "User"
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

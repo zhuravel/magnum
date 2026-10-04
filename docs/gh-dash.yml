@@ -1,0 +1,25 @@
+# gh-dash (https://github.com/dlvhdr/gh-dash) keybindings that hand a PR to magnum.
+# Merge the `keybindings.prs` entries into ~/.config/gh-dash/config.yml. Keys here avoid gh-dash's
+# defaults (c checkout, d diff, o browser, m merge, u update, w watch checks …); change them freely.
+# Requires the `gh magnum` shim (`magnum install --gh`) or replace `gh magnum` with the binary path.
+
+keybindings:
+  prs:
+    - key: M
+      name: magnum review
+      command: gh magnum review {{.RepoName}}#{{.PrNumber}}
+    - key: F
+      name: magnum fresh review
+      command: gh magnum review {{.RepoName}}#{{.PrNumber}} --fresh
+    - key: O
+      name: magnum open pane
+      command: gh magnum open {{.RepoName}}#{{.PrNumber}}
+    - key: W
+      name: magnum watch pane
+      command: gh magnum watch {{.RepoName}}#{{.PrNumber}}
+    - key: P
+      name: magnum pin
+      command: gh magnum pin {{.RepoName}}#{{.PrNumber}}
+    - key: S
+      name: magnum status
+      command: gh magnum status {{.RepoName}}#{{.PrNumber}}

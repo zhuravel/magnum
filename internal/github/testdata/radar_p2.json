@@ -1,0 +1,117 @@
+{
+  "data": {
+    "rateLimit": {
+      "limit": 5000,
+      "cost": 1,
+      "remaining": 4979,
+      "used": 21,
+      "resetAt": "2026-10-02T21:50:10Z"
+    },
+    "repositoryOwner": {
+      "repositories": {
+        "pageInfo": {
+          "hasNextPage": false,
+          "endCursor": "Y3Vyc29yOnYyOpKodGVsZWJ1Z3POTgHigA=="
+        },
+        "nodes": [
+          {
+            "id": "R_kgDOS0M3lg",
+            "nameWithOwner": "zhuravel/domain-connect-templates",
+            "pushedAt": "2026-06-10T06:32:34Z",
+            "pullRequests": {
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": null
+              },
+              "nodes": []
+            }
+          },
+          {
+            "id": "R_kgDOMcxMFQ",
+            "nameWithOwner": "zhuravel/extensions",
+            "pushedAt": "2024-07-31T13:56:49Z",
+            "pullRequests": {
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": null
+              },
+              "nodes": []
+            }
+          },
+          {
+            "id": "R_kgDOQJpSjw",
+            "nameWithOwner": "zhuravel/infrastructure",
+            "pushedAt": "2026-10-02T18:11:54Z",
+            "pullRequests": {
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": null
+              },
+              "nodes": []
+            }
+          },
+          {
+            "id": "R_kgDOQ5BOeA",
+            "nameWithOwner": "zhuravel/mailer",
+            "pushedAt": "2026-09-15T14:22:56Z",
+            "pullRequests": {
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": null
+              },
+              "nodes": []
+            }
+          },
+          {
+            "id": "R_kgDOSsceqw",
+            "nameWithOwner": "zhuravel/marketplace",
+            "pushedAt": "2026-05-31T19:10:24Z",
+            "pullRequests": {
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": null
+              },
+              "nodes": []
+            }
+          },
+          {
+            "id": "R_kgDOPXAHGw",
+            "nameWithOwner": "zhuravel/q",
+            "pushedAt": "2026-09-13T11:49:27Z",
+            "pullRequests": {
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": null
+              },
+              "nodes": []
+            }
+          },
+          {
+            "id": "R_kgDOTdNWLg",
+            "nameWithOwner": "zhuravel/stalwart",
+            "pushedAt": "2026-07-24T15:49:46Z",
+            "pullRequests": {
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": null
+              },
+              "nodes": []
+            }
+          },
+          {
+            "id": "R_kgDOTgHigA",
+            "nameWithOwner": "zhuravel/widgets",
+            "pushedAt": "2026-10-02T15:14:25Z",
+            "pullRequests": {
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": null
+              },
+              "nodes": []
+            }
+          }
+        ]
+      }
+    }
+  }
+}

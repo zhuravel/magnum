@@ -1,0 +1,54 @@
+{
+  "data": {
+    "rateLimit": {
+      "limit": 5000,
+      "cost": 1,
+      "remaining": 4972,
+      "used": 28,
+      "resetAt": "2026-10-02T21:50:10Z"
+    },
+    "repository": {
+      "p11982": {
+        "number": 11982,
+        "state": "MERGED",
+        "merged": true,
+        "mergedAt": "2026-10-02T14:24:50Z",
+        "closedAt": "2026-10-02T14:24:50Z",
+        "headRefOid": "d2bdbcf862fbc3f586c00b0cb66f6db6b38bdcb9"
+      },
+      "p11965": {
+        "number": 11965,
+        "state": "CLOSED",
+        "merged": false,
+        "mergedAt": null,
+        "closedAt": "2026-09-30T14:03:37Z",
+        "headRefOid": "1eb72bdac4ebb6b4072b60835ab4b78d1216fdc9"
+      },
+      "p11984": {
+        "number": 11984,
+        "state": "OPEN",
+        "merged": false,
+        "mergedAt": null,
+        "closedAt": null,
+        "headRefOid": "3cdf82c3f06b32e07dcee9396ae32e904ff33ae3"
+      },
+      "p99999999": null
+    }
+  },
+  "errors": [
+    {
+      "type": "NOT_FOUND",
+      "path": [
+        "repository",
+        "p99999999"
+      ],
+      "locations": [
+        {
+          "line": 1,
+          "column": 395
+        }
+      ],
+      "message": "Could not resolve to a PullRequest with the number of 99999999."
+    }
+  ]
+}

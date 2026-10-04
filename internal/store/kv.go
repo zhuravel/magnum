@@ -1,0 +1,123 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"strings"
+)
+
+// kv keys shared by the daemon (which writes them) and the CLI (`magnum
+// status`, `doctor`, `pause`, `resume`, `identities`), so neither side spells
+// them as string literals. Values are never secrets.
+const (
+	KVDaemonStartedAt     = "daemon.started_at"     // store.FormatTime
+	KVDaemonLastTick      = "daemon.last_tick"      // store.FormatTime
+	KVDaemonLastPoll      = "daemon.last_poll"      // store.FormatTime
+	KVDaemonLastReconcile = "daemon.last_reconcile" // store.FormatTime
+	KVDaemonPid           = "daemon.pid"
+	// KVDaemonPaused is "1" while automation is paused (magnum pause);
+	// KVDaemonPausedReason and KVDaemonPausedUntil (optional) explain it.
+	KVDaemonPaused       = "daemon.paused"
+	KVDaemonPausedReason = "daemon.paused_reason"
+	KVDaemonPausedUntil  = "daemon.paused_until"
+
+	KVGHRemaining       = "gh.remaining"
+	KVGHLimit           = "gh.limit"
+	KVGHReset           = "gh.reset"
+	KVGHPollPausedUntil = "gh.poll_paused_until"
+	KVHerdrUp           = "herdr.up" // "1" or "0"
+)
+
+// KVToolPausedUntil holds when a tool's pause ends ("codex", "claude";
+// store.FormatTime).
+func KVToolPausedUntil(tool string) string { return tool + ".paused_until" }
+
+// KVToolPausedReason holds why a tool is paused (usage_limit | login_required).
+func KVToolPausedReason(tool string) string { return tool + ".paused_reason" }
+
+// KVToolPausedDetail holds the pane line that caused a tool pause.
+func KVToolPausedDetail(tool string) string { return tool + ".paused_detail" }
+
+// KVToolBackoff holds the last fallback pause of a tool (a Go duration).
+func KVToolBackoff(tool string) string { return tool + ".backoff" }
+
+// KVIdentityCheck holds "pass" or "fail" from an identity's last Check.
+func KVIdentityCheck(name string) string { return "identity." + name + ".check" }
+
+// KVIdentityError holds why an identity's Check failed.
+func KVIdentityError(name string) string { return "identity." + name + ".error" }
+
+// KVIdentityTickError holds a tick-time token refresh failure.
+func KVIdentityTickError(name string) string { return "identity." + name + ".tick_error" }
+
+// KVIdentityTokenExpiry holds when an App identity's token expires
+// (store.FormatTime).
+func KVIdentityTokenExpiry(name string) string { return "identity." + name + ".token_expiry" }
+
+// KVWatchPaused holds the reason a watch owner's automation was paused
+// (identity leak); magnum resume --watch clears it.
+func KVWatchPaused(owner string) string { return "watch." + strings.ToLower(owner) + ".paused" }
+
+// KVPRSimplify is "1" when the PR's next round runs /simplify (magnum
+// review --simplify).
+func KVPRSimplify(prID int64) string { return fmt.Sprintf("pr.%d.simplify", prID) }
+
+// KVPRRoles holds the role names (a JSON list) requested for the PR's next
+// round (magnum review --role, --simplify); cleared once a review posted.
+func KVPRRoles(prID int64) string { return fmt.Sprintf("pr.%d.roles", prID) }
+
+// KVPRFresh is "1" when the PR's next round parks its sessions and starts
+// new conversations (magnum review --fresh).
+func KVPRFresh(prID int64) string { return fmt.Sprintf("pr.%d.fresh", prID) }
+
+// KVPRSessionsIdentity is the identity the PR's live agent sessions were
+// created for (their panes carry that identity's gh config); a round for
+// another identity parks them and starts fresh.
+func KVPRSessionsIdentity(prID int64) string { return fmt.Sprintf("pr.%d.sessions_identity", prID) }
+
+// KVPRGate is why the daemon skipped the PR at its last dispatch (an agent
+// still working, a human in its panes, an unhealthy identity, ...); cleared
+// when a round starts. Shown by `magnum status` as "waiting: <reason>".
+func KVPRGate(prID int64) string { return fmt.Sprintf("pr.%d.gate", prID) }
+
+// KVPRDryRun holds the PR state a dry-run round (review request with
+// dry_run) returns the PR to; while set, the next round posts nothing.
+func KVPRDryRun(prID int64) string { return fmt.Sprintf("pr.%d.dry_run", prID) }
+
+// KVScreenWidths holds the column widths dragged with the mouse on a
+// screen ("board", "dashboard") as a JSON object of column name to cells;
+// written by the CLI's screens, absent until a column is dragged.
+func KVScreenWidths(screen string) string { return "tui." + screen + ".widths" }
+
+// GetKV returns the value for key and whether it exists.
+func (s *Store) GetKV(ctx context.Context, key string) (string, bool, error) {
+	var v string
+	err := s.db.QueryRowContext(ctx, "SELECT value FROM kv WHERE key = ?", key).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("kv %s: %w", key, err)
+	}
+	return v, true, nil
+}
+
+// SetKV stores value under key. Never store secrets here.
+func (s *Store) SetKV(ctx context.Context, key, value string) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO kv (key, value, updated_at) VALUES (?, ?, ?)
+ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`, key, value, FormatTime(s.now()))
+	if err != nil {
+		return fmt.Errorf("set kv %s: %w", key, err)
+	}
+	return nil
+}
+
+// DeleteKV removes key (no error when absent).
+func (s *Store) DeleteKV(ctx context.Context, key string) error {
+	if _, err := s.db.ExecContext(ctx, "DELETE FROM kv WHERE key = ?", key); err != nil {
+		return fmt.Errorf("delete kv %s: %w", key, err)
+	}
+	return nil
+}

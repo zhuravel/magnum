@@ -1,0 +1,819 @@
+// Package config loads and validates config.toml (kept in the repository).
+package config
+
+import (
+	"fmt"
+	"os"
+	"path"
+	"path/filepath"
+	"reflect"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/BurntSushi/toml"
+
+	"github.com/zhuravel/magnum/internal/paths"
+)
+
+// Duration is a time.Duration that unmarshals from Go syntax ("30s", "5m",
+// "2h") with whole days allowed in front ("30d", "1d12h").
+type Duration struct{ time.Duration }
+
+func (d *Duration) UnmarshalText(b []byte) error {
+	v, err := ParseDuration(string(b))
+	if err != nil {
+		return err
+	}
+	d.Duration = v
+	return nil
+}
+
+// ParseDuration is time.ParseDuration plus a leading whole-day count: "7d",
+// "30d", "1d12h". A day is 24 hours.
+func ParseDuration(s string) (time.Duration, error) {
+	days, rest, ok := strings.Cut(s, "d")
+	if !ok {
+		return time.ParseDuration(s)
+	}
+	n, err := strconv.ParseUint(days, 10, 16)
+	if err != nil || days == "" {
+		return 0, fmt.Errorf("time: invalid duration %q", s)
+	}
+	d := time.Duration(n) * 24 * time.Hour
+	if rest == "" {
+		return d, nil
+	}
+	r, err := time.ParseDuration(rest)
+	if err != nil || r < 0 || strings.HasPrefix(rest, "+") {
+		return 0, fmt.Errorf("time: invalid duration %q", s)
+	}
+	return d + r, nil
+}
+
+// DatabaseSuffix ends every pool database template ([[pool]] databases):
+// the slot's slug follows the last "__", which is how magnum lists and
+// guards a slot's databases.
+const DatabaseSuffix = "__{slug}"
+
+type Config struct {
+	Daemon     Daemon     `toml:"daemon"`
+	Herdr      Herdr      `toml:"herdr"`
+	Terminal   Terminal   `toml:"terminal"`
+	Codex      Codex      `toml:"codex"`  // legacy: fallbacks for kinds.codex, codex-judge and codex-review
+	Claude     Claude     `toml:"claude"` // legacy: fallbacks for kinds.claude, claude-review and claude-simplify
+	GitHub     GitHub     `toml:"github"`
+	Pipeline   Pipeline   `toml:"pipeline"`
+	Usage      Usage      `toml:"usage"`
+	Identities []Identity `toml:"identity"`
+	Watches    []Watch    `toml:"watch"`
+	Pools      []Pool     `toml:"pool"`
+	Repos      []Repo     `toml:"repo"`
+
+	// Kinds are the agent CLIs ([kinds.<name>]) and Roles the review
+	// pipeline ([[role]]). After Load or Defaults both hold the merged,
+	// normalized result: built-in defaults, then the legacy [codex]/[claude]
+	// keys, then config.toml, then config.local.toml. Read them through
+	// KindSpec, RolesFor, JudgeFor and RoleByNameOrAlias.
+	Kinds map[string]Kind `toml:"kinds"`
+	Roles []Role          `toml:"role"`
+
+	// Layout is filled by Load; it is not part of the file.
+	Layout paths.Layout `toml:"-"`
+
+	// legacyErrs are problems in legacy keys found while mapping them onto
+	// the pipeline (buildPipeline); Validate reports them.
+	legacyErrs []error
+
+	// snapshot is the prompt text the daemon loaded at startup
+	// (SnapshotPrompts); nil = prompts are read from disk when resolved.
+	// Set once, before the daemon starts its goroutines.
+	snapshot *PromptSnapshot
+}
+
+type Daemon struct {
+	PollInterval             Duration `toml:"poll_interval"`
+	MaxConcurrentReviews     int      `toml:"max_concurrent_reviews"`
+	MaxTotalWorkingCodex     int      `toml:"max_total_working_codex"`
+	PushQuietPeriod          Duration `toml:"push_quiet_period"`
+	MinRereviewInterval      Duration `toml:"min_rereview_interval"`
+	DraftMinRereviewInterval Duration `toml:"draft_min_rereview_interval"`
+	MaxRoundsPerPRPerDay     int      `toml:"max_rounds_per_pr_per_day"`
+	CloseGrace               Duration `toml:"close_grace"`
+	ReviewerTimeout          Duration `toml:"reviewer_timeout"` // default timeout of non-judge roles (a role's own timeout wins)
+	JudgeTimeout             Duration `toml:"judge_timeout"`    // default timeout of judge roles
+	AgentStartStagger        Duration `toml:"agent_start_stagger"`
+	MinWarm                  Duration `toml:"min_warm"`
+	HumanCooldown            Duration `toml:"human_cooldown"`
+	ReconcileInterval        Duration `toml:"reconcile_interval"`
+	DefaultRepo              string   `toml:"default_repo"`
+	QuietHours               string   `toml:"quiet_hours"` // "01:00-07:00" local, optional
+	MinFreeDiskGB            int      `toml:"min_free_disk_gb"`
+	// KeepEvents and KeepRequests are how long the daemon keeps audit events
+	// and handled CLI requests (0 = forever); it prunes older rows on every
+	// reconcile.
+	KeepEvents   Duration `toml:"keep_events"`
+	KeepRequests Duration `toml:"keep_requests"`
+	// MaxRoundRestarts bounds how often one round starts its reviewers over
+	// on a head pushed while they run (before the judge is prompted); later
+	// pushes leave the round on the head it has. 0 = never restart.
+	MaxRoundRestarts int `toml:"max_round_restarts"`
+	// BurstQuietPeriod replaces PushQuietPeriod (when longer) for a PR whose
+	// head changed BurstPushes times or more within BurstWindow up to its
+	// last push: an author pushing in a burst gets a longer quiet period
+	// before the next round. A zero value turns the rule off. A [[watch]]
+	// may override each (Config.ThrottleFor).
+	BurstQuietPeriod Duration `toml:"burst_quiet_period"`
+	BurstPushes      int      `toml:"burst_pushes"`
+	BurstWindow      Duration `toml:"burst_window"`
+	// ModelLimitCooldown is how long a model that hit its own limit
+	// (health pattern model_limit) counts as limited when the pane text
+	// names no reset time; sessions use the kind's fallback_models meanwhile.
+	ModelLimitCooldown Duration `toml:"model_limit_cooldown"`
+	// ParkIdleAfter parks the live agents of a reviewed PR once all of them
+	// have been idle this long (they resume on the PR's next round); 0 = never.
+	// Pinned PRs and PRs with human activity within HumanCooldown are left alone.
+	ParkIdleAfter Duration `toml:"park_idle_after"`
+	// SkipTrivialDeltas are the kinds of change a push may consist of
+	// without a re-review (TrivialDeltaClasses: comments, whitespace,
+	// docs; default all three, [] = re-review every push): the review of
+	// the earlier commit then stands for the new head. A [[watch]] may
+	// override it (Config.TrivialDeltas).
+	SkipTrivialDeltas []string `toml:"skip_trivial_deltas"`
+	// RequestDebounce is how long a review round waits after a review
+	// request for the poll login or a posting identity (or a team in a
+	// watch's request_teams), or after a draft became ready for review,
+	// counted from the later of that and the last push. Such a requested
+	// round skips every other timing rule and the daily cap; 0 = no wait.
+	RequestDebounce Duration `toml:"request_debounce"`
+	// RereviewMinLines is the smallest unreviewed delta an automatic
+	// re-review runs for after the quiet period: changed lines (additions
+	// plus deletions) the trivial-delta classifier counts as code, since the
+	// reviewed commit. A smaller delta without an added file waits for more
+	// pushes or RereviewMaxWait since its first push, whichever is first.
+	// 0 = no threshold. A [[watch]] may override both (Config.ThrottleFor).
+	RereviewMinLines int      `toml:"rereview_min_lines"`
+	RereviewMaxWait  Duration `toml:"rereview_max_wait"`
+}
+
+// TrivialDeltaClasses are the values of skip_trivial_deltas: a push that
+// only changes comment lines, only whitespace (blank lines, re-indented
+// code where indentation carries no meaning) or only documentation files.
+var TrivialDeltaClasses = []string{"comments", "whitespace", "docs"}
+
+// Usage is the [usage] section: subscription budgets the scheduler watches.
+// Codex's budget is read from Codex's own session files (internal/usage).
+type Usage struct {
+	// CodexSoft: at or above this share (percent) of the Codex budget used,
+	// first reviews wait; re-reviews and forced reviews still run. 0 = off.
+	CodexSoft float64 `toml:"codex_soft"`
+	// CodexHard: at or above this share every kind backed by Codex pauses
+	// until the budget drops below it again. 0 = off.
+	CodexHard float64 `toml:"codex_hard"`
+	// CodexHome is the CODEX_HOME whose sessions are read; "" = $CODEX_HOME,
+	// else ~/.codex.
+	CodexHome string `toml:"codex_home"`
+}
+
+// GitHub tunes how magnum reaches the GitHub REST API itself (App JWT and
+// installation-token calls; everything else already runs through gh).
+type GitHub struct {
+	// Transport is "gh" (default: requests run as `gh api --include`, so only
+	// the signed gh binary talks to GitHub, which outbound firewalls such as
+	// Little Snitch already allow) or "direct" (Go net/http).
+	Transport string `toml:"transport"`
+}
+
+type Herdr struct {
+	Socket           string `toml:"socket"`
+	Notify           bool   `toml:"notify"`
+	ToastEveryReview bool   `toml:"toast_every_review"`
+}
+
+type Terminal struct {
+	App               string `toml:"app"`      // Terminal | iTerm2 | Ghostty | WezTerm | custom | generic
+	Session           string `toml:"session"`  // herdr session name
+	Launcher          string `toml:"launcher"` // custom launcher template with {herdr} {args} {command}
+	RevealOnAttention bool   `toml:"reveal_on_attention"`
+	// Mouse enables mouse support on the PR board and the status dashboard
+	// (wheel, clicks, header sort, column drag, right-click menu); the m key
+	// toggles it live.
+	Mouse bool `toml:"mouse"`
+}
+
+// Codex is the legacy [codex] section. Load maps it onto the pipeline as
+// fallbacks (keys a [kinds.codex] or [[role]] block sets win): wrapper_mode
+// and args onto kinds.codex, skill_path onto codex-judge's skill and
+// review_args onto codex-review's args. The fields keep the values the files
+// set; read the effective values through KindSpec, RoleByNameOrAlias and
+// JudgeFor (the judge's Skill, not SkillPath).
+type Codex struct {
+	// WrapperMode: "auto" probes `zsh -ic 'whence -w codex'`; true means the
+	// user's shell function supplies the flags and magnum passes only extras.
+	WrapperMode string   `toml:"wrapper_mode"`
+	Args        []string `toml:"args"`
+	ReviewArgs  []string `toml:"review_args"` // extra args for `command codex review`
+	SkillPath   string   `toml:"skill_path"`
+}
+
+// Claude is the legacy [claude] section, mapped like Codex: wrapper_mode
+// and args onto kinds.claude, effort onto claude-review and simplify onto
+// claude-simplify's runs (first -> first, always -> always, never ->
+// manual; anything else but "" fails validation). The fields keep the values
+// the files set; the effective settings are in KindSpec and the roles.
+type Claude struct {
+	WrapperMode string   `toml:"wrapper_mode"`
+	Args        []string `toml:"args"`
+	Effort      string   `toml:"effort"`
+	Simplify    string   `toml:"simplify"` // first | always | never
+}
+
+type Identity struct {
+	Name            string `toml:"name"`
+	Kind            string `toml:"kind"` // gh | app
+	Login           string `toml:"login"`
+	AppID           int64  `toml:"app_id"`
+	ClientID        string `toml:"client_id"`
+	InstallationID  int64  `toml:"installation_id"`
+	PrivateKeyEnv   string `toml:"private_key_env"`
+	NoFindingsEvent string `toml:"no_findings_event"` // APPROVE | COMMENT
+	BlockingEvent   string `toml:"blocking_event"`    // REQUEST_CHANGES | COMMENT
+	DismissOwnStale *bool  `toml:"dismiss_own_stale_change_requests"`
+}
+
+// DismissStale reports whether the identity dismisses its own stale CHANGES_REQUESTED.
+func (i Identity) DismissStale() bool {
+	if i.DismissOwnStale != nil {
+		return *i.DismissOwnStale
+	}
+	return i.Kind == "app"
+}
+
+type Watch struct {
+	Owner               string   `toml:"owner"`
+	Include             []string `toml:"include"`
+	Exclude             []string `toml:"exclude"`
+	Identity            string   `toml:"identity"`
+	PollIdentity        string   `toml:"poll_identity"`
+	CloneRoot           string   `toml:"clone_root"`
+	IncludeDrafts       *bool    `toml:"include_drafts"`
+	IncludeOwn          *bool    `toml:"include_own"`
+	SkipBotAuthors      *bool    `toml:"skip_bot_authors"`
+	SkipAuthors         []string `toml:"skip_authors"`
+	SkipLabels          []string `toml:"skip_labels"`
+	SkipCrossRepository *bool    `toml:"skip_cross_repository"`
+	// SkipDepartedAuthors (default true): a PR from a branch of the
+	// repository whose author is no longer an owner, member or collaborator
+	// of it (GitHub's authorAssociation) was opened by someone who left; it
+	// is not reviewed. Fork PRs are skip_cross_repository's business.
+	SkipDepartedAuthors *bool `toml:"skip_departed_authors"`
+	// SkipPaths are path globs ("**" matches whole directories, "*" never
+	// crosses "/"; see MatchPath): a PR is not reviewed when every file it
+	// changes (a rename counts both names) matches one of them. A PR whose
+	// file list is unknown or longer than GitHub lists is never skipped.
+	SkipPaths []string `toml:"skip_paths"`
+	// Roles names the [[role]]s (names or aliases) this watch runs; empty
+	// = every role. Exactly one of them must be a judge.
+	Roles []string `toml:"roles"`
+	// BurstQuietPeriod, BurstPushes and BurstWindow override the [daemon]
+	// keys of the same names for this watch's PRs: a zero duration or an
+	// unset burst_pushes keeps the daemon's, burst_pushes = 0 turns the rule
+	// off for the watch. See Config.ThrottleFor.
+	BurstQuietPeriod Duration `toml:"burst_quiet_period"`
+	BurstPushes      *int     `toml:"burst_pushes"`
+	BurstWindow      Duration `toml:"burst_window"`
+	// KeepApprovals keeps the approvals an App identity posted on the
+	// watch's PRs when they get new commits (default false: magnum
+	// dismisses them until the re-review posts). A [[repo]] block's
+	// keep_approvals overrides it.
+	KeepApprovals bool `toml:"keep_approvals"`
+	// SkipTrivialDeltas overrides [daemon] skip_trivial_deltas for the
+	// watch's PRs: nil (unset) keeps the daemon's, [] re-reviews every push.
+	SkipTrivialDeltas []string `toml:"skip_trivial_deltas"`
+	// RereviewMinLines and RereviewMaxWait override the [daemon] keys of the
+	// same names for this watch's PRs: unset rereview_min_lines or a zero
+	// duration keeps the daemon's, rereview_min_lines = 0 turns the
+	// threshold off for the watch.
+	RereviewMinLines *int     `toml:"rereview_min_lines"`
+	RereviewMaxWait  Duration `toml:"rereview_max_wait"`
+	// RequestTeams are team slugs whose review requests count like a
+	// request for the poll login (request_debounce); other teams' do not.
+	RequestTeams []string `toml:"request_teams"`
+}
+
+// TrivialDeltas is the skip_trivial_deltas that applies to w's PRs: the
+// watch's when it sets one, else the daemon's. Empty = every push is
+// re-reviewed.
+func (c *Config) TrivialDeltas(w *Watch) []string {
+	if w != nil && w.SkipTrivialDeltas != nil {
+		return w.SkipTrivialDeltas
+	}
+	return c.Daemon.SkipTrivialDeltas
+}
+
+// ThrottleFor is the [daemon] section with w's burst and re-review delta
+// overrides applied: the throttle settings (eligibility.Throttle) of w's
+// PRs. A nil w is the daemon's.
+func (c *Config) ThrottleFor(w *Watch) Daemon {
+	d := c.Daemon
+	if w == nil {
+		return d
+	}
+	if w.BurstQuietPeriod.Duration > 0 {
+		d.BurstQuietPeriod = w.BurstQuietPeriod
+	}
+	if w.BurstPushes != nil {
+		d.BurstPushes = *w.BurstPushes
+	}
+	if w.BurstWindow.Duration > 0 {
+		d.BurstWindow = w.BurstWindow
+	}
+	if w.RereviewMinLines != nil {
+		d.RereviewMinLines = *w.RereviewMinLines
+	}
+	if w.RereviewMaxWait.Duration > 0 {
+		d.RereviewMaxWait = w.RereviewMaxWait
+	}
+	return d
+}
+
+func boolOr(p *bool, def bool) bool {
+	if p == nil {
+		return def
+	}
+	return *p
+}
+func (w Watch) DraftsIncluded() bool   { return boolOr(w.IncludeDrafts, true) }
+func (w Watch) OwnIncluded() bool      { return boolOr(w.IncludeOwn, true) }
+func (w Watch) BotsSkipped() bool      { return boolOr(w.SkipBotAuthors, true) }
+func (w Watch) CrossRepoSkipped() bool { return boolOr(w.SkipCrossRepository, true) }
+
+// DepartedAuthorsSkipped is SkipDepartedAuthors with its default (true).
+func (w Watch) DepartedAuthorsSkipped() bool { return boolOr(w.SkipDepartedAuthors, true) }
+
+// Matches reports whether owner/name is covered by this watch: the owner
+// equals w.Owner, no Exclude glob matches the name and an Include glob does
+// (path.Match globs; case is ignored throughout).
+func (w Watch) Matches(owner, name string) bool {
+	if !strings.EqualFold(owner, w.Owner) {
+		return false
+	}
+	// GitHub names are case-insensitive, like owners (above), RepoFor and
+	// PoolFor: match with both sides lower-cased.
+	name = strings.ToLower(name)
+	for _, g := range w.Exclude {
+		if ok, _ := path.Match(strings.ToLower(g), name); ok {
+			return false
+		}
+	}
+	for _, g := range w.Include {
+		if ok, _ := path.Match(strings.ToLower(g), name); ok {
+			return true
+		}
+	}
+	return false
+}
+
+type Pool struct {
+	Repo            string            `toml:"repo"` // owner/name
+	MainClone       string            `toml:"main_clone"`
+	SlotName        string            `toml:"slot_name"` // review{n}
+	SlotPath        string            `toml:"slot_path"` // ~/Projects/talkable.review{n}
+	Base            string            `toml:"base"`
+	Min             int               `toml:"min"`
+	Max             int               `toml:"max"`
+	IdleRemoveAfter Duration          `toml:"idle_remove_after"`
+	MinFreeDiskGB   int               `toml:"min_free_disk_gb"`
+	CopyFiles       []string          `toml:"copy_files"`
+	StripEnv        []string          `toml:"strip_env"`
+	Setup           []string          `toml:"setup"`
+	Teardown        []string          `toml:"teardown"`
+	SchemaPaths     []string          `toml:"schema_paths"`
+	ResetDB         []string          `toml:"reset_db"`
+	PostCheckout    []string          `toml:"post_checkout"`
+	Databases       []string          `toml:"databases"`
+	Env             map[string]string `toml:"env"`
+	// Prepare and Ready make a round's checks work: before the reviewers
+	// start, the round runs each prepare command (`bin/rails
+	// db:test:prepare`), then each ready probe (exit 0 = ready), in the
+	// checkout as `zsh -lc <command>` (the login shell the agents' tools
+	// use) with the slot's env, all within ReadyTimeout (default 5m). A
+	// failure never stops the round: the judge's prompt lists it, so the
+	// judge does not spend its time finding out what cannot run. A [[repo]]
+	// block's keys of the same names replace these. See Config.ReadinessFor.
+	Prepare      []string `toml:"prepare"`
+	Ready        []string `toml:"ready"`
+	ReadyTimeout Duration `toml:"ready_timeout"`
+}
+
+// Slot renders the name of slot n.
+func (p Pool) Slot(n int) string { return strings.ReplaceAll(p.SlotName, "{n}", fmt.Sprint(n)) }
+
+// Path renders the checkout path of slot n.
+func (p Pool) Path(n int) string {
+	return paths.Expand(strings.ReplaceAll(p.SlotPath, "{n}", fmt.Sprint(n)))
+}
+
+// DBNames renders the database names for a slug.
+func (p Pool) DBNames(slug string) []string {
+	out := make([]string, 0, len(p.Databases))
+	for _, d := range p.Databases {
+		out = append(out, strings.ReplaceAll(d, "{slug}", slug))
+	}
+	return out
+}
+
+// SlotEnv renders [pool.env] for a slot (blank values stay blank on purpose).
+func (p Pool) SlotEnv(slot string) map[string]string {
+	out := make(map[string]string, len(p.Env))
+	for k, v := range p.Env {
+		out[k] = strings.ReplaceAll(v, "{slot}", slot)
+	}
+	return out
+}
+
+// Repo is a [[repo]] block: the repository's verdicts (any watched
+// repository, pooled or not) and setup for the per-PR worktrees of a
+// repository without a pool. Without a block, a per-PR worktree runs the main clone's
+// .config/wt.toml hooks (worktrunk); setup or teardown commands here replace
+// those hooks (both of them), and wt_hooks = false ignores them without a
+// replacement. Commands run in the worktree with WT_BRANCH=magnum-pr-<N> and
+// the rendered env; they are not templated (use $WT_BRANCH).
+type Repo struct {
+	Repo      string            `toml:"repo"`       // owner/name
+	Setup     []string          `toml:"setup"`      // after the worktree is created, before the review starts
+	Teardown  []string          `toml:"teardown"`   // before the worktree is removed (failures are logged)
+	WTHooks   *bool             `toml:"wt_hooks"`   // default true: use .config/wt.toml when setup/teardown are empty
+	CopyFiles []string          `toml:"copy_files"` // relative to the main clone, copied when present
+	StripEnv  []string          `toml:"strip_env"`  // keys dropped from the rendered .mise.local.toml
+	Env       map[string]string `toml:"env"`        // {slug} {path} {clone}
+
+	// The repository's verdicts, overriding the posting identity's (see
+	// Config.VerdictsFor). Unlike the keys above, which configure per-PR
+	// worktrees, these may also be set for a repository with a [[pool]].
+	NoFindingsEvent string `toml:"no_findings_event"` // APPROVE | COMMENT
+	BlockingEvent   string `toml:"blocking_event"`    // REQUEST_CHANGES | COMMENT
+
+	// Verification readiness (see Pool.Prepare), with or without a
+	// [[pool]]: each key that is set replaces the pool's.
+	Prepare      []string `toml:"prepare"`
+	Ready        []string `toml:"ready"`
+	ReadyTimeout Duration `toml:"ready_timeout"`
+
+	// KeepApprovals keeps an approval the posting App identity gave when the
+	// PR gets new commits; by default magnum dismisses it until the
+	// re-review posts. Overrides the watch's keep_approvals (see
+	// Config.KeepApprovals).
+	KeepApprovals *bool `toml:"keep_approvals"`
+}
+
+// worktreeKeys reports whether the block sets any per-PR worktree key
+// (everything but repo, the verdicts, readiness and keep_approvals).
+func (r Repo) worktreeKeys() bool {
+	return len(r.Setup) > 0 || len(r.Teardown) > 0 || r.WTHooks != nil || len(r.CopyFiles) > 0 || len(r.StripEnv) > 0 || len(r.Env) > 0
+}
+
+// WTHooksEnabled reports whether .config/wt.toml hooks may run (wt_hooks,
+// default true).
+func (r Repo) WTHooksEnabled() bool { return boolOr(r.WTHooks, true) }
+
+// HasCommands reports whether the block supplies its own setup or teardown.
+func (r Repo) HasCommands() bool { return len(r.Setup) > 0 || len(r.Teardown) > 0 }
+
+// RenderEnv renders [repo.env] for a per-PR worktree: {slug} is the
+// workspace name (magnum-pr-<N>), {path} the worktree and {clone} the main
+// clone. Blank values stay blank on purpose.
+func (r Repo) RenderEnv(slug, path, clone string) map[string]string {
+	out := make(map[string]string, len(r.Env))
+	rep := strings.NewReplacer("{slug}", slug, "{path}", path, "{clone}", clone)
+	for k, v := range r.Env {
+		out[k] = rep.Replace(v)
+	}
+	return out
+}
+
+// LoadOptions tunes LoadWithOptions.
+type LoadOptions struct {
+	// NoOverlay skips config.local.toml (LocalOverlayPath) even when it
+	// exists next to the config file, so the result depends on the committed
+	// file alone.
+	NoOverlay bool
+}
+
+// Load reads the file at path (or the layout's default), applies the
+// config.local.toml next to it and validates the result. It is
+// LoadWithOptions with the zero LoadOptions.
+func Load(layout paths.Layout, file string) (*Config, error) {
+	return LoadWithOptions(layout, file, LoadOptions{})
+}
+
+// LoadWithOptions is Load with options: the file at path (or $MAGNUM_CONFIG,
+// else the layout's default), the overlay unless opts.NoOverlay, validated.
+func LoadWithOptions(layout paths.Layout, file string, opts LoadOptions) (*Config, error) {
+	if file == "" {
+		file = os.Getenv("MAGNUM_CONFIG")
+	}
+	if file == "" {
+		file = layout.Config()
+	}
+	cfg := Defaults()
+	cfg.Layout = layout
+	// Kinds and roles are merged key by key below; decoding into the
+	// defaults would reuse their slice elements and replace whole map values.
+	cfg.Kinds, cfg.Roles = nil, nil
+	md, err := toml.DecodeFile(file, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("config %s: %w", file, err)
+	}
+	if undecoded := md.Undecoded(); len(undecoded) > 0 {
+		return nil, fmt.Errorf("config %s: unknown keys: %v", file, undecoded)
+	}
+	base, err := readLayer(file, md, cfg.Kinds, cfg.Roles)
+	if err != nil {
+		return nil, err
+	}
+	var over *layer
+	if local := LocalOverlayPath(file); local != "" && !opts.NoOverlay {
+		if over, err = cfg.applyOverlay(local); err != nil {
+			return nil, err
+		}
+	}
+	cfg.buildPipeline(base, over)
+	cfg.expand()
+	cfg.Normalize()
+	cfg.expandPipeline()
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("config %s: %w", file, err)
+	}
+	return cfg, nil
+}
+
+// LocalOverlayPath returns the gitignored overlay next to the config file
+// (config.local.toml) when it exists, else "". The overlay holds private
+// settings that must not be committed, e.g. extra [[watch]] blocks.
+func LocalOverlayPath(file string) string {
+	local := filepath.Join(filepath.Dir(file), "config.local.toml")
+	if _, err := os.Stat(local); err != nil {
+		return ""
+	}
+	return local
+}
+
+// applyOverlay merges config.local.toml: [[identity]], [[watch]], [[pool]]
+// and [[repo]] entries are appended; keys present under [daemon], [herdr], [terminal],
+// [codex], [claude], [github], [pipeline] and [usage] override the committed values key by key.
+// Its [kinds.<name>] keys and [[role]] blocks are returned for buildPipeline:
+// kind keys override key by key, a [[role]] named like an existing role
+// overrides the keys it sets, any other [[role]] is appended.
+func (c *Config) applyOverlay(path string) (*layer, error) {
+	var o Config
+	md, err := toml.DecodeFile(path, &o)
+	if err != nil {
+		return nil, fmt.Errorf("config overlay %s: %w", path, err)
+	}
+	if undecoded := md.Undecoded(); len(undecoded) > 0 {
+		return nil, fmt.Errorf("config overlay %s: unknown keys: %v", path, undecoded)
+	}
+	c.Identities = append(c.Identities, o.Identities...)
+	c.Watches = append(c.Watches, o.Watches...)
+	c.Pools = append(c.Pools, o.Pools...)
+	c.Repos = append(c.Repos, o.Repos...)
+	overlaySection(md, "daemon", &c.Daemon, &o.Daemon)
+	overlaySection(md, "herdr", &c.Herdr, &o.Herdr)
+	overlaySection(md, "terminal", &c.Terminal, &o.Terminal)
+	overlaySection(md, "codex", &c.Codex, &o.Codex)
+	overlaySection(md, "claude", &c.Claude, &o.Claude)
+	overlaySection(md, "github", &c.GitHub, &o.GitHub)
+	overlaySection(md, "pipeline", &c.Pipeline, &o.Pipeline)
+	overlaySection(md, "usage", &c.Usage, &o.Usage)
+	l, err := readLayer(path, md, o.Kinds, o.Roles)
+	if err != nil {
+		return nil, fmt.Errorf("config overlay %s: %w", path, err)
+	}
+	return l, nil
+}
+
+// overlaySection copies every field of src whose toml key is defined in the
+// overlay into dst.
+func overlaySection(md toml.MetaData, section string, dst, src any) {
+	dv := reflect.ValueOf(dst).Elem()
+	sv := reflect.ValueOf(src).Elem()
+	t := dv.Type()
+	for i := 0; i < t.NumField(); i++ {
+		tag := strings.Split(t.Field(i).Tag.Get("toml"), ",")[0]
+		if tag == "" || tag == "-" {
+			continue
+		}
+		if md.IsDefined(section, tag) {
+			dv.Field(i).Set(sv.Field(i))
+		}
+	}
+}
+
+// Defaults returns the built-in defaults (Kinds and Roles normalized,
+// {{repo}} paths unexpanded); Load overlays the file on top.
+func Defaults() *Config {
+	c := &Config{
+		Daemon: Daemon{
+			PollInterval:             Duration{30 * time.Second},
+			MaxConcurrentReviews:     3,
+			MaxTotalWorkingCodex:     5,
+			PushQuietPeriod:          Duration{5 * time.Minute},
+			MinRereviewInterval:      Duration{30 * time.Minute},
+			DraftMinRereviewInterval: Duration{2 * time.Hour},
+			MaxRoundsPerPRPerDay:     12,
+			CloseGrace:               Duration{10 * time.Minute},
+			ReviewerTimeout:          Duration{40 * time.Minute},
+			JudgeTimeout:             Duration{90 * time.Minute},
+			AgentStartStagger:        Duration{15 * time.Second},
+			MinWarm:                  Duration{30 * time.Minute},
+			HumanCooldown:            Duration{15 * time.Minute},
+			ReconcileInterval:        Duration{10 * time.Minute},
+			MinFreeDiskGB:            15,
+			KeepEvents:               Duration{30 * 24 * time.Hour},
+			KeepRequests:             Duration{7 * 24 * time.Hour},
+			MaxRoundRestarts:         2,
+			BurstQuietPeriod:         Duration{15 * time.Minute},
+			BurstPushes:              3,
+			BurstWindow:              Duration{30 * time.Minute},
+			ModelLimitCooldown:       Duration{5 * time.Hour},
+			ParkIdleAfter:            Duration{2 * time.Hour},
+			SkipTrivialDeltas:        slices.Clone(TrivialDeltaClasses),
+			RequestDebounce:          Duration{time.Minute},
+			RereviewMinLines:         30,
+			RereviewMaxWait:          Duration{2 * time.Hour},
+		},
+		Herdr:    Herdr{Socket: "~/.config/herdr/herdr.sock", Notify: true},
+		Terminal: Terminal{App: "iTerm2", Session: "default", Mouse: true},
+		Codex:    Codex{WrapperMode: "auto", SkillPath: "{{repo}}/skills/magnum-review/SKILL.md"},
+		Claude:   Claude{WrapperMode: "auto", Effort: "high", Simplify: "first"},
+		GitHub:   GitHub{Transport: "gh"},
+		Pipeline: Pipeline{PromptsDir: "{{repo}}/prompts"},
+		Usage:    Usage{CodexSoft: 80, CodexHard: 95},
+	}
+	c.Normalize()
+	return c
+}
+
+// expand resolves ~ and {{repo}} in paths and fills per-watch and per-pool
+// defaults. It runs before Normalize, which reads prompts from prompts_dir.
+func (c *Config) expand() {
+	c.Herdr.Socket = paths.Expand(c.Herdr.Socket)
+	c.Usage.CodexHome = paths.Expand(c.Usage.CodexHome)
+	c.Codex.SkillPath = paths.Expand(strings.ReplaceAll(c.Codex.SkillPath, "{{repo}}", c.Layout.Home))
+	c.Pipeline.PromptsDir = paths.Expand(strings.ReplaceAll(c.Pipeline.PromptsDir, "{{repo}}", c.Layout.Home))
+	if d := c.Pipeline.PromptsDir; d != "" && !filepath.IsAbs(d) && c.Layout.Home != "" {
+		c.Pipeline.PromptsDir = filepath.Join(c.Layout.Home, d)
+	}
+	for i := range c.Watches {
+		c.Watches[i].CloneRoot = paths.Expand(c.Watches[i].CloneRoot)
+		if c.Watches[i].CloneRoot == "" {
+			c.Watches[i].CloneRoot = paths.Expand("~/Projects")
+		}
+		if c.Watches[i].PollIdentity == "" {
+			c.Watches[i].PollIdentity = c.Watches[i].Identity
+		}
+	}
+	for i := range c.Pools {
+		c.Pools[i].MainClone = paths.Expand(c.Pools[i].MainClone)
+		if c.Pools[i].Base == "" {
+			c.Pools[i].Base = "master"
+		}
+		if c.Pools[i].MinFreeDiskGB == 0 {
+			c.Pools[i].MinFreeDiskGB = c.Daemon.MinFreeDiskGB
+		}
+	}
+}
+
+// IdentityByName returns the identity or nil.
+func (c *Config) IdentityByName(name string) *Identity {
+	for i := range c.Identities {
+		if c.Identities[i].Name == name {
+			return &c.Identities[i]
+		}
+	}
+	return nil
+}
+
+// WatchFor returns the watch that covers owner/name, or nil.
+func (c *Config) WatchFor(fullName string) *Watch {
+	owner, name, ok := strings.Cut(fullName, "/")
+	if !ok {
+		return nil
+	}
+	for i := range c.Watches {
+		if c.Watches[i].Matches(owner, name) {
+			return &c.Watches[i]
+		}
+	}
+	return nil
+}
+
+// RepoFor returns the [[repo]] block for owner/name, or nil.
+func (c *Config) RepoFor(fullName string) *Repo {
+	for i := range c.Repos {
+		if strings.EqualFold(c.Repos[i].Repo, fullName) {
+			return &c.Repos[i]
+		}
+	}
+	return nil
+}
+
+// VerdictsFor returns the review events the judge posts for repository
+// fullName ("owner/name") as identity id: noFindings when it finds nothing
+// (APPROVE | COMMENT), blocking when it finds a blocking issue
+// (REQUEST_CHANGES | COMMENT). Each comes from the repository's [[repo]]
+// block when it sets it, else from the identity, else the default:
+// APPROVE for a gh identity and COMMENT for an app or an unknown one (a bot
+// approval must not unlock a merge by accident), and REQUEST_CHANGES.
+func (c *Config) VerdictsFor(fullName string, id *Identity) (noFindings, blocking string) {
+	var r *Repo
+	if c != nil {
+		r = c.RepoFor(fullName)
+	}
+	pick := func(repo, ident, def string) string {
+		switch {
+		case r != nil && repo != "":
+			return repo
+		case ident != "":
+			return ident
+		}
+		return def
+	}
+	var idNF, idBE string
+	def := "COMMENT"
+	if id != nil {
+		idNF, idBE = id.NoFindingsEvent, id.BlockingEvent
+		if id.Kind == "gh" {
+			def = "APPROVE"
+		}
+	}
+	var repoNF, repoBE string
+	if r != nil {
+		repoNF, repoBE = r.NoFindingsEvent, r.BlockingEvent
+	}
+	return pick(repoNF, idNF, def), pick(repoBE, idBE, "REQUEST_CHANGES")
+}
+
+// PoolFor returns the pool for owner/name, or nil (per-PR worktree repos).
+func (c *Config) PoolFor(fullName string) *Pool {
+	for i := range c.Pools {
+		if strings.EqualFold(c.Pools[i].Repo, fullName) {
+			return &c.Pools[i]
+		}
+	}
+	return nil
+}
+
+// DefaultReadyTimeout bounds a round's whole readiness step when neither the
+// [[repo]] nor the [[pool]] sets ready_timeout.
+const DefaultReadyTimeout = 5 * time.Minute
+
+// Readiness is a repository's verification readiness step: the commands a
+// round runs in the checkout before the reviewers (see Pool.Prepare).
+type Readiness struct {
+	Prepare []string
+	Ready   []string
+	Timeout time.Duration // the budget of all of them together
+}
+
+// ReadinessFor returns the readiness step of repository fullName
+// ("owner/name"): each of prepare, ready and ready_timeout from its [[repo]]
+// block when the block sets it, else from its [[pool]]; the timeout defaults
+// to DefaultReadyTimeout.
+func (c *Config) ReadinessFor(fullName string) Readiness {
+	var out Readiness
+	if p := c.PoolFor(fullName); p != nil {
+		out = Readiness{Prepare: p.Prepare, Ready: p.Ready, Timeout: p.ReadyTimeout.Duration}
+	}
+	if r := c.RepoFor(fullName); r != nil {
+		if len(r.Prepare) > 0 {
+			out.Prepare = r.Prepare
+		}
+		if len(r.Ready) > 0 {
+			out.Ready = r.Ready
+		}
+		if r.ReadyTimeout.Duration > 0 {
+			out.Timeout = r.ReadyTimeout.Duration
+		}
+	}
+	if out.Timeout <= 0 {
+		out.Timeout = DefaultReadyTimeout
+	}
+	return out
+}
+
+// KeepApprovals reports whether an App identity's approval on a PR of
+// repository fullName stays when the PR gets new commits: the [[repo]]
+// block's keep_approvals when set, else the covering watch's (default
+// false: magnum dismisses it until the re-review posts).
+func (c *Config) KeepApprovals(fullName string) bool {
+	if r := c.RepoFor(fullName); r != nil && r.KeepApprovals != nil {
+		return *r.KeepApprovals
+	}
+	if w := c.WatchFor(fullName); w != nil {
+		return w.KeepApprovals
+	}
+	return false
+}

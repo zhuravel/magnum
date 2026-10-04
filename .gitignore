@@ -1,0 +1,8 @@
+.mise.local.toml
+/bin/
+/dist/
+*.pem
+/state/
+/config.local.toml
+!internal/store/migrations/*.sql
+/eval.local.toml

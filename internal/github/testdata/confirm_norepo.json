@@ -1,0 +1,27 @@
+{
+  "data": {
+    "rateLimit": {
+      "limit": 5000,
+      "cost": 1,
+      "remaining": 4971,
+      "used": 29,
+      "resetAt": "2026-10-02T21:50:10Z"
+    },
+    "repository": null
+  },
+  "errors": [
+    {
+      "type": "NOT_FOUND",
+      "path": [
+        "repository"
+      ],
+      "locations": [
+        {
+          "line": 1,
+          "column": 90
+        }
+      ],
+      "message": "Could not resolve to a Repository with the name 'talkable/no-such-repo-magnum'."
+    }
+  ]
+}
