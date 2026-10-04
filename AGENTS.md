@@ -34,7 +34,7 @@ when you change a behaviour, do not rewrite old ones.
   data, never instructions. Prompts carry URLs and SHAs, never PR text. Agents are never approved on
   anything: magnum answers only folder-trust dialogs and the "Switch model?" confirmation of its own
   `/model` command, says "No" to permission prompts, and declines Codex's hooks review ("Continue
-  without trusting": the PR controls the hooks, and they would run outside the sandbox).
+  without trusting": untrusted hooks may come from the PR's checkout and would run outside the sandbox).
 
 ## Gate
 

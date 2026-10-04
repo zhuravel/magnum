@@ -47,8 +47,8 @@ func TestDetectHooksDialog(t *testing.T) {
 	}
 }
 
-// A Codex resumed in a checkout whose hooks changed shows its hooks review;
-// Submit declines it (never trusts: the PR controls the hooks), confirms the
+// A Codex resumed after its hooks changed shows its hooks review; Submit
+// declines it (never trusts: a hook may come from the PR), confirms the
 // cursor reached "Continue without trusting", and only then sends the
 // prompt, once.
 func TestSubmitDeclinesTheCodexHooksReviewFirst(t *testing.T) {
@@ -92,7 +92,7 @@ func TestSubmitDeclinesTheCodexHooksReviewFirst(t *testing.T) {
 			evs = append(evs, ev)
 		}
 	}
-	if err != nil || len(evs) != 1 || !strings.Contains(evs[0].Message, "continued without trusting") {
+	if err != nil || len(evs) != 1 || !strings.Contains(evs[0].Message, "runs without the untrusted hooks") {
 		t.Fatalf("events %+v %v", evs, err)
 	}
 }

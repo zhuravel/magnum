@@ -11,8 +11,9 @@ import (
 )
 
 // Codex's startup hooks review (Codex 0.160, tui/src/startup_hooks_review.rs)
-// appears when a session starts or resumes in a checkout whose hooks are new
-// or changed (a PR branch changed the repository's Codex hooks):
+// appears when a session starts or resumes and hooks Codex has not trusted yet
+// are new or changed: the user's ~/.codex/hooks.json (a tool that installs
+// hooks rewrote it) or a repository's .codex/ hooks (which a PR controls):
 //
 //	Hooks need review
 //	3 hooks are new or changed.
@@ -21,9 +22,11 @@ import (
 //	  2. Trust all and continue
 //	  3. Continue without trusting (hooks won't run)
 //
-// Typed into, it eats the next prompt. magnum never trusts hooks (the PR
-// controls them and they run outside the sandbox): it picks "Continue without
-// trusting", as it says No to permission prompts.
+// Typed into, it eats the next prompt. The dialog does not say where a hook
+// comes from, so magnum never trusts any (they run outside the sandbox, and a
+// PR may have added them): it picks "Continue without trusting", as it says No
+// to permission prompts. That holds for the one session and records no
+// distrust; trusting them once in one's own Codex stops the dialog for good.
 const (
 	hooksTitle   = "Hooks need review"
 	hooksDecline = "Continue without trusting (hooks won't run)"
@@ -116,8 +119,8 @@ func (m *Manager) declineHooks(ctx context.Context, prID int64, role Role, ref p
 		return false, fmt.Errorf("agents: hooks review in %s: %w", ref, err)
 	}
 	keys = append(keys, "enter")
-	msg := fmt.Sprintf("declined the Codex hooks review of %s in %s: continued without trusting the checkout's hooks (%s)",
-		role, ref, strings.Join(keys, ", "))
+	msg := fmt.Sprintf("declined the Codex hooks review of %s in %s: this session runs without the untrusted hooks; "+
+		"trust them once in your own Codex to stop the dialog (%s)", role, ref, strings.Join(keys, ", "))
 	m.logf("agents: %s", msg)
 	data, _ := json.Marshal(map[string]any{"role": string(role), "agent": ref.name, "pane": ref.pane, "keys": keys})
 	subject := m.prSubject(ctx, prID)

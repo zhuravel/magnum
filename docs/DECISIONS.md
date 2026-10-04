@@ -641,11 +641,15 @@ editing history. Code, config comments and prompts reference these by their head
   Rejected: ⌘⇧. (terminals keep ⌘ for themselves) and arbitrary hex colors (the board sticks to the 16
   ANSI colors so themes stay readable).
 - **Codex's hooks review is declined, never trusted** (2026-10-04, after talkable#11483's re-review: the
-  resumed judge showed "Hooks need review" because the PR changed the repository's Codex hooks, the
-  prompt went into the dialog, magnum took the idle agent for a judge that stopped, nudged it and parked
-  the PR in needs_attention). Before every prompt to a Codex agent, after a prompt herdr rejected as
+  resumed judge showed "Hooks need review" because a terminal app had just rewritten the user's
+  ~/.codex/hooks.json, the prompt went into the dialog, magnum took the idle agent for a judge that
+  stopped, nudged it and parked the PR in needs_attention). The dialog lists hooks Codex has not trusted
+  yet, from the user's ~/.codex/hooks.json or from a repository's .codex/ (which a PR controls), and
+  does not say which, so magnum treats them all as untrusted. Declining applies to that session only
+  and records no distrust; trusting the hooks once in one's own Codex (Codex keeps a trusted hash per
+  hook in config.toml) stops the dialog for every later session, magnum's included. Before every prompt to a Codex agent, after a prompt herdr rejected as
   blocked, and when a Codex start stops at a dialog, magnum reads the screen; on the hooks review it moves
   the cursor to "Continue without trusting (hooks won't run)", confirms it got there, presses Enter, records
-  `agents.hooks_declined` and waits for the agent to be idle before prompting. Rejected: trusting them (the
-  hooks come from the PR and run outside the sandbox) and leaving the dialog for a human (every PR that
-  touches the hooks would stall its round).
+  `agents.hooks_declined` and waits for the agent to be idle before prompting. Rejected: trusting them
+  (they run outside the sandbox and may come from the PR) and leaving the dialog for a human (every
+  change to the hooks would stall the next round of every PR).
