@@ -22,6 +22,10 @@ account or a GitHub App. When the author pushes, the same agent sessions pick up
 they pull the delta, read the replies, and re-review only what changed. When the PR merges, the folder
 and its databases are released. You keep working; Magnum keeps the review queue empty.
 
+> [!NOTE]
+> **Disclaimer:** everything in this repository is 100% vibecoded, and 100% awesome. It saves me time
+> and I use it every day. I hope you're not against vibecode if you trust AI to review your pull requests.
+
 - **Multiple agents, one review.** Claude, Codex, droid, omp or any CLI herdr can drive, each with its
   own prompt, model, credentials and schedule, feeding candidate findings to a judge that posts once.
 - **Sessions that remember.** Re-reviews re-prompt the sessions that reviewed the PR before, so the
