@@ -216,9 +216,11 @@ func TestCommentOnlyCommitDuringTheReviewNeedsNoReReview(t *testing.T) {
 	h.tick()
 	h.advance(5 * time.Minute)
 	h.rd.gate = make(chan struct{})
+	before := len(h.rd.all())
 	if err := h.e.Tick(h.ctx); err != nil {
 		t.Fatal(err)
 	}
+	h.awaitRound(before)
 	// While the judge works on a7b3f8c, the poller sees 602da9d.
 	h.advance(time.Minute)
 	h.gh.compare[reviewedHead+"..."+pushedHead] = github.CompareStats{Commits: 1}
@@ -258,9 +260,11 @@ func TestCodeCommitDuringTheReviewKeepsTheReReview(t *testing.T) {
 	h.tick()
 	h.advance(5 * time.Minute)
 	h.rd.gate = make(chan struct{})
+	before := len(h.rd.all())
 	if err := h.e.Tick(h.ctx); err != nil {
 		t.Fatal(err)
 	}
+	h.awaitRound(before)
 	h.advance(time.Minute)
 	h.gh.compare["b1...b2"] = github.CompareStats{Commits: 1}
 	h.gh.files = map[string][]github.FileDelta{"b1...b2": rubyMixed}

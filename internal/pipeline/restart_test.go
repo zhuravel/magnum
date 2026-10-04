@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/execx"
@@ -95,6 +96,20 @@ func pushThen(e *env, sha string, next behavior) behavior {
 
 func (e *env) dirOf(sha string) string { return e.layout.ReviewDir("talkable", "talkable", 11920, sha) }
 
+// waitRun waits until role's run on head reaches state (a reviewer finishes
+// its run in its own goroutine, so another role's behavior may wait for it).
+func (e *env) waitRun(role agents.Role, head, state string) {
+	e.t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(2 * time.Millisecond) {
+		for _, r := range e.runs() {
+			if r.Role == string(role) && r.TargetSHA == head && r.State == state {
+				return
+			}
+		}
+	}
+	e.t.Errorf("%s never reached %s on %s", role, state, short(head))
+}
+
 func (e *env) eventsOf(kind string) []store.Event {
 	var out []store.Event
 	for _, ev := range e.events() {
@@ -109,7 +124,16 @@ func TestPushDuringReviewersRestartsOnTheNewHead(t *testing.T) {
 	e := newEnv(t)
 	in := e.input(KindInitial)
 	sw := e.withRestarts(&in, 2)
-	e.ag.behaviors[agents.RoleClaude] = []behavior{pushThen(e, head2, hang()), writeReport("## P2 on the new head\n")}
+	// The push lands while claude's turn is in flight and after codex-review
+	// finished on the old head (the reviewers run in parallel: a push before
+	// codex starts abandons its pending run instead, which the scheduler would
+	// otherwise pick at random).
+	pushAfterCodex := func(f *fakeAgents, run store.Run, text string) error {
+		e.waitRun(agents.RoleCodexReview, target, store.RunVerified)
+		e.push(head2)
+		return nil // the turn stays in flight until the push cuts it
+	}
+	e.ag.behaviors[agents.RoleClaude] = []behavior{pushAfterCodex, writeReport("## P2 on the new head\n")}
 	post := e.judgePosts(601, "COMMENTED", "COMMENT")
 	post.commit = head2
 	e.ag.behaviors[agents.RoleJudge] = []behavior{post.behavior(t)}

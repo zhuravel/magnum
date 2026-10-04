@@ -182,9 +182,11 @@ func TestHeadMovedDuringRoundQueuesRereview(t *testing.T) {
 	h.tick()
 	h.advance(5 * time.Minute)
 	h.rd.gate = make(chan struct{})
+	before := len(h.rd.all())
 	if err := h.e.Tick(h.ctx); err != nil {
 		t.Fatal(err)
 	}
+	h.awaitRound(before)
 	// While the round reviews b1, the poller sees a push.
 	h.advance(time.Minute)
 	pushAt := h.clock.Now()

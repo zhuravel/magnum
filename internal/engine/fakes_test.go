@@ -1073,6 +1073,19 @@ func (h *harness) tick() {
 	h.settle()
 }
 
+// awaitRound waits until more than before rounds reached the pipeline: a
+// round the tick dispatched runs in its own goroutine, which takes the PR
+// from claiming to reviewing before it enters RunRound (and waits at
+// h.rd.gate, when set).
+func (h *harness) awaitRound(before int) {
+	h.t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); len(h.rd.all()) <= before; time.Sleep(2 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			h.t.Fatal("the round never reached the pipeline")
+		}
+	}
+}
+
 func (h *harness) settle() {
 	h.e.roundWG.Wait()
 	h.e.drainHeavy(h.ctx)
