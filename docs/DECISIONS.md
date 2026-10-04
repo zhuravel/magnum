@@ -653,3 +653,16 @@ editing history. Code, config comments and prompts reference these by their head
   `agents.hooks_declined` and waits for the agent to be idle before prompting. Rejected: trusting them
   (they run outside the sandbox and may come from the PR) and leaving the dialog for a human (every
   change to the hooks would stall the next round of every PR).
+- **Codex's hooks review trusts the user's own hooks** (2026-10-04, supersedes "declined, never trusted"
+  above: declining ran every magnum session without the hooks a terminal app had just installed in
+  ~/.codex/hooks.json, and the user's answer was to trust them). The dialog does not name a hook's source,
+  but Codex reads hooks from only three places: its home (hooks.json, config.toml), installed plugins
+  (hooks/hooks.json) and the project's .codex/ layers (each directory from the checkout up to the
+  repository root). magnum checks the checkout on disk, untracked files included (a previous round's agent
+  may have written them): with no .codex/hooks.json and no hooks, plugin_hooks, plugins or marketplaces key
+  in any .codex/config.toml there, every hook listed is the user's, so it picks "Trust all and continue"
+  and records `agents.hooks_trusted`; otherwise, or when the checkout is unknown, missing or unreadable, it
+  declines as before. Kind key `on_hooks_review` (`trust_own` default, `decline`). Rejected: opening
+  "Review hooks" to read each hook's path (an unrecorded screen that may change between Codex releases;
+  the filesystem answers the same question) and trusting unconditionally (a PR adding .codex/hooks.json
+  would run its commands outside the sandbox).

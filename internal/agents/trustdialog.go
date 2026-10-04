@@ -346,35 +346,36 @@ func (m *Manager) AnswerTrustDialog(ctx context.Context, s store.Session) (bool,
 }
 
 // trustRetry answers a trust dialog in run's session (AnswerTrustDialog),
-// or declines a Codex hooks review (declineHooks), and reports whether the
-// run's rejected prompt may be sent again.
+// or a Codex hooks review (answerHooks), and reports whether the run's
+// rejected prompt may be sent again.
 func (m *Manager) trustRetry(ctx context.Context, runID string, sess store.Session) bool {
 	ok, err := m.AnswerTrustDialog(ctx, sess)
 	if err != nil {
 		m.logf("agents: run %s: trust dialog fallback: %v", runID, err)
 	}
-	if !ok && m.sessionKind(sess) == KindCodex {
+	if kind := m.sessionKind(sess); !ok && kind == KindCodex {
 		ref := paneRef{name: store.Deref(sess.AgentName), pane: store.Deref(sess.HerdrPaneID)}
-		if ok, err = m.declineHooks(ctx, sess.PRID, Role(sess.Role), ref); err != nil {
+		if ok, err = m.answerHooks(ctx, sess.PRID, Role(sess.Role), kind, ref, store.Deref(sess.Cwd)); err != nil {
 			m.logf("agents: run %s: hooks review: %v", runID, err)
 		}
 	}
 	return ok
 }
 
-// startAfterTrustDialog answers a trust dialog that stopped a starting agent
-// and returns the agent once it is idle.
-func (m *Manager) startAfterTrustDialog(ctx context.Context, prID int64, role Role, kind string, ref paneRef, gate trustGate) (herdr.AgentInfo, bool) {
+// startAfterTrustDialog answers a trust dialog (or a Codex hooks review)
+// that stopped a starting agent in checkout dir and returns the agent once
+// it is idle.
+func (m *Manager) startAfterTrustDialog(ctx context.Context, prID int64, role Role, kind string, ref paneRef, dir string, gate trustGate) (herdr.AgentInfo, bool) {
 	ok, err := m.answerTrust(ctx, prID, role, kind, ref, gate)
 	if err != nil {
 		m.logf("agents: start %s: trust dialog fallback: %v", ref, err)
 	}
 	if kind == KindCodex { // a resumed or fresh Codex may stop at its hooks review (after the trust dialog, too)
-		declined, err := m.declineHooks(ctx, prID, role, ref)
+		answered, err := m.answerHooks(ctx, prID, role, kind, ref, dir)
 		if err != nil {
 			m.logf("agents: start %s: hooks review: %v", ref, err)
 		}
-		ok = ok || declined
+		ok = ok || answered
 	}
 	if !ok {
 		return herdr.AgentInfo{}, false

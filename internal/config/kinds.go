@@ -67,6 +67,12 @@ type Kind struct {
 	// PermissionDeny). The first-launch folder-trust dialog is handled
 	// separately either way.
 	OnPermissionPrompt string `toml:"on_permission_prompt"`
+	// OnHooksReview: how magnum answers Codex's startup hooks review (hooks
+	// new or changed since Codex last trusted them): "trust_own" (default)
+	// trusts them when the checkout declares no hooks of its own, so all are
+	// the user's, and declines them otherwise; "decline" always declines
+	// (see HooksTrustOwn). Only a kind whose CLI shows that dialog uses it.
+	OnHooksReview string `toml:"on_hooks_review"`
 	// AfterDenyPrompt: the message sent (once per denied prompt, through
 	// herdr agent.prompt, within the same run) when an agent whose
 	// permission prompt magnum denied stops its turn and goes idle, so it
@@ -125,6 +131,19 @@ const (
 	// PermissionWait: never answer; the agent stays blocked until the human
 	// answers or the round times out.
 	PermissionWait = "wait"
+)
+
+// Kind.OnHooksReview values.
+const (
+	// HooksTrustOwn: pick "Trust all and continue" when the checkout carries
+	// no hooks of its own (no .codex/hooks.json, no hooks or plugins in its
+	// .codex/config.toml), so every hook listed comes from the user's Codex
+	// home or an installed plugin; "Continue without trusting" otherwise.
+	HooksTrustOwn = "trust_own"
+	// HooksDecline: always "Continue without trusting": the session runs
+	// without the untrusted hooks until the user trusts them in their own
+	// Codex.
+	HooksDecline = "decline"
 )
 
 // HealthPatterns are regular expressions (RE2, matched case-insensitively)
@@ -249,7 +268,8 @@ func DefaultHealthPatterns() HealthPatterns {
 //     effort ["--thinking={effort}"]; no login check.
 //
 // All use wrapper "auto", session_source "herdr", on_permission_prompt
-// "deny", DefaultAfterDenyPrompt and DefaultHealthPatterns. The codex and
+// "deny", on_hooks_review "trust_own", DefaultAfterDenyPrompt and
+// DefaultHealthPatterns. The codex and
 // claude args make a plain binary run without approval prompts and (codex)
 // without its sandbox, as the user's zsh wrappers do: review agents run
 // tests and `gh`, and magnum answers every approval prompt No. Args apply
@@ -257,7 +277,7 @@ func DefaultHealthPatterns() HealthPatterns {
 func DefaultKinds() map[string]Kind {
 	base := func(k Kind) Kind {
 		k.Wrapper, k.SessionSource, k.HealthPatterns = WrapperAuto, SessionHerdr, DefaultHealthPatterns()
-		k.OnPermissionPrompt, k.AfterDenyPrompt = PermissionDeny, DefaultAfterDenyPrompt
+		k.OnPermissionPrompt, k.AfterDenyPrompt, k.OnHooksReview = PermissionDeny, DefaultAfterDenyPrompt, HooksTrustOwn
 		return k
 	}
 	return map[string]Kind{
@@ -449,6 +469,10 @@ func normalizeKinds(kinds map[string]Kind) {
 		k.OnPermissionPrompt = strings.ToLower(strings.TrimSpace(k.OnPermissionPrompt))
 		if k.OnPermissionPrompt == "" {
 			k.OnPermissionPrompt = PermissionDeny
+		}
+		k.OnHooksReview = strings.ToLower(strings.TrimSpace(k.OnHooksReview))
+		if k.OnHooksReview == "" {
+			k.OnHooksReview = HooksTrustOwn
 		}
 		k.AfterDenyPrompt = strings.TrimSpace(k.AfterDenyPrompt)
 		kinds[name] = k

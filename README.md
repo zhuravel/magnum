@@ -458,7 +458,10 @@ the same entries Codex and Claude write when you click "trust". An approval prom
 during a review (Claude Code asks before some commands even with `--dangerously-skip-permissions`) is
 answered No, never Yes, at most 10 times per run and recorded as an `agent.prompt_denied` event, and an
 agent that stops after the No is told once to finish without the command (`after_deny_prompt`); set
-`on_permission_prompt = "wait"` under `[kinds.<name>]` to leave such prompts to you.
+`on_permission_prompt = "wait"` under `[kinds.<name>]` to leave such prompts to you. Codex's "Hooks need
+review" (your hooks changed since Codex last trusted them) is answered "Trust all" only when the checkout
+declares no hooks of its own, so every hook it lists is yours; hooks a repository brings are declined
+for the session (`on_hooks_review = "decline"` declines them all).
 
 ## Development
 

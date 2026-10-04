@@ -440,6 +440,11 @@ func validateKind(name string, k Kind) []error {
 	default:
 		bad("on_permission_prompt must be deny or wait, got %q", k.OnPermissionPrompt)
 	}
+	switch k.OnHooksReview {
+	case "", HooksTrustOwn, HooksDecline:
+	default:
+		bad("on_hooks_review must be trust_own or decline, got %q", k.OnHooksReview)
+	}
 	for _, g := range []struct {
 		key, ph string
 		args    []string

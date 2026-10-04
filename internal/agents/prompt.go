@@ -196,11 +196,11 @@ func (m *Manager) Submit(ctx context.Context, run store.Run, text string) error 
 		return fmt.Errorf("agents: submit %s: %w", run.ID, err) // nothing sent: the run stays pending
 	}
 
-	// A Codex resumed in a checkout whose hooks changed shows its hooks
-	// review, which would eat the prompt: decline it first (declineHooks).
-	if m.sessionKind(sess) == KindCodex {
+	// A Codex resumed after its hooks changed shows its hooks review, which
+	// would eat the prompt: answer it first (answerHooks).
+	if kind := m.sessionKind(sess); kind == KindCodex {
 		ref := paneRef{name: store.Deref(sess.AgentName), pane: store.Deref(sess.HerdrPaneID)}
-		if _, err := m.declineHooks(ctx, run.PRID, role, ref); err != nil {
+		if _, err := m.answerHooks(ctx, run.PRID, role, kind, ref, store.Deref(sess.Cwd)); err != nil {
 			m.logf("agents: submit %s: hooks review: %v", run.ID, err)
 		}
 	}

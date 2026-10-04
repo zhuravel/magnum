@@ -1,9 +1,12 @@
 package agents
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -28,10 +31,10 @@ func hooksCursorAt(n int) string {
 }
 
 func TestDetectHooksDialog(t *testing.T) {
-	if d, ok := detectHooksDialog(codexHooksScreen); !ok || d.cursor != 0 || d.decline != 2 {
+	if d, ok := detectHooksDialog(codexHooksScreen); !ok || d.cursor != 0 {
 		t.Fatalf("hooks review: %+v %v", d, ok)
 	}
-	if d, ok := detectHooksDialog(hooksCursorAt(2)); !ok || d.cursor != 2 {
+	if d, ok := detectHooksDialog(hooksCursorAt(hooksDeclineOption)); !ok || d.cursor != hooksDeclineOption {
 		t.Fatalf("cursor on decline: %+v %v", d, ok)
 	}
 	for name, text := range map[string]string{
@@ -47,13 +50,93 @@ func TestDetectHooksDialog(t *testing.T) {
 	}
 }
 
-// A Codex resumed after its hooks changed shows its hooks review; Submit
-// declines it (never trusts: a hook may come from the PR), confirms the
-// cursor reached "Continue without trusting", and only then sends the
-// prompt, once.
-func TestSubmitDeclinesTheCodexHooksReviewFirst(t *testing.T) {
+// writeFiles creates files (path relative to root → content) under root.
+func writeFiles(t *testing.T, root string, files map[string]string) {
+	t.Helper()
+	for name, body := range files {
+		p := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A checkout declares hooks of its own through .codex/hooks.json or hooks
+// (or plugins) in .codex/config.toml, in any project layer up to the
+// repository root; MCP servers alone, a hooks log directory or a .codex above
+// the repository are not the checkout's hooks. What magnum cannot read is
+// never taken for "no hooks".
+func TestCheckoutHooks(t *testing.T) {
+	mcpOnly := "[mcp_servers.github]\nurl = \"https://example.com/mcp\"\n"
+	for name, tc := range map[string]struct {
+		files   map[string]string
+		root    string // the repository root, relative to the temp dir
+		sub     string // the checkout, relative to the repository root
+		want    string // the declaring file, relative to the repository root
+		wantErr string
+	}{
+		"none":                 {files: map[string]string{"README.md": "x"}},
+		"mcp servers only":     {files: map[string]string{".codex/config.toml": mcpOnly, ".codex/hooks/log/tool_use.log": "x"}},
+		"hooks.json":           {files: map[string]string{".codex/hooks.json": "{}"}, want: ".codex/hooks.json"},
+		"hooks table":          {files: map[string]string{".codex/config.toml": mcpOnly + "[[hooks.stop]]\ncommand = \"x\"\n"}, want: ".codex/config.toml"},
+		"hooks feature":        {files: map[string]string{".codex/config.toml": "[features]\nhooks = true\n"}, want: ".codex/config.toml"},
+		"plugins":              {files: map[string]string{".codex/config.toml": "[plugins.\"x@y\"]\nenabled = true\n"}, want: ".codex/config.toml"},
+		"in a parent layer":    {files: map[string]string{".codex/hooks.json": "{}", "app/x.rb": ""}, sub: "app", want: ".codex/hooks.json"},
+		"invalid config":       {files: map[string]string{".codex/config.toml": "hooks = [\n"}, wantErr: "is not valid TOML"},
+		"missing checkout":     {sub: "gone", wantErr: "is not a directory"},
+		"above the repository": {files: map[string]string{"x/.codex/hooks.json": "{}"}, root: "x/repo"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			top := t.TempDir()
+			root := filepath.Join(top, tc.root)
+			writeFiles(t, top, tc.files)
+			if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			dir := filepath.Join(root, tc.sub)
+			got, err := checkoutHooks(dir)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("got %q, %v; want error %q", got, err, tc.wantErr)
+				}
+				return
+			}
+			want := ""
+			if tc.want != "" {
+				want = filepath.Join(root, tc.want)
+			}
+			if err != nil || got != want {
+				t.Fatalf("got %q, %v; want %q", got, err, want)
+			}
+		})
+	}
+	for _, dir := range []string{"", "relative/path"} {
+		if _, err := checkoutHooks(dir); err == nil || !strings.Contains(err.Error(), "unknown") {
+			t.Errorf("%q: %v", dir, err)
+		}
+	}
+}
+
+// hooksEnv starts the judge in a checkout made of files and shows the hooks
+// review on its screen; Enter on any option clears it.
+func hooksEnv(t *testing.T, files map[string]string) (*env, string) {
+	t.Helper()
 	e := newEnv(t)
-	e.started()
+	dir := t.TempDir()
+	writeFiles(t, dir, files)
+	if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := e.m.EnsureWorkspace(e.ctx, e.pr, dir, map[string]string{"WT_BRANCH": "review1"}, "talkable#11920", e.coreRoles())
+	if err != nil {
+		t.Fatalf("EnsureWorkspace: %v", err)
+	}
+	if err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleJudge), ws.Panes[RoleJudge], ""); err != nil {
+		t.Fatalf("StartAgent: %v", err)
+	}
 	name := "mg-11920-codex-judge-5d01cf"
 	e.h.mu.Lock()
 	e.h.reads[name] = codexHooksScreen
@@ -65,18 +148,40 @@ func TestSubmitDeclinesTheCodexHooksReviewFirst(t *testing.T) {
 			case !ok:
 			case k == "down":
 				f.reads[target] = hooksCursorAt(d.cursor + 1)
-			case k == "enter" && d.cursor != d.decline:
-				panic("enter pressed off the decline option")
 			case k == "enter":
 				f.reads[target] = codexIdleScreen
 			}
 		}
 	}
+	return e, name
+}
+
+func hooksEvents(t *testing.T, e *env) []store.Event {
+	t.Helper()
+	all, err := e.st.EventsBySubject(e.ctx, "pr:talkable/talkable#11920", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []store.Event
+	for _, ev := range all {
+		if ev.Kind == EventHooksTrusted || ev.Kind == EventHooksDeclined {
+			out = append(out, ev)
+		}
+	}
+	return out
+}
+
+// A Codex resumed after the user's own hooks changed (a tool rewrote
+// ~/.codex/hooks.json) shows its hooks review; the checkout declares no hooks,
+// so Submit trusts them, confirms the cursor reached "Trust all and
+// continue", and only then sends the prompt, once.
+func TestSubmitTrustsHooksWhenTheCheckoutHasNone(t *testing.T) {
+	e, name := hooksEnv(t, map[string]string{".codex/config.toml": "[mcp_servers.github]\nurl = \"https://example.com/mcp\"\n"})
 	id, err := e.m.Prompt(e.ctx, e.pr, RoleJudge, store.RunRereview, "re-review")
 	if err != nil {
 		t.Fatalf("Prompt: %v", err)
 	}
-	if got := strings.Join(e.keysSent(), " "); got != name+":down "+name+":down "+name+":enter" {
+	if got := strings.Join(e.keysSent(), " "); got != name+":down "+name+":enter" {
 		t.Fatalf("keys = %s", got)
 	}
 	if n := len(e.h.prompts); n != 1 {
@@ -85,30 +190,55 @@ func TestSubmitDeclinesTheCodexHooksReviewFirst(t *testing.T) {
 	if r := e.run1(id); r.State != store.RunWorking {
 		t.Fatalf("run = %+v", r)
 	}
-	all, err := e.st.EventsBySubject(e.ctx, "pr:talkable/talkable#11920", 0)
-	var evs []store.Event
-	for _, ev := range all {
-		if ev.Kind == EventHooksDeclined {
-			evs = append(evs, ev)
-		}
+	if evs := hooksEvents(t, e); len(evs) != 1 || evs[0].Kind != EventHooksTrusted || !strings.Contains(evs[0].Message, "declares no hooks") {
+		t.Fatalf("events %+v", evs)
 	}
-	if err != nil || len(evs) != 1 || !strings.Contains(evs[0].Message, "runs without the untrusted hooks") {
-		t.Fatalf("events %+v %v", evs, err)
+}
+
+// Hooks a PR could have added are never trusted: with .codex/hooks.json in
+// the checkout, or on_hooks_review = "decline", Submit picks "Continue
+// without trusting" and says why.
+func TestSubmitDeclinesHooksTheCheckoutDeclares(t *testing.T) {
+	for name, tc := range map[string]struct {
+		files map[string]string
+		kind  func(*config.Kind)
+		why   string
+	}{
+		"checkout hooks": {files: map[string]string{".codex/hooks.json": "{}"}, why: "the checkout declares hooks in"},
+		"decline":        {kind: func(k *config.Kind) { k.OnHooksReview = config.HooksDecline }, why: "on_hooks_review is not trust_own"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e, agent := hooksEnv(t, tc.files)
+			if tc.kind != nil {
+				e.setKind(KindCodex, tc.kind)
+			}
+			if _, err := e.m.Prompt(e.ctx, e.pr, RoleJudge, store.RunRereview, "re-review"); err != nil {
+				t.Fatalf("Prompt: %v", err)
+			}
+			if got := strings.Join(e.keysSent(), " "); got != agent+":down "+agent+":down "+agent+":enter" {
+				t.Fatalf("keys = %s", got)
+			}
+			evs := hooksEvents(t, e)
+			if len(evs) != 1 || evs[0].Kind != EventHooksDeclined || !strings.Contains(evs[0].Message, tc.why) ||
+				!strings.Contains(evs[0].Message, "runs without the untrusted hooks") {
+				t.Fatalf("events %+v", evs)
+			}
+		})
 	}
 }
 
 // A cursor that does not move is never confirmed: no Enter on "Review hooks"
-// or "Trust all and continue".
-func TestDeclineHooksNeverConfirmsAnotherOption(t *testing.T) {
+// or on an option magnum did not pick.
+func TestAnswerHooksNeverConfirmsAnotherOption(t *testing.T) {
 	e := newEnv(t)
 	e.started()
 	name := "mg-11920-codex-judge-5d01cf"
 	e.h.mu.Lock()
 	e.h.reads[name] = codexHooksScreen // keys change nothing on this screen
 	e.h.mu.Unlock()
-	ok, err := e.m.declineHooks(e.ctx, e.pr.ID, RoleJudge, paneRef{name: name})
+	ok, err := e.m.answerHooks(e.ctx, e.pr.ID, RoleJudge, KindCodex, paneRef{name: name}, t.TempDir())
 	if ok || err == nil || !strings.Contains(err.Error(), "not confirming") {
-		t.Fatalf("declined %v, err %v", ok, err)
+		t.Fatalf("answered %v, err %v", ok, err)
 	}
 	for _, k := range e.keysSent() {
 		if strings.HasSuffix(k, ":enter") {

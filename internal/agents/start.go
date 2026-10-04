@@ -99,7 +99,7 @@ func (m *Manager) StartAgent(ctx context.Context, pr store.PR, role config.Role,
 			return fmt.Errorf("agents: start %s: the name is taken: %w", name, err)
 		}
 		if a.AgentStatus == herdr.StatusBlocked {
-			if b, ok := m.startAfterTrustDialog(ctx, pr.ID, r, kindName, paneRef{name: name, pane: a.PaneID}, sessionGate(sess)); ok {
+			if b, ok := m.startAfterTrustDialog(ctx, pr.ID, r, kindName, paneRef{name: name, pane: a.PaneID}, checkout, sessionGate(sess)); ok {
 				a = b
 			}
 		}
@@ -180,7 +180,7 @@ func (m *Manager) StartAgent(ctx context.Context, pr store.PR, role config.Role,
 	if err != nil {
 		// agent_not_ready: blocked during startup, e.g. at a trust dialog.
 		if ctx.Err() == nil && (herdr.IsCode(err, codeAgentNotReady) || herdr.IsCode(err, herdr.CodeAgentBlocked) || herdr.IsTimeout(err)) {
-			if a, ok := m.startAfterTrustDialog(ctx, pr.ID, r, kindName, ref, gate); ok {
+			if a, ok := m.startAfterTrustDialog(ctx, pr.ID, r, kindName, ref, dir, gate); ok {
 				return started(withPane(a, paneID))
 			}
 		}
@@ -188,7 +188,7 @@ func (m *Manager) StartAgent(ctx context.Context, pr store.PR, role config.Role,
 	}
 	a := withPane(res.Agent, paneID)
 	if a.AgentStatus == herdr.StatusBlocked {
-		if b, ok := m.startAfterTrustDialog(ctx, pr.ID, r, kindName, ref, gate); ok {
+		if b, ok := m.startAfterTrustDialog(ctx, pr.ID, r, kindName, ref, dir, gate); ok {
 			a = withPane(b, paneID)
 		}
 	}

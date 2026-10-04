@@ -109,6 +109,9 @@ prompts_dir = "{{repo}}/prompts"  # a prompt name reads prompts_dir/<name>, else
 #                                     # at most 10 per run, then it waits); wait leaves it to you
 # after_deny_prompt = "magnum denied that command: ..."  # sent once when the agent stops after a deny,
 #                                     # so it finishes the run without the command; "" = send nothing
+# on_hooks_review = "trust_own"       # Codex's "Hooks need review" at start: trust_own trusts the hooks when
+#                                     # the checkout declares none (.codex/hooks.json, hooks or plugins in
+#                                     # .codex/config.toml), so all are yours; decline = never trust
 #   [kinds.codex.env]
 #   CODEX_HOME = "~/.codex"
 #   [kinds.codex.health_patterns]     # case-insensitive regexps; a list replaces the built-in one
