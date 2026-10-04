@@ -25,7 +25,7 @@ func (e *Engine) sinceBase(pr store.PR) (source, base string) {
 	}
 	login := e.reviewerLogin(pr.Identity)
 	for _, r := range pr.LatestReviews {
-		if r.CommitSHA != "" && r.State != "PENDING" && github.SameLogin(r.Login, login) {
+		if r.CommitSHA != "" && r.State != "PENDING" && github.SameAccount(r.Login, login) {
 			return store.SinceFromReview, r.CommitSHA
 		}
 	}
@@ -108,7 +108,7 @@ func (e *Engine) ownReviewCommit(ctx context.Context, gh GitHub, repo store.Repo
 	e.changed(key, "")
 	login := e.reviewerLogin(pr.Identity)
 	for _, r := range slices.Backward(reviews) {
-		if r.CommitOid != "" && r.State != "PENDING" && github.SameLogin(r.AuthorLogin, login) {
+		if r.CommitOid != "" && r.State != "PENDING" && github.SameAccount(github.Account(r.AuthorLogin, r.AuthorType), login) {
 			return r.CommitOid
 		}
 	}

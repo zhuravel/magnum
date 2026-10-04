@@ -46,6 +46,7 @@ type glyphs struct {
 	nonBlocking, simplify, times                            string
 	ciPass, ciFail, ciPending, ciMissing, ciSkip            string // a check's state: the CI column and card
 	stale, mine, pin, errMark, fail, ok                     string
+	bot                                                     string // before a bot's login in the narrow columns; "" = keep "[bot]"
 	cursor, dash, minus, atLeast, rule, up, down, dot       string
 	sortDesc, sortAsc, refresh, sep, chipSep                string
 	gap                                                     string // after an icon that text follows directly
@@ -86,11 +87,12 @@ func newGlyphs(mode IconMode) glyphs {
 			nonBlocking: "💬", times: "×",
 			ciPass: "\uf49e", ciFail: "\uf52f", ciPending: "\uf43a", // nf-oct-check_circle, x_circle, clock
 			ciMissing: "\uf48b", ciSkip: "\uf517", // nf-oct-dash, skip
-			simplify: "\uf0c4", // nf-fa-scissors
-			stale:    "\uf464", // nf-oct-history
-			mine:     "\uf51f", // nf-oct-star_fill
-			pin:      "\uf435", // nf-oct-pin
-			errMark:  "\uf530", // nf-oct-x_circle_fill
+			simplify: "\uf0c4",     // nf-fa-scissors
+			stale:    "\uf464",     // nf-oct-history
+			mine:     "\uf51f",     // nf-oct-star_fill
+			bot:      "\U000F06A9", // nf-md-robot
+			pin:      "\uf435",     // nf-oct-pin
+			errMark:  "\uf530",     // nf-oct-x_circle_fill
 			fail:     "❌", ok: "✅",
 			cursor: "▌", dash: "—", minus: "−", atLeast: "≥", rule: "─", up: "▲", down: "▼", dot: "●",
 			sortDesc: "\uf51a", // nf-oct-sort_desc
@@ -152,7 +154,7 @@ func newGlyphs(mode IconMode) glyphs {
 	return glyphs{
 		mode:     IconsUnicode,
 		approved: "✔", changes: "✗", commented: "💬", pending: "◌", dismissed: "⊘", other: "•",
-		stale: "⟳", mine: "★", pin: "📌", errMark: "!", fail: "✗", ok: "✔",
+		stale: "⟳", mine: "★", bot: "🤖", pin: "📌", errMark: "!", fail: "✗", ok: "✔",
 		nonBlocking: "●", simplify: "✂", times: "×",
 		ciPass: "✓", ciFail: "✗", ciPending: "◌", ciMissing: "–", ciSkip: "⊘",
 		cursor: "▌", dash: "—", minus: "−", atLeast: "≥", rule: "─", up: "▲", down: "▼", dot: "●",

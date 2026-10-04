@@ -404,12 +404,12 @@ func fillDetails(in *store.GitHubPR, d github.PRDetails, logins []string, now ti
 		if r.Type == "Team" {
 			in.RequestedReviewers = append(in.RequestedReviewers, store.TeamReviewerPrefix+r.Login)
 		} else {
-			in.RequestedReviewers = append(in.RequestedReviewers, github.NormalizeLogin(r.Login))
+			in.RequestedReviewers = append(in.RequestedReviewers, github.Account(r.Login, r.Type))
 		}
 	}
 	in.LatestReviews = make([]store.LatestReview, 0, len(d.LatestReviews))
 	for _, r := range d.LatestReviews {
-		lr := store.LatestReview{Login: github.NormalizeLogin(r.AuthorLogin), State: r.State, CommitSHA: r.CommitOid}
+		lr := store.LatestReview{Login: github.Account(r.AuthorLogin, r.AuthorType), State: r.State, CommitSHA: r.CommitOid}
 		if !r.SubmittedAt.IsZero() {
 			lr.SubmittedAt = store.Ptr(r.SubmittedAt.UTC())
 		}
@@ -437,7 +437,7 @@ func fillDetails(in *store.GitHubPR, d github.PRDetails, logins []string, now ti
 			continue
 		}
 		for _, l := range logins {
-			if github.SameLogin(r.Login, l) {
+			if github.SameAccount(github.Account(r.Login, r.Type), l) {
 				req = true
 			}
 		}

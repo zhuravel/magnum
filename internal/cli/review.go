@@ -488,7 +488,7 @@ func reviewRequested(d *actDeps, w config.Watch, reqs []github.Reviewer) bool {
 			continue
 		}
 		for _, l := range logins {
-			if github.SameLogin(r.Login, l) {
+			if github.SameAccount(github.Account(r.Login, r.Type), l) {
 				return true
 			}
 		}

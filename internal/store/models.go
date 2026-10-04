@@ -203,7 +203,7 @@ type PR struct {
 	RequestedReviewers []string       `json:"requested_reviewers"` // requested_reviewers_json; teams as "team:<slug>"
 	LatestReviews      []LatestReview `json:"latest_reviews"`      // latest_reviews_json
 	SinceReview        *SinceReview   `json:"since_review"`        // since_review_json; nil until computed
-	LastReviewLogin    *string        `json:"last_review_login"`   // who posted reviewed_sha's review (no "[bot]")
+	LastReviewLogin    *string        `json:"last_review_login"`   // who posted reviewed_sha's review (Account form: an App's keeps "[bot]")
 	BaseSHA            *string        `json:"base_sha"`            // base branch tip at the last Details fetch
 	DetailsAt          *time.Time     `json:"details_at"`          // last Details fetch; nil = never
 	// AuthorAssociation (migration 0006) is GitHub's authorAssociation of the
@@ -303,7 +303,7 @@ const TeamReviewerPrefix = "team:"
 // LatestReview is one entry of prs.latest_reviews_json: GitHub's latest
 // review of one reviewer.
 type LatestReview struct {
-	Login       string     `json:"login"`                  // GraphQL login, no "[bot]" suffix; "" for a ghost
+	Login       string     `json:"login"`                  // Account form (github.Account): a bot's keeps "[bot]"; "" for a ghost
 	State       string     `json:"state"`                  // APPROVED | CHANGES_REQUESTED | COMMENTED | DISMISSED | PENDING
 	SubmittedAt *time.Time `json:"submitted_at,omitempty"` // nil for a PENDING review
 	CommitSHA   string     `json:"commit_sha"`             // "" when the commit is gone

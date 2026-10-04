@@ -87,7 +87,7 @@ func approvedPR(h *harness, n int, head string) store.PR {
 	approving(h, "APPROVED")
 	pr := h.reviewedPR(n, head)
 	if deref(pr.LastReviewID) != approvalID || deref(pr.LastReviewEvent) != "APPROVED" || deref(pr.ReviewedSHA) != head ||
-		deref(pr.LastReviewLogin) != "talkable" || pr.Identity != "talkable-app" {
+		deref(pr.LastReviewLogin) != "talkable[bot]" || pr.Identity != "talkable-app" {
 		h.t.Fatalf("setup: review %v event %q at %q by %q as %q", pr.LastReviewID, deref(pr.LastReviewEvent),
 			deref(pr.ReviewedSHA), deref(pr.LastReviewLogin), pr.Identity)
 	}
@@ -503,8 +503,8 @@ func TestOnlyTheConfiguredAppsReviewIsDismissed(t *testing.T) {
 		login any // last_review_login; nil = none recorded
 		want  bool
 	}{
-		{"the App's login", "talkable", true},
-		{"the App's login as GitHub's REST API spells it", "talkable[bot]", true},
+		{"the App's login", "talkable[bot]", true},
+		{"a user named like the App", "talkable", false},
 		{"no login recorded: the PR's identity is the App", nil, true},
 		{"another login", "example-bot", false},
 		{"the gh user's login", "zhuravel", false},
@@ -653,7 +653,7 @@ func TestDryRunDismissesNothing(t *testing.T) {
 				u.Set("reviewed_sha", "b1")
 				u.Set("last_review_id", approvalID)
 				u.Set("last_review_event", "APPROVED")
-				u.Set("last_review_login", "talkable")
+				u.Set("last_review_login", "talkable[bot]")
 			}); err != nil {
 				t.Fatal(err)
 			}

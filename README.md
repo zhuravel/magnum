@@ -371,7 +371,8 @@ identities, roles and sorts from config.
 One row per open PR, newest activity first: repository and PR number (two columns, so a long repository name never hides the number), title, author, assignee, updated age, Magnum's state
 badge, the last review (who, verdict, age, ⟳ when the head moved since), what changed since
 (`3c +41 −7`), and reviewer chips with a verdict glyph each (✔ approved, ✗ changes requested,
-💬 commented, ◌ requested, ⟳ stale); yours and Magnum's are starred. `enter` opens the card with the full
+💬 commented, ◌ requested, ⟳ stale); yours and Magnum's are starred, and a bot's login carries the bot
+mark (🤖, or `[bot]` in ASCII), so an App named like you (`zhuravel[bot]`) never reads as you. `enter` opens the card with the full
 per-reviewer table and the last round's stage timings (fetch/checkout, each role, verify, total); `/`
 filters; `v` cycles the views; `s`/`S` sort; `r`, `R`, `i` start review variants; `o` opens the pane;
 `p`/`u` pin; `x` releases; `M`/`U` mute; `K` kills the running review; `I` ignores the PR (an ignored

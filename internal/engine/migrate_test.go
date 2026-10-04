@@ -128,7 +128,7 @@ func (m *migHarness) reviewedByA() store.PR {
 	m.t.Helper()
 	migPosts(m.harness, "COMMENTED")
 	pr := m.reviewedPR(2, "b1")
-	if deref(pr.LastReviewID) != 500 || deref(pr.LastReviewEvent) != "COMMENTED" || deref(pr.LastReviewLogin) != "talkable" || pr.Identity != "talkable-app" {
+	if deref(pr.LastReviewID) != 500 || deref(pr.LastReviewEvent) != "COMMENTED" || deref(pr.LastReviewLogin) != "talkable[bot]" || pr.Identity != "talkable-app" {
 		m.t.Fatalf("setup: review %v %q by %q as %q", pr.LastReviewID, deref(pr.LastReviewEvent), deref(pr.LastReviewLogin), pr.Identity)
 	}
 	migRun(m.harness, pr, "run-a", 1, "talkable-app", "talkable[bot]", 500, "COMMENTED")
@@ -264,7 +264,7 @@ func TestMigrationLiveCaseKeepsTheOldAppsHistory(t *testing.T) {
 
 	// B's review stands; the review it follows is A's COMMENTED one, and
 	// there is nothing of A's to dismiss (COMMENTED and DISMISSED stay).
-	if deref(got.LastReviewID) != 501 || deref(got.LastReviewLogin) != "zhuravel" || deref(got.ReviewedSHA) != "b2" {
+	if deref(got.LastReviewID) != 501 || deref(got.LastReviewLogin) != "zhuravel[bot]" || deref(got.ReviewedSHA) != "b2" {
 		t.Fatalf("after the round: review %v by %q at %q", got.LastReviewID, deref(got.LastReviewLogin), deref(got.ReviewedSHA))
 	}
 	for name, g := range map[string]*fakeGH{"talkable-app": a, "zhuravel-app": b, "the poll client": m.gh} {
@@ -643,8 +643,8 @@ func TestMigrationWaitsForAPausedRoundToContinue(t *testing.T) {
 	if f := migFormer(m.harness, pr.ID); f != nil {
 		t.Fatalf("former_identities after the continue = %q, want none", f)
 	}
-	if deref(got.LastReviewLogin) != "talkable" || deref(got.ReviewedSHA) != "b2" {
-		t.Fatalf("continue posted as %q at %q, want talkable at b2", deref(got.LastReviewLogin), deref(got.ReviewedSHA))
+	if deref(got.LastReviewLogin) != "talkable[bot]" || deref(got.ReviewedSHA) != "b2" {
+		t.Fatalf("continue posted as %q at %q, want talkable[bot] at b2", deref(got.LastReviewLogin), deref(got.ReviewedSHA))
 	}
 	continued := deref(got.LastReviewID)
 
@@ -901,8 +901,8 @@ func TestPreviousReviewCountsAFormerLoginsReview(t *testing.T) {
 		alone := cur
 		alone.LastReviewID = store.Ptr(int64(999))
 		prev := m.e.previousReview(m.ctx, alone, nowLogin, former)
-		if prev.ID != 999 || prev.Login != "talkable" {
-			t.Fatalf("previous = %+v, want review 999 by talkable (last_review_login)", prev)
+		if prev.ID != 999 || prev.Login != "talkable[bot]" {
+			t.Fatalf("previous = %+v, want review 999 by talkable[bot] (last_review_login)", prev)
 		}
 		alone.LastReviewLogin = nil
 		if prev := m.e.previousReview(m.ctx, alone, nowLogin, former); prev.ID != 999 || prev.Login != "" {

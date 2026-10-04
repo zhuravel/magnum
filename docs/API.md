@@ -4386,6 +4386,13 @@ var (
 
 FUNCTIONS
 
+func Account(login, typename string) string
+    Account is a login as REST names the account: a bot's GraphQL login
+    ("zhuravel" with __typename "Bot") gets its "[bot]" suffix, so an App named
+    like a user ("zhuravel[bot]", the user "zhuravel") stays another account.
+    A user's login, one already suffixed and "" come back as they are. The
+    registry keeps logins in this form.
+
 func IsBot(typename, login string) bool
     IsBot reports whether an author is a bot: GraphQL __typename "Bot" or a REST
     login ending in "[bot]".
@@ -4399,8 +4406,15 @@ func ParseRef(s, defaultRepo string) (owner, repo string, number int, err error)
     https://github.com/o/r/pull/N[/...], "o/r#N", "r#N" (owner from
     defaultRepo), "#N" or "N" (both from defaultRepo, "owner/name").
 
+func SameAccount(a, b string) bool
+    SameAccount compares two logins in Account form case-insensitively:
+    "zhuravel[bot]" and "zhuravel" are different accounts.
+
 func SameLogin(a, b string) bool
-    SameLogin compares two logins case-insensitively after NormalizeLogin.
+    SameLogin compares two logins case-insensitively after NormalizeLogin:
+    the same name whether or not either is a bot, so an App and a user of
+    the same name match. Use it only next to a check of the kind (IsBot);
+    SameAccount otherwise.
 
 
 TYPES
@@ -8303,7 +8317,7 @@ type BoardRow struct {
 	Name               string         `json:"name"`
 	Number             int            `json:"number"`
 	Title              string         `json:"title"`
-	Author             string         `json:"author"`
+	Author             string         `json:"author"` // Account form: a bot's keeps "[bot]"
 	URL                string         `json:"url"`
 	Draft              bool           `json:"draft"`
 	Labels             []string       `json:"labels"`
@@ -8492,7 +8506,7 @@ type GitHubRequiredChecks struct {
     repository's default branch requires.
 
 type LatestReview struct {
-	Login       string     `json:"login"`                  // GraphQL login, no "[bot]" suffix; "" for a ghost
+	Login       string     `json:"login"`                  // Account form (github.Account): a bot's keeps "[bot]"; "" for a ghost
 	State       string     `json:"state"`                  // APPROVED | CHANGES_REQUESTED | COMMENTED | DISMISSED | PENDING
 	SubmittedAt *time.Time `json:"submitted_at,omitempty"` // nil for a PENDING review
 	CommitSHA   string     `json:"commit_sha"`             // "" when the commit is gone
@@ -8563,7 +8577,7 @@ type PR struct {
 	RequestedReviewers []string       `json:"requested_reviewers"` // requested_reviewers_json; teams as "team:<slug>"
 	LatestReviews      []LatestReview `json:"latest_reviews"`      // latest_reviews_json
 	SinceReview        *SinceReview   `json:"since_review"`        // since_review_json; nil until computed
-	LastReviewLogin    *string        `json:"last_review_login"`   // who posted reviewed_sha's review (no "[bot]")
+	LastReviewLogin    *string        `json:"last_review_login"`   // who posted reviewed_sha's review (Account form: an App's keeps "[bot]")
 	BaseSHA            *string        `json:"base_sha"`            // base branch tip at the last Details fetch
 	DetailsAt          *time.Time     `json:"details_at"`          // last Details fetch; nil = never
 	// AuthorAssociation (migration 0006) is GitHub's authorAssociation of the

@@ -429,12 +429,13 @@ func TestPRBoardSanitizesAndGuards(t *testing.T) {
 }
 
 // Every reviewer shows a verdict glyph in the verdict's color; mine come
-// first with ★, stale ones are dimmed and marked ⟳.
+// first with ★, stale ones are dimmed and marked ⟳, and a bot's login shows
+// the bot mark instead of "[bot]" (the App is not the user named like it).
 func TestPRBoardVerdictGlyphsAndColors(t *testing.T) {
 	m, _, _ := newBoard(t, 240, 20, PRBoardOptions{})
 	raw := m.View().Content
 	v := viewOf(m)
-	mustContain(t, v, "★zhuravel✔ bob✗⟳ cat💬 dan◌", "★talkable✗⟳ ann✔⟳", "★zhuravel💬⟳ frank✔", "eve◌")
+	mustContain(t, v, "★zhuravel✔ bob✗⟳ cat💬 dan◌", "★🤖talkable✗⟳ ann✔⟳", "★zhuravel💬⟳ frank✔", "eve◌")
 
 	row := lineWith(t, raw, "#11920")
 	p := m.pal
@@ -1082,4 +1083,18 @@ func TestPRBoardNotReviewedRows(t *testing.T) {
 	c, _ := send(t, m, keyMsg("enter"))
 	mustContain(t, viewOf(c), "NOT REVIEWED", "Open before magnum began watching this repository")
 	mustNotContain(t, viewOf(c), "A approve")
+}
+
+// The narrow columns mark a bot's login per icon mode; ASCII, without a
+// mark, keeps the "[bot]" suffix.
+func TestLoginTextMarksBots(t *testing.T) {
+	for mode, want := range map[IconMode]string{IconsUnicode: "🤖zhuravel", IconsNerd: "\U000F06A9 zhuravel", IconsASCII: "zhuravel[bot]"} {
+		p := newPRBPainter(defaultStyles, newPRBPalette(defaultStyles), newGlyphs(mode), boardNow, nil, nil, SortUpdated, true)
+		if got := p.loginText("zhuravel[bot]"); got != want {
+			t.Errorf("%s: %q, want %q", mode, got, want)
+		}
+		if got := p.loginText("@zhuravel"); got != "zhuravel" {
+			t.Errorf("%s: a user's login %q", mode, got)
+		}
+	}
 }

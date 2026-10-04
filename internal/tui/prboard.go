@@ -448,8 +448,8 @@ func normLogin(s string) string {
 	return strings.TrimSuffix(s, "[bot]")
 }
 
-// shortLogin is a login for the narrow columns ("talkable[bot]" →
-// "talkable").
+// shortLogin is a login without "@" and "[bot]" ("talkable[bot]" →
+// "talkable"); the narrow columns mark a bot's (prbPainter.loginText).
 func shortLogin(s string) string {
 	return strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(s), "@"), "[bot]")
 }

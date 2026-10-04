@@ -78,13 +78,14 @@ func (e *Engine) requestLogins(w config.Watch, prIdentity string) []string {
 	return out
 }
 
-// requestForUs reports whether ev asks one of logins (ignoring "[bot]", so
-// GraphQL and REST forms match) or a team of w's request_teams for a review.
+// requestForUs reports whether ev asks one of logins (Account form: a request
+// for the user is not one for an App of the same name) or a team of w's
+// request_teams for a review.
 func requestForUs(w config.Watch, logins []string, ev github.ReviewRequestEvent) bool {
 	if ev.Reviewer.Type == "Team" {
 		return slices.ContainsFunc(w.RequestTeams, func(t string) bool { return strings.EqualFold(strings.TrimSpace(t), ev.Reviewer.Login) })
 	}
-	return slices.ContainsFunc(logins, func(l string) bool { return github.SameLogin(ev.Reviewer.Login, l) })
+	return slices.ContainsFunc(logins, func(l string) bool { return github.SameAccount(github.Account(ev.Reviewer.Login, ev.Reviewer.Type), l) })
 }
 
 // noteRequest records the newest review request of d for magnum that is

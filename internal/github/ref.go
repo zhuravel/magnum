@@ -57,7 +57,26 @@ func ParseRef(s, defaultRepo string) (owner, repo string, number int, err error)
 // compare equal to GraphQL logins ("talkable").
 func NormalizeLogin(s string) string { return strings.TrimSuffix(s, "[bot]") }
 
-// SameLogin compares two logins case-insensitively after NormalizeLogin.
+// Account is a login as REST names the account: a bot's GraphQL login
+// ("zhuravel" with __typename "Bot") gets its "[bot]" suffix, so an App
+// named like a user ("zhuravel[bot]", the user "zhuravel") stays another
+// account. A user's login, one already suffixed and "" come back as they are.
+// The registry keeps logins in this form.
+func Account(login, typename string) string {
+	if login == "" || typename != "Bot" || strings.HasSuffix(login, "[bot]") {
+		return login
+	}
+	return login + "[bot]"
+}
+
+// SameAccount compares two logins in Account form case-insensitively:
+// "zhuravel[bot]" and "zhuravel" are different accounts.
+func SameAccount(a, b string) bool { return a != "" && b != "" && strings.EqualFold(a, b) }
+
+// SameLogin compares two logins case-insensitively after NormalizeLogin: the
+// same name whether or not either is a bot, so an App and a user of the same
+// name match. Use it only next to a check of the kind (IsBot); SameAccount
+// otherwise.
 func SameLogin(a, b string) bool {
 	return a != "" && b != "" && strings.EqualFold(NormalizeLogin(a), NormalizeLogin(b))
 }

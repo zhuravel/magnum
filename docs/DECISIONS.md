@@ -666,3 +666,16 @@ editing history. Code, config comments and prompts reference these by their head
   "Review hooks" to read each hook's path (an unrecorded screen that may change between Codex releases;
   the filesystem answers the same question) and trusting unconditionally (a PR adding .codex/hooks.json
   would run its commands outside the sandbox).
+- **Logins keep "[bot]": an App named like its owner is another account** (2026-10-04, after the
+  user's own App, "zhuravel[bot]", started posting where the user "zhuravel" also reviews). GraphQL
+  drops a bot's "[bot]" and magnum stored that form, comparing logins by name (`SameLogin`): the board
+  showed the App's review as the user's, reviewer rows of the two would merge, the approval magnum
+  follows on new commits could take the user's own approval for the App's (and pick the first of two
+  installations of one App), and the "since review" base could start from the user's review. The
+  registry now keeps every login as REST names the account (`github.Account`: a GraphQL login of
+  __typename Bot gets "[bot]"), comparisons that decide anything use `SameAccount` (exact, case
+  aside), and `SameLogin` stays only next to an explicit bot check. Migration 0008 takes
+  last_review_login from the posting run's reviewer_login and fetches every open PR's Details once
+  more. The board still counts both the user and magnum's identities as "mine" (★); the narrow columns
+  mark a bot's login with 🤖 (Nerd Font robot, `[bot]` in ASCII) and the card prints it in full. The
+  user's own PRs stay self-authored for the user's App (it comments, never approves its owner's PR).

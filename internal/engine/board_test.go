@@ -89,8 +89,8 @@ func TestSinceReviewFromIdentityReviewOnGitHub(t *testing.T) {
 func TestSinceReviewFollowsReviewedSHA(t *testing.T) {
 	h := newHarness(t)
 	reviewed := h.reviewedPR(2, "b1")
-	if deref(reviewed.LastReviewLogin) != "talkable" {
-		t.Fatalf("last_review_login = %v, want the App login without [bot]", reviewed.LastReviewLogin)
+	if deref(reviewed.LastReviewLogin) != "talkable[bot]" {
+		t.Fatalf("last_review_login = %v, want the App login with [bot]", reviewed.LastReviewLogin)
 	}
 
 	// The next poll sees reviewed_sha == head: nothing new, no Compare.

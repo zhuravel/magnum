@@ -95,3 +95,22 @@ func TestIsBot(t *testing.T) {
 		t.Error("user detected as bot")
 	}
 }
+
+// A bot's GraphQL login gets REST's "[bot]"; an App and the user it is named
+// after are different accounts, while SameLogin (name only) matches them.
+func TestAccount(t *testing.T) {
+	for _, tc := range []struct{ login, typ, want string }{
+		{"zhuravel", "Bot", "zhuravel[bot]"}, {"zhuravel", "User", "zhuravel"}, {"zhuravel[bot]", "Bot", "zhuravel[bot]"},
+		{"zhuravel[bot]", "", "zhuravel[bot]"}, {"", "Bot", ""}, {"ghost", "Mannequin", "ghost"},
+	} {
+		if got := Account(tc.login, tc.typ); got != tc.want {
+			t.Errorf("Account(%q, %q) = %q, want %q", tc.login, tc.typ, got, tc.want)
+		}
+	}
+	if SameAccount("zhuravel", "zhuravel[bot]") || !SameAccount("Zhuravel[bot]", "zhuravel[BOT]") || SameAccount("", "") {
+		t.Fatal("SameAccount")
+	}
+	if !SameLogin("zhuravel", "zhuravel[bot]") {
+		t.Fatal("SameLogin compares names only")
+	}
+}

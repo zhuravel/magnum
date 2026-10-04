@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -74,7 +73,7 @@ func (e *Engine) requestVerdict(ctx context.Context, p VerdictPayload, event str
 	if err := e.st.UpdatePR(ctx, pr.ID, func(u *store.PRUpdate) {
 		u.Set("last_review_id", rev.ID)
 		u.Set("last_review_event", state)
-		if l := github.NormalizeLogin(rev.UserLogin); l != "" {
+		if l := rev.UserLogin; l != "" {
 			u.Set("last_review_login", l)
 		}
 	}); err != nil {

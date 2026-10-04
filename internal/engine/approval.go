@@ -42,19 +42,26 @@ func isApproval(event string) bool {
 }
 
 // approvalIdentity is the App identity that posted pr's last review: the
-// configured App whose login posted it (last_review_login), else the PR's
-// identity when that is an App and no login was recorded. nil when the
-// review is not an App's.
+// PR's identity when it is an App with the login that posted it
+// (last_review_login), else the first configured App with that login (one
+// App installed on several owners has an identity per installation, all
+// with one login), else the PR's identity when that is an App and no login
+// was recorded. nil when the review is not an App's: a user named like the
+// App ("zhuravel", the App "zhuravel[bot]") is not it.
 func (e *Engine) approvalIdentity(pr store.PR) *config.Identity {
 	login := deref(pr.LastReviewLogin)
+	own := e.cfg.IdentityByName(pr.Identity)
+	if own != nil && own.Kind != "app" {
+		own = nil
+	}
 	if login == "" {
-		if id := e.cfg.IdentityByName(pr.Identity); id != nil && id.Kind == "app" {
-			return id
-		}
-		return nil
+		return own
+	}
+	if own != nil && github.SameAccount(own.Login, login) {
+		return own
 	}
 	for i := range e.cfg.Identities {
-		if id := &e.cfg.Identities[i]; id.Kind == "app" && github.SameLogin(id.Login, login) {
+		if id := &e.cfg.Identities[i]; id.Kind == "app" && github.SameAccount(id.Login, login) {
 			return id
 		}
 	}

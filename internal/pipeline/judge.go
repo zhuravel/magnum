@@ -630,11 +630,13 @@ func (rd *round) judgeData(run store.Run, marker string) agents.JudgeData {
 	return jd
 }
 
-// selfAuthored: the PR's author is the user or the reviewer login itself.
+// selfAuthored: the PR's author is the user or the reviewer login itself
+// (Account form: the user's PR is self-authored for the user's App too,
+// through SelfLogin, never because the App is named like the user).
 func (rd *round) selfAuthored() bool {
-	author := store.Deref(rd.in.PR.AuthorLogin)
+	author := github.Account(store.Deref(rd.in.PR.AuthorLogin), store.Deref(rd.in.PR.AuthorType))
 	if author == "" {
 		return false
 	}
-	return (rd.r.SelfLogin != "" && github.SameLogin(author, rd.r.SelfLogin)) || github.SameLogin(author, rd.login)
+	return github.SameAccount(author, rd.r.SelfLogin) || github.SameAccount(author, rd.login)
 }

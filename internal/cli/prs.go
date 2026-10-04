@@ -335,8 +335,14 @@ func prsSelfLogins(cfg *config.Config) []string {
 	return out
 }
 
-// prsLoginKey compares logins: case, a leading "@" and a "[bot]" suffix do
-// not matter (GraphQL drops the suffix, REST keeps it).
+// prsAccountKey folds a login for telling accounts apart: case and "@"
+// dropped, "[bot]" kept (the App "zhuravel[bot]" is not the user "zhuravel").
+func prsAccountKey(s string) string {
+	return strings.TrimPrefix(strings.ToLower(strings.TrimSpace(s)), "@")
+}
+
+// prsLoginKey folds a login for "mine": case, a leading "@" and a "[bot]"
+// suffix do not matter, so the user and magnum's App both count.
 func prsLoginKey(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
 	return strings.TrimSuffix(strings.TrimPrefix(s, "@"), "[bot]")
@@ -430,22 +436,22 @@ func prsBoardRow(b store.BoardRow, self []string) tui.PRBoardRow {
 		if v.Verdict == "pending" {
 			v.Stale = false // a draft review has no verdict to go stale
 		}
-		if i, ok := index[prsLoginKey(login)]; ok {
+		if i, ok := index[prsAccountKey(login)]; ok {
 			r.Reviewers[i] = v // GitHub lists one review per reviewer; keep the last
 			continue
 		}
-		index[prsLoginKey(login)] = len(r.Reviewers)
+		index[prsAccountKey(login)] = len(r.Reviewers)
 		r.Reviewers = append(r.Reviewers, v)
 	}
 	for _, login := range b.RequestedReviewers {
 		if login == "" {
 			continue
 		}
-		if i, ok := index[prsLoginKey(login)]; ok {
+		if i, ok := index[prsAccountKey(login)]; ok {
 			r.Reviewers[i].Requested = true
 			continue
 		}
-		index[prsLoginKey(login)] = len(r.Reviewers)
+		index[prsAccountKey(login)] = len(r.Reviewers)
 		r.Reviewers = append(r.Reviewers, tui.ReviewerInfo{
 			Login: login, Verdict: "pending", Requested: true, Mine: mine[prsLoginKey(login)],
 		})

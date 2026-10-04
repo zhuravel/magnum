@@ -540,7 +540,21 @@ func (p prbPainter) loginCell(login string) cell {
 	if strings.TrimSpace(login) == "" {
 		return p.dash()
 	}
-	return cell{{shortLogin(login), p.loginStyle(login, false)}}
+	return cell{{p.loginText(login), p.loginStyle(login, false)}}
+}
+
+// loginText is a login for the narrow columns: a bot's "[bot]" gives way to
+// the bot mark before the name ("🤖zhuravel"), so an App stays apart from the
+// user it is named after; without a mark (ASCII) the suffix stays.
+func (p prbPainter) loginText(login string) string {
+	short := shortLogin(login)
+	switch {
+	case !strings.HasSuffix(strings.TrimSpace(login), "[bot]"):
+		return short
+	case p.g.bot == "":
+		return short + "[bot]"
+	}
+	return p.g.bot + p.g.gap + short
 }
 
 func (p prbPainter) assigneeCell(as []string) cell {
@@ -554,7 +568,7 @@ func (p prbPainter) assigneeCell(as []string) cell {
 			break
 		}
 	}
-	c := cell{{shortLogin(first), p.loginStyle(first, false)}}
+	c := cell{{p.loginText(first), p.loginStyle(first, false)}}
 	if len(as) > 1 {
 		c = append(c, seg{fmt.Sprintf(" +%d", len(as)-1), p.st.Dim})
 	}
@@ -900,7 +914,7 @@ func (p prbPainter) reviewerChips(list []ReviewerInfo) []cell {
 		if mine {
 			c = append(c, seg{p.g.mine + p.g.gap, lst})
 		}
-		c = append(c, seg{shortLogin(v.Login), lst}, seg{p.g.chipSep + glyph, vst})
+		c = append(c, seg{p.loginText(v.Login), lst}, seg{p.g.chipSep + glyph, vst})
 		if v.Stale {
 			c = append(c, seg{p.g.gap + p.g.stale, p.pal.yellow})
 		}

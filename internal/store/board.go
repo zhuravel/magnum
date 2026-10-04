@@ -29,7 +29,7 @@ type BoardRow struct {
 	Name               string         `json:"name"`
 	Number             int            `json:"number"`
 	Title              string         `json:"title"`
-	Author             string         `json:"author"`
+	Author             string         `json:"author"` // Account form: a bot's keeps "[bot]"
 	URL                string         `json:"url"`
 	Draft              bool           `json:"draft"`
 	Labels             []string       `json:"labels"`
@@ -89,7 +89,8 @@ func (s *Store) Board(ctx context.Context, f BoardFilter) ([]BoardRow, error) {
 		args = append(args, anys(closedPRStates)...)
 		args = append(args, GHClosed, GHMerged)
 	}
-	q := `SELECT p.id, r.owner, r.name, p.number, p.title, p.author_login, p.url, p.is_draft, p.labels_json,
+	q := `SELECT p.id, r.owner, r.name, p.number, p.title,
+  CASE WHEN p.author_type = 'Bot' AND p.author_login NOT LIKE '%[bot]' THEN p.author_login || '[bot]' ELSE p.author_login END, p.url, p.is_draft, p.labels_json,
   p.assignees_json, p.requested_reviewers_json, p.review_requested, p.latest_reviews_json, p.since_review_json,
   p.state, p.skip_reason, p.gh_state, p.gh_updated_at, p.head_sha, p.reviewed_sha, p.last_review_event,
   p.reviewed_at, p.last_review_login, p.identity, sl.name, sl.path, p.pinned, p.muted, p.next_eligible_at,

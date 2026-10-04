@@ -438,9 +438,7 @@ func (e *Engine) previousReview(ctx context.Context, pr store.PR, login string, 
 	if pr.ReviewedAt != nil {
 		prev.SubmittedAt = *pr.ReviewedAt
 	}
-	// last_review_login drops "[bot]": without a run that names the login,
-	// a review any former login could have posted counts as a former one's.
-	prev.Former = slices.ContainsFunc(former, func(f string) bool { return github.SameLogin(prev.Login, f) })
+	prev.Former = slices.ContainsFunc(former, func(f string) bool { return github.SameAccount(prev.Login, f) })
 	if v, ok := e.getKV(ctx, KVPRManualVerdict(pr.ID)); ok && prev.ID != 0 && v == strconv.FormatInt(prev.ID, 10) {
 		prev.Manual = true
 	}
@@ -924,7 +922,7 @@ func (e *Engine) onPosted(ctx context.Context, job *roundJob, pr store.PR, in pi
 			simplified = rep.Status == pipeline.ReportOK || rep.Status == pipeline.ReportEmpty || rep.Status == ""
 		}
 	}
-	login := github.NormalizeLogin(e.reviewerLogin(pr.Identity))
+	login := e.reviewerLogin(pr.Identity)
 	recordReview := func(u *store.PRUpdate) {
 		u.Set("reviewed_sha", reviewed)
 		if res.ReviewID != 0 {

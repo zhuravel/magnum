@@ -253,7 +253,7 @@ func (r *Runner) AppendToReview(ctx context.Context, owner, repo string, number 
 	if err != nil {
 		return err
 	}
-	if login := r.Identity.Login(); !github.SameLogin(rv.UserLogin, login) {
+	if login := r.Identity.Login(); !github.SameAccount(rv.UserLogin, login) {
 		return fmt.Errorf("pipeline: review %d was posted by %q, not %q", reviewID, rv.UserLogin, login)
 	}
 	body := strings.TrimRight(rv.Body, "\n\t ")
