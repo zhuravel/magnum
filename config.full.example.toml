@@ -291,6 +291,9 @@ databases = [
 # blocking_event = "REQUEST_CHANGES"      # REQUEST_CHANGES | COMMENT; default: the identity's
 # keep_approvals = false                  # true: keep an App's approval when the PR gets new commits
 #                                         # (default: dismissed until the re-review posts; also on [[watch]])
+# required_checks = ["ci / *"]            # checks a PR must pass to be ready; magnum reads GitHub's rulesets by
+#                                         # itself, so set it only where GitHub will not tell (a private repo on a
+#                                         # free plan) or to override; "workflow:<glob>" = a whole Actions workflow
 # prepare = ["bin/rails db:test:prepare"] # readiness, as on [[pool]]
 # ready = ["bin/rails runner 'ActiveRecord::Base.connection'"]
 # ready_timeout = "5m"
