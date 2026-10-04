@@ -619,7 +619,7 @@ func (p prbPainter) ciLines(ci CIInfo) []string {
 	for i, c := range ci.Required {
 		l := p.ciLook(c.State)
 		text := orDash(c.Name) + " " + orDash(l.word)
-		if n := checkCount(c); n != "" {
+		if n := c.Count(); n != "" {
 			text += " " + n
 		}
 		items[i] = marked(mark(c.State), l.textSt.Render(text))

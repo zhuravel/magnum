@@ -85,3 +85,17 @@ func TestPRsBadges(t *testing.T) {
 		t.Fatal("badges without a match")
 	}
 }
+
+// The printed CI cell names required checks by their labels, with the
+// finished count of a glob that matched several ("ci:passed 3/3"), never the
+// raw pattern.
+func TestPRsCICellRequired(t *testing.T) {
+	ci := &tui.CIInfo{State: "passed", Required: []tui.CheckState{
+		{Name: "ci / *", Label: "ci", State: "passed", Done: 3, Total: 3},
+		{Name: "Completion", Label: "Completion", State: "missing"},
+		{Name: "workflow:Lint", Label: "Lint", State: "pending", Done: 1, Total: 2},
+	}}
+	if got, want := prsCICell(ci), "ci:passed 3/3, Completion:missing, Lint:pending 1/2"; got != want {
+		t.Fatalf("cell = %q, want %q", got, want)
+	}
+}

@@ -7,6 +7,7 @@ package cli
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -537,9 +538,9 @@ func prsStateCell(r tui.PRBoardRow) string {
 	return s
 }
 
-// prsCICell is the head's CI: the required checks when the repository has
-// some ("Completion:missing ci / *:passed"), else the counts ("passed
-// 65/65", "failed 2/65", "pending 40/65"); "-" when unknown.
+// prsCICell is the head's CI: the required checks by label when the
+// repository has some ("Completion:missing, ci:passed 3/3"), else the counts
+// ("passed 65/65", "failed 2/65", "pending 40/65"); "-" when unknown.
 func prsCICell(ci *tui.CIInfo) string {
 	if ci == nil {
 		return "-"
@@ -548,9 +549,12 @@ func prsCICell(ci *tui.CIInfo) string {
 	if len(ci.Required) > 0 {
 		parts := make([]string, len(ci.Required))
 		for i, r := range ci.Required {
-			parts[i] = r.Name + ":" + r.State
+			parts[i] = cmp.Or(r.Label, r.Name) + ":" + r.State
+			if n := r.Count(); n != "" {
+				parts[i] += " " + n
+			}
 		}
-		s = strings.Join(parts, " ")
+		s = strings.Join(parts, ", ")
 	} else {
 		switch ci.State {
 		case "failed":

@@ -687,7 +687,7 @@ func (p prbPainter) ciCell(ci *CIInfo) cell {
 		c = cell{{marked(l.glyph, ""), l.glyphSt}, {orDash(cmp.Or(worst.Label, worst.Name)), l.textSt}}
 		if s := normCI(worst.State); s == "missing" || s == "skipped" {
 			c = append(c, seg{" " + l.word, l.textSt})
-		} else if n := checkCount(worst); n != "" {
+		} else if n := worst.Count(); n != "" {
 			c = append(c, seg{" " + n, l.textSt})
 		}
 		if n := len(ci.Required) - 1; n > 0 {
@@ -732,10 +732,10 @@ func ciRank(state string) int {
 	return 5
 }
 
-// checkCount is "done/total" for a passed or pending required check that
-// matched several checks ("3/3", "1/3"); "" otherwise (one check, none, or a
-// failure the card names).
-func checkCount(c CheckState) string {
+// Count is "done/total" for a passed or pending required check that matched
+// several checks ("3/3", "1/3"); "" otherwise (one check, none, or a failure
+// the card names).
+func (c CheckState) Count() string {
 	if s := normCI(c.State); c.Total < 2 || (s != "passed" && s != "pending") {
 		return ""
 	}

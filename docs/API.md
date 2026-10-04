@@ -9362,6 +9362,11 @@ type CheckState struct {
     Total the checks it matched on the head and Done those that finished (Total
     0: none, or the head's are not known yet).
 
+func (c CheckState) Count() string
+    Count is "done/total" for a passed or pending required check that matched
+    several checks ("3/3", "1/3"); "" otherwise (one check, none, or a failure
+    the card names).
+
 type CleanupAction struct {
 	ID      string // stable id the caller maps back to its own action
 	Kind    string // release_slot, remove_slot, drop_db, reset_external, ...
