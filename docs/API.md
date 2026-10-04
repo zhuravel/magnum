@@ -1920,6 +1920,9 @@ const (
 )
     Placeholders substituted by Kind.Argv and in Kind.Rename.
 
+const BuiltinDefaults = "built-in defaults (config.defaults.toml)"
+    BuiltinDefaults names the embedded base in messages and Sources.
+
 const DatabaseSuffix = "__{slug}"
     DatabaseSuffix ends every pool database template ([[pool]] databases):
     the slot's slug follows the last "__", which is how magnum lists and guards
@@ -1933,6 +1936,10 @@ const DefaultAfterDenyPrompt = "magnum denied that command: review roles never r
 const DefaultReadyTimeout = 5 * time.Minute
     DefaultReadyTimeout bounds a round's whole readiness step when neither the
     [[repo]] nor the [[pool]] sets ready_timeout.
+
+const DefaultSimplifyRerunLines = 150
+    DefaultSimplifyRerunLines is claude-simplify's rerun_min_lines: about two
+    new functions' worth of code since it last looked.
 
 const DefaultSkill = "{{repo}}/skills/magnum-review/SKILL.md"
     DefaultSkill is the judge's default skill path ({{repo}} = magnum's home).
@@ -1985,9 +1992,10 @@ func DefaultKinds() map[string]Kind
     wrapper, so a wrapper's own flags are never doubled.
 
 func LocalOverlayPath(file string) string
-    LocalOverlayPath returns the gitignored overlay next to the config file
-    (config.local.toml) when it exists, else "". The overlay holds private
-    settings that must not be committed, e.g. extra [[watch]] blocks.
+    LocalOverlayPath returns the legacy overlay next to a config
+    file (config.local.toml) when it exists, else "". The user config
+    (~/.config/magnum/config.toml) replaced it; it is still read when that is
+    missing.
 
 func MatchPath(glob, name string) bool
     MatchPath reports whether the "/"-separated name matches glob.
@@ -2058,13 +2066,17 @@ type Config struct {
 	// Kinds are the agent CLIs ([kinds.<name>]) and Roles the review
 	// pipeline ([[role]]). After Load or Defaults both hold the merged,
 	// normalized result: built-in defaults, then the legacy [codex]/[claude]
-	// keys, then config.toml, then config.local.toml. Read them through
+	// keys, then the base (config.defaults.toml or a file), then the user
+	// config. Read them through
 	// KindSpec, RolesFor, JudgeFor and RoleByNameOrAlias.
 	Kinds map[string]Kind `toml:"kinds"`
 	Roles []Role          `toml:"role"`
 
 	// Layout is filled by Load; it is not part of the file.
 	Layout paths.Layout `toml:"-"`
+	// Sources are what Load read, base first: a file, or BuiltinDefaults,
+	// then the user layer when there was one.
+	Sources []string `toml:"-"`
 
 	// Has unexported fields.
 }
@@ -2074,13 +2086,22 @@ func Defaults() *Config
     paths unexpanded); Load overlays the file on top.
 
 func Load(layout paths.Layout, file string) (*Config, error)
-    Load reads the file at path (or the layout's default), applies the
-    config.local.toml next to it and validates the result. It is LoadWithOptions
-    with the zero LoadOptions.
+    Load reads the configuration (see LoadWithOptions) with the zero
+    LoadOptions.
 
 func LoadWithOptions(layout paths.Layout, file string, opts LoadOptions) (*Config, error)
-    LoadWithOptions is Load with options: the file at path (or $MAGNUM_CONFIG,
-    else the layout's default), the overlay unless opts.NoOverlay, validated.
+    LoadWithOptions reads the configuration in two layers and validates it.
+
+    The base is file (or $MAGNUM_CONFIG): a complete configuration replacing
+    the built-in defaults; else a config.toml in the layout's home (a checkout
+    from before the defaults were built in); else the built-in defaults,
+    the repository's config.defaults.toml embedded in the binary.
+
+    The user layer goes over it unless opts.NoOverlay: the layout's
+    UserConfig (~/.config/magnum/config.toml) when it exists, else a legacy
+    config.local.toml next to the base file (in the home for the built-in base).
+    It appends [[identity]], [[watch]], [[pool]] and [[repo]], and overrides
+    keys (see applyOverlay). cfg.Sources lists what was read.
 
 func (c *Config) IdentityByName(name string) *Identity
     IdentityByName returns the identity or nil.
@@ -2199,10 +2220,10 @@ func (c *Config) VerdictsFor(fullName string, id *Identity) (noFindings, blockin
 
 func (c *Config) Warnings() []string
     Warnings lists human-readable problems that do not make the config invalid:
-    zero [[identity]] or zero [[watch]] blocks are valid (the committed
-    config.toml has neither; they live in config.local.toml), but magnum then
-    cannot post or reviews nothing. Print them from `magnum doctor` and `magnum
-    config`.
+    zero [[identity]] or zero [[watch]] blocks are valid (the built-in defaults
+    have neither; they live in the user's ~/.config/magnum/config.toml), but
+    magnum then cannot post or reviews nothing. Print them from `magnum doctor`
+    and `magnum config`.
 
 func (c *Config) WatchFor(fullName string) *Watch
     WatchFor returns the watch that covers owner/name, or nil.
@@ -2455,9 +2476,9 @@ type LaunchArgs struct {
     LaunchArgs are the per-start values Kind.Argv substitutes.
 
 type LoadOptions struct {
-	// NoOverlay skips config.local.toml (LocalOverlayPath) even when it
-	// exists next to the config file, so the result depends on the committed
-	// file alone.
+	// NoOverlay skips the user layer (the user config, or a legacy
+	// config.local.toml) even when it exists, so the result depends on the
+	// base alone.
 	NoOverlay bool
 }
     LoadOptions tunes LoadWithOptions.
@@ -2623,6 +2644,12 @@ type Role struct {
 	Judge bool `toml:"judge"`
 	// Runs: "always" (default), "first", "manual" or "never" (see RunsAlways).
 	Runs string `toml:"runs"`
+	// RerunMinLines, for runs = "first": the role runs again once the code
+	// lines changed since the head of its last completed run reach this
+	// many (comments, blank lines, whitespace moves and documentation do
+	// not count; the re-review threshold's measure). 0 = only the first
+	// round, then on request. Ignored for the other runs values.
+	RerunMinLines int `toml:"rerun_min_lines"`
 	// Identity: the [[identity]] whose GitHub env the role's pane gets;
 	// "" = the watch's identity.
 	Identity string `toml:"identity"`
@@ -2711,8 +2738,9 @@ type Role struct {
 
     A [[role]] in config.toml named like a built-in role (DefaultRoles) inherits
     that role's fields for every key it does not set. Declaring any [[role]] in
-    config.toml replaces the built-in list; config.local.toml [[role]] blocks
-    merge into it by name (or are appended).
+    the base (config.defaults.toml, or a --config file) replaces the built-in
+    list; the user config [[role]] blocks merge into it by name (or are
+    appended).
 
 func DefaultRoles() []Role
     DefaultRoles returns the built-in roles in display order (fresh copies,
@@ -2779,6 +2807,11 @@ type Terminal struct {
 	// (wheel, clicks, header sort, column drag, right-click menu); the m key
 	// toggles it live.
 	Mouse bool `toml:"mouse"`
+	// Icons is the symbols the PR board and the status dashboard draw:
+	// "nerd" Nerd Font icons and emoji (colored marks for states, verdicts
+	// and finding priorities; needs a Nerd Font), "unicode" Unicode symbols
+	// any font has (the default, also when empty), "ascii" plain ASCII.
+	Icons string `toml:"icons"`
 }
 
 type Usage struct {
@@ -6590,11 +6623,21 @@ FUNCTIONS
 func Expand(p string) string
     Expand replaces a leading ~ with the user's home directory.
 
+func UserConfigPath() string
+    UserConfigPath is where the user's config lives: $XDG_CONFIG_HOME/magnum/
+    config.toml when XDG_CONFIG_HOME is an absolute path, else
+    ~/.config/magnum/config.toml; "" without a home directory.
+
 
 TYPES
 
 type Layout struct {
 	Home string // repository root (MAGNUM_HOME)
+	// UserConfig is the user's config file, layered over the built-in
+	// defaults: $XDG_CONFIG_HOME/magnum/config.toml, else
+	// ~/.config/magnum/config.toml (Resolve sets it; UserConfigPath). ""
+	// means none (tests build layouts without it).
+	UserConfig string
 	// Scratch, when set, holds the registry, the review reports and the
 	// repository notes instead of state/ (magnum eval: a replay never touches
 	// the live registry, reports or notes). Logs, locks, the pidfile and the
@@ -8663,6 +8706,10 @@ func (s *Store) LastReviewSummaries(ctx context.Context, prIDs []int64) (map[int
     round, for the PRs that have one. A result file that does not parse is
     skipped (the round still counts as posted elsewhere).
 
+func (s *Store) LastRoleRunHead(ctx context.Context, prID int64, role string) (string, error)
+    LastRoleRunHead is the head of the PR's latest completed run of role (ended
+    or verified), "" when the role never completed one.
+
 func (s *Store) LatestRoundRuns(ctx context.Context, prIDs ...int64) (map[int64][]Run, error)
     LatestRoundRuns returns, per PR, the runs of its highest round, oldest
     first. prIDs limits the PRs; empty means every PR with a run. A PR without
@@ -9109,6 +9156,7 @@ type DashboardOptions struct {
 	Title      string           // default "magnum status"
 	Now        func() time.Time // clock for "updated Xs ago"; default time.Now
 	Judge      string           // the judge role's name in the help ("open the PR's <Judge> pane"); default "judge"
+	Icons      IconMode         // the symbols: unicode (default), nerd (Nerd Font icons and emoji) or ascii
 	// NoMouse starts with mouse support off ([terminal] mouse = false);
 	// m turns it on and off either way.
 	NoMouse bool
@@ -9155,6 +9203,22 @@ type GitHubInfo struct {
 }
     GitHubInfo is the GraphQL rate budget; Limit 0 means unknown (no poll yet).
 
+type IconMode string
+    IconMode is the set of symbols the PR board and the status dashboard draw
+    ([terminal] icons). A screen cannot tell which font the terminal uses,
+    so the configuration decides; nothing is detected.
+
+const (
+	// IconsUnicode draws Unicode symbols (✔ ✗ 💬 📌) that any font has: the
+	// default, also for an empty or unknown mode.
+	IconsUnicode IconMode = "unicode"
+	// IconsNerd draws Nerd Font icons and emoji: a colored marker before
+	// every state, verdict and finding priority, an icon in every state
+	// pill and before the section headings. Needs a Nerd Font.
+	IconsNerd IconMode = "nerd"
+	// IconsASCII draws plain ASCII ("+", "x", "pin").
+	IconsASCII IconMode = "ascii"
+)
 type KindCount struct {
 	Kind    string
 	Working int
@@ -9179,9 +9243,9 @@ type PRBoardOptions struct {
 	// ViewChanged, when set, hears every v, so the next board can open in
 	// the same view.
 	ViewChanged func(PRView)
-	Repo        string // show only this repository ("name" or "owner/name"); empty shows all
-	ASCII       bool   // ASCII glyphs ("+", "x", "pin") instead of ✔ ✗ 📌
-	Judge       string // the judge role's name in the help ("open the <Judge> pane"); default "judge"
+	Repo        string   // show only this repository ("name" or "owner/name"); empty shows all
+	Icons       IconMode // the symbols: unicode (default), nerd (Nerd Font icons and emoji) or ascii
+	Judge       string   // the judge role's name in the help ("open the <Judge> pane"); default "judge"
 	// NoMouse starts with mouse support off ([terminal] mouse = false);
 	// m turns it on and off either way.
 	NoMouse bool

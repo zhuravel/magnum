@@ -192,8 +192,8 @@ func TestForcedPRIsReviewedEvenWhenThePushIsTrivial(t *testing.T) {
 	}
 	h.gh.files = map[string][]github.FileDelta{"b1...b2": yamlComments}
 	pollPR(h, time.Minute, 2, "b2") // a forced PR is due at once: the same tick runs its round
-	if h.gh.count("compare_files:") != 0 {
-		t.Fatal("a forced PR's push was classified")
+	if _, skipped := h.e.getKV(h.ctx, KVPRTrivial(h.pr(2).ID)); skipped {
+		t.Fatal("a forced PR's push was skipped as trivial")
 	}
 	if ins := h.rd.all(); len(ins) != 2 || ins[1].TargetSHA != "b2" {
 		t.Fatalf("rounds = %+v, want the forced re-review of b2", ins)

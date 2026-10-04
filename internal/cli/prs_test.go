@@ -710,3 +710,56 @@ func TestPRsSourceCarriesWaitAndTrivialNote(t *testing.T) {
 		t.Fatalf("row = %+v", got)
 	}
 }
+
+// [terminal] icons reaches both screens; without a configuration they
+// draw Unicode symbols.
+func TestScreensDrawTheConfiguredIcons(t *testing.T) {
+	f := newInspFixture(t)
+	path := filepath.Join(f.Home, "config.toml")
+	cfg, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(cfg, "\n[terminal]\nicons = \"nerd\"\n"...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	prsSeed(t, f)
+	onScreen(t)
+	var dash, board tui.IconMode
+	oldDash, oldBoard := tuiDashboard, tuiPRBoard
+	t.Cleanup(func() { tuiDashboard, tuiPRBoard = oldDash, oldBoard })
+	tuiDashboard = func(_ context.Context, _ tui.DashboardSource, _ tui.DashboardActions, o tui.DashboardOptions) error {
+		dash = o.Icons
+		return tui.ErrSwitchToBoard
+	}
+	tuiPRBoard = func(_ context.Context, _ tui.PRBoardSource, _ tui.DashboardActions, o tui.PRBoardOptions) error {
+		board = o.Icons
+		return nil
+	}
+	if code := f.run("status", "--watch"); code != 0 {
+		t.Fatalf("code %d err %s", code, f.Err.String())
+	}
+	if dash != tui.IconsNerd || board != tui.IconsNerd {
+		t.Errorf("icons = nerd: dashboard draws %q, board %q", dash, board)
+	}
+	if got := prsBoardOptions(nil, prsOptions{}).Icons; got != tui.IconsUnicode {
+		t.Errorf("no configuration: the board draws %q", got)
+	}
+}
+
+// The plain table names what magnum's latest review concluded.
+func TestPRsTableFindingsCell(t *testing.T) {
+	for _, tc := range []struct {
+		f    *tui.FindingsInfo
+		want string
+	}{
+		{nil, "-"},
+		{&tui.FindingsInfo{Verdict: "clean"}, "clean"},
+		{&tui.FindingsInfo{Verdict: "blocking", Counts: [4]int{0, 1, 3, 0}, Simplifications: 4}, "blocking P1:1 P2:3 simplify:4"},
+		{&tui.FindingsInfo{Verdict: "non_blocking", Counts: [4]int{0, 0, 0, 2}}, "non-blocking P3:2"},
+	} {
+		if got := prsFindingsCell(tc.f); got != tc.want {
+			t.Errorf("%+v: %q, want %q", tc.f, got, tc.want)
+		}
+	}
+}

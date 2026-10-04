@@ -39,8 +39,7 @@ import (
 const (
 	evalUsage    = "run|score|list|show"
 	evalRunUsage = "[--corpus FILE] [--case NAME]... [--label TEXT] [--no-notes] [--keep] [--force]"
-	// evalCorpusFile is the default corpus, next to config.local.toml and
-	// gitignored with it.
+	// evalCorpusFile is the default corpus, in the checkout and gitignored.
 	evalCorpusFile = "eval.local.toml"
 	// evalAgentTag tags eval agents (agents.Deps.Tag).
 	evalAgentTag = "eval"

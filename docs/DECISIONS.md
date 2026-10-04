@@ -575,3 +575,34 @@ editing history. Code, config comments and prompts reference these by their head
   registry, filters and JSON; the board shows "not reviewed" and the card says the PR was open before
   magnum began watching and what starts a review; `magnum status` says the same. Rejected: renaming the
   state (every stored row, filter and test names it).
+- **Settings live in ~/.config/magnum/config.toml over defaults built into the binary** (2026-10-04, to make
+  magnum distributable). The committed defaults are `config.defaults.toml`, embedded in the binary (the root
+  package `magnum`); the user's file is `$XDG_CONFIG_HOME/magnum/config.toml`, else
+  `~/.config/magnum/config.toml` (`paths.Layout.UserConfig`), layered with the overlay rules
+  `config.local.toml` had (blocks appended, keys and same-name roles overridden); `magnum init` writes it.
+  `--config`/`$MAGNUM_CONFIG` still name a complete file that replaces the defaults (and tests use it); a
+  `config.toml` or `config.local.toml` left in the checkout is still read when the new file is missing, and
+  doctor says how to move it. `magnum config` and doctor list the sources read. The examples are
+  `config.example.toml` (minimal) and `config.full.example.toml` (a worked setup). Still in the checkout:
+  `state/`, the prompts, the judge skill and `.mise.local.toml` (next steps for a binary-only install).
+  Rejected: reading the defaults from the checkout at run time (a distributed binary has none) and a
+  `--config` that means the user file (it would change every test's meaning of a full config).
+- **claude-simplify runs again after significant changes** (2026-10-04, the maintainer: simplification
+  "could be enabled for the next review run if there were significant changes since the last
+  simplification"). A `runs = "first"` role may set `rerun_min_lines` (claude-simplify: 150): when a round is
+  prepared, the code lines changed since the head of the role's last completed run are measured with the
+  re-review threshold's rules (comments, blank lines, whitespace moves and documentation do not count; one
+  compare call as the poll identity), and at the threshold the role runs as if requested. Significant means
+  new code to simplify: 150 lines is about two new functions, and a measure from the last simplification,
+  not the last review, lets several small pushes add up. Rejected: rerunning on every re-review (the costly
+  role on one-line fixes), a file count (a new 5-line file is not worth a pass) and the PR's total size
+  (a large PR already simplified needs nothing new).
+- **Icon modes for the screens** (2026-10-04, the maintainer uses a Nerd Font and asked for icons and emoji
+  that make the screens easy to scan). `[terminal] icons = "unicode" | "nerd" | "ascii"` (default unicode,
+  today's look; ascii what the ASCII mode was) reaches the PR board and the dashboard as their Icons option.
+  Nerd mode puts a Nerd Font icon on every state pill, verdict and section heading and colour emoji where
+  colour carries the meaning (state marks, verdicts, P0–P3, the daemon's health); every glyph is a `\u`
+  escape named in a comment, none uses U+FE0F or a joiner, and a test renders every screen in every mode at
+  40 to 200 columns with no line wider or taller than the screen. The mode is fixed per process, so the
+  render caches need no key for it. Rejected: guessing a Nerd Font from TERM (no terminal reports its font)
+  and emoji-only symbols (their widths vary; icons stay one cell).

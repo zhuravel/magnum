@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 )
 
@@ -168,4 +169,19 @@ func (s *Store) RoleRanBefore(ctx context.Context, prID int64, role string) (boo
 		return false, fmt.Errorf("role ran before pr %d %s: %w", prID, role, err)
 	}
 	return ran, nil
+}
+
+// LastRoleRunHead is the head of the PR's latest completed run of role
+// (ended or verified), "" when the role never completed one.
+func (s *Store) LastRoleRunHead(ctx context.Context, prID int64, role string) (string, error) {
+	var sha string
+	err := s.db.QueryRowContext(ctx, `SELECT target_sha FROM runs WHERE pr_id = ? AND role = ? AND state IN (?, ?)
+ORDER BY created_at DESC LIMIT 1`, prID, role, RunEnded, RunVerified).Scan(&sha)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("last run of %s on pr %d: %w", role, prID, err)
+	}
+	return sha, nil
 }

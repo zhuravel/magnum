@@ -118,6 +118,9 @@ func (e *Engine) prepare(ctx context.Context, job *roundJob) (pipeline.RoundInpu
 	// starting or prompting anything.
 	rs.roles = e.cfg.RolesFor(&job.watch)
 	rs.requested = e.requestedRoles(ctx, pr.ID)
+	if job.kind != kindContinue && job.evalHead == "" {
+		rs.requested = append(rs.requested, e.rerunRoles(ctx, job, rs.roles, rs.target)...)
+	}
 	if rs.toRun, err = pipeline.RolesToRun(ctx, e.st, e.cfg, pr, rs.roles, rs.requested, job.kind); err != nil {
 		return fail(err)
 	}

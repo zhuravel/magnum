@@ -422,7 +422,7 @@ func (d *actDeps) resolveRef(ctx context.Context, ref string) (actTarget, error)
 			full = repo.FullName()
 		}
 		if d.Cfg.WatchFor(full) == nil {
-			return actTarget{Repo: repo}, fmt.Errorf("%s is not watched: add it to a [[watch]] in config.local.toml (`magnum init` writes one): %w", full, store.ErrNotFound)
+			return actTarget{Repo: repo}, fmt.Errorf("%s is not watched: add it to a [[watch]] in ~/.config/magnum/config.toml (`magnum init` writes one): %w", full, store.ErrNotFound)
 		}
 		return actTarget{Repo: repo}, fmt.Errorf("%s#%d is not in the registry yet (the daemon records open PRs on its next poll): %w\nfix: `magnum review %s` adds it now", full, number, store.ErrNotFound, ref)
 	}

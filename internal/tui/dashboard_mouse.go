@@ -371,6 +371,6 @@ func (m dashboardModel) drawMenu(out []string, w, h int) []string {
 	}
 	items := m.menuItems()
 	l := placeMenu(items, m.menu.sel, m.menu.x, m.menu.y, w, h)
-	overlay(out, m.st.menuBox(items, m.menu.sel, l, false), l.x, l.y, w)
+	overlay(out, m.st.menuBox(items, m.menu.sel, l, m.g.mode == IconsASCII), l.x, l.y, w)
 	return out
 }

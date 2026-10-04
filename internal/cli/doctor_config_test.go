@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"github.com/zhuravel/magnum/internal/config"
 	"os"
 	"path/filepath"
 	"strings"
@@ -69,11 +70,12 @@ func TestConfigCommandPrintsLoadedFileAndWarnings(t *testing.T) {
 }
 
 // Doctor reports the config's warnings as WARN checks, in the JSON too, and
-// names the file the config came from.
+// names what the config was read from (the built-in defaults and the user's file).
 func TestDoctorConfigWarnings(t *testing.T) {
 	_, d, _, _ := doctorFixture(t)
 	custom := writeBareConfig(t)
 	d.ConfigFile = custom
+	d.Config.Sources = []string{config.BuiltinDefaults, custom} // what Load records it read
 	d.Config.Identities, d.Config.Watches = nil, nil
 
 	cs := doctorConfig(context.Background(), d)

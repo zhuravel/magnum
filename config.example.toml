@@ -1,5 +1,6 @@
-# Copy to config.local.toml (gitignored), or let `magnum init` write it. Appended to config.toml;
-# config.toml.example has every key in a worked setup and `magnum config` validates the result.
+# A minimal ~/.config/magnum/config.toml: copy it there, or let `magnum init` write it. It layers over the
+# built-in defaults (config.defaults.toml); config.full.example.toml has every key in a worked setup and
+# `magnum config` validates the result.
 
 [daemon]
 default_repo = "example/widgets"   # `magnum review 123` means example/widgets#123
@@ -12,6 +13,6 @@ login = "your-login"
 [[watch]]
 owner = "example"
 include = ["widgets"]              # repository globs; ["*"] watches the whole owner
-identity = "me"                    # who posts; a GitHub App identity is in config.toml.example
+identity = "me"                    # who posts; a GitHub App identity is in config.full.example.toml
 poll_identity = "me"               # who polls: always a gh login
 # clone_root = "~/Projects"        # where the clone is found or created; no [[pool]] needed

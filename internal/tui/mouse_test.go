@@ -439,7 +439,7 @@ func TestBoardRightClickMenu(t *testing.T) {
 	}
 
 	// A right click near the corner keeps the menu on screen.
-	c, _, _ := newBoard(t, 100, 20, PRBoardOptions{ASCII: true})
+	c, _, _ := newBoard(t, 100, 20, PRBoardOptions{Icons: IconsASCII})
 	c, _ = send(t, c, rightClick(99, boardRowY(c, len(c.view)-1)))
 	v = viewOf(c)
 	if !c.menu.open || maxLineWidth(v) > 100 || lineCount(v) != 20 {

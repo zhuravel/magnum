@@ -93,7 +93,7 @@ func doctorPlainBinary(d doctorDeps, kind string, k config.Kind) doctorCheck {
 	case len(missing) > 0:
 		return doctorFailed(name, fmt.Sprintf("%s is a plain binary (wrapper %s) and starts %s without %s: the agents stop at approval prompts, which magnum answers No, and a sandboxed judge cannot post",
 			kind, mode, strings.Join(missing, ", "), flag),
-			fmt.Sprintf("set %s args = [%q] in config.local.toml (the default), or restore the zsh `%s` function that adds it", section, flag, kind))
+			fmt.Sprintf("set %s args = [%q] in ~/.config/magnum/config.toml (the default), or restore the zsh `%s` function that adds it", section, flag, kind))
 	}
 	return doctorOK(name, fmt.Sprintf("%s is a plain binary (wrapper %s): magnum adds %s args, which run it without approval prompts", kind, mode, section))
 }

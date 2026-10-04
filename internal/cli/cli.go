@@ -82,7 +82,8 @@ func newRoot(c *Context) *cobra.Command {
 			return nil
 		},
 	}
-	root.PersistentFlags().StringVar(&c.cfgPath, "config", c.cfgPath, "config file (default: $MAGNUM_CONFIG or <home>/config.toml)")
+	root.PersistentFlags().StringVar(&c.cfgPath, "config", c.cfgPath,
+		"a complete config file instead of the built-in defaults (default: $MAGNUM_CONFIG; your settings go in ~/.config/magnum/config.toml)")
 	_ = root.MarkPersistentFlagFilename("config", "toml")
 
 	root.AddGroup(
@@ -235,7 +236,7 @@ func newVersionCmd(c *Context) *cobra.Command {
 
 func newConfigCmd(c *Context) *cobra.Command {
 	return newCommand(groupInspect, "config", "validate config.toml and render every prompt file; print the resolved paths",
-		"Validate config.toml (with the private additions of config.local.toml), render every prompt file the "+
+		"Validate the configuration (the built-in defaults with your ~/.config/magnum/config.toml over them), render every prompt file the "+
 			"roles name with this binary's template data, and print the resolved home, config, state and judge "+
 			"skill paths with the number of watches, identities and pools. Fix whatever it reports before installing "+
 			"or restarting the daemon: `magnum daemon-restart` and `magnum install` run this command with the binary "+
@@ -247,7 +248,7 @@ func newConfigCmd(c *Context) *cobra.Command {
 			}
 			n, _ := engine.CheckPrompts(c.Config)
 			fmt.Fprintf(c.Stdout, "home:    %s\nconfig:  %s\nstate:   %s\nskill:   %s\nwatches: %d  identities: %d  pools: %d\nprompts: %d renders ok\n",
-				c.Layout.Home, configFileInUse(c), c.Layout.State(), c.Config.JudgeFor(nil).Skill, len(c.Config.Watches), len(c.Config.Identities), len(c.Config.Pools), n)
+				c.Layout.Home, configSources(c.Config, configFileInUse(c), c.Layout), c.Layout.State(), c.Config.JudgeFor(nil).Skill, len(c.Config.Watches), len(c.Config.Identities), len(c.Config.Pools), n)
 			for _, w := range c.Config.Warnings() {
 				fmt.Fprintln(c.Stderr, "warning:", w)
 			}

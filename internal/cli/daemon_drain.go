@@ -60,7 +60,7 @@ func verifyBuild(ctx context.Context, c *Context, run execx.Runner, cmd string) 
 		detail = err.Error()
 	}
 	fmt.Fprintf(c.Stderr, "magnum %s: %s rejects the configuration, so the daemon would not start on it:\n%s\n"+
-		"fix: correct config.toml, config.local.toml or the prompt files (or rebuild with `make build`), "+
+		"fix: correct ~/.config/magnum/config.toml or the prompt files (or rebuild with `make build`), "+
 		"check with `%s config`, then retry\n", cmd, inspTilde(bin), execx.Redact(detail), inspTilde(bin))
 	return false
 }

@@ -15,16 +15,16 @@ import (
 
 // Warnings lists human-readable problems that do not make the config
 // invalid: zero [[identity]] or zero [[watch]] blocks are valid (the
-// committed config.toml has neither; they live in config.local.toml), but
+// built-in defaults have neither; they live in the user's ~/.config/magnum/config.toml), but
 // magnum then cannot post or reviews nothing. Print them from `magnum
 // doctor` and `magnum config`.
 func (c *Config) Warnings() []string {
 	var out []string
 	if len(c.Identities) == 0 {
-		out = append(out, "no [[identity]] configured: magnum cannot poll GitHub or post reviews (declare identities in config.local.toml; examples in config.toml)")
+		out = append(out, "no [[identity]] configured: magnum cannot poll GitHub or post reviews (declare identities in ~/.config/magnum/config.toml: `magnum init` writes one; examples in config.full.example.toml)")
 	}
 	if len(c.Watches) == 0 {
-		out = append(out, "no [[watch]] configured, magnum reviews nothing (declare watches in config.local.toml; examples in config.toml)")
+		out = append(out, "no [[watch]] configured, magnum reviews nothing (declare watches in ~/.config/magnum/config.toml: `magnum init` writes one; examples in config.full.example.toml)")
 	}
 	return out
 }
@@ -152,6 +152,11 @@ func (c *Config) Validate() error {
 	case "gh", "direct":
 	default:
 		errs = append(errs, fmt.Errorf("github.transport must be gh or direct, got %q", c.GitHub.Transport))
+	}
+	switch c.Terminal.Icons {
+	case "", "unicode", "nerd", "ascii":
+	default:
+		errs = append(errs, fmt.Errorf("terminal.icons must be unicode, nerd or ascii, got %q", c.Terminal.Icons))
 	}
 	return errors.Join(errs...)
 }
@@ -507,6 +512,9 @@ func (c *Config) validateRole(r Role, kinds map[string]Kind, ids map[string]bool
 	case RunsAlways, RunsFirst, RunsManual, RunsNever:
 	default:
 		bad("runs must be always, first, manual or never, got %q", r.Runs)
+	}
+	if r.RerunMinLines < 0 { // only runs = "first" reads it; elsewhere it is ignored
+		bad("rerun_min_lines must be 0 or more, got %d", r.RerunMinLines)
 	}
 	switch r.Capture {
 	case CaptureFile, CaptureGitDiff:

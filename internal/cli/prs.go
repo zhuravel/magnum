@@ -178,7 +178,7 @@ func runInspScreens(ctx context.Context, c *Context, d statusDeps, so statusOpti
 	dashboard := func(ctx context.Context) error {
 		return tuiDashboard(ctx, statusDashSource(d, so), acts, tui.DashboardOptions{
 			Refresh: statusRefresh, ShowManual: so.All, Title: "magnum status", Now: inspNow, Judge: rolesJudgeName(d.Config),
-			NoMouse: !mouse, MouseToggled: toggled, Widths: widths,
+			Icons: screenIcons(d.Config), NoMouse: !mouse, MouseToggled: toggled, Widths: widths,
 		})
 	}
 	src := prsSource(d.Store, d.Config, po.filter(), prsSelfLogins(d.Config), c.Layout) // one source: its timings cache survives tab
@@ -193,7 +193,17 @@ func runInspScreens(ctx context.Context, c *Context, d statusDeps, so statusOpti
 
 // prsBoardOptions are the board's options for o.
 func prsBoardOptions(cfg *config.Config, o prsOptions) tui.PRBoardOptions {
-	return tui.PRBoardOptions{SelfLogins: prsSelfLogins(cfg), DefaultSort: o.Sort, DefaultView: o.View, Repo: o.Repo, Now: inspNow, Judge: rolesJudgeName(cfg)}
+	return tui.PRBoardOptions{SelfLogins: prsSelfLogins(cfg), DefaultSort: o.Sort, DefaultView: o.View, Repo: o.Repo, Now: inspNow,
+		Judge: rolesJudgeName(cfg), Icons: screenIcons(cfg)}
+}
+
+// screenIcons is the screens' symbols, [terminal] icons: the screens read
+// an empty or unknown mode as unicode.
+func screenIcons(cfg *config.Config) tui.IconMode {
+	if cfg == nil {
+		return tui.IconsUnicode
+	}
+	return tui.IconMode(cfg.Terminal.Icons)
 }
 
 // prsSource reads the board's rows from the registry; it never asks GitHub.
@@ -446,7 +456,7 @@ func prsRender(w io.Writer, rows []tui.PRBoardRow, defaultRepo string, now time.
 		return
 	}
 	tw := inspTable(w)
-	fmt.Fprintln(tw, "REF\tTITLE\tAUTHOR\tASSIGNEE\tUPDATED\tSTATE\tLAST REVIEW\tSINCE\tREVIEWERS")
+	fmt.Fprintln(tw, "REF\tTITLE\tAUTHOR\tASSIGNEE\tUPDATED\tSTATE\tLAST REVIEW\tFINDINGS\tSINCE\tREVIEWERS")
 	for _, r := range rows {
 		cells := []string{
 			prsRefLabel(r, defaultRepo),
@@ -456,6 +466,7 @@ func prsRender(w io.Writer, rows []tui.PRBoardRow, defaultRepo string, now time.
 			actAgo(now, r.UpdatedAt),
 			prsStateCell(r),
 			prsLastReviewCell(r.LastReview, now),
+			prsFindingsCell(r.Findings),
 			prsSinceCell(r.SinceReview),
 			prsReviewersCell(r.Reviewers),
 		}
@@ -491,6 +502,25 @@ func prsStateCell(r tui.PRBoardRow) string {
 		}
 	}
 	return s
+}
+
+// prsFindingsCell is what magnum's latest review concluded:
+// "blocking P1:1 P2:3 simplify:4", "clean", or "-" when it has not
+// reviewed the PR.
+func prsFindingsCell(f *tui.FindingsInfo) string {
+	if f == nil {
+		return "-"
+	}
+	parts := []string{strings.ReplaceAll(f.Verdict, "_", "-")}
+	for i, n := range f.Counts {
+		if n > 0 {
+			parts = append(parts, fmt.Sprintf("P%d:%d", i, n))
+		}
+	}
+	if f.Simplifications > 0 {
+		parts = append(parts, fmt.Sprintf("simplify:%d", f.Simplifications))
+	}
+	return strings.Join(parts, " ")
 }
 
 // prsLastReviewCell is "approved 3h by talkable" (", stale" when the head

@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"charm.land/bubbles/v2/spinner"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -36,7 +35,7 @@ func RenderPRBoard(rows []PRBoardRow, width int, opts PRBoardOptions) string {
 	}
 	scoped := scopeRows(rows, opts.Repo)
 	st := defaultStyles
-	p := newPRBPainter(st, newPRBPalette(st), newPRBGlyphs(opts.ASCII), opts.Now(), selfSet(opts.SelfLogins), scoped, by, true)
+	p := newPRBPainter(st, newPRBPalette(st), newGlyphs(opts.Icons), opts.Now(), selfSet(opts.SelfLogins), scoped, by, true)
 	p.judge = opts.Judge
 	sorted := SortPRBoard(FilterPRBoard(scoped, view, opts.SelfLogins), by, true)
 	lay := p.layout(scoped, width)
@@ -52,37 +51,6 @@ func RenderPRBoard(rows []PRBoardRow, width int, opts PRBoardOptions) string {
 		lines = append(lines, "  "+st.Dim.Render("no open pull requests"))
 	}
 	return strings.Join(lines, "\n")
-}
-
-// prbGlyphs are the symbols the board draws, in Unicode or plain ASCII.
-type prbGlyphs struct {
-	approved, changes, commented, pending, dismissed, other string
-	nonBlocking, simplify, times                            string
-	stale, mine, pin, errMark, fail, ok                     string
-	cursor, dash, minus, atLeast, rule, up, down, dot       string
-	sortDesc, sortAsc, refresh, sep, chipSep                string
-	spinner                                                 spinner.Spinner
-}
-
-func newPRBGlyphs(ascii bool) prbGlyphs {
-	if ascii {
-		return prbGlyphs{
-			approved: "+", changes: "x", commented: "c", pending: "?", dismissed: "-", other: "*",
-			stale: "~", mine: "*", pin: "pin", errMark: "!", fail: "x", ok: "+",
-			nonBlocking: "~", simplify: "s", times: "x",
-			cursor: ">", dash: "-", minus: "-", atLeast: ">=", rule: "-", up: "^", down: "v", dot: "",
-			sortDesc: "v", sortAsc: "^", refresh: "at", sep: " | ", chipSep: ":",
-			spinner: spinner.Line,
-		}
-	}
-	return prbGlyphs{
-		approved: "✔", changes: "✗", commented: "💬", pending: "◌", dismissed: "⊘", other: "•",
-		stale: "⟳", mine: "★", pin: "📌", errMark: "!", fail: "✗", ok: "✔",
-		nonBlocking: "●", simplify: "✂", times: "×",
-		cursor: "▌", dash: "—", minus: "−", atLeast: "≥", rule: "─", up: "▲", down: "▼", dot: "●",
-		sortDesc: "↓", sortAsc: "↑", refresh: "↻", sep: " · ",
-		spinner: spinner.MiniDot,
-	}
 }
 
 // prbPalette is the board's own looks on top of styles: state pills,
@@ -372,6 +340,9 @@ var (
 	// keep their content's width (up to prbCap).
 	prbFlexMin = map[prbCol]int{colTitle: 18, colReviewers: 12}
 	prbCap     = map[prbCol]int{colRef: 28, colNum: 7, colAuthor: 14, colAssignee: 14, colLastReview: 22, colFindings: 22, colReviewers: 44}
+	// prbRichFindingsCap is the findings' cap when priorities carry marks
+	// (two cells each) and the verdict is an emoji.
+	prbRichFindingsCap = 32
 )
 
 const prbMarkW = 2 // the cursor mark before each row
@@ -396,7 +367,7 @@ func sortColumn(s PRSort) prbCol {
 type prbPainter struct {
 	st      styles
 	pal     prbPalette
-	g       prbGlyphs
+	g       glyphs
 	now     time.Time
 	self    map[string]bool
 	all     []PRBoardRow // every row in scope: counts and column widths
@@ -407,7 +378,7 @@ type prbPainter struct {
 	judge   string // PRBoardOptions.Judge
 }
 
-func newPRBPainter(st styles, pal prbPalette, g prbGlyphs, now time.Time, self map[string]bool, all []PRBoardRow, by PRSort, desc bool) prbPainter {
+func newPRBPainter(st styles, pal prbPalette, g glyphs, now time.Time, self map[string]bool, all []PRBoardRow, by PRSort, desc bool) prbPainter {
 	p := prbPainter{st: st, pal: pal, g: g, now: now, self: self, all: all, sort: by, desc: desc}
 	owners := map[string]bool{}
 	for _, r := range all {
@@ -502,11 +473,7 @@ func (p prbPainter) numCell(r PRBoardRow) cell {
 func (p prbPainter) titleCell(r PRBoardRow) cell {
 	var c cell
 	if r.Pinned {
-		pin := lipgloss.Style{}
-		if p.g.pin == "pin" {
-			pin = p.st.Accent
-		}
-		c = append(c, seg{p.g.pin + " ", pin})
+		c = append(c, seg{p.g.pin + " ", p.pinStyle()})
 	}
 	if r.LastError != "" {
 		c = append(c, seg{p.g.errMark + " ", p.st.Err})
@@ -525,6 +492,15 @@ func (p prbPainter) titleCell(r PRBoardRow) cell {
 		return append(c, seg{title, lipgloss.NewStyle().Strikethrough(true)}) // greyed by the muted overlay
 	}
 	return append(c, seg{title, lipgloss.Style{}})
+}
+
+// pinStyle colors a pin that is a word or a monochrome icon; 📌 brings
+// its own colors.
+func (p prbPainter) pinStyle() lipgloss.Style {
+	if p.g.pinAccent {
+		return p.st.Accent
+	}
+	return lipgloss.Style{}
 }
 
 func (p prbPainter) loginStyle(login string, mine bool) lipgloss.Style {
@@ -586,26 +562,19 @@ func (p prbPainter) stateCell(state string) cell {
 	if s == "" {
 		return p.dash()
 	}
-	return cell{{" " + stateLabel(s) + " ", p.pal.pills[s]}}
+	return cell{{" " + marked(p.g.stateIcon[s], stateLabel(s)) + " ", p.pal.pills[s]}}
 }
 
 // findingsCell is the latest review's verdict glyph, its findings by
-// priority ("P1 P2×3") and its simplifications ("✂4"): what the review
-// concluded, also where it could only comment.
+// priority ("P1 P2×3", each behind its mark in the nerd mode: "🔴P1") and
+// its simplifications ("✂4"): what the review concluded, also where it
+// could only comment.
 func (p prbPainter) findingsCell(f *FindingsInfo) cell {
 	if f == nil {
 		return p.dash()
 	}
-	var c cell
-	switch f.Verdict {
-	case "blocking":
-		c = append(c, seg{p.g.changes + " ", p.pal.red})
-	case "non_blocking":
-		c = append(c, seg{p.g.nonBlocking + " ", p.pal.yellow})
-	default:
-		c = append(c, seg{p.g.ok + " ", p.pal.green})
-	}
-	styles := [4]lipgloss.Style{p.pal.red, p.pal.red, p.pal.yellow, p.st.Dim}
+	glyph, vst := p.findingsVerdict(f.Verdict)
+	c := cell{{glyph + " ", vst}}
 	listed := false
 	for i, n := range f.Counts {
 		if n <= 0 {
@@ -615,19 +584,36 @@ func (p prbPainter) findingsCell(f *FindingsInfo) cell {
 			c = append(c, seg{" ", lipgloss.Style{}})
 		}
 		listed = true
-		t := fmt.Sprintf("P%d", i)
+		t := p.g.priority[i] + fmt.Sprintf("P%d", i)
 		if n > 1 {
 			t += p.g.times + strconv.Itoa(n)
 		}
-		c = append(c, seg{t, styles[i]})
+		c = append(c, seg{t, p.priorityStyle(i)})
 	}
 	if !listed {
 		c = append(c, seg{"clean", p.pal.green})
 	}
 	if f.Simplifications > 0 {
-		c = append(c, seg{" " + p.g.simplify + strconv.Itoa(f.Simplifications), p.st.Dim})
+		c = append(c, seg{" " + p.g.simplify + p.g.gap + strconv.Itoa(f.Simplifications), p.st.Dim})
 	}
 	return c
+}
+
+// findingsVerdict is the glyph and the color of what a review concluded:
+// blocking, non-blocking or clean.
+func (p prbPainter) findingsVerdict(v string) (string, lipgloss.Style) {
+	switch v {
+	case "blocking":
+		return p.g.changes, p.pal.red
+	case "non_blocking":
+		return p.g.nonBlocking, p.pal.yellow
+	}
+	return p.g.ok, p.pal.green
+}
+
+// priorityStyle is the color of findings of priority P<i>.
+func (p prbPainter) priorityStyle(i int) lipgloss.Style {
+	return [4]lipgloss.Style{p.pal.red, p.pal.red, p.pal.yellow, p.st.Dim}[min(max(i, 0), 3)]
 }
 
 // verdict is a verdict's glyph, its short and long names and its color.
@@ -758,11 +744,11 @@ func (p prbPainter) reviewerChips(list []ReviewerInfo) []cell {
 		}
 		var c cell
 		if mine {
-			c = append(c, seg{p.g.mine, lst})
+			c = append(c, seg{p.g.mine + p.g.gap, lst})
 		}
 		c = append(c, seg{shortLogin(v.Login), lst}, seg{p.g.chipSep + glyph, vst})
 		if v.Stale {
-			c = append(c, seg{p.g.stale, p.pal.yellow})
+			c = append(c, seg{p.g.gap + p.g.stale, p.pal.yellow})
 		}
 		chips = append(chips, c)
 	}
@@ -881,6 +867,9 @@ func (p prbPainter) natural(rows []PRBoardRow) prbNatural {
 		}
 	}
 	for c, limit := range prbCap {
+		if c == colFindings && p.g.rich {
+			limit = prbRichFindingsCap
+		}
 		n.nat[c] = min(n.nat[c], max(limit, ansi.StringWidth(p.colTitle(c))))
 	}
 	return n
@@ -1171,9 +1160,13 @@ func (p prbPainter) summaryLine(width int) string {
 		}
 	}
 	var chips []string
-	chip := func(dot lipgloss.Style, n int, label string) {
+	// A chip leads with the state's mark (nerd) or its colored dot.
+	chip := func(state string, dot lipgloss.Style, n int, label string) {
 		s := p.pal.bold.Render(strconv.Itoa(n)) + " " + p.st.Dim.Render(label)
-		if p.g.dot != "" {
+		switch mark := p.g.stateMark[state]; {
+		case mark != "":
+			s = mark + " " + s
+		case p.g.dot != "":
 			s = dot.Render(p.g.dot) + " " + s
 		}
 		chips = append(chips, s)
@@ -1181,12 +1174,12 @@ func (p prbPainter) summaryLine(width int) string {
 	known := 0
 	for _, s := range prStateOrder {
 		if n := counts[s]; n > 0 {
-			chip(p.pal.dots[s], n, stateLabel(s))
+			chip(s, p.pal.dots[s], n, stateLabel(s))
 			known += n
 		}
 	}
 	if other := len(p.all) - known; other > 0 {
-		chip(p.st.Dim, other, "other")
+		chip("", p.st.Dim, other, "other")
 	}
 	var right []string
 	if stale > 0 {
@@ -1196,7 +1189,7 @@ func (p prbPainter) summaryLine(width int) string {
 		right = append(right, p.st.Err.Render(p.g.errMark)+" "+p.pal.bold.Render(strconv.Itoa(failing))+" "+p.st.Dim.Render("failing"))
 	}
 	if pinned > 0 {
-		right = append(right, p.g.pin+" "+p.pal.bold.Render(strconv.Itoa(pinned))+" "+p.st.Dim.Render("pinned"))
+		right = append(right, p.pinStyle().Render(p.g.pin)+" "+p.pal.bold.Render(strconv.Itoa(pinned))+" "+p.st.Dim.Render("pinned"))
 	}
 	r := strings.Join(right, "   ")
 	if r != "" {

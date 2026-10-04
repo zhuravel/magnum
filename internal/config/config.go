@@ -14,6 +14,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/zhuravel/magnum"
 	"github.com/zhuravel/magnum/internal/paths"
 )
 
@@ -74,13 +75,17 @@ type Config struct {
 	// Kinds are the agent CLIs ([kinds.<name>]) and Roles the review
 	// pipeline ([[role]]). After Load or Defaults both hold the merged,
 	// normalized result: built-in defaults, then the legacy [codex]/[claude]
-	// keys, then config.toml, then config.local.toml. Read them through
+	// keys, then the base (config.defaults.toml or a file), then the user
+	// config. Read them through
 	// KindSpec, RolesFor, JudgeFor and RoleByNameOrAlias.
 	Kinds map[string]Kind `toml:"kinds"`
 	Roles []Role          `toml:"role"`
 
 	// Layout is filled by Load; it is not part of the file.
 	Layout paths.Layout `toml:"-"`
+	// Sources are what Load read, base first: a file, or BuiltinDefaults,
+	// then the user layer when there was one.
+	Sources []string `toml:"-"`
 
 	// legacyErrs are problems in legacy keys found while mapping them onto
 	// the pipeline (buildPipeline); Validate reports them.
@@ -200,6 +205,11 @@ type Terminal struct {
 	// (wheel, clicks, header sort, column drag, right-click menu); the m key
 	// toggles it live.
 	Mouse bool `toml:"mouse"`
+	// Icons is the symbols the PR board and the status dashboard draw:
+	// "nerd" Nerd Font icons and emoji (colored marks for states, verdicts
+	// and finding priorities; needs a Nerd Font), "unicode" Unicode symbols
+	// any font has (the default, also when empty), "ascii" plain ASCII.
+	Icons string `toml:"icons"`
 }
 
 // Codex is the legacy [codex] section. Load maps it onto the pipeline as
@@ -495,69 +505,117 @@ func (r Repo) RenderEnv(slug, path, clone string) map[string]string {
 
 // LoadOptions tunes LoadWithOptions.
 type LoadOptions struct {
-	// NoOverlay skips config.local.toml (LocalOverlayPath) even when it
-	// exists next to the config file, so the result depends on the committed
-	// file alone.
+	// NoOverlay skips the user layer (the user config, or a legacy
+	// config.local.toml) even when it exists, so the result depends on the
+	// base alone.
 	NoOverlay bool
 }
 
-// Load reads the file at path (or the layout's default), applies the
-// config.local.toml next to it and validates the result. It is
-// LoadWithOptions with the zero LoadOptions.
+// BuiltinDefaults names the embedded base in messages and Sources.
+const BuiltinDefaults = "built-in defaults (config.defaults.toml)"
+
+// Load reads the configuration (see LoadWithOptions) with the zero
+// LoadOptions.
 func Load(layout paths.Layout, file string) (*Config, error) {
 	return LoadWithOptions(layout, file, LoadOptions{})
 }
 
-// LoadWithOptions is Load with options: the file at path (or $MAGNUM_CONFIG,
-// else the layout's default), the overlay unless opts.NoOverlay, validated.
+// LoadWithOptions reads the configuration in two layers and validates it.
+//
+// The base is file (or $MAGNUM_CONFIG): a complete configuration replacing
+// the built-in defaults; else a config.toml in the layout's home (a checkout
+// from before the defaults were built in); else the built-in defaults, the
+// repository's config.defaults.toml embedded in the binary.
+//
+// The user layer goes over it unless opts.NoOverlay: the layout's
+// UserConfig (~/.config/magnum/config.toml) when it exists, else a legacy
+// config.local.toml next to the base file (in the home for the built-in
+// base). It appends [[identity]], [[watch]], [[pool]] and [[repo]], and
+// overrides keys (see applyOverlay). cfg.Sources lists what was read.
 func LoadWithOptions(layout paths.Layout, file string, opts LoadOptions) (*Config, error) {
 	if file == "" {
 		file = os.Getenv("MAGNUM_CONFIG")
 	}
-	if file == "" {
-		file = layout.Config()
+	if file == "" && layout.Home != "" {
+		if legacy := layout.Config(); exists(legacy) {
+			file = legacy
+		}
 	}
 	cfg := Defaults()
 	cfg.Layout = layout
 	// Kinds and roles are merged key by key below; decoding into the
 	// defaults would reuse their slice elements and replace whole map values.
 	cfg.Kinds, cfg.Roles = nil, nil
-	md, err := toml.DecodeFile(file, cfg)
+	name := file
+	var md toml.MetaData
+	var data []byte // nil: read file
+	var err error
+	if file != "" {
+		md, err = toml.DecodeFile(file, cfg)
+	} else {
+		name, data = BuiltinDefaults, magnum.DefaultConfig
+		md, err = toml.Decode(string(data), cfg)
+	}
 	if err != nil {
-		return nil, fmt.Errorf("config %s: %w", file, err)
+		return nil, fmt.Errorf("config %s: %w", name, err)
 	}
 	if undecoded := md.Undecoded(); len(undecoded) > 0 {
-		return nil, fmt.Errorf("config %s: unknown keys: %v", file, undecoded)
+		return nil, fmt.Errorf("config %s: unknown keys: %v", name, undecoded)
 	}
-	base, err := readLayer(file, md, cfg.Kinds, cfg.Roles)
+	base, err := readLayerData(name, data, md, cfg.Kinds, cfg.Roles)
 	if err != nil {
 		return nil, err
 	}
+	cfg.Sources = []string{name}
 	var over *layer
-	if local := LocalOverlayPath(file); local != "" && !opts.NoOverlay {
-		if over, err = cfg.applyOverlay(local); err != nil {
+	if user := userLayerPath(layout, file); user != "" && !opts.NoOverlay {
+		if over, err = cfg.applyOverlay(user); err != nil {
 			return nil, err
 		}
+		cfg.Sources = append(cfg.Sources, user)
 	}
 	cfg.buildPipeline(base, over)
 	cfg.expand()
 	cfg.Normalize()
 	cfg.expandPipeline()
 	if err := cfg.Validate(); err != nil {
-		return nil, fmt.Errorf("config %s: %w", file, err)
+		return nil, fmt.Errorf("config %s: %w", strings.Join(cfg.Sources, " + "), err)
 	}
 	return cfg, nil
 }
 
-// LocalOverlayPath returns the gitignored overlay next to the config file
-// (config.local.toml) when it exists, else "". The overlay holds private
-// settings that must not be committed, e.g. extra [[watch]] blocks.
+// userLayerPath is the user layer for a base file ("" = built-in): the
+// layout's UserConfig when it exists, else a legacy config.local.toml next
+// to the base (in the home for the built-in base); "" for none.
+func userLayerPath(layout paths.Layout, base string) string {
+	if layout.UserConfig != "" && exists(layout.UserConfig) {
+		return layout.UserConfig
+	}
+	dir := layout.Home
+	if base != "" {
+		dir = filepath.Dir(base)
+	}
+	if dir == "" {
+		return ""
+	}
+	return LocalOverlayPath(filepath.Join(dir, "config.toml"))
+}
+
+// LocalOverlayPath returns the legacy overlay next to a config file
+// (config.local.toml) when it exists, else "". The user config
+// (~/.config/magnum/config.toml) replaced it; it is still read when that is
+// missing.
 func LocalOverlayPath(file string) string {
 	local := filepath.Join(filepath.Dir(file), "config.local.toml")
 	if _, err := os.Stat(local); err != nil {
 		return ""
 	}
 	return local
+}
+
+func exists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
 }
 
 // applyOverlay merges config.local.toml: [[identity]], [[watch]], [[pool]]

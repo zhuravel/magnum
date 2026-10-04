@@ -48,7 +48,7 @@ flowchart LR
     S --> W[herdr workspace]
     W --> R1[claude-review pane]
     W --> R2[codex-review pane]
-    W --> R3[claude-simplify pane<br/>first round only]
+    W --> R3[claude-simplify pane<br/>first round, then after big changes]
     R1 & R2 & R3 -- reports on disk --> J[codex-judge pane]
     J -- one marked review --> GH
     GH -- new push --> D
@@ -85,7 +85,7 @@ A new machine reviews its first PR without a pool or a database:
 ```bash
 git clone <this repository> ~/Projects/magnum && cd ~/Projects/magnum
 make build                                   # bin/magnum
-bin/magnum init                              # config.local.toml: your gh login, one repository, who posts
+bin/magnum init                              # ~/.config/magnum/config.toml: your gh login, one repository, who posts
 bin/magnum doctor                            # what this setup uses, with the exact fix for each problem
 bin/magnum daemon                            # in a second terminal or herdr pane: the daemon in the foreground
 bin/magnum review owner/repo#123 --wait      # one review of that repository's PR, start to finish
@@ -100,9 +100,8 @@ bin/magnum install --gh --no-launchd         # optional: `gh magnum …`
 bin/magnum completion zsh > "${fpath[1]}/_magnum"
 ```
 
-`magnum init` refuses to replace an existing `config.local.toml` without `--force` (the old file is kept
-as `config.local.toml.bak`); [config.local.toml.example](config.local.toml.example) is the same minimal
-setup to copy by hand. To post as a GitHub App, answer 2 when init asks who posts: it asks for the App's
+`magnum init` refuses to replace an existing config without `--force` (the old file is kept as
+`config.toml.bak`); [config.example.toml](config.example.toml) is the same minimal setup to copy by hand. To post as a GitHub App, answer 2 when init asks who posts: it asks for the App's
 ids and prints the `.mise.local.toml` line for its private key (it never asks for the key), and every
 command then runs through `mise exec -- bin/magnum …`; `mise exec -- bin/magnum identities check`
 verifies the App. A big repository with its own databases gets a pool of warm slots: add a `[[pool]]`
@@ -110,17 +109,24 @@ verifies the App. A big repository with its own databases gets a pool of warm sl
 
 ## Configuration
 
-Everything lives in the repository, in three files:
+Two layers and a secrets file:
 
-- `config.toml` (committed, distributable): the daemon defaults, the agent kinds and the review roles.
-  It names no account, repository or path of yours.
-- `config.local.toml` (gitignored): your identities, watches, pools and repos, plus any key you want
-  to override. Its `[[watch]]`, `[[identity]]`, `[[pool]]` and `[[repo]]` blocks are appended, a
-  `[[role]]` overrides the keys it sets on the role of the same name (or is appended), scalar keys and
-  `[kinds.<name>]` entries override key by key. [config.toml.example](config.toml.example) is a complete,
-  working setup (Talkable's) to copy from.
-- `.mise.local.toml` (gitignored): secrets such as GitHub App private keys, which reach the daemon
-  through mise.
+- The built-in defaults: [config.defaults.toml](config.defaults.toml), embedded in the binary. The
+  daemon defaults, the agent kinds and the review roles, every key documented; it names no account,
+  repository or path of yours. Editing it changes the defaults after `make build`.
+- Your config, `~/.config/magnum/config.toml` (`$XDG_CONFIG_HOME/magnum/config.toml` when that is set;
+  `magnum init` writes it): your identities, watches, pools and repos, plus any default you want to
+  override. Its `[[watch]]`, `[[identity]]`, `[[pool]]` and `[[repo]]` blocks are appended, a `[[role]]`
+  overrides the keys it sets on the role of the same name (or is appended), scalar keys and
+  `[kinds.<name>]` entries override key by key. [config.full.example.toml](config.full.example.toml) is
+  a complete, working setup (Talkable's) to copy from. `magnum config` and `magnum doctor` say which
+  files were read.
+- `.mise.local.toml` (gitignored, in the checkout): secrets such as GitHub App private keys, which reach
+  the daemon through mise.
+
+`--config FILE` (or `$MAGNUM_CONFIG`) replaces the built-in defaults with a complete file of your own.
+A `config.local.toml` in the checkout, where settings lived before, is still read when
+`~/.config/magnum/config.toml` does not exist; doctor says how to move it.
 
 The daemon prunes audit events older than `[daemon] keep_events` (default `"30d"`) and handled CLI
 requests older than `keep_requests` (default `"7d"`) on every reconcile; `"0"` keeps them forever.
@@ -248,7 +254,7 @@ reviewers, as `zsh -lc` with the slot's env and within `ready_timeout` (5m) toge
 check that the login shell runs the Ruby the checkout pins; a failure never stops the round, it tells
 the judge what will not work. A watch's `skip_paths` (path globs where `**` spans
 directories, such as `["docs/**", "**/*.md"]`) skips a PR whose changed files all match, while a forced
-`magnum review` still runs it. See the Configuration comments in `config.toml` for every key.
+`magnum review` still runs it. See the comments in `config.defaults.toml` for every key.
 
 ### Roles and kinds: the review pipeline
 
@@ -278,7 +284,8 @@ capture = "stdout"
 name = "claude-simplify"
 kind = "claude"
 prompt = "claude-simplify.md"
-runs = "first"                     # first review of a PR, then only on request (`magnum review --role claude-simplify`, or `--simplify`)
+runs = "first"                     # first review of a PR, then on request (`magnum review --role claude-simplify`, or `--simplify`)
+rerun_min_lines = 150              # ...and again once 150 code lines changed since its last run (0 = never)
 capture = "git-diff"               # the patch it would apply; the tree is restored afterwards
 output = "claude-simplify.patch"
 after = ["claude-review", "codex-review"]
@@ -297,7 +304,7 @@ timeout = "90m"
 
 Non-judge roles run in parallel unless `after = [...]` orders them; the judge runs last and gets every
 other role's report. With no `[[role]]` at all Magnum runs these four built-in roles, which
-`config.toml` writes out in full; a block named like a built-in role inherits every key it does not
+`config.defaults.toml` writes out in full; a block named like a built-in role inherits every key it does not
 set. The old `[codex]` and `[claude]` sections still work as fallbacks for the matching keys.
 
 A role whose `runs` is `first` (after its first run) or `manual` runs when asked:
@@ -332,7 +339,7 @@ code; `magnum stats` reports them per role.
 
 | Command | What it does |
 |---|---|
-| `magnum init [--force]` | Write `config.local.toml` for this machine from three questions: your gh login, one repository, who posts (your login or a GitHub App). |
+| `magnum init [--force]` | Write `~/.config/magnum/config.toml` for this machine from three questions: your gh login, one repository, who posts (your login or a GitHub App). |
 | `magnum prs [--repo …] [--view all\|magnum\|mine\|ready] [--sort updated\|last-review\|reviewer-activity\|changes\|state] [--all] [--json]` | The PR board: every watched PR with its last review, each reviewer's verdict (with staleness), what changed since the last review, assignees. `--view` keeps what Magnum reviewed, what is yours or what is ready to merge. Live screen on a terminal, table or JSON otherwise. |
 | `magnum status [<ref>\|<slot>] [--all] [--sizes] [--json] [--watch]` | Daemon, slots, queue, pauses; a PR's detail card with its review history and the last round's stage timings. `--watch` is the live dashboard (`tab` flips to the PR board). |
 | `magnum stats [--since 7d] [--repo owner/name] [--json]` | Review statistics per local day and repository over a window (`--since` takes `7d`, `36h`, `90m` or a date; default 7d): rounds started and how they ended, findings posted by priority, median and p90 durations per role and per round, how many findings each source raised, had posted, had posted alone or had rejected (with reason codes), and model switches, denied prompts and round restarts. |
@@ -392,6 +399,11 @@ row for a menu of its actions (each still asks y/N where its key does). `m` turn
 (`[terminal] mouse = false` starts with it off); while it is on, select text with Option-drag in iTerm2 or
 Shift-drag in most other terminals. On the status dashboard `w` shows or hides the manual worktrees (it used
 to be `m`).
+
+`[terminal] icons` picks the screens' symbols: `unicode` (the default), `nerd` for a
+[Nerd Font](https://www.nerdfonts.com) terminal (an icon on every state, verdict and section, and colour
+emoji that make states, verdicts and finding priorities easy to spot: 🔴 attention, 🟡 queued, 🔵
+reviewing, 🟢 reviewed, 🔥 P0, 🟠 P2), or `ascii`. `?` shows the legend for the mode in use.
 
 ## Integrations
 

@@ -68,8 +68,17 @@ func (p prbPainter) helpContent(width int) []string {
 		p.pal.green.Render(g.approved) + " approved", p.pal.red.Render(g.changes) + " changes requested",
 		p.pal.yellow.Render(g.commented) + " commented", p.st.Dim.Render(g.pending) + " requested",
 		p.st.Dim.Render(g.dismissed) + " dismissed", p.pal.yellow.Render(g.stale) + " stale: the head moved since",
-		p.pal.mine.Render(g.mine) + " yours", g.pin + " pinned", p.st.Err.Render(g.errMark) + " last round failed",
+		p.pal.mine.Render(g.mine) + " yours", p.pinStyle().Render(g.pin) + " pinned", p.st.Err.Render(g.errMark) + " last round failed",
 		p.pal.tag.Render("muted") + " dimmed row",
+	}, "   ", inner)...)
+	prios := make([]string, len(g.priority))
+	for i := range prios {
+		prios[i] = p.priorityStyle(i).Render(g.priority[i] + fmt.Sprintf("P%d", i))
+	}
+	lines = append(lines, flow([]string{
+		p.st.Header.Render("FINDINGS"), p.pal.red.Render(g.changes) + " blocking", p.pal.yellow.Render(g.nonBlocking) + " non-blocking",
+		p.pal.green.Render(g.ok) + " clean", strings.Join(prios, " ") + " by priority, " + g.times + "n how many",
+		p.st.Dim.Render(g.simplify) + " simplifications",
 	}, "   ", inner)...)
 	ex := &ReviewDelta{Base: "reviewed", Commits: 3, Additions: 41, Deletions: 7}
 	since := p.sinceCell(ex, p.sinceWidths([]PRBoardRow{{SinceReview: ex}})).render(nil) +
@@ -77,9 +86,13 @@ func (p prbPainter) helpContent(width int) []string {
 	lines = append(lines, strings.Split(lipgloss.NewStyle().Width(inner).Render(since), "\n")...)
 	var pills []string
 	for _, st := range prStateOrder {
-		pills = append(pills, p.stateCell(st).render(nil))
+		pills = append(pills, marked(g.stateMark[st], p.stateCell(st).render(nil)))
 	}
-	lines = append(lines, flow(pills, " ", inner)...)
+	sep := " "
+	if g.rich { // the marks need room to tell the pills apart
+		sep = "   "
+	}
+	lines = append(lines, flow(pills, sep, inner)...)
 	for i, l := range lines {
 		lines[i] = truncate(strings.TrimRight(l, " "), inner)
 	}
@@ -134,7 +147,7 @@ func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
 	head := p.st.Title.Render(orDim(prRef(r))) + "  " + p.stateCell(r.State).render(nil)
 	var flags []string
 	if r.Pinned {
-		flags = append(flags, p.g.pin+" pinned")
+		flags = append(flags, p.pinStyle().Render(p.g.pin)+" pinned")
 	}
 	if r.Draft {
 		flags = append(flags, p.pal.tag.Render("draft"))
@@ -232,17 +245,17 @@ func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
 	}
 
 	if r.WaitDetail != "" {
-		add("", p.st.Section.Render("WAITING"))
+		add("", p.st.Section.Render(p.g.headed("WAITING")))
 		for _, l := range strings.Split(lipgloss.NewStyle().Width(max(inner-2, 10)).Render(r.WaitDetail), "\n") {
 			add("  " + l)
 		}
 	}
 
-	add("", p.st.Section.Render("SINCE REVIEW"))
+	add("", p.st.Section.Render(p.g.headed("SINCE REVIEW")))
 	for _, l := range p.sinceSentence(r) {
 		add("  " + l)
 	}
-	add("", p.st.Section.Render("LAST REVIEW"))
+	add("", p.st.Section.Render(p.g.headed("LAST REVIEW")))
 	for _, l := range p.lastReviewSentence(r) {
 		add("  " + l)
 	}
@@ -250,21 +263,21 @@ func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
 		add("  " + p.st.Dim.Render(r.Note))
 	}
 	if f := r.Findings; f != nil {
-		add("", p.st.Section.Render("FINDINGS"))
-		for _, l := range findingsLines(*f) {
+		add("", p.st.Section.Render(p.g.headed("FINDINGS")))
+		for _, l := range p.findingsLines(*f) {
 			for _, w := range strings.Split(lipgloss.NewStyle().Width(max(inner-2, 10)).Render(l), "\n") {
 				add("  " + w)
 			}
 		}
 	}
 	if normState(r.State) == "baseline" {
-		add("", p.st.Section.Render("NOT REVIEWED"))
+		add("", p.st.Section.Render(p.g.headed("NOT REVIEWED")))
 		for _, w := range strings.Split(lipgloss.NewStyle().Width(max(inner-2, 10)).Render(notReviewedSentence), "\n") {
 			add("  " + w)
 		}
 	}
 	if t := r.LastRound; t != nil {
-		head := fmt.Sprintf("LAST ROUND (%d", t.Round)
+		head := p.g.headed("LAST ROUND") + fmt.Sprintf(" (%d", t.Round)
 		if t.Kind != "" {
 			head += ", " + t.Kind
 		}
@@ -274,7 +287,7 @@ func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
 		}
 	}
 
-	add("", p.st.Section.Render(fmt.Sprintf("REVIEWERS (%d)", len(r.Reviewers))))
+	add("", p.st.Section.Render(fmt.Sprintf("%s (%d)", p.g.headed("REVIEWERS"), len(r.Reviewers))))
 	if len(r.Reviewers) == 0 {
 		add("  " + p.st.Dim.Render("nobody yet"))
 	} else {
@@ -289,7 +302,7 @@ func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
 		wrap := func(s string) []string {
 			return strings.Split(lipgloss.NewStyle().Width(max(inner-2, 10)).Render(oneLine(s)), "\n")
 		}
-		add("", p.st.Err.Render(title))
+		add("", p.st.Err.Render(p.g.headed(title)))
 		for _, l := range wrap(r.LastError) {
 			add("  " + p.pal.red.Render(l))
 		}
@@ -323,7 +336,7 @@ func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
 			}
 		}
 	}
-	add("", p.st.Section.Render("ACTIONS"))
+	add("", p.st.Section.Render(p.g.headed("ACTIONS")))
 	for _, l := range p.st.wrapHints(inner-2, acts...) {
 		add("  " + l)
 	}
@@ -465,7 +478,8 @@ const notReviewedSentence = "Open before magnum began watching this repository, 
 // findingsLines say what the latest review concluded: the decision (and
 // what was posted instead, when the repository only lets it comment), the
 // findings by priority with the simplifications, and the earlier findings.
-func findingsLines(f FindingsInfo) []string {
+// The nerd mode marks the decision with its verdict and each priority.
+func (p prbPainter) findingsLines(f FindingsInfo) []string {
 	decision := map[string]string{
 		"blocking":     "request changes",
 		"non_blocking": "comment (nothing blocks the merge)",
@@ -476,6 +490,10 @@ func findingsLines(f FindingsInfo) []string {
 	}
 	want := map[string]string{"blocking": "REQUEST_CHANGES", "non_blocking": "COMMENT", "clean": "APPROVE"}[f.Verdict]
 	line := "Decision: " + decision
+	if p.g.rich {
+		glyph, _ := p.findingsVerdict(f.Verdict)
+		line = glyph + " " + line
+	}
 	if f.Posted != "" && want != "" && !strings.EqualFold(f.Posted, want) {
 		line += "; posted as " + strings.ToLower(strings.ReplaceAll(f.Posted, "_", " ")) +
 			" (A approves, C requests changes)"
@@ -483,15 +501,19 @@ func findingsLines(f FindingsInfo) []string {
 	out := []string{line}
 	var parts []string
 	for i, n := range f.Counts {
-		parts = append(parts, fmt.Sprintf("P%d %d", i, n))
+		parts = append(parts, marked(p.g.priority[i], fmt.Sprintf("P%d %d", i, n)))
 	}
 	counts := strings.Join(parts, " · ")
+	scissors := ""
+	if p.g.rich {
+		scissors = p.g.simplify + " "
+	}
 	switch f.Simplifications {
 	case 0:
 	case 1:
-		counts += " · 1 simplification suggested"
+		counts += " · " + scissors + "1 simplification suggested"
 	default:
-		counts += fmt.Sprintf(" · %d simplifications suggested", f.Simplifications)
+		counts += fmt.Sprintf(" · %s%d simplifications suggested", scissors, f.Simplifications)
 	}
 	out = append(out, counts)
 	if f.Fixed+f.Open+f.Answered > 0 {

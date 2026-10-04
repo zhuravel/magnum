@@ -137,10 +137,22 @@ type layer struct {
 }
 
 func readLayer(file string, md toml.MetaData, kinds map[string]Kind, roles []Role) (*layer, error) {
+	return readLayerData(file, nil, md, kinds, roles)
+}
+
+// readLayerData is readLayer for a layer given as data (the built-in
+// defaults); nil data reads file.
+func readLayerData(file string, data []byte, md toml.MetaData, kinds map[string]Kind, roles []Role) (*layer, error) {
 	var raw struct {
 		Role []map[string]any `toml:"role"`
 	}
-	if _, err := toml.DecodeFile(file, &raw); err != nil {
+	var err error
+	if data != nil {
+		_, err = toml.Decode(string(data), &raw)
+	} else {
+		_, err = toml.DecodeFile(file, &raw)
+	}
+	if err != nil {
 		return nil, fmt.Errorf("config %s: %w", file, err)
 	}
 	return &layer{md: md, kinds: kinds, roles: roles, raw: raw.Role}, nil

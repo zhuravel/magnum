@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -230,11 +231,8 @@ func inspFirstLine(s string) string {
 
 func doctorConfig(ctx context.Context, d doctorDeps) []doctorCheck {
 	cfg := d.Config
-	file := d.ConfigFile
-	if file == "" {
-		file = d.Layout.Config()
-	}
-	detail := fmt.Sprintf("config %s: %d watches, %d identities, %d pools", inspTilde(file), len(cfg.Watches),
+	sources := configSources(cfg, d.ConfigFile, d.Layout)
+	detail := fmt.Sprintf("config %s: %d watches, %d identities, %d pools", sources, len(cfg.Watches),
 		len(cfg.Identities), len(cfg.Pools))
 	if d.Store != nil {
 		if v, err := d.Store.SchemaVersion(ctx); err == nil {
@@ -242,6 +240,16 @@ func doctorConfig(ctx context.Context, d doctorDeps) []doctorCheck {
 		}
 	}
 	out := []doctorCheck{doctorOK("config", detail)}
+	for _, s := range cfg.Sources {
+		if filepath.Base(s) == "config.local.toml" && d.Layout.UserConfig != "" {
+			out = append(out, doctorWarned("config location", "your settings are read from the legacy "+inspTilde(s),
+				fmt.Sprintf("mkdir -p %s && mv %s %s", inspTilde(filepath.Dir(d.Layout.UserConfig)), inspTilde(s), inspTilde(d.Layout.UserConfig))))
+		}
+		if s == filepath.Join(d.Layout.Home, "config.toml") {
+			out = append(out, doctorWarned("config location", inspTilde(s)+" replaces the built-in defaults (a checkout from before they were built in)",
+				"keep your settings in "+inspTilde(d.Layout.UserConfig)+" and remove "+inspTilde(s)+" unless it is a complete config on purpose"))
+		}
+	}
 	for _, w := range cfg.Warnings() {
 		out = append(out, doctorWarned("config warning", w, ""))
 	}
@@ -250,4 +258,20 @@ func doctorConfig(ctx context.Context, d doctorDeps) []doctorCheck {
 			"cd "+inspTilde(d.Layout.Home)+" && go build -o bin/magnum ./cmd/magnum"))
 	}
 	return out
+}
+
+// configSources names what the configuration was read from: "base + user"
+// (cfg.Sources), else the file given, else the layout's default.
+func configSources(cfg *config.Config, file string, l paths.Layout) string {
+	if cfg != nil && len(cfg.Sources) > 0 {
+		parts := make([]string, len(cfg.Sources))
+		for i, s := range cfg.Sources {
+			parts[i] = inspTilde(s)
+		}
+		return strings.Join(parts, " + ")
+	}
+	if file != "" {
+		return inspTilde(file)
+	}
+	return config.BuiltinDefaults
 }

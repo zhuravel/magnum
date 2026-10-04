@@ -308,5 +308,5 @@ func (m prBoardModel) runMenuItem(items []menuItem, i int) (prBoardModel, tea.Cm
 func (m prBoardModel) drawMenu(out []string, w, h int) {
 	items := m.menuItems()
 	l := placeMenu(items, m.menu.sel, m.menu.x, m.menu.y, w, h)
-	overlay(out, m.st.menuBox(items, m.menu.sel, l, m.opts.ASCII), l.x, l.y, w)
+	overlay(out, m.st.menuBox(items, m.menu.sel, l, m.g.mode == IconsASCII), l.x, l.y, w)
 }

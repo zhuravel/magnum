@@ -12,8 +12,9 @@ when you change a behaviour, do not rewrite old ones.
   `make test` runs `make check-private`, which greps tracked files for patterns kept only in the
   gitignored `.mise.local.toml` (`MAGNUM_PRIVATE_PATTERNS`) and for every human login in the local
   registry (`scripts/check-logins.sh`; `MAGNUM_OWN_LOGINS` and `MAGNUM_LOGIN_ALLOW` exempt).
-  Use `talkable` or `example` in examples. Personal config goes into `config.local.toml` (gitignored);
-  `config.toml` must stay distributable and must load standalone.
+  Use `talkable` or `example` in examples. Personal config goes into `~/.config/magnum/config.toml`
+  (outside the repository); `config.defaults.toml` holds the built-in defaults (embedded in the binary),
+  must stay distributable and must load standalone.
 - **A daemon built from this checkout may be live on the machine.** Never run `bin/magnum` from a
   test or an agent task, never run git, mysql, herdr or launchctl against real directories or sockets.
   Tests are hermetic: fakes for git, gh, herdr and MySQL; the live tests are opt-in by environment

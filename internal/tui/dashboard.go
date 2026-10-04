@@ -158,6 +158,7 @@ type DashboardOptions struct {
 	Title      string           // default "magnum status"
 	Now        func() time.Time // clock for "updated Xs ago"; default time.Now
 	Judge      string           // the judge role's name in the help ("open the PR's <Judge> pane"); default "judge"
+	Icons      IconMode         // the symbols: unicode (default), nerd (Nerd Font icons and emoji) or ascii
 	// NoMouse starts with mouse support off ([terminal] mouse = false);
 	// m turns it on and off either way.
 	NoMouse bool
@@ -236,6 +237,7 @@ type dashboardModel struct {
 	src  DashboardSource
 	opts DashboardOptions
 	st   styles
+	g    glyphs // fixed for the model's life, so no cache key names it
 
 	width, height int
 
@@ -341,9 +343,10 @@ func newDashboardModel(ctx context.Context, src DashboardSource, act DashboardAc
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
-	sp := spinner.New(spinner.WithSpinner(spinner.MiniDot), spinner.WithStyle(defaultStyles.Accent))
+	g := newGlyphs(opts.Icons)
+	sp := spinner.New(spinner.WithSpinner(g.spinner), spinner.WithStyle(defaultStyles.Accent))
 	m := dashboardModel{
-		actionBar: newActionBar(ctx, act), src: src, opts: opts, st: defaultStyles, spin: sp, cache: &dashCache{},
+		actionBar: newActionBar(ctx, act), src: src, opts: opts, st: defaultStyles, g: g, spin: sp, cache: &dashCache{},
 		showManual: opts.ShowManual,
 		loading:    true, spinning: true, // Init starts the first gather and the spinner
 		saver: newWidthSaver(opts.Widths, widthsDashboard),
@@ -843,9 +846,9 @@ func (m dashboardModel) headerLines(w int) []string {
 	d := m.data
 	label := func(s string) string { return m.st.Label.Render(fmt.Sprintf("%-10s", s)) }
 
-	daemon := m.st.Err.Render("not running")
+	daemon := marked(m.g.running[0], m.st.Err.Render("not running"))
 	if d.Daemon.Running {
-		daemon = m.st.OK.Render("running") + fmt.Sprintf(" (pid %d", d.Daemon.PID)
+		daemon = marked(m.g.running[1], m.st.OK.Render("running")) + fmt.Sprintf(" (pid %d", d.Daemon.PID)
 		if d.Daemon.Uptime != "" {
 			daemon += ", up " + d.Daemon.Uptime
 		}
@@ -910,7 +913,7 @@ func (m dashboardModel) headerLines(w int) []string {
 			if i == 0 {
 				lead = label("pauses:")
 			}
-			line := m.st.Warn.Render("PAUSED "+p.Key+": ") + p.Reason
+			line := marked(m.g.stateMark["paused"], m.st.Warn.Render("PAUSED "+p.Key+": ")) + p.Reason
 			if p.Fix != "" {
 				line += m.st.Dim.Render(" · fix: " + p.Fix)
 			}
@@ -988,7 +991,7 @@ func (m dashboardModel) drawBody(w int) dashBody {
 	var out []string
 	var b dashBody
 	section := func(title string, n int) {
-		out = append(out, m.st.Section.Render(fmt.Sprintf("%s (%d)", title, n)))
+		out = append(out, m.st.Section.Render(fmt.Sprintf("%s (%d)", m.g.headed(title), n)))
 	}
 	addRows := func(table string, cols []column, cells [][]string) {
 		widths := layoutColumnsFixed(cols, cells, w, len(cursorMark), m.fixedWidths(table, cols))
@@ -1010,9 +1013,13 @@ func (m dashboardModel) drawBody(w int) dashBody {
 		for i, s := range d.Slots {
 			pr := "-"
 			if s.PRRef != "" {
-				pr = strings.TrimSpace(s.PRRef + " " + s.PRState)
+				pr = strings.TrimSpace(s.PRRef + " " + m.stateText(s.PRState))
 			}
-			cells[i] = []string{s.Name, orDash(s.Folder), pr, orDash(s.SlotState), orDash(s.DBs), orDash(s.Disk)}
+			state := orDash(s.SlotState)
+			if f := strings.Fields(s.SlotState); len(f) > 0 { // "busy [pinned]"
+				state = marked(m.g.slotMark[f[0]], state)
+			}
+			cells[i] = []string{s.Name, orDash(s.Folder), pr, state, orDash(s.DBs), orDash(s.Disk)}
 		}
 		addRows(dashSlots, slotCols, cells)
 	}
@@ -1024,7 +1031,7 @@ func (m dashboardModel) drawBody(w int) dashBody {
 	} else {
 		cells := make([][]string, len(d.Queue))
 		for i, q := range d.Queue {
-			cells[i] = []string{q.Ref, orDash(q.State), orDash(q.Next), orDash(q.Age), orDash(q.Author), oneLine(q.Title)}
+			cells[i] = []string{q.Ref, orDash(m.stateText(q.State)), orDash(q.Next), orDash(q.Age), orDash(q.Author), oneLine(q.Title)}
 		}
 		addRows(dashQueue, queueCols, cells)
 	}
@@ -1037,7 +1044,7 @@ func (m dashboardModel) drawBody(w int) dashBody {
 			if a.Kind != "" {
 				subj += " [" + a.Kind + "]"
 			}
-			out = append(out, truncate(noMark+m.st.Warn.Render(subj)+": "+oneLine(a.Message), w))
+			out = append(out, truncate(noMark+marked(m.g.stateMark["needs_attention"], m.st.Warn.Render(subj))+": "+oneLine(a.Message), w))
 			if a.Fix != "" {
 				out = append(out, truncate(noMark+m.st.Dim.Render("  fix: "+a.Fix), w))
 			}
@@ -1047,7 +1054,7 @@ func (m dashboardModel) drawBody(w int) dashBody {
 	if len(d.Manual) > 0 {
 		out = append(out, "")
 		if !m.showManual {
-			out = append(out, m.st.Dim.Render(fmt.Sprintf("MANUAL WORKTREES (%d hidden, w shows them)", len(d.Manual))))
+			out = append(out, m.st.Dim.Render(fmt.Sprintf("%s (%d hidden, w shows them)", m.g.headed("MANUAL WORKTREES"), len(d.Manual))))
 		} else {
 			section("MANUAL WORKTREES", len(d.Manual))
 			cells := make([][]string, len(d.Manual))
@@ -1071,6 +1078,15 @@ func (m dashboardModel) drawBody(w int) dashBody {
 	}
 	b.lines = out
 	return b
+}
+
+// stateText is a PR state behind its mark, when the mode has one; the
+// cells carry no styling, the emoji bring their own colors.
+func (m dashboardModel) stateText(state string) string {
+	if strings.TrimSpace(state) == "" {
+		return state
+	}
+	return marked(m.g.stateMark[normState(state)], state)
 }
 
 func (m dashboardModel) statusLine(w int) string {
@@ -1166,7 +1182,36 @@ func (m dashboardModel) helpContent() []string {
 	for _, h := range mouseHelp(false, "opens the pane") {
 		lines = append(lines, m.st.Key.Render(fmt.Sprintf("%-16s", h.key))+" "+h.desc)
 	}
-	return append(lines, strings.Split(m.st.Dim.Width(64).Render(mouseSelectNote), "\n")...)
+	lines = append(lines, strings.Split(m.st.Dim.Width(64).Render(mouseSelectNote), "\n")...)
+	return append(lines, m.legend(64)...)
+}
+
+// legend explains the marks before PR and slot states (nerd mode); the
+// other modes mark nothing.
+func (m dashboardModel) legend(width int) []string {
+	if !m.g.rich {
+		return nil
+	}
+	var prs, slots []string
+	for _, s := range prStateOrder {
+		if mk := m.g.stateMark[s]; mk != "" {
+			prs = append(prs, mk+" "+stateLabel(s))
+		}
+	}
+	for _, s := range dashSlotStateOrder {
+		if mk := m.g.slotMark[s]; mk != "" {
+			slots = append(slots, mk+" "+strings.ReplaceAll(s, "_", " "))
+		}
+	}
+	lines := []string{"", m.st.Title.Render("Legend"), m.st.Label.Render("PRs")}
+	lines = append(lines, flow(prs, "   ", width)...)
+	lines = append(lines, m.st.Label.Render("Slots"))
+	return append(lines, flow(slots, "   ", width)...)
+}
+
+// dashSlotStateOrder lists the slot states for the legend, healthy first.
+var dashSlotStateOrder = []string{
+	"free", "claimed", "busy", "held", "provisioning", "releasing", "dirty_schema", "broken", "lost", "observed", "removing", "removed",
 }
 
 // helpLines is the help box in height lines, its content scrolled by

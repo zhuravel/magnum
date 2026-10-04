@@ -16,6 +16,11 @@ import (
 // Layout resolves every path magnum reads or writes.
 type Layout struct {
 	Home string // repository root (MAGNUM_HOME)
+	// UserConfig is the user's config file, layered over the built-in
+	// defaults: $XDG_CONFIG_HOME/magnum/config.toml, else
+	// ~/.config/magnum/config.toml (Resolve sets it; UserConfigPath). ""
+	// means none (tests build layouts without it).
+	UserConfig string
 	// Scratch, when set, holds the registry, the review reports and the
 	// repository notes instead of state/ (magnum eval: a replay never touches
 	// the live registry, reports or notes). Logs, locks, the pidfile and the
@@ -41,18 +46,32 @@ func Resolve() (Layout, error) {
 		if err != nil {
 			return Layout{}, fmt.Errorf("paths: MAGNUM_HOME %q: %w", h, err)
 		}
-		return Layout{Home: home}, nil
+		return Layout{Home: home, UserConfig: UserConfigPath()}, nil
 	}
 	if exe, err := os.Executable(); err == nil {
 		if home, ok := homeFromExecutable(exe); ok {
-			return Layout{Home: home}, nil
+			return Layout{Home: home, UserConfig: UserConfigPath()}, nil
 		}
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return Layout{}, err
 	}
-	return Layout{Home: filepath.Join(home, "Projects", "magnum")}, nil
+	return Layout{Home: filepath.Join(home, "Projects", "magnum"), UserConfig: UserConfigPath()}, nil
+}
+
+// UserConfigPath is where the user's config lives: $XDG_CONFIG_HOME/magnum/
+// config.toml when XDG_CONFIG_HOME is an absolute path, else
+// ~/.config/magnum/config.toml; "" without a home directory.
+func UserConfigPath() string {
+	if x := os.Getenv("XDG_CONFIG_HOME"); filepath.IsAbs(x) {
+		return filepath.Join(x, "magnum", "config.toml")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".config", "magnum", "config.toml")
 }
 
 // canonicalDir returns p as an absolute path with every symlink resolved. The
@@ -101,7 +120,8 @@ func homeFromExecutable(exe string) (string, bool) {
 // another Go project must not make that project magnum's home.
 func findHome(dir string) (string, bool) {
 	for range 4 {
-		if exists(filepath.Join(dir, "config.toml")) || isMagnumModule(filepath.Join(dir, "go.mod")) {
+		if exists(filepath.Join(dir, "config.toml")) || exists(filepath.Join(dir, "config.defaults.toml")) ||
+			isMagnumModule(filepath.Join(dir, "go.mod")) {
 			return dir, true
 		}
 		parent := filepath.Dir(dir)

@@ -6,3 +6,4 @@
 /config.local.toml
 !internal/store/migrations/*.sql
 /eval.local.toml
+/config.toml

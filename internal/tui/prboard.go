@@ -177,9 +177,9 @@ type PRBoardOptions struct {
 	// ViewChanged, when set, hears every v, so the next board can open in
 	// the same view.
 	ViewChanged func(PRView)
-	Repo        string // show only this repository ("name" or "owner/name"); empty shows all
-	ASCII       bool   // ASCII glyphs ("+", "x", "pin") instead of ✔ ✗ 📌
-	Judge       string // the judge role's name in the help ("open the <Judge> pane"); default "judge"
+	Repo        string   // show only this repository ("name" or "owner/name"); empty shows all
+	Icons       IconMode // the symbols: unicode (default), nerd (Nerd Font icons and emoji) or ascii
+	Judge       string   // the judge role's name in the help ("open the <Judge> pane"); default "judge"
 	// NoMouse starts with mouse support off ([terminal] mouse = false);
 	// m turns it on and off either way.
 	NoMouse bool
@@ -541,7 +541,7 @@ type prBoardModel struct {
 	opts PRBoardOptions
 	st   styles
 	pal  prbPalette
-	g    prbGlyphs
+	g    glyphs
 	self map[string]bool
 
 	width, height int
@@ -668,7 +668,7 @@ func newPRBoardModel(ctx context.Context, src PRBoardSource, act DashboardAction
 	if !opts.DefaultView.valid() {
 		opts.DefaultView = ViewAll
 	}
-	g := newPRBGlyphs(opts.ASCII)
+	g := newGlyphs(opts.Icons)
 	sp := spinner.New(spinner.WithSpinner(g.spinner), spinner.WithStyle(defaultStyles.Accent))
 	in := textinput.New()
 	in.Prompt = "/ "

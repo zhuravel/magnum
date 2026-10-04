@@ -1,6 +1,6 @@
 package cli
 
-// `magnum init`: write config.local.toml for a new machine from three
+// `magnum init`: write the user's config (~/.config/magnum/config.toml) for a new machine from three
 // questions (the gh login, one repository, who posts), validate it with the
 // committed config and print what to do next. It never asks for a key:
 // an App's private key goes into .mise.local.toml by hand.
@@ -21,23 +21,24 @@ import (
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/paths"
 )
 
 const initUsage = "[--force]"
 
 func newInitCmd(c *Context) *cobra.Command {
 	var force bool
-	cmd := newCommand(groupAct, "init "+initUsage, "write config.local.toml for this machine: your gh login, one repository, who posts",
-		"Ask three questions and write config.local.toml next to config.toml: your gh login (the default comes "+
+	cmd := newCommand(groupAct, "init "+initUsage, "write ~/.config/magnum/config.toml for this machine: your gh login, one repository, who posts",
+		"Ask three questions and write your config, ~/.config/magnum/config.toml ($XDG_CONFIG_HOME/magnum when set), which layers over the built-in defaults: your gh login (the default comes "+
 			"from `gh api user`), one repository to watch (owner/name) and who posts the reviews, your gh login or a "+
 			"GitHub App (then its app id, client id, installation id and the name of the variable that will hold its "+
 			"private key). The result is the smallest valid setup: one identity (plus the App when it posts), one "+
 			"watch of that repository, no pool and no database, with daemon.default_repo set so `magnum review 123` "+
 			"works. It is validated with config.toml before it is written. An App's private key is never asked for: "+
-			"init prints the .mise.local.toml line to add. An existing config.local.toml is refused unless --force "+
-			"(the old file is kept as config.local.toml.bak). ctrl+c or an empty input stops without writing.",
+			"init prints the .mise.local.toml line to add. An existing config is refused unless --force "+
+			"(the old file is kept as config.toml.bak). ctrl+c or an empty input stops without writing.",
 		func(pos []string) int { return runInit(c, force, pos) })
-	cmd.Flags().BoolVar(&force, "force", false, "replace an existing config.local.toml (kept as config.local.toml.bak)")
+	cmd.Flags().BoolVar(&force, "force", false, "replace an existing config (kept as <file>.bak)")
 	return cmd
 }
 
@@ -65,15 +66,15 @@ func runInit(c *Context, force bool, pos []string) int {
 	if len(pos) > 0 {
 		return inspUsage(c, "init", fmt.Sprintf("unexpected argument %q", pos[0]), initUsage)
 	}
-	file := configFileInUse(c)
-	local := filepath.Join(filepath.Dir(file), "config.local.toml")
+	file := daemonConfigOverride(c) // "" = the built-in defaults (or a legacy config.toml in the home)
+	local := initTarget(c, file)
 	if _, err := os.Stat(local); err == nil && !force {
-		fmt.Fprintf(c.Stderr, "magnum init: %s exists\nfix: edit it (config.toml.example has every key), or re-run with --force to replace it (the old file is kept as %s)\n",
+		fmt.Fprintf(c.Stderr, "magnum init: %s exists\nfix: edit it (config.full.example.toml has every key in a worked setup), or re-run with --force to replace it (the old file is kept as %s)\n",
 			inspTilde(local), filepath.Base(local)+".bak")
 		return 1
 	}
 	if _, err := config.LoadWithOptions(c.Layout, file, config.LoadOptions{NoOverlay: true}); err != nil {
-		fmt.Fprintf(c.Stderr, "magnum init: the committed config does not load: %v\nfix: restore config.toml (git checkout config.toml)\n", err)
+		fmt.Fprintf(c.Stderr, "magnum init: the defaults do not load: %v\nfix: restore config.defaults.toml and rebuild (make build)\n", err)
 		return 1
 	}
 	ctx, cancel := signalContext()
@@ -101,6 +102,19 @@ func runInit(c *Context, force bool, pos []string) int {
 	return 0
 }
 
+// initTarget is the file init writes: next to an explicit --config file its
+// config.local.toml; else the user config (~/.config/magnum/config.toml);
+// else (a layout without one) config.local.toml in the home.
+func initTarget(c *Context, file string) string {
+	switch {
+	case file != "":
+		return filepath.Join(filepath.Dir(file), "config.local.toml")
+	case c.Layout.UserConfig != "":
+		return c.Layout.UserConfig
+	}
+	return filepath.Join(c.Layout.Home, "config.local.toml")
+}
+
 // initGHLogin is the login gh is logged in as; "" when gh cannot tell.
 func initGHLogin(ctx context.Context) string {
 	run := daemonSys.Runner
@@ -120,7 +134,7 @@ func initGHLogin(ctx context.Context) string {
 // initAsk asks the questions; defLogin is the default gh login.
 func initAsk(ctx context.Context, w io.Writer, in *promptIn, defLogin string) (initAnswers, error) {
 	var a initAnswers
-	fmt.Fprintln(w, "magnum init writes config.local.toml: one identity, one watched repository, no pool. Empty input stops.")
+	fmt.Fprintln(w, "magnum init writes your config (~/.config/magnum/config.toml): one identity, one watched repository, no pool. Empty input stops.")
 	var err error
 	if a.login, err = in.ask(ctx, w, "Your GitHub login (gh polls GitHub as it)", defLogin, initCheckLogin); err != nil {
 		return a, err
@@ -260,8 +274,8 @@ func initRender(a initAnswers, now time.Time) string {
 	return b.String()
 }
 
-// initValidate loads the committed config file with content as its
-// config.local.toml, in a scratch directory, so nothing is written unless
+// initValidate loads the base (file, or the built-in defaults) with content
+// as the user's config, from a scratch file, so nothing is written unless
 // the result is valid.
 func initValidate(c *Context, file, content string) error {
 	dir, err := os.MkdirTemp("", "magnum-init-")
@@ -269,17 +283,25 @@ func initValidate(c *Context, file, content string) error {
 		return err
 	}
 	defer os.RemoveAll(dir)
-	base, err := os.ReadFile(file)
-	if err != nil {
+	user := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(user, []byte(content), 0o600); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(dir, "config.toml"), base, 0o600); err != nil {
+	if file != "" { // a full config with its legacy overlay next to it
+		base, err := os.ReadFile(file)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(user, base, 0o600); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(dir, "config.local.toml"), []byte(content), 0o600); err != nil {
+			return err
+		}
+		_, err = config.Load(paths.Layout{Home: c.Layout.Home}, user)
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(dir, "config.local.toml"), []byte(content), 0o600); err != nil {
-		return err
-	}
-	_, err = config.Load(c.Layout, filepath.Join(dir, "config.toml"))
+	_, err = config.Load(paths.Layout{Home: c.Layout.Home, UserConfig: user}, "")
 	return err
 }
 
@@ -291,7 +313,10 @@ func initWrite(path, content string) error {
 			return fmt.Errorf("keep the old %s: %w", filepath.Base(path), err)
 		}
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".config.local.toml.*")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
 	if err != nil {
 		return err
 	}

@@ -194,9 +194,9 @@ func TestInitRenderQuotesAndKeyEnv(t *testing.T) {
 
 // config.local.toml.example is what a second machine copies: it must load
 // with the committed config.toml as it is.
-func TestConfigLocalExampleLoads(t *testing.T) {
+func TestConfigExampleLoads(t *testing.T) {
 	it := newInitTest(t, "")
-	ex, err := os.ReadFile(filepath.Join("..", "..", "config.local.toml.example"))
+	ex, err := os.ReadFile(filepath.Join("..", "..", "config.example.toml"))
 	if err != nil {
 		t.Fatal(err)
 	}

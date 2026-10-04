@@ -18,7 +18,7 @@ import (
 //
 // A [[role]] in config.toml named like a built-in role (DefaultRoles)
 // inherits that role's fields for every key it does not set. Declaring any
-// [[role]] in config.toml replaces the built-in list; config.local.toml
+// [[role]] in the base (config.defaults.toml, or a --config file) replaces the built-in list; the user config
 // [[role]] blocks merge into it by name (or are appended).
 type Role struct {
 	// Name: unique, ^[a-z][a-z0-9-]{0,23}$; pane labels, titles, agent
@@ -36,6 +36,12 @@ type Role struct {
 	Judge bool `toml:"judge"`
 	// Runs: "always" (default), "first", "manual" or "never" (see RunsAlways).
 	Runs string `toml:"runs"`
+	// RerunMinLines, for runs = "first": the role runs again once the code
+	// lines changed since the head of its last completed run reach this
+	// many (comments, blank lines, whitespace moves and documentation do
+	// not count; the re-review threshold's measure). 0 = only the first
+	// round, then on request. Ignored for the other runs values.
+	RerunMinLines int `toml:"rerun_min_lines"`
 	// Identity: the [[identity]] whose GitHub env the role's pane gets;
 	// "" = the watch's identity.
 	Identity string `toml:"identity"`
@@ -239,7 +245,7 @@ func DefaultRoles() []Role {
 			Prompt: "claude-review.md", Rereview: "claude-rereview.md", Restart: "claude-restart.md", Aliases: []string{"claude"}},
 		{Name: RoleCodexReview, Kind: KindShell, Tool: KindCodex, Command: defaultCodexReviewCommand,
 			OKStatus: []int{0}, Capture: CaptureStdout, Aliases: []string{"codex", "codex_review"}},
-		{Name: RoleClaudeSimplify, Kind: KindClaude, Runs: RunsFirst, Prompt: "claude-simplify.md",
+		{Name: RoleClaudeSimplify, Kind: KindClaude, Runs: RunsFirst, RerunMinLines: DefaultSimplifyRerunLines, Prompt: "claude-simplify.md",
 			Capture: CaptureGitDiff, Output: "claude-simplify.patch",
 			After: []string{RoleClaudeReview, RoleCodexReview}, Aliases: []string{"simplify"}},
 	}
@@ -472,3 +478,7 @@ func (c *Config) normalizedRoles(in []Role) []Role {
 	}
 	return roles
 }
+
+// DefaultSimplifyRerunLines is claude-simplify's rerun_min_lines: about
+// two new functions' worth of code since it last looked.
+const DefaultSimplifyRerunLines = 150

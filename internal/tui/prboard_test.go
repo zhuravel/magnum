@@ -463,7 +463,7 @@ func TestPRBoardVerdictGlyphsAndColors(t *testing.T) {
 		t.Errorf("fresh changes requested not red or still stale:\n%q", row)
 	}
 
-	a, _, _ := newBoard(t, 240, 20, PRBoardOptions{ASCII: true})
+	a, _, _ := newBoard(t, 240, 20, PRBoardOptions{Icons: IconsASCII})
 	av := viewOf(a)
 	mustContain(t, av, "*zhuravel:+ bob:x~ cat:c dan:?", "pin Fix referral", "> magnum#42")
 	for _, g := range []string{"✔", "✗", "💬", "◌", "⟳", "★", "📌", "▌", "─"} {

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/zhuravel/magnum"
 	"github.com/zhuravel/magnum/internal/paths"
 )
 
@@ -16,12 +17,11 @@ func repoRoot(t *testing.T) string {
 	return filepath.Clean(filepath.Join(filepath.Dir(f), "..", ".."))
 }
 
-// The committed config.toml carries no identity, watch or pool (those live in
-// the gitignored config.local.toml), and that is valid. NoOverlay keeps the
-// developer's own config.local.toml out of the result.
-func TestLoadCommittedConfigWithoutOverlay(t *testing.T) {
-	root := repoRoot(t)
-	cfg, err := LoadWithOptions(paths.Layout{Home: root}, filepath.Join(root, "config.toml"), LoadOptions{NoOverlay: true})
+// The built-in defaults (config.defaults.toml, embedded) carry no identity,
+// watch or pool (those live in the user's config), and that is valid.
+func TestLoadBuiltinDefaults(t *testing.T) {
+	root := t.TempDir()
+	cfg, err := LoadWithOptions(paths.Layout{Home: root}, "", LoadOptions{NoOverlay: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,6 +40,61 @@ func TestLoadCommittedConfigWithoutOverlay(t *testing.T) {
 	}
 	if cfg.Daemon.PushQuietPeriod.Minutes() != 5 {
 		t.Fatal(cfg.Daemon.PushQuietPeriod)
+	}
+	if len(cfg.Sources) != 1 || cfg.Sources[0] != BuiltinDefaults {
+		t.Fatalf("sources %q", cfg.Sources)
+	}
+}
+
+// The embedded defaults are the repository's config.defaults.toml, byte for
+// byte: what a distributed binary runs with is what the checkout documents.
+func TestBuiltinDefaultsAreTheCommittedFile(t *testing.T) {
+	committed, err := os.ReadFile(filepath.Join(repoRoot(t), "config.defaults.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(committed) != string(magnum.DefaultConfig) {
+		t.Fatal("the embedded defaults differ from config.defaults.toml (rebuild)")
+	}
+}
+
+// The user's ~/.config/magnum/config.toml layers over the built-in defaults;
+// without it a legacy config.local.toml in the home still applies, and the
+// user config wins over it when both exist.
+func TestUserConfigLayersOverTheBuiltinDefaults(t *testing.T) {
+	home, cfgDir := t.TempDir(), t.TempDir()
+	user := filepath.Join(cfgDir, "magnum", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(user), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	write := func(p, body string) {
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	legacy := strings.Replace(testLocalConfig, `name = "me"`, `name = "legacy-me"`, 1)
+	legacy = strings.Replace(legacy, `poll_identity = "me"`, `poll_identity = "legacy-me"`, 1)
+	write(filepath.Join(home, "config.local.toml"), legacy)
+
+	cfg, err := Load(paths.Layout{Home: home, UserConfig: user}, "") // the user config does not exist yet
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Sources) != 2 || cfg.Sources[0] != BuiltinDefaults || cfg.Sources[1] != filepath.Join(home, "config.local.toml") ||
+		cfg.IdentityByName("legacy-me") == nil {
+		t.Fatalf("legacy layer: sources %q", cfg.Sources)
+	}
+
+	write(user, testLocalConfig)
+	cfg, err = Load(paths.Layout{Home: home, UserConfig: user}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Sources) != 2 || cfg.Sources[1] != user || cfg.IdentityByName("me") == nil || cfg.IdentityByName("legacy-me") != nil {
+		t.Fatalf("user layer: sources %q, identities %+v", cfg.Sources, cfg.Identities)
+	}
+	if len(cfg.Watches) != 1 || len(cfg.RolesFor(nil)) != 4 {
+		t.Fatalf("watches %d, roles %d", len(cfg.Watches), len(cfg.RolesFor(nil)))
 	}
 }
 
@@ -82,24 +137,21 @@ databases = ["app_development__{slug}", "app_test__{slug}"]
   WM_HANDLE = ""
 `
 
-// loadCommittedWithLocal copies the committed config.toml into a temp dir,
-// writes local as the config.local.toml next to the copy and loads it with
-// the repository as magnum's home, so {{repo}} expands as in production.
+// loadCommittedWithLocal loads the built-in defaults with local as the
+// user's config, with the repository as magnum's home, so {{repo}} expands
+// as in production.
 func loadCommittedWithLocal(t *testing.T, local string) (*Config, error) {
 	t.Helper()
 	root := repoRoot(t)
-	committed, err := os.ReadFile(filepath.Join(root, "config.toml"))
-	if err != nil {
+	user := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(user, []byte(local), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "config.toml"), committed, 0o600); err != nil {
-		t.Fatal(err)
+	base := ""
+	if _, err := os.Stat(filepath.Join(root, "config.toml")); err == nil {
+		base = filepath.Join(root, "config.defaults.toml") // a checkout still holding the old config.toml
 	}
-	if err := os.WriteFile(filepath.Join(dir, "config.local.toml"), []byte(local), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return Load(paths.Layout{Home: root}, filepath.Join(dir, "config.toml"))
+	return Load(paths.Layout{Home: root, UserConfig: user}, base)
 }
 
 func TestLoadCommittedConfigWithLocalOverlay(t *testing.T) {

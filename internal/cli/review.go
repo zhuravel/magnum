@@ -354,7 +354,7 @@ func reviewImport(ctx context.Context, d *actDeps, owner, name string, number in
 	full := owner + "/" + name
 	w := d.Cfg.WatchFor(full)
 	if w == nil {
-		return actTarget{}, fmt.Errorf("%s is not watched: add it to a [[watch]] (owner = %q, include = [%q]) in config.local.toml (`magnum init` writes one)", full, owner, name)
+		return actTarget{}, fmt.Errorf("%s is not watched: add it to a [[watch]] (owner = %q, include = [%q]) in ~/.config/magnum/config.toml (`magnum init` writes one)", full, owner, name)
 	}
 	ident := w.PollIdentity
 	if ident == "" {

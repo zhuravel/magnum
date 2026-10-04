@@ -1,10 +1,9 @@
-# A complete, working magnum configuration (Talkable's setup) as an example. config.toml ships generic
-# defaults; copy the [[identity]], [[watch]], [[pool]] blocks and the [daemon]/[terminal] keys you need into
-# the gitignored config.local.toml. Secrets (App private keys) live in the gitignored .mise.local.toml.
-# Private additions go into the gitignored config.local.toml next to this file: its [[watch]],
-# [[identity]], [[pool]] and [[repo]] blocks are appended, any key it sets under [daemon], [herdr],
-# [terminal], [github], [pipeline] or [kinds.<name>] overrides the value here, and its [[role]] blocks
-# override the role of the same name key by key (other names are appended).
+# magnum's built-in configuration: embedded in the binary (rebuild after editing), every key documented.
+# Your settings do not go here: put them in ~/.config/magnum/config.toml ($XDG_CONFIG_HOME/magnum/config.toml
+# when that is set; `magnum init` writes one). Its [[watch]], [[identity]], [[pool]] and [[repo]] blocks are
+# appended, any key it sets under [daemon], [herdr], [terminal], [github], [pipeline], [usage] or
+# [kinds.<name>] overrides the value here, and its [[role]] blocks override the role of the same name key by
+# key (other names are appended). Secrets go in the checkout's gitignored .mise.local.toml.
 # Durations use Go syntax: "30s", "5m", "2h", with whole days in front: "7d", "1d12h".
 
 [daemon]
@@ -23,7 +22,7 @@ agent_start_stagger = "15s"
 min_warm = "30m"
 human_cooldown = "15m"            # after you type into a magnum pane
 reconcile_interval = "10m"
-default_repo = "talkable/talkable"
+default_repo = ""                 # "owner/name": lets `magnum review 123` omit the repository (set it in your config)
 min_free_disk_gb = 15
 keep_events = "30d"               # audit events older than this are pruned on every reconcile ("0" keeps all)
 keep_requests = "7d"              # handled CLI requests older than this are pruned the same way
@@ -40,7 +39,7 @@ rereview_max_wait = "2h"          #   (comments, blank lines, whitespace and doc
                                   #   (0 lines = no threshold; [[watch]] may override both)
 model_limit_cooldown = "5h"       # a model capped on its own (health pattern model_limit) without a reset time
                                   # counts as limited this long; sessions use the kind's fallback_models meanwhile
-park_idle_after = "2h"            # park a reviewed PR's agents once all of them idled this long ("0" = never);
+# park_idle_after = "2h"          # park a reviewed PR's agents once all of them idled this long ("0" = never);
                                   # the next round resumes them; pinned PRs and recent human activity keep them
 # skip_trivial_deltas = ["comments", "whitespace", "docs"]   # a push that changes only these since the review
                                   # is not re-reviewed: the review stands for the new head ([] = re-review every
@@ -53,21 +52,22 @@ notify = true
 toast_every_review = false
 
 [terminal]
-app = "iTerm2"                    # Terminal | iTerm2 | Ghostty | WezTerm | custom
+app = "Terminal"                  # Terminal | iTerm2 | Ghostty | WezTerm | custom (override in your config)
 session = "default"
 launcher = ""                     # custom: template with {herdr} {args} {command}
 reveal_on_attention = false
 # mouse = true                    # board and dashboard: wheel, click, double-click, heading sort,
                                   # column drag, right-click menu; m toggles it live (default true)
+icons = "unicode"                 # unicode | nerd (Nerd Font icons and colour emoji: needs a Nerd Font) | ascii
 
 [github]
 transport = "gh"                  # App JWT/token calls run as `gh api` (gh | direct); direct = Go net/http,
                                   # which Little Snitch blocks for a rebuilt, unsigned magnum binary
 
-[usage]                           # the Codex budget, read from Codex's own session files at most once a minute
-codex_soft = 80                   # at this % used, first reviews wait (re-reviews and `magnum review` still run)
-codex_hard = 95                   # at this % used, rounds that need Codex wait until it is below again (0 = off)
-codex_home = ""                   # "" = $CODEX_HOME, else ~/.codex
+# [usage]                         # the Codex budget, read from Codex's own session files at most once a minute
+# codex_soft = 80                 # at this % used, first reviews wait (re-reviews and `magnum review` still run)
+# codex_hard = 95                 # at this % used, rounds that need Codex wait until it is below again (0 = off)
+# codex_home = ""                 # "" = $CODEX_HOME, else ~/.codex
 
 # The review pipeline ("a Procfile of agents"): [kinds.<name>] says how to drive an agent CLI, each
 # [[role]] is one agent (or shell command) of a review round, a [[watch]]'s `roles` picks the roles it
@@ -186,6 +186,8 @@ name = "claude-simplify"
 kind = "claude"
 runs = "first"                        # always | first (until it ran once, then on request) | manual | never
                                       # on request = `magnum review <ref> --role claude-simplify` (or --simplify)
+rerun_min_lines = 150                 # runs again once this many code lines changed since its last run
+                                      # (comments, blank lines, whitespace moves and docs do not count); 0 = never
 prompt = "claude-simplify.md"
 capture = "git-diff"                  # magnum saves `git diff` as output, then reverts the checkout
 output = "claude-simplify.patch"
@@ -193,85 +195,73 @@ after = ["claude-review", "codex-review"]
 timeout = "40m"
 aliases = ["simplify"]
 
-[[identity]]
-name = "zhuravel"
-kind = "gh"
-login = "zhuravel"
-no_findings_event = "APPROVE"
-
-[[identity]]
-name = "talkable-app"
-kind = "app"
-login = "talkable[bot]"
-app_id = 2700610
-client_id = "Iv23licS9bkgs7IGVSoS"
-installation_id = 105365229
-private_key_env = "MAGNUM_TALKABLE_APP_PRIVATE_KEY"   # PEM text or a path, from .mise.local.toml
-no_findings_event = "COMMENT"
-blocking_event = "REQUEST_CHANGES"
-
-[[watch]]
-owner = "talkable"
-include = ["talkable"]
-exclude = []
-identity = "talkable-app"
-poll_identity = "zhuravel"
-clone_root = "~/Projects"
-include_drafts = true
-include_own = true
-skip_bot_authors = true
-skip_authors = ["dependabot"]
-skip_labels = []
+# Identities, watches and pools are personal: declare them in ~/.config/magnum/config.toml (its
+# blocks are appended to this file). The examples below show every key.
+#
+# [[identity]]                            # who polls and who posts
+# name = "me"
+# kind = "gh"                             # your `gh auth login` account
+# login = "your-login"
+# no_findings_event = "APPROVE"           # APPROVE | COMMENT when the judge finds nothing
+#
+# [[identity]]
+# name = "reviewer-app"
+# kind = "app"                            # a GitHub App; reviews appear as <slug>[bot]
+# login = "your-app[bot]"
+# app_id = 123456
+# client_id = "Iv23liXXXXXXXXXXXXXX"
+# installation_id = 12345678
+# private_key_env = "MAGNUM_REVIEWER_APP_PRIVATE_KEY"   # PEM text or a path, from .mise.local.toml
+# no_findings_event = "COMMENT"           # never let a bot approval unlock a merge by accident
+# blocking_event = "REQUEST_CHANGES"
+#
+# [[watch]]
+# owner = "your-org"
+# include = ["your-app"]                  # repository globs; ["*"] for the whole owner
+# exclude = []
+# identity = "reviewer-app"               # who posts
+# poll_identity = "me"                    # who polls (a gh identity)
+# clone_root = "~/Projects"
+# include_drafts = true
+# include_own = true
+# skip_bot_authors = true
+# skip_authors = ["dependabot"]
+# skip_labels = []
 # skip_paths = ["docs/**", "**/*.md"]   # skip a PR when every changed file matches ("**" spans directories, "*" stays in one)
-skip_cross_repository = true
-skip_departed_authors = true          # skip branch PRs whose author is no longer an owner, member or collaborator (left the org)
-# burst_quiet_period = "20m"            # overrides the [daemon] burst keys for this watch (burst_pushes = 0: off)
+# skip_cross_repository = true
+# skip_departed_authors = true          # skip branch PRs whose author is no longer an owner, member or collaborator (left the org)
+# burst_pushes = 0                      # overrides [daemon] burst_quiet_period / burst_pushes / burst_window
+# skip_trivial_deltas = []              # overrides [daemon] skip_trivial_deltas ([] = re-review every push)
 # rereview_min_lines = 0                # overrides [daemon] rereview_min_lines / rereview_max_wait (0: no threshold)
 # request_teams = ["backend"]           # review requests for these team slugs start a round like one for you
-roles = ["codex-judge", "claude-review", "codex-review", "claude-simplify"]   # omitted or [] = every [[role]]
-
-[[pool]]
-repo = "talkable/talkable"
-main_clone = "~/Projects/talkable"
-slot_name = "review{n}"
-slot_path = "~/Projects/talkable.review{n}"
-base = "master"
-min = 12
-max = 18
-idle_remove_after = "48h"
-min_free_disk_gb = 15
-copy_files = [".mise.local.toml", "config/initializers/local.rb"]
-strip_env = ["GITHUB_PERSONAL_ACCESS_TOKEN"]
-setup = ["bin/worktree-setup"]
-teardown = ["bin/worktree-archive"]
-schema_paths = ["db/"]
-reset_db = [
-  "DISABLE_DATABASE_ENVIRONMENT_CHECK=1 SKIP_TEST_DATABASE=1 FAKE_AWS=1 bin/rails db:schema:load",
-  "DISABLE_DATABASE_ENVIRONMENT_CHECK=1 FAKE_AWS=1 RAILS_ENV=test bin/rails db:schema:load",
-  "FAKE_AWS=1 bin/rails db:seed",
-]
-post_checkout = ["bundle check >/dev/null || bundle install --jobs 4", "pnpm install --frozen-lockfile"]
-databases = [
-  "talkable_development__{slug}", "talkable_development_reporting__{slug}",
-  "talkable_development_shard_1__{slug}", "talkable_development_shard_1001__{slug}",
-  "talkable_test__{slug}", "talkable_test_reporting__{slug}",
-  "talkable_test_shard_1__{slug}", "talkable_test_shard_1001__{slug}",
-]
-# Readiness: run in the checkout before the reviewers of every round (`zsh -lc`, the slot's env), then
-# the probes (exit 0 = ready), all within ready_timeout, then a check that the shell runs the Ruby the
-# checkout pins. Failures go to the judge's prompt; they never stop the round.
-# prepare = ["RAILS_ENV=test bin/rails db:test:prepare"]
-# ready = ["RAILS_ENV=test bin/rails runner 'ActiveRecord::Base.connection.active?'"]
-# ready_timeout = "5m"
-
-  [pool.env]
-  WT_BRANCH = "{slot}"            # selects the __review<n> databases (config/environment_constants.rb)
-  CONDUCTOR_WORKSPACE_NAME = ""   # blank every name variable that outranks WT_BRANCH
-  EMDASH_TASK_NAME = ""
-  SUPERSET_WORKSPACE_NAME = ""
-  COMMANDER_CONTEXT_NAME = ""
-  CLAUDE_CODE_WORKTREE_NAME = ""
-  WM_HANDLE = ""
+# roles = ["codex-judge", "claude-review", "codex-review", "claude-simplify"]   # omitted or [] = every [[role]]
+#
+# [[pool]]                                # a big app with its own databases: a pool of warm slots
+# repo = "your-org/your-app"
+# main_clone = "~/Projects/your-app"
+# slot_name = "review{n}"
+# slot_path = "~/Projects/your-app.review{n}"
+# base = "master"
+# min = 6
+# max = 8
+# idle_remove_after = "48h"
+# min_free_disk_gb = 15
+# copy_files = [".mise.local.toml", "config/initializers/local.rb"]
+# strip_env = ["GITHUB_PERSONAL_ACCESS_TOKEN"]
+# setup = ["bin/worktree-setup"]           # runs once per slot with the [pool.env] below
+# teardown = ["bin/worktree-archive"]
+# schema_paths = ["db/"]
+# reset_db = ["bin/rails db:schema:load", "RAILS_ENV=test bin/rails db:schema:load", "bin/rails db:seed"]
+# post_checkout = ["bundle check >/dev/null || bundle install --jobs 4", "pnpm install --frozen-lockfile"]
+# databases = ["your_app_development__{slug}", "your_app_test__{slug}"]   # each must end in __{slug}
+# prepare = ["bin/rails db:test:prepare"] # readiness: run in the checkout before the reviewers of every
+# ready = ["bin/rails runner 'ActiveRecord::Base.connection'"]  # round (`zsh -lc`, the slot's env), then
+# ready_timeout = "5m"                    # the probes (exit 0 = ready), all within ready_timeout, then a
+#                                         # check that the shell runs the pinned Ruby; failures go to the
+#                                         # judge, they never stop the round
+#
+#   [pool.env]
+#   WT_BRANCH = "{slot}"                  # the name your app derives its databases from
 
 # Per-PR worktrees (repos without a [[pool]]) run as workspace "magnum-pr-<N>": WT_BRANCH is exported to
 # their hooks and agents, the outranking workspace-name variables are blanked, and the main clone's
