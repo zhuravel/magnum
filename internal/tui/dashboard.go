@@ -10,6 +10,7 @@ import (
 
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -237,7 +238,8 @@ type dashboardModel struct {
 	src  DashboardSource
 	opts DashboardOptions
 	st   styles
-	g    glyphs // fixed for the model's life, so no cache key names it
+	pal  prbPalette // the state colors of the marks; follows st
+	g    glyphs     // fixed for the model's life, so no cache key names it
 
 	width, height int
 
@@ -346,7 +348,7 @@ func newDashboardModel(ctx context.Context, src DashboardSource, act DashboardAc
 	g := newGlyphs(opts.Icons)
 	sp := spinner.New(spinner.WithSpinner(g.spinner), spinner.WithStyle(defaultStyles.Accent))
 	m := dashboardModel{
-		actionBar: newActionBar(ctx, act), src: src, opts: opts, st: defaultStyles, g: g, spin: sp, cache: &dashCache{},
+		actionBar: newActionBar(ctx, act), src: src, opts: opts, st: defaultStyles, pal: newPRBPalette(defaultStyles), g: g, spin: sp, cache: &dashCache{},
 		showManual: opts.ShowManual,
 		loading:    true, spinning: true, // Init starts the first gather and the spinner
 		saver: newWidthSaver(opts.Widths, widthsDashboard),
@@ -399,6 +401,7 @@ func (m dashboardModel) update(msg tea.Msg) (dashboardModel, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 	case tea.BackgroundColorMsg:
 		m.st = newStyles(msg.IsDark())
+		m.pal = newPRBPalette(m.st)
 		m.spin.Style = m.st.Accent
 	case dashDataMsg:
 		m.loading = false
@@ -846,9 +849,15 @@ func (m dashboardModel) headerLines(w int) []string {
 	d := m.data
 	label := func(s string) string { return m.st.Label.Render(fmt.Sprintf("%-10s", s)) }
 
-	daemon := marked(m.g.running[0], m.st.Err.Render("not running"))
+	dot := func(st lipgloss.Style) string {
+		if m.g.markDot == "" {
+			return ""
+		}
+		return st.Render(m.g.markDot)
+	}
+	daemon := marked(dot(m.st.Err), m.st.Err.Render("not running"))
 	if d.Daemon.Running {
-		daemon = marked(m.g.running[1], m.st.OK.Render("running")) + fmt.Sprintf(" (pid %d", d.Daemon.PID)
+		daemon = marked(dot(m.st.OK), m.st.OK.Render("running")) + fmt.Sprintf(" (pid %d", d.Daemon.PID)
 		if d.Daemon.Uptime != "" {
 			daemon += ", up " + d.Daemon.Uptime
 		}
@@ -913,7 +922,7 @@ func (m dashboardModel) headerLines(w int) []string {
 			if i == 0 {
 				lead = label("pauses:")
 			}
-			line := marked(m.g.stateMark["paused"], m.st.Warn.Render("PAUSED "+p.Key+": ")) + p.Reason
+			line := marked(stateMark(m.g, m.pal, "paused"), m.st.Warn.Render("PAUSED "+p.Key+": ")) + p.Reason
 			if p.Fix != "" {
 				line += m.st.Dim.Render(" · fix: " + p.Fix)
 			}
@@ -999,7 +1008,9 @@ func (m dashboardModel) drawBody(w int) dashBody {
 		out = append(out, noMark+m.st.headerRow(cols, widths))
 		for _, c := range cells {
 			line := renderRowCols(cols, c, widths)
-			b.rowAt, b.rowText = append(b.rowAt, len(out)), append(b.rowText, line)
+			// The selected row draws its text plain in the selection's
+			// style: a mark's color reset would end the highlight.
+			b.rowAt, b.rowText = append(b.rowAt, len(out)), append(b.rowText, ansi.Strip(line))
 			out = append(out, noMark+line)
 		}
 	}
@@ -1017,7 +1028,7 @@ func (m dashboardModel) drawBody(w int) dashBody {
 			}
 			state := orDash(s.SlotState)
 			if f := strings.Fields(s.SlotState); len(f) > 0 { // "busy [pinned]"
-				state = marked(m.g.slotMark[f[0]], state)
+				state = marked(slotMark(m.g, m.pal, f[0]), state)
 			}
 			cells[i] = []string{s.Name, orDash(s.Folder), pr, state, orDash(s.DBs), orDash(s.Disk)}
 		}
@@ -1044,7 +1055,7 @@ func (m dashboardModel) drawBody(w int) dashBody {
 			if a.Kind != "" {
 				subj += " [" + a.Kind + "]"
 			}
-			out = append(out, truncate(noMark+marked(m.g.stateMark["needs_attention"], m.st.Warn.Render(subj))+": "+oneLine(a.Message), w))
+			out = append(out, truncate(noMark+marked(stateMark(m.g, m.pal, "needs_attention"), m.st.Warn.Render(subj))+": "+oneLine(a.Message), w))
 			if a.Fix != "" {
 				out = append(out, truncate(noMark+m.st.Dim.Render("  fix: "+a.Fix), w))
 			}
@@ -1080,13 +1091,14 @@ func (m dashboardModel) drawBody(w int) dashBody {
 	return b
 }
 
-// stateText is a PR state behind its mark, when the mode has one; the
-// cells carry no styling, the emoji bring their own colors.
+// stateText is a PR state behind its mark, when the mode has one: the
+// mark's color is the cell's only styling (the selected row draws its
+// text plain, see addRows).
 func (m dashboardModel) stateText(state string) string {
 	if strings.TrimSpace(state) == "" {
 		return state
 	}
-	return marked(m.g.stateMark[normState(state)], state)
+	return marked(stateMark(m.g, m.pal, state), state)
 }
 
 func (m dashboardModel) statusLine(w int) string {
@@ -1194,12 +1206,12 @@ func (m dashboardModel) legend(width int) []string {
 	}
 	var prs, slots []string
 	for _, s := range prStateOrder {
-		if mk := m.g.stateMark[s]; mk != "" {
+		if mk := stateMark(m.g, m.pal, s); mk != "" {
 			prs = append(prs, mk+" "+stateLabel(s))
 		}
 	}
 	for _, s := range dashSlotStateOrder {
-		if mk := m.g.slotMark[s]; mk != "" {
+		if mk := slotMark(m.g, m.pal, s); mk != "" {
 			slots = append(slots, mk+" "+strings.ReplaceAll(s, "_", " "))
 		}
 	}

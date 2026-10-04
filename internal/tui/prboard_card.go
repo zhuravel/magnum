@@ -91,7 +91,7 @@ func (p prbPainter) helpContent(width int) []string {
 	lines = append(lines, strings.Split(lipgloss.NewStyle().Width(inner).Render(since), "\n")...)
 	var pills []string
 	for _, st := range prStateOrder {
-		pills = append(pills, marked(g.stateMark[st], p.stateCell(st).render(nil)))
+		pills = append(pills, p.stateCell(st).render(nil))
 	}
 	sep := " "
 	if g.rich { // the marks need room to tell the pills apart

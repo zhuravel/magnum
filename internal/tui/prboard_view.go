@@ -66,6 +66,7 @@ type prbPalette struct {
 
 	ruleColor, dim, selBg color.Color
 	pills, dots           map[string]lipgloss.Style
+	slotDots              map[string]lipgloss.Style // a slot state's color (dashboard)
 	// named are the colors a badge may ask for ([board] badges color):
 	// red, green, yellow, blue, magenta, cyan and gray, as the pills use them.
 	named map[string]lipgloss.Style
@@ -105,9 +106,15 @@ func newPRBPalette(st styles) prbPalette {
 			"baseline": fg(dim), "ineligible": gone, "ignored": gone, "closed": gone, "released": gone,
 		},
 		dots: map[string]lipgloss.Style{
-			"queued": fg(yellow), "rereview_pending": fg(yellow), "reviewing": fg(blue), "reviewed": fg(green),
+			"queued": fg(yellow), "rereview_pending": fg(yellow), "reviewed": fg(green),
+			"claiming": fg(blue), "reviewing": fg(blue), "verifying": fg(blue),
 			"needs_attention": fg(red), "paused": fg(red),
-			"baseline": fg(dim), "ineligible": fg(dim), "ignored": fg(dim), "closed": fg(dim), "released": fg(dim),
+			"baseline": fg(dim), "ineligible": fg(dim), "ignored": fg(dim), "closed": fg(dim), "releasing": fg(dim), "released": fg(dim),
+		},
+		slotDots: map[string]lipgloss.Style{
+			"free": fg(green), "claimed": fg(blue), "busy": fg(blue), "held": fg(magenta),
+			"provisioning": fg(yellow), "releasing": fg(yellow), "dirty_schema": fg(yellow),
+			"broken": fg(red), "lost": fg(red), "observed": lipgloss.NewStyle(), "removing": fg(dim), "removed": fg(dim),
 		},
 	}
 }
@@ -631,11 +638,37 @@ func (p prbPainter) stateCell(state string) cell {
 	if s == "" {
 		return p.dash()
 	}
-	icon := p.g.stateIcon[s]
+	return cell{{" " + marked(p.stateIcon(s), stateLabel(s)) + " ", p.pal.pills[s]}}
+}
+
+// stateIcon is a PR state's icon: the spinner's frame while a round runs
+// (glyphs.working), else the pill's icon ("" in modes without one).
+func (p prbPainter) stateIcon(s string) string {
 	if workingState(s) && len(p.g.working) > 0 {
-		icon = p.g.working[p.frame%len(p.g.working)]
+		return p.g.working[p.frame%len(p.g.working)]
 	}
-	return cell{{" " + marked(icon, stateLabel(s)) + " ", p.pal.pills[s]}}
+	return p.g.stateIcon[normState(s)]
+}
+
+// stateMark is a PR state's mark outside its pill (the dashboard, the
+// legends): the pill's icon in the state's color, in the modes with pill
+// icons; "" in the others.
+func stateMark(g glyphs, pal prbPalette, state string) string {
+	s := normState(state)
+	if icon := g.stateIcon[s]; icon != "" {
+		return pal.dots[s].Render(icon)
+	}
+	return ""
+}
+
+// slotMark is a slot state's mark: the mark dot in the state's color, in
+// the modes with one; "" for a state without a color.
+func slotMark(g glyphs, pal prbPalette, state string) string {
+	st, ok := pal.slotDots[state]
+	if g.markDot == "" || !ok {
+		return ""
+	}
+	return st.Render(g.markDot)
 }
 
 // workingState reports whether a PR in state s has a review round running:
@@ -1367,12 +1400,13 @@ func (p prbPainter) summaryLine(width int) string {
 		}
 	}
 	var chips []string
-	// A chip leads with the state's mark (nerd) or its colored dot.
+	// A chip leads with the state's pill icon (nerd: the spinner while a
+	// round runs) or a dot, in the state's color.
 	chip := func(state string, dot lipgloss.Style, n int, label string) {
 		s := p.pal.bold.Render(strconv.Itoa(n)) + " " + p.st.Dim.Render(label)
-		switch mark := p.g.stateMark[state]; {
-		case mark != "":
-			s = mark + " " + s
+		switch icon := p.stateIcon(state); {
+		case p.g.rich && icon != "":
+			s = dot.Render(icon) + " " + s
 		case p.g.dot != "":
 			s = dot.Render(p.g.dot) + " " + s
 		}

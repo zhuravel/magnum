@@ -58,8 +58,8 @@ launcher = ""                     # custom: template with {herdr} {args} {comman
 reveal_on_attention = false
 # mouse = true                    # board and dashboard: wheel, click, double-click, heading sort,
                                   # column drag, right-click menu; m toggles it live (default true)
-icons = "unicode"                 # unicode | nerd (Nerd Font icons, gh-dash's for verdicts and checks, colored
-                                  # icons for priorities, colour emoji for states: needs a Nerd Font) | ascii
+icons = "unicode"                 # unicode | nerd (Nerd Font icons in their state's color, gh-dash's for verdicts
+                                  # and checks: needs a Nerd Font) | ascii
 
 [board]
 # badges = { "Flagged" = "🚩" }     # GitHub label → what the PR board shows before the title (case and leading

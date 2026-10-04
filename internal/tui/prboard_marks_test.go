@@ -60,7 +60,7 @@ func TestPRBoardSkippedRows(t *testing.T) {
 	rows := append(boardRows(), skippedRow(), plain)
 	for mode, want := range map[IconMode][]string{
 		IconsUnicode: {" skipped · bot", "● 1 not reviewed", "● 2 skipped"},
-		IconsNerd:    {" \uf517 skipped · bot", "⚫ 2 skipped"},
+		IconsNerd:    {" \uf517 skipped · bot", "\uf517 2 skipped"},
 		IconsASCII:   {" skipped · bot", " 2 skipped"},
 	} {
 		m := iconBoard(t, mode, 200, 30, rows...)

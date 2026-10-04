@@ -111,11 +111,16 @@ func TestNerdIconsMarkStatesVerdictsAndPriorities(t *testing.T) {
 	rows := append(boardRows(), findingsRow())
 	b := iconBoard(t, IconsNerd, 240, 30, rows...)
 	mustContain(t, viewOf(b),
-		"🔴 2 attention", "🔵 1 reviewing", "🟢 1 reviewed", "⚪ 1 not reviewed", // the summary
-		" ⣷ reviewing ", // a review round runs: the pill spins (frame 0 here) " \uf421 attention ", " \uf4c5 not reviewed ", // the pills
+		"\uf421 2 attention", "⣷ 1 reviewing", "\uf42e 1 reviewed", "\uf4c5 1 not reviewed", // the summary: pill icons
+		" ⣷ reviewing ", " \uf421 attention ", " \uf4c5 not reviewed ", // the pills; a running round spins (frame 0 here)
 		"\ueb43 \uf490 P0 \uf444 P1 \uf444 P2×3 \uf444 P3 \uf0c4 2", // FINDINGS, whole
 		"\U000F012C approved", "alice\ueb43", "bob\uf468 \uf464", "eve\ue641", "\uf51f zhuravel\U000F012C", // verdicts and chips: gh-dash's icons
 		"\uf435 Fix referral", "\uf530 Referral analytics") // pin and failure
+
+	// The summary's icons are in the state's color, not colour emoji.
+	if raw, pal := b.View().Content, b.painter().pal; !strings.Contains(raw, pal.dots["needs_attention"].Render("\uf421")+" ") {
+		t.Errorf("the summary's attention icon is not red: %q", raw)
+	}
 
 	c := iconBoard(t, IconsNerd, 200, 90, findingsRow())
 	c, _ = send(t, c, keyMsg("enter"))
@@ -131,13 +136,22 @@ func TestNerdIconsMarkStatesVerdictsAndPriorities(t *testing.T) {
 	h, _ := send(t, b, tea.WindowSizeMsg{Width: 240, Height: 60}, keyMsg("?"))
 	mustContain(t, viewOf(h), "\U000F012C approved", "\ueb43 changes requested", "\ue641 requested", "\uf464 stale", "\uf51f yours",
 		"\ueb43 blocking", "\uf27b non-blocking", "\uf058 clean", "\uf490 P0 \uf444 P1 \uf444 P2 \uf444 P3 by priority", "\uf0c4 simplifications",
-		"🔴  \uf421 attention ", "🚫  \uf466 ignored ")
+		" \uf421 attention ", " \uf466 ignored ")
 
 	d := iconDash(t, IconsNerd, 120, 40)
-	mustContain(t, viewOf(d), "🟢 running", "🛑 PAUSED codex", "\uf413 SLOTS (2)", "\uf407 QUEUE (2)", "\uf421 ATTENTION (1)",
-		"\uf425 MANUAL WORKTREES (1)", "talkable#1 🔵 reviewing", "🔵 busy", "🟢 free", "🟡 queued", "🔴 talkable#3 [needs_attention]")
+	mustContain(t, viewOf(d), "\uf444 running", "\uf04c PAUSED codex", "\uf413 SLOTS (2)", "\uf407 QUEUE (2)", "\uf421 ATTENTION (1)",
+		"\uf425 MANUAL WORKTREES (1)", "talkable#1 \uf441 reviewing", "\uf444 busy", "\uf444 free", "\uf4e3 queued", "\uf421 talkable#3 [needs_attention]")
+	// Marks are in their state's color; the selected row (review1) stays
+	// plain inside its highlight, which a mark's color reset would cut.
+	raw := d.View().Content
+	if !strings.Contains(raw, d.pal.slotDots["free"].Render("\uf444")+" free") || !strings.Contains(raw, d.st.OK.Render("\uf444")+" ") {
+		t.Errorf("the dashboard's marks are not in their state's color: %q", raw)
+	}
+	if sel := lineWith(t, raw, "review1"); !strings.Contains(sel, "talkable#1 \uf441 reviewing  \uf444 busy") {
+		t.Errorf("the selected row is not plain inside its highlight: %q", sel)
+	}
 	dh, _ := send(t, d, tea.WindowSizeMsg{Width: 120, Height: 80}, keyMsg("?"))
-	mustContain(t, viewOf(dh), "Legend", "🔴 attention", "⚪ not reviewed", "🟣 held", "🟠 dirty schema")
+	mustContain(t, viewOf(dh), "Legend", "\uf421 attention", "\uf4c5 not reviewed", "\uf444 held", "\uf444 dirty schema")
 }
 
 // The default stays as it was: an empty or unknown mode draws Unicode
@@ -216,7 +230,7 @@ func TestGlyphWidths(t *testing.T) {
 				for _, k := range v.MapKeys() {
 					check(name+"["+k.String()+"]", v.MapIndex(k))
 				}
-			case reflect.Array:
+			case reflect.Array, reflect.Slice:
 				for i := range v.Len() {
 					check(name, v.Index(i))
 				}
@@ -230,18 +244,23 @@ func TestGlyphWidths(t *testing.T) {
 		}
 	}
 
-	nerd := newGlyphs(IconsNerd)
-	for _, s := range prStateOrder {
-		if nerd.stateIcon[s] == "" || nerd.stateMark[s] == "" {
-			t.Errorf("nerd: state %s has icon %q, mark %q", s, nerd.stateIcon[s], nerd.stateMark[s])
+	// Every PR state and slot state has a mark in the nerd mode: an icon
+	// in the state's color, never a colour emoji.
+	nerd, pal := newGlyphs(IconsNerd), newPRBPalette(defaultStyles)
+	for _, st := range prStateOrder {
+		if nerd.stateIcon[st] == "" || stateMark(nerd, pal, st) == "" {
+			t.Errorf("nerd: state %s has icon %q, mark %q", st, nerd.stateIcon[st], stateMark(nerd, pal, st))
+		}
+		if _, ok := pal.dots[st]; !ok {
+			t.Errorf("state %s has no color", st)
 		}
 	}
-	if len(nerd.slotMark) != len(dashSlotStateOrder) {
-		t.Errorf("nerd: %d slot marks, the legend lists %d states", len(nerd.slotMark), len(dashSlotStateOrder))
+	if len(pal.slotDots) != len(dashSlotStateOrder) {
+		t.Errorf("%d slot colors, the legend lists %d states", len(pal.slotDots), len(dashSlotStateOrder))
 	}
-	for _, s := range dashSlotStateOrder {
-		if nerd.slotMark[s] == "" {
-			t.Errorf("nerd: slot state %s has no mark", s)
+	for _, st := range dashSlotStateOrder {
+		if slotMark(nerd, pal, st) == "" {
+			t.Errorf("nerd: slot state %s has no mark", st)
 		}
 	}
 }

@@ -712,3 +712,10 @@ editing history. Code, config comments and prompts reference these by their head
   eight frames a second, only while some PR in scope is in such a state: the frame chain ends with the
   last one, and the frame is part of the rows' cache key only then, so a still board keeps its cached
   frames. Badge counts in the summary and the card's badges take the badge's color, as rows did.
+- **No colour emoji left in the Nerd Font mode's marks** (2026-10-04, amends the two entries above: the
+  board's summary still led each state count with 🔴 🔵 🟢 ⚪). A PR state outside its pill (the board's
+  summary, the status dashboard's slots, queue, pauses and attention lines, both legends) shows the
+  pill's own icon in the state's color (the summary's reviewing count spins with the pills); a slot
+  state and the daemon's status show nf-oct-dot_fill in theirs (prbPalette dots and slotDots). The
+  help legend's pills lose their emoji prefix: the pill carries its icon. The dashboard's selected row
+  draws its text without the marks' colors, since a color's reset would end the row's highlight.

@@ -55,13 +55,14 @@ type glyphs struct {
 	// finding priorities, the card's decision and section headings.
 	rich      bool
 	stateIcon map[string]string // in a board state pill, before its label
-	stateMark map[string]string // before a PR state elsewhere (summary, dashboard, legend)
-	slotMark  map[string]string // before a slot state (dashboard)
-	priority  [4]string         // before P0..P3
-	ciMark    map[string]string // before a check state on the card
-	heading   map[string]string // before a section heading (card, dashboard)
-	running   [2]string         // before the daemon's state: stopped, running (dashboard)
-	spinner   spinner.Spinner
+	// markDot is drawn in its state's color before a slot state and the
+	// daemon's status (dashboard); a PR state outside its pill gets the
+	// pill's icon in its color (stateMark). "" = no marks.
+	markDot  string
+	priority [4]string         // before P0..P3
+	ciMark   map[string]string // before a check state on the card
+	heading  map[string]string // before a section heading (card, dashboard)
+	spinner  spinner.Spinner
 	// working are the frames of the spinner a reviewing PR's state pill
 	// shows instead of a still icon (herdr-radar's eight-dot braille, the gap
 	// walking round the cell); nil = still.
@@ -129,22 +130,10 @@ func newGlyphs(mode IconMode) glyphs {
 				"releasing":        "\uf52a", // nf-oct-unlock
 				"released":         "\uf52a",
 			},
-			stateMark: map[string]string{
-				"needs_attention": "🔴", "paused": "🛑",
-				"claiming": "🔵", "reviewing": "🔵", "verifying": "🔵",
-				"rereview_pending": "🟡", "queued": "🟡",
-				"reviewed": "🟢", "baseline": "⚪", "ignored": "🚫",
-				"ineligible": "⚫", "closed": "⚫", "releasing": "⚫", "released": "⚫",
-			},
-			slotMark: map[string]string{
-				"free": "🟢", "claimed": "🔵", "busy": "🔵", "held": "🟣",
-				"provisioning": "🟡", "releasing": "🟡", "dirty_schema": "🟠",
-				"broken": "🔴", "lost": "🔴", "observed": "⚪", "removing": "⚫", "removed": "⚫",
-			},
+			markDot: "\uf444", // nf-oct-dot_fill
 			// Finding priorities: icons in the priority's color (red,
 			// red, yellow, dim), quieter than colour emoji.
 			priority: [4]string{"\uf490", "\uf444", "\uf444", "\uf444"}, // nf-oct-flame, nf-oct-dot_fill
-			running:  [2]string{"🔴", "🟢"},
 			heading: map[string]string{
 				"WAITING":          "\uf4e3", // nf-oct-hourglass
 				"SINCE REVIEW":     "\uf417", // nf-oct-git_commit
