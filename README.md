@@ -23,8 +23,9 @@ they pull the delta, read the replies, and re-review only what changed. When the
 and its databases are released. You keep working; Magnum keeps the review queue empty.
 
 > [!NOTE]
-> **Disclaimer:** everything in this repository is 100% vibecoded, and 100% awesome. It saves me time
-> and I use it every day. I hope you're not against vibecode if you trust AI to review your pull requests.
+> **Disclaimer:** this repository is 100% vibecoded and, I'd say, 100% awesome. It saves me hours, and I
+> use it every day. If you're happy to let AI review your pull requests, I hope you won't mind that AI
+> wrote the reviewer too.
 
 - **Multiple agents, one review.** Claude, Codex, droid, omp or any CLI herdr can drive, each with its
   own prompt, model, credentials and schedule, feeding candidate findings to a judge that posts once.
