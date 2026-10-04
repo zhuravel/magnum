@@ -103,7 +103,11 @@ func runDaemonCmd(c *Context, f daemonFlags, pos []string) int {
 // log as its newest line. launchd restarts a non-zero exit after its
 // throttle, so the error repeats there until the configuration is fixed.
 func refuseDaemonStart(c *Context, err error) {
-	fix := fmt.Sprintf("correct the config file (default %s) or the prompt files, check with `magnum config`, then `magnum daemon-restart`", c.Layout.Config())
+	file := c.Layout.Config()
+	if file == "" || !fileExists(file) {
+		file = c.Layout.UserConfig
+	}
+	fix := fmt.Sprintf("correct the config file (%s) or the prompt files, check with `magnum config`, then `magnum daemon-restart`", inspTilde(file))
 	fmt.Fprintf(c.Stderr, "magnum daemon: refusing to start: %v\nfix: %s\n", err, fix)
 	if !c.Layout.Valid() {
 		return

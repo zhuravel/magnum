@@ -71,6 +71,11 @@ func runMigrateHome(c *Context, pos []string, f restartFlags, dry bool) int {
 		fmt.Fprintf(c.Stderr, "magnum migrate-home: "+format+"\n", a...)
 		return 1
 	}
+	// Before anything stops or moves: rewriting the launchd agent at the end
+	// needs the config (the herdr socket, the identities' keys).
+	if !loadDaemonGroupConfig(c, "migrate-home") {
+		return 1
+	}
 	src := c.Layout
 	if !src.CheckoutLayout() || src.Home == "" {
 		fmt.Fprintf(c.Stdout, "nothing to move: the registry is in %s already\n", inspTilde(src.Data()))

@@ -185,3 +185,21 @@ func TestMigrateHomeRewritesTheLaunchAgent(t *testing.T) {
 		t.Fatalf("plist:\n%s", plist)
 	}
 }
+
+// A real invocation starts without a loaded config (the fixtures hand one
+// in); migrate-home loads it before it rewrites the launchd agent, which
+// needs the herdr socket and the identities.
+func TestMigrateHomeLoadsTheConfig(t *testing.T) {
+	dt, dst := migrateFixture(t, installRules(herdrPluginListEmpty)...)
+	dt.writeBinary(t)
+	dt.ctx.Config = nil
+	if code := dt.run("migrate-home"); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, dt.stderr)
+	}
+	if _, err := os.Stat(dst.DB()); err != nil {
+		t.Fatalf("registry not moved: %v", err)
+	}
+	if _, err := os.Stat(launchd.AgentPath(dt.userHome, launchd.DefaultLabel)); err != nil {
+		t.Fatalf("plist not written: %v", err)
+	}
+}

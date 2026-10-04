@@ -93,8 +93,12 @@ func daemonGroupNoArgs(c *Context, name, usage string, pos []string) bool {
 // loadDaemonGroupConfig loads config.toml and explains the fix on failure.
 func loadDaemonGroupConfig(c *Context, cmd string) bool {
 	if err := c.LoadConfig(); err != nil {
-		fmt.Fprintf(c.Stderr, "magnum %s: %v\nfix: correct the config file (default %s), then check it with `magnum config`\n",
-			cmd, err, c.Layout.Config())
+		file := c.Layout.Config()
+		if file == "" || !fileExists(file) {
+			file = c.Layout.UserConfig
+		}
+		fmt.Fprintf(c.Stderr, "magnum %s: %v\nfix: correct the config file (%s), then check it with `magnum config`\n",
+			cmd, err, inspTilde(file))
 		return false
 	}
 	return true

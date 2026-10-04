@@ -516,27 +516,28 @@ func TestLoadPrivateKeyReportsThePlaceholder(t *testing.T) {
 	}
 }
 
-// The value .mise.toml really sets for every App key variable is the
-// placeholder, whatever it is changed to later.
-func TestTrackedMiseTomlKeysArePlaceholders(t *testing.T) {
+// The tracked .mise.toml never carries key material: no [env] value is PEM
+// text, and a *_PRIVATE_KEY variable it declares holds the placeholder
+// (App keys are files named by private_key_file).
+func TestTrackedMiseTomlHoldsNoKeys(t *testing.T) {
 	var mise struct {
 		Env map[string]any `toml:"env"`
 	}
 	if _, err := toml.DecodeFile(filepath.Join("..", "..", ".mise.toml"), &mise); err != nil {
 		t.Fatal(err)
 	}
-	n := 0
 	for name, v := range mise.Env {
 		s, ok := v.(string)
-		if !ok || !strings.HasSuffix(name, "_PRIVATE_KEY") {
+		if !ok {
 			continue
 		}
-		n++
-		if _, err := loadPrivateKey(name, s); !errors.Is(err, ErrPlaceholderKey) {
-			t.Errorf("%s from .mise.toml: err = %v, want the placeholder error", name, err)
+		if strings.Contains(s, "PRIVATE KEY") {
+			t.Errorf("%s in .mise.toml holds key material", name)
 		}
-	}
-	if n == 0 {
-		t.Fatal("no *_PRIVATE_KEY placeholder in .mise.toml's [env]")
+		if strings.HasSuffix(name, "_PRIVATE_KEY") {
+			if _, err := loadPrivateKey(name, s); !errors.Is(err, ErrPlaceholderKey) {
+				t.Errorf("%s from .mise.toml: err = %v, want the placeholder error", name, err)
+			}
+		}
 	}
 }
