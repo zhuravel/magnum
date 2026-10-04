@@ -736,3 +736,14 @@ editing history. Code, config comments and prompts reference these by their head
   user. launchd runs `magnum daemon` directly unless an App key still comes from a checkout's mise
   environment, and pins `MAGNUM_HOME` only for the checkout layout. Rejected: compatibility symlinks at
   the old paths (one-time leftovers nobody finds later) and copying instead of renaming (two registries).
+- **Distribution: a source-built Homebrew formula in a personal tap, released from a local script**
+  (2026-10-04; the repository stays github.com/zhuravel/magnum, private for now). `brew install
+  zhuravel/tap/magnum` builds the tagged commit with Homebrew's Go: nothing to sign or notarize (a
+  prebuilt binary in a cask would need an Apple Developer ID), and the formula's git URL works while the
+  repository is private because git uses the user's credentials (a release-tarball URL would not).
+  `make release VERSION=vX.Y.Z` (scripts/release.sh) runs the gate, tags, publishes the GitHub release and
+  pushes the formula, filled from packaging/homebrew/magnum.rb, to the tap with the maintainer's own gh
+  credentials. Rejected: a release workflow in Actions (it would need a token with write access to the
+  tap stored as a secret, for a one-maintainer project) and `brew services` (it would fight `magnum
+  install` over the launchd job; the formula's caveats say to run `magnum daemon-restart --drain` after an
+  upgrade). CI runs the gate on macOS runners: magnum is a macOS tool and its tests run where it runs.

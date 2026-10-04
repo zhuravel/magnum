@@ -1,0 +1,20 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    # macOS: magnum is a macOS tool (launchd, AppleScript); its tests run where it runs.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: gate (gofmt, vet, tests; the private-name checks skip without local patterns and registry)
+        run: make test
+      - name: build
+        run: make build

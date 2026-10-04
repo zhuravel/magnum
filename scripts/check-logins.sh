@@ -7,7 +7,12 @@
 # .mise.local.toml). Tests use placeholders (alice, bob, rev-ann). Without a
 # registry (a fresh clone, CI) there is nothing to check.
 set -eu
-db="${MAGNUM_DB:-state/magnum.db}"
+db="${MAGNUM_DB:-}"
+if [ -z "$db" ]; then # the checkout's registry, else the installed one (magnum migrate-home)
+  for c in state/magnum.db "${XDG_DATA_HOME:-$HOME/.local/share}/magnum/magnum.db"; do
+    if [ -f "$c" ]; then db="$c"; break; fi
+  done
+fi
 if [ ! -f "$db" ] || ! command -v sqlite3 >/dev/null 2>&1; then
   echo "check-logins: no registry at $db (or no sqlite3): skipped"
   exit 0

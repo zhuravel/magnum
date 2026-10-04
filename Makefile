@@ -1,11 +1,12 @@
-# magnum build helpers. launchd runs bin/magnum through `mise exec` (see `magnum install`).
+# magnum build helpers. `make install` loads the launchd agent for bin/magnum (see `magnum install`);
+# `make release VERSION=vX.Y.Z` tags, publishes and updates the Homebrew tap (scripts/release.sh).
 
 GO            ?= go
 BIN           ?= bin/magnum
 VERSION       ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 INSTALL_FLAGS ?= --plugin
 
-.PHONY: build test check-private install api-doc
+.PHONY: build test check-private install api-doc release
 
 ## build: compile bin/magnum (the binary launchd and the herdr plugin run)
 build:
@@ -40,3 +41,7 @@ api-doc:
 	    echo; echo "## $$p"; echo; echo '```text'; $(GO) doc -all ./internal/$$p || exit 1; echo '```'; \
 	  done; } > docs/API.md.tmp && mv docs/API.md.tmp docs/API.md
 	@echo "docs/API.md regenerated"
+
+## release: tag the pushed master as $(VERSION) (vX.Y.Z), publish the GitHub release, update the Homebrew tap
+release:
+	scripts/release.sh $(VERSION)
