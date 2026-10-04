@@ -3,6 +3,12 @@
 # tap's formula (github.com/zhuravel/homebrew-tap) at it. Usage: scripts/release.sh v0.2.0
 set -euo pipefail
 
+# The private-name guard (make check-private) reads its patterns from the gitignored .mise.local.toml:
+# without them a release would skip it, so run under mise when they are not in the environment.
+if [ -z "${MAGNUM_PRIVATE_PATTERNS+set}" ] && command -v mise >/dev/null 2>&1; then
+  exec mise exec -C "$(git rev-parse --show-toplevel)" -- "$0" "$@"
+fi
+
 v="${1:?usage: scripts/release.sh vX.Y.Z}"
 [[ "$v" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "release: the version must look like v1.2.3" >&2; exit 2; }
 cd "$(git rev-parse --show-toplevel)"
