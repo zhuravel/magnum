@@ -501,7 +501,7 @@ func TestWriteMarkdownGolden(t *testing.T) {
 		"Unmatched findings:\n" +
 		"\n" +
 		"- `app/models/user.rb:7` **P2** Missing index\n" +
-		"- `app/models/order.rb` " + strings.Repeat("é", 100) + "…\n" +
+		"- `app/models/order.rb` " + strings.Repeat("é", 99) + "…\n" +
 		"- `(no path)` no path at all\n" +
 		"\n" +
 		"## sandbox\n" +

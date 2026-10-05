@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/paths"
 )
 
@@ -38,11 +39,7 @@ func AcquireLock(path string) (unlock func(), held bool, err error) {
 }
 
 func writePid(path string) error {
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return fsx.WriteFileAtomic(path, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600)
 }
 
 // DaemonPID returns the pid of the running daemon from the pidfile, or 0

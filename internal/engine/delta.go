@@ -18,6 +18,7 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/eligibility"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // KVPRTrivial holds the last push magnum skipped as trivial for a PR
@@ -58,7 +59,7 @@ func (t TrivialSkip) Note() string {
 	case len(t.Classes) == 1 && t.Classes[0] == DeltaBase:
 		what = "base-merge"
 	}
-	return fmt.Sprintf("%s push skipped (%s → %s)", what, short(t.From), short(t.To))
+	return fmt.Sprintf("%s push skipped (%s → %s)", what, textx.ShortSHA(t.From), textx.ShortSHA(t.To))
 }
 
 // KVPRDelta holds the size of a PR's unreviewed delta (DeltaRecord as
@@ -108,9 +109,9 @@ func (dc deltaCheck) change() string {
 		if dc.rebased {
 			verb = "rebases onto " + dc.base
 		}
-		return fmt.Sprintf("only %s (%d %s, the PR's own changes unchanged)", verb, dc.commits, plural(dc.commits, "commit", "commits"))
+		return fmt.Sprintf("only %s (%d %s, the PR's own changes unchanged)", verb, dc.commits, textx.Plural(dc.commits, "commit", "commits"))
 	}
-	return fmt.Sprintf("changes %s (%d %s)", DeltaLabel(dc.classes), dc.files, plural(dc.files, "file", "files"))
+	return fmt.Sprintf("changes %s (%d %s)", DeltaLabel(dc.classes), dc.files, textx.Plural(dc.files, "file", "files"))
 }
 
 // checkDelta compares from...to in one GitHub call as the watch's poll
@@ -139,12 +140,12 @@ func (e *Engine) checkDelta(ctx context.Context, repo store.Repo, w config.Watch
 	}
 	pc, err := e.comparePush(ctx, gh, repo, from, to)
 	if err != nil {
-		e.log.Info("delta: compare failed; the push is re-reviewed", "repo", repo.FullName(), "from", short(from), "to", short(to), "err", err)
+		e.log.Info("delta: compare failed; the push is re-reviewed", "repo", repo.FullName(), "from", textx.ShortSHA(from), "to", textx.ShortSHA(to), "err", err)
 		return deltaCheck{}
 	}
 	if pc.Status == "behind" || pc.Commits == 0 {
 		e.log.Info("delta: the head is behind the reviewed commit; the push is re-reviewed", "repo", repo.FullName(),
-			"from", short(from), "to", short(to), "status", pc.Status)
+			"from", textx.ShortSHA(from), "to", textx.ShortSHA(to), "status", pc.Status)
 		return deltaCheck{}
 	}
 	dc := deltaCheck{measured: true, files: len(pc.Files), commits: pc.Commits}
@@ -238,7 +239,7 @@ func (e *Engine) settlePush(ctx context.Context, repo store.Repo, w config.Watch
 	}
 	e.recordTrivial(ctx, repo, pr, TrivialSkip{From: from, To: pr.HeadSHA, Classes: dc.classes, Files: dc.files, At: e.now()},
 		fmt.Sprintf("%s → reviewed: the push to %s %s since the review of %s; no re-review, the review stands",
-			pr.State, short(pr.HeadSHA), dc.change(), short(from)))
+			pr.State, textx.ShortSHA(pr.HeadSHA), dc.change(), textx.ShortSHA(from)))
 	return true, nil
 }
 

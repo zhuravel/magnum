@@ -31,6 +31,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/paths"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // Protocol is the herdr socket protocol version this client was verified
@@ -322,8 +323,5 @@ func socketLine(method string, params any) string {
 func logArg(s string) string {
 	s = execx.Redact(s)
 	s = strings.NewReplacer("\r", `\r`, "\n", `\n`).Replace(s)
-	if r := []rune(s); len(r) > maxLogArg {
-		s = string(r[:maxLogArg]) + "…"
-	}
-	return s
+	return textx.Clip(s, maxLogArg)
 }

@@ -31,6 +31,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // deltaRecordVersion is the DeltaRecord.Version of a record measured with
@@ -75,7 +76,7 @@ func (e *Engine) ownDiffDelta(ctx context.Context, gh GitHub, repo store.Repo, b
 		}
 	}
 	e.log.Info("delta: the PR's own diff cannot be compared in full; the push is measured since the review",
-		"repo", repo.FullName(), "base", base, "from", short(from), "to", short(to), "err", err)
+		"repo", repo.FullName(), "base", base, "from", textx.ShortSHA(from), "to", textx.ShortSHA(to), "err", err)
 	return ownDiff{}, false
 }
 

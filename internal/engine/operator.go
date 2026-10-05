@@ -23,6 +23,7 @@ import (
 	"github.com/zhuravel/magnum/internal/notify"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // KVDaemonPausedAt holds when the running `magnum pause` began
@@ -116,7 +117,7 @@ func (e *Engine) toastRequestedFailed(ctx context.Context, job *roundJob, pr sto
 	if cur.NextAttemptAt != nil && cur.NextAttemptAt.After(now) {
 		body += "; it retries at " + waitClock(*cur.NextAttemptAt, now)
 	}
-	e.info(notify.Item{Key: fmt.Sprintf("requested:%d:%s:%d:%s", pr.ID, short(cur.HeadSHA), cur.Attempts, what),
+	e.info(notify.Item{Key: fmt.Sprintf("requested:%d:%s:%d:%s", pr.ID, textx.ShortSHA(cur.HeadSHA), cur.Attempts, what),
 		Title: label + ": requested review failed", Body: body, Line: label + ": requested review failed (" + what + ")",
 		Kind: kindRequestedFailed, Window: requestedToastWindow})
 }

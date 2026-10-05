@@ -3,8 +3,7 @@
 // registry, review reports and notes in ~/.local/share/magnum, logs, locks
 // and the identities' gh config in ~/.local/state/magnum. A checkout layout
 // (everything under <checkout>/state, gitignored) remains for development
-// (MAGNUM_HOME) and for an install whose registry has not moved yet (see
-// Resolve and `magnum migrate-home`).
+// (MAGNUM_HOME).
 package paths
 
 import (
@@ -15,6 +14,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/zhuravel/magnum/internal/fsx"
 )
 
 // Layout resolves every path magnum reads or writes.
@@ -34,7 +35,7 @@ type Layout struct {
 	Exe string
 	// UserConfig is the user's config file, layered over the built-in
 	// defaults: $XDG_CONFIG_HOME/magnum/config.toml, else
-	// ~/.config/magnum/config.toml (Resolve sets it; UserConfigPath). ""
+	// ~/.config/magnum/config.toml (Resolve sets it). ""
 	// means none (tests build layouts without it).
 	UserConfig string
 	// Scratch, when set, holds the registry, the review reports and the
@@ -48,11 +49,6 @@ type Layout struct {
 // marks the repository root.
 const modulePath = "github.com/zhuravel/magnum"
 
-// LegacyHome is where magnum's checkout lived before it was installable: an
-// install whose registry is still under <LegacyHome>/state keeps using it
-// until `magnum migrate-home` moves it.
-const LegacyHome = "~/Projects/magnum"
-
 // Resolve picks the layout:
 //
 //   - MAGNUM_HOME set: the checkout layout under it (development, tests).
@@ -63,10 +59,6 @@ const LegacyHome = "~/Projects/magnum"
 //   - Else the XDG layout, with Home the checkout holding the binary, if any
 //     (it has config.toml, config.defaults.toml or magnum's own go.mod
 //     within four levels up, symlinks resolved).
-//   - Except while the XDG registry does not exist and a checkout's does
-//     (the binary's checkout, else LegacyHome): that checkout layout, so an
-//     install keeps its registry until `magnum migrate-home` moves it
-//     instead of starting over empty.
 func Resolve() (Layout, error) {
 	exe, _ := os.Executable()
 	home, _ := os.UserHomeDir()
@@ -90,19 +82,8 @@ func resolve(getenv func(string) string, exe, userHome string) (Layout, error) {
 	if dataHome == "" || stateHome == "" {
 		return Layout{}, errors.New("paths: no home directory to put magnum's data in")
 	}
-	xdg := Layout{Home: checkout, UserConfig: user, Exe: exe,
-		DataDir: filepath.Join(dataHome, "magnum"), StateDir: filepath.Join(stateHome, "magnum")}
-	if exists(xdg.DB()) {
-		return xdg, nil
-	}
-	for _, old := range []string{checkout, expandFrom(LegacyHome, userHome)} {
-		if old != "" && exists(Layout{Home: old}.DB()) {
-			if dir, err := canonicalDir(old); err == nil {
-				return Layout{Home: dir, UserConfig: user, Exe: exe}, nil
-			}
-		}
-	}
-	return xdg, nil
+	return Layout{Home: checkout, UserConfig: user, Exe: exe,
+		DataDir: filepath.Join(dataHome, "magnum"), StateDir: filepath.Join(stateHome, "magnum")}, nil
 }
 
 // xdgDir is $<env> when it is an absolute path, else ~/<fallback>; "" without
@@ -117,33 +98,13 @@ func xdgDir(getenv func(string) string, userHome, env, fallback string) string {
 	return filepath.Join(userHome, fallback)
 }
 
-// Installed is l moved to the XDG data and state directories (what Resolve
-// picks once the registry lives there); Home, UserConfig and Exe stay.
-func (l Layout) Installed() (Layout, error) {
-	home, _ := os.UserHomeDir()
-	data, state := xdgDir(os.Getenv, home, "XDG_DATA_HOME", ".local/share"), xdgDir(os.Getenv, home, "XDG_STATE_HOME", ".local/state")
-	if data == "" || state == "" {
-		return Layout{}, errors.New("paths: no home directory to put magnum's data in")
-	}
-	l.DataDir, l.StateDir, l.Scratch = filepath.Join(data, "magnum"), filepath.Join(state, "magnum"), ""
-	return l, nil
-}
-
 // CheckoutLayout reports whether everything lives under Home/state (the
-// development layout, or an install that has not run `magnum migrate-home`).
+// development layout, MAGNUM_HOME).
 func (l Layout) CheckoutLayout() bool { return l.StateDir == "" }
 
 // Valid reports whether the layout names where magnum's files live (a
 // zero Layout, as tests build, does not).
 func (l Layout) Valid() bool { return l.Home != "" || l.StateDir != "" }
-
-// UserConfigPath is where the user's config lives: $XDG_CONFIG_HOME/magnum/
-// config.toml when XDG_CONFIG_HOME is an absolute path, else
-// ~/.config/magnum/config.toml; "" without a home directory.
-func UserConfigPath() string {
-	home, _ := os.UserHomeDir()
-	return userConfigPath(os.Getenv, home)
-}
 
 func userConfigPath(getenv func(string) string, userHome string) string {
 	if dir := xdgDir(getenv, userHome, "XDG_CONFIG_HOME", ".config"); dir != "" {
@@ -207,7 +168,7 @@ func homeFromExecutable(exe string) (string, bool) {
 // another Go project must not make that project magnum's home.
 func findHome(dir string) (string, bool) {
 	for range 4 {
-		if exists(filepath.Join(dir, "config.toml")) || exists(filepath.Join(dir, "config.defaults.toml")) ||
+		if fsx.Exists(filepath.Join(dir, "config.toml")) || fsx.Exists(filepath.Join(dir, "config.defaults.toml")) ||
 			isMagnumModule(filepath.Join(dir, "go.mod")) {
 			return dir, true
 		}
@@ -241,8 +202,6 @@ func isMagnumModule(path string) bool {
 	}
 	return false
 }
-
-func exists(p string) bool { _, err := os.Stat(p); return err == nil }
 
 // Expand replaces a leading ~ with the user's home directory.
 func Expand(p string) string {
@@ -293,7 +252,7 @@ func (l Layout) Plugin() string { return l.inHome("herdr-plugin.toml") }
 // else the running binary (a Homebrew install's stable bin/ link rather
 // than its versioned Cellar path, which an upgrade removes).
 func (l Layout) Binary() string {
-	if b := l.inHome("bin", "magnum"); b != "" && (exists(b) || l.Exe == "") {
+	if b := l.inHome("bin", "magnum"); b != "" && (fsx.Exists(b) || l.Exe == "") {
 		return b
 	}
 	return stableExe(l.Exe)

@@ -19,6 +19,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -436,7 +437,7 @@ func perPRDBSlug(sl store.Slot, p perPRPlan) string {
 // or an unusable wt.toml skip it (logged); failed commands are logged and
 // tolerated. Only a cancelled ctx is returned, so the step runs again.
 func (m *Manager) teardownPerPR(ctx context.Context, sl store.Slot, number int, base string) error {
-	if !exists(sl.Path) {
+	if !fsx.Exists(sl.Path) {
 		return nil
 	}
 	subject := "slot:" + sl.Name

@@ -14,7 +14,6 @@ import (
 	"net/http"
 	"os"
 	"slices"
-	"time"
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/cleanup"
@@ -36,8 +35,8 @@ import (
 // Options tune New.
 type Options struct {
 	// DryRun wraps the runner in execx.DryRun, puts slots in dry-run mode,
-	// disables toasts and opens a private copy of the registry (see
-	// App.StorePath), so nothing outside the process changes.
+	// disables toasts and opens a private copy of the registry, so nothing
+	// outside the process changes.
 	DryRun bool
 	// Daemon marks the process as the daemon, which owns daemon.log rotation.
 	// Any other process (CLI commands) appends to daemon.log without ever
@@ -93,7 +92,7 @@ type App struct {
 	Identities map[string]identity.Source
 	// MySQL is the local DBngin client. mysqlx.Open never connects, so it is
 	// non-nil even while MySQL is down (calls then fail and consumers degrade);
-	// use MySQLUp to probe. Nil only when the DSN is invalid.
+	// Ping probes it. Nil only when the DSN is invalid.
 	MySQL *mysqlx.Client
 	Git   *gitx.Client
 
@@ -296,7 +295,7 @@ func (a *App) wire() {
 		Log: Printf{Logger: a.Logger, Level: slog.LevelInfo, Src: "cleanup"},
 	}
 	a.Notify = &notify.Notifier{
-		Herdr: a.Herdr, Store: a.Store, Runner: a.Runner, Layout: a.Layout,
+		Herdr: a.Herdr, Store: a.Store, Runner: a.Runner,
 		Enabled: cfg.Herdr.Notify && !a.DryRun && a.AgentTag == "",
 		Log:     Printf{Logger: a.Logger, Level: slog.LevelInfo, Src: "notify"},
 	}
@@ -336,20 +335,6 @@ func selfLogin(cfg *config.Config, name string) string {
 		}
 	}
 	return ""
-}
-
-// StorePath is the database file the App opened: state/magnum.db, or a
-// temporary copy of it under DryRun (removed by Close).
-func (a *App) StorePath() string { return a.storePath }
-
-// MySQLUp reports whether the MySQL server answers a ping within 3 s.
-func (a *App) MySQLUp(ctx context.Context) bool {
-	if a.MySQL == nil {
-		return false
-	}
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	return a.MySQL.Ping(ctx) == nil
 }
 
 // IdentityNames lists the configured identity names in config order.

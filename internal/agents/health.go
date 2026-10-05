@@ -141,9 +141,6 @@ func (m *Manager) healthRules(kind string) []healthRule {
 	return rules
 }
 
-// Classify is ClassifyAt(text, time.Now()).
-func Classify(text string) Health { return ClassifyAt(text, time.Now()) }
-
 // ClassifyAt is ClassifyWith with config.DefaultHealthPatterns.
 func ClassifyAt(text string, now time.Time) Health { return classify(defaultRules, text, now) }
 

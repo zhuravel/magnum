@@ -700,6 +700,9 @@ func (d *actDeps) focus(ctx context.Context, res *actFocusResult, sess store.Ses
 		return nil
 	}
 	out, err := d.Reveal(ctx, reveal.Options{NewWindow: newWindow})
+	if _, denied := errors.AsType[*reveal.AutomationError](err); denied {
+		return fmt.Errorf("focused %s in herdr, but %w", target, err) // its fix is a permission, not [terminal]
+	}
 	if err != nil {
 		return fmt.Errorf("focused %s in herdr, but revealing it in %s failed: %w (fix [terminal] in config.toml, or pass --no-reveal)", target, d.Cfg.Terminal.App, err)
 	}

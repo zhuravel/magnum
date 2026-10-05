@@ -15,6 +15,8 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // rowAct is an action on the selected row's PR (or, for pin, unpin and
@@ -194,7 +196,7 @@ func actionRefusal(a rowAct, r actRow) string {
 		case r.closed():
 			return l + " was closed without merging: only open or merged PRs are reviewed"
 		case r.merged() && sameSHA(r.head, r.reviewed):
-			return l + ": its merged head " + shortSHA(r.head) + " was already reviewed"
+			return l + ": its merged head " + textx.ShortSHA(r.head) + " was already reviewed"
 		case !r.merged() && r.ended():
 			return l + " is " + r.state + ": only open or merged PRs are reviewed"
 		case r.running():
@@ -221,7 +223,7 @@ func actionRefusal(a rowAct, r actRow) string {
 		case r.merged() || r.closed() || r.ended():
 			return l + " is " + cmp.Or(r.ghWord(), r.state) + ": nothing to " + verb
 		case f.SHA != "" && r.head != "" && !sameSHA(r.head, f.SHA):
-			return l + ": the head moved since magnum reviewed " + shortSHA(f.SHA) + r.orKey(actReview, ": review again first (%k)")
+			return l + ": the head moved since magnum reviewed " + textx.ShortSHA(f.SHA) + r.orKey(actReview, ": review again first (%k)")
 		}
 	case actBrowser:
 		if r.url == "" {

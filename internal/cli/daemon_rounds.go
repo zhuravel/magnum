@@ -93,8 +93,8 @@ func roundsFix(cmd string) string {
 	case "daemon-restart":
 		return "`magnum daemon-restart --when-idle` restarts once no round runs (stopping nothing), --drain also " +
 			"stops new rounds meanwhile, --now interrupts them"
-	case "install", "migrate-home":
-		return fmt.Sprintf("`magnum %s --drain` stops new rounds and waits for these, --now interrupts them", cmd)
+	case "install":
+		return "`magnum install --drain` stops new rounds and waits for these, --now interrupts them"
 	}
 	return "wait for them (`magnum status --watch`), or pass --now to interrupt"
 }

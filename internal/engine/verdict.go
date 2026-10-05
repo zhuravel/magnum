@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // Manual verdicts: `magnum approve` and `magnum request-changes` (and the
@@ -49,7 +50,7 @@ func (e *Engine) requestVerdict(ctx context.Context, p VerdictPayload, event str
 		return "", fmt.Errorf("a review round of %s is running: wait for its review, then decide", label)
 	case pr.HeadSHA != reviewed && !p.Force:
 		return "", fmt.Errorf("%s moved to %s since magnum reviewed %s: review it again first, or --force to post on %s",
-			label, short(pr.HeadSHA), short(reviewed), short(reviewed))
+			label, textx.ShortSHA(pr.HeadSHA), textx.ShortSHA(reviewed), textx.ShortSHA(reviewed))
 	}
 	gh := e.gh(pr.Identity)
 	if gh == nil {
@@ -77,7 +78,7 @@ func (e *Engine) requestVerdict(ctx context.Context, p VerdictPayload, event str
 	}
 	e.setKV(ctx, KVPRManualVerdict(pr.ID), strconv.FormatInt(rev.ID, 10))
 	done := map[string]string{"APPROVE": "approved", "REQUEST_CHANGES": "requested changes on"}[event]
-	msg := fmt.Sprintf("%s %s at %s as %s: %s", done, label, short(reviewed), rev.UserLogin, rev.HTMLURL)
+	msg := fmt.Sprintf("%s %s at %s as %s: %s", done, label, textx.ShortSHA(reviewed), rev.UserLogin, rev.HTMLURL)
 	e.event(ctx, "info", prSubject(repo, pr.Number), "review.manual_verdict", msg,
 		map[string]any{"event": event, "review_id": rev.ID, "sha": reviewed, "identity": pr.Identity})
 	return msg, nil
@@ -94,7 +95,7 @@ func verdictBody(event, message, sha string, sum *store.ReviewSummary) string {
 	if event == "REQUEST_CHANGES" {
 		what = "Changes requested"
 	}
-	fmt.Fprintf(&b, "%s after magnum's review of `%s`", what, short(sha))
+	fmt.Fprintf(&b, "%s after magnum's review of `%s`", what, textx.ShortSHA(sha))
 	if sum != nil {
 		var parts []string
 		for i, n := range sum.Counts {
@@ -109,6 +110,6 @@ func verdictBody(event, message, sha string, sum *store.ReviewSummary) string {
 			b.WriteString(": " + sum.URL)
 		}
 	}
-	b.WriteString(".\n\n<!-- magnum:verdict=" + event + " head=" + short(sha) + " -->")
+	b.WriteString(".\n\n<!-- magnum:verdict=" + event + " head=" + textx.ShortSHA(sha) + " -->")
 	return b.String()
 }

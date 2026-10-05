@@ -12,6 +12,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -256,13 +257,5 @@ func WriteFileAtomic(root *os.Root, name string, data []byte) error {
 			return err
 		}
 	}
-	tmp := name + ".tmp"
-	if err := root.WriteFile(tmp, data, 0o600); err != nil {
-		return err
-	}
-	if err := root.Rename(tmp, name); err != nil {
-		_ = root.Remove(tmp)
-		return err
-	}
-	return nil
+	return fsx.WriteFileAtomicIn(root, name, data, 0o600)
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // Request kinds of `magnum abort` and `magnum ignore` (TargetPayload with a
@@ -252,13 +253,13 @@ func (e *Engine) stopPR(ctx context.Context, prID int64, ignore, roundRan bool) 
 		done = append(done, "round stopped")
 	}
 	if n := e.interruptPR(ctx, pr, w); n > 0 {
-		done = append(done, fmt.Sprintf("%d %s interrupted", n, plural(n, "agent", "agents")))
+		done = append(done, fmt.Sprintf("%d %s interrupted", n, textx.Plural(n, "agent", "agents")))
 		if !e.waitAgentsQuiet(ctx, pr.ID) {
 			e.log.Info("agents still working after the interrupt", "subject", subject)
 		}
 	}
 	if n := e.abandonRuns(ctx, pr.ID); n > 0 {
-		done = append(done, fmt.Sprintf("%d %s abandoned", n, plural(n, "run", "runs")))
+		done = append(done, fmt.Sprintf("%d %s abandoned", n, textx.Plural(n, "run", "runs")))
 	}
 	parked := true
 	if err := e.parkForStop(ctx, pr); err != nil {
@@ -578,12 +579,4 @@ func (e *Engine) handBack(ctx context.Context, repo store.Repo, pr store.PR, par
 	}
 	e.event(ctx, "info", "slot:"+slot.Name, "slot.released", slot.Name+" handed back: "+label+" was stopped", nil)
 	return "slot " + slot.Name + " released", nil
-}
-
-// plural is one or many by n.
-func plural(n int, one, many string) string {
-	if n == 1 {
-		return one
-	}
-	return many
 }

@@ -18,7 +18,6 @@ import (
 var (
 	askedPoll  = github.Reviewer{Type: "User", Login: "zhuravel"}
 	askedBot   = github.Reviewer{Type: "Bot", Login: "talkable"}
-	askedTeam  = github.Reviewer{Type: "Team", Login: "reviewers"}
 	reqSubject = "pr:talkable/talkable#2"
 )
 

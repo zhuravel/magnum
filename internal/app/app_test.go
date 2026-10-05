@@ -94,8 +94,8 @@ func TestNewWiresEverything(t *testing.T) {
 		a.Agents == nil || a.Cleanup == nil || a.Notify == nil || a.MySQL == nil {
 		t.Fatalf("missing component: %+v", a)
 	}
-	if a.StorePath() != layout.DB() {
-		t.Fatalf("store path = %s, want %s", a.StorePath(), layout.DB())
+	if a.storePath != layout.DB() {
+		t.Fatalf("store path = %s, want %s", a.storePath, layout.DB())
 	}
 	if a.Herdr.Socket != "/nonexistent/herdr.sock" {
 		t.Fatalf("herdr socket = %q", a.Herdr.Socket)
@@ -165,7 +165,7 @@ func TestDryRunUsesStoreCopy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a.StorePath() == layout.DB() {
+	if a.storePath == layout.DB() {
 		t.Fatal("dry run must not open the real registry")
 	}
 	if a.DryRunner == nil || a.Runner != a.DryRunner {
@@ -183,7 +183,7 @@ func TestDryRunUsesStoreCopy(t *testing.T) {
 	if _, err := a.Runner.Run(ctx, execx.Cmd{Name: "git", Args: []string{"push"}, Mutates: true}); err != nil {
 		t.Fatal(err)
 	}
-	copyDir := filepath.Dir(a.StorePath())
+	copyDir := filepath.Dir(a.storePath)
 	if err := a.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +227,7 @@ func TestResolvePR(t *testing.T) {
 		"https://github.com/zhuravel/x/pull/5/files": "zhuravel/x#5",
 	}
 	for ref, want := range cases {
-		o, r, n, err := a.ResolvePR(ctx, ref)
+		o, r, n, err := a.Refs().ResolvePR(ctx, ref)
 		if err != nil {
 			t.Fatalf("%s: %v", ref, err)
 		}
@@ -235,7 +235,7 @@ func TestResolvePR(t *testing.T) {
 			t.Fatalf("%s: got %s want %s", ref, got, want)
 		}
 	}
-	if _, _, _, err := a.ResolvePR(ctx, "not a ref"); err == nil {
+	if _, _, _, err := a.Refs().ResolvePR(ctx, "not a ref"); err == nil {
 		t.Fatal("bad ref must fail")
 	}
 }
@@ -243,21 +243,21 @@ func TestResolvePR(t *testing.T) {
 func TestLookupPR(t *testing.T) {
 	a, _ := testApp(t, Options{})
 	ctx := context.Background()
-	if _, _, err := a.LookupPR(ctx, "5"); !errors.Is(err, store.ErrNotFound) {
+	if _, _, err := LookupPR(ctx, a.Store, a.Refs(), "5"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("unknown repo: %v", err)
 	}
 	repo, err := a.Store.UpsertRepo(ctx, store.Repo{NodeID: "R", Owner: "talkable", Name: "talkable", Mode: store.RepoModePool})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := a.LookupPR(ctx, "5"); !errors.Is(err, store.ErrNotFound) {
+	if _, _, err := LookupPR(ctx, a.Store, a.Refs(), "5"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("unknown pr: %v", err)
 	}
 	if _, err := a.Store.UpsertPRFromGitHub(ctx, store.GitHubPR{RepoID: repo.ID, NodeID: "P", Number: 5,
 		URL: "u", HeadSHA: "abc", InitialState: store.PRBaseline, Identity: "talkable-app"}); err != nil {
 		t.Fatal(err)
 	}
-	r, pr, err := a.LookupPR(ctx, "talkable#5")
+	r, pr, err := LookupPR(ctx, a.Store, a.Refs(), "talkable#5")
 	if err != nil || r.ID != repo.ID || pr.Number != 5 {
 		t.Fatalf("lookup: %v %+v %+v", err, r, pr)
 	}
@@ -272,16 +272,16 @@ func TestLookupPR(t *testing.T) {
 		URL: "u7", HeadSHA: "def", InitialState: store.PRBaseline, Identity: "talkable-app"}); err != nil {
 		t.Fatal(err)
 	}
-	if r, pr, err := a.LookupPR(ctx, "widgets#7"); err != nil || r.ID != other.ID || pr.Number != 7 {
+	if r, pr, err := LookupPR(ctx, a.Store, a.Refs(), "widgets#7"); err != nil || r.ID != other.ID || pr.Number != 7 {
 		t.Fatalf("repo#N under another owner: %v %+v %+v", err, r, pr)
 	}
-	if _, _, err := a.LookupPR(ctx, "example/widgets#7"); err != nil {
+	if _, _, err := LookupPR(ctx, a.Store, a.Refs(), "example/widgets#7"); err != nil {
 		t.Fatalf("owner/repo#N: %v", err)
 	}
 	if _, err := a.Store.UpsertRepo(ctx, store.Repo{NodeID: "R3", Owner: "another", Name: "widgets", Mode: store.RepoModePerPR}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := a.LookupPR(ctx, "widgets#7"); err == nil || !strings.Contains(err.Error(), "ambiguous") {
+	if _, _, err := LookupPR(ctx, a.Store, a.Refs(), "widgets#7"); err == nil || !strings.Contains(err.Error(), "ambiguous") {
 		t.Fatalf("two repos named widgets must be ambiguous: %v", err)
 	}
 }
@@ -301,11 +301,11 @@ func TestLookupPRNameFallbackIsForRepoRefsOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, ref := range []string{"7", "#7", " 7 "} {
-		if r, _, err := a.LookupPR(ctx, ref); !errors.Is(err, store.ErrNotFound) {
+		if r, _, err := LookupPR(ctx, a.Store, a.Refs(), ref); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("LookupPR(%q) = %s, %v; want not found (the default repository is not registered)", ref, r.FullName(), err)
 		}
 	}
-	r, pr, err := a.LookupPR(ctx, "talkable#7")
+	r, pr, err := LookupPR(ctx, a.Store, a.Refs(), "talkable#7")
 	if err != nil || r.ID != other.ID || pr.Number != 7 {
 		t.Fatalf("talkable#7: %v %+v %+v", err, r, pr)
 	}

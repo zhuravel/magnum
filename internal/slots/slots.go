@@ -247,11 +247,6 @@ func placeholder(sl store.Slot) string {
 	return sl.Name
 }
 
-func exists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
-}
-
 // acquireHeavy takes the heavy-command lock, honoring ctx while waiting.
 func (m *Manager) acquireHeavy(ctx context.Context) (release func(), err error) {
 	select {

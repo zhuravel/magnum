@@ -15,6 +15,9 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+
+	"github.com/zhuravel/magnum/internal/fsx"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 const runFile = "run.json"
@@ -94,28 +97,10 @@ func SaveRun(dir string, r Run) error {
 		return fmt.Errorf("eval: save run %s: %w", r.ID, err)
 	}
 	defer root.Close()
-	tmp := "." + runFile + ".tmp"
-	if err := writeFile(root, tmp, append(data, '\n')); err != nil {
-		_ = root.Remove(tmp)
-		return fmt.Errorf("eval: save run %s: %w", r.ID, err)
-	}
-	if err := root.Rename(tmp, runFile); err != nil {
-		_ = root.Remove(tmp)
+	if err := fsx.WriteFileAtomicIn(root, runFile, append(data, '\n'), 0o600); err != nil {
 		return fmt.Errorf("eval: save run %s: %w", r.ID, err)
 	}
 	return nil
-}
-
-func writeFile(root *os.Root, name string, data []byte) error {
-	f, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-	if err != nil {
-		return err
-	}
-	_, err = f.Write(data)
-	if err == nil {
-		err = f.Sync()
-	}
-	return errors.Join(err, f.Close())
 }
 
 // LoadRun reads dir/run.json.
@@ -374,12 +359,7 @@ func findingPlace(f Finding) string {
 	}
 }
 
-// firstLine returns the first line of s, cut at n runes with an ellipsis.
+// firstLine is the first line of s that is not blank, at most n runes.
 func firstLine(s string, n int) string {
-	line, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
-	line = strings.TrimSpace(line)
-	if cut := head(line, n); cut != line {
-		return cut + "…"
-	}
-	return line
+	return textx.Clip(textx.FirstLine(s), n)
 }

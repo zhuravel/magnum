@@ -9,12 +9,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 	"unicode"
 
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/notify"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -152,47 +152,10 @@ func WriteTabBarFile(path string, at time.Time, maxAge time.Duration, text strin
 		return r
 	}, execx.Redact(text)))
 	data := fmt.Sprintf("%d %d\n%s\n", at.Unix(), int64(maxAge/time.Second), line)
-	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
-	if err != nil {
+	if err := fsx.WriteFileAtomic(path, []byte(data), 0o644); err != nil {
 		return fmt.Errorf("tab bar: %w", err)
 	}
-	tmp := f.Name()
-	_, werr := f.WriteString(data)
-	if cerr := f.Close(); werr == nil {
-		werr = cerr
-	}
-	if werr == nil {
-		werr = os.Chmod(tmp, 0o644)
-	}
-	if werr == nil {
-		werr = os.Rename(tmp, path)
-	}
-	if werr != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("tab bar: %w", werr)
-	}
 	return nil
-}
-
-// readTabBarFile parses a file WriteTabBarFile wrote: the time it was
-// written, its max age and the status line. ok is false for a file without
-// the timestamp line (an older daemon's single line).
-func readTabBarFile(path string) (at time.Time, maxAge time.Duration, line string, ok bool) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return time.Time{}, 0, "", false
-	}
-	head, rest, _ := strings.Cut(string(b), "\n")
-	f := strings.Fields(head)
-	if len(f) != 2 {
-		return time.Time{}, 0, "", false
-	}
-	sec, err1 := strconv.ParseInt(f[0], 10, 64)
-	age, err2 := strconv.ParseInt(f[1], 10, 64)
-	if err1 != nil || err2 != nil {
-		return time.Time{}, 0, "", false
-	}
-	return time.Unix(sec, 0), time.Duration(age) * time.Second, strings.TrimSpace(rest), true
 }
 
 // tabBar is the short status line herdr shows in its tab bar.

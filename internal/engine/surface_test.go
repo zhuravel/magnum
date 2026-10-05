@@ -2,6 +2,8 @@ package engine
 
 import (
 	"context"
+	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -118,4 +120,25 @@ func TestTabBarFileCarriesItsTimestamp(t *testing.T) {
 	if strings.Contains(line, "\n") {
 		t.Fatalf("multi-line status: %q", line)
 	}
+}
+
+// readTabBarFile parses a file WriteTabBarFile wrote: the time it was
+// written, its max age and the status line. ok is false for a file without
+// the timestamp line (an older daemon's single line).
+func readTabBarFile(path string) (at time.Time, maxAge time.Duration, line string, ok bool) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return time.Time{}, 0, "", false
+	}
+	head, rest, _ := strings.Cut(string(b), "\n")
+	f := strings.Fields(head)
+	if len(f) != 2 {
+		return time.Time{}, 0, "", false
+	}
+	sec, err1 := strconv.ParseInt(f[0], 10, 64)
+	age, err2 := strconv.ParseInt(f[1], 10, 64)
+	if err1 != nil || err2 != nil {
+		return time.Time{}, 0, "", false
+	}
+	return time.Unix(sec, 0), time.Duration(age) * time.Second, strings.TrimSpace(rest), true
 }

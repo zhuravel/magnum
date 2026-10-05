@@ -12,6 +12,8 @@ import (
 
 	"github.com/zhuravel/magnum/internal/launchd"
 	"github.com/zhuravel/magnum/internal/reveal"
+	"github.com/zhuravel/magnum/internal/textx"
+	"github.com/zhuravel/magnum/internal/tui"
 )
 
 // doctorStagingWarn is the ~/.codex/.tmp/marketplaces/.staging size worth a warning.
@@ -23,7 +25,7 @@ var doctorGOOS = runtime.GOOS
 // doctorTerminal names, on macOS, the Automation permission `magnum open`
 // and reveal_on_attention need to focus a herdr client in a terminal magnum
 // scripts with AppleScript (Terminal, iTerm2, Ghostty). It does not probe
-// it (reveal.Revealer.Probe could): an AppleScript call starts the terminal
+// it: an AppleScript call starts the terminal
 // when it is not running, and before the operator decided macOS asks in a
 // dialog that takes focus, while doctor must not open windows or take
 // focus. Besides, the permission belongs to the app that sends the events:
@@ -75,7 +77,7 @@ func doctorLoginShell(ctx context.Context, d doctorDeps) []doctorCheck {
 		return []doctorCheck{doctorWarned(name, "`zsh -lc 'print -r -- $PATH'` failed: "+err.Error(), "")}
 	}
 	fix := "add `eval \"$(mise activate zsh --shims)\"` to ~/.zprofile (agent tool shells are `zsh -lc`: no .zshrc, /usr/bin first)"
-	entries := strings.Split(strings.TrimSpace(inspFirstLine(out)), ":")
+	entries := strings.Split(strings.TrimSpace(textx.FirstLine(out)), ":")
 	shimsAt, usrBinAt := -1, len(entries)
 	for i, e := range entries {
 		switch {
@@ -110,7 +112,7 @@ func doctorDisk(_ context.Context, d doctorDeps) []doctorCheck {
 	if err != nil {
 		return []doctorCheck{doctorWarned("disk", "could not read free disk space: "+err.Error(), "")}
 	}
-	detail := fmt.Sprintf("%s free on the disk holding %s (min %d GB)", inspBytes(int64(free)), inspTilde(path), minGB)
+	detail := fmt.Sprintf("%s free on the disk holding %s (min %d GB)", tui.HumanBytes(int64(free)), inspTilde(path), minGB)
 	if minGB > 0 && free < uint64(minGB)<<30 {
 		return []doctorCheck{doctorFailed("disk", detail+": provisioning is refused",
 			"free space: `magnum cleanup`, `magnum cleanup --shrink`, or lower min_free_disk_gb in config.toml")}
@@ -139,7 +141,7 @@ func doctorStaging(ctx context.Context, d doctorDeps) []doctorCheck {
 	if err != nil {
 		return []doctorCheck{doctorWarned(name, "could not size "+inspTilde(dir)+": "+err.Error(), "")}
 	}
-	detail := fmt.Sprintf("Codex marketplace staging %s is %s", inspTilde(dir), inspBytes(kb*1024))
+	detail := fmt.Sprintf("Codex marketplace staging %s is %s", inspTilde(dir), tui.HumanBytes(kb*1024))
 	if kb*1024 >= doctorStagingWarn {
 		return []doctorCheck{doctorWarned(name, detail+" (every Codex start clones into it)",
 			"while no Codex runs: rm -rf "+inspTilde(dir))}

@@ -1,5 +1,5 @@
-// Package notify is magnum's user-facing status surface: toasts, herdr sidebar
-// tokens and the tab-bar file.
+// Package notify is magnum's user-facing status surface: toasts and herdr
+// sidebar tokens. The tab-bar file is the engine's (engine.WriteTabBarFile).
 //
 //   - Toast shows a deduplicated message through herdr's notification.show and
 //     falls back to `osascript display notification` when herdr cannot show it
@@ -11,8 +11,6 @@
 //     repositories) into one summary per minute.
 //   - Sidebar publishes display-only tokens for a workspace under the source
 //     "magnum" with a 24 h TTL, so stale tokens disappear on their own.
-//   - WriteTabBar atomically rewrites state/tabbar.txt, which herdr's
-//     ui.tab_bar_right command segment reads with `cat`.
 //
 // Everything is best effort and never decides pipeline behavior: callers log
 // the returned errors and carry on. All subprocesses go through execx.Runner;
@@ -29,7 +27,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/herdr"
-	"github.com/zhuravel/magnum/internal/paths"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 const (
@@ -87,11 +85,9 @@ type Notifier struct {
 	Store DedupeStore
 	// Runner runs the osascript fallback. Nil disables the fallback.
 	Runner execx.Runner
-	// Layout locates the tab-bar file.
-	Layout paths.Layout
 	// Enabled is the [herdr] notify switch. When false Toast (and every
-	// Batcher flush) is a silent no-op. Sidebar and WriteTabBar are display
-	// surfaces, not notifications, and ignore it.
+	// Batcher flush) is a silent no-op. Sidebar is a display surface, not a
+	// notification, and ignores it.
 	Enabled bool
 	// Log, when set, receives one redacted line per fallback or suppression.
 	Log execx.Logger
@@ -390,16 +386,5 @@ func cleanText(s string, multiline bool, max int) string {
 			b.WriteRune(r)
 		}
 	}
-	return clip(strings.TrimSpace(b.String()), max)
-}
-
-func clip(s string, max int) string {
-	if max <= 0 {
-		return s
-	}
-	r := []rune(s)
-	if len(r) <= max {
-		return s
-	}
-	return strings.TrimRightFunc(string(r[:max-1]), unicode.IsSpace) + "…"
+	return textx.Clip(strings.TrimSpace(b.String()), max)
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/identity"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 const identitiesUsage = "[list] | check [--name <identity>] [--json]"
@@ -322,7 +323,7 @@ func identitiesList(ctx context.Context, c *Context, st *store.Store, cfg *confi
 			check = "never (run `magnum identities check`)"
 		} else if check == "fail" {
 			if why, _, _ := st.GetKV(ctx, store.KVIdentityError(id.Name)); why != "" {
-				check += ": " + trunc(why, 60)
+				check += ": " + textx.Clip(why, 60)
 			}
 		}
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", id.Name, id.Kind, id.Login, inspOrDash(strings.Join(posts, " ")),

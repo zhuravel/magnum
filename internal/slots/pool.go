@@ -12,6 +12,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/mysqlx"
 	"github.com/zhuravel/magnum/internal/paths"
@@ -537,7 +538,7 @@ func (m *Manager) removeGuard(ctx context.Context, sl store.Slot, force bool) er
 
 func (m *Manager) removeSteps(ctx context.Context, subject string, sl store.Slot, pool config.Pool, force bool) error {
 	if err := m.step(ctx, subject, "teardown", func(ctx context.Context) error {
-		if !exists(sl.Path) {
+		if !fsx.Exists(sl.Path) {
 			return nil
 		}
 		return m.runScripts(ctx, sl, pool.SlotEnv(sl.Name), pool.Teardown, "teardown", "slot-"+sl.Name+".log", TeardownTimeout)

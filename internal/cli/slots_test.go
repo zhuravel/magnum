@@ -143,7 +143,7 @@ func TestSlotsProvisionErrors(t *testing.T) {
 	if len(ops.provisioned) != 0 {
 		t.Fatal("must not provision without the lock")
 	}
-	req, err := e.st.NextPendingRequest(context.Background())
+	req, err := nextPendingRequest(context.Background(), e.st)
 	if err != nil || req.Kind != engine.ReqProvision {
 		t.Fatalf("request %+v err %v", req, err)
 	}

@@ -475,3 +475,17 @@ func wantHold(t *testing.T, err error, reason string) ErrHold {
 	}
 	return hold
 }
+
+// openAssignment is the PR's open assignment, or store.ErrNotFound.
+func (h *harness) openAssignment(prID int64) (store.Assignment, error) {
+	as, err := h.st.AssignmentsByPR(h.ctx, prID)
+	if err != nil {
+		return store.Assignment{}, err
+	}
+	for _, a := range slices.Backward(as) {
+		if a.EndedAt == nil {
+			return a, nil
+		}
+	}
+	return store.Assignment{}, store.ErrNotFound
+}

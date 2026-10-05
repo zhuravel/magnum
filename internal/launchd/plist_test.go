@@ -6,20 +6,12 @@ import (
 	"encoding/xml"
 	"errors"
 	"io"
-	"reflect"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/zhuravel/magnum/internal/execx"
 )
-
-func TestDefaultArgs(t *testing.T) {
-	got := DefaultArgs("/r/magnum", "/opt/homebrew/bin/mise", "/r/magnum/bin/magnum")
-	want := []string{"/opt/homebrew/bin/mise", "-C", "/r/magnum", "exec", "--", "/r/magnum/bin/magnum", "daemon"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("DefaultArgs = %q, want %q", got, want)
-	}
-}
 
 func TestAgentPath(t *testing.T) {
 	got := AgentPath("/Users/me", "zhuravel.magnum")
@@ -77,7 +69,7 @@ const goldenFull = `<?xml version="1.0" encoding="UTF-8"?>
 func fullOptions() Options {
 	return Options{
 		Label:            "zhuravel.magnum",
-		ProgramArguments: DefaultArgs("/Users/me/Projects/magnum", "/opt/homebrew/bin/mise", "/Users/me/Projects/magnum/bin/magnum"),
+		ProgramArguments: []string{"/opt/homebrew/bin/mise", "-C", "/Users/me/Projects/magnum", "exec", "--", "/Users/me/Projects/magnum/bin/magnum", "daemon"},
 		WorkingDir:       "/Users/me/Projects/magnum",
 		Env: map[string]string{
 			"PATH":              "/Users/me/.local/bin:/opt/homebrew/bin:/usr/bin:/bin",
@@ -210,7 +202,7 @@ func TestPlistPassesPlutilLint(t *testing.T) {
 	r := &execx.Real{}
 	dir := t.TempDir()
 	path := dir + "/x.plist"
-	if err := writeFileAtomic(path, Plist(fullOptions())); err != nil {
+	if err := os.WriteFile(path, Plist(fullOptions()), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	res, err := r.Run(context.Background(), execx.Cmd{Name: "plutil", Args: []string{"-lint", path}})

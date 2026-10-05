@@ -11,6 +11,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // doctorInstall is the fix for an agent CLI that is not on PATH.
@@ -122,7 +123,7 @@ func doctorAgentChecks(ctx context.Context, d doctorDeps) []doctorCheck {
 		default:
 			label := kind
 			if version, err := doctorExec(ctx, d, 15*time.Second, "", nil, kind, "--version"); err == nil && version != "" {
-				label = kind + " " + inspFirstLine(version)
+				label = kind + " " + textx.FirstLine(version)
 			}
 			out = append(out, doctorOK(kind, fmt.Sprintf("%s is on PATH (zsh %s; used by %s)", label, what, users)))
 		}
@@ -172,7 +173,7 @@ func doctorLogin(ctx context.Context, d doctorDeps, kind string, k config.Kind, 
 	loggedIn, readable := k.LoggedIn(stdout, stderr, err == nil)
 	switch {
 	case !readable:
-		return doctorWarned(name, fmt.Sprintf("cannot read the output of `%s` with login_ok %q: %s", check, k.LoginOK, inspFirstLine(execx.Redact(stdout+"\n"+stderr))),
+		return doctorWarned(name, fmt.Sprintf("cannot read the output of `%s` with login_ok %q: %s", check, k.LoginOK, textx.FirstLine(execx.Redact(stdout+"\n"+stderr))),
 			"fix [kinds."+kind+"] login_check or login_ok in config.toml (magnum assumes logged in meanwhile)")
 	case !loggedIn:
 		return doctorFailed(name, fmt.Sprintf("%s is logged out (`%s`)", kind, check), "run `"+rolesLoginCommand(kind)+"` (reviews pause until it passes)")
@@ -180,8 +181,7 @@ func doctorLogin(ctx context.Context, d doctorDeps, kind string, k config.Kind, 
 	return doctorOK(name, fmt.Sprintf("%s is logged in (`%s`)", kind, check))
 }
 
-// doctorSkill checks every judge role's skill file (the legacy [codex]
-// skill_path is only a fallback config.Load maps onto codex-judge's skill).
+// doctorSkill checks every judge role's skill file.
 func doctorSkill(_ context.Context, d doctorDeps) []doctorCheck {
 	var paths []string
 	for _, r := range d.Config.RolesFor(nil) {
@@ -196,7 +196,7 @@ func doctorSkill(_ context.Context, d doctorDeps) []doctorCheck {
 	for _, p := range paths {
 		if fi, err := os.Stat(p); err != nil || fi.IsDir() {
 			out = append(out, doctorFailed("skill", "judge skill missing at "+inspTilde(p),
-				"restore skills/magnum-review/SKILL.md (`git checkout -- skills`) or fix the judge role's skill (or [codex] skill_path) in config.toml"))
+				"restore skills/magnum-review/SKILL.md (`git checkout -- skills`) or fix the judge role's skill in config.toml"))
 			continue
 		}
 		out = append(out, doctorOK("skill", "judge skill at "+inspTilde(p)))

@@ -79,7 +79,7 @@ burst_window = "1h"
 ` + minimalConfig + `burst_pushes = 0
 burst_window = "45m"
 `,
-		"config.local.toml": `
+		"user.toml": `
 [[role]]
 name = "codex-judge"
 rereview_effort = "medium"

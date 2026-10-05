@@ -60,8 +60,9 @@ type Observation struct {
 const LostGrace = 15 * time.Second
 
 // Observe takes one herdr snapshot and runs ObserveSnapshotAt with the time
-// it was taken. Call it once per daemon tick: polling is the completion
-// signal.
+// it was taken. The daemon calls ObserveSnapshotAt itself, once per tick,
+// with the snapshot that tick also counts working agents from (polling is
+// the completion signal).
 func (m *Manager) Observe(ctx context.Context) ([]Observation, error) {
 	at := m.now()
 	snap, err := m.d.Herdr.Snapshot(ctx)

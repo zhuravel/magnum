@@ -26,18 +26,8 @@ func (p RefParser) ResolvePR(_ context.Context, ref string) (owner, repo string,
 // Refs is the App's RefParser (cfg.Daemon.DefaultRepo).
 func (a *App) Refs() RefParser { return RefParser{DefaultRepo: a.Config.Daemon.DefaultRepo} }
 
-// ResolvePR parses a PR reference with cfg.Daemon.DefaultRepo.
-func (a *App) ResolvePR(ctx context.Context, ref string) (owner, repo string, number int, err error) {
-	return a.Refs().ResolvePR(ctx, ref)
-}
-
-// LookupPR resolves ref and loads the repository and PR rows. A repository
-// or PR the registry does not know wraps store.ErrNotFound.
-func (a *App) LookupPR(ctx context.Context, ref string) (store.Repo, store.PR, error) {
-	return LookupPR(ctx, a.Store, a.Refs(), ref)
-}
-
-// LookupPR resolves ref with p and loads its rows from st.
+// LookupPR resolves ref with p and loads the repository and PR rows from st.
+// A repository or PR the registry does not know wraps store.ErrNotFound.
 func LookupPR(ctx context.Context, st *store.Store, p RefParser, ref string) (store.Repo, store.PR, error) {
 	owner, name, number, err := p.ResolvePR(ctx, ref)
 	if err != nil {

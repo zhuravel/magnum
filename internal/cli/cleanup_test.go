@@ -202,7 +202,7 @@ func TestCleanupHandsOffToRunningDaemon(t *testing.T) {
 	if fp.applied {
 		t.Fatal("the CLI must not apply while the daemon holds the lock")
 	}
-	req, err := st.NextPendingRequest(context.Background())
+	req, err := nextPendingRequest(context.Background(), st)
 	if err != nil || req.Kind != engine.ReqCleanup {
 		t.Fatalf("request = %+v err %v", req, err)
 	}
@@ -337,7 +337,7 @@ func TestCleanupReviewScreenHandsTheSelectionToTheDaemon(t *testing.T) {
 	if code := cleanupExec(context.Background(), f.Ctx, fp, st, cf, "talkable/talkable"); code != 0 {
 		t.Fatalf("code %d err %s", code, f.Err.String())
 	}
-	req, err := st.NextPendingRequest(context.Background())
+	req, err := nextPendingRequest(context.Background(), st)
 	if err != nil || req.Kind != engine.ReqCleanup {
 		t.Fatalf("request = %+v err %v", req, err)
 	}

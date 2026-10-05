@@ -16,6 +16,7 @@ import (
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // Identity migration (migrate.go): a PR follows its watch's posting identity,
@@ -201,7 +202,7 @@ func wantStrings(t *testing.T, what string, got, want []string) {
 // migDismissCall is the call a DismissReview of the former identity's review
 // id makes on its client, for a review of head posted as login.
 func migDismissCall(id int64, head, login string) string {
-	return fmt.Sprintf("dismiss:talkable/talkable#2:%d:%s", id, fmt.Sprintf(FormerDismissMessage, short(head), login))
+	return fmt.Sprintf("dismiss:talkable/talkable#2:%d:%s", id, fmt.Sprintf(FormerDismissMessage, textx.ShortSHA(head), login))
 }
 
 // ---- 1. the live case ----

@@ -11,6 +11,8 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // RenderPRBoard renders the board once, for output that is not
@@ -332,20 +334,6 @@ func compactNum(n int) string {
 	return strings.TrimSuffix(fmt.Sprintf("%.1f", float64(n)/1e6), ".0") + "M"
 }
 
-func shortSHA(s string) string {
-	if len(s) > 7 {
-		return s[:7]
-	}
-	return s
-}
-
-func plural(n int, one, many string) string {
-	if n == 1 {
-		return "1 " + one
-	}
-	return strconv.Itoa(n) + " " + many
-}
-
 // prbCol is a table column.
 type prbCol int
 
@@ -444,7 +432,9 @@ func (p prbPainter) glyphW() int {
 	return w
 }
 
-func (p prbPainter) isMine(login string, mine bool) bool { return mine || p.self[normLogin(login)] }
+func (p prbPainter) isMine(login string, mine bool) bool {
+	return mine || p.self[textx.FoldLogin(login)]
+}
 
 func (p prbPainter) dash() cell { return cell{{p.g.dash, p.st.Dim}} }
 

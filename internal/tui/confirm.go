@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // pendingAction is an action waiting for y/N in the footer. The review
@@ -177,7 +179,7 @@ func nothingToMute(ref, state string) string {
 // the reviewed one), that review, then the head. The commit count comes
 // first so a narrow footer cuts the details, not the news.
 func boardReviewFacts(r PRBoardRow, now time.Time) string {
-	head := prefixed("head ", shortSHA(r.HeadSHA))
+	head := prefixed("head ", textx.ShortSHA(r.HeadSHA))
 	lr := r.LastReview
 	if lr == nil || (lr.CommitSHA == "" && lr.SubmittedAt.IsZero() && lr.Login == "") {
 		return joinFacts("not reviewed yet", head)
@@ -192,7 +194,7 @@ func boardReviewFacts(r PRBoardRow, now time.Time) string {
 	if head != "" && sameSHA(r.HeadSHA, lr.CommitSHA) {
 		return "no new commits since " + head + " was reviewed" + when
 	}
-	last := "the last review" + prefixed(" of ", shortSHA(lr.CommitSHA)) + when
+	last := "the last review" + prefixed(" of ", textx.ShortSHA(lr.CommitSHA)) + when
 	d := r.SinceReview
 	if d != nil && d.Base != "reviewed" {
 		d = nil // a delta from the base branch says nothing about the review
@@ -201,7 +203,7 @@ func boardReviewFacts(r PRBoardRow, now time.Time) string {
 	case d != nil && d.Commits <= 0:
 		return joinFacts("no new commits since "+last, head)
 	case d != nil:
-		n := plural(d.Commits, "commit", "commits")
+		n := textx.Count(d.Commits, "commit", "commits")
 		if d.Truncated {
 			n = "at least " + n
 		}
@@ -209,7 +211,7 @@ func boardReviewFacts(r PRBoardRow, now time.Time) string {
 	case head != "" && lr.CommitSHA != "":
 		return joinFacts("new commits since "+last, head)
 	}
-	return joinFacts("last review"+prefixed(" of ", shortSHA(lr.CommitSHA))+when, head)
+	return joinFacts("last review"+prefixed(" of ", textx.ShortSHA(lr.CommitSHA))+when, head)
 }
 
 // ReviewFacts is what the y/N question before a review says about a PR on

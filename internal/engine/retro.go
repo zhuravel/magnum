@@ -28,6 +28,7 @@ import (
 	"github.com/zhuravel/magnum/internal/learn"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 const (
@@ -623,7 +624,7 @@ func (e *Engine) retroFetch(ctx context.Context, root *os.Root, repo store.Repo,
 	case errors.Is(err, github.ErrNotFound):
 		return "not on GitHub at the reviewed commit"
 	case err != nil:
-		e.log.Warn("retro: read a commented file", "repo", repo.FullName(), "sha", short(sha), "err", err)
+		e.log.Warn("retro: read a commented file", "repo", repo.FullName(), "sha", textx.ShortSHA(sha), "err", err)
 		return "GitHub could not be read"
 	}
 	if err := learn.WriteFileAtomic(root, rel, data); err != nil {

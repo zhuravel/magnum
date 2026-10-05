@@ -17,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 const missesUsage = "[<ref>] [--all] [--class miss|not_issue|style|outside|unclassified] [--json]"
@@ -209,7 +210,7 @@ func missesRender(w io.Writer, ms []store.Miss, defRepo string, width int) {
 	tw := inspTable(w)
 	fmt.Fprintln(tw, strings.Join(header, "\t")+"\tLESSON")
 	for i, r := range rows {
-		fmt.Fprintln(tw, strings.Join(r, "\t")+"\t"+inspOrDash(trunc(lessons[i], budget)))
+		fmt.Fprintln(tw, strings.Join(r, "\t")+"\t"+inspOrDash(textx.Clip(lessons[i], budget)))
 	}
 	_ = tw.Flush()
 }

@@ -30,8 +30,8 @@ func TestTitle(t *testing.T) {
 		}
 	}
 	// Pane labels are unchanged: Title without a repo.
-	if got := PaneLabel(11920, RoleCodexReview); got != "PR #11920 codex-review" {
-		t.Errorf("PaneLabel = %q", got)
+	if got := TaggedPaneLabel("", 11920, RoleCodexReview); got != "PR #11920 codex-review" {
+		t.Errorf("TaggedPaneLabel = %q", got)
 	}
 }
 

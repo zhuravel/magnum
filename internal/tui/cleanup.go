@@ -10,6 +10,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // CleanupPlan is what the cleanup screen reviews: the actions the planner
@@ -420,7 +422,7 @@ func (m cleanupModel) selectLines() []string {
 	disk, mysql, dbs := m.selection()
 	lines = append(lines, "",
 		fmt.Sprintf("selected %d/%d · disk %s · mysql %s · %d %s",
-			m.selectedCount(), len(acts), HumanBytes(disk), HumanBytes(mysql), dbs, cleanupPlural(dbs, "database", "databases")),
+			m.selectedCount(), len(acts), HumanBytes(disk), HumanBytes(mysql), dbs, textx.Plural(dbs, "database", "databases")),
 		m.st.Dim.Render(fmt.Sprintf("whole plan: disk %s · mysql %s", HumanBytes(m.plan.Totals.Disk), HumanBytes(m.plan.Totals.MySQL))),
 		cleanupStyled(m.st.Warn, m.note),
 		m.st.hints(m.width,
@@ -490,16 +492,9 @@ func cleanupMySQLCell(a CleanupAction) string {
 		parts = append(parts, HumanBytes(a.DBBytes))
 	}
 	if n := len(a.DBNames); n > 0 {
-		parts = append(parts, fmt.Sprintf("(%d %s)", n, cleanupPlural(n, "db", "dbs")))
+		parts = append(parts, fmt.Sprintf("(%d %s)", n, textx.Plural(n, "db", "dbs")))
 	}
 	return orDash(strings.Join(parts, " "))
-}
-
-func cleanupPlural(n int, one, many string) string {
-	if n == 1 {
-		return one
-	}
-	return many
 }
 
 // cleanupDescribe is the confirm-step line for one action.
@@ -509,7 +504,7 @@ func cleanupDescribe(a CleanupAction) string {
 		parts = append(parts, "frees "+HumanBytes(a.Bytes))
 	}
 	if n := len(a.DBNames); n > 0 {
-		s := fmt.Sprintf("drops %d %s", n, cleanupPlural(n, "database", "databases"))
+		s := fmt.Sprintf("drops %d %s", n, textx.Plural(n, "database", "databases"))
 		if a.DBBytes > 0 {
 			s += " (" + HumanBytes(a.DBBytes) + ")"
 		}
@@ -532,7 +527,7 @@ func (m cleanupModel) confirmLines() []string {
 	disk, mysql, dbs := m.selection()
 	lines := []string{
 		m.st.Title.Render(fmt.Sprintf("Apply %d action(s)?", n)) +
-			m.st.Dim.Render(fmt.Sprintf("  disk %s · mysql %s · %d %s", HumanBytes(disk), HumanBytes(mysql), dbs, cleanupPlural(dbs, "database", "databases"))),
+			m.st.Dim.Render(fmt.Sprintf("  disk %s · mysql %s · %d %s", HumanBytes(disk), HumanBytes(mysql), dbs, textx.Plural(dbs, "database", "databases"))),
 		"",
 	}
 

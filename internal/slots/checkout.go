@@ -11,6 +11,7 @@ import (
 	"github.com/zhuravel/magnum/internal/mysqlx"
 	"github.com/zhuravel/magnum/internal/steps"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // Claim hands a free pool slot to pr: store.FreeSlots (the slot that last
@@ -105,7 +106,7 @@ func (m *Manager) Checkout(ctx context.Context, slot store.Slot, pr store.PR, po
 		return fmt.Errorf("slots: checkout PR #%d: invalid target sha %q", pr.Number, targetSHA)
 	}
 	if m.d.DryRun {
-		m.dryRun("check out PR #%d at %s in %s", pr.Number, short(targetSHA), slot.Name)
+		m.dryRun("check out PR #%d at %s in %s", pr.Number, textx.ShortSHA(targetSHA), slot.Name)
 		return nil
 	}
 	sl, err := m.reload(ctx, slot)
@@ -118,7 +119,7 @@ func (m *Manager) Checkout(ctx context.Context, slot store.Slot, pr store.PR, po
 	if !slices.Contains([]string{store.SlotClaimed, store.SlotHeld}, sl.State) {
 		return fmt.Errorf("slots: checkout PR #%d: slot %s is %s: %w", pr.Number, sl.Name, sl.State, store.ErrConflict)
 	}
-	subject := fmt.Sprintf("slot:%s:pr:%d:%s", sl.Name, pr.Number, targetSHA[:7])
+	subject := fmt.Sprintf("slot:%s:pr:%d:%s", sl.Name, pr.Number, textx.ShortSHA(targetSHA))
 	if err := steps.ResetSubject(ctx, m.d.Store, subject); err != nil {
 		return err
 	}
@@ -144,7 +145,7 @@ func (m *Manager) checkoutSteps(ctx context.Context, subject string, sl store.Sl
 		}
 		if sha != target {
 			m.event(ctx, subject, "warn", "slot.head_moved",
-				fmt.Sprintf("PR #%d head moved: wanted %s, fetched %s; checking out %s", pr.Number, short(target), short(sha), short(sha)))
+				fmt.Sprintf("PR #%d head moved: wanted %s, fetched %s; checking out %s", pr.Number, textx.ShortSHA(target), textx.ShortSHA(sha), textx.ShortSHA(sha)))
 		}
 		return nil
 	}); err != nil {
@@ -184,7 +185,7 @@ func (m *Manager) checkoutSteps(ctx context.Context, subject string, sl store.Sl
 			return err
 		}
 		if head != sha {
-			return fmt.Errorf("%w: %s HEAD is %s, want %s", ErrVerify, sl.Name, short(head), short(sha))
+			return fmt.Errorf("%w: %s HEAD is %s, want %s", ErrVerify, sl.Name, textx.ShortSHA(head), textx.ShortSHA(sha))
 		}
 		if err := m.d.Store.UpdateSlotFields(ctx, sl.ID, func(u *store.SlotUpdate) {
 			u.Set("checked_out_sha", sha)

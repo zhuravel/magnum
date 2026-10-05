@@ -18,7 +18,9 @@ import (
 	"github.com/zhuravel/magnum/internal/app"
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/launchd"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 const daemonUsage = "daemon [--once] [--dry-run [--json]] [--log-level LEVEL]"
@@ -108,7 +110,7 @@ func runDaemonCmd(c *Context, f daemonFlags, pos []string) int {
 // throttle, so the error repeats there until the configuration is fixed.
 func refuseDaemonStart(c *Context, err error) {
 	file := c.Layout.Config()
-	if file == "" || !fileExists(file) {
+	if file == "" || !fsx.Exists(file) {
 		file = c.Layout.UserConfig
 	}
 	fix := fmt.Sprintf("correct the config file (%s) or the prompt files, check with `magnum config`, then `magnum daemon-restart`", inspTilde(file))
@@ -154,7 +156,7 @@ func runDaemonEngine(ctx context.Context, c *Context, o daemonOptions) (daemonDr
 	}
 	// An installed binary's herdr plugin copy follows the binary: an upgrade
 	// brings new actions to a plugin `magnum install --plugin` wrote.
-	if dir := pluginDir(c.Layout); !o.DryRun && dir != c.Layout.Home && fileExists(filepath.Join(dir, "herdr-plugin.toml")) {
+	if dir := pluginDir(c.Layout); !o.DryRun && dir != c.Layout.Home && fsx.Exists(filepath.Join(dir, "herdr-plugin.toml")) {
 		if _, err := writePluginFiles(dir); err != nil {
 			fmt.Fprintf(c.Stderr, "magnum daemon: refresh the herdr plugin in %s: %v\n", dir, err)
 		}
@@ -211,8 +213,8 @@ func writeDaemonDryRunJSON(c *Context, rep daemonDryRunReport) int {
 // renderDaemonDryRun prints the planned side effects as tables.
 func renderDaemonDryRun(w io.Writer, rep daemonDryRunReport) {
 	fmt.Fprintf(w, "dry run: %s, %s (nothing was changed)\n",
-		daemonPlural(len(rep.Ops), "planned action", "planned actions"),
-		daemonPlural(len(rep.Commands), "command", "commands"))
+		textx.Count(len(rep.Ops), "planned action", "planned actions"),
+		textx.Count(len(rep.Commands), "command", "commands"))
 	if len(rep.Ops) > 0 {
 		fmt.Fprintln(w)
 		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
@@ -230,11 +232,4 @@ func renderDaemonDryRun(w io.Writer, rep daemonDryRunReport) {
 			fmt.Fprintln(w, "  "+cmd)
 		}
 	}
-}
-
-func daemonPlural(n int, one, many string) string {
-	if n == 1 {
-		return fmt.Sprintf("1 %s", one)
-	}
-	return fmt.Sprintf("%d %s", n, many)
 }

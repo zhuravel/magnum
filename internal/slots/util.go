@@ -15,6 +15,7 @@ import (
 	"syscall"
 
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/paths"
 )
 
@@ -31,7 +32,7 @@ func sortedKeys(m map[string]string) []string {
 // filesystem holding path (or its nearest existing ancestor).
 func freeDiskBytes(path string) (uint64, error) {
 	p := filepath.Clean(path)
-	for !exists(p) {
+	for !fsx.Exists(p) {
 		parent := filepath.Dir(p)
 		if parent == p {
 			break

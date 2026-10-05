@@ -23,6 +23,7 @@ import (
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 	"github.com/zhuravel/magnum/internal/tui"
 )
 
@@ -354,7 +355,7 @@ func prsSelfLogins(cfg *config.Config) []string {
 	var out []string
 	seen := map[string]bool{}
 	add := func(login string) {
-		if k := prsLoginKey(login); k != "" && !seen[k] {
+		if k := textx.FoldLogin(login); k != "" && !seen[k] {
 			seen[k] = true
 			out = append(out, login)
 		}
@@ -376,13 +377,6 @@ func prsSelfLogins(cfg *config.Config) []string {
 // dropped, "[bot]" kept (the App "zhuravel[bot]" is not the user "zhuravel").
 func prsAccountKey(s string) string {
 	return strings.TrimPrefix(strings.ToLower(strings.TrimSpace(s)), "@")
-}
-
-// prsLoginKey folds a login for "mine": case, a leading "@" and a "[bot]"
-// suffix do not matter, so the user and magnum's App both count.
-func prsLoginKey(s string) string {
-	s = strings.ToLower(strings.TrimSpace(s))
-	return strings.TrimSuffix(strings.TrimPrefix(s, "@"), "[bot]")
 }
 
 // prsBoardState maps the automation state onto the board's states: the
@@ -430,7 +424,7 @@ func prsVerdict(state string) string {
 func prsBoardRow(b store.BoardRow, self []string) tui.PRBoardRow {
 	mine := map[string]bool{}
 	for _, l := range self {
-		if k := prsLoginKey(l); k != "" {
+		if k := textx.FoldLogin(l); k != "" {
 			mine[k] = true
 		}
 	}
@@ -451,7 +445,7 @@ func prsBoardRow(b store.BoardRow, self []string) tui.PRBoardRow {
 		r.LastReview = &tui.ReviewInfo{
 			Login: b.LastReviewLogin, Event: b.LastReviewEvent, SubmittedAt: b.LastReviewAt, CommitSHA: b.ReviewedSHA,
 			Stale: b.HeadSHA != "" && b.ReviewedSHA != b.HeadSHA,
-			Mine:  b.LastReviewLogin != "" && mine[prsLoginKey(b.LastReviewLogin)],
+			Mine:  b.LastReviewLogin != "" && mine[textx.FoldLogin(b.LastReviewLogin)],
 		}
 	}
 
@@ -467,7 +461,7 @@ func prsBoardRow(b store.BoardRow, self []string) tui.PRBoardRow {
 		v := tui.ReviewerInfo{
 			Login: login, Verdict: prsVerdict(lr.State), CommitSHA: lr.CommitSHA,
 			Stale: b.HeadSHA != "" && lr.CommitSHA != b.HeadSHA,
-			Mine:  mine[prsLoginKey(login)],
+			Mine:  mine[textx.FoldLogin(login)],
 		}
 		if lr.SubmittedAt != nil {
 			v.SubmittedAt = *lr.SubmittedAt
@@ -492,7 +486,7 @@ func prsBoardRow(b store.BoardRow, self []string) tui.PRBoardRow {
 		}
 		index[prsAccountKey(login)] = len(r.Reviewers)
 		r.Reviewers = append(r.Reviewers, tui.ReviewerInfo{
-			Login: login, Verdict: "pending", Requested: true, Mine: mine[prsLoginKey(login)],
+			Login: login, Verdict: "pending", Requested: true, Mine: mine[textx.FoldLogin(login)],
 		})
 	}
 
@@ -530,7 +524,7 @@ func prsRequests(list []store.ReviewRequest, mine map[string]bool) (toMe, last *
 		if q.To == "" || q.At.IsZero() {
 			continue
 		}
-		info := tui.RequestInfo{To: q.To, By: q.By, At: q.At, Mine: mine[prsLoginKey(q.To)]}
+		info := tui.RequestInfo{To: q.To, By: q.By, At: q.At, Mine: mine[textx.FoldLogin(q.To)]}
 		if i, ok := index[prsAccountKey(q.To)]; ok {
 			if !info.At.Before(per[i].At) {
 				per[i] = info
@@ -572,7 +566,7 @@ func prsRender(w io.Writer, rows []tui.PRBoardRow, defaultRepo string, now time.
 	for _, r := range rows {
 		cells := []string{
 			prsRefLabel(r, defaultRepo),
-			trunc(actClean(r.Title), 48),
+			textx.Clip(actClean(r.Title), 48),
 			inspOrDash(actClean(r.Author)),
 			inspOrDash(actClean(strings.Join(r.Assignees, ","))),
 			actAgo(now, r.UpdatedAt),

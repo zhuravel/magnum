@@ -6,6 +6,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // nextRound is an initial round numbered after the PR's latest, as the
@@ -131,6 +132,6 @@ func TestRestartDropsTheUnverifiedMarker(t *testing.T) {
 		t.Fatalf("result = %+v, err = %v", res, err)
 	}
 	if res.JudgeRunID == marker {
-		t.Fatalf("the review of %s carries the marker of the unverified run on %s", short(head2), short(target))
+		t.Fatalf("the review of %s carries the marker of the unverified run on %s", textx.ShortSHA(head2), textx.ShortSHA(target))
 	}
 }

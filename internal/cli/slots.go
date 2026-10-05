@@ -17,6 +17,7 @@ import (
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 const slotsUsage = "[list [--all] [--json]] | provision [--count N] [--repo owner/name] | remove <slot> [--force] [--yes] [--dry-run] | " +
@@ -258,7 +259,7 @@ func (e *slotsEnv) list(ctx context.Context, all, asJSON bool) int {
 			notes = append(notes, "dirty schema")
 		}
 		if le := store.Deref(sl.LastError); le != "" && sl.State != store.SlotFree {
-			notes = append(notes, "error: "+trunc(le, 60))
+			notes = append(notes, "error: "+textx.Clip(le, 60))
 		}
 		r.Note = strings.Join(notes, "; ")
 		rows = append(rows, r)

@@ -40,7 +40,7 @@ func loadFiles(t *testing.T, home string, files map[string]string) (*Config, err
 			t.Fatal(err)
 		}
 	}
-	return Load(paths.Layout{Home: home}, filepath.Join(home, "config.toml"))
+	return Load(paths.Layout{Home: home, UserConfig: filepath.Join(home, "user.toml")}, filepath.Join(home, "config.toml"))
 }
 
 func mustLoad(t *testing.T, files map[string]string) *Config {
@@ -62,7 +62,7 @@ func roleNames(roles []Role) []string {
 
 // The four [[role]] blocks written out in config.defaults.toml are exactly
 // the built-in defaults: loading that file and a config without any
-// pipeline keys (same home) yields the same kinds, roles and legacy mirrors.
+// pipeline keys (same home) yields the same kinds and roles.
 func TestDefaultsEqualExplicitConfig(t *testing.T) {
 	root := repoRoot(t)
 	// NoOverlay: the developer's user config must not leak in.
@@ -83,9 +83,6 @@ func TestDefaultsEqualExplicitConfig(t *testing.T) {
 	}
 	if !reflect.DeepEqual(explicit.Kinds, implicit.Kinds) {
 		t.Errorf("kinds differ:\nexplicit %+v\nimplicit %+v", explicit.Kinds, implicit.Kinds)
-	}
-	if !reflect.DeepEqual(explicit.Codex, implicit.Codex) || !reflect.DeepEqual(explicit.Claude, implicit.Claude) {
-		t.Errorf("legacy mirrors differ: %+v %+v vs %+v %+v", explicit.Codex, explicit.Claude, implicit.Codex, implicit.Claude)
 	}
 	if explicit.Daemon.JudgeTimeout != implicit.Daemon.JudgeTimeout || explicit.Daemon.ReviewerTimeout != implicit.Daemon.ReviewerTimeout {
 		t.Errorf("timeouts differ: %v/%v vs %v/%v", explicit.Daemon.JudgeTimeout, explicit.Daemon.ReviewerTimeout,
@@ -253,12 +250,8 @@ func TestValidatePipeline(t *testing.T) {
 func TestKindMerging(t *testing.T) {
 	cfg := mustLoad(t, map[string]string{
 		"config.toml": minimalConfig + `
-[codex]
-wrapper_mode = "true"            # legacy: [kinds.codex] wrapper below wins
-args = ["--legacy"]
-[claude]
-wrapper_mode = "false"
-args = ["--dangerously-skip-permissions"]
+[kinds.claude]
+wrapper = "false"
 [kinds.codex]
 wrapper = "false"
 start = ["--search"]
@@ -271,7 +264,7 @@ resume = ["--session", "{session}"]
 login_check = "pi auth"
 login_ok = "regex:^ok"
 `,
-		"config.local.toml": `
+		"user.toml": `
 [kinds.codex]
 rename = ""
 [kinds.droid]
@@ -280,7 +273,7 @@ session_source = "none"
 	})
 	codex, ok := cfg.KindSpec("codex")
 	def := DefaultKinds()["codex"]
-	if !ok || codex.Wrapper != "false" || !slices.Equal(codex.Start, []string{"--search"}) || !slices.Equal(codex.Args, []string{"--legacy"}) ||
+	if !ok || codex.Wrapper != "false" || !slices.Equal(codex.Start, []string{"--search"}) || !slices.Equal(codex.Args, def.Args) ||
 		!slices.Equal(codex.Resume, def.Resume) || !slices.Equal(codex.Effort, def.Effort) || codex.Rename != "" ||
 		codex.LoginCheck != "codex login status" || codex.Env["CODEX_HOME"] != "/x" {
 		t.Fatalf("codex = %+v", codex)
@@ -305,11 +298,6 @@ session_source = "none"
 	}
 	if got := cfg.KindNames(); !slices.Equal(got, []string{"claude", "codex", "droid", "omp", "pi"}) {
 		t.Fatalf("KindNames = %v", got)
-	}
-	// The legacy [codex]/[claude] keys are fallbacks only: the effective
-	// values are the kinds' (asserted above), not mirrored back.
-	if cfg.Codex.WrapperMode != "true" || !slices.Equal(cfg.Codex.Args, []string{"--legacy"}) || cfg.Claude.WrapperMode != "false" {
-		t.Fatalf("legacy fields = %+v %+v, want the values the file set", cfg.Codex, cfg.Claude)
 	}
 	h, err := codex.HealthPatterns.Compile()
 	if err != nil || len(h.UsageLimit) != 1 || !h.UsageLimit[0].MatchString("CUSTOM LIMIT hit") {
@@ -336,7 +324,7 @@ on_permission_prompt = "wait"
 [kinds.pi]
 resume = ["--session", "{session}"]
 `,
-		"config.local.toml": `
+		"user.toml": `
 [kinds.codex]
 on_permission_prompt = " WAIT "
 [kinds.claude]
@@ -589,8 +577,8 @@ func TestShouldRun(t *testing.T) {
 // no longer exists.
 func TestStopPromptKeyIsAcceptedAndIgnored(t *testing.T) {
 	cfg := mustLoad(t, map[string]string{
-		"config.toml":       minimalConfig,
-		"config.local.toml": "[[role]]\nname = \"codex-judge\"\nstop = \"judge-stop.md\"\n",
+		"config.toml": minimalConfig,
+		"user.toml":   "[[role]]\nname = \"codex-judge\"\nstop = \"judge-stop.md\"\n",
 	})
 	if slices.Contains(PromptKinds, "stop") {
 		t.Fatalf("PromptKinds = %v", PromptKinds)
@@ -652,8 +640,8 @@ func TestPromptResolution(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg, err = loadFiles(t, t.TempDir(), map[string]string{
-		"config.toml":       minimalConfig,
-		"config.local.toml": "[pipeline]\nprompts_dir = \"" + other + "\"\n",
+		"config.toml": minimalConfig,
+		"user.toml":   "[pipeline]\nprompts_dir = \"" + other + "\"\n",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -676,17 +664,13 @@ func TestPromptResolution(t *testing.T) {
 	}
 }
 
-func TestLegacySectionsMapOntoRoles(t *testing.T) {
+// [daemon] reviewer_timeout and judge_timeout are the roles' default
+// timeouts; a [[role]] key wins over them.
+func TestDaemonTimeoutsMapOntoRoles(t *testing.T) {
 	cfg := mustLoad(t, map[string]string{"config.toml": minimalConfig + `
 [daemon]
 reviewer_timeout = "50m"
 judge_timeout = "2h"
-[codex]
-review_args = ["--model", "o3"]
-skill_path = "/skills/judge.md"
-[claude]
-effort = "medium"
-simplify = "never"
 `})
 	get := func(name string) Role {
 		r, ok := cfg.RoleByNameOrAlias(nil, name)
@@ -695,29 +679,14 @@ simplify = "never"
 		}
 		return r
 	}
-	if r := get("codex-review"); !slices.Equal(r.Args, []string{"--model", "o3"}) || r.Timeout.Duration != 50*time.Minute {
+	if r := get("codex-review"); r.Timeout.Duration != 50*time.Minute {
 		t.Fatalf("codex-review = %+v", r)
 	}
-	if r := get("judge"); r.Skill != "/skills/judge.md" || r.Timeout.Duration != 2*time.Hour {
+	if r := get("judge"); r.Timeout.Duration != 2*time.Hour {
 		t.Fatalf("judge = %+v", r)
 	}
-	if r := get("claude"); r.Effort != "medium" {
-		t.Fatalf("claude-review = %+v", r)
-	}
-	if r := get("simplify"); r.Runs != RunsManual {
-		t.Fatalf("claude-simplify = %+v", r)
-	}
-	// The legacy fields keep what the file set; the effective values live in
-	// Kinds and Roles.
-	if cfg.Codex.SkillPath != "/skills/judge.md" || cfg.Claude.Simplify != "never" || cfg.Claude.Effort != "medium" ||
-		cfg.Daemon.ReviewerTimeout.Duration != 50*time.Minute || cfg.Daemon.JudgeTimeout.Duration != 2*time.Hour {
-		t.Fatalf("legacy fields: %+v %+v %+v", cfg.Codex, cfg.Claude, cfg.Daemon)
-	}
 
-	// A [[role]] key wins over the legacy fallback.
 	cfg = mustLoad(t, map[string]string{"config.toml": minimalConfig + `
-[claude]
-effort = "medium"
 [[role]]
 name = "codex-judge"
 kind = "codex"
@@ -734,29 +703,8 @@ timeout = "10m"
 	if got := roleNames(cfg.Roles); !slices.Equal(got, []string{"codex-judge", "claude-review"}) {
 		t.Fatalf("declared roles replace the built-in list: %v", got)
 	}
-	// The role's effective values are the roles' own; the legacy fields stay raw.
-	if cfg.Claude.Effort != "medium" || cfg.Daemon.ReviewerTimeout.Duration != 40*time.Minute {
-		t.Fatalf("legacy fields: %+v %+v", cfg.Claude, cfg.Daemon)
-	}
-}
-
-// The judge's skill is the role's; Load does not write it back into the
-// legacy [codex] skill_path field.
-func TestJudgeSkillComesFromTheRoleNotTheLegacyField(t *testing.T) {
-	cfg := mustLoad(t, map[string]string{"config.toml": minimalConfig + `
-[codex]
-skill_path = "/skills/legacy.md"
-[[role]]
-name = "codex-judge"
-kind = "codex"
-judge = true
-skill = "/skills/own.md"
-`})
-	if got := cfg.JudgeFor(nil).Skill; got != "/skills/own.md" {
-		t.Fatalf("judge skill = %q", got)
-	}
-	if cfg.Codex.SkillPath != "/skills/legacy.md" {
-		t.Fatalf("Codex.SkillPath = %q, want the legacy key as written", cfg.Codex.SkillPath)
+	if cfg.Daemon.ReviewerTimeout.Duration != 40*time.Minute {
+		t.Fatalf("daemon.reviewer_timeout = %v, want the default", cfg.Daemon.ReviewerTimeout)
 	}
 }
 
@@ -764,7 +712,7 @@ func TestOverlayRoles(t *testing.T) {
 	cfg := mustLoad(t, map[string]string{
 		"prompts/droid-review.md": "review",
 		"config.toml":             minimalConfig,
-		"config.local.toml": `
+		"user.toml": `
 [[role]]
 name = "claude-review"
 model = "sonnet"

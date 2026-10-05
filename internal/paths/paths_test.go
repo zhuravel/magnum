@@ -254,10 +254,9 @@ func TestEnsureDirsTightensExistingDirs(t *testing.T) {
 	}
 }
 
-// An installed magnum keeps its data where XDG says; MAGNUM_HOME keeps the
-// checkout layout; an install whose registry still sits in a checkout's
-// state/ (the binary's checkout, else ~/Projects/magnum) keeps using it until
-// `magnum migrate-home` moves it, rather than starting over empty.
+// An installed magnum keeps its data where XDG says, and so does a binary
+// in a checkout, whatever registry a checkout's state/ still holds; only
+// MAGNUM_HOME selects the checkout layout.
 func TestResolveLayouts(t *testing.T) {
 	user := realTemp(t)
 	env := func(kv map[string]string) func(string) string { return func(k string) string { return kv[k] } }
@@ -291,22 +290,22 @@ func TestResolveLayouts(t *testing.T) {
 		t.Fatalf("XDG variables: %+v", l)
 	}
 
-	// The registry still in ~/Projects/magnum/state: that layout, until it moves.
-	legacy := filepath.Join(user, "Projects", "magnum")
-	write(t, filepath.Join(legacy, "state", "magnum.db"), "")
-	if l, _ = resolve(env(nil), brewExe, user); l.Home != legacy || !l.CheckoutLayout() || l.DB() != legacy+"/state/magnum.db" {
-		t.Fatalf("legacy registry: %+v", l)
-	}
-	write(t, filepath.Join(user, ".local/share/magnum/magnum.db"), "")
-	if l, _ = resolve(env(nil), brewExe, user); l.CheckoutLayout() {
-		t.Fatalf("both registries: the XDG one wins, got %+v", l)
+	// A registry left in ~/Projects/magnum/state (the layout before the XDG
+	// one) is not picked up: the XDG layout, empty, is the install's.
+	xdgDB := filepath.Join(user, ".local/share/magnum/magnum.db")
+	write(t, filepath.Join(user, "Projects", "magnum", "state", "magnum.db"), "")
+	if l, _ = resolve(env(nil), brewExe, user); l.Home != "" || l.CheckoutLayout() || l.DB() != xdgDB {
+		t.Fatalf("a registry in ~/Projects/magnum: %+v", l)
 	}
 
-	// A binary in a checkout: Home for its sources, data in XDG.
+	// A binary in a checkout: Home for its sources, data in XDG, even when
+	// the checkout's state/ holds a registry.
 	co := filepath.Join(realTemp(t), "magnum")
 	write(t, filepath.Join(co, "go.mod"), "module "+modulePath+"\n")
 	write(t, filepath.Join(co, "bin", "magnum"), "")
-	if l, _ = resolve(env(nil), filepath.Join(co, "bin", "magnum"), user); l.Home != co || l.CheckoutLayout() || l.Binary() != filepath.Join(co, "bin", "magnum") || l.Skill() == "" {
+	write(t, filepath.Join(co, "state", "magnum.db"), "")
+	if l, _ = resolve(env(nil), filepath.Join(co, "bin", "magnum"), user); l.Home != co || l.CheckoutLayout() || l.DB() != xdgDB ||
+		l.Binary() != filepath.Join(co, "bin", "magnum") || l.Skill() == "" {
 		t.Fatalf("checkout binary: %+v", l)
 	}
 

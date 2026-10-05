@@ -522,7 +522,7 @@ func TestLastLine(t *testing.T) {
 		{"stdout when stderr empty", execx.Result{Stdout: []byte("out\n")}, true, "out"},
 		{"control characters dropped", execx.Result{Stdout: []byte("\x1b[31mred\x1b[0m\r\n")}, false, "[31mred[0m"},
 		{"truncation marker skipped", execx.Result{Stdout: []byte("kept\n" + execx.TruncationMarker)}, false, "kept"},
-		{"shortened", execx.Result{Stdout: []byte(long)}, false, strings.Repeat("x", readinessLineMax) + "…"},
+		{"shortened", execx.Result{Stdout: []byte(long)}, false, strings.Repeat("x", readinessLineMax-1) + "…"},
 		{"token redacted", execx.Result{Stdout: []byte("token ghp_" + strings.Repeat("a", 36) + "\n")}, false, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

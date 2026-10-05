@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 const (
@@ -76,11 +77,7 @@ func (b Build) Label() string {
 		v = "unknown"
 	}
 	if b.Revision != "" && (v == "dev" || v == "unknown") {
-		r := b.Revision
-		if len(r) > 7 {
-			r = r[:7]
-		}
-		v += " (" + r + ")"
+		v += " (" + textx.ShortSHA(b.Revision) + ")"
 	}
 	return v
 }

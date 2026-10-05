@@ -71,8 +71,8 @@ func TestLoadRefusesBadDaemonTimings(t *testing.T) {
 	} {
 		t.Run(tc.want, func(t *testing.T) {
 			_, err := loadFiles(t, t.TempDir(), map[string]string{
-				"config.toml":       minimalConfig,
-				"config.local.toml": "[daemon]\n" + tc.line + "\n",
+				"config.toml": minimalConfig,
+				"user.toml":   "[daemon]\n" + tc.line + "\n",
 			})
 			wantError(t, err, tc.want)
 		})

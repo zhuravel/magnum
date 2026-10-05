@@ -11,6 +11,7 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // requestOpen handles a `magnum open` request: nothing to do for a PR whose
@@ -148,7 +149,7 @@ func (e *Engine) openPR(ctx context.Context, repo store.Repo, w config.Watch, pr
 			pl = *pool
 		}
 		if err := e.d.Slots.Checkout(ctx, slot, pr, pl, target); err != nil {
-			return "", fmt.Errorf("check out %s in %s: %w", short(target), slot.Name, err)
+			return "", fmt.Errorf("check out %s in %s: %w", textx.ShortSHA(target), slot.Name, err)
 		}
 	}
 	if slot, err = e.st.SlotByID(ctx, slot.ID); err != nil {
@@ -212,10 +213,10 @@ func (e *Engine) openPR(ctx context.Context, repo store.Repo, w config.Watch, pr
 		pane = deref(s.HerdrPaneID)
 	}
 	at := deref(slot.CheckedOutSHA)
-	e.event(ctx, "info", subject, "pr.opened", fmt.Sprintf("magnum open: restored in %s at %s, pinned", slot.Name, short(at)),
+	e.event(ctx, "info", subject, "pr.opened", fmt.Sprintf("magnum open: restored in %s at %s, pinned", slot.Name, textx.ShortSHA(at)),
 		map[string]any{"slot": slot.Name, "pane": pane, "role": role.Name})
 	return fmt.Sprintf("restored %s in %s at %s (pinned; `magnum unpin %s` lets reviews use it again); %s pane %s",
-		label, slot.Name, short(at), label, role.Name, pane), nil
+		label, slot.Name, textx.ShortSHA(at), label, role.Name, pane), nil
 }
 
 // releaseReserved hands back the slot a failed `magnum open` reserved: the

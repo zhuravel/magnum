@@ -10,6 +10,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 func doctorClones(ctx context.Context, d doctorDeps) []doctorCheck {
@@ -49,7 +50,7 @@ func doctorClones(ctx context.Context, d doctorDeps) []doctorCheck {
 		case strings.TrimSpace(got) == "":
 			out = append(out, doctorWarned(check, "origin has no branch "+base, "fix [[pool]] base in config.toml"))
 		default:
-			out = append(out, doctorOK(check, fmt.Sprintf("origin reachable (%s): %s at %s", how, base, sha7(strings.Fields(got)[0]))))
+			out = append(out, doctorOK(check, fmt.Sprintf("origin reachable (%s): %s at %s", how, base, textx.ShortSHA(strings.Fields(got)[0]))))
 		}
 	}
 	seen := map[string]bool{}
@@ -116,7 +117,7 @@ func doctorMise(ctx context.Context, d doctorDeps) []doctorCheck {
 			return []doctorCheck{doctorFailed(name, "`mise -C "+inspTilde(sl.Path)+" exec -- ruby -v` failed: "+err.Error(),
 				"run `mise trust` and `mise install` in "+inspTilde(sl.Path)+", then `magnum slots repair "+sl.Name+"` if it persists")}
 		}
-		return []doctorCheck{doctorOK(name, fmt.Sprintf("mise exec works in %s (%s)", sl.Name, inspFirstLine(v)))}
+		return []doctorCheck{doctorOK(name, fmt.Sprintf("mise exec works in %s (%s)", sl.Name, textx.FirstLine(v)))}
 	}
 	return []doctorCheck{doctorWarned(name, "no provisioned slot to test `mise exec` in", "magnum slots provision")}
 }

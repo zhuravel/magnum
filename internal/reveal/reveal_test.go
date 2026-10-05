@@ -136,45 +136,43 @@ func TestOutcomeString(t *testing.T) {
 	}
 }
 
-func TestProbe(t *testing.T) {
-	t.Run("iTerm", func(t *testing.T) {
-		r, f := newTest(terminalCfg("iTerm2", "work"),
-			osaRule(func(string) (string, error) { return "/dev/ttys050, /dev/ttys051", nil }))
-		ttys, err := r.Probe(ctx())
-		if err != nil || !reflect.DeepEqual(ttys, []string{"/dev/ttys050", "/dev/ttys051"}) {
-			t.Fatalf("got %v %v", ttys, err)
-		}
-		mustContain(t, scriptOf(t, f, 0), "tty of every session of every tab of every window")
-		if f.Calls[0].Mutates {
-			t.Error("listing ttys is read-only")
-		}
-	})
-	t.Run("Terminal", func(t *testing.T) {
-		r, f := newTest(terminalCfg("Terminal", "work"),
-			osaRule(func(string) (string, error) { return "/dev/ttys001", nil }))
-		if ttys, err := r.Probe(ctx()); err != nil || len(ttys) != 1 {
-			t.Fatalf("got %v %v", ttys, err)
-		}
-		mustContain(t, scriptOf(t, f, 0), "tty of every tab of every window")
-	})
-	t.Run("WezTerm", func(t *testing.T) {
-		r, _ := newTest(terminalCfg("WezTerm", "work"),
-			execx.Rule{Prefix: []string{testWezTerm, "cli", "list"}, Result: stdout(`[{"window_id":1,"pane_id":3,"tty_name":"/dev/ttys009"}]`)})
-		if ttys, err := r.Probe(ctx()); err != nil || !reflect.DeepEqual(ttys, []string{"/dev/ttys009"}) {
-			t.Fatalf("got %v %v", ttys, err)
-		}
-	})
-	t.Run("errors", func(t *testing.T) {
-		boom := errors.New("denied")
-		r, _ := newTest(terminalCfg("iTerm2", "work"), errRule(boom, osascript))
-		if _, err := r.Probe(ctx()); !errors.Is(err, boom) {
-			t.Fatalf("got %v", err)
-		}
-		for _, app := range []string{"Ghostty", "custom", "Muxy"} {
-			r, _ := newTest(terminalCfg(app, "work"))
-			if _, err := r.Probe(ctx()); err == nil {
-				t.Errorf("%s: want unsupported error", app)
+// TestRevealNamesTheAutomationPermissionWhenMacOSRefuses: osascript's error
+// -1743 ("Not authorized to send Apple events") means the app that runs magnum
+// may not script the terminal. Reveal says so, with the fix, instead of
+// bringing the terminal forward and calling that a success.
+func TestRevealNamesTheAutomationPermissionWhenMacOSRefuses(t *testing.T) {
+	denied := func(app string) execx.Rule {
+		return execx.Rule{Prefix: []string{osascript}, Result: execx.Result{Code: 1,
+			Stderr: []byte("execution error: Not authorized to send Apple events to " + app + ". (-1743)\n")}}
+	}
+	setPrefix := []string{testHerdr, "--session", "work", "terminal", "title", "set", testMarker}
+	for _, tc := range []struct {
+		app, name string
+		rules     []execx.Rule
+	}{
+		{"iTerm2", "iTerm", []execx.Rule{psRule(psWithWorkClient), denied("iTerm")}},
+		{"Terminal", "Terminal", []execx.Rule{psRule(psWithWorkClient), denied("Terminal")}},
+		{"Ghostty", "Ghostty", []execx.Rule{{Prefix: setPrefix, Result: stdout(titleJSON(true, "set"))}, denied("Ghostty"),
+			okRule(testHerdr, "--session", "work", "terminal", "title", "clear")}},
+	} {
+		t.Run(tc.app, func(t *testing.T) {
+			r, f := newTest(terminalCfg(tc.app, "work"), append(tc.rules, okRule(openBin))...)
+			out, err := r.Reveal(ctx(), Options{})
+			var ae *AutomationError
+			if !errors.As(err, &ae) || ae.App != tc.name {
+				t.Fatalf("got %+v %v, want an AutomationError for %s", out, err, tc.name)
 			}
-		}
-	})
+			mustContain(t, err.Error(), "Automation", "-1743", "System Settings → Privacy & Security → Automation → allow "+tc.name)
+			if out.Action == ActionActivated || len(f.CallsWithPrefix(openBin)) != 0 {
+				t.Fatalf("must not bring %s forward and call it revealed: %+v %v", tc.app, out, names(f))
+			}
+		})
+	}
+	// Any other osascript failure still falls back to bringing the app forward.
+	r, _ := newTest(terminalCfg("iTerm2", "work"), psRule(psWithWorkClient),
+		execx.Rule{Prefix: []string{osascript}, Result: execx.Result{Code: 1, Stderr: []byte("execution error: iTerm got an error (-1728)\n")}},
+		okRule(openBin))
+	if out, err := r.Reveal(ctx(), Options{}); err != nil || out.Action != ActionActivated {
+		t.Fatalf("another error: %+v %v", out, err)
+	}
 }

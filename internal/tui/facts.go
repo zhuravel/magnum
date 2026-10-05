@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // DaemonFacts are what the titles say of the daemon; the zero value says
@@ -77,7 +79,7 @@ func (f DaemonFacts) list(now time.Time) []fact {
 		}
 		full := s
 		if f.Held > 0 {
-			full += " · " + plural(f.Held, "request held", "requests held")
+			full += " · " + textx.Count(f.Held, "request held", "requests held")
 		}
 		out = append(out, fact{full, s})
 	}

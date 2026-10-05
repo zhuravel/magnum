@@ -113,6 +113,32 @@ func (o Outcome) String() string {
 	return s
 }
 
+// AutomationError is a focus script macOS refused to run (osascript's
+// error -1743, "Not authorized to send Apple events"): the app that runs
+// magnum may not control App under Privacy & Security → Automation.
+type AutomationError struct {
+	App string // the application the script controls: iTerm, Terminal or Ghostty
+}
+
+func (e *AutomationError) Error() string {
+	return fmt.Sprintf("macOS did not let magnum script %s (the Automation permission, error -1743): "+
+		"System Settings → Privacy & Security → Automation → allow %s for the app that runs magnum "+
+		"(your terminal; the daemon's entry for reveal_on_attention)", e.App, e.App)
+}
+
+// automationDenied is an AutomationError for r's terminal when err is
+// osascript's error -1743; ok is false for any other error.
+func (r *Revealer) automationDenied(err error) (ae *AutomationError, ok bool) {
+	if ee, isExit := errors.AsType[*execx.ExitError](err); !isExit || !strings.Contains(ee.Stderr, "(-1743)") {
+		return nil, false
+	}
+	app, nerr := r.activationName()
+	if nerr != nil {
+		app = string(r.kind)
+	}
+	return &AutomationError{App: app}, true
+}
+
 var errCannotFocus = errors.New("this terminal cannot be scripted to focus an existing herdr client")
 
 // Revealer reveals herdr in one configured terminal. Build it with New.
@@ -156,12 +182,6 @@ func Reveal(ctx context.Context, run execx.Runner, cfg config.Terminal, herdrBin
 	return New(run, cfg, herdrBin).Reveal(ctx, opts)
 }
 
-// Kind reports the detected terminal kind.
-func (r *Revealer) Kind() Kind { return r.kind }
-
-// Session reports the herdr session being revealed.
-func (r *Revealer) Session() string { return r.session }
-
 // Reveal focuses the existing herdr client when there is one. When the
 // terminal confirms there is none it launches a new client (a tab, or a window
 // with opts.NewWindow). When focus cannot be determined it only brings the
@@ -183,6 +203,9 @@ func (r *Revealer) Reveal(ctx context.Context, opts Options) (Outcome, error) {
 	}
 	if err := ctx.Err(); err != nil {
 		return out, err
+	}
+	if _, denied := errors.AsType[*AutomationError](focusErr); denied {
+		return out, focusErr // bringing the app forward would not show the client
 	}
 	if r.kind == KindCustom {
 		if err := r.Launch(ctx, opts); err != nil {
@@ -219,41 +242,6 @@ func (r *Revealer) FocusExisting(ctx context.Context) (FocusResult, error) {
 	}
 }
 
-// Probe lists the ttys the configured terminal reports for its panes (iTerm2,
-// Terminal.app and WezTerm only), which shows that scripting works, e.g.
-// that the macOS Automation permission was granted. `magnum doctor` does not
-// call it: its AppleScript starts a terminal that is not running, and before
-// the permission was decided macOS asks in a dialog that takes focus, while
-// doctor must not open windows (doctor names the permission instead).
-func (r *Revealer) Probe(ctx context.Context) ([]string, error) {
-	switch r.kind {
-	case KindITerm, KindTerminal:
-		script := itermTtyListScript()
-		if r.kind == KindTerminal {
-			script = terminalTtyListScript()
-		}
-		res, err := r.run.Run(ctx, execx.Cmd{
-			Name: cmdOsascript, Args: []string{"-e", script}, Timeout: focusTimeout, Label: "list " + string(r.kind) + " ttys",
-		})
-		if err != nil {
-			return nil, fmt.Errorf("list %s ttys: %w", r.kind, err)
-		}
-		return parseTtyList(res.Out()), nil
-	case KindWezTerm:
-		listing, err := r.wezTermList(ctx)
-		if err != nil {
-			return nil, err
-		}
-		ttys, ok := wezTermTtys(listing)
-		if !ok {
-			return nil, errors.New("wezterm cli list did not return a JSON pane array")
-		}
-		return ttys, nil
-	default:
-		return nil, fmt.Errorf("%w (%s)", errCannotFocus, r.kind)
-	}
-}
-
 // focusByTty serves iTerm2 and Terminal.app: find the client ttys with ps, then
 // let AppleScript select the tab that owns one of them.
 func (r *Revealer) focusByTty(ctx context.Context) (FocusResult, error) {
@@ -273,6 +261,9 @@ func (r *Revealer) focusByTty(ctx context.Context) (FocusResult, error) {
 		Label: "focus herdr client in " + string(r.kind),
 	})
 	if err != nil {
+		if ae, ok := r.automationDenied(err); ok {
+			return Unavailable, ae
+		}
 		return Unavailable, fmt.Errorf("focus %s tab: %w", r.kind, err)
 	}
 	switch out := res.Out(); out {

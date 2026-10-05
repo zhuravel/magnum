@@ -27,8 +27,8 @@ const (
 
 const daemonRestartUsage = "daemon-restart [--now | --drain | --when-idle] [--timeout D]"
 
-// restartFlags are the parsed rounds-in-flight flags of daemon-restart,
-// install and migrate-home (--when-idle: daemon-restart only).
+// restartFlags are the parsed rounds-in-flight flags of daemon-restart and
+// install (--when-idle: daemon-restart only).
 type restartFlags struct {
 	now, drain, whenIdle bool
 	timeout              time.Duration

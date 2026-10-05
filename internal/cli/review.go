@@ -19,6 +19,7 @@ import (
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 const reviewUsage = "review <url|owner/repo#N|repo#N|N> [--fresh] [--role <role>]... [--simplify] [--as <identity>] [--no-post] [--focus] [--wait] [--timeout <duration>] [--dry-run] [--json]"
@@ -164,7 +165,7 @@ func reviewMain(ctx context.Context, c *Context, d *actDeps, ref string, o revie
 	merged := t.PR.GHState == store.GHMerged
 	switch {
 	case merged && store.Deref(t.PR.ReviewedSHA) == t.PR.HeadSHA:
-		return reviewFailJSON(c, o, out, fmt.Errorf("%s: its merged head %s was already reviewed", label, sha7(t.PR.HeadSHA)))
+		return reviewFailJSON(c, o, out, fmt.Errorf("%s: its merged head %s was already reviewed", label, textx.ShortSHA(t.PR.HeadSHA)))
 	case merged && t.PR.State == store.PRReleasing:
 		return reviewFailJSON(c, o, out, fmt.Errorf("%s: its checkout is being released; run `magnum review` again in a minute", label))
 	case !merged && t.PR.GHState == store.GHClosed:
@@ -186,7 +187,7 @@ func reviewMain(ctx context.Context, c *Context, d *actDeps, ref string, o revie
 		fmt.Fprintf(progress, "%s is pinned: this review unpins it (a person's changes in its slot still hold the round)\n", label)
 	}
 	if rs := store.Deref(t.PR.ReviewedSHA); rs != "" && rs == t.PR.HeadSHA {
-		fmt.Fprintf(progress, "head %s was already reviewed (%s); reviewing it again\n", sha7(rs), store.Deref(t.PR.LastReviewEvent))
+		fmt.Fprintf(progress, "head %s was already reviewed (%s); reviewing it again\n", textx.ShortSHA(rs), store.Deref(t.PR.LastReviewEvent))
 	}
 
 	// A forced round always reviews the head again: there is no "again" to send.
@@ -528,7 +529,7 @@ func reviewRepoInfo(ctx context.Context, d *actDeps, ident, owner, name string) 
 
 // reviewDescribe prints how the reference resolved.
 func reviewDescribe(ctx context.Context, w io.Writer, d *actDeps, t actTarget, label string, added, dry bool) {
-	title := trunc(actClean(store.Deref(t.PR.Title)), 80)
+	title := textx.Clip(actClean(store.Deref(t.PR.Title)), 80)
 	author := actClean(store.Deref(t.PR.AuthorLogin))
 	line := label
 	if title != "" {
@@ -541,12 +542,12 @@ func reviewDescribe(ctx context.Context, w io.Writer, d *actDeps, t actTarget, l
 	if t.PR.URL != "" {
 		fmt.Fprintln(w, "  "+t.PR.URL)
 	}
-	facts := []string{"state " + t.PR.State, "head " + sha7(t.PR.HeadSHA)}
+	facts := []string{"state " + t.PR.State, "head " + textx.ShortSHA(t.PR.HeadSHA)}
 	if t.PR.IsDraft {
 		facts = append(facts, "draft")
 	}
 	if rs := store.Deref(t.PR.ReviewedSHA); rs != "" {
-		facts = append(facts, fmt.Sprintf("last review %s on %s", store.Deref(t.PR.LastReviewEvent), sha7(rs)))
+		facts = append(facts, fmt.Sprintf("last review %s on %s", store.Deref(t.PR.LastReviewEvent), textx.ShortSHA(rs)))
 	}
 	if t.PR.Identity != "" {
 		facts = append(facts, "identity "+t.PR.Identity)
@@ -800,7 +801,7 @@ func (f *reviewFollower) completion(ctx context.Context, pr store.PR) (code int,
 	if pr.ReviewedAt != nil && !pr.ReviewedAt.Before(f.start) {
 		ev, url, login := reviewPosted(ctx, f.d, pr, f.start)
 		f.out.Event, f.out.ReviewURL = ev, url
-		msg := fmt.Sprintf("reviewed %s: %s on %s", f.label, ev, sha7(store.Deref(pr.ReviewedSHA)))
+		msg := fmt.Sprintf("reviewed %s: %s on %s", f.label, ev, textx.ShortSHA(store.Deref(pr.ReviewedSHA)))
 		if login != "" {
 			msg += " as " + login
 		}
@@ -842,9 +843,9 @@ func (f *reviewFollower) completion(ctx context.Context, pr store.PR) (code int,
 // "1111111..2222222" since its last review, else "the whole PR at 2222222".
 func reviewPostMergeScope(pr store.PR) string {
 	if rs := store.Deref(pr.ReviewedSHA); rs != "" {
-		return sha7(rs) + ".." + sha7(pr.HeadSHA)
+		return textx.ShortSHA(rs) + ".." + textx.ShortSHA(pr.HeadSHA)
 	}
-	return "the whole PR at " + sha7(pr.HeadSHA)
+	return "the whole PR at " + textx.ShortSHA(pr.HeadSHA)
 }
 
 // reviewDryRunEnded reports the end of a dry-run round started at or after

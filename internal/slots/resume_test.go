@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/steps"
 	"github.com/zhuravel/magnum/internal/store"
@@ -448,8 +449,8 @@ func TestRemoveResumeRunsTheGuardFirst(t *testing.T) {
 			if rm := h.run.gitCalls("worktree", "remove"); len(rm) != 1 || !slices.Contains(rm[0].Args, "--force") {
 				t.Fatalf("worktree remove = %v", rm)
 			}
-			if got := h.slot(sl.Name); got.State != store.SlotRemoved || exists(sl.Path) {
-				t.Fatalf("state %s, dir exists %v", got.State, exists(sl.Path))
+			if got := h.slot(sl.Name); got.State != store.SlotRemoved || fsx.Exists(sl.Path) {
+				t.Fatalf("state %s, dir exists %v", got.State, fsx.Exists(sl.Path))
 			}
 		})
 	}
@@ -498,8 +499,8 @@ func TestRemovePRWorktreeResumeRunsTheGuardFirst(t *testing.T) {
 			if err := h.m.RemovePRWorktree(h.ctx, h.slot(sl.Name), true); err != nil {
 				t.Fatalf("forced RemovePRWorktree: %v", err)
 			}
-			if got := h.slot(sl.Name); got.State != store.SlotRemoved || exists(sl.Path) {
-				t.Fatalf("state %s, dir exists %v", got.State, exists(sl.Path))
+			if got := h.slot(sl.Name); got.State != store.SlotRemoved || fsx.Exists(sl.Path) {
+				t.Fatalf("state %s, dir exists %v", got.State, fsx.Exists(sl.Path))
 			}
 		})
 	}
@@ -524,8 +525,8 @@ func TestRemoveResumeDiscardsResidue(t *testing.T) {
 			if rm := h.run.gitCalls("worktree", "remove"); len(rm) != 1 || !slices.Contains(rm[0].Args, "--force") {
 				t.Fatalf("worktree remove = %v", rm)
 			}
-			if got := h.slot(sl.Name); got.State != store.SlotRemoved || exists(sl.Path) {
-				t.Fatalf("state %s, dir exists %v", got.State, exists(sl.Path))
+			if got := h.slot(sl.Name); got.State != store.SlotRemoved || fsx.Exists(sl.Path) {
+				t.Fatalf("state %s, dir exists %v", got.State, fsx.Exists(sl.Path))
 			}
 			h.wantDiscarded(t, sl.Name, d.file)
 		})
@@ -546,8 +547,8 @@ func TestRemoveResumeDiscardsResidue(t *testing.T) {
 			if rm := h.run.gitCalls("worktree", "remove"); len(rm) != 1 || !slices.Contains(rm[0].Args, "--force") {
 				t.Fatalf("worktree remove = %v", rm)
 			}
-			if got := h.slot(sl.Name); got.State != store.SlotRemoved || exists(sl.Path) {
-				t.Fatalf("state %s, dir exists %v", got.State, exists(sl.Path))
+			if got := h.slot(sl.Name); got.State != store.SlotRemoved || fsx.Exists(sl.Path) {
+				t.Fatalf("state %s, dir exists %v", got.State, fsx.Exists(sl.Path))
 			}
 			h.wantDiscarded(t, sl.Name, d.file)
 		})
@@ -619,8 +620,8 @@ func TestRemoveRefusesDriftAndForeignAgents(t *testing.T) {
 		if n := len(h.scriptCalls("")); n != 0 {
 			t.Fatalf("teardown ran (%d scripts)", n)
 		}
-		if got := h.slot(sl.Name); got.State != store.SlotFree || got.HoldReason != nil || !exists(sl.Path) {
-			t.Fatalf("state %s hold %v dir %v", got.State, store.Deref(got.HoldReason), exists(sl.Path))
+		if got := h.slot(sl.Name); got.State != store.SlotFree || got.HoldReason != nil || !fsx.Exists(sl.Path) {
+			t.Fatalf("state %s hold %v dir %v", got.State, store.Deref(got.HoldReason), fsx.Exists(sl.Path))
 		}
 	})
 	perPR := func(t *testing.T) (*perPRFixture, store.Slot) {
@@ -641,8 +642,8 @@ func TestRemoveRefusesDriftAndForeignAgents(t *testing.T) {
 			t.Fatalf("teardown ran %d times", n)
 		}
 		got := h.slot(sl.Name)
-		if got.State != store.SlotClaimed || store.Deref(got.HoldReason) != hold || !exists(sl.Path) {
-			t.Fatalf("state %s hold %v dir %v", got.State, store.Deref(got.HoldReason), exists(sl.Path))
+		if got.State != store.SlotClaimed || store.Deref(got.HoldReason) != hold || !fsx.Exists(sl.Path) {
+			t.Fatalf("state %s hold %v dir %v", got.State, store.Deref(got.HoldReason), fsx.Exists(sl.Path))
 		}
 	}
 	t.Run("per-PR head drift", func(t *testing.T) {
@@ -677,8 +678,8 @@ func TestRemoveNeverTakesABusySlot(t *testing.T) {
 		if n := len(h.scriptCalls("")); n != 0 {
 			t.Fatalf("ran %d scripts", n)
 		}
-		if got := h.slot(sl.Name); got.State != store.SlotBusy || !exists(sl.Path) {
-			t.Fatalf("state %s dir %v", got.State, exists(sl.Path))
+		if got := h.slot(sl.Name); got.State != store.SlotBusy || !fsx.Exists(sl.Path) {
+			t.Fatalf("state %s dir %v", got.State, fsx.Exists(sl.Path))
 		}
 	})
 	t.Run("per-PR", func(t *testing.T) {
@@ -698,8 +699,8 @@ func TestRemoveNeverTakesABusySlot(t *testing.T) {
 			}
 		}
 		h.wantNoGit(t, "worktree", "remove")
-		if got := h.slot(sl.Name); got.State != store.SlotBusy || !exists(sl.Path) {
-			t.Fatalf("state %s dir %v", got.State, exists(sl.Path))
+		if got := h.slot(sl.Name); got.State != store.SlotBusy || !fsx.Exists(sl.Path) {
+			t.Fatalf("state %s dir %v", got.State, fsx.Exists(sl.Path))
 		}
 	})
 }
@@ -805,11 +806,12 @@ func TestCreatePRWorktreeReopensAMissingAssignment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a, err := h.st.OpenAssignmentByPR(h.ctx, f.pr.ID)
+	a, err := h.openAssignment(f.pr.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.st.CloseAssignment(h.ctx, a.ID, "crash"); err != nil {
+	if _, err := h.st.DB().ExecContext(h.ctx, "UPDATE assignments SET ended_at = ?, end_reason = 'crash' WHERE id = ?",
+		store.FormatTime(time.Now()), a.ID); err != nil {
 		t.Fatal(err)
 	}
 	h.run.reset()
@@ -818,7 +820,7 @@ func TestCreatePRWorktreeReopensAMissingAssignment(t *testing.T) {
 		t.Fatalf("second CreatePRWorktree = %+v, %v", again, err)
 	}
 	h.wantNoGit(t, "worktree", "add")
-	b, err := h.st.OpenAssignmentByPR(h.ctx, f.pr.ID)
+	b, err := h.openAssignment(f.pr.ID)
 	if err != nil || b.ID == a.ID || b.SlotID != sl.ID || b.Path != sl.Path || store.Deref(b.HeadSHA) != store.Deref(sl.CheckedOutSHA) ||
 		store.Deref(b.HeadSHA) != f.sha7 {
 		t.Fatalf("reopened assignment = %+v, %v; want slot %d at %s", b, err, sl.ID, f.sha7)
@@ -888,7 +890,7 @@ func TestCreatePRWorktreeResyncsARetainedWorktree(t *testing.T) {
 			if cur := gitT(t, sl.Path, "rev-parse", "HEAD"); cur != head || readFile(t, filepath.Join(sl.Path, "NEWS")) != "news\n" {
 				t.Fatalf("HEAD = %s, want %s", cur, head)
 			}
-			if a, err := h.st.OpenAssignmentByPR(h.ctx, f.pr.ID); err != nil || store.Deref(a.HeadSHA) != head {
+			if a, err := h.openAssignment(f.pr.ID); err != nil || store.Deref(a.HeadSHA) != head {
 				t.Fatalf("assignment = %+v, %v", a, err)
 			}
 		})
@@ -918,7 +920,7 @@ func TestRemovePRWorktreeWithCheckoutAndCloneGone(t *testing.T) {
 	if got.State != store.SlotRemoved || got.PRID != nil {
 		t.Fatalf("slot = %+v", got)
 	}
-	if _, err := h.st.OpenAssignmentByPR(h.ctx, f.pr.ID); !errors.Is(err, store.ErrNotFound) {
+	if _, err := h.openAssignment(f.pr.ID); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("assignment still open: %v", err)
 	}
 }

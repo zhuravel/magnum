@@ -7,7 +7,7 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 ## Cross-cutting conventions
 
 - Every subprocess goes through `execx.Runner` (`Real`, `Fake`, `DryRun`). Commands that change state set `Cmd.Mutates = true`, so `--dry-run` only prints them. Packages that run subprocesses take a runner: `gitx`, `github`, `identity`, `launchd`, `reveal`, `slots`, `inventory`, `agents`, `pipeline`, `cleanup`, `notify` (osascript). `execx.Real` refuses a missing `Cmd.Dir` with a `working directory` error (code -1) before starting the process.
-- `mysqlx` (database/sql), `herdr` (Unix socket) and `identity.App`'s REST calls (net/http) do not use execx, so `execx.DryRun` does not stop them. Under `daemon --dry-run` the engine therefore never calls `agents`, `pipeline.RunRound`, `notify` toasts/`Sidebar`/`WriteTabBar` or identity refresh; `slots` and `cleanup` have their own dry-run flags (`slots.Deps.DryRun`, `cleanup.Options.DryRun`), and `app.New` opens a private `VACUUM INTO` copy of `state/magnum.db`.
+- `mysqlx` (database/sql), `herdr` (Unix socket) and `identity.App`'s REST calls (net/http) do not use execx, so `execx.DryRun` does not stop them. Under `daemon --dry-run` the engine therefore never calls `agents`, `pipeline.RunRound`, `notify` toasts/`Sidebar` or identity refresh, and writes no tab-bar file; `slots` and `cleanup` have their own dry-run flags (`slots.Deps.DryRun`, `cleanup.Options.DryRun`), and `app.New` opens a private `VACUUM INTO` copy of `state/magnum.db`.
 - One `app.App` per process wires every layer (`app.New(cfg, layout, app.Options{...})`, then `engine.FromApp(a)` for the daemon). Non-daemon commands pass `Options.Logger`, otherwise the App logs to `state/logs/daemon.log`.
 - Commands: `cli` exports only `Main` and `Context`. Every command is a cobra command built per call by `newRoot` from its own `new*Cmd(c)` constructor in its own file (unexported helpers carry a per-group prefix: `act*`, `insp*`/`status*`/`doctor*`, `daemon*`); `magnum --help` lists them by group and README.md summarizes their flags. `status --watch`, `pick`, `cleanup` and `watch` run a `tui` screen when stdin and stdout are terminals (`tui.IsTerminal`) and keep their plain-text output anywhere else and with `--json`; the cli adapts its own types into the screen's structs, and actions run after the screen exits (pick) or capture their output (the dashboard).
 - CLI and daemon hand-off: mutating commands call `store.EnqueueRequest(engine.Req*, payload)` and then `engine.KickDaemon(layout)` (pid 0 = no daemon). In-process slot or cleanup work takes `engine.AcquireLock(layout.Lock())`; `held == true` means a daemon runs, so send a request instead (`slots provision|repair|adopt` → `engine.ReqProvision|ReqRepair|ReqAdopt`, `magnum open` of a parked PR → `engine.ReqOpen`). Never probe the lock.
@@ -41,6 +41,7 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 | [engine](#engine) | Package engine is magnum's daemon: one tick loop that polls GitHub, observes herdr, applies health pauses, consumes CLI requests, dispatches review rounds into slots (each round in its own goroutine), releases closed PRs after their grace and reconciles the registry with disk, MySQL and herdr. |
 | [eval](#eval) | Package eval scores an evaluation replay of magnum's pull request review against a corpus of pull requests with known ("seeded") defects. |
 | [execx](#execx) | Package execx is the single choke point for every subprocess magnum runs (git, gh, mysql, mise exec, launchctl, osascript, codex/claude probes). |
+| [fsx](#fsx) | Package fsx holds the file helpers several packages share: an atomic file write, plain or confined to an os.Root, and an existence check. |
 | [github](#github) | Package github is magnum's GitHub access layer. |
 | [gitx](#gitx) | Package gitx holds every git operation magnum needs: fetching PR heads into refs/magnum/pr/N, detached switches and placeholder resets in review slots, worktree management, dirty/unpushed guards and the diff queries behind "did this PR touch db/". |
 | [herdr](#herdr) | Package herdr is magnum's client for the herdr terminal multiplexer's Unix-socket API (verified against herdr 0.9.x, protocol 22). |
@@ -49,13 +50,14 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 | [launchd](#launchd) | Package launchd writes and manages magnum's LaunchAgent (label zhuravel.magnum): rendering the plist, installing it into the user's GUI domain, and querying, restarting and removing the job. |
 | [learn](#learn) | Package learn is the deterministic half of the retro (DECISIONS "Learning loop: daily retro"): after a pull request magnum reviewed closes, Build turns what other reviewers said about it into candidates for a classifier, after dropping what cannot be a miss (the author's and magnum's own comments, short approvals, comments on code magnum never saw, findings magnum already posted), and ParseOutput reads the classifier's answer back, refusing anything off schema and any lesson that retells the pull request instead of teaching (ScrubLesson). |
 | [mysqlx](#mysqlx) | Package mysqlx inventories and drops the per-worktree MySQL databases that Talkable's bin/worktree-setup creates (talkable_<env>[_<role>]__<slug>) on the local DBngin server. |
-| [notify](#notify) | Package notify is magnum's user-facing status surface: toasts, herdr sidebar tokens and the tab-bar file. |
+| [notify](#notify) | Package notify is magnum's user-facing status surface: toasts and herdr sidebar tokens. |
 | [paths](#paths) | Package paths defines magnum's on-disk layout. |
 | [pipeline](#pipeline) | Package pipeline runs one review round for a PR inside its herdr workspace: a readiness step in the checkout (the repository's prepare commands and ready probes and a Ruby check, readiness.go; failures only inform the judge), then the round's configured roles (config.Role: agent sessions on any configured kind, or shell commands) in stages (config.Config.Stages: the roles of a stage in parallel, git-diff roles one at a time after them, each followed by a tree restore), then the judge, then verification on GitHub (the oracle for "review posted") and the optional dismissal of the identity's own stale CHANGES_REQUESTED. |
 | [reveal](#reveal) | Package reveal brings the herdr client to the front of the user's terminal: focus the existing client when there is one, otherwise open a new tab or window running `herdr --session <name>`. |
 | [slots](#slots) | Package slots manages the checkouts magnum reviews in: the Talkable pool slots (~/Projects/talkable.reviewN, provisioned once with bin/worktree-setup and reused) and per-PR worktrees for small repositories, next to the repository's main clone whatever it is named (~/Projects/<owner>-<name>__worktrees/pr-N). |
 | [steps](#steps) | Package steps makes multi-step side effects resumable after a crash. |
 | [store](#store) | Package store is magnum's SQLite registry: repos, PRs, slots, assignments, slot databases, agent sessions, review runs, CLI requests, the audit event log, small key/value state and notification dedup. |
+| [textx](#textx) | Package textx holds the small text helpers several packages share: clipping to a number of runes, the first line, a short commit SHA, plurals and login folding. |
 | [tui](#tui) | Package tui holds magnum's interactive terminal screens, built on Bubble Tea: the status dashboard (RunDashboard), the PR board (RunPRBoard), the PR picker (RunPicker), the cleanup plan review (RunCleanupPlan) and the read-only pane mirror (RunWatch). |
 | [usage](#usage) | Package usage reads how much of an agent CLI's subscription budget is used. |
 
@@ -356,10 +358,6 @@ func NotesLockLine(lock string) string
 func NotesUnlockLine(lock string) string
     NotesUnlockLine is the shell line that releases the notes lock.
 
-func PaneLabel(number int, r Role) string
-    PaneLabel is the herdr pane name for a role: "PR #N <role>", e.g. "PR #729
-    codex-judge" (Title without a repo).
-
 func RenderPrompt(p config.Prompt, data any) (string, error)
     RenderPrompt executes a resolved prompt template
     (config.Config.ResolvePrompt or RolePrompt) with data: JudgeData for the
@@ -407,7 +405,8 @@ func TaggedAgentName(tag string, repo string, number int, role Role) string
     An empty tag is AgentName.
 
 func TaggedPaneLabel(tag string, number int, r Role) string
-    TaggedPaneLabel is PaneLabel under a tag (Deps.Tag).
+    TaggedPaneLabel is the herdr pane name for a role under a tag (Deps.Tag):
+    "PR #N <role>", e.g. "PR #729 codex-judge" (TaggedTitle without a repo).
 
 func TaggedTitle(tag, repo string, number int, role Role) string
     TaggedTitle is Title under a tag (Deps.Tag): "eval PR #729 codex-judge -
@@ -479,9 +478,6 @@ type Health struct {
 	Detail string // the matching line, redacted, at most 300 bytes
 }
     Health is the classifier's verdict.
-
-func Classify(text string) Health
-    Classify is ClassifyAt(text, time.Now()).
 
 func ClassifyAt(text string, now time.Time) Health
     ClassifyAt is ClassifyWith with config.DefaultHealthPatterns.
@@ -733,9 +729,9 @@ func (m *Manager) EnsureWorkspace(ctx context.Context, pr store.PR, slotPath str
         down the right column again, and so on.
 
     Every pane gets env with the role's env (Config.RoleEnv) laid over it. Every
-    newly assigned pane gets a sessions row (state starting, agent name/kind
-    or agent_kind "shell", pane/workspace/tab ids, cwd, env_json) and is
-    renamed "PR #N <role>" (PaneLabel); a new workspace whose root pane cannot
+    newly assigned pane gets a sessions row (state starting, agent name/kind or
+    agent_kind "shell", pane/workspace/tab ids, cwd, env_json) and is renamed
+    "PR #N <role>" (TaggedPaneLabel); a new workspace whose root pane cannot
     be recorded is closed again (nothing else would find it). Live rows whose
     pane is gone are marked lost first, keeping their session_id for ResumeID.
     Pane envs are stored in sessions.env_json, so they must not carry secrets
@@ -772,8 +768,10 @@ func (m *Manager) NoteModelLimit(ctx context.Context, s store.Session, h Health)
     a kind.model_limited event.
 
 func (m *Manager) Observe(ctx context.Context) ([]Observation, error)
-    Observe takes one herdr snapshot and runs ObserveSnapshotAt with the time it
-    was taken. Call it once per daemon tick: polling is the completion signal.
+    Observe takes one herdr snapshot and runs ObserveSnapshotAt with the time
+    it was taken. The daemon calls ObserveSnapshotAt itself, once per tick,
+    with the snapshot that tick also counts working agents from (polling is the
+    completion signal).
 
 func (m *Manager) ObserveSnapshot(ctx context.Context, snap herdr.Snapshot) ([]Observation, error)
     ObserveSnapshot is ObserveSnapshotAt with the capture time now (a snapshot
@@ -1316,7 +1314,8 @@ func Interactive(f *os.File) bool
     stdin/stderr and which is also a character device, is not a terminal.
 
 func LookupPR(ctx context.Context, st *store.Store, p RefParser, ref string) (store.Repo, store.PR, error)
-    LookupPR resolves ref with p and loads its rows from st.
+    LookupPR resolves ref with p and loads the repository and PR rows from st.
+    A repository or PR the registry does not know wraps store.ErrNotFound.
 
 func NewLogger(file io.Writer, stderr io.Writer, level slog.Leveler) *slog.Logger
     NewLogger builds magnum's logger: JSON lines to file (when non-nil) plus
@@ -1344,7 +1343,7 @@ type App struct {
 	Identities map[string]identity.Source
 	// MySQL is the local DBngin client. mysqlx.Open never connects, so it is
 	// non-nil even while MySQL is down (calls then fail and consumers degrade);
-	// use MySQLUp to probe. Nil only when the DSN is invalid.
+	// Ping probes it. Nil only when the DSN is invalid.
 	MySQL *mysqlx.Client
 	Git   *gitx.Client
 
@@ -1374,27 +1373,13 @@ func (a *App) Close() error
 func (a *App) IdentityNames() []string
     IdentityNames lists the configured identity names in config order.
 
-func (a *App) LookupPR(ctx context.Context, ref string) (store.Repo, store.PR, error)
-    LookupPR resolves ref and loads the repository and PR rows. A repository or
-    PR the registry does not know wraps store.ErrNotFound.
-
-func (a *App) MySQLUp(ctx context.Context) bool
-    MySQLUp reports whether the MySQL server answers a ping within 3 s.
-
 func (a *App) Refs() RefParser
     Refs is the App's RefParser (cfg.Daemon.DefaultRepo).
 
-func (a *App) ResolvePR(ctx context.Context, ref string) (owner, repo string, number int, err error)
-    ResolvePR parses a PR reference with cfg.Daemon.DefaultRepo.
-
-func (a *App) StorePath() string
-    StorePath is the database file the App opened: state/magnum.db, or a
-    temporary copy of it under DryRun (removed by Close).
-
 type Options struct {
 	// DryRun wraps the runner in execx.DryRun, puts slots in dry-run mode,
-	// disables toasts and opens a private copy of the registry (see
-	// App.StorePath), so nothing outside the process changes.
+	// disables toasts and opens a private copy of the registry, so nothing
+	// outside the process changes.
 	DryRun bool
 	// Daemon marks the process as the daemon, which owns daemon.log rotation.
 	// Any other process (CLI commands) appends to daemon.log without ever
@@ -2085,12 +2070,6 @@ func Issue(title string, trackers []Tracker) (key, url string)
     (leftmost; at one position, the earlier tracker) and returns the key
     ("PS-38553") and its URL; "" and "" when there is none.
 
-func LocalOverlayPath(file string) string
-    LocalOverlayPath returns the legacy overlay next to a config
-    file (config.local.toml) when it exists, else "". The user config
-    (~/.config/magnum/config.toml) replaced it; it is still read when that is
-    missing.
-
 func MatchPath(glob, name string) bool
     MatchPath reports whether the "/"-separated name matches glob.
     A "**" segment matches zero or more whole segments; every other segment
@@ -2149,39 +2128,10 @@ type Board struct {
 }
     Board tunes the PR board ([board]).
 
-type Claude struct {
-	WrapperMode string   `toml:"wrapper_mode"`
-	Args        []string `toml:"args"`
-	Effort      string   `toml:"effort"`
-	Simplify    string   `toml:"simplify"` // first | always | never
-}
-    Claude is the legacy [claude] section, mapped like Codex: wrapper_mode
-    and args onto kinds.claude, effort onto claude-review and simplify onto
-    claude-simplify's runs (first -> first, always -> always, never -> manual;
-    anything else but "" fails validation). The fields keep the values the files
-    set; the effective settings are in KindSpec and the roles.
-
-type Codex struct {
-	// WrapperMode: "auto" probes `zsh -ic 'whence -w codex'`; true means the
-	// user's shell function supplies the flags and magnum passes only extras.
-	WrapperMode string   `toml:"wrapper_mode"`
-	Args        []string `toml:"args"`
-	ReviewArgs  []string `toml:"review_args"` // extra args for `command codex review`
-	SkillPath   string   `toml:"skill_path"`
-}
-    Codex is the legacy [codex] section. Load maps it onto the pipeline as
-    fallbacks (keys a [kinds.codex] or [[role]] block sets win): wrapper_mode
-    and args onto kinds.codex, skill_path onto codex-judge's skill and
-    review_args onto codex-review's args. The fields keep the values the files
-    set; read the effective values through KindSpec, RoleByNameOrAlias and
-    JudgeFor (the judge's Skill, not SkillPath).
-
 type Config struct {
 	Daemon     Daemon     `toml:"daemon"`
 	Herdr      Herdr      `toml:"herdr"`
 	Terminal   Terminal   `toml:"terminal"`
-	Codex      Codex      `toml:"codex"`  // legacy: fallbacks for kinds.codex, codex-judge and codex-review
-	Claude     Claude     `toml:"claude"` // legacy: fallbacks for kinds.claude, claude-review and claude-simplify
 	GitHub     GitHub     `toml:"github"`
 	Pipeline   Pipeline   `toml:"pipeline"`
 	Usage      Usage      `toml:"usage"`
@@ -2195,10 +2145,9 @@ type Config struct {
 
 	// Kinds are the agent CLIs ([kinds.<name>]) and Roles the review
 	// pipeline ([[role]]). After Load or Defaults both hold the merged,
-	// normalized result: built-in defaults, then the legacy [codex]/[claude]
-	// keys, then the base (config.defaults.toml or a file), then the user
-	// config. Read them through
-	// KindSpec, RolesFor, JudgeFor and RoleByNameOrAlias.
+	// normalized result: built-in defaults, then the base
+	// (config.defaults.toml or a file), then the user config. Read them
+	// through KindSpec, RolesFor, JudgeFor and RoleByNameOrAlias.
 	Kinds map[string]Kind `toml:"kinds"`
 	Roles []Role          `toml:"role"`
 
@@ -2227,11 +2176,10 @@ func LoadWithOptions(layout paths.Layout, file string, opts LoadOptions) (*Confi
     from before the defaults were built in); else the built-in defaults,
     the repository's config.defaults.toml embedded in the binary.
 
-    The user layer goes over it unless opts.NoOverlay: the layout's
-    UserConfig (~/.config/magnum/config.toml) when it exists, else a legacy
-    config.local.toml next to the base file (in the home for the built-in base).
-    It appends [[identity]], [[watch]], [[pool]] and [[repo]], and overrides
-    keys (see applyOverlay). cfg.Sources lists what was read.
+    The user layer goes over it unless opts.NoOverlay: the layout's UserConfig
+    (~/.config/magnum/config.toml) when it exists. It appends [[identity]],
+    [[watch]], [[pool]] and [[repo]], and overrides keys (see applyOverlay).
+    cfg.Sources lists what was read.
 
 func (c *Config) IdentityByName(name string) *Identity
     IdentityByName returns the identity or nil.
@@ -2693,9 +2641,8 @@ func (l Learn) DailyTime(day time.Time) (time.Time, error)
     location). daily_at must be "HH:MM", 00:00 to 23:59, two digits each.
 
 type LoadOptions struct {
-	// NoOverlay skips the user layer (the user config, or a legacy
-	// config.local.toml) even when it exists, so the result depends on the
-	// base alone.
+	// NoOverlay skips the user layer (the user config) even when it exists,
+	// so the result depends on the base alone.
 	NoOverlay bool
 }
     LoadOptions tunes LoadWithOptions.
@@ -2799,6 +2746,16 @@ func (s *PromptSnapshot) Changed() []string
 func (s *PromptSnapshot) Files() int
     Files counts the files the snapshot holds: prompts (embedded defaults
     included) and skill copies.
+
+type QuietWindow struct{ Start, End int }
+    QuietWindow is a daemon.quiet_hours window in minutes since midnight.
+    It includes Start and excludes End, and wraps past midnight when End is not
+    after Start.
+
+func ParseQuietHours(spec string) (w QuietWindow, ok bool, err error)
+    ParseQuietHours reads a daemon.quiet_hours spec, a local "HH:MM-HH:MM" such
+    as "01:00-07:00" (each clock "H:MM" or "HH:MM", 00:00 through 23:59, start
+    and end different). A blank spec is no window: ok is false, with no error.
 
 type Readiness struct {
 	Prepare []string
@@ -3230,19 +3187,15 @@ FUNCTIONS
 
 func QuietHours(spec string, now time.Time) bool
     QuietHours reports whether now falls inside the quiet-hours window spec,
-    a local "HH:MM-HH:MM" such as "01:00-07:00". The window includes its start
-    and excludes its end, and wraps past midnight when the end is not after the
-    start ("22:00-06:00" covers 22:00 through 05:59:59).
+    a local "HH:MM-HH:MM" such as "01:00-07:00" (config.ParseQuietHours).
+    The window includes its start and excludes its end, and wraps past midnight
+    when the end is not after the start ("22:00-06:00" covers 22:00 through
+    05:59:59).
 
-    The wall-clock time is read from now itself, in now's location;
-    pass time.Now() to get local quiet hours. An empty spec means no quiet
-    hours, and so does an invalid one (QuietHours cannot report errors;
-    use ValidateQuietHours when loading the config).
-
-func ValidateQuietHours(spec string) error
-    ValidateQuietHours checks a daemon.quiet_hours value: empty is valid (no
-    quiet hours), otherwise it must be "HH:MM-HH:MM" (00:00 through 23:59) with
-    different start and end.
+    The wall-clock time is read from now itself, in now's location; pass
+    time.Now() to get local quiet hours. An empty spec means no quiet hours,
+    and so does an invalid one (QuietHours cannot report errors; Config.Validate
+    rejects one when the config loads).
 
 
 TYPES
@@ -4805,6 +4758,37 @@ type Runner interface {
 	Run(ctx context.Context, c Cmd) (Result, error)
 }
     Runner executes commands. Implementations: Real, Fake, DryRun.
+
+```
+
+## fsx
+
+```text
+package fsx // import "github.com/zhuravel/magnum/internal/fsx"
+
+Package fsx holds the file helpers several packages share: an atomic file write,
+plain or confined to an os.Root, and an existence check. It imports only the
+standard library.
+
+FUNCTIONS
+
+func Exists(path string) bool
+    Exists reports whether path names something os.Stat can see (a symlink
+    counts by its target).
+
+func WriteFileAtomic(path string, data []byte, perm fs.FileMode) error
+    WriteFileAtomic replaces path with data, mode exactly perm whatever the
+    umask: a temporary file with a unique name in path's directory is written,
+    synced and renamed over path, then the directory is synced, so a reader (or
+    a crash) sees the old content or the new, never part of a file. A symlink at
+    path is replaced, not followed. The directory must exist; the temporary file
+    is removed on failure.
+
+func WriteFileAtomicIn(root *os.Root, name string, data []byte, perm fs.FileMode) (err error)
+    WriteFileAtomicIn is WriteFileAtomic for name inside root: a name that is
+    absolute or escapes root (.., or a symlink in a parent pointing outside) is
+    an error and nothing is written outside root. name's directory is resolved
+    once, so the temporary file and the rename land in the same one.
 
 ```
 
@@ -6840,14 +6824,6 @@ func Bootout(ctx context.Context, run execx.Runner, uid int, label string) error
     error is ignored only when Status confirms the job is not loaded; if Status
     itself fails, the job's state is unknown and the bootout error is returned.
 
-func DefaultArgs(repo, misePath, binary string) []string
-    DefaultArgs returns magnum's ProgramArguments:
-
-        <misePath> -C <repo> exec -- <binary> daemon
-
-    so the daemon starts with the repository's mise environment (including the
-    GitHub App private key) regardless of launchd's bare environment.
-
 func Install(ctx context.Context, run execx.Runner, uid int, path string, plist []byte) error
     Install (re)loads the job described by plist into gui/<uid>.
 
@@ -7345,8 +7321,8 @@ func (g Guard) Check(name string) error
 ```text
 package notify // import "github.com/zhuravel/magnum/internal/notify"
 
-Package notify is magnum's user-facing status surface: toasts, herdr sidebar
-tokens and the tab-bar file.
+Package notify is magnum's user-facing status surface: toasts and herdr sidebar
+tokens. The tab-bar file is the engine's (engine.WriteTabBarFile).
 
   - Toast shows a deduplicated message through herdr's notification.show and
     falls back to `osascript display notification` when herdr cannot show it
@@ -7358,8 +7334,6 @@ tokens and the tab-bar file.
     into one summary per minute.
   - Sidebar publishes display-only tokens for a workspace under the source
     "magnum" with a 24 h TTL, so stale tokens disappear on their own.
-  - WriteTabBar atomically rewrites state/tabbar.txt, which herdr's
-    ui.tab_bar_right command segment reads with `cat`.
 
 Everything is best effort and never decides pipeline behavior: callers log
 the returned errors and carry on. All subprocesses go through execx.Runner;
@@ -7504,11 +7478,9 @@ type Notifier struct {
 	Store DedupeStore
 	// Runner runs the osascript fallback. Nil disables the fallback.
 	Runner execx.Runner
-	// Layout locates the tab-bar file.
-	Layout paths.Layout
 	// Enabled is the [herdr] notify switch. When false Toast (and every
-	// Batcher flush) is a silent no-op. Sidebar and WriteTabBar are display
-	// surfaces, not notifications, and ignore it.
+	// Batcher flush) is a silent no-op. Sidebar is a display surface, not a
+	// notification, and ignores it.
 	Enabled bool
 	// Log, when set, receives one redacted line per fallback or suppression.
 	Log execx.Logger
@@ -7559,19 +7531,6 @@ func (n *Notifier) ToastUrgent(ctx context.Context, key, title, body string, win
     timeout; a caller on a latency-sensitive loop runs it in a goroutine.
     A cancelled ctx stops the waiting, releases the key and returns ctx's error.
 
-func (n *Notifier) WriteTabBar(text string) error
-    WriteTabBar replaces the tab-bar file (Layout.TabBar(), state/tabbar.txt)
-    with text, atomically: readers (herdr runs `cat` on it every few seconds)
-    see either the old or the new content, never a partial write.
-
-    herdr renders only the last output line, strips ESC bytes and drops
-    the whole status area when the line does not fit, so text is flattened
-    to a single plain line (newlines and tabs become spaces, other control
-    characters are dropped, secrets redacted) and terminated by one newline.
-    Empty text produces an empty file. Keeping the line short is the caller's
-    job. When the file already holds exactly this content nothing is written,
-    so calling it every daemon tick costs one small read.
-
 ```
 
 ## paths
@@ -7580,30 +7539,15 @@ func (n *Notifier) WriteTabBar(text string) error
 package paths // import "github.com/zhuravel/magnum/internal/paths"
 
 Package paths defines magnum's on-disk layout. An installed magnum keeps its
-files where XDG says: the user config in ~/.config/magnum, the registry,
-review reports and notes in ~/.local/share/magnum, logs, locks and the
-identities' gh config in ~/.local/state/magnum. A checkout layout (everything
-under <checkout>/state, gitignored) remains for development (MAGNUM_HOME)
-and for an install whose registry has not moved yet (see Resolve and `magnum
-migrate-home`).
-
-CONSTANTS
-
-const LegacyHome = "~/Projects/magnum"
-    LegacyHome is where magnum's checkout lived before it was installable:
-    an install whose registry is still under <LegacyHome>/state keeps using it
-    until `magnum migrate-home` moves it.
-
+files where XDG says: the user config in ~/.config/magnum, the registry, review
+reports and notes in ~/.local/share/magnum, logs, locks and the identities'
+gh config in ~/.local/state/magnum. A checkout layout (everything under
+<checkout>/state, gitignored) remains for development (MAGNUM_HOME).
 
 FUNCTIONS
 
 func Expand(p string) string
     Expand replaces a leading ~ with the user's home directory.
-
-func UserConfigPath() string
-    UserConfigPath is where the user's config lives: $XDG_CONFIG_HOME/magnum/
-    config.toml when XDG_CONFIG_HOME is an absolute path, else
-    ~/.config/magnum/config.toml; "" without a home directory.
 
 
 TYPES
@@ -7624,7 +7568,7 @@ type Layout struct {
 	Exe string
 	// UserConfig is the user's config file, layered over the built-in
 	// defaults: $XDG_CONFIG_HOME/magnum/config.toml, else
-	// ~/.config/magnum/config.toml (Resolve sets it; UserConfigPath). ""
+	// ~/.config/magnum/config.toml (Resolve sets it). ""
 	// means none (tests build layouts without it).
 	UserConfig string
 	// Scratch, when set, holds the registry, the review reports and the
@@ -7646,10 +7590,6 @@ func Resolve() (Layout, error)
       - Else the XDG layout, with Home the checkout holding the binary, if any
         (it has config.toml, config.defaults.toml or magnum's own go.mod within
         four levels up, symlinks resolved).
-      - Except while the XDG registry does not exist and a checkout's does (the
-        binary's checkout, else LegacyHome): that checkout layout, so an install
-        keeps its registry until `magnum migrate-home` moves it instead of
-        starting over empty.
 
 func (l Layout) Binary() string
     Binary is what launchd runs: the checkout's bin/magnum when there is one,
@@ -7658,7 +7598,7 @@ func (l Layout) Binary() string
 
 func (l Layout) CheckoutLayout() bool
     CheckoutLayout reports whether everything lives under Home/state (the
-    development layout, or an install that has not run `magnum migrate-home`).
+    development layout, MAGNUM_HOME).
 
 func (l Layout) Config() string
     Config is the checkout's legacy full config (Home/config.toml); "" without a
@@ -7685,10 +7625,6 @@ func (l Layout) EnsureDirs() error
 func (l Layout) GhConfigDir(id string) string
 
 func (l Layout) GhRoot() string
-
-func (l Layout) Installed() (Layout, error)
-    Installed is l moved to the XDG data and state directories (what Resolve
-    picks once the registry lives there); Home, UserConfig and Exe stay.
 
 func (l Layout) Learn() string
     Learn is where the learning loop keeps its inputs and outputs: the retro's
@@ -8201,6 +8137,15 @@ const (
 	ActionLaunched  Action = "launched"  // opened a new client tab/window
 	ActionActivated Action = "activated" // could only bring the terminal app forward
 )
+type AutomationError struct {
+	App string // the application the script controls: iTerm, Terminal or Ghostty
+}
+    AutomationError is a focus script macOS refused to run (osascript's error
+    -1743, "Not authorized to send Apple events"): the app that runs magnum may
+    not control App under Privacy & Security → Automation.
+
+func (e *AutomationError) Error() string
+
 type FocusResult string
     FocusResult is the outcome of looking for an existing herdr client.
 
@@ -8268,9 +8213,6 @@ func (r *Revealer) FocusExisting(ctx context.Context) (FocusResult, error)
     FocusExisting looks for a herdr client of the session in the configured
     terminal and focuses it. The error accompanies Unavailable and says why.
 
-func (r *Revealer) Kind() Kind
-    Kind reports the detected terminal kind.
-
 func (r *Revealer) Launch(ctx context.Context, opts Options) error
     Launch opens a new herdr client for the session in the configured terminal:
     iTerm2 (new tab, or window with opts.NewWindow) and Terminal.app (do
@@ -8279,23 +8221,12 @@ func (r *Revealer) Launch(ctx context.Context, opts Options) error
     A non-empty terminal.launcher wins over the app kind, as in the Raycast
     extension.
 
-func (r *Revealer) Probe(ctx context.Context) ([]string, error)
-    Probe lists the ttys the configured terminal reports for its panes (iTerm2,
-    Terminal.app and WezTerm only), which shows that scripting works, e.g.
-    that the macOS Automation permission was granted. `magnum doctor` does
-    not call it: its AppleScript starts a terminal that is not running, and
-    before the permission was decided macOS asks in a dialog that takes focus,
-    while doctor must not open windows (doctor names the permission instead).
-
 func (r *Revealer) Reveal(ctx context.Context, opts Options) (Outcome, error)
     Reveal focuses the existing herdr client when there is one. When the
     terminal confirms there is none it launches a new client (a tab, or a window
     with opts.NewWindow). When focus cannot be determined it only brings the
     terminal app forward (opening a second client could duplicate one it cannot
     see); a custom launcher has no app to raise, so it launches.
-
-func (r *Revealer) Session() string
-    Session reports the herdr session being revealed.
 
 ```
 
@@ -9995,10 +9926,6 @@ func (s *Store) ClaimSlot(ctx context.Context, prID, slotID int64, dbNames ...st
 func (s *Store) Close() error
     Close closes the database.
 
-func (s *Store) CloseAssignment(ctx context.Context, id int64, reason string) error
-    CloseAssignment ends open assignment id. Closing a closed or missing
-    assignment is ErrConflict.
-
 func (s *Store) ClosedPastGrace(ctx context.Context, now time.Time) ([]PR, error)
     ClosedPastGrace returns closed PRs whose release_after has passed (an unset
     release_after counts as passed) and that have no active run, oldest deadline
@@ -10123,16 +10050,10 @@ func (s *Store) Misses(ctx context.Context, f MissFilter) ([]Miss, error)
     Misses returns the misses f selects, newest first, each with its PR's
     repository and number.
 
-func (s *Store) NextPendingRequest(ctx context.Context) (Request, error)
-    NextPendingRequest returns the oldest pending request, or ErrNotFound.
-
 func (s *Store) OpenAssignment(ctx context.Context, a Assignment) (Assignment, error)
     OpenAssignment inserts an open assignment (for flows other than ClaimSlot,
     e.g. per-PR worktrees). StartedAt defaults to now. A second open assignment
     for the same slot or PR is ErrConflict.
-
-func (s *Store) OpenAssignmentByPR(ctx context.Context, prID int64) (Assignment, error)
-    OpenAssignmentByPR returns the PR's open assignment.
 
 func (s *Store) OpenAssignmentBySlot(ctx context.Context, slotID int64) (Assignment, error)
     OpenAssignmentBySlot returns the slot's open assignment.
@@ -10140,16 +10061,13 @@ func (s *Store) OpenAssignmentBySlot(ctx context.Context, slotID int64) (Assignm
 func (s *Store) PRByID(ctx context.Context, id int64) (PR, error)
     PRByID looks up a PR by id.
 
-func (s *Store) PRByNodeID(ctx context.Context, nodeID string) (PR, error)
-    PRByNodeID looks up a PR by its GitHub node id.
-
 func (s *Store) PRByRepoNumber(ctx context.Context, repoID int64, number int) (PR, error)
     PRByRepoNumber looks up PR #number of repository repoID.
 
 func (s *Store) PendingRequests(ctx context.Context, limit int) ([]Request, error)
-    PendingRequests returns up to limit pending requests, oldest first (limit
-    <= 0 = all). Unlike NextPendingRequest it lets a consumer skip a request it
-    already handed to a background worker.
+    PendingRequests returns up to limit pending requests, oldest first (limit <=
+    0 = all), so a consumer can skip a request it already handed to a background
+    worker.
 
 func (s *Store) Prune(ctx context.Context, keepEvents, keepRequests time.Duration) (PruneResult, error)
     Prune deletes events older than keepEvents and handled requests (state done
@@ -10385,6 +10303,41 @@ func (u *Update) Where(col string, v any)
     like a state mismatch, so a caller can require that the row still describes
     what it decided on (for example head_sha == the target sha). col may be any
     column of the table; conditions combine with AND.
+
+```
+
+## textx
+
+```text
+package textx // import "github.com/zhuravel/magnum/internal/textx"
+
+Package textx holds the small text helpers several packages share: clipping to a
+number of runes, the first line, a short commit SHA, plurals and login folding.
+It imports only the standard library.
+
+FUNCTIONS
+
+func Clip(s string, n int) string
+    Clip cuts s to at most n runes: a longer s becomes its first n-1 runes,
+    spaces at their end dropped, and an ellipsis. n <= 0 means no limit.
+    Normalizing s (trimming, collapsing spaces) is the caller's.
+
+func Count(n int, one, many string) string
+    Count is n and its noun: "1 file", "3 files".
+
+func FirstLine(s string) string
+    FirstLine is the first line of s that is not blank, trimmed.
+
+func FoldLogin(s string) string
+    FoldLogin folds a GitHub login for comparison: case, surrounding spaces,
+    a leading "@" and a "[bot]" suffix do not matter, so "@Talkable[bot]" and
+    "talkable" fold the same.
+
+func Plural(n int, one, many string) string
+    Plural is one when n is 1, otherwise many.
+
+func ShortSHA(sha string) string
+    ShortSHA is a commit SHA cut to 7 characters; a shorter string is kept.
 
 ```
 

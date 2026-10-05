@@ -1,6 +1,6 @@
 # Live-reload for daemon development: `mise run dev` (unloads the launchd job first).
 # Rebuilds bin/magnum and restarts `magnum daemon` on every save under cmd/ and internal/,
-# or when config.toml / config.local.toml / embedded templates change.
+# or when config.toml / embedded templates change.
 root = "."
 tmp_dir = "bin/air"
 
@@ -10,7 +10,7 @@ bin = "bin/magnum"
 args_bin = ["daemon", "--log-level", "debug"]
 include_dir = ["cmd", "internal"]
 include_ext = ["go", "toml", "tmpl"]
-include_file = ["config.toml", "config.local.toml"]
+include_file = ["config.toml"]
 exclude_dir = ["state", "docs", "bin", "skills", "scripts", ".git"]
 exclude_regex = ["_test\\.go$"]
 delay = 1000

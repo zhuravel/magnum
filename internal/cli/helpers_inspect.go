@@ -20,6 +20,7 @@ import (
 	"github.com/zhuravel/magnum/internal/app"
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/tui"
 )
 
 // Test hooks.
@@ -84,39 +85,15 @@ func inspTilde(p string) string {
 	return p
 }
 
-// inspDur renders a duration compactly: 45s, 12m, 2h5m, 3d4h.
-func inspDur(d time.Duration) string {
-	if d < 0 {
-		d = -d
-	}
-	switch {
-	case d < time.Minute:
-		return fmt.Sprintf("%ds", int(d.Seconds()))
-	case d < time.Hour:
-		return fmt.Sprintf("%dm", int(d.Minutes()))
-	case d < 48*time.Hour:
-		h := int(d.Hours())
-		if m := int(d.Minutes()) % 60; m != 0 {
-			return fmt.Sprintf("%dh%dm", h, m)
-		}
-		return fmt.Sprintf("%dh", h)
-	}
-	days := int(d.Hours()) / 24
-	if h := int(d.Hours()) % 24; h != 0 {
-		return fmt.Sprintf("%dd%dh", days, h)
-	}
-	return fmt.Sprintf("%dd", days)
-}
-
 // inspAgo renders t relative to now: "3m ago", "in 5m", "-" for nil/zero.
 func inspAgo(now time.Time, t *time.Time) string {
 	if t == nil || t.IsZero() {
 		return "-"
 	}
 	if t.After(now) {
-		return "in " + inspDur(t.Sub(now))
+		return "in " + tui.HumanDuration(t.Sub(now))
 	}
-	return inspDur(now.Sub(*t)) + " ago"
+	return tui.HumanDuration(now.Sub(*t)) + " ago"
 }
 
 // inspClock renders t as a local wall-clock time (date added when not today).
@@ -128,22 +105,8 @@ func inspClock(now, t time.Time) string {
 	return lt.Format("Jan 2 15:04")
 }
 
-// inspBytes renders a byte count: 812K, 1.3G.
-func inspBytes(n int64) string {
-	const k = 1024
-	switch {
-	case n <= 0:
-		return "0"
-	case n < k*k:
-		return fmt.Sprintf("%dK", (n+k-1)/k)
-	case n < k*k*k:
-		return fmt.Sprintf("%dM", (n+k*k-1)/(k*k))
-	}
-	return fmt.Sprintf("%.1fG", float64(n)/float64(k*k*k))
-}
-
 // inspMB renders a MySQL size in MB.
-func inspMB(mb float64) string { return inspBytes(int64(mb * 1024 * 1024)) }
+func inspMB(mb float64) string { return tui.HumanBytes(int64(mb * 1024 * 1024)) }
 
 // inspPRLabel is the short PR label used in tables: "talkable#11920".
 func inspPRLabel(repoFullName string, number int) string {

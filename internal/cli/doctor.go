@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +19,7 @@ import (
 	"github.com/zhuravel/magnum/internal/mysqlx"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 const doctorUsage = "[--json]"
@@ -200,7 +200,7 @@ func doctorExecGit(ctx context.Context, d doctorDeps, timeout time.Duration, env
 	if err != nil {
 		var ee *execx.ExitError
 		if errors.As(err, &ee) && strings.TrimSpace(ee.Stderr) != "" {
-			return res.Out(), fmt.Errorf("%s", inspFirstLine(execx.Redact(ee.Stderr)))
+			return res.Out(), fmt.Errorf("%s", textx.FirstLine(execx.Redact(ee.Stderr)))
 		}
 		return res.Out(), err
 	}
@@ -218,7 +218,7 @@ func doctorShellProbe(ctx context.Context, d doctorDeps, timeout time.Duration, 
 	if err != nil {
 		var ee *execx.ExitError
 		if errors.As(err, &ee) && strings.TrimSpace(ee.Stderr) != "" {
-			return res.Out(), fmt.Errorf("%s", inspFirstLine(execx.Redact(ee.Stderr)))
+			return res.Out(), fmt.Errorf("%s", textx.FirstLine(execx.Redact(ee.Stderr)))
 		}
 		return res.Out(), err
 	}
@@ -233,19 +233,11 @@ func doctorExec(ctx context.Context, d doctorDeps, timeout time.Duration, dir st
 	if err != nil {
 		var ee *execx.ExitError
 		if errors.As(err, &ee) && strings.TrimSpace(ee.Stderr) != "" {
-			return res.Out(), fmt.Errorf("%s", inspFirstLine(execx.Redact(ee.Stderr)))
+			return res.Out(), fmt.Errorf("%s", textx.FirstLine(execx.Redact(ee.Stderr)))
 		}
 		return res.Out(), err
 	}
 	return res.Out(), nil
-}
-
-func inspFirstLine(s string) string {
-	s = strings.TrimSpace(s)
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		return s[:i]
-	}
-	return s
 }
 
 func doctorConfig(ctx context.Context, d doctorDeps) []doctorCheck {
@@ -260,10 +252,6 @@ func doctorConfig(ctx context.Context, d doctorDeps) []doctorCheck {
 	}
 	out := []doctorCheck{doctorOK("config", detail)}
 	for _, s := range cfg.Sources {
-		if filepath.Base(s) == "config.local.toml" && d.Layout.UserConfig != "" {
-			out = append(out, doctorWarned("config location", "your settings are read from the legacy "+inspTilde(s),
-				fmt.Sprintf("mkdir -p %s && mv %s %s", inspTilde(filepath.Dir(d.Layout.UserConfig)), inspTilde(s), inspTilde(d.Layout.UserConfig))))
-		}
 		if legacy := d.Layout.Config(); legacy != "" && s == legacy {
 			out = append(out, doctorWarned("config location", inspTilde(s)+" replaces the built-in defaults (a checkout from before they were built in)",
 				"keep your settings in "+inspTilde(d.Layout.UserConfig)+" and remove "+inspTilde(s)+" unless it is a complete config on purpose"))

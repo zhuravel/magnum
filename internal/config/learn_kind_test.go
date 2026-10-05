@@ -66,7 +66,7 @@ func TestLearnDefaultModelFollowsTheKind(t *testing.T) {
 				}
 				files := map[string]string{"config.toml": minimalConfig}
 				if layer == "user config" {
-					files["config.local.toml"] = section
+					files["user.toml"] = section
 				} else {
 					files["config.toml"] = minimalConfig + section
 				}
@@ -93,16 +93,16 @@ func TestLearnDefaultModelFollowsTheKind(t *testing.T) {
 // again, so the model never depends on which layer set what.
 func TestLearnDefaultModelIsRecomputedWhenALaterLayerChangesTheKind(t *testing.T) {
 	cfg := mustLoad(t, map[string]string{
-		"config.toml":       minimalConfig + "[learn]\nkind = \"codex\"\n",
-		"config.local.toml": "[learn]\nkind = \"claude\"\n",
+		"config.toml": minimalConfig + "[learn]\nkind = \"codex\"\n",
+		"user.toml":   "[learn]\nkind = \"claude\"\n",
 	})
 	if cfg.Learn.Kind != "claude" || cfg.Learn.Model != "sonnet" {
 		t.Fatalf("learn kind, model = %q, %q; want claude, sonnet", cfg.Learn.Kind, cfg.Learn.Model)
 	}
 	// A model the base chose stays when the user layer leaves the kind alone.
 	cfg = mustLoad(t, map[string]string{
-		"config.toml":       minimalConfig + "[learn]\nkind = \"codex\"\nmodel = \"gpt-5\"\n",
-		"config.local.toml": "[learn]\nenabled = true\n",
+		"config.toml": minimalConfig + "[learn]\nkind = \"codex\"\nmodel = \"gpt-5\"\n",
+		"user.toml":   "[learn]\nenabled = true\n",
 	})
 	if cfg.Learn.Kind != "codex" || cfg.Learn.Model != "gpt-5" {
 		t.Fatalf("learn kind, model = %q, %q; want codex, gpt-5", cfg.Learn.Kind, cfg.Learn.Model)

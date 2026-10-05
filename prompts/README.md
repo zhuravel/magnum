@@ -356,10 +356,10 @@ file exists (else no restart prompt). claude-review's are `claude-review.md`, `c
 `claude-restart.md`.
 
 A round runs the watch's non-judge roles in parallel, layered by `after`, then the judge. The judge gets
-every other role's report path. Declaring any `[[role]]` in `config.toml` replaces the built-in list. A
-block named like a built-in role inherits that role's keys, so `name = "claude-review"` plus
-`model = "opus"` is a complete block. In `config.local.toml`, a `[[role]]` with an existing name
-overrides only the keys it sets, and a new name is appended.
+every other role's report path. Declaring any `[[role]]` in the base config (`config.defaults.toml`, or a
+`--config` file) replaces the built-in list. In your `~/.config/magnum/config.toml`, a `[[role]]` named
+like an existing role overrides only the keys it sets, so `name = "claude-review"` plus `model = "opus"`
+is a complete block, and a new name is appended.
 
 ### Triage
 

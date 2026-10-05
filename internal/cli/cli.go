@@ -106,7 +106,7 @@ func newRoot(c *Context) *cobra.Command {
 		newAttentionCmd(c), newPickCmd(c), newCleanupCmd(c), newKickCmd(c),
 		newPauseCmd(c), newResumeCmd(c), newUICmd(c),
 		// Daemon
-		newDaemonCmd(c), newDaemonRestartCmd(c), newDaemonStopCmd(c), newMigrateHomeCmd(c), newInstallCmd(c), newUninstallCmd(c),
+		newDaemonCmd(c), newDaemonRestartCmd(c), newDaemonStopCmd(c), newInstallCmd(c), newUninstallCmd(c),
 	)
 	noFileCompletionByDefault(root)
 	return root

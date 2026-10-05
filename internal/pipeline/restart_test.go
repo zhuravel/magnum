@@ -16,6 +16,7 @@ import (
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 const (
@@ -82,7 +83,7 @@ func (e *env) withRestarts(in *RoundInput, max int) *switcher {
 func (e *env) push(sha string) {
 	e.t.Helper()
 	if err := e.st.UpdatePR(e.ctx, e.pr.ID, func(u *store.PRUpdate) { u.Set("head_sha", sha) }); err != nil {
-		e.t.Fatalf("push %s: %v", short(sha), err)
+		e.t.Fatalf("push %s: %v", textx.ShortSHA(sha), err)
 	}
 }
 
@@ -107,7 +108,7 @@ func (e *env) waitRun(role agents.Role, head, state string) {
 			}
 		}
 	}
-	e.t.Errorf("%s never reached %s on %s", role, state, short(head))
+	e.t.Errorf("%s never reached %s on %s", role, state, textx.ShortSHA(head))
 }
 
 func (e *env) eventsOf(kind string) []store.Event {
@@ -146,7 +147,7 @@ func TestPushDuringReviewersRestartsOnTheNewHead(t *testing.T) {
 		t.Fatalf("result = %+v", res)
 	}
 	if got := sw.asked(); !slices.Equal(got, []string{head2}) {
-		t.Errorf("switches = %v, want [%s]", got, short(head2))
+		t.Errorf("switches = %v, want [%s]", got, textx.ShortSHA(head2))
 	}
 	claudeAgent := agents.AgentName("talkable/talkable", 11920, agents.RoleClaude)
 	if !slices.Contains(e.keys.sends, "agent:"+claudeAgent+":esc") {
@@ -182,7 +183,7 @@ func TestPushDuringReviewersRestartsOnTheNewHead(t *testing.T) {
 	for _, r := range byHead[target] {
 		switch r.Role {
 		case string(agents.RoleClaude), string(agents.RoleJudge):
-			if r.State != store.RunAbandoned || store.Deref(r.Outcome) != ReportHeadMoved || !strings.Contains(store.Deref(r.Error), short(head2)) {
+			if r.State != store.RunAbandoned || store.Deref(r.Outcome) != ReportHeadMoved || !strings.Contains(store.Deref(r.Error), textx.ShortSHA(head2)) {
 				t.Errorf("old %s run = %s / %q / %q", r.Role, r.State, store.Deref(r.Outcome), store.Deref(r.Error))
 			}
 		case string(agents.RoleCodexReview):
@@ -203,7 +204,7 @@ func TestPushDuringReviewersRestartsOnTheNewHead(t *testing.T) {
 	if len(restarted) != 1 {
 		t.Fatalf("round.restarted events = %d", len(restarted))
 	}
-	mustContain(t, "round.restarted", restarted[0].Message, "from "+short(target)+" to "+short(head2), "restart 1 of 2", "cut short: claude-review")
+	mustContain(t, "round.restarted", restarted[0].Message, "from "+textx.ShortSHA(target)+" to "+textx.ShortSHA(head2), "restart 1 of 2", "cut short: claude-review")
 }
 
 func TestThirdPushDoesNotRestart(t *testing.T) {
@@ -440,7 +441,7 @@ func TestRestartSwitchFailureEndsTheRound(t *testing.T) {
 	e.ag.behaviors[agents.RoleClaude] = []behavior{pushThen(e, head2, hang())}
 
 	res, err := e.r.RunRound(e.ctx, in)
-	if err == nil || res.Outcome != OutcomeError || !strings.Contains(res.Error, "restart on "+short(head2)) {
+	if err == nil || res.Outcome != OutcomeError || !strings.Contains(res.Error, "restart on "+textx.ShortSHA(head2)) {
 		t.Fatalf("result = %+v, %v", res, err)
 	}
 	if n := len(e.ag.submitsFor(agents.RoleJudge)); n != 0 {

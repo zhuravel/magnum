@@ -1,7 +1,6 @@
 package reveal
 
 import (
-	"reflect"
 	"strings"
 	"testing"
 )
@@ -63,24 +62,6 @@ func TestGhosttyFocusScript(t *testing.T) {
 	}
 }
 
-func TestTTYListScriptsAndParser(t *testing.T) {
-	if s := terminalTtyListScript(); !strings.Contains(s, "tty of every tab of every window") {
-		t.Errorf("Terminal tty list: %s", s)
-	}
-	if s := itermTtyListScript(); !strings.Contains(s, "tty of every session of every tab of every window") {
-		t.Errorf("iTerm tty list: %s", s)
-	}
-	if got := parseTtyList("/dev/ttys001, /dev/ttys002, /dev/ttys001"); !reflect.DeepEqual(got, []string{"/dev/ttys001", "/dev/ttys002"}) {
-		t.Errorf("got %v", got)
-	}
-	if got := parseTtyList("/dev/ttys001, missing value\n/dev/ttys003"); !reflect.DeepEqual(got, []string{"/dev/ttys001", "/dev/ttys003"}) {
-		t.Errorf("got %v", got)
-	}
-	if got := parseTtyList(""); len(got) != 0 {
-		t.Errorf("got %v", got)
-	}
-}
-
 const weztermListing = `[
  {"window_id": 4, "pane_id": 1, "tty_name": "/dev/ttys001"},
  {"window_id": 5, "pane_id": 2, "tty_name": "/dev/ttys002"},
@@ -112,16 +93,5 @@ func TestWezTermSelectorsAreTotal(t *testing.T) {
 		if got := selectWezTermWindow(out); got != "" {
 			t.Errorf("window(%q) = %q", out, got)
 		}
-		if got, ok := wezTermTtys(out); ok || len(got) != 0 {
-			t.Errorf("ttys(%q) = %v %v", out, got, ok)
-		}
-	}
-}
-
-func TestWezTermTtys(t *testing.T) {
-	got, ok := wezTermTtys(weztermListing)
-	want := []string{"/dev/ttys001", "/dev/ttys002", "/dev/ttys003"}
-	if !ok || !reflect.DeepEqual(got, want) {
-		t.Fatalf("got %v %v", got, ok)
 	}
 }

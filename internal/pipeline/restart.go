@@ -12,6 +12,7 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // A push the poller records while the reviewers run (before the judge is
@@ -30,7 +31,9 @@ import (
 // headMovedError is the cause of a stage context a push cancelled.
 type headMovedError struct{ sha string }
 
-func (e *headMovedError) Error() string { return "pipeline: the PR head moved to " + short(e.sha) }
+func (e *headMovedError) Error() string {
+	return "pipeline: the PR head moved to " + textx.ShortSHA(e.sha)
+}
 
 // pushCut reports whether ctx was cancelled by a push (noticePush): a turn it
 // cut short leaves its run for restart to settle.
@@ -68,7 +71,7 @@ func (rd *round) movedHead(ctx context.Context) string {
 	}
 	if rd.r.Git != nil {
 		if mb, err := rd.r.Git.MergeBase(ctx, rd.in.SlotPath, head, target); err == nil && mb == head {
-			rd.logf("pipeline: %s: head %s is an ancestor of %s: no push", rd.subject, short(head), short(target))
+			rd.logf("pipeline: %s: head %s is an ancestor of %s: no push", rd.subject, textx.ShortSHA(head), textx.ShortSHA(target))
 			rd.mu.Lock()
 			rd.seenHead = head
 			rd.mu.Unlock()
@@ -166,11 +169,11 @@ func (rd *round) restart(ctx context.Context, head string, runs map[string]*stor
 			cut = append(cut, role.Name)
 		}
 	}
-	rd.finishRun(ctx, judgeRun.ID, store.RunAbandoned, ReportHeadMoved, "the PR head moved to "+short(head))
+	rd.finishRun(ctx, judgeRun.ID, store.RunAbandoned, ReportHeadMoved, "the PR head moved to "+textx.ShortSHA(head))
 
 	sw, err := rd.in.Switch(ctx, head)
 	if err != nil {
-		return nil, fmt.Errorf("pipeline: restart on %s: %w", short(head), err)
+		return nil, fmt.Errorf("pipeline: restart on %s: %w", textx.ShortSHA(head), err)
 	}
 	target := cmp.Or(sw.TargetSHA, head)
 	rd.restarts++
@@ -196,7 +199,7 @@ func (rd *round) restart(ctx context.Context, head string, runs map[string]*stor
 		return nil, err
 	}
 	msg := fmt.Sprintf("the PR head moved from %s to %s before the judge was prompted: restart %d of %d",
-		short(from), short(target), rd.restarts, rd.in.MaxRestarts)
+		textx.ShortSHA(from), textx.ShortSHA(target), rd.restarts, rd.in.MaxRestarts)
 	if len(cut) > 0 {
 		msg += " (cut short: " + strings.Join(cut, ", ") + ")"
 	}
@@ -237,7 +240,7 @@ func (rd *round) settleCut(ctx context.Context, role config.Role, run store.Run,
 	default:
 		return false
 	}
-	rd.finishRun(ctx, cur.ID, store.RunAbandoned, ReportHeadMoved, "the PR head moved to "+short(head))
+	rd.finishRun(ctx, cur.ID, store.RunAbandoned, ReportHeadMoved, "the PR head moved to "+textx.ShortSHA(head))
 	return true
 }
 

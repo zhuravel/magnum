@@ -139,8 +139,7 @@ timeout = "20m"                   # per PR: a turn that takes longer is abandone
 # runs. Prompts are files in prompts_dir, loaded when the daemon starts (an edit takes effect at the next
 # `magnum daemon-restart`). prompts/README.md documents every key, the template variables
 # and examples (a droid or omp role, a watch with two roles). `magnum roles` prints the effective roles per
-# watch and `magnum roles --kinds` the kinds. The old [codex]/[claude] sections are still accepted as
-# fallbacks for the keys below.
+# watch and `magnum roles --kinds` the kinds.
 
 [pipeline]
 prompts_dir = "{{repo}}/prompts"  # a prompt name reads prompts_dir/<name>, else magnum's built-in copy;

@@ -55,20 +55,27 @@ describe any new key, command or key binding.
 | Path | What |
 |---|---|
 | `cmd/magnum` | entry point |
+| `internal/app` | wires the components from the config: store, runner, clients, identities, layers |
 | `internal/engine` | daemon loop: poll, throttle, dispatch, health, release, requests |
+| `internal/eligibility` | pure decisions: which PRs a watch picks up, when a round may start, quiet hours |
 | `internal/pipeline` | one review round: stages, reviewers, judge, verification |
+| `internal/steps` | resumable multi-step side effects |
 | `internal/agents` | herdr sessions: start, prompt, observe, trust and permission prompts, titles |
 | `internal/slots`, `cleanup`, `inventory` | pool slots, per-PR worktrees, guards, orphan detection |
 | `internal/store` | SQLite registry, migrations under `migrations/`, compare-and-set transitions |
 | `internal/config`, `prompts/`, `skills/` | configuration (roles, kinds), prompt files, the judge skill |
+| `internal/learn`, `eval` | the daily retro's candidates and answers; replaying seeded PRs to score a change |
 | `internal/cli`, `internal/tui` | cobra commands, Bubble Tea v2 screens |
+| `internal/attention`, `notify` | why a PR needs the user; toasts and herdr sidebar tokens |
+| `internal/usage` | how much of an agent CLI's budget is used, and its pace |
 | `internal/github`, `identity`, `herdr`, `gitx`, `mysqlx`, `execx` | the outside world, each behind a fake |
+| `internal/launchd`, `reveal` | the LaunchAgent; bringing the herdr client to the front of the terminal |
+| `internal/paths`, `fsx`, `textx` | the on-disk layout; the shared file (atomic write) and text helpers, leaves on the stdlib |
 | `docs/` | API doc (generated), decisions, probe notes (`spikes.md`), gh-dash keys |
 
 Where a running magnum keeps its files (`internal/paths`): the user config and App keys in
 `~/.config/magnum`, the registry, reports and notes in `~/.local/share/magnum`, logs, locks and the gh
-config dirs in `~/.local/state/magnum`. `MAGNUM_HOME=<checkout>` (and a checkout whose `state/` still holds
-the registry, until `magnum migrate-home`) keeps everything under `<checkout>/state/`.
+config dirs in `~/.local/state/magnum`. `MAGNUM_HOME=<checkout>` keeps everything under `<checkout>/state/`.
 
 ## Conventions
 

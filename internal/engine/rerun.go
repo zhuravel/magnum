@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // rerunRoles names the runs = "first" roles with rerun_min_lines whose code
@@ -45,7 +46,7 @@ func (e *Engine) rerunRoles(ctx context.Context, job *roundJob, roles []config.R
 		out = append(out, r.Name)
 		e.event(ctx, "info", prSubject(job.repo, job.pr.Number), "round.rerun_role",
 			fmt.Sprintf("%s runs again: %d code lines changed since its last run at %s (rerun_min_lines %d)",
-				r.Name, size.Lines, short(last), r.RerunMinLines),
+				r.Name, size.Lines, textx.ShortSHA(last), r.RerunMinLines),
 			map[string]any{"role": r.Name, "lines": size.Lines, "since": last, "min": r.RerunMinLines, "own_diff": m.ownOK})
 	}
 	return out

@@ -157,16 +157,10 @@ func readLayerData(file string, data []byte, md toml.MetaData, kinds map[string]
 }
 
 // buildPipeline computes Kinds and Roles from the built-in defaults, the
-// legacy [codex]/[claude]/[daemon] keys (fallbacks), the config file's
-// blocks and the overlay's blocks, in that order.
+// config file's blocks and the overlay's blocks, in that order.
 func (c *Config) buildPipeline(base, over *layer) {
 	kinds := DefaultKinds()
-	applyLegacyKinds(kinds, c.Codex, c.Claude)
 	builtins := DefaultRoles()
-	c.legacyErrs = nil
-	if err := applyLegacyRoles(builtins, c.Codex, c.Claude); err != nil {
-		c.legacyErrs = append(c.legacyErrs, err)
-	}
 	roles := builtins
 	for _, l := range []*layer{base, over} {
 		if l == nil {
@@ -245,61 +239,4 @@ func mergeDefined(dst, src reflect.Value, path []string, defined func([]string) 
 			dst.Field(i).Set(src.Field(i))
 		}
 	}
-}
-
-// applyLegacyKinds maps [codex]/[claude] wrapper_mode and args onto the codex
-// and claude kinds.
-func applyLegacyKinds(kinds map[string]Kind, codex Codex, claude Claude) {
-	set := func(name, wrapper string, args []string) {
-		k := kinds[name]
-		if wrapper != "" {
-			k.Wrapper = wrapper
-		}
-		if len(args) > 0 {
-			k.Args = slices.Clone(args)
-		}
-		kinds[name] = k
-	}
-	set(KindCodex, codex.WrapperMode, codex.Args)
-	set(KindClaude, claude.WrapperMode, claude.Args)
-}
-
-// applyLegacyRoles maps [codex] skill_path and review_args and [claude]
-// effort and simplify onto the built-in roles. It returns an error for a
-// [claude] simplify value other than "", first, always or never (which then
-// maps to nothing).
-func applyLegacyRoles(roles []Role, codex Codex, claude Claude) error {
-	var err error
-	switch claude.Simplify {
-	case "", "first", "always", "never":
-	default:
-		err = fmt.Errorf("claude.simplify must be first, always or never, got %q", claude.Simplify)
-	}
-	for i := range roles {
-		r := &roles[i]
-		switch r.Name {
-		case RoleCodexJudge:
-			if codex.SkillPath != "" {
-				r.Skill = codex.SkillPath
-			}
-		case RoleCodexReview:
-			if len(codex.ReviewArgs) > 0 {
-				r.Args = slices.Clone(codex.ReviewArgs)
-			}
-		case RoleClaudeReview:
-			if claude.Effort != "" {
-				r.Effort = claude.Effort
-			}
-		case RoleClaudeSimplify:
-			switch claude.Simplify {
-			case "always":
-				r.Runs = RunsAlways
-			case "never":
-				r.Runs = RunsManual // [claude] simplify = never still honoured `magnum review --simplify`
-			case "first":
-				r.Runs = RunsFirst
-			}
-		}
-	}
-	return err
 }

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -248,4 +249,16 @@ func TestCompletionScript(t *testing.T) {
 	if code := execute(c, []string{"completion", "zsh"}); code != 0 || !strings.Contains(out.String(), "#compdef magnum") {
 		t.Fatalf("completion zsh: exit %d\n%.200s", code, out)
 	}
+}
+
+// nextPendingRequest is the oldest pending request, or store.ErrNotFound.
+func nextPendingRequest(ctx context.Context, st *store.Store) (store.Request, error) {
+	q, err := st.PendingRequests(ctx, 1)
+	if err != nil {
+		return store.Request{}, err
+	}
+	if len(q) == 0 {
+		return store.Request{}, store.ErrNotFound
+	}
+	return q[0], nil
 }

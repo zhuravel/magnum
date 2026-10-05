@@ -267,7 +267,7 @@ func waitIdle(ctx context.Context, c *Context, cmd string, timeout time.Duration
 	}
 }
 
-// guardRounds is what daemon-restart, install and migrate-home do about
+// guardRounds is what daemon-restart and install do about
 // rounds in flight before they stop the daemon: refuse (default), ignore
 // them (--now), drain them (--drain), or wait until none runs (--when-idle;
 // the caller checks again right before the restart, see restartWhenIdle).

@@ -41,7 +41,8 @@ func newInitTest(t *testing.T, ghLogin string) *initTest {
 	t.Cleanup(func() { daemonSys, inspStdin = oldSys, oldStdin })
 	daemonSys.Runner = it.fake
 	daemonSys.Getenv = func(string) string { return "" }
-	it.c = &Context{Version: "test", Layout: paths.Layout{Home: it.home}, Stdout: &it.out, Stderr: &it.err}
+	it.c = &Context{Version: "test", Layout: paths.Layout{Home: it.home, UserConfig: filepath.Join(it.home, "user", "config.toml")},
+		Stdout: &it.out, Stderr: &it.err}
 	return it
 }
 
@@ -54,7 +55,7 @@ func (it *initTest) run(t *testing.T, input string, args ...string) int {
 	return execute(it.c, append([]string{"init"}, args...))
 }
 
-func (it *initTest) local() string { return filepath.Join(it.home, "config.local.toml") }
+func (it *initTest) local() string { return it.c.Layout.UserConfig }
 
 func TestInitWritesAMinimalConfigForTheGHLogin(t *testing.T) {
 	it := newInitTest(t, "octo-cat")
@@ -162,7 +163,7 @@ func TestInitStopsWithoutWriting(t *testing.T) {
 		t.Fatalf("code %d %s", code, it.err.String())
 	}
 	if _, err := os.Stat(it.local()); !os.IsNotExist(err) {
-		t.Fatalf("config.local.toml written: %v", err)
+		t.Fatalf("the user config was written: %v", err)
 	}
 	if code := it.run(t, "", "extra"); code != 2 {
 		t.Fatalf("argument: code %d", code)
@@ -188,12 +189,15 @@ func TestInitRenderQuotesAndKeyEnv(t *testing.T) {
 	}
 }
 
-// config.local.toml.example is what a second machine copies: it must load
-// with the committed config.toml as it is.
+// config.example.toml is what a second machine copies: it must load as the
+// user config over the defaults as they are.
 func TestConfigExampleLoads(t *testing.T) {
 	it := newInitTest(t, "")
 	ex, err := os.ReadFile(filepath.Join("..", "..", "config.example.toml"))
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(it.local()), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(it.local(), ex, 0o600); err != nil {

@@ -160,7 +160,6 @@ func (c *Config) Validate() error {
 	errs = append(errs, c.validateUsage()...)
 	errs = append(errs, c.validateTriage()...)
 	errs = append(errs, c.validateLearn()...)
-	errs = append(errs, c.legacyErrs...)
 	switch c.GitHub.Transport {
 	case "gh", "direct":
 	default:
@@ -453,34 +452,45 @@ func validateCopyFiles(label string, files []string) []error {
 	return errs
 }
 
-// validateQuietHours checks daemon.quiet_hours with the rules of
-// internal/eligibility's parser, which imports this package and so cannot be
-// called from here: empty is fine, else "HH:MM-HH:MM" with each clock in
-// 00:00..23:59 and start != end.
+// validateQuietHours checks daemon.quiet_hours (ParseQuietHours).
 func validateQuietHours(spec string) []error {
-	trimmed := strings.TrimSpace(spec)
-	if trimmed == "" {
-		return nil
-	}
-	from, to, found := strings.Cut(trimmed, "-")
-	if !found {
-		return []error{fmt.Errorf("daemon.quiet_hours %q: want HH:MM-HH:MM", spec)}
-	}
-	start, err := parseClock(from)
-	if err != nil {
-		return []error{fmt.Errorf("daemon.quiet_hours %q: start: %w", spec, err)}
-	}
-	end, err := parseClock(to)
-	if err != nil {
-		return []error{fmt.Errorf("daemon.quiet_hours %q: end: %w", spec, err)}
-	}
-	if start == end {
-		return []error{fmt.Errorf("daemon.quiet_hours %q: start and end are the same, so the window is empty", spec)}
+	if _, _, err := ParseQuietHours(spec); err != nil {
+		return []error{fmt.Errorf("daemon.quiet_hours %q: %w", spec, err)}
 	}
 	return nil
 }
 
-// parseClock reads "H:MM" or "HH:MM" as minutes since midnight.
+// QuietWindow is a daemon.quiet_hours window in minutes since midnight. It
+// includes Start and excludes End, and wraps past midnight when End is not
+// after Start.
+type QuietWindow struct{ Start, End int }
+
+// ParseQuietHours reads a daemon.quiet_hours spec, a local "HH:MM-HH:MM" such
+// as "01:00-07:00" (each clock "H:MM" or "HH:MM", 00:00 through 23:59, start
+// and end different). A blank spec is no window: ok is false, with no error.
+func ParseQuietHours(spec string) (w QuietWindow, ok bool, err error) {
+	trimmed := strings.TrimSpace(spec)
+	if trimmed == "" {
+		return QuietWindow{}, false, nil
+	}
+	from, to, found := strings.Cut(trimmed, "-")
+	if !found {
+		return QuietWindow{}, false, errors.New("want HH:MM-HH:MM")
+	}
+	if w.Start, err = parseClock(from); err != nil {
+		return QuietWindow{}, false, fmt.Errorf("start: %w", err)
+	}
+	if w.End, err = parseClock(to); err != nil {
+		return QuietWindow{}, false, fmt.Errorf("end: %w", err)
+	}
+	if w.Start == w.End {
+		return QuietWindow{}, false, errors.New("start and end are the same, so the window is empty")
+	}
+	return w, true, nil
+}
+
+// parseClock reads "H:MM" or "HH:MM" as minutes since midnight. Anything else,
+// including a second "-" or a seconds field, is an error.
 func parseClock(s string) (int, error) {
 	t, err := time.Parse("15:04", strings.TrimSpace(s))
 	if err != nil {

@@ -15,6 +15,7 @@ import (
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // roundJob is one round the dispatcher decided to run.
@@ -585,16 +586,16 @@ func codexRoles(roles []config.Role) int {
 func (e *Engine) planStart(ctx context.Context, job *roundJob, subject string) bool {
 	switch {
 	case job.hasSlo:
-		e.rec.Record(ctx, subject, "review", fmt.Sprintf("%s round in %s at %s", job.kind, job.slot.Name, short(job.pr.HeadSHA)))
+		e.rec.Record(ctx, subject, "review", fmt.Sprintf("%s round in %s at %s", job.kind, job.slot.Name, textx.ShortSHA(job.pr.HeadSHA)))
 	case job.pool == nil:
-		e.rec.Record(ctx, subject, "review", fmt.Sprintf("%s round in a new per-PR worktree at %s", job.kind, short(job.pr.HeadSHA)))
+		e.rec.Record(ctx, subject, "review", fmt.Sprintf("%s round in a new per-PR worktree at %s", job.kind, textx.ShortSHA(job.pr.HeadSHA)))
 	default:
 		free, err := e.st.FreeSlots(ctx, job.pool.Repo, job.pr.ID)
 		if err != nil || len(free) == 0 {
 			e.needSlot(ctx, *job.pool, subject)
 			return false
 		}
-		e.rec.Record(ctx, subject, "review", fmt.Sprintf("%s round in %s (claim) at %s", job.kind, free[0].Name, short(job.pr.HeadSHA)))
+		e.rec.Record(ctx, subject, "review", fmt.Sprintf("%s round in %s (claim) at %s", job.kind, free[0].Name, textx.ShortSHA(job.pr.HeadSHA)))
 	}
 	e.dryRounds++
 	return true

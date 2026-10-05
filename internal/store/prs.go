@@ -308,15 +308,6 @@ func (s *Store) PRByID(ctx context.Context, id int64) (PR, error) {
 	return p, nil
 }
 
-// PRByNodeID looks up a PR by its GitHub node id.
-func (s *Store) PRByNodeID(ctx context.Context, nodeID string) (PR, error) {
-	p, err := scanPR(s.db.QueryRowContext(ctx, "SELECT "+cols("", prColumns)+" FROM prs WHERE node_id = ?", nodeID))
-	if err != nil {
-		return PR{}, notFound(err, "pr", nodeID)
-	}
-	return p, nil
-}
-
 // PRByRepoNumber looks up PR #number of repository repoID.
 func (s *Store) PRByRepoNumber(ctx context.Context, repoID int64, number int) (PR, error) {
 	p, err := scanPR(s.db.QueryRowContext(ctx, "SELECT "+cols("", prColumns)+

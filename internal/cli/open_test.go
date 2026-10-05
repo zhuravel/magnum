@@ -1,11 +1,14 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
 
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/engine"
+	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/reveal"
 	"github.com/zhuravel/magnum/internal/store"
@@ -155,5 +158,34 @@ func TestOpenWithoutSessionsAndUsage(t *testing.T) {
 	h.errb.Reset()
 	if code := h.cmd("open", "99"); code != 1 || !strings.Contains(h.errb.String(), "magnum review 99") {
 		t.Fatalf("unknown PR: exit %d: %s", code, h.errb.String())
+	}
+}
+
+// TestOpenNamesTheAutomationPermission: when macOS refuses magnum's
+// AppleScript (error -1743), `magnum open` says which permission and where to
+// grant it, instead of reporting the terminal activated.
+func TestOpenNamesTheAutomationPermission(t *testing.T) {
+	h := newActHarness(t)
+	pr := h.seedPR("talkable/talkable", 5, store.PRReviewed)
+	h.session(pr.ID, store.RoleJudge, store.SessionLive, "mg-talkable-5-judge", "p_1", "w_1")
+	run := &execx.Fake{Rules: []execx.Rule{
+		{Prefix: []string{"/bin/ps"}, Result: execx.Result{Stdout: []byte("100 ttys050  herdr --session default\n")}},
+		{Prefix: []string{"/usr/bin/osascript"}, Result: execx.Result{Code: 1,
+			Stderr: []byte("execution error: Not authorized to send Apple events to iTerm. (-1743)\n")}},
+		{Prefix: []string{"/usr/bin/open"}},
+	}}
+	h.d.Reveal = func(ctx context.Context, o reveal.Options) (reveal.Outcome, error) {
+		return reveal.Reveal(ctx, run, config.Terminal{App: "iTerm2", Session: "default"}, "herdr", o)
+	}
+	if code := h.cmd("open", "5"); code != 1 {
+		t.Fatalf("exit %d, want 1\nstdout %s\nstderr %s", code, h.out.String(), h.errb.String())
+	}
+	actContains(t, h.errb.String(), "focused mg-talkable-5-judge in herdr", "Automation", "-1743",
+		"System Settings → Privacy & Security → Automation → allow iTerm")
+	if s := h.errb.String() + h.out.String(); strings.Contains(s, "activated") || strings.Contains(s, "fix [terminal]") {
+		t.Fatalf("names the wrong fix:\n%s", s)
+	}
+	if len(run.CallsWithPrefix("/usr/bin/open")) != 0 {
+		t.Fatal("brought iTerm forward anyway")
 	}
 }

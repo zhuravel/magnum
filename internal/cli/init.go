@@ -21,6 +21,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/paths"
 )
 
@@ -66,9 +67,13 @@ func runInit(c *Context, force bool, pos []string) int {
 		return inspUsage(c, "init", fmt.Sprintf("unexpected argument %q", pos[0]), initUsage)
 	}
 	file := daemonConfigOverride(c) // "" = the built-in defaults (or a legacy config.toml in the home)
-	local := initTarget(c, file)
+	local := c.Layout.UserConfig
+	if local == "" {
+		fmt.Fprintf(c.Stderr, "magnum init: no place for your config: there is no home directory to put ~/.config/magnum/config.toml in\nfix: set HOME (or XDG_CONFIG_HOME)\n")
+		return 1
+	}
 	if _, err := os.Stat(local); err == nil && !force {
-		fmt.Fprintf(c.Stderr, "magnum init: %s exists\nfix: edit it (config.full.example.toml has every key in a worked setup), or re-run with --force to replace it (the old file is kept as %s)\n",
+		fmt.Fprintf(c.Stderr, "magnum init: %s exists\nfix: edit it (config.full.example.toml is a worked setup, config.defaults.toml documents every key), or re-run with --force to replace it (the old file is kept as %s)\n",
 			inspTilde(local), filepath.Base(local)+".bak")
 		return 1
 	}
@@ -102,22 +107,6 @@ func runInit(c *Context, force bool, pos []string) int {
 	}
 	initReport(c.Stdout, local, ans, cfg)
 	return 0
-}
-
-// initTarget is the file init writes: next to an explicit --config file its
-// config.local.toml; else the user config (~/.config/magnum/config.toml);
-// else (a layout without one) config.local.toml in the home.
-func initTarget(c *Context, file string) string {
-	switch {
-	case file != "":
-		return filepath.Join(filepath.Dir(file), "config.local.toml")
-	case c.Layout.UserConfig != "":
-		return c.Layout.UserConfig
-	}
-	if c.Layout.Home == "" {
-		return ""
-	}
-	return filepath.Join(c.Layout.Home, "config.local.toml")
 }
 
 // initGHLogin is the login gh is logged in as; "" when gh cannot tell.
@@ -230,7 +219,7 @@ func initCheckBot(s string) (string, error) {
 // initAppName names the App identity: its slug and "-app".
 func initAppName(bot string) string { return strings.TrimSuffix(bot, "[bot]") + "-app" }
 
-// initRender is the config.local.toml for a. Every value was validated to
+// initRender is the user config for a. Every value was validated to
 // a plain character set, so strconv.Quote yields valid TOML strings.
 func initRender(a initAnswers, now time.Time) string {
 	q := strconv.Quote
@@ -268,21 +257,7 @@ func initValidate(c *Context, file, content string) error {
 	if err := os.WriteFile(user, []byte(content), 0o600); err != nil {
 		return err
 	}
-	if file != "" { // a full config with its legacy overlay next to it
-		base, err := os.ReadFile(file)
-		if err != nil {
-			return err
-		}
-		if err := os.WriteFile(user, base, 0o600); err != nil {
-			return err
-		}
-		if err := os.WriteFile(filepath.Join(dir, "config.local.toml"), []byte(content), 0o600); err != nil {
-			return err
-		}
-		_, err = config.Load(paths.Layout{Home: c.Layout.Home}, user)
-		return err
-	}
-	_, err = config.Load(paths.Layout{Home: c.Layout.Home, UserConfig: user}, "")
+	_, err = config.Load(paths.Layout{Home: c.Layout.Home, UserConfig: user}, file)
 	return err
 }
 
@@ -297,22 +272,7 @@ func initWrite(path, content string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmp.Name())
-	if _, err := tmp.WriteString(content); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Chmod(tmp.Name(), 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), path)
+	return fsx.WriteFileAtomic(path, []byte(content), 0o600)
 }
 
 // initReport says what was written and what to do next.

@@ -7,9 +7,11 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // Guard refuses to let magnum touch a slot a human may be using. It returns
@@ -224,7 +226,7 @@ func processNames(pi herdr.ProcessInfo) string {
 
 // guardHead detects commits a human made in the slot.
 func (m *Manager) guardHead(ctx context.Context, sl store.Slot) error {
-	if sl.Path == "" || !exists(sl.Path) {
+	if sl.Path == "" || !fsx.Exists(sl.Path) {
 		return nil
 	}
 	if want := store.Deref(sl.CheckedOutSHA); want != "" {
@@ -239,7 +241,7 @@ func (m *Manager) guardHead(ctx context.Context, sl store.Slot) error {
 			return err
 		}
 		return m.persistHold(ctx, sl, HoldHeadDrift, fmt.Sprintf("HEAD is %s, magnum checked out %s",
-			short(head), short(want)))
+			textx.ShortSHA(head), textx.ShortSHA(want)))
 	}
 	n, err := m.git.Unpushed(ctx, sl.Path)
 	if err != nil {
@@ -310,7 +312,7 @@ func (m *Manager) resumeSwitch(ctx context.Context, sl store.Slot, head string) 
 		return false, fmt.Errorf("slots: guard %s: %w", sl.Name, err)
 	}
 	m.event(ctx, "slot:"+sl.Name, "info", "slot.switch_recorded",
-		fmt.Sprintf("HEAD %s is the commit an interrupted checkout switched to; recorded as checked out", short(head)))
+		fmt.Sprintf("HEAD %s is the commit an interrupted checkout switched to; recorded as checked out", textx.ShortSHA(head)))
 	return true, nil
 }
 
@@ -355,7 +357,7 @@ func humanActivity(sl store.Slot, pr store.PR) string {
 // holdChanges persists HoldDirtyWorktree when the slot's tree has changes
 // (untracked files only with untracked); why names the human evidence.
 func (m *Manager) holdChanges(ctx context.Context, sl store.Slot, untracked bool, why string) error {
-	if sl.Path == "" || !exists(sl.Path) {
+	if sl.Path == "" || !fsx.Exists(sl.Path) {
 		return nil
 	}
 	ch, err := m.worktreeChanges(ctx, sl.Path)
@@ -378,7 +380,7 @@ const maxListed = 20
 // what the guard took for magnum's residue can be audited. A switch or reset
 // keeps untracked files: they count only with untracked.
 func (m *Manager) noteDiscard(ctx context.Context, sl store.Slot, untracked bool) (bool, error) {
-	if sl.Path == "" || !exists(sl.Path) {
+	if sl.Path == "" || !fsx.Exists(sl.Path) {
 		return false, nil
 	}
 	ch, err := m.worktreeChanges(ctx, sl.Path)
@@ -469,13 +471,6 @@ func (m *Manager) persistHold(ctx context.Context, sl store.Slot, reason, detail
 	return hold
 }
 
-func short(sha string) string {
-	if len(sha) > 7 {
-		return sha[:7]
-	}
-	return sha
-}
-
 // Pin marks the slot pinned: no automatic claim, checkout, release or
 // removal until Unpin.
 func (m *Manager) Pin(ctx context.Context, slot store.Slot) error {
@@ -522,7 +517,7 @@ func (m *Manager) Unpin(ctx context.Context, slot store.Slot) error {
 		return err
 	}
 	var rebase string
-	if r := sl.HoldReason; r != nil && (*r == HoldHeadDrift || *r == HoldUnpushed) && exists(sl.Path) {
+	if r := sl.HoldReason; r != nil && (*r == HoldHeadDrift || *r == HoldUnpushed) && fsx.Exists(sl.Path) {
 		if rebase, err = m.git.RevParse(ctx, sl.Path, "HEAD"); err != nil {
 			return fmt.Errorf("slots: unpin %s: %w", sl.Name, err)
 		}

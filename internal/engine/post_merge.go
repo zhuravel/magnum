@@ -23,6 +23,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/attention"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // postMerge reports whether pr's round is a post-merge review: GitHub
@@ -46,7 +47,7 @@ var postMergeRoundStates = []string{store.PRQueued, store.PRRereviewPending, sto
 func postMergeRefusal(label string, pr store.PR) string {
 	switch {
 	case deref(pr.ReviewedSHA) == pr.HeadSHA:
-		return fmt.Sprintf("%s: its merged head %s was already reviewed", label, short(pr.HeadSHA))
+		return fmt.Sprintf("%s: its merged head %s was already reviewed", label, textx.ShortSHA(pr.HeadSHA))
 	case pr.State == store.PRReleasing:
 		return label + ": its checkout is being released; run `magnum review` again in a minute"
 	}
@@ -58,9 +59,9 @@ func postMergeRefusal(label string, pr store.PR) string {
 // "of the merged head 2222222" without an earlier review.
 func postMergeScope(pr store.PR) string {
 	if rs := deref(pr.ReviewedSHA); rs != "" {
-		return fmt.Sprintf("post-merge review %s → %s (comment only)", short(rs), short(pr.HeadSHA))
+		return fmt.Sprintf("post-merge review %s → %s (comment only)", textx.ShortSHA(rs), textx.ShortSHA(pr.HeadSHA))
 	}
-	return fmt.Sprintf("post-merge review of the merged head %s (comment only)", short(pr.HeadSHA))
+	return fmt.Sprintf("post-merge review of the merged head %s (comment only)", textx.ShortSHA(pr.HeadSHA))
 }
 
 // postMergeBase is the commit a post-merge round of job reviews from:
@@ -79,7 +80,7 @@ func (e *Engine) postMergeBase(ctx context.Context, job *roundJob, target string
 	}
 	dir, subject := job.slot.Path, prSubject(job.repo, job.pr.Number)
 	note := func(base, from string) string {
-		e.event(ctx, "info", subject, "round.post_merge_base", fmt.Sprintf("post-merge round reviews %s..%s (%s)", short(base), short(target), from),
+		e.event(ctx, "info", subject, "round.post_merge_base", fmt.Sprintf("post-merge round reviews %s..%s (%s)", textx.ShortSHA(base), textx.ShortSHA(target), from),
 			map[string]any{"base_sha": base, "target_sha": target, "from": from})
 		return base
 	}
@@ -87,23 +88,23 @@ func (e *Engine) postMergeBase(ctx context.Context, job *roundJob, target string
 		if _, err := e.d.Git.RevParse(ctx, dir, mc); err != nil {
 			if clone := cmp.Or(job.slot.MainClone, deref(job.repo.ClonePath)); clone != "" {
 				if err := e.d.Git.FetchCommit(ctx, clone, mc, 0); err != nil {
-					e.log.Info("post-merge base: fetch the merge commit", "subject", subject, "commit", short(mc), "err", err)
+					e.log.Info("post-merge base: fetch the merge commit", "subject", subject, "commit", textx.ShortSHA(mc), "err", err)
 				}
 			}
 		}
 		if parent, err := e.d.Git.RevParse(ctx, dir, mc+"^1"); err == nil {
 			if mb, err := e.d.Git.MergeBase(ctx, dir, parent, target); err == nil {
-				return note(mb, "the base before merge commit "+short(mc))
+				return note(mb, "the base before merge commit "+textx.ShortSHA(mc))
 			}
 		}
 	}
 	if b := deref(job.pr.BaseSHA); b != "" {
 		if mb, err := e.d.Git.MergeBase(ctx, dir, b, target); err == nil {
-			return note(mb, "the recorded base tip "+short(b))
+			return note(mb, "the recorded base tip "+textx.ShortSHA(b))
 		}
 	}
 	e.event(ctx, "warn", subject, "round.post_merge_base",
-		fmt.Sprintf("post-merge round: no base before the merge found for %s; the reviewers compare with the base branch", short(target)), nil)
+		fmt.Sprintf("post-merge round: no base before the merge found for %s; the reviewers compare with the base branch", textx.ShortSHA(target)), nil)
 	return ""
 }
 

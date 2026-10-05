@@ -3,7 +3,6 @@ package slots
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -179,48 +179,10 @@ func WriteCheckoutFile(checkout, rel string, data []byte, perm fs.FileMode) (err
 		return err
 	}
 	defer root.Close()
-	dir, base := filepath.Dir(clean), filepath.Base(clean)
-	if err := root.MkdirAll(dir, 0o755); err != nil {
+	if err := root.MkdirAll(filepath.Dir(clean), 0o755); err != nil {
 		return err
 	}
-	// One handle on the parent directory, so the temp file and the rename
-	// resolve it once (and inside checkout).
-	parent, err := root.OpenRoot(dir)
-	if err != nil {
-		return err
-	}
-	defer parent.Close()
-
-	var (
-		tmp  *os.File
-		name string
-	)
-	for range 10 {
-		name = "." + base + ".tmp-" + rand.Text()[:12]
-		tmp, err = parent.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-		if !errors.Is(err, fs.ErrExist) {
-			break
-		}
-	}
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if err != nil {
-			parent.Remove(name)
-		}
-	}()
-	_, err = tmp.Write(data)
-	if err == nil {
-		err = tmp.Chmod(perm.Perm()) // exactly perm, whatever the umask
-	}
-	if cerr := tmp.Close(); err == nil {
-		err = cerr
-	}
-	if err != nil {
-		return err
-	}
-	return parent.Rename(name, base)
+	return fsx.WriteFileAtomicIn(root, clean, data, perm)
 }
 
 // CopyIntoCheckout copies src (a file outside the checkout, e.g. in the main

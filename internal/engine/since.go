@@ -8,6 +8,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // maxComparesPerRepo caps the Compare calls one repository's poll makes; PRs
@@ -71,7 +72,7 @@ func (e *Engine) refreshSinceReview(ctx context.Context, gh GitHub, repo store.R
 		cs, err := e.compareStats(ctx, gh, repo, base, pr.HeadSHA) // a push's comparison of this poll serves it
 		switch {
 		case errors.Is(err, github.ErrNotFound):
-			next.Error = fmt.Sprintf("GitHub cannot compare %s...%s (a commit is gone)", short(base), short(pr.HeadSHA))
+			next.Error = fmt.Sprintf("GitHub cannot compare %s...%s (a commit is gone)", textx.ShortSHA(base), textx.ShortSHA(pr.HeadSHA))
 		case err != nil:
 			*budget = 0
 			if e.changed("compare:"+repo.FullName(), err.Error()) {

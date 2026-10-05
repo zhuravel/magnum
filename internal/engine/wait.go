@@ -411,16 +411,12 @@ func quietHoursNow(spec string, now time.Time) bool {
 // quietHoursEnd is the next local time quiet_hours ("HH:MM-HH:MM") end
 // after now; zero when spec cannot be read.
 func quietHoursEnd(spec string, now time.Time) time.Time {
-	_, end, ok := strings.Cut(spec, "-")
-	if !ok {
-		return time.Time{}
-	}
-	t, err := time.Parse("15:04", strings.TrimSpace(end))
-	if err != nil {
+	w, ok, err := config.ParseQuietHours(spec)
+	if err != nil || !ok {
 		return time.Time{}
 	}
 	n := now.Local()
-	at := time.Date(n.Year(), n.Month(), n.Day(), t.Hour(), t.Minute(), 0, 0, n.Location())
+	at := time.Date(n.Year(), n.Month(), n.Day(), w.End/60, w.End%60, 0, 0, n.Location())
 	if !at.After(n) {
 		at = at.AddDate(0, 0, 1)
 	}

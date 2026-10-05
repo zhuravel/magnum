@@ -388,7 +388,7 @@ func TestReserveLeavesThePRStateAlone(t *testing.T) {
 	if cur, _ := h.st.PRByID(h.ctx, pr.ID); cur.State != store.PRReviewed {
 		t.Fatalf("PR state = %s, want reviewed", cur.State)
 	}
-	a, err := h.st.OpenAssignmentByPR(h.ctx, pr.ID)
+	a, err := h.openAssignment(pr.ID)
 	if err != nil || a.SlotID != sl.ID || len(a.DBNames) != 2 {
 		t.Fatalf("assignment = %+v, %v", a, err)
 	}

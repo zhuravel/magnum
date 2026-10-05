@@ -13,7 +13,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"unicode/utf8"
+
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // Kinds: why the engine parked the PR (engine needsAttention's why).
@@ -122,8 +123,8 @@ func Explain(kind, msg, ref string) Reason {
 	lines := cleanLines(output)
 	r.Tail = lines[max(0, len(lines)-TailLines):]
 	r.Cause, r.Fix = cause(r, chain, output, lines, ref)
-	r.Cause = clip(r.Cause, SummaryMax)
-	r.Summary = clip(summary(r), SummaryMax)
+	r.Cause = clip(r.Cause)
+	r.Summary = clip(summary(r))
 	return r
 }
 
@@ -177,17 +178,17 @@ func cause(r Reason, chain, output string, lines []string, ref string) (string, 
 	generic := "fix the cause, then " + retry + " (or `magnum ignore " + ref + "` to stop reviewing it)"
 	switch r.Kind {
 	case KindBlocked, KindNoReview, KindOverloaded:
-		c := strings.TrimSpace(strings.TrimPrefix(firstLine(chain), "judge blocked:"))
+		c := strings.TrimSpace(strings.TrimPrefix(textx.FirstLine(chain), "judge blocked:"))
 		fix := "`magnum open " + ref + "` shows the judge's pane; fix what it reports, then " + retry
 		if r.Kind == KindOverloaded {
 			fix = "the agent's API stayed overloaded; " + retry + " retries"
 		}
 		return c, fix
 	case KindIdentityError:
-		return strings.TrimSpace(strings.TrimPrefix(firstLine(chain), "judge identity check failed:")),
+		return strings.TrimSpace(strings.TrimPrefix(textx.FirstLine(chain), "judge identity check failed:")),
 			"`magnum identities check` shows what fails; then " + retry
 	case KindIdentityLeak:
-		return firstLine(chain), "check that review on GitHub and the identity's token; automation for the watch is paused until `magnum resume`"
+		return textx.FirstLine(chain), "check that review on GitHub and the identity's token; automation for the watch is paused until `magnum resume`"
 	}
 
 	all := chain + "\n" + output
@@ -290,27 +291,16 @@ func stepLabel(step string) string {
 	return strings.Join(f[:min(2, len(f))], " ")
 }
 
-func firstLine(s string) string {
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		s = s[:i]
-	}
-	return strings.TrimSpace(s)
-}
-
 // lastSegment is the innermost context of an error chain ("a: b: c" → "c").
 func lastSegment(chain string) string {
-	chain = firstLine(chain)
+	chain = textx.FirstLine(chain)
 	if i := strings.LastIndex(chain, ": "); i >= 0 && i+2 < len(chain) {
 		return chain[i+2:]
 	}
 	return chain
 }
 
-func clip(s string, n int) string {
-	s = strings.Join(strings.Fields(s), " ")
-	if utf8.RuneCountInString(s) <= n {
-		return s
-	}
-	r := []rune(s)
-	return strings.TrimSpace(string(r[:n-1])) + "…"
+// clip collapses s to one line of single spaces, at most SummaryMax runes.
+func clip(s string) string {
+	return textx.Clip(strings.Join(strings.Fields(s), " "), SummaryMax)
 }

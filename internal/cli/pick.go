@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 	"github.com/zhuravel/magnum/internal/tui"
 )
 
@@ -178,7 +179,7 @@ func pickEntries(ctx context.Context, d *actDeps, limit int) ([]pickEntry, error
 		}
 		rows = append(rows, row{at: at, e: pickEntry{
 			Label: d.actLabel(repo.FullName(), pr.Number), Repo: repo.FullName(), Number: pr.Number, URL: pr.URL,
-			State: state, Title: trunc(actClean(store.Deref(pr.Title)), 90),
+			State: state, Title: textx.Clip(actClean(store.Deref(pr.Title)), 90),
 			Author: author, Age: actAgo(now, at), Pinned: pr.Pinned, Known: true, Review: reviewFactsOf(pr), GHState: pr.GHState,
 		}})
 	}
@@ -343,7 +344,7 @@ func pickRefEntry(ctx context.Context, d *actDeps, s string) (pickEntry, bool) {
 	e := pickEntry{Label: d.actLabel(full, n), Repo: full, Number: n, State: "new", URL: fmt.Sprintf("https://github.com/%s/pull/%d", full, n)}
 	if t, err := d.resolveRef(ctx, e.ref()); err == nil {
 		e.Known, e.Pinned, e.State, e.Review = true, t.PR.Pinned, t.PR.State, reviewFactsOf(t.PR)
-		e.GHState, e.Title = t.PR.GHState, trunc(actClean(store.Deref(t.PR.Title)), 90)
+		e.GHState, e.Title = t.PR.GHState, textx.Clip(actClean(store.Deref(t.PR.Title)), 90)
 		if t.PR.URL != "" {
 			e.URL = t.PR.URL
 		}

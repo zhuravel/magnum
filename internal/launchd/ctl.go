@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/fsx"
 )
 
 const (
@@ -86,7 +87,10 @@ func install(ctx context.Context, run execx.Runner, uid int, path string, plist 
 	if err != nil {
 		return fmt.Errorf("launchd install: %w", err)
 	}
-	if err := writeFileAtomic(path, plist); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("launchd install: write %s: %w", path, err)
+	}
+	if err := fsx.WriteFileAtomic(path, plist, 0o644); err != nil { // launchd reads it; never a partial plist
 		return fmt.Errorf("launchd install: write %s: %w", path, err)
 	}
 
@@ -228,44 +232,6 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 	case <-t.C:
 		return nil
 	}
-}
-
-// writeFileAtomic writes data to path with mode 0644 via a temp file in the
-// same directory, flushed to disk before the rename, so a reader (launchd)
-// never sees a partial plist, even after a crash.
-func writeFileAtomic(path string, data []byte) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(dir, ".magnum-plist-*")
-	if err != nil {
-		return err
-	}
-	done := false
-	defer func() {
-		if !done {
-			_ = tmp.Close()
-			_ = os.Remove(tmp.Name())
-		}
-	}()
-	if _, err := tmp.Write(data); err != nil {
-		return err
-	}
-	if err := tmp.Chmod(0o644); err != nil { // CreateTemp makes 0600; ignore umask
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp.Name(), path); err != nil {
-		return err
-	}
-	done = true
-	return nil
 }
 
 // labelFromPlist extracts the top-level Label string from plist XML.

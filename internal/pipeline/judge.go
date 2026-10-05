@@ -15,6 +15,7 @@ import (
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 const (
@@ -331,7 +332,7 @@ func (rd *round) findReview(ctx context.Context, markers []string, res judgeResu
 	if pick == nil {
 		return nil, nil
 	}
-	rd.warn(ctx, "review %d by %s on %s has no magnum:run marker; accepted as this round's review", pick.DatabaseID, rd.login, short(target))
+	rd.warn(ctx, "review %d by %s on %s has no magnum:run marker; accepted as this round's review", pick.DatabaseID, rd.login, textx.ShortSHA(target))
 	return rd.restCheck(ctx, *pick)
 }
 
@@ -378,7 +379,7 @@ func (rd *round) findClaimed(ctx context.Context, markers []string, res judgeRes
 		if i := slices.IndexFunc(ours, func(rv github.Review) bool { return rv.CommitOid == target }); i >= 0 {
 			pick = ours[i]
 		} else {
-			rd.warn(ctx, "review %d is on commit %s, not the round's target %s", pick.DatabaseID, short(pick.CommitOid), short(target))
+			rd.warn(ctx, "review %d is on commit %s, not the round's target %s", pick.DatabaseID, textx.ShortSHA(pick.CommitOid), textx.ShortSHA(target))
 		}
 		p, err := rd.restCheck(ctx, pick)
 		if p == nil || err != nil || p.leak != "" {
@@ -579,9 +580,9 @@ func (rd *round) dismissStale(ctx context.Context, event string, newID int64, ne
 		prev.Manual { // the reviewer's own verdict stands until they change it
 		return
 	}
-	msg := fmt.Sprintf("Superseded by the newer magnum review of %s: %s", short(rd.in.TargetSHA), newURL)
+	msg := fmt.Sprintf("Superseded by the newer magnum review of %s: %s", textx.ShortSHA(rd.in.TargetSHA), newURL)
 	if newURL == "" {
-		msg = fmt.Sprintf("Superseded by the newer magnum review %d of %s.", newID, short(rd.in.TargetSHA))
+		msg = fmt.Sprintf("Superseded by the newer magnum review %d of %s.", newID, textx.ShortSHA(rd.in.TargetSHA))
 	}
 	err := rd.r.GitHub.DismissReview(ctx, rd.owner, rd.name, rd.in.PR.Number, prev.ID, msg)
 	if err != nil {
@@ -676,7 +677,7 @@ func (rd *round) judgeData(run store.Run, marker string) agents.JudgeData {
 		history = []PreviousReview{*in.Previous}
 	}
 	for _, h := range history {
-		pr := agents.PreviousReview{ID: h.ID, Event: h.Event, SHA: short(h.SHA)}
+		pr := agents.PreviousReview{ID: h.ID, Event: h.Event, SHA: textx.ShortSHA(h.SHA)}
 		if !h.SubmittedAt.IsZero() {
 			pr.SubmittedAt = h.SubmittedAt.UTC().Format(time.RFC3339)
 		}

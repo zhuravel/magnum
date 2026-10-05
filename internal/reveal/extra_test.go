@@ -16,8 +16,8 @@ import (
 
 func TestAccessors(t *testing.T) {
 	r := New(&execx.Fake{}, config.Terminal{App: "Ghostty"}, "")
-	if r.Kind() != KindGhostty || r.Session() != "default" || r.herdrBin != "herdr" {
-		t.Fatalf("got kind=%s session=%s bin=%s", r.Kind(), r.Session(), r.herdrBin)
+	if r.kind != KindGhostty || r.session != "default" || r.herdrBin != "herdr" {
+		t.Fatalf("got kind=%s session=%s bin=%s", r.kind, r.session, r.herdrBin)
 	}
 }
 

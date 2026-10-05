@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // Shell completion reads the registry through its own read-only SQLite
@@ -284,11 +285,7 @@ func (c *Context) completeRepos(string) []cobra.Completion {
 
 // completeDesc keeps a description to one short line.
 func completeDesc(s string) string {
-	s = strings.Join(strings.Fields(s), " ")
-	if r := []rune(s); len(r) > 80 {
-		s = string(r[:79]) + "…"
-	}
-	return s
+	return textx.Clip(strings.Join(strings.Fields(s), " "), 80)
 }
 
 // completeFirst completes the first positional argument from sources (in

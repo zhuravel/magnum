@@ -45,6 +45,7 @@ import (
 	"github.com/zhuravel/magnum/internal/identity"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // Round kinds (the run kinds of the round's run rows).
@@ -619,7 +620,7 @@ func (rd *round) run(ctx context.Context) (RoundResult, error) {
 		names = append(names, x.Name)
 	}
 	names = append(names, rd.judge.Name)
-	rd.event(ctx, "info", "round.start", fmt.Sprintf("round %d (%s) of %s on %s in %s: %s", in.Round, in.Kind, rd.subject, short(in.TargetSHA), in.SlotPath, strings.Join(names, ", ")),
+	rd.event(ctx, "info", "round.start", fmt.Sprintf("round %d (%s) of %s on %s in %s: %s", in.Round, in.Kind, rd.subject, textx.ShortSHA(in.TargetSHA), in.SlotPath, strings.Join(names, ", ")),
 		map[string]any{"round": in.Round, "kind": in.Kind, "target_sha": in.TargetSHA, "slot": in.SlotPath, "dry_run": in.DryRun, "roles": names})
 
 	env, err := rd.r.Identity.Env(ctx)
@@ -929,11 +930,4 @@ func (r *Runner) sleep(ctx context.Context, d time.Duration) error {
 	case <-t.C:
 		return nil
 	}
-}
-
-func short(sha string) string {
-	if len(sha) > 7 {
-		return sha[:7]
-	}
-	return sha
 }

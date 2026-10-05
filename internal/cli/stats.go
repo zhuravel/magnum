@@ -24,6 +24,7 @@ import (
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/tui"
 )
 
 const statsUsage = "[--since 7d] [--repo X] [--json]"
@@ -678,7 +679,7 @@ func statsRender(w io.Writer, r statsReport) {
 	if r.Repo != "" {
 		scope = actClean(r.Repo)
 	}
-	fmt.Fprintf(w, "stats since %s (%s), %s\n", r.Since.Local().Format(statsTimeFmt), inspDur(r.Until.Sub(r.Since)), scope)
+	fmt.Fprintf(w, "stats since %s (%s), %s\n", r.Since.Local().Format(statsTimeFmt), tui.HumanDuration(r.Until.Sub(r.Since)), scope)
 	if len(r.Groups) == 0 && len(r.TopPRs) == 0 {
 		fmt.Fprintf(w, "\nno rounds since %s\n", r.Since.Local().Format(statsTimeFmt))
 		return
@@ -708,13 +709,13 @@ func statsRender(w io.Writer, r statsReport) {
 	for _, role := range statsOrdered(r.Total.Durations, statsRoundRole) {
 		d := r.Total.Durations[role]
 		durs = append(durs, []string{actClean(role), strconv.Itoa(d.N),
-			inspDur(time.Duration(d.MedianSeconds) * time.Second), inspDur(time.Duration(d.P90Seconds) * time.Second)})
+			tui.HumanDuration(time.Duration(d.MedianSeconds) * time.Second), tui.HumanDuration(time.Duration(d.P90Seconds) * time.Second)})
 	}
 	statsTable(w, "DURATIONS", []string{"ROLE", "N", "MEDIAN", "P90"}, durs)
 
 	var top [][]string
 	for _, p := range r.TopPRs {
-		top = append(top, []string{actClean(p.Repo) + "#" + strconv.Itoa(p.Number), inspDur(time.Duration(p.AgentSeconds) * time.Second),
+		top = append(top, []string{actClean(p.Repo) + "#" + strconv.Itoa(p.Number), tui.HumanDuration(time.Duration(p.AgentSeconds) * time.Second),
 			strconv.Itoa(p.Rounds), statsPercent(p.Share)})
 	}
 	statsTable(w, "TOP PRS BY AGENT TIME", []string{"PR", "AGENT TIME", "ROUNDS", "SHARE"}, top)

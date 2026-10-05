@@ -60,8 +60,8 @@ func TestBuiltinDefaultsAreTheCommittedFile(t *testing.T) {
 }
 
 // The user's ~/.config/magnum/config.toml layers over the built-in defaults;
-// without it a legacy config.local.toml in the home still applies, and the
-// user config wins over it when both exist.
+// a config.local.toml in the home (where settings lived before) is not read,
+// with or without it.
 func TestUserConfigLayersOverTheBuiltinDefaults(t *testing.T) {
 	home, cfgDir := t.TempDir(), t.TempDir()
 	user := filepath.Join(cfgDir, "magnum", "config.toml")
@@ -81,9 +81,8 @@ func TestUserConfigLayersOverTheBuiltinDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cfg.Sources) != 2 || cfg.Sources[0] != BuiltinDefaults || cfg.Sources[1] != filepath.Join(home, "config.local.toml") ||
-		cfg.IdentityByName("legacy-me") == nil {
-		t.Fatalf("legacy layer: sources %q", cfg.Sources)
+	if len(cfg.Sources) != 1 || cfg.Sources[0] != BuiltinDefaults || cfg.IdentityByName("legacy-me") != nil {
+		t.Fatalf("config.local.toml was read: sources %q", cfg.Sources)
 	}
 
 	write(user, testLocalConfig)
@@ -99,7 +98,7 @@ func TestUserConfigLayersOverTheBuiltinDefaults(t *testing.T) {
 	}
 }
 
-// A deterministic stand-in for a developer's config.local.toml.
+// A deterministic stand-in for a developer's user config.
 const testLocalConfig = `
 [[identity]]
 name = "me"
@@ -227,13 +226,13 @@ owner = "talkable"
 include = ["*"]
 identity = "me"
 `
-	for name, body := range map[string]string{"config.toml": base, "config.local.toml": local} {
+	for name, body := range map[string]string{"config.toml": base, "user.toml": local} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
 	file := filepath.Join(dir, "config.toml")
-	layout := paths.Layout{Home: dir}
+	layout := paths.Layout{Home: dir, UserConfig: filepath.Join(dir, "user.toml")}
 	with, err := Load(layout, file)
 	if err != nil || len(with.Watches) != 2 {
 		t.Fatalf("Load: %v %+v", err, with)
@@ -284,10 +283,10 @@ transport = "direct"
 	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(base), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "config.local.toml"), []byte(local), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "user.toml"), []byte(local), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := Load(paths.Layout{Home: dir}, filepath.Join(dir, "config.toml"))
+	cfg, err := Load(paths.Layout{Home: dir, UserConfig: filepath.Join(dir, "user.toml")}, filepath.Join(dir, "config.toml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,11 +315,11 @@ func TestTerminalMouse(t *testing.T) {
 			t.Fatal(err)
 		}
 		if local != "" {
-			if err := os.WriteFile(filepath.Join(dir, "config.local.toml"), []byte(local), 0o600); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, "user.toml"), []byte(local), 0o600); err != nil {
 				t.Fatal(err)
 			}
 		}
-		return Load(paths.Layout{Home: dir}, filepath.Join(dir, "config.toml"))
+		return Load(paths.Layout{Home: dir, UserConfig: filepath.Join(dir, "user.toml")}, filepath.Join(dir, "config.toml"))
 	}
 	for _, tc := range []struct {
 		name, base, local string
@@ -406,10 +405,10 @@ wt_hooks = false
 	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(base), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "config.local.toml"), []byte(local), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "user.toml"), []byte(local), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := Load(paths.Layout{Home: dir}, filepath.Join(dir, "config.toml"))
+	cfg, err := Load(paths.Layout{Home: dir, UserConfig: filepath.Join(dir, "user.toml")}, filepath.Join(dir, "config.toml"))
 	if err != nil {
 		t.Fatal(err)
 	}

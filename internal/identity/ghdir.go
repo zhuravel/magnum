@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/zhuravel/magnum/internal/fsx"
 )
 
 // syncConfigDir writes the current token into ConfigDir unless it is already
@@ -22,7 +24,7 @@ func (a *App) syncConfigDir() error {
 	}
 	dir := a.ConfigDir()
 	hosts, cfg := filepath.Join(dir, "hosts.yml"), filepath.Join(dir, "config.yml")
-	if tok == a.written && fileExists(hosts) && fileExists(cfg) {
+	if tok == a.written && fsx.Exists(hosts) && fsx.Exists(cfg) {
 		return nil
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -31,11 +33,11 @@ func (a *App) syncConfigDir() error {
 	if err := os.Chmod(dir, 0o700); err != nil {
 		return fmt.Errorf("write gh config dir: %w", err)
 	}
-	if err := writeFileAtomic(cfg, renderConfigYML(a.cfg.Name)); err != nil {
-		return err
+	if err := fsx.WriteFileAtomic(cfg, renderConfigYML(a.cfg.Name), 0o600); err != nil {
+		return fmt.Errorf("write %s: %w", cfg, err)
 	}
-	if err := writeFileAtomic(hosts, renderHostsYML(a.cfg.Name, tok, a.cfg.Login)); err != nil {
-		return err
+	if err := fsx.WriteFileAtomic(hosts, renderHostsYML(a.cfg.Name, tok, a.cfg.Login), 0o600); err != nil {
+		return fmt.Errorf("write %s: %w", hosts, err)
 	}
 	a.written = tok
 	return nil
@@ -63,35 +65,3 @@ func yamlString(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
 }
-
-// writeFileAtomic writes data to path via a 0600 temp file in the same
-// directory and a rename, so readers never see a partial file.
-func writeFileAtomic(path string, data []byte) (err error) {
-	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
-	}
-	tmp := f.Name()
-	defer func() {
-		if err != nil {
-			_ = os.Remove(tmp)
-		}
-	}()
-	if err = f.Chmod(0o600); err == nil {
-		if _, err = f.Write(data); err == nil {
-			err = f.Sync()
-		}
-	}
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-	if err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
-	}
-	if err = os.Rename(tmp, path); err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
-	}
-	return nil
-}
-
-func fileExists(p string) bool { _, err := os.Stat(p); return err == nil }

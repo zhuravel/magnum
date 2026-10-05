@@ -1076,9 +1076,6 @@ default_repo = "talkable/talkable"
 notify = true
 toast_every_review = true
 
-[claude]
-simplify = "first"
-
 [[identity]]
 name = "zhuravel"
 kind = "gh"
@@ -1184,7 +1181,7 @@ func newHarness(t *testing.T, mods ...func(*harness)) *harness {
 		t.Fatal(err)
 	}
 
-	notifier := &notify.Notifier{Herdr: h.nh, Store: st, Layout: layout, Enabled: true}
+	notifier := &notify.Notifier{Herdr: h.nh, Store: st, Enabled: true}
 	planner := &cleanup.Planner{Store: st, Slots: h.sl, Inventory: h.inv, Config: cfg, Clock: clock.Now, Park: h.ag.Park}
 	h.d = Deps{
 		Config: cfg, Layout: layout, Store: st, Now: clock.Now,

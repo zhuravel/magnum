@@ -12,8 +12,10 @@ import (
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 const (
@@ -383,7 +385,7 @@ func (rd *round) collectPatch(ctx context.Context, role config.Role, run store.R
 		}
 		return rep
 	}
-	if err := writeFileAtomic(path, res.Stdout); err != nil {
+	if err := fsx.WriteFileAtomic(path, res.Stdout, 0o600); err != nil {
 		rep.Status, rep.Detail = ReportFailed, fmt.Sprintf("write %s: %v", filepath.Base(path), err)
 		return rep
 	}
@@ -409,7 +411,7 @@ func (rd *round) restoreTree(ctx context.Context, role config.Role) error {
 		return fmt.Errorf("pipeline: %s cleanup: %w", role.Name, err)
 	}
 	if head != target {
-		rd.warn(ctx, "%s moved HEAD to %s; switching back to %s", role.Name, short(head), short(target))
+		rd.warn(ctx, "%s moved HEAD to %s; switching back to %s", role.Name, textx.ShortSHA(head), textx.ShortSHA(target))
 		if err := rd.r.Git.SwitchDetach(ctx, slot, target); err != nil {
 			return fmt.Errorf("pipeline: %s cleanup: %w", role.Name, err)
 		}
@@ -417,7 +419,7 @@ func (rd *round) restoreTree(ctx context.Context, role config.Role) error {
 			return fmt.Errorf("pipeline: %s cleanup: %w", role.Name, err)
 		}
 		if head != target {
-			return fmt.Errorf("pipeline: %s cleanup: HEAD is %s, want %s", role.Name, short(head), short(target))
+			return fmt.Errorf("pipeline: %s cleanup: HEAD is %s, want %s", role.Name, textx.ShortSHA(head), textx.ShortSHA(target))
 		}
 	}
 	if st, err := rd.r.Git.Status(ctx, slot); err != nil {
@@ -475,12 +477,4 @@ func (rd *round) baseRef() string {
 		return b
 	}
 	return "origin/" + b
-}
-
-func writeFileAtomic(path string, b []byte) error {
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
 }

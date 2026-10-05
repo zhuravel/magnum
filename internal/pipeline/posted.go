@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/zhuravel/magnum/internal/github"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // Checks of a verified review that never change the round's outcome: a
@@ -46,8 +47,8 @@ func (rd *round) handleDuplicates(ctx context.Context, p *postedReview) {
 	}
 	var msg []string
 	if n := len(p.duplicates); n > 0 {
-		msg = append(msg, fmt.Sprintf("%d more submitted review%s (%s) carry the run's marker; kept %d, the first. GitHub cannot delete a submitted review: delete its comments or edit it by hand",
-			n, plural(n), joinIDs(p.duplicates), p.id))
+		msg = append(msg, fmt.Sprintf("%s (%s) carry the run's marker; kept %d, the first. GitHub cannot delete a submitted review: delete its comments or edit it by hand",
+			textx.Count(n, "more submitted review", "more submitted reviews"), joinIDs(p.duplicates), p.id))
 	}
 	if len(deleted) > 0 {
 		msg = append(msg, "deleted the pending duplicate "+joinIDs(deleted))
@@ -134,7 +135,7 @@ func (rd *round) environmentFailures(ctx context.Context, fs []envFailure) {
 	for _, f := range fs {
 		parts = append(parts, strings.TrimPrefix(f.Cmd+": "+f.Error, ": "))
 	}
-	rd.event(ctx, "warn", "round.environment", fmt.Sprintf("the judge hit %d failure%s of the review machine: %s", len(fs), plural(len(fs)), strings.Join(parts, "; ")),
+	rd.event(ctx, "warn", "round.environment", fmt.Sprintf("the judge hit %s of the review machine: %s", textx.Count(len(fs), "failure", "failures"), strings.Join(parts, "; ")),
 		map[string]any{"failures": fs})
 }
 
@@ -177,12 +178,4 @@ func joinIDs(ids []int64) string {
 		s[i] = fmt.Sprint(id)
 	}
 	return strings.Join(s, ", ")
-}
-
-// plural is "s" unless n is 1.
-func plural(n int) string {
-	if n == 1 {
-		return ""
-	}
-	return "s"
 }

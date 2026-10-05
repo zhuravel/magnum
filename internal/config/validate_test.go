@@ -60,29 +60,15 @@ func TestZeroWatchesAndIdentitiesAreValid(t *testing.T) {
 	}
 }
 
-func TestLegacySimplifyIsValidated(t *testing.T) {
-	for _, v := range []string{"sometimes", "First", "never ", "off"} {
-		_, err := loadFiles(t, t.TempDir(), map[string]string{"config.toml": minimalConfig + "[claude]\nsimplify = \"" + v + "\"\n"})
-		if err == nil || !strings.Contains(err.Error(), "claude.simplify") || !strings.Contains(err.Error(), v) {
-			t.Errorf("simplify %q: err = %v, want a claude.simplify error", v, err)
-		}
-	}
-	// The overlay's value is checked too.
-	_, err := loadFiles(t, t.TempDir(), map[string]string{
-		"config.toml":       minimalConfig,
-		"config.local.toml": "[claude]\nsimplify = \"typo\"\n",
-	})
-	wantError(t, err, "claude.simplify", "typo")
-
-	for v, runs := range map[string]string{"": RunsFirst, "first": RunsFirst, "always": RunsAlways, "never": RunsManual} {
-		cfg, err := loadFiles(t, t.TempDir(), map[string]string{"config.toml": minimalConfig + "[claude]\nsimplify = \"" + v + "\"\n"})
-		if err != nil {
-			t.Errorf("simplify %q: %v", v, err)
-			continue
-		}
-		if r, _ := cfg.RoleByNameOrAlias(nil, "simplify"); r.Runs != runs {
-			t.Errorf("simplify %q: runs = %q, want %q", v, r.Runs, runs)
-		}
+// The legacy [codex] and [claude] sections are gone: a config that still
+// has one fails to load with "unknown keys", in the base and in the user
+// layer, instead of being mapped onto the kinds and roles.
+func TestLegacyCodexClaudeSectionsAreUnknownKeys(t *testing.T) {
+	for _, section := range []string{"[codex]\nskill_path = \"/skills/judge.md\"\n", "[claude]\nsimplify = \"never\"\n"} {
+		_, err := loadFiles(t, t.TempDir(), map[string]string{"config.toml": minimalConfig + section})
+		wantError(t, err, "unknown keys")
+		_, err = loadFiles(t, t.TempDir(), map[string]string{"config.toml": minimalConfig, "user.toml": section})
+		wantError(t, err, "unknown keys")
 	}
 }
 
@@ -112,8 +98,8 @@ func TestValidateIdentities(t *testing.T) {
 	}
 	// Duplicates across config.toml and the overlay are caught too.
 	_, err := loadFiles(t, t.TempDir(), map[string]string{
-		"config.toml":       minimalConfig,
-		"config.local.toml": "[[identity]]\nname = \"z\"\nkind = \"gh\"\nlogin = \"z2\"\n",
+		"config.toml": minimalConfig,
+		"user.toml":   "[[identity]]\nname = \"z\"\nkind = \"gh\"\nlogin = \"z2\"\n",
 	})
 	wantError(t, err, `identity "z" is declared twice`)
 }
@@ -180,6 +166,25 @@ func TestValidateQuietHours(t *testing.T) {
 	}
 	_, err := loadFiles(t, t.TempDir(), map[string]string{"config.toml": "[daemon]\nquiet_hours = \"nonsense\"\n" + minimalConfig})
 	wantError(t, err, "daemon.quiet_hours")
+}
+
+// TestParseQuietHoursReadsTheWindow: the one quiet_hours parser (eligibility
+// uses it too) gives minutes since midnight, nothing for a blank spec.
+func TestParseQuietHoursReadsTheWindow(t *testing.T) {
+	for spec, want := range map[string]QuietWindow{"22:00-06:00": {22 * 60, 6 * 60}, " 1:05 - 7:30 ": {65, 7*60 + 30}, "00:00-23:59": {0, 23*60 + 59}} {
+		w, ok, err := ParseQuietHours(spec)
+		if err != nil || !ok || w != want {
+			t.Errorf("ParseQuietHours(%q) = %+v, %v, %v; want %+v", spec, w, ok, err, want)
+		}
+	}
+	for _, blank := range []string{"", "  "} {
+		if _, ok, err := ParseQuietHours(blank); ok || err != nil {
+			t.Errorf("ParseQuietHours(%q) = %v, %v; want no window and no error", blank, ok, err)
+		}
+	}
+	if _, ok, err := ParseQuietHours("01:00-01:00"); ok || err == nil {
+		t.Errorf("an empty window must be an error")
+	}
 }
 
 func TestValidateTemplatesParse(t *testing.T) {
@@ -321,8 +326,8 @@ func TestAfterNamingUnknownRoleIsRejectedEverywhere(t *testing.T) {
 		"[[role]]\nname = \"claude-review\"\nkind = \"claude\"\nafter = [\"ghost\"]\n"})
 	wantError(t, err, `after names unknown role "ghost"`)
 	_, err = loadFiles(t, t.TempDir(), map[string]string{
-		"config.toml":       minimalConfig,
-		"config.local.toml": "[[role]]\nname = \"claude-simplify\"\nafter = [\"claude-review\", \"ghost\"]\n",
+		"config.toml": minimalConfig,
+		"user.toml":   "[[role]]\nname = \"claude-simplify\"\nafter = [\"claude-review\", \"ghost\"]\n",
 	})
 	wantError(t, err, `after names unknown role "ghost"`)
 }
@@ -438,8 +443,8 @@ func TestOKStatusLoadsAndMerges(t *testing.T) {
 	}
 	// The overlay replaces the list like any other slice field.
 	cfg = mustLoad(t, map[string]string{
-		"config.toml":       minimalConfig,
-		"config.local.toml": "[[role]]\nname = \"codex-review\"\nok_status = [0, 1]\n",
+		"config.toml": minimalConfig,
+		"user.toml":   "[[role]]\nname = \"codex-review\"\nok_status = [0, 1]\n",
 	})
 	cr, _ = cfg.RoleByNameOrAlias(nil, "codex-review")
 	if !slices.Equal(cr.OKStatus, []int{0, 1}) || !cr.StatusOK(1) || cr.Command == "" {
@@ -447,8 +452,8 @@ func TestOKStatusLoadsAndMerges(t *testing.T) {
 	}
 	// An explicit empty list normalizes to nil (only 0 counts).
 	cfg = mustLoad(t, map[string]string{
-		"config.toml":       minimalConfig,
-		"config.local.toml": "[[role]]\nname = \"codex-review\"\nok_status = []\n",
+		"config.toml": minimalConfig,
+		"user.toml":   "[[role]]\nname = \"codex-review\"\nok_status = []\n",
 	})
 	cr, _ = cfg.RoleByNameOrAlias(nil, "codex-review")
 	if cr.OKStatus != nil || !cr.StatusOK(0) || cr.StatusOK(1) {
@@ -460,8 +465,8 @@ func TestOKStatusLoadsAndMerges(t *testing.T) {
 	}
 	// An agent role cannot set it.
 	_, err := loadFiles(t, t.TempDir(), map[string]string{
-		"config.toml":       minimalConfig,
-		"config.local.toml": "[[role]]\nname = \"claude-review\"\nok_status = [0]\n",
+		"config.toml": minimalConfig,
+		"user.toml":   "[[role]]\nname = \"claude-review\"\nok_status = [0]\n",
 	})
 	wantError(t, err, "role claude-review", "ok_status is for shell roles only")
 }

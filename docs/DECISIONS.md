@@ -1620,3 +1620,44 @@ editing history. Code, config comments and prompts reference these by their head
   line, after the marker"; the judge put it on the line right after `</details>` and the marker comment,
   and GitHub treats an HTML block as running until a blank line, so the footer's Markdown (the link, the
   italics) was posted as raw text. The skill now asks for a blank line before it.
+- **The legacy `[codex]` and `[claude]` sections are gone** (2026-10-05). They predated `[kinds.*]` and
+  `[[role]]` and only mapped onto them as fallbacks (`wrapper_mode` and `args` onto the kinds,
+  `skill_path` and `review_args` onto codex-judge and codex-review, `effort` and `simplify` onto
+  claude-review and claude-simplify); no known config uses them, and the public history starts after
+  the kinds and roles replaced them. A config that still has one now fails to load with "unknown keys"
+  instead of being mapped silently; the fix is the matching `[kinds.<name>]` key or `[[role]]` block.
+  Rejected: keeping the fallbacks with a deprecation warning (nobody to warn, and two ways to set one
+  key).
+- **`magnum migrate-home` and the `config.local.toml` fallback are gone** (2026-10-05). Every known
+  install has moved to the XDG places, and the checkout layout they migrated from predates the public
+  history. Without `MAGNUM_HOME` the layout is now always the XDG one: a registry left in a checkout's
+  `state/` (the binary's checkout or `~/Projects/magnum`) no longer selects the checkout layout, and the
+  user layer is only `~/.config/magnum/config.toml` (`$XDG_CONFIG_HOME`): a `config.local.toml` next to the
+  base file is not read, `magnum init` writes the user config even under `--config`, and doctor no longer
+  offers to move one. Kept: `MAGNUM_HOME=<checkout>` (development, the checkout layout) and the checkout's
+  own `config.toml` as the base when no `--config` names one, which the development and test layouts use.
+  Rejected: keeping the command for a straggler (one would run it once from an older release).
+- **One atomic file write** (2026-10-05). Ten packages wrote a file through a temporary file and a
+  rename, each its own way: some under a fixed `<name>.tmp` that two writers share, some without an
+  fsync. `fsx.WriteFileAtomic` (and `WriteFileAtomicIn` for a write confined to an `os.Root`) is the one
+  copy: a temporary file with a unique name in the target's directory, its mode set exactly (whatever the
+  umask), written and synced, renamed over the target, then the directory synced (best effort: the file
+  is already in place). Every caller keeps its mode and its own directory creation. Not yet moved: the
+  agents' CLI-config writer (`internal/agents/trust.go`).
+- **Text is clipped one way** (2026-10-05). Five clippers disagreed by a rune: some kept n runes and added
+  the ellipsis, some kept n-1. `textx.Clip(s, n)` is the one rule: at most n runes, the last an ellipsis
+  when the text was cut, spaces before it dropped. Outputs that change: a readiness check's last line, the
+  eval report's first lines of errors and findings, herdr's logged arguments (one rune shorter when cut),
+  and a CLI cell or completion description cut right after a space (no space before the ellipsis).
+  `textx.FirstLine` is the first non-blank line, trimmed, also for attention's explanations (which took
+  the first line even when blank) and doctor's error lines (which kept its trailing spaces). The short
+  SHA (7), plurals and the login fold (case, "@", "[bot]") have one copy each too; the 10- and 12-character
+  SHAs and the folds that keep "@" or "[bot]" are other rules and stay.
+- **`magnum open` names the Automation permission when macOS refuses its AppleScript** (2026-10-05).
+  osascript's error -1743 ("Not authorized to send Apple events") meant the focus script could not run;
+  `magnum open` then brought the terminal forward with `open -a` and reported "activated terminal app",
+  which reads as a success while the herdr tab stays hidden. Reveal now returns a `reveal.AutomationError`
+  instead, and `magnum open` (and the screens' open, and the daemon's reveal_on_attention log line) says
+  "macOS did not let magnum script iTerm (the Automation permission, error -1743): System Settings →
+  Privacy & Security → Automation → allow iTerm for the app that runs magnum". Any other focus failure
+  still falls back to bringing the terminal forward.

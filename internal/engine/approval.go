@@ -17,6 +17,7 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // ApprovalDismissMessage is the reason a dismissed approval shows on GitHub.
@@ -108,7 +109,7 @@ func (e *Engine) followApproval(ctx context.Context, repo store.Repo, pr store.P
 	case cerr == nil && cs.Commits == 0:
 		e.setKV(ctx, kvApprovalKept(pr.ID), kept)
 		e.event(ctx, "info", subject, "review.approval_kept",
-			fmt.Sprintf("approval %d kept: head %s has no commits since %s", reviewID, short(pr.HeadSHA), short(reviewed)), data)
+			fmt.Sprintf("approval %d kept: head %s has no commits since %s", reviewID, textx.ShortSHA(pr.HeadSHA), textx.ShortSHA(reviewed)), data)
 		return
 	case cerr != nil:
 		if ctx.Err() != nil {
@@ -131,7 +132,7 @@ func (e *Engine) followApproval(ctx context.Context, repo store.Repo, pr store.P
 			what = fmt.Sprintf("%d new commit%s", cs.Commits, map[bool]string{true: "", false: "s"}[cs.Commits == 1])
 		}
 		e.event(ctx, "info", subject, "review.approval_dismissed",
-			fmt.Sprintf("dismissed approval %d by %s on %s: %s up to %s; a re-review follows", reviewID, id.Login, short(reviewed), what, short(pr.HeadSHA)), data)
+			fmt.Sprintf("dismissed approval %d by %s on %s: %s up to %s; a re-review follows", reviewID, id.Login, textx.ShortSHA(reviewed), what, textx.ShortSHA(pr.HeadSHA)), data)
 	case errors.Is(err, github.ErrForbidden):
 		e.setKV(ctx, kvApprovalRefused(pr.ID), idStr)
 		e.event(ctx, "warn", subject, "review.approval_dismiss_refused",

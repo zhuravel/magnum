@@ -29,19 +29,9 @@ func (s *Store) EnqueueRequest(ctx context.Context, kind string, payload any) (i
 	return res.LastInsertId()
 }
 
-// NextPendingRequest returns the oldest pending request, or ErrNotFound.
-func (s *Store) NextPendingRequest(ctx context.Context) (Request, error) {
-	r, err := scanRequest(s.db.QueryRowContext(ctx, "SELECT "+cols("", requestColumns)+
-		" FROM requests WHERE state = ? ORDER BY id LIMIT 1", RequestPending))
-	if err != nil {
-		return Request{}, notFound(err, "request", "pending")
-	}
-	return r, nil
-}
-
 // PendingRequests returns up to limit pending requests, oldest first
-// (limit <= 0 = all). Unlike NextPendingRequest it lets a consumer skip a
-// request it already handed to a background worker.
+// (limit <= 0 = all), so a consumer can skip a request it already handed to
+// a background worker.
 func (s *Store) PendingRequests(ctx context.Context, limit int) ([]Request, error) {
 	q := "SELECT " + cols("", requestColumns) + " FROM requests WHERE state = ? ORDER BY id"
 	if limit > 0 {

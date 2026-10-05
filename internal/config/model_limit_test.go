@@ -242,8 +242,8 @@ func TestLoadModelLimitKeysMergeKeyByKey(t *testing.T) {
 
 	// The overlay overrides the committed file key by key too.
 	cfg = mustLoad(t, map[string]string{
-		"config.toml":       minimalConfig + "[kinds.claude]\nfallback_models = [\"sonnet\"]\nreset_model = \"opus\"\n",
-		"config.local.toml": "[kinds.claude]\nfallback_models = [\"haiku\", \"sonnet\"]\n",
+		"config.toml": minimalConfig + "[kinds.claude]\nfallback_models = [\"sonnet\"]\nreset_model = \"opus\"\n",
+		"user.toml":   "[kinds.claude]\nfallback_models = [\"haiku\", \"sonnet\"]\n",
 	})
 	claude, _ = cfg.KindSpec("claude")
 	if !slices.Equal(claude.FallbackModels, []string{"haiku", "sonnet"}) || claude.ResetModel != "opus" || claude.SwitchModel != "/model {model}" {
@@ -317,16 +317,16 @@ func TestLoadModelLimitCooldown(t *testing.T) {
 
 	// The overlay overrides the committed value.
 	cfg = mustLoad(t, map[string]string{
-		"config.toml":       minimalConfig + "[daemon]\nmodel_limit_cooldown = \"2h\"\n",
-		"config.local.toml": "[daemon]\nmodel_limit_cooldown = \"90m\"\n",
+		"config.toml": minimalConfig + "[daemon]\nmodel_limit_cooldown = \"2h\"\n",
+		"user.toml":   "[daemon]\nmodel_limit_cooldown = \"90m\"\n",
 	})
 	if got := cfg.Daemon.ModelLimitCooldown.Duration; got != 90*time.Minute {
 		t.Fatalf("overlay model_limit_cooldown = %s, want 90m", got)
 	}
 	// An overlay that leaves it out keeps the committed one.
 	cfg = mustLoad(t, map[string]string{
-		"config.toml":       minimalConfig + "[daemon]\nmodel_limit_cooldown = \"2h\"\n",
-		"config.local.toml": "[daemon]\nburst_pushes = 4\n",
+		"config.toml": minimalConfig + "[daemon]\nmodel_limit_cooldown = \"2h\"\n",
+		"user.toml":   "[daemon]\nburst_pushes = 4\n",
 	})
 	if got := cfg.Daemon.ModelLimitCooldown.Duration; got != 2*time.Hour {
 		t.Fatalf("model_limit_cooldown with an unrelated overlay = %s, want 2h", got)

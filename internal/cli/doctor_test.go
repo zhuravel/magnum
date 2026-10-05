@@ -236,7 +236,7 @@ func TestDoctorFailures(t *testing.T) {
 		"claude":        {"FAIL", "install Claude Code"},
 		"claude login":  {"SKIP", ""},
 		"codex wrapper": {"FAIL", "--dangerously-bypass-approvals-and-sandbox"},
-		"skill":         {"FAIL", "skill_path"},
+		"skill":         {"FAIL", "judge role's skill"},
 		"gh":            {"FAIL", "gh auth login"},
 		"mysql":         {"FAIL", "DBngin"},
 		"disk":          {"FAIL", "magnum cleanup"},
@@ -486,7 +486,7 @@ func TestDoctorChecksTheMiseTheLaunchAgentUses(t *testing.T) {
 	}
 	write := func(program string) {
 		t.Helper()
-		args := launchd.DefaultArgs(d.Layout.Home, program, d.Layout.Binary())
+		args := []string{program, "-C", d.Layout.Home, "exec", "--", d.Layout.Binary(), "daemon"}
 		if !isMiseProgram(program) {
 			args = []string{program, "daemon"}
 		}

@@ -30,9 +30,11 @@ import (
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/eval"
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/pipeline"
+	"github.com/zhuravel/magnum/internal/textx"
 	"github.com/zhuravel/magnum/internal/usage"
 )
 
@@ -143,7 +145,7 @@ func evalCorpusPath(c *Context, flag string) string {
 		dir = filepath.Join(paths.Expand("~"), ".config", "magnum")
 	}
 	user := filepath.Join(dir, evalCorpusFile)
-	if legacy := filepath.Join(c.Layout.Home, evalLegacyCorpusFile); c.Layout.Home != "" && !fileExists(user) && fileExists(legacy) {
+	if legacy := filepath.Join(c.Layout.Home, evalLegacyCorpusFile); c.Layout.Home != "" && !fsx.Exists(user) && fsx.Exists(legacy) {
 		return legacy
 	}
 	return user
@@ -188,7 +190,7 @@ func runEvalRun(c *Context, f evalRunFlags) int {
 		case ctx.Err() != nil:
 			cr.Outcome, cr.Error = "skipped", "interrupted"
 		default:
-			fmt.Fprintf(c.Stdout, "[%d/%d] %s %s at %s\n", i+1, len(cases), ec.Name, ec.PR, ec.Head[:7])
+			fmt.Fprintf(c.Stdout, "[%d/%d] %s %s at %s\n", i+1, len(cases), ec.Name, ec.PR, textx.ShortSHA(ec.Head))
 			cr = r.runCase(ctx, ec, cr)
 			if cr.Outcome == pipeline.OutcomeUsageLimit || cr.Outcome == pipeline.OutcomeLoginRequired {
 				stopped = "an earlier case hit " + cr.Outcome

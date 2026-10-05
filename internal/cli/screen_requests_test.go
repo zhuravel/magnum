@@ -57,7 +57,7 @@ func TestScreenActionsReportARefusedRequest(t *testing.T) {
 	h.seedPR("talkable/talkable", 5, store.PRReviewed)
 	h.pid = 4242
 	h.onSleep = func(h *actHarness) {
-		if q, err := h.st.NextPendingRequest(h.ctx); err == nil {
+		if q, err := nextPendingRequest(h.ctx, h.st); err == nil {
 			_ = h.st.CompleteRequest(h.ctx, q.ID, store.RequestFailed, "talkable#5 is not open (released, GitHub MERGED)")
 		}
 	}

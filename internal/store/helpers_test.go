@@ -81,9 +81,7 @@ func TestSlotByPRAndAssignSlot(t *testing.T) {
 	if open, _ := st.OpenAssignmentBySlot(ctx, sl.ID); Deref(open.HeadSHA) != "sha-new" {
 		t.Fatalf("head = %v", open.HeadSHA)
 	}
-	if err := st.CloseAssignment(ctx, a.ID, "released"); err != nil {
-		t.Fatal(err)
-	}
+	closeAssignment(t, st, a.ID, "released")
 	if err := st.UpdateAssignmentHead(ctx, a.ID, "x"); !errors.Is(err, ErrConflict) {
 		t.Fatalf("ended assignment = %v, want ErrConflict", err)
 	}
@@ -211,5 +209,23 @@ func TestKVKeys(t *testing.T) {
 		if got != want {
 			t.Errorf("key %q, want %q", got, want)
 		}
+	}
+}
+
+// openAssignmentOf is the PR's open assignment, or ErrNotFound.
+func openAssignmentOf(ctx context.Context, st *Store, prID int64) (Assignment, error) {
+	return st.assignmentWhere(ctx, "pr_id = ? AND ended_at IS NULL", prID)
+}
+
+// closeAssignment ends open assignment id, as a release would.
+func closeAssignment(t *testing.T, st *Store, id int64, reason string) {
+	t.Helper()
+	res, err := st.db.Exec("UPDATE assignments SET ended_at = ?, end_reason = ? WHERE id = ? AND ended_at IS NULL",
+		FormatTime(st.now()), reason, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		t.Fatalf("assignment %d is not open", id)
 	}
 }

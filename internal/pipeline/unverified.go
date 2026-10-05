@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // errUnverified starts the error of a judge run whose round could not ask
@@ -117,7 +118,7 @@ func (rd *round) adoptUnverified(ctx context.Context) func() (RoundResult, error
 		}
 		rd.unverified = u.markers[0]
 		rd.event(ctx, "warn", "round.unverified", fmt.Sprintf("the review of judge run %s (round %d) on %s could not be verified and %s; "+
-			"this round's judge looks for it before posting: its review carries the same marker", u.markers[0], u.round, short(rd.in.TargetSHA), why),
+			"this round's judge looks for it before posting: its review carries the same marker", u.markers[0], u.round, textx.ShortSHA(rd.in.TargetSHA), why),
 			map[string]any{"markers": u.markers, "runs": u.runs})
 		return nil
 	}
@@ -165,7 +166,7 @@ func (rd *round) adoptUnverified(ctx context.Context) func() (RoundResult, error
 		}
 	}
 	rd.event(ctx, "info", "round.adopted", fmt.Sprintf("review %d of judge run %s (round %d), which GitHub could not verify then, is on %s: "+
-		"adopted without a new round", found.id, u.markers[0], u.round, short(rd.in.TargetSHA)),
+		"adopted without a new round", found.id, u.markers[0], u.round, textx.ShortSHA(rd.in.TargetSHA)),
 		map[string]any{"review_id": found.id, "markers": u.markers, "runs": u.runs, "outcome": outcome})
 	if outcome == OutcomePosted {
 		r := u.result

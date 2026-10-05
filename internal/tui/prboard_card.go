@@ -12,6 +12,8 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // helpContent is the keys and the legend, at most width-6 cells wide (the
@@ -236,7 +238,7 @@ func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
 		{"Issue", issue},
 		{"Updated", when(r.UpdatedAt)},
 		{"GitHub", gh},
-		{"Head", orDim(shortSHA(r.HeadSHA))},
+		{"Head", orDim(textx.ShortSHA(r.HeadSHA))},
 		{"Slot", orDim(r.Slot)},
 		{"Notes", map[bool]string{true: "yes", false: "no"}[r.Notes]},
 		{"Next review", next},
@@ -406,9 +408,9 @@ func (p prbPainter) mergedUnreviewedSentence(r PRBoardRow) string {
 	}
 	last := "never reviewed"
 	if li := r.LastReview; li != nil && li.CommitSHA != "" {
-		last = "last review on " + shortSHA(li.CommitSHA)
+		last = "last review on " + textx.ShortSHA(li.CommitSHA)
 	}
-	return fmt.Sprintf("Merged %s before magnum reviewed its last push: %s, merged head %s", when, last, cmp.Or(shortSHA(r.HeadSHA), "unknown"))
+	return fmt.Sprintf("Merged %s before magnum reviewed its last push: %s, merged head %s", when, last, cmp.Or(textx.ShortSHA(r.HeadSHA), "unknown"))
 }
 
 // sinceSentence says what changed since the review, with a second line
@@ -419,16 +421,16 @@ func (p prbPainter) sinceSentence(r PRBoardRow) []string {
 		return []string{p.st.Dim.Render("unknown: no compare yet")}
 	}
 	a, del := "+"+strconv.Itoa(d.Additions), p.g.minus+strconv.Itoa(d.Deletions) // exact in the card
-	nums := plural(d.Commits, "commit", "commits") + p.st.Dim.Render(" · ") + plural(d.Files, "file", "files") +
+	nums := textx.Count(d.Commits, "commit", "commits") + p.st.Dim.Render(" · ") + textx.Count(d.Files, "file", "files") +
 		p.st.Dim.Render(" · ") + p.pal.add.Render(a) + " " + p.pal.del.Render(del)
 	var s string
 	switch {
 	case isBaseDelta(d):
 		s = nums + p.st.Dim.Render(" against the base branch: never reviewed")
 	case d.Commits == 0 && d.Additions == 0 && d.Deletions == 0:
-		s = p.st.OK.Render("nothing new") + p.st.Dim.Render(" since the reviewed head "+shortSHA(d.BaseSHA))
+		s = p.st.OK.Render("nothing new") + p.st.Dim.Render(" since the reviewed head "+textx.ShortSHA(d.BaseSHA))
 	default:
-		s = nums + p.st.Dim.Render(" since the reviewed head "+shortSHA(d.BaseSHA))
+		s = nums + p.st.Dim.Render(" since the reviewed head "+textx.ShortSHA(d.BaseSHA))
 	}
 	if d.Truncated {
 		return []string{s, p.st.Dim.Render("at least: GitHub truncated the compare")}
@@ -453,14 +455,14 @@ func (p prbPainter) lastReviewSentence(r PRBoardRow) []string {
 		s += "  " + li.SubmittedAt.Local().Format("Jan 2 15:04") + p.st.Dim.Render(" · "+HumanAgo(max(p.now.Sub(li.SubmittedAt), time.Second)))
 	}
 	if li.CommitSHA != "" {
-		s += p.st.Dim.Render("  on ") + shortSHA(li.CommitSHA)
+		s += p.st.Dim.Render("  on ") + textx.ShortSHA(li.CommitSHA)
 	}
 	if !li.Stale {
 		return []string{s}
 	}
 	moved := "the head moved since"
 	if r.HeadSHA != "" {
-		moved = "the head moved to " + shortSHA(r.HeadSHA) + " since"
+		moved = "the head moved to " + textx.ShortSHA(r.HeadSHA) + " since"
 	}
 	return []string{s, p.pal.yellow.Render(p.g.stale + " stale: " + moved)}
 }
@@ -497,7 +499,7 @@ func (p prbPainter) reviewerTable(r PRBoardRow, inner int) []string {
 		}
 		commit := p.st.Dim.Render(p.g.dash)
 		if v.CommitSHA != "" {
-			commit = shortSHA(v.CommitSHA)
+			commit = textx.ShortSHA(v.CommitSHA)
 			if r.HeadSHA != "" && !strings.HasPrefix(r.HeadSHA, v.CommitSHA) && !strings.HasPrefix(v.CommitSHA, r.HeadSHA) {
 				commit = p.st.Dim.Render(commit)
 			}

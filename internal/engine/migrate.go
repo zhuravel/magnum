@@ -23,6 +23,7 @@ import (
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // KVPRFormerIdentities holds the identities a PR posted as before it
@@ -163,7 +164,7 @@ func (e *Engine) dismissFormer(ctx context.Context, job *roundJob, pr store.PR, 
 				continue
 			}
 			data := map[string]any{"review_id": rv.DatabaseID, "state": state, "identity": id.Name, "superseded_by": res.ReviewID}
-			err := gh.DismissReview(ctx, job.repo.Owner, job.repo.Name, pr.Number, rv.DatabaseID, fmt.Sprintf(FormerDismissMessage, short(target), cur))
+			err := gh.DismissReview(ctx, job.repo.Owner, job.repo.Name, pr.Number, rv.DatabaseID, fmt.Sprintf(FormerDismissMessage, textx.ShortSHA(target), cur))
 			if err != nil {
 				e.event(ctx, "warn", subject, "review.former_dismiss_failed",
 					fmt.Sprintf("could not dismiss %s review %d by %s: %v", state, rv.DatabaseID, id.Login, err), data)

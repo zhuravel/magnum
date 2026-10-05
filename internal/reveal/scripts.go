@@ -2,7 +2,6 @@ package reveal
 
 import (
 	"encoding/json"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -84,28 +83,6 @@ func ghosttyFocusScript(title string) string {
 end tell`
 }
 
-func terminalTtyListScript() string {
-	return `tell application "Terminal" to get tty of every tab of every window`
-}
-
-func itermTtyListScript() string {
-	return `tell application "iTerm" to get tty of every session of every tab of every window`
-}
-
-var ttyListSep = regexp.MustCompile(`[,\s]+`)
-
-// parseTtyList reads the flattened list osascript prints
-// ("/dev/ttys001, /dev/ttys002") into unique tty paths.
-func parseTtyList(output string) []string {
-	var ttys []string
-	for _, item := range ttyListSep.Split(output, -1) {
-		if strings.HasPrefix(item, "/dev/") && !slices.Contains(ttys, item) {
-			ttys = append(ttys, item)
-		}
-	}
-	return ttys
-}
-
 // wezPane is one entry of `wezterm cli list --format json`.
 type wezPane struct {
 	WindowID *int   `json:"window_id"`
@@ -144,19 +121,4 @@ func selectWezTermWindow(output string) string {
 		}
 	}
 	return ""
-}
-
-// wezTermTtys lists the unique pane ttys of a listing.
-func wezTermTtys(output string) ([]string, bool) {
-	panes, ok := parseWezTermPanes(output)
-	if !ok {
-		return nil, false
-	}
-	var ttys []string
-	for _, p := range panes {
-		if p.TTYName != "" && !slices.Contains(ttys, p.TTYName) {
-			ttys = append(ttys, p.TTYName)
-		}
-	}
-	return ttys, true
 }

@@ -22,9 +22,6 @@ import (
 //go:embed judge-*.md claude-*.md codex-*.sh model-fallback.md triage.md retro.md
 var embedded embed.FS
 
-// FS holds the embedded default prompts, named as in this directory.
-var FS fs.FS = embedded
-
 // Names lists the embedded default prompts, sorted.
 func Names() []string {
 	ents, err := fs.ReadDir(embedded, ".")

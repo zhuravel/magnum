@@ -8,7 +8,7 @@
 # registry (a fresh clone, CI) there is nothing to check.
 set -eu
 db="${MAGNUM_DB:-}"
-if [ -z "$db" ]; then # the checkout's registry, else the installed one (magnum migrate-home)
+if [ -z "$db" ]; then # the checkout's registry (MAGNUM_HOME), else the installed one
   for c in state/magnum.db "${XDG_DATA_HOME:-$HOME/.local/share}/magnum/magnum.db"; do
     if [ -f "$c" ]; then db="$c"; break; fi
   done

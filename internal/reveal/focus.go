@@ -85,6 +85,9 @@ func (r *Revealer) focusGhostty(ctx context.Context) (FocusResult, error) {
 		Mutates: true, Label: "focus ghostty terminal",
 	})
 	if err != nil {
+		if ae, ok := r.automationDenied(err); ok {
+			return Unavailable, ae
+		}
 		return Unavailable, fmt.Errorf("focus ghostty terminal: %w", err)
 	}
 	if osa.Out() != "focused" {

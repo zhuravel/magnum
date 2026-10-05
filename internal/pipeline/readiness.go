@@ -29,15 +29,16 @@ import (
 	"strings"
 	"time"
 	"unicode"
-	"unicode/utf8"
 
 	"github.com/BurntSushi/toml"
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/slots"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // ReadinessPlan is a round's readiness step: the repository's commands
@@ -154,7 +155,7 @@ func (rd *round) readiness(ctx context.Context) error {
 	}
 	b, err := json.MarshalIndent(rf, "", "  ")
 	if err == nil {
-		err = writeFileAtomic(file, append(b, '\n'))
+		err = fsx.WriteFileAtomic(file, append(b, '\n'), 0o600)
 	}
 	if err != nil {
 		rd.warn(ctx, "readiness: write %s: %v", ReadinessFile, err)
@@ -295,10 +296,7 @@ func oneLine(s string) string {
 		}
 		return r
 	}, s))
-	if utf8.RuneCountInString(s) > readinessLineMax {
-		s = string([]rune(s)[:readinessLineMax]) + "…"
-	}
-	return s
+	return textx.Clip(s, readinessLineMax)
 }
 
 // rubyPinned is the Ruby version a checkout pins.

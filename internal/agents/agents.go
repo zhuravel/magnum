@@ -231,11 +231,8 @@ func (m *Manager) now() time.Time {
 // titles, agent names and CLI output use it).
 func (r Role) Label() string { return string(r) }
 
-// PaneLabel is the herdr pane name for a role: "PR #N <role>", e.g.
-// "PR #729 codex-judge" (Title without a repo).
-func PaneLabel(number int, r Role) string { return Title("", number, r) }
-
-// TaggedPaneLabel is PaneLabel under a tag (Deps.Tag).
+// TaggedPaneLabel is the herdr pane name for a role under a tag (Deps.Tag):
+// "PR #N <role>", e.g. "PR #729 codex-judge" (TaggedTitle without a repo).
 func TaggedPaneLabel(tag string, number int, r Role) string { return TaggedTitle(tag, "", number, r) }
 
 const agentNameMax = 32 // herdr: [a-z][a-z0-9_-]{0,31}

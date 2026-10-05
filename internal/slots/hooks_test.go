@@ -14,6 +14,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/steps"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -182,7 +183,7 @@ func (f *perPRFixture) recordHooks(t *testing.T) *hookRecorder {
 			rec.mu.Lock()
 			rec.execs = append(rec.execs, mc)
 			rec.states = append(rec.states, state)
-			rec.dirs = append(rec.dirs, exists(mc.Dir))
+			rec.dirs = append(rec.dirs, fsx.Exists(mc.Dir))
 			rec.mu.Unlock()
 			if strings.HasSuffix(mc.Script, "./bin/worktree-setup") && h.failScript[mc.Script] == 0 {
 				writeFile(t, filepath.Join(mc.Dir, MarkerFile), DBSlug(mc.Env["WT_BRANCH"])+"\n")
@@ -267,7 +268,7 @@ func TestPerPRWorktreeRunsWorktrunkHooks(t *testing.T) {
 	if sl.State != store.SlotClaimed || store.Deref(sl.DBSlug) != "magnum_pr_7" {
 		t.Fatalf("slot = %+v (db_slug %q)", sl, store.Deref(sl.DBSlug))
 	}
-	if a, err := h.st.OpenAssignmentByPR(h.ctx, f.pr.ID); err != nil || store.Deref(a.DBSlug) != "magnum_pr_7" {
+	if a, err := h.openAssignment(f.pr.ID); err != nil || store.Deref(a.DBSlug) != "magnum_pr_7" {
 		t.Fatalf("assignment = %+v, %v", a, err)
 	}
 
@@ -337,8 +338,8 @@ func TestPerPRWorktreeRunsWorktrunkHooks(t *testing.T) {
 	if pre, rm := callIndex(h.run, isMiseScript(archive)), callIndex(h.run, isGit("worktree", "remove")); pre < 0 || rm < pre {
 		t.Fatalf("pre-remove at %d, worktree remove at %d", pre, rm)
 	}
-	if got := h.slot(sl.Name); got.State != store.SlotRemoved || exists(path) {
-		t.Fatalf("slot = %s, dir exists %v", got.State, exists(path))
+	if got := h.slot(sl.Name); got.State != store.SlotRemoved || fsx.Exists(path) {
+		t.Fatalf("slot = %s, dir exists %v", got.State, fsx.Exists(path))
 	}
 	// A second removal is a no-op.
 	if err := h.m.RemovePRWorktree(h.ctx, h.slot(sl.Name), false); err != nil || len(rec.execs) != 1 {
@@ -365,7 +366,7 @@ func TestPerPRSetupFailureMarksSlotBroken(t *testing.T) {
 	if strings.Contains(store.Deref(sl.LastError), "ghp_") {
 		t.Fatalf("last_error not redacted: %s", store.Deref(sl.LastError))
 	}
-	if _, err := h.st.OpenAssignmentByPR(h.ctx, f.pr.ID); !errors.Is(err, store.ErrNotFound) {
+	if _, err := h.openAssignment(f.pr.ID); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("assignment opened for a broken slot: %v", err)
 	}
 	// The first post-start command failed: the next one never ran.
@@ -418,8 +419,8 @@ func TestPerPRTeardownFailureStillRemoves(t *testing.T) {
 	if err := h.m.Release(h.ctx, sl, config.Pool{}, "pr_closed"); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
-	if got := h.slot(sl.Name); got.State != store.SlotRemoved || exists(sl.Path) {
-		t.Fatalf("slot = %s, dir exists %v", got.State, exists(sl.Path))
+	if got := h.slot(sl.Name); got.State != store.SlotRemoved || fsx.Exists(sl.Path) {
+		t.Fatalf("slot = %s, dir exists %v", got.State, fsx.Exists(sl.Path))
 	}
 	// The failed hook is logged and the remaining pre-remove hooks still ran.
 	if len(rec.execs) != 2 || rec.execs[1].Script != "echo bye" {
@@ -515,7 +516,7 @@ func TestPerPRRepoConfigOverridesWorktrunk(t *testing.T) {
 	if got := readFile(t, filepath.Join(path, "config", "initializers", "local.rb")); got != "LOCAL = 1\n" {
 		t.Fatalf("copied file = %q", got)
 	}
-	if exists(filepath.Join(path, "config", "missing.yml")) {
+	if fsx.Exists(filepath.Join(path, "config", "missing.yml")) {
 		t.Fatal("a missing copy_files source must be skipped")
 	}
 	local := readFile(t, filepath.Join(path, MiseLocal))

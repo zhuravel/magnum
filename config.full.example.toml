@@ -1,73 +1,18 @@
-# A complete, working magnum configuration (Talkable's setup) as an example. The binary ships generic
-# defaults (config.defaults.toml); copy the [[identity]], [[watch]], [[pool]] blocks and the [daemon]/[terminal]
-# keys you need into ~/.config/magnum/config.toml. App private keys are files next to it (~/.config/magnum/keys/,
-# chmod 600). Your config's [[watch]], [[identity]], [[pool]] and [[repo]] blocks are appended to the
-# defaults, any key it sets under [daemon], [herdr], [terminal], [board], [github], [pipeline], [triage],
-# [learn] or [kinds.<name>] overrides the default, and its [[role]] blocks override the role of the same name
-# key by key (other names are appended).
+# A complete, working ~/.config/magnum/config.toml (Talkable's setup) as an example: the blocks a user
+# writes and the few defaults this setup changes. Every other key, with its default and what it does, is in
+# config.defaults.toml (embedded in the binary); set one here only to change it. App private keys are files
+# next to the config (~/.config/magnum/keys/, chmod 600). Your config's [[watch]], [[identity]], [[pool]] and
+# [[repo]] blocks are appended to the defaults, any key it sets under [daemon], [herdr], [terminal], [board],
+# [github], [pipeline], [triage], [learn] or [kinds.<name>] overrides the default, and its [[role]] blocks
+# override the role of the same name key by key (other names are appended). `magnum roles` prints the
+# effective roles and `magnum config` validates the result.
 # Durations use Go syntax: "30s", "5m", "2h", with whole days in front: "7d", "1d12h".
 
 [daemon]
-poll_interval = "30s"                 # how often magnum polls GitHub and observes herdr; must be positive
-max_concurrent_reviews = 3        # review rounds running at once
-max_total_working_codex = 5       # counts your own working Codex agents too
-push_quiet_period = "5m"          # a new head is reviewable only after no push for this long (0 = at once; never negative)
-min_rereview_interval = "30m"     # per PR, between review rounds
-draft_min_rereview_interval = "2h"
-max_rounds_per_pr_per_day = 12    # automatic rounds only: requested and forced rounds never count, and rounds
-                                  # magnum cut short (a restart, an error before any prompt, a prompt that did
-                                  # not render) are refunded
-close_grace = "10m"               # wait after CLOSED/MERGED before releasing (covers reopen; 0 = release at once)
-# reviewer_timeout / judge_timeout: set per role now ([[role]] timeout below); still read as fallbacks
-agent_start_stagger = "15s"
-min_warm = "30m"
-human_cooldown = "15m"            # after you type into a magnum pane
-reconcile_interval = "10m"          # reconcile and prune; must be positive (0 would stop the retention below)
-default_repo = "talkable/talkable"
-min_free_disk_gb = 15                # a slot or worktree needs this much free disk (0 = no check)
-keep_events = "30d"               # audit events older than this are pruned on every reconcile ("0" keeps all); the step
-                                  # rows a checkout resumes from are kept only while their subject has an event inside it
-keep_requests = "7d"              # handled CLI requests older than this are pruned the same way
-max_round_restarts = 2            # a push while the reviewers run restarts them on the new head (0 = never)
-burst_quiet_period = "15m"        # replaces push_quiet_period after a burst of pushes:
-burst_pushes = 3                  #   this many head changes (0 = off)
-burst_window = "30m"              #   within this window up to the last one ([[watch]] may override all three)
-request_debounce = "1m"           # a review request for the poll login or a posting identity (or a team in a
-                                  # [[watch]] request_teams), or a draft marked ready, starts a round this long
-                                  # after it (and the last push), skipping the timing rules above and the cap
-rereview_min_lines = 30           # an automatic re-review needs this many changed code lines since the review
-rereview_max_wait = "2h"          #   (comments, blank lines, whitespace and docs do not count) or an added file;
-                                  #   after a merge of the base branch or a rebase only the change in the PR's own
-                                  #   diff counts; a smaller delta waits for more pushes or this long after its
-                                  #   first push (0 lines = no threshold; [[watch]] may override both)
-model_limit_cooldown = "5h"       # a model capped on its own (health pattern model_limit) without a reset time
-                                  # counts as limited this long; sessions use the kind's fallback_models meanwhile
-park_idle_after = "2h"            # park a reviewed PR's agents once all of them idled this long ("0" = never),
-                                  # and a waiting PR's when its round is held by a pause, a drain or the daily
-                                  # cap, or is more than this far off; the next round resumes them; pinned PRs
-                                  # and recent human activity keep them
-# skip_trivial_deltas = ["comments", "whitespace", "docs", "base"]   # a push that changes only these since
-                                  # the review is not re-reviewed: the review stands for the new head; "base" is a
-                                  # push that merges the base branch (or rebases onto it) and leaves the PR's own
-                                  # diff against it as it was ([] = re-review every push; a list without "base"
-                                  # re-reviews base merges; [[watch]] may override; `magnum review` always runs)
-# quiet_hours = "01:00-07:00"
-restart_on_new_build = false      # true: once a new bin/magnum on disk passes its config check, the daemon restarts
-                                  # on it at the first tick with no round claiming, reviewing or verifying (it exits
-                                  # for launchd to start the new build; dispatch never stops for it; needs launchd)
-
-[herdr]
-socket = "~/.config/herdr/herdr.sock"
-notify = true                     # toasts (false = none); a review you ask for toasts how it went
-toast_every_review = false        # also toast every automatic review posted
+default_repo = "talkable/talkable"    # what a bare PR number means (`magnum review 123`)
 
 [terminal]
 app = "iTerm2"                    # Terminal | iTerm2 | Ghostty | WezTerm | custom
-session = "default"
-launcher = ""                     # custom: template with {herdr} {args} {command}
-reveal_on_attention = false
-# mouse = true                    # board and dashboard: wheel, click, double-click, heading sort,
-                                  # column drag, right-click menu; m toggles it live (default true)
 
 [board]
 badges = { "Flagged" = "🚩", "Schema Migration" = { text = "\uf1c0", color = "yellow" } }   # 🚩 a flagged Jira issue; \uf1c0 = Nerd Font database icon
@@ -75,171 +20,6 @@ trackers = [                      # t on the PR board opens the first issue key 
   "https://talkable.atlassian.net/browse/PS-{num}",
   "https://talkable.atlassian.net/browse/PR-{num}",
 ]
-recent_closed = "24h"             # merged and closed PRs stay on the board this long, after the open ones ("0" = off)
-
-[github]
-transport = "gh"                  # App JWT/token calls run as `gh api` (gh | direct); direct = Go net/http,
-                                  # which Little Snitch blocks for a rebuilt, unsigned magnum binary
-
-[usage]                           # the Codex budget, read from Codex's own session files at most once a minute
-codex_soft = 80                   # at this % used, first reviews wait (re-reviews and `magnum review` still run)
-codex_hard = 95                   # at this % used, rounds that need Codex wait until it is below again (0 = off)
-codex_home = ""                   # "" = $CODEX_HOME, else ~/.codex
-
-[triage]                          # a cheap model decides which reviewers a small diff needs (the judge always runs)
-enabled = false                   # true: first reviews and re-reviews whose diff has at most max_lines changed lines are
-                                  # asked about; a reviewer needs a `summary` ([[role]] below) to be left out of a round
-max_lines = 120                   # more changed lines (added + deleted) run every role, unasked
-command = ["claude", "-p", "--model", "haiku", "--tools", "", "--no-session-persistence"]   # prompt on stdin, answer on stdout
-# command = ["codex", "exec", "--model", "<a cheap model>", "--sandbox", "read-only", "--ephemeral", "--skip-git-repo-check", "-"]
-timeout = "2m"                    # a failure or a timeout runs every role
-prompt = "triage.md"
-
-[learn]                           # the retro: what other reviewers caught on a closed PR, that magnum's review missed
-enabled = false                   # true: runs once a day, after daily_at (`magnum retro` runs one regardless; `magnum misses`
-                                  # lists what it found). A cheap `learn` agent classifies the comments in a herdr pane
-daily_at = "07:00"                # local time, "HH:MM"
-lookback = "7d"                   # PRs merged or closed within it are candidates
-max_prs = 20                      # PRs classified per retro, the newest closed first
-min_comment_chars = 20            # shorter comments are dropped
-include_bots = false              # bot accounts other than magnum's count as reviewers
-kind = "claude"                   # a [kinds.<name>] that drives a session (not "shell")
-model = "sonnet"                  # the default of kind "claude" only: another kind without a model of its own runs on
-                                  # its own default model ("" = that kind's default_model, else its CLI's)
-effort = ""
-# args = []                       # appended to the agent's launch args
-prompt = "retro.md"
-timeout = "20m"                   # per PR
-
-# The review pipeline ("a Procfile of agents"): [kinds.<name>] says how to drive an agent CLI, each
-# [[role]] is one agent (or shell command) of a review round, a [[watch]]'s `roles` picks the roles it
-# runs. Prompts are files in prompts_dir, loaded when the daemon starts (an edit takes effect at the next
-# `magnum daemon-restart`). prompts/README.md documents every key, the template variables
-# and examples (a droid or omp role, a watch with two roles). `magnum roles` prints the effective roles per
-# watch and `magnum roles --kinds` the kinds. The old [codex]/[claude] sections are still accepted as
-# fallbacks for the keys below.
-
-[pipeline]
-prompts_dir = "{{repo}}/prompts"  # a prompt name reads prompts_dir/<name>, else magnum's built-in copy
-
-# Agent CLIs: codex, claude, droid and omp are built in (values below are their defaults); every key is
-# optional and overrides only itself. Any other herdr agent kind (pi, gemini, ...) can be declared too.
-#
-# [kinds.codex]
-# wrapper = "auto"                    # auto: probe `zsh -ic 'whence -w codex'` (your zsh function adds the
-#                                     # flags, so magnum passes extras only); true | false (false appends args)
-# start = []                          # always appended
-# args = ["--dangerously-bypass-approvals-and-sandbox"]  # appended only without a wrapper: a plain
-#                                     # binary runs like the wrapper, without approval prompts or sandbox
-#                                     # (magnum answers prompts No; a sandboxed judge cannot post); doctor
-#                                     # fails a plain binary without it
-# resume = ["resume", "{session}"]
-# model = ["--model", "{model}"]
-# default_model = ""                  # the model of every codex role without its own `model`, passed through
-#                                     # `model` args; e.g. "gpt-6.1-sol" makes the judge start with
-#                                     # --model gpt-6.1-sol ("" = codex's own default; a role's model wins)
-# effort = ["-c", "model_reasoning_effort={effort}"]
-# name = []                           # codex has no name flag, so magnum types `rename` while it works
-# rename = "/rename {title}"
-# login_check = "codex login status"  # "" = no preflight
-# login_ok = "text:Logged in"         # text:<substring> | regex:<expr> | json:<path> | "" (exit status 0)
-# session_source = "herdr"            # herdr reports the session id; none = always start fresh
-# on_permission_prompt = "deny"       # an approval prompt during a magnum run: deny answers No (never Yes;
-#                                     # at most 10 per run, then it waits); wait leaves it to you
-# after_deny_prompt = "magnum denied that command: ..."  # sent once when the agent stops after a deny,
-#                                     # so it finishes the run without the command; "" = send nothing
-# on_hooks_review = "trust_own"       # Codex's "Hooks need review" at start: trust_own trusts the hooks when
-#                                     # the checkout declares none (.codex/hooks.json, hooks or plugins in
-#                                     # .codex/config.toml), so all are yours; decline = never trust
-#   [kinds.codex.env]
-#   CODEX_HOME = "~/.codex"
-#   [kinds.codex.health_patterns]     # case-insensitive regexps; a list replaces the built-in one
-#   usage_limit = ['usage limit reached']   # also login_required, model_limit, overloaded
-#
-# [kinds.claude]
-# args = ["--dangerously-skip-permissions"]  # only without a wrapper, as for codex
-# resume = ["--resume", "{session}"]
-# model = ["--model", "{model}"]
-# name = ["--name", "{title}"]
-# login_check = "claude auth status"
-# login_ok = "json:loggedIn"
-# switch_model = "/model {model}"     # typed into the idle pane when its model hits its own limit ("You've reached
-#                                     # your Fable limit"); "" = cannot switch, so that limit pauses the kind
-# fallback_models = ["opus", "sonnet"]  # switched to in order, once each per run, then back after the limit ends
-# default_model = ""                  # the model of claude roles without their own `model` ("" = the CLI's)
-# reset_model = "default"             # the switch_model argument back to the CLI's default (no model set)
-#
-# [kinds.droid]                       # droid 0.232: no model, effort or name flag in interactive mode
-# resume = ["--resume", "{session}"]
-#
-# [kinds.omp]                         # omp 18.4
-# resume = ["--resume={session}"]
-# model = ["--model={model}"]
-# effort = ["--thinking={effort}"]
-
-# The four roles below are the built-in defaults written out; declaring any [[role]] here replaces the
-# built-in list. Non-judge roles run in parallel unless `after` orders them; the judge runs last, reads
-# their reports and posts the review.
-
-[[role]]
-name = "codex-judge"
-kind = "codex"
-judge = true                          # exactly one judge per watch
-# model = "gpt-6.1-sol"               # the Codex model for this role (--model); empty = [kinds.codex]
-#                                     # default_model, else codex's own default
-effort = "xhigh"                      # -c model_reasoning_effort=xhigh (the zsh codex function passes the same)
-rereview_effort = "high"              # re-reviews of new commits; codex sets effort at launch only, so a live
-                                      # session is asked for it in the prompt ("" = effort)
-skill = "{{repo}}/skills/magnum-review/SKILL.md"
-prompt = "judge-initial.md"
-rereview = "judge-rereview.md"
-continue_prompt = "judge-continue.md"
-recovery = "judge-recovery.md"
-nudge = "judge-nudge.md"
-output = "codex-judge.json"           # the result file in the round's report directory
-timeout = "90m"
-aliases = ["judge"]
-
-[[role]]
-name = "claude-review"
-kind = "claude"
-summary = "deep review for bugs, security and correctness"   # what [triage] tells the model the role checks
-effort = "high"                       # passed to /code-review by the prompt
-rereview_effort = "medium"            # re-reviews of new commits
-prompt = "claude-review.md"
-rereview = "claude-rereview.md"
-restart = "claude-restart.md"         # a push cut the review short; the round restarted on the new head
-output = "claude-review.md"
-timeout = "40m"
-aliases = ["claude"]
-
-[[role]]
-name = "codex-review"
-kind = "shell"                        # a shell pane, not an agent session
-summary = "Codex's own static review of the diff"
-tool = "codex"                        # codex's login check, pauses and health patterns apply
-# args = ["-c", "model=gpt-6.1-sol"]  # `codex review` takes the model as a config override
-command = "command codex review --base {{if .BaseSHA}}{{.BaseSHA}}{{else}}{{.BaseRef}}{{end}}"
-                                      # the merge base (fixed), else the base ref (moves with the base branch)
-args = []                             # appended shell-quoted
-ok_status = [0]                       # exit statuses that count as a report; any other status fails the role
-capture = "stdout"                    # the command's stdout is tee'd into output (stderr stays in the pane)
-output = "codex-review.md"
-timeout = "40m"
-aliases = ["codex", "codex_review"]
-
-[[role]]
-name = "claude-simplify"
-kind = "claude"
-summary = "simplifications and refactors of the changed code"
-runs = "first"                        # always | first (until it ran once, then on request) | manual | never
-                                      # on request = `magnum review <ref> --role claude-simplify` (or --simplify)
-prompt = "claude-simplify.md"
-capture = "git-diff"                  # magnum saves `git diff` as output, then reverts the checkout
-output = "claude-simplify.patch"
-after = ["claude-review", "codex-review"]
-timeout = "40m"
-aliases = ["simplify"]
 
 [[identity]]
 name = "zhuravel"
@@ -268,33 +48,21 @@ blocking_event = "REQUEST_CHANGES"
 [[watch]]
 owner = "talkable"
 include = ["talkable"]
-exclude = []
-identity = "talkable-app"
-poll_identity = "zhuravel"
-clone_root = "~/Projects"
-include_drafts = true
-include_own = true
-skip_bot_authors = true
+identity = "talkable-app"             # who posts
+poll_identity = "zhuravel"            # who polls (a gh identity)
 skip_authors = ["dependabot"]
-skip_labels = []
 # skip_paths = ["docs/**", "**/*.md"]   # skip a PR when every changed file matches ("**" spans directories, "*" stays in one)
-skip_cross_repository = true
-skip_departed_authors = true          # skip branch PRs whose author is no longer an owner, member or collaborator (left the org)
-# burst_quiet_period = "20m"            # overrides the [daemon] burst keys for this watch (burst_pushes = 0: off)
-# rereview_min_lines = 0                # overrides [daemon] rereview_min_lines / rereview_max_wait (0: no threshold)
 # request_teams = ["backend"]           # review requests for these team slugs start a round like one for you
-roles = ["codex-judge", "claude-review", "codex-review", "claude-simplify"]   # omitted or [] = every [[role]]
+# roles = ["codex-judge", "claude-review", "codex-review", "claude-simplify"]   # omitted or [] = every [[role]]
 
 [[pool]]
 repo = "talkable/talkable"
 main_clone = "~/Projects/talkable"
 slot_name = "review{n}"           # slot names and paths are unique: two pools must not render the same one
 slot_path = "~/Projects/talkable.review{n}"
-base = "master"
 min = 12
 max = 18
 idle_remove_after = "48h"
-min_free_disk_gb = 15
 copy_files = [".mise.local.toml", "config/initializers/local.rb"]
 strip_env = ["GITHUB_PERSONAL_ACCESS_TOKEN"]
 setup = ["bin/worktree-setup"]
@@ -309,7 +77,6 @@ reset_db = [
   "DISABLE_DATABASE_ENVIRONMENT_CHECK=1 FAKE_AWS=1 RAILS_ENV=test bin/rails db:schema:load",
   "FAKE_AWS=1 bin/rails db:seed",
 ]
-# reset_db_on_schema_change = true   # false: reset_db on release only
 post_checkout = ["bundle check >/dev/null || bundle install --jobs 4", "pnpm install --frozen-lockfile"]
 databases = [
   "talkable_development__{slug}", "talkable_development_reporting__{slug}",

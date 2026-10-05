@@ -102,11 +102,11 @@ func TestDetectTrustDialog(t *testing.T) {
 
 func TestClassifyTrustDialogs(t *testing.T) {
 	for _, text := range []string{codexTrustScreen, codexTrustFlat, claudeTrustScreen, claudeTrustFlat} {
-		if h := Classify(text); h.Kind != HealthTrustDialog || h.Detail == "" {
+		if h := ClassifyAt(text, time.Now()); h.Kind != HealthTrustDialog || h.Detail == "" {
 			t.Fatalf("Classify(%q) = %+v, want trust_dialog", text, h)
 		}
 	}
-	if h := Classify("Do you trust the files in this folder?"); h.Kind != HealthBlocked {
+	if h := ClassifyAt("Do you trust the files in this folder?", time.Now()); h.Kind != HealthBlocked {
 		t.Fatalf("old trust prompt = %s, want blocked", h.Kind)
 	}
 }

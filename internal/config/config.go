@@ -15,6 +15,7 @@ import (
 	"github.com/BurntSushi/toml"
 
 	"github.com/zhuravel/magnum"
+	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/paths"
 )
 
@@ -62,8 +63,6 @@ type Config struct {
 	Daemon     Daemon     `toml:"daemon"`
 	Herdr      Herdr      `toml:"herdr"`
 	Terminal   Terminal   `toml:"terminal"`
-	Codex      Codex      `toml:"codex"`  // legacy: fallbacks for kinds.codex, codex-judge and codex-review
-	Claude     Claude     `toml:"claude"` // legacy: fallbacks for kinds.claude, claude-review and claude-simplify
 	GitHub     GitHub     `toml:"github"`
 	Pipeline   Pipeline   `toml:"pipeline"`
 	Usage      Usage      `toml:"usage"`
@@ -77,10 +76,9 @@ type Config struct {
 
 	// Kinds are the agent CLIs ([kinds.<name>]) and Roles the review
 	// pipeline ([[role]]). After Load or Defaults both hold the merged,
-	// normalized result: built-in defaults, then the legacy [codex]/[claude]
-	// keys, then the base (config.defaults.toml or a file), then the user
-	// config. Read them through
-	// KindSpec, RolesFor, JudgeFor and RoleByNameOrAlias.
+	// normalized result: built-in defaults, then the base
+	// (config.defaults.toml or a file), then the user config. Read them
+	// through KindSpec, RolesFor, JudgeFor and RoleByNameOrAlias.
 	Kinds map[string]Kind `toml:"kinds"`
 	Roles []Role          `toml:"role"`
 
@@ -89,10 +87,6 @@ type Config struct {
 	// Sources are what Load read, base first: a file, or BuiltinDefaults,
 	// then the user layer when there was one.
 	Sources []string `toml:"-"`
-
-	// legacyErrs are problems in legacy keys found while mapping them onto
-	// the pipeline (buildPipeline); Validate reports them.
-	legacyErrs []error
 
 	// snapshot is the prompt text the daemon loaded at startup
 	// (SnapshotPrompts); nil = prompts are read from disk when resolved.
@@ -225,33 +219,6 @@ type Terminal struct {
 	// and finding priorities; needs a Nerd Font), "unicode" Unicode symbols
 	// any font has (the default, also when empty), "ascii" plain ASCII.
 	Icons string `toml:"icons"`
-}
-
-// Codex is the legacy [codex] section. Load maps it onto the pipeline as
-// fallbacks (keys a [kinds.codex] or [[role]] block sets win): wrapper_mode
-// and args onto kinds.codex, skill_path onto codex-judge's skill and
-// review_args onto codex-review's args. The fields keep the values the files
-// set; read the effective values through KindSpec, RoleByNameOrAlias and
-// JudgeFor (the judge's Skill, not SkillPath).
-type Codex struct {
-	// WrapperMode: "auto" probes `zsh -ic 'whence -w codex'`; true means the
-	// user's shell function supplies the flags and magnum passes only extras.
-	WrapperMode string   `toml:"wrapper_mode"`
-	Args        []string `toml:"args"`
-	ReviewArgs  []string `toml:"review_args"` // extra args for `command codex review`
-	SkillPath   string   `toml:"skill_path"`
-}
-
-// Claude is the legacy [claude] section, mapped like Codex: wrapper_mode
-// and args onto kinds.claude, effort onto claude-review and simplify onto
-// claude-simplify's runs (first -> first, always -> always, never ->
-// manual; anything else but "" fails validation). The fields keep the values
-// the files set; the effective settings are in KindSpec and the roles.
-type Claude struct {
-	WrapperMode string   `toml:"wrapper_mode"`
-	Args        []string `toml:"args"`
-	Effort      string   `toml:"effort"`
-	Simplify    string   `toml:"simplify"` // first | always | never
 }
 
 type Identity struct {
@@ -577,9 +544,8 @@ func (r Repo) RenderEnv(slug, path, clone string) map[string]string {
 
 // LoadOptions tunes LoadWithOptions.
 type LoadOptions struct {
-	// NoOverlay skips the user layer (the user config, or a legacy
-	// config.local.toml) even when it exists, so the result depends on the
-	// base alone.
+	// NoOverlay skips the user layer (the user config) even when it exists,
+	// so the result depends on the base alone.
 	NoOverlay bool
 }
 
@@ -600,16 +566,15 @@ func Load(layout paths.Layout, file string) (*Config, error) {
 // repository's config.defaults.toml embedded in the binary.
 //
 // The user layer goes over it unless opts.NoOverlay: the layout's
-// UserConfig (~/.config/magnum/config.toml) when it exists, else a legacy
-// config.local.toml next to the base file (in the home for the built-in
-// base). It appends [[identity]], [[watch]], [[pool]] and [[repo]], and
-// overrides keys (see applyOverlay). cfg.Sources lists what was read.
+// UserConfig (~/.config/magnum/config.toml) when it exists. It appends
+// [[identity]], [[watch]], [[pool]] and [[repo]], and overrides keys (see
+// applyOverlay). cfg.Sources lists what was read.
 func LoadWithOptions(layout paths.Layout, file string, opts LoadOptions) (*Config, error) {
 	if file == "" {
 		file = os.Getenv("MAGNUM_CONFIG")
 	}
 	if file == "" && layout.Home != "" {
-		if legacy := layout.Config(); exists(legacy) {
+		if legacy := layout.Config(); fsx.Exists(legacy) {
 			file = legacy
 		}
 	}
@@ -641,7 +606,7 @@ func LoadWithOptions(layout paths.Layout, file string, opts LoadOptions) (*Confi
 	}
 	cfg.Sources = []string{name}
 	var over *layer
-	if user := userLayerPath(layout, file); user != "" && !opts.NoOverlay {
+	if user := layout.UserConfig; user != "" && fsx.Exists(user) && !opts.NoOverlay {
 		if over, err = cfg.applyOverlay(user); err != nil {
 			return nil, err
 		}
@@ -657,43 +622,9 @@ func LoadWithOptions(layout paths.Layout, file string, opts LoadOptions) (*Confi
 	return cfg, nil
 }
 
-// userLayerPath is the user layer for a base file ("" = built-in): the
-// layout's UserConfig when it exists, else a legacy config.local.toml next
-// to the base (in the home for the built-in base); "" for none.
-func userLayerPath(layout paths.Layout, base string) string {
-	if layout.UserConfig != "" && exists(layout.UserConfig) {
-		return layout.UserConfig
-	}
-	dir := layout.Home
-	if base != "" {
-		dir = filepath.Dir(base)
-	}
-	if dir == "" {
-		return ""
-	}
-	return LocalOverlayPath(filepath.Join(dir, "config.toml"))
-}
-
-// LocalOverlayPath returns the legacy overlay next to a config file
-// (config.local.toml) when it exists, else "". The user config
-// (~/.config/magnum/config.toml) replaced it; it is still read when that is
-// missing.
-func LocalOverlayPath(file string) string {
-	local := filepath.Join(filepath.Dir(file), "config.local.toml")
-	if _, err := os.Stat(local); err != nil {
-		return ""
-	}
-	return local
-}
-
-func exists(p string) bool {
-	_, err := os.Stat(p)
-	return err == nil
-}
-
-// applyOverlay merges config.local.toml: [[identity]], [[watch]], [[pool]]
+// applyOverlay merges the user config: [[identity]], [[watch]], [[pool]]
 // and [[repo]] entries are appended; keys present under [daemon], [herdr], [terminal],
-// [codex], [claude], [github], [pipeline], [usage], [triage] and [learn] override the committed values key by key.
+// [github], [pipeline], [usage], [triage] and [learn] override the committed values key by key.
 // Its [kinds.<name>] keys and [[role]] blocks are returned for buildPipeline:
 // kind keys override key by key, a [[role]] named like an existing role
 // overrides the keys it sets, any other [[role]] is appended.
@@ -713,8 +644,6 @@ func (c *Config) applyOverlay(path string) (*layer, error) {
 	overlaySection(md, "daemon", &c.Daemon, &o.Daemon)
 	overlaySection(md, "herdr", &c.Herdr, &o.Herdr)
 	overlaySection(md, "terminal", &c.Terminal, &o.Terminal)
-	overlaySection(md, "codex", &c.Codex, &o.Codex)
-	overlaySection(md, "claude", &c.Claude, &o.Claude)
 	overlaySection(md, "github", &c.GitHub, &o.GitHub)
 	overlaySection(md, "pipeline", &c.Pipeline, &o.Pipeline)
 	overlaySection(md, "usage", &c.Usage, &o.Usage)
@@ -781,8 +710,6 @@ func Defaults() *Config {
 		},
 		Herdr:    Herdr{Socket: "~/.config/herdr/herdr.sock", Notify: true},
 		Terminal: Terminal{App: "Terminal", Session: "default", Mouse: true, Icons: "unicode"},
-		Codex:    Codex{WrapperMode: "auto", SkillPath: "{{repo}}/skills/magnum-review/SKILL.md"},
-		Claude:   Claude{WrapperMode: "auto", Effort: "high", Simplify: "first"},
 		GitHub:   GitHub{Transport: "gh"},
 		Pipeline: Pipeline{PromptsDir: "{{repo}}/prompts"},
 		Usage:    Usage{CodexSoft: 80, CodexHard: 95},
@@ -812,7 +739,6 @@ func (c *Config) repoPath(p string) string {
 func (c *Config) expand() {
 	c.Herdr.Socket = paths.Expand(c.Herdr.Socket)
 	c.Usage.CodexHome = paths.Expand(c.Usage.CodexHome)
-	c.Codex.SkillPath = c.repoPath(c.Codex.SkillPath)
 	c.Pipeline.PromptsDir = c.repoPath(c.Pipeline.PromptsDir)
 	if d := c.Pipeline.PromptsDir; d != "" && !filepath.IsAbs(d) && c.Layout.Home != "" {
 		c.Pipeline.PromptsDir = filepath.Join(c.Layout.Home, d)

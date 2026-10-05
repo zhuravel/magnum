@@ -12,6 +12,7 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 const attentionUsage = "attention [--list] [--no-reveal] [--new-window] [--json]"
@@ -100,7 +101,7 @@ func attentionMain(ctx context.Context, c *Context, d *actDeps, o attentionOpts)
 			if where == "" {
 				where = "(no live pane)"
 			}
-			rows = append(rows, []string{it.Kind, it.PR, actRoleName(it.Role), where, actAgo(d.now(), it.Since), trunc(actClean(it.Detail), 120)})
+			rows = append(rows, []string{it.Kind, it.PR, actRoleName(it.Role), where, actAgo(d.now(), it.Since), textx.Clip(actClean(it.Detail), 120)})
 		}
 		actTable(c.Stdout, []string{"WHY", "PR", "ROLE", "AGENT", "SINCE", "DETAIL"}, rows)
 		return 0
@@ -123,7 +124,7 @@ func attentionMain(ctx context.Context, c *Context, d *actDeps, o attentionOpts)
 		} else {
 			fmt.Fprintln(c.Stdout, actFocusLine(res))
 			if it.Detail != "" {
-				fmt.Fprintln(c.Stdout, "  "+trunc(actClean(it.Detail), 200))
+				fmt.Fprintln(c.Stdout, "  "+textx.Clip(actClean(it.Detail), 200))
 			}
 			if it.Fix != "" {
 				fmt.Fprintln(c.Stdout, "  fix: "+actClean(it.Fix))
@@ -140,7 +141,7 @@ func attentionMain(ctx context.Context, c *Context, d *actDeps, o attentionOpts)
 	}
 	// Only items without a live pane (parked PRs needing attention).
 	for _, it := range items {
-		fmt.Fprintf(c.Stdout, "%s %s: %s (no live pane: `magnum open %s`)\n", it.PR, it.Kind, trunc(actClean(it.Detail), 200), it.PR)
+		fmt.Fprintf(c.Stdout, "%s %s: %s (no live pane: `magnum open %s`)\n", it.PR, it.Kind, textx.Clip(actClean(it.Detail), 200), it.PR)
 		if it.Fix != "" {
 			fmt.Fprintln(c.Stdout, "  fix: "+actClean(it.Fix))
 		}

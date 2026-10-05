@@ -639,7 +639,7 @@ func TestClaimSlotIsExclusive(t *testing.T) {
 	if err := st.ReleaseSlot(ctx, s1.ID, []string{SlotClaimed, SlotBusy, SlotHeld, SlotReleasing}, SlotFree, "released"); err != nil {
 		t.Fatalf("ReleaseSlot: %v", err)
 	}
-	if _, err := st.OpenAssignmentByPR(ctx, pr1.ID); !errors.Is(err, ErrNotFound) {
+	if _, err := openAssignmentOf(ctx, st, pr1.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("assignment still open: %v", err)
 	}
 	if _, err := st.ClaimSlot(ctx, pr2.ID, s1.ID); err != nil {
@@ -868,13 +868,8 @@ func TestFreeAndEvictableSlots(t *testing.T) {
 	if _, err := st.OpenAssignment(ctx, Assignment{PRID: pr.ID, SlotID: a.ID, Path: a.Path}); err != nil {
 		t.Fatal(err)
 	}
-	asg, _ := st.OpenAssignmentByPR(ctx, pr.ID)
-	if err := st.CloseAssignment(ctx, asg.ID, "test"); err != nil {
-		t.Fatal(err)
-	}
-	if err := st.CloseAssignment(ctx, asg.ID, "again"); !errors.Is(err, ErrConflict) {
-		t.Fatalf("double close: %v", err)
-	}
+	asg, _ := openAssignmentOf(ctx, st, pr.ID)
+	closeAssignment(t, st, asg.ID, "test")
 	free, _ = st.FreeSlots(ctx, "talkable/talkable", pr.ID)
 	if got := names(free); got[0] != "review1" {
 		t.Fatalf("preferred slot not first: %v", got)
@@ -1046,8 +1041,8 @@ func TestSlotDatabases(t *testing.T) {
 func TestRequestsQueue(t *testing.T) {
 	st, clk := newStore(t)
 	ctx := context.Background()
-	if _, err := st.NextPendingRequest(ctx); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("empty queue: %v", err)
+	if q, err := st.PendingRequests(ctx, 0); err != nil || len(q) != 0 {
+		t.Fatalf("empty queue: %v %v", q, err)
 	}
 	id1, err := st.EnqueueRequest(ctx, "review", map[string]any{"pr": 1})
 	if err != nil {
@@ -1055,9 +1050,9 @@ func TestRequestsQueue(t *testing.T) {
 	}
 	clk.Add(time.Second)
 	id2, _ := st.EnqueueRequest(ctx, "kick", nil)
-	next, err := st.NextPendingRequest(ctx)
-	if err != nil || next.ID != id1 || next.Kind != "review" || string(next.Payload) != `{"pr":1}` {
-		t.Fatalf("next: %+v %v", next, err)
+	q, err := st.PendingRequests(ctx, 1)
+	if err != nil || len(q) != 1 || q[0].ID != id1 || q[0].Kind != "review" || string(q[0].Payload) != `{"pr":1}` {
+		t.Fatalf("next: %+v %v", q, err)
 	}
 	if err := st.CompleteRequest(ctx, id1, RequestDone, "ok"); err != nil {
 		t.Fatal(err)
@@ -1065,9 +1060,8 @@ func TestRequestsQueue(t *testing.T) {
 	if err := st.CompleteRequest(ctx, id1, RequestFailed, "again"); !errors.Is(err, ErrConflict) {
 		t.Fatalf("double complete: %v", err)
 	}
-	next, _ = st.NextPendingRequest(ctx)
-	if next.ID != id2 || string(next.Payload) != "{}" {
-		t.Fatalf("second: %+v", next)
+	if q, _ = st.PendingRequests(ctx, 0); len(q) != 1 || q[0].ID != id2 || string(q[0].Payload) != "{}" {
+		t.Fatalf("second: %+v", q)
 	}
 	got, _ := st.RequestByID(ctx, id1)
 	if got.State != RequestDone || Deref(got.Result) != "ok" || got.HandledAt == nil {

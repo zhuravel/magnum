@@ -1,7 +1,6 @@
 package eligibility
 
 import (
-	"strings"
 	"testing"
 	"time"
 )
@@ -74,25 +73,5 @@ func TestQuietHours(t *testing.T) {
 				t.Fatalf("QuietHours(%q, %v) = %v, want %v", tc.spec, tc.now, got, tc.want)
 			}
 		})
-	}
-}
-
-func TestValidateQuietHours(t *testing.T) {
-	valid := []string{"", "  ", "01:00-07:00", "22:00-06:00", "00:00-23:59", " 1:00 - 7:00 "}
-	for _, spec := range valid {
-		if err := ValidateQuietHours(spec); err != nil {
-			t.Errorf("ValidateQuietHours(%q) = %v, want nil", spec, err)
-		}
-	}
-	invalid := []string{"25:00-07:00", "01:00-07:60", "01:00", "01:00-", "-07:00", "01:00-07:00-08:00", "night", "01:00-01:00", "22:00-24:00", "01:00:00-07:00:00"}
-	for _, spec := range invalid {
-		err := ValidateQuietHours(spec)
-		if err == nil {
-			t.Errorf("ValidateQuietHours(%q) = nil, want error", spec)
-			continue
-		}
-		if !strings.Contains(err.Error(), spec) {
-			t.Errorf("error %q should quote the spec %q", err, spec)
-		}
 	}
 }

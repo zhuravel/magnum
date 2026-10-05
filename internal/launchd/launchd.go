@@ -62,16 +62,6 @@ type Options struct {
 // plain stop or restart would otherwise SIGKILL it mid-cleanup.
 const ExitTimeOut = 45
 
-// DefaultArgs returns magnum's ProgramArguments:
-//
-//	<misePath> -C <repo> exec -- <binary> daemon
-//
-// so the daemon starts with the repository's mise environment (including the
-// GitHub App private key) regardless of launchd's bare environment.
-func DefaultArgs(repo, misePath, binary string) []string {
-	return []string{misePath, "-C", repo, "exec", "--", binary, "daemon"}
-}
-
 // AgentPath returns the per-user LaunchAgent plist path for a label.
 func AgentPath(home, label string) string {
 	return filepath.Join(home, "Library", "LaunchAgents", label+".plist")

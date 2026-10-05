@@ -203,28 +203,9 @@ func insertAssignment(ctx context.Context, q querier, query string, args ...any)
 	return res.LastInsertId()
 }
 
-// CloseAssignment ends open assignment id. Closing a closed or missing
-// assignment is ErrConflict.
-func (s *Store) CloseAssignment(ctx context.Context, id int64, reason string) error {
-	res, err := s.db.ExecContext(ctx, "UPDATE assignments SET ended_at = ?, end_reason = ? WHERE id = ? AND ended_at IS NULL",
-		FormatTime(s.now()), reason, id)
-	if err != nil {
-		return fmt.Errorf("close assignment %d: %w", id, err)
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return fmt.Errorf("close assignment %d: %w: not open", id, ErrConflict)
-	}
-	return nil
-}
-
 // OpenAssignmentBySlot returns the slot's open assignment.
 func (s *Store) OpenAssignmentBySlot(ctx context.Context, slotID int64) (Assignment, error) {
 	return s.assignmentWhere(ctx, "slot_id = ? AND ended_at IS NULL", slotID)
-}
-
-// OpenAssignmentByPR returns the PR's open assignment.
-func (s *Store) OpenAssignmentByPR(ctx context.Context, prID int64) (Assignment, error) {
-	return s.assignmentWhere(ctx, "pr_id = ? AND ended_at IS NULL", prID)
 }
 
 // UpdateAssignmentHead records the commit an open assignment's checkout now

@@ -17,6 +17,7 @@ import (
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // confirmGap is how far apart the two CLOSED/MERGED confirmations of a PR
@@ -687,7 +688,7 @@ func (e *Engine) onSeenPR(ctx context.Context, repo store.Repo, w config.Watch, 
 func (e *Engine) onHeadChange(ctx context.Context, repo store.Repo, w config.Watch, pr store.PR, now time.Time) error {
 	subject := prSubject(repo, pr.Number)
 	e.recordPush(ctx, pr.ID, now)
-	e.event(ctx, "info", subject, "pr.head_changed", "new head "+short(pr.HeadSHA), map[string]any{"head_sha": pr.HeadSHA, "state": pr.State})
+	e.event(ctx, "info", subject, "pr.head_changed", "new head "+textx.ShortSHA(pr.HeadSHA), map[string]any{"head_sha": pr.HeadSHA, "state": pr.State})
 	switch pr.State {
 	case store.PRBaseline, store.PRIneligible, store.PRNeedsAttention, store.PRReviewed,
 		store.PRQueued, store.PRRereviewPending:
@@ -707,7 +708,7 @@ func (e *Engine) onHeadChange(ctx context.Context, repo store.Repo, w config.Wat
 		// An App approval of an older commit goes before the re-review is
 		// queued.
 		e.followApproval(ctx, repo, pr)
-		return e.queue(ctx, pr, w, []string{pr.State}, true, now, "new head "+short(pr.HeadSHA))
+		return e.queue(ctx, pr, w, []string{pr.State}, true, now, "new head "+textx.ShortSHA(pr.HeadSHA))
 	case store.PRClaiming, store.PRReviewing, store.PRVerifying, store.PRPaused:
 		e.followApproval(ctx, repo, pr)
 		// The round in flight reviews the old head: while its reviewers run
@@ -736,7 +737,7 @@ func (e *Engine) alreadyReviewed(ctx context.Context, repo store.Repo, pr store.
 		return err
 	}
 	e.event(ctx, "info", prSubject(repo, pr.Number), "pr.reviewed",
-		fmt.Sprintf("%s → reviewed: head %s was already reviewed", pr.State, short(pr.HeadSHA)), nil)
+		fmt.Sprintf("%s → reviewed: head %s was already reviewed", pr.State, textx.ShortSHA(pr.HeadSHA)), nil)
 	return nil
 }
 
@@ -877,12 +878,12 @@ func (e *Engine) mergedUnreviewed(ctx context.Context, repo store.Repo, pr store
 	last := "never reviewed"
 	data := map[string]any{"head_sha": pr.HeadSHA, "prev_state": deref(pr.PrevState)}
 	if reviewed != "" {
-		last = "last review " + short(reviewed)
+		last = "last review " + textx.ShortSHA(reviewed)
 		data["reviewed_sha"] = reviewed
 	}
 	e.event(ctx, "warn", prSubject(repo, pr.Number), "pr.merged_unreviewed",
-		fmt.Sprintf("merged before magnum reviewed %s (%s)", short(pr.HeadSHA), last), data)
+		fmt.Sprintf("merged before magnum reviewed %s (%s)", textx.ShortSHA(pr.HeadSHA), last), data)
 	e.urgent(fmt.Sprintf("merged-unreviewed:%d", pr.ID), "magnum: "+label+" merged unreviewed",
-		fmt.Sprintf("%s merged before magnum reviewed its last push: merged head %s, %s", label, short(pr.HeadSHA), last),
+		fmt.Sprintf("%s merged before magnum reviewed its last push: merged head %s, %s", label, textx.ShortSHA(pr.HeadSHA), last),
 		mergedUnreviewedWindow)
 }

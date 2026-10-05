@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 	"github.com/zhuravel/magnum/internal/tui"
 )
 
@@ -101,7 +102,7 @@ func TestPickRefEntryCarriesGitHubStateAndTitle(t *testing.T) {
 	long := strings.Repeat("long title ", 20) + "\x1b[31m"
 	h.setPR(pr.ID, store.PRClosed, func(u *store.PRUpdate) { u.Set("title", long) })
 	e, ok := pickRefEntry(h.ctx, h.d, "talkable#5")
-	if !ok || !e.Known || e.GHState != store.GHMerged || e.State != "closed" || e.Title != trunc(actClean(long), 90) || len([]rune(e.Title)) > 90 {
+	if !ok || !e.Known || e.GHState != store.GHMerged || e.State != "closed" || e.Title != textx.Clip(actClean(long), 90) || len([]rune(e.Title)) > 90 {
 		t.Fatalf("entry %+v, %v", e, ok)
 	}
 	if e, ok := pickRefEntry(h.ctx, h.d, "talkable#6"); !ok || e.Known || e.GHState != "" || e.Title != "" {

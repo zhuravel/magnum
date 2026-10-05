@@ -157,8 +157,8 @@ func TestSkipPathsLoadsFromTOML(t *testing.T) {
 	wantError(t, err, "watch acme", "skip_paths", `"a**b"`)
 	// The overlay can declare it too.
 	_, err = loadFiles(t, t.TempDir(), map[string]string{
-		"config.toml":       minimalConfig,
-		"config.local.toml": "[[watch]]\nowner = \"acme\"\ninclude = [\"*\"]\nidentity = \"z\"\nskip_paths = [\"[\"]\n",
+		"config.toml": minimalConfig,
+		"user.toml":   "[[watch]]\nowner = \"acme\"\ninclude = [\"*\"]\nidentity = \"z\"\nskip_paths = [\"[\"]\n",
 	})
 	wantError(t, err, "skip_paths", `"["`)
 }

@@ -12,10 +12,12 @@ import (
 	"strings"
 
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/steps"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // DefaultCloneRoot is used when a watch has no clone_root.
@@ -66,8 +68,8 @@ func (m *Manager) MainClonePath(ctx context.Context, watch config.Watch, repo st
 		return "", false, fmt.Errorf("slots: find the clone of %s: %w", repo, err)
 	}
 	dest := filepath.Join(root, name)
-	if exists(dest) && !gitx.IsRepo(dest) {
-		if alt := filepath.Join(root, owner+"-"+name); !exists(alt) {
+	if fsx.Exists(dest) && !gitx.IsRepo(dest) {
+		if alt := filepath.Join(root, owner+"-"+name); !fsx.Exists(alt) {
 			return alt, false, nil
 		}
 	}
@@ -119,7 +121,7 @@ func (m *Manager) CreatePRWorktree(ctx context.Context, watch config.Watch, repo
 	slotName := PRSlotName(repo, pr.Number)
 	if m.d.DryRun { // no git at all: the default layout stands in for discovery
 		mainClone, path := PRWorktreePaths(watch, repo, pr.Number)
-		m.dryRun("create worktree %s (or next to an existing clone) for %s#%d at %s", path, repo, pr.Number, short(targetSHA))
+		m.dryRun("create worktree %s (or next to an existing clone) for %s#%d at %s", path, repo, pr.Number, textx.ShortSHA(targetSHA))
 		return store.Slot{Name: slotName, RepoFullName: repo, Kind: store.SlotKindPerPR, Path: path,
 			MainClone: mainClone, State: store.SlotClaimed}, nil
 	}
@@ -178,8 +180,8 @@ func (m *Manager) perPRRow(ctx context.Context, repo string, pr store.PR, slotNa
 		return store.Slot{}, false, fmt.Errorf("slots: worktree %s: %w", slotName, err)
 	}
 	switch {
-	case sl.State == store.SlotProvisioning && sl.MainClone != mainClone && !exists(sl.Path) &&
-		(!exists(sl.MainClone) || !gitx.IsRepo(sl.MainClone)):
+	case sl.State == store.SlotProvisioning && sl.MainClone != mainClone && !fsx.Exists(sl.Path) &&
+		(!fsx.Exists(sl.MainClone) || !gitx.IsRepo(sl.MainClone)):
 		// An interrupted row that pointed at a folder that is not the clone
 		// (before clone discovery): nothing was created yet, so it moves to
 		// the clone found now and its steps start over.
@@ -226,7 +228,7 @@ func (m *Manager) perPRSteps(ctx context.Context, subject string, sl store.Slot,
 		}
 		if sha != target {
 			m.event(ctx, subject, "warn", "slot.head_moved",
-				fmt.Sprintf("PR #%d head moved: wanted %s, fetched %s; checking out %s", pr.Number, short(target), short(sha), short(sha)))
+				fmt.Sprintf("PR #%d head moved: wanted %s, fetched %s; checking out %s", pr.Number, textx.ShortSHA(target), textx.ShortSHA(sha), textx.ShortSHA(sha)))
 		}
 		return nil
 	}); err != nil {
@@ -264,7 +266,7 @@ func (m *Manager) perPRSteps(ctx context.Context, subject string, sl store.Slot,
 			return err
 		}
 		if head != sha {
-			return fmt.Errorf("%w: %s HEAD is %s, want %s", ErrVerify, sl.Path, short(head), short(sha))
+			return fmt.Errorf("%w: %s HEAD is %s, want %s", ErrVerify, sl.Path, textx.ShortSHA(head), textx.ShortSHA(sha))
 		}
 		return nil
 	}); err != nil {
@@ -450,7 +452,7 @@ func (m *Manager) removePRSteps(ctx context.Context, subject string, sl store.Sl
 		return err
 	}
 	if err := m.step(ctx, subject, "delete_ref", func(ctx context.Context) error {
-		if number <= 0 || !exists(sl.MainClone) {
+		if number <= 0 || !fsx.Exists(sl.MainClone) {
 			return nil
 		}
 		return m.git.UpdateRefDelete(ctx, sl.MainClone, gitx.PRRef(number))
@@ -458,7 +460,7 @@ func (m *Manager) removePRSteps(ctx context.Context, subject string, sl store.Sl
 		return err
 	}
 	if err := m.step(ctx, subject, "worktree_prune", func(ctx context.Context) error {
-		if !exists(sl.MainClone) {
+		if !fsx.Exists(sl.MainClone) {
 			return nil
 		}
 		// Plain prune: see removeSteps for the unmounted-volume caveat.

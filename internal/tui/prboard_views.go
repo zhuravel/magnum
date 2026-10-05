@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // PRView is a preset subset of the board's rows.
@@ -61,7 +63,7 @@ func (v PRView) has(r PRBoardRow, self map[string]bool) bool {
 		}
 		return true
 	case ViewMine:
-		return slices.ContainsFunc(r.Assignees, func(a string) bool { return self[normLogin(a)] }) || reviewRequestedFrom(r, self)
+		return slices.ContainsFunc(r.Assignees, func(a string) bool { return self[textx.FoldLogin(a)] }) || reviewRequestedFrom(r, self)
 	case ViewReady:
 		return readyToMerge(r)
 	}
@@ -99,7 +101,7 @@ func readyToMerge(r PRBoardRow) bool {
 // reviewRequestedFrom reports whether a review of r is requested from one
 // of the self logins.
 func reviewRequestedFrom(r PRBoardRow, self map[string]bool) bool {
-	return slices.ContainsFunc(r.Reviewers, func(rv ReviewerInfo) bool { return rv.Requested && (rv.Mine || self[normLogin(rv.Login)]) })
+	return slices.ContainsFunc(r.Reviewers, func(rv ReviewerInfo) bool { return rv.Requested && (rv.Mine || self[textx.FoldLogin(rv.Login)]) })
 }
 
 // FilterPRBoard returns the rows of rows in view v; selfLogins are the
@@ -179,11 +181,11 @@ func parsePRQuery(q string) prQuery {
 // loginMatches reports whether login contains want ("@me": is one of the
 // self logins); case, "@" and "[bot]" do not matter.
 func loginMatches(login, want string, self map[string]bool) bool {
-	n := normLogin(login)
+	n := textx.FoldLogin(login)
 	if want == "@me" {
 		return n != "" && self[n]
 	}
-	w := normLogin(want)
+	w := textx.FoldLogin(want)
 	return n != "" && w != "" && strings.Contains(n, w)
 }
 

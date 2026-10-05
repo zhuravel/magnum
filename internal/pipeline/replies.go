@@ -16,10 +16,11 @@ import (
 	"slices"
 	"strings"
 	"unicode"
-	"unicode/utf8"
 
 	"github.com/zhuravel/magnum/internal/agents"
+	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/github"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // Reply classes (agents.ThreadReply.Class).
@@ -144,21 +145,8 @@ func trimReplyLead(s string) string {
 // ellipsis when it was cut.
 func excerpt(s string, n int) (string, bool) {
 	s = strings.TrimSpace(s)
-	if utf8.RuneCountInString(s) <= n {
-		return s, false
-	}
-	r := []rune(s)
-	return strings.TrimRightFunc(string(r[:n-1]), unicode.IsSpace) + "…", true
-}
-
-// firstLine is the first non-empty line of s, trimmed.
-func firstLine(s string) string {
-	for line := range strings.Lines(s) {
-		if t := strings.TrimSpace(line); t != "" {
-			return t
-		}
-	}
-	return ""
+	c := textx.Clip(s, n)
+	return c, c != s
 }
 
 // ownThreads turns the PR's threads into the judge's: only those whose
@@ -172,7 +160,7 @@ func (rd *round) ownThreads(ts []github.Thread) []agents.ReviewThread {
 			continue
 		}
 		root := t.Comments[0]
-		finding, _ := excerpt(firstLine(root.Body), findingLineMax)
+		finding, _ := excerpt(textx.FirstLine(root.Body), findingLineMax)
 		loc := t.Path
 		if line := cmp.Or(t.Line, t.OriginalLine); line > 0 {
 			loc = fmt.Sprintf("%s:%d", t.Path, line)
@@ -223,7 +211,7 @@ func threadSummary(ts []agents.ReviewThread) string {
 			silent++
 		}
 	}
-	s := fmt.Sprintf("%d thread%s", len(ts), plural(len(ts)))
+	s := textx.Count(len(ts), "thread", "threads")
 	var state []string
 	if resolved > 0 {
 		state = append(state, fmt.Sprintf("%d resolved", resolved))
@@ -244,7 +232,7 @@ func threadSummary(ts []agents.ReviewThread) string {
 	case len(replies) == 0:
 		return s + "; no replies"
 	case silent > 0:
-		return s + "; replies: " + strings.Join(replies, ", ") + fmt.Sprintf("; %d thread%s without a reply", silent, plural(silent))
+		return s + "; replies: " + strings.Join(replies, ", ") + "; " + textx.Count(silent, "thread", "threads") + " without a reply"
 	}
 	return s + "; replies: " + strings.Join(replies, ", ")
 }
@@ -291,7 +279,7 @@ func (rd *round) addThreads(ctx context.Context, jd *agents.JudgeData) {
 		return
 	}
 	path := filepath.Join(rd.dir, ThreadsFile)
-	if err := writeFileAtomic(path, append(b, '\n')); err != nil {
+	if err := fsx.WriteFileAtomic(path, append(b, '\n'), 0o600); err != nil {
 		rd.event(ctx, "warn", "round.threads", fmt.Sprintf("could not write the review threads; the judge reads the replies itself: %v", err), nil)
 		return
 	}

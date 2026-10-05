@@ -18,6 +18,7 @@ import (
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // Infrastructure pause timing.
@@ -275,9 +276,5 @@ func gitProbe(g *gitx.Client) func(ctx context.Context, dir string) error {
 
 // clipRunes shortens s to at most n runes with a trailing ellipsis.
 func clipRunes(s string, n int) string {
-	r := []rune(strings.TrimSpace(s))
-	if len(r) <= n {
-		return string(r)
-	}
-	return strings.TrimSpace(string(r[:n-1])) + "…"
+	return textx.Clip(strings.TrimSpace(s), n)
 }

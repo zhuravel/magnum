@@ -15,6 +15,7 @@ import (
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // inspTestConfig is a complete config.toml for the inspect tests; HOME is
@@ -28,9 +29,6 @@ max_total_working_codex = 5
 
 [herdr]
 socket = "HOME/no-herdr.sock"
-
-[codex]
-skill_path = "{{repo}}/skills/magnum-review/SKILL.md"
 
 [[identity]]
 name = "zhuravel"
@@ -186,19 +184,12 @@ func TestInspFormatting(t *testing.T) {
 	past := now.Add(-90 * time.Minute)
 	future := now.Add(5 * time.Minute)
 	cases := map[string]string{
-		inspDur(45 * time.Second):           "45s",
-		inspDur(12 * time.Minute):           "12m",
-		inspDur(125 * time.Minute):          "2h5m",
-		inspDur(76 * time.Hour):             "3d4h",
 		inspAgo(now, &past):                 "1h30m ago",
 		inspAgo(now, &future):               "in 5m",
 		inspAgo(now, nil):                   "-",
-		inspBytes(2048):                     "2K",
-		inspBytes(5 << 20):                  "5M",
-		inspBytes(3 << 29):                  "1.5G",
 		inspMB(800):                         "800M",
-		sha7("abcdef0123"):                  "abcdef0",
-		trunc("hello world", 6):             "hello…",
+		textx.ShortSHA("abcdef0123"):        "abcdef0",
+		textx.Clip("hello world", 6):        "hello…",
 		inspPRLabel("talkable/talkable", 7): "talkable#7",
 		inspShellQuote("~/Projects/a b"):    "~/'Projects/a b'",
 		inspShellQuote("/tmp/x"):            "/tmp/x",
@@ -263,7 +254,7 @@ func TestInspSubmitWaitsForCompletion(t *testing.T) {
 	go func() {
 		defer close(done)
 		for i := 0; i < 200; i++ {
-			if req, err := st.NextPendingRequest(ctx); err == nil {
+			if req, err := nextPendingRequest(ctx, st); err == nil {
 				_ = st.CompleteRequest(ctx, req.ID, store.RequestDone, "pinned review1")
 				return
 			}

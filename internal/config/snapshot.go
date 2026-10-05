@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum"
+	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/paths"
 )
 
@@ -202,12 +203,7 @@ func copySkill(src, dir string) (snapSkill, error) {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 		return snapSkill{}, err
 	}
-	tmp := dst + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return snapSkill{}, err
-	}
-	if err := os.Rename(tmp, dst); err != nil {
-		_ = os.Remove(tmp)
+	if err := fsx.WriteFileAtomic(dst, b, 0o600); err != nil {
 		return snapSkill{}, err
 	}
 	return snapSkill{copy: dst, stamp: st}, nil

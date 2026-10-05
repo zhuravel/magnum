@@ -81,7 +81,7 @@ func roleNames(roles []config.Role) []Role {
 // Every pane gets env with the role's env (Config.RoleEnv) laid over it.
 // Every newly assigned pane gets a sessions row (state starting, agent
 // name/kind or agent_kind "shell", pane/workspace/tab ids, cwd, env_json) and
-// is renamed "PR #N <role>" (PaneLabel); a new workspace whose root pane
+// is renamed "PR #N <role>" (TaggedPaneLabel); a new workspace whose root pane
 // cannot be recorded is closed again (nothing else would find it). Live
 // rows whose pane is gone are marked lost first, keeping their session_id
 // for ResumeID. Pane envs are

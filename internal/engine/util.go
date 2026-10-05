@@ -328,13 +328,6 @@ func (e *Engine) waitStart(ctx context.Context, codex bool) (release func(), err
 
 func deref[T any](p *T) T { return store.Deref(p) }
 
-func short(sha string) string {
-	if len(sha) > 7 {
-		return sha[:7]
-	}
-	return sha
-}
-
 // changed records msg as the latest value for key (tick goroutine only) and
 // reports whether it differs from the previous one, so repeating conditions
 // produce one audit row instead of one per tick.

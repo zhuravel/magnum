@@ -127,7 +127,7 @@ func TestSchedulingKeysAcceptDayDurations(t *testing.T) {
 func TestSchedulingLocalOverlaySetsZeroValues(t *testing.T) {
 	cfg := mustLoad(t, map[string]string{
 		"config.toml": schedulingConfig,
-		"config.local.toml": `
+		"user.toml": `
 [daemon]
 request_debounce = "0s"
 rereview_min_lines = 0

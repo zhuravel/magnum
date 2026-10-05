@@ -96,7 +96,7 @@ func statusDashData(r statusReport, defaultRepo string) tui.StatusData {
 	dm := r.Daemon
 	out.Daemon = tui.DaemonInfo{Running: dm.Running, PID: dm.PID, Launchd: dm.Launchd, Skew: statusSafe(dm.Skew, 0)}
 	if dm.Running && dm.StartedAt != nil {
-		out.Daemon.Uptime = inspDur(now.Sub(*dm.StartedAt))
+		out.Daemon.Uptime = tui.HumanDuration(now.Sub(*dm.StartedAt))
 	}
 	out.Activity = tui.ActivityInfo{LastPoll: ago(dm.LastPoll), LastTick: ago(dm.LastTick), LastReconcile: ago(dm.LastReconcile)}
 	if g := r.GitHub; g.Remaining != nil {

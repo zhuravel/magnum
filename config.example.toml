@@ -1,6 +1,6 @@
 # A minimal ~/.config/magnum/config.toml: copy it there, or let `magnum init` write it. It layers over the
-# built-in defaults (config.defaults.toml); config.full.example.toml has every key in a worked setup and
-# `magnum config` validates the result.
+# built-in defaults (config.defaults.toml, every key documented); config.full.example.toml is a worked
+# setup and `magnum config` validates the result.
 
 [daemon]
 default_repo = "example/widgets"   # `magnum review 123` means example/widgets#123

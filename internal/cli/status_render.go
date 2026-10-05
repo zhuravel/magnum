@@ -17,6 +17,8 @@ import (
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/inventory"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
+	"github.com/zhuravel/magnum/internal/tui"
 )
 
 // statusSafe makes untrusted text (PR titles, errors, pause details, pane
@@ -26,7 +28,7 @@ import (
 func statusSafe(s string, limit int) string {
 	s = actClean(s)
 	if limit > 0 {
-		s = trunc(s, limit)
+		s = textx.Clip(s, limit)
 	}
 	return s
 }
@@ -55,7 +57,7 @@ func statusRenderHeader(w io.Writer, r statusReport) {
 	if dm.Running {
 		daemon = fmt.Sprintf("running (pid %d", dm.PID)
 		if dm.StartedAt != nil {
-			daemon += ", up " + inspDur(now.Sub(*dm.StartedAt))
+			daemon += ", up " + tui.HumanDuration(now.Sub(*dm.StartedAt))
 		}
 		daemon += ")"
 	}
@@ -143,7 +145,7 @@ func statusCodexText(u statusCodexUsage, now time.Time) string {
 	case 7 * 24 * 60:
 		s += " of the weekly limit"
 	default:
-		s += " of the " + inspDur(time.Duration(u.WindowMinutes)*time.Minute) + " limit"
+		s += " of the " + tui.HumanDuration(time.Duration(u.WindowMinutes)*time.Minute) + " limit"
 	}
 	if u.Plan != "" {
 		s += " (" + statusSafe(u.Plan, 20) + ")"
@@ -193,14 +195,14 @@ func statusRetroText(ro statusRetro, now time.Time) string {
 		case l.Stopped != "":
 			s += "stopped: " + statusSafe(l.Stopped, 0)
 		default:
-			s += daemonPlural(l.PRs, "PR", "PRs") + ", " + strconv.Itoa(l.Classified) + " classified"
+			s += textx.Count(l.PRs, "PR", "PRs") + ", " + strconv.Itoa(l.Classified) + " classified"
 			if l.Failed > 0 {
 				s += ", " + strconv.Itoa(l.Failed) + " failed"
 			}
 		}
 	}
 	if ro.NewMisses != nil {
-		s += " · " + daemonPlural(*ro.NewMisses, "new miss", "new misses")
+		s += " · " + textx.Count(*ro.NewMisses, "new miss", "new misses")
 	}
 	return s
 }
@@ -231,7 +233,7 @@ func statusDiskText(d statusDisk) string {
 	case d.Error != "":
 		return "unknown: " + statusSafe(d.Error, 0)
 	case d.FreeBytes > 0:
-		disk := fmt.Sprintf("%s free in %s (min %d GB)", inspBytes(int64(d.FreeBytes)), statusSafe(inspTilde(d.Path), 0), d.MinGB)
+		disk := fmt.Sprintf("%s free in %s (min %d GB)", tui.HumanBytes(int64(d.FreeBytes)), statusSafe(inspTilde(d.Path), 0), d.MinGB)
 		if d.MinGB > 0 && d.FreeBytes < uint64(d.MinGB)<<30 {
 			disk += "  LOW: provisioning refused"
 		}
@@ -305,7 +307,7 @@ func statusPauseText(p statusPause, now time.Time) string {
 	if p.Since != nil {
 		s += " since " + inspClock(now, *p.Since) + " (" + inspAgo(now, p.Since) + ")"
 		if p.Until != nil && p.Until.After(*p.Since) {
-			s += ", for " + inspDur(p.Until.Sub(*p.Since))
+			s += ", for " + tui.HumanDuration(p.Until.Sub(*p.Since))
 		}
 	}
 	if p.Until != nil {
@@ -316,7 +318,7 @@ func statusPauseText(p statusPause, now time.Time) string {
 		}
 	}
 	if p.Held > 0 {
-		s += " · " + daemonPlural(p.Held, "request", "requests") + " held"
+		s += " · " + textx.Count(p.Held, "request", "requests") + " held"
 	}
 	if p.Using != "" {
 		s += ", using " + statusSafe(p.Using, 0)
@@ -332,7 +334,7 @@ func statusPauseText(p statusPause, now time.Time) string {
 func statusExternalCells(x inventory.ExternalView) []string {
 	branch := x.Branch
 	if x.Detached {
-		branch = "(detached " + sha7(x.Head) + ")"
+		branch = "(detached " + textx.ShortSHA(x.Head) + ")"
 	}
 	pr := "-"
 	if x.PRNumber > 0 {
@@ -359,7 +361,7 @@ func statusExternalCells(x inventory.ExternalView) []string {
 	}
 	disk := "-"
 	if x.SizeKB != nil {
-		disk = inspBytes(*x.SizeKB * 1024)
+		disk = tui.HumanBytes(*x.SizeKB * 1024)
 	}
 	return []string{statusSafe(inspTilde(x.Path), 0), statusSafe(branch, 40), pr, gh, dbs, agentsCell, disk}
 }
@@ -413,7 +415,7 @@ func statusSlotDisk(v inventory.SlotView) string {
 	if v.SizeKB == nil {
 		return "-"
 	}
-	return inspBytes(*v.SizeKB * 1024)
+	return tui.HumanBytes(*v.SizeKB * 1024)
 }
 
 func statusCountPresent(dbs []inventory.DBView) int {
@@ -493,9 +495,9 @@ func statusRenderDetail(w io.Writer, d statusDetail, now time.Time) {
 		author = "ghost"
 	}
 	fmt.Fprintf(w, "  author:    %s; posts as %s\n", statusSafe(author, 0), statusSafe(inspOrDash(pr.Identity), 0))
-	head := sha7(pr.HeadSHA)
+	head := textx.ShortSHA(pr.HeadSHA)
 	if rs := store.Deref(pr.ReviewedSHA); rs != "" {
-		head += ", reviewed " + sha7(rs)
+		head += ", reviewed " + textx.ShortSHA(rs)
 		if pr.ReviewedAt != nil {
 			head += " " + inspAgo(now, pr.ReviewedAt)
 		}
@@ -510,7 +512,7 @@ func statusRenderDetail(w io.Writer, d statusDetail, now time.Time) {
 	switch {
 	case d.Slot != nil:
 		sha := store.Deref(d.Slot.Slot.CheckedOutSHA)
-		fmt.Fprintf(w, "  folder:    %s @ %s (slot %s, %s)\n", statusSafe(inspTilde(d.Slot.Slot.Path), 0), inspOrDash(sha7(sha)),
+		fmt.Fprintf(w, "  folder:    %s @ %s (slot %s, %s)\n", statusSafe(inspTilde(d.Slot.Slot.Path), 0), inspOrDash(textx.ShortSHA(sha)),
 			statusSafe(d.Slot.Slot.Name, 0), d.Slot.Slot.State)
 		statusRenderDBs(w, d.Slot)
 	case d.LastFolder != "":
@@ -608,7 +610,7 @@ func statusRenderHistory(w io.Writer, runs []store.Run, now time.Time, isJudge f
 	fmt.Fprintf(w, "  reviews:\n")
 	for _, rd := range rounds {
 		for _, j := range rd.judge {
-			line := fmt.Sprintf("    round %d %-9s %s %-9s", rd.n, j.Kind, sha7(j.TargetSHA), j.State)
+			line := fmt.Sprintf("    round %d %-9s %s %-9s", rd.n, j.Kind, textx.ShortSHA(j.TargetSHA), j.State)
 			if ev := store.Deref(j.ReviewEvent); ev != "" {
 				line += " " + statusSafe(ev, 0)
 			} else if oc := store.Deref(j.Outcome); oc != "" {
@@ -660,7 +662,7 @@ func findingsSentence(f store.ReviewSummary) string {
 	if f.Event != "" && want != "" && !strings.EqualFold(f.Event, want) {
 		s += " (posted as " + strings.ToLower(strings.ReplaceAll(f.Event, "_", " ")) + ")"
 	}
-	s += fmt.Sprintf(" at %s: P0 %d · P1 %d · P2 %d · P3 %d", sha7(f.SHA), f.Counts[0], f.Counts[1], f.Counts[2], f.Counts[3])
+	s += fmt.Sprintf(" at %s: P0 %d · P1 %d · P2 %d · P3 %d", textx.ShortSHA(f.SHA), f.Counts[0], f.Counts[1], f.Counts[2], f.Counts[3])
 	if f.Simplifications > 0 {
 		s += fmt.Sprintf(" · %d simplifications", f.Simplifications)
 	}

@@ -12,6 +12,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -61,7 +62,7 @@ func (f *perPRFixture) ownOrigin(t *testing.T) (work string) {
 	copyRepo(t, fx.origin, origin)
 	copyRepo(t, fx.work, work)
 	repointOrigin(t, work, fx.origin, origin)
-	if exists(f.main) {
+	if fsx.Exists(f.main) {
 		repointOrigin(t, f.main, fx.origin, origin)
 	}
 	return work
@@ -123,7 +124,7 @@ func TestCreatePRWorktree(t *testing.T) {
 	if len(add) != 1 || !add[0].Mutates || !slices.Equal(add[0].Args, []string{"-C", f.main, "worktree", "add", "--quiet", "--detach", wantPath, gitx.PRRef(7)}) {
 		t.Fatalf("worktree add = %+v", add)
 	}
-	a, err := h.st.OpenAssignmentByPR(h.ctx, f.pr.ID)
+	a, err := h.openAssignment(f.pr.ID)
 	if err != nil || a.SlotID != sl.ID || store.Deref(a.HeadSHA) != f.sha7 {
 		t.Fatalf("assignment = %+v, %v", a, err)
 	}
@@ -237,7 +238,7 @@ func TestPerPRCheckoutAndRemove(t *testing.T) {
 	if head := gitT(t, sl.Path, "rev-parse", "HEAD"); head != newSHA {
 		t.Fatalf("HEAD = %s", head)
 	}
-	if a, err := h.st.OpenAssignmentByPR(h.ctx, f.pr.ID); err != nil || store.Deref(a.HeadSHA) != newSHA {
+	if a, err := h.openAssignment(f.pr.ID); err != nil || store.Deref(a.HeadSHA) != newSHA {
 		t.Fatalf("assignment head = %v, %v; want the new checkout %s", a.HeadSHA, err, newSHA)
 	}
 	if n := len(h.scriptCalls("")); n != 0 {
@@ -250,7 +251,7 @@ func TestPerPRCheckoutAndRemove(t *testing.T) {
 	writeFile(t, notes, "scratch\n")
 	h.humanTyped(f.pr.ID, h.now.Add(time.Minute))
 	wantHold(t, h.m.RemovePRWorktree(h.ctx, h.slot(sl.Name), false), HoldDirtyWorktree)
-	if !exists(notes) || len(h.run.gitCalls("worktree", "remove")) != 0 {
+	if !fsx.Exists(notes) || len(h.run.gitCalls("worktree", "remove")) != 0 {
 		t.Fatal("an untracked file was removed")
 	}
 	if got := h.slot(sl.Name); got.State != store.SlotClaimed || store.Deref(got.HoldReason) != HoldDirtyWorktree {
@@ -280,7 +281,7 @@ func TestPerPRCheckoutAndRemove(t *testing.T) {
 	if got.State != store.SlotRemoved || got.PRID != nil {
 		t.Fatalf("slot = %+v", got)
 	}
-	if _, err := h.st.OpenAssignmentByPR(h.ctx, f.pr.ID); !errors.Is(err, store.ErrNotFound) {
+	if _, err := h.openAssignment(f.pr.ID); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("assignment still open: %v", err)
 	}
 
@@ -318,7 +319,7 @@ func TestRemovePRWorktreeRefusesTrackedChanges(t *testing.T) {
 	if got := h.slot(sl.Name); got.State != store.SlotClaimed {
 		t.Fatalf("state = %s", got.State)
 	}
-	if !exists(sl.Path) || readFile(t, readme) != "edited\n" {
+	if !fsx.Exists(sl.Path) || readFile(t, readme) != "edited\n" {
 		t.Fatal("the worktree or its change is gone")
 	}
 	if rm := h.run.gitCalls("worktree", "remove"); len(rm) != 0 {
@@ -330,8 +331,8 @@ func TestRemovePRWorktreeRefusesTrackedChanges(t *testing.T) {
 	if err := h.m.RemovePRWorktree(h.ctx, sl, true); err != nil {
 		t.Fatalf("forced: %v", err)
 	}
-	if got := h.slot(sl.Name); got.State != store.SlotRemoved || exists(sl.Path) {
-		t.Fatalf("state = %s, dir exists %v", got.State, exists(sl.Path))
+	if got := h.slot(sl.Name); got.State != store.SlotRemoved || fsx.Exists(sl.Path) {
+		t.Fatalf("state = %s, dir exists %v", got.State, fsx.Exists(sl.Path))
 	}
 	if n := len(h.scriptCalls("bin/teardown")); n != 1 {
 		t.Fatalf("forced removal ran teardown %d times, want 1", n)

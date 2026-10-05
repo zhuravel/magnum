@@ -13,6 +13,7 @@ import (
 
 	"github.com/zhuravel/magnum"
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/launchd"
 	"github.com/zhuravel/magnum/internal/paths"
 )
@@ -178,7 +179,7 @@ func installLaunchAgent(ctx context.Context, c *Context, run execx.Runner, dry b
 // manifest (development), else the copy WritePluginFiles keeps under the
 // data directory.
 func pluginDir(l paths.Layout) string {
-	if p := l.Plugin(); p != "" && fileExists(p) {
+	if p := l.Plugin(); p != "" && fsx.Exists(p) {
 		return l.Home
 	}
 	return filepath.Join(l.Data(), "herdr-plugin")
@@ -200,10 +201,7 @@ func writePluginFiles(dir string) (bool, error) {
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 			return wrote, err
 		}
-		if err := os.WriteFile(p+".tmp", f.data, f.mode); err != nil {
-			return wrote, err
-		}
-		if err := os.Rename(p+".tmp", p); err != nil {
+		if err := fsx.WriteFileAtomic(p, f.data, f.mode); err != nil {
 			return wrote, err
 		}
 		wrote = true

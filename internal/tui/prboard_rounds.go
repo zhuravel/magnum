@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // SpendInfo is what a PR's reviews cost over a window: the agent time (the
@@ -60,7 +62,7 @@ func spendCell(s *SpendInfo) string {
 	if s == nil {
 		return ""
 	}
-	return StageDuration(s.AgentTime) + " · " + plural(s.Rounds, "round", "rounds")
+	return StageDuration(s.AgentTime) + " · " + textx.Count(s.Rounds, "round", "rounds")
 }
 
 // spendLabel names the window of a PR's agent time: "Agent time 7d".
@@ -128,7 +130,7 @@ func (p prbPainter) roundWhyLines(w RoundWhy) []string {
 	// for it: the change of its code did.
 	var added, asked []string
 	for _, r := range w.Reruns {
-		added = append(added, r.Role+" ("+plural(r.Lines, "line", "lines")+" changed)")
+		added = append(added, r.Role+" ("+textx.Count(r.Lines, "line", "lines")+" changed)")
 	}
 	for _, r := range w.Requested {
 		if !slices.ContainsFunc(w.Reruns, func(x RoleRerun) bool { return x.Role == r }) && !slices.Contains(asked, r) {

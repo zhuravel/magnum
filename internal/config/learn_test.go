@@ -38,27 +38,6 @@ func TestLearnDefaults(t *testing.T) {
 	}
 }
 
-// The worked example's [learn] block shows the defaults, so copying it into a
-// user config changes nothing until a key is edited.
-func TestFullExampleLearnMatchesDefaults(t *testing.T) {
-	src, err := os.ReadFile(filepath.Join(repoRoot(t), "config.full.example.toml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	home := t.TempDir()
-	user := filepath.Join(home, "user.toml")
-	if err := os.WriteFile(user, src, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := Load(paths.Layout{Home: home, UserConfig: user}, "")
-	if err != nil {
-		t.Fatalf("load config.full.example.toml: %v", err)
-	}
-	if want := DefaultLearn(); !reflect.DeepEqual(cfg.Learn, want) {
-		t.Fatalf("config.full.example.toml learn = %+v, want %+v", cfg.Learn, want)
-	}
-}
-
 // daily_at is "HH:MM" and nothing else: two digits each, 00:00 to 23:59.
 func TestLearnDailyTimeParsesStrictClockTimes(t *testing.T) {
 	day := time.Date(2026, time.October, 5, 15, 45, 30, 123, time.UTC)

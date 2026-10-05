@@ -18,6 +18,7 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/launchd"
 	"github.com/zhuravel/magnum/internal/paths"
 )
@@ -94,7 +95,7 @@ func daemonGroupNoArgs(c *Context, name, usage string, pos []string) bool {
 func loadDaemonGroupConfig(c *Context, cmd string) bool {
 	if err := c.LoadConfig(); err != nil {
 		file := c.Layout.Config()
-		if file == "" || !fileExists(file) {
+		if file == "" || !fsx.Exists(file) {
 			file = c.Layout.UserConfig
 		}
 		fmt.Fprintf(c.Stderr, "magnum %s: %v\nfix: correct the config file (%s), then check it with `magnum config`\n",
@@ -161,7 +162,7 @@ func launchPrefix(layout paths.Layout, cfg *config.Config, misePath string) []st
 	if layout.Home == "" || cfg == nil || misePath == "" {
 		return nil
 	}
-	if !fileExists(filepath.Join(layout.Home, ".mise.toml")) && !fileExists(filepath.Join(layout.Home, ".mise.local.toml")) {
+	if !fsx.Exists(filepath.Join(layout.Home, ".mise.toml")) && !fsx.Exists(filepath.Join(layout.Home, ".mise.local.toml")) {
 		return nil
 	}
 	for _, id := range cfg.Identities {
@@ -171,8 +172,6 @@ func launchPrefix(layout paths.Layout, cfg *config.Config, misePath string) []st
 	}
 	return nil
 }
-
-func fileExists(p string) bool { _, err := os.Stat(p); return err == nil }
 
 // launchdPATH is the PATH the LaunchAgent gets (launchd's own is bare).
 // It carries mise's shims (codex, claude, node installed with mise), which a
