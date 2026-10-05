@@ -384,7 +384,7 @@ func TestArgv(t *testing.T) {
 		t.Errorf("codex = %q", got)
 	}
 	if got := k["claude"].Argv(LaunchArgs{Session: "u-2", Title: "PR #1 claude-review - r", Effort: "high", Wrapper: true}); !slices.Equal(got,
-		[]string{"--resume", "u-2", "--name", "PR #1 claude-review - r"}) {
+		[]string{"--resume", "u-2", "--name", "PR #1 claude-review - r", "--effort", "high"}) {
 		t.Errorf("claude = %q", got)
 	}
 	claude := k["claude"]

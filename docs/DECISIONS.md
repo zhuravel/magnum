@@ -1492,3 +1492,11 @@ editing history. Code, config comments and prompts reference these by their head
   uncalled. Rejected: checking `application "…" is running` first (the dialog remains), and asking
   `AEDeterminePermissionToAutomateTarget` without a prompt through a JavaScript-for-Automation bridge
   (untested here, and it still answers for doctor's terminal, not the daemon).
+- **Claude sessions get `--effort` like `--model`** (2026-10-05). The claude kind passed a role's effort only
+  inside the prompt (`/code-review <url> high`), so every Claude session ran at the operator's own Claude
+  Code `effortLevel` (here `xhigh`, thinking always on), and a role without `model` ran whatever Claude
+  Code picked: the default for a new session, the old model for a resumed one (a review parked on 10-03
+  came back on Fable two days later, after every live session had moved to Opus). claude-review was the
+  slowest role (median 14m, p90 26m). The kind now has `effort = ["--effort", "{effort}"]`; both flags are
+  part of every launch and resume (`Kind.Argv`). Which model and effort a deployment uses stays config
+  (`[[role]] model`, `effort`, `rereview_effort`), not a built-in default.

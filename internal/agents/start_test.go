@@ -28,9 +28,11 @@ func TestStartAgentFreshWrapperPassesOnlyExtras(t *testing.T) {
 		t.Fatalf("judge start = %+v", j)
 	}
 	c := e.h.starts[1]
-	// Claude gets its pane title as one --name arg (herdr shell-quotes it).
+	// Claude gets its pane title as one --name arg (herdr shell-quotes it)
+	// and the role's effort as --effort, so the session never runs at the
+	// operator's own Claude Code effortLevel.
 	if c.Name != "mg-11920-claude-review-5d01cf" || c.Kind != "claude" || c.PaneID != ws.Panes[RoleClaude] ||
-		!slices.Equal(c.Args, []string{"--name", "PR #11920 claude-review - talkable"}) {
+		!slices.Equal(c.Args, []string{"--name", "PR #11920 claude-review - talkable", "--effort", "high"}) {
 		t.Fatalf("claude start = %+v", c)
 	}
 	if got := e.h.callsWith("WaitIdleShell"); len(got) != 2 {
@@ -84,9 +86,9 @@ func TestStartAgentResumeArgs(t *testing.T) {
 		probeOutput string
 	}{
 		{"codex wrapper", "auto", RoleJudge, []string{"--x"}, "resume 01a0-uuid -c model_reasoning_effort=xhigh", "codex: function"},
-		{"claude wrapper", "true", RoleClaude, []string{"--x"}, "--resume c1d2-id --name PR #11920 claude-review - talkable", ""},
+		{"claude wrapper", "true", RoleClaude, []string{"--x"}, "--resume c1d2-id --name PR #11920 claude-review - talkable --effort high", ""},
 		{"codex plain", "false", RoleJudge, []string{"--dangerously-bypass-approvals-and-sandbox", "--search"}, "resume 01a0-uuid -c model_reasoning_effort=xhigh --dangerously-bypass-approvals-and-sandbox --search", ""},
-		{"claude plain", "false", RoleClaude, []string{"--dangerously-skip-permissions"}, "--resume c1d2-id --name PR #11920 claude-review - talkable --dangerously-skip-permissions", ""},
+		{"claude plain", "false", RoleClaude, []string{"--dangerously-skip-permissions"}, "--resume c1d2-id --name PR #11920 claude-review - talkable --effort high --dangerously-skip-permissions", ""},
 		{"codex no function", "auto", RoleJudge, []string{"--search"}, "resume 01a0-uuid -c model_reasoning_effort=xhigh --search", "codex: command"},
 	}
 	for _, tc := range cases {

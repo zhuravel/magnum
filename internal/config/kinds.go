@@ -293,6 +293,7 @@ func DefaultKinds() map[string]Kind {
 			Args:       []string{"--dangerously-skip-permissions"},
 			Resume:     []string{"--resume", PlaceholderSession},
 			Model:      []string{"--model", PlaceholderModel},
+			Effort:     []string{"--effort", PlaceholderEffort},
 			Name:       []string{"--name", PlaceholderTitle},
 			LoginCheck: "claude auth status", LoginOK: "json:loggedIn",
 			SwitchModel: "/model " + PlaceholderModel, FallbackModels: []string{"opus", "sonnet"}, ResetModel: "default",

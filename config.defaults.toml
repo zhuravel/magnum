@@ -185,6 +185,7 @@ prompts_dir = "{{repo}}/prompts"  # a prompt name reads prompts_dir/<name>, else
 # args = ["--dangerously-skip-permissions"]  # only without a wrapper, as for codex
 # resume = ["--resume", "{session}"]
 # model = ["--model", "{model}"]
+# effort = ["--effort", "{effort}"]   # without it the session runs at your own Claude Code effortLevel
 # name = ["--name", "{title}"]
 # login_check = "claude auth status"
 # login_ok = "json:loggedIn"

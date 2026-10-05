@@ -410,7 +410,9 @@ variable and examples (a droid simplifier, an omp reviewer, a watch with two rol
 Every task is a role, so its model and effort live in its `[[role]]` block in your config; a block
 there overrides the built-in role of the same name key by key, so it needs only the keys you change.
 `model` picks the model (else the kind's `default_model`, else the CLI's own), `effort` the reasoning
-effort of first reviews and `rereview_effort` that of re-reviews of new commits. `codex-review` is a
+effort of first reviews and `rereview_effort` that of re-reviews of new commits. Claude roles get both as
+`--model` and `--effort` at launch and on every resume, so a role without them runs at your own Claude
+Code `model` and `effortLevel` settings, and a resumed conversation keeps the model it started on. `codex-review` is a
 shell role that runs `codex review`, so it takes both as Codex config overrides in `args`. A role you
 can do without is turned off with `runs = "never"` (or `"manual"`: only when you ask). To spend less as a
 subscription runs low, for example:
