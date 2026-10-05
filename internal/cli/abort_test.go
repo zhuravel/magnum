@@ -51,8 +51,15 @@ func TestAbortWithoutADaemonLeavesNoRequestBehind(t *testing.T) {
 		t.Fatalf("exit %d", code)
 	}
 	actContains(t, h.errb.String(), "no daemon is running")
-	reqs := h.requests()
-	if len(reqs) != 1 || reqs[0].State != store.RequestFailed {
+	if reqs := h.requests(); len(reqs) != 0 {
+		t.Fatalf("the request must not wait for the next daemon: %+v", reqs)
+	}
+	// The daemon died between the check and the kick: withdrawn.
+	h.d.Running = func() (int, error) { return 4242, nil }
+	if code := h.cmd("abort", "5"); code != 1 {
+		t.Fatalf("exit %d", code)
+	}
+	if reqs := h.requests(); len(reqs) != 1 || reqs[0].State != store.RequestFailed {
 		t.Fatalf("the request must not wait for the next daemon: %+v", reqs)
 	}
 }

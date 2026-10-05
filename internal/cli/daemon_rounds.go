@@ -82,9 +82,21 @@ func (c *Context) refuseWhileRoundsRun(cmd string, now bool) bool {
 	}
 	fmt.Fprintf(c.Stderr, "magnum %s: %d review round(s) in flight: %s\n"+
 		"stopping the daemon now abandons them (their agents keep running, the rounds start over later)\n"+
-		"fix: wait for them (`magnum status --watch`), or pass --now to interrupt\n",
-		cmd, len(rounds), strings.Join(rounds, ", "))
+		"fix: %s\n", cmd, len(rounds), strings.Join(rounds, ", "), roundsFix(cmd))
 	return false
+}
+
+// roundsFix is the fix line of a stop refused while rounds run: the ways
+// cmd has to wait for them.
+func roundsFix(cmd string) string {
+	switch cmd {
+	case "daemon-restart":
+		return "`magnum daemon-restart --when-idle` restarts once no round runs (stopping nothing), --drain also " +
+			"stops new rounds meanwhile, --now interrupts them"
+	case "install", "migrate-home":
+		return fmt.Sprintf("`magnum %s --drain` stops new rounds and waits for these, --now interrupts them", cmd)
+	}
+	return "wait for them (`magnum status --watch`), or pass --now to interrupt"
 }
 
 // daemonRunning reports whether a daemon runs now: launchd's job is running,

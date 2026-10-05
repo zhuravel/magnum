@@ -1250,3 +1250,59 @@ editing history. Code, config comments and prompts reference these by their head
   (`missing (no changes)`) did its job and does not count. Decided in code, not only in the skill, so a
   judge that misreads its reports cannot approve. Rejected: holding the round until the reviewer is back
   (a usage limit can last hours, and the findings the others made are worth posting now).
+- **Requests are answered before the GitHub poll** (2026-10-05, after 11 of 14 requests that waited for
+  their answer took 10.9 to 15.4 s: every tick, a kick's included, polled GitHub for about 12 s before it
+  handled requests, so the CLI's 10 s wait ran out and the board flashed "queued" over a refusal). Every
+  tick now handles the pending requests first, then polls, observes and applies the pauses, then handles
+  the requests that arrived meanwhile. The CLI and the screens wait 30 s. Rejected: reordering only a
+  tick a kick woke (the order is as safe for a timer tick, and one order is one code path).
+- **One request client** (2026-10-05). The queue, wake, wait and print steps existed twice
+  (`actDeps.submit/await` with `actRequestOutcome`, `inspSubmit/inspWaitRequest/inspPrintRequest`) and were
+  copied into review, pin, verdict, pause and retro with different waits and wording. `reqClient`
+  (`internal/cli/request_client.go`) is now the only way the CLI and the screens hand work to the daemon;
+  it returns the request with its id, its answer or "still pending", the daemon's pid and the build skew,
+  so a screen can keep following a pending request.
+- **The daemon records its build; a request names what an older daemon lacks** (2026-10-05, after a daemon
+  ran a build 70 minutes older than `bin/magnum` and refused a post-merge review the new build allowed, with
+  nothing saying so). At startup the daemon writes `daemon.build`: the stamped version, Go's
+  `vcs.revision`, the binary launchd starts and its mtime. `magnum status`, every request reply and the
+  dashboard's data (`tui.DaemonInfo.Skew`, drawn by a later screen change) report "daemon runs <old>
+  since <time>; <new> is built: `magnum daemon-restart`" when the CLI's version differs or that binary
+  changed since. The daemon decodes payloads with `DisallowUnknownFields`: a field it does not know fails
+  the request ("this daemon predates <field>: restart it") instead of being dropped (a dropped `dry_run`
+  would post). A payload field, once added, is therefore never removed; an older daemon learns of it only
+  by failing. Rejected: comparing only the revision (a dirty tree builds different code on one revision).
+- **Restart when idle, by hand or by the daemon** (2026-10-05, after a restart from the herdr plugin failed
+  without a word all day: rounds ran from 13:03 to 15:18, and `daemon-restart` without a flag refuses while
+  one is in flight). `magnum daemon-restart --when-idle` waits, without a drain and holding nothing, until
+  no round is claiming, reviewing or verifying, then restarts, and waits again when one started in between
+  (at most `--timeout`, default 2h). Opt-in `[daemon] restart_on_new_build`: each reconcile looks at the
+  binary launchd starts, a new one is checked once (`version`, then `config`, as `daemon-restart` checks a
+  build) and, when it passes, the daemon exits non-zero at the first tick with no round in flight, as it
+  does after a schema migration, so launchd starts the new build (`daemon.restart_pending`,
+  `daemon.restarted_for_build`; `daemon.build_rejected` when the check fails). Dispatch never stops for it.
+  It needs launchd: a daemon without `XPC_SERVICE_NAME` set to the job's label only records that a restart
+  by hand is due. Rejected: re-executing the binary in place (it keeps the environment `mise exec` built
+  for the old one, and a daemon in a terminal would change under its user), and draining for the restart
+  (it holds the rounds people asked for).
+- **A drain has an owner** (2026-10-05, after a drain stayed up with nothing running it: closing the
+  terminal sends SIGHUP, which killed `daemon-restart --drain` before it lifted the drain, and every round
+  was held until the next restart). `signalContext` catches SIGHUP like ctrl+c and SIGTERM, so the
+  command lifts its drain. `daemon.draining` holds `{"since", "pid"}` (an older CLI's bare time still
+  reads); each tick the daemon lifts a drain whose drainer is gone or whose pid now belongs to another
+  program (`daemon.drain_lifted`); `magnum status` names the pid and how to lift the drain. The command
+  records `daemon.drain_started` and, when it lifts its own drain, `daemon.drain_ended` (the restarted
+  daemon writes its own). The fix of a refused restart names `--when-idle` and `--drain`. Rejected: an
+  expiry (a drain may rightly last two hours; the pid says exactly whether its owner lives).
+- **A request does not outlive the absence of a daemon** (2026-10-05, after a review queued while no daemon
+  ran said "applies when the daemon starts" and would have posted whenever that was). At startup the daemon
+  fails, as "expired: queued while no daemon ran", the pending requests older than an hour that were queued
+  after the previous daemon's last tick. `review`, `approve`, `request-changes` and `open` of a parked PR
+  refuse without a daemon and queue nothing (a request no daemon answered is withdrawn); `pin`, `mute`,
+  `ignore` and the others still queue for the next start, and `release`, `pause`, `resume` and the slot
+  commands keep their in-process paths. Rejected: expiring every pending request older than an hour (a heavy
+  request the previous daemon was running when it stopped resumes in the next one).
+- **The plugin's actions say how they ended** (2026-10-05). The restart action toasted only a success; it
+  now runs `daemon-restart --when-idle` and toasts its last line, success or failure, and every other
+  action that fails toasts its last stderr line (else its last output line). The build action says the
+  new binary runs after a restart.

@@ -80,35 +80,25 @@ func retroMain(ctx context.Context, c *Context, d *actDeps, o retroOpts, refs []
 		return cmdFail(c, "retro", err)
 	}
 	out := retroJSON{Payload: engine.RetroPayload{PRs: ids, Again: o.again, Lookback: o.lookback}}
-	id, pid, err := d.submit(ctx, engine.ReqRetro, out.Payload)
+	res, err := d.reqs().send(ctx, engine.ReqRetro, out.Payload, d.quick())
 	if err != nil {
-		if id == 0 {
-			return retroFail(c, o, out, err)
-		}
-		fmt.Fprintln(c.Stderr, err)
-	}
-	var req store.Request
-	if pid != 0 {
-		req, err = d.await(ctx, id, d.quickPoll(), d.Quick)
-	} else {
-		req, err = d.Store.RequestByID(ctx, id)
-	}
-	if err != nil && req.ID == 0 {
 		return retroFail(c, o, out, err)
 	}
-	rv := actRequestView(req, pid)
+	rv := res.view()
 	out.Request = &rv
 	switch {
-	case pid == 0:
-		return retroFail(c, o, out, fmt.Errorf("no daemon is running: request %d stays queued and starts the retro once one runs: %s", id, actDaemonFix))
-	case req.State == store.RequestFailed:
-		return retroFail(c, o, out, errors.New(store.Deref(req.Result)))
+	case res.PID == 0 && res.Pending():
+		res.printNotes(c.Stderr)
+		return retroFail(c, o, out, fmt.Errorf("no daemon is running: request %d stays queued and starts the retro once one runs: %s", res.ID(), actDaemonFix))
+	case res.Failed():
+		res.printNotes(c.Stderr)
+		return retroFail(c, o, out, errors.New(res.Result()))
 	case o.json:
 		_ = writeJSON(c.Stdout, out)
 		return 0
 	}
-	actRequestOutcome(c.Stdout, c.Stderr, req, pid)
-	if req.State == store.RequestDone {
+	res.print(c.Stdout, c.Stderr)
+	if res.Req.State == store.RequestDone {
 		fmt.Fprintln(c.Stdout, "follow it with `magnum logs`; `magnum misses` lists the results")
 	}
 	return 0

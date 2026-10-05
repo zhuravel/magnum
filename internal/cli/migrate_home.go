@@ -107,7 +107,7 @@ func runMigrateHome(c *Context, pos []string, f restartFlags, dry bool) int {
 
 	ctx := context.Background()
 	run := daemonSys.runner(false, c.Stdout)
-	endDrain, ok := c.guardRounds(ctx, run, "migrate-home", f.now, f.drain, f.timeout)
+	endDrain, ok := c.guardRounds(ctx, run, "migrate-home", f)
 	if !ok {
 		return 1
 	}

@@ -102,6 +102,7 @@ func TestPickScreenEntriesAndPinToggle(t *testing.T) {
 
 func TestPickScreenTypedRefIsReviewed(t *testing.T) {
 	h := newActHarness(t)
+	h.pid = 4242 // a daemon runs: reviews and verdicts are queued only then
 	h.seedPR("talkable/talkable", 5, store.PRReviewed)
 	h.gh.details[11932] = github.PRDetails{NodeID: "PR_11932", Number: 11932, Title: "New", State: "OPEN", HeadRefOid: "ccc"}
 	h.withPicker(func([]tui.PickEntry) tui.PickOutcome {
@@ -156,6 +157,7 @@ func TestPickLinkQueryOffersAnUnknownPR(t *testing.T) {
 
 func TestPickPromptOffATerminal(t *testing.T) {
 	h := newActHarness(t)
+	h.pid = 4242 // a daemon runs: reviews and verdicts are queued only then
 	h.seedPR("talkable/talkable", 5, store.PRReviewed)
 	old := tuiPicker
 	tuiPicker = func(context.Context, []tui.PickEntry, tui.PickerOptions) (tui.PickOutcome, error) {
@@ -187,6 +189,7 @@ func TestPickPromptOffATerminal(t *testing.T) {
 
 func TestPickInThePluginPopupKeepsTheResultUp(t *testing.T) {
 	h := newActHarness(t)
+	h.pid = 4242 // a daemon runs: reviews and verdicts are queued only then
 	h.seedPR("talkable/talkable", 5, store.PRReviewed)
 	h.withPicker(pickEntryAt(0, tui.PickActionReview))
 	h.tty.Rules = []execx.Rule{{Prefix: []string{"stty", "-g"}, Result: execx.Result{Stdout: []byte("saved")}},

@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -275,11 +276,19 @@ func answer[T any](e *Engine, ctx context.Context, req store.Request, fn func(co
 	}
 }
 
+// decode reads req's payload into v. A field v does not know comes from a
+// newer CLI: the request fails instead of running without it (a dropped
+// dry_run would post), so a payload field, once added, is never removed.
 func decode(req store.Request, v any) error {
 	if len(req.Payload) == 0 {
 		return nil
 	}
-	if err := json.Unmarshal(req.Payload, v); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(req.Payload))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		if field, ok := strings.CutPrefix(err.Error(), "json: unknown field "); ok {
+			return fmt.Errorf("request %d (%s): this daemon predates %s: restart it (`magnum daemon-restart`), then retry", req.ID, req.Kind, field)
+		}
 		return fmt.Errorf("request %d (%s): bad payload: %w", req.ID, req.Kind, err)
 	}
 	return nil

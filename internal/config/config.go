@@ -165,6 +165,12 @@ type Daemon struct {
 	// 0 = no threshold. A [[watch]] may override both (Config.ThrottleFor).
 	RereviewMinLines int      `toml:"rereview_min_lines"`
 	RereviewMaxWait  Duration `toml:"rereview_max_wait"`
+	// RestartOnNewBuild lets the daemon restart itself on a new binary
+	// on disk (the one launchd starts) once it passes its configuration
+	// check: at the first tick no round is claiming, reviewing or
+	// verifying, it exits for launchd to start the new build. Dispatch never
+	// stops for it. Needs launchd (`magnum install`).
+	RestartOnNewBuild bool `toml:"restart_on_new_build"`
 }
 
 // TrivialDeltaClasses are the values of skip_trivial_deltas: a push that

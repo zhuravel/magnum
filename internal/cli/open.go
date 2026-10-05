@@ -156,16 +156,19 @@ func openRestore(ctx context.Context, c *Context, d *actDeps, t actTarget, role,
 	hint := openResumeHint(d.Cfg, parked)
 	reqID := int64(0)
 	if !starting {
-		id, pid, err := d.submit(ctx, actReqOpen, engine.OpenPayload{PRTarget: t.prTarget(), Role: role})
-		if err != nil && id == 0 {
+		// Restoring is for now: with no daemon nothing stays queued to
+		// restore and pin the PR whenever one starts.
+		out, err := d.reqs().send(ctx, actReqOpen, engine.OpenPayload{PRTarget: t.prTarget(), Role: role}, reqSend{NeedDaemon: true})
+		switch {
+		case errors.Is(err, errNoDaemon):
+			return store.Session{}, fmt.Errorf("%s is parked and no daemon is running to restore it (%s)%s", label, actDaemonFix, hint)
+		case err != nil:
 			return store.Session{}, err
 		}
-		if pid == 0 {
-			return store.Session{}, fmt.Errorf("%s is parked and no daemon is running to restore it (%s)%s", label, actDaemonFix, hint)
-		}
-		reqID = id
+		reqID = out.ID()
 		if !o.json {
-			fmt.Fprintf(c.Stderr, "%s is parked; asked the daemon to restore its sessions in a slot, pinned to you (request %d)…\n", label, id)
+			out.printNotes(c.Stderr)
+			fmt.Fprintf(c.Stderr, "%s is parked; asked the daemon to restore its sessions in a slot, pinned to you (request %d)…\n", label, reqID)
 		}
 	} else if !o.json {
 		fmt.Fprintf(c.Stderr, "waiting for the %s session of %s to start…\n", actRoleName(role), label)

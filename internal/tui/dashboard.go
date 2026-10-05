@@ -39,6 +39,10 @@ type DaemonInfo struct {
 	PID     int
 	Uptime  string // preformatted ("3h12m"); empty when unknown
 	Launchd string // launchd job state ("running", "not loaded")
+	// Skew says the daemon runs an older build than the CLI's or the one on
+	// disk ("daemon runs v1 since …; v2 is built: `magnum daemon-restart`");
+	// "" when it does not.
+	Skew string
 }
 
 // ActivityInfo is how long ago the daemon last polled GitHub, ticked and

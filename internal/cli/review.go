@@ -274,39 +274,26 @@ func reviewAttachStart(ctx context.Context, d *actDeps, pr store.PR) time.Time {
 func reviewQueue(ctx context.Context, c *Context, d *actDeps, t actTarget, label string, payload engine.ReviewPayload, o reviewOpts, out reviewJSON) int {
 	w, ew := c.Stdout, c.Stderr
 	start := d.now()
-	id, pid, err := d.submit(ctx, engine.ReqReview, payload)
+	// A review posts to GitHub: with no daemon to run it now it is refused,
+	// never left queued to post whenever a daemon starts.
+	q := d.quick()
+	q.NeedDaemon = true
+	res, err := d.reqs().send(ctx, engine.ReqReview, payload, q)
 	if err != nil {
-		if id == 0 {
-			return reviewFailJSON(c, o, out, err)
+		if errors.Is(err, errNoDaemon) {
+			err = fmt.Errorf("%s: nothing was queued: %w", label, err)
 		}
-		fmt.Fprintln(ew, err)
-	}
-	var req store.Request
-	if pid != 0 {
-		req, err = d.await(ctx, id, d.quickPoll(), d.Quick)
-	} else {
-		req, err = d.Store.RequestByID(ctx, id)
-	}
-	if err != nil && req.ID == 0 {
 		return reviewFailJSON(c, o, out, err)
 	}
-	rv := actRequestView(req, pid)
+	id := res.ID()
+	rv := res.view()
 	out.Request = &rv
-	if req.State == store.RequestFailed {
-		return reviewFailJSON(c, o, out, errors.New(store.Deref(req.Result)))
+	if res.Failed() {
+		res.printNotes(ew)
+		return reviewFailJSON(c, o, out, errors.New(res.Result()))
 	}
 	if !o.json {
-		actRequestOutcome(w, ew, req, pid)
-	}
-	if pid == 0 {
-		if o.wait || o.focus {
-			err := fmt.Errorf("--wait and --focus need a running daemon (request %d stays queued until one starts): %s", id, actDaemonFix)
-			return reviewFailJSON(c, o, out, err)
-		}
-		if o.json {
-			_ = writeJSON(w, out)
-		}
-		return 0
+		res.print(w, ew)
 	}
 	if !o.wait && !o.focus {
 		if o.json {

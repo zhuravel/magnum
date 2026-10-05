@@ -153,7 +153,7 @@ func TestRetroAnswerThatNeverComesIsReportedAsQueued(t *testing.T) {
 	if code := h.cmd("retro"); code != 0 {
 		t.Fatalf("exit %d: %s", code, h.errb.String())
 	}
-	actContains(t, h.out.String(), "request 1 (retro) is queued", "the daemon (pid 4242) handles it shortly")
+	actContains(t, h.out.String(), "queued as request 1 (retro)", "the daemon (pid 4242) is running", "`magnum logs request:1 -f`")
 	if strings.Contains(h.out.String(), "magnum misses") {
 		t.Errorf("the hint follows a retro that may not have started:\n%s", h.out.String())
 	}

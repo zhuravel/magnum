@@ -67,7 +67,7 @@ func runStatus(c *Context, f statusFlags, pos []string) int {
 	ctx, cancel := signalContext()
 	defer cancel()
 
-	d := newStatusDeps(a)
+	d := newStatusDeps(a, c.Version)
 	o := statusOptions{All: f.all, Sizes: f.sizes, NoGitHub: f.watch}
 	if len(pos) == 1 {
 		o.Ref = pos[0]
@@ -115,7 +115,7 @@ func runStatus(c *Context, f statusFlags, pos []string) int {
 }
 
 // newStatusDeps reads everything status shows from a.
-func newStatusDeps(a *app.App) statusDeps {
+func newStatusDeps(a *app.App, version string) statusDeps {
 	return statusDeps{
 		Store: a.Store, Config: a.Config, Layout: a.Layout, Inventory: a.Inventory, Herdr: a.Herdr,
 		Launchd: func(ctx context.Context) (launchd.Info, error) {
@@ -123,6 +123,7 @@ func newStatusDeps(a *app.App) statusDeps {
 		},
 		DaemonPID: func() (int, error) { return engine.DaemonPID(a.Layout) },
 		DiskFree:  inspDiskFree, DiskPath: inspHome(), Now: inspNow,
+		Version: version,
 	}
 }
 
@@ -148,6 +149,13 @@ type statusDeps struct {
 	DiskFree  func(path string) (uint64, error)
 	DiskPath  string
 	Now       func() time.Time
+	// Version is this binary's build and ModTime reads a binary's mtime
+	// (nil = engine.FileModTime): the daemon's build skew.
+	Version string
+	ModTime func(path string) (time.Time, bool)
+	// DrainerAlive reports whether a drain's drainer still runs (nil =
+	// engine.DrainerAlive).
+	DrainerAlive func(pid int) bool
 }
 
 type statusOptions struct {
@@ -194,7 +202,14 @@ type statusDaemon struct {
 	HerdrUp       *bool      `json:"herdr_up,omitempty"` // as the daemon last saw it
 	// DrainingSince is when `magnum daemon-restart --drain` stopped new
 	// rounds (engine.KVDaemonDraining); nil when no drain is in progress.
+	// DrainerPID is the pid of the command that drains (0 = not recorded).
 	DrainingSince *time.Time `json:"draining_since,omitempty"`
+	DrainerPID    int        `json:"drainer_pid,omitempty"`
+	// Build is what the daemon recorded running at its start
+	// (engine.KVDaemonBuild); Skew says when this binary or the one on disk
+	// is newer (engine.SkewNote; only while a daemon runs).
+	Build *engine.Build `json:"build,omitempty"`
+	Skew  string        `json:"build_skew,omitempty"`
 	// PromptsLoadedAt is when the running daemon took its prompt snapshot
 	// (engine.KVPromptsLoadedAt). PromptsChanged counts the prompt and skill
 	// files that differ on disk since (engine.KVPromptsChanged; they take

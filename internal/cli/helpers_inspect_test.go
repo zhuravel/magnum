@@ -270,12 +270,12 @@ func TestInspSubmitWaitsForCompletion(t *testing.T) {
 			time.Sleep(2 * time.Millisecond)
 		}
 	}()
-	req, pid, err := inspSubmit(ctx, f.Ctx, st, "pin", map[string]string{"slot": "review1"}, 2*time.Second)
+	out, err := inspHandOff(ctx, f.Ctx, st, "pin", map[string]string{"slot": "review1"}, 2*time.Second)
 	<-done
-	if err != nil || pid != 0 || req.State != store.RequestDone {
-		t.Fatalf("req=%+v pid=%d err=%v", req, pid, err)
+	if err != nil || out.PID != 0 || out.Req.State != store.RequestDone {
+		t.Fatalf("out=%+v err=%v", out, err)
 	}
-	if code := inspPrintRequest(f.Ctx, req, pid); code != 0 || !strings.Contains(f.Out.String(), "pinned review1") {
+	if code := out.print(f.Ctx.Stdout, f.Ctx.Stderr); code != 0 || !strings.Contains(f.Out.String(), "pinned review1") {
 		t.Fatalf("code=%d out=%q", code, f.Out.String())
 	}
 }

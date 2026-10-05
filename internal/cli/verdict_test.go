@@ -12,6 +12,7 @@ import (
 // request waits for it.
 func TestVerdictCommandsQueueTheVerdict(t *testing.T) {
 	h := newActHarness(t)
+	h.pid = 4242 // a daemon runs: reviews and verdicts are queued only then
 	h.seedPR("talkable/talkable", 5, store.PRReviewed)
 	if code := h.cmd("approve", "talkable#5", "-m", "Looks right to me."); code != 0 {
 		t.Fatalf("exit %d: %s", code, h.errb.String())
@@ -29,5 +30,5 @@ func TestVerdictCommandsQueueTheVerdict(t *testing.T) {
 		r.Number != 5 || !r.Force || r.Message != "" {
 		t.Fatalf("payloads %+v / %+v", a, r)
 	}
-	actContains(t, h.errb.String(), "queued as request")
+	actContains(t, h.out.String(), "the daemon (pid 4242) is running, so the work was queued as request 2 (request_changes)")
 }

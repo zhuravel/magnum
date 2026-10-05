@@ -258,20 +258,17 @@ func cleanupExec(ctx context.Context, c *Context, pl cleanupPlanner, st *store.S
 		if f.wait {
 			wait = 24 * time.Hour
 		}
-		req, pid, err := inspSubmit(ctx, c, st, engine.ReqCleanup, engine.CleanupPayload{Plan: &plan, Confirmed: confirmed}, wait)
-		if err != nil && req.ID == 0 {
+		out, err := inspHandOff(ctx, c, st, engine.ReqCleanup, engine.CleanupPayload{Plan: &plan, Confirmed: confirmed}, wait)
+		if err != nil {
 			return cmdFail(c, cmd, err)
 		}
 		if f.asJSON {
-			if err := writeJSON(c.Stdout, cleanupJSONOut{Plan: plan, Request: &req}); err != nil {
+			if err := writeJSON(c.Stdout, cleanupJSONOut{Plan: plan, Request: &out.Req}); err != nil {
 				return cmdFail(c, cmd, err)
 			}
-			if req.State == store.RequestFailed {
-				return 1
-			}
-			return 0
+			return out.jsonCode()
 		}
-		return inspPrintRequest(c, req, pid)
+		return out.print(c.Stdout, c.Stderr)
 	}
 	defer unlock()
 	rep, aerr := pl.Apply(ctx, plan, confirmed)

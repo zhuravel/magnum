@@ -233,63 +233,24 @@ func inspConfirmTyped(ctx context.Context, c *Context, question, want string) bo
 	return inspIsTTY() && inspPrompt().confirmTyped(ctx, c.Stdout, question, want)
 }
 
-// inspSubmit hands work to the running daemon: it inserts a request row,
-// sends SIGUSR1 and waits up to wait for the request to complete. It
-// returns the latest row (State pending when the wait ran out) and the
-// daemon's pid (0 when no daemon answered the kick).
-func inspSubmit(ctx context.Context, c *Context, st *store.Store, kind string, payload any, wait time.Duration) (store.Request, int, error) {
-	id, err := st.EnqueueRequest(ctx, kind, payload)
-	if err != nil {
-		return store.Request{}, 0, err
-	}
-	pid, err := engine.KickDaemon(c.Layout)
-	if err != nil {
-		fmt.Fprintf(c.Stderr, "magnum: could not signal the daemon: %v (it picks the request up on its next tick)\n", err)
-	}
-	req, err := inspWaitRequest(ctx, st, id, wait)
-	return req, pid, err
+// inspRequests is the request client (request_client.go) of the inspect
+// commands, which hand work to the daemon when it holds its lock.
+func inspRequests(c *Context, st *store.Store) reqClient {
+	return reqClient{st: st, kick: func() (int, error) { return engine.KickDaemon(c.Layout) }, now: inspNow, version: c.Version,
+		sleep: func(ctx context.Context, d time.Duration) error {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(d):
+				return nil
+			}
+		}}
 }
 
-// inspWaitRequest polls a request until it leaves pending or wait runs out.
-func inspWaitRequest(ctx context.Context, st *store.Store, id int64, wait time.Duration) (store.Request, error) {
-	deadline := inspNow().Add(wait)
-	for {
-		req, err := st.RequestByID(ctx, id)
-		if err != nil {
-			return req, err
-		}
-		if req.State != store.RequestPending || !inspNow().Before(deadline) {
-			return req, nil
-		}
-		select {
-		case <-ctx.Done():
-			return req, ctx.Err()
-		case <-time.After(inspPoll):
-		}
-	}
-}
-
-// inspPrintRequest reports a request's outcome; non-zero when it failed.
-func inspPrintRequest(c *Context, req store.Request, pid int) int {
-	res := strings.TrimSpace(store.Deref(req.Result))
-	switch req.State {
-	case store.RequestDone:
-		if res != "" {
-			fmt.Fprintln(c.Stdout, res)
-		}
-		return 0
-	case store.RequestFailed:
-		fmt.Fprintf(c.Stderr, "magnum: the daemon refused request %d: %s\n", req.ID, res)
-		return 1
-	}
-	if pid == 0 {
-		fmt.Fprintf(c.Stdout, "the daemon is running (it holds %s), so the work was queued as request %d; it was not woken "+
-			"(no usable pidfile) and picks the request up on its next tick; follow it with `magnum logs request:%d -f`\n",
-			inspTilde(c.Layout.Lock()), req.ID, req.ID)
-		return 0
-	}
-	fmt.Fprintf(c.Stdout, "the daemon (pid %d) is running, so the work was queued as request %d; follow it with `magnum logs request:%d -f`\n", pid, req.ID, req.ID)
-	return 0
+// inspHandOff hands work to the daemon, which holds its lock, and waits up
+// to wait for its answer (the outcome says pending when the wait ran out).
+func inspHandOff(ctx context.Context, c *Context, st *store.Store, kind string, payload any, wait time.Duration) (reqOutcome, error) {
+	return inspRequests(c, st).send(ctx, kind, payload, reqSend{Wait: wait, Poll: inspPoll, Held: true})
 }
 
 // inspDiskFree returns the free bytes of the filesystem holding path.

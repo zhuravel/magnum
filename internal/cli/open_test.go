@@ -98,8 +98,8 @@ func TestOpenParkedPRWithoutDaemonPrintsTheManualResume(t *testing.T) {
 		t.Fatalf("exit %d", code)
 	}
 	actContains(t, h.errb.String(), "talkable#5 is parked and no daemon is running", "resume by hand: cd /Users/x/Projects/talkable.review3 && codex resume 019a-uuid")
-	reqs := h.requests()
-	if len(reqs) != 1 || reqs[0].Kind != actReqOpen {
+	// Nothing stays queued to restore and pin the PR whenever a daemon starts.
+	if reqs := h.requests(); len(reqs) != 0 {
 		t.Fatalf("requests %+v", reqs)
 	}
 }

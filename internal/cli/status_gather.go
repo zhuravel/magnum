@@ -126,7 +126,22 @@ func statusGatherDaemon(ctx context.Context, d statusDeps, kv statusKV, r *statu
 		up := v == "1"
 		r.Daemon.HerdrUp = &up
 	}
-	r.Daemon.DrainingSince = kv.getTime(engine.KVDaemonDraining)
+	if v, ok := kv.get(engine.KVDaemonDraining); ok {
+		if dr, ok := engine.ParseDrain(v); ok {
+			since := dr.Since
+			r.Daemon.DrainingSince, r.Daemon.DrainerPID = &since, dr.PID
+		}
+	}
+	if b, ok := engine.ReadDaemonBuild(ctx, d.Store); ok {
+		r.Daemon.Build = &b
+		if r.Daemon.Running {
+			modTime := d.ModTime
+			if modTime == nil {
+				modTime = engine.FileModTime
+			}
+			r.Daemon.Skew = engine.SkewNote(b, d.Version, modTime)
+		}
+	}
 	r.Daemon.PromptsLoadedAt = kv.getTime(engine.KVPromptsLoadedAt)
 	if n := kv.getInt(engine.KVPromptsChanged); n != nil && *n > 0 {
 		r.Daemon.PromptsChanged = *n
@@ -199,9 +214,7 @@ func statusGatherPauses(d statusDeps, kv statusKV, r *statusReport) {
 			Fix: "magnum resume"})
 	}
 	if since := r.Daemon.DrainingSince; since != nil {
-		r.Pauses = append(r.Pauses, statusPause{Scope: "daemon", Reason: "draining for a restart since " + inspClock(r.GeneratedAt, *since),
-			Detail: "no new round starts; the restart follows once none is in flight",
-			Fix:    "wait for `magnum daemon-restart --drain` (ctrl+c there lifts the drain)"})
+		r.Pauses = append(r.Pauses, statusDrainPause(d, r.Daemon, r.GeneratedAt, *since))
 	}
 	if until := kv.getTime(engine.KVInfraPausedUntil); until != nil {
 		reason, _ := kv.get(engine.KVInfraPausedReason)

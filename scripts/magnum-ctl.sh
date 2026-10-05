@@ -29,20 +29,44 @@ M="$(resolve_magnum)"
 
 ctx() { printf '%s' "${HERDR_PLUGIN_CONTEXT_JSON:-{\}}" | jq -r "$1 // empty" 2>/dev/null || true; }
 toast() { "$HERDR" notification show "magnum" --body "$1" >/dev/null 2>&1 || true; }
-popup() { exec "$M" ui open "$1"; }
+
+# capture runs "$@" out of sight (an action has no terminal), keeping the last line it printed in OUT and
+# the last line it wrote to stderr in ERR; it returns the command's exit status.
+capture() {
+  local errf rc=0
+  errf="$(mktemp "${TMPDIR:-/tmp}/magnum-ctl.XXXXXX")"
+  OUT="$("$@" 2>"$errf")" || rc=$?
+  OUT="$(printf '%s\n' "$OUT" | awk 'NF { l = $0 } END { print l }')"
+  ERR="$(awk 'NF { l = $0 } END { print l }' "$errf")"
+  rm -f "$errf"
+  return "$rc"
+}
+# failed toasts why an action failed: its last stderr line, else its last output line.
+failed() { toast "${ERR:-${OUT:-magnum $1 failed}}"; }
+popup() { capture "$M" ui open "$1" || failed "ui open"; }
 
 case "${1:-}" in
   on-startup)     "$M" kick reconcile >/dev/null 2>&1 || true ;;
   picker)         popup picker ;;
   picker-link)    MAGNUM_PICK_QUERY="${HERDR_PLUGIN_CLICKED_URL:-}" popup picker ;;
   _picker)        exec "$M" pick --query "${MAGNUM_PICK_QUERY:-}" ;;
-  attention)      out="$("$M" attention 2>&1)" || toast "$out" ;;
-  here)           verb="${2:?verb}"; out="$("$M" "$verb" --workspace "$(ctx .workspace_id)" --cwd "$(ctx '.workspace_cwd // .focused_pane_cwd')" 2>&1)" || true; toast "$out" ;;
+  attention)      capture "$M" attention || failed attention ;;
+  here)           verb="${2:?verb}"
+                  if capture "$M" "$verb" --workspace "$(ctx .workspace_id)" --cwd "$(ctx '.workspace_cwd // .focused_pane_cwd')"; then
+                    toast "${OUT:-${ERR:-magnum $verb: done}}"
+                  else
+                    failed "$verb"
+                  fi ;;
   popup)          popup "${2:?pane}" ;;
   _status)        exec "$M" status --watch ;;
   _cleanup)       "$M" cleanup || true; printf '\npress any key to close'; read -rsn1 ;;
   _doctor)        "$M" doctor || true; printf '\npress any key to close'; read -rsn1 ;;
-  daemon-restart) "$M" daemon-restart && toast "daemon restarted" ;;
-  build)          (cd "$PLUGIN_ROOT" && go build -o bin/magnum ./cmd/magnum) ;;
+  # The restart waits, holding nothing, until no round is in flight; its last line is toasted either way.
+  daemon-restart) if capture "$M" daemon-restart --when-idle; then toast "${OUT:-daemon restarted}"; else failed daemon-restart; fi ;;
+  build)          if capture sh -c 'cd "$1" && go build -o bin/magnum ./cmd/magnum' build "$PLUGIN_ROOT"; then
+                    toast "built bin/magnum; the daemon runs it after a restart (Magnum: restart daemon)"
+                  else
+                    failed build
+                  fi ;;
   *) echo "usage: magnum-ctl.sh {on-startup|picker|picker-link|attention|here <verb>|popup <pane>|daemon-restart|build}" >&2; exit 2 ;;
 esac

@@ -2428,6 +2428,12 @@ type Daemon struct {
 	// 0 = no threshold. A [[watch]] may override both (Config.ThrottleFor).
 	RereviewMinLines int      `toml:"rereview_min_lines"`
 	RereviewMaxWait  Duration `toml:"rereview_max_wait"`
+	// RestartOnNewBuild lets the daemon restart itself on a new binary
+	// on disk (the one launchd starts) once it passes its configuration
+	// check: at the first tick no round is claiming, reviewing or
+	// verifying, it exits for launchd to start the new build. Dispatch never
+	// stops for it. Needs launchd (`magnum install`).
+	RestartOnNewBuild bool `toml:"restart_on_new_build"`
 }
 
 type Duration struct{ time.Duration }
@@ -3356,6 +3362,11 @@ const (
 	BudgetPauseReason = "budget_cap"
 )
 const (
+	// KVDaemonBuild is the running daemon's Build as JSON, written at
+	// startup.
+	KVDaemonBuild = "daemon.build"
+)
+const (
 	// KVPromptsLoadedAt is when the running daemon loaded its prompts
 	// (store.FormatTime). KVPromptsChanged counts the prompt and skill files
 	// that differ on disk since (absent when none) and KVPromptsChangedFiles
@@ -3532,6 +3543,11 @@ var ErrOpsLockHeld = errors.New("a magnum command holds state/ops.lock for in-pr
     command running slot work in-process (it holds layout.OpsLock() too):
     the daemon exits non-zero so launchd starts it again once that work is done.
 
+var ErrRestartForBuild = errors.New("a new build is on disk and no round is in flight; exiting for launchd to start it")
+    ErrRestartForBuild is what Tick and Run return when the daemon exits for a
+    new build on disk ([daemon] restart_on_new_build): the exit is non-zero,
+    so launchd starts the new binary.
+
 var ErrSchemaChanged = errors.New("schema migrated under the daemon; exiting for launchd to restart")
     ErrSchemaChanged is what Tick and Run return once another magnum binary
     migrated the registry under the running daemon (store.SchemaChanged):
@@ -3582,6 +3598,15 @@ func DeltaLabel(classes []string) string
     whitespace only", "comments, whitespace and docs only". The order is always
     comments, whitespace, docs, base, whatever the order given; unknown classes
     are left out and no known class at all is "".
+
+func DrainerAlive(pid int) bool
+    DrainerAlive reports whether the drainer pid still runs as a magnum process.
+    A pid that is gone, or that now belongs to another program (pids are
+    reused), is not; a process ps cannot describe counts as alive (the drain
+    stays: lifting it by mistake would start rounds the restart then abandons).
+
+func FileModTime(path string) (time.Time, bool)
+    FileModTime is SkewNote's reader of a binary's mtime on disk.
 
 func KVIdentityCheck(name string) string
     KVIdentityCheck is the kv key holding "pass" or "fail" from the
@@ -3690,6 +3715,13 @@ func PromptsLine(loadedAt time.Time, changed int) string
     loaded them, and how many files changed on disk since (they take effect at
     the next restart). "" when loadedAt is zero (no daemon has recorded it).
 
+func SkewNote(daemon Build, cliVersion string, modTime func(path string) (time.Time, bool)) string
+    SkewNote says when the running daemon is older than what is built: the CLI's
+    version (cliVersion) differs from the daemon's, or the daemon's binary on
+    disk changed since it started (its mtime; modTime reads it, false when it
+    cannot). "" when neither. A version that is empty or "dev" (a build `make
+    build` did not stamp) is not compared.
+
 func SkillCopyDir(state string) string
     SkillCopyDir is where the daemon keeps the copies of the judges' skills it
     took at startup (<state>/skill/<hash>/SKILL.md).
@@ -3734,6 +3766,30 @@ type Agents interface {
 	Recover(ctx context.Context, pr store.PR) ([]agents.Recovered, error)
 }
     Agents is the part of *agents.Manager the engine drives.
+
+type Build struct {
+	Version   string    `json:"version"`
+	Revision  string    `json:"revision,omitempty"`
+	Path      string    `json:"path,omitempty"`
+	ModTime   time.Time `json:"mtime,omitzero"`
+	StartedAt time.Time `json:"started_at,omitzero"`
+}
+    Build identifies a magnum binary: the version `make build` stamps
+    (main.version), the commit Go recorded (vcs.revision), and the binary
+    launchd starts (paths.Layout.Binary) with its modification time.
+
+func CurrentBuild(version, path string) Build
+    CurrentBuild is this process's build: version as stamped, the revision from
+    the binary's build info, and path with its current mtime (both left empty
+    when path is "" or cannot be read).
+
+func ReadDaemonBuild(ctx context.Context, st *store.Store) (Build, bool)
+    ReadDaemonBuild reads the build the daemon recorded at startup (false when
+    none did: a daemon older than the record, or none ever ran).
+
+func (b Build) Label() string
+    Label is how messages name the build: its version, with the commit when the
+    version does not say it ("dev (8ad5bb2)").
 
 type Classifier interface {
 	Classify(ctx context.Context, job ClassifyJob) (ClassifyResult, error)
@@ -3877,6 +3933,20 @@ type Deps struct {
     Deps are the engine's collaborators. Config, Store and Logger are required;
     a nil port disables the steps that need it.
 
+type Drain struct {
+	Since time.Time `json:"since"`
+	PID   int       `json:"pid,omitempty"`
+}
+    Drain is a drain in progress, the KVDaemonDraining value: when it started
+    and the pid of the command that drains (0 = an older CLI did not say).
+
+func ParseDrain(v string) (Drain, bool)
+    ParseDrain reads a KVDaemonDraining value: Drain.Value, or the bare start
+    time an older CLI wrote. false for "" or anything else.
+
+func (d Drain) Value() string
+    Value is d as KVDaemonDraining stores it.
+
 type Engine struct {
 	// Has unexported fields.
 }
@@ -3923,7 +3993,8 @@ func (e *Engine) Tick(ctx context.Context) error
     Tick runs one iteration of the daemon loop. Steps log their own
     failures; the returned error joins them for the caller's information.
     A registry migrated by another binary stops the tick before any step
-    (ErrSchemaChanged).
+    (ErrSchemaChanged), and so does a new build the daemon restarts on
+    (ErrRestartForBuild, restart_on_new_build).
 
 type EvalCase struct {
 	Owner, Repo string
@@ -4026,6 +4097,17 @@ type Options struct {
 	// NoSignals skips installing SIGTERM/SIGINT (stop) and SIGUSR1 (tick now)
 	// handlers.
 	NoSignals bool
+	// Build is this daemon's build (CurrentBuild), recorded at startup as
+	// KVDaemonBuild.
+	Build Build
+	// CheckBuild checks a binary found on disk before the daemon restarts on
+	// it ([daemon] restart_on_new_build): it returns the binary's version, or
+	// why the binary refuses the configuration. nil = no restart for a new
+	// build.
+	CheckBuild func(ctx context.Context, path string) (version string, err error)
+	// Supervised: launchd runs this daemon and starts it again when it exits
+	// non-zero, so it may exit for a new build.
+	Supervised bool
 }
     Options tune Run.
 
@@ -10408,6 +10490,10 @@ type DaemonInfo struct {
 	PID     int
 	Uptime  string // preformatted ("3h12m"); empty when unknown
 	Launchd string // launchd job state ("running", "not loaded")
+	// Skew says the daemon runs an older build than the CLI's or the one on
+	// disk ("daemon runs v1 since …; v2 is built: `magnum daemon-restart`");
+	// "" when it does not.
+	Skew string
 }
     DaemonInfo is the daemon process and its launchd job.
 

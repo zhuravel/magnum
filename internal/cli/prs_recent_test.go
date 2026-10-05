@@ -146,7 +146,7 @@ func TestPRsSourceMovesTheWindowWithTheClock(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer a.Close()
-	d := newStatusDeps(a)
+	d := newStatusDeps(a, "test")
 	o := prsOptions{View: tui.ViewAll, Sort: tui.SortUpdated, Desc: true}
 	src := prsSource(d.Store, d.Config, o.filter(), nil, f.Ctx.Layout)
 	recent := func() []string {

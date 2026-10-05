@@ -145,7 +145,7 @@ func runPRs(c *Context, f prsFlags, pos []string) int {
 	defer a.Close()
 	ctx, cancel := signalContext()
 	defer cancel()
-	d := newStatusDeps(a)
+	d := newStatusDeps(a, c.Version)
 
 	if !f.json && inspScreen(c) {
 		if err := runInspScreens(ctx, c, d, statusOptions{}, o, screenBoard); err != nil {

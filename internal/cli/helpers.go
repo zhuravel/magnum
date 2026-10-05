@@ -29,10 +29,12 @@ func cmdFail(c *Context, cmd string, err error) int {
 	return 1
 }
 
-// signalContext ends on ctrl+c or SIGTERM. Blocking reads must watch it
-// (promptIn): the handler keeps the signal from killing the process.
+// signalContext ends on ctrl+c, SIGTERM or SIGHUP (the terminal closed).
+// Blocking reads must watch it (promptIn): the handler keeps the signal from
+// killing the process, so a command can undo what it holds first (a drain
+// lifts itself instead of holding every round).
 func signalContext() (context.Context, context.CancelFunc) {
-	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 }
 
 // writeJSON writes v as indented JSON and a newline.

@@ -208,6 +208,17 @@ type Options struct {
 	// NoSignals skips installing SIGTERM/SIGINT (stop) and SIGUSR1 (tick now)
 	// handlers.
 	NoSignals bool
+	// Build is this daemon's build (CurrentBuild), recorded at startup as
+	// KVDaemonBuild.
+	Build Build
+	// CheckBuild checks a binary found on disk before the daemon restarts on
+	// it ([daemon] restart_on_new_build): it returns the binary's version, or
+	// why the binary refuses the configuration. nil = no restart for a new
+	// build.
+	CheckBuild func(ctx context.Context, path string) (version string, err error)
+	// Supervised: launchd runs this daemon and starts it again when it exits
+	// non-zero, so it may exit for a new build.
+	Supervised bool
 }
 
 // Engine is the daemon. Create it with New or FromApp.
@@ -253,6 +264,13 @@ type Engine struct {
 
 	infraMu  sync.Mutex // infrastructure failures (infra.go)
 	depsFail depsFailure
+
+	// build is this daemon's build, checkBuild and supervised come from
+	// Options, and builds tracks new builds on disk (build.go).
+	build      Build
+	checkBuild func(ctx context.Context, path string) (string, error)
+	supervised bool
+	builds     buildWatch
 
 	once         bool       // Run with Options.Once: no daily retro (retro.go)
 	retroMu      sync.Mutex // the running retro (retro.go)
@@ -419,6 +437,7 @@ func (e *Engine) Run(ctx context.Context, opts Options) error {
 	defer e.shutdown()
 
 	e.once = opts.Once
+	e.build, e.checkBuild, e.supervised = opts.Build, opts.CheckBuild, opts.Supervised
 	e.log.Info("magnum daemon starting", "pid", os.Getpid(), "dry_run", e.d.DryRun, "once", opts.Once)
 	if err := e.loadPrompts(ctx); err != nil {
 		e.log.Error("magnum daemon refusing to start", "err", err)
@@ -469,7 +488,7 @@ func (e *Engine) Run(ctx context.Context, opts Options) error {
 				}
 			}
 		}
-		if err := e.Tick(ctx); errors.Is(err, ErrSchemaChanged) {
+		if err := e.Tick(ctx); errors.Is(err, ErrSchemaChanged) || errors.Is(err, ErrRestartForBuild) {
 			return err
 		} else if err != nil && ctx.Err() == nil {
 			e.warnTick(err)
@@ -543,7 +562,8 @@ func (e *Engine) observeUntilIdle(ctx context.Context) {
 // Tick runs one iteration of the daemon loop. Steps log their own failures;
 // the returned error joins them for the caller's information. A registry
 // migrated by another binary stops the tick before any step
-// (ErrSchemaChanged).
+// (ErrSchemaChanged), and so does a new build the daemon restarts on
+// (ErrRestartForBuild, restart_on_new_build).
 func (e *Engine) Tick(ctx context.Context) error {
 	if changed, err := e.st.SchemaChanged(ctx); err != nil {
 		e.log.Warn("read schema version", "err", err)
@@ -551,10 +571,18 @@ func (e *Engine) Tick(ctx context.Context) error {
 		e.log.Error(ErrSchemaChanged.Error())
 		return ErrSchemaChanged
 	}
+	if err := e.restartForBuild(ctx); err != nil {
+		return err
+	}
 	now := e.now()
 	var errs []error
 	e.setKV(ctx, kvLastTick, store.FormatTime(now))
 	e.heartbeat()
+	// Requests come first: the GitHub poll takes seconds (about 12 with
+	// several watches), and a CLI or screen waiting for an answer gave up
+	// before it came. The requests that arrive during the poll are handled
+	// after it.
+	e.handleRequests(ctx)
 	e.refreshIdentities(ctx)
 	if err := e.poll(ctx); err != nil {
 		errs = append(errs, err)
@@ -576,10 +604,15 @@ func (e *Engine) Tick(ctx context.Context) error {
 // a re-classification of ineligible PRs under the config just loaded and an
 // inventory reconcile (queued on the heavy worker).
 func (e *Engine) startup(ctx context.Context) {
+	// The previous daemon's last tick, before this one writes its own:
+	// requests queued after it were never seen by a daemon (expireRequests).
+	lastTick, _ := e.kvTime(ctx, kvLastTick)
 	e.setKV(ctx, kvStartedAt, store.FormatTime(e.now()))
 	if !e.d.DryRun {
 		e.setKV(ctx, kvPid, strconv.Itoa(os.Getpid()))
 	}
+	e.recordBuild(ctx)
+	e.expireRequests(ctx, lastTick)
 	// A drain (daemon-restart --drain) ends with the restart: this daemon
 	// is the one that was waited for.
 	if v, ok := e.getKV(ctx, KVDaemonDraining); ok && v != "" {

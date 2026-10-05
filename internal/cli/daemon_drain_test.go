@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -83,8 +84,9 @@ func TestDaemonRestartDrainWaitsForRoundsThenRestarts(t *testing.T) {
 	sleeps := 0
 	daemonSys.Sleep = func(d time.Duration) {
 		sleeps++
-		if v, ok := draining(t, dt); !ok || v == "" {
-			t.Errorf("sleep %d: drain not set", sleeps)
+		v, ok := draining(t, dt)
+		if dr, parsed := engine.ParseDrain(v); !ok || !parsed || dr.PID != os.Getpid() {
+			t.Errorf("sleep %d: drain %q is not owned by this process", sleeps, v)
 		}
 		if sleeps == 4 {
 			finishRound(t, dt)
@@ -94,7 +96,7 @@ func TestDaemonRestartDrainWaitsForRoundsThenRestarts(t *testing.T) {
 		t.Fatalf("exit %d, stderr: %s", code, dt.stderr)
 	}
 	out := dt.stdout.String()
-	actContains(t, out, "draining: no new rounds start; waiting for 1 round(s) in flight (at most 2h0m0s): talkable/talkable#42 (reviewing)",
+	actContains(t, out, fmt.Sprintf("draining (pid %d): no new rounds start; waiting for 1 round(s) in flight (at most 2h0m0s): talkable/talkable#42 (reviewing)", os.Getpid()),
 		"draining: 1 round(s) in flight after 15s", "drained after 20s", "restarted zhuravel.magnum")
 	if n := len(dt.fake.CallsWithPrefix("launchctl", "kickstart")); n != 1 {
 		t.Fatalf("kickstart calls = %d", n)
@@ -102,6 +104,33 @@ func TestDaemonRestartDrainWaitsForRoundsThenRestarts(t *testing.T) {
 	if _, ok := draining(t, dt); ok {
 		t.Fatal("drain kept after the restart")
 	}
+	if got := drainEvents(t, dt); strings.Join(got, ",") != "daemon.drain_started,daemon.drain_ended" {
+		t.Fatalf("drain events = %v", got)
+	}
+}
+
+// drainEvents are the kinds of the drain events in the test registry.
+func drainEvents(t *testing.T, dt *daemonGroupTest) []string {
+	t.Helper()
+	st, err := store.Open(dt.ctx.Layout.DB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	rows, err := st.DB().Query("SELECT kind FROM events WHERE kind LIKE 'daemon.drain%' ORDER BY id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, k)
+	}
+	return out
 }
 
 // TestDaemonRestartDrainGivesUp: rounds still in flight after --timeout

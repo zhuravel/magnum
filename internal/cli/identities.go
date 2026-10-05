@@ -237,8 +237,11 @@ func identitiesWithdraw(ctx context.Context, st *store.Store, ids []int64) {
 // the verdict requests ids and says how that went.
 func identitiesAwait(ctx context.Context, c *Context, st *store.Store, ids []int64, pid int, asJSON bool) {
 	deadline := inspNow().Add(identitiesVerdictWait)
+	rc := inspRequests(c, st)
 	for _, id := range ids {
-		req, err := inspWaitRequest(ctx, st, id, max(0, deadline.Sub(inspNow())))
+		out := reqOutcome{Req: store.Request{ID: id}, PID: pid}
+		err := rc.wait(ctx, &out, max(time.Nanosecond, deadline.Sub(inspNow())), inspPoll)
+		req := out.Req
 		switch {
 		case err != nil:
 			fmt.Fprintf(c.Stderr, "magnum identities check: waiting for the daemon (pid %d): %v\n", pid, err)

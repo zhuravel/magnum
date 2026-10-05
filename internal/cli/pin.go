@@ -139,34 +139,20 @@ func targetMain(ctx context.Context, c *Context, d *actDeps, k targetKind, ref s
 		payload.Force = o.force
 		return releaseMain(ctx, c, d, t, label, payload, o)
 	}
-	id, pid, err := d.submit(ctx, k.req, payload)
+	out, err := d.reqs().send(ctx, k.req, payload, d.quick())
 	if err != nil {
-		if id == 0 {
-			return cmdFail(c, k.name, err)
-		}
-		fmt.Fprintln(c.Stderr, err)
-	}
-	var req store.Request
-	if pid != 0 {
-		req, err = d.await(ctx, id, d.quickPoll(), d.Quick)
-	} else {
-		req, err = d.Store.RequestByID(ctx, id)
-	}
-	if err != nil && req.ID == 0 {
 		return cmdFail(c, k.name, err)
 	}
 	if o.json {
-		_ = writeJSON(c.Stdout, actRequestView(req, pid))
-		if req.State == store.RequestFailed {
-			return 1
-		}
+		_ = writeJSON(c.Stdout, out.view())
+		return out.jsonCode()
+	}
+	if out.Pending() && out.PID == 0 {
+		out.printNotes(c.Stderr)
+		fmt.Fprintf(c.Stderr, "%s %s is queued as request %d and applies when the daemon starts: %s\n", k.name, label, out.ID(), actDaemonFix)
 		return 0
 	}
-	if req.State == store.RequestPending && pid == 0 {
-		fmt.Fprintf(c.Stderr, "%s %s is queued as request %d and applies when the daemon starts: %s\n", k.name, label, id, actDaemonFix)
-		return 0
-	}
-	return actRequestOutcome(c.Stdout, c.Stderr, req, pid)
+	return out.print(c.Stdout, c.Stderr)
 }
 
 // targetResolve is resolve plus slot names (review3, owner/name#N) as
@@ -292,18 +278,17 @@ func releaseMain(ctx context.Context, c *Context, d *actDeps, t actTarget, label
 // lock) and, with --wait, follows the request to its end.
 func releaseHandOff(ctx context.Context, c *Context, d *actDeps, t actTarget, label, what string, payload engine.TargetPayload, o targetOpts) int {
 	w, ew := c.Stdout, c.Stderr
-	id, pid, err := d.submit(ctx, engine.ReqRelease, payload)
-	if err != nil && id == 0 {
+	rc := d.reqs()
+	out, err := rc.send(ctx, engine.ReqRelease, payload, reqSend{})
+	if err != nil {
 		return cmdFail(c, "release", err)
 	}
-	if err != nil {
-		fmt.Fprintln(ew, err)
-	}
-	if !o.wait || pid == 0 {
-		req, _ := d.Store.RequestByID(ctx, id)
+	id := out.ID()
+	if !o.wait || out.PID == 0 {
 		if o.json {
-			_ = writeJSON(w, actRequestView(req, pid))
+			_ = writeJSON(w, out.view())
 		} else {
+			out.printNotes(ew)
 			fmt.Fprintf(w, "release of %s queued as request %d; the daemon runs it on its heavy worker (`magnum release %s --wait` or `magnum logs request:%d` follows it)\n", what, id, releaseRef(t, label), id)
 		}
 		if o.wait {
@@ -315,21 +300,17 @@ func releaseHandOff(ctx context.Context, c *Context, d *actDeps, t actTarget, la
 		return 0
 	}
 	if !o.json {
-		fmt.Fprintf(ew, "waiting for the daemon (pid %d) to release %s (request %d)…\n", pid, what, id)
+		fmt.Fprintf(ew, "waiting for the daemon (pid %d) to release %s (request %d)…\n", out.PID, what, id)
 	}
-	req, err := d.await(ctx, id, d.Poll, 0)
-	if err != nil {
+	if err := rc.wait(ctx, &out, -1, d.Poll); err != nil {
 		fmt.Fprintf(ew, "stopped waiting; request %d goes on (`magnum logs request:%d`)\n", id, id)
 		return 130
 	}
 	if o.json {
-		_ = writeJSON(w, actRequestView(req, pid))
-		if req.State == store.RequestFailed {
-			return 1
-		}
-		return 0
+		_ = writeJSON(w, out.view())
+		return out.jsonCode()
 	}
-	return actRequestOutcome(w, ew, req, pid)
+	return out.print(w, ew)
 }
 
 func releaseRef(t actTarget, label string) string {

@@ -42,6 +42,7 @@ func TestReviewQueuesForcedRequestAndPrintsPosition(t *testing.T) {
 
 func TestReviewImportsUnknownPRWithOneDetailsCall(t *testing.T) {
 	h := newActHarness(t)
+	h.pid = 4242 // a daemon runs: reviews and verdicts are queued only then
 	h.gh.details[7] = github.PRDetails{NodeID: "PR_w7", Number: 7, Title: "Add widget", URL: "https://github.com/zhuravel/widgets/pull/7",
 		AuthorLogin: "bob", AuthorType: "User", HeadRefName: "feature", BaseRefName: "main", State: "OPEN", HeadRefOid: "fff0001",
 		UpdatedAt: h.now.Add(-time.Hour), ReviewRequests: []github.Reviewer{{Type: "User", Login: "zhuravel"}}}
@@ -72,12 +73,12 @@ func TestReviewImportsUnknownPRWithOneDetailsCall(t *testing.T) {
 	if reqs := h.requests(); len(reqs) != 1 {
 		t.Fatalf("requests = %+v", reqs)
 	}
-	actContains(t, h.out.String(), "added to the registry from GitHub")
-	actContains(t, h.errb.String(), "no daemon is running", "magnum daemon")
+	actContains(t, h.out.String(), "added to the registry from GitHub", "the daemon (pid 4242) is running, so the work was queued as request 1 (review)")
 }
 
 func TestReviewNoPostQueuesADryRunRound(t *testing.T) {
 	h := newActHarness(t)
+	h.pid = 4242 // a daemon runs: reviews and verdicts are queued only then
 	h.seedPR("talkable/talkable", 5, store.PRReviewed)
 	if code := h.cmd("review", "5", "--no-post"); code != 0 {
 		t.Fatalf("exit %d: %s", code, h.errb.String())
@@ -306,13 +307,53 @@ func TestReviewWaitOnAPostMergeRoundThatFailed(t *testing.T) {
 	actContains(t, h.errb.String(), "talkable#5: the post-merge review was not posted: blocked: HEAD mismatch")
 }
 
-func TestReviewWaitNeedsADaemon(t *testing.T) {
+// A review posts to GitHub: with no daemon it used to stay queued and post
+// whenever one started, possibly days later. It is refused, nothing queued.
+func TestReviewWithoutADaemonQueuesNothing(t *testing.T) {
 	h := newActHarness(t)
 	h.seedPR("talkable/talkable", 5, store.PRReviewed)
-	if code := h.cmd("review", "5", "--wait"); code != 1 {
+	for _, args := range [][]string{{"5"}, {"5", "--wait"}} {
+		h.errb.Reset()
+		if code := h.cmd("review", args...); code != 1 {
+			t.Fatalf("review %v: exit %d", args, code)
+		}
+		actContains(t, h.errb.String(), "talkable#5: nothing was queued: no daemon is running", "magnum install")
+	}
+	if reqs := h.requests(); len(reqs) != 0 {
+		t.Fatalf("requests = %+v", reqs)
+	}
+}
+
+// The daemon died between the check and the kick: the request is withdrawn
+// (failed), so no later daemon posts it.
+func TestReviewNoDaemonAnsweredWithdrawsTheRequest(t *testing.T) {
+	h := newActHarness(t)
+	h.seedPR("talkable/talkable", 5, store.PRReviewed)
+	h.d.Running = func() (int, error) { return 4242, nil }
+	if code := h.cmd("review", "5"); code != 1 {
 		t.Fatalf("exit %d", code)
 	}
-	actContains(t, h.errb.String(), "--wait and --focus need a running daemon", "magnum install")
+	reqs := h.requests()
+	if len(reqs) != 1 || reqs[0].State != store.RequestFailed {
+		t.Fatalf("requests = %+v", reqs)
+	}
+	actContains(t, h.errb.String(), "nothing was queued: no daemon is running")
+}
+
+// The verdicts post to GitHub too: refused without a daemon.
+func TestVerdictWithoutADaemonQueuesNothing(t *testing.T) {
+	h := newActHarness(t)
+	h.seedPR("talkable/talkable", 5, store.PRReviewed)
+	for _, verb := range []string{"approve", "request-changes"} {
+		h.errb.Reset()
+		if code := h.cmd(verb, "talkable#5", "--force"); code != 1 {
+			t.Fatalf("%s: exit %d", verb, code)
+		}
+		actContains(t, h.errb.String(), verb+" talkable#5: nothing was queued: no daemon is running")
+	}
+	if reqs := h.requests(); len(reqs) != 0 {
+		t.Fatalf("requests = %+v", reqs)
+	}
 }
 
 // reviewRecordGH logs the PR reads that reach the fake GitHub client.
@@ -665,6 +706,7 @@ func TestReviewDryRunIsHonouredBeforeAttaching(t *testing.T) {
 
 func TestReviewShorthandKeepsTheResolvedRepository(t *testing.T) {
 	h := newActHarness(t)
+	h.pid = 4242 // a daemon runs: reviews and verdicts are queued only then
 	if _, err := h.st.UpsertRepo(h.ctx, store.Repo{NodeID: "R_widgets", Owner: "zhuravel", Name: "widgets", Mode: store.RepoModePerPR}); err != nil {
 		t.Fatal(err)
 	}
@@ -728,6 +770,7 @@ func TestReviewResolveRefNamesTheResolvedRepositoryInItsErrors(t *testing.T) {
 
 func TestReviewPreparesTheIdentityBeforeReadingGitHub(t *testing.T) {
 	h := newActHarness(t)
+	h.pid = 4242 // a daemon runs: reviews and verdicts are queued only then
 	h.gh.details[7] = github.PRDetails{NodeID: "PR_w7", Number: 7, Title: "Add widget", State: "OPEN", HeadRefOid: "fff0001"}
 	h.run.Rules = []execx.Rule{{Prefix: []string{"gh", "api", "repos/zhuravel/widgets"},
 		Result: execx.Result{Stdout: []byte(`{"node_id":"R_widgets","full_name":"zhuravel/widgets","default_branch":"main"}`)}}}
@@ -765,6 +808,7 @@ func TestReviewPrepareIdentityFailureFailsTheCommand(t *testing.T) {
 
 func TestReviewAgainIsHiddenButStillAccepted(t *testing.T) {
 	h := newActHarness(t)
+	h.pid = 4242 // a daemon runs: reviews and verdicts are queued only then
 	pr := h.seedPR("talkable/talkable", 5, store.PRReviewed)
 	h.setPR(pr.ID, store.PRReviewed, func(u *store.PRUpdate) {
 		u.Set("reviewed_sha", pr.HeadSHA)

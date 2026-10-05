@@ -50,6 +50,9 @@ park_idle_after = "2h"            # park a reviewed PR's agents once all of them
                                   # diff against it as it was ([] = re-review every push; a list without "base"
                                   # re-reviews base merges; [[watch]] may override; `magnum review` always runs)
 # quiet_hours = "01:00-07:00"
+restart_on_new_build = false      # true: once a new bin/magnum on disk passes its config check, the daemon restarts
+                                  # on it at the first tick with no round claiming, reviewing or verifying (it exits
+                                  # for launchd to start the new build; dispatch never stops for it; needs launchd)
 
 [herdr]
 socket = "~/.config/herdr/herdr.sock"

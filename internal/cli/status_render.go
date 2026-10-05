@@ -61,6 +61,9 @@ func statusRenderHeader(w io.Writer, r statusReport) {
 	}
 	daemon += ", launchd " + statusSafe(dm.Launchd, 0)
 	fmt.Fprintf(w, "daemon:   %s\n", daemon)
+	if dm.Skew != "" {
+		fmt.Fprintf(w, "build:    %s\n", statusSafe(dm.Skew, 0))
+	}
 	if line := statusPromptsText(dm); line != "" {
 		fmt.Fprintf(w, "prompts:  %s\n", statusSafe(line, 0))
 	}

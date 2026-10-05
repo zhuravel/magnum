@@ -331,15 +331,15 @@ func (e *slotsEnv) inProcess(ctx context.Context, cmd, kind string, payload any)
 // and waits briefly for it; long work (setup takes up to 45 minutes) is
 // reported as queued with how to follow it.
 func (e *slotsEnv) handOff(ctx context.Context, cmd, kind string, payload any) int {
-	req, pid, err := inspSubmit(ctx, e.c, e.st, kind, payload, inspHandoffWait)
-	if err != nil && req.ID == 0 {
+	out, err := inspHandOff(ctx, e.c, e.st, kind, payload, inspHandoffWait)
+	if err != nil {
 		return cmdFail(e.c, cmd, err)
 	}
-	if req.State == store.RequestPending && kind != engine.ReqAdopt {
+	if out.Pending() && kind != engine.ReqAdopt {
 		fmt.Fprintf(e.c.Stdout, "the daemon runs `magnum %s` in the background; setup logs: %s\n", cmd,
 			inspTilde(filepath.Join(e.c.Layout.Logs(), "provision-<slot>.log")))
 	}
-	return inspPrintRequest(e.c, req, pid)
+	return out.print(e.c.Stdout, e.c.Stderr)
 }
 
 // provision provisions count pool slots (count < 0: up to pool.min),
@@ -505,11 +505,11 @@ func (e *slotsEnv) pin(ctx context.Context, name string, pin bool) int {
 	}
 	kind := map[bool]string{true: engine.ReqPin, false: engine.ReqUnpin}[pin]
 	handOff := func() int {
-		req, pid, err := inspSubmit(ctx, e.c, e.st, kind, engine.TargetPayload{Slot: sl.Name}, inspHandoffWait)
-		if err != nil && req.ID == 0 {
+		out, err := inspHandOff(ctx, e.c, e.st, kind, engine.TargetPayload{Slot: sl.Name}, inspHandoffWait)
+		if err != nil {
 			return cmdFail(e.c, cmd, err)
 		}
-		return inspPrintRequest(e.c, req, pid)
+		return out.print(e.c.Stdout, e.c.Stderr)
 	}
 	unlock, who, err := acquireOps(e.c.Layout)
 	switch {

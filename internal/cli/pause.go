@@ -129,22 +129,18 @@ func pauseDaemonPID(c *Context, d *actDeps) int {
 // dedup), and waits for it briefly. done is printed when the daemon applied
 // it ("" = the daemon's own result).
 func pauseRequest(ctx context.Context, c *Context, d *actDeps, cmd, kind string, p engine.PausePayload, done string) int {
-	id, pid, err := d.submit(ctx, kind, p)
-	if err != nil && id == 0 {
-		return cmdFail(c, cmd, err)
-	}
+	q := d.quick()
+	q.Held = true // the caller found the daemon running
+	out, err := d.reqs().send(ctx, kind, p, q)
 	if err != nil {
-		fmt.Fprintln(c.Stderr, err)
-	}
-	req, err := d.await(ctx, id, d.quickPoll(), d.Quick)
-	if err != nil && req.ID == 0 {
 		return cmdFail(c, cmd, err)
 	}
-	if req.State == store.RequestDone && done != "" {
+	if out.Req.State == store.RequestDone && done != "" {
+		out.printNotes(c.Stderr)
 		fmt.Fprintln(c.Stdout, done)
 		return 0
 	}
-	return actRequestOutcome(c.Stdout, c.Stderr, req, pid)
+	return out.print(c.Stdout, c.Stderr)
 }
 
 // pauseParseUntil reads "15:30" (today, or tomorrow if past) or RFC3339.

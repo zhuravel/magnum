@@ -138,7 +138,7 @@ func installLaunchAgent(ctx context.Context, c *Context, run execx.Runner, dry b
 		return 0
 	}
 	if rf.drain {
-		endDrain, ok := c.guardRounds(ctx, run, "install", false, true, rf.timeout)
+		endDrain, ok := c.guardRounds(ctx, run, "install", restartFlags{drain: true, timeout: rf.timeout})
 		if !ok {
 			return 1
 		}

@@ -18,6 +18,7 @@ import (
 	"github.com/zhuravel/magnum/internal/app"
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/launchd"
 )
 
 const daemonUsage = "daemon [--once] [--dry-run [--json]] [--log-level LEVEL]"
@@ -52,6 +53,8 @@ type daemonOptions struct {
 	DryRun   bool
 	JSON     bool
 	LogLevel slog.Level
+	// Engine are the engine options runDaemonCmd prepares (daemonEngineOptions).
+	Engine engine.Options
 }
 
 // daemonDryRunReport is what a dry run would have done: the engine's
@@ -79,6 +82,7 @@ func runDaemonCmd(c *Context, f daemonFlags, pos []string) int {
 		refuseDaemonStart(c, err)
 		return 1
 	}
+	opts.Engine = daemonEngineOptions(c, opts)
 
 	// engine.Run installs the SIGTERM/SIGINT/SIGUSR1 handlers and returns nil
 	// on a stop signal and when another daemon already holds the lock, so
@@ -157,7 +161,9 @@ func runDaemonEngine(ctx context.Context, c *Context, o daemonOptions) (daemonDr
 	}
 	defer a.Close()
 	e := engine.FromApp(a)
-	err = e.Run(ctx, engine.Options{Once: o.Once})
+	eo := o.Engine
+	eo.Once = o.Once
+	err = e.Run(ctx, eo)
 	var rep daemonDryRunReport
 	if o.DryRun {
 		rep.Ops = e.Planned()
@@ -168,6 +174,22 @@ func runDaemonEngine(ctx context.Context, c *Context, o daemonOptions) (daemonDr
 		}
 	}
 	return rep, err
+}
+
+// daemonEngineOptions are the engine options of the daemon process: its
+// build (recorded for the CLI's skew check: the version stamped into this
+// binary and the binary launchd starts), the check a new build on disk passes
+// before the daemon restarts on it, and whether launchd runs this daemon
+// (it sets XPC_SERVICE_NAME to the job's label), which restart_on_new_build
+// needs to start it again.
+func daemonEngineOptions(c *Context, o daemonOptions) engine.Options {
+	run := daemonSys.runner(false, c.Stdout)
+	opts := engine.Options{Once: o.Once, Build: engine.CurrentBuild(c.Version, c.Layout.Binary()),
+		Supervised: daemonSys.Getenv("XPC_SERVICE_NAME") == launchd.DefaultLabel}
+	if !o.DryRun {
+		opts.CheckBuild = newBuildCheck(c, run)
+	}
+	return opts
 }
 
 func writeDaemonDryRunJSON(c *Context, rep daemonDryRunReport) int {

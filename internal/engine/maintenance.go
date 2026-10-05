@@ -133,7 +133,8 @@ func (e *Engine) applyCleanup(ctx context.Context, opts cleanup.Options, what st
 	return nil
 }
 
-// maybeReconcile queues a reconcile every daemon.reconcile_interval.
+// maybeReconcile queues a reconcile every daemon.reconcile_interval, after
+// noting prompt files and a binary changed on disk.
 func (e *Engine) maybeReconcile(ctx context.Context) {
 	iv := e.cfg.Daemon.ReconcileInterval.Duration
 	if iv <= 0 {
@@ -144,6 +145,7 @@ func (e *Engine) maybeReconcile(ctx context.Context) {
 		return
 	}
 	e.notePromptChanges(ctx)
+	e.noteBuild(ctx)
 	if e.enqueueHeavy("reconcile", e.reconcile) {
 		e.lastReconcile = now
 	}

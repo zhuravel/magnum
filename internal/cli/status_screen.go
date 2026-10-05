@@ -91,7 +91,7 @@ func statusDashData(r statusReport, defaultRepo string) tui.StatusData {
 	out := tui.StatusData{GeneratedAt: now, Warnings: slices.Clone(r.Warnings)}
 
 	dm := r.Daemon
-	out.Daemon = tui.DaemonInfo{Running: dm.Running, PID: dm.PID, Launchd: dm.Launchd}
+	out.Daemon = tui.DaemonInfo{Running: dm.Running, PID: dm.PID, Launchd: dm.Launchd, Skew: statusSafe(dm.Skew, 0)}
 	if dm.Running && dm.StartedAt != nil {
 		out.Daemon.Uptime = inspDur(now.Sub(*dm.StartedAt))
 	}

@@ -103,8 +103,11 @@ magnum install --gh --no-launchd             # optional: `gh magnum …`
 magnum completion zsh > "${fpath[1]}/_magnum"
 ```
 
-To upgrade: `brew upgrade magnum && magnum daemon-restart --drain` (the daemon keeps running the old
-binary until it restarts; `--drain` waits for the rounds in flight).
+To upgrade: `brew upgrade magnum && magnum daemon-restart --when-idle` (the daemon keeps running the old
+binary until it restarts; `--when-idle` restarts at the first moment no round is in flight, `--drain` also
+stops new rounds meanwhile). `magnum status` and every reply to a command the daemon answers say when the
+daemon runs an older build than the CLI or the binary on disk; with `[daemon] restart_on_new_build = true`
+the daemon restarts on a new build by itself, at the first tick no round is in flight.
 
 `magnum init` refuses to replace an existing config without `--force` (the old file is kept as
 `config.toml.bak`); [config.example.toml](config.example.toml) is the same minimal setup to copy by hand.
@@ -142,6 +145,21 @@ keeps that layout on purpose, for development.
 `--config FILE` (or `$MAGNUM_CONFIG`) replaces the built-in defaults with a complete file of your own.
 A `config.local.toml` in the checkout, where settings lived before, is still read when
 `~/.config/magnum/config.toml` does not exist; doctor says how to move it.
+
+`[daemon] restart_on_new_build` (default `false`): when `true`, every reconcile looks at the binary
+launchd starts; once a new one passes its check (`<binary> version` and `<binary> config`, as
+`daemon-restart` checks it) the daemon exits at the first tick no round is claiming, reviewing or
+verifying, and launchd starts the new build (events `daemon.restart_pending`, then
+`daemon.restarted_for_build`). Dispatch is never held for it, and a daemon launchd does not run (started
+by hand) only says so: nothing would start it again.
+
+A command handed to the daemon waits up to 30 s for its answer (the daemon answers requests before its
+GitHub poll); a request still pending says how to follow it (`magnum logs request:<id> -f`). A request
+that reaches a daemon newer than it fails with "this daemon predates <field>: restart it" instead of
+running without the field. Without a daemon, `review`, `approve`, `request-changes` and `open` of a parked
+PR refuse and queue nothing (they would post or act whenever a daemon next started); the other commands
+still queue for the next start, and a request no daemon saw within an hour fails at startup as "expired:
+queued while no daemon ran".
 
 The daemon prunes audit events older than `[daemon] keep_events` (default `"30d"`) and handled CLI
 requests older than `keep_requests` (default `"7d"`) on every reconcile; `"0"` keeps them forever. The
@@ -495,7 +513,7 @@ What an author gets, every review alike:
 | `magnum slots [list\|provision\|remove\|repair\|adopt\|pin\|unpin]` | Pool management. |
 | `magnum where <ref>` | `cd $(magnum where 123)`. |
 | `magnum pause\|resume`, `magnum logs [<ref>] [-f]`, `magnum doctor`, `magnum identities check`, `magnum kick` | Operations. `pause` holds automatic reviews; a review you ask for (`magnum review`, the board, the picker) still runs. |
-| `magnum daemon [--once] [--dry-run]`, `magnum install\|uninstall\|daemon-restart\|daemon-stop [--now]`, `magnum migrate-home` | The daemon and its launchd job (`migrate-home` moves a checkout's `state/` to the XDG places, see Configuration). Stop and restart refuse while review rounds are in flight unless `--now`; `daemon-restart --drain` and `install --drain` stop new rounds, wait for those in flight (at most `--timeout`, default 2h) and then restart. `daemon-restart` and `install` first run `magnum config` with the binary launchd will run, which validates the configuration and renders every prompt with the build that will run, and refuse when it fails; the daemon refuses to start on the same errors (written to `daemon.log` and `launchd.log`). After a build that adds a registry migration, other commands refuse to run while the older daemon is up (they would migrate the registry under it) and point at `daemon-restart --drain`. |
+| `magnum daemon [--once] [--dry-run]`, `magnum install\|uninstall\|daemon-restart\|daemon-stop [--now]`, `magnum daemon-restart --when-idle\|--drain [--timeout D]`, `magnum migrate-home` | The daemon and its launchd job (`migrate-home` moves a checkout's `state/` to the XDG places, see Configuration). Stop and restart refuse while review rounds are in flight unless `--now`; `daemon-restart --when-idle` waits, stopping nothing, until no round is in flight and restarts then (it waits again when a round starts in between); `daemon-restart --drain` and `install --drain` stop new rounds, wait for those in flight and then restart; both wait at most `--timeout` (default 2h), and ctrl+c or closing the terminal stops the wait and lifts the drain. A drain names its command's pid: `magnum status` shows it with how to lift it, and the daemon lifts a drain whose command is gone. `daemon-restart` and `install` first run `magnum config` with the binary launchd will run, which validates the configuration and renders every prompt with the build that will run, and refuse when it fails; the daemon refuses to start on the same errors (written to `daemon.log` and `launchd.log`). After a build that adds a registry migration, other commands refuse to run while the older daemon is up (they would migrate the registry under it) and point at `daemon-restart --drain`. |
 
 Shell completion is dynamic: PR references complete from the registry with their titles, slots,
 identities, roles and sorts from config.

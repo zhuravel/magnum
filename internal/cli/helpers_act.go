@@ -89,6 +89,11 @@ type actDeps struct {
 
 	Kick func() (int, error)                              // engine.KickDaemon
 	Lock func() (unlock func(), who opsHolder, err error) // acquireOps(layout)
+	// Running is the daemon's pid without waking it (engine.DaemonPID; 0 =
+	// none); nil leaves it to the kick. Version is this binary's build,
+	// compared with the daemon's (engine.SkewNote).
+	Running func() (int, error)
+	Version string
 
 	Now   func() time.Time
 	Sleep func(ctx context.Context, d time.Duration) error
@@ -124,13 +129,15 @@ var actNewDeps = func(c *Context, mode actMode) (*actDeps, error) {
 	cfg, layout := c.Config, c.Layout // config.Load sets cfg.Layout to c.Layout
 	d := &actDeps{
 		Cfg: cfg, Layout: layout,
-		TTY:  actTTYRunner{Stdin: os.Stdin, Stderr: c.Stderr},
-		Kick: func() (int, error) { return engine.KickDaemon(layout) },
-		Lock: func() (func(), opsHolder, error) { return acquireOps(layout) },
-		Now:  time.Now, Sleep: actSleep,
+		TTY:     actTTYRunner{Stdin: os.Stdin, Stderr: c.Stderr},
+		Kick:    func() (int, error) { return engine.KickDaemon(layout) },
+		Lock:    func() (func(), opsHolder, error) { return acquireOps(layout) },
+		Running: func() (int, error) { return engine.DaemonPID(layout) },
+		Version: c.Version,
+		Now:     time.Now, Sleep: actSleep,
 		Stdin: os.Stdin, StdinTTY: actTerminal(os.Stdin), StdoutTTY: actIsTTY(c.Stdout),
 		Getenv: os.Getenv,
-		Poll:   2 * time.Second, Quick: 10 * time.Second,
+		Poll:   2 * time.Second, Quick: reqQuickWait,
 		close: func() error { return nil },
 	}
 	herdrBin := os.Getenv("HERDR_BIN_PATH")
@@ -590,39 +597,15 @@ func actRoleName(role string) string { return agents.Role(role).Label() }
 
 // --- requests to the daemon ---
 
-// submit enqueues a request and kicks the daemon; pid is 0 when none runs.
-func (d *actDeps) submit(ctx context.Context, kind string, payload any) (int64, int, error) {
-	id, err := d.Store.EnqueueRequest(ctx, kind, payload)
-	if err != nil {
-		return 0, 0, fmt.Errorf("queue %s request: %w", kind, err)
-	}
-	pid, err := d.Kick()
-	if err != nil {
-		return id, 0, fmt.Errorf("request %d queued, but waking the daemon failed: %w", id, err)
-	}
-	return id, pid, nil
+// reqs is the request client (request_client.go) over d's registry and
+// daemon.
+func (d *actDeps) reqs() reqClient {
+	return reqClient{st: d.Store, kick: d.Kick, running: d.Running, now: d.now, sleep: d.sleep, version: d.Version}
 }
 
-// await polls a request until it leaves pending, ctx ends or timeout passes
-// (0 = no limit); the last read is returned either way.
-func (d *actDeps) await(ctx context.Context, id int64, every, timeout time.Duration) (store.Request, error) {
-	deadline := time.Time{}
-	if timeout > 0 {
-		deadline = d.now().Add(timeout)
-	}
-	for {
-		req, err := d.Store.RequestByID(ctx, id)
-		if err != nil || req.State != store.RequestPending {
-			return req, err
-		}
-		if !deadline.IsZero() && !d.now().Before(deadline) {
-			return req, nil
-		}
-		if err := d.sleep(ctx, every); err != nil {
-			return req, err
-		}
-	}
-}
+// quick is a send that waits up to Quick for an answer the daemon gives
+// within its tick.
+func (d *actDeps) quick() reqSend { return reqSend{Wait: d.Quick, Poll: d.quickPoll()} }
 
 // quickPoll is the poll interval while waiting for a tick-time request.
 func (d *actDeps) quickPoll() time.Duration {
@@ -630,42 +613,6 @@ func (d *actDeps) quickPoll() time.Duration {
 		return d.Poll
 	}
 	return 250 * time.Millisecond
-}
-
-// requestOutcome renders a finished or still pending request for humans and
-// returns the exit code.
-func actRequestOutcome(w, ew io.Writer, req store.Request, pid int) int {
-	res := strings.TrimSpace(store.Deref(req.Result))
-	switch req.State {
-	case store.RequestDone:
-		if res == "" {
-			res = "done"
-		}
-		fmt.Fprintln(w, res)
-		return 0
-	case store.RequestFailed:
-		fmt.Fprintf(ew, "%s\n", res)
-		return 1
-	}
-	if pid == 0 {
-		fmt.Fprintf(ew, "request %d (%s) is queued, but no daemon is running: %s\n", req.ID, req.Kind, actDaemonFix)
-		return 0
-	}
-	fmt.Fprintf(w, "request %d (%s) is queued; the daemon (pid %d) handles it shortly (`magnum logs request:%d`)\n", req.ID, req.Kind, pid, req.ID)
-	return 0
-}
-
-// actRequestJSON is a request as --json prints it.
-type actRequestJSON struct {
-	ID        int64  `json:"request_id"`
-	Kind      string `json:"kind"`
-	State     string `json:"state"`
-	Result    string `json:"result,omitempty"`
-	DaemonPID int    `json:"daemon_pid"`
-}
-
-func actRequestView(req store.Request, pid int) actRequestJSON {
-	return actRequestJSON{ID: req.ID, Kind: req.Kind, State: req.State, Result: store.Deref(req.Result), DaemonPID: pid}
 }
 
 // --- herdr focus + terminal reveal ---

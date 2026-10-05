@@ -7,12 +7,12 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/spf13/cobra"
 
 	"github.com/zhuravel/magnum/internal/engine"
-	"github.com/zhuravel/magnum/internal/store"
 )
 
 type verdictOpts struct {
@@ -77,35 +77,22 @@ func verdictMain(ctx context.Context, c *Context, d *actDeps, name, req, ref str
 	return submitAndReport(ctx, c, d, name, d.actLabel(t.full(), t.PR.Number), req, payload, o.json)
 }
 
-// submitAndReport hands a request to the daemon, waits briefly for its
-// answer and prints it (or says it waits for the daemon).
+// submitAndReport hands a verdict to the daemon, waits briefly for its
+// answer and prints it. A verdict posts to GitHub: with no daemon to post it
+// now it is refused, never left queued to post whenever a daemon starts.
 func submitAndReport(ctx context.Context, c *Context, d *actDeps, name, label, req string, payload any, asJSON bool) int {
-	id, pid, err := d.submit(ctx, req, payload)
+	q := d.quick()
+	q.NeedDaemon = true
+	out, err := d.reqs().send(ctx, req, payload, q)
 	if err != nil {
-		if id == 0 {
-			return cmdFail(c, name, err)
+		if errors.Is(err, errNoDaemon) {
+			err = fmt.Errorf("%s %s: nothing was queued: %w", name, label, err)
 		}
-		fmt.Fprintln(c.Stderr, err)
-	}
-	var r store.Request
-	if pid != 0 {
-		r, err = d.await(ctx, id, d.quickPoll(), d.Quick)
-	} else {
-		r, err = d.Store.RequestByID(ctx, id)
-	}
-	if err != nil && r.ID == 0 {
 		return cmdFail(c, name, err)
 	}
 	if asJSON {
-		_ = writeJSON(c.Stdout, actRequestView(r, pid))
-		if r.State == store.RequestFailed {
-			return 1
-		}
-		return 0
+		_ = writeJSON(c.Stdout, out.view())
+		return out.jsonCode()
 	}
-	if r.State == store.RequestPending && pid == 0 {
-		fmt.Fprintf(c.Stderr, "%s %s is queued as request %d and applies when the daemon starts: %s\n", name, label, id, actDaemonFix)
-		return 0
-	}
-	return actRequestOutcome(c.Stdout, c.Stderr, r, pid)
+	return out.print(c.Stdout, c.Stderr)
 }

@@ -179,7 +179,8 @@ func newActHarness(t *testing.T) *actHarness {
 			h.reveals = append(h.reveals, o)
 			return reveal.Outcome{Action: reveal.ActionLaunched, Kind: reveal.KindITerm, Session: "default"}, nil
 		},
-		Kick: func() (int, error) { h.kicks++; return h.pid, nil },
+		Kick:    func() (int, error) { h.kicks++; return h.pid, nil },
+		Running: func() (int, error) { return h.pid, nil },
 		Lock: func() (func(), opsHolder, error) {
 			switch {
 			case h.held:

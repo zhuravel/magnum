@@ -278,6 +278,7 @@ func (e *Engine) health(ctx context.Context) {
 		e.delKV(ctx, KVDaemonPaused, KVDaemonPausedReason, KVDaemonPausedUntil)
 		e.event(ctx, "info", "", "daemon.resumed", "automation pause ended", nil)
 	}
+	e.checkDrain(ctx)
 	e.probeInfra(ctx)
 	e.checkBudget(ctx)
 }

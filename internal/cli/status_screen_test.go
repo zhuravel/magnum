@@ -168,9 +168,14 @@ func TestStatusDashActionsCaptureOutput(t *testing.T) {
 	if err != nil || !strings.Contains(text, "pin talkable#5 is queued as request 1") {
 		t.Fatalf("pin: %q %v", text, err)
 	}
+	if _, err := acts.Review(ctx, "talkable#5", tui.ReviewOpts{}); err == nil || !strings.Contains(err.Error(), "nothing was queued: no daemon is running") {
+		t.Fatalf("review without a daemon to answer: %v", err)
+	}
+	h.pid = 4242 // a review is queued only while a daemon answers
 	if _, err := acts.Review(ctx, "talkable#5", tui.ReviewOpts{Again: true, Simplify: true}); err != nil {
 		t.Fatalf("review: %v", err)
 	}
+	h.pid = 0
 	text, err = acts.Release(ctx, "talkable#5") // no question: the dashboard asked
 	if err != nil || !strings.Contains(lastLine(text), "release of talkable#5 queued as request 3") {
 		t.Fatalf("release: %q %v", text, err)

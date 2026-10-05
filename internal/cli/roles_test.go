@@ -249,6 +249,7 @@ func TestRoleCompletionListsConfiguredRoles(t *testing.T) {
 
 func TestReviewRoleRequestsOnDemandRoles(t *testing.T) {
 	h := newActHarness(t)
+	h.pid = 4242 // a daemon runs: reviews and verdicts are queued only then
 	h.seedPR("talkable/talkable", 5, store.PRReviewed)
 	if code := h.cmd("review", "5", "--role", "simplify", "--role", "claude-simplify", "--role", "CLAUDE"); code != 0 {
 		t.Fatalf("exit %d: %s", code, h.errb.String())

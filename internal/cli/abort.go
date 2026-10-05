@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -87,47 +88,43 @@ func stopMain(ctx context.Context, c *Context, d *actDeps, k stopKind, ref strin
 	if k.running && !slices.Contains(inFlight, t.PR.State) {
 		return cmdFail(c, k.name, fmt.Errorf("no review of %s is running (state %s)", label, t.PR.State))
 	}
-	id, pid, err := d.submit(ctx, k.req, engine.TargetPayload{PRTarget: t.prTarget()})
-	if err != nil {
-		if id == 0 {
-			return cmdFail(c, k.name, err)
-		}
-		fmt.Fprintln(c.Stderr, err)
+	// Nothing runs without a daemon: an abort is refused then (the next
+	// daemon must not act on it); an ignore is queued for its start.
+	rc := d.reqs()
+	out, err := rc.send(ctx, k.req, engine.TargetPayload{PRTarget: t.prTarget()}, reqSend{NeedDaemon: k.running})
+	switch {
+	case errors.Is(err, errNoDaemon):
+		return cmdFail(c, k.name, fmt.Errorf("no review of %s is running: %w", label, err))
+	case err != nil:
+		return cmdFail(c, k.name, err)
 	}
-	if pid == 0 {
-		if k.running {
-			// Nothing runs without a daemon: the next one must not act on it.
-			why := "no review of " + label + " is running: no daemon is running"
-			_ = d.Store.CompleteRequest(ctx, id, store.RequestFailed, why)
-			return cmdFail(c, k.name, fmt.Errorf("%s (%s)", why, actDaemonFix))
-		}
-		req, err := d.Store.RequestByID(ctx, id)
-		if err != nil {
-			return cmdFail(c, k.name, err)
-		}
+	id := out.ID()
+	if out.PID == 0 && out.Pending() {
 		if o.json {
-			_ = writeJSON(c.Stdout, actRequestView(req, pid))
+			_ = writeJSON(c.Stdout, out.view())
 			return 0
 		}
+		out.printNotes(c.Stderr)
 		fmt.Fprintf(c.Stderr, "%s %s is queued as request %d and applies when the daemon starts: %s\n", k.name, label, id, actDaemonFix)
 		return 0
 	}
 	if !o.json {
-		fmt.Fprintf(c.Stderr, "asked the daemon (pid %d) to %s %s (request %d)…\n", pid, k.name, label, id)
+		fmt.Fprintf(c.Stderr, "asked the daemon (pid %d) to %s %s (request %d)…\n", out.PID, k.name, label, id)
 	}
-	req, err := d.await(ctx, id, d.quickPoll(), o.timeout)
-	if err != nil && req.ID == 0 {
-		return cmdFail(c, k.name, err)
+	if out.Pending() {
+		if err := rc.wait(ctx, &out, o.timeout, d.quickPoll()); err != nil && out.Pending() {
+			return cmdFail(c, k.name, err)
+		}
 	}
 	if o.json {
-		_ = writeJSON(c.Stdout, actRequestView(req, pid))
-		if req.State != store.RequestDone {
+		_ = writeJSON(c.Stdout, out.view())
+		if out.Req.State != store.RequestDone {
 			return 1
 		}
 		return 0
 	}
-	if req.State == store.RequestPending {
+	if out.Pending() {
 		return cmdFail(c, k.name, fmt.Errorf("request %d is still running after %s (`magnum logs request:%d` follows it)", id, o.timeout, id))
 	}
-	return actRequestOutcome(c.Stdout, c.Stderr, req, pid)
+	return out.print(c.Stdout, c.Stderr)
 }
