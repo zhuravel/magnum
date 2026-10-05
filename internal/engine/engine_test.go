@@ -210,7 +210,7 @@ func TestHeadMovedDuringRoundQueuesRereview(t *testing.T) {
 	if want.After(pr.LastRoundStartedAt.Add(30 * time.Minute)) {
 		t.Fatal("the test needs the interval to end after the quiet period")
 	}
-	if got := h.rd.appended(); len(got) != 1 || got[0] != "101:_Reviewed b1; 1 commit arrived during the review, re-review follows._" {
+	if got := h.rd.appended(); len(got) != 1 || got[0] != "101:_Reviewed b1; 1 commit arrived during the review, re-review follows after the quiet period._" {
 		t.Errorf("review notes = %q", got)
 	}
 	if deref(pr.ReviewedSHA) != "b1" || pr.PendingSince == nil || !pr.PendingSince.Equal(pushAt) ||

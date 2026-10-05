@@ -3367,6 +3367,16 @@ const (
 	KVDaemonBuild = "daemon.build"
 )
 const (
+	KVDaemonPausedAt   = "daemon.paused_at"
+	KVDaemonPausedHeld = "daemon.paused_held"
+)
+    KVDaemonPausedAt holds when the running `magnum pause` began
+    (store.FormatTime); a pause renewed while it runs keeps it.
+    KVDaemonPausedHeld is how many review requests the pause holds
+    (pauseHeldRequest), rewritten by every tick while paused. Both go with the
+    pause.
+
+const (
 	// KVPromptsLoadedAt is when the running daemon loaded its prompts
 	// (store.FormatTime). KVPromptsChanged counts the prompt and skill files
 	// that differ on disk since (absent when none) and KVPromptsChangedFiles
@@ -4258,6 +4268,10 @@ type Slots interface {
 	NextSlotNumber(ctx context.Context, pool config.Pool) (int, error)
 	Pin(ctx context.Context, slot store.Slot) error
 	Unpin(ctx context.Context, slot store.Slot) error
+	// ClearPin and Guard serve a review request of a pinned PR
+	// (review_unpin.go): the pin goes, the guard's holds stay and are named.
+	ClearPin(ctx context.Context, slot store.Slot) error
+	Guard(ctx context.Context, slot store.Slot) error
 	// Reserve, Repair and Adopt serve the open, repair and adopt requests.
 	Reserve(ctx context.Context, pr store.PR, pool config.Pool) (store.Slot, error)
 	Repair(ctx context.Context, slot store.Slot, pool config.Pool) error
@@ -8551,6 +8565,13 @@ func (m *Manager) Claim(ctx context.Context, pr store.PR, pool config.Pool) (sto
     with the pool's database names). A lost race moves on to the next slot;
     a PR that is not claimable is ErrConflict; no slot left is ErrNoFreeSlot.
     The returned row is the claimed slot.
+
+func (m *Manager) ClearPin(ctx context.Context, slot store.Slot) error
+    ClearPin removes the slot's pin and nothing else: a hold a guard persisted
+    (hold_reason: a person's changes, unpushed commits, a moved HEAD) stays
+    until Unpin, so the guard keeps refusing the slot. A review request uses
+    it on the slot `magnum open` pinned: the person's work stays protected,
+    the pin alone no longer holds the review.
 
 func (m *Manager) CreatePRWorktree(ctx context.Context, watch config.Watch, repo string, pr store.PR, targetSHA string) (store.Slot, error)
     CreatePRWorktree checks pr out into its own detached worktree for a

@@ -34,6 +34,13 @@ func TestPauseAndResumeWithoutDaemon(t *testing.T) {
 	if v, _ := h.kv(engine.KVDaemonPausedUntil); v != store.FormatTime(h.now.Add(2*time.Hour)) {
 		t.Errorf("until = %q", v)
 	}
+	if v, _ := h.kv(engine.KVDaemonPausedAt); v != store.FormatTime(h.now) {
+		t.Errorf("paused at = %q, want now", v)
+	}
+	// A pause renewed while it runs keeps its start.
+	started := store.FormatTime(h.now.Add(-time.Hour))
+	_ = h.st.SetKV(h.ctx, engine.KVDaemonPausedAt, started)
+	_ = h.st.SetKV(h.ctx, engine.KVDaemonPausedHeld, "2")
 	if len(h.requests()) != 0 {
 		t.Errorf("queued a request without a daemon: %+v", h.requests())
 	}
@@ -48,12 +55,16 @@ func TestPauseAndResumeWithoutDaemon(t *testing.T) {
 			t.Errorf("an indefinite pause kept %s = %q", k, v)
 		}
 	}
+	if v, _ := h.kv(engine.KVDaemonPausedAt); v != started {
+		t.Errorf("renewed pause's start = %q, want %q", v, started)
+	}
 
 	h.out.Reset()
 	if code := h.cmd("resume"); code != 0 {
 		t.Fatalf("resume exit %d", code)
 	}
-	for _, k := range []string{engine.KVDaemonPaused, engine.KVDaemonPausedReason, engine.KVDaemonPausedUntil} {
+	for _, k := range []string{engine.KVDaemonPaused, engine.KVDaemonPausedReason, engine.KVDaemonPausedUntil,
+		engine.KVDaemonPausedAt, engine.KVDaemonPausedHeld} {
 		if _, ok := h.kv(k); ok {
 			t.Errorf("%s still set", k)
 		}

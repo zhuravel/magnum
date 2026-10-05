@@ -752,6 +752,10 @@ type fakeSlots struct {
 	calls    []string
 	moveHead string // Checkout "fetches" this head instead of the target
 	holdErr  error
+	// guardErr is what Guard returns for a slot without a persisted hold
+	// (a person's agent in it, say); a hold_reason is returned as
+	// slots.Guard does.
+	guardErr error
 	// checkoutGate, when set, makes Checkout signal checkoutStarted and wait
 	// for a value (or ctx): a round held in its checkout / deps step.
 	checkoutGate    chan struct{}
@@ -859,7 +863,29 @@ func (f *fakeSlots) RemovePRWorktree(ctx context.Context, slot store.Slot, force
 	return f.st.ReleaseSlot(ctx, slot.ID, nil, store.SlotRemoved, "closed")
 }
 
-func (f *fakeSlots) Guard(context.Context, store.Slot) error { return nil }
+func (f *fakeSlots) Guard(ctx context.Context, slot store.Slot) error {
+	sl := slot
+	if slot.ID != 0 {
+		var err error
+		if sl, err = f.st.SlotByID(ctx, slot.ID); err != nil {
+			return err
+		}
+	}
+	switch {
+	case sl.Pinned:
+		return slots.ErrHold{Reason: slots.HoldPinned, Detail: sl.Name + " is pinned"}
+	case deref(sl.HoldReason) != "":
+		return slots.ErrHold{Reason: *sl.HoldReason, Detail: sl.Name + " is held"}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.guardErr
+}
+
+func (f *fakeSlots) ClearPin(ctx context.Context, slot store.Slot) error {
+	f.record("clear_pin:" + slot.Name)
+	return f.st.UpdateSlotFields(ctx, slot.ID, func(u *store.SlotUpdate) { u.Set("pinned", false) })
+}
 
 func (f *fakeSlots) HumanEvidence(context.Context, store.Slot) (string, error) { return "", nil }
 

@@ -1579,7 +1579,11 @@ func (m prBoardModel) review(what string, o ReviewOpts) (prBoardModel, tea.Cmd) 
 		if mergedOnGitHub(r) {
 			return postMergeQuestion(m.questionLabel(r, ref), o)
 		}
-		return reviewQuestion(m.questionLabel(r, ref), o, boardReviewFacts(r, now))
+		facts := boardReviewFacts(r, now)
+		if r.Pinned { // the daemon unpins it (its slot's guards still hold a person's changes)
+			facts = joinFacts(facts, "pinned: the review unpins it")
+		}
+		return reviewQuestion(m.questionLabel(r, ref), o, facts)
 	},
 		func(ctx context.Context, a DashboardActions, ref string) (string, error) {
 			return a.Review(ctx, ref, o)

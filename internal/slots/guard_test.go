@@ -278,6 +278,44 @@ func TestGuardPinnedAndManualHold(t *testing.T) {
 	wantHold(t, h.m.Guard(h.ctx, sl), "manual")
 }
 
+// A review request hands a pinned slot back with ClearPin: the pin goes, a
+// hold a guard persisted (a person's changes, commits or drift) stays, so the
+// guard still refuses the slot and the head stays where the person left it.
+func TestClearPinKeepsAPersistedHold(t *testing.T) {
+	h := newHarness(t)
+	sl := h.provisioned(1)
+	if err := h.m.Pin(h.ctx, sl); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.UpdateSlotFields(h.ctx, sl.ID, func(u *store.SlotUpdate) { u.Set("hold_reason", HoldDirtyWorktree) }); err != nil {
+		t.Fatal(err)
+	}
+	before := h.slot(sl.Name)
+	if err := h.m.ClearPin(h.ctx, before); err != nil {
+		t.Fatal(err)
+	}
+	after := h.slot(sl.Name)
+	if after.Pinned || store.Deref(after.HoldReason) != HoldDirtyWorktree || store.Deref(after.CheckedOutSHA) != store.Deref(before.CheckedOutSHA) {
+		t.Fatalf("after ClearPin: pinned %v hold %q checked_out %q (was %q)", after.Pinned, store.Deref(after.HoldReason),
+			store.Deref(after.CheckedOutSHA), store.Deref(before.CheckedOutSHA))
+	}
+	wantHold(t, h.m.Guard(h.ctx, after), HoldDirtyWorktree)
+
+	// Without a hold, the slot goes back to automation.
+	if err := h.m.Unpin(h.ctx, after); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.m.Pin(h.ctx, after); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.m.ClearPin(h.ctx, h.slot(sl.Name)); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.m.Guard(h.ctx, h.slot(sl.Name)); err != nil {
+		t.Fatalf("Guard after ClearPin of a slot without a hold: %v", err)
+	}
+}
+
 func TestGuardMissingDirectorySkipsGit(t *testing.T) {
 	h := newHarness(t)
 	sl := store.Slot{Name: "ghost", Path: filepath.Join(h.root, "nope"), CheckedOutSHA: store.Ptr(h.shaPR7)}

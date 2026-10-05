@@ -277,6 +277,11 @@ type statusPause struct {
 	Reason string     `json:"reason"`
 	Detail string     `json:"detail,omitempty"`
 	Until  *time.Time `json:"until,omitempty"`
+	// Since is when `magnum pause` began and Held how many review requests
+	// it holds (engine.KVDaemonPausedAt, KVDaemonPausedHeld); daemon scope
+	// only.
+	Since *time.Time `json:"since,omitempty"`
+	Held  int        `json:"held,omitempty"`
 	// Using is the model the kind's sessions run while a model is limited
 	// (Reason "<model> limited").
 	Using string `json:"using,omitempty"`

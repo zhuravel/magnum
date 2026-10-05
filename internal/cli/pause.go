@@ -92,7 +92,18 @@ func pauseMain(ctx context.Context, c *Context, d *actDeps, o pauseOpts) int {
 	if !until.IsZero() {
 		untilVal = store.FormatTime(until)
 	}
-	for _, kv := range [][2]string{{store.KVDaemonPausedReason, o.reason}, {store.KVDaemonPausedUntil, untilVal}, {store.KVDaemonPaused, "1"}} {
+	// A pause renewed while it runs keeps its start (an older build's pause
+	// has none: the daemon takes it from its event).
+	startVal := store.FormatTime(now)
+	if v, _, err := d.Store.GetKV(ctx, store.KVDaemonPaused); err != nil {
+		return cmdFail(c, "pause", err)
+	} else if v == "1" {
+		if startVal, _, err = d.Store.GetKV(ctx, engine.KVDaemonPausedAt); err != nil {
+			return cmdFail(c, "pause", err)
+		}
+	}
+	for _, kv := range [][2]string{{store.KVDaemonPausedReason, o.reason}, {store.KVDaemonPausedUntil, untilVal},
+		{engine.KVDaemonPausedAt, startVal}, {store.KVDaemonPaused, "1"}} {
 		if err := pauseSetKV(ctx, d.Store, kv[0], kv[1]); err != nil {
 			return cmdFail(c, "pause", err)
 		}
@@ -288,6 +299,9 @@ func resumeOffline(ctx context.Context, d *actDeps, o resumeOpts) (string, error
 	}
 	had, err := del(store.KVDaemonPaused, store.KVDaemonPausedReason, store.KVDaemonPausedUntil)
 	if err != nil {
+		return "", err
+	}
+	if _, err := del(engine.KVDaemonPausedAt, engine.KVDaemonPausedHeld); err != nil {
 		return "", err
 	}
 	infra, err := del(engine.KVInfraPausedUntil, engine.KVInfraPausedReason, engine.KVInfraPausedDetail)

@@ -64,6 +64,9 @@ func statusFixture(t *testing.T) (*inspFixture, *store.Store, statusDeps, time.T
 		"codex.paused_detail":                  "You've hit your usage limit",
 		engine.KVDaemonPaused:                  "1",
 		engine.KVDaemonPausedReason:            "lunch",
+		engine.KVDaemonPausedAt:                store.FormatTime(now.Add(-19 * time.Hour)),
+		engine.KVDaemonPausedUntil:             store.FormatTime(now.Add(time.Hour)),
+		engine.KVDaemonPausedHeld:              "6",
 		engine.KVWatchPaused("talkable"):       "review 77 posted by zhuravel",
 		engine.KVIdentityCheck("talkable-app"): "fail",
 		engine.KVIdentityError("talkable-app"): "pull_requests permission is read",
@@ -164,6 +167,10 @@ func TestStatusGather(t *testing.T) {
 		scopes["identity:talkable-app"].Detail != "pull_requests permission is read" {
 		t.Fatalf("pauses = %+v", r.Pauses)
 	}
+	// The pause says since when and how many review requests it holds.
+	if p := scopes["daemon"]; p.Since == nil || !p.Since.Equal(r.GeneratedAt.Add(-19*time.Hour)) || p.Held != 6 {
+		t.Fatalf("daemon pause = %+v, want since 19h ago holding 6", p)
+	}
 	if len(r.Queue) != 2 || r.Queue[0].Number != 11931 || !r.Queue[0].Forced {
 		t.Fatalf("queue (forced first) = %+v", r.Queue)
 	}
@@ -204,7 +211,9 @@ func TestStatusRenderAndDetail(t *testing.T) {
 		"last poll 40s ago",
 		"github:   4890/5000 points left",
 		"rounds:   1/3 active (talkable#11940); working agents: codex 1/5, claude 1",
-		"daemon: lunch",
+		"daemon: lunch since ",
+		"(19h ago), for 20h until ",
+		"(in 1h) · 6 requests held",
 		"codex: usage_limit until",
 		"fix: magnum identities check --name talkable-app",
 		"SLOT", "FOLDER", "DATABASES", "review1",

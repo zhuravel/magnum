@@ -208,7 +208,7 @@ func (e *Engine) tabBar(ctx context.Context) string {
 		parts = append(parts, fmt.Sprintf("%d attention", len(prs)))
 	}
 	if v, _ := e.getKV(ctx, KVDaemonPaused); v == "1" {
-		parts = append(parts, "paused")
+		parts = append(parts, e.pauseTabBar(ctx)...) // "paused 19h · 6 requests held"
 	}
 	if _, ok := e.infraPause(ctx); ok {
 		parts = append(parts, "infra paused")

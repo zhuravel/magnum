@@ -252,7 +252,8 @@ func TestCommentOnlyCommitDuringTheReviewNeedsNoReReview(t *testing.T) {
 
 // A code commit during the review keeps today's note and re-review.
 func TestCodeCommitDuringTheReviewKeepsTheReReview(t *testing.T) {
-	h := newHarness(t)
+	// No re-review threshold: the small delta is noted in moved_head_test.go.
+	h := newHarness(t, func(h *harness) { h.cfg.Daemon.RereviewMinLines = 0 })
 	h.open(prSpec{n: 1, head: "base1"})
 	h.startup()
 	h.tick()
@@ -274,7 +275,7 @@ func TestCodeCommitDuringTheReviewKeepsTheReReview(t *testing.T) {
 	}
 	close(h.rd.gate)
 	h.settle()
-	if got := h.rd.appended(); len(got) != 1 || got[0] != "101:_Reviewed b1; 1 commit arrived during the review, re-review follows._" {
+	if got := h.rd.appended(); len(got) != 1 || got[0] != "101:_Reviewed b1; 1 commit arrived during the review, re-review follows after the quiet period._" {
 		t.Fatalf("review notes = %q", got)
 	}
 	if pr := h.wantState(2, store.PRRereviewPending); deref(pr.ReviewedSHA) != "b1" {

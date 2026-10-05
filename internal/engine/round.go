@@ -732,6 +732,11 @@ func (e *Engine) setupFailed(ctx context.Context, job *roundJob, se *setupError)
 		to = store.PRPaused
 	}
 	e.retryOrAttention(ctx, job, pr, []string{store.PRClaiming, store.PRReviewing}, to, se.err.Error(), !se.noCharge, se.retryAt)
+	// Not charged is a wait (a person in the panes, a busy agent), not a
+	// failure; an infrastructure pause has its own toast.
+	if !se.noCharge && se.infra == "" {
+		e.toastRequestedFailed(ctx, job, pr, "setup failed", se.err.Error()) // operator.go
+	}
 }
 
 // retryOrAttention charges one attempt (when charge) and moves the PR to to
@@ -906,6 +911,7 @@ func (e *Engine) finish(ctx context.Context, job *roundJob, in pipeline.RoundInp
 		}
 		e.retryOrAttention(ctx, job, pr, from, claimableState(pr), outcome+": "+msg, true, time.Time{})
 	}
+	e.requestedRoundFailed(ctx, job, pr, outcome, msg, runErr) // operator.go
 	token := outcome
 	if res.Event != "" {
 		token = res.Event
@@ -1057,7 +1063,10 @@ func (e *Engine) onPosted(ctx context.Context, job *roundJob, pr store.PR, in pi
 				map[string]any{"role": string(role), "path": rep.Path})
 		}
 	}
-	if e.cfg.Herdr.ToastEveryReview && e.batch != nil {
+	switch {
+	case pr.Forced: // the operator asked for it: always toasted (operator.go)
+		e.toastRequestedPosted(job, pr, res, now)
+	case e.cfg.Herdr.ToastEveryReview && e.batch != nil:
 		label := fmt.Sprintf("%s#%d", job.repo.Name, pr.Number)
 		title := label + ": " + reviewSummary(res)
 		e.batch.Add(notify.Item{
@@ -1114,13 +1123,22 @@ func (e *Engine) noteMovedHead(ctx context.Context, job *roundJob, pr store.PR, 
 		}
 		return
 	}
-	what := fmt.Sprintf("%d commits", st.Commits)
+	what, are := fmt.Sprintf("%d commits", st.Commits), "are"
 	if st.Commits == 1 {
-		what = "1 commit"
+		what, are = "1 commit", "is"
 	}
+	// The re-review is promised only when it starts by itself (rereviewFollows).
+	follows := "re-review follows"
 	line := fmt.Sprintf("_Reviewed %s; %s arrived during the review, re-review follows._", short(target), what)
 	if trivial != nil {
+		follows = DeltaLabel(trivial) + ", no re-review needed"
 		line = fmt.Sprintf("_Reviewed %s; %s arrived during the review (%s), no re-review needed._", short(target), what, DeltaLabel(trivial))
+	} else if when, ok := e.rereviewFollows(ctx, job.watch, pr.ID); !ok {
+		follows = "not reviewed yet"
+		line = fmt.Sprintf("_Reviewed %s; %s arrived during the review and %s not reviewed yet._", short(target), what, are)
+	} else if when != "" {
+		follows += " " + when
+		line = fmt.Sprintf("_Reviewed %s; %s arrived during the review, re-review follows %s._", short(target), what, when)
 	}
 	subject := prSubject(job.repo, pr.Number)
 	if err := rounds.AppendToReview(ctx, job.repo.Owner, job.repo.Name, pr.Number, reviewID, line); err != nil {
@@ -1128,12 +1146,50 @@ func (e *Engine) noteMovedHead(ctx context.Context, job *roundJob, pr store.PR, 
 			fmt.Sprintf("review %d: could not add that %s arrived during it: %v", reviewID, what, err), nil)
 		return
 	}
-	follows := "re-review follows"
-	if trivial != nil {
-		follows = DeltaLabel(trivial) + ", no re-review needed"
-	}
 	e.event(ctx, "info", subject, "round.review_noted", fmt.Sprintf("review %d: %s arrived during it, %s", reviewID, what, follows),
 		map[string]any{"review_id": reviewID, "reviewed_sha": target, "head_sha": pr.HeadSHA, "trivial": trivial})
+}
+
+// rereviewFollows reports whether the re-review of the commits that arrived
+// during a review starts by itself, from the PR's wait as it is right after
+// the review was recorded (waitFor), and when: "" at the next dispatch,
+// "after the quiet period" when the push quiet period (or its burst form)
+// holds it. It does not when a longer timing rule holds the PR (the daily
+// cap, the small-delta threshold, an interval), or when something would hold
+// it once its timing clears: `magnum pause`, a drain or an infrastructure
+// pause, quiet hours, a mute, an agent kind the watch's roles use paused.
+func (e *Engine) rereviewFollows(ctx context.Context, w config.Watch, prID int64) (string, bool) {
+	pr, err := e.st.PRByID(ctx, prID)
+	if err != nil || (pr.State != store.PRRereviewPending && pr.State != store.PRQueued) {
+		return "", false
+	}
+	now := e.now()
+	wait := e.waitFor(ctx, pr, e.globalWait(ctx, tickState{herdrUp: true}, now), now)
+	when := ""
+	switch wait.Reason {
+	case WaitNext, WaitRequested, WaitCapacity:
+	case WaitQuiet, WaitBurst:
+		when = "after the quiet period"
+	default:
+		return "", false
+	}
+	at := now // when the quiet period ends (quiet hours then hold it)
+	if wait.Until.After(at) {
+		at = wait.Until
+	}
+	// The roles dispatch would run (their kinds' pauses hold the round).
+	roles := e.cfg.RolesFor(&w)
+	if toRun, err := pipeline.RolesToRun(ctx, e.st, e.cfg, pr, roles, e.requestedRoles(ctx, pr.ID), kindFor(pr)); err == nil {
+		roles = toRun
+	}
+	switch {
+	case e.holdReason(ctx) != "":
+	case !pr.Forced && (e.userPause(ctx) != "" || pr.Muted || quietHoursNow(e.cfg.Daemon.QuietHours, at)):
+	case e.kindPauseReason(ctx, agentKinds(roles)) != "":
+	default:
+		return when, true
+	}
+	return "", false
 }
 
 // requeueMovedHead is the backstop after onPosted's transition to reviewed

@@ -140,6 +140,20 @@ func TestReviewDryRunChangesNothing(t *testing.T) {
 	actContains(t, h.out.String(), "would be added from GitHub", `dry run: would queue request review {"repo":"zhuravel/x","number":9}`)
 }
 
+// A pinned PR (magnum open, magnum pin) is unpinned by the review: the
+// command says so before it queues anything.
+func TestReviewSaysItUnpinsAPinnedPR(t *testing.T) {
+	h := newActHarness(t)
+	pr := h.seedPR("talkable/talkable", 5, store.PRReviewed)
+	if err := h.st.UpdatePR(h.ctx, pr.ID, func(u *store.PRUpdate) { u.Set("pinned", true) }); err != nil {
+		t.Fatal(err)
+	}
+	if code := h.cmd("review", "talkable#5", "--dry-run"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.errb.String())
+	}
+	actContains(t, h.out.String(), "talkable#5 is pinned: this review unpins it")
+}
+
 func TestReviewWaitFollowsTheRoundToThePostedReview(t *testing.T) {
 	h := newActHarness(t)
 	pr := h.seedPR("talkable/talkable", 5, store.PRQueued)

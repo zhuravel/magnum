@@ -211,7 +211,7 @@ func statusGatherPauses(d statusDeps, kv statusKV, r *statusReport) {
 			reason = "magnum pause"
 		}
 		r.Pauses = append(r.Pauses, statusPause{Scope: "daemon", Reason: reason, Until: kv.getTime(store.KVDaemonPausedUntil),
-			Fix: "magnum resume"})
+			Since: kv.getTime(engine.KVDaemonPausedAt), Held: store.Deref(kv.getInt(engine.KVDaemonPausedHeld)), Fix: "magnum resume"})
 	}
 	if since := r.Daemon.DrainingSince; since != nil {
 		r.Pauses = append(r.Pauses, statusDrainPause(d, r.Daemon, r.GeneratedAt, *since))

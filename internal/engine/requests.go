@@ -407,6 +407,7 @@ func (e *Engine) requestReview(ctx context.Context, p ReviewPayload) (string, er
 	if ok, _ := e.identityHealthy(ctx, posting); !ok {
 		e.warmIdentities(ctx, false)
 	}
+	unpinned, slotHeld := e.unpinForReview(ctx, repo, pr) // review_unpin.go
 	pos := 0
 	if cands, err := e.st.Candidates(ctx, store.CandidateParams{Now: e.now()}); err == nil {
 		for i, c := range cands {
@@ -432,6 +433,12 @@ func (e *Engine) requestReview(ctx context.Context, p ReviewPayload) (string, er
 		res += "; waiting: " + reason
 	} else if reason := e.kindPauseReason(ctx, agentKinds(e.cfg.RolesFor(w))); reason != "" {
 		res += "; waiting: " + reason
+	}
+	if unpinned != "" {
+		res += "; " + unpinned
+	}
+	if slotHeld != "" {
+		res += "; waiting: " + slotHeld
 	}
 	return res, nil
 }
@@ -493,7 +500,7 @@ func (e *Engine) requestPin(ctx context.Context, p TargetPayload, pin bool) (str
 	verb := map[bool]string{true: "pinned", false: "unpinned"}[pin]
 	var slot store.Slot
 	hasSlot := false
-	label := p.Slot
+	label, subject := p.Slot, ""
 	if p.Slot != "" {
 		sl, err := e.st.SlotByName(ctx, p.Slot)
 		if err != nil {
@@ -508,7 +515,7 @@ func (e *Engine) requestPin(ctx context.Context, p TargetPayload, pin bool) (str
 		if err != nil {
 			return "", err
 		}
-		label = fmt.Sprintf("%s#%d", repo.FullName(), pr.Number)
+		label, subject = fmt.Sprintf("%s#%d", repo.FullName(), pr.Number), prSubject(repo, pr.Number)
 		if err := e.st.UpdatePR(ctx, pr.ID, func(u *store.PRUpdate) { u.Set("pinned", pin) }); err != nil {
 			return "", err
 		}
@@ -528,6 +535,7 @@ func (e *Engine) requestPin(ctx context.Context, p TargetPayload, pin bool) (str
 		}
 		label += " (slot " + slot.Name + ")"
 	}
+	e.pinEvent(ctx, subject, slot, p.Slot != "", pin, verb+" "+label) // review_unpin.go
 	return verb + " " + label, nil
 }
 
@@ -588,6 +596,9 @@ func (e *Engine) requestMute(ctx context.Context, p TargetPayload, mute bool) (s
 
 func (e *Engine) requestPause(ctx context.Context, p PausePayload, pause bool) (string, error) {
 	if pause {
+		if v, _ := e.getKV(ctx, KVDaemonPaused); v != "1" { // a pause renewed keeps its start
+			e.setKV(ctx, KVDaemonPausedAt, store.FormatTime(e.now()))
+		}
 		e.setKV(ctx, KVDaemonPaused, "1")
 		e.setKV(ctx, KVDaemonPausedReason, p.Reason)
 		if p.Until != nil && !p.Until.IsZero() {
@@ -620,7 +631,7 @@ func (e *Engine) requestPause(ctx context.Context, p PausePayload, pause bool) (
 		e.clearToolPause(ctx, p.Tool)
 		return "resumed " + p.Tool + modelLimitsNote(e.clearModelLimits(ctx, p.Tool)), nil
 	}
-	e.delKV(ctx, KVDaemonPaused, KVDaemonPausedReason, KVDaemonPausedUntil)
+	e.delKV(ctx, KVDaemonPaused, KVDaemonPausedReason, KVDaemonPausedUntil, KVDaemonPausedAt, KVDaemonPausedHeld)
 	if _, ok := e.infraPause(ctx); ok {
 		e.clearInfraPause(ctx, false)
 		e.event(ctx, "info", "", "infra.resumed", "infrastructure pause lifted (magnum resume)", nil)

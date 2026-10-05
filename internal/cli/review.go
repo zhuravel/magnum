@@ -184,6 +184,9 @@ func reviewMain(ctx context.Context, c *Context, d *actDeps, ref string, o revie
 	if t.PR.Muted {
 		fmt.Fprintf(progress, "%s is muted: this forced round runs anyway (`magnum unmute %s` resumes automatic reviews)\n", label, label)
 	}
+	if t.PR.Pinned {
+		fmt.Fprintf(progress, "%s is pinned: this review unpins it (a person's changes in its slot still hold the round)\n", label)
+	}
 	if rs := store.Deref(t.PR.ReviewedSHA); rs != "" && rs == t.PR.HeadSHA {
 		fmt.Fprintf(progress, "head %s was already reviewed (%s); reviewing it again\n", sha7(rs), store.Deref(t.PR.LastReviewEvent))
 	}

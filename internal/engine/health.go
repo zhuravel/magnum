@@ -275,7 +275,7 @@ func (e *Engine) health(ctx context.Context) {
 		e.event(ctx, "info", "tool:"+tool, "tool.resumed", fmt.Sprintf("%s pause (%s) ended", tool, p.Reason), nil)
 	}
 	if until, ok := e.kvTime(ctx, KVDaemonPausedUntil); ok && !now.Before(until) {
-		e.delKV(ctx, KVDaemonPaused, KVDaemonPausedReason, KVDaemonPausedUntil)
+		e.delKV(ctx, KVDaemonPaused, KVDaemonPausedReason, KVDaemonPausedUntil, KVDaemonPausedAt, KVDaemonPausedHeld)
 		e.event(ctx, "info", "", "daemon.resumed", "automation pause ended", nil)
 	}
 	e.checkDrain(ctx)

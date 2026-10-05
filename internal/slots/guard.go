@@ -489,6 +489,22 @@ func (m *Manager) Pin(ctx context.Context, slot store.Slot) error {
 	return nil
 }
 
+// ClearPin removes the slot's pin and nothing else: a hold a guard persisted
+// (hold_reason: a person's changes, unpushed commits, a moved HEAD) stays
+// until Unpin, so the guard keeps refusing the slot. A review request uses it
+// on the slot `magnum open` pinned: the person's work stays protected, the pin
+// alone no longer holds the review.
+func (m *Manager) ClearPin(ctx context.Context, slot store.Slot) error {
+	if m.d.DryRun {
+		m.dryRun("clear the pin of %s", slot.Name)
+		return nil
+	}
+	if err := m.d.Store.UpdateSlotFields(ctx, slot.ID, func(u *store.SlotUpdate) { u.Set("pinned", false) }); err != nil {
+		return fmt.Errorf("slots: clear the pin of %s: %w", slot.Name, err)
+	}
+	return nil
+}
+
 // Unpin hands the slot back to automation: pinned and hold_reason are
 // cleared. A head_drift or unpushed_commits hold is acknowledged by taking
 // the current HEAD as the new checked_out_sha, so the next guard passes and

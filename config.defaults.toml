@@ -55,8 +55,8 @@ restart_on_new_build = false      # true: once a new bin/magnum on disk passes i
 
 [herdr]
 socket = "~/.config/herdr/herdr.sock"
-notify = true
-toast_every_review = false
+notify = true                     # toasts (false = none); a review you ask for toasts how it went
+toast_every_review = false        # also toast every automatic review posted
 
 [terminal]
 app = "Terminal"                  # Terminal | iTerm2 | Ghostty | WezTerm | custom (override in your config)

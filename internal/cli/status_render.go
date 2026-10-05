@@ -281,15 +281,26 @@ func statusRenderQueue(w io.Writer, r statusReport) {
 	}
 }
 
-// statusPauseText is a pause's reason with its end and detail.
+// statusPauseText is a pause's reason with its start, length and end, the
+// review requests it holds, and its detail: "lunch since 21:04 (19h ago),
+// for 20h until 17:04 (in 1h) · 6 requests held".
 func statusPauseText(p statusPause, now time.Time) string {
 	s := statusSafe(p.Reason, 0)
+	if p.Since != nil {
+		s += " since " + inspClock(now, *p.Since) + " (" + inspAgo(now, p.Since) + ")"
+		if p.Until != nil && p.Until.After(*p.Since) {
+			s += ", for " + inspDur(p.Until.Sub(*p.Since))
+		}
+	}
 	if p.Until != nil {
 		if p.Until.After(now) {
 			s += " until " + inspClock(now, *p.Until) + " (" + inspAgo(now, p.Until) + ")"
 		} else {
 			s += " (ends on the next tick)"
 		}
+	}
+	if p.Held > 0 {
+		s += " · " + daemonPlural(p.Held, "request", "requests") + " held"
 	}
 	if p.Using != "" {
 		s += ", using " + statusSafe(p.Using, 0)

@@ -62,7 +62,8 @@ func TestStatusDashData(t *testing.T) {
 		!strings.Contains(p.Fix, "magnum resume --tool codex") {
 		t.Errorf("codex pause %+v", p)
 	}
-	if p := pauses["daemon"]; p.Reason != "lunch" || p.Fix != "magnum resume" {
+	if p := pauses["daemon"]; !strings.HasPrefix(p.Reason, "lunch since ") || !strings.HasSuffix(p.Reason, "· 6 requests held") ||
+		p.Fix != "magnum resume" {
 		t.Errorf("daemon pause %+v", p)
 	}
 

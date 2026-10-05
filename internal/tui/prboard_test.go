@@ -902,11 +902,11 @@ func TestPRBoardConfirmationTexts(t *testing.T) {
 		keys []string
 		want string
 	}{
-		// #11920: the head is the reviewed head
+		// #11920: the head is the reviewed head; pinned, which the review undoes
 		{[]string{"j", "j", "j", "R"}, "Fresh review of talkable#11920 in new agent sessions " +
-			"(no new commits since head abc1234 was reviewed 2h ago by zhuravel)?"},
+			"(no new commits since head abc1234 was reviewed 2h ago by zhuravel, pinned: the review unpins it)?"},
 		{[]string{"j", "j", "j", "r"}, "Review talkable#11920 now " +
-			"(no new commits since head abc1234 was reviewed 2h ago by zhuravel)?"},
+			"(no new commits since head abc1234 was reviewed 2h ago by zhuravel, pinned: the review unpins it)?"},
 		// #11950: two commits since the review of 4444444
 		{[]string{"j", "j", "r"}, "Review talkable#11950 now " +
 			"(2 commits since the last review of 4444444 5h ago by zhuravel, head 8888888)?"},

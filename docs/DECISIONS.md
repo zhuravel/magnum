@@ -1306,3 +1306,50 @@ editing history. Code, config comments and prompts reference these by their head
   now runs `daemon-restart --when-idle` and toasts its last line, success or failure, and every other
   action that fails toasts its last stderr line (else its last output line). The build action says the
   new binary runs after a restart.
+- **A review the operator asks for unpins its PR** (2026-10-05, after `magnum open` pinned a PR and a
+  `magnum review` of it answered "queued", then waited behind the pin for hours: the reply, the board's
+  question and the command named only the drain). `magnum review` (and the board's r, the picker) clears
+  the PR's pin and its slot's (`slots.ClearPin`: the pin only), writes `pr.unpinned` and says "unpinned
+  review1 (pinned by magnum open at 12:35) to review it", the origin being the PR's newest `pr.opened` or
+  `pr.pinned` event (`magnum pin|unpin` and `magnum slots pin|unpin` now write `pr.pinned` and
+  `pr.unpinned`). The slot's guard then runs: a persisted hold (dirty_worktree, head_drift,
+  unpushed_commits) or a live one (a person's agent or process in the slot) is named in the reply
+  ("waiting: slot review1 is held: …") and recorded as the PR's gate, so its wait names it; the round's
+  checkout runs the guard again. The board's y/N question and `magnum review` say that the review unpins a
+  pinned PR. Rejected: `Unpin` (it also clears the hold and takes a moved HEAD as the checked-out commit, so
+  the round's checkout could move a person's commits away) and asking first ("pinned since you opened it:
+  unpin and review?"): the request is explicit and the guards protect the person's work.
+- **Requested rounds always toast** (2026-10-05, after six rounds the operator asked for posted in one day
+  without a word because `toast_every_review` is off, while one sat behind a pin for two hours). A forced
+  round (`magnum review`, the board, the picker, a post-merge review) toasts whatever `toast_every_review`
+  says, which stays the switch for automatic rounds (a forced one is not toasted twice): when it posts
+  ("talkable#2: CHANGES_REQUESTED (1 P1, 2 P2)", "Your requested review took 34m, posted as …"); when it
+  fails and will retry (an error, a timeout, an overloaded API, a charged setup failure: why, and when it
+  retries; needs_attention, a paused agent kind, the infrastructure pause and a failed post-merge round keep
+  their own toasts); and once when it cannot start for a reason only the operator can lift and has waited
+  2 minutes for it: a guard keeping its slot (pinned or held), an unhealthy identity, a paused agent kind,
+  or a drain that has lasted 15 minutes. They go through the informational batch with a dedupe key per
+  review, per head and attempt, or per PR and reason, so recovery and restarts do not repeat them; `[herdr]
+  notify = false` silences them. Rejected: urgent toasts (these are news, not alarms, and a burst should be
+  one summary) and a toast for every wait (the throttle, capacity and the slot queue lift by themselves).
+- **A pause says how long and what it holds** (2026-10-05, after a pause without `--for` ran 19 hours while
+  people's review requests waited on it and the tab bar said only "paused"). `magnum pause` records when it
+  began (`daemon.paused_at`; a pause renewed keeps it, one an older build started takes its `daemon.paused`
+  event's time), and every tick counts the review requests it holds (`daemon.paused_held`: waiting PRs
+  nobody forced or muted whose review is requested from the operator on GitHub or whose newest handled
+  request is still pending; a draft marked ready is no person's request). The tab bar shows "paused 19h · 6
+  requests held"; `magnum status` and the dashboard "lunch since 21:04 (19h ago), for 2h until 23:04 (in
+  1h) · 6 requests held" (`since` and `held` in its JSON); each held request toasts once per pause
+  ("talkable#2: alice asked for your review", "magnum is paused (since 21:04); …"). The board's title is
+  left for later; the registry has the data. Rejected: the kv row's own update time as the start (renewing
+  the pause rewrites it).
+- **The note on a review that commits outran promises only what will happen** (2026-10-05, after "re-review
+  follows" was appended while magnum was paused and the next round ran 17 hours later, when forced). The
+  note reads the PR's wait right after the review is recorded (`waitFor`): "re-review follows." when the
+  next dispatch starts it, "re-review follows after the quiet period." when the push quiet period (or its
+  burst form) holds it, and otherwise "N commits arrived during the review and are not reviewed yet.": the
+  daily cap, the small-delta threshold, a pause, a drain or infrastructure pause, quiet hours (now or when
+  the quiet period ends), a mute, or a paused agent kind of the watch's roles. The trivial note is unchanged
+  and the line still ends the review body. Rejected: naming magnum's reason or a clock time on GitHub (the
+  author reads it in another time zone, and the operator's state is not theirs), and promising the
+  small-delta or capped re-review (it starts hours later, if no push comes first).

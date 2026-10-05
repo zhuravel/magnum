@@ -105,6 +105,10 @@ type Slots interface {
 	NextSlotNumber(ctx context.Context, pool config.Pool) (int, error)
 	Pin(ctx context.Context, slot store.Slot) error
 	Unpin(ctx context.Context, slot store.Slot) error
+	// ClearPin and Guard serve a review request of a pinned PR
+	// (review_unpin.go): the pin goes, the guard's holds stay and are named.
+	ClearPin(ctx context.Context, slot store.Slot) error
+	Guard(ctx context.Context, slot store.Slot) error
 	// Reserve, Repair and Adopt serve the open, repair and adopt requests.
 	Reserve(ctx context.Context, pr store.PR, pool config.Pool) (store.Slot, error)
 	Repair(ctx context.Context, slot store.Slot, pool config.Pool) error
@@ -261,6 +265,11 @@ type Engine struct {
 	toastStop    context.CancelFunc
 	toastWait    time.Duration // how long shutdown waits for them (0 = toastDrain)
 	lastTabBar   string
+	// held and pauseToasted are the tick's memory of what it told the
+	// operator (operator.go): requested rounds held by them, and the
+	// review requests the running pause holds that were toasted.
+	held         map[int64]heldWait
+	pauseToasted map[string]bool
 
 	infraMu  sync.Mutex // infrastructure failures (infra.go)
 	depsFail depsFailure

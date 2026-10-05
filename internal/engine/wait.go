@@ -234,8 +234,11 @@ func (e *Engine) noteWaits(ctx context.Context, ts tickState) {
 	}
 	now := e.now()
 	global := e.globalWait(ctx, ts, now)
+	waits := make([]prWait, 0, len(prs))
 	for _, pr := range prs {
-		b, err := json.Marshal(e.waitFor(ctx, pr, global, now))
+		w := e.waitFor(ctx, pr, global, now)
+		waits = append(waits, prWait{pr: pr, wait: w})
+		b, err := json.Marshal(w)
 		if err != nil {
 			continue
 		}
@@ -243,6 +246,7 @@ func (e *Engine) noteWaits(ctx context.Context, ts tickState) {
 			e.setKV(ctx, KVPRWait(pr.ID), string(b))
 		}
 	}
+	e.noteOperatorWaits(ctx, waits, now) // operator.go
 }
 
 // globalWait is what holds every PR this tick (nil = nothing): the daemon
