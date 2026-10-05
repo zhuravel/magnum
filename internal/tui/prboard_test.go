@@ -279,7 +279,7 @@ func TestPRBoardColumnsHideByWidth(t *testing.T) {
 		{100, []string{"TITLE", "STATE", "LAST REVIEW", "FINDINGS", "REVIEWERS"}, []string{"ASSIGNEE", "SINCE REVIEW", "AUTHOR", "REQUESTED", "UPDATED", "CI"}},
 	}
 	for _, c := range cases {
-		m, _, _ := newBoard(t, c.width, 20, PRBoardOptions{Layout: LayoutOneLine})
+		m, _, _ := newBoard(t, c.width, 20, PRBoardOptions{})
 		v := viewOf(m)
 		header := ansi.Strip(lineWith(t, m.View().Content, "TITLE"))
 		for _, s := range c.shown {
@@ -478,7 +478,7 @@ func TestPRBoardVerdictGlyphsAndColors(t *testing.T) {
 // The last review column: ★ when mine, verdict and age, dimmed with ⟳ when
 // the head moved since; "—" when there is none.
 func TestPRBoardLastReviewAndStale(t *testing.T) {
-	m, _, _ := newBoard(t, 200, 20, PRBoardOptions{Layout: LayoutOneLine})
+	m, _, _ := newBoard(t, 200, 20, PRBoardOptions{})
 	raw := m.View().Content
 	mustContain(t, ansi.Strip(lineWith(t, raw, "#11920")), "★ ✔  approved 2h")
 	stale := lineWith(t, raw, "#11902")
@@ -716,7 +716,7 @@ func TestPRBoardRefresh(t *testing.T) {
 }
 
 func TestPRBoardNavigationAndScroll(t *testing.T) {
-	m, _, _ := newBoard(t, 120, 10, PRBoardOptions{Layout: LayoutOneLine}) // 4 rows fit
+	m, _, _ := newBoard(t, 120, 10, PRBoardOptions{}) // 4 rows fit
 	v := viewOf(m)
 	mustContain(t, v, "▼ 3 more", "1/7")
 	mustNotContain(t, v, "▲")

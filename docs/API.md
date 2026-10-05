@@ -10360,9 +10360,8 @@ func RenderPRBoard(rows []PRBoardRow, width int, opts PRBoardOptions) string
     RenderPRBoard renders the board once, for output that is not interactive and
     for tests: the title bar, the state summary, the column headings and every
     row of opts.DefaultView and opts.DefaultOwner (in opts.DefaultSort order,
-    largest first), fitted to width (0 = no limit) in opts.Layout (auto:
-    one line per PR when every column fits, else two). It uses the dark palette
-    and no cursor; ages count from opts.Now.
+    largest first), fitted to width (0 = no limit). It uses the dark palette and
+    no cursor; ages count from opts.Now.
 
 func RunDashboard(ctx context.Context, src DashboardSource, act DashboardActions, opts DashboardOptions) error
     RunDashboard shows the live status dashboard until the user quits or
@@ -10652,12 +10651,6 @@ type PRBoardOptions struct {
 	// can be kept.
 	HideSkipped bool
 	HideToggled func(hide bool)
-	// Layout is the layout the board opens in (L cycles it): LayoutAuto
-	// (the default) puts each PR on one line when every column fits at
-	// its content width with a 40-cell title, else on two lines;
-	// LayoutChanged, when set, hears every L so the choice can be kept.
-	Layout        PRLayout
-	LayoutChanged func(PRLayout)
 	// MouseToggled, when set, hears every m, so the next screen can start
 	// the same way.
 	MouseToggled func(on bool)
@@ -10772,18 +10765,6 @@ type PRBoardSourceFunc func(ctx context.Context) ([]PRBoardRow, error)
 
 func (f PRBoardSourceFunc) Rows(ctx context.Context) ([]PRBoardRow, error)
     Rows calls f.
-
-type PRLayout string
-    PRLayout is how the board lays out a PR: on one line, on two, or auto (one
-    line when every column fits at its content width with a 40-cell title,
-    else two). L cycles them.
-
-const (
-	LayoutAuto     PRLayout = "auto"
-	LayoutOneLine  PRLayout = "1-line"
-	LayoutTwoLines PRLayout = "2-line"
-)
-    The board's layouts, in the order L cycles through them.
 
 type PRRow struct {
 	Ref, Title, Author, State, Next, Age, URL string

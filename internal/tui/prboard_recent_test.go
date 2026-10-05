@@ -230,7 +230,7 @@ func TestPRBoardCardSaysMergedUnreviewed(t *testing.T) {
 // scroll marks count rows, and a click picks the row under it (the
 // heading is no row).
 func TestPRBoardRecentlyClosedHeadingScrollsAndClicks(t *testing.T) {
-	m := recentBoard(t, 200, 10, PRBoardOptions{Layout: LayoutOneLine}) // 4 table lines
+	m := recentBoard(t, 200, 10, PRBoardOptions{}) // 4 table lines
 	for i := range len(m.view) {
 		m.moveTo(i)
 		m.fixScroll()
@@ -281,7 +281,7 @@ func TestPRBoardRecentlyClosedHeadingScrollsAndClicks(t *testing.T) {
 // RenderPRBoard (output that is not interactive, and tests) draws the
 // section too.
 func TestRenderPRBoardRecentlyClosed(t *testing.T) {
-	out := ansi.Strip(RenderPRBoard(recentRows(), 200, PRBoardOptions{Now: func() time.Time { return boardNow }, SelfLogins: boardSelf, RecentClosed: 24 * time.Hour, Layout: LayoutOneLine}))
+	out := ansi.Strip(RenderPRBoard(recentRows(), 200, PRBoardOptions{Now: func() time.Time { return boardNow }, SelfLogins: boardSelf, RecentClosed: 24 * time.Hour}))
 	lines := strings.Split(out, "\n")
 	at := slices.IndexFunc(lines, func(l string) bool { return strings.Contains(l, "merged or closed in the last 24h (3)") })
 	if at < 0 || !strings.Contains(lines[at+1], "#11991") || !strings.Contains(lines[at+2], "merged · unreviewed") {

@@ -101,7 +101,7 @@ func (c *prbCache) layoutFor(k prbRowsKey, build func() prbLayout) prbLayout {
 	return c.layout.get(k, struct{}{}, build)
 }
 
-func (c *prbCache) row(k prbRowsKey, r prbRowKey, draw func() []string) []string {
+func (c *prbCache) row(k prbRowsKey, r prbRowKey, draw func() string) string {
 	if c == nil {
 		return draw()
 	}
@@ -134,13 +134,6 @@ func (c *dashCache) headerFor(k dashHeaderKey, draw func() []string) []string {
 		return draw()
 	}
 	return c.header.get(k, struct{}{}, draw)
-}
-
-func (c *prbCache) hintsFor(k prbHintsKey, draw func() string) string {
-	if c == nil {
-		return draw()
-	}
-	return c.hints.get(k, draw)
 }
 
 func (c *prbCache) naturalFor(k prbRowsKey, build func() prbNatural) prbNatural {

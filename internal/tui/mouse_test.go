@@ -59,11 +59,8 @@ func wheelUp() tea.Msg            { return tea.MouseWheelMsg{X: 10, Y: 10, Butto
 // title bar and the summary line come first).
 const boardHeadingY = 2
 
-// boardRowY is the screen row of the board's row i (its first line).
-func boardRowY(m prBoardModel, i int) int {
-	rh := m.rowHeight()
-	return boardHeadingY + tableChrome(rh) + (i-m.scroll)*rh
-}
+// boardRowY is the screen row of the board's row i.
+func boardRowY(m prBoardModel, i int) int { return boardHeadingY + prbTableChrome + i - m.scroll }
 
 // boardCol is where column c starts on the board's heading line and how
 // wide it is.
@@ -104,7 +101,7 @@ func (f *fakeActions) list() []string {
 // it; the heading shows the column and the direction. Columns without a
 // sort ignore the click, and nothing acts.
 func TestBoardHeadingClickSorts(t *testing.T) {
-	m, _, act := newBoard(t, 180, 30, PRBoardOptions{Layout: LayoutOneLine})
+	m, _, act := newBoard(t, 180, 30, PRBoardOptions{})
 	state, _ := boardCol(t, m, colState)
 	m, _ = send(t, m, leftClick(state+1, boardHeadingY))
 	if m.sort != SortState || !m.desc {
@@ -161,7 +158,7 @@ func TestBoardWheelScrollsWithoutActing(t *testing.T) {
 	for range 40 {
 		m, _ = send(t, m, wheelDown())
 	}
-	if want := len(m.view) - m.tableRows(); m.scroll != want || m.cursor < m.scroll {
+	if want := len(m.view) - m.tableHeight(); m.scroll != want || m.cursor < m.scroll {
 		t.Fatalf("at the bottom: scroll %d (want %d) cursor %d", m.scroll, want, m.cursor)
 	}
 	if m.mode != prbTable || m.confirm != nil || m.busy != "" || len(act.list()) != 0 {
@@ -187,7 +184,7 @@ func TestBoardWheelScrollsWithoutActing(t *testing.T) {
 // open its card, as enter does. Slower clicks, clicks on two rows and
 // clicks off the rows do not.
 func TestBoardClickSelectsAndDoubleClickOpens(t *testing.T) {
-	m, _, act := newBoard(t, 160, 30, PRBoardOptions{Layout: LayoutOneLine})
+	m, _, act := newBoard(t, 160, 30, PRBoardOptions{})
 	now := boardNow
 	m.opts.Now = func() time.Time { return now }
 	m, _ = send(t, m, leftClick(30, boardRowY(m, 2)))
@@ -222,7 +219,7 @@ func TestBoardClickSelectsAndDoubleClickOpens(t *testing.T) {
 	}
 
 	// While filtering, a double click keeps the filter and opens the card.
-	f, _, _ := newBoard(t, 160, 30, PRBoardOptions{Layout: LayoutOneLine})
+	f, _, _ := newBoard(t, 160, 30, PRBoardOptions{})
 	f, _ = send(t, f, keyMsg("/"))
 	f, _ = send(t, f, typed("talkable")...)
 	f, _ = send(t, f, leftClick(30, boardRowY(f, 1)), leftClick(30, boardRowY(f, 1)))
@@ -336,7 +333,7 @@ func menuState(items []menuItem) map[string]bool {
 // item through its key (y/N included); esc, a click outside or a second
 // right click close it.
 func TestBoardRightClickMenu(t *testing.T) {
-	m, _, act := newBoard(t, 160, 30, PRBoardOptions{Layout: LayoutOneLine})
+	m, _, act := newBoard(t, 160, 30, PRBoardOptions{})
 	i := boardRow(t, m, "talkable/talkable#11920") // reviewed, pinned, in a slot
 	y := boardRowY(m, i)
 	m, _ = send(t, m, rightClick(40, y))
@@ -442,7 +439,7 @@ func TestBoardRightClickMenu(t *testing.T) {
 	}
 
 	// A right click near the corner keeps the menu on screen.
-	c, _, _ := newBoard(t, 100, 20, PRBoardOptions{Icons: IconsASCII, Layout: LayoutOneLine})
+	c, _, _ := newBoard(t, 100, 20, PRBoardOptions{Icons: IconsASCII})
 	c, _ = send(t, c, rightClick(99, boardRowY(c, len(c.view)-1)))
 	v = viewOf(c)
 	if !c.menu.open || maxLineWidth(v) > 100 || lineCount(v) != 20 {
@@ -465,7 +462,7 @@ func TestBoardRightClickMenu(t *testing.T) {
 // the footer says so and mouse messages change nothing.
 func TestMouseToggle(t *testing.T) {
 	var heard []bool
-	m, _, _ := newBoard(t, 160, 30, PRBoardOptions{MouseToggled: func(on bool) { heard = append(heard, on) }, Layout: LayoutOneLine})
+	m, _, _ := newBoard(t, 160, 30, PRBoardOptions{MouseToggled: func(on bool) { heard = append(heard, on) }})
 	if m.View().MouseMode != tea.MouseModeCellMotion {
 		t.Fatal("the board must ask for mouse events")
 	}
@@ -511,7 +508,7 @@ func TestMouseToggle(t *testing.T) {
 // show nothing (a press on a gap, a release without a drag, mouse events
 // while it is off) keep the frame.
 func TestBoardFrameCacheFollowsTheMouse(t *testing.T) {
-	m := stormBoardIn(t, 60, LayoutOneLine)
+	m := stormBoard(t, 60)
 	x, w := boardCol(t, m, colFindings)
 	state, _ := boardCol(t, m, colState)
 	// Sorting by state takes the arrow off UPDATED, which then fits again

@@ -533,20 +533,11 @@ per-reviewer table (and a line with the latest request to each reviewer: who ask
 round's stage timings (fetch/checkout, each role, verify, total); `/`
 filters; `v` cycles the views; `s`/`S` sort (updated, last review, reviewer activity, requested, changes,
 state; the requested sort puts the newest request first, the one the column shows, and PRs nobody asked
-last); `L` cycles the layout (below); `r`, `R`, `i` start review variants (a post-merge review on a
+last); `r`, `R`, `i` start review variants (a post-merge review on a
 merged PR, below); `o` opens the pane; `p`/`u` pin; `x` releases; `M`/`U` mute (on a merged PR, below); `K` kills the running review; `I` ignores the PR (an ignored
 row is greyed with its title struck through, and `U` unmutes it, which stops ignoring it); `A` approves
 and `C` requests changes as the PR's posting identity (see `magnum approve`); `b` opens the browser;
 `t` opens the PR's issue in its tracker (below); `tab` switches to the status dashboard. Every action that stops or starts work asks y/N first.
-
-A PR takes one line while every column fits at its content width with a title of 40 cells; on a
-narrower screen it takes two: what the PR is (repository and number, title, author, assignee, updated,
-requested) and, indented and dimmed, where it stands (state, last review, findings, CI, since review,
-reviewers), each line with its own headings. A line that still does not fit drops its own columns: since
-review, then last review on the second line; assignee, then author, then requested on the first. `L`
-cycles auto (the default), one line (columns give way on a narrow screen, as they always did) and two
-lines; the title bar names the layout when it is not auto, and the choice is kept across runs. A click on
-either line of a PR is a click on the PR, and each heading line sorts and resizes its own columns.
 
 CI shows the head's checks: the repository's required checks when it has some (read from GitHub's
 rulesets, or `[[repo]] required_checks`; `✗ Completion`, `– Completion not run` when it never ran on the

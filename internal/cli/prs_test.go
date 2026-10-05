@@ -653,40 +653,6 @@ func TestScreensKeepColumnWidths(t *testing.T) {
 	}
 }
 
-// The board's layout (L) is kept in the registry: the next board, in this
-// run after tab or in the next run, opens in it.
-func TestBoardKeepsItsLayout(t *testing.T) {
-	f := newInspFixture(t)
-	prsSeed(t, f)
-	onScreen(t)
-	var opened []tui.PRLayout
-	oldDash, oldBoard := tuiDashboard, tuiPRBoard
-	t.Cleanup(func() { tuiDashboard, tuiPRBoard = oldDash, oldBoard })
-	tuiDashboard = func(context.Context, tui.DashboardSource, tui.DashboardActions, tui.DashboardOptions) error {
-		return tui.ErrSwitchToBoard
-	}
-	tuiPRBoard = func(_ context.Context, _ tui.PRBoardSource, _ tui.DashboardActions, o tui.PRBoardOptions) error {
-		opened = append(opened, o.Layout)
-		if len(opened) == 1 {
-			o.LayoutChanged(tui.LayoutTwoLines) // L on the board, then tab
-			return tui.ErrSwitchToDashboard
-		}
-		return nil
-	}
-	if code := f.run("prs"); code != 0 {
-		t.Fatalf("code %d err %s", code, f.Err.String())
-	}
-	if code := f.run("prs"); code != 0 {
-		t.Fatalf("code %d err %s", code, f.Err.String())
-	}
-	if want := []tui.PRLayout{tui.LayoutAuto, tui.LayoutTwoLines, tui.LayoutTwoLines}; !slices.Equal(opened, want) {
-		t.Fatalf("board layouts %v, want %v", opened, want)
-	}
-	if v, ok, _ := f.store().GetKV(context.Background(), kvBoardLayout); !ok || v != "2-line" {
-		t.Fatalf("kept %q %v", v, ok)
-	}
-}
-
 // [terminal] mouse = false starts both screens with the mouse off.
 func TestScreensFollowTheMouseSetting(t *testing.T) {
 	f := newInspFixture(t)

@@ -1353,3 +1353,8 @@ editing history. Code, config comments and prompts reference these by their head
   and the line still ends the review body. Rejected: naming magnum's reason or a clock time on GitHub (the
   author reads it in another time zone, and the operator's state is not theirs), and promising the
   small-delta or capped re-review (it starts hours later, if no push comes first).
+- **Two-line board rows removed** (2026-10-05, the same day they shipped). The operator tried the
+  two-line layout and the `L` switcher on the live board and did not want them: the board is one line per
+  PR again, and narrow screens drop columns in `prbDropOrder` as before. The registry key `board.layout`
+  the switcher saved is ignored. The entry above ("Board: two-line rows") stays as the record of what was
+  tried.
