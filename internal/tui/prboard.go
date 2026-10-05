@@ -279,6 +279,12 @@ type PRBoardOptions struct {
 	// can be kept.
 	HideSkipped bool
 	HideToggled func(hide bool)
+	// Layout is the layout the board opens in (L cycles it): LayoutAuto
+	// (the default) puts each PR on one line when every column fits at
+	// its content width with a 40-cell title, else on two lines;
+	// LayoutChanged, when set, hears every L so the choice can be kept.
+	Layout        PRLayout
+	LayoutChanged func(PRLayout)
 	// MouseToggled, when set, hears every m, so the next screen can start
 	// the same way.
 	MouseToggled func(on bool)
@@ -776,10 +782,11 @@ type prBoardModel struct {
 
 	sort      PRSort
 	desc      bool
-	boardView PRView // the preset subset of the rows (v cycles)
-	owner     string // the owner whose rows show (O cycles); "" shows every owner
-	hide      bool   // ignored and skipped rows are hidden (h toggles)
-	hidden    int    // how many rows hide hides in the owner scope
+	boardView PRView   // the preset subset of the rows (v cycles)
+	owner     string   // the owner whose rows show (O cycles); "" shows every owner
+	hide      bool     // ignored and skipped rows are hidden (h toggles)
+	layout    PRLayout // one line per PR, two, or auto (L cycles)
+	hidden    int      // how many rows hide hides in the owner scope
 	filter    textinput.Model
 	filtering bool // the filter input has the keyboard
 
@@ -801,14 +808,23 @@ type prBoardModel struct {
 }
 
 // prbCache is the board's rendering cache (see render_cache.go): the
-// frame, the columns' content widths over every row, the column layout
-// and each drawn row.
+// frame, the columns' content widths over every row, the column layout,
+// each drawn row (its one or two lines) and the table's key hints.
 type prbCache struct {
 	frame   frameCache[prbFrameKey]
 	natural partCache[prbRowsKey, struct{}, prbNatural]
 	layout  partCache[prbRowsKey, struct{}, prbLayout]
 	summary partCache[prbRowsKey, struct{}, string]
-	rows    partCache[prbRowsKey, prbRowKey, string]
+	rows    partCache[prbRowsKey, prbRowKey, []string]
+	hints   frameCache[prbHintsKey]
+}
+
+// prbHintsKey is what the table's key hints depend on: the room they have,
+// the filter they offer to clear and the palette.
+type prbHintsKey struct {
+	room   int
+	filter string
+	dark   bool
 }
 
 // prbRowsKey is what the layout and every drawn row depend on besides
@@ -823,6 +839,7 @@ type prbRowsKey struct {
 	desc, dark bool
 	clock      int64
 	widths     prbWidths // dragged widths; zero in the natural widths' key
+	layout     PRLayout  // L's choice; "" in the natural widths' key
 }
 
 // prbRowKey names one drawn row of a view.
@@ -834,6 +851,7 @@ type prbRowKey struct {
 // prbFrameKey is everything a frame of the board shows.
 type prbFrameKey struct {
 	rows                     prbRowsKey
+	rowLines                 int // the lines each row takes at this width: the layout auto chose
 	width, height            int
 	cursor, scroll           int
 	mode                     prbMode
@@ -853,12 +871,13 @@ type prbFrameKey struct {
 }
 
 func (m prBoardModel) rowsKey(w int) prbRowsKey {
-	return prbRowsKey{gen: m.gen, width: w, anim: m.animFrame(), sort: m.sort, owner: m.owner, hide: m.hide, desc: m.desc, dark: m.st.dark, clock: clockKey(m.opts.Now), widths: m.widths}
+	return prbRowsKey{gen: m.gen, width: w, anim: m.animFrame(), sort: m.sort, owner: m.owner, hide: m.hide, desc: m.desc, dark: m.st.dark, clock: clockKey(m.opts.Now), widths: m.widths, layout: m.layout}
 }
 
 func (m prBoardModel) frameKey() prbFrameKey {
+	rk := m.rowsKey(m.viewWidth())
 	k := prbFrameKey{
-		rows: m.rowsKey(m.viewWidth()), width: m.width, height: m.height,
+		rows: rk, rowLines: m.layoutFor(rk, nil).height(), width: m.width, height: m.height,
 		cursor: m.cursor, scroll: m.scroll, mode: m.mode, detailScroll: m.detailScroll, helpScroll: m.helpScroll,
 		filter: m.filter.Value(), filtering: m.filtering,
 		haveData: m.haveData, loading: m.loading, loadErr: errText(m.loadErr), refreshedAt: m.refreshedAt.UnixNano(),
@@ -895,6 +914,9 @@ func newPRBoardModel(ctx context.Context, src PRBoardSource, act DashboardAction
 	if !opts.DefaultView.valid() {
 		opts.DefaultView = ViewAll
 	}
+	if !opts.Layout.valid() {
+		opts.Layout = LayoutAuto
+	}
 	g := newGlyphs(opts.Icons)
 	sp := spinner.New(spinner.WithSpinner(g.spinner), spinner.WithStyle(defaultStyles.Accent))
 	in := textinput.New()
@@ -904,7 +926,7 @@ func newPRBoardModel(ctx context.Context, src PRBoardSource, act DashboardAction
 	m := prBoardModel{
 		actionBar: newActionBar(ctx, act), src: src, opts: opts, g: g, spin: sp, filter: in, cache: &prbCache{},
 		self: selfSet(opts.SelfLogins), sort: opts.DefaultSort, desc: true, boardView: opts.DefaultView,
-		owner: strings.TrimSpace(opts.DefaultOwner), hide: opts.HideSkipped, section: -1,
+		owner: strings.TrimSpace(opts.DefaultOwner), hide: opts.HideSkipped, layout: opts.Layout, section: -1,
 		loading: true, spinning: true, // Init starts the first load and the spinner
 		saver: newWidthSaver(opts.Widths, widthsBoard),
 	}
@@ -1291,9 +1313,9 @@ func (m prBoardModel) tableKey(k string) (prBoardModel, tea.Cmd) {
 	case "G", "end":
 		m.moveTo(len(m.view) - 1)
 	case "pgdown", "ctrl+d", "space":
-		m.moveTo(m.cursor + max(m.tableHeight()-1, 1))
+		m.moveTo(m.cursor + m.pageRows())
 	case "pgup", "ctrl+u":
-		m.moveTo(m.cursor - max(m.tableHeight()-1, 1))
+		m.moveTo(m.cursor - m.pageRows())
 	case "enter":
 		if _, ok := m.selected(); ok {
 			m.mode, m.detailScroll = prbDetail, 0
@@ -1314,6 +1336,13 @@ func (m prBoardModel) tableKey(k string) (prBoardModel, tea.Cmd) {
 		}
 	case "O":
 		return m.nextOwner()
+	case "L":
+		m.layout = m.layout.next()
+		if m.opts.LayoutChanged != nil {
+			m.opts.LayoutChanged(m.layout)
+		}
+		cmd := m.note(m.layout.describe())
+		return m, cmd
 	case "h":
 		m.hide = !m.hide
 		if m.opts.HideToggled != nil {
@@ -1559,14 +1588,14 @@ func (m prBoardModel) openIssue() (prBoardModel, tea.Cmd) {
 	})
 }
 
-func (m prBoardModel) viewWidth() int {
+func (m *prBoardModel) viewWidth() int {
 	if m.width > 0 {
 		return m.width
 	}
 	return 120
 }
 
-func (m prBoardModel) viewHeight() int {
+func (m *prBoardModel) viewHeight() int {
 	if m.height > 0 {
 		return m.height
 	}
@@ -1574,38 +1603,91 @@ func (m prBoardModel) viewHeight() int {
 }
 
 // The screen is the title bar and the summary line, the body, then the
-// status rule and the key hints. The table spends two body lines on its
-// heading and its rule.
-const (
-	prbChrome      = 4
-	prbTableChrome = 2
-)
+// status rule and the key hints.
+const prbChrome = 4
 
 // bodyHeight is the room between the summary line and the footer.
-func (m prBoardModel) bodyHeight() int { return max(m.viewHeight()-prbChrome, 3) }
+func (m *prBoardModel) bodyHeight() int { return max(m.viewHeight()-prbChrome, 3) }
 
-// tableHeight is how many table lines fit on screen: rows, and the
-// recently closed section's heading when it shows.
-func (m prBoardModel) tableHeight() int { return max(m.bodyHeight()-prbTableChrome, 1) }
+// layoutAt is the table's column layout at width w, dragged widths
+// applied, from the cache; p measures the rows on a miss (nil: the
+// model's painter).
+func (m *prBoardModel) layoutAt(w int, p *prbPainter) prbLayout { return m.layoutFor(m.rowsKey(w), p) }
+
+// layoutFor is layoutAt for the rows key rk (of width rk.width).
+func (m *prBoardModel) layoutFor(rk prbRowsKey, p *prbPainter) prbLayout {
+	w := rk.width
+	return m.cache.layoutFor(rk, func() prbLayout {
+		if p == nil {
+			pp := m.painter()
+			p = &pp
+		}
+		nk := rk
+		nk.widths, nk.layout = prbWidths{}, ""
+		n := m.cache.naturalFor(nk, func() prbNatural { return p.natural(m.all) })
+		return p.fit(n, w, m.widths, m.layout)
+	})
+}
+
+// rowHeight is how many lines each row takes on the table at the screen's
+// width: 2 when the layout puts each PR on two lines, else 1.
+func (m *prBoardModel) rowHeight() int { return m.layoutAt(m.viewWidth(), nil).height() }
+
+// tableChrome is the table's lines above its rows: the column headings
+// (one line per line of a row) and the rule.
+func tableChrome(rh int) int { return rh + 1 }
+
+// tableLinesFor is how many table lines fit on screen below the chrome
+// for rows of rh lines: the rows, and the recently closed section's
+// heading when it shows.
+func (m *prBoardModel) tableLinesFor(rh int) int { return max(m.bodyHeight()-tableChrome(rh), 1) }
+
+// tableRows is how many rows a screenful holds (at least one).
+func (m *prBoardModel) tableRows() int {
+	rh := m.rowHeight()
+	return max(m.tableLinesFor(rh)/rh, 1)
+}
+
+// pageRows is how far page up and page down move the cursor: a
+// screenful of rows less one.
+func (m *prBoardModel) pageRows() int { return max(m.tableRows()-1, 1) }
 
 // visible is the rows the table draws from row start, [start, end), and
 // whether the recently closed section's heading is among them: it takes a
 // line before row m.section, or the last line with the section's rows
-// below (a table of one line keeps it for the row).
-func (m prBoardModel) visible(start int) (end int, heading bool) {
-	avail := m.tableHeight()
-	if s := m.section; s >= start && s < start+avail && s < len(m.view) && avail > 1 {
-		return min(start+avail-1, len(m.view)), true
+// below (a table too short for the heading and a row keeps it for the
+// row). A row is never cut: one that does not fit whole is not drawn.
+func (m *prBoardModel) visible(start int) (end int, heading bool) {
+	rh := m.rowHeight()
+	return m.visibleIn(start, m.tableLinesFor(rh), rh)
+}
+
+// visibleIn is visible for avail table lines and rows of rh lines.
+func (m *prBoardModel) visibleIn(start, avail, rh int) (end int, heading bool) {
+	rows := max(avail/rh, 1)
+	if s := m.section; s >= start && s < len(m.view) {
+		switch {
+		case s < start+rows && avail > rh:
+			return min(start+(avail-1)/rh, len(m.view)), true
+		case s == start+rows && rows*rh < avail: // the heading fits below the last row
+			return min(start+rows, len(m.view)), true
+		}
 	}
-	return min(start+avail, len(m.view)), false
+	return min(start+rows, len(m.view)), false
 }
 
 // maxScroll is the first row of the last screenful: the smallest start
 // from which the table draws every row to the end.
-func (m prBoardModel) maxScroll() int {
-	s := max(len(m.view)-m.tableHeight(), 0)
+func (m *prBoardModel) maxScroll() int {
+	rh := m.rowHeight()
+	return m.maxScrollIn(m.tableLinesFor(rh), rh)
+}
+
+// maxScrollIn is maxScroll for avail table lines and rows of rh lines.
+func (m *prBoardModel) maxScrollIn(avail, rh int) int {
+	s := max(len(m.view)-max(avail/rh, 1), 0)
 	for s < len(m.view)-1 {
-		if end, _ := m.visible(s); end >= len(m.view) {
+		if end, _ := m.visibleIn(s, avail, rh); end >= len(m.view) {
 			break
 		}
 		s++
@@ -1629,22 +1711,25 @@ func (m *prBoardModel) fixScroll() {
 		n := len(m.painter().cardContent(r, cardInner(m.viewWidth())))
 		m.detailScroll = min(max(m.detailScroll, 0), max(n-(m.bodyHeight()-2), 0))
 	}
-	avail := m.tableHeight()
+	rh := m.rowHeight()
+	avail := m.tableLinesFor(rh)
+	rows := max(avail/rh, 1)
+	top := m.maxScrollIn(avail, rh)
 	switch {
-	case m.maxScroll() == 0:
+	case top == 0:
 		m.scroll = 0
 	case m.cursor < m.scroll:
 		m.scroll = m.cursor
-	case m.cursor >= m.scroll+avail:
-		m.scroll = m.cursor - avail + 1
+	case m.cursor >= m.scroll+rows:
+		m.scroll = m.cursor - rows + 1
 	}
 	for m.scroll < m.cursor { // the heading may push the cursor row off
-		if end, _ := m.visible(m.scroll); m.cursor < end {
+		if end, _ := m.visibleIn(m.scroll, avail, rh); m.cursor < end {
 			break
 		}
 		m.scroll++
 	}
-	m.scroll = min(max(m.scroll, 0), m.maxScroll())
+	m.scroll = min(max(m.scroll, 0), top)
 }
 
 // View draws the board, or returns the last frame when nothing it shows
@@ -1670,7 +1755,7 @@ func (m prBoardModel) render() string {
 		right = m.spin.View() + " " + right
 	}
 	out := []string{
-		p.titleLine(w, m.opts.Title, m.opts.Repo, m.owner, m.boardView, m.inView, m.filter.Value(), len(m.view), m.hidden, right),
+		p.titleLine(w, m.opts.Title, m.opts.Repo, m.owner, m.boardView, m.inView, m.filter.Value(), len(m.view), m.hidden, right, m.layout),
 		m.cache.summaryFor(m.rowsKey(w), func() string { return p.summaryLine(w) }),
 	}
 
@@ -1713,9 +1798,9 @@ func (m prBoardModel) tableLines(p prbPainter, w int) (lines []string, below int
 		return []string{"", "  " + m.spin.View() + " " + m.st.Dim.Render("loading pull requests…")}, 0
 	}
 	start := min(m.scroll, max(len(m.view)-1, 0))
-	end, heading := m.visible(start)
+	end, heading := m.visibleIn(start, m.tableLinesFor(lay.height()), lay.height())
 	below = len(m.view) - end
-	lines = append(lines, p.headerLine(lay, w), p.rule(w, start, true))
+	lines = append(append(lines, p.headerLines(lay, w)...), p.rule(w, start, true))
 	switch {
 	case len(m.view) == 0 && m.filter.Value() != "":
 		lines = append(lines, "", "  "+m.st.Dim.Render(truncate(fmt.Sprintf("no PR matches %q · esc clears the filter", m.filter.Value()), w-2)))
@@ -1733,7 +1818,7 @@ func (m prBoardModel) tableLines(p prbPainter, w int) (lines []string, below int
 			lines = append(lines, p.recentHeading(w, m.opts.RecentClosed, len(m.view)-m.section))
 		}
 		sel := i == m.cursor
-		lines = append(lines, m.cache.row(rk, prbRowKey{i, sel}, func() string { return p.rowLine(m.view[i], lay, w, sel) }))
+		lines = append(lines, m.cache.row(rk, prbRowKey{i, sel}, func() []string { return p.rowLines(m.view[i], lay, w, sel) })...)
 	}
 	if heading && m.section == end { // the last line: the section's rows are below
 		lines = append(lines, p.recentHeading(w, m.opts.RecentClosed, len(m.view)-m.section))
@@ -1829,23 +1914,28 @@ func (m prBoardModel) hintLine(w int) string {
 			pos = strings.TrimSpace(off + "  " + pos)
 		}
 		room := max(w-ansi.StringWidth(pos)-2, 10)
-		sets := [][]hint{
-			{{"enter", "details"}, {"r", "review"}, {"R", "fresh"}, {"i", "simplify"}, {"o", "open"}, {"b", "browser"}, {"t", "tracker"},
-				{"p/u", "pin"}, {"x", "release"}, {"/", "filter"}, {"v", "view"}, {"O", "owner"}, {"s/S", "sort"}, {"tab", "overview"}, {"?", "help"}, {"q", "quit"}},
-			{{"enter", "details"}, {"r", "review"}, {"R", "fresh"}, {"i", "simplify"}, {"o", "open"}, {"b", "browser"},
-				{"p/u", "pin"}, {"x", "release"}, {"/", "filter"}, {"v", "view"}, {"s/S", "sort"}, {"tab", "overview"}, {"?", "help"}, {"q", "quit"}},
-			{{"enter", "details"}, {"r", "review"}, {"o", "open"}, {"b", "browser"}, {"/", "filter"}, {"v", "view"}, {"s", "sort"},
-				{"tab", "overview"}, {"?", "help"}, {"q", "quit"}},
-			{{"enter", "details"}, {"/", "filter"}, {"v", "view"}, {"tab", "overview"}, {"?", "help"}, {"q", "quit"}},
-			{{"enter", "details"}, {"/", "filter"}, {"?", "help"}, {"q", "quit"}},
-		}
-		if f := m.filter.Value(); f != "" {
-			for i := range sets {
-				sets[i] = append([]hint{{"esc", "clear " + m.st.Accent.Render(f)}}, sets[i]...)
-			}
-		}
-		left = m.st.fitHints(room, sets...)
+		left = m.cache.hintsFor(prbHintsKey{room: room, filter: m.filter.Value(), dark: m.st.dark}, func() string { return m.tableHints(room) })
 		return spread(left, pos, w)
 	}
 	return spread(left, off, w)
+}
+
+// tableHints are the table's key hints, the most that fit room.
+func (m prBoardModel) tableHints(room int) string {
+	sets := [][]hint{
+		{{"enter", "details"}, {"r", "review"}, {"R", "fresh"}, {"i", "simplify"}, {"o", "open"}, {"b", "browser"}, {"t", "tracker"},
+			{"p/u", "pin"}, {"x", "release"}, {"/", "filter"}, {"v", "view"}, {"O", "owner"}, {"s/S", "sort"}, {"L", "layout"}, {"tab", "overview"}, {"?", "help"}, {"q", "quit"}},
+		{{"enter", "details"}, {"r", "review"}, {"R", "fresh"}, {"i", "simplify"}, {"o", "open"}, {"b", "browser"},
+			{"p/u", "pin"}, {"x", "release"}, {"/", "filter"}, {"v", "view"}, {"s/S", "sort"}, {"L", "layout"}, {"tab", "overview"}, {"?", "help"}, {"q", "quit"}},
+		{{"enter", "details"}, {"r", "review"}, {"o", "open"}, {"b", "browser"}, {"/", "filter"}, {"v", "view"}, {"s", "sort"},
+			{"L", "layout"}, {"tab", "overview"}, {"?", "help"}, {"q", "quit"}},
+		{{"enter", "details"}, {"/", "filter"}, {"v", "view"}, {"tab", "overview"}, {"?", "help"}, {"q", "quit"}},
+		{{"enter", "details"}, {"/", "filter"}, {"?", "help"}, {"q", "quit"}},
+	}
+	if f := m.filter.Value(); f != "" {
+		for i := range sets {
+			sets[i] = append([]hint{{"esc", "clear " + m.st.Accent.Render(f)}}, sets[i]...)
+		}
+	}
+	return m.st.fitHints(room, sets...)
 }

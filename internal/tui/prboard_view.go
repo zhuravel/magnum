@@ -16,8 +16,9 @@ import (
 // RenderPRBoard renders the board once, for output that is not
 // interactive and for tests: the title bar, the state summary, the column
 // headings and every row of opts.DefaultView and opts.DefaultOwner (in
-// opts.DefaultSort order, largest first), fitted to width (0 = no limit). It uses the dark palette and no cursor;
-// ages count from opts.Now.
+// opts.DefaultSort order, largest first), fitted to width (0 = no limit)
+// in opts.Layout (auto: one line per PR when every column fits, else two).
+// It uses the dark palette and no cursor; ages count from opts.Now.
 func RenderPRBoard(rows []PRBoardRow, width int, opts PRBoardOptions) string {
 	if opts.Now == nil {
 		opts.Now = time.Now
@@ -44,18 +45,23 @@ func RenderPRBoard(rows []PRBoardRow, width int, opts PRBoardOptions) string {
 	p := newPRBPainter(st, newPRBPalette(st), newGlyphs(opts.Icons), opts.Now(), selfSet(opts.SelfLogins), scoped, by, true)
 	p.judge = opts.Judge
 	sorted := SortPRBoard(FilterPRBoard(scoped, view, opts.SelfLogins), by, true)
-	lay := p.layout(scoped, width)
+	mode := opts.Layout
+	if !mode.valid() {
+		mode = LayoutAuto
+	}
+	lay := p.layout(scoped, width, mode)
 	w := width
 	if w <= 0 {
 		w = lay.total()
 	}
-	lines := []string{p.titleLine(w, opts.Title, opts.Repo, owner, view, len(sorted), "", len(sorted), 0, ""), p.summaryLine(w), p.headerLine(lay, w), p.rule(w, 0, false)}
+	lines := []string{p.titleLine(w, opts.Title, opts.Repo, owner, view, len(sorted), "", len(sorted), 0, "", mode), p.summaryLine(w)}
+	lines = append(append(lines, p.headerLines(lay, w)...), p.rule(w, 0, false))
 	section := slices.IndexFunc(sorted, func(r PRBoardRow) bool { return r.Recent })
 	for i, r := range sorted {
 		if i == section {
 			lines = append(lines, p.recentHeading(w, opts.RecentClosed, len(sorted)-section))
 		}
-		lines = append(lines, p.rowLine(r, lay, w, false))
+		lines = append(lines, p.rowLines(r, lay, w, false)...)
 	}
 	if len(sorted) == 0 {
 		lines = append(lines, "  "+st.Dim.Render("no open pull requests"))
@@ -381,6 +387,57 @@ var (
 )
 
 const prbMarkW = 2 // the cursor mark before each row
+
+// PRLayout is how the board lays out a PR: on one line, on two, or auto
+// (one line when every column fits at its content width with a 40-cell
+// title, else two). L cycles them.
+type PRLayout string
+
+// The board's layouts, in the order L cycles through them.
+const (
+	LayoutAuto     PRLayout = "auto"
+	LayoutOneLine  PRLayout = "1-line"
+	LayoutTwoLines PRLayout = "2-line"
+)
+
+var prLayoutOrder = []PRLayout{LayoutAuto, LayoutOneLine, LayoutTwoLines}
+
+func (l PRLayout) valid() bool { return slices.Contains(prLayoutOrder, l) }
+
+func (l PRLayout) next() PRLayout {
+	i := slices.Index(prLayoutOrder, l)
+	return prLayoutOrder[(i+1)%len(prLayoutOrder)]
+}
+
+// describe is the footer's news after L.
+func (l PRLayout) describe() string {
+	switch l {
+	case LayoutOneLine:
+		return "layout: one line per PR (L: two lines)"
+	case LayoutTwoLines:
+		return "layout: two lines per PR (L: auto)"
+	}
+	return "layout: auto, one line per PR when every column fits (L: one line)"
+}
+
+// A two-line row says what the PR is on its first line and where it
+// stands on its second, indented and dimmed. Each line drops its own
+// columns, in its own order, when it does not fit.
+var (
+	prbLine1Cols = []prbCol{colRef, colNum, colTitle, colAuthor, colAssignee, colUpdated, colRequested}
+	prbLine2Cols = []prbCol{colState, colLastReview, colFindings, colCI, colSince, colReviewers}
+	prbLine1Drop = []prbCol{colAssignee, colAuthor, colRequested}
+	prbLine2Drop = []prbCol{colSince, colLastReview}
+	prbAllCols   = []prbCol{colRef, colNum, colTitle, colAuthor, colAssignee, colUpdated, colRequested, colState, colLastReview, colFindings, colCI, colSince, colReviewers}
+)
+
+const (
+	// prbOneLineTitle is the narrowest title auto keeps a PR on one line
+	// for: a narrower one would cut most titles.
+	prbOneLineTitle = 40
+	// prbLine2Indent is where a two-line row's second line starts.
+	prbLine2Indent = 4
+)
 
 func prbRightAligned(c prbCol) bool { return c == colUpdated || c == colNum }
 
@@ -1119,21 +1176,60 @@ func (p prbPainter) fitChips(chips []cell, w int) cell {
 	return out
 }
 
-// prbLayout is which columns show and how wide they are, and how wide a
-// drag may make each (the most it can take before a column would give way).
-type prbLayout struct {
+// prbLine is one line of the table's rows: which columns show and how
+// wide they are, how wide a drag may make each (the most it can take
+// before a column of the line would give way) and where the first column
+// starts.
+type prbLine struct {
 	cols   []prbCol
 	widths []int
 	maxW   []int
-	since  [3]int
+	indent int
 }
 
-func (l prbLayout) total() int {
-	t := prbMarkW + len(colGap)*max(len(l.cols)-1, 0)
+func (l prbLine) total() int {
+	t := l.indent + len(colGap)*max(len(l.cols)-1, 0)
 	for _, w := range l.widths {
 		t += w
 	}
 	return t
+}
+
+// colAt is the column of l at x on its heading line (see colAtWidths).
+func (l prbLine) colAt(x int) (i int, gap bool) { return colAtWidths(l.widths, l.indent, x) }
+
+// prbLayout is how the table lays out a row: every column on one line
+// (the embedded prbLine), or, when two is set, what the PR is on that
+// line and where it stands on line2.
+type prbLayout struct {
+	prbLine
+	line2 prbLine
+	two   bool
+	since [3]int
+}
+
+// height is how many lines each row, and the column headings, take.
+func (l prbLayout) height() int {
+	if l.two {
+		return 2
+	}
+	return 1
+}
+
+// line is line i of a row (0 is the first).
+func (l prbLayout) line(i int) prbLine {
+	if i == 1 && l.two {
+		return l.line2
+	}
+	return l.prbLine
+}
+
+// total is the widest line's width.
+func (l prbLayout) total() int {
+	if l.two {
+		return max(l.prbLine.total(), l.line2.total())
+	}
+	return l.prbLine.total()
 }
 
 // prbWidths are the column widths the user dragged; 0 is automatic.
@@ -1196,25 +1292,62 @@ func (p prbPainter) natural(rows []PRBoardRow) prbNatural {
 	return n
 }
 
-// layout sizes the columns to rows' content (see fit).
-func (p prbPainter) layout(rows []PRBoardRow, width int) prbLayout {
-	return p.fit(p.natural(rows), width, prbWidths{})
+// layout sizes the columns to rows' content in mode (see fit).
+func (p prbPainter) layout(rows []PRBoardRow, width int, mode PRLayout) prbLayout {
+	return p.fit(p.natural(rows), width, prbWidths{}, mode)
 }
 
-// fit sizes the columns to their content and hides the least important
-// ones (assignee, since review, author, ...) until the table fits width
-// (0 = no limit). Extra room goes to the title and the reviewers. A
-// dragged width (over) replaces a column's content width; the title and
-// the reviewers still give way down to their minimum on a narrow screen.
-func (p prbPainter) fit(n prbNatural, width int, over prbWidths) prbLayout {
-	lay := prbLayout{since: n.since}
+// fit lays the columns out at width (0 = no limit) in mode: every column
+// on one line, or each row on two lines (prbLine1Cols, prbLine2Cols),
+// each line fitted on its own. Auto takes one line when every column fits
+// at its content width (dragged widths aside, so a drag never flips the
+// layout) with a title of prbOneLineTitle cells, or its whole title when
+// that is shorter. A dragged width (over) replaces a column's content
+// width.
+func (p prbPainter) fit(n prbNatural, width int, over prbWidths, mode PRLayout) prbLayout {
 	nat := n.nat
 	for c, v := range over {
 		if v > 0 {
 			nat[c] = max(v, minColWidth)
-			if width > 0 {
-				nat[c] = min(nat[c], max(width-prbMarkW, minColWidth))
-			}
+		}
+	}
+	if mode == LayoutTwoLines || mode != LayoutOneLine && !fitsOneLine(n.nat, width) {
+		return prbLayout{
+			prbLine: fitLine(nat, over, width, prbMarkW, prbLine1Cols, prbLine1Drop),
+			line2:   fitLine(nat, over, width, prbLine2Indent, prbLine2Cols, prbLine2Drop),
+			two:     true,
+			since:   n.since,
+		}
+	}
+	return prbLayout{prbLine: fitLine(nat, over, width, prbMarkW, prbAllCols, prbDropOrder), since: n.since}
+}
+
+// fitsOneLine says whether every column fits on one line of width (0 = no
+// limit) at its content width nat, the title at prbOneLineTitle cells.
+func fitsOneLine(nat [prbNumCols]int, width int) bool {
+	if width <= 0 {
+		return true
+	}
+	need := prbMarkW + len(colGap)*(len(prbAllCols)-1)
+	for _, c := range prbAllCols {
+		if c == colTitle {
+			need += min(nat[c], prbOneLineTitle)
+		} else {
+			need += nat[c]
+		}
+	}
+	return need <= width
+}
+
+// fitLine sizes cols to their content (nat) and hides the ones in drop,
+// in turn, until the line, starting at indent, fits width (0 = no limit).
+// Extra room goes to the title and the reviewers. A dragged column (over)
+// gets at most the line's width; the title and the reviewers still give
+// way down to their minimum on a narrow screen.
+func fitLine(nat [prbNumCols]int, over prbWidths, width, indent int, all, drop []prbCol) prbLine {
+	for c, v := range over {
+		if v > 0 && width > 0 {
+			nat[c] = min(nat[c], max(width-indent, minColWidth))
 		}
 	}
 	minW := func(c prbCol) int {
@@ -1224,66 +1357,69 @@ func (p prbPainter) fit(n prbNatural, width int, over prbWidths) prbLayout {
 		return nat[c]
 	}
 	need := func(cols []prbCol) int {
-		t := prbMarkW + len(colGap)*(len(cols)-1)
+		t := indent + len(colGap)*(len(cols)-1)
 		for _, c := range cols {
 			t += minW(c)
 		}
 		return t
 	}
-	cols := []prbCol{colRef, colNum, colTitle, colAuthor, colAssignee, colUpdated, colRequested, colState, colLastReview, colFindings, colCI, colSince, colReviewers}
-	for _, d := range prbDropOrder {
+	cols := slices.Clone(all)
+	for _, d := range drop {
 		if width <= 0 || need(cols) <= width {
 			break
 		}
 		cols = slices.DeleteFunc(cols, func(c prbCol) bool { return c == d })
 	}
-	lay.cols = cols
-	lay.widths = make([]int, len(cols))
-	lay.maxW = make([]int, len(cols))
+	l := prbLine{cols: cols, widths: make([]int, len(cols)), maxW: make([]int, len(cols)), indent: indent}
 	total := need(cols)
 	for i, c := range cols {
-		lay.widths[i] = nat[c]
-		lay.maxW[i] = nat[c]
+		l.widths[i] = nat[c]
+		l.maxW[i] = nat[c]
 		if width <= 0 {
 			continue
 		}
-		lay.widths[i] = minW(c)
+		l.widths[i] = minW(c)
 		if _, flex := prbFlexMin[c]; flex {
-			lay.maxW[i] = max(width-prbMarkW, minColWidth)
+			l.maxW[i] = max(width-indent, minColWidth)
 		} else {
-			lay.maxW[i] = max(width-(total-minW(c)), minColWidth)
+			l.maxW[i] = max(width-(total-minW(c)), minColWidth)
 		}
 	}
 	if width <= 0 {
-		return lay
+		return l
 	}
 	extra := width - total
 	want := func(c prbCol) int {
 		if i := slices.Index(cols, c); i >= 0 {
-			return nat[c] - lay.widths[i]
+			return nat[c] - l.widths[i]
 		}
 		return 0
 	}
 	give := func(c prbCol, n int) {
 		if i := slices.Index(cols, c); i >= 0 && n > 0 {
-			lay.widths[i] += n
+			l.widths[i] += n
 			extra -= n
 		}
 	}
 	give(colReviewers, min(want(colReviewers), extra/3))
 	give(colTitle, min(want(colTitle), extra))
 	give(colReviewers, min(want(colReviewers), extra))
-	return lay
+	return l
 }
 
-// colAt is the column of lay at x on the heading line (see colAtWidths).
-func (l prbLayout) colAt(x int) (i int, gap bool) { return colAtWidths(l.widths, prbMarkW, x) }
+// headerLines are the column headings, one line per line of a row.
+func (p prbPainter) headerLines(lay prbLayout, width int) []string {
+	if !lay.two {
+		return []string{p.headerLine(lay.prbLine, width)}
+	}
+	return []string{p.headerLine(lay.prbLine, width), p.headerLine(lay.line2, width)}
+}
 
-func (p prbPainter) headerLine(lay prbLayout, width int) string {
+func (p prbPainter) headerLine(l prbLine, width int) string {
 	var b strings.Builder
-	b.WriteString(spaces(prbMarkW))
-	for i, c := range lay.cols {
-		w := lay.widths[i]
+	b.WriteString(spaces(l.indent))
+	for i, c := range l.cols {
+		w := l.widths[i]
 		t := truncate(p.colTitle(c), w)
 		st := p.st.Header
 		if c == sortColumn(p.sort) {
@@ -1296,7 +1432,7 @@ func (p prbPainter) headerLine(lay prbLayout, width int) string {
 		switch {
 		case prbRightAligned(c):
 			b.WriteString(pad + st.Render(t))
-		case i < len(lay.cols)-1:
+		case i < len(l.cols)-1:
 			b.WriteString(st.Render(t) + pad)
 		default:
 			b.WriteString(st.Render(t))
@@ -1322,17 +1458,46 @@ func (p prbPainter) overlay(selected, muted bool) func(lipgloss.Style) lipgloss.
 	}
 }
 
-// rowLine renders one PR; the cursor row gets the mark, a background to
-// the edge and a bold title.
-func (p prbPainter) rowLine(r PRBoardRow, lay prbLayout, width int, selected bool) string {
+// secondOverlay is overlay for the second line of a two-line row, which
+// is dimmed: a run without a color of its own takes the board's dim, the
+// state pills, verdicts and checks keep theirs.
+func (p prbPainter) secondOverlay(selected, muted bool) func(lipgloss.Style) lipgloss.Style {
+	ov := p.overlay(selected, muted)
+	if muted {
+		return ov
+	}
+	return func(s lipgloss.Style) lipgloss.Style {
+		if _, plain := s.GetForeground().(lipgloss.NoColor); plain && !s.GetReverse() {
+			s = s.Foreground(p.pal.dim)
+		}
+		if ov != nil {
+			s = ov(s)
+		}
+		return s
+	}
+}
+
+// rowLines renders one PR: one line, or two when lay.two, the second
+// indented and dimmed. The cursor row gets the mark, a background to the
+// edge on every line and a bold title.
+func (p prbPainter) rowLines(r PRBoardRow, lay prbLayout, width int, selected bool) []string {
 	cs := p.cells(r, lay.since)
-	line := cell{{spaces(prbMarkW), lipgloss.Style{}}}
-	if selected {
-		line = cell{{p.g.cursor + spaces(prbMarkW-ansi.StringWidth(p.g.cursor)), p.st.Accent}}
+	first := p.rowLine(r, cs, lay.prbLine, width, selected, false)
+	if !lay.two {
+		return []string{first}
+	}
+	return []string{first, p.rowLine(r, cs, lay.line2, width, selected, true)}
+}
+
+// rowLine renders line l of r's row; second is a two-line row's second line.
+func (p prbPainter) rowLine(r PRBoardRow, cs prbCells, l prbLine, width int, selected, second bool) string {
+	line := cell{{spaces(l.indent), lipgloss.Style{}}}
+	if selected && !second {
+		line = cell{{p.g.cursor + spaces(l.indent-ansi.StringWidth(p.g.cursor)), p.st.Accent}}
 	}
 	keep := [2]int{-1, -1} // the segs of a flag the row's dim leaves alone
-	for i, c := range lay.cols {
-		w := lay.widths[i]
+	for i, c := range l.cols {
+		w := l.widths[i]
 		var cl cell
 		switch c {
 		case colReviewers:
@@ -1365,7 +1530,7 @@ func (p prbPainter) rowLine(r PRBoardRow, lay prbLayout, width int, selected boo
 		switch {
 		case prbRightAligned(c):
 			line = append(append(line, pad), cl...)
-		case i < len(lay.cols)-1 || selected:
+		case i < len(l.cols)-1 || selected:
 			line = append(append(line, cl...), pad)
 		default:
 			line = append(line, cl...)
@@ -1377,7 +1542,11 @@ func (p prbPainter) rowLine(r PRBoardRow, lay prbLayout, width int, selected boo
 		}
 		line = line.fit(width)
 	}
-	ov := p.overlay(selected, r.Muted || skipped(r) || r.Recent)
+	muted := r.Muted || skipped(r) || r.Recent
+	ov := p.overlay(selected, muted)
+	if second {
+		ov = p.secondOverlay(selected, muted)
+	}
 	if keep[0] < 0 || keep[1] > len(line) { // no flag, or cut off by the width
 		return line.render(ov)
 	}
@@ -1419,9 +1588,9 @@ func (p prbPainter) footerRule(width int, msg string, below int) string {
 
 // titleLine is the title bar: the title, the repository scope, the open
 // count, the owner scope ("all owners" when the rows span several), the
-// view (with inView, its row count), the sort and the filter, with right
-// (the refresh time) on the right.
-func (p prbPainter) titleLine(width int, title, repo, owner string, view PRView, inView int, filter string, shown, hidden int, right string) string {
+// view (with inView, its row count), the sort, the layout unless it is
+// auto, and the filter, with right (the refresh time) on the right.
+func (p prbPainter) titleLine(width int, title, repo, owner string, view PRView, inView int, filter string, shown, hidden int, right string, layout PRLayout) string {
 	scope := "all repos"
 	if repo != "" {
 		scope = repo
@@ -1471,6 +1640,9 @@ func (p prbPainter) titleLine(width int, title, repo, owner string, view PRView,
 			parts = append(parts, p.st.Dim.Render("sorted by ")+sorted)
 		} else {
 			parts = append(parts, sorted)
+		}
+		if layout == LayoutOneLine || layout == LayoutTwoLines {
+			parts = append(parts, p.st.Dim.Render(string(layout)))
 		}
 		if match != "" {
 			parts = append(parts, match)

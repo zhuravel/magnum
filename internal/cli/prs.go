@@ -37,7 +37,9 @@ func newPRsCmd(c *Context) *cobra.Command {
 			"board never spends GitHub rate budget.\n\n"+
 			"On a terminal this opens the live board, refreshed every 5s: j/k move, enter shows the PR card (with the "+
 			"last round's stage timings), / filters (fuzzy words plus state:<s>, assignee:<login>, author:<login> and "+
-			"review:requested; @me means you), v cycles the views, s cycles the sort and S reverses it, r reviews (R fresh, i with /simplify), o opens the "+
+			"review:requested; @me means you), v cycles the views, s cycles the sort and S reverses it, L cycles the "+
+			"layout (auto: one line per PR when every column fits, else two; one line; two lines; kept across runs), "+
+			"r reviews (R fresh, i with /simplify), o opens the "+
 			"judge's pane, p/u pin and unpin, x releases, M/U mute and unmute (every review, release, mute and unmute "+
 			"key asks y/N first; only y confirms), b opens the PR in the browser, a "+
 			"jumps to what needs you, ctrl+r or F5 refreshes now, tab switches to the status dashboard (and back), ? lists "+
@@ -173,7 +175,8 @@ func runPRs(c *Context, f prsFlags, pos []string) int {
 // runInspScreens runs the status dashboard and the PR board with one set of
 // actions, starting with first; tab switches between them. Both keep their
 // dragged column widths in the registry, the mouse toggle (m) carries over
-// to the other screen and the board reopens in the view it was left in.
+// to the other screen and the board reopens in the view it was left in,
+// with the hide toggle (h) and the layout (L) the registry keeps.
 func runInspScreens(ctx context.Context, c *Context, d statusDeps, so statusOptions, po prsOptions, first string) error {
 	acts := newScreenActions(c)
 	defer acts.Close()
@@ -190,10 +193,13 @@ func runInspScreens(ctx context.Context, c *Context, d statusDeps, so statusOpti
 		})
 	}
 	src := prsSource(d.Store, d.Config, po.filter(), prsSelfLogins(d.Config), c.Layout) // one source: its timings cache survives tab
-	hide := false                                                                       // h: kept in the registry, so the board opens the way it was left
+	hide, layout := false, tui.LayoutAuto                                               // h and L: kept in the registry, so the board opens the way it was left
 	if d.Store != nil {
 		if v, ok, err := d.Store.GetKV(ctx, kvBoardHideSkipped); err == nil && ok {
 			hide = v == "1"
+		}
+		if v, ok, err := d.Store.GetKV(ctx, kvBoardLayout); err == nil && ok {
+			layout = tui.PRLayout(v) // the board reads an unknown one as auto
 		}
 	}
 	board := func(ctx context.Context) error {
@@ -208,13 +214,24 @@ func runInspScreens(ctx context.Context, c *Context, d statusDeps, so statusOpti
 				_ = d.Store.SetKV(context.WithoutCancel(ctx), kvBoardHideSkipped, map[bool]string{true: "1", false: "0"}[h])
 			}
 		}
+		o.Layout = layout
+		o.LayoutChanged = func(l tui.PRLayout) {
+			layout = l
+			if d.Store != nil {
+				_ = d.Store.SetKV(context.WithoutCancel(ctx), kvBoardLayout, string(l))
+			}
+		}
 		return tuiPRBoard(ctx, src, acts, o)
 	}
 	return runScreens(ctx, first, dashboard, board)
 }
 
-// kvBoardHideSkipped keeps the board's h (hide ignored and skipped PRs).
-const kvBoardHideSkipped = "board.hide_skipped"
+// kvBoardHideSkipped keeps the board's h (hide ignored and skipped PRs),
+// kvBoardLayout its L (auto, 1-line or 2-line).
+const (
+	kvBoardHideSkipped = "board.hide_skipped"
+	kvBoardLayout      = "board.layout"
+)
 
 // prsBoardOptions are the board's options for o.
 func prsBoardOptions(cfg *config.Config, o prsOptions) tui.PRBoardOptions {

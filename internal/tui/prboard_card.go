@@ -33,8 +33,9 @@ func (p prbPainter) helpContent(width int) []string {
 		{"j/k ↑/↓", "move"}, {"g / G", "first / last PR"}, {"pgup/pgdn", "a page up / down"},
 		{"enter", "details card"}, {"s / S", "next sort / reverse it"}, {"/", "filter (fuzzy)"},
 		{"v / O", "next view / next owner (all, then each)"},
+		{"L", "layout: auto, one line, two lines per PR"},
 		{"esc", "back, clear the filter, quit"}, {"ctrl+r / F5", "refresh now"}, {"tab", "status dashboard"},
-		{"h / W", "hide ignored and skipped / reset widths"}, {"?", "this help"}, {"q", "quit"},
+		{"h / W", "hide ignored and skipped / reset widths"}, {"? / q", "this help / quit"},
 	})
 	acts := section("Act on the PR", []hint{
 		{"r", "review now (asks y/N); post-merge if merged"}, {"R", "fresh review in new agent sessions (asks y/N)"},

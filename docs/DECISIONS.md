@@ -972,3 +972,24 @@ editing history. Code, config comments and prompts reference these by their head
   difference of two diffs is not a diff a model can be shown, a re-review after a base merge now runs only
   when the PR's own code changed, and a merge's comparison is mostly over `max_lines` or at the file cap,
   where triage runs every role, its safe default.
+- **The board puts a PR on two lines when its columns do not fit on one** (2026-10-05, after the 13 columns,
+  about 260 cells with whole titles, lost columns and cut titles to 18 cells on a narrower pane). **Why
+  this split**: the first line says what the PR is (REPO, #, TITLE, AUTHOR, ASSIGNEE, UPDATED, REQUESTED),
+  the second, indented four cells and dimmed, where it stands (STATE, LAST REVIEW, FINDINGS, CI, SINCE
+  REVIEW, REVIEWERS); each line has its own heading line and computes its own widths with the same caps
+  and content widths, so its columns still line up across rows and the title takes the first line's room.
+  **Why this rule for auto**: one line while every column fits at its content width (up to its cap) with a
+  40-cell title, measured on the content alone so a dragged width never flips the layout mid-drag; that
+  is exactly where the one-line layout stopped dropping columns or cutting titles below 40, and above it
+  the frame is byte for byte the old one (`testdata/board_*.golden`, drawn by the code before). A line
+  that still does not fit drops its own columns (SINCE REVIEW, then LAST REVIEW; ASSIGNEE, then AUTHOR,
+  then REQUESTED). **Why dim only the uncolored runs of the second line**: the state pill, the verdict
+  glyphs and the check marks are what a glance looks for; the board's dim on everything would grey the
+  red attention and merged-unreviewed pills like a muted row. `L` cycles auto, one line and two lines; the
+  title bar names a layout other than auto, and the choice is kept in the registry (`board.layout`) like
+  `board.hide_skipped`. A row stays one unit: j/k, page up and down and the wheel count rows, scrolling
+  never shows half a row, the cursor's background covers both lines, a click on either line selects the
+  PR, and each heading line sorts and resizes its own columns. The layout mode is in the rows' cache key
+  and the lines per row in the frame's. Rejected: wrapping the title onto a second line (the columns
+  still would not fit), a horizontal scroll (what scrolls off is never seen), and per-column visibility
+  settings (one key covers the case).

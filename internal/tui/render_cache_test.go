@@ -45,8 +45,12 @@ func synthStatus(n int) StatusData {
 	return d
 }
 
-func stormBoard(t testing.TB, rows int) prBoardModel {
-	m, src, _ := newBoard(t, 120, 40, PRBoardOptions{})
+func stormBoard(t testing.TB, rows int) prBoardModel { return stormBoardIn(t, rows, LayoutAuto) }
+
+// stormBoardIn is stormBoard in layout: at 120 cells auto puts each PR on
+// two lines.
+func stormBoardIn(t testing.TB, rows int, layout PRLayout) prBoardModel {
+	m, src, _ := newBoard(t, 120, 40, PRBoardOptions{Layout: layout})
 	src.rows = synthBoardRows(rows)
 	n, _ := m.Update(prbDataMsg{rows: src.rows})
 	return n.(prBoardModel)
@@ -112,8 +116,16 @@ func TestWheelEventsUpAndDownStayCheap(t *testing.T) {
 	}
 }
 
-func BenchmarkBoardFrameMoving(b *testing.B) {
-	m := stormBoard(b, 200)
+// The board benchmarks run at 120 cells, where auto puts each PR on two
+// lines; the OneLine ones keep the one-line table (columns dropped).
+func BenchmarkBoardFrameMoving(b *testing.B)        { benchBoardMoving(b, LayoutAuto) }
+func BenchmarkBoardFrameMovingOneLine(b *testing.B) { benchBoardMoving(b, LayoutOneLine) }
+
+func BenchmarkBoardFrameAtBottom(b *testing.B)        { benchBoardAtBottom(b, LayoutAuto) }
+func BenchmarkBoardFrameAtBottomOneLine(b *testing.B) { benchBoardAtBottom(b, LayoutOneLine) }
+
+func benchBoardMoving(b *testing.B, layout PRLayout) {
+	m := stormBoardIn(b, 200, layout)
 	up, down := keyMsg("k"), keyMsg("j")
 	b.ResetTimer()
 	for i := range b.N {
@@ -127,8 +139,8 @@ func BenchmarkBoardFrameMoving(b *testing.B) {
 	}
 }
 
-func BenchmarkBoardFrameAtBottom(b *testing.B) {
-	m := stormBoard(b, 200)
+func benchBoardAtBottom(b *testing.B, layout PRLayout) {
+	m := stormBoardIn(b, 200, layout)
 	n, _ := m.Update(keyMsg("G"))
 	m = n.(prBoardModel)
 	down := keyMsg("j")

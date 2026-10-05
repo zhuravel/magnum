@@ -4,7 +4,9 @@ package tui
 // table, the card or the help; a click selects a row and a double click
 // opens its card; a click on a heading sorts by that column and a second
 // one reverses it; dragging a heading gap resizes the column on its left;
-// a right click opens the row's menu.
+// a right click opens the row's menu. In the two-line layout a click on
+// either line of a row is a click on the row, and each heading line works
+// for its own columns.
 
 import (
 	tea "charm.land/bubbletea/v2"
@@ -22,16 +24,8 @@ func colSort(c prbCol) (PRSort, bool) {
 }
 
 // tableLayout is the table's column layout at width w, dragged widths
-// applied, from the cache.
-func (m prBoardModel) tableLayout(p prbPainter, w int) prbLayout {
-	rk := m.rowsKey(w)
-	return m.cache.layoutFor(rk, func() prbLayout {
-		nk := rk
-		nk.widths = prbWidths{}
-		n := m.cache.naturalFor(nk, func() prbNatural { return p.natural(m.all) })
-		return p.fit(n, w, m.widths)
-	})
-}
+// applied, from the cache (see layoutAt).
+func (m prBoardModel) tableLayout(p prbPainter, w int) prbLayout { return m.layoutAt(w, &p) }
 
 // bodyLine is the body line at screen row y (0 is the table's heading),
 // -1 off the body. A screen too short for the frame loses its top lines,
@@ -45,23 +39,24 @@ func (m prBoardModel) bodyLine(y int) int {
 	return l
 }
 
-// rowAt is the index in view of the row drawn at screen row y, -1 when
-// no row is drawn there.
+// rowAt is the index in view of the row drawn at screen row y (on any of
+// its lines), -1 when no row is drawn there.
 func (m prBoardModel) rowAt(y int) int {
 	l := m.bodyLine(y)
-	if m.mode != prbTable || !m.haveData || l < prbTableChrome {
+	rh := m.rowHeight()
+	if m.mode != prbTable || !m.haveData || l < tableChrome(rh) {
 		return -1
 	}
 	start := min(m.scroll, max(len(m.view)-1, 0))
-	end, heading := m.visible(start)
-	off := l - prbTableChrome
-	if at := m.section - start; heading && off >= at {
+	end, heading := m.visibleIn(start, m.tableLinesFor(rh), rh)
+	off := l - tableChrome(rh)
+	if at := (m.section - start) * rh; heading && off >= at {
 		if off == at {
 			return -1 // the recently closed section's heading
 		}
 		off--
 	}
-	if i := start + off; i < end {
+	if i := start + off/rh; i < end {
 		return i
 	}
 	return -1
@@ -130,8 +125,8 @@ func (m prBoardModel) click(ev tea.Mouse) (prBoardModel, tea.Cmd) {
 	}
 	switch ev.Button {
 	case tea.MouseLeft:
-		if m.haveData && m.bodyLine(ev.Y) == 0 {
-			return m.headingClick(ev.X)
+		if l := m.bodyLine(ev.Y); m.haveData && l >= 0 && l < m.rowHeight() {
+			return m.headingClick(ev.X, l)
 		}
 		i := m.rowAt(ev.Y)
 		if i < 0 {
@@ -154,17 +149,17 @@ func (m prBoardModel) click(ev tea.Mouse) (prBoardModel, tea.Cmd) {
 	return m, nil
 }
 
-// headingClick sorts by the column under x (again: reverses it), or
-// starts resizing the column left of the gap under x.
-func (m prBoardModel) headingClick(x int) (prBoardModel, tea.Cmd) {
-	lay := m.tableLayout(m.painter(), m.viewWidth())
-	i, gap := lay.colAt(x)
+// headingClick sorts by the column under x on heading line line (again:
+// reverses it), or starts resizing the column left of the gap under x.
+func (m prBoardModel) headingClick(x, line int) (prBoardModel, tea.Cmd) {
+	l := m.tableLayout(m.painter(), m.viewWidth()).line(line)
+	i, gap := l.colAt(x)
 	switch {
 	case i < 0:
 	case gap:
-		m.drag = colDrag{active: true, col: int(lay.cols[i]), startX: x, startW: lay.widths[i], maxW: lay.maxW[i]}
+		m.drag = colDrag{active: true, col: int(l.cols[i]), startX: x, startW: l.widths[i], maxW: l.maxW[i]}
 	default:
-		if s, ok := colSort(lay.cols[i]); ok {
+		if s, ok := colSort(l.cols[i]); ok {
 			if s == m.sort {
 				m.desc = !m.desc
 			} else {

@@ -185,7 +185,7 @@ func TestRowStateOfAMergedPRShowsItsPostMergeRound(t *testing.T) {
 // A merged PR in a post-merge round shows the round's state pill, then
 // "post-merge" and what holds it, in the table; not "merged".
 func TestPRBoardStateCellOfAPostMergeRound(t *testing.T) {
-	m := recentBoard(t, 220, 40, PRBoardOptions{})
+	m := recentBoard(t, 220, 40, PRBoardOptions{Layout: LayoutOneLine})
 	p := m.painter()
 	row := postMergeRow(t, pmMergedUnreviewed)
 	row.State, row.Wait = "rereview_pending", "post-merge review · next tick"
