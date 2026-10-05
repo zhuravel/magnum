@@ -496,10 +496,19 @@ What an author gets, every review alike:
   the process. The event follows `no_findings_event` and `blocking_event`, except that a round where a
   reviewer left no report (a usage limit, a timeout) never approves: its no-findings event is `COMMENT`,
   and Checks names the missing reviewer.
-- **Each finding on the defective line**, the code that must change: a test that proves it is a fenced
-  block naming its spec file and line, and a `suggestion` is only ever the code fix.
-- **One comment per simplification idea**, titled "**Simplification** (optional, no reply needed)", each
-  backed by an equivalence probe listed in Checks.
+- **Each finding on the defective line**, the code that must change: a title that states the wrong result;
+  the trigger, who can produce it and the concrete consequence; a test that proves it as a fenced block
+  naming its spec file and line; **Fix** with the code cause and the smallest safe change (a `suggestion`
+  is only ever the code fix).
+- **Priority by reachability**: P2 is a defect that real use or an attacker reaches, with harm beyond the
+  triggering request; one that only crafted input or a stack of unlikely preconditions reaches, harming
+  only that request, is P3. A size or timing trigger states its threshold and why real data reaches it.
+- **At most three simplifications**, the most substantial, one comment per idea, titled
+  "**Simplification** (optional, no reply needed)", each backed by an equivalence probe listed in Checks.
+  Each removes something a reader must hold (a branch, helper, flag, duplicated block), never only renames
+  or moves code, and none touches authorization, sandboxing, money or usage recording, or concurrency code
+  unless it removes a defect-prone construct; a re-review suggests them only on lines changed since the
+  previous review.
 - **The identity's footer** as the last line (`review_footer`, see Identities).
 
 ## Daily use

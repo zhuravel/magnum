@@ -167,3 +167,92 @@ func TestSkillCarriesTheNotesProcedure(t *testing.T) {
 		}
 	}
 }
+
+// skillSays fails for every phrase SKILL.md lacks (want) or still carries
+// (gone).
+func skillSays(t *testing.T, want, gone []string) {
+	t.Helper()
+	skill := string(magnum.Skill)
+	for _, w := range want {
+		if !strings.Contains(skill, w) {
+			t.Errorf("SKILL.md lacks %q", w)
+		}
+	}
+	for _, g := range gone {
+		if strings.Contains(skill, g) {
+			t.Errorf("SKILL.md still says %q", g)
+		}
+	}
+}
+
+// A finding names who can trigger it, a concrete consequence and how likely
+// the trigger is: of the findings authors scored, the rejected ones were a
+// 2048-byte input against a real maximum of 179, a reproduction on a test
+// double that allowed what the real component forbids, and P2s whose harm
+// stayed inside the triggering request (36 of 45 posted findings were P2).
+func TestSkillFindingsProveFiveFactsAndRankByReachability(t *testing.T) {
+	skillSays(t, []string{
+		"prove five facts: the exact trigger and who can produce it; the wrong result as a concrete consequence, never an adjective; how this PR causes it; how likely the trigger is here; a practical fix.",
+		"Reachability decides the priority",
+		"states its threshold and why real data reaches it",
+		"a test double that allows",
+		"calls the behaviour deliberate, answer that reason or drop the finding",
+		"real use or an attacker reaches, with harm beyond the triggering request",
+		"a failure only crafted input or a stack of unlikely preconditions reaches, harming only that request",
+	}, []string{"four facts"})
+}
+
+// Simplifications must remove something, stay out of sensitive code, keep to
+// the lines a re-review covers and number at most three: 33 of 33 scored
+// simplifications on one organization were declined, 20 of them on one PR,
+// in code that records billable usage or enforces trust checks.
+func TestSkillPostsAtMostThreeSimplificationsThatRemoveSomething(t *testing.T) {
+	skillSays(t, []string{
+		"Post at most three, the most substantial",
+		"removes something a reader must hold",
+		"not just moves, renames or rephrases code",
+		"authorization, sandboxing, money or usage recording, or concurrency code, unless it removes a defect-prone construct",
+		"lines changed since the previous review",
+	}, []string{"there is no cap", "a clearer name or structure"})
+}
+
+// A comment states the trigger and the consequence first and ends with the
+// code cause and the smallest safe change; structure counts only with an
+// input that goes wrong; the drafted review is reread once before posting.
+func TestSkillShapesCommentsAroundTriggerAndSmallestFix(t *testing.T) {
+	skillSays(t, []string{
+		"**Fix**: the code cause and the smallest safe change",
+		"Structure can hide a defect",
+		"Report one only with the input that goes wrong.",
+		"reread every comment once",
+	}, nil)
+}
+
+// The simplify reviewer proposes removals, not renames or moves that leave
+// as much for a reader to hold.
+func TestSimplifyPromptAsksForRemovalsNotRenames(t *testing.T) {
+	got, err := RenderPrompt(prompt(t, "claude-simplify.md"), roleFixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "Prefer deleting a branch, helper, mode or duplicate over rewriting the same logic more neatly; skip formatting, wording, renames and moves that remove nothing") ||
+		strings.Contains(got, "Prefer code over prose") {
+		t.Errorf("claude-simplify.md does not ask for removals only:\n%s", got)
+	}
+}
+
+// claude-review's reports name the trigger, so the judge proves a candidate
+// faster and one without a trigger reads as speculative.
+func TestClaudeReviewPromptsAskForTheTrigger(t *testing.T) {
+	restart := roleFixture()
+	restart.Mode, restart.RestartedFrom = ModeRestart, "f1cc4f9e0d1c2b3a4f5e6d7c8b9a0f1e2d3c4b5a"
+	for name, d := range map[string]RoleData{"claude-review.md": roleFixture(), "claude-restart.md": restart} {
+		got, err := RenderPrompt(prompt(t, name), d)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if !strings.Contains(got, "the exact trigger (an input, call or sequence), what goes wrong, how this PR causes it, the suggested fix and any command you ran with its output") {
+			t.Errorf("%s does not ask for the trigger:\n%s", name, got)
+		}
+	}
+}

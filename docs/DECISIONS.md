@@ -1562,3 +1562,57 @@ editing history. Code, config comments and prompts reference these by their head
   engine renames is left out, not an error, and a registry that cannot say leaves the card without them
   rather than the board without rows. Rejected: a column on the board (the operator keeps it one line per
   PR, and the spend is a reason to open the card, not to sort by).
+- **No score before posting** (2026-10-05). Authors on one organization score every finding with a rubric
+  (pros minus cons on an open scale, a negative net dropped) and decline the negative ones; the judge does
+  not score its own findings that way before posting. Most declines rested on what only the author holds:
+  production telemetry, decisions kept in their own tools' memory, a pending human security review. The
+  judge's net would be a guess, and the author's tool scores anyway, so a second score adds nothing.
+  Subtracting the fix's cost from the defect also turns "is this real" into "is this worth doing now" and
+  parks what a reviewer exists to surface: low-probability real bugs, authorization gaps whose fix lands in
+  code the PR does not touch, latent bugs that only today's ordering or data sizes hide, and input an
+  attacker controls. The nets were not stable either: on one PR three negative scores were reversed and
+  fixed after re-argument. The judge takes the rubric's principles instead (the next entries). Rejected: a
+  numeric score per finding, and a threshold below which a proven finding is not posted.
+- **Five facts, and reachability decides the priority** (2026-10-05; of 18 posted findings authors scored,
+  12 were fixed, 1 kept open as valid, 4 marked low priority and 1 incorrect, and 36 of 45 posted findings
+  on that organization were P2). A finding proves five facts instead of four: the exact trigger and who can
+  produce it; the wrong result as a concrete consequence, never an adjective; how this PR causes it; how
+  likely the trigger is here; a practical fix. Who produces the trigger, its preconditions and how far it
+  fails (the triggering request, one account, every tenant) set the priority. A size, count or timing
+  trigger states its threshold and why real data reaches it (one finding rested on a 2048-byte input where
+  the longest real one was 179 bytes, another on a 4 MiB fixture against a real maximum of 10 KiB). A
+  fixture far past realistic sizes, or a test double that allows what the real component forbids (a mock let
+  reads finish out of order where the real host runs them in order), proves nothing. A reason the code, the
+  PR or an earlier reply gives for deliberate behaviour is answered, or the finding is dropped. P2 now needs
+  a path that real use or an attacker reaches with harm beyond the triggering request; a failure only
+  crafted input or a stack of unlikely preconditions reaches, harming only that request, is P3.
+  claude-review's initial and restart prompts ask for the exact trigger, how the PR causes it and any
+  command run with its output, so a candidate without a trigger reads as speculative. Rejected: ranking by
+  whether real users send the input (an attacker sends what no user does; how far the harm goes decides).
+- **A comment leads with the trigger and ends with the smallest fix** (2026-10-05; 15 of 66 answered
+  findings got pushback, often "low priority" or "moot", and authors' agents apply fixes locally: 43 replies
+  opened with "fixed in" after an acknowledgement, and no commit came from "Apply suggestion"). The comment
+  form names its parts: a title that states the wrong result; the trigger, who produces it and the
+  consequence; the reproduction; **Fix** with the code cause and the smallest safe change; no "Why this
+  matters" section. The word rules add a first sentence that stands alone and the exact result or change,
+  never a category or advice. Before posting, the judge rereads every comment once to cut preamble, repeated
+  context and vague words and to check that each finding keeps its trigger, result, reproduction and fix,
+  since earlier drift (event names, process notes, mixed verdict openings) was fixed one rule at a time.
+  Structure that can hide a defect (a silent fallback or cast over an unclear invariant, a copied helper
+  that misses its edge cases, feature checks in a shared path, related writes left half-applied) is reported
+  only with the input that goes wrong. Rejected: structure, file size or wrappers as findings of their own
+  (taste is never a finding), and comments phrased as questions (the reply contract cannot classify the
+  answers).
+- **At most three simplifications, each removing something** (2026-10-05; amends "Simplify output is a list
+  of optional suggestions" of 2026-10-04 and "One comment per simplification idea" of 2026-10-05, which both
+  rejected a cap: 33 of the 33 simplifications that got a scored reply on one organization were declined,
+  and one PR got 20 next to 5 findings, in code that records billable usage or enforces trust checks). The
+  judge keeps a hunk only when it removes something a reader must hold (a branch, helper, mode, flag,
+  duplicated block, allocation or control-flow trap), not when it only moves, renames or rephrases code, and
+  the simplify prompt asks for deletions over neater rewrites. It drops a hunk that edits authorization,
+  sandboxing, money or usage recording, or concurrency code unless the hunk removes a defect-prone
+  construct: there, re-proving equivalence costs the author more than the lines save. A re-review keeps only
+  hunks on lines changed since the previous review. It posts at most three, the most substantial, ordered by
+  what they remove; the rest count as `dropped`. The diff-only scope and the equivalence probe were expected
+  to keep the count down without a cap, and did not. Rejected: removing claude-simplify from the defaults (a
+  deployment can leave it out of a watch's `roles`).

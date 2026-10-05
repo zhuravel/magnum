@@ -397,9 +397,9 @@ instead, i.e. what magnum will type to start, resume and name each one. `--json`
 | Role | Kind | What it does |
 |---|---|---|
 | `codex-judge` | codex | Persistent session; reads the reports, runs `$magnum-review` and posts one review. Effort `xhigh`, `high` for re-reviews, 90 minutes. |
-| `claude-review` | claude | Persistent session running `/code-review <url> high` (`medium` for re-reviews), leaving out style-only and pre-existing problems; writes `claude-review.md`. |
+| `claude-review` | claude | Persistent session running `/code-review <url> high` (`medium` for re-reviews), leaving out style-only and pre-existing problems and naming each finding's trigger; writes `claude-review.md`. |
 | `codex-review` | shell | Types `command codex review --base <merge base>` (the base ref when the merge base is unknown) into a plain pane; its output is tee'd into `codex-review.md`. |
-| `claude-simplify` | claude | Runs `/simplify` after both reviewers on a PR's first review, or on request (`magnum review --role claude-simplify`, or `--simplify`); its diff becomes `claude-simplify.patch`. |
+| `claude-simplify` | claude | Runs `/simplify`, asking for removals rather than renames or moves, after both reviewers on a PR's first review, or on request (`magnum review --role claude-simplify`, or `--simplify`); its diff becomes `claude-simplify.patch`. |
 
 ### Shell roles
 
