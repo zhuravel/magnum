@@ -218,11 +218,33 @@ func (e *APIError) allErrors(typ string) bool {
 
 var ghDefaults = map[string]string{"GH_PROMPT_DISABLED": "1", "GH_NO_UPDATE_NOTIFIER": "1"}
 
-// gh runs one gh command with the client's env and directory.
+// betweenKey carries the function WithBetweenCalls puts into a context.
+type betweenKey struct{}
+
+// WithBetweenCalls returns ctx carrying fn, which the client runs before
+// every gh command it makes with that context (BetweenCalls), on the
+// caller's goroutine: the daemon's poll answers the requests a CLI queued
+// meanwhile, so one waits for a single GitHub call, not the whole poll. fn
+// gets no context: it must not make its calls with this one.
+func WithBetweenCalls(ctx context.Context, fn func()) context.Context {
+	return context.WithValue(ctx, betweenKey{}, fn)
+}
+
+// BetweenCalls runs the function WithBetweenCalls put into ctx, if any. The
+// client calls it before each gh command; a fake GitHub can do the same.
+func BetweenCalls(ctx context.Context) {
+	if fn, ok := ctx.Value(betweenKey{}).(func()); ok && fn != nil {
+		fn()
+	}
+}
+
+// gh runs one gh command with the client's env and directory, after
+// BetweenCalls.
 func (c *Client) gh(ctx context.Context, label string, args []string, stdin []byte, mutates bool) (execx.Result, error) {
 	if c.Run == nil {
 		return execx.Result{}, errors.New("github: Client.Run is nil")
 	}
+	BetweenCalls(ctx)
 	env := maps.Clone(ghDefaults)
 	maps.Copy(env, c.Env)
 	return c.Run.Run(ctx, execx.Cmd{

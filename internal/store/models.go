@@ -376,6 +376,13 @@ type Slot struct {
 	LastError         *string    `json:"last_error"`
 	CreatedAt         time.Time  `json:"created_at"`
 	UpdatedAt         time.Time  `json:"updated_at"`
+	// SchemaFP, SchemaSHA and SchemaVersion say what a pool slot's databases
+	// carry: the fingerprint of the files under the pool's schema_paths at
+	// the commit they were last loaded from, that commit, and the version
+	// db/schema.rb declared there. nil = unknown (the next round reloads).
+	SchemaFP      *string `json:"schema_fp"`
+	SchemaSHA     *string `json:"schema_sha"`
+	SchemaVersion *string `json:"schema_version"`
 }
 
 // Assignment records that a PR's code (and databases) lived in a slot.
@@ -504,7 +511,9 @@ var (
 		"review_requests_json"}
 	slotColumns = []string{"id", "name", "repo_id", "repo_full_name", "kind", "path", "main_clone",
 		"placeholder_branch", "db_slug", "state", "pr_id", "pinned", "dirty_schema", "checked_out_sha",
-		"hold_reason", "lock_sha", "last_used_at", "last_error", "created_at", "updated_at"}
+		"hold_reason", "lock_sha", "last_used_at", "last_error", "created_at", "updated_at",
+		// 0012_schema_fingerprint
+		"schema_fp", "schema_sha", "schema_version"}
 	assignmentColumns = []string{"id", "pr_id", "slot_id", "path", "db_slug", "db_names_json", "head_sha",
 		"started_at", "ended_at", "end_reason"}
 	slotDatabaseColumns = []string{"id", "slot_id", "db_name", "slug", "size_mb", "first_seen_at", "last_seen_at",
@@ -563,7 +572,7 @@ func scanSlot(sc scanner) (Slot, error) {
 	err := sc.Scan(&s.ID, &s.Name, &s.RepoID, &s.RepoFullName, &s.Kind, &s.Path, &s.MainClone,
 		&s.PlaceholderBranch, &s.DBSlug, &s.State, &s.PRID, &s.Pinned, &s.DirtySchema, &s.CheckedOutSHA,
 		&s.HoldReason, &s.LockSHA, nullTime(&s.LastUsedAt), &s.LastError, timeCol(&s.CreatedAt),
-		timeCol(&s.UpdatedAt))
+		timeCol(&s.UpdatedAt), &s.SchemaFP, &s.SchemaSHA, &s.SchemaVersion)
 	return s, err
 }
 

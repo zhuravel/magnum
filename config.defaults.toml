@@ -338,7 +338,8 @@ aliases = ["simplify"]
 # base = "master"
 # min = 6
 # max = 8
-# idle_remove_after = "48h"
+# idle_remove_after = "168h"              # a free slot above min goes once idle this long (the default when unset
+#                                         # or 0; each removal is about 1 GB the next provision writes again)
 # min_free_disk_gb = 15
 # copy_files = [".mise.local.toml", "config/initializers/local.rb"]
 # strip_env = ["GITHUB_PERSONAL_ACCESS_TOKEN"]
@@ -346,12 +347,14 @@ aliases = ["simplify"]
 # teardown = ["bin/worktree-archive"]
 # schema_paths = ["db/"]                 # a PR that changes these changes the databases' schema
 # reset_db = ["bin/rails db:schema:load", "RAILS_ENV=test bin/rails db:schema:load", "bin/rails db:seed"]
-#                                         # loads the checkout's schema into the slot's databases: on release,
-#                                         # and before the reviewers of a PR that changes schema_paths
-# reset_db_on_schema_change = true        # false: reset_db only on release (the reviewers of a PR that changes
-#                                         # the schema run against the base one); before the reviewers it runs
-#                                         # as the first readiness commands, within 30m of its own (as on
-#                                         # release), and ready_timeout starts after it
+#                                         # loads the checkout's schema into the slot's databases: before the
+#                                         # reviewers when the files under schema_paths differ from those the
+#                                         # databases were last loaded from (or the dev database's
+#                                         # schema_migrations moved); a release keeps the databases as they are
+# reset_db_on_schema_change = true        # false: reset_db only on release, back to the base schema (the
+#                                         # reviewers of a PR that changes the schema run against the base one);
+#                                         # before the reviewers it runs as the first readiness commands, within
+#                                         # 30m of its own (as on release), and ready_timeout starts after it
 # post_checkout = ["bundle check >/dev/null || bundle install --jobs 4", "pnpm install --frozen-lockfile"]
 # databases = ["your_app_development__{slug}", "your_app_test__{slug}"]   # each must end in __{slug}
 # prepare = ["bin/rails db:test:prepare"] # readiness: run in the checkout before the reviewers of every

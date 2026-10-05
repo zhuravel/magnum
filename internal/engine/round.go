@@ -340,7 +340,7 @@ func (e *Engine) roundInput(ctx context.Context, job *roundJob, rs roundSetup, w
 		PR: cur, Repo: job.repo, SlotPath: job.slot.Path, Round: rs.round, Kind: rs.kind,
 		TargetSHA: rs.target, BaseRef: base, Roles: rs.roles, Requested: rs.requested, MovedFrom: ws.MovedFrom,
 		ContinueRunID: job.continueRunID, DryRun: dryRun, PostMerge: job.postMerge,
-		NotesPath: e.roundNotes(job.repo), Readiness: e.readinessPlan(job),
+		NotesPath: e.roundNotes(job.repo), Readiness: e.readinessPlan(ctx, job, rs.kind),
 	}
 	if job.evalHead != "" {
 		in.Blind = true
@@ -664,18 +664,41 @@ func (e *Engine) slotEnv(job *roundJob) map[string]string {
 
 // readinessPlan is the round's readiness step: the repository's prepare
 // commands and ready probes (config.Config.ReadinessFor), run with the
-// checkout's environment (slotEnv), after the pool's reset_db when the
-// checkout changes the pool's schema_paths: Slots.Checkout's schema step
-// marked the pool slot dirty_schema (it stays so until the release loads
-// the base schema again, so a later round of the PR reloads too, also
-// after a push that reverted the change), unless the pool's
-// reset_db_on_schema_change is off. The reset has the release's budget
-// (slots.ResetDBTimeout), apart from ready_timeout.
-func (e *Engine) readinessPlan(job *roundJob) pipeline.ReadinessPlan {
+// checkout's environment (slotEnv), after the pool's reset_db when the pool
+// slot's databases carry another schema than the checkout's
+// (Slots.CheckSchema; a pool that is slots.LazySchema, so not with
+// reset_db_on_schema_change off). The reset has the release's budget
+// (slots.ResetDBTimeout), apart from ready_timeout; the slot's schema is
+// unknown until it passed (ForgetSchema, then Loaded records the
+// checkout's). A continue runs no readiness step, so no check either.
+func (e *Engine) readinessPlan(ctx context.Context, job *roundJob, kind string) pipeline.ReadinessPlan {
 	r := e.cfg.ReadinessFor(job.repo.FullName())
 	plan := pipeline.ReadinessPlan{Prepare: r.Prepare, Ready: r.Ready, Timeout: r.Timeout, Env: e.slotEnv(job)}
-	if p := job.pool; p != nil && job.slot.Kind == store.SlotKindPool && job.slot.DirtySchema && p.ResetsDBOnSchemaChange() {
-		plan.ResetDB, plan.ResetDBTimeout = p.ResetDB, slots.ResetDBTimeout
+	p := job.pool
+	if p == nil || job.slot.Kind != store.SlotKindPool || kind == kindContinue || !slots.LazySchema(*p) || e.d.Slots == nil {
+		return plan
+	}
+	slot := job.slot
+	subject := "slot:" + slot.Name
+	check, err := e.d.Slots.CheckSchema(ctx, slot, *p)
+	if err != nil {
+		e.log.Warn("schema check failed; reloading", "slot", slot.Name, "err", err)
+		check = slots.SchemaCheck{Need: true, Why: "the schema could not be compared"}
+	}
+	if !check.Need {
+		plan.SchemaNote = check.Why
+		e.event(ctx, "info", subject, "slot.schema_unchanged", check.Why, map[string]any{"pr": prSubject(job.repo, job.pr.Number), "sha": check.SHA})
+		return plan
+	}
+	if err := e.d.Slots.ForgetSchema(ctx, slot); err != nil {
+		e.log.Warn("forget the slot's schema", "slot", slot.Name, "err", err)
+	}
+	plan.ResetDB, plan.ResetDBTimeout = p.ResetDB, slots.ResetDBTimeout
+	plan.SchemaNote = "reloading the schema: " + check.Why
+	plan.Loaded = func(ctx context.Context) {
+		if err := e.d.Slots.RecordSchema(ctx, slot, check); err != nil {
+			e.log.Warn("record the slot's schema", "slot", slot.Name, "err", err)
+		}
 	}
 	return plan
 }

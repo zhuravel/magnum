@@ -556,6 +556,7 @@ func (rd *round) finalizeJudge(ctx context.Context, runIDs []string, v verdict) 
 		rd.recordFindings(ctx, runIDs[0], v.result)
 		rd.handleDuplicates(ctx, v.review)
 		rd.checkLocalPaths(ctx, v.review)
+		rd.fixFooter(ctx, v.review)
 		rd.dismissStale(ctx, res.Event, res.ReviewID, res.ReviewURL)
 	}
 	return rd.done(ctx, v.outcome, v.err)

@@ -28,6 +28,7 @@ import (
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // ---- clock ----
@@ -111,6 +112,9 @@ type fakeGH struct {
 	// commit in.
 	merges map[string]bool
 	calls  []string
+	// onRadar and onCIStates run during those calls (outside the lock):
+	// what a person does while the daemon waits for GitHub.
+	onRadar, onCIStates func()
 }
 
 // ComparePush answers like CompareFilesStatus (one "compare_files:" call),
@@ -246,8 +250,14 @@ func (g *fakeGH) count(prefix string) int {
 	return n
 }
 
-func (g *fakeGH) Radar(_ context.Context, org string) ([]github.RepoRadar, github.RateLimit, error) {
+// Radar, CIStates and Details run github.BetweenCalls first, as the client
+// does before each gh command.
+func (g *fakeGH) Radar(ctx context.Context, org string) ([]github.RepoRadar, github.RateLimit, error) {
+	github.BetweenCalls(ctx)
 	g.record("radar:" + org)
+	if fn := g.hook(&g.onRadar); fn != nil {
+		fn()
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.radarErr != nil {
@@ -275,7 +285,18 @@ func (g *fakeGH) Radar(_ context.Context, org string) ([]github.RepoRadar, githu
 
 // CIStates answers the rollup of each asked PR whose head is still the
 // one asked about, from its spec (none for ciUnknown).
-func (g *fakeGH) CIStates(_ context.Context, prs []github.PRRadar) (map[string]string, github.RateLimit, error) {
+// hook reads one of the on* hooks under the lock.
+func (g *fakeGH) hook(fn *func()) func() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return *fn
+}
+
+func (g *fakeGH) CIStates(ctx context.Context, prs []github.PRRadar) (map[string]string, github.RateLimit, error) {
+	github.BetweenCalls(ctx)
+	if fn := g.hook(&g.onCIStates); fn != nil {
+		fn()
+	}
 	ids := make([]string, len(prs))
 	for i, p := range prs {
 		ids[i] = p.NodeID
@@ -298,7 +319,8 @@ func (g *fakeGH) CIStates(_ context.Context, prs []github.PRRadar) (map[string]s
 	return out, github.RateLimit{Limit: 5000, Remaining: 4899, Cost: 1}, nil
 }
 
-func (g *fakeGH) Details(_ context.Context, owner, repo string, numbers []int) (map[int]github.PRDetails, []int, error) {
+func (g *fakeGH) Details(ctx context.Context, owner, repo string, numbers []int) (map[int]github.PRDetails, []int, error) {
+	github.BetweenCalls(ctx)
 	g.record(fmt.Sprintf("details:%s/%s:%v", owner, repo, numbers))
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -765,6 +787,8 @@ type fakeSlots struct {
 	// schema_paths: the slot becomes dirty_schema, as slots.Checkout's
 	// schema step marks it.
 	schemaChange bool
+	// ensureNote is what EnsureSchema answers (magnum open).
+	ensureNote string
 }
 
 func (f *fakeSlots) record(s string) {
@@ -898,6 +922,60 @@ func (f *fakeSlots) Guard(ctx context.Context, slot store.Slot) error {
 func (f *fakeSlots) ClearPin(ctx context.Context, slot store.Slot) error {
 	f.record("clear_pin:" + slot.Name)
 	return f.st.UpdateSlotFields(ctx, slot.ID, func(u *store.SlotUpdate) { u.Set("pinned", false) })
+}
+
+// CheckSchema compares the checkout's schema, "pr" when schemaChange is set
+// and "base" otherwise, with the slot's recorded schema_fp, as
+// slots.CheckSchema does with real fingerprints.
+func (f *fakeSlots) CheckSchema(ctx context.Context, slot store.Slot, _ config.Pool) (slots.SchemaCheck, error) {
+	f.record("check_schema:" + slot.Name)
+	sl, err := f.st.SlotByID(ctx, slot.ID)
+	if err != nil {
+		return slots.SchemaCheck{}, err
+	}
+	f.mu.Lock()
+	fp := map[bool]string{true: "pr", false: "base"}[f.schemaChange]
+	f.mu.Unlock()
+	c := slots.SchemaCheck{FP: fp, SHA: deref(sl.CheckedOutSHA)}
+	switch since := textx.ShortSHA(deref(sl.SchemaSHA)); {
+	case sl.SchemaFP == nil:
+		c.Need, c.Why = true, "the schema its databases carry is unknown"
+	case *sl.SchemaFP != fp:
+		c.Need, c.Why = true, "its databases carry the schema of "+since
+	default:
+		c.Why = "schema unchanged since " + since + ": no reset"
+	}
+	return c, nil
+}
+
+func (f *fakeSlots) ForgetSchema(ctx context.Context, slot store.Slot) error {
+	f.record("forget_schema:" + slot.Name)
+	return f.setSchema(ctx, slot.ID, "", "")
+}
+
+func (f *fakeSlots) RecordSchema(ctx context.Context, slot store.Slot, c slots.SchemaCheck) error {
+	f.record("record_schema:" + slot.Name + ":" + c.FP)
+	return f.setSchema(ctx, slot.ID, c.FP, c.SHA)
+}
+
+// setSchema records fp loaded from sha on slot id ("" = unknown).
+func (f *fakeSlots) setSchema(ctx context.Context, id int64, fp, sha string) error {
+	return f.st.UpdateSlotFields(ctx, id, func(u *store.SlotUpdate) {
+		if fp == "" {
+			u.Set("schema_fp", nil)
+			u.Set("schema_sha", nil)
+			return
+		}
+		u.Set("schema_fp", fp)
+		u.Set("schema_sha", sha)
+	})
+}
+
+func (f *fakeSlots) EnsureSchema(_ context.Context, slot store.Slot, _ config.Pool) (string, error) {
+	f.record("ensure_schema:" + slot.Name)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.ensureNote, nil
 }
 
 func (f *fakeSlots) HumanEvidence(context.Context, store.Slot) (string, error) { return "", nil }

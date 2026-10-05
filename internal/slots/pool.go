@@ -146,6 +146,7 @@ func resetSlotFields(u *store.SlotUpdate) {
 	u.Set("hold_reason", nil)
 	u.Set("lock_sha", nil)
 	u.Set("last_error", nil)
+	setSchema(u, SchemaCheck{})
 }
 
 // provision runs the provisioning steps for a slot in state provisioning.
@@ -216,9 +217,13 @@ func (m *Manager) provisionSteps(ctx context.Context, subject string, sl store.S
 		if err := m.recordDatabases(ctx, sl, pool, dbs); err != nil {
 			return err
 		}
+		// The setup loaded the checkout's schema, as the release trusted
+		// before: a first round of a PR with the same schema does not reload.
+		loaded := m.loadedSchema(ctx, sl, pool)
 		err = m.d.Store.TransitionSlot(ctx, sl.ID, []string{store.SlotProvisioning}, store.SlotFree, func(u *store.SlotUpdate) {
 			u.Set("lock_sha", lock)
 			u.Set("last_error", nil)
+			setSchema(u, loaded)
 		})
 		if err != nil {
 			return fmt.Errorf("slots: mark %s free: %w", sl.Name, err)
@@ -592,6 +597,7 @@ func (m *Manager) markRemoved(ctx context.Context, sl store.Slot, reason string)
 		u.Set("hold_reason", nil)
 		u.Set("pinned", false)
 		u.Set("last_error", nil)
+		setSchema(u, SchemaCheck{})
 	})
 	if err != nil {
 		return err

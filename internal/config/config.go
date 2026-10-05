@@ -415,11 +415,13 @@ type Pool struct {
 	Databases       []string          `toml:"databases"`
 	Env             map[string]string `toml:"env"`
 	// ResetDBOnSchemaChange runs ResetDB before the reviewers of a round
-	// whose checkout changes SchemaPaths, as the first commands of the
-	// readiness step (see Prepare), so the slot's databases carry the PR's
+	// whose checkout's files under SchemaPaths differ from those the slot's
+	// databases were last loaded from (slots.CheckSchema), as the first
+	// commands of the readiness step (see Prepare), so they carry the PR's
 	// schema; they have the release's reset_db budget of their own, and
-	// ReadyTimeout starts after them. The release still loads the base
-	// schema. nil = true; read it through ResetsDBOnSchemaChange.
+	// ReadyTimeout starts after them. The release then keeps the databases
+	// as they are; false loads the base schema at release instead, as
+	// before. nil = true; read it through ResetsDBOnSchemaChange.
 	ResetDBOnSchemaChange *bool `toml:"reset_db_on_schema_change"`
 	// Prepare and Ready make a round's checks work: before the reviewers
 	// start, the round runs each prepare command (`bin/rails
@@ -767,8 +769,17 @@ func (c *Config) expand() {
 		if c.Pools[i].MinFreeDiskGB == 0 {
 			c.Pools[i].MinFreeDiskGB = c.Daemon.MinFreeDiskGB
 		}
+		if c.Pools[i].IdleRemoveAfter.Duration == 0 {
+			c.Pools[i].IdleRemoveAfter.Duration = DefaultIdleRemoveAfter
+		}
 	}
 }
+
+// DefaultIdleRemoveAfter is a pool's idle_remove_after when it sets none (or
+// 0): a free slot above pool.min is removed once it has been idle this long.
+// Without it every reconcile removed the surplus at once, and the next
+// provision wrote about 1 GB again.
+const DefaultIdleRemoveAfter = 168 * time.Hour
 
 // IdentityByName returns the identity or nil.
 func (c *Config) IdentityByName(name string) *Identity {

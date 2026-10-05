@@ -63,7 +63,7 @@ func (e *Engine) poll(ctx context.Context) error {
 			errs = append(errs, fmt.Errorf("poll %s: no GitHub client for identity %q", w.Owner, w.PollIdentity))
 			continue
 		}
-		repos, rl, err := gh.Radar(ctx, w.Owner)
+		repos, rl, err := gh.Radar(e.betweenCalls(ctx), w.Owner)
 		e.recordRateLimit(ctx, rl, now)
 		if err != nil {
 			if e.logOnce("poll:"+w.Owner, err.Error(), now) {
@@ -81,6 +81,31 @@ func (e *Engine) poll(ctx context.Context) error {
 	e.recheckDeltas(ctx)
 	e.setKV(ctx, kvLastPoll, store.FormatTime(now))
 	return errors.Join(errs...)
+}
+
+// requestsMidPoll answers the requests a CLI or a screen queued while the
+// poll waits for GitHub (pin, mute, review, ...): the tick handles requests
+// before and after the poll, which takes 10 to 12 s with several watches,
+// and the kick a request sends cannot cut it short. The poll calls it where
+// it holds no PR row it decides on afterwards: before each GitHub read of
+// the radar (its pages included), the CI rollups and the Details
+// (betweenCalls), before each repository and before each PR it applies. So
+// a request waits for one GitHub call, the daemon stays the only writer of
+// the PR and slot rows a request changes, and the order of requests holds.
+// A nested call (a handler reading GitHub) does nothing.
+func (e *Engine) requestsMidPoll(ctx context.Context) {
+	if e.midPoll || ctx.Err() != nil {
+		return
+	}
+	e.midPoll = true
+	defer func() { e.midPoll = false }()
+	e.handleRequests(ctx)
+}
+
+// betweenCalls is ctx with requestsMidPoll(ctx) run before each GitHub
+// call made with it (github.WithBetweenCalls); the handlers get ctx itself.
+func (e *Engine) betweenCalls(ctx context.Context) context.Context {
+	return github.WithBetweenCalls(ctx, func() { e.requestsMidPoll(ctx) })
 }
 
 func (e *Engine) recordRateLimit(ctx context.Context, rl github.RateLimit, now time.Time) {
@@ -117,12 +142,13 @@ func (e *Engine) pollOwner(ctx context.Context, w config.Watch, gh GitHub, repos
 			watches[i] = ww
 		}
 	}
-	e.readCI(ctx, w, gh, repos, watches, now)
+	e.readCI(e.betweenCalls(ctx), w, gh, repos, watches, now)
 	var errs []error
 	for i, rr := range repos {
 		if watches[i] == nil {
 			continue
 		}
+		e.requestsMidPoll(ctx)
 		if err := e.pollRepo(ctx, *watches[i], gh, rr, ownerSynced, now); err != nil {
 			errs = append(errs, err)
 		}
@@ -219,7 +245,10 @@ func (e *Engine) pollRepo(ctx context.Context, w config.Watch, gh GitHub, rr git
 		}
 		e.refreshRequiredChecks(ctx, gh, repo, branch, firstSync, now)
 	}
-	details, needed := e.fetchDetails(ctx, gh, full, rr.PRs, byNode)
+	// Requests may be answered during the Details read: byNode serves its
+	// GitHub fields only from here on, and applyRadarPRs decides on the rows
+	// its upserts read.
+	details, needed := e.fetchDetails(e.betweenCalls(ctx), gh, full, rr.PRs, byNode)
 	errs, inRadar := e.applyRadarPRs(ctx, w, gh, repo, rr.PRs, byNode, details, needed, firstSync, now)
 
 	var missing []store.PR
@@ -295,6 +324,9 @@ func (e *Engine) applyRadarPRs(ctx context.Context, w config.Watch, gh GitHub, r
 	var errs []error
 	inRadar := map[string]bool{}
 	for _, p := range prs {
+		// The previous PR's files, comparisons and dismissals were GitHub
+		// calls; cur below serves its GitHub fields only.
+		e.requestsMidPoll(ctx)
 		inRadar[p.NodeID] = true
 		cur, exists := byNode[p.NodeID]
 		d, hasD := details[p.Number]

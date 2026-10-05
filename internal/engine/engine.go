@@ -113,6 +113,12 @@ type Slots interface {
 	Reserve(ctx context.Context, pr store.PR, pool config.Pool) (store.Slot, error)
 	Repair(ctx context.Context, slot store.Slot, pool config.Pool) error
 	Adopt(ctx context.Context, pool config.Pool, path string) (store.Slot, error)
+	// CheckSchema, ForgetSchema and RecordSchema decide and record a round's
+	// schema reload (readinessPlan); EnsureSchema reloads for magnum open.
+	CheckSchema(ctx context.Context, slot store.Slot, pool config.Pool) (slots.SchemaCheck, error)
+	ForgetSchema(ctx context.Context, slot store.Slot) error
+	RecordSchema(ctx context.Context, slot store.Slot, c slots.SchemaCheck) error
+	EnsureSchema(ctx context.Context, slot store.Slot, pool config.Pool) (string, error)
 }
 
 // Git is the part of *gitx.Client the engine reads (round context, clone
@@ -246,6 +252,7 @@ type Engine struct {
 	kick          chan struct{}
 	batch         *notify.Batcher
 	lastReconcile time.Time
+	midPoll       bool // requestsMidPoll is answering requests (the tick's goroutine only)
 	herdrUp       *bool
 	starts        starter
 	dryRounds     int // rounds a dry run planned this tick
@@ -593,7 +600,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	// Requests come first: the GitHub poll takes seconds (about 12 with
 	// several watches), and a CLI or screen waiting for an answer gave up
 	// before it came. The requests that arrive during the poll are handled
-	// after it.
+	// between its GitHub calls (requestsMidPoll, poll.go).
 	e.handleRequests(ctx)
 	e.refreshIdentities(ctx)
 	if err := e.poll(ctx); err != nil {

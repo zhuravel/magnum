@@ -57,13 +57,15 @@ func TestOpenRequestRestoresAParkedPR(t *testing.T) {
 	h := newHarness(t)
 	pr := h.parkedPR()
 	h.ag.resumeIDs = map[agents.Role]string{agents.RoleJudge: "uuid-judge"}
+	// The slot's databases carried another schema: open loads the checkout's.
+	h.sl.ensureNote = "loaded the schema of b1 (its databases carry the schema of a0)"
 	earlier := len(h.ag.all())
 	id := h.enqueue(ReqOpen, OpenPayload{PRTarget: PRTarget{Repo: "talkable/talkable", Number: 2}})
 	h.tick()
 
 	r := h.request(id)
 	if r.State != store.RequestDone || !strings.Contains(deref(r.Result), "restored talkable/talkable#2 in review1") ||
-		!strings.Contains(deref(r.Result), "codex-judge pane p-judge") {
+		!strings.Contains(deref(r.Result), "codex-judge pane p-judge; loaded the schema of b1") {
 		t.Fatalf("open request: %+v %q", r, deref(r.Result))
 	}
 	cur := h.wantState(2, store.PRReviewed) // the PR's state is untouched
@@ -74,7 +76,7 @@ func TestOpenRequestRestoresAParkedPR(t *testing.T) {
 	if deref(sl.PRID) != pr.ID || sl.State != store.SlotHeld || !sl.Pinned || deref(sl.CheckedOutSHA) != "b1" {
 		t.Fatalf("slot = %+v", sl)
 	}
-	for _, want := range []string{"reserve:" + itoa(pr.ID), "checkout:review1:" + itoa(pr.ID) + ":b1", "pin:review1"} {
+	for _, want := range []string{"reserve:" + itoa(pr.ID), "checkout:review1:" + itoa(pr.ID) + ":b1", "ensure_schema:review1", "pin:review1"} {
 		if !slices.Contains(h.sl.all(), want) {
 			t.Fatalf("slot calls %v lack %s", h.sl.all(), want)
 		}
@@ -98,6 +100,26 @@ func TestOpenRequestRestoresAParkedPR(t *testing.T) {
 	h.tick()
 	if r := h.request(again); r.State != store.RequestDone || !strings.Contains(deref(r.Result), "is live") {
 		t.Fatalf("second open: %+v %q", r, deref(r.Result))
+	}
+}
+
+// magnum open of a PR that still holds its slot leaves the slot's
+// databases alone (a person may have migrated them on purpose); only a free
+// slot it reserves, which carries its last PR's schema, gets the checkout's
+// (TestOpenRequestRestoresAParkedPR).
+func TestOpenOfAPRsOwnSlotLeavesItsDatabasesAlone(t *testing.T) {
+	h := newHarness(t)
+	pr := h.reviewedPR(2, "b1")
+	if err := h.ag.Park(h.ctx, pr); err != nil {
+		t.Fatal(err)
+	}
+	id := h.enqueue(ReqOpen, OpenPayload{PRTarget: PRTarget{Ref: "2"}})
+	h.tick()
+	if r := h.request(id); r.State != store.RequestDone || !strings.Contains(deref(r.Result), "restored talkable/talkable#2 in review1") {
+		t.Fatalf("open request: %+v %q", r, deref(r.Result))
+	}
+	if slices.Contains(h.sl.all(), "ensure_schema:review1") {
+		t.Fatalf("open reloaded the schema of the PR's own slot: %v", h.sl.all())
 	}
 }
 

@@ -155,6 +155,23 @@ func (e *Engine) openPR(ctx context.Context, repo store.Repo, w config.Watch, pr
 	if slot, err = e.st.SlotByID(ctx, slot.ID); err != nil {
 		return "", err
 	}
+	// A free pool slot just reserved carries the schema its last PR loaded
+	// (slots.LazySchema): its databases are made to fit the checkout handed
+	// over. The PR's own slot is left as it is: a person may have migrated
+	// its databases on purpose.
+	schemaNote := ""
+	if pool != nil && fresh {
+		note, err := e.d.Slots.EnsureSchema(ctx, slot, *pool)
+		switch {
+		case err != nil && ctx.Err() != nil:
+			return "", err
+		case err != nil:
+			schemaNote = "; its databases' schema could not be loaded (the next round reloads it): " + err.Error()
+			e.event(ctx, "warn", "slot:"+slot.Name, "slot.schema_reset_failed", "magnum open: "+err.Error(), nil)
+		case strings.HasPrefix(note, "loaded"):
+			schemaNote = "; " + note
+		}
+	}
 
 	// 2. Sessions.
 	var layout, start []config.Role
@@ -215,8 +232,8 @@ func (e *Engine) openPR(ctx context.Context, repo store.Repo, w config.Watch, pr
 	at := deref(slot.CheckedOutSHA)
 	e.event(ctx, "info", subject, "pr.opened", fmt.Sprintf("magnum open: restored in %s at %s, pinned", slot.Name, textx.ShortSHA(at)),
 		map[string]any{"slot": slot.Name, "pane": pane, "role": role.Name})
-	return fmt.Sprintf("restored %s in %s at %s (pinned; `magnum unpin %s` lets reviews use it again); %s pane %s",
-		label, slot.Name, textx.ShortSHA(at), label, role.Name, pane), nil
+	return fmt.Sprintf("restored %s in %s at %s (pinned; `magnum unpin %s` lets reviews use it again); %s pane %s%s",
+		label, slot.Name, textx.ShortSHA(at), label, role.Name, pane, schemaNote), nil
 }
 
 // releaseReserved hands back the slot a failed `magnum open` reserved: the

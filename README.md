@@ -150,7 +150,7 @@ verifying, and launchd starts the new build (events `daemon.restart_pending`, th
 by hand) only says so: nothing would start it again.
 
 A command handed to the daemon waits up to 30 s for its answer (the daemon answers requests before its
-GitHub poll); a request still pending says how to follow it (`magnum logs request:<id> -f`). A request
+GitHub poll and between the poll's GitHub calls, so one waits for a single call); a request still pending says how to follow it (`magnum logs request:<id> -f`). A request
 that reaches a daemon newer than it fails with "this daemon predates <field>: restart it" instead of
 running without the field. Without a daemon, `review`, `approve`, `request-changes` and `open` of a parked
 PR refuse and queue nothing (they would post or act whenever a daemon next started); the other commands
@@ -325,11 +325,17 @@ Magnum dismisses that approval before the re-review is queued; `keep_approvals =
 `ready` (probes, exit 0 = ready) on a `[[pool]]` or `[[repo]]` run in the checkout before the
 reviewers, as `zsh -lc` with the slot's env and within `ready_timeout` (5m) together, followed by a
 check that the login shell runs the Ruby the checkout pins; a failure never stops the round, it tells
-the judge what will not work. When a PR changes a pool's `schema_paths` (such as `["db/"]`), the pool's
-`reset_db` commands run first, the same way but within 30 minutes of their own (as on release, with
-`ready_timeout` starting after them), so the slot's databases carry the PR's tables and columns; the release loads the base schema again. `reset_db_on_schema_change =
-false` on the `[[pool]]` keeps `reset_db` to the release, and `magnum doctor` warns about a pool with
-`schema_paths` and no `reset_db`. A watch's `skip_paths` (path globs where `**` spans
+the judge what will not work. When the files under a pool's `schema_paths` (such as `["db/"]`) differ
+from those the slot's databases were last loaded from, or the development database's
+`schema_migrations` no longer match them, the pool's `reset_db` commands run first, the same way but
+within 30 minutes of their own (with `ready_timeout` starting after them), so the slot's databases
+carry the PR's tables and columns. Another round of the same PR, or a PR on the same schema, reloads
+nothing ("schema unchanged since <commit>: no reset"), and a release keeps the databases as they are
+for the next PR to compare (each reload rewrites every table); `magnum open` reloads them the same way
+before it hands a person a free slot. `reset_db_on_schema_change = false` on the `[[pool]]` keeps
+`reset_db` to the release, which then loads the base schema, and `magnum doctor` warns about a pool with
+`schema_paths` and no `reset_db`. A free slot above a pool's `min` is removed once it has been idle for
+`idle_remove_after` (168h when unset). A watch's `skip_paths` (path globs where `**` spans
 directories, such as `["docs/**", "**/*.md"]`) skips a PR whose changed files all match, while a forced
 `magnum review` still runs it. See the comments in `config.defaults.toml` for every key.
 
@@ -572,7 +578,7 @@ the slot only when the PR holds one.
 
 An action hands its work to the daemon as a request and shows the daemon's answer, not "queued": when the
 answer is not there by the time the action returns (a release always, which runs on the daemon's heavy
-worker; anything else while a slow GitHub poll holds the tick), its row carries ◷ (`?` in ASCII) and the
+worker; anything else while a slow GitHub call holds the tick), its row carries ◷ (`?` in ASCII) and the
 screen re-reads the request with every refresh until the answer comes, then flashes it. A failure, the
 action's own or the daemon's refusal of its request, stays in red until a key is pressed; one too long
 for the footer ends in "(! shows all)". `!` opens the action log on both screens: the last 20 outcomes,

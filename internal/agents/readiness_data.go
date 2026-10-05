@@ -2,8 +2,9 @@ package agents
 
 // Verification readiness (backlog 14): before the reviewers start, a round
 // runs the repository's prepare commands and ready probes ([[repo]] or
-// [[pool]] prepare/ready), after the pool's reset_db when the PR changes its
-// schema_paths, and a built-in Ruby check in the checkout, so the
+// [[pool]] prepare/ready), after the pool's reset_db when the slot's
+// databases carry another schema than the checkout's, and a built-in Ruby
+// check in the checkout, so the
 // judge knows up front which checks cannot work on this machine instead of
 // spending agent time rediscovering it. The judge prompt lists the outcome
 // (JudgeData.Readiness); the full results, including each command's last
@@ -12,8 +13,8 @@ package agents
 // Readiness check kinds (ReadinessCheck.Kind).
 const (
 	// ReadinessResetDB is a [[pool]] reset_db command, run first when the
-	// PR changes the pool's schema_paths: it loads the PR's schema into the
-	// slot's databases.
+	// slot's databases carry another schema than the checkout's: it loads
+	// the PR's schema into them.
 	ReadinessResetDB = "reset_db"
 	ReadinessPrepare = "prepare" // a [[repo]]/[[pool]] prepare command
 	ReadinessReady   = "ready"   // a [[repo]]/[[pool]] ready probe (exit 0 = ready)

@@ -1661,3 +1661,57 @@ editing history. Code, config comments and prompts reference these by their head
   "macOS did not let magnum script iTerm (the Automation permission, error -1743): System Settings →
   Privacy & Security → Automation → allow iTerm for the app that runs magnum". Any other focus failure
   still falls back to bringing the terminal forward.
+- **A slot reloads its databases only when the checkout needs another schema** (2026-10-06). One
+  `reset_db` rewrites every table (746 on Talkable, 0.3-0.5 GB of MySQL writes and minutes of round
+  time), and it ran before every round of a slot marked `dirty_schema` (the flag stayed until the
+  release), while the release loaded the base schema again for the next PR to replace. A slot now records
+  the schema its databases carry (`schema_fp`, `schema_sha`, `schema_version`, migration 0012): the
+  fingerprint of the files `schema_paths` match at the commit they were loaded from (`git diff-tree` of the
+  empty tree, so the pathspec rules are those of the `dirty_schema` check), set after a reload passed and
+  after provisioning (whose setup loads the checkout's schema, as the release trusted before), and
+  cleared before a reload starts (one that stops half-way leaves it unknown). The readiness step reloads
+  when the checkout's fingerprint differs, when none is recorded (a slot the previous binary released:
+  one reload each), or when the development database's `MAX(schema_migrations.version)` is not the
+  version the checkout's `db/schema.rb` declares (a migration run by hand or by an agent); otherwise it
+  says "schema unchanged since <commit>: no reset" in a `slot.schema_unchanged` event and the readiness
+  line and file. The release keeps the databases (`slot.schema_kept`) unless the development database
+  drifted from the recorded version, the old check as a safety net, which then loads the base schema as
+  before. `magnum open` hands a person databases that fit the checkout: when the free slot it reserves
+  carries another schema it reloads first (through mise, the slot's log, 30m), so a released slot's last
+  PR never shows through; a failed reload is reported in its answer and leaves the schema unknown. The
+  PR's own claimed or held slot is left as it is (a person may have migrated it on purpose), and a
+  removal changes nothing (its teardown drops the databases). `reset_db_on_schema_change = false` keeps the old release:
+  the base schema at every release, no reload before the reviewers. Rejected: reloading the base schema
+  lazily at the next claim (two reloads for a PR that needs another schema), and skipping only the reloads
+  of the same PR's later rounds (the next PR with the same schema would still pay one).
+- **A pool keeps a surplus free slot for a week** (2026-10-06). `idle_remove_after` was commented out in
+  the built-in defaults, so a pool without it removed every free slot above `min` at the next reconcile
+  (every 10 minutes), and the next demand provisioned one again: about 1 GB written per cycle. Unset or
+  0 now means 168h (`config.DefaultIdleRemoveAfter`); a value in the user's config is kept.
+- **Fewer small writes** (2026-10-06). `SetKV` leaves a key that already holds the value alone,
+  `updated_at` included (the daemon sets the same gate, wait and pause keys every tick); nothing reads
+  `kv.updated_at`, and a heartbeat such as `daemon.last_tick` carries its time in the value, so it is
+  still written every tick. The `slot-*`, `provision-*` and `perpr-*` logs rotate like `daemon.log`: the
+  write that would take one past 2 MB (`slots.SlotLogMax`) first moves it to `<name>.1`, replacing the
+  previous one (a seed that prints its SQL filled several MB on every reset, and they were never cut).
+- **Requests are answered between the poll's GitHub calls; pin and mute stay the daemon's** (2026-10-06).
+  A pin or mute pressed while the daemon polled GitHub waited for the whole poll, 10 to 12 s with several
+  watches (the kick cannot cut a poll short). Writing the flag from the CLI was considered and audited
+  first: the store writes only the columns a caller sets, so no daemon path rewrites `pinned` or `muted`
+  from a whole stale row, but a review request queued before a pin and answered after it unpins the PR
+  and its slot (`unpinForReview`), and an ignore queued before an unmute mutes the PR again: a CLI write
+  would invert the order of the person's own actions, and a compare-and-set on the flag cannot tell the
+  new pin from the old one. So the daemon stays the only writer, in request order, and answers pending
+  requests during the poll instead: before each GitHub call of the radar (its pages included), the CI
+  rollups and the Details reads (`github.WithBetweenCalls` in the call's context), before each repository
+  and before each PR it applies, the places where the poll holds no PR row it decides on afterwards (its
+  snapshot serves GitHub fields only there). Not between a PR's upsert and its transitions, where a
+  request could change the row the transitions read. A request now waits for one GitHub call; handlers
+  get the poll's context without the hook, and a nested call does nothing.
+- **The review footer's paragraph is checked after posting** (2026-10-06). Besides the skill's rule
+  (above), a verified review whose body has the identity's footer glued to the line before it (no blank
+  line, so GitHub posts its Markdown as raw text after `</details>` or a comment) is edited once to put
+  the blank line in (`round.footer_fixed`), through the same author-checked edit `AppendToReview` makes.
+  `AppendToReview` puts its note ("_Reviewed 06f72c2; 1 commit arrived …_") before the footer when the
+  body ends with it, so the footer stays the last paragraph; a body without one gets the note last, as
+  before. Both edits are idempotent.

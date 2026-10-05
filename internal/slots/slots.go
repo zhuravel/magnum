@@ -309,7 +309,14 @@ func (m *Manager) runLogged(ctx context.Context, c execx.Cmd, logName string) er
 	return nil
 }
 
-// transcript appends redacted text to a log file under layout.Logs(); best effort.
+// SlotLogMax caps each log transcript writes (slot-<name>.log,
+// provision-<name>.log, perpr-<slug>.log): the write that would push one past
+// it first moves it to <name>.1, replacing the previous one, as daemon.log
+// rotates. A seed that prints its SQL fills several MB on every reset.
+const SlotLogMax = 2 << 20
+
+// transcript appends redacted text to a log file under layout.Logs(),
+// rotated at SlotLogMax; best effort.
 func (m *Manager) transcript(logName, text string) {
 	if !m.d.Layout.Valid() || logName == "" {
 		return
@@ -319,13 +326,20 @@ func (m *Manager) transcript(logName, text string) {
 		m.logf("slots: log dir: %v", err)
 		return
 	}
-	f, err := os.OpenFile(filepath.Join(dir, logName), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	text = execx.Redact(text)
+	path := filepath.Join(dir, logName)
+	if fi, err := os.Stat(path); err == nil && fi.Size() > 0 && fi.Size()+int64(len(text)) > SlotLogMax {
+		if err := os.Rename(path, path+".1"); err != nil {
+			m.logf("slots: rotate log: %v", err)
+		}
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		m.logf("slots: open log: %v", err)
 		return
 	}
 	defer f.Close()
-	if _, err := f.WriteString(execx.Redact(text)); err != nil {
+	if _, err := f.WriteString(text); err != nil {
 		m.logf("slots: write log: %v", err)
 	}
 }

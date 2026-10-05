@@ -104,10 +104,14 @@ func (s *Store) GetKV(ctx context.Context, key string) (string, bool, error) {
 	return v, true, nil
 }
 
-// SetKV stores value under key. Never store secrets here.
+// SetKV stores value under key. A key that holds value already is left
+// alone, updated_at included: the daemon sets the same keys every tick, and
+// nothing reads updated_at (a heartbeat such as daemon.last_tick carries its
+// time in the value, so it is written every time). Never store secrets here.
 func (s *Store) SetKV(ctx context.Context, key, value string) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO kv (key, value, updated_at) VALUES (?, ?, ?)
-ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`, key, value, FormatTime(s.now()))
+ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+WHERE kv.value IS NOT excluded.value`, key, value, FormatTime(s.now()))
 	if err != nil {
 		return fmt.Errorf("set kv %s: %w", key, err)
 	}

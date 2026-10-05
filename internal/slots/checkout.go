@@ -250,7 +250,8 @@ func (m *Manager) deps(ctx context.Context, slot store.Slot, pool config.Pool) e
 
 // markSchema sets dirty_schema when HEAD changes pool.schema_paths relative to
 // its merge base with origin/<base> (unrelated histories count as dirty). It
-// never clears the flag: only a schema reload on release does.
+// never clears the flag: the release does. Whether a round reloads the
+// databases is CheckSchema's call (LazySchema), not this flag's.
 func (m *Manager) markSchema(ctx context.Context, sl store.Slot, pool config.Pool) error {
 	if len(pool.SchemaPaths) == 0 {
 		return nil
@@ -281,9 +282,11 @@ func (m *Manager) markSchema(ctx context.Context, sl store.Slot, pool config.Poo
 // releasing, fetch_base, reset (placeholder branch → origin/<base>, tracked
 // changes discarded after a slot.discarded event, checked_out_sha cleared),
 // delete_ref (refs/magnum/pr/N), render_mise, deps, schema_check
-// (when dirty_schema is set or MAX(schema_migrations.version) of the first
-// development database differs from db/schema.rb at HEAD: the slot moves to
-// dirty_schema and pool.reset_db runs through mise exec, 30m; a second
+// (resetSchema: a LazySchema pool keeps the databases unless
+// MAX(schema_migrations.version) of the development database differs from
+// the version of the schema recorded for them; otherwise when dirty_schema
+// is set or that version differs from db/schema.rb at HEAD: the slot moves
+// to dirty_schema and pool.reset_db runs through mise exec, 30m; a second
 // failure in a row moves the slot to broken and returns ErrBroken) and
 // mark_free (store.ReleaseSlot: free, pr_id cleared, assignment closed with
 // reason). A releasing or dirty_schema slot resumes after its last completed
@@ -380,8 +383,13 @@ func (m *Manager) releaseSteps(ctx context.Context, subject string, sl store.Slo
 	})
 }
 
-// resetSchema reloads the slot's databases when the PR touched the schema or
-// the dev database is not at db/schema.rb's version.
+// resetSchema is the release's schema step. A LazySchema pool keeps the
+// slot's databases, whatever schema they carry, unless the development
+// database drifted from the recorded schema (keptSchemaDrifted): the next
+// round reloads them only when its checkout needs another (CheckSchema).
+// Otherwise, and on a drift, it reloads them with the base schema when the
+// PR touched the schema or the dev database is not at db/schema.rb's
+// version, and records the base schema as theirs.
 func (m *Manager) resetSchema(ctx context.Context, slot store.Slot, pool config.Pool) error {
 	sl, err := m.reload(ctx, slot)
 	if err != nil {
@@ -389,6 +397,15 @@ func (m *Manager) resetSchema(ctx context.Context, slot store.Slot, pool config.
 	}
 	need := sl.DirtySchema
 	why := "dirty_schema"
+	if LazySchema(pool) {
+		if why, err = m.keptSchemaDrifted(ctx, sl, pool); err != nil {
+			return err
+		}
+		if why == "" {
+			return m.keepSchema(ctx, sl)
+		}
+		need = true
+	}
 	if !need && m.d.MySQL != nil {
 		want, ok, err := schemaVersion(sl.Path)
 		if err != nil {
@@ -413,7 +430,9 @@ func (m *Manager) resetSchema(ctx context.Context, slot store.Slot, pool config.
 		return m.d.Store.UpdateSlotFields(ctx, sl.ID, func(u *store.SlotUpdate) { u.Set("dirty_schema", false) })
 	}
 	if sl.State != store.SlotDirtySchema {
-		if err := m.d.Store.TransitionSlot(ctx, sl.ID, []string{store.SlotReleasing}, store.SlotDirtySchema, nil); err != nil {
+		// The databases' schema is unknown until the reload succeeds.
+		if err := m.d.Store.TransitionSlot(ctx, sl.ID, []string{store.SlotReleasing}, store.SlotDirtySchema,
+			func(u *store.SlotUpdate) { setSchema(u, SchemaCheck{}) }); err != nil {
 			return fmt.Errorf("slots: release %s: %w", sl.Name, err)
 		}
 	}
@@ -422,7 +441,11 @@ func (m *Manager) resetSchema(ctx context.Context, slot store.Slot, pool config.
 	for attempt := 1; attempt <= 2; attempt++ {
 		runErr = m.runScripts(ctx, sl, pool.SlotEnv(sl.Name), pool.ResetDB, "reset_db", "slot-"+sl.Name+".log", ResetDBTimeout)
 		if runErr == nil {
-			return m.d.Store.UpdateSlotFields(ctx, sl.ID, func(u *store.SlotUpdate) { u.Set("dirty_schema", false) })
+			base := m.loadedSchema(ctx, sl, pool)
+			return m.d.Store.UpdateSlotFields(ctx, sl.ID, func(u *store.SlotUpdate) {
+				u.Set("dirty_schema", false)
+				setSchema(u, base)
+			})
 		}
 		if ctx.Err() != nil {
 			return runErr

@@ -665,3 +665,35 @@ func TestRealIgnoresRedirectingEnvironment(t *testing.T) {
 		t.Fatalf("decoy tree changed: %q", st)
 	}
 }
+
+// TreeFiles lists the files of a commit that pathspecs match, with the same
+// pathspec rules as ChangedPaths (a directory, a glob, pathspec magic), each
+// with its blob id: what a pool slot's schema fingerprint is made of.
+func TestRealTreeFilesMatchesLikeChangedPaths(t *testing.T) {
+	fx := newFixture(t)
+	ctx := context.Background()
+	fx.fetchPR7()
+	blob := fx.git(fx.clone, "rev-parse", fx.pr+":db/schema.rb")
+
+	got, err := fx.c.TreeFiles(ctx, fx.clone, PRRef(7), "db/")
+	if want := []string{"100644 " + blob + " db/schema.rb"}; err != nil || !slices.Equal(got, want) {
+		t.Fatalf("TreeFiles(db/) = %q, %v; want %q", got, err, want)
+	}
+	for _, spec := range []string{"db/*.rb", "*.rb", "db/schema.rb"} {
+		got, err := fx.c.TreeFiles(ctx, fx.clone, PRRef(7), spec)
+		changed, cerr := fx.c.ChangedPaths(ctx, fx.clone, fx.base, PRRef(7), spec)
+		var paths []string
+		for _, f := range got {
+			paths = append(paths, f[strings.LastIndexByte(f, ' ')+1:])
+		}
+		if err != nil || cerr != nil || !slices.Equal(paths, changed) {
+			t.Fatalf("TreeFiles(%s) = %q, %v; ChangedPaths = %q, %v", spec, got, err, changed, cerr)
+		}
+	}
+	if got, err := fx.c.TreeFiles(ctx, fx.clone, fx.base, "db/"); err != nil || len(got) != 0 {
+		t.Fatalf("TreeFiles at a commit without db/ = %q, %v", got, err)
+	}
+	if _, err := fx.c.TreeFiles(ctx, fx.clone, "refs/magnum/pr/99", "db/"); !errors.Is(err, ErrNoSuchRef) {
+		t.Fatalf("TreeFiles of a missing ref: err = %v, want ErrNoSuchRef", err)
+	}
+}

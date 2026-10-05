@@ -427,26 +427,35 @@ func TestRoundCarriesTheReadinessPlanAndThePoolEnv(t *testing.T) {
 	}
 }
 
-// A checkout that changes the pool's schema_paths (the slot is
-// dirty_schema after it) runs the pool's reset_db in the readiness step,
-// before the reviewers; one that does not change it, a pool without
-// reset_db and reset_db_on_schema_change = false run none. The slot stays
-// dirty_schema, so its release still loads the base schema.
-func TestRoundResetsTheSchemaWhenItsCheckoutChangesIt(t *testing.T) {
+// The readiness step runs the pool's reset_db before the reviewers only when
+// the slot's databases carry another schema than the checkout's
+// (Slots.CheckSchema): a PR that changes the schema on a slot that carries
+// the base one, or a slot whose schema is unknown. A checkout whose schema
+// the databases carry already says why nothing runs. A pool without
+// reset_db, or with reset_db_on_schema_change = false, never checks. A
+// reload makes the slot's schema unknown until it passed (Loaded records
+// the checkout's).
+func TestRoundReloadsTheSchemaOnlyWhenTheSlotCarriesAnother(t *testing.T) {
 	reset := []string{"bin/rails db:schema:load", "RAILS_ENV=test bin/rails db:schema:load"}
 	off := false
 	tests := []struct {
-		name   string
-		change bool
-		mod    func(p *config.Pool)
-		want   []string
+		name     string
+		change   bool
+		recorded string // the slot's schema_fp before the round ("" = unknown)
+		mod      func(p *config.Pool)
+		want     []string
+		note     string
 	}{
-		{"the PR changes the schema", true, func(p *config.Pool) { p.ResetDB = reset }, reset},
-		{"the PR does not change it", false, func(p *config.Pool) { p.ResetDB = reset }, nil},
-		{"the pool has no reset_db", true, func(*config.Pool) {}, nil},
-		{"reset_db_on_schema_change = false", true, func(p *config.Pool) {
+		{"the PR changes the schema", true, "base", func(p *config.Pool) { p.ResetDB = reset }, reset,
+			"reloading the schema: its databases carry the schema of 0a1b2c3"},
+		{"the PR keeps the schema the slot carries", false, "base", func(p *config.Pool) { p.ResetDB = reset }, nil,
+			"schema unchanged since 0a1b2c3: no reset"},
+		{"the slot's schema is unknown", false, "", func(p *config.Pool) { p.ResetDB = reset }, reset,
+			"reloading the schema: the schema its databases carry is unknown"},
+		{"the pool has no reset_db", true, "base", func(*config.Pool) {}, nil, ""},
+		{"reset_db_on_schema_change = false", true, "base", func(p *config.Pool) {
 			p.ResetDB, p.ResetDBOnSchemaChange = reset, &off
-		}, nil},
+		}, nil, ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -456,14 +465,19 @@ func TestRoundResetsTheSchemaWhenItsCheckoutChangesIt(t *testing.T) {
 				tc.mod(p)
 				h.sl.schemaChange = tc.change
 			})
+			if tc.recorded != "" {
+				if err := h.sl.setSchema(h.ctx, h.slot("review1").ID, tc.recorded, "0a1b2c3d4e5f"); err != nil {
+					t.Fatal(err)
+				}
+			}
 			h.reviewedPR(2, "b1")
 			ins := h.rd.all()
 			if len(ins) != 1 {
 				t.Fatalf("rounds: %d", len(ins))
 			}
 			rd := ins[0].Readiness
-			if !slices.Equal(rd.ResetDB, tc.want) || !slices.Equal(rd.Prepare, []string{"bin/rails db:test:prepare"}) {
-				t.Fatalf("readiness = reset_db %q prepare %q, want reset_db %q", rd.ResetDB, rd.Prepare, tc.want)
+			if !slices.Equal(rd.ResetDB, tc.want) || !slices.Equal(rd.Prepare, []string{"bin/rails db:test:prepare"}) || rd.SchemaNote != tc.note {
+				t.Fatalf("readiness = reset_db %q prepare %q note %q, want reset_db %q note %q", rd.ResetDB, rd.Prepare, rd.SchemaNote, tc.want, tc.note)
 			}
 			// The reset has the release's budget, apart from ready_timeout.
 			if tc.want != nil && (rd.ResetDBTimeout != slots.ResetDBTimeout || rd.Timeout != config.DefaultReadyTimeout) {
@@ -472,8 +486,20 @@ func TestRoundResetsTheSchemaWhenItsCheckoutChangesIt(t *testing.T) {
 			if want := map[string]string{"WT_BRANCH": "review1"}; !maps.Equal(rd.Env, want) {
 				t.Fatalf("readiness env = %v, want %v", rd.Env, want)
 			}
-			if sl := h.slot("review1"); sl.DirtySchema != tc.change {
-				t.Fatalf("slot dirty_schema = %v, want %v", sl.DirtySchema, tc.change)
+			switch sl := h.slot("review1"); {
+			case tc.want != nil && (sl.SchemaFP != nil || rd.Loaded == nil):
+				t.Fatalf("before the reload passed: schema_fp %v, Loaded set %v; want unknown and set", deref(sl.SchemaFP), rd.Loaded != nil)
+			case tc.want == nil && (deref(sl.SchemaFP) != tc.recorded || rd.Loaded != nil):
+				t.Fatalf("no reload: schema_fp %q, Loaded set %v; want %q kept", deref(sl.SchemaFP), rd.Loaded != nil, tc.recorded)
+			}
+			if tc.want != nil {
+				rd.Loaded(h.ctx) // the pipeline's call once every reset_db command passed
+				if want := map[bool]string{true: "pr", false: "base"}[tc.change]; deref(h.slot("review1").SchemaFP) != want {
+					t.Fatalf("recorded schema_fp = %q, want %q", deref(h.slot("review1").SchemaFP), want)
+				}
+			}
+			if strings.HasPrefix(tc.note, "schema unchanged") && !h.hasEvent("slot:review1", "slot.schema_unchanged") {
+				t.Fatal("no slot.schema_unchanged event")
 			}
 		})
 	}

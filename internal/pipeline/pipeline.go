@@ -491,10 +491,7 @@ func (r *Runner) newRound(ctx context.Context, in RoundInput) (*round, error) {
 	pr.HeadSHA = in.TargetSHA
 	pr.Identity = r.Identity.Name()
 
-	idCfg := config.Identity{Name: r.Identity.Name(), Kind: r.Identity.Kind(), Login: r.Identity.Login()}
-	if c := r.Config.IdentityByName(r.Identity.Name()); c != nil {
-		idCfg = *c
-	}
+	idCfg := r.identityConfig()
 	login := r.Identity.Login()
 	rd := &round{
 		r: r, in: in, pr: pr,

@@ -245,24 +245,67 @@ func (rd *round) settleCut(ctx context.Context, role config.Role, run store.Run,
 }
 
 // AppendToReview adds text as the last paragraph of review reviewID, which
-// the runner's identity posted (GitHub lets only a review's author edit it):
-// it reads the body over REST and puts it back with text appended. A body
-// that already ends with text is left alone.
+// the runner's identity posted (editReview), before the identity's footer
+// when the body ends with it, so the footer stays the last paragraph. A
+// body that carries text there already is left alone.
 func (r *Runner) AppendToReview(ctx context.Context, owner, repo string, number int, reviewID int64, text string) error {
 	if r.GitHub == nil || r.Identity == nil {
 		return fmt.Errorf("%w: AppendToReview needs GitHub and Identity", ErrInvalid)
 	}
 	text = strings.TrimSpace(text)
+	footer := r.identityConfig().Footer()
+	_, err := r.editReview(ctx, owner, repo, number, reviewID, func(body string) (string, bool) {
+		return appendNote(body, text, footer)
+	})
+	return err
+}
+
+// identityConfig is the runner's identity as configured (a bare one with the
+// built-in defaults when the config does not name it).
+func (r *Runner) identityConfig() config.Identity {
+	if r.Config != nil {
+		if c := r.Config.IdentityByName(r.Identity.Name()); c != nil {
+			return *c
+		}
+	}
+	return config.Identity{Name: r.Identity.Name(), Kind: r.Identity.Kind(), Login: r.Identity.Login()}
+}
+
+// editReview reads review reviewID over REST, checks that the runner's
+// identity posted it (GitHub lets only a review's author edit it) and puts
+// back the body edit returns, when edit reports a change.
+func (r *Runner) editReview(ctx context.Context, owner, repo string, number int, reviewID int64, edit func(body string) (string, bool)) (bool, error) {
 	rv, err := r.GitHub.ReviewREST(ctx, owner, repo, number, reviewID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if login := r.Identity.Login(); !github.SameAccount(rv.UserLogin, login) {
-		return fmt.Errorf("pipeline: review %d was posted by %q, not %q", reviewID, rv.UserLogin, login)
+		return false, fmt.Errorf("pipeline: review %d was posted by %q, not %q", reviewID, rv.UserLogin, login)
 	}
-	body := strings.TrimRight(rv.Body, "\n\t ")
-	if strings.HasSuffix(body, text) {
-		return nil
+	body, changed := edit(rv.Body)
+	if !changed {
+		return false, nil
 	}
-	return r.GitHub.UpdateReviewBody(ctx, owner, repo, number, reviewID, body+"\n\n"+text)
+	return true, r.GitHub.UpdateReviewBody(ctx, owner, repo, number, reviewID, body)
+}
+
+// appendNote adds text as body's last paragraph, or right before footer
+// when the body ends with it; false when text is there already.
+func appendNote(body, text, footer string) (string, bool) {
+	const space = "\r\n\t "
+	head, tail := strings.TrimRight(body, space), ""
+	if footer != "" && strings.HasSuffix(head, footer) {
+		head, tail = strings.TrimRight(strings.TrimSuffix(head, footer), space), footer
+	}
+	if strings.HasSuffix(head, text) {
+		return body, false
+	}
+	out := text
+	if head != "" {
+		out = head + "\n\n" + text
+	}
+	if tail != "" {
+		out += "\n\n" + tail
+	}
+	return out, true
 }

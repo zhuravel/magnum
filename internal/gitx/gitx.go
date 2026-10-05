@@ -491,6 +491,46 @@ func (c *Client) ChangedPaths(ctx context.Context, dir, base, head string, paths
 	return paths, nil
 }
 
+// Empty tree ids of the two object formats: TreeFiles diffs a commit against
+// the empty tree to list its files.
+const (
+	emptyTreeSHA1   = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+	emptyTreeSHA256 = "6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321"
+)
+
+// TreeFiles lists the files of rev (a commit) that pathspecs match, with the
+// pathspec rules ChangedPaths has ("db/", a glob, pathspec magic), each as
+// "<mode> <blob id> <path>", in git's order; nil when none matches. It is
+// `git diff-tree` of the empty tree against rev, unabbreviated, so the list
+// changes exactly when a matching file's content, mode or name does. A rev
+// that does not resolve is ErrNoSuchRef.
+func (c *Client) TreeFiles(ctx context.Context, dir, rev string, pathspecs ...string) ([]string, error) {
+	sha, err := c.RevParse(ctx, dir, rev)
+	if err != nil {
+		return nil, err
+	}
+	empty := emptyTreeSHA1
+	if len(sha) == 64 {
+		empty = emptyTreeSHA256
+	}
+	args := append([]string{"diff-tree", "-r", "-z", "--no-renames", "--no-abbrev", empty, sha, "--"}, pathspecs...)
+	res, err := c.git(ctx, dir, call{label: "diff-tree " + sha[:7]}, args...)
+	if err != nil {
+		return nil, err
+	}
+	// -z raw records: ":<mode> <mode> <oid> <oid> <status>" NUL "<path>" NUL.
+	parts := strings.Split(strings.TrimSuffix(string(res.Stdout), "\x00"), "\x00")
+	var out []string
+	for i := 0; i+1 < len(parts); i += 2 {
+		f := strings.Fields(parts[i])
+		if len(f) != 5 {
+			return nil, fmt.Errorf("gitx: diff-tree %s: unexpected record %q", rev, parts[i])
+		}
+		out = append(out, f[1]+" "+f[3]+" "+parts[i+1])
+	}
+	return out, nil
+}
+
 var pullURLNumber = regexp.MustCompile(`/pull/(\d+)`)
 
 // BranchPR returns the PR number recorded in `git config branch.<b>.pr` (the

@@ -8,11 +8,11 @@ package pipeline
 // and ready probes (config.Config.ReadinessFor) and a built-in Ruby check in
 // the checkout, through the login shell the agents' tools use, and tells
 // the judge what will not work. A failure never stops the round. When the
-// PR changes the pool's schema, the pool's reset_db commands run first, the
-// same way but within the release's reset_db budget, and ready_timeout
-// starts after them (4 of 9 rounds of a pool repository skipped DB specs on
-// a table or column the PR added, because the slot's databases had the base
-// schema).
+// slot's databases carry another schema than the checkout's
+// (slots.CheckSchema), the pool's reset_db commands run first, the same way
+// but within the release's reset_db budget, and ready_timeout starts after
+// them (4 of 9 rounds of a pool repository skipped DB specs on a table or
+// column the PR added, because the slot's databases had the base schema).
 
 import (
 	"bytes"
@@ -26,6 +26,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -44,11 +45,18 @@ import (
 // ReadinessPlan is a round's readiness step: the repository's commands
 // (config.Readiness) and the slot's environment they run with.
 type ReadinessPlan struct {
-	// ResetDB are the pool's reset_db commands when the checkout changes the
-	// pool's schema_paths (the slot is dirty_schema): run before everything
-	// else, in order (Mutates), so the slot's databases carry the PR's
-	// schema. Empty when the checkout does not change it.
+	// ResetDB are the pool's reset_db commands when the slot's databases
+	// carry another schema than the checkout's (slots.CheckSchema): run
+	// before everything else, in order (Mutates), so they carry the PR's
+	// schema. Empty when they carry it already.
 	ResetDB []string
+	// Loaded is called once every ResetDB command passed: the engine
+	// records the schema the databases now carry. nil = nothing to record.
+	Loaded func(ctx context.Context)
+	// SchemaNote is magnum's line about the schema for the readiness event
+	// and file: why ResetDB runs, or why it does not ("schema unchanged
+	// since abc1234: no reset").
+	SchemaNote string
 	// ResetDBTimeout is the budget of the ResetDB commands together, apart
 	// from Timeout: the release's (slots.ResetDBTimeout, also when 0). A
 	// command still running when it ends is stopped (timeout); the reset_db
@@ -87,6 +95,7 @@ type readinessFile struct {
 	RanAt          string                  `json:"ran_at"`
 	Timeout        string                  `json:"timeout"`                    // ready_timeout
 	ResetDBTimeout string                  `json:"reset_db_timeout,omitempty"` // the schema reset's own budget, when it ran
+	Schema         string                  `json:"schema,omitempty"`           // ReadinessPlan.SchemaNote
 	Checks         []agents.ReadinessCheck `json:"checks"`
 }
 
@@ -141,6 +150,9 @@ func (rd *round) readiness(ctx context.Context) error {
 	checks := make([]agents.ReadinessCheck, 0, len(resets)+len(cmds))
 	// The reset runs within its own budget; ready_timeout starts after it.
 	checks = append(checks, rd.runPhase(ctx, resets, plan.Env, readinessBudget{"reset_db's budget", resetBudget}, pin)...)
+	if len(resets) > 0 && plan.Loaded != nil && !slices.ContainsFunc(checks, func(c agents.ReadinessCheck) bool { return !c.OK }) {
+		plan.Loaded(context.WithoutCancel(ctx))
+	}
 	checks = append(checks, rd.runPhase(ctx, cmds, plan.Env, readinessBudget{"ready_timeout", budget}, pin)...)
 	res := agents.Readiness{Checks: checks}
 	for _, c := range checks {
@@ -149,7 +161,8 @@ func (rd *round) readiness(ctx context.Context) error {
 		}
 	}
 	file := filepath.Join(rd.dir, ReadinessFile)
-	rf := readinessFile{HeadSHA: rd.in.TargetSHA, RanAt: start.UTC().Format(time.RFC3339), Timeout: budget.String(), Checks: checks}
+	rf := readinessFile{HeadSHA: rd.in.TargetSHA, RanAt: start.UTC().Format(time.RFC3339), Timeout: budget.String(),
+		Schema: plan.SchemaNote, Checks: checks}
 	if len(resets) > 0 {
 		rf.ResetDBTimeout = resetBudget.String()
 	}
@@ -165,7 +178,7 @@ func (rd *round) readiness(ctx context.Context) error {
 	rd.mu.Lock()
 	rd.ready = res
 	rd.mu.Unlock()
-	rd.readinessEvent(ctx, res, rd.r.now().Sub(start))
+	rd.readinessEvent(ctx, res, rd.r.now().Sub(start), plan.SchemaNote)
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -239,8 +252,9 @@ func errorCause(err error) string {
 
 // readinessEvent records the step: round.readiness, a warning when a check
 // did not pass. Commands come from the configuration; their output stays in
-// the readiness file (it is the PR's code talking).
-func (rd *round) readinessEvent(ctx context.Context, res agents.Readiness, took time.Duration) {
+// the readiness file (it is the PR's code talking). schema, the plan's
+// SchemaNote, ends the message.
+func (rd *round) readinessEvent(ctx context.Context, res agents.Readiness, took time.Duration, schema string) {
 	var failed []string
 	summary := make([]map[string]any, 0, len(res.Checks))
 	for _, c := range res.Checks {
@@ -253,6 +267,9 @@ func (rd *round) readinessEvent(ctx context.Context, res agents.Readiness, took 
 	if len(failed) > 0 {
 		level = "warn"
 		msg += "; " + strings.Join(failed, "; ")
+	}
+	if schema != "" {
+		msg += "; " + schema
 	}
 	rd.event(ctx, level, "round.readiness", msg, map[string]any{"checks": summary, "failed": res.Failed, "file": res.File})
 }

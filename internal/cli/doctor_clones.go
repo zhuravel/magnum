@@ -84,7 +84,7 @@ func doctorSchemaReset(_ context.Context, d doctorDeps) []doctorCheck {
 			out = append(out, doctorWarned(name, "pool "+p.Repo+" names schema_paths without reset_db: the slots' databases keep the base schema, so a PR that changes it is reviewed without its tables and columns",
 				"add reset_db to the [[pool]] in config.toml: the commands that load the checkout's schema into the slot's databases (`bin/rails db:schema:load`, also with RAILS_ENV=test)"))
 		case p.ResetsDBOnSchemaChange():
-			out = append(out, doctorOK(name, "pool "+p.Repo+": reset_db loads a PR's schema before the reviewers when the PR changes schema_paths, and the base schema again on release"))
+			out = append(out, doctorOK(name, "pool "+p.Repo+": reset_db loads a PR's schema before the reviewers when the slot's databases carry another one; a release keeps them"))
 		default:
 			out = append(out, doctorOK(name, "pool "+p.Repo+": reset_db runs on release only (reset_db_on_schema_change = false)"))
 		}

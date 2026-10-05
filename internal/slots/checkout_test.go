@@ -233,20 +233,20 @@ func TestRelease(t *testing.T) {
 	if len(reset) != 1 || !reset[0].Mutates {
 		t.Fatalf("placeholder reset = %v", reset)
 	}
-	// Lock went back to master's → deps again; dirty schema → reset_db scripts in order.
-	if n := len(h.scriptCalls(h.pool.PostCheckout[0])); n != 1 {
-		t.Fatalf("deps calls = %d", n)
-	}
+	// Lock went back to master's → deps again. The databases keep the schema
+	// they carry (LazySchema): no reset_db at release.
 	var scripts []string
 	for _, c := range h.scriptCalls("") {
 		scripts = append(scripts, c.Script)
-		if strings.Contains(c.Script, "db:") && (c.Cmd.Timeout != ResetDBTimeout || !c.Cmd.Mutates || c.Env["WT_BRANCH"] != "review1") {
-			t.Fatalf("reset cmd = %+v", c.Cmd)
-		}
 	}
-	want := []string{h.pool.PostCheckout[0], h.pool.ResetDB[0], h.pool.ResetDB[1]}
-	if !slices.Equal(scripts, want) {
+	if want := []string{h.pool.PostCheckout[0]}; !slices.Equal(scripts, want) {
 		t.Fatalf("scripts = %q, want %q", scripts, want)
+	}
+	if store.Deref(got.SchemaFP) != store.Deref(sl.SchemaFP) || got.SchemaFP == nil {
+		t.Fatalf("schema fp = %v, want the one recorded before the release %v", got.SchemaFP, sl.SchemaFP)
+	}
+	if !h.hasEvent("slot.schema_kept") {
+		t.Fatal("no slot.schema_kept event")
 	}
 	as, err := h.st.AssignmentsByPR(h.ctx, pr.ID)
 	if err != nil || len(as) != 1 || as[0].EndedAt == nil || store.Deref(as[0].EndReason) != "pr_closed" {
@@ -304,8 +304,16 @@ func (h *harness) claimAgain(t *testing.T, number int, sha string) (store.Slot, 
 	return h.slot(sl.Name), pr
 }
 
+// eager makes the pool reload the base schema at release
+// (reset_db_on_schema_change = false), the reload the tests below exercise.
+func (h *harness) eager() {
+	off := false
+	h.pool.ResetDBOnSchemaChange = &off
+}
+
 func TestReleaseSchemaResetFailsTwiceBreaksSlot(t *testing.T) {
 	h := newHarness(t)
+	h.eager()
 	sl, _ := h.claimedCheckout(7, h.shaPR7)
 	h.failScript[h.pool.ResetDB[0]] = 2
 	h.clearScripts()
@@ -324,6 +332,7 @@ func TestReleaseSchemaResetFailsTwiceBreaksSlot(t *testing.T) {
 
 func TestReleaseSchemaResetRetriesOnce(t *testing.T) {
 	h := newHarness(t)
+	h.eager()
 	sl, _ := h.claimedCheckout(7, h.shaPR7)
 	h.failScript[h.pool.ResetDB[1]] = 1
 	if err := h.m.Release(h.ctx, sl, h.pool, "pr_closed"); err != nil {

@@ -64,6 +64,55 @@ func (rd *round) handleDuplicates(ctx context.Context, p *postedReview) {
 		"kept": p.id, "duplicates": p.duplicates, "pending": p.pending, "deleted": deleted})
 }
 
+// fixFooter is the safety net for the identity's footer: GitHub keeps an
+// HTML block (</details>, a comment) running until a blank line, so a
+// footer glued to the line before it is posted as raw text. A verified
+// review whose body shows that gets the blank line (round.footer_fixed),
+// through the edit AppendToReview makes.
+func (rd *round) fixFooter(ctx context.Context, p *postedReview) {
+	footer := rd.idCfg.Footer()
+	if p == nil || p.id == 0 || footer == "" {
+		return
+	}
+	if _, glued := footerParagraph(p.body, footer); !glued {
+		return
+	}
+	changed, err := rd.r.editReview(ctx, rd.owner, rd.name, rd.in.PR.Number, p.id, func(body string) (string, bool) {
+		return footerParagraph(body, footer)
+	})
+	if err != nil {
+		rd.warn(ctx, "review %d: could not give its footer its own paragraph: %v", p.id, err)
+		return
+	}
+	if changed {
+		rd.event(ctx, "info", "round.footer_fixed", fmt.Sprintf("review %d: the footer was glued to the line before it; added the blank line GitHub needs to render it", p.id),
+			map[string]any{"review_id": p.id})
+	}
+}
+
+// footerParagraph gives footer, its last occurrence in body, the blank line
+// before it that makes it a paragraph of its own; false when body has no
+// footer, starts with it or has the blank line already (it is idempotent).
+func footerParagraph(body, footer string) (string, bool) {
+	i := strings.LastIndex(body, footer)
+	if footer == "" || i < 0 {
+		return body, false
+	}
+	head, newlines := body[:i], 0
+	for {
+		head = strings.TrimRight(head, " \t\r")
+		if !strings.HasSuffix(head, "\n") {
+			break
+		}
+		head = head[:len(head)-1]
+		newlines++
+	}
+	if head == "" || newlines >= 2 {
+		return body, false
+	}
+	return head + "\n\n" + body[i:], true
+}
+
 // localPathRe matches an absolute path of the review machine: under a temp
 // directory or a home directory, not inside a URL or a relative path.
 var localPathRe = regexp.MustCompile(`(?:^|[^\w.~/:-])((?:/private)?/(?:tmp|var/folders|Users|home)/[^\s"'` + "`" + `<>()\[\]{}|,;*]*)`)

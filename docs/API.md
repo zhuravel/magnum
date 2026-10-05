@@ -165,8 +165,8 @@ const (
 
 const (
 	// ReadinessResetDB is a [[pool]] reset_db command, run first when the
-	// PR changes the pool's schema_paths: it loads the PR's schema into the
-	// slot's databases.
+	// slot's databases carry another schema than the checkout's: it loads
+	// the PR's schema into them.
 	ReadinessResetDB = "reset_db"
 	ReadinessPrepare = "prepare" // a [[repo]]/[[pool]] prepare command
 	ReadinessReady   = "ready"   // a [[repo]]/[[pool]] ready probe (exit 0 = ready)
@@ -1965,6 +1965,12 @@ const DefaultAfterDenyPrompt = "magnum denied that command: review roles never r
     DefaultAfterDenyPrompt is every built-in and declared kind's
     after_deny_prompt.
 
+const DefaultIdleRemoveAfter = 168 * time.Hour
+    DefaultIdleRemoveAfter is a pool's idle_remove_after when it sets none (or
+    0): a free slot above pool.min is removed once it has been idle this long.
+    Without it every reconcile removed the surplus at once, and the next
+    provision wrote about 1 GB again.
+
 const DefaultLearnPrompt = "retro.md"
     DefaultLearnPrompt is the retro prompt file.
 
@@ -2678,11 +2684,13 @@ type Pool struct {
 	Databases       []string          `toml:"databases"`
 	Env             map[string]string `toml:"env"`
 	// ResetDBOnSchemaChange runs ResetDB before the reviewers of a round
-	// whose checkout changes SchemaPaths, as the first commands of the
-	// readiness step (see Prepare), so the slot's databases carry the PR's
+	// whose checkout's files under SchemaPaths differ from those the slot's
+	// databases were last loaded from (slots.CheckSchema), as the first
+	// commands of the readiness step (see Prepare), so they carry the PR's
 	// schema; they have the release's reset_db budget of their own, and
-	// ReadyTimeout starts after them. The release still loads the base
-	// schema. nil = true; read it through ResetsDBOnSchemaChange.
+	// ReadyTimeout starts after them. The release then keeps the databases
+	// as they are; false loads the base schema at release instead, as
+	// before. nil = true; read it through ResetsDBOnSchemaChange.
 	ResetDBOnSchemaChange *bool `toml:"reset_db_on_schema_change"`
 	// Prepare and Ready make a round's checks work: before the reviewers
 	// start, the round runs each prepare command (`bin/rails
@@ -4274,6 +4282,12 @@ type Slots interface {
 	Reserve(ctx context.Context, pr store.PR, pool config.Pool) (store.Slot, error)
 	Repair(ctx context.Context, slot store.Slot, pool config.Pool) error
 	Adopt(ctx context.Context, pool config.Pool, path string) (store.Slot, error)
+	// CheckSchema, ForgetSchema and RecordSchema decide and record a round's
+	// schema reload (readinessPlan); EnsureSchema reloads for magnum open.
+	CheckSchema(ctx context.Context, slot store.Slot, pool config.Pool) (slots.SchemaCheck, error)
+	ForgetSchema(ctx context.Context, slot store.Slot) error
+	RecordSchema(ctx context.Context, slot store.Slot, c slots.SchemaCheck) error
+	EnsureSchema(ctx context.Context, slot store.Slot, pool config.Pool) (string, error)
 }
     Slots is the part of *slots.Manager the engine drives.
 
@@ -4869,6 +4883,10 @@ func Account(login, typename string) string
     A user's login, one already suffixed and "" come back as they are. The
     registry keeps logins in this form.
 
+func BetweenCalls(ctx context.Context)
+    BetweenCalls runs the function WithBetweenCalls put into ctx, if any.
+    The client calls it before each gh command; a fake GitHub can do the same.
+
 func IsBot(typename, login string) bool
     IsBot reports whether an author is a bot: GraphQL __typename "Bot" or a REST
     login ending in "[bot]".
@@ -4891,6 +4909,13 @@ func SameLogin(a, b string) bool
     the same name whether or not either is a bot, so an App and a user of
     the same name match. Use it only next to a check of the kind (IsBot);
     SameAccount otherwise.
+
+func WithBetweenCalls(ctx context.Context, fn func()) context.Context
+    WithBetweenCalls returns ctx carrying fn, which the client runs before
+    every gh command it makes with that context (BetweenCalls), on the caller's
+    goroutine: the daemon's poll answers the requests a CLI queued meanwhile, so
+    one waits for a single GitHub call, not the whole poll. fn gets no context:
+    it must not make its calls with this one.
 
 
 TYPES
@@ -5577,6 +5602,14 @@ func (c *Client) StatusPaths(ctx context.Context, dir string) ([]StatusEntry, er
 func (c *Client) SwitchDetach(ctx context.Context, dir, ref string) error
     SwitchDetach detaches dir's HEAD at ref, discarding tracked changes
     (untracked files stay). Callers verify the result with RevParse.
+
+func (c *Client) TreeFiles(ctx context.Context, dir, rev string, pathspecs ...string) ([]string, error)
+    TreeFiles lists the files of rev (a commit) that pathspecs match,
+    with the pathspec rules ChangedPaths has ("db/", a glob, pathspec magic),
+    each as "<mode> <blob id> <path>", in git's order; nil when none matches.
+    It is `git diff-tree` of the empty tree against rev, unabbreviated, so the
+    list changes exactly when a matching file's content, mode or name does.
+    A rev that does not resolve is ErrNoSuchRef.
 
 func (c *Client) Unpushed(ctx context.Context, dir string) (int, error)
     Unpushed counts commits reachable from HEAD that exist on no remote-tracking
@@ -7880,11 +7913,18 @@ type PreviousReview struct {
     PreviousReview is the reviewer's earlier review of the PR.
 
 type ReadinessPlan struct {
-	// ResetDB are the pool's reset_db commands when the checkout changes the
-	// pool's schema_paths (the slot is dirty_schema): run before everything
-	// else, in order (Mutates), so the slot's databases carry the PR's
-	// schema. Empty when the checkout does not change it.
+	// ResetDB are the pool's reset_db commands when the slot's databases
+	// carry another schema than the checkout's (slots.CheckSchema): run
+	// before everything else, in order (Mutates), so they carry the PR's
+	// schema. Empty when they carry it already.
 	ResetDB []string
+	// Loaded is called once every ResetDB command passed: the engine
+	// records the schema the databases now carry. nil = nothing to record.
+	Loaded func(ctx context.Context)
+	// SchemaNote is magnum's line about the schema for the readiness event
+	// and file: why ResetDB runs, or why it does not ("schema unchanged
+	// since abc1234: no reset").
+	SchemaNote string
 	// ResetDBTimeout is the budget of the ResetDB commands together, apart
 	// from Timeout: the release's (slots.ResetDBTimeout, also when 0). A
 	// command still running when it ends is stopped (timeout); the reset_db
@@ -8068,10 +8108,10 @@ type Runner struct {
     per-round state and is safe for concurrent RunRound calls.
 
 func (r *Runner) AppendToReview(ctx context.Context, owner, repo string, number int, reviewID int64, text string) error
-    AppendToReview adds text as the last paragraph of review reviewID, which
-    the runner's identity posted (GitHub lets only a review's author edit it):
-    it reads the body over REST and puts it back with text appended. A body that
-    already ends with text is left alone.
+    AppendToReview adds text as the last paragraph of review reviewID,
+    which the runner's identity posted (editReview), before the identity's
+    footer when the body ends with it, so the footer stays the last paragraph.
+    A body that carries text there already is left alone.
 
 func (r *Runner) RunRound(ctx context.Context, in RoundInput) (RoundResult, error)
     RunRound runs one round and blocks until it ends. The error is non-nil
@@ -8300,6 +8340,12 @@ const SchemaFile = "db/schema.rb"
     SchemaFile is read for the `define(version: …)` the slot's dev database must
     match after a release.
 
+const SlotLogMax = 2 << 20
+    SlotLogMax caps each log transcript writes (slot-<name>.log,
+    provision-<name>.log, perpr-<slug>.log): the write that would push one past
+    it first moves it to <name>.1, replacing the previous one, as daemon.log
+    rotates. A seed that prints its SQL fills several MB on every reset.
+
 const WTConfigFile = ".config/wt.toml"
     WTConfigFile is worktrunk's project config, relative to the main clone.
 
@@ -8397,6 +8443,13 @@ func DropGuard(pool config.Pool) mysqlx.Guard
     slugs are ever droppable. A pool without database templates, with no common
     prefix or with a slot_name lacking {n} gets the zero Guard, which refuses
     everything.
+
+func LazySchema(pool config.Pool) bool
+    LazySchema reports whether pool's slots reload their databases only when a
+    round's checkout needs another schema (CheckSchema, before the reviewers)
+    and keep them through the release: the pool names schema_paths and reset_db,
+    and reset_db_on_schema_change is on. Otherwise the release loads the base
+    schema again, as before.
 
 func ListPoolDatabases(ctx context.Context, c DBLister, pools ...config.Pool) (dbs []mysqlx.Database, bad []string, err error)
     ListPoolDatabases lists the per-worktree databases of pools: every schema
@@ -8540,6 +8593,14 @@ func (m *Manager) Adopt(ctx context.Context, pool config.Pool, path string) (sto
     a removed, lost or broken row with that name is revived (its PR and open
     assignment released with reason "adopted").
 
+func (m *Manager) CheckSchema(ctx context.Context, slot store.Slot, pool config.Pool) (SchemaCheck, error)
+    CheckSchema compares the schema a pool slot's checkout needs with the one
+    its databases carry: a reload is needed when the fingerprints differ or none
+    was recorded. A match is checked once more against the development database,
+    whose MAX(schema_migrations.version) must be the version the checkout's
+    db/schema.rb declares (a migration someone ran by hand, or an agent,
+    moves it; a failed read counts as a mismatch). Read-only.
+
 func (m *Manager) Checkout(ctx context.Context, slot store.Slot, pr store.PR, pool config.Pool, targetSHA string) error
     Checkout puts pr's head into a claimed or held slot that belongs to pr.
     Steps (subject "slot:<name>:pr:<N>:<sha7>", a new generation on every call;
@@ -8597,6 +8658,20 @@ func (m *Manager) CreatePRWorktree(ctx context.Context, watch config.Watch, repo
     returns that slot (at its recorded paths), opening its assignment if a crash
     between the claim's two writes left none; a removed, broken or lost row for
     the same PR is reused (its old assignment closed) and its steps start over.
+
+func (m *Manager) EnsureSchema(ctx context.Context, slot store.Slot, pool config.Pool) (string, error)
+    EnsureSchema gives a pool slot handed to a person (magnum open) the
+    databases of its checkout, as a round's readiness step does: when
+    CheckSchema finds they carry another schema, the pool's reset_db runs
+    through mise exec (ResetDBTimeout, the slot's log) and the new schema is
+    recorded. It returns what it did for the person. A failed reload is an error
+    and leaves the schema unknown. A pool that is not LazySchema, or a per-PR
+    worktree, runs nothing: its released slots carry the base schema.
+
+func (m *Manager) ForgetSchema(ctx context.Context, slot store.Slot) error
+    ForgetSchema marks the schema of the slot's databases unknown, before a
+    reload that may stop half-way: the next round reloads them again unless
+    RecordSchema follows.
 
 func (m *Manager) Guard(ctx context.Context, slot store.Slot) error
     Guard refuses to let magnum touch a slot a human may be using. It returns an
@@ -8674,22 +8749,28 @@ func (m *Manager) ProvisionPool(ctx context.Context, pool config.Pool, n int) er
     which move it to broken (ErrVerify). Below pool.min_free_disk_gb nothing is
     added (ErrLowDisk).
 
+func (m *Manager) RecordSchema(ctx context.Context, slot store.Slot, c SchemaCheck) error
+    RecordSchema stores c, CheckSchema's answer, as the schema the slot's
+    databases carry, once its reload succeeded.
+
 func (m *Manager) Release(ctx context.Context, slot store.Slot, pool config.Pool, reason string) error
     Release hands a claimed or held pool slot back to the pool. Steps (subject
     "slot:<name>:release"): guard (Guard: pins, holds, a human's agent or
-    process, HEAD drift, tracked changes a human made), then the slot moves
-    to releasing, fetch_base, reset (placeholder branch → origin/<base>,
-    tracked changes discarded after a slot.discarded event, checked_out_sha
-    cleared), delete_ref (refs/magnum/pr/N), render_mise, deps, schema_check
-    (when dirty_schema is set or MAX(schema_migrations.version) of the first
-    development database differs from db/schema.rb at HEAD: the slot moves to
-    dirty_schema and pool.reset_db runs through mise exec, 30m; a second failure
-    in a row moves the slot to broken and returns ErrBroken) and mark_free
-    (store.ReleaseSlot: free, pr_id cleared, assignment closed with reason).
-    A releasing or dirty_schema slot resumes after its last completed step,
-    after Guard ran again: whatever a human did since the last attempt refuses
-    the release before its next destructive step. Per-PR slots are removed
-    instead (RemovePRWorktree semantics).
+    process, HEAD drift, tracked changes a human made), then the slot moves to
+    releasing, fetch_base, reset (placeholder branch → origin/<base>, tracked
+    changes discarded after a slot.discarded event, checked_out_sha cleared),
+    delete_ref (refs/magnum/pr/N), render_mise, deps, schema_check (resetSchema:
+    a LazySchema pool keeps the databases unless MAX(schema_migrations.version)
+    of the development database differs from the version of the schema recorded
+    for them; otherwise when dirty_schema is set or that version differs from
+    db/schema.rb at HEAD: the slot moves to dirty_schema and pool.reset_db
+    runs through mise exec, 30m; a second failure in a row moves the slot to
+    broken and returns ErrBroken) and mark_free (store.ReleaseSlot: free,
+    pr_id cleared, assignment closed with reason). A releasing or dirty_schema
+    slot resumes after its last completed step, after Guard ran again:
+    whatever a human did since the last attempt refuses the release before its
+    next destructive step. Per-PR slots are removed instead (RemovePRWorktree
+    semantics).
 
 func (m *Manager) Remove(ctx context.Context, slot store.Slot, pool config.Pool, force bool) error
     Remove tears a pool slot down: steps of subject "slot:<name>:remove" are
@@ -8751,6 +8832,21 @@ type PrefixLister interface {
     one of prefixes followed by a non-empty slug, ordered by name (requested
     from mysqlx as (*Client).ListPrefixed). ListPoolDatabases uses it when the
     client has it.
+
+type SchemaCheck struct {
+	// Need is true when the slot's databases must be reloaded (the pool's
+	// reset_db) to carry the checkout's schema.
+	Need bool
+	// Why says why a reload is needed, or why not ("schema unchanged since
+	// abc1234: no reset").
+	Why string
+	// FP, SHA and Version are the checkout's schema: the fingerprint of
+	// the files schema_paths match at SHA (its HEAD) and the version its
+	// db/schema.rb declares ("" = none). RecordSchema stores them once the
+	// reload succeeded.
+	FP, SHA, Version string
+}
+    SchemaCheck is CheckSchema's answer for a pool slot.
 
 type WTHooks struct {
 	PostCreate []Hook
@@ -9815,6 +9911,13 @@ type Slot struct {
 	LastError         *string    `json:"last_error"`
 	CreatedAt         time.Time  `json:"created_at"`
 	UpdatedAt         time.Time  `json:"updated_at"`
+	// SchemaFP, SchemaSHA and SchemaVersion say what a pool slot's databases
+	// carry: the fingerprint of the files under the pool's schema_paths at
+	// the commit they were last loaded from, that commit, and the version
+	// db/schema.rb declared there. nil = unknown (the next round reloads).
+	SchemaFP      *string `json:"schema_fp"`
+	SchemaSHA     *string `json:"schema_sha"`
+	SchemaVersion *string `json:"schema_version"`
 }
     Slot is a checkout magnum reviews in (pool slot, per-PR worktree, or an
     observed external repoN checkout).
@@ -10168,7 +10271,10 @@ func (s *Store) SetGitHubRequiredChecks(ctx context.Context, fullName string, g 
     SetGitHubRequiredChecks caches g for repository fullName.
 
 func (s *Store) SetKV(ctx context.Context, key, value string) error
-    SetKV stores value under key. Never store secrets here.
+    SetKV stores value under key. A key that holds value already is left alone,
+    updated_at included: the daemon sets the same keys every tick, and nothing
+    reads updated_at (a heartbeat such as daemon.last_tick carries its time in
+    the value, so it is written every time). Never store secrets here.
 
 func (s *Store) SetRepoClonePath(ctx context.Context, repoID int64, path string) error
     SetRepoClonePath records where the repository's main clone lives; "" clears
