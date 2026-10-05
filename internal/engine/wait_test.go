@@ -146,7 +146,7 @@ func TestWaitGlobalReasons(t *testing.T) {
 		hint   string
 	}{
 		{"daemon paused", func(h *harness) { h.e.setKV(h.ctx, KVDaemonPaused, "1") }, WaitPaused, "`magnum resume` lifts the pause"},
-		{"draining", func(h *harness) { h.e.setKV(h.ctx, KVDaemonDraining, store.FormatTime(h.clock.Now())) }, WaitPaused, "`magnum resume` lifts the pause"},
+		{"draining", func(h *harness) { h.e.setKV(h.ctx, KVDaemonDraining, store.FormatTime(h.clock.Now())) }, WaitDraining, "the end of the rounds in flight"},
 		{"infra", func(h *harness) {
 			h.e.setKV(h.ctx, KVInfraPausedUntil, store.FormatTime(h.clock.Now().Add(4*time.Minute)))
 			h.e.setKV(h.ctx, KVInfraPausedReason, "ssh")
@@ -283,5 +283,46 @@ func TestWaitClock(t *testing.T) {
 		if got := waitClock(at, now); got != want {
 			t.Errorf("waitClock(%s) = %q, want %q", at, got, want)
 		}
+	}
+}
+
+// TestWaitCellNeverShowsAMinuteThatHasPassed: a wait ends at a second, the
+// cell shows minutes, so the end is rounded up to the minute it falls in
+// (quiet until 16:28:51 shows "→ 16:29", not "→ 16:28" for most of a
+// minute), and a wait the next tick has not yet replaced says "→ now".
+func TestWaitCellNeverShowsAMinuteThatHasPassed(t *testing.T) {
+	at := func(h, m, s int) time.Time { return time.Date(2026, 10, 5, h, m, s, 0, time.Local) }
+	w := Wait{Reason: WaitQuiet, Rereview: true, Until: at(16, 28, 51)}
+	if got, want := w.Short(at(16, 28, 30)), "re-review · quiet → 16:29"; got != want {
+		t.Errorf("short before the end = %q, want %q", got, want)
+	}
+	if got, want := w.Short(at(16, 29, 5)), "re-review · quiet → now"; got != want {
+		t.Errorf("short after the end = %q, want %q", got, want)
+	}
+	if got, want := (Wait{Reason: WaitQuiet, Until: at(16, 40, 0)}).Short(at(16, 30, 0)), "review · quiet → 16:40"; got != want {
+		t.Errorf("short on a whole minute = %q, want %q", got, want)
+	}
+	if got := w.Sentence("talkable#2", at(16, 28, 30)); !strings.Contains(got, "until 16:29") {
+		t.Errorf("sentence = %q", got)
+	}
+}
+
+// TestDrainWaitIsNotCalledAPause: a drain (magnum daemon-restart --drain)
+// holds every PR, a requested one too, but it is not `magnum pause`: its
+// cell says "draining" and its sentence does not offer `magnum resume`,
+// which would not lift it.
+func TestDrainWaitIsNotCalledAPause(t *testing.T) {
+	h := newHarness(t)
+	pushedAfter(t, h, 40*time.Minute)
+	h.advance(10 * time.Minute)
+	h.e.setKV(h.ctx, KVDaemonDraining, store.FormatTime(h.clock.Now()))
+	h.tick()
+	h.wantState(2, store.PRRereviewPending)
+	w := waitOf(t, h, 2)
+	if w.Reason != WaitDraining || w.Short(h.clock.Now()) != "re-review · draining" {
+		t.Fatalf("wait = %+v (%q)", w, w.Short(h.clock.Now()))
+	}
+	if got := w.Sentence("talkable#2", h.clock.Now()); strings.Contains(got, "magnum resume") || !strings.Contains(got, "restart") {
+		t.Errorf("sentence = %q", got)
 	}
 }

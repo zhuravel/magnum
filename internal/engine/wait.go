@@ -41,7 +41,8 @@ const (
 	WaitRetry         = "retry"          // the backoff after a failed round
 	WaitMuted         = "muted"          // magnum mute
 	WaitQuietHours    = "quiet_hours"    // [daemon] quiet_hours
-	WaitPaused        = "paused"         // the daemon is paused or draining
+	WaitPaused        = "paused"         // magnum pause, or an infrastructure pause past its probe time
+	WaitDraining      = "draining"       // magnum daemon-restart --drain: no round starts until the restart
 	WaitInfra         = "infra"          // an infrastructure failure paused dispatch
 	WaitHerdr         = "herdr"          // herdr is unreachable
 	WaitKind          = "kind"           // an agent kind the round needs is paused
@@ -86,9 +87,14 @@ func (w Wait) kind() string {
 
 // waitClock is t as a screen shows it relative to now: "14:09" today or
 // within the next 24 hours (the cap's midnight is "00:00"), "Tue 14:09"
-// within a week, else "Jan 2 14:09".
+// within a week, else "Jan 2 14:09". A t within a minute is rounded up to
+// the next whole minute: a wait that ends at 14:08:51 has not ended at
+// 14:08, so it shows "14:09".
 func waitClock(t, now time.Time) string {
 	t, now = t.Local(), now.Local()
+	if m := t.Truncate(time.Minute); m.Before(t) {
+		t = m.Add(time.Minute)
+	}
 	ahead := t.Sub(now)
 	switch y1, m1, d1 := t.Date(); {
 	case y1 == now.Year() && m1 == now.Month() && d1 == now.Day(), ahead > 0 && ahead < 24*time.Hour:
@@ -132,6 +138,8 @@ func (w Wait) Short(now time.Time) string {
 		what = "quiet hours"
 	case WaitPaused:
 		what = "paused"
+	case WaitDraining:
+		what = "draining"
 	case WaitInfra:
 		what = "infra pause"
 	case WaitHerdr:
@@ -152,8 +160,12 @@ func (w Wait) Short(now time.Time) string {
 		what = "waiting"
 	}
 	s := w.kind() + " · " + what
-	if !w.Until.IsZero() {
+	switch {
+	case w.Until.IsZero():
+	case w.Until.After(now):
 		s += " → " + waitClock(w.Until, now)
+	default:
+		s += " → now" // over; the next tick records what holds it next, if anything
 	}
 	return s
 }
@@ -233,6 +245,9 @@ func (e *Engine) noteWaits(ctx context.Context, ts tickState) {
 func (e *Engine) globalWait(ctx context.Context, ts tickState, now time.Time) *Wait {
 	if p, ok := e.infraPause(ctx); ok && now.Before(p.Until) {
 		return &Wait{Reason: WaitInfra, Until: p.Until, Detail: "an infrastructure pause (" + p.Reason + "); the probe runs"}
+	}
+	if v, ok := e.getKV(ctx, KVDaemonDraining); ok && v != "" {
+		return &Wait{Reason: WaitDraining, Detail: "the restart (magnum daemon-restart --drain), which follows the end of the rounds in flight"}
 	}
 	if why := e.holdReason(ctx); why != "" {
 		return &Wait{Reason: WaitPaused, Detail: "the " + why}
