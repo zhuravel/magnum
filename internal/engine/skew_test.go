@@ -107,6 +107,8 @@ func TestCheckPromptsCatchesFieldsThisBuildLacks(t *testing.T) {
 		{"judge-rereview.md", "{{if .ForcePushed}}force pushed: {{.NewTemplateField}}{{end}}"},
 		{"claude-review.md", "{{if .NotesPath}}notes{{else}}{{.NewTemplateField}}{{end}}"},
 		{"model-fallback.md", "{{range .Missing}}{{end}}"},
+		{"triage.md", `{{if eq .Kind "rereview"}}{{.NewTemplateField}}{{end}}`},
+		{"triage.md", `{{range .Roles}}{{.Detail}}{{end}}`},
 	} {
 		t.Run(tc.file, func(t *testing.T) {
 			h := newHarness(t)

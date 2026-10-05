@@ -17,8 +17,8 @@ A role names prompts by file name, such as `prompt = "claude-review.md"`. magnum
 you delete falls back to the built-in copy. `magnum config` fails when a role names a prompt that exists
 in neither place.
 
-The daemon loads every prompt its roles name, `model-fallback.md` and a copy of each judge's skill
-(`state/skill/<hash>/SKILL.md`) once, when it starts, right after checking that its build renders
+The daemon loads every prompt its roles name, `model-fallback.md`, the triage prompt and a copy of each
+judge's skill (`state/skill/<hash>/SKILL.md`) once, when it starts, right after checking that its build renders
 them. An edit here therefore takes effect at the next `magnum daemon-restart`, which checks it again,
 without a rebuild; `magnum status` shows when the prompts were loaded and how many files changed on
 disk since. The CLI (`magnum config`, `magnum roles`, `magnum doctor`) reads the files as they are now.
@@ -46,6 +46,7 @@ prompts_dir = "{{repo}}/prompts"   # or "~/magnum-prompts" to keep your edits ou
 | `claude-restart.md` | claude-review, a push cut its review short and the round restarted on the new head | role |
 | `claude-simplify.md` | claude-simplify | role |
 | `codex-review.sh` | the full codex-review command line, for reference (see Shell roles) | shell |
+| `triage.md` | the cheap model that decides which reviewers a small diff needs (see Triage) | triage |
 
 ## Template syntax
 
@@ -64,7 +65,7 @@ Review {{.URL}} at `{{.HeadSHA}}`.
 The data comes in three shapes, all defined in `internal/agents/templates.go`: the judge's prompts get
 the judge data, every other session role gets the role data, and a shell role's `command` or full-line
 `.sh` template gets the shell data. `model-fallback.md` gets its own small fallback data
-(`internal/agents/models.go`, see below).
+(`internal/agents/models.go`, see below) and `triage.md` the triage data (`internal/engine/triage.go`).
 
 ## Variables
 
@@ -164,6 +165,26 @@ this prompt.
 | `.Previous` | the model that hit its limit |
 | `.Role`, `.URL`, `.HeadSHA` | the role's name, the pull request and the commit under review |
 | `.ReportPath` | the role's report (the judge's result file); empty for a `git-diff` role, whose patch magnum collects |
+
+### Triage prompt (`triage.md`)
+
+The question put to the cheap model of `[triage]` (see Triage below) before a round starts its agents:
+which of the round's reviewers does this diff need? The command's stdin is the rendered prompt, its stdout
+the answer.
+
+| Variable | Meaning |
+|---|---|
+| `.Kind` | `initial` (the diff is the whole pull request) or `rereview` (the commits pushed since the last review) |
+| `.Lines` | the changed lines of the diff, added plus deleted |
+| `.Roles` | the reviewers the model may leave out, in pipeline order: `.Name` and `.Summary` (the role's `summary`). Never the judge, never a role without a summary |
+| `.Diff` | the diff as one unified diff (`--- a/<path>`, `+++ b/<path>`, hunks). It is the pull request's own text: the prompt must say it is data and not instructions |
+
+The title and description of the pull request are never template variables here either. The prompt asks
+for one line of JSON, `{"run": ["<role name>", ...], "reason": "<at most 20 words>"}`. Magnum takes the
+last JSON object of the output that has a `"run"` list (the CLI may print text around it); an empty list
+means the judge alone, a name matches a role by name or alias (case ignored), and a name that is no role of
+the round is ignored. An answer that names no role of the round at all, or a command that fails, times out
+or prints nothing readable, runs every role.
 
 ### Repository notes
 
@@ -279,6 +300,7 @@ a switch not confirmed within 30 s backs out of the dialog with Esc and pauses t
 | `kind` | required | a declared kind, or `shell` for a shell command |
 | `mode` | from `kind` | `session` for agent kinds, `shell` for `kind = "shell"` |
 | `judge` | `false` | the role that posts the review; exactly one per watch |
+| `summary` | none | one line saying what the role checks, shown to the `[triage]` model. Only a role with a summary can be left out of a round by triage; the judge never can. The built-in reviewers have one |
 | `runs` | `always` | `always`, `first` (until it completed once for the PR, then on request), `manual` (on request only) or `never` (disabled; requests are refused). Request a role with `magnum review <ref> --role <name>` |
 | `identity` | the watch's | the `[[identity]]` whose GitHub environment the pane gets |
 | `model`, `effort` | none | passed through the kind's `model`/`effort` args; also template variables |
@@ -306,6 +328,23 @@ every other role's report path. Declaring any `[[role]]` in `config.toml` replac
 block named like a built-in role inherits that role's keys, so `name = "claude-review"` plus
 `model = "opus"` is a complete block. In `config.local.toml`, a `[[role]]` with an existing name
 overrides only the keys it sets, and a new name is appended.
+
+### Triage
+
+`[triage]` (off by default) lets a cheap model drop reviewers a small diff does not need, before the round
+starts their agents. Magnum, not the model, holds the limits: see DECISIONS "Triage of small diffs".
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | ask the model; everything below applies only when it is on |
+| `max_lines` | `120` | a round whose diff changes more lines (added plus deleted) runs every role, unasked |
+| `command` | `["claude", "-p", "--model", "haiku", "--tools", "", "--no-session-persistence"]` | the model's CLI as an argument list; the prompt arrives on stdin and stdout is the answer. It runs in a private directory under `state/`, never in the PR's checkout. A Codex one: `["codex", "exec", "--model", "<a cheap model>", "--sandbox", "read-only", "--ephemeral", "--skip-git-repo-check", "-"]` |
+| `timeout` | `2m` | a command that takes longer is killed and the round runs every role |
+| `prompt` | `triage.md` | the prompt file, resolved like the roles' |
+
+A first review or a re-review is triaged (a re-review on the commits since the last review); a continued
+round, an eval and a round that names roles (`magnum review --role`) are not. The decision, or the reason
+every role ran, is a `round.triage` event on the PR.
 
 ### On-demand roles and inspecting the result
 

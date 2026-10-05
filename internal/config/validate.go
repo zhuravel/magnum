@@ -153,6 +153,7 @@ func (c *Config) Validate() error {
 		errs = append(errs, fmt.Errorf("daemon.park_idle_after must be 0 (never) or at least 1m, got %s", p))
 	}
 	errs = append(errs, c.validateUsage()...)
+	errs = append(errs, c.validateTriage()...)
 	errs = append(errs, c.legacyErrs...)
 	switch c.GitHub.Transport {
 	case "gh", "direct":

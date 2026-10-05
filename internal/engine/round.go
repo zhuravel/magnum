@@ -114,8 +114,8 @@ func (e *Engine) prepare(ctx context.Context, job *roundJob) (pipeline.RoundInpu
 	}
 
 	// 2. The roles this round runs (the watch's, per their runs and this
-	// round's requests), then a preflight of their agent kinds before
-	// starting or prompting anything.
+	// round's requests, then the ones triage keeps), then a preflight of
+	// their agent kinds before starting or prompting anything.
 	rs.roles = e.cfg.RolesFor(&job.watch)
 	rs.requested = e.requestedRoles(ctx, pr.ID)
 	if job.kind != kindContinue && job.evalHead == "" {
@@ -127,6 +127,9 @@ func (e *Engine) prepare(ctx context.Context, job *roundJob) (pipeline.RoundInpu
 	if len(rs.toRun) == 0 {
 		return fail(fmt.Errorf("watch %s has no judge among its roles", job.watch.Owner))
 	}
+	// A small diff may not need every reviewer ([triage]): what is dropped
+	// here is neither preflighted nor started.
+	e.triage(ctx, job, &rs)
 	if serr := e.preflight(ctx, agentKinds(rs.toRun)); serr != nil {
 		return pipeline.RoundInput{}, ws, serr
 	}

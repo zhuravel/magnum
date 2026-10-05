@@ -1,7 +1,7 @@
 # magnum's built-in configuration: embedded in the binary (rebuild after editing), every key documented.
 # Your settings do not go here: put them in ~/.config/magnum/config.toml ($XDG_CONFIG_HOME/magnum/config.toml
 # when that is set; `magnum init` writes one). Its [[watch]], [[identity]], [[pool]] and [[repo]] blocks are
-# appended, any key it sets under [daemon], [herdr], [terminal], [github], [pipeline], [usage] or
+# appended, any key it sets under [daemon], [herdr], [terminal], [github], [pipeline], [usage], [triage] or
 # [kinds.<name>] overrides the value here, and its [[role]] blocks override the role of the same name key by
 # key (other names are appended). Secrets go in the checkout's gitignored .mise.local.toml.
 # Durations use Go syntax: "30s", "5m", "2h", with whole days in front: "7d", "1d12h".
@@ -78,6 +78,24 @@ transport = "gh"                  # App JWT/token calls run as `gh api` (gh | di
 # codex_soft = 80                 # at this % used, first reviews wait (re-reviews and `magnum review` still run)
 # codex_hard = 95                 # at this % used, rounds that need Codex wait until it is below again (0 = off)
 # codex_home = ""                 # "" = $CODEX_HOME, else ~/.codex
+
+# Triage: before a round starts its agents, a cheap model reads the round's diff and says which reviewers it
+# needs, so a one-line fix does not wake every reviewer. Magnum, not the model, holds the limits: only rounds
+# with at most max_lines changed lines are asked (bigger ones run every role), the judge always runs, the
+# model can only remove roles that have a `summary` (never add one, never touch a role without one), and
+# any failure of the command (missing, non-zero exit, timeout, no readable answer) runs every role. Only
+# first reviews and re-reviews are triaged: not continued rounds, evals, or rounds that name roles (`magnum
+# review --role`). The decision is a round.triage event on the PR; prompts/README.md documents the prompt.
+
+[triage]
+enabled = false                   # ask a cheap model which reviewers a small diff needs (the judge always runs)
+max_lines = 120                   # rounds with more changed lines (added + deleted) run every role, unasked
+command = ["claude", "-p", "--model", "haiku", "--tools", "", "--no-session-persistence"]
+                                  # gets the prompt on stdin; its stdout is the answer. Another CLI, as a Codex one:
+                                  # ["codex", "exec", "--model", "<a cheap model>", "--sandbox", "read-only",
+                                  #  "--ephemeral", "--skip-git-repo-check", "-"]
+timeout = "2m"                    # a command that takes longer is killed and the round runs every role
+prompt = "triage.md"              # in prompts_dir; the embedded copy when absent
 
 # The review pipeline ("a Procfile of agents"): [kinds.<name>] says how to drive an agent CLI, each
 # [[role]] is one agent (or shell command) of a review round, a [[watch]]'s `roles` picks the roles it
@@ -174,6 +192,8 @@ aliases = ["judge"]
 [[role]]
 name = "claude-review"
 kind = "claude"
+summary = "deep review for bugs, security and correctness"   # one line for [triage]: what the role checks
+                                      # (a role without one is never dropped from a round)
 effort = "high"                       # passed to /code-review by the prompt
 prompt = "claude-review.md"
 rereview = "claude-rereview.md"
@@ -185,6 +205,7 @@ aliases = ["claude"]
 [[role]]
 name = "codex-review"
 kind = "shell"                        # a shell pane, not an agent session
+summary = "Codex's own static review of the diff"
 tool = "codex"                        # codex's login check, pauses and health patterns apply
 # args = ["-c", "model=gpt-6.1-sol"]  # `codex review` takes the model as a config override
 command = "command codex review --base {{if .BaseSHA}}{{.BaseSHA}}{{else}}{{.BaseRef}}{{end}}"
@@ -199,6 +220,7 @@ aliases = ["codex", "codex_review"]
 [[role]]
 name = "claude-simplify"
 kind = "claude"
+summary = "simplifications and refactors of the changed code"
 runs = "first"                        # always | first (until it ran once, then on request) | manual | never
                                       # on request = `magnum review <ref> --role claude-simplify` (or --simplify)
 rerun_min_lines = 150                 # runs again once this many code lines changed since its last run

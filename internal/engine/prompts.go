@@ -52,7 +52,7 @@ func PromptsLine(loadedAt time.Time, changed int) string {
 
 // loadPrompts takes the prompt snapshot rounds render from
 // (config.Config.SnapshotPrompts: every prompt the roles name,
-// model-fallback.md and a copy of each judge's skill) and renders it once
+// model-fallback.md, the triage prompt and a copy of each judge's skill) and renders it once
 // more with this build (CheckPrompts): the start check read the files a
 // moment earlier, and an edit in between must not reach a round unchecked.
 // A dry run copies no skill (it writes nothing outside its store).
@@ -61,7 +61,7 @@ func (e *Engine) loadPrompts(ctx context.Context) error {
 	if !e.d.DryRun && e.d.Layout.Valid() {
 		skillDir = SkillCopyDir(e.d.Layout.State())
 	}
-	snap, err := e.cfg.SnapshotPrompts(skillDir, e.now(), agents.FallbackPromptName)
+	snap, err := e.cfg.SnapshotPrompts(skillDir, e.now(), agents.FallbackPromptName, e.cfg.Triage.Prompt)
 	if err != nil {
 		return fmt.Errorf("engine: %w", err)
 	}

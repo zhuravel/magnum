@@ -67,6 +67,7 @@ type Config struct {
 	GitHub     GitHub     `toml:"github"`
 	Pipeline   Pipeline   `toml:"pipeline"`
 	Usage      Usage      `toml:"usage"`
+	Triage     Triage     `toml:"triage"`
 	Board      Board      `toml:"board"`
 	Identities []Identity `toml:"identity"`
 	Watches    []Watch    `toml:"watch"`
@@ -646,7 +647,7 @@ func exists(p string) bool {
 
 // applyOverlay merges config.local.toml: [[identity]], [[watch]], [[pool]]
 // and [[repo]] entries are appended; keys present under [daemon], [herdr], [terminal],
-// [codex], [claude], [github], [pipeline] and [usage] override the committed values key by key.
+// [codex], [claude], [github], [pipeline], [usage] and [triage] override the committed values key by key.
 // Its [kinds.<name>] keys and [[role]] blocks are returned for buildPipeline:
 // kind keys override key by key, a [[role]] named like an existing role
 // overrides the keys it sets, any other [[role]] is appended.
@@ -671,6 +672,7 @@ func (c *Config) applyOverlay(path string) (*layer, error) {
 	overlaySection(md, "github", &c.GitHub, &o.GitHub)
 	overlaySection(md, "pipeline", &c.Pipeline, &o.Pipeline)
 	overlaySection(md, "usage", &c.Usage, &o.Usage)
+	overlaySection(md, "triage", &c.Triage, &o.Triage)
 	overlaySection(md, "board", &c.Board, &o.Board)
 	l, err := readLayer(path, md, o.Kinds, o.Roles)
 	if err != nil {
@@ -736,6 +738,7 @@ func Defaults() *Config {
 		GitHub:   GitHub{Transport: "gh"},
 		Pipeline: Pipeline{PromptsDir: "{{repo}}/prompts"},
 		Usage:    Usage{CodexSoft: 80, CodexHard: 95},
+		Triage:   DefaultTriage(),
 	}
 	c.Normalize()
 	return c

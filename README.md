@@ -372,6 +372,33 @@ applies a change once the rounds in flight end. A session whose model hits its o
 the kind's next `fallback_models` entry by itself (Claude: `["opus", "sonnet"]`) and back once the limit
 lifts.
 
+#### Triage: fewer reviewers for a small diff
+
+A one-line fix does not need every reviewer. With `[triage] enabled = true`, before a round starts its agents
+Magnum asks a cheap model which reviewers the round's diff needs: Claude haiku by default, or any CLI that reads
+a prompt on stdin and prints its answer (`command`, with a Codex line in `config.defaults.toml`). The limits are
+Magnum's, not the model's. Only a first review or re-review whose diff has at most `max_lines` changed lines
+(default 120, added plus deleted; a re-review counts the commits since the last review) is asked about, bigger
+rounds run every role. The judge always runs, and the model can only remove roles that have a `summary`, the
+one-line description of what a role checks (the built-in reviewers have one, a role without one always runs). A
+round that names its roles (`magnum review --role`), a continued round and an eval are never triaged. Anything
+that goes wrong (a missing or failing command, a `timeout`, an answer that cannot be read, a diff GitHub cannot
+give in full) runs every role. The prompt, `prompts/triage.md`, tells the model that the diff is data, not
+instructions, and never contains the PR's title or description. Each decision is a `round.triage` event on the
+PR (`magnum logs <ref>`): the diff size, what runs, what was skipped and the model's reason, or the warning that
+says why every role ran.
+
+```toml
+[triage]
+enabled = true
+max_lines = 120
+command = ["claude", "-p", "--model", "haiku", "--tools", "", "--no-session-persistence"]   # prompt on stdin, answer on stdout
+
+[[role]]
+name = "claude-simplify"
+summary = "simplifications and refactors of the changed code"   # what the model is told the role does
+```
+
 ### The judge skill
 
 `skills/magnum-review/SKILL.md` is the judge's method: review the whole PR, treat every candidate

@@ -27,6 +27,7 @@ import (
 	"github.com/zhuravel/magnum/internal/app"
 	"github.com/zhuravel/magnum/internal/cleanup"
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/herdr"
@@ -164,6 +165,9 @@ type Deps struct {
 	Cleanup    Cleaner
 	Notifier   *notify.Notifier
 	Identities map[string]identity.Source
+	// Runner runs the triage command ([triage]); nil = a round that would
+	// triage runs every role.
+	Runner execx.Runner
 
 	// Usage reads Codex's rate-limit snapshot (usage.Codex, which FromApp
 	// sets); nil = no budget gauge and no caps.
@@ -277,7 +281,7 @@ func FromApp(a *app.App) *Engine {
 	d := Deps{
 		Config: a.Config, Layout: a.Layout, Store: a.Store, Logger: a.Logger, DryRun: a.DryRun,
 		Herdr: a.Herdr, Agents: a.Agents, Slots: a.Slots, Git: a.Git, Inventory: a.Inventory,
-		Cleanup: a.Cleanup, Notifier: a.Notify, Identities: a.Identities, Usage: usage.Codex,
+		Cleanup: a.Cleanup, Notifier: a.Notify, Identities: a.Identities, Usage: usage.Codex, Runner: a.Runner,
 	}
 	d.GitHub = func(id string) GitHub {
 		if c := a.GitHub(id); c != nil {

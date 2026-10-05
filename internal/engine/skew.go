@@ -17,14 +17,15 @@ import (
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
 // CheckPrompts renders, with representative data and this binary's
 // renderer, every prompt file the configured roles name (judges with
 // agents.JudgeData, other session roles with agents.RoleData in each mode,
-// shell roles' command or full-line template through agents.ShellLine) and
-// the model-fallback prompt. Each template is rendered twice, once with
+// shell roles' command or full-line template through agents.ShellLine), the
+// model-fallback prompt and the triage prompt. Each template is rendered twice, once with
 // every field set and once with the optional ones empty, so both sides of
 // an {{if}} run. It returns how many renders passed and every failure,
 // joined: a template field this binary's data lacks (a prompt edited for a
@@ -79,6 +80,16 @@ func CheckPrompts(cfg *config.Config) (int, error) {
 	} else {
 		render("model-fallback prompt", p, sampleData[agents.FallbackData](true))
 		render("model-fallback prompt", p, agents.FallbackData{})
+	}
+	if p, err := cfg.ResolvePrompt(cfg.Triage.Prompt); err != nil {
+		errs = append(errs, fmt.Errorf("triage prompt: %w", err))
+	} else {
+		d := sampleData[triageData](true)
+		for _, kind := range []string{pipeline.KindInitial, pipeline.KindRereview} {
+			d.Kind = kind
+			render("triage prompt", p, d)
+		}
+		render("triage prompt", p, triageData{})
 	}
 	return ok, errors.Join(errs...)
 }

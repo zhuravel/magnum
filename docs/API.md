@@ -1963,6 +1963,9 @@ const DefaultSimplifyRerunLines = 150
 const DefaultSkill = "{{repo}}/skills/magnum-review/SKILL.md"
     DefaultSkill is the judge's default skill path ({{repo}} = magnum's home).
 
+const DefaultTriagePrompt = "triage.md"
+    DefaultTriagePrompt is the triage prompt file.
+
 const EmbeddedSkill = "builtin:skills/magnum-review/SKILL.md"
     EmbeddedSkill names the binary's own copy of the judge skill (magnum.Skill)
     as a skill source: what a judge gets without a checkout.
@@ -2125,6 +2128,7 @@ type Config struct {
 	GitHub     GitHub     `toml:"github"`
 	Pipeline   Pipeline   `toml:"pipeline"`
 	Usage      Usage      `toml:"usage"`
+	Triage     Triage     `toml:"triage"`
 	Board      Board      `toml:"board"`
 	Identities []Identity `toml:"identity"`
 	Watches    []Watch    `toml:"watch"`
@@ -2743,6 +2747,10 @@ type Role struct {
 	// judge is a session role with runs = "always", capture = "file" and no
 	// After (it always runs last).
 	Judge bool `toml:"judge"`
+	// Summary is a one-line description of what the role checks, shown to the
+	// triage model ([triage]; Removable). A role without one is never
+	// removed from a round, and neither is the judge.
+	Summary string `toml:"summary"`
 	// Runs: "always" (default), "first", "manual" or "never" (see RunsAlways).
 	Runs string `toml:"runs"`
 	// RerunMinLines, for runs = "first": the role runs again once the code
@@ -2862,6 +2870,9 @@ func DefaultRoles() []Role
         capture git-diff, output claude-simplify.patch, after claude-review and
         codex-review; aliases simplify.
 
+    Each non-judge role carries a Summary, which makes it a candidate for triage
+    ([triage]).
+
 func (r Role) AgentKind() string
     AgentKind is the agent CLI whose login preflight, pauses and health patterns
     apply to the role: Kind for session roles, Tool for shell roles ("" when the
@@ -2887,6 +2898,10 @@ func (r Role) PromptFile(kind string) string
     PromptStop); "" when the role has none (shell roles driven by Command,
     non-judge roles for continue/recovery/nudge/stop unless set, a role without
     a restart prompt, unknown kinds). Rereview falls back to the initial prompt.
+
+func (r Role) Removable() bool
+    Removable is whether triage may drop the role from a round: not the judge,
+    and it has a Summary to show the model.
 
 func (r Role) ReportFile() string
     ReportFile is the file the role writes in the round's report directory.
@@ -2925,6 +2940,31 @@ type Tracker struct {
 func ParseTracker(tmpl string) (Tracker, error)
     ParseTracker reads a [board] trackers template: an http(s) URL with {num}
     once, right after the issue key's prefix.
+
+type Triage struct {
+	// Enabled turns triage on; off by default (it spends a model call per round).
+	Enabled bool `toml:"enabled"`
+	// MaxLines: a round whose diff changes more lines (added plus deleted)
+	// than this runs every role, unasked.
+	MaxLines int `toml:"max_lines"`
+	// Command is the model's CLI, an argument vector: the prompt arrives on
+	// its stdin and its stdout is the answer.
+	Command []string `toml:"command"`
+	// Timeout bounds the command; a timeout runs every role.
+	Timeout Duration `toml:"timeout"`
+	// Prompt is the template file (Config.ResolvePrompt); see prompts/README.md.
+	Prompt string `toml:"prompt"`
+}
+    Triage is the [triage] section: before a round starts its agents,
+    a cheap model is asked which of the round's reviewers its diff needs,
+    so a one-line fix does not wake every reviewer. Rounds with more than
+    MaxLines changed lines run every role without asking; the judge always runs,
+    the model can only remove roles that have a Summary, and any failure runs
+    every role (internal/engine/triage.go, DECISIONS "Triage of small diffs").
+
+func DefaultTriage() Triage
+    DefaultTriage returns the built-in [triage] values: off, Claude haiku with
+    no tools and no session kept.
 
 type Usage struct {
 	// CodexSoft: at or above this share (percent) of the Codex budget used,
@@ -3378,12 +3418,12 @@ func CheckPrompts(cfg *config.Config) (int, error)
     CheckPrompts renders, with representative data and this binary's renderer,
     every prompt file the configured roles name (judges with agents.JudgeData,
     other session roles with agents.RoleData in each mode, shell roles' command
-    or full-line template through agents.ShellLine) and the model-fallback
-    prompt. Each template is rendered twice, once with every field set and once
-    with the optional ones empty, so both sides of an {{if}} run. It returns
-    how many renders passed and every failure, joined: a template field this
-    binary's data lacks (a prompt edited for a newer build) fails here instead
-    of in a round.
+    or full-line template through agents.ShellLine), the model-fallback prompt
+    and the triage prompt. Each template is rendered twice, once with every
+    field set and once with the optional ones empty, so both sides of an
+    {{if}} run. It returns how many renders passed and every failure, joined:
+    a template field this binary's data lacks (a prompt edited for a newer
+    build) fails here instead of in a round.
 
 func ClearModelLimits(ctx context.Context, st *store.Store, kind string) ([]string, error)
     ClearModelLimits deletes the per-model limits recorded for kind
@@ -3635,6 +3675,9 @@ type Deps struct {
 	Cleanup    Cleaner
 	Notifier   *notify.Notifier
 	Identities map[string]identity.Source
+	// Runner runs the triage command ([triage]); nil = a round that would
+	// triage runs every role.
+	Runner execx.Runner
 
 	// Usage reads Codex's rate-limit snapshot (usage.Codex, which FromApp
 	// sets); nil = no budget gauge and no caps.

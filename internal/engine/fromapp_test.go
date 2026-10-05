@@ -52,6 +52,9 @@ func TestFromAppDryRunOnce(t *testing.T) {
 	}
 	defer a.Close()
 	e := FromApp(a)
+	if e.d.Runner != a.Runner {
+		t.Fatal("FromApp does not hand the app's command runner to the engine: the triage command would never run")
+	}
 	if err := e.Run(context.Background(), Options{Once: true, NoSignals: true}); err != nil {
 		t.Fatal(err)
 	}

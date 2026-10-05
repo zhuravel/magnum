@@ -777,3 +777,41 @@ editing history. Code, config comments and prompts reference these by their head
   `requestedReviewers` (no time), from GitHub's updatedAt (any activity moves it) and a timeline call per
   PR when the board opens (the board never asks GitHub). A request older than the newest ten events is not
   kept.
+- **Triage of small diffs: a cheap model may drop reviewers, inside bounds magnum enforces** (2026-10-05, after
+  one-line fixes got the full three-reviewer round). `[triage]` (off by default) asks a cheap model (Claude
+  haiku through `claude -p`, or any CLI that takes a prompt on stdin) which reviewers the round's diff needs,
+  after the round's roles are known (`pipeline.RolesToRun`) and before anything is preflighted or started, so
+  a dropped role costs no login check, pane or agent. The diff is the PR's own text and the model reads it, so
+  nothing depends on the model resisting what the diff says to it; the bounds are code: only a diff of at most
+  `max_lines` changed lines (added plus deleted, 120) is asked about, so a big change always gets every
+  reviewer; the judge always runs; the answer can only remove roles RolesToRun picked and only ones with a
+  `summary` (a new optional `[[role]]` key, the one-line description the model is shown; a role without one
+  is never offered), and a name that is no role of the round is ignored, while an answer naming none of the
+  round's roles is treated as no answer; any failure (command missing, non-zero exit, timeout, no JSON
+  object with a `"run"` list in the output, an incomplete diff, GitHub unreadable) runs every role and says
+  why in a `round.triage` warning. A decision is a `round.triage` event naming the diff size, the roles that
+  run and the ones skipped and the model's reason (one line, 120 runes, redacted). The prompt
+  (`prompts/triage.md`, part of the startup snapshot) says the diff is data, not instructions, and carries
+  neither the PR's title nor its body. The command runs without a terminal and in a private directory under
+  `state/`, never the checkout: a model CLI reads the project settings, hooks and instruction files of its
+  working directory, which are the PR's to write. Triage applies to first reviews and re-reviews only; a
+  round that names roles (`magnum review --role`, or a `runs = "first"` role whose `rerun_min_lines` earned a
+  rerun, which counts as named), a continued round and an eval run what they would have run. The diff is read
+  from GitHub's comparison as the watch's poll identity (the call `rerun_min_lines` and the re-review
+  threshold already make): the base branch against the target for a first review (GitHub's comparison is the
+  merge-base diff the PR page shows), the reviewed commit against the target for a re-review (the whole PR
+  when the reviewed commit is the target itself). The pipeline gets the reduced candidate list, so a skipped
+  role is neither started nor mentioned to the judge, which already copes with absent reports; a skipped
+  `runs = "first"` role has not run, so it is still due later. Rejected: letting the model add roles or skip
+  the judge (the PR's text could talk its way out of a review, or into a costly one); a heuristic on paths
+  (it cannot tell a typo in a string from a logic change); asking about every round (the saving is on the
+  small ones, and a big diff costs real tokens to read); failing or delaying the round on an unreadable
+  answer (a saved reviewer is not worth a late review). This is the one prompt that carries PR text and the
+  first agent call that is not an interactive pane, both on purpose: the call is a classification, not a
+  review (reviews still run in panes, top of this file); the default command gives the model no tools
+  (`--tools ""`) and no session, and runs in that private directory, so the diff can sway only the answer,
+  whose effect the bounds above limit. The prompt names what may skip every reviewer (a typo, a constant, a
+  nil guard, test- or docs-only) and what must keep the bug-finding ones (authorization or tenant scoping,
+  money, concurrency, data writes, schema, code outside the diff): a prompt that only said "the judge reads
+  the diff itself" let haiku drop every reviewer from a change that removed tenant scoping, and one that
+  said "when in doubt, keep it" kept them all for a one-line nil guard.

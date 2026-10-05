@@ -34,6 +34,10 @@ type Role struct {
 	// judge is a session role with runs = "always", capture = "file" and no
 	// After (it always runs last).
 	Judge bool `toml:"judge"`
+	// Summary is a one-line description of what the role checks, shown to the
+	// triage model ([triage]; Removable). A role without one is never
+	// removed from a round, and neither is the judge.
+	Summary string `toml:"summary"`
 	// Runs: "always" (default), "first", "manual" or "never" (see RunsAlways).
 	Runs string `toml:"runs"`
 	// RerunMinLines, for runs = "first": the role runs again once the code
@@ -235,18 +239,21 @@ func (r Role) ShouldRun(ranBefore, requested bool) bool {
 //   - claude-simplify: claude, runs first, prompt claude-simplify.md,
 //     capture git-diff, output claude-simplify.patch, after claude-review and
 //     codex-review; aliases simplify.
+//
+// Each non-judge role carries a Summary, which makes it a candidate for
+// triage ([triage]).
 func DefaultRoles() []Role {
 	return []Role{
 		{Name: RoleCodexJudge, Kind: KindCodex, Judge: true, Effort: "xhigh", RereviewEffort: "high", Skill: DefaultSkill,
 			Prompt: "judge-initial.md", Rereview: "judge-rereview.md", ContinuePrompt: "judge-continue.md",
 			Recovery: "judge-recovery.md", Nudge: "judge-nudge.md", Stop: "judge-stop.md",
 			Aliases: []string{"judge"}},
-		{Name: RoleClaudeReview, Kind: KindClaude, Effort: "high",
+		{Name: RoleClaudeReview, Kind: KindClaude, Effort: "high", Summary: "deep review for bugs, security and correctness",
 			Prompt: "claude-review.md", Rereview: "claude-rereview.md", Restart: "claude-restart.md", Aliases: []string{"claude"}},
-		{Name: RoleCodexReview, Kind: KindShell, Tool: KindCodex, Command: defaultCodexReviewCommand,
+		{Name: RoleCodexReview, Kind: KindShell, Tool: KindCodex, Command: defaultCodexReviewCommand, Summary: "Codex's own static review of the diff",
 			OKStatus: []int{0}, Capture: CaptureStdout, Aliases: []string{"codex", "codex_review"}},
 		{Name: RoleClaudeSimplify, Kind: KindClaude, Runs: RunsFirst, RerunMinLines: DefaultSimplifyRerunLines, Prompt: "claude-simplify.md",
-			Capture: CaptureGitDiff, Output: "claude-simplify.patch",
+			Summary: "simplifications and refactors of the changed code", Capture: CaptureGitDiff, Output: "claude-simplify.patch",
 			After: []string{RoleClaudeReview, RoleCodexReview}, Aliases: []string{"simplify"}},
 	}
 }
