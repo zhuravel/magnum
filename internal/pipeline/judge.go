@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -80,8 +81,12 @@ func (rd *round) runJudge(ctx context.Context, run store.Run) (RoundResult, erro
 		rd.finishRun(ctx, run.ID, store.RunFailed, OutcomeError, err.Error())
 		return rd.done(ctx, OutcomeError, fmt.Errorf("pipeline: judge prompt: %w", err))
 	}
-	rd.event(ctx, "info", "round.judge", fmt.Sprintf("prompting %s (run %s, %s)", rd.judge.Name, run.ID, in.Kind),
-		map[string]any{"run": run.ID, "marker": marker, "reports": jd.Reports})
+	msg := fmt.Sprintf("prompting %s (run %s, %s)", rd.judge.Name, run.ID, in.Kind)
+	if usual, _ := JudgeEvents(rd.r.Config, rd.owner+"/"+rd.name, &rd.idCfg, in.PostMerge); usual != jd.NoFindingsEvent {
+		msg += fmt.Sprintf("; no %s this round, a report is missing: %s", usual, strings.Join(missingReports(jd.Reports), ", "))
+	}
+	rd.event(ctx, "info", "round.judge", msg,
+		map[string]any{"run": run.ID, "marker": marker, "reports": jd.Reports, "no_findings_event": jd.NoFindingsEvent})
 	markers := []string{marker}
 	if marker != run.ID {
 		markers = append(markers, run.ID)
@@ -598,21 +603,47 @@ func (rd *round) dismissStale(ctx context.Context, event string, newID int64, ne
 // (RoundInput.PostMerge), with or without findings.
 const PostMergeEvent = "COMMENT"
 
+// noApproveEvent is the no-findings event of a round that lacks a reviewer's
+// report (JudgeEvents).
+const noApproveEvent = "COMMENT"
+
 // JudgeEvents are the review events the judge's prompt names for a round of
 // repository fullName ("owner/name") posted as identity id: the
-// repository's or the identity's (config.Config.VerdictsFor), and COMMENT
-// both ways in a post-merge round, where a verdict blocks nothing.
-func JudgeEvents(cfg *config.Config, fullName string, id *config.Identity, postMerge bool) (noFindings, blocking string) {
+// repository's or the identity's (config.Config.VerdictsFor); COMMENT both
+// ways in a post-merge round, where a verdict blocks nothing; and COMMENT
+// for no findings when one of the round's reports is missing (an APPROVE
+// once went out while claude-review had hit a usage limit: a review that did
+// not hear every reviewer approves nothing). A git-diff role that found
+// nothing to change (ReportEmpty) did its job and is not missing.
+func JudgeEvents(cfg *config.Config, fullName string, id *config.Identity, postMerge bool, reports ...agents.Report) (noFindings, blocking string) {
 	if postMerge {
 		return PostMergeEvent, PostMergeEvent
 	}
-	return cfg.VerdictsFor(fullName, id)
+	noFindings, blocking = cfg.VerdictsFor(fullName, id)
+	if len(missingReports(reports)) > 0 {
+		noFindings = noApproveEvent
+	}
+	return noFindings, blocking
+}
+
+// missingReports names the reports a role left unusable, with why
+// ("claude-review (usage_limit)"); a git-diff role without changes is not
+// one of them.
+func missingReports(reports []agents.Report) []string {
+	var out []string
+	for _, r := range reports {
+		if (r.Missing || r.Path == "") && r.Status != ReportEmpty {
+			out = append(out, fmt.Sprintf("%s (%s)", r.Role, cmp.Or(r.Status, r.Detail, "no report")))
+		}
+	}
+	return out
 }
 
 // judgeData fills the judge templates.
 func (rd *round) judgeData(run store.Run, marker string) agents.JudgeData {
 	in := rd.in
-	nf, be := JudgeEvents(rd.r.Config, rd.owner+"/"+rd.name, &rd.idCfg, in.PostMerge)
+	reports := rd.judgeReports()
+	nf, be := JudgeEvents(rd.r.Config, rd.owner+"/"+rd.name, &rd.idCfg, in.PostMerge, reports...)
 	skill := config.SkillPath(rd.judge.Skill, rd.r.Layout) // config.Defaults keeps {{repo}} unexpanded
 	base := in.BaseRef
 	if base == "" {
@@ -622,8 +653,8 @@ func (rd *round) judgeData(run store.Run, marker string) agents.JudgeData {
 		RunID: marker, Owner: rd.owner, Repo: rd.name, Number: in.PR.Number, URL: in.PR.URL,
 		HeadSHA: in.TargetSHA, BaseRef: base, BaseSHA: in.BaseSHA, Checkout: in.SlotPath,
 		IdentityKind: rd.r.Identity.Kind(), ReviewerLogin: rd.login, GhConfigDir: rd.ghDir,
-		NoFindingsEvent: nf, BlockingEvent: be, SelfAuthored: rd.selfAuthored(),
-		Reports: rd.judgeReports(), ResultFile: rd.reportPath(run, rd.judge), DryRun: in.DryRun, Blind: in.Blind, PostMerge: in.PostMerge,
+		NoFindingsEvent: nf, BlockingEvent: be, SelfAuthored: rd.selfAuthored(), Footer: rd.idCfg.Footer(),
+		Reports: reports, ResultFile: rd.reportPath(run, rd.judge), DryRun: in.DryRun, Blind: in.Blind, PostMerge: in.PostMerge,
 		SkillPath: skill, Model: rd.r.Config.RoleModel(rd.judge), Effort: rd.judge.EffortFor(in.Kind == KindRereview),
 		ForcePushed: in.ForcePushed, MovedFrom: in.MovedFrom, PreviousHeadSHA: rd.previousHead(),
 		NotesPath: in.NotesPath,

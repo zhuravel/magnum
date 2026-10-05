@@ -59,8 +59,8 @@ func TestRereviewPromptNamesTheThreadsFile(t *testing.T) {
 }
 
 // The re-review and recovery prompts carry the readiness outcome like the
-// initial one: the failure paragraph and the block's list, and nothing of
-// either when no check ran.
+// initial one: the block's list (what to do about a failure is the skill's),
+// and nothing of it when no check ran.
 func TestRereviewAndRecoveryPromptsCarryReadiness(t *testing.T) {
 	ready := Readiness{File: "/state/reviews/talkable/talkable/11920/d4e5f6a/readiness.json", Failed: 1, Checks: []ReadinessCheck{
 		{Kind: ReadinessPrepare, Command: "bin/setup-test-db", OK: true, Status: ReadinessOK, Duration: "4.2s"},
@@ -73,16 +73,9 @@ func TestRereviewAndRecoveryPromptsCarryReadiness(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		for _, want := range []string{
-			"1 readiness check magnum ran in this checkout before the reviewers did not pass (`readiness` below; each command's last output line is in " + ready.File + ").",
-			"\nreadiness: " + ready.File + "\n  - prepare `bin/setup-test-db`: ok in 4.2s\n  - ruby `ruby -v`: failed in 0.3s (the checkout pins Ruby 3.3.4",
-		} {
-			if !strings.Contains(got, want) {
-				t.Errorf("%s lacks %q:\n%s", name, want, got)
-			}
-		}
-		if strings.Index(got, "readiness check magnum ran") > strings.Index(got, "<magnum>") {
-			t.Errorf("%s: the readiness paragraph comes after the <magnum> block", name)
+		want := "\nreadiness: " + ready.File + "\n  - prepare `bin/setup-test-db`: ok in 4.2s\n  - ruby `ruby -v`: failed in 0.3s (the checkout pins Ruby 3.3.4"
+		if !strings.Contains(magnumBlock(t, got), want) {
+			t.Errorf("%s lacks %q:\n%s", name, want, got)
 		}
 		d.Readiness = Readiness{}
 		if got, err = RenderPrompt(prompt(t, name), d); err != nil || strings.Contains(got, "readiness") {

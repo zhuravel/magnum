@@ -82,7 +82,8 @@ the judge data, every other session role gets the role data, and a shell role's 
 | `.IdentityKind` | `gh` or `app` |
 | `.ReviewerLogin` | the login the review is posted as (REST form, e.g. `talkable[bot]`) |
 | `.GhConfigDir` | `GH_CONFIG_DIR` of the identity; empty for the `gh` identity |
-| `.NoFindingsEvent`, `.BlockingEvent` | review events from the `[[identity]]` |
+| `.NoFindingsEvent`, `.BlockingEvent` | review events from the `[[repo]]` or the `[[identity]]`; `.NoFindingsEvent` is `COMMENT` whenever a reviewer of the round left no usable report (anything in `.Reports` that is missing, except a git-diff role's `no changes`): a review that did not hear every reviewer never approves |
+| `.Footer` | the posting identity's `review_footer` (magnum's default line when it sets none), which the judge appends verbatim as the review's last line; empty when the identity sets `""`. The judge prompts render `footer:` only when it is set |
 | `.SelfAuthored` | the PR's author is the reviewing identity |
 | `.Reports` | one entry per other role of the round, in pipeline order (see below) |
 | `.ResultFile` | where the judge writes its JSON result (the role's `output`) |
@@ -98,11 +99,11 @@ the judge data, every other session role gets the role data, and a shell role's 
 | `.PreviousReviews` | earlier reviews by the login: `.ID`, `.Event`, `.SHA`, `.SubmittedAt` (recovery) |
 | `.ThreadsFile`, `.ThreadSummary` | the JSON file of the inline threads the login (or a former login) started, every reply classified (`fixed`, `not a bug`, `won't fix`, `other`), and their counts, e.g. `3 threads (1 resolved); replies: 1 fixed, 1 not a bug; 1 thread without a reply` (rereview, and recovery of a reviewed PR; empty when magnum could not read them). `.Threads` holds the same data, but replies are PR content: name the file, never print them |
 | `.FormerLogins` | the logins (REST form) the PR's earlier reviews were posted as before its watch moved to another identity: their reviews and threads are the judge's own history; usually empty |
-| `.NotesPath` | the repository notes file, `<home>/state/notes/<owner>/<repo>.md` (lower-case); empty when there is none. The judge reads it and rewrites it when a round taught something durable (see Repository notes) |
+| `.NotesPath` | the repository notes file, `<home>/state/notes/<owner>/<repo>.md` (lower-case); empty when there is none. The judge reads it and rewrites it when a round taught something durable (see Repository notes). The judge prompts pass it and the four rows below as the `<magnum>` fields `notes`, `notes_dir`, `notes_harness`, `notes_lock` and `notes_unlock`, only when it is set; the steps are the skill's |
 | `.NotesDir`, `.NotesLock` | the harness directory next to the notes file (its path without `.md`) and the notes lock (that with `.lock`); empty without notes |
 | `.NotesHarness`, `.NotesHarnessMore` | the harness directory's entries at prompt time (sorted, a directory ends in `/`, at most 40) and how many more there are |
 | `.NotesLockCommand`, `.NotesUnlockCommand` | the shell lines that take the notes lock (printing `notes locked`, or `notes busy` after three minutes) and release it |
-| `.Readiness` | what magnum ran in the checkout before the reviewers (`prepare` and `ready` of the `[[repo]]` or `[[pool]]`, and the `ruby` check): `.Checks` (each `.Kind`, `.Command`, `.Status` `ok`/`failed`/`timeout`/`skipped`, `.Detail` magnum's reason, `.Duration`), `.Failed` (how many did not pass) and `.File`, the JSON file that also holds each command's last output line. That line is the PR's code talking: name the file, never print it. Empty when nothing ran (initial, rereview and recovery rounds run the step; continue does not) |
+| `.Readiness` | what magnum ran in the checkout before the reviewers (`prepare` and `ready` of the `[[repo]]` or `[[pool]]`, and the `ruby` check): `.Checks` (each `.Kind`, `.Command`, `.Status` `ok`/`failed`/`timeout`/`skipped`, `.Detail` magnum's reason, `.Duration`), `.Failed` (how many did not pass) and `.File`, the JSON file that also holds each command's last output line. That line is the PR's code talking: name the file, never print it. Empty when nothing ran (initial, rereview and recovery rounds run the step; continue does not). The judge prompts list it as the `<magnum>` field `readiness`; what to do about a check that did not pass is the skill's |
 
 #### `.Reports` entries
 
@@ -216,16 +217,18 @@ or, when its scope is `general`, names the repository is dropped and the miss ke
 
 magnum keeps one Markdown file per repository, `<home>/state/notes/<owner>/<repo>.md` with owner and
 repository lower-cased (`state/` is gitignored), and a directory with the same name without `.md` next to
-it for QA scripts. The built-in prompts tell every role to read the file first as hints from earlier
-reviews to verify, and tell the judge to rewrite it (never append) after posting when the round taught
-it something durable: what the repository is, how to run its tests and lint, how to QA a change,
-failures of the review machine, known pitfalls, standing decisions, at most about 80 lines under a
-dated header line. Judges of different PRs of one repository run at the same time, so the judge takes
-the notes lock (`.NotesLockCommand`: a directory created with `mkdir`, which outlives the shell command,
-waited for at most three minutes and taken over after ten), reads the current file again, merges its
-lessons into it, writes it through a temp file and `mv`, and releases the lock. The prompt lists the
-harness directory's files so a script the notes no longer mention is visible. A custom prompt opts in
-with `{{if .NotesPath}}...{{.NotesPath}}...{{end}}`. `magnum notes <repo>` prints the file and
+it for QA scripts. The built-in reviewer prompts tell their role to read the file first as hints from
+earlier reviews to verify. The judge prompts pass the file, the harness directory, its files (so a script
+the notes no longer mention is visible) and the lock commands as `<magnum>` fields (`notes`,
+`notes_dir`, `notes_harness`, `notes_lock`, `notes_unlock`), and the skill (section 2) holds the steps
+once: rewrite the file (never append) after posting when the round taught something durable (what the
+repository is, how to run its tests and lint, how to QA a change, failures of the review machine, known
+pitfalls, standing decisions, at most about 80 lines under a dated header line). Judges of different PRs
+of one repository run at the same time, so the judge takes the notes lock (`.NotesLockCommand`: a
+directory created with `mkdir`, which outlives the shell command, waited for at most three minutes and
+taken over after ten), reads the current file again, merges its lessons into it, writes it through a
+temp file and `mv`, and releases the lock. A custom prompt opts in with
+`{{if .NotesPath}}...{{.NotesPath}}...{{end}}`. `magnum notes <repo>` prints the file and
 `magnum notes <repo> --edit` opens it in `$VISUAL` or `$EDITOR`.
 
 ### Shell roles (`command`, or a full-line `.sh` prompt)
@@ -390,7 +393,7 @@ instead, i.e. what magnum will type to start, resume and name each one. `--json`
 | Role | Kind | What it does |
 |---|---|---|
 | `codex-judge` | codex | Persistent session; reads the reports, runs `$magnum-review` and posts one review. Effort `xhigh`, `high` for re-reviews, 90 minutes. |
-| `claude-review` | claude | Persistent session running `/code-review <url> high`; writes `claude-review.md`. |
+| `claude-review` | claude | Persistent session running `/code-review <url> high` (`medium` for re-reviews), leaving out style-only and pre-existing problems; writes `claude-review.md`. |
 | `codex-review` | shell | Types `command codex review --base <merge base>` (the base ref when the merge base is unknown) into a plain pane; its output is tee'd into `codex-review.md`. |
 | `claude-simplify` | claude | Runs `/simplify` after both reviewers on a PR's first review, or on request (`magnum review --role claude-simplify`, or `--simplify`); its diff becomes `claude-simplify.patch`. |
 

@@ -538,23 +538,29 @@ type JudgeData struct {
 	// readiness.json because it is PR text).
 	Readiness Readiness
 
-	RunID           string
-	Owner, Repo     string
-	Number          int
-	URL             string
-	HeadSHA         string
-	BaseRef         string
-	BaseSHA         string
-	Checkout        string // absolute checkout path the judge works in
-	IdentityKind    string // gh | app
-	ReviewerLogin   string // REST form, e.g. talkable[bot]
-	GhConfigDir     string // "" for the gh identity
-	NoFindingsEvent string // APPROVE | COMMENT
+	RunID         string
+	Owner, Repo   string
+	Number        int
+	URL           string
+	HeadSHA       string
+	BaseRef       string
+	BaseSHA       string
+	Checkout      string // absolute checkout path the judge works in
+	IdentityKind  string // gh | app
+	ReviewerLogin string // REST form, e.g. talkable[bot]
+	GhConfigDir   string // "" for the gh identity
+	// NoFindingsEvent is APPROVE or COMMENT: COMMENT whenever a reviewer
+	// of the round left no usable report (pipeline.JudgeEvents).
+	NoFindingsEvent string
 	BlockingEvent   string // REQUEST_CHANGES | COMMENT
 	SelfAuthored    bool
-	Reports         []Report // one per non-judge role of the round, in pipeline order
-	ResultFile      string   // <report dir>/<the judge's output>, e.g. codex-judge.json
-	DryRun          bool
+	// Footer is the posting identity's review footer
+	// (config.Identity.Footer), which the judge appends verbatim as the
+	// review's last line; "" = none, and the prompts leave the field out.
+	Footer     string
+	Reports    []Report // one per non-judge role of the round, in pipeline order
+	ResultFile string   // <report dir>/<the judge's output>, e.g. codex-judge.json
+	DryRun     bool
 	// Blind: an evaluation replay (pipeline.RoundInput.Blind), rendered as
 	// `blind: true`; the skill then judges the local diff of HeadSHA only.
 	Blind bool
@@ -571,7 +577,10 @@ type JudgeData struct {
 	EffortInPrompt bool
 	// NotesPath is the repository notes file: the judge reads it first and
 	// rewrites it at the end of a round that taught something durable. ""
-	// = no notes, and the prompts leave the paragraph out.
+	// = no notes, and the prompts leave the notes fields out. The judge
+	// prompts pass it and the fields below as `notes`, `notes_dir`,
+	// `notes_harness`, `notes_lock` and `notes_unlock` in the <magnum>
+	// block; the steps are the skill's.
 	NotesPath string
 	// NotesDir is the harness directory next to NotesPath and NotesLock the
 	// lock the judge holds while it rewrites the notes (NotesFiles; derived
@@ -1237,8 +1246,9 @@ type ThreadReply struct {
 	Author string `json:"author"`
 	// Own: the reviewer login wrote it (an earlier rebuttal); it has no Class.
 	Own bool `json:"own,omitempty"`
-	// Class is what the reply's first words claim: fixed, not a bug, won't
-	// fix or other.
+	// Class is what the reply's first clause claims (past an
+	// acknowledgement such as "Good catch,"): fixed, not a bug, won't fix or
+	// other.
 	Class     string `json:"class,omitempty"`
 	Body      string `json:"body"`                // an excerpt: at most 600 characters
 	Truncated bool   `json:"truncated,omitempty"` // Body was cut
@@ -1965,6 +1975,12 @@ const DefaultReadyTimeout = 5 * time.Minute
     DefaultReadyTimeout bounds a round's whole readiness step when neither the
     [[repo]] nor the [[pool]] sets ready_timeout.
 
+const DefaultReviewFooter = "_Automated review by magnum. Reply on a thread with `fixed`, `not a bug: <why>` or `won't fix: <why>`; " +
+	"simplifications are optional. New pushes are re-reviewed automatically._"
+    DefaultReviewFooter is the footer of every identity that sets no
+    review_footer: what the review is and how to answer it, in the words the
+    reply classifier knows (config.defaults.toml documents it word for word).
+
 const DefaultSimplifyRerunLines = 150
     DefaultSimplifyRerunLines is claude-simplify's rerun_min_lines: about two
     new functions' worth of code since it last looked.
@@ -1989,6 +2005,9 @@ const PlaceholderNum = "{num}"
 const RequiredWorkflowPrefix = "workflow:"
     RequiredWorkflowPrefix marks a required_checks entry naming a whole GitHub
     Actions workflow ("workflow:CI").
+
+const ReviewFooterMax = 400
+    ReviewFooterMax bounds review_footer: it must be shorter, in characters.
 
 const SkillCopyName = "SKILL.md"
     SkillCopyName is the file name of a judge skill's startup copy (<skill
@@ -2471,11 +2490,19 @@ type Identity struct {
 	NoFindingsEvent string `toml:"no_findings_event"` // APPROVE | COMMENT
 	BlockingEvent   string `toml:"blocking_event"`    // REQUEST_CHANGES | COMMENT
 	DismissOwnStale *bool  `toml:"dismiss_own_stale_change_requests"`
+	// ReviewFooter is the line the identity's reviews end with, for the PR's
+	// author (nil = DefaultReviewFooter, "" = none); see Footer.
+	ReviewFooter *string `toml:"review_footer"`
 }
 
 func (i Identity) DismissStale() bool
     DismissStale reports whether the identity dismisses its own stale
     CHANGES_REQUESTED.
+
+func (i Identity) Footer() string
+    Footer is the line the judge appends verbatim to every review the
+    identity posts (the <magnum> block's footer): review_footer, trimmed,
+    else DefaultReviewFooter; "" = no footer.
 
 type Kind struct {
 	// Start: extra args always appended.
@@ -2944,8 +2971,8 @@ func DefaultRoles() []Role
         skill DefaultSkill, prompts judge-*.md, timeout daemon.judge_timeout;
         aliases judge.
       - claude-review: claude, prompt claude-review.md, rereview
-        claude-rereview.md, restart claude-restart.md, effort high; aliases
-        claude.
+        claude-rereview.md, restart claude-restart.md, effort high,
+        rereview_effort medium; aliases claude.
       - codex-review: shell, tool codex, command "command codex review --base
         {{if .BaseSHA}}{{.BaseSHA}}{{else}}{{.BaseRef}}{{end}}" (the merge base,
         else the base ref), ok_status [0], capture stdout; aliases codex,
@@ -7677,11 +7704,15 @@ var ErrInvalid = errors.New("pipeline: invalid round")
 
 FUNCTIONS
 
-func JudgeEvents(cfg *config.Config, fullName string, id *config.Identity, postMerge bool) (noFindings, blocking string)
+func JudgeEvents(cfg *config.Config, fullName string, id *config.Identity, postMerge bool, reports ...agents.Report) (noFindings, blocking string)
     JudgeEvents are the review events the judge's prompt names for a round of
     repository fullName ("owner/name") posted as identity id: the repository's
-    or the identity's (config.Config.VerdictsFor), and COMMENT both ways in a
-    post-merge round, where a verdict blocks nothing.
+    or the identity's (config.Config.VerdictsFor); COMMENT both ways in a
+    post-merge round, where a verdict blocks nothing; and COMMENT for no
+    findings when one of the round's reports is missing (an APPROVE once went
+    out while claude-review had hit a usage limit: a review that did not hear
+    every reviewer approves nothing). A git-diff role that found nothing to
+    change (ReportEmpty) did its job and is not missing.
 
 func RolesToRun(ctx context.Context, st *store.Store, cfg *config.Config, pr store.PR, roles []config.Role, requested []string, kind string) ([]config.Role, error)
     RolesToRun returns the roles a round of kind runs for pr, in the order

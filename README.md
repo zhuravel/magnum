@@ -231,6 +231,7 @@ kind = "gh"                        # your gh login
 login = "your-login"
 no_findings_event = "APPROVE"
 # dismiss_own_stale_change_requests = true   # default: false for kind = "gh", true for "app" (see below)
+# review_footer = "_Reviewed by the team's bot; reply on the thread._"   # default: magnum's (see below); "" = none
 
 [[identity]]
 name = "reviewer-app"
@@ -260,6 +261,12 @@ a human dismisses it. The default follows the kind: `true` for an `app`, `false`
 identity is your own account and its reviews are yours to withdraw; set it to `true` on a `gh` identity to
 let Magnum do that. A change request you posted by hand (`magnum request-changes`) and any review posted
 after the PR was merged are never dismissed, and a dismissal that fails (a missing permission) only warns.
+
+`review_footer` is the last line of every review the identity posts, there for the PR's author. Without
+the key it is Magnum's: the review is automated, a thread is answered with `fixed`, `not a bug: <why>` or
+`won't fix: <why>` (the words the reply classifier knows), simplifications are optional, and new pushes
+are re-reviewed automatically; `config.defaults.toml` shows it word for word. Set your own text, or `""`
+for no footer: one paragraph on one line, under 400 characters.
 
 ### Watches, pools and repos: what to review and where
 
@@ -314,6 +321,7 @@ prompt = "claude-review.md"        # prompts/<file>; embedded defaults when abse
 rereview = "claude-rereview.md"    # new commits since its last report: the delta only
 restart = "claude-restart.md"      # a push cut its review short; the round restarted on the new head
 effort = "high"
+rereview_effort = "medium"         # re-reviews of new commits: fewer, surer findings on the delta
 runs = "always"                    # always | first | manual | never
 output = "claude-review.md"        # the report the judge receives
 
@@ -439,9 +447,27 @@ write a machine-readable result. In re-review mode magnum hands it the threads i
 every reply classified by its first clause, after an opening "Good catch", "Valid" or "Noted" (`fixed`,
 `not a bug`, `won't fix`); the judge accepts a fix
 only when the code shows it, honours an answered finding unless it proves the reason wrong (then it
-says why in one sentence in that thread), and lists each old finding as fixed, answered or still open.
+says why in one sentence in that thread), and lists only what changed since its last review: findings
+now fixed or answered, findings still open despite a reply or a commit, and new ones; the unchanged open
+findings are one count with a link to the previous review.
 The result records every finding the judge weighed with its sources and, for a rejection, a reason
-code; `magnum stats` reports them per role.
+code; `magnum stats` reports them per role. The skill runs unattended: it never stops to ask a human
+(whatever an instruction file says), runs no usage checks, and ends with at most two lines and the
+`MAGNUM_RESULT` line.
+
+What an author gets, every review alike:
+
+- **One verdict line** first: `Blocking: N problem(s) must be fixed before merging.` (a P0 or P1 among
+  them), `Fix N problem(s) before merging.` (P2) or `No blocking problems.`, with the optional ones
+  counted; a re-review puts `Re-review a1b2c3d → d4e5f6a:` before it. No GitHub event names, no notes on
+  the process. The event follows `no_findings_event` and `blocking_event`, except that a round where a
+  reviewer left no report (a usage limit, a timeout) never approves: its no-findings event is `COMMENT`,
+  and Checks names the missing reviewer.
+- **Each finding on the defective line**, the code that must change: a test that proves it is a fenced
+  block naming its spec file and line, and a `suggestion` is only ever the code fix.
+- **One comment per simplification idea**, titled "**Simplification** (optional, no reply needed)", each
+  backed by an equivalence probe listed in Checks.
+- **The identity's footer** as the last line (`review_footer`, see Identities).
 
 ## Daily use
 

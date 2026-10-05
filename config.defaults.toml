@@ -226,6 +226,7 @@ kind = "claude"
 summary = "deep review for bugs, security and correctness"   # one line for [triage]: what the role checks
                                       # (a role without one is never dropped from a round)
 effort = "high"                       # passed to /code-review by the prompt
+rereview_effort = "medium"            # re-reviews of new commits: fewer, surer findings on a smaller delta
 prompt = "claude-review.md"
 rereview = "claude-rereview.md"
 restart = "claude-restart.md"         # a push cut the review short; the round restarted on the new head
@@ -280,6 +281,10 @@ aliases = ["simplify"]
 #                                         # merged, are never dismissed; a failed dismissal (a missing permission) only
 #                                         # warns. After a watch moves to another identity the new one's review also
 #                                         # dismisses the old identity's change requests, if the old one has this on.
+# review_footer = "_Automated review by magnum. Reply on a thread with `fixed`, `not a bug: <why>` or `won't fix: <why>`; simplifications are optional. New pushes are re-reviewed automatically._"
+#                                         # the last line of every review the identity posts, for the PR's author: the
+#                                         # line above is the default of every identity that does not set its own;
+#                                         # "" = no footer; one paragraph on one line, under 400 characters
 #
 # [[identity]]
 # name = "reviewer-app"

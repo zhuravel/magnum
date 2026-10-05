@@ -214,7 +214,7 @@ func TestRereviewStartsAgentsAtTheRereviewEffort(t *testing.T) {
 		want   []string
 	}{
 		{"resumed judge", map[agents.Role]string{agents.RoleJudge: "uuid-judge", agents.RoleClaude: "uuid-claude"},
-			[]string{"codex-judge:high:uuid-judge", "claude-review:high:uuid-claude"}},
+			[]string{"codex-judge:high:uuid-judge", "claude-review:medium:uuid-claude"}},
 		// Without a conversation the judge re-reads the history (recovery)
 		// at its full effort.
 		{"fresh judge", nil, []string{"codex-judge:xhigh:"}},

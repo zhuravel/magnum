@@ -57,6 +57,9 @@ func (c *Config) Validate() error {
 			errs = append(errs, fmt.Errorf("identity %s: kind must be gh or app", id.Name))
 		}
 		errs = append(errs, validateVerdicts("identity "+id.Name, id.NoFindingsEvent, id.BlockingEvent)...)
+		if err := validateFooter(id.Footer()); err != nil {
+			errs = append(errs, fmt.Errorf("identity %s: review_footer %w", id.Name, err))
+		}
 		ids[id.Name] = id
 	}
 	for _, w := range c.Watches {
@@ -400,6 +403,20 @@ func validateReadiness(label string, prepare, ready []string, timeout Duration) 
 		errs = append(errs, fmt.Errorf("%s: ready_timeout must not be negative", label))
 	}
 	return errs
+}
+
+// validateFooter checks an identity's review footer: one paragraph (no line
+// break or other control character: it is the last line of a review and a
+// one-line field of the judge's <magnum> block) shorter than
+// ReviewFooterMax characters.
+func validateFooter(footer string) error {
+	if strings.ContainsFunc(footer, unicode.IsControl) {
+		return errors.New("must be one paragraph on one line, without line breaks or other control characters")
+	}
+	if n := len([]rune(footer)); n >= ReviewFooterMax {
+		return fmt.Errorf("must be under %d characters (it has %d)", ReviewFooterMax, n)
+	}
+	return nil
 }
 
 // validateVerdicts checks the no_findings_event and blocking_event of an

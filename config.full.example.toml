@@ -200,6 +200,7 @@ name = "claude-review"
 kind = "claude"
 summary = "deep review for bugs, security and correctness"   # what [triage] tells the model the role checks
 effort = "high"                       # passed to /code-review by the prompt
+rereview_effort = "medium"            # re-reviews of new commits
 prompt = "claude-review.md"
 rereview = "claude-rereview.md"
 restart = "claude-restart.md"         # a push cut the review short; the round restarted on the new head
@@ -244,6 +245,8 @@ no_findings_event = "APPROVE"
 #                                           # CHANGES_REQUESTED review, which would otherwise keep blocking the author's
 #                                           # merge. Default: true for kind = "app", false for "gh" (your own account's
 #                                           # reviews stay unless you opt in); hand-posted change requests are never dismissed
+# review_footer = ""                        # the last line of every review this identity posts; default: magnum's line
+#                                           # (config.defaults.toml shows it); "" = none; one line under 400 characters
 
 [[identity]]
 name = "talkable-app"

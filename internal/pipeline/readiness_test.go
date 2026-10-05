@@ -469,14 +469,14 @@ func TestJudgeInitialPromptListsReadiness(t *testing.T) {
 			LastLine: "ActiveRecord::NoDatabaseError"},
 		{Kind: agents.ReadinessRuby, Command: RubyCheckCommand, OK: true, Status: agents.ReadinessOK, Detail: "runs Ruby 3.3.4", Duration: "0.3s"},
 	}})
+	// The facts are <magnum> fields; what to do about them is the skill's.
 	mustContain(t, "judge prompt", out,
-		"1 readiness check magnum ran in this checkout before the reviewers did not pass (`readiness` below; each command's last output line is in /r/readiness.json). Read them before you run any check",
 		"readiness: /r/readiness.json\n  - prepare `bin/rails db:test:prepare`: failed in 4.2s (exit 1)\n  - ruby `ruby -v`: ok in 0.3s (runs Ruby 3.3.4)\nresult_file: /r/codex-judge.json")
 	if strings.Contains(out, "NoDatabaseError") {
 		t.Errorf("the prompt carries a command's output (PR text):\n%s", out)
 	}
-	if strings.Index(out, "readiness check") > strings.Index(out, "<magnum>") {
-		t.Errorf("the readiness paragraph belongs before the <magnum> block:\n%s", out)
+	if strings.Contains(out[:strings.Index(out, "<magnum>")], "readiness") {
+		t.Errorf("the prompt repeats the skill's readiness paragraph:\n%s", out)
 	}
 
 	allOK := render(agents.Readiness{File: "/r/readiness.json", Checks: []agents.ReadinessCheck{

@@ -152,8 +152,9 @@ type ThreadReply struct {
 	Author string `json:"author"`
 	// Own: the reviewer login wrote it (an earlier rebuttal); it has no Class.
 	Own bool `json:"own,omitempty"`
-	// Class is what the reply's first words claim: fixed, not a bug, won't
-	// fix or other.
+	// Class is what the reply's first clause claims (past an
+	// acknowledgement such as "Good catch,"): fixed, not a bug, won't fix or
+	// other.
 	Class     string `json:"class,omitempty"`
 	Body      string `json:"body"`                // an excerpt: at most 600 characters
 	Truncated bool   `json:"truncated,omitempty"` // Body was cut
@@ -167,23 +168,29 @@ type JudgeData struct {
 	// readiness.json because it is PR text).
 	Readiness Readiness
 
-	RunID           string
-	Owner, Repo     string
-	Number          int
-	URL             string
-	HeadSHA         string
-	BaseRef         string
-	BaseSHA         string
-	Checkout        string // absolute checkout path the judge works in
-	IdentityKind    string // gh | app
-	ReviewerLogin   string // REST form, e.g. talkable[bot]
-	GhConfigDir     string // "" for the gh identity
-	NoFindingsEvent string // APPROVE | COMMENT
+	RunID         string
+	Owner, Repo   string
+	Number        int
+	URL           string
+	HeadSHA       string
+	BaseRef       string
+	BaseSHA       string
+	Checkout      string // absolute checkout path the judge works in
+	IdentityKind  string // gh | app
+	ReviewerLogin string // REST form, e.g. talkable[bot]
+	GhConfigDir   string // "" for the gh identity
+	// NoFindingsEvent is APPROVE or COMMENT: COMMENT whenever a reviewer
+	// of the round left no usable report (pipeline.JudgeEvents).
+	NoFindingsEvent string
 	BlockingEvent   string // REQUEST_CHANGES | COMMENT
 	SelfAuthored    bool
-	Reports         []Report // one per non-judge role of the round, in pipeline order
-	ResultFile      string   // <report dir>/<the judge's output>, e.g. codex-judge.json
-	DryRun          bool
+	// Footer is the posting identity's review footer
+	// (config.Identity.Footer), which the judge appends verbatim as the
+	// review's last line; "" = none, and the prompts leave the field out.
+	Footer     string
+	Reports    []Report // one per non-judge role of the round, in pipeline order
+	ResultFile string   // <report dir>/<the judge's output>, e.g. codex-judge.json
+	DryRun     bool
 	// Blind: an evaluation replay (pipeline.RoundInput.Blind), rendered as
 	// `blind: true`; the skill then judges the local diff of HeadSHA only.
 	Blind bool
@@ -200,7 +207,10 @@ type JudgeData struct {
 	EffortInPrompt bool
 	// NotesPath is the repository notes file: the judge reads it first and
 	// rewrites it at the end of a round that taught something durable. ""
-	// = no notes, and the prompts leave the paragraph out.
+	// = no notes, and the prompts leave the notes fields out. The judge
+	// prompts pass it and the fields below as `notes`, `notes_dir`,
+	// `notes_harness`, `notes_lock` and `notes_unlock` in the <magnum>
+	// block; the steps are the skill's.
 	NotesPath string
 	// NotesDir is the harness directory next to NotesPath and NotesLock the
 	// lock the judge holds while it rewrites the notes (NotesFiles; derived

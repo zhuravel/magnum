@@ -1173,3 +1173,80 @@ editing history. Code, config comments and prompts reference these by their head
   unwatched repositories, and 25 × 25 takes four pages for that owner), reading CI on a slower cadence (a
   re-run's result would show minutes late), and 50-repository radar pages by default (two of them took
   the same 7.7 s in all at a point more every tick; the retry covers the slow tail).
+- **A finding sits on the defective line** (2026-10-05, after 25 of 58 findings posted since the "test as a
+  `suggestion`" rule sat on spec lines, against 1 of 68 before, and "Apply suggestion" was used on none of
+  17 PRs: authors' agents apply changes locally). An author reading the code diff saw no comment at the bug,
+  and fixing the code never outdated the thread. The skill anchors every finding on the smallest changed
+  line of the code that must change, never a test file; a test that proves it goes in the comment as a
+  fenced block naming its file and line (`spec/…_spec.rb:42`), and a `suggestion` is only ever the code fix.
+  Rejected: keeping the test-file suggestion for one-click adoption (nobody clicked).
+- **One comment per simplification idea, each proven equivalent** (2026-10-05, after one PR got 12
+  simplification comments for 7 ideas, all declined with 12 replies, and one posted simplification changed
+  behaviour). Hunks that implement one idea, even far apart, are one comment: a `suggestion` at the first
+  site and "Same change at L…" for the others, titled "**Simplification** (optional, no reply needed)".
+  Each kept one needs an equivalence probe (a focused test, or a command running old and new code on the
+  same inputs) listed in Checks; one without a probe is dropped. Rejected: a cap on simplifications (caps
+  were rejected before; the probe and the merge cut the noise instead).
+- **Three verdict lines** (2026-10-05, after bodies opened with "Approve.", "Blocking:" on a COMMENT review,
+  "COMMENT — 8 P2 defects", "Changes needed:" on a P2-only review and process notes such as "This PR is not
+  stacked."). A body opens with exactly one of `Blocking: N problem(s) must be fixed before merging.` (a P0
+  or P1 among them), `Fix N problem(s) before merging.` (P2) or `No blocking problems.`, N counting the P0
+  to P2 findings with the still-open earlier ones, the optional ones counted after it; a re-review puts
+  `**Re-review a1b2c3d → d4e5f6a:**` first, a post-merge review says "in a follow-up". No GitHub event
+  names and no process notes in the body; the event itself still follows `no_findings_event` and
+  `blocking_event`. Rejected: naming the event in the body (GitHub shows it already, and an App that
+  never approves posts COMMENT for a clean review and a P2 one alike, so the event says less than the line).
+- **Re-reviews list what changed** (2026-10-05, after one PR relisted the same three threads in nine
+  consecutive review bodies, rounds 13 and 14 opening with "0 are fixed, 0 answered, 12 remain open" and
+  10 to 12 links). A re-review lists the earlier findings now fixed, now answered, or still open despite a
+  new reply or commit, and the new findings; the unchanged open ones are one count with one link to the
+  previous review, and the verdict still counts them. Rejected: dropping the unchanged ones altogether (the
+  author would not see why the verdict still blocks). Not changed: what a forced round on an unchanged head
+  posts.
+- **A footer tells the author what the review is and how to answer** (2026-10-05, after no review said
+  so: every review request went to the operator, never the App, authors' tools replied to every thread,
+  and their replies did not use the words the classifier knows). `[[identity]] review_footer` is the
+  last line of every review the identity posts, appended verbatim by the judge after the marker line (the
+  marker is matched anywhere in the body, and magnum's own "arrived during the review" note is appended
+  after everything). Without the key it is magnum's line (config.DefaultReviewFooter, documented word for
+  word in config.defaults.toml and checked by a test): automated review, reply `fixed`, `not a bug:
+  <why>` or `won't fix: <why>`, simplifications optional, new pushes re-reviewed automatically. `""`
+  turns it off. It must be one line under 400 characters: it is a field of the judge's `<magnum>` block
+  (`footer:`, rendered only when set). Per identity, so no name goes into the repository. Rejected: a
+  fixed line in the skill (the skill is public and generic, while a footer may name a team or a channel).
+- **The prompts say a reply's class comes from its first clause** (2026-10-05). The classifier reads the
+  first clause past an acknowledgement ("Good catch, fixed in …", "Low priority — … Kept as is."), while
+  judge-rereview.md, judge-recovery.md and the skill still said "first words"; they now say what the
+  classifier does, the skill with an example of each class.
+- **The notes steps and the readiness paragraph live in the skill only** (2026-10-05, after the same
+  14-line notes procedure was in four judge prompts and the readiness paragraph in three, about 1.6 KB of
+  every re-review prompt resent each round to a persistent session). The judge prompts pass `notes`,
+  `notes_dir`, `notes_harness` (the listing, `(+N more)` past 40), `notes_lock` and `notes_unlock` as
+  `<magnum>` fields, only when there are notes, beside the `readiness` list they already carried; the
+  skill's section 2 holds the steps once. The startup render check fills every JudgeData field, these
+  included, and goldens cover them. Rejected: keeping a one-line pointer in each prompt (the skill is
+  loaded with the prompt's link anyway).
+- **claude-review reports only what can be posted** (2026-10-05, after 3 of the candidates only
+  claude-review raised were posted and 302 rejected: speculative 108, style_only 73, pre_existing 29). Its
+  prompts no longer ask for "the ones you consider uncertain" and leave out style-only and pre-existing
+  problems (not introduced or exposed by the PR), and its built-in `rereview_effort` is `medium`. Its first
+  review stays at `high`; eval measures whether it still finds what only it found. Rejected: dropping
+  claude-review from re-reviews (it was once the sole source of 9 of 24 posted findings).
+- **The judge runs unattended** (2026-10-05, after four rounds ended blocked because a checkout's
+  AGENTS.md said to stop and ask the user, and nine posted rounds logged a failed usage-probe MCP call from
+  the operator's global agent instructions as a review-machine failure, which leaked into the notes). The
+  skill never stops to ask or wait for a human, whatever an instruction file says, records what it cannot
+  do under `environment_failures` and goes on, runs no usage or budget checks or unrelated MCP tools
+  (magnum handles limits), and keeps such machine noise out of the notes.
+- **The judge's final output is two lines and MAGNUM_RESULT** (2026-10-05). The skill asked for one final
+  MAGNUM_RESULT line and then a ten-item final response nobody reads (magnum reads the result file, and
+  the pane only for that line and health). Now the final response is at most two lines (the review URL or
+  the blocker, and the counts), and `MAGNUM_RESULT <json>` is the very last line.
+- **No APPROVE without every reviewer's report** (2026-10-05, after an APPROVE went out while claude-review
+  had hit a usage limit; 5 of 35 posted rounds had no claude-review report). When a non-judge role of the
+  round has no usable report, `pipeline.JudgeEvents` makes the round's `no_findings_event` COMMENT (the
+  blocking event and a post-merge round are unchanged), the `round.judge` event says why, and the skill
+  names each missing reviewer and its reason in Checks. A git-diff role that found nothing to change
+  (`missing (no changes)`) did its job and does not count. Decided in code, not only in the skill, so a
+  judge that misreads its reports cannot approve. Rejected: holding the round until the reviewer is back
+  (a usage limit can last hours, and the findings the others made are worth posting now).

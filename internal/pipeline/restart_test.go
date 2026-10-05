@@ -474,9 +474,11 @@ func TestRereviewEffort(t *testing.T) {
 	}
 	// codex sets the effort at launch only: the prompt asks for rereview_effort.
 	mustContain(t, "judge rereview prompt", judge[1].Text, line)
-	// claude passes its effort to /code-review in the prompt itself.
+	// claude passes its effort to /code-review in the prompt itself: high
+	// for the first review, its rereview_effort medium for new commits.
 	claude := e.ag.submitsFor(agents.RoleClaude)
-	mustContain(t, "claude rereview prompt", claude[1].Text, "/code-review https://github.com/talkable/talkable/pull/11920 high",
+	mustContain(t, "claude initial prompt", claude[0].Text, "/code-review https://github.com/talkable/talkable/pull/11920 high\n")
+	mustContain(t, "claude rereview prompt", claude[1].Text, "/code-review https://github.com/talkable/talkable/pull/11920 medium\n",
 		"git diff "+prevSHA+".."+target)
 	if strings.Contains(claude[1].Text, "Work at") {
 		t.Errorf("claude rereview prompt names an effort beyond /code-review:\n%s", claude[1].Text)

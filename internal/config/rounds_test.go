@@ -19,7 +19,7 @@ func TestRoundSpeedDefaults(t *testing.T) {
 		t.Errorf("the judge has a restart prompt: %q", j.PromptFile(PromptRestart))
 	}
 	cr, _ := cfg.RoleByNameOrAlias(nil, "claude")
-	if cr.PromptFile(PromptRestart) != "claude-restart.md" || cr.EffortFor(true) != "high" {
+	if cr.PromptFile(PromptRestart) != "claude-restart.md" || cr.EffortFor(true) != "medium" {
 		t.Errorf("claude-review restart %q rereview effort %q", cr.PromptFile(PromptRestart), cr.EffortFor(true))
 	}
 	for _, name := range []string{"codex-review", "claude-simplify"} {

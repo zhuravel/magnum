@@ -100,31 +100,27 @@ func TestNotesHarnessListsEntriesSortedAndBounded(t *testing.T) {
 }
 
 // RenderPrompt derives the harness directory, the lock and its commands
-// from NotesPath, and the judge prompts show them with the listing.
-func TestJudgePromptsCarryTheNotesProcedure(t *testing.T) {
+// from NotesPath, and the judge prompts' <magnum> blocks name them with the
+// listing (and how many entries it left out).
+func TestJudgePromptsCarryTheNotesFields(t *testing.T) {
 	d := judgeFixture()
 	d.NotesPath = testNotesPath
-	d.NotesHarness, d.NotesHarnessMore = []string{"jest-setup.js", "run-spec.sh"}, 3
+	d.NotesHarness, d.NotesHarnessMore = []string{"fixtures/", "jest-setup.js", "run-spec.sh"}, 3
 	dir, lock := NotesFiles(testNotesPath)
+	want := "\nnotes: " + testNotesPath + "\nnotes_dir: " + dir + "\nnotes_harness: fixtures/, jest-setup.js, run-spec.sh (+3 more)\n" +
+		"notes_lock: " + NotesLockLine(lock) + "\nnotes_unlock: " + NotesUnlockLine(lock) + "\n"
 	for _, name := range []string{"judge-initial.md", "judge-rereview.md", "judge-recovery.md", "judge-continue.md"} {
 		got, err := RenderPrompt(prompt(t, name), d)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		for _, want := range []string{
-			"harness directory " + dir + " holds `jest-setup.js`, `run-spec.sh` and 3 more",
-			"`" + NotesLockLine(lock) + "`", "`" + NotesUnlockLine(lock) + "`",
-			"Read " + testNotesPath + " again now", "merge", testNotesPath + ".tmp",
-			"`notes busy`", "orphan",
-		} {
-			if !strings.Contains(got, want) {
-				t.Errorf("%s: missing %q:\n%s", name, want, got)
-			}
+		if block := got[strings.Index(got, "<magnum>"):]; !strings.Contains(block, want) {
+			t.Errorf("%s: the <magnum> block lacks\n%s\nin\n%s", name, want, block)
 		}
 	}
 	d.NotesHarness, d.NotesHarnessMore = nil, 0
 	got, err := RenderPrompt(prompt(t, "judge-initial.md"), &d)
-	if err != nil || !strings.Contains(got, "harness directory "+dir+" holds no files yet") {
+	if err != nil || !strings.Contains(got, "\nnotes_harness:\nnotes_lock: ") {
 		t.Fatalf("empty harness: %v\n%s", err, got)
 	}
 }

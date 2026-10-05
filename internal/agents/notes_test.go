@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -39,7 +40,12 @@ func TestNotesParagraphInRolePrompts(t *testing.T) {
 	}
 }
 
-func TestNotesParagraphInJudgePrompts(t *testing.T) {
+// The judge prompts pass the notes as <magnum> fields (the file, its harness
+// directory and listing, the lock commands), and only when there are notes;
+// the steps are the skill's (SKILL.md section 2), so no prompt repeats them
+// and the text before the block is the same with or without notes.
+func TestJudgePromptsPassTheNotesAsMagnumFields(t *testing.T) {
+	dir, lock := NotesFiles(testNotesPath)
 	for _, name := range []string{"judge-initial.md", "judge-rereview.md", "judge-recovery.md", "judge-continue.md"} {
 		t.Run(name, func(t *testing.T) {
 			p := prompt(t, name)
@@ -48,7 +54,7 @@ func TestNotesParagraphInJudgePrompts(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if strings.Contains(plain, "Repository notes") || strings.Contains(plain, "Notes for") {
+			if strings.Contains(plain, "\nnotes") {
 				t.Fatalf("without NotesPath:\n%s", plain)
 			}
 			d.NotesPath = testNotesPath
@@ -57,22 +63,21 @@ func TestNotesParagraphInJudgePrompts(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				for _, want := range []string{testNotesParagraph,
-					"update " + testNotesPath + " when this round taught you something durable",
-					"rewrite it, never append", "At most about 80 lines",
-					"`# Notes for talkable/talkable (updated YYYY-MM-DD)`", "harness directory /m/state/notes/talkable/talkable holds",
-					"before you write the result file", "Nothing secret", "Take the lock", "Release the lock",
-				} {
-					if !strings.Contains(got, want) {
-						t.Errorf("missing %q:\n%s", want, got)
+				at := strings.Index(got, "<magnum>")
+				block := got[at:]
+				for _, want := range []string{"\nnotes: " + testNotesPath + "\n", "\nnotes_dir: " + dir + "\n", "\nnotes_harness:\n",
+					"\nnotes_lock: " + NotesLockLine(lock) + "\n", "\nnotes_unlock: " + NotesUnlockLine(lock) + "\n"} {
+					if !strings.Contains(block, want) {
+						t.Errorf("the <magnum> block lacks %q:\n%s", want, block)
 					}
 				}
-				// The <magnum> block stays last and unchanged.
-				if i := strings.Index(got, "\n\n<magnum>\n"); i < strings.Index(got, testNotesParagraph) || !strings.HasSuffix(got, "</magnum>") {
-					t.Errorf("the notes paragraphs must come before the <magnum> block:\n%s", got)
+				if !strings.HasSuffix(got, "</magnum>") || got[:at] != plain[:strings.Index(plain, "<magnum>")] {
+					t.Errorf("the notes changed the text before the block:\n%s\n--- plain:\n%s", got, plain)
 				}
-				if tail := got[strings.Index(got, "<magnum>"):]; !strings.Contains(plain, tail) {
-					t.Errorf("the <magnum> block changed:\n%s\n--- plain:\n%s", tail, plain)
+				for _, step := range notesSteps {
+					if strings.Contains(got, step) {
+						t.Errorf("the prompt repeats the skill's notes step %q:\n%s", step, got)
+					}
 				}
 			}
 		})
@@ -87,6 +92,26 @@ func TestNotesParagraphInJudgePrompts(t *testing.T) {
 		d.NotesPath = testNotesPath
 		if got, err := RenderPrompt(prompt(t, name), d); err != nil || got != plain {
 			t.Errorf("%s changed with NotesPath: %q, %v", name, got, err)
+		}
+	}
+}
+
+// notesSteps are phrases of the notes procedure the judge prompts carried
+// before it moved to the skill (about 1.6 KB of every re-review prompt).
+// ("notes busy" is also what the lock command prints, so only the files are
+// checked for it.)
+var notesSteps = []string{"Repository notes at", "Take the lock", "Release the lock", "read them first",
+	"again now", ".tmp", "never append", "Notes for", "At most about 80 lines", "orphan", "Nothing secret"}
+
+// No judge prompt file carries the notes procedure or the readiness
+// paragraph, whatever its data: both live in the skill only.
+func TestJudgePromptFilesCarryNoNotesStepsOrReadinessParagraph(t *testing.T) {
+	for _, name := range []string{"judge-initial.md", "judge-rereview.md", "judge-recovery.md", "judge-continue.md", "judge-nudge.md"} {
+		text := prompt(t, name).Text
+		for _, step := range append(slices.Clone(notesSteps), "notes busy", "did not pass", "rerun them", "rediscover", "environment_failures") {
+			if strings.Contains(text, step) {
+				t.Errorf("%s carries %q", name, step)
+			}
 		}
 	}
 }

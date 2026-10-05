@@ -17,7 +17,8 @@ const (
 
 // RoundInput.NotesPath reaches the RoleData and JudgeData of the round, so
 // the real prompt files render the notes paragraph for the reviewer and the
-// judge (with the rewrite instruction) and leave it out without notes.
+// notes fields of the judge's <magnum> block (the skill holds the rewrite
+// steps), and leave both out without notes.
 func TestNotesPathReachesTheRolePromptsAndTheJudgePrompt(t *testing.T) {
 	prev := &PreviousReview{ID: 900, Event: "CHANGES_REQUESTED", SHA: prevSHA, SubmittedAt: t0.Add(-3 * time.Hour)}
 	for _, kind := range []string{KindInitial, KindRereview} {
@@ -41,19 +42,19 @@ func TestNotesPathReachesTheRolePromptsAndTheJudgePrompt(t *testing.T) {
 				judge := e.ag.submitsFor(agents.RoleJudge)[0].Text
 				if notes == "" {
 					for what, text := range map[string]string{"claude prompt": claude, "judge prompt": judge} {
-						if strings.Contains(text, "Repository notes") || strings.Contains(text, "Notes for") || strings.Contains(text, "rewrite") {
+						if strings.Contains(text, "Repository notes") || strings.Contains(text, "\nnotes") || strings.Contains(text, "rewrite") {
 							t.Errorf("%s mentions notes without NotesPath:\n%s", what, text)
 						}
 					}
 					return
 				}
 				mustContain(t, "claude prompt", claude, notesParagraph)
-				mustContain(t, "judge prompt", judge, notesParagraph,
-					"update "+notesFile+" when this round taught you something durable",
-					"rewrite it, never append", "`# Notes for talkable/talkable (updated YYYY-MM-DD)`", "before you write the result file",
-					"harness directory /state/notes/talkable/talkable holds no files yet", agents.NotesLockLine("/state/notes/talkable/talkable.lock"))
-				if strings.Index(judge, notesParagraph) > strings.Index(judge, "<magnum>") {
-					t.Errorf("the notes paragraph comes after the <magnum> block:\n%s", judge)
+				lock := "/state/notes/talkable/talkable.lock"
+				mustContain(t, "judge prompt", judge[strings.Index(judge, "<magnum>"):], "\nnotes: "+notesFile+"\n",
+					"\nnotes_dir: /state/notes/talkable/talkable\n", "\nnotes_harness:\n",
+					"\nnotes_lock: "+agents.NotesLockLine(lock)+"\n", "\nnotes_unlock: "+agents.NotesUnlockLine(lock)+"\n")
+				if strings.Contains(judge, "Repository notes") || strings.Contains(judge, "Take the lock") {
+					t.Errorf("the judge prompt repeats the skill's notes steps:\n%s", judge)
 				}
 			})
 		}
@@ -83,6 +84,6 @@ func TestJudgePromptListsTheHarnessDirectory(t *testing.T) {
 	}
 	judge := e.ag.submitsFor(agents.RoleJudge)[0].Text
 	mustContain(t, "judge prompt", judge,
-		"harness directory "+dir+" holds `fixtures/`, `jest-setup.js`, `run-spec.sh`.",
-		agents.NotesLockLine(dir+".lock"), agents.NotesUnlockLine(dir+".lock"), "Read "+notes+" again now")
+		"\nnotes: "+notes+"\nnotes_dir: "+dir+"\nnotes_harness: fixtures/, jest-setup.js, run-spec.sh\n",
+		"\nnotes_lock: "+agents.NotesLockLine(dir+".lock")+"\n", "\nnotes_unlock: "+agents.NotesUnlockLine(dir+".lock")+"\n")
 }

@@ -233,8 +233,8 @@ func (r Role) ShouldRun(ranBefore, requested bool) bool {
 //     DefaultSkill, prompts judge-*.md, timeout daemon.judge_timeout;
 //     aliases judge.
 //   - claude-review: claude, prompt claude-review.md, rereview
-//     claude-rereview.md, restart claude-restart.md, effort high; aliases
-//     claude.
+//     claude-rereview.md, restart claude-restart.md, effort high,
+//     rereview_effort medium; aliases claude.
 //   - codex-review: shell, tool codex, command "command codex review --base
 //     {{if .BaseSHA}}{{.BaseSHA}}{{else}}{{.BaseRef}}{{end}}" (the merge base,
 //     else the base ref), ok_status [0], capture stdout; aliases codex,
@@ -251,7 +251,7 @@ func DefaultRoles() []Role {
 			Prompt: "judge-initial.md", Rereview: "judge-rereview.md", ContinuePrompt: "judge-continue.md",
 			Recovery: "judge-recovery.md", Nudge: "judge-nudge.md",
 			Aliases: []string{"judge"}},
-		{Name: RoleClaudeReview, Kind: KindClaude, Effort: "high", Summary: "deep review for bugs, security and correctness",
+		{Name: RoleClaudeReview, Kind: KindClaude, Effort: "high", RereviewEffort: "medium", Summary: "deep review for bugs, security and correctness",
 			Prompt: "claude-review.md", Rereview: "claude-rereview.md", Restart: "claude-restart.md", Aliases: []string{"claude"}},
 		{Name: RoleCodexReview, Kind: KindShell, Tool: KindCodex, Command: defaultCodexReviewCommand, Summary: "Codex's own static review of the diff",
 			OKStatus: []int{0}, Capture: CaptureStdout, Aliases: []string{"codex", "codex_review"}},
