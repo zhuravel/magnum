@@ -336,6 +336,42 @@ right after checking that its build renders them, so an edit takes effect at the
 `magnum daemon-restart`; `magnum status` counts the files changed on disk since. [prompts/README.md](prompts/README.md) lists every key, every template
 variable and examples (a droid simplifier, an omp reviewer, a watch with two roles).
 
+#### Models and effort
+
+Every task is a role, so its model and effort live in its `[[role]]` block in your config; a block
+there overrides the built-in role of the same name key by key, so it needs only the keys you change.
+`model` picks the model (else the kind's `default_model`, else the CLI's own), `effort` the reasoning
+effort of first reviews and `rereview_effort` that of re-reviews of new commits. `codex-review` is a
+shell role that runs `codex review`, so it takes both as Codex config overrides in `args`. A role you
+can do without is turned off with `runs = "never"` (or `"manual"`: only when you ask). To spend less as a
+subscription runs low, for example:
+
+```toml
+[[role]]
+name = "codex-judge"
+model = "gpt-6.1-sol"                # a cheaper Codex model
+effort = "medium"
+rereview_effort = "low"
+
+[[role]]
+name = "claude-review"
+model = "sonnet"
+effort = "medium"
+
+[[role]]
+name = "codex-review"
+args = ["-c", "model=gpt-6.1-sol", "-c", "model_reasoning_effort=medium"]
+
+[[role]]
+name = "claude-simplify"
+runs = "never"
+```
+
+`magnum roles` prints the effective model and effort of every role, and `magnum daemon-restart --drain`
+applies a change once the rounds in flight end. A session whose model hits its own limit switches to
+the kind's next `fallback_models` entry by itself (Claude: `["opus", "sonnet"]`) and back once the limit
+lifts.
+
 ### The judge skill
 
 `skills/magnum-review/SKILL.md` is the judge's method: review the whole PR, treat every candidate
