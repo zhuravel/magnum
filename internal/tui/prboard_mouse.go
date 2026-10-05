@@ -53,8 +53,15 @@ func (m prBoardModel) rowAt(y int) int {
 		return -1
 	}
 	start := min(m.scroll, max(len(m.view)-1, 0))
-	end := min(start+m.tableHeight(), len(m.view))
-	if i := start + l - prbTableChrome; i < end {
+	end, heading := m.visible(start)
+	off := l - prbTableChrome
+	if at := m.section - start; heading && off >= at {
+		if off == at {
+			return -1 // the recently closed section's heading
+		}
+		off--
+	}
+	if i := start + off; i < end {
 		return i
 	}
 	return -1
@@ -98,13 +105,13 @@ func (m *prBoardModel) wheel(b tea.MouseButton) {
 	case prbDetail:
 		m.detailScroll = max(m.detailScroll+n, 0)
 	default:
-		avail := m.tableHeight()
-		m.scroll = min(max(m.scroll+n, 0), max(len(m.view)-avail, 0))
+		m.scroll = min(max(m.scroll+n, 0), m.maxScroll())
+		end, _ := m.visible(m.scroll)
 		switch {
 		case m.cursor < m.scroll:
 			m.moveTo(m.scroll)
-		case m.cursor >= m.scroll+avail:
-			m.moveTo(m.scroll + avail - 1)
+		case m.cursor >= end:
+			m.moveTo(end - 1)
 		}
 	}
 }

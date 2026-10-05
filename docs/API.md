@@ -2097,6 +2097,11 @@ type Board struct {
 	// the board opens it, the card shows it. A [[watch]] or [[repo]] block's
 	// trackers win for its PRs (Config.TrackersFor).
 	Trackers []string `toml:"trackers"`
+	// RecentClosed is how long a merged or closed PR stays on the board, in
+	// its own section after the open PRs (merged_at, else closed_at, within
+	// it); 0 turns the section off. `magnum prs --all` lists every closed PR
+	// whatever it says.
+	RecentClosed Duration `toml:"recent_closed"`
 }
     Board tunes the PR board ([board]).
 
@@ -8829,6 +8834,10 @@ VARIABLES
 var ClaimableStates = []string{PRQueued, PRRereviewPending}
     ClaimableStates are the PR states ClaimSlot accepts.
 
+var DueStates = []string{PRQueued, PRRereviewPending, PRClaiming, PRReviewing, PRVerifying, PRPaused, PRNeedsAttention}
+    DueStates are the automation states in which magnum means to review a PR:
+    a round is due or running. Callers must not modify the slice.
+
 var ErrConflict = errors.New("store: conflict")
     ErrConflict is returned (wrapped) when a compare-and-set update matched no
     row because the state moved on, or when an insert hits a uniqueness rule (a
@@ -8855,6 +8864,14 @@ func Deref[T any](p *T) T
 func FormatTime(t time.Time) string
     FormatTime renders t in UTC with TimeFormat. Every timestamp written to the
     database must go through it.
+
+func IsMergedUnreviewed(ghState, prevState, headSHA, reviewedSHA string, muted, forced bool) bool
+    IsMergedUnreviewed reports whether GitHub merged a PR before magnum reviewed
+    its last push: ghState is MERGED, prevState (the state the PR closed in)
+    is one of DueStates, and headSHA is not reviewedSHA ("" = never reviewed).
+    A muted PR waits for no round unless it was forced, so it is not flagged;
+    baseline, reviewed, skipped and ignored PRs close outside DueStates and
+    never are.
 
 func KVIdentityCheck(name string) string
     KVIdentityCheck holds "pass" or "fail" from an identity's last Check.
@@ -8967,6 +8984,10 @@ type BoardFilter struct {
 	// IncludeClosed also lists PRs in closed/releasing/released and PRs
 	// GitHub reports CLOSED or MERGED.
 	IncludeClosed bool
+	// ClosedSince, when set, also lists the PRs GitHub merged or closed at
+	// or after it (merged_at, else closed_at), without IncludeClosed: the
+	// board's recently closed section ([board] recent_closed).
+	ClosedSince time.Time
 }
     BoardFilter selects the rows of Board. The zero value lists every open PR.
 
@@ -9012,6 +9033,15 @@ type BoardRow struct {
 	// ReviewRequests are the newest review requests of the PR (at most 10,
 	// oldest first; empty until the next Details fetch).
 	ReviewRequests []ReviewRequest `json:"review_requests"`
+	// PrevState is the automation state the PR left when magnum confirmed
+	// it closed ("" while open); MergedAt and ClosedAt are GitHub's (zero
+	// while open; MergedAt stays zero for a PR closed unmerged).
+	PrevState string    `json:"prev_state"`
+	MergedAt  time.Time `json:"merged_at"`
+	ClosedAt  time.Time `json:"closed_at"`
+	// MergedUnreviewed: GitHub merged the PR before magnum reviewed its last
+	// push (IsMergedUnreviewed).
+	MergedUnreviewed bool `json:"merged_unreviewed"`
 }
     BoardRow is one PR as the board shows it: the prs row flattened with its
     repository and its current slot. Empty strings, zero times and nil pointers
@@ -9298,6 +9328,9 @@ type PR struct {
 	ReviewRequests []ReviewRequest `json:"review_requests"`
 }
     PR is one pull request and its automation state.
+
+func (p PR) MergedUnreviewed() bool
+    MergedUnreviewed is IsMergedUnreviewed for p.
 
 type PRFilter struct {
 	RepoID int64
@@ -10353,6 +10386,10 @@ type PRBoardOptions struct {
 	// Widths keeps the column widths dragged with the mouse across runs;
 	// nil keeps them for this run only.
 	Widths ColumnWidths
+	// RecentClosed is [board] recent_closed, the window the heading of the
+	// recently closed section names ("merged or closed in the last 24h");
+	// the source marks the rows in it (PRBoardRow.Recent).
+	RecentClosed time.Duration
 }
     PRBoardOptions tune the PR board.
 
@@ -10415,6 +10452,16 @@ type PRBoardRow struct {
 	// registry knows none (only the newest ten requests of a PR are kept).
 	RequestedToMe, LastRequest *RequestInfo
 	Requests                   []RequestInfo
+
+	// ClosedAt is when GitHub merged the PR, else closed it; zero while it
+	// is open. Recent marks a PR GitHub merged or closed within [board]
+	// recent_closed: the board lists it in a section after the open PRs.
+	ClosedAt time.Time
+	Recent   bool
+	// MergedUnreviewed: GitHub merged the PR before magnum reviewed its last
+	// push (store.IsMergedUnreviewed); LastReview.CommitSHA is the commit
+	// magnum reviewed last, if any.
+	MergedUnreviewed bool
 }
     PRBoardRow is one pull request on the PR board. Ref is what actions receive;
     Owner, Repo and Number label the row (Ref is parsed when they are empty).
@@ -10429,6 +10476,8 @@ func SortPRBoard(rows []PRBoardRow, by PRSort, desc bool) []PRBoardRow
     newest request, most lines changed, most urgent state). Rows lacking the key
     (never reviewed, no request, no delta) come last either way; ties put the
     newest update first, then order by ref. An unknown sort means SortUpdated.
+    The recently closed rows (Recent) come after all the others, newest closed
+    first, whatever the sort: they are the board's own section.
 
 type PRBoardSource interface {
 	Rows(ctx context.Context) ([]PRBoardRow, error)

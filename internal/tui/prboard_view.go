@@ -50,7 +50,11 @@ func RenderPRBoard(rows []PRBoardRow, width int, opts PRBoardOptions) string {
 		w = lay.total()
 	}
 	lines := []string{p.titleLine(w, opts.Title, opts.Repo, owner, view, len(sorted), "", len(sorted), 0, ""), p.summaryLine(w), p.headerLine(lay, w), p.rule(w, 0, false)}
-	for _, r := range sorted {
+	section := slices.IndexFunc(sorted, func(r PRBoardRow) bool { return r.Recent })
+	for i, r := range sorted {
+		if i == section {
+			lines = append(lines, p.recentHeading(w, opts.RecentClosed, len(sorted)-section))
+		}
 		lines = append(lines, p.rowLine(r, lay, w, false))
 	}
 	if len(sorted) == 0 {
@@ -104,12 +108,14 @@ func newPRBPalette(st styles) prbPalette {
 			"reviewed":        pill(green),
 			"needs_attention": redPill, "paused": redPill,
 			"baseline": fg(dim), "ineligible": gone, "ignored": gone, "closed": gone, "released": gone,
+			"merged": gone, "merged_unreviewed": redPill,
 		},
 		dots: map[string]lipgloss.Style{
 			"queued": fg(yellow), "rereview_pending": fg(yellow), "reviewed": fg(green),
 			"claiming": fg(blue), "reviewing": fg(blue), "verifying": fg(blue),
 			"needs_attention": fg(red), "paused": fg(red),
 			"baseline": fg(dim), "ineligible": fg(dim), "ignored": fg(dim), "closed": fg(dim), "releasing": fg(dim), "released": fg(dim),
+			"merged": fg(dim), "merged_unreviewed": fg(red),
 		},
 		slotDots: map[string]lipgloss.Style{
 			"free": fg(green), "claimed": fg(blue), "busy": fg(blue), "held": fg(magenta),
@@ -627,7 +633,7 @@ func (p prbPainter) requestedCell(r PRBoardRow) cell {
 // by what holds it and until when, dimmed ("quiet → 14:09"), and for a
 // skipped PR by why in a word ("· bot").
 func (p prbPainter) stateWaitCell(r PRBoardRow) cell {
-	c := p.stateCell(r.State)
+	c := p.stateCell(rowState(r))
 	if _, rest, ok := strings.Cut(r.Wait, " · "); ok && rest != "" {
 		c = append(c, seg{" " + rest, p.st.Dim})
 	}
@@ -666,7 +672,58 @@ func (p prbPainter) stateCell(state string) cell {
 	if s == "" {
 		return p.dash()
 	}
-	return cell{{" " + marked(p.stateIcon(s), stateLabel(s)) + " ", p.pal.pills[s]}}
+	label := stateLabel(s)
+	if s == "merged_unreviewed" {
+		label = "merged" + p.g.sep + "unreviewed"
+	}
+	return cell{{" " + marked(p.stateIcon(s), label) + " ", p.pal.pills[s]}}
+}
+
+// rowState is the state r's pill shows: what GitHub did to a PR it merged
+// or closed (merged, closed, or merged_unreviewed when it merged before
+// magnum reviewed its last push), else magnum's state.
+func rowState(r PRBoardRow) string {
+	switch strings.ToUpper(strings.TrimSpace(r.GHState)) {
+	case "MERGED":
+		if r.MergedUnreviewed {
+			return "merged_unreviewed"
+		}
+		return "merged"
+	case "CLOSED":
+		return "closed"
+	}
+	return r.State
+}
+
+// recentHeading is the line before the recently closed rows: "merged or
+// closed in the last 24h (3)" on a rule. window is [board] recent_closed.
+func (p prbPainter) recentHeading(width int, window time.Duration, n int) string {
+	text := "merged or closed recently"
+	if window > 0 {
+		text = "merged or closed in the last " + recentWindow(window)
+	}
+	label := " " + p.st.Dim.Render(text) + " " + p.pal.bold.Render(fmt.Sprintf("(%d)", n)) + " "
+	lead := p.pal.rule.Render(strings.Repeat(p.g.rule, prbMarkW))
+	if width <= 0 {
+		return lead + label
+	}
+	fill := max(width-ansi.StringWidth(lead)-ansi.StringWidth(label), 0)
+	return truncate(lead+label+p.pal.rule.Render(strings.Repeat(p.g.rule, fill)), width)
+}
+
+// recentWindow is a window as [board] recent_closed would write it: "24h",
+// "3d", "90m".
+func recentWindow(d time.Duration) string {
+	const day = 24 * time.Hour
+	switch {
+	case d > day && d%day == 0:
+		return fmt.Sprintf("%dd", d/day)
+	case d%time.Hour == 0:
+		return fmt.Sprintf("%dh", d/time.Hour)
+	case d%time.Minute == 0:
+		return fmt.Sprintf("%dm", d/time.Minute)
+	}
+	return d.String()
 }
 
 // stateIcon is a PR state's icon: the spinner's frame while a round runs
@@ -1262,6 +1319,7 @@ func (p prbPainter) rowLine(r PRBoardRow, lay prbLayout, width int, selected boo
 	if selected {
 		line = cell{{p.g.cursor + spaces(prbMarkW-ansi.StringWidth(p.g.cursor)), p.st.Accent}}
 	}
+	keep := [2]int{-1, -1} // the segs of a flag the row's dim leaves alone
 	for i, c := range lay.cols {
 		w := lay.widths[i]
 		var cl cell
@@ -1287,6 +1345,12 @@ func (p prbPainter) rowLine(r PRBoardRow, lay prbLayout, width int, selected boo
 			line = append(line, seg{colGap, lipgloss.Style{}})
 		}
 		pad := seg{spaces(w - cl.width()), lipgloss.Style{}}
+		if c == colState && r.MergedUnreviewed {
+			keep = [2]int{len(line), len(line) + len(cl)}
+			if prbRightAligned(c) {
+				keep = [2]int{len(line) + 1, len(line) + 1 + len(cl)}
+			}
+		}
 		switch {
 		case prbRightAligned(c):
 			line = append(append(line, pad), cl...)
@@ -1302,7 +1366,11 @@ func (p prbPainter) rowLine(r PRBoardRow, lay prbLayout, width int, selected boo
 		}
 		line = line.fit(width)
 	}
-	return line.render(p.overlay(selected, r.Muted || skipped(r)))
+	ov := p.overlay(selected, r.Muted || skipped(r) || r.Recent)
+	if keep[0] < 0 || keep[1] > len(line) { // no flag, or cut off by the width
+		return line.render(ov)
+	}
+	return line[:keep[0]].render(ov) + line[keep[0]:keep[1]].render(p.overlay(selected, false)) + line[keep[1]:].render(ov)
 }
 
 // rule is a full-width separator; n > 0 marks "▲ n more" (up) or "▼ n
@@ -1451,6 +1519,15 @@ func (p prbPainter) summaryLine(width int) string {
 		chip("", p.st.Dim, other, "other")
 	}
 	var right []string
+	unreviewed := 0
+	for _, r := range p.all {
+		if r.Recent && r.MergedUnreviewed {
+			unreviewed++
+		}
+	}
+	if unreviewed > 0 { // first: the one count that means something was missed
+		right = append(right, p.pal.pills["merged_unreviewed"].Render(" "+marked(p.g.stateIcon["merged_unreviewed"], fmt.Sprintf("%d merged unreviewed", unreviewed))+" "))
+	}
 	if stale > 0 {
 		right = append(right, p.pal.yellow.Render(p.g.stale)+" "+p.pal.bold.Render(strconv.Itoa(stale))+" "+p.st.Dim.Render("stale"))
 	}

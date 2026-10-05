@@ -416,7 +416,7 @@ code; `magnum stats` reports them per role.
 | Command | What it does |
 |---|---|
 | `magnum init [--force]` | Write `~/.config/magnum/config.toml` for this machine from three questions: your gh login, one repository, who posts (your login or a GitHub App). |
-| `magnum prs [--repo …] [--view all\|magnum\|mine\|ready] [--sort updated\|last-review\|reviewer-activity\|requested\|changes\|state] [--all] [--json]` | The PR board: every watched PR with its last review, each reviewer's verdict (with staleness), when a review was last requested (and whether of you), what changed since the last review, assignees. `--view` keeps what Magnum reviewed, what is yours or what is ready to merge. Live screen on a terminal, table or JSON otherwise. |
+| `magnum prs [--repo …] [--view all\|magnum\|mine\|ready] [--sort updated\|last-review\|reviewer-activity\|requested\|changes\|state] [--all] [--json]` | The PR board: every watched PR with its last review, each reviewer's verdict (with staleness), when a review was last requested (and whether of you), what changed since the last review, assignees; then the PRs merged or closed in the last day (`[board] recent_closed`), flagging one merged before Magnum reviewed its last push. `--view` keeps what Magnum reviewed, what is yours or what is ready to merge. Live screen on a terminal, table or JSON otherwise. |
 | `magnum status [<ref>\|<slot>] [--all] [--sizes] [--json] [--watch]` | Daemon, slots, queue, pauses; a PR's detail card with its review history and the last round's stage timings. `--watch` is the live dashboard (`tab` flips to the PR board). |
 | `magnum stats [--since 7d] [--repo owner/name] [--json]` | Review statistics per local day and repository over a window (`--since` takes `7d`, `36h`, `90m` or a date; default 7d): rounds started and how they ended, findings posted by priority, median and p90 durations per role and per round, how many findings each source raised, had posted, had posted alone or had rejected (with reason codes), and model switches, denied prompts and round restarts. |
 | `magnum eval run\|score\|list\|show` | Measure a prompt, skill or model change: `run` replays the PRs with known defects in `~/.config/magnum/eval.toml` (see `eval.toml.example`) at their pinned heads as blind dry runs and reports, per case, the seeded defects the planned review found, at what severity, and its other findings (noise), next to the previous run. `score` re-scores a run after a match rule is fixed, without the agents. |
@@ -477,6 +477,18 @@ issue key in the title that a template knows (`[PS-38553] …` → `…/browse/P
 and what the card shows as Issue; a key is matched whole, so `XPS-1` is not `PS-1`. `trackers` on a
 `[[watch]]` or `[[repo]]` applies to its PRs and wins prefix by prefix (`[[repo]]`, then `[[watch]]`, then
 `[board]`), so two organizations can both have `PR-` issues in different trackers.
+
+PRs GitHub merged or closed within `[board] recent_closed` (24h by default; `"0"` turns it off) stay on the
+board in a section after the open ones, under a "merged or closed in the last 24h" heading: newest closed
+first whatever the sort, dimmed, their state `merged` or `closed`; they follow the view, the owner and the
+filter like any row, and their keys work as with `--all` (which still lists every closed PR). A PR GitHub
+merged in a state where Magnum still meant to review it (queued, re-review, a round running, paused or
+needing attention) before Magnum reviewed its last push reads `merged · unreviewed` in the red attention
+pill; the summary counts them in a red "N merged unreviewed" pill, the card says when it merged and which
+commits (the one Magnum last reviewed, the merged head), the status dashboard lists it under ATTENTION, and
+the daemon writes a `pr.merged_unreviewed` warning and sends one toast per PR (`[herdr] notify`). A baseline,
+skipped, ignored, muted or reviewed PR is never flagged: Magnum was not going to review it. Printed rows
+(`magnum prs` without a terminal) list the section too, with `closed,merged,unreviewed` in STATE.
 
 FINDINGS shows what magnum's latest review concluded, also where its repository lets it only comment:
 the verdict (✗ blocking, ● comment, ✔ clean), the findings by priority (`P1 P2×3`) and the optional

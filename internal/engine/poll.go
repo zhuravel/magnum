@@ -23,6 +23,10 @@ import (
 // that left the OPEN list must be before it counts as closed.
 const confirmGap = 60 * time.Second
 
+// mergedUnreviewedWindow: a PR merged before its last push was reviewed is
+// announced once a day at most.
+const mergedUnreviewedWindow = 24 * time.Hour
+
 // rateFloor is the GraphQL budget below which polling waits for the reset.
 const rateFloor = 50
 
@@ -805,6 +809,9 @@ func (e *Engine) confirmMissing(ctx context.Context, gh GitHub, repo store.Repo,
 					continue
 				}
 				e.event(ctx, "info", subject, "pr.closed", fmt.Sprintf("%s on GitHub (confirmed %d×); slot released after %s", strings.ToLower(st.State), count, e.cfg.Daemon.CloseGrace.Duration), nil)
+				if cur, err := e.st.PRByID(ctx, pr.ID); err == nil {
+					e.mergedUnreviewed(ctx, repo, cur)
+				}
 				continue
 			}
 			if err := e.st.UpdatePR(ctx, pr.ID, func(u *store.PRUpdate) { u.Set("confirm_count", count) }); err != nil {
@@ -813,4 +820,27 @@ func (e *Engine) confirmMissing(ctx context.Context, gh GitHub, repo store.Repo,
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// mergedUnreviewed flags a PR, just confirmed closed, that GitHub merged
+// before magnum reviewed its last push (PR.MergedUnreviewed: prev_state is
+// the state it closed in): a warn event and one toast per PR, since this is
+// a PR magnum meant to review and did not get to.
+func (e *Engine) mergedUnreviewed(ctx context.Context, repo store.Repo, pr store.PR) {
+	if !pr.MergedUnreviewed() {
+		return
+	}
+	reviewed := deref(pr.ReviewedSHA)
+	label := fmt.Sprintf("%s#%d", repo.Name, pr.Number)
+	last := "never reviewed"
+	data := map[string]any{"head_sha": pr.HeadSHA, "prev_state": deref(pr.PrevState)}
+	if reviewed != "" {
+		last = "last review " + short(reviewed)
+		data["reviewed_sha"] = reviewed
+	}
+	e.event(ctx, "warn", prSubject(repo, pr.Number), "pr.merged_unreviewed",
+		fmt.Sprintf("merged before magnum reviewed %s (%s)", short(pr.HeadSHA), last), data)
+	e.urgent(fmt.Sprintf("merged-unreviewed:%d", pr.ID), "magnum: "+label+" merged unreviewed",
+		fmt.Sprintf("%s merged before magnum reviewed its last push: merged head %s, %s", label, short(pr.HeadSHA), last),
+		mergedUnreviewedWindow)
 }

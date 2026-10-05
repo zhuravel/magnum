@@ -876,3 +876,26 @@ editing history. Code, config comments and prompts reference these by their head
   files, not a one-line answer, and gets the pane's observability); matching other reviewers' comments
   to findings with a model (the deterministic nearness rule is cheap and auditable); retro-ing open PRs
   (comments keep arriving, and a PR is looked at once).
+- **Recently merged and closed PRs stay on the board; one merged before its review is flagged** (2026-10-05,
+  after a PR the user had asked magnum to review, forced and rereview_pending, merged before its round ran
+  and nothing showed it). **Why a time window, not `--all`**: the board listed open PRs only, and `--all`
+  adds every closed PR there ever was, which buries the one that just merged; `[board] recent_closed`
+  (24h by default, `"0"` off) keeps the PRs GitHub merged or closed within it (merged_at, else closed_at)
+  in their own section after the open ones, newest closed first whatever the sort, dimmed, `merged` or
+  `closed` in the state cell. The window is computed at every load, so a PR leaves the section when it
+  ages out; `--all` keeps its meaning and only the PRs inside the window form the section. The printed rows
+  list them too, after the open ones. **Why the rule uses `prev_state`**: "merged unreviewed" must mean a PR
+  magnum meant to review and did not, not every unreviewed merge. `prev_state` is the automation state the
+  close confirmation left (`u.Copy("prev_state", "state")` in the engine's `confirmMissing`, kept through
+  releasing and released), so the flag needs gh_state MERGED, a `prev_state` where a round was due or
+  running (queued, rereview_pending, claiming, reviewing, verifying, paused, needs_attention:
+  `store.DueStates`) and a head that is not `reviewed_sha` (or no review at all). Baseline, skipped and
+  ignored PRs close in other states, reviewed ones had their head reviewed, and a muted PR waits for no
+  round unless it was forced (as the dispatcher reads it), so none of them is flagged.
+  `store.IsMergedUnreviewed` is the one rule: the board row, the status dashboard's ATTENTION line and the
+  engine use it. **Why a toast**: the board and the dashboard show it only to someone looking; the miss is
+  the user's to act on (review the merged change, tell the author), so when the engine confirms the
+  close it writes a `pr.merged_unreviewed` warn event and sends one urgent toast through the notifier
+  (deduped per PR, silent with `[herdr] notify = false` and in dry runs). Rejected: flagging every
+  merge with an unreviewed head (baseline PRs and skipped bots would drown the signal), and a GitHub call
+  when the board opens (the board reads only the registry).

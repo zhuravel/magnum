@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -17,6 +18,10 @@ type BoardFilter struct {
 	// IncludeClosed also lists PRs in closed/releasing/released and PRs
 	// GitHub reports CLOSED or MERGED.
 	IncludeClosed bool
+	// ClosedSince, when set, also lists the PRs GitHub merged or closed at
+	// or after it (merged_at, else closed_at), without IncludeClosed: the
+	// board's recently closed section ([board] recent_closed).
+	ClosedSince time.Time
 }
 
 // BoardRow is one PR as the board shows it: the prs row flattened with its
@@ -64,6 +69,34 @@ type BoardRow struct {
 	// ReviewRequests are the newest review requests of the PR (at most 10,
 	// oldest first; empty until the next Details fetch).
 	ReviewRequests []ReviewRequest `json:"review_requests"`
+	// PrevState is the automation state the PR left when magnum confirmed
+	// it closed ("" while open); MergedAt and ClosedAt are GitHub's (zero
+	// while open; MergedAt stays zero for a PR closed unmerged).
+	PrevState string    `json:"prev_state"`
+	MergedAt  time.Time `json:"merged_at"`
+	ClosedAt  time.Time `json:"closed_at"`
+	// MergedUnreviewed: GitHub merged the PR before magnum reviewed its last
+	// push (IsMergedUnreviewed).
+	MergedUnreviewed bool `json:"merged_unreviewed"`
+}
+
+// DueStates are the automation states in which magnum means to review a PR:
+// a round is due or running. Callers must not modify the slice.
+var DueStates = []string{PRQueued, PRRereviewPending, PRClaiming, PRReviewing, PRVerifying, PRPaused, PRNeedsAttention}
+
+// IsMergedUnreviewed reports whether GitHub merged a PR before magnum
+// reviewed its last push: ghState is MERGED, prevState (the state the PR
+// closed in) is one of DueStates, and headSHA is not reviewedSHA ("" =
+// never reviewed). A muted PR waits for no round unless it was forced, so it
+// is not flagged; baseline, reviewed, skipped and ignored PRs close outside
+// DueStates and never are.
+func IsMergedUnreviewed(ghState, prevState, headSHA, reviewedSHA string, muted, forced bool) bool {
+	return ghState == GHMerged && slices.Contains(DueStates, prevState) && headSHA != reviewedSHA && (!muted || forced)
+}
+
+// MergedUnreviewed is IsMergedUnreviewed for p.
+func (p PR) MergedUnreviewed() bool {
+	return IsMergedUnreviewed(p.GHState, Deref(p.PrevState), p.HeadSHA, Deref(p.ReviewedSHA), p.Muted, p.Forced)
 }
 
 // closedPRStates are the automation states IncludeClosed adds.
@@ -88,16 +121,22 @@ func (s *Store) Board(ctx context.Context, f BoardFilter) ([]BoardRow, error) {
 		where = append(where, "p.state IN ("+placeholders(len(f.States))+")")
 		args = append(args, anys(f.States)...)
 	case !f.IncludeClosed:
-		where = append(where, "p.state NOT IN ("+placeholders(len(closedPRStates))+")", "p.gh_state NOT IN (?, ?)")
+		open := "p.state NOT IN (" + placeholders(len(closedPRStates)) + ") AND p.gh_state NOT IN (?, ?)"
 		args = append(args, anys(closedPRStates)...)
 		args = append(args, GHClosed, GHMerged)
+		if !f.ClosedSince.IsZero() {
+			open = "(" + open + ") OR (p.gh_state IN (?, ?) AND COALESCE(p.merged_at, p.closed_at) >= ?)"
+			args = append(args, GHClosed, GHMerged, FormatTime(f.ClosedSince))
+		}
+		where = append(where, "("+open+")")
 	}
 	q := `SELECT p.id, r.owner, r.name, p.number, p.title,
   CASE WHEN p.author_type = 'Bot' AND p.author_login NOT LIKE '%[bot]' THEN p.author_login || '[bot]' ELSE p.author_login END, p.url, p.is_draft, p.labels_json,
   p.assignees_json, p.requested_reviewers_json, p.review_requested, p.latest_reviews_json, p.since_review_json,
   p.state, p.skip_reason, p.gh_state, p.gh_updated_at, p.head_sha, p.reviewed_sha, p.last_review_event,
   p.reviewed_at, p.last_review_login, p.identity, sl.name, sl.path, p.pinned, p.muted, p.next_eligible_at,
-  p.last_error, p.rounds_today, p.rounds_day, p.ci_state, p.ci_json, p.review_requests_json
+  p.last_error, p.rounds_today, p.rounds_day, p.ci_state, p.ci_json, p.review_requests_json,
+  p.prev_state, p.merged_at, p.closed_at, p.forced
 FROM prs p
 JOIN repos r ON r.id = p.repo_id
 LEFT JOIN slots sl ON sl.pr_id = p.id AND sl.state <> ?`
@@ -125,14 +164,16 @@ func scanBoardRow(sc scanner, today string) (BoardRow, error) {
 	var (
 		b                                                              BoardRow
 		title, author, skip, reviewed, event, login, slot, path, lastE *string
-		roundsDay, ciState                                             *string
-		updated, reviewedAt, nextAt                                    *time.Time
+		roundsDay, ciState, prev                                       *string
+		updated, reviewedAt, nextAt, mergedAt, closedAt                *time.Time
+		forced                                                         bool
 	)
 	err := sc.Scan(&b.PRID, &b.Owner, &b.Name, &b.Number, &title, &author, &b.URL, &b.Draft, jsonCol(&b.Labels),
 		jsonCol(&b.Assignees), jsonCol(&b.RequestedReviewers), &b.ReviewRequested, jsonCol(&b.LatestReviews),
 		jsonCol(&b.SinceReview), &b.State, &skip, &b.GHState, nullTime(&updated), &b.HeadSHA, &reviewed, &event,
 		nullTime(&reviewedAt), &login, &b.Identity, &slot, &path, &b.Pinned, &b.Muted, nullTime(&nextAt),
-		&lastE, &b.RoundsToday, &roundsDay, &ciState, jsonCol(&b.CI), jsonCol(&b.ReviewRequests))
+		&lastE, &b.RoundsToday, &roundsDay, &ciState, jsonCol(&b.CI), jsonCol(&b.ReviewRequests),
+		&prev, nullTime(&mergedAt), nullTime(&closedAt), &forced)
 	if err != nil {
 		return BoardRow{}, err
 	}
@@ -142,6 +183,8 @@ func scanBoardRow(sc scanner, today string) (BoardRow, error) {
 	b.Slot, b.SlotPath, b.LastError = Deref(slot), Deref(path), Deref(lastE)
 	b.UpdatedAt, b.LastReviewAt, b.NextEligibleAt = Deref(updated), Deref(reviewedAt), Deref(nextAt)
 	b.CIState = Deref(ciState)
+	b.PrevState, b.MergedAt, b.ClosedAt = Deref(prev), Deref(mergedAt), Deref(closedAt)
+	b.MergedUnreviewed = IsMergedUnreviewed(b.GHState, b.PrevState, b.HeadSHA, b.ReviewedSHA, b.Muted, forced)
 	if Deref(roundsDay) != today {
 		b.RoundsToday = 0
 	}

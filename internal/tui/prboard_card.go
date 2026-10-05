@@ -71,6 +71,10 @@ func (p prbPainter) helpContent(width int) []string {
 		p.pal.mine.Render(g.mine) + " yours", p.pinStyle().Render(g.pin) + " pinned", p.st.Err.Render(g.errMark) + " last round failed",
 		p.pal.tag.Render("muted") + " dimmed row",
 	}, "   ", inner)...)
+	lines = append(lines, flow([]string{
+		p.stateCell("merged_unreviewed").render(nil) + " GitHub merged it before magnum reviewed its last push",
+		p.st.Dim.Render("merged or closed in the last …") + " the recently closed PRs, dimmed, newest first ([board] recent_closed)",
+	}, "   ", inner)...)
 	prios := make([]string, len(g.priority))
 	for i := range prios {
 		prios[i] = p.priorityStyle(i).Render(p.priorityMark(i) + fmt.Sprintf("P%d", i))
@@ -153,7 +157,7 @@ func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
 		return s
 	}
 
-	head := p.st.Title.Render(orDim(prRef(r))) + "  " + p.stateCell(r.State).render(nil)
+	head := p.st.Title.Render(orDim(prRef(r))) + "  " + p.stateCell(rowState(r)).render(nil)
 	var flags []string
 	if r.Pinned {
 		flags = append(flags, p.pinStyle().Render(p.g.pin)+" pinned")
@@ -182,6 +186,11 @@ func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
 	add(tl...)
 	if url := prURL(r); url != "" {
 		add(p.st.Accent.Render(url))
+	}
+	if r.MergedUnreviewed {
+		for _, l := range strings.Split(lipgloss.NewStyle().Width(inner).Render(p.mergedUnreviewedSentence(r)), "\n") {
+			add(p.pal.red.Render(l))
+		}
 	}
 	add("")
 
@@ -388,6 +397,20 @@ func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
 		add("  " + l)
 	}
 	return lines
+}
+
+// mergedUnreviewedSentence says that GitHub merged r before magnum reviewed
+// its last push: when, the commit magnum reviewed last and the merged head.
+func (p prbPainter) mergedUnreviewedSentence(r PRBoardRow) string {
+	when := "on GitHub"
+	if !r.ClosedAt.IsZero() {
+		when = r.ClosedAt.Local().Format("Jan 2 15:04") + " (" + HumanAgo(max(p.now.Sub(r.ClosedAt), time.Second)) + ")"
+	}
+	last := "never reviewed"
+	if li := r.LastReview; li != nil && li.CommitSHA != "" {
+		last = "last review on " + shortSHA(li.CommitSHA)
+	}
+	return fmt.Sprintf("Merged %s before magnum reviewed its last push: %s, merged head %s", when, last, cmp.Or(shortSHA(r.HeadSHA), "unknown"))
 }
 
 // sinceSentence says what changed since the review, with a second line

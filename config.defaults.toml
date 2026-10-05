@@ -69,6 +69,9 @@ icons = "unicode"                 # unicode | nerd (Nerd Font icons in their sta
 # trackers = ["https://example.atlassian.net/browse/PS-{num}"]   # issue links: t on the PR board opens the
                                   # first issue key of the title ("[PS-38553] …") a template knows; {num} follows
                                   # the key's prefix (Linear: "https://linear.app/<workspace>/issue/ENG-{num}")
+recent_closed = "24h"             # merged and closed PRs stay on the PR board this long, in a section after the
+                                  # open ones (newest closed first, dimmed; "merged · unreviewed" in red when GitHub
+                                  # merged a PR magnum still meant to review); "0" = off (--all lists every closed PR)
 
 [github]
 transport = "gh"                  # App JWT/token calls run as `gh api` (gh | direct); direct = Go net/http,

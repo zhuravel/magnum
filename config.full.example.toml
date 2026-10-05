@@ -66,6 +66,7 @@ trackers = [                      # t on the PR board opens the first issue key 
   "https://talkable.atlassian.net/browse/PS-{num}",
   "https://talkable.atlassian.net/browse/PR-{num}",
 ]
+recent_closed = "24h"             # merged and closed PRs stay on the board this long, after the open ones ("0" = off)
 
 [github]
 transport = "gh"                  # App JWT/token calls run as `gh api` (gh | direct); direct = Go net/http,

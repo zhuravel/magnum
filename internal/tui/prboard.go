@@ -136,6 +136,16 @@ type PRBoardRow struct {
 	// registry knows none (only the newest ten requests of a PR are kept).
 	RequestedToMe, LastRequest *RequestInfo
 	Requests                   []RequestInfo
+
+	// ClosedAt is when GitHub merged the PR, else closed it; zero while it
+	// is open. Recent marks a PR GitHub merged or closed within [board]
+	// recent_closed: the board lists it in a section after the open PRs.
+	ClosedAt time.Time
+	Recent   bool
+	// MergedUnreviewed: GitHub merged the PR before magnum reviewed its last
+	// push (store.IsMergedUnreviewed); LastReview.CommitSHA is the commit
+	// magnum reviewed last, if any.
+	MergedUnreviewed bool
 }
 
 // RequestInfo is a review request: who was asked, by whom and when.
@@ -275,6 +285,10 @@ type PRBoardOptions struct {
 	// Widths keeps the column widths dragged with the mouse across runs;
 	// nil keeps them for this run only.
 	Widths ColumnWidths
+	// RecentClosed is [board] recent_closed, the window the heading of the
+	// recently closed section names ("merged or closed in the last 24h");
+	// the source marks the rows in it (PRBoardRow.Recent).
+	RecentClosed time.Duration
 }
 
 // RunPRBoard shows the live PR board until the user quits or ctx ends. act
@@ -298,11 +312,24 @@ func RunPRBoard(ctx context.Context, src PRBoardSource, act DashboardActions, op
 // newest request, most lines changed, most urgent state). Rows lacking the
 // key (never reviewed, no request, no delta) come last either way; ties put
 // the newest update first, then order by ref. An unknown sort means
-// SortUpdated.
+// SortUpdated. The recently closed rows (Recent) come after all the others,
+// newest closed first, whatever the sort: they are the board's own section.
 func SortPRBoard(rows []PRBoardRow, by PRSort, desc bool) []PRBoardRow {
 	out := slices.Clone(rows)
 	key := prSortKey(by)
 	slices.SortStableFunc(out, func(a, b PRBoardRow) int {
+		switch {
+		case a.Recent != b.Recent:
+			if b.Recent {
+				return -1
+			}
+			return 1
+		case a.Recent:
+			if c := b.ClosedAt.Compare(a.ClosedAt); c != 0 {
+				return c
+			}
+			return cmp.Compare(prRef(a), prRef(b))
+		}
 		va, oka := key(a)
 		vb, okb := key(b)
 		switch {
@@ -726,11 +753,14 @@ type prBoardModel struct {
 	filtering bool // the filter input has the keyboard
 
 	cursor, scroll int
-	selKey         string // the cursor row's ref, kept across refreshes
-	mode           prbMode
-	detailScroll   int
-	helpFrom       prbMode // where the help returns to
-	helpScroll     int
+	// section is the index in view of the first recently closed row, which
+	// the section's heading line precedes; -1 when view has none.
+	section      int
+	selKey       string // the cursor row's ref, kept across refreshes
+	mode         prbMode
+	detailScroll int
+	helpFrom     prbMode // where the help returns to
+	helpScroll   int
 
 	widths prbWidths   // dragged column widths
 	saver  *widthSaver // keeps them; nil without opts.Widths
@@ -843,7 +873,7 @@ func newPRBoardModel(ctx context.Context, src PRBoardSource, act DashboardAction
 	m := prBoardModel{
 		actionBar: newActionBar(ctx, act), src: src, opts: opts, g: g, spin: sp, filter: in, cache: &prbCache{},
 		self: selfSet(opts.SelfLogins), sort: opts.DefaultSort, desc: true, boardView: opts.DefaultView,
-		owner: strings.TrimSpace(opts.DefaultOwner), hide: opts.HideSkipped,
+		owner: strings.TrimSpace(opts.DefaultOwner), hide: opts.HideSkipped, section: -1,
 		loading: true, spinning: true, // Init starts the first load and the spinner
 		saver: newWidthSaver(opts.Widths, widthsBoard),
 	}
@@ -1035,6 +1065,7 @@ func (m *prBoardModel) rebuild() {
 		}
 	}
 	m.view = SortPRBoard(rows, m.sort, m.desc)
+	m.section = slices.IndexFunc(m.view, func(r PRBoardRow) bool { return r.Recent })
 	m.working = slices.ContainsFunc(m.all, func(r PRBoardRow) bool { return workingState(r.State) })
 	m.gen = nextGen()
 	if m.selKey != "" {
@@ -1506,8 +1537,34 @@ const (
 // bodyHeight is the room between the summary line and the footer.
 func (m prBoardModel) bodyHeight() int { return max(m.viewHeight()-prbChrome, 3) }
 
-// tableHeight is how many rows fit on screen.
+// tableHeight is how many table lines fit on screen: rows, and the
+// recently closed section's heading when it shows.
 func (m prBoardModel) tableHeight() int { return max(m.bodyHeight()-prbTableChrome, 1) }
+
+// visible is the rows the table draws from row start, [start, end), and
+// whether the recently closed section's heading is among them: it takes a
+// line before row m.section, or the last line with the section's rows
+// below (a table of one line keeps it for the row).
+func (m prBoardModel) visible(start int) (end int, heading bool) {
+	avail := m.tableHeight()
+	if s := m.section; s >= start && s < start+avail && s < len(m.view) && avail > 1 {
+		return min(start+avail-1, len(m.view)), true
+	}
+	return min(start+avail, len(m.view)), false
+}
+
+// maxScroll is the first row of the last screenful: the smallest start
+// from which the table draws every row to the end.
+func (m prBoardModel) maxScroll() int {
+	s := max(len(m.view)-m.tableHeight(), 0)
+	for s < len(m.view)-1 {
+		if end, _ := m.visible(s); end >= len(m.view) {
+			break
+		}
+		s++
+	}
+	return s
+}
 
 // fixScroll scrolls the table so the cursor row stays on screen, and
 // keeps the card's and the help's scroll within their content.
@@ -1527,14 +1584,20 @@ func (m *prBoardModel) fixScroll() {
 	}
 	avail := m.tableHeight()
 	switch {
-	case len(m.view) <= avail:
+	case m.maxScroll() == 0:
 		m.scroll = 0
 	case m.cursor < m.scroll:
 		m.scroll = m.cursor
 	case m.cursor >= m.scroll+avail:
 		m.scroll = m.cursor - avail + 1
 	}
-	m.scroll = min(max(m.scroll, 0), max(len(m.view)-avail, 0))
+	for m.scroll < m.cursor { // the heading may push the cursor row off
+		if end, _ := m.visible(m.scroll); m.cursor < end {
+			break
+		}
+		m.scroll++
+	}
+	m.scroll = min(max(m.scroll, 0), m.maxScroll())
 }
 
 // View draws the board, or returns the last frame when nothing it shows
@@ -1602,9 +1665,8 @@ func (m prBoardModel) tableLines(p prbPainter, w int) (lines []string, below int
 		}
 		return []string{"", "  " + m.spin.View() + " " + m.st.Dim.Render("loading pull requests…")}, 0
 	}
-	avail := m.tableHeight()
 	start := min(m.scroll, max(len(m.view)-1, 0))
-	end := min(start+avail, len(m.view))
+	end, heading := m.visible(start)
 	below = len(m.view) - end
 	lines = append(lines, p.headerLine(lay, w), p.rule(w, start, true))
 	switch {
@@ -1620,8 +1682,14 @@ func (m prBoardModel) tableLines(p prbPainter, w int) (lines []string, below int
 		lines = append(lines, "", "  "+m.st.Dim.Render(msg))
 	}
 	for i := start; i < end; i++ {
+		if heading && i == m.section {
+			lines = append(lines, p.recentHeading(w, m.opts.RecentClosed, len(m.view)-m.section))
+		}
 		sel := i == m.cursor
 		lines = append(lines, m.cache.row(rk, prbRowKey{i, sel}, func() string { return p.rowLine(m.view[i], lay, w, sel) }))
+	}
+	if heading && m.section == end { // the last line: the section's rows are below
+		lines = append(lines, p.recentHeading(w, m.opts.RecentClosed, len(m.view)-m.section))
 	}
 	return lines, below
 }

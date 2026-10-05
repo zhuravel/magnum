@@ -331,7 +331,44 @@ func statusGatherPRs(ctx context.Context, d statusDeps, now time.Time, r *status
 		}
 	}
 	statusSortQueue(r.Queue)
+	if d.Config != nil {
+		r.Attention = append(r.Attention, statusMergedUnreviewed(prs, repoByID, d.Config.Board.RecentClosed.Duration, now)...)
+	}
 	return nil
+}
+
+// statusMergedUnreviewed lists the PRs GitHub merged before magnum reviewed
+// their last push (PR.MergedUnreviewed) as attention rows, newest merge first:
+// "merged unreviewed at 15:04" (the date added when not today). Only a merge
+// (merged_at, else closed_at) within the board's recent_closed window of now
+// counts; 0 turns the list off, and a PR with neither time is skipped. There
+// is no fix to name: the merge is done, the row says what went unreviewed.
+func statusMergedUnreviewed(prs []store.PR, repoByID map[int64]store.Repo, window time.Duration, now time.Time) []statusAttention {
+	type merged struct {
+		at  time.Time
+		row statusAttention
+	}
+	var found []merged
+	for _, pr := range prs {
+		if !pr.MergedUnreviewed() {
+			continue
+		}
+		at := store.Deref(pr.MergedAt)
+		if at.IsZero() {
+			at = store.Deref(pr.ClosedAt)
+		}
+		if window <= 0 || at.IsZero() || now.Sub(at) > window {
+			continue
+		}
+		found = append(found, merged{at, statusAttention{Subject: inspPRLabel(repoByID[pr.RepoID].FullName(), pr.Number),
+			Message: "merged unreviewed at " + inspClock(now, at)}})
+	}
+	slices.SortStableFunc(found, func(a, b merged) int { return b.at.Compare(a.at) })
+	rows := make([]statusAttention, len(found))
+	for i, m := range found {
+		rows[i] = m.row
+	}
+	return rows
 }
 
 // statusGatherAgents counts the working agent panes herdr reports; a herdr

@@ -24,6 +24,11 @@ type Board struct {
 	// the board opens it, the card shows it. A [[watch]] or [[repo]] block's
 	// trackers win for its PRs (Config.TrackersFor).
 	Trackers []string `toml:"trackers"`
+	// RecentClosed is how long a merged or closed PR stays on the board, in
+	// its own section after the open PRs (merged_at, else closed_at, within
+	// it); 0 turns the section off. `magnum prs --all` lists every closed PR
+	// whatever it says.
+	RecentClosed Duration `toml:"recent_closed"`
 }
 
 // PlaceholderNum is the issue number in a [board] trackers template.
@@ -134,7 +139,8 @@ func (b *BadgeSpec) UnmarshalTOML(v any) error {
 	return fmt.Errorf("a badge is a text or { text = \"…\", color = \"…\" }, got %T", v)
 }
 
-// validate checks the badges: a label, a short text and a known color each.
+// validate checks the badges (a label, a short text and a known color each),
+// the trackers and recent_closed.
 func (b Board) validate() []string {
 	var out []string
 	for label, spec := range b.Badges {
@@ -148,6 +154,9 @@ func (b Board) validate() []string {
 		case spec.Color != "" && !slices.Contains(BadgeColors, spec.Color):
 			out = append(out, fmt.Sprintf("board.badges[%q]: color %q is not one of %s", label, spec.Color, strings.Join(BadgeColors[:7], ", ")))
 		}
+	}
+	if b.RecentClosed.Duration < 0 {
+		out = append(out, "board.recent_closed must not be negative (0 turns the recently closed section off)")
 	}
 	return append(out, trackerProblems("board", b.Trackers)...)
 }

@@ -48,7 +48,10 @@ func newPRsCmd(c *Context) *cobra.Command {
 			"--view picks the rows: all, magnum (what magnum reviewed or is reviewing), mine (assigned to you or your "+
 			"review requested) or ready (approved, no changes requested, not a draft); on the live board it is the "+
 			"view the board opens in. "+
-			"--repo shows one repository, --all adds closed and merged PRs, --limit caps the rows. --sort picks the "+
+			"PRs GitHub merged or closed within [board] recent_closed (24h by default; \"0\" turns it off) follow the "+
+			"open ones, newest closed first, dimmed; \"merged · unreviewed\" (closed,merged,unreviewed in the printed "+
+			"rows) marks one GitHub merged before magnum reviewed its last push. "+
+			"--repo shows one repository, --all adds every closed and merged PR, --limit caps the rows. --sort picks the "+
 			"order (updated, last-review, reviewer-activity, requested, changes, state); --desc (the default) puts the "+
 			"newest, latest, most recently requested, most changed or most urgent first and --desc=false reverses the "+
 			"printed rows. REQUESTED is when a review was last requested of you (starred on the board), else of "+
@@ -216,7 +219,8 @@ const kvBoardHideSkipped = "board.hide_skipped"
 // prsBoardOptions are the board's options for o.
 func prsBoardOptions(cfg *config.Config, o prsOptions) tui.PRBoardOptions {
 	return tui.PRBoardOptions{SelfLogins: prsSelfLogins(cfg), DefaultSort: o.Sort, DefaultView: o.View, Repo: o.Repo, Now: inspNow,
-		Judge: rolesJudgeName(cfg), Icons: screenIcons(cfg), DefaultRepo: defaultRepo(cfg), DefaultOwner: o.Owner}
+		Judge: rolesJudgeName(cfg), Icons: screenIcons(cfg), DefaultRepo: defaultRepo(cfg), DefaultOwner: o.Owner,
+		RecentClosed: prsRecentClosed(cfg)}
 }
 
 // screenIcons is the screens' symbols, [terminal] icons: the screens read
@@ -231,12 +235,19 @@ func screenIcons(cfg *config.Config) tui.IconMode {
 // prsSource reads the board's rows from the registry; it never asks GitHub.
 // Notes says whether the repository has reviewer notes under layout
 // (looked up once per repository and load); LastRound carries the stage
-// timings of each PR's last round (cfg names the judge).
+// timings of each PR's last round (cfg names the judge). Each load also
+// reads the PRs GitHub merged or closed within [board] recent_closed of
+// now and marks them Recent, the board's section after the open PRs.
 func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []string, layout paths.Layout) tui.PRBoardSourceFunc {
 	timings := &boardTimings{}
+	window := prsRecentClosed(cfg)
 	return func(ctx context.Context) ([]tui.PRBoardRow, error) {
 		if st == nil {
 			return nil, errors.New("no registry")
+		}
+		f := f
+		if window > 0 {
+			f.ClosedSince = inspNow().Add(-window)
 		}
 		rows, err := st.Board(ctx, f)
 		if err != nil {
@@ -250,6 +261,8 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 		for _, r := range rows {
 			ids = append(ids, r.PRID)
 			row := prsBoardRow(r, self)
+			row.Recent = window > 0 && !row.ClosedAt.IsZero() && !row.ClosedAt.Before(f.ClosedSince) &&
+				(r.GHState == store.GHMerged || r.GHState == store.GHClosed)
 			full := r.Owner + "/" + r.Name
 			req, ok := required[full]
 			if !ok {
@@ -318,6 +331,15 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 		}
 		return out, nil
 	}
+}
+
+// prsRecentClosed is [board] recent_closed (0 without a config: the section
+// is off).
+func prsRecentClosed(cfg *config.Config) time.Duration {
+	if cfg == nil {
+		return 0
+	}
+	return max(cfg.Board.RecentClosed.Duration, 0)
 }
 
 // prsSelfLogins are the logins that count as "me" on the board: every
@@ -416,6 +438,7 @@ func prsBoardRow(b store.BoardRow, self []string) tui.PRBoardRow {
 		State: prsRowState(b), GHState: b.GHState, UpdatedAt: b.UpdatedAt, HeadSHA: b.HeadSHA,
 		Slot: b.Slot, Pinned: b.Pinned, Muted: b.Muted, NextEligibleAt: b.NextEligibleAt,
 		LastError: b.LastError, RoundsToday: b.RoundsToday, SkipReason: b.SkipReason,
+		ClosedAt: cmp.Or(b.MergedAt, b.ClosedAt), MergedUnreviewed: b.MergedUnreviewed,
 	}
 	if r.Ref == "" && b.Owner != "" && b.Name != "" && b.Number > 0 {
 		r.Ref = fmt.Sprintf("%s/%s#%d", b.Owner, b.Name, b.Number)
@@ -597,11 +620,15 @@ func prsRequestedCell(r tui.PRBoardRow, now time.Time) string {
 }
 
 // prsStateCell is the magnum state with the flags that matter
-// ("reviewed,pinned,draft").
+// ("reviewed,pinned,draft"; "closed,merged,unreviewed" for a PR GitHub
+// merged before magnum reviewed its last push).
 func prsStateCell(r tui.PRBoardRow) string {
 	s := inspOrDash(r.State)
 	if g := strings.ToUpper(r.GHState); g == "MERGED" || g == "CLOSED" {
 		s += "," + strings.ToLower(g)
+	}
+	if r.MergedUnreviewed {
+		s += ",unreviewed"
 	}
 	for _, f := range []struct {
 		on   bool

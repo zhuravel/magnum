@@ -742,6 +742,7 @@ func Defaults() *Config {
 		Usage:    Usage{CodexSoft: 80, CodexHard: 95},
 		Triage:   DefaultTriage(),
 		Learn:    DefaultLearn(),
+		Board:    Board{RecentClosed: Duration{24 * time.Hour}},
 	}
 	c.Normalize()
 	return c

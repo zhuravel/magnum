@@ -129,6 +129,9 @@ func newGlyphs(mode IconMode) glyphs {
 				"closed":           "\uf4dc", // nf-oct-git_pull_request_closed
 				"releasing":        "\uf52a", // nf-oct-unlock
 				"released":         "\uf52a",
+				"merged":           "\uf419", // nf-oct-git_merge
+				// GitHub merged it before magnum reviewed its last push.
+				"merged_unreviewed": "\uf421", // nf-oct-alert
 			},
 			markDot: "\uf444", // nf-oct-dot_fill
 			// Finding priorities: icons in the priority's color (red,
