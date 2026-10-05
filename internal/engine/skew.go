@@ -25,7 +25,7 @@ import (
 // renderer, every prompt file the configured roles name (judges with
 // agents.JudgeData, other session roles with agents.RoleData in each mode,
 // shell roles' command or full-line template through agents.ShellLine), the
-// model-fallback prompt and the triage prompt. Each template is rendered twice, once with
+// model-fallback prompt, the triage prompt and the retro prompt. Each template is rendered twice, once with
 // every field set and once with the optional ones empty, so both sides of
 // an {{if}} run. It returns how many renders passed and every failure,
 // joined: a template field this binary's data lacks (a prompt edited for a
@@ -90,6 +90,12 @@ func CheckPrompts(cfg *config.Config) (int, error) {
 			render("triage prompt", p, d)
 		}
 		render("triage prompt", p, triageData{})
+	}
+	if p, err := cfg.ResolvePrompt(cfg.Learn.Prompt); err != nil {
+		errs = append(errs, fmt.Errorf("retro prompt: %w", err))
+	} else {
+		render("retro prompt", p, sampleData[retroData](true))
+		render("retro prompt", p, retroData{})
 	}
 	return ok, errors.Join(errs...)
 }

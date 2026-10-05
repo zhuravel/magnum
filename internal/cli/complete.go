@@ -156,6 +156,18 @@ func (c *Context) completeQuery(query string, scan func(*sql.Rows) error, args .
 // gets the bare N of default-repo PRs (N resolves against
 // daemon.default_repo).
 func (c *Context) completePRs(toComplete string) []cobra.Completion {
+	return c.completePRsWhere(toComplete, "p.gh_state = 'OPEN' OR p.state NOT IN ('closed', 'releasing', 'released')", "p.updated_at")
+}
+
+// completeClosedPRs is completePRs for the PRs closed or merged on GitHub,
+// the latest closed first: the ones `retro` looks at and `misses` lists.
+func (c *Context) completeClosedPRs(toComplete string) []cobra.Completion {
+	return c.completePRsWhere(toComplete, "p.gh_state IN ('MERGED', 'CLOSED')", "COALESCE(p.closed_at, p.merged_at, p.updated_at)")
+}
+
+// completePRsWhere offers the PRs where (a SQL condition over prs p) selects,
+// ordered by order, newest first.
+func (c *Context) completePRsWhere(toComplete, where, order string) []cobra.Completion {
 	defaultRepo := ""
 	if c.LoadConfig() == nil {
 		defaultRepo = strings.ToLower(c.Config.Daemon.DefaultRepo)
@@ -165,8 +177,8 @@ func (c *Context) completePRs(toComplete string) []cobra.Completion {
 	var out []cobra.Completion
 	c.completeQuery(`SELECT r.owner, r.name, p.number, COALESCE(p.title, '')
 		FROM prs p JOIN repos r ON r.id = p.repo_id
-		WHERE p.gh_state = 'OPEN' OR p.state NOT IN ('closed', 'releasing', 'released')
-		ORDER BY p.updated_at DESC LIMIT ?`, func(rows *sql.Rows) error {
+		WHERE (`+where+`)
+		ORDER BY `+order+` DESC LIMIT ?`, func(rows *sql.Rows) error {
 		var owner, name, title string
 		var n int
 		if err := rows.Scan(&owner, &name, &n, &title); err != nil {

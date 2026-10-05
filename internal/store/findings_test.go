@@ -205,3 +205,57 @@ func TestMigrationV4ToV5Findings(t *testing.T) {
 		t.Fatalf("runs after the migration = %+v, %v", runs, err)
 	}
 }
+
+func TestFindingsByPRReturnsOnlyThatPRsOldestFirst(t *testing.T) {
+	st, _ := newStore(t)
+	ctx := context.Background()
+	repo := mustRepo(t, st)
+	pr := mustPR(t, st, repo.ID, 7, PRReviewed)
+	other := mustPR(t, st, repo.ID, 8, PRReviewed)
+	round1 := mustRunAt(t, st, pr.ID, 1, RoleJudge, 0)
+	round2 := mustRunAt(t, st, pr.ID, 2, RoleJudge, time.Hour)
+	otherRun := mustRunAt(t, st, other.ID, 1, RoleJudge, 0)
+
+	// Inserted out of order: the list is by time, then by id.
+	err := st.RecordFindings(ctx, round1.ID, pr.ID, 1, []Finding{
+		{FindingID: "F1", Severity: "P2", Path: "app/a.rb", Line: 12, Sources: []string{"claude-review", "judge"}, Verdict: FindingPosted, CreatedAt: t0.Add(2 * time.Minute)},
+		{FindingID: "F2", Sources: []string{"codex-review"}, Verdict: FindingRejected, ReasonCode: "style_only", CreatedAt: t0.Add(time.Minute)},
+		{FindingID: "F3", Sources: []string{}, Verdict: FindingRejected, ReasonCode: "duplicate", CreatedAt: t0.Add(time.Minute)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RecordFindings(ctx, round2.ID, pr.ID, 2, []Finding{{FindingID: "F1", Sources: []string{"judge"}, Verdict: FindingPosted, CreatedAt: t0.Add(3 * time.Minute)}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RecordFindings(ctx, otherRun.ID, other.ID, 1, []Finding{{FindingID: "F9", Sources: []string{"judge"}, Verdict: FindingPosted, CreatedAt: t0}}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := st.FindingsByPR(ctx, pr.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var order []string
+	for _, f := range got {
+		if f.PRID != pr.ID || f.Repo != "" {
+			t.Errorf("finding %+v: pr %d, repo %q; want PR %d and no repo", f, f.PRID, f.Repo, pr.ID)
+		}
+		order = append(order, itoa(int64(f.Round))+f.FindingID)
+	}
+	if want := []string{"1F2", "1F3", "1F1", "2F1"}; !reflect.DeepEqual(order, want) {
+		t.Fatalf("findings = %v, want %v", order, want)
+	}
+	want := Finding{ID: got[2].ID, RunID: round1.ID, PRID: pr.ID, Round: 1, FindingID: "F1", Severity: "P2", Path: "app/a.rb", Line: 12,
+		Sources: []string{"claude-review", "judge"}, Verdict: FindingPosted, CreatedAt: t0.Add(2 * time.Minute)}
+	if !reflect.DeepEqual(got[2], want) {
+		t.Fatalf("finding = %+v\nwant %+v", got[2], want)
+	}
+	if none, err := st.FindingsByPR(ctx, 999); err != nil || len(none) != 0 {
+		t.Fatalf("findings of an unknown PR = %+v, %v", none, err)
+	}
+	// FindingsSince still names the repository.
+	if all, _ := st.FindingsSince(ctx, t0.Add(-time.Hour)); len(all) != 5 || all[0].Repo != "talkable/talkable" {
+		t.Fatalf("FindingsSince = %+v", all)
+	}
+}

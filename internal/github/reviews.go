@@ -34,14 +34,58 @@ type RESTReview struct {
 	SubmittedAt time.Time
 }
 
+// reviewNodeFields selects one review; reviewNodeJSON decodes it.
+const reviewNodeFields = "databaseId state body url submittedAt commit { oid } author { login __typename }"
+
 const reviewsQuery = `query($owner: String!, $name: String!, $number: Int!) {
   ` + rateLimitFields + `
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
-      reviews(last: 30) { nodes { databaseId state body url submittedAt commit { oid } author { login __typename } } }
+      reviews(last: 30) { nodes { ` + reviewNodeFields + ` } }
     }
   }
 }`
+
+const (
+	reviewsPageSize = 100
+	reviewsMaxPages = 5
+)
+
+var reviewsPagedQuery = fmt.Sprintf(`query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
+  `+rateLimitFields+`
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviews(first: %d, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes { `+reviewNodeFields+` }
+      }
+    }
+  }
+}`, reviewsPageSize)
+
+// reviewNodeJSON is one node of a pull request's reviews connection.
+type reviewNodeJSON struct {
+	DatabaseID  int64      `json:"databaseId"`
+	State       string     `json:"state"`
+	Body        string     `json:"body"`
+	URL         string     `json:"url"`
+	SubmittedAt time.Time  `json:"submittedAt"`
+	Author      *actorJSON `json:"author"`
+	Commit      *struct {
+		Oid string `json:"oid"`
+	} `json:"commit"`
+}
+
+func (n reviewNodeJSON) review() Review {
+	r := Review{DatabaseID: n.DatabaseID, State: n.State, Body: n.Body, URL: n.URL, SubmittedAt: n.SubmittedAt}
+	if n.Author != nil {
+		r.AuthorLogin, r.AuthorType = n.Author.Login, n.Author.Typename
+	}
+	if n.Commit != nil {
+		r.CommitOid = n.Commit.Oid
+	}
+	return r
+}
 
 // ReviewsWithMarker returns the last 30 reviews of a pull request whose body
 // contains marker, oldest first; an empty marker returns all of them. A
@@ -57,17 +101,7 @@ func (c *Client) ReviewsWithMarker(ctx context.Context, owner, repo string, numb
 		Repository *struct {
 			PullRequest *struct {
 				Reviews struct {
-					Nodes []struct {
-						DatabaseID  int64      `json:"databaseId"`
-						State       string     `json:"state"`
-						Body        string     `json:"body"`
-						URL         string     `json:"url"`
-						SubmittedAt time.Time  `json:"submittedAt"`
-						Author      *actorJSON `json:"author"`
-						Commit      *struct {
-							Oid string `json:"oid"`
-						} `json:"commit"`
-					} `json:"nodes"`
+					Nodes []reviewNodeJSON `json:"nodes"`
 				} `json:"reviews"`
 			} `json:"pullRequest"`
 		} `json:"repository"`
@@ -86,14 +120,55 @@ func (c *Client) ReviewsWithMarker(ctx context.Context, owner, repo string, numb
 		if marker != "" && !strings.Contains(n.Body, marker) {
 			continue
 		}
-		r := Review{DatabaseID: n.DatabaseID, State: n.State, Body: n.Body, URL: n.URL, SubmittedAt: n.SubmittedAt}
-		if n.Author != nil {
-			r.AuthorLogin, r.AuthorType = n.Author.Login, n.Author.Typename
+		out = append(out, n.review())
+	}
+	return out, nil
+}
+
+// Reviews lists every review of a pull request, oldest first: reviewsPageSize
+// (100) per page, at most reviewsMaxPages (5) pages (later reviews beyond that
+// are left out). A missing repository or pull request is an error matching
+// ErrNotFound.
+func (c *Client) Reviews(ctx context.Context, owner, repo string, number int) ([]Review, error) {
+	if err := checkRepo(owner, repo); err != nil {
+		return nil, err
+	}
+	if number <= 0 {
+		return nil, fmt.Errorf("github: invalid pull request number %d", number)
+	}
+	op := fmt.Sprintf("all reviews %s/%s#%d", owner, repo, number)
+	out := []Review{}
+	var cursor any // nil: the first page
+	for range reviewsMaxPages {
+		var data struct {
+			Repository *struct {
+				PullRequest *struct {
+					Reviews struct {
+						PageInfo struct {
+							HasNextPage bool   `json:"hasNextPage"`
+							EndCursor   string `json:"endCursor"`
+						} `json:"pageInfo"`
+						Nodes []reviewNodeJSON `json:"nodes"`
+					} `json:"reviews"`
+				} `json:"pullRequest"`
+			} `json:"repository"`
 		}
-		if n.Commit != nil {
-			r.CommitOid = n.Commit.Oid
+		vars := map[string]any{"owner": owner, "name": repo, "number": number, "cursor": cursor}
+		_, notFound, err := c.graphql(ctx, op, reviewsPagedQuery, vars, &data)
+		if err != nil {
+			return nil, err
 		}
-		out = append(out, r)
+		if len(notFound) > 0 || data.Repository == nil || data.Repository.PullRequest == nil {
+			return nil, &APIError{Op: op, Errors: notFoundOr(notFound, op)}
+		}
+		rv := data.Repository.PullRequest.Reviews
+		for _, n := range rv.Nodes {
+			out = append(out, n.review())
+		}
+		if !rv.PageInfo.HasNextPage || rv.PageInfo.EndCursor == "" {
+			return out, nil
+		}
+		cursor = rv.PageInfo.EndCursor
 	}
 	return out, nil
 }

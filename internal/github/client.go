@@ -5,10 +5,12 @@
 //
 // Reads use GraphQL (`gh api graphql --input -`): the per-owner Radar poll
 // (a user or an organization), batched Details, ConfirmStates for PRs that
-// left the OPEN list, and ReviewsWithMarker for verification. REST is used
+// left the OPEN list, ReviewsWithMarker for verification, and Reviews and
+// ReviewThreads for the whole conversation of one pull request. REST is used
 // where only REST carries the data (ReviewREST: the "[bot]"-suffixed author
-// login; Compare: the size of an arbitrary base...head range) and for writes
-// (DismissReview).
+// login; Compare and CompareFiles: the size and the patches of an arbitrary
+// base...head range; FileAt: the raw content of a file at a ref, a response
+// that is bytes and not JSON) and for writes (DismissReview).
 //
 // GraphQL partial errors are tolerated only for NOT_FOUND paths, which the
 // batched calls report as missing numbers; any other error fails the whole
@@ -368,6 +370,38 @@ func (c *Client) restOnce(ctx context.Context, op, method, path string, fields [
 		return fmt.Errorf("github %s: decode response: %w", op, err)
 	}
 	return nil
+}
+
+// restRaw runs one REST GET and returns the response body verbatim (it is not
+// decoded), asking for media type accept (gh api -H "Accept: ..."), e.g.
+// application/vnd.github.raw for a file's content. Errors map as in rest, and
+// after a 401 it calls Reauth and repeats the call once. Reads only: it is
+// never marked Mutates. A successful call with no output returns an empty,
+// non-nil slice.
+func (c *Client) restRaw(ctx context.Context, op, path, accept string) ([]byte, error) {
+	body, err := c.restRawOnce(ctx, op, path, accept)
+	retry, err := c.reauthorize(ctx, err)
+	if retry {
+		return c.restRawOnce(ctx, op, path, accept)
+	}
+	return body, err
+}
+
+func (c *Client) restRawOnce(ctx context.Context, op, path, accept string) ([]byte, error) {
+	args := append([]string{"api", path}, ghHost...)
+	args = append(args, "-H", "Accept: "+accept)
+	res, err := c.gh(ctx, op, args, nil, false)
+	if err != nil {
+		var exitErr *execx.ExitError
+		if errors.As(err, &exitErr) {
+			return nil, ghFailure(op, res, exitErr)
+		}
+		return nil, fmt.Errorf("github %s: %w", op, err)
+	}
+	if res.Stdout == nil {
+		return []byte{}, nil
+	}
+	return res.Stdout, nil
 }
 
 var httpStatusRe = regexp.MustCompile(`\(HTTP (\d{3})\)`)

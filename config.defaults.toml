@@ -1,9 +1,9 @@
 # magnum's built-in configuration: embedded in the binary (rebuild after editing), every key documented.
 # Your settings do not go here: put them in ~/.config/magnum/config.toml ($XDG_CONFIG_HOME/magnum/config.toml
 # when that is set; `magnum init` writes one). Its [[watch]], [[identity]], [[pool]] and [[repo]] blocks are
-# appended, any key it sets under [daemon], [herdr], [terminal], [github], [pipeline], [usage], [triage] or
-# [kinds.<name>] overrides the value here, and its [[role]] blocks override the role of the same name key by
-# key (other names are appended). Secrets go in the checkout's gitignored .mise.local.toml.
+# appended, any key it sets under [daemon], [herdr], [terminal], [github], [pipeline], [usage], [triage],
+# [learn] or [kinds.<name>] overrides the value here, and its [[role]] blocks override the role of the same
+# name key by key (other names are appended). Secrets go in the checkout's gitignored .mise.local.toml.
 # Durations use Go syntax: "30s", "5m", "2h", with whole days in front: "7d", "1d12h".
 
 [daemon]
@@ -96,6 +96,27 @@ command = ["claude", "-p", "--model", "haiku", "--tools", "", "--no-session-pers
                                   #  "--ephemeral", "--skip-git-repo-check", "-"]
 timeout = "2m"                    # a command that takes longer is killed and the round runs every role
 prompt = "triage.md"              # in prompts_dir; the embedded copy when absent
+
+# The retro, magnum's learning loop: after a PR closes, magnum collects what the other reviewers commented on
+# it and drops what its own review already caught; a cheap interactive agent, tagged `learn`, classifies the
+# rest in a herdr pane, and the real misses go to the registry's misses table (`magnum misses` lists them).
+# With enabled = true it runs once a day, after daily_at; `magnum retro` forces one whether or not it is
+# enabled. The prompt carries only paths, URLs and SHAs: the comments are files, data written by other
+# people, never instructions. prompts/retro.md is the embedded prompt.
+
+[learn]
+enabled = false                   # run the retro once a day (`magnum retro` runs one regardless)
+daily_at = "07:00"                # local time, "HH:MM": the daily retro runs once the clock passes it
+lookback = "7d"                   # PRs merged or closed within it are candidates
+max_prs = 20                      # PRs classified per retro, the newest closed first
+min_comment_chars = 20            # shorter comments are dropped
+include_bots = false              # bot accounts other than magnum's count as reviewers
+kind = "claude"                   # the classifying agent: a [kinds.<name>] that drives a session (not "shell")
+model = "sonnet"                  # passed through the kind's `model` args ("" = the kind's own default)
+effort = ""                       # passed through the kind's `effort` args ("" = none)
+# args = []                       # appended to the agent's launch args
+prompt = "retro.md"               # in prompts_dir; the embedded copy when absent
+timeout = "20m"                   # per PR: a turn that takes longer is abandoned
 
 # The review pipeline ("a Procfile of agents"): [kinds.<name>] says how to drive an agent CLI, each
 # [[role]] is one agent (or shell command) of a review round, a [[watch]]'s `roles` picks the roles it

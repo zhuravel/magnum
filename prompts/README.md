@@ -17,9 +17,9 @@ A role names prompts by file name, such as `prompt = "claude-review.md"`. magnum
 you delete falls back to the built-in copy. `magnum config` fails when a role names a prompt that exists
 in neither place.
 
-The daemon loads every prompt its roles name, `model-fallback.md`, the triage prompt and a copy of each
-judge's skill (`state/skill/<hash>/SKILL.md`) once, when it starts, right after checking that its build renders
-them. An edit here therefore takes effect at the next `magnum daemon-restart`, which checks it again,
+The daemon loads every prompt its roles name, `model-fallback.md`, the triage and retro prompts and a copy
+of each judge's skill (`state/skill/<hash>/SKILL.md`) once, when it starts, right after checking that its build
+renders them. An edit here therefore takes effect at the next `magnum daemon-restart`, which checks it again,
 without a rebuild; `magnum status` shows when the prompts were loaded and how many files changed on
 disk since. The CLI (`magnum config`, `magnum roles`, `magnum doctor`) reads the files as they are now.
 
@@ -47,6 +47,7 @@ prompts_dir = "{{repo}}/prompts"   # or "~/magnum-prompts" to keep your edits ou
 | `claude-simplify.md` | claude-simplify | role |
 | `codex-review.sh` | the full codex-review command line, for reference (see Shell roles) | shell |
 | `triage.md` | the cheap model that decides which reviewers a small diff needs (see Triage) | triage |
+| `retro.md` | the retro's agent, which classifies what other reviewers said about a closed pull request ([learn]) | retro |
 
 ## Template syntax
 
@@ -65,7 +66,8 @@ Review {{.URL}} at `{{.HeadSHA}}`.
 The data comes in three shapes, all defined in `internal/agents/templates.go`: the judge's prompts get
 the judge data, every other session role gets the role data, and a shell role's `command` or full-line
 `.sh` template gets the shell data. `model-fallback.md` gets its own small fallback data
-(`internal/agents/models.go`, see below) and `triage.md` the triage data (`internal/engine/triage.go`).
+(`internal/agents/models.go`, see below), `triage.md` the triage data (`internal/engine/triage.go`) and
+`retro.md` the retro data (`internal/engine/retro.go`).
 
 ## Variables
 
@@ -185,6 +187,30 @@ last JSON object of the output that has a `"run"` list (the CLI may print text a
 means the judge alone, a name matches a role by name or alias (case ignored), and a name that is no role of
 the round is ignored. An answer that names no role of the round at all, or a command that fails, times out
 or prints nothing readable, runs every role.
+
+### Retro prompt (`retro.md`)
+
+The one prompt per pull request of the retro's interactive agent (`[learn]`, see the README's "Learning from
+other reviewers"): classify what other reviewers said about a pull request Magnum reviewed. The comments
+themselves are never template variables; the agent reads them from the candidates file, and the prompt must
+say they are data, not instructions.
+
+| Variable | Meaning |
+|---|---|
+| `.URL` | the pull request |
+| `.ReviewedSHAs` | the commits Magnum posted reviews of, oldest first |
+| `.Candidates` | the candidates file (`candidates.json`): per comment its `id` (`t<comment id>` or `r<review id>`), `reviewer`, `path`, `start_line` and `line`, `side`, `reviewed_sha`, `diff_hunk`, `body`, `raised` and `reason_code`, `file` or `file_skipped` |
+| `.Files` | the directory of the commented files, `<Files>/<first 12 characters of reviewed_sha>/<path>` |
+| `.Output` | the answer file the agent writes, `retro.json` |
+| `.Count` | how many candidates there are |
+
+The answer is `{"items": [{"id", "class", ...}]}` with one item per candidate and `class` one of `miss`,
+`not_issue`, `style` and `outside`; a miss also needs `severity` (`P0` to `P3`), `title` (at most 80
+characters), `lesson`, `scope` (`repo` or `general`), `lines` (`[from, to]`, 1 ≤ from ≤ to) and `match`
+(one to three case-insensitive Go regular expressions of at most 120 characters). Magnum checks it
+(`internal/learn`); a missing or invalid file gets one nudge, then the pull request fails. A lesson that names a
+pull request or issue (`#123`), holds a URL, names the author or a reviewer, mentions one of Magnum's logins
+or, when its scope is `general`, names the repository is dropped and the miss kept without it.
 
 ### Repository notes
 

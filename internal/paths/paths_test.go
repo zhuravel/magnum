@@ -272,6 +272,7 @@ func TestResolveLayouts(t *testing.T) {
 		l.DB():                          filepath.Join(user, ".local/share/magnum/magnum.db"),
 		l.ReviewDir("o", "r", 1, "abc"): filepath.Join(user, ".local/share/magnum/reviews/o/r/1/abc"),
 		l.Notes():                       filepath.Join(user, ".local/share/magnum/notes"),
+		l.Learn():                       filepath.Join(user, ".local/share/magnum/learn"),
 		l.Logs():                        filepath.Join(user, ".local/state/magnum/logs"),
 		l.GhConfigDir("app"):            filepath.Join(user, ".local/state/magnum/gh/app"),
 		l.UserConfig:                    filepath.Join(user, ".config/magnum/config.toml"),

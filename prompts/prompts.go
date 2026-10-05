@@ -1,15 +1,16 @@
 // Package prompts embeds magnum's default prompt templates: the files of
 // this directory that config.Role prompt names refer to (judge-*.md,
 // claude-*.md, codex-*.sh), model-fallback.md, the continuation after a
-// session switched models on a per-model limit, and triage.md, the question
-// a cheap model answers about which reviewers a small diff needs. The same
-// files are also read from disk: a prompt name resolves to
-// <pipeline.prompts_dir>/<name> when that file exists (prompts_dir defaults
-// to this directory), else to the embedded copy of the same name (see
-// config.Config.ResolvePrompt). The daemon reads them once, at startup
-// (config.Config.SnapshotPrompts); the CLI whenever it resolves one.
-// README.md documents the template variables and the role/kind
-// configuration.
+// session switched models on a per-model limit, triage.md, the question a
+// cheap model answers about which reviewers a small diff needs, and
+// retro.md, the classification of other reviewers' comments a retro asks
+// for ([learn]). The same files are also read from disk: a prompt name
+// resolves to <pipeline.prompts_dir>/<name> when that file exists
+// (prompts_dir defaults to this directory), else to the embedded copy of
+// the same name (see config.Config.ResolvePrompt). The daemon reads them
+// once, at startup (config.Config.SnapshotPrompts); the CLI whenever it
+// resolves one. README.md documents the template variables and the
+// role/kind configuration.
 package prompts
 
 import (
@@ -18,7 +19,7 @@ import (
 	"sort"
 )
 
-//go:embed judge-*.md claude-*.md codex-*.sh model-fallback.md triage.md
+//go:embed judge-*.md claude-*.md codex-*.sh model-fallback.md triage.md retro.md
 var embedded embed.FS
 
 // FS holds the embedded default prompts, named as in this directory.

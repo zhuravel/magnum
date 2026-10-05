@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -96,7 +97,53 @@ type fakeGH struct {
 	// say); requiredErr fails it.
 	required    map[string][]string
 	requiredErr error
-	calls       []string
+	// threads answers ReviewThreads by number; contents answers FileAt by
+	// "<path>@<ref>" (absent = ErrNotFound); statuses gives
+	// CompareFilesStatus its status by "base...head" (absent = "ahead").
+	threads  map[int][]github.Thread
+	contents map[string][]byte
+	statuses map[string]string
+	calls    []string
+}
+
+func (g *fakeGH) CompareFilesStatus(ctx context.Context, owner, repo, base, head string) (string, []github.FileDelta, error) {
+	fs, err := g.CompareFiles(ctx, owner, repo, base, head)
+	if err != nil {
+		return "", nil, err
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return cmp.Or(g.statuses[base+"..."+head], "ahead"), fs, nil
+}
+
+func (g *fakeGH) ReviewThreads(_ context.Context, owner, repo string, number int) ([]github.Thread, error) {
+	g.record(fmt.Sprintf("threads:%s/%s#%d", owner, repo, number))
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return slices.Clone(g.threads[number]), nil
+}
+
+func (g *fakeGH) Reviews(_ context.Context, owner, repo string, number int) ([]github.Review, error) {
+	g.record(fmt.Sprintf("all_reviews:%s/%s#%d", owner, repo, number))
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return slices.Clone(g.allReviews[number]), nil
+}
+
+func (g *fakeGH) FileAt(_ context.Context, owner, repo, path, ref string) ([]byte, error) {
+	g.record(fmt.Sprintf("file:%s/%s:%s@%s", owner, repo, path, ref))
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	b, ok := g.contents[path+"@"+ref]
+	switch {
+	case slices.Contains(strings.Split(path, "/"), ".."): // as the real client refuses it
+		return nil, fmt.Errorf("github: invalid file path %q", path)
+	case !ok:
+		return nil, &github.APIError{Op: "file", Status: 404, Message: "Not Found"}
+	case len(b) > github.FileAtLimit:
+		return nil, fmt.Errorf("file %s: %w", path, github.ErrFileTooLarge)
+	}
+	return b, nil
 }
 
 func (g *fakeGH) RequiredChecks(_ context.Context, owner, repo, branch string) ([]string, bool, error) {
@@ -308,10 +355,13 @@ func (g *fakeGH) ConfirmStates(_ context.Context, owner, repo string, numbers []
 // ---- herdr ----
 
 type fakeHerdr struct {
-	mu     sync.Mutex
-	err    error
-	agents []herdr.AgentInfo
-	calls  int
+	mu         sync.Mutex
+	err        error
+	agents     []herdr.AgentInfo
+	workspaces []herdr.Workspace
+	panes      []herdr.Pane
+	closed     []string // WorkspaceClose calls
+	calls      int
 }
 
 func (h *fakeHerdr) Snapshot(context.Context) (herdr.Snapshot, error) {
@@ -321,7 +371,18 @@ func (h *fakeHerdr) Snapshot(context.Context) (herdr.Snapshot, error) {
 	if h.err != nil {
 		return herdr.Snapshot{}, h.err
 	}
-	return herdr.Snapshot{Agents: h.agents}, nil
+	return herdr.Snapshot{Agents: slices.Clone(h.agents), Workspaces: slices.Clone(h.workspaces), Panes: slices.Clone(h.panes)}, nil
+}
+
+// WorkspaceClose closes a workspace with its panes and agents.
+func (h *fakeHerdr) WorkspaceClose(_ context.Context, id string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.closed = append(h.closed, id)
+	h.agents = slices.DeleteFunc(h.agents, func(a herdr.AgentInfo) bool { return a.WorkspaceID == id })
+	h.panes = slices.DeleteFunc(h.panes, func(p herdr.Pane) bool { return p.WorkspaceID == id })
+	h.workspaces = slices.DeleteFunc(h.workspaces, func(w herdr.Workspace) bool { return w.ID == id })
+	return nil
 }
 
 type fakeNotifyHerdr struct {
@@ -1088,6 +1149,7 @@ func (h *harness) awaitRound(before int) {
 
 func (h *harness) settle() {
 	h.e.roundWG.Wait()
+	h.e.retroWG.Wait()
 	h.e.drainHeavy(h.ctx)
 	h.e.toastWG.Wait() // urgent toasts run in goroutines
 }

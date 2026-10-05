@@ -5,6 +5,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strconv"
@@ -40,6 +41,7 @@ func statusGather(ctx context.Context, d statusDeps, o statusOptions) (statusRep
 	statusGatherDaemon(ctx, d, kv, &r)
 	statusGatherGitHub(kv, now, &r) // before the pauses: the budget pause comes first
 	statusGatherUsage(d, kv, &r)
+	statusGatherRetro(ctx, d, kv, &r)
 	statusGatherPauses(d, kv, &r)
 	statusGatherDisk(d, &r)
 	if err := statusGatherPRs(ctx, d, now, &r); err != nil {
@@ -150,6 +152,26 @@ func statusGatherUsage(d statusDeps, kv statusKV, r *statusReport) {
 		u.Soft, u.Hard = d.Config.Usage.CodexSoft, d.Config.Usage.CodexHard
 	}
 	r.Codex = u
+}
+
+// statusGatherRetro fills the retro: the last one's summary and the new
+// misses. A retro nobody asked for (no [learn] enabled, none ever ran), an
+// unreadable summary or a failed count is absence, not an error.
+func statusGatherRetro(ctx context.Context, d statusDeps, kv statusKV, r *statusReport) {
+	ro := &statusRetro{Enabled: d.Config != nil && d.Config.Learn.Enabled}
+	if v, ok := kv.get(engine.KVRetroLast); ok {
+		var last engine.RetroSummary
+		if json.Unmarshal([]byte(v), &last) == nil {
+			ro.Last = &last
+		}
+	}
+	if !ro.Enabled && ro.Last == nil {
+		return
+	}
+	if n, err := d.Store.CountMisses(ctx, store.MissFilter{Classes: []string{store.MissMiss}, States: []string{store.MissNew}}); err == nil {
+		ro.NewMisses = &n
+	}
+	r.Retro = ro
 }
 
 // statusGatherGitHub fills the GitHub rate budget and, while polling waits

@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -221,5 +222,112 @@ func TestUpdateReviewBodyForbidden(t *testing.T) {
 	err := (&Client{Run: f}).UpdateReviewBody(context.Background(), "talkable", "talkable", 5, 77, "body")
 	if !errors.Is(err, ErrForbidden) {
 		t.Fatalf("err = %v, want ErrForbidden", err)
+	}
+}
+
+// Synthetic pages of the paged reviews connection: the first has a review by a
+// ghost (null author), the second one whose commit is gone (null commit).
+const reviewsPage1 = `{"data":{"rateLimit":{"limit":5000,"cost":1,"remaining":4990,"used":10,"resetAt":"2026-10-04T12:00:00Z"},
+"repository":{"pullRequest":{"reviews":{"pageInfo":{"hasNextPage":true,"endCursor":"Y3Vyc29yOjE="},"nodes":[
+ {"databaseId":1001,"state":"COMMENTED","body":"first","url":"https://github.com/talkable/talkable/pull/5#pullrequestreview-1001","submittedAt":"2026-10-03T09:00:00Z","commit":{"oid":"1111111111111111111111111111111111111111"},"author":{"login":"rev-ann","__typename":"User"}},
+ {"databaseId":1002,"state":"DISMISSED","body":"from a deleted account","url":"u1002","submittedAt":"2026-10-03T10:00:00Z","commit":{"oid":"1111111111111111111111111111111111111111"},"author":null}]}}}}}`
+
+const reviewsPage2 = `{"data":{"repository":{"pullRequest":{"reviews":{"pageInfo":{"hasNextPage":false,"endCursor":"Y3Vyc29yOjI="},"nodes":[
+ {"databaseId":1003,"state":"APPROVED","body":"","url":"u1003","submittedAt":"2026-10-03T11:00:00Z","commit":null,"author":{"login":"talkable","__typename":"Bot"}}]}}}}}`
+
+func TestReviewsPagesInOrder(t *testing.T) {
+	var cursors []any
+	f := &execx.Fake{Rules: []execx.Rule{gqlRule(t, func(c execx.Cmd, req gqlReq) (execx.Result, error) {
+		cursors = append(cursors, req.Variables["cursor"])
+		if req.Variables["cursor"] == nil {
+			return okResult(compact(t, reviewsPage1))
+		}
+		return okResult(compact(t, reviewsPage2))
+	})}}
+	c := &Client{Run: f, Env: map[string]string{"GH_CONFIG_DIR": "/state/gh/talkable-app"}}
+	got, err := c.Reviews(context.Background(), "talkable", "talkable", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(cursors, []any{nil, "Y3Vyc29yOjE="}) {
+		t.Fatalf("cursors = %v", cursors)
+	}
+	at := func(h int) time.Time { return time.Date(2026, 10, 3, h, 0, 0, 0, time.UTC) }
+	want := []Review{
+		{DatabaseID: 1001, State: "COMMENTED", Body: "first", URL: "https://github.com/talkable/talkable/pull/5#pullrequestreview-1001",
+			SubmittedAt: at(9), CommitOid: "1111111111111111111111111111111111111111", AuthorLogin: "rev-ann", AuthorType: "User"},
+		// A ghost: no author.
+		{DatabaseID: 1002, State: "DISMISSED", Body: "from a deleted account", URL: "u1002", SubmittedAt: at(10), CommitOid: "1111111111111111111111111111111111111111"},
+		// No commit: CommitOid stays empty.
+		{DatabaseID: 1003, State: "APPROVED", URL: "u1003", SubmittedAt: at(11), AuthorLogin: "talkable", AuthorType: "Bot"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("reviews = %+v\nwant %+v", got, want)
+	}
+	call := f.Calls[0]
+	if call.Mutates || call.Env["GH_CONFIG_DIR"] != "/state/gh/talkable-app" {
+		t.Errorf("call = %+v", call)
+	}
+	q := oneLine(decodeReq(t, call).Query)
+	for _, want := range []string{"reviews(first: 100, after: $cursor)", "pageInfo { hasNextPage endCursor }",
+		"nodes { databaseId state body url submittedAt commit { oid } author { login __typename } }"} {
+		if !strings.Contains(q, want) {
+			t.Errorf("query lacks %q: %s", want, q)
+		}
+	}
+	if strings.Contains(q, "last:") {
+		t.Errorf("Reviews must page from the start, not read the last reviews: %s", q)
+	}
+}
+
+func TestReviewsStopsAtTheMaxPages(t *testing.T) {
+	// A pull request with more reviews than reviewsMaxPages pages hold: the
+	// later ones are left out, and the client stops asking.
+	calls := 0
+	f := &execx.Fake{Rules: []execx.Rule{gqlRule(t, func(c execx.Cmd, req gqlReq) (execx.Result, error) {
+		calls++
+		return okResult(compact(t, fmt.Sprintf(`{"data":{"repository":{"pullRequest":{"reviews":{"pageInfo":{"hasNextPage":true,"endCursor":"c%d"},"nodes":[
+		 {"databaseId":%d,"state":"COMMENTED","body":"","url":"u","submittedAt":"2026-10-03T09:00:00Z","commit":null,"author":null}]}}}}}`, calls, calls)))
+	})}}
+	got, err := (&Client{Run: f}).Reviews(context.Background(), "talkable", "talkable", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != reviewsMaxPages || len(got) != reviewsMaxPages {
+		t.Errorf("calls = %d, reviews = %d, want %d of each", calls, len(got), reviewsMaxPages)
+	}
+	if got[0].DatabaseID != 1 || got[len(got)-1].DatabaseID != int64(reviewsMaxPages) {
+		t.Errorf("order = %d..%d", got[0].DatabaseID, got[len(got)-1].DatabaseID)
+	}
+}
+
+func TestReviewsEmptyAndErrors(t *testing.T) {
+	empty := &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"gh", "api", "graphql"}, Result: execx.Result{Stdout: compact(t,
+		`{"data":{"repository":{"pullRequest":{"reviews":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}}`)}}}}
+	got, err := (&Client{Run: empty}).Reviews(context.Background(), "talkable", "talkable", 5)
+	if err != nil || got == nil || len(got) != 0 {
+		t.Fatalf("no reviews = %v, %v (want an empty, non-nil list)", got, err)
+	}
+
+	missing := &execx.Fake{Rules: []execx.Rule{{
+		Prefix: []string{"gh", "api", "graphql"},
+		Result: execx.Result{Stdout: fixture(t, "reviews_notfound.json"), Stderr: fixture(t, "reviews_notfound.stderr"), Code: 1},
+	}}}
+	if _, err := (&Client{Run: missing}).Reviews(context.Background(), "talkable", "talkable", 99999999); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing PR = %v, want ErrNotFound", err)
+	}
+	// A null pullRequest without a GraphQL error is a missing one too.
+	null := &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"gh", "api", "graphql"}, Result: execx.Result{Stdout: []byte(`{"data":{"repository":{"pullRequest":null}}}`)}}}}
+	if _, err := (&Client{Run: null}).Reviews(context.Background(), "talkable", "talkable", 5); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("null pullRequest = %v, want ErrNotFound", err)
+	}
+	for _, tc := range []struct {
+		owner, repo string
+		number      int
+	}{{"talkable", "talkable", 0}, {"", "talkable", 5}, {"talkable", "tal/kable", 5}} {
+		f := &execx.Fake{}
+		if _, err := (&Client{Run: f}).Reviews(context.Background(), tc.owner, tc.repo, tc.number); err == nil || len(f.Calls) != 0 {
+			t.Errorf("%+v: err = %v, calls = %d, want an error before any call", tc, err, len(f.Calls))
+		}
 	}
 }

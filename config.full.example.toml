@@ -2,9 +2,9 @@
 # defaults (config.defaults.toml); copy the [[identity]], [[watch]], [[pool]] blocks and the [daemon]/[terminal]
 # keys you need into ~/.config/magnum/config.toml. App private keys are files next to it (~/.config/magnum/keys/,
 # chmod 600). Your config's [[watch]], [[identity]], [[pool]] and [[repo]] blocks are appended to the
-# defaults, any key it sets under [daemon], [herdr], [terminal], [board], [github], [pipeline], [triage] or
-# [kinds.<name>] overrides the default, and its [[role]] blocks override the role of the same name key by key (other names
-# are appended).
+# defaults, any key it sets under [daemon], [herdr], [terminal], [board], [github], [pipeline], [triage],
+# [learn] or [kinds.<name>] overrides the default, and its [[role]] blocks override the role of the same name
+# key by key (other names are appended).
 # Durations use Go syntax: "30s", "5m", "2h", with whole days in front: "7d", "1d12h".
 
 [daemon]
@@ -84,6 +84,21 @@ command = ["claude", "-p", "--model", "haiku", "--tools", "", "--no-session-pers
 # command = ["codex", "exec", "--model", "<a cheap model>", "--sandbox", "read-only", "--ephemeral", "--skip-git-repo-check", "-"]
 timeout = "2m"                    # a failure or a timeout runs every role
 prompt = "triage.md"
+
+[learn]                           # the retro: what other reviewers caught on a closed PR, that magnum's review missed
+enabled = false                   # true: runs once a day, after daily_at (`magnum retro` runs one regardless; `magnum misses`
+                                  # lists what it found). A cheap `learn` agent classifies the comments in a herdr pane
+daily_at = "07:00"                # local time, "HH:MM"
+lookback = "7d"                   # PRs merged or closed within it are candidates
+max_prs = 20                      # PRs classified per retro, the newest closed first
+min_comment_chars = 20            # shorter comments are dropped
+include_bots = false              # bot accounts other than magnum's count as reviewers
+kind = "claude"                   # a [kinds.<name>] that drives a session (not "shell")
+model = "sonnet"
+effort = ""
+# args = []                       # appended to the agent's launch args
+prompt = "retro.md"
+timeout = "20m"                   # per PR
 
 # The review pipeline ("a Procfile of agents"): [kinds.<name>] says how to drive an agent CLI, each
 # [[role]] is one agent (or shell command) of a review round, a [[watch]]'s `roles` picks the roles it

@@ -420,6 +420,8 @@ code; `magnum stats` reports them per role.
 | `magnum status [<ref>\|<slot>] [--all] [--sizes] [--json] [--watch]` | Daemon, slots, queue, pauses; a PR's detail card with its review history and the last round's stage timings. `--watch` is the live dashboard (`tab` flips to the PR board). |
 | `magnum stats [--since 7d] [--repo owner/name] [--json]` | Review statistics per local day and repository over a window (`--since` takes `7d`, `36h`, `90m` or a date; default 7d): rounds started and how they ended, findings posted by priority, median and p90 durations per role and per round, how many findings each source raised, had posted, had posted alone or had rejected (with reason codes), and model switches, denied prompts and round restarts. |
 | `magnum eval run\|score\|list\|show` | Measure a prompt, skill or model change: `run` replays the PRs with known defects in `~/.config/magnum/eval.toml` (see `eval.toml.example`) at their pinned heads as blind dry runs and reports, per case, the seeded defects the planned review found, at what severity, and its other findings (noise), next to the previous run. `score` re-scores a run after a match rule is fixed, without the agents. |
+| `magnum retro [<ref>...] [--again] [--lookback 14d] [--json]` | Run the retro now (see Learning from other reviewers): classify what other reviewers said about the PRs closed within the lookback, whether or not `[learn] enabled`. `--again` looks again at PRs a retro already did; PRs named by `<ref>` are looked at again in any case. |
+| `magnum misses [<ref>] [--all] [--class miss\|not_issue\|style\|outside\|unclassified] [--json]` | What other reviewers caught and Magnum did not: the retro's new misses, with the reviewer, where, severity, whether Magnum's judge had raised and rejected it, the title and the lesson. `--all` lists every class and state. |
 | `magnum review <url\|owner/repo#N\|repo#N\|N> [--fresh] [--role <role>] [--simplify] [--as <identity>] [--no-post] [--wait] [--timeout <duration>]` | Force a round now, bypassing throttles. `--role` (repeatable) also runs an on-demand role this round; `--simplify` is its shorthand for the role aliased `simplify` (claude-simplify by default). `--wait` follows the round; `--timeout` stops following after that long while the round goes on. |
 | `magnum open <ref> [--role <role>]` | Focus the PR's pane in herdr and reveal the herdr client (focus the existing iTerm2 tab, or open a new one). |
 | `magnum watch <ref> [--role <role>] [--ansi]` | Read-only live mirror of a pane in any terminal. |
@@ -507,6 +509,65 @@ verdicts and check states use gh-dash's icons, so both boards read alike; findin
 for P0 and a dot for P1 to P3 in the priority's color; the summary and the status dashboard mark each
 state with its pill's icon in the state's color, and slots and the daemon with a colored dot), or `ascii`. Outside ASCII a reviewing PR's state
 pill spins (herdr-radar's braille spinner) while its round runs. `?` shows the legend for the mode in use.
+
+### Learning from other reviewers
+
+Other people review the same pull requests, and what they catch that Magnum did not is the plainest measure
+of what its review misses. The retro collects it. With `[learn] enabled = true` it runs once a day, on the
+first tick after `daily_at` (07:00), unless Magnum is paused or draining; `magnum retro` runs one at any
+time, also while Magnum is paused (not while it drains for a restart). It looks at the pull requests
+merged or closed within `lookback` (a week) that Magnum posted a review on and that no retro looked at yet
+(or whose retro failed, up to three times), newest first, until `max_prs` (20) of them had something to
+classify. `magnum retro <ref>...` looks at the pull requests it names whenever they closed and whether or
+not a retro already did, like `--again` for those.
+
+For each one it reads the review threads and reviews from GitHub and keeps the root comment of every thread
+and the summary of every review written by someone other than the author, Magnum's own logins (every
+configured identity's, and the ones the PR's reviews were posted as) and, unless `include_bots`, bots.
+Replies are not read. A comment shorter than `min_comment_chars` (20) once quotes and code blocks are
+removed, or one that only approves ("LGTM, thanks!"), is dropped. A comment within three lines of a finding
+Magnum posted on the same file was caught and is only counted. A comment made on a commit Magnum reviewed
+applies to that commit; one made on a later commit applies to the newest commit Magnum reviewed before it
+only when that later commit descends from it and GitHub's comparison shows the file unchanged since, and
+is recorded as `outside` otherwise (about code Magnum never saw: a later change, an older commit, a history
+a force push replaced). A comment near a finding the judge rejected is marked as raised and rejected, with
+the judge's reason code. A comment on deleted lines keeps its file and hunk but no line.
+
+The rest goes to an interactive agent in a herdr workspace named `learn retro`, tagged `learn` like eval's
+agents are tagged `eval`: `kind` and `model` (Claude sonnet by default), one prompt per pull request
+(`prompts/retro.md`) that carries only file paths, the pull request's URL and the reviewed SHAs. The agent
+reads the comments from a file, with each commented file as it was at the reviewed commit (copied from
+GitHub, up to 512 KiB each), and writes its answer to another: `miss` (a real defect a careful reviewer
+should have reported), `not_issue`, `style` or `outside`, and for a miss a severity, a title, a one-line
+lesson ("When X, check Y because Z"), a scope (`general` or `repo`), the lines and patterns a finding of it
+would match. Magnum checks the answer; a missing or invalid one gets one nudge, then the pull request is
+recorded as failed and the retro goes on; the next retros try a failed pull request again, three times
+in all. A lesson is dropped (a `retro.lesson_rejected` event says why, never what) when it names a pull
+request or issue, a URL, the author or a reviewer, mentions one of Magnum's logins, or, for a `general`
+lesson, the repository: general lessons can reach the public review skill, while a `repo` lesson stays
+with that repository's notes. A shutdown, an agent that cannot start or goes away, or a limit on the
+agent (a usage limit or a logout, which also pause its CLI as a round's would, a per-model limit or an
+overload) ends the retro without recording the pull request it was on, so the next retro takes that one
+and the rest; no retro starts while the agent's CLI is paused. Trust dialogs, permission prompts
+(answered No) and Codex's hooks review behave as in rounds. The agent works in
+`~/.local/share/magnum/learn/retro/` and is closed when the retro ends, quit if it is still busy; an
+agent an earlier retro left running is ended before a new one starts.
+
+The registry keeps one row per comment in its `misses` table: the comment's URL, reviewer, file and line,
+the reviewed commit, the class, whether Magnum had raised it and, for a miss, what the agent wrote. It never
+keeps a comment's text; that stays in the retro's run directory,
+`~/.local/share/magnum/learn/retro/<run>/<owner>/<repo>/<N>/` (`candidates.json`, the files, `retro.json`),
+which is deleted after 30 days. `magnum misses` lists the new misses, `magnum status` shows when the last
+retro ran and how many new misses wait, and every step is a `retro.*` event (`magnum logs <ref>`) that
+never quotes a comment.
+
+```toml
+[learn]
+enabled = true          # once a day; `magnum retro` runs one regardless
+daily_at = "07:00"
+lookback = "7d"
+model = "sonnet"
+```
 
 ## Integrations
 

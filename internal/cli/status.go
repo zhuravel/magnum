@@ -165,6 +165,7 @@ type statusReport struct {
 	Daemon      statusDaemon             `json:"daemon"`
 	GitHub      statusGitHub             `json:"github"`
 	Codex       *statusCodexUsage        `json:"codex_usage,omitempty"`
+	Retro       *statusRetro             `json:"retro,omitempty"`
 	Rounds      statusRounds             `json:"rounds"`
 	Agents      *statusAgents            `json:"agents,omitempty"`
 	Pauses      []statusPause            `json:"pauses"`
@@ -213,6 +214,16 @@ type statusCodexUsage struct {
 	ReportedAt    *time.Time `json:"reported_at,omitempty"`
 	Soft          float64    `json:"soft"`
 	Hard          float64    `json:"hard"`
+}
+
+// statusRetro is the learning loop: whether [learn] schedules the daily
+// retro, what the last retro did (engine.KVRetroLast) and how many real
+// misses (class miss) no lesson was drawn from yet. It is left out when
+// [learn] is off and no retro ever ran.
+type statusRetro struct {
+	Enabled   bool                 `json:"enabled"`
+	Last      *engine.RetroSummary `json:"last,omitempty"`
+	NewMisses *int                 `json:"new_misses,omitempty"` // nil when the registry could not be read
 }
 
 type statusGitHub struct {

@@ -137,3 +137,17 @@ func TestCompareFilesEmptyPatchIsCompleteNotTruncated(t *testing.T) {
 		t.Errorf("deltas = %+v, want %+v", got, want)
 	}
 }
+
+// TestCompareFilesStatusSaysHowHeadRelatesToBase: the same one call also
+// returns GitHub's status of the comparison ("ahead": head descends from
+// base; "behind", "diverged", "identical"), which tells whether a later
+// commit is a descendant of an earlier one.
+func TestCompareFilesStatusSaysHowHeadRelatesToBase(t *testing.T) {
+	for _, status := range []string{"ahead", "behind", "diverged", "identical"} {
+		c, f := compareFilesClient(`{"status":"` + status + `","files":[{"filename":"a.rb","status":"modified","patch":"@@ -1 +1 @@\n-a\n+b"}]}`)
+		got, files, err := c.CompareFilesStatus(context.Background(), "talkable", "talkable", cmpBase, cmpHead)
+		if err != nil || got != status || len(files) != 1 || files[0].Path != "a.rb" || len(f.Calls) != 1 {
+			t.Fatalf("%s: status %q, files %+v, %v, calls %d", status, got, files, err, len(f.Calls))
+		}
+	}
+}

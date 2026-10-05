@@ -81,6 +81,9 @@ func statusRenderHeader(w io.Writer, r statusReport) {
 	if r.Codex != nil {
 		fmt.Fprintf(w, "codex:    %s\n", statusCodexText(*r.Codex, now))
 	}
+	if r.Retro != nil {
+		fmt.Fprintf(w, "retro:    %s\n", statusRetroText(*r.Retro, now))
+	}
 	fmt.Fprintf(w, "rounds:   %s\n", statusRoundsText(r))
 	fmt.Fprintf(w, "disk:     %s\n", statusDiskText(r.Disk))
 	if len(r.Pauses) == 0 {
@@ -153,6 +156,32 @@ func statusCodexText(u statusCodexUsage, now time.Time) string {
 		s += fmt.Sprintf("; at the soft cap %g%%: first reviews wait", u.Soft)
 	case u.Soft > 0 || u.Hard > 0:
 		s += fmt.Sprintf("; caps %g%%/%g%%", u.Soft, u.Hard)
+	}
+	return s
+}
+
+// statusRetroText is the retro line's value: when the last retro finished
+// and how it went, then the real misses waiting for a lesson.
+func statusRetroText(ro statusRetro, now time.Time) string {
+	s := "never"
+	if l := ro.Last; l != nil {
+		finished := l.Finished
+		if finished.IsZero() {
+			finished = l.At
+		}
+		s = inspAgo(now, &finished) + ", "
+		switch {
+		case l.Stopped != "":
+			s += "stopped: " + statusSafe(l.Stopped, 0)
+		default:
+			s += daemonPlural(l.PRs, "PR", "PRs") + ", " + strconv.Itoa(l.Classified) + " classified"
+			if l.Failed > 0 {
+				s += ", " + strconv.Itoa(l.Failed) + " failed"
+			}
+		}
+	}
+	if ro.NewMisses != nil {
+		s += " · " + daemonPlural(*ro.NewMisses, "new miss", "new misses")
 	}
 	return s
 }

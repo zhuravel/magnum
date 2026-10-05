@@ -38,6 +38,8 @@ const (
 	// ReqIdentityVerdict records a `magnum identities check` verdict
 	// (IdentityVerdictPayload) as the daemon records its own checks.
 	ReqIdentityVerdict = "identity_verdict"
+	// ReqRetro starts a retro now (RetroPayload, retro.go).
+	ReqRetro = "retro"
 )
 
 // maxRequestsPerTick bounds the requests one tick handles.
@@ -202,6 +204,8 @@ func (e *Engine) handleRequest(ctx context.Context, req store.Request) {
 		})
 	case ReqIdentityVerdict:
 		answer(e, ctx, req, e.requestIdentityVerdict)
+	case ReqRetro:
+		answer(e, ctx, req, e.requestRetro)
 	case ReqRelease:
 		p, ok := payload[TargetPayload](e, ctx, req)
 		if !ok {

@@ -110,6 +110,24 @@ func triageFixtureFor(kind string) triageFixture {
 		}}
 }
 
+// retroFixture has the shape of the engine's retro data (internal/engine
+// retroData); the engine checks the shipped prompt against the real type
+// (CheckPrompts).
+type retroFixture struct {
+	URL          string
+	ReviewedSHAs []string
+	Candidates   string
+	Files        string
+	Output       string
+	Count        int
+}
+
+func retroFixtureWith(shas ...string) retroFixture {
+	dir := "/data/learn/retro/20261005-070000/talkable/talkable/11920"
+	return retroFixture{URL: "https://github.com/talkable/talkable/pull/11920", ReviewedSHAs: shas,
+		Candidates: dir + "/candidates.json", Files: dir + "/files", Output: dir + "/retro.json", Count: 3}
+}
+
 func TestRenderGolden(t *testing.T) {
 	forced := judgeFixture()
 	forced.ForcePushed = true
@@ -166,6 +184,8 @@ func TestRenderGolden(t *testing.T) {
 			ReportPath: "/state/reviews/talkable/talkable/11920/d4e5f6a/claude-review.md"}},
 		{"triage_initial", "triage.md", triageFixtureFor("initial")},
 		{"triage_rereview", "triage.md", triageFixtureFor("rereview")},
+		{"retro", "retro.md", retroFixtureWith("a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0")},
+		{"retro_two_reviews", "retro.md", retroFixtureWith("a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0", "d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3")},
 		{"model_fallback_patch", FallbackPromptName, FallbackData{Model: "sonnet", Previous: "opus", Role: "claude-simplify",
 			URL: "https://github.com/talkable/talkable/pull/11920", HeadSHA: "d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3"}},
 	}
@@ -232,7 +252,7 @@ func checkGolden(t *testing.T, golden, got string) {
 
 func TestEveryDefaultPromptHasAGolden(t *testing.T) {
 	want := []string{"claude-rereview.md", "claude-restart.md", "claude-review.md", "claude-simplify.md", "codex-review.sh", "judge-continue.md",
-		"judge-initial.md", "judge-nudge.md", "judge-recovery.md", "judge-rereview.md", "judge-stop.md", "model-fallback.md", "triage.md"}
+		"judge-initial.md", "judge-nudge.md", "judge-recovery.md", "judge-rereview.md", "judge-stop.md", "model-fallback.md", "retro.md", "triage.md"}
 	if got := prompts.Names(); !slices.Equal(got, want) {
 		t.Fatalf("prompts.Names() = %v, want %v (add a golden case)", got, want)
 	}

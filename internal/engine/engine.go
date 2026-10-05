@@ -168,6 +168,9 @@ type Deps struct {
 	// Runner runs the triage command ([triage]); nil = a round that would
 	// triage runs every role.
 	Runner execx.Runner
+	// Classifier sets up the retro's classifier for one retro run ([learn],
+	// retro.go); nil = the candidates are stored unclassified.
+	Classifier func(ctx context.Context, run RetroRun) (Classifier, error)
 
 	// Usage reads Codex's rate-limit snapshot (usage.Codex, which FromApp
 	// sets); nil = no budget gauge and no caps.
@@ -236,6 +239,12 @@ type Engine struct {
 	infraMu  sync.Mutex // infrastructure failures (infra.go)
 	depsFail depsFailure
 
+	once         bool       // Run with Options.Once: no daily retro (retro.go)
+	retroMu      sync.Mutex // the running retro (retro.go)
+	retroCancel  context.CancelFunc
+	retroStarted time.Time
+	retroWG      sync.WaitGroup
+
 	usageMu   sync.Mutex // the Codex budget (budget.go)
 	usageRead time.Time
 	usageSnap *usage.Snapshot
@@ -297,6 +306,17 @@ func FromApp(a *app.App) *Engine {
 	}
 	if a.Herdr != nil {
 		d.Focus = a.Herdr.AgentFocus
+	}
+	if h := a.Herdr; h != nil && !a.DryRun && a.AgentTag == "" && a.Config != nil {
+		// The retro's agent (retro_pane.go): an agents manager of its own,
+		// over a scratch registry, tagged apart from the PRs' agents.
+		d.Classifier = paneClassifiers(paneDeps{
+			Config: a.Config, Layout: a.Layout, Logger: a.Logger, Herdr: h, Keys: h.AgentSendKeys, CloseWorkspace: h.WorkspaceClose,
+			Agents: func(st *store.Store, cfg *config.Config, layout paths.Layout) paneAgents {
+				return agents.New(agents.Deps{Herdr: h, Store: st, Runner: a.Runner, Config: cfg, Layout: layout, Tag: LearnAgentTag,
+					Log: app.Printf{Logger: a.Logger, Level: slog.LevelInfo, Src: "learn"}})
+			},
+		})
 	}
 	if a.Git != nil {
 		d.Probe = gitProbe(a.Git)
@@ -382,6 +402,7 @@ func (e *Engine) Run(ctx context.Context, opts Options) error {
 	}
 	defer e.shutdown()
 
+	e.once = opts.Once
 	e.log.Info("magnum daemon starting", "pid", os.Getpid(), "dry_run", e.d.DryRun, "once", opts.Once)
 	if err := e.loadPrompts(ctx); err != nil {
 		e.log.Error("magnum daemon refusing to start", "err", err)
@@ -464,8 +485,8 @@ func (e *Engine) lockHeld() error {
 	return nil
 }
 
-// shutdown stops rounds (their runs stay observed, never re-sent), waits
-// for them briefly, flushes pending toasts and gives urgent toasts still
+// shutdown stops rounds (their runs stay observed, never re-sent) and a
+// running retro, waits for them briefly, flushes pending toasts and gives urgent toasts still
 // retrying a bounded time before cancelling them.
 func (e *Engine) shutdown() {
 	e.mu.Lock()
@@ -473,12 +494,13 @@ func (e *Engine) shutdown() {
 		h.cancel()
 	}
 	e.mu.Unlock()
+	e.stopRetro()
 	done := make(chan struct{})
-	go func() { e.roundWG.Wait(); close(done) }()
+	go func() { e.roundWG.Wait(); e.retroWG.Wait(); close(done) }()
 	select {
 	case <-done:
 	case <-time.After(30 * time.Second):
-		e.log.Warn("rounds did not stop within 30s")
+		e.log.Warn("rounds or the retro did not stop within 30s")
 	}
 	if e.batch != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -535,6 +557,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	e.noteWaits(ctx, ts)
 	e.parkIdle(ctx, ts)
 	e.maybeReconcile(ctx)
+	e.maybeRetro(ctx)
 	e.surface(ctx)
 	return errors.Join(errs...)
 }

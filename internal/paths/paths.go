@@ -332,6 +332,10 @@ func (l Layout) data() string {
 // Data is where the registry, reports and notes live (see data).
 func (l Layout) Data() string { return l.data() }
 
+// Learn is where the learning loop keeps its inputs and outputs: the
+// retro's runs live under Learn()/retro/<run>/.
+func (l Layout) Learn() string { return filepath.Join(l.data(), "learn") }
+
 // ReviewDir is where one review round's reports live.
 func (l Layout) ReviewDir(owner, repo string, number int, sha string) string {
 	if len(sha) > 12 {

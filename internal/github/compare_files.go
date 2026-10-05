@@ -26,16 +26,27 @@ type FileDelta struct {
 // page carries the whole file list, at most CompareFileLimit files). A
 // missing repository or commit is an error matching ErrNotFound.
 func (c *Client) CompareFiles(ctx context.Context, owner, repo, base, head string) ([]FileDelta, error) {
+	_, files, err := c.CompareFilesStatus(ctx, owner, repo, base, head)
+	return files, err
+}
+
+// CompareFilesStatus is CompareFiles that also returns the comparison's
+// status as GitHub reports it: "ahead" (head descends from base),
+// "identical", "behind" (base descends from head) or "diverged". The file
+// list is three-dot (head's changes since the merge base), so only "ahead"
+// and "identical" make it the difference between base and head.
+func (c *Client) CompareFilesStatus(ctx context.Context, owner, repo, base, head string) (string, []FileDelta, error) {
 	if err := checkRepo(owner, repo); err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	for _, ref := range []string{base, head} {
 		if !compareRefRe.MatchString(ref) || strings.Contains(ref, "..") {
-			return nil, fmt.Errorf("github: invalid compare ref %q", ref)
+			return "", nil, fmt.Errorf("github: invalid compare ref %q", ref)
 		}
 	}
 	var r struct {
-		Files []struct {
+		Status string `json:"status"`
+		Files  []struct {
 			Filename         string  `json:"filename"`
 			PreviousFilename string  `json:"previous_filename"`
 			Status           string  `json:"status"`
@@ -45,7 +56,7 @@ func (c *Client) CompareFiles(ctx context.Context, owner, repo, base, head strin
 	path := fmt.Sprintf("repos/%s/%s/compare/%s...%s?per_page=1", owner, repo, base, head)
 	op := fmt.Sprintf("compare files %s/%s %s...%s", owner, repo, shortRef(base), shortRef(head))
 	if err := c.rest(ctx, op, "GET", path, nil, false, &r); err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	cut := len(r.Files) >= CompareFileLimit
 	out := make([]FileDelta, 0, len(r.Files))
@@ -56,5 +67,5 @@ func (c *Client) CompareFiles(ctx context.Context, owner, repo, base, head strin
 		}
 		out = append(out, d)
 	}
-	return out, nil
+	return r.Status, out, nil
 }

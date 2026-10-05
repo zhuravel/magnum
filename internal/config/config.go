@@ -68,6 +68,7 @@ type Config struct {
 	Pipeline   Pipeline   `toml:"pipeline"`
 	Usage      Usage      `toml:"usage"`
 	Triage     Triage     `toml:"triage"`
+	Learn      Learn      `toml:"learn"`
 	Board      Board      `toml:"board"`
 	Identities []Identity `toml:"identity"`
 	Watches    []Watch    `toml:"watch"`
@@ -647,7 +648,7 @@ func exists(p string) bool {
 
 // applyOverlay merges config.local.toml: [[identity]], [[watch]], [[pool]]
 // and [[repo]] entries are appended; keys present under [daemon], [herdr], [terminal],
-// [codex], [claude], [github], [pipeline], [usage] and [triage] override the committed values key by key.
+// [codex], [claude], [github], [pipeline], [usage], [triage] and [learn] override the committed values key by key.
 // Its [kinds.<name>] keys and [[role]] blocks are returned for buildPipeline:
 // kind keys override key by key, a [[role]] named like an existing role
 // overrides the keys it sets, any other [[role]] is appended.
@@ -673,6 +674,7 @@ func (c *Config) applyOverlay(path string) (*layer, error) {
 	overlaySection(md, "pipeline", &c.Pipeline, &o.Pipeline)
 	overlaySection(md, "usage", &c.Usage, &o.Usage)
 	overlaySection(md, "triage", &c.Triage, &o.Triage)
+	overlaySection(md, "learn", &c.Learn, &o.Learn)
 	overlaySection(md, "board", &c.Board, &o.Board)
 	l, err := readLayer(path, md, o.Kinds, o.Roles)
 	if err != nil {
@@ -739,6 +741,7 @@ func Defaults() *Config {
 		Pipeline: Pipeline{PromptsDir: "{{repo}}/prompts"},
 		Usage:    Usage{CodexSoft: 80, CodexHard: 95},
 		Triage:   DefaultTriage(),
+		Learn:    DefaultLearn(),
 	}
 	c.Normalize()
 	return c

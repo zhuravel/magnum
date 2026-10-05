@@ -815,3 +815,64 @@ editing history. Code, config comments and prompts reference these by their head
   money, concurrency, data writes, schema, code outside the diff): a prompt that only said "the judge reads
   the diff itself" let haiku drop every reviewer from a change that removed tenant scoping, and one that
   said "when in doubt, keep it" kept them all for a one-line nil guard.
+- **Learning loop: daily retro** (2026-10-05, stage 1 of learning from other reviewers: other people's comments
+  on PRs magnum reviewed are the most direct evidence of what its review misses, and nothing collected them).
+  `[learn]` (schedule off by default) runs a retro once a local day after `daily_at`, never while paused or
+  draining; `magnum retro` (`ReqRetro`) forces one past `magnum pause` but not past a drain or an
+  infrastructure pause. It looks at PRs merged or closed within `lookback` that have a posted review and no
+  `retro_prs` row, or a failed one with fewer than three `attempts` (`--again`, and naming PRs with
+  `magnum retro <ref>`, ignore the row), newest closed first, until `max_prs` had candidates. **What
+  counts as a miss**: a root comment of a review thread or a review body by another reviewer (not the
+  author, not one of magnum's logins, configured or posted-as, not a bot unless `include_bots`; replies never
+  count in this stage), long enough once quotes and code blocks are removed and not just an approval, that
+  an interactive classifier judges a real defect or risk in the reviewed change a careful reviewer should
+  have reported; `not_issue`, `style` and `outside` are stored too, so a later stage can measure noise.
+  **Why a comment on a later commit counts only when the file is unchanged**: a comment applies to code
+  magnum saw. One made on a reviewed commit does; one made on a later commit applies to the newest commit
+  magnum reviewed before the comment only when the comparison's status is `ahead` or `identical` (the
+  later commit descends from the reviewed one: the comparison is three-dot, so for an older commit or a
+  history a force push replaced it lists nothing that matters) and it lists neither the file nor more than
+  its file cap, because then the commented lines are the ones magnum read; otherwise it is stored as
+  `outside` without a model call, since a defect introduced after the review is not a miss and a classifier
+  cannot be trusted to tell. A review body is kept only on a reviewed commit (it has no file to compare). A
+  comment on deleted lines (`diffSide` LEFT) is numbered in the old file, so it keeps its hunk but no line
+  and is never near a finding. **Why caught findings are dropped deterministically**: a comment within three lines of a
+  finding magnum posted on the same path (the judge's provenance, `findings`) is the same point and is
+  counted, not stored or sent to a model, so a model's opinion can never turn a caught defect into a miss
+  and the classifier only sees what magnum did not post; one near a finding the judge rejected is kept as
+  `raised = rejected` with the reason code, the case a later stage most wants to see. **The classifier is
+  an interactive pane agent tagged `learn`**, consistent with "Reviews run in interactive herdr
+  panes, never headless" (top of this file): one agent per retro (`[learn] kind`/`model`, Claude sonnet by
+  default) in a herdr workspace "learn retro", driven by the eval machinery (a scratch registry under the
+  run directory, removed at the end; an agents manager tagged so its agent never meets a PR's own; a scratch
+  engine observing herdr for it, which the daemon's own observation never conflicts with, since each only
+  reads the sessions of its own registry), working in `learn/retro/`, the directory of every run, because
+  the CLIs trust the directory they start in and a path per run would add a trust entry every day; so trust dialogs,
+  permission prompts (answered No), hooks review, turn completion and usage-limit pauses behave as in
+  rounds; it is prompted once per PR with paths, the URL and the reviewed SHAs only (`prompts/retro.md`)
+  and reads the comments from a file it is told is data. Its answer is a file Go validates (`internal/learn`):
+  one item per candidate, a known class, and for a miss a severity, a title of at most 80 characters, a
+  lesson, a scope, a line range and one to three compiling patterns; a missing or invalid file gets one
+  nudge, then the PR is `failed` and the retro goes on; a failure is the PR's own, so the next retros try it
+  again, three attempts in all. **A stop that is not the PR's records nothing**: a shutdown, a classifier
+  that cannot start or went away, and a limit on its agent end the retro without a `retro_prs` row for the
+  PR in flight, which stays due with the rest; a usage limit and a logout also pause the agent's CLI, as
+  after a round, but a per-model limit and an overload do not (as in rounds, where an overload is the
+  moment's, not the CLI's). An agent the retro could not park (busy at shutdown) is quit and its workspace
+  closed, and one an earlier retro left behind (same tagged name) is ended before the next one starts
+  rather than adopted; when an agent cannot be ended, the scratch registry that records it stays. A
+  classification is never downgraded: a re-run whose classifier fails leaves the earlier one in place.
+  **Lessons are scrubbed**: a lesson with a PR or issue reference, a URL, the PR author's or a reviewer's
+  login (as a whole word, case-insensitively, with or without "@"), or an @mention of one of magnum's logins
+  is dropped and the miss kept without it, and so is a `general` lesson that names the repository's owner or
+  name, backticks or not, since general lessons can reach the public judge skill (a `repo` lesson stays in
+  that repository's notes and may name it); each drop is an info event with its reason (`issue_ref`, `url`,
+  `login`, `names_repo`), never the lesson. What later stages turn into notes and prompt changes teaches a
+  principle instead of retelling a PR; titles stay as written, in the local registry only. The registry stores no
+  comment text: `misses` keeps the URL, reviewer, place, reviewed commit and the verdict; the comments, the
+  commented files (fetched at the reviewed commit, at most 512 KiB, written through `os.Root` because the
+  paths come from GitHub) and the answer stay in `learn/retro/<run>/`, pruned after 30 days, and no event
+  quotes a comment. Rejected: classifying with `claude -p` like triage (a retro is an investigation of
+  files, not a one-line answer, and gets the pane's observability); matching other reviewers' comments
+  to findings with a model (the deterministic nearness rule is cheap and auditable); retro-ing open PRs
+  (comments keep arriving, and a PR is looked at once).

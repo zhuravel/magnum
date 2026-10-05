@@ -47,6 +47,7 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 | [identity](#identity) | Package identity provides the GitHub identities magnum acts as. |
 | [inventory](#inventory) | Package inventory is the read-mostly reconciliation view: the registry (slots, assignments, sessions) compared with what is really on disk (`git worktree list` of every watched main clone), in MySQL (per-worktree databases), in herdr (agents per path) and, on request, on GitHub (states of PRs checked out in manual worktrees). |
 | [launchd](#launchd) | Package launchd writes and manages magnum's LaunchAgent (label zhuravel.magnum): rendering the plist, installing it into the user's GUI domain, and querying, restarting and removing the job. |
+| [learn](#learn) | Package learn is the deterministic half of the retro (DECISIONS "Learning loop: daily retro"): after a pull request magnum reviewed closes, Build turns what other reviewers said about it into candidates for a classifier, after dropping what cannot be a miss (the author's and magnum's own comments, short approvals, comments on code magnum never saw, findings magnum already posted), and ParseOutput reads the classifier's answer back, refusing anything off schema and any lesson that retells the pull request instead of teaching (ScrubLesson). |
 | [mysqlx](#mysqlx) | Package mysqlx inventories and drops the per-worktree MySQL databases that Talkable's bin/worktree-setup creates (talkable_<env>[_<role>]__<slug>) on the local DBngin server. |
 | [notify](#notify) | Package notify is magnum's user-facing status surface: toasts, herdr sidebar tokens and the tab-bar file. |
 | [paths](#paths) | Package paths defines magnum's on-disk layout. |
@@ -1952,6 +1953,9 @@ const DefaultAfterDenyPrompt = "magnum denied that command: review roles never r
     DefaultAfterDenyPrompt is every built-in and declared kind's
     after_deny_prompt.
 
+const DefaultLearnPrompt = "retro.md"
+    DefaultLearnPrompt is the retro prompt file.
+
 const DefaultReadyTimeout = 5 * time.Minute
     DefaultReadyTimeout bounds a round's whole readiness step when neither the
     [[repo]] nor the [[pool]] sets ready_timeout.
@@ -1969,6 +1973,10 @@ const DefaultTriagePrompt = "triage.md"
 const EmbeddedSkill = "builtin:skills/magnum-review/SKILL.md"
     EmbeddedSkill names the binary's own copy of the judge skill (magnum.Skill)
     as a skill source: what a judge gets without a checkout.
+
+const LearnRoleName = "retro"
+    LearnRoleName is the name of the role the retro's classifying agent runs as
+    (LearnRole).
 
 const PlaceholderNum = "{num}"
     PlaceholderNum is the issue number in a [board] trackers template.
@@ -2129,6 +2137,7 @@ type Config struct {
 	Pipeline   Pipeline   `toml:"pipeline"`
 	Usage      Usage      `toml:"usage"`
 	Triage     Triage     `toml:"triage"`
+	Learn      Learn      `toml:"learn"`
 	Board      Board      `toml:"board"`
 	Identities []Identity `toml:"identity"`
 	Watches    []Watch    `toml:"watch"`
@@ -2194,6 +2203,11 @@ func (c *Config) KindNames() []string
 func (c *Config) KindSpec(name string) (Kind, bool)
     KindSpec returns the merged [kinds.<name>] spec (user keys over
     DefaultKinds); false for "shell" and undeclared names.
+
+func (c *Config) LearnRole() Role
+    LearnRole is the role the retro's classifying agent runs as: LearnRoleName,
+    the [learn] kind in session mode with its model, effort, args, prompt and
+    timeout, writing retro.json, normalized like a configured role.
 
 func (c *Config) Normalize()
     Normalize fills the defaulted fields of Kinds and Roles in place (Load
@@ -2565,6 +2579,48 @@ type LaunchArgs struct {
 	Extra   []string // Role.Args, appended last as given
 }
     LaunchArgs are the per-start values Kind.Argv substitutes.
+
+type Learn struct {
+	// Enabled turns the daily schedule on; off by default (it spends a model
+	// turn per candidate PR). `magnum retro` runs regardless.
+	Enabled bool `toml:"enabled"`
+	// DailyAt is the local time of day, "HH:MM", after which the daily retro
+	// runs once.
+	DailyAt string `toml:"daily_at"`
+	// Lookback: PRs merged or closed within it are candidates.
+	Lookback Duration `toml:"lookback"`
+	// MaxPRs bounds the PRs classified per retro, newest closed first.
+	MaxPRs int `toml:"max_prs"`
+	// MinCommentChars: comments shorter than this are dropped.
+	MinCommentChars int `toml:"min_comment_chars"`
+	// IncludeBots counts bot accounts other than magnum's own as reviewers.
+	IncludeBots bool `toml:"include_bots"`
+	// Kind is the classifying agent's [kinds.<name>]; Model, Effort and Args
+	// are passed to it like a role's (LearnRole).
+	Kind   string   `toml:"kind"`
+	Model  string   `toml:"model"`
+	Effort string   `toml:"effort"`
+	Args   []string `toml:"args"`
+	// Prompt is the template file (Config.ResolvePrompt); see prompts/README.md.
+	Prompt string `toml:"prompt"`
+	// Timeout bounds the agent's turn on one PR.
+	Timeout Duration `toml:"timeout"`
+}
+    Learn is the [learn] section: the daily retro. After a PR closes,
+    magnum collects what the other reviewers commented on it, drops what its own
+    review already posted, and has an interactive agent classify the rest; the
+    real misses go to the registry's misses table (`magnum misses` lists them).
+    Enabled runs it once a day after DailyAt; `magnum retro` runs one whether
+    or not it is enabled (internal/engine/retro.go, DECISIONS "Learning loop:
+    daily retro").
+
+func DefaultLearn() Learn
+    DefaultLearn returns the built-in [learn] values: off, a week of lookback,
+    Claude sonnet classifying.
+
+func (l Learn) DailyTime(day time.Time) (time.Time, error)
+    DailyTime is the daily_at time on the local calendar day of day (in day's
+    location). daily_at must be "HH:MM", 00:00 to 23:59, two digits each.
 
 type LoadOptions struct {
 	// NoOverlay skips the user layer (the user config, or a legacy
@@ -3284,9 +3340,23 @@ const (
 	// ReqIdentityVerdict records a `magnum identities check` verdict
 	// (IdentityVerdictPayload) as the daemon records its own checks.
 	ReqIdentityVerdict = "identity_verdict"
+	// ReqRetro starts a retro now (RetroPayload, retro.go).
+	ReqRetro = "retro"
 )
     Request kinds (requests.kind) the daemon consumes.
 
+const (
+	// KVRetroDay is the local day (store.DayKey) of the last daily retro
+	// that finished; the next one waits for another day.
+	KVRetroDay = "learn.retro_day"
+	// KVRetroLast is the last retro's RetroSummary (JSON).
+	KVRetroLast = "learn.retro_last"
+)
+const (
+	// LearnAgentTag tags the retro's agent (agents.Deps.Tag), as "eval"
+	// tags a replay's.
+	LearnAgentTag = "learn"
+)
 const (
 	DeltaComments   = "comments"
 	DeltaWhitespace = "whitespace"
@@ -3352,7 +3422,8 @@ const (
 	WaitRetry         = "retry"          // the backoff after a failed round
 	WaitMuted         = "muted"          // magnum mute
 	WaitQuietHours    = "quiet_hours"    // [daemon] quiet_hours
-	WaitPaused        = "paused"         // the daemon is paused or draining
+	WaitPaused        = "paused"         // magnum pause, or an infrastructure pause past its probe time
+	WaitDraining      = "draining"       // magnum daemon-restart --drain: no round starts until the restart
 	WaitInfra         = "infra"          // an infrastructure failure paused dispatch
 	WaitHerdr         = "herdr"          // herdr is unreachable
 	WaitKind          = "kind"           // an agent kind the round needs is paused
@@ -3388,6 +3459,11 @@ var DeltaClasses = config.TrivialDeltaClasses
     DeltaClasses lists every class, the default of skip_trivial_deltas
     (config.TrivialDeltaClasses, the list the configuration accepts).
 
+var ErrClassifierDown = errors.New("engine: the retro's classifier is not available")
+    ErrClassifierDown wraps a Classifier's error that is not the PR's: the agent
+    could not be set up or started, or went away (herdr down, a prompt refused
+    before it was sent). The retro stops without recording the PR.
+
 var ErrEvalLayout = errors.New("engine: magnum eval needs a scratch layout (paths.Layout.Scratch), never the live registry")
     ErrEvalLayout: RunEval needs an engine built on a scratch layout.
 
@@ -3405,6 +3481,9 @@ var ErrSchemaChanged = errors.New("schema migrated under the daemon; exiting for
 var EvalObserveEvery = 10 * time.Second
     EvalObserveEvery is how often RunEval observes herdr during a replay.
 
+var RetroObserveEvery = 10 * time.Second
+    RetroObserveEvery is how often the retro's agent is observed.
+
 
 FUNCTIONS
 
@@ -3418,12 +3497,12 @@ func CheckPrompts(cfg *config.Config) (int, error)
     CheckPrompts renders, with representative data and this binary's renderer,
     every prompt file the configured roles name (judges with agents.JudgeData,
     other session roles with agents.RoleData in each mode, shell roles' command
-    or full-line template through agents.ShellLine), the model-fallback prompt
-    and the triage prompt. Each template is rendered twice, once with every
-    field set and once with the optional ones empty, so both sides of an
-    {{if}} run. It returns how many renders passed and every failure, joined:
-    a template field this binary's data lacks (a prompt edited for a newer
-    build) fails here instead of in a round.
+    or full-line template through agents.ShellLine), the model-fallback prompt,
+    the triage prompt and the retro prompt. Each template is rendered twice,
+    once with every field set and once with the optional ones empty,
+    so both sides of an {{if}} run. It returns how many renders passed and every
+    failure, joined: a template field this binary's data lacks (a prompt edited
+    for a newer build) fails here instead of in a round.
 
 func ClearModelLimits(ctx context.Context, st *store.Store, kind string) ([]string, error)
     ClearModelLimits deletes the per-model limits recorded for kind
@@ -3596,6 +3675,40 @@ type Agents interface {
 }
     Agents is the part of *agents.Manager the engine drives.
 
+type Classifier interface {
+	Classify(ctx context.Context, job ClassifyJob) (ClassifyResult, error)
+	Close(ctx context.Context) error
+}
+    Classifier sorts the candidates of one PR at a time, writing
+    ClassifyJob.OutputPath. One serves a whole retro; Close ends it.
+
+type ClassifyJob struct {
+	Dir            string
+	CandidatesPath string
+	OutputPath     string
+	PR             store.PR
+	Repo           store.Repo
+	// ReviewedSHAs are the commits magnum reviewed, oldest first.
+	ReviewedSHAs []string
+	// Candidates are the candidates file's, for checking the answer.
+	Candidates []learn.Candidate
+}
+    ClassifyJob is one PR's candidates for a Classifier: Dir holds
+    CandidatesPath (learn.Candidates) and the commented files (learn.FilePath);
+    the classifier writes its answer (learn.Output) to OutputPath.
+
+type ClassifyResult struct {
+	// Unclassified: nothing classified the candidates (no classifier is
+	// set up); they are stored unclassified, not as a failure.
+	Unclassified bool
+	// Pause: the classifier's agent hit a limit (Kind: usage_limit,
+	// login_required, model_limit or overloaded). The retro stops without
+	// recording the PR, which stays due; a usage limit and a logout also
+	// pause the tool, as after a round.
+	Pause *pipeline.Pause
+}
+    ClassifyResult is how a Classifier's turn ended, besides its error.
+
 type Cleaner interface {
 	Plan(ctx context.Context, opts cleanup.Options) (cleanup.Plan, error)
 	PlanFrom(ctx context.Context, opts cleanup.Options, inv inventory.Inventory) (cleanup.Plan, error)
@@ -3678,6 +3791,9 @@ type Deps struct {
 	// Runner runs the triage command ([triage]); nil = a round that would
 	// triage runs every role.
 	Runner execx.Runner
+	// Classifier sets up the retro's classifier for one retro run ([learn],
+	// retro.go); nil = the candidates are stored unclassified.
+	Classifier func(ctx context.Context, run RetroRun) (Classifier, error)
 
 	// Usage reads Codex's rate-limit snapshot (usage.Codex, which FromApp
 	// sets); nil = no budget gauge and no caps.
@@ -3903,6 +4019,49 @@ type Request struct {
 func (r Request) Phrase() string
     Phrase is how screens name the request: "requested by alice" or "ready for
     review".
+
+type RetroGitHub interface {
+	ReviewThreads(ctx context.Context, owner, repo string, number int) ([]github.Thread, error)
+	Reviews(ctx context.Context, owner, repo string, number int) ([]github.Review, error)
+	CompareFilesStatus(ctx context.Context, owner, repo, base, head string) (string, []github.FileDelta, error)
+	FileAt(ctx context.Context, owner, repo, path, ref string) ([]byte, error)
+}
+    RetroGitHub is what a retro reads from GitHub (*github.Client): the review
+    threads, every review, the comparison of a reviewed commit with a later one
+    and the commented files.
+
+type RetroPayload struct {
+	// PRs limits the retro to these pull requests (registry ids), whenever
+	// they closed, and implies Again for them; empty = every PR due within
+	// the lookback.
+	PRs []int64 `json:"prs,omitempty"`
+	// Again also looks at PRs a retro already looked at.
+	Again bool `json:"again,omitempty"`
+	// Lookback replaces [learn] lookback (config.ParseDuration: "14d").
+	Lookback string `json:"lookback,omitempty"`
+}
+    RetroPayload is a `magnum retro` request: a retro now, whatever learn
+    enabled, daily_at and `magnum pause` say (a drain or an infrastructure pause
+    still holds it).
+
+type RetroRun struct {
+	ID  string
+	Dir string
+}
+    RetroRun is one retro: its id and directory (learn/retro/<id>).
+
+type RetroSummary struct {
+	Run        string    `json:"run"` // its directory under learn/retro
+	At         time.Time `json:"at"`
+	Finished   time.Time `json:"finished"`
+	PRs        int       `json:"prs"`        // PRs looked at
+	Classified int       `json:"classified"` // PRs whose candidates were classified
+	Misses     int       `json:"misses"`     // candidates classified as a miss
+	Caught     int       `json:"caught"`     // comments magnum had already posted
+	Failed     int       `json:"failed"`     // PRs that failed
+	Stopped    string    `json:"stopped,omitempty"`
+}
+    RetroSummary is what the last retro did (KVRetroLast).
 
 type ReviewPayload struct {
 	PRTarget
@@ -4440,11 +4599,14 @@ subprocess run through execx.Runner, so the identity is chosen by the client's
 env (GH_CONFIG_DIR per identity), tests script gh with execx.Fake and --dry-run
 turns writes into no-ops.
 
-Reads use GraphQL (`gh api graphql --input -`): the per-owner Radar poll (a
-user or an organization), batched Details, ConfirmStates for PRs that left the
-OPEN list, and ReviewsWithMarker for verification. REST is used where only
-REST carries the data (ReviewREST: the "[bot]"-suffixed author login; Compare:
-the size of an arbitrary base...head range) and for writes (DismissReview).
+Reads use GraphQL (`gh api graphql --input -`): the per-owner Radar poll (a user
+or an organization), batched Details, ConfirmStates for PRs that left the OPEN
+list, ReviewsWithMarker for verification, and Reviews and ReviewThreads for the
+whole conversation of one pull request. REST is used where only REST carries the
+data (ReviewREST: the "[bot]"-suffixed author login; Compare and CompareFiles:
+the size and the patches of an arbitrary base...head range; FileAt: the raw
+content of a file at a ref, a response that is bytes and not JSON) and for
+writes (DismissReview).
 
 GraphQL partial errors are tolerated only for NOT_FOUND paths, which the
 batched calls report as missing numbers; any other error fails the whole call,
@@ -4470,6 +4632,9 @@ const CompareFileLimit = 300
     CompareFileLimit is the most files GitHub lists for one comparison;
     a comparison listing exactly this many is treated as truncated.
 
+const FileAtLimit = 512 << 10
+    FileAtLimit caps FileAt: a larger file is not returned.
+
 
 VARIABLES
 
@@ -4480,6 +4645,10 @@ var (
 	ErrRateLimited  = errors.New("github: rate limited")
 )
     Errors matched by *APIError through errors.Is.
+
+var ErrFileTooLarge = errors.New("github: file too large")
+    ErrFileTooLarge matches FileAt's error for a file above FileAtLimit; callers
+    skip such a file.
 
 
 FUNCTIONS
@@ -4590,6 +4759,13 @@ func (c *Client) CompareFiles(ctx context.Context, owner, repo, base, head strin
     the first page carries the whole file list, at most CompareFileLimit files).
     A missing repository or commit is an error matching ErrNotFound.
 
+func (c *Client) CompareFilesStatus(ctx context.Context, owner, repo, base, head string) (string, []FileDelta, error)
+    CompareFilesStatus is CompareFiles that also returns the comparison's
+    status as GitHub reports it: "ahead" (head descends from base), "identical",
+    "behind" (base descends from head) or "diverged". The file list is three-dot
+    (head's changes since the merge base), so only "ahead" and "identical" make
+    it the difference between base and head.
+
 func (c *Client) ConfirmStates(ctx context.Context, owner, repo string, numbers []int) (map[int]PRState, []int, error)
     ConfirmStates reads state/merged/mergedAt/closedAt/headRefOid for pull
     requests that disappeared from the radar's OPEN list. Numbers GitHub cannot
@@ -4621,6 +4797,19 @@ func (c *Client) DismissReview(ctx context.Context, owner, repo string, number i
     /repos/{o}/{r}/pulls/{n}/reviews/{id}/dismissals) as the client's identity.
     It is marked Mutates, so execx.DryRun only plans it. A missing permission is
     an error matching ErrForbidden; callers report it and do not retry.
+
+func (c *Client) FileAt(ctx context.Context, owner, repo, path, ref string) ([]byte, error)
+    FileAt reads the raw content of path at ref (a commit SHA, a branch
+    or a tag): GET /repos/{o}/{r}/contents/{path}?ref={ref} with Accept:
+    application/vnd.github.raw. The bytes come back verbatim; an empty file
+    is an empty, non-nil slice. path is relative to the repository root
+    ("app/models/order.rb"): empty, "." and ".." segments, backslashes and NULs
+    are refused before any call, as is a ref that is not a plain ref name or
+    SHA (the shape Compare accepts, without ".."). Call it only for paths that
+    name files (a diff does): what GitHub answers for a directory is not file
+    content. A missing file, ref or repository is an error matching ErrNotFound;
+    a file above FileAtLimit an error matching ErrFileTooLarge (checked on the
+    bytes received).
 
 func (c *Client) LastRateLimit() RateLimit
     LastRateLimit returns the most conservative rate-limit snapshot seen by
@@ -4669,8 +4858,16 @@ func (c *Client) ReviewREST(ctx context.Context, owner, repo string, number int,
 func (c *Client) ReviewThreads(ctx context.Context, owner, repo string, number int) ([]Thread, error)
     ReviewThreads lists the inline review threads of a pull request with
     their comments, oldest thread first (at most threadsMaxPages pages of
-    threadsPageSize threads, threadCommentsMax comments each). A missing
-    repository or pull request is an error matching ErrNotFound.
+    threadsPageSize threads, threadCommentsMax comments each). The diff hunk
+    and the original commit are read once per thread, for its first comment only
+    (see ThreadComment), so replies cost no hunk. A missing repository or pull
+    request is an error matching ErrNotFound.
+
+func (c *Client) Reviews(ctx context.Context, owner, repo string, number int) ([]Review, error)
+    Reviews lists every review of a pull request, oldest first: reviewsPageSize
+    (100) per page, at most reviewsMaxPages (5) pages (later reviews beyond that
+    are left out). A missing repository or pull request is an error matching
+    ErrNotFound.
 
 func (c *Client) ReviewsWithMarker(ctx context.Context, owner, repo string, number int, marker string) ([]Review, error)
     ReviewsWithMarker returns the last 30 reviews of a pull request whose
@@ -4879,10 +5076,20 @@ type Reviewer struct {
 type Thread struct {
 	ID           string // GraphQL node id (PRRT_…)
 	Path         string
-	Line         int // 0 when GitHub reports none (an outdated thread)
-	OriginalLine int // the line the thread was started on
-	Resolved     bool
-	Outdated     bool
+	Line         int // 0 when GitHub reports none (an outdated thread); the last line of a multi-line thread
+	OriginalLine int // the line the thread was started on (the last line of a multi-line range)
+	// StartLine is the first line of a multi-line thread's range, so the
+	// thread covers StartLine..Line; 0 for a single-line thread (and when
+	// GitHub reports none, as for an outdated thread). OriginalStartLine is
+	// the same for the range the thread was started on (OriginalLine is its
+	// last line).
+	StartLine         int
+	OriginalStartLine int
+	// DiffSide is the side of the diff the thread is on: "RIGHT" (the
+	// new file's lines) or "LEFT" (deleted lines, numbered in the old file).
+	DiffSide string
+	Resolved bool
+	Outdated bool
 	// Comments are oldest first; Comments[0] started the thread and the rest
 	// are its replies. At most threadCommentsMax per thread.
 	Comments []ThreadComment
@@ -4897,6 +5104,14 @@ type ThreadComment struct {
 	URL         string
 	CreatedAt   time.Time
 	ReviewID    int64 // the review the comment belongs to; 0 when unknown
+	// OriginalCommitOid is the commit the comment was made on, and DiffHunk
+	// the diff hunk it was made on (the lines around the commented one, as
+	// they were then). Both are set on a thread's first comment (Comments[0])
+	// only, the comment that anchors the thread; replies carry neither, and
+	// OriginalCommitOid is "" when GitHub reports no commit (it is
+	// gone).
+	OriginalCommitOid string
+	DiffHunk          string
 }
     ThreadComment is one comment of a review thread.
 
@@ -6468,6 +6683,241 @@ const (
 )
 ```
 
+## learn
+
+```text
+package learn // import "github.com/zhuravel/magnum/internal/learn"
+
+Package learn is the deterministic half of the retro (DECISIONS "Learning loop:
+daily retro"): after a pull request magnum reviewed closes, Build turns what
+other reviewers said about it into candidates for a classifier, after dropping
+what cannot be a miss (the author's and magnum's own comments, short approvals,
+comments on code magnum never saw, findings magnum already posted), and
+ParseOutput reads the classifier's answer back, refusing anything off schema and
+any lesson that retells the pull request instead of teaching (ScrubLesson).
+
+The package is pure: it starts no process and touches no network or registry.
+The engine reads GitHub and the registry and hands the data in; the one
+comparison Build may need is a function of Input.
+
+CONSTANTS
+
+const (
+	KindThread = store.MissSourceThread
+	KindReview = store.MissSourceReview
+)
+    Candidate kinds (store.MissSourceThread, store.MissSourceReview).
+
+const (
+	CandidatesFile = "candidates.json" // what Build kept, for the classifier
+	OutputFile     = "retro.json"      // the classifier's answer (ParseOutput)
+	FilesDir       = "files"           // the commented files: files/<sha12>/<path>
+)
+    Files of a pull request's retro directory.
+
+const (
+	TitleMax   = 80  // runes
+	MatchMax   = 3   // patterns per miss
+	PatternMax = 120 // bytes per pattern
+)
+    Limits of the classifier's answer.
+
+const (
+	LessonIssueRef  = "issue_ref"  // a pull request or issue number (#123)
+	LessonURL       = "url"        // a link
+	LessonLogin     = "login"      // a login of the pull request, with or without "@"
+	LessonNamesRepo = "names_repo" // the repository's owner or name, in a general lesson
+)
+    Why ScrubLesson dropped a lesson (the reason of a lesson_rejected event).
+
+const NearLines = 3
+    NearLines is how far, in lines, a comment may be from one of magnum's
+    findings on the same path and still be about it.
+
+
+FUNCTIONS
+
+func FilePath(sha, p string) string
+    FilePath is where the copy of path at sha lives under a retro directory's
+    files: files/<sha12>/<path>, slash-separated.
+
+func ParseOutput(data []byte, cands []Candidate) (map[string]Item, error)
+    ParseOutput reads the classifier's answer for cands: one item per candidate,
+    no other id, a known class; a miss also has a severity (P0 to P3), a title
+    of at most TitleMax runes, a lesson, a scope (repo or general), lines [from,
+    to] with 1 <= from <= to and one to MatchMax patterns of at most PatternMax
+    bytes that compile as case-insensitive Go regular expressions. Only a miss
+    keeps those fields: the other classes keep their id and class. The error
+    names ids and fields, never the classifier's text, so it can go back into a
+    prompt.
+
+func ScrubLesson(lesson, scope string, people, own, repo []string) (string, string)
+    ScrubLesson returns lesson when it teaches without retelling the pull
+    request, else "" and why (Lesson*): a pull request or issue reference
+    (#123), a URL, one of people (the author's and the reviewers' logins),
+    with or without "@", or an @mention of one of own (magnum's logins,
+    whose bare name is often the organization's); a "[bot]" suffix is ignored,
+    and "@" before anything else is code (@property, @Transactional). A lesson
+    of scope general may not name the repository's owner or name either (repo),
+    backticks or not, since general lessons can reach the public judge skill;
+    a repo lesson goes to that repository's own notes and may. Words match whole
+    and case-insensitively.
+
+func WriteFileAtomic(root *os.Root, name string, data []byte) error
+    WriteFileAtomic writes data to name inside root: a temporary file next
+    to it, then a rename, so a reader never sees half a file. name comes from
+    GitHub (a commented path), and root confines it to the retro directory.
+
+
+TYPES
+
+type Candidate struct {
+	ID       string `json:"id"`
+	Kind     string `json:"kind"` // KindThread | KindReview
+	URL      string `json:"url"`
+	Reviewer string `json:"reviewer"` // Account form
+	// Path and the line range [StartLine, Line] are where an inline comment
+	// sits in the file at ReviewedSHA (both 0 for a file comment, and for a
+	// comment on deleted lines, Side "LEFT", whose lines are the old
+	// file's); a review body has neither.
+	Path      string `json:"path,omitempty"`
+	StartLine int    `json:"start_line,omitempty"`
+	Line      int    `json:"line,omitempty"`
+	Side      string `json:"side,omitempty"` // the diff side: RIGHT, or LEFT for deleted lines
+	// ReviewedSHA is the commit magnum reviewed that the comment applies
+	// to: the comment's own commit, or a reviewed commit since which the
+	// commented file did not change. CommentSHA is the commit the comment
+	// was made on.
+	ReviewedSHA string    `json:"reviewed_sha"`
+	CommentSHA  string    `json:"comment_sha,omitempty"`
+	DiffHunk    string    `json:"diff_hunk,omitempty"`
+	Body        string    `json:"body"`
+	CreatedAt   time.Time `json:"created_at"`
+	// Raised is store.MissRaisedRejected when the judge raised a finding
+	// near the comment and rejected it (FindingRef "<run id>/<finding id>",
+	// ReasonCode its reason), else store.MissRaisedNone.
+	Raised     string `json:"raised"`
+	FindingRef string `json:"finding_ref,omitempty"`
+	ReasonCode string `json:"reason_code,omitempty"`
+	// File is the commented file at ReviewedSHA, relative to the candidates
+	// file's directory; FileSkipped says why there is no copy. The engine
+	// fills both.
+	File        string `json:"file,omitempty"`
+	FileSkipped string `json:"file_skipped,omitempty"`
+}
+    Candidate is one comment of another reviewer for the classifier: the root
+    comment of a review thread ("t<comment id>") or the body of a review
+    ("r<review id>").
+
+func (c Candidate) Lines() []int
+    Lines is the candidate's line range as [from, to] (nil without a line).
+
+type Candidates struct {
+	PR           string      `json:"pr"`            // the pull request's URL
+	ReviewedSHAs []string    `json:"reviewed_shas"` // what magnum reviewed, oldest first
+	FilesDir     string      `json:"files_dir"`     // relative to the file's directory
+	Candidates   []Candidate `json:"candidates"`
+}
+    Candidates is the candidates file.
+
+func ReadCandidates(p string) (Candidates, error)
+    ReadCandidates reads a candidates file.
+
+type Comparison struct {
+	// Descendant: the later commit descends from the reviewed one (GitHub's
+	// status "ahead" or "identical"). The file list is three-dot, so only
+	// then is it the difference between the two: for an older commit or a
+	// history a force push replaced it lists nothing that matters.
+	Descendant bool
+	// Paths are the files that differ (renames under both names); Complete
+	// is false when GitHub cut the list.
+	Paths    []string
+	Complete bool
+}
+    Comparison is what Build needs of GitHub's comparison of two commits.
+
+type Input struct {
+	// Author is the pull request's author in Account form
+	// (github.Account): its own comments are never candidates.
+	Author string
+	// Reviewed are the commits magnum reviewed; their order does not matter.
+	Reviewed []Reviewed
+	// Own are magnum's logins in Account form: every configured identity's,
+	// and the ones the pull request's reviews were posted as.
+	Own []string
+	// Threads and Reviews are the pull request's review threads and
+	// reviews as GitHub reports them.
+	Threads []github.Thread
+	Reviews []github.Review
+	// Findings are the judge's findings of the pull request
+	// (store.Store.FindingsByPR): a posted one near a comment means magnum
+	// caught it; a rejected one, that magnum raised it and let it go.
+	Findings []store.Finding
+	// MinChars drops a comment whose text, without quotes and code blocks,
+	// is shorter.
+	MinChars int
+	// IncludeBots counts comments of bot accounts other than magnum's.
+	IncludeBots bool
+	// Compare compares a reviewed commit with a later one (GitHub's
+	// comparison). Build asks it only for an inline comment on a commit
+	// magnum did not review; nil means no comparison, so such a comment is
+	// outside.
+	Compare func(from, to string) (Comparison, error)
+}
+    Input is everything Build reads about one pull request.
+
+type Item struct {
+	ID       string   `json:"id"`
+	Class    string   `json:"class"`
+	Severity string   `json:"severity,omitempty"`
+	Title    string   `json:"title,omitempty"`
+	Lesson   string   `json:"lesson,omitempty"`
+	Scope    string   `json:"scope,omitempty"`
+	Lines    []int    `json:"lines,omitempty"`
+	Match    []string `json:"match,omitempty"`
+}
+    Item is the classifier's verdict on one candidate.
+
+type Output struct {
+	Items []Item `json:"items"`
+}
+    Output is the classifier's answer file.
+
+type Result struct {
+	// Candidates are the comments to classify, Outside the ones about code
+	// magnum did not review, stored as such without a classifier.
+	Candidates []Candidate
+	Outside    []Candidate
+	// Caught counts comments near a finding magnum posted, Dropped the
+	// comments too short or only an approval. Neither is stored.
+	Caught, Dropped int
+}
+    Result is what Build made of a pull request.
+
+func Build(in Input) (Result, error)
+    Build makes the candidates of a pull request: the root comment of every
+    review thread and the body of every review by another reviewer (not the
+    author, not one of magnum's logins, not a bot unless IncludeBots). Replies
+    are never candidates.
+
+    A comment shorter than MinChars without its quotes and code blocks, or that
+    only approves, is dropped. One near a finding magnum posted on the same path
+    is caught; one near a rejected finding is raised (a comment on deleted lines
+    has no line, so neither). A comment made on a reviewed commit applies to it;
+    an inline comment on another commit applies to the newest commit magnum
+    reviewed before the comment when that commit descends from the reviewed
+    one and the commented file did not change between the two (Compare), and is
+    outside otherwise, as is a review body on a commit magnum did not review.
+    Only a failing Compare is an error.
+
+type Reviewed struct {
+	SHA string
+	At  time.Time // when the review was posted
+}
+    Reviewed is a commit magnum posted a review of.
+
+```
+
 ## mysqlx
 
 ```text
@@ -6967,6 +7417,10 @@ func (l Layout) GhRoot() string
 func (l Layout) Installed() (Layout, error)
     Installed is l moved to the XDG data and state directories (what Resolve
     picks once the registry lives there); Home, UserConfig and Exe stay.
+
+func (l Layout) Learn() string
+    Learn is where the learning loop keeps its inputs and outputs: the retro's
+    runs live under Learn()/retro/<run>/.
 
 func (l Layout) Lock() string
 
@@ -8175,6 +8629,51 @@ const (
     them as string literals. Values are never secrets.
 
 const (
+	RetroNothing      = "nothing" // no candidate: nothing to classify
+	RetroClassified   = "classified"
+	RetroUnclassified = "unclassified" // candidates stored without a classifier
+	RetroFailed       = "failed"
+)
+    Retro outcomes per PR (retro_prs.status).
+
+const (
+	MissUnclassified = "unclassified"
+	MissMiss         = "miss"
+	MissNotIssue     = "not_issue"
+	MissStyle        = "style"
+	MissOutside      = "outside"
+)
+    Miss classes (misses.class).
+
+const (
+	MissSourceThread = "thread"
+	MissSourceReview = "review"
+)
+    Miss sources (misses.source_kind): a review thread or a review body.
+
+const (
+	MissRaisedNone     = "none"
+	MissRaisedRejected = "rejected"
+)
+    What magnum did with the point of a miss (misses.raised): it never raised
+    it, or raised it and the judge rejected it.
+
+const (
+	MissNew       = "new"
+	MissUsed      = "used"
+	MissDismissed = "dismissed"
+)
+    Miss states (misses.state): new until a lesson was drawn from it (used) or
+    someone dropped it (dismissed).
+
+const (
+	MissScopeRepo    = "repo"
+	MissScopeGeneral = "general"
+)
+    Miss scopes (misses.scope): a lesson for the PR's repository or for every
+    repository.
+
+const (
 	RepoModePool  = "pool"
 	RepoModePerPR = "per_pr"
 )
@@ -8312,6 +8811,10 @@ const (
 )
     Verdicts: what a review concluded, whatever its repository lets it post
     (ReviewSummary.Verdict).
+
+const RetroMaxAttempts = 3
+    RetroMaxAttempts is how many retros in a row may fail on a PR before the
+    retro gives it up (RetroDue; `magnum retro --again` still takes it).
 
 const TeamReviewerPrefix = "team:"
     TeamReviewerPrefix marks a team in requested_reviewers_json ("team:<slug>").
@@ -8677,6 +9180,42 @@ type LatestReview struct {
     LatestReview is one entry of prs.latest_reviews_json: GitHub's latest review
     of one reviewer.
 
+type Miss struct {
+	ID          int64     `json:"id"`
+	PRID        int64     `json:"pr_id"`
+	SourceURL   string    `json:"source_url"`  // GitHub's link to the comment; the key UpsertMiss stores by
+	SourceKind  string    `json:"source_kind"` // MissSourceThread | MissSourceReview
+	Reviewer    string    `json:"reviewer"`
+	Path        string    `json:"path,omitempty"`
+	Line        int       `json:"line,omitempty"` // 0 = none (a comment on the review body)
+	ReviewedSHA string    `json:"reviewed_sha"`   // the commit magnum's review covered
+	Class       string    `json:"class"`          // Miss* class
+	Severity    string    `json:"severity,omitempty"`
+	Raised      string    `json:"raised"`                // MissRaisedNone | MissRaisedRejected
+	FindingRef  string    `json:"finding_ref,omitempty"` // the rejected finding: "<run id>/<finding id>" (findings)
+	ReasonCode  string    `json:"reason_code,omitempty"` // why the judge rejected it
+	Title       string    `json:"title,omitempty"`
+	Lesson      string    `json:"lesson,omitempty"`
+	Scope       string    `json:"scope,omitempty"` // MissScopeRepo | MissScopeGeneral
+	Lines       []int     `json:"lines"`           // lines_json
+	Match       []string  `json:"match"`           // match_json
+	State       string    `json:"state"`           // MissNew | MissUsed | MissDismissed
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+	// Repo ("owner/name") and Number name the miss's PR; Misses fills them.
+	Repo   string `json:"repo,omitempty"`
+	Number int    `json:"number,omitempty"`
+}
+    Miss is a comment another reviewer made on a PR magnum reviewed, with what
+    the retro made of it (misses).
+
+type MissFilter struct {
+	Classes []string // empty = every class
+	States  []string // empty = every state
+	PRID    int64    // 0 = every PR
+}
+    MissFilter selects misses; zero values select everything.
+
 type Options struct {
 	// BeforeMigrate, when set, runs before pending migrations are applied,
 	// with the file's schema version and this binary's. An error refuses the
@@ -8822,6 +9361,26 @@ type RequiredChecks struct {
 }
     RequiredChecks is the list of checks a repository's PRs must pass to be
     ready, and where it comes from.
+
+type RetroPR struct {
+	PRID       int64     `json:"pr_id"`
+	RetroAt    time.Time `json:"retro_at"`
+	Day        string    `json:"day"` // DayKey of the retro
+	Status     string    `json:"status"`
+	Candidates int       `json:"candidates"`
+	Error      string    `json:"error,omitempty"`
+	// Attempts counts the retros in a row that failed on the PR (0 once
+	// one did not); RecordRetroPR keeps it.
+	Attempts int `json:"attempts"`
+}
+    RetroPR is one PR's retro record (retro_prs).
+
+type RetroQuery struct {
+	Since time.Time // closed or merged at or after Since (ignored when PRIDs is set)
+	Again bool      // also PRs that already have a retro_prs row
+	PRIDs []int64   // only these PRs, whenever they closed
+}
+    RetroQuery selects the PRs a retro looks at.
 
 type ReviewRequest struct {
 	At time.Time `json:"at"`
@@ -9064,6 +9623,9 @@ func (s *Store) CompleteRequest(ctx context.Context, id int64, state, result str
     CompleteRequest marks a pending request done or failed with a result
     message. Completing a request twice is ErrConflict.
 
+func (s *Store) CountMisses(ctx context.Context, f MissFilter) (int, error)
+    CountMisses counts the misses f selects.
+
 func (s *Store) CreateRun(ctx context.Context, r Run) (Run, error)
     CreateRun inserts a run and returns it. Role is any non-empty name. An empty
     ID is generated as "r-<UTC yyyymmddThhmmss>-<n>"; CreatedAt defaults to now.
@@ -9109,6 +9671,10 @@ func (s *Store) EvictableSlots(ctx context.Context, repoFullName string, now tim
     at least minWarm, PR not pinned and no human activity within minWarm,
     no active run, and no live session that is working, blocked or was prompted
     (or started) within minWarm.
+
+func (s *Store) FindingsByPR(ctx context.Context, prID int64) ([]Finding, error)
+    FindingsByPR returns the findings recorded for prID, oldest first
+    (created_at, id); Repo is left empty.
 
 func (s *Store) FindingsSince(ctx context.Context, since time.Time) ([]Finding, error)
     FindingsSince returns the findings recorded at or after since, oldest first,
@@ -9168,6 +9734,10 @@ func (s *Store) MarkSlotDatabaseDropped(ctx context.Context, dbName, by string) 
     MarkSlotDatabaseDropped records that dbName was dropped (by = who: a cleanup
     plan id, "cleanup", "reconcile", …).
 
+func (s *Store) Misses(ctx context.Context, f MissFilter) ([]Miss, error)
+    Misses returns the misses f selects, newest first, each with its PR's
+    repository and number.
+
 func (s *Store) NextPendingRequest(ctx context.Context) (Request, error)
     NextPendingRequest returns the oldest pending request, or ErrNotFound.
 
@@ -9214,6 +9784,13 @@ func (s *Store) RecordFindings(ctx context.Context, runID string, prID int64, ro
     needs a FindingID unique within fs and a verdict of FindingPosted or
     FindingRejected.
 
+func (s *Store) RecordRetroPR(ctx context.Context, r RetroPR) error
+    RecordRetroPR stores r as the retro record of r.PRID, replacing an
+    earlier one. A zero RetroAt is now and an empty Day is DayKey(RetroAt);
+    Status must be one of the Retro* values. An empty Error is stored as NULL.
+    Attempts is not taken from r: a failed status adds one to the PR's count,
+    any other sets it to 0.
+
 func (s *Store) ReleaseSlot(ctx context.Context, slotID int64, from []string, to, reason string) error
     ReleaseSlot atomically moves slot slotID from one of from to state to,
     clears its pr_id and closes its open assignment (if any) with reason.
@@ -9233,6 +9810,17 @@ func (s *Store) RequiredChecks(ctx context.Context, fullName string, configured 
     GitHub's as the poller last read them (Source "" and no checks when GitHub
     would not tell or was never asked). GitHub requiring nothing is Source
     RequiredFromGitHub with no checks.
+
+func (s *Store) RetroDue(ctx context.Context, q RetroQuery) ([]PR, error)
+    RetroDue lists the PRs due for a retro, newest closed first: merged or
+    closed, closed (closed_at, else merged_at) at or after q.Since unless
+    q.PRIDs names the PRs, with at least one run that posted a review, and
+    unless q.Again without a retro record, or with a failed one of fewer than
+    RetroMaxAttempts attempts.
+
+func (s *Store) RetroPRByID(ctx context.Context, prID int64) (RetroPR, error)
+    RetroPRByID returns the retro record of prID, or an error matching
+    ErrNotFound when the PR has none.
 
 func (s *Store) RoleRanBefore(ctx context.Context, prID int64, role string) (bool, error)
     RoleRanBefore reports whether a PR already has an ended or verified run
@@ -9333,6 +9921,18 @@ func (s *Store) UpdateSession(ctx context.Context, id int64, set func(*SessionUp
 
 func (s *Store) UpdateSlotFields(ctx context.Context, id int64, set func(*SlotUpdate)) error
     UpdateSlotFields changes non-state columns of slot id.
+
+func (s *Store) UpsertMiss(ctx context.Context, m Miss) (Miss, error)
+    UpsertMiss stores m by SourceURL and returns the stored row. A new miss is
+    inserted (an empty State is MissNew); an existing one is updated in place
+    and keeps its id, state and created_at, so running the retro again never
+    brings back a dismissed or used miss. Every other column takes m's value,
+    except that an unclassified m (a retro whose classifier failed) never
+    replaces a class an earlier retro set, nor what came with it (severity,
+    title, lesson, scope, lines, match). Empty Class is MissUnclassified,
+    empty Raised is MissRaisedNone, nil Lines and Match are empty lists, and ""
+    or 0 in an optional column is stored as NULL. PRID, SourceURL, SourceKind,
+    Reviewer and ReviewedSHA are required.
 
 func (s *Store) UpsertPRFromGitHub(ctx context.Context, in GitHubPR) (PRUpsert, error)
     UpsertPRFromGitHub inserts a PR (state InitialState, head_changed_at now)

@@ -226,11 +226,14 @@ func TestEveryCommandPinsHostname(t *testing.T) {
 	_, _, _ = c.Details(ctx, "talkable", "talkable", []int{1})
 	_, _, _ = c.ConfirmStates(ctx, "talkable", "talkable", []int{1})
 	_, _ = c.ReviewsWithMarker(ctx, "talkable", "talkable", 1, "")
+	_, _ = c.Reviews(ctx, "talkable", "talkable", 1)
+	_, _ = c.ReviewThreads(ctx, "talkable", "talkable", 1)
 	_, _ = c.ReviewREST(ctx, "talkable", "talkable", 1, 2)
 	_, _ = c.Compare(ctx, "talkable", "talkable", cmpBase, cmpHead)
+	_, _ = c.FileAt(ctx, "talkable", "talkable", "app/a.rb", cmpHead)
 	_ = c.DismissReview(ctx, "talkable", "talkable", 1, 2, "m")
-	if len(f.Calls) != 7 {
-		t.Fatalf("calls = %d, want 7", len(f.Calls))
+	if len(f.Calls) != 10 {
+		t.Fatalf("calls = %d, want 10", len(f.Calls))
 	}
 	for _, cmd := range f.Calls {
 		if !hostPinned(cmd.Args) {

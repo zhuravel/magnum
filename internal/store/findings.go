@@ -99,26 +99,48 @@ func (s *Store) FindingsSince(ctx context.Context, since time.Time) ([]Finding, 
 	if err != nil {
 		return nil, fmt.Errorf("findings since %s: %w", FormatTime(since), err)
 	}
-	out, err := collect(rows, func(sc scanner) (Finding, error) {
-		var f Finding
-		var sev, path, reason sql.NullString
-		var line sql.NullInt64
-		var src string
-		err := sc.Scan(&f.ID, &f.RunID, &f.PRID, &f.Round, &f.FindingID, &sev, &path, &line, &src, &f.Verdict,
-			&reason, timeCol(&f.CreatedAt), &f.Repo)
-		if err != nil {
-			return f, err
-		}
-		f.Severity, f.Path, f.ReasonCode, f.Line = sev.String, path.String, reason.String, int(line.Int64)
-		if err := json.Unmarshal([]byte(src), &f.Sources); err != nil {
-			return f, fmt.Errorf("finding %d: sources: %w", f.ID, err)
-		}
-		return f, nil
-	})
+	out, err := collect(rows, func(sc scanner) (Finding, error) { return scanFinding(sc, true) })
 	if err != nil {
 		return nil, fmt.Errorf("findings since %s: %w", FormatTime(since), err)
 	}
 	return out, nil
+}
+
+// FindingsByPR returns the findings recorded for prID, oldest first
+// (created_at, id); Repo is left empty.
+func (s *Store) FindingsByPR(ctx context.Context, prID int64) ([]Finding, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT "+cols("", findingColumns)+
+		" FROM findings WHERE pr_id = ? ORDER BY created_at, id", prID)
+	if err != nil {
+		return nil, fmt.Errorf("findings of pr %d: %w", prID, err)
+	}
+	out, err := collect(rows, func(sc scanner) (Finding, error) { return scanFinding(sc, false) })
+	if err != nil {
+		return nil, fmt.Errorf("findings of pr %d: %w", prID, err)
+	}
+	return out, nil
+}
+
+// scanFinding scans a row of findingColumns, followed by the PR's repository
+// when withRepo is set.
+func scanFinding(sc scanner, withRepo bool) (Finding, error) {
+	var f Finding
+	var sev, path, reason sql.NullString
+	var line sql.NullInt64
+	var src string
+	dest := []any{&f.ID, &f.RunID, &f.PRID, &f.Round, &f.FindingID, &sev, &path, &line, &src, &f.Verdict, &reason,
+		timeCol(&f.CreatedAt)}
+	if withRepo {
+		dest = append(dest, &f.Repo)
+	}
+	if err := sc.Scan(dest...); err != nil {
+		return f, err
+	}
+	f.Severity, f.Path, f.ReasonCode, f.Line = sev.String, path.String, reason.String, int(line.Int64)
+	if err := json.Unmarshal([]byte(src), &f.Sources); err != nil {
+		return f, fmt.Errorf("finding %d: sources: %w", f.ID, err)
+	}
+	return f, nil
 }
 
 // nullString stores "" as NULL.

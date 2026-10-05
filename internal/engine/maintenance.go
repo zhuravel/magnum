@@ -189,11 +189,13 @@ func (e *Engine) reconcile(ctx context.Context) error {
 
 // prune applies [daemon] keep_events and keep_requests (store.Prune): the
 // audit events and handled requests older than them are deleted, once per
-// reconcile. A dry run keeps everything.
+// reconcile; so are the retro's run directories past their 30 days
+// (pruneRetro). A dry run keeps everything.
 func (e *Engine) prune(ctx context.Context) error {
 	if e.d.DryRun {
 		return nil
 	}
+	e.pruneRetro()
 	keepEvents, keepRequests := e.cfg.Daemon.KeepEvents.Duration, e.cfg.Daemon.KeepRequests.Duration
 	if keepEvents <= 0 && keepRequests <= 0 {
 		return nil
