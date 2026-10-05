@@ -40,7 +40,7 @@ func (p prbPainter) helpContent(width int) []string {
 	acts := section("Act on the PR", []hint{
 		{"r", "review now (asks y/N); post-merge if merged"}, {"R", "fresh review in new agent sessions (asks y/N)"},
 		{"i", "review with /simplify (asks y/N)"}, {"o", "open the " + judgeName(p.judge) + " pane"},
-		{"b / t", "open the PR / its issue in the browser"}, {"p / u", "pin / unpin"}, {"M / U", "mute / unmute (asks y/N)"},
+		{"b / t", "open the PR / its issue in the browser"}, {"p / u", "pin / unpin"}, {"M / U", "mute / unmute (asks y/N); merged: dismiss flag"},
 		{"x", "release (asks y/N)"}, {"K", "kill the running review (asks y/N)"},
 		{"I", "ignore: kill, mute, free slot; U undoes"}, {"A / C", "approve / request changes (asks y/N)"}, {"a", "jump to what needs attention"},
 		{"y", "answer yes; any other key, enter too, cancels"},
@@ -192,6 +192,9 @@ func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
 		for _, l := range strings.Split(lipgloss.NewStyle().Width(inner).Render(p.mergedUnreviewedSentence(r)), "\n") {
 			add(p.pal.red.Render(l))
 		}
+	}
+	if r.FlagDismissed {
+		add(p.st.Dim.Render(truncate(flagDismissedNote, inner)))
 	}
 	add("")
 
@@ -398,6 +401,16 @@ func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
 	if r.IssueURL == "" {
 		acts = slices.DeleteFunc(acts, func(h hint) bool { return h.key == "t" })
 	}
+	switch act, _ := muteActFor(r.GHState, r.MergedUnreviewed, r.FlagDismissed); act {
+	case muteDismiss, muteRestore:
+		for i := range acts {
+			if acts[i].key == "M" {
+				acts[i].desc = map[muteAct]string{muteDismiss: "dismiss merged flag", muteRestore: "restore merged flag"}[act]
+			}
+		}
+	case muteNothing: // M only says there is nothing to mute
+		acts = slices.DeleteFunc(acts, func(h hint) bool { return h.key == "M" })
+	}
 	if normState(r.State) == "ignored" { // U undoes the ignore; ignoring again means nothing
 		acts = slices.DeleteFunc(acts, func(h hint) bool { return h.key == "I" })
 		for i := range acts {
@@ -412,6 +425,10 @@ func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
 	}
 	return lines
 }
+
+// flagDismissedNote is what the card of a merged PR muted after it merged
+// unreviewed says in place of the merged-unreviewed sentence.
+const flagDismissedNote = "merged-unreviewed flag dismissed (M restores it)"
 
 // mergedUnreviewedSentence says that GitHub merged r before magnum reviewed
 // its last push: when, the commit magnum reviewed last and the merged head.

@@ -993,3 +993,31 @@ editing history. Code, config comments and prompts reference these by their head
   and the lines per row in the frame's. Rejected: wrapping the title onto a second line (the columns
   still would not fit), a horizontal scroll (what scrolls off is never seen), and per-column visibility
   settings (one key covers the case).
+- **Mute on a merged PR dismisses its merged-unreviewed flag, and the stale forced mark is cleared**
+  (2026-10-05, after `M` on a recently merged row asked "stop automatic reviews of it?", which means nothing
+  for a PR that gets none, and could not even clear the flag of a PR that was forced before it merged).
+  **What the keys do**: on the board, the status dashboard and the right-click menu, `M` on a row merged
+  before its last push was reviewed asks "Dismiss the merged-unreviewed flag on <ref>? (r still runs a
+  post-merge review)" and sends the ordinary mute request on `y`; on a muted merged row that would be
+  flagged unmuted (`store.IsFlagDismissed`, `BoardRow.FlagDismissed`) it asks "Restore the merged-unreviewed
+  flag on <ref>?" and sends an unmute; on any other merged or closed row it asks nothing and flashes
+  "<ref> is merged: nothing to mute" (or closed); an open PR keeps its questions. The card of a dismissed
+  row says so in one dim line and offers `M` as the way back. **Why the daemon clears `forced`**:
+  `IsMergedUnreviewed` flags a muted PR only when it is forced, which is the review the user asked for while
+  the PR was open, and the mark outlives the close (a PR forced while queued closes, and is released, with
+  `forced = 1`), so a mute alone left the flag up. The mute handler therefore also clears `forced` when
+  GitHub's state of the PR is not OPEN, unless a post-merge round is due or running (queued,
+  rereview_pending, claiming, reviewing, verifying, paused): the dispatcher takes a merged PR only while it
+  is forced, so that round needs the mark. The clear is its own compare-and-set on the state the decision
+  read, so a post-merge review requested in between keeps its mark. An unmute never sets `forced` again, so
+  it brings the flag back. **Why not clear `forced` when the PR closes** (`confirmMissing`): for a PR muted
+  and forced while open the mark is the only thing that flags it once it merges (a review the user asked for
+  that the merge pre-empted), so clearing it there would change the flag's meaning; a reopen returns the PR
+  to its previous state with the mark, which keeps the user's pending request; and for an unmuted PR the
+  mark does nothing after the close (closed is not a claimable state, a post-merge review request sets it
+  itself), so clearing it would change nothing anyone sees. The round-end paths already clear it (posted,
+  dry run, failed, aborted). Rejected: a column for the dismissal (muted and not forced says it, and an
+  unmute restores the flag for free), clearing `forced` on every mute (on an open PR it is a pending request),
+  and keeping the old question on merged rows. Left as is: while a post-merge round is due or running the
+  mute keeps the mark and the flag stays until the round ends (`K` aborts it, then `M` dismisses), and `U`
+  still asks its old question on a merged row.

@@ -29,6 +29,14 @@ import (
 // merged it.
 func postMerge(pr store.PR) bool { return pr.GHState == store.GHMerged }
 
+// postMergeRoundStates are the states of a PR GitHub merged whose post-merge
+// round is due or running: the dispatcher holds a merged PR in them only while
+// it is forced, so a mute must leave the forced mark alone (requestMute). A
+// post-merge round that fails returns the PR to closed, never to
+// needs_attention, so that state is not one of them.
+var postMergeRoundStates = []string{store.PRQueued, store.PRRereviewPending, store.PRClaiming,
+	store.PRReviewing, store.PRVerifying, store.PRPaused}
+
 // postMergeRefusal is why `magnum review` of pr, which GitHub merged, is
 // refused ("" = it is not): its merged head was reviewed already, or cleanup
 // is releasing its checkout (releasing). A closed PR needs no such check:

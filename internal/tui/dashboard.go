@@ -92,6 +92,9 @@ type SlotRow struct {
 	Name, Folder, PRRef, PRState, SlotState, DBs, Disk string
 	URL                                                string // PR URL for b; optional (looked up in Queue by PRRef)
 	PRGHState                                          string // GitHub's state of the slot's PR: OPEN, CLOSED or MERGED; "" when unknown
+	// PRMergedUnreviewed and PRFlagDismissed are PRRow's MergedUnreviewed and
+	// FlagDismissed for the slot's PR; read with PRGHState.
+	PRMergedUnreviewed, PRFlagDismissed bool
 }
 
 // PRRow is one queued (or closing) PR; Ref is what actions receive.
@@ -99,6 +102,11 @@ type PRRow struct {
 	Ref, Title, Author, State, Next, Age, URL string
 	Review                                    *ReviewFacts // for the y/N question before a review; nil when unknown
 	GHState                                   string       // GitHub's state: OPEN, CLOSED or MERGED; "" when unknown
+	// MergedUnreviewed: GitHub merged the PR before magnum reviewed its last
+	// push; FlagDismissed: the PR was muted after that, so it is not flagged
+	// (store.IsMergedUnreviewed, store.IsFlagDismissed). M dismisses the one
+	// and restores the other.
+	MergedUnreviewed, FlagDismissed bool
 }
 
 // AttentionRow is something that needs the user.
@@ -527,8 +535,7 @@ func (m dashboardModel) listKey(k string) (dashboardModel, tea.Cmd) {
 	case "i":
 		return m.review("simplify review", ReviewOpts{Simplify: true})
 	case "M":
-		return m.askPR("mute", func(_ dashRow, ref string) string { return muteQuestion(ref, true) },
-			func(ctx context.Context, a DashboardActions, ref string) (string, error) { return a.Mute(ctx, ref) })
+		return m.mute()
 	case "U":
 		return m.askPR("unmute", func(_ dashRow, ref string) string { return muteQuestion(ref, false) },
 			func(ctx context.Context, a DashboardActions, ref string) (string, error) { return a.Unmute(ctx, ref) })
@@ -616,6 +623,32 @@ func (m dashboardModel) askPR(what string, question func(r dashRow, ref string) 
 	return m, cmd
 }
 
+// mute asks before muting the selected row's PR; for a PR GitHub merged or
+// closed it dismisses or restores the merged-unreviewed flag, or says there is
+// nothing to mute (see prBoardModel.mute).
+func (m dashboardModel) mute() (dashboardModel, tea.Cmd) {
+	r, ok := m.selected()
+	if !ok {
+		return m.fail("nothing selected")
+	}
+	gh, flagged, dismissed := m.mergeFacts(r)
+	switch act, state := muteActFor(gh, flagged, dismissed); act {
+	case muteNothing:
+		if ref := r.prRef(); ref != "" {
+			cmd := m.note(nothingToMute(ref, state))
+			return m, cmd
+		}
+	case muteDismiss:
+		return m.askPR("mute", func(_ dashRow, ref string) string { return dismissFlagQuestion(ref) },
+			func(ctx context.Context, a DashboardActions, ref string) (string, error) { return a.Mute(ctx, ref) })
+	case muteRestore:
+		return m.askPR("unmute", func(_ dashRow, ref string) string { return restoreFlagQuestion(ref) },
+			func(ctx context.Context, a DashboardActions, ref string) (string, error) { return a.Unmute(ctx, ref) })
+	}
+	return m.askPR("mute", func(_ dashRow, ref string) string { return muteQuestion(ref, true) },
+		func(ctx context.Context, a DashboardActions, ref string) (string, error) { return a.Mute(ctx, ref) })
+}
+
 // review asks before a review round, saying what it will do and what
 // changed since the last review; for a PR GitHub merged it asks the
 // post-merge question instead (the review only comments).
@@ -647,16 +680,24 @@ func (m dashboardModel) reviewFacts(r dashRow) string {
 // ghState is GitHub's state of the row's PR; a slot row without its own
 // reads its PR's queue row.
 func (m dashboardModel) ghState(r dashRow) string {
+	gh, _, _ := m.mergeFacts(r)
+	return gh
+}
+
+// mergeFacts is GitHub's state of the row's PR with whether it is flagged
+// merged unreviewed and whether that flag is dismissed; a slot row without
+// its own state reads them from its PR's queue row.
+func (m dashboardModel) mergeFacts(r dashRow) (gh string, flagged, dismissed bool) {
 	if r.pr != nil {
-		return r.pr.GHState
+		return r.pr.GHState, r.pr.MergedUnreviewed, r.pr.FlagDismissed
 	}
 	if r.slot.PRGHState != "" {
-		return r.slot.PRGHState
+		return r.slot.PRGHState, r.slot.PRMergedUnreviewed, r.slot.PRFlagDismissed
 	}
 	if q, ok := m.queueRow(r.prRef()); ok {
-		return q.GHState
+		return q.GHState, q.MergedUnreviewed, q.FlagDismissed
 	}
-	return ""
+	return "", false, false
 }
 
 // ghStateMerged reports whether a GitHub PR state (case aside) is MERGED.
@@ -1191,6 +1232,7 @@ func dashboardKeys(judge string) []hint {
 		{"p / u", "pin / unpin (the slot when it holds no PR)"},
 		{"x", "release (asks y/N)"},
 		{"M / U", "mute / unmute the PR (asks y/N)"},
+		{"M", "on a merged PR: dismiss / restore its merged-unreviewed flag (asks y/N)"},
 		{"K", "kill the PR's running review (asks y/N)"},
 		{"I", "ignore the PR: kill its review, mute it, free its slot (asks y/N)"},
 		{"a", "jump to the pane that needs attention"},

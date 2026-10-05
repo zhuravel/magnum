@@ -228,6 +228,22 @@ func unmuteItem(ok bool, st string) menuItem {
 	return menuItem{"unmute", "U", "U", ok}
 }
 
+// muteMenuItem is the menu's mute entry for what M does on the row (act). On
+// a PR GitHub merged or closed it says what M does there, dismiss or restore
+// the merged-unreviewed flag, and is dimmed when there is no flag to dismiss
+// or restore. acts: the row's actions can run; ask: the ordinary mute applies.
+func muteMenuItem(act muteAct, acts, ask bool) menuItem {
+	switch act {
+	case muteDismiss:
+		return menuItem{"dismiss merged flag", "M", "M", acts}
+	case muteRestore:
+		return menuItem{"restore merged flag", "M", "M", acts}
+	case muteNothing:
+		return menuItem{"mute", "M", "M", false}
+	}
+	return menuItem{"mute", "M", "M", ask}
+}
+
 // menuItems are the cursor row's actions as the menu lists them; the ones
 // that cannot apply to the row are dimmed.
 func (m prBoardModel) menuItems() []menuItem {
@@ -236,6 +252,7 @@ func (m prBoardModel) menuItems() []menuItem {
 	open := acts && isOpen(r)
 	review := open || acts && postMergeable(r)
 	st := normState(r.State)
+	mute, _ := muteActFor(r.GHState, r.MergedUnreviewed, r.FlagDismissed)
 	return []menuItem{
 		{"review", "r", "r", review},
 		{"fresh review", "R", "R", review},
@@ -250,7 +267,7 @@ func (m prBoardModel) menuItems() []menuItem {
 		{"pin", "p", "p", acts && !r.Pinned},
 		{"unpin", "u", "u", acts && r.Pinned},
 		{"release", "x", "x", acts && r.Slot != ""},
-		{"mute", "M", "M", acts && !r.Muted},
+		muteMenuItem(mute, acts, acts && !r.Muted),
 		unmuteItem(acts && r.Muted, st),
 		{"details", "enter", "enter", ok},
 		{"reset column widths", "W", "W", m.widths != prbWidths{}},

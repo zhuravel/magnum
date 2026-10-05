@@ -522,6 +522,15 @@ func (e *Engine) requestPin(ctx context.Context, p TargetPayload, pin bool) (str
 	return verb + " " + label, nil
 }
 
+// requestMute mutes or unmutes a PR. Muting a PR GitHub no longer lists as
+// open (merged or closed) also clears its forced mark, unless a post-merge
+// round is due or running: the mark a review request left on a PR that closed
+// before its round ran would keep the PR flagged merged unreviewed
+// (store.IsMergedUnreviewed counts a muted PR that is forced), and the mute is
+// how the user dismisses that flag. The clear is its own compare-and-set on the
+// state the decision read, so a post-merge review requested in between keeps
+// its mark. An unmute never sets the mark again: the flag comes back with the
+// PR unmuted.
 func (e *Engine) requestMute(ctx context.Context, p TargetPayload, mute bool) (string, error) {
 	repo, pr, err := e.resolve(ctx, p.PRTarget)
 	if err != nil {
@@ -536,6 +545,20 @@ func (e *Engine) requestMute(ctx context.Context, p TargetPayload, mute bool) (s
 	}); err != nil {
 		return "", err
 	}
+	dismissed := false
+	if mute && pr.Forced && pr.GHState != store.GHOpen && !slices.Contains(postMergeRoundStates, pr.State) {
+		switch err := e.st.TransitionPR(ctx, pr.ID, []string{pr.State}, "", func(u *store.PRUpdate) {
+			u.Set("forced", false)
+		}); {
+		case err == nil:
+			cur, err := e.st.PRByID(ctx, pr.ID)
+			dismissed = err == nil && pr.MergedUnreviewed() && !cur.MergedUnreviewed()
+		case errors.Is(err, store.ErrConflict):
+			e.log.Info("PR moved on while it was muted; its forced mark stays", "pr", pr.ID, "state", pr.State)
+		default:
+			return "", err
+		}
+	}
 	if !mute && pr.State == store.PRIneligible {
 		if w := e.cfg.WatchFor(repo.FullName()); w != nil {
 			cur, err := e.st.PRByID(ctx, pr.ID)
@@ -546,6 +569,9 @@ func (e *Engine) requestMute(ctx context.Context, p TargetPayload, mute bool) (s
 		}
 	}
 	if mute {
+		if dismissed {
+			return "muted " + label + ": merged-unreviewed flag dismissed", nil
+		}
 		return "muted " + label, nil
 	}
 	return "unmuted " + label, nil

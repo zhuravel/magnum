@@ -31,7 +31,9 @@ var targetKinds = []targetKind{
 			"next round. The daemon does it; without one the release runs here under the lock. --force discards " +
 			"tracked changes and releases inside the close grace, but never overrides pins or running agents."},
 	{"mute", engine.ReqMute, "stop automatic reviews of a PR", false,
-		"Stop automatic reviews of a PR until `magnum unmute`; a forced `magnum review` still runs."},
+		"Stop automatic reviews of a PR until `magnum unmute`; a forced `magnum review` still runs. On a PR GitHub " +
+			"merged before magnum reviewed its last push it dismisses the merged-unreviewed flag instead (`magnum " +
+			"unmute` restores it, `magnum review` still runs a post-merge review)."},
 	{"unmute", engine.ReqUnmute, "resume automatic reviews of a PR (also undoes magnum ignore)", false,
 		"Resume automatic reviews of a muted PR. For a PR `magnum ignore` muted, the ignore mark goes too and " +
 			"its eligibility is decided again; it is reviewed on its next push."},

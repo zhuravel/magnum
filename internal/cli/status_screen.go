@@ -134,6 +134,7 @@ func statusDashData(r statusReport, defaultRepo string) tui.StatusData {
 		if v.PR != nil {
 			row.PRRef = actRefLabel(defaultRepo, v.Slot.RepoFullName, v.PR.Number)
 			row.PRState, row.URL, row.PRGHState = v.PR.State, v.PR.URL, v.PR.GHState
+			row.PRMergedUnreviewed, row.PRFlagDismissed = v.PR.MergedUnreviewed(), v.PR.FlagDismissed()
 		}
 		out.Slots = append(out.Slots, row)
 	}
@@ -148,6 +149,7 @@ func statusDashData(r statusReport, defaultRepo string) tui.StatusData {
 		}
 		if q.rec != nil {
 			row.Review, row.GHState = reviewFactsOf(*q.rec), q.rec.GHState
+			row.MergedUnreviewed, row.FlagDismissed = q.rec.MergedUnreviewed(), q.rec.FlagDismissed()
 		}
 		return row
 	}

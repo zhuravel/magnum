@@ -131,12 +131,59 @@ func unmuteIgnoredQuestion(ref string) string {
 	return "Unmute " + ref + ": stop ignoring it and review it on its next push?"
 }
 
-// muteQuestion asks before muting (or unmuting) ref.
+// muteQuestion asks before muting (or unmuting) ref, a PR that is open.
 func muteQuestion(ref string, mute bool) string {
 	if mute {
 		return "Mute " + ref + ": stop automatic reviews of it?"
 	}
 	return "Unmute " + ref + ": resume automatic reviews of it?"
+}
+
+// muteAct is what M means on a PR, given what GitHub says of it.
+type muteAct int
+
+const (
+	muteAsk     muteAct = iota // an open PR: stop its automatic reviews (muteQuestion)
+	muteDismiss                // merged before its last push was reviewed: dismiss that flag
+	muteRestore                // flag dismissed by a mute: restore it with an unmute
+	muteNothing                // merged or closed with no flag to dismiss or restore
+)
+
+// muteActFor says what M does on a PR whose GitHub state is ghState (any
+// case; "" = not known, treated as open), flagged merged unreviewed or
+// muted with that flag dismissed. A merged or closed PR gets no automatic
+// reviews, so asking to stop them is meaningless: muting it means dismissing
+// the flag, and state (merged or closed) names it for the flash of
+// muteNothing.
+func muteActFor(ghState string, flagged, dismissed bool) (act muteAct, state string) {
+	state = strings.ToLower(strings.TrimSpace(ghState))
+	switch {
+	case state != "merged" && state != "closed":
+		return muteAsk, ""
+	case flagged:
+		return muteDismiss, state
+	case dismissed:
+		return muteRestore, state
+	}
+	return muteNothing, state
+}
+
+// dismissFlagQuestion asks before muting a PR GitHub merged before magnum
+// reviewed its last push, which dismisses the merged-unreviewed flag.
+func dismissFlagQuestion(ref string) string {
+	return "Dismiss the merged-unreviewed flag on " + ref + "? (r still runs a post-merge review)"
+}
+
+// restoreFlagQuestion asks before unmuting a merged PR whose flag a mute
+// dismissed.
+func restoreFlagQuestion(ref string) string {
+	return "Restore the merged-unreviewed flag on " + ref + "?"
+}
+
+// nothingToMute is the flash for M on a merged or closed PR with no flag to
+// dismiss or restore; state is "merged" or "closed".
+func nothingToMute(ref, state string) string {
+	return ref + " is " + state + ": nothing to mute"
 }
 
 // boardReviewFacts says what a review of the board row would look at:

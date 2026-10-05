@@ -292,8 +292,11 @@ func (m dashboardModel) menuItems() []menuItem {
 	pinKnown := ok && r.slot != nil && ref == ""
 	pinned := pinKnown && strings.Contains(r.slot.SlotState, "pinned")
 	url := ""
+	mute := muteAsk
 	if ok {
 		url = m.urlOf(r)
+		gh, flagged, dismissed := m.mergeFacts(r)
+		mute, _ = muteActFor(gh, flagged, dismissed)
 	}
 	return []menuItem{
 		{"review", "r", "r", live},
@@ -306,7 +309,7 @@ func (m dashboardModel) menuItems() []menuItem {
 		{"pin", "p", "p", acts && !pinned},
 		{"unpin", "u", "u", acts && (!pinKnown || pinned)},
 		{"release", "x", "x", acts && (r.slot != nil || m.slotHolds(ref))},
-		{"mute", "M", "M", pr},
+		muteMenuItem(mute, pr, pr),
 		{"unmute", "U", "U", pr},
 		{"reset column widths", "W", "W", len(m.widths) > 0},
 	}

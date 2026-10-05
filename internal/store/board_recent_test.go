@@ -82,12 +82,15 @@ func containsAll(got []int, want ...int) bool {
 
 // A PR is merged unreviewed when GitHub merged it in a state where magnum
 // meant to review it (a round due or running) before its head was reviewed.
+// A muted one whose forced mark is gone (the mute handler clears it on a PR
+// GitHub no longer lists as open) has its flag dismissed.
 func TestIsMergedUnreviewed(t *testing.T) {
 	for _, c := range []struct {
 		name                     string
 		gh, prev, head, reviewed string
 		muted, forced            bool
 		want                     bool
+		dismissed                bool // muted, would be flagged unmuted
 	}{
 		{name: "rereview pending, head moved", gh: GHMerged, prev: PRRereviewPending, head: "b2", reviewed: "b1", want: true},
 		{name: "queued, never reviewed", gh: GHMerged, prev: PRQueued, head: "b1", want: true},
@@ -97,17 +100,27 @@ func TestIsMergedUnreviewed(t *testing.T) {
 		{name: "paused", gh: GHMerged, prev: PRPaused, head: "b2", reviewed: "b1", want: true},
 		{name: "needs attention", gh: GHMerged, prev: PRNeedsAttention, head: "b2", reviewed: "b1", want: true},
 		{name: "forced while muted", gh: GHMerged, prev: PRQueued, head: "b2", muted: true, forced: true, want: true},
+		{name: "stale forced mark, never muted", gh: GHMerged, prev: PRQueued, head: "b2", reviewed: "b1", forced: true, want: true},
+		{name: "dismissed: muted, the stale forced mark cleared", gh: GHMerged, prev: PRQueued, head: "b2", reviewed: "b1", muted: true, dismissed: true},
+		{name: "restored: unmuted again, forced not restored", gh: GHMerged, prev: PRQueued, head: "b2", reviewed: "b1", want: true},
 		{name: "head reviewed", gh: GHMerged, prev: PRRereviewPending, head: "b1", reviewed: "b1"},
 		{name: "closed, not merged", gh: GHClosed, prev: PRRereviewPending, head: "b2", reviewed: "b1"},
 		{name: "still open", gh: GHOpen, prev: "", head: "b2", reviewed: "b1"},
 		{name: "baseline", gh: GHMerged, prev: PRBaseline, head: "b1"},
 		{name: "ineligible (skipped or ignored)", gh: GHMerged, prev: PRIneligible, head: "b1"},
 		{name: "reviewed", gh: GHMerged, prev: PRReviewed, head: "b2", reviewed: "b1"},
-		{name: "muted", gh: GHMerged, prev: PRQueued, head: "b2", reviewed: "b1", muted: true},
+		{name: "muted", gh: GHMerged, prev: PRQueued, head: "b2", reviewed: "b1", muted: true, dismissed: true},
+		{name: "muted, head reviewed: nothing to dismiss", gh: GHMerged, prev: PRQueued, head: "b1", reviewed: "b1", muted: true},
+		{name: "muted, closed not merged: nothing to dismiss", gh: GHClosed, prev: PRQueued, head: "b2", reviewed: "b1", muted: true},
+		{name: "muted, closed from reviewed: nothing to dismiss", gh: GHMerged, prev: PRReviewed, head: "b2", reviewed: "b1", muted: true},
+		{name: "muted, ignored: nothing to dismiss", gh: GHMerged, prev: PRIneligible, head: "b2", muted: true},
 		{name: "no prev state", gh: GHMerged, prev: "", head: "b2", reviewed: "b1"},
 	} {
 		if got := IsMergedUnreviewed(c.gh, c.prev, c.head, c.reviewed, c.muted, c.forced); got != c.want {
 			t.Errorf("%s: IsMergedUnreviewed = %v, want %v", c.name, got, c.want)
+		}
+		if got := IsFlagDismissed(c.gh, c.prev, c.head, c.reviewed, c.muted, c.forced); got != c.dismissed {
+			t.Errorf("%s: IsFlagDismissed = %v, want %v", c.name, got, c.dismissed)
 		}
 		pr := PR{GHState: c.gh, HeadSHA: c.head, Muted: c.muted, Forced: c.forced}
 		if c.prev != "" {
@@ -118,6 +131,12 @@ func TestIsMergedUnreviewed(t *testing.T) {
 		}
 		if got := pr.MergedUnreviewed(); got != c.want {
 			t.Errorf("%s: PR.MergedUnreviewed = %v, want %v", c.name, got, c.want)
+		}
+		if got := pr.FlagDismissed(); got != c.dismissed {
+			t.Errorf("%s: PR.FlagDismissed = %v, want %v", c.name, got, c.dismissed)
+		}
+		if c.want && c.dismissed {
+			t.Errorf("%s: a PR is never both flagged and dismissed", c.name)
 		}
 	}
 }
@@ -155,18 +174,34 @@ func TestBoardRowMergedUnreviewed(t *testing.T) {
 	mk(1, PRRereviewPending, "b1")
 	mk(2, PRBaseline, "")
 	mk(3, PRRereviewPending, "b2")
+	muted := mk(4, PRRereviewPending, "b1")  // muted after it closed: dismissed
+	forced := mk(5, PRRereviewPending, "b1") // muted and requested before it closed: still flagged
+	for _, c := range []struct {
+		pr     PR
+		forced bool
+	}{{muted, false}, {forced, true}} {
+		if err := st.UpdatePR(ctx, c.pr.ID, func(u *PRUpdate) {
+			u.Set("muted", true)
+			u.Set("forced", c.forced)
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	rows, err := st.Board(ctx, BoardFilter{ClosedSince: t0.Add(-24 * time.Hour)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	flags := map[int]bool{}
+	flags, dismissed := map[int]bool{}, map[int]bool{}
 	for _, r := range rows {
-		flags[r.Number] = r.MergedUnreviewed
+		flags[r.Number], dismissed[r.Number] = r.MergedUnreviewed, r.FlagDismissed
 		if r.Number == 1 && (r.PrevState != PRRereviewPending || r.ReviewedSHA != "b1" || r.HeadSHA != "b2") {
 			t.Fatalf("#1 row: prev %q reviewed %q head %q", r.PrevState, r.ReviewedSHA, r.HeadSHA)
 		}
 	}
-	if len(rows) != 3 || !flags[1] || flags[2] || flags[3] {
-		t.Fatalf("merged unreviewed = %v (%d rows), want only #1", flags, len(rows))
+	if len(rows) != 5 || !flags[1] || flags[2] || flags[3] || flags[4] || !flags[5] {
+		t.Fatalf("merged unreviewed = %v (%d rows), want #1 and #5", flags, len(rows))
+	}
+	if dismissed[1] || dismissed[2] || dismissed[3] || !dismissed[4] || dismissed[5] {
+		t.Fatalf("flag dismissed = %v, want only #4", dismissed)
 	}
 }

@@ -455,7 +455,7 @@ func prsBoardRow(b store.BoardRow, self []string) tui.PRBoardRow {
 		State: prsRowState(b), GHState: b.GHState, UpdatedAt: b.UpdatedAt, HeadSHA: b.HeadSHA,
 		Slot: b.Slot, Pinned: b.Pinned, Muted: b.Muted, NextEligibleAt: b.NextEligibleAt,
 		LastError: b.LastError, RoundsToday: b.RoundsToday, SkipReason: b.SkipReason,
-		ClosedAt: cmp.Or(b.MergedAt, b.ClosedAt), MergedUnreviewed: b.MergedUnreviewed,
+		ClosedAt: cmp.Or(b.MergedAt, b.ClosedAt), MergedUnreviewed: b.MergedUnreviewed, FlagDismissed: b.FlagDismissed,
 	}
 	if r.Ref == "" && b.Owner != "" && b.Name != "" && b.Number > 0 {
 		r.Ref = fmt.Sprintf("%s/%s#%d", b.Owner, b.Name, b.Number)

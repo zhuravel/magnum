@@ -76,8 +76,10 @@ type BoardRow struct {
 	MergedAt  time.Time `json:"merged_at"`
 	ClosedAt  time.Time `json:"closed_at"`
 	// MergedUnreviewed: GitHub merged the PR before magnum reviewed its last
-	// push (IsMergedUnreviewed).
+	// push (IsMergedUnreviewed). FlagDismissed: the PR was muted after that
+	// merge, so it is not flagged but would be unmuted (IsFlagDismissed).
 	MergedUnreviewed bool `json:"merged_unreviewed"`
+	FlagDismissed    bool `json:"flag_dismissed"`
 }
 
 // DueStates are the automation states in which magnum means to review a PR:
@@ -89,14 +91,36 @@ var DueStates = []string{PRQueued, PRRereviewPending, PRClaiming, PRReviewing, P
 // closed in) is one of DueStates, and headSHA is not reviewedSHA ("" =
 // never reviewed). A muted PR waits for no round unless it was forced, so it
 // is not flagged; baseline, reviewed, skipped and ignored PRs close outside
-// DueStates and never are.
+// DueStates and never are. The forced mark outlives the close, so a PR
+// forced before it merged stays flagged after it is muted, until the daemon
+// clears the mark on a mute of a PR GitHub no longer lists as open
+// (IsFlagDismissed).
 func IsMergedUnreviewed(ghState, prevState, headSHA, reviewedSHA string, muted, forced bool) bool {
-	return ghState == GHMerged && slices.Contains(DueStates, prevState) && headSHA != reviewedSHA && (!muted || forced)
+	return mergedWhileDue(ghState, prevState, headSHA, reviewedSHA) && (!muted || forced)
+}
+
+// IsFlagDismissed reports whether a PR is muted without being flagged, though
+// it would be flagged unmuted: GitHub merged it in a state where magnum meant
+// to review it, before its head was reviewed, and nothing forces a round of
+// it. Muting such a PR is how the flag is dismissed; unmuting restores it.
+func IsFlagDismissed(ghState, prevState, headSHA, reviewedSHA string, muted, forced bool) bool {
+	return mergedWhileDue(ghState, prevState, headSHA, reviewedSHA) && muted && !forced
+}
+
+// mergedWhileDue is what IsMergedUnreviewed and IsFlagDismissed share: the
+// merge came while a round was due or running, with the head not reviewed.
+func mergedWhileDue(ghState, prevState, headSHA, reviewedSHA string) bool {
+	return ghState == GHMerged && slices.Contains(DueStates, prevState) && headSHA != reviewedSHA
 }
 
 // MergedUnreviewed is IsMergedUnreviewed for p.
 func (p PR) MergedUnreviewed() bool {
 	return IsMergedUnreviewed(p.GHState, Deref(p.PrevState), p.HeadSHA, Deref(p.ReviewedSHA), p.Muted, p.Forced)
+}
+
+// FlagDismissed is IsFlagDismissed for p.
+func (p PR) FlagDismissed() bool {
+	return IsFlagDismissed(p.GHState, Deref(p.PrevState), p.HeadSHA, Deref(p.ReviewedSHA), p.Muted, p.Forced)
 }
 
 // closedPRStates are the automation states IncludeClosed adds.
@@ -185,6 +209,7 @@ func scanBoardRow(sc scanner, today string) (BoardRow, error) {
 	b.CIState = Deref(ciState)
 	b.PrevState, b.MergedAt, b.ClosedAt = Deref(prev), Deref(mergedAt), Deref(closedAt)
 	b.MergedUnreviewed = IsMergedUnreviewed(b.GHState, b.PrevState, b.HeadSHA, b.ReviewedSHA, b.Muted, forced)
+	b.FlagDismissed = IsFlagDismissed(b.GHState, b.PrevState, b.HeadSHA, b.ReviewedSHA, b.Muted, forced)
 	if Deref(roundsDay) != today {
 		b.RoundsToday = 0
 	}

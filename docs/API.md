@@ -8944,13 +8944,21 @@ func FormatTime(t time.Time) string
     FormatTime renders t in UTC with TimeFormat. Every timestamp written to the
     database must go through it.
 
+func IsFlagDismissed(ghState, prevState, headSHA, reviewedSHA string, muted, forced bool) bool
+    IsFlagDismissed reports whether a PR is muted without being flagged,
+    though it would be flagged unmuted: GitHub merged it in a state where magnum
+    meant to review it, before its head was reviewed, and nothing forces a round
+    of it. Muting such a PR is how the flag is dismissed; unmuting restores it.
+
 func IsMergedUnreviewed(ghState, prevState, headSHA, reviewedSHA string, muted, forced bool) bool
     IsMergedUnreviewed reports whether GitHub merged a PR before magnum reviewed
     its last push: ghState is MERGED, prevState (the state the PR closed in)
     is one of DueStates, and headSHA is not reviewedSHA ("" = never reviewed).
     A muted PR waits for no round unless it was forced, so it is not flagged;
     baseline, reviewed, skipped and ignored PRs close outside DueStates and
-    never are.
+    never are. The forced mark outlives the close, so a PR forced before it
+    merged stays flagged after it is muted, until the daemon clears the mark on
+    a mute of a PR GitHub no longer lists as open (IsFlagDismissed).
 
 func KVIdentityCheck(name string) string
     KVIdentityCheck holds "pass" or "fail" from an identity's last Check.
@@ -9119,8 +9127,10 @@ type BoardRow struct {
 	MergedAt  time.Time `json:"merged_at"`
 	ClosedAt  time.Time `json:"closed_at"`
 	// MergedUnreviewed: GitHub merged the PR before magnum reviewed its last
-	// push (IsMergedUnreviewed).
+	// push (IsMergedUnreviewed). FlagDismissed: the PR was muted after that
+	// merge, so it is not flagged but would be unmuted (IsFlagDismissed).
 	MergedUnreviewed bool `json:"merged_unreviewed"`
+	FlagDismissed    bool `json:"flag_dismissed"`
 }
     BoardRow is one PR as the board shows it: the prs row flattened with its
     repository and its current slot. Empty strings, zero times and nil pointers
@@ -9407,6 +9417,9 @@ type PR struct {
 	ReviewRequests []ReviewRequest `json:"review_requests"`
 }
     PR is one pull request and its automation state.
+
+func (p PR) FlagDismissed() bool
+    FlagDismissed is IsFlagDismissed for p.
 
 func (p PR) MergedUnreviewed() bool
     MergedUnreviewed is IsMergedUnreviewed for p.
@@ -10550,6 +10563,10 @@ type PRBoardRow struct {
 	// push (store.IsMergedUnreviewed); LastReview.CommitSHA is the commit
 	// magnum reviewed last, if any.
 	MergedUnreviewed bool
+	// FlagDismissed: the PR is muted without being flagged though it would
+	// be flagged unmuted (store.IsFlagDismissed): a mute dismissed the
+	// merged-unreviewed flag, and M restores it.
+	FlagDismissed bool
 }
     PRBoardRow is one pull request on the PR board. Ref is what actions receive;
     Owner, Repo and Number label the row (Ref is parsed when they are empty).
@@ -10595,6 +10612,11 @@ type PRRow struct {
 	Ref, Title, Author, State, Next, Age, URL string
 	Review                                    *ReviewFacts // for the y/N question before a review; nil when unknown
 	GHState                                   string       // GitHub's state: OPEN, CLOSED or MERGED; "" when unknown
+	// MergedUnreviewed: GitHub merged the PR before magnum reviewed its last
+	// push; FlagDismissed: the PR was muted after that, so it is not flagged
+	// (store.IsMergedUnreviewed, store.IsFlagDismissed). M dismisses the one
+	// and restores the other.
+	MergedUnreviewed, FlagDismissed bool
 }
     PRRow is one queued (or closing) PR; Ref is what actions receive.
 
@@ -10775,6 +10797,9 @@ type SlotRow struct {
 	Name, Folder, PRRef, PRState, SlotState, DBs, Disk string
 	URL                                                string // PR URL for b; optional (looked up in Queue by PRRef)
 	PRGHState                                          string // GitHub's state of the slot's PR: OPEN, CLOSED or MERGED; "" when unknown
+	// PRMergedUnreviewed and PRFlagDismissed are PRRow's MergedUnreviewed and
+	// FlagDismissed for the slot's PR; read with PRGHState.
+	PRMergedUnreviewed, PRFlagDismissed bool
 }
     SlotRow is one review slot. Actions on a slot row target PRRef, or the slot
     Name for pin/unpin/release when it holds no PR.

@@ -442,7 +442,7 @@ code; `magnum stats` reports them per role.
 | `magnum roles [--repo owner/name] [--kinds] [--json]` | The effective roles per watch (kind, runs, model, effort, capture, output, prompt file and whether it is yours or built in, after, judge, aliases). `--kinds` shows how each agent CLI is started and resumed, and which models it switches to when one hits its own limit, instead. |
 | `magnum attention [--list]` | Jump to whatever needs you: a blocked agent, a failed round, an unseen result. A PR in needs_attention is explained in one line (the stage, how many attempts on which head, the line of the output that names the cause) with the next step; `magnum status <ref>` adds the failing step and the end of its output, and the dashboard, the PR board's card and `magnum review --wait` say the same. |
 | `magnum pick` | Filterable PR picker; the herdr popup and ctrl+click on PR links use it. |
-| `magnum pin\|unpin\|release\|mute\|unmute <ref>` | Hold a PR's slot and sessions, hand them back, stop automation for a PR. |
+| `magnum pin\|unpin\|release\|mute\|unmute <ref>` | Hold a PR's slot and sessions, hand them back, stop automation for a PR (on a merged PR `mute` dismisses its merged-unreviewed flag and `unmute` restores it). |
 | `magnum abort <ref>` | Kill a PR's running review: its agents are interrupted, its runs abandoned, its sessions parked and a pool slot handed back. The PR returns to reviewed (or baseline) until the next push. |
 | `magnum approve <ref> [-m TEXT] [--force]`, `magnum request-changes <ref> [-m TEXT] [--force]` | Your own verdict on the head magnum reviewed, posted by the daemon as the PR's posting identity with a body that names magnum's review and its findings: for repositories where magnum only comments, or when you decide differently. The head must still be the reviewed one unless `--force`. A manual approval follows the head like magnum's own; magnum's later rounds never dismiss a manual verdict as their own stale review. Board keys `A` and `C`. |
 | `magnum ignore <ref>` | Abort, then mute the PR as ignored and free its slot: the daemon never queues it again until `magnum unmute <ref>`, which undoes the ignore. |
@@ -472,7 +472,7 @@ round's stage timings (fetch/checkout, each role, verify, total); `/`
 filters; `v` cycles the views; `s`/`S` sort (updated, last review, reviewer activity, requested, changes,
 state; the requested sort puts the newest request first, the one the column shows, and PRs nobody asked
 last); `L` cycles the layout (below); `r`, `R`, `i` start review variants (a post-merge review on a
-merged PR, below); `o` opens the pane; `p`/`u` pin; `x` releases; `M`/`U` mute; `K` kills the running review; `I` ignores the PR (an ignored
+merged PR, below); `o` opens the pane; `p`/`u` pin; `x` releases; `M`/`U` mute (on a merged PR, below); `K` kills the running review; `I` ignores the PR (an ignored
 row is greyed with its title struck through, and `U` unmutes it, which stops ignoring it); `A` approves
 and `C` requests changes as the PR's posting identity (see `magnum approve`); `b` opens the browser;
 `t` opens the PR's issue in its tracker (below); `tab` switches to the status dashboard. Every action that stops or starts work asks y/N first.
@@ -510,7 +510,15 @@ needing attention) before Magnum reviewed its last push reads `merged · unrevie
 pill; the summary counts them in a red "N merged unreviewed" pill, the card says when it merged and which
 commits (the one Magnum last reviewed, the merged head), the status dashboard lists it under ATTENTION, and
 the daemon writes a `pr.merged_unreviewed` warning and sends one toast per PR (`[herdr] notify`). A baseline,
-skipped, ignored, muted or reviewed PR is never flagged: Magnum was not going to review it. Printed rows
+skipped, ignored or reviewed PR is never flagged: Magnum was not going to review it, and a muted one is
+not flagged either unless a review of it was forced before it merged. A merged or closed PR gets no
+automatic reviews, so `M` does not ask to stop them there: on a flagged row it asks "Dismiss the
+merged-unreviewed flag on talkable#7? (r still runs a post-merge review)" and, on `y`, sends the mute
+(the daemon also clears the stale forced mark of a PR GitHub no longer lists as open, unless a post-merge
+round is due or running for it); the card then reads "merged-unreviewed flag dismissed (M restores it)",
+and `M` asks "Restore the merged-unreviewed flag on talkable#7?" and sends an unmute, which brings the flag
+back (the forced mark does not return); on any other merged or closed row `M` only says there is nothing
+to mute (the status dashboard and the right-click menu do the same). Printed rows
 (`magnum prs` without a terminal) list the section too, with `closed,merged,unreviewed` in STATE.
 `r` on a merged row asks "Post-merge review talkable#7 (comment only)?" (`R` and `i` their fresh and
 simplify variants; the status dashboard and `magnum pick` ask the same) and, on `y`, runs `magnum review`

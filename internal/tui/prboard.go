@@ -146,6 +146,10 @@ type PRBoardRow struct {
 	// push (store.IsMergedUnreviewed); LastReview.CommitSHA is the commit
 	// magnum reviewed last, if any.
 	MergedUnreviewed bool
+	// FlagDismissed: the PR is muted without being flagged though it would
+	// be flagged unmuted (store.IsFlagDismissed): a mute dismissed the
+	// merged-unreviewed flag, and M restores it.
+	FlagDismissed bool
 }
 
 // RequestInfo is a review request: who was asked, by whom and when.
@@ -1378,8 +1382,7 @@ func (m prBoardModel) tableKey(k string) (prBoardModel, tea.Cmd) {
 	case "u":
 		return m.onRow("unpin", func(ctx context.Context, a DashboardActions, ref string) (string, error) { return a.Unpin(ctx, ref) })
 	case "M":
-		return m.askOnRow("mute", func(r PRBoardRow, ref string) string { return muteQuestion(m.questionLabel(r, ref), true) },
-			func(ctx context.Context, a DashboardActions, ref string) (string, error) { return a.Mute(ctx, ref) })
+		return m.mute()
 	case "U":
 		return m.askOnRow("unmute", func(r PRBoardRow, ref string) string {
 			if normState(r.State) == "ignored" {
@@ -1523,6 +1526,36 @@ func (m prBoardModel) askOnRow(what string, question func(r PRBoardRow, ref stri
 	cmd := m.ask(question(r, ref), what+" "+ref,
 		func(ctx context.Context, a DashboardActions) (string, error) { return fn(ctx, a, ref) })
 	return m, cmd
+}
+
+// mute asks before muting the cursor row's PR. A PR GitHub merged or closed
+// gets no automatic reviews to stop: muting one merged before its last push
+// was reviewed dismisses its merged-unreviewed flag, M on one whose flag is
+// dismissed restores it (an unmute), and any other merged or closed row says
+// there is nothing to mute instead of asking.
+func (m prBoardModel) mute() (prBoardModel, tea.Cmd) {
+	r, ok := m.selected()
+	if !ok {
+		return m.fail("nothing selected")
+	}
+	ref := prRef(r)
+	if ref == "" {
+		return m.fail("this row names no PR")
+	}
+	label := m.questionLabel(r, ref)
+	switch act, state := muteActFor(r.GHState, r.MergedUnreviewed, r.FlagDismissed); act {
+	case muteNothing:
+		cmd := m.note(nothingToMute(label, state))
+		return m, cmd
+	case muteDismiss:
+		return m.askOnRow("mute", func(PRBoardRow, string) string { return dismissFlagQuestion(label) },
+			func(ctx context.Context, a DashboardActions, ref string) (string, error) { return a.Mute(ctx, ref) })
+	case muteRestore:
+		return m.askOnRow("unmute", func(PRBoardRow, string) string { return restoreFlagQuestion(label) },
+			func(ctx context.Context, a DashboardActions, ref string) (string, error) { return a.Unmute(ctx, ref) })
+	}
+	return m.askOnRow("mute", func(r PRBoardRow, ref string) string { return muteQuestion(m.questionLabel(r, ref), true) },
+		func(ctx context.Context, a DashboardActions, ref string) (string, error) { return a.Mute(ctx, ref) })
 }
 
 // review asks before a review round, saying what it will do and what
