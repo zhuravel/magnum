@@ -622,13 +622,19 @@ func (p prbPainter) requestedCell(r PRBoardRow) cell {
 // stateWaitCell is the state pill followed, for a PR waiting for a round,
 // by what holds it and until when, dimmed ("quiet → 14:09"), and for a
 // skipped PR by why in a word ("· bot"). A merged PR in a post-merge round
-// says so: "post-merge · next tick".
+// says so: "post-merge · next tick", and so does a delta check, waiting or
+// in flight: "delta check · quiet → 14:09".
 func (p prbPainter) stateWaitCell(r PRBoardRow) cell {
 	c := p.stateCell(rowState(r))
 	_, rest, held := strings.Cut(r.Wait, " · ")
 	switch {
 	case postMergeRound(r):
 		c = append(c, seg{" post-merge", p.st.Dim})
+		if held && rest != "" {
+			c = append(c, seg{" · " + rest, p.st.Dim})
+		}
+	case deltaCheckRound(r):
+		c = append(c, seg{" delta check", p.st.Dim})
 		if held && rest != "" {
 			c = append(c, seg{" · " + rest, p.st.Dim})
 		}
@@ -639,6 +645,17 @@ func (p prbPainter) stateWaitCell(r PRBoardRow) cell {
 		c = append(c, seg{"· " + why, p.st.Dim})
 	}
 	return c
+}
+
+// deltaCheckRound reports whether r waits for a delta check or runs one.
+func deltaCheckRound(r PRBoardRow) bool {
+	switch normState(r.State) {
+	case "queued", "rereview_pending":
+		return r.DeltaCheck
+	case "reviewing", "verifying":
+		return r.RoundWhy != nil && r.RoundWhy.DeltaCheck
+	}
+	return false
 }
 
 // skipped reports whether the configuration skips r (state ineligible).
@@ -1020,7 +1037,11 @@ func (p prbPainter) sinceCell(d *ReviewDelta, w [3]int) cell {
 		cst, ast, dst = p.st.Dim, p.st.Dim, p.st.Dim
 	}
 	padL := func(s string, n int) string { return spaces(n-ansi.StringWidth(s)) + s }
-	return cell{{padL(c, w[0]), cst}, {" " + padL(a, w[1]), ast}, {" " + padL(del, w[2]), dst}}
+	out := cell{{padL(c, w[0]), cst}, {" " + padL(a, w[1]), ast}, {" " + padL(del, w[2]), dst}}
+	if d.MergedBase != "" {
+		out = append(out, seg{" " + p.g.merge, p.st.Dim}) // the base branch's merge is left out
+	}
+	return out
 }
 
 func isBaseDelta(d *ReviewDelta) bool {

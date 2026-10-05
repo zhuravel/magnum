@@ -161,6 +161,15 @@ type Daemon struct {
 	// 0 = no threshold. A [[watch]] may override both (Config.ThrottleFor).
 	RereviewMinLines int      `toml:"rereview_min_lines"`
 	RereviewMaxWait  Duration `toml:"rereview_max_wait"`
+	// DeltaCheck (default true): a re-review whose delta since the reviewed
+	// commit has more than 0 and fewer than RereviewMinLines changed code
+	// lines and adds no file (modified binary files count 0 lines) does not
+	// wait for RereviewMaxWait: after the quiet period only the judge
+	// checks those commits, in its own session at its rereview_effort, and
+	// an App's approval stands meanwhile (for at most an hour after the
+	// push). false keeps the threshold's wait and a full round. A [[watch]]
+	// may override it (Config.ThrottleFor).
+	DeltaCheck bool `toml:"delta_check"`
 	// RestartOnNewBuild lets the daemon restart itself on a new binary
 	// on disk (the one launchd starts) once it passes its configuration
 	// check: at the first tick no round is claiming, reviewing or
@@ -317,6 +326,9 @@ type Watch struct {
 	// threshold off for the watch.
 	RereviewMinLines *int     `toml:"rereview_min_lines"`
 	RereviewMaxWait  Duration `toml:"rereview_max_wait"`
+	// DeltaCheck overrides [daemon] delta_check for this watch's PRs (unset
+	// keeps the daemon's).
+	DeltaCheck *bool `toml:"delta_check"`
 	// RequestTeams are team slugs whose review requests count like a
 	// request for the poll login (request_debounce); other teams' do not.
 	RequestTeams []string `toml:"request_teams"`
@@ -332,8 +344,8 @@ func (c *Config) TrivialDeltas(w *Watch) []string {
 	return c.Daemon.SkipTrivialDeltas
 }
 
-// ThrottleFor is the [daemon] section with w's burst and re-review delta
-// overrides applied: the throttle settings (eligibility.Throttle) of w's
+// ThrottleFor is the [daemon] section with w's burst, re-review delta and
+// delta check overrides applied: the throttle settings (eligibility.Throttle) of w's
 // PRs. A nil w is the daemon's.
 func (c *Config) ThrottleFor(w *Watch) Daemon {
 	d := c.Daemon
@@ -354,6 +366,9 @@ func (c *Config) ThrottleFor(w *Watch) Daemon {
 	}
 	if w.RereviewMaxWait.Duration > 0 {
 		d.RereviewMaxWait = w.RereviewMaxWait
+	}
+	if w.DeltaCheck != nil {
+		d.DeltaCheck = *w.DeltaCheck
 	}
 	return d
 }
@@ -709,6 +724,7 @@ func Defaults() *Config {
 			RequestDebounce:          Duration{time.Minute},
 			RereviewMinLines:         30,
 			RereviewMaxWait:          Duration{2 * time.Hour},
+			DeltaCheck:               true,
 		},
 		Herdr:    Herdr{Socket: "~/.config/herdr/herdr.sock", Notify: true},
 		Terminal: Terminal{App: "Terminal", Session: "default", Mouse: true, Icons: "unicode"},

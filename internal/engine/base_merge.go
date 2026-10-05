@@ -48,6 +48,11 @@ type ownDiff struct {
 	// own change after the push, or, for a file the PR no longer changes,
 	// its change before the push reverted (undone).
 	files []github.FileDelta
+	// additions and deletions are every line the change of the own diff
+	// adds and removes (comments and blank lines too: the since-review
+	// size, ownLineDelta); commits are the PR's own commits since the push's
+	// start (ownCommits).
+	additions, deletions, commits int
 }
 
 // prBase is the branch a PR merges into: its base_ref, else the
@@ -61,16 +66,17 @@ func prBase(repo store.Repo, pr store.PR) string {
 
 // ownDiffDelta reads the PR's own diff against base before (base...from)
 // and after (base...to) a push, as gh, and compares them
-// (compareOwnDiffs). GitHub's three-dot comparison starts at the merge base
-// of the base branch's tip with the commit, so each is the PR's diff as of
-// that commit. ok is false when a call fails or the comparison is
-// incomplete.
+// (compareOwnDiffs), with the PR's own commits since (ownCommits). GitHub's
+// three-dot comparison starts at the merge base of the base branch's tip
+// with the commit, so each is the PR's diff as of that commit. ok is false
+// when a call fails or the comparison is incomplete.
 func (e *Engine) ownDiffDelta(ctx context.Context, gh GitHub, repo store.Repo, base, from, to string) (ownDiff, bool) {
-	before, err := e.compareFiles(ctx, gh, repo, base, from)
+	before, err := e.comparePush(ctx, gh, repo, base, from)
 	if err == nil {
-		var after []github.FileDelta
-		if after, err = e.compareFiles(ctx, gh, repo, base, to); err == nil {
-			if d, ok := compareOwnDiffs(before, after); ok {
+		var after github.PushComparison
+		if after, err = e.comparePush(ctx, gh, repo, base, to); err == nil {
+			if d, ok := compareOwnDiffs(before.Files, after.Files); ok {
+				d.commits = ownCommits(before, after)
 				return d, true
 			}
 		}
@@ -125,6 +131,8 @@ func compareOwnDiffs(before, after []github.FileDelta) (ownDiff, bool) {
 		} else {
 			d.files = append(d.files, undone(fb))
 		}
+		add, del := ownLineDelta(old, cur)
+		d.additions, d.deletions = d.additions+add, d.deletions+del
 		if !inBefore && (fa.Status == "added" || fa.Status == "renamed" || fa.Status == "copied") {
 			d.size.AddedFiles++
 			continue
@@ -132,6 +140,49 @@ func compareOwnDiffs(before, after []github.FileDelta) (ownDiff, bool) {
 		d.size.Lines += ownChangedLines(p, old, cur)
 	}
 	return d, true
+}
+
+// ownLineDelta is what one file's own change before a push (its added and
+// removed lines, ownChange) became after it, as the push's additions and
+// deletions: a line the PR now adds, or no longer removes, is an addition;
+// a line it no longer adds, or now removes, a deletion (a multiset
+// difference, every line counted, comments and blank lines too).
+func ownLineDelta(before, after []string) (additions, deletions int) {
+	left := map[string]int{}
+	for _, l := range after {
+		left[l]++
+	}
+	for _, l := range before {
+		left[l]--
+	}
+	for l, n := range left {
+		switch {
+		case n == 0 || l[0] == '\\':
+		case (l[0] == '+') == (n > 0):
+			additions += max(n, -n)
+		default:
+			deletions += max(n, -n)
+		}
+	}
+	return additions, deletions
+}
+
+// ownCommits counts the PR's own commits since a push's start: the commits
+// of base...to that base...from does not have, by SHA (after a merge of the
+// base branch, its merge commit and the PR's new commits; after a rebase,
+// every rewritten one). When GitHub listed only part of either range
+// (github.ComparePushCommits), the difference of their totals stands in.
+func ownCommits(before, after github.PushComparison) int {
+	if len(before.SHAs) < before.Commits || len(after.SHAs) < after.Commits {
+		return max(after.Commits-before.Commits, 0)
+	}
+	n := 0
+	for _, s := range after.SHAs {
+		if !slices.Contains(before.SHAs, s) {
+			n++
+		}
+	}
+	return n
 }
 
 // ownChange is one file's own change in a PR's diff against its base: its

@@ -121,7 +121,10 @@ func (e *Engine) prepare(ctx context.Context, job *roundJob) (pipeline.RoundInpu
 	// their agent kinds before starting or prompting anything.
 	rs.roles = e.cfg.RolesFor(&job.watch)
 	rs.requested = e.requestedRoles(ctx, pr.ID)
-	if job.kind != kindContinue && job.evalHead == "" {
+	if job.deltaCheck && job.kind == pipeline.KindRereview {
+		rs.delta = e.confirmDeltaCheck(ctx, job, rs.target) // nil: the round runs in full
+	}
+	if job.kind != kindContinue && job.evalHead == "" && rs.delta == nil {
 		rs.requested = append(rs.requested, e.rerunRoles(ctx, job, rs.roles, rs.target)...)
 	}
 	if rs.toRun, err = pipeline.RolesToRun(ctx, e.st, e.cfg, pr, rs.roles, rs.requested, job.kind); err != nil {
@@ -130,9 +133,14 @@ func (e *Engine) prepare(ctx context.Context, job *roundJob) (pipeline.RoundInpu
 	if len(rs.toRun) == 0 {
 		return fail(fmt.Errorf("watch %s has no judge among its roles", job.watch.Owner))
 	}
-	// A small diff may not need every reviewer ([triage]): what is dropped
-	// here is neither preflighted nor started.
-	e.triage(ctx, job, &rs)
+	if rs.delta != nil {
+		// A delta check: the judge alone, no triage.
+		rs.roles, rs.toRun = judgeAlone(rs.roles), judgeAlone(rs.toRun)
+	} else {
+		// A small diff may not need every reviewer ([triage]): what is
+		// dropped here is neither preflighted nor started.
+		e.triage(ctx, job, &rs)
+	}
 	if serr := e.preflight(ctx, agentKinds(rs.toRun)); serr != nil {
 		return pipeline.RoundInput{}, ws, serr
 	}
@@ -148,18 +156,25 @@ func (e *Engine) prepare(ctx context.Context, job *roundJob) (pipeline.RoundInpu
 		return pipeline.RoundInput{}, ws, serr
 	}
 	e.finalizeStaleRuns(ctx, pr.ID)
+	if rs.kind != kindContinue {
+		e.noteDeltaCheckRound(ctx, pr.ID, rs.delta, rs.target) // a continue keeps the paused round's
+	}
 
 	in := e.roundInput(ctx, job, rs, ws, dryRun)
 	e.sidebar(ctx, ws.WorkspaceID, map[string]string{"magnum": "reviewing " + textx.ShortSHA(rs.target)})
 	names := roleNames(rs.toRun)
-	what := rs.kind
+	what := rs.kind + " round"
+	data := map[string]any{"slot": job.slot.Name, "kind": rs.kind, "target_sha": rs.target, "roles": names, "requested": rs.requested,
+		"post_merge": job.postMerge}
+	if rs.delta != nil {
+		what = deltaCheckLabel(rs.delta.Lines)
+		data["delta_check"], data["delta_lines"], data["delta_files"] = true, rs.delta.Lines, len(rs.delta.Files)
+	}
 	if job.postMerge {
 		what = "post-merge " + what
 	}
 	e.event(ctx, "info", prSubject(job.repo, pr.Number), "engine.round_start",
-		fmt.Sprintf("%s round in %s at %s: %s", what, job.slot.Name, textx.ShortSHA(rs.target), strings.Join(names, ", ")),
-		map[string]any{"slot": job.slot.Name, "kind": rs.kind, "target_sha": rs.target, "roles": names, "requested": rs.requested,
-			"post_merge": job.postMerge})
+		fmt.Sprintf("%s in %s at %s: %s", what, job.slot.Name, textx.ShortSHA(rs.target), strings.Join(names, ", ")), data)
 	return in, ws, nil
 }
 
@@ -172,6 +187,9 @@ type roundSetup struct {
 	toRun     []config.Role // the roles that run (pipeline.RolesToRun)
 	kind      string        // the round's kind once the judge's conversation is known
 	round     int           // the round number a continue keeps (0 = the pipeline's next)
+	// delta is the delta check the round runs (confirmDeltaCheck); nil = a
+	// round of every role that runs.
+	delta *pipeline.DeltaCheck
 }
 
 // checkout checks the PR's head out in its slot (a per-PR worktree is
@@ -270,9 +288,17 @@ func (e *Engine) startSessions(ctx context.Context, job *roundJob, rs *roundSetu
 			rs.kind = pipeline.KindInitial
 		}
 	}
-	if job.kind == kindContinue && rs.kind != kindContinue {
-		// The continued round became a full one: the other roles that run
-		// need their panes and agents too.
+	full := job.kind == kindContinue && rs.kind != kindContinue
+	if rs.delta != nil && rs.kind != pipeline.KindRereview {
+		// The judge has no conversation to keep: the round re-reads the PR
+		// with every role, as any recovery does.
+		e.event(ctx, "info", prSubject(job.repo, pr.Number), "round.delta_check_dropped",
+			"a full round instead of the delta check: the judge's session is gone", map[string]any{"kind": rs.kind})
+		rs.delta, rs.roles, full = nil, e.cfg.RolesFor(&job.watch), true
+	}
+	if full {
+		// The continued round (or the delta check) became a full one: the
+		// other roles that run need their panes and agents too.
 		all, err := pipeline.RolesToRun(ctx, e.st, e.cfg, pr, rs.roles, rs.requested, rs.kind)
 		if err != nil {
 			return fail(err)
@@ -286,6 +312,7 @@ func (e *Engine) startSessions(ctx context.Context, job *roundJob, rs *roundSetu
 		if ws, _, err = e.startRoles(ctx, pr, ws, job.slot.Path, env, extra, fresh, rs.kind == pipeline.KindRereview); err != nil {
 			return fail(err)
 		}
+		rs.toRun = append(rs.toRun, extra...)
 	}
 	return ws, nil
 }
@@ -340,7 +367,7 @@ func (e *Engine) roundInput(ctx context.Context, job *roundJob, rs roundSetup, w
 		PR: cur, Repo: job.repo, SlotPath: job.slot.Path, Round: rs.round, Kind: rs.kind,
 		TargetSHA: rs.target, BaseRef: base, Roles: rs.roles, Requested: rs.requested, MovedFrom: ws.MovedFrom,
 		ContinueRunID: job.continueRunID, DryRun: dryRun, PostMerge: job.postMerge,
-		NotesPath: e.roundNotes(job.repo), Readiness: e.readinessPlan(ctx, job, rs.kind),
+		NotesPath: e.roundNotes(job.repo), Readiness: e.readinessPlan(ctx, job, rs.kind), DeltaCheck: rs.delta,
 	}
 	if job.evalHead != "" {
 		in.Blind = true
@@ -351,8 +378,8 @@ func (e *Engine) roundInput(ctx context.Context, job *roundJob, rs roundSetup, w
 	if rs.kind != kindContinue {
 		in.ContinueRunID = ""
 		in.MaxRestarts, in.DispatchedHead = e.cfg.Daemon.MaxRoundRestarts, job.pr.HeadSHA
-		if job.evalHead != "" || job.postMerge {
-			in.MaxRestarts = 0 // a pinned head, or a merged one, never moves
+		if job.evalHead != "" || job.postMerge || rs.delta != nil {
+			in.MaxRestarts = 0 // a pinned head, or a merged one, never moves; a delta check measured its commits
 		}
 		if job.kind == kindContinue {
 			in.DispatchedHead = rs.target // a continue that became a full round kept the paused round's checkout

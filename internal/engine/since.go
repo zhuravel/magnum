@@ -34,12 +34,18 @@ func (e *Engine) sinceBase(pr store.PR) (source, base string) {
 }
 
 // refreshSinceReview keeps prs.since_review_json in step with the PR's
-// (review base, head). A reviewed base costs one Compare per new pair (a
-// pair GitHub cannot compare is stored with Error, so it is not retried); a
-// PR nothing reviewed yet takes its whole size from the Details fetched in
-// this poll (d, nil when none), which need no extra call. budget is the
-// repository's remaining Compare allowance for this poll; a failed Compare
-// other than not-found spends the rest of it.
+// (review base, head). A reviewed base costs one comparison per new pair,
+// none when the poll's re-review gate compared it already (a pair GitHub
+// cannot compare is stored with Error, so it is not retried): the shared
+// measure (measureRange), so a range that merged the base branch in or was
+// rebased counts only the PR's own commits, files and lines (two more
+// calls, or none after the gate's), and the raw comparison when the PR's
+// own diff cannot be compared in full. A PR nothing reviewed yet takes its
+// whole size from the Details fetched in this poll (d, nil when none),
+// which need no extra call. budget is the repository's remaining
+// comparison allowance for this poll (one per pair); a failed comparison
+// other than not-found spends the rest of it. A size measured before
+// merges were told apart (store.SinceReviewVersion) is measured again once.
 func (e *Engine) refreshSinceReview(ctx context.Context, gh GitHub, repo store.Repo, pr store.PR, d *github.PRDetails, budget *int) {
 	source, base := e.sinceBase(pr)
 	if source == store.SinceFromBase && d != nil && !d.LatestReviewsComplete {
@@ -60,16 +66,19 @@ func (e *Engine) refreshSinceReview(ctx context.Context, gh GitHub, repo store.R
 		if cur != nil && sameSince(*cur, next) {
 			return
 		}
-	case cur != nil && cur.Source == source && cur.Base == base && cur.Head == pr.HeadSHA:
+	case cur != nil && cur.Source == source && cur.Base == base && cur.Head == pr.HeadSHA && cur.Version >= store.SinceReviewVersion:
 		return // this pair is already measured
 	case base == pr.HeadSHA:
 		// The head is what was reviewed: nothing new.
+		next.Version = store.SinceReviewVersion
 	default:
 		if *budget <= 0 {
 			return
 		}
 		*budget--
-		cs, err := e.compareStats(ctx, gh, repo, base, pr.HeadSHA) // a push's comparison of this poll serves it
+		branch := prBase(repo, pr)
+		m, err := e.measureRange(ctx, gh, repo, branch, base, pr.HeadSHA) // the gate's comparisons of this poll serve it
+		next.Version = store.SinceReviewVersion
 		switch {
 		case errors.Is(err, github.ErrNotFound):
 			next.Error = fmt.Sprintf("GitHub cannot compare %s...%s (a commit is gone)", textx.ShortSHA(base), textx.ShortSHA(pr.HeadSHA))
@@ -81,7 +90,15 @@ func (e *Engine) refreshSinceReview(ctx context.Context, gh GitHub, repo store.R
 			return
 		default:
 			e.changed("compare:"+repo.FullName(), "")
+			cs := m.push.Stats
 			next.Commits, next.Files, next.Additions, next.Deletions = cs.Commits, cs.Files, cs.Additions, cs.Deletions
+			switch {
+			case m.ownOK:
+				next.Commits, next.Files, next.Additions, next.Deletions = m.own.commits, len(m.own.changed), m.own.additions, m.own.deletions
+				next.BaseMerged, next.BaseRef = true, branch
+			case viaBase(m.push):
+				next.Raw, next.BaseRef = true, branch
+			}
 		}
 	}
 	if err := e.st.UpdatePR(ctx, pr.ID, func(u *store.PRUpdate) { u.Set("since_review_json", next) }); err != nil {

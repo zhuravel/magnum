@@ -55,6 +55,10 @@ type PRFacts struct {
 	DeltaLines      int       // changed lines the trivial-delta classifier counts as code
 	DeltaAddedFiles int       // files added (or renamed, copied) since the review
 	DeltaSince      time.Time // the first push the review does not cover
+	// DeltaReadable: the delta was measured and every file of it was read
+	// in full or is a modified binary file, counted as 0 lines (what a delta
+	// check needs; DeltaKnown is false with such a file).
+	DeltaReadable bool
 
 	Forced bool // manual `magnum review`: Throttle lets it through
 	Muted  bool // automation stopped for this PR: Classify rejects it

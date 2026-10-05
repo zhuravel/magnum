@@ -54,6 +54,7 @@ type prsJSONRow struct {
 	Spend            *prsJSONSpend     `json:"spend"`     // agent time over the last 7 days
 	Wait             string            `json:"wait"`
 	WaitDetail       string            `json:"wait_detail"`
+	DeltaCheck       bool              `json:"delta_check"` // the round it waits for is a delta check
 	Note             string            `json:"note"`
 	RequestedToMe    *prsJSONRequest   `json:"requested_to_me"`
 	LastRequest      *prsJSONRequest   `json:"last_request"`
@@ -139,6 +140,10 @@ type prsJSONDelta struct {
 	Additions int    `json:"additions"`
 	Deletions int    `json:"deletions"`
 	Truncated bool   `json:"truncated"` // the counts are lower bounds
+	// MergedBase: the base branch a merge brought in, left out of the counts
+	// (the PR's own); RawBase: the one the counts include (raw).
+	MergedBase string `json:"merged_base"`
+	RawBase    string `json:"raw_base"`
 }
 
 type prsJSONRound struct {
@@ -157,15 +162,17 @@ type prsJSONStage struct {
 }
 
 type prsJSONRoundWhy struct {
-	Kind      string             `json:"kind"`
-	PostMerge bool               `json:"post_merge"`
-	Roles     []string           `json:"roles"`
-	Requested []string           `json:"requested"`
-	Reruns    []prsJSONRoleRerun `json:"reruns"`
-	Triaged   bool               `json:"triaged"`
-	Skipped   []string           `json:"skipped"`
-	Reason    string             `json:"reason"`
-	EveryRole string             `json:"every_role"` // why triage kept every role
+	Kind       string             `json:"kind"`
+	PostMerge  bool               `json:"post_merge"`
+	DeltaCheck bool               `json:"delta_check"` // the judge alone on a small delta
+	DeltaLines int                `json:"delta_lines"`
+	Roles      []string           `json:"roles"`
+	Requested  []string           `json:"requested"`
+	Reruns     []prsJSONRoleRerun `json:"reruns"`
+	Triaged    bool               `json:"triaged"`
+	Skipped    []string           `json:"skipped"`
+	Reason     string             `json:"reason"`
+	EveryRole  string             `json:"every_role"` // why triage kept every role
 }
 
 type prsJSONRoleRerun struct {
@@ -207,14 +214,15 @@ func prsJSONOf(r tui.PRBoardRow) prsJSONRow {
 		Slot: r.Slot, Pinned: r.Pinned, Muted: r.Muted, Notes: r.Notes, NextEligibleAt: r.NextEligibleAt,
 		LastError: r.LastError, ErrorFix: r.ErrorFix, ErrorDetail: listOf(r.ErrorDetail), RoundsToday: r.RoundsToday,
 		LastRound: mapPtr(r.LastRound, prsJSONRoundOf), RoundWhy: mapPtr(r.RoundWhy, prsJSONRoundWhyOf),
-		Spend: mapPtr(r.Spend, prsJSONSpendOf), Wait: r.Wait, WaitDetail: r.WaitDetail, Note: r.Note,
+		Spend: mapPtr(r.Spend, prsJSONSpendOf), Wait: r.Wait, WaitDetail: r.WaitDetail, DeltaCheck: r.DeltaCheck, Note: r.Note,
 		RequestedToMe: mapPtr(r.RequestedToMe, prsJSONRequestOf), LastRequest: mapPtr(r.LastRequest, prsJSONRequestOf),
 		Requests: mapList(r.Requests, prsJSONRequestOf), ClosedAt: r.ClosedAt, Recent: r.Recent, MergedUnreviewed: r.MergedUnreviewed, FlagDismissed: r.FlagDismissed,
 	}
 }
 
 func prsJSONRoundWhyOf(w tui.RoundWhy) prsJSONRoundWhy {
-	return prsJSONRoundWhy{Kind: w.Kind, PostMerge: w.PostMerge, Roles: listOf(w.Roles), Requested: listOf(w.Requested),
+	return prsJSONRoundWhy{Kind: w.Kind, PostMerge: w.PostMerge, DeltaCheck: w.DeltaCheck, DeltaLines: w.DeltaLines,
+		Roles: listOf(w.Roles), Requested: listOf(w.Requested),
 		Reruns:  mapList(w.Reruns, func(r tui.RoleRerun) prsJSONRoleRerun { return prsJSONRoleRerun{Role: r.Role, Lines: r.Lines} }),
 		Triaged: w.Triaged, Skipped: listOf(w.Skipped), Reason: w.Reason, EveryRole: w.EveryRole}
 }
@@ -257,7 +265,7 @@ func prsJSONReviewerOf(r tui.ReviewerInfo) prsJSONReviewer {
 
 func prsJSONDeltaOf(d tui.ReviewDelta) prsJSONDelta {
 	return prsJSONDelta{Base: d.Base, BaseSHA: d.BaseSHA, Commits: d.Commits, Files: d.Files, Additions: d.Additions,
-		Deletions: d.Deletions, Truncated: d.Truncated}
+		Deletions: d.Deletions, Truncated: d.Truncated, MergedBase: d.MergedBase, RawBase: d.RawBase}
 }
 
 func prsJSONRoundOf(r tui.RoundTimings) prsJSONRound {

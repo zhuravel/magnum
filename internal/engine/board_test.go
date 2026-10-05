@@ -68,7 +68,7 @@ func TestSinceReviewFromIdentityReviewOnGitHub(t *testing.T) {
 	// The App's earlier review (GraphQL login "talkable" for talkable[bot]).
 	spec := prSpec{n: 1, head: "a1", reviews: []github.LatestReview{
 		{State: "COMMENTED", SubmittedAt: sub, AuthorLogin: "talkable", AuthorType: "Bot", CommitOid: "a0"}}}
-	h.gh.compare["a0...a1"] = github.CompareStats{Commits: 2, Files: -1, Additions: 30, Deletions: 4}
+	compareRange(h, "a0...a1", github.CompareStats{Commits: 2, Files: -1, Additions: 30, Deletions: 4})
 	h.open(spec)
 	h.startup()
 	h.tick()
@@ -83,7 +83,7 @@ func TestSinceReviewFromIdentityReviewOnGitHub(t *testing.T) {
 	spec.assignees = []string{"rev-ann"}
 	h.open(spec)
 	h.tick()
-	if d, c := h.gh.count("details:"), h.gh.count("compare:"); d != 2 || c != 1 {
+	if d, c := h.gh.count("details:"), len(rangeCalls(h.gh, "a0", "a1")); d != 2 || c != 1 {
 		t.Fatalf("details %d compare %d", d, c)
 	}
 	if got := h.pr(1); !reflect.DeepEqual(got.Assignees, []string{"rev-ann"}) {
@@ -107,14 +107,14 @@ func TestSinceReviewFollowsReviewedSHA(t *testing.T) {
 		t.Fatalf("since review after the review = %+v", s)
 	}
 
-	// A push: one Compare reviewed_sha...head.
-	h.gh.compare["b1...b2"] = github.CompareStats{Commits: 1, Files: 2, Additions: 7, Deletions: 3}
+	// A push: one comparison reviewed_sha...head (the trivial-delta check's).
+	compareRange(h, "b1...b2", github.CompareStats{Commits: 1, Files: 2, Additions: 7, Deletions: 3})
 	h.advance(time.Minute)
 	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b2"})
 	h.tick()
 	pr = h.wantState(2, store.PRRereviewPending)
 	want := store.SinceReview{Source: store.SinceFromReviewed, Base: "b1", Head: "b2", Commits: 1, Files: 2, Additions: 7,
-		Deletions: 3, ComputedAt: h.clock.Now()}
+		Deletions: 3, ComputedAt: h.clock.Now(), Version: store.SinceReviewVersion}
 	if pr.SinceReview == nil || !equalSince(*pr.SinceReview, want) {
 		t.Fatalf("since review = %+v, want %+v", pr.SinceReview, want)
 	}
@@ -124,7 +124,7 @@ func TestSinceReviewFollowsReviewedSHA(t *testing.T) {
 	h.advance(time.Minute)
 	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b2", labels: []string{"x"}})
 	h.tick()
-	if n := h.gh.count("compare:"); n != 1 {
+	if n := len(rangeCalls(h.gh, "b1", "b2")); n != 1 {
 		t.Fatalf("compare calls = %d, want 1", n)
 	}
 
@@ -138,7 +138,9 @@ func TestSinceReviewFollowsReviewedSHA(t *testing.T) {
 	if s := pr.SinceReview; s == nil || s.Head != "b3" || s.Error == "" || s.Commits != 0 {
 		t.Fatalf("not-found compare = %+v", s)
 	}
-	if n := h.gh.count("compare:"); n != 2 {
+	// The trivial-delta check's call and the size's (a failed one is never
+	// kept), in the poll that saw the head; none after.
+	if n := len(rangeCalls(h.gh, "b1", "b3")); n != 2 {
 		t.Fatalf("compare calls = %d, want 2", n)
 	}
 }
@@ -149,11 +151,11 @@ func TestCompareFailureSpendsTheBudgetAndRetries(t *testing.T) {
 	byApp := func(commit string) []github.LatestReview {
 		return []github.LatestReview{{State: "APPROVED", SubmittedAt: sub, AuthorLogin: "talkable", AuthorType: "Bot", CommitOid: commit}}
 	}
-	h.gh.compareErr = &github.APIError{Op: "compare", Status: 502, Message: "Bad Gateway"}
+	h.gh.filesErr = &github.APIError{Op: "compare files", Status: 502, Message: "Bad Gateway"}
 	h.open(prSpec{n: 1, head: "a1", reviews: byApp("a0")}, prSpec{n: 2, head: "c1", reviews: byApp("c0")})
 	h.startup()
 	h.tick()
-	if n := h.gh.count("compare:"); n != 1 {
+	if n := h.gh.count("compare_files:"); n != 1 {
 		t.Fatalf("compare calls after a failure = %d, want 1 (the rest of the budget is spent)", n)
 	}
 	if h.pr(1).SinceReview != nil || h.pr(2).SinceReview != nil {
@@ -161,13 +163,13 @@ func TestCompareFailureSpendsTheBudgetAndRetries(t *testing.T) {
 	}
 
 	h.gh.mu.Lock()
-	h.gh.compareErr = nil
-	h.gh.compare["a0...a1"] = github.CompareStats{Commits: 1, Files: 1, Additions: 1}
-	h.gh.compare["c0...c1"] = github.CompareStats{Commits: 2, Files: 2, Additions: 2}
+	h.gh.filesErr = nil
 	h.gh.mu.Unlock()
+	compareRange(h, "a0...a1", github.CompareStats{Commits: 1, Files: 1, Additions: 1})
+	compareRange(h, "c0...c1", github.CompareStats{Commits: 2, Files: 2, Additions: 2})
 	h.advance(time.Minute)
 	h.tick()
-	if n := h.gh.count("compare:"); n != 3 {
+	if n := h.gh.count("compare_files:"); n != 3 {
 		t.Fatalf("compare calls = %d, want 3", n)
 	}
 	if a, c := h.pr(1).SinceReview, h.pr(2).SinceReview; a == nil || a.Commits != 1 || c == nil || c.Commits != 2 {
@@ -237,6 +239,21 @@ func TestDepartedAuthorsAreNotReviewed(t *testing.T) {
 	}
 	if pr := h.pr(3); deref(pr.AuthorAssociation) != "COLLABORATOR" {
 		t.Fatalf("backfilled association %q", deref(pr.AuthorAssociation))
+	}
+}
+
+// compareRange makes GitHub compare key ("base...head") with cs as its
+// size and, unless set, no file: the since-review size reads the range
+// with ComparePush (the trivial-delta check's call).
+func compareRange(h *harness, key string, cs github.CompareStats) {
+	h.gh.mu.Lock()
+	defer h.gh.mu.Unlock()
+	h.gh.compare[key] = cs
+	if h.gh.files == nil {
+		h.gh.files = map[string][]github.FileDelta{}
+	}
+	if _, ok := h.gh.files[key]; !ok {
+		h.gh.files[key] = []github.FileDelta{}
 	}
 }
 

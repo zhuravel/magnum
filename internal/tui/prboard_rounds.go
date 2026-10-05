@@ -23,11 +23,15 @@ type SpendInfo struct {
 // --role`, --simplify), the roles that ran again because their code changed
 // (rerun_min_lines), and triage's decision.
 type RoundWhy struct {
-	Kind      string   // initial, rereview, continue, recovery, nudge
-	PostMerge bool     // a post-merge review
-	Roles     []string // the roles it ran, in the order the round named them
-	Requested []string // the roles asked for this round
-	Reruns    []RoleRerun
+	Kind      string // initial, rereview, continue, recovery, nudge
+	PostMerge bool   // a post-merge review
+	// DeltaCheck: a re-review of DeltaLines changed code lines by the judge
+	// alone (a delta check).
+	DeltaCheck bool
+	DeltaLines int
+	Roles      []string // the roles it ran, in the order the round named them
+	Requested  []string // the roles asked for this round
+	Reruns     []RoleRerun
 	// Triaged: triage decided this round's roles; Skipped are the roles it
 	// dropped and Reason its words (the model read the PR: PR content,
 	// cleaned like any). EveryRole is why triage kept every role ("the diff
@@ -88,20 +92,30 @@ func roundKindPhrase(w RoundWhy) string {
 	if phrase == "" {
 		phrase = w.Kind
 	}
+	if w.DeltaCheck {
+		phrase = DeltaCheckPhrase(w.DeltaLines)
+	}
 	if phrase != "" && w.PostMerge {
 		phrase = "post-merge " + phrase
 	}
 	return phrase
 }
 
+// DeltaCheckPhrase names a delta check of lines changed code lines:
+// "delta check (4 lines)".
+func DeltaCheckPhrase(lines int) string {
+	return "delta check (" + textx.Count(lines, "line", "lines") + ")"
+}
+
 // roundWhyLines say which roles the last round ran and why, one fact a line
 // (the caller wraps them): the round's kind and roles, what triage decided,
 // the roles a change of their code added and the ones asked for. A continue
-// round runs the judge alone, which it says instead of naming it.
+// round and a delta check run the judge alone, which they say instead of
+// naming it.
 func (p prbPainter) roundWhyLines(w RoundWhy) []string {
 	var out []string
 	roles := strings.Join(w.Roles, ", ")
-	if w.Kind == "continue" && len(w.Roles) <= 1 {
+	if (w.Kind == "continue" || w.DeltaCheck) && len(w.Roles) <= 1 {
 		roles = "judge only"
 	}
 	switch kind := roundKindPhrase(w); {

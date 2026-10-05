@@ -46,6 +46,7 @@ type glyphs struct {
 	nonBlocking, simplify, times                            string
 	ciPass, ciFail, ciPending, ciMissing, ciSkip            string // a check's state: the CI column and card
 	stale, mine, pin, errMark, fail, ok                     string
+	merge                                                   string // SINCE REVIEW: the base branch's merge is left out
 	bot                                                     string // before a bot's login in the narrow columns; "" = keep "[bot]"
 	// queued marks a row whose action waits for the daemon's answer, in the
 	// cell after the cursor's: one cell wide in every mode.
@@ -78,7 +79,7 @@ func newGlyphs(mode IconMode) glyphs {
 		return glyphs{
 			mode:     IconsASCII,
 			approved: "+", changes: "x", commented: "c", pending: "?", dismissed: "-", other: "*",
-			stale: "~", mine: "*", pin: "pin", errMark: "!", fail: "x", ok: "+", queued: "?",
+			stale: "~", mine: "*", pin: "pin", errMark: "!", fail: "x", ok: "+", queued: "?", merge: "m",
 			nonBlocking: "~", simplify: "s", times: "x",
 			ciPass: "+", ciFail: "x", ciPending: "o", ciMissing: "-", ciSkip: "/",
 			cursor: ">", dash: "-", minus: "-", atLeast: ">=", rule: "-", up: "^", down: "v", dot: "",
@@ -106,6 +107,7 @@ func newGlyphs(mode IconMode) glyphs {
 			ciSkip:      "\uf517",     // nf-oct-skip
 			simplify:    "\uf0c4",     // nf-fa-scissors
 			stale:       "\uf464",     // nf-oct-history
+			merge:       "\uf419",     // nf-oct-git_merge
 			mine:        "\uf51f",     // nf-oct-star_fill
 			bot:         "\U000F06A9", // nf-md-robot
 			pin:         "\uf435",     // nf-oct-pin
@@ -166,7 +168,7 @@ func newGlyphs(mode IconMode) glyphs {
 	return glyphs{
 		mode:     IconsUnicode,
 		approved: "✔", changes: "✗", commented: "💬", pending: "◌", dismissed: "⊘", other: "•",
-		stale: "⟳", mine: "★", bot: "🤖", pin: "📌", errMark: "!", fail: "✗", ok: "✔", queued: "◷",
+		stale: "⟳", mine: "★", bot: "🤖", pin: "📌", errMark: "!", fail: "✗", ok: "✔", queued: "◷", merge: "⑂",
 		nonBlocking: "●", simplify: "✂", times: "×",
 		ciPass: "✓", ciFail: "✗", ciPending: "◌", ciMissing: "–", ciSkip: "⊘",
 		cursor: "▌", dash: "—", minus: "−", atLeast: "≥", rule: "─", up: "▲", down: "▼", dot: "●",

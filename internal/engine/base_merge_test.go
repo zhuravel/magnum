@@ -3,6 +3,7 @@ package engine
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -176,7 +177,7 @@ func TestIncompleteOwnDiffFallsBack(t *testing.T) {
 				t.Fatalf("state %s, want today's re-review", pr.State)
 			}
 			rec, ok := h.e.deltaRecord(h.ctx, pr.ID)
-			if want := MeasureDelta(masterFiles()); !ok || rec.DeltaSize != want {
+			if want := MeasureDelta(masterFiles()); !ok || !reflect.DeepEqual(rec.DeltaSize, want) {
 				t.Fatalf("delta record %+v, want reviewed...head's %+v", rec, want)
 			}
 		})

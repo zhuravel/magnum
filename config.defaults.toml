@@ -39,6 +39,10 @@ rereview_max_wait = "2h"          #   (comments, blank lines, whitespace and doc
                                   #   after a merge of the base branch or a rebase only the change in the PR's own
                                   #   diff counts; a smaller delta waits for more pushes or this long after its
                                   #   first push (0 lines = no threshold; [[watch]] may override both)
+delta_check = true                # such a small delta (more than 0 code lines; a modified image or other binary
+                                  #   file counts 0) gets a judge-only check after the quiet period instead of the
+                                  #   wait and a full round; an App's approval stands until it posts, at most 1h
+                                  #   (false = wait and re-review in full; [[watch]] may override)
 model_limit_cooldown = "5h"       # a model capped on its own (health pattern model_limit) without a reset time
                                   # counts as limited this long; sessions use the kind's fallback_models meanwhile
 # park_idle_after = "2h"          # park a reviewed PR's agents once all of them idled this long ("0" = never),
@@ -325,6 +329,7 @@ aliases = ["simplify"]
 # burst_pushes = 0                      # overrides [daemon] burst_quiet_period / burst_pushes / burst_window
 # skip_trivial_deltas = []              # overrides [daemon] skip_trivial_deltas ([] = re-review every push)
 # rereview_min_lines = 0                # overrides [daemon] rereview_min_lines / rereview_max_wait (0: no threshold)
+# delta_check = false                   # overrides [daemon] delta_check (false: a small delta waits for a full round)
 # request_teams = ["backend"]           # review requests for these team slugs start a round like one for you
 # roles = ["codex-judge", "claude-review", "codex-review", "claude-simplify"]   # omitted or [] = every [[role]]
 # trackers = ["https://linear.app/your-org/issue/PR-{num}"]   # [board] trackers for this owner's PRs: an issue key

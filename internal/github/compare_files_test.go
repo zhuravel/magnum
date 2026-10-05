@@ -154,18 +154,19 @@ func TestCompareFilesStatusSaysHowHeadRelatesToBase(t *testing.T) {
 
 // ComparePush tells a push that merged the base branch (a commit with two
 // parents) from a plain one, and cannot rule a merge out when GitHub listed
-// fewer commits than the range has.
+// fewer commits than the range has; it keeps the SHAs of the commits listed.
 func TestComparePushFindsAMergeCommit(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		body    string
 		merge   bool
 		commits int
+		shas    []string
 	}{
-		{"plain push", `{"status":"ahead","total_commits":2,"commits":[{"sha":"c1","parents":[{"sha":"p0"}]},{"sha":"c2","parents":[{"sha":"c1"}]}],"files":[]}`, false, 2},
-		{"base merged", `{"status":"ahead","total_commits":3,"commits":[{"sha":"m1","parents":[{"sha":"m0"}]},{"sha":"m2","parents":[{"sha":"m1"}]},{"sha":"mc","parents":[{"sha":"p0"},{"sha":"m2"}]}],"files":[]}`, true, 3},
-		{"list cut short", `{"status":"ahead","total_commits":250,"commits":[{"sha":"c1","parents":[{"sha":"p0"}]}],"files":[]}`, true, 250},
-		{"rebased", `{"status":"diverged","total_commits":1,"commits":[{"sha":"c1","parents":[{"sha":"m9"}]}],"files":[]}`, false, 1},
+		{"plain push", `{"status":"ahead","total_commits":2,"commits":[{"sha":"c1","parents":[{"sha":"p0"}]},{"sha":"c2","parents":[{"sha":"c1"}]}],"files":[]}`, false, 2, []string{"c1", "c2"}},
+		{"base merged", `{"status":"ahead","total_commits":3,"commits":[{"sha":"m1","parents":[{"sha":"m0"}]},{"sha":"m2","parents":[{"sha":"m1"}]},{"sha":"mc","parents":[{"sha":"p0"},{"sha":"m2"}]}],"files":[]}`, true, 3, []string{"m1", "m2", "mc"}},
+		{"list cut short", `{"status":"ahead","total_commits":250,"commits":[{"sha":"c1","parents":[{"sha":"p0"}]}],"files":[]}`, true, 250, []string{"c1"}},
+		{"rebased", `{"status":"diverged","total_commits":1,"commits":[{"sha":"c1","parents":[{"sha":"m9"}]}],"files":[]}`, false, 1, []string{"c1"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, f := compareFilesClient(tc.body)
@@ -173,8 +174,8 @@ func TestComparePushFindsAMergeCommit(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got.Merge != tc.merge || got.Commits != tc.commits {
-				t.Errorf("merge %v commits %d, want %v %d", got.Merge, got.Commits, tc.merge, tc.commits)
+			if got.Merge != tc.merge || got.Commits != tc.commits || !reflect.DeepEqual(got.SHAs, tc.shas) {
+				t.Errorf("merge %v commits %d shas %q, want %v %d %q", got.Merge, got.Commits, got.SHAs, tc.merge, tc.commits, tc.shas)
 			}
 			wantArgs := []string{"api", "repos/talkable/talkable/compare/" + cmpBase + "..." + cmpHead + "?per_page=100", "--hostname", "github.com"}
 			if len(f.Calls) != 1 || !reflect.DeepEqual(f.Calls[0].Args, wantArgs) {

@@ -20,6 +20,7 @@ import (
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/inventory"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/tui"
 	"github.com/zhuravel/magnum/internal/usage"
 )
 
@@ -337,7 +338,11 @@ func statusGatherPRs(ctx context.Context, d statusDeps, now time.Time, r *status
 		switch {
 		case slices.Contains(prInFlight, pr.State):
 			r.Rounds.Active++
-			r.Rounds.PRs = append(r.Rounds.PRs, inspPRLabel(repo, pr.Number))
+			label := inspPRLabel(repo, pr.Number)
+			if _, ok := statusDeltaCheck(ctx, st, pr); ok {
+				label += " (delta check)"
+			}
+			r.Rounds.PRs = append(r.Rounds.PRs, label)
 		case slices.Contains(statusQueued, pr.State):
 			r.Queue = append(r.Queue, line)
 		case slices.Contains(statusClosing, pr.State):
@@ -519,9 +524,27 @@ func statusNextShort(ctx context.Context, st *store.Store, pr store.PR, now time
 	return statusNextWithGate(ctx, st, pr, now)
 }
 
+// statusDeltaCheck is the delta check a PR's round in flight runs
+// (engine.KVPRDeltaCheck); ok is false for a PR not in flight or a round
+// that is none.
+func statusDeltaCheck(ctx context.Context, st *store.Store, pr store.PR) (engine.DeltaCheckRound, bool) {
+	if st == nil || !slices.Contains(prInFlight, pr.State) {
+		return engine.DeltaCheckRound{}, false
+	}
+	v, ok, err := st.GetKV(ctx, engine.KVPRDeltaCheck(pr.ID))
+	if err != nil || !ok {
+		return engine.DeltaCheckRound{}, false
+	}
+	return engine.ParseDeltaCheckRound(v)
+}
+
 // statusNextWithGate is statusNext with the daemon's last dispatch gate
-// reason (store.KVPRGate) when the PR is waiting for its turn.
+// reason (store.KVPRGate) when the PR is waiting for its turn, and the
+// delta check a round in flight runs.
 func statusNextWithGate(ctx context.Context, st *store.Store, pr store.PR, now time.Time) string {
+	if dc, ok := statusDeltaCheck(ctx, st, pr); ok {
+		return tui.DeltaCheckPhrase(dc.Lines) + " in progress"
+	}
 	next := statusNext(pr, now)
 	if st == nil || !strings.HasSuffix(next, "waiting for a slot") {
 		return next

@@ -14,6 +14,9 @@ The push merged the base branch, so `{{.PreviousHeadSHA}}..{{.HeadSHA}}` carries
 {{- else}}
 Read the new commits with `git log --oneline {{.PreviousHeadSHA}}..{{.HeadSHA}}` and `git diff {{.PreviousHeadSHA}}..{{.HeadSHA}}`.
 {{- end}}
+{{- if .DeltaCheck}}
+Only the commits since your last review changed ({{.DeltaLines}} lines{{if .DeltaFile}}; files listed in {{.DeltaFile}}{{end}}). Review just those changes against the PR's purpose and your earlier findings; the rest stands as reviewed. Post one short review.
+{{- end}}
 {{- if .MovedFrom}}
 This checkout is now {{.Checkout}} (it was {{.MovedFrom}}). Work only here.
 {{- end}}
@@ -50,6 +53,9 @@ since: {{.Since}}
 force_pushed: {{.ForcePushed}}
 {{- if .BaseMerged}}
 base_merged: true
+{{- end}}
+{{- if .DeltaCheck}}
+delta_check: true
 {{- end}}
 moved_from: {{.MovedFrom}}
 threads_file: {{.ThreadsFile}}

@@ -300,6 +300,7 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 							defRepo = cfg.Daemon.DefaultRepo
 						}
 						row.Wait, row.WaitDetail = w.Short(inspNow()), w.Sentence(actRefLabel(defRepo, full, r.Number), inspNow())
+						row.DeltaCheck = w.DeltaCheck
 					}
 				}
 			}
@@ -501,6 +502,7 @@ func prsBoardRow(b store.BoardRow, self []string) tui.PRBoardRow {
 		} else {
 			d := &tui.ReviewDelta{Base: "reviewed", BaseSHA: s.Base, Commits: s.Commits, Files: s.Files,
 				Additions: s.Additions, Deletions: s.Deletions}
+			d.MergedBase, d.RawBase = sinceBases(*s)
 			if s.Source == store.SinceFromBase {
 				d.Base = "base branch"
 			}
@@ -511,6 +513,19 @@ func prsBoardRow(b store.BoardRow, self []string) tui.PRBoardRow {
 		}
 	}
 	return r
+}
+
+// sinceBases are the base branch a since-review size left out (the PR's
+// own counts across a merge of it) and the one it includes (raw).
+func sinceBases(s store.SinceReview) (merged, raw string) {
+	base := cmp.Or(s.BaseRef, "the base branch")
+	switch {
+	case s.BaseMerged:
+		return base, ""
+	case s.Raw:
+		return "", base
+	}
+	return "", ""
 }
 
 // prsRequests sums up a PR's review requests (oldest first, as the registry
@@ -724,6 +739,12 @@ func prsSinceCell(d *tui.ReviewDelta) string {
 	s := fmt.Sprintf("%dc %df +%d/-%d", d.Commits, d.Files, d.Additions, d.Deletions)
 	if d.Truncated {
 		s = ">=" + s
+	}
+	switch {
+	case d.MergedBase != "":
+		s += " own"
+	case d.RawBase != "":
+		s += " raw"
 	}
 	if strings.Contains(strings.ToLower(d.Base), "base") {
 		s = "PR " + s

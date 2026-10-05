@@ -69,6 +69,9 @@ type Wait struct {
 	// PostMerge: GitHub merged the PR; the round it waits for is a
 	// post-merge review (`magnum review` of a merged PR, always forced).
 	PostMerge bool `json:"post_merge,omitempty"`
+	// DeltaCheck: the round it waits for is a delta check, the judge alone
+	// on a small delta (deltaCheckDue).
+	DeltaCheck bool `json:"delta_check,omitempty"`
 }
 
 // ParseWait reads a KVPRWait value; ok is false for "" or a value it cannot
@@ -82,10 +85,12 @@ func ParseWait(s string) (Wait, bool) {
 }
 
 func (w Wait) kind() string {
-	if w.PostMerge {
+	switch {
+	case w.PostMerge:
 		return "post-merge review"
-	}
-	if w.Rereview {
+	case w.DeltaCheck:
+		return "delta check"
+	case w.Rereview:
 		return "re-review"
 	}
 	return "review"
@@ -114,7 +119,7 @@ func waitClock(t, now time.Time) string {
 // Short is the compact form for a table cell, e.g. "re-review · cap 6/6 →
 // 00:00", "re-review · quiet → 14:09", "review · codex paused → 15:00",
 // "re-review · small delta 8/30 lines → 16:40", "re-review · requested by
-// alice → now".
+// alice → now", "delta check · quiet → 14:09".
 func (w Wait) Short(now time.Time) string {
 	var what string
 	switch w.Reason {
@@ -271,20 +276,25 @@ func (e *Engine) globalWait(ctx context.Context, ts tickState, now time.Time) *W
 // waitFor is why pr waits: its retry backoff, then the timing rules
 // (eligibility.Throttle, unless forced), then a mute, quiet hours, what
 // holds every PR (global), and finally the reason the last dispatch gave
-// (store.KVPRGate); with none of them it starts at the next dispatch.
+// (store.KVPRGate); with none of them it starts at the next dispatch. The
+// wait says whether the round is a delta check (deltaCheckDue).
 func (e *Engine) waitFor(ctx context.Context, pr store.PR, global *Wait, now time.Time) Wait {
 	base := Wait{Rereview: deref(pr.ReviewedSHA) != "", Forced: pr.Forced, PostMerge: postMerge(pr)}
+	repo, _ := e.st.RepoByID(ctx, pr.RepoID)
+	w := e.cfg.WatchFor(repo.FullName())
+	var f eligibility.PRFacts
+	if w != nil {
+		f = e.throttleFacts(ctx, pr, e.factsFor(pr, *w, now))
+		base.DeltaCheck = base.Rereview && e.deltaCheckDue(ctx, *w, pr, f, !f.RequestedAt.IsZero())
+	}
 	with := func(w Wait) Wait {
-		w.Rereview, w.Forced, w.PostMerge = base.Rereview, base.Forced, base.PostMerge
+		w.Rereview, w.Forced, w.PostMerge, w.DeltaCheck = base.Rereview, base.Forced, base.PostMerge, base.DeltaCheck
 		return w
 	}
 	if pr.NextAttemptAt != nil && pr.NextAttemptAt.After(now) {
 		return with(Wait{Reason: WaitRetry, Until: *pr.NextAttemptAt, Detail: fmt.Sprintf("a retry (attempt %d) after: %s", pr.Attempts+1, clipRunes(strings.Join(strings.Fields(deref(pr.LastError)), " "), 120))})
 	}
-	repo, _ := e.st.RepoByID(ctx, pr.RepoID)
-	w := e.cfg.WatchFor(repo.FullName())
 	if !pr.Forced && w != nil {
-		f := e.throttleFacts(ctx, pr, e.factsFor(pr, *w, now))
 		if td := eligibility.Throttle(e.cfg.ThrottleFor(w), f, now.Local()); !td.Ready {
 			return with(e.throttleWait(ctx, pr, *w, f, td, now))
 		}

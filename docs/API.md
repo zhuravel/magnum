@@ -605,7 +605,16 @@ type JudgeData struct {
 	// BaseMerged (rereview): the commits since PreviousHeadSHA merged a
 	// branch in, usually the base, so PreviousHeadSHA..HeadSHA carries its
 	// commits: the prompt compares the PR's own diff before and after.
-	BaseMerged      bool
+	BaseMerged bool
+	// DeltaCheck (rereview): the round is a delta check: the judge alone
+	// reviews the commits since its last review, DeltaLines changed code
+	// lines in the files DeltaFile lists (a JSON file in the report
+	// directory, "" when it could not be written: the file names are PR
+	// content). Rendered as `delta_check: true` and one instruction, only
+	// then.
+	DeltaCheck      bool
+	DeltaLines      int
+	DeltaFile       string
 	MovedFrom       string // previous checkout path when the PR changed slots
 	PreviousReviews []PreviousReview
 	// Threads are the inline threads the reviewer login started on the PR,
@@ -2291,9 +2300,9 @@ func (c *Config) Stages(w *Watch) [][]Role
     Validation guarantees After is acyclic.
 
 func (c *Config) ThrottleFor(w *Watch) Daemon
-    ThrottleFor is the [daemon] section with w's burst and re-review delta
-    overrides applied: the throttle settings (eligibility.Throttle) of w's PRs.
-    A nil w is the daemon's.
+    ThrottleFor is the [daemon] section with w's burst, re-review delta and
+    delta check overrides applied: the throttle settings (eligibility.Throttle)
+    of w's PRs. A nil w is the daemon's.
 
 func (c *Config) TrackersFor(fullName string) []Tracker
     TrackersFor returns the issue trackers of repository fullName's PRs:
@@ -2396,6 +2405,15 @@ type Daemon struct {
 	// 0 = no threshold. A [[watch]] may override both (Config.ThrottleFor).
 	RereviewMinLines int      `toml:"rereview_min_lines"`
 	RereviewMaxWait  Duration `toml:"rereview_max_wait"`
+	// DeltaCheck (default true): a re-review whose delta since the reviewed
+	// commit has more than 0 and fewer than RereviewMinLines changed code
+	// lines and adds no file (modified binary files count 0 lines) does not
+	// wait for RereviewMaxWait: after the quiet period only the judge
+	// checks those commits, in its own session at its rereview_effort, and
+	// an App's approval stands meanwhile (for at most an hour after the
+	// push). false keeps the threshold's wait and a full round. A [[watch]]
+	// may override it (Config.ThrottleFor).
+	DeltaCheck bool `toml:"delta_check"`
 	// RestartOnNewBuild lets the daemon restart itself on a new binary
 	// on disk (the one launchd starts) once it passes its configuration
 	// check: at the first tick no round is claiming, reviewing or
@@ -3138,6 +3156,9 @@ type Watch struct {
 	// threshold off for the watch.
 	RereviewMinLines *int     `toml:"rereview_min_lines"`
 	RereviewMaxWait  Duration `toml:"rereview_max_wait"`
+	// DeltaCheck overrides [daemon] delta_check for this watch's PRs (unset
+	// keeps the daemon's).
+	DeltaCheck *bool `toml:"delta_check"`
 	// RequestTeams are team slugs whose review requests count like a
 	// request for the poll login (request_debounce); other teams' do not.
 	RequestTeams []string `toml:"request_teams"`
@@ -3192,6 +3213,15 @@ const (
 
 
 FUNCTIONS
+
+func DeltaCheck(d config.Daemon, f PRFacts) bool
+    DeltaCheck reports whether a re-review's delta gets a delta check,
+    a judge-only round on the commits since the review, instead of a full round
+    after the threshold's wait: DeltaCheck (delta_check) and the threshold
+    (RereviewMinLines) are on, and the delta since the reviewed commit is
+    readable (DeltaReadable), adds no file and has more than 0 and fewer
+    than RereviewMinLines changed code lines. Whether the round is forced or
+    requested (then it runs in full) is the caller's business.
 
 func QuietHours(spec string, now time.Time) bool
     QuietHours reports whether now falls inside the quiet-hours window spec,
@@ -3261,6 +3291,10 @@ type PRFacts struct {
 	DeltaLines      int       // changed lines the trivial-delta classifier counts as code
 	DeltaAddedFiles int       // files added (or renamed, copied) since the review
 	DeltaSince      time.Time // the first push the review does not cover
+	// DeltaReadable: the delta was measured and every file of it was read
+	// in full or is a modified binary file, counted as 0 lines (what a delta
+	// check needs; DeltaKnown is false with such a file).
+	DeltaReadable bool
 
 	Forced bool // manual `magnum review`: Throttle lets it through
 	Muted  bool // automation stopped for this PR: Classify rejects it
@@ -3321,7 +3355,8 @@ func Throttle(d config.Daemon, f PRFacts, now time.Time) ThrottleDecision
         (DeltaKnown), adds no file and has fewer than RereviewMinLines
         changed lines, the PR waits until DeltaSince + RereviewMaxWait;
         a later push that reaches the threshold is measured again by the caller.
-        A zero RereviewMinLines turns the rule off.
+        A zero RereviewMinLines turns the rule off, and so does a delta that
+        gets a delta check (DeltaCheck): it is cheap, so it does not wait.
       - Requested (RequestedAt set): every rule above is skipped; the PR waits
         only RequestDebounce after the later of RequestedAt and HeadChangedAt.
       - Forced bypasses all of it: always ready.
@@ -3640,6 +3675,11 @@ func KVPRDelta(prID int64) string
     KVPRDelta holds the size of a PR's unreviewed delta (DeltaRecord as JSON),
     which the re-review threshold reads ([daemon] rereview_min_lines).
 
+func KVPRDeltaCheck(prID int64) string
+    KVPRDeltaCheck holds the delta check a PR's round in flight runs
+    (DeltaCheckRound as JSON), which `magnum status` reads while the PR is in
+    flight; the round's end deletes it.
+
 func KVPRFormerIdentities(prID int64) string
     KVPRFormerIdentities holds the identities a PR posted as before it migrated
     to its current one (a JSON list of identity names, newest last).
@@ -3855,6 +3895,17 @@ type CleanupPayload struct {
     (planned again by the daemon). Confirmed is the typed confirmation for
     actions that need it.
 
+type DeltaCheckRound struct {
+	Lines  int    `json:"lines"`  // the delta's changed code lines
+	Files  int    `json:"files"`  // its files
+	Target string `json:"target"` // the commit the check reviews
+}
+    DeltaCheckRound is a delta check in flight (KVPRDeltaCheck).
+
+func ParseDeltaCheckRound(s string) (DeltaCheckRound, bool)
+    ParseDeltaCheckRound reads a KVPRDeltaCheck value; ok is false for "" or a
+    value it cannot read.
+
 type DeltaRecord struct {
 	// Version is deltaRecordVersion for a delta measured with the PR's own
 	// diff in view (base_merge.go); 0, a record from before, is checked
@@ -3882,6 +3933,14 @@ type DeltaSize struct {
 	// complete patch (binary, too large, a cut-off file list): its lines
 	// are unknown, so the threshold cannot hold the delta back.
 	Complete bool `json:"complete"`
+	// Binaries are the files of the delta modified without a patch whose
+	// type is binary (binaryDeltaPath: an image, a font, an archive): they
+	// make it incomplete like any file without a patch, but a delta check
+	// (eligibility.DeltaCheck) reads them as 0 lines and names them to the
+	// judge. Unread counts the other files without a complete patch (too
+	// large, a cut-off file list, a removed binary).
+	Binaries []string `json:"binaries,omitempty"`
+	Unread   int      `json:"unread,omitempty"`
 }
     DeltaSize is how big a delta is for the re-review threshold ([daemon]
     rereview_min_lines).
@@ -3895,6 +3954,10 @@ func MeasureDelta(files []github.FileDelta) DeltaSize
     lines only changed order. A context line that one side has inside a block
     comment and the other does not (code commented out, or back in) counts one,
     like a line it cannot read.
+
+func (s DeltaSize) Readable() bool
+    Readable reports whether every file of the delta is read in full or is a
+    modified binary file (Binaries): what a delta check needs.
 
 type Deps struct {
 	Config *config.Config
@@ -4338,6 +4401,9 @@ type Wait struct {
 	// PostMerge: GitHub merged the PR; the round it waits for is a
 	// post-merge review (`magnum review` of a merged PR, always forced).
 	PostMerge bool `json:"post_merge,omitempty"`
+	// DeltaCheck: the round it waits for is a delta check, the judge alone
+	// on a small delta (deltaCheckDue).
+	DeltaCheck bool `json:"delta_check,omitempty"`
 }
     Wait is why a PR waiting for a round has none yet (KVPRWait).
 
@@ -4355,7 +4421,7 @@ func (w Wait) Short(now time.Time) string
     Short is the compact form for a table cell, e.g. "re-review · cap 6/6 →
     00:00", "re-review · quiet → 14:09", "review · codex paused → 15:00",
     "re-review · small delta 8/30 lines → 16:40", "re-review · requested by
-    alice → now".
+    alice → now", "delta check · quiet → 14:09".
 
 ```
 
@@ -5273,6 +5339,9 @@ type PushComparison struct {
 	// listed fewer of them than Commits (more than ComparePushCommits), so
 	// a merge cannot be ruled out.
 	Merge bool
+	// SHAs are the commits GitHub listed, oldest first: all Commits of them
+	// unless there are more than ComparePushCommits.
+	SHAs  []string
 	Files []FileDelta
 	// Stats is what Compare reads of the same range (the commits, the
 	// files, -1 at GitHub's file cap, and their additions and deletions),
@@ -7805,6 +7874,10 @@ const (
 	// ThreadsFile is the threads file in the round's report directory.
 	ThreadsFile = "review-threads.json"
 )
+const DeltaCheckFile = "delta-check.json"
+    DeltaCheckFile is the delta check's file list in the round's report
+    directory.
+
 const PostMergeEvent = "COMMENT"
     PostMergeEvent is the review event of a post-merge round
     (RoundInput.PostMerge), with or without findings.
@@ -7859,6 +7932,22 @@ type Agents interface {
     started the sessions of the roles that run (RolesToRun: EnsureWorkspace,
     EnsurePane, StartAgent) before RunRound; a role without a live session is
     reported as no_session.
+
+type DeltaCheck struct {
+	Lines int         `json:"lines"`
+	Files []DeltaFile `json:"files"`
+}
+    DeltaCheck is a delta check's measure of the commits since the judge's last
+    review: their changed code lines (the re-review threshold's measure) and
+    their files.
+
+type DeltaFile struct {
+	Path   string `json:"path"`
+	Status string `json:"status"`
+	Binary bool   `json:"binary,omitempty"`
+}
+    DeltaFile is a file of a delta check. Binary: modified without a patch (an
+    image, a font), counted as 0 lines.
 
 type Git interface {
 	RevParse(ctx context.Context, dir, ref string) (string, error)
@@ -8008,6 +8097,10 @@ type RoundInput struct {
 	// (RoleData/JudgeData.BaseMerged). ForcePushed wins over it.
 	BaseMerged bool
 	MovedFrom  string // agents.Workspace.MovedFrom
+	// DeltaCheck (rereview): the round is a delta check: Roles hold the
+	// judge alone, which reviews the small delta since its last review
+	// (JudgeData.DeltaCheck); nil = an ordinary round.
+	DeltaCheck *DeltaCheck
 
 	DryRun bool // the judge posts nothing; GitHub is not consulted
 	// Blind (magnum eval, with DryRun): the round replays a pinned head to
@@ -9164,6 +9257,10 @@ const RetroMaxAttempts = 3
     RetroMaxAttempts is how many retros in a row may fail on a PR before the
     retro gives it up (RetroDue; `magnum retro --again` still takes it).
 
+const SinceReviewVersion = 1
+    SinceReviewVersion is the SinceReview.Version of a size measured with a
+    merge of the base branch told apart (BaseMerged, Raw).
+
 const TeamReviewerPrefix = "team:"
     TeamReviewerPrefix marks a team in requested_reviewers_json ("team:<slug>").
 
@@ -9886,6 +9983,17 @@ type SinceReview struct {
 	Deletions  int       `json:"deletions"`       // likewise
 	Error      string    `json:"error,omitempty"` // the comparison failed for good (e.g. Base is gone); counts are 0
 	ComputedAt time.Time `json:"computed_at"`
+	// BaseMerged: Base...Head merged the base branch BaseRef in (or was
+	// rebased onto it), and the counts are the PR's own: its own commits,
+	// the files whose own change differs and their own-change lines. Raw:
+	// it did, but the PR's own diff could not be compared in full, so the
+	// counts are Base...Head's, the base branch's changes included.
+	BaseMerged bool   `json:"base_merged,omitempty"`
+	Raw        bool   `json:"raw,omitempty"`
+	BaseRef    string `json:"base_ref,omitempty"`
+	// Version is SinceReviewVersion for a size measured with the PR's own
+	// diff in view; an older one of a reviewed base is measured again once.
+	Version int `json:"version,omitempty"`
 }
     SinceReview is prs.since_review_json: the size of Base...Head, i.e. what
     changed since the last review (or the whole PR when nothing was reviewed).
@@ -10499,6 +10607,10 @@ var (
 
 FUNCTIONS
 
+func DeltaCheckPhrase(lines int) string
+    DeltaCheckPhrase names a delta check of lines changed code lines: "delta
+    check (4 lines)".
+
 func HumanAgo(d time.Duration) string
     HumanAgo renders how long ago something happened: "12s ago". Zero or a
     negative duration means it never happened and renders as "never".
@@ -10949,6 +11061,10 @@ type PRBoardRow struct {
 	// · quiet → 14:09") and the sentence with the command that lifts it,
 	// which the card shows. "" when the PR does not wait or no daemon said.
 	Wait, WaitDetail string
+	// DeltaCheck: the round the PR waits for is a delta check (the judge
+	// alone on a small delta); the state cell says so, as it does for a
+	// round in flight whose RoundWhy is one.
+	DeltaCheck bool
 	// Note is a one-line remark about the last review shown under LAST REVIEW
 	// on the card (e.g. "comment-only push skipped (a7b3f8c → 602da9d)").
 	Note string
@@ -11138,6 +11254,11 @@ type ReviewDelta struct {
 	BaseSHA                              string
 	Commits, Files, Additions, Deletions int
 	Truncated                            bool // the counts are lower bounds
+	// MergedBase is the base branch the commits since merged in (or were
+	// rebased onto) when the counts leave its changes out (the PR's own);
+	// Raw: they merged it, but the counts include its changes (the PR's
+	// own diff could not be compared in full). RawBase names it then.
+	MergedBase, RawBase string
 }
     ReviewDelta is what changed on a PR since Base: "reviewed" (the last
     reviewed head) or "base branch" (no review yet: the whole PR).
@@ -11201,11 +11322,15 @@ type RoundTimings struct {
     from the registry's runs and step events.
 
 type RoundWhy struct {
-	Kind      string   // initial, rereview, continue, recovery, nudge
-	PostMerge bool     // a post-merge review
-	Roles     []string // the roles it ran, in the order the round named them
-	Requested []string // the roles asked for this round
-	Reruns    []RoleRerun
+	Kind      string // initial, rereview, continue, recovery, nudge
+	PostMerge bool   // a post-merge review
+	// DeltaCheck: a re-review of DeltaLines changed code lines by the judge
+	// alone (a delta check).
+	DeltaCheck bool
+	DeltaLines int
+	Roles      []string // the roles it ran, in the order the round named them
+	Requested  []string // the roles asked for this round
+	Reruns     []RoleRerun
 	// Triaged: triage decided this round's roles; Skipped are the roles it
 	// dropped and Reason its words (the model read the PR: PR content,
 	// cleaned like any). EveryRole is why triage kept every role ("the diff

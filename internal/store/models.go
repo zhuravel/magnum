@@ -351,7 +351,22 @@ type SinceReview struct {
 	Deletions  int       `json:"deletions"`       // likewise
 	Error      string    `json:"error,omitempty"` // the comparison failed for good (e.g. Base is gone); counts are 0
 	ComputedAt time.Time `json:"computed_at"`
+	// BaseMerged: Base...Head merged the base branch BaseRef in (or was
+	// rebased onto it), and the counts are the PR's own: its own commits,
+	// the files whose own change differs and their own-change lines. Raw:
+	// it did, but the PR's own diff could not be compared in full, so the
+	// counts are Base...Head's, the base branch's changes included.
+	BaseMerged bool   `json:"base_merged,omitempty"`
+	Raw        bool   `json:"raw,omitempty"`
+	BaseRef    string `json:"base_ref,omitempty"`
+	// Version is SinceReviewVersion for a size measured with the PR's own
+	// diff in view; an older one of a reviewed base is measured again once.
+	Version int `json:"version,omitempty"`
 }
+
+// SinceReviewVersion is the SinceReview.Version of a size measured with a
+// merge of the base branch told apart (BaseMerged, Raw).
+const SinceReviewVersion = 1
 
 // Slot is a checkout magnum reviews in (pool slot, per-PR worktree, or an
 // observed external repoN checkout).

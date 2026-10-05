@@ -146,7 +146,8 @@ type rangeMeasure struct {
 func viaBase(pc github.PushComparison) bool { return pc.Merge || pc.Status == "diverged" }
 
 // measureRange is the one base-aware measure the re-review gate
-// (checkDelta), triage and the simplify rerun share: from...to
+// (checkDelta), triage, the simplify rerun, a delta check
+// (confirmDeltaCheck) and the since-review size share: from...to
 // (comparePush) and, when that range merged or diverged and base is known,
 // the PR's own diff before (base...from) and after (base...to) it
 // (ownDiffDelta). An own comparison that fails or is incomplete leaves

@@ -159,7 +159,8 @@ func TestOneWalkOfADeltaEqualsTheOldTwo(t *testing.T) {
 		if trivial != wantTrivial || !slices.Equal(classes, wantClasses) {
 			t.Fatalf("TrivialDelta(%+v, %q) = %q %v; the old one %q %v", files, allowed, classes, trivial, wantClasses, wantTrivial)
 		}
-		if got, want := MeasureDelta(files), oldMeasureDelta(files); got != want {
+		// The oracle knows no binary file (Binaries, Unread): the sizes it has.
+		if got, want := MeasureDelta(files), oldMeasureDelta(files); got.Lines != want.Lines || got.AddedFiles != want.AddedFiles || got.Complete != want.Complete {
 			t.Fatalf("MeasureDelta(%+v) = %+v; the old one %+v", files, got, want)
 		}
 	}

@@ -320,7 +320,7 @@ func TestSinceReviewFallsBackToReviewsWhenLatestReviewsAreTruncated(t *testing.T
 		{State: "COMMENTED", SubmittedAt: sub, AuthorLogin: "talkable", AuthorType: "Bot", CommitOid: "a0"},
 		{State: "PENDING", AuthorLogin: "talkable", AuthorType: "Bot", CommitOid: "a09"},
 	}}
-	h.gh.compare["a0...a1"] = github.CompareStats{Commits: 2, Files: 3, Additions: 30, Deletions: 4}
+	compareRange(h, "a0...a1", github.CompareStats{Commits: 2, Files: 3, Additions: 30, Deletions: 4})
 	h.open(prSpec{n: 1, head: "a1", reviewsTruncated: true})
 	h.startup()
 	h.tick()

@@ -44,6 +44,11 @@ type roundJob struct {
 	// daily cap.
 	requested bool
 
+	// deltaCheck: the re-review was dispatched as a delta check
+	// (deltaCheckDue): only the judge runs, unless prepare finds the commits
+	// it reviews no longer make one (confirmDeltaCheck).
+	deltaCheck bool
+
 	// postMerge: GitHub had merged the PR when the round was dispatched, so
 	// it is a post-merge review (post_merge.go); mergeBase is the commit it
 	// reviews from, the PR's merge base with the base branch before the
@@ -412,6 +417,11 @@ func (e *Engine) startRound(ctx context.Context, pr store.PR, repo store.Repo, w
 	if !pr.Forced {
 		_, job.requested = e.pendingRequest(ctx, pr)
 	}
+	if job.kind == pipeline.KindRereview {
+		f := e.factsFor(pr, *w, e.now())
+		e.deltaFacts(ctx, pr, &f)
+		job.deltaCheck = e.deltaCheckDue(ctx, *w, pr, f, job.requested)
+	}
 	from := store.ClaimableStates
 	if pr.State == store.PRPaused {
 		from = []string{store.PRPaused}
@@ -449,11 +459,15 @@ func (e *Engine) startRound(ctx context.Context, pr store.PR, repo store.Repo, w
 		job.continueRunID, job.round, job.target = "", 0, ""
 	}
 
-	// The roles the round runs decide which pauses and Codex limit apply.
+	// The roles the round runs decide which pauses and Codex limit apply
+	// (a delta check's judge alone).
 	toRun, err := pipeline.RolesToRun(ctx, e.st, e.cfg, pr, e.cfg.RolesFor(w), e.requestedRoles(ctx, pr.ID), job.kind)
 	if err != nil {
 		e.log.Warn("dispatch: roles", "subject", subject, "err", err)
 		return false, 0, gate{}
+	}
+	if job.deltaCheck {
+		toRun = judgeAlone(toRun)
 	}
 	if kind, why := e.pausedKind(ctx, agentKinds(toRun)); why != "" {
 		return false, 0, gate{reason: WaitKind, kind: kind, text: why}
@@ -584,18 +598,22 @@ func codexRoles(roles []config.Role) int {
 
 // planStart records what a dry run would do for job.
 func (e *Engine) planStart(ctx context.Context, job *roundJob, subject string) bool {
+	what := job.kind + " round"
+	if job.deltaCheck {
+		what = "delta check"
+	}
 	switch {
 	case job.hasSlo:
-		e.rec.Record(ctx, subject, "review", fmt.Sprintf("%s round in %s at %s", job.kind, job.slot.Name, textx.ShortSHA(job.pr.HeadSHA)))
+		e.rec.Record(ctx, subject, "review", fmt.Sprintf("%s in %s at %s", what, job.slot.Name, textx.ShortSHA(job.pr.HeadSHA)))
 	case job.pool == nil:
-		e.rec.Record(ctx, subject, "review", fmt.Sprintf("%s round in a new per-PR worktree at %s", job.kind, textx.ShortSHA(job.pr.HeadSHA)))
+		e.rec.Record(ctx, subject, "review", fmt.Sprintf("%s in a new per-PR worktree at %s", what, textx.ShortSHA(job.pr.HeadSHA)))
 	default:
 		free, err := e.st.FreeSlots(ctx, job.pool.Repo, job.pr.ID)
 		if err != nil || len(free) == 0 {
 			e.needSlot(ctx, *job.pool, subject)
 			return false
 		}
-		e.rec.Record(ctx, subject, "review", fmt.Sprintf("%s round in %s (claim) at %s", job.kind, free[0].Name, textx.ShortSHA(job.pr.HeadSHA)))
+		e.rec.Record(ctx, subject, "review", fmt.Sprintf("%s in %s (claim) at %s", what, free[0].Name, textx.ShortSHA(job.pr.HeadSHA)))
 	}
 	e.dryRounds++
 	return true

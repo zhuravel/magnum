@@ -77,6 +77,7 @@ func (rd *round) runJudge(ctx context.Context, run store.Run) (RoundResult, erro
 
 	jd := rd.judgeData(run, marker)
 	rd.addThreads(ctx, &jd)
+	rd.addDeltaCheck(ctx, &jd)
 	text, err := rd.r.Agents.RolePrompt(rd.judge, judgePrompt(in.Kind), jd)
 	if err != nil {
 		rd.finishRun(ctx, run.ID, store.RunFailed, OutcomeError, err.Error())

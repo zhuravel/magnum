@@ -204,7 +204,7 @@ func (e *Engine) deltaFacts(ctx context.Context, pr store.PR, f *eligibility.PRF
 	if !ok || rec.From != f.ReviewedSHA || rec.To != pr.HeadSHA {
 		return
 	}
-	f.DeltaKnown = rec.Complete
+	f.DeltaKnown, f.DeltaReadable = rec.Complete, rec.Readable()
 	f.DeltaLines, f.DeltaAddedFiles, f.DeltaSince = rec.Lines, rec.AddedFiles, rec.Since
 }
 

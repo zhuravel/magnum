@@ -58,6 +58,7 @@ func TrivialDelta(files []github.FileDelta, allowed []string) (classes []string,
 func assessDelta(files []github.FileDelta, allowed []string) (size DeltaSize, classes []string, trivial bool) {
 	size = DeltaSize{Complete: true}
 	trivial = len(files) > 0
+	cut := len(files) >= github.CompareFileLimit // GitHub may have left files out: none is known as binary
 	used := map[string]bool{}
 	// accept takes a modified file's walk: trivial when no code line
 	// changed and every class it used is allowed.
@@ -83,6 +84,11 @@ func assessDelta(files []github.FileDelta, allowed []string) (size DeltaSize, cl
 		case f.Truncated || f.Patch == "":
 			size.Complete = false
 			trivial = false
+			if !cut && f.Status == "modified" && f.Patch == "" && binaryDeltaPath(f.Path) {
+				size.Binaries = append(size.Binaries, f.Path)
+			} else {
+				size.Unread++
+			}
 		case docDeltaPath(f.Path):
 			switch {
 			case !trivial || f.Status != "modified":
@@ -482,6 +488,36 @@ type DeltaSize struct {
 	// complete patch (binary, too large, a cut-off file list): its lines
 	// are unknown, so the threshold cannot hold the delta back.
 	Complete bool `json:"complete"`
+	// Binaries are the files of the delta modified without a patch whose
+	// type is binary (binaryDeltaPath: an image, a font, an archive): they
+	// make it incomplete like any file without a patch, but a delta check
+	// (eligibility.DeltaCheck) reads them as 0 lines and names them to the
+	// judge. Unread counts the other files without a complete patch (too
+	// large, a cut-off file list, a removed binary).
+	Binaries []string `json:"binaries,omitempty"`
+	Unread   int      `json:"unread,omitempty"`
+}
+
+// Readable reports whether every file of the delta is read in full or is a
+// modified binary file (Binaries): what a delta check needs.
+func (s DeltaSize) Readable() bool {
+	return s.Complete || (s.Unread == 0 && len(s.Binaries) > 0)
+}
+
+// binaryDeltaPath reports whether a file is binary by its type (any case):
+// an image, a font, audio or video, an archive, a PDF, a compiled or
+// database file. GitHub sends no patch for such a file; a text file without
+// one is too large to diff, and its lines are unknown.
+func binaryDeltaPath(p string) bool {
+	switch strings.ToLower(path.Ext(p)) {
+	case ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".bmp", ".tif", ".tiff", ".avif", ".heic", ".psd",
+		".woff", ".woff2", ".ttf", ".otf", ".eot",
+		".mp3", ".mp4", ".m4a", ".wav", ".ogg", ".webm", ".mov", ".avi",
+		".zip", ".gz", ".tgz", ".bz2", ".xz", ".7z", ".jar", ".war",
+		".pdf", ".wasm", ".so", ".dylib", ".dll", ".exe", ".class", ".pyc", ".sqlite", ".sqlite3":
+		return true
+	}
+	return false
 }
 
 // MeasureDelta counts a delta's lines the way TrivialDelta judges them, with

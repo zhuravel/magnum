@@ -1715,3 +1715,61 @@ editing history. Code, config comments and prompts reference these by their head
   `AppendToReview` puts its note ("_Reviewed 06f72c2; 1 commit arrived …_") before the footer when the
   body ends with it, so the footer stays the last paragraph; a body without one gets the note last, as
   before. Both edits are idempotent.
+- **A small re-review delta gets a judge-only check** (2026-10-06; a push during a judge's turn swapped two
+  GIFs and changed 4 lines in two mail templates: the review approved the older commit, the approval went 30
+  seconds later, and the 4 lines waited under `rereview_min_lines` (30) for `rereview_max_wait` (2h), then
+  got a full round of every reviewer, 20 to 30 agent-minutes for 4 lines). A re-review whose delta since the
+  reviewed commit has more than 0 and fewer than `rereview_min_lines` code lines and adds no file, measured
+  as the gate measures it (the PR's own diff across a base merge, `measureRange`), now runs once the push
+  quiet period (or the burst one) is over as a delta check (`eligibility.DeltaCheck`, `[daemon] delta_check`,
+  default true, a `[[watch]]` may override it): only the judge runs, in its own session at its
+  `rereview_effort`, with no triage call and no rerun, and `judge-rereview.md` gets `delta_check: true` and
+  one instruction (review just the commits since the last review against the PR's purpose and the earlier
+  findings, post one short review), rendered only then, so the other goldens stay as they were; `SKILL.md`
+  is at its size cap and is not touched. The delta's files go to `delta-check.json` in the report directory,
+  which the prompt names: file names are PR content. A modified file without a patch whose type is binary
+  (an image, a font, an archive: `DeltaSize.Binaries`) counts 0 lines and is listed; it still makes the
+  measurement incomplete for the threshold, so `delta_check = false` keeps today's behaviour exactly. Any
+  other file without a patch (too large, a removed binary, a listing at GitHub's cap) and an added file mean
+  a full round, as before. Pauses, the re-review interval, the daily cap, capacity and drains hold it like any
+  round; a forced or requested round, one that names roles and a post-merge round run in full. The round
+  measures its commits again after the checkout (a newer head that grew past the threshold runs in full,
+  `round.delta_check_dropped`), never restarts on a push (its measure would be stale: the next round
+  measures the new commits), and a judge without its session runs a full recovery. The board's state cell,
+  the card's last round and `magnum status` call it a delta check (`delta check · quiet → 14:09`, `delta
+  check (4 lines)`, also in `engine.round_start`; `pr.<id>.delta_check` holds the one in flight), and the
+  note on a review whose head moved says "a short check of those commits follows" when one starts by
+  itself. Rejected: waiting for `rereview_max_wait` first (the check is cheap; waiting is what made the
+  case cost 2h), a separate run kind (the runs' kind column is a CHECK constraint; a migration for a label
+  is not worth it), and counting every file without a patch as 0 lines (a text file too large to diff
+  would pass as a short check).
+- **An approval stands while a delta check of the commits since is due** (2026-10-06; same case: the author
+  saw an approval appear and vanish 30 seconds later, for 4 lines). When the measured delta from an App's
+  approved commit to the head qualifies for a delta check (whatever round then runs), `followApproval` does
+  not dismiss the approval: it records it (`pr.<id>.approval_pending`, `review.approval_kept_for_check`)
+  and asks GitHub nothing more. The review posted next settles it: an approval supersedes it
+  (`review.approval_superseded`); a COMMENT or REQUEST_CHANGES dismisses it, and so does a round that fails
+  or needs attention (a charged setup failure too), a push that makes the delta too large, and an hour
+  after the first push it does not cover with no review posted (a pause, say), so an approval never covers
+  unreviewed code for long. The dismissal is the existing one (`review.approval_dismissed`, recorded as
+  DISMISSED while it is the PR's last review), its message "magnum: new commits since this approval; "
+  plus the reason; one GitHub did not answer is tried again at the next poll. A delta above the threshold,
+  an added file and `delta_check = false` keep the immediate dismissal. Rejected: keeping it until any
+  later review (an approval of unreviewed code could stand for hours behind a pause), and dismissing it
+  only after a failed check (the author would see the approval vanish late instead of early).
+- **SINCE REVIEW counts the PR's own changes across a base merge** (2026-10-06; one live PR showed 25
+  commits, 269 files, +13,307 −1,062 since its review, almost all of it master merged in). The board's
+  SINCE REVIEW column and the card read `since_review_json`, which `refreshSinceReview` took from the raw
+  comparison of the reviewed commit with the head, while the re-review gate, triage, the rerun and the
+  prompts already took the PR's own diff. It now takes the shared measure (`measureRange`), served by the
+  tick's comparisons, so a range the gate measured costs no call: a range with a merge commit or that
+  diverged counts the files whose own change differs, the lines that change adds and removes (every
+  line, comments too, as a size and not a threshold), and the PR's own commits since the review (the
+  commits of base...head that base...reviewed does not have, by SHA from the comparisons, which
+  `ComparePush` now lists; with more than 100, the difference of the totals), with `base_merged: true` and
+  the base branch's name; the cell gets a merge mark (`⑂`, nerd `nf-oct-git_merge`, ASCII `m`) and the card
+  says "(excluding a merge of master)". When the own diff cannot be compared in full, the raw counts stay,
+  marked `raw` ("(raw: including a merge of master)"). The own-diff comparisons are push comparisons now
+  (the same call, with up to 100 commits listed), and a size measured before this is measured again once
+  (`store.SinceReviewVersion`). Rejected: a separate Compare for the size (a third call for a range the gate
+  read), and counting only code lines (the column shows what changed, not what the threshold counts).

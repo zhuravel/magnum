@@ -169,8 +169,8 @@ render the same `slot_name` or `slot_path`.
 A push that lands while a round's reviewers still run restarts them on the new head, up to
 `[daemon] max_round_restarts` times per round (default 2; `0` turns restarts off). A push that lands
 while the judge works lets the round finish: Magnum appends "Reviewed <sha>; N commits arrived during
-the review, re-review follows" to the posted review and queues the re-review without waiting for
-`min_rereview_interval`. A PR whose head changed `burst_pushes` times (default 3) within `burst_window`
+the review, re-review follows" (or, for a small delta, "a short check of those commits follows") to the
+posted review and queues the re-review without waiting for `min_rereview_interval`. A PR whose head changed `burst_pushes` times (default 3) within `burst_window`
 (default `"30m"`) waits `burst_quiet_period` (default `"15m"`) instead of `push_quiet_period`; a
 `[[watch]]` can override all three, and `burst_pushes = 0` turns the rule off.
 
@@ -203,6 +203,22 @@ delta waits for further pushes, at most `rereview_max_wait` (default `"2h"`) aft
 an ancestor of the reviewed commit (GitHub: "behind") has nothing to measure, so the threshold does not hold
 its re-review.
 
+Such a small delta (more than 0 and fewer than `rereview_min_lines` code lines, no added file) gets a
+delta check instead of that wait and a full round (`[daemon] delta_check`, default `true`; a `[[watch]]`
+can override it): once the push quiet period (or the burst one) is over, only the judge runs, in its own
+session at its `rereview_effort`, without triage or reruns, and its prompt asks for one short review of the
+commits since its last one against the PR's purpose and its earlier findings (`delta_check: true`, and the
+delta's files listed in `delta-check.json` in the report directory). A modified image or other binary file
+(no patch) counts 0 lines there and is named in that list; an added file still means a full round. Pauses,
+the re-review interval, the daily cap, capacity and drains hold it as any round, and a forced or requested
+round, or one that names roles, runs in full. The board, the card and `magnum status` call it a delta
+check (`delta check · quiet → 14:09`, `delta check (4 lines)` on the card's last round and in
+`engine.round_start`). A judge whose session is gone makes it a full recovery round. An App's approval of the
+reviewed commit stands meanwhile (`review.approval_kept_for_check`): the check's approval supersedes it
+(`review.approval_superseded`); a check that comments, requests changes, fails or needs attention, a later
+push that makes the delta too large, or no check posted within an hour of the push dismisses it then, with
+the reason. `delta_check = false` keeps the wait and the full round.
+
 The rest of the re-review sees a base merge the same way: triage reads the PR's own diff of the files whose
 own change differs, the simplify reviewer's rerun measures that change, and the reviewers' and the judge's
 prompts say the push merged the base branch, so they compare the PR's diff before and after it instead of
@@ -223,7 +239,7 @@ models. Posted, blocked, timed-out and needs-attention rounds count.
 
 Every PR waiting for a round says why and until when: the dashboard's queue and the PR board show a
 compact form (`re-review · quiet → 14:09`, `re-review · cap 6/6 → 00:00`, `re-review · small delta
-8/30 lines → 16:40`, `re-review · requested by alice → now`), and the card and
+8/30 lines → 16:40`, `re-review · requested by alice → now`, `delta check · quiet → 14:09`), and the card and
 `magnum status <ref>` the full sentence with the command that lifts it (`magnum review <ref>` for the
 timing rules, `magnum resume` for a pause).
 
@@ -320,8 +336,8 @@ Repositories without a pool get a worktree per PR (`<clone>__worktrees/pr-<N>`).
 workspace name get isolated ones. A `[[repo]]` block can declare `setup`, `teardown`, `copy_files` and
 `env` explicitly instead. Its `no_findings_event` and `blocking_event` override the posting identity's
 verdicts for that repository, pooled or not. When a PR an App identity approved gets new commits,
-Magnum dismisses that approval before the re-review is queued; `keep_approvals = true` on the
-`[[repo]]` (or the `[[watch]]`) keeps it. `prepare` (such as `["bin/rails db:test:prepare"]`) and
+Magnum dismisses that approval before the re-review is queued (a small delta keeps it until its delta
+check posts, at most an hour); `keep_approvals = true` on the `[[repo]]` (or the `[[watch]]`) keeps it. `prepare` (such as `["bin/rails db:test:prepare"]`) and
 `ready` (probes, exit 0 = ready) on a `[[pool]]` or `[[repo]]` run in the checkout before the
 reviewers, as `zsh -lc` with the slot's env and within `ready_timeout` (5m) together, followed by a
 check that the login shell runs the Ruby the checkout pins; a failure never stops the round, it tells
@@ -554,7 +570,9 @@ One row per open PR, newest activity first: repository and PR number (two column
 (`★ 2h` when of you, also for an older PR whose author asked again; the dimmed age of the latest request
 when of someone else; it comes from the PR's timeline, which Magnum reads for the newest ten requests),
 Magnum's state badge, the last review (who, verdict, age, ⟳ when the head moved since), what changed since
-(`3c +41 −7`), and reviewer chips with a verdict glyph each (✔ approved, ✗ changes requested,
+(`3c +41 −7`; after a merge of the base branch, or a rebase onto it, the PR's own commits, files and lines
+with a merge mark, `⑂`, and the card says "(excluding a merge of master)", or "(raw: including a merge of
+master)" when the PR's own diff could not be compared in full), and reviewer chips with a verdict glyph each (✔ approved, ✗ changes requested,
 💬 commented, ◌ requested, ⟳ stale); yours and Magnum's are starred, and a bot's login carries the bot
 mark (🤖, or `[bot]` in ASCII), so an App named like you (`zhuravel[bot]`) never reads as you. `enter` opens the card with the full
 per-reviewer table (and a line with the latest request to each reviewer: who asked and when) and the last

@@ -212,5 +212,6 @@ func reviewFactsOf(pr store.PR) *tui.ReviewFacts {
 	}
 	f.SinceReview = &tui.ReviewDelta{Base: "reviewed", BaseSHA: s.Base, Commits: s.Commits, Files: max(s.Files, 0),
 		Additions: s.Additions, Deletions: s.Deletions, Truncated: s.Files < 0}
+	f.SinceReview.MergedBase, f.SinceReview.RawBase = sinceBases(*s)
 	return f
 }

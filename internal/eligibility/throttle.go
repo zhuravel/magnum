@@ -58,7 +58,8 @@ const (
 //     (DeltaKnown), adds no file and has fewer than RereviewMinLines changed
 //     lines, the PR waits until DeltaSince + RereviewMaxWait; a later push
 //     that reaches the threshold is measured again by the caller. A zero
-//     RereviewMinLines turns the rule off.
+//     RereviewMinLines turns the rule off, and so does a delta that gets a
+//     delta check (DeltaCheck): it is cheap, so it does not wait.
 //   - Requested (RequestedAt set): every rule above is skipped; the PR waits
 //     only RequestDebounce after the later of RequestedAt and HeadChangedAt.
 //   - Forced bypasses all of it: always ready.
@@ -122,7 +123,7 @@ func Throttle(d config.Daemon, f PRFacts, now time.Time) ThrottleDecision {
 		if limit := d.MaxRoundsPerPRPerDay; limit > 0 && f.RoundsToday >= limit {
 			hold(nextMidnight(now), RuleCap, fmt.Sprintf("daily round cap reached (%d per day)", limit))
 		}
-		if smallDelta(d, f) && !f.DeltaSince.IsZero() {
+		if smallDelta(d, f) && !DeltaCheck(d, f) && !f.DeltaSince.IsZero() {
 			hold(f.DeltaSince.Add(d.RereviewMaxWait.Duration), RuleSmallDelta, fmt.Sprintf("%s %d/%d lines since the review (at most %s)",
 				ReasonSmallDelta, f.DeltaLines, d.RereviewMinLines, d.RereviewMaxWait.Duration))
 		}
@@ -144,6 +145,18 @@ const (
 // RereviewMinLines (0 = no threshold).
 func smallDelta(d config.Daemon, f PRFacts) bool {
 	return d.RereviewMinLines > 0 && f.DeltaKnown && f.DeltaAddedFiles == 0 && f.DeltaLines < d.RereviewMinLines
+}
+
+// DeltaCheck reports whether a re-review's delta gets a delta check, a
+// judge-only round on the commits since the review, instead of a full round
+// after the threshold's wait: DeltaCheck (delta_check) and the threshold
+// (RereviewMinLines) are on, and the delta since the reviewed commit is
+// readable (DeltaReadable), adds no file and has more than 0 and fewer than
+// RereviewMinLines changed code lines. Whether the round is forced or
+// requested (then it runs in full) is the caller's business.
+func DeltaCheck(d config.Daemon, f PRFacts) bool {
+	return d.DeltaCheck && d.RereviewMinLines > 0 && f.ReviewedSHA != "" && f.DeltaReadable &&
+		f.DeltaAddedFiles == 0 && f.DeltaLines > 0 && f.DeltaLines < d.RereviewMinLines
 }
 
 // burst counts the pushes within d.BurstWindow of the latest one (that one

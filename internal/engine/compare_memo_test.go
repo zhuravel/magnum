@@ -22,7 +22,7 @@ func rangeCalls(g *fakeGH, base, head string) []string {
 // the approval check and the since-review size all ask about the reviewed
 // commit against the new head, and the poll asks GitHub once.
 func TestOnePollComparesAPushOnce(t *testing.T) {
-	h, app := newApprovalHarness(t)
+	h, app := newApprovalHarness(t, withoutDeltaCheck) // on, the 2 lines keep the approval for a delta check
 	approvedPR(h, 2, "b1")
 	h.gh.compare["b1...b2"] = github.CompareStats{Commits: 2, Files: 1, Additions: 2, Deletions: 2}
 	h.gh.files = map[string][]github.FileDelta{"b1...b2": rubyMixed}

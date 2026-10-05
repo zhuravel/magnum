@@ -37,6 +37,12 @@ func (e *Engine) setupFailed(ctx context.Context, job *roundJob, se *setupError)
 	}
 	subject := prSubject(job.repo, pr.Number)
 	e.event(ctx, "warn", subject, "engine.setup_failed", "round setup failed: "+se.err.Error(), nil)
+	if job.kind != kindContinue {
+		e.delKV(ctx, KVPRDeltaCheck(pr.ID))
+	}
+	if !se.noCharge {
+		e.keptApprovalFailed(ctx, job.repo, pr, "its round could not start")
+	}
 	if job.hasSlo {
 		// The slot stays the PR's, idle (held): claimed would keep it from
 		// eviction while the PR waits for its retry.
@@ -134,6 +140,12 @@ func (e *Engine) finish(ctx context.Context, job *roundJob, in pipeline.RoundInp
 	if outcome == "" {
 		outcome = pipeline.OutcomeError
 	}
+	switch {
+	case cancelled, outcome == pipeline.OutcomeUsageLimit, outcome == pipeline.OutcomeLoginRequired, outcome == pipeline.OutcomeOverloaded:
+		// The round goes on later (a recovery, a continue): it keeps its kind.
+	default:
+		e.delKV(ctx, KVPRDeltaCheck(pr.ID))
+	}
 	msg := res.Error
 	if msg == "" && runErr != nil {
 		msg = runErr.Error()
@@ -191,12 +203,15 @@ func (e *Engine) finish(ctx context.Context, job *roundJob, in pipeline.RoundInp
 		}
 		e.toPaused(ctx, pr, from, outcome+": "+msg, now.Add(backoff(attempts)), setAttempts)
 	case pipeline.OutcomeBlocked, pipeline.OutcomeNeedsAttention:
+		e.keptApprovalFailed(ctx, job.repo, pr, "its round ended "+outcome)
 		e.needsAttention(ctx, job, pr, from, outcome, msg, nil)
 	case pipeline.OutcomeIdentityError:
+		e.keptApprovalFailed(ctx, job.repo, pr, "its round ended "+outcome)
 		e.setKV(ctx, KVIdentityCheck(pr.Identity), "fail")
 		e.setKV(ctx, KVIdentityError(pr.Identity), "the judge's identity check failed: "+msg)
 		e.needsAttention(ctx, job, pr, from, outcome, msg, nil)
 	case pipeline.OutcomeIdentityLeak:
+		e.keptApprovalFailed(ctx, job.repo, pr, "its round ended "+outcome)
 		// msg is the pipeline's sentence: review N carrying the run's marker was posted as "x", not "y".
 		e.setKV(ctx, KVWatchPaused(job.repo.WatchOwner), fmt.Sprintf("identity leak on %s#%d: %s", job.repo.FullName(), pr.Number, msg))
 		e.needsAttention(ctx, job, pr, from, outcome, msg, nil)
@@ -224,6 +239,7 @@ func (e *Engine) finish(ctx context.Context, job *roundJob, in pipeline.RoundInp
 			e.retryOrAttention(ctx, job, pr, from, claimableState(pr), msg, false, classifySetup(runErr, pr, e.cfg, now).retryAt)
 			break
 		}
+		e.keptApprovalFailed(ctx, job.repo, pr, "its round ended "+outcome)
 		e.retryOrAttention(ctx, job, pr, from, claimableState(pr), outcome+": "+msg, true, time.Time{})
 	}
 	e.requestedRoundFailed(ctx, job, pr, outcome, msg, runErr) // operator.go
@@ -358,6 +374,7 @@ func (e *Engine) onPosted(ctx context.Context, job *roundJob, pr store.PR, in pi
 	if trivial == nil {
 		e.delKV(ctx, KVPRTrivial(pr.ID)) // a review of the head itself replaces the note
 	}
+	e.settleKeptApproval(ctx, job.repo, pr, target, res)
 	e.dismissFormer(ctx, job, pr, target, res)
 	e.delKV(ctx, kvPRDryRun(pr.ID)) // the forced request is served
 	// The request is served; the kinds that just worked lose their backoff.
@@ -439,18 +456,24 @@ func (e *Engine) noteMovedHead(ctx context.Context, job *roundJob, pr store.PR, 
 	if st.Commits == 1 {
 		what, are = "1 commit", "is"
 	}
-	// The re-review is promised only when it starts by itself (rereviewFollows).
-	follows := "re-review follows"
-	line := fmt.Sprintf("_Reviewed %s; %s arrived during the review, re-review follows._", textx.ShortSHA(target), what)
+	// The re-review is promised only when it starts by itself
+	// (rereviewFollows); a delta check of the commits is named as one.
+	var follows, line string
 	if trivial != nil {
 		follows = DeltaLabel(trivial) + ", no re-review needed"
 		line = fmt.Sprintf("_Reviewed %s; %s arrived during the review (%s), no re-review needed._", textx.ShortSHA(target), what, DeltaLabel(trivial))
-	} else if when, ok := e.rereviewFollows(ctx, job.watch, pr.ID); !ok {
+	} else if when, check, ok := e.rereviewFollows(ctx, job.watch, pr.ID); !ok {
 		follows = "not reviewed yet"
 		line = fmt.Sprintf("_Reviewed %s; %s arrived during the review and %s not reviewed yet._", textx.ShortSHA(target), what, are)
-	} else if when != "" {
-		follows += " " + when
-		line = fmt.Sprintf("_Reviewed %s; %s arrived during the review, re-review follows %s._", textx.ShortSHA(target), what, when)
+	} else {
+		follows = "re-review follows"
+		if check {
+			follows = "a short check of " + map[bool]string{true: "that commit", false: "those commits"}[st.Commits == 1] + " follows"
+		}
+		if when != "" {
+			follows += " " + when
+		}
+		line = fmt.Sprintf("_Reviewed %s; %s arrived during the review, %s._", textx.ShortSHA(target), what, follows)
 	}
 	subject := prSubject(job.repo, pr.Number)
 	if err := rounds.AppendToReview(ctx, job.repo.Owner, job.repo.Name, pr.Number, reviewID, line); err != nil {
@@ -464,26 +487,26 @@ func (e *Engine) noteMovedHead(ctx context.Context, job *roundJob, pr store.PR, 
 
 // rereviewFollows reports whether the re-review of the commits that arrived
 // during a review starts by itself, from the PR's wait as it is right after
-// the review was recorded (waitFor), and when: "" at the next dispatch,
-// "after the quiet period" when the push quiet period (or its burst form)
-// holds it. It does not when a longer timing rule holds the PR (the daily
-// cap, the small-delta threshold, an interval), or when something would hold
-// it once its timing clears: `magnum pause`, a drain or an infrastructure
-// pause, quiet hours, a mute, an agent kind the watch's roles use paused.
-func (e *Engine) rereviewFollows(ctx context.Context, w config.Watch, prID int64) (string, bool) {
+// the review was recorded (waitFor), when: "" at the next dispatch, "after
+// the quiet period" when the push quiet period (or its burst form) holds it,
+// and whether it is a delta check (check). It does not when a longer timing
+// rule holds the PR (the daily cap, the small-delta threshold, an interval),
+// or when something would hold it once its timing clears: `magnum pause`, a
+// drain or an infrastructure pause, quiet hours, a mute, an agent kind the
+// round's roles use paused (a delta check's judge alone).
+func (e *Engine) rereviewFollows(ctx context.Context, w config.Watch, prID int64) (when string, check, ok bool) {
 	pr, err := e.st.PRByID(ctx, prID)
 	if err != nil || (pr.State != store.PRRereviewPending && pr.State != store.PRQueued) {
-		return "", false
+		return "", false, false
 	}
 	now := e.now()
 	wait := e.waitFor(ctx, pr, e.globalWait(ctx, tickState{herdrUp: true}, now), now)
-	when := ""
 	switch wait.Reason {
 	case WaitNext, WaitRequested, WaitCapacity:
 	case WaitQuiet, WaitBurst:
 		when = "after the quiet period"
 	default:
-		return "", false
+		return "", false, false
 	}
 	at := now // when the quiet period ends (quiet hours then hold it)
 	if wait.Until.After(at) {
@@ -494,14 +517,17 @@ func (e *Engine) rereviewFollows(ctx context.Context, w config.Watch, prID int64
 	if toRun, err := pipeline.RolesToRun(ctx, e.st, e.cfg, pr, roles, e.requestedRoles(ctx, pr.ID), kindFor(pr)); err == nil {
 		roles = toRun
 	}
+	if wait.DeltaCheck {
+		roles = judgeAlone(roles)
+	}
 	switch {
 	case e.holdReason(ctx) != "":
 	case !pr.Forced && (e.userPause(ctx) != "" || pr.Muted || quietHoursNow(e.cfg.Daemon.QuietHours, at)):
 	case e.kindPauseReason(ctx, agentKinds(roles)) != "":
 	default:
-		return when, true
+		return when, wait.DeltaCheck, true
 	}
-	return "", false
+	return "", false, false
 }
 
 // requeueMovedHead is the backstop after onPosted's transition to reviewed

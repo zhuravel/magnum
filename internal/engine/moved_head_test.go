@@ -56,10 +56,12 @@ func TestMovedHeadNoteFollowsThePRsWait(t *testing.T) {
 		follows    = "101:_Reviewed b1; 1 commit arrived during the review, re-review follows._"
 		afterQuiet = "101:_Reviewed b1; 1 commit arrived during the review, re-review follows after the quiet period._"
 		notYet     = "101:_Reviewed b1; 1 commit arrived during the review and is not reviewed yet._"
+		checkQuiet = "101:_Reviewed b1; 1 commit arrived during the review, a short check of that commit follows after the quiet period._"
 	)
 	for _, tc := range []struct {
 		name      string
 		minLines  int // [daemon] rereview_min_lines; 0 = no threshold
+		noCheck   bool
 		files     []github.FileDelta
 		meanwhile func(h *harness)
 		want      string
@@ -72,11 +74,17 @@ func TestMovedHeadNoteFollowsThePRsWait(t *testing.T) {
 				h.t.Fatal(err)
 			}
 		}, want: notYet},
-		{name: "small delta", minLines: 30, files: rubyMixed, want: notYet},
+		{name: "small delta, delta_check off", minLines: 30, noCheck: true, files: rubyMixed, want: notYet},
+		{name: "small delta: a delta check", minLines: 30, files: rubyMixed, want: checkQuiet},
+		{name: "small delta: a delta check, magnum paused", minLines: 30, files: rubyMixed, meanwhile: func(h *harness) {
+			if err := h.st.SetKV(h.ctx, KVDaemonPaused, "1"); err != nil {
+				h.t.Fatal(err)
+			}
+		}, want: notYet},
 		{name: "quiet hours", meanwhile: func(h *harness) { h.cfg.Daemon.QuietHours = "00:00-23:59" }, want: notYet},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			h := newHarness(t, func(h *harness) { h.cfg.Daemon.RereviewMinLines = tc.minLines })
+			h := newHarness(t, func(h *harness) { h.cfg.Daemon.RereviewMinLines, h.cfg.Daemon.DeltaCheck = tc.minLines, !tc.noCheck })
 			var meanwhile func()
 			if tc.meanwhile != nil {
 				meanwhile = func() { tc.meanwhile(h) }
@@ -90,7 +98,10 @@ func TestMovedHeadNoteFollowsThePRsWait(t *testing.T) {
 				t.Fatal("no round.review_noted event")
 			}
 			wantEvent := "not reviewed yet"
-			if tc.want != notYet {
+			switch tc.want {
+			case checkQuiet:
+				wantEvent = "a short check of that commit follows"
+			case follows, afterQuiet:
 				wantEvent = "re-review follows"
 			}
 			if !strings.Contains(evs[i].Message, wantEvent) {

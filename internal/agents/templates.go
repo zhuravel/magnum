@@ -235,7 +235,16 @@ type JudgeData struct {
 	// BaseMerged (rereview): the commits since PreviousHeadSHA merged a
 	// branch in, usually the base, so PreviousHeadSHA..HeadSHA carries its
 	// commits: the prompt compares the PR's own diff before and after.
-	BaseMerged      bool
+	BaseMerged bool
+	// DeltaCheck (rereview): the round is a delta check: the judge alone
+	// reviews the commits since its last review, DeltaLines changed code
+	// lines in the files DeltaFile lists (a JSON file in the report
+	// directory, "" when it could not be written: the file names are PR
+	// content). Rendered as `delta_check: true` and one instruction, only
+	// then.
+	DeltaCheck      bool
+	DeltaLines      int
+	DeltaFile       string
 	MovedFrom       string // previous checkout path when the PR changed slots
 	PreviousReviews []PreviousReview
 	// Threads are the inline threads the reviewer login started on the PR,

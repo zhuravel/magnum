@@ -126,14 +126,15 @@ func TestTrivialPushClasses(t *testing.T) {
 }
 
 // skip_trivial_deltas = [] (daemon or watch) re-reviews every push; without
-// a re-review threshold (rereview_min_lines = 0) it does not even ask
-// GitHub for the patches.
+// a re-review threshold (rereview_min_lines = 0) it does not even measure
+// the delta. The poll compares the range once either way (the since-review
+// size).
 func TestTrivialSkipCanBeTurnedOff(t *testing.T) {
 	zero := 0
 	for _, tc := range []struct {
-		name    string
-		mod     func(h *harness)
-		patches bool // the threshold still measures the delta
+		name     string
+		mod      func(h *harness)
+		measured bool // the threshold still measures the delta
 	}{
 		{"daemon", func(h *harness) {
 			h.cfg.Daemon.SkipTrivialDeltas = []string{}
@@ -158,8 +159,11 @@ func TestTrivialSkipCanBeTurnedOff(t *testing.T) {
 			if pr.State != store.PRRereviewPending {
 				t.Fatalf("state %s, want rereview_pending", pr.State)
 			}
-			if got := h.gh.count("compare_files:") != 0; got != tc.patches {
-				t.Fatalf("patches fetched = %v, want %v: %v", got, tc.patches, h.gh.calls)
+			if _, got := h.e.deltaRecord(h.ctx, pr.ID); got != tc.measured {
+				t.Fatalf("delta measured = %v, want %v", got, tc.measured)
+			}
+			if got := rangeCalls(h.gh, "b1", "b2"); len(got) != 1 {
+				t.Fatalf("compares of b1...b2 = %q, want one", got)
 			}
 		})
 	}

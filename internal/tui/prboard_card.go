@@ -432,6 +432,13 @@ func (p prbPainter) sinceSentence(r PRBoardRow) []string {
 	default:
 		s = nums + p.st.Dim.Render(" since the reviewed head "+textx.ShortSHA(d.BaseSHA))
 	}
+	switch {
+	case isBaseDelta(d):
+	case d.MergedBase != "":
+		s += p.st.Dim.Render(" (excluding a merge of " + d.MergedBase + ")")
+	case d.RawBase != "":
+		s += p.st.Dim.Render(" (raw: including a merge of " + d.RawBase + ")")
+	}
 	if d.Truncated {
 		return []string{s, p.st.Dim.Render("at least: GitHub truncated the compare")}
 	}

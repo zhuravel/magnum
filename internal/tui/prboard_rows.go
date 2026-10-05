@@ -127,6 +127,10 @@ type PRBoardRow struct {
 	// · quiet → 14:09") and the sentence with the command that lifts it,
 	// which the card shows. "" when the PR does not wait or no daemon said.
 	Wait, WaitDetail string
+	// DeltaCheck: the round the PR waits for is a delta check (the judge
+	// alone on a small delta); the state cell says so, as it does for a
+	// round in flight whose RoundWhy is one.
+	DeltaCheck bool
 	// Note is a one-line remark about the last review shown under LAST REVIEW
 	// on the card (e.g. "comment-only push skipped (a7b3f8c → 602da9d)").
 	Note string
@@ -188,6 +192,11 @@ type ReviewDelta struct {
 	BaseSHA                              string
 	Commits, Files, Additions, Deletions int
 	Truncated                            bool // the counts are lower bounds
+	// MergedBase is the base branch the commits since merged in (or were
+	// rebased onto) when the counts leave its changes out (the PR's own);
+	// Raw: they merged it, but the counts include its changes (the PR's
+	// own diff could not be compared in full). RawBase names it then.
+	MergedBase, RawBase string
 }
 
 // PRSort orders the board.
@@ -574,6 +583,7 @@ func sanitizeRow(r PRBoardRow) PRBoardRow {
 	if r.SinceReview != nil {
 		d := *r.SinceReview
 		d.Base, d.BaseSHA = cleanText(d.Base), cleanText(d.BaseSHA)
+		d.MergedBase, d.RawBase = cleanText(d.MergedBase), cleanText(d.RawBase)
 		r.SinceReview = &d
 	}
 	if r.CI != nil {

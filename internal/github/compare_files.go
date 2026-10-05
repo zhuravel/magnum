@@ -51,6 +51,9 @@ type PushComparison struct {
 	// listed fewer of them than Commits (more than ComparePushCommits), so
 	// a merge cannot be ruled out.
 	Merge bool
+	// SHAs are the commits GitHub listed, oldest first: all Commits of them
+	// unless there are more than ComparePushCommits.
+	SHAs  []string
 	Files []FileDelta
 	// Stats is what Compare reads of the same range (the commits, the
 	// files, -1 at GitHub's file cap, and their additions and deletions),
@@ -84,6 +87,7 @@ func (c *Client) compareFiles(ctx context.Context, owner, repo, base, head strin
 		Status       string `json:"status"`
 		TotalCommits int    `json:"total_commits"`
 		Commits      []struct {
+			SHA     string `json:"sha"`
 			Parents []struct {
 				SHA string `json:"sha"`
 			} `json:"parents"`
@@ -121,6 +125,9 @@ func (c *Client) compareFiles(ctx context.Context, owner, repo, base, head strin
 	for _, cm := range r.Commits {
 		if len(cm.Parents) > 1 {
 			out.Merge = true
+		}
+		if cm.SHA != "" {
+			out.SHAs = append(out.SHAs, cm.SHA)
 		}
 	}
 	return out, nil

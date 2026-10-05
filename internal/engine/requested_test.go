@@ -548,7 +548,7 @@ func TestReviewRequestSkipsTheTimingRules(t *testing.T) {
 		hold   string   // why the automatic re-review waits before the request
 	}{
 		{name: "daily cap", mod: func(h *harness) { h.cfg.Daemon.MaxRoundsPerPRPerDay = 1 }, pushes: []string{"b2"}, hold: WaitCap},
-		{name: "small delta", files: rubyMixed, pushes: []string{"b2"}, hold: WaitDelta},
+		{name: "small delta", mod: withoutDeltaCheck, files: rubyMixed, pushes: []string{"b2"}, hold: WaitDelta},
 		{name: "burst quiet period", pushes: []string{"b2", "b3", "b4"}, hold: WaitBurst},
 		{name: "draft interval", draft: true, pushes: []string{"b2"}, hold: WaitDraftInterval},
 	} {
@@ -910,8 +910,10 @@ func pushedWithDelta(t *testing.T, h *harness, files []github.FileDelta) store.P
 	return h.wantState(2, store.PRRereviewPending)
 }
 
+// With delta_check off: with it on, the small delta gets a delta check
+// after the quiet period (deltacheck_test.go).
 func TestSmallDeltaHoldsTheReReviewUntilTheMaxWait(t *testing.T) {
-	h := newHarness(t)
+	h := newHarness(t, withoutDeltaCheck)
 	pr := pushedWithDelta(t, h, rubyMixed)
 	pushedAt := h.clock.Now() // 10:45
 	due := pushedAt.Add(2 * time.Hour)
@@ -955,7 +957,8 @@ func TestSmallDeltaHoldsTheReReviewUntilTheMaxWait(t *testing.T) {
 
 // A later push that brings the unreviewed delta (counted from the reviewed
 // commit) to the threshold, or adds a file, is reviewed after the quiet
-// period; one line short of the threshold it keeps waiting.
+// period; one line short of the threshold it keeps waiting (delta_check
+// off).
 func TestLargerUnreviewedDeltaIsReviewedAfterTheQuietPeriod(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -967,7 +970,7 @@ func TestLargerUnreviewedDeltaIsReviewedAfterTheQuietPeriod(t *testing.T) {
 		{"29 changed lines", codeDelta(29), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			h := newHarness(t)
+			h := newHarness(t, withoutDeltaCheck)
 			pushedWithDelta(t, h, rubyMixed) // b2 at 10:45: 2 lines
 			firstPush := h.clock.Now()
 			if got := MeasureDelta(tc.files); got.Lines < 29 && got.AddedFiles == 0 {
@@ -1008,7 +1011,7 @@ func TestLargerUnreviewedDeltaIsReviewedAfterTheQuietPeriod(t *testing.T) {
 }
 
 // rereview_min_lines = 0 (daemon or watch) turns the threshold off; a
-// watch's own value turns it on again.
+// watch's own value turns it on again (delta_check off).
 func TestSmallDeltaThresholdCanBeSetPerWatchOrTurnedOff(t *testing.T) {
 	zero, thirty := 0, 30
 	for _, tc := range []struct {
@@ -1025,7 +1028,7 @@ func TestSmallDeltaThresholdCanBeSetPerWatchOrTurnedOff(t *testing.T) {
 		}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			h := newHarness(t, tc.mod)
+			h := newHarness(t, withoutDeltaCheck, tc.mod)
 			pushedWithDelta(t, h, rubyMixed) // pushed at 10:45
 			h.advance(5 * time.Minute)       // 10:50: the quiet period ends
 			h.tick()

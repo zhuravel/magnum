@@ -93,8 +93,12 @@ type fakeGH struct {
 	dismissErr error                   // DismissReview fails
 	createErr  error                   // CreateReview fails
 	created    []string                // CreateReview calls: "<event>@<sha>:<body>"
-	// files answers CompareFiles by "base...head" (absent = ErrNotFound).
-	files map[string][]github.FileDelta
+	// files answers CompareFiles by "base...head" (absent = ErrNotFound);
+	// filesErr fails it (and ComparePush) instead.
+	files    map[string][]github.FileDelta
+	filesErr error
+	// shas are the commits ComparePush lists for "base...head".
+	shas map[string][]string
 	// required answers RequiredChecks by full name (absent = GitHub does not
 	// say); requiredErr fails it.
 	required    map[string][]string
@@ -128,7 +132,8 @@ func (g *fakeGH) ComparePush(ctx context.Context, owner, repo, base, head string
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	key := base + "..." + head
-	return github.PushComparison{Status: status, Commits: g.compare[key].Commits, Merge: g.merges[key], Files: fs, Stats: g.compare[key]}, nil
+	return github.PushComparison{Status: status, Commits: g.compare[key].Commits, Merge: g.merges[key], SHAs: slices.Clone(g.shas[key]),
+		Files: fs, Stats: g.compare[key]}, nil
 }
 
 func (g *fakeGH) CompareFilesStatus(ctx context.Context, owner, repo, base, head string) (string, []github.FileDelta, error) {
@@ -186,6 +191,9 @@ func (g *fakeGH) CompareFiles(_ context.Context, owner, repo, base, head string)
 	g.record(fmt.Sprintf("compare_files:%s/%s:%s...%s", owner, repo, base, head))
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if g.filesErr != nil {
+		return nil, g.filesErr
+	}
 	fs, ok := g.files[base+"..."+head]
 	if !ok {
 		return nil, &github.APIError{Op: "compare files", Status: 404, Message: "Not Found"}

@@ -203,10 +203,17 @@ func TestRenderGolden(t *testing.T) {
 	withNotes.ThreadsFile = "/Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/review-threads.json"
 	withNotes.ThreadSummary = "3 threads (1 resolved); replies: 1 fixed, 1 not a bug; 1 thread without a reply"
 
+	// A delta check: the judge alone, on a small delta whose files a JSON
+	// file in the report directory lists.
+	deltaCheck := judgeFixture()
+	deltaCheck.DeltaCheck, deltaCheck.DeltaLines = true, 4
+	deltaCheck.DeltaFile = "/Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/delta-check.json"
+
 	cases := []struct {
 		golden, name string
 		data         any
 	}{
+		{"judge_rereview_delta_check", "judge-rereview.md", deltaCheck},
 		{"judge_initial", "judge-initial.md", judgeFixture()},
 		{"judge_initial_blind", "judge-initial.md", blindJudge},
 		{"judge_initial_post_merge", "judge-initial.md", postMerge},
@@ -336,6 +343,44 @@ func TestJudgePromptsSayPostMergeOnlyForAPostMergeRound(t *testing.T) {
 		if !strings.Contains(block, "\npost_merge: true\n") || !strings.HasSuffix(strings.TrimSpace(block), "</magnum>") {
 			t.Errorf("%s: post_merge is not in the <magnum> block:\n%s", name, got)
 		}
+	}
+}
+
+// The re-review prompt says delta_check and asks for a short review of the
+// commits since the last one only in a delta check: every other round's
+// prompt stays as it was.
+func TestJudgeRereviewSaysDeltaCheckOnlyForADeltaCheck(t *testing.T) {
+	const instruction = "Only the commits since your last review changed (4 lines; files listed in /state/delta-check.json). " +
+		"Review just those changes against the PR's purpose and your earlier findings; the rest stands as reviewed. Post one short review."
+	p := prompt(t, "judge-rereview.md")
+	d := judgeFixture()
+	d.DeltaLines, d.DeltaFile = 4, "/state/delta-check.json" // ignored unless DeltaCheck
+	normal, err := RenderPrompt(p, d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want, err := RenderPrompt(p, judgeFixture()); err != nil || normal != want {
+		t.Fatalf("an ordinary re-review's prompt changed with the delta fields set (%v)", err)
+	}
+	if strings.Contains(normal, "delta_check") || strings.Contains(normal, "Only the commits since") {
+		t.Fatalf("an ordinary re-review names the delta check:\n%s", normal)
+	}
+	d.DeltaCheck = true
+	got, err := RenderPrompt(p, d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "\n"+instruction+"\n") {
+		t.Errorf("the delta check's prompt lacks %q:\n%s", instruction, got)
+	}
+	block := got[strings.Index(got, "<magnum>"):]
+	if !strings.Contains(block, "\ndelta_check: true\n") {
+		t.Errorf("delta_check is not in the <magnum> block:\n%s", got)
+	}
+	// A file list that could not be written leaves its mention out.
+	d.DeltaFile = ""
+	if got, err := RenderPrompt(p, d); err != nil || !strings.Contains(got, "changed (4 lines). Review just") {
+		t.Errorf("without the file: %v\n%s", err, got)
 	}
 }
 

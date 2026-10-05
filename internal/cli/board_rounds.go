@@ -21,7 +21,8 @@ import (
 const boardRoundsWindow = 7 * 24 * time.Hour
 
 // The events a round leaves, as the engine writes them: engine.round_start
-// (round.go, prepare) with {"kind", "roles", "requested", "post_merge"};
+// (round.go, prepare) with {"kind", "roles", "requested", "post_merge"} and,
+// for a delta check, {"delta_check", "delta_lines"};
 // round.triage (triage.go), before it, with {"runs", "skips", "reason"} for a
 // decision or {"why"} when every role runs; round.rerun_role (rerun.go),
 // before triage, with {"role", "lines"}. Triage and the reruns run during the
@@ -106,10 +107,12 @@ func roundWhyOf(evs []store.Event) *tui.RoundWhy {
 	}
 	start := eventData(evs[last])
 	w := &tui.RoundWhy{
-		Kind:      dataString(start, "kind"),
-		PostMerge: dataBool(start, "post_merge"),
-		Roles:     dataStrings(start, "roles"),
-		Requested: dataStrings(start, "requested"),
+		Kind:       dataString(start, "kind"),
+		PostMerge:  dataBool(start, "post_merge"),
+		DeltaCheck: dataBool(start, "delta_check"),
+		DeltaLines: dataInt(start, "delta_lines"),
+		Roles:      dataStrings(start, "roles"),
+		Requested:  dataStrings(start, "requested"),
 	}
 	setup := evs[prev+1 : last]
 
