@@ -344,13 +344,15 @@ func actionRun(a rowAct, r actRow) (what string, fn actionFunc) {
 	target := r.target()
 	what = rowActDefs[a].what + " " + target
 	// on calls a DashboardActions method on target.
-	on := func(call func(DashboardActions, context.Context, string) (string, error)) actionFunc {
-		return func(ctx context.Context, act DashboardActions) (string, error) { return call(act, ctx, target) }
+	on := func(call func(DashboardActions, context.Context, string) (ActionResult, error)) actionFunc {
+		return func(ctx context.Context, act DashboardActions) (ActionResult, error) { return call(act, ctx, target) }
 	}
 	switch a {
 	case actReview, actFresh, actSimplify:
 		o := reviewOptsOf(a)
-		return what, func(ctx context.Context, act DashboardActions) (string, error) { return act.Review(ctx, target, o) }
+		return what, func(ctx context.Context, act DashboardActions) (ActionResult, error) {
+			return act.Review(ctx, target, o)
+		}
 	case actAbort:
 		return what, on(DashboardActions.Abort)
 	case actIgnore:
@@ -366,11 +368,11 @@ func actionRun(a rowAct, r actRow) (what string, fn actionFunc) {
 		if a == actTracker {
 			url, name = r.issueURL, r.issue+": "+r.issueURL
 		}
-		return rowActDefs[a].what, func(ctx context.Context, act DashboardActions) (string, error) {
+		return rowActDefs[a].what, func(ctx context.Context, act DashboardActions) (ActionResult, error) {
 			if err := act.OpenBrowser(ctx, url); err != nil {
-				return "", err
+				return ActionResult{}, err
 			}
-			return "opened " + name, nil
+			return ActionResult{Text: "opened " + name}, nil
 		}
 	case actPin:
 		return what, on(DashboardActions.Pin)
@@ -402,10 +404,10 @@ func (b *actionBar) rowAction(a rowAct, r actRow) (cmd tea.Cmd, started bool) {
 		return b.setFlash(why, true), false
 	}
 	if q := actionQuestion(a, r); q != "" {
-		b.confirm = &pendingAction{question: q, what: what, fn: fn}
+		b.confirm = &pendingAction{question: q, what: what, target: r.target(), fn: fn}
 		return nil, false
 	}
-	return b.start(what, fn)
+	return b.start(what, r.target(), fn)
 }
 
 // actionMenu is the menu entries of acts for the row r, dimmed where the

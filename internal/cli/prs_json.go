@@ -50,6 +50,8 @@ type prsJSONRow struct {
 	ErrorDetail      []string          `json:"error_detail"`
 	RoundsToday      int               `json:"rounds_today"`
 	LastRound        *prsJSONRound     `json:"last_round"`
+	RoundWhy         *prsJSONRoundWhy  `json:"round_why"` // which roles the last round ran and why
+	Spend            *prsJSONSpend     `json:"spend"`     // agent time over the last 7 days
 	Wait             string            `json:"wait"`
 	WaitDetail       string            `json:"wait_detail"`
 	Note             string            `json:"note"`
@@ -154,6 +156,29 @@ type prsJSONStage struct {
 	Failed          bool   `json:"failed"`
 }
 
+type prsJSONRoundWhy struct {
+	Kind      string             `json:"kind"`
+	PostMerge bool               `json:"post_merge"`
+	Roles     []string           `json:"roles"`
+	Requested []string           `json:"requested"`
+	Reruns    []prsJSONRoleRerun `json:"reruns"`
+	Triaged   bool               `json:"triaged"`
+	Skipped   []string           `json:"skipped"`
+	Reason    string             `json:"reason"`
+	EveryRole string             `json:"every_role"` // why triage kept every role
+}
+
+type prsJSONRoleRerun struct {
+	Role  string `json:"role"`
+	Lines int    `json:"lines"` // code lines changed since its last run
+}
+
+type prsJSONSpend struct {
+	WindowSeconds int64 `json:"window_seconds"`
+	AgentSeconds  int64 `json:"agent_seconds"`
+	Rounds        int   `json:"rounds"`
+}
+
 type prsJSONRequest struct {
 	To   string    `json:"to"` // a login, or team:<slug>
 	By   string    `json:"by"`
@@ -181,10 +206,21 @@ func prsJSONOf(r tui.PRBoardRow) prsJSONRow {
 		Reviewers: mapList(r.Reviewers, prsJSONReviewerOf), SinceReview: mapPtr(r.SinceReview, prsJSONDeltaOf),
 		Slot: r.Slot, Pinned: r.Pinned, Muted: r.Muted, Notes: r.Notes, NextEligibleAt: r.NextEligibleAt,
 		LastError: r.LastError, ErrorFix: r.ErrorFix, ErrorDetail: listOf(r.ErrorDetail), RoundsToday: r.RoundsToday,
-		LastRound: mapPtr(r.LastRound, prsJSONRoundOf), Wait: r.Wait, WaitDetail: r.WaitDetail, Note: r.Note,
+		LastRound: mapPtr(r.LastRound, prsJSONRoundOf), RoundWhy: mapPtr(r.RoundWhy, prsJSONRoundWhyOf),
+		Spend: mapPtr(r.Spend, prsJSONSpendOf), Wait: r.Wait, WaitDetail: r.WaitDetail, Note: r.Note,
 		RequestedToMe: mapPtr(r.RequestedToMe, prsJSONRequestOf), LastRequest: mapPtr(r.LastRequest, prsJSONRequestOf),
 		Requests: mapList(r.Requests, prsJSONRequestOf), ClosedAt: r.ClosedAt, Recent: r.Recent, MergedUnreviewed: r.MergedUnreviewed, FlagDismissed: r.FlagDismissed,
 	}
+}
+
+func prsJSONRoundWhyOf(w tui.RoundWhy) prsJSONRoundWhy {
+	return prsJSONRoundWhy{Kind: w.Kind, PostMerge: w.PostMerge, Roles: listOf(w.Roles), Requested: listOf(w.Requested),
+		Reruns:  mapList(w.Reruns, func(r tui.RoleRerun) prsJSONRoleRerun { return prsJSONRoleRerun{Role: r.Role, Lines: r.Lines} }),
+		Triaged: w.Triaged, Skipped: listOf(w.Skipped), Reason: w.Reason, EveryRole: w.EveryRole}
+}
+
+func prsJSONSpendOf(s tui.SpendInfo) prsJSONSpend {
+	return prsJSONSpend{WindowSeconds: int64(s.Window / time.Second), AgentSeconds: int64(s.AgentTime / time.Second), Rounds: s.Rounds}
 }
 
 func prsJSONBadgeOf(b tui.Badge) prsJSONBadge {

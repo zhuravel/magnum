@@ -37,6 +37,10 @@ type reqClient struct {
 	// version is this binary's build, compared with the daemon's
 	// (engine.SkewNote).
 	version string
+	// sent, when set, hears the outcome of every request send queued, as
+	// send returns it: the screens keep the ids to follow the requests
+	// still pending.
+	sent func(reqOutcome)
 }
 
 // reqSend tunes one send.
@@ -87,7 +91,7 @@ func (o reqOutcome) Result() string { return strings.TrimSpace(store.Deref(o.Req
 // as o says (only when a daemon answered the kick, or holds its lock). The
 // error is only for a request that could not be queued, or for a NeedDaemon
 // send without a daemon; anything else is in the outcome.
-func (rc reqClient) send(ctx context.Context, kind string, payload any, o reqSend) (reqOutcome, error) {
+func (rc reqClient) send(ctx context.Context, kind string, payload any, o reqSend) (out reqOutcome, err error) {
 	if o.NeedDaemon && rc.running != nil {
 		if pid, err := rc.running(); err == nil && pid == 0 {
 			return reqOutcome{}, errNoDaemon
@@ -97,11 +101,15 @@ func (rc reqClient) send(ctx context.Context, kind string, payload any, o reqSen
 	if err != nil {
 		return reqOutcome{}, fmt.Errorf("queue %s request: %w", kind, err)
 	}
-	out := reqOutcome{Req: store.Request{ID: id, Kind: kind, State: store.RequestPending}, Held: o.Held}
+	out = reqOutcome{Req: store.Request{ID: id, Kind: kind, State: store.RequestPending}, Held: o.Held}
+	if rc.sent != nil {
+		defer func() { rc.sent(out) }()
+	}
 	out.PID, out.KickErr = rc.kick()
 	if o.NeedDaemon && out.PID == 0 {
 		why := "no daemon answered, so nothing runs it"
 		if err := rc.st.CompleteRequest(ctx, id, store.RequestFailed, why); err == nil || !errors.Is(err, store.ErrConflict) {
+			out.Req.State, out.Req.Result = store.RequestFailed, &why
 			if out.KickErr != nil {
 				return out, fmt.Errorf("%w (waking it failed: %v)", errNoDaemon, out.KickErr)
 			}

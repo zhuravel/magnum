@@ -34,7 +34,8 @@ func (p prbPainter) helpContent(width int) []string {
 		{"enter", "details card"}, {"s / S", "next sort / reverse it"}, {"/", "filter (fuzzy)"},
 		{"v / O", "next view / next owner (all, then each)"},
 		{"esc", "back, clear the filter, quit"}, {"ctrl+r / F5", "refresh now"}, {"tab", "status dashboard"},
-		{"h / W", "hide ignored and skipped / reset widths"}, {"?", "this help"}, {"q", "quit"},
+		{"h / W", "hide ignored and skipped / reset widths"}, {"? / " + logKey, "this help / the action log"},
+		{"q", "quit"},
 	})
 	acts := section("Act on the PR", []hint{
 		{"r", "review now (asks y/N); post-merge if merged"}, {"R", "fresh review in new agent sessions (asks y/N)"},
@@ -115,16 +116,7 @@ func (p prbPainter) helpContent(width int) []string {
 // help is the help box centered in width x height, its content scrolled
 // by scroll lines; below counts the lines out of view.
 func (p prbPainter) help(width, height, scroll int) ([]string, int) {
-	lines := p.helpContent(width)
-	room := max(height-2, 1)
-	scroll = min(max(scroll, 0), max(len(lines)-room, 0))
-	end := min(scroll+room, len(lines))
-	box := p.st.Box.BorderForeground(p.pal.ruleColor).Padding(0, 2)
-	out := strings.Split(lipgloss.PlaceHorizontal(width, lipgloss.Center, box.Render(strings.Join(lines[scroll:end], "\n"))), "\n")
-	for i := range out {
-		out[i] = truncate(strings.TrimRight(out[i], " "), width)
-	}
-	return out, len(lines) - end
+	return p.box(p.helpContent(width), width, height, scroll)
 }
 
 // cardInner is the card's text width inside its border and padding.
@@ -249,6 +241,7 @@ func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
 		{"Notes", map[bool]string{true: "yes", false: "no"}[r.Notes]},
 		{"Next review", next},
 		{"Rounds today", strconv.Itoa(r.RoundsToday)},
+		{spendLabel(r.Spend), orDim(spendCell(r.Spend))},
 	}
 	if r.Author == "" {
 		facts[0][1] = dash
@@ -328,14 +321,27 @@ func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
 			add("  " + w)
 		}
 	}
-	if t := r.LastRound; t != nil {
-		head := p.g.headed("LAST ROUND") + fmt.Sprintf(" (%d", t.Round)
-		if t.Kind != "" {
-			head += ", " + t.Kind
+	if t, why := r.LastRound, r.RoundWhy; t != nil || why != nil {
+		head := p.g.headed("LAST ROUND")
+		if t != nil {
+			head += fmt.Sprintf(" (%d", t.Round)
+			if t.Kind != "" {
+				head += ", " + t.Kind
+			}
+			head += ")"
 		}
-		add("", p.st.Section.Render(head+")"))
-		for _, l := range flow(p.timingParts(*t), p.st.Dim.Render(" · "), max(inner-2, 10)) {
-			add("  " + l)
+		add("", p.st.Section.Render(head))
+		if why != nil {
+			for _, l := range p.roundWhyLines(*why) {
+				for _, w := range strings.Split(lipgloss.NewStyle().Width(max(inner-2, 10)).Render(l), "\n") {
+					add("  " + strings.TrimRight(w, " "))
+				}
+			}
+		}
+		if t != nil {
+			for _, l := range flow(p.timingParts(*t), p.st.Dim.Render(" · "), max(inner-2, 10)) {
+				add("  " + l)
+			}
 		}
 	}
 

@@ -664,6 +664,8 @@ func TestPRBoardActionKeys(t *testing.T) {
 	e, _ = boardAct(t, e, "p")
 	mustContain(t, viewOf(e), "pin talkable/magnum#42: slot busy")
 	e, _ = send(t, e, flashExpireMsg{seq: e.flashSeq})
+	mustContain(t, viewOf(e), "pin talkable/magnum#42: slot busy") // a failure waits for a key
+	e, _ = send(t, e, keyMsg("j"))
 	mustNotContain(t, viewOf(e), "slot busy")
 
 	n := newPRBoardModel(context.Background(), &fakeBoardSource{rows: boardRows()}, nil, PRBoardOptions{})

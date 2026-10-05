@@ -160,6 +160,22 @@ func statusCodexText(u statusCodexUsage, now time.Time) string {
 	case u.Soft > 0 || u.Hard > 0:
 		s += fmt.Sprintf("; caps %g%%/%g%%", u.Soft, u.Hard)
 	}
+	if u.Pace > 0 && (u.Hard <= 0 || pct < u.Hard) {
+		s += fmt.Sprintf("; pace %.1fx", u.Pace)
+		var reach []string
+		if u.SoftAt != nil {
+			reach = append(reach, fmt.Sprintf("%g%% %s", u.Soft, inspClock(now, *u.SoftAt)))
+		}
+		if u.HardAt != nil {
+			reach = append(reach, fmt.Sprintf("%g%% %s", u.Hard, inspClock(now, *u.HardAt)))
+		}
+		switch {
+		case len(reach) > 0:
+			s += ": " + strings.Join(reach, ", ")
+		case u.Soft > 0 || u.Hard > 0:
+			s += ": within the window"
+		}
+	}
 	return s
 }
 

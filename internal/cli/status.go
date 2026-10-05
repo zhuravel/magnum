@@ -220,7 +220,10 @@ type statusDaemon struct {
 }
 
 // statusCodexUsage is the Codex budget as the daemon last read it from Codex's
-// session files, with the [usage] thresholds it is judged against.
+// session files, with the [usage] thresholds it is judged against. Pace is
+// the share of the budget used over the share of the window elapsed (2.7 runs
+// out at 37% of the window); SoftAt and HardAt are when the caps are reached
+// at that average pace, left out once reached and when the reset comes first.
 type statusCodexUsage struct {
 	Percent       int        `json:"percent"`
 	WindowMinutes int        `json:"window_minutes,omitempty"`
@@ -229,6 +232,9 @@ type statusCodexUsage struct {
 	ReportedAt    *time.Time `json:"reported_at,omitempty"`
 	Soft          float64    `json:"soft"`
 	Hard          float64    `json:"hard"`
+	Pace          float64    `json:"pace,omitempty"`
+	SoftAt        *time.Time `json:"soft_at,omitempty"`
+	HardAt        *time.Time `json:"hard_at,omitempty"`
 }
 
 // statusRetro is the learning loop: whether [learn] schedules the daily

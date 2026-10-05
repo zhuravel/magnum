@@ -78,17 +78,17 @@ func TestPRBoardSkippedRows(t *testing.T) {
 	lay := m.tableLayout(p, 200)
 	dim := lipgloss.NewStyle().Foreground(p.pal.dim)
 	struck := func(raw string) bool { return strings.Contains(raw, "\x1b[9m") || strings.Contains(raw, ";9m") }
-	if raw := p.rowLine(skippedRow(), lay, 200, false); !hasStyled(raw, dim, "Bump rack from 3.0 to 3.1") || struck(raw) {
+	if raw := p.rowLine(skippedRow(), lay, 200, false, false); !hasStyled(raw, dim, "Bump rack from 3.0 to 3.1") || struck(raw) {
 		t.Errorf("a skipped row is not dimmed, or struck through: %q", raw)
 	}
 	ignored := skippedRow()
 	ignored.State, ignored.Muted = "ignored", true
-	if raw := p.rowLine(ignored, lay, 200, false); !struck(raw) {
+	if raw := p.rowLine(ignored, lay, 200, false, false); !struck(raw) {
 		t.Errorf("an ignored row lost its strikethrough: %q", raw)
 	}
 	reviewed := skippedRow()
 	reviewed.State = "reviewed"
-	if raw := p.rowLine(reviewed, lay, 200, false); hasStyled(raw, dim, "Bump rack from 3.0 to 3.1") {
+	if raw := p.rowLine(reviewed, lay, 200, false, false); hasStyled(raw, dim, "Bump rack from 3.0 to 3.1") {
 		t.Error("a reviewed row is dimmed")
 	}
 

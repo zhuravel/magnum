@@ -67,7 +67,7 @@ func (m *dashboardModel) setWidths(w map[string]int) {
 // from scroll, the status and hint lines, the top cut on a short screen.
 func (m dashboardModel) bodyLineAt(y int) int {
 	w, h := m.viewWidth(), m.viewHeight()
-	if !m.haveData || m.showHelp || h <= 1 {
+	if !m.haveData || m.showHelp || m.showLog || h <= 1 {
 		return -1
 	}
 	hdr := len(m.header(w))
@@ -117,6 +117,10 @@ func (m *dashboardModel) wheel(b tea.MouseButton) {
 	}
 	if m.showHelp {
 		m.helpScroll = max(m.helpScroll+n, 0) // fixScroll keeps it within the help
+		return
+	}
+	if m.showLog {
+		m.logScroll = max(m.logScroll+n, 0)
 		return
 	}
 	if !m.haveData {

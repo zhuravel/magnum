@@ -1500,3 +1500,65 @@ editing history. Code, config comments and prompts reference these by their head
   slowest role (median 14m, p90 26m). The kind now has `effort = ["--effort", "{effort}"]`; both flags are
   part of every launch and resume (`Kind.Argv`). Which model and effort a deployment uses stays config
   (`[[role]] model`, `effort`, `rereview_effort`), not a built-in default.
+- **A screen action shows the daemon's answer, not "queued"** (2026-10-05, after a review of a merged PR
+  flashed a green "queued" on the board and the daemon's refusal 11 s later reached nobody, and after a
+  release, which never waits, read as done whatever the daemon then did). A screen action's result carries
+  the requests it queued (`tui.ActionResult`; the request client reports each send to the screens through
+  `actDeps.sent`). One the daemon has not answered when the action returns flashes as pending ("request 47
+  (review) is queued; the daemon has not answered yet") and marks its row with ◷ (`?` in ASCII) in the cell
+  after the cursor's; every refresh re-reads the pending requests (`DashboardActions.Requests`) and flashes
+  the answer when it comes, then drops the mark. A failure, the action's own or the daemon's refusal, stays
+  in red until a key is pressed (the key still acts); one wider than the footer is cut with "(! shows all)".
+  A request the registry no longer has settles as failed. Rejected: waiting longer in the action (the wait
+  is already 30 s and would hold every other action key), and toasts (the operator is looking at the
+  screen; the daemon toasts requested rounds already).
+- **The action log** (2026-10-05, after errors vanished from the footer after 5 s, cut to the width, with
+  only their last line kept). `!` on the board and on the status dashboard (free on both, and on no row
+  action) shows the last 20 outcomes, newest first: the time, the action, its requests with their ids and
+  states and when the daemon answered, everything the action printed and the daemon's answers whole. An
+  outcome with a request still pending is the last to go when the log is full. The two screens share one
+  log (`tui.ActionLog`, created by `runInspScreens`), so `tab` keeps the outcomes and the requests followed,
+  and a request queued on the dashboard (`talkable#7`) marks the board's row (`talkable/talkable#7`). It
+  lives as long as the screens do. Rejected: keeping it in the registry (the requests table and `magnum
+  logs request:N` already keep the history; the log is what this sitting did).
+- **The titles say what holds the daemon back** (2026-10-05, after a daemon ran an older build for hours, a
+  pause held people's review requests for 19 hours and a drain held a forced review for 94 minutes, with
+  nothing on the board's title but the refresh time). The title line of the board and of the status
+  dashboard carries, in yellow on its right, an older build ("daemon on v1.4.0 since 17:40 · v1.5.0 built:
+  daemon-restart"; "new build Oct 5 18:48" when the binary on disk changed under the same version), a drain
+  ("draining (pid 4242)"), the `magnum pause` ("paused 19h · 6 requests held") and the Codex pace (below).
+  They are read from the registry with every refresh (`screenFacts`: the parts of `magnum status` that need
+  no launchctl, herdr or inventory). On a narrow screen the board's title first drops its own words, then
+  the facts take their short forms, then the refresh time goes (the spinner stays), then the least pressing
+  fact; the dashboard's keeps its title, the age of its data and the scroll position. No line is added:
+  the rows, the cursor's highlight and the frame caches are as before (the frame keys carry the facts as
+  drawn, the board's row cache the rows marked pending). The dashboard's header cache no longer keys on the
+  clock and the spinner, which moved to the title it draws with every frame. Rejected: a status line of
+  its own (the operator wants the board one line per PR and the screen's lines for PRs).
+- **The Codex budget has a pace** (2026-10-05, after the gauge read 50% used with 18% of the weekly window
+  elapsed, 2.8 times the rate that lasts the window, and nothing would have said so before `codex_hard`
+  stopped every Codex round for days). `usage.PaceOf` compares the share used with the share of the window
+  elapsed and `Pace.Reach` projects, at the average rate since the window began, when a share is reached;
+  a time after the reset is no projection. `magnum status`'s codex line adds "pace 2.8x: 80% Oct 7 13:30,
+  95% Oct 8 09:10" (the caps still ahead and before the reset; "within the window" when neither is; no
+  pace at or past the hard cap), and its JSON `pace`, `soft_at` and `hard_at`; the screens' titles say
+  "codex 51% · at this pace 80% Tue 13:30" when a cap comes before the reset. The daemon sends one info
+  toast and writes one `usage.pace` event per window when `codex_soft` would come before the reset; the
+  window's reset time keys both in the registry, so a restart stays quiet, and nothing is judged in the
+  window's first tenth, where one burst is no pace. Rejected: an urgent toast (nothing is paused yet) and
+  a projection from the last hours only (it swings with every round).
+- **The card says which roles a round ran and why, and what a PR costs** (2026-10-05, after triage's
+  decisions existed only as events, a judge-only continue looked like a missing review, and one PR used 15
+  rounds and a quarter of three days' agent time with nothing showing it). The board reads, with every
+  load, the round events of the last 7 days (`engine.round_start`, and the `round.triage` and
+  `round.rerun_role` the round's setup wrote before it) and the agent time of each PR's runs created in
+  them (`store.AgentTimeSince`: a run counts from its submission to its end, to now while it goes; one
+  query for every row). The card's LAST ROUND opens with the round's kind and roles ("continue (finishing an
+  interrupted round): judge only"), what triage skipped and its reason (the model read the PR: its words are cleaned like any PR
+  text), a role whose code changed enough to run again ("rerun added claude-simplify (212 lines
+  changed)") and the roles asked for; its facts gain "Agent time 7d: 9h02m · 15 rounds". `magnum prs
+  --json` carries both (`round_why`, `spend`), and `magnum stats` lists the top 10 PRs by agent time in
+  its window with their rounds and share (`top_prs`). The events are read defensively: a field a later
+  engine renames is left out, not an error, and a registry that cannot say leaves the card without them
+  rather than the board without rows. Rejected: a column on the board (the operator keeps it one line per
+  PR, and the spend is a reason to open the card, not to sort by).

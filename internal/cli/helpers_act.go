@@ -110,6 +110,9 @@ type actDeps struct {
 
 	in    *promptIn
 	close func() error
+	// sent hears every request the commands queue (reqClient.sent): the
+	// screens follow the ones still pending.
+	sent func(reqOutcome)
 }
 
 // actMode selects how much actNewDeps builds.
@@ -641,7 +644,7 @@ func actRoleName(role string) string { return agents.Role(role).Label() }
 // reqs is the request client (request_client.go) over d's registry and
 // daemon.
 func (d *actDeps) reqs() reqClient {
-	return reqClient{st: d.Store, kick: d.Kick, running: d.Running, now: d.now, sleep: d.sleep, version: d.Version}
+	return reqClient{st: d.Store, kick: d.Kick, running: d.Running, now: d.now, sleep: d.sleep, version: d.Version, sent: d.sent}
 }
 
 // quick is a send that waits up to Quick for an answer the daemon gives

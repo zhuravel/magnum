@@ -208,6 +208,9 @@ func TestPRsJSONMirrorsEveryBoardRowField(t *testing.T) {
 		{tui.RoundTimings{}, prsJSONRound{}},
 		{tui.StageTiming{}, prsJSONStage{}},
 		{tui.RequestInfo{}, prsJSONRequest{}},
+		{tui.RoundWhy{}, prsJSONRoundWhy{}},
+		{tui.RoleRerun{}, prsJSONRoleRerun{}},
+		{tui.SpendInfo{}, prsJSONSpend{}},
 	} {
 		b, o := reflect.TypeOf(p.board), reflect.TypeOf(p.out)
 		if b.NumField() != o.NumField() {

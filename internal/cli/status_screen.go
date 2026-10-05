@@ -74,7 +74,9 @@ func statusDashSource(d statusDeps, o statusOptions) tui.SourceFunc {
 		if err != nil {
 			return tui.StatusData{}, err
 		}
-		return statusDashData(r, defRepo), nil
+		data := statusDashData(r, defRepo)
+		data.Facts = screenFacts(ctx, d)
+		return data, nil
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 type pendingAction struct {
 	question string     // what will happen, ending in "?"
 	what     string     // the action's label while it runs ("fresh review talkable#7")
+	target   string     // the PR (or slot) it acts on
 	fn       actionFunc // runs on y
 }
 

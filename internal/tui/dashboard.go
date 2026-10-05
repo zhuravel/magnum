@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -18,18 +19,21 @@ import (
 // display strings the caller formats (refs, folders, sizes); the header
 // numbers are formatted by the dashboard.
 type StatusData struct {
-	Daemon      DaemonInfo
-	Activity    ActivityInfo
-	GitHub      GitHubInfo
-	Rounds      RoundsInfo
-	Agents      AgentsInfo
-	Disk        DiskInfo
-	Pauses      []Pause
-	Slots       []SlotRow
-	Queue       []PRRow // open PRs, then closed ones pending release
-	Attention   []AttentionRow
-	Manual      []ManualRow // manual worktrees, shown when toggled on
-	Warnings    []string    // sources that could not be read
+	Daemon    DaemonInfo
+	Activity  ActivityInfo
+	GitHub    GitHubInfo
+	Rounds    RoundsInfo
+	Agents    AgentsInfo
+	Disk      DiskInfo
+	Pauses    []Pause
+	Slots     []SlotRow
+	Queue     []PRRow // open PRs, then closed ones pending release
+	Attention []AttentionRow
+	Manual    []ManualRow // manual worktrees, shown when toggled on
+	Warnings  []string    // sources that could not be read
+	// Facts are what the title says of the daemon: an older build, a pause,
+	// a drain, the Codex budget's pace.
+	Facts       DaemonFacts
 	GeneratedAt time.Time
 }
 
@@ -144,27 +148,33 @@ type ReviewOpts struct {
 	Simplify bool // run the role aliased simplify this round (magnum review --simplify)
 }
 
-// DashboardActions run what the dashboard's keys ask for. ref is a row's
-// PR reference (or a slot name, for pin/unpin/release of an empty slot).
-// The returned text is shown in the footer for a few seconds (only its
-// last non-empty line when it has several); an error is shown instead.
-// One action runs at a time; the data refreshes right after it returns.
+// DashboardActions run what the dashboard's and the board's keys ask for.
+// ref is a row's PR reference (or a slot name, for pin/unpin/release of an
+// empty slot). The result's text is shown in the footer (only its last
+// non-empty line when it has several) and kept whole in the action log; an
+// error is shown instead, until a key is pressed. A request the result
+// names as pending marks its row and is re-read (Requests) on every refresh
+// until the daemon answers. One action runs at a time; the data refreshes
+// right after it returns.
 type DashboardActions interface {
-	Open(ctx context.Context, ref string) (string, error)
-	Review(ctx context.Context, ref string, opts ReviewOpts) (string, error)
-	Pin(ctx context.Context, ref string) (string, error)
-	Unpin(ctx context.Context, ref string) (string, error)
-	Release(ctx context.Context, ref string) (string, error)
-	Mute(ctx context.Context, ref string) (string, error)
-	Unmute(ctx context.Context, ref string) (string, error)
-	Abort(ctx context.Context, ref string) (string, error)  // kill the PR's running review
-	Ignore(ctx context.Context, ref string) (string, error) // abort, mute and free the slot
+	Open(ctx context.Context, ref string) (ActionResult, error)
+	Review(ctx context.Context, ref string, opts ReviewOpts) (ActionResult, error)
+	Pin(ctx context.Context, ref string) (ActionResult, error)
+	Unpin(ctx context.Context, ref string) (ActionResult, error)
+	Release(ctx context.Context, ref string) (ActionResult, error)
+	Mute(ctx context.Context, ref string) (ActionResult, error)
+	Unmute(ctx context.Context, ref string) (ActionResult, error)
+	Abort(ctx context.Context, ref string) (ActionResult, error)  // kill the PR's running review
+	Ignore(ctx context.Context, ref string) (ActionResult, error) // abort, mute and free the slot
 	// Approve and RequestChanges post the reviewer's own verdict on the head
 	// magnum reviewed (magnum approve / request-changes).
-	Approve(ctx context.Context, ref string) (string, error)
-	RequestChanges(ctx context.Context, ref string) (string, error)
-	Attention(ctx context.Context) (string, error)
+	Approve(ctx context.Context, ref string) (ActionResult, error)
+	RequestChanges(ctx context.Context, ref string) (ActionResult, error)
+	Attention(ctx context.Context) (ActionResult, error)
 	OpenBrowser(ctx context.Context, url string) error
+	// Requests re-reads the requests ids name; one the registry no longer
+	// has is left out.
+	Requests(ctx context.Context, ids []int64) ([]Request, error)
 }
 
 // DashboardOptions tune the dashboard.
@@ -184,6 +194,10 @@ type DashboardOptions struct {
 	// Widths keeps the column widths dragged with the mouse across runs;
 	// nil keeps them for this run only.
 	Widths ColumnWidths
+	// Log keeps the actions' outcomes (! shows them) and the requests still
+	// pending; the board shares it, so tab keeps both. nil = a log of this
+	// screen's own.
+	Log *ActionLog
 }
 
 // RunDashboard shows the live status dashboard until the user quits or ctx
@@ -265,6 +279,8 @@ type dashboardModel struct {
 	showManual bool
 	showHelp   bool
 	helpScroll int
+	showLog    bool // the action log (!)
+	logScroll  int
 
 	// widths are the dragged column widths by name ("queue.title"); the
 	// map is replaced, never changed, as copies of the model share it.
@@ -285,13 +301,12 @@ type dashCache struct {
 	header partCache[dashHeaderKey, struct{}, []string]
 }
 
-// dashHeaderKey is what the header depends on.
+// dashHeaderKey is what the header depends on. Its first line, the title
+// (with the clock, the spinner and the facts), is drawn with every frame.
 type dashHeaderKey struct {
-	gen                     int64
-	width                   int
-	clock                   int64
-	dark, haveData, loading bool
-	spin                    string
+	gen            int64
+	width          int
+	dark, haveData bool
 }
 
 // dashBodyKey is what the body depends on besides the cursor.
@@ -300,6 +315,7 @@ type dashBodyKey struct {
 	width            int
 	showManual, dark bool
 	widths           string // dashboardModel.widthsKey
+	queued           string // the rows marked waiting for the daemon (ActionLog.pendingTargets)
 }
 
 // dashFrameKey is everything a frame of the dashboard shows.
@@ -309,6 +325,10 @@ type dashFrameKey struct {
 	cursor, scroll       int
 	showHelp             bool
 	helpScroll           int
+	showLog              bool
+	logScroll            int
+	logGen               int64  // the action log's generation
+	facts                string // the title's facts as drawn (DaemonFacts.key)
 	haveData, loading    bool
 	loadErr              string
 	spin                 string
@@ -322,7 +342,8 @@ type dashFrameKey struct {
 
 // bodyCacheKey is the key of the body at width w.
 func (m dashboardModel) bodyCacheKey(w int) dashBodyKey {
-	return dashBodyKey{gen: m.gen, width: w, showManual: m.showManual, dark: m.st.dark, widths: m.widthsKey}
+	return dashBodyKey{gen: m.gen, width: w, showManual: m.showManual, dark: m.st.dark, widths: m.widthsKey,
+		queued: strings.Join(m.log.pendingTargets(), "\n")}
 }
 
 func (m dashboardModel) frameKey() dashFrameKey {
@@ -330,6 +351,7 @@ func (m dashboardModel) frameKey() dashFrameKey {
 		body:  m.bodyCacheKey(m.viewWidth()),
 		width: int64(m.width), height: int64(m.height), clock: clockKey(m.opts.Now),
 		cursor: m.cursor, scroll: m.scroll, showHelp: m.showHelp, helpScroll: m.helpScroll,
+		showLog: m.showLog, logScroll: m.logScroll, logGen: m.log.generation(), facts: m.data.Facts.key(m.opts.Now()),
 		haveData: m.haveData, loading: m.loading, loadErr: errText(m.loadErr), spin: m.spinFrame(),
 		busy: m.busy, leaving: m.leaving, switching: m.switching,
 		flash: m.flash, flashErr: m.flashErr, flashInfo: m.flashInfo,
@@ -355,7 +377,7 @@ func newDashboardModel(ctx context.Context, src DashboardSource, act DashboardAc
 	g := newGlyphs(opts.Icons)
 	sp := spinner.New(spinner.WithSpinner(g.spinner), spinner.WithStyle(defaultStyles.Accent))
 	m := dashboardModel{
-		actionBar: newActionBar(ctx, act), src: src, opts: opts, st: defaultStyles, pal: newPRBPalette(defaultStyles), g: g, spin: sp, cache: &dashCache{},
+		actionBar: newActionBar(ctx, act, opts.Log, opts.Now), src: src, opts: opts, st: defaultStyles, pal: newPRBPalette(defaultStyles), g: g, spin: sp, cache: &dashCache{},
 		showManual: opts.ShowManual,
 		loading:    true, spinning: true, // Init starts the first gather and the spinner
 		saver: newWidthSaver(opts.Widths, widthsDashboard),
@@ -419,7 +441,13 @@ func (m dashboardModel) update(msg tea.Msg) (dashboardModel, tea.Cmd) {
 		m.data, m.haveData, m.loadErr = sanitizeStatus(msg.data), true, nil
 		m.rebuildRows()
 	case dashTickMsg:
-		return m, tea.Batch(m.startLoad(), m.tickCmd())
+		return m, tea.Batch(m.startLoad(), m.follow(), m.tickCmd())
+	case requestsMsg:
+		cmd, settled := m.followed(msg)
+		if settled { // the rows show what the daemon did
+			cmd = tea.Batch(cmd, m.startLoad())
+		}
+		return m, cmd
 	case spinner.TickMsg:
 		if !m.loading && m.busy == "" {
 			m.spinning = false // let the tick chain end
@@ -452,6 +480,7 @@ func (m dashboardModel) update(msg tea.Msg) (dashboardModel, tea.Cmd) {
 
 func (m dashboardModel) updateKey(msg tea.KeyPressMsg) (dashboardModel, tea.Cmd) {
 	k := msg.String()
+	m.keyPressed()
 	switch {
 	case m.leaving:
 		cmd := m.leavingKey(k)
@@ -474,6 +503,18 @@ func (m dashboardModel) updateKey(msg tea.KeyPressMsg) (dashboardModel, tea.Cmd)
 			m.showHelp, m.helpScroll = false, 0
 		default:
 			m.helpScroll = scrollKey(k, m.helpScroll, max(m.bodyHeight()-3, 1))
+		}
+		return m, nil
+	}
+	if m.showLog {
+		switch k {
+		case "q":
+			cmd := m.leave(false)
+			return m, cmd
+		case logKey, "esc", "enter":
+			m.showLog, m.logScroll = false, 0
+		default:
+			m.logScroll = scrollKey(k, m.logScroll, max(m.bodyHeight()-3, 1))
 		}
 		return m, nil
 	}
@@ -507,6 +548,8 @@ func (m dashboardModel) listKey(k string) (dashboardModel, tea.Cmd) {
 		m.moveOrScroll(-half)
 	case "?":
 		m.showHelp, m.helpScroll = true, 0
+	case logKey:
+		m.showLog, m.logScroll = true, 0
 	case "w":
 		m.showManual = !m.showManual
 	case "m":
@@ -522,7 +565,7 @@ func (m dashboardModel) listKey(k string) (dashboardModel, tea.Cmd) {
 		cmd := m.startLoad()
 		return m, cmd
 	case "a":
-		return m.run("attention", func(ctx context.Context, a DashboardActions) (string, error) { return a.Attention(ctx) })
+		return m.run("attention", func(ctx context.Context, a DashboardActions) (ActionResult, error) { return a.Attention(ctx) })
 	case "enter":
 		return m.rowAction(actOpen)
 	default:
@@ -598,9 +641,9 @@ func (m dashboardModel) reviewHeads(r dashRow) *ReviewFacts {
 	return nil
 }
 
-// run starts an action unless one is already running.
+// run starts an action on no row unless one is already running.
 func (m dashboardModel) run(what string, fn actionFunc) (dashboardModel, tea.Cmd) {
-	cmd, started := m.start(what, fn)
+	cmd, started := m.start(what, "", fn)
 	return m.withSpinner(cmd, started)
 }
 
@@ -742,6 +785,11 @@ func (m *dashboardModel) fixScroll() {
 		m.helpScroll = min(max(m.helpScroll, 0), max(len(m.helpContent())-room, 0))
 		return
 	}
+	if m.showLog {
+		room := max(avail-2, 1)
+		m.logScroll = min(max(m.logScroll, 0), max(len(m.logContent(m.viewWidth()))-room, 0))
+		return
+	}
 	n, cur := m.bodySize(m.viewWidth())
 	switch {
 	case cur < 0:
@@ -773,7 +821,7 @@ func (m dashboardModel) viewHeight() int {
 // asks the y/N) and dashMinBody body lines: pauses can make it long. The
 // lines are shared with the cache: clone them before changing them.
 func (m dashboardModel) header(w int) []string {
-	k := dashHeaderKey{gen: m.gen, width: w, clock: clockKey(m.opts.Now), dark: m.st.dark, haveData: m.haveData, loading: m.loading, spin: m.spinFrame()}
+	k := dashHeaderKey{gen: m.gen, width: w, dark: m.st.dark, haveData: m.haveData}
 	lines := m.cache.headerFor(k, func() []string { return m.headerLines(w) })
 	return lines[:min(len(lines), max(m.viewHeight()-dashFooter-dashMinBody, 1))]
 }
@@ -805,9 +853,12 @@ func (m dashboardModel) render() string {
 	avail := m.bodyHeight()
 	var body []string
 	var pos string
-	if m.showHelp {
-		body, pos = m.helpLines(w, avail)
-	} else {
+	switch {
+	case m.showHelp:
+		body, pos = m.boxLines(m.helpContent(), "help ", w, avail, m.helpScroll)
+	case m.showLog:
+		body, pos = m.boxLines(m.logContent(w), "log ", w, avail, m.logScroll)
+	default:
 		lines, _ := m.bodyLines(w)
 		start := min(m.scroll, max(len(lines)-1, 0))
 		end := min(start+avail, len(lines))
@@ -816,9 +867,7 @@ func (m dashboardModel) render() string {
 			pos = fmt.Sprintf(" · lines %d-%d of %d", start+1, end, len(lines))
 		}
 	}
-	if pos != "" {
-		header[0] = truncate(header[0]+m.st.Dim.Render(pos), w)
-	}
+	header[0] = m.titleLine(w, pos)
 	status := m.statusLine(w)
 	out := append(header, body...)
 	out = append(out, status, m.hintLine(w))
@@ -834,7 +883,11 @@ func (m dashboardModel) render() string {
 	return strings.Join(out, "\n")
 }
 
-func (m dashboardModel) headerLines(w int) []string {
+// titleLine is the header's first line: the title, when the data was
+// gathered, the spinner while loading and pos (the scroll position), with the
+// daemon's facts (facts.go) on the right; the facts give way first, the
+// short forms, then the least pressing ones.
+func (m dashboardModel) titleLine(w int, pos string) string {
 	title := m.st.Title.Render(m.opts.Title)
 	if m.haveData && !m.data.GeneratedAt.IsZero() {
 		title += m.st.Dim.Render(" · updated " + HumanAgo(max(m.opts.Now().Sub(m.data.GeneratedAt), time.Nanosecond)))
@@ -842,7 +895,24 @@ func (m dashboardModel) headerLines(w int) []string {
 	if m.loading {
 		title += " " + m.spin.View()
 	}
-	lines := []string{truncate(title, w)}
+	if pos != "" {
+		title += m.st.Dim.Render(pos)
+	}
+	if !m.haveData {
+		return truncate(title, w)
+	}
+	for _, right := range m.st.factVariants(m.data.Facts.list(m.opts.Now()), "   ") {
+		if right == "" || ansi.StringWidth(title)+2+ansi.StringWidth(right) <= w {
+			return spread(title, right, w)
+		}
+	}
+	return truncate(title, w)
+}
+
+// headerLines are the header; its first line is a stand-in render replaces
+// with titleLine.
+func (m dashboardModel) headerLines(w int) []string {
+	lines := []string{""}
 	if !m.haveData {
 		return lines
 	}
@@ -956,7 +1026,11 @@ func (m dashboardModel) bodyLines(w int) ([]string, int) {
 	}
 	at := b.rowAt[m.cursor]
 	lines := slices.Clone(b.lines)
-	lines[at] = truncate(cursorMark+m.st.Selected.Render(b.rowText[m.cursor]), w)
+	mark := cursorMark
+	if b.queued[m.cursor] {
+		mark = cursorMark[:len(cursorMark)-1] + m.st.Warn.Render(m.g.queued)
+	}
+	lines[at] = truncate(mark+m.st.Selected.Render(b.rowText[m.cursor]), w)
 	return lines, at
 }
 
@@ -984,6 +1058,7 @@ type dashBody struct {
 	lines   []string
 	rowAt   []int    // the line of each selectable row
 	rowText []string // each selectable row's cells, for drawing it selected
+	queued  []bool   // each selectable row's action waits for the daemon's answer
 	tables  []dashTable
 }
 
@@ -1002,16 +1077,22 @@ func (m dashboardModel) drawBody(w int) dashBody {
 	section := func(title string, n int) {
 		out = append(out, m.st.Section.Render(fmt.Sprintf("%s (%d)", m.g.headed(title), n)))
 	}
-	addRows := func(table string, cols []column, cells [][]string) {
+	pending := m.log.pendingTargets()
+	addRows := func(table string, cols []column, cells [][]string, refs []string) {
 		widths := layoutColumnsFixed(cols, cells, w, len(cursorMark), m.fixedWidths(table, cols))
 		b.tables = append(b.tables, dashTable{name: table, line: len(out), widths: widths})
 		out = append(out, noMark+m.st.headerRow(cols, widths))
-		for _, c := range cells {
+		for i, c := range cells {
 			line := renderRowCols(cols, c, widths)
 			// The selected row draws its text plain in the selection's
 			// style: a mark's color reset would end the highlight.
-			b.rowAt, b.rowText = append(b.rowAt, len(out)), append(b.rowText, ansi.Strip(line))
-			out = append(out, noMark+line)
+			queued := queuedFor(refs[i], pending)
+			b.rowAt, b.rowText, b.queued = append(b.rowAt, len(out)), append(b.rowText, ansi.Strip(line)), append(b.queued, queued)
+			mark := noMark
+			if queued {
+				mark = noMark[:len(noMark)-1] + m.st.Warn.Render(m.g.queued)
+			}
+			out = append(out, mark+line)
 		}
 	}
 
@@ -1020,8 +1101,9 @@ func (m dashboardModel) drawBody(w int) dashBody {
 	if len(d.Slots) == 0 {
 		out = append(out, m.st.Dim.Render("  none (`magnum slots provision` creates the pool)"))
 	} else {
-		cells := make([][]string, len(d.Slots))
+		cells, refs := make([][]string, len(d.Slots)), make([]string, len(d.Slots))
 		for i, s := range d.Slots {
+			refs[i] = cmp.Or(strings.TrimSpace(s.PRRef), s.Name)
 			pr := "-"
 			if s.PRRef != "" {
 				pr = strings.TrimSpace(s.PRRef + " " + m.stateText(s.PRState))
@@ -1032,7 +1114,7 @@ func (m dashboardModel) drawBody(w int) dashBody {
 			}
 			cells[i] = []string{s.Name, orDash(s.Folder), pr, state, orDash(s.DBs), orDash(s.Disk)}
 		}
-		addRows(dashSlots, slotCols, cells)
+		addRows(dashSlots, slotCols, cells, refs)
 	}
 
 	out = append(out, "")
@@ -1040,11 +1122,12 @@ func (m dashboardModel) drawBody(w int) dashBody {
 	if len(d.Queue) == 0 {
 		out = append(out, m.st.Dim.Render("  empty"))
 	} else {
-		cells := make([][]string, len(d.Queue))
+		cells, refs := make([][]string, len(d.Queue)), make([]string, len(d.Queue))
 		for i, q := range d.Queue {
 			cells[i] = []string{q.Ref, orDash(m.stateText(q.State)), orDash(q.Next), orDash(q.Age), orDash(q.Author), oneLine(q.Title)}
+			refs[i] = q.Ref
 		}
-		addRows(dashQueue, queueCols, cells)
+		addRows(dashQueue, queueCols, cells, refs)
 	}
 
 	if len(d.Attention) > 0 {
@@ -1109,15 +1192,16 @@ func (m dashboardModel) statusLine(w int) string {
 	case m.leaving:
 		return truncate(m.spin.View()+" "+m.st.Warn.Render(busy), w)
 	case m.flash != "":
-		line := m.st.OK.Render(m.flash)
+		suffix := m.busySuffix() // the action in flight stays visible
+		text := m.flashFit(w - ansi.StringWidth(suffix))
+		line := m.st.OK.Render(text)
 		switch {
 		case m.flashErr:
-			line = m.st.Err.Render(m.flash)
+			line = m.st.Err.Render(text)
 		case m.flashInfo:
-			line = m.st.Dim.Render(m.flash)
+			line = m.st.Dim.Render(text)
 		}
-		line += m.st.Dim.Render(m.busySuffix()) // the action in flight stays visible
-		return truncate(line, w)
+		return truncate(line+m.st.Dim.Render(suffix), w)
 	case busy != "":
 		return truncate(m.spin.View()+" "+busy, w)
 	case m.loadErr != nil && m.haveData:
@@ -1138,6 +1222,9 @@ func (m dashboardModel) hintLine(w int) string {
 	if m.showHelp {
 		return spread(m.st.hints(w, hint{"j/k", "scroll"}, hint{"?", "close help"}, hint{"q", "quit"}), off, w)
 	}
+	if m.showLog {
+		return spread(m.st.hints(w, hint{"j/k", "scroll"}, hint{logKey, "close log"}, hint{"q", "quit"}), off, w)
+	}
 	room := w
 	if off != "" {
 		room = max(w-ansi.StringWidth(off)-2, 10)
@@ -1145,7 +1232,7 @@ func (m dashboardModel) hintLine(w int) string {
 	open, attention := []hint{{"enter", "open"}}, []hint{{"a", "attention"}}
 	return spread(m.st.fitHints(room,
 		withHints([]hint{{"j/k", "move"}}, open, actionHints(actReview, actPin, actUnpin, actRelease), attention,
-			actionHints(actBrowser), []hint{{"w", "manual"}, {"tab", "PRs"}, {"?", "help"}, {"q", "quit"}}),
+			actionHints(actBrowser), []hint{{"w", "manual"}, {"tab", "PRs"}, {logKey, "log"}, {"?", "help"}, {"q", "quit"}}),
 		withHints(open, actionHints(actReview, actRelease), attention, []hint{{"tab", "PRs"}, {"?", "help"}, {"q", "quit"}}),
 		[]hint{{"tab", "PRs"}, {"?", "help"}, {"q", "quit"}},
 		[]hint{{"?", "help"}, {"q", "quit"}}), off, w)
@@ -1168,6 +1255,7 @@ func dashboardKeys(judge string) []hint {
 		{"K", "kill the PR's running review, or drop its queued one (asks y/N)"},
 		{"I", "ignore the PR: kill its review, mute it, free its slot (asks y/N)"},
 		{"a", "jump to the pane that needs attention"},
+		{logKey, "action log: the last 20 outcomes, their requests and full text"},
 		{"b", "open the PR in the browser"},
 		{"w", "show or hide manual worktrees"},
 		{"W", "reset the column widths"},
@@ -1228,15 +1316,22 @@ var dashSlotStateOrder = []string{
 	"free", "claimed", "busy", "held", "provisioning", "releasing", "dirty_schema", "broken", "lost", "observed", "removing", "removed",
 }
 
-// helpLines is the help box in height lines, its content scrolled by
-// helpScroll; pos says which lines show when not all of them fit.
-func (m dashboardModel) helpLines(w, height int) (lines []string, pos string) {
-	content := m.helpContent()
+// logContent is the dashboard's action log at screen width w (the box
+// takes four cells).
+func (m dashboardModel) logContent(w int) []string {
+	entries, _ := m.log.snapshot()
+	return logContent(m.st, m.g, entries, max(w-4, 20))
+}
+
+// boxLines is content in a box of height lines, scrolled by scroll (the
+// help, the action log); pos says which lines show when not all of them
+// fit, after what ("help ").
+func (m dashboardModel) boxLines(content []string, what string, w, height, scroll int) (lines []string, pos string) {
 	room := max(height-2, 1) // the box's border
-	start := min(m.helpScroll, max(len(content)-room, 0))
+	start := min(scroll, max(len(content)-room, 0))
 	end := min(start+room, len(content))
 	if end-start < len(content) {
-		pos = fmt.Sprintf(" · help lines %d-%d of %d", start+1, end, len(content))
+		pos = fmt.Sprintf(" · %slines %d-%d of %d", what, start+1, end, len(content))
 	}
 	box := m.st.Box
 	if w > 4 {

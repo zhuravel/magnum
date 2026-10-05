@@ -120,6 +120,11 @@ type PRBoardRow struct {
 	ErrorDetail []string
 	RoundsToday int
 	LastRound   *RoundTimings // the stages of the last review round; nil when none ran
+	// RoundWhy says which roles the last round ran and why; nil when unknown.
+	RoundWhy *RoundWhy
+	// Spend is the agent time the PR's runs took over the last 7 days and
+	// how many rounds they ran in; nil when none ran.
+	Spend *SpendInfo
 
 	// Wait and WaitDetail say why a PR waiting for a round has none yet (the
 	// daemon's account): the compact form the state cell shows ("re-review
@@ -293,6 +298,13 @@ type PRBoardOptions struct {
 	// recently closed section names ("merged or closed in the last 24h");
 	// the source marks the rows in it (PRBoardRow.Recent).
 	RecentClosed time.Duration
+	// Log keeps the actions' outcomes (! shows them) and the requests still
+	// pending; the dashboard shares it, so tab keeps both. nil = a log of
+	// this screen's own.
+	Log *ActionLog
+	// Facts, when set, reads what the title says of the daemon (an older
+	// build, a pause, a drain, the Codex budget's pace) with every load.
+	Facts func(ctx context.Context) DaemonFacts
 }
 
 // RunPRBoard shows the live PR board until the user quits or ctx ends. act
@@ -587,8 +599,9 @@ const (
 
 type (
 	prbDataMsg struct {
-		rows []PRBoardRow
-		err  error
+		rows  []PRBoardRow
+		facts DaemonFacts
+		err   error
 	}
 	prbTickMsg struct{}
 	prbAnimMsg struct{} // the next frame of the reviewing pills' spinner
@@ -705,6 +718,10 @@ func sanitizeRow(r PRBoardRow) PRBoardRow {
 		}
 		r.LastRound = &lr
 	}
+	if r.RoundWhy != nil {
+		w := cleanRoundWhy(*r.RoundWhy)
+		r.RoundWhy = &w
+	}
 	return r
 }
 
@@ -744,6 +761,7 @@ const (
 	prbTable prbMode = iota
 	prbDetail
 	prbHelp
+	prbLog // the action log (!)
 )
 
 type prBoardModel struct {
@@ -766,6 +784,7 @@ type prBoardModel struct {
 	loading     bool
 	loadErr     error
 	refreshedAt time.Time
+	facts       DaemonFacts // what the title says of the daemon (opts.Facts)
 	spin        spinner.Model
 	spinning    bool
 	working     bool // some row in scope has a review round running: its pill spins
@@ -790,6 +809,8 @@ type prBoardModel struct {
 	detailScroll int
 	helpFrom     prbMode // where the help returns to
 	helpScroll   int
+	logFrom      prbMode // where the action log returns to
+	logScroll    int
 
 	widths prbWidths   // dragged column widths
 	saver  *widthSaver // keeps them; nil without opts.Widths
@@ -821,6 +842,7 @@ type prbRowsKey struct {
 	desc, dark bool
 	clock      int64
 	widths     prbWidths // dragged widths; zero in the natural widths' key
+	queued     string    // the rows marked waiting for the daemon (ActionLog.pendingTargets)
 }
 
 // prbRowKey names one drawn row of a view.
@@ -836,6 +858,9 @@ type prbFrameKey struct {
 	cursor, scroll           int
 	mode                     prbMode
 	detailScroll, helpScroll int
+	logScroll                int
+	logGen                   int64  // the action log's generation
+	facts                    string // the title's facts as drawn (DaemonFacts.key)
 	filter                   string // the input as drawn while filtering, else its text
 	filtering                bool
 	haveData, loading        bool
@@ -851,13 +876,15 @@ type prbFrameKey struct {
 }
 
 func (m prBoardModel) rowsKey(w int) prbRowsKey {
-	return prbRowsKey{gen: m.gen, width: w, anim: m.animFrame(), sort: m.sort, owner: m.owner, hide: m.hide, desc: m.desc, dark: m.st.dark, clock: clockKey(m.opts.Now), widths: m.widths}
+	return prbRowsKey{gen: m.gen, width: w, anim: m.animFrame(), sort: m.sort, owner: m.owner, hide: m.hide, desc: m.desc, dark: m.st.dark, clock: clockKey(m.opts.Now), widths: m.widths,
+		queued: strings.Join(m.log.pendingTargets(), "\n")}
 }
 
 func (m prBoardModel) frameKey() prbFrameKey {
 	k := prbFrameKey{
 		rows: m.rowsKey(m.viewWidth()), width: m.width, height: m.height,
 		cursor: m.cursor, scroll: m.scroll, mode: m.mode, detailScroll: m.detailScroll, helpScroll: m.helpScroll,
+		logScroll: m.logScroll, logGen: m.log.generation(), facts: m.facts.key(m.opts.Now()),
 		filter: m.filter.Value(), filtering: m.filtering,
 		haveData: m.haveData, loading: m.loading, loadErr: errText(m.loadErr), refreshedAt: m.refreshedAt.UnixNano(),
 		busy: m.busy, leaving: m.leaving, switching: m.switching,
@@ -900,7 +927,7 @@ func newPRBoardModel(ctx context.Context, src PRBoardSource, act DashboardAction
 	in.Placeholder = "ref, title, author, reviewer, label; state: assignee: author: review:requested"
 	in.CharLimit = 120
 	m := prBoardModel{
-		actionBar: newActionBar(ctx, act), src: src, opts: opts, g: g, spin: sp, filter: in, cache: &prbCache{},
+		actionBar: newActionBar(ctx, act, opts.Log, opts.Now), src: src, opts: opts, g: g, spin: sp, filter: in, cache: &prbCache{},
 		self: selfSet(opts.SelfLogins), sort: opts.DefaultSort, desc: true, boardView: opts.DefaultView,
 		owner: strings.TrimSpace(opts.DefaultOwner), hide: opts.HideSkipped, section: -1,
 		loading: true, spinning: true, // Init starts the first load and the spinner
@@ -937,12 +964,16 @@ func (m prBoardModel) Init() tea.Cmd {
 }
 
 func (m prBoardModel) loadCmd() tea.Cmd {
-	ctx, src := m.ctx, m.src
+	ctx, src, facts := m.ctx, m.src, m.opts.Facts
 	return func() tea.Msg {
 		ctx, cancel := loadContext(ctx)
 		defer cancel()
 		rows, err := src.Rows(ctx)
-		return prbDataMsg{rows: rows, err: err}
+		msg := prbDataMsg{rows: rows, err: err}
+		if facts != nil && err == nil {
+			msg.facts = facts(ctx)
+		}
+		return msg
 	}
 }
 
@@ -1010,7 +1041,7 @@ func (m prBoardModel) update(msg tea.Msg) (prBoardModel, tea.Cmd) {
 			return m, nil
 		}
 		m.loaded = scopeRows(msg.rows, m.opts.Repo)
-		m.haveData, m.loadErr, m.refreshedAt = true, nil, m.opts.Now()
+		m.haveData, m.loadErr, m.refreshedAt, m.facts = true, nil, m.opts.Now(), msg.facts
 		var cmd tea.Cmd
 		if m.owner != "" && len(ownedBy(m.loaded, m.owner)) == 0 { // its last PR left: back to every owner
 			cmd = m.note("owner: all (" + m.owner + " has no pull requests now)")
@@ -1020,7 +1051,13 @@ func (m prBoardModel) update(msg tea.Msg) (prBoardModel, tea.Cmd) {
 		anim := m.startAnim() // before m is returned: it marks the chain started
 		return m, tea.Batch(cmd, anim)
 	case prbTickMsg:
-		cmd := tea.Batch(m.startLoad(), m.tickCmd())
+		cmd := tea.Batch(m.startLoad(), m.follow(), m.tickCmd())
+		return m, cmd
+	case requestsMsg:
+		cmd, settled := m.followed(msg)
+		if settled { // the rows show what the daemon did
+			cmd = tea.Batch(cmd, m.startLoad())
+		}
 		return m, cmd
 	case prbAnimMsg:
 		if !m.working {
@@ -1205,6 +1242,7 @@ func (m prBoardModel) selected() (PRBoardRow, bool) {
 
 func (m prBoardModel) updateKey(msg tea.KeyPressMsg) (prBoardModel, tea.Cmd) {
 	k := msg.String()
+	m.keyPressed()
 	switch {
 	case m.leaving:
 		cmd := m.leavingKey(k)
@@ -1224,6 +1262,8 @@ func (m prBoardModel) updateKey(msg tea.KeyPressMsg) (prBoardModel, tea.Cmd) {
 	switch m.mode {
 	case prbHelp:
 		return m.helpKey(k)
+	case prbLog:
+		return m.logKey(k)
 	case prbDetail:
 		if next, ok := m.detailKey(k); ok {
 			return next, nil
@@ -1242,6 +1282,20 @@ func (m prBoardModel) helpKey(k string) (prBoardModel, tea.Cmd) {
 		m.mode, m.helpScroll = m.helpFrom, 0
 	default:
 		m.helpScroll = scrollKey(k, m.helpScroll, max(m.bodyHeight()-3, 1))
+	}
+	return m, nil
+}
+
+// logKey handles a key over the action log: it scrolls, closes or quits.
+func (m prBoardModel) logKey(k string) (prBoardModel, tea.Cmd) {
+	switch k {
+	case "q":
+		cmd := m.leave(false)
+		return m, cmd
+	case logKey, "esc", "enter", "backspace":
+		m.mode, m.logScroll = m.logFrom, 0
+	default:
+		m.logScroll = scrollKey(k, m.logScroll, max(m.bodyHeight()-3, 1))
 	}
 	return m, nil
 }
@@ -1298,6 +1352,8 @@ func (m prBoardModel) tableKey(k string) (prBoardModel, tea.Cmd) {
 		}
 	case "?":
 		m.helpFrom, m.mode = prbTable, prbHelp
+	case logKey:
+		m.logFrom, m.mode, m.logScroll = m.mode, prbLog, 0
 	case "s":
 		m.sort, m.desc = m.sort.next(), true
 		m.rebuild()
@@ -1333,7 +1389,7 @@ func (m prBoardModel) tableKey(k string) (prBoardModel, tea.Cmd) {
 		cmd := m.startLoad()
 		return m, cmd
 	case "a":
-		return m.run("attention", func(ctx context.Context, a DashboardActions) (string, error) { return a.Attention(ctx) })
+		return m.run("attention", func(ctx context.Context, a DashboardActions) (ActionResult, error) { return a.Attention(ctx) })
 	case "m":
 		m.toggleMouse()
 		if m.opts.MouseToggled != nil {
@@ -1386,9 +1442,9 @@ func (m prBoardModel) editFilter(msg tea.Msg) (prBoardModel, tea.Cmd) {
 	return m, cmd
 }
 
-// run starts an action unless one is already running.
+// run starts an action on no row unless one is already running.
 func (m prBoardModel) run(what string, fn actionFunc) (prBoardModel, tea.Cmd) {
-	cmd, started := m.start(what, fn)
+	cmd, started := m.start(what, "", fn)
 	return m.withSpinner(cmd, started)
 }
 
@@ -1496,6 +1552,10 @@ func (m *prBoardModel) fixScroll() {
 		n := len(m.painter().helpContent(m.viewWidth()))
 		m.helpScroll = min(max(m.helpScroll, 0), max(n-(m.bodyHeight()-2), 0))
 	}
+	if m.mode == prbLog {
+		n := len(m.logContent(m.viewWidth()))
+		m.logScroll = min(max(m.logScroll, 0), max(n-(m.bodyHeight()-2), 0))
+	}
 	if m.mode == prbDetail {
 		r, ok := m.selected()
 		if !ok {
@@ -1538,15 +1598,16 @@ func (m prBoardModel) painter() prbPainter {
 func (m prBoardModel) render() string {
 	w, h := m.viewWidth(), m.viewHeight()
 	p := m.painter()
-	right := m.st.Dim.Render("loading…")
+	clock, spin := m.st.Dim.Render("loading…"), ""
 	if m.haveData {
-		right = m.st.Dim.Render(m.g.refresh + " " + m.refreshedAt.Local().Format("15:04:05"))
+		clock = m.st.Dim.Render(m.g.refresh + " " + m.refreshedAt.Local().Format("15:04:05"))
 	}
 	if m.loading || m.busy != "" {
-		right = m.spin.View() + " " + right
+		spin = m.spin.View()
 	}
 	out := []string{
-		p.titleLine(w, m.opts.Title, m.opts.Repo, m.owner, m.boardView, m.inView, m.filter.Value(), len(m.view), m.hidden, right),
+		p.titleLine(w, m.opts.Title, m.opts.Repo, m.owner, m.boardView, m.inView, m.filter.Value(), len(m.view), m.hidden,
+			spin, clock, m.facts.list(m.opts.Now())),
 		m.cache.summaryFor(m.rowsKey(w), func() string { return p.summaryLine(w) }),
 	}
 
@@ -1555,6 +1616,8 @@ func (m prBoardModel) render() string {
 	switch m.mode {
 	case prbHelp:
 		body, below = p.help(w, m.bodyHeight(), m.helpScroll)
+	case prbLog:
+		body, below = p.box(m.logContent(w), w, m.bodyHeight(), m.logScroll)
 	case prbDetail:
 		body, below = m.detailLines(p, w)
 	default:
@@ -1582,6 +1645,7 @@ func (m prBoardModel) render() string {
 func (m prBoardModel) tableLines(p prbPainter, w int) (lines []string, below int) {
 	rk := m.rowsKey(w)
 	lay := m.tableLayout(p, w)
+	queued := m.log.pendingTargets()
 	if !m.haveData {
 		if m.loadErr != nil {
 			return []string{"", "  " + m.st.Err.Render(truncate("could not load pull requests: "+oneLine(m.loadErr.Error()), w-2))}, 0
@@ -1609,7 +1673,9 @@ func (m prBoardModel) tableLines(p prbPainter, w int) (lines []string, below int
 			lines = append(lines, p.recentHeading(w, m.opts.RecentClosed, len(m.view)-m.section))
 		}
 		sel := i == m.cursor
-		lines = append(lines, m.cache.row(rk, prbRowKey{i, sel}, func() string { return p.rowLine(m.view[i], lay, w, sel) }))
+		lines = append(lines, m.cache.row(rk, prbRowKey{i, sel}, func() string {
+			return p.rowLine(m.view[i], lay, w, sel, queuedFor(prRef(m.view[i]), queued))
+		}))
 	}
 	if heading && m.section == end { // the last line: the section's rows are below
 		lines = append(lines, p.recentHeading(w, m.opts.RecentClosed, len(m.view)-m.section))
@@ -1639,15 +1705,20 @@ func (m prBoardModel) statusRule(p prbPainter, w, below int) string {
 	case m.leaving:
 		msg = m.spin.View() + " " + m.st.Warn.Render(m.busyText())
 	case m.flash != "":
+		suffix := m.busySuffix() // the action in flight stays visible
+		room := w - 4 - ansi.StringWidth(suffix)
+		if below > 0 {
+			room -= ansi.StringWidth(fmt.Sprintf(" %s %d more ", p.g.down, below)) + 2
+		}
 		switch {
 		case m.flashErr:
-			msg = m.st.Err.Render(m.g.fail + " " + m.flash)
+			msg = m.st.Err.Render(m.g.fail + " " + m.flashFit(room-ansi.StringWidth(m.g.fail)-1))
 		case m.flashInfo:
-			msg = m.st.Dim.Render(m.flash)
+			msg = m.st.Dim.Render(m.flashFit(room))
 		default:
-			msg = m.st.OK.Render(m.g.ok + " " + m.flash)
+			msg = m.st.OK.Render(m.g.ok + " " + m.flashFit(room-ansi.StringWidth(m.g.ok)-1))
 		}
-		msg += m.st.Dim.Render(m.busySuffix()) // the action in flight stays visible
+		msg += m.st.Dim.Render(suffix)
 	case m.busy != "":
 		msg = m.spin.View() + " " + m.busyText()
 	case m.loadErr != nil && m.haveData:
@@ -1688,6 +1759,8 @@ func (m prBoardModel) hintLine(w int) string {
 	switch m.mode {
 	case prbHelp:
 		left = m.st.hints(w, hint{"j/k", "scroll"}, hint{"?", "close help"}, hint{"q", "quit"})
+	case prbLog:
+		left = m.st.hints(w, hint{"j/k", "scroll"}, hint{logKey, "close log"}, hint{"q", "quit"})
 	case prbDetail:
 		back, help := []hint{{"esc", "back"}}, []hint{{"?", "help"}}
 		left = m.st.fitHints(w,
@@ -1708,7 +1781,7 @@ func (m prBoardModel) hintLine(w int) string {
 		details := []hint{{"enter", "details"}}
 		sets := [][]hint{
 			withHints(details, actionHints(actReview, actFresh, actSimplify, actOpen, actBrowser, actTracker, actPin, actUnpin, actRelease),
-				[]hint{{"/", "filter"}, {"v", "view"}, {"O", "owner"}, {"s/S", "sort"}, {"tab", "overview"}, {"?", "help"}, {"q", "quit"}}),
+				[]hint{{"/", "filter"}, {"v", "view"}, {"O", "owner"}, {"s/S", "sort"}, {"tab", "overview"}, {logKey, "log"}, {"?", "help"}, {"q", "quit"}}),
 			withHints(details, actionHints(actReview, actFresh, actSimplify, actOpen, actBrowser, actPin, actUnpin, actRelease),
 				[]hint{{"/", "filter"}, {"v", "view"}, {"s/S", "sort"}, {"tab", "overview"}, {"?", "help"}, {"q", "quit"}}),
 			withHints(details, actionHints(actReview, actOpen, actBrowser),

@@ -1,0 +1,145 @@
+package tui
+
+// What the titles of the PR board and the status dashboard say about the
+// daemon, beyond their rows: an older build running ("daemon on v1 since
+// 17:40 · v2 built: daemon-restart"), a drain, a pause and what it holds,
+// and the Codex budget's pace when it reaches a cap before the window
+// resets. They go on the existing title line, the rows' left alone, and give
+// way to its other parts on a narrow screen: short forms first, then the
+// least pressing fact.
+
+import (
+	"fmt"
+	"strings"
+	"time"
+)
+
+// DaemonFacts are what the titles say of the daemon; the zero value says
+// nothing.
+type DaemonFacts struct {
+	// SkewOld is the build the daemon runs when it is older than the CLI's
+	// or the one on disk ("v1.4.0", "dev (8ad5bb2)"), SkewSince when that
+	// daemon started and SkewNew what is built, as a phrase ("v1.5.0 built",
+	// "new build 18:48"); SkewOld is "" when the daemon runs the newest
+	// build.
+	SkewOld, SkewNew string
+	SkewSince        time.Time
+	// Paused: `magnum pause` holds automation since PausedSince (zero when
+	// unknown), holding Held review requests people made.
+	Paused      bool
+	PausedSince time.Time
+	Held        int
+	// Draining: `magnum daemon-restart --drain` holds new rounds; DrainerPID
+	// is the draining command (0 when unknown).
+	Draining   bool
+	DrainerPID int
+	// Codex is the Codex budget's pace when it reaches a cap before the
+	// window resets; nil otherwise.
+	Codex *CodexPace
+}
+
+// CodexPace is the Codex budget used now and when, at the pace it has been
+// spent since its window began, it reaches Cap ([usage] codex_soft, or
+// codex_hard once past it), before the window resets.
+type CodexPace struct {
+	Used int // percent
+	Cap  float64
+	At   time.Time
+}
+
+// fact is one thing a title says, whole and short.
+type fact struct{ full, short string }
+
+// list is f's facts, most pressing first: an older build (the daemon may
+// refuse what this build offers), a drain and a pause (no round starts),
+// then the Codex pace.
+func (f DaemonFacts) list(now time.Time) []fact {
+	var out []fact
+	if f.SkewOld != "" {
+		since := ""
+		if !f.SkewSince.IsZero() {
+			since = " since " + factClock(now, f.SkewSince)
+		}
+		built := cleanText(f.SkewNew) + ": daemon-restart"
+		out = append(out, fact{"daemon on " + cleanText(f.SkewOld) + since + " · " + built, built})
+	}
+	if f.Draining {
+		full := "draining"
+		if f.DrainerPID > 0 {
+			full += fmt.Sprintf(" (pid %d)", f.DrainerPID)
+		}
+		out = append(out, fact{full, "draining"})
+	}
+	if f.Paused {
+		s := "paused"
+		if !f.PausedSince.IsZero() {
+			s += " " + factAge(now.Sub(f.PausedSince))
+		}
+		full := s
+		if f.Held > 0 {
+			full += " · " + plural(f.Held, "request held", "requests held")
+		}
+		out = append(out, fact{full, s})
+	}
+	if c := f.Codex; c != nil {
+		at := c.At.Local().Format("Mon 15:04")
+		out = append(out, fact{fmt.Sprintf("codex %d%% · at this pace %g%% %s", c.Used, c.Cap, at), fmt.Sprintf("codex %g%% %s", c.Cap, at)})
+	}
+	return out
+}
+
+// key is f as drawn at now, for the frame caches.
+func (f DaemonFacts) key(now time.Time) string {
+	var b strings.Builder
+	for _, x := range f.list(now) {
+		b.WriteString(x.full)
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+// factVariants are the ways to draw facts, from the fullest (every fact
+// whole) to the barest (none): the short forms, then fewer facts, the least
+// pressing left out first. Each is styled; sep goes between facts.
+func (st styles) factVariants(facts []fact, sep string) []string {
+	if len(facts) == 0 {
+		return []string{""}
+	}
+	join := func(fs []fact, short bool) string {
+		parts := make([]string, len(fs))
+		for i, f := range fs {
+			s := f.full
+			if short {
+				s = f.short
+			}
+			parts[i] = st.Warn.Render(s)
+		}
+		return strings.Join(parts, sep)
+	}
+	out := []string{join(facts, false)}
+	for n := len(facts); n > 0; n-- {
+		out = append(out, join(facts[:n], true))
+	}
+	return append(out, "")
+}
+
+// factClock is when t was, for a title: "17:40" today, else "Mon 17:40".
+func factClock(now, t time.Time) string {
+	now, t = now.Local(), t.Local()
+	if y, m, d := now.Date(); t.Year() == y && t.Month() == m && t.Day() == d {
+		return t.Format("15:04")
+	}
+	return t.Format("Mon 15:04")
+}
+
+// factAge is how long a pause has lasted, as herdr's tab bar says it: "7m",
+// "19h", "3d".
+func factAge(d time.Duration) string {
+	switch {
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", max(int(d/time.Minute), 0))
+	case d < 48*time.Hour:
+		return fmt.Sprintf("%dh", int(d/time.Hour))
+	}
+	return fmt.Sprintf("%dd", int(d/(24*time.Hour)))
+}

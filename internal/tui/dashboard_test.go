@@ -62,55 +62,74 @@ type fakeActions struct {
 	mu    sync.Mutex
 	calls []string
 	err   error
+	// queued are the requests the next actions report (then cleared);
+	// answers are what Requests reads back, by id.
+	queued  []Request
+	answers map[int64]Request
+	asked   [][]int64
 }
 
-func (f *fakeActions) record(s string) (string, error) {
+func (f *fakeActions) record(s string) (ActionResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, s)
+	reqs := f.queued
+	f.queued = nil
 	if f.err != nil {
-		return "", f.err
+		return ActionResult{Text: "progress line\n" + f.err.Error(), Requests: reqs}, f.err
 	}
-	return "progress line\n" + s + " ok\n", nil
+	return ActionResult{Text: "progress line\n" + s + " ok\n", Requests: reqs}, nil
 }
 
-func (f *fakeActions) Open(_ context.Context, ref string) (string, error) {
+func (f *fakeActions) Open(_ context.Context, ref string) (ActionResult, error) {
 	return f.record("open " + ref)
 }
-func (f *fakeActions) Review(_ context.Context, ref string, o ReviewOpts) (string, error) {
+func (f *fakeActions) Review(_ context.Context, ref string, o ReviewOpts) (ActionResult, error) {
 	return f.record(fmt.Sprintf("review %s fresh=%t simplify=%t", ref, o.Fresh, o.Simplify))
 }
-func (f *fakeActions) Pin(_ context.Context, ref string) (string, error) {
+func (f *fakeActions) Pin(_ context.Context, ref string) (ActionResult, error) {
 	return f.record("pin " + ref)
 }
-func (f *fakeActions) Unpin(_ context.Context, ref string) (string, error) {
+func (f *fakeActions) Unpin(_ context.Context, ref string) (ActionResult, error) {
 	return f.record("unpin " + ref)
 }
-func (f *fakeActions) Release(_ context.Context, ref string) (string, error) {
+func (f *fakeActions) Release(_ context.Context, ref string) (ActionResult, error) {
 	return f.record("release " + ref)
 }
-func (f *fakeActions) Mute(_ context.Context, ref string) (string, error) {
+func (f *fakeActions) Mute(_ context.Context, ref string) (ActionResult, error) {
 	return f.record("mute " + ref)
 }
-func (f *fakeActions) Unmute(_ context.Context, ref string) (string, error) {
+func (f *fakeActions) Unmute(_ context.Context, ref string) (ActionResult, error) {
 	return f.record("unmute " + ref)
 }
-func (f *fakeActions) Abort(_ context.Context, ref string) (string, error) {
+func (f *fakeActions) Abort(_ context.Context, ref string) (ActionResult, error) {
 	return f.record("abort " + ref)
 }
-func (f *fakeActions) Approve(_ context.Context, ref string) (string, error) {
+func (f *fakeActions) Approve(_ context.Context, ref string) (ActionResult, error) {
 	return f.record("approve " + ref)
 }
-func (f *fakeActions) RequestChanges(_ context.Context, ref string) (string, error) {
+func (f *fakeActions) RequestChanges(_ context.Context, ref string) (ActionResult, error) {
 	return f.record("request-changes " + ref)
 }
-func (f *fakeActions) Ignore(_ context.Context, ref string) (string, error) {
+func (f *fakeActions) Ignore(_ context.Context, ref string) (ActionResult, error) {
 	return f.record("ignore " + ref)
 }
-func (f *fakeActions) Attention(context.Context) (string, error) { return f.record("attention") }
+func (f *fakeActions) Attention(context.Context) (ActionResult, error) { return f.record("attention") }
 func (f *fakeActions) OpenBrowser(_ context.Context, url string) error {
 	_, err := f.record("browser " + url)
 	return err
+}
+func (f *fakeActions) Requests(_ context.Context, ids []int64) ([]Request, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.asked = append(f.asked, ids)
+	var out []Request
+	for _, id := range ids {
+		if q, ok := f.answers[id]; ok {
+			out = append(out, q)
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeActions) last() string {

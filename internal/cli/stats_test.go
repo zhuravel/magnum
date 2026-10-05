@@ -507,7 +507,7 @@ func TestStatsCommandJSON(t *testing.T) {
 	if err := json.Unmarshal(f.Out.Bytes(), &doc); err != nil {
 		t.Fatalf("%v\n%s", err, f.Out.String())
 	}
-	if got := statsKeys(doc); !slices.Equal(got, []string{"groups", "since", "total", "until"}) {
+	if got := statsKeys(doc); !slices.Equal(got, []string{"agent_seconds", "groups", "since", "top_prs", "total", "until"}) {
 		t.Fatalf("top-level keys = %v", got)
 	}
 	if since, err := time.Parse(time.RFC3339, doc["since"].(string)); err != nil || !since.Equal(statsNow.Add(-7*24*time.Hour)) {

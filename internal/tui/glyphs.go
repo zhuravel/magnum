@@ -47,10 +47,13 @@ type glyphs struct {
 	ciPass, ciFail, ciPending, ciMissing, ciSkip            string // a check's state: the CI column and card
 	stale, mine, pin, errMark, fail, ok                     string
 	bot                                                     string // before a bot's login in the narrow columns; "" = keep "[bot]"
-	cursor, dash, minus, atLeast, rule, up, down, dot       string
-	sortDesc, sortAsc, refresh, sep, chipSep                string
-	gap                                                     string // after an icon that text follows directly
-	pinAccent                                               bool   // the pin is a word or a monochrome icon: color it
+	// queued marks a row whose action waits for the daemon's answer, in the
+	// cell after the cursor's: one cell wide in every mode.
+	queued                                            string
+	cursor, dash, minus, atLeast, rule, up, down, dot string
+	sortDesc, sortAsc, refresh, sep, chipSep          string
+	gap                                               string // after an icon that text follows directly
+	pinAccent                                         bool   // the pin is a word or a monochrome icon: color it
 	// rich marks what the other modes leave as text: states, slot states,
 	// finding priorities, the card's decision and section headings.
 	rich      bool
@@ -75,7 +78,7 @@ func newGlyphs(mode IconMode) glyphs {
 		return glyphs{
 			mode:     IconsASCII,
 			approved: "+", changes: "x", commented: "c", pending: "?", dismissed: "-", other: "*",
-			stale: "~", mine: "*", pin: "pin", errMark: "!", fail: "x", ok: "+",
+			stale: "~", mine: "*", pin: "pin", errMark: "!", fail: "x", ok: "+", queued: "?",
 			nonBlocking: "~", simplify: "s", times: "x",
 			ciPass: "+", ciFail: "x", ciPending: "o", ciMissing: "-", ciSkip: "/",
 			cursor: ">", dash: "-", minus: "-", atLeast: ">=", rule: "-", up: "^", down: "v", dot: "",
@@ -109,6 +112,7 @@ func newGlyphs(mode IconMode) glyphs {
 			errMark:     "\uf530",     // nf-oct-x_circle_fill
 			fail:        "\U000F0159", // gh-dash FailureIcon
 			ok:          "\uf058",     // gh-dash SuccessIcon
+			queued:      "◷",          // a Nerd Font icon may draw two cells wide: no room here
 			cursor:      "▌", dash: "—", minus: "−", atLeast: "≥", rule: "─", up: "▲", down: "▼", dot: "●",
 			sortDesc: "\uf51a", // nf-oct-sort_desc
 			sortAsc:  "\uf519", // nf-oct-sort_asc
@@ -162,7 +166,7 @@ func newGlyphs(mode IconMode) glyphs {
 	return glyphs{
 		mode:     IconsUnicode,
 		approved: "✔", changes: "✗", commented: "💬", pending: "◌", dismissed: "⊘", other: "•",
-		stale: "⟳", mine: "★", bot: "🤖", pin: "📌", errMark: "!", fail: "✗", ok: "✔",
+		stale: "⟳", mine: "★", bot: "🤖", pin: "📌", errMark: "!", fail: "✗", ok: "✔", queued: "◷",
 		nonBlocking: "●", simplify: "✂", times: "×",
 		ciPass: "✓", ciFail: "✗", ciPending: "◌", ciMissing: "–", ciSkip: "⊘",
 		cursor: "▌", dash: "—", minus: "−", atLeast: "≥", rule: "─", up: "▲", down: "▼", dot: "●",

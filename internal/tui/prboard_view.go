@@ -49,13 +49,13 @@ func RenderPRBoard(rows []PRBoardRow, width int, opts PRBoardOptions) string {
 	if w <= 0 {
 		w = lay.total()
 	}
-	lines := []string{p.titleLine(w, opts.Title, opts.Repo, owner, view, len(sorted), "", len(sorted), 0, ""), p.summaryLine(w), p.headerLine(lay, w), p.rule(w, 0, false)}
+	lines := []string{p.titleLine(w, opts.Title, opts.Repo, owner, view, len(sorted), "", len(sorted), 0, "", "", nil), p.summaryLine(w), p.headerLine(lay, w), p.rule(w, 0, false)}
 	section := slices.IndexFunc(sorted, func(r PRBoardRow) bool { return r.Recent })
 	for i, r := range sorted {
 		if i == section {
 			lines = append(lines, p.recentHeading(w, opts.RecentClosed, len(sorted)-section))
 		}
-		lines = append(lines, p.rowLine(r, lay, w, false))
+		lines = append(lines, p.rowLine(r, lay, w, false, false))
 	}
 	if len(sorted) == 0 {
 		lines = append(lines, "  "+st.Dim.Render("no open pull requests"))
@@ -1323,12 +1323,20 @@ func (p prbPainter) overlay(selected, muted bool) func(lipgloss.Style) lipgloss.
 }
 
 // rowLine renders one PR; the cursor row gets the mark, a background to
-// the edge and a bold title.
-func (p prbPainter) rowLine(r PRBoardRow, lay prbLayout, width int, selected bool) string {
+// the edge and a bold title, and a row whose action waits for the daemon's
+// answer (queued) the queued mark after the cursor's cell.
+func (p prbPainter) rowLine(r PRBoardRow, lay prbLayout, width int, selected, queued bool) string {
 	cs := p.cells(r, lay.since)
 	line := cell{{spaces(prbMarkW), lipgloss.Style{}}}
 	if selected {
 		line = cell{{p.g.cursor + spaces(prbMarkW-ansi.StringWidth(p.g.cursor)), p.st.Accent}}
+	}
+	if queued {
+		lead := " "
+		if selected {
+			lead = p.g.cursor
+		}
+		line = cell{{lead, p.st.Accent}, {p.g.queued, p.st.Warn}}
 	}
 	keep := [2]int{-1, -1} // the segs of a flag the row's dim leaves alone
 	for i, c := range lay.cols {
@@ -1419,9 +1427,11 @@ func (p prbPainter) footerRule(width int, msg string, below int) string {
 
 // titleLine is the title bar: the title, the repository scope, the open
 // count, the owner scope ("all owners" when the rows span several), the
-// view (with inView, its row count), the sort and the filter, with right
-// (the refresh time) on the right.
-func (p prbPainter) titleLine(width int, title, repo, owner string, view PRView, inView int, filter string, shown, hidden int, right string) string {
+// view (with inView, its row count), the sort and the filter, with the
+// daemon's facts (facts.go), spin (the spinner while loading) and clock (the
+// refresh time) on the right.
+func (p prbPainter) titleLine(width int, title, repo, owner string, view PRView, inView int, filter string, shown, hidden int,
+	spin, clock string, facts []fact) string {
 	scope := "all repos"
 	if repo != "" {
 		scope = repo
@@ -1437,13 +1447,11 @@ func (p prbPainter) titleLine(width int, title, repo, owner string, view PRView,
 	if filter != "" {
 		match = p.st.Accent.Render(fmt.Sprintf("%d match %q", shown, filter))
 	}
-	if right != "" {
-		right += " "
-	}
+	rights := p.titleRights(spin, clock, facts)
 	// From the fullest to the barest: narrow screens drop the "all repos"
-	// and "all owners" scopes, then the "sorted by" and "owner" words,
-	// before anything is cut.
-	var left string
+	// and "all owners" scopes, then the "sorted by" and "owner" words, then
+	// the facts give way (titleRights), before anything is cut.
+	var left, right string
 	for _, full := range []bool{true, false} {
 		parts := []string{p.st.Title.Render(title)}
 		if full || repo != "" {
@@ -1479,11 +1487,47 @@ func (p prbPainter) titleLine(width int, title, repo, owner string, view PRView,
 			parts = append(parts, p.st.Dim.Render(fmt.Sprintf("%d hidden (h)", hidden)))
 		}
 		left = " " + strings.Join(parts, p.st.Dim.Render(p.g.sep))
-		if width <= 0 || ansi.StringWidth(left)+1+ansi.StringWidth(right) <= width {
-			break
+		tries := rights[:1]
+		if !full {
+			tries = rights
+		}
+		for _, right = range tries {
+			if width <= 0 || ansi.StringWidth(left)+1+ansi.StringWidth(right) <= width {
+				return spread(left, right, width)
+			}
 		}
 	}
 	return spread(left, right, width)
+}
+
+// titleRights are the ways to draw the title's right side, from the
+// fullest to the barest: the facts whole, then short, then without the
+// refresh time (the spinner stays), then the least pressing facts left out.
+func (p prbPainter) titleRights(spin, clock string, facts []fact) []string {
+	compose := func(f string, withClock bool) string {
+		var parts []string
+		for _, s := range []string{f, spin} {
+			if s != "" {
+				parts = append(parts, s)
+			}
+		}
+		if withClock && clock != "" {
+			parts = append(parts, clock)
+		}
+		if len(parts) == 0 {
+			return ""
+		}
+		return strings.Join(parts, "  ") + " "
+	}
+	vs := p.st.factVariants(facts, "   ")
+	if len(facts) == 0 {
+		return []string{compose("", true)}
+	}
+	out := []string{compose(vs[0], true), compose(vs[1], true)}
+	for _, f := range vs[1:] {
+		out = append(out, compose(f, false))
+	}
+	return out
 }
 
 // summaryLine counts the rows per state, most urgent first, with the

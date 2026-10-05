@@ -508,8 +508,8 @@ What an author gets, every review alike:
 |---|---|
 | `magnum init [--force]` | Write `~/.config/magnum/config.toml` for this machine from three questions: your gh login, one repository, who posts (your login or a GitHub App). |
 | `magnum prs [--repo …] [--view all\|magnum\|mine\|ready] [--sort updated\|last-review\|reviewer-activity\|requested\|changes\|state] [--all] [--json]` | The PR board: every watched PR with its last review, each reviewer's verdict (with staleness), when a review was last requested (and whether of you), what changed since the last review, assignees; then the PRs merged or closed in the last day (`[board] recent_closed`), flagging one merged before Magnum reviewed its last push. `--view` keeps what Magnum reviewed, what is yours or what is ready to merge. Live screen on a terminal, table or JSON otherwise: snake_case keys, times in RFC 3339 (left out while unset), durations in seconds (`total_seconds`, `duration_seconds`), `null` for a part a PR has none of and `[]` for an empty list. |
-| `magnum status [<ref>\|<slot>] [--all] [--sizes] [--json] [--watch]` | Daemon, slots, queue, pauses; a PR's detail card with its review history and the last round's stage timings. `--watch` is the live dashboard (`tab` flips to the PR board). |
-| `magnum stats [--since 7d] [--repo owner/name] [--json]` | Review statistics per local day and repository over a window (`--since` takes `7d`, `36h`, `90m` or a date; default 7d): rounds started and how they ended, findings posted by priority, median and p90 durations per role and per round, how many findings each source raised, had posted, had posted alone or had rejected (with reason codes), and model switches, denied prompts and round restarts. |
+| `magnum status [<ref>\|<slot>] [--all] [--sizes] [--json] [--watch]` | Daemon, slots, queue, pauses; a PR's detail card with its review history and the last round's stage timings. The codex line says how fast the Codex budget is spent, the share used over the share of the window elapsed, and when `[usage]` codex_soft and codex_hard come at that pace if before the reset ("pace 2.8x: 80% Oct 7 13:30, 95% Oct 8 09:10"; `pace`, `soft_at` and `hard_at` in the JSON); the daemon toasts once per window when codex_soft would come before the reset (not in the window's first tenth, when one burst is no pace). `--watch` is the live dashboard (`tab` flips to the PR board). |
+| `magnum stats [--since 7d] [--repo owner/name] [--json]` | Review statistics per local day and repository over a window (`--since` takes `7d`, `36h`, `90m` or a date; default 7d): rounds started and how they ended, findings posted by priority, median and p90 durations per role and per round, how many findings each source raised, had posted, had posted alone or had rejected (with reason codes), model switches, denied prompts and round restarts, and the top 10 PRs by agent time (the sum of their runs' durations in the window, the rounds and the share of all agent time; `top_prs` in the JSON), so a PR burning the budget can be muted. |
 | `magnum eval run\|score\|list\|show` | Measure a prompt, skill or model change: `run` replays the PRs with known defects in `~/.config/magnum/eval.toml` (see `eval.toml.example`) at their pinned heads as blind dry runs and reports, per case, the seeded defects the planned review found, at what severity, and its other findings (noise), next to the previous run. `score` re-scores a run after a match rule is fixed, without the agents. |
 | `magnum retro [<ref>...] [--again] [--lookback 14d] [--json]` | Run the retro now (see Learning from other reviewers): classify what other reviewers said about the PRs closed within the lookback, whether or not `[learn] enabled`. `--again` looks again at PRs a retro already did; PRs named by `<ref>` are looked at again in any case. |
 | `magnum misses [<ref>] [--all] [--class miss\|not_issue\|style\|outside\|unclassified] [--json]` | What other reviewers caught and Magnum did not: the retro's new misses, with the reviewer, where, severity, whether Magnum's judge had raised and rejected it, the title and the lesson. `--all` lists every class and state. |
@@ -545,7 +545,9 @@ Magnum's state badge, the last review (who, verdict, age, ⟳ when the head move
 💬 commented, ◌ requested, ⟳ stale); yours and Magnum's are starred, and a bot's login carries the bot
 mark (🤖, or `[bot]` in ASCII), so an App named like you (`zhuravel[bot]`) never reads as you. `enter` opens the card with the full
 per-reviewer table (and a line with the latest request to each reviewer: who asked and when) and the last
-round's stage timings (fetch/checkout, each role, verify, total); `/`
+round's stage timings (fetch/checkout, each role, verify, total), which roles that round ran and why (its
+kind, a continue running the judge alone, what triage skipped and its reason, a role whose code changed
+enough to run again, the roles asked for), and the PR's agent time over 7 days with its rounds; `/`
 filters; `v` cycles the views; `s`/`S` sort (updated, last review, reviewer activity, requested, changes,
 state; the requested sort puts the newest request first, the one the column shows, and PRs nobody asked
 last); `r`, `R`, `i` start review variants (a post-merge review on a
@@ -560,6 +562,24 @@ merged PR; `K` with no review running or waiting; `U` on a PR that is not muted)
 menu dims and the card's ACTIONS leave out the same actions; the status dashboard and `magnum pick` refuse
 the same way. `I` names what it will do: kill or drop the review when one runs or waits, mute, and free
 the slot only when the PR holds one.
+
+An action hands its work to the daemon as a request and shows the daemon's answer, not "queued": when the
+answer is not there by the time the action returns (a release always, which runs on the daemon's heavy
+worker; anything else while a slow GitHub poll holds the tick), its row carries ◷ (`?` in ASCII) and the
+screen re-reads the request with every refresh until the answer comes, then flashes it. A failure, the
+action's own or the daemon's refusal of its request, stays in red until a key is pressed; one too long
+for the footer ends in "(! shows all)". `!` opens the action log on both screens: the last 20 outcomes,
+newest first, with their times, their request ids and states, everything the action printed and the
+daemon's answers whole. The board and the status dashboard share the log and the requests they follow,
+so `tab` keeps both.
+
+The title line of both screens also says what holds the daemon back, in yellow on the right: an older
+build running ("daemon on v1.4.0 since 17:40 · v1.5.0 built: daemon-restart", or "new build Oct 5 18:48"
+for a binary rebuilt on disk), a drain ("draining (pid 4242)"), a pause ("paused 19h · 6 requests held")
+and the Codex budget's pace when it reaches `codex_soft` (or `codex_hard`, once past the soft cap) before
+the window resets ("codex 51% · at this pace 80% Tue 13:30"). On a narrow screen they shorten ("v1.5.0
+built: daemon-restart", "paused 19h", "codex 80% Tue 13:30") and give way, the least pressing first;
+they never add a line.
 
 CI shows the head's checks: the repository's required checks when it has some (read from GitHub's
 rulesets, or `[[repo]] required_checks`; `✗ Completion`, `– Completion not run` when it never ran on the

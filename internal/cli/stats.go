@@ -75,6 +75,10 @@ func newStatsCmd(c *Context) *cobra.Command {
 			"OPERATIONS counts model-limit switches, permission prompts magnum denied and round restarts (the PR "+
 			"head moved before the judge was prompted). The text report shows durations and sources over the "+
 			"whole window; --json has every day and repository.\n\n"+
+			"TOP PRS BY AGENT TIME lists the 10 PRs whose runs kept agents busiest in the window, with the rounds "+
+			"those runs belong to and the share of all the window's agent time (--json: top_prs, agent_seconds "+
+			"and share as a fraction). A run counts from its submission to its end, to now while it is going, "+
+			"and only when it was created in the window.\n\n"+
 			"--since takes N days (7d), a Go duration (36h, 90m) or a date (2026-10-01, local midnight).",
 		func(pos []string) int { return runStats(c, f, pos) })
 	fs := cmd.Flags()
@@ -172,6 +176,51 @@ type statsReport struct {
 	Repo   string       `json:"repo,omitempty"`
 	Groups []statsGroup `json:"groups"`
 	Total  statsGroup   `json:"total"`
+	// AgentSeconds is all the agent time of the window (of the repository
+	// under --repo), TopPRs the PRs that took the most of it.
+	AgentSeconds int64        `json:"agent_seconds"`
+	TopPRs       []statsTopPR `json:"top_prs"`
+}
+
+// statsTopLimit is how many PRs the top lists.
+const statsTopLimit = 10
+
+// statsTopPR is one PR's agent time in the window: the sum of its runs'
+// durations (store.AgentTimeSince), the rounds they belong to and Share, its
+// fraction of all the agent time in scope (four decimals).
+type statsTopPR struct {
+	Repo         string  `json:"repo"`
+	Number       int     `json:"number"`
+	AgentSeconds int64   `json:"agent_seconds"`
+	Rounds       int     `json:"rounds"`
+	Share        float64 `json:"share"`
+}
+
+// statsTop picks the statsTopLimit PRs of times with the most agent time
+// (ties by repository, then number; one without any is left out) and returns
+// them with the total of every PR in scope; repo ("owner/name", or "" for
+// all) keeps one repository.
+func statsTop(times []store.PRAgentTime, repo string) ([]statsTopPR, time.Duration) {
+	var total time.Duration
+	var in []store.PRAgentTime
+	for _, p := range times {
+		if repo != "" && p.Repo != repo {
+			continue
+		}
+		total += p.Time
+		if p.Time > 0 {
+			in = append(in, p)
+		}
+	}
+	slices.SortFunc(in, func(a, b store.PRAgentTime) int {
+		return cmp.Or(cmp.Compare(b.Time, a.Time), cmp.Compare(a.Repo, b.Repo), cmp.Compare(a.Number, b.Number))
+	})
+	top := make([]statsTopPR, 0, min(len(in), statsTopLimit))
+	for _, p := range in[:min(len(in), statsTopLimit)] {
+		top = append(top, statsTopPR{Repo: p.Repo, Number: p.Number, AgentSeconds: statsSeconds(p.Time), Rounds: p.Rounds,
+			Share: math.Round(10000*float64(p.Time)/float64(total)) / 10000})
+	}
+	return top, total
 }
 
 // statsGroup is one (day, repository) group, or the total (no day or repo).
@@ -227,8 +276,16 @@ func statsGather(ctx context.Context, st *store.Store, cfg *config.Config, since
 	if err != nil {
 		return statsReport{}, err
 	}
+	times, err := st.AgentTimeSince(ctx, since, now)
+	if err != nil {
+		return statsReport{}, err
+	}
 	isJudge := func(role string) bool { return actIsJudge(cfg, role) }
-	return statsCompute(runs, findings, events, isJudge, since, now, repo), nil
+	rep := statsCompute(runs, findings, events, isJudge, since, now, repo)
+	var total time.Duration
+	rep.TopPRs, total = statsTop(times, repo)
+	rep.AgentSeconds = statsSeconds(total)
+	return rep, nil
 }
 
 // statsKey identifies a group.
@@ -622,7 +679,7 @@ func statsRender(w io.Writer, r statsReport) {
 		scope = actClean(r.Repo)
 	}
 	fmt.Fprintf(w, "stats since %s (%s), %s\n", r.Since.Local().Format(statsTimeFmt), inspDur(r.Until.Sub(r.Since)), scope)
-	if len(r.Groups) == 0 {
+	if len(r.Groups) == 0 && len(r.TopPRs) == 0 {
 		fmt.Fprintf(w, "\nno rounds since %s\n", r.Since.Local().Format(statsTimeFmt))
 		return
 	}
@@ -655,6 +712,13 @@ func statsRender(w io.Writer, r statsReport) {
 	}
 	statsTable(w, "DURATIONS", []string{"ROLE", "N", "MEDIAN", "P90"}, durs)
 
+	var top [][]string
+	for _, p := range r.TopPRs {
+		top = append(top, []string{actClean(p.Repo) + "#" + strconv.Itoa(p.Number), inspDur(time.Duration(p.AgentSeconds) * time.Second),
+			strconv.Itoa(p.Rounds), statsPercent(p.Share)})
+	}
+	statsTable(w, "TOP PRS BY AGENT TIME", []string{"PR", "AGENT TIME", "ROUNDS", "SHARE"}, top)
+
 	var srcs [][]string
 	for _, name := range statsOrdered(r.Total.Sources, statsJudgeSource) {
 		s := r.Total.Sources[name]
@@ -677,6 +741,15 @@ func statsRender(w io.Writer, r statsReport) {
 			}
 			return []string{strconv.Itoa(g.ModelSwitches), strconv.Itoa(g.Denies), strconv.Itoa(g.Restarts)}
 		}))
+}
+
+// statsPercent is a share (a fraction) as a whole percent; "<1%" for a small
+// one that is not nothing.
+func statsPercent(share float64) string {
+	if pct := int(math.Round(100 * share)); pct > 0 || share == 0 {
+		return strconv.Itoa(pct) + "%"
+	}
+	return "<1%"
 }
 
 // statsGroupRows is one row per group cols returns cells for (day and repo

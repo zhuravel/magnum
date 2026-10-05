@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/inventory"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/usage"
 )
 
 var (
@@ -165,6 +167,18 @@ func statusGatherUsage(d statusDeps, kv statusKV, r *statusReport) {
 	u.Plan, _ = kv.get(engine.KVUsageCodexPlan)
 	if d.Config != nil {
 		u.Soft, u.Hard = d.Config.Usage.CodexSoft, d.Config.Usage.CodexHard
+	}
+	if u.ResetsAt != nil {
+		if p, ok := usage.PaceOf(float64(u.Percent), u.WindowMinutes, *u.ResetsAt, r.GeneratedAt); ok && p.Used > 0 {
+			u.Pace = math.Round(p.Ratio()*100) / 100
+			reach := func(pct float64) *time.Time {
+				if at, ok := p.Reach(pct); ok {
+					return &at
+				}
+				return nil
+			}
+			u.SoftAt, u.HardAt = reach(u.Soft), reach(u.Hard)
+		}
 	}
 	r.Codex = u
 }

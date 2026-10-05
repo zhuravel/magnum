@@ -102,6 +102,8 @@ func (m *prBoardModel) wheel(b tea.MouseButton) {
 	switch m.mode {
 	case prbHelp:
 		m.helpScroll = max(m.helpScroll+n, 0) // fixScroll keeps it within the help
+	case prbLog:
+		m.logScroll = max(m.logScroll+n, 0)
 	case prbDetail:
 		m.detailScroll = max(m.detailScroll+n, 0)
 	default:

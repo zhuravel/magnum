@@ -9661,6 +9661,15 @@ func (p PR) FlagDismissed() bool
 func (p PR) MergedUnreviewed() bool
     MergedUnreviewed is IsMergedUnreviewed for p.
 
+type PRAgentTime struct {
+	PRID   int64
+	Repo   string // owner/name
+	Number int
+	Time   time.Duration // the sum of its runs' durations
+	Rounds int           // the distinct rounds those runs belong to
+}
+    PRAgentTime is what one PR's runs cost over a window (AgentTimeSince).
+
 type PRFilter struct {
 	RepoID int64
 	States []string
@@ -9923,6 +9932,18 @@ func OpenWith(path string, opts Options) (*Store, error)
 func (s *Store) ActiveRuns(ctx context.Context) ([]Run, error)
     ActiveRuns returns runs still in flight (pending, submitted, working,
     ended-but-unverified), oldest first.
+
+func (s *Store) AgentTimeSince(ctx context.Context, since, now time.Time, prIDs ...int64) ([]PRAgentTime, error)
+    AgentTimeSince sums, per PR, the durations of the runs created at or after
+    since and counts the distinct rounds they belong to; a PR without such
+    a run has no entry. A run lasts from its submission (its creation when
+    it was never submitted) to its end; one still going (pending, submitted,
+    working) lasts to now, and a finished run that never got an end stops where
+    it was last seen (verified, else working), or lasts nothing. A duration is
+    never negative. prIDs limits the PRs (none: every PR). The result is the PR
+    with the most agent time first, ties by PR id.
+
+    The durations are summed here, not in SQL: the runs' timestamps are text.
 
 func (s *Store) AppendEvent(ctx context.Context, e Event) (int64, error)
     AppendEvent writes an audit row and returns its id. At defaults to now and
@@ -10395,6 +10416,16 @@ a heading click sorts (the board), a heading gap drags a column wider and a
 right click opens the row's actions, each through its key's path; m turns it off
 and on.
 
+CONSTANTS
+
+const (
+	RequestPending = "pending"
+	RequestDone    = "done"
+	RequestFailed  = "failed"
+)
+    The states of a Request.
+
+
 VARIABLES
 
 var (
@@ -10462,6 +10493,27 @@ func TimingsText(t RoundTimings) string
 
 
 TYPES
+
+type ActionLog struct {
+	// Has unexported fields.
+}
+    ActionLog is the outcomes of the screens' last actions, newest last,
+    with the requests among them the daemon has not answered yet. The board
+    and the dashboard share one (tab keeps it), so a request queued on one
+    screen flashes on the other when the answer comes. Safe for concurrent use;
+    the zero value is ready.
+
+func NewActionLog() *ActionLog
+    NewActionLog returns an empty log.
+
+type ActionResult struct {
+	// Text is everything the action printed: the footer shows its last line,
+	// the action log all of it.
+	Text string
+	// Requests are the daemon requests it queued, as last read.
+	Requests []Request
+}
+    ActionResult is what a finished action reports.
 
 type ActivityInfo struct {
 	LastPoll, LastTick, LastReconcile time.Duration
@@ -10566,6 +10618,15 @@ type CleanupSkip struct{ Subject, Reason string }
 type CleanupTotals struct{ Disk, MySQL int64 }
     CleanupTotals are whole-plan estimates, in bytes.
 
+type CodexPace struct {
+	Used int // percent
+	Cap  float64
+	At   time.Time
+}
+    CodexPace is the Codex budget used now and when, at the pace it has
+    been spent since its window began, it reaches Cap ([usage] codex_soft,
+    or codex_hard once past it), before the window resets.
+
 type ColumnWidths interface {
 	LoadWidths(ctx context.Context, screen string) (map[string]int, error)
 	SaveWidths(ctx context.Context, screen string, widths map[string]int) error
@@ -10574,6 +10635,30 @@ type ColumnWidths interface {
     per screen ("board", "dashboard") and column name. LoadWidths returns nil
     when nothing is kept; SaveWidths with an empty map forgets them. The screens
     call both from commands, so a slow store never blocks a key.
+
+type DaemonFacts struct {
+	// SkewOld is the build the daemon runs when it is older than the CLI's
+	// or the one on disk ("v1.4.0", "dev (8ad5bb2)"), SkewSince when that
+	// daemon started and SkewNew what is built, as a phrase ("v1.5.0 built",
+	// "new build 18:48"); SkewOld is "" when the daemon runs the newest
+	// build.
+	SkewOld, SkewNew string
+	SkewSince        time.Time
+	// Paused: `magnum pause` holds automation since PausedSince (zero when
+	// unknown), holding Held review requests people made.
+	Paused      bool
+	PausedSince time.Time
+	Held        int
+	// Draining: `magnum daemon-restart --drain` holds new rounds; DrainerPID
+	// is the draining command (0 when unknown).
+	Draining   bool
+	DrainerPID int
+	// Codex is the Codex budget's pace when it reaches a cap before the
+	// window resets; nil otherwise.
+	Codex *CodexPace
+}
+    DaemonFacts are what the titles say of the daemon; the zero value says
+    nothing.
 
 type DaemonInfo struct {
 	Running bool
@@ -10588,27 +10673,33 @@ type DaemonInfo struct {
     DaemonInfo is the daemon process and its launchd job.
 
 type DashboardActions interface {
-	Open(ctx context.Context, ref string) (string, error)
-	Review(ctx context.Context, ref string, opts ReviewOpts) (string, error)
-	Pin(ctx context.Context, ref string) (string, error)
-	Unpin(ctx context.Context, ref string) (string, error)
-	Release(ctx context.Context, ref string) (string, error)
-	Mute(ctx context.Context, ref string) (string, error)
-	Unmute(ctx context.Context, ref string) (string, error)
-	Abort(ctx context.Context, ref string) (string, error)  // kill the PR's running review
-	Ignore(ctx context.Context, ref string) (string, error) // abort, mute and free the slot
+	Open(ctx context.Context, ref string) (ActionResult, error)
+	Review(ctx context.Context, ref string, opts ReviewOpts) (ActionResult, error)
+	Pin(ctx context.Context, ref string) (ActionResult, error)
+	Unpin(ctx context.Context, ref string) (ActionResult, error)
+	Release(ctx context.Context, ref string) (ActionResult, error)
+	Mute(ctx context.Context, ref string) (ActionResult, error)
+	Unmute(ctx context.Context, ref string) (ActionResult, error)
+	Abort(ctx context.Context, ref string) (ActionResult, error)  // kill the PR's running review
+	Ignore(ctx context.Context, ref string) (ActionResult, error) // abort, mute and free the slot
 	// Approve and RequestChanges post the reviewer's own verdict on the head
 	// magnum reviewed (magnum approve / request-changes).
-	Approve(ctx context.Context, ref string) (string, error)
-	RequestChanges(ctx context.Context, ref string) (string, error)
-	Attention(ctx context.Context) (string, error)
+	Approve(ctx context.Context, ref string) (ActionResult, error)
+	RequestChanges(ctx context.Context, ref string) (ActionResult, error)
+	Attention(ctx context.Context) (ActionResult, error)
 	OpenBrowser(ctx context.Context, url string) error
+	// Requests re-reads the requests ids name; one the registry no longer
+	// has is left out.
+	Requests(ctx context.Context, ids []int64) ([]Request, error)
 }
-    DashboardActions run what the dashboard's keys ask for. ref is a row's
-    PR reference (or a slot name, for pin/unpin/release of an empty slot).
-    The returned text is shown in the footer for a few seconds (only its last
-    non-empty line when it has several); an error is shown instead. One action
-    runs at a time; the data refreshes right after it returns.
+    DashboardActions run what the dashboard's and the board's keys ask for.
+    ref is a row's PR reference (or a slot name, for pin/unpin/release of
+    an empty slot). The result's text is shown in the footer (only its last
+    non-empty line when it has several) and kept whole in the action log;
+    an error is shown instead, until a key is pressed. A request the result
+    names as pending marks its row and is re-read (Requests) on every refresh
+    until the daemon answers. One action runs at a time; the data refreshes
+    right after it returns.
 
 type DashboardOptions struct {
 	Refresh    time.Duration    // between Gather calls; default 2s, at least 200ms
@@ -10626,6 +10717,10 @@ type DashboardOptions struct {
 	// Widths keeps the column widths dragged with the mouse across runs;
 	// nil keeps them for this run only.
 	Widths ColumnWidths
+	// Log keeps the actions' outcomes (! shows them) and the requests still
+	// pending; the board shares it, so tab keeps both. nil = a log of this
+	// screen's own.
+	Log *ActionLog
 }
     DashboardOptions tune the dashboard.
 
@@ -10731,6 +10826,13 @@ type PRBoardOptions struct {
 	// recently closed section names ("merged or closed in the last 24h");
 	// the source marks the rows in it (PRBoardRow.Recent).
 	RecentClosed time.Duration
+	// Log keeps the actions' outcomes (! shows them) and the requests still
+	// pending; the dashboard shares it, so tab keeps both. nil = a log of
+	// this screen's own.
+	Log *ActionLog
+	// Facts, when set, reads what the title says of the daemon (an older
+	// build, a pause, a drain, the Codex budget's pace) with every load.
+	Facts func(ctx context.Context) DaemonFacts
 }
     PRBoardOptions tune the PR board.
 
@@ -10777,6 +10879,11 @@ type PRBoardRow struct {
 	ErrorDetail []string
 	RoundsToday int
 	LastRound   *RoundTimings // the stages of the last review round; nil when none ran
+	// RoundWhy says which roles the last round ran and why; nil when unknown.
+	RoundWhy *RoundWhy
+	// Spend is the agent time the PR's runs took over the last 7 days and
+	// how many rounds they ran in; nil when none ran.
+	Spend *SpendInfo
 
 	// Wait and WaitDetail say why a PR waiting for a round has none yet (the
 	// daemon's account): the compact form the state cell shows ("re-review
@@ -10951,6 +11058,14 @@ type PickerOptions struct {
 }
     PickerOptions tune the picker.
 
+type Request struct {
+	ID     int64
+	Kind   string // review, pin, release, …
+	State  string // RequestPending, RequestDone or RequestFailed
+	Result string // the daemon's answer; "" while pending
+}
+    Request is a daemon request as the screens follow it.
+
 type RequestInfo struct {
 	To   string // the reviewer: a login (a bot's keeps "[bot]") or "team:<slug>"
 	By   string // who asked; "" when unknown (a deleted account)
@@ -11009,6 +11124,13 @@ type ReviewerInfo struct {
 }
     ReviewerInfo is one reviewer's latest verdict on a PR.
 
+type RoleRerun struct {
+	Role  string
+	Lines int
+}
+    RoleRerun is a role that ran again because Lines code lines changed since
+    its last run.
+
 type RoundTimings struct {
 	Round   int
 	Kind    string        // the round's kind: initial, rereview, continue, recovery
@@ -11018,6 +11140,26 @@ type RoundTimings struct {
 }
     RoundTimings is how long each stage of a PR's last review round took,
     from the registry's runs and step events.
+
+type RoundWhy struct {
+	Kind      string   // initial, rereview, continue, recovery, nudge
+	PostMerge bool     // a post-merge review
+	Roles     []string // the roles it ran, in the order the round named them
+	Requested []string // the roles asked for this round
+	Reruns    []RoleRerun
+	// Triaged: triage decided this round's roles; Skipped are the roles it
+	// dropped and Reason its words (the model read the PR: PR content,
+	// cleaned like any). EveryRole is why triage kept every role ("the diff
+	// could not be read"); all empty when triage did not run.
+	Triaged   bool
+	Skipped   []string
+	Reason    string
+	EveryRole string
+}
+    RoundWhy says which roles a PR's last round ran and why: its kind (a
+    continue runs the judge alone), the roles asked for it (`magnum review
+    --role`, --simplify), the roles that ran again because their code changed
+    (rerun_min_lines), and triage's decision.
 
 type RoundsInfo struct {
 	Active, Max int
@@ -11042,6 +11184,15 @@ type SourceFunc func(ctx context.Context) (StatusData, error)
 func (f SourceFunc) Gather(ctx context.Context) (StatusData, error)
     Gather calls f.
 
+type SpendInfo struct {
+	Window    time.Duration // how far back it counts (7 days)
+	AgentTime time.Duration
+	Rounds    int
+}
+    SpendInfo is what a PR's reviews cost over a window: the agent time (the sum
+    of its runs' durations, to now for a run still going) and how many rounds
+    those runs belong to.
+
 type StageTiming struct {
 	Name     string        // "fetch/checkout", a role's name, "verify"
 	Duration time.Duration // to now while Running
@@ -11051,18 +11202,21 @@ type StageTiming struct {
     StageTiming is one stage of a round.
 
 type StatusData struct {
-	Daemon      DaemonInfo
-	Activity    ActivityInfo
-	GitHub      GitHubInfo
-	Rounds      RoundsInfo
-	Agents      AgentsInfo
-	Disk        DiskInfo
-	Pauses      []Pause
-	Slots       []SlotRow
-	Queue       []PRRow // open PRs, then closed ones pending release
-	Attention   []AttentionRow
-	Manual      []ManualRow // manual worktrees, shown when toggled on
-	Warnings    []string    // sources that could not be read
+	Daemon    DaemonInfo
+	Activity  ActivityInfo
+	GitHub    GitHubInfo
+	Rounds    RoundsInfo
+	Agents    AgentsInfo
+	Disk      DiskInfo
+	Pauses    []Pause
+	Slots     []SlotRow
+	Queue     []PRRow // open PRs, then closed ones pending release
+	Attention []AttentionRow
+	Manual    []ManualRow // manual worktrees, shown when toggled on
+	Warnings  []string    // sources that could not be read
+	// Facts are what the title says of the daemon: an older build, a pause,
+	// a drain, the Codex budget's pace.
+	Facts       DaemonFacts
 	GeneratedAt time.Time
 }
     StatusData is one snapshot of what the dashboard shows. Table cells are
@@ -11163,6 +11317,34 @@ func Decide(snap Snapshot, soft, hard float64) Level
     of zero or less is off.
 
 func (l Level) String() string
+
+type Pace struct {
+	Used     float64   // percent of the budget used, 0–100
+	Start    time.Time // when the window began: ResetsAt minus its length
+	ResetsAt time.Time
+	Now      time.Time
+}
+    Pace is how fast a rate-limit window's budget is being spent: the share used
+    against the share of the window elapsed.
+
+func PaceOf(used float64, windowMinutes int, resetsAt, now time.Time) (Pace, bool)
+    PaceOf is the pace at now of a window windowMinutes long that resets at
+    resetsAt, with used percent of it used. ok is false when the length or the
+    reset is unknown (<= 0, zero) or now is not inside the window (before its
+    start, or at/after the reset).
+
+func (p Pace) Elapsed() float64
+    Elapsed is the share of the window elapsed, 0–100.
+
+func (p Pace) Ratio() float64
+    Ratio is Used over Elapsed: 1 spends the whole budget exactly at the reset,
+    2.7 runs out at 37% of the window. 0 when nothing elapsed.
+
+func (p Pace) Reach(pct float64) (time.Time, bool)
+    Reach is when the used share reaches pct at the current pace (the average
+    since the window began: Start + (Now-Start)*pct/Used). ok is false when it
+    is reached already (Used >= pct), nothing is used yet (Used <= 0), pct <= 0,
+    nothing has elapsed to extrapolate from, or the time is not before ResetsAt.
 
 type Snapshot struct {
 	Window

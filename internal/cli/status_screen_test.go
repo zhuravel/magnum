@@ -173,9 +173,9 @@ func TestStatusDashActionsCaptureOutput(t *testing.T) {
 	defer acts.Close()
 	ctx := context.Background()
 
-	text, err := acts.Pin(ctx, "talkable#5")
-	if err != nil || !strings.Contains(text, "pin talkable#5 is queued as request 1") {
-		t.Fatalf("pin: %q %v", text, err)
+	res, err := acts.Pin(ctx, "talkable#5")
+	if err != nil || !strings.Contains(res.Text, "pin talkable#5 is queued as request 1") {
+		t.Fatalf("pin: %q %v", res.Text, err)
 	}
 	if _, err := acts.Review(ctx, "talkable#5", tui.ReviewOpts{}); err == nil || !strings.Contains(err.Error(), "nothing was queued: no daemon is running") {
 		t.Fatalf("review without a daemon to answer: %v", err)
@@ -185,11 +185,11 @@ func TestStatusDashActionsCaptureOutput(t *testing.T) {
 		t.Fatalf("review: %v", err)
 	}
 	h.pid = 0
-	text, err = acts.Release(ctx, "talkable#5") // no question: the dashboard asked
-	if err != nil || !strings.Contains(lastLine(text), "release of talkable#5 queued as request 3") {
-		t.Fatalf("release: %q %v", text, err)
+	res, err = acts.Release(ctx, "talkable#5") // no question: the dashboard asked
+	if err != nil || !strings.Contains(lastLine(res.Text), "release of talkable#5 queued as request 3") {
+		t.Fatalf("release: %q %v", res.Text, err)
 	}
-	for _, fn := range []func(context.Context, string) (string, error){acts.Unpin, acts.Mute, acts.Unmute} {
+	for _, fn := range []func(context.Context, string) (tui.ActionResult, error){acts.Unpin, acts.Mute, acts.Unmute} {
 		if _, err := fn(ctx, "talkable#5"); err != nil {
 			t.Fatal(err)
 		}
@@ -205,8 +205,8 @@ func TestStatusDashActionsCaptureOutput(t *testing.T) {
 		t.Errorf("review payload %+v", p)
 	}
 
-	if text, err := acts.Attention(ctx); err != nil || text != "nothing needs you" {
-		t.Errorf("attention: %q %v (nothing needing you is news, not a failure)", text, err)
+	if res, err := acts.Attention(ctx); err != nil || res.Text != "nothing needs you" {
+		t.Errorf("attention: %q %v (nothing needing you is news, not a failure)", res.Text, err)
 	}
 	if _, err := acts.Open(ctx, "talkable#5"); err == nil || strings.HasPrefix(err.Error(), "magnum open") {
 		t.Errorf("open without a session: %v (want the reason without the command prefix)", err)

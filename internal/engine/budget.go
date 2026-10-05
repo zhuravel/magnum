@@ -3,7 +3,9 @@ package engine
 // The Codex budget: Codex reports its account's rate-limit windows in its own
 // session files (internal/usage). The health tick reads them at most once a
 // minute; at [usage] codex_soft first reviews wait, at codex_hard the kinds
-// backed by Codex pause until the budget is below the cap again.
+// backed by Codex pause until the budget is below the cap again. A budget
+// spent so fast that codex_soft comes before the window resets is told once
+// per window (notePace).
 
 import (
 	"context"
@@ -13,6 +15,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/agents"
+	"github.com/zhuravel/magnum/internal/notify"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/usage"
 )
@@ -28,6 +31,10 @@ const (
 	budgetPauseFallback = time.Hour
 	budgetToastWindow   = 12 * time.Hour
 	budgetToastKey      = "usage:codex"
+	// paceMinElapsed is the share (percent) of a window that must have
+	// elapsed before its pace is judged: the average over the first hours is
+	// one burst, and the one warning a window gets is not for that.
+	paceMinElapsed = 10
 )
 
 // readBudget returns the newest Codex snapshot, reading the session files
@@ -141,6 +148,7 @@ func (e *Engine) checkBudget(ctx context.Context) {
 	}
 	level, snap := e.budgetLevel()
 	now := e.now()
+	e.notePace(ctx, snap, now)
 	for _, kind := range kinds {
 		p, paused := e.toolPause(ctx, kind)
 		ours := paused && p.Reason == BudgetPauseReason
@@ -174,6 +182,48 @@ func (e *Engine) checkBudget(ctx context.Context) {
 			e.forgetSend(ctx, budgetToastKey)
 			e.event(ctx, "info", "tool:"+kind, "tool.resumed", fmt.Sprintf("%s pause (%s) ended: Codex budget %.0f%% used", kind, BudgetPauseReason, snap.Used()), nil)
 		}
+	}
+}
+
+// notePace warns, once per window, that the budget is spent faster than the
+// window lasts: still below codex_soft, but at the average pace since the
+// window began codex_soft comes before the reset, and first reviews wait from
+// then on. One info toast on the batcher, whose key is reserved in the
+// registry for the window's length (so a restarted daemon stays quiet), and
+// one usage.pace event, guarded the same way. A dry run only records it.
+func (e *Engine) notePace(ctx context.Context, snap usage.Snapshot, now time.Time) {
+	soft := e.cfg.Usage.CodexSoft
+	if soft <= 0 || snap.Used() >= soft {
+		return
+	}
+	w := bindingWindow(snap)
+	pace, ok := usage.PaceOf(w.UsedPercent, w.WindowMinutes, w.ResetsAt, now)
+	if !ok || pace.Elapsed() < paceMinElapsed {
+		return
+	}
+	reach, ok := pace.Reach(soft)
+	if !ok {
+		return
+	}
+	window := strconv.FormatInt(w.ResetsAt.Unix(), 10)
+	if !e.changed("usage.pace", window) { // tick goroutine; the registry decides across restarts
+		return
+	}
+	subject := "tool:" + agents.KindCodex
+	detail := fmt.Sprintf("At this pace it reaches %g%% (codex_soft) %s, before the reset %s: first reviews will wait. Pace %.1fx.",
+		soft, reach.Local().Format("Mon 15:04"), w.ResetsAt.Local().Format("Mon 15:04"), pace.Ratio())
+	if e.d.DryRun {
+		e.rec.Record(ctx, subject, "pace", fmt.Sprintf("Codex budget %.0f%% used: %s", snap.Used(), detail))
+		return
+	}
+	span := time.Duration(w.WindowMinutes) * time.Minute
+	e.info(notify.Item{Key: "usage:codex-pace:" + window, Title: fmt.Sprintf("magnum: Codex budget at %.0f%%", snap.Used()),
+		Body: detail, Window: span})
+	switch first, err := e.st.ShouldSend(ctx, "usage:codex-pace-event:"+window, span); {
+	case err != nil:
+		e.log.Warn("codex pace event", "err", err)
+	case first:
+		e.event(ctx, "info", subject, "usage.pace", fmt.Sprintf("Codex budget %.0f%% used: %s", snap.Used(), detail), nil)
 	}
 }
 
