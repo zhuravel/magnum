@@ -524,11 +524,11 @@ compares them with the previous run; `magnum eval score` re-applies the corpus a
 rule. A case costs a whole review round, so `run` waits for real reviews: it refuses to start a case
 past `[usage] codex_soft` unless `--force`.
 
-Troubleshooting lives in `magnum doctor`. Three things it checks that bit us: a firewall that silently
-blocks fresh binaries (Magnum therefore never opens its own HTTPS connections), git stalling on
-hostname lookups when no identity is configured (the tests pin one), and login shells that do not see
-mise: Codex and Claude run their tool commands as `zsh -lc`, which skips `.zshrc` and lets macOS put
-`/usr/bin` first, so `eval "$(mise activate zsh --shims)"` belongs in `~/.zprofile` or every review
+Troubleshooting lives in `magnum doctor`. Among other things it checks for a firewall that blocks newly
+built binaries (Magnum never opens HTTPS connections of its own; GitHub calls go through `gh`), git
+stalling on hostname lookups when no git identity is configured, and login shells that do not see mise:
+Codex and Claude run their tool commands as `zsh -lc`, which skips `.zshrc` and lets macOS put
+`/usr/bin` first, so `eval "$(mise activate zsh --shims)"` belongs in `~/.zprofile`, or every review
 sees the system Ruby and Node.
 
 ## Linux

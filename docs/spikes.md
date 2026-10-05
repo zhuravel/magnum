@@ -11,7 +11,7 @@ how it was probed, answer, and the config default it sets.
    Default: inject slot/identity env with `--env`; no `tmp/.worktree-env.sh` sourcing needed.
 2. **`herdr agent start --kind codex` types `codex` into zsh.** With no args after `--`, the foreground argv was
    `codex --dangerously-bypass-approvals-and-sandbox -c model_reasoning_effort=xhigh -c plan_mode_reasoning_effort=xhigh
-   -c model_reasoning_summary_format=experimental --search` — i.e. Bohdan's zsh `codex` function supplied the flags.
+   -c model_reasoning_summary_format=experimental --search` — i.e. the maintainer's zsh `codex` function supplied the flags.
    Default: `[codex] wrapper_mode = true`, `args = []`; magnum passes only extra args (`resume <uuid>`). Same for
    `claude` (`--dangerously-skip-permissions` comes from the wrapper). `doctor` re-checks with `zsh -ic 'whence -w codex'`.
 3. **Session id appears after the first turn.** `pane get` → `agent_session` was `null` right after start and
@@ -25,7 +25,7 @@ how it was probed, answer, and the config default it sets.
 6. **`agent prompt --wait` returns** with `result`/`error` both null on success for a one-line reply; multiline
    prompt text (two lines) was pasted intact.
 7. **gh honors `GH_CONFIG_DIR`** with a plain `oauth_token` in `hosts.yml` (`gh api user` → zhuravel,
-   `gh api repos/talkable/talkable` OK). Bohdan's own gh keeps its token in the keyring; the per-identity dirs use
+   `gh api repos/talkable/talkable` OK). the maintainer's own gh keeps its token in the keyring; the per-identity dirs use
    hosts.yml.
 8. **herdr processes.** `pgrep -x herdr` finds nothing, but `ps -axo pid=,tty=,args=` shows the server
    (`/opt/homebrew/bin/herdr server`, no tty) and the TUI client (`herdr`, `ttys000`). The reveal code must use `ps`
