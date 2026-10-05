@@ -196,7 +196,7 @@ func TestRenderGolden(t *testing.T) {
 	// The <magnum> fields of an identity's footer and the repository notes
 	// (with a threads file, as a re-review of a reviewed PR has).
 	withNotes := judgeFixture()
-	withNotes.Footer = "_Automated review by magnum. Reply on a thread with `fixed`, `not a bug: <why>` or `won't fix: <why>`; " +
+	withNotes.Footer = "_Automated review by [Magnum](https://github.com/zhuravel/magnum). Reply on a thread with `fixed`, `not a bug: <why>` or `won't fix: <why>`; " +
 		"simplifications are optional. New pushes are re-reviewed automatically._"
 	withNotes.NotesPath = "/Users/bohdan/Projects/magnum/state/notes/talkable/talkable.md"
 	withNotes.NotesHarness, withNotes.NotesHarnessMore = []string{"fixtures/", "run-spec.sh"}, 0

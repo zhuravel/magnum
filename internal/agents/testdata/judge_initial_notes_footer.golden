@@ -20,7 +20,7 @@ gh_config_dir: /Users/bohdan/Projects/magnum/state/gh/talkable-app
 no_findings_event: COMMENT
 blocking_event: REQUEST_CHANGES
 self_authored: false
-footer: _Automated review by magnum. Reply on a thread with `fixed`, `not a bug: <why>` or `won't fix: <why>`; simplifications are optional. New pushes are re-reviewed automatically._
+footer: _Automated review by [Magnum](https://github.com/zhuravel/magnum). Reply on a thread with `fixed`, `not a bug: <why>` or `won't fix: <why>`; simplifications are optional. New pushes are re-reviewed automatically._
 reports:
   - claude-review: /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/claude-review.md
   - codex-review: missing (timed out after 40m)

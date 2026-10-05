@@ -24,7 +24,7 @@ gh_config_dir: /Users/bohdan/Projects/magnum/state/gh/talkable-app
 no_findings_event: COMMENT
 blocking_event: REQUEST_CHANGES
 self_authored: false
-footer: _Automated review by magnum. Reply on a thread with `fixed`, `not a bug: <why>` or `won't fix: <why>`; simplifications are optional. New pushes are re-reviewed automatically._
+footer: _Automated review by [Magnum](https://github.com/zhuravel/magnum). Reply on a thread with `fixed`, `not a bug: <why>` or `won't fix: <why>`; simplifications are optional. New pushes are re-reviewed automatically._
 previous_review_id: 3012345678
 previous_head_sha: a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0
 since: 2026-10-03T09:15:00Z

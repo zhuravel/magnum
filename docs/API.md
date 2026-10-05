@@ -1987,7 +1987,7 @@ const DefaultReadyTimeout = 5 * time.Minute
     DefaultReadyTimeout bounds a round's whole readiness step when neither the
     [[repo]] nor the [[pool]] sets ready_timeout.
 
-const DefaultReviewFooter = "_Automated review by magnum. Reply on a thread with `fixed`, `not a bug: <why>` or `won't fix: <why>`; " +
+const DefaultReviewFooter = "_Automated review by [Magnum](https://github.com/zhuravel/magnum). Reply on a thread with `fixed`, `not a bug: <why>` or `won't fix: <why>`; " +
 	"simplifications are optional. New pushes are re-reviewed automatically._"
     DefaultReviewFooter is the footer of every identity that sets no
     review_footer: what the review is and how to answer it, in the words the

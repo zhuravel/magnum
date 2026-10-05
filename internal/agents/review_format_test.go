@@ -25,7 +25,7 @@ func magnumBlock(t *testing.T, prompt string) string {
 // <magnum> block, and only when there is one (review_footer = "" turns it
 // off).
 func TestJudgePromptsRenderTheFooterOnlyWhenSet(t *testing.T) {
-	const footer = "_Automated review by magnum. Reply on a thread with `fixed`, `not a bug: <why>` or `won't fix: <why>`._"
+	const footer = "_Automated review by [Magnum](https://github.com/zhuravel/magnum). Reply on a thread with `fixed`, `not a bug: <why>` or `won't fix: <why>`._"
 	for _, name := range judgePrompts {
 		d := judgeFixture()
 		plain, err := RenderPrompt(prompt(t, name), d)
