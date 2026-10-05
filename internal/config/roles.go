@@ -65,11 +65,11 @@ type Role struct {
 
 	// Prompt files (names resolved by Config.ResolvePrompt). Defaults:
 	// judges use judge-initial.md, judge-rereview.md, judge-continue.md,
-	// judge-recovery.md, judge-nudge.md and judge-stop.md; other session
-	// roles use <name>.md, <name>-rereview.md (only when it exists, else
-	// Prompt) and <name>-restart.md (only when it exists, else none). A
-	// shell role may name a full-line shell template (codex-review.sh) in
-	// Prompt instead of setting Command.
+	// judge-recovery.md and judge-nudge.md; other session roles use
+	// <name>.md, <name>-rereview.md (only when it exists, else Prompt) and
+	// <name>-restart.md (only when it exists, else none). A shell role may
+	// name a full-line shell template (codex-review.sh) in Prompt instead of
+	// setting Command.
 	Prompt   string `toml:"prompt"`
 	Rereview string `toml:"rereview"`
 	// Restart: a session reviewer whose turn a push cut short (the round
@@ -79,7 +79,12 @@ type Role struct {
 	ContinuePrompt string `toml:"continue_prompt"`
 	Recovery       string `toml:"recovery"`
 	Nudge          string `toml:"nudge"`
-	Stop           string `toml:"stop"`
+	// Stop is ignored: magnum never sent the judge a stop prompt. The key
+	// is still accepted so a config that names one (judge-stop.md, gone
+	// since) loads.
+	//
+	// Deprecated: no prompt kind reads it.
+	Stop string `toml:"stop"`
 
 	// Skill: the judge's skill file (template variable {{.SkillPath}});
 	// default DefaultSkill, expanded by Load. Judges only.
@@ -159,10 +164,10 @@ func (r Role) ReportFile() string {
 
 // PromptFile returns the prompt file name for a prompt kind (PromptInitial,
 // PromptRereview, PromptRestart, PromptContinue, PromptRecovery,
-// PromptNudge, PromptStop); "" when the role has none (shell roles driven
-// by Command, non-judge roles for continue/recovery/nudge/stop unless set,
-// a role without a restart prompt, unknown kinds). Rereview falls back to
-// the initial prompt.
+// PromptNudge); "" when the role has none (shell roles driven by Command,
+// non-judge roles for continue/recovery/nudge unless set, a role without a
+// restart prompt, unknown kinds). Rereview falls back to the initial
+// prompt.
 func (r Role) PromptFile(kind string) string {
 	switch kind {
 	case PromptInitial:
@@ -180,8 +185,6 @@ func (r Role) PromptFile(kind string) string {
 		return r.Recovery
 	case PromptNudge:
 		return r.Nudge
-	case PromptStop:
-		return r.Stop
 	}
 	return ""
 }
@@ -246,7 +249,7 @@ func DefaultRoles() []Role {
 	return []Role{
 		{Name: RoleCodexJudge, Kind: KindCodex, Judge: true, Effort: "xhigh", RereviewEffort: "high", Skill: DefaultSkill,
 			Prompt: "judge-initial.md", Rereview: "judge-rereview.md", ContinuePrompt: "judge-continue.md",
-			Recovery: "judge-recovery.md", Nudge: "judge-nudge.md", Stop: "judge-stop.md",
+			Recovery: "judge-recovery.md", Nudge: "judge-nudge.md",
 			Aliases: []string{"judge"}},
 		{Name: RoleClaudeReview, Kind: KindClaude, Effort: "high", Summary: "deep review for bugs, security and correctness",
 			Prompt: "claude-review.md", Rereview: "claude-rereview.md", Restart: "claude-restart.md", Aliases: []string{"claude"}},
@@ -459,7 +462,6 @@ func (c *Config) normalizedRoles(in []Role) []Role {
 			fill(&r.ContinuePrompt, "judge-continue.md")
 			fill(&r.Recovery, "judge-recovery.md")
 			fill(&r.Nudge, "judge-nudge.md")
-			fill(&r.Stop, "judge-stop.md")
 			if r.Skill == "" {
 				r.Skill = DefaultSkill
 			}

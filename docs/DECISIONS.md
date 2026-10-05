@@ -1090,3 +1090,60 @@ editing history. Code, config comments and prompts reference these by their head
   change request; never one posted by hand, never after the merge; a failed dismissal only warns; the
   old identity's after a watch moves) and that the default follows the kind: true for an app, false for a
   `gh` identity, whose reviews are the operator's own account's.
+- **The hooks review is answered only at the bottom of the screen, and only after a fresh look** (2026-10-05,
+  after a review of the dialog handling: the detector took the last "Hooks need review" title anywhere in the
+  viewport, so dialog text an agent's output left above a real approval prompt, with the cursor on magnum's
+  choice, would have had Enter pressed on "Yes, proceed", and with the cursor elsewhere arrows sent into the
+  composer). The options must now be the last lines but for blanks and key hints, as for the trust and
+  permission dialogs; a screen on which `detectPermissionPrompt` finds a prompt has no hooks review; and
+  right before Enter magnum reads the screen again and presses it only on the same dialog (its lines from
+  title to last option, the cursor left out) with the cursor on its choice. Keys go to the pane by id only
+  when herdr does not know the agent's name (`agent_not_found`): after a timeout or any other error the keys
+  may have arrived, and a second send would press them twice. Rejected: also refusing on the health
+  classifier's blocked patterns (its "press enter to confirm" is a hint the hooks review may show itself).
+- **A cancelled round stops its shell command** (2026-10-05, after both `busy` codex-review runs came 12 to
+  19 s after a cancelled one in the same pane: the command kept running, the requeued round waited
+  `IdleShellTimeout` against a p50 runtime of 8 minutes, and the judge posted without the most precise
+  reviewer). A round cancelled for any reason but a push now sends ctrl+c to a shell role's pane through the
+  same interrupt the push restart uses, on an uncancelled context. Rejected: waiting longer for an idle
+  shell (the output belongs to a round nobody reads).
+- **Replies are classified by their first clause** (2026-10-05, supersedes the "first words" of the reply
+  contract above: 7 of 8 real replies came back `other`, among them "(Claude) Good catch, fixed in <sha>",
+  "Incorrect — …" and "Noted — …", the style of the very tool the `(Claude)` prefix comes from, so the
+  threads file and the prompt summary carried no signal). The first paragraph is split into clauses at
+  sentence ends, commas, colons, semicolons and dashes; the first clause decides, after a leading `(Claude)`,
+  `[Codex]` or like tag, a "but" and a "this is"/"it was". Fixed: fixed, done, addressed, applied, already
+  addressed; not a bug: not a bug, incorrect, moot, by design, intended, intentional, "does not apply"; won't
+  fix: won't fix, declined, out of scope, follow-up, deprioritized, kept or left as is. An acknowledgement
+  ("Good catch", "Valid", "Analyzed", "Noted", "Low priority", "Thanks") hands the verdict to a later clause
+  of the paragraph, so "Low priority — <why>. Kept as is." is won't fix while "Good catch, not fixed yet"
+  and a bare "Noted." stay `other`. Rejected: keywords anywhere in the reply (an explanation mentions
+  "fixed" in passing) and "low priority" or "noted" alone as won't fix (the verdict is what follows them).
+- **A review posted but not verified is adopted, never posted twice** (2026-10-05, after a round's review
+  was posted and its verification failed on a network error after three tries: the round ended in error, and
+  the next round's judge, looking only for its own new marker, could post a second review on the same
+  head). The judge run keeps the failure (state failed, error "pipeline: verify on GitHub: …").
+  A round on the same head, by the same identity, with no verified review since, first looks on GitHub for
+  that run's marker (or the review id its result file names, posted by the reviewer on the head after its
+  prompt): found, the round adopts it before anything is prompted, the old judge runs become verified with
+  the review, and the findings, duplicates, local paths and a stale CHANGES_REQUESTED are handled as after
+  any post; the result carries the old round's number and marker. Not found, or GitHub still failing, the
+  round runs and its judge's review carries the old marker, the way a continued turn quotes the paused run:
+  the skill already lists the reviews for its marker right before posting, so a review that was there after
+  all is found instead of doubled, and verification looks for the same marker. A restart on a newer head
+  drops the old marker. Rejected: retrying verification for minutes inside the failed round (it holds the
+  slot and still loses to a longer outage), a marker-less match for the adoption (a review the user posted
+  under the same login since would pass for magnum's) and a new outcome for the engine (the run rows already
+  say it).
+- **claude-review's follow-up reports list no earlier findings** (2026-10-05, after the judge's rejections
+  of claude-review on one PR went 13, 12, 13, 21, 34, 46, 55, 63, 75 over nine re-reviews: the re-review and
+  restart prompts asked for an "Earlier findings" section with one line per finding of the previous report,
+  which already had one, so every round carried every earlier list forward). The section is gone; the judge
+  tracks earlier findings through its own threads and the reply contract. The reviewer is still told not to
+  re-derive a finding the new commits leave unchanged. Rejected: carrying only the previous report's new
+  findings that are still open (the reviewer cannot tell which the judge posted).
+- **No stop prompt** (2026-10-05). `judge-stop.md` was never sent: no code path asked for `PromptStop`, and
+  prompts/README.md said it served "PR closed or round cancelled", which interrupts handle with keys. The
+  file, the prompt kind, `JudgeData.Reason` and its doctor check are gone. A role's `stop` key is still
+  accepted and ignored, so a config that names `judge-stop.md` loads (an unknown key once crash-looped the
+  daemon 138 times).

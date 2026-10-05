@@ -78,7 +78,7 @@ func TestNotesParagraphInJudgePrompts(t *testing.T) {
 		})
 	}
 	// The short follow-ups restate no setup, so they stay as they are.
-	for _, name := range []string{"judge-nudge.md", "judge-stop.md"} {
+	for _, name := range []string{"judge-nudge.md"} {
 		d := judgeFixture()
 		plain, err := RenderPrompt(prompt(t, name), d)
 		if err != nil {

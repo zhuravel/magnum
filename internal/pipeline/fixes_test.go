@@ -3,9 +3,12 @@ package pipeline
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/zhuravel/magnum/internal/agents"
@@ -245,4 +248,56 @@ func TestRepoVerdictsOverrideIdentity(t *testing.T) {
 		t.Fatalf("RunRound: %v", err)
 	}
 	mustContain(t, "judge prompt", e2.ag.submitsFor(agents.RoleJudge)[0].Text, "no_findings_event: COMMENT", "blocking_event: COMMENT")
+}
+
+// A round cancelled while codex review runs in its shell pane, for any reason
+// but a push (whose restart interrupts it), stops the command with ctrl+c:
+// left running, it would hold the pane, and the next round's codex-review
+// would end busy.
+func TestCancelledRoundInterruptsShellCommand(t *testing.T) {
+	e := newEnv(t)
+	ctx, cancel := context.WithCancel(e.ctx)
+	var mu sync.Mutex
+	running := map[string]bool{} // panes whose command still runs
+	e.keys.onPane = func(pane string, keys []string) {
+		if slices.Contains(keys, "ctrl+c") {
+			mu.Lock()
+			delete(running, pane)
+			mu.Unlock()
+		}
+	}
+	calls := 0
+	e.ag.codex = func(f *fakeAgents, c codexCall) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if calls++; calls == 1 {
+			running[c.Pane] = true // the round is cancelled; the command keeps going
+			cancel()
+			return context.Canceled
+		}
+		if running[c.Pane] {
+			return fmt.Errorf("agents: %s: pane %s is not an idle shell: %w", c.Role, c.Pane, agents.ErrBusy)
+		}
+		return os.WriteFile(filepath.Join(e.reportDir(), "codex-review.md"), []byte("[P2] codex finding\n"), 0o600)
+	}
+	res, err := e.r.RunRound(ctx, e.input(KindInitial))
+	if !errorsIs(err, context.Canceled) || res.Outcome != OutcomeStopped {
+		t.Fatalf("cancelled round: result = %+v, err = %v", res, err)
+	}
+	pane := store.Deref(e.sess[agents.RoleCodexReview].HerdrPaneID)
+	e.keys.mu.Lock()
+	sends := slices.Clone(e.keys.sends)
+	e.keys.mu.Unlock()
+	if !slices.Contains(sends, "pane:"+pane+":ctrl+c") {
+		t.Fatalf("keys = %v, want ctrl+c to the codex-review pane %s", sends, pane)
+	}
+
+	e.ag.behaviors[agents.RoleJudge] = []behavior{e.judgePosts(700, "CHANGES_REQUESTED", "REQUEST_CHANGES").behavior(t)}
+	res, err = e.r.RunRound(e.ctx, e.input(KindInitial))
+	if err != nil || res.Outcome != OutcomePosted {
+		t.Fatalf("next round: result = %+v, err = %v", res, err)
+	}
+	if rep := res.Reports[agents.RoleCodexReview]; rep.Status != ReportOK {
+		t.Fatalf("next round's codex-review = %+v, want ok", rep)
+	}
 }

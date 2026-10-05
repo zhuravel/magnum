@@ -562,6 +562,8 @@ type fakeKeys struct {
 	sends []string // "agent:<target>:<keys>" / "pane:<id>:<keys>"
 	// onAgent runs after every AgentSendKeys (e.g. the agent goes idle).
 	onAgent func(target string, keys []string)
+	// onPane runs after every PaneSendKeys (e.g. ctrl+c ends a command).
+	onPane func(paneID string, keys []string)
 }
 
 func (k *fakeKeys) AgentSendKeys(ctx context.Context, target string, keys ...string) error {
@@ -577,8 +579,12 @@ func (k *fakeKeys) AgentSendKeys(ctx context.Context, target string, keys ...str
 
 func (k *fakeKeys) PaneSendKeys(ctx context.Context, paneID string, keys ...string) error {
 	k.mu.Lock()
-	defer k.mu.Unlock()
 	k.sends = append(k.sends, "pane:"+paneID+":"+strings.Join(keys, ","))
+	hook := k.onPane
+	k.mu.Unlock()
+	if hook != nil {
+		hook(paneID, keys)
+	}
 	return nil
 }
 

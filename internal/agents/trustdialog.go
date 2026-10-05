@@ -176,12 +176,14 @@ func (m *Manager) readVisible(ctx context.Context, ref paneRef) (string, error) 
 	return r.Text, nil
 }
 
-// sendKeys sends key presses to an agent: by name, else (or when that
-// fails) to its pane.
+// sendKeys sends key presses to an agent: by name, else to its pane. The
+// pane is the fallback only when herdr does not know the name
+// (agent_not_found): after a timeout or any other error the keys may have
+// arrived already, and sending them again would press them twice.
 func (m *Manager) sendKeys(ctx context.Context, ref paneRef, keys ...string) error {
 	if ref.name != "" {
 		err := m.d.Herdr.AgentSendKeys(ctx, ref.name, keys...)
-		if err == nil || ref.pane == "" {
+		if err == nil || ref.pane == "" || !herdr.IsCode(err, herdr.CodeAgentNotFound) {
 			return err
 		}
 	}

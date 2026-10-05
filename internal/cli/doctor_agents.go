@@ -206,7 +206,7 @@ func doctorSkill(_ context.Context, d doctorDeps) []doctorCheck {
 
 // doctorPromptKinds are the prompt kinds a role can name (config.Role.PromptFile).
 var doctorPromptKinds = []string{config.PromptInitial, config.PromptRereview, config.PromptContinue,
-	config.PromptRecovery, config.PromptNudge, config.PromptStop}
+	config.PromptRecovery, config.PromptNudge}
 
 // doctorPrompts checks that [pipeline] prompts_dir exists when set and that
 // every prompt file a role names resolves (prompts_dir, else the embedded

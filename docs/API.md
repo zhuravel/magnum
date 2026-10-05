@@ -612,9 +612,6 @@ type JudgeData struct {
 	// migration): their reviews and threads are the judge's own history,
 	// while every new write goes as ReviewerLogin. Empty for most PRs.
 	FormerLogins []string
-
-	// Stop.
-	Reason string
 }
     JudgeData feeds every judge prompt (judge-*.md). Fields a template does not
     use may stay zero.
@@ -1924,7 +1921,6 @@ const (
 	PromptContinue = "continue" // Role.ContinuePrompt: a pause ended mid-turn (judge)
 	PromptRecovery = "recovery" // Role.Recovery: a fresh session after the old one was lost (judge)
 	PromptNudge    = "nudge"    // Role.Nudge: the agent stopped without a result (judge)
-	PromptStop     = "stop"     // Role.Stop: the PR closed or the round was cancelled (judge)
 )
     Prompt kinds accepted by Role.PromptFile.
 
@@ -2008,7 +2004,7 @@ var ErrPromptNotFound = errors.New("prompt not found")
     ErrPromptNotFound: a prompt name exists neither in prompts_dir nor among the
     embedded defaults.
 
-var PromptKinds = []string{PromptInitial, PromptRereview, PromptRestart, PromptContinue, PromptRecovery, PromptNudge, PromptStop}
+var PromptKinds = []string{PromptInitial, PromptRereview, PromptRestart, PromptContinue, PromptRecovery, PromptNudge}
     PromptKinds lists every prompt kind a role may name (Role.PromptFile).
 
 var TrivialDeltaClasses = []string{"comments", "whitespace", "docs", "base"}
@@ -2861,11 +2857,11 @@ type Role struct {
 
 	// Prompt files (names resolved by Config.ResolvePrompt). Defaults:
 	// judges use judge-initial.md, judge-rereview.md, judge-continue.md,
-	// judge-recovery.md, judge-nudge.md and judge-stop.md; other session
-	// roles use <name>.md, <name>-rereview.md (only when it exists, else
-	// Prompt) and <name>-restart.md (only when it exists, else none). A
-	// shell role may name a full-line shell template (codex-review.sh) in
-	// Prompt instead of setting Command.
+	// judge-recovery.md and judge-nudge.md; other session roles use
+	// <name>.md, <name>-rereview.md (only when it exists, else Prompt) and
+	// <name>-restart.md (only when it exists, else none). A shell role may
+	// name a full-line shell template (codex-review.sh) in Prompt instead of
+	// setting Command.
 	Prompt   string `toml:"prompt"`
 	Rereview string `toml:"rereview"`
 	// Restart: a session reviewer whose turn a push cut short (the round
@@ -2875,7 +2871,12 @@ type Role struct {
 	ContinuePrompt string `toml:"continue_prompt"`
 	Recovery       string `toml:"recovery"`
 	Nudge          string `toml:"nudge"`
-	Stop           string `toml:"stop"`
+	// Stop is ignored: magnum never sent the judge a stop prompt. The key
+	// is still accepted so a config that names one (judge-stop.md, gone
+	// since) loads.
+	//
+	// Deprecated: no prompt kind reads it.
+	Stop string `toml:"stop"`
 
 	// Skill: the judge's skill file (template variable {{.SkillPath}});
 	// default DefaultSkill, expanded by Load. Judges only.
@@ -2977,10 +2978,10 @@ func (r Role) Matches(s string) bool
 
 func (r Role) PromptFile(kind string) string
     PromptFile returns the prompt file name for a prompt kind (PromptInitial,
-    PromptRereview, PromptRestart, PromptContinue, PromptRecovery, PromptNudge,
-    PromptStop); "" when the role has none (shell roles driven by Command,
-    non-judge roles for continue/recovery/nudge/stop unless set, a role without
-    a restart prompt, unknown kinds). Rereview falls back to the initial prompt.
+    PromptRereview, PromptRestart, PromptContinue, PromptRecovery, PromptNudge);
+    "" when the role has none (shell roles driven by Command, non-judge roles
+    for continue/recovery/nudge unless set, a role without a restart prompt,
+    unknown kinds). Rereview falls back to the initial prompt.
 
 func (r Role) Removable() bool
     Removable is whether triage may drop the role from a round: not the judge,

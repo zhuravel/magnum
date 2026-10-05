@@ -36,13 +36,53 @@ func TestClassifyReply(t *testing.T) {
 		{"Follow-up: TKBL-123", ReplyWontFix},
 		{"follow up in the next PR", ReplyWontFix},
 		{"Not fixed yet, working on it.", ReplyOther},
-		{"Good catch, fixed in 1a2b3c4.", ReplyOther},
 		{"Fixedness is not a word", ReplyOther},
 		{"Donezo", ReplyOther},
 		{"Why is this a problem?", ReplyOther},
 		{"> only a quote", ReplyOther},
 		{"", ReplyOther},
 		{"(Claude)", ReplyOther},
+	} {
+		if got := classifyReply(tc.body); got != tc.want {
+			t.Errorf("classifyReply(%q) = %q, want %q", tc.body, got, tc.want)
+		}
+	}
+}
+
+// Replies as authors and their agents write them: the verdict is the first
+// clause, or the clause after an acknowledgement ("Good catch", "Valid",
+// "Analyzed", "Noted", "Low priority"), once a leading "(Claude)" or a like
+// tag is gone. An acknowledgement alone, or one followed by anything but a
+// verdict, claims nothing.
+func TestClassifyReplyReadsTheFirstClause(t *testing.T) {
+	for _, tc := range []struct{ body, want string }{
+		{"(Claude) Good catch, fixed in 84c0b1e", ReplyFixed},
+		{"(Claude) Good catch — fixed in 84c0b1e; verified by `bundle exec rspec spec/models/user_spec.rb` (3 examples, 0 failures).", ReplyFixed},
+		{"Good catch. Fixed in 84c0b1e.", ReplyFixed},
+		{"(Claude) Valid — fixed in d64bcae", ReplyFixed},
+		{"Applied in 3f9e2a1.", ReplyFixed},
+		{"Already addressed in 7c1e0b2: the guard runs first.", ReplyFixed},
+		{"(Claude) This was already addressed in 7c1e0b2.", ReplyFixed},
+		{"[Codex] Done.", ReplyFixed},
+		{"(Claude Code) Fixed in 1a2b3c4.", ReplyFixed},
+		{"Incorrect — the caller holds the lock.", ReplyNotABug},
+		{"That's incorrect: the caller holds the lock.", ReplyNotABug},
+		{"(Claude) Analyzed — this is intentional.", ReplyNotABug},
+		{"(Claude) Analyzed — this concern does not apply.", ReplyNotABug},
+		{"Moot: the method is gone in 5d2c9e1.", ReplyNotABug},
+		{"(Claude) Low priority — the import runs once a night. Kept as is.", ReplyWontFix},
+		{"Low priority, kept.", ReplyWontFix},
+		{"Declined: the helper would hide the retry.", ReplyWontFix},
+		{"(Claude) Noted — left as is until the importer is rewritten.", ReplyWontFix},
+		{"(Claude) Noted — deprioritized for now.", ReplyWontFix},
+		{"(Claude) Valid, but out of scope for this PR — the PR only moves the job. Left for a separate change.", ReplyWontFix},
+		{"Good catch, not fixed yet.", ReplyOther},
+		{"Good catch. I'll look into it.", ReplyOther},
+		{"Noted.", ReplyOther},
+		{"(Claude) Low priority — the import runs once a night.", ReplyOther},
+		{"Incorrect handling of nil is fixed in 1a2b3c4.", ReplyOther},
+		{"This is not intentional.", ReplyOther},
+		{"Thanks!\n\nFixed in the next PR, maybe.", ReplyOther},
 	} {
 		if got := classifyReply(tc.body); got != tc.want {
 			t.Errorf("classifyReply(%q) = %q, want %q", tc.body, got, tc.want)

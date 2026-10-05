@@ -205,9 +205,9 @@ judge = true
 			want:  []string{"role bad-review", "rereview prompt worse.md"},
 		},
 		"judge prompt": {
-			files: map[string]string{"prompts/judge-stop.md": "stop {{end}}"},
+			files: map[string]string{"prompts/judge-nudge.md": "nudge {{end}}"},
 			role:  "",
-			want:  []string{"role codex-judge", "stop prompt judge-stop.md"},
+			want:  []string{"role codex-judge", "nudge prompt judge-nudge.md"},
 		},
 		"shell command": {
 			files: map[string]string{},

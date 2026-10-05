@@ -120,7 +120,7 @@ func TestDefaultsEqualExplicitConfig(t *testing.T) {
 	}
 	j := explicit.JudgeFor(w)
 	if j.Name != "codex-judge" || j.Skill != filepath.Join(root, "skills/magnum-review/SKILL.md") || j.Effort != "xhigh" ||
-		j.PromptFile(PromptStop) != "judge-stop.md" || j.PromptFile(PromptContinue) != "judge-continue.md" {
+		j.PromptFile(PromptNudge) != "judge-nudge.md" || j.PromptFile(PromptContinue) != "judge-continue.md" {
 		t.Fatalf("judge = %+v", j)
 	}
 	if cr, _ := explicit.RoleByNameOrAlias(w, "codex"); cr.Command != defaultCodexReviewCommand || cr.Args != nil ||
@@ -583,6 +583,31 @@ func TestShouldRun(t *testing.T) {
 	}
 }
 
+// magnum never sent a stop prompt, so no role names one and judge-stop.md is
+// gone. A config that still sets a role's stop key loads (an unknown key
+// would stop the daemon) and the key is ignored, even when the file it names
+// no longer exists.
+func TestStopPromptKeyIsAcceptedAndIgnored(t *testing.T) {
+	cfg := mustLoad(t, map[string]string{
+		"config.toml":       minimalConfig,
+		"config.local.toml": "[[role]]\nname = \"codex-judge\"\nstop = \"judge-stop.md\"\n",
+	})
+	if slices.Contains(PromptKinds, "stop") {
+		t.Fatalf("PromptKinds = %v", PromptKinds)
+	}
+	if f := cfg.JudgeFor(nil).PromptFile("stop"); f != "" {
+		t.Fatalf("the judge names stop prompt %q", f)
+	}
+	if _, err := cfg.ResolvePrompt("judge-stop.md"); !errors.Is(err, ErrPromptNotFound) {
+		t.Fatalf("judge-stop.md: %v, want it gone", err)
+	}
+	for _, r := range Defaults().Roles {
+		if r.Stop != "" {
+			t.Errorf("default role %s names stop prompt %q", r.Name, r.Stop)
+		}
+	}
+}
+
 func TestPromptResolution(t *testing.T) {
 	home := t.TempDir()
 	cfg, err := loadFiles(t, home, map[string]string{
@@ -597,8 +622,8 @@ func TestPromptResolution(t *testing.T) {
 	if err != nil || p.Embedded || p.Path != filepath.Join(home, "prompts", "judge-initial.md") || p.Text != "custom judge {{.URL}}" {
 		t.Fatalf("on disk: %+v %v", p, err)
 	}
-	p, err = cfg.ResolvePrompt("judge-stop.md")
-	if err != nil || !p.Embedded || p.Path != "" || !strings.Contains(p.Text, "Stop reviewing {{.URL}} now") {
+	p, err = cfg.ResolvePrompt("judge-nudge.md")
+	if err != nil || !p.Embedded || p.Path != "" || !strings.Contains(p.Text, "{{.ResultFile}}") {
 		t.Fatalf("embedded: %+v %v", p, err)
 	}
 	if p, err := cfg.ResolvePrompt("extra.md"); err != nil || p.Text != "extra" {

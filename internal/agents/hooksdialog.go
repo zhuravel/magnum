@@ -57,13 +57,26 @@ const (
 )
 
 // hooksDialog is a hooks review found on screen: the cursor's option, as an
-// index into hooksOptions.
-type hooksDialog struct{ cursor int }
+// index into hooksOptions, and key, the dialog's identity (promptKey of its
+// lines from the title to the last option), which tells a re-read whether
+// the screen still shows the same dialog.
+type hooksDialog struct {
+	cursor int
+	key    string
+}
 
-// detectHooksDialog finds the hooks review in a pane's visible text: its
-// title, then its three options on adjacent lines in order, one of them
-// carrying the cursor.
+// detectHooksDialog finds a live hooks review at the bottom of a pane's
+// visible text, as the trust and permission dialogs are found: its title
+// (the last one on screen), then its three options on adjacent lines in
+// order, one of them carrying the cursor, with nothing below them but blank
+// and key-hint lines. Dialog text that output, the composer or another
+// dialog follows is not the dialog, and a screen showing a permission prompt
+// (detectPermissionPrompt) has none: no key magnum presses for the hooks
+// review may land on an approval.
 func detectHooksDialog(text string) (hooksDialog, bool) {
+	if _, ok := detectPermissionPrompt(text); ok {
+		return hooksDialog{}, false
+	}
 	lines := strings.Split(strings.ReplaceAll(text, "\r", ""), "\n")
 	title := -1
 	for i, l := range lines {
@@ -84,7 +97,13 @@ func detectHooksDialog(text string) (hooksDialog, bool) {
 	if first < 0 || first+len(hooksOptions) > len(lines) {
 		return hooksDialog{}, false
 	}
-	d := hooksDialog{cursor: -1}
+	last := first + len(hooksOptions) - 1
+	for _, l := range lines[last+1:] {
+		if t := stripBox(l); t != "" && !permHint.MatchString(t) {
+			return hooksDialog{}, false
+		}
+	}
+	d := hooksDialog{cursor: -1, key: promptKey(lines[title : last+1])}
 	for k, want := range hooksOptions {
 		m := trustOptionLine.FindStringSubmatch(lines[first+k])
 		if m == nil || m[2] != want {
@@ -120,9 +139,10 @@ func (m *Manager) hooksChoice(kind, dir string) (int, string) {
 
 // answerHooks answers Codex's hooks review on ref's screen with the option
 // hooksChoice picks for the checkout dir: the cursor moves down (or up) to it
-// one key at a time, a re-read confirms it got there, then Enter, and magnum
-// waits for the agent to be idle. Nothing else on screen is touched (false,
-// nil). It records EventHooksTrusted or EventHooksDeclined.
+// one key at a time, then the screen is read again and Enter goes only to the
+// same dialog with the cursor on the choice; magnum then waits for the agent
+// to be idle. Nothing else on screen is touched (false, nil). It records
+// EventHooksTrusted or EventHooksDeclined.
 func (m *Manager) answerHooks(ctx context.Context, prID int64, role Role, kind string, ref paneRef, dir string) (bool, error) {
 	text, err := m.readVisible(ctx, ref)
 	if err != nil {
@@ -134,7 +154,8 @@ func (m *Manager) answerHooks(ctx context.Context, prID int64, role Role, kind s
 	}
 	choice, why := m.hooksChoice(kind, dir)
 	var keys []string
-	if d.cursor != choice {
+	moved := d.cursor != choice
+	if moved {
 		move, n := "down", choice-d.cursor
 		if n < 0 {
 			move, n = "up", -n
@@ -145,9 +166,13 @@ func (m *Manager) answerHooks(ctx context.Context, prID int64, role Role, kind s
 			}
 			keys = append(keys, move)
 		}
-		if !m.hooksCursorOn(ctx, ref, choice) {
-			return false, fmt.Errorf("agents: hooks review in %s: the cursor did not reach %q; not confirming", ref, hooksOptions[choice])
+	}
+	if !m.hooksCursorOn(ctx, ref, d.key, choice, moved) {
+		what := "the screen no longer shows the same hooks review"
+		if moved {
+			what = fmt.Sprintf("the cursor did not reach %q", hooksOptions[choice])
 		}
+		return false, fmt.Errorf("agents: hooks review in %s: %s; not confirming", ref, what)
 	}
 	if err := m.sendKeys(ctx, ref, "enter"); err != nil {
 		return false, fmt.Errorf("agents: hooks review in %s: %w", ref, err)
@@ -170,17 +195,24 @@ func (m *Manager) answerHooks(ctx context.Context, prID int64, role Role, kind s
 	return true, nil
 }
 
-// hooksCursorOn re-reads the hooks review until the cursor shows on option.
-func (m *Manager) hooksCursorOn(ctx context.Context, ref paneRef, option int) bool {
-	for range trustKeyRereads {
-		if m.sleep(ctx, trustKeyDelay) != nil {
+// hooksCursorOn re-reads ref's screen until it shows the hooks review
+// identified by key with the cursor on option: once, right away, when the
+// cursor did not move; after a move up to trustKeyRereads times, each after
+// trustKeyDelay. The last read is the one Enter follows.
+func (m *Manager) hooksCursorOn(ctx context.Context, ref paneRef, key string, option int, moved bool) bool {
+	tries := 1
+	if moved {
+		tries = trustKeyRereads
+	}
+	for range tries {
+		if moved && m.sleep(ctx, trustKeyDelay) != nil {
 			return false
 		}
 		text, err := m.readVisible(ctx, ref)
 		if err != nil {
 			continue
 		}
-		if d, ok := detectHooksDialog(text); ok && d.cursor == option {
+		if d, ok := detectHooksDialog(text); ok && d.key == key && d.cursor == option {
 			return true
 		}
 	}

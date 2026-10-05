@@ -57,6 +57,8 @@ type fakeHerdr struct {
 	busyStarts int
 	// onKeys runs (with f.mu held) after every send-keys call.
 	onKeys func(f *fakeHerdr, target string, keys []string)
+	// onRead runs (with f.mu held) after every agent read took its text.
+	onRead func(f *fakeHerdr, target string)
 	// onRun runs (with f.mu held) after every pane run.
 	onRun func(f *fakeHerdr, pane, command string)
 	// waitLine is the line PaneWaitOutput reports as matched ("" = the
@@ -472,7 +474,11 @@ func (f *fakeHerdr) AgentRead(ctx context.Context, target string, o herdr.ReadOp
 	if err := f.err("AgentRead"); err != nil {
 		return herdr.ReadResult{}, err
 	}
-	return herdr.ReadResult{Source: o.Source, Text: f.reads[target]}, nil
+	text := f.reads[target]
+	if f.onRead != nil {
+		f.onRead(f, target)
+	}
+	return herdr.ReadResult{Source: o.Source, Text: text}, nil
 }
 
 func (f *fakeHerdr) AgentRename(ctx context.Context, target, name string) error {

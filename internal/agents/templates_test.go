@@ -52,7 +52,6 @@ func judgeFixture() JudgeData {
 			{ID: 3012345678, Event: "REQUEST_CHANGES", SHA: "a1b2c3d", SubmittedAt: "2026-10-03T09:15:00Z"},
 			{ID: 3012399999, Event: "COMMENT", SHA: "b2c3d4e", SubmittedAt: "2026-10-03T10:40:00Z"},
 		},
-		Reason: "the PR was closed",
 	}
 }
 
@@ -128,6 +127,38 @@ func retroFixtureWith(shas ...string) retroFixture {
 		Candidates: dir + "/candidates.json", Files: dir + "/files", Output: dir + "/retro.json", Count: 3}
 }
 
+// A reviewer's follow-up report holds what is new and no "Earlier findings"
+// list: each report carried the previous one's list forward, so the lists
+// snowballed and the judge rejected the same findings again every round (it
+// tracks earlier findings through its own threads and the reply contract).
+// The reviewer still does not re-derive a finding the new commits leave
+// unchanged.
+func TestClaudeFollowUpPromptsListNoEarlierFindings(t *testing.T) {
+	restarted := roleFixture()
+	restarted.Mode, restarted.RestartedFrom = ModeRestart, "f1cc4f9e0d1c2b3a4f5e6d7c8b9a0f1e2d3c4b5a"
+	restartedForced := restarted
+	restartedForced.ForcePushed = true
+	forced := roleFixture()
+	forced.ForcePushed = true
+	for name, tc := range map[string]struct {
+		file string
+		data RoleData
+	}{
+		"rereview":              {"claude-rereview.md", roleFixture()},
+		"rereview, force push":  {"claude-rereview.md", forced},
+		"restart of a rereview": {"claude-restart.md", restarted},
+		"restart, force push":   {"claude-restart.md", restartedForced},
+	} {
+		got, err := RenderPrompt(prompt(t, tc.file), tc.data)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if strings.Contains(strings.ToLower(got), "earlier findings") || !strings.Contains(got, "re-derive a finding") {
+			t.Errorf("%s:\n%s", name, got)
+		}
+	}
+}
+
 func TestRenderGolden(t *testing.T) {
 	forced := judgeFixture()
 	forced.ForcePushed = true
@@ -180,7 +211,6 @@ func TestRenderGolden(t *testing.T) {
 		{"judge_continue", "judge-continue.md", judgeFixture()},
 		{"judge_nudge", "judge-nudge.md", judgeFixture()},
 		{"judge_recovery", "judge-recovery.md", judgeFixture()},
-		{"judge_stop", "judge-stop.md", judgeFixture()},
 		{"judge_rereview_effort", "judge-rereview.md", effortJudge},
 		{"claude_initial", "claude-review.md", roleFixture()},
 		{"claude_rereview", "claude-rereview.md", roleFixture()},
@@ -263,7 +293,7 @@ func checkGolden(t *testing.T, golden, got string) {
 
 func TestEveryDefaultPromptHasAGolden(t *testing.T) {
 	want := []string{"claude-rereview.md", "claude-restart.md", "claude-review.md", "claude-simplify.md", "codex-review.sh", "judge-continue.md",
-		"judge-initial.md", "judge-nudge.md", "judge-recovery.md", "judge-rereview.md", "judge-stop.md", "model-fallback.md", "retro.md", "triage.md"}
+		"judge-initial.md", "judge-nudge.md", "judge-recovery.md", "judge-rereview.md", "model-fallback.md", "retro.md", "triage.md"}
 	if got := prompts.Names(); !slices.Equal(got, want) {
 		t.Fatalf("prompts.Names() = %v, want %v (add a golden case)", got, want)
 	}

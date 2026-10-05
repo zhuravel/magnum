@@ -241,9 +241,6 @@ type JudgeData struct {
 	// migration): their reviews and threads are the judge's own history,
 	// while every new write goes as ReviewerLogin. Empty for most PRs.
 	FormerLogins []string
-
-	// Stop.
-	Reason string
 }
 
 // completed is d with its Reports and notes fields completed (a copy; d is

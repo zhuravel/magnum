@@ -2,9 +2,9 @@ package pipeline
 
 // The reply contract (skills/magnum-review/SKILL.md section 6): a re-review
 // reads the inline threads its reviewer login started on the PR, classifies
-// every reply by its first words and hands them to the judge as a file next
-// to the candidate reports. Replies are PR content, so the prompt names the
-// file and the counts, never the text.
+// every reply by its first clause (classifyReply) and hands them to the judge
+// as a file next to the candidate reports. Replies are PR content, so the
+// prompt names the file and the counts, never the text.
 
 import (
 	"cmp"
@@ -48,26 +48,47 @@ type ThreadLister interface {
 }
 
 var (
-	// replyAgentPrefix is the tag the team's resolve-review skill puts before
-	// every reply it writes.
-	replyAgentPrefix = regexp.MustCompile(`(?i)^\(claude\)`)
-	// replyClasses match a reply's first words (after any quote, markup and
-	// the agent prefix), in order.
+	// replyAgentPrefix is the tag an agent puts before every reply it writes:
+	// "(Claude)" from the team's resolve-review skill, "[Codex]" and the like.
+	replyAgentPrefix = regexp.MustCompile(`(?i)^[(\[](?:claude|codex|copilot|cursor|gemini|devin|agent|bot|ai)(?:[ -][a-z]+)?[)\]]:?`)
+	// replyClauseEnd splits a reply's first paragraph into clauses: at a
+	// sentence end, a comma, colon or semicolon (with any closing markup), a
+	// dash and a line break. Dots inside "v1.2" or a URL's colon do not split.
+	replyClauseEnd = regexp.MustCompile("[.!?;:,]+[*_`)\\]]*(?:\\s+|$)|\\s+-{1,2}\\s+|\\s*[–—]+\\s*|\\n+")
+	// replyClauseLead is what may precede a verdict in its clause: a
+	// conjunction ("but out of scope") and a subject ("this is intentional",
+	// "it was already addressed", "that's incorrect").
+	replyClauseLead = regexp.MustCompile(`(?i)^(?:(?:but|and|so)\s+)?(?:(?:this|that|it)(?:'s|\s+(?:is|was|has\s+been))\s+)?(?:now\s+)?`)
+	// replyAck is a clause that acknowledges without a verdict ("Good catch",
+	// "Valid", "Analyzed", "Noted", "Low priority"): the verdict follows.
+	replyAck = regexp.MustCompile(`(?i)^(?:(?:good|nice|great)\s+(?:catch|find|point|call)|valid(?:\s+(?:point|concern|finding|catch))?|` +
+		`analy[sz]ed|noted|low\s+priority|thanks?(?:\s+you)?|agreed|true|right|correct|confirmed|acknowledged|fair(?:\s+(?:point|enough))?|` +
+		`yes|yep|ok(?:ay)?|sure|investigated|checked|verified|reviewed)$`)
+	// replyClasses match a verdict clause (replyClauseLead dropped), in order.
 	replyClasses = []struct {
 		class string
 		re    *regexp.Regexp
 	}{
-		{ReplyNotABug, regexp.MustCompile(`(?i)^(?:not a bug|by design|(?:as )?intended|intentional(?:ly)?)\b`)},
-		{ReplyWontFix, regexp.MustCompile(`(?i)^(?:won'?t fix|will not fix|wontfix|out of scope|follow[- ]?up)\b`)},
-		{ReplyFixed, regexp.MustCompile(`(?i)^(?:fixed|done|addressed)\b`)},
+		{ReplyNotABug, regexp.MustCompile(`(?i)^(?:(?:not\s+a\s+bug|by\s+design|(?:as\s+)?intended|intentional(?:ly)?)\b|` +
+			`(?:incorrect|moot(?:\s+point)?|not\s+applicable)$|(?:(?:this|the)\s+(?:concern|finding|comment|issue)\s+)?does(?:\s+not|n't)\s+apply\b)`)},
+		{ReplyWontFix, regexp.MustCompile(`(?i)^(?:(?:won't\s+fix|wont\s+fix|will\s+not\s+fix|wontfix|out\s+of\s+scope|follow[- ]?up|declined|deprioriti[sz]ed)\b|` +
+			`(?:kept|keeping|left|leaving)(?:\s+(?:it|this|that))?\s+as[- ]is\b|kept$)`)},
+		{ReplyFixed, regexp.MustCompile(`(?i)^(?:already\s+)?(?:fixed|done|addressed|applied)\b`)},
 	}
 )
 
-// classifyReply says what a reply claims from its first words: "fixed",
-// "done" or "addressed in <sha>" (ReplyFixed); "not a bug", "by design",
-// "intended" (ReplyNotABug); "won't fix", "out of scope", "follow-up"
-// (ReplyWontFix); anything else is ReplyOther. Case does not matter; leading
-// quoted lines (">"), markup, emoji and a "(Claude)" prefix are skipped.
+// classifyReply says what a reply claims from its first clause: "fixed",
+// "done", "addressed", "applied" or "already addressed" (ReplyFixed); "not a
+// bug", "incorrect", "moot", "by design", "intended", "intentional"
+// (ReplyNotABug); "won't fix", "declined", "out of scope", "follow-up", "kept
+// as is" (ReplyWontFix). An acknowledgement ("Good catch", "Valid",
+// "Analyzed", "Noted", "Low priority") passes the verdict on to a later
+// clause of the first paragraph ("Good catch, fixed in <sha>", "Noted — left
+// as is", "Low priority — <why>. Kept as is."); anything else is ReplyOther,
+// as is an acknowledgement no verdict follows. Case does not matter; leading
+// quoted lines (">"), markup, emoji and an agent's "(Claude)" tag are
+// skipped, and a verdict may follow "but" or "this is" ("Valid, but out of
+// scope", "Analyzed — this is intentional").
 func classifyReply(body string) string {
 	s := strings.ReplaceAll(body, "’", "'")
 	for {
@@ -85,19 +106,37 @@ func classifyReply(body string) string {
 	if loc := replyAgentPrefix.FindStringIndex(s); loc != nil {
 		s = trimReplyLead(s[loc[1]:])
 	}
-	for _, c := range replyClasses {
-		if c.re.MatchString(s) {
-			return c.class
+	if para, _, ok := strings.Cut(s, "\n\n"); ok {
+		s = para
+	}
+	acked := false
+	for _, c := range replyClauseEnd.Split(s, -1) {
+		c = strings.TrimFunc(c, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
+		if c == "" {
+			continue
+		}
+		v := c[len(replyClauseLead.FindString(c)):]
+		for _, rc := range replyClasses {
+			if rc.re.MatchString(v) {
+				return rc.class
+			}
+		}
+		switch {
+		case replyAck.MatchString(c):
+			acked = true
+		case !acked:
+			return ReplyOther // the first clause claims nothing known
 		}
 	}
 	return ReplyOther
 }
 
 // trimReplyLead drops what precedes a reply's first word: spaces, markup,
-// punctuation and emoji (an opening parenthesis stays for the agent prefix).
+// punctuation and emoji (an opening parenthesis or bracket stays for the
+// agent's tag).
 func trimReplyLead(s string) string {
 	return strings.TrimLeftFunc(s, func(r rune) bool {
-		return r != '(' && !unicode.IsLetter(r) && !unicode.IsDigit(r)
+		return r != '(' && r != '[' && !unicode.IsLetter(r) && !unicode.IsDigit(r)
 	})
 }
 

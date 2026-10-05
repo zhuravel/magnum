@@ -61,8 +61,13 @@ type postedReview struct {
 func (rd *round) runJudge(ctx context.Context, run store.Run) (RoundResult, error) {
 	in := rd.in
 	marker := run.ID
-	if in.Kind == KindContinue && in.ContinueRunID != "" {
+	switch {
+	case in.Kind == KindContinue && in.ContinueRunID != "":
 		marker = in.ContinueRunID
+	case rd.unverified != "":
+		// An earlier review on this head may be on GitHub: the judge looks
+		// for its marker before posting (unverified.go).
+		marker = rd.unverified
 	}
 	rd.mu.Lock()
 	rd.res.JudgeRunID = marker
@@ -190,7 +195,7 @@ func (rd *round) judgeVerdict(ctx context.Context, t turn, resultFile string, ma
 			if ctx.Err() != nil {
 				return verdict{final: true, outcome: OutcomeStopped, err: ctx.Err()}
 			}
-			return verdict{final: true, outcome: OutcomeError, result: v.result, err: fmt.Errorf("pipeline: verify on GitHub: %w", err)}
+			return verdict{final: true, outcome: OutcomeError, result: v.result, err: fmt.Errorf("%w: %w", errUnverified, err)}
 		}
 		if found != nil {
 			v.final, v.review = true, found
@@ -294,13 +299,41 @@ func (rd *round) judgeSession(ctx context.Context, run store.Run) (store.Session
 }
 
 // findReview looks for this round's review: by marker (any marker review by
-// another login is a leak), else the review id from the result file, else a
-// marker-less review by the reviewer on the target posted after the prompt.
-// Only a submitted review counts (submitted reports it): a PENDING draft is
-// never accepted, so nothing is dismissed around it either. Of several
-// reviews carrying the marker the first (on the target) is the round's; the
-// others are duplicates (postedReview.duplicates, pending).
+// another login is a leak), else the review id from the result file
+// (findClaimed), else a marker-less review by the reviewer on the target
+// posted after the prompt. Only a submitted review counts (submitted reports
+// it): a PENDING draft is never accepted, so nothing is dismissed around it
+// either. Of several reviews carrying the marker the first (on the target)
+// is the round's; the others are duplicates (postedReview.duplicates,
+// pending).
 func (rd *round) findReview(ctx context.Context, markers []string, res judgeResult, since time.Time) (*postedReview, error) {
+	if p, err := rd.findClaimed(ctx, markers, res, since); p != nil || err != nil {
+		return p, err
+	}
+	target := rd.in.TargetSHA
+	all, err := rd.listReviews(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+	var pick *github.Review
+	for i := range all {
+		rv := all[i]
+		if rd.isReviewer(rv.AuthorLogin, rv.AuthorType) && rv.CommitOid == target && submitted(rv.State, rv.SubmittedAt) &&
+			!rv.SubmittedAt.Before(since) {
+			pick = &rv
+		}
+	}
+	if pick == nil {
+		return nil, nil
+	}
+	rd.warn(ctx, "review %d by %s on %s has no magnum:run marker; accepted as this round's review", pick.DatabaseID, rd.login, short(target))
+	return rd.restCheck(ctx, *pick)
+}
+
+// findClaimed is findReview without its last resort: the review carrying one
+// of markers, else the one the result file names (res.ReviewID) when the
+// reviewer posted it on the target after since; nil when neither is there.
+func (rd *round) findClaimed(ctx context.Context, markers []string, res judgeResult, since time.Time) (*postedReview, error) {
 	target := rd.in.TargetSHA
 	for _, id := range markers {
 		reviews, err := rd.listReviews(ctx, "magnum:run="+id)
@@ -371,24 +404,7 @@ func (rd *round) findReview(ctx context.Context, markers []string, res judgeResu
 			return &postedReview{id: rest.ID, url: rest.HTMLURL, commit: rest.CommitID, state: rest.State, body: rest.Body}, nil
 		}
 	}
-
-	all, err := rd.listReviews(ctx, "")
-	if err != nil {
-		return nil, err
-	}
-	var pick *github.Review
-	for i := range all {
-		rv := all[i]
-		if rd.isReviewer(rv.AuthorLogin, rv.AuthorType) && rv.CommitOid == target && submitted(rv.State, rv.SubmittedAt) &&
-			!rv.SubmittedAt.Before(since) {
-			pick = &rv
-		}
-	}
-	if pick == nil {
-		return nil, nil
-	}
-	rd.warn(ctx, "review %d by %s on %s has no magnum:run marker; accepted as this round's review", pick.DatabaseID, rd.login, short(target))
-	return rd.restCheck(ctx, *pick)
+	return nil, nil
 }
 
 // restCheck confirms the posting login over REST, where an App keeps its

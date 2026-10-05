@@ -3,6 +3,7 @@ package agents
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -150,6 +151,38 @@ func (ta *trustAgent) install(f *fakeHerdr) {
 				ta.unblock(f)
 			}
 		}
+	}
+}
+
+// Keys go to the agent by name and to its pane only when herdr does not know
+// the name (agent_not_found). After a timeout or any other error herdr may
+// have delivered them already, so they are never sent a second time.
+func TestSendKeysFallsBackToThePaneOnlyWhenTheAgentIsUnknown(t *testing.T) {
+	ref := paneRef{name: "mg-11920-codex-judge-5d01cf", pane: "w1:p1"}
+	for name, tc := range map[string]struct {
+		err      error
+		wantPane bool
+	}{
+		"agent not found":    {err: &herdr.Error{Method: "agent.send_keys", Code: herdr.CodeAgentNotFound, Message: ref.name}, wantPane: true},
+		"client timeout":     {err: fmt.Errorf("herdr agent.send_keys: %w", herdr.ErrTimeout)},
+		"herdr timeout code": {err: &herdr.Error{Method: "agent.send_keys", Code: herdr.CodeTimeout, Message: "timed out"}},
+		"other error":        {err: &herdr.Error{Method: "agent.send_keys", Code: "boom", Message: "boom"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t)
+			e.h.errs["AgentSendKeys"] = tc.err
+			err := e.m.sendKeys(e.ctx, ref, "enter")
+			panes := e.h.callsWith("PaneSendKeys")
+			if tc.wantPane {
+				if err != nil || len(panes) != 1 {
+					t.Fatalf("err %v, pane sends %v; want one fallback to the pane", err, panes)
+				}
+				return
+			}
+			if !errors.Is(err, tc.err) || len(panes) != 0 {
+				t.Fatalf("err %v, pane sends %v; want the agent's error and no pane send", err, panes)
+			}
+		})
 	}
 }
 

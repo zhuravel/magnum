@@ -402,6 +402,11 @@ type round struct {
 	judge  config.Role     // the round's judge
 	order  []config.Role   // the candidate non-judge roles, in stage order
 	stages [][]config.Role // the non-judge roles that run, by stage
+	// unverified is the marker of an earlier judge run on the target whose
+	// review magnum could not verify and did not find before the round
+	// (unverified.go): the judge's review carries it, so the judge finds
+	// that review before posting another. A restart on a newer head drops it.
+	unverified string
 
 	mu   sync.Mutex
 	res  RoundResult
@@ -598,6 +603,9 @@ func envKey(env map[string]string) string {
 
 // run is the round body.
 func (rd *round) run(ctx context.Context) (RoundResult, error) {
+	if end := rd.adoptUnverified(ctx); end != nil {
+		return end()
+	}
 	in := rd.in
 	names := []string{}
 	for _, x := range rd.running() {

@@ -434,7 +434,8 @@ summary = "simplifications and refactors of the changed code"   # what the model
 report as a claim to prove or reject, attach findings to changed lines with reproduction and fix,
 post one review (`REQUEST_CHANGES`, `COMMENT` or the configured no-findings event), verify it, and
 write a machine-readable result. In re-review mode magnum hands it the threads its login started with
-every reply classified by its first words (`fixed`, `not a bug`, `won't fix`); the judge accepts a fix
+every reply classified by its first clause, after an opening "Good catch", "Valid" or "Noted" (`fixed`,
+`not a bug`, `won't fix`); the judge accepts a fix
 only when the code shows it, honours an answered finding unless it proves the reason wrong (then it
 says why in one sentence in that thread), and lists each old finding as fixed, answered or still open.
 The result records every finding the judge weighed with its sources and, for a rejection, a reason

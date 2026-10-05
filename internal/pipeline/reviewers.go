@@ -227,7 +227,9 @@ func (rd *round) shellTurn(ctx context.Context, role config.Role, run store.Run,
 		// The restart interrupts the command and settles its run.
 		return turn{kind: waitCancelled, run: run, err: ctx.Err()}, anchor, nil
 	case ctx.Err() != nil:
-		// The command keeps running in the pane; nobody will read it.
+		// Nobody will read the command's output, and left running it would
+		// hold the pane: the next round's command would find it busy.
+		rd.interrupt(ctx, role, run)
 		return end(store.RunFailed, ReportCancelled, "round cancelled")
 	case errors.Is(err, agents.ErrBusy):
 		return end(store.RunFailed, ReportBusy, execx.Redact(err.Error()))

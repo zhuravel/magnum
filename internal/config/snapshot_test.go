@@ -174,18 +174,18 @@ func TestSnapshotEmbeddedDefaultIsChangedWhenAFileAppears(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	before, err := cfg.ResolvePrompt("judge-stop.md")
+	before, err := cfg.ResolvePrompt("judge-nudge.md")
 	if err != nil || !before.Embedded {
-		t.Fatalf("judge-stop.md = %+v %v, want the embedded default", before, err)
+		t.Fatalf("judge-nudge.md = %+v %v, want the embedded default", before, err)
 	}
 	if got := snap.Changed(); len(got) != 0 {
 		t.Fatalf("Changed() = %q, want none", got)
 	}
-	snapWrite(t, filepath.Join(home, "prompts", "judge-stop.md"), "my stop")
-	if got := snap.Changed(); !slices.Equal(got, []string{"judge-stop.md"}) {
-		t.Fatalf("Changed() = %q, want [judge-stop.md]", got)
+	snapWrite(t, filepath.Join(home, "prompts", "judge-nudge.md"), "my nudge")
+	if got := snap.Changed(); !slices.Equal(got, []string{"judge-nudge.md"}) {
+		t.Fatalf("Changed() = %q, want [judge-nudge.md]", got)
 	}
-	after, err := cfg.ResolvePrompt("judge-stop.md")
+	after, err := cfg.ResolvePrompt("judge-nudge.md")
 	if err != nil || !after.Embedded || after.Text != before.Text {
 		t.Fatalf("after the file appeared: %+v %v, want the embedded default", after, err)
 	}

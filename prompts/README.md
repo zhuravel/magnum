@@ -39,7 +39,6 @@ prompts_dir = "{{repo}}/prompts"   # or "~/magnum-prompts" to keep your edits ou
 | `judge-continue.md` | judge, after a pause (usage limit) ended mid-turn | judge |
 | `judge-recovery.md` | judge, fresh session after the old one was lost | judge |
 | `judge-nudge.md` | judge, stopped without a result | judge |
-| `judge-stop.md` | judge, PR closed or round cancelled | judge |
 | `model-fallback.md` | any session role, the judge included, after magnum switched its model because the model hit its own limit | fallback |
 | `claude-review.md` | claude-review, first review | role |
 | `claude-rereview.md` | claude-review, new head | role |
@@ -104,7 +103,6 @@ the judge data, every other session role gets the role data, and a shell role's 
 | `.NotesHarness`, `.NotesHarnessMore` | the harness directory's entries at prompt time (sorted, a directory ends in `/`, at most 40) and how many more there are |
 | `.NotesLockCommand`, `.NotesUnlockCommand` | the shell lines that take the notes lock (printing `notes locked`, or `notes busy` after three minutes) and release it |
 | `.Readiness` | what magnum ran in the checkout before the reviewers (`prepare` and `ready` of the `[[repo]]` or `[[pool]]`, and the `ruby` check): `.Checks` (each `.Kind`, `.Command`, `.Status` `ok`/`failed`/`timeout`/`skipped`, `.Detail` magnum's reason, `.Duration`), `.Failed` (how many did not pass) and `.File`, the JSON file that also holds each command's last output line. That line is the PR's code talking: name the file, never print it. Empty when nothing ran (initial, rereview and recovery rounds run the step; continue does not) |
-| `.Reason` | why the judge must stop (stop) |
 
 #### `.Reports` entries
 
@@ -336,7 +334,7 @@ a switch not confirmed within 30 s backs out of the dialog with Esc and pauses t
 | `args`, `env` | none | extra launch args (shell roles: appended to the command, quoted) and pane environment |
 | `prompt`, `rereview` | see below | prompt files for the first review and for a new head |
 | `restart` | see below | session reviewers: the prompt after a push cut the role's turn short and the round restarted on the new head |
-| `continue_prompt`, `recovery`, `nudge`, `stop` | judge only | the judge's other prompts |
+| `continue_prompt`, `recovery`, `nudge` | judge only | the judge's other prompts. A `stop` key is accepted and ignored: magnum never sent a stop prompt |
 | `skill` | `{{repo}}/skills/magnum-review/SKILL.md` | the judge's skill, `{{.SkillPath}}` |
 | `command`, `tool` | none | shell roles: the command template, and the kind whose login check, pauses and health patterns apply |
 | `ok_status` | `[0]` | shell roles: the exit statuses that count as a finished report; any other status fails the role (its output is then checked for login, usage-limit and overload errors) |

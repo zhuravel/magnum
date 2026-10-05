@@ -216,7 +216,6 @@ rereview = "judge-rereview.md"
 continue_prompt = "judge-continue.md"
 recovery = "judge-recovery.md"
 nudge = "judge-nudge.md"
-stop = "judge-stop.md"
 output = "codex-judge.json"           # the result file in the round's report directory
 timeout = "90m"
 aliases = ["judge"]

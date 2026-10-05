@@ -51,6 +51,91 @@ func TestDetectHooksDialog(t *testing.T) {
 	}
 }
 
+// A hooks review is live only at the bottom of the screen: its options are
+// the last lines but for blanks and key hints. Dialog text an agent's output
+// left above a permission prompt or the composer is never taken for it, so
+// no Enter lands on "Yes, proceed" and no arrow goes into the composer.
+func TestDetectHooksDialogOnlyAtTheBottom(t *testing.T) {
+	pressHint := strings.Replace(codexHooksScreen, "enter confirm · esc cancel", "Press enter to confirm or esc to go back", 1)
+	if _, ok := detectHooksDialog(pressHint); !ok {
+		t.Fatal("a hooks review with a press-enter hint was not detected")
+	}
+	for name, text := range map[string]string{
+		"above a command prompt":                  codexHooksScreen + codexCommandPrompt,
+		"cursor on the choice above edits prompt": hooksCursorAt(hooksTrustOption) + codexEditsPrompt,
+		"above the composer":                      codexHooksScreen + codexIdleScreen,
+		"output below":                            codexHooksScreen + "• Running the specs.\n",
+	} {
+		if d, ok := detectHooksDialog(text); ok {
+			t.Errorf("%s: detected a hooks review %+v", name, d)
+		}
+	}
+}
+
+// A stale hooks review above a live permission prompt or the composer never
+// yields a key: no Enter when the cursor already sits on magnum's choice, no
+// arrow when it does not.
+func TestAnswerHooksIgnoresStaleDialogAboveAnotherScreen(t *testing.T) {
+	for name, screen := range map[string]string{
+		"cursor on the choice above a prompt": hooksCursorAt(hooksTrustOption) + codexCommandPrompt,
+		"cursor elsewhere above a prompt":     codexHooksScreen + codexCommandPrompt,
+		"above the composer":                  codexHooksScreen + codexIdleScreen,
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t)
+			e.started()
+			agent := "mg-11920-codex-judge-5d01cf"
+			e.h.mu.Lock()
+			e.h.reads[agent] = screen
+			e.h.mu.Unlock()
+			ok, err := e.m.answerHooks(e.ctx, e.pr.ID, RoleJudge, KindCodex, paneRef{name: agent}, t.TempDir())
+			if ok || err != nil {
+				t.Fatalf("answered %v, err %v", ok, err)
+			}
+			if keys := e.keysSent(); len(keys) != 0 {
+				t.Fatalf("keys sent: %v", keys)
+			}
+		})
+	}
+}
+
+// The screen is read once more right before Enter, which goes only to the
+// same dialog with the cursor still on magnum's choice: a permission prompt
+// (or another hooks review) that replaced it after the first read gets no
+// key at all.
+func TestAnswerHooksRereadsBeforeEnter(t *testing.T) {
+	other := strings.Replace(hooksCursorAt(hooksTrustOption), "3 hooks are new or changed.", "4 hooks are new or changed.", 1)
+	for name, next := range map[string]string{
+		"permission prompt":    codexCommandPrompt,
+		"another hooks review": other,
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t)
+			e.started()
+			agent := "mg-11920-codex-judge-5d01cf"
+			reads := 0
+			e.h.mu.Lock()
+			e.h.reads[agent] = hooksCursorAt(hooksTrustOption)
+			e.h.onRead = func(f *fakeHerdr, target string) {
+				if reads++; reads == 1 {
+					f.reads[target] = next
+				}
+			}
+			e.h.mu.Unlock()
+			ok, err := e.m.answerHooks(e.ctx, e.pr.ID, RoleJudge, KindCodex, paneRef{name: agent}, t.TempDir())
+			if ok || err == nil || !strings.Contains(err.Error(), "not confirming") {
+				t.Fatalf("answered %v, err %v", ok, err)
+			}
+			if reads < 2 {
+				t.Fatalf("reads = %d, want a re-read before Enter", reads)
+			}
+			if keys := e.keysSent(); len(keys) != 0 {
+				t.Fatalf("keys sent: %v", keys)
+			}
+		})
+	}
+}
+
 // writeFiles creates files (path relative to root → content) under root.
 func writeFiles(t *testing.T, root string, files map[string]string) {
 	t.Helper()

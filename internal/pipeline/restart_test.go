@@ -271,7 +271,8 @@ func TestRestartCountResetsPerRound(t *testing.T) {
 	}
 	claude := e.ag.submitsFor(agents.RoleClaude)
 	// Round 2's restart prompt is confined to the delta since the previous review.
-	mustContain(t, "round 2 restart prompt", claude[3].Text, "moved from `"+head2+"` to `"+head3+"`", "Earlier findings")
+	mustContain(t, "round 2 restart prompt", claude[3].Text, "moved from `"+head2+"` to `"+head3+"`",
+		"review only `git diff "+head2+".."+head3+"`", "do not re-derive a finding from that report")
 }
 
 func TestPushBetweenStagesRestartsBeforeTheJudge(t *testing.T) {

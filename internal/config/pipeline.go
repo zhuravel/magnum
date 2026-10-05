@@ -62,11 +62,10 @@ const (
 	PromptContinue = "continue" // Role.ContinuePrompt: a pause ended mid-turn (judge)
 	PromptRecovery = "recovery" // Role.Recovery: a fresh session after the old one was lost (judge)
 	PromptNudge    = "nudge"    // Role.Nudge: the agent stopped without a result (judge)
-	PromptStop     = "stop"     // Role.Stop: the PR closed or the round was cancelled (judge)
 )
 
 // PromptKinds lists every prompt kind a role may name (Role.PromptFile).
-var PromptKinds = []string{PromptInitial, PromptRereview, PromptRestart, PromptContinue, PromptRecovery, PromptNudge, PromptStop}
+var PromptKinds = []string{PromptInitial, PromptRereview, PromptRestart, PromptContinue, PromptRecovery, PromptNudge}
 
 // Built-in role names (DefaultRoles) and kinds (DefaultKinds).
 const (
