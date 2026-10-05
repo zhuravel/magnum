@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -30,6 +31,12 @@ type roundJob struct {
 	round         int
 	continueRunID string
 	target        string
+	// continued: the job continues a paused round whose judge was prompted
+	// (prepareContinue). That round counted at its start and was not
+	// refunded (turnContinues), so this job never counts against the daily
+	// cap again, even when it becomes a full round (its judge's session was
+	// lost, or its checkout is gone).
+	continued bool
 
 	// requested: a review request no round has served yet (pendingRequest)
 	// started this round; like a forced one, it does not count against the
@@ -197,7 +204,8 @@ func (e *Engine) dispatch(ctx context.Context, ts tickState) {
 		}
 		if limit := e.cfg.Daemon.MaxConcurrentReviews; limit > 0 && e.reviewRounds()+e.plannedRounds() >= limit {
 			// The rest wait for a running round to end; say so (noteWaits).
-			e.noteGate(ctx, pr.ID, fmt.Sprintf("%s%d rounds running (max_concurrent_reviews %d)", gateCapacity, e.reviewRounds()+e.plannedRounds(), limit))
+			e.noteGate(ctx, pr.ID, gate{reason: WaitCapacity,
+				text: fmt.Sprintf("%s%d rounds running (max_concurrent_reviews %d)", gateCapacity, e.reviewRounds()+e.plannedRounds(), limit)})
 			continue
 		}
 		if quiet && !pr.Forced {
@@ -213,17 +221,17 @@ func (e *Engine) dispatch(ctx context.Context, ts tickState) {
 			continue
 		}
 		e.migrateIdentity(ctx, &pr, repo, w)
-		reason := e.prGate(ctx, pr, repo, w, ts, now)
+		g := e.prGate(ctx, pr, repo, w, ts, now)
 		started, codex := false, 0
-		if reason == "" {
-			started, codex, reason = e.startRound(ctx, pr, repo, w, working)
+		if g.text == "" {
+			started, codex, g = e.startRound(ctx, pr, repo, w, working)
 		}
 		switch {
-		case reason != "":
-			e.log.Debug("candidate skipped", "pr", pr.ID, "reason", reason)
-			e.noteGate(ctx, pr.ID, reason)
+		case g.text != "":
+			e.log.Debug("candidate skipped", "pr", pr.ID, "reason", g.text)
+			e.noteGate(ctx, pr.ID, g)
 		default:
-			e.delKV(ctx, kvPRGate(pr.ID), KVPRWait(pr.ID))
+			e.delKV(ctx, kvPRGate(pr.ID), kvPRGateReason(pr.ID), KVPRWait(pr.ID))
 		}
 		if started {
 			working += codex
@@ -276,10 +284,18 @@ func arrivedDuringReview(pr store.PR) bool {
 	return pr.PendingSince != nil && pr.ReviewedAt != nil && !pr.PendingSince.After(*pr.ReviewedAt)
 }
 
-// noteGate records why the PR waits (store.KVPRGate) when that changed.
-func (e *Engine) noteGate(ctx context.Context, prID int64, reason string) {
-	if prev, _ := e.getKV(ctx, kvPRGate(prID)); prev != reason {
-		e.setKV(ctx, kvPRGate(prID), reason)
+// noteGate records why the PR waits when that changed: the gate's sentence
+// (store.KVPRGate) and its code (kvPRGateReason).
+func (e *Engine) noteGate(ctx context.Context, prID int64, g gate) {
+	if prev, _ := e.getKV(ctx, kvPRGate(prID)); prev != g.text {
+		e.setKV(ctx, kvPRGate(prID), g.text)
+	}
+	b, err := json.Marshal(gateCode{Reason: g.reason, Kind: g.kind})
+	if err != nil {
+		return
+	}
+	if prev, _ := e.getKV(ctx, kvPRGateReason(prID)); prev != string(b) {
+		e.setKV(ctx, kvPRGateReason(prID), string(b))
 	}
 }
 
@@ -320,33 +336,33 @@ func (e *Engine) plannedRounds() int {
 	return e.dryRounds
 }
 
-// prGate is why one PR may not start a round now ("" = go).
-func (e *Engine) prGate(ctx context.Context, pr store.PR, repo store.Repo, w *config.Watch, ts tickState, now time.Time) string {
+// prGate is why one PR may not start a round now (the zero gate = go).
+func (e *Engine) prGate(ctx context.Context, pr store.PR, repo store.Repo, w *config.Watch, ts tickState, now time.Time) gate {
 	if e.roundActive(pr.ID) {
-		return "round in progress"
+		return otherGate("round in progress")
 	}
 	if ts.busyPR[pr.ID] {
-		return "an agent of the PR is working or blocked"
+		return otherGate("an agent of the PR is working or blocked")
 	}
 	if pr.HumanActiveAt != nil && now.Before(pr.HumanActiveAt.Add(e.cfg.Daemon.HumanCooldown.Duration)) {
-		return "human active in the PR's panes"
+		return otherGate("human active in the PR's panes")
 	}
 	if w == nil {
-		return "repository " + repo.FullName() + " is no longer watched (no [[watch]] covers it)"
+		return otherGate("repository " + repo.FullName() + " is no longer watched (no [[watch]] covers it)")
 	}
 	if pr.DetailsAt == nil && !pr.Forced {
 		// Author, labels and fork status are unknown until a Details fetch
 		// succeeds: the watch's filters cannot be applied yet.
-		return "waiting for the PR's details from GitHub"
+		return otherGate("waiting for the PR's details from GitHub")
 	}
 	if ok, why := e.identityHealthy(ctx, pr.Identity); !ok {
 		e.noteLastError(ctx, pr, why)
-		return why
+		return gate{reason: WaitIdentity, text: why}
 	}
 	if v, ok := e.getKV(ctx, KVWatchPaused(repo.WatchOwner)); ok && v != "" {
-		return "watch " + repo.WatchOwner + " paused: " + v
+		return otherGate("watch " + repo.WatchOwner + " paused: " + v)
 	}
-	return ""
+	return gate{}
 }
 
 // continueCandidates are paused PRs whose retry time passed: they continue
@@ -386,9 +402,9 @@ func (e *Engine) slotOf(ctx context.Context, prID int64) (store.Slot, bool, erro
 // startRound acquires a slot for pr (its own claimed/held slot, a free pool
 // slot, or a per-PR worktree created by the round) and launches the round
 // goroutine. It reports whether a round was started (or planned), the Codex
-// agents its roles add, and why the PR waits ("" when it started or waits
-// silently, for example for a slot being provisioned).
-func (e *Engine) startRound(ctx context.Context, pr store.PR, repo store.Repo, w *config.Watch, workingCodex int) (bool, int, string) {
+// agents its roles add, and why the PR waits (the zero gate when it started
+// or waits silently, for example for a slot being provisioned).
+func (e *Engine) startRound(ctx context.Context, pr store.PR, repo store.Repo, w *config.Watch, workingCodex int) (bool, int, gate) {
 	full := repo.FullName()
 	subject := prSubject(repo, pr.Number)
 	job := &roundJob{pr: pr, repo: repo, watch: *w, pool: e.cfg.PoolFor(full), kind: kindFor(pr), postMerge: postMerge(pr)}
@@ -399,14 +415,14 @@ func (e *Engine) startRound(ctx context.Context, pr store.PR, repo store.Repo, w
 	if pr.State == store.PRPaused {
 		from = []string{store.PRPaused}
 		if !e.prepareContinue(ctx, job) {
-			return false, 0, ""
+			return false, 0, gate{}
 		}
 	}
 
 	rctx, cancel := context.WithCancel(ctx)
 	if !e.reserve(pr.ID, &roundHandle{cancel: cancel}) {
 		cancel()
-		return false, 0, e.heldReason(pr.ID)
+		return false, 0, otherGate(e.heldReason(pr.ID))
 	}
 	launched := false
 	defer func() {
@@ -418,11 +434,11 @@ func (e *Engine) startRound(ctx context.Context, pr store.PR, repo store.Repo, w
 	slot, has, err := e.slotOf(ctx, pr.ID)
 	if err != nil {
 		e.log.Warn("dispatch: slots", "err", err)
-		return false, 0, ""
+		return false, 0, gate{}
 	}
 	if has {
 		if why := e.slotGate(ctx, job, &slot, subject); why != "" {
-			return false, 0, why
+			return false, 0, gate{reason: WaitSlot, text: why}
 		}
 		job.slot, job.hasSlo = slot, true
 	}
@@ -436,33 +452,34 @@ func (e *Engine) startRound(ctx context.Context, pr store.PR, repo store.Repo, w
 	toRun, err := pipeline.RolesToRun(ctx, e.st, e.cfg, pr, e.cfg.RolesFor(w), e.requestedRoles(ctx, pr.ID), job.kind)
 	if err != nil {
 		e.log.Warn("dispatch: roles", "subject", subject, "err", err)
-		return false, 0, ""
+		return false, 0, gate{}
 	}
-	if why := e.kindPauseReason(ctx, agentKinds(toRun)); why != "" {
-		return false, 0, why
+	if kind, why := e.pausedKind(ctx, agentKinds(toRun)); why != "" {
+		return false, 0, gate{reason: WaitKind, kind: kind, text: why}
 	}
 	codex := codexRoles(toRun)
 	if why := e.budgetGate(job.kind, pr.Forced, codex); why != "" {
-		return false, 0, why
+		return false, 0, gate{reason: WaitBudget, text: why}
 	}
 	if limit := e.cfg.Daemon.MaxTotalWorkingCodex; limit > 0 && codex > 0 && workingCodex+min(codex, limit) > limit {
-		return false, 0, fmt.Sprintf("working Codex agents at the limit (%d working, max_total_working_codex %d)", workingCodex, limit)
+		return false, 0, gate{reason: WaitCapacity,
+			text: fmt.Sprintf("working Codex agents at the limit (%d working, max_total_working_codex %d)", workingCodex, limit)}
 	}
 
 	if e.d.DryRun {
-		return e.planStart(ctx, job, subject), codex, ""
+		return e.planStart(ctx, job, subject), codex, gate{}
 	}
 
 	switch {
 	case has || job.pool == nil:
 		if err := e.st.TransitionPR(ctx, pr.ID, from, store.PRClaiming, nil); err != nil {
 			e.log.Debug("dispatch: claim PR", "subject", subject, "err", err)
-			return false, 0, ""
+			return false, 0, gate{}
 		}
 	default:
 		if pr.State == store.PRPaused {
 			if err := e.st.TransitionPR(ctx, pr.ID, from, claimableState(pr), nil); err != nil {
-				return false, 0, ""
+				return false, 0, gate{}
 			}
 			pr.State = claimableState(pr)
 			job.pr = pr
@@ -471,17 +488,17 @@ func (e *Engine) startRound(ctx context.Context, pr store.PR, repo store.Repo, w
 		switch {
 		case errors.Is(err, slots.ErrNoFreeSlot):
 			e.needSlot(ctx, *job.pool, subject)
-			return false, 0, gateNoFreeSlot + job.pool.Repo + " pool"
+			return false, 0, gate{reason: WaitSlot, text: gateNoFreeSlot + job.pool.Repo + " pool"}
 		case err != nil:
 			e.log.Info("dispatch: claim", "subject", subject, "err", err)
-			return false, 0, ""
+			return false, 0, gate{}
 		}
 		job.slot, job.hasSlo = sl, true
 		e.event(ctx, "info", subject, "slot.claimed", "claimed "+sl.Name, nil)
 	}
 	launched = true
 	e.launch(rctx, job)
-	return true, codex, ""
+	return true, codex, gate{}
 }
 
 // slotGate checks the PR's own slot before a round: "" when the round can
@@ -538,13 +555,19 @@ var recreatedPerPR = []string{store.SlotProvisioning, store.SlotLost, store.Slot
 // of them that is paused ("" = none). A pause of one kind leaves rounds that
 // do not use it alone.
 func (e *Engine) kindPauseReason(ctx context.Context, kinds []string) string {
+	_, why := e.pausedKind(ctx, kinds)
+	return why
+}
+
+// pausedKind is kindPauseReason with the paused kind it names.
+func (e *Engine) pausedKind(ctx context.Context, kinds []string) (kind, why string) {
 	now := e.now()
 	for _, kind := range kinds {
 		if p, ok := e.toolPause(ctx, kind); ok && now.Before(p.Until) {
-			return fmt.Sprintf("%s paused (%s) until %s", kind, p.Reason, p.Until.Local().Format("15:04"))
+			return kind, fmt.Sprintf("%s paused (%s) until %s", kind, p.Reason, p.Until.Local().Format("15:04"))
 		}
 	}
-	return ""
+	return "", ""
 }
 
 // codexRoles counts the roles that run a Codex agent.
@@ -592,7 +615,19 @@ func (e *Engine) prepareContinue(ctx context.Context, job *roundJob) bool {
 		return true
 	}
 	job.kind, job.round, job.continueRunID, job.target = kindContinue, j.round, j.marker.ID, j.marker.TargetSHA
+	job.continued = true
 	return true
+}
+
+// diffBase is the base the round's comparisons take the PR's own diff
+// against (measureRange): its base branch, or, for a post-merge round, the
+// base before the merge ("" when unknown: the base branch holds the merged
+// head, so no own diff is compared).
+func (job *roundJob) diffBase() string {
+	if job.postMerge {
+		return job.mergeBase
+	}
+	return prBase(job.repo, job.pr)
 }
 
 const kindContinue = "continue"

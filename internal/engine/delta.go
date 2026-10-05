@@ -116,42 +116,49 @@ func (dc deltaCheck) change() string {
 // checkDelta compares from...to in one GitHub call as the watch's poll
 // identity, when the watch skips trivial deltas or has a re-review
 // threshold. When that push is not trivial but has a merge commit or
-// diverged from the reviewed commit (a rebase, a force push), two more
-// calls compare the PR's own diff against base before and after it
-// (ownDiffDelta): unchanged is the class DeltaBase, changed gives the size
-// of that change; an incomplete comparison keeps the size of from...to.
-// Any failure of the first call measures nothing: the PR gets its
-// re-review.
+// diverged from the reviewed commit (a rebase, a force push), the measure
+// triage and the rerun share (measureRange) adds two calls that compare the
+// PR's own diff against base before and after it: unchanged is the class
+// DeltaBase, changed gives the size of that change; an incomplete
+// comparison keeps the size of from...to. A failure of the first call
+// measures nothing, and nor does a head GitHub finds behind the reviewed
+// commit (a force push back to an ancestor: no commit and no file to
+// measure, while the review discusses code the push dropped): the PR gets
+// its re-review.
 func (e *Engine) checkDelta(ctx context.Context, repo store.Repo, w config.Watch, base, from, to string) deltaCheck {
 	allowed := e.cfg.TrivialDeltas(&w)
 	if len(allowed) == 0 && e.cfg.ThrottleFor(&w).RereviewMinLines <= 0 {
 		return deltaCheck{}
 	}
-	if from == "" || to == "" || from == to || e.d.GitHub == nil {
+	if from == "" || to == "" || from == to {
 		return deltaCheck{}
 	}
-	gh := e.d.GitHub(w.PollIdentity)
+	gh := e.gh(w.PollIdentity)
 	if gh == nil {
 		return deltaCheck{}
 	}
-	pc, err := gh.ComparePush(ctx, repo.Owner, repo.Name, from, to)
+	pc, err := e.comparePush(ctx, gh, repo, from, to)
 	if err != nil {
 		e.log.Info("delta: compare failed; the push is re-reviewed", "repo", repo.FullName(), "from", short(from), "to", short(to), "err", err)
 		return deltaCheck{}
 	}
-	dc := deltaCheck{measured: true, files: len(pc.Files), size: MeasureDelta(pc.Files), commits: pc.Commits}
-	dc.classes, dc.trivial = TrivialDelta(pc.Files, allowed)
-	rebased := pc.Status == "diverged"
-	if dc.trivial || !(pc.Merge || rebased) || base == "" {
+	if pc.Status == "behind" || pc.Commits == 0 {
+		e.log.Info("delta: the head is behind the reviewed commit; the push is re-reviewed", "repo", repo.FullName(),
+			"from", short(from), "to", short(to), "status", pc.Status)
+		return deltaCheck{}
+	}
+	dc := deltaCheck{measured: true, files: len(pc.Files), commits: pc.Commits}
+	dc.size, dc.classes, dc.trivial = assessDelta(pc.Files, allowed)
+	if dc.trivial || !viaBase(pc) || base == "" {
 		return dc
 	}
-	own, ok := e.ownDiffDelta(ctx, gh, repo, base, from, to)
+	m, err := e.measureRange(ctx, gh, repo, base, from, to) // this tick's comparison of from...to, and the PR's own diff
 	switch {
-	case !ok:
-	case len(own.changed) > 0:
-		dc.size = own.size
+	case err != nil || !m.ownOK:
+	case len(m.own.changed) > 0:
+		dc.size = m.own.size
 	case slices.Contains(allowed, DeltaBase):
-		dc.trivial, dc.classes, dc.base, dc.rebased = true, []string{DeltaBase}, base, rebased
+		dc.trivial, dc.classes, dc.base, dc.rebased = true, []string{DeltaBase}, base, pc.Status == "diverged"
 	}
 	return dc
 }

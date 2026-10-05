@@ -294,7 +294,8 @@ func (e *Engine) startSessions(ctx context.Context, job *roundJob, rs *roundSetu
 // enterReviewing moves the slot to busy and the PR from claiming to
 // reviewing; a round other than a continue records its start for the
 // throttle (last_round_started_at), and an automatic one (neither forced
-// nor requested) counts against the daily cap (rounds_today).
+// nor requested) counts against the daily cap (rounds_today), unless it
+// continues a round that counted already (roundJob.continued).
 func (e *Engine) enterReviewing(ctx context.Context, job *roundJob, kind string) *setupError {
 	pr := job.pr
 	if err := e.st.TransitionSlot(ctx, job.slot.ID, []string{store.SlotClaimed, store.SlotHeld, store.SlotBusy}, store.SlotBusy, nil); err != nil {
@@ -302,7 +303,7 @@ func (e *Engine) enterReviewing(ctx context.Context, job *roundJob, kind string)
 	}
 	now := e.now()
 	day := store.DayKey(now)
-	counted := kind != kindContinue && !pr.Forced && !job.requested
+	counted := kind != kindContinue && !job.continued && !pr.Forced && !job.requested
 	err := e.st.TransitionPR(ctx, pr.ID, []string{store.PRClaiming}, store.PRReviewing, func(u *store.PRUpdate) {
 		u.Set("last_error", nil)
 		if kind != kindContinue {
@@ -335,10 +336,7 @@ func (e *Engine) roundInput(ctx context.Context, job *roundJob, rs roundSetup, w
 	if err != nil {
 		cur = job.pr
 	}
-	base := deref(cur.BaseRef)
-	if base == "" {
-		base = job.repo.DefaultBranch
-	}
+	base := prBase(job.repo, cur)
 	in := pipeline.RoundInput{
 		PR: cur, Repo: job.repo, SlotPath: job.slot.Path, Round: rs.round, Kind: rs.kind,
 		TargetSHA: rs.target, BaseRef: base, Roles: rs.roles, Requested: rs.requested, MovedFrom: ws.MovedFrom,
@@ -372,10 +370,35 @@ func (e *Engine) roundInput(ctx context.Context, job *roundJob, rs roundSetup, w
 		}
 	}
 	in.BaseSHA, in.ForcePushed = e.headContext(ctx, job.slot.Path, base, reviewed, rs.target)
+	if rs.kind == pipeline.KindRereview && job.evalHead == "" {
+		in.BaseMerged = e.baseMerged(ctx, job, reviewed, rs.target)
+	}
 	if job.postMerge {
 		in.BaseSHA = job.mergeBase // origin/<base> may hold the merged head: postMergeBase
 	}
 	return in
+}
+
+// baseMerged reports whether the commits from reviewed to target have a
+// merge commit (comparePush as the watch's poll identity, usually this
+// tick's comparison triage or the rerun made): the push merged a branch
+// in, usually the base, so the re-review prompts compare the PR's own diff
+// before and after it (pipeline.RoundInput.BaseMerged). Unknown (no
+// client, a failed call) is false.
+func (e *Engine) baseMerged(ctx context.Context, job *roundJob, reviewed, target string) bool {
+	if reviewed == "" || reviewed == target {
+		return false
+	}
+	gh := e.gh(job.watch.PollIdentity)
+	if gh == nil {
+		return false
+	}
+	pc, err := e.comparePush(ctx, gh, job.repo, reviewed, target)
+	if err != nil {
+		e.log.Info("base merge: compare failed; the re-review reads the commits since the review", "pr", job.pr.ID, "err", err)
+		return false
+	}
+	return pc.Merge
 }
 
 // headContext is target's merge base with the base branch ("" when unknown)
@@ -433,6 +456,9 @@ func (e *Engine) switchHead(job *roundJob, kind, base, workspaceID string) func(
 			reviewed = deref(pr.ReviewedSHA)
 		}
 		out.BaseSHA, out.ForcePushed = e.headContext(ctx, sl.Path, base, reviewed, out.TargetSHA)
+		if kind == pipeline.KindRereview {
+			out.BaseMerged = e.baseMerged(ctx, job, reviewed, out.TargetSHA)
+		}
 		e.sidebar(ctx, workspaceID, map[string]string{"magnum": "reviewing " + short(out.TargetSHA)})
 		return out, nil
 	}
@@ -850,7 +876,7 @@ func (e *Engine) finish(ctx context.Context, job *roundJob, in pipeline.RoundInp
 	if res.Pause != nil && res.Pause.Kind != string(agents.HealthOverloaded) && res.Pause.Kind != string(agents.HealthModelLimit) {
 		e.pauseTool(ctx, *res.Pause) // overload is a per-PR backoff (below)
 	}
-	if why := e.refundReason(ctx, job, res, outcome, msg); why != "" {
+	if why := e.refundReason(ctx, job, res, outcome, msg); why != "" && !e.turnContinues(ctx, job, pr, outcome, cancelled) {
 		e.refund(ctx, job, res.Round, why, outcome)
 	}
 	if cancelled && outcome == pipeline.OutcomeStopped {
@@ -1109,14 +1135,11 @@ func (e *Engine) noteMovedHead(ctx context.Context, job *roundJob, pr store.PR, 
 	}
 	// Only commits GitHub confirms: a head the poller has not caught up
 	// with yet (the round fetched a newer one) adds none.
-	var gh GitHub
-	if e.d.GitHub != nil {
-		gh = e.d.GitHub(job.watch.PollIdentity)
-	}
+	gh := e.gh(job.watch.PollIdentity)
 	if gh == nil {
 		return
 	}
-	st, err := gh.Compare(ctx, job.repo.Owner, job.repo.Name, target, pr.HeadSHA)
+	st, err := e.compareStats(ctx, gh, job.repo, target, pr.HeadSHA) // checkDelta's comparison, when it made one
 	if err != nil || st.Commits == 0 {
 		if err != nil {
 			e.log.Info("note on the review: compare", "pr", pr.ID, "err", err)

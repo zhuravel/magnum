@@ -201,3 +201,28 @@ func TestComparePushReadsStatusAndPatches(t *testing.T) {
 		t.Error("a bad ref was accepted")
 	}
 }
+
+// A push comparison carries what Compare reads of the same range, so one
+// call answers both (the engine's comparisons of a tick).
+func TestComparePushCarriesTheCompareStats(t *testing.T) {
+	body := `{"status":"ahead","total_commits":3,"commits":[{"sha":"c1","parents":[{"sha":"p0"}]}],"files":[
+		{"filename":"app/a.rb","status":"modified","additions":4,"deletions":1,"patch":"@@ -1 +1 @@\n-a\n+b"},
+		{"filename":"public/logo.png","status":"added","additions":0,"deletions":0}
+	]}`
+	c, _ := compareFilesClient(body)
+	got, err := c.ComparePush(context.Background(), "talkable", "talkable", cmpBase, cmpHead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stats, err := c.Compare(context.Background(), "talkable", "talkable", cmpBase, cmpHead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (CompareStats{Commits: 3, Files: 2, Additions: 4, Deletions: 1}); stats != want || got.Stats != want {
+		t.Errorf("Compare %+v, ComparePush's stats %+v, want %+v", stats, got.Stats, want)
+	}
+	c, _ = compareFilesClient(listingOf(CompareFileLimit))
+	if got, err := c.ComparePush(context.Background(), "talkable", "talkable", cmpBase, cmpHead); err != nil || got.Stats.Files != -1 {
+		t.Errorf("a listing at the file cap: stats %+v (%v), want Files -1", got.Stats, err)
+	}
+}

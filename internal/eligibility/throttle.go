@@ -16,7 +16,24 @@ type ThrottleDecision struct {
 	// Reason names the rule that is holding the PR back (the one that clears
 	// last); empty when Ready.
 	Reason string
+	// Rule is that rule as a code, for callers that tell the rules apart
+	// (the engine's wait reasons); empty when Ready.
+	Rule Rule
 }
+
+// Rule is a timing rule of Throttle (ThrottleDecision.Rule).
+type Rule string
+
+// The rules Throttle applies.
+const (
+	RuleRequested     Rule = "requested"      // a requested round's debounce
+	RuleQuiet         Rule = "quiet"          // the push quiet period
+	RuleBurst         Rule = "burst"          // the longer quiet period after a burst of pushes
+	RuleInterval      Rule = "interval"       // the minimum re-review interval since the last round
+	RuleDraftInterval Rule = "draft_interval" // the same for a draft
+	RuleCap           Rule = "cap"            // the daily round cap
+	RuleSmallDelta    Rule = "small_delta"    // the re-review threshold
+)
 
 // Throttle decides whether a PR that is already eligible may start a review
 // round at now. It only looks at timing: Muted, filters and quiet hours are
@@ -57,16 +74,17 @@ func Throttle(d config.Daemon, f PRFacts, now time.Time) ThrottleDecision {
 
 	var holdUntil time.Time
 	var reason string
-	hold := func(until time.Time, why string) {
+	var rule Rule
+	hold := func(until time.Time, r Rule, why string) {
 		if until.After(now) && until.After(holdUntil) {
-			holdUntil, reason = until, why
+			holdUntil, rule, reason = until, r, why
 		}
 	}
 	decide := func() ThrottleDecision {
 		if holdUntil.IsZero() {
 			return ThrottleDecision{Ready: true, NextEligibleAt: now}
 		}
-		return ThrottleDecision{NextEligibleAt: holdUntil, Reason: reason}
+		return ThrottleDecision{NextEligibleAt: holdUntil, Reason: reason, Rule: rule}
 	}
 
 	if !f.RequestedAt.IsZero() {
@@ -75,14 +93,14 @@ func Throttle(d config.Daemon, f PRFacts, now time.Time) ThrottleDecision {
 			anchor = f.HeadChangedAt
 		}
 		if debounce := d.RequestDebounce.Duration; debounce > 0 {
-			hold(anchor.Add(debounce), fmt.Sprintf("%s (%s)", ReasonRequested, debounce))
+			hold(anchor.Add(debounce), RuleRequested, fmt.Sprintf("%s (%s)", ReasonRequested, debounce))
 		}
 		return decide()
 	}
 
-	quiet, why := d.PushQuietPeriod.Duration, "push quiet period"
+	quiet, quietRule, why := d.PushQuietPeriod.Duration, RuleQuiet, "push quiet period"
 	if n := burst(d, f.PushTimes); n > 0 && d.BurstQuietPeriod.Duration > quiet {
-		quiet = d.BurstQuietPeriod.Duration
+		quiet, quietRule = d.BurstQuietPeriod.Duration, RuleBurst
 		why = fmt.Sprintf("burst quiet period after %d pushes within %s", n, d.BurstWindow.Duration)
 	}
 	anchor := f.HeadChangedAt
@@ -90,29 +108,30 @@ func Throttle(d config.Daemon, f PRFacts, now time.Time) ThrottleDecision {
 		anchor = f.PendingSince
 	}
 	if quiet > 0 && !anchor.IsZero() {
-		hold(anchor.Add(quiet), fmt.Sprintf("waiting for %s (%s)", why, quiet))
+		hold(anchor.Add(quiet), quietRule, fmt.Sprintf("waiting for %s (%s)", why, quiet))
 	}
 
 	if rereview {
-		interval, name := d.MinRereviewInterval.Duration, "min re-review interval"
+		interval, intervalRule, name := d.MinRereviewInterval.Duration, RuleInterval, "min re-review interval"
 		if f.IsDraft && d.DraftMinRereviewInterval.Duration > 0 {
-			interval, name = d.DraftMinRereviewInterval.Duration, "draft re-review interval"
+			interval, intervalRule, name = d.DraftMinRereviewInterval.Duration, RuleDraftInterval, "draft re-review interval"
 		}
 		if interval > 0 && !f.LastRoundStartedAt.IsZero() {
-			hold(f.LastRoundStartedAt.Add(interval), fmt.Sprintf("waiting for %s (%s)", name, interval))
+			hold(f.LastRoundStartedAt.Add(interval), intervalRule, fmt.Sprintf("waiting for %s (%s)", name, interval))
 		}
 		if limit := d.MaxRoundsPerPRPerDay; limit > 0 && f.RoundsToday >= limit {
-			hold(nextMidnight(now), fmt.Sprintf("daily round cap reached (%d per day)", limit))
+			hold(nextMidnight(now), RuleCap, fmt.Sprintf("daily round cap reached (%d per day)", limit))
 		}
 		if smallDelta(d, f) && !f.DeltaSince.IsZero() {
-			hold(f.DeltaSince.Add(d.RereviewMaxWait.Duration), fmt.Sprintf("%s %d/%d lines since the review (at most %s)",
+			hold(f.DeltaSince.Add(d.RereviewMaxWait.Duration), RuleSmallDelta, fmt.Sprintf("%s %d/%d lines since the review (at most %s)",
 				ReasonSmallDelta, f.DeltaLines, d.RereviewMinLines, d.RereviewMaxWait.Duration))
 		}
 	}
 	return decide()
 }
 
-// Reason prefixes of the rules a caller may need to tell apart.
+// Reason prefixes of two rules (ThrottleDecision.Rule is the code to tell
+// the rules apart by).
 const (
 	// ReasonRequested starts the reason of a requested round's debounce.
 	ReasonRequested = "review requested"

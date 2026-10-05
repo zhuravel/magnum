@@ -42,10 +42,14 @@ const (
 
 // triageData feeds the triage prompt (prompts/triage.md).
 type triageData struct {
-	Kind  string       // pipeline.KindInitial: the whole PR; pipeline.KindRereview: the commits since the last review
-	Lines int          // changed lines, added plus deleted
-	Roles []triageRole // the roles the model may leave out
-	Diff  string
+	Kind string // pipeline.KindInitial: the whole PR; pipeline.KindRereview: the commits since the last review
+	// OwnDiff: the commits since the last review merged the base branch
+	// in or were rebased onto it, so Diff is the PR's own diff (against
+	// its base) of each file whose own change they altered (measureRange).
+	OwnDiff bool
+	Lines   int          // changed lines, added plus deleted
+	Roles   []triageRole // the roles the model may leave out
+	Diff    string
 }
 
 // triageRole is a role the model may leave out, with what it checks.
@@ -86,7 +90,7 @@ func (e *Engine) triage(ctx context.Context, job *roundJob, rs *roundSetup) {
 		e.event(ctx, level, subject, "round.triage", "triage: every role runs: "+why, map[string]any{"why": why})
 	}
 
-	files, err := e.triageFiles(ctx, job, rs.target)
+	files, own, err := e.triageFiles(ctx, job, rs.target)
 	if err != nil {
 		everyRole("warn", "the diff could not be read: "+oneLine(err.Error(), triageWhyRunes))
 		return
@@ -115,7 +119,7 @@ func (e *Engine) triage(ctx context.Context, job *roundJob, rs *roundSetup) {
 		return
 	}
 
-	ans, err := e.askTriage(ctx, tc, triageData{Kind: job.kind, Lines: lines, Roles: offered, Diff: diff})
+	ans, err := e.askTriage(ctx, tc, triageData{Kind: job.kind, OwnDiff: own, Lines: lines, Roles: offered, Diff: diff})
 	if err != nil {
 		everyRole("warn", err.Error())
 		return
@@ -158,38 +162,40 @@ func (e *Engine) triage(ctx context.Context, job *roundJob, rs *roundSetup) {
 		msg += ": " + reason
 	}
 	e.event(ctx, "info", subject, "round.triage", msg,
-		map[string]any{"lines": lines, "max_lines": tc.MaxLines, "runs": roleNames(rs.toRun), "skips": skipped, "reason": reason})
+		map[string]any{"lines": lines, "max_lines": tc.MaxLines, "own_diff": own, "runs": roleNames(rs.toRun), "skips": skipped, "reason": reason})
 }
 
 // triageFiles reads the diff the round reviews from GitHub, as the watch's
 // poll identity (like rerunRoles): for a re-review the commits since the
-// reviewed one, else (a first review, or a re-review of the reviewed commit
-// itself) the whole PR, i.e. the base branch's merge base with target, which
-// GitHub's comparison of the base branch with target is. A post-merge round
-// compares with its merge base instead: the base branch holds the merged
-// head after a merge-commit merge.
-func (e *Engine) triageFiles(ctx context.Context, job *roundJob, target string) ([]github.FileDelta, error) {
-	var gh GitHub
-	if e.d.GitHub != nil {
-		gh = e.d.GitHub(job.watch.PollIdentity)
-	}
+// reviewed one, measured like the re-review gate measured them
+// (measureRange): when they merged the base branch in or were rebased (own
+// is true), the PR's own diff of each file whose own change they altered,
+// not the base branch's files. Else (a first review, or a re-review of the
+// reviewed commit itself) the whole PR, i.e. the base branch's merge base
+// with target, which GitHub's comparison of the base branch with target
+// is. A post-merge round compares with its merge base instead: the base
+// branch holds the merged head after a merge-commit merge.
+func (e *Engine) triageFiles(ctx context.Context, job *roundJob, target string) (files []github.FileDelta, own bool, err error) {
+	gh := e.gh(job.watch.PollIdentity)
 	if gh == nil {
-		return nil, errors.New("no GitHub client")
+		return nil, false, errors.New("no GitHub client")
 	}
-	base := deref(job.pr.BaseRef)
-	if base == "" {
-		base = job.repo.DefaultBranch
+	if reviewed := deref(job.pr.ReviewedSHA); job.kind == pipeline.KindRereview && reviewed != "" && reviewed != target {
+		m, err := e.measureRange(ctx, gh, job.repo, job.diffBase(), reviewed, target)
+		if err != nil {
+			return nil, false, err
+		}
+		return m.files(), m.ownOK, nil
 	}
+	base := prBase(job.repo, job.pr)
 	if job.postMerge && job.mergeBase != "" {
 		base = job.mergeBase
 	}
-	if reviewed := deref(job.pr.ReviewedSHA); job.kind == pipeline.KindRereview && reviewed != "" && reviewed != target {
-		base = reviewed
-	}
 	if base == "" {
-		return nil, errors.New("no base to compare with")
+		return nil, false, errors.New("no base to compare with")
 	}
-	return gh.CompareFiles(ctx, job.repo.Owner, job.repo.Name, base, target)
+	files, err = e.compareFiles(ctx, gh, job.repo, base, target)
+	return files, false, err
 }
 
 // triageAnswer is what the model says: the roles that run, and why.

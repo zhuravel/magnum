@@ -9,6 +9,8 @@ Work at {{.Effort}} reasoning effort for this re-review.
 {{- end}}
 {{- if .ForcePushed}}
 The author rewrote history: `{{.PreviousHeadSHA}}` is no longer in the branch. Review the full PR diff again, then compare it with your earlier findings.
+{{- else if .BaseMerged}}
+The push merged the base branch, so `{{.PreviousHeadSHA}}..{{.HeadSHA}}` carries the base branch's commits too. Review only what changed in the PR's own diff: compare `git diff {{if .BaseSHA}}{{.BaseSHA}}{{else}}origin/{{.BaseRef}}{{end}}...{{.PreviousHeadSHA}}` with `git diff {{if .BaseSHA}}{{.BaseSHA}}{{else}}origin/{{.BaseRef}}{{end}}...{{.HeadSHA}}`, not `git diff {{.PreviousHeadSHA}}..{{.HeadSHA}}`.
 {{- else}}
 Read the new commits with `git log --oneline {{.PreviousHeadSHA}}..{{.HeadSHA}}` and `git diff {{.PreviousHeadSHA}}..{{.HeadSHA}}`.
 {{- end}}
@@ -46,6 +48,9 @@ previous_review_id: {{.PreviousReviewID}}
 previous_head_sha: {{.PreviousHeadSHA}}
 since: {{.Since}}
 force_pushed: {{.ForcePushed}}
+{{- if .BaseMerged}}
+base_merged: true
+{{- end}}
 moved_from: {{.MovedFrom}}
 threads_file: {{.ThreadsFile}}
 reports:

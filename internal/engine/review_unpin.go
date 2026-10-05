@@ -72,7 +72,7 @@ func (e *Engine) unpinForReview(ctx context.Context, repo store.Repo, pr store.P
 		held = e.reviewSlotHold(ctx, slot)
 	}
 	if held != "" {
-		e.noteGate(ctx, pr.ID, held)
+		e.noteGate(ctx, pr.ID, gate{reason: WaitSlot, text: held})
 	}
 	return note, held
 }

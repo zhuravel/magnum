@@ -228,7 +228,13 @@ type RoundInput struct {
 	FormerLogins []string
 	Since        time.Time // rereview: read every comment since then
 	ForcePushed  bool
-	MovedFrom    string // agents.Workspace.MovedFrom
+	// BaseMerged (rereview): the commits since the previous review have a
+	// merge commit (the base branch merged in), so previous..TargetSHA
+	// carries the base branch's commits too: the re-review prompts compare
+	// the PR's own diff before and after them instead
+	// (RoleData/JudgeData.BaseMerged). ForcePushed wins over it.
+	BaseMerged bool
+	MovedFrom  string // agents.Workspace.MovedFrom
 
 	DryRun bool // the judge posts nothing; GitHub is not consulted
 	// Blind (magnum eval, with DryRun): the round replays a pinned head to
@@ -276,6 +282,7 @@ type Switched struct {
 	TargetSHA   string // the commit now checked out (a fetch may find a newer one); "" = the one asked for
 	BaseSHA     string // its merge base with the base ("" = unknown: the round keeps the old one)
 	ForcePushed bool   // the previous review's commit is not an ancestor of TargetSHA
+	BaseMerged  bool   // the commits since the previous review have a merge commit (RoundInput.BaseMerged)
 }
 
 // Pause asks the engine to pause an agent kind.

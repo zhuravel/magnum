@@ -97,13 +97,13 @@ func (e *Engine) followApproval(ctx context.Context, repo store.Repo, pr store.P
 	if v, ok := e.getKV(ctx, kvApprovalKept(pr.ID)); ok && v == kept {
 		return
 	}
-	gh := e.d.GitHub(id.Name)
+	gh := e.gh(id.Name)
 	if gh == nil {
 		return
 	}
 	subject := prSubject(repo, pr.Number)
 	data := map[string]any{"review_id": reviewID, "reviewed_sha": reviewed, "head_sha": pr.HeadSHA, "identity": id.Name}
-	cs, cerr := gh.Compare(ctx, repo.Owner, repo.Name, reviewed, pr.HeadSHA)
+	cs, cerr := e.compareStats(ctx, gh, repo, reviewed, pr.HeadSHA) // the trivial-delta check's comparison, when it made one
 	switch {
 	case cerr == nil && cs.Commits == 0:
 		e.setKV(ctx, kvApprovalKept(pr.ID), kept)

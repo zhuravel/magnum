@@ -245,24 +245,6 @@ func TestWaitClearedWhenTheRoundStarts(t *testing.T) {
 	}
 }
 
-func TestWaitGateClassification(t *testing.T) {
-	h := newHarness(t)
-	for gate, reason := range map[string]string{
-		"identity talkable-app unhealthy: x":                                WaitIdentity,
-		"Codex budget 85% used (soft cap 80%): first reviews wait; ...":     WaitBudget,
-		"working Codex agents at the limit (5 working, max 5)":              WaitCapacity,
-		gateCapacity + "3 rounds running (max_concurrent_reviews 3)":        WaitCapacity,
-		"slot review3 is broken: x (magnum slots repair review3)":           WaitSlot,
-		gateNoFreeSlot + "talkable/talkable pool":                           WaitSlot,
-		"waiting for the PR's details from GitHub":                          WaitOther,
-		"claude paused (usage_limit) until 15:00 (no pause recorded in kv)": WaitOther,
-	} {
-		if got := h.e.gateWait(h.ctx, gate); got.Reason != reason || got.Detail != gate {
-			t.Errorf("%q: %+v, want %s", gate, got, reason)
-		}
-	}
-}
-
 func TestHumanDuration(t *testing.T) {
 	for d, want := range map[time.Duration]string{5 * time.Minute: "5m", 2 * time.Hour: "2h", 90 * time.Minute: "1h30m", 45 * time.Second: "45s"} {
 		if got := humanDuration(d); got != want {

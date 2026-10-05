@@ -111,10 +111,7 @@ func (e *Engine) postMergeBase(ctx context.Context, job *roundJob, target string
 // as the watch's poll identity ("" when it cannot say, or the answer is not
 // a full commit id).
 func (e *Engine) mergeCommit(ctx context.Context, job *roundJob) string {
-	var gh GitHub
-	if e.d.GitHub != nil {
-		gh = e.d.GitHub(job.watch.PollIdentity)
-	}
+	gh := e.gh(job.watch.PollIdentity)
 	if gh == nil {
 		return ""
 	}

@@ -44,20 +44,64 @@ var DeltaClasses = config.TrivialDeltaClasses
 // A class missing from allowed makes the files that need it non-trivial, so
 // an empty allowed never skips.
 func TrivialDelta(files []github.FileDelta, allowed []string) (classes []string, trivial bool) {
-	if len(files) == 0 {
-		return nil, false
-	}
+	_, classes, trivial = assessDelta(files, allowed)
+	return classes, trivial
+}
+
+// assessDelta walks each file's patch once (walkPatch) for both questions
+// asked of a delta: its size for the re-review threshold (MeasureDelta) and
+// whether it is trivial under allowed, with the classes it used
+// (TrivialDelta; classes is nil when it is not). A documentation file counts
+// nothing and is docs without looking at its lines when docs is allowed;
+// otherwise its lines are judged like any other file's (a .md file has no
+// comment syntax, so only its whitespace changes pass).
+func assessDelta(files []github.FileDelta, allowed []string) (size DeltaSize, classes []string, trivial bool) {
+	size = DeltaSize{Complete: true}
+	trivial = len(files) > 0
 	used := map[string]bool{}
-	for _, f := range files {
-		fc, ok := deltaFileClasses(f, allowed)
-		if !ok {
-			return nil, false
+	// accept takes a modified file's walk: trivial when no code line
+	// changed and every class it used is allowed.
+	accept := func(lines int, fc []string) bool {
+		if lines > 0 || len(fc) == 0 {
+			return false
+		}
+		for _, c := range fc {
+			if !slices.Contains(allowed, c) {
+				return false
+			}
 		}
 		for _, c := range fc {
 			used[c] = true
 		}
+		return true
 	}
-	return slices.Sorted(maps.Keys(used)), true
+	for _, f := range files {
+		switch {
+		case f.Status == "added" || f.Status == "renamed" || f.Status == "copied":
+			size.AddedFiles++
+			trivial = false
+		case f.Truncated || f.Patch == "":
+			size.Complete = false
+			trivial = false
+		case docDeltaPath(f.Path):
+			switch {
+			case !trivial || f.Status != "modified":
+				trivial = false
+			case slices.Contains(allowed, DeltaDocs):
+				used[DeltaDocs] = true
+			default:
+				trivial = accept(walkPatch(f.Path, f.Patch))
+			}
+		default:
+			lines, fc := walkPatch(f.Path, f.Patch)
+			size.Lines += lines
+			trivial = trivial && f.Status == "modified" && accept(lines, fc)
+		}
+	}
+	if !trivial {
+		return size, nil, false
+	}
+	return size, slices.Sorted(maps.Keys(used)), true
 }
 
 // DeltaLabel is how a review note and events name the classes: "comments
@@ -82,30 +126,6 @@ func DeltaLabel(classes []string) string {
 		return names[0] + " only"
 	}
 	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1] + " only"
-}
-
-// deltaFileClasses returns the classes one file's change uses; ok is false
-// when the file needs a re-review. A documentation file is docs without
-// looking at its lines when docs is allowed; otherwise its lines are judged
-// like any other file's (a .md file has no comment syntax, so only its
-// whitespace changes pass).
-func deltaFileClasses(f github.FileDelta, allowed []string) (classes []string, ok bool) {
-	if f.Truncated || f.Status != "modified" || f.Patch == "" {
-		return nil, false
-	}
-	if docDeltaPath(f.Path) && slices.Contains(allowed, DeltaDocs) {
-		return []string{DeltaDocs}, true
-	}
-	classes, ok = deltaPatchClasses(f.Path, f.Patch)
-	if !ok || len(classes) == 0 {
-		return nil, false
-	}
-	for _, c := range classes {
-		if !slices.Contains(allowed, c) {
-			return nil, false
-		}
-	}
-	return classes, true
 }
 
 // docDeltaPath reports whether a file is documentation: a .md, .txt, .rst
@@ -189,33 +209,37 @@ type deltaLine struct {
 	comment bool
 }
 
-// deltaPatchClasses reads one file's patch hunk by hunk. A blank added or
-// removed line is whitespace. The other added and removed lines between two
-// context lines (a change run) are judged by deltaRunClasses: their code
-// must stay the same sequence, so a moved or swapped line is a change. The
-// block state is tracked per hunk, apart for the old side (context and
+// walkPatch reads one file's patch hunk by hunk, once, for both the
+// re-review threshold and the trivial-delta check: lines counts its changed
+// code lines (MeasureDelta) and classes lists the trivial classes its change
+// uses (sorted, unique), which describe it only when lines is 0: the patch
+// is trivial exactly then (assessDelta). A blank added or removed line
+// is whitespace and counts nothing. The other added and removed lines
+// between two context lines (a change run) are judged by runChange: their
+// code must stay the same sequence, so a moved or swapped line is a change.
+// The block state is tracked per hunk, apart for the old side (context and
 // removed lines) and the new side (context and added lines); a context line
 // inside a block on one side only (code commented out, or back in, by an
-// added or removed delimiter) is a change too. ok is false on a change or a
-// line it cannot read.
-func deltaPatchClasses(p, patch string) (classes []string, ok bool) {
+// added or removed delimiter) counts one, and so does a line it cannot
+// read.
+func walkPatch(p, patch string) (lines int, classes []string) {
 	syntax := fileCommentSyntax(p)
 	indent := indentSignificant(p)
 	used := map[string]bool{}
 	var removed, added []deltaLine
 	oldState, newState := blockUnknown, blockUnknown
-	// settle ends a change run and checks that both sides agree on being in
-	// a block; false when either fails.
-	settle := func() bool {
-		ok := deltaRunClasses(removed, added, used)
+	// settle ends a change run; a block that one side is in and the other
+	// is not makes the next context line a change.
+	settle := func() {
+		lines += runChange(removed, added, used)
 		removed, added = removed[:0], added[:0]
-		return ok && (oldState == blockIn) == (newState == blockIn)
+		if (oldState == blockIn) != (newState == blockIn) {
+			lines++
+		}
 	}
 	for _, l := range strings.Split(patch, "\n") {
 		if strings.HasPrefix(l, "@@") {
-			if !settle() {
-				return nil, false
-			}
+			settle()
 			oldState, newState = blockUnknown, blockUnknown
 			continue
 		}
@@ -227,9 +251,7 @@ func deltaPatchClasses(p, patch string) (classes []string, ok bool) {
 		switch l[0] {
 		case '\\': // "\ No newline at end of file"
 		case ' ':
-			if !settle() {
-				return nil, false
-			}
+			settle()
 			_, oldState = syntax.classify(t, oldState)
 			_, newState = syntax.classify(t, newState)
 		case '-', '+':
@@ -245,21 +267,23 @@ func deltaPatchClasses(p, patch string) (classes []string, ok bool) {
 			comment, *state = syntax.classify(t, *state)
 			*side = append(*side, deltaLine{norm: normalizeDeltaLine(text, indent), comment: comment})
 		default:
-			return nil, false
+			lines++
 		}
 	}
-	if !settle() {
-		return nil, false
-	}
-	return slices.Sorted(maps.Keys(used)), true
+	settle()
+	return lines, slices.Sorted(maps.Keys(used))
 }
 
-// deltaRunClasses judges one change run, adding the classes it uses to used.
-// The code lines removed and added must be the same sequence once
-// normalized: they changed only in whitespace (whitespace). A comment line
-// pairs with an equal comment of the other side (whitespace) or stays a
-// comment (comments). It reports false when the code changed.
-func deltaRunClasses(removed, added []deltaLine, used map[string]bool) bool {
+// runChange judges one change run: it returns how many of its code lines
+// changed and, when none did, adds the classes it uses to used. Comment
+// lines count nothing: one that pairs with an equal comment of the other
+// side only moved in whitespace (whitespace), any other is comments. The
+// code lines removed and added must be the same sequence once normalized
+// (they changed only in whitespace); otherwise a code line whose normalized
+// text the other side of the run has too only moved in whitespace and the
+// rest count one each, and code lines that are all matched but in another
+// order count all.
+func runChange(removed, added []deltaLine, used map[string]bool) int {
 	var oldCode, newCode []string
 	comments := map[string]int{}
 	for _, l := range removed {
@@ -269,29 +293,47 @@ func deltaRunClasses(removed, added []deltaLine, used map[string]bool) bool {
 			oldCode = append(oldCode, l.norm)
 		}
 	}
+	var classes []string
 	for _, l := range added {
 		switch {
 		case !l.comment:
 			newCode = append(newCode, l.norm)
 		case comments[l.norm] > 0:
 			comments[l.norm]--
-			used[DeltaWhitespace] = true
+			classes = append(classes, DeltaWhitespace)
 		default:
-			used[DeltaComments] = true
+			classes = append(classes, DeltaComments)
 		}
 	}
 	if !slices.Equal(oldCode, newCode) {
-		return false
+		left := map[string]int{}
+		for _, c := range oldCode {
+			left[c]++
+		}
+		matched := 0
+		for _, c := range newCode {
+			if left[c] > 0 {
+				left[c]--
+				matched++
+			}
+		}
+		if changed := len(oldCode) + len(newCode) - 2*matched; changed > 0 {
+			return changed
+		}
+		return len(oldCode) + len(newCode)
 	}
 	if len(oldCode) > 0 {
-		used[DeltaWhitespace] = true
+		classes = append(classes, DeltaWhitespace)
 	}
 	for _, n := range comments {
 		if n > 0 {
-			used[DeltaComments] = true
+			classes = append(classes, DeltaComments)
 		}
 	}
-	return true
+	for _, c := range classes {
+		used[c] = true
+	}
+	return 0
 }
 
 // normalizeDeltaLine collapses every run of whitespace in text to one space
@@ -451,105 +493,6 @@ type DeltaSize struct {
 // one side has inside a block comment and the other does not (code
 // commented out, or back in) counts one, like a line it cannot read.
 func MeasureDelta(files []github.FileDelta) DeltaSize {
-	s := DeltaSize{Complete: true}
-	for _, f := range files {
-		switch {
-		case f.Status == "added" || f.Status == "renamed" || f.Status == "copied":
-			s.AddedFiles++
-		case f.Truncated || f.Patch == "":
-			s.Complete = false
-		case !docDeltaPath(f.Path):
-			s.Lines += patchChangedLines(f.Path, f.Patch)
-		}
-	}
+	s, _, _ := assessDelta(files, nil)
 	return s
-}
-
-// patchChangedLines counts one file's changed code lines (MeasureDelta),
-// walking the patch like deltaPatchClasses.
-func patchChangedLines(p, patch string) int {
-	syntax := fileCommentSyntax(p)
-	indent := indentSignificant(p)
-	n := 0
-	var removed, added []deltaLine
-	oldState, newState := blockUnknown, blockUnknown
-	// settle ends a change run; a block that one side is in and the other
-	// is not makes the next context line a change.
-	settle := func() {
-		n += runChangedLines(removed, added)
-		removed, added = removed[:0], added[:0]
-		if (oldState == blockIn) != (newState == blockIn) {
-			n++
-		}
-	}
-	for _, l := range strings.Split(patch, "\n") {
-		if strings.HasPrefix(l, "@@") {
-			settle()
-			oldState, newState = blockUnknown, blockUnknown
-			continue
-		}
-		if l == "" {
-			l = " "
-		}
-		text := l[1:]
-		t := strings.TrimSpace(text)
-		switch l[0] {
-		case '\\': // "\ No newline at end of file"
-		case ' ':
-			settle()
-			_, oldState = syntax.classify(t, oldState)
-			_, newState = syntax.classify(t, newState)
-		case '-', '+':
-			if t == "" {
-				continue // a blank line
-			}
-			state, side := &newState, &added
-			if l[0] == '-' {
-				state, side = &oldState, &removed
-			}
-			var comment bool
-			comment, *state = syntax.classify(t, *state)
-			*side = append(*side, deltaLine{norm: normalizeDeltaLine(text, indent), comment: comment})
-		default:
-			n++
-		}
-	}
-	settle()
-	return n
-}
-
-// runChangedLines counts the code lines of one change run that changed:
-// comment lines count nothing; a code line whose normalized text the other
-// side of the run has too only moved in whitespace; the rest count one
-// each. Code lines that are all matched but in another order count all.
-func runChangedLines(removed, added []deltaLine) int {
-	var oldCode, newCode []string
-	for _, l := range removed {
-		if !l.comment {
-			oldCode = append(oldCode, l.norm)
-		}
-	}
-	for _, l := range added {
-		if !l.comment {
-			newCode = append(newCode, l.norm)
-		}
-	}
-	if slices.Equal(oldCode, newCode) {
-		return 0
-	}
-	left := map[string]int{}
-	for _, c := range oldCode {
-		left[c]++
-	}
-	matched := 0
-	for _, c := range newCode {
-		if left[c] > 0 {
-			left[c]--
-			matched++
-		}
-	}
-	if changed := len(oldCode) + len(newCode) - 2*matched; changed > 0 {
-		return changed
-	}
-	return len(oldCode) + len(newCode)
 }

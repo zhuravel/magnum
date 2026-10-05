@@ -1414,3 +1414,39 @@ editing history. Code, config comments and prompts reference these by their head
   PR again, and narrow screens drop columns in `prbDropOrder` as before. The registry key `board.layout`
   the switcher saved is ignored. The entry above ("Board: two-line rows") stays as the record of what was
   tried.
+- **A push that merges the base branch is reviewed by the PR's own diff** (2026-10-05; the gate above
+  measured such a push by the PR's own diff, but everything after it took the raw range: a push that merged
+  master and changed 40 of the PR's lines went over triage's `max_lines` on master's files and ran every
+  role, reran the simplify reviewer on master's lines, and its reviewers read `git diff previous..head`,
+  which carries master's commits). One measure of a range from the reviewed commit (or a role's last run)
+  serves the gate, triage and the rerun: the range itself, and, when it has a merge commit or diverged,
+  the PR's own diff against its base before and after it. Triage then reads the files whose own change
+  differs, each as its own diff after the push (a file the PR no longer changes as its earlier change
+  reverted), and says so in its prompt (`.OwnDiff`); the rerun measures that change. The re-review round
+  learns that the commits since the review have a merge commit (`RoundInput.BaseMerged`, again after a
+  restart on a newer head) and the reviewer, restart and judge prompts say to compare `git diff
+  <base>...<previous>` with `git diff <base>...<head>`, not `previous..head`; the judge's `<magnum>` block
+  carries `base_merged: true`. Each of these is rendered only when true, and a rewritten history
+  (`force_pushed`) still asks for the whole PR. Every comparison goes through a per-tick memo keyed by
+  repository, range and kind of call, which a push comparison of the same range also answers (it carries
+  Compare's stats): the poll's trivial-delta check, approval check and since-review size, and a review's
+  delta check and its "arrived during the review" note, compare a range once; a failed call is never
+  kept. Rejected: a local `git` check of the range (the measure would differ from the gate's, and the
+  slot's clone may not have fetched the base branch).
+- **A head behind the reviewed commit is not a 0-line delta** (2026-10-05). A force push back to an
+  ancestor of the reviewed commit makes GitHub call the range `behind`, with no commit and no file: it was
+  measured as a complete delta of 0 lines, so `rereview_min_lines` held the re-review up to
+  `rereview_max_wait` while the review still discussed code the push dropped. A range GitHub reports
+  `behind`, or with no commit, now measures nothing, like a failed compare: the re-review follows the
+  other timing rules. Rejected: comparing the other way round (head...reviewed lists what the push removed,
+  but as the base branch would see it, not as the review's reader does).
+- **A round whose judge turn continues is not refunded** (2026-10-05; a round a restart stopped during the
+  judge's turn was refunded, then recovery paused it and its continue posted, so the posted round never
+  counted against the cap and `last_round_started_at` went back to the round before). A round the daemon's
+  shutdown stopped (not `magnum abort` or `ignore`) and a usage or login pause, once the judge was
+  prompted, continue the judge's turn: the round counted at its start, is not refunded, and its continue
+  counts nothing again, also when it becomes a full round (the judge's session was lost, or its checkout
+  is gone). A round whose judge was not prompted is still refunded and its restart counts as a new round.
+  Recovery's note says where the round was: before it started, before it prompted any agent, or while
+  its reviewers ran. Rejected: refunding and counting the continue instead (its start would move the
+  re-review interval to a time no round started, and a crash before the continue would never count it).

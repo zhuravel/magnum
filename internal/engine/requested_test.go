@@ -92,6 +92,9 @@ func reqSetFiles(h *harness, key string, files []github.FileDelta) {
 		h.gh.files = map[string][]github.FileDelta{}
 	}
 	h.gh.files[key] = files
+	if _, ok := h.gh.compare[key]; !ok {
+		h.gh.compare[key] = github.CompareStats{Commits: 1} // a head ahead has a commit, or GitHub calls it behind
+	}
 }
 
 // reqWatches applies mod to every watch of the harness's config.

@@ -273,8 +273,8 @@ func TestOldForcedRereviewIsNotRechecked(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.restart()
-	if got := ownDiffCalls(h); len(got) != 0 {
-		t.Fatalf("own diff compares = %q, want none", got)
+	if rec, ok := h.e.deltaRecord(h.ctx, pr.ID); !ok || rec.Version != 0 {
+		t.Fatalf("delta record %+v: the forced PR was measured again", rec)
 	}
 	if evs := trivialEvents(t, h); len(evs) != 0 {
 		t.Fatalf("pr.trivial_delta events: %+v", evs)

@@ -388,6 +388,24 @@ func (e *Engine) restoreBaseline(ctx context.Context, repo store.Repo, w config.
 	return true
 }
 
+// interruptedPhase says where the round of pr, whose judge was not prompted,
+// was when the daemon restarted: before it started (claiming), before it
+// prompted any agent, or while its reviewers ran (a run created since the
+// round's start sent its prompt). Each goes back in line.
+func (e *Engine) interruptedPhase(ctx context.Context, pr store.PR) string {
+	if pr.State == store.PRClaiming {
+		return "daemon restarted before the round started"
+	}
+	if runs, err := e.st.RunsByPR(ctx, pr.ID); err == nil && pr.LastRoundStartedAt != nil {
+		for _, r := range runs {
+			if r.SubmittedAt != nil && !r.CreatedAt.Before(*pr.LastRoundStartedAt) {
+				return "daemon restarted while the reviewers ran; the round starts again"
+			}
+		}
+	}
+	return "daemon restarted before the round prompted its agents; the round starts again"
+}
+
 // recoverRows re-evaluates rows a previous daemon left mid-flight, before
 // anything starts: sessions are rebound to the panes herdr restored (by
 // session id), PRs whose judge turn is not over (judgePrompted, from the run
@@ -434,7 +452,7 @@ func (e *Engine) recoverRows(ctx context.Context) {
 		repo, _ := e.st.RepoByID(ctx, pr.RepoID)
 		subject := prSubject(repo, pr.Number)
 		to := claimableState(pr)
-		why := "daemon restarted before the round started"
+		why := e.interruptedPhase(ctx, pr)
 		if e.judgePrompted(ctx, pr) {
 			to = store.PRPaused
 			why = "daemon restarted during the judge's turn; it continues when idle"

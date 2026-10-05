@@ -142,7 +142,7 @@ func (e *Engine) dismissFormer(ctx context.Context, job *roundJob, pr store.PR, 
 		if !staleCR && !approvals {
 			continue
 		}
-		gh := e.d.GitHub(id.Name)
+		gh := e.gh(id.Name)
 		if gh == nil {
 			e.event(ctx, "warn", subject, "review.former_dismiss_failed",
 				fmt.Sprintf("no GitHub client for the former identity %s: its reviews stay as they are", id.Name), nil)

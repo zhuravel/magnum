@@ -283,16 +283,6 @@ func (e *Engine) health(ctx context.Context) {
 	e.checkBudget(ctx)
 }
 
-// pauseReason is why dispatch is closed for everything ("" = open): the
-// daemon pause, a drain before a restart, an infrastructure pause. A paused
-// agent kind only holds the rounds whose roles use it (kindPauseReason).
-func (e *Engine) pauseReason(ctx context.Context) string {
-	if r := e.userPause(ctx); r != "" {
-		return r
-	}
-	return e.holdReason(ctx)
-}
-
 // userPause is `magnum pause` ("" = none): it holds automatic reviews,
 // while a review the user asks for (a forced PR: `magnum review`, the board,
 // the picker) still runs.

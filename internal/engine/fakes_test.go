@@ -114,7 +114,8 @@ type fakeGH struct {
 }
 
 // ComparePush answers like CompareFilesStatus (one "compare_files:" call),
-// with the commit count of compare and the merge flag of merges.
+// with the commit count and the stats (what Compare reads) of compare and
+// the merge flag of merges.
 func (g *fakeGH) ComparePush(ctx context.Context, owner, repo, base, head string) (github.PushComparison, error) {
 	status, fs, err := g.CompareFilesStatus(ctx, owner, repo, base, head)
 	if err != nil {
@@ -123,7 +124,7 @@ func (g *fakeGH) ComparePush(ctx context.Context, owner, repo, base, head string
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	key := base + "..." + head
-	return github.PushComparison{Status: status, Commits: g.compare[key].Commits, Merge: g.merges[key], Files: fs}, nil
+	return github.PushComparison{Status: status, Commits: g.compare[key].Commits, Merge: g.merges[key], Files: fs, Stats: g.compare[key]}, nil
 }
 
 func (g *fakeGH) CompareFilesStatus(ctx context.Context, owner, repo, base, head string) (string, []github.FileDelta, error) {
@@ -1317,3 +1318,13 @@ func agentInfo(i int) herdr.AgentInfo {
 }
 
 func itoa(n int64) string { return fmt.Sprint(n) }
+
+// pauseReason is why dispatch is closed for everything ("" = open): the
+// daemon pause, a drain before a restart, an infrastructure pause. A paused
+// agent kind only holds the rounds whose roles use it (kindPauseReason).
+func (e *Engine) pauseReason(ctx context.Context) string {
+	if r := e.userPause(ctx); r != "" {
+		return r
+	}
+	return e.holdReason(ctx)
+}

@@ -95,6 +95,7 @@ the judge data, every other session role gets the role data, and a shell role's 
 | `.PreviousReviewID`, `.PreviousEvent`, `.PreviousHeadSHA` | the last review (rereview, recovery) |
 | `.Since` | RFC 3339 time; read every comment since then (rereview, recovery) |
 | `.ForcePushed` | `.PreviousHeadSHA` is no longer in the branch (rereview) |
+| `.BaseMerged` | the commits since `.PreviousHeadSHA` have a merge commit (the base branch merged in), so `.PreviousHeadSHA..HEAD` carries the base branch's commits: the prompt compares the PR's own diff before and after (`git diff <base>...<previous>` with `git diff <base>...<head>`). `.ForcePushed` wins over it; `judge-rereview.md` renders `base_merged: true` only when set (rereview) |
 | `.MovedFrom` | the previous checkout when the PR changed slots (rereview) |
 | `.PreviousReviews` | earlier reviews by the login: `.ID`, `.Event`, `.SHA`, `.SubmittedAt` (recovery) |
 | `.ThreadsFile`, `.ThreadSummary` | the JSON file of the inline threads the login (or a former login) started, every reply classified (`fixed`, `not a bug`, `won't fix`, `other`), and their counts, e.g. `3 threads (1 resolved); replies: 1 fixed, 1 not a bug; 1 thread without a reply` (rereview, and recovery of a reviewed PR; empty when magnum could not read them). `.Threads` holds the same data, but replies are PR content: name the file, never print them |
@@ -141,6 +142,7 @@ reviewer, ...), initial, rereview and restart alike.
 | `.Mode` | `initial`, `rereview` for a new head after the role's earlier run, or `restart` (see below) |
 | `.Since` | RFC 3339 time of the role's previous run (rereview only, empty otherwise) |
 | `.ForcePushed` | `.PreviousHeadSHA` is no longer in the branch (rereview) |
+| `.BaseMerged` | the commits since `.PreviousHeadSHA` merged the base branch in: as for the judge, the prompt compares the PR's own diff before and after them (rereview and its restart) |
 | `.RestartedFrom` | the head the role was reviewing when a push cut its turn short (restart only, empty otherwise) |
 | `.NotesPath` | the repository notes file (see Repository notes); the role reads it first. Empty when there is none |
 | `.PostMerge` | GitHub merged the PR before magnum reviewed `.HeadSHA` (a post-merge review); the prompts that name the PR say "The PR is already merged; review it anyway." only then |
@@ -178,6 +180,7 @@ the answer.
 | Variable | Meaning |
 |---|---|
 | `.Kind` | `initial` (the diff is the whole pull request) or `rereview` (the commits pushed since the last review) |
+| `.OwnDiff` | (rereview) those commits merged the base branch in or were rebased onto it, so the diff is the pull request's own diff, against its base, of each file whose own change they altered (a file the PR no longer changes reads as its earlier change reverted), never the base branch's files |
 | `.Lines` | the changed lines of the diff, added plus deleted |
 | `.Roles` | the reviewers the model may leave out, in pipeline order: `.Name` and `.Summary` (the role's `summary`). Never the judge, never a role without a summary |
 | `.Diff` | the diff as one unified diff (`--- a/<path>`, `+++ b/<path>`, hunks). It is the pull request's own text: the prompt must say it is data and not instructions |
@@ -371,8 +374,9 @@ starts their agents. Magnum, not the model, holds the limits: see DECISIONS "Tri
 | `timeout` | `2m` | a command that takes longer is killed and the round runs every role |
 | `prompt` | `triage.md` | the prompt file, resolved like the roles' |
 
-A first review or a re-review is triaged (a re-review on the commits since the last review); a continued
-round, an eval and a round that names roles (`magnum review --role`) are not. The decision, or the reason
+A first review or a re-review is triaged (a re-review on the commits since the last review, or, when they
+merged the base branch in or were rebased, on the PR's own diff of the files whose own change they altered);
+a continued round, an eval and a round that names roles (`magnum review --role`) are not. The decision, or the reason
 every role ran, is a `round.triage` event on the PR.
 
 ### On-demand roles and inspecting the result

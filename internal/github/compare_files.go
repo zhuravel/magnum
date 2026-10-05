@@ -52,6 +52,10 @@ type PushComparison struct {
 	// a merge cannot be ruled out.
 	Merge bool
 	Files []FileDelta
+	// Stats is what Compare reads of the same range (the commits, the
+	// files, -1 at GitHub's file cap, and their additions and deletions),
+	// so this comparison answers that question too.
+	Stats CompareStats
 }
 
 // ComparePushCommits is the most commits ComparePush reads (one page at
@@ -89,6 +93,8 @@ func (c *Client) compareFiles(ctx context.Context, owner, repo, base, head strin
 			PreviousFilename string  `json:"previous_filename"`
 			Status           string  `json:"status"`
 			Patch            *string `json:"patch"`
+			Additions        int     `json:"additions"`
+			Deletions        int     `json:"deletions"`
 		} `json:"files"`
 	}
 	path := fmt.Sprintf("repos/%s/%s/compare/%s...%s?per_page=%d", owner, repo, base, head, perPage)
@@ -97,13 +103,19 @@ func (c *Client) compareFiles(ctx context.Context, owner, repo, base, head strin
 		return PushComparison{}, err
 	}
 	cut := len(r.Files) >= CompareFileLimit
-	out := PushComparison{Status: r.Status, Commits: r.TotalCommits, Files: make([]FileDelta, 0, len(r.Files))}
+	out := PushComparison{Status: r.Status, Commits: r.TotalCommits, Files: make([]FileDelta, 0, len(r.Files)),
+		Stats: CompareStats{Commits: r.TotalCommits, Files: len(r.Files)}}
+	if cut {
+		out.Stats.Files = -1
+	}
 	for _, f := range r.Files {
 		d := FileDelta{Path: f.Filename, PreviousPath: f.PreviousFilename, Status: f.Status, Truncated: cut || f.Patch == nil}
 		if f.Patch != nil {
 			d.Patch = *f.Patch
 		}
 		out.Files = append(out.Files, d)
+		out.Stats.Additions += f.Additions
+		out.Stats.Deletions += f.Deletions
 	}
 	out.Merge = len(r.Commits) < r.TotalCommits
 	for _, cm := range r.Commits {

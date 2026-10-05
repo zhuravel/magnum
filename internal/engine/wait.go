@@ -302,7 +302,7 @@ func (e *Engine) waitFor(ctx context.Context, pr store.PR, global *Wait, now tim
 		return with(Wait{Reason: WaitPaused, Detail: "the " + why})
 	}
 	if gate, ok := e.getKV(ctx, kvPRGate(pr.ID)); ok && gate != "" {
-		return with(e.gateWait(ctx, gate))
+		return with(e.gateWait(ctx, pr.ID, gate))
 	}
 	if req, ok := e.pendingRequest(ctx, pr); ok && !pr.Forced {
 		return with(Wait{Reason: WaitRequested, Subject: req.Phrase(), Detail: "the next dispatch"})
@@ -314,26 +314,26 @@ func (e *Engine) waitFor(ctx context.Context, pr store.PR, global *Wait, now tim
 // Wait.
 func (e *Engine) throttleWait(ctx context.Context, pr store.PR, w config.Watch, f eligibility.PRFacts, td eligibility.ThrottleDecision, now time.Time) Wait {
 	d := e.cfg.ThrottleFor(&w)
-	reason, until := td.Reason, td.NextEligibleAt
-	switch {
-	case strings.HasPrefix(reason, eligibility.ReasonRequested):
+	until := td.NextEligibleAt
+	switch td.Rule {
+	case eligibility.RuleRequested:
 		req, _ := e.pendingRequest(ctx, pr)
 		return Wait{Reason: WaitRequested, Until: until, Subject: req.Phrase(),
 			Detail: fmt.Sprintf("the request debounce (%s after the request or the last push)", humanDuration(d.RequestDebounce.Duration))}
-	case strings.HasPrefix(reason, eligibility.ReasonSmallDelta):
+	case eligibility.RuleSmallDelta:
 		return Wait{Reason: WaitDelta, Until: until, Count: f.DeltaLines, Max: d.RereviewMinLines,
 			Detail: fmt.Sprintf("a larger delta (%d of %d changed lines since the review) or %s after its first push",
 				f.DeltaLines, d.RereviewMinLines, humanDuration(d.RereviewMaxWait.Duration))}
-	case strings.HasPrefix(reason, "waiting for burst quiet period"):
+	case eligibility.RuleBurst:
 		return Wait{Reason: WaitBurst, Until: until, Detail: fmt.Sprintf("the burst quiet period (%s after %d pushes within %s)",
 			humanDuration(d.BurstQuietPeriod.Duration), d.BurstPushes, humanDuration(d.BurstWindow.Duration))}
-	case strings.HasPrefix(reason, "waiting for push quiet period"):
+	case eligibility.RuleQuiet:
 		return Wait{Reason: WaitQuiet, Until: until, Detail: fmt.Sprintf("the push quiet period (%s)", humanDuration(d.PushQuietPeriod.Duration))}
-	case strings.HasPrefix(reason, "waiting for draft re-review interval"):
+	case eligibility.RuleDraftInterval:
 		return Wait{Reason: WaitDraftInterval, Until: until, Detail: fmt.Sprintf("the draft re-review interval (%s since the last round)", humanDuration(d.DraftMinRereviewInterval.Duration))}
-	case strings.HasPrefix(reason, "waiting for min re-review interval"):
+	case eligibility.RuleInterval:
 		return Wait{Reason: WaitInterval, Until: until, Detail: fmt.Sprintf("the minimum re-review interval (%s since the last round)", humanDuration(d.MinRereviewInterval.Duration))}
-	case strings.HasPrefix(reason, "daily round cap reached"):
+	case eligibility.RuleCap:
 		rounds := pr.RoundsToday
 		if deref(pr.RoundsDay) != store.DayKey(now) {
 			rounds = 0
@@ -341,7 +341,7 @@ func (e *Engine) throttleWait(ctx context.Context, pr store.PR, w config.Watch, 
 		return Wait{Reason: WaitCap, Until: until, Count: rounds, Max: d.MaxRoundsPerPRPerDay,
 			Detail: fmt.Sprintf("the daily round cap (%d of %d automatic rounds today)", rounds, d.MaxRoundsPerPRPerDay)}
 	}
-	return Wait{Reason: WaitOther, Until: until, Detail: reason}
+	return Wait{Reason: WaitOther, Until: until, Detail: td.Reason}
 }
 
 // fromGate reports whether the wait is the dispatcher's own reason
@@ -354,25 +354,44 @@ func (w Wait) fromGate() bool {
 	return false
 }
 
-// gateWait classifies the reason the last dispatch gave for skipping the PR
-// (store.KVPRGate; prGate, startRound and the capacity check write it).
-func (e *Engine) gateWait(ctx context.Context, gate string) Wait {
-	w := Wait{Reason: WaitOther, Detail: gate}
-	switch {
-	case strings.HasPrefix(gate, "identity "):
-		w.Reason = WaitIdentity
-	case strings.HasPrefix(gate, "Codex budget "):
-		w.Reason = WaitBudget
-	case strings.HasPrefix(gate, "working Codex agents at the limit"), strings.HasPrefix(gate, gateCapacity):
-		w.Reason = WaitCapacity
-	case strings.HasPrefix(gate, "slot "), strings.HasPrefix(gate, gateNoFreeSlot):
-		w.Reason = WaitSlot
-	default:
-		// kindPauseReason: "<kind> paused (<reason>) until 15:04".
-		if kind, _, ok := strings.Cut(gate, " paused ("); ok && !strings.Contains(kind, " ") {
-			if p, ok := e.toolPause(ctx, kind); ok {
-				w.Reason, w.Subject, w.Until = WaitKind, kind, p.Until
-			}
+// gate is why the dispatcher skips a PR (prGate, startRound and the capacity
+// check return it, noteGate records it): the sentence `magnum status` shows
+// (store.KVPRGate), the Wait reason it becomes (WaitIdentity, WaitBudget,
+// WaitCapacity, WaitSlot, WaitKind or WaitOther) and, for WaitKind, the
+// paused agent kind. The zero gate lets the round start.
+type gate struct {
+	reason string
+	text   string
+	kind   string
+}
+
+// otherGate is a gate of no reason of its own (WaitOther).
+func otherGate(text string) gate { return gate{reason: WaitOther, text: text} }
+
+// gateCode is what kvPRGateReason keeps of a gate.
+type gateCode struct {
+	Reason string `json:"reason"`
+	Kind   string `json:"kind,omitempty"`
+}
+
+// gateWait is the wait of the reason the last dispatch gave for skipping
+// the PR, text, built from the code recorded with it (kvPRGateReason): a
+// kind pause takes its end from the pause recorded now, and is another
+// reason when none is; a gate without a code (an older daemon's) is another
+// reason until the next dispatch records it again.
+func (e *Engine) gateWait(ctx context.Context, prID int64, text string) Wait {
+	w := Wait{Reason: WaitOther, Detail: text}
+	v, _ := e.getKV(ctx, kvPRGateReason(prID))
+	var c gateCode
+	if v == "" || json.Unmarshal([]byte(v), &c) != nil {
+		return w
+	}
+	switch c.Reason {
+	case WaitIdentity, WaitBudget, WaitCapacity, WaitSlot:
+		w.Reason = c.Reason
+	case WaitKind:
+		if p, ok := e.toolPause(ctx, c.Kind); ok {
+			w.Reason, w.Subject, w.Until = WaitKind, c.Kind, p.Until
 		}
 	}
 	return w

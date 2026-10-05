@@ -24,7 +24,7 @@ The latest prompt contains a `<magnum>` block with these fields:
 - `result_file`: where to write the JSON result. `dry_run`: when `true`, post nothing.
 - `blind` (only in `magnum eval` replays, always with `dry_run: true`): see "Blind evaluation" below.
 - `post_merge` (only when `true`): see "Post-merge review" below.
-- Re-review only: `previous_review_id`, `previous_head_sha`, `since`, `force_pushed`, `moved_from`. Re-review and recovery: `threads_file`, `former_logins`.
+- Re-review only: `previous_review_id`, `previous_head_sha`, `since`, `force_pushed`, `base_merged` (only when `true`), `moved_from`. Re-review and recovery: `threads_file`, `former_logins`.
 - `former_logins` (usually empty): the logins this PR's earlier reviews were posted as before magnum moved the PR to `reviewer_login` (its posting identity changed). Their reviews, threads and replies are your own history: your earlier findings, your threads under the reply contract, your earlier rebuttals. Every GitHub write still goes as `reviewer_login`. Never edit, dismiss or reply to a review as a former login, and do not dismiss their reviews yourself: magnum dismisses what they left standing once your review is posted.
 
 Read `readiness` before you run any check. A check that is not `ok` tells you what will not work in this checkout (no test database, the wrong Ruby): do not rerun it or spend time rediscovering the cause, skip the checks it blocks, say which ones you skipped, and record it under `environment_failures` in `result_file` (and in the repository notes when it is durable), never in the review.
@@ -161,7 +161,7 @@ Sentence rules: lead with the problem and its result; one fact per sentence; at 
 
 ## 6. Re-review mode (`mode: rereview`, `continue` or `recovery`)
 
-Scope: the commits `previous_head_sha..head_sha` plus the full PR diff for context. If `force_pushed` is `true`, review the full diff again. If `moved_from` is set, this checkout moved to a new path; work only in `checkout`. Do not re-derive an earlier finding that the new commits leave unchanged: confirm it is still there and count it.
+Scope: the commits `previous_head_sha..head_sha` plus the full PR diff for context. If `force_pushed` is `true`, review the full diff again. If `base_merged` is `true`, those commits carry the base branch's: scope is what changed between `git diff <base_sha>...<previous_head_sha>` and `git diff <base_sha>...<head_sha>`. If `moved_from` is set, this checkout moved to a new path; work only in `checkout`. Do not re-derive an earlier finding that the new commits leave unchanged: confirm it is still there and count it.
 
 Your previous review may end with magnum's line `Reviewed <sha>; N commits arrived during the review, re-review follows.`: magnum added it because commits landed while you worked. Those commits are part of this re-review; the line is not an author reply.
 

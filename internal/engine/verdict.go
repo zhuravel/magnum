@@ -2,7 +2,6 @@ package engine
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -52,10 +51,7 @@ func (e *Engine) requestVerdict(ctx context.Context, p VerdictPayload, event str
 		return "", fmt.Errorf("%s moved to %s since magnum reviewed %s: review it again first, or --force to post on %s",
 			label, short(pr.HeadSHA), short(reviewed), short(reviewed))
 	}
-	if e.d.GitHub == nil {
-		return "", errors.New("no GitHub client")
-	}
-	gh := e.d.GitHub(pr.Identity)
+	gh := e.gh(pr.Identity)
 	if gh == nil {
 		return "", fmt.Errorf("identity %q has no GitHub client", pr.Identity)
 	}

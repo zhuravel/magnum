@@ -496,10 +496,7 @@ func (e *Engine) retroInput(ctx context.Context, repo store.Repo, pr store.PR) (
 	if w == nil {
 		return learn.Input{}, nil, fmt.Errorf("%s is not watched (no [[watch]] covers it)", repo.FullName())
 	}
-	var gh GitHub
-	if e.d.GitHub != nil {
-		gh = e.d.GitHub(w.PollIdentity)
-	}
+	gh := e.gh(w.PollIdentity)
 	rg, ok := gh.(RetroGitHub)
 	if gh == nil || !ok {
 		return learn.Input{}, nil, fmt.Errorf("no GitHub client that reads reviews for poll identity %q", w.PollIdentity)

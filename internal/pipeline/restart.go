@@ -178,7 +178,7 @@ func (rd *round) restart(ctx context.Context, head string, runs map[string]*stor
 	rd.in.TargetSHA, rd.pr.HeadSHA = target, target
 	rd.unverified = "" // an earlier review of the old head is no review of this one
 	rd.in.BaseSHA = cmp.Or(sw.BaseSHA, rd.in.BaseSHA)
-	rd.in.ForcePushed = sw.ForcePushed
+	rd.in.ForcePushed, rd.in.BaseMerged = sw.ForcePushed, sw.BaseMerged
 	rd.dir = rd.r.Layout.ReviewDir(rd.owner, rd.name, rd.in.PR.Number, target)
 	rd.mu.Lock()
 	rd.seenHead = head

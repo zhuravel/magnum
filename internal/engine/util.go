@@ -95,6 +95,11 @@ func kvPRSessionsIdentity(id int64) string { return store.KVPRSessionsIdentity(i
 func kvPRGate(id int64) string             { return store.KVPRGate(id) }
 func kvPRDryRun(id int64) string           { return store.KVPRDryRun(id) }
 
+// kvPRGateReason holds the code of the PR's dispatch gate (gateCode as
+// JSON) next to its sentence (store.KVPRGate): its wait is built from the
+// code, never from the words (gateWait).
+func kvPRGateReason(id int64) string { return fmt.Sprintf("pr.%d.gate_reason", id) }
+
 func (e *Engine) getKV(ctx context.Context, key string) (string, bool) {
 	v, ok, err := e.st.GetKV(ctx, key)
 	if err != nil {

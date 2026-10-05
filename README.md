@@ -203,7 +203,14 @@ blank lines, whitespace moves or documentation) since the reviewed commit; after
 rebase, only the lines that changed in the PR's own diff. An automatic re-review runs after the quiet
 period once that delta reaches `[daemon] rereview_min_lines` (default 30) or adds a file; a smaller
 delta waits for further pushes, at most `rereview_max_wait` (default `"2h"`) after its first push.
-`rereview_min_lines = 0` turns the threshold off, and a `[[watch]]` can override both.
+`rereview_min_lines = 0` turns the threshold off, and a `[[watch]]` can override both. A force push back to
+an ancestor of the reviewed commit (GitHub: "behind") has nothing to measure, so the threshold does not hold
+its re-review.
+
+The rest of the re-review sees a base merge the same way: triage reads the PR's own diff of the files whose
+own change differs, the simplify reviewer's rerun measures that change, and the reviewers' and the judge's
+prompts say the push merged the base branch, so they compare the PR's diff before and after it instead of
+reading the base branch's commits as the PR's.
 
 A review request runs without delay: when someone requests a review from the poll login, from a posting
 identity's login (an App's `<slug>[bot]` too) or from a team a `[[watch]]` lists in `request_teams`, or
@@ -435,7 +442,8 @@ A one-line fix does not need every reviewer. With `[triage] enabled = true`, bef
 Magnum asks a cheap model which reviewers the round's diff needs: Claude haiku by default, or any CLI that reads
 a prompt on stdin and prints its answer (`command`, with a Codex line in `config.defaults.toml`). The limits are
 Magnum's, not the model's. Only a first review or re-review whose diff has at most `max_lines` changed lines
-(default 120, added plus deleted; a re-review counts the commits since the last review) is asked about, bigger
+(default 120, added plus deleted; a re-review counts the commits since the last review, or, after a base merge
+or a rebase, the PR's own diff of the files whose own change they altered) is asked about, bigger
 rounds run every role. The judge always runs, and the model can only remove roles that have a `summary`, the
 one-line description of what a role checks (the built-in reviewers have one, a role without one always runs). A
 round that names its roles (`magnum review --role`), a continued round and an eval are never triaged. Anything

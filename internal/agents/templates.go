@@ -232,8 +232,12 @@ type JudgeData struct {
 	PreviousHeadSHA  string
 	Since            string // RFC3339: read every comment since then
 	ForcePushed      bool
-	MovedFrom        string // previous checkout path when the PR changed slots
-	PreviousReviews  []PreviousReview
+	// BaseMerged (rereview): the commits since PreviousHeadSHA merged a
+	// branch in, usually the base, so PreviousHeadSHA..HeadSHA carries its
+	// commits: the prompt compares the PR's own diff before and after.
+	BaseMerged      bool
+	MovedFrom       string // previous checkout path when the PR changed slots
+	PreviousReviews []PreviousReview
 	// Threads are the inline threads the reviewer login started on the PR,
 	// each reply classified (re-review). Replies are PR content, so no
 	// prompt prints them: magnum writes Threads to ThreadsFile and a prompt
@@ -296,6 +300,10 @@ type RoleData struct {
 	Since          string // RFC3339: the role's previous run (rereview)
 	// ForcePushed: PreviousHeadSHA is no longer in the branch (rereview).
 	ForcePushed bool
+	// BaseMerged: the commits since PreviousHeadSHA merged a branch in,
+	// usually the base (rereview), so PreviousHeadSHA..HeadSHA carries its
+	// commits: the prompt compares the PR's own diff before and after.
+	BaseMerged bool
 	// RestartedFrom is the head the role was reviewing when a push cut its
 	// turn short (ModeRestart); HeadSHA is the new head.
 	RestartedFrom string

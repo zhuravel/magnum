@@ -275,7 +275,7 @@ func (e *Engine) stopPR(ctx context.Context, prID int64, ignore, roundRan bool) 
 	case to != "":
 		done = append(done, "PR "+to)
 	}
-	e.delKV(ctx, kvPRDryRun(pr.ID), kvPRFresh(pr.ID), kvPRGate(pr.ID), KVPRWait(pr.ID))
+	e.delKV(ctx, kvPRDryRun(pr.ID), kvPRFresh(pr.ID), kvPRGate(pr.ID), kvPRGateReason(pr.ID), KVPRWait(pr.ID))
 	e.clearRequested(ctx, pr.ID)
 
 	if note, err := e.handBack(ctx, repo, pr, parked, label); err != nil {

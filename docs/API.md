@@ -602,8 +602,12 @@ type JudgeData struct {
 	PreviousHeadSHA  string
 	Since            string // RFC3339: read every comment since then
 	ForcePushed      bool
-	MovedFrom        string // previous checkout path when the PR changed slots
-	PreviousReviews  []PreviousReview
+	// BaseMerged (rereview): the commits since PreviousHeadSHA merged a
+	// branch in, usually the base, so PreviousHeadSHA..HeadSHA carries its
+	// commits: the prompt compares the PR's own diff before and after.
+	BaseMerged      bool
+	MovedFrom       string // previous checkout path when the PR changed slots
+	PreviousReviews []PreviousReview
 	// Threads are the inline threads the reviewer login started on the PR,
 	// each reply classified (re-review). Replies are PR content, so no
 	// prompt prints them: magnum writes Threads to ThreadsFile and a prompt
@@ -1189,6 +1193,10 @@ type RoleData struct {
 	Since          string // RFC3339: the role's previous run (rereview)
 	// ForcePushed: PreviousHeadSHA is no longer in the branch (rereview).
 	ForcePushed bool
+	// BaseMerged: the commits since PreviousHeadSHA merged a branch in,
+	// usually the base (rereview), so PreviousHeadSHA..HeadSHA carries its
+	// commits: the prompt compares the PR's own diff before and after.
+	BaseMerged bool
 	// RestartedFrom is the head the role was reviewing when a push cut its
 	// turn short (ModeRestart); HeadSHA is the new head.
 	RestartedFrom string
@@ -3198,7 +3206,8 @@ const (
 	// ReasonSmallDelta starts the reason of the re-review threshold.
 	ReasonSmallDelta = "small delta"
 )
-    Reason prefixes of the rules a caller may need to tell apart.
+    Reason prefixes of two rules (ThrottleDecision.Rule is the code to tell the
+    rules apart by).
 
 
 FUNCTIONS
@@ -3283,6 +3292,20 @@ type PRFacts struct {
     PRFacts is the snapshot of one pull request that the decisions need.
     Zero time values mean "unknown" or "never".
 
+type Rule string
+    Rule is a timing rule of Throttle (ThrottleDecision.Rule).
+
+const (
+	RuleRequested     Rule = "requested"      // a requested round's debounce
+	RuleQuiet         Rule = "quiet"          // the push quiet period
+	RuleBurst         Rule = "burst"          // the longer quiet period after a burst of pushes
+	RuleInterval      Rule = "interval"       // the minimum re-review interval since the last round
+	RuleDraftInterval Rule = "draft_interval" // the same for a draft
+	RuleCap           Rule = "cap"            // the daily round cap
+	RuleSmallDelta    Rule = "small_delta"    // the re-review threshold
+)
+    The rules Throttle applies.
+
 type ThrottleDecision struct {
 	Ready bool
 	// NextEligibleAt is the earliest time every timing rule is satisfied. When
@@ -3291,6 +3314,9 @@ type ThrottleDecision struct {
 	// Reason names the rule that is holding the PR back (the one that clears
 	// last); empty when Ready.
 	Reason string
+	// Rule is that rule as a code, for callers that tell the rules apart
+	// (the engine's wait reasons); empty when Ready.
+	Rule Rule
 }
     ThrottleDecision is Throttle's verdict.
 
@@ -5223,6 +5249,10 @@ type PushComparison struct {
 	// a merge cannot be ruled out.
 	Merge bool
 	Files []FileDelta
+	// Stats is what Compare reads of the same range (the commits, the
+	// files, -1 at GitHub's file cap, and their additions and deletions),
+	// so this comparison answers that question too.
+	Stats CompareStats
 }
     PushComparison is a comparison read with its commits (ComparePush).
 
@@ -7968,7 +7998,13 @@ type RoundInput struct {
 	FormerLogins []string
 	Since        time.Time // rereview: read every comment since then
 	ForcePushed  bool
-	MovedFrom    string // agents.Workspace.MovedFrom
+	// BaseMerged (rereview): the commits since the previous review have a
+	// merge commit (the base branch merged in), so previous..TargetSHA
+	// carries the base branch's commits too: the re-review prompts compare
+	// the PR's own diff before and after them instead
+	// (RoleData/JudgeData.BaseMerged). ForcePushed wins over it.
+	BaseMerged bool
+	MovedFrom  string // agents.Workspace.MovedFrom
 
 	DryRun bool // the judge posts nothing; GitHub is not consulted
 	// Blind (magnum eval, with DryRun): the round replays a pinned head to
@@ -8086,6 +8122,7 @@ type Switched struct {
 	TargetSHA   string // the commit now checked out (a fetch may find a newer one); "" = the one asked for
 	BaseSHA     string // its merge base with the base ("" = unknown: the round keeps the old one)
 	ForcePushed bool   // the previous review's commit is not an ancestor of TargetSHA
+	BaseMerged  bool   // the commits since the previous review have a merge commit (RoundInput.BaseMerged)
 }
     Switched is the checkout after RoundInput.Switch.
 

@@ -143,7 +143,7 @@ func (rd *round) roleData(role config.Role, path string) (string, agents.RoleDat
 	}
 	kind := config.PromptInitial
 	if rereview {
-		kind, d.Mode, d.PreviousHeadSHA, d.ForcePushed = config.PromptRereview, agents.ModeRereview, prev, in.ForcePushed
+		kind, d.Mode, d.PreviousHeadSHA, d.ForcePushed, d.BaseMerged = config.PromptRereview, agents.ModeRereview, prev, in.ForcePushed, in.BaseMerged
 		if !in.Since.IsZero() {
 			d.Since = in.Since.UTC().Format(time.RFC3339)
 		}

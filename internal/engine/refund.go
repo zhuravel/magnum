@@ -39,7 +39,8 @@ func (job *roundJob) recordStart(day string, started time.Time, prev *time.Time,
 // ("" = it counts): stopped rounds, errors before any agent was prompted or
 // from a prompt that did not render, and a judge whose model and every
 // fallback were limited. Posted, needs-attention, blocked, timed-out and
-// other failed rounds count.
+// other failed rounds count, and so does a round whose judge turn continues
+// later (finish asks turnContinues).
 func (e *Engine) refundReason(ctx context.Context, job *roundJob, res pipeline.RoundResult, outcome, msg string) string {
 	switch outcome {
 	case pipeline.OutcomeStopped:
@@ -57,6 +58,34 @@ func (e *Engine) refundReason(ctx context.Context, job *roundJob, res pipeline.R
 		}
 	}
 	return ""
+}
+
+// turnContinues reports whether the round's judge turn goes on after this
+// ending, so the round is not over and refundReason does not apply: a round
+// a shutdown stopped (not `magnum abort` or `ignore`) and a usage or login
+// pause continue the turn once its judge was prompted (judgePrompted:
+// recovery and dispatch pause and continue such a PR). The continue is the
+// same round, counted once at its start (roundJob.continued).
+func (e *Engine) turnContinues(ctx context.Context, job *roundJob, pr store.PR, outcome string, cancelled bool) bool {
+	switch outcome {
+	case pipeline.OutcomeStopped:
+		if !cancelled || e.stopOrdered(job.pr.ID) {
+			return false
+		}
+	case pipeline.OutcomeUsageLimit, pipeline.OutcomeLoginRequired:
+	default:
+		return false
+	}
+	return e.judgePrompted(ctx, pr)
+}
+
+// stopOrdered reports whether `magnum abort` or `ignore` stopped the PR's
+// round (abort.go): its context ended for good, not for a shutdown.
+func (e *Engine) stopOrdered(prID int64) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	h := e.rounds[prID]
+	return h != nil && len(h.stop.reqs) > 0
 }
 
 // roundPrompted reports whether any run of round sent its agent a prompt

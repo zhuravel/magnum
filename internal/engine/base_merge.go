@@ -14,6 +14,14 @@ package engine
 // everywhere is the trivial class base; otherwise the re-review threshold
 // measures only what changed in the PR's own diff. Anything incomplete
 // keeps the comparison of reviewed...head.
+//
+// The rest of the round sees the push the same way (DECISIONS "A push that
+// merges the base branch is reviewed by the PR's own diff"): triage reads
+// the files whose own change differs and the simplify rerun measures that
+// change (measureRange, compare.go), and the re-review prompts say the push
+// merged the base branch (pipeline.RoundInput.BaseMerged), so the reviewers
+// compare the PR's own diff before and after it instead of reading the
+// base branch's commits as the PR's.
 
 import (
 	"context"
@@ -35,6 +43,10 @@ const deltaRecordVersion = 1
 type ownDiff struct {
 	changed []string  // the files whose own change differs, sorted
 	size    DeltaSize // that difference, for the re-review threshold
+	// files are the changed files as a diff to read (triage): each one's
+	// own change after the push, or, for a file the PR no longer changes,
+	// its change before the push reverted (undone).
+	files []github.FileDelta
 }
 
 // prBase is the branch a PR merges into: its base_ref, else the
@@ -53,10 +65,10 @@ func prBase(repo store.Repo, pr store.PR) string {
 // that commit. ok is false when a call fails or the comparison is
 // incomplete.
 func (e *Engine) ownDiffDelta(ctx context.Context, gh GitHub, repo store.Repo, base, from, to string) (ownDiff, bool) {
-	before, err := gh.CompareFiles(ctx, repo.Owner, repo.Name, base, from)
+	before, err := e.compareFiles(ctx, gh, repo, base, from)
 	if err == nil {
 		var after []github.FileDelta
-		if after, err = gh.CompareFiles(ctx, repo.Owner, repo.Name, base, to); err == nil {
+		if after, err = e.compareFiles(ctx, gh, repo, base, to); err == nil {
 			if d, ok := compareOwnDiffs(before, after); ok {
 				return d, true
 			}
@@ -107,6 +119,11 @@ func compareOwnDiffs(before, after []github.FileDelta) (ownDiff, bool) {
 			continue
 		}
 		d.changed = append(d.changed, p)
+		if inAfter {
+			d.files = append(d.files, fa)
+		} else {
+			d.files = append(d.files, undone(fb))
+		}
 		if !inBefore && (fa.Status == "added" || fa.Status == "renamed" || fa.Status == "copied") {
 			d.size.AddedFiles++
 			continue
@@ -139,6 +156,42 @@ func ownChange(patch string) []string {
 		}
 		prev = l[0]
 	}
+	return out
+}
+
+// undone is a file a push took out of the PR's own diff, as a diff that
+// reads like one: its own change before the push, reverted (added and
+// removed lines and the hunk header's sides swapped). An added file the PR
+// no longer adds reads as removed and the other way round; a rename or a
+// copy undone has no such diff (Truncated, so triage treats it as unread).
+func undone(f github.FileDelta) github.FileDelta {
+	out := github.FileDelta{Path: f.Path, Status: f.Status, Truncated: f.Truncated}
+	switch f.Status {
+	case "added":
+		out.Status = "removed"
+	case "removed":
+		out.Status = "added"
+	case "modified":
+	default:
+		out.Truncated = true
+		return out
+	}
+	lines := strings.Split(f.Patch, "\n")
+	for i, l := range lines {
+		switch {
+		case strings.HasPrefix(l, "@@"):
+			// "@@ -a,b +c,d @@ context" → "@@ -c,d +a,b @@ context"
+			if parts := strings.SplitN(l, " ", 4); len(parts) >= 3 && strings.HasPrefix(parts[1], "-") && strings.HasPrefix(parts[2], "+") {
+				parts[1], parts[2] = "-"+parts[2][1:], "+"+parts[1][1:]
+				lines[i] = strings.Join(parts, " ")
+			}
+		case strings.HasPrefix(l, "+"):
+			lines[i] = "-" + l[1:]
+		case strings.HasPrefix(l, "-"):
+			lines[i] = "+" + l[1:]
+		}
+	}
+	out.Patch = strings.Join(lines, "\n")
 	return out
 }
 

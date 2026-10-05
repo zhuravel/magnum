@@ -57,7 +57,7 @@ func (e *Engine) poll(ctx context.Context) error {
 			continue
 		}
 		seen[k] = true
-		gh := e.d.GitHub(w.PollIdentity)
+		gh := e.gh(w.PollIdentity)
 		if gh == nil {
 			errs = append(errs, fmt.Errorf("poll %s: no GitHub client for identity %q", w.Owner, w.PollIdentity))
 			continue

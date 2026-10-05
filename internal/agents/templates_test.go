@@ -95,10 +95,11 @@ func roleFixture() RoleData {
 // triageData, which this package cannot import); the engine checks the
 // shipped prompt against the real type (CheckPrompts).
 type triageFixture struct {
-	Kind  string
-	Lines int
-	Roles []struct{ Name, Summary string }
-	Diff  string
+	Kind    string
+	OwnDiff bool
+	Lines   int
+	Roles   []struct{ Name, Summary string }
+	Diff    string
 }
 
 func triageFixtureFor(kind string) triageFixture {

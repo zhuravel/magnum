@@ -256,6 +256,8 @@ type Engine struct {
 	deltasRechecked bool
 	// logged: when each repeating error was last logged (logOnce, util.go).
 	logged map[string]time.Time
+	// compares are this tick's GitHub comparisons (compare.go).
+	compares compareMemo
 
 	// Urgent toasts run in their own goroutines on toastCtx (surface.go).
 	toastMu      sync.Mutex
@@ -585,6 +587,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	}
 	now := e.now()
 	var errs []error
+	e.compares.reset() // a comparison serves the tick that made it
 	e.setKV(ctx, kvLastTick, store.FormatTime(now))
 	e.heartbeat()
 	// Requests come first: the GitHub poll takes seconds (about 12 with

@@ -68,7 +68,7 @@ func (e *Engine) refreshSinceReview(ctx context.Context, gh GitHub, repo store.R
 			return
 		}
 		*budget--
-		cs, err := gh.Compare(ctx, repo.Owner, repo.Name, base, pr.HeadSHA)
+		cs, err := e.compareStats(ctx, gh, repo, base, pr.HeadSHA) // a push's comparison of this poll serves it
 		switch {
 		case errors.Is(err, github.ErrNotFound):
 			next.Error = fmt.Sprintf("GitHub cannot compare %s...%s (a commit is gone)", short(base), short(pr.HeadSHA))
