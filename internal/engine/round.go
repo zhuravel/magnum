@@ -108,9 +108,13 @@ func (e *Engine) prepare(ctx context.Context, job *roundJob) (pipeline.RoundInpu
 		return pipeline.RoundInput{}, ws, &setupError{err: err, noCharge: true, retryAt: e.now().Add(busyRetry)}
 	}
 
-	// 1. Checkout.
+	// 1. Checkout (and a post-merge round's base, which the base branch no
+	// longer gives).
 	if rs.target, err = e.checkout(ctx, job); err != nil {
 		return pipeline.RoundInput{}, ws, e.checkoutFailed(err, job)
+	}
+	if job.postMerge {
+		job.mergeBase = e.postMergeBase(ctx, job, rs.target)
 	}
 
 	// 2. The roles this round runs (the watch's, per their runs and this
@@ -149,9 +153,14 @@ func (e *Engine) prepare(ctx context.Context, job *roundJob) (pipeline.RoundInpu
 	in := e.roundInput(ctx, job, rs, ws, dryRun)
 	e.sidebar(ctx, ws.WorkspaceID, map[string]string{"magnum": "reviewing " + short(rs.target)})
 	names := roleNames(rs.toRun)
+	what := rs.kind
+	if job.postMerge {
+		what = "post-merge " + what
+	}
 	e.event(ctx, "info", prSubject(job.repo, pr.Number), "engine.round_start",
-		fmt.Sprintf("%s round in %s at %s: %s", rs.kind, job.slot.Name, short(rs.target), strings.Join(names, ", ")),
-		map[string]any{"slot": job.slot.Name, "kind": rs.kind, "target_sha": rs.target, "roles": names, "requested": rs.requested})
+		fmt.Sprintf("%s round in %s at %s: %s", what, job.slot.Name, short(rs.target), strings.Join(names, ", ")),
+		map[string]any{"slot": job.slot.Name, "kind": rs.kind, "target_sha": rs.target, "roles": names, "requested": rs.requested,
+			"post_merge": job.postMerge})
 	return in, ws, nil
 }
 
@@ -333,7 +342,7 @@ func (e *Engine) roundInput(ctx context.Context, job *roundJob, rs roundSetup, w
 	in := pipeline.RoundInput{
 		PR: cur, Repo: job.repo, SlotPath: job.slot.Path, Round: rs.round, Kind: rs.kind,
 		TargetSHA: rs.target, BaseRef: base, Roles: rs.roles, Requested: rs.requested, MovedFrom: ws.MovedFrom,
-		ContinueRunID: job.continueRunID, DryRun: dryRun,
+		ContinueRunID: job.continueRunID, DryRun: dryRun, PostMerge: job.postMerge,
 		NotesPath: e.roundNotes(job.repo), Readiness: e.readinessPlan(job),
 	}
 	if job.evalHead != "" {
@@ -345,8 +354,8 @@ func (e *Engine) roundInput(ctx context.Context, job *roundJob, rs roundSetup, w
 	if rs.kind != kindContinue {
 		in.ContinueRunID = ""
 		in.MaxRestarts, in.DispatchedHead = e.cfg.Daemon.MaxRoundRestarts, job.pr.HeadSHA
-		if job.evalHead != "" {
-			in.MaxRestarts = 0 // a pinned head never moves
+		if job.evalHead != "" || job.postMerge {
+			in.MaxRestarts = 0 // a pinned head, or a merged one, never moves
 		}
 		if job.kind == kindContinue {
 			in.DispatchedHead = rs.target // a continue that became a full round kept the paused round's checkout
@@ -363,6 +372,9 @@ func (e *Engine) roundInput(ctx context.Context, job *roundJob, rs roundSetup, w
 		}
 	}
 	in.BaseSHA, in.ForcePushed = e.headContext(ctx, job.slot.Path, base, reviewed, rs.target)
+	if job.postMerge {
+		in.BaseSHA = job.mergeBase // origin/<base> may hold the merged head: postMergeBase
+	}
 	return in
 }
 
@@ -749,8 +761,13 @@ func (e *Engine) retryOrAttention(ctx context.Context, job *roundJob, pr store.P
 	}
 }
 
-// needsAttention parks the PR for a human and toasts.
+// needsAttention parks the PR for a human and toasts. A post-merge round
+// puts its PR back in closed instead (postMergeFailed).
 func (e *Engine) needsAttention(ctx context.Context, job *roundJob, pr store.PR, from []string, why, msg string, extra func(*store.PRUpdate)) {
+	if job.postMerge {
+		e.postMergeFailed(ctx, job, pr, from, why, msg, extra)
+		return
+	}
 	err := e.st.TransitionPR(ctx, pr.ID, from, store.PRNeedsAttention, func(u *store.PRUpdate) {
 		u.Set("last_error", msg)
 		u.Set("forced", false)
@@ -866,6 +883,10 @@ func (e *Engine) finish(ctx context.Context, job *roundJob, in pipeline.RoundInp
 		e.urgent(fmt.Sprintf("leak:%d", pr.ID), "magnum: IDENTITY LEAK on "+job.repo.Name+fmt.Sprintf("#%d", pr.Number),
 			msg+". Automation for "+job.repo.WatchOwner+" is paused (magnum resume --watch "+job.repo.WatchOwner+").", 0)
 	case pipeline.OutcomeClosed:
+		if job.postMerge { // merged: no poll will ever close it again
+			e.postMergeFailed(ctx, job, pr, from, outcome, "the judge found the PR closed: "+msg, nil)
+			break
+		}
 		// confirmMissing closes the PR if it really closed; until then it
 		// waits closedRecheck in line (reviewed only when its head was).
 		to := claimableState(pr)
@@ -897,11 +918,17 @@ func (e *Engine) finish(ctx context.Context, job *roundJob, in pipeline.RoundInp
 // becomes reviewed only while its head is still the reviewed commit (the
 // transition is guarded on head_sha); a push the poller recorded after the
 // read below fails that guard and the PR waits for a re-review of the new
-// head instead.
+// head instead. A post-merge review puts the PR back in closed, released
+// after a fresh close grace: a merged head never moves, and the round's
+// target is the merged head GitHub keeps (head_sha follows it when the
+// poller never saw the last push).
 func (e *Engine) onPosted(ctx context.Context, job *roundJob, pr store.PR, in pipeline.RoundInput, res pipeline.RoundResult, from []string) {
 	now := e.now()
 	target := in.TargetSHA
 	to := store.PRReviewed
+	if job.postMerge {
+		to = store.PRClosed
+	}
 	// reviewed is the commit the review stands for: the round's target, or
 	// the head that moved during the round when the delta is trivial
 	// (comments, whitespace, docs: no re-review follows).
@@ -909,7 +936,7 @@ func (e *Engine) onPosted(ctx context.Context, job *roundJob, pr store.PR, in pi
 	var trivial []string
 	trivialFiles := 0
 	var next time.Time
-	if pr.HeadSHA != target {
+	if pr.HeadSHA != target && !job.postMerge {
 		if dc := e.checkDelta(ctx, job.repo, job.watch, target, pr.HeadSHA); dc.trivial {
 			reviewed, trivial, trivialFiles = pr.HeadSHA, dc.classes, dc.files
 		} else {
@@ -960,6 +987,12 @@ func (e *Engine) onPosted(ctx context.Context, job *roundJob, pr store.PR, in pi
 		} else {
 			u.Set("next_eligible_at", nil)
 		}
+		if job.postMerge {
+			u.Set("release_after", e.releaseAfter())
+			if pr.HeadSHA != reviewed {
+				u.Set("head_sha", reviewed)
+			}
+		}
 	}
 	err := e.st.TransitionPR(ctx, pr.ID, from, to, set)
 	if errors.Is(err, store.ErrConflict) && to == store.PRReviewed {
@@ -988,8 +1021,18 @@ func (e *Engine) onPosted(ctx context.Context, job *roundJob, pr store.PR, in pi
 					short(reviewed), DeltaLabel(trivial), trivialFiles, plural(trivialFiles, "file", "files"), short(target)))
 			e.noteMovedHead(ctx, job, pr, target, res.ReviewID, trivial)
 		}
-	} else {
+	} else if to == store.PRRereviewPending {
 		e.noteMovedHead(ctx, job, pr, target, res.ReviewID, nil)
+	} else {
+		e.event(ctx, "info", prSubject(job.repo, pr.Number), "pr.post_merge_reviewed",
+			fmt.Sprintf("post-merge review %s posted on %s; closed again, slot released after %s", reviewSummary(res), short(reviewed),
+				e.cfg.Daemon.CloseGrace.Duration),
+			map[string]any{"review_id": res.ReviewID, "event": res.Event, "reviewed_sha": reviewed, "previous_sha": deref(pr.ReviewedSHA)})
+		if res.Event != "" && res.Event != "COMMENTED" { // the judge was asked for a comment: say so, undo nothing
+			e.event(ctx, "warn", prSubject(job.repo, pr.Number), "pr.post_merge_event",
+				fmt.Sprintf("post-merge review %d was posted as %s, not as a comment; it stands as posted", res.ReviewID, res.Event),
+				map[string]any{"review_id": res.ReviewID, "event": res.Event})
+		}
 	}
 	if trivial == nil {
 		e.delKV(ctx, KVPRTrivial(pr.ID)) // a review of the head itself replaces the note
@@ -1141,13 +1184,17 @@ func (e *Engine) reportKind(w *config.Watch, rep pipeline.RoleReport) string {
 // onDryRun ends a dry-run round (review request with dry_run): nothing was
 // posted, so reviewed_sha stays and the PR returns to the state it had
 // before the request (its claimable state when that was in flight, the head
-// moved meanwhile, or reviewed no longer describes it).
+// moved meanwhile, or reviewed no longer describes it). A post-merge dry run
+// returns to closed, released after a fresh close grace.
 func (e *Engine) onDryRun(ctx context.Context, job *roundJob, pr store.PR, in pipeline.RoundInput, res pipeline.RoundResult, from []string) {
 	to, _ := e.getKV(ctx, kvPRDryRun(pr.ID))
 	e.delKV(ctx, kvPRDryRun(pr.ID))
-	if to == "" || pr.HeadSHA != in.TargetSHA || to == store.PRPaused ||
+	switch {
+	case job.postMerge:
+		to = store.PRClosed
+	case to == "" || pr.HeadSHA != in.TargetSHA || to == store.PRPaused ||
 		slices.Contains(store.InFlightStates, to) || slices.Contains(closingStates, to) ||
-		(to == store.PRReviewed && deref(pr.ReviewedSHA) != pr.HeadSHA) {
+		(to == store.PRReviewed && deref(pr.ReviewedSHA) != pr.HeadSHA):
 		to = claimableState(pr)
 		if rs := deref(pr.ReviewedSHA); rs != "" && rs == pr.HeadSHA {
 			to = store.PRReviewed
@@ -1158,6 +1205,9 @@ func (e *Engine) onDryRun(ctx context.Context, job *roundJob, pr store.PR, in pi
 		u.Set("attempts", 0)
 		u.Set("next_attempt_at", nil)
 		u.Set("last_error", nil)
+		if job.postMerge {
+			u.Set("release_after", e.releaseAfter())
+		}
 	})
 	if err != nil {
 		e.log.Info("PR moved on during the dry-run round", "pr", pr.ID, "err", err)

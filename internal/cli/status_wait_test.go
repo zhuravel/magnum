@@ -69,3 +69,53 @@ func mustRepoID(t *testing.T, st *store.Store, full string) int64 {
 	}
 	return repo.ID
 }
+
+// A merged PR waiting for its post-merge round says so in the queue, on
+// `magnum status <ref>` (the daemon's wait, else the state's own words) and
+// while its round runs.
+func TestStatusDescribesAPostMergeReview(t *testing.T) {
+	_, st, d, _ := statusFixture(t)
+	ctx := context.Background()
+	pr, err := st.PRByRepoNumber(ctx, mustRepoID(t, st, "talkable/talkable"), 11930)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpdatePR(ctx, pr.ID, func(u *store.PRUpdate) { u.Set("gh_state", store.GHMerged); u.Set("forced", true) }); err != nil {
+		t.Fatal(err)
+	}
+	if r, err := statusGather(ctx, d, statusOptions{Ref: "11930"}); err != nil || r.Detail.Next != "post-merge review, forced, waiting for a slot" {
+		t.Fatalf("detail next without a wait = %q (%v)", r.Detail.Next, err)
+	}
+
+	w := engine.Wait{Reason: engine.WaitNext, Forced: true, PostMerge: true, Detail: "the next dispatch"}
+	b, err := json.Marshal(w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetKV(ctx, engine.KVPRWait(pr.ID), string(b)); err != nil {
+		t.Fatal(err)
+	}
+	r, err := statusGather(ctx, d, statusOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var next string
+	for _, q := range r.Queue {
+		if q.Number == 11930 {
+			next = q.Next
+		}
+	}
+	if next != "post-merge review · next tick" {
+		t.Fatalf("queue next = %q", next)
+	}
+	r, err = statusGather(ctx, d, statusOptions{Ref: "11930"})
+	if err != nil || r.Detail.Next != "forced post-merge review starts at the next dispatch" {
+		t.Fatalf("detail next = %q (%v)", r.Detail.Next, err)
+	}
+	if err := st.TransitionPR(ctx, pr.ID, []string{store.PRQueued}, store.PRReviewing, nil); err != nil {
+		t.Fatal(err)
+	}
+	if r, err = statusGather(ctx, d, statusOptions{Ref: "11930"}); err != nil || r.Detail.Next != "post-merge round in progress" {
+		t.Fatalf("running round next = %q (%v)", r.Detail.Next, err)
+	}
+}

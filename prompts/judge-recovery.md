@@ -61,4 +61,7 @@ readiness:{{if .File}} {{.File}}{{end}}
 {{- end}}{{end}}
 result_file: {{.ResultFile}}
 dry_run: {{.DryRun}}
+{{- if .PostMerge}}
+post_merge: true
+{{- end}}
 </magnum>

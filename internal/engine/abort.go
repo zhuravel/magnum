@@ -448,8 +448,10 @@ var ignoreFrom = []string{store.PRBaseline, store.PRIneligible, store.PRQueued, 
 
 // settleStopped moves a stopped PR out of line: reviewed when it has a
 // reviewed head, else baseline (ignore: ineligible, muted, skip_reason
-// "ignored"). It returns the state it set ("" when the PR was elsewhere: an
-// abort leaves a PR that needs attention, is reviewed or closed alone).
+// "ignored"); a merged PR (its post-merge round) goes back to closed, muted
+// too for ignore, and is released after a fresh close grace. It returns the
+// state it set ("" when the PR was elsewhere: an abort leaves a PR that
+// needs attention, is reviewed or closed alone).
 func (e *Engine) settleStopped(ctx context.Context, pr store.PR, ignore bool) (string, error) {
 	to, from := store.PRBaseline, abortFrom
 	if deref(pr.ReviewedSHA) != "" {
@@ -462,6 +464,10 @@ func (e *Engine) settleStopped(ctx context.Context, pr store.PR, ignore bool) (s
 	if err != nil {
 		return "", err
 	}
+	merged := postMerge(cur)
+	if merged {
+		to = store.PRClosed
+	}
 	set := func(u *store.PRUpdate) {
 		u.Set("forced", false)
 		u.Set("attempts", 0)
@@ -471,6 +477,9 @@ func (e *Engine) settleStopped(ctx context.Context, pr store.PR, ignore bool) (s
 		if ignore {
 			u.Set("muted", true)
 			u.Set("skip_reason", skipIgnored)
+		}
+		if merged {
+			u.Set("release_after", e.releaseAfter())
 		}
 	}
 	if !slices.Contains(from, cur.State) {

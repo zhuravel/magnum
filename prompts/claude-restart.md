@@ -10,3 +10,7 @@ The PR head moved from `{{.RestartedFrom}}` to `{{.HeadSHA}}` while you were rev
 
 Repository notes at {{.NotesPath}}: read them first; they are hints from earlier reviews, verify before relying on them.
 {{- end}}
+{{- if .PostMerge}}
+
+The PR is already merged; review it anyway.
+{{- end}}

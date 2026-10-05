@@ -50,4 +50,7 @@ dry_run: {{.DryRun}}
 {{- if .Blind}}
 blind: true
 {{- end}}
+{{- if .PostMerge}}
+post_merge: true
+{{- end}}
 </magnum>

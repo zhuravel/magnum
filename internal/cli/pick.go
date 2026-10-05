@@ -40,6 +40,9 @@ type pickEntry struct {
 	Pinned bool
 	Known  bool             // in the registry
 	Review *tui.ReviewFacts // for the screen's y/N question; nil when unknown
+	// GHState is GitHub's state of the PR, OPEN, CLOSED or MERGED; "" when
+	// the registry does not know the PR.
+	GHState string
 }
 
 // line is what the numbered prompt's filter matches.
@@ -48,6 +51,12 @@ func (e pickEntry) line() string {
 }
 
 func (e pickEntry) ref() string { return fmt.Sprintf("%s#%d", e.Repo, e.Number) }
+
+// screenEntry is the entry as the picker screen lists it.
+func (e pickEntry) screenEntry() tui.PickEntry {
+	return tui.PickEntry{Ref: e.ref(), Title: e.Title, Author: e.Author, State: e.State, Age: e.Age, URL: e.URL,
+		Pinned: e.Pinned, Review: e.Review, GHState: e.GHState}
+}
 
 func newPickCmd(c *Context) *cobra.Command {
 	var o pickOpts
@@ -98,9 +107,15 @@ func pickMain(ctx context.Context, c *Context, d *actDeps, o pickOpts) int {
 				}
 			}
 			if !found {
-				entries = append([]pickEntry{{Label: label, Repo: full, Number: n, State: "new",
-					URL:   fmt.Sprintf("https://github.com/%s/pull/%d", full, n),
-					Title: "(not in magnum yet: enter reviews it)"}}, entries...)
+				// entries lists open PRs only: offer the registry's row for a PR it
+				// knows (a merged one), the stub for one it does not.
+				e, ok := pickRefEntry(ctx, d, query)
+				if !ok || !e.Known {
+					e = pickEntry{Label: label, Repo: full, Number: n, State: "new",
+						URL:   fmt.Sprintf("https://github.com/%s/pull/%d", full, n),
+						Title: "(not in magnum yet: enter reviews it)"}
+				}
+				entries = append([]pickEntry{e}, entries...)
 			}
 			query = label
 		}
@@ -154,7 +169,7 @@ func pickEntries(ctx context.Context, d *actDeps, limit int) ([]pickEntry, error
 		rows = append(rows, row{at: at, e: pickEntry{
 			Label: d.actLabel(repo.FullName(), pr.Number), Repo: repo.FullName(), Number: pr.Number, URL: pr.URL,
 			State: state, Title: trunc(actClean(store.Deref(pr.Title)), 90),
-			Author: author, Age: actAgo(now, at), Pinned: pr.Pinned, Known: true, Review: reviewFactsOf(pr),
+			Author: author, Age: actAgo(now, at), Pinned: pr.Pinned, Known: true, Review: reviewFactsOf(pr), GHState: pr.GHState,
 		}})
 	}
 	sort.SliceStable(rows, func(i, j int) bool { return rows[i].at.After(rows[j].at) })
@@ -174,10 +189,17 @@ func pickEntries(ctx context.Context, d *actDeps, limit int) ([]pickEntry, error
 func pickScreen(ctx context.Context, c *Context, d *actDeps, entries []pickEntry, query string) int {
 	list := make([]tui.PickEntry, len(entries))
 	for i, e := range entries {
-		list[i] = tui.PickEntry{Ref: e.ref(), Title: e.Title, Author: e.Author, State: e.State, Age: e.Age, URL: e.URL,
-			Pinned: e.Pinned, Review: e.Review}
+		list[i] = e.screenEntry()
 	}
-	out, err := tuiPicker(ctx, list, tui.PickerOptions{Query: query, Now: d.now})
+	// A reference typed in the filter that the list lacks is looked up in the
+	// registry, so the y/N question knows a merged PR for what it is.
+	lookup := func(q string) (tui.PickEntry, bool) {
+		if e, ok := pickRefEntry(ctx, d, q); ok && e.Known {
+			return e.screenEntry(), true
+		}
+		return tui.PickEntry{}, false
+	}
+	out, err := tuiPicker(ctx, list, tui.PickerOptions{Query: query, Now: d.now, Lookup: lookup})
 	if err != nil {
 		return cmdFail(c, "pick", err)
 	}
@@ -283,7 +305,9 @@ func pickChoice(ctx context.Context, d *actDeps, shown []pickEntry, s string) (p
 	return pickEntry{}, fmt.Errorf("%q is neither a row number from the list nor a PR reference", s)
 }
 
-// pickRefEntry turns a typed URL or reference into an entry.
+// pickRefEntry turns a typed URL or reference into an entry; a PR the
+// registry knows (an open or a merged one) brings its state, title and GitHub
+// state along.
 func pickRefEntry(ctx context.Context, d *actDeps, s string) (pickEntry, bool) {
 	if strings.TrimSpace(s) == "" {
 		return pickEntry{}, false
@@ -295,6 +319,7 @@ func pickRefEntry(ctx context.Context, d *actDeps, s string) (pickEntry, bool) {
 	e := pickEntry{Label: d.actLabel(full, n), Repo: full, Number: n, State: "new", URL: fmt.Sprintf("https://github.com/%s/pull/%d", full, n)}
 	if t, err := d.resolveRef(ctx, e.ref()); err == nil {
 		e.Known, e.Pinned, e.State, e.Review = true, t.PR.Pinned, t.PR.State, reviewFactsOf(t.PR)
+		e.GHState, e.Title = t.PR.GHState, trunc(actClean(store.Deref(t.PR.Title)), 90)
 		if t.PR.URL != "" {
 			e.URL = t.PR.URL
 		}

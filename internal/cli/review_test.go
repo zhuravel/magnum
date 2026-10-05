@@ -208,10 +208,10 @@ func TestReviewRefusals(t *testing.T) {
 	}{
 		{nil, 2, "which PR?"},
 		{[]string{"1", "2"}, 2, "one PR at a time"},
-		{[]string{"5"}, 1, "only open PRs are reviewed"},
+		{[]string{"5"}, 1, "talkable#5 is closed (GitHub OPEN): only open or merged PRs are reviewed"},
 		{[]string{"5", "--as", "nobody"}, 1, `unknown identity "nobody"`},
 		{[]string{"owner/unwatched#3"}, 1, "owner/unwatched is not watched"},
-		{[]string{"5", "--wait"}, 1, "only open PRs"},
+		{[]string{"5", "--wait"}, 1, "only open or merged PRs"},
 	}
 	for _, tc := range cases {
 		h.errb.Reset()
@@ -227,6 +227,83 @@ func TestReviewRefusals(t *testing.T) {
 	if len(h.requests()) != 0 {
 		t.Error("refused reviews queued requests")
 	}
+}
+
+// A PR GitHub merged gets a post-merge review: the request is queued like
+// any other and the command says what it covers. A merged PR whose head was
+// reviewed, one being released and a PR closed without merging are refused
+// before anything is queued.
+func TestReviewOfAMergedPR(t *testing.T) {
+	h := newActHarness(t)
+	merged := func(n int, state, reviewed string, gh string) {
+		pr := h.seedPR("talkable/talkable", n, store.PRRereviewPending)
+		h.setPR(pr.ID, state, func(u *store.PRUpdate) {
+			u.Set("gh_state", gh)
+			if reviewed != "" {
+				u.Set("reviewed_sha", reviewed)
+			}
+		})
+	}
+	merged(5, store.PRClosed, "1111111aaaa", store.GHMerged)
+	merged(6, store.PRReleased, "abc1234def5678", store.GHMerged) // its head was reviewed
+	merged(7, store.PRReleasing, "1111111aaaa", store.GHMerged)
+	merged(8, store.PRClosed, "1111111aaaa", store.GHClosed)
+	merged(9, store.PRReleased, "", store.GHMerged) // never reviewed
+
+	h.pid = 4242
+	h.onSleep = func(h *actHarness) {
+		h.completePending(store.RequestDone, "queued talkable/talkable#5 (rereview_pending, forced): post-merge review 1111111 → abc1234 (comment only)")
+	}
+	if code := h.cmd("review", "5"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.errb.String())
+	}
+	actContains(t, h.out.String(), "talkable#5 was merged: a post-merge review of 1111111..abc1234, posted as a comment only",
+		"post-merge review 1111111 → abc1234 (comment only)")
+	if reqs := h.requests(); len(reqs) != 1 || reqs[0].Kind != engine.ReqReview {
+		t.Fatalf("requests = %+v", reqs)
+	}
+
+	h.out.Reset()
+	if code := h.cmd("review", "9", "--dry-run"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.errb.String())
+	}
+	actContains(t, h.out.String(), "talkable#9 was merged: a post-merge review of the whole PR at abc1234, posted as a comment only")
+
+	for _, tc := range []struct {
+		ref, want string
+	}{
+		{"6", "talkable#6: its merged head abc1234 was already reviewed"},
+		{"7", "talkable#7: its checkout is being released; run `magnum review` again in a minute"},
+		{"8", "talkable#8 was closed without merging (closed, GitHub CLOSED): only open or merged PRs are reviewed"},
+	} {
+		h.errb.Reset()
+		if code := h.cmd("review", tc.ref); code != 1 || !strings.Contains(h.errb.String(), tc.want) {
+			t.Errorf("review %s: exit %d, stderr %q; want 1 and %q", tc.ref, code, h.errb.String(), tc.want)
+		}
+	}
+	if n := len(h.requests()); n != 1 {
+		t.Fatalf("requests = %d, want only the one for #5", n)
+	}
+}
+
+// --wait on a post-merge round that ends without a review (back in closed,
+// last_error set) says so instead of "closed on GitHub".
+func TestReviewWaitOnAPostMergeRoundThatFailed(t *testing.T) {
+	h := newActHarness(t)
+	pr := h.seedPR("talkable/talkable", 5, store.PRRereviewPending)
+	h.setPR(pr.ID, store.PRClosed, func(u *store.PRUpdate) {
+		u.Set("gh_state", store.GHMerged)
+		u.Set("reviewed_sha", "1111111aaaa")
+	})
+	h.pid = 4242
+	h.onSleep = func(h *actHarness) {
+		h.completePending(store.RequestDone, "queued talkable/talkable#5 (rereview_pending, forced)")
+		h.setPR(pr.ID, store.PRClosed, func(u *store.PRUpdate) { u.Set("last_error", "blocked: HEAD mismatch") })
+	}
+	if code := h.cmd("review", "5", "--wait"); code != 1 {
+		t.Fatalf("exit %d, want 1: %s", code, h.errb.String())
+	}
+	actContains(t, h.errb.String(), "talkable#5: the post-merge review was not posted: blocked: HEAD mismatch")
 }
 
 func TestReviewWaitNeedsADaemon(t *testing.T) {

@@ -133,7 +133,7 @@ func statusDashData(r statusReport, defaultRepo string) tui.StatusData {
 			DBs: statusSlotDBs(v, r.Databases), Disk: statusSlotDisk(v)}
 		if v.PR != nil {
 			row.PRRef = actRefLabel(defaultRepo, v.Slot.RepoFullName, v.PR.Number)
-			row.PRState, row.URL = v.PR.State, v.PR.URL
+			row.PRState, row.URL, row.PRGHState = v.PR.State, v.PR.URL, v.PR.GHState
 		}
 		out.Slots = append(out.Slots, row)
 	}
@@ -147,7 +147,7 @@ func statusDashData(r statusReport, defaultRepo string) tui.StatusData {
 			row.Age = actAgo(now, *q.UpdatedAt)
 		}
 		if q.rec != nil {
-			row.Review = reviewFactsOf(*q.rec)
+			row.Review, row.GHState = reviewFactsOf(*q.rec), q.rec.GHState
 		}
 		return row
 	}

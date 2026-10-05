@@ -64,6 +64,19 @@ func reviewQuestion(ref string, o ReviewOpts, facts string) string {
 	return q + "?"
 }
 
+// postMergeQuestion asks before a post-merge review of ref, a PR GitHub
+// merged before magnum reviewed its last push: what the variant does, and
+// that the review only comments (there is nothing left to approve or block).
+func postMergeQuestion(ref string, o ReviewOpts) string {
+	switch {
+	case o.Fresh:
+		return "Fresh post-merge review of " + ref + " in new agent sessions (comment only)?"
+	case o.Simplify:
+		return "Post-merge review of " + ref + ", also running the simplify role (comment only)?"
+	}
+	return "Post-merge review " + ref + " (comment only)?"
+}
+
 // releaseQuestion asks before handing back target's slot.
 func releaseQuestion(target string) string {
 	return "Release " + target + ": hand back its slot now, sessions parked and worktree reset?"

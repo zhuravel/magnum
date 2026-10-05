@@ -110,6 +110,10 @@ type Slots interface {
 type Git interface {
 	MergeBase(ctx context.Context, dir, a, b string) (string, error)
 	FindClone(ctx context.Context, cloneRoot, owner, name string) (string, error)
+	// RevParse and FetchCommit find the first parent of a merged PR's merge
+	// commit, the base a post-merge round reviews from (postMergeBase).
+	RevParse(ctx context.Context, dir, ref string) (string, error)
+	FetchCommit(ctx context.Context, mainClone, sha string, number int) error
 }
 
 // Cleaner plans and applies storage cleanup (*cleanup.Planner). PlanFrom

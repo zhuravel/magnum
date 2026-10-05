@@ -104,6 +104,9 @@ type fakeGH struct {
 	contents map[string][]byte
 	statuses map[string]string
 	calls    []string
+	// mergeCommits answers ConfirmStates' MergeCommitOid of a merged PR by
+	// number.
+	mergeCommits map[int]string
 }
 
 func (g *fakeGH) CompareFilesStatus(ctx context.Context, owner, repo, base, head string) (string, []github.FileDelta, error) {
@@ -343,7 +346,7 @@ func (g *fakeGH) ConfirmStates(_ context.Context, owner, repo string, numbers []
 		if st == "" {
 			st = "OPEN"
 		}
-		ps := github.PRState{State: st, Merged: st == "MERGED"}
+		ps := github.PRState{State: st, Merged: st == "MERGED", MergeCommitOid: g.mergeCommits[n]}
 		if st == "MERGED" {
 			ps.MergedAt = time.Date(2026, 10, 5, 9, 0, 0, 0, time.UTC)
 		}
@@ -917,6 +920,14 @@ func (g fakeGit) FindClone(_ context.Context, _, owner, name string) (string, er
 	}
 	return "", fmt.Errorf("%w: %s/%s", gitx.ErrNoClone, owner, name)
 }
+
+// RevParse knows no commit: a post-merge round falls back to the recorded
+// base tip (postMergeBase).
+func (fakeGit) RevParse(_ context.Context, _, ref string) (string, error) {
+	return "", fmt.Errorf("rev-parse %s: %w", ref, gitx.ErrNoSuchRef)
+}
+
+func (fakeGit) FetchCommit(context.Context, string, string, int) error { return nil }
 
 func (fakeGit) MergeBase(_ context.Context, _, a, _ string) (string, error) {
 	if strings.HasPrefix(a, "origin/") {

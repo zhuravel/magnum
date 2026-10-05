@@ -535,6 +535,14 @@ func TestDismissFormerGuards(t *testing.T) {
 			t.Fatalf("dismissals = %d, want none", n)
 		}
 	})
+	t.Run("a post-merge review", func(t *testing.T) {
+		m, pr, job := setup(t)
+		job.postMerge = true
+		m.e.dismissFormer(m.ctx, job, pr, "b2", pipeline.RoundResult{ReviewID: 501})
+		if n := dismissed(m); n != 0 {
+			t.Fatalf("dismissals = %d, want none after the merge", n)
+		}
+	})
 	t.Run("the current identity is never its own former one", func(t *testing.T) {
 		m, pr, job := setup(t)
 		m.e.setKV(m.ctx, KVPRFormerIdentities(pr.ID), `["zhuravel-app"]`) // data from a bad migration

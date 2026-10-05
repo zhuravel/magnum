@@ -155,6 +155,12 @@ func TestRenderGolden(t *testing.T) {
 	blindJudge.DryRun, blindJudge.Blind = true, true
 	blindRole := roleFixture()
 	blindRole.Blind = true
+	// A post-merge round: the pipeline passes COMMENT for both events,
+	// whatever the identity or repository says.
+	postMerge := judgeFixture()
+	postMerge.PostMerge, postMerge.NoFindingsEvent, postMerge.BlockingEvent = true, "COMMENT", "COMMENT"
+	postMergeRole := roleFixture()
+	postMergeRole.PostMerge = true
 
 	cases := []struct {
 		golden, name string
@@ -162,6 +168,11 @@ func TestRenderGolden(t *testing.T) {
 	}{
 		{"judge_initial", "judge-initial.md", judgeFixture()},
 		{"judge_initial_blind", "judge-initial.md", blindJudge},
+		{"judge_initial_post_merge", "judge-initial.md", postMerge},
+		{"judge_rereview_post_merge", "judge-rereview.md", postMerge},
+		{"claude_initial_post_merge", "claude-review.md", postMergeRole},
+		{"claude_rereview_post_merge", "claude-rereview.md", postMergeRole},
+		{"simplify_post_merge", "claude-simplify.md", postMergeRole},
 		{"claude_initial_blind", "claude-review.md", blindRole},
 		{"simplify_blind", "claude-simplify.md", blindRole},
 		{"judge_rereview", "judge-rereview.md", judgeFixture()},
@@ -255,6 +266,59 @@ func TestEveryDefaultPromptHasAGolden(t *testing.T) {
 		"judge-initial.md", "judge-nudge.md", "judge-recovery.md", "judge-rereview.md", "judge-stop.md", "model-fallback.md", "retro.md", "triage.md"}
 	if got := prompts.Names(); !slices.Equal(got, want) {
 		t.Fatalf("prompts.Names() = %v, want %v (add a golden case)", got, want)
+	}
+}
+
+// Every judge prompt whose <magnum> block the skill reads (a post-merge
+// round may be initial, rereview, continue or recovery) carries
+// `post_merge: true` inside the block for a post-merge round, and only then.
+func TestJudgePromptsSayPostMergeOnlyForAPostMergeRound(t *testing.T) {
+	for _, name := range []string{"judge-initial.md", "judge-rereview.md", "judge-continue.md", "judge-recovery.md"} {
+		p := prompt(t, name)
+		d := judgeFixture()
+		normal, err := RenderPrompt(p, d)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if strings.Contains(normal, "post_merge") {
+			t.Errorf("%s names post_merge in a normal round:\n%s", name, normal)
+		}
+		d.PostMerge = true
+		got, err := RenderPrompt(p, d)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		block := got[strings.Index(got, "<magnum>"):]
+		if !strings.Contains(block, "\npost_merge: true\n") || !strings.HasSuffix(strings.TrimSpace(block), "</magnum>") {
+			t.Errorf("%s: post_merge is not in the <magnum> block:\n%s", name, got)
+		}
+	}
+}
+
+// A reviewer's prompt that names the PR says it is merged, so the review
+// does not stop at a closed PR, only in a post-merge round; the restart
+// prompt too (a post-merge round never restarts, but a configured one may).
+func TestRolePromptsSayTheMergedPRIsReviewedAnyway(t *testing.T) {
+	const sentence = "The PR is already merged; review it anyway."
+	for _, name := range []string{"claude-review.md", "claude-rereview.md", "claude-simplify.md", "claude-restart.md"} {
+		p := prompt(t, name)
+		d := roleFixture()
+		d.RestartedFrom = "f1cc4f9e0d1c2b3a4f5e6d7c8b9a0f1e2d3c4b5a"
+		normal, err := RenderPrompt(p, d)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if strings.Contains(normal, "merged") {
+			t.Errorf("%s mentions a merge in a normal round:\n%s", name, normal)
+		}
+		d.PostMerge = true
+		got, err := RenderPrompt(p, d)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if !strings.Contains(got, sentence) {
+			t.Errorf("%s lacks %q:\n%s", name, sentence, got)
+		}
 	}
 }
 

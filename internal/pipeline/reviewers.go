@@ -139,7 +139,7 @@ func (rd *round) roleData(role config.Role, path string) (string, agents.RoleDat
 		URL: rd.pr.URL, Owner: rd.owner, Repo: rd.name, Number: in.PR.Number,
 		HeadSHA: in.TargetSHA, BaseSHA: in.BaseSHA, BaseRef: rd.baseRef(), ReportPath: path,
 		Model: rd.r.Config.RoleModel(role), Effort: effort, EffortInPrompt: rd.effortInPrompt(role, effort),
-		Mode: agents.ModeInitial, NotesPath: in.NotesPath, Blind: in.Blind,
+		Mode: agents.ModeInitial, NotesPath: in.NotesPath, Blind: in.Blind, PostMerge: in.PostMerge,
 	}
 	kind := config.PromptInitial
 	if rereview {

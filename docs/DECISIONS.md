@@ -899,3 +899,44 @@ editing history. Code, config comments and prompts reference these by their head
   (deduped per PR, silent with `[herdr] notify = false` and in dry runs). Rejected: flagging every
   merge with an unreviewed head (baseline PRs and skipped bots would drown the signal), and a GitHub call
   when the board opens (the board reads only the registry).
+- **A merged PR magnum missed gets a post-merge review, posted as a comment** (2026-10-05, for the PR
+  of the entry above, merged before its forced re-review ran: GitHub still accepts comment-only reviews
+  on a merged PR, and the author can follow up on what it finds). `magnum review` of a PR in gh_state MERGED (and `r`,
+  `R`, `i` on its board row) runs the round instead of refusing; a PR closed without merging and a merged
+  PR whose head is `reviewed_sha` are still refused, and so is one whose checkout is being released (state
+  releasing). A closed PR needs no more: cleanup's apply now moves a PR closed → releasing before its
+  first side effect (parking the sessions; a failed park moves it back), and the request moves it closed
+  → claimable, both compare-and-set, so one of them loses before doing anything and a round never starts
+  in a checkout the cleanup is handing back. **Why COMMENT only**: a verdict after
+  the merge can block nothing, and how GitHub treats Approve and Request changes on a merged PR is not
+  something to rely on; the round overrides `no_findings_event` and `blocking_event` with COMMENT
+  in the judge's `<magnum>` block, which is what the skill reads (a live pane keeps the env it started
+  with, so the `MAGNUM_*_EVENT` env is left alone), whatever the identity or `[[repo]]` says; a review
+  GitHub verifies as anything else stands as posted, with a `pr.post_merge_event` warning; and it
+  dismisses no earlier review (the pipeline's stale change request, a former identity's reviews): they
+  are history now. The judge's block says `post_merge: true` (rendered only then, so the prompts of
+  every other round are unchanged), and the skill's short section asks for the body prefix
+  "**Post-merge review** <prev> → <head>:" and findings framed as follow-ups; the reviewers' prompts that
+  name the PR say "The PR is already merged; review it anyway." (a `/code-review` of a closed PR would
+  otherwise stop). **Why the commits magnum
+  missed**: what was reviewed before the merge was reviewed then; the round is the usual re-review from
+  `reviewed_sha` to the merged head (a first review when there is none), with the same sessions, triage
+  and checkout of `refs/pull/N/head`, which GitHub keeps after a merge, in a pool slot or a per-PR
+  worktree. **Why the base comes from the merge commit**: after a merge-commit merge `origin/<base>`
+  holds the head, so its merge base with the head is the head and every reviewer's diff (codex-review's
+  `--base`, simplify's `git diff <base>..HEAD`, the judge's `base_sha`) would be empty; the round
+  reviews from the merge base of the head and the first parent of GitHub's `mergeCommit` (the merge,
+  squash or last rebased commit, fetched by id when the clone lacks it), which is the base before the
+  merge for all three merge methods, and falls back to the base tip the last Details fetch recorded
+  (`base_sha`) when GitHub names none or names the head itself (a fast-forward). **Why no new state or column**: the round is post-merge whenever GitHub merged the PR, which
+  the registry already says (gh_state, read at dispatch); the request moves the PR from closed or
+  released to its claimable state, forced, `store.Candidates` takes a MERGED PR only when forced, and
+  every end of the round (a verified review, a dry run, a failure that would park an open PR in
+  needs_attention, an abort) puts it back in closed with a fresh `close_grace` (the release that
+  follows is the normal one, and the panes stay that long for a look). prev_state keeps the state the PR
+  closed in, so once the review is verified on the merged head `reviewed_sha` equals `head_sha` and
+  the `merged · unreviewed` flag clears by its own rule. needs_attention was rejected for a failed
+  post-merge round: closeGrace releases only closed PRs, so a merged PR there would hold its slot forever;
+  it goes back to closed with `last_error`, a `pr.post_merge_failed` warning and a toast instead.
+  Rejected: an approve or request-changes verdict after the merge, a review of the whole PR every time,
+  and a `post_merge` column (gh_state already says it).

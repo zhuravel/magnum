@@ -25,6 +25,9 @@ type PickEntry struct {
 	URL    string
 	Pinned bool         // ctrl+p means unpin when true
 	Review *ReviewFacts // for the y/N question before a review; nil when unknown
+	// GHState is GitHub's state of the PR: OPEN, CLOSED or MERGED; "" when
+	// unknown. A MERGED one is asked about as a post-merge review.
+	GHState string
 }
 
 // PickAction is what the user chose to do with the picked PR.
@@ -65,6 +68,9 @@ type PickerOptions struct {
 	Query string           // initial filter; a PR URL or reference narrows to that PR
 	Title string           // default "magnum pick"
 	Now   func() time.Time // clock for "reviewed 2h ago" in the y/N question; default time.Now
+	// Lookup resolves a typed reference the list lacks to a PR magnum knows,
+	// e.g. a merged one, so the y/N question can say what it is; nil means none.
+	Lookup func(query string) (PickEntry, bool)
 }
 
 // RunPicker lets the user filter entries and pick one with an action. It
@@ -138,6 +144,9 @@ type pickerModel struct {
 	width, height int
 	note          string       // footer note, e.g. "no PR matches"
 	confirm       *pickConfirm // a review awaiting y/N
+	// typed is the PR magnum knows that a typed reference the list lacks
+	// names (Lookup, asked when the filter changes); nil when none.
+	typed *PickEntry
 
 	done    bool
 	outcome PickOutcome
@@ -218,6 +227,24 @@ func (m *pickerModel) setFilter(v string) {
 	m.list.SetFilterText(v)
 	m.list.SetFilterState(list.Filtering)
 	m.list.FilterInput.SetCursor(pos)
+	m.lookupTyped()
+}
+
+// lookupTyped resolves the filter through Lookup when it is a reference the
+// list does not match (a merged PR, say), so the preview, the footer and the
+// question describe the PR magnum knows; m.typed is nil otherwise.
+func (m *pickerModel) lookupTyped() {
+	m.typed = nil
+	q := m.query()
+	if m.opts.Lookup == nil || len(m.list.VisibleItems()) != 0 {
+		return
+	}
+	if _, ok := parsePickRef(q); !ok {
+		return
+	}
+	if e, ok := m.opts.Lookup(q); ok {
+		m.typed = &e
+	}
 }
 
 func (m *pickerModel) resize(w, h int) {
@@ -304,14 +331,14 @@ func (m pickerModel) editFilter(msg tea.Msg) (tea.Model, tea.Cmd) {
 // pickConfirm is a review the picker asks about before it finishes.
 type pickConfirm struct {
 	action   PickAction
-	entry    *PickEntry // nil for a typed reference magnum does not list
+	entry    *PickEntry // nil for a typed reference the list lacks, even when Lookup knows it
 	question string
 }
 
 // choose acts on the highlighted entry, or on the typed reference when
 // nothing matches. The review actions ask y/N first.
 func (m pickerModel) choose(a PickAction) (tea.Model, tea.Cmd) {
-	var e *PickEntry
+	var e *PickEntry // what the outcome carries: the highlighted entry, nil for a typed reference
 	q := m.query()
 	if it, ok := m.list.SelectedItem().(pickItem); ok {
 		ent := it.e
@@ -325,28 +352,44 @@ func (m pickerModel) choose(a PickAction) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	if question := pickQuestion(a, e, q, m.opts.Now()); question != "" {
+	asked := e // the PR the question is about: a typed reference Lookup knows is asked about as that PR
+	if e == nil && m.typed != nil {
+		asked = m.typed
+	}
+	if question := pickQuestion(a, asked, q, m.opts.Now()); question != "" {
 		m.confirm = &pickConfirm{action: a, entry: e, question: question}
 		return m, nil
 	}
 	return m.finish(a, e)
 }
 
-// pickQuestion asks before a review of e, or of the typed reference query
-// when e is nil; "" for the actions that do not start a review.
-func pickQuestion(a PickAction, e *PickEntry, query string, now time.Time) string {
-	var o ReviewOpts
+// pickReviewOpts is the review variant action a asks for; false for the
+// actions that do not start a review.
+func pickReviewOpts(a PickAction) (ReviewOpts, bool) {
 	switch a {
 	case PickActionReview:
+		return ReviewOpts{}, true
 	case PickActionAgain:
-		o.Again = true
+		return ReviewOpts{Again: true}, true
 	case PickActionFresh:
-		o.Fresh = true
-	default:
+		return ReviewOpts{Fresh: true}, true
+	}
+	return ReviewOpts{}, false
+}
+
+// pickQuestion asks before a review of e, or of the typed reference query
+// when e is nil; a PR GitHub merged gets the post-merge question. "" for the
+// actions that do not start a review.
+func pickQuestion(a PickAction, e *PickEntry, query string, now time.Time) string {
+	o, review := pickReviewOpts(a)
+	if !review {
 		return ""
 	}
 	if e == nil {
 		return reviewQuestion(query, o, "not in magnum's list")
+	}
+	if ghStateMerged(e.GHState) {
+		return postMergeQuestion(e.Ref, o)
 	}
 	facts := reviewFacts(e.State, "", e.Review, now)
 	if e.Age != "" && e.Age != "-" {
@@ -381,7 +424,11 @@ func (m pickerModel) preview(w, h int) string {
 	box := m.st.Box.Width(w).Height(h).MaxHeight(h) // sizes include border and padding
 	inner := max(w-4, 1)
 	it, ok := m.list.SelectedItem().(pickItem)
-	if !ok {
+	e := it.e
+	switch {
+	case !ok && m.typed != nil:
+		e = *m.typed // a typed reference magnum knows but does not list
+	case !ok:
 		msg := "no PR selected"
 		if q := m.query(); q != "" {
 			if _, ref := parsePickRef(q); ref {
@@ -390,7 +437,10 @@ func (m pickerModel) preview(w, h int) string {
 		}
 		return box.Render(m.st.Dim.Width(inner).Render(msg))
 	}
-	e := it.e
+	state := e.State
+	if ghStateMerged(e.GHState) {
+		state = joinFacts(state, "merged on GitHub")
+	}
 	field := func(name, v string) string {
 		return m.st.Label.Render(fmt.Sprintf("%-7s", name)) + lipgloss.NewStyle().Width(max(inner-7, 1)).Render(orDash(v))
 	}
@@ -398,7 +448,7 @@ func (m pickerModel) preview(w, h int) string {
 		m.st.Title.Width(inner).Render(orDash(oneLine(e.Title))),
 		"",
 		field("ref", e.Ref),
-		field("state", e.State),
+		field("state", state),
 		field("author", e.Author),
 		field("age", e.Age),
 		"",
@@ -418,6 +468,10 @@ func (m pickerModel) footerLines() []string {
 		status = m.st.confirmLine(m.confirm.question, w)
 	case m.note != "":
 		status = m.st.Warn.Render(m.note)
+	case len(m.list.VisibleItems()) == 0 && m.typed != nil && ghStateMerged(m.typed.GHState):
+		status = m.st.Accent.Render("merged: enter asks for a post-merge review of " + m.typed.Ref)
+	case len(m.list.VisibleItems()) == 0 && m.typed != nil:
+		status = m.st.Accent.Render("enter reviews " + m.typed.Ref)
 	case len(m.list.VisibleItems()) == 0 && q != "":
 		if _, ok := parsePickRef(q); ok {
 			status = m.st.Accent.Render("not in the list: enter reviews " + q)

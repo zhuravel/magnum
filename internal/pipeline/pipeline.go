@@ -237,6 +237,13 @@ type RoundInput struct {
 	// judge takes the local diff, not GitHub's (the PR may have moved on or
 	// closed). Rendered as `blind: true` in the prompts.
 	Blind bool
+	// PostMerge: GitHub merged the PR before magnum reviewed it (the engine
+	// dispatched a `magnum review` of a merged PR). The judge reviews the
+	// commits magnum missed as usual but posts a COMMENT whatever the
+	// identity's or repository's events (JudgeData.PostMerge, rendered as
+	// `post_merge: true`), and the round dismisses no earlier review: a
+	// verdict after the merge blocks nothing.
+	PostMerge bool
 
 	// NotesPath is the repository notes file the roles read and the judge
 	// rewrites (RoleData/JudgeData.NotesPath); "" = none.

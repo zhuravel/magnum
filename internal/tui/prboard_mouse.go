@@ -239,11 +239,12 @@ func (m prBoardModel) menuItems() []menuItem {
 	r, ok := m.selected()
 	acts := ok && m.act != nil && prRef(r) != ""
 	open := acts && isOpen(r)
+	review := open || acts && postMergeable(r)
 	st := normState(r.State)
 	return []menuItem{
-		{"review", "r", "r", open},
-		{"fresh review", "R", "R", open},
-		{"simplify review", "i", "i", open},
+		{"review", "r", "r", review},
+		{"fresh review", "R", "R", review},
+		{"simplify review", "i", "i", review},
 		{"kill review", "K", "K", acts && st == "reviewing"},
 		{"ignore", "I", "I", open && st != "ignored"},
 		{"approve", "A", "A", open && r.Findings != nil},

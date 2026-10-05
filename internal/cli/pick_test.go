@@ -71,9 +71,9 @@ func TestPickScreenEntriesAndPinToggle(t *testing.T) {
 	}
 	want := []tui.PickEntry{
 		{Ref: "zhuravel/widgets#7", Title: "Fix coupon export", Author: "@alice", State: "queued", Age: "0s",
-			URL: "https://github.com/zhuravel/widgets/pull/7"},
+			URL: "https://github.com/zhuravel/widgets/pull/7", GHState: store.GHOpen},
 		{Ref: "talkable/talkable#5", Title: "Fix coupon export", Author: "@alice", State: "reviewed", Age: "3h",
-			URL: "https://github.com/talkable/talkable/pull/5"},
+			URL: "https://github.com/talkable/talkable/pull/5", GHState: store.GHOpen},
 	}
 	if len(got.entries) != len(want) || got.entries[0] != want[0] || got.entries[1] != want[1] {
 		t.Fatalf("entries (newest first):\n%+v\nwant\n%+v", got.entries, want)

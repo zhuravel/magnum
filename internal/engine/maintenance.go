@@ -79,8 +79,10 @@ func (e *Engine) defaultCleanup(ctx context.Context) error {
 // would release (past its grace, or being released) still has a round or a
 // restore running: its slot may be mid checkout or deps install, so the
 // cleanup waits (closeGrace queues it again once the round ended). A closed
-// PR never gets a new round, so the answer cannot flip back while cleanup
-// runs.
+// PR gets a new round only from a post-merge review request, which moves it
+// out of closed first; apply re-reads each PR and moves it closed →
+// releasing (compare-and-set) before its first side effect, so a request
+// that comes meanwhile either stops the release or is refused.
 func (e *Engine) closedRoundsRunning(ctx context.Context) bool {
 	due, err := e.st.ClosedPastGrace(ctx, e.now())
 	if err != nil {

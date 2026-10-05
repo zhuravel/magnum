@@ -186,7 +186,12 @@ type JudgeData struct {
 	DryRun          bool
 	// Blind: an evaluation replay (pipeline.RoundInput.Blind), rendered as
 	// `blind: true`; the skill then judges the local diff of HeadSHA only.
-	Blind         bool
+	Blind bool
+	// PostMerge: GitHub merged the PR before magnum reviewed HeadSHA
+	// (pipeline.RoundInput.PostMerge), rendered as `post_merge: true` only
+	// then; the skill posts a COMMENT that asks for follow-ups, and
+	// NoFindingsEvent and BlockingEvent are both COMMENT.
+	PostMerge     bool
 	SkillPath     string // the role's skill, absolute
 	Model, Effort string // the judge role's model and this round's effort (config.Role.EffortFor)
 	// EffortInPrompt: the agent's kind sets the effort only at launch (its
@@ -293,6 +298,10 @@ type RoleData struct {
 	// Blind: an evaluation replay (pipeline.RoundInput.Blind); the role
 	// must not read reviews, comments or commits after HeadSHA.
 	Blind bool
+	// PostMerge: GitHub merged the PR before magnum reviewed HeadSHA
+	// (pipeline.RoundInput.PostMerge); the prompts that name the PR say it
+	// is merged and to review it anyway.
+	PostMerge bool
 }
 
 // ShellData feeds a shell role's line (ShellLine): the role's command

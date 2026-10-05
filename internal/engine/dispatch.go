@@ -36,6 +36,13 @@ type roundJob struct {
 	// daily cap.
 	requested bool
 
+	// postMerge: GitHub had merged the PR when the round was dispatched, so
+	// it is a post-merge review (post_merge.go); mergeBase is the commit it
+	// reviews from, the PR's merge base with the base branch before the
+	// merge (postMergeBase, set after the checkout; "" = unknown).
+	postMerge bool
+	mergeBase string
+
 	// The round's start (enterReviewing, refund.go): whether it recorded
 	// last_round_started_at (started) and counted against the daily cap
 	// (counted), on which day, the start time it recorded and the one before.
@@ -344,6 +351,7 @@ func (e *Engine) prGate(ctx context.Context, pr store.PR, repo store.Repo, w *co
 
 // continueCandidates are paused PRs whose retry time passed: they continue
 // the judge's turn (or restart the round when the judge was never prompted).
+// A paused post-merge round (a merged PR, forced) continues too.
 func (e *Engine) continueCandidates(ctx context.Context, now time.Time) ([]store.PR, error) {
 	prs, err := e.st.ListPRs(ctx, store.PRFilter{States: []string{store.PRPaused}})
 	if err != nil {
@@ -351,7 +359,7 @@ func (e *Engine) continueCandidates(ctx context.Context, now time.Time) ([]store
 	}
 	var out []store.PR
 	for _, pr := range prs {
-		if pr.GHState != store.GHOpen || (pr.Muted && !pr.Forced) {
+		if !(pr.GHState == store.GHOpen || postMerge(pr) && pr.Forced) || (pr.Muted && !pr.Forced) {
 			continue
 		}
 		if pr.NextAttemptAt != nil && now.Before(*pr.NextAttemptAt) {
@@ -383,7 +391,7 @@ func (e *Engine) slotOf(ctx context.Context, prID int64) (store.Slot, bool, erro
 func (e *Engine) startRound(ctx context.Context, pr store.PR, repo store.Repo, w *config.Watch, workingCodex int) (bool, int, string) {
 	full := repo.FullName()
 	subject := prSubject(repo, pr.Number)
-	job := &roundJob{pr: pr, repo: repo, watch: *w, pool: e.cfg.PoolFor(full), kind: kindFor(pr)}
+	job := &roundJob{pr: pr, repo: repo, watch: *w, pool: e.cfg.PoolFor(full), kind: kindFor(pr), postMerge: postMerge(pr)}
 	if !pr.Forced {
 		_, job.requested = e.pendingRequest(ctx, pr)
 	}

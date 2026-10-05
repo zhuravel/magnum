@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -44,7 +45,10 @@ func newReviewCmd(c *Context) *cobra.Command {
 	var o reviewOpts
 	cmd := newCommand(groupAct, reviewUsage, "force a review round for a PR now (--wait follows it to the posted review)",
 		"Force a review round for a PR now; a PR magnum does not know yet is added to the registry from "+
-			"GitHub. The round runs even on a muted PR and even when its head was already reviewed. --fresh parks "+
+			"GitHub. The round runs even on a muted PR and even when its head was already reviewed. A PR GitHub "+
+			"merged gets a post-merge review: the commits magnum missed since its last review (the whole PR when "+
+			"it never reviewed it), posted as a comment only, after which the PR is released again; a merged PR "+
+			"whose head was reviewed, and a PR closed without merging, are refused. --fresh parks "+
 			"the sessions and starts new conversations, --role also runs an on-request role of the PR's watch "+
 			"this round (runs = \"first\" after its first completion, or \"manual\"; repeat it for several; "+
 			"`magnum roles` lists them), --simplify is the shorthand for the role aliased simplify "+
@@ -159,12 +163,23 @@ func reviewMain(ctx context.Context, c *Context, d *actDeps, ref string, o revie
 	}
 	progress := reviewProgress(c, o)
 
+	merged := t.PR.GHState == store.GHMerged
 	switch {
-	case slices.Contains(reviewClosing, t.PR.State) || (t.PR.GHState != "" && t.PR.GHState != store.GHOpen):
-		err := fmt.Errorf("%s is %s (GitHub %s): only open PRs are reviewed", label, t.PR.State, t.PR.GHState)
+	case merged && store.Deref(t.PR.ReviewedSHA) == t.PR.HeadSHA:
+		return reviewFailJSON(c, o, out, fmt.Errorf("%s: its merged head %s was already reviewed", label, sha7(t.PR.HeadSHA)))
+	case merged && t.PR.State == store.PRReleasing:
+		return reviewFailJSON(c, o, out, fmt.Errorf("%s: its checkout is being released; run `magnum review` again in a minute", label))
+	case !merged && t.PR.GHState == store.GHClosed:
+		err := fmt.Errorf("%s was closed without merging (%s, GitHub %s): only open or merged PRs are reviewed", label, t.PR.State, t.PR.GHState)
+		return reviewFailJSON(c, o, out, err)
+	case !merged && (slices.Contains(reviewClosing, t.PR.State) || (t.PR.GHState != "" && t.PR.GHState != store.GHOpen)):
+		err := fmt.Errorf("%s is %s (GitHub %s): only open or merged PRs are reviewed", label, t.PR.State, t.PR.GHState)
 		return reviewFailJSON(c, o, out, err)
 	case slices.Contains(prInFlight, t.PR.State):
 		return reviewAttach(ctx, c, d, t, label, o, out)
+	}
+	if merged {
+		fmt.Fprintf(progress, "%s was merged: a post-merge review of %s, posted as a comment only\n", label, reviewPostMergeScope(t.PR))
 	}
 	if t.PR.Muted {
 		fmt.Fprintf(progress, "%s is muted: this forced round runs anyway (`magnum unmute %s` resumes automatic reviews)\n", label, label)
@@ -823,11 +838,25 @@ func (f *reviewFollower) completion(ctx context.Context, pr store.PR) (code int,
 		fmt.Fprintf(ew, "%s paused: %s%s (`magnum status` shows the pause)\n", f.label, store.Deref(pr.LastError), when)
 		return 1, true
 	case store.PRClosed, store.PRReleasing, store.PRReleased:
+		if pr.GHState == store.GHMerged { // a post-merge round ended without a review
+			f.out.Error = cmp.Or(store.Deref(pr.LastError), "the post-merge round ended without a review")
+			fmt.Fprintf(ew, "%s: the post-merge review was not posted: %s\n", f.label, f.out.Error)
+			return 1, true
+		}
 		f.out.Error = "the PR closed"
 		fmt.Fprintf(ew, "%s closed on GitHub (%s); stopped following\n", f.label, pr.State)
 		return 1, true
 	}
 	return 0, false
+}
+
+// reviewPostMergeScope is what a post-merge review of the merged pr covers:
+// "1111111..2222222" since its last review, else "the whole PR at 2222222".
+func reviewPostMergeScope(pr store.PR) string {
+	if rs := store.Deref(pr.ReviewedSHA); rs != "" {
+		return sha7(rs) + ".." + sha7(pr.HeadSHA)
+	}
+	return "the whole PR at " + sha7(pr.HeadSHA)
 }
 
 // reviewDryRunEnded reports the end of a dry-run round started at or after

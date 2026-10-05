@@ -123,9 +123,10 @@ func (e *Engine) migrateIdentity(ctx context.Context, pr *store.PR, repo store.R
 // requests, dismiss_own_stale_change_requests) and an App's approvals
 // (unless keep_approvals), each dismissed with that identity's own
 // credentials. Other logins' reviews are never touched. Failures are
-// warnings: the new review stands either way.
+// warnings: the new review stands either way. A post-merge review dismisses
+// nothing: a verdict after the merge blocks nothing.
 func (e *Engine) dismissFormer(ctx context.Context, job *roundJob, pr store.PR, target string, res pipeline.RoundResult) {
-	if e.d.DryRun || res.ReviewID == 0 || e.d.GitHub == nil {
+	if e.d.DryRun || res.ReviewID == 0 || e.d.GitHub == nil || job.postMerge {
 		return
 	}
 	cur := e.reviewerLogin(pr.Identity)

@@ -156,15 +156,26 @@ func (p *Planner) applySlot(ctx context.Context, a Action) error {
 			p.logf("cleanup: %s: forcing past %s (%s)", sl.Name, h.Reason, h.Detail)
 		}
 	}
-	if a.PRID != 0 && p.Park != nil {
-		if err := p.Park(ctx, pr); err != nil {
-			return fmt.Errorf("cleanup: park sessions: %w", err)
-		}
-	}
+	// A closed PR moves to releasing before the first side effect: whatever
+	// races the release for it (a reopen, or a post-merge review request,
+	// which moves it closed → rereview_pending) loses this compare-and-set,
+	// or wins it and the release stops here, before anything was parked.
+	// A failed park puts the PR back in closed.
 	closingPR := a.PRID != 0 && closing(pr.State)
-	if closingPR && pr.State == store.PRClosed {
+	toReleasing := closingPR && pr.State == store.PRClosed
+	if toReleasing {
 		if err := p.Store.TransitionPR(ctx, pr.ID, []string{store.PRClosed}, store.PRReleasing, nil); err != nil {
 			return fmt.Errorf("cleanup: PR to releasing: %w", err)
+		}
+	}
+	if a.PRID != 0 && p.Park != nil {
+		if err := p.Park(ctx, pr); err != nil {
+			if toReleasing {
+				if rerr := p.Store.TransitionPR(ctx, pr.ID, []string{store.PRReleasing}, store.PRClosed, nil); rerr != nil {
+					err = errors.Join(err, fmt.Errorf("PR back to closed: %w", rerr))
+				}
+			}
+			return fmt.Errorf("cleanup: park sessions: %w", err)
 		}
 	}
 	switch {

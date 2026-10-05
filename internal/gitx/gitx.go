@@ -259,7 +259,8 @@ func (c *Client) fetchArgs(ctx context.Context, mainClone, refspec string) []str
 const EvalRefPrefix = "refs/magnum/eval/"
 
 // FetchCommit makes sha (a full commit id) present in mainClone for a magnum
-// eval replay. A commit already there costs one rev-parse. Otherwise it
+// eval replay, or for a post-merge round whose clone lacks the PR's merge
+// commit. A commit already there costs one rev-parse. Otherwise it
 // fetches the commit by id into refs/magnum/eval/<sha>, and when the server
 // refuses that, PR number's head into refs/magnum/eval/pr-<number> (the
 // commit is there unless the PR was force-pushed past it). It never writes

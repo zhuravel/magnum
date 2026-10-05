@@ -55,7 +55,8 @@ type PRTarget struct {
 }
 
 // ReviewPayload is a `magnum review` request: a forced round that bypasses
-// eligibility, the throttle and quiet hours.
+// eligibility, the throttle and quiet hours. On a PR GitHub merged it is a
+// post-merge review (post_merge.go).
 type ReviewPayload struct {
 	PRTarget
 	Again bool `json:"again,omitempty"` // review even when the head was already reviewed (implied)
@@ -313,7 +314,10 @@ func (e *Engine) resolve(ctx context.Context, t PRTarget) (store.Repo, store.PR,
 }
 
 // requestReview forces a round: forced=1, throttle and backoff cleared, the
-// PR queued (or rereview_pending); Candidates then puts it first.
+// PR queued (or rereview_pending); Candidates then puts it first. A PR
+// GitHub merged gets a post-merge review (post_merge.go): it leaves closed
+// or released the same way, unless its merged head was reviewed already or
+// its checkout is being released; a PR closed without merging is refused.
 func (e *Engine) requestReview(ctx context.Context, p ReviewPayload) (string, error) {
 	repo, pr, err := e.resolve(ctx, p.PRTarget)
 	if err != nil {
@@ -321,13 +325,20 @@ func (e *Engine) requestReview(ctx context.Context, p ReviewPayload) (string, er
 	}
 	label := fmt.Sprintf("%s#%d", repo.FullName(), pr.Number)
 	w := e.cfg.WatchFor(repo.FullName())
+	merged := postMerge(pr)
 	switch {
 	case w == nil:
 		return "", fmt.Errorf("%s is not watched (no [[watch]] covers it)", repo.FullName())
 	case slices.Contains(store.InFlightStates, pr.State) || e.roundActive(pr.ID):
 		return "", fmt.Errorf("%s: a round is already in progress (%s)", label, pr.State)
+	case merged:
+		if why := postMergeRefusal(label, pr); why != "" {
+			return "", errors.New(why)
+		}
+	case pr.GHState == store.GHClosed:
+		return "", fmt.Errorf("%s was closed without merging (%s, GitHub %s): only open or merged PRs are reviewed", label, pr.State, pr.GHState)
 	case slices.Contains(closingStates, pr.State) || pr.GHState != store.GHOpen:
-		return "", fmt.Errorf("%s is not open (%s, GitHub %s)", label, pr.State, pr.GHState)
+		return "", fmt.Errorf("%s is not open (%s, GitHub %s): only open or merged PRs are reviewed", label, pr.State, pr.GHState)
 	}
 	if p.As != "" && e.cfg.IdentityByName(p.As) == nil {
 		return "", fmt.Errorf("unknown identity %q", p.As)
@@ -371,7 +382,11 @@ func (e *Engine) requestReview(ctx context.Context, p ReviewPayload) (string, er
 	if p.Fresh {
 		e.setKV(ctx, kvPRFresh(pr.ID), "1")
 	}
-	e.event(ctx, "info", prSubject(repo, pr.Number), "pr.forced", fmt.Sprintf("magnum review: %s → %s (forced)", pr.State, to), nil)
+	forced := "forced"
+	if merged {
+		forced = "forced, post-merge"
+	}
+	e.event(ctx, "info", prSubject(repo, pr.Number), "pr.forced", fmt.Sprintf("magnum review: %s → %s (%s)", pr.State, to, forced), nil)
 	// A forced review should not wait for the periodic identity re-check when
 	// the identity it posts as (the one --as names, else the PR's) was marked
 	// unhealthy (for example by a judge whose own check hit a transient
@@ -397,6 +412,9 @@ func (e *Engine) requestReview(ctx context.Context, p ReviewPayload) (string, er
 	}
 	if len(requested) > 0 {
 		res += " with " + strings.Join(requested, ", ")
+	}
+	if merged {
+		res += ": " + postMergeScope(pr)
 	}
 	if pos > 0 {
 		res += fmt.Sprintf(", position %d", pos)

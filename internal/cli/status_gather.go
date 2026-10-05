@@ -515,6 +515,9 @@ func statusNext(pr store.PR, now time.Time) string {
 		return "skipped: " + store.Deref(pr.SkipReason) + " (`magnum review` forces a round)"
 	case store.PRQueued, store.PRRereviewPending:
 		var parts []string
+		if pr.GHState == store.GHMerged {
+			parts = append(parts, "post-merge review")
+		}
 		if pr.Forced {
 			parts = append(parts, "forced")
 		}
@@ -528,6 +531,9 @@ func statusNext(pr store.PR, now time.Time) string {
 		}
 		return strings.Join(parts, ", ")
 	case store.PRClaiming, store.PRReviewing, store.PRVerifying:
+		if pr.GHState == store.GHMerged {
+			return "post-merge round in progress"
+		}
 		return "round in progress"
 	case store.PRReviewed:
 		return "watching for new pushes"

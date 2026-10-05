@@ -120,6 +120,10 @@ type PRState struct {
 	MergedAt   time.Time // zero when not merged
 	ClosedAt   time.Time // zero when open
 	HeadRefOid string
+	// MergeCommitOid is the commit the merge put on the base branch: the
+	// merge commit, the squash commit or the last rebased commit ("" until
+	// merged). Its first parent is the base branch before the merge.
+	MergeCommitOid string
 }
 
 // detailsFragment reads labels, latestReviews and the head commit's checks in
@@ -143,7 +147,7 @@ const detailsFragment = `fragment PRDetails on PullRequest {
   headCommit: commits(last: 1) { nodes { commit { oid statusCheckRollup { state contexts(first: 100) { totalCount pageInfo { hasNextPage } nodes { __typename ... on CheckRun { name status conclusion startedAt completedAt checkSuite { workflowRun { workflow { name } } } } ... on StatusContext { context state createdAt } } } } } } }
 }`
 
-const stateFragment = `fragment PRState on PullRequest { number state merged mergedAt closedAt headRefOid }`
+const stateFragment = `fragment PRState on PullRequest { number state merged mergedAt closedAt headRefOid mergeCommit { oid } }`
 
 type actorJSON struct {
 	Login    string `json:"login"`
@@ -432,16 +436,23 @@ func (c *Client) ConfirmStates(ctx context.Context, owner, repo string, numbers 
 	out := map[int]PRState{}
 	notFound, err := c.batch(ctx, "confirm", owner, repo, numbers, "PRState", stateFragment, func(n int, raw json.RawMessage) error {
 		var s struct {
-			State      string    `json:"state"`
-			Merged     bool      `json:"merged"`
-			MergedAt   time.Time `json:"mergedAt"`
-			ClosedAt   time.Time `json:"closedAt"`
-			HeadRefOid string    `json:"headRefOid"`
+			State       string    `json:"state"`
+			Merged      bool      `json:"merged"`
+			MergedAt    time.Time `json:"mergedAt"`
+			ClosedAt    time.Time `json:"closedAt"`
+			HeadRefOid  string    `json:"headRefOid"`
+			MergeCommit *struct {
+				Oid string `json:"oid"`
+			} `json:"mergeCommit"`
 		}
 		if err := json.Unmarshal(raw, &s); err != nil {
 			return err
 		}
-		out[n] = PRState(s)
+		st := PRState{State: s.State, Merged: s.Merged, MergedAt: s.MergedAt, ClosedAt: s.ClosedAt, HeadRefOid: s.HeadRefOid}
+		if s.MergeCommit != nil {
+			st.MergeCommitOid = s.MergeCommit.Oid
+		}
+		out[n] = st
 		return nil
 	})
 	if err != nil {

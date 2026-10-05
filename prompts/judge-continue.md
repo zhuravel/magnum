@@ -29,4 +29,7 @@ blocking_event: {{.BlockingEvent}}
 self_authored: {{.SelfAuthored}}
 result_file: {{.ResultFile}}
 dry_run: {{.DryRun}}
+{{- if .PostMerge}}
+post_merge: true
+{{- end}}
 </magnum>

@@ -208,7 +208,8 @@ func TestConfirmStatesFixture(t *testing.T) {
 		t.Errorf("notFound = %v", notFound)
 	}
 	want := map[int]PRState{
-		11982: {State: "MERGED", Merged: true, MergedAt: time.Date(2026, 10, 2, 14, 24, 50, 0, time.UTC), ClosedAt: time.Date(2026, 10, 2, 14, 24, 50, 0, time.UTC), HeadRefOid: "d2bdbcf862fbc3f586c00b0cb66f6db6b38bdcb9"},
+		11982: {State: "MERGED", Merged: true, MergedAt: time.Date(2026, 10, 2, 14, 24, 50, 0, time.UTC), ClosedAt: time.Date(2026, 10, 2, 14, 24, 50, 0, time.UTC), HeadRefOid: "d2bdbcf862fbc3f586c00b0cb66f6db6b38bdcb9",
+			MergeCommitOid: "5f1d2c3b4a5968778695a4b3c2d1e0f9a8b7c6d5"},
 		11965: {State: "CLOSED", ClosedAt: time.Date(2026, 9, 30, 14, 3, 37, 0, time.UTC), HeadRefOid: "1eb72bdac4ebb6b4072b60835ab4b78d1216fdc9"},
 		11984: {State: "OPEN", HeadRefOid: "3cdf82c3f06b32e07dcee9396ae32e904ff33ae3"},
 	}
@@ -216,7 +217,7 @@ func TestConfirmStatesFixture(t *testing.T) {
 		t.Errorf("states =\n%+v\nwant\n%+v", got, want)
 	}
 	q := oneLine(decodeReq(t, f.Calls[0]).Query)
-	if !strings.Contains(q, "number state merged mergedAt closedAt headRefOid") || strings.Contains(q, "latestReviews") {
+	if !strings.Contains(q, "number state merged mergedAt closedAt headRefOid mergeCommit { oid }") || strings.Contains(q, "latestReviews") {
 		t.Errorf("confirm query should be scalar-only: %s", q)
 	}
 }

@@ -508,6 +508,37 @@ func isOpen(r PRBoardRow) bool {
 	return false
 }
 
+// mergedOnGitHub reports whether GitHub merged the PR.
+func mergedOnGitHub(r PRBoardRow) bool {
+	return strings.EqualFold(strings.TrimSpace(r.GHState), "MERGED")
+}
+
+// closedUnmerged reports whether GitHub closed the PR without merging it:
+// there is nothing to review.
+func closedUnmerged(r PRBoardRow) bool {
+	return strings.EqualFold(strings.TrimSpace(r.GHState), "CLOSED")
+}
+
+// postMergeable reports whether the PR can get a post-merge review: GitHub
+// merged it and its merged head is not the one magnum reviewed last.
+func postMergeable(r PRBoardRow) bool {
+	return mergedOnGitHub(r) && (r.LastReview == nil || !sameSHA(r.HeadSHA, r.LastReview.CommitSHA))
+}
+
+// postMergeRound reports whether a post-merge review of the merged PR waits
+// or runs: its state is a round's, not the closed or released of a PR magnum
+// is done with.
+func postMergeRound(r PRBoardRow) bool {
+	if !mergedOnGitHub(r) {
+		return false
+	}
+	switch normState(r.State) {
+	case "queued", "rereview_pending", "claiming", "reviewing", "verifying", "paused":
+		return true
+	}
+	return false
+}
+
 // normLogin folds a login for comparison: case, "@" and "[bot]" dropped.
 func normLogin(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
@@ -1466,10 +1497,26 @@ func (m prBoardModel) askOnRow(what string, question func(r PRBoardRow, ref stri
 }
 
 // review asks before a review round, saying what it will do and what
-// changed since the last review.
+// changed since the last review. A PR GitHub merged gets a post-merge
+// review (comment only), unless its merged head was reviewed; one closed
+// without merging gets none: both fail at once instead of asking.
 func (m prBoardModel) review(what string, o ReviewOpts) (prBoardModel, tea.Cmd) {
+	if r, ok := m.selected(); ok {
+		if ref := prRef(r); ref != "" {
+			label := m.questionLabel(r, ref)
+			switch {
+			case closedUnmerged(r):
+				return m.fail(label + " was closed without merging: only open or merged PRs are reviewed")
+			case mergedOnGitHub(r) && !postMergeable(r):
+				return m.fail(label + ": its merged head " + shortSHA(r.HeadSHA) + " was already reviewed")
+			}
+		}
+	}
 	now := m.opts.Now()
 	return m.askOnRow(what, func(r PRBoardRow, ref string) string {
+		if mergedOnGitHub(r) {
+			return postMergeQuestion(m.questionLabel(r, ref), o)
+		}
 		return reviewQuestion(m.questionLabel(r, ref), o, boardReviewFacts(r, now))
 	},
 		func(ctx context.Context, a DashboardActions, ref string) (string, error) {

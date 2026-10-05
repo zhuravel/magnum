@@ -165,6 +165,57 @@ func TestApplyParkBusyLeavesPRClosed(t *testing.T) {
 	}
 }
 
+// A review request racing a release (`magnum review` of a merged PR moves
+// it closed → rereview_pending with a compare-and-set) loses once the
+// release has begun: the release takes the PR from closed to releasing
+// before its first side effect (parking the sessions), so the request's
+// compare-and-set during the park fails, no round starts in a checkout being
+// handed back, and the release completes.
+func TestApplyReleaseBeatsAReviewRequestDuringThePark(t *testing.T) {
+	f := newFixture(t)
+	pr := f.closedPR(f.talkable, 1, store.GHMerged, -time.Minute)
+	f.poolSlot("review1", store.SlotHeld, pr.ID, true, nil)
+	var requestErr error
+	f.parkHook = func(store.PR) {
+		requestErr = f.st.TransitionPR(f.ctx, pr.ID, []string{store.PRClosed}, store.PRRereviewPending,
+			func(u *store.PRUpdate) { u.Set("forced", true) })
+	}
+	rep, err := f.apply(f.plan(Options{}), false)
+	if err != nil || rep.Done != 1 {
+		t.Fatalf("rep = %+v err = %v", rep, err)
+	}
+	if !errors.Is(requestErr, store.ErrConflict) {
+		t.Fatalf("the review request's compare-and-set during the park = %v, want a conflict", requestErr)
+	}
+	if got := f.prState(pr.ID); got != store.PRReleased {
+		t.Fatalf("PR state = %s, want released", got)
+	}
+}
+
+// A review request that wins (the PR left closed before the release's
+// compare-and-set) stops the release before any side effect: no session is
+// parked and the slot is not touched.
+func TestApplyStopsBeforeAnySideEffectWhenAReviewRequestWon(t *testing.T) {
+	f := newFixture(t)
+	pr := f.closedPR(f.talkable, 1, store.GHMerged, -time.Minute)
+	f.poolSlot("review1", store.SlotHeld, pr.ID, true, nil)
+	plan := f.plan(Options{})
+	if err := f.st.TransitionPR(f.ctx, pr.ID, []string{store.PRClosed}, store.PRRereviewPending,
+		func(u *store.PRUpdate) { u.Set("forced", true) }); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := f.apply(plan, false)
+	if !errors.Is(err, store.ErrConflict) || rep.Done != 0 {
+		t.Fatalf("rep = %+v err = %v, want the release stopped as stale", rep, err)
+	}
+	if len(f.parked) != 0 || len(f.slots.calls) != 0 {
+		t.Fatalf("side effects: parked %v, slot calls %v", f.parked, f.slots.calls)
+	}
+	if got := f.prState(pr.ID); got != store.PRRereviewPending {
+		t.Fatalf("PR state = %s, want the request's rereview_pending", got)
+	}
+}
+
 func TestApplyRechecksStaleState(t *testing.T) {
 	f := newFixture(t)
 	a := f.closedPR(f.talkable, 1, store.GHMerged, -time.Minute)

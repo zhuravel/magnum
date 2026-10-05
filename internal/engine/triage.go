@@ -165,7 +165,9 @@ func (e *Engine) triage(ctx context.Context, job *roundJob, rs *roundSetup) {
 // poll identity (like rerunRoles): for a re-review the commits since the
 // reviewed one, else (a first review, or a re-review of the reviewed commit
 // itself) the whole PR, i.e. the base branch's merge base with target, which
-// GitHub's comparison of the base branch with target is.
+// GitHub's comparison of the base branch with target is. A post-merge round
+// compares with its merge base instead: the base branch holds the merged
+// head after a merge-commit merge.
 func (e *Engine) triageFiles(ctx context.Context, job *roundJob, target string) ([]github.FileDelta, error) {
 	var gh GitHub
 	if e.d.GitHub != nil {
@@ -177,6 +179,9 @@ func (e *Engine) triageFiles(ctx context.Context, job *roundJob, target string) 
 	base := deref(job.pr.BaseRef)
 	if base == "" {
 		base = job.repo.DefaultBranch
+	}
+	if job.postMerge && job.mergeBase != "" {
+		base = job.mergeBase
 	}
 	if reviewed := deref(job.pr.ReviewedSHA); job.kind == pipeline.KindRereview && reviewed != "" && reviewed != target {
 		base = reviewed

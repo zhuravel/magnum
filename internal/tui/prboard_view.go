@@ -631,10 +631,18 @@ func (p prbPainter) requestedCell(r PRBoardRow) cell {
 
 // stateWaitCell is the state pill followed, for a PR waiting for a round,
 // by what holds it and until when, dimmed ("quiet → 14:09"), and for a
-// skipped PR by why in a word ("· bot").
+// skipped PR by why in a word ("· bot"). A merged PR in a post-merge round
+// says so: "post-merge · next tick".
 func (p prbPainter) stateWaitCell(r PRBoardRow) cell {
 	c := p.stateCell(rowState(r))
-	if _, rest, ok := strings.Cut(r.Wait, " · "); ok && rest != "" {
+	_, rest, held := strings.Cut(r.Wait, " · ")
+	switch {
+	case postMergeRound(r):
+		c = append(c, seg{" post-merge", p.st.Dim})
+		if held && rest != "" {
+			c = append(c, seg{" · " + rest, p.st.Dim})
+		}
+	case held && rest != "":
 		c = append(c, seg{" " + rest, p.st.Dim})
 	}
 	if why := skipWord(r); why != "" {
@@ -681,15 +689,18 @@ func (p prbPainter) stateCell(state string) cell {
 
 // rowState is the state r's pill shows: what GitHub did to a PR it merged
 // or closed (merged, closed, or merged_unreviewed when it merged before
-// magnum reviewed its last push), else magnum's state.
+// magnum reviewed its last push), else magnum's state. A merged PR whose
+// post-merge review waits or runs (postMergeRound) shows that round's state.
 func rowState(r PRBoardRow) string {
-	switch strings.ToUpper(strings.TrimSpace(r.GHState)) {
-	case "MERGED":
+	switch {
+	case postMergeRound(r):
+		return r.State
+	case mergedOnGitHub(r):
 		if r.MergedUnreviewed {
 			return "merged_unreviewed"
 		}
 		return "merged"
-	case "CLOSED":
+	case closedUnmerged(r):
 		return "closed"
 	}
 	return r.State

@@ -22,8 +22,10 @@ type CandidateParams struct {
 // reviewer (review_requested), then oldest GitHub activity (gh_updated_at,
 // falling back to created_at), then id.
 //
-// Every candidate is OPEN on GitHub, not muted (unless forced) and past its
-// retry backoff (next_attempt_at). Within that:
+// Every candidate is OPEN on GitHub, or MERGED and forced (a post-merge
+// review: `magnum review` of a PR merged before magnum reviewed its last
+// push), not muted (unless forced) and past its retry backoff
+// (next_attempt_at). Within that:
 //   - queued PRs qualify when forced or next_eligible_at is unset or due;
 //   - rereview_pending PRs qualify when forced, or when next_eligible_at is
 //     unset or due AND the push quiet period, the (draft) minimum interval and
@@ -43,7 +45,7 @@ func (s *Store) Candidates(ctx context.Context, p CandidateParams) ([]PR, error)
 	}
 	nowS := FormatTime(now)
 	rows, err := s.db.QueryContext(ctx, "SELECT "+cols("", prColumns)+` FROM prs
-WHERE gh_state = ?
+WHERE (gh_state = ? OR (gh_state = ? AND forced = 1))
   AND (muted = 0 OR forced = 1)
   AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
   AND (
@@ -56,7 +58,7 @@ WHERE gh_state = ?
     )))
   )
 ORDER BY forced DESC, review_requested DESC, COALESCE(gh_updated_at, created_at) ASC, id ASC`,
-		GHOpen, nowS,
+		GHOpen, GHMerged, nowS,
 		PRQueued, nowS,
 		PRRereviewPending, nowS, FormatTime(now.Add(-p.QuietPeriod)),
 		FormatTime(now.Add(-draftInterval)), FormatTime(now.Add(-p.MinInterval)),

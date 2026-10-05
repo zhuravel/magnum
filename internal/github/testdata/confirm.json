@@ -14,7 +14,10 @@
         "merged": true,
         "mergedAt": "2026-10-02T14:24:50Z",
         "closedAt": "2026-10-02T14:24:50Z",
-        "headRefOid": "d2bdbcf862fbc3f586c00b0cb66f6db6b38bdcb9"
+        "headRefOid": "d2bdbcf862fbc3f586c00b0cb66f6db6b38bdcb9",
+        "mergeCommit": {
+          "oid": "5f1d2c3b4a5968778695a4b3c2d1e0f9a8b7c6d5"
+        }
       },
       "p11965": {
         "number": 11965,
@@ -22,7 +25,8 @@
         "merged": false,
         "mergedAt": null,
         "closedAt": "2026-09-30T14:03:37Z",
-        "headRefOid": "1eb72bdac4ebb6b4072b60835ab4b78d1216fdc9"
+        "headRefOid": "1eb72bdac4ebb6b4072b60835ab4b78d1216fdc9",
+        "mergeCommit": null
       },
       "p11984": {
         "number": 11984,
@@ -30,7 +34,8 @@
         "merged": false,
         "mergedAt": null,
         "closedAt": null,
-        "headRefOid": "3cdf82c3f06b32e07dcee9396ae32e904ff33ae3"
+        "headRefOid": "3cdf82c3f06b32e07dcee9396ae32e904ff33ae3",
+        "mergeCommit": null
       },
       "p99999999": null
     }

@@ -549,10 +549,10 @@ func (rd *round) abandonIfPending(ctx context.Context, id string) {
 // dismissStale dismisses the identity's previous CHANGES_REQUESTED once a
 // non-blocking review superseded it (identity.dismiss_own_stale_change_requests,
 // on by default for apps). Failure, including a missing permission, is a
-// warning only.
+// warning only. A post-merge review dismisses nothing.
 func (rd *round) dismissStale(ctx context.Context, event string, newID int64, newURL string) {
 	prev := rd.in.Previous
-	if rd.in.DryRun || prev == nil || prev.ID == 0 || prev.ID == newID || !rd.idCfg.DismissStale() ||
+	if rd.in.DryRun || rd.in.PostMerge || prev == nil || prev.ID == 0 || prev.ID == newID || !rd.idCfg.DismissStale() ||
 		!isChangesRequested(prev.Event) || isChangesRequested(event) ||
 		prev.Former || // a former login's: the engine dismisses it as that identity
 		prev.Manual { // the reviewer's own verdict stands until they change it
@@ -578,10 +578,25 @@ func (rd *round) dismissStale(ctx context.Context, event string, newID int64, ne
 		map[string]any{"review_id": prev.ID, "superseded_by": newID})
 }
 
+// PostMergeEvent is the review event of a post-merge round
+// (RoundInput.PostMerge), with or without findings.
+const PostMergeEvent = "COMMENT"
+
+// JudgeEvents are the review events the judge's prompt names for a round of
+// repository fullName ("owner/name") posted as identity id: the
+// repository's or the identity's (config.Config.VerdictsFor), and COMMENT
+// both ways in a post-merge round, where a verdict blocks nothing.
+func JudgeEvents(cfg *config.Config, fullName string, id *config.Identity, postMerge bool) (noFindings, blocking string) {
+	if postMerge {
+		return PostMergeEvent, PostMergeEvent
+	}
+	return cfg.VerdictsFor(fullName, id)
+}
+
 // judgeData fills the judge templates.
 func (rd *round) judgeData(run store.Run, marker string) agents.JudgeData {
 	in := rd.in
-	nf, be := rd.r.Config.VerdictsFor(rd.owner+"/"+rd.name, &rd.idCfg)
+	nf, be := JudgeEvents(rd.r.Config, rd.owner+"/"+rd.name, &rd.idCfg, in.PostMerge)
 	skill := config.SkillPath(rd.judge.Skill, rd.r.Layout) // config.Defaults keeps {{repo}} unexpanded
 	base := in.BaseRef
 	if base == "" {
@@ -592,7 +607,7 @@ func (rd *round) judgeData(run store.Run, marker string) agents.JudgeData {
 		HeadSHA: in.TargetSHA, BaseRef: base, BaseSHA: in.BaseSHA, Checkout: in.SlotPath,
 		IdentityKind: rd.r.Identity.Kind(), ReviewerLogin: rd.login, GhConfigDir: rd.ghDir,
 		NoFindingsEvent: nf, BlockingEvent: be, SelfAuthored: rd.selfAuthored(),
-		Reports: rd.judgeReports(), ResultFile: rd.reportPath(run, rd.judge), DryRun: in.DryRun, Blind: in.Blind,
+		Reports: rd.judgeReports(), ResultFile: rd.reportPath(run, rd.judge), DryRun: in.DryRun, Blind: in.Blind, PostMerge: in.PostMerge,
 		SkillPath: skill, Model: rd.r.Config.RoleModel(rd.judge), Effort: rd.judge.EffortFor(in.Kind == KindRereview),
 		ForcePushed: in.ForcePushed, MovedFrom: in.MovedFrom, PreviousHeadSHA: rd.previousHead(),
 		NotesPath: in.NotesPath,

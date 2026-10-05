@@ -37,7 +37,7 @@ func (p prbPainter) helpContent(width int) []string {
 		{"h / W", "hide ignored and skipped / reset widths"}, {"?", "this help"}, {"q", "quit"},
 	})
 	acts := section("Act on the PR", []hint{
-		{"r", "review now (asks y/N)"}, {"R", "fresh review in new agent sessions (asks y/N)"},
+		{"r", "review now (asks y/N); post-merge if merged"}, {"R", "fresh review in new agent sessions (asks y/N)"},
 		{"i", "review with /simplify (asks y/N)"}, {"o", "open the " + judgeName(p.judge) + " pane"},
 		{"b / t", "open the PR / its issue in the browser"}, {"p / u", "pin / unpin"}, {"M / U", "mute / unmute (asks y/N)"},
 		{"x", "release (asks y/N)"}, {"K", "kill the running review (asks y/N)"},
@@ -378,6 +378,19 @@ func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
 	acts := []hint{hint{"r", "review"}, hint{"R", "fresh review"}, hint{"i", "simplify"}, hint{"o", "open pane"}, hint{"b", "browser"}, hint{"t", "tracker"},
 		hint{"p", "pin"}, hint{"u", "unpin"}, hint{"M", "mute"}, hint{"U", "unmute"}, hint{"x", "release"},
 		hint{"K", "kill review"}, hint{"I", "ignore"}, hint{"A", "approve"}, hint{"C", "request changes"}, hint{"esc", "back"}}
+	switch {
+	case closedUnmerged(r) || mergedOnGitHub(r) && !postMergeable(r): // nothing left to review
+		acts = slices.DeleteFunc(acts, func(h hint) bool { return h.key == "r" || h.key == "R" || h.key == "i" })
+	case mergedOnGitHub(r): // the review comments only
+		for i := range acts {
+			switch acts[i].key {
+			case "r":
+				acts[i].desc = "post-merge review"
+			case "R":
+				acts[i].desc = "fresh post-merge review"
+			}
+		}
+	}
 	if r.Findings == nil { // nothing magnum reviewed to approve or reject
 		acts = slices.DeleteFunc(acts, func(h hint) bool { return h.key == "A" || h.key == "C" })
 	}

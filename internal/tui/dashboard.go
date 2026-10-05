@@ -91,12 +91,14 @@ type Pause struct {
 type SlotRow struct {
 	Name, Folder, PRRef, PRState, SlotState, DBs, Disk string
 	URL                                                string // PR URL for b; optional (looked up in Queue by PRRef)
+	PRGHState                                          string // GitHub's state of the slot's PR: OPEN, CLOSED or MERGED; "" when unknown
 }
 
 // PRRow is one queued (or closing) PR; Ref is what actions receive.
 type PRRow struct {
 	Ref, Title, Author, State, Next, Age, URL string
 	Review                                    *ReviewFacts // for the y/N question before a review; nil when unknown
+	GHState                                   string       // GitHub's state: OPEN, CLOSED or MERGED; "" when unknown
 }
 
 // AttentionRow is something that needs the user.
@@ -615,9 +617,15 @@ func (m dashboardModel) askPR(what string, question func(r dashRow, ref string) 
 }
 
 // review asks before a review round, saying what it will do and what
-// changed since the last review.
+// changed since the last review; for a PR GitHub merged it asks the
+// post-merge question instead (the review only comments).
 func (m dashboardModel) review(what string, o ReviewOpts) (dashboardModel, tea.Cmd) {
-	return m.askPR(what, func(r dashRow, ref string) string { return reviewQuestion(ref, o, m.reviewFacts(r)) },
+	return m.askPR(what, func(r dashRow, ref string) string {
+		if ghStateMerged(m.ghState(r)) {
+			return postMergeQuestion(ref, o)
+		}
+		return reviewQuestion(ref, o, m.reviewFacts(r))
+	},
 		func(ctx context.Context, a DashboardActions, ref string) (string, error) {
 			return a.Review(ctx, ref, o)
 		})
@@ -634,6 +642,26 @@ func (m dashboardModel) reviewFacts(r dashRow) string {
 		return reviewFacts(q.State, q.Next, q.Review, now)
 	}
 	return stateReviewFacts(r.slot.PRState, "")
+}
+
+// ghState is GitHub's state of the row's PR; a slot row without its own
+// reads its PR's queue row.
+func (m dashboardModel) ghState(r dashRow) string {
+	if r.pr != nil {
+		return r.pr.GHState
+	}
+	if r.slot.PRGHState != "" {
+		return r.slot.PRGHState
+	}
+	if q, ok := m.queueRow(r.prRef()); ok {
+		return q.GHState
+	}
+	return ""
+}
+
+// ghStateMerged reports whether a GitHub PR state (case aside) is MERGED.
+func ghStateMerged(state string) bool {
+	return strings.EqualFold(strings.TrimSpace(state), "MERGED")
 }
 
 // queueRow is the queue's row for ref.

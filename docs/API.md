@@ -557,7 +557,12 @@ type JudgeData struct {
 	DryRun          bool
 	// Blind: an evaluation replay (pipeline.RoundInput.Blind), rendered as
 	// `blind: true`; the skill then judges the local diff of HeadSHA only.
-	Blind         bool
+	Blind bool
+	// PostMerge: GitHub merged the PR before magnum reviewed HeadSHA
+	// (pipeline.RoundInput.PostMerge), rendered as `post_merge: true` only
+	// then; the skill posts a COMMENT that asks for follow-ups, and
+	// NoFindingsEvent and BlockingEvent are both COMMENT.
+	PostMerge     bool
 	SkillPath     string // the role's skill, absolute
 	Model, Effort string // the judge role's model and this round's effort (config.Role.EffortFor)
 	// EffortInPrompt: the agent's kind sets the effort only at launch (its
@@ -1187,6 +1192,10 @@ type RoleData struct {
 	// Blind: an evaluation replay (pipeline.RoundInput.Blind); the role
 	// must not read reviews, comments or commits after HeadSHA.
 	Blind bool
+	// PostMerge: GitHub merged the PR before magnum reviewed HeadSHA
+	// (pipeline.RoundInput.PostMerge); the prompts that name the PR say it
+	// is merged and to review it anyway.
+	PostMerge bool
 }
     RoleData feeds the prompts of every non-judge session role (claude-review,
     claude-simplify, a droid or omp reviewer, ...): the union of what those
@@ -3892,6 +3901,10 @@ type EvalCase struct {
 type Git interface {
 	MergeBase(ctx context.Context, dir, a, b string) (string, error)
 	FindClone(ctx context.Context, cloneRoot, owner, name string) (string, error)
+	// RevParse and FetchCommit find the first parent of a merged PR's merge
+	// commit, the base a post-merge round reviews from (postMergeBase).
+	RevParse(ctx context.Context, dir, ref string) (string, error)
+	FetchCommit(ctx context.Context, mainClone, sha string, number int) error
 }
     Git is the part of *gitx.Client the engine reads (round context, clone
     discovery for repos.clone_path).
@@ -4087,7 +4100,8 @@ type ReviewPayload struct {
 	DryRun bool `json:"dry_run,omitempty"`
 }
     ReviewPayload is a `magnum review` request: a forced round that bypasses
-    eligibility, the throttle and quiet hours.
+    eligibility, the throttle and quiet hours. On a PR GitHub merged it is a
+    post-merge review (post_merge.go).
 
 type Rounds interface {
 	RunRound(ctx context.Context, in pipeline.RoundInput) (pipeline.RoundResult, error)
@@ -4157,6 +4171,9 @@ type Wait struct {
 	// Detail is the reason in words, without the round's kind or the time
 	// ("the push quiet period (5m)").
 	Detail string `json:"detail"`
+	// PostMerge: GitHub merged the PR; the round it waits for is a
+	// post-merge review (`magnum review` of a merged PR, always forced).
+	PostMerge bool `json:"post_merge,omitempty"`
 }
     Wait is why a PR waiting for a round has none yet (KVPRWait).
 
@@ -5003,6 +5020,10 @@ type PRState struct {
 	MergedAt   time.Time // zero when not merged
 	ClosedAt   time.Time // zero when open
 	HeadRefOid string
+	// MergeCommitOid is the commit the merge put on the base branch: the
+	// merge commit, the squash commit or the last rebased commit ("" until
+	// merged). Its first parent is the base branch before the merge.
+	MergeCommitOid string
 }
     PRState is the closed/merged confirmation of one pull request.
 
@@ -5253,11 +5274,12 @@ func (c *Client) FetchBranch(ctx context.Context, mainClone, base string) error
 
 func (c *Client) FetchCommit(ctx context.Context, mainClone, sha string, number int) error
     FetchCommit makes sha (a full commit id) present in mainClone for a magnum
-    eval replay. A commit already there costs one rev-parse. Otherwise it
-    fetches the commit by id into refs/magnum/eval/<sha>, and when the server
-    refuses that, PR number's head into refs/magnum/eval/pr-<number> (the
-    commit is there unless the PR was force-pushed past it). It never writes
-    refs/magnum/pr/*, so the daemon's checkouts are unaffected.
+    eval replay, or for a post-merge round whose clone lacks the PR's merge
+    commit. A commit already there costs one rev-parse. Otherwise it fetches the
+    commit by id into refs/magnum/eval/<sha>, and when the server refuses that,
+    PR number's head into refs/magnum/eval/pr-<number> (the commit is there
+    unless the PR was force-pushed past it). It never writes refs/magnum/pr/*,
+    so the daemon's checkouts are unaffected.
 
 func (c *Client) FetchPR(ctx context.Context, mainClone string, number int) (string, error)
     FetchPR fetches the PR head (refs/pull/N/head) into refs/magnum/pr/N
@@ -7569,6 +7591,10 @@ const (
 	// ThreadsFile is the threads file in the round's report directory.
 	ThreadsFile = "review-threads.json"
 )
+const PostMergeEvent = "COMMENT"
+    PostMergeEvent is the review event of a post-merge round
+    (RoundInput.PostMerge), with or without findings.
+
 
 VARIABLES
 
@@ -7577,6 +7603,12 @@ var ErrInvalid = errors.New("pipeline: invalid round")
 
 
 FUNCTIONS
+
+func JudgeEvents(cfg *config.Config, fullName string, id *config.Identity, postMerge bool) (noFindings, blocking string)
+    JudgeEvents are the review events the judge's prompt names for a round of
+    repository fullName ("owner/name") posted as identity id: the repository's
+    or the identity's (config.Config.VerdictsFor), and COMMENT both ways in a
+    post-merge round, where a verdict blocks nothing.
 
 func RolesToRun(ctx context.Context, st *store.Store, cfg *config.Config, pr store.PR, roles []config.Role, requested []string, kind string) ([]config.Role, error)
     RolesToRun returns the roles a round of kind runs for pr, in the order
@@ -7742,6 +7774,13 @@ type RoundInput struct {
 	// judge takes the local diff, not GitHub's (the PR may have moved on or
 	// closed). Rendered as `blind: true` in the prompts.
 	Blind bool
+	// PostMerge: GitHub merged the PR before magnum reviewed it (the engine
+	// dispatched a `magnum review` of a merged PR). The judge reviews the
+	// commits magnum missed as usual but posts a COMMENT whatever the
+	// identity's or repository's events (JudgeData.PostMerge, rendered as
+	// `post_merge: true`), and the round dismisses no earlier review: a
+	// verdict after the merge blocks nothing.
+	PostMerge bool
 
 	// NotesPath is the repository notes file the roles read and the judge
 	// rewrites (RoleData/JudgeData.NotesPath); "" = none.
@@ -9619,8 +9658,10 @@ func (s *Store) Candidates(ctx context.Context, p CandidateParams) ([]PR, error)
     (review_requested), then oldest GitHub activity (gh_updated_at, falling back
     to created_at), then id.
 
-    Every candidate is OPEN on GitHub, not muted (unless forced) and past its
-    retry backoff (next_attempt_at). Within that:
+    Every candidate is OPEN on GitHub, or MERGED and forced (a post-merge
+    review: `magnum review` of a PR merged before magnum reviewed its
+    last push), not muted (unless forced) and past its retry backoff
+    (next_attempt_at). Within that:
       - queued PRs qualify when forced or next_eligible_at is unset or due;
       - rereview_pending PRs qualify when forced, or when next_eligible_at is
         unset or due AND the push quiet period, the (draft) minimum interval and
@@ -10494,6 +10535,7 @@ func (f PRBoardSourceFunc) Rows(ctx context.Context) ([]PRBoardRow, error)
 type PRRow struct {
 	Ref, Title, Author, State, Next, Age, URL string
 	Review                                    *ReviewFacts // for the y/N question before a review; nil when unknown
+	GHState                                   string       // GitHub's state: OPEN, CLOSED or MERGED; "" when unknown
 }
     PRRow is one queued (or closing) PR; Ref is what actions receive.
 
@@ -10568,6 +10610,9 @@ type PickEntry struct {
 	URL    string
 	Pinned bool         // ctrl+p means unpin when true
 	Review *ReviewFacts // for the y/N question before a review; nil when unknown
+	// GHState is GitHub's state of the PR: OPEN, CLOSED or MERGED; "" when
+	// unknown. A MERGED one is asked about as a post-merge review.
+	GHState string
 }
     PickEntry is one PR the picker lists.
 
@@ -10588,6 +10633,9 @@ type PickerOptions struct {
 	Query string           // initial filter; a PR URL or reference narrows to that PR
 	Title string           // default "magnum pick"
 	Now   func() time.Time // clock for "reviewed 2h ago" in the y/N question; default time.Now
+	// Lookup resolves a typed reference the list lacks to a PR magnum knows,
+	// e.g. a merged one, so the y/N question can say what it is; nil means none.
+	Lookup func(query string) (PickEntry, bool)
 }
     PickerOptions tune the picker.
 
@@ -10667,6 +10715,7 @@ type RoundsInfo struct {
 type SlotRow struct {
 	Name, Folder, PRRef, PRState, SlotState, DBs, Disk string
 	URL                                                string // PR URL for b; optional (looked up in Queue by PRRef)
+	PRGHState                                          string // GitHub's state of the slot's PR: OPEN, CLOSED or MERGED; "" when unknown
 }
     SlotRow is one review slot. Actions on a slot row target PRRef, or the slot
     Name for pin/unpin/release when it holds no PR.

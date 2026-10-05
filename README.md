@@ -422,7 +422,7 @@ code; `magnum stats` reports them per role.
 | `magnum eval run\|score\|list\|show` | Measure a prompt, skill or model change: `run` replays the PRs with known defects in `~/.config/magnum/eval.toml` (see `eval.toml.example`) at their pinned heads as blind dry runs and reports, per case, the seeded defects the planned review found, at what severity, and its other findings (noise), next to the previous run. `score` re-scores a run after a match rule is fixed, without the agents. |
 | `magnum retro [<ref>...] [--again] [--lookback 14d] [--json]` | Run the retro now (see Learning from other reviewers): classify what other reviewers said about the PRs closed within the lookback, whether or not `[learn] enabled`. `--again` looks again at PRs a retro already did; PRs named by `<ref>` are looked at again in any case. |
 | `magnum misses [<ref>] [--all] [--class miss\|not_issue\|style\|outside\|unclassified] [--json]` | What other reviewers caught and Magnum did not: the retro's new misses, with the reviewer, where, severity, whether Magnum's judge had raised and rejected it, the title and the lesson. `--all` lists every class and state. |
-| `magnum review <url\|owner/repo#N\|repo#N\|N> [--fresh] [--role <role>] [--simplify] [--as <identity>] [--no-post] [--wait] [--timeout <duration>]` | Force a round now, bypassing throttles. `--role` (repeatable) also runs an on-demand role this round; `--simplify` is its shorthand for the role aliased `simplify` (claude-simplify by default). `--wait` follows the round; `--timeout` stops following after that long while the round goes on. |
+| `magnum review <url\|owner/repo#N\|repo#N\|N> [--fresh] [--role <role>] [--simplify] [--as <identity>] [--no-post] [--wait] [--timeout <duration>]` | Force a round now, bypassing throttles. `--role` (repeatable) also runs an on-demand role this round; `--simplify` is its shorthand for the role aliased `simplify` (claude-simplify by default). `--wait` follows the round; `--timeout` stops following after that long while the round goes on. On a PR GitHub merged it is a post-merge review: the commits Magnum missed since its last review (the whole PR when it never reviewed it), posted as a comment only, after which the PR is released again; a merged PR whose head was reviewed and a PR closed without merging are refused. |
 | `magnum open <ref> [--role <role>]` | Focus the PR's pane in herdr and reveal the herdr client (focus the existing iTerm2 tab, or open a new one). |
 | `magnum watch <ref> [--role <role>] [--ansi]` | Read-only live mirror of a pane in any terminal. |
 | `magnum roles [--repo owner/name] [--kinds] [--json]` | The effective roles per watch (kind, runs, model, effort, capture, output, prompt file and whether it is yours or built in, after, judge, aliases). `--kinds` shows how each agent CLI is started and resumed, and which models it switches to when one hits its own limit, instead. |
@@ -457,7 +457,7 @@ per-reviewer table (and a line with the latest request to each reviewer: who ask
 round's stage timings (fetch/checkout, each role, verify, total); `/`
 filters; `v` cycles the views; `s`/`S` sort (updated, last review, reviewer activity, requested, changes,
 state; the requested sort puts the newest request first, the one the column shows, and PRs nobody asked
-last); `r`, `R`, `i` start review variants; `o` opens the pane;
+last); `r`, `R`, `i` start review variants (a post-merge review on a merged PR, below); `o` opens the pane;
 `p`/`u` pin; `x` releases; `M`/`U` mute; `K` kills the running review; `I` ignores the PR (an ignored
 row is greyed with its title struck through, and `U` unmutes it, which stops ignoring it); `A` approves
 and `C` requests changes as the PR's posting identity (see `magnum approve`); `b` opens the browser;
@@ -489,6 +489,17 @@ commits (the one Magnum last reviewed, the merged head), the status dashboard li
 the daemon writes a `pr.merged_unreviewed` warning and sends one toast per PR (`[herdr] notify`). A baseline,
 skipped, ignored, muted or reviewed PR is never flagged: Magnum was not going to review it. Printed rows
 (`magnum prs` without a terminal) list the section too, with `closed,merged,unreviewed` in STATE.
+`r` on a merged row asks "Post-merge review talkable#7 (comment only)?" (`R` and `i` their fresh and
+simplify variants; the status dashboard and `magnum pick` ask the same) and, on `y`, runs `magnum review`
+for it: a re-review from the commit Magnum last reviewed to the merged head (a first review when there is
+none), in a pool slot or a per-PR worktree, against the base branch as it was before the merge (the first
+parent of GitHub's merge commit, so a merge-commit merge still has a diff), posted as a COMMENT whatever
+the identity or `[[repo]]` events say (a review posted otherwise stands, with a `pr.post_merge_event`
+warning), with findings framed as follow-ups and no earlier review dismissed. Its row shows the round's state with `post-merge` in the state cell
+(`re-review post-merge · next tick`), the flag clears once the review is verified on the merged head, and
+the PR goes back to closed and is released after a fresh `close_grace`. A round that cannot post (the
+judge is blocked, say) also goes back to closed, with a `pr.post_merge_failed` warning and a toast. A row
+closed without merging, or merged with its head reviewed, refuses at once.
 
 FINDINGS shows what magnum's latest review concluded, also where its repository lets it only comment:
 the verdict (✗ blocking, ● comment, ✔ clean), the findings by priority (`P1 P2×3`) and the optional

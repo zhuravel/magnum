@@ -169,6 +169,7 @@ type fixture struct {
 	run      *execx.Fake
 	parked   []int64
 	parkErr  error
+	parkHook func(store.PR) // runs inside Park, as something racing the release would
 	p        *Planner
 }
 
@@ -214,6 +215,9 @@ func newFixture(t *testing.T) *fixture {
 		Config: cfg, Clock: func() time.Time { return now },
 		Park: func(ctx context.Context, pr store.PR) error {
 			f.parked = append(f.parked, pr.ID)
+			if f.parkHook != nil {
+				f.parkHook(pr)
+			}
 			return f.parkErr
 		},
 	}

@@ -88,6 +88,7 @@ the judge data, every other session role gets the role data, and a shell role's 
 | `.Reports` | one entry per other role of the round, in pipeline order (see below) |
 | `.ResultFile` | where the judge writes its JSON result (the role's `output`) |
 | `.DryRun` | plan the review without posting it |
+| `.PostMerge` | GitHub merged the PR before magnum reviewed `.HeadSHA` (`magnum review` of a merged PR): post a COMMENT asking for follow-ups; `.NoFindingsEvent` and `.BlockingEvent` are both `COMMENT`. The judge prompts render `post_merge: true` only then |
 | `.SkillPath` | the role's `skill`, absolute; in the daemon, the copy it took at startup |
 | `.Model`, `.Effort` | the judge role's `model` (else its kind's `default_model`), and its effort for this round: `rereview_effort` in a re-review (when set), else `effort` |
 | `.EffortInPrompt` | the kind sets the effort only at launch (its `effort` args, as codex) and `.Effort` is not the role's `effort`: a running session cannot switch, so the prompt asks for `.Effort` in words |
@@ -143,6 +144,7 @@ reviewer, ...), initial, rereview and restart alike.
 | `.ForcePushed` | `.PreviousHeadSHA` is no longer in the branch (rereview) |
 | `.RestartedFrom` | the head the role was reviewing when a push cut its turn short (restart only, empty otherwise) |
 | `.NotesPath` | the repository notes file (see Repository notes); the role reads it first. Empty when there is none |
+| `.PostMerge` | GitHub merged the PR before magnum reviewed `.HeadSHA` (a post-merge review); the prompts that name the PR say "The PR is already merged; review it anyway." only then |
 
 A role without its own `<name>-rereview.md` (or `rereview` key) reuses its initial prompt for a new
 head. It then sees `.Mode` as `rereview` with `.PreviousHeadSHA` and `.Since` filled, so one file can
