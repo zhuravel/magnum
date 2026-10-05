@@ -125,7 +125,7 @@ func TestRadarQueryIsScalarOnly(t *testing.T) {
 		"ownerAffiliations: OWNER",
 		"isArchived: false",
 		"pullRequests(states: OPEN, first: $prFirst)",
-		"nodes { id number isDraft updatedAt headRefOid baseRefName isCrossRepository headRef { target { oid ... on Commit { statusCheckRollup { state } } } } }",
+		"nodes { id number isDraft updatedAt headRefOid baseRefName isCrossRepository }",
 		"id nameWithOwner pushedAt defaultBranchRef { name }",
 		"pageInfo { hasNextPage endCursor }",
 		"rateLimit { limit cost remaining used resetAt }",
@@ -140,53 +140,44 @@ func TestRadarQueryIsScalarOnly(t *testing.T) {
 		}
 	}
 	// A connection under pullRequests is priced once per pull request
-	// (commits(last: 1): 101 points a page instead of 1).
+	// (commits(last: 1): 101 points a page instead of 1, rateLimit(dryRun:
+	// true) on 2026-10-05).
 	for _, banned := range []string{"commits", "contexts", "last:"} {
 		if strings.Contains(q, banned) {
 			t.Errorf("radar query must not open a connection per pull request, found %q", banned)
 		}
 	}
+	// The check rollup costs no point (1 a page with or without it) but
+	// GitHub computes it for every open pull request of every repository
+	// the page lists: with it the busiest owner's first page ran out of
+	// time (HTTP 502/504) on 9% of the polls. CIStates reads it apart.
+	for _, banned := range []string{"statusCheckRollup", "headRef "} {
+		if strings.Contains(q, banned) {
+			t.Errorf("radar query must not read the check rollup, found %q", banned)
+		}
+	}
 }
 
-// TestRadarCIRollup: the head branch's rollup is the pull request's CI only
-// for a branch of the repository whose tip is the head. The repository's
-// default branch comes along.
-func TestRadarCIRollup(t *testing.T) {
-	node := func(n int, cross bool, headRef string) string {
-		return fmt.Sprintf(`{"id":"PR_%d","number":%d,"isDraft":false,"updatedAt":"2026-10-04T09:00:00Z","headRefOid":"h%d","baseRefName":"master","isCrossRepository":%v,"headRef":%s}`,
-			n, n, n, cross, headRef)
+// TestRadarReadsForksAndTheDefaultBranch: the radar says which pull
+// requests come from a fork (CIStates skips them) and leaves their CI
+// unknown; the repository's default branch comes along.
+func TestRadarReadsForksAndTheDefaultBranch(t *testing.T) {
+	node := func(n int, cross bool) string {
+		return fmt.Sprintf(`{"id":"PR_%d","number":%d,"isDraft":false,"updatedAt":"2026-10-04T09:00:00Z","headRefOid":"h%d","baseRefName":"master","isCrossRepository":%v}`,
+			n, n, n, cross)
 	}
 	body := compact(t, `{"data":{"rateLimit":{"limit":5000,"cost":1,"remaining":4999,"used":1,"resetAt":"2026-10-04T10:00:00Z"},
 		"repositoryOwner":{"repositories":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"id":"R_1","nameWithOwner":"talkable/app","pushedAt":"2026-10-04T09:00:00Z","defaultBranchRef":{"name":"main"},
-		"pullRequests":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[`+strings.Join([]string{
-		node(1, false, `{"target":{"oid":"h1","statusCheckRollup":{"state":"FAILURE"}}}`),
-		node(2, false, `{"target":{"oid":"h2","statusCheckRollup":null}}`),
-		node(3, true, `{"target":{"oid":"h3","statusCheckRollup":{"state":"SUCCESS"}}}`),
-		node(4, false, `{"target":{"oid":"newer","statusCheckRollup":{"state":"PENDING"}}}`),
-		node(5, false, `null`),
-	}, ",")+`]}}]}}}}`)
+		"pullRequests":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[`+node(1, false)+","+node(2, true)+`]}}]}}}}`)
 	f := &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"gh", "api", "graphql"}, Result: execx.Result{Stdout: body}}}}
 	repos, _, err := (&Client{Run: f}).Radar(context.Background(), "talkable")
-	if err != nil || len(repos) != 1 || repos[0].DefaultBranch != "main" {
+	if err != nil || len(repos) != 1 || repos[0].DefaultBranch != "main" || len(repos[0].PRs) != 2 {
 		t.Fatalf("repos = %+v, %v", repos, err)
 	}
-	type ci struct {
-		state string
-		known bool
-	}
-	var got []ci
-	for _, p := range repos[0].PRs {
-		got = append(got, ci{p.CIState, p.CIKnown})
-	}
-	want := []ci{
-		{"FAILURE", true}, // the branch's tip is the head
-		{"", true},        // no checks
-		{"", false},       // a fork's branch carries the fork's checks
-		{"", false},       // the branch moved past the head the radar read
-		{"", false},       // the branch is gone
-	}
-	if !slices.Equal(got, want) {
-		t.Errorf("CI = %+v, want %+v", got, want)
+	for i, p := range repos[0].PRs {
+		if p.IsCrossRepository != (i == 1) || p.CIKnown || p.CIState != "" {
+			t.Errorf("PR %d = %+v", p.Number, p)
+		}
 	}
 }
 
@@ -319,5 +310,161 @@ func TestRadarKeepsRateLimitWhenPullRequestPageFails(t *testing.T) {
 	// Only repository page 1 succeeded before its pull request page failed.
 	if rate.Cost != 1 || rate.Remaining != 4980 || rate.ResetAt.IsZero() {
 		t.Errorf("rate = %+v, want page 1's", rate)
+	}
+}
+
+// syntheticRadarPage is a repositories page of the repositories from..to-1
+// ("talkable/r<i>", one open PR each) that continues at next ("" = last).
+func syntheticRadarPage(t *testing.T, from, to int, next string) []byte {
+	t.Helper()
+	var nodes []string
+	for i := from; i < to; i++ {
+		nodes = append(nodes, fmt.Sprintf(`{"id":"R_%d","nameWithOwner":"talkable/r%d","pushedAt":"2026-10-05T09:00:00Z","defaultBranchRef":{"name":"main"},
+			"pullRequests":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[`+syntheticPR(i)+`]}}`, i, i))
+	}
+	return compact(t, `{"data":{"rateLimit":{"limit":5000,"cost":1,"remaining":4990,"used":10,"resetAt":"2026-10-05T10:00:00Z"},
+		"repositoryOwner":{"repositories":{"pageInfo":`+syntheticPageInfo(next)+`,"nodes":[`+strings.Join(nodes, ",")+`]}}}}`)
+}
+
+func syntheticPR(n int) string {
+	return fmt.Sprintf(`{"id":"PR_%d","number":%d,"isDraft":false,"updatedAt":"2026-10-05T09:00:00Z","headRefOid":"h%d","baseRefName":"main","isCrossRepository":false}`, n, n, n)
+}
+
+func syntheticPageInfo(next string) string {
+	if next == "" {
+		return `{"hasNextPage":false,"endCursor":null}`
+	}
+	return fmt.Sprintf(`{"hasNextPage":true,"endCursor":%q}`, next)
+}
+
+// What gh prints when GitHub could not answer a query in time: a bare
+// status line over GitHub's HTML error page (502), or GitHub's JSON message
+// (504).
+var (
+	html502 = []byte("<!DOCTYPE html><html><body>Unicorn!</body></html>")
+	gh502   = []byte("gh: HTTP 502\n")
+	json504 = []byte(`{"message":"We couldn't respond to your request in time. Sorry about that. Please try resubmitting your request and contact us if the problem persists."}`)
+	gh504   = []byte("gh: We couldn't respond to your request in time. Sorry about that. Please try resubmitting your request and contact us if the problem persists. (HTTP 504)\n")
+)
+
+// TestRadarRetriesAServerErrorAtHalfThePageSize: a page GitHub could not
+// answer in time (HTTP 502) is asked again once with half as many
+// repositories, and the pages after it keep the smaller size.
+func TestRadarRetriesAServerErrorAtHalfThePageSize(t *testing.T) {
+	var asked []string
+	f := &execx.Fake{Rules: []execx.Rule{gqlRule(t, func(c execx.Cmd, req gqlReq) (execx.Result, error) {
+		asked = append(asked, fmt.Sprint(req.Variables["first"], "@", req.Variables["after"]))
+		switch {
+		case req.Variables["first"] == float64(100):
+			return failResult(c, html502, gh502)
+		case req.Variables["after"] == nil:
+			return okResult(syntheticRadarPage(t, 0, 50, "c50"))
+		default:
+			return okResult(syntheticRadarPage(t, 50, 60, ""))
+		}
+	})}}
+	repos, rate, err := (&Client{Run: f}).Radar(context.Background(), "talkable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repos) != 60 {
+		t.Errorf("repos = %d, want 60", len(repos))
+	}
+	if want := []string{"100@<nil>", "50@<nil>", "50@c50"}; !slices.Equal(asked, want) {
+		t.Errorf("pages asked = %v, want %v", asked, want)
+	}
+	if rate.Cost != 2 {
+		t.Errorf("cost = %d, want 2 (the failed call reports none)", rate.Cost)
+	}
+}
+
+// TestRadarGivesUpAfterOneRetry: when the smaller page fails too, the radar
+// fails for this poll with the retry's error.
+func TestRadarGivesUpAfterOneRetry(t *testing.T) {
+	var asked []any
+	f := &execx.Fake{Rules: []execx.Rule{gqlRule(t, func(c execx.Cmd, req gqlReq) (execx.Result, error) {
+		asked = append(asked, req.Variables["first"])
+		return failResult(c, json504, gh504)
+	})}}
+	repos, _, err := (&Client{Run: f}).Radar(context.Background(), "talkable")
+	if err == nil || repos != nil {
+		t.Fatalf("want an error and no repositories, got %d, %v", len(repos), err)
+	}
+	if want := []any{float64(100), float64(50)}; !slices.Equal(asked, want) {
+		t.Errorf("pages asked = %v, want %v", asked, want)
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Status != 504 || !strings.Contains(err.Error(), "retried at 50 repositories") {
+		t.Errorf("err = %v", err)
+	}
+}
+
+// TestRadarRetryStopsAtTheFloor: halving never goes below minPage; a page
+// already at or below it is retried at its own size.
+func TestRadarRetryStopsAtTheFloor(t *testing.T) {
+	for _, tc := range []struct{ page, retry int }{{12, minPage}, {minPage, minPage}, {8, 8}} {
+		var asked []any
+		f := &execx.Fake{Rules: []execx.Rule{gqlRule(t, func(c execx.Cmd, req gqlReq) (execx.Result, error) {
+			asked = append(asked, req.Variables["first"])
+			return failResult(c, html502, gh502)
+		})}}
+		if _, _, err := (&Client{Run: f, repoPage: tc.page}).Radar(context.Background(), "talkable"); err == nil {
+			t.Errorf("page %d: want an error", tc.page)
+		}
+		if want := []any{float64(tc.page), float64(tc.retry)}; !slices.Equal(asked, want) {
+			t.Errorf("page %d: asked %v, want %v", tc.page, asked, want)
+		}
+	}
+}
+
+// TestRadarRetriesAPullRequestPageAtHalfSize: a repository's further pull
+// request page is retried the same way, with half as many pull requests.
+func TestRadarRetriesAPullRequestPageAtHalfSize(t *testing.T) {
+	var asked []any
+	f := &execx.Fake{Rules: []execx.Rule{gqlRule(t, func(c execx.Cmd, req gqlReq) (execx.Result, error) {
+		if strings.Contains(req.Query, "repositoryOwner(login: $org)") {
+			return okResult(compact(t, `{"data":{"rateLimit":{"limit":5000,"cost":1,"remaining":4990,"used":10,"resetAt":"2026-10-05T10:00:00Z"},
+				"repositoryOwner":{"repositories":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"id":"R_1","nameWithOwner":"talkable/app",
+				"pushedAt":"2026-10-05T09:00:00Z","defaultBranchRef":{"name":"main"},
+				"pullRequests":{"pageInfo":`+syntheticPageInfo("p1")+`,"nodes":[`+syntheticPR(1)+`]}}]}}}}`))
+		}
+		asked = append(asked, req.Variables["prFirst"])
+		if req.Variables["prFirst"] == float64(100) {
+			return failResult(c, html502, gh502)
+		}
+		return okResult(compact(t, `{"data":{"rateLimit":{"limit":5000,"cost":1,"remaining":4989,"used":11,"resetAt":"2026-10-05T10:00:00Z"},
+			"node":{"pullRequests":{"pageInfo":`+syntheticPageInfo("")+`,"nodes":[`+syntheticPR(2)+`]}}}}`))
+	})}}
+	repos, _, err := (&Client{Run: f}).Radar(context.Background(), "talkable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []any{float64(100), float64(50)}; !slices.Equal(asked, want) {
+		t.Errorf("pull request pages asked = %v, want %v", asked, want)
+	}
+	if len(repos) != 1 || len(repos[0].PRs) != 2 {
+		t.Errorf("repos = %+v", repos)
+	}
+}
+
+// TestRadarRetriesOnlyWhenGitHubRanOutOfTime: other failures (no network,
+// a bad query, the runner's own failure) are not retried.
+func TestRadarRetriesOnlyWhenGitHubRanOutOfTime(t *testing.T) {
+	for name, answer := range map[string]func(c execx.Cmd) (execx.Result, error){
+		"no network": func(c execx.Cmd) (execx.Result, error) {
+			return failResult(c, nil, []byte("error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com\n"))
+		},
+		"bad query": func(c execx.Cmd) (execx.Result, error) {
+			return failResult(c, fixture(t, "gql_syntax.json"), fixture(t, "gql_syntax.stderr"))
+		},
+		"runner": func(c execx.Cmd) (execx.Result, error) { return execx.Result{}, context.DeadlineExceeded },
+	} {
+		f := &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"gh", "api", "graphql"}, Fn: answer}}}
+		if _, _, err := (&Client{Run: f}).Radar(context.Background(), "talkable"); err == nil {
+			t.Errorf("%s: want an error", name)
+		}
+		if len(f.Calls) != 1 {
+			t.Errorf("%s: calls = %d, want 1", name, len(f.Calls))
+		}
 	}
 }

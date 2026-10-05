@@ -69,8 +69,8 @@ type prSpec struct {
 	// labelsTruncated and reviewsTruncated make Details report a cut-off
 	// label or latestReviews page (LabelsComplete, LatestReviewsComplete).
 	labelsTruncated, reviewsTruncated bool
-	// ci is the head's check rollup ("" = no checks) the radar and Details
-	// report, checks the Details' checks; ciUnknown makes the radar unable to
+	// ci is the head's check rollup ("" = no checks) CIStates and Details
+	// report, checks the Details' checks; ciUnknown makes CIStates unable to
 	// read the rollup (a fork's PR).
 	ci        string
 	checks    []github.Check
@@ -83,6 +83,7 @@ type fakeGH struct {
 	closed     map[int]string      // number -> CLOSED|MERGED for ConfirmStates
 	notFound   []int
 	radarErr   error
+	ciErr      error                          // CIStates fails
 	compare    map[string]github.CompareStats // "base...head" -> stats; absent = ErrNotFound
 	compareErr error
 	detailsErr error                   // Details fails
@@ -264,11 +265,36 @@ func (g *fakeGH) Radar(_ context.Context, org string) ([]github.RepoRadar, githu
 		rr := github.RepoRadar{NodeID: "R_" + full, NameWithOwner: full, DefaultBranch: "main"}
 		for _, p := range g.repos[full] {
 			rr.PRs = append(rr.PRs, github.PRRadar{NodeID: fmt.Sprintf("PR_%s_%d", full, p.n), Number: p.n,
-				IsDraft: p.draft, UpdatedAt: p.updated, HeadRefOid: p.head, BaseRefName: "master", CIState: p.ci, CIKnown: !p.ciUnknown})
+				IsDraft: p.draft, UpdatedAt: p.updated, HeadRefOid: p.head, BaseRefName: "master"})
 		}
 		out = append(out, rr)
 	}
 	return out, github.RateLimit{Limit: 5000, Remaining: 4900, Cost: 1}, nil
+}
+
+// CIStates answers the rollup of each asked PR whose head is still the
+// one asked about, from its spec (none for ciUnknown).
+func (g *fakeGH) CIStates(_ context.Context, prs []github.PRRadar) (map[string]string, github.RateLimit, error) {
+	ids := make([]string, len(prs))
+	for i, p := range prs {
+		ids[i] = p.NodeID
+	}
+	g.record("ci:" + strings.Join(ids, ","))
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.ciErr != nil {
+		return nil, github.RateLimit{}, g.ciErr
+	}
+	out := map[string]string{}
+	for full, specs := range g.repos {
+		for _, s := range specs {
+			id := fmt.Sprintf("PR_%s_%d", full, s.n)
+			if !s.ciUnknown && slices.ContainsFunc(prs, func(p github.PRRadar) bool { return p.NodeID == id && p.HeadRefOid == s.head }) {
+				out[id] = s.ci
+			}
+		}
+	}
+	return out, github.RateLimit{Limit: 5000, Remaining: 4899, Cost: 1}, nil
 }
 
 func (g *fakeGH) Details(_ context.Context, owner, repo string, numbers []int) (map[int]github.PRDetails, []int, error) {

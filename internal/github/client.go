@@ -4,9 +4,12 @@
 // and --dry-run turns writes into no-ops.
 //
 // Reads use GraphQL (`gh api graphql --input -`): the per-owner Radar poll
-// (a user or an organization), batched Details, ConfirmStates for PRs that
-// left the OPEN list, ReviewsWithMarker for verification, and Reviews and
-// ReviewThreads for the whole conversation of one pull request. REST is used
+// (a user or an organization) and the CIStates of its pull requests' heads,
+// batched Details, ConfirmStates for PRs that left the OPEN list,
+// ReviewsWithMarker for verification, and Reviews and ReviewThreads for the
+// whole conversation of one pull request. A Radar page or CIStates call
+// GitHub could not answer in time is asked again once at half the size
+// (retrySmaller). REST is used
 // where only REST carries the data (ReviewREST: the "[bot]"-suffixed author
 // login; Compare, CompareFiles and ComparePush: the size, the patches and
 // the merge commits of an arbitrary base...head range; FileAt: the raw
@@ -405,15 +408,66 @@ func (c *Client) restRawOnce(ctx context.Context, op, path, accept string) ([]by
 	return res.Stdout, nil
 }
 
-var httpStatusRe = regexp.MustCompile(`\(HTTP (\d{3})\)`)
+// httpStatusRe finds the status gh prints for a failed call: "(HTTP 404)"
+// after GitHub's message, or a line of its own ("gh: HTTP 502") when the
+// answer was not JSON (GitHub's HTML error page).
+var httpStatusRe = regexp.MustCompile(`\(HTTP (\d{3})\)|(?m:^(?:gh: )?HTTP (\d{3})[ \t\r]*$)`)
 
 func httpStatus(stderr []byte) int {
 	m := httpStatusRe.FindSubmatch(stderr)
 	if m == nil {
 		return 0
 	}
-	n, _ := strconv.Atoi(string(m[1]))
+	code := m[1]
+	if len(code) == 0 {
+		code = m[2]
+	}
+	n, _ := strconv.Atoi(string(code))
 	return n
+}
+
+// overloaded reports whether err is GitHub failing to answer a query in
+// time: an HTTP 5xx (a query past GitHub's time limit answers 502 or 504),
+// a GraphQL error naming a timeout, or the HTTP/2 stream GitHub cancelled.
+// A smaller query may succeed where this one did not; a network failure, a
+// refused or a malformed query would fail the same way again.
+func overloaded(err error) bool {
+	var apiErr *APIError
+	if errors.As(err, &apiErr) {
+		if apiErr.Status >= 500 {
+			return true
+		}
+		for _, g := range apiErr.Errors {
+			m := strings.ToLower(g.Message)
+			if strings.Contains(m, "timeout") || strings.Contains(m, "timed out") || strings.Contains(m, "timedout") {
+				return true
+			}
+		}
+		return false
+	}
+	var exitErr *execx.ExitError
+	return errors.As(err, &exitErr) && strings.Contains(exitErr.Stderr, "CANCEL; received from peer")
+}
+
+// minPage is the fewest items a page shrinks to when GitHub could not
+// answer a bigger one in time.
+const minPage = 10
+
+// retrySmaller runs call with a page of size items; when GitHub could not
+// answer it in time (overloaded) it runs it once more with half as many
+// (never below minPage, or the size itself when that is smaller) and
+// returns that size for the pages after it. The retry's error says the size
+// it tried, in what ("repositories a page").
+func retrySmaller(size int, what string, call func(size int) error) (int, error) {
+	err := call(size)
+	if !overloaded(err) {
+		return size, err
+	}
+	size = max(size/2, min(size, minPage))
+	if err := call(size); err != nil {
+		return size, fmt.Errorf("%w (retried at %d %s)", err, size, what)
+	}
+	return size, nil
 }
 
 // ghFailure turns a non-zero gh exit into an *APIError when GitHub answered

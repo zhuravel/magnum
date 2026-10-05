@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -336,4 +337,38 @@ func (e *Engine) changed(key, msg string) bool {
 	prev, ok := e.lastSeen[key]
 	e.lastSeen[key] = msg
 	return !ok || prev != msg
+}
+
+// errorLogWindow is how long an error logged once stays quiet while it
+// repeats: a poll failing every 30 s is one warning an hour, not 120.
+const errorLogWindow = time.Hour
+
+// volatileRe matches what differs between two occurrences of the same
+// failure: a TCP connection's address and port.
+var volatileRe = regexp.MustCompile(`\d{1,3}(?:\.\d{1,3}){3}:\d+`)
+
+// logOnce reports whether msg should be logged under key: true when the
+// same message (addresses and ports aside) was not logged for key within
+// errorLogWindow, which it then records (tick goroutine only). Unlike
+// changed, a success in between does not make a repeat new, and two errors
+// that alternate are each logged once a window.
+func (e *Engine) logOnce(key, msg string, now time.Time) bool {
+	k := key + "\x00" + volatileRe.ReplaceAllString(msg, "<addr>")
+	if at, ok := e.logged[k]; ok && now.Sub(at) < errorLogWindow {
+		return false
+	}
+	for old, at := range e.logged {
+		if now.Sub(at) >= errorLogWindow {
+			delete(e.logged, old)
+		}
+	}
+	e.logged[k] = now
+	return true
+}
+
+// warnTick logs a tick's errors, each distinct one once an hour (logOnce).
+func (e *Engine) warnTick(err error) {
+	if e.logOnce("tick", err.Error(), e.now()) {
+		e.log.Warn("tick finished with errors", "err", err)
+	}
 }

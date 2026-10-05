@@ -1147,3 +1147,29 @@ editing history. Code, config comments and prompts reference these by their head
   file, the prompt kind, `JudgeData.Reason` and its doctor check are gone. A role's `stop` key is still
   accepted and ignored, so a config that names `judge-stop.md` loads (an unknown key once crash-looped the
   daemon 138 times).
+- **The radar reads no CI; a read by node id does, and a page GitHub cannot answer in time is asked again
+  smaller** (2026-10-05, after the busiest owner's first radar page failed with HTTP 502 or 504 on 9% of
+  the polls, 26% in the peak hour, from the day the head's rollup went into the radar). The rollup costs
+  no point (`rateLimit(dryRun: true)`: 1 for a page of 100 repositories × 100 pull requests with or without
+  it, 101 with `commits(last: 1)`), but GitHub computes it for every open pull request of every repository
+  the page lists, watched or not: that page (96 repositories, 193 open pull requests) took 6.8 to 8.1 s
+  without it and 8.6 to 10.9 s with it, against GitHub's 10 s, and one of three answered 502. **Why a read
+  of its own**: a CI run that ends does not move a PR's `updatedAt`, so the board's CI column needs the
+  rollup on every poll. `CIStates` asks `nodes(ids:)` for the head branch's tip and its rollup state, for
+  the open same-repository PRs of the watched repositories only, 100 a call (the most `nodes` takes; 1 point
+  whatever the size; 99 PRs answered in 1.3 to 1.5 s). A poll of an owner costs its radar pages (1 point
+  each, as before the rollup) plus 1 point per 100 such PRs: 3 instead of 1 for the busiest owner, about
+  240 points an hour more at a 30 s poll, and nothing else on a quiet tick. A read that fails leaves the
+  rollups unknown (the stored CI stays, no Details are fetched for it) and the poll goes on. **Why retry
+  at half size**: a 5xx, a GraphQL error naming a timeout or a stream GitHub cancelled is asked again once
+  at half the page (the radar's repositories, a repository's further pull requests, a CI call; never below
+  10), the pages after it in the same call keep the smaller size, and a second failure gives up for the
+  tick; a network failure, a refused or a malformed query is not retried, it would fail the same way. gh's
+  bare `gh: HTTP 502` line (over GitHub's HTML error page) now reads as status 502. **Why once an hour**:
+  `poll.error` was logged on every change of the error and the daemon's "tick finished with errors" on
+  every tick, so poll errors were over half of all warnings; each distinct error (TCP addresses and ports
+  aside) of `poll.error`, the new `poll.ci_error` and the tick warning is now logged once an hour, even with
+  good polls in between. Rejected: keeping the rollup in the radar with smaller pages (still computed for
+  unwatched repositories, and 25 × 25 takes four pages for that owner), reading CI on a slower cadence (a
+  re-run's result would show minutes late), and 50-repository radar pages by default (two of them took
+  the same 7.7 s in all at a point more every tick; the retry covers the slow tail).

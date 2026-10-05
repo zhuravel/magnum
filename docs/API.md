@@ -3934,6 +3934,9 @@ type Git interface {
 
 type GitHub interface {
 	Radar(ctx context.Context, org string) ([]github.RepoRadar, github.RateLimit, error)
+	// CIStates reads the head rollups of the watched repositories' open PRs
+	// on every poll (readCI, poll.go); the radar carries none.
+	CIStates(ctx context.Context, prs []github.PRRadar) (map[string]string, github.RateLimit, error)
 	Details(ctx context.Context, owner, repo string, numbers []int) (map[int]github.PRDetails, []int, error)
 	ConfirmStates(ctx context.Context, owner, repo string, numbers []int) (map[int]github.PRState, []int, error)
 	Compare(ctx context.Context, owner, repo, base, head string) (github.CompareStats, error)
@@ -4648,10 +4651,12 @@ env (GH_CONFIG_DIR per identity), tests script gh with execx.Fake and --dry-run
 turns writes into no-ops.
 
 Reads use GraphQL (`gh api graphql --input -`): the per-owner Radar poll (a
-user or an organization), batched Details, ConfirmStates for PRs that left the
-OPEN list, ReviewsWithMarker for verification, and Reviews and ReviewThreads
-for the whole conversation of one pull request. REST is used where only REST
-carries the data (ReviewREST: the "[bot]"-suffixed author login; Compare,
+user or an organization) and the CIStates of its pull requests' heads, batched
+Details, ConfirmStates for PRs that left the OPEN list, ReviewsWithMarker for
+verification, and Reviews and ReviewThreads for the whole conversation of one
+pull request. A Radar page or CIStates call GitHub could not answer in time
+is asked again once at half the size (retrySmaller). REST is used where only
+REST carries the data (ReviewREST: the "[bot]"-suffixed author login; Compare,
 CompareFiles and ComparePush: the size, the patches and the merge commits of
 an arbitrary base...head range; FileAt: the raw content of a file at a ref,
 a response that is bytes and not JSON) and for writes (DismissReview).
@@ -4799,6 +4804,22 @@ type Client struct {
 }
     Client runs gh as one identity. The zero value is unusable; set Run.
 
+func (c *Client) CIStates(ctx context.Context, prs []PRRadar) (map[string]string, RateLimit, error)
+    CIStates reads the check rollup of each pull request's head (SUCCESS,
+    FAILURE, PENDING, ERROR, EXPECTED; "" when the head has no checks) by node
+    id. A CI run does not move a pull request's updatedAt, so the radar alone
+    cannot tell that it ended. The rollup is read through the head branch: it is
+    the pull request's only while the branch's tip is the HeadRefOid the radar
+    read, and a fork's pull request is not asked about (its branch carries the
+    fork's checks, not the ones the pull request runs); a pull request missing
+    from the result is unknown.
+
+    Each call asks about ciPage pull requests; one GitHub could not answer in
+    time is asked once more at half the size (retrySmaller), which the calls
+    after it keep. A call that still fails ends the read: the states read before
+    it come back with the error. The RateLimit sums Cost over the calls (1 point
+    each).
+
 func (c *Client) Compare(ctx context.Context, owner, repo, base, head string) (CompareStats, error)
     Compare reads GET /repos/{o}/{r}/compare/{base}...{head} with per_page=1:
     total_commits still counts every commit and the first page carries the
@@ -4887,11 +4908,13 @@ func (c *Client) Radar(ctx context.Context, org string) ([]RepoRadar, RateLimit,
     Radar lists every non-archived repository owned by owner (an organization
     or a user) with all its open pull requests, following both the repository
     and the per-repository pull request cursors. It is all-or-nothing:
-    any failed page fails the call and no repository list is returned,
-    so the caller never mistakes a partial list for closed pull requests.
-    The returned RateLimit sums Cost over all calls; the other fields are the
-    most conservative snapshot seen. When a later page fails it still carries
-    what the earlier pages reported, so the caller can pause on a low budget.
+    any failed page fails the call and no repository list is returned, so the
+    caller never mistakes a partial list for closed pull requests. A page GitHub
+    could not answer in time is asked once more at half the size (retrySmaller),
+    and the pages after it keep that size. The returned RateLimit sums Cost
+    over all calls; the other fields are the most conservative snapshot seen.
+    When a later page fails it still carries what the earlier pages reported,
+    so the caller can pause on a low budget.
 
 func (c *Client) RequiredChecks(ctx context.Context, owner, repo, branch string) (checks []string, known bool, err error)
     RequiredChecks reads the status checks a pull request into
@@ -5039,16 +5062,16 @@ type PRRadar struct {
 	UpdatedAt   time.Time
 	HeadRefOid  string
 	BaseRefName string
+	// IsCrossRepository is true for a pull request from a fork.
+	IsCrossRepository bool
 	// CIState is the head commit's check rollup (SUCCESS, FAILURE, PENDING,
-	// ERROR, EXPECTED), "" when it has no checks. It is read through the head
-	// branch, so it is known (CIKnown) only for a pull request from a branch
-	// of the repository itself whose tip is HeadRefOid: a fork's branch
-	// carries the fork's checks, not the ones the pull request runs.
+	// ERROR, EXPECTED), "" when it has no checks, and CIKnown says whether
+	// it was read. Radar leaves both unset: the caller fills them from
+	// CIStates.
 	CIState string
 	CIKnown bool
 }
-    PRRadar is the connection-free view of an open pull request the poller
-    diffs.
+    PRRadar is the scalar-only view of an open pull request the poller diffs.
 
 type PRState struct {
 	State      string // OPEN | CLOSED | MERGED
@@ -9268,9 +9291,9 @@ type GitHubPR struct {
 	DetailsAt *time.Time
 	// AuthorAssociation is the Details' authorAssociation (nil = keep).
 	AuthorAssociation *string
-	// CIState is the head's check rollup, from the radar or the Details, and
-	// CI the Details' checks (nil = keep). Like DetailsAt they are not
-	// Changed: CI moving changes no eligibility and queues nothing.
+	// CIState is the head's check rollup, from the poll's CI read or the
+	// Details, and CI the Details' checks (nil = keep). Like DetailsAt they
+	// are not Changed: CI moving changes no eligibility and queues nothing.
 	CIState *string
 	CI      *CIStatus
 	// ReviewRequests are the timeline's newest review requests, oldest first

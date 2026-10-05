@@ -40,6 +40,12 @@ func TestLiveReadOnly(t *testing.T) {
 	if main.NodeID == "" || len(main.PRs) == 0 || rate.Remaining == 0 {
 		t.Fatalf("radar looks wrong: %+v", rate)
 	}
+	start := time.Now()
+	states, ciRate, err := c.CIStates(ctx, main.PRs)
+	if err != nil || len(states) == 0 {
+		t.Fatalf("CI states: %d known, %v", len(states), err)
+	}
+	t.Logf("CI states: %d of %d PRs known in %v, rate %+v", len(states), len(main.PRs), time.Since(start).Round(time.Millisecond), ciRate)
 	nums := []int{main.PRs[0].Number, 99999999}
 	d, missing, err := c.Details(ctx, "talkable", "talkable", nums)
 	if err != nil || len(d) != 1 || len(missing) != 1 {

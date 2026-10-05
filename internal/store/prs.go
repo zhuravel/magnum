@@ -135,9 +135,9 @@ type GitHubPR struct {
 	DetailsAt *time.Time
 	// AuthorAssociation is the Details' authorAssociation (nil = keep).
 	AuthorAssociation *string
-	// CIState is the head's check rollup, from the radar or the Details, and
-	// CI the Details' checks (nil = keep). Like DetailsAt they are not
-	// Changed: CI moving changes no eligibility and queues nothing.
+	// CIState is the head's check rollup, from the poll's CI read or the
+	// Details, and CI the Details' checks (nil = keep). Like DetailsAt they
+	// are not Changed: CI moving changes no eligibility and queues nothing.
 	CIState *string
 	CI      *CIStatus
 	// ReviewRequests are the timeline's newest review requests, oldest first

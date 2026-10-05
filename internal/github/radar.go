@@ -17,8 +17,7 @@ type RepoRadar struct {
 	PRs           []PRRadar
 }
 
-// PRRadar is the connection-free view of an open pull request the poller
-// diffs.
+// PRRadar is the scalar-only view of an open pull request the poller diffs.
 type PRRadar struct {
 	NodeID      string
 	Number      int
@@ -26,24 +25,24 @@ type PRRadar struct {
 	UpdatedAt   time.Time
 	HeadRefOid  string
 	BaseRefName string
+	// IsCrossRepository is true for a pull request from a fork.
+	IsCrossRepository bool
 	// CIState is the head commit's check rollup (SUCCESS, FAILURE, PENDING,
-	// ERROR, EXPECTED), "" when it has no checks. It is read through the head
-	// branch, so it is known (CIKnown) only for a pull request from a branch
-	// of the repository itself whose tip is HeadRefOid: a fork's branch
-	// carries the fork's checks, not the ones the pull request runs.
+	// ERROR, EXPECTED), "" when it has no checks, and CIKnown says whether
+	// it was read. Radar leaves both unset: the caller fills them from
+	// CIStates.
 	CIState string
 	CIKnown bool
 }
 
-// prRadarFields reads the head's check rollup through headRef, objects
-// only: commits(last: 1), as Details reads it, is a connection, which GitHub
-// prices per pull request (100 repositories x 100 pull requests: 101 points
-// a page instead of 1).
-const prRadarFields = "nodes { id number isDraft updatedAt headRefOid baseRefName isCrossRepository " +
-	"headRef { target { oid ... on Commit { statusCheckRollup { state } } } } }"
+// prRadarFields are scalars only: a connection below pullRequests
+// (commits(last: 1)) is priced per pull request, and the head's check
+// rollup, which costs no point, is computed by GitHub for every open pull
+// request of the page (CIStates reads it apart).
+const prRadarFields = "nodes { id number isDraft updatedAt headRefOid baseRefName isCrossRepository }"
 
-// radarQuery is the per-owner poll: no connection below pullRequests, so
-// 100 repositories x 100 pull requests cost one point. repositoryOwner
+// radarQuery is the per-owner poll: scalar fields only, so 100
+// repositories x 100 pull requests cost one point. repositoryOwner
 // resolves both users and organizations (organization(login:) answers
 // NOT_FOUND for a user). The
 // repositories field defaults to ownerAffiliations [OWNER, COLLABORATOR],
@@ -107,35 +106,21 @@ type prConn struct {
 		HeadRefOid        string    `json:"headRefOid"`
 		BaseRefName       string    `json:"baseRefName"`
 		IsCrossRepository bool      `json:"isCrossRepository"`
-		HeadRef           *struct {
-			Target *struct {
-				Oid               string `json:"oid"`
-				StatusCheckRollup *struct {
-					State string `json:"state"`
-				} `json:"statusCheckRollup"`
-			} `json:"target"`
-		} `json:"headRef"`
 	} `json:"nodes"`
 }
 
 func (p prConn) radar() []PRRadar {
 	out := make([]PRRadar, 0, len(p.Nodes))
 	for _, n := range p.Nodes {
-		r := PRRadar{
-			NodeID:      n.ID,
-			Number:      n.Number,
-			IsDraft:     n.IsDraft,
-			UpdatedAt:   n.UpdatedAt,
-			HeadRefOid:  n.HeadRefOid,
-			BaseRefName: n.BaseRefName,
-		}
-		if !n.IsCrossRepository && n.HeadRef != nil && n.HeadRef.Target != nil && n.HeadRef.Target.Oid == n.HeadRefOid {
-			r.CIKnown = true
-			if rollup := n.HeadRef.Target.StatusCheckRollup; rollup != nil {
-				r.CIState = rollup.State
-			}
-		}
-		out = append(out, r)
+		out = append(out, PRRadar{
+			NodeID:            n.ID,
+			Number:            n.Number,
+			IsDraft:           n.IsDraft,
+			UpdatedAt:         n.UpdatedAt,
+			HeadRefOid:        n.HeadRefOid,
+			BaseRefName:       n.BaseRefName,
+			IsCrossRepository: n.IsCrossRepository,
+		})
 	}
 	return out
 }
@@ -152,11 +137,30 @@ func (s *rateSum) add(r RateLimit) {
 	s.total.Cost = cost
 }
 
+type radarJSON struct {
+	RepositoryOwner *struct {
+		Repositories struct {
+			PageInfo pageInfo `json:"pageInfo"`
+			Nodes    []struct {
+				ID               string    `json:"id"`
+				NameWithOwner    string    `json:"nameWithOwner"`
+				PushedAt         time.Time `json:"pushedAt"`
+				DefaultBranchRef *struct {
+					Name string `json:"name"`
+				} `json:"defaultBranchRef"`
+				PullRequests prConn `json:"pullRequests"`
+			} `json:"nodes"`
+		} `json:"repositories"`
+	} `json:"repositoryOwner"`
+}
+
 // Radar lists every non-archived repository owned by owner (an organization
 // or a user) with all its open pull requests, following both the repository
 // and the per-repository pull request cursors. It is all-or-nothing: any
 // failed page fails the call and no repository list is returned, so the
-// caller never mistakes a partial list for closed pull requests.
+// caller never mistakes a partial list for closed pull requests. A page
+// GitHub could not answer in time is asked once more at half the size
+// (retrySmaller), and the pages after it keep that size.
 // The returned RateLimit sums Cost over all calls; the other fields are the
 // most conservative snapshot seen. When a later page fails it still carries
 // what the earlier pages reported, so the caller can pause on a low budget.
@@ -174,28 +178,23 @@ func (c *Client) Radar(ctx context.Context, org string) ([]RepoRadar, RateLimit,
 		if page > maxPages {
 			return nil, sum.total, fmt.Errorf("github radar %s: more than %d repository pages", org, maxPages)
 		}
-		vars := map[string]any{"org": org, "first": repoPage, "prFirst": prPage}
-		if after != "" {
-			vars["after"] = after
-		}
-		var data struct {
-			RepositoryOwner *struct {
-				Repositories struct {
-					PageInfo pageInfo `json:"pageInfo"`
-					Nodes    []struct {
-						ID               string    `json:"id"`
-						NameWithOwner    string    `json:"nameWithOwner"`
-						PushedAt         time.Time `json:"pushedAt"`
-						DefaultBranchRef *struct {
-							Name string `json:"name"`
-						} `json:"defaultBranchRef"`
-						PullRequests prConn `json:"pullRequests"`
-					} `json:"nodes"`
-				} `json:"repositories"`
-			} `json:"repositoryOwner"`
-		}
 		op := fmt.Sprintf("radar %s page %d", org, page)
-		rate, notFound, err := c.graphql(ctx, op, radarQuery, vars, &data)
+		var (
+			data     radarJSON
+			rate     RateLimit
+			notFound []GraphQLError
+			err      error
+		)
+		repoPage, err = retrySmaller(repoPage, "repositories a page", func(first int) error {
+			vars := map[string]any{"org": org, "first": first, "prFirst": prPage}
+			if after != "" {
+				vars["after"] = after
+			}
+			data = radarJSON{}
+			var err error
+			rate, notFound, err = c.graphql(ctx, op, radarQuery, vars, &data)
+			return err
+		})
 		if err != nil {
 			return nil, sum.total, err
 		}
@@ -214,7 +213,7 @@ func (c *Client) Radar(ctx context.Context, org string) ([]RepoRadar, RateLimit,
 				return nil, sum.total, fmt.Errorf("github %s: %s pull requests: %w", op, n.NameWithOwner, err)
 			}
 			if cursor != "" {
-				more, err := c.morePRs(ctx, &sum, n.ID, n.NameWithOwner, cursor, prPage)
+				more, err := c.morePRs(ctx, &sum, n.ID, n.NameWithOwner, cursor, &prPage)
 				if err != nil {
 					return nil, sum.total, err
 				}
@@ -234,21 +233,34 @@ func (c *Client) Radar(ctx context.Context, org string) ([]RepoRadar, RateLimit,
 	return repos, sum.total, nil
 }
 
+type radarPRsJSON struct {
+	Node *struct {
+		PullRequests *prConn `json:"pullRequests"`
+	} `json:"node"`
+}
+
 // morePRs follows one repository's pull request cursor to the end, adding
-// each call's rate limit to sum.
-func (c *Client) morePRs(ctx context.Context, sum *rateSum, id, name, after string, prPage int) ([]PRRadar, error) {
+// each call's rate limit to sum. A page GitHub could not answer in time is
+// asked once more at half *prPage, which the pages after it keep.
+func (c *Client) morePRs(ctx context.Context, sum *rateSum, id, name, after string, prPage *int) ([]PRRadar, error) {
 	var out []PRRadar
 	for page := 2; ; page++ {
 		if page > maxPages {
 			return nil, fmt.Errorf("github radar %s: more than %d pull request pages", name, maxPages)
 		}
-		var data struct {
-			Node *struct {
-				PullRequests *prConn `json:"pullRequests"`
-			} `json:"node"`
-		}
 		op := fmt.Sprintf("radar %s pulls page %d", name, page)
-		rate, notFound, err := c.graphql(ctx, op, radarPRsQuery, map[string]any{"id": id, "prFirst": prPage, "after": after}, &data)
+		var (
+			data     radarPRsJSON
+			rate     RateLimit
+			notFound []GraphQLError
+			err      error
+		)
+		*prPage, err = retrySmaller(*prPage, "pull requests a page", func(prFirst int) error {
+			data = radarPRsJSON{}
+			var err error
+			rate, notFound, err = c.graphql(ctx, op, radarPRsQuery, map[string]any{"id": id, "prFirst": prFirst, "after": after}, &data)
+			return err
+		})
 		if err != nil {
 			return nil, err
 		}

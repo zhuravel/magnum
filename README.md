@@ -61,7 +61,9 @@ flowchart LR
 ```
 
 1. **Poll.** One GraphQL query per organization finds new PRs, new heads, new repositories and closed
-   PRs. Open PRs that existed before Magnum started are left alone until they change.
+   PRs, and a second reads the CI state of the watched repositories' open PRs (a CI run that ends does not
+   count as a change of the PR). Open PRs that existed before Magnum started are left alone until they
+   change.
 2. **Throttle.** A new head waits for a quiet period (default 5 min, 15 min after a burst of three
    pushes within 30 min) and at least 30 min since the previous round (2 h for drafts); pushes coalesce
    to the latest head; `magnum review` overrides.

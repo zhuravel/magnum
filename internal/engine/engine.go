@@ -47,6 +47,9 @@ import (
 // head left behind (followApproval), made as the App identity.
 type GitHub interface {
 	Radar(ctx context.Context, org string) ([]github.RepoRadar, github.RateLimit, error)
+	// CIStates reads the head rollups of the watched repositories' open PRs
+	// on every poll (readCI, poll.go); the radar carries none.
+	CIStates(ctx context.Context, prs []github.PRRadar) (map[string]string, github.RateLimit, error)
 	Details(ctx context.Context, owner, repo string, numbers []int) (map[int]github.PRDetails, []int, error)
 	ConfirmStates(ctx context.Context, owner, repo string, numbers []int) (map[int]github.PRState, []int, error)
 	Compare(ctx context.Context, owner, repo, base, head string) (github.CompareStats, error)
@@ -236,6 +239,8 @@ type Engine struct {
 	// deltasRechecked: the first poll checked the old delta records again
 	// (recheckDeltas, delta.go).
 	deltasRechecked bool
+	// logged: when each repeating error was last logged (logOnce, util.go).
+	logged map[string]time.Time
 
 	// Urgent toasts run in their own goroutines on toastCtx (surface.go).
 	toastMu      sync.Mutex
@@ -281,6 +286,7 @@ func New(d Deps) *Engine {
 		heavyKeys:    map[string]bool{},
 		inflight:     map[int64]bool{},
 		lastSeen:     map[string]string{},
+		logged:       map[string]time.Time{},
 		cleanupTried: map[int64]time.Time{},
 		kick:         make(chan struct{}, 1),
 		starts:       starter{codex: make(chan struct{}, maxCodexStarts)},
@@ -432,7 +438,7 @@ func (e *Engine) Run(ctx context.Context, opts Options) error {
 			<-worker
 			return err
 		} else if err != nil {
-			e.log.Warn("tick finished with errors", "err", err)
+			e.warnTick(err)
 		}
 		e.observeUntilIdle(ctx)
 		close(idle)
@@ -466,7 +472,7 @@ func (e *Engine) Run(ctx context.Context, opts Options) error {
 		if err := e.Tick(ctx); errors.Is(err, ErrSchemaChanged) {
 			return err
 		} else if err != nil && ctx.Err() == nil {
-			e.log.Warn("tick finished with errors", "err", err)
+			e.warnTick(err)
 		}
 		timer.Reset(interval)
 	}

@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -161,6 +162,56 @@ func TestExitWithoutJSONKeepsStderr(t *testing.T) {
 	var exitErr *execx.ExitError
 	if !errors.As(err, &exitErr) {
 		t.Error("transport failures should wrap the execx.ExitError")
+	}
+}
+
+// TestBareHTTPStatusIsAnAPIError: gh prints only "gh: HTTP 502" when
+// GitHub's answer is not JSON (its HTML error page); the status still
+// reaches the APIError.
+func TestBareHTTPStatusIsAnAPIError(t *testing.T) {
+	f := &execx.Fake{Rules: []execx.Rule{{
+		Prefix: []string{"gh"},
+		Result: execx.Result{Stdout: []byte("<html>Unicorn!</html>"), Stderr: []byte("gh: HTTP 502\n"), Code: 1},
+	}}}
+	_, err := (&Client{Run: f}).ReviewsWithMarker(context.Background(), "talkable", "talkable", 1, "")
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Status != 502 || apiErr.Message != "" {
+		t.Fatalf("err = %#v", err)
+	}
+	if got := err.Error(); got != "github reviews talkable/talkable#1 (HTTP 502)" {
+		t.Errorf("message = %q", got)
+	}
+}
+
+// TestOverloadedMeansGitHubRanOutOfTime: only GitHub failing to answer in
+// time (an HTTP 5xx, a GraphQL timeout, the stream it cancelled) makes a
+// smaller page worth a retry.
+func TestOverloadedMeansGitHubRanOutOfTime(t *testing.T) {
+	exit := func(stderr string) error {
+		return fmt.Errorf("github radar: %w", &execx.ExitError{Cmd: execx.Cmd{Name: "gh"}, Code: 1, Stderr: stderr})
+	}
+	for _, tc := range []struct {
+		err  error
+		want bool
+	}{
+		{&APIError{Op: "radar", Status: 502}, true},
+		{&APIError{Op: "radar", Status: 503, Message: "No server is currently available to service your request."}, true},
+		{&APIError{Op: "radar", Status: 504, Message: "We couldn't respond to your request in time."}, true},
+		{fmt.Errorf("wrapped: %w", &APIError{Op: "radar", Status: 504}), true},
+		{&APIError{Op: "radar", Errors: []GraphQLError{{Message: "Something went wrong while executing your query. This may be the result of a timeout, or it could be a GitHub bug."}}}, true},
+		{exit("stream error: stream ID 1; CANCEL; received from peer"), true},
+		{&APIError{Op: "radar", Status: 401}, false},
+		{&APIError{Op: "radar", Status: 403, Message: "API rate limit exceeded"}, false},
+		{&APIError{Op: "radar", Errors: []GraphQLError{{Type: "NOT_FOUND", Message: "Could not resolve"}}}, false},
+		{&APIError{Op: "radar", Errors: []GraphQLError{{Message: "Field 'x' doesn't exist on type 'Query'"}}}, false},
+		{exit("error connecting to api.github.com"), false},
+		{exit(`Post "https://api.github.com/graphql": read tcp 10.0.0.2:5000->140.82.121.6:443: read: connection reset by peer`), false},
+		{fmt.Errorf("github radar: %w", context.DeadlineExceeded), false},
+		{nil, false},
+	} {
+		if got := overloaded(tc.err); got != tc.want {
+			t.Errorf("overloaded(%v) = %v, want %v", tc.err, got, tc.want)
+		}
 	}
 }
 
