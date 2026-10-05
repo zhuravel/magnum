@@ -211,6 +211,11 @@ func (m *Manager) Submit(ctx context.Context, run store.Run, text string) error 
 		// makes the one re-send safe.
 		info, perr = m.d.Herdr.AgentPrompt(ctx, target(sess), text, wait)
 	}
+	if perr != nil && ctx.Err() == nil && herdr.IsCode(perr, codeAgentNotReady) && m.waitRegistered(ctx, sess) {
+		// Rejected before sending: herdr had not registered the agent yet (a
+		// resumed Claude Code takes a moment to show up as a named agent).
+		info, perr = m.d.Herdr.AgentPrompt(ctx, target(sess), text, wait)
+	}
 	// The prompt may have been delivered: record it whatever ctx does now.
 	cut := ctx.Err() != nil // ctx ended while the prompt was in flight
 	bctx := context.WithoutCancel(ctx)

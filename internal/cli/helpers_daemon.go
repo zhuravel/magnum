@@ -175,9 +175,16 @@ func launchPrefix(layout paths.Layout, cfg *config.Config, misePath string) []st
 func fileExists(p string) bool { _, err := os.Stat(p); return err == nil }
 
 // launchdPATH is the PATH the LaunchAgent gets (launchd's own is bare).
+// It carries mise's shims (codex, claude, node installed with mise), which a
+// launchd job running the binary directly, not through `mise exec`, gets no
+// other way: the daemon runs `codex login status` and the like itself.
 func launchdPATH(userHome string) string {
+	shims := filepath.Join(userHome, ".local", "share", "mise", "shims")
+	if d := daemonSys.Getenv("MISE_DATA_DIR"); filepath.IsAbs(d) {
+		shims = filepath.Join(d, "shims")
+	}
 	return strings.Join([]string{
-		filepath.Join(userHome, ".local", "bin"),
+		filepath.Join(userHome, ".local", "bin"), shims,
 		"/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin",
 	}, ":")
 }

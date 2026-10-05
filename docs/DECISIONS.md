@@ -754,3 +754,11 @@ editing history. Code, config comments and prompts reference these by their head
   the request's answer no longer says it waits. PRs nobody asked for wait and `magnum status` says the
   pause holds them. A drain for a restart and an infrastructure pause still hold every round: the first
   waits for rounds to end, the second means a round cannot run.
+- **The launchd job's PATH carries mise's shims; a prompt herdr rejects as agent_not_ready is sent
+  again once herdr lists the agent** (2026-10-05). Running `magnum daemon` directly instead of through
+  `mise exec` dropped the mise-installed CLIs from the daemon's PATH (`codex login status` failed with
+  "executable file not found"), so launchd's PATH now lists `~/.local/share/mise/shims` (`$MISE_DATA_DIR`
+  when set) after `~/.local/bin`. A freshly resumed Claude Code shows up as herdr's named agent a moment
+  after the start returns: a prompt sent in between failed the reviewer's run ("is not an active named
+  agent", five times in two days); herdr rejects it before sending, so Submit waits until the agent is
+  listed idle (TrustReadyTimeout) and sends once more, as it does after a trust dialog.

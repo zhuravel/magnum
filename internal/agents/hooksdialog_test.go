@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -244,5 +245,36 @@ func TestAnswerHooksNeverConfirmsAnotherOption(t *testing.T) {
 		if strings.HasSuffix(k, ":enter") {
 			t.Fatalf("pressed %v", e.keysSent())
 		}
+	}
+}
+
+// herdr rejects a prompt to an agent it has not registered yet (a resumed
+// Claude Code takes a moment to show up as a named agent): agent_not_ready
+// means nothing was sent, so Submit waits until herdr lists the agent idle
+// and sends once more.
+func TestSubmitWaitsForAnAgentHerdrHasNotRegisteredYet(t *testing.T) {
+	e := newEnv(t)
+	e.started()
+	calls := 0
+	e.h.onPrompt = func() {
+		calls++
+		if e.h.errs == nil {
+			e.h.errs = map[string]error{}
+		}
+		if calls == 1 {
+			e.h.errs["AgentPrompt"] = &herdr.Error{Method: "agent.prompt", Code: "agent_not_ready", Message: "agent is not an active named agent"}
+		} else {
+			delete(e.h.errs, "AgentPrompt")
+		}
+	}
+	id, err := e.m.Prompt(e.ctx, e.pr, RoleClaude, store.RunRereview, "re-review")
+	if err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if n := len(e.h.prompts); n != 2 {
+		t.Fatalf("prompts = %d, want 2 (the rejected one, then the resend)", n)
+	}
+	if r := e.run1(id); r.State != store.RunWorking {
+		t.Fatalf("run = %+v", r)
 	}
 }

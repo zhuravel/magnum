@@ -66,7 +66,7 @@ func TestInstallWritesPlistLoadsItAndLinksPlugin(t *testing.T) {
 	for _, want := range []string{
 		"<string>/opt/homebrew/bin/mise</string>\n\t\t<string>-C</string>\n\t\t<string>" + l.Home + "</string>\n\t\t<string>exec</string>\n\t\t<string>--</string>\n\t\t<string>" + l.Binary() + "</string>\n\t\t<string>daemon</string>",
 		"<key>WorkingDirectory</key>\n\t<string>" + l.Home + "</string>",
-		"<key>PATH</key>\n\t\t<string>" + dt.userHome + "/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>",
+		"<key>PATH</key>\n\t\t<string>" + dt.userHome + "/.local/bin:" + dt.userHome + "/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>",
 		"<key>HOME</key>\n\t\t<string>" + dt.userHome + "</string>",
 		"<key>HERDR_SOCKET_PATH</key>\n\t\t<string>/tmp/herdr-test.sock</string>",
 		"<key>MAGNUM_HOME</key>\n\t\t<string>" + l.Home + "</string>",

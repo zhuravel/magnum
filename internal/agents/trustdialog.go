@@ -316,6 +316,29 @@ func (m *Manager) waitTrustReady(ctx context.Context, ref paneRef) (herdr.AgentI
 	return herdr.AgentInfo{}, false
 }
 
+// waitRegistered waits (at most TrustReadyTimeout) until herdr lists sess's
+// agent by its name, idle: a prompt herdr rejected as agent_not_ready may
+// then be sent again.
+func (m *Manager) waitRegistered(ctx context.Context, sess store.Session) bool {
+	name := store.Deref(sess.AgentName)
+	if name == "" {
+		return false
+	}
+	for range int(TrustReadyTimeout / trustPoll) {
+		if m.sleep(ctx, trustPoll) != nil {
+			return false
+		}
+		snap, err := m.d.Herdr.Snapshot(ctx)
+		if err != nil {
+			continue
+		}
+		if a, ok := snap.AgentByName(name); ok && (a.AgentStatus == herdr.StatusIdle || a.AgentStatus == herdr.StatusDone) {
+			return true
+		}
+	}
+	return false
+}
+
 // AnswerTrustDialog is the fallback for an agent stopped at its CLI's
 // first-launch folder-trust dialog (EnsureTrust normally prevents it). It
 // acts only within TrustWindow of the session's start (StartedAt) and before
