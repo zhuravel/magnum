@@ -940,3 +940,35 @@ editing history. Code, config comments and prompts reference these by their head
   it goes back to closed with `last_error`, a `pr.post_merge_failed` warning and a toast instead.
   Rejected: an approve or request-changes verdict after the merge, a review of the whole PR every time,
   and a `post_merge` column (gh_state already says it).
+- **A push that only merges the base branch is not re-reviewed** (2026-10-05, after an author merged master
+  into a reviewed 103-file PR: one merge commit bringing 12 master commits and no change to the PR's own
+  code, which `reviewed...head` measured as 13 commits and 300 files, all master's, and queued a full
+  re-review). **Why the PR's own diff and not `reviewed...head`**: a re-review is about what the PR
+  changes, and the three-dot comparison of two commits of the PR counts whatever reached the branch in
+  between, the base branch's work included. The PR's diff against its base, before (`<base>...reviewed`,
+  whose merge base is the base commit the reviewed commit was built on) and after the push
+  (`<base>...head`), is what the author and the reviewers look at; a file's own change is its sequence of
+  added and removed lines, in order, without the context lines and `@@` headers that master's edits around
+  it move. Every file unchanged (or in neither diff) is the new trivial class `base` ("base merge only",
+  in `skip_trivial_deltas` by default; a user's explicit list replaces the default and so keeps it off);
+  otherwise the re-review threshold measures only what changed in the PR's own diff (a multiset difference
+  of the changed files' code lines; a file the PR now adds counts as an added file), so a conflict
+  resolved inside the PR's code is re-reviewed at its own size, not at master's. **Why only on a merge
+  commit or a divergence**: a plain push's `reviewed...head` already is the PR's own change, and two more
+  compare calls on every push would triple the delta check's REST calls for nothing; `ComparePush` reads the
+  first comparison with up to 100 commits (`per_page=100`, still one call) and looks for a commit with two
+  parents, and GitHub's `diverged` status covers a rebase or a force push. A range of more than 100
+  commits cannot rule a merge out and gets the check. A push that is already trivial by comments,
+  whitespace or docs is settled without it. **Why an incomplete comparison falls back**: a file without a
+  patch (binary, too large), or a diff at GitHub's 300-file cap, hides lines that may have changed, and
+  a failed call says nothing; the push is then measured `reviewed...head` exactly as before, which can
+  only re-review too often, never skip a change. Records measured before this rule carry no
+  `DeltaRecord.Version`: once per daemon, after its first poll, every `rereview_pending` PR with such a
+  record (not forced, no round running) goes through `settlePush` again, a compare-and-set from
+  `rereview_pending`, and either settles or keeps the new measure and is timed again with it. Rejected:
+  comparing tree contents at the merge base (needs the checkout, which the poller does not have), and
+  judging the own-diff change with the comment and whitespace classes (the difference of two diffs is
+  not a patch the classifier can read). Triage still reads `reviewed...target` for a re-review: the
+  difference of two diffs is not a diff a model can be shown, a re-review after a base merge now runs only
+  when the PR's own code changed, and a merge's comparison is mostly over `max_lines` or at the file cap,
+  where triage runs every role, its safe default.

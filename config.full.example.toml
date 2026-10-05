@@ -36,15 +36,18 @@ request_debounce = "1m"           # a review request for the poll login or a pos
                                   # after it (and the last push), skipping the timing rules above and the cap
 rereview_min_lines = 30           # an automatic re-review needs this many changed code lines since the review
 rereview_max_wait = "2h"          #   (comments, blank lines, whitespace and docs do not count) or an added file;
-                                  #   a smaller delta waits for more pushes or this long after its first push
-                                  #   (0 lines = no threshold; [[watch]] may override both)
+                                  #   after a merge of the base branch or a rebase only the change in the PR's own
+                                  #   diff counts; a smaller delta waits for more pushes or this long after its
+                                  #   first push (0 lines = no threshold; [[watch]] may override both)
 model_limit_cooldown = "5h"       # a model capped on its own (health pattern model_limit) without a reset time
                                   # counts as limited this long; sessions use the kind's fallback_models meanwhile
 park_idle_after = "2h"            # park a reviewed PR's agents once all of them idled this long ("0" = never);
                                   # the next round resumes them; pinned PRs and recent human activity keep them
-# skip_trivial_deltas = ["comments", "whitespace", "docs"]   # a push that changes only these since the review
-                                  # is not re-reviewed: the review stands for the new head ([] = re-review every
-                                  # push; [[watch]] may override; `magnum review` always runs)
+# skip_trivial_deltas = ["comments", "whitespace", "docs", "base"]   # a push that changes only these since
+                                  # the review is not re-reviewed: the review stands for the new head; "base" is a
+                                  # push that merges the base branch (or rebases onto it) and leaves the PR's own
+                                  # diff against it as it was ([] = re-review every push; a list without "base"
+                                  # re-reviews base merges; [[watch]] may override; `magnum review` always runs)
 # quiet_hours = "01:00-07:00"
 
 [herdr]

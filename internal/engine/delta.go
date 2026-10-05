@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/zhuravel/magnum/internal/config"
@@ -54,6 +55,8 @@ func (t TrivialSkip) Note() string {
 		what = "whitespace-only"
 	case len(t.Classes) == 1 && t.Classes[0] == DeltaDocs:
 		what = "docs-only"
+	case len(t.Classes) == 1 && t.Classes[0] == DeltaBase:
+		what = "base-merge"
 	}
 	return fmt.Sprintf("%s push skipped (%s → %s)", what, short(t.From), short(t.To))
 }
@@ -66,8 +69,12 @@ func KVPRDelta(prID int64) string { return fmt.Sprintf("pr.%d.delta", prID) }
 // head (KVPRDelta). It describes the PR only while From is its reviewed_sha
 // and To its head.
 type DeltaRecord struct {
-	From string `json:"from"`
-	To   string `json:"to"`
+	// Version is deltaRecordVersion for a delta measured with the PR's own
+	// diff in view (base_merge.go); 0, a record from before, is checked
+	// again once (recheckDeltas).
+	Version int    `json:"version,omitempty"`
+	From    string `json:"from"`
+	To      string `json:"to"`
 	DeltaSize
 	// Since is the first push the review does not cover: kept while From
 	// stays the reviewed commit.
@@ -84,12 +91,38 @@ type deltaCheck struct {
 	classes  []string
 	files    int
 	size     DeltaSize
+	// commits is the push's commit count (GitHub's total_commits); base
+	// and rebased name, for the class DeltaBase, the branch the push
+	// merged (or, rebased, the one GitHub says it diverged onto).
+	commits int
+	base    string
+	rebased bool
+}
+
+// change says what a trivial push did, for events: "changes comments only
+// (1 file)", "only merges master (13 commits, the PR's own changes
+// unchanged)".
+func (dc deltaCheck) change() string {
+	if slices.Contains(dc.classes, DeltaBase) {
+		verb := "merges " + dc.base
+		if dc.rebased {
+			verb = "rebases onto " + dc.base
+		}
+		return fmt.Sprintf("only %s (%d %s, the PR's own changes unchanged)", verb, dc.commits, plural(dc.commits, "commit", "commits"))
+	}
+	return fmt.Sprintf("changes %s (%d %s)", DeltaLabel(dc.classes), dc.files, plural(dc.files, "file", "files"))
 }
 
 // checkDelta compares from...to in one GitHub call as the watch's poll
 // identity, when the watch skips trivial deltas or has a re-review
-// threshold. Any failure measures nothing: the PR gets its re-review.
-func (e *Engine) checkDelta(ctx context.Context, repo store.Repo, w config.Watch, from, to string) deltaCheck {
+// threshold. When that push is not trivial but has a merge commit or
+// diverged from the reviewed commit (a rebase, a force push), two more
+// calls compare the PR's own diff against base before and after it
+// (ownDiffDelta): unchanged is the class DeltaBase, changed gives the size
+// of that change; an incomplete comparison keeps the size of from...to.
+// Any failure of the first call measures nothing: the PR gets its
+// re-review.
+func (e *Engine) checkDelta(ctx context.Context, repo store.Repo, w config.Watch, base, from, to string) deltaCheck {
 	allowed := e.cfg.TrivialDeltas(&w)
 	if len(allowed) == 0 && e.cfg.ThrottleFor(&w).RereviewMinLines <= 0 {
 		return deltaCheck{}
@@ -101,13 +134,25 @@ func (e *Engine) checkDelta(ctx context.Context, repo store.Repo, w config.Watch
 	if gh == nil {
 		return deltaCheck{}
 	}
-	deltas, err := gh.CompareFiles(ctx, repo.Owner, repo.Name, from, to)
+	pc, err := gh.ComparePush(ctx, repo.Owner, repo.Name, from, to)
 	if err != nil {
 		e.log.Info("delta: compare failed; the push is re-reviewed", "repo", repo.FullName(), "from", short(from), "to", short(to), "err", err)
 		return deltaCheck{}
 	}
-	dc := deltaCheck{measured: true, files: len(deltas), size: MeasureDelta(deltas)}
-	dc.classes, dc.trivial = TrivialDelta(deltas, allowed)
+	dc := deltaCheck{measured: true, files: len(pc.Files), size: MeasureDelta(pc.Files), commits: pc.Commits}
+	dc.classes, dc.trivial = TrivialDelta(pc.Files, allowed)
+	rebased := pc.Status == "diverged"
+	if dc.trivial || !(pc.Merge || rebased) || base == "" {
+		return dc
+	}
+	own, ok := e.ownDiffDelta(ctx, gh, repo, base, from, to)
+	switch {
+	case !ok:
+	case len(own.changed) > 0:
+		dc.size = own.size
+	case slices.Contains(allowed, DeltaBase):
+		dc.trivial, dc.classes, dc.base, dc.rebased = true, []string{DeltaBase}, base, rebased
+	}
 	return dc
 }
 
@@ -119,7 +164,7 @@ func (e *Engine) recordDelta(ctx context.Context, prID int64, from, to string, d
 	if !dc.measured {
 		return
 	}
-	rec := DeltaRecord{From: from, To: to, DeltaSize: dc.size, Since: pushedAt.UTC()}
+	rec := DeltaRecord{Version: deltaRecordVersion, From: from, To: to, DeltaSize: dc.size, Since: pushedAt.UTC()}
 	if prev, ok := e.deltaRecord(ctx, prID); ok && prev.From == from && !prev.Since.IsZero() {
 		rec.Since = prev.Since
 	}
@@ -165,12 +210,11 @@ func (e *Engine) settlePush(ctx context.Context, repo store.Repo, w config.Watch
 	if from == "" || from == pr.HeadSHA {
 		return false, nil
 	}
-	dc := e.checkDelta(ctx, repo, w, from, pr.HeadSHA)
+	dc := e.checkDelta(ctx, repo, w, prBase(repo, pr), from, pr.HeadSHA)
 	if !dc.trivial {
 		e.recordDelta(ctx, pr.ID, from, pr.HeadSHA, dc, e.now())
 		return false, nil
 	}
-	classes, files := dc.classes, dc.files
 	err := e.st.TransitionPR(ctx, pr.ID, []string{pr.State}, store.PRReviewed, func(u *store.PRUpdate) {
 		u.Where("head_sha", pr.HeadSHA)
 		u.Where("reviewed_sha", from)
@@ -185,10 +229,60 @@ func (e *Engine) settlePush(ctx context.Context, repo store.Repo, w config.Watch
 	if err != nil {
 		return true, err
 	}
-	e.recordTrivial(ctx, repo, pr, TrivialSkip{From: from, To: pr.HeadSHA, Classes: classes, Files: files, At: e.now()},
-		fmt.Sprintf("%s → reviewed: the push to %s changes %s (%d %s) since the review of %s; no re-review, the review stands",
-			pr.State, short(pr.HeadSHA), DeltaLabel(classes), files, plural(files, "file", "files"), short(from)))
+	e.recordTrivial(ctx, repo, pr, TrivialSkip{From: from, To: pr.HeadSHA, Classes: dc.classes, Files: dc.files, At: e.now()},
+		fmt.Sprintf("%s → reviewed: the push to %s %s since the review of %s; no re-review, the review stands",
+			pr.State, short(pr.HeadSHA), dc.change(), short(from)))
 	return true, nil
+}
+
+// recheckDeltas runs once per daemon, after its first poll: a
+// rereview_pending PR whose delta record predates deltaRecordVersion was
+// measured as reviewed...head even when the push only merged its base
+// branch, so settlePush checks it again, the same compare-and-set from
+// rereview_pending that a push gets. One whose own diff did not change
+// settles; another keeps the new measure and its re-review is timed again
+// with it (the threshold may now hold it back). Forced PRs and a PR whose
+// round started are left alone; a measure that fails leaves the old record
+// for the next daemon.
+func (e *Engine) recheckDeltas(ctx context.Context) {
+	if e.deltasRechecked {
+		return
+	}
+	e.deltasRechecked = true
+	prs, err := e.st.ListPRs(ctx, store.PRFilter{States: []string{store.PRRereviewPending}})
+	if err != nil {
+		e.log.Warn("delta recheck: list PRs", "err", err)
+		return
+	}
+	for _, pr := range prs {
+		if pr.Forced || e.roundActive(pr.ID) {
+			continue
+		}
+		if rec, ok := e.deltaRecord(ctx, pr.ID); !ok || rec.Version >= deltaRecordVersion {
+			continue
+		}
+		repo, err := e.st.RepoByID(ctx, pr.RepoID)
+		if err != nil {
+			continue
+		}
+		w := e.cfg.WatchFor(repo.FullName())
+		if w == nil {
+			continue
+		}
+		settled, err := e.settlePush(ctx, repo, *w, pr)
+		if err != nil {
+			e.log.Info("delta recheck: settle", "subject", prSubject(repo, pr.Number), "err", err)
+		}
+		if settled {
+			continue
+		}
+		if rec, ok := e.deltaRecord(ctx, pr.ID); ok && rec.Version == deltaRecordVersion && rec.From == deref(pr.ReviewedSHA) && rec.To == pr.HeadSHA {
+			why := fmt.Sprintf("delta measured again: %d lines", rec.Lines)
+			if err := e.queue(ctx, pr, *w, []string{store.PRRereviewPending}, false, e.now(), why); err != nil {
+				e.log.Info("delta recheck: queue", "subject", prSubject(repo, pr.Number), "err", err)
+			}
+		}
+	}
 }
 
 // recordTrivial keeps a trivial skip for the card (KVPRTrivial) and records

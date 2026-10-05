@@ -103,10 +103,26 @@ type fakeGH struct {
 	threads  map[int][]github.Thread
 	contents map[string][]byte
 	statuses map[string]string
-	calls    []string
 	// mergeCommits answers ConfirmStates' MergeCommitOid of a merged PR by
 	// number.
 	mergeCommits map[int]string
+	// merges marks the "base...head" ranges ComparePush finds a merge
+	// commit in.
+	merges map[string]bool
+	calls  []string
+}
+
+// ComparePush answers like CompareFilesStatus (one "compare_files:" call),
+// with the commit count of compare and the merge flag of merges.
+func (g *fakeGH) ComparePush(ctx context.Context, owner, repo, base, head string) (github.PushComparison, error) {
+	status, fs, err := g.CompareFilesStatus(ctx, owner, repo, base, head)
+	if err != nil {
+		return github.PushComparison{}, err
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	key := base + "..." + head
+	return github.PushComparison{Status: status, Commits: g.compare[key].Commits, Merge: g.merges[key], Files: fs}, nil
 }
 
 func (g *fakeGH) CompareFilesStatus(ctx context.Context, owner, repo, base, head string) (string, []github.FileDelta, error) {

@@ -156,14 +156,28 @@ A push whose changes since the last review are only comment lines, whitespace or
 re-reviewed: Magnum compares the reviewed commit with the new head (one GitHub call), moves the review
 to the new head with its verdict, keeps an App's approval and records `pr.trivial_delta`. When such a
 commit arrived during the judge's turn, the note on the review says "(comments only), no re-review
-needed" instead. `[daemon] skip_trivial_deltas` (default `["comments", "whitespace", "docs"]`, `[]` =
-re-review every push) picks the kinds, a `[[watch]]` can override it, and `magnum review` always runs.
+needed" instead. `[daemon] skip_trivial_deltas` (default `["comments", "whitespace", "docs", "base"]`,
+`[]` = re-review every push) picks the kinds, a `[[watch]]` can override it, and `magnum review` always
+runs.
+
+A push that merges the base branch into the PR (or rebases it onto the base) is judged by the PR's own
+diff, not by the commits it brings: when the comparison of the reviewed commit with the new head shows a
+merge commit or a divergence, Magnum compares the PR's diff against its base before and after the push
+(two more GitHub calls, `<base>...<reviewed>` and `<base>...<head>`), file by file, by the sequence of
+added and removed lines (context lines and hunk positions, which master's changes move, do not count).
+When no file's own change differs, the push is the kind `base` ("base merge only"): the review stands
+and `pr.trivial_delta` says, e.g., "the push to 2017f29 only merges master (13 commits, the PR's own
+changes unchanged)". A file without a complete patch, or a diff over GitHub's 300-file cap, makes the
+comparison incomplete, and the push is measured as any other. A daemon that starts on this rule checks
+the PRs already waiting for a re-review once more, on its first poll, and settles those a base merge
+queued.
 
 Any other push is measured by the same GitHub call: the changed lines that are code (not comments,
-blank lines, whitespace moves or documentation) since the reviewed commit. An automatic re-review runs
-after the quiet period once that delta reaches `[daemon] rereview_min_lines` (default 30) or adds a
-file; a smaller delta waits for further pushes, at most `rereview_max_wait` (default `"2h"`) after its
-first push. `rereview_min_lines = 0` turns the threshold off, and a `[[watch]]` can override both.
+blank lines, whitespace moves or documentation) since the reviewed commit; after a base merge or a
+rebase, only the lines that changed in the PR's own diff. An automatic re-review runs after the quiet
+period once that delta reaches `[daemon] rereview_min_lines` (default 30) or adds a file; a smaller
+delta waits for further pushes, at most `rereview_max_wait` (default `"2h"`) after its first push.
+`rereview_min_lines = 0` turns the threshold off, and a `[[watch]]` can override both.
 
 A review request runs without delay: when someone requests a review from the poll login, from a posting
 identity's login (an App's `<slug>[bot]` too) or from a team a `[[watch]]` lists in `request_teams`, or

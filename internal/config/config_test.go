@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -152,6 +153,30 @@ func loadCommittedWithLocal(t *testing.T, local string) (*Config, error) {
 		base = filepath.Join(root, "config.defaults.toml") // a checkout still holding the old config.toml
 	}
 	return Load(paths.Layout{Home: root, UserConfig: user}, base)
+}
+
+// skip_trivial_deltas is commented out in config.defaults.toml, so the
+// built-in default list applies, base merges included; a user's own list
+// replaces it, so one written before base existed keeps base off.
+func TestSkipTrivialDeltasDefaultsToEveryClassButKeepsAnExplicitList(t *testing.T) {
+	cfg, err := loadCommittedWithLocal(t, testLocalConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.TrivialDeltas(nil); !slices.Equal(got, []string{"comments", "whitespace", "docs", "base"}) {
+		t.Fatalf("default skip_trivial_deltas = %q", got)
+	}
+	cfg, err = loadCommittedWithLocal(t, testLocalConfig+"\n[daemon]\nskip_trivial_deltas = [\"comments\", \"docs\"]\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.TrivialDeltas(nil); !slices.Equal(got, []string{"comments", "docs"}) {
+		t.Fatalf("explicit skip_trivial_deltas = %q", got)
+	}
+	if _, err := loadCommittedWithLocal(t, testLocalConfig+"\n[daemon]\nskip_trivial_deltas = [\"base\", \"merges\"]\n"); err == nil ||
+		!strings.Contains(err.Error(), `"merges" is not one of comments, whitespace, docs, base`) {
+		t.Fatalf("an unknown class: %v", err)
+	}
 }
 
 func TestLoadCommittedConfigWithLocalOverlay(t *testing.T) {

@@ -145,8 +145,8 @@ type Daemon struct {
 	ParkIdleAfter Duration `toml:"park_idle_after"`
 	// SkipTrivialDeltas are the kinds of change a push may consist of
 	// without a re-review (TrivialDeltaClasses: comments, whitespace,
-	// docs; default all three, [] = re-review every push): the review of
-	// the earlier commit then stands for the new head. A [[watch]] may
+	// docs, base; default all four, [] = re-review every push): the review
+	// of the earlier commit then stands for the new head. A [[watch]] may
 	// override it (Config.TrivialDeltas).
 	SkipTrivialDeltas []string `toml:"skip_trivial_deltas"`
 	// RequestDebounce is how long a review round waits after a review
@@ -158,8 +158,10 @@ type Daemon struct {
 	// RereviewMinLines is the smallest unreviewed delta an automatic
 	// re-review runs for after the quiet period: changed lines (additions
 	// plus deletions) the trivial-delta classifier counts as code, since the
-	// reviewed commit. A smaller delta without an added file waits for more
-	// pushes or RereviewMaxWait since its first push, whichever is first.
+	// reviewed commit (after a push that merged the base branch or rebased,
+	// the change in the PR's own diff against its base). A smaller delta
+	// without an added file waits for more pushes or RereviewMaxWait since
+	// its first push, whichever is first.
 	// 0 = no threshold. A [[watch]] may override both (Config.ThrottleFor).
 	RereviewMinLines int      `toml:"rereview_min_lines"`
 	RereviewMaxWait  Duration `toml:"rereview_max_wait"`
@@ -167,8 +169,10 @@ type Daemon struct {
 
 // TrivialDeltaClasses are the values of skip_trivial_deltas: a push that
 // only changes comment lines, only whitespace (blank lines, re-indented
-// code where indentation carries no meaning) or only documentation files.
-var TrivialDeltaClasses = []string{"comments", "whitespace", "docs"}
+// code where indentation carries no meaning), only documentation files, or
+// only merges the base branch (or rebases onto it) and leaves the PR's own
+// diff against its base as it was (base).
+var TrivialDeltaClasses = []string{"comments", "whitespace", "docs", "base"}
 
 // Usage is the [usage] section: subscription budgets the scheduler watches.
 // Codex's budget is read from Codex's own session files (internal/usage).

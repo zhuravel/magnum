@@ -76,6 +76,9 @@ func (e *Engine) poll(ctx context.Context) error {
 			errs = append(errs, err)
 		}
 	}
+	// After the first poll applied the heads it found: pushes it saw were
+	// measured anew, the old records left are checked again once.
+	e.recheckDeltas(ctx)
 	e.setKV(ctx, kvLastPoll, store.FormatTime(now))
 	return errors.Join(errs...)
 }

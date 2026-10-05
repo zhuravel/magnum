@@ -931,14 +931,14 @@ func (e *Engine) onPosted(ctx context.Context, job *roundJob, pr store.PR, in pi
 	}
 	// reviewed is the commit the review stands for: the round's target, or
 	// the head that moved during the round when the delta is trivial
-	// (comments, whitespace, docs: no re-review follows).
+	// (comments, whitespace, docs, a base merge: no re-review follows).
 	reviewed := target
 	var trivial []string
-	trivialFiles := 0
+	var settled deltaCheck
 	var next time.Time
 	if pr.HeadSHA != target && !job.postMerge {
-		if dc := e.checkDelta(ctx, job.repo, job.watch, target, pr.HeadSHA); dc.trivial {
-			reviewed, trivial, trivialFiles = pr.HeadSHA, dc.classes, dc.files
+		if dc := e.checkDelta(ctx, job.repo, job.watch, prBase(job.repo, pr), target, pr.HeadSHA); dc.trivial {
+			reviewed, trivial, settled = pr.HeadSHA, dc.classes, dc
 		} else {
 			e.recordDelta(ctx, pr.ID, target, pr.HeadSHA, dc, pr.HeadChangedAt)
 			to, next = store.PRRereviewPending, e.rereviewAt(ctx, pr, job.watch, target, now)
@@ -1016,9 +1016,9 @@ func (e *Engine) onPosted(ctx context.Context, job *roundJob, pr store.PR, in pi
 	} else if to == store.PRReviewed {
 		e.requeueMovedHead(ctx, job.watch, pr.ID, now)
 		if trivial != nil {
-			e.recordTrivial(ctx, job.repo, pr, TrivialSkip{From: target, To: reviewed, Classes: trivial, Files: trivialFiles, At: now},
-				fmt.Sprintf("the push to %s during the review changes %s (%d %s) since %s; no re-review, the review stands",
-					short(reviewed), DeltaLabel(trivial), trivialFiles, plural(trivialFiles, "file", "files"), short(target)))
+			e.recordTrivial(ctx, job.repo, pr, TrivialSkip{From: target, To: reviewed, Classes: trivial, Files: settled.files, At: now},
+				fmt.Sprintf("the push to %s during the review %s since %s; no re-review, the review stands",
+					short(reviewed), settled.change(), short(target)))
 			e.noteMovedHead(ctx, job, pr, target, res.ReviewID, trivial)
 		}
 	} else if to == store.PRRereviewPending {

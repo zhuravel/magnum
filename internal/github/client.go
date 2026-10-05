@@ -8,9 +8,10 @@
 // left the OPEN list, ReviewsWithMarker for verification, and Reviews and
 // ReviewThreads for the whole conversation of one pull request. REST is used
 // where only REST carries the data (ReviewREST: the "[bot]"-suffixed author
-// login; Compare and CompareFiles: the size and the patches of an arbitrary
-// base...head range; FileAt: the raw content of a file at a ref, a response
-// that is bytes and not JSON) and for writes (DismissReview).
+// login; Compare, CompareFiles and ComparePush: the size, the patches and
+// the merge commits of an arbitrary base...head range; FileAt: the raw
+// content of a file at a ref, a response that is bytes and not JSON) and
+// for writes (DismissReview).
 //
 // GraphQL partial errors are tolerated only for NOT_FOUND paths, which the
 // batched calls report as missing numbers; any other error fails the whole

@@ -51,8 +51,11 @@ type GitHub interface {
 	ConfirmStates(ctx context.Context, owner, repo string, numbers []int) (map[int]github.PRState, []int, error)
 	Compare(ctx context.Context, owner, repo, base, head string) (github.CompareStats, error)
 	// CompareFiles reads base...head's changed files with their patches
-	// (the trivial-delta check, delta.go).
+	// (the PR's own diff against its base, base_merge.go; triage; reruns).
 	CompareFiles(ctx context.Context, owner, repo, base, head string) ([]github.FileDelta, error)
+	// ComparePush is CompareFiles with GitHub's status and whether the
+	// range has a merge commit (the trivial-delta check, delta.go).
+	ComparePush(ctx context.Context, owner, repo, base, head string) (github.PushComparison, error)
 	// ReviewsWithMarker with an empty marker lists a PR's last 30 reviews:
 	// the since_review fallback when Details' latestReviews was truncated.
 	ReviewsWithMarker(ctx context.Context, owner, repo string, number int, marker string) ([]github.Review, error)
@@ -230,6 +233,9 @@ type Engine struct {
 	dryRounds     int // rounds a dry run planned this tick
 	lastSeen      map[string]string
 	cleanupTried  map[int64]time.Time // close-grace cleanup attempts per PR
+	// deltasRechecked: the first poll checked the old delta records again
+	// (recheckDeltas, delta.go).
+	deltasRechecked bool
 
 	// Urgent toasts run in their own goroutines on toastCtx (surface.go).
 	toastMu      sync.Mutex

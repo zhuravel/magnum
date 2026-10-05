@@ -24,6 +24,11 @@ const (
 	DeltaComments   = "comments"
 	DeltaWhitespace = "whitespace"
 	DeltaDocs       = "docs"
+	// DeltaBase is a push that only merged the base branch into the PR (or
+	// rebased it onto the base) and left the PR's own diff against its base
+	// as it was (base_merge.go). TrivialDelta never returns it: checkDelta
+	// does, from the PR's own diff.
+	DeltaBase = "base"
 )
 
 // DeltaClasses lists every class, the default of skip_trivial_deltas
@@ -56,14 +61,17 @@ func TrivialDelta(files []github.FileDelta, allowed []string) (classes []string,
 }
 
 // DeltaLabel is how a review note and events name the classes: "comments
-// only", "whitespace only", "docs only", "comments and whitespace only",
-// "comments, whitespace and docs only". The order is always comments,
-// whitespace, docs, whatever the order given; unknown classes are left out
-// and no known class at all is "".
+// only", "whitespace only", "docs only", "base merge only", "comments and
+// whitespace only", "comments, whitespace and docs only". The order is
+// always comments, whitespace, docs, base, whatever the order given;
+// unknown classes are left out and no known class at all is "".
 func DeltaLabel(classes []string) string {
 	var names []string
 	for _, c := range DeltaClasses {
 		if slices.Contains(classes, c) {
+			if c == DeltaBase {
+				c = "base merge"
+			}
 			names = append(names, c)
 		}
 	}

@@ -2011,10 +2011,12 @@ var ErrPromptNotFound = errors.New("prompt not found")
 var PromptKinds = []string{PromptInitial, PromptRereview, PromptRestart, PromptContinue, PromptRecovery, PromptNudge, PromptStop}
     PromptKinds lists every prompt kind a role may name (Role.PromptFile).
 
-var TrivialDeltaClasses = []string{"comments", "whitespace", "docs"}
+var TrivialDeltaClasses = []string{"comments", "whitespace", "docs", "base"}
     TrivialDeltaClasses are the values of skip_trivial_deltas: a push that only
     changes comment lines, only whitespace (blank lines, re-indented code where
-    indentation carries no meaning) or only documentation files.
+    indentation carries no meaning), only documentation files, or only merges
+    the base branch (or rebases onto it) and leaves the PR's own diff against
+    its base as it was (base).
 
 
 FUNCTIONS
@@ -2385,8 +2387,8 @@ type Daemon struct {
 	ParkIdleAfter Duration `toml:"park_idle_after"`
 	// SkipTrivialDeltas are the kinds of change a push may consist of
 	// without a re-review (TrivialDeltaClasses: comments, whitespace,
-	// docs; default all three, [] = re-review every push): the review of
-	// the earlier commit then stands for the new head. A [[watch]] may
+	// docs, base; default all four, [] = re-review every push): the review
+	// of the earlier commit then stands for the new head. A [[watch]] may
 	// override it (Config.TrivialDeltas).
 	SkipTrivialDeltas []string `toml:"skip_trivial_deltas"`
 	// RequestDebounce is how long a review round waits after a review
@@ -2398,8 +2400,10 @@ type Daemon struct {
 	// RereviewMinLines is the smallest unreviewed delta an automatic
 	// re-review runs for after the quiet period: changed lines (additions
 	// plus deletions) the trivial-delta classifier counts as code, since the
-	// reviewed commit. A smaller delta without an added file waits for more
-	// pushes or RereviewMaxWait since its first push, whichever is first.
+	// reviewed commit (after a push that merged the base branch or rebased,
+	// the change in the PR's own diff against its base). A smaller delta
+	// without an added file waits for more pushes or RereviewMaxWait since
+	// its first push, whichever is first.
 	// 0 = no threshold. A [[watch]] may override both (Config.ThrottleFor).
 	RereviewMinLines int      `toml:"rereview_min_lines"`
 	RereviewMaxWait  Duration `toml:"rereview_max_wait"`
@@ -3375,6 +3379,11 @@ const (
 	DeltaComments   = "comments"
 	DeltaWhitespace = "whitespace"
 	DeltaDocs       = "docs"
+	// DeltaBase is a push that only merged the base branch into the PR (or
+	// rebased it onto the base) and left the PR's own diff against its base
+	// as it was (base_merge.go). TrivialDelta never returns it: checkDelta
+	// does, from the PR's own diff.
+	DeltaBase = "base"
 )
     Delta classes ([daemon] skip_trivial_deltas).
 
@@ -3532,10 +3541,10 @@ func DaemonPID(layout paths.Layout) (int, error)
 
 func DeltaLabel(classes []string) string
     DeltaLabel is how a review note and events name the classes: "comments
-    only", "whitespace only", "docs only", "comments and whitespace only",
-    "comments, whitespace and docs only". The order is always comments,
-    whitespace, docs, whatever the order given; unknown classes are left out and
-    no known class at all is "".
+    only", "whitespace only", "docs only", "base merge only", "comments and
+    whitespace only", "comments, whitespace and docs only". The order is always
+    comments, whitespace, docs, base, whatever the order given; unknown classes
+    are left out and no known class at all is "".
 
 func KVIdentityCheck(name string) string
     KVIdentityCheck is the kv key holding "pass" or "fail" from the
@@ -3741,8 +3750,12 @@ type CleanupPayload struct {
     actions that need it.
 
 type DeltaRecord struct {
-	From string `json:"from"`
-	To   string `json:"to"`
+	// Version is deltaRecordVersion for a delta measured with the PR's own
+	// diff in view (base_merge.go); 0, a record from before, is checked
+	// again once (recheckDeltas).
+	Version int    `json:"version,omitempty"`
+	From    string `json:"from"`
+	To      string `json:"to"`
 	DeltaSize
 	// Since is the first push the review does not cover: kept while From
 	// stays the reviewed commit.
@@ -3915,8 +3928,11 @@ type GitHub interface {
 	ConfirmStates(ctx context.Context, owner, repo string, numbers []int) (map[int]github.PRState, []int, error)
 	Compare(ctx context.Context, owner, repo, base, head string) (github.CompareStats, error)
 	// CompareFiles reads base...head's changed files with their patches
-	// (the trivial-delta check, delta.go).
+	// (the PR's own diff against its base, base_merge.go; triage; reruns).
 	CompareFiles(ctx context.Context, owner, repo, base, head string) ([]github.FileDelta, error)
+	// ComparePush is CompareFiles with GitHub's status and whether the
+	// range has a merge commit (the trivial-delta check, delta.go).
+	ComparePush(ctx context.Context, owner, repo, base, head string) (github.PushComparison, error)
 	// ReviewsWithMarker with an empty marker lists a PR's last 30 reviews:
 	// the since_review fallback when Details' latestReviews was truncated.
 	ReviewsWithMarker(ctx context.Context, owner, repo string, number int, marker string) ([]github.Review, error)
@@ -4621,14 +4637,14 @@ subprocess run through execx.Runner, so the identity is chosen by the client's
 env (GH_CONFIG_DIR per identity), tests script gh with execx.Fake and --dry-run
 turns writes into no-ops.
 
-Reads use GraphQL (`gh api graphql --input -`): the per-owner Radar poll (a user
-or an organization), batched Details, ConfirmStates for PRs that left the OPEN
-list, ReviewsWithMarker for verification, and Reviews and ReviewThreads for the
-whole conversation of one pull request. REST is used where only REST carries the
-data (ReviewREST: the "[bot]"-suffixed author login; Compare and CompareFiles:
-the size and the patches of an arbitrary base...head range; FileAt: the raw
-content of a file at a ref, a response that is bytes and not JSON) and for
-writes (DismissReview).
+Reads use GraphQL (`gh api graphql --input -`): the per-owner Radar poll (a
+user or an organization), batched Details, ConfirmStates for PRs that left the
+OPEN list, ReviewsWithMarker for verification, and Reviews and ReviewThreads
+for the whole conversation of one pull request. REST is used where only REST
+carries the data (ReviewREST: the "[bot]"-suffixed author login; Compare,
+CompareFiles and ComparePush: the size, the patches and the merge commits of
+an arbitrary base...head range; FileAt: the raw content of a file at a ref,
+a response that is bytes and not JSON) and for writes (DismissReview).
 
 GraphQL partial errors are tolerated only for NOT_FOUND paths, which the
 batched calls report as missing numbers; any other error fails the whole call,
@@ -4653,6 +4669,10 @@ const (
 const CompareFileLimit = 300
     CompareFileLimit is the most files GitHub lists for one comparison;
     a comparison listing exactly this many is treated as truncated.
+
+const ComparePushCommits = 100
+    ComparePushCommits is the most commits ComparePush reads (one page at
+    GitHub's per_page maximum).
 
 const FileAtLimit = 512 << 10
     FileAtLimit caps FileAt: a larger file is not returned.
@@ -4787,6 +4807,12 @@ func (c *Client) CompareFilesStatus(ctx context.Context, owner, repo, base, head
     "behind" (base descends from head) or "diverged". The file list is three-dot
     (head's changes since the merge base), so only "ahead" and "identical" make
     it the difference between base and head.
+
+func (c *Client) ComparePush(ctx context.Context, owner, repo, base, head string) (PushComparison, error)
+    ComparePush is CompareFilesStatus that also reads up to ComparePushCommits
+    of the commits (per_page=100: the first page still carries the whole file
+    list) to tell whether the range brings a merge commit: a push that merged
+    the base branch into the PR.
 
 func (c *Client) ConfirmStates(ctx context.Context, owner, repo string, numbers []int) (map[int]PRState, []int, error)
     ConfirmStates reads state/merged/mergedAt/closedAt/headRefOid for pull
@@ -5026,6 +5052,20 @@ type PRState struct {
 	MergeCommitOid string
 }
     PRState is the closed/merged confirmation of one pull request.
+
+type PushComparison struct {
+	// Status is GitHub's: "ahead", "identical", "behind" or "diverged"
+	// (CompareFilesStatus).
+	Status string
+	// Commits is total_commits: the commits head has since the merge base.
+	Commits int
+	// Merge: one of those commits has more than one parent, or GitHub
+	// listed fewer of them than Commits (more than ComparePushCommits), so
+	// a merge cannot be ruled out.
+	Merge bool
+	Files []FileDelta
+}
+    PushComparison is a comparison read with its commits (ComparePush).
 
 type RESTReview struct {
 	ID          int64

@@ -36,36 +36,80 @@ func (c *Client) CompareFiles(ctx context.Context, owner, repo, base, head strin
 // list is three-dot (head's changes since the merge base), so only "ahead"
 // and "identical" make it the difference between base and head.
 func (c *Client) CompareFilesStatus(ctx context.Context, owner, repo, base, head string) (string, []FileDelta, error) {
+	pc, err := c.compareFiles(ctx, owner, repo, base, head, 1)
+	return pc.Status, pc.Files, err
+}
+
+// PushComparison is a comparison read with its commits (ComparePush).
+type PushComparison struct {
+	// Status is GitHub's: "ahead", "identical", "behind" or "diverged"
+	// (CompareFilesStatus).
+	Status string
+	// Commits is total_commits: the commits head has since the merge base.
+	Commits int
+	// Merge: one of those commits has more than one parent, or GitHub
+	// listed fewer of them than Commits (more than ComparePushCommits), so
+	// a merge cannot be ruled out.
+	Merge bool
+	Files []FileDelta
+}
+
+// ComparePushCommits is the most commits ComparePush reads (one page at
+// GitHub's per_page maximum).
+const ComparePushCommits = 100
+
+// ComparePush is CompareFilesStatus that also reads up to
+// ComparePushCommits of the commits (per_page=100: the first page still
+// carries the whole file list) to tell whether the range brings a merge
+// commit: a push that merged the base branch into the PR.
+func (c *Client) ComparePush(ctx context.Context, owner, repo, base, head string) (PushComparison, error) {
+	return c.compareFiles(ctx, owner, repo, base, head, ComparePushCommits)
+}
+
+// compareFiles reads base...head with perPage commits on its first page.
+func (c *Client) compareFiles(ctx context.Context, owner, repo, base, head string, perPage int) (PushComparison, error) {
 	if err := checkRepo(owner, repo); err != nil {
-		return "", nil, err
+		return PushComparison{}, err
 	}
 	for _, ref := range []string{base, head} {
 		if !compareRefRe.MatchString(ref) || strings.Contains(ref, "..") {
-			return "", nil, fmt.Errorf("github: invalid compare ref %q", ref)
+			return PushComparison{}, fmt.Errorf("github: invalid compare ref %q", ref)
 		}
 	}
 	var r struct {
-		Status string `json:"status"`
-		Files  []struct {
+		Status       string `json:"status"`
+		TotalCommits int    `json:"total_commits"`
+		Commits      []struct {
+			Parents []struct {
+				SHA string `json:"sha"`
+			} `json:"parents"`
+		} `json:"commits"`
+		Files []struct {
 			Filename         string  `json:"filename"`
 			PreviousFilename string  `json:"previous_filename"`
 			Status           string  `json:"status"`
 			Patch            *string `json:"patch"`
 		} `json:"files"`
 	}
-	path := fmt.Sprintf("repos/%s/%s/compare/%s...%s?per_page=1", owner, repo, base, head)
+	path := fmt.Sprintf("repos/%s/%s/compare/%s...%s?per_page=%d", owner, repo, base, head, perPage)
 	op := fmt.Sprintf("compare files %s/%s %s...%s", owner, repo, shortRef(base), shortRef(head))
 	if err := c.rest(ctx, op, "GET", path, nil, false, &r); err != nil {
-		return "", nil, err
+		return PushComparison{}, err
 	}
 	cut := len(r.Files) >= CompareFileLimit
-	out := make([]FileDelta, 0, len(r.Files))
+	out := PushComparison{Status: r.Status, Commits: r.TotalCommits, Files: make([]FileDelta, 0, len(r.Files))}
 	for _, f := range r.Files {
 		d := FileDelta{Path: f.Filename, PreviousPath: f.PreviousFilename, Status: f.Status, Truncated: cut || f.Patch == nil}
 		if f.Patch != nil {
 			d.Patch = *f.Patch
 		}
-		out = append(out, d)
+		out.Files = append(out.Files, d)
 	}
-	return r.Status, out, nil
+	out.Merge = len(r.Commits) < r.TotalCommits
+	for _, cm := range r.Commits {
+		if len(cm.Parents) > 1 {
+			out.Merge = true
+		}
+	}
+	return out, nil
 }

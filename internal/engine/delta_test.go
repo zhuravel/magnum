@@ -307,6 +307,7 @@ func TestTrivialSkipNote(t *testing.T) {
 		"comments":            "comment-only push skipped (a7b3f8c → 602da9d)",
 		"whitespace":          "whitespace-only push skipped (a7b3f8c → 602da9d)",
 		"docs":                "docs-only push skipped (a7b3f8c → 602da9d)",
+		"base":                "base-merge push skipped (a7b3f8c → 602da9d)",
 		"comments,whitespace": "trivial push skipped (a7b3f8c → 602da9d)",
 	} {
 		s := TrivialSkip{From: "a7b3f8c0000", To: "602da9d1111", Classes: strings.Split(classes, ",")}
