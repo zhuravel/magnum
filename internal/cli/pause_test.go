@@ -18,6 +18,29 @@ func (h *actHarness) kv(key string) (string, bool) {
 	return v, ok
 }
 
+// `magnum pause 2h` used to pause for good with the reason "2h": a word that
+// reads as a duration is refused and --for named, and nothing is paused.
+func TestPauseRefusesADurationAsTheReason(t *testing.T) {
+	h := newActHarness(t)
+	for _, args := range [][]string{{"2h"}, {"lunch", "90m"}} {
+		h.errb.Reset()
+		if code := h.cmd("pause", args...); code != 2 {
+			t.Fatalf("pause %v: exit %d: %s", args, code, h.errb.String())
+		}
+		d := args[len(args)-1]
+		actContains(t, h.errb.String(), `"`+d+`" reads as a duration: use --for `+d)
+		if _, ok := h.kv(engine.KVDaemonPaused); ok {
+			t.Fatalf("pause %v paused", args)
+		}
+	}
+	if code := h.cmd("pause", "lunch", "break"); code != 0 {
+		t.Fatalf("a worded reason: exit %d: %s", code, h.errb.String())
+	}
+	if v, _ := h.kv(engine.KVDaemonPausedReason); v != "lunch break" {
+		t.Errorf("reason = %q", v)
+	}
+}
+
 func TestPauseAndResumeWithoutDaemon(t *testing.T) {
 	h := newActHarness(t)
 	// An expired timed pause is left over: the new pause must replace it.

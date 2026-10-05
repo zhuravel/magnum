@@ -38,9 +38,38 @@ func TestAbortWithoutARunningReviewFailsAtOnce(t *testing.T) {
 	if code := h.cmd("abort", "talkable#5"); code != 1 {
 		t.Fatalf("exit %d", code)
 	}
-	actContains(t, h.errb.String(), "no review of talkable#5 is running (state reviewed)")
+	actContains(t, h.errb.String(), "no review of talkable#5 is running or queued (state reviewed)")
 	if len(h.requests()) != 0 || h.kicks != 0 {
 		t.Fatal("asked the daemon although nothing runs")
+	}
+}
+
+// A review that waits in line (a forced one `magnum review` asked for, or an
+// automatic one) and a paused round can be taken back: the abort goes to the
+// daemon as for a running round. Only the daemon can take it back, so without
+// one nothing is queued.
+func TestAbortTakesBackAQueuedReview(t *testing.T) {
+	for _, state := range []string{store.PRQueued, store.PRRereviewPending, store.PRPaused} {
+		h := newActHarness(t)
+		pr := h.seedPR("talkable/talkable", 5, state)
+		h.setPR(pr.ID, state, func(u *store.PRUpdate) { u.Set("forced", true) })
+		h.pid = 7
+		h.onSleep = func(h *actHarness) {
+			h.completePending(store.RequestDone, "took back the forced review of talkable/talkable#5: PR reviewed")
+		}
+		if code := h.cmd("abort", "5"); code != 0 {
+			t.Fatalf("%s: exit %d: %s", state, code, h.errb.String())
+		}
+		if reqs := h.requests(); len(reqs) != 1 || reqs[0].Kind != engine.ReqAbort {
+			t.Fatalf("%s: requests %+v", state, reqs)
+		}
+		actContains(t, h.out.String(), "took back the forced review of talkable/talkable#5")
+
+		h.pid = 0
+		h.errb.Reset()
+		if code := h.cmd("abort", "5"); code != 1 || !strings.Contains(h.errb.String(), "nothing was queued for talkable#5: no daemon is running") {
+			t.Fatalf("%s without a daemon: exit %d: %s", state, code, h.errb.String())
+		}
 	}
 }
 

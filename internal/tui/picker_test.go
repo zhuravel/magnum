@@ -155,12 +155,12 @@ func TestPickerNoMatchStays(t *testing.T) {
 
 func TestPickerActionKeys(t *testing.T) {
 	for k, want := range map[string]PickAction{
-		"ctrl+r": PickActionAgain, "ctrl+f": PickActionFresh, "ctrl+g": PickActionOpen, "ctrl+o": PickActionBrowser,
-		"ctrl+p": PickActionTogglePin, "ctrl+x": PickActionRelease, "enter": PickActionReview,
+		"ctrl+f": PickActionFresh, "ctrl+g": PickActionOpen, "ctrl+o": PickActionBrowser,
+		"ctrl+p": PickActionTogglePin, "enter": PickActionReview,
 	} {
 		m := newPicker(t, "", 120, 24)
 		names := []string{"down", k}
-		if want == PickActionReview || want == PickActionAgain || want == PickActionFresh {
+		if want == PickActionReview || want == PickActionFresh {
 			names = append(names, "y") // the review keys ask first
 		}
 		_, out, ok := pickOutcome(t, m, names...)
@@ -175,6 +175,17 @@ func TestPickerActionKeys(t *testing.T) {
 	if PickActionTogglePin.String() != "toggle-pin" || PickAction(42).String() != "PickAction(42)" {
 		t.Errorf("String: %s, %s", PickActionTogglePin, PickAction(42))
 	}
+
+	// ctrl+x releases a PR that is not pinned; a pinned one is refused at the
+	// key, naming the key that unpins it, and the picker stays up.
+	if _, out, ok := pickOutcome(t, newPicker(t, "", 120, 24), "ctrl+x"); !ok || out.Action != PickActionRelease || out.Entry.Ref != "talkable/talkable#7" {
+		t.Errorf("ctrl+x on talkable#7: %+v", out)
+	}
+	m, _, done := pickOutcome(t, newPicker(t, "", 120, 24), "down", "ctrl+x")
+	if done || m.confirm != nil {
+		t.Fatalf("ctrl+x on the pinned talkable#1 finished (%v) or asked", done)
+	}
+	mustContain(t, viewOf(m), "talkable/talkable#1 is pinned: unpin first (ctrl+p)")
 }
 
 func TestPickerNavigation(t *testing.T) {
@@ -241,10 +252,10 @@ func TestRunPickerEndToEnd(t *testing.T) {
 	}
 }
 
-// enter, ^r and ^f ask before the picker hands back a review; any other
+// enter and ^f ask before the picker hands back a review; any other
 // key cancels the question and leaves the picker up.
 func TestPickerReviewKeysAsk(t *testing.T) {
-	for k, want := range map[string]PickAction{"enter": PickActionReview, "ctrl+r": PickActionAgain, "ctrl+f": PickActionFresh} {
+	for k, want := range map[string]PickAction{"enter": PickActionReview, "ctrl+f": PickActionFresh} {
 		m := newPicker(t, "", 120, 24)
 		m, _, done := pickOutcome(t, m, "down", k)
 		if done || m.confirm == nil {
@@ -277,9 +288,11 @@ func TestPickerReviewKeysAsk(t *testing.T) {
 		keys []string
 		want string
 	}{
-		{[]string{"down", "enter"}, "Review talkable/talkable#1 now (no new commits since the last review, last activity 1h ago)?"},
-		{[]string{"down", "ctrl+f"}, "Fresh review of talkable/talkable#1 in new agent sessions (no new commits since the last review, last activity 1h ago)?"},
-		{[]string{"ctrl+r"}, "Review talkable/talkable#7 again (not reviewed yet, queued, last activity 5m ago)?"},
+		// talkable#1 is pinned: the review unpins it, as the board says
+		{[]string{"down", "enter"}, "Review talkable/talkable#1 now (no new commits since the last review, last activity 1h ago, pinned: the review unpins it)?"},
+		{[]string{"down", "ctrl+f"}, "Fresh review of talkable/talkable#1 in new agent sessions (no new commits since the last review, last activity 1h ago, " +
+			"pinned: the review unpins it)?"},
+		{[]string{"enter"}, "Review talkable/talkable#7 now (not reviewed yet, queued, last activity 5m ago)?"},
 	} {
 		m := newPicker(t, "", 200, 24)
 		m, _ = send(t, m, keys(c.keys...)...)
@@ -308,7 +321,8 @@ func TestPickerQuestionUsesReviewFacts(t *testing.T) {
 	}{
 		{[]string{"ctrl+f"}, "Fresh review of talkable/talkable#7 in new agent sessions " +
 			"(3 commits since the last review of ffa3270 20m ago by zhuravel[bot], head 1234567, last activity 5m ago)?"},
-		{[]string{"down", "enter"}, "Review talkable/talkable#1 now (no new commits since head ffa3270 was reviewed 2h ago by zhuravel, last activity 1h ago)?"},
+		{[]string{"down", "enter"}, "Review talkable/talkable#1 now (no new commits since head ffa3270 was reviewed 2h ago by zhuravel, last activity 1h ago, " +
+			"pinned: the review unpins it)?"},
 	} {
 		got, _ := send(t, m, keys(c.keys...)...)
 		if got.confirm == nil || got.confirm.question != c.want {

@@ -185,6 +185,15 @@ func TestPickPromptOffATerminal(t *testing.T) {
 	if code := h.cmd("pick"); code != 2 || !strings.Contains(h.errb.String(), `unknown action "z"`) {
 		t.Fatalf("bad action exit %d: %s", code, h.errb.String())
 	}
+	// "a" (review again) is gone: r reviews a reviewed head again anyway.
+	h.errb.Reset()
+	h.stdin("1 a\n")
+	if code := h.cmd("pick"); code != 2 || !strings.Contains(h.errb.String(), `unknown action "a" (r, f, o, b, p or x)`) {
+		t.Fatalf("a: exit %d: %s", code, h.errb.String())
+	}
+	if strings.Contains(h.out.String(), "re-review") {
+		t.Errorf("the prompt still offers a re-review:\n%s", h.out.String())
+	}
 }
 
 func TestPickInThePluginPopupKeepsTheResultUp(t *testing.T) {
@@ -205,6 +214,57 @@ func TestPickInThePluginPopupKeepsTheResultUp(t *testing.T) {
 	actContains(t, h.out.String(), "press any key to close")
 	if n := len(h.tty.CallsWithPrefix("stty")); n != 3 {
 		t.Errorf("stty calls = %d (save, cbreak, restore)", n)
+	}
+}
+
+// A failure is held open by the plugin's script, which waits for a key
+// after any failing exit (open and browser too), so the picker does not
+// wait as well: one key closes the popup, not two.
+func TestPickInThePluginPopupLeavesAFailureToTheScript(t *testing.T) {
+	h := newActHarness(t) // no daemon: the review is refused
+	h.seedPR("talkable/talkable", 5, store.PRReviewed)
+	h.withPicker(pickEntryAt(0, tui.PickActionReview))
+	h.env["HERDR_PLUGIN_ID"] = "zhuravel.magnum"
+	h.stdin("k")
+	if code := h.cmd("pick"); code != 1 {
+		t.Fatalf("exit %d: %s", code, h.errb.String())
+	}
+	actContains(t, h.errb.String(), "nothing was queued")
+	if strings.Contains(h.out.String(), "press any key") || len(h.tty.CallsWithPrefix("stty")) != 0 {
+		t.Errorf("the picker waited for a key after a failure:\n%s", h.out.String())
+	}
+}
+
+// ctrl+r lists the PRs again: the picker gets a reload that reads the
+// registry anew, and a PR it lists only after a refresh is acted on.
+func TestPickScreenReloadReadsTheRegistryAgain(t *testing.T) {
+	h := newActHarness(t)
+	h.seedPR("talkable/talkable", 5, store.PRReviewed)
+	calls := h.withPicker(func([]tui.PickEntry) tui.PickOutcome { return tui.PickOutcome{} })
+	if code := h.cmd("pick"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.errb.String())
+	}
+	reload := (*calls)[0].opts.Reload
+	if reload == nil {
+		t.Fatal("the picker got no reload")
+	}
+	h.seedPR("zhuravel/widgets", 7, store.PRQueued)
+	again, err := reload(h.ctx)
+	if err != nil || len(again) != 2 {
+		t.Fatalf("reload = %+v, %v", again, err)
+	}
+
+	// #9 is recorded while the picker is up: a refresh lists it, and picking it
+	// acts on the registry's row although the first list lacked it.
+	h.withPicker(func(entries []tui.PickEntry) tui.PickOutcome {
+		h.seedPR("zhuravel/widgets", 9, store.PRQueued)
+		return tui.PickOutcome{Action: tui.PickActionTogglePin, Entry: &tui.PickEntry{Ref: "zhuravel/widgets#9"}}
+	})
+	if code := h.cmd("pick"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.errb.String())
+	}
+	if reqs := h.requests(); len(reqs) != 1 || reqs[0].Kind != engine.ReqPin || actDecode[engine.TargetPayload](t, reqs[0].Payload).Number != 9 {
+		t.Fatalf("requests %+v", reqs)
 	}
 }
 

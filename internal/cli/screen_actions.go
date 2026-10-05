@@ -97,7 +97,7 @@ func (s *screenActions) Open(ctx context.Context, ref string) (string, error) {
 
 func (s *screenActions) Review(ctx context.Context, ref string, o tui.ReviewOpts) (string, error) {
 	return s.do(ctx, "review", func(ctx context.Context, c *Context, d *actDeps) int {
-		return reviewMain(ctx, c, d, ref, reviewOpts{again: o.Again, fresh: o.Fresh, simplify: o.Simplify})
+		return reviewMain(ctx, c, d, ref, reviewOpts{fresh: o.Fresh, simplify: o.Simplify})
 	})
 }
 

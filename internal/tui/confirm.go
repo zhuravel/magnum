@@ -9,8 +9,9 @@ import (
 )
 
 // pendingAction is an action waiting for y/N in the footer. The review
-// keys, release, abort, ignore, mute and unmute ask first: a review round runs for
-// minutes and posts to GitHub, so a stray key must not start one.
+// keys, release, abort, ignore, mute, unmute and the verdicts ask first (see
+// actionQuestion): a review round runs for minutes and posts to GitHub, so
+// a stray key must not start one.
 type pendingAction struct {
 	question string     // what will happen, ending in "?"
 	what     string     // the action's label while it runs ("fresh review talkable#7")
@@ -50,8 +51,6 @@ func reviewQuestion(ref string, o ReviewOpts, facts string) string {
 		q = "Fresh review of " + ref + " in new agent sessions"
 	case o.Simplify:
 		q = "Simplify review of " + ref
-	case o.Again:
-		q = "Review " + ref + " again"
 	default:
 		q = "Review " + ref + " now"
 	}
@@ -82,26 +81,16 @@ func releaseQuestion(target string) string {
 	return "Release " + target + ": hand back its slot now, sessions parked and worktree reset?"
 }
 
-// abortQuestion asks before killing ref's running review.
-func abortQuestion(ref string) string {
-	return "Kill the running review of " + ref + "?"
-}
-
-// ignoreQuestion asks before ignoring ref.
-func ignoreQuestion(ref string) string {
-	return "Ignore " + ref + ": kill its review, mute it and free its slot?"
-}
-
-// verdictQuestion asks before posting the reviewer's verdict on r: it says
-// on which head and what magnum's review concluded, so the decision is an
-// informed one.
-func verdictQuestion(ref string, approve bool, r PRBoardRow) string {
+// verdictQuestion asks before posting the reviewer's verdict on ref: it
+// says on which head and what magnum's review f concluded, so the decision
+// is an informed one. A head that moved since is refused before asking
+// (actionRefusal): the screens cannot pass --force.
+func verdictQuestion(ref string, approve bool, f *FindingsInfo) string {
 	verb := "Request changes on"
 	if approve {
 		verb = "Approve"
 	}
 	q := verb + " " + ref
-	f := r.Findings
 	if f == nil {
 		return q + "?"
 	}
@@ -118,11 +107,7 @@ func verdictQuestion(ref string, approve bool, r PRBoardRow) string {
 	if len(parts) > 0 {
 		found = strings.Join(parts, ", ")
 	}
-	q += "? magnum found " + found
-	if r.HeadSHA != "" && f.SHA != "" && r.HeadSHA != f.SHA {
-		q += "; the head moved since (review again first)"
-	}
-	return q
+	return q + "? magnum found " + found
 }
 
 // unmuteIgnoredQuestion asks before unmuting a PR `magnum ignore` muted,
@@ -249,13 +234,7 @@ func reviewFacts(state, next string, f *ReviewFacts, now time.Time) string {
 	if f.ReviewedSHA != "" || !f.ReviewedAt.IsZero() {
 		r.LastReview = &ReviewInfo{Login: cleanText(f.ReviewedBy), SubmittedAt: f.ReviewedAt, CommitSHA: cleanText(f.ReviewedSHA)}
 	}
-	facts := boardReviewFacts(r, now)
-	s, _, _ := strings.Cut(state, ",")
-	switch normState(s) {
-	case "claiming", "reviewing", "verifying":
-		return joinFacts("a round is already in progress", facts)
-	}
-	return facts
+	return boardReviewFacts(r, now)
 }
 
 // stateReviewFacts says what magnum's state tells about a review, for the
@@ -270,8 +249,6 @@ func stateReviewFacts(state, next string) string {
 		return next
 	case "reviewed":
 		return "no new commits since the last review"
-	case "claiming", "reviewing", "verifying":
-		return "a round is already in progress"
 	case "rereview_pending":
 		f = "reviewed before, re-review pending"
 	case "queued":

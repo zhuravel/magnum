@@ -147,13 +147,26 @@ func TestPRBoardMuteOnAPlainMergedOrClosedPRFlashesAndSendsNothing(t *testing.T)
 	}
 }
 
-// An open PR keeps the questions it had: M mutes, U unmutes.
+// An open PR keeps the questions it had: M mutes it, U unmutes it once it
+// is muted (on one that is not muted U says so instead of asking).
 func TestPRBoardMuteOnAnOpenPRKeepsItsQuestions(t *testing.T) {
-	for _, tc := range []struct{ key, want string }{
-		{"M", "Mute talkable#11950: stop automatic reviews of it?"},
-		{"U", "Unmute talkable#11950: resume automatic reviews of it?"},
+	muted := muteMergedRows()
+	for i := range muted {
+		if prRef(muted[i]) == "talkable/talkable#11950" {
+			muted[i].Muted = true
+		}
+	}
+	for _, tc := range []struct {
+		key, want string
+		rows      []PRBoardRow
+	}{
+		{"M", "Mute talkable#11950: stop automatic reviews of it?", nil},
+		{"U", "Unmute talkable#11950: resume automatic reviews of it?", muted},
 	} {
 		m, act := muteMergedBoard(t, "talkable/talkable#11950")
+		if tc.rows != nil {
+			m, _ = send(t, m, prbDataMsg{rows: tc.rows})
+		}
 		m, _ = send(t, m, keyMsg(tc.key))
 		if m.confirm == nil || m.confirm.question != tc.want {
 			t.Errorf("%s asked %+v, want %q", tc.key, m.confirm, tc.want)
@@ -227,7 +240,8 @@ func TestPRBoardMenuMuteAsksTheSameQuestionOnMergedPRs(t *testing.T) {
 
 // The card of a PR whose flag is dismissed says so in one dim line and offers
 // M as the way back; a flagged PR's card offers to dismiss; a plain merged or
-// closed PR's card offers no mute at all (unmute stays).
+// closed PR's card offers neither mute nor unmute (there is nothing to undo),
+// and an open one only what applies to it.
 func TestPRBoardCardSaysTheFlagIsDismissed(t *testing.T) {
 	m, _ := muteMergedBoard(t, mmDismissed)
 	p := m.painter()
@@ -254,11 +268,11 @@ func TestPRBoardCardSaysTheFlagIsDismissed(t *testing.T) {
 
 	for _, ref := range []string{pmMergedReviewed, pmClosedUnmerged, mmMergedMute, mmClosedMute} {
 		c := card(ref)
-		mustContain(t, c, "unmute")
-		mustNotContain(t, c, "flag dismissed", "dismiss merged flag", "restore merged flag", "M mute")
+		mustNotContain(t, c, "flag dismissed", "dismiss merged flag", "restore merged flag", "M mute", "unmute")
 	}
-	open := card("talkable/talkable#11950")
-	mustContain(t, open, "M mute", "U unmute")
+	open := card("talkable/talkable#11950") // open, not muted
+	mustContain(t, open, "M mute")
+	mustNotContain(t, open, "U unmute")
 }
 
 // The key help says what M does on a merged PR.

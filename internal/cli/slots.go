@@ -47,12 +47,14 @@ func newSlotsCmd(c *Context) *cobra.Command {
 			"Register an existing checkout at <path> as a free pool slot. The path must be the pool's slot path "+
 				"for some N, a worktree of the main clone whose tmp/.worktree-db-slug names that slot, and all its "+
 				"databases must exist. A removed, lost or broken row of that name is revived."),
-		newSlotsTargetCmd(c, "pin", "<slot>", "keep a slot for you (no automatic claim, checkout, release or removal)",
+		newSlotsPinCmd(c, "pin", "keep a slot for you (no automatic claim, checkout, release or removal); same as `magnum pin <slot>`",
 			"Pin a slot: automation does not claim, check out, release or remove it until `magnum slots unpin`. "+
-				"The PR it holds is pinned too."),
-		newSlotsTargetCmd(c, "unpin", "<slot>", "hand a pinned slot back to automation",
+				"The PR it holds is pinned too. It is `magnum pin <slot>`: the daemon does it, and with no daemon "+
+				"running the request waits for its start."),
+		newSlotsPinCmd(c, "unpin", "hand a pinned slot back to automation; same as `magnum unpin <slot>`",
 			"Hand a pinned slot back to automation. A head_drift or unpushed_commits hold is acknowledged by "+
-				"taking the current HEAD, so the next release resets the slot."),
+				"taking the current HEAD, so the next release resets the slot. It is `magnum unpin <slot>`: the "+
+				"daemon does it, and with no daemon running the request waits for its start."),
 	)
 	return cmd
 }
@@ -133,7 +135,21 @@ func (e *slotsEnv) remove(ctx context.Context, f *cleanupFlags, slot string) int
 	return cleanupExec(ctx, e.c, e.cleaner, e.st, f, e.cfg.Daemon.DefaultRepo)
 }
 
-// newSlotsTargetCmd is `slots repair|adopt|pin|unpin <arg>`.
+// newSlotsPinCmd is `slots pin|unpin <slot>`, which runs `magnum pin|unpin
+// <slot>` (targetMain): one code path, so both behave alike with or without
+// a daemon running.
+func newSlotsPinCmd(c *Context, sub, short, long string) *cobra.Command {
+	cmd := newCommand("", sub+" <slot>", short, long, func(pos []string) int {
+		if len(pos) != 1 {
+			return inspUsage(c, "slots", sub+" needs a slot name", slotsUsage)
+		}
+		return runTarget(c, targetKindByName(sub), targetOpts{}, pos)
+	})
+	cmd.ValidArgsFunction = completeFirst(c.completeSlots)
+	return cmd
+}
+
+// newSlotsTargetCmd is `slots repair|adopt <arg>`.
 func newSlotsTargetCmd(c *Context, sub, arg, short, long string) *cobra.Command {
 	cmd := newCommand("", sub+" "+arg, short, long, func(pos []string) int {
 		if len(pos) != 1 {
@@ -144,16 +160,11 @@ func newSlotsTargetCmd(c *Context, sub, arg, short, long string) *cobra.Command 
 			return inspUsage(c, "slots", sub+" needs "+what, slotsUsage)
 		}
 		target := pos[0]
-		return slotsRun(c, sub != "pin" && sub != "unpin", func(ctx context.Context, e *slotsEnv) int {
-			switch sub {
-			case "repair":
-				return e.repair(ctx, target)
-			case "adopt":
+		return slotsRun(c, true, func(ctx context.Context, e *slotsEnv) int {
+			if sub == "adopt" {
 				return e.adopt(ctx, target)
-			case "pin":
-				return e.pin(ctx, target, true)
 			}
-			return e.pin(ctx, target, false)
+			return e.repair(ctx, target)
 		})
 	})
 	if sub == "adopt" {
@@ -189,8 +200,6 @@ type slotsOps interface {
 	NextSlotNumber(ctx context.Context, pool config.Pool) (int, error)
 	Repair(ctx context.Context, slot store.Slot, pool config.Pool) error
 	Adopt(ctx context.Context, pool config.Pool, path string) (store.Slot, error)
-	Pin(ctx context.Context, slot store.Slot) error
-	Unpin(ctx context.Context, slot store.Slot) error
 }
 
 // slotsEnv is what the subcommands work with.
@@ -492,49 +501,5 @@ func (e *slotsEnv) adopt(ctx context.Context, path string) int {
 		return cmdFail(e.c, cmd, fmt.Errorf("%w\n  fix: %s", err, fix))
 	}
 	fmt.Fprintf(e.c.Stdout, "adopted %s as %s (%s)\n", inspTilde(abs), sl.Name, sl.State)
-	return 0
-}
-
-// pin pins or unpins a slot: through the daemon when it runs, else in
-// process under the locks (mirroring the daemon: the slot's PR too).
-func (e *slotsEnv) pin(ctx context.Context, name string, pin bool) int {
-	cmd := map[bool]string{true: "slots pin", false: "slots unpin"}[pin]
-	sl, ok := e.slot(cmd, name)
-	if !ok {
-		return 1
-	}
-	kind := map[bool]string{true: engine.ReqPin, false: engine.ReqUnpin}[pin]
-	handOff := func() int {
-		out, err := inspHandOff(ctx, e.c, e.st, kind, engine.TargetPayload{Slot: sl.Name}, inspHandoffWait)
-		if err != nil {
-			return cmdFail(e.c, cmd, err)
-		}
-		return out.print(e.c.Stdout, e.c.Stderr)
-	}
-	unlock, who, err := acquireOps(e.c.Layout)
-	switch {
-	case err != nil:
-		return cmdFail(e.c, cmd, err)
-	case who == opsBusy:
-		return cmdFail(e.c, cmd, opsBusyErr(e.c.Layout))
-	case who == opsDaemon:
-		return handOff()
-	}
-	defer unlock()
-	if pin {
-		err = e.ops.Pin(ctx, sl)
-	} else {
-		err = e.ops.Unpin(ctx, sl)
-	}
-	if err != nil {
-		return cmdFail(e.c, cmd, err)
-	}
-	if sl.PRID != nil {
-		if err := e.st.UpdatePR(ctx, *sl.PRID, func(u *store.PRUpdate) { u.Set("pinned", pin) }); err != nil {
-			return cmdFail(e.c, cmd, err)
-		}
-	}
-	verb := map[bool]string{true: "pinned", false: "unpinned"}[pin]
-	fmt.Fprintf(e.c.Stdout, "%s %s\n", verb, sl.Name)
 	return 0
 }

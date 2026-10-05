@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -23,8 +24,6 @@ type fakeSlotOps struct {
 	provErr     error
 	repaired    []string
 	adopted     []string
-	pinned      []string
-	unpinned    []string
 }
 
 func (f *fakeSlotOps) ProvisionPool(ctx context.Context, pool config.Pool, n int) error {
@@ -48,16 +47,6 @@ func (f *fakeSlotOps) Repair(ctx context.Context, sl store.Slot, pool config.Poo
 func (f *fakeSlotOps) Adopt(ctx context.Context, pool config.Pool, path string) (store.Slot, error) {
 	f.adopted = append(f.adopted, path)
 	return store.Slot{Name: "review4", Path: path, State: store.SlotFree}, nil
-}
-
-func (f *fakeSlotOps) Pin(ctx context.Context, sl store.Slot) error {
-	f.pinned = append(f.pinned, sl.Name)
-	return nil
-}
-
-func (f *fakeSlotOps) Unpin(ctx context.Context, sl store.Slot) error {
-	f.unpinned = append(f.unpinned, sl.Name)
-	return nil
 }
 
 func slotsFixture(t *testing.T) (*inspFixture, *slotsEnv, *fakeSlotOps, *fakePlanner) {
@@ -217,29 +206,44 @@ func TestSlotsRepairAdoptViaDaemon(t *testing.T) {
 	}
 }
 
-func TestSlotsPinInProcessAndViaDaemon(t *testing.T) {
-	f, e, ops, _ := slotsFixture(t)
-	_, pr := inspSeedPR(t, e.st, "talkable/talkable", 11920, store.PRReviewed, nil)
-	inspSeedSlot(t, e.st, f.Home, "review1", store.SlotHeld, &pr.ID)
-	ctx := context.Background()
-	if code := e.pin(ctx, "review1", true); code != 0 || fmt.Sprint(ops.pinned) != "[review1]" {
-		t.Fatalf("pin code %d ops %v err %s", code, ops.pinned, f.Err.String())
+// `slots pin|unpin <slot>` is `magnum pin|unpin <slot>`: the same request
+// and the same answer, with or without a daemon (it used to pin in process
+// when none ran, while `pin <slot>` queued).
+func TestSlotsPinIsMagnumPin(t *testing.T) {
+	h := newActHarness(t)
+	pr := h.seedPR("talkable/talkable", 5, store.PRReviewed)
+	sl, err := h.st.CreateSlot(h.ctx, store.Slot{Name: "review3", RepoFullName: "talkable/talkable", Kind: store.SlotKindPool,
+		Path: filepath.Join(h.home, "talkable.review3"), MainClone: h.home, State: store.SlotFree})
+	if err != nil {
+		t.Fatal(err)
 	}
-	got, _ := e.st.PRByID(ctx, pr.ID)
-	if !got.Pinned {
-		t.Fatal("the slot's PR must be pinned too")
+	if err := h.st.TransitionSlot(h.ctx, sl.ID, nil, store.SlotHeld, func(u *store.SlotUpdate) { u.Set("pr_id", pr.ID) }); err != nil {
+		t.Fatal(err)
 	}
-	unlock, _, _ := engine.AcquireLock(f.Ctx.Layout.Lock())
-	defer unlock()
-	if code := e.pin(ctx, "review1", false); code != 0 || len(ops.unpinned) != 0 {
-		t.Fatalf("unpin via daemon code %d ops %v", code, ops.unpinned)
+	var said []string
+	for _, args := range [][]string{{"slots", "pin", "review3"}, {"pin", "review3"}, {"slots", "unpin", "review3"}, {"unpin", "review3"}} {
+		h.out.Reset()
+		h.errb.Reset()
+		if code := h.cmd(args[0], args[1:]...); code != 0 {
+			t.Fatalf("%v: exit %d: %s", args, code, h.errb.String())
+		}
+		said = append(said, strings.ReplaceAll(h.errb.String(), fmt.Sprintf("request %d", len(h.requests())), "request N"))
 	}
-	req, err := e.st.NextPendingRequest(ctx)
-	if err != nil || req.Kind != engine.ReqUnpin || !strings.Contains(string(req.Payload), `"slot":"review1"`) {
-		t.Fatalf("request %+v err %v", req, err)
+	if said[0] != said[1] || said[2] != said[3] || !strings.Contains(said[0], "pin slot review3 is queued as request N and applies when the daemon starts") {
+		t.Errorf("slots pin and pin answered differently:\n%q", said)
 	}
-	if code := e.pin(ctx, "nope", true); code != 1 {
-		t.Fatalf("unknown slot pin code %d", code)
+	reqs := h.requests()
+	if len(reqs) != 4 {
+		t.Fatalf("requests %+v", reqs)
+	}
+	for i, want := range []string{engine.ReqPin, engine.ReqPin, engine.ReqUnpin, engine.ReqUnpin} {
+		if p := actDecode[engine.TargetPayload](t, reqs[i].Payload); reqs[i].Kind != want || p.Slot != "review3" || p.Number != 0 {
+			t.Errorf("request %d: %s %+v", i, reqs[i].Kind, p)
+		}
+	}
+	h.errb.Reset()
+	if code := h.cmd("slots", "pin", "nonsense-slot"); code != 1 || !strings.Contains(h.errb.String(), "neither a PR") {
+		t.Fatalf("unknown slot: exit %d: %s", code, h.errb.String())
 	}
 }
 

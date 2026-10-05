@@ -320,10 +320,10 @@ func TestPRBoardNoLineOverflows(t *testing.T) {
 	}
 	// a tiny screen still shows the question, and a narrow one its y/N
 	m, _, _ := newBoard(t, 100, 4, PRBoardOptions{})
-	m, _ = send(t, m, keyMsg("x"))
-	mustContain(t, viewOf(m), "Release magnum#42:", "y/N")
+	m, _ = send(t, m, keyMsg("K"))
+	mustContain(t, viewOf(m), "Kill the running review", "y/N")
 	m, _, _ = newBoard(t, 40, 10, PRBoardOptions{})
-	m, _ = send(t, m, keyMsg("R"))
+	m, _ = send(t, m, keyMsg("j"), keyMsg("R"))
 	mustContain(t, viewOf(m), "Fresh review", "y/N")
 	// a narrow title bar sheds words, not the sort
 	n, _, _ := newBoard(t, 70, 20, PRBoardOptions{})
@@ -612,20 +612,18 @@ func TestPRBoardActionKeys(t *testing.T) {
 		keys []string
 		want string
 	}{
-		{[]string{"r", "y"}, "review talkable/magnum#42 again=false fresh=false simplify=false"},
-		{[]string{"R", "y"}, "review talkable/magnum#42 again=false fresh=true simplify=false"},
-		{[]string{"i", "Y"}, "review talkable/magnum#42 again=false fresh=false simplify=true"},
+		{[]string{"j", "r", "y"}, "review talkable/talkable#11931 fresh=false simplify=false"}, // #42 runs a round: refused there
+		{[]string{"j", "R", "y"}, "review talkable/talkable#11931 fresh=true simplify=false"},
+		{[]string{"j", "i", "Y"}, "review talkable/talkable#11931 fresh=false simplify=true"},
 		{[]string{"o"}, "open talkable/magnum#42"},
 		{[]string{"p"}, "pin talkable/magnum#42"},
-		{[]string{"u"}, "unpin talkable/magnum#42"},
+		{[]string{"j", "j", "j", "u"}, "unpin talkable/talkable#11920"},
 		{[]string{"M", "y"}, "mute talkable/magnum#42"},
-		{[]string{"U", "Y"}, "unmute talkable/magnum#42"},
 		{[]string{"a"}, "attention"},
 		{[]string{"b"}, "browser https://github.com/talkable/magnum/pull/42"}, // no URL: built from the ref
-		{[]string{"x", "y"}, "release talkable/magnum#42"},
 		{[]string{"K", "y"}, "abort talkable/magnum#42"},
 		{[]string{"I", "y"}, "ignore talkable/magnum#42"},
-		{[]string{"j", "enter", "r", "y"}, "review talkable/talkable#11931 again=false fresh=false simplify=false"}, // from the card
+		{[]string{"j", "enter", "r", "y"}, "review talkable/talkable#11931 fresh=false simplify=false"}, // from the card
 		{[]string{"G", "o"}, "open talkable/talkable#11000"},
 	}
 	for _, c := range cases {
@@ -637,7 +635,7 @@ func TestPRBoardActionKeys(t *testing.T) {
 			continue
 		}
 		flash := c.want + " ok" // the last line of the action's output
-		if c.keys[0] == "b" {
+		if slices.Contains(c.keys, "b") {
 			flash = "opened https://github.com/talkable/magnum/pull/42"
 		}
 		mustContain(t, viewOf(m), flash)
@@ -653,14 +651,13 @@ func TestPRBoardActionKeys(t *testing.T) {
 	}
 
 	m, _, act := newBoard(t, 160, 24, PRBoardOptions{})
-	m, _ = send(t, m, keyMsg("x"))
-	mustContain(t, viewOf(m), "Release magnum#42: hand back its slot now, sessions parked and worktree reset? y/N",
-		"y confirms, any other key cancels")
+	m, _ = send(t, m, keyMsg("K"))
+	mustContain(t, viewOf(m), "Kill the running review of magnum#42? y/N", "y confirms, any other key cancels")
 	m, _ = boardAct(t, m, "n")
 	if act.last() != "" {
-		t.Errorf("n released anyway: %q", act.last())
+		t.Errorf("n aborted anyway: %q", act.last())
 	}
-	mustContain(t, viewOf(m), "release talkable/magnum#42 cancelled")
+	mustContain(t, viewOf(m), "abort talkable/magnum#42 cancelled")
 
 	e, _, eact := newBoard(t, 160, 24, PRBoardOptions{})
 	eact.err = errors.New("slot busy")
@@ -859,8 +856,17 @@ func TestPRBoardHelpNamesTheJudge(t *testing.T) {
 // The review keys only ask: y runs the round once, any other key (enter
 // too) cancels it.
 func TestPRBoardReviewKeysAsk(t *testing.T) {
+	// One PR each key asks about: in line, holding a slot, and a muted one for U.
+	waiting := PRBoardRow{Ref: "talkable/talkable#5", Owner: "talkable", Repo: "talkable", Number: 5, State: "queued", GHState: "OPEN",
+		UpdatedAt: boardNow, Slot: "~/Projects/talkable.review3"}
+	muted := waiting
+	muted.Ref, muted.Number, muted.Muted, muted.UpdatedAt = "talkable/talkable#6", 6, true, boardNow.Add(-time.Minute)
 	for _, k := range []string{"r", "R", "i", "M", "U", "x"} {
 		m, _, act := newBoard(t, 220, 24, PRBoardOptions{})
+		m, _ = send(t, m, prbDataMsg{rows: []PRBoardRow{waiting, muted}})
+		if k == "U" {
+			m, _ = send(t, m, keyMsg("j"))
+		}
 		m, cmd := send(t, m, keyMsg(k))
 		if hasMsg[actionDoneMsg](execCmd(cmd)) || len(act.calls) != 0 {
 			t.Fatalf("%s alone ran an action: %v", k, act.calls)
@@ -914,12 +920,13 @@ func TestPRBoardConfirmationTexts(t *testing.T) {
 			"(7 commits since the last review of 6666666 26h ago by talkable[bot], head 7777777)?"},
 		// #11931: never reviewed (its delta is from the base branch)
 		{[]string{"j", "R"}, "Fresh review of talkable#11931 in new agent sessions (not reviewed yet, head 5555555)?"},
-		{[]string{"r"}, "Review magnum#42 now (not reviewed yet)?"},
+		{[]string{"j", "r"}, "Review talkable#11931 now (not reviewed yet, head 5555555)?"},
 		{[]string{"M"}, "Mute magnum#42: stop automatic reviews of it?"},
-		{[]string{"U"}, "Unmute magnum#42: resume automatic reviews of it?"},
-		{[]string{"x"}, "Release magnum#42: hand back its slot now, sessions parked and worktree reset?"},
 		{[]string{"K"}, "Kill the running review of magnum#42?"},
-		{[]string{"I"}, "Ignore magnum#42: kill its review, mute it and free its slot?"},
+		{[]string{"j", "K"}, "Drop the queued review of talkable#11931 before it starts?"},
+		// #42 holds no slot: nothing to free; #11920 holds one
+		{[]string{"I"}, "Ignore magnum#42: kill its review and mute it?"},
+		{[]string{"j", "j", "j", "I"}, "Ignore talkable#11920: mute it and free its slot?"},
 	}
 	for _, c := range cases {
 		m, _, _ := newBoard(t, 220, 24, PRBoardOptions{})
@@ -1026,7 +1033,7 @@ func TestPRBoardIgnoredRowsAreStruckAndUnmutedWithU(t *testing.T) {
 	c, _ = send(t, c, prbDataMsg{rows: []PRBoardRow{ignored}})
 	c, _ = send(t, c, keyMsg("enter"))
 	v := viewOf(c)
-	mustContain(t, v, "U unmute: stop ignoring")
+	mustContain(t, v, "U unmute (stop ignoring)")
 	mustNotContain(t, v, "I ignore")
 }
 

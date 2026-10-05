@@ -188,7 +188,7 @@ func TestAbortWithoutARunningRoundFails(t *testing.T) {
 	id := h.enqueue(ReqAbort, TargetPayload{PRTarget: PRTarget{Ref: "2"}})
 	h.tick()
 	r := h.request(id)
-	if r.State != store.RequestFailed || deref(r.Result) != "no review of talkable/talkable#2 is running (state reviewed)" {
+	if r.State != store.RequestFailed || deref(r.Result) != "no review of talkable/talkable#2 is running or queued (state reviewed)" {
 		t.Fatalf("abort: %s %q", r.State, deref(r.Result))
 	}
 	if h.ag.count("park:") != 0 {

@@ -65,7 +65,7 @@ func watchMain(ctx context.Context, c *Context, d *actDeps, ref string, o watchO
 	}
 	t, err := d.resolve(ctx, ref, "", "")
 	if err != nil {
-		return cmdFail(c, "watch", err)
+		return cmdFail(c, "watch", verbFix("watch", err))
 	}
 	spec, err := actRoleFor(d.Cfg, t.full(), o.role)
 	if err != nil {

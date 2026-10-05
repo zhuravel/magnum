@@ -4231,7 +4231,10 @@ type RetroSummary struct {
 
 type ReviewPayload struct {
 	PRTarget
-	Again bool `json:"again,omitempty"` // review even when the head was already reviewed (implied)
+	// Again is ignored: a forced round reviews the head even when it was
+	// reviewed already. No CLI sends it any more; it stays so a request an
+	// older CLI queued with --again still decodes (decode refuses unknown fields).
+	Again bool `json:"again,omitempty"`
 	Fresh bool `json:"fresh,omitempty"` // park the sessions and start new conversations
 	// Simplify asks for the role answering to "simplify" (claude-simplify
 	// by default) this round, whatever its runs; kept for older CLIs, the
@@ -10829,14 +10832,14 @@ type PickAction int
 const (
 	PickActionCancel    PickAction = iota
 	PickActionReview               // enter
-	PickActionAgain                // ctrl+r: review again
 	PickActionFresh                // ctrl+f: review with new sessions
 	PickActionOpen                 // ctrl+g: open the judge pane
 	PickActionBrowser              // ctrl+o: open the PR URL
 	PickActionTogglePin            // ctrl+p: pin, or unpin when Entry.Pinned
 	PickActionRelease              // ctrl+x
 )
-    The picker's actions; PickActionCancel is the zero value.
+    The picker's actions; PickActionCancel is the zero value. ctrl+r (and F5)
+    refreshes the list, as on every screen.
 
 func (a PickAction) String() string
 
@@ -10875,6 +10878,9 @@ type PickerOptions struct {
 	// Lookup resolves a typed reference the list lacks to a PR magnum knows,
 	// e.g. a merged one, so the y/N question can say what it is; nil means none.
 	Lookup func(query string) (PickEntry, bool)
+	// Reload lists the PRs again for ctrl+r and F5 (the registry may have
+	// changed since the picker opened); nil means the keys say so instead.
+	Reload func(ctx context.Context) ([]PickEntry, error)
 }
     PickerOptions tune the picker.
 
@@ -10918,11 +10924,12 @@ type ReviewInfo struct {
     ReviewInfo is the latest review on a PR.
 
 type ReviewOpts struct {
-	Again    bool // review the head again even if it was already reviewed
 	Fresh    bool // new agent sessions instead of resuming
 	Simplify bool // run the role aliased simplify this round (magnum review --simplify)
 }
-    ReviewOpts are the review variants the dashboard asks for.
+    ReviewOpts are the review variants the screens ask for. A forced round
+    reviews the head even when it was reviewed already, so there is no "again"
+    variant.
 
 type ReviewerInfo struct {
 	Login       string

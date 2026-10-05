@@ -44,12 +44,18 @@ capture() {
 # failed toasts why an action failed: its last stderr line, else its last output line.
 failed() { toast "${ERR:-${OUT:-magnum $1 failed}}"; }
 popup() { capture "$M" ui open "$1" || failed "ui open"; }
+# hold keeps a popup open after its command failed, so the error stays on screen (an exec would close the
+# popup with it); a command that worked, or that ctrl+c stopped, closes it. It returns the command's status.
+hold() {
+  if [ "$1" -ne 0 ] && [ "$1" -ne 130 ]; then printf '\npress any key to close'; read -rsn1 || true; fi
+  return "$1"
+}
 
 case "${1:-}" in
-  on-startup)     "$M" kick reconcile >/dev/null 2>&1 || true ;;
+  on-startup)     "$M" kick >/dev/null 2>&1 || true ;;
   picker)         popup picker ;;
   picker-link)    MAGNUM_PICK_QUERY="${HERDR_PLUGIN_CLICKED_URL:-}" popup picker ;;
-  _picker)        exec "$M" pick --query "${MAGNUM_PICK_QUERY:-}" ;;
+  _picker)        rc=0; "$M" pick --query "${MAGNUM_PICK_QUERY:-}" || rc=$?; hold "$rc" ;;
   attention)      capture "$M" attention || failed attention ;;
   here)           verb="${2:?verb}"
                   if capture "$M" "$verb" --workspace "$(ctx .workspace_id)" --cwd "$(ctx '.workspace_cwd // .focused_pane_cwd')"; then
@@ -58,7 +64,7 @@ case "${1:-}" in
                     failed "$verb"
                   fi ;;
   popup)          popup "${2:?pane}" ;;
-  _status)        exec "$M" status --watch ;;
+  _status)        rc=0; "$M" status --watch || rc=$?; hold "$rc" ;;
   _cleanup)       "$M" cleanup || true; printf '\npress any key to close'; read -rsn1 ;;
   _doctor)        "$M" doctor || true; printf '\npress any key to close'; read -rsn1 ;;
   # The restart waits, holding nothing, until no round is in flight; its last line is toasted either way.

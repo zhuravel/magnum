@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,7 +19,7 @@ const pickUsage = "pick [--query <url|ref|text>] [--limit N]"
 
 // pickKeys maps the numbered prompt's action letters to the picker's actions.
 var pickKeys = map[string]tui.PickAction{
-	"r": tui.PickActionReview, "a": tui.PickActionAgain, "f": tui.PickActionFresh, "o": tui.PickActionOpen,
+	"r": tui.PickActionReview, "f": tui.PickActionFresh, "o": tui.PickActionOpen,
 	"b": tui.PickActionBrowser, "p": tui.PickActionTogglePin, "x": tui.PickActionRelease,
 }
 
@@ -60,10 +61,12 @@ func (e pickEntry) screenEntry() tui.PickEntry {
 
 func newPickCmd(c *Context) *cobra.Command {
 	var o pickOpts
-	cmd := newCommand(groupAct, pickUsage, "pick a PR to review, re-review, open, pin or release",
-		"Pick a PR from a filterable list, then review it (enter), re-review (ctrl+r), review fresh (ctrl+f), "+
-			"open its pane (ctrl+g), open it in the browser (ctrl+o), pin or unpin (ctrl+p), or release it "+
-			"(ctrl+x); esc cancels. Typing a PR URL or reference magnum does not list reviews that PR. When stdin "+
+	cmd := newCommand(groupAct, pickUsage, "pick a PR to review, open, pin or release",
+		"Pick a PR from a filterable list, then review it (enter; a reviewed head is reviewed again), review fresh "+
+			"(ctrl+f), open its pane (ctrl+g), open it in the browser (ctrl+o), pin or unpin (ctrl+p), or release it "+
+			"(ctrl+x); ctrl+r refreshes the list and esc cancels. A key that cannot act on the PR (a review while "+
+			"its round runs, a release of a pinned PR) says why instead. Typing a PR URL or reference magnum does "+
+			"not list reviews that PR. When stdin "+
 			"or stdout is not a terminal a numbered prompt does the same. --query (or MAGNUM_PICK_QUERY) sets the "+
 			"initial filter; a PR URL or reference preselects that PR, or offers it when magnum does not know it yet.",
 		func(pos []string) int { return runPick(c, o, pos) })
@@ -92,6 +95,7 @@ func pickMain(ctx context.Context, c *Context, d *actDeps, o pickOpts) int {
 	if err != nil {
 		return cmdFail(c, "pick", err)
 	}
+	var typed []pickEntry // the PR a typed query names when the list lacks it
 	query := strings.TrimSpace(o.query)
 	if query == "" {
 		query = strings.TrimSpace(d.getenv("MAGNUM_PICK_QUERY")) // set by the plugin's link handler
@@ -115,13 +119,19 @@ func pickMain(ctx context.Context, c *Context, d *actDeps, o pickOpts) int {
 						URL:   fmt.Sprintf("https://github.com/%s/pull/%d", full, n),
 						Title: "(not in magnum yet: enter reviews it)"}
 				}
+				typed = []pickEntry{e}
 				entries = append([]pickEntry{e}, entries...)
 			}
 			query = label
 		}
 	}
 	if d.screen() {
-		return pickScreen(ctx, c, d, entries, query)
+		// ctrl+r lists the PRs again, keeping the typed PR the list lacks.
+		reload := func(ctx context.Context) ([]pickEntry, error) {
+			again, err := pickEntries(ctx, d, o.limit)
+			return append(slices.Clone(typed), again...), err
+		}
+		return pickScreen(ctx, c, d, entries, query, reload)
 	}
 	return pickPrompt(ctx, c, d, entries, query)
 }
@@ -185,11 +195,14 @@ func pickEntries(ctx context.Context, d *actDeps, limit int) ([]pickEntry, error
 
 // pickScreen runs the picker, then acts on the choice once the screen has
 // closed, so the action prints to the terminal as usual (and the herdr popup
-// keeps its result up).
-func pickScreen(ctx context.Context, c *Context, d *actDeps, entries []pickEntry, query string) int {
-	list := make([]tui.PickEntry, len(entries))
-	for i, e := range entries {
-		list[i] = e.screenEntry()
+// keeps its result up). reload lists the PRs again for ctrl+r.
+func pickScreen(ctx context.Context, c *Context, d *actDeps, entries []pickEntry, query string, reload func(context.Context) ([]pickEntry, error)) int {
+	screen := func(entries []pickEntry) []tui.PickEntry {
+		list := make([]tui.PickEntry, len(entries))
+		for i, e := range entries {
+			list[i] = e.screenEntry()
+		}
+		return list
 	}
 	// A reference typed in the filter that the list lacks is looked up in the
 	// registry, so the y/N question knows a merged PR for what it is.
@@ -199,7 +212,14 @@ func pickScreen(ctx context.Context, c *Context, d *actDeps, entries []pickEntry
 		}
 		return tui.PickEntry{}, false
 	}
-	out, err := tuiPicker(ctx, list, tui.PickerOptions{Query: query, Now: d.now, Lookup: lookup})
+	opts := tui.PickerOptions{Query: query, Now: d.now, Lookup: lookup}
+	if reload != nil {
+		opts.Reload = func(ctx context.Context) ([]tui.PickEntry, error) {
+			again, err := reload(ctx)
+			return screen(again), err
+		}
+	}
+	out, err := tuiPicker(ctx, screen(entries), opts)
 	if err != nil {
 		return cmdFail(c, "pick", err)
 	}
@@ -211,6 +231,10 @@ func pickScreen(ctx context.Context, c *Context, d *actDeps, entries []pickEntry
 			if e.ref() == out.Entry.Ref {
 				return pickAct(ctx, c, d, e, out.Action)
 			}
+		}
+		// Listed by a refresh (ctrl+r): read it again from the registry.
+		if e, ok := pickRefEntry(ctx, d, out.Entry.Ref); ok {
+			return pickAct(ctx, c, d, e, out.Action)
 		}
 	}
 	// Nothing listed matched: the typed URL or reference is acted on directly.
@@ -258,7 +282,7 @@ func pickPrompt(ctx context.Context, c *Context, d *actDeps, entries []pickEntry
 		rows[i] = []string{strconv.Itoa(i+1) + ")", e.Label, e.State, e.Title, e.Author, e.Age}
 	}
 	actTable(c.Stdout, nil, rows)
-	fmt.Fprint(c.Stdout, "row number or PR (#N, repo#N, URL), then an optional action (r review [default], a re-review, f fresh, o open, b browser, p pin/unpin, x release); blank quits: ")
+	fmt.Fprint(c.Stdout, "row number or PR (#N, repo#N, URL), then an optional action (r review [default], f fresh, o open, b browser, p pin/unpin, x release); blank quits: ")
 	line, err := d.readLine(ctx)
 	if err != nil || line == "" {
 		fmt.Fprintln(c.Stdout)
@@ -271,7 +295,7 @@ func pickPrompt(ctx context.Context, c *Context, d *actDeps, entries []pickEntry
 	}
 	action, ok := pickKeys[act]
 	if !ok {
-		fmt.Fprintf(c.Stderr, "unknown action %q (r, a, f, o, b, p or x)\n", act)
+		fmt.Fprintf(c.Stderr, "unknown action %q (r, f, o, b, p or x)\n", act)
 		return 2
 	}
 	e, err := pickChoice(ctx, d, shown, fields[0])
@@ -328,18 +352,24 @@ func pickRefEntry(ctx context.Context, d *actDeps, s string) (pickEntry, bool) {
 }
 
 // pickAct runs the picked action on the entry. In the herdr popup the result
-// of a review, pin or release stays up until a key is pressed; open and
-// browser close the popup at once.
+// of a review, pin or release stays up until a key is pressed, and an open or
+// a browser that worked closes it at once; a failure of any of them is held
+// open by the plugin's script (magnum-ctl.sh), which waits for a key after
+// any non-zero exit, so it is not held here as well.
 func pickAct(ctx context.Context, c *Context, d *actDeps, e pickEntry, a tui.PickAction) int {
-	if a != tui.PickActionOpen && a != tui.PickActionBrowser {
-		defer d.pressAnyKey(ctx, c.Stdout)
+	code := pickRun(ctx, c, d, e, a)
+	if code == 0 && a != tui.PickActionOpen && a != tui.PickActionBrowser {
+		d.pressAnyKey(ctx, c.Stdout)
 	}
+	return code
+}
+
+// pickRun runs action a on e.
+func pickRun(ctx context.Context, c *Context, d *actDeps, e pickEntry, a tui.PickAction) int {
 	ref := e.ref()
 	switch a {
 	case tui.PickActionReview:
 		return reviewMain(ctx, c, d, ref, reviewOpts{})
-	case tui.PickActionAgain:
-		return reviewMain(ctx, c, d, ref, reviewOpts{again: true})
 	case tui.PickActionFresh:
 		return reviewMain(ctx, c, d, ref, reviewOpts{fresh: true})
 	case tui.PickActionOpen:

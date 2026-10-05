@@ -523,12 +523,6 @@ func closedUnmerged(r PRBoardRow) bool {
 	return strings.EqualFold(strings.TrimSpace(r.GHState), "CLOSED")
 }
 
-// postMergeable reports whether the PR can get a post-merge review: GitHub
-// merged it and its merged head is not the one magnum reviewed last.
-func postMergeable(r PRBoardRow) bool {
-	return mergedOnGitHub(r) && (r.LastReview == nil || !sameSHA(r.HeadSHA, r.LastReview.CommitSHA))
-}
-
 // postMergeRound reports whether a post-merge review of the merged PR waits
 // or runs: its state is a round's, not the closed or released of a PR magnum
 // is done with.
@@ -1340,55 +1334,6 @@ func (m prBoardModel) tableKey(k string) (prBoardModel, tea.Cmd) {
 		return m, cmd
 	case "a":
 		return m.run("attention", func(ctx context.Context, a DashboardActions) (string, error) { return a.Attention(ctx) })
-	case "o":
-		return m.onRow("open", func(ctx context.Context, a DashboardActions, ref string) (string, error) { return a.Open(ctx, ref) })
-	case "r":
-		return m.review("review", ReviewOpts{})
-	case "R":
-		return m.review("fresh review", ReviewOpts{Fresh: true})
-	case "i":
-		return m.review("simplify review", ReviewOpts{Simplify: true})
-	case "p":
-		return m.onRow("pin", func(ctx context.Context, a DashboardActions, ref string) (string, error) { return a.Pin(ctx, ref) })
-	case "u":
-		return m.onRow("unpin", func(ctx context.Context, a DashboardActions, ref string) (string, error) { return a.Unpin(ctx, ref) })
-	case "M":
-		return m.mute()
-	case "U":
-		return m.askOnRow("unmute", func(r PRBoardRow, ref string) string {
-			if normState(r.State) == "ignored" {
-				return unmuteIgnoredQuestion(m.questionLabel(r, ref))
-			}
-			return muteQuestion(m.questionLabel(r, ref), false)
-		},
-			func(ctx context.Context, a DashboardActions, ref string) (string, error) { return a.Unmute(ctx, ref) })
-	case "K":
-		return m.askOnRow("abort", func(r PRBoardRow, ref string) string { return abortQuestion(m.questionLabel(r, ref)) },
-			func(ctx context.Context, a DashboardActions, ref string) (string, error) { return a.Abort(ctx, ref) })
-	case "A", "C":
-		approve := k == "A"
-		name := map[bool]string{true: "approve", false: "request changes"}[approve]
-		if r, ok := m.selected(); !ok || r.Findings == nil {
-			cmd := m.note("magnum has not reviewed this PR: nothing to " + name + " on")
-			return m, cmd
-		}
-		return m.askOnRow(name, func(r PRBoardRow, ref string) string { return verdictQuestion(m.questionLabel(r, ref), approve, r) },
-			func(ctx context.Context, a DashboardActions, ref string) (string, error) {
-				if approve {
-					return a.Approve(ctx, ref)
-				}
-				return a.RequestChanges(ctx, ref)
-			})
-	case "I":
-		return m.askOnRow("ignore", func(r PRBoardRow, ref string) string { return ignoreQuestion(m.questionLabel(r, ref)) },
-			func(ctx context.Context, a DashboardActions, ref string) (string, error) { return a.Ignore(ctx, ref) })
-	case "x":
-		return m.askOnRow("release", func(r PRBoardRow, ref string) string { return releaseQuestion(m.questionLabel(r, ref)) },
-			func(ctx context.Context, a DashboardActions, ref string) (string, error) { return a.Release(ctx, ref) })
-	case "b":
-		return m.browse()
-	case "t":
-		return m.openIssue()
 	case "m":
 		m.toggleMouse()
 		if m.opts.MouseToggled != nil {
@@ -1398,6 +1343,10 @@ func (m prBoardModel) tableKey(k string) (prBoardModel, tea.Cmd) {
 		return m, cmd
 	case "W":
 		return m.resetWidths()
+	default:
+		if a, ok := rowActFor(boardActs, k); ok {
+			return m.rowAction(a)
+		}
 	}
 	return m, nil
 }
@@ -1457,17 +1406,21 @@ func (m prBoardModel) fail(text string) (prBoardModel, tea.Cmd) {
 	return m, cmd
 }
 
-// onRow runs fn on the cursor row's PR.
-func (m prBoardModel) onRow(what string, fn refActionFunc) (prBoardModel, tea.Cmd) {
+// rowAction runs the row action a on the cursor row (rowacts.go): refused
+// at once with the reason, asked y/N first, or started.
+func (m prBoardModel) rowAction(a rowAct) (prBoardModel, tea.Cmd) {
+	cmd, started := m.actionBar.rowAction(a, m.actRow())
+	return m.withSpinner(cmd, started)
+}
+
+// actRow is what the row actions know of the cursor row; questions name
+// its PR as the table does.
+func (m prBoardModel) actRow() actRow {
 	r, ok := m.selected()
 	if !ok {
-		return m.fail("nothing selected")
+		return actRow{}
 	}
-	ref := prRef(r)
-	if ref == "" {
-		return m.fail("this row names no PR")
-	}
-	return m.run(what+" "+ref, func(ctx context.Context, a DashboardActions) (string, error) { return fn(ctx, a, ref) })
+	return boardActRow(r, m.questionLabel(r, prRef(r)), m.opts.Now())
 }
 
 // questionLabel names the row's PR in a question as the table does:
@@ -1480,120 +1433,6 @@ func (m prBoardModel) questionLabel(r PRBoardRow, ref string) string {
 		return fmt.Sprintf("%s#%d", repo, n)
 	}
 	return ref
-}
-
-// askOnRow puts fn on the cursor row's PR to the user: the footer asks
-// question(row, ref) and y runs it. A missing PR, missing actions
-// or an action still running fail at once instead of asking.
-func (m prBoardModel) askOnRow(what string, question func(r PRBoardRow, ref string) string, fn refActionFunc) (prBoardModel, tea.Cmd) {
-	r, ok := m.selected()
-	if !ok {
-		return m.fail("nothing selected")
-	}
-	ref := prRef(r)
-	if ref == "" {
-		return m.fail("this row names no PR")
-	}
-	cmd := m.ask(question(r, ref), what+" "+ref,
-		func(ctx context.Context, a DashboardActions) (string, error) { return fn(ctx, a, ref) })
-	return m, cmd
-}
-
-// mute asks before muting the cursor row's PR. A PR GitHub merged or closed
-// gets no automatic reviews to stop: muting one merged before its last push
-// was reviewed dismisses its merged-unreviewed flag, M on one whose flag is
-// dismissed restores it (an unmute), and any other merged or closed row says
-// there is nothing to mute instead of asking.
-func (m prBoardModel) mute() (prBoardModel, tea.Cmd) {
-	r, ok := m.selected()
-	if !ok {
-		return m.fail("nothing selected")
-	}
-	ref := prRef(r)
-	if ref == "" {
-		return m.fail("this row names no PR")
-	}
-	label := m.questionLabel(r, ref)
-	switch act, state := muteActFor(r.GHState, r.MergedUnreviewed, r.FlagDismissed); act {
-	case muteNothing:
-		cmd := m.note(nothingToMute(label, state))
-		return m, cmd
-	case muteDismiss:
-		return m.askOnRow("mute", func(PRBoardRow, string) string { return dismissFlagQuestion(label) },
-			func(ctx context.Context, a DashboardActions, ref string) (string, error) { return a.Mute(ctx, ref) })
-	case muteRestore:
-		return m.askOnRow("unmute", func(PRBoardRow, string) string { return restoreFlagQuestion(label) },
-			func(ctx context.Context, a DashboardActions, ref string) (string, error) { return a.Unmute(ctx, ref) })
-	}
-	return m.askOnRow("mute", func(r PRBoardRow, ref string) string { return muteQuestion(m.questionLabel(r, ref), true) },
-		func(ctx context.Context, a DashboardActions, ref string) (string, error) { return a.Mute(ctx, ref) })
-}
-
-// review asks before a review round, saying what it will do and what
-// changed since the last review. A PR GitHub merged gets a post-merge
-// review (comment only), unless its merged head was reviewed; one closed
-// without merging gets none: both fail at once instead of asking.
-func (m prBoardModel) review(what string, o ReviewOpts) (prBoardModel, tea.Cmd) {
-	if r, ok := m.selected(); ok {
-		if ref := prRef(r); ref != "" {
-			label := m.questionLabel(r, ref)
-			switch {
-			case closedUnmerged(r):
-				return m.fail(label + " was closed without merging: only open or merged PRs are reviewed")
-			case mergedOnGitHub(r) && !postMergeable(r):
-				return m.fail(label + ": its merged head " + shortSHA(r.HeadSHA) + " was already reviewed")
-			}
-		}
-	}
-	now := m.opts.Now()
-	return m.askOnRow(what, func(r PRBoardRow, ref string) string {
-		if mergedOnGitHub(r) {
-			return postMergeQuestion(m.questionLabel(r, ref), o)
-		}
-		facts := boardReviewFacts(r, now)
-		if r.Pinned { // the daemon unpins it (its slot's guards still hold a person's changes)
-			facts = joinFacts(facts, "pinned: the review unpins it")
-		}
-		return reviewQuestion(m.questionLabel(r, ref), o, facts)
-	},
-		func(ctx context.Context, a DashboardActions, ref string) (string, error) {
-			return a.Review(ctx, ref, o)
-		})
-}
-
-func (m prBoardModel) browse() (prBoardModel, tea.Cmd) {
-	r, ok := m.selected()
-	if !ok {
-		return m.fail("nothing selected")
-	}
-	url := prURL(r)
-	if url == "" {
-		return m.fail("this row has no URL")
-	}
-	return m.run("browser", func(ctx context.Context, a DashboardActions) (string, error) {
-		if err := a.OpenBrowser(ctx, url); err != nil {
-			return "", err
-		}
-		return "opened " + url, nil
-	})
-}
-
-// openIssue opens the selected PR's issue (Issue) in the browser.
-func (m prBoardModel) openIssue() (prBoardModel, tea.Cmd) {
-	r, ok := m.selected()
-	if !ok {
-		return m.fail("nothing selected")
-	}
-	if r.IssueURL == "" {
-		return m.fail("the title names no issue: [board] trackers lists the issue keys and their URLs")
-	}
-	url := r.IssueURL
-	return m.run("tracker", func(ctx context.Context, a DashboardActions) (string, error) {
-		if err := a.OpenBrowser(ctx, url); err != nil {
-			return "", err
-		}
-		return "opened " + r.Issue + ": " + url, nil
-	})
 }
 
 func (m prBoardModel) viewWidth() int {
@@ -1850,13 +1689,13 @@ func (m prBoardModel) hintLine(w int) string {
 	case prbHelp:
 		left = m.st.hints(w, hint{"j/k", "scroll"}, hint{"?", "close help"}, hint{"q", "quit"})
 	case prbDetail:
+		back, help := []hint{{"esc", "back"}}, []hint{{"?", "help"}}
 		left = m.st.fitHints(w,
-			[]hint{{"esc", "back"}, {"j/k", "scroll"}, {"r", "review"}, {"R", "fresh"}, {"i", "simplify"}, {"o", "open"},
-				{"b", "browser"}, {"t", "tracker"}, {"p/u", "pin"}, {"M/U", "mute"}, {"x", "release"}, {"K", "kill"}, {"I", "ignore"}, {"?", "help"}},
-			[]hint{{"esc", "back"}, {"r", "review"}, {"R", "fresh"}, {"i", "simplify"}, {"o", "open"}, {"b", "browser"},
-				{"p/u", "pin"}, {"M/U", "mute"}, {"x", "release"}, {"?", "help"}},
-			[]hint{{"esc", "back"}, {"r", "review"}, {"o", "open"}, {"b", "browser"}, {"?", "help"}},
-			[]hint{{"esc", "back"}, {"?", "help"}})
+			withHints(back, []hint{{"j/k", "scroll"}}, actionHints(actReview, actFresh, actSimplify, actOpen, actBrowser, actTracker,
+				actPin, actUnpin, actMute, actUnmute, actRelease, actAbort, actIgnore), help),
+			withHints(back, actionHints(actReview, actFresh, actSimplify, actOpen, actBrowser, actPin, actUnpin, actMute, actUnmute, actRelease), help),
+			withHints(back, actionHints(actReview, actOpen, actBrowser), help),
+			withHints(back, help))
 	default:
 		pos := ""
 		if len(m.view) > 0 {
@@ -1866,13 +1705,14 @@ func (m prBoardModel) hintLine(w int) string {
 			pos = strings.TrimSpace(off + "  " + pos)
 		}
 		room := max(w-ansi.StringWidth(pos)-2, 10)
+		details := []hint{{"enter", "details"}}
 		sets := [][]hint{
-			{{"enter", "details"}, {"r", "review"}, {"R", "fresh"}, {"i", "simplify"}, {"o", "open"}, {"b", "browser"}, {"t", "tracker"},
-				{"p/u", "pin"}, {"x", "release"}, {"/", "filter"}, {"v", "view"}, {"O", "owner"}, {"s/S", "sort"}, {"tab", "overview"}, {"?", "help"}, {"q", "quit"}},
-			{{"enter", "details"}, {"r", "review"}, {"R", "fresh"}, {"i", "simplify"}, {"o", "open"}, {"b", "browser"},
-				{"p/u", "pin"}, {"x", "release"}, {"/", "filter"}, {"v", "view"}, {"s/S", "sort"}, {"tab", "overview"}, {"?", "help"}, {"q", "quit"}},
-			{{"enter", "details"}, {"r", "review"}, {"o", "open"}, {"b", "browser"}, {"/", "filter"}, {"v", "view"}, {"s", "sort"},
-				{"tab", "overview"}, {"?", "help"}, {"q", "quit"}},
+			withHints(details, actionHints(actReview, actFresh, actSimplify, actOpen, actBrowser, actTracker, actPin, actUnpin, actRelease),
+				[]hint{{"/", "filter"}, {"v", "view"}, {"O", "owner"}, {"s/S", "sort"}, {"tab", "overview"}, {"?", "help"}, {"q", "quit"}}),
+			withHints(details, actionHints(actReview, actFresh, actSimplify, actOpen, actBrowser, actPin, actUnpin, actRelease),
+				[]hint{{"/", "filter"}, {"v", "view"}, {"s/S", "sort"}, {"tab", "overview"}, {"?", "help"}, {"q", "quit"}}),
+			withHints(details, actionHints(actReview, actOpen, actBrowser),
+				[]hint{{"/", "filter"}, {"v", "view"}, {"s", "sort"}, {"tab", "overview"}, {"?", "help"}, {"q", "quit"}}),
 			{{"enter", "details"}, {"/", "filter"}, {"v", "view"}, {"tab", "overview"}, {"?", "help"}, {"q", "quit"}},
 			{{"enter", "details"}, {"/", "filter"}, {"?", "help"}, {"q", "quit"}},
 		}

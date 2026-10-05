@@ -72,7 +72,7 @@ func openMain(ctx context.Context, c *Context, d *actDeps, ref string, o openOpt
 	}
 	t, err := d.resolve(ctx, ref, o.workspace, o.cwd)
 	if err != nil {
-		return cmdFail(c, "open", err)
+		return cmdFail(c, "open", verbFix("open", err))
 	}
 	if !t.hasPR() {
 		return cmdFail(c, "open", fmt.Errorf("slot %s holds no PR", t.Slot.Name))

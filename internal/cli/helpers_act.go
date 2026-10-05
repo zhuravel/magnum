@@ -431,9 +431,50 @@ func (d *actDeps) resolveRef(ctx context.Context, ref string) (actTarget, error)
 		if d.Cfg.WatchFor(full) == nil {
 			return actTarget{Repo: repo}, fmt.Errorf("%s is not watched: add it to a [[watch]] in ~/.config/magnum/config.toml (`magnum init` writes one): %w", full, store.ErrNotFound)
 		}
-		return actTarget{Repo: repo}, fmt.Errorf("%s#%d is not in the registry yet (the daemon records open PRs on its next poll): %w\nfix: `magnum review %s` adds it now", full, number, store.ErrNotFound, ref)
+		return actTarget{Repo: repo}, notInRegistry{label: fmt.Sprintf("%s#%d", full, number), ref: ref}
 	}
 	return actTarget{Repo: repo, PR: pr}, nil
+}
+
+// notInRegistry is the error for a PR of a watched repository the daemon has
+// not recorded yet (it is store.ErrNotFound). Its fix depends on the verb
+// (verbFix): `magnum review` adds such a PR, but only by starting a forced
+// round, which is no fix for a mute or an ignore.
+type notInRegistry struct{ label, ref string }
+
+func (e notInRegistry) Error() string {
+	return e.label + " is not in the registry yet (the daemon records open PRs on its next poll)"
+}
+
+func (e notInRegistry) Unwrap() error { return store.ErrNotFound }
+
+// verbFix adds to err, when it is a notInRegistry, the step that works for
+// the verb magnum ran.
+func verbFix(verb string, err error) error {
+	var nir notInRegistry
+	if !errors.As(err, &nir) {
+		return err
+	}
+	var fix string
+	switch verb {
+	case "mute", "ignore", "pin":
+		fix = fmt.Sprintf("wait for the daemon's next poll to record it (`magnum kick` polls now), then run `magnum %s %s` again", verb, nir.ref)
+	case "unmute":
+		fix = "nothing to unmute: a PR magnum has not recorded is not muted"
+	case "unpin":
+		fix = "nothing to unpin: a PR magnum has not recorded is not pinned"
+	case "release":
+		fix = "nothing to release: magnum holds no slot for it"
+	case "abort":
+		fix = "nothing to abort: magnum has no review of it"
+	case "approve", "request-changes":
+		fix = fmt.Sprintf("magnum has not reviewed it: `magnum review %s` reviews it first (a forced round)", nir.ref)
+	case "open", "watch":
+		fix = fmt.Sprintf("magnum has no panes for it: `magnum review %s` starts a review (a forced round) that opens them", nir.ref)
+	default:
+		fix = "wait for the daemon's next poll to record it (`magnum kick` polls now)"
+	}
+	return fmt.Errorf("%w\nfix: %s", err, fix)
 }
 
 // resolveWorkspace maps a herdr workspace to the PR whose session lives in it.

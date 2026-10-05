@@ -67,6 +67,14 @@ func TestStatusDashData(t *testing.T) {
 		t.Errorf("daemon pause %+v", p)
 	}
 
+	// A slot whose PR `magnum ignore` muted says "ignored", as the board does,
+	// so the dashboard's U asks to stop ignoring it.
+	ignored := store.PR{Number: 7, State: store.PRIneligible, Muted: true, SkipReason: store.Ptr(engine.SkipIgnored), GHState: store.GHOpen}
+	if d := statusDashData(statusReport{Slots: []inventory.SlotView{{Slot: store.Slot{Name: "review2", RepoFullName: "talkable/talkable"}, PR: &ignored}}},
+		"talkable/talkable"); len(d.Slots) != 1 || d.Slots[0].PRState != "ignored" {
+		t.Errorf("an ignored PR's slot row: %+v", d.Slots)
+	}
+
 	wantSlot := tui.SlotRow{Name: "review1", Folder: inspTilde(f.Home + "/talkable.review1"), PRRef: "talkable#11920", PRState: store.PRReviewed,
 		SlotState: "held [foreign_agent]", DBs: "1/2 300M", Disk: "1.0G", URL: "https://github.com/talkable/talkable/pull/11920", PRGHState: store.GHOpen}
 	if len(got.Slots) != 1 || got.Slots[0] != wantSlot {
@@ -173,7 +181,7 @@ func TestStatusDashActionsCaptureOutput(t *testing.T) {
 		t.Fatalf("review without a daemon to answer: %v", err)
 	}
 	h.pid = 4242 // a review is queued only while a daemon answers
-	if _, err := acts.Review(ctx, "talkable#5", tui.ReviewOpts{Again: true, Simplify: true}); err != nil {
+	if _, err := acts.Review(ctx, "talkable#5", tui.ReviewOpts{Simplify: true}); err != nil {
 		t.Fatalf("review: %v", err)
 	}
 	h.pid = 0
@@ -193,7 +201,7 @@ func TestStatusDashActionsCaptureOutput(t *testing.T) {
 	if !slices.Equal(kinds, []string{engine.ReqPin, engine.ReqReview, engine.ReqRelease, engine.ReqUnpin, engine.ReqMute, engine.ReqUnmute}) {
 		t.Fatalf("requests %v", kinds)
 	}
-	if p := actDecode[engine.ReviewPayload](t, h.requests()[1].Payload); !p.Again || !p.Simplify || p.Fresh {
+	if p := actDecode[engine.ReviewPayload](t, h.requests()[1].Payload); p.Again || !p.Simplify || p.Fresh {
 		t.Errorf("review payload %+v", p)
 	}
 

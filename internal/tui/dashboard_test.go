@@ -78,7 +78,7 @@ func (f *fakeActions) Open(_ context.Context, ref string) (string, error) {
 	return f.record("open " + ref)
 }
 func (f *fakeActions) Review(_ context.Context, ref string, o ReviewOpts) (string, error) {
-	return f.record(fmt.Sprintf("review %s again=%t fresh=%t simplify=%t", ref, o.Again, o.Fresh, o.Simplify))
+	return f.record(fmt.Sprintf("review %s fresh=%t simplify=%t", ref, o.Fresh, o.Simplify))
 }
 func (f *fakeActions) Pin(_ context.Context, ref string) (string, error) {
 	return f.record("pin " + ref)
@@ -231,17 +231,17 @@ func TestDashboardCursorCrossesSectionsAndOpens(t *testing.T) {
 func TestDashboardReviewVariants(t *testing.T) {
 	m, _, act := newDash(t, 140, 50)
 	for key, want := range map[string]string{
-		"r y": "review talkable#1 again=false fresh=false simplify=false",
-		"R y": "review talkable#1 again=false fresh=true simplify=false",
-		"i y": "review talkable#1 again=false fresh=false simplify=true",
-		"M y": "mute talkable#1",
-		"U y": "unmute talkable#1",
-		"K y": "abort talkable#1",
-		"I y": "ignore talkable#1",
-		"p":   "pin talkable#1",
-		"u":   "unpin talkable#1",
-		"a":   "attention",
-		"b":   "browser https://github.com/talkable/talkable/pull/1",
+		"j j r y": "review talkable#7 fresh=false simplify=false", // talkable#1 runs a round: r is refused there
+		"j j R y": "review talkable#7 fresh=true simplify=false",
+		"j j i y": "review talkable#7 fresh=false simplify=true",
+		"M y":     "mute talkable#1",
+		"U y":     "unmute talkable#1",
+		"K y":     "abort talkable#1",
+		"I y":     "ignore talkable#1",
+		"p":       "pin talkable#1",
+		"u":       "unpin talkable#1",
+		"a":       "attention",
+		"b":       "browser https://github.com/talkable/talkable/pull/1",
 	} {
 		dashAct(t, m, strings.Fields(key)...)
 		if act.last() != want {
@@ -272,16 +272,16 @@ func TestDashboardEmptySlot(t *testing.T) {
 
 func TestDashboardReleaseConfirms(t *testing.T) {
 	m, _, act := newDash(t, 140, 50)
-	m, _ = send(t, m, keys("j", "j", "x")...)
-	mustContain(t, viewOf(m), "Release talkable#7: hand back its slot now, sessions parked and worktree reset? y/N",
+	m, _ = send(t, m, keys("x")...) // slot review1 holds talkable#1
+	mustContain(t, viewOf(m), "Release talkable#1: hand back its slot now, sessions parked and worktree reset? y/N",
 		"y confirms, any other key cancels")
 	m, _ = dashAct(t, m, "n")
 	if len(act.calls) != 0 {
 		t.Fatalf("n released: %v", act.calls)
 	}
-	mustContain(t, viewOf(m), "release talkable#7 cancelled")
+	mustContain(t, viewOf(m), "release talkable#1 cancelled")
 	m, _ = dashAct(t, m, "x", "y")
-	if act.last() != "release talkable#7" {
+	if act.last() != "release talkable#1" {
 		t.Fatalf("x y called %q", act.last())
 	}
 }
@@ -289,18 +289,18 @@ func TestDashboardReleaseConfirms(t *testing.T) {
 func TestDashboardActionErrorsAndBusy(t *testing.T) {
 	m, _, act := newDash(t, 140, 50)
 	act.err = errors.New("daemon not running")
-	m, _ = dashAct(t, m, "r", "y")
-	mustContain(t, viewOf(m), "review talkable#1: daemon not running")
+	m, _ = dashAct(t, m, "j", "j", "r", "y") // talkable#7
+	mustContain(t, viewOf(m), "review talkable#7: daemon not running")
 
 	m, _ = send(t, m, keys("p")...) // left running: the command is not executed
-	mustContain(t, viewOf(m), "pin talkable#1…")
+	mustContain(t, viewOf(m), "pin talkable#7…")
 	m, _ = send(t, m, keys("u")...)
-	mustContain(t, viewOf(m), "still running: pin talkable#1")
+	mustContain(t, viewOf(m), "still running: pin talkable#7")
 	m, _ = send(t, m, keys("R")...) // busy: fails at once instead of asking
 	if m.confirm != nil {
 		t.Error("R asked while an action was running")
 	}
-	mustContain(t, viewOf(m), "still running: pin talkable#1")
+	mustContain(t, viewOf(m), "still running: pin talkable#7")
 
 	none := newDashboardModel(context.Background(), &fakeSource{}, nil, DashboardOptions{})
 	none, _ = send(t, none, dashDataMsg{data: dashData()}, keyMsg("r"))
@@ -472,7 +472,7 @@ func TestDashboardReviewKeysAsk(t *testing.T) {
 	data := dashData()
 	data.Queue[0].State, data.Queue[0].Next = "reviewed", "watching for new pushes"
 	data.Queue = append(data.Queue, PRRow{Ref: "talkable#9", State: "rereview_pending", Next: "eligible in 4m"})
-	for _, k := range []string{"r", "R", "i", "M", "U", "x"} {
+	for _, k := range []string{"r", "R", "i", "M", "U"} {
 		m, src, act := newDash(t, 220, 50)
 		m, _ = send(t, m, dashDataMsg{data: data})
 		m, cmd := send(t, m, keys("j", "j", k)...) // talkable#7, reviewed
@@ -502,7 +502,6 @@ func TestDashboardReviewKeysAsk(t *testing.T) {
 		{[]string{"j", "j", "R"}, "Fresh review of talkable#7 in new agent sessions (no new commits since the last review)?"},
 		{[]string{"j", "j", "i"}, "Simplify review of talkable#7, also running the simplify role (no new commits since the last review)?"},
 		{[]string{"j", "j", "j", "j", "r"}, "Review talkable#9 now (reviewed before, re-review pending, next: eligible in 4m)?"},
-		{[]string{"r"}, "Review talkable#1 now (a round is already in progress)?"}, // a slot row reads its queue row
 		{[]string{"j", "x"}, "Release review2: hand back its slot now, sessions parked and worktree reset?"},
 	} {
 		got, _ := send(t, m, keys(c.keys...)...)
@@ -536,6 +535,7 @@ func TestDashboardQuestionUsesReviewFacts(t *testing.T) {
 	data := dashData()
 	data.Queue[0].State = "reviewed"
 	data.Queue[0].Review = &ReviewFacts{HeadSHA: "ffa3270aaa", ReviewedSHA: "ffa3270aaa", ReviewedAt: dashNow.Add(-20 * time.Minute), ReviewedBy: "zhuravel[bot]"}
+	data.Queue[1].State = "rereview_pending" // talkable#1 waits for its round (a running one refuses r)
 	data.Queue[1].Review = &ReviewFacts{HeadSHA: "9b1c2d3eee", ReviewedSHA: "ffa3270aaa", ReviewedAt: dashNow.Add(-time.Hour),
 		SinceReview: &ReviewDelta{Base: "reviewed", Commits: 3}}
 	data.Queue = append(data.Queue, PRRow{Ref: "talkable#9", State: "rereview_pending",
@@ -548,8 +548,8 @@ func TestDashboardQuestionUsesReviewFacts(t *testing.T) {
 	}{
 		{[]string{"j", "j", "R"}, "Fresh review of talkable#7 in new agent sessions (no new commits since head ffa3270 was reviewed 20m ago by zhuravel[bot])?"},
 		{[]string{"j", "j", "j", "j", "r"}, "Review talkable#9 now (1 commit since the last review of ffa3270, head 1234567)?"},
-		// a slot row reads its queue row; a running round says so first
-		{[]string{"r"}, "Review talkable#1 now (a round is already in progress, 3 commits since the last review of ffa3270 1h ago, head 9b1c2d3)?"},
+		// a slot row reads its queue row
+		{[]string{"r"}, "Review talkable#1 now (3 commits since the last review of ffa3270 1h ago, head 9b1c2d3)?"},
 	} {
 		got, _ := send(t, m, keys(c.keys...)...)
 		if got.confirm == nil || got.confirm.question != c.want {

@@ -31,10 +31,10 @@ const (
 )
 
 type reviewOpts struct {
-	again, fresh, simplify, focus, wait, dryRun, noPost, json bool
-	as, workspace, cwd                                        string
-	roles                                                     []string      // --role: on-request roles to run this round
-	timeout                                                   time.Duration // --timeout: stop following after this long (0 = no limit)
+	fresh, simplify, focus, wait, dryRun, noPost, json bool
+	as, workspace, cwd                                 string
+	roles                                              []string      // --role: on-request roles to run this round
+	timeout                                            time.Duration // --timeout: stop following after this long (0 = no limit)
 }
 
 // reviewClosing are the end of a PR's life (prInFlight are the states of a
@@ -58,8 +58,6 @@ func newReviewCmd(c *Context) *cobra.Command {
 			"(default 2h, 0 = no limit) stops following it after that long, and the round goes on.",
 		func(pos []string) int { return runReview(c, o, pos) })
 	fs := cmd.Flags()
-	fs.BoolVar(&o.again, "again", false, "no effect: a forced round reviews the head again anyway")
-	_ = fs.MarkHidden("again") // kept so existing scripts keep working
 	fs.BoolVar(&o.fresh, "fresh", false, "park the sessions and start new conversations (no resume)")
 	fs.StringArrayVar(&o.roles, "role", nil, "also run this on-request `role` this round; repeatable")
 	fs.BoolVar(&o.simplify, "simplify", false, "shorthand for --role <the role aliased simplify> (claude-simplify by default)")
@@ -191,8 +189,8 @@ func reviewMain(ctx context.Context, c *Context, d *actDeps, ref string, o revie
 		fmt.Fprintf(progress, "head %s was already reviewed (%s); reviewing it again\n", sha7(rs), store.Deref(t.PR.LastReviewEvent))
 	}
 
-	// Again is sent for the daemons that look at it; a forced round always reviews the head again.
-	payload := engine.ReviewPayload{PRTarget: t.prTarget(), Again: o.again, Fresh: o.fresh, Simplify: o.simplify, Roles: roles, As: o.as, DryRun: o.noPost}
+	// A forced round always reviews the head again: there is no "again" to send.
+	payload := engine.ReviewPayload{PRTarget: t.prTarget(), Fresh: o.fresh, Simplify: o.simplify, Roles: roles, As: o.as, DryRun: o.noPost}
 	if o.dryRun {
 		out.Payload = &payload
 		if o.json {

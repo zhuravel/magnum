@@ -40,6 +40,13 @@ func newPauseCmd(c *Context) *cobra.Command {
 }
 
 func runPause(c *Context, o pauseOpts, pos []string) int {
+	// `magnum pause 2h` would pause indefinitely with the reason "2h": a word
+	// that reads as a duration is refused, never taken for the reason.
+	for _, p := range pos {
+		if _, err := time.ParseDuration(p); err == nil {
+			return actUsage(c, "pause", fmt.Sprintf("%q reads as a duration: use --for %s (words after pause are the reason)", p, p), pauseUsage)
+		}
+	}
 	if len(pos) > 0 {
 		o.reason = strings.TrimSpace(o.reason + " " + strings.Join(pos, " "))
 	}

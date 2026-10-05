@@ -350,7 +350,7 @@ func TestBoardRightClickMenu(t *testing.T) {
 	}
 	want := map[string]bool{
 		"review": true, "fresh review": true, "simplify review": true, "kill review": false, "ignore": true,
-		"open pane": true, "browser": true, "tracker": false, "pin": false, "unpin": true, "release": true,
+		"open pane": true, "browser": true, "tracker": false, "pin": false, "unpin": true, "release": false, // pinned: unpin first
 		"mute": true, "unmute": false, "details": true, "reset column widths": false,
 		"approve": false, "request changes": false, // the fixture has no findings for #11920
 	}
@@ -386,7 +386,7 @@ func TestBoardRightClickMenu(t *testing.T) {
 	mustContain(t, viewOf(m), "y/N")
 	m, cmd := send(t, m, keyMsg("y"))
 	m = run(t, m, cmd)
-	if calls := act.list(); len(calls) != 1 || !strings.HasPrefix(calls[0], "review talkable/talkable#11920 again=false fresh=false") {
+	if calls := act.list(); len(calls) != 1 || !strings.HasPrefix(calls[0], "review talkable/talkable#11920 fresh=false") {
 		t.Fatalf("calls %v", calls)
 	}
 
@@ -426,11 +426,14 @@ func TestBoardRightClickMenu(t *testing.T) {
 	j := boardRow(t, m, "talkable/magnum#42")
 	m, _ = send(t, m, rightClick(40, boardRowY(m, j)))
 	got := menuState(m.menuItems())
-	if !got["kill review"] || got["release"] || !got["pin"] || got["unpin"] {
+	if !got["kill review"] || got["release"] || !got["pin"] || got["unpin"] || got["review"] {
 		t.Errorf("menu of #42: %v", got)
 	}
-	m, _ = send(t, m, keyMsg("enter"))
-	m, _ = send(t, m, keyMsg("n"))
+	m, _ = send(t, m, keyMsg("enter")) // review is dimmed while its round runs: nothing happens
+	if !m.menu.open || m.confirm != nil {
+		t.Fatalf("enter on a dimmed review: menu %v, question %+v", m.menu.open, m.confirm)
+	}
+	m, _ = send(t, m, keyMsg("esc"))
 
 	// details opens the card; reset column widths applies once a width was dragged.
 	m, _ = send(t, m, rightClick(40, boardRowY(m, j)), keyMsg("G"), keyMsg("k"), keyMsg("enter"))
@@ -608,8 +611,8 @@ func TestDashboardMouse(t *testing.T) {
 	mustContain(t, viewOf(m), "open pane", "o / enter", "reset column widths")
 	m, _ = send(t, m, keyMsg("esc"), rightClick(10, dashRowY(m, 3)))
 	got = menuState(m.menuItems())
-	if !got["kill review"] || !got["review"] || !got["release"] || !got["open pane"] || !got["browser"] {
-		t.Fatalf("reviewing PR menu %v", got)
+	if !got["kill review"] || got["review"] || !got["release"] || !got["open pane"] || !got["browser"] {
+		t.Fatalf("reviewing PR menu (review is dimmed while its round runs) %v", got)
 	}
 	m, _ = send(t, m, keyMsg("K"))
 	if m.confirm == nil || !strings.Contains(m.confirm.question, "Kill the running review of talkable#1") {

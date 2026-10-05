@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -57,15 +59,60 @@ shift 3 # notification show magnum
 // it sent.
 func (p *pluginScript) run(env []string, args ...string) []string {
 	p.t.Helper()
+	if out, code := p.exec(env, args...); code != 0 {
+		p.t.Fatalf("magnum-ctl.sh %v: exit %d\n%s", args, code, out)
+	}
+	b, _ := os.ReadFile(p.toasts)
+	return strings.Split(strings.TrimSpace(string(b)), "\n")
+}
+
+// exec runs the script with args and env and returns what it printed and its
+// exit status.
+func (p *pluginScript) exec(env []string, args ...string) (string, int) {
+	p.t.Helper()
 	_ = os.Remove(p.toasts)
 	cmd := exec.Command("bash", append([]string{filepath.Join(p.dir, "scripts", "magnum-ctl.sh")}, args...)...)
 	cmd.Env = append([]string{"PATH=" + os.Getenv("PATH"), "TMPDIR=" + p.dir, "MAGNUM_BIN=" + filepath.Join(p.dir, "fake-magnum"),
 		"HERDR_BIN_PATH=" + filepath.Join(p.dir, "fake-herdr"), "CALLS=" + p.calls, "TOASTS=" + p.toasts}, env...)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		p.t.Fatalf("magnum-ctl.sh %v: %v\n%s", args, err, out)
+	out, err := cmd.CombinedOutput()
+	var exit *exec.ExitError
+	switch {
+	case err == nil:
+		return string(out), 0
+	case errors.As(err, &exit):
+		return string(out), exit.ExitCode()
 	}
-	b, _ := os.ReadFile(p.toasts)
-	return strings.Split(strings.TrimSpace(string(b)), "\n")
+	p.t.Fatalf("magnum-ctl.sh %v: %v", args, err)
+	return "", -1
+}
+
+// The picker and status popups keep their error on screen: a failure waits
+// for a key (it used to exec, so the popup closed with the error), while a
+// success, or ctrl+c, closes at once; the exit status is the command's.
+func TestPluginPopupsHoldAFailure(t *testing.T) {
+	p := newPluginScript(t)
+	for _, c := range []struct {
+		verb, pane string
+	}{{"pick", "_picker"}, {"status", "_status"}} {
+		out, code := p.exec([]string{"RC_" + c.verb + "=1", "ERR_" + c.verb + "=magnum " + c.verb + ": registry locked"}, c.pane)
+		if code != 1 || !strings.Contains(out, "registry locked") || !strings.Contains(out, "press any key to close") {
+			t.Errorf("%s failing: exit %d:\n%s", c.pane, code, out)
+		}
+		for _, rc := range []string{"0", "130"} {
+			out, code = p.exec([]string{"RC_" + c.verb + "=" + rc, "OUT_" + c.verb + "=done"}, c.pane)
+			if strings.Contains(out, "press any key") || strconv.Itoa(code) != rc {
+				t.Errorf("%s exiting %s held the popup (exit %d):\n%s", c.pane, rc, code, out)
+			}
+		}
+	}
+	if b, _ := os.ReadFile(p.calls); !strings.Contains(string(b), "pick --query") || !strings.Contains(string(b), "status --watch") {
+		t.Errorf("calls = %s", b)
+	}
+	// The startup nudge kicks without the target kick no longer takes.
+	p.run(nil, "on-startup")
+	if b, _ := os.ReadFile(p.calls); !strings.Contains(string(b), "\nkick\n") {
+		t.Errorf("on-startup calls = %q", b)
+	}
 }
 
 // The restart action used to toast only a success, so a restart refused

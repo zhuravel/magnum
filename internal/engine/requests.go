@@ -60,7 +60,10 @@ type PRTarget struct {
 // post-merge review (post_merge.go).
 type ReviewPayload struct {
 	PRTarget
-	Again bool `json:"again,omitempty"` // review even when the head was already reviewed (implied)
+	// Again is ignored: a forced round reviews the head even when it was
+	// reviewed already. No CLI sends it any more; it stays so a request an
+	// older CLI queued with --again still decodes (decode refuses unknown fields).
+	Again bool `json:"again,omitempty"`
 	Fresh bool `json:"fresh,omitempty"` // park the sessions and start new conversations
 	// Simplify asks for the role answering to "simplify" (claude-simplify
 	// by default) this round, whatever its runs; kept for older CLIs, the

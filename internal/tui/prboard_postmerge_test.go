@@ -63,11 +63,11 @@ func postMergeRow(t *testing.T, ref string) PRBoardRow {
 func TestPRBoardPostMergeReviewKeysAskTheirOwnQuestions(t *testing.T) {
 	cases := []struct{ key, question, call string }{
 		{"r", "Post-merge review talkable#11990 (comment only)?",
-			"review talkable/talkable#11990 again=false fresh=false simplify=false"},
+			"review talkable/talkable#11990 fresh=false simplify=false"},
 		{"R", "Fresh post-merge review of talkable#11990 in new agent sessions (comment only)?",
-			"review talkable/talkable#11990 again=false fresh=true simplify=false"},
+			"review talkable/talkable#11990 fresh=true simplify=false"},
 		{"i", "Post-merge review of talkable#11990, also running the simplify role (comment only)?",
-			"review talkable/talkable#11990 again=false fresh=false simplify=true"},
+			"review talkable/talkable#11990 fresh=false simplify=true"},
 	}
 	for _, c := range cases {
 		m, act := postMergeBoard(t, pmMergedUnreviewed)
@@ -233,10 +233,9 @@ func TestPRBoardMenuOffersPostMergeReview(t *testing.T) {
 		ok  bool
 	}{{pmMergedUnreviewed, true}, {pmClosedUnmerged, false}, {pmMergedReviewed, false}} {
 		m, _ := postMergeBoard(t, c.ref)
-		got := menuState(m.menuItems())
-		for _, label := range []string{"review", "fresh review", "simplify review"} {
-			if got[label] != c.ok {
-				t.Errorf("%s: %q enabled = %v, want %v", c.ref, label, got[label], c.ok)
+		for _, it := range m.menuItems() {
+			if slices.Contains([]string{"r", "R", "i"}, it.key) && it.ok != c.ok {
+				t.Errorf("%s: %q enabled = %v, want %v", c.ref, it.label, it.ok, c.ok)
 			}
 		}
 	}

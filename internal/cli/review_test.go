@@ -782,6 +782,44 @@ func TestReviewResolveRefNamesTheResolvedRepositoryInItsErrors(t *testing.T) {
 	}
 }
 
+// A PR the daemon has not recorded yet gets the step that works for the
+// verb that names it: "`magnum review <ref>` adds it now" was printed for
+// mute and ignore too, and following it started a forced round. Nothing is
+// queued for any of them.
+func TestVerbsOnAPRNotInTheRegistryNameTheirOwnFix(t *testing.T) {
+	h := newActHarness(t)
+	h.pid = 4242
+	h.seedPR("talkable/talkable", 5, store.PRReviewed) // the repository is known; #9 is not
+	for verb, want := range map[string]string{
+		"mute":            "fix: wait for the daemon's next poll to record it (`magnum kick` polls now), then run `magnum mute 9` again",
+		"ignore":          "fix: wait for the daemon's next poll to record it (`magnum kick` polls now), then run `magnum ignore 9` again",
+		"pin":             "fix: wait for the daemon's next poll to record it (`magnum kick` polls now), then run `magnum pin 9` again",
+		"unmute":          "fix: nothing to unmute: a PR magnum has not recorded is not muted",
+		"unpin":           "fix: nothing to unpin: a PR magnum has not recorded is not pinned",
+		"release":         "fix: nothing to release: magnum holds no slot for it",
+		"abort":           "fix: nothing to abort: magnum has no review of it",
+		"approve":         "fix: magnum has not reviewed it: `magnum review 9` reviews it first (a forced round)",
+		"request-changes": "fix: magnum has not reviewed it: `magnum review 9` reviews it first (a forced round)",
+		"open":            "fix: magnum has no panes for it: `magnum review 9` starts a review (a forced round) that opens them",
+	} {
+		h.errb.Reset()
+		args := []string{"9"}
+		if verb == "release" {
+			args = append(args, "--yes")
+		}
+		if code := h.cmd(verb, args...); code != 1 {
+			t.Errorf("%s: exit %d: %s", verb, code, h.errb.String())
+		}
+		actContains(t, h.errb.String(), "talkable/talkable#9 is not in the registry yet", want)
+		if strings.Contains(h.errb.String(), "adds it now") {
+			t.Errorf("%s still offers a forced review: %s", verb, h.errb.String())
+		}
+	}
+	if reqs := h.requests(); len(reqs) != 0 {
+		t.Errorf("queued %+v", reqs)
+	}
+}
+
 func TestReviewPreparesTheIdentityBeforeReadingGitHub(t *testing.T) {
 	h := newActHarness(t)
 	h.pid = 4242 // a daemon runs: reviews and verdicts are queued only then
@@ -820,7 +858,9 @@ func TestReviewPrepareIdentityFailureFailsTheCommand(t *testing.T) {
 	}
 }
 
-func TestReviewAgainIsHiddenButStillAccepted(t *testing.T) {
+// A forced round reviews a reviewed head again anyway, so --again, which
+// did nothing, is gone: the review says so and sends no "again".
+func TestReviewOfAReviewedHeadNeedsNoAgain(t *testing.T) {
 	h := newActHarness(t)
 	h.pid = 4242 // a daemon runs: reviews and verdicts are queued only then
 	pr := h.seedPR("talkable/talkable", 5, store.PRReviewed)
@@ -828,23 +868,19 @@ func TestReviewAgainIsHiddenButStillAccepted(t *testing.T) {
 		u.Set("reviewed_sha", pr.HeadSHA)
 		u.Set("last_review_event", "COMMENTED")
 	})
-	if code := h.cmd("review", "--help"); code != 0 {
-		t.Fatalf("help exit %d", code)
+	if code := h.cmd("review", "5"); code != 0 {
+		t.Fatalf("review: exit %d: %s", code, h.errb.String())
 	}
-	if strings.Contains(h.out.String(), "--again") || strings.Contains(reviewUsage, "--again") {
-		t.Errorf("--again is still advertised:\n%s", h.out.String())
-	}
-	for _, args := range [][]string{{"5"}, {"5", "--again"}} {
-		h.out.Reset()
-		if code := h.cmd("review", args...); code != 0 {
-			t.Fatalf("review %v: exit %d: %s", args, code, h.errb.String())
-		}
-		actContains(t, h.out.String(), "head abc1234 was already reviewed (COMMENTED); reviewing it again")
-		h.completePending(store.RequestFailed, "reset") // so the next round may be queued
-		h.setPR(pr.ID, store.PRReviewed, nil)
-	}
+	actContains(t, h.out.String(), "head abc1234 was already reviewed (COMMENTED); reviewing it again")
 	reqs := h.requests()
-	if len(reqs) != 2 || actDecode[engine.ReviewPayload](t, reqs[0].Payload).Again || !actDecode[engine.ReviewPayload](t, reqs[1].Payload).Again {
-		t.Errorf("payloads = %s / %s", reqs[0].Payload, reqs[1].Payload)
+	if len(reqs) != 1 || strings.Contains(string(reqs[0].Payload), "again") {
+		t.Errorf("payloads = %v", reqs)
+	}
+	h.errb.Reset()
+	if code := h.cmd("review", "5", "--again"); code == 0 || !strings.Contains(h.errb.String(), "unknown flag: --again") {
+		t.Errorf("--again: exit %d: %s", code, h.errb.String())
+	}
+	if len(h.requests()) != 1 {
+		t.Errorf("--again queued a request")
 	}
 }

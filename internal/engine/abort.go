@@ -67,8 +67,11 @@ type stopOrder struct {
 // once the round goroutine is back (still holding the PR's reservation, so
 // nothing else touches the slot), stopPR interrupts the agents, abandons the
 // runs, parks the sessions, hands a pool slot back (a per-PR worktree is
-// kept) and puts the PR in reviewed (it has a reviewed head) or baseline. No
-// round running is an error.
+// kept) and puts the PR in reviewed (it has a reviewed head) or baseline. A
+// paused round is stopped the same way. A review that waits in line (queued
+// or rereview_pending: forced by `magnum review`, or automatic) is taken back
+// before it starts (dropQueued). A PR with no review running or waiting is an
+// error.
 //
 // ignore does the same when a round runs, and also mutes the PR with
 // skip_reason "ignored" (state ineligible), so the daemon never queues it
@@ -105,10 +108,13 @@ func (e *Engine) requestAbort(ctx context.Context, id int64, p TargetPayload, ig
 	}
 	e.mu.Unlock()
 
-	stale := slices.Contains(store.InFlightStates, pr.State) // a round's state without its round
+	// A round's state without its round, or a round paused mid-way: stopped
+	// as a running one is. A review waiting in line is taken back.
+	stale := slices.Contains(store.InFlightStates, pr.State) || pr.State == store.PRPaused
+	queued := pr.State == store.PRQueued || pr.State == store.PRRereviewPending
 	switch {
-	case !ignore && !stale:
-		e.complete(ctx, id, fmt.Errorf("no review of %s is running (state %s)", label, pr.State), "")
+	case !ignore && !stale && !queued:
+		e.complete(ctx, id, fmt.Errorf("no review of %s is running or queued (state %s)", label, pr.State), "")
 		return
 	case e.d.DryRun:
 		e.rec.Record(ctx, prSubject(repo, pr.Number), verb, "stop the PR's agents, park its sessions and hand back its slot")
@@ -121,6 +127,13 @@ func (e *Engine) requestAbort(ctx context.Context, id int64, p TargetPayload, ig
 		e.complete(ctx, id, fmt.Errorf("%s: %s; run `magnum %s %s` again shortly", label, e.heldReason(pr.ID), verb, label), "")
 		return
 	}
+	if queued && !ignore {
+		res, err := e.dropQueued(ctx, repo, pr)
+		e.unreserve(pr.ID)
+		cancel()
+		e.complete(ctx, id, err, res)
+		return
+	}
 	e.mu.Lock()
 	e.inflight[id] = true
 	e.mu.Unlock()
@@ -130,6 +143,34 @@ func (e *Engine) requestAbort(ctx context.Context, id int64, p TargetPayload, ig
 		defer e.unreserve(pr.ID)
 		e.serveStop(rctx, pr.ID, []stopOrder{{id: id, ignore: ignore}}, false)
 	}()
+}
+
+// dropQueued takes back a review that waits in line, before any of it ran:
+// the PR leaves the line for reviewed or baseline (a merged PR's post-merge
+// review: closed, released after a fresh close grace), its forced mark goes
+// and so does what the request asked for this round (fresh sessions, a dry
+// run, on-request roles), while its agents, sessions and slot are left as they
+// are: nothing started, and a person may be working in its panes. A --as
+// identity switch stays, as `magnum review --as` documents it for good. The
+// caller holds the PR's reservation, so no round claims it meanwhile.
+func (e *Engine) dropQueued(ctx context.Context, repo store.Repo, pr store.PR) (string, error) {
+	label := fmt.Sprintf("%s#%d", repo.FullName(), pr.Number)
+	to, err := e.settleStopped(ctx, pr, false)
+	if err != nil {
+		return "", err
+	}
+	if to == "" {
+		return "", fmt.Errorf("%s moved on meanwhile; `magnum status %s` says where it is", label, label)
+	}
+	e.delKV(ctx, kvPRDryRun(pr.ID), kvPRFresh(pr.ID), kvPRGate(pr.ID), KVPRWait(pr.ID))
+	e.clearRequested(ctx, pr.ID)
+	what := "queued review"
+	if pr.Forced {
+		what = "forced review"
+	}
+	res := fmt.Sprintf("took back the %s of %s before it started: PR %s", what, label, to)
+	e.event(ctx, "info", prSubject(repo, pr.Number), "pr.aborted", res, map[string]any{"queued": true, "forced": pr.Forced, "state": to})
+	return res, nil
 }
 
 // afterRound runs at the end of a round goroutine, before it drops the PR's

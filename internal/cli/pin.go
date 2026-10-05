@@ -118,7 +118,7 @@ func runTarget(c *Context, k targetKind, o targetOpts, pos []string) int {
 func targetMain(ctx context.Context, c *Context, d *actDeps, k targetKind, ref string, o targetOpts) int {
 	t, err := targetResolve(ctx, d, ref, o.workspace, o.cwd)
 	if err != nil {
-		return cmdFail(c, k.name, err)
+		return cmdFail(c, k.name, verbFix(k.name, err))
 	}
 	var payload engine.TargetPayload
 	label := ""

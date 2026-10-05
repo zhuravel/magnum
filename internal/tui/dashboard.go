@@ -136,9 +136,10 @@ type SourceFunc func(ctx context.Context) (StatusData, error)
 // Gather calls f.
 func (f SourceFunc) Gather(ctx context.Context) (StatusData, error) { return f(ctx) }
 
-// ReviewOpts are the review variants the dashboard asks for.
+// ReviewOpts are the review variants the screens ask for. A forced round
+// reviews the head even when it was reviewed already, so there is no
+// "again" variant.
 type ReviewOpts struct {
-	Again    bool // review the head again even if it was already reviewed
 	Fresh    bool // new agent sessions instead of resuming
 	Simplify bool // run the role aliased simplify this round (magnum review --simplify)
 }
@@ -236,14 +237,6 @@ func (r dashRow) prRef() string {
 		return strings.TrimSpace(r.slot.PRRef)
 	}
 	return r.pr.Ref
-}
-
-// target is what pin, unpin and release act on: the PR, else the slot.
-func (r dashRow) target() string {
-	if ref := r.prRef(); ref != "" {
-		return ref
-	}
-	return r.slot.Name
 }
 
 type dashboardModel struct {
@@ -530,43 +523,79 @@ func (m dashboardModel) listKey(k string) (dashboardModel, tea.Cmd) {
 		return m, cmd
 	case "a":
 		return m.run("attention", func(ctx context.Context, a DashboardActions) (string, error) { return a.Attention(ctx) })
-	case "enter", "o":
-		return m.onPR("open", func(ctx context.Context, a DashboardActions, ref string) (string, error) { return a.Open(ctx, ref) })
-	case "r":
-		return m.review("review", ReviewOpts{})
-	case "R":
-		return m.review("fresh review", ReviewOpts{Fresh: true})
-	case "i":
-		return m.review("simplify review", ReviewOpts{Simplify: true})
-	case "M":
-		return m.mute()
-	case "U":
-		return m.askPR("unmute", func(_ dashRow, ref string) string { return muteQuestion(ref, false) },
-			func(ctx context.Context, a DashboardActions, ref string) (string, error) { return a.Unmute(ctx, ref) })
-	case "K":
-		return m.askPR("abort", func(_ dashRow, ref string) string { return abortQuestion(ref) },
-			func(ctx context.Context, a DashboardActions, ref string) (string, error) { return a.Abort(ctx, ref) })
-	case "I":
-		return m.askPR("ignore", func(_ dashRow, ref string) string { return ignoreQuestion(ref) },
-			func(ctx context.Context, a DashboardActions, ref string) (string, error) { return a.Ignore(ctx, ref) })
-	case "p":
-		return m.onTarget("pin", func(ctx context.Context, a DashboardActions, ref string) (string, error) { return a.Pin(ctx, ref) })
-	case "u":
-		return m.onTarget("unpin", func(ctx context.Context, a DashboardActions, ref string) (string, error) { return a.Unpin(ctx, ref) })
-	case "x":
-		r, ok := m.selected()
-		if !ok {
-			return m.fail("nothing selected")
+	case "enter":
+		return m.rowAction(actOpen)
+	default:
+		if a, ok := rowActFor(dashActs, k); ok {
+			return m.rowAction(a)
 		}
-		target := r.target()
-		cmd := m.ask(releaseQuestion(target), "release "+target, func(ctx context.Context, a DashboardActions) (string, error) {
-			return a.Release(ctx, target)
-		})
-		return m, cmd
-	case "b":
-		return m.browse()
 	}
 	return m, nil
+}
+
+// rowAction runs the row action a on the selected row (rowacts.go):
+// refused at once with the reason, asked y/N first, or started.
+func (m dashboardModel) rowAction(a rowAct) (dashboardModel, tea.Cmd) {
+	cmd, started := m.actionBar.rowAction(a, m.actRow())
+	return m.withSpinner(cmd, started)
+}
+
+// actRow is what the row actions know of the selected row: its PR's state,
+// GitHub state and heads (a slot row reads its PR's queue row), and its slot.
+// The dashboard lists every slot, so a PR no slot row holds has none; a
+// slot pinned is the PR's pin too, while a slot that is not pinned says
+// nothing of a PR pinned elsewhere. An empty slot row offers pin, unpin and
+// release of the slot.
+func (m dashboardModel) actRow() actRow {
+	r, ok := m.selected()
+	if !ok {
+		return actRow{}
+	}
+	ref := r.prRef()
+	row := actRow{ok: true, ref: ref, label: ref, state: m.rowState(r), url: m.urlOf(r), facts: m.reviewFacts(r), slotKnown: true}
+	gh, flagged, dismissed := m.mergeFacts(r)
+	row.ghState, row.mergedUnreviewed, row.flagDismissed = strings.ToUpper(strings.TrimSpace(gh)), flagged, dismissed
+	if f := m.reviewHeads(r); f != nil {
+		row.head, row.reviewed = f.HeadSHA, f.ReviewedSHA
+	}
+	if s := m.slotRow(r); s != nil {
+		row.inSlot = true
+		row.pinned = strings.Contains(s.SlotState, "pinned")
+		row.pinKnown = row.pinned || ref == ""
+	}
+	if ref == "" {
+		row.slot, row.label, row.none = r.slot.Name, "slot "+r.slot.Name, "slot "+r.slot.Name+" holds no PR"
+	}
+	if row.ignored() {
+		row.muted, row.mutedKnown = true, true
+	}
+	return row
+}
+
+// slotRow is the slot row of r: r itself, or the slot holding its PR; nil
+// when no slot holds it.
+func (m dashboardModel) slotRow(r dashRow) *SlotRow {
+	if r.slot != nil {
+		return r.slot
+	}
+	for i := range m.data.Slots {
+		if s := &m.data.Slots[i]; r.pr.Ref != "" && strings.EqualFold(s.PRRef, r.pr.Ref) {
+			return s
+		}
+	}
+	return nil
+}
+
+// reviewHeads is the review facts of the row's PR (heads, last review); a
+// slot row reads its queue row. nil when unknown.
+func (m dashboardModel) reviewHeads(r dashRow) *ReviewFacts {
+	if r.pr != nil {
+		return r.pr.Review
+	}
+	if q, ok := m.queueRow(r.prRef()); ok {
+		return q.Review
+	}
+	return nil
 }
 
 // run starts an action unless one is already running.
@@ -590,84 +619,6 @@ func (m dashboardModel) withSpinner(cmd tea.Cmd, started bool) (dashboardModel, 
 	return m, cmd
 }
 
-// onPR runs fn on the selected row's PR.
-func (m dashboardModel) onPR(what string, fn refActionFunc) (dashboardModel, tea.Cmd) {
-	r, ok := m.selected()
-	if !ok {
-		return m.fail("nothing selected")
-	}
-	ref := r.prRef()
-	if ref == "" {
-		return m.fail("slot " + r.slot.Name + " holds no PR")
-	}
-	return m.run(what+" "+ref, func(ctx context.Context, a DashboardActions) (string, error) { return fn(ctx, a, ref) })
-}
-
-// onTarget runs fn on the selected row's PR, or its slot when it has none.
-func (m dashboardModel) onTarget(what string, fn refActionFunc) (dashboardModel, tea.Cmd) {
-	r, ok := m.selected()
-	if !ok {
-		return m.fail("nothing selected")
-	}
-	ref := r.target()
-	return m.run(what+" "+ref, func(ctx context.Context, a DashboardActions) (string, error) { return fn(ctx, a, ref) })
-}
-
-// askPR asks question(row, ref) before running fn on the selected row's PR.
-func (m dashboardModel) askPR(what string, question func(r dashRow, ref string) string, fn refActionFunc) (dashboardModel, tea.Cmd) {
-	r, ok := m.selected()
-	if !ok {
-		return m.fail("nothing selected")
-	}
-	ref := r.prRef()
-	if ref == "" {
-		return m.fail("slot " + r.slot.Name + " holds no PR")
-	}
-	cmd := m.ask(question(r, ref), what+" "+ref, func(ctx context.Context, a DashboardActions) (string, error) { return fn(ctx, a, ref) })
-	return m, cmd
-}
-
-// mute asks before muting the selected row's PR; for a PR GitHub merged or
-// closed it dismisses or restores the merged-unreviewed flag, or says there is
-// nothing to mute (see prBoardModel.mute).
-func (m dashboardModel) mute() (dashboardModel, tea.Cmd) {
-	r, ok := m.selected()
-	if !ok {
-		return m.fail("nothing selected")
-	}
-	gh, flagged, dismissed := m.mergeFacts(r)
-	switch act, state := muteActFor(gh, flagged, dismissed); act {
-	case muteNothing:
-		if ref := r.prRef(); ref != "" {
-			cmd := m.note(nothingToMute(ref, state))
-			return m, cmd
-		}
-	case muteDismiss:
-		return m.askPR("mute", func(_ dashRow, ref string) string { return dismissFlagQuestion(ref) },
-			func(ctx context.Context, a DashboardActions, ref string) (string, error) { return a.Mute(ctx, ref) })
-	case muteRestore:
-		return m.askPR("unmute", func(_ dashRow, ref string) string { return restoreFlagQuestion(ref) },
-			func(ctx context.Context, a DashboardActions, ref string) (string, error) { return a.Unmute(ctx, ref) })
-	}
-	return m.askPR("mute", func(_ dashRow, ref string) string { return muteQuestion(ref, true) },
-		func(ctx context.Context, a DashboardActions, ref string) (string, error) { return a.Mute(ctx, ref) })
-}
-
-// review asks before a review round, saying what it will do and what
-// changed since the last review; for a PR GitHub merged it asks the
-// post-merge question instead (the review only comments).
-func (m dashboardModel) review(what string, o ReviewOpts) (dashboardModel, tea.Cmd) {
-	return m.askPR(what, func(r dashRow, ref string) string {
-		if ghStateMerged(m.ghState(r)) {
-			return postMergeQuestion(ref, o)
-		}
-		return reviewQuestion(ref, o, m.reviewFacts(r))
-	},
-		func(ctx context.Context, a DashboardActions, ref string) (string, error) {
-			return a.Review(ctx, ref, o)
-		})
-}
-
 // reviewFacts is what the question says about the row's PR; a slot row
 // reads its PR's queue row, which carries the heads and what is next.
 func (m dashboardModel) reviewFacts(r dashRow) string {
@@ -679,13 +630,6 @@ func (m dashboardModel) reviewFacts(r dashRow) string {
 		return reviewFacts(q.State, q.Next, q.Review, now)
 	}
 	return stateReviewFacts(r.slot.PRState, "")
-}
-
-// ghState is GitHub's state of the row's PR; a slot row without its own
-// reads its PR's queue row.
-func (m dashboardModel) ghState(r dashRow) string {
-	gh, _, _ := m.mergeFacts(r)
-	return gh
 }
 
 // mergeFacts is GitHub's state of the row's PR with whether it is flagged
@@ -720,23 +664,6 @@ func (m dashboardModel) queueRow(ref string) (PRRow, bool) {
 		}
 	}
 	return PRRow{}, false
-}
-
-func (m dashboardModel) browse() (dashboardModel, tea.Cmd) {
-	r, ok := m.selected()
-	if !ok {
-		return m.fail("nothing selected")
-	}
-	url := m.urlOf(r)
-	if url == "" {
-		return m.fail("no PR URL for " + r.target())
-	}
-	return m.run("browser", func(ctx context.Context, a DashboardActions) (string, error) {
-		if err := a.OpenBrowser(ctx, url); err != nil {
-			return "", err
-		}
-		return "opened " + url, nil
-	})
 }
 
 // urlOf is the row's PR URL; a slot row without one borrows its queue row's.
@@ -1215,10 +1142,11 @@ func (m dashboardModel) hintLine(w int) string {
 	if off != "" {
 		room = max(w-ansi.StringWidth(off)-2, 10)
 	}
+	open, attention := []hint{{"enter", "open"}}, []hint{{"a", "attention"}}
 	return spread(m.st.fitHints(room,
-		[]hint{{"j/k", "move"}, {"enter", "open"}, {"r", "review"}, {"p/u", "pin"}, {"x", "release"},
-			{"a", "attention"}, {"b", "browser"}, {"w", "manual"}, {"tab", "PRs"}, {"?", "help"}, {"q", "quit"}},
-		[]hint{{"enter", "open"}, {"r", "review"}, {"x", "release"}, {"a", "attention"}, {"tab", "PRs"}, {"?", "help"}, {"q", "quit"}},
+		withHints([]hint{{"j/k", "move"}}, open, actionHints(actReview, actPin, actUnpin, actRelease), attention,
+			actionHints(actBrowser), []hint{{"w", "manual"}, {"tab", "PRs"}, {"?", "help"}, {"q", "quit"}}),
+		withHints(open, actionHints(actReview, actRelease), attention, []hint{{"tab", "PRs"}, {"?", "help"}, {"q", "quit"}}),
 		[]hint{{"tab", "PRs"}, {"?", "help"}, {"q", "quit"}},
 		[]hint{{"?", "help"}, {"q", "quit"}}), off, w)
 }
@@ -1237,7 +1165,7 @@ func dashboardKeys(judge string) []hint {
 		{"x", "release (asks y/N)"},
 		{"M / U", "mute / unmute the PR (asks y/N)"},
 		{"M", "on a merged PR: dismiss / restore its merged-unreviewed flag (asks y/N)"},
-		{"K", "kill the PR's running review (asks y/N)"},
+		{"K", "kill the PR's running review, or drop its queued one (asks y/N)"},
 		{"I", "ignore the PR: kill its review, mute it, free its slot (asks y/N)"},
 		{"a", "jump to the pane that needs attention"},
 		{"b", "open the PR in the browser"},

@@ -9,7 +9,7 @@ import "testing"
 func TestDashboardAsksPostMergeQuestionForMergedPR(t *testing.T) {
 	data := dashData()
 	data.Queue[0].State, data.Queue[0].GHState = "closed", "MERGED" // talkable#7
-	data.Queue[1].GHState = "OPEN"                                  // talkable#1
+	data.Queue[1].State, data.Queue[1].GHState = "queued", "OPEN"   // talkable#1, in line (a running one refuses r)
 	data.Queue = append(data.Queue, PRRow{Ref: "talkable#9", State: "queued", GHState: "merged"})
 	m, _, _ := newDash(t, 220, 50)
 	m, _ = send(t, m, dashDataMsg{data: data})
@@ -21,7 +21,7 @@ func TestDashboardAsksPostMergeQuestionForMergedPR(t *testing.T) {
 		{[]string{"j", "j", "R"}, "Fresh post-merge review of talkable#7 in new agent sessions (comment only)?"},
 		{[]string{"j", "j", "i"}, "Post-merge review of talkable#7, also running the simplify role (comment only)?"},
 		{[]string{"j", "j", "j", "j", "r"}, "Post-merge review talkable#9 (comment only)?"}, // the state is read without regard to case
-		{[]string{"j", "j", "j", "r"}, "Review talkable#1 now (a round is already in progress)?"},
+		{[]string{"j", "j", "j", "r"}, "Review talkable#1 now (not reviewed yet, queued, next: judge)?"},
 	} {
 		got, _ := send(t, m, keys(c.keys...)...)
 		if got.confirm == nil || got.confirm.question != c.want {
@@ -33,9 +33,9 @@ func TestDashboardAsksPostMergeQuestionForMergedPR(t *testing.T) {
 
 	// y runs the same Review action as for any other PR.
 	for key, want := range map[string]string{
-		"r": "review talkable#7 again=false fresh=false simplify=false",
-		"R": "review talkable#7 again=false fresh=true simplify=false",
-		"i": "review talkable#7 again=false fresh=false simplify=true",
+		"r": "review talkable#7 fresh=false simplify=false",
+		"R": "review talkable#7 fresh=true simplify=false",
+		"i": "review talkable#7 fresh=false simplify=true",
 	} {
 		m, src, act := newDash(t, 220, 50)
 		m, _ = send(t, m, dashDataMsg{data: data})
@@ -54,7 +54,7 @@ func TestDashboardAsksPostMergeQuestionForMergedPR(t *testing.T) {
 // PR's queue row.
 func TestDashboardSlotRowAsksPostMergeQuestionForMergedPR(t *testing.T) {
 	const post = "Post-merge review talkable#1 (comment only)?"
-	const generic = "Review talkable#1 now (a round is already in progress)?"
+	const generic = "Review talkable#1 now (not reviewed yet, queued, next: judge)?"
 	for name, c := range map[string]struct {
 		slot, queue string
 		want        string
@@ -67,8 +67,8 @@ func TestDashboardSlotRowAsksPostMergeQuestionForMergedPR(t *testing.T) {
 		"neither knows":                         {want: generic},
 	} {
 		data := dashData()
-		data.Slots[0].PRGHState = c.slot
-		data.Queue[1].GHState = c.queue // talkable#1
+		data.Slots[0].PRGHState, data.Slots[0].PRState = c.slot, "queued"
+		data.Queue[1].GHState, data.Queue[1].State = c.queue, "queued" // talkable#1, in line (a running one refuses r)
 		m, _, act := newDash(t, 220, 50)
 		m, _ = send(t, m, dashDataMsg{data: data})
 		m, _ = send(t, m, keyMsg("r")) // the cursor starts on slot review1
@@ -76,7 +76,7 @@ func TestDashboardSlotRowAsksPostMergeQuestionForMergedPR(t *testing.T) {
 			t.Errorf("%s: asked %+v, want %q", name, m.confirm, c.want)
 			continue
 		}
-		if _, follow := dashAct(t, m, "y"); act.last() != "review talkable#1 again=false fresh=false simplify=false" || !hasMsg[dashDataMsg](follow) {
+		if _, follow := dashAct(t, m, "y"); act.last() != "review talkable#1 fresh=false simplify=false" || !hasMsg[dashDataMsg](follow) {
 			t.Errorf("%s: y called %v", name, act.calls)
 		}
 	}

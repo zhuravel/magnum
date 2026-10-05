@@ -25,7 +25,6 @@ func TestPickerAsksPostMergeQuestionForMergedEntry(t *testing.T) {
 		action PickAction
 	}{
 		{[]string{"enter"}, "Post-merge review talkable/talkable#5 (comment only)?", PickActionReview},
-		{[]string{"ctrl+r"}, "Post-merge review talkable/talkable#5 (comment only)?", PickActionAgain}, // again has no text of its own
 		{[]string{"ctrl+f"}, "Fresh post-merge review of talkable/talkable#5 in new agent sessions (comment only)?", PickActionFresh},
 	} {
 		got, _ := send(t, m, keys(c.keys...)...)

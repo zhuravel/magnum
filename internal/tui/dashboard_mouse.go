@@ -266,53 +266,14 @@ func (m dashboardModel) rowState(r dashRow) string {
 	return normState(s)
 }
 
-// slotHolds reports whether a slot holds the PR ref.
-func (m dashboardModel) slotHolds(ref string) bool {
-	return ref != "" && slices.ContainsFunc(m.data.Slots, func(s SlotRow) bool { return strings.EqualFold(s.PRRef, ref) })
-}
-
-// menuItems are the selected row's actions as the menu lists them; the
-// ones that cannot apply to the row are dimmed. The dashboard does not
-// know whether a PR is pinned or muted, so only an empty slot's pin
-// state dims pin or unpin.
+// menuItems are the selected row's actions as the menu lists them (the row
+// actions' table, then reset widths), the ones that cannot run on the row
+// dimmed by the same predicate the keys check (actionRefusal). The dashboard
+// does not know whether a PR is muted, nor pinned unless its slot is: the
+// daemon decides those.
 func (m dashboardModel) menuItems() []menuItem {
-	r, ok := m.selected()
-	acts := ok && m.act != nil
-	ref := ""
-	if ok {
-		ref = r.prRef()
-	}
-	pr := acts && ref != ""
-	state := ""
-	if ok {
-		state = m.rowState(r)
-	}
-	live := pr && state != "closed" && state != "released"
-	running := pr && slices.Contains([]string{"claiming", "reviewing", "verifying"}, state)
-	pinKnown := ok && r.slot != nil && ref == ""
-	pinned := pinKnown && strings.Contains(r.slot.SlotState, "pinned")
-	url := ""
-	mute := muteAsk
-	if ok {
-		url = m.urlOf(r)
-		gh, flagged, dismissed := m.mergeFacts(r)
-		mute, _ = muteActFor(gh, flagged, dismissed)
-	}
-	return []menuItem{
-		{"review", "r", "r", live},
-		{"fresh review", "R", "R", live},
-		{"simplify review", "i", "i", live},
-		{"kill review", "K", "K", running},
-		{"ignore", "I", "I", live && state != "ignored"},
-		{"open pane", "o / enter", "o", pr},
-		{"browser", "b", "b", acts && url != ""},
-		{"pin", "p", "p", acts && !pinned},
-		{"unpin", "u", "u", acts && (!pinKnown || pinned)},
-		{"release", "x", "x", acts && (r.slot != nil || m.slotHolds(ref))},
-		muteMenuItem(mute, pr, pr),
-		{"unmute", "U", "U", pr},
-		{"reset column widths", "W", "W", len(m.widths) > 0},
-	}
+	return append(actionMenu(dashActs, m.actRow(), m.act != nil, map[rowAct]string{actOpen: "o / enter"}),
+		menuItem{"reset column widths", "W", "W", len(m.widths) > 0})
 }
 
 // menuKey handles a key while the menu is open: move, run the highlighted

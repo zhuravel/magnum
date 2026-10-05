@@ -33,11 +33,11 @@ type PickEntry struct {
 // PickAction is what the user chose to do with the picked PR.
 type PickAction int
 
-// The picker's actions; PickActionCancel is the zero value.
+// The picker's actions; PickActionCancel is the zero value. ctrl+r (and F5)
+// refreshes the list, as on every screen.
 const (
 	PickActionCancel    PickAction = iota
 	PickActionReview               // enter
-	PickActionAgain                // ctrl+r: review again
 	PickActionFresh                // ctrl+f: review with new sessions
 	PickActionOpen                 // ctrl+g: open the judge pane
 	PickActionBrowser              // ctrl+o: open the PR URL
@@ -45,7 +45,7 @@ const (
 	PickActionRelease              // ctrl+x
 )
 
-var pickActionNames = [...]string{"cancel", "review", "again", "fresh", "open", "browser", "toggle-pin", "release"}
+var pickActionNames = [...]string{"cancel", "review", "fresh", "open", "browser", "toggle-pin", "release"}
 
 func (a PickAction) String() string {
 	if a >= 0 && int(a) < len(pickActionNames) {
@@ -71,6 +71,9 @@ type PickerOptions struct {
 	// Lookup resolves a typed reference the list lacks to a PR magnum knows,
 	// e.g. a merged one, so the y/N question can say what it is; nil means none.
 	Lookup func(query string) (PickEntry, bool)
+	// Reload lists the PRs again for ctrl+r and F5 (the registry may have
+	// changed since the picker opened); nil means the keys say so instead.
+	Reload func(ctx context.Context) ([]PickEntry, error)
 }
 
 // RunPicker lets the user filter entries and pick one with an action. It
@@ -78,6 +81,7 @@ type PickerOptions struct {
 // ends.
 func RunPicker(ctx context.Context, entries []PickEntry, opts PickerOptions) (PickOutcome, error) {
 	m := newPickerModel(entries, opts)
+	m.ctx = ctx
 	final, err := runProgram(ctx, m)
 	if pm, ok := final.(pickerModel); ok && pm.done && err == nil && ctx.Err() == nil {
 		return pm.outcome, nil
@@ -136,6 +140,7 @@ func (d pickDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 }
 
 type pickerModel struct {
+	ctx     context.Context // RunPicker's: a reload stops with it
 	entries []PickEntry
 	list    list.Model
 	opts    PickerOptions
@@ -178,7 +183,7 @@ func newPickerModel(entries []PickEntry, opts PickerOptions) pickerModel {
 	l.Filter = pickFilter(entries)
 	l.FilterInput.Prompt = pickPrompt
 
-	m := pickerModel{entries: entries, list: l, opts: opts}
+	m := pickerModel{ctx: context.Background(), entries: entries, list: l, opts: opts}
 	m.applyStyles(defaultStyles)
 	m.setFilter(strings.TrimSpace(opts.Query))
 	m.resize(80, 24)
@@ -270,6 +275,8 @@ func (m pickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil // filtering is synchronous; a late async result would be stale
 	case tea.KeyPressMsg:
 		return m.updateKey(msg)
+	case pickReloadMsg:
+		return m.reloaded(msg), nil
 	case tea.PasteMsg:
 		if m.confirm != nil {
 			m.confirm = nil // a paste cancels the question, like any key
@@ -281,8 +288,19 @@ func (m pickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // pickKeyActions maps keys to actions.
 var pickKeyActions = map[string]PickAction{
-	"enter": PickActionReview, "ctrl+r": PickActionAgain, "ctrl+f": PickActionFresh, "ctrl+g": PickActionOpen,
+	"enter": PickActionReview, "ctrl+f": PickActionFresh, "ctrl+g": PickActionOpen,
 	"ctrl+o": PickActionBrowser, "ctrl+p": PickActionTogglePin, "ctrl+x": PickActionRelease,
+}
+
+// pickRowKeys are the picker's keys of the row actions it offers, for the
+// refusals that name one ("unpin first (ctrl+p)").
+var pickRowKeys = map[rowAct]string{actReview: "enter", actFresh: "ctrl+f", actOpen: "ctrl+g", actBrowser: "ctrl+o",
+	actPin: "ctrl+p", actUnpin: "ctrl+p", actRelease: "ctrl+x"}
+
+// pickReloadMsg is a finished reload of the list.
+type pickReloadMsg struct {
+	entries []PickEntry
+	err     error
 }
 
 func (m pickerModel) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -298,6 +316,8 @@ func (m pickerModel) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.choose(a)
 	}
 	switch k {
+	case "ctrl+r", "f5":
+		return m.reload()
 	case "ctrl+c", "esc": // not q: a query may start with it ("quinn")
 		return m.finish(PickActionCancel, nil)
 	case "up", "ctrl+k":
@@ -328,6 +348,51 @@ func (m pickerModel) editFilter(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// reload lists the PRs again (Reload) in the background.
+func (m pickerModel) reload() (tea.Model, tea.Cmd) {
+	if m.opts.Reload == nil {
+		m.note = "refresh is not available here"
+		return m, nil
+	}
+	m.note = "refreshing…"
+	ctx, reload := m.ctx, m.opts.Reload
+	return m, func() tea.Msg {
+		ctx, cancel := loadContext(ctx)
+		defer cancel()
+		entries, err := reload(ctx)
+		return pickReloadMsg{entries: entries, err: err}
+	}
+}
+
+// reloaded swaps in the reloaded list, keeping the filter and, when it is
+// still listed, the highlighted PR.
+func (m pickerModel) reloaded(msg pickReloadMsg) pickerModel {
+	if msg.err != nil {
+		m.note = "refresh failed: " + oneLine(msg.err.Error())
+		return m
+	}
+	sel := ""
+	if it, ok := m.list.SelectedItem().(pickItem); ok {
+		sel = it.e.Ref
+	}
+	m.entries = append([]PickEntry(nil), msg.entries...)
+	items := make([]list.Item, len(m.entries))
+	for i, e := range m.entries {
+		items[i] = pickItem{e}
+	}
+	m.list.SetItems(items)
+	m.list.Filter = pickFilter(m.entries)
+	m.list.SetDelegate(newPickDelegate(m.entries, m.st))
+	m.setFilter(m.list.FilterInput.Value())
+	for i, it := range m.list.VisibleItems() {
+		if p, ok := it.(pickItem); ok && sel != "" && p.e.Ref == sel {
+			m.list.Select(i)
+		}
+	}
+	m.note = fmt.Sprintf("refreshed: %d PRs", len(m.entries))
+	return m
+}
+
 // pickConfirm is a review the picker asks about before it finishes.
 type pickConfirm struct {
 	action   PickAction
@@ -356,46 +421,57 @@ func (m pickerModel) choose(a PickAction) (tea.Model, tea.Cmd) {
 	if e == nil && m.typed != nil {
 		asked = m.typed
 	}
-	if question := pickQuestion(a, asked, q, m.opts.Now()); question != "" {
-		m.confirm = &pickConfirm{action: a, entry: e, question: question}
+	row, act := pickActRow(asked, q, m.opts.Now()), pickRowAct(a, asked)
+	if why := actionRefusal(act, row); why != "" { // refused before anything is asked, as on the board
+		m.note = why
+		return m, nil
+	}
+	if a == PickActionReview || a == PickActionFresh { // the reviews ask y/N; the rest act at once
+		m.confirm = &pickConfirm{action: a, entry: e, question: actionQuestion(act, row)}
 		return m, nil
 	}
 	return m.finish(a, e)
 }
 
-// pickReviewOpts is the review variant action a asks for; false for the
-// actions that do not start a review.
-func pickReviewOpts(a PickAction) (ReviewOpts, bool) {
+// pickRowAct is the row action a picker action is; e (nil: a typed
+// reference magnum does not know) says whether ctrl+p pins or unpins.
+func pickRowAct(a PickAction, e *PickEntry) rowAct {
 	switch a {
 	case PickActionReview:
-		return ReviewOpts{}, true
-	case PickActionAgain:
-		return ReviewOpts{Again: true}, true
+		return actReview
 	case PickActionFresh:
-		return ReviewOpts{Fresh: true}, true
+		return actFresh
+	case PickActionOpen:
+		return actOpen
+	case PickActionBrowser:
+		return actBrowser
+	case PickActionTogglePin:
+		if e != nil && e.Pinned {
+			return actUnpin
+		}
+		return actPin
 	}
-	return ReviewOpts{}, false
+	return actRelease
 }
 
-// pickQuestion asks before a review of e, or of the typed reference query
-// when e is nil; a PR GitHub merged gets the post-merge question. "" for the
-// actions that do not start a review.
-func pickQuestion(a PickAction, e *PickEntry, query string, now time.Time) string {
-	o, review := pickReviewOpts(a)
-	if !review {
-		return ""
-	}
+// pickActRow is what the row actions know of e, or of the typed reference
+// query when e is nil (a PR magnum does not list): its state, GitHub state,
+// heads and pin, and the facts the review question gives.
+func pickActRow(e *PickEntry, query string, now time.Time) actRow {
 	if e == nil {
-		return reviewQuestion(query, o, "not in magnum's list")
+		return actRow{ok: true, ref: query, label: query, facts: "not in magnum's list", keys: pickRowKeys}
 	}
-	if ghStateMerged(e.GHState) {
-		return postMergeQuestion(e.Ref, o)
+	state, _, _ := strings.Cut(e.State, ",")
+	row := actRow{ok: true, ref: e.Ref, label: e.Ref, state: normState(state), ghState: strings.ToUpper(strings.TrimSpace(e.GHState)),
+		url: e.URL, pinned: e.Pinned, pinKnown: true, keys: pickRowKeys}
+	if f := e.Review; f != nil {
+		row.head, row.reviewed = f.HeadSHA, f.ReviewedSHA
 	}
-	facts := reviewFacts(e.State, "", e.Review, now)
+	row.facts = reviewFacts(e.State, "", e.Review, now)
 	if e.Age != "" && e.Age != "-" {
-		facts = joinFacts(facts, "last activity "+e.Age+" ago")
+		row.facts = joinFacts(row.facts, "last activity "+e.Age+" ago")
 	}
-	return reviewQuestion(e.Ref, o, facts)
+	return row
 }
 
 func (m pickerModel) finish(a PickAction, e *PickEntry) (tea.Model, tea.Cmd) {
@@ -477,9 +553,11 @@ func (m pickerModel) footerLines() []string {
 			status = m.st.Accent.Render("not in the list: enter reviews " + q)
 		}
 	}
-	lines := m.st.wrapHints(w,
-		hint{"enter", "review"}, hint{"^r", "re-review"}, hint{"^f", "fresh"}, hint{"^g", "open"},
-		hint{"^o", "browser"}, hint{"^p", "pin/unpin"}, hint{"^x", "release"}, hint{"↑/↓", "move"}, hint{"esc", "cancel"})
+	hs := []hint{{"enter", "review"}, {"^f", "fresh"}, {"^g", "open"}, {"^o", "browser"}, {"^p", "pin/unpin"}, {"^x", "release"}}
+	if m.opts.Reload != nil {
+		hs = append(hs, hint{"^r", "refresh"})
+	}
+	lines := m.st.wrapHints(w, append(hs, hint{"↑/↓", "move"}, hint{"esc", "cancel"})...)
 	return append([]string{truncate(status, w)}, lines...)
 }
 

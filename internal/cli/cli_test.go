@@ -222,7 +222,7 @@ func TestCompletionFromRegistryAndConfig(t *testing.T) {
 	if got := strings.Join(roles, ","); got != "claude-simplify,codex-judge,claude-review,codex-review" {
 		t.Errorf("review --role completions = %q", got)
 	}
-	if got := complete(t, f.Ctx, "kick", ""); strings.Join(got, ",") != "poll,reconcile,schedule" {
+	if got := complete(t, f.Ctx, "kick", ""); len(got) != 0 { // its old targets are accepted, not offered
 		t.Errorf("kick completions = %q", got)
 	}
 	if got := complete(t, f.Ctx, "pause", "--reason", ""); len(got) != 0 {

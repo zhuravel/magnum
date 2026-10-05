@@ -40,7 +40,7 @@ func (p prbPainter) helpContent(width int) []string {
 		{"r", "review now (asks y/N); post-merge if merged"}, {"R", "fresh review in new agent sessions (asks y/N)"},
 		{"i", "review with /simplify (asks y/N)"}, {"o", "open the " + judgeName(p.judge) + " pane"},
 		{"b / t", "open the PR / its issue in the browser"}, {"p / u", "pin / unpin"}, {"M / U", "mute / unmute (asks y/N); merged: dismiss flag"},
-		{"x", "release (asks y/N)"}, {"K", "kill the running review (asks y/N)"},
+		{"x", "release (asks y/N)"}, {"K", "kill the running or queued review (asks y/N)"},
 		{"I", "ignore: kill, mute, free slot; U undoes"}, {"A / C", "approve / request changes (asks y/N)"}, {"a", "jump to what needs attention"},
 		{"y", "answer yes; any other key, enter too, cancels"},
 	})
@@ -378,46 +378,8 @@ func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
 		}
 	}
 
-	acts := []hint{hint{"r", "review"}, hint{"R", "fresh review"}, hint{"i", "simplify"}, hint{"o", "open pane"}, hint{"b", "browser"}, hint{"t", "tracker"},
-		hint{"p", "pin"}, hint{"u", "unpin"}, hint{"M", "mute"}, hint{"U", "unmute"}, hint{"x", "release"},
-		hint{"K", "kill review"}, hint{"I", "ignore"}, hint{"A", "approve"}, hint{"C", "request changes"}, hint{"esc", "back"}}
-	switch {
-	case closedUnmerged(r) || mergedOnGitHub(r) && !postMergeable(r): // nothing left to review
-		acts = slices.DeleteFunc(acts, func(h hint) bool { return h.key == "r" || h.key == "R" || h.key == "i" })
-	case mergedOnGitHub(r): // the review comments only
-		for i := range acts {
-			switch acts[i].key {
-			case "r":
-				acts[i].desc = "post-merge review"
-			case "R":
-				acts[i].desc = "fresh post-merge review"
-			}
-		}
-	}
-	if r.Findings == nil { // nothing magnum reviewed to approve or reject
-		acts = slices.DeleteFunc(acts, func(h hint) bool { return h.key == "A" || h.key == "C" })
-	}
-	if r.IssueURL == "" {
-		acts = slices.DeleteFunc(acts, func(h hint) bool { return h.key == "t" })
-	}
-	switch act, _ := muteActFor(r.GHState, r.MergedUnreviewed, r.FlagDismissed); act {
-	case muteDismiss, muteRestore:
-		for i := range acts {
-			if acts[i].key == "M" {
-				acts[i].desc = map[muteAct]string{muteDismiss: "dismiss merged flag", muteRestore: "restore merged flag"}[act]
-			}
-		}
-	case muteNothing: // M only says there is nothing to mute
-		acts = slices.DeleteFunc(acts, func(h hint) bool { return h.key == "M" })
-	}
-	if normState(r.State) == "ignored" { // U undoes the ignore; ignoring again means nothing
-		acts = slices.DeleteFunc(acts, func(h hint) bool { return h.key == "I" })
-		for i := range acts {
-			if acts[i].key == "U" {
-				acts[i].desc = "unmute: stop ignoring"
-			}
-		}
-	}
+	// The actions that can run on the PR, by the predicate its keys check.
+	acts := append(actionCard(boardActs, boardActRow(r, "", p.now)), hint{"esc", "back"})
 	add("", p.st.Section.Render(p.g.headed("ACTIONS")))
 	for _, l := range p.st.wrapHints(inner-2, acts...) {
 		add("  " + l)

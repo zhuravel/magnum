@@ -315,6 +315,62 @@ editing history. Code, config comments and prompts reference these by their head
   the cooldown. `magnum roles --kinds` prints each kind's `model switch:` line (switch command, fallbacks,
   default and reset model, or `-` when a model limit pauses the kind), and doctor suggests HTTPS clones
   (`git clone https://…` or `gh repo clone`) with the ssh-agent hint only for an SSH origin.
+- **The screens ask only what `y` will do** (2026-10-05, after questions offered a `y` the daemon then
+  refused or that did something else: `x` on a pinned PR, `A` after the head moved, `R` on a PR under review
+  flashing a green "follow it with `magnum review --wait`", `I` on a merged PR promising to free a slot).
+  The board, the dashboard and the picker share one row-action layer (`internal/tui/rowacts.go`): a table
+  of the row actions (key, menu label, hint word, name), what each screen knows of its row (`actRow`; a
+  fact a screen does not know stays unknown and is left to the daemon), one predicate `actionRefusal`
+  checked before anything is asked, and the question built from the same facts. The right-click menus,
+  the card's ACTIONS and the key hints are generated from the table, so the rules exist once instead of in
+  six copies. Refused at the key with a red flash: `x` on a pinned PR ("unpin first (u)") or one with no
+  slot; `A`/`C` after the head moved ("review again first (r)": a screen cannot pass `--force`); `r`, `R`,
+  `i` on a round running (the daemon queues no second one: "round in progress; K kills it"); a review of a
+  PR closed without merging or merged with its head reviewed, now on the dashboard too; `I` on a merged PR
+  or an ignored one; `K` with no review running, paused or waiting; `U` on a merged or closed PR unless a
+  mute dismissed its merged-unreviewed flag (then it asks to restore it), and on a PR that is not muted;
+  `M` on a muted one; `p` on a pinned PR and `u` on one that is not. `I` names what it will do (kill or drop
+  the review when one runs or waits, mute, free the slot only when the PR holds one; a closed PR is only
+  muted, which keeps it ignored if reopened), the dashboard reads a PR `magnum ignore` muted as `ignored`,
+  so its `U` asks to stop ignoring it, and the picker's review question says a pinned PR is unpinned, as
+  the board's does. A refusal in the picker names its own key ("unpin first (ctrl+p)"). Rejected: asking
+  and letting the daemon refuse (its answer came after the flash, or never, for a release), and a
+  row-filtered key-hint line (it would change under the cursor and defeat the frame cache).
+- **`magnum abort` takes back a review that waits in line** (2026-10-05). Before, only `magnum ignore`
+  removed a forced review once queued, and that mutes the PR for good; `mute` does not stop one (a forced
+  round runs muted). `abort` (and `K`) on a queued or rereview_pending PR, forced or automatic, now drops
+  the review before it starts: the forced mark goes, so do the fresh-sessions, dry-run and on-request-role
+  marks of the request, and the PR returns to reviewed, or baseline when never reviewed (a merged PR's
+  post-merge review: closed, released after a fresh close grace); no agent is interrupted, no session
+  parked, the slot is kept, since nothing started and a person may be working in its panes. A `--as`
+  identity switch stays (it is documented as lasting). A round paused mid-way is stopped like a running
+  one. The `pr.aborted` event carries `queued: true`. Rejected: restoring the exact state before the
+  request (the registry keeps no such history; reviewed or baseline is what an abort of a running round
+  gives too).
+- **`Again` is gone; `ctrl+r` refreshes the picker** (2026-10-05). The hidden `magnum review --again`,
+  `tui.ReviewOpts.Again`, the picker's `ctrl+r` and the numbered prompt's `a` duplicated a plain review (a
+  forced round reviews a reviewed head anyway) and asked "Review X again" even of a PR never reviewed.
+  `ctrl+r` and F5 now refresh the picker's list, as on every screen (the entry above on keys), keeping the
+  filter and the highlighted PR. The daemon still accepts `again` in a review payload and ignores it:
+  `decode` refuses unknown fields, so a request an older CLI queued with `--again` would fail otherwise.
+- **Fix hints name what works for the verb, and no positional argument is a placebo** (2026-10-05). A PR
+  the daemon has not recorded yet got "fix: `magnum review <ref>` adds it now" from mute, ignore, pin,
+  abort and approve alike; following it started a forced round. Now mute, ignore and pin say to wait for
+  the next poll (`magnum kick` polls now) and run the command again, unmute, unpin, release and abort that
+  there is nothing to undo, approve, request-changes, open and watch that magnum has not reviewed it and
+  that `magnum review` would start a forced round. `magnum pause 2h` paused for good with the reason
+  "2h": a word that parses as a duration is refused ("use --for 2h"). `kick poll|reconcile|schedule`
+  echoed its argument back (every tick does all three): it takes none now, and the three names are still
+  accepted with a note, since an installed copy of the herdr plugin runs `kick reconcile` at startup.
+  `magnum slots pin|unpin <slot>` runs `magnum pin|unpin <slot>`: one path through the daemon, which also
+  writes the `pr.pinned` event a review's unpin reply reads; with no daemon running the request waits for
+  its start, as `pin` always did (before, `slots pin` pinned in process then). Rejected: pinning in process
+  from both (a second writer of pins and their events beside the daemon).
+- **The herdr picker and status popups keep a failure on screen** (2026-10-05). `magnum-ctl.sh` ran them
+  with `exec`, and `pick` skipped its press-any-key for open and browser, so the popup closed with the
+  error. The script now runs them as children and, after a failing exit (ctrl+c's 130 aside), waits for a
+  key; `pick` itself waits only after a review, pin or release that worked, so a failure needs one key, not
+  two.
 
 ## Operations
 

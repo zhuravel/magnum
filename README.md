@@ -503,16 +503,16 @@ What an author gets, every review alike:
 | `magnum watch <ref> [--role <role>] [--ansi]` | Read-only live mirror of a pane in any terminal. |
 | `magnum roles [--repo owner/name] [--kinds] [--json]` | The effective roles per watch (kind, runs, model, effort, capture, output, prompt file and whether it is yours or built in, after, judge, aliases). `--kinds` shows how each agent CLI is started and resumed, and which models it switches to when one hits its own limit, instead. |
 | `magnum attention [--list]` | Jump to whatever needs you: a blocked agent, a failed round, an unseen result. A PR in needs_attention is explained in one line (the stage, how many attempts on which head, the line of the output that names the cause) with the next step; `magnum status <ref>` adds the failing step and the end of its output, and the dashboard, the PR board's card and `magnum review --wait` say the same. |
-| `magnum pick` | Filterable PR picker; the herdr popup and ctrl+click on PR links use it. |
+| `magnum pick` | Filterable PR picker; the herdr popup and ctrl+click on PR links use it. `enter` reviews (a reviewed head again too), `ctrl+f` fresh, `ctrl+g` opens the pane, `ctrl+o` the browser, `ctrl+p` pins or unpins, `ctrl+x` releases, `ctrl+r` refreshes the list; a key that cannot act on the PR says why instead (a review while its round runs, a release of a pinned PR). In the herdr popup a failure stays on screen until a key is pressed. |
 | `magnum pin\|unpin\|release\|mute\|unmute <ref>` | Hold a PR's slot and sessions, hand them back, stop automation for a PR (on a merged PR `mute` dismisses its merged-unreviewed flag and `unmute` restores it). |
-| `magnum abort <ref>` | Kill a PR's running review: its agents are interrupted, its runs abandoned, its sessions parked and a pool slot handed back. The PR returns to reviewed (or baseline) until the next push. |
+| `magnum abort <ref>` | Kill a PR's running (or paused) review: its agents are interrupted, its runs abandoned, its sessions parked and a pool slot handed back. A review that waits in line (one `magnum review` asked for, or an automatic one) is taken back before it starts: its forced mark and what it asked for go, and nothing else is touched. The PR returns to reviewed (or baseline) until the next push. |
 | `magnum approve <ref> [-m TEXT] [--force]`, `magnum request-changes <ref> [-m TEXT] [--force]` | Your own verdict on the head magnum reviewed, posted by the daemon as the PR's posting identity with a body that names magnum's review and its findings: for repositories where magnum only comments, or when you decide differently. The head must still be the reviewed one unless `--force`. A manual approval follows the head like magnum's own; magnum's later rounds never dismiss a manual verdict as their own stale review. Board keys `A` and `C`. |
 | `magnum ignore <ref>` | Abort, then mute the PR as ignored and free its slot: the daemon never queues it again until `magnum unmute <ref>`, which undoes the ignore. |
 | `magnum notes <repo> [--edit]` | The repository notes every role reads first and the judge rewrites after a round that taught it something (`~/.local/share/magnum/notes/<owner>/<repo>.md`): what the repo is, how to test and QA it, known pitfalls. |
 | `magnum cleanup [--dry-run] [--pr <ref>] [--slot <name>] [--orphans [--slug X]] [--shrink] [--external --slot repoN]` | Storage cleanup with a reviewable plan: closed PRs, orphan databases, idle slots, manual worktrees. |
-| `magnum slots [list\|provision\|remove\|repair\|adopt\|pin\|unpin]` | Pool management. |
+| `magnum slots [list\|provision\|remove\|repair\|adopt\|pin\|unpin]` | Pool management. `slots pin\|unpin <slot>` is `magnum pin\|unpin <slot>`. |
 | `magnum where <ref>` | `cd $(magnum where 123)`. |
-| `magnum pause\|resume`, `magnum logs [<ref>] [-f]`, `magnum doctor`, `magnum identities check`, `magnum kick` | Operations. `pause` holds automatic reviews; a review you ask for (`magnum review`, the board, the picker) still runs. The tab bar and `magnum status` show since when it holds them and how many review requests people made wait on it. |
+| `magnum pause\|resume`, `magnum logs [<ref>] [-f]`, `magnum doctor`, `magnum identities check`, `magnum kick` | Operations. `pause` holds automatic reviews (`--for 2h` or `--until 15:30` ends it; words after `pause` are the reason, and one that reads as a duration is refused); a review you ask for (`magnum review`, the board, the picker) still runs. `kick` wakes the daemon for a tick, which polls, schedules and reconciles. The tab bar and `magnum status` show since when it holds them and how many review requests people made wait on it. |
 | `magnum daemon [--once] [--dry-run]`, `magnum install\|uninstall\|daemon-restart\|daemon-stop [--now]`, `magnum daemon-restart --when-idle\|--drain [--timeout D]`, `magnum migrate-home` | The daemon and its launchd job (`migrate-home` moves a checkout's `state/` to the XDG places, see Configuration). Stop and restart refuse while review rounds are in flight unless `--now`; `daemon-restart --when-idle` waits, stopping nothing, until no round is in flight and restarts then (it waits again when a round starts in between); `daemon-restart --drain` and `install --drain` stop new rounds, wait for those in flight and then restart; both wait at most `--timeout` (default 2h), and ctrl+c or closing the terminal stops the wait and lifts the drain. A drain names its command's pid: `magnum status` shows it with how to lift it, and the daemon lifts a drain whose command is gone. `daemon-restart` and `install` first run `magnum config` with the binary launchd will run, which validates the configuration and renders every prompt with the build that will run, and refuse when it fails; the daemon refuses to start on the same errors (written to `daemon.log` and `launchd.log`). After a build that adds a registry migration, other commands refuse to run while the older daemon is up (they would migrate the registry under it) and point at `daemon-restart --drain`. |
 
 Shell completion is dynamic: PR references complete from the registry with their titles, slots,
@@ -534,10 +534,17 @@ round's stage timings (fetch/checkout, each role, verify, total); `/`
 filters; `v` cycles the views; `s`/`S` sort (updated, last review, reviewer activity, requested, changes,
 state; the requested sort puts the newest request first, the one the column shows, and PRs nobody asked
 last); `r`, `R`, `i` start review variants (a post-merge review on a
-merged PR, below); `o` opens the pane; `p`/`u` pin; `x` releases; `M`/`U` mute (on a merged PR, below); `K` kills the running review; `I` ignores the PR (an ignored
+merged PR, below); `o` opens the pane; `p`/`u` pin; `x` releases; `M`/`U` mute (on a merged PR, below); `K` kills the running review, or drops one that waits in line; `I` ignores the PR (an ignored
 row is greyed with its title struck through, and `U` unmutes it, which stops ignoring it); `A` approves
 and `C` requests changes as the PR's posting identity (see `magnum approve`); `b` opens the browser;
-`t` opens the PR's issue in its tracker (below); `tab` switches to the status dashboard. Every action that stops or starts work asks y/N first.
+`t` opens the PR's issue in its tracker (below); `tab` switches to the status dashboard. Every action that stops or starts work asks y/N first,
+and only when `y` will do what it asks: a key that cannot act on the row says why at once instead (`x` on a
+pinned PR: unpin first, or with no slot: nothing to release; `A`/`C` after the head moved: review again
+first, since a screen cannot force a verdict; `r`, `R`, `i` while a round runs: `K` kills it; `I` on a
+merged PR; `K` with no review running or waiting; `U` on a PR that is not muted), and the right-click
+menu dims and the card's ACTIONS leave out the same actions; the status dashboard and `magnum pick` refuse
+the same way. `I` names what it will do: kill or drop the review when one runs or waits, mute, and free
+the slot only when the PR holds one.
 
 CI shows the head's checks: the repository's required checks when it has some (read from GitHub's
 rulesets, or `[[repo]] required_checks`; `✗ Completion`, `– Completion not run` when it never ran on the
@@ -571,7 +578,8 @@ merged-unreviewed flag on talkable#7? (r still runs a post-merge review)" and, o
 round is due or running for it); the card then reads "merged-unreviewed flag dismissed (M restores it)",
 and `M` asks "Restore the merged-unreviewed flag on talkable#7?" and sends an unmute, which brings the flag
 back (the forced mark does not return); on any other merged or closed row `M` only says there is nothing
-to mute (the status dashboard and the right-click menu do the same). Printed rows
+to mute (the status dashboard and the right-click menu do the same); `U` there restores a dismissed flag and
+otherwise says there is nothing to unmute. Printed rows
 (`magnum prs` without a terminal) list the section too, with `closed,merged,unreviewed` in STATE.
 `r` on a merged row asks "Post-merge review talkable#7 (comment only)?" (`R` and `i` their fresh and
 simplify variants; the status dashboard and `magnum pick` ask the same) and, on `y`, runs `magnum review`
@@ -605,7 +613,7 @@ you) and `review:requested` (your review is requested); a comma lists alternativ
 The mouse works on both screens: the wheel scrolls; click selects a row and double-click opens its card (on
 the status dashboard: its pane); click a column heading to sort by it, again to reverse; drag the gap between
 two headings to resize the column on its left (widths are kept per screen; `W` resets them); right-click a
-row for a menu of its actions (each still asks y/N where its key does). `m` turns the mouse off and on
+row for a menu of its actions (each still asks y/N where its key does, dimmed where its key would refuse). `m` turns the mouse off and on
 (`[terminal] mouse = false` starts with it off); while it is on, select text with Option-drag in iTerm2 or
 Shift-drag in most other terminals. On the status dashboard `w` shows or hides the manual worktrees (it used
 to be `m`).

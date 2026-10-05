@@ -11,6 +11,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/tui"
 )
@@ -133,7 +134,7 @@ func statusDashData(r statusReport, defaultRepo string) tui.StatusData {
 			DBs: statusSlotDBs(v, r.Databases), Disk: statusSlotDisk(v)}
 		if v.PR != nil {
 			row.PRRef = actRefLabel(defaultRepo, v.Slot.RepoFullName, v.PR.Number)
-			row.PRState, row.URL, row.PRGHState = v.PR.State, v.PR.URL, v.PR.GHState
+			row.PRState, row.URL, row.PRGHState = screenPRState(*v.PR), v.PR.URL, v.PR.GHState
 			row.PRMergedUnreviewed, row.PRFlagDismissed = v.PR.MergedUnreviewed(), v.PR.FlagDismissed()
 		}
 		out.Slots = append(out.Slots, row)
@@ -173,6 +174,16 @@ func statusDashData(r statusReport, defaultRepo string) tui.StatusData {
 		out.Manual = append(out.Manual, tui.ManualRow{Folder: c[0], Branch: c[1], PRRef: c[2], GitHub: c[3], DBs: c[4], Agents: c[5], Disk: c[6]})
 	}
 	return out
+}
+
+// screenPRState is a PR's state as the screens show it and act on it: a PR
+// `magnum ignore` muted reads "ignored", as on the board (prsRowState), so the
+// dashboard's U asks to stop ignoring it.
+func screenPRState(pr store.PR) string {
+	if pr.Muted && store.Deref(pr.SkipReason) == engine.SkipIgnored && pr.State != store.PRClosed && pr.State != store.PRReleased {
+		return "ignored"
+	}
+	return pr.State
 }
 
 // reviewFactsOf is what the y/N question before a review says about pr:

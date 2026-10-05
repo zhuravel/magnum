@@ -68,7 +68,7 @@ func runVerdict(c *Context, name, req string, o verdictOpts, pos []string) int {
 func verdictMain(ctx context.Context, c *Context, d *actDeps, name, req, ref string, o verdictOpts) int {
 	t, err := targetResolve(ctx, d, ref, "", "")
 	if err != nil {
-		return cmdFail(c, name, err)
+		return cmdFail(c, name, verbFix(name, err))
 	}
 	if !t.hasPR() {
 		return cmdFail(c, name, fmt.Errorf("%s names no PR", ref))

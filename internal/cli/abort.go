@@ -17,7 +17,7 @@ import (
 // request that stops the PR's agents, parks its sessions and frees its slot.
 type stopKind struct {
 	name, req string
-	running   bool // only a PR with a running review is a target (abort)
+	running   bool // only a PR with a review running or waiting in line is a target (abort)
 }
 
 var (
@@ -37,11 +37,14 @@ const stopTimeout = 3 * time.Minute
 func stopUsage(k stopKind) string { return k.name + " <ref> [--timeout d] [--json]" }
 
 func newAbortCmd(c *Context) *cobra.Command {
-	return newStopCmd(c, stopAbort, "kill a PR's running review",
-		"Kill the running review of a PR: the daemon cancels the round, interrupts its agents (ctrl+c), marks its "+
-			"runs abandoned (\"aborted by user\"), parks the sessions (conversations stay resumable) and hands a pool "+
-			"slot back (a per-PR worktree is kept). The PR goes back to reviewed, or baseline when it was never "+
-			"reviewed: the next push queues it again. Exits 1 when no review of the PR is running.")
+	return newStopCmd(c, stopAbort, "kill a PR's running review, or take back a queued one",
+		"Kill the running (or paused) review of a PR: the daemon cancels the round, interrupts its agents (ctrl+c), "+
+			"marks its runs abandoned (\"aborted by user\"), parks the sessions (conversations stay resumable) and "+
+			"hands a pool slot back (a per-PR worktree is kept). A review that waits in line (one `magnum review` "+
+			"asked for, or an automatic one) is taken back before it starts: its forced mark and what it asked for "+
+			"(fresh sessions, roles, a dry run) go, and nothing else is touched. Either way the PR goes back to "+
+			"reviewed, or baseline when it was never reviewed (a merged PR's post-merge review: back to closed), "+
+			"and the next push queues it again. Exits 1 when no review of the PR runs or waits.")
 }
 
 func newStopCmd(c *Context, k stopKind, short, long string) *cobra.Command {
@@ -71,22 +74,23 @@ func runStop(c *Context, k stopKind, o stopOpts, pos []string) int {
 	return stopMain(ctx, c, d, k, pos[0], o)
 }
 
-// inFlight are the PR states of a running round (claiming, reviewing,
-// verifying).
-var inFlight = []string{store.PRClaiming, store.PRReviewing, store.PRVerifying}
+// abortable are the PR states abort takes a review from: a round running
+// (claiming, reviewing, verifying) or paused, and a review waiting in line
+// (queued, rereview_pending).
+var abortable = []string{store.PRClaiming, store.PRReviewing, store.PRVerifying, store.PRPaused, store.PRQueued, store.PRRereviewPending}
 
 // stopMain hands an abort or ignore of ref to the daemon and waits for it.
-// An abort of a PR without a running round fails here, before any request;
-// without a daemon nothing runs, so an abort fails, and an ignore is queued
-// for the next start (like mute).
+// An abort of a PR with no review running or waiting fails here, before any
+// request; without a daemon nothing runs, so an abort fails, and an ignore is
+// queued for the next start (like mute).
 func stopMain(ctx context.Context, c *Context, d *actDeps, k stopKind, ref string, o stopOpts) int {
 	t, err := d.resolve(ctx, ref, "", "")
 	if err != nil {
-		return cmdFail(c, k.name, err)
+		return cmdFail(c, k.name, verbFix(k.name, err))
 	}
 	label := d.actLabel(t.full(), t.PR.Number)
-	if k.running && !slices.Contains(inFlight, t.PR.State) {
-		return cmdFail(c, k.name, fmt.Errorf("no review of %s is running (state %s)", label, t.PR.State))
+	if k.running && !slices.Contains(abortable, t.PR.State) {
+		return cmdFail(c, k.name, fmt.Errorf("no review of %s is running or queued (state %s)", label, t.PR.State))
 	}
 	// Nothing runs without a daemon: an abort is refused then (the next
 	// daemon must not act on it); an ignore is queued for its start.
@@ -94,7 +98,7 @@ func stopMain(ctx context.Context, c *Context, d *actDeps, k stopKind, ref strin
 	out, err := rc.send(ctx, k.req, engine.TargetPayload{PRTarget: t.prTarget()}, reqSend{NeedDaemon: k.running})
 	switch {
 	case errors.Is(err, errNoDaemon):
-		return cmdFail(c, k.name, fmt.Errorf("no review of %s is running: %w", label, err))
+		return cmdFail(c, k.name, fmt.Errorf("nothing was queued for %s: %w", label, err))
 	case err != nil:
 		return cmdFail(c, k.name, err)
 	}
