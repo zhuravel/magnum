@@ -1106,3 +1106,39 @@ func TestDispatchRecordsTheGateReason(t *testing.T) {
 		t.Fatalf("gate kv kept after the round started: %q", v)
 	}
 }
+
+// `magnum pause` holds automatic reviews only: a review the user asks for
+// (a forced PR) still runs, and the request's answer does not say it waits;
+// a PR that is not forced waits and says why. A drain for a restart holds
+// every round, forced or not.
+func TestPauseHoldsAutomaticReviewsNotRequestedOnes(t *testing.T) {
+	h := newHarness(t)
+	h.open(prSpec{n: 1, head: "a1"}, prSpec{n: 2, head: "b1"})
+	h.startup()
+	h.tick()
+	h.enqueue(ReqPause, PausePayload{Reason: "lunch"})
+	h.tick()
+	h.open(prSpec{n: 1, head: "a1"}, prSpec{n: 2, head: "b2"}) // a push: an automatic round would follow
+	h.advance(time.Hour)
+	id := h.enqueue(ReqReview, ReviewPayload{PRTarget: PRTarget{Repo: "talkable/talkable", Number: 1}})
+	h.tick()
+	h.wantState(1, store.PRReviewed)
+	if r, err := h.st.RequestByID(h.ctx, id); err != nil || strings.Contains(deref(r.Result), "waiting") {
+		t.Fatalf("request answer %q (%v)", deref(r.Result), err)
+	}
+	h.advance(10 * time.Minute) // past the push's quiet period: only the pause holds PR #2
+	h.tick()
+	if pr := h.pr(2); pr.State == store.PRReviewed || pr.State == store.PRReviewing {
+		t.Fatalf("PR #2 reviewed while paused: %s", pr.State)
+	}
+	if w := waitOf(t, h, 2); w.Reason != WaitPaused {
+		t.Fatalf("PR #2 wait = %+v, want the pause", w)
+	}
+
+	h.e.setKV(h.ctx, KVDaemonDraining, store.FormatTime(h.clock.Now()))
+	h.enqueue(ReqReview, ReviewPayload{PRTarget: PRTarget{Repo: "talkable/talkable", Number: 2}})
+	h.tick()
+	if pr := h.pr(2); pr.State == store.PRReviewed || pr.State == store.PRReviewing {
+		t.Fatalf("a forced PR ran during a drain: %s", pr.State)
+	}
+}

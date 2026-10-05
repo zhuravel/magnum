@@ -26,8 +26,9 @@ type pauseOpts struct {
 
 func newPauseCmd(c *Context) *cobra.Command {
 	var o pauseOpts
-	cmd := newCommand(groupAct, pauseUsage, "pause automation (running rounds finish; nothing new starts)",
-		"Pause automation: running rounds finish, nothing new starts. The pause lasts until `magnum resume`, "+
+	cmd := newCommand(groupAct, pauseUsage, "pause automatic reviews (running rounds finish; reviews you ask for still run)",
+		"Pause automatic reviews: running rounds finish and no automatic round starts, while a review you ask for "+
+			"(`magnum review`, the board's r/R/i, the picker) still runs. The pause lasts until `magnum resume`, "+
 			"for --for, or until --until (a local time like 15:30 or an RFC3339 timestamp); --reason shows in "+
 			"`magnum status`. It is recorded in the registry, so it applies even when no daemon runs yet.",
 		func(pos []string) int { return runPause(c, o, pos) })

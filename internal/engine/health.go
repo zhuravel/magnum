@@ -286,10 +286,26 @@ func (e *Engine) health(ctx context.Context) {
 // daemon pause, a drain before a restart, an infrastructure pause. A paused
 // agent kind only holds the rounds whose roles use it (kindPauseReason).
 func (e *Engine) pauseReason(ctx context.Context) string {
+	if r := e.userPause(ctx); r != "" {
+		return r
+	}
+	return e.holdReason(ctx)
+}
+
+// userPause is `magnum pause` ("" = none): it holds automatic reviews,
+// while a review the user asks for (a forced PR: `magnum review`, the board,
+// the picker) still runs.
+func (e *Engine) userPause(ctx context.Context) string {
 	if v, ok := e.getKV(ctx, KVDaemonPaused); ok && v == "1" {
 		r, _ := e.getKV(ctx, KVDaemonPausedReason)
 		return strings.TrimSpace("daemon paused " + r)
 	}
+	return ""
+}
+
+// holdReason holds every new round, forced or not ("" = none): a drain for a
+// restart, or an infrastructure pause.
+func (e *Engine) holdReason(ctx context.Context) string {
 	if v, ok := e.getKV(ctx, KVDaemonDraining); ok && v != "" {
 		return "draining for a restart (magnum daemon-restart --drain)"
 	}

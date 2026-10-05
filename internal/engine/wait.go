@@ -228,12 +228,13 @@ func (e *Engine) noteWaits(ctx context.Context, ts tickState) {
 }
 
 // globalWait is what holds every PR this tick (nil = nothing): the daemon
-// paused or draining, an infrastructure pause, herdr unreachable.
+// draining, an infrastructure pause, herdr unreachable. `magnum pause` holds
+// only the PRs nobody asked to review (waitFor).
 func (e *Engine) globalWait(ctx context.Context, ts tickState, now time.Time) *Wait {
 	if p, ok := e.infraPause(ctx); ok && now.Before(p.Until) {
 		return &Wait{Reason: WaitInfra, Until: p.Until, Detail: "an infrastructure pause (" + p.Reason + "); the probe runs"}
 	}
-	if why := e.pauseReason(ctx); why != "" {
+	if why := e.holdReason(ctx); why != "" {
 		return &Wait{Reason: WaitPaused, Detail: "the " + why}
 	}
 	if !ts.herdrUp {
@@ -268,6 +269,9 @@ func (e *Engine) waitFor(ctx context.Context, pr store.PR, global *Wait, now tim
 	}
 	if global != nil {
 		return with(*global)
+	}
+	if why := e.userPause(ctx); why != "" && !pr.Forced {
+		return with(Wait{Reason: WaitPaused, Detail: "the " + why})
 	}
 	if gate, ok := e.getKV(ctx, kvPRGate(pr.ID)); ok && gate != "" {
 		return with(e.gateWait(ctx, gate))

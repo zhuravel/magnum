@@ -397,7 +397,7 @@ func (e *Engine) requestReview(ctx context.Context, p ReviewPayload) (string, er
 	if pos > 0 {
 		res += fmt.Sprintf(", position %d", pos)
 	}
-	if reason := e.pauseReason(ctx); reason != "" {
+	if reason := e.holdReason(ctx); reason != "" { // a forced review passes `magnum pause`
 		res += "; waiting: " + reason
 	} else if reason := e.kindPauseReason(ctx, agentKinds(e.cfg.RolesFor(w))); reason != "" {
 		res += "; waiting: " + reason

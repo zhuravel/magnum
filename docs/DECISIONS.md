@@ -747,3 +747,10 @@ editing history. Code, config comments and prompts reference these by their head
   tap stored as a secret, for a one-maintainer project) and `brew services` (it would fight `magnum
   install` over the launchd job; the formula's caveats say to run `magnum daemon-restart --drain` after an
   upgrade). CI runs the gate on macOS runners: magnum is a macOS tool and its tests run where it runs.
+- **`magnum pause` holds automatic reviews, not the ones you ask for** (2026-10-05, after a review asked
+  for from the board waited behind a pause without saying so). A pause is the user stopping the
+  automation; `magnum review`, the board's r/R/i and the picker are the user asking for a round now, so
+  a forced PR passes the pause (as it already passed the timing rules, quiet hours and the daily cap) and
+  the request's answer no longer says it waits. PRs nobody asked for wait and `magnum status` says the
+  pause holds them. A drain for a restart and an infrastructure pause still hold every round: the first
+  waits for rounds to end, the second means a round cannot run.

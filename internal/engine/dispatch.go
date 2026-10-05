@@ -152,10 +152,11 @@ func (e *Engine) heldReason(prID int64) string {
 // that waits records why (store.KVPRGate) for `magnum status`.
 func (e *Engine) dispatch(ctx context.Context, ts tickState) {
 	e.dryRounds = 0
-	if reason := e.pauseReason(ctx); reason != "" {
+	if reason := e.holdReason(ctx); reason != "" {
 		e.log.Debug("dispatch paused", "reason", reason)
 		return
 	}
+	paused := e.userPause(ctx) // only reviews the user asked for start
 	if !ts.herdrUp {
 		e.log.Debug("dispatch waits for herdr")
 		return
@@ -184,6 +185,9 @@ func (e *Engine) dispatch(ctx context.Context, ts tickState) {
 
 	working := ts.workingCodex
 	for _, pr := range cands {
+		if paused != "" && !pr.Forced {
+			continue // waitFor says why
+		}
 		if limit := e.cfg.Daemon.MaxConcurrentReviews; limit > 0 && e.reviewRounds()+e.plannedRounds() >= limit {
 			// The rest wait for a running round to end; say so (noteWaits).
 			e.noteGate(ctx, pr.ID, fmt.Sprintf("%s%d rounds running (max_concurrent_reviews %d)", gateCapacity, e.reviewRounds()+e.plannedRounds(), limit))
