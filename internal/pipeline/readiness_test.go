@@ -14,6 +14,7 @@ import (
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -122,6 +123,162 @@ func TestReadinessRunsBeforeTheReviewersAndFailuresDoNotStopTheRound(t *testing.
 	if ev.Level != "warn" || !strings.Contains(ev.Message, "1 of 3 checks ok") ||
 		!strings.Contains(ev.Message, "prepare `bin/rails db:test:prepare`: exit 1") || strings.Contains(ev.Message+string(ev.Data), "Unknown database") {
 		t.Errorf("round.readiness event = %s %q %s", ev.Level, ev.Message, ev.Data)
+	}
+}
+
+// A checkout that changes the pool's schema (ReadinessPlan.ResetDB) loads
+// it into the slot's databases before anything else runs, through the same
+// path as prepare (the login shell, the slot's env, the step's budget, a
+// command that may change things); a reset that fails does not stop the
+// round, it reaches the judge's readiness list.
+func TestReadinessResetsTheSchemaFirstAndAFailureReachesTheJudge(t *testing.T) {
+	e := newEnv(t)
+	checkout := t.TempDir()
+	e.exec.Rules = []execx.Rule{
+		zshRule("bin/rails db:schema:load", execx.Result{Code: 1, Duration: 2 * time.Second,
+			Stderr: []byte("ActiveRecord::StatementInvalid: Table 'talkable_test__review1.offers' doesn't exist\n")}, nil),
+		zshRule("RAILS_ENV=test bin/rails db:schema:load", execx.Result{}, nil),
+		zshRule("bin/rails db:test:prepare", execx.Result{}, nil),
+	}
+	ready := func() int { return len(e.exec.CallsWithPrefix(ReadinessShell)) }
+	e.ag.behaviors[agents.RoleClaude] = []behavior{func(f *fakeAgents, run store.Run, text string) error {
+		if n := ready(); n != 3 {
+			t.Errorf("claude-review was prompted after %d readiness commands, want the schema reset and prepare first", n)
+		}
+		return writeReport("## P2 something\n")(f, run, text)
+	}}
+	judge := e.judgePosts(501, "COMMENTED", "COMMENT").behavior(t)
+	e.ag.behaviors[agents.RoleJudge] = []behavior{func(f *fakeAgents, run store.Run, text string) error {
+		if !strings.Contains(text, "  - reset_db `bin/rails db:schema:load`: failed in 2s (exit 1)\n") ||
+			!strings.Contains(text, "  - reset_db `RAILS_ENV=test bin/rails db:schema:load`: ok") {
+			t.Errorf("the judge's prompt does not list the schema reset:\n%s", text)
+		}
+		if strings.Contains(text, "offers' doesn't exist") {
+			t.Errorf("the judge's prompt carries a command's output:\n%s", text)
+		}
+		return judge(f, run, text)
+	}}
+
+	in := e.input(KindInitial)
+	in.SlotPath = checkout
+	in.Readiness = ReadinessPlan{ResetDB: []string{"bin/rails db:schema:load", "RAILS_ENV=test bin/rails db:schema:load"},
+		Prepare: []string{"bin/rails db:test:prepare"}, Timeout: 3 * time.Minute, Env: map[string]string{"WT_BRANCH": "review1"}}
+	res, err := e.r.RunRound(e.ctx, in)
+	if err != nil || res.Outcome != OutcomePosted {
+		t.Fatalf("RunRound = %+v, %v", res, err)
+	}
+
+	var scripts []string
+	for _, c := range e.exec.CallsWithPrefix(ReadinessShell) {
+		scripts = append(scripts, c.Args[1])
+		// The reset has the release's reset_db budget (slots.ResetDBTimeout,
+		// the plan sets none), prepare the whole ready_timeout after it.
+		limit := 3 * time.Minute
+		if strings.HasSuffix(c.Args[1], "db:schema:load") {
+			limit = slots.ResetDBTimeout
+		}
+		if c.Dir != checkout || c.Env["WT_BRANCH"] != "review1" || c.Timeout != limit || !c.Mutates || c.Probe {
+			t.Errorf("%s: dir %q env %v timeout %s (want %s) mutates %v probe %v", c.Args[1], c.Dir, c.Env, c.Timeout, limit, c.Mutates, c.Probe)
+		}
+	}
+	if want := []string{"bin/rails db:schema:load", "RAILS_ENV=test bin/rails db:schema:load", "bin/rails db:test:prepare"}; !slices.Equal(scripts, want) {
+		t.Fatalf("readiness commands = %q, want %q", scripts, want)
+	}
+	f := readReadinessFile(t, e.reportDir())
+	if len(f.Checks) != 3 {
+		t.Fatalf("readiness file = %+v", f)
+	}
+	if c := f.Checks[0]; c.Kind != agents.ReadinessResetDB || c.OK || c.Status != agents.ReadinessFailed || c.Detail != "exit 1" ||
+		!strings.Contains(c.LastLine, "doesn't exist") {
+		t.Errorf("reset_db check = %+v", c)
+	}
+	if c := f.Checks[1]; c.Kind != agents.ReadinessResetDB || !c.OK {
+		t.Errorf("second reset_db check = %+v", c)
+	}
+	var ev *store.Event
+	for _, x := range e.events() {
+		if x.Kind == "round.readiness" {
+			ev = &x
+		}
+	}
+	if ev == nil || ev.Level != "warn" || !strings.Contains(ev.Message, "reset_db `bin/rails db:schema:load`: exit 1") {
+		t.Errorf("round.readiness event = %+v", ev)
+	}
+}
+
+// The schema reset has a budget of its own (ReadinessPlan.ResetDBTimeout,
+// the release's reset_db timeout), not counted against ready_timeout: a
+// slow reset leaves prepare and ready their whole ready_timeout, and a reset
+// that outlives its own budget is stopped and the reset_db commands after it
+// skipped, while prepare and ready still run.
+func TestReadinessSchemaResetHasItsOwnBudget(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		resetTakes  time.Duration
+		wantResets  []string // statuses of the two reset_db checks
+		wantDetails []string
+	}{
+		{"a slow reset", 20 * time.Minute, []string{agents.ReadinessOK, agents.ReadinessOK}, []string{"", ""}},
+		{"a reset past its budget", 40 * time.Minute, []string{agents.ReadinessTimeout, agents.ReadinessSkipped},
+			[]string{"stopped when reset_db's budget (30m0s) ran out", "reset_db's budget (30m0s) was spent before it ran"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t)
+			e.exec.Rules = []execx.Rule{
+				{Prefix: []string{ReadinessShell, "-lc", "bin/rails db:schema:load"}, Fn: func(c execx.Cmd) (execx.Result, error) {
+					if c.Timeout != 30*time.Minute {
+						t.Errorf("first reset_db timeout = %s, want its own 30m budget", c.Timeout)
+					}
+					e.clock.Add(tc.resetTakes)
+					if tc.resetTakes > c.Timeout {
+						return execx.Result{Code: -1, Duration: c.Timeout}, &execx.RunError{Cmd: c, Err: context.DeadlineExceeded}
+					}
+					return execx.Result{Duration: tc.resetTakes}, nil
+				}},
+				{Prefix: []string{ReadinessShell, "-lc", "bin/rails db:seed"}, Fn: func(c execx.Cmd) (execx.Result, error) {
+					if c.Timeout != 10*time.Minute {
+						t.Errorf("second reset_db timeout = %s, want what the reset budget has left (10m)", c.Timeout)
+					}
+					return execx.Result{}, nil
+				}},
+				{Prefix: []string{ReadinessShell, "-lc", "bin/rails db:test:prepare"}, Fn: func(c execx.Cmd) (execx.Result, error) {
+					if c.Timeout != 5*time.Minute {
+						t.Errorf("prepare timeout = %s, want the whole ready_timeout (5m) after the reset", c.Timeout)
+					}
+					e.clock.Add(time.Minute)
+					return execx.Result{}, nil
+				}},
+				{Prefix: []string{ReadinessShell, "-lc", "bin/ready"}, Fn: func(c execx.Cmd) (execx.Result, error) {
+					if c.Timeout != 4*time.Minute {
+						t.Errorf("ready timeout = %s, want what ready_timeout has left (4m)", c.Timeout)
+					}
+					return execx.Result{}, nil
+				}},
+			}
+			rd := readinessRound(t, e, KindInitial, t.TempDir(), ReadinessPlan{
+				ResetDB: []string{"bin/rails db:schema:load", "bin/rails db:seed"}, ResetDBTimeout: 30 * time.Minute,
+				Prepare: []string{"bin/rails db:test:prepare"}, Ready: []string{"bin/ready"}, Timeout: 5 * time.Minute})
+			if err := rd.readiness(e.ctx); err != nil {
+				t.Fatal(err)
+			}
+			got := rd.readinessData()
+			if len(got.Checks) != 4 {
+				t.Fatalf("readiness = %+v", got)
+			}
+			for i, want := range tc.wantResets {
+				if c := got.Checks[i]; c.Kind != agents.ReadinessResetDB || c.Status != want || c.Detail != tc.wantDetails[i] {
+					t.Errorf("reset_db check %d = %+v, want %s %q", i, c, want, tc.wantDetails[i])
+				}
+			}
+			for _, c := range got.Checks[2:] {
+				if !c.OK {
+					t.Errorf("%s check after the reset = %+v, want ok within its own ready_timeout", c.Kind, c)
+				}
+			}
+			if f := readReadinessFile(t, rd.dir); f.Timeout != "5m0s" || f.ResetDBTimeout != "30m0s" {
+				t.Errorf("readiness file budgets = %q and %q, want 5m0s and 30m0s", f.Timeout, f.ResetDBTimeout)
+			}
+		})
 	}
 }
 

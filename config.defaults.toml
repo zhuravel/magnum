@@ -41,8 +41,10 @@ rereview_max_wait = "2h"          #   (comments, blank lines, whitespace and doc
                                   #   first push (0 lines = no threshold; [[watch]] may override both)
 model_limit_cooldown = "5h"       # a model capped on its own (health pattern model_limit) without a reset time
                                   # counts as limited this long; sessions use the kind's fallback_models meanwhile
-# park_idle_after = "2h"          # park a reviewed PR's agents once all of them idled this long ("0" = never);
-                                  # the next round resumes them; pinned PRs and recent human activity keep them
+# park_idle_after = "2h"          # park a reviewed PR's agents once all of them idled this long ("0" = never),
+                                  # and a waiting PR's when its round is held by a pause, a drain or the daily
+                                  # cap, or is more than this far off; the next round resumes them; pinned PRs
+                                  # and recent human activity keep them
 # skip_trivial_deltas = ["comments", "whitespace", "docs", "base"]   # a push that changes only these since
                                   # the review is not re-reviewed: the review stands for the new head; "base" is a
                                   # push that merges the base branch (or rebases onto it) and leaves the PR's own
@@ -342,8 +344,14 @@ aliases = ["simplify"]
 # strip_env = ["GITHUB_PERSONAL_ACCESS_TOKEN"]
 # setup = ["bin/worktree-setup"]           # runs once per slot with the [pool.env] below
 # teardown = ["bin/worktree-archive"]
-# schema_paths = ["db/"]
+# schema_paths = ["db/"]                 # a PR that changes these changes the databases' schema
 # reset_db = ["bin/rails db:schema:load", "RAILS_ENV=test bin/rails db:schema:load", "bin/rails db:seed"]
+#                                         # loads the checkout's schema into the slot's databases: on release,
+#                                         # and before the reviewers of a PR that changes schema_paths
+# reset_db_on_schema_change = true        # false: reset_db only on release (the reviewers of a PR that changes
+#                                         # the schema run against the base one); before the reviewers it runs
+#                                         # as the first readiness commands, within 30m of its own (as on
+#                                         # release), and ready_timeout starts after it
 # post_checkout = ["bundle check >/dev/null || bundle install --jobs 4", "pnpm install --frozen-lockfile"]
 # databases = ["your_app_development__{slug}", "your_app_test__{slug}"]   # each must end in __{slug}
 # prepare = ["bin/rails db:test:prepare"] # readiness: run in the checkout before the reviewers of every

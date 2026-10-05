@@ -162,6 +162,10 @@ const (
     ("pr:<owner>/<name>#<N>").
 
 const (
+	// ReadinessResetDB is a [[pool]] reset_db command, run first when the
+	// PR changes the pool's schema_paths: it loads the PR's schema into the
+	// slot's databases.
+	ReadinessResetDB = "reset_db"
 	ReadinessPrepare = "prepare" // a [[repo]]/[[pool]] prepare command
 	ReadinessReady   = "ready"   // a [[repo]]/[[pool]] ready probe (exit 0 = ready)
 	ReadinessRuby    = "ruby"    // the built-in check that the login shell runs the Ruby the checkout pins
@@ -1092,7 +1096,7 @@ type Readiness struct {
     The zero value means no step ran (nothing configured, a continued turn).
 
 type ReadinessCheck struct {
-	Kind    string `json:"kind"`    // ReadinessPrepare, ReadinessReady or ReadinessRuby
+	Kind    string `json:"kind"`    // ReadinessResetDB, ReadinessPrepare, ReadinessReady or ReadinessRuby
 	Command string `json:"command"` // as configured (ruby: the version command)
 	OK      bool   `json:"ok"`
 	Status  string `json:"status"` // ReadinessOK, ReadinessFailed, ReadinessTimeout or ReadinessSkipped
@@ -2412,6 +2416,8 @@ type Daemon struct {
 	ModelLimitCooldown Duration `toml:"model_limit_cooldown"`
 	// ParkIdleAfter parks the live agents of a reviewed PR once all of them
 	// have been idle this long (they resume on the PR's next round); 0 = never.
+	// A PR waiting for a round is parked the same way when its wait is a
+	// pause, a drain, the daily cap or ends more than this far away.
 	// Pinned PRs and PRs with human activity within HumanCooldown are left alone.
 	ParkIdleAfter Duration `toml:"park_idle_after"`
 	// SkipTrivialDeltas are the kinds of change a push may consist of
@@ -2724,6 +2730,13 @@ type Pool struct {
 	PostCheckout    []string          `toml:"post_checkout"`
 	Databases       []string          `toml:"databases"`
 	Env             map[string]string `toml:"env"`
+	// ResetDBOnSchemaChange runs ResetDB before the reviewers of a round
+	// whose checkout changes SchemaPaths, as the first commands of the
+	// readiness step (see Prepare), so the slot's databases carry the PR's
+	// schema; they have the release's reset_db budget of their own, and
+	// ReadyTimeout starts after them. The release still loads the base
+	// schema. nil = true; read it through ResetsDBOnSchemaChange.
+	ResetDBOnSchemaChange *bool `toml:"reset_db_on_schema_change"`
 	// Prepare and Ready make a round's checks work: before the reviewers
 	// start, the round runs each prepare command (`bin/rails
 	// db:test:prepare`), then each ready probe (exit 0 = ready), in the
@@ -2742,6 +2755,9 @@ func (p Pool) DBNames(slug string) []string
 
 func (p Pool) Path(n int) string
     Path renders the checkout path of slot n.
+
+func (p Pool) ResetsDBOnSchemaChange() bool
+    ResetsDBOnSchemaChange is ResetDBOnSchemaChange with its default (true).
 
 func (p Pool) Slot(n int) string
     Slot renders the name of slot n.
@@ -7928,11 +7944,22 @@ type PreviousReview struct {
     PreviousReview is the reviewer's earlier review of the PR.
 
 type ReadinessPlan struct {
-	Prepare []string // run first, in order (Mutates)
-	Ready   []string // probes, run after them (exit 0 = ready)
-	// Timeout is the budget of the whole step; 0 = config.DefaultReadyTimeout.
-	// A command still running when it ends is stopped (timeout); the ones
-	// after it are skipped.
+	// ResetDB are the pool's reset_db commands when the checkout changes the
+	// pool's schema_paths (the slot is dirty_schema): run before everything
+	// else, in order (Mutates), so the slot's databases carry the PR's
+	// schema. Empty when the checkout does not change it.
+	ResetDB []string
+	// ResetDBTimeout is the budget of the ResetDB commands together, apart
+	// from Timeout: the release's (slots.ResetDBTimeout, also when 0). A
+	// command still running when it ends is stopped (timeout); the reset_db
+	// commands after it are skipped, the others still run.
+	ResetDBTimeout time.Duration
+	Prepare        []string // run next, in order (Mutates)
+	Ready          []string // probes, run after them (exit 0 = ready)
+	// Timeout is the budget of the step's other commands (prepare, ready and
+	// the Ruby check), which starts once the reset is done; 0 =
+	// config.DefaultReadyTimeout. A command still running when it ends is
+	// stopped (timeout); the ones after it are skipped.
 	Timeout time.Duration
 	// Env overlays the daemon's environment: the slot's pool env or the
 	// per-PR worktree env, what the slot's own setup commands get.
@@ -8254,8 +8281,11 @@ func (r *Revealer) Launch(ctx context.Context, opts Options) error
 
 func (r *Revealer) Probe(ctx context.Context) ([]string, error)
     Probe lists the ttys the configured terminal reports for its panes (iTerm2,
-    Terminal.app and WezTerm only). `magnum doctor` uses it to check that
-    scripting works, e.g. that macOS Automation permission was granted.
+    Terminal.app and WezTerm only), which shows that scripting works, e.g.
+    that the macOS Automation permission was granted. `magnum doctor` does
+    not call it: its AppleScript starts a terminal that is not running, and
+    before the permission was decided macOS asks in a dialog that takes focus,
+    while doctor must not open windows (doctor names the permission instead).
 
 func (r *Revealer) Reveal(ctx context.Context, opts Options) (Outcome, error)
     Reveal focuses the existing herdr client when there is one. When the

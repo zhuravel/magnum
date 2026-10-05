@@ -665,10 +665,20 @@ func (e *Engine) slotEnv(job *roundJob) map[string]string {
 
 // readinessPlan is the round's readiness step: the repository's prepare
 // commands and ready probes (config.Config.ReadinessFor), run with the
-// checkout's environment (slotEnv).
+// checkout's environment (slotEnv), after the pool's reset_db when the
+// checkout changes the pool's schema_paths: Slots.Checkout's schema step
+// marked the pool slot dirty_schema (it stays so until the release loads
+// the base schema again, so a later round of the PR reloads too, also
+// after a push that reverted the change), unless the pool's
+// reset_db_on_schema_change is off. The reset has the release's budget
+// (slots.ResetDBTimeout), apart from ready_timeout.
 func (e *Engine) readinessPlan(job *roundJob) pipeline.ReadinessPlan {
 	r := e.cfg.ReadinessFor(job.repo.FullName())
-	return pipeline.ReadinessPlan{Prepare: r.Prepare, Ready: r.Ready, Timeout: r.Timeout, Env: e.slotEnv(job)}
+	plan := pipeline.ReadinessPlan{Prepare: r.Prepare, Ready: r.Ready, Timeout: r.Timeout, Env: e.slotEnv(job)}
+	if p := job.pool; p != nil && job.slot.Kind == store.SlotKindPool && job.slot.DirtySchema && p.ResetsDBOnSchemaChange() {
+		plan.ResetDB, plan.ResetDBTimeout = p.ResetDB, slots.ResetDBTimeout
+	}
+	return plan
 }
 
 // finalizeStaleRuns closes runs earlier rounds left behind (a crash, a

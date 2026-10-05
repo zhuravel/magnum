@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/prompts"
 )
@@ -421,6 +422,58 @@ func TestRoundCarriesTheReadinessPlanAndThePoolEnv(t *testing.T) {
 			// The pool's env with {slot} filled in: the commands run as the slot's own setup does.
 			if want := map[string]string{"WT_BRANCH": "review1"}; !maps.Equal(rd.Env, want) {
 				t.Fatalf("readiness env = %v, want %v", rd.Env, want)
+			}
+		})
+	}
+}
+
+// A checkout that changes the pool's schema_paths (the slot is
+// dirty_schema after it) runs the pool's reset_db in the readiness step,
+// before the reviewers; one that does not change it, a pool without
+// reset_db and reset_db_on_schema_change = false run none. The slot stays
+// dirty_schema, so its release still loads the base schema.
+func TestRoundResetsTheSchemaWhenItsCheckoutChangesIt(t *testing.T) {
+	reset := []string{"bin/rails db:schema:load", "RAILS_ENV=test bin/rails db:schema:load"}
+	off := false
+	tests := []struct {
+		name   string
+		change bool
+		mod    func(p *config.Pool)
+		want   []string
+	}{
+		{"the PR changes the schema", true, func(p *config.Pool) { p.ResetDB = reset }, reset},
+		{"the PR does not change it", false, func(p *config.Pool) { p.ResetDB = reset }, nil},
+		{"the pool has no reset_db", true, func(*config.Pool) {}, nil},
+		{"reset_db_on_schema_change = false", true, func(p *config.Pool) {
+			p.ResetDB, p.ResetDBOnSchemaChange = reset, &off
+		}, nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, func(h *harness) {
+				p := &h.cfg.Pools[0]
+				p.SchemaPaths, p.Prepare = []string{"db/"}, []string{"bin/rails db:test:prepare"}
+				tc.mod(p)
+				h.sl.schemaChange = tc.change
+			})
+			h.reviewedPR(2, "b1")
+			ins := h.rd.all()
+			if len(ins) != 1 {
+				t.Fatalf("rounds: %d", len(ins))
+			}
+			rd := ins[0].Readiness
+			if !slices.Equal(rd.ResetDB, tc.want) || !slices.Equal(rd.Prepare, []string{"bin/rails db:test:prepare"}) {
+				t.Fatalf("readiness = reset_db %q prepare %q, want reset_db %q", rd.ResetDB, rd.Prepare, tc.want)
+			}
+			// The reset has the release's budget, apart from ready_timeout.
+			if tc.want != nil && (rd.ResetDBTimeout != slots.ResetDBTimeout || rd.Timeout != config.DefaultReadyTimeout) {
+				t.Fatalf("budgets = reset_db %s ready %s, want %s and %s", rd.ResetDBTimeout, rd.Timeout, slots.ResetDBTimeout, config.DefaultReadyTimeout)
+			}
+			if want := map[string]string{"WT_BRANCH": "review1"}; !maps.Equal(rd.Env, want) {
+				t.Fatalf("readiness env = %v, want %v", rd.Env, want)
+			}
+			if sl := h.slot("review1"); sl.DirtySchema != tc.change {
+				t.Fatalf("slot dirty_schema = %v, want %v", sl.DirtySchema, tc.change)
 			}
 		})
 	}

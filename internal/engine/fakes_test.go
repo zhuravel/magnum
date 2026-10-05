@@ -761,6 +761,10 @@ type fakeSlots struct {
 	// for a value (or ctx): a round held in its checkout / deps step.
 	checkoutGate    chan struct{}
 	checkoutStarted chan struct{}
+	// schemaChange makes Checkout find that the PR changes the pool's
+	// schema_paths: the slot becomes dirty_schema, as slots.Checkout's
+	// schema step marks it.
+	schemaChange bool
 }
 
 func (f *fakeSlots) record(s string) {
@@ -812,7 +816,15 @@ func (f *fakeSlots) Checkout(ctx context.Context, slot store.Slot, pr store.PR, 
 	if f.moveHead != "" {
 		sha = f.moveHead
 	}
-	return f.st.UpdateSlotFields(ctx, slot.ID, func(u *store.SlotUpdate) { u.Set("checked_out_sha", sha) })
+	f.mu.Lock()
+	schema := f.schemaChange
+	f.mu.Unlock()
+	return f.st.UpdateSlotFields(ctx, slot.ID, func(u *store.SlotUpdate) {
+		u.Set("checked_out_sha", sha)
+		if schema {
+			u.Set("dirty_schema", true)
+		}
+	})
 }
 
 func (f *fakeSlots) CreatePRWorktree(ctx context.Context, _ config.Watch, repo string, pr store.PR, target string) (store.Slot, error) {

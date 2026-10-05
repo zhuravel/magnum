@@ -5,15 +5,52 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/zhuravel/magnum/internal/launchd"
+	"github.com/zhuravel/magnum/internal/reveal"
 )
 
 // doctorStagingWarn is the ~/.codex/.tmp/marketplaces/.staging size worth a warning.
 const doctorStagingWarn = 1 << 30
+
+// doctorGOOS is the OS doctor checks for (a seam for tests).
+var doctorGOOS = runtime.GOOS
+
+// doctorTerminal names, on macOS, the Automation permission `magnum open`
+// and reveal_on_attention need to focus a herdr client in a terminal magnum
+// scripts with AppleScript (Terminal, iTerm2, Ghostty). It does not probe
+// it (reveal.Revealer.Probe could): an AppleScript call starts the terminal
+// when it is not running, and before the operator decided macOS asks in a
+// dialog that takes focus, while doctor must not open windows or take
+// focus. Besides, the permission belongs to the app that sends the events:
+// the terminal doctor runs in here, the LaunchAgent's program for the
+// daemon, so a probe from doctor would not answer for the daemon's
+// reveal_on_attention. WezTerm (`wezterm cli`), a custom launcher and a
+// generic terminal need no permission: no line.
+func doctorTerminal(_ context.Context, d doctorDeps) []doctorCheck {
+	if doctorGOOS != "darwin" {
+		return nil
+	}
+	var app string
+	switch reveal.DetectKind(d.Config.Terminal.App) {
+	case reveal.KindTerminal:
+		app = "Terminal"
+	case reveal.KindITerm:
+		app = "iTerm"
+	case reveal.KindGhostty:
+		app = "Ghostty"
+	default:
+		return nil
+	}
+	return []doctorCheck{{Name: "terminal", Status: doctorSkip,
+		Detail: "terminal " + app + ": scripting not probed (an AppleScript call from doctor could start " + app + " or raise macOS's Automation dialog)",
+		Fix: "if `magnum open` brings " + app + " forward without focusing the herdr tab: System Settings → Privacy & Security → Automation → allow " + app +
+			" for the app that runs magnum (your terminal; the daemon's entry for reveal_on_attention)"}}
+}
 
 // doctorLoginShell checks that a non-interactive login shell sees mise's
 // tools. Codex and Claude run their tool commands as `zsh -lc …`, which skips

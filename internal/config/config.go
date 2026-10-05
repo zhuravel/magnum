@@ -141,6 +141,8 @@ type Daemon struct {
 	ModelLimitCooldown Duration `toml:"model_limit_cooldown"`
 	// ParkIdleAfter parks the live agents of a reviewed PR once all of them
 	// have been idle this long (they resume on the PR's next round); 0 = never.
+	// A PR waiting for a round is parked the same way when its wait is a
+	// pause, a drain, the daily cap or ends more than this far away.
 	// Pinned PRs and PRs with human activity within HumanCooldown are left alone.
 	ParkIdleAfter Duration `toml:"park_idle_after"`
 	// SkipTrivialDeltas are the kinds of change a push may consist of
@@ -445,6 +447,13 @@ type Pool struct {
 	PostCheckout    []string          `toml:"post_checkout"`
 	Databases       []string          `toml:"databases"`
 	Env             map[string]string `toml:"env"`
+	// ResetDBOnSchemaChange runs ResetDB before the reviewers of a round
+	// whose checkout changes SchemaPaths, as the first commands of the
+	// readiness step (see Prepare), so the slot's databases carry the PR's
+	// schema; they have the release's reset_db budget of their own, and
+	// ReadyTimeout starts after them. The release still loads the base
+	// schema. nil = true; read it through ResetsDBOnSchemaChange.
+	ResetDBOnSchemaChange *bool `toml:"reset_db_on_schema_change"`
 	// Prepare and Ready make a round's checks work: before the reviewers
 	// start, the round runs each prepare command (`bin/rails
 	// db:test:prepare`), then each ready probe (exit 0 = ready), in the
@@ -457,6 +466,9 @@ type Pool struct {
 	Ready        []string `toml:"ready"`
 	ReadyTimeout Duration `toml:"ready_timeout"`
 }
+
+// ResetsDBOnSchemaChange is ResetDBOnSchemaChange with its default (true).
+func (p Pool) ResetsDBOnSchemaChange() bool { return boolOr(p.ResetDBOnSchemaChange, true) }
 
 // Slot renders the name of slot n.
 func (p Pool) Slot(n int) string { return strings.ReplaceAll(p.SlotName, "{n}", fmt.Sprint(n)) }

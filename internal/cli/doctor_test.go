@@ -525,3 +525,91 @@ func TestDoctorChecksTheMiseTheLaunchAgentUses(t *testing.T) {
 		t.Fatalf("unreadable plist: %+v", c)
 	}
 }
+
+// Doctor never scripts the terminal: an AppleScript call would start a
+// terminal that is not running and, before the operator decided, raise
+// macOS's Automation dialog, and doctor must not open windows or take
+// focus. On macOS a terminal magnum scripts with AppleScript gets a SKIP
+// line that names where the permission is granted; nothing runs osascript.
+// A terminal it does not script that way, or another OS, gets no line.
+func TestDoctorNamesTheAutomationPermissionWithoutScriptingTheTerminal(t *testing.T) {
+	_, d, _, _ := doctorFixture(t)
+	goos := doctorGOOS
+	t.Cleanup(func() { doctorGOOS = goos })
+	fake := d.Run.(*execx.Fake)
+	for _, tc := range []struct {
+		goos, app string
+		want      string // the terminal named in the fix; "" = no line
+	}{
+		{"darwin", "iTerm2", "iTerm"},
+		{"darwin", "Terminal", "Terminal"},
+		{"darwin", "Ghostty", "Ghostty"},
+		{"darwin", "WezTerm", ""},
+		{"darwin", "custom", ""},
+		{"linux", "iTerm2", ""},
+	} {
+		t.Run(tc.goos+" "+tc.app, func(t *testing.T) {
+			doctorGOOS = tc.goos
+			cfg := *d.Config
+			cfg.Terminal.App = tc.app
+			d := d
+			d.Config = &cfg
+			calls := len(fake.Calls)
+			c, ok := doctorByName(doctorRun(context.Background(), d))["terminal"]
+			for _, call := range fake.Calls[calls:] {
+				if strings.Contains(call.Name, "osascript") || call.Name == "open" || strings.HasSuffix(call.Name, "/open") {
+					t.Errorf("doctor ran %s %q", call.Name, call.Args)
+				}
+			}
+			if tc.want == "" {
+				if ok {
+					t.Fatalf("terminal check = %+v, want none", c)
+				}
+				return
+			}
+			if !ok || c.Status != doctorSkip || !strings.Contains(c.Fix, "Privacy & Security → Automation → allow "+tc.want) {
+				t.Fatalf("terminal check = %+v (found %v), want SKIP naming the Automation permission for %s", c, ok, tc.want)
+			}
+		})
+	}
+}
+
+// A pool that names schema_paths without reset_db never loads a PR's schema
+// (neither before the reviewers nor on release): doctor warns with the fix.
+// A pool that has both says when reset_db runs; one without schema_paths
+// gets no line.
+func TestDoctorWarnsAboutSchemaPathsWithoutResetDB(t *testing.T) {
+	_, d, _, _ := doctorFixture(t)
+	off := false
+	for _, tc := range []struct {
+		name       string
+		pool       config.Pool
+		status     string
+		detail     string
+		fixMention string
+	}{
+		{"schema_paths without reset_db", config.Pool{Repo: "talkable/talkable", SchemaPaths: []string{"db/"}}, doctorWarn,
+			"schema_paths without reset_db", "reset_db"},
+		{"both", config.Pool{Repo: "talkable/talkable", SchemaPaths: []string{"db/"}, ResetDB: []string{"bin/rails db:schema:load"}}, doctorPass,
+			"before the reviewers", ""},
+		{"turned off", config.Pool{Repo: "talkable/talkable", SchemaPaths: []string{"db/"}, ResetDB: []string{"bin/rails db:schema:load"},
+			ResetDBOnSchemaChange: &off}, doctorPass, "on release only", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := *d.Config
+			cfg.Pools = []config.Pool{tc.pool}
+			d := d
+			d.Config = &cfg
+			c, ok := doctorByName(doctorRun(context.Background(), d))["schema talkable/talkable"]
+			if !ok || c.Status != tc.status || !strings.Contains(c.Detail, tc.detail) || !strings.Contains(c.Fix, tc.fixMention) {
+				t.Fatalf("schema check = %+v (found %v), want %s with %q, fix naming %q", c, ok, tc.status, tc.detail, tc.fixMention)
+			}
+		})
+	}
+	cfg := *d.Config
+	cfg.Pools = []config.Pool{{Repo: "talkable/talkable", ResetDB: []string{"bin/rails db:schema:load"}}}
+	d.Config = &cfg
+	if c, ok := doctorByName(doctorRun(context.Background(), d))["schema talkable/talkable"]; ok {
+		t.Fatalf("a pool without schema_paths got a schema check: %+v", c)
+	}
+}

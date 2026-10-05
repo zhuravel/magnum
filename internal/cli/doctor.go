@@ -30,8 +30,9 @@ func newDoctorCmd(c *Context) *cobra.Command {
 		"Check everything magnum depends on: config, herdr (version and socket methods), every agent CLI the "+
 			"configured roles use (on PATH in zsh, logged in, shell wrapper), the judge skill, the role prompts and "+
 			"prompts_dir, gh and each identity, MySQL (when a [[pool]] declares databases), the main clones and their SSH "+
-			"origins, mise (when a pool, the LaunchAgent or your PATH uses it), free disk, codex staging, the launchd agent "+
-			"and the mise it starts the daemon through, the herdr plugin link and the registry. "+
+			"origins, a pool's reset_db when it names schema_paths, mise (when a pool, the LaunchAgent or your PATH uses it), free disk, codex staging, the launchd agent "+
+			"and the mise it starts the daemon through, the terminal's Automation permission on macOS (named, never probed: "+
+			"doctor opens no window), the herdr plugin link and the registry. "+
 			"Each check prints PASS, WARN, FAIL or SKIP with the exact fix. Read-only; exits 1 when a check fails.",
 		func(pos []string) int { return runDoctor(c, asJSON, pos) })
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print JSON")
@@ -151,7 +152,7 @@ func doctorPrint(c *Context, cs []doctorCheck, asJSON bool) int {
 func doctorRun(ctx context.Context, d doctorDeps) []doctorCheck {
 	groups := []func(context.Context, doctorDeps) []doctorCheck{
 		doctorConfig, doctorHerdrChecks, doctorAgentChecks, doctorSkill, doctorPrompts, doctorGH, doctorIdentities, doctorMySQLCheck,
-		doctorClones, doctorMise, doctorLoginShell, doctorDisk, doctorStaging, doctorLaunchd, doctorLaunchdMise, doctorPluginCheck, doctorRegistry,
+		doctorClones, doctorSchemaReset, doctorMise, doctorLoginShell, doctorDisk, doctorStaging, doctorLaunchd, doctorLaunchdMise, doctorTerminal, doctorPluginCheck, doctorRegistry,
 	}
 	out := make([][]doctorCheck, len(groups))
 	var wg sync.WaitGroup

@@ -67,6 +67,30 @@ func doctorClones(ctx context.Context, d doctorDeps) []doctorCheck {
 	return out
 }
 
+// doctorSchemaReset checks that a pool which names schema_paths can load a
+// PR's schema: without reset_db neither the round of a PR that changes the
+// schema nor the release reloads the slot's databases, so the reviewers run
+// the PR's specs against the base schema.
+func doctorSchemaReset(_ context.Context, d doctorDeps) []doctorCheck {
+	var out []doctorCheck
+	for _, p := range d.Config.Pools {
+		if len(p.SchemaPaths) == 0 {
+			continue
+		}
+		name := "schema " + p.Repo
+		switch {
+		case len(p.ResetDB) == 0:
+			out = append(out, doctorWarned(name, "pool "+p.Repo+" names schema_paths without reset_db: the slots' databases keep the base schema, so a PR that changes it is reviewed without its tables and columns",
+				"add reset_db to the [[pool]] in config.toml: the commands that load the checkout's schema into the slot's databases (`bin/rails db:schema:load`, also with RAILS_ENV=test)"))
+		case p.ResetsDBOnSchemaChange():
+			out = append(out, doctorOK(name, "pool "+p.Repo+": reset_db loads a PR's schema before the reviewers when the PR changes schema_paths, and the base schema again on release"))
+		default:
+			out = append(out, doctorOK(name, "pool "+p.Repo+": reset_db runs on release only (reset_db_on_schema_change = false)"))
+		}
+	}
+	return out
+}
+
 func doctorMise(ctx context.Context, d doctorDeps) []doctorCheck {
 	const name = "mise exec"
 	if d.Store == nil {

@@ -103,6 +103,26 @@ editing history. Code, config comments and prompts reference these by their head
 - **Files magnum writes into a checkout go through `os.Root`** so a tracked symlink in the PR cannot
   redirect a write outside the worktree; `.mise.local.toml` is rendered from parsed TOML with token
   keys stripped in every representation.
+- **A PR that changes the schema is reviewed on its schema** (2026-10-05, after 4 of 9 rounds of the pool
+  repository recorded skipped DB specs: a missing table, missing columns, TEXT instead of MEDIUMTEXT, a
+  missing column the PR added). The checkout's schema step only marked the slot `dirty_schema` for its
+  release, so the reviewers ran the PR's specs against the base schema. When the round's checkout leaves
+  the pool slot `dirty_schema` (the PR changes `schema_paths` since its merge base, the test the schema
+  step uses), the pool's `reset_db` commands now run before the reviewers as the first commands of the
+  readiness step: `zsh -lc` in the checkout with the slot's env, recorded in `readiness.json`, the
+  `round.readiness` event and the judge's `readiness` list as `reset_db` checks. The reset has the
+  release's budget for `reset_db` (`slots.ResetDBTimeout`, 30 minutes) of its own, and `ready_timeout`
+  starts after it, so `prepare` and `ready` keep theirs whole however long a dev load, a test load and a
+  seed take; a reset command that outlives the budget is stopped and the ones after it are skipped. A
+  failure does not stop the round; the skill has the judge skip the checks that need the PR's tables and
+  record it under `environment_failures`. The slot stays `dirty_schema`, so the release still loads the
+  base schema, and a later round of the PR reloads too (also after a push that reverted the change: the
+  databases still hold the PR's earlier schema). `[[pool]] reset_db_on_schema_change = false` keeps
+  `reset_db` to the release; `magnum doctor` warns about a pool with `schema_paths` and no `reset_db`.
+  Not rerun when a push restarts the reviewers mid-round. Rejected: running `prepare` instead (a pool may
+  have none, and `db:test:prepare` loads the test database only), counting the reset against
+  `ready_timeout` (5 minutes: a slow reset was cut, or left `prepare` and `ready` skipped), and a key of
+  its own for the reset's budget (the release's timeout already bounds `reset_db`).
 
 ## Scheduling
 
@@ -174,6 +194,15 @@ editing history. Code, config comments and prompts reference these by their head
   reservation; the next round resumes them as after any park. Pinned or held slots and a keystroke within
   `human_cooldown` keep them. Rejected: `min_warm` as the threshold (it governs slot eviction; 30 minutes
   is too short for agents that keep a conversation for the next push).
+- **Idle agents of PRs that wait long are parked too** (2026-10-05, after two `rereview_pending` PRs held 8
+  live agents idle for up to 2 hours under `magnum pause`). A `queued` or `rereview_pending` PR is parked
+  like a reviewed one, after `park_idle_after` of idling, when the wait the last dispatch recorded for it
+  (`pr.<id>.wait`) is `magnum pause` or an infrastructure pause, a drain for a restart, the daily round cap,
+  or any wait that ends more than `park_idle_after` from now; the next round resumes the sessions. A wait
+  without an end (the next dispatch, a slot, capacity, a mute) is not long. A pinned or held slot still
+  keeps its agents whatever the PR waits for, since a person works there, so a wait on a pinned or held
+  slot never parks. Rejected: parking every waiting PR after `park_idle_after` (a quiet period or the
+  next dispatch ends within minutes, and a resume costs the round its warm agents).
 
 ## Agents in panes
 
@@ -1450,3 +1479,16 @@ editing history. Code, config comments and prompts reference these by their head
   Recovery's note says where the round was: before it started, before it prompted any agent, or while
   its reviewers ran. Rejected: refunding and counting the continue instead (its start would move the
   re-review interval to a time no round started, and a crash before the continue would never count it).
+- **Doctor names the terminal's Automation permission and does not probe it** (2026-10-05; a comment said
+  `magnum doctor` used `reveal.Revealer.Probe`, and nothing called it, so a missing permission showed only
+  after the fact, when `magnum open` could only activate the terminal app). Probe cannot run from doctor
+  without a window: its AppleScript (`tell application "iTerm"`) starts a terminal that is not running,
+  and while the operator has not decided the permission macOS asks in a dialog that takes focus, which
+  doctor must never do. The permission also belongs to the app that sends the events (the terminal doctor
+  runs in, the LaunchAgent's program for the daemon), so a probe from doctor would not answer for
+  `reveal_on_attention`. On macOS, a terminal magnum scripts with AppleScript (Terminal, iTerm2,
+  Ghostty) gets a SKIP line with the fix (System Settings → Privacy & Security → Automation → allow it);
+  WezTerm, a custom launcher and a generic terminal need no permission and get none. Probe stays
+  uncalled. Rejected: checking `application "…" is running` first (the dialog remains), and asking
+  `AEDeterminePermissionToAutomateTarget` without a prompt through a JavaScript-for-Automation bridge
+  (untested here, and it still answers for doctor's terminal, not the daemon).

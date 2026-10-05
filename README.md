@@ -244,8 +244,9 @@ The `[usage]` section watches the Codex budget, which Magnum reads from Codex's 
 bar show the gauge (`codex 87%`); `0` turns a cap off.
 
 Once every agent of a reviewed PR has been idle for `[daemon] park_idle_after` (default `"2h"`, `"0"`
-never) its sessions are parked to free memory; the next round resumes them. Pinned PRs and PRs you typed
-into within `human_cooldown` keep their agents.
+never) its sessions are parked to free memory; the next round resumes them. The same goes for a PR whose
+review or re-review waits behind `magnum pause`, a drain, the daily cap, or anything else that ends more than
+`park_idle_after` from now. Pinned PRs and PRs you typed into within `human_cooldown` keep their agents.
 
 ### Identities: who posts
 
@@ -328,7 +329,11 @@ Magnum dismisses that approval before the re-review is queued; `keep_approvals =
 `ready` (probes, exit 0 = ready) on a `[[pool]]` or `[[repo]]` run in the checkout before the
 reviewers, as `zsh -lc` with the slot's env and within `ready_timeout` (5m) together, followed by a
 check that the login shell runs the Ruby the checkout pins; a failure never stops the round, it tells
-the judge what will not work. A watch's `skip_paths` (path globs where `**` spans
+the judge what will not work. When a PR changes a pool's `schema_paths` (such as `["db/"]`), the pool's
+`reset_db` commands run first, the same way but within 30 minutes of their own (as on release, with
+`ready_timeout` starting after them), so the slot's databases carry the PR's tables and columns; the release loads the base schema again. `reset_db_on_schema_change =
+false` on the `[[pool]]` keeps `reset_db` to the release, and `magnum doctor` warns about a pool with
+`schema_paths` and no `reset_db`. A watch's `skip_paths` (path globs where `**` spans
 directories, such as `["docs/**", "**/*.md"]`) skips a PR whose changed files all match, while a forced
 `magnum review` still runs it. See the comments in `config.defaults.toml` for every key.
 
@@ -789,7 +794,9 @@ built binaries (Magnum never opens HTTPS connections of its own; GitHub calls go
 stalling on hostname lookups when no git identity is configured, and login shells that do not see mise:
 Codex and Claude run their tool commands as `zsh -lc`, which skips `.zshrc` and lets macOS put
 `/usr/bin` first, so `eval "$(mise activate zsh --shims)"` belongs in `~/.zprofile`, or every review
-sees the system Ruby and Node.
+sees the system Ruby and Node. On macOS it names the Automation permission `magnum open` needs to focus
+the herdr tab in Terminal, iTerm2 or Ghostty (System Settings → Privacy & Security → Automation) without
+probing it: an AppleScript call would start the terminal or raise macOS's permission dialog.
 
 ## Linux
 

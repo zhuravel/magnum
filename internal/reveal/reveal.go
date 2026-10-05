@@ -220,8 +220,11 @@ func (r *Revealer) FocusExisting(ctx context.Context) (FocusResult, error) {
 }
 
 // Probe lists the ttys the configured terminal reports for its panes (iTerm2,
-// Terminal.app and WezTerm only). `magnum doctor` uses it to check that
-// scripting works, e.g. that macOS Automation permission was granted.
+// Terminal.app and WezTerm only), which shows that scripting works, e.g.
+// that the macOS Automation permission was granted. `magnum doctor` does not
+// call it: its AppleScript starts a terminal that is not running, and before
+// the permission was decided macOS asks in a dialog that takes focus, while
+// doctor must not open windows (doctor names the permission instead).
 func (r *Revealer) Probe(ctx context.Context) ([]string, error) {
 	switch r.kind {
 	case KindITerm, KindTerminal:

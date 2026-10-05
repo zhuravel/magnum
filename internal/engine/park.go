@@ -4,7 +4,10 @@ package engine
 // often for hours (21 processes, about 2.8 GB, idle 10.8 hours on average).
 // Once every live agent of a reviewed PR has been idle for [daemon]
 // park_idle_after the PR's sessions are parked; the next round resumes them
-// as after any park.
+// as after any park. A PR that waits for its round behind a pause, a drain,
+// the daily cap or a wait ending more than park_idle_after away is parked
+// the same way (under `magnum pause`, two re-reviews held 8 agents idle for
+// up to 2 hours).
 
 import (
 	"context"
@@ -17,9 +20,11 @@ import (
 	"github.com/zhuravel/magnum/internal/store"
 )
 
-// parkIdle queues a park for every reviewed PR whose live agents have all
-// been idle longer than park_idle_after (0 = never). The park runs on the
-// heavy worker (parkJob), which checks again under the PR's reservation.
+// parkIdle queues a park for every reviewed PR, and every PR whose round is
+// far off (waitsLong), whose live agents have all been idle longer than
+// park_idle_after (0 = never). It runs right after noteWaits recorded the
+// waits. The park runs on the heavy worker (parkJob), which checks again
+// under the PR's reservation.
 func (e *Engine) parkIdle(ctx context.Context, ts tickState) {
 	after := e.cfg.Daemon.ParkIdleAfter.Duration
 	if after <= 0 || e.d.Agents == nil || !ts.herdrUp {
@@ -52,13 +57,23 @@ func (e *Engine) parkIdle(ctx context.Context, ts tickState) {
 }
 
 // parkable reports whether the PR's live sessions may be parked now: the PR
-// is reviewed, no human typed into its panes within human_cooldown, its
-// slot is neither pinned nor held for a human, and every session is idle
-// (not working or blocked) since before now - after. It returns the PR and
-// when its last session went idle.
+// is reviewed, or waits for a round that is far off (waitsLong), no human
+// typed into its panes within human_cooldown, its slot is neither pinned
+// nor held for a human (whatever the PR waits for), and every session is
+// idle (not working or blocked) since before now - after. It returns the PR
+// and when its last session went idle.
 func (e *Engine) parkable(ctx context.Context, prID int64, sessions []store.Session, now time.Time, after time.Duration) (store.PR, time.Time, bool) {
 	pr, err := e.st.PRByID(ctx, prID)
-	if err != nil || pr.State != store.PRReviewed {
+	if err != nil {
+		return pr, time.Time{}, false
+	}
+	switch pr.State {
+	case store.PRReviewed:
+	case store.PRQueued, store.PRRereviewPending:
+		if !e.waitsLong(ctx, prID, now, after) {
+			return pr, time.Time{}, false
+		}
+	default:
 		return pr, time.Time{}, false
 	}
 	if pr.HumanActiveAt != nil && now.Before(pr.HumanActiveAt.Add(e.cfg.Daemon.HumanCooldown.Duration)) {
@@ -87,6 +102,25 @@ func (e *Engine) parkable(ctx context.Context, prID int64, sessions []store.Sess
 		return pr, last, false
 	}
 	return pr, last, true
+}
+
+// waitsLong reports whether a PR waiting for a round (queued,
+// rereview_pending) will not get one soon, by the wait the last dispatch
+// recorded for it (KVPRWait, noteWaits): `magnum pause` or an
+// infrastructure pause, a drain for a restart, the daily round cap, or any
+// wait that ends more than after from now. A wait without an end (the next
+// dispatch, a slot or capacity, a mute) is not long: it may end any tick.
+func (e *Engine) waitsLong(ctx context.Context, prID int64, now time.Time, after time.Duration) bool {
+	v, _ := e.getKV(ctx, KVPRWait(prID))
+	w, ok := ParseWait(v)
+	if !ok {
+		return false
+	}
+	switch w.Reason {
+	case WaitPaused, WaitInfra, WaitDraining, WaitCap:
+		return true
+	}
+	return w.Until.Sub(now) > after
 }
 
 // parkJob parks the PR's sessions under its slot-work reservation, after

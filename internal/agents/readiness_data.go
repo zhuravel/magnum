@@ -2,7 +2,8 @@ package agents
 
 // Verification readiness (backlog 14): before the reviewers start, a round
 // runs the repository's prepare commands and ready probes ([[repo]] or
-// [[pool]] prepare/ready) and a built-in Ruby check in the checkout, so the
+// [[pool]] prepare/ready), after the pool's reset_db when the PR changes its
+// schema_paths, and a built-in Ruby check in the checkout, so the
 // judge knows up front which checks cannot work on this machine instead of
 // spending agent time rediscovering it. The judge prompt lists the outcome
 // (JudgeData.Readiness); the full results, including each command's last
@@ -10,6 +11,10 @@ package agents
 
 // Readiness check kinds (ReadinessCheck.Kind).
 const (
+	// ReadinessResetDB is a [[pool]] reset_db command, run first when the
+	// PR changes the pool's schema_paths: it loads the PR's schema into the
+	// slot's databases.
+	ReadinessResetDB = "reset_db"
 	ReadinessPrepare = "prepare" // a [[repo]]/[[pool]] prepare command
 	ReadinessReady   = "ready"   // a [[repo]]/[[pool]] ready probe (exit 0 = ready)
 	ReadinessRuby    = "ruby"    // the built-in check that the login shell runs the Ruby the checkout pins
@@ -25,7 +30,7 @@ const (
 
 // ReadinessCheck is one command of the readiness step.
 type ReadinessCheck struct {
-	Kind    string `json:"kind"`    // ReadinessPrepare, ReadinessReady or ReadinessRuby
+	Kind    string `json:"kind"`    // ReadinessResetDB, ReadinessPrepare, ReadinessReady or ReadinessRuby
 	Command string `json:"command"` // as configured (ruby: the version command)
 	OK      bool   `json:"ok"`
 	Status  string `json:"status"` // ReadinessOK, ReadinessFailed, ReadinessTimeout or ReadinessSkipped

@@ -7,7 +7,12 @@ package pipeline
 // the reviewers start, a round now runs the repository's prepare commands
 // and ready probes (config.Config.ReadinessFor) and a built-in Ruby check in
 // the checkout, through the login shell the agents' tools use, and tells
-// the judge what will not work. A failure never stops the round.
+// the judge what will not work. A failure never stops the round. When the
+// PR changes the pool's schema, the pool's reset_db commands run first, the
+// same way but within the release's reset_db budget, and ready_timeout
+// starts after them (4 of 9 rounds of a pool repository skipped DB specs on
+// a table or column the PR added, because the slot's databases had the base
+// schema).
 
 import (
 	"bytes"
@@ -32,16 +37,28 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/gitx"
+	"github.com/zhuravel/magnum/internal/slots"
 )
 
 // ReadinessPlan is a round's readiness step: the repository's commands
 // (config.Readiness) and the slot's environment they run with.
 type ReadinessPlan struct {
-	Prepare []string // run first, in order (Mutates)
-	Ready   []string // probes, run after them (exit 0 = ready)
-	// Timeout is the budget of the whole step; 0 = config.DefaultReadyTimeout.
-	// A command still running when it ends is stopped (timeout); the ones
-	// after it are skipped.
+	// ResetDB are the pool's reset_db commands when the checkout changes the
+	// pool's schema_paths (the slot is dirty_schema): run before everything
+	// else, in order (Mutates), so the slot's databases carry the PR's
+	// schema. Empty when the checkout does not change it.
+	ResetDB []string
+	// ResetDBTimeout is the budget of the ResetDB commands together, apart
+	// from Timeout: the release's (slots.ResetDBTimeout, also when 0). A
+	// command still running when it ends is stopped (timeout); the reset_db
+	// commands after it are skipped, the others still run.
+	ResetDBTimeout time.Duration
+	Prepare        []string // run next, in order (Mutates)
+	Ready          []string // probes, run after them (exit 0 = ready)
+	// Timeout is the budget of the step's other commands (prepare, ready and
+	// the Ruby check), which starts once the reset is done; 0 =
+	// config.DefaultReadyTimeout. A command still running when it ends is
+	// stopped (timeout); the ones after it are skipped.
 	Timeout time.Duration
 	// Env overlays the daemon's environment: the slot's pool env or the
 	// per-PR worktree env, what the slot's own setup commands get.
@@ -65,11 +82,21 @@ const (
 
 // readinessFile is the JSON the step writes (ReadinessFile).
 type readinessFile struct {
-	HeadSHA string                  `json:"head_sha"`
-	RanAt   string                  `json:"ran_at"`
-	Timeout string                  `json:"timeout"`
-	Checks  []agents.ReadinessCheck `json:"checks"`
+	HeadSHA        string                  `json:"head_sha"`
+	RanAt          string                  `json:"ran_at"`
+	Timeout        string                  `json:"timeout"`                    // ready_timeout
+	ResetDBTimeout string                  `json:"reset_db_timeout,omitempty"` // the schema reset's own budget, when it ran
+	Checks         []agents.ReadinessCheck `json:"checks"`
 }
+
+// readinessBudget is the time a phase of the step has: what its checks call
+// it ("ready_timeout") and how long it is.
+type readinessBudget struct {
+	name string
+	d    time.Duration
+}
+
+func (b readinessBudget) String() string { return fmt.Sprintf("%s (%s)", b.name, b.d) }
 
 // readinessCmd is one command of the step.
 type readinessCmd struct {
@@ -84,7 +111,10 @@ func (rd *round) readiness(ctx context.Context) error {
 		return nil
 	}
 	plan := rd.in.Readiness
-	var cmds []readinessCmd
+	var resets, cmds []readinessCmd
+	for _, s := range plan.ResetDB {
+		resets = append(resets, readinessCmd{agents.ReadinessResetDB, s})
+	}
 	for _, s := range plan.Prepare {
 		cmds = append(cmds, readinessCmd{agents.ReadinessPrepare, s})
 	}
@@ -95,35 +125,22 @@ func (rd *round) readiness(ctx context.Context) error {
 	if pinned {
 		cmds = append(cmds, readinessCmd{agents.ReadinessRuby, RubyCheckCommand})
 	}
-	if len(cmds) == 0 {
+	if len(resets)+len(cmds) == 0 {
 		return nil
 	}
 	budget := plan.Timeout
 	if budget <= 0 {
 		budget = config.DefaultReadyTimeout
 	}
-	start := rd.r.now()
-	deadline := start.Add(budget)
-	checks := make([]agents.ReadinessCheck, 0, len(cmds))
-	for _, c := range cmds {
-		check := agents.ReadinessCheck{Kind: c.kind, Command: c.script}
-		left := deadline.Sub(rd.r.now())
-		switch {
-		case ctx.Err() != nil:
-			check.Status, check.Detail = agents.ReadinessSkipped, "the round was cancelled"
-		case left <= 0:
-			check.Status, check.Detail = agents.ReadinessSkipped, fmt.Sprintf("ready_timeout (%s) was spent before it ran", budget)
-		default:
-			check = rd.runReadiness(ctx, c, plan.Env, left, budget)
-			if c.kind == agents.ReadinessRuby && check.Status == agents.ReadinessOK {
-				check = rubyVerdict(check, pin)
-			} else if c.kind == agents.ReadinessRuby && check.Status == agents.ReadinessFailed {
-				check.Detail = fmt.Sprintf("the checkout pins Ruby %s (%s) but `%s` failed (%s)", pin.label(), pin.source, RubyCheckCommand, check.Detail)
-			}
-		}
-		check.OK = check.Status == agents.ReadinessOK
-		checks = append(checks, check)
+	resetBudget := plan.ResetDBTimeout
+	if resetBudget <= 0 {
+		resetBudget = slots.ResetDBTimeout
 	}
+	start := rd.r.now()
+	checks := make([]agents.ReadinessCheck, 0, len(resets)+len(cmds))
+	// The reset runs within its own budget; ready_timeout starts after it.
+	checks = append(checks, rd.runPhase(ctx, resets, plan.Env, readinessBudget{"reset_db's budget", resetBudget}, pin)...)
+	checks = append(checks, rd.runPhase(ctx, cmds, plan.Env, readinessBudget{"ready_timeout", budget}, pin)...)
 	res := agents.Readiness{Checks: checks}
 	for _, c := range checks {
 		if !c.OK {
@@ -131,9 +148,11 @@ func (rd *round) readiness(ctx context.Context) error {
 		}
 	}
 	file := filepath.Join(rd.dir, ReadinessFile)
-	b, err := json.MarshalIndent(readinessFile{
-		HeadSHA: rd.in.TargetSHA, RanAt: start.UTC().Format(time.RFC3339), Timeout: budget.String(), Checks: checks,
-	}, "", "  ")
+	rf := readinessFile{HeadSHA: rd.in.TargetSHA, RanAt: start.UTC().Format(time.RFC3339), Timeout: budget.String(), Checks: checks}
+	if len(resets) > 0 {
+		rf.ResetDBTimeout = resetBudget.String()
+	}
+	b, err := json.MarshalIndent(rf, "", "  ")
 	if err == nil {
 		err = writeFileAtomic(file, append(b, '\n'))
 	}
@@ -152,15 +171,43 @@ func (rd *round) readiness(ctx context.Context) error {
 	return nil
 }
 
+// runPhase runs cmds one after the other within budget, which starts now: a
+// command gets what is left of it, and the ones after a command that spent
+// it are skipped. The Ruby check's outcome is read against pin.
+func (rd *round) runPhase(ctx context.Context, cmds []readinessCmd, env map[string]string, budget readinessBudget, pin rubyPinned) []agents.ReadinessCheck {
+	deadline := rd.r.now().Add(budget.d)
+	checks := make([]agents.ReadinessCheck, 0, len(cmds))
+	for _, c := range cmds {
+		check := agents.ReadinessCheck{Kind: c.kind, Command: c.script}
+		left := deadline.Sub(rd.r.now())
+		switch {
+		case ctx.Err() != nil:
+			check.Status, check.Detail = agents.ReadinessSkipped, "the round was cancelled"
+		case left <= 0:
+			check.Status, check.Detail = agents.ReadinessSkipped, budget.String()+" was spent before it ran"
+		default:
+			check = rd.runReadiness(ctx, c, env, left, budget)
+			if c.kind == agents.ReadinessRuby && check.Status == agents.ReadinessOK {
+				check = rubyVerdict(check, pin)
+			} else if c.kind == agents.ReadinessRuby && check.Status == agents.ReadinessFailed {
+				check.Detail = fmt.Sprintf("the checkout pins Ruby %s (%s) but `%s` failed (%s)", pin.label(), pin.source, RubyCheckCommand, check.Detail)
+			}
+		}
+		check.OK = check.Status == agents.ReadinessOK
+		checks = append(checks, check)
+	}
+	return checks
+}
+
 // runReadiness runs one command as `zsh -lc <script>` in the checkout with
 // at most left of the budget.
-func (rd *round) runReadiness(ctx context.Context, c readinessCmd, env map[string]string, left, budget time.Duration) agents.ReadinessCheck {
+func (rd *round) runReadiness(ctx context.Context, c readinessCmd, env map[string]string, left time.Duration, budget readinessBudget) agents.ReadinessCheck {
 	check := agents.ReadinessCheck{Kind: c.kind, Command: c.script}
-	prepare := c.kind == agents.ReadinessPrepare
+	mutates := c.kind == agents.ReadinessPrepare || c.kind == agents.ReadinessResetDB
 	res, err := rd.r.Exec.Run(ctx, execx.Cmd{
 		Name: ReadinessShell, Args: []string{"-lc", c.script}, Dir: rd.in.SlotPath,
 		Env: maps.Clone(env), Unset: gitx.ScrubbedEnv(), Timeout: left,
-		Mutates: prepare, Probe: !prepare, Label: "readiness " + c.kind,
+		Mutates: mutates, Probe: !mutates, Label: "readiness " + c.kind,
 	})
 	check.Duration = res.Duration.Round(100 * time.Millisecond).String()
 	check.LastLine = lastLine(res, err != nil)
@@ -173,7 +220,7 @@ func (rd *round) runReadiness(ctx context.Context, c readinessCmd, env map[strin
 	case errors.As(err, &exit):
 		check.Status, check.Detail = agents.ReadinessFailed, fmt.Sprintf("exit %d", exit.Code)
 	case errors.Is(err, context.DeadlineExceeded):
-		check.Status, check.Detail = agents.ReadinessTimeout, fmt.Sprintf("stopped when ready_timeout (%s) ran out", budget)
+		check.Status, check.Detail = agents.ReadinessTimeout, "stopped when "+budget.String()+" ran out"
 	default:
 		check.Status, check.Detail = agents.ReadinessFailed, "could not run: "+oneLine(execx.Redact(errorCause(err)))
 	}
