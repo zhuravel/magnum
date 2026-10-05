@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
@@ -25,7 +26,7 @@ import (
 	"github.com/zhuravel/magnum/internal/tui"
 )
 
-const prsUsage = "[--repo owner/name|name] [--view all|magnum|mine|ready] [--sort updated|last-review|reviewer-activity|changes|state] [--desc] [--all] [--json] [--limit N]"
+const prsUsage = "[--repo owner/name|name] [--view all|magnum|mine|ready] [--sort updated|last-review|reviewer-activity|requested|changes|state] [--desc] [--all] [--json] [--limit N]"
 
 func newPRsCmd(c *Context) *cobra.Command {
 	var f prsFlags
@@ -48,14 +49,16 @@ func newPRsCmd(c *Context) *cobra.Command {
 			"review requested) or ready (approved, no changes requested, not a draft); on the live board it is the "+
 			"view the board opens in. "+
 			"--repo shows one repository, --all adds closed and merged PRs, --limit caps the rows. --sort picks the "+
-			"order (updated, last-review, reviewer-activity, changes, state); --desc (the default) puts the newest, "+
-			"latest, most changed or most urgent first and --desc=false reverses the printed rows.",
+			"order (updated, last-review, reviewer-activity, requested, changes, state); --desc (the default) puts the "+
+			"newest, latest, most recently requested, most changed or most urgent first and --desc=false reverses the "+
+			"printed rows. REQUESTED is when a review was last requested of you (starred on the board), else of "+
+			"anyone; requested sorts by it, PRs with no request last.",
 		func(pos []string) int { return runPRs(c, f, pos) })
 	fs := cmd.Flags()
 	fs.StringVar(&f.repo, "repo", "", "show one repository (owner/name or name)")
 	fs.StringVar(&f.view, "view", string(tui.ViewAll), "rows: all, magnum, mine or ready (v cycles them on the board)")
-	fs.StringVar(&f.sort, "sort", string(tui.SortUpdated), "order: updated, last-review, reviewer-activity, changes or state")
-	fs.BoolVar(&f.desc, "desc", true, "largest first (newest, latest, most changed, most urgent); --desc=false reverses")
+	fs.StringVar(&f.sort, "sort", string(tui.SortUpdated), "order: updated, last-review, reviewer-activity, requested, changes or state")
+	fs.BoolVar(&f.desc, "desc", true, "largest first (newest, latest, most recently requested, most changed, most urgent); --desc=false reverses")
 	fs.BoolVar(&f.all, "all", false, "also list closed and merged PRs")
 	fs.BoolVar(&f.json, "json", false, "print JSON")
 	fs.IntVar(&f.limit, "limit", 0, "show at most N PRs (0 = all)")
@@ -417,6 +420,7 @@ func prsBoardRow(b store.BoardRow, self []string) tui.PRBoardRow {
 	if r.Ref == "" && b.Owner != "" && b.Name != "" && b.Number > 0 {
 		r.Ref = fmt.Sprintf("%s/%s#%d", b.Owner, b.Name, b.Number)
 	}
+	r.RequestedToMe, r.LastRequest, r.Requests = prsRequests(b.ReviewRequests, mine)
 	if b.ReviewedSHA != "" || b.LastReviewEvent != "" || !b.LastReviewAt.IsZero() {
 		r.LastReview = &tui.ReviewInfo{
 			Login: b.LastReviewLogin, Event: b.LastReviewEvent, SubmittedAt: b.LastReviewAt, CommitSHA: b.ReviewedSHA,
@@ -489,6 +493,40 @@ func prsBoardRow(b store.BoardRow, self []string) tui.PRBoardRow {
 	return r
 }
 
+// prsRequests sums up a PR's review requests (oldest first, as the registry
+// keeps them): the latest request to each reviewer, newest first, with the
+// latest of them all and the latest asking one of mine ("mine" is keyed by
+// prsLoginKey, which is what the ★ means everywhere). A request without a
+// reviewer or a time says nothing and is left out.
+func prsRequests(list []store.ReviewRequest, mine map[string]bool) (toMe, last *tui.RequestInfo, per []tui.RequestInfo) {
+	index := map[string]int{}
+	for _, q := range list {
+		if q.To == "" || q.At.IsZero() {
+			continue
+		}
+		info := tui.RequestInfo{To: q.To, By: q.By, At: q.At, Mine: mine[prsLoginKey(q.To)]}
+		if i, ok := index[prsAccountKey(q.To)]; ok {
+			if !info.At.Before(per[i].At) {
+				per[i] = info
+			}
+			continue
+		}
+		index[prsAccountKey(q.To)] = len(per)
+		per = append(per, info)
+	}
+	slices.SortStableFunc(per, func(a, b tui.RequestInfo) int { return b.At.Compare(a.At) })
+	if len(per) == 0 {
+		return nil, nil, nil
+	}
+	newest := per[0]
+	last = &newest
+	if i := slices.IndexFunc(per, func(q tui.RequestInfo) bool { return q.Mine }); i >= 0 {
+		asked := per[i]
+		toMe = &asked
+	}
+	return toMe, last, per
+}
+
 // prsDefaultRepo is daemon.default_repo ("" without a config).
 func prsDefaultRepo(cfg *config.Config) string {
 	if cfg == nil {
@@ -504,7 +542,7 @@ func prsRender(w io.Writer, rows []tui.PRBoardRow, defaultRepo string, now time.
 		return
 	}
 	tw := inspTable(w)
-	fmt.Fprintln(tw, "REF\tTITLE\tAUTHOR\tASSIGNEE\tUPDATED\tSTATE\tLAST REVIEW\tFINDINGS\tCI\tSINCE\tREVIEWERS")
+	fmt.Fprintln(tw, "REF\tTITLE\tAUTHOR\tASSIGNEE\tUPDATED\tREQUESTED\tSTATE\tLAST REVIEW\tFINDINGS\tCI\tSINCE\tREVIEWERS")
 	for _, r := range rows {
 		cells := []string{
 			prsRefLabel(r, defaultRepo),
@@ -512,6 +550,7 @@ func prsRender(w io.Writer, rows []tui.PRBoardRow, defaultRepo string, now time.
 			inspOrDash(actClean(r.Author)),
 			inspOrDash(actClean(strings.Join(r.Assignees, ","))),
 			actAgo(now, r.UpdatedAt),
+			prsRequestedCell(r, now),
 			prsStateCell(r),
 			prsLastReviewCell(r.LastReview, now),
 			prsFindingsCell(r.Findings),
@@ -533,6 +572,28 @@ func prsRefLabel(r tui.PRBoardRow, defaultRepo string) string {
 		return actRefLabel(defaultRepo, r.Owner+"/"+r.Repo, r.Number)
 	}
 	return actClean(r.Ref)
+}
+
+// prsRequestedCell is the review request the board's REQUESTED column shows:
+// the latest to me, else the latest to anyone, "me 2h by alice" or
+// "bob 3d by alice"; "-" when the PR shows none.
+func prsRequestedCell(r tui.PRBoardRow, now time.Time) string {
+	q := r.RequestedToMe
+	if q == nil {
+		q = r.LastRequest
+	}
+	if q == nil || q.At.IsZero() {
+		return "-"
+	}
+	to := actClean(q.To)
+	if r.RequestedToMe != nil {
+		to = "me"
+	}
+	s := to + " " + actAgo(now, q.At)
+	if q.By != "" {
+		s += " by " + actClean(q.By)
+	}
+	return s
 }
 
 // prsStateCell is the magnum state with the flags that matter
@@ -689,6 +750,7 @@ func completeSorts(string) []cobra.Completion {
 		tui.SortUpdated:          "newest update first",
 		tui.SortLastReview:       "latest review first",
 		tui.SortReviewerActivity: "latest verdict by anyone first",
+		tui.SortRequested:        "latest review request first (yours, else anyone's)",
 		tui.SortChanges:          "most lines changed since the review first",
 		tui.SortState:            "most urgent state first",
 	}

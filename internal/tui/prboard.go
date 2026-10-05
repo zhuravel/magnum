@@ -129,6 +129,21 @@ type PRBoardRow struct {
 	// Note is a one-line remark about the last review shown under LAST REVIEW
 	// on the card (e.g. "comment-only push skipped (a7b3f8c → 602da9d)").
 	Note string
+
+	// RequestedToMe is the latest review request that asked one of the self
+	// logins; LastRequest the latest one whoever it asked; Requests the
+	// latest request to each reviewer, newest first. Nil or empty when the
+	// registry knows none (only the newest ten requests of a PR are kept).
+	RequestedToMe, LastRequest *RequestInfo
+	Requests                   []RequestInfo
+}
+
+// RequestInfo is a review request: who was asked, by whom and when.
+type RequestInfo struct {
+	To   string // the reviewer: a login (a bot's keeps "[bot]") or "team:<slug>"
+	By   string // who asked; "" when unknown (a deleted account)
+	At   time.Time
+	Mine bool // To is one of the self logins
 }
 
 // ReviewInfo is the latest review on a PR.
@@ -168,11 +183,12 @@ const (
 	SortUpdated          PRSort = "updated"           // newest update first
 	SortLastReview       PRSort = "last-review"       // latest review first
 	SortReviewerActivity PRSort = "reviewer-activity" // latest verdict by anyone first
+	SortRequested        PRSort = "requested"         // latest review request first
 	SortChanges          PRSort = "changes"           // most lines changed since the review first
 	SortState            PRSort = "state"             // most urgent state first
 )
 
-var prSortOrder = []PRSort{SortUpdated, SortLastReview, SortReviewerActivity, SortChanges, SortState}
+var prSortOrder = []PRSort{SortUpdated, SortLastReview, SortReviewerActivity, SortRequested, SortChanges, SortState}
 
 // PRSorts lists the sorts in the order the s key cycles through them.
 func PRSorts() []PRSort { return slices.Clone(prSortOrder) }
@@ -279,9 +295,10 @@ func RunPRBoard(ctx context.Context, src PRBoardSource, act DashboardActions, op
 
 // SortPRBoard returns a copy of rows in the given order; desc puts the
 // largest key first (newest update, latest review, most recent verdict,
-// most lines changed, most urgent state). Rows lacking the key (never
-// reviewed, no delta) come last either way; ties put the newest update
-// first, then order by ref. An unknown sort means SortUpdated.
+// newest request, most lines changed, most urgent state). Rows lacking the
+// key (never reviewed, no request, no delta) come last either way; ties put
+// the newest update first, then order by ref. An unknown sort means
+// SortUpdated.
 func SortPRBoard(rows []PRBoardRow, by PRSort, desc bool) []PRBoardRow {
 	out := slices.Clone(rows)
 	key := prSortKey(by)
@@ -321,6 +338,14 @@ func prSortKey(by PRSort) func(PRBoardRow) (int64, bool) {
 		}
 	case SortReviewerActivity:
 		return func(r PRBoardRow) (int64, bool) { return at(latestVerdict(r)) }
+	case SortRequested:
+		return func(r PRBoardRow) (int64, bool) {
+			q, ok := shownRequest(r)
+			if !ok {
+				return 0, false
+			}
+			return at(q.At)
+		}
 	case SortChanges:
 		return func(r PRBoardRow) (int64, bool) {
 			d := r.SinceReview
@@ -333,6 +358,18 @@ func prSortKey(by PRSort) func(PRBoardRow) (int64, bool) {
 		return func(r PRBoardRow) (int64, bool) { return int64(stateUrgency(r.State)), true }
 	}
 	return func(r PRBoardRow) (int64, bool) { return at(r.UpdatedAt) }
+}
+
+// shownRequest is the review request the REQUESTED column shows and the
+// requested sort orders by: the latest to me, else the latest of all;
+// false when the PR has none (or none with a time).
+func shownRequest(r PRBoardRow) (RequestInfo, bool) {
+	for _, q := range []*RequestInfo{r.RequestedToMe, r.LastRequest} {
+		if q != nil && !q.At.IsZero() {
+			return *q, true
+		}
+	}
+	return RequestInfo{}, false
 }
 
 // latestVerdict is when anyone last reviewed the PR.
@@ -569,6 +606,21 @@ func sanitizeRow(r PRBoardRow) PRBoardRow {
 		}
 		r.Reviewers = revs
 	}
+	if r.RequestedToMe != nil {
+		q := cleanRequest(*r.RequestedToMe)
+		r.RequestedToMe = &q
+	}
+	if r.LastRequest != nil {
+		q := cleanRequest(*r.LastRequest)
+		r.LastRequest = &q
+	}
+	if r.Requests != nil {
+		qs := make([]RequestInfo, len(r.Requests))
+		for i, q := range r.Requests {
+			qs[i] = cleanRequest(q)
+		}
+		r.Requests = qs
+	}
 	if r.SinceReview != nil {
 		d := *r.SinceReview
 		d.Base, d.BaseSHA = cleanText(d.Base), cleanText(d.BaseSHA)
@@ -598,6 +650,11 @@ func sanitizeRow(r PRBoardRow) PRBoardRow {
 		r.LastRound = &lr
 	}
 	return r
+}
+
+func cleanRequest(q RequestInfo) RequestInfo {
+	q.To, q.By = cleanText(q.To), cleanText(q.By)
+	return q
 }
 
 // cleanText drops escape sequences and control characters and folds

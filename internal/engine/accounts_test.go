@@ -35,6 +35,41 @@ func TestFillDetailsKeepsABotReviewersSuffix(t *testing.T) {
 	}
 }
 
+// The registry keeps when each review was requested, of whom and by whom,
+// with the reviewer named the way requested_reviewers_json names them: an
+// App keeps its "[bot]" (an App named like the user is not the user), a team
+// is "team:<slug>". The newest requests come last, as GitHub lists them;
+// a PR whose timeline holds none stores an empty list, which replaces an
+// older one.
+func TestFillDetailsKeepsWhenAndWhoRequestedAReview(t *testing.T) {
+	at := time.Date(2026, 3, 4, 12, 0, 0, 0, time.FixedZone("EET", 2*3600))
+	var in store.GitHubPR
+	fillDetails(&in, github.PRDetails{ReviewRequestEvents: []github.ReviewRequestEvent{
+		{CreatedAt: at, Actor: "alice", Reviewer: github.Reviewer{Type: "User", Login: "zhuravel"}},
+		{CreatedAt: at.Add(time.Hour), Actor: "alice", Reviewer: github.Reviewer{Type: "Bot", Login: "zhuravel"}},
+		{CreatedAt: at.Add(2 * time.Hour), Actor: "", Reviewer: github.Reviewer{Type: "Team", Login: "core"}},
+	}}, nil, time.Now())
+	want := []store.ReviewRequest{
+		{At: at.UTC(), By: "alice", To: "zhuravel"},
+		{At: at.Add(time.Hour).UTC(), By: "alice", To: "zhuravel[bot]"},
+		{At: at.Add(2 * time.Hour).UTC(), By: "", To: store.TeamReviewerPrefix + "core"},
+	}
+	if len(in.ReviewRequests) != len(want) {
+		t.Fatalf("review requests %+v, want %+v", in.ReviewRequests, want)
+	}
+	for i, w := range want {
+		if g := in.ReviewRequests[i]; !g.At.Equal(w.At) || g.At.Location() != time.UTC || g.By != w.By || g.To != w.To {
+			t.Errorf("review request %d = %+v, want %+v", i, g, w)
+		}
+	}
+
+	var none store.GitHubPR
+	fillDetails(&none, github.PRDetails{}, nil, time.Now())
+	if none.ReviewRequests == nil || len(none.ReviewRequests) != 0 {
+		t.Fatalf("no events: review requests %#v, want an empty non-nil list (nil keeps the stored one)", none.ReviewRequests)
+	}
+}
+
 // The approval magnum follows is an App identity's: a review by the user
 // named like the App is never dismissed with the App's token, and of two
 // installations of one App (one login) the PR's own identity posts.

@@ -4262,6 +4262,12 @@ type Cmd struct {
 	// this a git repository? does this ref exist?): a failed exit is logged
 	// at Debug instead of Warn. Start failures and timeouts still warn.
 	Probe bool
+	// NoTTY starts the process in a new session, without a controlling
+	// terminal (setsid), as launchd starts the daemon. An interactive shell
+	// (`zsh -ic`) run from a CLI in a terminal otherwise shares that
+	// terminal from a background process group, where shell startup that
+	// touches the terminal stops it until the timeout.
+	NoTTY bool
 }
     Cmd describes one subprocess.
 
@@ -8457,6 +8463,9 @@ type BoardRow struct {
 	// are fetched; CI.State trails CIState while a Details fetch fails.
 	CIState string    `json:"ci_state"`
 	CI      *CIStatus `json:"ci"`
+	// ReviewRequests are the newest review requests of the PR (at most 10,
+	// oldest first; empty until the next Details fetch).
+	ReviewRequests []ReviewRequest `json:"review_requests"`
 }
     BoardRow is one PR as the board shows it: the prs row flattened with its
     repository and its current slot. Empty strings, zero times and nil pointers
@@ -8589,6 +8598,9 @@ type GitHubPR struct {
 	// Changed: CI moving changes no eligibility and queues nothing.
 	CIState *string
 	CI      *CIStatus
+	// ReviewRequests are the timeline's newest review requests, oldest first
+	// (nil = keep). Not Changed either: a request moves no eligibility.
+	ReviewRequests []ReviewRequest
 
 	// InitialState and Identity are used only when the PR is new.
 	InitialState string
@@ -8698,6 +8710,10 @@ type PR struct {
 	// CI (ci_json) is the head's checks as the last Details fetch saw them;
 	// nil until then.
 	CI *CIStatus `json:"ci"`
+	// ReviewRequests (migration 0009, review_requests_json) are the newest
+	// review requests of the PR's timeline, oldest first; empty until the
+	// next Details fetch.
+	ReviewRequests []ReviewRequest `json:"review_requests"`
 }
     PR is one pull request and its automation state.
 
@@ -8763,6 +8779,14 @@ type RequiredChecks struct {
 }
     RequiredChecks is the list of checks a repository's PRs must pass to be
     ready, and where it comes from.
+
+type ReviewRequest struct {
+	At time.Time `json:"at"`
+	By string    `json:"by"` // who asked ("" for a deleted account); as GitHub's GraphQL names them, without "[bot]"
+	To string    `json:"to"` // who was asked: Account form (github.Account), or "team:<slug>"
+}
+    ReviewRequest is one entry of prs.review_requests_json: a review asked of
+    one reviewer.
 
 type ReviewSummary struct {
 	RunID           string    `json:"run_id"`
@@ -9306,8 +9330,9 @@ type Update struct {
 
     Accepted values: nil (NULL), string, bool, int, int64, float64, time.Time
     (the zero time stores NULL), pointers to those (nil pointer = NULL),
-    []string, map[string]string, []LatestReview, SinceReview and *SinceReview
-    (stored as JSON; a nil *SinceReview stores NULL) and json.RawMessage.
+    []string, map[string]string, []LatestReview, []ReviewRequest, SinceReview
+    and *SinceReview (stored as JSON; a nil *SinceReview stores NULL) and
+    json.RawMessage.
 
 func (u *Update) Copy(dst, src string)
     Copy sets column dst to the row's current value of src (read before the
@@ -9740,6 +9765,13 @@ type PRBoardRow struct {
 	// Note is a one-line remark about the last review shown under LAST REVIEW
 	// on the card (e.g. "comment-only push skipped (a7b3f8c → 602da9d)").
 	Note string
+
+	// RequestedToMe is the latest review request that asked one of the self
+	// logins; LastRequest the latest one whoever it asked; Requests the
+	// latest request to each reviewer, newest first. Nil or empty when the
+	// registry knows none (only the newest ten requests of a PR are kept).
+	RequestedToMe, LastRequest *RequestInfo
+	Requests                   []RequestInfo
 }
     PRBoardRow is one pull request on the PR board. Ref is what actions receive;
     Owner, Repo and Number label the row (Ref is parsed when they are empty).
@@ -9749,11 +9781,11 @@ func FilterPRBoard(rows []PRBoardRow, v PRView, selfLogins []string) []PRBoardRo
     that count as "me" (PRBoardOptions.SelfLogins).
 
 func SortPRBoard(rows []PRBoardRow, by PRSort, desc bool) []PRBoardRow
-    SortPRBoard returns a copy of rows in the given order; desc puts the largest
-    key first (newest update, latest review, most recent verdict, most lines
-    changed, most urgent state). Rows lacking the key (never reviewed, no delta)
-    come last either way; ties put the newest update first, then order by ref.
-    An unknown sort means SortUpdated.
+    SortPRBoard returns a copy of rows in the given order; desc puts the
+    largest key first (newest update, latest review, most recent verdict,
+    newest request, most lines changed, most urgent state). Rows lacking the key
+    (never reviewed, no request, no delta) come last either way; ties put the
+    newest update first, then order by ref. An unknown sort means SortUpdated.
 
 type PRBoardSource interface {
 	Rows(ctx context.Context) ([]PRBoardRow, error)
@@ -9780,6 +9812,7 @@ const (
 	SortUpdated          PRSort = "updated"           // newest update first
 	SortLastReview       PRSort = "last-review"       // latest review first
 	SortReviewerActivity PRSort = "reviewer-activity" // latest verdict by anyone first
+	SortRequested        PRSort = "requested"         // latest review request first
 	SortChanges          PRSort = "changes"           // most lines changed since the review first
 	SortState            PRSort = "state"             // most urgent state first
 )
@@ -9865,6 +9898,14 @@ type PickerOptions struct {
 	Now   func() time.Time // clock for "reviewed 2h ago" in the y/N question; default time.Now
 }
     PickerOptions tune the picker.
+
+type RequestInfo struct {
+	To   string // the reviewer: a login (a bot's keeps "[bot]") or "team:<slug>"
+	By   string // who asked; "" when unknown (a deleted account)
+	At   time.Time
+	Mine bool // To is one of the self logins
+}
+    RequestInfo is a review request: who was asked, by whom and when.
 
 type ReviewDelta struct {
 	Base                                 string

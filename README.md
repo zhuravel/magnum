@@ -389,7 +389,7 @@ code; `magnum stats` reports them per role.
 | Command | What it does |
 |---|---|
 | `magnum init [--force]` | Write `~/.config/magnum/config.toml` for this machine from three questions: your gh login, one repository, who posts (your login or a GitHub App). |
-| `magnum prs [--repo …] [--view all\|magnum\|mine\|ready] [--sort updated\|last-review\|reviewer-activity\|changes\|state] [--all] [--json]` | The PR board: every watched PR with its last review, each reviewer's verdict (with staleness), what changed since the last review, assignees. `--view` keeps what Magnum reviewed, what is yours or what is ready to merge. Live screen on a terminal, table or JSON otherwise. |
+| `magnum prs [--repo …] [--view all\|magnum\|mine\|ready] [--sort updated\|last-review\|reviewer-activity\|requested\|changes\|state] [--all] [--json]` | The PR board: every watched PR with its last review, each reviewer's verdict (with staleness), when a review was last requested (and whether of you), what changed since the last review, assignees. `--view` keeps what Magnum reviewed, what is yours or what is ready to merge. Live screen on a terminal, table or JSON otherwise. |
 | `magnum status [<ref>\|<slot>] [--all] [--sizes] [--json] [--watch]` | Daemon, slots, queue, pauses; a PR's detail card with its review history and the last round's stage timings. `--watch` is the live dashboard (`tab` flips to the PR board). |
 | `magnum stats [--since 7d] [--repo owner/name] [--json]` | Review statistics per local day and repository over a window (`--since` takes `7d`, `36h`, `90m` or a date; default 7d): rounds started and how they ended, findings posted by priority, median and p90 durations per role and per round, how many findings each source raised, had posted, had posted alone or had rejected (with reason codes), and model switches, denied prompts and round restarts. |
 | `magnum eval run\|score\|list\|show` | Measure a prompt, skill or model change: `run` replays the PRs with known defects in `~/.config/magnum/eval.toml` (see `eval.toml.example`) at their pinned heads as blind dry runs and reports, per case, the seeded defects the planned review found, at what severity, and its other findings (noise), next to the previous run. `score` re-scores a run after a match rule is fixed, without the agents. |
@@ -417,13 +417,18 @@ identities, roles and sorts from config.
 
 <!-- screenshot placeholder: assets/prs.png -->
 
-One row per open PR, newest activity first: repository and PR number (two columns, so a long repository name never hides the number), title, author, assignee, updated age, Magnum's state
-badge, the last review (who, verdict, age, ⟳ when the head moved since), what changed since
+One row per open PR, newest activity first: repository and PR number (two columns, so a long repository name never hides the number), title, author, assignee, updated age, when a review was last requested
+(`★ 2h` when of you, also for an older PR whose author asked again; the dimmed age of the latest request
+when of someone else; it comes from the PR's timeline, which Magnum reads for the newest ten requests),
+Magnum's state badge, the last review (who, verdict, age, ⟳ when the head moved since), what changed since
 (`3c +41 −7`), and reviewer chips with a verdict glyph each (✔ approved, ✗ changes requested,
 💬 commented, ◌ requested, ⟳ stale); yours and Magnum's are starred, and a bot's login carries the bot
 mark (🤖, or `[bot]` in ASCII), so an App named like you (`zhuravel[bot]`) never reads as you. `enter` opens the card with the full
-per-reviewer table and the last round's stage timings (fetch/checkout, each role, verify, total); `/`
-filters; `v` cycles the views; `s`/`S` sort; `r`, `R`, `i` start review variants; `o` opens the pane;
+per-reviewer table (and a line with the latest request to each reviewer: who asked and when) and the last
+round's stage timings (fetch/checkout, each role, verify, total); `/`
+filters; `v` cycles the views; `s`/`S` sort (updated, last review, reviewer activity, requested, changes,
+state; the requested sort puts the newest request first, the one the column shows, and PRs nobody asked
+last); `r`, `R`, `i` start review variants; `o` opens the pane;
 `p`/`u` pin; `x` releases; `M`/`U` mute; `K` kills the running review; `I` ignores the PR (an ignored
 row is greyed with its title struck through, and `U` unmutes it, which stops ignoring it); `A` approves
 and `C` requests changes as the PR's posting identity (see `magnum approve`); `b` opens the browser;

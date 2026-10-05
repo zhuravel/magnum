@@ -350,6 +350,7 @@ const (
 	colAuthor
 	colAssignee
 	colUpdated
+	colRequested // when a review was last requested, starred when from me
 	colState
 	colLastReview
 	colFindings
@@ -359,15 +360,15 @@ const (
 	prbNumCols
 )
 
-var prbColTitles = [prbNumCols]string{"REPO", "#", "TITLE", "AUTHOR", "ASSIGNEE", "UPDATED", "STATE", "LAST REVIEW", "FINDINGS", "CI", "SINCE REVIEW", "REVIEWERS"}
+var prbColTitles = [prbNumCols]string{"REPO", "#", "TITLE", "AUTHOR", "ASSIGNEE", "UPDATED", "REQUESTED", "STATE", "LAST REVIEW", "FINDINGS", "CI", "SINCE REVIEW", "REVIEWERS"}
 
 var (
 	// prbDropOrder is which columns give way, in turn, on a narrow screen.
-	prbDropOrder = []prbCol{colAssignee, colSince, colAuthor, colUpdated, colCI, colLastReview, colReviewers, colFindings}
+	prbDropOrder = []prbCol{colAssignee, colSince, colAuthor, colRequested, colUpdated, colCI, colLastReview, colReviewers, colFindings}
 	// prbFlexMin is the narrowest the flexible columns get; the others
 	// keep their content's width (up to prbCap).
 	prbFlexMin = map[prbCol]int{colTitle: 18, colReviewers: 12}
-	prbCap     = map[prbCol]int{colRef: 28, colNum: 7, colAuthor: 14, colAssignee: 14, colLastReview: 22, colFindings: 22, colCI: 24, colReviewers: 44}
+	prbCap     = map[prbCol]int{colRef: 28, colNum: 7, colAuthor: 14, colAssignee: 14, colRequested: 10, colLastReview: 22, colFindings: 22, colCI: 24, colReviewers: 44}
 	// prbRichFindingsCap is the findings' cap when priorities carry marks
 	// (two cells each) and the verdict is an emoji.
 	prbRichFindingsCap = 32
@@ -383,6 +384,8 @@ func sortColumn(s PRSort) prbCol {
 		return colLastReview
 	case SortReviewerActivity:
 		return colReviewers
+	case SortRequested:
+		return colRequested
 	case SortChanges:
 		return colSince
 	case SortState:
@@ -401,6 +404,7 @@ type prbPainter struct {
 	all     []PRBoardRow // every row in scope: counts and column widths
 	owners  bool         // rows span several owners, so refs name them
 	anyMine bool         // some last review is mine: that column keeps room for ★
+	anyAsk  bool         // some review was requested from me: the requested column keeps room for ★
 	sort    PRSort
 	desc    bool
 	judge   string // PRBoardOptions.Judge
@@ -416,6 +420,9 @@ func newPRBPainter(st styles, pal prbPalette, g glyphs, now time.Time, self map[
 		}
 		if r.LastReview != nil && p.isMine(r.LastReview.Login, r.LastReview.Mine) {
 			p.anyMine = true
+		}
+		if q := r.RequestedToMe; q != nil && !q.At.IsZero() {
+			p.anyAsk = true
 		}
 	}
 	p.owners = len(owners) > 1
@@ -464,6 +471,7 @@ func (p prbPainter) cells(r PRBoardRow, since [3]int) prbCells {
 	cs.c[colAuthor] = p.loginCell(r.Author)
 	cs.c[colAssignee] = p.assigneeCell(r.Assignees)
 	cs.c[colUpdated] = p.ageCell(r.UpdatedAt)
+	cs.c[colRequested] = p.requestedCell(r)
 	cs.c[colState] = p.stateWaitCell(r)
 	cs.c[colLastReview] = p.lastReviewCell(r.LastReview)
 	cs.c[colFindings] = p.findingsCell(r.Findings)
@@ -593,6 +601,26 @@ func (p prbPainter) ageCell(t time.Time) cell {
 		st = p.st.Dim
 	}
 	return cell{{shortAge(d), st}}
+}
+
+// requestedCell is when a review was last requested: the star and the age of
+// the latest request to me ("★ 2h"), else the age of the latest request to
+// anyone, dimmed (and indented past the star when some other row has one, so
+// the ages line up); a dash when the PR shows none.
+func (p prbPainter) requestedCell(r PRBoardRow) cell {
+	q, ok := shownRequest(r)
+	if !ok {
+		return p.dash()
+	}
+	age := shortAge(max(p.now.Sub(q.At), 0))
+	if r.RequestedToMe != nil && !r.RequestedToMe.At.IsZero() {
+		return cell{{p.g.mine + " ", p.pal.mine}, {age, lipgloss.Style{}}}
+	}
+	c := cell{{age, p.st.Dim}}
+	if p.anyAsk {
+		c = append(cell{{spaces(ansi.StringWidth(p.g.mine) + 1), lipgloss.Style{}}}, c...)
+	}
+	return c
 }
 
 // stateWaitCell is the state pill followed, for a PR waiting for a round,
@@ -1044,7 +1072,7 @@ func (l prbLayout) total() int {
 type prbWidths [prbNumCols]int
 
 // prbColNames name the columns for ColumnWidths.
-var prbColNames = [prbNumCols]string{"repo", "num", "title", "author", "assignee", "updated", "state", "last_review", "findings", "ci", "since_review", "reviewers"}
+var prbColNames = [prbNumCols]string{"repo", "num", "title", "author", "assignee", "updated", "requested", "state", "last_review", "findings", "ci", "since_review", "reviewers"}
 
 // prbWidthsFrom reads kept widths by column name.
 func prbWidthsFrom(m map[string]int) prbWidths {
@@ -1134,7 +1162,7 @@ func (p prbPainter) fit(n prbNatural, width int, over prbWidths) prbLayout {
 		}
 		return t
 	}
-	cols := []prbCol{colRef, colNum, colTitle, colAuthor, colAssignee, colUpdated, colState, colLastReview, colFindings, colCI, colSince, colReviewers}
+	cols := []prbCol{colRef, colNum, colTitle, colAuthor, colAssignee, colUpdated, colRequested, colState, colLastReview, colFindings, colCI, colSince, colReviewers}
 	for _, d := range prbDropOrder {
 		if width <= 0 || need(cols) <= width {
 			break

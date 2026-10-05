@@ -19,8 +19,8 @@ import (
 //
 // Accepted values: nil (NULL), string, bool, int, int64, float64, time.Time
 // (the zero time stores NULL), pointers to those (nil pointer = NULL),
-// []string, map[string]string, []LatestReview, SinceReview and *SinceReview
-// (stored as JSON; a nil *SinceReview stores NULL) and json.RawMessage.
+// []string, map[string]string, []LatestReview, []ReviewRequest, SinceReview and
+// *SinceReview (stored as JSON; a nil *SinceReview stores NULL) and json.RawMessage.
 type Update struct {
 	table    *tableSpec
 	sets     []string
@@ -185,6 +185,12 @@ func dbValue(v any) (any, error) {
 	case []LatestReview:
 		if x == nil {
 			x = []LatestReview{}
+		}
+		b, err := json.Marshal(x)
+		return string(b), err
+	case []ReviewRequest:
+		if x == nil {
+			x = []ReviewRequest{}
 		}
 		b, err := json.Marshal(x)
 		return string(b), err

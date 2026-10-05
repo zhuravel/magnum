@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -41,6 +42,15 @@ func prsRichRow() store.BoardRow {
 			{Login: "talkable", State: "COMMENTED", SubmittedAt: at(time.Hour), CommitSHA: "reviewed"},
 			{Login: "", State: "APPROVED", SubmittedAt: at(9 * time.Hour), CommitSHA: prsHead},
 		},
+		// Oldest first: bob was asked three days ago and again an hour ago, the
+		// user (zhuravel) twice, a team by someone who left.
+		ReviewRequests: []store.ReviewRequest{
+			{At: prsNow.Add(-72 * time.Hour), By: "ann", To: "bob"},
+			{At: prsNow.Add(-26 * time.Hour), By: "", To: "team:core"},
+			{At: prsNow.Add(-4 * time.Hour), By: "ann", To: "zhuravel"},
+			{At: prsNow.Add(-2 * time.Hour), By: "ann", To: "zhuravel"},
+			{At: prsNow.Add(-time.Hour), By: "ann", To: "bob"},
+		},
 		SinceReview: &store.SinceReview{Source: store.SinceFromReviewed, Base: "reviewed", Head: prsHead,
 			Commits: 2, Files: 3, Additions: 40, Deletions: 5, ComputedAt: prsNow},
 		State: store.PRVerifying, GHState: "OPEN", UpdatedAt: prsNow.Add(-30 * time.Minute), HeadSHA: prsHead,
@@ -73,6 +83,14 @@ func TestPRsBoardRowMapsEveryField(t *testing.T) {
 		SinceReview: &tui.ReviewDelta{Base: "reviewed", BaseSHA: "reviewed", Commits: 2, Files: 3, Additions: 40, Deletions: 5},
 		Slot:        "review1", Pinned: true, Muted: true, NextEligibleAt: prsNow.Add(time.Hour),
 		LastError: "judge failed", RoundsToday: 2,
+		// The latest request to each reviewer, newest first; zhuravel is me.
+		RequestedToMe: &tui.RequestInfo{To: "zhuravel", By: "ann", At: prsNow.Add(-2 * time.Hour), Mine: true},
+		LastRequest:   &tui.RequestInfo{To: "bob", By: "ann", At: prsNow.Add(-time.Hour)},
+		Requests: []tui.RequestInfo{
+			{To: "bob", By: "ann", At: prsNow.Add(-time.Hour)},
+			{To: "zhuravel", By: "ann", At: prsNow.Add(-2 * time.Hour), Mine: true},
+			{To: "team:core", At: prsNow.Add(-26 * time.Hour)},
+		},
 	}
 	gj, _ := json.MarshalIndent(got, "", " ")
 	wj, _ := json.MarshalIndent(want, "", " ")
@@ -183,6 +201,81 @@ func TestPRsBoardRowEdgeCases(t *testing.T) {
 	}
 }
 
+// The board row sums up the review requests: the latest to each reviewer
+// (newest first), the latest of all and the latest asking me, where "me" is
+// the ★ of the board: the user and the App posting as them, whatever the case
+// and the "[bot]", while another account of the same name is not.
+func TestPRsBoardRowSummarisesReviewRequests(t *testing.T) {
+	ask := func(to, by string, ago time.Duration) store.ReviewRequest {
+		return store.ReviewRequest{At: prsNow.Add(-ago), By: by, To: to}
+	}
+	self := []string{"zhuravel", "talkable[bot]"}
+	for name, tc := range map[string]struct {
+		list        []store.ReviewRequest
+		toMe, last  string // "<to> <hours>h", "" = nil
+		perReviewer []string
+	}{
+		"none": {},
+		"only others: the latest is shown, nothing is mine": {
+			list: []store.ReviewRequest{ask("bob", "ann", 5*time.Hour), ask("cat", "ann", 3*time.Hour)},
+			last: "cat 3h", perReviewer: []string{"cat 3h", "bob 5h"},
+		},
+		"asked again: the later request replaces the earlier of one reviewer": {
+			list: []store.ReviewRequest{ask("zhuravel", "ann", 30*time.Hour), ask("bob", "ann", 20*time.Hour), ask("zhuravel", "ann", 10*time.Hour)},
+			toMe: "zhuravel 10h", last: "zhuravel 10h", perReviewer: []string{"zhuravel 10h", "bob 20h"},
+		},
+		"mine is not the latest": {
+			list: []store.ReviewRequest{ask("zhuravel", "ann", 30*time.Hour), ask("team:core", "", time.Hour)},
+			toMe: "zhuravel 30h", last: "team:core 1h", perReviewer: []string{"team:core 1h", "zhuravel 30h"},
+		},
+		"the App posting as me and the user's case count as me": {
+			list: []store.ReviewRequest{ask("Zhuravel", "ann", 6*time.Hour), ask("talkable[bot]", "ann", 2*time.Hour)},
+			toMe: "talkable[bot] 2h", last: "talkable[bot] 2h", perReviewer: []string{"talkable[bot] 2h", "Zhuravel 6h"},
+		},
+		"another account of my name is another reviewer, and still not mine": {
+			list: []store.ReviewRequest{ask("rev-ann", "ann", 4*time.Hour), ask("rev-ann[bot]", "ann", 3*time.Hour)},
+			last: "rev-ann[bot] 3h", perReviewer: []string{"rev-ann[bot] 3h", "rev-ann 4h"},
+		},
+		"a request without a reviewer or a time says nothing": {
+			list: []store.ReviewRequest{ask("", "ann", time.Hour), {To: "bob", By: "ann"}, ask("cat", "ann", 2*time.Hour)},
+			last: "cat 2h", perReviewer: []string{"cat 2h"},
+		},
+		"unordered input still ends with the newest per reviewer": {
+			list: []store.ReviewRequest{ask("bob", "ann", time.Hour), ask("bob", "ann", 9*time.Hour)},
+			last: "bob 1h", perReviewer: []string{"bob 1h"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := prsRichRow()
+			b.ReviewRequests = tc.list
+			r := prsBoardRow(b, self)
+			show := func(q *tui.RequestInfo) string {
+				if q == nil {
+					return ""
+				}
+				return q.To + " " + strconv.Itoa(int(prsNow.Sub(q.At).Hours())) + "h"
+			}
+			if show(r.RequestedToMe) != tc.toMe || show(r.LastRequest) != tc.last {
+				t.Errorf("to me %q, last %q; want %q, %q", show(r.RequestedToMe), show(r.LastRequest), tc.toMe, tc.last)
+			}
+			var per []string
+			for _, q := range r.Requests {
+				per = append(per, show(&q))
+				if want := slices.Contains([]string{"zhuravel", "Zhuravel", "talkable[bot]"}, q.To); q.Mine != want {
+					t.Errorf("request to %s: mine = %v, want %v", q.To, q.Mine, want)
+				}
+			}
+			if !slices.Equal(per, tc.perReviewer) {
+				t.Errorf("per reviewer %v, want %v", per, tc.perReviewer)
+			}
+		})
+	}
+	// No self logins: nothing is mine, whoever was asked.
+	if r := prsBoardRow(prsRichRow(), nil); r.RequestedToMe != nil || r.LastRequest == nil || len(r.Requests) != 3 {
+		t.Errorf("without self logins: to me %+v, last %+v, %d requests", r.RequestedToMe, r.LastRequest, len(r.Requests))
+	}
+}
+
 func TestPRsSelfLogins(t *testing.T) {
 	cfg := &config.Config{
 		Identities: []config.Identity{
@@ -207,7 +300,7 @@ func TestPRsRenderCells(t *testing.T) {
 	prsRender(&b, []tui.PRBoardRow{r}, "talkable/talkable", prsNow)
 	out := b.String()
 	for _, want := range []string{
-		"REF", "TITLE", "AUTHOR", "ASSIGNEE", "UPDATED", "STATE", "LAST REVIEW", "SINCE", "REVIEWERS",
+		"REF", "TITLE", "AUTHOR", "ASSIGNEE", "UPDATED", "REQUESTED", "STATE", "LAST REVIEW", "SINCE", "REVIEWERS",
 		"talkable#11920", "Fix the widget", "ann", "bob,cat", "30m", "reviewing,draft,pinned,muted,error",
 		"commented 1h by talkable, stale", "2c 3f +40/-5",
 		"cat(approved,re-requested)", "bob(changes_requested,stale)", "dan(requested)", "team:core(requested)",
@@ -222,6 +315,22 @@ func TestPRsRenderCells(t *testing.T) {
 	if got := prsLastReviewCell(nil, prsNow); got != "-" {
 		t.Errorf("no review cell %q", got)
 	}
+	// The request the board shows: the latest to me, else the latest to anyone.
+	mine := prsBoardRow(prsRichRow(), []string{"zhuravel"})
+	for _, tc := range []struct {
+		name string
+		row  tui.PRBoardRow
+		want string
+	}{
+		{"to me", mine, "me 2h by ann"},
+		{"to someone else", prsBoardRow(prsRichRow(), nil), "bob 1h by ann"},
+		{"nobody asked", tui.PRBoardRow{}, "-"},
+		{"by someone who left", tui.PRBoardRow{LastRequest: &tui.RequestInfo{To: "team:core", At: prsNow.Add(-26 * time.Hour)}}, "team:core 26h"},
+	} {
+		if got := prsRequestedCell(tc.row, prsNow); got != tc.want {
+			t.Errorf("%s: requested cell %q, want %q", tc.name, got, tc.want)
+		}
+	}
 	b.Reset()
 	prsRender(&b, nil, "", prsNow)
 	if !strings.Contains(b.String(), "no pull requests") {
@@ -229,8 +338,9 @@ func TestPRsRenderCells(t *testing.T) {
 	}
 }
 
-// prsSeed seeds three PRs with board fields: one reviewed (stale), one queued
-// and one merged.
+// prsSeed seeds three PRs with board fields: one reviewed (stale, its review
+// requested of the user five hours ago), one queued (its review requested of
+// someone else an hour ago) and one merged.
 func prsSeed(t *testing.T, f *inspFixture) {
 	t.Helper()
 	st := f.store()
@@ -245,9 +355,11 @@ func prsSeed(t *testing.T, f *inspFixture) {
 		u.Set("requested_reviewers_json", `["dan","team:core"]`)
 		u.Set("latest_reviews_json", `[{"login":"cat","state":"CHANGES_REQUESTED","submitted_at":"`+ts(time.Hour)+`","commit_sha":"reviewedsha"}]`)
 		u.Set("since_review_json", `{"source":"reviewed","base":"reviewedsha","head":"x","commits":2,"files":-1,"additions":10,"deletions":1}`)
+		u.Set("review_requests_json", `[{"at":"`+ts(5*time.Hour)+`","by":"alice","to":"zhuravel"}]`)
 	})
 	inspSeedPR(t, st, "talkable/talkable", 11931, store.PRQueued, func(u *store.PRUpdate) {
 		u.Set("gh_updated_at", ts(time.Minute))
+		u.Set("review_requests_json", `[{"at":"`+ts(time.Hour)+`","by":"alice","to":"bob"}]`)
 	})
 	inspSeedPR(t, st, "zhuravel/app", 3, store.PRReleased, func(u *store.PRUpdate) {
 		u.Set("gh_updated_at", ts(time.Hour))
@@ -268,10 +380,13 @@ func TestPRsPrintsTableAndJSON(t *testing.T) {
 	if len(lines) != 3 || !strings.HasPrefix(lines[1], "talkable#11931") || !strings.HasPrefix(lines[2], "talkable#11920") {
 		t.Fatalf("open PRs, newest update first:\n%s", out)
 	}
-	for _, want := range []string{"approved 2h by talkable, stale", ">=2c 300f +10/-1", "cat(changes_requested,stale)", "team:core(requested)", "bob"} {
+	for _, want := range []string{"approved 2h by talkable, stale", ">=2c 300f +10/-1", "cat(changes_requested,stale)", "team:core(requested)", "bob", "me 5h by alice"} {
 		if !strings.Contains(lines[2], want) {
 			t.Errorf("row lacks %q:\n%s", want, lines[2])
 		}
+	}
+	if !strings.Contains(lines[0], "REQUESTED") || !strings.Contains(lines[1], "bob 1h by alice") {
+		t.Errorf("the REQUESTED column:\n%s", out)
 	}
 
 	if code := f.run("prs", "--all", "--sort", "last-review", "--json"); code != 0 {
@@ -289,6 +404,30 @@ func TestPRsPrintsTableAndJSON(t *testing.T) {
 	}
 	if rows[2].GHState != store.GHMerged {
 		t.Errorf("merged row %+v", rows[2])
+	}
+	if q := rows[0].RequestedToMe; q == nil || q.To != "zhuravel" || q.By != "alice" || !q.Mine || rows[0].LastRequest == nil || len(rows[0].Requests) != 1 ||
+		rows[1].RequestedToMe != nil || rows[1].LastRequest == nil || rows[1].LastRequest.To != "bob" || rows[2].LastRequest != nil {
+		t.Errorf("review requests of the mapped rows: %+v / %+v / %+v", rows[0].RequestedToMe, rows[1].LastRequest, rows[2].LastRequest)
+	}
+
+	// The newest request first, whatever it asked; PRs nobody asked come last.
+	if code := f.run("prs", "--all", "--sort", "requested", "--json"); code != 0 {
+		t.Fatalf("code %d err %s", code, f.Err.String())
+	}
+	if err := json.Unmarshal(f.Out.Bytes(), &rows); err != nil {
+		t.Fatalf("json: %v\n%s", err, f.Out.String())
+	}
+	if refs := prsRefs(rows); !slices.Equal(refs, []string{"talkable/talkable#11931", "talkable/talkable#11920", "zhuravel/app#3"}) {
+		t.Fatalf("--all --sort requested: %v (the hour-old request, the five-hour-old one, then none)", refs)
+	}
+	if code := f.run("prs", "--all", "--sort", "requested", "--desc=false", "--json"); code != 0 {
+		t.Fatalf("code %d err %s", code, f.Err.String())
+	}
+	if err := json.Unmarshal(f.Out.Bytes(), &rows); err != nil {
+		t.Fatalf("json: %v\n%s", err, f.Out.String())
+	}
+	if refs := prsRefs(rows); !slices.Equal(refs, []string{"talkable/talkable#11920", "talkable/talkable#11931", "zhuravel/app#3"}) {
+		t.Fatalf("--all --sort requested --desc=false: %v (oldest request first, none still last)", refs)
 	}
 
 	if code := f.run("prs", "--repo", "app", "--all", "--json"); code != 0 || !strings.Contains(f.Out.String(), "zhuravel/app#3") ||
@@ -334,7 +473,7 @@ func TestPRsUsageErrors(t *testing.T) {
 	if code := f.run("prs", "--sort", "bogus"); code != 2 || !strings.Contains(f.Err.String(), "usage: magnum prs") {
 		t.Errorf("bad sort message: %s", f.Err.String())
 	}
-	for _, s := range []string{"last_review", "Reviewer Activity", "CHANGES", "state", ""} {
+	for _, s := range []string{"last_review", "Reviewer Activity", "Requested", "CHANGES", "state", ""} {
 		if code := f.run("prs", "--sort", s, "--json"); code != 0 {
 			t.Errorf("--sort %q: code %d %s", s, code, f.Err.String())
 		}
@@ -372,6 +511,11 @@ func TestPRsOpensTheBoard(t *testing.T) {
 	}
 	if refs := prsRefs(rows); len(refs) != 2 || !slices.Contains(refs, "talkable/talkable#11920") {
 		t.Errorf("rows %v", refs)
+	}
+	for _, r := range rows {
+		if r.Ref == "talkable/talkable#11920" && (r.RequestedToMe == nil || !r.RequestedToMe.Mine || len(r.Requests) != 1) {
+			t.Errorf("the board's row lacks the review request to me: %+v", r.RequestedToMe)
+		}
 	}
 	if code := f.run("prs", "--json"); code != 0 || !strings.HasPrefix(f.Out.String(), "[") {
 		t.Errorf("--json on a terminal prints: code %d %q", code, f.Out.String())

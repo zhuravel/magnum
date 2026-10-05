@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"testing"
 	"time"
@@ -95,9 +96,11 @@ func TestUpsertPRBoardFields(t *testing.T) {
 	repo := mustRepo(t, st)
 	sub := t0.Add(-time.Hour)
 	reviews := []LatestReview{{Login: "rev-ann", State: "APPROVED", SubmittedAt: &sub, CommitSHA: "h1"}}
+	asked := t0.Add(-3 * time.Hour)
+	requests := []ReviewRequest{{At: asked, By: "alice", To: "rev-ann"}, {At: asked.Add(time.Hour), By: "alice", To: "team:engineers"}}
 	in := GitHubPR{RepoID: repo.ID, NodeID: "PR_9", Number: 9, URL: "u9", HeadSHA: "h1", InitialState: PRQueued, Identity: "zhuravel",
 		Assignees: []string{"zhuravel"}, RequestedReviewers: []string{"team:engineers", "rev-ann"}, LatestReviews: reviews,
-		BaseSHA: Ptr("b1"), DetailsAt: Ptr(t0)}
+		ReviewRequests: requests, BaseSHA: Ptr("b1"), DetailsAt: Ptr(t0)}
 	res, err := st.UpsertPRFromGitHub(ctx, in)
 	if err != nil || !res.New {
 		t.Fatalf("insert = %+v, %v", res, err)
@@ -108,11 +111,15 @@ func TestUpsertPRBoardFields(t *testing.T) {
 		pr.DetailsAt == nil || !pr.DetailsAt.Equal(t0) {
 		t.Fatalf("inserted board fields: %+v", pr)
 	}
+	if len(pr.ReviewRequests) != 2 || !slices.EqualFunc(pr.ReviewRequests, requests, ReviewRequest.equal) {
+		t.Fatalf("inserted review requests = %+v, want %+v", pr.ReviewRequests, requests)
+	}
 
 	// Same values with a newer DetailsAt: nothing changed, nothing written.
 	c.Add(time.Minute)
 	sub2 := sub // equal instant, different pointer
 	in.LatestReviews = []LatestReview{{Login: "rev-ann", State: "APPROVED", SubmittedAt: &sub2, CommitSHA: "h1"}}
+	in.ReviewRequests = []ReviewRequest{{At: asked.In(time.FixedZone("EEST", 3*3600)), By: "alice", To: "rev-ann"}, requests[1]}
 	in.DetailsAt = Ptr(t0.Add(time.Minute))
 	if res, err = st.UpsertPRFromGitHub(ctx, in); err != nil || res.Changed || !res.PR.DetailsAt.Equal(t0) || !res.PR.UpdatedAt.Equal(t0) {
 		t.Fatalf("no-op refresh = %+v, %v", res, err)
@@ -121,8 +128,29 @@ func TestUpsertPRBoardFields(t *testing.T) {
 	// nil board fields keep the stored values.
 	keep := in
 	keep.Assignees, keep.RequestedReviewers, keep.LatestReviews, keep.BaseSHA, keep.DetailsAt = nil, nil, nil, nil, nil
-	if res, err = st.UpsertPRFromGitHub(ctx, keep); err != nil || res.Changed || len(res.PR.Assignees) != 1 {
+	keep.ReviewRequests = nil
+	if res, err = st.UpsertPRFromGitHub(ctx, keep); err != nil || res.Changed || len(res.PR.Assignees) != 1 || len(res.PR.ReviewRequests) != 2 {
 		t.Fatalf("nil fields = %+v, %v", res, err)
+	}
+
+	// A new request (the author asked again) is stored and stamps details_at,
+	// but like the CI it is not Changed: it moves no eligibility. An empty
+	// list (no request in the timeline's window) replaces the stored one.
+	c.Add(time.Minute)
+	again := in
+	again.ReviewRequests = append(slices.Clone(requests), ReviewRequest{At: t0, By: "alice", To: "rev-ann"})
+	again.DetailsAt = Ptr(t0.Add(2 * time.Minute))
+	if res, err = st.UpsertPRFromGitHub(ctx, again); err != nil || res.Changed || len(res.PR.ReviewRequests) != 3 || !res.PR.ReviewRequests[2].At.Equal(t0) ||
+		!res.PR.DetailsAt.Equal(t0.Add(2*time.Minute)) {
+		t.Fatalf("a new review request = %+v, %v", res, err)
+	}
+	again.ReviewRequests = []ReviewRequest{}
+	if res, err = st.UpsertPRFromGitHub(ctx, again); err != nil || res.Changed || len(res.PR.ReviewRequests) != 0 {
+		t.Fatalf("no requests = %+v, %v", res, err)
+	}
+	in.ReviewRequests = requests
+	if _, err = st.UpsertPRFromGitHub(ctx, in); err != nil {
+		t.Fatal(err)
 	}
 
 	// A new review state is a change and stamps details_at.
@@ -183,6 +211,7 @@ func TestBoard(t *testing.T) {
 		in.RequestedReviewers = []string{"team:engineers"}
 		in.ReviewRequested = Ptr(true)
 		in.LatestReviews = []LatestReview{{Login: "talkable", State: "COMMENTED", SubmittedAt: &sub, CommitSHA: "head0"}}
+		in.ReviewRequests = []ReviewRequest{{At: t0.Add(-3 * time.Hour), By: "alice", To: "team:engineers"}}
 		in.Labels = []string{"WIP"}
 		in.IsDraft = true
 	})
@@ -228,7 +257,7 @@ func TestBoard(t *testing.T) {
 	wantRow := BoardRow{
 		PRID: held.ID, Ref: "talkable/talkable#1", Owner: "talkable", Name: "talkable", Number: 1, Title: "PR 1", Author: "alice",
 		URL: "u1", Draft: true, Labels: []string{"WIP"}, Assignees: []string{"zhuravel"}, RequestedReviewers: []string{"team:engineers"},
-		ReviewRequested: true, LatestReviews: held.LatestReviews, SinceReview: &since, State: PRReviewed, GHState: GHOpen,
+		ReviewRequested: true, LatestReviews: held.LatestReviews, ReviewRequests: held.ReviewRequests, SinceReview: &since, State: PRReviewed, GHState: GHOpen,
 		UpdatedAt: t0.Add(-time.Hour), HeadSHA: "head1", ReviewedSHA: "head0", LastReviewEvent: "COMMENTED",
 		LastReviewAt: t0.Add(-2 * time.Hour), LastReviewLogin: "talkable", Identity: "talkable-app", Slot: "review1",
 		SlotPath: sl.Path, Pinned: true, NextEligibleAt: t0.Add(30 * time.Minute), LastError: "boom", RoundsToday: 2,
@@ -236,7 +265,7 @@ func TestBoard(t *testing.T) {
 	if !reflect.DeepEqual(r, wantRow) {
 		t.Fatalf("row =\n%+v\nwant\n%+v", r, wantRow)
 	}
-	if q := rows[0]; q.Slot != "" || q.SinceReview != nil || q.Assignees == nil || q.LatestReviews == nil || q.RoundsToday != 0 {
+	if q := rows[0]; q.Slot != "" || q.SinceReview != nil || q.Assignees == nil || q.LatestReviews == nil || q.ReviewRequests == nil || q.RoundsToday != 0 {
 		t.Fatalf("bare row = %+v", q)
 	}
 

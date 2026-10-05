@@ -216,6 +216,10 @@ type PR struct {
 	// CI (ci_json) is the head's checks as the last Details fetch saw them;
 	// nil until then.
 	CI *CIStatus `json:"ci"`
+	// ReviewRequests (migration 0009, review_requests_json) are the newest
+	// review requests of the PR's timeline, oldest first; empty until the
+	// next Details fetch.
+	ReviewRequests []ReviewRequest `json:"review_requests"`
 }
 
 // CIStatus is prs.ci_json: the checks of a PR's head commit. Its State can
@@ -314,6 +318,18 @@ func (a LatestReview) equal(b LatestReview) bool {
 		return false
 	}
 	return a.SubmittedAt == nil || a.SubmittedAt.Equal(*b.SubmittedAt)
+}
+
+// ReviewRequest is one entry of prs.review_requests_json: a review asked of
+// one reviewer.
+type ReviewRequest struct {
+	At time.Time `json:"at"`
+	By string    `json:"by"` // who asked ("" for a deleted account); as GitHub's GraphQL names them, without "[bot]"
+	To string    `json:"to"` // who was asked: Account form (github.Account), or "team:<slug>"
+}
+
+func (a ReviewRequest) equal(b ReviewRequest) bool {
+	return a.At.Equal(b.At) && a.By == b.By && a.To == b.To
 }
 
 // SinceReview.Source values: what Base is.
@@ -483,7 +499,9 @@ var (
 		// 0006_author_association
 		"author_association",
 		// 0007_ci
-		"ci_state", "ci_json"}
+		"ci_state", "ci_json",
+		// 0009_review_requests
+		"review_requests_json"}
 	slotColumns = []string{"id", "name", "repo_id", "repo_full_name", "kind", "path", "main_clone",
 		"placeholder_branch", "db_slug", "state", "pr_id", "pinned", "dirty_schema", "checked_out_sha",
 		"hold_reason", "lock_sha", "last_used_at", "last_error", "created_at", "updated_at"}
@@ -535,7 +553,8 @@ func scanPR(sc scanner) (PR, error) {
 		&p.LastError, &p.Pinned, &p.Muted, &p.SimplifyDone, nullTime(&p.HumanActiveAt),
 		timeCol(&p.CreatedAt), timeCol(&p.UpdatedAt),
 		jsonCol(&p.Assignees), jsonCol(&p.RequestedReviewers), jsonCol(&p.LatestReviews), jsonCol(&p.SinceReview),
-		&p.LastReviewLogin, &p.BaseSHA, nullTime(&p.DetailsAt), &p.AuthorAssociation, &p.CIState, jsonCol(&p.CI))
+		&p.LastReviewLogin, &p.BaseSHA, nullTime(&p.DetailsAt), &p.AuthorAssociation, &p.CIState, jsonCol(&p.CI),
+		jsonCol(&p.ReviewRequests))
 	return p, err
 }
 

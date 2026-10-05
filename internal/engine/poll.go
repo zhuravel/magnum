@@ -415,6 +415,14 @@ func fillDetails(in *store.GitHubPR, d github.PRDetails, logins []string, now ti
 		}
 		in.LatestReviews = append(in.LatestReviews, lr)
 	}
+	in.ReviewRequests = make([]store.ReviewRequest, 0, len(d.ReviewRequestEvents))
+	for _, ev := range d.ReviewRequestEvents {
+		to := github.Account(ev.Reviewer.Login, ev.Reviewer.Type)
+		if ev.Reviewer.Type == "Team" {
+			to = store.TeamReviewerPrefix + ev.Reviewer.Login
+		}
+		in.ReviewRequests = append(in.ReviewRequests, store.ReviewRequest{At: ev.CreatedAt.UTC(), By: ev.Actor, To: to})
+	}
 	in.Title = store.Ptr(d.Title)
 	in.AuthorLogin = store.Ptr(d.AuthorLogin)
 	in.AuthorType = store.Ptr(d.AuthorType)

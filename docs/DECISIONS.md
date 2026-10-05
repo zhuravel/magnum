@@ -762,3 +762,18 @@ editing history. Code, config comments and prompts reference these by their head
   after the start returns: a prompt sent in between failed the reviewer's run ("is not an active named
   agent", five times in two days); herdr rejects it before sending, so Submit waits until the agent is
   listed idle (TrustReadyTimeout) and sends once more, as it does after a trust dialog.
+- **The board shows when a review was last requested, and whether of you** (2026-10-05). An old PR whose
+  author asks for a review again looked like any other old PR: the pending-reviewers list says who is
+  asked, not when, and UPDATED moves with every comment. The poller now keeps the newest ten review
+  requests of the PR's timeline (the events the daemon already reads for review-request rounds) in
+  `prs.review_requests_json`: when, by whom, of whom (Account form, a team as `team:<slug>`). The board's
+  REQUESTED column shows `★ 2h` for the latest request of you or a posting identity (the ★ means what it
+  means everywhere), else the dimmed age of the latest request; the card has a line with the latest request
+  to each reviewer; `--sort requested` puts the newest request first, and the one it orders by is the one
+  the column shows, so the column reads in order and a PR nobody asked comes last. The summary is built
+  where "mine" is known, in the board's row mapping, not in the registry. Migration 0009 sets `details_at`
+  to NULL for open PRs: the next poll fetches every open PR's Details once, which backfills the history of
+  the older PRs and holds each from dispatch until then, as for a new PR. Rejected: a column from
+  `requestedReviewers` (no time), from GitHub's updatedAt (any activity moves it) and a timeline call per
+  PR when the board opens (the board never asks GitHub). A request older than the newest ten events is not
+  kept.

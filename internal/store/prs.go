@@ -140,6 +140,9 @@ type GitHubPR struct {
 	// Changed: CI moving changes no eligibility and queues nothing.
 	CIState *string
 	CI      *CIStatus
+	// ReviewRequests are the timeline's newest review requests, oldest first
+	// (nil = keep). Not Changed either: a request moves no eligibility.
+	ReviewRequests []ReviewRequest
 
 	// InitialState and Identity are used only when the PR is new.
 	InitialState string
@@ -221,6 +224,7 @@ func (s *Store) UpsertPRFromGitHub(ctx context.Context, in GitHubPR) (PRUpsert, 
 		changed := len(u.sets) > 0
 		setIf("ci_state", in.CIState != nil && (cur.CIState == nil || *in.CIState != *cur.CIState), in.CIState)
 		setIf("ci_json", in.CI != nil && (cur.CI == nil || !in.CI.equal(*cur.CI)), in.CI)
+		setIf("review_requests_json", in.ReviewRequests != nil && !slices.EqualFunc(in.ReviewRequests, cur.ReviewRequests, ReviewRequest.equal), in.ReviewRequests)
 		setIf("details_at", in.DetailsAt != nil && (len(u.sets) > 0 || cur.DetailsAt == nil), in.DetailsAt)
 		if len(u.sets) == 0 && u.err == nil {
 			res.PR = cur
@@ -254,6 +258,10 @@ func (s *Store) insertPR(ctx context.Context, tx *sql.Tx, in GitHubPR) (int64, e
 	if requested == nil {
 		requested = []string{}
 	}
+	requests := in.ReviewRequests
+	if requests == nil {
+		requests = []ReviewRequest{}
+	}
 	ghState := in.GHState
 	if ghState == "" {
 		ghState = GHOpen
@@ -264,14 +272,14 @@ INSERT INTO prs (repo_id, node_id, number, url, title, author_login, author_type
   head_sha, head_changed_at, is_draft, is_cross_repo, review_requested, labels_json, gh_state, gh_updated_at,
   merged_at, closed_at, state, identity, created_at, updated_at,
   assignees_json, requested_reviewers_json, latest_reviews_json, base_sha, details_at, author_association,
-  ci_state, ci_json)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ci_state, ci_json, review_requests_json)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		in.RepoID, in.NodeID, in.Number, in.URL, in.Title, in.AuthorLogin, in.AuthorType, in.HeadRef, in.BaseRef,
 		in.HeadSHA, now, boolInt(in.IsDraft), boolInt(Deref(in.IsCrossRepo)),
 		boolInt(Deref(in.ReviewRequested)), mustDB(labels), ghState,
 		mustDB(in.GHUpdatedAt), mustDB(in.MergedAt), mustDB(in.ClosedAt), in.InitialState, in.Identity, now, now,
 		mustDB(assignees), mustDB(requested), mustDB(in.LatestReviews), in.BaseSHA, mustDB(in.DetailsAt), in.AuthorAssociation,
-		in.CIState, mustDB(in.CI))
+		in.CIState, mustDB(in.CI), mustDB(requests))
 	if err != nil {
 		return 0, mapErr(err)
 	}

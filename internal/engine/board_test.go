@@ -13,7 +13,9 @@ import (
 func TestPollStoresBoardFieldsAndWholePRSize(t *testing.T) {
 	h := newHarness(t)
 	sub := time.Date(2026, 10, 5, 8, 0, 0, 0, time.UTC)
+	asked := sub.Add(-time.Hour)
 	h.open(prSpec{n: 1, head: "a1", assignees: []string{"zhuravel", "dependabot[bot]"}, request: true,
+		requests: []github.ReviewRequestEvent{{CreatedAt: asked, Actor: "alice", Reviewer: github.Reviewer{Type: "User", Login: "zhuravel"}}},
 		reviews: []github.LatestReview{
 			{State: "APPROVED", SubmittedAt: sub, AuthorLogin: "rev-ann", AuthorType: "User", CommitOid: "a0"},
 			{State: "PENDING", AuthorLogin: "zhuravel", AuthorType: "User"},
@@ -35,6 +37,9 @@ func TestPollStoresBoardFieldsAndWholePRSize(t *testing.T) {
 	}
 	if deref(pr.BaseSHA) != fakeBaseOid || pr.DetailsAt == nil || !pr.DetailsAt.Equal(now) {
 		t.Fatalf("base %v details_at %v", pr.BaseSHA, pr.DetailsAt)
+	}
+	if len(pr.ReviewRequests) != 1 || !pr.ReviewRequests[0].At.Equal(asked) || pr.ReviewRequests[0].By != "alice" || pr.ReviewRequests[0].To != "zhuravel" {
+		t.Fatalf("review requests = %+v", pr.ReviewRequests)
 	}
 	// Nothing reviewed by the PR's identity: the whole PR, sized by Details, no Compare.
 	want := store.SinceReview{Source: store.SinceFromBase, Base: fakeBaseOid, Head: "a1", Commits: 1, Files: 1,

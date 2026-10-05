@@ -117,7 +117,7 @@ func TestBoardHeadingClickSorts(t *testing.T) {
 	}
 	mustContain(t, viewOf(m), "STATE ↑")
 
-	for c, want := range map[prbCol]PRSort{colLastReview: SortLastReview, colSince: SortChanges, colReviewers: SortReviewerActivity, colUpdated: SortUpdated} {
+	for c, want := range map[prbCol]PRSort{colLastReview: SortLastReview, colSince: SortChanges, colReviewers: SortReviewerActivity, colRequested: SortRequested, colUpdated: SortUpdated} {
 		x, w := boardCol(t, m, c)
 		m, _ = send(t, m, leftClick(x+w/2, boardHeadingY))
 		if m.sort != want || !m.desc {
@@ -233,10 +233,10 @@ func TestBoardClickSelectsAndDoubleClickOpens(t *testing.T) {
 // come back on the next start; W resets them.
 func TestBoardDragResizesAndKeepsWidths(t *testing.T) {
 	kept := &fakeWidths{}
-	m, _, _ := newBoard(t, 170, 30, PRBoardOptions{Widths: kept})
+	m, _, _ := newBoard(t, 190, 30, PRBoardOptions{Widths: kept})
 	x, w := boardCol(t, m, colAuthor)
 	gap := x + w
-	cols := len(m.tableLayout(m.painter(), 170).cols)
+	cols := len(m.tableLayout(m.painter(), 190).cols)
 	m, _ = send(t, m, leftClick(gap, boardHeadingY))
 	if m.sort != SortUpdated {
 		t.Fatal("a click on a gap sorted")
@@ -250,11 +250,11 @@ func TestBoardDragResizesAndKeepsWidths(t *testing.T) {
 		t.Fatalf("drag far left: author %d, want the minimum %d", got, minColWidth)
 	}
 	m, _ = send(t, m, motion(gap+1000, boardHeadingY))
-	lay := m.tableLayout(m.painter(), 170)
-	if len(lay.cols) != cols || lay.total() > 170 {
+	lay := m.tableLayout(m.painter(), 190)
+	if len(lay.cols) != cols || lay.total() > 190 {
 		t.Fatalf("drag far right pushed columns off: %d of %d shown, %d cells", len(lay.cols), cols, lay.total())
 	}
-	if maxLineWidth(viewOf(m)) > 170 {
+	if maxLineWidth(viewOf(m)) > 190 {
 		t.Fatal("a line overflows the screen")
 	}
 	if kept.saves != 0 {
@@ -277,7 +277,7 @@ func TestBoardDragResizesAndKeepsWidths(t *testing.T) {
 	}
 
 	// The next board starts with the kept widths.
-	next, _, _ := newBoard(t, 170, 30, PRBoardOptions{Widths: kept})
+	next, _, _ := newBoard(t, 190, 30, PRBoardOptions{Widths: kept})
 	next = run(t, next, next.saver.load(next.ctx))
 	if _, got := boardCol(t, next, colAuthor); got != w+7 {
 		t.Fatalf("reloaded author %d, want %d", got, w+7)

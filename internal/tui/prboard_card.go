@@ -85,6 +85,10 @@ func (p prbPainter) helpContent(width int) []string {
 		p.pal.yellow.Render(g.ciPending) + " pending", p.pal.yellow.Render(g.ciMissing) + " not run", p.pal.yellow.Render(g.ciSkip) + " skipped",
 		"65/65 checks done", "Completion +1: the worst required check and how many more", p.pal.yellow.Render(g.stale) + " of an older commit",
 	}, "   ", inner)...)
+	lines = append(lines, flow([]string{
+		p.st.Header.Render("REQUESTED"), p.pal.mine.Render(g.mine) + " 2h: a review asked of you 2h ago",
+		p.st.Dim.Render("3d") + " the latest ask of someone else",
+	}, "   ", inner)...)
 	ex := &ReviewDelta{Base: "reviewed", Commits: 3, Additions: 41, Deletions: 7}
 	since := p.sinceCell(ex, p.sinceWidths([]PRBoardRow{{SinceReview: ex}})).render(nil) +
 		"  commits, lines added and removed since the last review " + p.st.Dim.Render("(dim: the whole PR, never reviewed)")
@@ -329,6 +333,10 @@ func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
 	} else {
 		add(p.reviewerTable(r, inner)...)
 	}
+	if lines := p.requestLines(r, inner); len(lines) > 0 {
+		add("")
+		add(lines...)
+	}
 
 	if r.LastError != "" {
 		title := "LAST ERROR"
@@ -488,6 +496,49 @@ func (p prbPainter) reviewerTable(r PRBoardRow, inner int) []string {
 		out = append(out, "  "+renderRow(row, widths))
 	}
 	return out
+}
+
+// requestLines say when each reviewer was last asked for a review and by
+// whom, newest first, mine starred ("Requested: ★ zhuravel by alice 2h ago ·
+// bob by alice 3d ago"), wrapped under the label; none when the PR shows no
+// request.
+func (p prbPainter) requestLines(r PRBoardRow, inner int) []string {
+	if len(r.Requests) == 0 {
+		return nil
+	}
+	label := p.st.Header.Render("Requested:") + " "
+	indent := spaces(ansi.StringWidth(label))
+	items := make([]string, len(r.Requests))
+	for i, q := range r.Requests {
+		item := p.loginStyle(q.To, q.Mine).Render(q.To)
+		if p.isMine(q.To, q.Mine) {
+			item = p.pal.mine.Render(p.g.mine+" ") + item
+		}
+		if q.By != "" {
+			item += p.st.Dim.Render(" by ") + q.By
+		}
+		if !q.At.IsZero() {
+			item += p.st.Dim.Render(" " + requestAgo(max(p.now.Sub(q.At), 0)))
+		}
+		items[i] = item
+	}
+	lines := flow(items, p.st.Dim.Render(p.g.sep), max(inner-2-ansi.StringWidth(label), 10))
+	for i, l := range lines {
+		if i == 0 {
+			lines[i] = "  " + label + l
+		} else {
+			lines[i] = "  " + indent + l
+		}
+	}
+	return lines
+}
+
+// requestAgo is how long ago a request was made, in words: "2h ago".
+func requestAgo(d time.Duration) string {
+	if s := shortAge(d); s != "now" {
+		return s + " ago"
+	}
+	return "just now"
 }
 
 // timingParts are the round's stages and its total, styled: a running

@@ -211,7 +211,7 @@ func TestSortPRBoardEachSort(t *testing.T) {
 func TestParsePRSort(t *testing.T) {
 	for in, want := range map[string]PRSort{
 		"": SortUpdated, "updated": SortUpdated, "Last_Review": SortLastReview, "last review": SortLastReview,
-		"reviewer-activity": SortReviewerActivity, "CHANGES": SortChanges, "state": SortState,
+		"reviewer-activity": SortReviewerActivity, "Requested": SortRequested, "CHANGES": SortChanges, "state": SortState,
 	} {
 		if got, err := ParsePRSort(in); err != nil || got != want {
 			t.Errorf("ParsePRSort(%q) = %q, %v; want %q", in, got, err, want)
@@ -220,7 +220,7 @@ func TestParsePRSort(t *testing.T) {
 	if _, err := ParsePRSort("size"); err == nil || !strings.Contains(err.Error(), "last-review") {
 		t.Errorf("ParsePRSort(size) error = %v, want one listing the sorts", err)
 	}
-	if got := PRSorts(); len(got) != 5 || got[0] != SortUpdated {
+	if got := PRSorts(); len(got) != 6 || got[0] != SortUpdated {
 		t.Errorf("PRSorts() = %v", got)
 	}
 }
@@ -249,7 +249,7 @@ func TestPRBoardSortKeys(t *testing.T) {
 		t.Errorf("reversed last review order starts with %s", got[0])
 	}
 
-	m, _ = send(t, m, keyMsg("s"), keyMsg("s"), keyMsg("s"))
+	m, _ = send(t, m, keyMsg("s"), keyMsg("s"), keyMsg("s"), keyMsg("s"))
 	if m.sort != SortState || !m.desc {
 		t.Fatalf("sort = %s desc=%t, want state desc", m.sort, m.desc)
 	}
@@ -266,16 +266,17 @@ func TestPRBoardSortKeys(t *testing.T) {
 }
 
 // Narrow screens hide Assignee, then Since review, then Author, then
-// Updated, then CI; Findings stays as long as the reviewers do. No line is
+// Requested, then Updated, then CI; Findings stays as long as the reviewers do. No line is
 // ever wider than the screen.
 func TestPRBoardColumnsHideByWidth(t *testing.T) {
 	cases := []struct {
 		width         int
 		shown, hidden []string
 	}{
-		{170, []string{"REPO", "#", "TITLE", "AUTHOR", "ASSIGNEE", "UPDATED", "STATE", "LAST REVIEW", "FINDINGS", "CI", "SINCE REVIEW", "REVIEWERS"}, nil},
-		{120, []string{"TITLE", "UPDATED", "STATE", "LAST REVIEW", "FINDINGS", "CI", "REVIEWERS"}, []string{"ASSIGNEE", "SINCE REVIEW", "AUTHOR"}},
-		{100, []string{"TITLE", "STATE", "LAST REVIEW", "FINDINGS", "REVIEWERS"}, []string{"ASSIGNEE", "SINCE REVIEW", "AUTHOR", "UPDATED", "CI"}},
+		{170, []string{"REPO", "#", "TITLE", "AUTHOR", "ASSIGNEE", "UPDATED", "REQUESTED", "STATE", "LAST REVIEW", "FINDINGS", "CI", "SINCE REVIEW", "REVIEWERS"}, nil},
+		{130, []string{"TITLE", "UPDATED", "REQUESTED", "STATE", "LAST REVIEW", "FINDINGS", "CI", "REVIEWERS"}, []string{"ASSIGNEE", "SINCE REVIEW", "AUTHOR"}},
+		{120, []string{"TITLE", "UPDATED", "STATE", "LAST REVIEW", "FINDINGS", "CI", "REVIEWERS"}, []string{"ASSIGNEE", "SINCE REVIEW", "AUTHOR", "REQUESTED"}},
+		{100, []string{"TITLE", "STATE", "LAST REVIEW", "FINDINGS", "REVIEWERS"}, []string{"ASSIGNEE", "SINCE REVIEW", "AUTHOR", "REQUESTED", "UPDATED", "CI"}},
 	}
 	for _, c := range cases {
 		m, _, _ := newBoard(t, c.width, 20, PRBoardOptions{})
