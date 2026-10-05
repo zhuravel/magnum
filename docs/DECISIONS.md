@@ -1616,3 +1616,7 @@ editing history. Code, config comments and prompts reference these by their head
   what they remove; the rest count as `dropped`. The diff-only scope and the equivalence probe were expected
   to keep the count down without a cap, and did not. Rejected: removing claude-simplify from the defaults (a
   deployment can leave it out of a watch's `roles`).
+- **The review footer is its own paragraph** (2026-10-05). The skill said to append the footer "as the last
+  line, after the marker"; the judge put it on the line right after `</details>` and the marker comment,
+  and GitHub treats an HTML block as running until a blank line, so the footer's Markdown (the link, the
+  italics) was posted as raw text. The skill now asks for a blank line before it.
