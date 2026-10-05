@@ -46,7 +46,8 @@ func newPRsCmd(c *Context) *cobra.Command {
 			"every key and q quits. With the mouse ([terminal] mouse, on by default; m toggles it) the wheel scrolls, a "+
 			"click selects and a double click opens the card, a click on a heading sorts by it (again reverses), "+
 			"dragging the gap between two headings resizes a column (W resets) and a right click opens the PR's "+
-			"actions. Elsewhere, or with --json, it prints the rows once.\n\n"+
+			"actions. Elsewhere, or with --json, it prints the rows once; the JSON has snake_case keys, times in RFC 3339 "+
+			"(left out while unset) and durations in seconds.\n\n"+
 			"--view picks the rows: all, magnum (what magnum reviewed or is reviewing), mine (assigned to you or your "+
 			"review requested) or ready (approved, no changes requested, not a draft); on the live board it is the "+
 			"view the board opens in. "+
@@ -158,10 +159,7 @@ func runPRs(c *Context, f prsFlags, pos []string) int {
 	}
 	var b bytes.Buffer
 	if f.json {
-		if rows == nil {
-			rows = []tui.PRBoardRow{}
-		}
-		err = writeJSON(&b, rows)
+		err = writeJSON(&b, prsJSONRows(rows))
 	} else {
 		prsRender(&b, rows, prsDefaultRepo(d.Config), inspNow())
 	}

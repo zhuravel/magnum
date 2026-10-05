@@ -19,20 +19,28 @@ type PruneResult struct {
 // disables pruning of that table. It is meant for the daemon's maintenance
 // pass: nothing else ever removes these rows.
 //
-// Step rows of a subject's current generation (kind step, and the step.reset
-// row that opened it) are kept whatever their age, because StepDone reads
-// them to resume a sequence; only superseded generations are pruned.
+// One kind of old event is kept: the step rows of a subject's current
+// generation (kind step, and the step.reset row that opened it), because
+// StepDone reads them to resume a sequence, and only while the subject is in
+// use, that is while it has an event of any kind inside the window. A subject
+// quiet for the whole window is not mid-sequence (subjects carry the head's
+// sha, so a finished checkout never comes back), and its step rows are pruned
+// like any other; a sequence that did run again would repeat its steps, which
+// package steps already requires to be idempotent. Superseded generations are
+// pruned by age as before.
 func (s *Store) Prune(ctx context.Context, keepEvents, keepRequests time.Duration) (PruneResult, error) {
 	var out PruneResult
 	now := s.now()
+	cutoff := now.Add(-keepEvents)
 	err := s.tx(ctx, func(tx *sql.Tx) error {
 		if keepEvents > 0 {
 			res, err := tx.ExecContext(ctx, `
 DELETE FROM events
 WHERE at < ?
-  AND NOT (kind IN (?, ?) AND id >= COALESCE(
-    (SELECT MAX(r.id) FROM events r WHERE r.subject = events.subject AND r.kind = ?), 0))`,
-				FormatTime(now.Add(-keepEvents)), KindStep, KindStepReset, KindStepReset)
+  AND NOT (kind IN (?, ?)
+    AND id >= COALESCE((SELECT MAX(r.id) FROM events r WHERE r.subject = events.subject AND r.kind = ?), 0)
+    AND EXISTS (SELECT 1 FROM events a WHERE a.subject = events.subject AND a.at >= ?))`,
+				FormatTime(cutoff), KindStep, KindStepReset, KindStepReset, FormatTime(cutoff))
 			if err != nil {
 				return fmt.Errorf("events: %w", err)
 			}

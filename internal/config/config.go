@@ -594,6 +594,7 @@ func LoadWithOptions(layout paths.Layout, file string, opts LoadOptions) (*Confi
 	if undecoded := md.Undecoded(); len(undecoded) > 0 {
 		return nil, fmt.Errorf("config %s: unknown keys: %v", name, undecoded)
 	}
+	cfg.learnModelFollowsKind(md)
 	base, err := readLayerData(name, data, md, cfg.Kinds, cfg.Roles)
 	if err != nil {
 		return nil, err
@@ -679,6 +680,7 @@ func (c *Config) applyOverlay(path string) (*layer, error) {
 	overlaySection(md, "usage", &c.Usage, &o.Usage)
 	overlaySection(md, "triage", &c.Triage, &o.Triage)
 	overlaySection(md, "learn", &c.Learn, &o.Learn)
+	c.learnModelFollowsKind(md)
 	overlaySection(md, "board", &c.Board, &o.Board)
 	l, err := readLayer(path, md, o.Kinds, o.Roles)
 	if err != nil {
@@ -738,7 +740,7 @@ func Defaults() *Config {
 			RereviewMaxWait:          Duration{2 * time.Hour},
 		},
 		Herdr:    Herdr{Socket: "~/.config/herdr/herdr.sock", Notify: true},
-		Terminal: Terminal{App: "iTerm2", Session: "default", Mouse: true},
+		Terminal: Terminal{App: "Terminal", Session: "default", Mouse: true, Icons: "unicode"},
 		Codex:    Codex{WrapperMode: "auto", SkillPath: "{{repo}}/skills/magnum-review/SKILL.md"},
 		Claude:   Claude{WrapperMode: "auto", Effort: "high", Simplify: "first"},
 		GitHub:   GitHub{Transport: "gh"},

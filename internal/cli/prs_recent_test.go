@@ -73,12 +73,12 @@ func TestPRsListsRecentlyClosedAfterTheOpenOnes(t *testing.T) {
 	if code := f.run("prs", "--json"); code != 0 {
 		t.Fatalf("code %d err %s", code, f.Err.String())
 	}
-	var rows []tui.PRBoardRow
+	var rows []prsJSONRow
 	if err := json.Unmarshal(f.Out.Bytes(), &rows); err != nil {
 		t.Fatalf("json: %v\n%s", err, f.Out.String())
 	}
 	if len(rows) != 4 {
-		t.Fatalf("json rows %v", prsRefs(rows))
+		t.Fatalf("json rows %v", prsJSONRefs(rows))
 	}
 	for _, r := range rows[:2] {
 		if r.Recent || r.MergedUnreviewed || !r.ClosedAt.IsZero() {
@@ -100,7 +100,7 @@ func TestPRsListsRecentlyClosedAfterTheOpenOnes(t *testing.T) {
 	if err := json.Unmarshal(f.Out.Bytes(), &rows); err != nil {
 		t.Fatal(err)
 	}
-	got := prsRefs(rows)
+	got := prsJSONRefs(rows)
 	if len(got) != 6 || !slices.Equal(got[4:], []string{"talkable/talkable#11990", "talkable/talkable#11991"}) {
 		t.Fatalf("--all rows %v, want every PR with the two recent ones last", got)
 	}
@@ -126,11 +126,11 @@ func TestPRsRecentClosedZeroListsOnlyOpenPRs(t *testing.T) {
 	if code := f.run("prs", "--json"); code != 0 {
 		t.Fatalf("code %d err %s", code, f.Err.String())
 	}
-	var rows []tui.PRBoardRow
+	var rows []prsJSONRow
 	if err := json.Unmarshal(f.Out.Bytes(), &rows); err != nil {
 		t.Fatal(err)
 	}
-	if got := prsRefs(rows); !slices.Equal(got, []string{"talkable/talkable#11931", "talkable/talkable#11920"}) {
+	if got := prsJSONRefs(rows); !slices.Equal(got, []string{"talkable/talkable#11931", "talkable/talkable#11920"}) {
 		t.Fatalf("rows %v, want only the open PRs", got)
 	}
 }

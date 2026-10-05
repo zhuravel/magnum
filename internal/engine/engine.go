@@ -447,10 +447,7 @@ func (e *Engine) Run(ctx context.Context, opts Options) error {
 	}()
 	defer func() { cancel(); <-worker }()
 
-	interval := e.cfg.Daemon.PollInterval.Duration
-	if interval <= 0 {
-		interval = 30 * time.Second
-	}
+	interval := e.cfg.Daemon.PollInterval.Duration // Config.Validate keeps it positive
 	timer := time.NewTimer(0)
 	defer timer.Stop()
 	for {
@@ -527,10 +524,7 @@ func (e *Engine) shutdown() {
 // launched by a --once tick are running (polling is their completion
 // signal); the heavy worker runs alongside.
 func (e *Engine) observeUntilIdle(ctx context.Context) {
-	interval := e.cfg.Daemon.PollInterval.Duration
-	if interval <= 0 {
-		interval = 30 * time.Second
-	}
+	interval := e.cfg.Daemon.PollInterval.Duration // Config.Validate keeps it positive
 	for e.activeRounds() > 0 {
 		if err := e.d.Sleep(ctx, interval); err != nil {
 			return

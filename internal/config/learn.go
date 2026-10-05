@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/BurntSushi/toml"
 )
 
 // Learn is the [learn] section: the daily retro. After a PR closes, magnum
@@ -30,7 +32,10 @@ type Learn struct {
 	// IncludeBots counts bot accounts other than magnum's own as reviewers.
 	IncludeBots bool `toml:"include_bots"`
 	// Kind is the classifying agent's [kinds.<name>]; Model, Effort and Args
-	// are passed to it like a role's (LearnRole).
+	// are passed to it like a role's (LearnRole). Model "" is the kind's own
+	// default (its default_model, else the CLI's). A config that names a kind
+	// but no model gets DefaultLearnModel(kind): sonnet for claude, "" for any
+	// other kind, whose CLI would not know a Claude model name.
 	Kind   string   `toml:"kind"`
 	Model  string   `toml:"model"`
 	Effort string   `toml:"effort"`
@@ -48,6 +53,27 @@ const DefaultLearnPrompt = "retro.md"
 // (LearnRole).
 const LearnRoleName = "retro"
 
+// DefaultLearnModel is the [learn] model of a kind the config names without
+// choosing a model: sonnet for claude, the cheap model the retro was written
+// for, and "" for every other kind, which then runs on its own default model
+// (a Claude model name passed to another CLI fails every PR's retro).
+func DefaultLearnModel(kind string) string {
+	if kind == KindClaude {
+		return "sonnet"
+	}
+	return ""
+}
+
+// learnModelFollowsKind makes the default model kind-aware: a layer (the base
+// file, the user config) that sets learn.kind but not learn.model gets
+// DefaultLearnModel of that kind instead of whatever an earlier layer left.
+// A layer that sets model keeps it, whatever the kind.
+func (c *Config) learnModelFollowsKind(md toml.MetaData) {
+	if md.IsDefined("learn", "kind") && !md.IsDefined("learn", "model") {
+		c.Learn.Model = DefaultLearnModel(c.Learn.Kind)
+	}
+}
+
 // DefaultLearn returns the built-in [learn] values: off, a week of lookback,
 // Claude sonnet classifying.
 func DefaultLearn() Learn {
@@ -57,7 +83,7 @@ func DefaultLearn() Learn {
 		MaxPRs:          20,
 		MinCommentChars: 20,
 		Kind:            KindClaude,
-		Model:           "sonnet",
+		Model:           DefaultLearnModel(KindClaude),
 		Prompt:          DefaultLearnPrompt,
 		Timeout:         Duration{20 * time.Minute},
 	}
@@ -102,10 +128,26 @@ func (c *Config) LearnRole() Role {
 	return c.normalizedRoles([]Role{r})[0]
 }
 
+// validateLearnRole runs LearnRole through validateRole, the checks a [[role]]
+// gets, with its messages worded for [learn] ("learn: kind droid has no model
+// args ..."). The prompt and the timeout are left out: validateLearn checks
+// learn.prompt and learn.timeout itself, with their own wording, so neither is
+// reported twice. The kind is declared (the caller checked).
+func (c *Config) validateLearnRole() []error {
+	r := c.LearnRole()
+	r.Prompt, r.Rereview, r.Timeout = "", "", Duration{time.Minute}
+	var errs []error
+	for _, err := range c.validateRole(r, c.kinds(), nil) {
+		errs = append(errs, errors.New("learn: "+strings.TrimPrefix(err.Error(), "role "+LearnRoleName+": ")))
+	}
+	return errs
+}
+
 // validateLearn checks [learn] always (a forced `magnum retro` runs whether or
 // not the schedule is enabled): daily_at parses, the kind is a declared agent
-// kind ("shell" is not one), the prompt names a file that resolves and parses,
-// and the limits are positive.
+// kind ("shell" is not one), the role it builds (LearnRole) passes the checks
+// of a [[role]] (a kind without model args cannot be handed a model), the
+// prompt names a file that resolves and parses, and the limits are positive.
 func (c *Config) validateLearn() []error {
 	l := c.Learn
 	var errs []error
@@ -114,6 +156,8 @@ func (c *Config) validateLearn() []error {
 	}
 	if _, ok := c.KindSpec(l.Kind); !ok {
 		errs = append(errs, fmt.Errorf("learn.kind %q is not a declared agent kind (declared: %s)", l.Kind, strings.Join(c.KindNames(), ", ")))
+	} else {
+		errs = append(errs, c.validateLearnRole()...)
 	}
 	if l.Prompt == "" {
 		errs = append(errs, errors.New("learn.prompt must name a prompt file"))

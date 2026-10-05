@@ -31,7 +31,9 @@ func TestPruneEventsAndRequests(t *testing.T) {
 	curReset := event(45, "slot:a", KindStepReset, "", "")
 	curStep := event(44, "slot:a", KindStep, "provision", PhaseOK)
 	oldNote := event(44, "slot:a", "slot.note", "", "")
-	// slot:b never reset: all its step rows are in the current generation.
+	recentNote := event(3, "slot:a", "slot.note", "", "") // slot:a is in use: its current generation stays
+	// slot:b never reset (all its step rows are in the current generation) but
+	// has been silent for the whole window: nothing resumes it, so it goes.
 	noResetStep := event(60, "slot:b", KindStep, "provision", PhaseOK)
 	// An old step row of another subject must not be saved by slot:a's reset.
 	otherOld := event(41, "slot:c", "poll", "", "")
@@ -60,7 +62,7 @@ func TestPruneEventsAndRequests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := (PruneResult{Events: 5, Requests: 2}); res != want {
+	if want := (PruneResult{Events: 6, Requests: 2}); res != want {
 		t.Fatalf("Prune = %+v, want %+v", res, want)
 	}
 
@@ -75,8 +77,8 @@ func TestPruneEventsAndRequests(t *testing.T) {
 		left = append(left, id)
 	}
 	rows.Close()
-	gone := map[int64]bool{oldPlain: true, oldReset: true, oldStep: true, oldNote: true, otherOld: true}
-	kept := []int64{recentPlain, curReset, curStep, noResetStep}
+	gone := map[int64]bool{oldPlain: true, oldReset: true, oldStep: true, oldNote: true, otherOld: true, noResetStep: true}
+	kept := []int64{recentPlain, curReset, curStep, recentNote}
 	for _, id := range left {
 		if gone[id] {
 			t.Errorf("event %d should have been pruned", id)
@@ -95,11 +97,9 @@ func TestPruneEventsAndRequests(t *testing.T) {
 		t.Errorf("%d events left, want %d: %v", len(left), len(kept), left)
 	}
 
-	// Resuming a sequence still sees its current generation's ok rows.
-	for _, c := range []struct{ subject, step string }{{"slot:a", "provision"}, {"slot:b", "provision"}} {
-		if done, err := st.StepDone(ctx, c.subject, c.step); err != nil || !done {
-			t.Errorf("StepDone(%s, %s) = %v, %v after Prune; want true", c.subject, c.step, done, err)
-		}
+	// Resuming a sequence of a subject in use still sees its current generation's ok rows.
+	if done, err := st.StepDone(ctx, "slot:a", "provision"); err != nil || !done {
+		t.Errorf("StepDone(slot:a, provision) = %v, %v after Prune; want true", done, err)
 	}
 
 	for id, wantGone := range map[int64]bool{r1: false, r2: true, r3: true, r4: false, r5: false} {

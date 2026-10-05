@@ -7,24 +7,25 @@
 # Durations use Go syntax: "30s", "5m", "2h", with whole days in front: "7d", "1d12h".
 
 [daemon]
-poll_interval = "30s"
+poll_interval = "30s"                 # how often magnum polls GitHub and observes herdr; must be positive
 max_concurrent_reviews = 3        # review rounds running at once
 max_total_working_codex = 5       # counts your own working Codex agents too
-push_quiet_period = "5m"          # a new head is reviewable only after no push for this long
+push_quiet_period = "5m"          # a new head is reviewable only after no push for this long (0 = at once; never negative)
 min_rereview_interval = "30m"     # per PR, between review rounds
 draft_min_rereview_interval = "2h"
 max_rounds_per_pr_per_day = 12    # automatic rounds only: requested and forced rounds never count, and rounds
                                   # magnum cut short (a restart, an error before any prompt, a prompt that did
                                   # not render) are refunded
-close_grace = "10m"               # wait after CLOSED/MERGED before releasing (covers reopen)
+close_grace = "10m"               # wait after CLOSED/MERGED before releasing (covers reopen; 0 = release at once)
 # reviewer_timeout / judge_timeout: set per role now ([[role]] timeout below); still read as fallbacks
 agent_start_stagger = "15s"
 min_warm = "30m"
 human_cooldown = "15m"            # after you type into a magnum pane
-reconcile_interval = "10m"
+reconcile_interval = "10m"          # reconcile and prune; must be positive (0 would stop the retention below)
 default_repo = ""                 # "owner/name": lets `magnum review 123` omit the repository (set it in your config)
-min_free_disk_gb = 15
-keep_events = "30d"               # audit events older than this are pruned on every reconcile ("0" keeps all)
+min_free_disk_gb = 15                # a slot or worktree needs this much free disk (0 = no check)
+keep_events = "30d"               # audit events older than this are pruned on every reconcile ("0" keeps all); the step
+                                  # rows a checkout resumes from are kept only while their subject has an event inside it
 keep_requests = "7d"              # handled CLI requests older than this are pruned the same way
 max_round_restarts = 2            # a push while the reviewers run restarts them on the new head (0 = never)
 burst_quiet_period = "15m"        # replaces push_quiet_period after a burst of pushes:
@@ -118,7 +119,11 @@ max_prs = 20                      # PRs classified per retro, the newest closed 
 min_comment_chars = 20            # shorter comments are dropped
 include_bots = false              # bot accounts other than magnum's count as reviewers
 kind = "claude"                   # the classifying agent: a [kinds.<name>] that drives a session (not "shell")
-model = "sonnet"                  # passed through the kind's `model` args ("" = the kind's own default)
+model = "sonnet"                  # passed through the kind's `model` args ("" = the kind's own default model). "sonnet" is
+                                  # the default of kind "claude" only: a config that sets another kind and no model
+                                  # gets "" (that kind's default_model, else its CLI's own), and one that sets a
+                                  # model keeps it. The agent is checked like a [[role]] (a kind without `model`
+                                  # args cannot be given one)
 effort = ""                       # passed through the kind's `effort` args ("" = none)
 # args = []                       # appended to the agent's launch args
 prompt = "retro.md"               # in prompts_dir; the embedded copy when absent
@@ -267,6 +272,15 @@ aliases = ["simplify"]
 # kind = "gh"                             # your `gh auth login` account
 # login = "your-login"
 # no_findings_event = "APPROVE"           # APPROVE | COMMENT when the judge finds nothing
+# dismiss_own_stale_change_requests = true  # a re-review with no blocking finding dismisses this identity's own earlier
+#                                         # CHANGES_REQUESTED review of the PR ("Superseded by the newer magnum review"),
+#                                         # which would otherwise stay and keep blocking the author's merge. The default
+#                                         # depends on the kind: true for an app, false for gh, whose reviews are your
+#                                         # own account's, so set true to let magnum withdraw them. A change request you
+#                                         # posted by hand (magnum request-changes), and any review after the PR was
+#                                         # merged, are never dismissed; a failed dismissal (a missing permission) only
+#                                         # warns. After a watch moves to another identity the new one's review also
+#                                         # dismisses the old identity's change requests, if the old one has this on.
 #
 # [[identity]]
 # name = "reviewer-app"
@@ -280,6 +294,8 @@ aliases = ["simplify"]
 #                                         # env var holding the PEM's text or path (e.g. from a checkout's mise)
 # no_findings_event = "COMMENT"           # never let a bot approval unlock a merge by accident
 # blocking_event = "REQUEST_CHANGES"
+# dismiss_own_stale_change_requests = true  # the default for an app (see above); false leaves a stale change request
+#                                         # for a human to dismiss
 #
 # [[watch]]
 # owner = "your-org"
@@ -307,8 +323,8 @@ aliases = ["simplify"]
 # [[pool]]                                # a big app with its own databases: a pool of warm slots
 # repo = "your-org/your-app"
 # main_clone = "~/Projects/your-app"
-# slot_name = "review{n}"
-# slot_path = "~/Projects/your-app.review{n}"
+# slot_name = "review{n}"                 # slot names and paths are unique: two pools must not render the same
+# slot_path = "~/Projects/your-app.review{n}"   # one (review1 in both), so give each pool its own prefix
 # base = "master"
 # min = 6
 # max = 8

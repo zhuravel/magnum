@@ -8,24 +8,25 @@
 # Durations use Go syntax: "30s", "5m", "2h", with whole days in front: "7d", "1d12h".
 
 [daemon]
-poll_interval = "30s"
+poll_interval = "30s"                 # how often magnum polls GitHub and observes herdr; must be positive
 max_concurrent_reviews = 3        # review rounds running at once
 max_total_working_codex = 5       # counts your own working Codex agents too
-push_quiet_period = "5m"          # a new head is reviewable only after no push for this long
+push_quiet_period = "5m"          # a new head is reviewable only after no push for this long (0 = at once; never negative)
 min_rereview_interval = "30m"     # per PR, between review rounds
 draft_min_rereview_interval = "2h"
 max_rounds_per_pr_per_day = 12    # automatic rounds only: requested and forced rounds never count, and rounds
                                   # magnum cut short (a restart, an error before any prompt, a prompt that did
                                   # not render) are refunded
-close_grace = "10m"               # wait after CLOSED/MERGED before releasing (covers reopen)
+close_grace = "10m"               # wait after CLOSED/MERGED before releasing (covers reopen; 0 = release at once)
 # reviewer_timeout / judge_timeout: set per role now ([[role]] timeout below); still read as fallbacks
 agent_start_stagger = "15s"
 min_warm = "30m"
 human_cooldown = "15m"            # after you type into a magnum pane
-reconcile_interval = "10m"
+reconcile_interval = "10m"          # reconcile and prune; must be positive (0 would stop the retention below)
 default_repo = "talkable/talkable"
-min_free_disk_gb = 15
-keep_events = "30d"               # audit events older than this are pruned on every reconcile ("0" keeps all)
+min_free_disk_gb = 15                # a slot or worktree needs this much free disk (0 = no check)
+keep_events = "30d"               # audit events older than this are pruned on every reconcile ("0" keeps all); the step
+                                  # rows a checkout resumes from are kept only while their subject has an event inside it
 keep_requests = "7d"              # handled CLI requests older than this are pruned the same way
 max_round_restarts = 2            # a push while the reviewers run restarts them on the new head (0 = never)
 burst_quiet_period = "15m"        # replaces push_quiet_period after a burst of pushes:
@@ -98,7 +99,8 @@ max_prs = 20                      # PRs classified per retro, the newest closed 
 min_comment_chars = 20            # shorter comments are dropped
 include_bots = false              # bot accounts other than magnum's count as reviewers
 kind = "claude"                   # a [kinds.<name>] that drives a session (not "shell")
-model = "sonnet"
+model = "sonnet"                  # the default of kind "claude" only: another kind without a model of its own runs on
+                                  # its own default model ("" = that kind's default_model, else its CLI's)
 effort = ""
 # args = []                       # appended to the agent's launch args
 prompt = "retro.md"
@@ -239,6 +241,10 @@ name = "zhuravel"
 kind = "gh"
 login = "zhuravel"
 no_findings_event = "APPROVE"
+# dismiss_own_stale_change_requests = true  # a re-review with no blocking finding dismisses this identity's own earlier
+#                                           # CHANGES_REQUESTED review, which would otherwise keep blocking the author's
+#                                           # merge. Default: true for kind = "app", false for "gh" (your own account's
+#                                           # reviews stay unless you opt in); hand-posted change requests are never dismissed
 
 [[identity]]
 name = "talkable-app"
@@ -250,6 +256,7 @@ installation_id = 105365229
 private_key_file = "~/.config/magnum/keys/talkable-app.pem"   # the App's PEM, chmod 600
 no_findings_event = "COMMENT"
 blocking_event = "REQUEST_CHANGES"
+# dismiss_own_stale_change_requests = true  # the default for an app: false leaves a stale change request for a human to dismiss
 
 [[watch]]
 owner = "talkable"
@@ -274,7 +281,7 @@ roles = ["codex-judge", "claude-review", "codex-review", "claude-simplify"]   # 
 [[pool]]
 repo = "talkable/talkable"
 main_clone = "~/Projects/talkable"
-slot_name = "review{n}"
+slot_name = "review{n}"           # slot names and paths are unique: two pools must not render the same one
 slot_path = "~/Projects/talkable.review{n}"
 base = "master"
 min = 12

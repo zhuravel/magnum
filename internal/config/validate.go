@@ -126,6 +126,7 @@ func (c *Config) Validate() error {
 			errs = append(errs, fmt.Errorf("pool %s: no [[watch]] covers it", p.Repo))
 		}
 	}
+	errs = append(errs, c.validatePoolSlots()...)
 	errs = append(errs, c.validateRepos()...)
 	errs = append(errs, c.validatePipeline()...)
 	if c.Daemon.MaxConcurrentReviews < 1 {
@@ -134,6 +135,7 @@ func (c *Config) Validate() error {
 	if !filepath.IsAbs(c.Herdr.Socket) {
 		errs = append(errs, fmt.Errorf("herdr.socket must be absolute after expansion: %s", c.Herdr.Socket))
 	}
+	errs = append(errs, c.Daemon.validateTimings()...)
 	errs = append(errs, validateQuietHours(c.Daemon.QuietHours)...)
 	errs = append(errs, validateKeep("daemon.keep_events", c.Daemon.KeepEvents)...)
 	errs = append(errs, validateKeep("daemon.keep_requests", c.Daemon.KeepRequests)...)
@@ -167,6 +169,48 @@ func (c *Config) Validate() error {
 		errs = append(errs, fmt.Errorf("terminal.icons must be unicode, nerd or ascii, got %q", c.Terminal.Icons))
 	}
 	return errors.Join(errs...)
+}
+
+// validateTimings checks the daemon's intervals, waits and limits that
+// nothing else checks (the burst, rereview, keep and request_debounce keys have
+// their own validators). The poll and reconcile intervals must be positive: the
+// engine used to patch a bad poll interval in three places, and a reconcile
+// interval of 0 skipped every reconcile, so the retention never ran. The
+// waits and quiet periods may be 0 (none) but not negative, which released a
+// closed PR's slot at once or counted a push as old before it was made.
+// default_repo, when set, is the owner/name `magnum review 123` assumes.
+func (d Daemon) validateTimings() []error {
+	var errs []error
+	for _, x := range []struct {
+		key string
+		d   Duration
+	}{{"poll_interval", d.PollInterval}, {"reconcile_interval", d.ReconcileInterval}} {
+		if x.d.Duration <= 0 {
+			errs = append(errs, fmt.Errorf("daemon.%s must be positive, got %s", x.key, x.d.Duration))
+		}
+	}
+	for _, x := range []struct {
+		key string
+		d   Duration
+	}{
+		{"push_quiet_period", d.PushQuietPeriod}, {"min_rereview_interval", d.MinRereviewInterval},
+		{"draft_min_rereview_interval", d.DraftMinRereviewInterval}, {"close_grace", d.CloseGrace},
+		{"reviewer_timeout", d.ReviewerTimeout}, {"judge_timeout", d.JudgeTimeout},
+		{"agent_start_stagger", d.AgentStartStagger}, {"min_warm", d.MinWarm}, {"human_cooldown", d.HumanCooldown},
+	} {
+		if x.d.Duration < 0 {
+			errs = append(errs, fmt.Errorf("daemon.%s must not be negative, got %s", x.key, x.d.Duration))
+		}
+	}
+	if d.MinFreeDiskGB < 0 {
+		errs = append(errs, fmt.Errorf("daemon.min_free_disk_gb must be >= 0, got %d", d.MinFreeDiskGB))
+	}
+	if r := d.DefaultRepo; r != "" {
+		if owner, name, ok := strings.Cut(r, "/"); !ok || owner == "" || name == "" || strings.Contains(name, "/") {
+			errs = append(errs, fmt.Errorf("daemon.default_repo %q must be owner/name", r))
+		}
+	}
+	return errs
 }
 
 // validateUsage checks [usage]: each threshold is 0 (off) or a percentage
@@ -213,6 +257,54 @@ func validateRereviewDelta(prefix string, minLines *int, maxWait Duration) []err
 	}
 	if maxWait.Duration < 0 {
 		errs = append(errs, fmt.Errorf("%srereview_max_wait must not be negative", prefix))
+	}
+	return errs
+}
+
+// maxCheckedSlots bounds how many slot numbers of a pool validatePoolSlots
+// renders: a pool of more checkouts than that is not a pool anyone runs.
+const maxCheckedSlots = 1000
+
+// validatePoolSlots checks that no two [[pool]] blocks render the same slot
+// name or checkout path, for any slot number up to a pool's max (a slot is
+// numbered from 1 and a pool never holds more than max). The registry keeps
+// slot names (and the paths on disk) unique, so a second pool whose
+// "review{n}" renders the first pool's "review1" would be handed that slot,
+// never grow, and report nothing. A repository configured twice is reported
+// by the caller already, and its pools are not compared with each other.
+func (c *Config) validatePoolSlots() []error {
+	type owner struct {
+		repo string
+		n    int
+	}
+	var errs []error
+	names, dirs := map[string]owner{}, map[string]owner{}
+	for _, p := range c.Pools {
+		if p.Max <= 0 || !strings.Contains(p.SlotName, "{n}") || !strings.Contains(p.SlotPath, "{n}") {
+			continue // reported by the pool's own checks
+		}
+		last := min(p.Max, maxCheckedSlots)
+		for _, k := range []struct {
+			key    string
+			seen   map[string]owner
+			render func(n int) string
+		}{
+			{"slot_name", names, p.Slot},
+			{"slot_path", dirs, func(n int) string { return filepath.Clean(p.Path(n)) }},
+		} {
+			for n := 1; n <= last; n++ {
+				if o, taken := k.seen[k.render(n)]; taken && !strings.EqualFold(o.repo, p.Repo) {
+					errs = append(errs, fmt.Errorf("pool %s: %s renders %q for slot %d, which pool %s also renders (for slot %d); "+
+						"slot names and paths are unique across pools, so give each pool its own", p.Repo, k.key, k.render(n), n, o.repo, o.n))
+					break
+				}
+			}
+			for n := 1; n <= last; n++ {
+				if _, taken := k.seen[k.render(n)]; !taken {
+					k.seen[k.render(n)] = owner{p.Repo, n}
+				}
+			}
+		}
 	}
 	return errs
 }

@@ -392,11 +392,11 @@ func TestPRsPrintsTableAndJSON(t *testing.T) {
 	if code := f.run("prs", "--all", "--sort", "last-review", "--json"); code != 0 {
 		t.Fatalf("code %d err %s", code, f.Err.String())
 	}
-	var rows []tui.PRBoardRow
+	var rows []prsJSONRow
 	if err := json.Unmarshal(f.Out.Bytes(), &rows); err != nil {
 		t.Fatalf("json: %v\n%s", err, f.Out.String())
 	}
-	if refs := prsRefs(rows); !slices.Equal(refs, []string{"talkable/talkable#11920", "talkable/talkable#11931", "zhuravel/app#3"}) {
+	if refs := prsJSONRefs(rows); !slices.Equal(refs, []string{"talkable/talkable#11920", "talkable/talkable#11931", "zhuravel/app#3"}) {
 		t.Fatalf("--all --sort last-review: %v (reviewed first, then newest update)", refs)
 	}
 	if r := rows[0]; r.LastReview == nil || !r.LastReview.Mine || !r.SinceReview.Truncated || len(r.Reviewers) != 3 {
@@ -417,7 +417,7 @@ func TestPRsPrintsTableAndJSON(t *testing.T) {
 	if err := json.Unmarshal(f.Out.Bytes(), &rows); err != nil {
 		t.Fatalf("json: %v\n%s", err, f.Out.String())
 	}
-	if refs := prsRefs(rows); !slices.Equal(refs, []string{"talkable/talkable#11931", "talkable/talkable#11920", "zhuravel/app#3"}) {
+	if refs := prsJSONRefs(rows); !slices.Equal(refs, []string{"talkable/talkable#11931", "talkable/talkable#11920", "zhuravel/app#3"}) {
 		t.Fatalf("--all --sort requested: %v (the hour-old request, the five-hour-old one, then none)", refs)
 	}
 	if code := f.run("prs", "--all", "--sort", "requested", "--desc=false", "--json"); code != 0 {
@@ -426,7 +426,7 @@ func TestPRsPrintsTableAndJSON(t *testing.T) {
 	if err := json.Unmarshal(f.Out.Bytes(), &rows); err != nil {
 		t.Fatalf("json: %v\n%s", err, f.Out.String())
 	}
-	if refs := prsRefs(rows); !slices.Equal(refs, []string{"talkable/talkable#11920", "talkable/talkable#11931", "zhuravel/app#3"}) {
+	if refs := prsJSONRefs(rows); !slices.Equal(refs, []string{"talkable/talkable#11920", "talkable/talkable#11931", "zhuravel/app#3"}) {
 		t.Fatalf("--all --sort requested --desc=false: %v (oldest request first, none still last)", refs)
 	}
 
@@ -438,7 +438,7 @@ func TestPRsPrintsTableAndJSON(t *testing.T) {
 		t.Fatalf("code %d", code)
 	}
 	if err := json.Unmarshal(f.Out.Bytes(), &rows); err != nil || len(rows) != 1 || rows[0].Ref != "talkable/talkable#11920" {
-		t.Fatalf("--desc=false --limit 1 must be the oldest update: %v %v", err, prsRefs(rows))
+		t.Fatalf("--desc=false --limit 1 must be the oldest update: %v %v", err, prsJSONRefs(rows))
 	}
 	// The limit cuts after the requested sort, not after the registry's
 	// newest-update order.
@@ -446,11 +446,19 @@ func TestPRsPrintsTableAndJSON(t *testing.T) {
 		t.Fatalf("code %d", code)
 	}
 	if err := json.Unmarshal(f.Out.Bytes(), &rows); err != nil || len(rows) != 1 || rows[0].Ref != "talkable/talkable#11920" {
-		t.Fatalf("--sort last-review --limit 1: %v %v", err, prsRefs(rows))
+		t.Fatalf("--sort last-review --limit 1: %v %v", err, prsJSONRefs(rows))
 	}
 	if code := f.run("prs", "--repo", "nope", "--json"); code != 0 || strings.TrimSpace(f.Out.String()) != "[]" {
 		t.Fatalf("no rows: code %d %q", code, f.Out.String())
 	}
+}
+
+func prsJSONRefs(rows []prsJSONRow) []string {
+	var out []string
+	for _, r := range rows {
+		out = append(out, r.Ref)
+	}
+	return out
 }
 
 func prsRefs(rows []tui.PRBoardRow) []string {
@@ -809,11 +817,11 @@ func TestPRsView(t *testing.T) {
 		if code := f.run("prs", "--view", view, "--json"); code != 0 {
 			t.Fatalf("--view %s: code %d err %s", view, code, f.Err.String())
 		}
-		var rows []tui.PRBoardRow
+		var rows []prsJSONRow
 		if err := json.Unmarshal(f.Out.Bytes(), &rows); err != nil {
 			t.Fatal(err)
 		}
-		if got := prsRefs(rows); !slices.Equal(got, want) {
+		if got := prsJSONRefs(rows); !slices.Equal(got, want) {
 			t.Errorf("--view %s = %v, want %v", view, got, want)
 		}
 	}

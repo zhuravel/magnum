@@ -2047,6 +2047,12 @@ func DefaultKinds() map[string]Kind
     approval prompt No. Args apply only without a wrapper, so a wrapper's own
     flags are never doubled.
 
+func DefaultLearnModel(kind string) string
+    DefaultLearnModel is the [learn] model of a kind the config names without
+    choosing a model: sonnet for claude, the cheap model the retro was written
+    for, and "" for every other kind, which then runs on its own default model
+    (a Claude model name passed to another CLI fails every PR's retro).
+
 func Issue(title string, trackers []Tracker) (key, url string)
     Issue finds the first issue key in title that one of trackers knows
     (leftmost; at one position, the earlier tracker) and returns the key
@@ -2614,7 +2620,10 @@ type Learn struct {
 	// IncludeBots counts bot accounts other than magnum's own as reviewers.
 	IncludeBots bool `toml:"include_bots"`
 	// Kind is the classifying agent's [kinds.<name>]; Model, Effort and Args
-	// are passed to it like a role's (LearnRole).
+	// are passed to it like a role's (LearnRole). Model "" is the kind's own
+	// default (its default_model, else the CLI's). A config that names a kind
+	// but no model gets DefaultLearnModel(kind): sonnet for claude, "" for any
+	// other kind, whose CLI would not know a Claude model name.
 	Kind   string   `toml:"kind"`
 	Model  string   `toml:"model"`
 	Effort string   `toml:"effort"`
@@ -9900,9 +9909,15 @@ func (s *Store) Prune(ctx context.Context, keepEvents, keepRequests time.Duratio
     pruning of that table. It is meant for the daemon's maintenance pass:
     nothing else ever removes these rows.
 
-    Step rows of a subject's current generation (kind step, and the step.reset
-    row that opened it) are kept whatever their age, because StepDone reads them
-    to resume a sequence; only superseded generations are pruned.
+    One kind of old event is kept: the step rows of a subject's current
+    generation (kind step, and the step.reset row that opened it), because
+    StepDone reads them to resume a sequence, and only while the subject is in
+    use, that is while it has an event of any kind inside the window. A subject
+    quiet for the whole window is not mid-sequence (subjects carry the head's
+    sha, so a finished checkout never comes back), and its step rows are pruned
+    like any other; a sequence that did run again would repeat its steps, which
+    package steps already requires to be idempotent. Superseded generations are
+    pruned by age as before.
 
 func (s *Store) RecordFindings(ctx context.Context, runID string, prID int64, round int, fs []Finding) error
     RecordFindings replaces the findings recorded for runID with fs in one

@@ -142,7 +142,13 @@ A `config.local.toml` in the checkout, where settings lived before, is still rea
 `~/.config/magnum/config.toml` does not exist; doctor says how to move it.
 
 The daemon prunes audit events older than `[daemon] keep_events` (default `"30d"`) and handled CLI
-requests older than `keep_requests` (default `"7d"`) on every reconcile; `"0"` keeps them forever.
+requests older than `keep_requests` (default `"7d"`) on every reconcile; `"0"` keeps them forever. The
+step rows a checkout resumes from after a crash are the one exception, and only while their subject (a
+checkout, named with the head's sha) has had an event inside the window: a subject quiet for `keep_events`
+loses them with the rest. `poll_interval` and `reconcile_interval` must be positive, the other waits and
+quiet periods (`close_grace`, `push_quiet_period`, ...) and `min_free_disk_gb` not negative, and
+`default_repo`, when set, `owner/name`; the config is refused otherwise. Two `[[pool]]` blocks may not
+render the same `slot_name` or `slot_path`.
 
 A push that lands while a round's reviewers still run restarts them on the new head, up to
 `[daemon] max_round_restarts` times per round (default 2; `0` turns restarts off). A push that lands
@@ -222,6 +228,7 @@ name = "me"
 kind = "gh"                        # your gh login
 login = "your-login"
 no_findings_event = "APPROVE"
+# dismiss_own_stale_change_requests = true   # default: false for kind = "gh", true for "app" (see below)
 
 [[identity]]
 name = "reviewer-app"
@@ -243,6 +250,14 @@ identity ran in, reads the old login's reviews and threads as its own history (t
 replies to answer, the earlier findings), and once its review is posted dismisses what the old identity
 left standing, its change requests and an App's approvals, with the old identity's own credentials.
 `magnum review --as <identity>` pins one PR to an identity, and a pinned PR never migrates.
+
+`dismiss_own_stale_change_requests` says what happens to an identity's own earlier REQUEST_CHANGES review
+once a newer review of the PR has nothing blocking: `true` dismisses it ("Superseded by the newer magnum
+review"), `false` leaves it standing, and a standing change request keeps blocking the author's merge until
+a human dismisses it. The default follows the kind: `true` for an `app`, `false` for `gh`, because a `gh`
+identity is your own account and its reviews are yours to withdraw; set it to `true` on a `gh` identity to
+let Magnum do that. A change request you posted by hand (`magnum request-changes`) and any review posted
+after the PR was merged are never dismissed, and a dismissal that fails (a missing permission) only warns.
 
 ### Watches, pools and repos: what to review and where
 
@@ -430,7 +445,7 @@ code; `magnum stats` reports them per role.
 | Command | What it does |
 |---|---|
 | `magnum init [--force]` | Write `~/.config/magnum/config.toml` for this machine from three questions: your gh login, one repository, who posts (your login or a GitHub App). |
-| `magnum prs [--repo …] [--view all\|magnum\|mine\|ready] [--sort updated\|last-review\|reviewer-activity\|requested\|changes\|state] [--all] [--json]` | The PR board: every watched PR with its last review, each reviewer's verdict (with staleness), when a review was last requested (and whether of you), what changed since the last review, assignees; then the PRs merged or closed in the last day (`[board] recent_closed`), flagging one merged before Magnum reviewed its last push. `--view` keeps what Magnum reviewed, what is yours or what is ready to merge. Live screen on a terminal, table or JSON otherwise. |
+| `magnum prs [--repo …] [--view all\|magnum\|mine\|ready] [--sort updated\|last-review\|reviewer-activity\|requested\|changes\|state] [--all] [--json]` | The PR board: every watched PR with its last review, each reviewer's verdict (with staleness), when a review was last requested (and whether of you), what changed since the last review, assignees; then the PRs merged or closed in the last day (`[board] recent_closed`), flagging one merged before Magnum reviewed its last push. `--view` keeps what Magnum reviewed, what is yours or what is ready to merge. Live screen on a terminal, table or JSON otherwise: snake_case keys, times in RFC 3339 (left out while unset), durations in seconds (`total_seconds`, `duration_seconds`), `null` for a part a PR has none of and `[]` for an empty list. |
 | `magnum status [<ref>\|<slot>] [--all] [--sizes] [--json] [--watch]` | Daemon, slots, queue, pauses; a PR's detail card with its review history and the last round's stage timings. `--watch` is the live dashboard (`tab` flips to the PR board). |
 | `magnum stats [--since 7d] [--repo owner/name] [--json]` | Review statistics per local day and repository over a window (`--since` takes `7d`, `36h`, `90m` or a date; default 7d): rounds started and how they ended, findings posted by priority, median and p90 durations per role and per round, how many findings each source raised, had posted, had posted alone or had rejected (with reason codes), and model switches, denied prompts and round restarts. |
 | `magnum eval run\|score\|list\|show` | Measure a prompt, skill or model change: `run` replays the PRs with known defects in `~/.config/magnum/eval.toml` (see `eval.toml.example`) at their pinned heads as blind dry runs and reports, per case, the seeded defects the planned review found, at what severity, and its other findings (noise), next to the previous run. `score` re-scores a run after a match rule is fixed, without the agents. |
@@ -588,7 +603,9 @@ a force push replaced). A comment near a finding the judge rejected is marked as
 the judge's reason code. A comment on deleted lines keeps its file and hunk but no line.
 
 The rest goes to an interactive agent in a herdr workspace named `learn retro`, tagged `learn` like eval's
-agents are tagged `eval`: `kind` and `model` (Claude sonnet by default), one prompt per pull request
+agents are tagged `eval`: `kind` and `model` (Claude sonnet by default; `sonnet` is the default of the
+`claude` kind only, so another `kind` without a `model` runs on its own default model, and the agent
+is checked like a `[[role]]`), one prompt per pull request
 (`prompts/retro.md`) that carries only file paths, the pull request's URL and the reviewed SHAs. The agent
 reads the comments from a file, with each commented file as it was at the reviewed commit (copied from
 GitHub, up to 512 KiB each), and writes its answer to another: `miss` (a real defect a careful reviewer

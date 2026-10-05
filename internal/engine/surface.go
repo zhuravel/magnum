@@ -125,10 +125,7 @@ func (e *Engine) writeTabBar() {
 	if !e.d.Layout.Valid() {
 		return
 	}
-	interval := e.cfg.Daemon.PollInterval.Duration
-	if interval <= 0 {
-		interval = 30 * time.Second
-	}
+	interval := e.cfg.Daemon.PollInterval.Duration // Config.Validate keeps it positive
 	if err := WriteTabBarFile(e.d.Layout.TabBar(), e.now(), tabBarStaleTicks*interval, e.lastTabBar); err != nil {
 		e.log.Warn("tab bar", "err", err)
 	}

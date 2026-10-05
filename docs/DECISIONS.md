@@ -1021,3 +1021,72 @@ editing history. Code, config comments and prompts reference these by their head
   and keeping the old question on merged rows. Left as is: while a post-merge round is due or running the
   mute keeps the mark and the flag stays until the round ends (`K` aborts it, then `M` dismisses), and `U`
   still asks its old question on a merged row.
+- **Config is refused when it would silently disable a guard or share a slot** (2026-10-05, after a review of
+  the config and the registry found each of these loading clean). **Pools**: two `[[pool]]` blocks may not
+  render the same `slot_name` or `slot_path` for any slot number up to their `max` (paths compared cleaned,
+  `~` expanded). The registry keeps slot names unique, so a second pool copied from the README's `review{n}`
+  was handed the first pool's `review1`, never grew, and said nothing. `rev{n}` against `rev1{n}` is caught
+  too, at `rev11`, when both pools are big enough to reach it. **`[learn]`**: the role the retro runs as
+  (`Config.LearnRole`) goes through the checks of a `[[role]]`, worded `learn: ...` (the prompt and the
+  timeout keep their own messages, reported once), so a kind without `model` args fails the load as the same
+  role would instead of failing every PR's retro three times. The default model is kind-aware: `sonnet` is
+  `DefaultLearnModel("claude")`, other kinds get `""` (their `default_model`, else their CLI's own); a layer
+  (the base file or the user config) that sets `learn.kind` and not `learn.model` gets the default of that
+  kind, a layer that sets a model keeps it, so `kind = "codex"` no longer runs `codex --model sonnet`.
+  **Daemon timings**: `poll_interval` and `reconcile_interval` must be positive, `close_grace`,
+  `push_quiet_period`, `min_rereview_interval`, `draft_min_rereview_interval`, `agent_start_stagger`,
+  `min_warm`, `human_cooldown`, `reviewer_timeout` and `judge_timeout` not negative (0 stays "none" or "use
+  the fallback"), `min_free_disk_gb` not negative and `default_repo`, when set, `owner/name`. A reconcile
+  interval of 0 had skipped every reconcile, the retention with it, and a negative `close_grace` released a
+  closed PR's slot at once. With the load refusing them, the three `poll_interval <= 0` fallbacks in the
+  engine are gone: one place decides what is valid. Rejected: keeping the fallbacks as a second line of
+  defence (they hid the bad value, and a config the engine and the validator read differently is a bug
+  waiting), and unlimited rendering for the pool check (a bound of 1000 slots per pool is far past any pool).
+- **`config.Defaults()` equals `config.defaults.toml`** (2026-10-05). The Go literal said `terminal.app =
+  "iTerm2"` and no icon set where the committed file says `"Terminal"` and `"unicode"`, so a `--config` base
+  without `[terminal]` and every test that calls `Defaults()` ran on a configuration no installed binary
+  has. The literal follows the file, and `TestGoDefaultsEqualTheEmbeddedDefaultsFile` walks every key the
+  file sets in every plain-data section and fails on a difference, so the two cannot drift again. A key the
+  file only mentions in a comment is the Go value by design (that is how a documented default is spelled)
+  and is not compared; kinds and roles had a test already. Rejected: generating the Go literal from the file
+  at start-up (the literal is what tests and tools read before any file is, and a parse of the embedded file
+  on every `Defaults()` call costs more than the test).
+- **`keep_events` prunes step rows too, once their subject is quiet** (2026-10-05). The retention kept the
+  step rows of every subject's current generation for ever, because `StepDone` reads them to resume a
+  sequence, but a subject carries the head's sha (`slot:review3:pr:11483:2e1a968`), so a finished checkout
+  never comes back: 44% of the live registry's events were such rows, about 350 a day, against a default
+  that promises 30 days. A step row, and the `step.reset` that opened its generation, is now kept past the
+  window only while its subject has had an event of any kind inside it; a subject quiet for the whole
+  window loses them with the rest of its history. A sequence that did run again after that would repeat
+  its steps, which `package steps` already requires to be idempotent or prechecked (at-least-once), and
+  each sequence in `internal/slots` opens with a reset of its generation anyway. Rejected: a separate, longer keep for step
+  rows (one more key for rows nobody reads after the sequence ended), and deleting the rows of closed PRs
+  only (the retention would need the PR's state, and a checkout's subject does not name its PR row).
+- **Two indexes nobody used are dropped: `events_subject` and `prs_gh_updated`** (2026-10-05, migration
+  0011). `EXPLAIN QUERY PLAN` on every query in `internal/store` chose `events_subject_id` for every events
+  lookup (it also gives the order), and the board's and the dispatcher's orderings start with an expression
+  (`gh_updated_at IS NULL`, `COALESCE(gh_updated_at, created_at)`), which no index on the column can serve.
+  Each cost a write per row; `events_subject` was 188 KB of a 2.8 MB registry. The retention's new check
+  ("an event of this subject inside the window") would have used `events_subject`, and does not need it: it
+  reads the few rows of one subject through `events_subject_id`, and a test pins that plan. The migration is
+  `DROP INDEX IF EXISTS` twice and rewrites no table. As with any new migration, the CLI cannot open the
+  registry until the daemon runs the new build: `magnum daemon-restart --drain`.
+- **`magnum prs --json` has its own shape** (2026-10-05). It marshalled `tui.PRBoardRow`, which has no json
+  tags: PascalCase keys, unset times as `0001-01-01T00:00:00Z`, durations in nanoseconds, where every other
+  `--json` is snake_case. The output is a contract and the screen's row type changes with the screen, so
+  `internal/cli/prs_json.go` has its own types, a field for a field. Keys are snake_case at every depth; a
+  time is RFC 3339 and left out while unset (`omitzero`); a duration is whole seconds under a key ending
+  `_seconds` (`total_seconds`, `duration_seconds`), as `stats --json` writes them; a part a PR has none of
+  (`last_review`, `ci`, `last_round`, ...) is `null` and a list is `[]`, so a consumer indexes without testing
+  for a missing key; `findings.counts` stays `[p0, p1, p2, p3]` like the review summary's. A test fails when a
+  field is added to the board row, or a type it holds, and not to the JSON. Rejected: tagging the TUI types
+  (they would carry the contract into every screen change) and `omitempty` on strings (a key that comes and
+  goes is the harder shape to consume).
+- **`dismiss_own_stale_change_requests` is documented, its default unchanged** (2026-10-05). The key had no
+  mention outside code comments: with a `gh` identity (default false) a stale REQUEST_CHANGES from the
+  operator's own account survives the approving re-review and keeps blocking the author's merge, and the
+  operator could not find the setting. It is now in `config.defaults.toml`, `config.full.example.toml` and
+  the README, with what it does (a re-review with nothing blocking dismisses the identity's own earlier
+  change request; never one posted by hand, never after the merge; a failed dismissal only warns; the
+  old identity's after a watch moves) and that the default follows the kind: true for an app, false for a
+  `gh` identity, whose reviews are the operator's own account's.
