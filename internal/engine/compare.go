@@ -136,9 +136,11 @@ func (e *Engine) compareStats(ctx context.Context, gh GitHub, repo store.Repo, b
 type rangeMeasure struct {
 	push github.PushComparison
 	// own compares the PR's own diff before and after the range (ownOK:
-	// in full); without it from...to is the measure.
-	own   ownDiff
-	ownOK bool
+	// in full); without it from...to is the measure. ownRead: both sides
+	// were read, so own.commits counts the PR's own commits even when the
+	// comparison is incomplete (they need only the commit lists).
+	own            ownDiff
+	ownRead, ownOK bool
 }
 
 // viaBase reports whether a range needs the PR's own diff to be measured:
@@ -159,9 +161,22 @@ func (e *Engine) measureRange(ctx context.Context, gh GitHub, repo store.Repo, b
 	}
 	m := rangeMeasure{push: pc}
 	if viaBase(pc) && base != "" {
-		m.own, m.ownOK = e.ownDiffDelta(ctx, gh, repo, base, from, to)
+		m.own, m.ownRead, m.ownOK = e.ownDiffDelta(ctx, gh, repo, base, from, to)
 	}
 	return m, nil
+}
+
+// commits is the range's commit count as the PR's commits tab tells it,
+// for whatever a person reads (the since-review size, a note on a review):
+// the PR's own commits since from (ownCommits) when its own diff was read
+// before and after the range, compared in full or not; else, or when that
+// finds none, from...to's, which after a merge of the base branch counts
+// the base branch's commits too.
+func (m rangeMeasure) commits() int {
+	if m.ownRead && m.own.commits > 0 {
+		return m.own.commits
+	}
+	return m.push.Commits
 }
 
 // size is the range's size for a threshold: the change of the PR's own

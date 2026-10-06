@@ -68,33 +68,41 @@ func prBase(repo store.Repo, pr store.PR) string {
 // and after (base...to) a push, as gh, and compares them
 // (compareOwnDiffs), with the PR's own commits since (ownCommits). GitHub's
 // three-dot comparison starts at the merge base of the base branch's tip
-// with the commit, so each is the PR's diff as of that commit. ok is false
-// when a call fails or the comparison is incomplete.
-func (e *Engine) ownDiffDelta(ctx context.Context, gh GitHub, repo store.Repo, base, from, to string) (ownDiff, bool) {
+// with the commit, so each is the PR's diff as of that commit. read is true
+// when both calls succeeded: d.commits counts then, even when the
+// comparison is incomplete. ok is false when a call fails or the
+// comparison is incomplete; d holds nothing else then.
+func (e *Engine) ownDiffDelta(ctx context.Context, gh GitHub, repo store.Repo, base, from, to string) (d ownDiff, read, ok bool) {
 	before, err := e.comparePush(ctx, gh, repo, base, from)
 	if err == nil {
 		var after github.PushComparison
 		if after, err = e.comparePush(ctx, gh, repo, base, to); err == nil {
-			if d, ok := compareOwnDiffs(before.Files, after.Files); ok {
-				d.commits = ownCommits(before, after)
-				return d, true
+			d, ok = compareOwnDiffs(before.Files, after.Files)
+			d.commits, read = ownCommits(before, after), true
+			if ok {
+				return d, true, true
 			}
 		}
 	}
 	e.log.Info("delta: the PR's own diff cannot be compared in full; the push is measured since the review",
 		"repo", repo.FullName(), "base", base, "from", textx.ShortSHA(from), "to", textx.ShortSHA(to), "err", err)
-	return ownDiff{}, false
+	return d, read, false
 }
 
 // compareOwnDiffs compares a PR's own diff before a push (base...reviewed)
 // with the one after it (base...head), file by file. A file is unchanged
 // when both list it with the same status, previous path and own change
-// (ownChange), or neither does. A changed file adds to the size: a file the
-// PR now adds (added, renamed or copied, and absent before) counts as an
-// added file, any other its changed lines (ownChangedLines). ok is false
-// when the comparison is incomplete: a file of either diff without a
-// complete patch (binary, too large, or a listing at GitHub's file cap,
-// which marks every file Truncated).
+// (ownChange), or neither does; a file without a patch on either side (an
+// empty or binary file, whose diff is empty, not missing) is unchanged only
+// when both list it without one and with the same blob. A changed file adds
+// to the size: a file the PR now adds (added, renamed or copied, and absent
+// before) counts as an added file, any other its changed lines
+// (ownChangedLines); one without a patch also counts as MeasureDelta counts
+// such a file of a push (a modified binary in Binaries, any other Unread,
+// either leaving the size incomplete), so the threshold never holds back a
+// change it cannot count. ok is false when the comparison is incomplete: a
+// file of either diff marked Truncated (a patch too large to send, or a
+// listing at GitHub's file cap, which marks every file).
 func compareOwnDiffs(before, after []github.FileDelta) (ownDiff, bool) {
 	index := func(files []github.FileDelta, into map[string]github.FileDelta) bool {
 		for _, f := range files {
@@ -122,13 +130,20 @@ func compareOwnDiffs(before, after []github.FileDelta) (ownDiff, bool) {
 		if inAfter {
 			cur = ownChange(fa.Patch)
 		}
-		if inBefore && inAfter && fb.Status == fa.Status && fb.PreviousPath == fa.PreviousPath && slices.Equal(old, cur) {
+		same := slices.Equal(old, cur)
+		noPatch := (inBefore && fb.Patch == "") || (inAfter && fa.Patch == "")
+		if noPatch {
+			same = fb.Patch == fa.Patch && fb.BlobSHA == fa.BlobSHA
+		}
+		if inBefore && inAfter && fb.Status == fa.Status && fb.PreviousPath == fa.PreviousPath && same {
 			continue
 		}
 		d.changed = append(d.changed, p)
+		f := fa
 		if inAfter {
 			d.files = append(d.files, fa)
 		} else {
+			f = fb
 			d.files = append(d.files, undone(fb))
 		}
 		add, del := ownLineDelta(old, cur)
@@ -138,6 +153,14 @@ func compareOwnDiffs(before, after []github.FileDelta) (ownDiff, bool) {
 			continue
 		}
 		d.size.Lines += ownChangedLines(p, old, cur)
+		if noPatch {
+			d.size.Complete = false
+			if f.Status == "modified" && binaryDeltaPath(p) {
+				d.size.Binaries = append(d.size.Binaries, p)
+			} else {
+				d.size.Unread++
+			}
+		}
 	}
 	return d, true
 }

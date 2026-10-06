@@ -191,6 +191,7 @@ func TestHeadMovedDuringRoundQueuesRereview(t *testing.T) {
 	h.advance(time.Minute)
 	pushAt := h.clock.Now()
 	h.gh.compare["b1...b2"] = github.CompareStats{Commits: 1}
+	h.gh.files = map[string][]github.FileDelta{"b1...b2": codePatch(40)} // above the re-review threshold
 	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b2"})
 	if err := h.e.Tick(h.ctx); err != nil {
 		t.Fatal(err)

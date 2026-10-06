@@ -121,8 +121,14 @@ func TestPushDuringTheJudgeNotesTheReview(t *testing.T) {
 			h := newHarness(t)
 			h.queuedPR(2, "b1")
 			h.advance(5 * time.Minute)
-			if tc.commits >= 0 {
+			switch {
+			case tc.commits > 0:
 				h.gh.compare["b1...b3"] = github.CompareStats{Commits: tc.commits}
+				h.gh.files = map[string][]github.FileDelta{"b1...b3": codePatch(40)} // above the re-review threshold
+			case tc.commits == 0:
+				h.gh.compare["b1...b3"] = github.CompareStats{}
+				h.gh.files = map[string][]github.FileDelta{"b1...b3": {}}
+				h.gh.statuses = map[string]string{"b1...b3": "behind"}
 			}
 			h.rd.appendErr = tc.appendErr
 			h.rd.script = func(in pipeline.RoundInput) (pipeline.RoundResult, error) {

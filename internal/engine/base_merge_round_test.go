@@ -163,3 +163,53 @@ func TestAPushBackToAnAncestorIsNotASmallDelta(t *testing.T) {
 		t.Fatalf("wait = %+v, held as a small delta", w)
 	}
 }
+
+// A merge of master that arrives during the review: the note on the review
+// counts the PR's own commits that arrived (by SHA, as the PR's commits tab
+// lists them: the merge commit and the PR's new one), not the 13 commits
+// of master the merge brought; one that only merges master too.
+func TestMovedHeadNoteCountsThePRsOwnCommitsAcrossABaseMerge(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		shas  []string
+		after []github.FileDelta
+		note  string
+	}{
+		{"a merge that changes the PR's code", []string{"c1", "c2", "c3", "mc"}, ownAfterConflict,
+			"101:_Reviewed 2cb4d7c; 2 commits arrived during the review, re-review follows"},
+		{"a merge only", []string{"c1", "c2", "mc"}, ownAfterMerge,
+			"101:_Reviewed 2cb4d7c; 1 commit arrived during the review (base merge only), no re-review needed._"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, noThreshold)
+			h.open(prSpec{n: 1, head: "base1"})
+			h.startup()
+			h.tick()
+			h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: reviewedTip})
+			h.tick()
+			h.advance(5 * time.Minute)
+			h.rd.gate = make(chan struct{})
+			before := len(h.rd.all())
+			if err := h.e.Tick(h.ctx); err != nil {
+				t.Fatal(err)
+			}
+			h.awaitRound(before)
+			h.advance(time.Minute)
+			setPushFiles(h, true, "ahead", ownBefore, tc.after)
+			h.gh.mu.Lock()
+			h.gh.shas = map[string][]string{"master..." + reviewedTip: {"c1", "c2"}, "master..." + mergedHead: tc.shas}
+			h.gh.compare["master..."+reviewedTip] = github.CompareStats{Commits: 2}
+			h.gh.compare["master..."+mergedHead] = github.CompareStats{Commits: len(tc.shas)}
+			h.gh.mu.Unlock()
+			h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: mergedHead})
+			if err := h.e.Tick(h.ctx); err != nil {
+				t.Fatal(err)
+			}
+			close(h.rd.gate)
+			h.settle()
+			if got := h.rd.appended(); len(got) != 1 || !strings.HasPrefix(got[0], tc.note) {
+				t.Fatalf("review notes = %q, want %q", got, tc.note)
+			}
+		})
+	}
+}

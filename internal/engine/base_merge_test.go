@@ -308,7 +308,7 @@ func TestCompareOwnDiffs(t *testing.T) {
 		{"a file the PR now adds", []github.FileDelta{same}, []github.FileDelta{same, ownBefore[1]}, []string{"app/services/redeem.rb"}, 0, true},
 		{"in neither", nil, nil, nil, 0, true},
 		{"a truncated patch", []github.FileDelta{same}, []github.FileDelta{{Path: same.Path, Status: "modified", Patch: same.Patch, Truncated: true}}, nil, 0, false},
-		{"a binary file", []github.FileDelta{{Path: "public/logo.png", Status: "added", Truncated: true}}, []github.FileDelta{{Path: "public/logo.png", Status: "added", Truncated: true}}, nil, 0, false},
+		{"a patch too large to send", []github.FileDelta{{Path: "db/structure.sql", Status: "added", Truncated: true}}, []github.FileDelta{{Path: "db/structure.sql", Status: "added", Truncated: true}}, nil, 0, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d, ok := compareOwnDiffs(tc.before, tc.after)
@@ -325,6 +325,61 @@ func TestCompareOwnDiffs(t *testing.T) {
 	}
 	if d, _ := compareOwnDiffs([]github.FileDelta{same}, []github.FileDelta{same, ownBefore[1]}); d.size.AddedFiles != 1 {
 		t.Fatalf("added files = %d, want the file the PR now adds", d.size.AddedFiles)
+	}
+}
+
+// emptyBlob is git's blob SHA of the empty file, which GitHub lists for an
+// empty file (a .keep).
+const emptyBlob = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+
+// A file GitHub lists without a patch and without a line (an empty or
+// binary file) is compared by its blob: the same status, previous path and
+// blob on both sides is unchanged, another blob (or a patch on one side
+// only) is a change. A changed one counts as such a file of a push does
+// (MeasureDelta): one the PR now adds as an added file; a modified binary
+// at no line, which leaves the size incomplete for the threshold but
+// readable for a delta check; any other as unread. So the threshold never
+// holds back a change it cannot count.
+func TestCompareOwnDiffsComparesPatchlessFilesByBlob(t *testing.T) {
+	const logoPath, toolPath = "public/logo.png", "vendor/bin/tool"
+	logo := func(blob string) github.FileDelta {
+		return github.FileDelta{Path: logoPath, Status: "modified", BlobSHA: blob}
+	}
+	tool := func(blob string) github.FileDelta {
+		return github.FileDelta{Path: toolPath, Status: "modified", BlobSHA: blob}
+	}
+	moved := github.FileDelta{Path: "public/brand.png", PreviousPath: logoPath, Status: "renamed", BlobSHA: "b1"}
+	keep := github.FileDelta{Path: "app/views/partials/.keep", Status: "added", BlobSHA: emptyBlob}
+	code := ownBefore[0]
+	noPatch := github.FileDelta{Path: code.Path, Status: "modified", BlobSHA: "b3"}
+	files := func(fs ...github.FileDelta) []github.FileDelta { return fs }
+	complete := DeltaSize{Complete: true}
+	binary := DeltaSize{Binaries: []string{logoPath}}
+	for _, tc := range []struct {
+		name          string
+		before, after []github.FileDelta
+		changed       []string
+		size          DeltaSize
+	}{
+		{"the same blob", files(code, logo("b1")), files(code, logo("b1")), nil, complete},
+		{"the same empty file", files(code, keep), files(code, keep), nil, complete},
+		{"a file renamed as it was", files(moved), files(moved), nil, complete},
+		{"another blob", files(code, logo("b1")), files(code, logo("b2")), []string{logoPath}, binary},
+		{"a binary the PR now changes", files(code), files(code, logo("b2")), []string{logoPath}, binary},
+		{"a binary the PR no longer changes", files(code, logo("b1")), files(code), []string{logoPath}, binary},
+		{"an empty file the PR now adds", files(code), files(code, keep), []string{keep.Path}, DeltaSize{AddedFiles: 1, Complete: true}},
+		{"a file of no binary type", files(tool("b1")), files(tool("b2")), []string{toolPath}, DeltaSize{Unread: 1}},
+		{"a patch on one side only", files(code), files(noPatch), []string{code.Path}, DeltaSize{Lines: 2, Unread: 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, ok := compareOwnDiffs(tc.before, tc.after)
+			if !ok {
+				t.Fatal("a file without a patch or a line made the comparison incomplete")
+			}
+			if !slices.Equal(d.changed, tc.changed) || !reflect.DeepEqual(d.size, tc.size) {
+				t.Fatalf("changed %q size %+v, want %q %+v", d.changed, d.size, tc.changed, tc.size)
+			}
+		})
 	}
 }
 

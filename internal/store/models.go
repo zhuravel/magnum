@@ -355,7 +355,9 @@ type SinceReview struct {
 	// rebased onto it), and the counts are the PR's own: its own commits,
 	// the files whose own change differs and their own-change lines. Raw:
 	// it did, but the PR's own diff could not be compared in full, so the
-	// counts are Base...Head's, the base branch's changes included.
+	// files and lines are Base...Head's, the base branch's changes
+	// included; the commits are still the PR's own when both sides of its
+	// own diff were read (they need only the commit lists).
 	BaseMerged bool   `json:"base_merged,omitempty"`
 	Raw        bool   `json:"raw,omitempty"`
 	BaseRef    string `json:"base_ref,omitempty"`
@@ -365,8 +367,10 @@ type SinceReview struct {
 }
 
 // SinceReviewVersion is the SinceReview.Version of a size measured with a
-// merge of the base branch told apart (BaseMerged, Raw).
-const SinceReviewVersion = 1
+// merge of the base branch told apart (BaseMerged, Raw; 1), with a file
+// GitHub lists without a patch or a line (an empty or binary file) compared
+// by its blob and a raw size's commits the PR's own (2).
+const SinceReviewVersion = 2
 
 // Slot is a checkout magnum reviews in (pool slot, per-PR worktree, or an
 // observed external repoN checkout).

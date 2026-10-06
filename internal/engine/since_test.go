@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -32,16 +33,90 @@ func TestSinceReviewCountsThePRsOwnChangesAcrossABaseMerge(t *testing.T) {
 	}
 }
 
-// When the PR's own diff cannot be compared in full, the size is the push's
-// comparison, master's changes included, and says so (raw).
-func TestSinceReviewKeepsTheRawSizeWhenTheOwnDiffIsIncomplete(t *testing.T) {
-	truncatedAfter := slices.Clone(ownAfterConflict)
-	truncatedAfter[0].Truncated = true
+// When the PR's own diff cannot be compared in full (a patch too large to
+// send: no patch, its lines counted), the files and lines are the push's
+// comparison, master's changes included, and say so (raw); the commits are
+// still the PR's own, which need only the two comparisons' commit lists.
+// Only when a comparison of the own diff fails are they the push's too.
+func TestSinceReviewKeepsTheRawSizeButThePRsOwnCommitsWhenTheOwnDiffIsIncomplete(t *testing.T) {
+	tooLarge := slices.Clone(ownAfterConflict)
+	tooLarge[0] = github.FileDelta{Path: tooLarge[0].Path, Status: "modified", BlobSHA: "5716ca5", Truncated: true}
+	for _, tc := range []struct {
+		name    string
+		after   []github.FileDelta
+		commits int
+	}{
+		{"a patch too large", tooLarge, 2},
+		{"the comparison after the push fails", nil, 13},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.gh.shas = map[string][]string{"master..." + reviewedTip: {"c1", "c2"}, "master..." + mergedHead: {"c1", "c2", "c3", "mc"}}
+			h.gh.compare["master..."+reviewedTip] = github.CompareStats{Commits: 2}
+			h.gh.compare["master..."+mergedHead] = github.CompareStats{Commits: 4}
+			h.reviewedPR(2, reviewedTip)
+			setPushFiles(h, true, "ahead", ownBefore, tc.after)
+			h.gh.mu.Lock()
+			h.gh.compare[reviewedTip+"..."+mergedHead] = github.CompareStats{Commits: 13, Files: 5, Additions: 48, Deletions: 47}
+			h.gh.mu.Unlock()
+			pollPR(h, time.Minute, 2, mergedHead)
+			s := h.pr(2).SinceReview
+			if s == nil || s.Commits != tc.commits || s.Files != 5 || s.Additions != 48 || s.Deletions != 47 || !s.Raw || s.BaseMerged || s.BaseRef != "master" {
+				t.Fatalf("since review = %+v, want %d commits and the push's 5 files, +48 -47, marked raw", s, tc.commits)
+			}
+		})
+	}
+}
+
+// The live case (a stacked PR): the PR's base branch is another feature
+// branch, which the PR merged after its review. The push lists that
+// branch's commits and files (44 commits, GitHub's cap of 300 files), so
+// only the PR's own diff tells what changed: before the push every file has
+// its patch, after it the same patches and two empty files GitHub sends no
+// patch for. Those are complete (an empty diff, not a missing one), so the
+// size is the PR's own: its own commits and the two added files, not 44
+// commits and 300 files.
+func TestSinceReviewOfAStackedPRThatMergedItsBaseIsThePRsOwn(t *testing.T) {
+	const stack = "feature-render-view"
 	h := newHarness(t)
-	pr := baseMergePush(t, h, true, "ahead", ownBefore, truncatedAfter)
-	s := pr.SinceReview
-	if s == nil || s.Commits != 13 || !s.Raw || s.BaseMerged || s.BaseRef != "master" {
-		t.Fatalf("since review = %+v, want the raw 13 commits marked raw", s)
+	h.open(prSpec{n: 1, head: "base1"})
+	h.startup()
+	h.tick()
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: reviewedTip, base: stack})
+	h.tick()
+	h.advance(5 * time.Minute)
+	h.tick()
+	h.wantState(2, store.PRReviewed)
+
+	push := reviewedTip + "..." + mergedHead
+	capped := make([]github.FileDelta, github.CompareFileLimit)
+	for i := range capped {
+		capped[i] = github.FileDelta{Path: fmt.Sprintf("app/views/stack_%d.rb", i), Status: "modified", Patch: "@@ -1 +1 @@\n-a\n+b", Truncated: true}
+	}
+	keep := func(dir string) github.FileDelta {
+		return github.FileDelta{Path: "app/views/partials/" + dir + "/.keep", Status: "added", BlobSHA: emptyBlob}
+	}
+	after := append(slices.Clone(ownBefore), keep("partials"), keep("static_assets"))
+	h.gh.mu.Lock()
+	h.gh.files = map[string][]github.FileDelta{push: capped, stack + "..." + reviewedTip: ownBefore, stack + "..." + mergedHead: after}
+	h.gh.compare[push] = github.CompareStats{Commits: 44, Files: -1, Additions: 9570, Deletions: 554}
+	h.gh.merges = map[string]bool{push: true}
+	h.gh.shas = map[string][]string{stack + "..." + reviewedTip: {"c1", "c2"}, stack + "..." + mergedHead: {"c1", "c2", "c3", "mc"}}
+	h.gh.compare[stack+"..."+reviewedTip] = github.CompareStats{Commits: 2}
+	h.gh.compare[stack+"..."+mergedHead] = github.CompareStats{Commits: 4}
+	h.gh.mu.Unlock()
+	h.advance(time.Minute)
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: mergedHead, base: stack})
+	h.tick()
+
+	pr := h.wantState(2, store.PRRereviewPending)
+	want := store.SinceReview{Source: store.SinceFromReviewed, Base: reviewedTip, Head: mergedHead, Commits: 2, Files: 2,
+		BaseMerged: true, BaseRef: stack, Version: store.SinceReviewVersion, ComputedAt: h.clock.Now()}
+	if pr.SinceReview == nil || !equalSince(*pr.SinceReview, want) {
+		t.Fatalf("since review = %+v, want %+v", pr.SinceReview, want)
+	}
+	if rec, ok := h.e.deltaRecord(h.ctx, pr.ID); !ok || rec.AddedFiles != 2 || rec.Lines != 0 || !rec.Complete {
+		t.Fatalf("delta record %+v, want the two files the PR now adds", rec)
 	}
 }
 
@@ -74,6 +149,24 @@ func TestOldSinceReviewOfAPairIsMeasuredAgainOnce(t *testing.T) {
 	}
 	if got := rangeCalls(h.gh, "b1", "b2"); len(got) != 2 {
 		t.Fatalf("compares of b1...b2 = %q, want the push's and one more", got)
+	}
+}
+
+// A size measured before a file without a patch could be compared (version
+// 1: an empty or binary file made the PR's own diff incomplete, so a push
+// that merged the base branch kept the raw size, the base branch's commits
+// counted as the PR's) is measured again once.
+func TestSinceReviewMeasuredBeforePatchlessFilesCompareIsMeasuredAgain(t *testing.T) {
+	h := newHarness(t)
+	pr := reviewedThenPushed(t, h, "", rubyMixed)
+	old := *pr.SinceReview
+	old.Version, old.Commits, old.Raw, old.BaseRef = 1, 44, true, "master"
+	if err := h.st.UpdatePR(h.ctx, pr.ID, func(u *store.PRUpdate) { u.Set("since_review_json", old) }); err != nil {
+		t.Fatal(err)
+	}
+	pollPR(h, time.Minute, 2, "b2")
+	if s := h.pr(2).SinceReview; s == nil || s.Commits != 1 || s.Raw || s.Version != store.SinceReviewVersion {
+		t.Fatalf("since review = %+v, want measured again", s)
 	}
 }
 

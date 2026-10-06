@@ -30,7 +30,7 @@ func TestCompareFilesReadsPatchesRenamesAndBinaries(t *testing.T) {
 	c, f := compareFilesClient(`{"total_commits":2,"files":[
 		{"filename":"config/app.yml","status":"modified","additions":1,"deletions":1,"patch":"@@ -1,2 +1,2 @@\n key: a\n-old: 1\n+new: 2"},
 		{"filename":"lib/new_name.rb","previous_filename":"lib/old_name.rb","status":"renamed","patch":"@@ -3 +3 @@\n-x\n+y"},
-		{"filename":"public/logo.png","status":"added","additions":0,"deletions":0}
+		{"filename":"public/logo.png","status":"added","sha":"` + logoBlob + `","additions":0,"deletions":0}
 	]}`)
 	got, err := c.CompareFiles(context.Background(), "talkable", "talkable", cmpBase, cmpHead)
 	if err != nil {
@@ -39,7 +39,7 @@ func TestCompareFilesReadsPatchesRenamesAndBinaries(t *testing.T) {
 	want := []FileDelta{
 		{Path: "config/app.yml", Status: "modified", Patch: "@@ -1,2 +1,2 @@\n key: a\n-old: 1\n+new: 2"},
 		{Path: "lib/new_name.rb", PreviousPath: "lib/old_name.rb", Status: "renamed", Patch: "@@ -3 +3 @@\n-x\n+y"},
-		{Path: "public/logo.png", Status: "added", Truncated: true},
+		{Path: "public/logo.png", Status: "added", BlobSHA: logoBlob},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("deltas = %+v\nwant     %+v", got, want)
@@ -135,6 +135,54 @@ func TestCompareFilesEmptyPatchIsCompleteNotTruncated(t *testing.T) {
 	want := []FileDelta{{Path: "bin/run", Status: "modified", Patch: "", Truncated: false}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("deltas = %+v, want %+v", got, want)
+	}
+}
+
+// logoBlob and emptyBlob are blob SHAs GitHub lists for a file: an image's,
+// and the empty file's (git's e69de29).
+const (
+	logoBlob  = "a3f1c2d4e5b60718293a4b5c6d7e8f9012345678"
+	emptyBlob = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+	sqlBlob   = "5716ca5987cbf97d6bb54920bea6adde242d87e6"
+)
+
+// GitHub sends no patch for an empty file or a binary one and counts no line
+// of it: below the listing cap such a file is complete (its diff is empty,
+// not missing) and carries its blob SHA, by which a later comparison tells
+// whether it changed. A file without a patch whose lines GitHub counted (it
+// left out a patch too large to send) is truncated, and so is one without a
+// blob to tell it by (GitHub's sha may be null) and every file of a listing
+// at the cap.
+func TestCompareFilesAPatchlessFileWithoutLinesIsCompleteWithItsBlob(t *testing.T) {
+	c, _ := compareFilesClient(`{"files":[
+		{"filename":"app/views/partials/.keep","status":"added","sha":"` + emptyBlob + `","additions":0,"deletions":0,"changes":0},
+		{"filename":"public/logo.png","status":"modified","sha":"` + logoBlob + `","additions":0,"deletions":0,"changes":0},
+		{"filename":"db/structure.sql","status":"modified","sha":"` + sqlBlob + `","additions":4000,"deletions":12,"changes":4012},
+		{"filename":"public/icon.png","status":"modified","sha":null,"additions":0,"deletions":0,"changes":0}
+	]}`)
+	got, err := c.CompareFiles(context.Background(), "talkable", "talkable", cmpBase, cmpHead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []FileDelta{
+		{Path: "app/views/partials/.keep", Status: "added", BlobSHA: emptyBlob},
+		{Path: "public/logo.png", Status: "modified", BlobSHA: logoBlob},
+		{Path: "db/structure.sql", Status: "modified", BlobSHA: sqlBlob, Truncated: true},
+		{Path: "public/icon.png", Status: "modified", Truncated: true},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("deltas = %+v\nwant     %+v", got, want)
+	}
+
+	capped := strings.Replace(listingOf(CompareFileLimit-1), `]}`,
+		`,{"filename":"public/logo.png","status":"modified","sha":"`+logoBlob+`","additions":0,"deletions":0}]}`, 1)
+	c, _ = compareFilesClient(capped)
+	got, err = c.CompareFiles(context.Background(), "talkable", "talkable", cmpBase, cmpHead)
+	if err != nil || len(got) != CompareFileLimit {
+		t.Fatalf("a listing at the cap: %d files, %v", len(got), err)
+	}
+	if last := got[len(got)-1]; last.Path != "public/logo.png" || !last.Truncated || last.BlobSHA != logoBlob {
+		t.Errorf("a patchless file of a listing at the cap = %+v, want it truncated", last)
 	}
 }
 

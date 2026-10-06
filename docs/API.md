@@ -5382,10 +5382,17 @@ type FileDelta struct {
 	// Patch holds the file's unified-diff hunks ("@@ ... @@" lines and
 	// " ", "+", "-" lines); "" when GitHub left it out.
 	Patch string
-	// Truncated: the patch is missing or may be incomplete: GitHub sends none
-	// for a binary or too large file, and a comparison listing
-	// CompareFileLimit files may have dropped some, so every file of it is
-	// marked.
+	// BlobSHA is GitHub's sha of the file: its blob at head (for a removed
+	// file, what GitHub lists; "" when GitHub sends null). It tells two
+	// listings of a file without a patch apart (an empty or binary file).
+	BlobSHA string
+	// Truncated: the patch is missing or may be incomplete: GitHub left out
+	// a patch too large to send (it still counts the lines), and a
+	// comparison listing CompareFileLimit files may have dropped some, so
+	// every file of it is marked. A file GitHub lists without a patch and
+	// without a line added or removed (an empty or binary file), with its
+	// blob, in a listing below the cap is complete: its diff is empty, not
+	// missing.
 	Truncated bool
 }
     FileDelta is one changed file of a comparison (CompareFiles).
@@ -9779,9 +9786,11 @@ const RetroMaxAttempts = 3
     RetroMaxAttempts is how many retros in a row may fail on a PR before the
     retro gives it up (RetroDue; `magnum retro --again` still takes it).
 
-const SinceReviewVersion = 1
+const SinceReviewVersion = 2
     SinceReviewVersion is the SinceReview.Version of a size measured with a
-    merge of the base branch told apart (BaseMerged, Raw).
+    merge of the base branch told apart (BaseMerged, Raw; 1), with a file GitHub
+    lists without a patch or a line (an empty or binary file) compared by its
+    blob and a raw size's commits the PR's own (2).
 
 const TeamReviewerPrefix = "team:"
     TeamReviewerPrefix marks a team in requested_reviewers_json ("team:<slug>").
@@ -10622,7 +10631,9 @@ type SinceReview struct {
 	// rebased onto it), and the counts are the PR's own: its own commits,
 	// the files whose own change differs and their own-change lines. Raw:
 	// it did, but the PR's own diff could not be compared in full, so the
-	// counts are Base...Head's, the base branch's changes included.
+	// files and lines are Base...Head's, the base branch's changes
+	// included; the commits are still the PR's own when both sides of its
+	// own diff were read (they need only the commit lists).
 	BaseMerged bool   `json:"base_merged,omitempty"`
 	Raw        bool   `json:"raw,omitempty"`
 	BaseRef    string `json:"base_ref,omitempty"`

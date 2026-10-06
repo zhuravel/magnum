@@ -14,10 +14,17 @@ type FileDelta struct {
 	// Patch holds the file's unified-diff hunks ("@@ ... @@" lines and
 	// " ", "+", "-" lines); "" when GitHub left it out.
 	Patch string
-	// Truncated: the patch is missing or may be incomplete: GitHub sends none
-	// for a binary or too large file, and a comparison listing
-	// CompareFileLimit files may have dropped some, so every file of it is
-	// marked.
+	// BlobSHA is GitHub's sha of the file: its blob at head (for a removed
+	// file, what GitHub lists; "" when GitHub sends null). It tells two
+	// listings of a file without a patch apart (an empty or binary file).
+	BlobSHA string
+	// Truncated: the patch is missing or may be incomplete: GitHub left out
+	// a patch too large to send (it still counts the lines), and a
+	// comparison listing CompareFileLimit files may have dropped some, so
+	// every file of it is marked. A file GitHub lists without a patch and
+	// without a line added or removed (an empty or binary file), with its
+	// blob, in a listing below the cap is complete: its diff is empty, not
+	// missing.
 	Truncated bool
 }
 
@@ -96,6 +103,7 @@ func (c *Client) compareFiles(ctx context.Context, owner, repo, base, head strin
 			Filename         string  `json:"filename"`
 			PreviousFilename string  `json:"previous_filename"`
 			Status           string  `json:"status"`
+			SHA              string  `json:"sha"`
 			Patch            *string `json:"patch"`
 			Additions        int     `json:"additions"`
 			Deletions        int     `json:"deletions"`
@@ -113,7 +121,11 @@ func (c *Client) compareFiles(ctx context.Context, owner, repo, base, head strin
 		out.Stats.Files = -1
 	}
 	for _, f := range r.Files {
-		d := FileDelta{Path: f.Filename, PreviousPath: f.PreviousFilename, Status: f.Status, Truncated: cut || f.Patch == nil}
+		// Without a patch, lines GitHub counted mean a patch too large to
+		// send; none, an empty or binary file, whose diff is empty and which
+		// its blob tells apart (GitHub's sha may be null).
+		d := FileDelta{Path: f.Filename, PreviousPath: f.PreviousFilename, Status: f.Status, BlobSHA: f.SHA,
+			Truncated: cut || (f.Patch == nil && (f.Additions+f.Deletions > 0 || f.SHA == ""))}
 		if f.Patch != nil {
 			d.Patch = *f.Patch
 		}

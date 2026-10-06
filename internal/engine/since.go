@@ -39,13 +39,15 @@ func (e *Engine) sinceBase(pr store.PR) (source, base string) {
 // cannot compare is stored with Error, so it is not retried): the shared
 // measure (measureRange), so a range that merged the base branch in or was
 // rebased counts only the PR's own commits, files and lines (two more
-// calls, or none after the gate's), and the raw comparison when the PR's
-// own diff cannot be compared in full. A PR nothing reviewed yet takes its
-// whole size from the Details fetched in this poll (d, nil when none),
-// which need no extra call. budget is the repository's remaining
-// comparison allowance for this poll (one per pair); a failed comparison
-// other than not-found spends the rest of it. A size measured before
-// merges were told apart (store.SinceReviewVersion) is measured again once.
+// calls, or none after the gate's), and the raw comparison's files and
+// lines when the PR's own diff cannot be compared in full, its commits
+// still the PR's own when both sides were read (rangeMeasure.commits). A PR
+// nothing reviewed yet takes its whole size from the Details fetched in
+// this poll (d, nil when none), which need no extra call. budget is the
+// repository's remaining comparison allowance for this poll (one per
+// pair); a failed comparison other than not-found spends the rest of it. A
+// size measured by an older rule (store.SinceReviewVersion) is measured
+// again once.
 func (e *Engine) refreshSinceReview(ctx context.Context, gh GitHub, repo store.Repo, pr store.PR, d *github.PRDetails, budget *int) {
 	source, base := e.sinceBase(pr)
 	if source == store.SinceFromBase && d != nil && !d.LatestReviewsComplete {
@@ -91,10 +93,10 @@ func (e *Engine) refreshSinceReview(ctx context.Context, gh GitHub, repo store.R
 		default:
 			e.changed("compare:"+repo.FullName(), "")
 			cs := m.push.Stats
-			next.Commits, next.Files, next.Additions, next.Deletions = cs.Commits, cs.Files, cs.Additions, cs.Deletions
+			next.Commits, next.Files, next.Additions, next.Deletions = m.commits(), cs.Files, cs.Additions, cs.Deletions
 			switch {
 			case m.ownOK:
-				next.Commits, next.Files, next.Additions, next.Deletions = m.own.commits, len(m.own.changed), m.own.additions, m.own.deletions
+				next.Files, next.Additions, next.Deletions = len(m.own.changed), m.own.additions, m.own.deletions
 				next.BaseMerged, next.BaseRef = true, branch
 			case viaBase(m.push):
 				next.Raw, next.BaseRef = true, branch

@@ -214,6 +214,32 @@ func TestModifiedBinaryFilesKeepADeltaReadable(t *testing.T) {
 	}
 }
 
+// GitHub's client lists a binary or empty file without a patch as complete
+// (not Truncated, with its blob): the size of a push still takes it as one
+// without a patch, never as 0 lines read in full, and the push is never
+// trivial for it.
+func TestAPatchlessFileListedCompleteIsStillUnread(t *testing.T) {
+	asListed := slices.Clone(liveDelta)
+	for i := range 2 {
+		asListed[i].Truncated, asListed[i].BlobSHA = false, fmt.Sprintf("b%d", i)
+	}
+	if s := MeasureDelta(asListed); s.Lines != 4 || s.Complete || !slices.Equal(s.Binaries, []string{liveDelta[0].Path, liveDelta[1].Path}) || !s.Readable() {
+		t.Fatalf("live delta as listed = %+v, want the two images as binaries", s)
+	}
+	for name, f := range map[string]github.FileDelta{
+		"an image":         {Path: "app/assets/logo.png", Status: "modified", BlobSHA: "b1"},
+		"an empty file":    {Path: "app/assets/.keep", Status: "modified", BlobSHA: "b2"},
+		"a removed binary": {Path: "app/assets/old.png", Status: "removed", BlobSHA: "b3"},
+	} {
+		if s := MeasureDelta([]github.FileDelta{f}); s.Complete {
+			t.Errorf("%s: %+v, want it incomplete", name, s)
+		}
+		if _, trivial := TrivialDelta([]github.FileDelta{yamlComments[0], f}, DeltaClasses); trivial {
+			t.Errorf("%s: a push with it is trivial", name)
+		}
+	}
+}
+
 func mustJSON(t *testing.T, v any) string {
 	t.Helper()
 	b, err := json.Marshal(v)

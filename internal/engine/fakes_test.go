@@ -76,6 +76,9 @@ type prSpec struct {
 	ci        string
 	checks    []github.Check
 	ciUnknown bool
+	// base is the branch the PR merges into ("" = master); another
+	// feature branch for a stacked PR.
+	base string
 }
 
 type fakeGH struct {
@@ -284,7 +287,7 @@ func (g *fakeGH) Radar(ctx context.Context, org string) ([]github.RepoRadar, git
 		rr := github.RepoRadar{NodeID: "R_" + full, NameWithOwner: full, DefaultBranch: "main"}
 		for _, p := range g.repos[full] {
 			rr.PRs = append(rr.PRs, github.PRRadar{NodeID: fmt.Sprintf("PR_%s_%d", full, p.n), Number: p.n,
-				IsDraft: p.draft, UpdatedAt: p.updated, HeadRefOid: p.head, BaseRefName: "master"})
+				IsDraft: p.draft, UpdatedAt: p.updated, HeadRefOid: p.head, BaseRefName: cmp.Or(p.base, "master")})
 		}
 		out = append(out, rr)
 	}
@@ -356,7 +359,7 @@ func (g *fakeGH) Details(ctx context.Context, owner, repo string, numbers []int)
 			d := github.PRDetails{NodeID: fmt.Sprintf("PR_%s_%d", full, n), Number: n, Title: fmt.Sprintf("PR %d", n), AuthorAssociation: assoc,
 				URL: fmt.Sprintf("https://github.com/%s/pull/%d", full, n), AuthorLogin: author, AuthorType: "User",
 				Labels: p.labels, LabelsComplete: !p.labelsTruncated, LatestReviewsComplete: !p.reviewsTruncated,
-				HeadRefName: "feature", BaseRefName: "master", State: "OPEN", IsDraft: p.draft,
+				HeadRefName: "feature", BaseRefName: cmp.Or(p.base, "master"), State: "OPEN", IsDraft: p.draft,
 				HeadRefOid: p.head, BaseRefOid: fakeBaseOid, Assignees: append([]string{}, p.assignees...),
 				ReviewRequests: []github.Reviewer{}, LatestReviews: append([]github.LatestReview{}, p.reviews...),
 				Additions: 10 * n, Deletions: n, ChangedFiles: n, Commits: 1,

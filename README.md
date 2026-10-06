@@ -646,7 +646,9 @@ when of someone else; it comes from the PR's timeline, which Magnum reads for th
 Magnum's state badge, the last review (who, verdict, age, ⟳ when the head moved since), what changed since
 (`3c +41 −7`; after a merge of the base branch, or a rebase onto it, the PR's own commits, files and lines
 with a merge mark, `⑂`, and the card says "(excluding a merge of master)", or "(raw: including a merge of
-master)" when the PR's own diff could not be compared in full), and reviewer chips with a verdict glyph each (✔ approved, ✗ changes requested,
+master)" when the PR's own diff could not be compared in full (a patch GitHub left out as too large, or 300
+files or more): the files and lines then include the merge's, the commits are still the PR's own; an empty
+or binary file, which GitHub sends without a patch, is compared by its blob), and reviewer chips with a verdict glyph each (✔ approved, ✗ changes requested,
 💬 commented, ◌ requested, ⟳ stale); yours and Magnum's are starred, and a bot's login carries the bot
 mark (🤖, or `[bot]` in ASCII), so an App named like you (`zhuravel[bot]`) never reads as you. `enter` opens the card with the full
 per-reviewer table (and a line with the latest request to each reviewer: who asked and when) and the last

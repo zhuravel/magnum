@@ -1972,3 +1972,28 @@ editing history. Code, config comments and prompts reference these by their head
   curator's model and prompt hash. Rejected: applying a proposal without review (the curator deletes scripts)
   and a new runner for the curator (the retro's pane agent already handles trust, permissions, turns and
   health).
+- **An empty or binary file no longer makes a PR's own diff incomplete, and a raw size counts the PR's own
+  commits** (2026-10-06; a stacked PR, whose base branch is another feature branch, merged that branch after its
+  review, and the board said 44 commits and 300+ files since the review where GitHub's commits tab listed a few).
+  GitHub sends no patch for an empty file (two `.keep` files the PR added) nor for a binary one, and the client
+  marked every file without a patch `Truncated`, so the comparison of the PR's own diff before and after the push
+  gave up and the size fell back to reviewed...head: the base branch's commits, and GitHub's 300-file cap. A file
+  GitHub lists without a patch, with no line added or removed and with its blob (`sha`, which GitHub may send as
+  null), in a listing below the cap is now complete, its blob in `FileDelta.BlobSHA`; one whose lines GitHub
+  counted (a patch too large to send), one without a blob and every file of a listing at the cap stay truncated.
+  The own-diff comparison tells such a file by its status, previous path and blob; a changed one counts as
+  `MeasureDelta` counts it in a push (an added one as an added file, a modified binary in `Binaries`, any other
+  unread, the last two leaving the size incomplete), so the threshold never holds back a change it cannot count;
+  triage and the trivial-delta check already read a file with an empty patch as unread. When the own diff is
+  still incomplete but both sides were read, the commits are the PR's own (the SHAs of base...head that
+  base...reviewed lacks: only the commit lists are needed) and the files and lines stay raw (`raw`). This counts
+  for the since-review size and for the note a review gets when commits arrive during it, which now takes the
+  shared measure (`measureRange`, the gate's comparisons of the tick) instead of its own compare: a merge of
+  master during the review is "2 commits arrived", not master's 13. Where the own count finds none (GitHub listed
+  only part of a range's commits and the difference of the totals stands in), the push's count stays, so a range
+  with commits never shows none. Sizes stored by the old rule are measured again once (`store.SinceReviewVersion`
+  2; the per-repository compare budget spreads the calls); the gate's delta records are not (`deltaRecordVersion`
+  unchanged: their raw size errs towards a re-review). Unchanged: the trivial-delta event of a base merge ("only
+  merges master (13 commits, ...)") names the commits the merge brought, and an approval's dismissal event still
+  counts reviewed...head's commits. Rejected: reading every file without a patch as complete (a patch too large
+  to send would read as no change), and comparing such files by path alone (a replaced image would not count).

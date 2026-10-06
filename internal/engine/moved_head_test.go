@@ -11,9 +11,9 @@ import (
 )
 
 // pushDuringReview reviews PR #2 at b1 while one commit (b2, changing
-// files; nil = GitHub lists none) is pushed during the round, runs
-// meanwhile before the review posts, and returns the notes the round added
-// to its review.
+// files; nil = 40 lines of code, which no threshold holds) is pushed during
+// the round, runs meanwhile before the review posts, and returns the notes
+// the round added to its review.
 func pushDuringReview(t *testing.T, h *harness, files []github.FileDelta, meanwhile func()) []string {
 	t.Helper()
 	h.open(prSpec{n: 1, head: "base1"})
@@ -30,9 +30,10 @@ func pushDuringReview(t *testing.T, h *harness, files []github.FileDelta, meanwh
 	h.awaitRound(before)
 	h.advance(time.Minute)
 	h.gh.compare["b1...b2"] = github.CompareStats{Commits: 1}
-	if files != nil {
-		h.gh.files = map[string][]github.FileDelta{"b1...b2": files}
+	if files == nil {
+		files = codePatch(40)
 	}
+	h.gh.files = map[string][]github.FileDelta{"b1...b2": files}
 	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b2"})
 	if err := h.e.Tick(h.ctx); err != nil {
 		t.Fatal(err)

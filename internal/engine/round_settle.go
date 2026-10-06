@@ -426,10 +426,12 @@ func (e *Engine) rereviewAt(ctx context.Context, pr store.PR, w config.Watch, ta
 
 // noteMovedHead appends a line to the review the round posted when commits
 // arrived during it (GitHub's compare of the reviewed commit and the head
-// counts them): which commit it covers and that a re-review follows, or,
-// when the commits were trivial (classes, see TrivialDelta), what they
-// changed and that none is needed. Best effort: an identity that cannot
-// edit its own review leaves it as posted (a warning event).
+// confirms them; after a merge of the base branch they are counted as the
+// PR's own, rangeMeasure.commits): which commit it covers and that a
+// re-review follows, or, when the commits were trivial (classes, see
+// TrivialDelta), what they changed and that none is needed. Best effort: an
+// identity that cannot edit its own review leaves it as posted (a warning
+// event).
 func (e *Engine) noteMovedHead(ctx context.Context, job *roundJob, pr store.PR, target string, reviewID int64, trivial []string) {
 	if e.d.DryRun || reviewID == 0 || e.d.Rounds == nil || pr.HeadSHA == target {
 		return
@@ -444,15 +446,16 @@ func (e *Engine) noteMovedHead(ctx context.Context, job *roundJob, pr store.PR, 
 	if gh == nil {
 		return
 	}
-	st, err := e.compareStats(ctx, gh, job.repo, target, pr.HeadSHA) // checkDelta's comparison, when it made one
-	if err != nil || st.Commits == 0 {
+	m, err := e.measureRange(ctx, gh, job.repo, prBase(job.repo, pr), target, pr.HeadSHA) // checkDelta's comparisons, when it made them
+	if err != nil || m.push.Commits == 0 {
 		if err != nil {
 			e.log.Info("note on the review: compare", "pr", pr.ID, "err", err)
 		}
 		return
 	}
-	what, are := fmt.Sprintf("%d commits", st.Commits), "are"
-	if st.Commits == 1 {
+	n := m.commits()
+	what, are := fmt.Sprintf("%d commits", n), "are"
+	if n == 1 {
 		what, are = "1 commit", "is"
 	}
 	// The re-review is promised only when it starts by itself
@@ -467,7 +470,7 @@ func (e *Engine) noteMovedHead(ctx context.Context, job *roundJob, pr store.PR, 
 	} else {
 		follows = "re-review follows"
 		if check {
-			follows = "a short check of " + map[bool]string{true: "that commit", false: "those commits"}[st.Commits == 1] + " follows"
+			follows = "a short check of " + map[bool]string{true: "that commit", false: "those commits"}[n == 1] + " follows"
 		}
 		if when != "" {
 			follows += " " + when

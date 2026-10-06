@@ -389,19 +389,27 @@ func TestTriageReasonIsClipped(t *testing.T) {
 	}
 }
 
-// Files whose patch GitHub left out (a binary, a huge file) leave the size
-// unknown: every role runs, said in the event, and the model is not asked.
+// Files whose patch GitHub left out (a huge file, truncated) or never has
+// (a binary or empty file, complete with no line) leave the size unknown:
+// every role runs, said in the event, and the model is not asked.
 func TestTriageWithoutAFullDiffRunsEveryRole(t *testing.T) {
-	h, model := triageHarness(t, modelAnswers(`{"run": []}`))
-	rounds := watchRoundRoles(h)
-	files := append(codePatch(3), github.FileDelta{Path: "logo.png", Status: "modified", Truncated: true})
-	h.gh.files = map[string][]github.FileDelta{"master...b1": files}
-	h.reviewedPR(2, "b1")
-	if got := rounds.all(); len(got) != 1 || !slices.Equal(got[0], allRoles) || len(model.Calls) != 0 {
-		t.Fatalf("roles = %v, model calls %d", got, len(model.Calls))
-	}
-	if ev := onlyTriageEvent(t, h); ev.Level != "info" || !strings.Contains(ev.Message, "has no patch") {
-		t.Fatalf("event = %s %q", ev.Level, ev.Message)
+	for name, noPatch := range map[string]github.FileDelta{
+		"a patch too large": {Path: "db/structure.sql", Status: "modified", Truncated: true},
+		"a binary file":     {Path: "logo.png", Status: "modified", BlobSHA: "b1"},
+		"an empty file":     {Path: "app/views/partials/.keep", Status: "added", BlobSHA: emptyBlob},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h, model := triageHarness(t, modelAnswers(`{"run": []}`))
+			rounds := watchRoundRoles(h)
+			h.gh.files = map[string][]github.FileDelta{"master...b1": append(codePatch(3), noPatch)}
+			h.reviewedPR(2, "b1")
+			if got := rounds.all(); len(got) != 1 || !slices.Equal(got[0], allRoles) || len(model.Calls) != 0 {
+				t.Fatalf("roles = %v, model calls %d", got, len(model.Calls))
+			}
+			if ev := onlyTriageEvent(t, h); ev.Level != "info" || !strings.Contains(ev.Message, "has no patch") {
+				t.Fatalf("event = %s %q", ev.Level, ev.Message)
+			}
+		})
 	}
 }
 
