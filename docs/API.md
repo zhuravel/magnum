@@ -421,6 +421,12 @@ func PostReviewLine(d JudgeData) string
     a dry run; --local-base (the base the blind replay's diff starts at) in a
     blind one, so the tool reads nothing from GitHub.
 
+func ProjectPaths(kind string) []string
+    ProjectPaths are the paths, relative to the checkout's root, that kind loads
+    its project config from (claude: .claude and .mcp.json), for a comparison
+    limited to them (gitx.Client.ChangedUnder); nil for a kind magnum does not
+    compare.
+
 func ProjectRule(kind string) (paths, effect string, servers bool)
     ProjectRule describes for `magnum roles --kinds` the project config of kind
     magnum compares with the PR's merge base, e.g. ".codex/" or ".claude/ or
@@ -4941,6 +4947,9 @@ type Git interface {
 	// commit, the base a post-merge round reviews from (postMergeBase).
 	RevParse(ctx context.Context, dir, ref string) (string, error)
 	FetchCommit(ctx context.Context, mainClone, sha string, number int) error
+	// ChangedUnder tells whether a head changes the project config a
+	// running agent reloads (parkReloading).
+	ChangedUnder(ctx context.Context, dir, base, head string, paths ...string) ([]string, error)
 }
     Git is the part of *gitx.Client the engine reads (round context, clone
     discovery for repos.clone_path).
@@ -5191,6 +5200,10 @@ type Rounds interface {
 type Slots interface {
 	Claim(ctx context.Context, pr store.PR, pool config.Pool) (store.Slot, error)
 	Checkout(ctx context.Context, slot store.Slot, pr store.PR, pool config.Pool, targetSHA string) error
+	// Fetch and CheckoutFetched split Checkout around its fetch, for a
+	// round that reads the head before the checkout moves (parkReloading).
+	Fetch(ctx context.Context, slot store.Slot, pr store.PR, pool config.Pool) (string, error)
+	CheckoutFetched(ctx context.Context, slot store.Slot, pr store.PR, pool config.Pool, targetSHA, fetched string) error
 	CreatePRWorktree(ctx context.Context, watch config.Watch, repo string, pr store.PR, targetSHA string) (store.Slot, error)
 	Release(ctx context.Context, slot store.Slot, pool config.Pool, reason string) error
 	ProvisionPool(ctx context.Context, pool config.Pool, n int) error
@@ -6653,6 +6666,12 @@ func (c *Client) ChangedPaths(ctx context.Context, dir, base, head string, paths
     base (git diff base...head), optionally limited to pathspecs such as "db/".
     Renames are reported as a deletion plus an addition so a move out of a
     watched directory still shows up. The result is nil when nothing matches.
+
+func (c *Client) ChangedUnder(ctx context.Context, dir, base, head string, paths ...string) ([]string, error)
+    ChangedUnder is ChangedPaths limited to the files at or under paths,
+    each relative to the repository's top and taken literally (a directory or a
+    file): what head changes there since its merge base with base, whatever base
+    did since. One git diff; nil when head leaves them all alone.
 
 func (c *Client) Clone(ctx context.Context, repoURL, dest string) error
     Clone clones url into the absolute path dest (parents are created). URLs
@@ -10640,6 +10659,12 @@ func (m *Manager) Checkout(ctx context.Context, slot store.Slot, pr store.PR, po
     the prompt is acked is the engine's job. Read the slot again for the sha
     actually checked out. pool is ignored for per-PR slots.
 
+func (m *Manager) CheckoutFetched(ctx context.Context, slot store.Slot, pr store.PR, pool config.Pool, targetSHA, fetched string) error
+    CheckoutFetched is Checkout of the head Fetch brought into the slot's main
+    clone (fetched), without fetching again: its fetch step only checks that
+    refs/magnum/pr/N still holds that commit, and fails when a fetch since moved
+    it (the caller read fetched, not the newer head).
+
 func (m *Manager) Claim(ctx context.Context, pr store.PR, pool config.Pool) (store.Slot, error)
     Claim hands a free pool slot to pr: store.FreeSlots (the slot that last
     held the PR first, then least recently used) and store.ClaimSlot for each
@@ -10687,6 +10712,16 @@ func (m *Manager) EnsureSchema(ctx context.Context, slot store.Slot, pool config
     recorded. It returns what it did for the person. A failed reload is an error
     and leaves the schema unknown. A pool that is not LazySchema, or a per-PR
     worktree, runs nothing: its released slots carry the base schema.
+
+func (m *Manager) Fetch(ctx context.Context, slot store.Slot, pr store.PR, pool config.Pool) (string, error)
+    Fetch is Checkout's fetch alone, for a caller that reads the head before
+    it checks it out (the engine compares the project config a running agent
+    reloads, before the checkout moves under it) and then checks it out with
+    CheckoutFetched: refs/pull/N/head → refs/magnum/pr/N in the slot's main
+    clone, plus origin/<base> for a pool slot. It returns the commit fetched,
+    which may be newer than the radar's head. The slot must belong to pr; its
+    state does not matter, as nothing in its work tree changes. pool is ignored
+    for per-PR slots.
 
 func (m *Manager) ForgetSchema(ctx context.Context, slot store.Slot) error
     ForgetSchema marks the schema of the slot's databases unknown, before a

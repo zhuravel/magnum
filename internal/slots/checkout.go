@@ -102,6 +102,60 @@ func (m *Manager) Reserve(ctx context.Context, pr store.PR, pool config.Pool) (s
 // engine's job. Read the slot again for the sha actually checked out.
 // pool is ignored for per-PR slots.
 func (m *Manager) Checkout(ctx context.Context, slot store.Slot, pr store.PR, pool config.Pool, targetSHA string) error {
+	return m.checkout(ctx, slot, pr, pool, targetSHA, "")
+}
+
+// CheckoutFetched is Checkout of the head Fetch brought into the slot's
+// main clone (fetched), without fetching again: its fetch step only checks
+// that refs/magnum/pr/N still holds that commit, and fails when a fetch
+// since moved it (the caller read fetched, not the newer head).
+func (m *Manager) CheckoutFetched(ctx context.Context, slot store.Slot, pr store.PR, pool config.Pool, targetSHA, fetched string) error {
+	if fetched == "" {
+		return fmt.Errorf("slots: checkout PR #%d: no fetched head", pr.Number)
+	}
+	return m.checkout(ctx, slot, pr, pool, targetSHA, fetched)
+}
+
+// Fetch is Checkout's fetch alone, for a caller that reads the head before
+// it checks it out (the engine compares the project config a running agent
+// reloads, before the checkout moves under it) and then checks it out with
+// CheckoutFetched: refs/pull/N/head → refs/magnum/pr/N in the slot's main
+// clone, plus origin/<base> for a pool slot. It returns the commit fetched,
+// which may be newer than the radar's head. The slot must belong to pr;
+// its state does not matter, as nothing in its work tree changes. pool is
+// ignored for per-PR slots.
+func (m *Manager) Fetch(ctx context.Context, slot store.Slot, pr store.PR, pool config.Pool) (string, error) {
+	if m.d.DryRun {
+		m.dryRun("fetch PR #%d into %s", pr.Number, slot.MainClone)
+		return "", fmt.Errorf("slots: fetch PR #%d: a dry run fetches nothing", pr.Number)
+	}
+	sl, err := m.reload(ctx, slot)
+	if err != nil {
+		return "", err
+	}
+	if sl.PRID == nil || *sl.PRID != pr.ID {
+		return "", fmt.Errorf("slots: fetch PR #%d: slot %s is not assigned to it: %w", pr.Number, sl.Name, store.ErrConflict)
+	}
+	return m.fetchHead(ctx, sl, pr, pool)
+}
+
+// fetchHead fetches pr's head into sl's main clone (and a pool slot's base
+// branch) and returns the commit fetched.
+func (m *Manager) fetchHead(ctx context.Context, sl store.Slot, pr store.PR, pool config.Pool) (string, error) {
+	sha, err := m.git.FetchPR(ctx, sl.MainClone, pr.Number)
+	if err != nil {
+		return "", err
+	}
+	if sl.Kind == store.SlotKindPool {
+		if err := m.git.FetchBranch(ctx, sl.MainClone, pool.Base); err != nil {
+			return "", err
+		}
+	}
+	return sha, nil
+}
+
+// checkout is Checkout, or CheckoutFetched with fetched set.
+func (m *Manager) checkout(ctx context.Context, slot store.Slot, pr store.PR, pool config.Pool, targetSHA, fetched string) error {
 	if len(targetSHA) < 7 {
 		return fmt.Errorf("slots: checkout PR #%d: invalid target sha %q", pr.Number, targetSHA)
 	}
@@ -123,24 +177,31 @@ func (m *Manager) Checkout(ctx context.Context, slot store.Slot, pr store.PR, po
 	if err := steps.ResetSubject(ctx, m.d.Store, subject); err != nil {
 		return err
 	}
-	err = m.checkoutSteps(ctx, subject, sl, pr, pool, targetSHA)
+	err = m.checkoutSteps(ctx, subject, sl, pr, pool, targetSHA, fetched)
 	if err != nil {
 		m.setLastError(ctx, sl.ID, err)
 	}
 	return err
 }
 
-func (m *Manager) checkoutSteps(ctx context.Context, subject string, sl store.Slot, pr store.PR, pool config.Pool, target string) error {
+// checkoutSteps runs Checkout's steps; fetched, when set, is the head Fetch
+// brought, which the fetch step checks instead of fetching.
+func (m *Manager) checkoutSteps(ctx context.Context, subject string, sl store.Slot, pr store.PR, pool config.Pool, target, fetched string) error {
 	isPool := sl.Kind == store.SlotKindPool
 	sha := ""
 	if err := m.step(ctx, subject, "fetch", func(ctx context.Context) error {
 		var err error
-		if sha, err = m.git.FetchPR(ctx, sl.MainClone, pr.Number); err != nil {
-			return err
-		}
-		if isPool {
-			if err := m.git.FetchBranch(ctx, sl.MainClone, pool.Base); err != nil {
+		if fetched == "" {
+			if sha, err = m.fetchHead(ctx, sl, pr, pool); err != nil {
 				return err
+			}
+		} else {
+			if sha, err = m.git.RevParse(ctx, sl.MainClone, gitx.PRRef(pr.Number)); err != nil {
+				return err
+			}
+			if sha != fetched {
+				return fmt.Errorf("slots: PR #%d: %s moved from %s to %s since the fetch", pr.Number, gitx.PRRef(pr.Number),
+					textx.ShortSHA(fetched), textx.ShortSHA(sha))
 			}
 		}
 		if sha != target {

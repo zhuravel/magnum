@@ -816,8 +816,12 @@ records it, the board's card says "Claude ran without the PR's .claude/ and .mcp
 does the review's Checks. A PR that leaves both alone keeps the team's project config. Claude Code reloads
 its settings and skills while it runs, and loads a `.claude/settings.json` a later commit adds, so a
 Claude session that started with the project config loaded is quit (its conversation parked) before
-Magnum moves the checkout to a new head, at a round's start and at a restart after a push, and resumed
-once the new head is checked out; one that works or is blocked holds the round instead. Add
+Magnum moves the checkout to a new head that changes it, at a round's start and at a restart after a push,
+and resumed once the new head is checked out; one that works or is blocked holds the round instead. The
+checkout's fetch runs first, and the head it fetched decides: by the PR's file list when the list is
+complete and of that head, else (a PR of more files than the list holds) by git, the files that head
+changes under `.claude/` or in `.mcp.json` since its merge base with the base branch; a git that cannot
+tell quits the session. Add
 `--strict-mcp-config` to `project_untrust` to drop your own MCP servers from such sessions too. Not covered:
 a nested `<dir>/.claude/skills/` (Claude loads it once it works on files there), a team hook that runs a
 script outside `.claude/` the PR changes, and an agent that checks another commit out in the checkout.

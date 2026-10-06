@@ -106,6 +106,10 @@ type Rounds interface {
 type Slots interface {
 	Claim(ctx context.Context, pr store.PR, pool config.Pool) (store.Slot, error)
 	Checkout(ctx context.Context, slot store.Slot, pr store.PR, pool config.Pool, targetSHA string) error
+	// Fetch and CheckoutFetched split Checkout around its fetch, for a
+	// round that reads the head before the checkout moves (parkReloading).
+	Fetch(ctx context.Context, slot store.Slot, pr store.PR, pool config.Pool) (string, error)
+	CheckoutFetched(ctx context.Context, slot store.Slot, pr store.PR, pool config.Pool, targetSHA, fetched string) error
 	CreatePRWorktree(ctx context.Context, watch config.Watch, repo string, pr store.PR, targetSHA string) (store.Slot, error)
 	Release(ctx context.Context, slot store.Slot, pool config.Pool, reason string) error
 	ProvisionPool(ctx context.Context, pool config.Pool, n int) error
@@ -137,6 +141,9 @@ type Git interface {
 	// commit, the base a post-merge round reviews from (postMergeBase).
 	RevParse(ctx context.Context, dir, ref string) (string, error)
 	FetchCommit(ctx context.Context, mainClone, sha string, number int) error
+	// ChangedUnder tells whether a head changes the project config a
+	// running agent reloads (parkReloading).
+	ChangedUnder(ctx context.Context, dir, base, head string, paths ...string) ([]string, error)
 }
 
 // Cleaner plans and applies storage cleanup (*cleanup.Planner). PlanFrom

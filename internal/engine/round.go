@@ -110,12 +110,13 @@ func (e *Engine) prepare(ctx context.Context, job *roundJob) (pipeline.RoundInpu
 	// 1. Checkout (and a post-merge round's base, which the base branch no
 	// longer gives), once the sessions that would reload the project
 	// config from it are out of its way.
+	fetched := ""
 	if !(job.kind == kindContinue && job.target != "") && job.evalHead == "" {
-		if _, err := e.parkReloading(ctx, job); err != nil {
+		if _, fetched, err = e.parkReloading(ctx, job, pr.HeadSHA); err != nil {
 			return fail(err)
 		}
 	}
-	if rs.target, err = e.checkout(ctx, job); err != nil {
+	if rs.target, err = e.checkout(ctx, job, fetched); err != nil {
 		return pipeline.RoundInput{}, ws, e.checkoutFailed(err, job)
 	}
 	if job.postMerge {
@@ -230,11 +231,19 @@ type roundSetup struct {
 // or a re-review of the same head.
 func (rs *roundSetup) judgeOnly() bool { return rs.delta != nil || rs.sameHead }
 
+// checksOutInPlace reports whether the round's checkout happens in the slot
+// it already has (Slots.Checkout), rather than in a per-PR worktree created
+// or recreated for it.
+func (job *roundJob) checksOutInPlace() bool {
+	return job.hasSlo && !(job.slot.Kind == store.SlotKindPerPR && slices.Contains(recreatedPerPR, job.slot.State))
+}
+
 // checkout checks the PR's head out in its slot (a per-PR worktree is
 // created, or recreated, first) and returns the commit the round reviews:
-// the one the fetch found, which may be newer than the radar's. A continue
-// keeps the paused round's target.
-func (e *Engine) checkout(ctx context.Context, job *roundJob) (string, error) {
+// the one the fetch found, which may be newer than the radar's; fetched is
+// the head parkReloading fetched for it already ("" = the checkout
+// fetches). A continue keeps the paused round's target.
+func (e *Engine) checkout(ctx context.Context, job *roundJob, fetched string) (string, error) {
 	pr := job.pr
 	if job.kind == kindContinue && job.target != "" {
 		return job.target, nil
@@ -246,13 +255,13 @@ func (e *Engine) checkout(ctx context.Context, job *roundJob) (string, error) {
 	if job.pool != nil {
 		pool = *job.pool
 	}
-	if !job.hasSlo || (job.slot.Kind == store.SlotKindPerPR && slices.Contains(recreatedPerPR, job.slot.State)) {
+	if !job.checksOutInPlace() {
 		sl, err := e.d.Slots.CreatePRWorktree(ctx, job.watch, job.repo.FullName(), pr, pr.HeadSHA)
 		if err != nil {
 			return "", fmt.Errorf("per-PR worktree: %w", err)
 		}
 		job.slot, job.hasSlo = sl, true
-	} else if err := e.d.Slots.Checkout(ctx, job.slot, pr, pool, pr.HeadSHA); err != nil {
+	} else if err := e.checkoutHead(ctx, job, pr, pool, pr.HeadSHA, fetched); err != nil {
 		return "", fmt.Errorf("checkout in %s: %w", job.slot.Name, err)
 	}
 	sl, err := e.st.SlotByID(ctx, job.slot.ID)
@@ -268,6 +277,16 @@ func (e *Engine) checkout(ctx context.Context, job *roundJob) (string, error) {
 		e.event(ctx, "info", prSubject(job.repo, pr.Number), "round.head_moved", fmt.Sprintf("GitHub head moved to %s; reviewing that", textx.ShortSHA(target)), nil)
 	}
 	return target, nil
+}
+
+// checkoutHead checks target out in the round's slot: the head fetched
+// already when parkReloading fetched one (Slots.CheckoutFetched, no second
+// fetch), else through the checkout's own fetch.
+func (e *Engine) checkoutHead(ctx context.Context, job *roundJob, pr store.PR, pool config.Pool, target, fetched string) error {
+	if fetched != "" {
+		return e.d.Slots.CheckoutFetched(ctx, job.slot, pr, pool, target, fetched)
+	}
+	return e.d.Slots.Checkout(ctx, job.slot, pr, pool, target)
 }
 
 // startSessions gives the roles that run their panes (one workspace) and
@@ -529,11 +548,11 @@ func (e *Engine) switchHead(job *roundJob, rs roundSetup, base string, ws agents
 		if job.pool != nil {
 			pool = *job.pool
 		}
-		parked, err := e.parkReloading(ctx, job)
+		parked, fetched, err := e.parkReloading(ctx, job, sha)
 		if err != nil {
 			return pipeline.Switched{}, err
 		}
-		if err := e.d.Slots.Checkout(ctx, job.slot, pr, pool, sha); err != nil {
+		if err := e.checkoutHead(ctx, job, pr, pool, sha, fetched); err != nil {
 			return pipeline.Switched{}, fmt.Errorf("checkout in %s: %w", job.slot.Name, err)
 		}
 		// The restart prompts every role on the same session: resume the

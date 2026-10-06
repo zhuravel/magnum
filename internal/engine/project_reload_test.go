@@ -1,10 +1,13 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -146,42 +149,180 @@ func TestRoundRestartParksAReloadingSessionAcrossTheSwitch(t *testing.T) {
 	}
 }
 
-// A new head that leaves the reloaded project config alone (the PR's file
-// list at that head names nothing under .claude/ or .mcp.json) brings the
+// projectGit answers ChangedUnder per head (the files the head changes at
+// or under the paths since its merge base with the base) and records each
+// comparison as "<base>...<head>:<paths>".
+type projectGit struct {
+	fakeGit
+	mu      sync.Mutex
+	changed map[string][]string
+	err     error
+	calls   []string
+}
+
+func (g *projectGit) ChangedUnder(_ context.Context, _, base, head string, paths ...string) ([]string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.calls = append(g.calls, base+"..."+head+":"+strings.Join(paths, ","))
+	if g.err != nil {
+		return nil, g.err
+	}
+	return g.changed[head], nil
+}
+
+func (g *projectGit) all() []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return slices.Clone(g.calls)
+}
+
+// A new head that leaves the reloaded project config alone brings the
 // session nothing new to reload, so magnum does not quit it: a quit that
 // cannot stop the agent (its MCP servers still in the pane's foreground)
-// held such a round for good, retried every tick. A head whose list names
-// that config, or whose list is cut off or missing, still quits it.
+// held such a round for good. The checkout's fetch runs first, once, and
+// the head it fetched decides: by the PR's file list when it is complete
+// and for that head, else by git (the head's changes at or under .claude
+// and .mcp.json since its merge base with the base branch), which a PR of
+// more files than the list holds needs. A head that changes the config, and
+// a git that cannot tell, still quit the session.
 func TestALiveClaudeSessionStaysWhenTheNewHeadLeavesItsConfigAlone(t *testing.T) {
+	untouched := []string{"app/models/order.rb", "spec/models/order_spec.rb"}
 	for _, c := range []struct {
 		name      string
 		files     []string
 		truncated bool
+		moveHead  string              // the fetch finds this head instead of the radar's b2
+		changed   map[string][]string // git's answer per head
+		gitErr    error
+		fetchErr  error
 		wantQuit  bool
+		wantGit   string // the comparison git ran ("" = none)
 	}{
-		{"untouched", []string{"app/models/order.rb", "spec/models/order_spec.rb"}, false, false},
-		{"settings changed", []string{"app/models/order.rb", ".claude/settings.json"}, false, true},
-		{"mcp changed", []string{".mcp.json"}, false, true},
-		{"cut-off list", []string{"app/models/order.rb"}, true, true},
-		{"no list", nil, false, true},
+		{name: "untouched list", files: untouched},
+		{name: "settings changed", files: []string{"app/models/order.rb", ".claude/settings.json"}, wantQuit: true},
+		{name: "mcp changed", files: []string{".mcp.json"}, wantQuit: true},
+		{name: "cut-off list, git finds the config alone", files: untouched, truncated: true,
+			wantGit: "origin/master...b2:.claude,.mcp.json"},
+		{name: "cut-off list, git finds a change", files: untouched, truncated: true,
+			changed: map[string][]string{"b2": {".claude/settings.json"}}, wantQuit: true, wantGit: "origin/master...b2:.claude,.mcp.json"},
+		{name: "cut-off list, git fails", files: untouched, truncated: true, gitErr: errors.New("fatal: bad object"),
+			wantQuit: true, wantGit: "origin/master...b2:.claude,.mcp.json"},
+		{name: "no list, git finds the config alone", wantGit: "origin/master...b2:.claude,.mcp.json"},
+		{name: "list for another head than the fetched one", files: untouched, moveHead: "b3",
+			changed: map[string][]string{"b3": {".mcp.json"}}, wantQuit: true, wantGit: "origin/master...b3:.claude,.mcp.json"},
+		{name: "the fetch fails, the radar head's list decides", files: untouched, fetchErr: errors.New("fetch: network down")},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			h := newHarness(t)
+			g := &projectGit{changed: c.changed, err: c.gitErr}
+			h := newHarness(t, func(h *harness) { h.d.Git = g })
 			h.reviewedPR(2, "b1")
 			at := reloadingClaude(h)
+			h.sl.mu.Lock()
+			h.sl.moveHead, h.sl.fetchErr = c.moveHead, c.fetchErr
+			h.sl.mu.Unlock()
+			before := len(h.sl.all())
 			h.advance(30 * time.Minute)
 			h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b2", files: c.files, filesTruncated: c.truncated})
 			h.tick()
 			h.advance(5 * time.Minute)
 			h.tick()
-			if n := len(h.rd.all()); n != 2 {
-				t.Fatalf("rounds = %d, want the re-review", n)
+			rounds := h.rd.all()
+			if len(rounds) != 2 {
+				t.Fatalf("rounds = %d, want the re-review", len(rounds))
 			}
 			if quit := len(*at) > 0; quit != c.wantQuit {
 				t.Fatalf("quits = %v, want a quit: %v", *at, c.wantQuit)
 			}
+			calls := g.all()
+			if c.wantGit == "" && len(calls) > 0 || c.wantGit != "" && !slices.Equal(calls, []string{c.wantGit}) {
+				t.Fatalf("git comparisons = %q, want %q", calls, c.wantGit)
+			}
+			slotCalls := h.sl.all()[before:]
+			fetches := slices.DeleteFunc(slices.Clone(slotCalls), func(s string) bool { return !strings.HasPrefix(s, "fetch:") })
+			if want := 1 + btoi(c.fetchErr != nil); len(fetches) != want {
+				t.Fatalf("slot calls %v: %d fetches, want %d (the checkout reuses the one before the decision)", slotCalls, len(fetches), want)
+			}
+			target := cmp.Or(c.moveHead, "b2")
+			if c.fetchErr == nil && !slices.Contains(slotCalls, fmt.Sprintf("checkout-fetched:review1:%d:%s", h.pr(2).ID, target)) {
+				t.Fatalf("slot calls %v: want the fetched head checked out without another fetch", slotCalls)
+			}
+			if got := rounds[1].TargetSHA; got != target {
+				t.Fatalf("the re-review's target = %s, want the fetched %s", got, target)
+			}
 		})
 	}
+}
+
+// A restart's switch to a newer head asks the same question with the head
+// it switches to: without a list for that head git decides, and the switch
+// checks out the head it fetched for that, fetching once.
+func TestRoundRestartDecidesByGitWithoutAListOfTheNewHead(t *testing.T) {
+	g := &projectGit{}
+	h := newHarness(t, func(h *harness) { h.d.Git = g })
+	h.queuedPR(2, "b1")
+	h.advance(5 * time.Minute)
+	var at *[]string
+	var during []string
+	h.rd.script = func(in pipeline.RoundInput) (pipeline.RoundResult, error) {
+		at = reloadingClaude(h)
+		h.pushed(2, "b2")
+		before := len(h.sl.all())
+		sw, err := in.Switch(context.Background(), "b2")
+		during = h.sl.all()[before:]
+		if err != nil {
+			return pipeline.RoundResult{Outcome: pipeline.OutcomeError, Error: err.Error()}, err
+		}
+		return posted(sw.TargetSHA, 1), nil
+	}
+	h.tick()
+	if at == nil || len(*at) != 0 {
+		t.Fatalf("quits = %v, want none: git finds b2 leaves the config alone", at)
+	}
+	if calls := g.all(); !slices.Equal(calls, []string{"origin/master...b2:.claude,.mcp.json"}) {
+		t.Fatalf("git comparisons = %q", calls)
+	}
+	id := h.pr(2).ID
+	if want := []string{fmt.Sprintf("fetch:review1:%d", id), fmt.Sprintf("checkout-fetched:review1:%d:b2", id),
+		fmt.Sprintf("checkout:review1:%d:b2", id)}; !slices.Equal(during, want) {
+		t.Fatalf("slot calls of the switch = %v, want %v", during, want)
+	}
+	if got := h.wantState(2, store.PRReviewed); deref(got.ReviewedSHA) != "b2" {
+		t.Fatalf("reviewed_sha = %q, want b2", deref(got.ReviewedSHA))
+	}
+}
+
+// A live session that does not reload its project config needs no answer
+// before the checkout: the checkout fetches as it always did, once.
+func TestNoReloadingSessionFetchesInTheCheckoutOnly(t *testing.T) {
+	g := &projectGit{}
+	h := newHarness(t, func(h *harness) { h.d.Git = g })
+	h.reviewedPR(2, "b1")
+	before := len(h.sl.all())
+	h.advance(30 * time.Minute)
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b2"})
+	h.tick()
+	h.advance(5 * time.Minute)
+	h.tick()
+	if n := len(h.rd.all()); n != 2 {
+		t.Fatalf("rounds = %d, want the re-review", n)
+	}
+	got := h.sl.all()[before:]
+	want := []string{fmt.Sprintf("fetch:review1:%d", h.pr(2).ID), fmt.Sprintf("checkout:review1:%d:b2", h.pr(2).ID)}
+	if i := slices.Index(got, want[0]); i < 0 || i+1 >= len(got) || got[i+1] != want[1] || slices.ContainsFunc(got, func(s string) bool {
+		return strings.HasPrefix(s, "checkout-fetched:")
+	}) {
+		t.Fatalf("slot calls %v, want %v", got, want)
+	}
+	if calls := g.all(); len(calls) > 0 {
+		t.Fatalf("git comparisons %q without a reloading session", calls)
+	}
+}
+
+func btoi(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // An idle session whose quit fails (its agent did not stop: MCP servers

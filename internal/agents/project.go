@@ -223,6 +223,18 @@ func (m *Manager) noteSessionProject(ctx context.Context, id int64, kind string,
 	}
 }
 
+// ProjectPaths are the paths, relative to the checkout's root, that kind
+// loads its project config from (claude: .claude and .mcp.json), for a
+// comparison limited to them (gitx.Client.ChangedUnder); nil for a kind
+// magnum does not compare.
+func ProjectPaths(kind string) []string {
+	var out []string
+	for _, p := range projectConfigs[kind].paths {
+		out = append(out, p.name)
+	}
+	return out
+}
+
 // ProjectTouched reports whether paths (a PR's changed files, relative to
 // the repository root) name the project config kind loads from the
 // checkout: a file at or under one of its paths. A kind magnum does not

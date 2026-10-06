@@ -127,6 +127,54 @@ func TestCheckout(t *testing.T) {
 	}
 }
 
+// The engine reads the head a round checks out before the checkout (whether
+// it changes the project config a running Claude session reloads), so it
+// fetches first and checks out what it fetched: Fetch runs the checkout's
+// fetch (the PR's head and, for a pool slot, the base branch) and
+// CheckoutFetched does not fetch again. A ref that moved since (another
+// fetch) fails the checkout instead of checking out a head nobody read.
+func TestCheckoutFetchedReusesTheFetch(t *testing.T) {
+	h := newHarness(t)
+	h.provisioned(1)
+	pr := h.pr(h.repo().ID, 7, h.shaPR7, store.PRQueued)
+	sl, err := h.m.Claim(h.ctx, pr, h.pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.run.reset()
+	head, err := h.m.Fetch(h.ctx, sl, pr, h.pool)
+	if err != nil || head != h.shaPR7 {
+		t.Fatalf("Fetch = %q, %v; want %s", head, err, h.shaPR7)
+	}
+	if n := len(h.run.gitCalls("fetch")); n != 2 {
+		t.Fatalf("Fetch ran %d fetches, want the PR's head and the base branch", n)
+	}
+	h.run.reset()
+	if err := h.m.CheckoutFetched(h.ctx, sl, pr, h.pool, h.shaPR7, head); err != nil {
+		t.Fatalf("CheckoutFetched: %v", err)
+	}
+	if calls := h.run.gitCalls("fetch"); len(calls) != 0 {
+		t.Fatalf("CheckoutFetched fetched again: %v", calls)
+	}
+	if got := h.slot(sl.Name); store.Deref(got.CheckedOutSHA) != h.shaPR7 || gitT(t, sl.Path, "rev-parse", "HEAD") != h.shaPR7 {
+		t.Fatalf("checked out %s", store.Deref(got.CheckedOutSHA))
+	}
+
+	gitT(t, h.main, "update-ref", gitx.PRRef(7), h.shaPR8)
+	err = h.m.CheckoutFetched(h.ctx, h.slot(sl.Name), pr, h.pool, h.shaPR7, head)
+	if err == nil || !strings.Contains(err.Error(), "moved") {
+		t.Fatalf("CheckoutFetched after the ref moved: %v, want a refusal", err)
+	}
+	if got := gitT(t, sl.Path, "rev-parse", "HEAD"); got != h.shaPR7 {
+		t.Fatalf("HEAD = %s, want the fetched head kept", got)
+	}
+
+	other := h.pr(h.repo().ID, 8, h.shaPR8, store.PRQueued)
+	if _, err := h.m.Fetch(h.ctx, sl, other, h.pool); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("Fetch into another PR's slot: %v, want ErrConflict", err)
+	}
+}
+
 func TestCheckoutWithoutSchemaOrLockChanges(t *testing.T) {
 	h := newHarness(t)
 	sl, _ := h.claimedCheckout(8, h.shaPR8)

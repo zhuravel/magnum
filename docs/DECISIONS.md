@@ -2894,3 +2894,22 @@ editing history. Code, config comments and prompts reference these by their head
   shares the help line with `x` to keep the help on one screen. Rejected: a column on prs (a migration, and the CLI
   could not run until the daemon restarted on it, for three values only the engine and the board read); muting with
   an expiry (a mute holds requests too, and the operator still wants a review he asks for or someone requests).
+- **Git decides whether a new head changes a reloading session's project config when the file list cannot**
+  (2026-10-07; amends "A Claude session is quit before the checkout moves only when the new head
+  changes its project config"). The operator's own PR changed 202 files; the stored list holds 100 and
+  was cut off, so every re-review quit the idle claude-review session to be safe, and that quit failed every
+  time (the agent and its MCP servers still in the pane's foreground after 10 seconds): the round failed its
+  setup, charged, until the PR needed attention. Before it quits such a session, parkReloading now runs the
+  checkout's fetch (`slots.Manager.Fetch`: the PR's head into `refs/magnum/pr/N`, and the base branch for a
+  pool slot) and the checkout checks out the head it fetched without fetching again
+  (`slots.Manager.CheckoutFetched`, which fails if the ref moved since); that head decides. The PR's file list
+  decides when it is complete and of that head; otherwise (cut off, another head, none) git does: one `git diff
+  --name-only origin/<base>...<head> -- .claude .mcp.json` (pathspecs literal from the top;
+  `gitx.Client.ChangedUnder`, the kind's paths from `agents.ProjectPaths`), once per kind per checkout. The
+  session is quit only when that lists a file or git fails. The fetch runs whenever a live session that
+  reloads its project config is there, not only when the list cannot decide: GitHub's head may have moved
+  since the radar read it, and the head checked out is the one that must be judged (the list of the radar's
+  head no longer decides for a newer one). A fetch that fails leaves the old decision (the radar head's
+  list, else a quit) and the checkout fetches as before; a per-PR worktree the round creates or recreates
+  is not fetched first. The same holds at a restart's switch to a newer head, which now names the head it
+  switches to instead of the PR the round claimed.

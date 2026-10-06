@@ -112,3 +112,51 @@ func TestWorkTreeChangesOfSeveralPaths(t *testing.T) {
 	}
 	changes(".claude/settings.local.json", ".mcp.json")
 }
+
+// ChangedUnder answers whether a head brings changes to a CLI's project
+// config before it is checked out (the engine's question for a Claude
+// session that reloads .claude/ and .mcp.json): one `git diff --name-only`
+// of base...head limited to the paths, each taken literally from the top,
+// so only what the head changed since its merge base with the base branch
+// counts, not what the base branch did since.
+func TestChangedUnder(t *testing.T) {
+	ctx := context.Background()
+	c, f := newFake(outRule(".claude/settings.json\x00.mcp.json\x00", "git", "-C", slot, "diff"))
+	got, err := c.ChangedUnder(ctx, slot, "origin/master", sha1, ".claude", ".mcp.json")
+	if want := []string{".claude/settings.json", ".mcp.json"}; err != nil || !slices.Equal(got, want) {
+		t.Fatalf("ChangedUnder = %q, %v; want %q", got, err, want)
+	}
+	wantCall(t, f, 0, false, "git", "-C", slot, "diff", "--name-only", "-z", "--no-renames", "origin/master..."+sha1, "--",
+		":(top,literal).claude", ":(top,literal).mcp.json")
+	for _, bad := range [][]string{{"-x", sha1, ".claude"}, {"a..b", sha1, ".claude"}, {"origin/master", sha1}, {"origin/master", sha1, ""}} {
+		if _, err := c.ChangedUnder(ctx, slot, bad[0], bad[1], bad[2:]...); err == nil {
+			t.Errorf("ChangedUnder(%q) must be refused", bad)
+		}
+	}
+
+	fx := newFixture(t)
+	dir := fx.origin
+	fx.commit(dir, ".claude/settings.json", "{}\n", "Add the team's Claude settings")
+	fx.commit(dir, ".mcp.json", "{\"mcpServers\":{}}\n", "Add the team's MCP servers")
+	fx.git(dir, "checkout", "--quiet", "-b", "topic")
+	untouched := fx.commit(dir, "app/x.rb", "x\n", "Change the app only")
+	fx.git(dir, "checkout", "--quiet", "main")
+	fx.commit(dir, ".claude/settings.json", "{\"env\":{}}\n", "The base branch moves its settings on")
+	changes := func(head string, want ...string) {
+		t.Helper()
+		got, err := fx.c.ChangedUnder(ctx, dir, "main", head, ".claude", ".mcp.json")
+		if err != nil || !slices.Equal(got, want) {
+			t.Fatalf("ChangedUnder(%s) = %q, %v; want %q", head, got, err, want)
+		}
+	}
+	changes(untouched)
+	fx.git(dir, "checkout", "--quiet", "topic")
+	fx.write(dir, "sub/.mcp.json", "{}\n")
+	nested := fx.commit(dir, "CLAUDE.md", "x\n", "A nested .mcp.json and the instructions")
+	changes(nested)
+	hooks := fx.commit(dir, ".claude/settings.json", "{\"hooks\":{}}\n", "Add hooks")
+	changes(hooks, ".claude/settings.json")
+	fx.git(dir, "rm", "--quiet", ".mcp.json")
+	fx.git(dir, "commit", "--quiet", "-m", "Delete the servers")
+	changes(fx.git(dir, "rev-parse", "HEAD"), ".claude/settings.json", ".mcp.json")
+}

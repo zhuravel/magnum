@@ -500,6 +500,31 @@ func (c *Client) ModifiedPaths(ctx context.Context, dir, base, head string) ([]s
 	return c.diffNames(ctx, dir, base, head, []string{"--diff-filter=a"}, nil)
 }
 
+// ChangedUnder is ChangedPaths limited to the files at or under paths, each
+// relative to the repository's top and taken literally (a directory or a
+// file): what head changes there since its merge base with base, whatever
+// base did since. One git diff; nil when head leaves them all alone.
+func (c *Client) ChangedUnder(ctx context.Context, dir, base, head string, paths ...string) ([]string, error) {
+	specs, err := literalPaths(paths)
+	if err != nil {
+		return nil, err
+	}
+	return c.diffNames(ctx, dir, base, head, nil, specs)
+}
+
+// literalPaths are paths as pathspecs taken literally from the
+// repository's top; at least one, none empty.
+func literalPaths(paths []string) ([]string, error) {
+	if len(paths) == 0 || slices.Contains(paths, "") {
+		return nil, errors.New("gitx: the comparison needs a path")
+	}
+	specs := make([]string, len(paths))
+	for i, p := range paths {
+		specs[i] = ":(top,literal)" + p
+	}
+	return specs, nil
+}
+
 // WorkTreeChanges lists the files at or under paths (each relative to the
 // repository's top, taken literally: a directory or a file) whose state on
 // disk differs from base, as a tool reading them sees them: committed and
@@ -513,12 +538,9 @@ func (c *Client) WorkTreeChanges(ctx context.Context, dir, base string, paths ..
 	if strings.Contains(base, "..") {
 		return nil, fmt.Errorf("gitx: revision %q must not be a range", base)
 	}
-	if len(paths) == 0 || slices.Contains(paths, "") {
-		return nil, errors.New("gitx: work tree changes need a path")
-	}
-	specs := make([]string, len(paths))
-	for i, p := range paths {
-		specs[i] = ":(top,literal)" + p
+	specs, err := literalPaths(paths)
+	if err != nil {
+		return nil, err
 	}
 	diff, err := c.git(ctx, dir, call{label: "diff --name-only " + base},
 		append([]string{"diff", "--name-only", "-z", "--no-renames", "--no-ext-diff", base, "--"}, specs...)...)

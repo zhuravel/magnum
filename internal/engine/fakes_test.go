@@ -896,7 +896,8 @@ type fakeSlots struct {
 
 	mu       sync.Mutex
 	calls    []string
-	moveHead string // Checkout "fetches" this head instead of the target
+	moveHead string // Checkout and Fetch "fetch" this head instead of the target
+	fetchErr error  // Fetch fails with it
 	holdErr  error
 	// guardErr is what Guard returns for a slot without a persisted hold
 	// (a person's agent in it, say); a hold_reason is returned as
@@ -941,7 +942,36 @@ func (f *fakeSlots) Claim(ctx context.Context, pr store.PR, pool config.Pool) (s
 	return store.Slot{}, slots.ErrNoFreeSlot
 }
 
-func (f *fakeSlots) Checkout(ctx context.Context, slot store.Slot, pr store.PR, _ config.Pool, target string) error {
+// Fetch "fetches" the PR's head as Checkout does first: moveHead, else the
+// head the registry has now (GitHub's, which a push in a test updates);
+// fetchErr makes it fail.
+func (f *fakeSlots) Fetch(ctx context.Context, slot store.Slot, pr store.PR, _ config.Pool) (string, error) {
+	f.record(fmt.Sprintf("fetch:%s:%d", slot.Name, pr.ID))
+	f.mu.Lock()
+	move, ferr := f.moveHead, f.fetchErr
+	f.mu.Unlock()
+	if ferr != nil {
+		return "", ferr
+	}
+	cur, err := f.st.PRByID(ctx, pr.ID)
+	if err != nil {
+		return "", err
+	}
+	return cmp.Or(move, cur.HeadSHA), nil
+}
+
+// CheckoutFetched checks out the head Fetch returned, fetching nothing.
+func (f *fakeSlots) CheckoutFetched(ctx context.Context, slot store.Slot, pr store.PR, pool config.Pool, target, fetched string) error {
+	f.record(fmt.Sprintf("checkout-fetched:%s:%d:%s", slot.Name, pr.ID, fetched))
+	return f.checkout(ctx, slot, pr, pool, target, fetched)
+}
+
+func (f *fakeSlots) Checkout(ctx context.Context, slot store.Slot, pr store.PR, pool config.Pool, target string) error {
+	f.record(fmt.Sprintf("fetch:%s:%d", slot.Name, pr.ID))
+	return f.checkout(ctx, slot, pr, pool, target, "")
+}
+
+func (f *fakeSlots) checkout(ctx context.Context, slot store.Slot, pr store.PR, _ config.Pool, target, fetched string) error {
 	f.record(fmt.Sprintf("checkout:%s:%d:%s", slot.Name, pr.ID, target))
 	f.mu.Lock()
 	gate, started := f.checkoutGate, f.checkoutStarted
@@ -959,10 +989,7 @@ func (f *fakeSlots) Checkout(ctx context.Context, slot store.Slot, pr store.PR, 
 	if f.holdErr != nil {
 		return f.holdErr
 	}
-	sha := target
-	if f.moveHead != "" {
-		sha = f.moveHead
-	}
+	sha := cmp.Or(fetched, f.moveHead, target)
 	f.mu.Lock()
 	schema := f.schemaChange
 	f.mu.Unlock()
@@ -1210,6 +1237,13 @@ func (fakeGit) RevParse(_ context.Context, _, ref string) (string, error) {
 }
 
 func (fakeGit) FetchCommit(context.Context, string, string, int) error { return nil }
+
+// ChangedUnder cannot tell: a session that reloads its project config is
+// quit unless a test's git (projectGit) or the stored file list says the
+// head leaves that config alone.
+func (fakeGit) ChangedUnder(_ context.Context, _, base, head string, _ ...string) ([]string, error) {
+	return nil, fmt.Errorf("fake git: no diff of %s...%s", base, head)
+}
 
 func (fakeGit) MergeBase(_ context.Context, _, a, _ string) (string, error) {
 	if strings.HasPrefix(a, "origin/") {

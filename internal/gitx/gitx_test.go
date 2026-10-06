@@ -933,6 +933,7 @@ func allOps(ctx context.Context) []op {
 		{"StatusPaths", false, true, func(c *Client) error { _, err := c.StatusPaths(ctx, slot); return err }},
 		{"MergeBase", false, true, func(c *Client) error { _, err := c.MergeBase(ctx, slot, "a", "b"); return err }},
 		{"ChangedPaths", false, true, func(c *Client) error { _, err := c.ChangedPaths(ctx, slot, "a", "b"); return err }},
+		{"ChangedUnder", false, true, func(c *Client) error { _, err := c.ChangedUnder(ctx, slot, "a", "b", ".claude"); return err }},
 		{"BranchPR", false, true, func(c *Client) error { _, _, err := c.BranchPR(ctx, slot, "b"); return err }},
 		{"Unpushed", false, true, func(c *Client) error { _, err := c.Unpushed(ctx, slot); return err }},
 		{"UnpushedRef", false, true, func(c *Client) error { _, err := c.UnpushedRef(ctx, slot, "review1"); return err }},
