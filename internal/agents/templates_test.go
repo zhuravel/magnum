@@ -110,6 +110,30 @@ func triageFixtureFor(kind string) triageFixture {
 		}}
 }
 
+// curateFixture has the shape of the engine's curator data (internal/engine
+// curateData); the engine checks the shipped prompt against the real type
+// (CheckPrompts).
+type curateFixture struct {
+	Repo, Dir, Current, CurrentHarness, Usage, Proposal, Harness, Changes string
+	Limits                                                                struct {
+		MaxBytes        int64
+		MaxLine         int
+		MaxHarnessFiles int
+		MaxHarnessBytes int64
+	}
+	Over         []string
+	UnusedRounds int
+}
+
+func curateFixtureWith(over ...string) curateFixture {
+	dir := "/data/notes/.curate/talkable/talkable/20261006-101500"
+	f := curateFixture{Repo: "talkable/talkable", Dir: dir, Current: dir + "/current.md", CurrentHarness: dir + "/current",
+		Usage: dir + "/usage.json", Proposal: dir + "/proposal.md", Harness: dir + "/harness", Changes: dir + "/changes.json",
+		Over: over, UnusedRounds: 20}
+	f.Limits.MaxBytes, f.Limits.MaxLine, f.Limits.MaxHarnessFiles, f.Limits.MaxHarnessBytes = 16384, 300, 15, 131072
+	return f
+}
+
 // retroFixture has the shape of the engine's retro data (internal/engine
 // retroData); the engine checks the shipped prompt against the real type
 // (CheckPrompts).
@@ -253,6 +277,8 @@ func TestRenderGolden(t *testing.T) {
 		{"triage_initial", "triage.md", triageFixtureFor("initial")},
 		{"triage_rereview", "triage.md", triageFixtureFor("rereview")},
 		{"retro", "retro.md", retroFixtureWith("a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0")},
+		{"notes_curate", "notes-curate.md", curateFixtureWith("max_bytes", "max_harness_files")},
+		{"notes_curate_within", "notes-curate.md", curateFixtureWith()},
 		{"retro_two_reviews", "retro.md", retroFixtureWith("a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0", "d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3")},
 		{"model_fallback_no_report", FallbackPromptName, FallbackData{Model: "sonnet", Previous: "opus", Role: "claude-simplify",
 			URL: "https://github.com/talkable/talkable/pull/11920", HeadSHA: "d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3"}},
@@ -320,7 +346,7 @@ func checkGolden(t *testing.T, golden, got string) {
 
 func TestEveryDefaultPromptHasAGolden(t *testing.T) {
 	want := []string{"claude-rereview.md", "claude-restart.md", "claude-review.md", "claude-simplify.md", "codex-review.sh", "judge-continue.md",
-		"judge-initial.md", "judge-nudge.md", "judge-recovery.md", "judge-rereview.md", "model-fallback.md", "retro.md", "triage.md"}
+		"judge-initial.md", "judge-nudge.md", "judge-recovery.md", "judge-rereview.md", "model-fallback.md", "notes-curate.md", "retro.md", "triage.md"}
 	if got := prompts.Names(); !slices.Equal(got, want) {
 		t.Fatalf("prompts.Names() = %v, want %v (add a golden case)", got, want)
 	}

@@ -99,6 +99,12 @@ func CheckPrompts(cfg *config.Config) (int, error) {
 		render("retro prompt", p, sampleData[retroData](true))
 		render("retro prompt", p, retroData{})
 	}
+	if p, err := cfg.ResolvePrompt(cfg.Notes.Prompt); err != nil {
+		errs = append(errs, fmt.Errorf("notes curation prompt: %w", err))
+	} else {
+		render("notes curation prompt", p, sampleData[curateData](true))
+		render("notes curation prompt", p, curateData{})
+	}
 	for _, id := range cfg.Identities {
 		tmpl := id.Footer()
 		if tmpl == "" {

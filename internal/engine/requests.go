@@ -211,6 +211,8 @@ func (e *Engine) handleRequest(ctx context.Context, req store.Request) {
 		answer(e, ctx, req, e.requestIdentityVerdict)
 	case ReqRetro:
 		answer(e, ctx, req, e.requestRetro)
+	case ReqNotesCurate: // notes_curate.go
+		answer(e, ctx, req, e.requestCurate)
 	case ReqRelease:
 		p, ok := payload[TargetPayload](e, ctx, req)
 		if !ok {

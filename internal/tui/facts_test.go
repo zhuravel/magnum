@@ -117,6 +117,22 @@ func TestDashboardTitleSaysWhatHoldsTheDaemon(t *testing.T) {
 	}
 }
 
+// TestTitlesCountTheNotesProposalsToReview: a curation proposal waiting for
+// the operator is the least pressing fact, "notes ×N" when space is short.
+func TestTitlesCountTheNotesProposalsToReview(t *testing.T) {
+	f := allFacts()
+	f.NotesProposals = 2
+	facts := f.list(boardNow)
+	if last := facts[len(facts)-1]; last.full != "2 notes proposals to review" || last.short != "notes ×2" {
+		t.Fatalf("last fact = %+v", last)
+	}
+	if got := (DaemonFacts{NotesProposals: 1}).list(boardNow)[0].full; got != "1 notes proposal to review" {
+		t.Errorf("one proposal: %q", got)
+	}
+	title := strings.Split(viewOf(boardWithFacts(t, 400, 24, DaemonFacts{NotesProposals: 1})), "\n")[0]
+	mustContain(t, title, "1 notes proposal to review")
+}
+
 // TestFactsGiveWayInOrder: the variants run from every fact whole to none,
 // the short forms before any fact is left out, the least pressing first.
 func TestFactsGiveWayInOrder(t *testing.T) {

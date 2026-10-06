@@ -1900,3 +1900,75 @@ editing history. Code, config comments and prompts reference these by their head
   field and instruction and a stale "(but `no changes`)" making room. Rejected: a footer field the judge copies (a
   multi-line template rendered per review is magnum's data, and the judge already glued the one-line footer to
   `</details>`); `.Clean` from the result's `verdict` (`clean` there ignores simplifications).
+- **Repository notes: triggers, history, usage and curation** (2026-10-06, amends "Repository notes" and "The
+  judge merges the repository notes under a lock"; approved by the operator). The notes' rules were prompt text
+  only, and they piled up: talkable's had grown to 26.5 KB, 81 lines, 36 of them over 300 characters, with 46
+  harness scripts (232 KB), mostly one-off probes of single PRs each described in the notes, and machine-specific
+  workarounds (a version manager's install path under a home directory). Four parts, below; the notes and the
+  harness stay files the judge rewrites under its lock, and nothing here blocks or fails a review.
+- **The notes limits are curation triggers, measured in code** (2026-10-06). `[notes]` `max_bytes` (16384),
+  `max_line` (300 characters), `max_harness_files` (15) and `max_harness_bytes` (131072) are measured after each
+  judge round and at every start; past any of them a `notes.over_limit` event names the limits and the
+  repository is marked (`KVNotesOver`), back within all of them `notes.within_limits` clears the mark. Value
+  matters, not size: the operator's revision made them triggers, not caps, so a curated proposal may stay above
+  them when what it keeps helps future reviews, and the skill no longer says "at most about 80 lines". Rejected:
+  caps that refuse a proposal (they would make the curator cut useful knowledge to fit) and a check that blocks
+  the judge's write (a review must not fail over notes).
+- **Every version of the notes and the harness is kept in the registry, forever** (2026-10-06, the operator:
+  nothing lost, so a curation with a changed prompt can start from any earlier version or the whole history).
+  Migration 0013 adds `notes_versions` (the source: judge, curation, human or import; the round's PR and run;
+  the notes text gzip-compressed, NULL when an earlier version of the repository holds the same text),
+  `harness_blobs` (each file body once per content, gzip) and `notes_version_files` (a version's files by path).
+  A version is recorded after every judge round that changed the notes or the harness (the round snapshots
+  both into its report directory right before the judge is prompted, and a state that differs from the
+  snapshot after the round is the judge's; a continued turn keeps its round's snapshot), after an applied
+  curation, after `magnum notes --edit` and an applied restore (human), and as an import of a state magnum
+  finds on disk without a record of it, at every start (the first start imports every repository) and every
+  reconcile (skipping a repository whose round is in its judge stage, which records its own). An unchanged
+  state is not recorded again, and a `notes.changed` event counts the lines and harness files a version adds
+  and removes without quoting them. `--log` and `--diff [N]` read this history; `--restore <version>`
+  proposes a version back through the same review as a curation. No retention applies to these tables, nor
+  to `notes_proposals`, `notes_files` and `notes_usage`: the prune step deletes old events and handled
+  requests only (`store.Prune`), and the findings, the retro's misses and the judges' stored results
+  (`runs.result_json`) are never pruned either (checked: no statement deletes them; `RecordFindings` only
+  replaces one run's rows when the same result is recorded again). Rejected: a `.history/` directory of
+  files (a second store to prune and back up, and `--diff` would need the files anyway) and keeping only the
+  last versions (a later curation could not see what an earlier one removed).
+- **The judge reports the harness files it used** (2026-10-06). The result file gains `harness_used` (SKILL.md
+  section 8; a list of names relative to `notes_dir`, read leniently), and a reviewer report that names a
+  harness file by its path counts as a use too. `notes_files` counts the judge rounds each file existed for and
+  `notes_usage` the runs that used it; a file that existed for 20 rounds of its repository without a use is a
+  curation candidate, which `magnum notes <repo>` lists and the curator reads. SKILL.md stays within its size
+  cap: the sentence and the JSON field replace words in section 2 (30,840 to 30,839 bytes, after the footer change).
+- **The notes keep what helps a future review** (2026-10-06, the operator). The pile-up started at the source:
+  judges saved one PR's probes in the shared harness and described them in the notes. The skill's notes
+  procedure (section 2) now says the content is only what helps review a future PR, never one PR's findings,
+  code or probes, and that a probe for one PR stays in the round's report directory (beside `result_file`)
+  while only a general script a future PR would run goes in `notes_dir`, named in the notes.
+- **A curator proposes curated notes; the operator applies or rejects** (2026-10-06). With `[notes] curate =
+  "over_limit"` (the default) a marked repository is curated once its notes changed since its last curation
+  began or was applied, at most once a day; `"weekly"` also curates every repository with notes once a week;
+  `"off"` only on `magnum notes <repo> --curate` (`ReqNotesCurate`). One curation runs at a time, none while a
+  proposal of the repository waits or a round of it is in its judge stage (a PR of it reviewing whose current
+  round has a judge run), and an attempt that stored nothing (an agent down, a limit) waits an hour. The
+  curation copies the notes and the harness under the notes lock into a scratch directory
+  (`notes/.curate/<owner>/<repo>/<run>/`, pruned after 30 days) and drives the retro's pane machinery, now a
+  `paneAgent` with a `paneSpec` per kind (a "learn notes" workspace, the `[notes]` role, tagged `learn`): its
+  prompt (`prompts/notes-curate.md`, registered and render-checked like the retro's) carries paths, the limits
+  and a usage file only. The curator's test is value per future PR: every kept section and harness file in
+  `changes.json` carries a one-line reason saying how it helps review another PR of the repository, and one
+  PR's content is removed or merged into parameterized scripts. Magnum validates the proposal
+  (`notes.Validate`): reasons for every kept item and every current harness file accounted for, every proposed
+  harness file named in the notes, plain files only, no pull request reference, branch of the repository's
+  PRs or probe file (a name with "probe" or a PR number), no secret (`execx.Redact` would change it) and no
+  home directory path; size is not checked. An invalid proposal gets one nudge naming its problems, then is
+  stored as invalid with them. A valid one is stored as pending (its state as a version of source curation,
+  outside the history until applied), toasted once and counted in the board's and dashboard's titles; `magnum
+  notes <repo> --review` shows a colored diff, the harness changes with reasons and the sizes, and asks y/N:
+  `y` applies it under the notes lock after reading the live notes again (refused, and the proposal expired,
+  when they changed since its base), `n` rejects it with `--reason`, which the next curation reads, anything
+  else leaves it waiting; a proposal not reviewed within 7 days expires. Every proposal stays in
+  `notes_proposals` with its base, its proposed version, `changes.json`, its state and reason, and the
+  curator's model and prompt hash. Rejected: applying a proposal without review (the curator deletes scripts)
+  and a new runner for the curator (the retro's pane agent already handles trust, permissions, turns and
+  health).

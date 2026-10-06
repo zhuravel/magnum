@@ -153,6 +153,9 @@ func (e *Engine) finish(ctx context.Context, job *roundJob, in pipeline.RoundInp
 	e.event(ctx, "info", subject, "engine.round_result", fmt.Sprintf("round %d: %s %s", res.Round, outcome, res.Event),
 		map[string]any{"outcome": outcome, "event": res.Event, "review_id": res.ReviewID, "target_sha": in.TargetSHA,
 			"restarts": res.Restarts, "error": msg})
+	if !cancelled { // a judge a shutdown left working records its notes with the round that continues it
+		e.recordRoundNotes(ctx, job, in, res) // notes_record.go
+	}
 
 	// Role health → pauses of the roles' agent kinds (the round itself may
 	// have posted). A model limit never pauses a kind: the pipeline switched

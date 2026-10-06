@@ -38,6 +38,9 @@ type DaemonFacts struct {
 	// Codex is the Codex budget's pace when it reaches a cap before the
 	// window resets; nil otherwise.
 	Codex *CodexPace
+	// NotesProposals counts the curation proposals for repository notes
+	// that wait for the operator (`magnum notes <repo> --review`).
+	NotesProposals int
 }
 
 // CodexPace is the Codex budget used now and when, at the pace it has been
@@ -54,7 +57,7 @@ type fact struct{ full, short string }
 
 // list is f's facts, most pressing first: an older build (the daemon may
 // refuse what this build offers), a drain and a pause (no round starts),
-// then the Codex pace.
+// the Codex pace, then the notes proposals waiting for review.
 func (f DaemonFacts) list(now time.Time) []fact {
 	var out []fact
 	if f.SkewOld != "" {
@@ -86,6 +89,9 @@ func (f DaemonFacts) list(now time.Time) []fact {
 	if c := f.Codex; c != nil {
 		at := c.At.Local().Format("Mon 15:04")
 		out = append(out, fact{fmt.Sprintf("codex %d%% · at this pace %g%% %s", c.Used, c.Cap, at), fmt.Sprintf("codex %g%% %s", c.Cap, at)})
+	}
+	if n := f.NotesProposals; n > 0 {
+		out = append(out, fact{textx.Count(n, "notes proposal to review", "notes proposals to review"), fmt.Sprintf("notes ×%d", n)})
 	}
 	return out
 }

@@ -191,6 +191,9 @@ type Deps struct {
 	// Classifier sets up the retro's classifier for one retro run ([learn],
 	// retro.go); nil = the candidates are stored unclassified.
 	Classifier func(ctx context.Context, run RetroRun) (Classifier, error)
+	// Curator sets up the notes curator for one curation ([notes],
+	// notes_curate.go); nil = no curation runs.
+	Curator func(ctx context.Context, run CurateRun) (Curator, error)
 
 	// Usage reads Codex's rate-limit snapshot (usage.Codex, which FromApp
 	// sets); nil = no budget gauge and no caps.
@@ -296,6 +299,14 @@ type Engine struct {
 	retroStarted time.Time
 	retroWG      sync.WaitGroup
 
+	curateMu      sync.Mutex // the running notes curation (notes_curate.go)
+	curateCancel  context.CancelFunc
+	curateStarted time.Time
+	curateRepo    string
+	curateWG      sync.WaitGroup
+	curateTried   map[int64]time.Time // repositories whose last curation stored nothing, and when
+	curateChecked time.Time           // the last scan for a curation due (the tick's goroutine only)
+
 	usageMu   sync.Mutex // the Codex budget (budget.go)
 	usageRead time.Time
 	usageSnap *usage.Snapshot
@@ -324,6 +335,7 @@ func New(d Deps) *Engine {
 		lastSeen:     map[string]string{},
 		logged:       map[string]time.Time{},
 		cleanupTried: map[int64]time.Time{},
+		curateTried:  map[int64]time.Time{},
 		kick:         make(chan struct{}, 1),
 		starts:       starter{codex: make(chan struct{}, maxCodexStarts)},
 	}
@@ -362,13 +374,16 @@ func FromApp(a *app.App) *Engine {
 	if h := a.Herdr; h != nil && !a.DryRun && a.AgentTag == "" && a.Config != nil {
 		// The retro's agent (retro_pane.go): an agents manager of its own,
 		// over a scratch registry, tagged apart from the PRs' agents.
-		d.Classifier = paneClassifiers(paneDeps{
+		pd := paneDeps{
 			Config: a.Config, Layout: a.Layout, Logger: a.Logger, Herdr: h, Keys: h.AgentSendKeys, CloseWorkspace: h.WorkspaceClose,
 			Agents: func(st *store.Store, cfg *config.Config, layout paths.Layout) paneAgents {
 				return agents.New(agents.Deps{Herdr: h, Store: st, Runner: a.Runner, Config: cfg, Layout: layout, Tag: LearnAgentTag,
 					Log: app.Printf{Logger: a.Logger, Level: slog.LevelInfo, Src: "learn"}})
 			},
-		})
+		}
+		d.Classifier = paneClassifiers(pd)
+		// The notes curator (notes_curate.go) is the same kind of agent.
+		d.Curator = paneCurators(pd)
 	}
 	if a.Git != nil {
 		d.Probe = gitProbe(a.Git)
@@ -535,9 +550,10 @@ func (e *Engine) lockHeld() error {
 	return nil
 }
 
-// shutdown stops rounds (their runs stay observed, never re-sent) and a
-// running retro, waits for them briefly, flushes pending toasts and gives urgent toasts still
-// retrying a bounded time before cancelling them.
+// shutdown stops rounds (their runs stay observed, never re-sent), a
+// running retro and a running notes curation, waits for them briefly,
+// flushes pending toasts and gives urgent toasts still retrying a bounded
+// time before cancelling them.
 func (e *Engine) shutdown() {
 	e.mu.Lock()
 	for _, h := range e.rounds {
@@ -545,12 +561,13 @@ func (e *Engine) shutdown() {
 	}
 	e.mu.Unlock()
 	e.stopRetro()
+	e.stopCurate()
 	done := make(chan struct{})
-	go func() { e.roundWG.Wait(); e.retroWG.Wait(); close(done) }()
+	go func() { e.roundWG.Wait(); e.retroWG.Wait(); e.curateWG.Wait(); close(done) }()
 	select {
 	case <-done:
 	case <-time.After(30 * time.Second):
-		e.log.Warn("rounds or the retro did not stop within 30s")
+		e.log.Warn("rounds, the retro or the notes curation did not stop within 30s")
 	}
 	if e.batch != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -615,6 +632,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	e.parkIdle(ctx, ts)
 	e.maybeReconcile(ctx)
 	e.maybeRetro(ctx)
+	e.maybeCurate(ctx)
 	e.surface(ctx)
 	return errors.Join(errs...)
 }
@@ -642,6 +660,7 @@ func (e *Engine) startup(ctx context.Context) {
 	e.warmIdentities(ctx, true)
 	e.recoverRows(ctx)
 	e.reclassifyIneligible(ctx)
+	e.syncNotes(ctx, true) // notes_record.go: the first start imports every repository's notes
 	e.lastReconcile = e.now()
 	e.enqueueHeavy("reconcile", e.reconcile)
 }

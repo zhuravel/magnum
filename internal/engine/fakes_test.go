@@ -1325,6 +1325,7 @@ func (h *harness) awaitRound(before int) {
 func (h *harness) settle() {
 	h.e.roundWG.Wait()
 	h.e.retroWG.Wait()
+	h.e.curateWG.Wait()
 	h.e.drainHeavy(h.ctx)
 	h.e.toastWG.Wait() // urgent toasts run in goroutines
 }

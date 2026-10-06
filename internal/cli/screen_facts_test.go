@@ -71,6 +71,25 @@ func TestScreenFactsReadWhatHoldsTheDaemon(t *testing.T) {
 	}
 }
 
+// TestScreenFactsCountTheNotesProposalsToReview: the titles count the
+// curation proposals waiting for the operator, not the decided ones.
+func TestScreenFactsCountTheNotesProposalsToReview(t *testing.T) {
+	_, st, d, _ := statusFixture(t)
+	ctx := context.Background()
+	repo, err := st.RepoByFullName(ctx, "talkable/talkable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, state := range []string{store.ProposalPending, store.ProposalRejected, store.ProposalPending} {
+		if _, err := st.CreateNotesProposal(ctx, store.NotesProposalInput{RepoID: repo.ID, Kind: store.ProposalCuration, State: state}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if f := screenFacts(ctx, d); f.NotesProposals != 2 {
+		t.Errorf("NotesProposals = %d, want 2", f.NotesProposals)
+	}
+}
+
 // TestScreenFactsNameTheBinaryOnDisk: with the same version, a binary
 // rebuilt on disk is named by when it was built.
 func TestScreenFactsNameTheBinaryOnDisk(t *testing.T) {

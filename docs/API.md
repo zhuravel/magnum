@@ -50,6 +50,7 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 | [launchd](#launchd) | Package launchd writes and manages magnum's LaunchAgent (label zhuravel.magnum): rendering the plist, installing it into the user's GUI domain, and querying, restarting and removing the job. |
 | [learn](#learn) | Package learn is the deterministic half of the retro (DECISIONS "Learning loop: daily retro"): after a pull request magnum reviewed closes, Build turns what other reviewers said about it into candidates for a classifier, after dropping what cannot be a miss (the author's and magnum's own comments, short approvals, comments on code magnum never saw, findings magnum already posted), and ParseOutput reads the classifier's answer back, refusing anything off schema and any lesson that retells the pull request instead of teaching (ScrubLesson). |
 | [mysqlx](#mysqlx) | Package mysqlx inventories and drops the per-worktree MySQL databases that Talkable's bin/worktree-setup creates (talkable_<env>[_<role>]__<slug>) on the local DBngin server. |
+| [notes](#notes) | Package notes measures, versions and curates the repository notes (the file every review role reads first and the judge rewrites, engine.NotesPath) and their harness directory of QA scripts. |
 | [notify](#notify) | Package notify is magnum's user-facing status surface: toasts and herdr sidebar tokens. |
 | [paths](#paths) | Package paths defines magnum's on-disk layout. |
 | [pipeline](#pipeline) | Package pipeline runs one review round for a PR inside its herdr workspace: a readiness step in the checkout (the repository's prepare commands and ready probes and a Ruby check, readiness.go; failures only inform the judge), then the round's configured roles (config.Role: agent sessions on any configured kind, or shell commands) in stages (config.Config.Stages: the roles of a stage in parallel, then a check that they left HEAD and the tree as they found them, restoring both when not: no role may edit the checkout), then the judge, then verification on GitHub (the oracle for "review posted") and the optional dismissal of the identity's own stale CHANGES_REQUESTED. |
@@ -1911,6 +1912,13 @@ const (
     Kind.OnHooksReview values.
 
 const (
+	CurateOverLimit = "over_limit" // a repository past a limit, once its notes changed since the last curation
+	CurateWeekly    = "weekly"     // that, and every repository with notes once a week
+	CurateOff       = "off"        // only `magnum notes <repo> --curate`
+)
+    Curation schedules ([notes] curate).
+
+const (
 	// KindShell is the Role.Kind of a role that types a shell command into
 	// a plain pane instead of driving an agent CLI (codex-review).
 	KindShell = "shell"
@@ -1988,6 +1996,9 @@ const DefaultIdleRemoveAfter = 168 * time.Hour
 const DefaultLearnPrompt = "retro.md"
     DefaultLearnPrompt is the retro prompt file.
 
+const DefaultNotesPrompt = "notes-curate.md"
+    DefaultNotesPrompt is the curator's prompt file.
+
 const DefaultReadyTimeout = 5 * time.Minute
     DefaultReadyTimeout bounds a round's whole readiness step when neither the
     [[repo]] nor the [[pool]] sets ready_timeout.
@@ -2022,6 +2033,9 @@ const EmbeddedSkill = "builtin:skills/magnum-review/SKILL.md"
 const LearnRoleName = "retro"
     LearnRoleName is the name of the role the retro's classifying agent runs as
     (LearnRole).
+
+const NotesRoleName = "notes"
+    NotesRoleName is the name of the role the curator runs as (NotesRole).
 
 const PlaceholderNum = "{num}"
     PlaceholderNum is the issue number in a [board] trackers template.
@@ -2168,6 +2182,7 @@ type Config struct {
 	Usage      Usage      `toml:"usage"`
 	Triage     Triage     `toml:"triage"`
 	Learn      Learn      `toml:"learn"`
+	Notes      Notes      `toml:"notes"`
 	Board      Board      `toml:"board"`
 	Identities []Identity `toml:"identity"`
 	Watches    []Watch    `toml:"watch"`
@@ -2241,6 +2256,11 @@ func (c *Config) Normalize()
     Normalize fills the defaulted fields of Kinds and Roles in place (Load
     and Defaults call it; call it again after editing either in code). It is
     idempotent and never overrides a value that is set.
+
+func (c *Config) NotesRole() Role
+    NotesRole is the role the curator runs as: NotesRoleName, the [notes] kind
+    in session mode with its model, effort, args, prompt and timeout, normalized
+    like a configured role.
 
 func (c *Config) PoolFor(fullName string) *Pool
     PoolFor returns the pool for owner/name, or nil (per-PR worktree repos).
@@ -2706,6 +2726,37 @@ type LoadOptions struct {
 	NoOverlay bool
 }
     LoadOptions tunes LoadWithOptions.
+
+type Notes struct {
+	MaxBytes        int64  `toml:"max_bytes"`
+	MaxLine         int    `toml:"max_line"`
+	MaxHarnessFiles int    `toml:"max_harness_files"`
+	MaxHarnessBytes int64  `toml:"max_harness_bytes"`
+	Curate          string `toml:"curate"`
+	// Kind is the curator's [kinds.<name>]; a config that names a kind but no
+	// model gets DefaultLearnModel(kind), as [learn] does.
+	Kind   string   `toml:"kind"`
+	Model  string   `toml:"model"`
+	Effort string   `toml:"effort"`
+	Args   []string `toml:"args"`
+	// Prompt is the curator's template file (Config.ResolvePrompt).
+	Prompt string `toml:"prompt"`
+	// Timeout bounds the curator's turn.
+	Timeout Duration `toml:"timeout"`
+}
+    Notes is the [notes] section: the repository notes every review role
+    reads first and the judge rewrites (engine.NotesPath). The four limits are
+    curation triggers, not caps: after each judge round (and at startup) magnum
+    measures the notes and the harness directory of QA scripts beside them,
+    and a repository past any limit is marked for curation (a notes.over_limit
+    event). Nothing blocks a review, and a curated proposal may stay above a
+    limit when what it keeps helps future reviews. Curate says when a curation
+    runs: for a marked repository, also once a week, or only on demand (`magnum
+    notes <repo> --curate`). The curator is an interactive agent like the
+    retro's ([learn]): Kind, Model, Effort and Args as a role's (NotesRole).
+
+func DefaultNotes() Notes
+    DefaultNotes returns the built-in [notes] values.
 
 type Pipeline struct {
 	// PromptsDir holds the editable prompt files; default "{{repo}}/prompts"
@@ -3442,6 +3493,23 @@ const (
 	KVDaemonBuild = "daemon.build"
 )
 const (
+	// ReqNotesCurate starts a curation of a repository's notes now
+	// (NotesCuratePayload).
+	ReqNotesCurate = "notes_curate"
+
+	// Curation triggers (notes_proposals.trigger_reason).
+	CurateTriggerOverLimit = config.CurateOverLimit
+	CurateTriggerWeekly    = config.CurateWeekly
+	CurateTriggerRequest   = "request"
+
+	// ProposalTTL is how long a proposal waits for the operator before it
+	// expires.
+	ProposalTTL = 7 * 24 * time.Hour
+	// NotesLockWait is how long a curation's copy and an apply wait for the
+	// notes lock, as long as a judge waits for it.
+	NotesLockWait = 3 * time.Minute
+)
+const (
 	KVDaemonPausedAt   = "daemon.paused_at"
 	KVDaemonPausedHeld = "daemon.paused_held"
 )
@@ -3620,6 +3688,10 @@ var ErrClassifierDown = errors.New("engine: the retro's classifier is not availa
     could not be set up or started, or went away (herdr down, a prompt refused
     before it was sent). The retro stops without recording the PR.
 
+var ErrCuratorDown = errors.New("engine: the notes curator is not available")
+    ErrCuratorDown wraps a Curator's error that is not the proposal's: the agent
+    could not be set up or started, or went away.
+
 var ErrEvalLayout = errors.New("engine: magnum eval needs a scratch layout (paths.Layout.Scratch), never the live registry")
     ErrEvalLayout: RunEval needs an engine built on a scratch layout.
 
@@ -3674,6 +3746,9 @@ func ClearModelLimits(ctx context.Context, st *store.Store, kind string) ([]stri
     their next prompt. It returns the models that were limited. `magnum resume
     --tool` runs it (through the daemon, or directly when no daemon runs).
 
+func ContentOf(s notes.State) store.NotesContent
+    ContentOf is a notes state as the registry stores it.
+
 func DaemonPID(layout paths.Layout) (int, error)
     DaemonPID returns the pid of the running daemon from the pidfile, or 0 when
     there is no pidfile or that process is gone. It never touches the lock
@@ -3704,6 +3779,12 @@ func KVIdentityCheck(name string) string
 func KVIdentityError(name string) string
     KVIdentityError is the kv key holding why the identity's Check failed.
     Same as store.KVIdentityError.
+
+func KVNotesOver(fullName string) string
+    KVNotesOver holds the notes limits a repository's notes are past,
+    comma-separated ("max_bytes,max_line"): the mark a curation looks for.
+    It is set when they are measured past a limit and deleted when they are back
+    within all of them.
 
 func KVPRAttention(prID int64) string
     KVPRAttention holds why the engine parked a PR in needs_attention (the kind
@@ -3817,6 +3898,9 @@ func SkewNote(daemon Build, cliVersion string, modTime func(path string) (time.T
 func SkillCopyDir(state string) string
     SkillCopyDir is where the daemon keeps the copies of the judges' skills it
     took at startup (<state>/skill/<hash>/SKILL.md).
+
+func StateOf(c store.NotesContent) notes.State
+    StateOf is a version's content as a notes state.
 
 func TrivialDelta(files []github.FileDelta, allowed []string) (classes []string, trivial bool)
     TrivialDelta reports whether a delta needs no re-review under the allowed
@@ -3934,6 +4018,36 @@ type CleanupPayload struct {
     (planned again by the daemon). Confirmed is the typed confirmation for
     actions that need it.
 
+type CurateJob struct {
+	Repo    string
+	Scratch notes.Scratch
+	Prompt  string
+	Check   func() (notes.Proposal, []string)
+}
+    CurateJob is what a Curator works on: the scratch directory, the rendered
+    prompt (prompts/notes-curate.md), and Check, which reads what the curator
+    wrote and validates it (no problems: a valid proposal).
+
+type CurateResult struct {
+	Proposal notes.Proposal
+	Problems []string
+	Pause    *pipeline.Pause
+}
+    CurateResult is how a curator's turns ended: a proposal, valid when Problems
+    is empty, or a Pause (a limit the agent hit).
+
+type CurateRun struct {
+	ID  string
+	Dir string
+}
+    CurateRun is one curation: its id and scratch directory.
+
+type Curator interface {
+	Curate(ctx context.Context, job CurateJob) (CurateResult, error)
+	Close(ctx context.Context) error
+}
+    Curator proposes curated notes for one curation; Close ends it.
+
 type DeltaCheckRound struct {
 	Lines  int    `json:"lines"`  // the delta's changed code lines
 	Files  int    `json:"files"`  // its files
@@ -4029,6 +4143,9 @@ type Deps struct {
 	// Classifier sets up the retro's classifier for one retro run ([learn],
 	// retro.go); nil = the candidates are stored unclassified.
 	Classifier func(ctx context.Context, run RetroRun) (Classifier, error)
+	// Curator sets up the notes curator for one curation ([notes],
+	// notes_curate.go); nil = no curation runs.
+	Curator func(ctx context.Context, run CurateRun) (Curator, error)
 
 	// Usage reads Codex's rate-limit snapshot (usage.Codex, which FromApp
 	// sets); nil = no budget gauge and no caps.
@@ -4191,6 +4308,11 @@ type Inventory interface {
 	UpsertSlotDatabases(ctx context.Context, inv inventory.Inventory) (inventory.SyncResult, error)
 }
     Inventory is the reconcile scanner (*inventory.Scanner).
+
+type NotesCuratePayload struct {
+	Repo string `json:"repo"` // owner/name
+}
+    NotesCuratePayload is a `magnum notes <repo> --curate` request.
 
 type OpenPayload struct {
 	PRTarget
@@ -7457,6 +7579,325 @@ func (g Guard) Check(name string) error
 
 ```
 
+## notes
+
+```text
+package notes // import "github.com/zhuravel/magnum/internal/notes"
+
+Package notes measures, versions and curates the repository notes (the file
+every review role reads first and the judge rewrites, engine.NotesPath)
+and their harness directory of QA scripts. It reads and writes files only:
+the engine decides when (after a round, at startup, on a schedule) and the CLI
+shows and applies what is here.
+
+    <root>/<owner>/<repo>.md                    the notes
+    <root>/<owner>/<repo>/                      the harness
+    <root>/<owner>/<repo>.lock/                 the lock the judges take (agents.NotesLockLine)
+    <root>/.curate/<owner>/<repo>/<id>/         one curation's scratch copy and proposal (curate.go)
+
+Every version of the notes and the harness is kept in the registry
+(store.RecordNotesVersion), not here. GitHub owners never start with a dot,
+so ".curate" never collides with an owner's directory.
+
+CONSTANTS
+
+const (
+	ActionKept    = "kept"
+	ActionAdded   = "added"
+	ActionMerged  = "merged"
+	ActionRemoved = "removed" // a section
+	ActionDeleted = "deleted" // a harness file
+)
+    The actions of a Change.
+
+const (
+	LimitBytes        = "max_bytes"
+	LimitLine         = "max_line"
+	LimitHarnessFiles = "max_harness_files"
+	LimitHarnessBytes = "max_harness_bytes"
+)
+    The limits by their notes key, in the order Over reports them.
+
+const (
+	MaxFileBytes  = 8 << 20
+	MaxStateBytes = 64 << 20
+)
+    Caps on what ReadState reads: a harness this large is not notes, and a
+    version must fit the registry.
+
+const CurateDirName = ".curate"
+    CurateDirName is the curations' directory under the notes root.
+
+const SnapshotFile = "notes-before.json"
+    SnapshotFile is the snapshot a round takes of the notes before its judge is
+    prompted, in the round's report directory.
+
+
+VARIABLES
+
+var ErrBusy = errors.New("notes busy: another writer holds the notes lock")
+    ErrBusy is Lock's error when another holder kept the lock past the wait.
+
+var ErrTooLarge = errors.New("notes: the harness is too large to record")
+    ErrTooLarge is ReadState's error for a harness past MaxFileBytes or
+    MaxStateBytes.
+
+
+FUNCTIONS
+
+func Fingerprint(notes []byte, files []File) string
+    Fingerprint identifies a state of the notes and the harness: the notes'
+    content (a missing file is empty notes, as a version records it) and every
+    harness file's name and content.
+
+func HarnessDelta(before, after []File) (added, removed, changed []string)
+    HarnessDelta compares two listings: the names only in after (added), only in
+    before (removed) and in both with another content (changed), each sorted.
+
+func LineChanges(a, b string) (added, removed int)
+    LineChanges counts the lines b adds to a and the lines it removes, with the
+    same line matching as Unified (a changed line counts once in each).
+
+func Lock(ctx context.Context, path string, wait time.Duration) (func(), error)
+    Lock takes the notes lock at path (Repo.Lock) as the judges do, retrying
+    until wait has passed (ErrBusy); it returns the release.
+
+func Measure(r Repo, l Limits) (Size, []File, error)
+    Measure measures r's notes file and harness. A missing notes file or harness
+    measures zero; any other read error is returned.
+
+func Printable(text string) string
+    Printable replaces the control characters other than newline and tab in text
+    written by an agent, so it cannot drive a terminal.
+
+func SameListing(a, b []File) bool
+    SameListing reports whether two listings name the same files with the same
+    content.
+
+func Sections(text []byte) []string
+    Sections lists the "## " headings of notes text.
+
+func TextSHA(text []byte) string
+    TextSHA is the SHA-256 of notes text, hex.
+
+func Unified(nameA, nameB, a, b string, ctx int) string
+    Unified returns a unified diff of a and b, compared line by line,
+    with ctx lines of context around each change: the header "--- <nameA>\n+++
+    <nameB>\n", then hunks "@@ -<start>,<count> +<start>,<count> @@\n" followed
+    by lines prefixed with ' ', '-' or '+', each ending in "\n". It returns ""
+    when a == b.
+
+    Start numbers are 1-based. A range of one line is written as its start
+    alone ("@@ -3 +3 @@") and a range of no lines as the number of the line
+    before it and a zero count ("-0,0" when a is empty), as GNU diff does.
+    Changes whose context would overlap or touch (at most 2*ctx unchanged lines
+    between them) share one hunk. Lines are split on "\n" only, so a "\r" stays
+    part of its line, and a line without its "\n" (only the last one of a side
+    can be) differs from the same text with it. Such a line is printed followed
+    by "\n\\ No newline at end of file\n". A negative ctx counts as 0.
+
+func Validate(p Proposal, c Check) []string
+    Validate returns what is wrong with proposal p (nil = valid), in words fit
+    for a nudge and the registry (names and rules, never notes text): the notes
+    and changes.json must be there; every proposed section and harness file must
+    be accounted for as kept or added with a one-line reason, and every current
+    harness file with what became of it; every proposed harness file must be
+    named in the notes; nothing may name a pull request, one of its branches
+    or probe files, carry what looks like a secret or a home directory path.
+    Size is not checked: the limits trigger curations, they do not cap them.
+
+func WriteSnapshot(dir string, s Snapshot) error
+    WriteSnapshot writes s to dir/SnapshotFile.
+
+func WriteState(r Repo, s State) error
+    WriteState makes r's notes and harness s: the notes file is replaced
+    atomically (removed when s has none), and the harness by a complete new
+    directory renamed into place, the old one removed after. The caller holds
+    r's lock (Lock). A harness path that is not clean (cleanName) is refused
+    before anything is written.
+
+
+TYPES
+
+type Blob struct {
+	Path   string // slash-separated, relative to the harness directory
+	SHA256 string
+	Body   []byte
+}
+    Blob is one harness file with its content.
+
+type Change struct {
+	Name   string `json:"name"`
+	Action string `json:"action"`
+	Into   string `json:"into,omitempty"` // merged: where it went
+	Reason string `json:"reason"`
+}
+    Change is one item of Changes.
+
+type Changes struct {
+	Sections []Change `json:"sections"`
+	Files    []Change `json:"files"`
+}
+    Changes is the curator's changes.json: what became of every notes section
+    (by its "## " heading) and every harness file, each with a one-line reason.
+
+type Check struct {
+	Base State
+	// PRNumbers are the repository's pull request numbers; Branches their
+	// head branches. A harness file named after a number, or notes naming a
+	// branch, carry one pull request's content.
+	PRNumbers []int
+	Branches  []string
+}
+    Check is what Validate compares a proposal with: the state the curation
+    started from and what names one pull request of the repository.
+
+type File struct {
+	Name   string `json:"name"`
+	Size   int64  `json:"size"`
+	SHA256 string `json:"sha256"`
+}
+    File is one harness file: its slash-separated path relative to the harness
+    directory, its size and the SHA-256 of its content.
+
+func List(dir string) ([]File, error)
+    List lists the regular files under dir, recursively, sorted by name;
+    symbolic links and other special files are left out (never followed).
+    A missing dir lists nothing.
+
+type Limits struct {
+	MaxBytes        int64 `json:"max_bytes"`
+	MaxLine         int   `json:"max_line"` // characters
+	MaxHarnessFiles int   `json:"max_harness_files"`
+	MaxHarnessBytes int64 `json:"max_harness_bytes"`
+}
+    Limits are the notes curation triggers: past any of them the repository is
+    marked for curation. None of them blocks a review or a proposal.
+
+type Proposal struct {
+	State       State
+	Changes     Changes
+	ChangesJSON []byte
+}
+    Proposal is what a curator wrote: the proposed notes and harness, and its
+    changes.json (raw and parsed).
+
+func ReadProposal(s Scratch) (Proposal, []string)
+    ReadProposal reads what the curator wrote in s. Problems name what is
+    missing or unreadable, in words fit for a nudge (paths, never content).
+
+type Repo struct {
+	Root, Owner, Name string
+}
+    Repo is one repository's notes under Root; Owner and Name are lower-case
+    single path elements (engine.NotesPath checks them).
+
+func RepoOf(notesPath string) (Repo, bool)
+    RepoOf is the Repo whose notes file is notesPath (<root>/<owner>/<name>.md);
+    false when the path does not have that shape.
+
+func (r Repo) Curate() string
+    Curate is the directory of the repository's curations.
+
+func (r Repo) FullName() string
+    FullName is "owner/name".
+
+func (r Repo) Harness() string
+    Harness is the harness directory next to the notes file.
+
+func (r Repo) Lock() string
+    Lock is the lock directory the judges take (agents.NotesFiles).
+
+func (r Repo) Notes() string
+    Notes is the notes file.
+
+type Scratch struct{ Dir string }
+    Scratch is one curation's directory.
+
+func PrepareScratch(dir string, base State, usage []byte) (Scratch, error)
+    PrepareScratch makes a new scratch directory dir holding base (the notes as
+    current.md, the harness as current/ and as the harness/ the curator edits)
+    and usage as usage.json.
+
+func (s Scratch) Changes() string
+
+func (s Scratch) Current() string
+
+func (s Scratch) CurrentHarness() string
+
+func (s Scratch) Harness() string
+
+func (s Scratch) Proposal() string
+
+func (s Scratch) Usage() string
+
+type Size struct {
+	Exists       bool  `json:"exists"` // the notes file exists
+	Bytes        int64 `json:"bytes"`
+	Lines        int   `json:"lines"`
+	LongLines    int   `json:"long_lines"`   // lines longer than Limits.MaxLine characters
+	LongestLine  int   `json:"longest_line"` // characters
+	HarnessFiles int   `json:"harness_files"`
+	HarnessBytes int64 `json:"harness_bytes"`
+}
+    Size is what the notes and the harness hold.
+
+func MeasureText(text []byte, maxLine int) Size
+    MeasureText measures notes text: its bytes, lines and the lines longer than
+    maxLine characters (0 = none counted).
+
+func (s Size) Over(l Limits) []string
+    Over names the limits s is past, in the order of the Limit* constants;
+    a limit of 0 or less is off.
+
+type Snapshot struct {
+	Round    int       `json:"round"`
+	At       time.Time `json:"at"`
+	Exists   bool      `json:"exists"`
+	NotesSHA string    `json:"notes_sha256"`
+	Harness  []File    `json:"harness"`
+}
+    Snapshot is the notes and the harness as a round's judge found them:
+    after the round, a state that differs from it is the round's change (or a
+    concurrent writer's) and is recorded as a version of the judge.
+
+func ReadSnapshot(dir string) (Snapshot, error)
+    ReadSnapshot reads dir/SnapshotFile.
+
+func Take(r Repo, round int, now time.Time) (Snapshot, error)
+    Take snapshots r now for round.
+
+func (s Snapshot) Fingerprint() string
+    Fingerprint identifies the snapshot's state, comparable with
+    State.Fingerprint.
+
+type State struct {
+	Exists bool // the notes file exists (false: Notes is empty)
+	Notes  []byte
+	Files  []Blob // sorted by Path
+}
+    State is the whole content of a repository's notes: the notes text and
+    every harness file with its body. It is what a version in the registry holds
+    (store.NotesVersion) and what an applied proposal writes.
+
+func ReadState(r Repo) (State, error)
+    ReadState reads r's notes and harness: regular files only, as List lists
+    them. A missing notes file or harness reads empty.
+
+func (s State) Fingerprint() string
+    Fingerprint identifies s (Fingerprint of its notes and listing).
+
+func (s State) Listing() []File
+    Listing is s's harness as a listing (names, sizes, hashes).
+
+func (s State) Same(o State) bool
+    Same reports whether s and o hold the same notes and harness.
+
+func (s State) Size(maxLine int) Size
+    Size measures s against maxLine (Size.Over compares it with the limits).
+
+```
+
 ## notify
 
 ```text
@@ -8203,6 +8644,10 @@ type RoundResult struct {
 	ReviewCommit string
 	Event        string         // APPROVED | COMMENTED | CHANGES_REQUESTED (dry run: the planned event)
 	Findings     map[string]int // P0..P3 from the judge's result file
+	// HarnessUsed are the repository notes' harness files the judge said it
+	// ran or read (its result's harness_used), as written: names relative to
+	// notes_dir or paths under it.
+	HarnessUsed []string
 
 	Pause   *Pause
 	Reports map[agents.Role]RoleReport // by role name: every non-judge role the round ran (or skipped as logged out)
@@ -9293,6 +9738,26 @@ const (
     SinceReview.Source values: what Base is.
 
 const (
+	NotesFromJudge    = "judge"    // a round's judge changed them
+	NotesFromCuration = "curation" // a curator proposed them (applied or not)
+	NotesFromHuman    = "human"    // `magnum notes --edit`, or a restore the operator applied
+	NotesFromImport   = "import"   // found on disk without a record of who wrote them
+)
+    Notes version sources (notes_versions.source).
+
+const (
+	ProposalCuration = "curation"
+	ProposalRestore  = "restore"
+
+	ProposalPending  = "pending"
+	ProposalApplied  = "applied"
+	ProposalRejected = "rejected"
+	ProposalExpired  = "expired"
+	ProposalInvalid  = "invalid"
+)
+    Notes proposal kinds and states (notes_proposals.kind, .state).
+
+const (
 	RequiredFromConfig = "config" // the [[repo]] block's required_checks
 	RequiredFromGitHub = "github" // the default branch's rulesets or branch protection
 )
@@ -9305,6 +9770,10 @@ const (
 )
     Verdicts: what a review concluded, whatever its repository lets it post
     (ReviewSummary.Verdict).
+
+const NotesUnusedRounds = 20
+    NotesUnusedRounds is how many judge rounds a harness file must have existed
+    for, with no recorded use, to be a curation candidate.
 
 const RetroMaxAttempts = 3
     RetroMaxAttempts is how many retros in a row may fail on a PR before the
@@ -9748,6 +10217,119 @@ type MissFilter struct {
 	PRID    int64    // 0 = every PR
 }
     MissFilter selects misses; zero values select everything.
+
+type NotesBlob struct {
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
+	Bytes  int64  `json:"bytes"`
+	Body   []byte `json:"-"`
+}
+    NotesBlob is one harness file of a version: its path relative to the
+    harness directory, its content's SHA-256 and size, and (when read with
+    NotesVersionContent, or recorded) its body.
+
+type NotesContent struct {
+	Notes []byte
+	Files []NotesBlob
+}
+    NotesContent is what a version holds: the notes text and every harness file
+    with its body, sorted by path.
+
+type NotesFileUse struct {
+	File      string     `json:"file"`
+	FirstSeen time.Time  `json:"first_seen"`
+	Rounds    int        `json:"rounds"`
+	Uses      int        `json:"uses"`
+	LastUsed  *time.Time `json:"last_used,omitempty"`
+}
+    NotesFileUse is how a harness file of a repository was used: since when it
+    exists, how many judge rounds it existed for and how many of them (or their
+    reviewers) used it.
+
+func (u NotesFileUse) Unused() bool
+    Unused reports whether the file is a curation candidate: it existed for
+    NotesUnusedRounds judge rounds or more and no round recorded a use.
+
+type NotesProposal struct {
+	ID               int64           `json:"id"`
+	RepoID           int64           `json:"repo_id"`
+	Kind             string          `json:"kind"`              // ProposalCuration | ProposalRestore
+	Trigger          string          `json:"trigger,omitempty"` // why a curation ran: over_limit, weekly, request
+	BaseVersionID    *int64          `json:"base_version_id,omitempty"`
+	VersionID        *int64          `json:"version_id,omitempty"`         // the proposed state
+	AppliedVersionID *int64          `json:"applied_version_id,omitempty"` // recorded when it was applied
+	Changes          json.RawMessage `json:"changes,omitempty"`            // the curator's changes.json
+	State            string          `json:"state"`
+	Reason           string          `json:"reason,omitempty"` // rejected: the operator's; expired, invalid: magnum's
+	Model            string          `json:"model,omitempty"`
+	PromptSHA256     string          `json:"prompt_sha256,omitempty"`
+	Scratch          string          `json:"scratch,omitempty"` // the curation's directory
+	CreatedAt        time.Time       `json:"created_at"`
+	DecidedAt        *time.Time      `json:"decided_at,omitempty"`
+}
+    NotesProposal is a proposal for a repository's notes: a curator's, or a
+    restore of an earlier version.
+
+type NotesProposalFilter struct {
+	RepoID int64
+	States []string
+	Limit  int
+}
+    NotesProposalFilter selects proposals: of a repository (0 = any), in States
+    (empty = any), newest first, at most Limit (0 = all).
+
+type NotesProposalInput struct {
+	RepoID        int64
+	Kind          string // ProposalCuration | ProposalRestore
+	Trigger       string
+	BaseVersionID int64 // 0 = none
+	// Proposed is a curation's proposed state, recorded as a version of
+	// source curation tied to the proposal; nil for a restore (VersionID)
+	// or an invalid proposal (no state kept).
+	Proposed *NotesContent
+	// VersionID is the version a restore proposes.
+	VersionID int64
+	Changes   []byte // changes.json (nil = none)
+	State     string // ProposalPending, or ProposalInvalid with Reason
+	Reason    string
+	Model     string
+	PromptSHA string
+	Scratch   string
+	At        time.Time // zero = now
+}
+    NotesProposalInput is a proposal to store (CreateNotesProposal).
+
+type NotesVersion struct {
+	ID         int64       `json:"id"`
+	RepoID     int64       `json:"repo_id"`
+	At         time.Time   `json:"at"`
+	Source     string      `json:"source"`
+	PRID       *int64      `json:"pr_id,omitempty"`
+	PRNumber   int         `json:"pr_number,omitempty"` // the PR's number (read only)
+	RunID      string      `json:"run_id,omitempty"`
+	ProposalID *int64      `json:"proposal_id,omitempty"`
+	Bytes      int64       `json:"bytes"`
+	SHA256     string      `json:"sha256"`
+	Files      []NotesBlob `json:"files"`
+}
+    NotesVersion is one recorded state of a repository's notes.
+
+func (v NotesVersion) HarnessBytes() int64
+    HarnessBytes is the total size of v's harness files.
+
+type NotesVersionInput struct {
+	RepoID     int64
+	At         time.Time // zero = now
+	Source     string    // NotesFrom*
+	PRID       int64     // 0 = none
+	RunID      string
+	ProposalID int64 // 0 = none
+	Content    NotesContent
+	// Dedupe: when the latest version of the repository's history already
+	// holds this state, nothing is recorded and that version is returned.
+	Dedupe bool
+}
+    NotesVersionInput is a state to record (RecordNotesVersion).
 
 type Options struct {
 	// BeforeMigrate, when set, runs before pending migrations are applied,
@@ -10202,6 +10784,13 @@ func (s *Store) CompleteRequest(ctx context.Context, id int64, state, result str
 func (s *Store) CountMisses(ctx context.Context, f MissFilter) (int, error)
     CountMisses counts the misses f selects.
 
+func (s *Store) CountNotesProposals(ctx context.Context, state string) (int, error)
+    CountNotesProposals counts the proposals in state.
+
+func (s *Store) CreateNotesProposal(ctx context.Context, in NotesProposalInput) (NotesProposal, error)
+    CreateNotesProposal stores a proposal (and a curation's proposed state as a
+    version of source curation) in one transaction.
+
 func (s *Store) CreateRun(ctx context.Context, r Run) (Run, error)
     CreateRun inserts a run and returns it. Role is any non-empty name. An empty
     ID is generated as "r-<UTC yyyymmddThhmmss>-<n>"; CreatedAt defaults to now.
@@ -10220,6 +10809,13 @@ func (s *Store) CreateSlot(ctx context.Context, sl Slot) (Slot, error)
 func (s *Store) DB() *sql.DB
     DB exposes the underlying handle for ad hoc read-only queries (status views,
     tests). Writes should go through the typed methods.
+
+func (s *Store) DecideNotesProposal(ctx context.Context, id int64, from []string, to, reason string, at time.Time, applied *NotesVersionInput) (NotesProposal, error)
+    DecideNotesProposal moves proposal id from one of from to state to,
+    with reason, compare-and-set (ErrConflict when it is in another state). With
+    applied, the state the proposal leads to is recorded in the same transaction
+    as a version of the repository (applied.RepoID and ProposalID are set here)
+    and linked as the proposal's applied_version_id.
 
 func (s *Store) DeleteKV(ctx context.Context, key string) error
     DeleteKV removes key (no error when absent).
@@ -10282,6 +10878,10 @@ func (s *Store) LastRoleRunHead(ctx context.Context, prID int64, role string) (s
     LastRoleRunHead is the head of the PR's latest completed run of role (ended
     or verified), "" when the role never completed one.
 
+func (s *Store) LatestNotesVersion(ctx context.Context, repoID int64) (NotesVersion, error)
+    LatestNotesVersion is the newest version of repoID's history (ErrNotFound
+    when none was recorded).
+
 func (s *Store) LatestRoundRuns(ctx context.Context, prIDs ...int64) (map[int64][]Run, error)
     LatestRoundRuns returns, per PR, the runs of its highest round, oldest
     first. prIDs limits the PRs; empty means every PR with a run. A PR without
@@ -10313,6 +10913,28 @@ func (s *Store) MarkSlotDatabaseDropped(ctx context.Context, dbName, by string) 
 func (s *Store) Misses(ctx context.Context, f MissFilter) ([]Miss, error)
     Misses returns the misses f selects, newest first, each with its PR's
     repository and number.
+
+func (s *Store) NotesFileUses(ctx context.Context, repoID int64) ([]NotesFileUse, error)
+    NotesFileUses lists repoID's harness files with their rounds and the uses
+    recorded since each was first seen, by file name.
+
+func (s *Store) NotesHistory(ctx context.Context, repoID int64, limit int) ([]NotesVersion, error)
+    NotesHistory lists repoID's history, newest first, at most limit versions
+    (limit <= 0 = all): every recorded version except the proposed states of
+    curations, which appear as the version recorded when one was applied.
+
+func (s *Store) NotesProposalByID(ctx context.Context, id int64) (NotesProposal, error)
+    NotesProposalByID reads a proposal.
+
+func (s *Store) NotesProposals(ctx context.Context, f NotesProposalFilter) ([]NotesProposal, error)
+    NotesProposals lists the proposals f selects.
+
+func (s *Store) NotesVersionByID(ctx context.Context, id int64) (NotesVersion, error)
+    NotesVersionByID reads a version (its files without bodies).
+
+func (s *Store) NotesVersionContent(ctx context.Context, id int64) (NotesContent, error)
+    NotesVersionContent reads what version id holds: its notes text and its
+    harness files with their bodies.
 
 func (s *Store) OpenAssignment(ctx context.Context, a Assignment) (Assignment, error)
     OpenAssignment inserts an open assignment (for flows other than ClaimSlot,
@@ -10356,6 +10978,23 @@ func (s *Store) RecordFindings(ctx context.Context, runID string, prID int64, ro
     now), so recording a round's result again is harmless. Every finding
     needs a FindingID unique within fs and a verdict of FindingPosted or
     FindingRejected.
+
+func (s *Store) RecordNotesRound(ctx context.Context, repoID int64, files []string, at time.Time) error
+    RecordNotesRound counts a judge round of repoID for the harness files
+    present now: each counts one more round, a new one starts at one (first seen
+    at), and the rows of files that are gone are dropped (a file that comes back
+    starts over).
+
+func (s *Store) RecordNotesUsage(ctx context.Context, repoID int64, runID string, files []string, at time.Time) error
+    RecordNotesUsage records that run runID used files of repoID's harness (once
+    per file and run).
+
+func (s *Store) RecordNotesVersion(ctx context.Context, in NotesVersionInput) (NotesVersion, bool, error)
+    RecordNotesVersion records in's state as a version of its repository:
+    the notes text gzip-compressed (or NULL when an earlier version holds
+    the same text), the harness files by path and each body once per content
+    (harness_blobs). It reports whether a version was added (false: Dedupe found
+    the latest version identical).
 
 func (s *Store) RecordRetroPR(ctx context.Context, r RetroPR) error
     RecordRetroPR stores r as the retro record of r.PRID, replacing an
@@ -10880,6 +11519,9 @@ type DaemonFacts struct {
 	// Codex is the Codex budget's pace when it reaches a cap before the
 	// window resets; nil otherwise.
 	Codex *CodexPace
+	// NotesProposals counts the curation proposals for repository notes
+	// that wait for the operator (`magnum notes <repo> --review`).
+	NotesProposals int
 }
     DaemonFacts are what the titles say of the daemon; the zero value says
     nothing.

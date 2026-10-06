@@ -68,6 +68,7 @@ type Config struct {
 	Usage      Usage      `toml:"usage"`
 	Triage     Triage     `toml:"triage"`
 	Learn      Learn      `toml:"learn"`
+	Notes      Notes      `toml:"notes"`
 	Board      Board      `toml:"board"`
 	Identities []Identity `toml:"identity"`
 	Watches    []Watch    `toml:"watch"`
@@ -599,6 +600,7 @@ func LoadWithOptions(layout paths.Layout, file string, opts LoadOptions) (*Confi
 		return nil, fmt.Errorf("config %s: unknown keys: %v", name, undecoded)
 	}
 	cfg.learnModelFollowsKind(md)
+	cfg.notesModelFollowsKind(md)
 	base, err := readLayerData(name, data, md, cfg.Kinds, cfg.Roles)
 	if err != nil {
 		return nil, err
@@ -623,7 +625,7 @@ func LoadWithOptions(layout paths.Layout, file string, opts LoadOptions) (*Confi
 
 // applyOverlay merges the user config: [[identity]], [[watch]], [[pool]]
 // and [[repo]] entries are appended; keys present under [daemon], [herdr], [terminal],
-// [github], [pipeline], [usage], [triage] and [learn] override the committed values key by key.
+// [github], [pipeline], [usage], [triage], [learn] and [notes] override the committed values key by key.
 // Its [kinds.<name>] keys and [[role]] blocks are returned for buildPipeline:
 // kind keys override key by key, a [[role]] named like an existing role
 // overrides the keys it sets, any other [[role]] is appended.
@@ -649,6 +651,8 @@ func (c *Config) applyOverlay(path string) (*layer, error) {
 	overlaySection(md, "triage", &c.Triage, &o.Triage)
 	overlaySection(md, "learn", &c.Learn, &o.Learn)
 	c.learnModelFollowsKind(md)
+	overlaySection(md, "notes", &c.Notes, &o.Notes)
+	c.notesModelFollowsKind(md)
 	overlaySection(md, "board", &c.Board, &o.Board)
 	l, err := readLayer(path, md, o.Kinds, o.Roles)
 	if err != nil {
@@ -715,6 +719,7 @@ func Defaults() *Config {
 		Usage:    Usage{CodexSoft: 80, CodexHard: 95},
 		Triage:   DefaultTriage(),
 		Learn:    DefaultLearn(),
+		Notes:    DefaultNotes(),
 		Board:    Board{RecentClosed: Duration{24 * time.Hour}},
 	}
 	c.Normalize()

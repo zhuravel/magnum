@@ -78,6 +78,7 @@ func (rd *round) runJudge(ctx context.Context, run store.Run) (RoundResult, erro
 	jd := rd.judgeData(run, marker)
 	rd.addThreads(ctx, &jd)
 	rd.addDeltaCheck(ctx, &jd)
+	rd.snapshotNotes()
 	text, err := rd.r.Agents.RolePrompt(rd.judge, judgePrompt(in.Kind), jd)
 	if err != nil {
 		rd.finishRun(ctx, run.ID, store.RunFailed, OutcomeError, err.Error())
@@ -501,6 +502,7 @@ func (rd *round) finalizeJudge(ctx context.Context, runIDs []string, v verdict) 
 	}
 	if v.result != nil {
 		rd.res.Findings = v.result.Findings
+		rd.res.HarnessUsed = v.result.HarnessUsed
 		if rd.res.Event == "" {
 			rd.res.Event = normalizeEvent(v.result.Event)
 		}

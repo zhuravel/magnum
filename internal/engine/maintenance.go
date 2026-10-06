@@ -185,6 +185,7 @@ func (e *Engine) reconcile(ctx context.Context) error {
 		}
 	}
 	e.warmIdentities(ctx, false)
+	e.syncNotes(ctx, false)
 	if err := e.prune(ctx); err != nil {
 		errs = append(errs, err)
 	}
@@ -193,13 +194,17 @@ func (e *Engine) reconcile(ctx context.Context) error {
 
 // prune applies [daemon] keep_events and keep_requests (store.Prune): the
 // audit events and handled requests older than them are deleted, once per
-// reconcile; so are the retro's run directories past their 30 days
-// (pruneRetro). A dry run keeps everything.
+// reconcile; so are the retro's run directories and the notes curations'
+// scratch directories past their 30 days (pruneRetro, pruneCurations).
+// Nothing else is pruned: the notes' versions and proposals, the findings,
+// the misses and the judges' results stay in the registry. A dry run keeps
+// everything.
 func (e *Engine) prune(ctx context.Context) error {
 	if e.d.DryRun {
 		return nil
 	}
 	e.pruneRetro()
+	e.pruneCurations()
 	keepEvents, keepRequests := e.cfg.Daemon.KeepEvents.Duration, e.cfg.Daemon.KeepRequests.Duration
 	if keepEvents <= 0 && keepRequests <= 0 {
 		return nil

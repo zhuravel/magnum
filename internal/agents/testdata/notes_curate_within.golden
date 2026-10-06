@@ -1,0 +1,30 @@
+You curate the repository notes of talkable/talkable: the notes file and the harness of QA scripts that an automated reviewer reads before it reviews each new pull request of this repository. Reviewers of earlier pull requests wrote them, and they pile up. Propose a better version; a person reviews it before anything changes.
+
+The test for every line and every script: does it help a review of a different, future pull request of this repository? Keep only what does, and say how. Anything that only explains one pull request's code, findings or probes goes: delete it, or merge what is general in it into a parameterized script.
+
+Read these local files; fetch nothing, and change nothing outside `/data/notes/.curate/talkable/talkable/20261006-101500`:
+- `/data/notes/.curate/talkable/talkable/20261006-101500/current.md`: the notes now.
+- `/data/notes/.curate/talkable/talkable/20261006-101500/current`: the harness now (read only).
+- `/data/notes/.curate/talkable/talkable/20261006-101500/usage.json`: the limits and the sizes now, which limits the notes are past, each harness file's `rounds` (the review rounds it existed for), `uses` (the rounds that ran or read it) and `unused_candidate` (no recorded use in 20 rounds or more), and `rejections`: why the operator rejected earlier proposals. Do not propose what they rejected again.
+
+Keep in the notes only durable repository knowledge:
+- what the repository is;
+- how to run its tests and lint;
+- how to QA a change;
+- standing decisions;
+- known pitfalls;
+- pitfalls of the review machine, only while they still apply.
+
+Remove:
+- anything about one pull request: its number, branch, code, findings or probes;
+- machine-specific paths (a home directory, a version manager's install path) and obsolete workarounds;
+- duplicated or contradicted lines.
+
+The limits are triggers for this curation, not caps: 16384 bytes, lines of at most 300 characters, 15 harness files and 131072 harness bytes. Stay within them unless the content truly improves future reviews; then say so in the reasons.
+
+Write your proposal:
+1. `/data/notes/.curate/talkable/talkable/20261006-101500/proposal.md`: the whole new notes. Start with `# Notes for talkable/talkable (updated YYYY-MM-DD)`, then `## ` sections. Name every harness file by its path relative to the harness, with what it does and how to run it.
+2. `/data/notes/.curate/talkable/talkable/20261006-101500/harness`: the proposed harness. It starts as a copy of the current one: delete, merge and rewrite files there. One-off probes become a few general, parameterized scripts, or go. Every file left there must be named in the notes.
+3. `/data/notes/.curate/talkable/talkable/20261006-101500/changes.json`, JSON: {"sections":[{"name":"<section heading>","action":"kept|added|merged|removed","into":"<heading, for merged>","reason":"..."}],"files":[{"name":"<harness path>","action":"kept|added|merged|deleted","into":"<harness path, for merged>","reason":"..."}]}. Every `## ` section of the proposal and every file of the proposed harness appears as kept or added, with a reason saying how it helps a review of a future pull request; every current section and file appears with what became of it and why. Reasons are one line each, without pull request numbers or branch names.
+
+Write each file to `<file>.tmp` first, then move it into place. Then stop. Post nothing, change no repository, and touch no file outside `/data/notes/.curate/talkable/talkable/20261006-101500`.

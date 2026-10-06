@@ -2,9 +2,10 @@ package cli
 
 // What the titles of the dashboard and the PR board say about the daemon
 // (tui.DaemonFacts): an older build running, a pause and the review requests
-// it holds, a drain, and the Codex budget's pace when it reaches a cap before
-// the window resets. Both screens read them from the registry with every
-// refresh, without launchctl or herdr.
+// it holds, a drain, the Codex budget's pace when it reaches a cap before
+// the window resets, and the notes curation proposals waiting for review.
+// Both screens read them from the registry with every refresh, without
+// launchctl or herdr.
 
 import (
 	"context"
@@ -47,6 +48,9 @@ func screenFacts(ctx context.Context, d statusDeps) tui.DaemonFacts {
 	}
 	if c := r.Codex; c != nil {
 		f.Codex = screenCodexPace(*c)
+	}
+	if n, err := d.Store.CountNotesProposals(ctx, store.ProposalPending); err == nil {
+		f.NotesProposals = n
 	}
 	return f
 }

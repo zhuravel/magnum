@@ -160,6 +160,7 @@ func (c *Config) Validate() error {
 	errs = append(errs, c.validateUsage()...)
 	errs = append(errs, c.validateTriage()...)
 	errs = append(errs, c.validateLearn()...)
+	errs = append(errs, c.validateNotes()...)
 	switch c.GitHub.Transport {
 	case "gh", "direct":
 	default:

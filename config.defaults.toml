@@ -2,7 +2,7 @@
 # Your settings do not go here: put them in ~/.config/magnum/config.toml ($XDG_CONFIG_HOME/magnum/config.toml
 # when that is set; `magnum init` writes one). Its [[watch]], [[identity]], [[pool]] and [[repo]] blocks are
 # appended, any key it sets under [daemon], [herdr], [terminal], [github], [pipeline], [usage], [triage],
-# [learn] or [kinds.<name>] overrides the value here, and its [[role]] blocks override the role of the same
+# [learn], [notes] or [kinds.<name>] overrides the value here, and its [[role]] blocks override the role of the same
 # name key by key (other names are appended). Secrets go in the checkout's gitignored .mise.local.toml.
 # Durations use Go syntax: "30s", "5m", "2h", with whole days in front: "7d", "1d12h".
 
@@ -137,6 +137,29 @@ effort = ""                       # passed through the kind's `effort` args ("" 
 # args = []                       # appended to the agent's launch args
 prompt = "retro.md"               # in prompts_dir; the embedded copy when absent
 timeout = "20m"                   # per PR: a turn that takes longer is abandoned
+
+# Repository notes (~/.local/share/magnum/notes/<owner>/<repo>.md and the harness directory of QA scripts
+# beside it): every review role reads them first, the judge rewrites them. Every version is kept in the
+# registry (`magnum notes <repo> --log`, `--diff`, `--restore`). The four limits are curation triggers, not
+# caps: after each judge round and at startup magnum measures the notes, and a repository past any of them is
+# marked for curation (a notes.over_limit event). Nothing blocks a review, and a curated proposal may stay
+# above a limit when what it keeps helps future reviews of the repository.
+[notes]
+max_bytes = 16384                 # notes larger than this
+max_line = 300                    # a line longer than this many characters
+max_harness_files = 15            # more harness files than this
+max_harness_bytes = 131072        # a larger harness than this
+curate = "over_limit"             # over_limit: curate a marked repository once its notes changed since the
+                                  # last curation (at most once a day); weekly: that, and every repository with
+                                  # notes once a week; off: only `magnum notes <repo> --curate`. A curator agent
+                                  # proposes new notes and harness in a scratch copy; nothing changes until you
+                                  # accept it with `magnum notes <repo> --review`
+kind = "claude"                   # the curator: a [kinds.<name>] that drives a session (not "shell"), checked
+model = "sonnet"                  # like a [[role]]; "sonnet" is the default of kind "claude" only, as in [learn]
+effort = ""                       # passed through the kind's `effort` args ("" = none)
+# args = []                       # appended to the agent's launch args
+prompt = "notes-curate.md"        # in prompts_dir; the embedded copy when absent
+timeout = "30m"                   # a curator turn that takes longer is abandoned
 
 # The review pipeline ("a Procfile of agents"): [kinds.<name>] says how to drive an agent CLI, each
 # [[role]] is one agent (or shell command) of a review round, a [[watch]]'s `roles` picks the roles it

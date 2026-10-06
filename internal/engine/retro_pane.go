@@ -10,7 +10,9 @@ package engine
 // hooks review and the end of a turn (agents.ObserveSnapshotAt, two idle
 // observations) behave exactly as in rounds. The daemon's own observation
 // never sees it: its sessions live in the scratch registry. The live
-// registry gets only what the retro job stores.
+// registry gets only what the retro job stores. The notes curator
+// (notes_curate.go) is the same kind of agent: a paneAgent with its own
+// paneSpec.
 
 import (
 	"context"
@@ -90,9 +92,8 @@ type paneDeps struct {
 	Poll         time.Duration
 }
 
-// paneClassifiers is Deps.Classifier for the pane agent: a classifier per
-// retro run, which sets itself up at its first PR.
-func paneClassifiers(d paneDeps) func(context.Context, RetroRun) (Classifier, error) {
+// withDefaults fills d's optional fields.
+func (d paneDeps) withDefaults() paneDeps {
 	if d.Now == nil {
 		d.Now = time.Now
 	}
@@ -108,15 +109,46 @@ func paneClassifiers(d paneDeps) func(context.Context, RetroRun) (Classifier, er
 	if d.Logger == nil {
 		d.Logger = slog.New(slog.DiscardHandler)
 	}
+	return d
+}
+
+// paneSpec says which pane agent a paneAgent is: what it is called in logs
+// and errors, the label of its herdr workspace, the scratch row its session
+// hangs on (with LearnAgentTag they make its herdr name, the same for every
+// run) and the role it runs as.
+type paneSpec struct {
+	what        string
+	workspace   string
+	owner, name string
+	role        func(*config.Config) config.Role
+}
+
+// retroPane is the retro's classifier.
+var retroPane = paneSpec{what: "retro", workspace: learnWorkspace, owner: learnRepoOwner, name: learnRepoName,
+	role: (*config.Config).LearnRole}
+
+// paneClassifiers is Deps.Classifier for the pane agent: a classifier per
+// retro run, which sets itself up at its first PR.
+func paneClassifiers(d paneDeps) func(context.Context, RetroRun) (Classifier, error) {
+	d = d.withDefaults()
 	return func(_ context.Context, run RetroRun) (Classifier, error) {
-		return &paneClassifier{d: d, run: run}, nil
+		return &paneClassifier{paneAgent: &paneAgent{d: d, spec: retroPane, dir: run.Dir, id: run.ID}, run: run}, nil
 	}
 }
 
 // paneClassifier is one retro's agent.
 type paneClassifier struct {
-	d   paneDeps
+	*paneAgent
 	run RetroRun
+}
+
+// paneAgent is one interactive agent of a run (a retro, a curation),
+// prompted turn by turn.
+type paneAgent struct {
+	d    paneDeps
+	spec paneSpec
+	dir  string // the run's directory: the scratch registry is in it, the agent works in its parent
+	id   string // the run's id
 
 	scratch string // the scratch registry's directory
 	cfg     *config.Config
@@ -150,11 +182,11 @@ func (c *paneClassifier) Classify(ctx context.Context, job ClassifyJob) (Classif
 	if err := c.setup(ctx); err != nil {
 		return ClassifyResult{}, fmt.Errorf("%w: set up: %w", ErrClassifierDown, err)
 	}
-	if res, err := c.ensureAgent(ctx); err != nil {
-		if res.Pause != nil || ctx.Err() != nil {
-			return res, err
+	if pause, err := c.ensureAgent(ctx); err != nil {
+		if pause != nil || ctx.Err() != nil {
+			return ClassifyResult{Pause: pause}, err
 		}
-		return res, fmt.Errorf("%w: start: %w", ErrClassifierDown, err)
+		return ClassifyResult{}, fmt.Errorf("%w: start: %w", ErrClassifierDown, err)
 	}
 	text, err := c.prompt(job)
 	if err != nil { // the prompt file, not the PR
@@ -229,12 +261,13 @@ func (c *paneClassifier) prompt(job ClassifyJob) (string, error) {
 
 // setup makes, once, the scratch registry under the run directory with the
 // row the agent's session hangs on, the agents manager over it with the
-// [learn] role as its only role, and the engine that observes herdr for it.
-func (c *paneClassifier) setup(ctx context.Context) error {
+// agent's role ([learn], [notes]) as its only role, and the engine that
+// observes herdr for it.
+func (c *paneAgent) setup(ctx context.Context) error {
 	if c.mgr != nil {
 		return nil
 	}
-	c.scratch = filepath.Join(c.run.Dir, learnScratch)
+	c.scratch = filepath.Join(c.dir, learnScratch)
 	layout := c.d.Layout // logs, locks and the gh config dirs stay the install's
 	layout.Scratch = c.scratch
 	if err := os.MkdirAll(c.scratch, 0o700); err != nil {
@@ -246,14 +279,15 @@ func (c *paneClassifier) setup(ctx context.Context) error {
 	}
 	st.Clock = c.d.Now
 	cfg := *c.d.Config
-	c.role = cfg.LearnRole()
+	c.role = c.spec.role(&cfg)
 	cfg.Roles = []config.Role{c.role} // the agents manager knows the role by name
-	repo, err := st.UpsertRepo(ctx, store.Repo{NodeID: "learn:retro", Owner: learnRepoOwner, Name: learnRepoName,
-		WatchOwner: learnRepoOwner, Mode: store.RepoModePerPR})
+	node := "learn:" + c.spec.name
+	repo, err := st.UpsertRepo(ctx, store.Repo{NodeID: node, Owner: c.spec.owner, Name: c.spec.name,
+		WatchOwner: c.spec.owner, Mode: store.RepoModePerPR})
 	if err == nil {
 		var up store.PRUpsert
-		up, err = st.UpsertPRFromGitHub(ctx, store.GitHubPR{RepoID: repo.ID, NodeID: "learn:retro#1", Number: learnNumber,
-			URL: "file://" + c.run.Dir, HeadSHA: c.run.ID, GHState: store.GHOpen, InitialState: store.PRClaiming, Identity: LearnAgentTag})
+		up, err = st.UpsertPRFromGitHub(ctx, store.GitHubPR{RepoID: repo.ID, NodeID: node + "#1", Number: learnNumber,
+			URL: "file://" + c.dir, HeadSHA: c.id, GHState: store.GHOpen, InitialState: store.PRClaiming, Identity: LearnAgentTag})
 		c.pr = up.PR
 	}
 	if err != nil {
@@ -270,49 +304,49 @@ func (c *paneClassifier) setup(ctx context.Context) error {
 
 // ensureAgent starts the agent unless its session is live: a preflight of
 // its CLI (a logout is a Pause, as for a round), then observation, the end
-// of an agent an earlier retro left behind (clearLeftover), its workspace
+// of an agent an earlier run left behind (clearLeftover), its workspace
 // and the agent itself. The agent works in the directory that holds every
-// run, one path across retros: the CLIs trust the directory they start in
+// run, one path across runs: the CLIs trust the directory they start in
 // (EnsureTrust), and a new path per run would add an entry to their config
 // every day.
-func (c *paneClassifier) ensureAgent(ctx context.Context) (ClassifyResult, error) {
+func (c *paneAgent) ensureAgent(ctx context.Context) (*pipeline.Pause, error) {
 	if s, err := c.st.LiveSessionByPRRole(ctx, c.pr.ID, c.role.Name); err == nil && s.State == store.SessionLive {
-		return ClassifyResult{}, nil
+		return nil, nil
 	}
 	if err := c.mgr.PreflightRole(ctx, c.role); err != nil {
 		if errors.Is(err, agents.ErrLoginRequired) {
-			return ClassifyResult{Pause: &pipeline.Pause{Kind: string(agents.HealthLoginRequired), Tool: c.role.AgentKind(),
-				Detail: execx.Redact(err.Error())}}, err
+			return &pipeline.Pause{Kind: string(agents.HealthLoginRequired), Tool: c.role.AgentKind(),
+				Detail: execx.Redact(err.Error())}, err
 		}
-		return ClassifyResult{}, err
+		return nil, err
 	}
 	c.observe(ctx)
 	if err := c.clearLeftover(ctx); err != nil {
-		return ClassifyResult{}, err
+		return nil, err
 	}
-	cwd := filepath.Dir(c.run.Dir)
-	ws, err := c.mgr.EnsureWorkspace(ctx, c.pr, cwd, nil, learnWorkspace, []config.Role{c.role})
+	cwd := filepath.Dir(c.dir)
+	ws, err := c.mgr.EnsureWorkspace(ctx, c.pr, cwd, nil, c.spec.workspace, []config.Role{c.role})
 	if err != nil {
-		return ClassifyResult{}, err
+		return nil, err
 	}
 	pane := ws.Panes[agents.Role(c.role.Name)]
 	if pane == "" {
-		return ClassifyResult{}, fmt.Errorf("the %q workspace has no pane for the agent", learnWorkspace)
+		return nil, fmt.Errorf("the %q workspace has no pane for the agent", c.spec.workspace)
 	}
-	return ClassifyResult{}, c.mgr.StartAgent(ctx, c.pr, c.role, pane, "")
+	return nil, c.mgr.StartAgent(ctx, c.pr, c.role, pane, "")
 }
 
-// clearLeftover ends an agent with the retro's tagged name that is not in
-// this retro's registry (a crash, a workspace an earlier retro could not
+// clearLeftover ends an agent with the run's tagged name that is not in
+// this run's registry (a crash, a workspace an earlier run could not
 // close): StartAgent would adopt it, its old conversation and all, and
-// leave this retro's new workspace empty. Its workspace is closed when it
-// is a "learn retro" one holding nothing else; otherwise the agent is quit
-// (ctrl+c twice) and the workspace left to whoever split it.
-func (c *paneClassifier) clearLeftover(ctx context.Context) error {
+// leave this run's new workspace empty. Its workspace is closed when it is
+// one of the spec's ("learn retro") holding nothing else; otherwise the
+// agent is quit (ctrl+c twice) and the workspace left to whoever split it.
+func (c *paneAgent) clearLeftover(ctx context.Context) error {
 	if c.d.Herdr == nil {
 		return nil
 	}
-	name := agents.TaggedAgentName(LearnAgentTag, learnRepoOwner+"/"+learnRepoName, learnNumber, agents.Role(c.role.Name))
+	name := agents.TaggedAgentName(LearnAgentTag, c.spec.owner+"/"+c.spec.name, learnNumber, agents.Role(c.role.Name))
 	for attempt := range 5 {
 		snap, err := c.d.Herdr.Snapshot(ctx)
 		if err != nil {
@@ -323,9 +357,9 @@ func (c *paneClassifier) clearLeftover(ctx context.Context) error {
 			return nil
 		}
 		if attempt == 0 {
-			c.d.Logger.Warn("retro: ending an agent an earlier retro left behind", "agent", name, "workspace", a.WorkspaceID)
+			c.d.Logger.Warn(c.spec.what+": ending an agent an earlier run left behind", "agent", name, "workspace", a.WorkspaceID)
 			switch {
-			case ownWorkspace(snap, a.WorkspaceID, a.PaneID) && c.d.CloseWorkspace != nil:
+			case ownWorkspace(snap, a.WorkspaceID, a.PaneID, c.spec.workspace) && c.d.CloseWorkspace != nil:
 				err = c.d.CloseWorkspace(ctx, a.WorkspaceID)
 			case c.d.Keys != nil:
 				err = c.d.Keys(ctx, name, "ctrl+c")
@@ -341,13 +375,13 @@ func (c *paneClassifier) clearLeftover(ctx context.Context) error {
 			return err
 		}
 	}
-	return fmt.Errorf("the agent %s an earlier retro left behind is still running", name)
+	return fmt.Errorf("the agent %s an earlier run left behind is still running", name)
 }
 
-// ownWorkspace reports whether workspace ws is the retro's own: labelled
-// learnWorkspace and holding no pane but pane.
-func ownWorkspace(snap herdr.Snapshot, ws, pane string) bool {
-	if ws == "" || !slices.ContainsFunc(snap.Workspaces, func(w herdr.Workspace) bool { return w.ID == ws && w.Label == learnWorkspace }) {
+// ownWorkspace reports whether workspace ws is a pane agent's own: labelled
+// label and holding no pane but pane.
+func ownWorkspace(snap herdr.Snapshot, ws, pane, label string) bool {
+	if ws == "" || !slices.ContainsFunc(snap.Workspaces, func(w herdr.Workspace) bool { return w.ID == ws && w.Label == label }) {
 		return false
 	}
 	return !slices.ContainsFunc(snap.Panes, func(p herdr.Pane) bool { return p.WorkspaceID == ws && p.ID != pane })
@@ -361,7 +395,7 @@ func herdrGone(err error) bool {
 
 // observe starts observing herdr for the agent until Close (or ctx ends):
 // nothing else tells its turns that they ended.
-func (c *paneClassifier) observe(ctx context.Context) {
+func (c *paneAgent) observe(ctx context.Context) {
 	if c.observed != nil {
 		return
 	}
@@ -377,7 +411,7 @@ func (c *paneClassifier) observe(ctx context.Context) {
 // its session, ctx ends or [learn] timeout passes (the turn is then
 // interrupted). A run Submit left pending is abandoned; one it submitted is
 // observed, never sent again.
-func (c *paneClassifier) turn(ctx context.Context, attempt int, text string) paneTurn {
+func (c *paneAgent) turn(ctx context.Context, attempt int, text string) paneTurn {
 	kind := store.RunInitial
 	if attempt > 0 {
 		kind = store.RunNudge
@@ -398,14 +432,14 @@ func (c *paneClassifier) turn(ctx context.Context, attempt int, text string) pan
 		case cur.State == store.RunFailed || cur.State == store.RunAbandoned:
 			return paneTurn{run: cur, err: err, down: true}
 		}
-		c.d.Logger.Warn("retro: the prompt was not acknowledged as working; waiting for the turn", "run", run.ID, "err", err)
+		c.d.Logger.Warn(c.spec.what+": the prompt was not acknowledged as working; waiting for the turn", "run", run.ID, "err", err)
 	}
 	return c.wait(ctx, run.ID)
 }
 
 // wait polls run id until it ends (the observation saw the agent idle
 // twice), fails, loses its session, ctx ends or the role's timeout passes.
-func (c *paneClassifier) wait(ctx context.Context, id string) paneTurn {
+func (c *paneAgent) wait(ctx context.Context, id string) paneTurn {
 	deadline := c.d.Now().Add(c.role.Timeout.Duration)
 	for {
 		run, err := c.st.RunByID(ctx, id)
@@ -437,7 +471,7 @@ func (c *paneClassifier) wait(ctx context.Context, id string) paneTurn {
 
 // interrupt stops the agent's turn (esc), so it neither writes late nor
 // keeps the workspace busy.
-func (c *paneClassifier) interrupt(ctx context.Context, run store.Run) {
+func (c *paneAgent) interrupt(ctx context.Context, run store.Run) {
 	if c.d.Keys == nil || run.SessionID == nil {
 		return
 	}
@@ -451,13 +485,13 @@ func (c *paneClassifier) interrupt(ctx context.Context, run store.Run) {
 	}
 	if target != "" {
 		if err := c.d.Keys(context.WithoutCancel(ctx), target, "esc"); err != nil {
-			c.d.Logger.Warn("retro: interrupt the agent", "run", run.ID, "err", err)
+			c.d.Logger.Warn(c.spec.what+": interrupt the agent", "run", run.ID, "err", err)
 		}
 	}
 }
 
 // finish abandons a run that will not be waited for any more.
-func (c *paneClassifier) finish(ctx context.Context, id string, why error) {
+func (c *paneAgent) finish(ctx context.Context, id string, why error) {
 	err := c.st.TransitionRun(context.WithoutCancel(ctx), id,
 		[]string{store.RunPending, store.RunSubmitted, store.RunWorking, store.RunEnded}, store.RunAbandoned,
 		func(u *store.RunUpdate) {
@@ -465,7 +499,7 @@ func (c *paneClassifier) finish(ctx context.Context, id string, why error) {
 			u.Set("ended_at", c.d.Now())
 		})
 	if err != nil && !errors.Is(err, store.ErrConflict) {
-		c.d.Logger.Warn("retro: abandon a run", "run", id, "err", err)
+		c.d.Logger.Warn(c.spec.what+": abandon a run", "run", id, "err", err)
 	}
 }
 
@@ -474,7 +508,7 @@ func (c *paneClassifier) finish(ctx context.Context, id string, why error) {
 // file): a usage limit, a logout, a per-model limit or an overload is a
 // Pause of that kind (the retro job pauses the tool for the first two
 // only, as rounds do).
-func (c *paneClassifier) health(ctx context.Context, t paneTurn, anchor string) *pipeline.Pause {
+func (c *paneAgent) health(ctx context.Context, t paneTurn, anchor string) *pipeline.Pause {
 	if t.run.SessionID == nil {
 		return nil
 	}
@@ -514,7 +548,7 @@ func (c *paneClassifier) health(ctx context.Context, t paneTurn, anchor string) 
 // closed. Only then is the scratch registry removed; if the agent stays,
 // the registry stays too, where its session is recorded, and the error says
 // where. The run directory keeps the inputs and the answers either way.
-func (c *paneClassifier) Close(ctx context.Context) error {
+func (c *paneAgent) Close(ctx context.Context) error {
 	if c.stopObserving != nil {
 		c.stopObserving()
 		<-c.observed
@@ -524,9 +558,9 @@ func (c *paneClassifier) Close(ctx context.Context) error {
 	}
 	if err := c.release(ctx); err != nil {
 		_ = c.st.Close()
-		c.d.Logger.Warn("retro: the agent was not closed; its scratch registry stays", "registry", c.scratch,
-			"workspace", learnWorkspace, "err", err)
-		return fmt.Errorf("the %q workspace may still run the agent (its registry stays at %s): %w", learnWorkspace, c.scratch, err)
+		c.d.Logger.Warn(c.spec.what+": the agent was not closed; its scratch registry stays", "registry", c.scratch,
+			"workspace", c.spec.workspace, "err", err)
+		return fmt.Errorf("the %q workspace may still run the agent (its registry stays at %s): %w", c.spec.workspace, c.scratch, err)
 	}
 	var errs []error
 	if err := c.st.Close(); err != nil {
@@ -540,7 +574,7 @@ func (c *paneClassifier) Close(ctx context.Context) error {
 
 // release ends the agent's runs, then parks it, else quits it and closes
 // its workspace.
-func (c *paneClassifier) release(ctx context.Context) error {
+func (c *paneAgent) release(ctx context.Context) error {
 	runs, err := c.st.RunsByPR(ctx, c.pr.ID)
 	if err != nil {
 		return err
@@ -549,7 +583,7 @@ func (c *paneClassifier) release(ctx context.Context) error {
 		switch r.State {
 		case store.RunPending, store.RunSubmitted, store.RunWorking:
 			c.interrupt(ctx, r)
-			c.finish(ctx, r.ID, errors.New("the retro ended"))
+			c.finish(ctx, r.ID, errors.New("the "+c.spec.what+" ended"))
 		}
 	}
 	perr := c.mgr.Park(ctx, c.pr)
@@ -570,7 +604,7 @@ func (c *paneClassifier) release(ctx context.Context) error {
 	if ws == "" || c.d.CloseWorkspace == nil {
 		return nil
 	}
-	if snap, err := c.d.Herdr.Snapshot(ctx); err != nil || !ownWorkspace(snap, ws, store.Deref(s.HerdrPaneID)) {
+	if snap, err := c.d.Herdr.Snapshot(ctx); err != nil || !ownWorkspace(snap, ws, store.Deref(s.HerdrPaneID), c.spec.workspace) {
 		return nil // the agent is gone; a workspace someone split stays theirs
 	}
 	if err := c.d.CloseWorkspace(ctx, ws); err != nil && !herdrGone(err) {

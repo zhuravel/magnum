@@ -57,7 +57,9 @@ func TestNotesPrintsTheFile(t *testing.T) {
 	notesWrite(t, f.Ctx.Layout, "talkable", "talkable", text)
 
 	for _, arg := range []string{"talkable/talkable", "Talkable/TALKABLE", "talkable"} { // the last: daemon.default_repo's owner
-		if code := f.run("notes", arg); code != 0 || f.Out.String() != text || f.Err.Len() != 0 {
+		// stdout is the file alone (it pipes); the sizes go to stderr.
+		if code := f.run("notes", arg); code != 0 || f.Out.String() != text ||
+			!strings.HasPrefix(f.Err.String(), "notes: 89 bytes (max_bytes 16384), 4 lines, 0 longer than 300 characters (max_line)\n") {
 			t.Errorf("notes %s: exit %d\nstdout %q\nstderr %q", arg, code, f.Out, f.Err)
 		}
 	}

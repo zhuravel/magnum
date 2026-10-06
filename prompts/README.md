@@ -17,7 +17,7 @@ A role names prompts by file name, such as `prompt = "claude-review.md"`. magnum
 you delete falls back to the built-in copy. `magnum config` fails when a role names a prompt that exists
 in neither place.
 
-The daemon loads every prompt its roles name, `model-fallback.md`, the triage and retro prompts and a copy
+The daemon loads every prompt its roles name, `model-fallback.md`, the triage, retro and notes curation prompts and a copy
 of each judge's skill (`state/skill/<hash>/SKILL.md`) once, when it starts, right after checking that its build
 renders them. An edit here therefore takes effect at the next `magnum daemon-restart`, which checks it again,
 without a rebuild; `magnum status` shows when the prompts were loaded and how many files changed on
@@ -47,6 +47,7 @@ prompts_dir = "{{repo}}/prompts"   # or "~/magnum-prompts" to keep your edits ou
 | `codex-review.sh` | the full codex-review command line, for reference (see Shell roles) | shell |
 | `triage.md` | the cheap model that decides which reviewers a small diff needs (see Triage) | triage |
 | `retro.md` | the retro's agent, which classifies what other reviewers said about a closed pull request ([learn]) | retro |
+| `notes-curate.md` | the notes curator, which proposes curated repository notes and harness ([notes]) | curation |
 
 ## Template syntax
 
@@ -65,8 +66,9 @@ Review {{.URL}} at `{{.HeadSHA}}`.
 The data comes in three shapes, all defined in `internal/agents/templates.go`: the judge's prompts get
 the judge data, every other session role gets the role data, and a shell role's `command` or full-line
 `.sh` template gets the shell data. `model-fallback.md` gets its own small fallback data
-(`internal/agents/models.go`, see below), `triage.md` the triage data (`internal/engine/triage.go`) and
-`retro.md` the retro data (`internal/engine/retro.go`).
+(`internal/agents/models.go`, see below), `triage.md` the triage data (`internal/engine/triage.go`),
+`retro.md` the retro data (`internal/engine/retro.go`) and `notes-curate.md` the curation data
+(`internal/engine/notes_curate.go`).
 
 ## Variables
 
@@ -217,23 +219,51 @@ characters), `lesson`, `scope` (`repo` or `general`), `lines` (`[from, to]`, 1 â
 pull request or issue (`#123`), holds a URL, names the author or a reviewer, mentions one of Magnum's logins
 or, when its scope is `general`, names the repository is dropped and the miss kept without it.
 
+### Notes curation prompt (`notes-curate.md`)
+
+The one prompt of a notes curation (`[notes]`, see the README's "Repository notes"): propose curated notes
+and harness for one repository in a scratch copy. Notes text is never a template variable; the agent reads
+the copies.
+
+| Variable | Meaning |
+|---|---|
+| `.Repo` | the repository, `owner/name` |
+| `.Dir` | the curation's scratch directory, the only place the agent may write |
+| `.Current`, `.CurrentHarness` | the notes and the harness now, `current.md` and `current/` (read only) |
+| `.Usage` | `usage.json`: the limits, the sizes, which limits the notes are past, each harness file's `rounds`, `uses` and `unused_candidate`, and the operator's reasons for rejecting earlier curations |
+| `.Proposal`, `.Harness`, `.Changes` | what the agent writes: `proposal.md`, the `harness/` directory (a copy of the current one at first) and `changes.json` |
+| `.Limits` | the [notes] curation triggers: `.MaxBytes`, `.MaxLine`, `.MaxHarnessFiles`, `.MaxHarnessBytes` |
+| `.Over` | the triggers the notes are past (empty: a weekly or requested curation) |
+| `.UnusedRounds` | the rounds without a use after which a harness file is a candidate (20) |
+
+`changes.json` is `{"sections": [...], "files": [...]}`, each item `{"name", "action", "into", "reason"}`:
+every `## ` section of the proposal and every proposed harness file `kept` or `added`, every current
+harness file `kept`, `merged` (into a proposed file) or `deleted`, each with a one-line reason saying how
+it helps a review of a future pull request. Magnum checks the proposal (`internal/notes`): every harness
+file named in the notes, nothing outside the scratch directory, no pull request number, branch or probe
+file, no secret and no home directory path; size is not checked. An invalid proposal gets one nudge naming
+its problems, then is kept as invalid.
+
 ### Repository notes
 
-magnum keeps one Markdown file per repository, `<home>/state/notes/<owner>/<repo>.md` with owner and
-repository lower-cased (`state/` is gitignored), and a directory with the same name without `.md` next to
-it for QA scripts. The built-in reviewer prompts tell their role to read the file first as hints from
-earlier reviews to verify. The judge prompts pass the file, the harness directory, its files (so a script
-the notes no longer mention is visible) and the lock commands as `<magnum>` fields (`notes`,
-`notes_dir`, `notes_harness`, `notes_lock`, `notes_unlock`), and the skill (section 2) holds the steps
-once: rewrite the file (never append) after posting when the round taught something durable (what the
-repository is, how to run its tests and lint, how to QA a change, failures of the review machine, known
-pitfalls, standing decisions, at most about 80 lines under a dated header line). Judges of different PRs
+magnum keeps one Markdown file per repository, `~/.local/share/magnum/notes/<owner>/<repo>.md` with owner
+and repository lower-cased, and a directory with the same name without `.md` next to it for QA scripts.
+The built-in reviewer prompts tell their role to read the file first as hints from earlier reviews to
+verify. The judge prompts pass the file, the harness directory, its files (so a script the notes no longer
+mention is visible) and the lock commands as `<magnum>` fields (`notes`, `notes_dir`, `notes_harness`,
+`notes_lock`, `notes_unlock`), and the skill (section 2) holds the steps once: rewrite the file (never
+append) after posting when the round taught something durable that helps review a future pull request
+(what the repository is, how to test, lint and QA a change, failures of the review machine, known
+pitfalls, standing decisions, under a dated header line), never one pull request's findings, code or
+probes: a probe for one pull request stays in the round's report directory. The judge's result names the
+harness files it ran or read (`harness_used`). Judges of different PRs
 of one repository run at the same time, so the judge takes the notes lock (`.NotesLockCommand`: a
 directory created with `mkdir`, which outlives the shell command, waited for at most three minutes and
 taken over after ten), reads the current file again, merges its lessons into it, writes it through a
 temp file and `mv`, and releases the lock. A custom prompt opts in with
-`{{if .NotesPath}}...{{.NotesPath}}...{{end}}`. `magnum notes <repo>` prints the file and
-`magnum notes <repo> --edit` opens it in `$VISUAL` or `$EDITOR`.
+`{{if .NotesPath}}...{{.NotesPath}}...{{end}}`. `magnum notes <repo>` prints the file and its sizes,
+`magnum notes <repo> --edit` opens it in `$VISUAL` or `$EDITOR`, and the README's "Repository notes"
+describes the history and the curation.
 
 ### Shell roles (`command`, or a full-line `.sh` prompt)
 

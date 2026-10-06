@@ -2,9 +2,10 @@
 // this directory that config.Role prompt names refer to (judge-*.md,
 // claude-*.md, codex-*.sh), model-fallback.md, the continuation after a
 // session switched models on a per-model limit, triage.md, the question a
-// cheap model answers about which reviewers a small diff needs, and
-// retro.md, the classification of other reviewers' comments a retro asks
-// for ([learn]). The same files are also read from disk: a prompt name
+// cheap model answers about which reviewers a small diff needs, retro.md,
+// the classification of other reviewers' comments a retro asks for
+// ([learn]), and notes-curate.md, the curation of a repository's notes
+// ([notes]). The same files are also read from disk: a prompt name
 // resolves to <pipeline.prompts_dir>/<name> when that file exists
 // (prompts_dir defaults to this directory), else to the embedded copy of
 // the same name (see config.Config.ResolvePrompt). The daemon reads them
@@ -19,7 +20,7 @@ import (
 	"sort"
 )
 
-//go:embed judge-*.md claude-*.md codex-*.sh model-fallback.md triage.md retro.md
+//go:embed judge-*.md claude-*.md codex-*.sh model-fallback.md triage.md retro.md notes-curate.md
 var embedded embed.FS
 
 // Names lists the embedded default prompts, sorted.

@@ -31,8 +31,11 @@ type judgeResult struct {
 	// was posted and why it was rejected (nil in a result file written
 	// before the skill asked for it).
 	Provenance []findingRecord
-	Raw        string // the JSON as written
-	Source     string // file | pane
+	// HarnessUsed are the files of the repository notes' harness the judge
+	// ran or read this round (SKILL.md section 8), as written.
+	HarnessUsed []string
+	Raw         string // the JSON as written
+	Source      string // file | pane
 }
 
 // findingRecord is one entry of the result's provenance list.
@@ -114,6 +117,34 @@ func parseSources(m json.RawMessage) []string {
 	return out
 }
 
+// parseHarnessUsed reads harness_used leniently: a list of file names (or one
+// name as a string), trimmed, empty ones and repeats dropped, at most
+// maxHarnessUsed of them.
+func parseHarnessUsed(m json.RawMessage) []string {
+	var list []string
+	if json.Unmarshal(m, &list) != nil {
+		var items []json.RawMessage
+		if json.Unmarshal(m, &items) == nil {
+			for _, it := range items {
+				list = append(list, jsonString(it))
+			}
+		} else if s := jsonString(m); s != "" {
+			list = []string{s}
+		}
+	}
+	var out []string
+	for _, s := range list {
+		s = strings.TrimSpace(s)
+		if s != "" && !slices.Contains(out, s) && len(out) < maxHarnessUsed {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// maxHarnessUsed bounds the harness files one result may name.
+const maxHarnessUsed = 100
+
 // reasonCode normalizes a reason code: "Not reproducible" -> not_reproducible.
 func reasonCode(s string) string {
 	return strings.Join(strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
@@ -192,6 +223,9 @@ func parseResult(b []byte) (judgeResult, bool) {
 	}
 	if f, ok := raw["provenance"]; ok {
 		r.Provenance = parseProvenance(f)
+	}
+	if f, ok := raw["harness_used"]; ok {
+		r.HarnessUsed = parseHarnessUsed(f)
 	}
 	if f, ok := raw["findings"]; ok {
 		var m map[string]json.RawMessage
