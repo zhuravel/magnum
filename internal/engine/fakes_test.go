@@ -749,6 +749,13 @@ func (f *fakeAgents) Park(ctx context.Context, pr store.PR) error {
 	return nil
 }
 
+// Quit parks one session, as agents.Manager.Quit does with a resumable
+// conversation.
+func (f *fakeAgents) Quit(ctx context.Context, s store.Session) error {
+	f.record(fmt.Sprintf("quit:%d:%s", s.PRID, s.Role))
+	return f.st.TransitionSession(ctx, s.ID, []string{store.SessionStarting, store.SessionLive, store.SessionLost}, store.SessionParked, nil)
+}
+
 func (f *fakeAgents) Recover(_ context.Context, pr store.PR) ([]agents.Recovered, error) {
 	f.record(fmt.Sprintf("recover:%d", pr.ID))
 	return nil, nil

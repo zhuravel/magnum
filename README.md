@@ -358,6 +358,17 @@ never) its sessions are parked to free memory; the next round resumes them. The 
 review or re-review waits behind `magnum pause`, a drain, the daily cap, or anything else that ends more than
 `park_idle_after` from now. Pinned PRs and PRs you typed into within `human_cooldown` keep their agents.
 
+The judge is the exception to resuming. Codex's prompt cache lasts about an hour and a half, so a judge
+resumed later re-reads its whole conversation uncached on its first turn (25 of 39 resumed judge turns did,
+4.7M tokens in 2.3 days). A judge whose last turn on the PR ended longer than `[pipeline] judge_fresh_after`
+ago (default `"90m"`, `"0"` always resumes) starts the next round in a fresh session instead, the way a judge
+whose session was lost does: a re-review becomes a recovery, whose prompt has the judge read its earlier
+reviews and their threads from GitHub, while the reviewers keep their conversations and re-review the new
+commits as usual; a delta check or a re-review of the same head runs with a fresh judge at its
+`rereview_effort`. A judge still live in its pane is quit first, which parks its conversation (history kept).
+A continue finishes its paused turn in the old conversation. Each such start is a `round.judge_fresh_cold`
+event with the idle time.
+
 ### Identities: who posts
 
 ```toml
@@ -544,7 +555,8 @@ output = "claude-review.md"        # the report the judge receives
 name = "codex-review"
 kind = "shell"
 tool = "codex"                     # codex's login check, pauses and health patterns apply
-command = "command codex review --base {{if .BaseSHA}}{{.BaseSHA}}{{else}}{{.BaseRef}}{{end}}"   # the merge base
+effort = "high"                    # -c model_reasoning_effort=high, never your global Codex effort
+command = "command codex review{{if .Effort}} -c model_reasoning_effort={{.Effort}}{{end}} --base {{if .BaseSHA}}{{.BaseSHA}}{{else}}{{.BaseRef}}{{end}}"   # the merge base
 capture = "stdout"
 
 [[role]]
@@ -564,6 +576,7 @@ prompt = "judge-initial.md"
 rereview = "judge-rereview.md"
 effort = "xhigh"
 rereview_effort = "high"           # re-reviews of new commits; the first review stays at xhigh
+max_subagents = 2                  # subagents open at once (0 = none)
 timeout = "90m"
 ```
 
@@ -686,9 +699,11 @@ there overrides the built-in role of the same name key by key, so it needs only 
 effort of first reviews and `rereview_effort` that of re-reviews of new commits. Claude roles get both as
 `--model` and `--effort` at launch and on every resume, so a role without them runs at your own Claude
 Code `model` and `effortLevel` settings, and a resumed conversation keeps the model it started on. `codex-review` is a
-shell role that runs `codex review`, so it takes both as Codex config overrides in `args`. A role you
-can do without is turned off with `runs = "never"` (or `"manual"`: only when you ask). To spend less as a
-subscription runs low, for example:
+shell role that runs `codex review`: its command passes the role's `effort` (`high` by default) as `-c
+model_reasoning_effort=…`, so it never runs at the effort of your global Codex config (it did, at `xhigh`,
+for 23% of the Codex spend), and its `args`, appended after, take a model or another effort as Codex config
+overrides. A role you can do without is turned off with `runs = "never"` (or `"manual"`: only when you
+ask). To spend less as a subscription runs low, for example:
 
 ```toml
 [[role]]
@@ -712,7 +727,19 @@ runs = "never"
 ```
 
 `magnum roles` prints the effective model and effort of every role, and `magnum daemon-restart --drain`
-applies a change once the rounds in flight end. A session whose model hits its own limit switches to
+applies a change once the rounds in flight end.
+
+A role's `max_subagents` caps the subagents its agent may have open at once, through its kind's `subagents`
+args (Codex: `-c agents.max_concurrent_threads_per_session=N`; `0` turns them off with `-c
+agents.enabled=false`; a kind without those args ignores the key). The judge defaults to 2: on its own it
+started 53 subagent threads in 36 sessions, 27% of the Codex spend, two of them over a million tokens on one
+PR. Codex caps the threads open at once, not how many a session starts in all.
+
+Magnum's Codex sessions (the judge, `codex review`) otherwise run on your own Codex setup: `$CODEX_HOME`'s
+login and session files (which Magnum resumes and reads for usage), and also its `config.toml` (your MCP
+servers, hooks and plugins) and your global `AGENTS.md`. Codex can turn an MCP server off for one launch
+(`-c mcp_servers.<name>.enabled=false`) but has no override for the global `AGENTS.md`; only a separate
+`CODEX_HOME` leaves it out, so Magnum does not isolate its sessions yet. A session whose model hits its own limit switches to
 the kind's next `fallback_models` entry by itself (Claude: `["opus", "sonnet"]`) and back once the limit
 lifts.
 

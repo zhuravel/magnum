@@ -22,9 +22,10 @@ func TestStartAgentFreshWrapperPassesOnlyExtras(t *testing.T) {
 		t.Fatalf("starts = %+v", e.h.starts)
 	}
 	j := e.h.starts[0]
-	// The judge role's effort (xhigh) goes through the codex kind's effort args.
+	// The judge role's effort (xhigh) goes through the codex kind's effort
+	// args, its max_subagents (2) through the subagents args.
 	if j.Name != "mg-11920-codex-judge-5d01cf" || j.Kind != "codex" || j.PaneID != ws.Panes[RoleJudge] || j.Timeout != 120*time.Second ||
-		!slices.Equal(j.Args, []string{"-c", "model_reasoning_effort=xhigh"}) {
+		!slices.Equal(j.Args, []string{"-c", "model_reasoning_effort=xhigh", "-c", "agents.max_concurrent_threads_per_session=2"}) {
 		t.Fatalf("judge start = %+v", j)
 	}
 	c := e.h.starts[1]
@@ -85,11 +86,11 @@ func TestStartAgentResumeArgs(t *testing.T) {
 		want        string
 		probeOutput string
 	}{
-		{"codex wrapper", "auto", RoleJudge, []string{"--x"}, "resume 01a0-uuid -c model_reasoning_effort=xhigh", "codex: function"},
+		{"codex wrapper", "auto", RoleJudge, []string{"--x"}, "resume 01a0-uuid -c model_reasoning_effort=xhigh -c agents.max_concurrent_threads_per_session=2", "codex: function"},
 		{"claude wrapper", "true", RoleClaude, []string{"--x"}, "--resume c1d2-id --name PR #11920 claude-review - talkable --effort high", ""},
-		{"codex plain", "false", RoleJudge, []string{"--dangerously-bypass-approvals-and-sandbox", "--search"}, "resume 01a0-uuid -c model_reasoning_effort=xhigh --dangerously-bypass-approvals-and-sandbox --search", ""},
+		{"codex plain", "false", RoleJudge, []string{"--dangerously-bypass-approvals-and-sandbox", "--search"}, "resume 01a0-uuid -c model_reasoning_effort=xhigh -c agents.max_concurrent_threads_per_session=2 --dangerously-bypass-approvals-and-sandbox --search", ""},
 		{"claude plain", "false", RoleClaude, []string{"--dangerously-skip-permissions"}, "--resume c1d2-id --name PR #11920 claude-review - talkable --effort high --dangerously-skip-permissions", ""},
-		{"codex no function", "auto", RoleJudge, []string{"--search"}, "resume 01a0-uuid -c model_reasoning_effort=xhigh --search", "codex: command"},
+		{"codex no function", "auto", RoleJudge, []string{"--search"}, "resume 01a0-uuid -c model_reasoning_effort=xhigh -c agents.max_concurrent_threads_per_session=2 --search", "codex: command"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

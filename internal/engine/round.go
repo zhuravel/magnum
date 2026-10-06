@@ -202,6 +202,9 @@ type roundSetup struct {
 	// sameHead: the round re-reviews the reviewed head, the judge alone
 	// (confirmSameHead).
 	sameHead bool
+	// coldJudge: the judge alone started in a fresh session because its
+	// prompt cache was cold (coldJudge); the reviewers kept theirs.
+	coldJudge bool
 }
 
 // judgeOnly reports whether the round runs its judge alone: a delta check
@@ -292,8 +295,14 @@ func (e *Engine) startSessions(ctx context.Context, job *roundJob, rs *roundSetu
 	if rs.judgeOnly() && e.hasOwnReview(ctx, pr, rs.src.Login()) {
 		effort = effortCheck // a fresh judge checks the delta, or the same head, too (checkFresh)
 	}
+	if !fresh {
+		var cold string
+		if rs.coldJudge, cold = e.coldJudge(ctx, job, rs); rs.coldJudge {
+			why = cold
+		}
+	}
 	recovered := false
-	if ws, recovered, err = e.startRoles(ctx, pr, ws, job.slot.Path, env, rs.toRun, fresh, effort); err != nil {
+	if ws, recovered, err = e.startRoles(ctx, pr, ws, job.slot.Path, env, rs.toRun, fresh, rs.coldJudge, effort); err != nil {
 		return fail(err)
 	}
 
@@ -325,7 +334,7 @@ func (e *Engine) startSessions(ctx context.Context, job *roundJob, rs *roundSetu
 		if serr := e.preflight(ctx, agentKinds(extra)); serr != nil {
 			return ws, serr
 		}
-		if ws, _, err = e.startRoles(ctx, pr, ws, job.slot.Path, env, extra, fresh, effortOf(rs.kind)); err != nil {
+		if ws, _, err = e.startRoles(ctx, pr, ws, job.slot.Path, env, extra, fresh, false, effortOf(rs.kind)); err != nil {
 			return fail(err)
 		}
 		rs.toRun = append(rs.toRun, extra...)
@@ -385,6 +394,7 @@ func (e *Engine) roundInput(ctx context.Context, job *roundJob, rs roundSetup, w
 		ContinueRunID: job.continueRunID, DryRun: dryRun, PostMerge: job.postMerge,
 		NotesPath: e.roundNotes(job.repo), Readiness: e.readinessPlan(ctx, job, rs.kind), DeltaCheck: rs.delta, SameHead: rs.sameHead,
 		OwnPass: e.cfg.JudgeOwnPassFor(&job.watch) == config.OwnPassParallel, Related: e.cfg.RelatedFor(&job.watch),
+		ColdJudge: rs.coldJudge && rs.kind == pipeline.KindRecovery,
 	}
 	if job.evalHead != "" {
 		in.Blind = true
@@ -623,9 +633,11 @@ func effortOf(kind string) startEffort {
 // workspace lacks) and starts or resumes the agent roles' agents, the judge
 // first, at effort (see startEffort; once the judge had to start fresh, the
 // other roles start at their full effort: the round becomes a recovery).
-// recovered is true when the judge started without a conversation to
-// resume.
-func (e *Engine) startRoles(ctx context.Context, pr store.PR, ws agents.Workspace, slotPath string, env map[string]string, roles []config.Role, fresh bool, effort startEffort) (agents.Workspace, bool, error) {
+// coldJudge starts the judge alone fresh (its prompt cache is cold,
+// coldJudge): the others keep their conversations and effort, since they
+// re-review as before (pipeline.RoundInput.ColdJudge). recovered is true
+// when the judge started without a conversation to resume.
+func (e *Engine) startRoles(ctx context.Context, pr store.PR, ws agents.Workspace, slotPath string, env map[string]string, roles []config.Role, fresh, coldJudge bool, effort startEffort) (agents.Workspace, bool, error) {
 	recovered := false
 	for _, role := range judgeFirst(roles) {
 		if ws.Panes[agents.Role(role.Name)] == "" {
@@ -637,12 +649,15 @@ func (e *Engine) startRoles(ctx context.Context, pr store.PR, ws agents.Workspac
 		if role.IsShell() {
 			continue
 		}
-		freshStart, err := e.ensureAgent(ctx, pr, role, ws, fresh, effort)
+		freshStart, err := e.ensureAgent(ctx, pr, role, ws, fresh || role.Judge && coldJudge, effort)
 		if err != nil {
 			return ws, false, fmt.Errorf("start %s: %w", role.Name, err)
 		}
 		if role.Judge && freshStart {
-			recovered, effort = true, effortFull
+			recovered = true
+			if !coldJudge {
+				effort = effortFull
+			}
 		}
 	}
 	return ws, recovered, nil

@@ -524,6 +524,9 @@ func (c *Config) validatePipeline() []error {
 	}
 	ownPass("pipeline", c.Pipeline.JudgeOwnPass, true)
 	related("pipeline", c.Pipeline.RelatedLookback, c.Pipeline.RelatedIgnore)
+	if d := c.Pipeline.JudgeFreshAfter.Duration; d < 0 {
+		errs = append(errs, fmt.Errorf("pipeline: judge_fresh_after must be 0 (always resume) or positive, got %s", d))
+	}
 	for _, w := range c.Watches {
 		ownPass("watch "+w.Owner, w.JudgeOwnPass, true)
 		related("watch "+w.Owner, w.RelatedLookback, w.RelatedIgnore)
@@ -595,7 +598,7 @@ func validateKind(name string, k Kind) []error {
 		key, ph string
 		args    []string
 	}{{"resume", PlaceholderSession, k.Resume}, {"model", PlaceholderModel, k.Model},
-		{"effort", PlaceholderEffort, k.Effort}, {"name", PlaceholderTitle, k.Name}} {
+		{"effort", PlaceholderEffort, k.Effort}, {"name", PlaceholderTitle, k.Name}, {"subagents", PlaceholderSubagents, k.Subagents}} {
 		if len(g.args) > 0 && !slices.ContainsFunc(g.args, func(s string) bool { return strings.Contains(s, g.ph) }) {
 			bad("%s %q must contain %s", g.key, g.args, g.ph)
 		}
@@ -746,6 +749,9 @@ func (c *Config) validateRole(r Role, kinds map[string]Kind, ids map[string]bool
 	}
 	if r.Timeout.Duration <= 0 {
 		bad("timeout must be positive")
+	}
+	if r.MaxSubagents != nil && *r.MaxSubagents < 0 {
+		bad("max_subagents must be 0 (none) or more, got %d", *r.MaxSubagents)
 	}
 	for key := range r.Env {
 		if !envKeyRe.MatchString(key) {

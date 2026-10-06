@@ -184,7 +184,8 @@ func TestRolesKinds(t *testing.T) {
 	out := f.Out.String()
 	actContains(t, out, "codex (used by codex-judge)\n", "claude (used by claude-review)\n", "droid (used by droid-lint)\n",
 		"omp (no role uses it)\n", "codex login status (logged in: text:Logged in; fix: codex login)", "--resume {session}",
-		"-c model_reasoning_effort={effort}", "codex -c model_reasoning_effort=xhigh", "claude --name {title}")
+		"-c model_reasoning_effort={effort}", "codex -c model_reasoning_effort=xhigh", "claude --name {title}",
+		"-c agents.max_concurrent_threads_per_session={subagents} (none: -c agents.enabled=false)")
 	if i, j := strings.Index(out, "droid (used by"), strings.Index(out, "omp (no role"); i < 0 || j < i {
 		t.Errorf("kinds the roles use come first:\n%s", out)
 	}

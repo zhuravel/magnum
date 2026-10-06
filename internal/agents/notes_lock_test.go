@@ -132,11 +132,11 @@ func TestCodexReviewUsesTheMergeBase(t *testing.T) {
 	role := defaultRole(t, RoleCodexReview)
 	d := ShellData{BaseRef: "origin/master", BaseSHA: "0123456789abcdef0123456789abcdef01234567", ReportPath: "/r/codex.md", Marker: DoneMarker("r-1")}
 	got, err := ShellLine(role, d)
-	if err != nil || !strings.Contains(got, "command codex review --base 0123456789abcdef0123456789abcdef01234567; } |") {
+	if err != nil || !strings.Contains(got, "command codex review -c model_reasoning_effort=high --base 0123456789abcdef0123456789abcdef01234567; } |") {
 		t.Fatalf("with a merge base: %v\n%s", err, got)
 	}
 	d.BaseSHA = ""
-	if got, err := ShellLine(role, d); err != nil || !strings.Contains(got, "command codex review --base origin/master; } |") {
+	if got, err := ShellLine(role, d); err != nil || !strings.Contains(got, "command codex review -c model_reasoning_effort=high --base origin/master; } |") {
 		t.Fatalf("without a merge base: %v\n%s", err, got)
 	}
 

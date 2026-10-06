@@ -44,6 +44,14 @@ type Pipeline struct {
 	// (default DefaultRelatedIgnore, the lockfiles; [] = none). A [[watch]]
 	// may override it (Watch.RelatedIgnore).
 	RelatedIgnore []string `toml:"related_ignore"`
+	// JudgeFreshAfter: a judge whose last turn on the PR ended longer ago
+	// than this starts the PR's next round in a fresh session (the recovery
+	// path, which reads the earlier reviews and threads from GitHub) instead
+	// of resuming its conversation, whose prompt cache has gone cold by
+	// then (it lasts about 1.5 hours), so its first turn would re-read the
+	// whole conversation uncached. Default 90m; 0 = always resume. Only the
+	// judge; a continue of a paused turn keeps its conversation.
+	JudgeFreshAfter Duration `toml:"judge_fresh_after"`
 }
 
 // DefaultRelatedIgnore is [pipeline] related_ignore's default: lockfiles,
@@ -152,6 +160,8 @@ const (
 	PlaceholderTitle   = "{title}"
 	PlaceholderModel   = "{model}"
 	PlaceholderEffort  = "{effort}"
+	// PlaceholderSubagents is Role.MaxSubagents in Kind.Subagents.
+	PlaceholderSubagents = "{subagents}"
 )
 
 // DefaultSkill is the judge's default skill path ({{repo}} = magnum's home).

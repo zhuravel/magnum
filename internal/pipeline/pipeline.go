@@ -269,6 +269,13 @@ type RoundInput struct {
 	// commits: Roles hold the judge alone, which re-decides its earlier
 	// findings from the replies (JudgeData.SameHead) at its rereview effort.
 	SameHead bool
+	// ColdJudge (recovery): the judge alone started in a fresh session
+	// because its conversation's prompt cache had gone cold ([pipeline]
+	// judge_fresh_after), while the reviewers kept theirs: the judge gets
+	// the recovery prompt, and the reviewers re-review the commits since
+	// the last review as in a re-review (their rereview prompts and effort)
+	// instead of reviewing the whole PR again.
+	ColdJudge bool
 
 	DryRun bool // the judge posts nothing; GitHub is not consulted
 	// Blind (magnum eval, with DryRun): the round replays a pinned head to

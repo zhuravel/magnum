@@ -189,6 +189,11 @@ related_ignore = ["**/Gemfile.lock", "**/package-lock.json", "**/pnpm-lock.yaml"
                   "**/go.sum", "**/poetry.lock", "**/uv.lock", "**/Pipfile.lock", "**/Cargo.lock", "**/composer.lock"]
                                   # paths that never make two PRs related (globs as skip_paths) and that
                                   # history.json (the changed files' last commits) leaves out; [] = none
+judge_fresh_after = "90m"         # a judge whose last turn on the PR ended longer ago starts the next round in a
+                                  # fresh session (the recovery, which reads the earlier reviews and threads from
+                                  # GitHub): Codex's prompt cache lasts about 1.5 h, so resuming re-reads the whole
+                                  # conversation uncached. A live judge is quit first (parked, history kept); the
+                                  # other roles keep their sessions; a continue resumes. "0" = always resume
 
 # Agent CLIs: codex, claude, droid and omp are built in (values below are their defaults); every key is
 # optional and overrides only itself. Any other herdr agent kind (pi, gemini, ...) can be declared too.
@@ -207,6 +212,9 @@ related_ignore = ["**/Gemfile.lock", "**/package-lock.json", "**/pnpm-lock.yaml"
 #                                     # `model` args; e.g. "gpt-6.1-sol" makes the judge start with
 #                                     # --model gpt-6.1-sol ("" = codex's own default; a role's model wins)
 # effort = ["-c", "model_reasoning_effort={effort}"]
+# subagents = ["-c", "agents.max_concurrent_threads_per_session={subagents}"]   # a role's max_subagents: the
+#                                     # spawned-agent threads open at once, the primary excluded (at least 1)
+# no_subagents = ["-c", "agents.enabled=false"]   # max_subagents = 0: no multi-agent tools at all
 # name = []                           # codex has no name flag, so magnum types `rename` while it works
 # rename = "/rename {title}"
 # login_check = "codex login status"  # "" = no preflight
@@ -259,6 +267,9 @@ judge = true                          # exactly one judge per watch
 effort = "xhigh"                      # -c model_reasoning_effort=xhigh (the zsh codex function passes the same)
 rereview_effort = "high"              # re-reviews of new commits; codex sets effort at launch only, so a live
                                       # session is asked for it in the prompt ("" = effort)
+max_subagents = 2                     # subagents the judge may have open at once (the kind's `subagents` args;
+                                      # 0 = none, through `no_subagents`); on its own it started 53 in 36
+                                      # sessions, 27% of the Codex spend. Codex caps open threads, not a total
 skill = "{{repo}}/skills/magnum-review/SKILL.md"   # without a checkout: the binary's built-in copy
 prompt = "judge-initial.md"
 rereview = "judge-rereview.md"
@@ -290,7 +301,9 @@ kind = "shell"                        # a shell pane, not an agent session
 summary = "Codex's own static review of the diff"
 tool = "codex"                        # codex's login check, pauses and health patterns apply
 # args = ["-c", "model=gpt-6.1-sol"]  # `codex review` takes the model as a config override
-command = "command codex review --base {{if .BaseSHA}}{{.BaseSHA}}{{else}}{{.BaseRef}}{{end}}"
+effort = "high"                       # passed by the command as -c model_reasoning_effort=high, so `codex review`
+                                      # never runs at your global Codex effort; args come after it and win
+command = "command codex review{{if .Effort}} -c model_reasoning_effort={{.Effort}}{{end}} --base {{if .BaseSHA}}{{.BaseSHA}}{{else}}{{.BaseRef}}{{end}}"
                                       # the merge base (fixed), else the base ref (moves with the base branch)
 args = []                             # appended shell-quoted
 ok_status = [0]                       # exit statuses that count as a report; any other status fails the role

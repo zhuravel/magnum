@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/github"
@@ -235,7 +236,27 @@ func TestCodexReviewFallsBackToTheBaseRef(t *testing.T) {
 	if _, err := e.r.RunRound(e.ctx, in); err != nil {
 		t.Fatal(err)
 	}
-	if len(e.ag.codexCalls) != 1 || !strings.Contains(e.ag.codexCalls[0].Script, "command codex review --base origin/master; } |") {
+	if len(e.ag.codexCalls) != 1 || !strings.Contains(e.ag.codexCalls[0].Script, "command codex review -c model_reasoning_effort=high --base origin/master; } |") {
+		t.Fatalf("codex calls = %+v", e.ag.codexCalls)
+	}
+}
+
+// codex-review's line carries its effort for the round: rereview_effort in
+// a re-review, as a session role's prompt does.
+func TestCodexReviewRunsAtItsRereviewEffortInAReReview(t *testing.T) {
+	e := newEnv(t)
+	for i, r := range e.cfg.Roles {
+		if r.Name == string(agents.RoleCodexReview) {
+			e.cfg.Roles[i].RereviewEffort = "medium"
+		}
+	}
+	e.ag.behaviors[agents.RoleJudge] = []behavior{e.judgePosts(602, "COMMENTED", "COMMENT").behavior(t)}
+	in := e.input(KindRereview)
+	in.Previous = &PreviousReview{ID: 901, Event: "COMMENTED", SHA: prevSHA, SubmittedAt: t0.Add(-time.Hour)}
+	if _, err := e.r.RunRound(e.ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	if len(e.ag.codexCalls) != 1 || !strings.Contains(e.ag.codexCalls[0].Script, "command codex review -c model_reasoning_effort=medium --base ") {
 		t.Fatalf("codex calls = %+v", e.ag.codexCalls)
 	}
 }

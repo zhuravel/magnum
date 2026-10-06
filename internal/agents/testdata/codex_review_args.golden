@@ -1,1 +1,1 @@
-set -o pipefail; { printf '<!-- magnum:run=r-20261003T120000-9 -->\n'; command codex review --base origin/feature/base-pr -c model_reasoning_effort=high; } | tee '/tmp/with space/codex-review.md'; printf '\nMAGNUM_DONE_r-20261003T120000-9 %d\n' "$?"
+set -o pipefail; { printf '<!-- magnum:run=r-20261003T120000-9 -->\n'; command codex review -c model_reasoning_effort=high --base origin/feature/base-pr -c model_reasoning_effort=medium; } | tee '/tmp/with space/codex-review.md'; printf '\nMAGNUM_DONE_r-20261003T120000-9 %d\n' "$?"

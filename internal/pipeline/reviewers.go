@@ -176,7 +176,7 @@ func setAside(path string) error {
 func (rd *round) roleData(role config.Role, runID, path string) (string, agents.RoleData) {
 	in := rd.in
 	prev := rd.previousHead()
-	rereview := in.Kind == KindRereview && prev != ""
+	rereview := rd.reviewersRereview()
 	effort := role.EffortFor(rereview)
 	d := agents.RoleData{
 		URL: rd.pr.URL, Owner: rd.owner, Repo: rd.name, Number: in.PR.Number,
@@ -237,6 +237,7 @@ func (rd *round) shellTurn(ctx context.Context, role config.Role, run store.Run,
 		Title:      agents.TaggedTitle(rd.r.AgentTag, rd.name, rd.pr.Number, agents.Role(role.Name)),
 		ReportPath: path, Marker: marker, RunID: run.ID,
 		BaseRef: rd.baseRef(), BaseSHA: rd.in.BaseSHA, HeadSHA: rd.in.TargetSHA, URL: rd.pr.URL,
+		Model: rd.r.Config.RoleModel(role), Effort: role.EffortFor(rd.reviewersRereview()),
 	})
 	if err != nil {
 		return end(store.RunFailed, ReportFailed, execx.Redact(err.Error()))
@@ -540,6 +541,15 @@ func (rd *round) reportPath(run store.Run, role config.Role) string {
 // timeout is the role's turn timeout (config.Role.Timeout; config defaults
 // it from daemon.judge_timeout / reviewer_timeout and refuses <= 0).
 func (rd *round) timeout(role config.Role) time.Duration { return role.Timeout.Duration }
+
+// reviewersRereview reports whether the round's reviewers re-review the
+// commits since the previous review (their rereview prompts and effort): a
+// re-review, or a recovery whose judge alone started fresh because its
+// prompt cache was cold (RoundInput.ColdJudge), with a previous head.
+func (rd *round) reviewersRereview() bool {
+	k := rd.in.Kind
+	return (k == KindRereview || k == KindRecovery && rd.in.ColdJudge) && rd.previousHead() != ""
+}
 
 // previousHead is the head the previous review covered.
 func (rd *round) previousHead() string {

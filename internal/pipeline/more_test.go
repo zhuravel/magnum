@@ -193,6 +193,23 @@ func TestRecoveryPromptListsHistory(t *testing.T) {
 	}
 }
 
+// A judge that started fresh because its prompt cache was cold gets the
+// recovery prompt, while the reviewers, which kept their conversations,
+// re-review the new commits as in a re-review.
+func TestAColdJudgesRecoveryKeepsTheReviewersOnTheReReview(t *testing.T) {
+	e := newEnv(t)
+	e.ag.behaviors[agents.RoleJudge] = []behavior{e.judgePosts(606, "COMMENTED", "COMMENT").behavior(t)}
+	in := e.input(KindRecovery)
+	in.ColdJudge = true
+	in.Previous = &PreviousReview{ID: 901, Event: "COMMENTED", SHA: prevSHA, SubmittedAt: t0.Add(-time.Hour)}
+	res, err := e.r.RunRound(e.ctx, in)
+	if err != nil || res.Outcome != OutcomePosted {
+		t.Fatalf("result = %+v, err = %v", res, err)
+	}
+	mustContain(t, "judge prompt", e.ag.submitsFor(agents.RoleJudge)[0].Text, "mode: recovery")
+	mustContain(t, "claude prompt", e.ag.submitsFor(agents.RoleClaude)[0].Text, "New commits were pushed", " medium")
+}
+
 func TestVerifyRetriesTransientGitHubError(t *testing.T) {
 	e := newEnv(t)
 	e.gh.failLists = 1

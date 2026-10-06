@@ -63,8 +63,9 @@ func TestHappyPathInitialRound(t *testing.T) {
 	if cc.Pane != "p3" || cc.Marker != agents.DoneMarker(codexRun.ID) || cc.Timeout != e.cfg.Daemon.ReviewerTimeout.Duration {
 		t.Errorf("codex call = %+v (run %s)", cc, codexRun.ID)
 	}
-	// codex review runs against the merge base, which does not move with the base branch.
-	mustContain(t, "codex script", cc.Script, "command codex review --base base000111222333444555666777888999aaabbb; } |", filepath.Join(dir, "codex-review.md"), "MAGNUM_DONE_"+codexRun.ID)
+	// codex review runs at the role's effort against the merge base, which
+	// does not move with the base branch.
+	mustContain(t, "codex script", cc.Script, "command codex review -c model_reasoning_effort=high --base base000111222333444555666777888999aaabbb; } |", filepath.Join(dir, "codex-review.md"), "MAGNUM_DONE_"+codexRun.ID)
 	// The pane's terminal title (herdr sidebar) is set first, the report
 	// starts with the run's marker; the done marker stays last.
 	if !strings.HasPrefix(cc.Script, `printf '\033]0;%s\007' 'PR #11920 codex-review - talkable'; DISABLE_AUTO_TITLE=true; set -o pipefail; `+

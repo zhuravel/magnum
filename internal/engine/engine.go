@@ -84,6 +84,9 @@ type Agents interface {
 	ResumeID(ctx context.Context, prID int64, role agents.Role) (string, error)
 	Preflight(ctx context.Context, kind string) error
 	Park(ctx context.Context, pr store.PR) error
+	// Quit stops one session's agent and parks its conversation (a cold
+	// judge, coldJudge).
+	Quit(ctx context.Context, s store.Session) error
 	Recover(ctx context.Context, pr store.PR) ([]agents.Recovered, error)
 }
 

@@ -29,7 +29,7 @@ func newRolesCmd(c *Context) *cobra.Command {
 			"runs, model, effort, capture, report file, initial prompt (and whether prompts_dir or the embedded copy "+
 			"provides it), the roles it runs after, the judge and the aliases --role accepts. --repo shows the roles "+
 			"of the watch covering one repository. --kinds prints the [kinds.<name>] specs instead: wrapper mode, "+
-			"login check, the resume, model, effort and name args, the session source and the command line each "+
+			"login check, the resume, model, effort, subagents and name args, the session source and the command line each "+
 			"role starts with. --json prints the resolved roles (or kinds) as JSON keyed like config.toml.",
 		func(pos []string) int { return runRoles(c, o, pos) })
 	fs := cmd.Flags()
@@ -353,6 +353,7 @@ func rolesKinds(c *Context, cfg *config.Config, o rolesOpts) int {
 		fmt.Fprintf(tw, "  resume:\t%s\n", args(k.Resume))
 		fmt.Fprintf(tw, "  model:\t%s\n", args(k.Model))
 		fmt.Fprintf(tw, "  effort:\t%s\n", args(k.Effort))
+		fmt.Fprintf(tw, "  subagents:\t%s (none: %s)\n", args(k.Subagents), args(k.NoSubagents))
 		fmt.Fprintf(tw, "  name:\t%s\n", args(k.Name))
 		fmt.Fprintf(tw, "  rename:\t%s\n", inspOrDash(k.Rename))
 		fmt.Fprintf(tw, "  start:\t%s\n", args(k.Start))
@@ -365,7 +366,7 @@ func rolesKinds(c *Context, cfg *config.Config, o rolesOpts) int {
 				continue
 			}
 			argv := k.Argv(config.LaunchArgs{Title: config.PlaceholderTitle, Model: r.Model, Effort: r.Effort,
-				Wrapper: k.Wrapper == config.WrapperTrue, Extra: r.Args})
+				Subagents: r.MaxSubagents, Wrapper: k.Wrapper == config.WrapperTrue, Extra: r.Args})
 			fmt.Fprintf(tw, "  starts %s:\t%s\n", r.Name, strings.Join(append([]string{name}, argv...), " "))
 		}
 		tw.Flush()

@@ -389,6 +389,42 @@ editing history. Code, config comments and prompts reference these by their head
   as `missing`). Still open: a late write that lands after a report was accepted replaces it, and a
   continued round checks that its paused round verified a report, not its marker. Rejected: the marker
   anywhere in the report (a review that quotes one, as a review of magnum's own code may, would pass).
+- **A cold judge starts in a fresh session** (2026-10-06). Codex's prompt cache lasts about 1.5 hours and
+  sessions park after 2, so 25 of 39 resumed judge turns started cold, their first turn re-reading the whole
+  conversation uncached (4.7M tokens in 2.3 days, avg 187k per turn). `[pipeline] judge_fresh_after` (default
+  `90m`, `0` = always resume) starts the judge of a round fresh when its last turn on the PR (the newest
+  `ended_at` of its runs) ended longer ago than that and it has a conversation to resume (engine
+  `coldJudge`): a live judge is quit first (`agents.Manager.Quit`, now on the engine's `Agents` port), which
+  parks its conversation, and one that works or is blocked, or that Quit cannot stop, is resumed as before.
+  It takes the path a lost session takes: a re-review becomes a recovery (`judge-recovery.md` has the judge
+  read its earlier reviews and their threads from GitHub), a delta check or a same-head re-review runs with a
+  fresh judge at its `rereview_effort` (`round.delta_check_fresh` / `round.same_head_fresh`, whose reason
+  names the idle time). Only the judge: unlike a lost session's recovery, where every role starts at its full
+  effort and reviews the whole PR, the reviewers keep their conversations and their re-review prompts and
+  effort (`pipeline.RoundInput.ColdJudge`), since a cold resume costs less than a full review by each of
+  them. A continue finishes its paused turn in the old conversation. Each such start is a
+  `round.judge_fresh_cold` event ("the judge starts in a fresh session: its last turn ended 1h31m ago
+  (judge_fresh_after 1h30m), so its prompt cache is cold", with `idle_seconds`, `last_turn_at`,
+  `fresh_after`, `was_live`).
+- **Codex roles run at their own effort and with few subagents** (2026-10-06). codex-review set only its
+  model, so `codex review` ran at the effort of the operator's global Codex config (`xhigh`), 23% of the
+  Codex spend; and the judge started 53 subagent threads in 36 sessions on its own, 27% of the spend (two of
+  them 1.4M and 1.3M tokens on one PR). codex-review now has `effort = "high"`, which its command passes as
+  `-c model_reasoning_effort={{.Effort}}` (shell roles get `.Model` and `.Effort` as template variables,
+  the round's `rereview_effort` in a re-review; `codex-review.sh` does the same) before its `args`, so a
+  user's role `effort` or an override in `args` still wins (Codex applies `-c` in order). A role's
+  `max_subagents` caps the subagents its agent may have open at once through its kind's new `subagents` args
+  (codex: `-c agents.max_concurrent_threads_per_session={subagents}`; Codex's config reference: "Maximum
+  number of spawned-agent threads that can be open concurrently, excluding the primary thread", at least 1)
+  and `0` through `no_subagents` (codex: `-c agents.enabled=false`, "Enable or disable multi-agent tools");
+  a kind without them ignores the key, as it does `effort`. The judge defaults to 2. Codex has no setting
+  for how many subagents a session starts in all, only how many are open at once. Not done: a clean Codex
+  setup for magnum's sessions. Codex merges `-c` tables into the user's config (`mcp_servers={}` changes
+  nothing), so its MCP servers can only be turned off one by one by name
+  (`-c mcp_servers.<name>.enabled=false`), and nothing but a separate `CODEX_HOME` keeps the global
+  `AGENTS.md` out (Codex reads `$CODEX_HOME/AGENTS.md` unconditionally); a separate `CODEX_HOME` moves the
+  login, the session files magnum resumes and reads for usage, the folder trust magnum writes and the hooks
+  with it, so it waits for a decision.
 
 ## Screens and commands
 

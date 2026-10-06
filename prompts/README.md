@@ -38,7 +38,7 @@ prompts_dir = "{{repo}}/prompts"   # or "~/magnum-prompts" to keep your edits ou
 | `judge-initial.md` | judge, first review | judge |
 | `judge-rereview.md` | judge, new head after its last review | judge |
 | `judge-continue.md` | judge, after a pause (usage limit) ended mid-turn | judge |
-| `judge-recovery.md` | judge, fresh session after the old one was lost | judge |
+| `judge-recovery.md` | judge, fresh session after the old one was lost, or went cold (`[pipeline] judge_fresh_after`) | judge |
 | `judge-nudge.md` | judge, stopped without a result | judge |
 | `model-fallback.md` | any session role, the judge included, after magnum switched its model because the model hit its own limit | fallback |
 | `claude-review.md` | claude-review, first review | role |
@@ -308,6 +308,7 @@ before they are substituted, because the result is typed into a shell.
 | `.BaseRef` | the base ref, e.g. `origin/master` or the parent branch of a stacked PR |
 | `.BaseSHA` | the merge base of the head and the base; empty when unknown. It does not move when the base branch gains commits, so codex-review passes it to `--base` (`{{if .BaseSHA}}{{.BaseSHA}}{{else}}{{.BaseRef}}{{end}}`) |
 | `.HeadSHA`, `.URL` | the commit under review and the pull request |
+| `.Model`, `.Effort` | the role's `model`, and its effort for this round: `rereview_effort` in a re-review (when set), else `effort`; empty when unset. codex-review's command passes `.Effort` as `-c model_reasoning_effort={{.Effort}}` |
 | `.RunID` | the run id, i.e. `.Marker` without its `MAGNUM_DONE_` prefix; a line that prints `<!-- magnum:run={{.RunID}} -->` makes it the report's required first line, as for a session role |
 | `.ExtraArgs` | the older name of `.Args`, for full-line templates written for `codex-review.sh` |
 
@@ -330,6 +331,7 @@ any other name adds a kind that starts from the same health patterns, `wrapper =
 | `args` | args appended only without a wrapper (the old `[codex]`/`[claude]` `args`). codex defaults to `["--dangerously-bypass-approvals-and-sandbox"]` and claude to `["--dangerously-skip-permissions"]`, so a plain binary runs like the usual zsh wrappers, without approval prompts (magnum answers every prompt No) and, for codex, without the sandbox (a sandboxed judge cannot reach GitHub). `magnum doctor` fails a plain codex or claude binary whose session roles start without that flag |
 | `resume` | args that resume `{session}` |
 | `model`, `effort` | args that pass a role's `{model}` or `{effort}`; empty means the CLI cannot take it |
+| `subagents`, `no_subagents` | args that cap the subagents a session may have open at once to a role's `max_subagents` (`{subagents}`, 1 or more), and args that turn subagents off (`max_subagents = 0`); empty means the CLI cannot cap them and the role key is ignored. codex: `["-c", "agents.max_concurrent_threads_per_session={subagents}"]` (Codex counts the spawned-agent threads open at once, the primary excluded) and `["-c", "agents.enabled=false"]` |
 | `default_model` | the model of the kind's roles that set no `model`, passed through `model` args (e.g. `default_model = "gpt-6.1-sol"` under `[kinds.codex]` starts the codex judge with `--model gpt-6.1-sol`); `""` = the CLI's own default. A shell role (codex-review) takes its model through its own `args` |
 | `name` | args that name the session `{title}` at launch |
 | `rename` | a slash command typed while the agent works, e.g. `/rename {title}`; `""` = none |
@@ -344,8 +346,8 @@ any other name adds a kind that starts from the same health patterns, `wrapper =
 | `on_hooks_review` | Codex's startup "Hooks need review" (hooks new or changed since Codex last trusted them): `trust_own` (default) picks "Trust all and continue" when the checkout declares no hooks of its own (no `.codex/hooks.json`, no `hooks` or `plugins` in its `.codex/config.toml`), so every hook listed is yours (Codex home or an installed plugin), recorded as `agents.hooks_trusted`; otherwise, or with `decline`, "Continue without trusting" for that session, recorded as `agents.hooks_declined`. |
 | `after_deny_prompt` | the message sent once, in the same run, when an agent stops its turn after a deny (Claude Code does), so it finishes without the command; it counts toward the 10 per run and is recorded as `agent.deny_continued`. Default: "magnum denied that command: review roles never run approval-gated or destructive commands. Continue the task without it and finish as instructed."; `""` sends nothing. |
 
-The launch args are built in this order: `resume`, `name`, `model`, `effort`, `start`, `args`, then
-the role's `args`. `magnum roles --kinds` prints the effective kinds, merged with your overrides, so you
+The launch args are built in this order: `resume`, `name`, `model`, `effort`, `subagents` (or
+`no_subagents`), `start`, `args`, then the role's `args`. `magnum roles --kinds` prints the effective kinds, merged with your overrides, so you
 can see exactly what magnum will type.
 
 | Kind | resume | model | effort | name / rename | login check |
@@ -393,7 +395,8 @@ a switch not confirmed within 30 s backs out of the dialog with Esc and pauses t
 | `summary` | none | one line saying what the role checks, shown to the `[triage]` model. Only a role with a summary can be left out of a round by triage; the judge never can. The built-in reviewers have one |
 | `runs` | `always` | `always`, `first` (until it completed once for the PR, then on request), `manual` (on request only) or `never` (disabled; requests are refused). Request a role with `magnum review <ref> --role <name>` |
 | `identity` | the watch's | the `[[identity]]` whose GitHub environment the pane gets |
-| `model`, `effort` | none | passed through the kind's `model`/`effort` args; also template variables |
+| `model`, `effort` | none | passed through the kind's `model`/`effort` args; also template variables (a shell role's command gets them too: codex-review's passes `effort`, `high` by default, as `-c model_reasoning_effort=…`) |
+| `max_subagents` | none; the judge `2` | the subagents the role's agent may have open at once, through the kind's `subagents` args; `0` = none (`no_subagents`); a kind without those args ignores it |
 | `rereview_effort` | `effort` | the effort of re-review rounds (new commits after an earlier review); the judge's built-in default is `high`. A re-review starts or resumes an agent at it; a live session of a kind that sets effort only at launch is asked for it in the prompt (`.EffortInPrompt`) |
 | `args`, `env` | none | extra launch args (shell roles: appended to the command, quoted) and pane environment |
 | `prompt`, `rereview` | see below | prompt files for the first review and for a new head |
@@ -460,9 +463,9 @@ instead, i.e. what magnum will type to start, resume and name each one. `--json`
 
 | Role | Kind | What it does |
 |---|---|---|
-| `codex-judge` | codex | Persistent session; reads the reports, runs `$magnum-review` and posts one review. Effort `xhigh`, `high` for re-reviews, 90 minutes. |
+| `codex-judge` | codex | Persistent session; reads the reports, runs `$magnum-review` and posts one review. Effort `xhigh`, `high` for re-reviews, at most 2 subagents open at once, 90 minutes. Starts fresh instead of resuming once its last turn on the PR ended more than `[pipeline] judge_fresh_after` (90m) ago. |
 | `claude-review` | claude | Persistent session running `/code-review <url> high` (`medium` for re-reviews), leaving out style-only and pre-existing problems and naming each finding's trigger; it also checks every caller of changed behaviour (non-production ones too), what a replaced mechanism did implicitly and any test failure or flake the change brings, and lists the candidates it rejected with the reason; writes `claude-review.md`. |
-| `codex-review` | shell | Types `command codex review --base <merge base>` (the base ref when the merge base is unknown) into a plain pane; its output is tee'd into `codex-review.md`. `codex review` takes custom instructions only as a review target of their own, in place of `--base`, so it gets none of claude-review's extra checks. |
+| `codex-review` | shell | Types `command codex review -c model_reasoning_effort=high --base <merge base>` (its `effort`, so never your global Codex effort; the base ref when the merge base is unknown) into a plain pane; its output is tee'd into `codex-review.md`. `codex review` takes custom instructions only as a review target of their own, in place of `--base`, so it gets none of claude-review's extra checks. |
 | `claude-simplify` | claude | A read-only `/simplify`, alongside the reviewers on a PR's first review, again after `rerun_min_lines` changed lines, or on request (`magnum review --role claude-simplify`, or `--simplify`): four subagents review the diff in parallel for reuse, simplification, efficiency and altitude (one pass without the Agent tool), and instead of editing it writes every qualifying proposal, ranked, removals rather than renames or moves, with exact current and replacement lines, to `claude-simplify.md`. A re-review proposes only on lines changed since the previous review. |
 
 ### Shell roles

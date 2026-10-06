@@ -426,6 +426,10 @@ type ShellData struct {
 	BaseSHA string
 	HeadSHA string
 	URL     string
+	// Model and Effort are the role's model and its effort for the round
+	// (config.Role.EffortFor); "" = the role's model and effort.
+	// codex-review's command passes Effort as a config override.
+	Model, Effort string
 
 	// RunID and ExtraArgs keep full-line templates written for the old
 	// codex_review.sh data working: RunID is Marker without its
@@ -495,6 +499,12 @@ func (d ShellData) filled(role config.Role) ShellData {
 	if d.Capture == "" {
 		d.Capture = role.Capture
 	}
+	if d.Model == "" {
+		d.Model = role.Model
+	}
+	if d.Effort == "" {
+		d.Effort = role.Effort
+	}
 	if d.Marker == "" && d.RunID != "" {
 		d.Marker = DoneMarker(d.RunID)
 	}
@@ -533,6 +543,7 @@ func (d ShellData) shellSafe() (ShellData, error) {
 		Args: quoteAll(d.Args), ExtraArgs: quoteAll(d.ExtraArgs),
 		ReportPath: quoteNonEmpty(d.ReportPath), BaseRef: quoteNonEmpty(d.BaseRef), BaseSHA: quoteNonEmpty(d.BaseSHA),
 		HeadSHA: quoteNonEmpty(d.HeadSHA), URL: quoteNonEmpty(d.URL), Title: quoteNonEmpty(d.Title),
+		Model: quoteNonEmpty(d.Model), Effort: quoteNonEmpty(d.Effort),
 	}
 	return out, nil
 }

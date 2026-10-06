@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -19,9 +20,10 @@ import (
 // herdr types the command into the pane's shell, so the CLI may be a zsh
 // wrapper function or alias that adds its own flags. The launch argv is
 // built by Argv in this order: Resume (resumed sessions only), Name (when a
-// title is known), Model (the role's model, else DefaultModel) and Effort
-// (when the role sets it), Start, Args (only without a wrapper), then the
-// role's args.
+// title is known), Model (the role's model, else DefaultModel), Effort
+// (when the role sets it) and Subagents or NoSubagents (when the role sets
+// max_subagents), Start, Args (only without a wrapper), then the role's
+// args.
 type Kind struct {
 	// Start: extra args always appended.
 	Start []string `toml:"start"`
@@ -40,6 +42,13 @@ type Kind struct {
 	// Effort: args that set reasoning effort {effort}; empty = the effort
 	// reaches prompts only (Role.Effort is a template variable either way).
 	Effort []string `toml:"effort"`
+	// Subagents: args that cap the subagents a session may have open at
+	// once to {subagents} (Role.MaxSubagents, 1 or more), e.g. codex's
+	// ["-c", "agents.max_concurrent_threads_per_session={subagents}"];
+	// NoSubagents: args that turn subagents off (max_subagents = 0). Empty =
+	// the kind cannot cap them, and the role key is ignored.
+	Subagents   []string `toml:"subagents"`
+	NoSubagents []string `toml:"no_subagents"`
 	// Name: args that name the session {title} at launch (claude --name).
 	Name []string `toml:"name"`
 	// Rename: a slash command typed while the agent works to (re)name its
@@ -288,6 +297,9 @@ func DefaultKinds() map[string]Kind {
 			Effort:     []string{"-c", "model_reasoning_effort=" + PlaceholderEffort},
 			Rename:     "/rename " + PlaceholderTitle,
 			LoginCheck: "codex login status", LoginOK: "text:Logged in",
+			// The spawned-agent threads open at once, the primary excluded
+			// (at least 1); agents.enabled = false removes the tools.
+			Subagents: []string{"-c", "agents.max_concurrent_threads_per_session=" + PlaceholderSubagents}, NoSubagents: []string{"-c", "agents.enabled=false"},
 		}),
 		KindClaude: base(Kind{
 			Args:       []string{"--dangerously-skip-permissions"},
@@ -315,12 +327,17 @@ type LaunchArgs struct {
 	Effort  string   // Role.Effort; "" skips Effort
 	Wrapper bool     // the command is a wrapper function (Args are skipped)
 	Extra   []string // Role.Args, appended last as given
+
+	// Subagents is Role.MaxSubagents: nil skips Subagents and NoSubagents,
+	// 0 takes NoSubagents, more takes Subagents.
+	Subagents *int
 }
 
 // Argv builds the args after the command name (herdr shell-quotes each one):
-// Resume, Name, Model (a.Model, else DefaultModel), Effort, Start, Args (no
-// wrapper only), then a.Extra. A group whose value is empty is skipped;
-// placeholders are replaced in every element.
+// Resume, Name, Model (a.Model, else DefaultModel), Effort, Subagents (or
+// NoSubagents for 0), Start, Args (no wrapper only), then a.Extra. A group
+// whose value is empty is skipped; placeholders are replaced in every
+// element.
 func (k Kind) Argv(a LaunchArgs) []string {
 	var out []string
 	add := func(group []string, placeholder, value string) {
@@ -335,6 +352,13 @@ func (k Kind) Argv(a LaunchArgs) []string {
 	add(k.Name, PlaceholderTitle, a.Title)
 	add(k.Model, PlaceholderModel, cmp.Or(a.Model, k.DefaultModel))
 	add(k.Effort, PlaceholderEffort, a.Effort)
+	switch {
+	case a.Subagents == nil:
+	case *a.Subagents == 0:
+		out = append(out, k.NoSubagents...)
+	default:
+		add(k.Subagents, PlaceholderSubagents, strconv.Itoa(*a.Subagents))
+	}
 	out = append(out, k.Start...)
 	if !a.Wrapper {
 		out = append(out, k.Args...)
@@ -452,6 +476,7 @@ func normalizeKinds(kinds map[string]Kind) {
 	for name, k := range kinds {
 		k.Start, k.Args, k.Resume, k.Model = cloneOrNil(k.Start), cloneOrNil(k.Args), cloneOrNil(k.Resume), cloneOrNil(k.Model)
 		k.Effort, k.Name, k.FallbackModels = cloneOrNil(k.Effort), cloneOrNil(k.Name), cloneOrNil(k.FallbackModels)
+		k.Subagents, k.NoSubagents = cloneOrNil(k.Subagents), cloneOrNil(k.NoSubagents)
 		k.SwitchModel, k.DefaultModel = strings.TrimSpace(k.SwitchModel), strings.TrimSpace(k.DefaultModel)
 		k.ResetModel = strings.TrimSpace(k.ResetModel)
 		h := &k.HealthPatterns

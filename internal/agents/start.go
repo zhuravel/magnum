@@ -34,7 +34,7 @@ import (
 //     Name=AgentName, Kind=the kind, Timeout AgentStartTimeout and the args
 //     Kind.Argv builds: resume args, name args with Title (claude --name;
 //     kinds without name args but with a rename command are named later, by
-//     ObserveSnapshot), the role's model and effort args, the kind's start
+//     ObserveSnapshot), the role's model, effort and subagent-cap args, the kind's start
 //     args, its args only when it is not a wrapper, then role.Args. While
 //     the role's model is limited (NoteModelLimit), the model args name the
 //     kind's first fallback model that is not, and the session records it
@@ -150,7 +150,7 @@ func (m *Manager) StartAgent(ctx context.Context, pr store.PR, role config.Role,
 	ref := paneRef{name: name, pane: paneID}
 	model, onFallback := m.startModel(ctx, role, kind)
 	args := kind.Argv(config.LaunchArgs{Session: resume, Title: title, Model: model, Effort: role.Effort,
-		Wrapper: wrapper, Extra: role.Args})
+		Subagents: role.MaxSubagents, Wrapper: wrapper, Extra: role.Args})
 	opts := herdr.AgentStartOptions{Name: name, Kind: kindName, PaneID: paneID, Timeout: AgentStartTimeout, Args: args}
 	launched := m.now()
 	gate := trustGate{since: launched} // a fresh agent was never prompted

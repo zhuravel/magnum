@@ -1054,11 +1054,11 @@ func (m *Manager) StartAgent(ctx context.Context, pr store.PR, role config.Role,
         Name=AgentName, Kind=the kind, Timeout AgentStartTimeout and the args
         Kind.Argv builds: resume args, name args with Title (claude --name;
         kinds without name args but with a rename command are named later,
-        by ObserveSnapshot), the role's model and effort args, the kind's
-        start args, its args only when it is not a wrapper, then role.Args.
-        While the role's model is limited (NoteModelLimit), the model args name
-        the kind's first fallback model that is not, and the session records it
-        (KVSessionModel, an agent.model_switched event).
+        by ObserveSnapshot), the role's model, effort and subagent-cap args,
+        the kind's start args, its args only when it is not a wrapper,
+        then role.Args. While the role's model is limited (NoteModelLimit),
+        the model args name the kind's first fallback model that is not, and the
+        session records it (KVSessionModel, an agent.model_switched event).
       - An agent that comes up blocked (agent.start agent_not_ready, timeout,
         or status blocked, also when adopted) gets the trust-dialog fallback:
         within TrustWindow of its start and before its first prompt,
@@ -1381,6 +1381,10 @@ type ShellData struct {
 	BaseSHA string
 	HeadSHA string
 	URL     string
+	// Model and Effort are the role's model and its effort for the round
+	// (config.Role.EffortFor); "" = the role's model and effort.
+	// codex-review's command passes Effort as a config override.
+	Model, Effort string
 
 	// RunID and ExtraArgs keep full-line templates written for the old
 	// codex_review.sh data working: RunID is Marker without its
@@ -2119,6 +2123,8 @@ const (
 	PlaceholderTitle   = "{title}"
 	PlaceholderModel   = "{model}"
 	PlaceholderEffort  = "{effort}"
+	// PlaceholderSubagents is Role.MaxSubagents in Kind.Subagents.
+	PlaceholderSubagents = "{subagents}"
 )
     Placeholders substituted by Kind.Argv and in Kind.Rename.
 
@@ -2147,6 +2153,10 @@ const DefaultIdleRemoveAfter = 168 * time.Hour
     0): a free slot above pool.min is removed once it has been idle this long.
     Without it every reconcile removed the surplus at once, and the next
     provision wrote about 1 GB again.
+
+const DefaultJudgeSubagents = 2
+    DefaultJudgeSubagents is the judge's max_subagents: on its own it started 53
+    subagent threads in 36 sessions, 27% of the Codex spend.
 
 const DefaultLearnPrompt = "retro.md"
     DefaultLearnPrompt is the retro prompt file.
@@ -2798,6 +2808,13 @@ type Kind struct {
 	// Effort: args that set reasoning effort {effort}; empty = the effort
 	// reaches prompts only (Role.Effort is a template variable either way).
 	Effort []string `toml:"effort"`
+	// Subagents: args that cap the subagents a session may have open at
+	// once to {subagents} (Role.MaxSubagents, 1 or more), e.g. codex's
+	// ["-c", "agents.max_concurrent_threads_per_session={subagents}"];
+	// NoSubagents: args that turn subagents off (max_subagents = 0). Empty =
+	// the kind cannot cap them, and the role key is ignored.
+	Subagents   []string `toml:"subagents"`
+	NoSubagents []string `toml:"no_subagents"`
 	// Name: args that name the session {title} at launch (claude --name).
 	Name []string `toml:"name"`
 	// Rename: a slash command typed while the agent works to (re)name its
@@ -2861,15 +2878,16 @@ type Kind struct {
 
     herdr types the command into the pane's shell, so the CLI may be a zsh
     wrapper function or alias that adds its own flags. The launch argv is built
-    by Argv in this order: Resume (resumed sessions only), Name (when a title
-    is known), Model (the role's model, else DefaultModel) and Effort (when the
-    role sets it), Start, Args (only without a wrapper), then the role's args.
+    by Argv in this order: Resume (resumed sessions only), Name (when a title is
+    known), Model (the role's model, else DefaultModel), Effort (when the role
+    sets it) and Subagents or NoSubagents (when the role sets max_subagents),
+    Start, Args (only without a wrapper), then the role's args.
 
 func (k Kind) Argv(a LaunchArgs) []string
     Argv builds the args after the command name (herdr shell-quotes each one):
-    Resume, Name, Model (a.Model, else DefaultModel), Effort, Start, Args (no
-    wrapper only), then a.Extra. A group whose value is empty is skipped;
-    placeholders are replaced in every element.
+    Resume, Name, Model (a.Model, else DefaultModel), Effort, Subagents (or
+    NoSubagents for 0), Start, Args (no wrapper only), then a.Extra. A group
+    whose value is empty is skipped; placeholders are replaced in every element.
 
 func (k Kind) LoggedIn(stdout, stderr string, exitOK bool) (loggedIn, readable bool)
     LoggedIn reads LoginCheck's output per LoginOK. exitOK is whether the
@@ -2900,6 +2918,10 @@ type LaunchArgs struct {
 	Effort  string   // Role.Effort; "" skips Effort
 	Wrapper bool     // the command is a wrapper function (Args are skipped)
 	Extra   []string // Role.Args, appended last as given
+
+	// Subagents is Role.MaxSubagents: nil skips Subagents and NoSubagents,
+	// 0 takes NoSubagents, more takes Subagents.
+	Subagents *int
 }
     LaunchArgs are the per-start values Kind.Argv substitutes.
 
@@ -3018,6 +3040,14 @@ type Pipeline struct {
 	// (default DefaultRelatedIgnore, the lockfiles; [] = none). A [[watch]]
 	// may override it (Watch.RelatedIgnore).
 	RelatedIgnore []string `toml:"related_ignore"`
+	// JudgeFreshAfter: a judge whose last turn on the PR ended longer ago
+	// than this starts the PR's next round in a fresh session (the recovery
+	// path, which reads the earlier reviews and threads from GitHub) instead
+	// of resuming its conversation, whose prompt cache has gone cold by
+	// then (it lasts about 1.5 hours), so its first turn would re-read the
+	// whole conversation uncached. Default 90m; 0 = always resume. Only the
+	// judge; a continue of a paused turn keeps its conversation.
+	JudgeFreshAfter Duration `toml:"judge_fresh_after"`
 }
     Pipeline is the [pipeline] section.
 
@@ -3227,13 +3257,21 @@ type Role struct {
 	// "" = the watch's identity.
 	Identity string `toml:"identity"`
 	// Model and Effort are passed through the kind's model/effort args
-	// (Kind.Argv) and are template variables ({{.Model}}, {{.Effort}}).
+	// (Kind.Argv) and are template variables ({{.Model}}, {{.Effort}}; a
+	// shell role's command gets them too, codex-review its effort as a
+	// config override).
 	Model  string `toml:"model"`
 	Effort string `toml:"effort"`
 	// RereviewEffort is the effort of a re-review round (a new head after
 	// an earlier review); "" = Effort. The first review and a recovery keep
 	// Effort. See EffortFor.
 	RereviewEffort string `toml:"rereview_effort"`
+	// MaxSubagents caps the subagents the role's agent may have open at
+	// once, passed through its kind's subagents args (0: the kind's
+	// no_subagents args, which turn them off); nil = the CLI's own limit.
+	// A kind without those args ignores it, as it does Effort. The judge
+	// defaults to 2 (DefaultRoles).
+	MaxSubagents *int `toml:"max_subagents"`
 	// Args: session roles append them to the CLI's launch args; shell roles
 	// append them, shell-quoted, to the rendered Command.
 	Args []string `toml:"args"`
@@ -3330,15 +3368,15 @@ func DefaultRoles() []Role
     and the judge's prompt names):
 
       - codex-judge: codex, judge, effort xhigh, rereview_effort high,
-        skill DefaultSkill, prompts judge-*.md, timeout daemon.judge_timeout;
-        aliases judge.
+        max_subagents DefaultJudgeSubagents, skill DefaultSkill, prompts
+        judge-*.md, timeout daemon.judge_timeout; aliases judge.
       - claude-review: claude, prompt claude-review.md, rereview
         claude-rereview.md, restart claude-restart.md, effort high,
         rereview_effort medium; aliases claude.
-      - codex-review: shell, tool codex, command "command codex review --base
-        {{if .BaseSHA}}{{.BaseSHA}}{{else}}{{.BaseRef}}{{end}}" (the merge base,
-        else the base ref), ok_status [0], capture stdout; aliases codex,
-        codex_review.
+      - codex-review: shell, tool codex, effort high, command
+        defaultCodexReviewCommand (its effort as a config override, then the
+        merge base, else the base ref), ok_status [0], capture stdout; aliases
+        codex, codex_review.
       - claude-simplify: claude, runs first, rerun_min_lines
         DefaultSimplifyRerunLines, prompt claude-simplify.md (read-only:
         it writes its proposals to claude-simplify.md), no after, so it runs in
@@ -4274,6 +4312,9 @@ type Agents interface {
 	ResumeID(ctx context.Context, prID int64, role agents.Role) (string, error)
 	Preflight(ctx context.Context, kind string) error
 	Park(ctx context.Context, pr store.PR) error
+	// Quit stops one session's agent and parks its conversation (a cold
+	// judge, coldJudge).
+	Quit(ctx context.Context, s store.Session) error
 	Recover(ctx context.Context, pr store.PR) ([]agents.Recovered, error)
 }
     Agents is the part of *agents.Manager the engine drives.
@@ -9286,6 +9327,13 @@ type RoundInput struct {
 	// commits: Roles hold the judge alone, which re-decides its earlier
 	// findings from the replies (JudgeData.SameHead) at its rereview effort.
 	SameHead bool
+	// ColdJudge (recovery): the judge alone started in a fresh session
+	// because its conversation's prompt cache had gone cold ([pipeline]
+	// judge_fresh_after), while the reviewers kept theirs: the judge gets
+	// the recovery prompt, and the reviewers re-review the commits since
+	// the last review as in a re-review (their rereview prompts and effort)
+	// instead of reviewing the whole PR again.
+	ColdJudge bool
 
 	DryRun bool // the judge posts nothing; GitHub is not consulted
 	// Blind (magnum eval, with DryRun): the round replays a pinned head to

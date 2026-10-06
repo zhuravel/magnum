@@ -409,7 +409,7 @@ func TestRenderGolden(t *testing.T) {
 
 	codexReview := defaultRole(t, RoleCodexReview)
 	withArgs := codexReview
-	withArgs.Args = []string{"-c", "model_reasoning_effort=high"}
+	withArgs.Args = []string{"-c", "model_reasoning_effort=medium"} // after the role's effort, so it wins
 	shells := []struct {
 		golden string
 		role   config.Role
@@ -704,12 +704,63 @@ func TestCodexReviewScriptQuoting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `set -o pipefail; { printf '<!-- magnum:run=r-1 -->\n'; command codex review --base 'origin/it'\''s' '$(whoami)'; } | tee '/tmp/a b/codex.md'; printf '\nMAGNUM_DONE_r-1 %d\n' "$?"`
+	want := `set -o pipefail; { printf '<!-- magnum:run=r-1 -->\n'; command codex review -c model_reasoning_effort=high --base 'origin/it'\''s' '$(whoami)'; } | tee '/tmp/a b/codex.md'; printf '\nMAGNUM_DONE_r-1 %d\n' "$?"`
 	if got != want {
 		t.Fatalf("got  %s\nwant %s", got, want)
 	}
 	if DoneMarker("r-1") != "MAGNUM_DONE_r-1" {
 		t.Fatalf("DoneMarker = %q", DoneMarker("r-1"))
+	}
+}
+
+// codex-review set only its model, so `codex review` ran at the effort of
+// the operator's global Codex config (xhigh): 23% of the Codex spend. Its
+// command passes the role's effort (high) as a config override, the
+// round's effort (ShellData.Effort) when given, a user's role effort when
+// set, and the role's args after it, so a `-c model_reasoning_effort=` in
+// args wins too (Codex applies -c overrides in order).
+func TestCodexReviewRunsAtItsOwnEffortNotTheUsersGlobalOne(t *testing.T) {
+	role := defaultRole(t, RoleCodexReview)
+	if role.Effort != "high" {
+		t.Fatalf("codex-review effort = %q, want high", role.Effort)
+	}
+	d := ShellData{BaseRef: "origin/master", ReportPath: "/r/codex.md", Marker: DoneMarker("r-1")}
+	line := func(r config.Role, d ShellData) string {
+		t.Helper()
+		got, err := ShellLine(r, d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	if got := line(role, d); !strings.Contains(got, "command codex review -c model_reasoning_effort=high --base origin/master; } |") {
+		t.Fatalf("default: %s", got)
+	}
+	user := role
+	user.Effort = "medium"
+	if got := line(user, d); !strings.Contains(got, "command codex review -c model_reasoning_effort=medium --base origin/master; } |") {
+		t.Fatalf("the user's effort: %s", got)
+	}
+	round := d
+	round.Effort = "low"
+	if got := line(role, round); !strings.Contains(got, "-c model_reasoning_effort=low --base") {
+		t.Fatalf("the round's effort: %s", got)
+	}
+	args := role
+	args.Args = []string{"-c", "model_reasoning_effort=minimal"}
+	if got := line(args, d); !strings.Contains(got, "review -c model_reasoning_effort=high --base origin/master -c model_reasoning_effort=minimal; } |") {
+		t.Fatalf("args after the effort: %s", got)
+	}
+	none := role
+	none.Effort = ""
+	if got := line(none, d); !strings.Contains(got, "command codex review --base origin/master; } |") {
+		t.Fatalf("no effort: %s", got)
+	}
+	// The full-line template does the same.
+	sh := role
+	sh.Command, sh.Prompt = "", "codex-review.sh"
+	if got := line(sh, d); !strings.Contains(got, "command codex review -c model_reasoning_effort=high --base origin/master; } |") {
+		t.Fatalf("codex-review.sh: %s", got)
 	}
 }
 

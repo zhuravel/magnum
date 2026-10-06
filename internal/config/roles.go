@@ -50,13 +50,21 @@ type Role struct {
 	// "" = the watch's identity.
 	Identity string `toml:"identity"`
 	// Model and Effort are passed through the kind's model/effort args
-	// (Kind.Argv) and are template variables ({{.Model}}, {{.Effort}}).
+	// (Kind.Argv) and are template variables ({{.Model}}, {{.Effort}}; a
+	// shell role's command gets them too, codex-review its effort as a
+	// config override).
 	Model  string `toml:"model"`
 	Effort string `toml:"effort"`
 	// RereviewEffort is the effort of a re-review round (a new head after
 	// an earlier review); "" = Effort. The first review and a recovery keep
 	// Effort. See EffortFor.
 	RereviewEffort string `toml:"rereview_effort"`
+	// MaxSubagents caps the subagents the role's agent may have open at
+	// once, passed through its kind's subagents args (0: the kind's
+	// no_subagents args, which turn them off); nil = the CLI's own limit.
+	// A kind without those args ignores it, as it does Effort. The judge
+	// defaults to 2 (DefaultRoles).
+	MaxSubagents *int `toml:"max_subagents"`
 	// Args: session roles append them to the CLI's launch args; shell roles
 	// append them, shell-quoted, to the rendered Command.
 	Args []string `toml:"args"`
@@ -235,16 +243,16 @@ func (r Role) ShouldRun(ranBefore, requested bool) bool {
 // before normalization; Normalize fills Mode, Runs, Output, Capture,
 // Timeout and the judge's prompt names):
 //
-//   - codex-judge: codex, judge, effort xhigh, rereview_effort high, skill
-//     DefaultSkill, prompts judge-*.md, timeout daemon.judge_timeout;
-//     aliases judge.
+//   - codex-judge: codex, judge, effort xhigh, rereview_effort high,
+//     max_subagents DefaultJudgeSubagents, skill DefaultSkill, prompts
+//     judge-*.md, timeout daemon.judge_timeout; aliases judge.
 //   - claude-review: claude, prompt claude-review.md, rereview
 //     claude-rereview.md, restart claude-restart.md, effort high,
 //     rereview_effort medium; aliases claude.
-//   - codex-review: shell, tool codex, command "command codex review --base
-//     {{if .BaseSHA}}{{.BaseSHA}}{{else}}{{.BaseRef}}{{end}}" (the merge base,
-//     else the base ref), ok_status [0], capture stdout; aliases codex,
-//     codex_review.
+//   - codex-review: shell, tool codex, effort high, command
+//     defaultCodexReviewCommand (its effort as a config override, then the
+//     merge base, else the base ref), ok_status [0], capture stdout; aliases
+//     codex, codex_review.
 //   - claude-simplify: claude, runs first, rerun_min_lines
 //     DefaultSimplifyRerunLines, prompt claude-simplify.md (read-only: it
 //     writes its proposals to claude-simplify.md), no after, so it runs in
@@ -254,13 +262,13 @@ func (r Role) ShouldRun(ranBefore, requested bool) bool {
 // triage ([triage]).
 func DefaultRoles() []Role {
 	return []Role{
-		{Name: RoleCodexJudge, Kind: KindCodex, Judge: true, Effort: "xhigh", RereviewEffort: "high", Skill: DefaultSkill,
+		{Name: RoleCodexJudge, Kind: KindCodex, Judge: true, Effort: "xhigh", RereviewEffort: "high", MaxSubagents: new(DefaultJudgeSubagents), Skill: DefaultSkill,
 			Prompt: "judge-initial.md", Rereview: "judge-rereview.md", ContinuePrompt: "judge-continue.md",
 			Recovery: "judge-recovery.md", Nudge: "judge-nudge.md",
 			Aliases: []string{"judge"}},
 		{Name: RoleClaudeReview, Kind: KindClaude, Effort: "high", RereviewEffort: "medium", Summary: "deep review for bugs, security and correctness",
 			Prompt: "claude-review.md", Rereview: "claude-rereview.md", Restart: "claude-restart.md", Aliases: []string{"claude"}},
-		{Name: RoleCodexReview, Kind: KindShell, Tool: KindCodex, Command: defaultCodexReviewCommand, Summary: "Codex's own static review of the diff",
+		{Name: RoleCodexReview, Kind: KindShell, Tool: KindCodex, Effort: "high", Command: defaultCodexReviewCommand, Summary: "Codex's own static review of the diff",
 			OKStatus: []int{0}, Capture: CaptureStdout, Aliases: []string{"codex", "codex_review"}},
 		{Name: RoleClaudeSimplify, Kind: KindClaude, Runs: RunsFirst, RerunMinLines: DefaultSimplifyRerunLines, Prompt: "claude-simplify.md",
 			Summary: "simplifications and refactors of the changed code", Aliases: []string{"simplify"}},
@@ -268,11 +276,17 @@ func DefaultRoles() []Role {
 }
 
 // defaultCodexReviewCommand is the codex-review role's command: `codex
-// review` against the PR's merge base, or its base ref when the merge base
-// is unknown. The merge base does not move: with --base origin/master a
-// review of a PR whose base branch gained commits flagged files the PR does
-// not touch.
-const defaultCodexReviewCommand = "command codex review --base {{if .BaseSHA}}{{.BaseSHA}}{{else}}{{.BaseRef}}{{end}}"
+// review` at the role's effort (a config override, so it never runs at the
+// effort of the user's global Codex config; args after it still win)
+// against the PR's merge base, or its base ref when the merge base is
+// unknown. The merge base does not move: with --base origin/master a review
+// of a PR whose base branch gained commits flagged files the PR does not
+// touch.
+const defaultCodexReviewCommand = "command codex review{{if .Effort}} -c model_reasoning_effort={{.Effort}}{{end}} --base {{if .BaseSHA}}{{.BaseSHA}}{{else}}{{.BaseRef}}{{end}}"
+
+// DefaultJudgeSubagents is the judge's max_subagents: on its own it started
+// 53 subagent threads in 36 sessions, 27% of the Codex spend.
+const DefaultJudgeSubagents = 2
 
 func defaultOutput(r Role) string {
 	if r.Judge {
