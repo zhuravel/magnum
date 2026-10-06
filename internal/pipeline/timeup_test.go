@@ -26,8 +26,9 @@ func (e *env) reviewerWarnings(role agents.Role) []string {
 }
 
 // A reviewer still working when its time runs out (the live case: a spec
-// run in the background) is asked once to stop waiting and write its report
-// now, within its run; the report it then writes is its report.
+// run in the background) is asked once to stop its background tasks
+// (TaskStop) and write its report now, within its run, starting with its
+// run marker; the report it then writes is its report.
 func TestAReviewerOutOfTimeIsAskedForItsReport(t *testing.T) {
 	e := newEnv(t)
 	e.ag.behaviors[agents.RoleClaude] = []behavior{hang()}
@@ -50,7 +51,7 @@ func TestAReviewerOutOfTimeIsAskedForItsReport(t *testing.T) {
 		t.Fatalf("time-up sent for run %s, want the reviewer's run %s", up.Run.ID, run.ID)
 	}
 	mustContain(t, "time-up text", up.Text, "Time is up", "40 minutes", filepath.Join(e.reportDir(), "claude-review.md"),
-		"Stop waiting for background", "pending")
+		"Stop every background task you started with TaskStop", agents.ReportMarker(run.ID), "pending")
 	if run.State != store.RunVerified {
 		t.Fatalf("claude run = %s, want verified", run.State)
 	}
@@ -68,8 +69,10 @@ func TestAReviewerOutOfTimeIsAskedForItsReport(t *testing.T) {
 }
 
 // A reviewer that does not answer the time-up within TimeUpGrace is
-// interrupted and reported as timed out, as before; the event says so, and
-// names the background work its agent left running.
+// interrupted and reported as timed out, as before. The background work it
+// started outlives the interrupt, so it is told once more to stop it with
+// TaskStop and do nothing else; what its transcript still shows running
+// StopGrace later is counted in the event (magnum kills nothing).
 func TestAReviewerThatIgnoresTheTimeUpIsInterruptedAfterTheGrace(t *testing.T) {
 	e := newEnv(t)
 	e.ag.behaviors[agents.RoleClaude] = []behavior{hang()}
@@ -83,11 +86,15 @@ func TestAReviewerThatIgnoresTheTimeUpIsInterruptedAfterTheGrace(t *testing.T) {
 	if got := res.Reports[agents.RoleClaude]; got.Status != ReportTimeout {
 		t.Fatalf("claude report = %+v, want timeout", got)
 	}
-	if len(e.ag.timeUps) != 1 {
-		t.Fatalf("time-ups = %d, want 1", len(e.ag.timeUps))
+	if len(e.ag.timeUps) != 2 {
+		t.Fatalf("messages = %d, want the time-up and the stop after the interrupt", len(e.ag.timeUps))
 	}
-	if elapsed := e.clock.Now().Sub(t0); elapsed < e.cfg.Daemon.ReviewerTimeout.Duration+TimeUpGrace {
-		t.Fatalf("elapsed %s, want the timeout and the grace", elapsed)
+	run := e.runOf(agents.RoleClaude, store.RunInitial)
+	if stop := e.ag.timeUps[1]; stop.Run.ID != run.ID || stop.Text != stopBackgroundText {
+		t.Fatalf("after the interrupt: %+v, want %q to run %s", stop, stopBackgroundText, run.ID)
+	}
+	if elapsed := e.clock.Now().Sub(t0); elapsed < e.cfg.Daemon.ReviewerTimeout.Duration+TimeUpGrace+StopGrace {
+		t.Fatalf("elapsed %s, want the timeout, the grace and the stop's grace", elapsed)
 	}
 	if want := "agent:" + agents.AgentName("talkable/talkable", 11920, agents.RoleClaude) + ":esc"; len(e.keys.sends) != 1 || e.keys.sends[0] != want {
 		t.Fatalf("interrupt keys = %v, want %s", e.keys.sends, want)
@@ -96,9 +103,48 @@ func TestAReviewerThatIgnoresTheTimeUpIsInterruptedAfterTheGrace(t *testing.T) {
 	if len(warns) != 1 {
 		t.Fatalf("claude warnings: %q", warns)
 	}
-	mustContain(t, "warning", warns[0], "claude-review report timeout", "interrupted claude-review", "2 background tasks it started still run")
-	if run := e.runOf(agents.RoleClaude, store.RunInitial); run.State != store.RunFailed || store.Deref(run.Outcome) != ReportTimeout {
+	mustContain(t, "warning", warns[0], "claude-review report timeout",
+		"interrupted claude-review; asked it to stop the 2 background tasks it started: 2 still run after 2 minutes")
+	if run.State != store.RunFailed || store.Deref(run.Outcome) != ReportTimeout {
 		t.Fatalf("claude run = %s / %s", run.State, store.Deref(run.Outcome))
+	}
+}
+
+// A reviewer interrupted with background work running is told to stop it
+// (TaskStop) and do nothing else; once its transcript shows none left, the
+// round goes on, and the event says it stopped them.
+func TestAnInterruptedReviewerIsToldToStopItsBackgroundTasks(t *testing.T) {
+	e := newEnv(t)
+	e.ag.behaviors[agents.RoleClaude] = []behavior{endSilently()}
+	e.ag.background = map[agents.Role]int{agents.RoleClaude: 1}
+	e.ag.onTimeUp = func(f *fakeAgents, run store.Run, text string) error {
+		if text == stopBackgroundText {
+			f.mu.Lock()
+			f.background[agents.RoleClaude] = 0
+			f.mu.Unlock()
+		}
+		return nil
+	}
+	e.ag.behaviors[agents.RoleJudge] = []behavior{e.judgePosts(609, "COMMENTED", "COMMENT").behavior(t)}
+
+	res, err := e.r.RunRound(e.ctx, e.input(KindInitial))
+	if err != nil {
+		t.Fatalf("RunRound: %v", err)
+	}
+	if res.Reports[agents.RoleClaude].Status != ReportMissing {
+		t.Fatalf("claude report = %+v", res.Reports[agents.RoleClaude])
+	}
+	if len(e.keys.sends) != 1 {
+		t.Fatalf("interrupt keys = %v", e.keys.sends)
+	}
+	if len(e.ag.timeUps) != 1 || e.ag.timeUps[0].Text != stopBackgroundText {
+		t.Fatalf("messages = %+v, want only the stop", e.ag.timeUps)
+	}
+	mustContain(t, "stop message", stopBackgroundText, "TaskStop", "do nothing else")
+	warns := e.reviewerWarnings(agents.RoleClaude)
+	if len(warns) != 1 || warns[0] != "claude-review report missing: finished without writing claude-review.md; "+
+		"interrupted claude-review; asked it to stop the 1 background task it started: it did" {
+		t.Fatalf("claude warnings: %q", warns)
 	}
 }
 

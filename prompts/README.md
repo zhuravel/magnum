@@ -156,11 +156,15 @@ reviewer, ...), initial, rereview and restart alike.
 | `.NotesPath` | the repository notes file (see Repository notes); the role reads it first. Empty when there is none |
 | `.PostMerge` | GitHub merged the PR before magnum reviewed `.HeadSHA` (a post-merge review); the prompts that name the PR say "The PR is already merged; review it anyway." only then |
 | `.Budget` | the role's `timeout` in words (`40 minutes`): the claude prompts give it as the time budget, within which the turn must end with the report written (background work only when it finishes well within it, waited for before the report) |
+| `.RunID` | the run the prompt starts. The shipped prompts ask for `<!-- magnum:run={{.RunID}} -->` as the report's first line; a prompt that names this marker makes it required: a report without it, or with another run's, is stale (`missing`), since report paths are per head and an earlier run that kept working may write there. A prompt that does not name it needs none |
 
 When a session role's `timeout` passes, magnum types one fixed last call into its agent within the same
-run (not a prompt file): time is up, stop waiting for background work, write the report to `.ReportPath`
-now with the checks still running listed as pending. The turn gets 5 more minutes before it is
-interrupted as timed out.
+run (not a prompt file): time is up, stop every background task with TaskStop, write the report to
+`.ReportPath` now (starting with its run marker, when the prompt named one) with the checks stopped or
+not run listed as pending. The turn gets 5 more minutes before it is interrupted as timed out. A
+reviewer interrupted with background work still running (its transcript shows it) gets one more fixed
+message: stop every background task with TaskStop and do nothing else; magnum then waits up to 2
+minutes for the transcript to show none and counts what is left in the warning.
 
 A role without its own `<name>-rereview.md` (or `rereview` key) reuses its initial prompt for a new
 head. It then sees `.Mode` as `rereview` with `.PreviousHeadSHA` and `.Since` filled, so one file can
@@ -299,7 +303,7 @@ before they are substituted, because the result is typed into a shell.
 | `.BaseRef` | the base ref, e.g. `origin/master` or the parent branch of a stacked PR |
 | `.BaseSHA` | the merge base of the head and the base; empty when unknown. It does not move when the base branch gains commits, so codex-review passes it to `--base` (`{{if .BaseSHA}}{{.BaseSHA}}{{else}}{{.BaseRef}}{{end}}`) |
 | `.HeadSHA`, `.URL` | the commit under review and the pull request |
-| `.RunID` | the run id, i.e. `.Marker` without its `MAGNUM_DONE_` prefix |
+| `.RunID` | the run id, i.e. `.Marker` without its `MAGNUM_DONE_` prefix; a line that prints `<!-- magnum:run={{.RunID}} -->` makes it the report's required first line, as for a session role |
 | `.ExtraArgs` | the older name of `.Args`, for full-line templates written for `codex-review.sh` |
 
 `.Marker` and `.RunID` are restricted to letters, digits, `.`, `_` and `-`. A template that uses
@@ -461,14 +465,16 @@ instead, i.e. what magnum will type to start, resume and name each one. `--json`
 A shell role's `command` is a template over the shell variables. magnum types it as one line, like this:
 
 ```text
-printf '\033]0;%s\007' <title>; DISABLE_AUTO_TITLE=true; set -o pipefail; <command> <args...> | tee <output>; printf '\nMAGNUM_DONE_<run> %d\n' "$?"
+printf '\033]0;%s\007' <title>; DISABLE_AUTO_TITLE=true; set -o pipefail; { printf '<!-- magnum:run=<run> -->\n'; <command> <args...>; } | tee <output>; printf '\nMAGNUM_DONE_<run> %d\n' "$?"
 ```
 
-The `| tee` part is only there with `capture = "stdout"`. `pipefail` makes the printed status the
-command's rather than `tee`'s; a status outside the role's `ok_status` fails the role even when it wrote
-output. To control the whole line, set `prompt` to a `.sh` template instead of `command`; it must print
-the done marker itself, on a line of its own and followed by the status (a bare marker counts as
-success). `codex-review.sh` shows the line magnum types for codex-review.
+The braces, the run marker and the `| tee` are only there with `capture = "stdout"`: the report then
+starts with the run's marker, followed by the command's output, and a report without that marker is
+stale. `pipefail` makes the printed status the command's rather than `tee`'s; a status outside the
+role's `ok_status` fails the role even when it wrote output. To control the whole line, set `prompt` to
+a `.sh` template instead of `command`; it must print the done marker itself, on a line of its own and
+followed by the status (a bare marker counts as success). `codex-review.sh` shows the line magnum types
+for codex-review.
 
 ## Examples
 

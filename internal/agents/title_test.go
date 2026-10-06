@@ -43,7 +43,7 @@ func TestShellLineTitlePrefix(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := `printf '\033]0;%s\007' 'PR #11920 codex-review - talkable'; DISABLE_AUTO_TITLE=true; set -o pipefail; ` +
-		`command codex review --base origin/master | tee /tmp/codex.md; printf '\nMAGNUM_DONE_r-1 %d\n' "$?"`
+		`{ printf '<!-- magnum:run=r-1 -->\n'; command codex review --base origin/master; } | tee /tmp/codex.md; printf '\nMAGNUM_DONE_r-1 %d\n' "$?"`
 	if got != want {
 		t.Fatalf("got  %s\nwant %s", got, want)
 	}

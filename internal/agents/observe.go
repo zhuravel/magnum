@@ -92,7 +92,10 @@ func (m *Manager) ObserveSnapshot(ctx context.Context, snap herdr.Snapshot) ([]O
 //     working + a submitted run -> run working (working_seen_at).
 //     idle_ticks >= CompletionIdleTicks + a submitted/working run -> run ended,
 //     ObsCompleted. working with no pending/submitted/working run (outside a
-//     short grace after start/prompt) -> ObsHumanActive. blocked -> ObsBlocked,
+//     short grace after start/prompt) -> ObsHumanActive, unless the agent is
+//     a claude agent whose transcript shows a task notification began the
+//     turn (background work of an earlier run resumed it; see
+//     notificationTurn). blocked -> ObsBlocked,
 //     or ObsPromptDenied when a pending/submitted/working run is in flight,
 //     the kind's on_permission_prompt is "deny" and the screen shows a
 //     permission prompt, which is answered No (see answerPermission; never
@@ -186,12 +189,12 @@ func (m *Manager) observeOne(ctx context.Context, s store.Session, snap herdr.Sn
 	o.Status = a.AgentStatus
 	idle := a.AgentStatus == herdr.StatusIdle || a.AgentStatus == herdr.StatusDone
 	busy := a.AgentStatus == herdr.StatusWorking || a.AgentStatus == herdr.StatusBlocked
+	sid := store.Deref(s.SessionID) // the agent's own session id (a claude agent's transcript)
+	if a.AgentSession != nil && a.AgentSession.Value != "" {
+		sid = a.AgentSession.Value
+	}
 	held := false // idle, but background work keeps the turn going
 	if idle && o.Run != nil && (o.Run.State == store.RunSubmitted || o.Run.State == store.RunWorking) {
-		sid := store.Deref(s.SessionID)
-		if a.AgentSession != nil && a.AgentSession.Value != "" {
-			sid = a.AgentSession.Value
-		}
 		o.Background, held = m.backgroundWait(ctx, s, sid, *o.Run)
 	}
 	err := m.d.Store.TransitionSession(ctx, s.ID, liveStates, store.SessionLive, func(u *store.SessionUpdate) {
@@ -245,7 +248,8 @@ func (m *Manager) observeOne(ctx context.Context, s store.Session, snap herdr.Sn
 			}
 			m.nameAgent(ctx, s, pane, terminalTitle(a, panes[pane]))
 		}
-		if len(runs) == 0 && !recent(s.StartedAt, now) && (s.LastPromptAt == nil || !recent(*s.LastPromptAt, now)) {
+		if len(runs) == 0 && !recent(s.StartedAt, now) && (s.LastPromptAt == nil || !recent(*s.LastPromptAt, now)) &&
+			!m.notificationTurn(s, sid) {
 			if err := m.d.Store.UpdatePR(ctx, s.PRID, func(u *store.PRUpdate) { u.Set("human_active_at", now) }); err != nil {
 				return o, fmt.Errorf("agents: observe pr %d human activity: %w", s.PRID, err)
 			}

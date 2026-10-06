@@ -235,7 +235,7 @@ func TestCodexReviewFallsBackToTheBaseRef(t *testing.T) {
 	if _, err := e.r.RunRound(e.ctx, in); err != nil {
 		t.Fatal(err)
 	}
-	if len(e.ag.codexCalls) != 1 || !strings.Contains(e.ag.codexCalls[0].Script, "command codex review --base origin/master |") {
+	if len(e.ag.codexCalls) != 1 || !strings.Contains(e.ag.codexCalls[0].Script, "command codex review --base origin/master; } |") {
 		t.Fatalf("codex calls = %+v", e.ag.codexCalls)
 	}
 }

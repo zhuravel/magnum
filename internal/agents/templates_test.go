@@ -89,7 +89,7 @@ func roleFixture() RoleData {
 		HeadSHA: "d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3", PreviousHeadSHA: "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0",
 		BaseSHA:    "0123456789abcdef0123456789abcdef01234567",
 		ReportPath: "/Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/claude-review.md",
-		Budget:     "40 minutes",
+		Budget:     "40 minutes", RunID: "r-20261003T120000-7",
 	}
 }
 
@@ -661,7 +661,7 @@ func TestCodexReviewScriptQuoting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `set -o pipefail; command codex review --base 'origin/it'\''s' '$(whoami)' | tee '/tmp/a b/codex.md'; printf '\nMAGNUM_DONE_r-1 %d\n' "$?"`
+	want := `set -o pipefail; { printf '<!-- magnum:run=r-1 -->\n'; command codex review --base 'origin/it'\''s' '$(whoami)'; } | tee '/tmp/a b/codex.md'; printf '\nMAGNUM_DONE_r-1 %d\n' "$?"`
 	if got != want {
 		t.Fatalf("got  %s\nwant %s", got, want)
 	}
@@ -680,18 +680,67 @@ func TestShellLineCommandArgsCapture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// capture = stdout: the run's marker, then the command's output, tee'd
+	// into the report.
 	want := `printf '\033]0;%s\007' 'PR #7 lint - r'; DISABLE_AUTO_TITLE=true; set -o pipefail; ` +
-		`bin/lint --since origin/main --url https://github.com/o/r/pull/7 --head abc123 --format 'md table' | tee /rep/lint.md; printf '\nMAGNUM_DONE_r-5 %d\n' "$?"`
+		`{ printf '<!-- magnum:run=r-5 -->\n'; bin/lint --since origin/main --url https://github.com/o/r/pull/7 --head abc123 --format 'md table'; } | tee /rep/lint.md; printf '\nMAGNUM_DONE_r-5 %d\n' "$?"`
 	if got != want {
 		t.Fatalf("got  %s\nwant %s", got, want)
 	}
-	// capture = file: the command writes its report itself, no tee.
+	// capture = file: the command writes its report itself, no tee and no
+	// marker.
 	role.Capture = config.CaptureFile
 	role.Command = "bin/lint --out {{.ReportPath}}"
 	role.Args = nil
 	d.Title = ""
 	if got, err = ShellLine(role, d); err != nil || got != `set -o pipefail; bin/lint --out /rep/lint.md; printf '\nMAGNUM_DONE_r-5 %d\n' "$?"` {
 		t.Fatalf("capture file = %q, %v", got, err)
+	}
+}
+
+// Every shipped reviewer prompt, in every mode, asks for the run's marker
+// as the report's first line: a report without it is stale.
+func TestReviewerPromptsAskForTheRunMarker(t *testing.T) {
+	for _, file := range []string{"claude-review.md", "claude-rereview.md", "claude-restart.md", "claude-simplify.md"} {
+		for _, mode := range []string{ModeInitial, ModeRereview, ModeRestart} {
+			d := roleFixture()
+			d.Mode = mode
+			if mode == ModeRestart {
+				d.RestartedFrom = "f1cc4f9e0d1c2b3a4f5e6d7c8b9a0f1e2d3c4b5a"
+			}
+			got, err := RenderPrompt(prompt(t, file), d)
+			if err != nil {
+				t.Fatalf("%s (%s): %v", file, mode, err)
+			}
+			if !strings.Contains(got, "first line must be `"+ReportMarker(d.RunID)+"`") {
+				t.Errorf("%s (%s) does not ask for the marker:\n%s", file, mode, got)
+			}
+		}
+	}
+}
+
+// A report starts with its run's marker; ReportRun reads it back and what
+// follows its line, past leading blank lines (a byte-order mark too).
+func TestReportRunReadsTheMarkerOnAReportsFirstLine(t *testing.T) {
+	if got := ReportMarker("r-20261003T120000-8"); got != "<!-- magnum:run=r-20261003T120000-8 -->" {
+		t.Fatalf("ReportMarker = %q", got)
+	}
+	for _, tc := range []struct {
+		name, report, run, rest string
+	}{
+		{"its marker", ReportMarker("r-1") + "\n## P2 x\n", "r-1", "## P2 x\n"},
+		{"after blank lines", "\ufeff\n  \n" + ReportMarker("r-1") + "\r\n## P2 x\n", "r-1", "## P2 x\n"},
+		{"the marker alone", ReportMarker("r-1"), "r-1", ""},
+		{"no marker", "## P2 x\n", "", "## P2 x\n"},
+		{"a marker below the first line", "# Review\n" + ReportMarker("r-1") + "\n", "", "# Review\n" + ReportMarker("r-1") + "\n"},
+		{"a marker with text around it", "see " + ReportMarker("r-1") + "\n", "", "see " + ReportMarker("r-1") + "\n"},
+		{"a malformed marker", "<!-- magnum:run=r 1 -->\n", "", "<!-- magnum:run=r 1 -->\n"},
+		{"empty", "", "", ""},
+	} {
+		run, rest := ReportRun([]byte(tc.report))
+		if run != tc.run || string(rest) != tc.rest {
+			t.Errorf("%s: ReportRun = %q, %q; want %q, %q", tc.name, run, rest, tc.run, tc.rest)
+		}
 	}
 }
 

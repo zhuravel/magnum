@@ -64,9 +64,11 @@ func TestHappyPathInitialRound(t *testing.T) {
 		t.Errorf("codex call = %+v (run %s)", cc, codexRun.ID)
 	}
 	// codex review runs against the merge base, which does not move with the base branch.
-	mustContain(t, "codex script", cc.Script, "command codex review --base base000111222333444555666777888999aaabbb |", filepath.Join(dir, "codex-review.md"), "MAGNUM_DONE_"+codexRun.ID)
-	// The pane's terminal title (herdr sidebar) is set first; the marker stays last.
-	if !strings.HasPrefix(cc.Script, `printf '\033]0;%s\007' 'PR #11920 codex-review - talkable'; DISABLE_AUTO_TITLE=true; set -o pipefail; command codex review `) ||
+	mustContain(t, "codex script", cc.Script, "command codex review --base base000111222333444555666777888999aaabbb; } |", filepath.Join(dir, "codex-review.md"), "MAGNUM_DONE_"+codexRun.ID)
+	// The pane's terminal title (herdr sidebar) is set first, the report
+	// starts with the run's marker; the done marker stays last.
+	if !strings.HasPrefix(cc.Script, `printf '\033]0;%s\007' 'PR #11920 codex-review - talkable'; DISABLE_AUTO_TITLE=true; set -o pipefail; `+
+		`{ printf '`+agents.ReportMarker(codexRun.ID)+`\n'; command codex review `) ||
 		!strings.HasSuffix(cc.Script, `; printf '\nMAGNUM_DONE_`+codexRun.ID+` %d\n' "$?"`) {
 		t.Errorf("codex script = %q", cc.Script)
 	}

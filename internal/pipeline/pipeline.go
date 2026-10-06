@@ -105,6 +105,10 @@ const (
 	// for its report (round.timeUp), to write it and end its turn before it
 	// is interrupted as timed out.
 	TimeUpGrace = 5 * time.Minute
+	// StopGrace bounds the wait for an interrupted reviewer, told to stop
+	// the background tasks it left running (round.stopReviewer), until its
+	// transcript shows none.
+	StopGrace = 2 * time.Minute
 )
 
 // ErrInvalid marks a RoundInput or Runner that cannot run a round.
@@ -128,9 +132,10 @@ type Agents interface {
 	SwitchModel(ctx context.Context, s store.Session, model, reason string) error
 	FallbackPrompt(d agents.FallbackData) (string, error)
 	// A reviewer whose time ran out (see round.timeUp): TimeUp types the
-	// last call into its agent within its run; BackgroundTasks counts the
-	// work a claude agent started in the background during a run and left
-	// running (ok false: unknown).
+	// last call into its agent within its run, and after an interrupt the
+	// message to stop its background work (round.stopReviewer);
+	// BackgroundTasks counts the work a claude agent started in the
+	// background during a run and left running (ok false: unknown).
 	TimeUp(ctx context.Context, run store.Run, text string) error
 	BackgroundTasks(ctx context.Context, run store.Run) (int, bool)
 }
@@ -456,7 +461,13 @@ type round struct {
 	// cont is each role's latest continuation run on a fallback model
 	// (modelFallback): the run a restart must settle in place of the one
 	// the stage started with. Guarded by mu; reset by a restart.
-	cont   map[string]store.Run
+	cont map[string]store.Run
+	// marks is the run each role's report must name in its first line
+	// (agents.ReportMarker): the run whose prompt or shell line named that
+	// marker, also for its continuations on fallback models; a role
+	// without one (its prompt names no marker) is read as before. Guarded
+	// by mu.
+	marks  map[string]string
 	start  time.Time
 	health map[string]*config.HealthRegexps // compiled health patterns by agent kind (nil = the defaults)
 	ready  agents.Readiness                 // the readiness step's outcome (guarded by mu; zero = none ran)

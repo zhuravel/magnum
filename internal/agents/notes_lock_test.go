@@ -132,11 +132,11 @@ func TestCodexReviewUsesTheMergeBase(t *testing.T) {
 	role := defaultRole(t, RoleCodexReview)
 	d := ShellData{BaseRef: "origin/master", BaseSHA: "0123456789abcdef0123456789abcdef01234567", ReportPath: "/r/codex.md", Marker: DoneMarker("r-1")}
 	got, err := ShellLine(role, d)
-	if err != nil || !strings.Contains(got, "command codex review --base 0123456789abcdef0123456789abcdef01234567 |") {
+	if err != nil || !strings.Contains(got, "command codex review --base 0123456789abcdef0123456789abcdef01234567; } |") {
 		t.Fatalf("with a merge base: %v\n%s", err, got)
 	}
 	d.BaseSHA = ""
-	if got, err := ShellLine(role, d); err != nil || !strings.Contains(got, "command codex review --base origin/master |") {
+	if got, err := ShellLine(role, d); err != nil || !strings.Contains(got, "command codex review --base origin/master; } |") {
 		t.Fatalf("without a merge base: %v\n%s", err, got)
 	}
 
@@ -144,7 +144,7 @@ func TestCodexReviewUsesTheMergeBase(t *testing.T) {
 	sh := role
 	sh.Command, sh.Prompt = "", "codex-review.sh"
 	d.BaseSHA = "abc1234"
-	if got, err := ShellLine(sh, d); err != nil || !strings.Contains(got, "--base abc1234 |") {
+	if got, err := ShellLine(sh, d); err != nil || !strings.Contains(got, "--base abc1234; } |") {
 		t.Fatalf("codex-review.sh: %v\n%s", err, got)
 	}
 	d.BaseSHA, d.BaseRef = "", ""

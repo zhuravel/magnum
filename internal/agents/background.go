@@ -30,7 +30,10 @@ import (
 // the session's transcript, the JSONL file Claude Code appends every entry
 // to, and holds the run open while background work started during the run
 // has neither notified nor been stopped (TaskStop), or while the agent has
-// not answered a notification yet.
+// not answered a notification yet. A notification that resumes the agent
+// with no run in flight (work an earlier run left running) starts a turn
+// nobody typed: the observer reads where the turn began before it takes
+// the agent for a human's (notificationTurn).
 
 // EventBackgroundWait is recorded once per run when background work holds
 // an idle claude agent's run open (data: role, run, tasks).
@@ -48,17 +51,24 @@ const (
 // in flight. mu guards everything; the observer and BackgroundTasks read the
 // transcript under it, TimeUp sets timeUp.
 type bgWatch struct {
-	mu     sync.Mutex
-	run    string
+	mu  sync.Mutex
+	run string // "" = no run: the observer's watch of an agent working without one (turnWatch)
+	// since: entries stamped before it are not the run's (its creation,
+	// less transcriptSkew; zero without a run).
+	since  time.Time
 	sid    string // the Claude session id the transcript is named after
 	path   string // "" = not located yet
-	offset int64  // read up to here (after the last complete line); -1 = start at the run
+	offset int64  // read up to here (after the last complete line); -1 = start at the run (or the last turn's start)
 	// tasks are the background work started during the run that has not
 	// finished: tool_use id -> its task id ("" until its result names one).
 	tasks map[string]string
 	stops map[string]string // TaskStop/KillShell tool_use id -> the task it stops
 	note  time.Time         // the newest task notification
 	reply time.Time         // the newest assistant entry
+	// notifiedTurn: the newest turn the transcript shows began with a task
+	// notification (background work finishing), not a prompt typed into
+	// the pane.
+	notifiedTurn bool
 	// timeUp: the agent was told to stop waiting for its background work
 	// (TimeUp), so that work no longer holds the run.
 	timeUp bool
@@ -69,16 +79,33 @@ type bgWatch struct {
 // reset forgets what was read (a new session id, a transcript that shrank).
 func (w *bgWatch) reset() {
 	w.offset, w.tasks, w.stops, w.note, w.reply = -1, map[string]string{}, map[string]string{}, time.Time{}, time.Time{}
+	w.notifiedTurn = false
 }
 
 // watch is the bgWatch of session s for run, a fresh one when s had none or
 // one of another run.
-func (m *Manager) watch(sessionID int64, run string) *bgWatch {
+func (m *Manager) watch(sessionID int64, run store.Run) *bgWatch {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	w := m.bg[sessionID]
-	if w == nil || w.run != run {
-		w = &bgWatch{run: run}
+	if w == nil || w.run != run.ID {
+		w = &bgWatch{run: run.ID, since: run.CreatedAt.Add(-transcriptSkew)}
+		w.reset()
+		m.bg[sessionID] = w
+	}
+	return w
+}
+
+// turnWatch is the bgWatch the observer reads for session s while no run
+// is in flight: its last run's, which goes on from where that run's reads
+// stopped, else one without a run, which starts at the transcript's last
+// turn.
+func (m *Manager) turnWatch(sessionID int64) *bgWatch {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	w := m.bg[sessionID]
+	if w == nil {
+		w = &bgWatch{}
 		w.reset()
 		m.bg[sessionID] = w
 	}
@@ -95,10 +122,10 @@ func (m *Manager) backgroundWait(ctx context.Context, s store.Session, sid strin
 	if m.sessionKind(s) != KindClaude || sid == "" {
 		return 0, false
 	}
-	w := m.watch(s.ID, run.ID)
+	w := m.watch(s.ID, run)
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if !m.readTranscript(s, sid, run, w) {
+	if !m.readTranscript(s, sid, w) {
 		return 0, false
 	}
 	tasks = len(w.tasks)
@@ -127,23 +154,43 @@ func (m *Manager) BackgroundTasks(ctx context.Context, run store.Run) (int, bool
 	if err != nil || m.sessionKind(s) != KindClaude || store.Deref(s.SessionID) == "" {
 		return 0, false
 	}
-	w := m.watch(s.ID, run.ID)
+	w := m.watch(s.ID, run)
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if !m.readTranscript(s, store.Deref(s.SessionID), run, w) {
+	if !m.readTranscript(s, store.Deref(s.SessionID), w) {
 		return 0, false
 	}
 	return len(w.tasks), true
 }
 
+// notificationTurn reports whether the claude agent of session s (Claude
+// Code session sid), seen working with no run in flight, works on a turn a
+// task notification began: background work it started earlier finished and
+// resumed it, nobody typed into its pane. The newest turn-starting user
+// entry of its transcript tells (Claude Code's turnOrigin or origin, else
+// a text that is a <task-notification>). Any other kind, and a transcript
+// it cannot read, report false: the turn counts as a human's, as before.
+func (m *Manager) notificationTurn(s store.Session, sid string) bool {
+	if m.sessionKind(s) != KindClaude || sid == "" {
+		return false
+	}
+	w := m.turnWatch(s.ID)
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return m.readTranscript(s, sid, w) && w.notifiedTurn
+}
+
 // TimeUp sends text to the agent of run's session within that run, without
 // a new run (as continueAfterDeny sends after_deny_prompt): the pipeline's
-// last call to a reviewer whose time ran out to write its report now. From
-// then on the agent's background work no longer holds the run open (the
-// text tells it to stop waiting for that work); a task notification it has
-// not answered still does. The session's idle_ticks are reset and its
-// last_prompt_at set. A run without a live agent session fails with
-// ErrNoSession (ErrNotAgent for a shell role's pane).
+// last call to a reviewer whose time ran out to stop its background tasks
+// and write its report now, or, once the reviewer was interrupted, to stop
+// the background tasks it left running. From then on the agent's
+// background work no longer holds the run open (the text tells it to stop
+// that work); a task notification it has not answered still does. The
+// session's idle_ticks are reset and its last_prompt_at set (so the turn
+// the text starts is not taken for someone typing). A run without a live
+// agent session fails with ErrNoSession (ErrNotAgent for a shell role's
+// pane).
 func (m *Manager) TimeUp(ctx context.Context, run store.Run, text string) error {
 	if run.SessionID == nil {
 		return fmt.Errorf("agents: time up %s: %w", run.ID, ErrNoSession)
@@ -171,7 +218,7 @@ func (m *Manager) TimeUp(ctx context.Context, run store.Run, text string) error 
 	if _, err := m.d.Herdr.AgentPrompt(ctx, target(s), text, nil); err != nil {
 		return fmt.Errorf("agents: time up %s: %w", run.ID, mapHerdr(err))
 	}
-	w := m.watch(s.ID, run.ID)
+	w := m.watch(s.ID, run)
 	w.mu.Lock()
 	w.timeUp = true
 	w.mu.Unlock()
@@ -186,18 +233,19 @@ func (m *Manager) TimeUp(ctx context.Context, run store.Run, text string) error 
 }
 
 // readTranscript brings w up to date with what session sid's transcript
-// gained since the last read, starting at run's creation. It reports
-// whether the transcript could be read (a failure is logged once).
-func (m *Manager) readTranscript(s store.Session, sid string, run store.Run, w *bgWatch) bool {
+// gained since the last read, starting at w's run's creation (without a
+// run, at the transcript's last turn). It reports whether the transcript
+// could be read (a failure is logged once).
+func (m *Manager) readTranscript(s store.Session, sid string, w *bgWatch) bool {
 	if w.sid != sid {
 		w.sid, w.path = sid, ""
 		w.reset()
 	}
-	err := m.readNew(s, run, w)
+	err := m.readNew(s, w)
 	if err != nil {
 		if msg := err.Error(); msg != w.failed {
 			w.failed = msg
-			m.logf("agents: %s: cannot read its Claude transcript, so its run ends when herdr shows it idle: %v", s.Role, err)
+			m.logf("agents: %s: cannot read its Claude transcript, so its turns end when herdr shows it idle and count as typed: %v", s.Role, err)
 		}
 		return false
 	}
@@ -205,7 +253,7 @@ func (m *Manager) readTranscript(s store.Session, sid string, run store.Run, w *
 	return true
 }
 
-func (m *Manager) readNew(s store.Session, run store.Run, w *bgWatch) error {
+func (m *Manager) readNew(s store.Session, w *bgWatch) error {
 	if w.path == "" {
 		p, err := m.transcriptPath(s, w.sid)
 		if err != nil {
@@ -227,13 +275,17 @@ func (m *Manager) readNew(s store.Session, run store.Run, w *bgWatch) error {
 		w.path = ""
 		return fmt.Errorf("%s is not a file", f.Name())
 	}
-	since := run.CreatedAt.Add(-transcriptSkew)
 	size := st.Size()
 	if w.offset > size {
 		w.reset()
 	}
 	if w.offset < 0 {
-		if w.offset, err = transcriptStart(f, size, since); err != nil {
+		if w.run == "" {
+			w.offset, err = lastTurnStart(f, size)
+		} else {
+			w.offset, err = transcriptStart(f, size, w.since)
+		}
+		if err != nil {
 			return err
 		}
 	}
@@ -251,7 +303,7 @@ func (m *Manager) readNew(s store.Session, run store.Run, w *bgWatch) error {
 		return nil // one entry still being written
 	}
 	for line := range bytes.SplitSeq(buf[:end], []byte("\n")) {
-		w.apply(line, since)
+		w.apply(line)
 	}
 	w.offset += int64(end + 1)
 	return nil
@@ -317,11 +369,42 @@ func (m *Manager) claudeDir(s store.Session) string {
 }
 
 // transcriptStart is an offset of r (size bytes) before which every
-// complete line is stamped before since: it reads backwards,
-// transcriptChunk at a time, to the last line stamped before since (lines
-// without a timestamp never stop it), so a long session costs only its
-// tail. 0 when no line is older.
+// complete line is stamped before since: the end of the last line stamped
+// before since (lines without a timestamp never stop it), so a long
+// session costs only its tail. 0 when no line is older.
 func transcriptStart(r io.ReaderAt, size int64, since time.Time) (int64, error) {
+	_, end, ok, err := lastLine(r, size, func(line []byte) bool {
+		at, ok := lineTime(line)
+		return ok && at.Before(since)
+	})
+	if !ok {
+		return 0, err
+	}
+	return end, nil
+}
+
+// lastTurnStart is the offset of the transcript's last turn-starting user
+// entry (see tEntry.prompt) in r (size bytes), where a watch without a run
+// starts reading; 0 when there is none.
+func lastTurnStart(r io.ReaderAt, size int64) (int64, error) {
+	start, _, _, err := lastLine(r, size, func(line []byte) bool {
+		if !bytes.Contains(line, []byte(`"user"`)) {
+			return false // most lines: no JSON decoding
+		}
+		var e tEntry
+		if json.Unmarshal(line, &e) != nil || e.IsSidechain {
+			return false
+		}
+		_, ok := e.prompt(contentBlocks(e.Message.Content))
+		return ok
+	})
+	return start, err
+}
+
+// lastLine finds the last line of r (size bytes) that match accepts,
+// reading backwards transcriptChunk at a time, and returns where it starts
+// and ends (past its newline, at most size).
+func lastLine(r io.ReaderAt, size int64, match func(line []byte) bool) (start, end int64, ok bool, err error) {
 	pos := size
 	var tail []byte // the bytes after pos not looked at yet: the start of a line that began before pos
 	for pos > 0 {
@@ -329,7 +412,7 @@ func transcriptStart(r io.ReaderAt, size int64, since time.Time) (int64, error) 
 		pos -= n
 		buf := make([]byte, n, n+int64(len(tail)))
 		if _, err := r.ReadAt(buf, pos); err != nil && !errors.Is(err, io.EOF) {
-			return 0, err
+			return 0, 0, false, err
 		}
 		buf = append(buf, tail...)
 		first := 0 // buf[first:] holds whole lines
@@ -345,14 +428,15 @@ func transcriptStart(r io.ReaderAt, size int64, since time.Time) (int64, error) 
 		for len(lines) > 0 {
 			body := bytes.TrimSuffix(lines, []byte("\n"))
 			i := bytes.LastIndexByte(body, '\n')
-			if at, ok := lineTime(body[i+1:]); ok && at.Before(since) {
-				return min(pos+int64(first)+int64(len(lines)), size), nil
+			if match(body[i+1:]) {
+				at := pos + int64(first)
+				return at + int64(i+1), min(at+int64(len(lines)), size), true, nil
 			}
 			lines = body[:i+1]
 		}
 		tail = buf[:first]
 	}
-	return 0, nil
+	return 0, 0, false, nil
 }
 
 // lineTime is the timestamp of a transcript entry.
@@ -372,12 +456,19 @@ type (
 		Type        string    `json:"type"`
 		Timestamp   time.Time `json:"timestamp"`
 		IsSidechain bool      `json:"isSidechain"`
+		IsMeta      bool      `json:"isMeta"`    // text Claude Code adds itself (a skill's body), no prompt
 		Operation   string    `json:"operation"` // queue-operation: enqueue, dequeue, ...
 		Content     any       `json:"content"`   // queue-operation: the queued text
 		Message     struct {
 			Content json.RawMessage `json:"content"` // a string, or content blocks
 		} `json:"message"`
 		ToolUseResult any `json:"toolUseResult"` // an object, or a string for an error
+		// What began the turn a prompt starts: turnOrigin "human" or
+		// "task_notification", origin {"kind": "human" or
+		// "task-notification"} (absent before Claude Code recorded them;
+		// read loosely, so a shape of its own never drops the entry).
+		TurnOrigin any `json:"turnOrigin"`
+		Origin     any `json:"origin"`
 	}
 	tBlock struct {
 		Type      string         `json:"type"`
@@ -394,20 +485,51 @@ type (
 // earlier KillShell and KillBash).
 var stopTools = map[string]bool{"TaskStop": true, "KillShell": true, "KillBash": true}
 
-// apply reads one transcript line into w. Entries stamped before since,
+// prompt is the text of a user entry that starts a turn: a prompt typed
+// into the pane or a task notification, as a string or a first text block
+// (not a tool result, not text Claude Code adds itself).
+func (e *tEntry) prompt(blocks []tBlock) (string, bool) {
+	if e.Type != "user" || e.IsMeta || len(blocks) == 0 || blocks[0].Type != "text" {
+		return "", false
+	}
+	return blocks[0].Text, true
+}
+
+// byNotification reports whether the turn prompt e starts (text) began
+// with a task notification: as Claude Code records the turn's origin, else
+// (older versions) when the text is one.
+func (e *tEntry) byNotification(text string) bool {
+	origin, _ := e.Origin.(map[string]any)
+	switch kind := str(origin["kind"]); {
+	case str(e.TurnOrigin) != "":
+		return str(e.TurnOrigin) == "task_notification"
+	case kind != "":
+		return kind == "task-notification"
+	}
+	return strings.HasPrefix(strings.TrimSpace(text), "<task-notification>")
+}
+
+// apply reads one transcript line into w. Entries stamped before w.since,
 // entries of a subagent's own thread (isSidechain) and lines that are not
 // JSON are skipped.
-func (w *bgWatch) apply(line []byte, since time.Time) {
+func (w *bgWatch) apply(line []byte) {
 	var e tEntry
-	if json.Unmarshal(line, &e) != nil || e.IsSidechain || e.Timestamp.Before(since) {
+	if json.Unmarshal(line, &e) != nil || e.IsSidechain || e.Timestamp.Before(w.since) {
 		return
+	}
+	var blocks []tBlock
+	if e.Type == "assistant" || e.Type == "user" {
+		blocks = contentBlocks(e.Message.Content)
+	}
+	if text, ok := e.prompt(blocks); ok {
+		w.notifiedTurn = e.byNotification(text)
 	}
 	switch e.Type {
 	case "assistant":
 		if e.Timestamp.After(w.reply) {
 			w.reply = e.Timestamp
 		}
-		for _, b := range contentBlocks(e.Message.Content) {
+		for _, b := range blocks {
 			if b.Type != "tool_use" || b.ID == "" {
 				continue
 			}
@@ -422,7 +544,7 @@ func (w *bgWatch) apply(line []byte, since time.Time) {
 		}
 	case "user":
 		result, _ := e.ToolUseResult.(map[string]any)
-		for i, b := range contentBlocks(e.Message.Content) {
+		for i, b := range blocks {
 			switch b.Type {
 			case "text":
 				w.notified(b.Text, e.Timestamp)

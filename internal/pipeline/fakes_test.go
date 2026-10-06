@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -102,6 +103,35 @@ type fakeAgents struct {
 	timeUpErr error
 	// background is what BackgroundTasks reports per role (absent: unknown).
 	background map[agents.Role]int
+	// marks is the run whose marker (agents.ReportMarker) the last prompt or
+	// line a role got that named one asked its report to start with: an
+	// obedient agent writes it (writeReport), a shell line prints it before
+	// the command's output (RunShell).
+	marks map[agents.Role]string
+}
+
+// reportMark finds the run marker a prompt or a shell line names.
+var reportMark = regexp.MustCompile(`<!-- magnum:run=([A-Za-z0-9._-]+) -->`)
+
+// noteMark records the run marker text names, if any, as role's.
+func (f *fakeAgents) noteMark(role agents.Role, text string) {
+	m := reportMark.FindStringSubmatch(text)
+	if m == nil {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.marks == nil {
+		f.marks = map[agents.Role]string{}
+	}
+	f.marks[role] = m[1]
+}
+
+// markOf is the run marker role's report starts with ("" = none asked).
+func (f *fakeAgents) markOf(role agents.Role) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.marks[role]
 }
 
 // TimeUp records the call (the real one types the text into the run's
@@ -169,6 +199,7 @@ func (f *fakeAgents) NewRun(ctx context.Context, pr store.PR, role agents.Role, 
 
 func (f *fakeAgents) Submit(ctx context.Context, run store.Run, text string) error {
 	role := agents.Role(run.Role)
+	f.noteMark(role, text)
 	f.mu.Lock()
 	f.submits = append(f.submits, submitCall{Run: run, Role: role, Text: text})
 	f.order = append(f.order, "submit:"+run.Role)
@@ -224,13 +255,37 @@ func (f *fakeAgents) RunShell(ctx context.Context, pr store.PR, role config.Role
 	}
 	status := f.exitStatus[c.Role]
 	f.mu.Unlock()
+	f.noteMark(c.Role, line)
 	if fn == nil {
 		return status, nil
 	}
 	if err := fn(f, c); err != nil {
 		return agents.ShellStatusUnknown, err
 	}
-	return status, nil
+	return status, f.teeMark(ctx, line)
+}
+
+// teeMark puts the run marker a shell line prints before the command's
+// output at the top of the report the command wrote, as the line's tee
+// does (a report already starting with a marker is left alone).
+func (f *fakeAgents) teeMark(ctx context.Context, line string) error {
+	m := reportMark.FindStringSubmatch(line)
+	if m == nil {
+		return nil
+	}
+	run, err := f.st.RunByID(ctx, m[1])
+	if err != nil {
+		return err
+	}
+	path := store.Deref(run.ReportPath)
+	b, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) || bytes.HasPrefix(b, []byte("<!-- magnum:run=")) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append([]byte(agents.ReportMarker(m[1])+"\n"), b...), 0o600)
 }
 
 func (f *fakeAgents) RolePrompt(role config.Role, promptKind string, data any) (string, error) {
@@ -291,8 +346,23 @@ func (f *fakeAgents) end(runID string) error {
 		func(u *store.RunUpdate) { u.Set("ended_at", f.st.Clock()) })
 }
 
-// writeReport writes the run's report file and ends the run.
+// writeReport writes the run's report file and ends the run. Like an
+// obedient agent, it starts the report with the run marker its prompt
+// asked for (the original prompt's when it continues on a fallback model),
+// unless content starts with one.
 func writeReport(content string) behavior {
+	return func(f *fakeAgents, run store.Run, text string) error {
+		report := content
+		if id := f.markOf(agents.Role(run.Role)); id != "" && !strings.HasPrefix(report, "<!-- magnum:run=") {
+			report = agents.ReportMarker(id) + "\n" + report
+		}
+		return writeRawReport(report)(f, run, text)
+	}
+}
+
+// writeRawReport writes content as the run's report file, as it is, and
+// ends the run.
+func writeRawReport(content string) behavior {
 	return func(f *fakeAgents, run store.Run, text string) error {
 		path := store.Deref(run.ReportPath)
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {

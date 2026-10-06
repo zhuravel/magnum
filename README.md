@@ -523,13 +523,18 @@ resumes when that work notifies it, so for a claude agent Magnum reads the sessi
 (`projects/<checkout>/<session id>.jsonl` under the pane's `CLAUDE_CONFIG_DIR`, else `~/.claude`; only what
 the run appended) and keeps the turn going while such work has not finished or the agent has not answered
 its notification (one `agent.background_wait` event per run). The role's `timeout`, which its prompt names
-as the time budget, still bounds the turn: when it passes, Magnum asks the agent once to stop waiting, write
-its report with what it found and list the checks still running as pending (`round.time_up`), and waits 5
-more minutes before it interrupts the agent and counts the report as `timeout`. A reviewer whose turn
-ended without a report is interrupted too; an interrupt does not stop a claude agent's background work, so
-the warning names what it left running. A report file already there when its role is prompted is set
-aside (`<name>.prev`) and a continued round reuses only the reports its paused round verified, so a report
-written after its run ended never passes for a later run's.
+as the time budget, still bounds the turn: when it passes, Magnum asks the agent once to stop its background
+tasks (TaskStop), write its report with what it found and list the checks it stopped as pending
+(`round.time_up`), and waits 5 more minutes before it interrupts the agent and counts the report as
+`timeout`. A reviewer whose turn ended without a report is interrupted too. An interrupt does not stop a
+claude agent's background work, so an agent whose transcript still shows some is told once more to stop it
+with TaskStop and do nothing else, and the warning says whether it did within 2 minutes; work that
+finishes later anyway resumes the agent, and that turn is not taken for someone typing into the pane. A
+reviewer's report starts with its run's marker (`<!-- magnum:run=<run id> -->`, which the prompts ask for
+and codex-review's line prints before the output), a report file already there when its role is prompted
+is set aside (`<name>.prev`), a report without its run's marker counts as missing, and a continued round
+reuses only the reports its paused round verified, so a report written after its run ended never passes
+for a later run's.
 
 claude-simplify is Claude Code's `/simplify` made read-only. Four subagents review the diff in parallel,
 one angle each: reuse (code the codebase already has), simplification (redundant state, near-copies,

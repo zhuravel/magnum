@@ -346,6 +346,49 @@ editing history. Code, config comments and prompts reference these by their head
   the same head is still indistinguishable by path or time; only a run id in the report would tell, which
   the reviewer prompts do not ask for. Rejected for now: per-run report paths (the panes' `MAGNUM_REPORT_DIR`,
   the judge's report directory and eval address a round's reports by head).
+- **An interrupted reviewer is told to stop its background tasks** (2026-10-06, amends "A reviewer out of
+  time is asked for its report, then interrupted"). An interrupt (esc) ends a claude agent's turn, not the
+  shells it started in the background, whose notifications resume the agent with no run in flight. The
+  time-up message now asks for that first: "Time is up: this review had <budget>. Stop every background task
+  you started with TaskStop and start nothing new. Write the report to <path> now with what you found so far
+  (its first line: `<run marker>`), list the checks you stopped or did not run as pending, and end your
+  turn." A reviewer interrupted because its run timed out or ended without its report gets, when its
+  transcript shows background work still running, one more message within the same run once it is idle
+  (`TimeUp` again, never over a dialog): "This review is over. Stop every background task you started with
+  TaskStop and do nothing else." Magnum then reads the transcript each poll until none is left or
+  `StopGrace` (2 minutes, a constant) passed, and the `round.reviewer` warning says how it ended ("asked it
+  to stop the 2 background tasks it started: it did", or ": 1 still runs after 2 minutes"). Nothing is
+  killed: magnum does not kill processes it did not start. No message goes to an agent
+  whose transcript shows none, cannot be read, or of another kind (Codex has no TaskStop and holds its turn
+  open anyway). Rejected: waiting `TimeUpGrace` for the stop (5 more minutes of a round for a step that takes
+  seconds); sending it unconditionally (a turn for nothing).
+- **A turn a task notification began is nobody typing** (2026-10-06, amends "A claude agent's turn is not
+  over while its background work runs"). Background work an earlier run left running resumes the claude agent
+  when it finishes; herdr shows it working with no run in flight, which the observer took for someone typing
+  into the pane (`human_active`, and Submit waited `human_cooldown`). For a claude agent the observer now reads
+  where the turn began: the transcript's newest user entry that starts a turn (text, not a tool result, not
+  Claude Code's own `isMeta` text). Claude Code records its origin (`turnOrigin: task_notification`,
+  `origin.kind: task-notification`, else `human`; versions without those fields are read from the text, a
+  `<task-notification>` block); a notification is no human activity, a typed prompt still is. The last run's
+  transcript watch reads on from where it stopped; without one (a daemon restart) a backward scan of the
+  transcript's tail finds the last turn start, then only appended bytes are read. Other kinds, and a
+  transcript magnum cannot read, count as typed, as before. Rejected: treating any work shortly after a run
+  ended as magnum's (it would hide a person who took over the pane).
+- **A report names its run** (2026-10-06, amends "A report is its run's only if its run verified it"). Each
+  reviewer prompt (claude-review, claude-rereview, claude-restart, claude-simplify) asks for
+  `<!-- magnum:run=<run id> -->` (`agents.ReportMarker`, the prompts' `.RunID`) as the report's first line,
+  and codex-review's line prints it before the output it tees into the report (`{ printf '<marker>\n';
+  command codex review ...; } | tee <report>`; any shell role with `capture = "stdout"` does the same). A
+  role whose prompt or line named its run's marker has a report only when the report's first non-blank line
+  is that marker: one without it is `missing` with the detail "stale report (no run marker)", one with
+  another run's "stale report from run <id>", and a marker with nothing after it is "empty". The run is the
+  one the role prompt or line went to, also for its continuations on fallback models (their prompt names
+  none, the agent finishes the task as first instructed); the time-up message repeats the marker. A prompt
+  or line that names no marker (a role's prompt file of its own, a `capture = "file"` shell role, the
+  judge's own pass) needs none, as before. The judge's candidate list is unchanged (a stale report is listed
+  as `missing`). Still open: a late write that lands after a report was accepted replaces it, and a
+  continued round checks that its paused round verified a report, not its marker. Rejected: the marker
+  anywhere in the report (a review that quotes one, as a review of magnum's own code may, would pass).
 
 ## Screens and commands
 

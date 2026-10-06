@@ -60,6 +60,15 @@ func userPrompt(at time.Time, text string) tline {
 		"message": map[string]any{"role": "user", "content": text}}
 }
 
+// humanPrompt is a prompt typed into the pane (by a person, or by magnum
+// through herdr), with the origin Claude Code records for it.
+func humanPrompt(at time.Time, text string) tline {
+	l := userPrompt(at, text)
+	l["origin"] = map[string]any{"kind": "human"}
+	l["turnOrigin"], l["promptSource"] = "human", "typed"
+	return l
+}
+
 func notificationText(toolUseID, taskID, status string) string {
 	return fmt.Sprintf("<task-notification>\n<task-id>%s</task-id>\n<tool-use-id>%s</tool-use-id>\n"+
 		"<output-file>/tmp/claude/tasks/%s.output</output-file>\n<status>%s</status>\n"+
@@ -74,8 +83,9 @@ func notification(at time.Time, toolUseID, taskID, status string) []tline {
 		{"type": "queue-operation", "operation": "enqueue", "timestamp": stamp(at), "sessionId": claudeSID, "content": text},
 		{"type": "queue-operation", "operation": "dequeue", "timestamp": stamp(at), "sessionId": claudeSID},
 		{"type": "user", "isSidechain": false, "timestamp": stamp(at), "sessionId": claudeSID,
-			"message": map[string]any{"role": "user", "content": text},
-			"origin":  map[string]any{"kind": "task-notification", "producer": "session-task"}},
+			"message":    map[string]any{"role": "user", "content": text},
+			"origin":     map[string]any{"kind": "task-notification", "producer": "session-task"},
+			"turnOrigin": "task_notification", "promptSource": "system"},
 	}
 }
 
@@ -538,5 +548,123 @@ func TestTimeUpIsNeverTypedIntoADialog(t *testing.T) {
 	}
 	if o := e.idleTicks(3); o.Kind != "" || o.Background != 1 {
 		t.Fatalf("after a refused TimeUp = kind %q background %d, want still held", o.Kind, o.Background)
+	}
+}
+
+// Background work a claude agent started during a run that is over (a
+// reviewer interrupted for its timeout or after it ended without its
+// report) resumes the agent when it finishes: a turn its task notification
+// started, with no magnum run in flight. Nobody typed into the pane, so it
+// is no human activity and starts no cooldown; a prompt typed into the pane
+// still is.
+func TestObserveTakesATurnATaskNotificationStartedForNoHuman(t *testing.T) {
+	noOrigin := func(lines []tline) []tline {
+		for _, l := range lines {
+			delete(l, "origin")
+			delete(l, "turnOrigin")
+			delete(l, "promptSource")
+		}
+		return lines
+	}
+	for _, tc := range []struct {
+		name  string
+		next  func(at time.Time) []tline
+		human bool
+	}{
+		{"a task notification", func(at time.Time) []tline { return notification(at, "toolu_bash1", "bg1", "completed") }, false},
+		{"a task notification from a Claude Code that records no origin", func(at time.Time) []tline {
+			return noOrigin(notification(at, "toolu_bash1", "bg1", "completed"))
+		}, false},
+		{"a prompt typed into the pane", func(at time.Time) []tline {
+			return []tline{humanPrompt(at, "Why is the spec run still going?")}
+		}, true},
+		{"a prompt from a Claude Code that records no origin", func(at time.Time) []tline {
+			return noOrigin([]tline{humanPrompt(at, "Why is the spec run still going?")})
+		}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t)
+			tr := e.claudeTranscript()
+			id := e.promptClaude()
+			now := e.clock.Now()
+			tr.add(humanPrompt(now, "/code-review https://github.com/talkable/talkable/pull/11920 high"))
+			tr.addAll(bashInBackground(now.Add(time.Second), "toolu_bash1", "bg1"))
+			tr.add(assistantSays(now.Add(2*time.Second), "Waiting for the spec run."), turnEnded(now.Add(2*time.Second)))
+			// The run ends with the spec run still going: time is up, the
+			// agent answers and goes idle.
+			if err := e.m.TimeUp(e.ctx, e.run1(id), "Time is up."); err != nil {
+				t.Fatal(err)
+			}
+			tr.add(assistantSays(e.clock.Now(), "Report written."), turnEnded(e.clock.Now()))
+			if o := e.idleTicks(2); o.Kind != ObsCompleted {
+				t.Fatalf("run = %+v, want completed", o)
+			}
+
+			e.clock.Add(10 * time.Minute) // well past the grace after magnum's last prompt
+			at := e.clock.Now()
+			tr.addAll(tc.next(at))
+			tr.add(toolUse(at.Add(time.Second), "toolu_cat1", "Bash", map[string]any{"command": "cat /tmp/claude/tasks/bg1.output"}))
+			e.h.setAgentStatus(claudeAgent, herdr.StatusWorking)
+			o := e.observe()[RoleClaude]
+			pr := e.reloadPR()
+			if tc.human {
+				if o.Kind != ObsHumanActive || pr.HumanActiveAt == nil {
+					t.Fatalf("observation %q, human_active_at %v; want human activity", o.Kind, pr.HumanActiveAt)
+				}
+				return
+			}
+			if o.Kind != "" || pr.HumanActiveAt != nil {
+				t.Fatalf("observation %q, human_active_at %v; want no human activity", o.Kind, pr.HumanActiveAt)
+			}
+		})
+	}
+}
+
+// Without a run to read from (a daemon started while the agent works), the
+// observer finds where the turn began in the transcript's tail, across
+// more than one read; the next prompt typed into the pane is a human's.
+func TestObserveFindsWhereATurnBeganWithoutARun(t *testing.T) {
+	e := newEnv(t)
+	tr := e.claudeTranscript()
+	e.started()
+	e.h.setAgentSession(claudeAgent, claudeSID)
+	e.clock.Add(10 * time.Minute)
+	now := e.clock.Now()
+	tr.add(humanPrompt(now.Add(-2*time.Hour), "/code-review https://github.com/talkable/talkable/pull/11920 high"))
+	tr.addAll(bashInBackground(now.Add(-2*time.Hour+time.Second), "toolu_bash1", "bg1"))
+	tr.addAll(notification(now.Add(-time.Minute), "toolu_bash1", "bg1", "completed"))
+	var work []tline
+	for i := range 2000 { // the turn so far, several times transcriptChunk
+		work = append(work, assistantSays(now.Add(-time.Minute+time.Duration(i)*time.Millisecond), strings.Repeat("x", 200)))
+	}
+	tr.add(work...)
+	e.h.setAgentStatus(claudeAgent, herdr.StatusWorking)
+	if o := e.observe()[RoleClaude]; o.Kind != "" {
+		t.Fatalf("observation %q, want none: a task notification started the turn", o.Kind)
+	}
+	if pr := e.reloadPR(); pr.HumanActiveAt != nil {
+		t.Fatalf("human_active_at = %v", pr.HumanActiveAt)
+	}
+
+	e.clock.Add(30 * time.Second)
+	tr.add(humanPrompt(e.clock.Now(), "Stop."))
+	if o := e.observe()[RoleClaude]; o.Kind != ObsHumanActive {
+		t.Fatalf("observation %q after a typed prompt, want %q", o.Kind, ObsHumanActive)
+	}
+}
+
+// Only Claude Code resumes a turn by itself: any other agent working with no
+// run in flight is someone typing, as before, whatever a transcript says.
+func TestObserveTakesAnyWorkingCodexAgentWithoutARunForAHuman(t *testing.T) {
+	e := newEnv(t)
+	tr := e.claudeTranscript()
+	e.started()
+	const judge = "mg-11920-codex-judge-5d01cf"
+	e.h.setAgentSession(judge, claudeSID)
+	e.clock.Add(10 * time.Minute)
+	tr.addAll(notification(e.clock.Now(), "toolu_bash1", "bg1", "completed"))
+	e.h.setAgentStatus(judge, herdr.StatusWorking)
+	if o := e.observe()[RoleJudge]; o.Kind != ObsHumanActive {
+		t.Fatalf("codex judge = %q, want %q", o.Kind, ObsHumanActive)
 	}
 }

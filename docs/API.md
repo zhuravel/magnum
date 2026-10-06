@@ -401,6 +401,20 @@ func RenderPrompt(p config.Prompt, data any) (string, error)
     a prompt or typed command must not end with one (a shell line would submit
     an extra empty command).
 
+func ReportMarker(runID string) string
+    ReportMarker is the line a role's report starts with to say which run wrote
+    it (`<!-- magnum:run=<runID> -->`, an HTML comment Markdown does not show):
+    report paths are per head, not per run, so a reviewer that kept working
+    after its run ended can write where a later run on the same head looks.
+    The reviewer prompts ask for it (RoleData.RunID), and a shell role's line
+    with capture "stdout" prints it before the output it tees into the report
+    (ShellLine).
+
+func ReportRun(report []byte) (runID string, rest []byte)
+    ReportRun reads the run a report's ReportMarker names, on its first line
+    that is not blank (a byte-order mark aside), and returns the report after
+    that line; a report whose first line is no marker returns "" and itself.
+
 func SameModel(a, b string) bool
     SameModel reports whether two model names mean the same model as limit
     messages and configs spell them: equal ignoring case, or one is a word of
@@ -411,22 +425,23 @@ func ShellLine(role config.Role, d ShellData) (string, error)
     RunShell). With role.Command set (the role's command template overridable by
     d.Command) the line is
 
-        [printf '\033]0;%s\007' <Title>; DISABLE_AUTO_TITLE=true; ]set -o pipefail; <command> <args...>[ | tee <ReportPath>]; printf '\n<Marker> %d\n' "$?"
+        [printf '\033]0;%s\007' <Title>; DISABLE_AUTO_TITLE=true; ]set -o pipefail; [{ printf '<ReportMarker(RunID)>\n'; ]<command> <args...>[; } | tee <ReportPath>]; printf '\n<Marker> %d\n' "$?"
 
     where <command> is the command template executed with d (every value
     shell-quoted, e.g. `command codex review --base {{.BaseSHA}}`), the args
-    (role.Args, or d.Args) are shell-quoted and appended, and the tee is there
-    only for capture "stdout" (ReportPath is then required). The optional prefix
-    sets the pane's terminal title (OSC 0), which herdr's sidebar shows, and
-    stops oh-my-zsh from resetting it after the command (its title hooks honour
-    DISABLE_AUTO_TITLE at run time). pipefail makes the status the command's,
-    not tee's; the final printf puts the marker on a line of its own (also after
-    output without a trailing newline) followed by that status, which RunShell
-    returns (config.Role.StatusOK judges it). With role.Prompt set instead, that
-    full-line .sh template (d.Template, else the embedded default of that name)
-    is rendered with d and must contain the marker (prompts/codex-review.sh
-    shows the same ending). Marker must match [A-Za-z0-9._-]+; trailing newlines
-    are trimmed.
+    (role.Args, or d.Args) are shell-quoted and appended, and the braces and
+    the tee are there only for capture "stdout" (ReportPath is then required):
+    the report starts with the run's ReportMarker, then the command's output.
+    The optional prefix sets the pane's terminal title (OSC 0), which herdr's
+    sidebar shows, and stops oh-my-zsh from resetting it after the command
+    (its title hooks honour DISABLE_AUTO_TITLE at run time). pipefail makes
+    the status the command's, not tee's; the final printf puts the marker on
+    a line of its own (also after output without a trailing newline) followed
+    by that status, which RunShell returns (config.Role.StatusOK judges it).
+    With role.Prompt set instead, that full-line .sh template (d.Template,
+    else the embedded default of that name) is rendered with d and must contain
+    the marker (prompts/codex-review.sh shows the same ending). Marker must
+    match [A-Za-z0-9._-]+; trailing newlines are trimmed.
 
 func TaggedAgentName(tag string, repo string, number int, role Role) string
     TaggedAgentName is AgentName for agents started under a tag (Deps.Tag,
@@ -864,28 +879,30 @@ func (m *Manager) ObserveSnapshotAt(ctx context.Context, snap herdr.Snapshot, ca
 
       - agent found (by name, else by pane): status/status_at stored; idle|done
         increments idle_ticks, working|blocked resets it; a newly reported
-        agent_session.value becomes session_id; a starting session becomes live.
-        working + a submitted run -> run working (working_seen_at). idle_ticks
-        >= CompletionIdleTicks + a submitted/working run -> run ended,
-        ObsCompleted. working with no pending/submitted/working run (outside
-        a short grace after start/prompt) -> ObsHumanActive. blocked ->
-        ObsBlocked, or ObsPromptDenied when a pending/submitted/working run is
-        in flight, the kind's on_permission_prompt is "deny" and the screen
-        shows a permission prompt, which is answered No (see answerPermission;
-        never without a run in flight, where the human may be driving the agent,
-        so an agent that resumes working after a deny is never human_active).
-        idle after such a deny, with that run still in flight and the agent
-        not seen working since -> the kind's after_deny_prompt is sent (see
-        continueAfterDeny), ObsDenyContinued, and the run does not end.
-        A claude agent idle with a submitted/working run whose transcript
-        shows background work started during the run still running, or a
-        task notification not answered yet, counts as working for completion
-        (idle_ticks 0, Background set; see backgroundWait), until the pipeline's
-        TimeUp tells it to stop waiting for that work. An agent of a kind named
-        by a rename command (codex), working on a submitted/working run, whose
-        terminal title lacks Title gets that command (`/rename <Title>`) typed
-        into its pane (at most once per call, TitleAttempts per session row;
-        see nameAgent).
+        agent_session.value becomes session_id; a starting session becomes
+        live. working + a submitted run -> run working (working_seen_at).
+        idle_ticks >= CompletionIdleTicks + a submitted/working run -> run
+        ended, ObsCompleted. working with no pending/submitted/working
+        run (outside a short grace after start/prompt) -> ObsHumanActive,
+        unless the agent is a claude agent whose transcript shows a task
+        notification began the turn (background work of an earlier run resumed
+        it; see notificationTurn). blocked -> ObsBlocked, or ObsPromptDenied
+        when a pending/submitted/working run is in flight, the kind's
+        on_permission_prompt is "deny" and the screen shows a permission prompt,
+        which is answered No (see answerPermission; never without a run in
+        flight, where the human may be driving the agent, so an agent that
+        resumes working after a deny is never human_active). idle after such
+        a deny, with that run still in flight and the agent not seen working
+        since -> the kind's after_deny_prompt is sent (see continueAfterDeny),
+        ObsDenyContinued, and the run does not end. A claude agent idle with a
+        submitted/working run whose transcript shows background work started
+        during the run still running, or a task notification not answered yet,
+        counts as working for completion (idle_ticks 0, Background set; see
+        backgroundWait), until the pipeline's TimeUp tells it to stop waiting
+        for that work. An agent of a kind named by a rename command (codex),
+        working on a submitted/working run, whose terminal title lacks Title
+        gets that command (`/rename <Title>`) typed into its pane (at most once
+        per call, TitleAttempts per session row; see nameAgent).
       - live agent session without its agent, or any session whose pane is gone
         -> session lost, ObsLost. A starting session (agent not started yet)
         with its pane still present is left alone, and so is a session that
@@ -1099,14 +1116,16 @@ func (m *Manager) SwitchModel(ctx context.Context, s store.Session, model, reaso
     time for that.
 
 func (m *Manager) TimeUp(ctx context.Context, run store.Run, text string) error
-    TimeUp sends text to the agent of run's session within that run, without a
-    new run (as continueAfterDeny sends after_deny_prompt): the pipeline's last
-    call to a reviewer whose time ran out to write its report now. From then on
-    the agent's background work no longer holds the run open (the text tells
-    it to stop waiting for that work); a task notification it has not answered
-    still does. The session's idle_ticks are reset and its last_prompt_at set.
-    A run without a live agent session fails with ErrNoSession (ErrNotAgent for
-    a shell role's pane).
+    TimeUp sends text to the agent of run's session within that run, without
+    a new run (as continueAfterDeny sends after_deny_prompt): the pipeline's
+    last call to a reviewer whose time ran out to stop its background tasks
+    and write its report now, or, once the reviewer was interrupted, to stop
+    the background tasks it left running. From then on the agent's background
+    work no longer holds the run open (the text tells it to stop that work);
+    a task notification it has not answered still does. The session's idle_ticks
+    are reset and its last_prompt_at set (so the turn the text starts is not
+    taken for someone typing). A run without a live agent session fails with
+    ErrNoSession (ErrNotAgent for a shell role's pane).
 
 func (m *Manager) Wrapper(ctx context.Context, kind string) (bool, error)
     Wrapper reports whether the kind's command is a zsh wrapper function (or
@@ -1315,6 +1334,10 @@ type RoleData struct {
 	// prompts tell the agent to end its turn with the report written
 	// within it.
 	Budget string
+	// RunID is the run the prompt starts: the shipped prompts ask for its
+	// marker, ReportMarker(RunID), as the report's first line, and a role
+	// whose prompt names it has a report only when the report carries it.
+	RunID string
 }
     RoleData feeds the prompts of every non-judge session role (claude-review,
     claude-simplify, a droid or omp reviewer, ...): the union of what those
@@ -8573,6 +8596,10 @@ const (
 	// for its report (round.timeUp), to write it and end its turn before it
 	// is interrupted as timed out.
 	TimeUpGrace = 5 * time.Minute
+	// StopGrace bounds the wait for an interrupted reviewer, told to stop
+	// the background tasks it left running (round.stopReviewer), until its
+	// transcript shows none.
+	StopGrace = 2 * time.Minute
 )
     Timing.
 
@@ -8655,9 +8682,10 @@ type Agents interface {
 	SwitchModel(ctx context.Context, s store.Session, model, reason string) error
 	FallbackPrompt(d agents.FallbackData) (string, error)
 	// A reviewer whose time ran out (see round.timeUp): TimeUp types the
-	// last call into its agent within its run; BackgroundTasks counts the
-	// work a claude agent started in the background during a run and left
-	// running (ok false: unknown).
+	// last call into its agent within its run, and after an interrupt the
+	// message to stop its background work (round.stopReviewer);
+	// BackgroundTasks counts the work a claude agent started in the
+	// background during a run and left running (ok false: unknown).
 	TimeUp(ctx context.Context, run store.Run, text string) error
 	BackgroundTasks(ctx context.Context, run store.Run) (int, bool)
 }

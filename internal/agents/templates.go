@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"bytes"
 	"cmp"
 	"errors"
 	"fmt"
@@ -377,6 +378,10 @@ type RoleData struct {
 	// prompts tell the agent to end its turn with the report written
 	// within it.
 	Budget string
+	// RunID is the run the prompt starts: the shipped prompts ask for its
+	// marker, ReportMarker(RunID), as the report's first line, and a role
+	// whose prompt names it has a report only when the report carries it.
+	RunID string
 }
 
 // ShellData feeds a shell role's line (ShellLine): the role's command
@@ -422,6 +427,31 @@ func DoneMarker(runID string) string { return donePrefix + runID }
 // doneFormat is the printf format a shell line ends with: the marker on a
 // line of its own with the exit status of the command before it.
 func doneFormat(marker string) string { return marker + " %d" }
+
+// ReportMarker is the line a role's report starts with to say which run
+// wrote it (`<!-- magnum:run=<runID> -->`, an HTML comment Markdown does not
+// show): report paths are per head, not per run, so a reviewer that kept
+// working after its run ended can write where a later run on the same head
+// looks. The reviewer prompts ask for it (RoleData.RunID), and a shell
+// role's line with capture "stdout" prints it before the output it tees
+// into the report (ShellLine).
+func ReportMarker(runID string) string { return "<!-- magnum:run=" + runID + " -->" }
+
+// reportMarkerLine matches a ReportMarker line.
+var reportMarkerLine = regexp.MustCompile(`^<!-- magnum:run=([A-Za-z0-9._-]+) -->$`)
+
+// ReportRun reads the run a report's ReportMarker names, on its first line
+// that is not blank (a byte-order mark aside), and returns the report after
+// that line; a report whose first line is no marker returns "" and itself.
+func ReportRun(report []byte) (runID string, rest []byte) {
+	b := bytes.TrimLeft(bytes.TrimPrefix(report, []byte("\ufeff")), " \t\r\n")
+	line, after, _ := bytes.Cut(b, []byte("\n"))
+	m := reportMarkerLine.FindSubmatch(bytes.TrimSpace(line))
+	if m == nil {
+		return "", report
+	}
+	return string(m[1]), after
+}
 
 // CommandAnchor is text that only the pane's echo of a shell line built
 // with marker contains (the done printf's format, which the output shows
@@ -524,12 +554,14 @@ func quoteNonEmpty(s string) string {
 // (see RunShell). With role.Command set (the role's command template
 // overridable by d.Command) the line is
 //
-//	[printf '\033]0;%s\007' <Title>; DISABLE_AUTO_TITLE=true; ]set -o pipefail; <command> <args...>[ | tee <ReportPath>]; printf '\n<Marker> %d\n' "$?"
+//	[printf '\033]0;%s\007' <Title>; DISABLE_AUTO_TITLE=true; ]set -o pipefail; [{ printf '<ReportMarker(RunID)>\n'; ]<command> <args...>[; } | tee <ReportPath>]; printf '\n<Marker> %d\n' "$?"
 //
 // where <command> is the command template executed with d (every value
 // shell-quoted, e.g. `command codex review --base {{.BaseSHA}}`), the args
-// (role.Args, or d.Args) are shell-quoted and appended, and the tee is there
-// only for capture "stdout" (ReportPath is then required). The optional
+// (role.Args, or d.Args) are shell-quoted and appended, and the braces and
+// the tee are there only for capture "stdout" (ReportPath is then
+// required): the report starts with the run's ReportMarker, then the
+// command's output. The optional
 // prefix sets the pane's terminal title (OSC 0), which herdr's sidebar
 // shows, and stops oh-my-zsh from resetting it after the command (its title
 // hooks honour DISABLE_AUTO_TITLE at run time). pipefail makes the status
@@ -570,14 +602,20 @@ func ShellLine(role config.Role, d ShellData) (string, error) {
 		fmt.Fprintf(&b, `printf '\033]0;%%s\007' %s; DISABLE_AUTO_TITLE=true; `, q.Title)
 	}
 	b.WriteString("set -o pipefail; ")
+	tee := d.Capture == config.CaptureStdout
+	if tee {
+		// The report starts with the run's marker (RunID is [A-Za-z0-9._-]+,
+		// so it needs no quoting inside the format).
+		fmt.Fprintf(&b, `{ printf '%s\n'; `, ReportMarker(q.RunID))
+	}
 	b.WriteString(cmd)
 	for _, a := range q.Args {
 		b.WriteString(" " + a)
 	}
-	if d.Capture == config.CaptureStdout {
+	if tee {
 		// stdout only: `codex review` prints its verdict there and the whole
 		// transcript on stderr, which stays visible in the pane.
-		b.WriteString(" | tee " + q.ReportPath)
+		b.WriteString("; } | tee " + q.ReportPath)
 	}
 	fmt.Fprintf(&b, `; printf '\n%s\n' "$?"`, doneFormat(q.Marker))
 	return b.String(), nil
