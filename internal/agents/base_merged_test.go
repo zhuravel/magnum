@@ -72,3 +72,54 @@ func TestTriagePromptSaysTheDiffIsThePRsOwn(t *testing.T) {
 		t.Errorf("triage prompt:\n%s", got)
 	}
 }
+
+// The two prompts that still read previous..head after a merge of the base
+// branch: simplify's re-review hands its subagents the PR's own diff and
+// scopes the proposals to what changed between the two own diffs, and the
+// recovery prompt (a judge whose session is gone, a fresh-session delta
+// check too) says the push merged the base, marks it in the <magnum> block,
+// and calls a delta check's delta the change between the two own diffs.
+func TestBaseMergedSimplifyAndRecoveryPromptsReadThePRsOwnDiff(t *testing.T) {
+	role := roleFixture()
+	role.Mode, role.BaseMerged = ModeRereview, true
+	role.ReportPath = "/state/reviews/talkable/talkable/11920/d4e5f6a/claude-simplify.md"
+	own := "`git diff " + role.BaseSHA + "..." + role.PreviousHeadSHA + "` with `git diff " + role.BaseSHA + "..." + role.HeadSHA + "`"
+	got, err := RenderPrompt(prompt(t, "claude-simplify.md"), role)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range []string{"Run `git diff " + role.BaseSHA + "..HEAD` once", "The push merged the base branch", own} {
+		if !strings.Contains(got, w) {
+			t.Errorf("simplify after a base merge lacks %q:\n%s", w, got)
+		}
+	}
+	if strings.Contains(got, "Run `git diff "+role.PreviousHeadSHA+"..HEAD`") {
+		t.Errorf("simplify after a base merge still hands its subagents previous..head:\n%s", got)
+	}
+	plain := role
+	plain.BaseMerged = false
+	if got, err := RenderPrompt(prompt(t, "claude-simplify.md"), plain); err != nil || !strings.Contains(got, "Run `git diff "+role.PreviousHeadSHA+"..HEAD` once") {
+		t.Errorf("a plain re-review's simplify no longer reads the delta (%v):\n%s", err, got)
+	}
+
+	judge := judgeFixture()
+	judge.BaseMerged = true
+	judgeOwn := "`git diff " + judge.BaseSHA + "..." + judge.PreviousHeadSHA + "` with `git diff " + judge.BaseSHA + "..." + judge.HeadSHA + "`"
+	got, err = RenderPrompt(prompt(t, "judge-recovery.md"), judge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range []string{"The push merged the base branch", judgeOwn, "\nbase_merged: true\n"} {
+		if !strings.Contains(got, w) {
+			t.Errorf("recovery after a base merge lacks %q:\n%s", w, got)
+		}
+	}
+	check := judge
+	check.DeltaCheck, check.DeltaLines = true, 4
+	if got, err = RenderPrompt(prompt(t, "judge-recovery.md"), check); err != nil || !strings.Contains(got, "the change between the PR's own diff before and after them") {
+		t.Errorf("a delta check after a base merge (%v):\n%s", err, got)
+	}
+	if got, err = RenderPrompt(prompt(t, "judge-recovery.md"), judgeFixture()); err != nil || strings.Contains(got, "base_merged") || strings.Contains(got, "merged the base") {
+		t.Errorf("a recovery without a base merge names one (%v):\n%s", err, got)
+	}
+}

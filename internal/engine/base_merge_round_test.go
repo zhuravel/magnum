@@ -111,6 +111,28 @@ func TestRereviewInputSaysThePushMergedTheBase(t *testing.T) {
 	}
 }
 
+// A recovery round (the judge's session is gone) after a push that merged
+// the base branch tells its prompt so too: the fresh judge reads the PR's
+// own diff before and after the push, not the base branch's commits.
+func TestARecoveryAfterABaseMergeSaysThePushMergedTheBase(t *testing.T) {
+	h := newHarness(t, noThreshold)
+	setPushFiles(h, true, "ahead", ownBefore, ownAfterConflict)
+	h.reviewedPR(2, reviewedTip)
+	pollPR(h, time.Minute, 2, mergedHead)
+	h.wantState(2, store.PRRereviewPending)
+	parkSessions(h, 2)
+	h.advance(time.Hour)
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: mergedHead})
+	h.tick()
+	ins := h.rd.all()
+	if len(ins) != 2 || ins[1].Kind != pipeline.KindRecovery {
+		t.Fatalf("rounds = %d (second %+v), want a recovery", len(ins), ins[len(ins)-1].Kind)
+	}
+	if !ins[1].BaseMerged || ins[1].ForcePushed {
+		t.Fatalf("recovery input: base merged %v, force pushed %v", ins[1].BaseMerged, ins[1].ForcePushed)
+	}
+}
+
 // A re-review restarted on a newer head learns whether the commits since
 // the review merged the base branch up to that head.
 func TestRestartOnAMergedHeadSaysThePushMergedTheBase(t *testing.T) {

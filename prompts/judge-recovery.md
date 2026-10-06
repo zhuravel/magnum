@@ -4,8 +4,12 @@ Earlier reviews by `{{.ReviewerLogin}}`{{if .FormerLogins}} or, before magnum mo
   - {{.ID}} {{.Event}} on `{{.SHA}}` ({{.SubmittedAt}})
 {{- end}}
 Read them and their threads first (`gh api repos/{{.Owner}}/{{.Repo}}/pulls/{{.Number}}/reviews/<id>/comments`), then follow the skill's re-review section for head `{{.HeadSHA}}`. Candidate reports for this head are listed below.
+{{- $merged := and .BaseMerged (not .ForcePushed)}}
+{{- if $merged}}
+The push merged the base branch, so `{{.PreviousHeadSHA}}..{{.HeadSHA}}` carries the base branch's commits too. Review only what changed in the PR's own diff: compare `git diff {{if .BaseSHA}}{{.BaseSHA}}{{else}}origin/{{.BaseRef}}{{end}}...{{.PreviousHeadSHA}}` with `git diff {{if .BaseSHA}}{{.BaseSHA}}{{else}}origin/{{.BaseRef}}{{end}}...{{.HeadSHA}}`, not `git diff {{.PreviousHeadSHA}}..{{.HeadSHA}}`.
+{{- end}}
 {{- if .DeltaCheck}}
-Only the commits since your last review (`{{.PreviousHeadShort}}`) changed ({{.DeltaLines}} {{if eq .DeltaLines 1}}line{{else}}lines{{end}}{{if .DeltaFile}}; files listed in {{.DeltaFile}}{{end}}). Read your previous review and its threads for context, then review just those changes; the rest stands as reviewed. Post one short review.
+Only the commits since your last review (`{{.PreviousHeadShort}}`) changed ({{.DeltaLines}} {{if eq .DeltaLines 1}}line{{else}}lines{{end}}{{if .DeltaFile}}; files listed in {{.DeltaFile}}{{end}}){{if $merged}}, counted as the change between the PR's own diff before and after them{{end}}. Read your previous review and its threads for context, then review just those changes; the rest stands as reviewed. Post one short review.
 {{- end}}
 {{- if .FormerLogins}}
 The reviews and threads of {{range $i, $l := .FormerLogins}}{{if $i}}, {{end}}`{{$l}}`{{end}} are yours: count their findings as your earlier findings and decide their threads under the reply contract. Post everything new as `{{.ReviewerLogin}}`, and never edit or dismiss their reviews: magnum dismisses what they left standing once your review is posted.
@@ -36,6 +40,9 @@ self_authored: {{.SelfAuthored}}
 previous_review_id: {{.PreviousReviewID}}
 previous_head_sha: {{.PreviousHeadSHA}}
 since: {{.Since}}
+{{- if $merged}}
+base_merged: true
+{{- end}}
 {{- if .DeltaCheck}}
 delta_check: true
 {{- end}}

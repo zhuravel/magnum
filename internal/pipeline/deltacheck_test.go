@@ -142,3 +142,42 @@ func TestAFreshJudgeChecksADeltaWithTheRecoveryPrompt(t *testing.T) {
 		t.Fatalf("ordinary recovery prompt mentions a delta check:\n%s", p)
 	}
 }
+
+// A recovery after a push that merged the base branch renders base_merged
+// (RoundInput.BaseMerged reaches JudgeData for every kind), so the fresh
+// judge compares the PR's own diff before and after the push; for a delta
+// check the delta is that change, and a force push still wins.
+func TestARecoveryAfterABaseMergeRendersBaseMerged(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		check, force bool
+	}{{"a recovery", false, false}, {"a fresh-session delta check", true, false}, {"a force push", false, true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t)
+			e.ag.behaviors[agents.RoleJudge] = []behavior{e.judgePosts(611, "COMMENTED", "COMMENT").behavior(t)}
+			in := e.input(KindRecovery)
+			in.Round, in.BaseMerged, in.ForcePushed = 2, true, tc.force
+			in.Previous = &PreviousReview{ID: 610, Event: "COMMENTED", SHA: prevSHA, SubmittedAt: t0.Add(-time.Hour), Login: "talkable[bot]"}
+			if tc.check {
+				roles := e.r.Config.RolesFor(nil)
+				in.Roles = []config.Role{roles[slices.IndexFunc(roles, func(r config.Role) bool { return r.Judge })]}
+				in.DeltaCheck = &DeltaCheck{Lines: 2, Files: []DeltaFile{{Path: "app/models/coupon.rb", Status: "modified"}}}
+			}
+			if res, err := e.r.RunRound(e.ctx, in); err != nil || res.Outcome != OutcomePosted {
+				t.Fatalf("RunRound = %+v, %v", res, err)
+			}
+			prompt := e.ag.submitsFor(agents.RoleJudge)[0].Text
+			own := "compare `git diff " + in.BaseSHA + "..." + prevSHA + "` with `git diff " + in.BaseSHA + "..." + target + "`"
+			if tc.force {
+				if strings.Contains(prompt, "base_merged") || strings.Contains(prompt, own) {
+					t.Fatalf("a force push reads as a base merge:\n%s", prompt)
+				}
+				return
+			}
+			mustContain(t, "judge prompt", prompt, "\nmode: recovery\n", "\nbase_merged: true\n", "The push merged the base branch", own)
+			if tc.check {
+				mustContain(t, "judge prompt", prompt, "changed (2 lines; files listed in ", "), counted as the change between the PR's own diff before and after them.")
+			}
+		})
+	}
+}

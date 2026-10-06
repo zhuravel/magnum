@@ -244,11 +244,26 @@ func TestRenderGolden(t *testing.T) {
 	// it reads from misses.json beside usage.json.
 	curateMisses := curateFixtureWith("max_bytes")
 	curateMisses.Misses, curateMisses.MissCount = curateMisses.Dir+"/misses.json", 2
+	// A re-review after a push that merged the base branch: the commits
+	// since the previous head carry the base branch's, so the prompts hand
+	// out the PR's own diff and compare it before and after.
+	simplifyRereview := roleFixture()
+	simplifyRereview.Mode = ModeRereview
+	simplifyMerged := simplifyRereview
+	simplifyMerged.BaseMerged = true
+	recoveryMerged := judgeFixture()
+	recoveryMerged.BaseMerged = true
+	deltaCheckMerged := deltaCheck
+	deltaCheckMerged.BaseMerged = true
 
 	cases := []struct {
 		golden, name string
 		data         any
 	}{
+		{"simplify_rereview", "claude-simplify.md", simplifyData(simplifyRereview)},
+		{"simplify_rereview_base_merged", "claude-simplify.md", simplifyData(simplifyMerged)},
+		{"judge_recovery_base_merged", "judge-recovery.md", recoveryMerged},
+		{"judge_recovery_delta_check_base_merged", "judge-recovery.md", deltaCheckMerged},
 		{"judge_rereview_delta_check", "judge-rereview.md", deltaCheck},
 		// The same check by a judge in a fresh session (its old one is gone,
 		// or the PR's identity migrated): the recovery prompt carries it.

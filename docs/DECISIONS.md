@@ -1507,6 +1507,20 @@ editing history. Code, config comments and prompts reference these by their head
   delta check and its "arrived during the review" note, compare a range once; a failed call is never
   kept. Rejected: a local `git` check of the range (the measure would differ from the gate's, and the
   slot's clone may not have fetched the base branch).
+- **Simplify's re-review and the recovery prompt read the PR's own diff after a base merge too**
+  (2026-10-06). Two prompts still handed out `previous..head` after a push that merged the base branch:
+  `claude-simplify.md` in re-review mode ran `git diff <previous>..HEAD` and gave it to its four subagents,
+  master's commits included, and `judge-recovery.md` (a fresh judge rebuilding a re-review, the
+  fresh-session delta check of a15cbb0 too) neither said the commits merged the base branch nor carried
+  `base_merged`, which the engine never set for a recovery round. Simplify now hands out the PR's own diff
+  (`git diff <base>..HEAD`) and keeps its proposals to what changed between `git diff <base>...<previous>`
+  and `git diff <base>...<head>`; the recovery prompt says what `judge-rereview.md` says, renders
+  `base_merged: true`, and calls a delta check's delta the change between the two own diffs, all only
+  without a force push (which wins, as in the re-review); the engine measures `RoundInput.BaseMerged` for
+  recovery rounds as for re-reviews, also after a restart on a newer head. `judge-continue.md`,
+  `judge-nudge.md`, `model-fallback.md` (they continue a turn whose first prompt already said it) and
+  `codex-review.sh` (the whole PR against the merge base) name no previous head and need nothing. SKILL.md
+  is untouched: its re-review section (6) already covers `mode: recovery` and `base_merged`.
 - **A head behind the reviewed commit is not a 0-line delta** (2026-10-05). A force push back to an
   ancestor of the reviewed commit makes GitHub call the range `behind`, with no commit and no file: it was
   measured as a complete delta of 0 lines, so `rereview_min_lines` held the re-review up to

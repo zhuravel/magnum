@@ -396,13 +396,20 @@ func (e *Engine) roundInput(ctx context.Context, job *roundJob, rs roundSetup, w
 		}
 	}
 	in.BaseSHA, in.ForcePushed = e.headContext(ctx, job.slot.Path, base, reviewed, rs.target)
-	if rs.kind == pipeline.KindRereview && job.evalHead == "" {
+	if sinceReview(rs.kind) && job.evalHead == "" {
 		in.BaseMerged = e.baseMerged(ctx, job, reviewed, rs.target)
 	}
 	if job.postMerge {
 		in.BaseSHA = job.mergeBase // origin/<base> may hold the merged head: postMergeBase
 	}
 	return in
+}
+
+// sinceReview: a round of kind reviews the commits since the previous
+// review (a re-review, or a recovery whose fresh judge rebuilds it), so its
+// prompts are told when they merged the base branch (baseMerged).
+func sinceReview(kind string) bool {
+	return kind == pipeline.KindRereview || kind == pipeline.KindRecovery
 }
 
 // baseMerged reports whether the commits from reviewed to target have a
@@ -482,7 +489,7 @@ func (e *Engine) switchHead(job *roundJob, kind, base, workspaceID string) func(
 			reviewed = deref(pr.ReviewedSHA)
 		}
 		out.BaseSHA, out.ForcePushed = e.headContext(ctx, sl.Path, base, reviewed, out.TargetSHA)
-		if kind == pipeline.KindRereview {
+		if sinceReview(kind) {
 			out.BaseMerged = e.baseMerged(ctx, job, reviewed, out.TargetSHA)
 		}
 		e.sidebar(ctx, workspaceID, map[string]string{"magnum": "reviewing " + textx.ShortSHA(out.TargetSHA)})
