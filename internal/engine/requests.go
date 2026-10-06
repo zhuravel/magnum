@@ -200,6 +200,8 @@ func (e *Engine) handleRequest(ctx context.Context, req store.Request) {
 		answer(e, ctx, req, func(ctx context.Context, p TargetPayload) (string, error) {
 			return e.requestMute(ctx, p, req.Kind == ReqMute)
 		})
+	case ReqSnooze: // snooze.go
+		answer(e, ctx, req, e.requestSnooze)
 	case ReqApprove, ReqRequestChanges:
 		event := map[string]string{ReqApprove: "APPROVE", ReqRequestChanges: "REQUEST_CHANGES"}[req.Kind]
 		answer(e, ctx, req, func(ctx context.Context, p VerdictPayload) (string, error) {

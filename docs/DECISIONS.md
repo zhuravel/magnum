@@ -2862,3 +2862,35 @@ editing history. Code, config comments and prompts reference these by their head
   it. A quit that fails after the session was idle is no longer agents.ErrBusy: the setup failure is charged, backs
   off and leaves the PR needing attention after its attempts. Rejected: closing the pane to force the quit (it kills
   the agent's processes, and a quit is rarely needed now).
+- **The operator's own PRs have their own re-review interval** (2026-10-07). The operator develops his own PRs in
+  another agent session that pushes often, and magnum re-reviewed each burst 30 minutes after the last round (after
+  15 minutes of quiet), which spent Codex and added noise to a PR still in progress. `[daemon]
+  own_min_rereview_interval` (default `"0"`: min_rereview_interval; the operator's config sets `"2h"`, a `[[watch]]`
+  may override it, a zero there keeping the daemon's) replaces min_rereview_interval in eligibility.Throttle for a
+  PR whose author is one of config.SelfLogins (PRFacts.Own, the board's "mine"), as draft_min_rereview_interval does
+  for drafts; an own draft waits the longer of the two. A review request and `magnum review` skip it as they skip
+  the other timing rules. Its wait is `own_interval` ("re-review · own PR interval → 16:40", "the own PR interval
+  (2h since the last round)"). store.Candidates' SQL backstop cannot tell the operator's PRs apart, so dispatch
+  passes it the shortest of min_rereview_interval and every positive own interval (engine backstopInterval): an
+  own interval shorter than the normal one is not held to it. Rejected: a per-author list in the config (the self
+  logins already say whose PRs are the operator's).
+- **Snooze: one PR's automatic rounds held until a time** (2026-10-07). `magnum snooze <ref> [--for 2h | --until
+  18:00 | --off]` (default 2h) and the board's `z` (2h, after y/N; on a snoozed PR it offers to lift the snooze) hold
+  every automatic round of the PR until then: a push, the quiet period's end, a re-review, a reply round, a delta
+  check and a new PR's first review. `magnum review`, the board's review keys and a review request on GitHub still
+  run, and the snooze stays for the automatic rounds after them. The CLI and the board send a `snooze` request
+  (engine.SnoozePayload: the end, or off, and who asks), which the daemon applies like a mute (queued until one runs);
+  only an open PR is snoozed, and a snooze whose end passed before the daemon handled it does nothing. The snooze is
+  the kv `pr.<id>.snooze` (until, set at, by whom), so it survives restarts and needs no migration; it ends on its
+  own at its time, and an ended record holds nothing and is never cleaned up. eligibility.Throttle holds the PR
+  until then (PRFacts.SnoozedUntil, rule `snoozed`, after the request branch so a request passes, before the reply
+  branch so a reply round waits too), which sets next_eligible_at and the wait (`snoozed`: "re-review · snoozed →
+  18:00", the sentence naming `magnum snooze <ref> --off` and `magnum review <ref>`); setting or lifting a snooze
+  gives a waiting PR its next_eligible_at again. Dispatch checks the record once more (snoozeHolds), unless the PR is
+  forced or a request waits, so a PR whose time was set before the snooze (a round's settle, a retry's backoff) and a
+  paused round's continuation wait too. The board shows `snoozed → 18:00` in the state cell (the daemon's wait, or
+  after the state pill when nothing waits there), the card says until when, since when and by whom ("magnum snooze"
+  or "the board") and that `z` lifts it, and `prs --json` gains `snoozed_until`, `snoozed_at` and `snoozed_by`. `z`
+  shares the help line with `x` to keep the help on one screen. Rejected: a column on prs (a migration, and the CLI
+  could not run until the daemon restarted on it, for three values only the engine and the board read); muting with
+  an expiry (a mute holds requests too, and the operator still wants a review he asks for or someone requests).

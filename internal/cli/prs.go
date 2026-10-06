@@ -341,6 +341,11 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 					row.LastError = errorSummary(r.LastError) + extra
 				}
 			}
+			if v, ok, err := st.GetKV(ctx, engine.KVPRSnooze(r.PRID)); err == nil && ok {
+				if s, ok := engine.ParseSnooze(v); ok && s.Active(inspNow()) {
+					row.SnoozedUntil, row.SnoozedAt, row.SnoozedBy = s.Until, s.At, s.By
+				}
+			}
 			if v, ok, err := st.GetKV(ctx, engine.KVPRTrivial(r.PRID)); err == nil && ok {
 				if t, ok := engine.ParseTrivialSkip(v); ok {
 					row.Note = t.Note()

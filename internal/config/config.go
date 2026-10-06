@@ -102,6 +102,7 @@ type Daemon struct {
 	PushQuietPeriod          Duration `toml:"push_quiet_period"`
 	MinRereviewInterval      Duration `toml:"min_rereview_interval"`
 	DraftMinRereviewInterval Duration `toml:"draft_min_rereview_interval"`
+	OwnMinRereviewInterval   Duration `toml:"own_min_rereview_interval"` // MinRereviewInterval for the operator's own PRs (SelfLogins; an own draft takes the longer of it and the draft one; 0 = MinRereviewInterval; Config.ThrottleFor)
 	MaxRoundsPerPRPerDay     int      `toml:"max_rounds_per_pr_per_day"`
 	CloseGrace               Duration `toml:"close_grace"`
 	ReviewerTimeout          Duration `toml:"reviewer_timeout"` // default timeout of non-judge roles (a role's own timeout wins)
@@ -320,6 +321,10 @@ type Watch struct {
 	// DeltaCheck overrides [daemon] delta_check for this watch's PRs (unset
 	// keeps the daemon's).
 	DeltaCheck *bool `toml:"delta_check"`
+	// OwnMinRereviewInterval overrides [daemon] own_min_rereview_interval
+	// for this watch's PRs the operator authored (a zero duration keeps the
+	// daemon's).
+	OwnMinRereviewInterval Duration `toml:"own_min_rereview_interval"`
 	// JudgeOwnPass overrides [pipeline] judge_own_pass for this watch's PRs
 	// ("" keeps the pipeline's; see Config.JudgeOwnPassFor).
 	JudgeOwnPass string `toml:"judge_own_pass"`
@@ -369,9 +374,9 @@ func (c *Config) TrivialDeltas(w *Watch) []string {
 	return c.Daemon.SkipTrivialDeltas
 }
 
-// ThrottleFor is the [daemon] section with w's burst, re-review delta and
-// delta check overrides applied: the throttle settings (eligibility.Throttle) of w's
-// PRs. A nil w is the daemon's.
+// ThrottleFor is the [daemon] section with w's burst, re-review delta,
+// delta check and own PR interval overrides applied: the throttle settings
+// (eligibility.Throttle) of w's PRs. A nil w is the daemon's.
 func (c *Config) ThrottleFor(w *Watch) Daemon {
 	d := c.Daemon
 	if w == nil {
@@ -394,6 +399,9 @@ func (c *Config) ThrottleFor(w *Watch) Daemon {
 	}
 	if w.DeltaCheck != nil {
 		d.DeltaCheck = *w.DeltaCheck
+	}
+	if w.OwnMinRereviewInterval.Duration > 0 {
+		d.OwnMinRereviewInterval = w.OwnMinRereviewInterval
 	}
 	return d
 }

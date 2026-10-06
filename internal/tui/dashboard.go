@@ -187,6 +187,10 @@ type DashboardActions interface {
 	Release(ctx context.Context, ref string) (ActionResult, error)
 	Mute(ctx context.Context, ref string) (ActionResult, error)
 	Unmute(ctx context.Context, ref string) (ActionResult, error)
+	// Snooze holds the PR's automatic reviews for d and Unsnooze lifts
+	// that (magnum snooze [--off]); the board's z.
+	Snooze(ctx context.Context, ref string, d time.Duration) (ActionResult, error)
+	Unsnooze(ctx context.Context, ref string) (ActionResult, error)
 	Abort(ctx context.Context, ref string) (ActionResult, error)  // kill the PR's running review
 	Ignore(ctx context.Context, ref string) (ActionResult, error) // abort, mute and free the slot
 	// Approve and RequestChanges post the reviewer's own verdict on the head

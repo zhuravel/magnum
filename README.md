@@ -262,6 +262,23 @@ posted review and queues the re-review without waiting for `min_rereview_interva
 (default `"30m"`) waits `burst_quiet_period` (default `"15m"`) instead of `push_quiet_period`; a
 `[[watch]]` can override all three, and `burst_pushes = 0` turns the rule off.
 
+A PR you authored (its author is one of your logins: every gh identity and every watch's posting
+identity, the board's "mine") waits `[daemon] own_min_rereview_interval` after its last round instead of
+`min_rereview_interval` when that is set (default `"0"`: the same interval), say `"2h"` while another
+session of yours pushes to it often; an own draft waits the longer of it and `draft_min_rereview_interval`,
+a `[[watch]]` can override it, and a review request or `magnum review` skips it like the other timing
+rules. The wait names it ("re-review · own PR interval → 16:40").
+
+`magnum snooze <ref>` holds one PR's automatic rounds for a while: `--for` (default `2h`), `--until 18:00`
+(tomorrow once past) or an RFC 3339 time; `--off` lifts it. Until then no push, quiet period, re-review,
+reply round or delta check starts a round on it (the first review of a new PR included), while
+`magnum review`, the board's review keys and a review request on GitHub still run one and leave the
+snooze in place. It ends on its own at its time and survives a daemon restart (the registry keeps it); a
+round in flight finishes. The board's `z` snoozes the selected PR for 2h after a y/N, and on a snoozed PR
+offers to lift it; the state cell says `snoozed → 18:00` (in the wait, or after the state when nothing
+waits), the card until when, since when and by whom (`magnum snooze` or the board), and `prs --json`
+has `snoozed_until`, `snoozed_at` and `snoozed_by`.
+
 A push whose changes since the last review are only comment lines, whitespace or documentation is not
 re-reviewed: Magnum compares the reviewed commit with the new head (one GitHub call), moves the review
 to the new head with its verdict, keeps an App's approval and records `pr.trivial_delta`. When such a
@@ -1000,6 +1017,7 @@ Fix 1 problem before merging. 1 optional: 1 simplification.
 | `magnum pick` | Filterable PR picker; the herdr popup and ctrl+click on PR links use it. `enter` reviews (a reviewed head again too), `ctrl+f` fresh, `ctrl+g` opens the pane, `ctrl+o` the browser, `ctrl+p` pins or unpins, `ctrl+x` releases, `ctrl+r` refreshes the list; a key that cannot act on the PR says why instead (a review while its round runs, a release of a pinned PR). In the herdr popup a failure stays on screen until a key is pressed. |
 | `magnum ui open picker\|status\|cleanup\|doctor [--workspace id] [--width 90%] [--height 60%]` | Open one of the herdr plugin's popup panes over the herdr socket (what the plugin's keys run); the sizes come from the `[[panes]]` of `herdr-plugin.toml` unless given, the workspace from the plugin's context. |
 | `magnum pin\|unpin\|release\|mute\|unmute <ref>` | Hold a PR's slot and sessions, hand them back, stop automation for a PR (on a merged PR `mute` dismisses its merged-unreviewed flag and `unmute` restores it). |
+| `magnum snooze <ref> [--for 2h \| --until 18:00 \| --off]` | Hold a PR's automatic reviews until then (default 2h): no push, re-review, reply round or delta check starts a round, while `magnum review`, the board and a GitHub review request still do; it ends on its own and survives restarts, `--off` lifts it (see Configuration). Board key `z`. |
 | `magnum abort <ref>` | Kill a PR's running (or paused) review: its agents are interrupted, its runs abandoned, its sessions parked and a pool slot handed back. A review that waits in line (one `magnum review` asked for, or an automatic one) is taken back before it starts: its forced mark and what it asked for go, and nothing else is touched. The PR returns to reviewed (or baseline) until the next push. |
 | `magnum approve <ref> [-m TEXT] [--force]`, `magnum request-changes <ref> [-m TEXT] [--force]` | Your own verdict on the head magnum reviewed, posted by the daemon as the PR's posting identity with a body that names magnum's review and its findings: for repositories where magnum only comments, or when you decide differently. The head must still be the reviewed one unless `--force`. A manual approval follows the head like magnum's own; magnum's later rounds never dismiss a manual verdict as their own stale review. Board keys `A` and `C`. |
 | `magnum unapprove <ref> [--resume] [--yes] [--json]` | Withdraw the approval Magnum posted as you on the PR (Approving as you), dismissing it as you, and stop it approving that PR as you; without one standing it only stops it. Asks y/N on a terminal. `--resume` lets Magnum approve the PR as you again; your reviews from before then no longer stop it. Board key `D`. |
@@ -1048,14 +1066,14 @@ enough to run again, the roles asked for), and the PR's agent time over 7 days w
 filters; `v` cycles the views; `s`/`S` sort (updated, last review, reviewer activity, requested, changes,
 state; the requested sort puts the newest request first, the one the column shows, and PRs nobody asked
 last); `r`, `R`, `i` start review variants (a post-merge review on a
-merged PR, below); `o` opens the pane; `p`/`u` pin; `x` releases; `M`/`U` mute (on a merged PR, below); `K` kills the running review, or drops one that waits in line; `I` ignores the PR (an ignored
+merged PR, below); `o` opens the pane; `p`/`u` pin; `x` releases; `M`/`U` mute (on a merged PR, below); `z` snoozes the PR for 2h, or lifts its snooze (`magnum snooze`); `K` kills the running review, or drops one that waits in line; `I` ignores the PR (an ignored
 row is greyed with its title struck through, and `U` unmutes it, which stops ignoring it); `A` approves
 and `C` requests changes as the PR's posting identity (see `magnum approve`); `b` opens the browser;
 `t` opens the PR's issue in its tracker (below); `tab` switches to the status dashboard. Every action that stops or starts work asks y/N first,
 and only when `y` will do what it asks: a key that cannot act on the row says why at once instead (`x` on a
 pinned PR: unpin first, or with no slot: nothing to release; `A`/`C` after the head moved: review again
 first, since a screen cannot force a verdict; `r`, `R`, `i` while a round runs: `K` kills it; `I` on a
-merged PR; `K` with no review running or waiting; `U` on a PR that is not muted), and the right-click
+merged PR; `K` with no review running or waiting; `U` on a PR that is not muted; `z` on a merged or closed PR), and the right-click
 menu dims and the card's ACTIONS leave out the same actions; the status dashboard and `magnum pick` refuse
 the same way. `I` names what it will do: kill or drop the review when one runs or waits, mute, and free
 the slot only when the PR holds one.

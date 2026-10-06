@@ -106,6 +106,12 @@ func (f *fakeActions) Mute(_ context.Context, ref string) (ActionResult, error) 
 func (f *fakeActions) Unmute(_ context.Context, ref string) (ActionResult, error) {
 	return f.record("unmute " + ref)
 }
+func (f *fakeActions) Snooze(_ context.Context, ref string, d time.Duration) (ActionResult, error) {
+	return f.record("snooze " + ref + " " + d.String())
+}
+func (f *fakeActions) Unsnooze(_ context.Context, ref string) (ActionResult, error) {
+	return f.record("unsnooze " + ref)
+}
 func (f *fakeActions) Abort(_ context.Context, ref string) (ActionResult, error) {
 	return f.record("abort " + ref)
 }

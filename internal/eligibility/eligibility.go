@@ -58,6 +58,14 @@ type PRFacts struct {
 	RepliedAt    time.Time
 	ReplyRoundAt time.Time
 
+	// Own: the PR's author is one of the operator's own logins
+	// (config.SelfLogins): its re-review waits OwnMinRereviewInterval.
+	Own bool
+	// SnoozedUntil is when the PR's snooze (`magnum snooze`) ends: until
+	// then no automatic round starts, while a request or a forced round
+	// still does. Zero (or a time that has passed) = not snoozed.
+	SnoozedUntil time.Time
+
 	// The unreviewed delta (ReviewedSHA...HeadSHA) for the re-review
 	// threshold. DeltaKnown is false when it was not measured, or a file of
 	// it had no complete patch: the threshold then never holds the PR.

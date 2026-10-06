@@ -599,8 +599,16 @@ func (e *Engine) factsFor(ctx context.Context, pr store.PR, w config.Watch, now 
 		HeadSHA:           pr.HeadSHA, ReviewedSHA: deref(pr.ReviewedSHA), State: pr.State,
 		HeadChangedAt: pr.HeadChangedAt, PendingSince: deref(pr.PendingSince),
 		LastRoundStartedAt: deref(pr.LastRoundStartedAt), RoundsToday: rounds,
+		Own:    e.ownPR(pr),
 		Forced: pr.Forced, Muted: pr.Muted, Pinned: pr.Pinned,
 	}
+}
+
+// ownPR reports whether the operator authored pr: its author is one of
+// config.SelfLogins (the board's "mine").
+func (e *Engine) ownPR(pr store.PR) bool {
+	a := deref(pr.AuthorLogin)
+	return a != "" && e.cfg.SelfMatch()(a)
 }
 
 // claimableState is where a PR waits for its next round.

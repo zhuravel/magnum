@@ -152,6 +152,13 @@ type PRBoardRow struct {
 	// alone on a small delta); the state cell says so, as it does for a
 	// round in flight whose RoundWhy is one.
 	DeltaCheck bool
+	// SnoozedUntil is when the PR's snooze ends (`magnum snooze`, z): no
+	// automatic round starts before; SnoozedAt is when it was set and
+	// SnoozedBy who set it ("magnum snooze", "the board"). Zero while the
+	// PR is not snoozed. The state cell says "snoozed → 18:00" when nothing
+	// else waits there, the card says all three, and z lifts it.
+	SnoozedUntil, SnoozedAt time.Time
+	SnoozedBy               string
 	// Note is a one-line remark about the last review shown under LAST REVIEW
 	// on the card (e.g. "comment-only push skipped (a7b3f8c → 602da9d)").
 	Note string
@@ -607,7 +614,7 @@ func sanitizeRow(r PRBoardRow) PRBoardRow {
 	r.Issue, r.IssueURL = cleanText(r.Issue), cleanText(r.IssueURL)
 	r.State, r.GHState, r.Slot, r.LastError = cleanText(r.State), cleanText(r.GHState), cleanText(r.Slot), cleanText(r.LastError)
 	r.HeadSHA = cleanText(r.HeadSHA)
-	r.Wait, r.WaitDetail = cleanText(r.Wait), cleanText(r.WaitDetail)
+	r.Wait, r.WaitDetail, r.SnoozedBy = cleanText(r.Wait), cleanText(r.WaitDetail), cleanText(r.SnoozedBy)
 	r.Stalemate = cleanAll(r.Stalemate)
 	r.Note, r.SkipReason, r.ProjectNote = cleanText(r.Note), cleanText(r.SkipReason), cleanText(r.ProjectNote)
 	if r.Badges != nil {

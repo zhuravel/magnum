@@ -36,6 +36,8 @@ const (
 	WaitBurst         = "burst"          // the longer quiet period after a burst of pushes
 	WaitInterval      = "interval"       // the minimum re-review interval since the last round
 	WaitDraftInterval = "draft_interval" // the same for a draft
+	WaitOwnInterval   = "own_interval"   // the same for the operator's own PR
+	WaitSnoozed       = "snoozed"        // magnum snooze: no automatic round until it ends
 	WaitCap           = "cap"            // the daily round cap
 	WaitDelta         = "delta"          // the re-review threshold: a small delta waits for more
 	WaitRequested     = "requested"      // a review request (or ready for review): the debounce, then the next dispatch
@@ -151,6 +153,10 @@ func (w Wait) Short(now time.Time) string {
 		what = "interval"
 	case WaitDraftInterval:
 		what = "draft interval"
+	case WaitOwnInterval:
+		what = "own PR interval"
+	case WaitSnoozed:
+		what = "snoozed"
 	case WaitCap:
 		what = fmt.Sprintf("cap %d/%d", w.Count, w.Max)
 	case WaitRetry:
@@ -198,8 +204,8 @@ func (w Wait) Short(now time.Time) string {
 // budget cap, but not past pauses, the identity or capacity).
 func (w Wait) overridable() bool {
 	switch w.Reason {
-	case WaitQuiet, WaitBurst, WaitInterval, WaitDraftInterval, WaitCap, WaitDelta, WaitRequested, WaitRetry,
-		WaitQuietHours, WaitBudget, WaitNext:
+	case WaitQuiet, WaitBurst, WaitInterval, WaitDraftInterval, WaitOwnInterval, WaitSnoozed, WaitCap, WaitDelta,
+		WaitRequested, WaitRetry, WaitQuietHours, WaitBudget, WaitNext:
 		return true
 	}
 	return false
@@ -233,6 +239,8 @@ func (w Wait) Sentence(ref string, now time.Time) string {
 	case w.Forced || w.Reason == WaitNext || requestedNow:
 	case (w.Reason == WaitReplies || w.Reason == WaitReplyInterval) && ref != "":
 		s += "; `magnum review --replies " + ref + "` runs it now"
+	case w.Reason == WaitSnoozed && ref != "":
+		s += "; `magnum snooze " + ref + " --off` lifts it, `magnum review " + ref + "` runs it now"
 	case w.overridable() && ref != "":
 		s += "; `magnum review " + ref + "` runs it now"
 	case w.Reason == WaitMuted && ref != "":
@@ -365,6 +373,10 @@ func (e *Engine) throttleWait(ctx context.Context, pr store.PR, w config.Watch, 
 		return Wait{Reason: WaitQuiet, Until: until, Detail: fmt.Sprintf("the push quiet period (%s)", humanDuration(d.PushQuietPeriod.Duration))}
 	case eligibility.RuleDraftInterval:
 		return Wait{Reason: WaitDraftInterval, Until: until, Detail: fmt.Sprintf("the draft re-review interval (%s since the last round)", humanDuration(d.DraftMinRereviewInterval.Duration))}
+	case eligibility.RuleOwnInterval:
+		return Wait{Reason: WaitOwnInterval, Until: until, Detail: fmt.Sprintf("the own PR interval (%s since the last round)", humanDuration(d.OwnMinRereviewInterval.Duration))}
+	case eligibility.RuleSnoozed:
+		return Wait{Reason: WaitSnoozed, Until: until, Detail: "the end of its snooze"}
 	case eligibility.RuleInterval:
 		return Wait{Reason: WaitInterval, Until: until, Detail: fmt.Sprintf("the minimum re-review interval (%s since the last round)", humanDuration(d.MinRereviewInterval.Duration))}
 	case eligibility.RuleCap:

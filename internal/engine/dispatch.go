@@ -200,7 +200,7 @@ func (e *Engine) dispatch(ctx context.Context, ts tickState) {
 	params := store.CandidateParams{
 		Now:              now,
 		QuietPeriod:      e.cfg.Daemon.PushQuietPeriod.Duration,
-		MinInterval:      e.cfg.Daemon.MinRereviewInterval.Duration,
+		MinInterval:      e.backstopInterval(),
 		DraftMinInterval: e.cfg.Daemon.DraftMinRereviewInterval.Duration,
 		MaxRoundsPerDay:  e.cfg.Daemon.MaxRoundsPerPRPerDay,
 		Day:              store.DayKey(now),
@@ -225,6 +225,9 @@ func (e *Engine) dispatch(ctx context.Context, ts tickState) {
 		}
 		if quiet && !pr.Forced {
 			continue
+		}
+		if e.snoozeHolds(ctx, pr, now) {
+			continue // waitFor says why (snooze.go)
 		}
 		repo, err := e.st.RepoByID(ctx, pr.RepoID)
 		if err != nil {
@@ -292,6 +295,24 @@ func (e *Engine) relaxedCandidates(ctx context.Context, p store.CandidateParams,
 		out = append(out, pr)
 	}
 	return out
+}
+
+// backstopInterval is the re-review interval store.Candidates' backstop
+// holds a non-draft PR to: min_rereview_interval, or a shorter
+// own_min_rereview_interval (the daemon's or a watch's), which the backstop
+// cannot tell the operator's PRs by and must not hold them past.
+func (e *Engine) backstopInterval() time.Duration {
+	d := e.cfg.Daemon.MinRereviewInterval.Duration
+	own := []time.Duration{e.cfg.Daemon.OwnMinRereviewInterval.Duration}
+	for i := range e.cfg.Watches {
+		own = append(own, e.cfg.ThrottleFor(&e.cfg.Watches[i]).OwnMinRereviewInterval.Duration)
+	}
+	for _, o := range own {
+		if o > 0 {
+			d = min(d, o)
+		}
+	}
+	return d
 }
 
 // arrivedDuringReview reports whether the head a PR waits to have reviewed

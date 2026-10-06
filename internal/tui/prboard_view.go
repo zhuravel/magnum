@@ -692,7 +692,8 @@ const (
 // much of it), and for a skipped PR by why in a word ("· bot"). A merged PR
 // in a post-merge round says so: "post-merge · next tick", and so does a
 // delta check, waiting or in flight: "delta check · quiet → 14:09",
-// "delta check · judge · 4m".
+// "delta check · judge · 4m". A snoozed PR with nothing else there says
+// until when: "snoozed → 18:00".
 func (p prbPainter) stateWaitCell(r PRBoardRow) cell { return p.stateWaitDetail(r, stateFull) }
 
 // stateWaitDetail is stateWaitCell with d of a running round's progress.
@@ -709,6 +710,9 @@ func (p prbPainter) stateWaitDetail(r PRBoardRow, d stateDetail) cell {
 	_, rest, held := strings.Cut(r.Wait, " · ")
 	if g := roundProgress(r); g != nil && d > stateBare {
 		rest, held = progressText(*g, p.now, d == stateFull), true
+	}
+	if (!held || rest == "") && snoozeShown(r, p.now) {
+		rest, held = "snoozed → "+untilClock(r.SnoozedUntil, p.now), true
 	}
 	switch {
 	case postMergeRound(r):
@@ -728,6 +732,12 @@ func (p prbPainter) stateWaitDetail(r PRBoardRow, d stateDetail) cell {
 		c = append(c, seg{"· " + why, p.st.Dim})
 	}
 	return c
+}
+
+// snoozeShown reports whether r's snooze holds at now and its state cell may
+// say so: no round runs (its stage takes the cell).
+func snoozeShown(r PRBoardRow, now time.Time) bool {
+	return r.SnoozedUntil.After(now) && !workingState(rowState(r))
 }
 
 // roundProgress is the round r runs, as its state cell shows it; nil when

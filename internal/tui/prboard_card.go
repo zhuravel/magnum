@@ -43,7 +43,7 @@ func (p prbPainter) helpContent(width int) []string {
 		{"r", "review now (asks y/N); post-merge if merged"}, {"R", "fresh review in new agent sessions (asks y/N)"},
 		{"i", "review with /simplify (asks y/N)"}, {"o", "open the " + judgeName(p.judge) + " pane"},
 		{"b / t", "open the PR / its issue in the browser"}, {"p / u", "pin / unpin"}, {"M / U", "mute / unmute (asks y/N); merged: dismiss flag"},
-		{"x", "release (asks y/N)"}, {"K", "kill the running or queued review (asks y/N)"},
+		{"x / z", "release (asks y/N) / snooze 2h or lift it"}, {"K", "kill the running or queued review (asks y/N)"},
 		{"I", "ignore: kill, mute, free slot; U undoes"}, {"A / C", "approve / request changes (asks y/N)"}, {"a", "jump to what needs attention"},
 		{"y", "answer yes; any other key, enter too, cancels"},
 	})
@@ -204,6 +204,9 @@ func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
 	}
 	if r.AutoStopped != "" {
 		add(p.st.Dim.Render(truncate("magnum no longer approves it as you: "+oneLine(r.AutoStopped)+" (magnum unapprove --resume)", inner)))
+	}
+	if r.SnoozedUntil.After(p.now) {
+		add(p.pal.yellow.Render(truncate(p.snoozeSentence(r), inner)))
 	}
 	add("")
 
@@ -439,6 +442,23 @@ func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
 		add("  " + l)
 	}
 	return lines
+}
+
+// snoozeSentence says until when r is snoozed, since when and by whom, and
+// how to lift it: "Snoozed until 18:00 · set 15:58 by the board: no
+// automatic review starts (z lifts it)".
+func (p prbPainter) snoozeSentence(r PRBoardRow) string {
+	s := "Snoozed until " + untilClock(r.SnoozedUntil, p.now)
+	if !r.SnoozedAt.IsZero() || r.SnoozedBy != "" {
+		s += " · set"
+		if !r.SnoozedAt.IsZero() {
+			s += " " + factClock(p.now, r.SnoozedAt)
+		}
+		if r.SnoozedBy != "" {
+			s += " by " + r.SnoozedBy
+		}
+	}
+	return s + ": no automatic review starts (" + rowActDefs[actSnooze].key + " lifts it)"
 }
 
 // maxStalemateURLs is how many threads after the first the card lists.

@@ -95,6 +95,9 @@ func (c *Config) Validate() error {
 		errs = append(errs, validateBurst("watch "+w.Owner+": ", w.BurstQuietPeriod, w.BurstPushes, w.BurstWindow)...)
 		errs = append(errs, validateTrivialDeltas("watch "+w.Owner+": ", w.SkipTrivialDeltas)...)
 		errs = append(errs, validateRereviewDelta("watch "+w.Owner+": ", w.RereviewMinLines, w.RereviewMaxWait)...)
+		if w.OwnMinRereviewInterval.Duration < 0 {
+			errs = append(errs, fmt.Errorf("watch %s: own_min_rereview_interval must not be negative", w.Owner))
+		}
 		for _, t := range w.RequestTeams {
 			if strings.TrimSpace(t) == "" || strings.ContainsAny(t, "/ @") {
 				errs = append(errs, fmt.Errorf("watch %s: request_teams entry %q must be a team slug (no owner, no @)", w.Owner, t))
@@ -212,7 +215,8 @@ func (d Daemon) validateTimings() []error {
 		d   Duration
 	}{
 		{"push_quiet_period", d.PushQuietPeriod}, {"min_rereview_interval", d.MinRereviewInterval},
-		{"draft_min_rereview_interval", d.DraftMinRereviewInterval}, {"close_grace", d.CloseGrace},
+		{"draft_min_rereview_interval", d.DraftMinRereviewInterval}, {"own_min_rereview_interval", d.OwnMinRereviewInterval},
+		{"close_grace", d.CloseGrace},
 		{"reviewer_timeout", d.ReviewerTimeout}, {"judge_timeout", d.JudgeTimeout},
 		{"agent_start_stagger", d.AgentStartStagger}, {"min_warm", d.MinWarm}, {"human_cooldown", d.HumanCooldown},
 	} {

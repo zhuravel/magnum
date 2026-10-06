@@ -41,7 +41,11 @@ const (
 	actMute
 	actUnmute
 	actUnapprove
+	actSnooze
 )
+
+// boardSnooze is how long the board's z snoozes a PR.
+const boardSnooze = 2 * time.Hour
 
 // rowActDef is a row action's key and words.
 type rowActDef struct {
@@ -68,13 +72,14 @@ var rowActDefs = [...]rowActDef{
 	actMute:           {"M", "mute", "mute", "mute"},
 	actUnmute:         {"U", "unmute", "unmute", "unmute"},
 	actUnapprove:      {"D", "withdraw approval", "withdraw", "unapprove"},
+	actSnooze:         {"z", "snooze 2h", "snooze", "snooze"},
 }
 
 // The actions each screen offers, in the order its menu (and the card) lists
 // them.
 var (
 	boardActs = []rowAct{actReview, actFresh, actSimplify, actAbort, actIgnore, actApprove, actRequestChanges, actUnapprove,
-		actOpen, actBrowser, actTracker, actPin, actUnpin, actRelease, actMute, actUnmute}
+		actOpen, actBrowser, actTracker, actPin, actUnpin, actRelease, actMute, actUnmute, actSnooze}
 	dashActs = []rowAct{actReview, actFresh, actSimplify, actAbort, actIgnore,
 		actOpen, actBrowser, actPin, actUnpin, actRelease, actMute, actUnmute}
 )
@@ -133,6 +138,11 @@ type actRow struct {
 	inSlot, slotKnown               bool // the PR holds a slot
 	mergedUnreviewed, flagDismissed bool
 
+	// snoozedUntil is when the PR's snooze ends (zero: not snoozed, or the
+	// screen does not know: only the board offers z); now is the screen's
+	// clock when it built the row, which z's question counts from.
+	snoozedUntil, now time.Time
+
 	// keys are the screen's keys where they differ from rowActDefs (the
 	// picker's); an action missing from it there has no key.
 	keys map[rowAct]string
@@ -168,6 +178,9 @@ func (r actRow) closed() bool { return r.ghState == "CLOSED" }
 
 // ghWord is "merged" or "closed" for a PR GitHub no longer lists as open.
 func (r actRow) ghWord() string { return strings.ToLower(r.ghState) }
+
+// snoozed reports whether the row's snooze still holds.
+func (r actRow) snoozed() bool { return r.snoozedUntil.After(r.now) }
 
 func (r actRow) running() bool { return slices.Contains(runningStates, r.state) }
 func (r actRow) queued() bool  { return slices.Contains(queuedStates, r.state) }
@@ -286,6 +299,10 @@ func actionRefusal(a rowAct, r actRow) string {
 		case !r.merged() && !r.closed() && r.mutedKnown && !r.muted && !r.ignored():
 			return l + " is not muted"
 		}
+	case actSnooze: // a snooze that holds can always be lifted
+		if !r.snoozed() && (r.merged() || r.closed() || r.ended()) {
+			return l + " is " + cmp.Or(r.ghWord(), r.state) + ": nothing to snooze"
+		}
 	}
 	return ""
 }
@@ -335,8 +352,27 @@ func actionQuestion(a rowAct, r actRow) string {
 			return unmuteIgnoredQuestion(l)
 		}
 		return muteQuestion(l, false)
+	case actSnooze:
+		if r.snoozed() {
+			return "Lift the snooze of " + l + " (until " + untilClock(r.snoozedUntil, r.now) + "): automatic reviews start again?"
+		}
+		return "Snooze " + l + " for " + HumanDuration(boardSnooze) + ": no automatic review starts on it until " +
+			untilClock(r.now.Add(boardSnooze), r.now) + " (" + cmp.Or(r.key(actReview), "a review") + " and review requests still run)?"
 	}
 	return ""
+}
+
+// untilClock is when t comes, as the screens say it: "14:09" within a day,
+// "Tue 14:09" within a week, else "Jan 2 14:09".
+func untilClock(t, now time.Time) string {
+	t, now = t.Local(), now.Local()
+	switch ahead := t.Sub(now); {
+	case ahead < 24*time.Hour:
+		return t.Format("15:04")
+	case ahead < 6*24*time.Hour:
+		return t.Format("Mon 15:04")
+	}
+	return t.Format("Jan 2 15:04")
 }
 
 // reviewOptsOf is the review variant a starts.
@@ -377,6 +413,10 @@ func actionLabel(a rowAct, r actRow) string {
 	case actUnmute:
 		if r.ignored() {
 			return "unmute (stop ignoring)"
+		}
+	case actSnooze:
+		if r.snoozed() {
+			return "lift snooze"
 		}
 	}
 	return rowActDefs[a].label
@@ -434,6 +474,13 @@ func actionRun(a rowAct, r actRow) (what string, fn actionFunc) {
 			return rowActDefs[actUnmute].what + " " + target, on(DashboardActions.Unmute)
 		}
 		return what, on(DashboardActions.Mute)
+	case actSnooze:
+		if r.snoozed() {
+			return "unsnooze " + target, on(DashboardActions.Unsnooze)
+		}
+		return what, func(ctx context.Context, act DashboardActions) (ActionResult, error) {
+			return act.Snooze(ctx, target, boardSnooze)
+		}
 	}
 	return what, on(DashboardActions.Unmute)
 }
@@ -580,7 +627,7 @@ func boardActRow(r PRBoardRow, label string, now time.Time) actRow {
 		findings: r.Findings, verdicts: true, url: prURL(r), issue: r.Issue, issueURL: r.IssueURL,
 		pinned: r.Pinned, pinKnown: true, muted: r.Muted || normState(r.State) == "ignored", mutedKnown: true,
 		inSlot: r.Slot != "", slotKnown: true, mergedUnreviewed: r.MergedUnreviewed, flagDismissed: r.FlagDismissed,
-		auto: r.AutoApproved, autoKnown: true}
+		auto: r.AutoApproved, autoKnown: true, snoozedUntil: r.SnoozedUntil, now: now}
 	if r.LastReview != nil {
 		row.reviewed = r.LastReview.CommitSHA
 	}

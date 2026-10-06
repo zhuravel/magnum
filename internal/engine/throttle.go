@@ -57,13 +57,17 @@ func (e *Engine) throttle(ctx context.Context, w config.Watch, pr store.PR, f el
 }
 
 // throttleFacts completes f with what the registry's kv holds for pr: its
-// recent pushes, a pending review request (pendingRequest; none for a
-// forced PR) and the measured delta since the reviewed commit (deltaFacts).
+// recent pushes, its snooze (snoozeOf), a pending review request
+// (pendingRequest; none for a forced PR) and the measured delta since the
+// reviewed commit (deltaFacts).
 // A head that arrived during the PR's last review (f.PendingSince not after
 // reviewed_at) is not held by the re-review interval: that review already
 // covers an older head (rereviewAt, arrivedDuringReview).
 func (e *Engine) throttleFacts(ctx context.Context, pr store.PR, f eligibility.PRFacts) eligibility.PRFacts {
 	f.PushTimes = e.pushTimes(ctx, pr.ID)
+	if s, ok := e.snoozeRecord(ctx, pr.ID); ok {
+		f.SnoozedUntil = s.Until // Throttle reads one that has ended as none
+	}
 	if pr.ReviewedAt != nil && !f.PendingSince.IsZero() && !f.PendingSince.After(*pr.ReviewedAt) {
 		f.LastRoundStartedAt = time.Time{}
 	}

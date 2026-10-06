@@ -58,7 +58,10 @@ type prsJSONRow struct {
 	Spend            *prsJSONSpend     `json:"spend"`     // agent time over the last 7 days
 	Wait             string            `json:"wait"`
 	WaitDetail       string            `json:"wait_detail"`
-	DeltaCheck       bool              `json:"delta_check"` // the round it waits for is a delta check
+	DeltaCheck       bool              `json:"delta_check"`            // the round it waits for is a delta check
+	SnoozedUntil     time.Time         `json:"snoozed_until,omitzero"` // when the PR's snooze ends (magnum snooze); left out while not snoozed
+	SnoozedAt        time.Time         `json:"snoozed_at,omitzero"`    // when the snooze was set
+	SnoozedBy        string            `json:"snoozed_by"`             // by whom: "magnum snooze", "the board"; "" while not snoozed
 	Note             string            `json:"note"`
 	ProjectNote      string            `json:"project_note"` // the agents ran without the PR's own agent config changes
 	RequestedToMe    *prsJSONRequest   `json:"requested_to_me"`
@@ -255,6 +258,7 @@ func prsJSONOf(r tui.PRBoardRow) prsJSONRow {
 		LastError: r.LastError, ErrorFix: r.ErrorFix, ErrorDetail: listOf(r.ErrorDetail), RoundsToday: r.RoundsToday,
 		LastRound: mapPtr(r.LastRound, prsJSONRoundOf), RoundWhy: mapPtr(r.RoundWhy, prsJSONRoundWhyOf),
 		Progress: mapPtr(r.Progress, prsJSONProgressOf), Spend: mapPtr(r.Spend, prsJSONSpendOf), Wait: r.Wait, WaitDetail: r.WaitDetail, DeltaCheck: r.DeltaCheck, Note: r.Note, ProjectNote: r.ProjectNote,
+		SnoozedUntil: r.SnoozedUntil, SnoozedAt: r.SnoozedAt, SnoozedBy: r.SnoozedBy,
 		RequestedToMe: mapPtr(r.RequestedToMe, prsJSONRequestOf), LastRequest: mapPtr(r.LastRequest, prsJSONRequestOf),
 		Requests: mapList(r.Requests, prsJSONRequestOf), ClosedAt: r.ClosedAt, Recent: r.Recent, MergedUnreviewed: r.MergedUnreviewed, FlagDismissed: r.FlagDismissed,
 		NeedsMe: r.NeedsMe, ReviewDecision: r.ReviewDecision, AutoApproveStopped: r.AutoStopped,

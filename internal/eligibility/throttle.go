@@ -31,10 +31,12 @@ const (
 	RuleBurst         Rule = "burst"          // the longer quiet period after a burst of pushes
 	RuleInterval      Rule = "interval"       // the minimum re-review interval since the last round
 	RuleDraftInterval Rule = "draft_interval" // the same for a draft
+	RuleOwnInterval   Rule = "own_interval"   // the same for the operator's own PR
 	RuleCap           Rule = "cap"            // the daily round cap
 	RuleSmallDelta    Rule = "small_delta"    // the re-review threshold
 	RuleReplies       Rule = "replies"        // the reply debounce
 	RuleReplyInterval Rule = "reply_interval" // one reply round per PR and head per reply_min_interval
+	RuleSnoozed       Rule = "snoozed"        // magnum snooze
 )
 
 // Throttle decides whether a PR that is already eligible may start a review
@@ -55,7 +57,9 @@ const (
 //     (DraftMinRereviewInterval for drafts; zero = MinRereviewInterval) <= now,
 //     and RoundsToday < MaxRoundsPerPRPerDay. A cap of zero or less means no
 //     cap; a daily cap that is reached holds the PR until the next local
-//     midnight.
+//     midnight. The operator's own PR (Own) waits OwnMinRereviewInterval
+//     instead (zero = the interval above); an own draft the longer of it and
+//     the draft interval.
 //   - Small delta (re-review only): while the unreviewed delta is known
 //     (DeltaKnown), adds no file and has fewer than RereviewMinLines changed
 //     lines, the PR waits until DeltaSince + RereviewMaxWait; a later push
@@ -64,15 +68,19 @@ const (
 //     delta check (DeltaCheck): it is cheap, so it does not wait.
 //   - Requested (RequestedAt set): every rule above is skipped; the PR waits
 //     only RequestDebounce after the later of RequestedAt and HeadChangedAt.
-//   - Replies (RepliedAt set, no request): every rule above is skipped too;
-//     the PR waits ReplyDebounce after RepliedAt and ReplyMinInterval after
-//     ReplyRoundAt (the caller sets RepliedAt only while no push came since
-//     the review: a push wins, and its re-review reads the replies).
+//   - Snoozed (SnoozedUntil after now, no request): the PR waits until then,
+//     whatever round it waits for, a reply round's included.
+//   - Replies (RepliedAt set, no request): every rule above but the snooze
+//     is skipped; the PR waits ReplyDebounce after RepliedAt and
+//     ReplyMinInterval after ReplyRoundAt (the caller sets RepliedAt only
+//     while no push came since the review: a push wins, and its re-review
+//     reads the replies).
 //   - Forced bypasses all of it: always ready.
 //
 // A zero timestamp or zero duration never blocks. When several rules hold the
 // PR back, NextEligibleAt is the latest of them and Reason names that one
-// (ties go to quiet period, then interval, then cap, then small delta).
+// (ties go to the snooze, then quiet period, then interval, then cap, then
+// small delta).
 func Throttle(d config.Daemon, f PRFacts, now time.Time) ThrottleDecision {
 	if f.Forced {
 		return ThrottleDecision{Ready: true, NextEligibleAt: now}
@@ -104,6 +112,7 @@ func Throttle(d config.Daemon, f PRFacts, now time.Time) ThrottleDecision {
 		}
 		return decide()
 	}
+	hold(f.SnoozedUntil, RuleSnoozed, ReasonSnoozed)
 	if !f.RepliedAt.IsZero() {
 		if debounce := d.ReplyDebounce.Duration; debounce > 0 {
 			hold(f.RepliedAt.Add(debounce), RuleReplies, fmt.Sprintf("%s (%s after the last)", ReasonReplies, debounce))
@@ -132,6 +141,9 @@ func Throttle(d config.Daemon, f PRFacts, now time.Time) ThrottleDecision {
 		if f.IsDraft && d.DraftMinRereviewInterval.Duration > 0 {
 			interval, intervalRule, name = d.DraftMinRereviewInterval.Duration, RuleDraftInterval, "draft re-review interval"
 		}
+		if own := d.OwnMinRereviewInterval.Duration; f.Own && own > 0 && (!f.IsDraft || own > interval) {
+			interval, intervalRule, name = own, RuleOwnInterval, "own PR interval"
+		}
 		if interval > 0 && !f.LastRoundStartedAt.IsZero() {
 			hold(f.LastRoundStartedAt.Add(interval), intervalRule, fmt.Sprintf("waiting for %s (%s)", name, interval))
 		}
@@ -155,6 +167,8 @@ const (
 	ReasonSmallDelta = "small delta"
 	// ReasonReplies starts the reasons of the reply debounce and interval.
 	ReasonReplies = "replies to the review"
+	// ReasonSnoozed is the reason of a snooze (magnum snooze).
+	ReasonSnoozed = "snoozed"
 )
 
 // smallDelta reports whether a measured delta stays under the re-review

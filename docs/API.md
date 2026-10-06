@@ -435,6 +435,12 @@ func ProjectSentences(ctx context.Context, st *store.Store, prID int64, head str
     project configuration (CodexProjectSentence, ClaudeProjectSentence),
     in projectKinds' order; "" when none did.
 
+func ProjectTouched(kind string, paths []string) bool
+    ProjectTouched reports whether paths (a PR's changed files, relative to
+    the repository root) name the project config kind loads from the checkout:
+    a file at or under one of its paths. A kind magnum does not compare touches
+    nothing.
+
 func RenderPrompt(p config.Prompt, data any) (string, error)
     RenderPrompt executes a resolved prompt template
     (config.Config.ResolvePrompt or RolePrompt) with data: JudgeData for the
@@ -2709,9 +2715,9 @@ func (c *Config) Stages(w *Watch) [][]Role
     Validation guarantees After is acyclic.
 
 func (c *Config) ThrottleFor(w *Watch) Daemon
-    ThrottleFor is the [daemon] section with w's burst, re-review delta and
-    delta check overrides applied: the throttle settings (eligibility.Throttle)
-    of w's PRs. A nil w is the daemon's.
+    ThrottleFor is the [daemon] section with w's burst, re-review delta,
+    delta check and own PR interval overrides applied: the throttle settings
+    (eligibility.Throttle) of w's PRs. A nil w is the daemon's.
 
 func (c *Config) TrackersFor(fullName string) []Tracker
     TrackersFor returns the issue trackers of repository fullName's PRs:
@@ -2770,6 +2776,7 @@ type Daemon struct {
 	PushQuietPeriod          Duration `toml:"push_quiet_period"`
 	MinRereviewInterval      Duration `toml:"min_rereview_interval"`
 	DraftMinRereviewInterval Duration `toml:"draft_min_rereview_interval"`
+	OwnMinRereviewInterval   Duration `toml:"own_min_rereview_interval"` // MinRereviewInterval for the operator's own PRs (SelfLogins; an own draft takes the longer of it and the draft one; 0 = MinRereviewInterval; Config.ThrottleFor)
 	MaxRoundsPerPRPerDay     int      `toml:"max_rounds_per_pr_per_day"`
 	CloseGrace               Duration `toml:"close_grace"`
 	ReviewerTimeout          Duration `toml:"reviewer_timeout"` // default timeout of non-judge roles (a role's own timeout wins)
@@ -3766,6 +3773,10 @@ type Watch struct {
 	// DeltaCheck overrides [daemon] delta_check for this watch's PRs (unset
 	// keeps the daemon's).
 	DeltaCheck *bool `toml:"delta_check"`
+	// OwnMinRereviewInterval overrides [daemon] own_min_rereview_interval
+	// for this watch's PRs the operator authored (a zero duration keeps the
+	// daemon's).
+	OwnMinRereviewInterval Duration `toml:"own_min_rereview_interval"`
 	// JudgeOwnPass overrides [pipeline] judge_own_pass for this watch's PRs
 	// ("" keeps the pipeline's; see Config.JudgeOwnPassFor).
 	JudgeOwnPass string `toml:"judge_own_pass"`
@@ -3847,6 +3858,8 @@ const (
 	ReasonSmallDelta = "small delta"
 	// ReasonReplies starts the reasons of the reply debounce and interval.
 	ReasonReplies = "replies to the review"
+	// ReasonSnoozed is the reason of a snooze (magnum snooze).
+	ReasonSnoozed = "snoozed"
 )
     Reason prefixes of two rules (ThrottleDecision.Rule is the code to tell the
     rules apart by).
@@ -3934,6 +3947,14 @@ type PRFacts struct {
 	RepliedAt    time.Time
 	ReplyRoundAt time.Time
 
+	// Own: the PR's author is one of the operator's own logins
+	// (config.SelfLogins): its re-review waits OwnMinRereviewInterval.
+	Own bool
+	// SnoozedUntil is when the PR's snooze (`magnum snooze`) ends: until
+	// then no automatic round starts, while a request or a forced round
+	// still does. Zero (or a time that has passed) = not snoozed.
+	SnoozedUntil time.Time
+
 	// The unreviewed delta (ReviewedSHA...HeadSHA) for the re-review
 	// threshold. DeltaKnown is false when it was not measured, or a file of
 	// it had no complete patch: the threshold then never holds the PR.
@@ -3962,10 +3983,12 @@ const (
 	RuleBurst         Rule = "burst"          // the longer quiet period after a burst of pushes
 	RuleInterval      Rule = "interval"       // the minimum re-review interval since the last round
 	RuleDraftInterval Rule = "draft_interval" // the same for a draft
+	RuleOwnInterval   Rule = "own_interval"   // the same for the operator's own PR
 	RuleCap           Rule = "cap"            // the daily round cap
 	RuleSmallDelta    Rule = "small_delta"    // the re-review threshold
 	RuleReplies       Rule = "replies"        // the reply debounce
 	RuleReplyInterval Rule = "reply_interval" // one reply round per PR and head per reply_min_interval
+	RuleSnoozed       Rule = "snoozed"        // magnum snooze
 )
     The rules Throttle applies.
 
@@ -4002,7 +4025,9 @@ func Throttle(d config.Daemon, f PRFacts, now time.Time) ThrottleDecision
         MinRereviewInterval (DraftMinRereviewInterval for drafts; zero =
         MinRereviewInterval) <= now, and RoundsToday < MaxRoundsPerPRPerDay.
         A cap of zero or less means no cap; a daily cap that is reached holds
-        the PR until the next local midnight.
+        the PR until the next local midnight. The operator's own PR (Own) waits
+        OwnMinRereviewInterval instead (zero = the interval above); an own draft
+        the longer of it and the draft interval.
       - Small delta (re-review only): while the unreviewed delta is known
         (DeltaKnown), adds no file and has fewer than RereviewMinLines
         changed lines, the PR waits until DeltaSince + RereviewMaxWait;
@@ -4011,15 +4036,18 @@ func Throttle(d config.Daemon, f PRFacts, now time.Time) ThrottleDecision
         gets a delta check (DeltaCheck): it is cheap, so it does not wait.
       - Requested (RequestedAt set): every rule above is skipped; the PR waits
         only RequestDebounce after the later of RequestedAt and HeadChangedAt.
-      - Replies (RepliedAt set, no request): every rule above is skipped too;
-        the PR waits ReplyDebounce after RepliedAt and ReplyMinInterval after
-        ReplyRoundAt (the caller sets RepliedAt only while no push came since
-        the review: a push wins, and its re-review reads the replies).
+      - Snoozed (SnoozedUntil after now, no request): the PR waits until then,
+        whatever round it waits for, a reply round's included.
+      - Replies (RepliedAt set, no request): every rule above but the snooze is
+        skipped; the PR waits ReplyDebounce after RepliedAt and ReplyMinInterval
+        after ReplyRoundAt (the caller sets RepliedAt only while no push came
+        since the review: a push wins, and its re-review reads the replies).
       - Forced bypasses all of it: always ready.
 
     A zero timestamp or zero duration never blocks. When several rules hold
-    the PR back, NextEligibleAt is the latest of them and Reason names that one
-    (ties go to quiet period, then interval, then cap, then small delta).
+    the PR back, NextEligibleAt is the latest of them and Reason names that
+    one (ties go to the snooze, then quiet period, then interval, then cap,
+    then small delta).
 
 ```
 
@@ -4225,6 +4253,8 @@ const (
 	WaitBurst         = "burst"          // the longer quiet period after a burst of pushes
 	WaitInterval      = "interval"       // the minimum re-review interval since the last round
 	WaitDraftInterval = "draft_interval" // the same for a draft
+	WaitOwnInterval   = "own_interval"   // the same for the operator's own PR
+	WaitSnoozed       = "snoozed"        // magnum snooze: no automatic round until it ends
 	WaitCap           = "cap"            // the daily round cap
 	WaitDelta         = "delta"          // the re-review threshold: a small delta waits for more
 	WaitRequested     = "requested"      // a review request (or ready for review): the debounce, then the next dispatch
@@ -4254,6 +4284,9 @@ const FormerDismissMessage = "magnum: superseded by the review of %s posted as %
     FormerDismissMessage is the reason a dismissed review of a former identity
     shows on GitHub; the arguments are the new review's commit (short) and the
     login it was posted as.
+
+const ReqSnooze = "snooze"
+    ReqSnooze snoozes a PR or lifts its snooze (SnoozePayload).
 
 const ReqUnapprove = "unapprove"
     ReqUnapprove is `magnum unapprove` and the board's D (UnapprovePayload).
@@ -4430,6 +4463,9 @@ func KVPRRequestBy(prID int64) string
 func KVPRSkippedBaseline(prID int64) string
     KVPRSkippedBaseline marks a baseline PR skipBaseline made ineligible:
     its value is the head it was skipped on.
+
+func KVPRSnooze(prID int64) string
+    KVPRSnooze holds a PR's snooze (Snooze as JSON).
 
 func KVPRStalemate(prID int64) string
     KVPRStalemate holds the threads of a PR where magnum stopped arguing and
@@ -5177,6 +5213,31 @@ type Slots interface {
 	EnsureSchema(ctx context.Context, slot store.Slot, pool config.Pool) (string, error)
 }
     Slots is the part of *slots.Manager the engine drives.
+
+type Snooze struct {
+	Until time.Time `json:"until"`
+	At    time.Time `json:"at"`
+	By    string    `json:"by,omitempty"`
+}
+    Snooze is a PR's snooze: until when no automatic round starts, when it was
+    set and by whom ("magnum snooze", "the board").
+
+func ParseSnooze(s string) (Snooze, bool)
+    ParseSnooze reads a KVPRSnooze value; ok is false for "" or a value it
+    cannot read. Whether the snooze still holds is Active's business.
+
+func (s Snooze) Active(now time.Time) bool
+    Active reports whether the snooze holds at now: it ends at Until.
+
+type SnoozePayload struct {
+	PRTarget
+	Until time.Time `json:"until,omitzero"`
+	Off   bool      `json:"off,omitempty"`
+	By    string    `json:"by,omitempty"`
+}
+    SnoozePayload is a `magnum snooze` request: snooze the PR until Until,
+    or lift its snooze (Off). By says who asks ("magnum snooze", "the board"),
+    for the card and the events.
 
 type StaleCheck struct {
 	Stale          bool
@@ -13339,6 +13400,10 @@ type DashboardActions interface {
 	Release(ctx context.Context, ref string) (ActionResult, error)
 	Mute(ctx context.Context, ref string) (ActionResult, error)
 	Unmute(ctx context.Context, ref string) (ActionResult, error)
+	// Snooze holds the PR's automatic reviews for d and Unsnooze lifts
+	// that (magnum snooze [--off]); the board's z.
+	Snooze(ctx context.Context, ref string, d time.Duration) (ActionResult, error)
+	Unsnooze(ctx context.Context, ref string) (ActionResult, error)
 	Abort(ctx context.Context, ref string) (ActionResult, error)  // kill the PR's running review
 	Ignore(ctx context.Context, ref string) (ActionResult, error) // abort, mute and free the slot
 	// Approve and RequestChanges post the reviewer's own verdict on the head
@@ -13580,6 +13645,13 @@ type PRBoardRow struct {
 	// alone on a small delta); the state cell says so, as it does for a
 	// round in flight whose RoundWhy is one.
 	DeltaCheck bool
+	// SnoozedUntil is when the PR's snooze ends (`magnum snooze`, z): no
+	// automatic round starts before; SnoozedAt is when it was set and
+	// SnoozedBy who set it ("magnum snooze", "the board"). Zero while the
+	// PR is not snoozed. The state cell says "snoozed → 18:00" when nothing
+	// else waits there, the card says all three, and z lifts it.
+	SnoozedUntil, SnoozedAt time.Time
+	SnoozedBy               string
 	// Note is a one-line remark about the last review shown under LAST REVIEW
 	// on the card (e.g. "comment-only push skipped (a7b3f8c → 602da9d)").
 	Note string

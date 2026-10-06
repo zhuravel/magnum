@@ -175,6 +175,21 @@ func (s *screenActions) Unmute(ctx context.Context, ref string) (tui.ActionResul
 	return s.target(ctx, "unmute", ref)
 }
 
+// Snooze holds the PR's automatic reviews for d, as "the board"; the
+// screen asked first.
+func (s *screenActions) Snooze(ctx context.Context, ref string, d time.Duration) (tui.ActionResult, error) {
+	return s.do(ctx, "snooze", func(ctx context.Context, c *Context, deps *actDeps) int {
+		return snoozeMain(ctx, c, deps, ref, snoozeOpts{dur: d, by: "the board"})
+	})
+}
+
+// Unsnooze lifts the PR's snooze; the screen asked first.
+func (s *screenActions) Unsnooze(ctx context.Context, ref string) (tui.ActionResult, error) {
+	return s.do(ctx, "snooze", func(ctx context.Context, c *Context, deps *actDeps) int {
+		return snoozeMain(ctx, c, deps, ref, snoozeOpts{off: true, by: "the board"})
+	})
+}
+
 // Approve posts the reviewer's APPROVE on the reviewed head; the screen
 // asked first.
 func (s *screenActions) Approve(ctx context.Context, ref string) (tui.ActionResult, error) {
