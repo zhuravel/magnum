@@ -85,17 +85,22 @@ func runRoles(c *Context, o rolesOpts, pos []string) int {
 
 // rolesRepo normalizes --repo: owner/name, or a name in daemon.default_repo's
 // owner.
-func rolesRepo(cfg *config.Config, s string) (string, error) {
+func rolesRepo(cfg *config.Config, s string) (string, error) { return repoArg(cfg, "--repo ", s) }
+
+// repoArg normalizes a repository argument: owner/name, or a name in
+// daemon.default_repo's owner. An error names it after label ("--repo ",
+// or "" for a positional one).
+func repoArg(cfg *config.Config, label, s string) (string, error) {
 	owner, name, ok := strings.Cut(s, "/")
 	if !ok {
 		def, _, _ := strings.Cut(cfg.Daemon.DefaultRepo, "/")
 		if def == "" {
-			return "", fmt.Errorf("--repo %s: want owner/name (no daemon.default_repo to take the owner from)", s)
+			return "", fmt.Errorf("%s%s: want owner/name (no daemon.default_repo to take the owner from)", label, s)
 		}
 		owner, name = def, s
 	}
 	if owner == "" || name == "" || strings.Contains(name, "/") {
-		return "", fmt.Errorf("--repo %s: want owner/name or name", s)
+		return "", fmt.Errorf("%s%s: want owner/name or name", label, s)
 	}
 	return owner + "/" + name, nil
 }

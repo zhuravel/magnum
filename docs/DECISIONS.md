@@ -2556,3 +2556,40 @@ editing history. Code, config comments and prompts reference these by their head
   bodies to tell Magnum's reviews from the operator's), counting only the operator's dismissals as a stop (a
   maintainer's dismissal is a person's judgement too), withdrawing on every push, and an approval when the
   priorities of still-open findings cannot be told.
+- **`magnum stats` says who found each posted problem** (2026-10-06; amends "Finding provenance, then `magnum
+  stats`"). Two estimates of what the reviewers add disagreed: in 31 full re-reviews they found 5 posted
+  findings the judge missed, all P3, against "41 of 75 posted re-review findings came only from
+  claude-review", because before the judge's own pass it read the reports first and `sources` mixed "found"
+  and "confirmed". Since the own pass writes `judge-own.md` before any report is read, SKILL.md section 3 says
+  `sources` names `judge` only if the own pass (`own_findings`, when set) found the problem; a candidate the
+  judge only confirmed lists its reports alone. `magnum stats` gains two sections (`value` in `--json`) over
+  the posted rounds whose provenance can tell: first reviews and re-reviews (recoveries included) with a run of
+  kind `own_pass`, and delta checks, re-reviews the judge ran alone (an unchanged head too), whose findings are
+  all its own. Per kind: the rounds, the posted findings by priority (of the round's latest judge run that
+  recorded provenance) split into the own pass alone, the own pass and a reviewer, and reviewers only by the
+  reviewers that raised them (`claude-review+codex-review` is one key, so the split adds up), those with no
+  source apart; the reviewer-only P0 to P2 findings and their rate per 10 rounds; each role's median turn (the
+  judge's own pass apart). It informs one decision: when reviewers alone add almost no P0 to P2 in re-reviews,
+  more re-reviews can run as the judge alone. Rejected: a separate `--value` view (every section of `stats` is
+  one report), counting rounds before the own pass (their `judge` meant "found or confirmed"), and splitting a
+  finding two reviewers raised between them (the per-reviewer counts would no longer add up).
+- **Bugs found next door are kept, and listed apart** (2026-10-06). The judge proves and drops problems that
+  already existed before the PR (`pre_existing`): 63 so far, 1 P1 and 26 P2, among them a cross-site export of
+  shoppers' emails on a PR that fixed the same guard elsewhere, and nobody heard of them. Every provenance
+  entry now carries a short `title` (required by SKILL.md section 8), and a `pre_existing` P1 or P2 the judge
+  proved at `head_sha` in or near code the PR changes is `"nearby": true` (section 7); the result parser keeps
+  the title as one line of at most 120 runes and the mark only on a rejection, and migration 0021 stores both
+  (`findings.title`, `findings.nearby`, which rows recorded before lack). The review lists up to three nearby
+  problems in a collapsed `<details><summary>Found nearby, not this PR's (N)</summary>` block before Checks,
+  one line each (`path:line`, the problem, its priority), never counted in the verdict line or the event; a
+  security one (an authorization bypass, data exposure, injection) goes only to the result file, since the
+  repository may be public. `magnum debt [<repo>] [--json]` lists them across PRs from the registry
+  (`store.PreExistingFindings`): the rejected `pre_existing` P1 and P2 findings marked nearby, and the untitled
+  ones recorded before titles and the mark existed (their path and reason only), newest first, once per
+  repository, path and title (case and blanks folded; an untitled one per path), the newest find with its PR
+  and day. SKILL.md grows to 31,523 bytes and its cap from 31,098 by 425: the block, the titles and the
+  sources rule add 690 bytes, and shortening sections 3, 7 and 8 without dropping a rule won back 250 (the
+  reports' description, the reason a simplification must sit on changed lines, "magnum handles a newer head",
+  what magnum does with `verdict`). Rejected: counting nearby problems toward the verdict (the PR did not
+  bring them), posting a security one in a public review, and listing titled pre-existing problems the judge
+  did not mark nearby (not proven at the head, or far from the PR).

@@ -76,7 +76,10 @@ LGTM :shipit:`), then each finding as an inline comment on the line that must ch
 > The `catch` changes state before the session check. Check the captured session first.
 
 The author answers on the thread (`fixed`, `not a bug: <why>`, `won't fix: <why>`), and the next push is
-re-reviewed against those answers. [The judge skill](#the-judge-skill) has the full format.
+re-reviewed against those answers. A P1 or P2 problem the judge proved next to the PR's changes that the
+PR did not bring is not a finding: up to three go into a collapsed "Found nearby, not this PR's" block
+before Checks, one line each, never counted in the verdict (a security one only into `magnum debt`).
+[The judge skill](#the-judge-skill) has the full format.
 
 ## How it works
 
@@ -575,7 +578,19 @@ that left no file only makes the candidates prompt ask for it. Crash recovery co
 reviewers (a daemon restart during it starts the round again), and a usage limit there pauses the round
 at the candidates prompt, whose turn the paused round then continues. A judge alone (a delta check, a re-review of the same head, a continued
 turn, a round whose reviewers were all dropped) gets one prompt, and `judge_own_pass = "after"` keeps one
-prompt after the reviewers. No role may edit the checkout: after each stage Magnum compares HEAD and `git status`
+prompt after the reviewers.
+
+What the reviewers add is measured, not guessed: in a round with the own pass, `judge` among a posted
+finding's sources means the own pass found it before any report was read. `magnum stats` (WHO FOUND THE
+POSTED FINDINGS, WHAT THE REVIEWERS ADD; `value` in `--json`) counts, for first reviews, re-reviews and
+delta checks (the judge alone), the posted findings by priority found by the own pass, by the own pass
+and a reviewer, and by reviewers only (by reviewer), the reviewer-only P0 to P2 per 10 rounds and each
+role's median turn. Read the re-review row against its reviewers' minutes: when reviewers alone add
+almost no P0 to P2 there, more re-reviews can run as the judge alone (a higher `rereview_min_lines` makes
+more of them delta checks) and save the reviewers' turns; the first review row tells the same of first
+reviews.
+
+No role may edit the checkout: after each stage Magnum compares HEAD and `git status`
 with what the stage found (the judge's own pass included while it works), and a role that changed them
 gets a `round.checkout_dirty` warning and the checkout reset to the PR head (`git reset --hard`, `git
 clean -fd`) before anything else runs on it.
@@ -728,8 +743,10 @@ only when the code shows it, honours an answered finding unless it proves the re
 says why in one sentence in that thread), and lists only what changed since its last review: findings
 now fixed or answered, findings still open despite a reply or a commit, and new ones; the unchanged open
 findings are one count with a link to the previous review.
-The result records every finding the judge weighed with its sources and, for a rejection, a reason
-code; `magnum stats` reports them per role. The skill runs unattended: it never stops to ask a human
+The result records every finding the judge weighed with a short title, its sources (`judge` only when
+its own pass found it, not when it confirmed a report) and, for a rejection, a reason code, marking
+`nearby` a pre-existing P1 or P2 it proved in or near the code the PR changes; `magnum stats` reports
+them per role and `magnum debt` lists the nearby ones across PRs. The skill runs unattended: it never stops to ask a human
 (whatever an instruction file says), runs no usage checks, and ends with at most two lines and the
 `MAGNUM_RESULT` line.
 
@@ -844,10 +861,11 @@ Fix 1 problem before merging. 1 optional: 1 simplification.
 | `magnum init [--force]` | Write `~/.config/magnum/config.toml` for this machine from three questions: your gh login, one repository, who posts (your login or a GitHub App). |
 | `magnum prs [--repo …] [--view all\|magnum\|mine\|ready] [--sort updated\|last-review\|reviewer-activity\|requested\|changes\|state] [--all] [--needs-me] [--auto-approved] [--json]` | The PR board: every watched PR with its last review, each reviewer's verdict (with staleness), when a review was last requested (and whether of you), what changed since the last review, assignees; then the PRs merged or closed in the last day (`[board] recent_closed`), flagging one merged before Magnum reviewed its last push. `--view` keeps what Magnum reviewed, what is yours or what is ready to merge. Live screen on a terminal, table or JSON otherwise: snake_case keys, times in RFC 3339 (left out while unset), durations in seconds (`total_seconds`, `duration_seconds`), `null` for a part a PR has none of and `[]` for an empty list; UPDATED is `activity_at`, the PR's last activity, and GitHub's own updatedAt is `github_updated_at`. `--needs-me` lists only the PRs Magnum approved that GitHub still blocks on your approval (below); `needs_me` (`approve`, `lift` or `""`) and `review_decision` (GitHub's) say it in the JSON. `--auto-approved` lists only the PRs Magnum approved as you (Approving as you); `auto_approved` (its `review_id`, `head`, `url` and `at`, or `null`) and `auto_approve_stopped` (why Magnum no longer approves the PR as you, or `""`) say it in the JSON, `auto-approved` in the printed STATE. |
 | `magnum status [<ref>\|<slot>] [--all] [--sizes] [--json] [--watch]` | Daemon, slots, queue, pauses; a PR's detail card with its review history and the last round's stage timings. The codex line says how fast the Codex budget is spent, the share used over the share of the window elapsed, and when `[usage]` codex_soft and codex_hard come at that pace if before the reset ("pace 2.8x: 80% Oct 7 13:30, 95% Oct 8 09:10"; `pace`, `soft_at` and `hard_at` in the JSON); the daemon toasts once per window when codex_soft would come before the reset (not in the window's first tenth, when one burst is no pace). The notes line sums up the repositories with notes, the proposals to review and those past a limit (`magnum notes` lists them). `--watch` is the live dashboard (`tab` flips to the PR board). |
-| `magnum stats [--since 7d] [--repo owner/name] [--json]` | Review statistics per local day and repository over a window (`--since` takes `7d`, `36h`, `90m` or a date; default 7d): rounds started and how they ended, findings posted by priority, median and p90 durations per role and per round, how many findings each source raised, had posted, had posted alone or had rejected (with reason codes), model switches, denied prompts and round restarts, and the top 10 PRs by agent time (the sum of their runs' durations in the window, the rounds and the share of all agent time; `top_prs` in the JSON), so a PR burning the budget can be muted. |
+| `magnum stats [--since 7d] [--repo owner/name] [--json]` | Review statistics per local day and repository over a window (`--since` takes `7d`, `36h`, `90m` or a date; default 7d): rounds started and how they ended, findings posted by priority, median and p90 durations per role and per round, how many findings each source raised, had posted, had posted alone or had rejected (with reason codes), model switches, denied prompts and round restarts, and the top 10 PRs by agent time (the sum of their runs' durations in the window, the rounds and the share of all agent time; `top_prs` in the JSON), so a PR burning the budget can be muted; and, for first reviews and re-reviews with the judge's own pass and for delta checks, who found the posted findings (the own pass, the own pass and a reviewer, reviewers only), the reviewer-only P0–P2 per 10 rounds and each role's median turn (`value`; see [Roles and kinds](#roles-and-kinds-the-review-pipeline)). |
 | `magnum eval run\|score\|list\|show` | Measure a prompt, skill or model change: `run` replays the PRs with known defects in `~/.config/magnum/eval.toml` (see `eval.toml.example`) at their pinned heads as blind dry runs and reports, per case, the seeded defects the planned review found, at what severity, and its other findings (noise), next to the previous run. `score` re-scores a run after a match rule is fixed, without the agents. |
 | `magnum retro [<ref>...] [--again] [--lookback 14d] [--json]` | Run the retro now (see Learning from other reviewers): classify what other reviewers said about the PRs closed within the lookback, whether or not `[learn] enabled`. `--again` looks again at PRs a retro already did; PRs named by `<ref>` are looked at again in any case. |
 | `magnum misses [<ref>] [--all] [--class miss\|not_issue\|style\|outside\|unclassified] [--json]` | What other reviewers caught and Magnum did not: the retro's new misses, with the reviewer, where, severity, whether Magnum's judge had raised and rejected it, the title and the lesson. `--all` lists every class and state. |
+| `magnum debt [<repo>] [--json]` | Bugs found next door: the P1 and P2 problems the judge proved at a PR's head in or near its changes but did not post because the PR did not bring them, across PRs, newest first and once per path and title, with the PR and day it was found (security ones appear only here). Rows recorded before findings had titles show the path and reason only. |
 | `magnum review <url\|owner/repo#N\|repo#N\|N> [--fresh] [--role <role>] [--simplify] [--as <identity>] [--no-post] [--wait] [--timeout <duration>]` | Force a round now, bypassing throttles. `--role` (repeatable) also runs an on-demand role this round; `--simplify` is its shorthand for the role aliased `simplify` (claude-simplify by default). `--wait` follows the round; `--timeout` stops following after that long while the round goes on. On a head Magnum already reviewed (no new commits) only the judge runs, to re-decide its earlier findings from the replies; `--role`, `--simplify` and `--fresh` keep the full round. On a PR GitHub merged it is a post-merge review: the commits Magnum missed since its last review (the whole PR when it never reviewed it), posted as a comment only, after which the PR is released again; a merged PR whose head was reviewed and a PR closed without merging are refused. A pinned PR (`magnum open`, `magnum pin`) is unpinned for it; its slot's guards still keep a person's changes or agent safe, and the answer names the guard that holds the round. |
 | `magnum open <ref> [--role <role>]` | Focus the PR's pane in herdr and reveal the herdr client (focus the existing iTerm2 tab, or open a new one). When macOS refuses its AppleScript (the Automation permission, error -1743) it says so and where to allow it. |
 | `magnum watch <ref> [--role <role>] [--ansi]` | Read-only live mirror of a pane in any terminal. |

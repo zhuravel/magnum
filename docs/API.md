@@ -2332,8 +2332,8 @@ type Board struct {
 	// whatever it says.
 	RecentClosed Duration `toml:"recent_closed"`
 	// Shimmer slides a rainbow across the state cell of a PR magnum approved
-	// that GitHub still blocks on the operator's approval ("✓ needs you",
-	// "✓ lift your ✗") while one is on screen; false keeps it still. A
+	// that GitHub still blocks on the operator's approval ("✔ needs you",
+	// "✔ lift your ✗") while one is on screen; false keeps it still. A
 	// terminal without colors (NO_COLOR) shows it in reverse video either way.
 	Shimmer bool `toml:"shimmer"`
 }
@@ -11037,25 +11037,34 @@ type FilesPR struct {
     FilesPR is a PR with its stored file list (PRsWithFiles).
 
 type Finding struct {
-	ID         int64     `json:"id"`
-	RunID      string    `json:"run_id"`
-	PRID       int64     `json:"pr_id"`
-	Round      int       `json:"round"`
-	FindingID  string    `json:"finding_id"`
-	Severity   string    `json:"severity,omitempty"` // P0..P3 as the judge wrote it
-	Path       string    `json:"path,omitempty"`
-	Line       int       `json:"line,omitempty"` // 0 = none (a finding in the review body)
-	Sources    []string  `json:"sources"`
-	Verdict    string    `json:"verdict"`               // FindingPosted | FindingRejected
-	ReasonCode string    `json:"reason_code,omitempty"` // rejections: duplicate, not_reproducible, ...
-	CreatedAt  time.Time `json:"created_at"`
-	// Repo is the PR's repository (owner/name); FindingsSince fills it.
-	Repo string `json:"repo,omitempty"`
+	ID        int64  `json:"id"`
+	RunID     string `json:"run_id"`
+	PRID      int64  `json:"pr_id"`
+	Round     int    `json:"round"`
+	FindingID string `json:"finding_id"`
+	// Title names the problem in a few words ("" in rows recorded before
+	// titles, migration 0021).
+	Title      string   `json:"title,omitempty"`
+	Severity   string   `json:"severity,omitempty"` // P0..P3 as the judge wrote it
+	Path       string   `json:"path,omitempty"`
+	Line       int      `json:"line,omitempty"` // 0 = none (a finding in the review body)
+	Sources    []string `json:"sources"`
+	Verdict    string   `json:"verdict"`               // FindingPosted | FindingRejected
+	ReasonCode string   `json:"reason_code,omitempty"` // rejections: duplicate, not_reproducible, ...
+	// Nearby marks a pre-existing P1 or P2 the judge proved at the head in
+	// or near code the PR changes (SKILL.md section 7): `magnum debt`.
+	Nearby    bool      `json:"nearby,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	// Repo is the PR's repository (owner/name); FindingsSince and
+	// PreExistingFindings fill it, and Number (the PR's) the latter.
+	Repo   string `json:"repo,omitempty"`
+	Number int    `json:"number,omitempty"`
 }
     Finding is one finding the judge judged in a posted round, from the
     provenance list of its result file (skills/magnum-review/SKILL.md section
-    8): the sources that raised it (reviewer roles, "judge" for the judge's own
-    pass), whether it was posted and, for a rejection, the reason code.
+    8): its title, the sources that raised it (reviewer roles, "judge" for the
+    judge's own pass), whether it was posted and, for a rejection, the reason
+    code and whether it is nearby.
 
 type GitHubPR struct {
 	RepoID      int64
@@ -12091,6 +12100,11 @@ func (s *Store) PostedFindingPaths(ctx context.Context, prIDs []int64) (map[int6
     magnum posted on each path over all its rounds (findings without a path and
     rejected candidates excluded).
 
+func (s *Store) PreExistingFindings(ctx context.Context) ([]Finding, error)
+    PreExistingFindings returns the P1 and P2 findings the judge rejected as
+    pre_existing, in every PR, newest first (created_at, then id), each with its
+    PR's repository and number: what `magnum debt` lists.
+
 func (s *Store) ProposalMisses(ctx context.Context, id int64) ([]ProposalMiss, error)
     ProposalMisses lists what proposal id did with the misses it was given,
     by miss id, each with the miss as it is now.
@@ -12988,8 +13002,8 @@ type PRBoardRow struct {
 	// a GitHub App's approval, still blocks it on the operator
 	// (store.NeedsMe): NeedsMeApprove while it requires an approval that
 	// counts, NeedsMeLift while the operator's own changes request is the
-	// only one blocking it; "" otherwise. The state cell says "✓ needs you"
-	// or "✓ lift your ✗" and the updated sort lists it first.
+	// only one blocking it; "" otherwise. The state cell says "✔ needs you"
+	// or "✔ lift your ✗" and the updated sort lists it first.
 	NeedsMe string
 	// ReviewDecision is GitHub's reviewDecision: APPROVED,
 	// CHANGES_REQUESTED or REVIEW_REQUIRED; "" when the base branch requires
@@ -12997,7 +13011,7 @@ type PRBoardRow struct {
 	ReviewDecision string
 	// AutoApproved is the approval magnum posted as the operator that
 	// stands on the PR ([[watch]] auto_approve); nil when none. The state
-	// cell says "✓ auto" and D withdraws it.
+	// cell says "✔ auto" and D withdraws it.
 	AutoApproved *AutoApproval
 	// AutoStopped is why magnum no longer approves the PR as the operator
 	// (they dismissed one of its approvals, reviewed the PR by hand or ran

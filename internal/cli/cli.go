@@ -94,7 +94,7 @@ func newRoot(c *Context) *cobra.Command {
 	root.AddCommand(
 		// Inspect
 		newStatusCmd(c), newPRsCmd(c), newWhereCmd(c), newSlotsCmd(c), newLogsCmd(c), newDoctorCmd(c),
-		newIdentitiesCmd(c), newRolesCmd(c), newNotesCmd(c), newStatsCmd(c), newMissesCmd(c), newConfigCmd(c), newVersionCmd(c),
+		newIdentitiesCmd(c), newRolesCmd(c), newNotesCmd(c), newStatsCmd(c), newMissesCmd(c), newDebtCmd(c), newConfigCmd(c), newVersionCmd(c),
 		// Act
 		newInitCmd(c), newReviewCmd(c), newOpenCmd(c), newWatchCmd(c), newEvalCmd(c), newRetroCmd(c),
 	)

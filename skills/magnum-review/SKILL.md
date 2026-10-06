@@ -93,11 +93,11 @@ Content, starting with `# Notes for <owner>/<repo> (updated YYYY-MM-DD)`: only w
 
 ## 3. Judge the candidate reports
 
-Read every report listed in `reports`: findings from Claude's `/code-review` (`claude-review.md`) and from `codex review` (`codex-review.md`, P0–P3 text); all simplification proposals, ranked, each with its current and replacement lines (`claude-simplify.md`).
+Read every report in `reports`: findings in `claude-review.md` and `codex-review.md`; ranked simplification proposals, each with its current and replacement lines, in `claude-simplify.md`.
 
 Treat each review item as a claim, also one a report lists as rejected, dismissed or out of scope. Prove or reject it with the same standard as your own findings (section 4). Merge duplicates between the reports and your own pass, keeping the strongest wording and the most precise location. Never mention which tool proposed a finding. Give each missing report one line in Checks with its reason, even when the machine caused it: `- claude-review: no report (usage_limit)`.
 
-Keep a ledger of every defect finding you judged, the candidates of every report and your own, for the result file's `provenance` (section 8). One entry per distinct problem: a problem several sources raised is one entry with all of them in `sources` (each report's role as `reports` lists it, and `judge` for what your own pass found). A posted finding has `verdict: posted`. A dropped one has `verdict: rejected` and exactly one `reason_code`:
+Keep a ledger of every defect finding you judged, every report's candidates and your own, for `provenance` (section 8). One entry per distinct problem: a problem several sources raised is one entry with all of them in `sources` (each report's role as `reports` lists it, and `judge` only if your own pass (`own_findings`, when set) found it; a candidate you only confirmed lists its reports alone). A posted finding has `verdict: posted`. A dropped one has `verdict: rejected` and exactly one `reason_code`:
 
 - `duplicate`: an earlier review, an existing thread or another reviewer's comment already covers it;
 - `not_reproducible`: you could not trigger it at `head_sha`; `speculative`: a vague or future risk without a realistic trigger;
@@ -106,7 +106,7 @@ Keep a ledger of every defect finding you judged, the candidates of every report
 - `environment`: it rests on a failure of the review machine (section 7).
 
 `claude-simplify.md` holds no defect claims: never judge its proposals by the defect standard or put them in the ledger. Handle these optional improvements so:
-- Keep a proposal when all hold: its current lines match `head_sha` and are lines this PR added or modified (so a `suggestion` block can attach to them; in a re-review, lines changed since the previous review), it removes something a reader must hold (a branch, helper, mode, flag, duplicated block, allocation or control-flow trap), not just moves, renames or rephrases code, and your own equivalence probe proves it preserves behaviour: a focused test, or a command that runs the old and the new code on the same inputs. Give each probe one line in Checks: the command, marked `(equivalence probe)`, and its result. Drop a proposal without one, and any that edits authorization, sandboxing, money or usage recording, or concurrency code, unless it removes a defect-prone construct.
+- Keep a proposal when all hold: its current lines match `head_sha` and are lines this PR added or modified (in a re-review, lines changed since the previous review), it removes something a reader must hold (a branch, helper, mode, flag, duplicated block, allocation or control-flow trap), not just moves, renames or rephrases code, and your own equivalence probe proves it preserves behaviour: a focused test, or a command that runs the old and the new code on the same inputs. Give each probe one line in Checks: the command, marked `(equivalence probe)`, and its result. Drop a proposal without one, and any that edits authorization, sandboxing, money or usage recording, or concurrency code, unless it removes a defect-prone construct.
 - One comment per idea: a proposal becomes a ` ```suggestion ` at its first site plus "Same change at L…" for the others. Its first line is the title alone, `**Simplification** (optional, no reply needed)`, then a blank line, one sentence on what it removes, and the suggestion. Post at most three, the most substantial, ordered by what they remove, most first; the rest count as `dropped`. They never affect the verdict.
 - In the result file report `claude-simplify` as `{"suggested":N,"outside_diff":N,"dropped":N}`.
 
@@ -187,7 +187,7 @@ Body: `**Re-review 9be04f2 → 4c1d2e3:**`, or `**Re-review of 4c1d2e3 (no new c
 
 Finish all analysis before you post anything. Validate, rank and dedupe the findings, then reread every comment once: cut preamble, repeated context and vague words; check each finding keeps its trigger, result, reproduction and fix.
 
-Body (under 150 words in normal cases, the Checks block excluded): the verdict line, the finding titles by priority (counts by priority when there are more than five), any related-PR line (section 2), the Checks block, the marker line `<!-- magnum:run=<run_id> head=<sha7> -->` last (magnum appends a footer: write none). No GitHub event names (APPROVE, COMMENT, REQUEST_CHANGES) and no notes on the process ("This PR is not stacked").
+Body (under 150 words in normal cases, collapsed blocks excluded): the verdict line, the finding titles by priority (counts by priority when there are more than five), any related-PR line (section 2), any nearby block, the Checks block, the marker line `<!-- magnum:run=<run_id> head=<sha7> -->` last (magnum appends a footer: write none). No GitHub event names (APPROVE, COMMENT, REQUEST_CHANGES) and no notes on the process ("This PR is not stacked").
 
 The verdict line is exactly one of four; N counts the P0, P1 and P2 findings, still-open earlier ones included:
 
@@ -197,6 +197,8 @@ The verdict line is exactly one of four; N counts the P0, P1 and P2 findings, st
 - else: `No problems found. LGTM :shipit:`; a re-review: `No new problems since <previous_head_sha, 7 chars>. LGTM :shipit:`; post-merge: `No problems found in the merged commits. :shipit:`
 
 Write `1 problem` or `2 problems`, and add the optional ones when there are any (`2 optional: 1 P3, 1 simplification.`). A post-merge review says `in a follow-up` instead of `before merging`.
+
+A `pre_existing` P1 or P2 you proved at `head_sha` in or near code the PR changes is `nearby`: list up to three in `<details><summary>Found nearby, not this PR's (N)</summary>`, one line each (`path:line`, the problem, its priority), never counted in the verdict line or the event. A security one (an authorization bypass, data exposure, injection) goes only to the result file.
 
 Checks are collapsed, one line per command with its result or the exact reason it was skipped; N counts the commands that ran:
 
@@ -210,7 +212,7 @@ Checks are collapsed, one line per command with its result or the exact reason i
 </details>
 ```
 
-A failure the review machine caused is not the author's problem: a missing database or table, a deadlock or lock wait in the test database, the wrong Ruby, Node or Python version, a missing tool or gem, no network. Leave it out of the posted review, Checks included. Report it under `environment_failures` and in the notes (section 2).
+A failure the review machine caused is not the author's problem: a missing database or table, a test-database deadlock or lock wait, the wrong Ruby, Node or Python version, a missing tool or gem, no network. Leave it out of the posted review, Checks included. Report it under `environment_failures` and in the notes (section 2).
 
 Event, from the findings you post (an earlier finding that is still open counts with its priority):
 
@@ -219,7 +221,7 @@ Event, from the findings you post (an earlier finding that is still open counts 
 - no findings (optional simplifications do not count) → `no_findings_event`;
 - `self_authored: true`, or GitHub refuses a self-verdict → `COMMENT`.
 
-The review covers exactly `head_sha`, the commit magnum checked out. Post it on `head_sha` even when the PR head moved while you worked: do not fetch, read or check out newer commits, and do not drop a finding or mark it fixed because of them. magnum handles a newer head.
+Post on `head_sha`, the commit magnum checked out, even when the PR head moved while you worked: do not fetch, read or check out newer commits, and do not drop a finding or mark it fixed because of them.
 
 Post only through `post_review`. Write the review to the file its `--review` names, `{"event":"…","body":"…","comments":[{"path":"app/x.rb","line":42,"body":"…"}]}` (`"side":"LEFT"` for a deleted line, `start_line` for a range), never putting PR content inside executable shell text, then run the line as given. It prints one JSON object:
 
@@ -241,10 +243,10 @@ At every exit, success or not, write `result_file` atomically (write `<result_fi
  "review_id":123,"review_url":"…","event":"REQUEST_CHANGES","verdict":"blocking",
  "findings":{"P0":0,"P1":0,"P2":2,"P3":1},
  "provenance":[
-   {"id":"F1","severity":"P2","path":"app/models/order.rb","line":42,"sources":["claude-review","judge"],"verdict":"posted"},
-   {"id":"F2","severity":"P2","path":"app/jobs/sync_job.rb","line":7,"sources":["codex-review"],"verdict":"posted"},
-   {"id":"F3","severity":"P3","path":"app/chat.ts","line":null,"sources":["judge"],"verdict":"posted"},
-   {"id":"F4","severity":"P2","path":"lib/legacy.rb","line":3,"sources":["claude-review"],"verdict":"rejected","reason_code":"pre_existing"}],
+   {"id":"F1","title":"Total skips tax","severity":"P2","path":"app/models/order.rb","line":42,"sources":["claude-review","judge"],"verdict":"posted"},
+   {"id":"F2","title":"Retry sends twice","severity":"P2","path":"app/jobs/sync_job.rb","line":7,"sources":["codex-review"],"verdict":"posted"},
+   {"id":"F3","title":"Wrong field named","severity":"P3","path":"app/chat.ts","line":null,"sources":["judge"],"verdict":"posted"},
+   {"id":"F4","title":"Export skips site check","severity":"P2","path":"lib/legacy.rb","line":3,"sources":["claude-review"],"verdict":"rejected","reason_code":"pre_existing","nearby":true}],
  "previous_findings":{"fixed":0,"open":0,"answered":0,"rebutted":0},
  "candidates":{"claude-review":{"accepted":1,"rejected":1},"codex-review":{"accepted":1,"rejected":0},"claude-simplify":{"suggested":1,"outside_diff":3,"dropped":1}},
  "checks":[{"cmd":"bin/rspec spec/x_spec.rb","result":"50 passed"}],"harness_used":["run_spec.sh"],
@@ -252,8 +254,8 @@ At every exit, success or not, write `result_file` atomically (write `<result_fi
  "blocker":null,"planned_review":null,"planned_replies":null}
 ```
 
-`verdict` is your decision whatever this repository lets you post: `blocking` (at least one `P0` or `P1`, a still-open earlier finding included), `non_blocking` (only `P2` and `P3`), `clean` (no findings; optional simplifications do not count). Write it on every review, also when the events or `self_authored` make you post `COMMENT`: magnum shows it to the reviewer.
+`verdict` is your decision whatever this repository lets you post: `blocking` (at least one `P0` or `P1`, a still-open earlier finding included), `non_blocking` (only `P2` and `P3`), `clean` (no findings; optional simplifications do not count). Write it on every review, also when the events or `self_authored` make you post `COMMENT`.
 
-`provenance` is the ledger of section 3: `id`s unique in the file, `line` `null` for a finding in the body, `reason_code` only on a rejection. Its posted entries add up to `findings`. `previous_findings.rebutted` counts the still-open findings you rebutted in their thread this round. `harness_used`: the `notes_dir` files you ran or read, named as there.
+`provenance` is the ledger of section 3: `id`s unique in the file, a short `title` on every entry, `line` `null` for a finding in the body, `reason_code` only on a rejection, `"nearby":true` on a nearby one (section 7). Its posted entries add up to `findings`. `previous_findings.rebutted` counts the still-open findings you rebutted in their thread this round. `harness_used`: the `notes_dir` files you ran or read, named as there.
 
 Finish with at most two lines (the review URL or the exact blocker, and the finding counts), then `MAGNUM_RESULT <same json>` as the very last line. If identity, PR discovery, validation or submission blocks the review, make no other GitHub write.

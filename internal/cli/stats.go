@@ -74,6 +74,11 @@ func newStatsCmd(c *Context) *cobra.Command {
 			"weighed, how many it posted, how many only that source raised (unique) and how many it rejected, "+
 			"with the reason codes; it comes from the judge's per-finding provenance, so rounds posted before it "+
 			"existed have none.\n\n"+
+			"WHO FOUND THE POSTED FINDINGS and WHAT THE REVIEWERS ADD count only the posted rounds whose provenance "+
+			"tells who found what: first reviews and re-reviews in which the judge made its own pass (written before "+
+			"it reads any report), and delta checks, which the judge runs alone. Each posted finding counts under the "+
+			"own pass, the own pass with reviewers, or the reviewers alone that raised it; REVIEWER-ONLY P0-P2 counts "+
+			"the latter's P0 to P2 findings, also per 10 rounds, next to each role's median turn (--json: value).\n\n"+
 			"OPERATIONS counts model-limit switches, permission prompts magnum denied and round restarts (the PR "+
 			"head moved before the judge was prompted). The text report shows durations and sources over the "+
 			"whole window; --json has every day and repository.\n\n"+
@@ -182,6 +187,9 @@ type statsReport struct {
 	// under --repo), TopPRs the PRs that took the most of it.
 	AgentSeconds int64        `json:"agent_seconds"`
 	TopPRs       []statsTopPR `json:"top_prs"`
+	// Value is who found the posted findings, per kind of round
+	// (stats_value.go).
+	Value []statsValue `json:"value"`
 }
 
 // statsTopLimit is how many PRs the top lists.
@@ -371,6 +379,7 @@ func statsCompute(runs []store.RoundRun, findings []store.Finding, events []stor
 	}
 	accs := &statsAccs{groups: map[statsKey]*statsAcc{}, total: newStatsAcc()}
 	ends := statsRoundEnds(events)
+	valued := map[statsValueKey]statsValueRound{}
 
 	// Rounds: outcomes, findings posted, durations.
 	for _, rd := range statsGroupRounds(runs) {
@@ -383,6 +392,9 @@ func statsCompute(runs []store.RoundRun, findings []store.Finding, events []stor
 			counts = rd.findingsPosted(isJudge)
 		}
 		spans := rd.durations()
+		if kind := rd.valueKind(isJudge); kind != "" && outcome == "posted" {
+			valued[statsValueKey{rd.pr, rd.round}] = statsValueRound{kind: kind, spans: spans}
+		}
 		accs.do(store.DayKey(rd.start), rd.repo, func(a *statsAcc) {
 			a.g.Rounds.Started++
 			a.g.Rounds.Outcomes[outcome]++
@@ -453,7 +465,7 @@ func statsCompute(runs []store.RoundRun, findings []store.Finding, events []stor
 		return cmp.Or(cmp.Compare(a.day, b.day), cmp.Compare(a.repo, b.repo))
 	})
 	rep := statsReport{Since: since.Truncate(time.Second), Until: now.Truncate(time.Second), Repo: repo,
-		Groups: make([]statsGroup, 0, len(keys)), Total: accs.total.finish(statsKey{})}
+		Groups: make([]statsGroup, 0, len(keys)), Total: accs.total.finish(statsKey{}), Value: statsValues(valued, findings)}
 	for _, k := range keys {
 		rep.Groups = append(rep.Groups, accs.groups[k].finish(k))
 	}
@@ -515,6 +527,7 @@ func statsRoundEnds(events []store.Event) map[statsRoundEnd]string {
 
 // statsRound is one round (a PR's round number) with all its runs.
 type statsRound struct {
+	pr     int64 // the PR's id
 	repo   string
 	number int
 	round  int
@@ -534,7 +547,7 @@ func statsGroupRounds(runs []store.RoundRun) []*statsRound {
 		k := key{rr.PRID, rr.Round}
 		rd := idx[k]
 		if rd == nil {
-			rd = &statsRound{repo: rr.Repo, number: rr.Number, round: rr.Round}
+			rd = &statsRound{pr: rr.PRID, repo: rr.Repo, number: rr.Number, round: rr.Round}
 			idx[k] = rd
 			out = append(out, rd)
 		}
@@ -742,6 +755,7 @@ func statsRender(w io.Writer, r statsReport) {
 		srcs = append(srcs, []string{actClean(name), strconv.Itoa(s.Judged), strconv.Itoa(s.Posted), strconv.Itoa(s.Unique), accepted, rejected})
 	}
 	statsTable(w, "SOURCES", []string{"SOURCE", "JUDGED", "POSTED", "UNIQUE", "ACCEPTED", "REJECTED"}, srcs)
+	statsRenderValue(w, r.Value)
 
 	statsTable(w, "OPERATIONS", []string{"DAY", "REPO", "MODEL SWITCHES", "DENIES", "RESTARTS"},
 		statsGroupRows(r, func(g statsGroup) []string {

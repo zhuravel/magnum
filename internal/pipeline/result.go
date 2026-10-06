@@ -7,13 +7,15 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // judgeResult is the judge's result (codex-judge.json, or the MAGNUM_RESULT line):
 // {status, run_id, review_id, review_url, event, findings{P0..P3},
-// provenance[{id, severity, path, line, sources, verdict, reason_code}],
+// provenance[{id, title, severity, path, line, sources, verdict, reason_code, nearby}],
 // environment_failures[{cmd, error}], blocker, …}.
 type judgeResult struct {
 	Status    string
@@ -41,6 +43,7 @@ type judgeResult struct {
 // findingRecord is one entry of the result's provenance list.
 type findingRecord struct {
 	ID       string   // unique within the result
+	Title    string   // the problem in a few words: one line, at most maxTitleRunes
 	Severity string   // P0..P3
 	Path     string   // "" for a finding in the review body
 	Line     int      // 0 = none
@@ -50,13 +53,20 @@ type findingRecord struct {
 	// (normalized): duplicate, not_reproducible, outside_diff, pre_existing,
 	// style_only, speculative or environment (SKILL.md section 3).
 	ReasonCode string
+	// Nearby marks a rejected pre-existing problem the judge proved at the
+	// head in or near code the PR changes (SKILL.md section 7).
+	Nearby bool
 }
+
+// maxTitleRunes bounds a finding's title.
+const maxTitleRunes = 120
 
 // parseProvenance reads the result's provenance list leniently: an entry
 // that is not an object or has no posted/rejected verdict is skipped; an id
-// that is missing or repeated becomes "#<position>"; severities are upper
-// case, sources lower case without repeats, reason codes lower case with
-// underscores (a posted finding has none).
+// that is missing or repeated becomes "#<position>"; titles are one line of
+// at most maxTitleRunes; severities are upper case, sources lower case
+// without repeats, reason codes lower case with underscores (a posted
+// finding has none, and is never nearby); nearby is true or "true".
 func parseProvenance(m json.RawMessage) []findingRecord {
 	var items []json.RawMessage
 	if json.Unmarshal(m, &items) != nil {
@@ -71,6 +81,7 @@ func parseProvenance(m json.RawMessage) []findingRecord {
 		}
 		f := findingRecord{
 			ID:         strings.TrimSpace(jsonString(o["id"])),
+			Title:      findingTitle(jsonString(o["title"])),
 			Severity:   strings.ToUpper(strings.TrimSpace(jsonString(o["severity"]))),
 			Path:       strings.TrimSpace(jsonString(o["path"])),
 			Line:       int(max(jsonInt(o["line"]), 0)),
@@ -81,7 +92,7 @@ func parseProvenance(m json.RawMessage) []findingRecord {
 		case store.FindingPosted, "accepted":
 			f.Verdict, f.ReasonCode = store.FindingPosted, ""
 		case store.FindingRejected, "dropped":
-			f.Verdict = store.FindingRejected
+			f.Verdict, f.Nearby = store.FindingRejected, jsonTrue(o["nearby"])
 		default:
 			continue
 		}
@@ -97,6 +108,27 @@ func parseProvenance(m json.RawMessage) []findingRecord {
 		out = append(out, f)
 	}
 	return out
+}
+
+// findingTitle is a provenance title as one line: invalid UTF-8 dropped,
+// control characters and runs of blanks folded to one space, cut to
+// maxTitleRunes.
+func findingTitle(s string) string {
+	return textx.Clip(strings.Join(strings.Fields(strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, strings.ToValidUTF8(s, ""))), " "), maxTitleRunes)
+}
+
+// jsonTrue reports whether m is true or the string "true" (any case).
+func jsonTrue(m json.RawMessage) bool {
+	var b bool
+	if json.Unmarshal(m, &b) == nil {
+		return b
+	}
+	return strings.EqualFold(strings.TrimSpace(jsonString(m)), "true")
 }
 
 // parseSources reads a list of source names (or one name as a string).
@@ -328,8 +360,8 @@ func (rd *round) recordFindings(ctx context.Context, runID string, res *judgeRes
 	}
 	fs := make([]store.Finding, 0, len(res.Provenance))
 	for _, f := range res.Provenance {
-		fs = append(fs, store.Finding{FindingID: f.ID, Severity: f.Severity, Path: f.Path, Line: f.Line,
-			Sources: f.Sources, Verdict: f.Verdict, ReasonCode: f.ReasonCode})
+		fs = append(fs, store.Finding{FindingID: f.ID, Title: f.Title, Severity: f.Severity, Path: f.Path, Line: f.Line,
+			Sources: f.Sources, Verdict: f.Verdict, ReasonCode: f.ReasonCode, Nearby: f.Nearby})
 	}
 	if err := rd.r.Store.RecordFindings(context.WithoutCancel(ctx), runID, rd.pr.ID, rd.in.Round, fs); err != nil {
 		rd.logf("pipeline: record findings: %v", err)

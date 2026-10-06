@@ -142,10 +142,38 @@ func TestClaudeReviewPromptsLeaveOutUncertainStyleAndPreExistingFindings(t *test
 	}
 }
 
+// `magnum stats` can tell what the reviewers add only if `judge` in a
+// finding's sources means the judge's own pass found it: before the own pass
+// the judge read the reports first, and `sources` mixed "found" with
+// "confirmed" (41 of 75 posted re-review findings "came only from
+// claude-review", against 5 the judge missed by another count).
+func TestSkillNamesTheJudgeASourceOnlyForWhatItsOwnPassFound(t *testing.T) {
+	skillSays(t, []string{
+		"and `judge` only if your own pass (`own_findings`, when set) found it; a candidate you only confirmed lists its reports alone)",
+	}, []string{"and `judge` for what your own pass found)"})
+}
+
+// The judge proved and dropped 63 pre-existing problems (1 P1, 26 P2), a
+// cross-site export of shoppers' emails among them, and nobody heard of
+// them. A proven P1 or P2 next to the PR's changes is listed in a collapsed
+// block before Checks that never counts toward the verdict; a security one
+// goes only to the result file, where every ledger entry has a title.
+func TestSkillListsProvenProblemsNextDoorApart(t *testing.T) {
+	skillSays(t, []string{
+		"any related-PR line (section 2), any nearby block, the Checks block,",
+		"A `pre_existing` P1 or P2 you proved at `head_sha` in or near code the PR changes is `nearby`: list up to three in `<details><summary>Found nearby, not this PR's (N)</summary>`, one line each (`path:line`, the problem, its priority), never counted in the verdict line or the event.",
+		"A security one (an authorization bypass, data exposure, injection) goes only to the result file.",
+		"a short `title` on every entry",
+		"`\"nearby\":true` on a nearby one (section 7)",
+	}, nil)
+}
+
 // skillMaxBytes bounds SKILL.md: 28,040 bytes before the review-format
-// changes plus about 10%, and 254 for the reply contract's declined fix
-// (2026-10-06). Every rule added must replace or shorten text.
-const skillMaxBytes = 31_098
+// changes plus about 10%, 254 for the reply contract's declined fix and
+// 425 for the nearby block, the ledger's titles and its own-pass sources
+// (2026-10-06: they add 690 bytes, shortening sections 3, 7 and 8 won back
+// 250). Every rule added must replace or shorten text.
+const skillMaxBytes = 31_523
 
 func TestSkillStaysTight(t *testing.T) {
 	if n := len(magnum.Skill); n > skillMaxBytes {
