@@ -162,17 +162,17 @@ func TestCodexReviewRunsWithoutTheOperatorsMCPServers(t *testing.T) {
 	sh.Command, sh.Prompt = "", "codex-review.sh"
 	want := "command codex review -c model_reasoning_effort=high " + strings.Join(mcpOffArgs, " ") + " --base origin/master; } |"
 	for name, r := range map[string]config.Role{"command": role, "codex-review.sh": sh} {
-		got, err := e.m.ShellLine(r, d)
+		got, err := e.m.ShellLine(e.ctx, e.pr.ID, r, d)
 		if err != nil || !strings.Contains(got, want) {
 			t.Fatalf("%s: line = %q, %v\nwant it to contain %q", name, got, err, want)
 		}
 	}
 	e.setKind(KindCodex, func(k *config.Kind) { k.MCPAllow = []string{"browser", "docs"} })
-	if got, err := e.m.ShellLine(role, d); err != nil || !strings.Contains(got, "review -c model_reasoning_effort=high --base") {
+	if got, err := e.m.ShellLine(e.ctx, e.pr.ID, role, d); err != nil || !strings.Contains(got, "review -c model_reasoning_effort=high --base") {
 		t.Fatalf("all allowed: line = %q, %v", got, err)
 	}
 	e.setKind(KindCodex, func(k *config.Kind) { k.MCPAllow, k.MCPOff = nil, false })
-	if got, err := e.m.ShellLine(role, d); err != nil || !strings.Contains(got, "review -c model_reasoning_effort=high --base") {
+	if got, err := e.m.ShellLine(e.ctx, e.pr.ID, role, d); err != nil || !strings.Contains(got, "review -c model_reasoning_effort=high --base") {
 		t.Fatalf("mcp_off false: line = %q, %v", got, err)
 	}
 }

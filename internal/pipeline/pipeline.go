@@ -126,7 +126,7 @@ type Agents interface {
 	ReadRecent(ctx context.Context, s store.Session, lines int) (string, error)
 	PreflightRole(ctx context.Context, role config.Role) error
 	RolePrompt(role config.Role, promptKind string, data any) (string, error)
-	ShellLine(role config.Role, d agents.ShellData) (string, error)
+	ShellLine(ctx context.Context, prID int64, role config.Role, d agents.ShellData) (string, error)
 	// Per-model limits (see modelFallback).
 	NoteModelLimit(ctx context.Context, s store.Session, h agents.Health) (agents.ModelLimit, error)
 	FallbackModel(ctx context.Context, s store.Session, tried []string) (string, bool)

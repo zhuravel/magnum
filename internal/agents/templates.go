@@ -3,6 +3,7 @@ package agents
 import (
 	"bytes"
 	"cmp"
+	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -337,6 +338,12 @@ type JudgeData struct {
 	// magnum wrote none (no file of the PR on the base, a continued turn, a
 	// git failure).
 	HistoryFile string
+	// CodexProjectDeclined: the round's Codex sessions ran with the
+	// checkout untrusted because the PR changes .codex/ (the PR's
+	// CodexProjectNote names the round's head), rendered as
+	// `codex_project: declined` by the initial, rereview and recovery
+	// prompts only then; the skill adds a line to the review's Checks.
+	CodexProjectDeclined bool
 }
 
 // Judge phases of JudgeData.Phase.
@@ -457,10 +464,12 @@ type ShellData struct {
 	// (config.Role.EffortFor); "" = the role's model and effort.
 	// codex-review's command passes Effort as a config override.
 	Model, Effort string
-	// MCPOff are the args that turn off the MCP servers of the Codex config
-	// (the role's tool kind's mcp_off, config.Kind.MCPOffArgs), which
-	// codex-review's command passes after its effort; Manager.ShellLine
-	// fills it when nil.
+	// MCPOff are the args that keep configuration out of the Codex session
+	// (the role's tool kind's config.Kind.ConfigOffArgs): the MCP servers
+	// of the Codex config (mcp_off), and the checkout's .codex/ when the PR
+	// changes it (project_untrust), else its servers under project_mcp
+	// "off"; codex-review's command passes them after its effort.
+	// Manager.ShellLine fills it when nil.
 	MCPOff []string
 
 	// RunID and ExtraArgs keep full-line templates written for the old
@@ -475,6 +484,10 @@ type ShellData struct {
 	// role.Prompt among the embedded defaults. Manager.ShellLine fills it
 	// from the configuration. Not a template variable.
 	Template *config.Prompt
+	// Checkout is the PR's checkout the line runs in, whose .codex/
+	// Manager.ShellLine compares with BaseSHA (else BaseRef); "" = unknown,
+	// nothing kept out. Not a template variable.
+	Checkout string
 }
 
 const donePrefix = "MAGNUM_DONE_"
@@ -716,12 +729,16 @@ func promptLine(role config.Role, d ShellData) (string, error) {
 // ShellLine is ShellLine with the role's full-line template (role.Prompt)
 // resolved through the configuration (pipeline.prompts_dir, then the
 // embedded defaults) unless d.Template is set, and d.MCPOff, when nil,
-// turning off the MCP servers a Codex session of the role's tool kind would
-// load (mcpServers).
-func (m *Manager) ShellLine(role config.Role, d ShellData) (string, error) {
+// keeping out what a Codex session of the role's tool kind must not load:
+// the MCP servers of the Codex config (mcpServers) and the PR's .codex/ in
+// d.Checkout (codexProject against d.BaseSHA, else d.BaseRef; a rendered
+// line records the decision for PR prID, recordProject).
+func (m *Manager) ShellLine(ctx context.Context, prID int64, role config.Role, d ShellData) (string, error) {
+	var project projectScope
 	if d.MCPOff == nil {
 		if k, ok := m.kindSpec(role.AgentKind()); ok {
-			d.MCPOff = k.MCPOffArgs(m.mcpServers(role))
+			project = m.codexProject(ctx, role, d.Checkout, cmp.Or(d.BaseSHA, d.BaseRef), d.HeadSHA)
+			d.MCPOff = k.ConfigOffArgs(m.mcpServers(role), project.servers, project.paths)
 		}
 	}
 	if d.Template == nil && role.IsShell() && role.Command == "" && d.Command == "" && role.Prompt != "" {
@@ -731,7 +748,11 @@ func (m *Manager) ShellLine(role config.Role, d ShellData) (string, error) {
 		}
 		d.Template = &p
 	}
-	return ShellLine(role, d)
+	line, err := ShellLine(role, d)
+	if err == nil {
+		m.recordProject(ctx, prID, role, d.Checkout, project)
+	}
+	return line, err
 }
 
 var shellPlain = regexp.MustCompile(`^[A-Za-z0-9_@%+=:,./-]+$`)

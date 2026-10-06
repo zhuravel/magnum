@@ -208,6 +208,10 @@ const (
 )
     Trust-dialog fallback timing.
 
+const CodexProjectSentence = "Codex ran without the PR's .codex/ changes (the checkout was untrusted in its sessions)"
+    CodexProjectSentence is what the board's card says for a PR whose head's
+    Codex sessions ran with its checkout untrusted.
+
 const CompletionIdleTicks = 2
     CompletionIdleTicks is how many consecutive idle|done observations end a
     turn.
@@ -215,6 +219,11 @@ const CompletionIdleTicks = 2
 const EventBackgroundWait = "agent.background_wait"
     EventBackgroundWait is recorded once per run when background work holds an
     idle claude agent's run open (data: role, run, tasks).
+
+const EventCodexProjectDeclined = "agents.codex_project_declined"
+    EventCodexProjectDeclined is recorded (subject "pr:<owner>/<name>#<N>") each
+    time a Codex session of the PR starts with its checkout untrusted because
+    the PR changes .codex/.
 
 const EventDefaultModelRestored = "agent.default_model_restored"
     EventDefaultModelRestored is recorded when SwitchModel put the Claude
@@ -481,6 +490,19 @@ func Title(repo string, number int, role Role) string
 
 
 TYPES
+
+type CodexProjectNote struct {
+	Head     string    `json:"head"`     // the checkout's head at that launch ("" = unknown)
+	At       time.Time `json:"at"`       // the launch
+	Files    int       `json:"files"`    // the files under .codex/ that differ from the merge base
+	Compared bool      `json:"compared"` // false: git could not compare, so the checkout was untrusted anyway
+}
+    CodexProjectNote is the PR's record of a Codex session launched with its
+    checkout untrusted (store.KVPRCodexProject).
+
+func CodexProjectDeclined(ctx context.Context, st *store.Store, prID int64) (CodexProjectNote, bool)
+    CodexProjectDeclined reads the PR's record of a Codex session launched with
+    its checkout untrusted; false when there is none (or it cannot be read).
 
 type Deps struct {
 	Herdr  Herdr
@@ -756,6 +778,12 @@ type JudgeData struct {
 	// magnum wrote none (no file of the PR on the base, a continued turn, a
 	// git failure).
 	HistoryFile string
+	// CodexProjectDeclined: the round's Codex sessions ran with the
+	// checkout untrusted because the PR changes .codex/ (the PR's
+	// CodexProjectNote names the round's head), rendered as
+	// `codex_project: declined` by the initial, rereview and recovery
+	// prompts only then; the skill adds a line to the review's Checks.
+	CodexProjectDeclined bool
 }
     JudgeData feeds every judge prompt (judge-*.md). Fields a template does not
     use may stay zero.
@@ -1050,11 +1078,14 @@ func (m *Manager) RunShell(ctx context.Context, pr store.PR, role config.Role, p
     (agent_kind "shell") becomes live with last_prompt_at; the run row is the
     caller's. An agent role is refused with an error.
 
-func (m *Manager) ShellLine(role config.Role, d ShellData) (string, error)
+func (m *Manager) ShellLine(ctx context.Context, prID int64, role config.Role, d ShellData) (string, error)
     ShellLine is ShellLine with the role's full-line template (role.Prompt)
-    resolved through the configuration (pipeline.prompts_dir, then the embedded
-    defaults) unless d.Template is set, and d.MCPOff, when nil, turning off the
-    MCP servers a Codex session of the role's tool kind would load (mcpServers).
+    resolved through the configuration (pipeline.prompts_dir, then the
+    embedded defaults) unless d.Template is set, and d.MCPOff, when nil,
+    keeping out what a Codex session of the role's tool kind must not load:
+    the MCP servers of the Codex config (mcpServers) and the PR's .codex/ in
+    d.Checkout (codexProject against d.BaseSHA, else d.BaseRef; a rendered line
+    records the decision for PR prID, recordProject).
 
 func (m *Manager) StartAgent(ctx context.Context, pr store.PR, role config.Role, paneID, resume string) error
     StartAgent launches (or adopts) the agent of an agent role in paneID and
@@ -1080,17 +1111,21 @@ func (m *Manager) StartAgent(ctx context.Context, pr store.PR, role config.Role,
         kinds without name args but with a rename command are named later,
         by ObserveSnapshot), the role's model, effort and subagent-cap args,
         the args that turn off the MCP servers of the Codex config (the kind's
-        mcp_off, read at every launch: mcpServers), the kind's start args,
-        its args only when it is not a wrapper, then role.Args. While the role's
-        model is limited (NoteModelLimit), the model args name the kind's first
+        mcp_off, read at every launch: mcpServers), the args that keep the
+        checkout's .codex/ out when the PR changes it, or its servers under
+        project_mcp "off" (codexProject against origin/<the PR's base>,
+        recorded by recordProject), the kind's start args, its args only
+        when it is not a wrapper, then role.Args. While the role's model
+        is limited (NoteModelLimit), the model args name the kind's first
         fallback model that is not, and the session records it (KVSessionModel,
         an agent.model_switched event).
       - An agent that comes up blocked (agent.start agent_not_ready, timeout,
         or status blocked, also when adopted) gets the trust-dialog fallback:
         within TrustWindow of its start and before its first prompt,
-        a Codex/Claude first-launch trust dialog on screen is answered and the
-        agent awaited until idle (see AnswerTrustDialog); any other dialog is
-        left for the human.
+        a Codex/Claude first-launch trust dialog on screen is answered and
+        the agent awaited until idle (see AnswerTrustDialog); Codex's "Folder
+        access" for a checkout the session treats as untrusted is opened
+        restricted at any time; any other dialog is left for the human.
 
     herdr's agent.start takes no environment: the role's env (Config.RoleEnv)
     reaches the agent through its pane, which EnsureWorkspace or EnsurePane
@@ -1417,10 +1452,12 @@ type ShellData struct {
 	// (config.Role.EffortFor); "" = the role's model and effort.
 	// codex-review's command passes Effort as a config override.
 	Model, Effort string
-	// MCPOff are the args that turn off the MCP servers of the Codex config
-	// (the role's tool kind's mcp_off, config.Kind.MCPOffArgs), which
-	// codex-review's command passes after its effort; Manager.ShellLine
-	// fills it when nil.
+	// MCPOff are the args that keep configuration out of the Codex session
+	// (the role's tool kind's config.Kind.ConfigOffArgs): the MCP servers
+	// of the Codex config (mcp_off), and the checkout's .codex/ when the PR
+	// changes it (project_untrust), else its servers under project_mcp
+	// "off"; codex-review's command passes them after its effort.
+	// Manager.ShellLine fills it when nil.
 	MCPOff []string
 
 	// RunID and ExtraArgs keep full-line templates written for the old
@@ -1435,6 +1472,10 @@ type ShellData struct {
 	// role.Prompt among the embedded defaults. Manager.ShellLine fills it
 	// from the configuration. Not a template variable.
 	Template *config.Prompt
+	// Checkout is the PR's checkout the line runs in, whose .codex/
+	// Manager.ShellLine compares with BaseSHA (else BaseRef); "" = unknown,
+	// nothing kept out. Not a template variable.
+	Checkout string
 }
     ShellData feeds a shell role's line (ShellLine): the role's command
     template, or a full-line .sh prompt template. Every value is shell-quoted
@@ -2095,6 +2136,16 @@ const (
     Kind.OnHooksReview values.
 
 const (
+	// ProjectMCPAllow: the MCP servers of an unchanged .codex/config.toml
+	// in the checkout (the base branch's, so the team's) load.
+	ProjectMCPAllow = "allow"
+	// ProjectMCPOff: they are turned off like the user's (MCPDisable),
+	// except those in MCPAllow.
+	ProjectMCPOff = "off"
+)
+    Kind.ProjectMCP values.
+
+const (
 	CurateOverLimit = "over_limit" // a repository past a limit, once its notes changed since the last curation
 	CurateWeekly    = "weekly"     // every repository with notes, once a week, once they changed
 	CurateMisses    = "misses"     // a retro recorded misses of the repository for its notes (class miss, scope repo)
@@ -2167,6 +2218,9 @@ const (
 	PlaceholderSubagents = "{subagents}"
 	// PlaceholderServer is an MCP server's name in Kind.MCPDisable.
 	PlaceholderServer = "{server}"
+	// PlaceholderProjects is the TOML table of untrusted paths in
+	// Kind.ProjectUntrust (Kind.UntrustArgs).
+	PlaceholderProjects = "{projects}"
 )
     Placeholders substituted by Kind.Argv and in Kind.Rename.
 
@@ -2288,7 +2342,8 @@ func DefaultKinds() map[string]Kind
         resume ["resume","{session}"], model ["--model","{model}"], effort
         ["-c","model_reasoning_effort={effort}"], rename "/rename {title}",
         login_check "codex login status" + login_ok "text:Logged in", mcp_off
-        true with mcp_disable ["-c","mcp_servers.{server}.enabled=false"].
+        true with mcp_disable ["-c","mcp_servers.{server}.enabled=false"],
+        project_untrust ["-c","projects={projects}"].
       - claude: args ["--dangerously-skip-permissions"], resume
         ["--resume","{session}"], model ["--model","{model}"], name
         ["--name","{title}"], login_check "claude auth status" + login_ok
@@ -2300,10 +2355,10 @@ func DefaultKinds() map[string]Kind
       - omp (18.4): resume ["--resume={session}"], model ["--model={model}"],
         effort ["--thinking={effort}"]; no login check.
 
-    All use wrapper "auto", session_source "herdr", on_permission_prompt
-    "deny", on_hooks_review "trust_own", DefaultAfterDenyPrompt and
-    DefaultHealthPatterns. The codex and claude args make a plain binary run
-    without approval prompts and (codex) without its sandbox, as the user's
+    All use wrapper "auto", session_source "herdr", on_permission_prompt "deny",
+    on_hooks_review "trust_own", project_mcp "allow", DefaultAfterDenyPrompt
+    and DefaultHealthPatterns. The codex and claude args make a plain binary
+    run without approval prompts and (codex) without its sandbox, as the user's
     zsh wrappers do: review agents run tests and `gh`, and magnum answers every
     approval prompt No. Args apply only without a wrapper, so a wrapper's own
     flags are never doubled.
@@ -2347,6 +2402,9 @@ func SkillPath(skill string, layout paths.Layout) string
     replaced by layout's checkout, or layout.Skill() when skill is ""; the
     embedded skill (EmbeddedSkill) when either needs a checkout the layout lacks
     (Load expands {{repo}} and ~ already; Defaults keeps them).
+
+func TOMLString(s string) string
+    TOMLString renders s as a TOML basic string.
 
 func ValidatePathGlob(glob string) error
     ValidatePathGlob checks a skip_paths entry: it must not be blank,
@@ -2876,6 +2934,21 @@ type Kind struct {
 	// MCPDisable: args that turn off MCP server {server}, passed once per
 	// server, e.g. codex's ["-c", "mcp_servers.{server}.enabled=false"].
 	MCPDisable []string `toml:"mcp_disable"`
+	// ProjectMCP: the MCP servers the checkout's own .codex/config.toml
+	// declares when the PR leaves .codex/ as its merge base has it (the
+	// team's servers): "allow" (default) keeps them, "off" turns each off
+	// through MCPDisable like the user's, except those in MCPAllow (see
+	// ConfigOffArgs). A PR that changes .codex/ loads none of them
+	// (ProjectUntrust).
+	ProjectMCP string `toml:"project_mcp"`
+	// ProjectUntrust: args that make one session treat the checkout as an
+	// untrusted folder, so it loads nothing from the checkout's .codex/
+	// (config, MCP servers, hooks, rules), passed when the PR changes
+	// .codex/ against its merge base; {projects} is a TOML inline table
+	// marking each of the checkout's paths untrusted (UntrustArgs), e.g.
+	// codex's ["-c", "projects={projects}"]. Empty = such a session loads
+	// the PR's .codex/ like any trusted project's.
+	ProjectUntrust []string `toml:"project_untrust"`
 	// Name: args that name the session {title} at launch (claude --name).
 	Name []string `toml:"name"`
 	// Rename: a slash command typed while the agent works to (re)name its
@@ -2942,15 +3015,22 @@ type Kind struct {
     by Argv in this order: Resume (resumed sessions only), Name (when a title
     is known), Model (the role's model, else DefaultModel), Effort (when the
     role sets it), Subagents or NoSubagents (when the role sets max_subagents),
-    MCPDisable per MCP server to turn off (MCPOffArgs), Start, Args (only
-    without a wrapper), then the role's args.
+    MCPDisable per MCP server to turn off and ProjectUntrust for a checkout
+    whose .codex/ the PR changes (ConfigOffArgs), Start, Args (only without a
+    wrapper), then the role's args.
 
 func (k Kind) Argv(a LaunchArgs) []string
     Argv builds the args after the command name (herdr shell-quotes each one):
-    Resume, Name, Model (a.Model, else DefaultModel), Effort, Subagents (or
-    NoSubagents for 0), MCPOffArgs(a.MCPServers), Start, Args (no wrapper only),
-    then a.Extra. A group whose value is empty is skipped; placeholders are
-    replaced in every element.
+    Resume, Name, Model (a.Model, else DefaultModel), Effort, Subagents
+    (or NoSubagents for 0), ConfigOffArgs(a.MCPServers, a.ProjectServers,
+    a.Untrusted), Start, Args (no wrapper only), then a.Extra. A group whose
+    value is empty is skipped; placeholders are replaced in every element.
+
+func (k Kind) ConfigOffArgs(servers, project, untrusted []string) []string
+    ConfigOffArgs are the args that keep configuration out of a session:
+    MCPDisable once per server to turn off (servers under MCPOff, then under
+    ProjectMCP "off" each project server not among them; none in MCPAllow,
+    nothing without MCPDisable), then UntrustArgs(untrusted).
 
 func (k Kind) LoggedIn(stdout, stderr string, exitOK bool) (loggedIn, readable bool)
     LoggedIn reads LoginCheck's output per LoginOK. exitOK is whether the
@@ -2979,6 +3059,12 @@ func (k Kind) SwitchModelCommand(model string) string
     SwitchModelCommand is SwitchModel with {model} replaced ("" when the kind
     cannot switch or model is empty).
 
+func (k Kind) UntrustArgs(paths []string) []string
+    UntrustArgs are ProjectUntrust with {projects} replaced by one TOML inline
+    table marking each path untrusted, e.g. {"/p/x"={trust_level="untrusted"}}
+    (a second -c of the same key would replace the first); nil without paths or
+    ProjectUntrust.
+
 type LaunchArgs struct {
 	Session string   // session id to resume; "" = a fresh session (Resume is skipped)
 	Title   string   // the pane title; "" skips Name
@@ -2993,6 +3079,11 @@ type LaunchArgs struct {
 	// MCPServers are the MCP servers the session would load (the Codex
 	// config's); MCPOffArgs turns them off.
 	MCPServers []string
+	// ProjectServers are the MCP servers the checkout's unchanged
+	// .codex/config.toml declares, turned off under project_mcp "off";
+	// Untrusted are the checkout's paths whose project config the session
+	// must not load (the PR changes .codex/). See ConfigOffArgs.
+	ProjectServers, Untrusted []string
 }
     LaunchArgs are the per-start values Kind.Argv substitutes.
 
@@ -6576,6 +6667,14 @@ func (c *Client) UpdateRefDelete(ctx context.Context, mainClone, ref string) err
     never followed: one pointing outside refs/magnum/ is refused, and the delete
     runs with --no-deref so git removes the ref itself, not its target.
 
+func (c *Client) WorkTreeChanges(ctx context.Context, dir, base, path string) ([]string, error)
+    WorkTreeChanges lists the files under path (relative to the repository's
+    top, taken literally) whose state on disk differs from base, as a tool
+    reading that directory sees them: committed and uncommitted changes and
+    deletions (git diff base -- path), and the untracked files, ignored ones
+    included (git ls-files --others). Sorted, without duplicates; nil when the
+    directory matches base.
+
 func (c *Client) WorktreeAdd(ctx context.Context, mainClone, path, ref string, detach bool, branch string) error
     WorktreeAdd creates a worktree at the absolute path, checking out ref.
     With detach it is a detached HEAD at ref; with branch it creates that new
@@ -9231,7 +9330,7 @@ type Agents interface {
 	ReadRecent(ctx context.Context, s store.Session, lines int) (string, error)
 	PreflightRole(ctx context.Context, role config.Role) error
 	RolePrompt(role config.Role, promptKind string, data any) (string, error)
-	ShellLine(role config.Role, d agents.ShellData) (string, error)
+	ShellLine(ctx context.Context, prID int64, role config.Role, d agents.ShellData) (string, error)
 	// Per-model limits (see modelFallback).
 	NoteModelLimit(ctx context.Context, s store.Session, h agents.Health) (agents.ModelLimit, error)
 	FallbackModel(ctx context.Context, s store.Session, tried []string) (string, bool)
@@ -11116,6 +11215,11 @@ func KVIdentityTickError(name string) string
 func KVIdentityTokenExpiry(name string) string
     KVIdentityTokenExpiry holds when an App identity's token expires
     (store.FormatTime).
+
+func KVPRCodexProject(prID int64) string
+    KVPRCodexProject records a Codex session of the PR launched with
+    its checkout untrusted because the PR changes .codex/ (JSON, see
+    agents.CodexProjectNote); a launch that finds .codex/ unchanged clears it.
 
 func KVPRDryRun(prID int64) string
     KVPRDryRun holds the PR state a dry-run round (review request with dry_run)
@@ -13417,6 +13521,11 @@ type PRBoardRow struct {
 	// Note is a one-line remark about the last review shown under LAST REVIEW
 	// on the card (e.g. "comment-only push skipped (a7b3f8c → 602da9d)").
 	Note string
+	// ProjectNote says that the agents of the PR's head ran without the
+	// PR's changes to the checkout's own agent config (e.g. the PR changes
+	// .codex/, so Codex ran with the checkout untrusted); the card shows it
+	// under LAST REVIEW. "" = nothing to say.
+	ProjectNote string
 
 	// RequestedToMe is the latest review request that asked one of the self
 	// logins; LastRequest the latest one whoever it asked; Requests the

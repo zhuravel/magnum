@@ -127,6 +127,14 @@ func TestSkillReadsTheHistoryAndChecksTheDescriptionsClaims(t *testing.T) {
 	}, []string{"For a merged one, check this PR does not undo or re-break its fix."})
 }
 
+// A PR that changes .codex/ gets its checkout untrusted in magnum's Codex
+// sessions (codexProject): the review says so in its Checks.
+func TestSkillSaysARoundRanWithoutThePRsCodexChanges(t *testing.T) {
+	skillSays(t, []string{
+		"- `codex_project` (only `declined`): magnum kept the PR's `.codex/` changes out of its Codex sessions; add the Checks line `- Codex ran without the PR's .codex/ changes`.",
+	}, nil)
+}
+
 // A re-review of an unchanged head posted "Re-review 42a70de → 42a70de" with
 // Checks listing an empty commit range and an empty diff: its header names
 // the one commit, and its Checks only what ran this time.
@@ -202,10 +210,11 @@ func TestSkillSetsTheOperatorsInteractiveHabitsAside(t *testing.T) {
 // 250), and 158 for the changed files' history and the description's claims
 // (2026-10-06: they add 581 bytes, shortening sections 2 and 4 won back
 // 423), 92 for listing `history` among the block's fields and the
-// description line in the body's order, and 278 for setting the operator's
-// interactive habits aside (2026-10-06). Every rule added must replace or
+// description line in the body's order, 278 for setting the operator's
+// interactive habits aside (2026-10-06), and 171 for the `codex_project`
+// field and its Checks line (2026-10-06). Every rule added must replace or
 // shorten text.
-const skillMaxBytes = 32_051
+const skillMaxBytes = 32_222
 
 func TestSkillStaysTight(t *testing.T) {
 	if n := len(magnum.Skill); n > skillMaxBytes {
@@ -224,7 +233,7 @@ func TestSkillDescribesEveryMagnumField(t *testing.T) {
 	d.MovedFrom, d.ForcePushed = "/Users/bohdan/Projects/talkable.review1", true
 	d.Readiness = Readiness{Failed: 1, File: "/r/readiness.json", Checks: []ReadinessCheck{
 		{Kind: ReadinessReady, Command: "bin/db-ready", Status: ReadinessFailed, Duration: "1s"}}}
-	d.RelatedPRs, d.HistoryFile = "/r/related.json", "/r/history.json"
+	d.RelatedPRs, d.HistoryFile, d.CodexProjectDeclined = "/r/related.json", "/r/history.json", true
 	skill := string(magnum.Skill)
 	seen := map[string]bool{}
 	// A two-phase round: the candidates phase of each prompt, and the own
@@ -253,7 +262,7 @@ func TestSkillDescribesEveryMagnumField(t *testing.T) {
 			seen[m[1]] = true
 		}
 	}
-	for _, f := range []string{"notes", "notes_dir", "notes_harness", "notes_lock", "notes_unlock", "readiness", "reports", "phase", "own_findings", "related_prs", "history"} {
+	for _, f := range []string{"notes", "notes_dir", "notes_harness", "notes_lock", "notes_unlock", "readiness", "reports", "phase", "own_findings", "related_prs", "history", "codex_project"} {
 		if !seen[f] {
 			t.Errorf("no judge prompt renders `%s`", f)
 		}

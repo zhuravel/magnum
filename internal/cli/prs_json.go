@@ -60,6 +60,7 @@ type prsJSONRow struct {
 	WaitDetail       string            `json:"wait_detail"`
 	DeltaCheck       bool              `json:"delta_check"` // the round it waits for is a delta check
 	Note             string            `json:"note"`
+	ProjectNote      string            `json:"project_note"` // the agents ran without the PR's own agent config changes
 	RequestedToMe    *prsJSONRequest   `json:"requested_to_me"`
 	LastRequest      *prsJSONRequest   `json:"last_request"`
 	Requests         []prsJSONRequest  `json:"requests"`
@@ -253,7 +254,7 @@ func prsJSONOf(r tui.PRBoardRow) prsJSONRow {
 		Slot: r.Slot, Pinned: r.Pinned, Muted: r.Muted, Notes: r.Notes, NextEligibleAt: r.NextEligibleAt,
 		LastError: r.LastError, ErrorFix: r.ErrorFix, ErrorDetail: listOf(r.ErrorDetail), RoundsToday: r.RoundsToday,
 		LastRound: mapPtr(r.LastRound, prsJSONRoundOf), RoundWhy: mapPtr(r.RoundWhy, prsJSONRoundWhyOf),
-		Progress: mapPtr(r.Progress, prsJSONProgressOf), Spend: mapPtr(r.Spend, prsJSONSpendOf), Wait: r.Wait, WaitDetail: r.WaitDetail, DeltaCheck: r.DeltaCheck, Note: r.Note,
+		Progress: mapPtr(r.Progress, prsJSONProgressOf), Spend: mapPtr(r.Spend, prsJSONSpendOf), Wait: r.Wait, WaitDetail: r.WaitDetail, DeltaCheck: r.DeltaCheck, Note: r.Note, ProjectNote: r.ProjectNote,
 		RequestedToMe: mapPtr(r.RequestedToMe, prsJSONRequestOf), LastRequest: mapPtr(r.LastRequest, prsJSONRequestOf),
 		Requests: mapList(r.Requests, prsJSONRequestOf), ClosedAt: r.ClosedAt, Recent: r.Recent, MergedUnreviewed: r.MergedUnreviewed, FlagDismissed: r.FlagDismissed,
 		NeedsMe: r.NeedsMe, ReviewDecision: r.ReviewDecision, AutoApproveStopped: r.AutoStopped,

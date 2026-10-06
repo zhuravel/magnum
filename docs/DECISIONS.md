@@ -444,6 +444,47 @@ editing history. Code, config comments and prompts reference these by their head
   says, beside its role, that the operator's instructions for interactive work (status lines, usage-limit
   checks, delegation or orchestration skills) do not apply in a review: check no usage, start a subagent
   only when a review step needs one, end the turn as the skill says (its cap grows by those 278 bytes).
+- **A PR that changes `.codex/` runs Codex with its checkout untrusted** (2026-10-06). Codex 0.160 loads a
+  project layer from `.codex/` in each directory from the session's cwd up to the project root, for a
+  trusted folder only (`config/src/loader/mod.rs`: `config.toml` minus a short denylist of provider, notify
+  and profile keys, hooks, rules), and magnum trusts its checkouts. A watched repository tracks
+  `.codex/config.toml` with MCP servers whose auth comes from environment variables, and the checkout is the
+  PR's head: a PR could add a stdio server (a command Codex starts), point a server's URL elsewhere with
+  `bearer_token_env_var` or `env_http_headers` naming a secret of the slot's environment, or set
+  `shell_environment_policy`, `zsh_path`, instructions files, agent roles and plugins. W35 read only the
+  operator's config. Codex decides a folder's trust from the merged non-project layers plus the session's
+  `-c` flags (which merge into the user's tables, `config/src/overrides.rs`, `merge.rs`) before it loads the
+  project layers, and a `-c` key path is split on dots, so magnum passes one inline table:
+  `-c projects={"<checkout>"={trust_level="untrusted"},"<real path>"={…}}` (`[kinds.codex] project_untrust`,
+  `{projects}`), which beats the `trusted` entry it wrote for the checkout (Codex looks up the directory
+  itself before the repository root) for that session only and writes nothing. It does so at every launch
+  and resume of a codex-kind role and in codex-review's `.MCPOff` when the files on disk under the
+  checkout's `.codex/` differ from the merge base of `HEAD` and `origin/<base>` (the round's merge base for
+  the shell line): `git diff --name-only <merge base> -- :(top,literal).codex` plus `git ls-files --others`
+  (ignored files too: a round's agent may have written one), and also when git cannot tell; a checkout
+  without a `.codex` directory runs no git. Declining trust stops more than the project layers, which was
+  checked: Codex then leaves the checkout's `AGENTS.md` out of its instructions (`core/src/agents_md.rs`;
+  the judge skill reads it itself and treats it as data, which AGENTS.md asks anyway), derives stricter
+  sandbox and approval defaults only where nothing sets them (`core/src/config/mod.rs`; magnum's codex args and the operator's
+  wrapper pass `--dangerously-bypass-approvals-and-sandbox`; `codex review` sets approvals to never), and
+  its TUI opens on a "Folder access" dialog at every start and resume (`tui/src/onboarding`): "Open
+  restricted" loads nothing and saves no trust, so magnum answers it at any time (a third trust spec, no
+  first-launch window), before a prompt too. The variant "Open existing task", shown for a resumed task on
+  Codex's shared daemon, keeps what the task loaded while trusted and is left for the human. Each such
+  launch records an `agents.codex_project_declined` event (counts, never a path) and the PR's
+  `pr.<id>.codex_project` record with the head, which a launch that finds `.codex/` unchanged clears; the
+  board's card says "Codex ran without the PR's .codex/ changes" for the PR's head, and the judge's
+  initial, rereview and recovery prompts carry `codex_project: declined` for the round's head, which the
+  skill turns into a Checks line (its cap grows by 171 bytes). A PR that leaves `.codex/` alone gets the
+  base branch's project config, the team's, as before; the new `project_mcp = "off"` (default `allow`)
+  turns its servers off like the operator's, by name, except `mcp_allow`. Rejected: turning off every
+  server the PR's file declares and neutralising its other keys one by one (the dangerous keys are many,
+  change with each Codex release, and key aliases could hide one), and refusing such PRs (the review still
+  works untrusted). Not covered: a Codex TUI attached to a running Codex app-server daemon sends the
+  daemon only reasoning overrides when it starts a thread (`tui/src/app_server_session.rs`), so neither
+  W35's flags nor this one may apply there (no daemon socket ran on the operator's machine); a session
+  herdr restores by itself starts without magnum's flags; a post-merge review compares with
+  `origin/<base>`, which then holds the merged change, so it counts as the base's.
 
 ## Screens and commands
 

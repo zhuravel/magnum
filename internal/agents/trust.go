@@ -18,6 +18,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/gitx"
 )
@@ -299,23 +300,7 @@ func insertCodexTrustLevel(data []byte, dir string) ([]byte, bool) {
 }
 
 // tomlQuote renders s as a TOML basic string.
-func tomlQuote(s string) string {
-	var b strings.Builder
-	b.WriteByte('"')
-	for _, r := range s {
-		switch {
-		case r == '"' || r == '\\':
-			b.WriteByte('\\')
-			b.WriteRune(r)
-		case r < 0x20 || r == 0x7f:
-			fmt.Fprintf(&b, `\u%04X`, r)
-		default:
-			b.WriteRune(r)
-		}
-	}
-	b.WriteByte('"')
-	return b.String()
-}
+func tomlQuote(s string) string { return config.TOMLString(s) }
 
 // ensureClaudeTrust sets projects[dir].hasTrustDialogAccepted for every dir
 // in the Claude config at path and returns the dirs it changed. A missing

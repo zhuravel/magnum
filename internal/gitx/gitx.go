@@ -500,6 +500,41 @@ func (c *Client) ModifiedPaths(ctx context.Context, dir, base, head string) ([]s
 	return c.diffNames(ctx, dir, base, head, []string{"--diff-filter=a"}, nil)
 }
 
+// WorkTreeChanges lists the files under path (relative to the repository's
+// top, taken literally) whose state on disk differs from base, as a tool
+// reading that directory sees them: committed and uncommitted changes and
+// deletions (git diff base -- path), and the untracked files, ignored ones
+// included (git ls-files --others). Sorted, without duplicates; nil when
+// the directory matches base.
+func (c *Client) WorkTreeChanges(ctx context.Context, dir, base, path string) ([]string, error) {
+	if err := checkRev("revision", base); err != nil {
+		return nil, err
+	}
+	if strings.Contains(base, "..") {
+		return nil, fmt.Errorf("gitx: revision %q must not be a range", base)
+	}
+	if path == "" {
+		return nil, errors.New("gitx: work tree changes need a path")
+	}
+	spec := ":(top,literal)" + path
+	diff, err := c.git(ctx, dir, call{label: "diff --name-only " + base}, "diff", "--name-only", "-z", "--no-renames", "--no-ext-diff", base, "--", spec)
+	if err != nil {
+		return nil, err
+	}
+	others, err := c.git(ctx, dir, call{label: "ls-files --others"}, "ls-files", "-z", "--others", "--", spec)
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, p := range strings.Split(string(diff.Stdout)+"\x00"+string(others.Stdout), "\x00") {
+		if p != "" {
+			paths = append(paths, p)
+		}
+	}
+	slices.Sort(paths)
+	return slices.Compact(paths), nil
+}
+
 // diffNames lists the paths of `git diff --name-only base...head`, opts
 // after the fixed options and pathspecs after "--".
 func (c *Client) diffNames(ctx context.Context, dir, base, head string, opts, pathspecs []string) ([]string, error) {

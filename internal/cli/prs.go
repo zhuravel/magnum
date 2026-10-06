@@ -18,6 +18,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/github"
@@ -349,6 +350,9 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 				if v, ok, err := st.GetKV(ctx, engine.KVPRStalemate(r.PRID)); err == nil && ok {
 					row.Stalemate = prsStalemate(v)
 				}
+			}
+			if n, ok := agents.CodexProjectDeclined(ctx, st, r.PRID); ok && n.Head != "" && n.Head == r.HeadSHA {
+				row.ProjectNote = agents.CodexProjectSentence
 			}
 			out = append(out, row)
 		}

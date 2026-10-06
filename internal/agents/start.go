@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -36,7 +37,10 @@ import (
 //     kinds without name args but with a rename command are named later, by
 //     ObserveSnapshot), the role's model, effort and subagent-cap args, the
 //     args that turn off the MCP servers of the Codex config (the kind's
-//     mcp_off, read at every launch: mcpServers), the kind's start
+//     mcp_off, read at every launch: mcpServers), the args that keep the
+//     checkout's .codex/ out when the PR changes it, or its servers under
+//     project_mcp "off" (codexProject against origin/<the PR's base>,
+//     recorded by recordProject), the kind's start
 //     args, its args only when it is not a wrapper, then role.Args. While
 //     the role's model is limited (NoteModelLimit), the model args name the
 //     kind's first fallback model that is not, and the session records it
@@ -45,8 +49,9 @@ import (
 //     or status blocked, also when adopted) gets the trust-dialog fallback:
 //     within TrustWindow of its start and before its first prompt, a
 //     Codex/Claude first-launch trust dialog on screen is answered and the
-//     agent awaited until idle (see AnswerTrustDialog); any other dialog is
-//     left for the human.
+//     agent awaited until idle (see AnswerTrustDialog); Codex's "Folder
+//     access" for a checkout the session treats as untrusted is opened
+//     restricted at any time; any other dialog is left for the human.
 //
 // herdr's agent.start takes no environment: the role's env
 // (Config.RoleEnv) reaches the agent through its pane, which EnsureWorkspace
@@ -151,8 +156,12 @@ func (m *Manager) StartAgent(ctx context.Context, pr store.PR, role config.Role,
 	}
 	ref := paneRef{name: name, pane: paneID}
 	model, onFallback := m.startModel(ctx, role, kind)
+	base := cmp.Or(store.Deref(pr.BaseRef), repo.DefaultBranch)
+	project := m.codexProject(ctx, role, dir, "origin/"+strings.TrimPrefix(base, "origin/"), "")
 	args := kind.Argv(config.LaunchArgs{Session: resume, Title: title, Model: model, Effort: role.Effort,
-		Subagents: role.MaxSubagents, MCPServers: m.mcpServers(role), Wrapper: wrapper, Extra: role.Args})
+		Subagents: role.MaxSubagents, MCPServers: m.mcpServers(role), ProjectServers: project.servers, Untrusted: project.paths,
+		Wrapper: wrapper, Extra: role.Args})
+	m.recordProject(ctx, pr.ID, role, dir, project)
 	opts := herdr.AgentStartOptions{Name: name, Kind: kindName, PaneID: paneID, Timeout: AgentStartTimeout, Args: args}
 	launched := m.now()
 	gate := trustGate{since: launched} // a fresh agent was never prompted

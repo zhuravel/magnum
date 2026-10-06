@@ -305,6 +305,11 @@ func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
 	if r.Note != "" {
 		add("  " + p.st.Dim.Render(r.Note))
 	}
+	if r.ProjectNote != "" {
+		for _, l := range strings.Split(lipgloss.NewStyle().Width(max(inner-2, 10)).Render(r.ProjectNote), "\n") {
+			add("  " + p.pal.yellow.Render(l))
+		}
+	}
 	if f := r.Findings; f != nil {
 		add("", p.st.Section.Render(p.g.headed("FINDINGS")))
 		for _, l := range p.findingsLines(*f) {

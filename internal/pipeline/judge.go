@@ -75,6 +75,7 @@ func (rd *round) runJudge(ctx context.Context, run store.Run) (RoundResult, erro
 	rd.addThreads(ctx, &jd)
 	rd.addDeltaCheck(ctx, &jd)
 	rd.addRelated(ctx, &jd)
+	rd.addProjectDeclined(ctx, &jd)
 	rd.ownPassPhase(&jd)
 	rd.snapshotNotes()
 	text, err := rd.r.Agents.RolePrompt(rd.judge, judgePrompt(in.Kind), jd)

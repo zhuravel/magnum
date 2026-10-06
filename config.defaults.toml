@@ -227,7 +227,16 @@ judge_fresh_after = "90m"         # a judge whose last turn on the PR ended long
 #                                     # ~/.codex), one mcp_disable per server; false = they all load
 # mcp_allow = []                      # MCP servers mcp_off leaves on, e.g. ["docs"]
 # mcp_disable = ["-c", "mcp_servers.{server}.enabled=false"]   # turns off server {server} ([] = mcp_off ignored)
-# name = []                           # codex has no name flag, so magnum types `rename` while it works
+# project_untrust = ["-c", "projects={projects}"]   # when the PR changes the checkout's .codex/ (against its
+#                                     # merge base, files a round left there included, or when git cannot
+#                                     # tell), every launch, resume and codex-review line marks the checkout
+#                                     # untrusted for that session ({projects}: a TOML table of its paths), so
+#                                     # none of the PR's .codex/ loads (config, MCP servers, hooks, rules) and
+#                                     # magnum answers Codex's "Folder access" with "Open restricted";
+#                                     # [] = a changed .codex/ loads like any trusted project's
+# project_mcp = "allow"               # the MCP servers of an unchanged .codex/config.toml (the team's): allow
+#                                     # keeps them; off turns them off like mcp_off, but for mcp_allow
+# name = []                         # codex has no name flag, so magnum types `rename` while it works
 # rename = "/rename {title}"
 # login_check = "codex login status"  # "" = no preflight
 # login_ok = "text:Logged in"         # text:<substring> | regex:<expr> | json:<path> | "" (exit status 0)
@@ -316,7 +325,8 @@ tool = "codex"                        # codex's login check, pauses and health p
 effort = "high"                       # passed by the command as -c model_reasoning_effort=high, so `codex review`
                                       # never runs at your global Codex effort; args come after it and win
 command = "command codex review{{if .Effort}} -c model_reasoning_effort={{.Effort}}{{end}}{{range .MCPOff}} {{.}}{{end}} --base {{if .BaseSHA}}{{.BaseSHA}}{{else}}{{.BaseRef}}{{end}}"
-                                      # .MCPOff turns off your Codex MCP servers ([kinds.codex] mcp_off); then
+                                      # .MCPOff turns off your Codex MCP servers ([kinds.codex] mcp_off) and
+                                      # keeps a PR's .codex/ changes out (project_untrust); then
                                       # the merge base (fixed), else the base ref (moves with the base branch)
 args = []                             # appended shell-quoted
 ok_status = [0]                       # exit statuses that count as a report; any other status fails the role

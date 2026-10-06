@@ -771,7 +771,24 @@ line. A custom codex-review `command` needs `{{range .MCPOff}} {{.}}{{end}}` for
 gives its sessions a `CODEX_HOME` of their own (the login, the session files, the folder trust and the
 hooks live there), so your global `AGENTS.md` still loads; the judge skill tells the judge that your
 instructions for interactive work (status lines, usage checks, delegation skills) do not apply in a
-review. A session whose model hits its own limit switches to the kind's next `fallback_models` entry by
+review.
+
+The checkout's own `.codex/` is project config Codex loads for a trusted folder (Magnum trusts its
+checkouts): MCP servers it starts or sends tokens from the environment to, hooks, rules, settings. A PR
+controls it, so when the files under the checkout's `.codex/` differ from the PR's merge base (the PR's
+commits, files a round left there, or git cannot tell), every launch and resume of the judge and `codex
+review`'s line pass `-c projects={"<checkout>"={trust_level="untrusted"}}` (`[kinds.codex]
+project_untrust`): that session treats the checkout as an untrusted folder and loads none of its `.codex/`,
+nothing is written to your config, and Magnum answers Codex's "Folder access" with "Open restricted".
+Codex then also leaves the checkout's `AGENTS.md` out of its instructions; the judge skill reads it anyway.
+An `agents.codex_project_declined` event records it, the board's card says "Codex ran without the PR's
+.codex/ changes" and so does the review's Checks. A PR that leaves `.codex/` alone gets the base branch's
+(the team's) project config as before; `project_mcp = "off"` turns its MCP servers off too, but for
+`mcp_allow`. Not covered: a Codex TUI that attaches to a running Codex app-server daemon hands it only
+some of its `-c` flags (Codex 0.160), so the MCP servers and the trust may then not be Magnum's to set; a
+session herdr restores by itself starts without Magnum's flags.
+
+A session whose model hits its own limit switches to the kind's next `fallback_models` entry by
 itself (Claude: `["opus", "sonnet"]`) and back once the limit lifts.
 
 #### Triage: fewer reviewers for a small diff

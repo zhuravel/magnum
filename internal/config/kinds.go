@@ -23,8 +23,9 @@ import (
 // built by Argv in this order: Resume (resumed sessions only), Name (when a
 // title is known), Model (the role's model, else DefaultModel), Effort
 // (when the role sets it), Subagents or NoSubagents (when the role sets
-// max_subagents), MCPDisable per MCP server to turn off (MCPOffArgs),
-// Start, Args (only without a wrapper), then the role's args.
+// max_subagents), MCPDisable per MCP server to turn off and ProjectUntrust
+// for a checkout whose .codex/ the PR changes (ConfigOffArgs), Start, Args
+// (only without a wrapper), then the role's args.
 type Kind struct {
 	// Start: extra args always appended.
 	Start []string `toml:"start"`
@@ -60,6 +61,21 @@ type Kind struct {
 	// MCPDisable: args that turn off MCP server {server}, passed once per
 	// server, e.g. codex's ["-c", "mcp_servers.{server}.enabled=false"].
 	MCPDisable []string `toml:"mcp_disable"`
+	// ProjectMCP: the MCP servers the checkout's own .codex/config.toml
+	// declares when the PR leaves .codex/ as its merge base has it (the
+	// team's servers): "allow" (default) keeps them, "off" turns each off
+	// through MCPDisable like the user's, except those in MCPAllow (see
+	// ConfigOffArgs). A PR that changes .codex/ loads none of them
+	// (ProjectUntrust).
+	ProjectMCP string `toml:"project_mcp"`
+	// ProjectUntrust: args that make one session treat the checkout as an
+	// untrusted folder, so it loads nothing from the checkout's .codex/
+	// (config, MCP servers, hooks, rules), passed when the PR changes
+	// .codex/ against its merge base; {projects} is a TOML inline table
+	// marking each of the checkout's paths untrusted (UntrustArgs), e.g.
+	// codex's ["-c", "projects={projects}"]. Empty = such a session loads
+	// the PR's .codex/ like any trusted project's.
+	ProjectUntrust []string `toml:"project_untrust"`
 	// Name: args that name the session {title} at launch (claude --name).
 	Name []string `toml:"name"`
 	// Rename: a slash command typed while the agent works to (re)name its
@@ -164,6 +180,16 @@ const (
 	// without the untrusted hooks until the user trusts them in their own
 	// Codex.
 	HooksDecline = "decline"
+)
+
+// Kind.ProjectMCP values.
+const (
+	// ProjectMCPAllow: the MCP servers of an unchanged .codex/config.toml
+	// in the checkout (the base branch's, so the team's) load.
+	ProjectMCPAllow = "allow"
+	// ProjectMCPOff: they are turned off like the user's (MCPDisable),
+	// except those in MCPAllow.
+	ProjectMCPOff = "off"
 )
 
 // HealthPatterns are regular expressions (RE2, matched case-insensitively)
@@ -276,7 +302,8 @@ func DefaultHealthPatterns() HealthPatterns {
 //     resume ["resume","{session}"], model ["--model","{model}"],
 //     effort ["-c","model_reasoning_effort={effort}"], rename "/rename {title}",
 //     login_check "codex login status" + login_ok "text:Logged in",
-//     mcp_off true with mcp_disable ["-c","mcp_servers.{server}.enabled=false"].
+//     mcp_off true with mcp_disable ["-c","mcp_servers.{server}.enabled=false"],
+//     project_untrust ["-c","projects={projects}"].
 //   - claude: args ["--dangerously-skip-permissions"],
 //     resume ["--resume","{session}"], model ["--model","{model}"],
 //     name ["--name","{title}"], login_check "claude auth status" + login_ok
@@ -289,8 +316,8 @@ func DefaultHealthPatterns() HealthPatterns {
 //     effort ["--thinking={effort}"]; no login check.
 //
 // All use wrapper "auto", session_source "herdr", on_permission_prompt
-// "deny", on_hooks_review "trust_own", DefaultAfterDenyPrompt and
-// DefaultHealthPatterns. The codex and
+// "deny", on_hooks_review "trust_own", project_mcp "allow",
+// DefaultAfterDenyPrompt and DefaultHealthPatterns. The codex and
 // claude args make a plain binary run without approval prompts and (codex)
 // without its sandbox, as the user's zsh wrappers do: review agents run
 // tests and `gh`, and magnum answers every approval prompt No. Args apply
@@ -299,6 +326,7 @@ func DefaultKinds() map[string]Kind {
 	base := func(k Kind) Kind {
 		k.Wrapper, k.SessionSource, k.HealthPatterns = WrapperAuto, SessionHerdr, DefaultHealthPatterns()
 		k.OnPermissionPrompt, k.AfterDenyPrompt, k.OnHooksReview = PermissionDeny, DefaultAfterDenyPrompt, HooksTrustOwn
+		k.ProjectMCP = ProjectMCPAllow
 		return k
 	}
 	return map[string]Kind{
@@ -313,6 +341,12 @@ func DefaultKinds() map[string]Kind {
 			// (at least 1); agents.enabled = false removes the tools.
 			Subagents: []string{"-c", "agents.max_concurrent_threads_per_session=" + PlaceholderSubagents}, NoSubagents: []string{"-c", "agents.enabled=false"},
 			MCPOff: true, MCPDisable: []string{"-c", "mcp_servers." + PlaceholderServer + ".enabled=false"},
+			// Codex 0.160 merges a -c table into the user's config
+			// (config/src/overrides.rs, merge.rs) and decides a folder's
+			// trust from those session flags before the project layers load
+			// (config/src/loader/mod.rs), so the table overrides the trust
+			// magnum recorded for one session only.
+			ProjectUntrust: []string{"-c", "projects=" + PlaceholderProjects},
 		}),
 		KindClaude: base(Kind{
 			Args:       []string{"--dangerously-skip-permissions"},
@@ -347,12 +381,17 @@ type LaunchArgs struct {
 	// MCPServers are the MCP servers the session would load (the Codex
 	// config's); MCPOffArgs turns them off.
 	MCPServers []string
+	// ProjectServers are the MCP servers the checkout's unchanged
+	// .codex/config.toml declares, turned off under project_mcp "off";
+	// Untrusted are the checkout's paths whose project config the session
+	// must not load (the PR changes .codex/). See ConfigOffArgs.
+	ProjectServers, Untrusted []string
 }
 
 // Argv builds the args after the command name (herdr shell-quotes each one):
 // Resume, Name, Model (a.Model, else DefaultModel), Effort, Subagents (or
-// NoSubagents for 0), MCPOffArgs(a.MCPServers), Start, Args (no wrapper
-// only), then a.Extra. A group whose value is empty is skipped;
+// NoSubagents for 0), ConfigOffArgs(a.MCPServers, a.ProjectServers,
+// a.Untrusted), Start, Args (no wrapper only), then a.Extra. A group whose value is empty is skipped;
 // placeholders are replaced in every element.
 func (k Kind) Argv(a LaunchArgs) []string {
 	var out []string
@@ -375,7 +414,7 @@ func (k Kind) Argv(a LaunchArgs) []string {
 	default:
 		add(k.Subagents, PlaceholderSubagents, strconv.Itoa(*a.Subagents))
 	}
-	out = append(out, k.MCPOffArgs(a.MCPServers)...)
+	out = append(out, k.ConfigOffArgs(a.MCPServers, a.ProjectServers, a.Untrusted)...)
 	out = append(out, k.Start...)
 	if !a.Wrapper {
 		out = append(out, k.Args...)
@@ -400,6 +439,64 @@ func (k Kind) MCPOffArgs(servers []string) []string {
 		}
 	}
 	return out
+}
+
+// ConfigOffArgs are the args that keep configuration out of a session:
+// MCPDisable once per server to turn off (servers under MCPOff, then
+// under ProjectMCP "off" each project server not among them; none in
+// MCPAllow, nothing without MCPDisable), then UntrustArgs(untrusted).
+func (k Kind) ConfigOffArgs(servers, project, untrusted []string) []string {
+	out := k.MCPOffArgs(servers)
+	if k.ProjectMCP == ProjectMCPOff && len(k.MCPDisable) > 0 {
+		for _, s := range project {
+			if slices.Contains(k.MCPAllow, s) || k.MCPOff && slices.Contains(servers, s) {
+				continue
+			}
+			for _, a := range k.MCPDisable {
+				out = append(out, strings.ReplaceAll(a, PlaceholderServer, s))
+			}
+		}
+	}
+	return append(out, k.UntrustArgs(untrusted)...)
+}
+
+// UntrustArgs are ProjectUntrust with {projects} replaced by one TOML
+// inline table marking each path untrusted, e.g.
+// {"/p/x"={trust_level="untrusted"}} (a second -c of the same key would
+// replace the first); nil without paths or ProjectUntrust.
+func (k Kind) UntrustArgs(paths []string) []string {
+	if len(paths) == 0 || len(k.ProjectUntrust) == 0 {
+		return nil
+	}
+	entries := make([]string, len(paths))
+	for i, p := range paths {
+		entries[i] = TOMLString(p) + `={trust_level="untrusted"}`
+	}
+	table := "{" + strings.Join(entries, ",") + "}"
+	out := make([]string, len(k.ProjectUntrust))
+	for i, a := range k.ProjectUntrust {
+		out[i] = strings.ReplaceAll(a, PlaceholderProjects, table)
+	}
+	return out
+}
+
+// TOMLString renders s as a TOML basic string.
+func TOMLString(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range s {
+		switch {
+		case r == '"' || r == '\\':
+			b.WriteByte('\\')
+			b.WriteRune(r)
+		case r < 0x20 || r == 0x7f:
+			fmt.Fprintf(&b, `\u%04X`, r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
 }
 
 // RenameCommand is Rename with {title} replaced ("" when the kind has none).
@@ -513,7 +610,7 @@ func normalizeKinds(kinds map[string]Kind) {
 		k.Start, k.Args, k.Resume, k.Model = cloneOrNil(k.Start), cloneOrNil(k.Args), cloneOrNil(k.Resume), cloneOrNil(k.Model)
 		k.Effort, k.Name, k.FallbackModels = cloneOrNil(k.Effort), cloneOrNil(k.Name), cloneOrNil(k.FallbackModels)
 		k.Subagents, k.NoSubagents = cloneOrNil(k.Subagents), cloneOrNil(k.NoSubagents)
-		k.MCPAllow, k.MCPDisable = cloneOrNil(k.MCPAllow), cloneOrNil(k.MCPDisable)
+		k.MCPAllow, k.MCPDisable, k.ProjectUntrust = cloneOrNil(k.MCPAllow), cloneOrNil(k.MCPDisable), cloneOrNil(k.ProjectUntrust)
 		k.SwitchModel, k.DefaultModel = strings.TrimSpace(k.SwitchModel), strings.TrimSpace(k.DefaultModel)
 		k.ResetModel = strings.TrimSpace(k.ResetModel)
 		h := &k.HealthPatterns
@@ -536,6 +633,10 @@ func normalizeKinds(kinds map[string]Kind) {
 		k.OnHooksReview = strings.ToLower(strings.TrimSpace(k.OnHooksReview))
 		if k.OnHooksReview == "" {
 			k.OnHooksReview = HooksTrustOwn
+		}
+		k.ProjectMCP = strings.ToLower(strings.TrimSpace(k.ProjectMCP))
+		if k.ProjectMCP == "" {
+			k.ProjectMCP = ProjectMCPAllow
 		}
 		k.AfterDenyPrompt = strings.TrimSpace(k.AfterDenyPrompt)
 		kinds[name] = k

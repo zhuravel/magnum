@@ -155,6 +155,11 @@ type PRBoardRow struct {
 	// Note is a one-line remark about the last review shown under LAST REVIEW
 	// on the card (e.g. "comment-only push skipped (a7b3f8c → 602da9d)").
 	Note string
+	// ProjectNote says that the agents of the PR's head ran without the
+	// PR's changes to the checkout's own agent config (e.g. the PR changes
+	// .codex/, so Codex ran with the checkout untrusted); the card shows it
+	// under LAST REVIEW. "" = nothing to say.
+	ProjectNote string
 
 	// RequestedToMe is the latest review request that asked one of the self
 	// logins; LastRequest the latest one whoever it asked; Requests the
@@ -604,7 +609,7 @@ func sanitizeRow(r PRBoardRow) PRBoardRow {
 	r.HeadSHA = cleanText(r.HeadSHA)
 	r.Wait, r.WaitDetail = cleanText(r.Wait), cleanText(r.WaitDetail)
 	r.Stalemate = cleanAll(r.Stalemate)
-	r.Note, r.SkipReason = cleanText(r.Note), cleanText(r.SkipReason)
+	r.Note, r.SkipReason, r.ProjectNote = cleanText(r.Note), cleanText(r.SkipReason), cleanText(r.ProjectNote)
 	if r.Badges != nil {
 		badges := make([]Badge, 0, len(r.Badges))
 		for _, b := range r.Badges {

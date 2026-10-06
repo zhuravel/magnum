@@ -359,6 +359,15 @@ func rolesKinds(c *Context, cfg *config.Config, o rolesOpts) int {
 			mcp = args(k.MCPDisable) + " per MCP server of the Codex config (allowed: " + inspOrDash(strings.Join(k.MCPAllow, ", ")) + ")"
 		}
 		fmt.Fprintf(tw, "  mcp:\t%s\n", mcp)
+		project := "-"
+		if len(k.ProjectUntrust) > 0 || k.ProjectMCP == config.ProjectMCPOff && len(k.MCPDisable) > 0 {
+			untrust := "- (a changed .codex/ loads)"
+			if len(k.ProjectUntrust) > 0 {
+				untrust = args(k.ProjectUntrust) + " when the PR changes .codex/ (the checkout untrusted for the session)"
+			}
+			project = untrust + "; else its MCP servers: " + k.ProjectMCP
+		}
+		fmt.Fprintf(tw, "  project:\t%s\n", project)
 		fmt.Fprintf(tw, "  name:\t%s\n", args(k.Name))
 		fmt.Fprintf(tw, "  rename:\t%s\n", inspOrDash(k.Rename))
 		fmt.Fprintf(tw, "  start:\t%s\n", args(k.Start))

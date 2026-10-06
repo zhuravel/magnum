@@ -233,11 +233,12 @@ func (rd *round) shellTurn(ctx context.Context, role config.Role, run store.Run,
 	pane := *sess.HerdrPaneID
 	marker := agents.DoneMarker(run.ID)
 	anchor := agents.CommandAnchor(marker)
-	line, err := rd.r.Agents.ShellLine(role, agents.ShellData{
+	line, err := rd.r.Agents.ShellLine(ctx, rd.pr.ID, role, agents.ShellData{
 		Title:      agents.TaggedTitle(rd.r.AgentTag, rd.name, rd.pr.Number, agents.Role(role.Name)),
 		ReportPath: path, Marker: marker, RunID: run.ID,
 		BaseRef: rd.baseRef(), BaseSHA: rd.in.BaseSHA, HeadSHA: rd.in.TargetSHA, URL: rd.pr.URL,
 		Model: rd.r.Config.RoleModel(role), Effort: role.EffortFor(rd.reviewersRereview()),
+		Checkout: rd.in.SlotPath,
 	})
 	if err != nil {
 		return end(store.RunFailed, ReportFailed, execx.Redact(err.Error()))

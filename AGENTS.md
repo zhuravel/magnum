@@ -36,7 +36,9 @@ when you change a behaviour, do not rewrite old ones.
   anything: magnum answers only folder-trust dialogs and the "Switch model?" confirmation of its own
   `/model` command, says "No" to permission prompts, and trusts Codex's hooks review only when the
   checkout declares no hooks of its own (so the hooks are the user's); hooks a checkout brings may come
-  from the PR and would run outside the sandbox, so they are declined.
+  from the PR and would run outside the sandbox, so they are declined. A PR that changes the checkout's
+  `.codex/` (project config, MCP servers, hooks, rules) gets its Codex sessions started with the
+  checkout untrusted (`project_untrust`), and their "Folder access" is answered "Open restricted".
 
 ## Gate
 

@@ -164,6 +164,9 @@ const (
 	PlaceholderSubagents = "{subagents}"
 	// PlaceholderServer is an MCP server's name in Kind.MCPDisable.
 	PlaceholderServer = "{server}"
+	// PlaceholderProjects is the TOML table of untrusted paths in
+	// Kind.ProjectUntrust (Kind.UntrustArgs).
+	PlaceholderProjects = "{projects}"
 )
 
 // DefaultSkill is the judge's default skill path ({{repo}} = magnum's home).

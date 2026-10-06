@@ -45,19 +45,30 @@ const (
 	startBusyDelay    = 2 * time.Second
 )
 
-// trustSpec is one of the two first-launch dialogs magnum answers, as Codex
-// 0.160 and Claude Code render them: the title on a line of its own, then
-// (codex) the question on a line of its own, then the two options on
-// adjacent lines, with nothing below them but blank lines and the key hints.
+// trustSpec is one of the folder dialogs magnum answers, as Codex 0.160 and
+// Claude Code render them: the title on a line of its own, then (codex's
+// first-launch dialog) the question on a line of its own, then the two
+// options on adjacent lines, with nothing below them but blank lines and the
+// key hints.
 type trustSpec struct {
 	kind           string
 	title          string
 	question       string // "" = none
 	accept, reject string // the option texts
+	// restricted: Codex's "Folder access" for a folder the session treats
+	// as untrusted (the -c projects table magnum passes when the PR changes
+	// .codex/, codexProject): "Open restricted" loads none of the folder's
+	// .codex/ and saves no trust (tui/src/onboarding/trust_directory.rs,
+	// onboarding_screen.rs), so magnum takes it at any time. "Open existing
+	// task" (a resumed task on Codex's shared daemon, which may keep what it
+	// loaded while trusted) is not this dialog and is left for the human.
+	restricted bool
 }
 
 var trustSpecs = []trustSpec{
 	{kind: KindCodex, title: "Folder access", question: "Trust this folder?", accept: "Trust and continue", reject: "Quit"},
+	{kind: KindCodex, title: "Folder access", accept: "Open restricted", reject: "Quit", restricted: true},
+	{kind: KindCodex, title: "Folder access", accept: "Open restricted", reject: "Back to Agent Command Center", restricted: true},
 	{kind: KindClaude, title: "Accessing workspace:", accept: "Yes, I trust this folder", reject: "No, exit"},
 }
 
@@ -75,6 +86,7 @@ type trustDialog struct {
 	acceptSelected bool   // the cursor is on the trust option
 	rejectSelected bool   // the cursor is on the quit/exit option
 	acceptBelow    bool   // the trust option is listed after the other one
+	restricted     bool   // Codex's "Open restricted" dialog (trustSpec.restricted)
 }
 
 // answerable: exactly one of the dialog's options carries the cursor, so
@@ -121,7 +133,7 @@ func (sp trustSpec) match(lines []string) (trustDialog, bool) {
 		}
 		i++
 	}
-	d := trustDialog{kind: sp.kind}
+	d := trustDialog{kind: sp.kind, restricted: sp.restricted}
 	accept, reject := -1, -1
 	for ; i < len(lines); i++ {
 		m := trustOptionLine.FindStringSubmatch(lines[i])
@@ -213,7 +225,9 @@ func (g trustGate) open(now time.Time) bool {
 // running role when the gate is open and the pane shows the whole dialog
 // (detectTrustDialog) with the cursor on one of its two options: Enter when
 // the cursor is on the trust option, else one Up/Down toward it, a re-read
-// confirming the cursor got there, then Enter. Only the codex and claude
+// confirming the cursor got there, then Enter. Codex's restricted "Folder
+// access" (trustSpec.restricted) is answered "Open restricted" the same
+// way whatever the gate: it grants nothing. Only the codex and claude
 // dialogs are known; for any other kind (droid, omp, ...) nothing is
 // answered. Anything else on screen is left alone (false, nil). It records
 // EventTrustDialogAnswered.
@@ -221,7 +235,8 @@ func (m *Manager) answerTrust(ctx context.Context, prID int64, role Role, kind s
 	if kind != KindCodex && kind != KindClaude {
 		return false, nil
 	}
-	if !gate.open(m.now()) {
+	open := gate.open(m.now())
+	if !open && kind != KindCodex {
 		return false, nil
 	}
 	text, err := m.readVisible(ctx, ref)
@@ -229,7 +244,7 @@ func (m *Manager) answerTrust(ctx context.Context, prID int64, role Role, kind s
 		return false, err
 	}
 	d, ok := detectTrustDialog(text)
-	if !ok || d.kind != kind || !d.answerable() {
+	if !ok || d.kind != kind || !d.answerable() || !open && !d.restricted {
 		return false, nil
 	}
 	var keys []string
@@ -242,7 +257,7 @@ func (m *Manager) answerTrust(ctx context.Context, prID int64, role Role, kind s
 			return false, fmt.Errorf("agents: %s trust dialog in %s: %w", d.kind, ref, err)
 		}
 		keys = append(keys, move)
-		if !m.trustCursorOnAccept(ctx, ref, d.kind) {
+		if !m.trustCursorOnAccept(ctx, ref, d) {
 			return false, fmt.Errorf("agents: %s trust dialog in %s: the cursor did not reach the trust option; not confirming", d.kind, ref)
 		}
 	}
@@ -250,13 +265,13 @@ func (m *Manager) answerTrust(ctx context.Context, prID int64, role Role, kind s
 		return false, fmt.Errorf("agents: %s trust dialog in %s: %w", d.kind, ref, err)
 	}
 	keys = append(keys, "enter")
-	m.trustAnswered(ctx, prID, role, ref, d.kind, keys)
+	m.trustAnswered(ctx, prID, role, ref, d, keys)
 	return true, nil
 }
 
 // trustCursorOnAccept re-reads the dialog until the cursor shows on the trust
-// option.
-func (m *Manager) trustCursorOnAccept(ctx context.Context, ref paneRef, kind string) bool {
+// option of the same dialog (a restricted one stays restricted).
+func (m *Manager) trustCursorOnAccept(ctx context.Context, ref paneRef, was trustDialog) bool {
 	for range trustKeyRereads {
 		if m.sleep(ctx, trustKeyDelay) != nil {
 			return false
@@ -265,7 +280,7 @@ func (m *Manager) trustCursorOnAccept(ctx context.Context, ref paneRef, kind str
 		if err != nil {
 			continue
 		}
-		if d, ok := detectTrustDialog(text); ok && d.kind == kind && d.answerable() && d.acceptSelected {
+		if d, ok := detectTrustDialog(text); ok && d.kind == was.kind && d.restricted == was.restricted && d.answerable() && d.acceptSelected {
 			return true
 		}
 	}
@@ -273,10 +288,15 @@ func (m *Manager) trustCursorOnAccept(ctx context.Context, ref paneRef, kind str
 }
 
 // trustAnswered logs and records the answered dialog (best effort).
-func (m *Manager) trustAnswered(ctx context.Context, prID int64, role Role, ref paneRef, kind string, keys []string) {
+func (m *Manager) trustAnswered(ctx context.Context, prID int64, role Role, ref paneRef, d trustDialog, keys []string) {
+	kind := d.kind
 	msg := fmt.Sprintf("answered the %s folder-trust dialog of %s in %s (%s)", kind, role, ref, strings.Join(keys, ", "))
+	if d.restricted {
+		msg = fmt.Sprintf("answered the %s \"Folder access\" of %s in %s with \"Open restricted\": the session treats the checkout as "+
+			"untrusted and loads none of its .codex/ (%s)", kind, role, ref, strings.Join(keys, ", "))
+	}
 	m.logf("agents: %s", msg)
-	data, _ := json.Marshal(map[string]any{"role": string(role), "kind": kind, "agent": ref.name, "pane": ref.pane, "keys": keys})
+	data, _ := json.Marshal(map[string]any{"role": string(role), "kind": kind, "agent": ref.name, "pane": ref.pane, "keys": keys, "restricted": d.restricted})
 	subject := m.prSubject(ctx, prID)
 	if _, err := m.d.Store.AppendEvent(context.WithoutCancel(ctx), store.Event{Level: "info", Subject: &subject,
 		Kind: EventTrustDialogAnswered, Message: execx.Redact(msg), Data: data}); err != nil {
@@ -366,6 +386,20 @@ func (m *Manager) AnswerTrustDialog(ctx context.Context, s store.Session) (bool,
 	}
 	if _, ready := m.waitTrustReady(ctx, ref); !ready {
 		m.logf("agents: %s is not idle %s after its trust dialog was answered", ref, TrustReadyTimeout)
+	}
+	return true, nil
+}
+
+// openRestricted answers Codex's restricted "Folder access" on ref's screen
+// with "Open restricted" (answerTrust with a closed gate: no other dialog)
+// and waits for the agent to be idle.
+func (m *Manager) openRestricted(ctx context.Context, prID int64, role Role, ref paneRef) (bool, error) {
+	ok, err := m.answerTrust(ctx, prID, role, KindCodex, ref, trustGate{})
+	if !ok {
+		return false, err
+	}
+	if _, ready := m.waitTrustReady(ctx, ref); !ready {
+		m.logf("agents: %s is not idle %s after it opened restricted", ref, TrustReadyTimeout)
 	}
 	return true, nil
 }

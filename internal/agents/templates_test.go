@@ -319,6 +319,13 @@ func TestRenderGolden(t *testing.T) {
 		d.HistoryFile = ownDir + "history.json"
 		return d
 	}
+	// A round whose Codex sessions ran with the checkout untrusted because
+	// the PR changes .codex/: the posting judge prompts say so, for the
+	// review's Checks.
+	withCodexProject := func(d JudgeData) JudgeData {
+		d.CodexProjectDeclined = true
+		return d
+	}
 
 	cases := []struct {
 		golden, name string
@@ -346,6 +353,9 @@ func TestRenderGolden(t *testing.T) {
 		{"claude_initial_history", "claude-review.md", roleHistory(roleFixture())},
 		{"claude_rereview_history", "claude-rereview.md", roleHistory(roleFixture())},
 		{"claude_restart_history", "claude-restart.md", roleHistory(restartedRereview)},
+		{"judge_initial_codex_project", "judge-initial.md", withCodexProject(candidates(judgeFixture()))},
+		{"judge_rereview_codex_project", "judge-rereview.md", withCodexProject(withNotes)},
+		{"judge_recovery_codex_project", "judge-recovery.md", withCodexProject(judgeFixture())},
 		{"judge_initial_candidates", "judge-initial.md", candidates(judgeFixture())},
 		{"judge_initial_candidates_no_own", "judge-initial.md", noOwn},
 		{"judge_rereview_candidates", "judge-rereview.md", candidates(withNotes)},
@@ -873,7 +883,7 @@ func TestShellLinePrompt(t *testing.T) {
 	}
 	e.cfg.Pipeline.PromptsDir = dir
 	d.Template = nil
-	if got, err := e.m.ShellLine(role, d); err != nil || got != want {
+	if got, err := e.m.ShellLine(e.ctx, e.pr.ID, role, d); err != nil || got != want {
 		t.Fatalf("Manager.ShellLine = %q, %v", got, err)
 	}
 	// The free function only knows the embedded defaults.

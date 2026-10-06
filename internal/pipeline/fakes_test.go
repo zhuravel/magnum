@@ -293,8 +293,8 @@ func (f *fakeAgents) RolePrompt(role config.Role, promptKind string, data any) (
 	return f.m.RolePrompt(role, promptKind, data)
 }
 
-func (f *fakeAgents) ShellLine(role config.Role, d agents.ShellData) (string, error) {
-	return f.m.ShellLine(role, d)
+func (f *fakeAgents) ShellLine(ctx context.Context, prID int64, role config.Role, d agents.ShellData) (string, error) {
+	return f.m.ShellLine(ctx, prID, role, d)
 }
 
 // shellCallsFor returns the RunShell calls of role.
