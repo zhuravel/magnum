@@ -734,8 +734,8 @@ func deltaCheckRound(r PRBoardRow) bool {
 func skipped(r PRBoardRow) bool { return normState(r.State) == "ineligible" }
 
 // skipWord is why the configuration skips r in a word or two, from its
-// SkipReason: bot, author, label, draft, fork or left org; "" when the
-// reason says none of them.
+// SkipReason: manual, bot, author, label, draft, fork or left org; "" when
+// the reason says none of them.
 func skipWord(r PRBoardRow) string {
 	if !skipped(r) {
 		return ""
@@ -744,7 +744,7 @@ func skipWord(r PRBoardRow) string {
 	for _, w := range []struct{ word, short string }{
 		// The setting names come first: an author "dependabot" in
 		// skip_authors is skipped as an author, a label "draft" as a label.
-		{"departed", "left org"}, {" left ", "left org"}, {"skip_authors", "author"}, {"skip_labels", "label"},
+		{"manual_repos", "manual"}, {"departed", "left org"}, {" left ", "left org"}, {"skip_authors", "author"}, {"skip_labels", "label"},
 		{"bot", "bot"}, {"draft", "draft"}, {"fork", "fork"}, {"label", "label"}, {"author", "author"},
 	} {
 		if strings.Contains(why, w.word) {

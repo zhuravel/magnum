@@ -459,7 +459,11 @@ before it hands a person a free slot. `reset_db_on_schema_change = false` on the
 `schema_paths` and no `reset_db`. A free slot above a pool's `min` is removed once it has been idle for
 `idle_remove_after` (168h when unset). A watch's `skip_paths` (path globs where `**` spans
 directories, such as `["docs/**", "**/*.md"]`) skips a PR whose changed files all match, while a forced
-`magnum review` still runs it. See the comments in `config.defaults.toml` for every key.
+`magnum review` still runs it. A watch's `manual_repos` (names of repositories it covers, without owner
+or pattern, such as `["example"]`) keeps them on the board, in `magnum prs`, the status and the retro,
+but starts no round there on its own: not for a new PR, a push or a review request on GitHub. Their PRs
+read "skipped · manual"; `magnum review`, the board's `r`/`R` and the picker review one. See the
+comments in `config.defaults.toml` for every key.
 
 #### Approving as you
 
@@ -972,8 +976,9 @@ CI shows the head's checks: the repository's required checks when it has some (r
 rulesets, or `[[repo]] required_checks`; `✗ Completion`, `– Completion not run` when it never ran on the
 head, `⊘ Completion skipped`), else the counts (`✓ 65/65`, `✗ 2 failed`, `◌ 40/65`); the card lists the
 checks per workflow and names every failed job. Rows the configuration skips (bots, `skip_authors`,
-labels, forks, authors who left) read "skipped · bot" and are dimmed; `R` still reviews one, and `h` hides
-the skipped and ignored rows (the title says how many; the choice is kept). A label in `[board] badges`
+labels, forks, authors who left, `manual_repos`) read "skipped · bot" or "skipped · manual" and are
+dimmed; `R` still reviews one, and `h` hides the skipped and ignored rows (the title says how many; the
+choice is kept). A label in `[board] badges`
 (`{ "Flagged" = "🚩" }`, or `{ text = "\uf1c0", color = "yellow" }` for a colored one) shows as its badge
 before the title and is counted in the summary. `[board] trackers` links PRs to their issues: URL templates
 with `{num}` right after the issue key's prefix, such as

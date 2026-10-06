@@ -280,7 +280,7 @@ func (e *Engine) relaxedCandidates(ctx context.Context, p store.CandidateParams,
 			continue
 		}
 		w := e.cfg.WatchFor(repo.FullName())
-		if w == nil || !e.throttle(ctx, *w, pr, e.factsFor(pr, *w, now), now).Ready {
+		if w == nil || !e.throttle(ctx, *w, pr, e.factsFor(ctx, pr, *w, now), now).Ready {
 			continue
 		}
 		out = append(out, pr)
@@ -423,7 +423,7 @@ func (e *Engine) startRound(ctx context.Context, pr store.PR, repo store.Repo, w
 		_, job.requested = e.pendingRequest(ctx, pr)
 	}
 	if job.kind == pipeline.KindRereview {
-		f := e.factsFor(pr, *w, e.now())
+		f := e.factsFor(ctx, pr, *w, e.now())
 		e.deltaFacts(ctx, pr, &f)
 		job.deltaCheck = e.deltaCheckDue(ctx, *w, pr, f, job.requested)
 		job.sameHead = e.sameHeadDue(ctx, pr)

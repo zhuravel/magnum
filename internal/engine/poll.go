@@ -355,7 +355,7 @@ func (e *Engine) applyRadarPRs(ctx context.Context, w config.Watch, gh GitHub, r
 		if !exists {
 			in.InitialState = store.PRBaseline
 			if !firstSync {
-				facts := e.factsFor(prFromInput(in, now), w, now)
+				facts := e.factsFor(ctx, prFromInput(in, now), w, now)
 				if dec := eligibility.Classify(w, facts); dec.Eligible {
 					in.InitialState = store.PRQueued
 				} else {
@@ -368,7 +368,7 @@ func (e *Engine) applyRadarPRs(ctx context.Context, w config.Watch, gh GitHub, r
 			errs = append(errs, err)
 			continue
 		}
-		if !firstSync && e.wantsFiles(w, res, now) && e.fetchChangedFiles(ctx, gh, w, repo, res.PR, &fileFetches) {
+		if !firstSync && e.wantsFiles(ctx, w, res, now) && e.fetchChangedFiles(ctx, gh, w, repo, res.PR, &fileFetches) {
 			res.Changed = true // a fresh file list: classify again (skip_paths)
 		}
 		// A review request, or a draft marked ready, is recorded before the
@@ -571,13 +571,23 @@ func prFromInput(in store.GitHubPR, now time.Time) store.PR {
 	return pr
 }
 
-// factsFor is the eligibility view of a PR.
-func (e *Engine) factsFor(pr store.PR, w config.Watch, now time.Time) eligibility.PRFacts {
+// factsFor is the eligibility view of a PR. Its repository's name is read
+// only when the watch has manual_repos, the one rule that needs it.
+func (e *Engine) factsFor(ctx context.Context, pr store.PR, w config.Watch, now time.Time) eligibility.PRFacts {
 	rounds := pr.RoundsToday
 	if deref(pr.RoundsDay) != store.DayKey(now) {
 		rounds = 0
 	}
+	repo := ""
+	if len(w.ManualRepos) > 0 {
+		r, err := e.st.RepoByID(ctx, pr.RepoID)
+		if err != nil {
+			e.log.Warn("eligibility: repository", "pr", pr.ID, "err", err)
+		}
+		repo = r.Name
+	}
 	return eligibility.PRFacts{
+		Repo:   repo,
 		Number: pr.Number, AuthorLogin: deref(pr.AuthorLogin),
 		AuthorIsBot: github.IsBot(deref(pr.AuthorType), deref(pr.AuthorLogin)),
 		IsDraft:     pr.IsDraft, IsCrossRepo: pr.IsCrossRepo, Labels: pr.Labels, SelfLogin: e.selfLogin(w),
@@ -602,7 +612,7 @@ func claimableState(pr store.PR) string {
 // also restarts pending_since and the retry budget.
 func (e *Engine) queue(ctx context.Context, pr store.PR, w config.Watch, from []string, headChanged bool, now time.Time, why string) error {
 	to := claimableState(pr)
-	f := e.factsFor(pr, w, now)
+	f := e.factsFor(ctx, pr, w, now)
 	if headChanged || pr.PendingSince == nil {
 		f.PendingSince = now
 	}
@@ -664,7 +674,7 @@ func (e *Engine) onNewPR(ctx context.Context, repo store.Repo, w config.Watch, p
 		if dec := e.classify(ctx, w, pr, now); !dec.Eligible { // inserted queued before its files were known
 			return e.markIneligible(ctx, pr, []string{store.PRQueued}, dec.Reason, false, now)
 		}
-		f := e.factsFor(pr, w, now)
+		f := e.factsFor(ctx, pr, w, now)
 		f.PendingSince = now
 		td := e.throttle(ctx, w, pr, f, now)
 		if err := e.st.UpdatePR(ctx, pr.ID, func(u *store.PRUpdate) {

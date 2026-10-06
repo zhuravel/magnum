@@ -3522,6 +3522,12 @@ type Watch struct {
 	// AutoApproveData (nil = DefaultAutoApproveBody); magnum appends its
 	// marker.
 	AutoApproveBody *string `toml:"auto_approve_body"`
+	// ManualRepos names repositories of the watch (names, any case, no
+	// owner or pattern) that are reviewed only when the operator asks
+	// (`magnum review`, the board, the picker): their PRs are polled and
+	// shown, but eligibility.Classify rejects them, so no push, new PR or
+	// GitHub review request starts a round. See ManualRepo.
+	ManualRepos []string `toml:"manual_repos"`
 }
 
 func (w Watch) BotsSkipped() bool
@@ -3532,6 +3538,10 @@ func (w Watch) DepartedAuthorsSkipped() bool
     DepartedAuthorsSkipped is SkipDepartedAuthors with its default (true).
 
 func (w Watch) DraftsIncluded() bool
+
+func (w Watch) ManualRepo(name string) bool
+    ManualRepo reports whether manual_repos names the repository name (without
+    owner; any case). A blank name is never manual.
 
 func (w Watch) Matches(owner, name string) bool
     Matches reports whether owner/name is covered by this watch: the owner
@@ -3605,17 +3615,20 @@ type Decision struct {
     Decision is Classify's verdict.
 
 func Classify(w config.Watch, f PRFacts) Decision
-    Classify applies the watch's filters to a PR. It looks at Muted, the author
-    (bots, skip_authors, own), Labels, IsDraft, IsCrossRepo and the author's
-    association (skip_departed_authors), in that order, and reports the first
-    rule that rejects the PR.
+    Classify applies the watch's filters to a PR. It looks at Muted,
+    the repository (manual_repos), the author (bots, skip_authors, own), Labels,
+    IsDraft, IsCrossRepo and the author's association (skip_departed_authors),
+    in that order, and reports the first rule that rejects the PR.
 
     Forced is deliberately not consulted: the filters describe what the daemon
     picks up on its own, and whether a manual request overrides them is the
     caller's decision.
 
 type PRFacts struct {
-	Number      int
+	Number int
+	// Repo is the repository's name without owner ("" = unknown, never a
+	// manual repository): manual_repos.
+	Repo        string
 	AuthorLogin string // GraphQL or REST form; a trailing "[bot]" is understood
 	AuthorIsBot bool   // GraphQL __typename == "Bot"
 	IsDraft     bool

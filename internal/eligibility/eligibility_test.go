@@ -51,6 +51,21 @@ func TestClassify(t *testing.T) {
 			f.Muted, f.AuthorIsBot, f.IsDraft, f.IsCrossRepo = true, true, true, true
 		}, reason: "muted"},
 
+		// manual_repos: shown, reviewed only on request
+		{name: "a manual repository's PR is ineligible", watch: config.Watch{Owner: "talkable", ManualRepos: []string{"example"}},
+			mutate: func(f *PRFacts) { f.Repo = "example" }, reason: "manual repository (manual_repos)"},
+		{name: "manual_repos ignores case", watch: config.Watch{Owner: "talkable", ManualRepos: []string{"EXAMPLE"}},
+			mutate: func(f *PRFacts) { f.Repo = "example" }, reason: "manual repository (manual_repos)"},
+		{name: "another repository of the watch stays eligible", watch: config.Watch{Owner: "talkable", ManualRepos: []string{"example"}},
+			mutate: func(f *PRFacts) { f.Repo = "talkable" }, want: true},
+		{name: "an unknown repository is not manual", watch: config.Watch{Owner: "talkable", ManualRepos: []string{"example"}}, want: true},
+		{name: "muted is reported before manual_repos", watch: config.Watch{ManualRepos: []string{"example"}},
+			mutate: func(f *PRFacts) { f.Repo, f.Muted = "example", true }, reason: "muted"},
+		{name: "manual_repos is reported before the author rules", watch: config.Watch{ManualRepos: []string{"example"}},
+			mutate: func(f *PRFacts) { f.Repo, f.AuthorIsBot = "example", true }, reason: "manual repository (manual_repos)"},
+		{name: "Forced does not bypass manual_repos (the engine's call)", watch: config.Watch{ManualRepos: []string{"example"}},
+			mutate: func(f *PRFacts) { f.Repo, f.Forced = "example", true }, reason: "manual repository (manual_repos)"},
+
 		// bots
 		{name: "AuthorIsBot is skipped by default", mutate: func(f *PRFacts) { f.AuthorIsBot = true }, reason: "bot author"},
 		{name: "[bot] login suffix is skipped even without AuthorIsBot", mutate: func(f *PRFacts) { f.AuthorLogin = "renovate[bot]" }, reason: "bot author"},

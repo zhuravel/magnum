@@ -284,7 +284,7 @@ func (e *Engine) waitFor(ctx context.Context, pr store.PR, global *Wait, now tim
 	w := e.cfg.WatchFor(repo.FullName())
 	var f eligibility.PRFacts
 	if w != nil {
-		f = e.throttleFacts(ctx, pr, e.factsFor(pr, *w, now))
+		f = e.throttleFacts(ctx, pr, e.factsFor(ctx, pr, *w, now))
 		base.DeltaCheck = base.Rereview && e.deltaCheckDue(ctx, *w, pr, f, !f.RequestedAt.IsZero())
 	}
 	with := func(w Wait) Wait {

@@ -19,7 +19,10 @@ import (
 // PRFacts is the snapshot of one pull request that the decisions need. Zero
 // time values mean "unknown" or "never".
 type PRFacts struct {
-	Number      int
+	Number int
+	// Repo is the repository's name without owner ("" = unknown, never a
+	// manual repository): manual_repos.
+	Repo        string
 	AuthorLogin string // GraphQL or REST form; a trailing "[bot]" is understood
 	AuthorIsBot bool   // GraphQL __typename == "Bot"
 	IsDraft     bool
@@ -71,10 +74,11 @@ type Decision struct {
 	Reason   string // why the PR is ineligible, in words that name the config key; empty when eligible
 }
 
-// Classify applies the watch's filters to a PR. It looks at Muted, the author
-// (bots, skip_authors, own), Labels, IsDraft, IsCrossRepo and the author's
-// association (skip_departed_authors), in that order, and reports the first
-// rule that rejects the PR.
+// Classify applies the watch's filters to a PR. It looks at Muted, the
+// repository (manual_repos), the author (bots, skip_authors, own), Labels,
+// IsDraft, IsCrossRepo and the author's association
+// (skip_departed_authors), in that order, and reports the first rule that
+// rejects the PR.
 //
 // Forced is deliberately not consulted: the filters describe what the daemon
 // picks up on its own, and whether a manual request overrides them is the
@@ -83,6 +87,8 @@ func Classify(w config.Watch, f PRFacts) Decision {
 	switch {
 	case f.Muted:
 		return reject("muted")
+	case w.ManualRepo(f.Repo):
+		return reject("manual repository (manual_repos)")
 	case w.BotsSkipped() && isBot(f):
 		return reject("bot author")
 	case authorSkipped(w.SkipAuthors, f.AuthorLogin):

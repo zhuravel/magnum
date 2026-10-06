@@ -101,6 +101,14 @@ func (c *Config) Validate() error {
 			}
 		}
 		errs = append(errs, w.validateAutoApprove(ids)...)
+		for _, n := range w.ManualRepos {
+			switch {
+			case strings.TrimSpace(n) == "" || strings.ContainsAny(n, "/*?[]\\ "):
+				errs = append(errs, fmt.Errorf("watch %s: manual_repos entry %q must be a repository name of the watch (no owner, no pattern)", w.Owner, n))
+			case !w.Matches(w.Owner, n):
+				errs = append(errs, fmt.Errorf("watch %s: manual_repos names %q, which the watch does not cover (include/exclude)", w.Owner, n))
+			}
+		}
 	}
 	pools := map[string]bool{}
 	for _, p := range c.Pools {

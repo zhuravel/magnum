@@ -415,7 +415,7 @@ func (e *Engine) onPosted(ctx context.Context, job *roundJob, pr store.PR, in pi
 // interval does not hold it (dispatch's backstop agrees,
 // arrivedDuringReview); the daily cap still does.
 func (e *Engine) rereviewAt(ctx context.Context, pr store.PR, w config.Watch, target string, now time.Time) time.Time {
-	f := e.factsFor(pr, w, now)
+	f := e.factsFor(ctx, pr, w, now)
 	f.ReviewedSHA = target
 	f.LastRoundStartedAt = time.Time{}
 	if f.PendingSince.IsZero() {

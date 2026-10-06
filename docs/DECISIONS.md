@@ -2593,3 +2593,14 @@ editing history. Code, config comments and prompts reference these by their head
   what magnum does with `verdict`). Rejected: counting nearby problems toward the verdict (the PR did not
   bring them), posting a security one in a public review, and listing titled pre-existing problems the judge
   did not mark nearby (not proven at the head, or far from the PR).
+- **Repositories shown but reviewed only on request** (2026-10-06). The operator wanted a repository on the
+  board and in `magnum prs` without Magnum reviewing it on its own. A watch's `manual_repos` names such
+  repositories (names it covers, any case, without owner or pattern, validated like `auto_approve`'s), and
+  `eligibility.Classify` rejects their PRs, right after `muted`, with "manual repository (manual_repos)"
+  (`PRFacts.Repo`, which the engine's `factsFor` reads only for a watch that has the key): no round starts
+  for a new PR, a push or a review request on GitHub, and a PR already waiting becomes ineligible at
+  dispatch. A forced review (`magnum review`, the board's `r`/`R`, the picker) still runs, as with every
+  filter. Nothing else changes: the poll reads the PRs, the board, card, status, related PRs and the retro
+  see them, and the board says "skipped · manual". Rejected: leaving the repository out of the watch (it
+  would vanish from the board and `prs`) and muting each PR (`magnum ignore` is per PR, and a new PR would
+  be reviewed before it could be muted).

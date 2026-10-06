@@ -122,14 +122,14 @@ func (e *Engine) pathSkipReason(ctx context.Context, w config.Watch, pr store.PR
 // its head moved, or it waits (or is ineligible and may be queued again),
 // and the watch's other filters let it through. A PR they reject anyway
 // costs no fetch.
-func (e *Engine) wantsFiles(w config.Watch, res store.PRUpsert, now time.Time) bool {
+func (e *Engine) wantsFiles(ctx context.Context, w config.Watch, res store.PRUpsert, now time.Time) bool {
 	if len(w.SkipPaths) == 0 || res.PR.Forced {
 		return false
 	}
 	if !res.New && !res.HeadChanged && !slices.Contains(filesWatchStates, res.PR.State) {
 		return false
 	}
-	return eligibility.Classify(w, e.factsFor(res.PR, w, now)).Eligible
+	return eligibility.Classify(w, e.factsFor(ctx, res.PR, w, now)).Eligible
 }
 
 // classify is eligibility.Classify plus what only the engine knows: a PR
@@ -137,7 +137,7 @@ func (e *Engine) wantsFiles(w config.Watch, res store.PRUpsert, now time.Time) b
 // whose changed files all match the watch's skip_paths is rejected. Callers
 // keep forced PRs out of it, so a manual review still runs.
 func (e *Engine) classify(ctx context.Context, w config.Watch, pr store.PR, now time.Time) eligibility.Decision {
-	dec := eligibility.Classify(w, e.factsFor(pr, w, now))
+	dec := eligibility.Classify(w, e.factsFor(ctx, pr, w, now))
 	if !dec.Eligible {
 		if dec.Reason == mutedReason && deref(pr.SkipReason) == skipIgnored {
 			dec.Reason = skipIgnored

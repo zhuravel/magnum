@@ -36,6 +36,7 @@ func TestSkipWord(t *testing.T) {
 		`label "draft" is in skip_labels`:                                         "label",
 		"draft pull request":                                                      "draft",
 		"head repository is a fork":                                               "fork",
+		"manual repository (manual_repos)":                                        "manual",
 		"":                                                                        "",
 		"something else":                                                          "",
 	} {

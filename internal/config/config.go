@@ -336,6 +336,19 @@ type Watch struct {
 	// AutoApproveData (nil = DefaultAutoApproveBody); magnum appends its
 	// marker.
 	AutoApproveBody *string `toml:"auto_approve_body"`
+	// ManualRepos names repositories of the watch (names, any case, no
+	// owner or pattern) that are reviewed only when the operator asks
+	// (`magnum review`, the board, the picker): their PRs are polled and
+	// shown, but eligibility.Classify rejects them, so no push, new PR or
+	// GitHub review request starts a round. See ManualRepo.
+	ManualRepos []string `toml:"manual_repos"`
+}
+
+// ManualRepo reports whether manual_repos names the repository name
+// (without owner; any case). A blank name is never manual.
+func (w Watch) ManualRepo(name string) bool {
+	name = strings.TrimSpace(name)
+	return name != "" && slices.ContainsFunc(w.ManualRepos, func(n string) bool { return strings.EqualFold(strings.TrimSpace(n), name) })
 }
 
 // TrivialDeltas is the skip_trivial_deltas that applies to w's PRs: the

@@ -200,7 +200,7 @@ func (e *Engine) onRequest(ctx context.Context, repo store.Repo, w config.Watch,
 		if pr.Forced {
 			return nil
 		}
-		td := e.throttle(ctx, w, pr, e.factsFor(pr, w, now), now)
+		td := e.throttle(ctx, w, pr, e.factsFor(ctx, pr, w, now), now)
 		if pr.NextEligibleAt != nil && pr.NextEligibleAt.Equal(td.NextEligibleAt) {
 			return nil
 		}
