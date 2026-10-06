@@ -301,6 +301,51 @@ editing history. Code, config comments and prompts reference these by their head
   switch never snapshots the first one's choice. This replaces "the switch back restores it" in the
   per-model limit entry above. Rejected: restoring only on the switch back (the user's sessions
   started in between got the fallback).
+- **A claude agent's turn is not over while its background work runs** (2026-10-06). claude-review ended
+  its turn right after starting a spec run in the background (Bash `run_in_background`), herdr showed it
+  idle, two idle ticks ended its run, the report was missing, the judge posted "no problems" and the
+  checkout was restored under the running specs; the agent went on, resumed by each task notification, and
+  wrote the report 2h20m later with the blocking problem a colleague then found. Claude Code ends a turn
+  whenever work it started in the background runs (a command run in the background or moved there by its
+  timeout, an asynchronous Agent or workflow, a skill forked into the background such as `/code-review`) and
+  resumes when that work notifies it. The observer now reads, for an idle claude agent with a run in flight,
+  its session's transcript (`<config dir>/projects/<the cwd, every character but A-Z, a-z and 0-9 as
+  "-">/<session id>.jsonl`, the config dir being the pane's `CLAUDE_CONFIG_DIR`, else `$CLAUDE_CONFIG_DIR`, else
+  `~/.claude`; a project directory named otherwise is found by the session id), from the run's creation on
+  (a backward scan finds where, then only appended bytes are read each tick): a background launch (a tool use
+  with `run_in_background`, or a result with `backgroundTaskId`, `background: true` or `status:
+  async_launched`) is pending until a `<task-notification>` names its tool use or task (any status but
+  running) or a TaskStop result names its task, and a notification is pending until an assistant entry
+  follows it. While anything is pending the agent counts as working for completion (idle_ticks 0), with one
+  `agent.background_wait` event per run ("claude-review: waiting for 1 background task"). A transcript magnum
+  cannot find or read, and every other kind, end on herdr's status as before (Codex holds its turn open while
+  its subagents run; it never resumes a turn by itself). Rejected: reading the pane for a "background task"
+  line (layout-dependent) and holding every idle agent for a while (it would not know when to stop).
+- **A reviewer out of time is asked for its report, then interrupted** (2026-10-06). The role's timeout
+  still bounds the turn, background work included: when it passes, a session reviewer (not the judge, not a
+  shell role) gets one fixed message within the same run, typed only when no dialog is on screen ("Time is
+  up ... Stop waiting for background tasks and start nothing new. Write the report to <path> now ..., list the
+  checks still running or not run as pending, and end your turn"; `round.time_up`), and from then on its
+  background work no longer holds the run; it has `TimeUpGrace` (5 minutes, a constant) to end its turn, else
+  it is interrupted (esc) and its report counts as `timeout`, as before. A run that ended without a report
+  (`missing`) interrupts the reviewer too, and the `round.reviewer` warning says so and counts the background
+  work a claude agent left running, which an interrupt does not stop (an esc ends the turn, not its
+  background shells, whose notifications resume the agent). Stopping those shells is left open: magnum does
+  not kill processes it did not start. The reviewer prompts (claude-review, claude-rereview, claude-restart)
+  name the role's timeout as the time budget (`.Budget`): end the turn with the report written, start
+  background work only when it finishes well within the budget and wait for it, prefer the changed code's
+  specs to a whole-suite run. Rejected: a config key for the grace (no case for tuning it yet) and a prompt
+  file for the message (it carries only the budget and the path, like `after_deny_prompt`).
+- **A report is its run's only if its run verified it** (2026-10-06). Report paths are per head
+  (`reviews/<owner>/<repo>/<N>/<sha>/<output>`), not per run, so a reviewer that kept working after its run
+  ended can write where a later round on the same head looks. The round's start already set aside the files
+  there (`<name>.prev`); now each role's file is set aside again right before the role is prompted (a later
+  stage, a late write after the round started), and a continued round (`continue`, the judge finishing a
+  paused turn) reuses a reviewer's file only when that role's latest run of the paused round on the head is
+  verified, warning about a file no run verified. A late write during the next run of the same session on
+  the same head is still indistinguishable by path or time; only a run id in the report would tell, which
+  the reviewer prompts do not ask for. Rejected for now: per-run report paths (the panes' `MAGNUM_REPORT_DIR`,
+  the judge's report directory and eval address a round's reports by head).
 
 ## Screens and commands
 

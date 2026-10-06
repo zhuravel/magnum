@@ -676,6 +676,11 @@ func TestContinueSkipsReviewersAndReusesReports(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "claude-review.md"), []byte("old claude"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// The paused round verified claude-review's report.
+	if _, err := e.st.CreateRun(e.ctx, store.Run{PRID: e.pr.ID, Round: 1, Role: string(agents.RoleClaude), Kind: store.RunInitial,
+		TargetSHA: target, State: store.RunVerified, Outcome: store.Ptr(ReportOK), ReportPath: store.Ptr(filepath.Join(dir, "claude-review.md"))}); err != nil {
+		t.Fatal(err)
+	}
 	if err := writeJudgeJSON(filepath.Join(dir, "codex-judge.json"), map[string]any{"status": "error"}); err != nil {
 		t.Fatal(err)
 	}

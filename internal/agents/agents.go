@@ -155,6 +155,12 @@ type Deps struct {
 	// ($CLAUDE_CONFIG_DIR/settings.json or ~/.claude/settings.json). A test
 	// binary never falls back to the defaults.
 	ClaudeSettings string
+	// ClaudeDir is Claude Code's config directory, whose projects/ holds
+	// the session transcripts the observer reads for background work (see
+	// backgroundWait); "" = $CLAUDE_CONFIG_DIR, else ~/.claude. A session
+	// whose pane env sets CLAUDE_CONFIG_DIR uses that. A test binary never
+	// falls back to the defaults.
+	ClaudeDir string
 	// Log receives one line per trust entry added and per trust dialog
 	// answered (optional).
 	Log execx.Logger
@@ -186,6 +192,9 @@ type Manager struct {
 	liveAt map[int64]time.Time
 	// switching marks the sessions SwitchModel is switching right now.
 	switching map[int64]bool
+	// bg is what each claude session's transcript says about the
+	// background work of its run in flight (see backgroundWait).
+	bg map[int64]*bgWatch
 	// settingsLock (capacity 1) serializes the Claude switches, which share
 	// one settings file (see holdDefaultModel).
 	settingsLock chan struct{}
@@ -199,7 +208,7 @@ func New(d Deps) *Manager {
 	}
 	return &Manager{d: d, sleep: sleep, wrapper: map[string]bool{}, health: map[string][]healthRule{},
 		titles: map[int64]*titleState{}, denies: map[int64]*denyState{}, liveAt: map[int64]time.Time{},
-		switching: map[int64]bool{}, settingsLock: make(chan struct{}, 1)}
+		switching: map[int64]bool{}, bg: map[int64]*bgWatch{}, settingsLock: make(chan struct{}, 1)}
 }
 
 // markedLive records that session id became live at t (see liveAt).

@@ -89,6 +89,7 @@ func roleFixture() RoleData {
 		HeadSHA: "d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3", PreviousHeadSHA: "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0",
 		BaseSHA:    "0123456789abcdef0123456789abcdef01234567",
 		ReportPath: "/Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/claude-review.md",
+		Budget:     "40 minutes",
 	}
 }
 

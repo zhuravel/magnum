@@ -340,6 +340,10 @@ type RoleData struct {
 	// (pipeline.RoundInput.PostMerge); the prompts that name the PR say it
 	// is merged and to review it anyway.
 	PostMerge bool
+	// Budget is the role's turn timeout in words ("40 minutes"): the
+	// prompts tell the agent to end its turn with the report written
+	// within it.
+	Budget string
 }
 
 // ShellData feeds a shell role's line (ShellLine): the role's command

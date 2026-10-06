@@ -101,6 +101,10 @@ const (
 	// judge, a reviewer a push cut short) to be seen idle; the engine's
 	// Observe records agent statuses every tick.
 	InterruptWait = 60 * time.Second
+	// TimeUpGrace is how long a reviewer whose time ran out has, once asked
+	// for its report (round.timeUp), to write it and end its turn before it
+	// is interrupted as timed out.
+	TimeUpGrace = 5 * time.Minute
 )
 
 // ErrInvalid marks a RoundInput or Runner that cannot run a round.
@@ -123,6 +127,12 @@ type Agents interface {
 	FallbackModel(ctx context.Context, s store.Session, tried []string) (string, bool)
 	SwitchModel(ctx context.Context, s store.Session, model, reason string) error
 	FallbackPrompt(d agents.FallbackData) (string, error)
+	// A reviewer whose time ran out (see round.timeUp): TimeUp types the
+	// last call into its agent within its run; BackgroundTasks counts the
+	// work a claude agent started in the background during a run and left
+	// running (ok false: unknown).
+	TimeUp(ctx context.Context, run store.Run, text string) error
+	BackgroundTasks(ctx context.Context, run store.Run) (int, bool)
 }
 
 // GitHub is the subset of *github.Client a round uses. It must act as the
@@ -672,7 +682,7 @@ func (rd *round) run(ctx context.Context) (RoundResult, error) {
 	}
 
 	if in.Kind == KindContinue {
-		rd.existingReports()
+		rd.existingReports(ctx)
 	}
 	if err := rd.readiness(ctx); err != nil {
 		return rd.stopped(ctx)
@@ -748,15 +758,35 @@ func (rd *round) setAsideStale() error {
 }
 
 // existingReports fills Reports for a continued round from the files on
-// disk: a role that runs on every round is listed as missing when its file
-// is absent, others (first, manual) only when they left a report.
-func (rd *round) existingReports() {
+// disk that the paused round verified (its role's latest run on this head
+// ended verified): a role that runs on every round is listed as missing when
+// its file is absent or was not verified, others (first, manual) only when
+// they left a verified report. A file whose run did not verify it was
+// written after that run ended (a reviewer that kept working): it is not
+// read, with a warning.
+func (rd *round) existingReports(ctx context.Context) {
+	verified := map[string]bool{} // role -> its latest run of the paused round on this head is verified
+	if runs, err := rd.r.Store.RunsByPR(ctx, rd.in.PR.ID); err == nil {
+		for _, r := range runs {
+			if r.Round == rd.in.Round && r.TargetSHA == rd.in.TargetSHA {
+				verified[r.Role] = r.State == store.RunVerified
+			}
+		}
+	} else {
+		rd.logf("pipeline: runs of round %d: %v", rd.in.Round, err)
+	}
 	for _, role := range rd.order {
 		p := filepath.Join(rd.dir, role.ReportFile())
 		st, err := os.Stat(p)
+		present := err == nil && st.Size() > 0
+		if present && !verified[role.Name] {
+			rd.warn(ctx, "%s: %s is not round %d's report (no run of the round verified it, so it was written after its run ended); not read",
+				role.Name, role.ReportFile(), rd.in.Round)
+			present = false
+		}
 		rep := rd.newReport(role, "")
 		switch {
-		case err == nil && st.Size() > 0:
+		case present:
 			rep.Status, rep.Path = ReportOK, p
 		case role.Runs == config.RunsAlways:
 			rep.Status, rep.Detail = ReportMissing, "not available"

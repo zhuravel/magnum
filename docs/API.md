@@ -206,6 +206,10 @@ const CompletionIdleTicks = 2
     CompletionIdleTicks is how many consecutive idle|done observations end a
     turn.
 
+const EventBackgroundWait = "agent.background_wait"
+    EventBackgroundWait is recorded once per run when background work holds an
+    idle claude agent's run open (data: role, run, tasks).
+
 const EventDefaultModelRestored = "agent.default_model_restored"
     EventDefaultModelRestored is recorded when SwitchModel put the Claude
     settings' default model back (data: session, role, file, model, found;
@@ -464,6 +468,12 @@ type Deps struct {
 	// ($CLAUDE_CONFIG_DIR/settings.json or ~/.claude/settings.json). A test
 	// binary never falls back to the defaults.
 	ClaudeSettings string
+	// ClaudeDir is Claude Code's config directory, whose projects/ holds
+	// the session transcripts the observer reads for background work (see
+	// backgroundWait); "" = $CLAUDE_CONFIG_DIR, else ~/.claude. A session
+	// whose pane env sets CLAUDE_CONFIG_DIR uses that. A test binary never
+	// falls back to the defaults.
+	ClaudeDir string
 	// Log receives one line per trust entry added and per trust dialog
 	// answered (optional).
 	Log execx.Logger
@@ -684,6 +694,11 @@ func (m *Manager) AnswerTrustDialog(ctx context.Context, s store.Session) (bool,
     or screen, a shell role and any kind other than codex and claude (whose
     trust handling is unknown) are left untouched (false, nil).
 
+func (m *Manager) BackgroundTasks(ctx context.Context, run store.Run) (int, bool)
+    BackgroundTasks counts the background work the claude agent of run's session
+    started during run and left running, as its transcript shows now (ok false:
+    not a claude session, or no transcript to read).
+
 func (m *Manager) CheckHealth(ctx context.Context, s store.Session) (Health, error)
     CheckHealth classifies the session's recent pane output with the health
     patterns of its kind ([kinds.<kind>] health_patterns; a shell role's Tool,
@@ -828,10 +843,15 @@ func (m *Manager) ObserveSnapshotAt(ctx context.Context, snap herdr.Snapshot, ca
         idle after such a deny, with that run still in flight and the agent
         not seen working since -> the kind's after_deny_prompt is sent (see
         continueAfterDeny), ObsDenyContinued, and the run does not end.
-        An agent of a kind named by a rename command (codex), working on a
-        submitted/working run, whose terminal title lacks Title gets that
-        command (`/rename <Title>`) typed into its pane (at most once per call,
-        TitleAttempts per session row; see nameAgent).
+        A claude agent idle with a submitted/working run whose transcript
+        shows background work started during the run still running, or a
+        task notification not answered yet, counts as working for completion
+        (idle_ticks 0, Background set; see backgroundWait), until the pipeline's
+        TimeUp tells it to stop waiting for that work. An agent of a kind named
+        by a rename command (codex), working on a submitted/working run, whose
+        terminal title lacks Title gets that command (`/rename <Title>`) typed
+        into its pane (at most once per call, TitleAttempts per session row;
+        see nameAgent).
       - live agent session without its agent, or any session whose pane is gone
         -> session lost, ObsLost. A starting session (agent not started yet)
         with its pane still present is left alone, and so is a session that
@@ -1044,6 +1064,16 @@ func (m *Manager) SwitchModel(ctx context.Context, s store.Session, model, reaso
     EventDefaultModelRestored when it had changed). Claude switches run one at a
     time for that.
 
+func (m *Manager) TimeUp(ctx context.Context, run store.Run, text string) error
+    TimeUp sends text to the agent of run's session within that run, without a
+    new run (as continueAfterDeny sends after_deny_prompt): the pipeline's last
+    call to a reviewer whose time ran out to write its report now. From then on
+    the agent's background work no longer holds the run open (the text tells
+    it to stop waiting for that work); a task notification it has not answered
+    still does. The session's idle_ticks are reset and its last_prompt_at set.
+    A run without a live agent session fails with ErrNoSession (ErrNotAgent for
+    a shell role's pane).
+
 func (m *Manager) Wrapper(ctx context.Context, kind string) (bool, error)
     Wrapper reports whether the kind's command is a zsh wrapper function (or
     alias) that supplies its own flags, per [kinds.<kind>] wrapper: "true"
@@ -1074,6 +1104,10 @@ type Observation struct {
 	Status  herdr.Status  // agent status this tick ("" for shell panes and missing agents)
 	Session store.Session // row after this tick's update
 	Run     *store.Run    // newest run in flight for the session (completed run for ObsCompleted)
+	// Background is the work an idle claude agent started in the background
+	// during Run and left running, as its transcript shows (see
+	// backgroundWait); while there is any, the run does not end.
+	Background int
 }
     Observation is the result of one tick for one starting/live session.
 
@@ -1243,6 +1277,10 @@ type RoleData struct {
 	// (pipeline.RoundInput.PostMerge); the prompts that name the PR say it
 	// is merged and to review it anyway.
 	PostMerge bool
+	// Budget is the role's turn timeout in words ("40 minutes"): the
+	// prompts tell the agent to end its turn with the report written
+	// within it.
+	Budget string
 }
     RoleData feeds the prompts of every non-judge session role (claude-review,
     claude-simplify, a droid or omp reviewer, ...): the union of what those
@@ -8471,6 +8509,10 @@ const (
 	// judge, a reviewer a push cut short) to be seen idle; the engine's
 	// Observe records agent statuses every tick.
 	InterruptWait = 60 * time.Second
+	// TimeUpGrace is how long a reviewer whose time ran out has, once asked
+	// for its report (round.timeUp), to write it and end its turn before it
+	// is interrupted as timed out.
+	TimeUpGrace = 5 * time.Minute
 )
     Timing.
 
@@ -8552,6 +8594,12 @@ type Agents interface {
 	FallbackModel(ctx context.Context, s store.Session, tried []string) (string, bool)
 	SwitchModel(ctx context.Context, s store.Session, model, reason string) error
 	FallbackPrompt(d agents.FallbackData) (string, error)
+	// A reviewer whose time ran out (see round.timeUp): TimeUp types the
+	// last call into its agent within its run; BackgroundTasks counts the
+	// work a claude agent started in the background during a run and left
+	// running (ok false: unknown).
+	TimeUp(ctx context.Context, run store.Run, text string) error
+	BackgroundTasks(ctx context.Context, run store.Run) (int, bool)
 }
     Agents is the subset of *agents.Manager a round uses. The caller must have
     started the sessions of the roles that run (RolesToRun: EnsureWorkspace,

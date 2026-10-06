@@ -141,6 +141,11 @@ func (m *Manager) nextObserveTick(live []store.Session) {
 			delete(m.liveAt, id)
 		}
 	}
+	for id := range m.bg {
+		if !keep[id] {
+			delete(m.bg, id)
+		}
+	}
 }
 
 // terminalTitle is the title herdr shows for an agent's pane: the stripped

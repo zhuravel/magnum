@@ -421,6 +421,21 @@ other role's report. No role may edit the checkout: after each stage Magnum comp
 with what the stage found, and a role that changed them gets a `round.checkout_dirty` warning and the
 checkout reset to the PR head (`git reset --hard`, `git clean -fd`) before anything else runs on it.
 
+A session role's turn ends when herdr shows its agent idle on two ticks in a row. Claude Code also ends
+its turn while work it started in the background runs (a command run in the background or moved there by
+its timeout, an asynchronous subagent, a skill forked into the background such as `/code-review`) and
+resumes when that work notifies it, so for a claude agent Magnum reads the session's transcript too
+(`projects/<checkout>/<session id>.jsonl` under the pane's `CLAUDE_CONFIG_DIR`, else `~/.claude`; only what
+the run appended) and keeps the turn going while such work has not finished or the agent has not answered
+its notification (one `agent.background_wait` event per run). The role's `timeout`, which its prompt names
+as the time budget, still bounds the turn: when it passes, Magnum asks the agent once to stop waiting, write
+its report with what it found and list the checks still running as pending (`round.time_up`), and waits 5
+more minutes before it interrupts the agent and counts the report as `timeout`. A reviewer whose turn
+ended without a report is interrupted too; an interrupt does not stop a claude agent's background work, so
+the warning names what it left running. A report file already there when its role is prompted is set
+aside (`<name>.prev`) and a continued round reuses only the reports its paused round verified, so a report
+written after its run ended never passes for a later run's.
+
 claude-simplify is Claude Code's `/simplify` made read-only. Four subagents review the diff in parallel,
 one angle each: reuse (code the codebase already has), simplification (redundant state, near-copies,
 nesting, dead code), efficiency (repeated work, serial independent steps, hot-path blocking) and altitude

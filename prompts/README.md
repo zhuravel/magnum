@@ -150,6 +150,12 @@ reviewer, ...), initial, rereview and restart alike.
 | `.RestartedFrom` | the head the role was reviewing when a push cut its turn short (restart only, empty otherwise) |
 | `.NotesPath` | the repository notes file (see Repository notes); the role reads it first. Empty when there is none |
 | `.PostMerge` | GitHub merged the PR before magnum reviewed `.HeadSHA` (a post-merge review); the prompts that name the PR say "The PR is already merged; review it anyway." only then |
+| `.Budget` | the role's `timeout` in words (`40 minutes`): the claude prompts give it as the time budget, within which the turn must end with the report written (background work only when it finishes well within it, waited for before the report) |
+
+When a session role's `timeout` passes, magnum types one fixed last call into its agent within the same
+run (not a prompt file): time is up, stop waiting for background work, write the report to `.ReportPath`
+now with the checks still running listed as pending. The turn gets 5 more minutes before it is
+interrupted as timed out.
 
 A role without its own `<name>-rereview.md` (or `rereview` key) reuses its initial prompt for a new
 head. It then sees `.Mode` as `rereview` with `.PreviousHeadSHA` and `.Since` filled, so one file can

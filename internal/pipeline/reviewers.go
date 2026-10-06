@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -55,6 +56,12 @@ func (rd *round) runRole(ctx context.Context, role config.Role, run store.Run) R
 // (a prompt that could not be rendered, no pane, a busy shell,
 // cancellation); its run is final then.
 func (rd *round) turn(ctx context.Context, role config.Role, run store.Run, path string) (t turn, anchor string, early *RoleReport) {
+	if err := setAside(path); err != nil {
+		rd.finishRun(ctx, run.ID, store.RunFailed, ReportFailed, err.Error())
+		rep := rd.newReport(role, run.ID)
+		rep.Status, rep.Detail = ReportFailed, execx.Redact(err.Error())
+		return turn{}, "", &rep
+	}
 	if role.IsShell() {
 		return rd.shellTurn(ctx, role, run, path)
 	}
@@ -72,7 +79,80 @@ func (rd *round) turn(ctx context.Context, role config.Role, run store.Run, path
 		anchor = path
 	}
 	t, anchor = rd.reviewerFallbacks(ctx, role, rd.submitAndWait(ctx, run, text, rd.timeout(role), "", nil), path, anchor)
+	if t.kind == waitTimeout {
+		t = rd.timeUp(ctx, role, t, path)
+	}
 	return t, anchor, nil
+}
+
+// timeUpText is the last call to a reviewer whose time ran out: its budget
+// and its report file.
+const timeUpText = "Time is up: this review had %s. Stop waiting for background tasks and start nothing new. " +
+	"Write the report to %s now with what you found so far, list the checks still running or not run as pending, and end your turn."
+
+// timeUp gives a session reviewer whose turn t ran out of time one last
+// call (the live case: a spec run in the background, the report not
+// written): Agents.TimeUp asks its agent, within the same run, to stop
+// waiting for background work and write its report now, and the run is
+// waited for TimeUpGrace more. A turn that then ends is read as any ended
+// turn (its report, else missing); one that does not is the timeout it
+// was. A time-up that cannot be sent leaves the timeout as it is.
+func (rd *round) timeUp(ctx context.Context, role config.Role, t turn, path string) turn {
+	if role.IsShell() || ctx.Err() != nil {
+		return t
+	}
+	budget := durationWords(rd.timeout(role))
+	if err := rd.r.Agents.TimeUp(ctx, t.run, fmt.Sprintf(timeUpText, budget, path)); err != nil {
+		rd.warn(ctx, "%s ran out of its %s and could not be asked for its report: %v", role.Name, budget, err)
+		return t
+	}
+	rd.event(ctx, "warn", "round.time_up", fmt.Sprintf("%s ran out of its %s: asked it to write its report now, waiting %s more (run %s)",
+		role.Name, budget, durationWords(TimeUpGrace), t.run.ID), map[string]any{"run": t.run.ID, "role": role.Name, "grace": TimeUpGrace.String()})
+	next := rd.wait(ctx, t.run.ID, TimeUpGrace, "", nil)
+	if next.kind == waitTimeout {
+		next.err = fmt.Errorf("pipeline: %s run %s: no report after its %s and %s more", role.Name, t.run.ID, budget, durationWords(TimeUpGrace))
+	}
+	return next
+}
+
+// durationWords spells a duration for a prompt or a message: "40 minutes",
+// "2 hours", "1 minute"; anything else as Go writes it.
+func durationWords(d time.Duration) string {
+	unit := func(n int64, word string) string {
+		if n == 1 {
+			return "1 " + word
+		}
+		return fmt.Sprintf("%d %ss", n, word)
+	}
+	switch {
+	case d > 0 && d%time.Hour == 0:
+		return unit(int64(d/time.Hour), "hour")
+	case d > 0 && d%time.Minute == 0:
+		return unit(int64(d/time.Minute), "minute")
+	case d > 0 && d%time.Second == 0 && d < time.Minute:
+		return unit(int64(d/time.Second), "second")
+	}
+	return d.String()
+}
+
+// setAside renames a report file present before its role is prompted to
+// <name>.prev: report paths are per head, not per run, so a file there now
+// was written by an earlier run (a reviewer that kept working after its run
+// ended) and must never pass for this run's report. The round's start set
+// aside what was there then (setAsideStale); this catches what arrived
+// since.
+func setAside(path string) error {
+	_, err := os.Lstat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err == nil {
+		err = os.Rename(path, path+".prev")
+	}
+	if err != nil {
+		return fmt.Errorf("pipeline: set aside the stale %s: %w", filepath.Base(path), err)
+	}
+	return nil
 }
 
 // roleData fills a session role's prompt: the rereview prompt (and mode) for
@@ -89,6 +169,7 @@ func (rd *round) roleData(role config.Role, path string) (string, agents.RoleDat
 		HeadSHA: in.TargetSHA, BaseSHA: in.BaseSHA, BaseRef: rd.baseRef(), ReportPath: path,
 		Model: rd.r.Config.RoleModel(role), Effort: effort, EffortInPrompt: rd.effortInPrompt(role, effort),
 		Mode: agents.ModeInitial, NotesPath: in.NotesPath, Blind: in.Blind, PostMerge: in.PostMerge,
+		Budget: durationWords(rd.timeout(role)),
 	}
 	kind := config.PromptInitial
 	if rereview {
@@ -222,11 +303,12 @@ func (rd *round) finishReviewer(ctx context.Context, role config.Role, run store
 			// A run failed externally after the report was written.
 			rep = r
 		}
-		rd.finishReviewerRun(ctx, role, run, rep)
+		rd.finishReviewerRun(ctx, role, run, rep, "")
 		return rep
 	case waitTimeout, waitLost:
+		stopped := ""
 		if t.kind == waitTimeout {
-			rd.interrupt(ctx, role, run)
+			stopped = rd.stopReviewer(ctx, role, run)
 			rep.Status = ReportTimeout
 		} else {
 			rep.Status = ReportLost
@@ -236,16 +318,39 @@ func (rd *round) finishReviewer(ctx context.Context, role config.Role, run store
 			r.Detail = "report present, but the role did not finish: " + rep.Status
 			rep = r
 		}
-		rd.finishReviewerRun(ctx, role, run, rep)
+		rd.finishReviewerRun(ctx, role, run, rep, stopped)
 		return rep
 	}
 	// waitEnded (or waitResult, unused for these roles).
 	rep = rd.checkReport(ctx, role, run, path, anchor)
-	rd.finishReviewerRun(ctx, role, run, rep)
+	stopped := ""
+	if rep.Status == ReportMissing && role.IsAgent() {
+		stopped = rd.stopReviewer(ctx, role, run)
+	}
+	rd.finishReviewerRun(ctx, role, run, rep, stopped)
 	return rep
 }
 
-func (rd *round) finishReviewerRun(ctx context.Context, role config.Role, run store.Run, rep RoleReport) {
+// stopReviewer interrupts a reviewer whose run magnum ends without its
+// report (timed out, or ended without writing it), so it does not go on
+// working in the checkout once the round moves on, and says what it did
+// for the run's event: that it interrupted the role and, for a claude
+// agent, the background work it left running, which an interrupt does not
+// stop.
+func (rd *round) stopReviewer(ctx context.Context, role config.Role, run store.Run) string {
+	rd.interrupt(ctx, role, run)
+	note := "interrupted " + role.Name
+	if n, ok := rd.r.Agents.BackgroundTasks(context.WithoutCancel(ctx), run); ok && n == 1 {
+		note += "; 1 background task it started still runs"
+	} else if ok && n > 1 {
+		note += fmt.Sprintf("; %d background tasks it started still run", n)
+	}
+	return note
+}
+
+// finishReviewerRun records role's run as its report says; stopped is what
+// stopReviewer did, added to the warning ("" = nothing).
+func (rd *round) finishReviewerRun(ctx context.Context, role config.Role, run store.Run, rep RoleReport, stopped string) {
 	if rep.Status == ReportOK {
 		rd.finishRun(ctx, run.ID, store.RunVerified, rep.Status, rep.Detail)
 		return
@@ -255,6 +360,9 @@ func (rd *round) finishReviewerRun(ctx context.Context, role config.Role, run st
 		msg = rep.Status
 	}
 	rd.finishRun(ctx, run.ID, store.RunFailed, rep.Status, msg)
+	if stopped != "" {
+		msg += "; " + stopped
+	}
 	rd.event(ctx, "warn", "round.reviewer", fmt.Sprintf("%s report %s: %s", role.Name, rep.Status, msg), map[string]any{"run": run.ID, "role": run.Role, "status": rep.Status})
 }
 

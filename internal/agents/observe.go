@@ -49,6 +49,10 @@ type Observation struct {
 	Status  herdr.Status  // agent status this tick ("" for shell panes and missing agents)
 	Session store.Session // row after this tick's update
 	Run     *store.Run    // newest run in flight for the session (completed run for ObsCompleted)
+	// Background is the work an idle claude agent started in the background
+	// during Run and left running, as its transcript shows (see
+	// backgroundWait); while there is any, the run does not end.
+	Background int
 }
 
 // LostGrace keeps an observe tick from judging a session lost from a
@@ -97,6 +101,11 @@ func (m *Manager) ObserveSnapshot(ctx context.Context, snap herdr.Snapshot) ([]O
 //     idle after such a deny, with that run still in flight and the agent
 //     not seen working since -> the kind's after_deny_prompt is sent (see
 //     continueAfterDeny), ObsDenyContinued, and the run does not end.
+//     A claude agent idle with a submitted/working run whose transcript
+//     shows background work started during the run still running, or a
+//     task notification not answered yet, counts as working for completion
+//     (idle_ticks 0, Background set; see backgroundWait), until the
+//     pipeline's TimeUp tells it to stop waiting for that work.
 //     An agent of a kind named by a rename command (codex), working on a
 //     submitted/working run, whose terminal title lacks Title gets that
 //     command (`/rename <Title>`) typed into its pane (at most once per call,
@@ -177,16 +186,24 @@ func (m *Manager) observeOne(ctx context.Context, s store.Session, snap herdr.Sn
 	o.Status = a.AgentStatus
 	idle := a.AgentStatus == herdr.StatusIdle || a.AgentStatus == herdr.StatusDone
 	busy := a.AgentStatus == herdr.StatusWorking || a.AgentStatus == herdr.StatusBlocked
+	held := false // idle, but background work keeps the turn going
+	if idle && o.Run != nil && (o.Run.State == store.RunSubmitted || o.Run.State == store.RunWorking) {
+		sid := store.Deref(s.SessionID)
+		if a.AgentSession != nil && a.AgentSession.Value != "" {
+			sid = a.AgentSession.Value
+		}
+		o.Background, held = m.backgroundWait(ctx, s, sid, *o.Run)
+	}
 	err := m.d.Store.TransitionSession(ctx, s.ID, liveStates, store.SessionLive, func(u *store.SessionUpdate) {
 		if a.AgentStatus != "" && string(a.AgentStatus) != store.Deref(s.AgentStatus) {
 			u.Set("agent_status", string(a.AgentStatus))
 			u.Set("agent_status_at", now)
 		}
 		switch {
+		case busy || held:
+			u.Set("idle_ticks", 0)
 		case idle:
 			u.Inc("idle_ticks", 1)
-		case busy:
-			u.Set("idle_ticks", 0)
 		}
 		if a.PaneID != "" && a.PaneID != paneID {
 			u.Set("herdr_pane_id", a.PaneID)

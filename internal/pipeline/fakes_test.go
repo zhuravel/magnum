@@ -95,6 +95,39 @@ type fakeAgents struct {
 	// switches are the SwitchModel calls; switchErr fails them.
 	switches  []switchCall
 	switchErr error
+	// timeUps are the TimeUp calls; onTimeUp is what the agent does with
+	// the text (nil: nothing), timeUpErr fails them.
+	timeUps   []submitCall
+	onTimeUp  behavior
+	timeUpErr error
+	// background is what BackgroundTasks reports per role (absent: unknown).
+	background map[agents.Role]int
+}
+
+// TimeUp records the call (the real one types the text into the run's
+// agent within the same run) and runs onTimeUp.
+func (f *fakeAgents) TimeUp(ctx context.Context, run store.Run, text string) error {
+	f.mu.Lock()
+	f.timeUps = append(f.timeUps, submitCall{Run: run, Role: agents.Role(run.Role), Text: text})
+	f.order = append(f.order, "time_up:"+run.Role)
+	hook, err := f.onTimeUp, f.timeUpErr
+	f.mu.Unlock()
+	if err != nil || hook == nil {
+		return err
+	}
+	cur, err := f.st.RunByID(ctx, run.ID)
+	if err != nil {
+		return err
+	}
+	return hook(f, cur, text)
+}
+
+// BackgroundTasks reports background[role] (ok false when absent).
+func (f *fakeAgents) BackgroundTasks(ctx context.Context, run store.Run) (int, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n, ok := f.background[agents.Role(run.Role)]
+	return n, ok
 }
 
 // switchCall is one SwitchModel the pipeline made.
