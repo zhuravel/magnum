@@ -2435,3 +2435,19 @@ editing history. Code, config comments and prompts reference these by their head
   of a part of the batch); counting assignments, review dismissals, milestones, auto-merge, mentions,
   cross-references and comment edits (not what the operator asked for) or project events (they need
   `read:project`, which magnum's logins lack).
+- **A reply that declines the fix in its own words is `won't fix`** (2026-10-06, after a re-review kept a
+  P2 open and withheld the approval: the author's reply confirmed the finding, said "still open" and that
+  the remedy was "undecided", weighed the proposed fix against its cost and scored it at −8; the author
+  meant "we will not do that", the judge read the words, and the classifier said `other` because the first
+  clause was neither a verdict nor an acknowledgement). The skill's reply contract now decides a reply by
+  what it does, not by its keywords: a reply that weighs the fix and turns it down (a negative score, "not
+  worth it", "we accept the risk") is `won't fix` with its reason, even when it calls the thread open or the
+  remedy undecided, honoured unless the judge proves the reason wrong at the head (the impact is larger);
+  only a reply that neither fixes, disputes nor declines leaves a finding still open. `classifyReply` falls
+  back, when no first clause decides, to `won't fix` for a negative score for the fix anywhere in the first
+  paragraph ("score(s|d) that/the/this fix at −8", "Net: −3", "net -2.5", hyphen-minus or U+2212) or a
+  clause "we accept the/this risk" or "not worth it/the …", unless an earlier clause says fixed or not a
+  bug; the class stays a hint. SKILL.md's cap moved from 30,844 to 31,098 bytes, the rule's size: the
+  sentences around it are pinned or carry rules. Rejected: taking "still open" or "undecided" at their word
+  (what caused the miss), a positive score as a fix (only "applied" or "fixed" claims one, and the code must
+  show it) and scores past the first paragraph (the classifier reads only the first).

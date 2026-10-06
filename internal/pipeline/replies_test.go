@@ -90,6 +90,44 @@ func TestClassifyReplyReadsTheFirstClause(t *testing.T) {
 	}
 }
 
+// A reply that weighs the proposed fix and declines it is won't fix, though
+// it names no verdict keyword and calls the thread open: a judge kept a
+// finding open because the reply began "Confirmed on every premise", said
+// "still open" and "undecided", and scored the fix at −8. A negative score
+// for the fix ("score that fix at −8", "Net: −3", "net -2.5", either minus)
+// anywhere in the first paragraph, or a clause "we accept the risk" or "not
+// worth it", declines the fix unless an earlier clause says fixed or not a
+// bug.
+func TestClassifyReplyTakesADeclinedFixAsWontFix(t *testing.T) {
+	for _, tc := range []struct{ body, want string }{
+		{"(Claude) Confirmed on every premise. No change in this push — this one is still open. A revert leaves the queued jobs " +
+			"failing, but they retry for about seven weeks and complete on the next deploy, so the impact is bounded. Staging a " +
+			"compatible consumer release first costs a second PR and deploy for a window that only opens on a revert, so I score " +
+			"that fix at −8. How to handle it is still undecided.", ReplyWontFix},
+		{"Checked. Scored the fix at -3: it doubles the queries on every page.", ReplyWontFix},
+		{"I score this fix at − 2 against the risk.", ReplyWontFix},
+		{"Net: −3. The helper would hide the retry.", ReplyWontFix},
+		{"(Claude) Valid concern; net -2.5 once the second deploy is counted.", ReplyWontFix},
+		{"Confirmed. We accept the risk: the import runs once a night.", ReplyWontFix},
+		{"Reproduced it, but not worth it for a nightly import.", ReplyWontFix},
+		{"It's not worth the second deploy.", ReplyWontFix},
+		{"(Claude) Applied in 3f9e2a1. Net: +3, the guard costs one query.", ReplyFixed},
+		{"Fixed in 3f9e2a1; the larger rewrite I score that fix at −4.", ReplyFixed},
+		{"Confirmed. Not a bug here: the caller retries, so I score that fix at −8.", ReplyNotABug},
+		{"Reproduced on staging, already addressed in 3f9e2a1. Net: −1 for the second guard.", ReplyOther},
+		{"Reproduced on staging, not a bug for the nightly path. Not worth it elsewhere.", ReplyOther},
+		{"Still open, will look later.", ReplyOther},
+		{"Confirmed. This one is still open; how to handle it is undecided.", ReplyOther},
+		{"Net: 0 either way, still open.", ReplyOther},
+		{"Is it worth it? The internet -3 dB loss is unrelated.", ReplyOther},
+		{"Noted.\n\nI score that fix at −8.", ReplyOther},
+	} {
+		if got := classifyReply(tc.body); got != tc.want {
+			t.Errorf("classifyReply(%q) = %q, want %q", tc.body, got, tc.want)
+		}
+	}
+}
+
 func TestExcerpt(t *testing.T) {
 	if s, cut := excerpt("  short  ", 600); s != "short" || cut {
 		t.Fatalf("short = %q, %v", s, cut)

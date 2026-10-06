@@ -76,6 +76,13 @@ var (
 			`(?:kept|keeping|left|leaving)(?:\s+(?:it|this|that))?\s+as[- ]is\b|kept$)`)},
 		{ReplyFixed, regexp.MustCompile(`(?i)^(?:already\s+)?(?:fixed|done|addressed|applied)\b`)},
 	}
+	// replyNegativeScore is a negative score for the proposed fix, with a
+	// hyphen-minus or a U+2212 minus: "I score that fix at −8", "scored the
+	// fix at -3", "Net: −3", "net -2.5".
+	replyNegativeScore = regexp.MustCompile(`(?i)(?:\bscore[sd]?\s+(?:that|the|this)\s+fix\s+at|\bnet:?)\s*[-−]\s*\d`)
+	// replyDeclines is a clause (replyClauseLead dropped) that declines the
+	// fix: "we accept the risk", "not worth it", "but not worth the cost".
+	replyDeclines = regexp.MustCompile(`(?i)^(?:we\s+accept\s+(?:the|this)\s+risk|not\s+worth\s+(?:it|the))\b`)
 )
 
 // classifyReply says what a reply claims from its first clause: "fixed",
@@ -86,7 +93,10 @@ var (
 // "Analyzed", "Noted", "Low priority") passes the verdict on to a later
 // clause of the first paragraph ("Good catch, fixed in <sha>", "Noted — left
 // as is", "Low priority — <why>. Kept as is."); anything else is ReplyOther,
-// as is an acknowledgement no verdict follows. Case does not matter; leading
+// as is an acknowledgement no verdict follows, unless the paragraph declines
+// the fix before any clause says fixed or not a bug (replyDeclined: "Confirmed.
+// Still open … so I score that fix at −8" is ReplyWontFix). The class is a
+// hint for the judge, not a verdict. Case does not matter; leading
 // quoted lines (">"), markup, emoji and an agent's "(Claude)" tag are
 // skipped, and a verdict may follow "but" or "this is" ("Valid, but out of
 // scope", "Analyzed — this is intentional").
@@ -110,26 +120,73 @@ func classifyReply(body string) string {
 	if para, _, ok := strings.Cut(s, "\n\n"); ok {
 		s = para
 	}
+	clauses := replyClauses(s)
 	acked := false
-	for _, c := range replyClauseEnd.Split(s, -1) {
-		c = strings.TrimFunc(c, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
-		if c == "" {
-			continue
+	for _, c := range clauses {
+		if class := replyVerdict(c.text); class != "" {
+			return class
 		}
-		v := c[len(replyClauseLead.FindString(c)):]
-		for _, rc := range replyClasses {
-			if rc.re.MatchString(v) {
-				return rc.class
-			}
-		}
-		switch {
-		case replyAck.MatchString(c):
+		if replyAck.MatchString(c.text) {
 			acked = true
-		case !acked:
-			return ReplyOther // the first clause claims nothing known
+		} else if !acked {
+			break // the first clause claims nothing known
+		}
+	}
+	return replyDeclined(s, clauses)
+}
+
+// replyDeclined is ReplyWontFix when the paragraph s weighs the proposed fix
+// and declines it before any clause says fixed or not a bug: a negative score
+// for the fix anywhere ("I score that fix at −8", "Net: −3"), or a clause
+// "we accept the risk" or "not worth it". Otherwise it is ReplyOther.
+func replyDeclined(s string, clauses []replyClause) string {
+	scored := len(s)
+	if loc := replyNegativeScore.FindStringIndex(s); loc != nil {
+		scored = loc[0]
+	}
+	for _, c := range clauses {
+		if class := replyVerdict(c.text); class == ReplyFixed || class == ReplyNotABug {
+			return ReplyOther
+		}
+		if scored < c.end || replyDeclines.MatchString(c.text[len(replyClauseLead.FindString(c.text)):]) {
+			return ReplyWontFix
 		}
 	}
 	return ReplyOther
+}
+
+// replyClause is a clause of a reply's first paragraph, trimmed of what is no
+// letter or digit at either end, and the offset in the paragraph where it ends.
+type replyClause struct {
+	text string
+	end  int
+}
+
+// replyClauses splits a reply's first paragraph at replyClauseEnd, leaving
+// out the clauses that trim to nothing.
+func replyClauses(s string) []replyClause {
+	var out []replyClause
+	start := 0
+	for _, loc := range append(replyClauseEnd.FindAllStringIndex(s, -1), []int{len(s), len(s)}) {
+		c := strings.TrimFunc(s[start:loc[0]], func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
+		start = loc[1]
+		if c != "" {
+			out = append(out, replyClause{text: c, end: loc[0]})
+		}
+	}
+	return out
+}
+
+// replyVerdict is the class a clause claims (replyClauseLead dropped), or ""
+// when it claims none.
+func replyVerdict(c string) string {
+	v := c[len(replyClauseLead.FindString(c)):]
+	for _, rc := range replyClasses {
+		if rc.re.MatchString(v) {
+			return rc.class
+		}
+	}
+	return ""
 }
 
 // trimReplyLead drops what precedes a reply's first word: spaces, markup,

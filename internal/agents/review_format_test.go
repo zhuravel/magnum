@@ -98,6 +98,20 @@ func TestJudgePromptsSayTheReplyClassComesFromTheFirstClause(t *testing.T) {
 	}
 }
 
+// A reply is decided by what it does, not by its keywords: a judge kept a
+// finding open, and the PR from approval, because the author's reply scored
+// the proposed fix at −8 yet called the thread "still open" and the remedy
+// "undecided". A reply that weighs the fix and declines it is won't fix.
+func TestSkillDecidesAReplyByWhatItDoes(t *testing.T) {
+	skillSays(t, []string{
+		"`other`: a keyword hint, not a verdict. Decide a reply by what it does.",
+		"- **answered**: a reply that disputes the finding or declines the fix with a reason.",
+		"Weighing the fix and turning it down (a negative score, \"not worth it\", \"we accept the risk\") is `won't fix`, even if the reply calls the thread open or the remedy undecided.",
+		"Honour it unless you prove the reason wrong at `head_sha` (say, the impact is larger).",
+		"- **still open**: no fix, no reasoned dispute or decline, or a reason you proved wrong.",
+	}, []string{"a `not a bug` or `won't fix` reply that gives a reason", "no fix and no reason,"})
+}
+
 // claude-review reports only what the judge can post: of the candidates only
 // claude-review raised, 3 were posted and 302 rejected (speculative 108,
 // style_only 73, pre_existing 29). Its prompts no longer ask for uncertain
@@ -120,8 +134,9 @@ func TestClaudeReviewPromptsLeaveOutUncertainStyleAndPreExistingFindings(t *test
 }
 
 // skillMaxBytes bounds SKILL.md: 28,040 bytes before the review-format
-// changes plus about 10%. Every rule added must replace or shorten text.
-const skillMaxBytes = 30_844
+// changes plus about 10%, and 254 for the reply contract's declined fix
+// (2026-10-06). Every rule added must replace or shorten text.
+const skillMaxBytes = 31_098
 
 func TestSkillStaysTight(t *testing.T) {
 	if n := len(magnum.Skill); n > skillMaxBytes {
