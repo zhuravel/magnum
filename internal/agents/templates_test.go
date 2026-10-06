@@ -40,6 +40,7 @@ func judgeFixture() JudgeData {
 			{Role: "claude-simplify", Path: "/Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/claude-simplify.md"},
 		},
 		ResultFile:       "/Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/codex-judge.json",
+		Magnum:           "/Users/bohdan/Projects/magnum/bin/magnum",
 		DryRun:           false,
 		SkillPath:        "/Users/bohdan/Projects/magnum/skills/magnum-review/SKILL.md",
 		PreviousReviewID: 3012345678,

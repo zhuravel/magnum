@@ -600,6 +600,25 @@ func TestMergeBase(t *testing.T) {
 	}
 }
 
+// FileDiff diffs one file the way GitHub shows a PR's patch, whatever the
+// user's diff settings, with the path taken literally from the top.
+func TestFileDiff(t *testing.T) {
+	ctx := context.Background()
+	c, f := newFake(outRule("@@ -1 +1 @@\n-a\n+b\n", "git", "-C", ".", "diff"))
+	got, err := c.FileDiff(ctx, ".", sha1, "HEAD", ":(exclude)app/x.rb")
+	if err != nil || got != "@@ -1 +1 @@\n-a\n+b\n" {
+		t.Fatalf("FileDiff = %q, %v", got, err)
+	}
+	wantCall(t, f, 0, false, "git", "-C", ".", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--unified=3",
+		"--inter-hunk-context=0", sha1, "HEAD", "--", ":(top,literal):(exclude)app/x.rb")
+	if _, err := c.FileDiff(ctx, ".", "--output=x", "HEAD", "a"); err == nil {
+		t.Error("option-looking rev must be rejected")
+	}
+	if _, err := c.FileDiff(ctx, ".", sha1, "HEAD", ""); err == nil {
+		t.Error("an empty path must be rejected")
+	}
+}
+
 func TestChangedPaths(t *testing.T) {
 	ctx := context.Background()
 	c, f := newFake(outRule("db/migrate/1_a.rb\x00db/schema.rb\x00", "git", "-C", slot, "diff"))

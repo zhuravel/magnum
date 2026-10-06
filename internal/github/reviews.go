@@ -246,6 +246,58 @@ func (c *Client) CreateReview(ctx context.Context, owner, repo string, number in
 	return r.review(), nil
 }
 
+// ReviewRequest is the body of POST /repos/{o}/{r}/pulls/{n}/reviews: one
+// submitted review with all its inline comments (SubmitReview).
+type ReviewRequest struct {
+	CommitID string         `json:"commit_id"`
+	Event    string         `json:"event"` // APPROVE, REQUEST_CHANGES or COMMENT
+	Body     string         `json:"body"`
+	Comments []DraftComment `json:"comments"`
+}
+
+// DraftComment is one inline comment of a ReviewRequest, anchored on line
+// (and, for a multi-line comment, from start_line) of path on side: RIGHT
+// for the head's lines (added or context), LEFT for the base's (deleted or
+// context).
+type DraftComment struct {
+	Path      string `json:"path"`
+	Line      int    `json:"line"`
+	Side      string `json:"side,omitempty"`
+	StartLine int    `json:"start_line,omitempty"`
+	StartSide string `json:"start_side,omitempty"`
+	Body      string `json:"body"`
+}
+
+// SubmitReview posts one review with its inline comments (POST
+// /repos/{o}/{r}/pulls/{n}/reviews) as the client's identity, the request
+// sent as JSON on gh's stdin so no review text reaches argv. It checks only
+// what the request needs to be well formed (event, a full commit id);
+// GitHub checks the rest. It is marked Mutates, so execx.DryRun only plans
+// it.
+func (c *Client) SubmitReview(ctx context.Context, owner, repo string, number int, r ReviewRequest) (RESTReview, error) {
+	if err := checkRepo(owner, repo); err != nil {
+		return RESTReview{}, err
+	}
+	switch r.Event {
+	case "APPROVE", "REQUEST_CHANGES", "COMMENT":
+	default:
+		return RESTReview{}, fmt.Errorf("github: review event %q is not APPROVE, REQUEST_CHANGES or COMMENT", r.Event)
+	}
+	if number <= 0 || len(r.CommitID) != 40 {
+		return RESTReview{}, fmt.Errorf("github: a review needs a pull request number and a full commit id")
+	}
+	if r.Comments == nil {
+		r.Comments = []DraftComment{}
+	}
+	var out restReviewJSON
+	path := fmt.Sprintf("repos/%s/%s/pulls/%d/reviews", owner, repo, number)
+	op := fmt.Sprintf("review %s/%s#%d (%s)", owner, repo, number, r.Event)
+	if err := c.restInput(ctx, op, "POST", path, r, true, &out); err != nil {
+		return RESTReview{}, err
+	}
+	return out.review(), nil
+}
+
 // DismissReview dismisses a review (PUT /repos/{o}/{r}/pulls/{n}/reviews/{id}/dismissals)
 // as the client's identity. It is marked Mutates, so execx.DryRun only plans
 // it. A missing permission is an error matching ErrForbidden; callers report

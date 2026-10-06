@@ -460,6 +460,30 @@ func (c *Client) MergeBase(ctx context.Context, dir, a, b string) (string, error
 	return sha, nil
 }
 
+// FileDiff returns the unified diff of one file from base to head (git diff
+// base head -- path; path is relative to the repository's top and taken
+// literally) as GitHub shows a pull request's patch: three lines of
+// context, hunks never merged across a gap, and none of the user's settings
+// that change the hunks (an external diff, textconv, a context size). ""
+// when the file did not change; a binary file has a header and no hunks.
+func (c *Client) FileDiff(ctx context.Context, dir, base, head, path string) (string, error) {
+	for _, rev := range []string{base, head} {
+		if err := checkRev("revision", rev); err != nil {
+			return "", err
+		}
+	}
+	if path == "" {
+		return "", errors.New("gitx: diff needs a path")
+	}
+	res, err := c.git(ctx, dir, call{label: fmt.Sprintf("diff %s %s", base, head)},
+		"diff", "--no-color", "--no-ext-diff", "--no-textconv", "--unified=3", "--inter-hunk-context=0",
+		base, head, "--", ":(top,literal)"+path)
+	if err != nil {
+		return "", err
+	}
+	return string(res.Stdout), nil
+}
+
 // ChangedPaths lists the files head changed relative to its merge base with
 // base (git diff base...head), optionally limited to pathspecs such as "db/".
 // Renames are reported as a deletion plus an addition so a move out of a

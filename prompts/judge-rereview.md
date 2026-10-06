@@ -74,6 +74,7 @@ notes_lock: {{.NotesLockCommand}}
 notes_unlock: {{.NotesUnlockCommand}}
 {{- end}}
 result_file: {{.ResultFile}}
+post_review: {{.PostReviewCommand}}
 dry_run: {{.DryRun}}
 {{- if .PostMerge}}
 post_merge: true

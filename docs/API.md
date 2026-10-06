@@ -54,6 +54,7 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 | [notify](#notify) | Package notify is magnum's user-facing status surface: toasts and herdr sidebar tokens. |
 | [paths](#paths) | Package paths defines magnum's on-disk layout. |
 | [pipeline](#pipeline) | Package pipeline runs one review round for a PR inside its herdr workspace: a readiness step in the checkout (the repository's prepare commands and ready probes and a Ruby check, readiness.go; failures only inform the judge), then the round's configured roles (config.Role: agent sessions on any configured kind, or shell commands) in stages (config.Config.Stages: the roles of a stage in parallel, then a check that they left HEAD and the tree as they found them, restoring both when not: no role may edit the checkout), then the judge, then verification on GitHub (the oracle for "review posted") and the optional dismissal of the identity's own stale CHANGES_REQUESTED. |
+| [postreview](#postreview) | Package postreview is `magnum post-review`, the judge's posting tool. |
 | [reveal](#reveal) | Package reveal brings the herdr client to the front of the user's terminal: focus the existing client when there is one, otherwise open a new tab or window running `herdr --session <name>`. |
 | [slots](#slots) | Package slots manages the checkouts magnum reviews in: the Talkable pool slots (~/Projects/talkable.reviewN, provisioned once with bin/worktree-setup and reused) and per-PR worktrees for small repositories, next to the repository's main clone whatever it is named (~/Projects/<owner>-<name>__worktrees/pr-N). |
 | [steps](#steps) | Package steps makes multi-step side effects resumable after a crash. |
@@ -239,6 +240,11 @@ const MaxReset = 24 * time.Hour
     or fake a far-off date, so a pause never lasts longer than this from one
     reading (a longer limit is simply hit again).
 
+const PostReviewFile = "review.json"
+    PostReviewFile is the file the judge writes its review to for
+    `magnum post-review`, in the report directory next to its result file
+    (JudgeData.ReviewFile).
+
 const ShellStatusUnknown = -1
     ShellStatusUnknown is RunShell's status when the done marker carried no exit
     status (a full-line template that echoes the bare marker).
@@ -358,6 +364,14 @@ func NotesLockLine(lock string) string
 
 func NotesUnlockLine(lock string) string
     NotesUnlockLine is the shell line that releases the notes lock.
+
+func PostReviewLine(d JudgeData) string
+    PostReviewLine is the shell line the judge runs to post its review
+    (JudgeData.PostReviewCommand, `post_review` in the <magnum> block):
+    `magnum post-review` with the run's facts as flags, each value shell-quoted.
+    --gh-config-dir only for an identity with its own gh config; --dry-run in
+    a dry run; --local-base (the base the blind replay's diff starts at) in a
+    blind one, so the tool reads nothing from GitHub.
 
 func RenderPrompt(p config.Prompt, data any) (string, error)
     RenderPrompt executes a resolved prompt template
@@ -557,7 +571,14 @@ type JudgeData struct {
 	SelfAuthored    bool
 	Reports         []Report // one per non-judge role of the round, in pipeline order
 	ResultFile      string   // <report dir>/<the judge's output>, e.g. codex-judge.json
-	DryRun          bool
+	// Magnum is the magnum executable the judge's post_review line runs
+	// (the daemon's own, absolute; "" = magnum on PATH). ReviewFile is
+	// where the judge writes the review it posts (<report dir>/review.json,
+	// derived from ResultFile when empty), and PostReviewCommand the line
+	// that posts it, rendered as `post_review` (PostReviewLine; always
+	// derived).
+	Magnum, ReviewFile, PostReviewCommand string
+	DryRun                                bool
 	// Blind: an evaluation replay (pipeline.RoundInput.Blind), rendered as
 	// `blind: true`; the skill then judges the local diff of HeadSHA only.
 	Blind bool
@@ -5085,6 +5106,10 @@ const ComparePushCommits = 100
 const FileAtLimit = 512 << 10
     FileAtLimit caps FileAt: a larger file is not returned.
 
+const PullFilesMaxPages = 30
+    PullFilesMaxPages is how many pages of 100 PullFiles reads: GitHub's own cap
+    for the endpoint, 3000 files.
+
 
 VARIABLES
 
@@ -5152,6 +5177,11 @@ type APIError struct {
 	Status  int            // HTTP status when known, else 0
 	Message string         // REST message or gh's stderr line
 	Errors  []GraphQLError // GraphQL errors, if any
+	// Details are the entries of a REST error body's "errors" array (a
+	// string as it is, an object as its field and message), e.g. "Can not
+	// approve your own pull request" under the message "Unprocessable
+	// Entity".
+	Details []string
 }
     APIError is a failure GitHub reported: an HTTP status from gh, a REST error
     body, or GraphQL errors.
@@ -5308,6 +5338,19 @@ func (c *Client) ListFiles(ctx context.Context, owner, repo string, number int) 
     conclusions from the list (GitHub itself caps this endpoint at 3000 files).
     A missing repository or pull request is an error matching ErrNotFound.
 
+func (c *Client) PullFiles(ctx context.Context, owner, repo string, number int) (files []FileDelta, complete bool, err error)
+    PullFiles reads the files a pull request changes with their patches as
+    GitHub shows them in the PR's diff (GET /repos/{o}/{r}/pulls/{n}/files,
+    up to PullFilesMaxPages pages of 100). A file GitHub sends no patch for
+    (binary, or too large) is Truncated with an empty Patch. complete is false
+    when the last page read was full: the PR changes more files than were read.
+    A missing repository or pull request is an error matching ErrNotFound.
+
+func (c *Client) PullSHAs(ctx context.Context, owner, repo string, number int) (base, head string, err error)
+    PullSHAs reads a pull request's base and head commits as REST reports them
+    (GET /repos/{o}/{r}/pulls/{n}: base.sha, head.sha). A missing repository or
+    pull request is an error matching ErrNotFound.
+
 func (c *Client) Radar(ctx context.Context, org string) ([]RepoRadar, RateLimit, error)
     Radar lists every non-archived repository owned by owner (an organization
     or a user) with all its open pull requests, following both the repository
@@ -5332,8 +5375,8 @@ func (c *Client) RequiredChecks(ctx context.Context, owner, repo, branch string)
 
 func (c *Client) ReviewComments(ctx context.Context, owner, repo string, number int, reviewID int64) ([]ReviewComment, error)
     ReviewComments lists the inline comments of a review (GET
-    /repos/{o}/{r}/pulls/{n}/reviews/{id}/comments), at most 100: the first
-    page, which holds every review magnum posts.
+    /repos/{o}/{r}/pulls/{n}/reviews/{id}/comments), 100 a page until a page is
+    not full, at most reviewCommentsMaxPages pages.
 
 func (c *Client) ReviewREST(ctx context.Context, owner, repo string, number int, id int64) (RESTReview, error)
     ReviewREST reads one review over REST (GET
@@ -5359,6 +5402,13 @@ func (c *Client) ReviewsWithMarker(ctx context.Context, owner, repo string, numb
     body contains marker, oldest first; an empty marker returns all of them.
     A missing repository or pull request is an error matching ErrNotFound.
 
+func (c *Client) SubmitReview(ctx context.Context, owner, repo string, number int, r ReviewRequest) (RESTReview, error)
+    SubmitReview posts one review with its inline comments (POST
+    /repos/{o}/{r}/pulls/{n}/reviews) as the client's identity, the request sent
+    as JSON on gh's stdin so no review text reaches argv. It checks only what
+    the request needs to be well formed (event, a full commit id); GitHub checks
+    the rest. It is marked Mutates, so execx.DryRun only plans it.
+
 func (c *Client) UpdateReviewBody(ctx context.Context, owner, repo string, number int, reviewID int64, body string) error
     UpdateReviewBody replaces the summary body of a review (PUT
     /repos/{o}/{r}/pulls/{n}/reviews/{id}) as the client's identity; GitHub lets
@@ -5374,6 +5424,19 @@ type CompareStats struct {
 }
     CompareStats is the size of base...head as GitHub's compare API reports it
     (three-dot: what head adds on top of its merge base with base).
+
+type DraftComment struct {
+	Path      string `json:"path"`
+	Line      int    `json:"line"`
+	Side      string `json:"side,omitempty"`
+	StartLine int    `json:"start_line,omitempty"`
+	StartSide string `json:"start_side,omitempty"`
+	Body      string `json:"body"`
+}
+    DraftComment is one inline comment of a ReviewRequest, anchored on line
+    (and, for a multi-line comment, from start_line) of path on side: RIGHT
+    for the head's lines (added or context), LEFT for the base's (deleted or
+    context).
 
 type FileDelta struct {
 	Path         string // the file's path at head
@@ -5572,6 +5635,15 @@ type ReviewComment struct {
 	HTMLURL string
 }
     ReviewComment is one inline comment of a review as REST reports it.
+
+type ReviewRequest struct {
+	CommitID string         `json:"commit_id"`
+	Event    string         `json:"event"` // APPROVE, REQUEST_CHANGES or COMMENT
+	Body     string         `json:"body"`
+	Comments []DraftComment `json:"comments"`
+}
+    ReviewRequest is the body of POST /repos/{o}/{r}/pulls/{n}/reviews:
+    one submitted review with all its inline comments (SubmitReview).
 
 type ReviewRequestEvent struct {
 	CreatedAt time.Time
@@ -5779,6 +5851,14 @@ func (c *Client) FetchPR(ctx context.Context, mainClone string, number int) (str
     only planned, so the final lookup returns whatever refs/magnum/pr/N already
     holds (the sha of an earlier real fetch, possibly stale) or fails with
     ErrNoSuchRef.
+
+func (c *Client) FileDiff(ctx context.Context, dir, base, head, path string) (string, error)
+    FileDiff returns the unified diff of one file from base to head (git diff
+    base head -- path; path is relative to the repository's top and taken
+    literally) as GitHub shows a pull request's patch: three lines of context,
+    hunks never merged across a gap, and none of the user's settings that change
+    the hunks (an external diff, textconv, a context size). "" when the file did
+    not change; a binary file has a header and no hunks.
 
 func (c *Client) FindClone(ctx context.Context, cloneRoot, owner, name string) (string, error)
     FindClone returns the main clone of github.com/<owner>/<name> under
@@ -8727,6 +8807,187 @@ type ThreadLister interface {
     review threads with their comments (github.Client.ReviewThreads). Optional:
     without it a re-review names no threads file and the judge reads the replies
     itself.
+
+```
+
+## postreview
+
+```text
+package postreview // import "github.com/zhuravel/magnum/internal/postreview"
+
+Package postreview is `magnum post-review`, the judge's posting tool.
+The judge writes its review (event, body, inline comments) to a file; Run checks
+it (the fields, then every inline anchor against the pull request's diff),
+posts it once as the judge's identity (never twice: a review carrying the
+run's marker counts as posted) and reads it back. It works from its Options,
+gh and git in the checkout alone: it loads no config, opens no registry,
+never contacts the daemon and writes no file.
+
+CONSTANTS
+
+const (
+	StatusPosted           = "posted"            // posted and read back
+	StatusAlreadyPosted    = "already_posted"    // a review carrying the run's marker exists; nothing posted
+	StatusDryRun           = "dry_run"           // checked; nothing posted (Outcome.PlannedReview)
+	StatusInvalid          = "invalid"           // the review file is wrong (Outcome.Problems)
+	StatusInvalidAnchors   = "invalid_anchors"   // inline comments off the diff (Outcome.InvalidAnchors)
+	StatusRejected         = "rejected"          // GitHub refused the review and none was created
+	StatusError            = "error"             // anything else; Outcome.Message says what
+	StatusReadbackMismatch = "readback_mismatch" // posted, but the review reads back differently
+)
+    Outcome statuses (Outcome.Status).
+
+const (
+	EventComment        = "COMMENT"
+	EventRequestChanges = "REQUEST_CHANGES"
+	EventApprove        = "APPROVE"
+)
+    Review events the judge may post.
+
+const (
+	SideRight = "RIGHT" // the head's lines: added or context
+	SideLeft  = "LEFT"  // the base's lines: deleted or context
+)
+    Sides of an inline comment.
+
+const FooterMarker = "<!-- magnum:footer -->"
+    FooterMarker starts the footer magnum appends to a verified review
+    (pipeline's footerMarker); a judge never writes it.
+
+const MaxBody = 65536
+    MaxBody is GitHub's limit for a review body and for a comment body,
+    in characters.
+
+
+FUNCTIONS
+
+func RunMarker(runID, head string) string
+    RunMarker is the line every review of run carries, on head: `<!--
+    magnum:run=<run id> head=<first 7 of head> -->`.
+
+
+TYPES
+
+type BadAnchor struct {
+	Index     int    `json:"index"` // in the review file's comments
+	Path      string `json:"path"`
+	Line      int    `json:"line"`
+	StartLine int    `json:"start_line,omitempty"`
+	Side      string `json:"side"`
+	Why       string `json:"why"`
+	// Valid are the line ranges of the file's hunks on that side
+	// ("12-20"); empty for a file the pull request does not change.
+	Valid []string `json:"valid"`
+}
+    BadAnchor is an inline comment GitHub would refuse: its line (or its
+    start_line) is not a line of the pull request's diff on its side.
+
+type Deps struct {
+	GitHub GitHub
+	Git    Git
+	Dir    string
+}
+    Deps are Run's GitHub, as the judge's identity, and git in Dir, the checkout
+    ("." = the current directory).
+
+type Git interface {
+	RevParse(ctx context.Context, dir, ref string) (string, error)
+	MergeBase(ctx context.Context, dir, a, b string) (string, error)
+	FileDiff(ctx context.Context, dir, base, head, path string) (string, error)
+}
+    Git is what Run reads from the checkout (*gitx.Client).
+
+type GitHub interface {
+	PullSHAs(ctx context.Context, owner, repo string, number int) (base, head string, err error)
+	PullFiles(ctx context.Context, owner, repo string, number int) ([]github.FileDelta, bool, error)
+	CompareFiles(ctx context.Context, owner, repo, base, head string) ([]github.FileDelta, error)
+	Reviews(ctx context.Context, owner, repo string, number int) ([]github.Review, error)
+	SubmitReview(ctx context.Context, owner, repo string, number int, r github.ReviewRequest) (github.RESTReview, error)
+	ReviewREST(ctx context.Context, owner, repo string, number int, id int64) (github.RESTReview, error)
+	ReviewComments(ctx context.Context, owner, repo string, number int, reviewID int64) ([]github.ReviewComment, error)
+}
+    GitHub is what Run reads and writes on GitHub (*github.Client, as the
+    judge's identity).
+
+type Options struct {
+	Owner, Repo string
+	Number      int
+	HeadSHA     string // the reviewed commit: the review's commit_id
+	RunID       string // the round's marker id
+	Login       string // reviewer_login, REST form ("talkable[bot]")
+	// FormerLogins posted this PR's reviews before its identity migrated: a
+	// review of theirs carrying the marker counts as posted too.
+	FormerLogins []string
+	DryRun       bool // check everything, post nothing
+	// LocalBase (a blind replay, with DryRun): check the anchors against
+	// `git diff LocalBase HeadSHA` in the checkout and read nothing from
+	// GitHub, whose pull request may have moved on since HeadSHA.
+	LocalBase string
+}
+    Options are the run's facts, from the judge's <magnum> block.
+
+func (o Options) Check() error
+    Check reports what is wrong with o.
+
+type Outcome struct {
+	Status  string `json:"status"`
+	Message string `json:"message,omitempty"` // what went wrong (error, rejected), or what was found
+	// Problems are the review file's faults (invalid).
+	Problems []string `json:"problems,omitempty"`
+	// InvalidAnchors are the comments off the diff (invalid_anchors).
+	InvalidAnchors []BadAnchor `json:"invalid_anchors,omitempty"`
+	// Unchecked are the indexes of comments no diff could check (a binary
+	// or too large file without its commits in the checkout): kept, GitHub
+	// decides.
+	Unchecked []int `json:"unchecked_anchors,omitempty"`
+	// MarkerAppended: the body lacked the run marker; it was added as its
+	// last line.
+	MarkerAppended bool `json:"marker_appended,omitempty"`
+
+	ReviewID  int64  `json:"review_id,omitempty"`
+	ReviewURL string `json:"review_url,omitempty"`
+	Event     string `json:"event,omitempty"` // the event posted (or, already posted, the review's)
+	// EventDowngraded: GitHub refused a self-verdict, so the review went
+	// out as COMMENT.
+	EventDowngraded bool   `json:"event_downgraded,omitempty"`
+	State           string `json:"state,omitempty"` // as read back
+	CommitID        string `json:"commit_id,omitempty"`
+	Comments        *int   `json:"comments,omitempty"` // inline comments read back (dry run: planned)
+	// Mismatches say how the review read back differs (readback_mismatch).
+	Mismatches []string `json:"mismatches,omitempty"`
+	// PlannedReview is the request a dry run would have sent.
+	PlannedReview *github.ReviewRequest `json:"planned_review,omitempty"`
+}
+    Outcome is what Run printed: a status and its details. ExitCode maps it to
+    the command's exit status.
+
+func Run(ctx context.Context, d Deps, o Options, data []byte) Outcome
+    Run posts the judge's review file data for the run o names: check the file,
+    check its inline anchors against the pull request's diff, look for a review
+    already carrying the run's marker, then post (or, in a dry run, plan) the
+    review once and read it back.
+
+func (o Outcome) ExitCode() int
+    ExitCode is 0 for posted, already posted and a dry run, 2 when the judge
+    must fix its review file, 1 otherwise.
+
+func (o Outcome) Summary() string
+    Summary is the outcome in one human line (ids and counts, no PR text).
+
+type Review struct {
+	Event    string                `json:"event"`
+	Body     string                `json:"body"`
+	Comments []github.DraftComment `json:"comments"`
+}
+    Review is the file the judge writes: the review to post. Comments use
+    GitHub's fields (path, line, side, start_line, start_side, body).
+
+func Parse(data []byte, o Options) (r Review, appended bool, problems []string)
+    Parse decodes and checks the judge's review file for the run o names.
+    It returns the review to post, with each comment's side (RIGHT unless
+    given) and a multi-line comment's start side filled in and the run's marker
+    appended as the body's last line when the body lacks it (appended reports
+    that), or the problems found, each naming its field.
 
 ```
 

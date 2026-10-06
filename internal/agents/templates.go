@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"text/template"
@@ -187,7 +188,14 @@ type JudgeData struct {
 	SelfAuthored    bool
 	Reports         []Report // one per non-judge role of the round, in pipeline order
 	ResultFile      string   // <report dir>/<the judge's output>, e.g. codex-judge.json
-	DryRun          bool
+	// Magnum is the magnum executable the judge's post_review line runs
+	// (the daemon's own, absolute; "" = magnum on PATH). ReviewFile is
+	// where the judge writes the review it posts (<report dir>/review.json,
+	// derived from ResultFile when empty), and PostReviewCommand the line
+	// that posts it, rendered as `post_review` (PostReviewLine; always
+	// derived).
+	Magnum, ReviewFile, PostReviewCommand string
+	DryRun                                bool
 	// Blind: an evaluation replay (pipeline.RoundInput.Blind), rendered as
 	// `blind: true`; the skill then judges the local diff of HeadSHA only.
 	Blind bool
@@ -267,11 +275,15 @@ type JudgeData struct {
 	FormerLogins []string
 }
 
-// completed is d with its Reports, notes fields and PreviousHeadShort
-// completed (a copy; d is not modified).
+// completed is d with its Reports, notes fields, PreviousHeadShort and
+// post-review line completed (a copy; d is not modified).
 func (d *JudgeData) completed() JudgeData {
 	out := *d
 	out.PreviousHeadShort = textx.ShortSHA(d.PreviousHeadSHA)
+	if out.ReviewFile == "" && out.ResultFile != "" {
+		out.ReviewFile = filepath.Join(filepath.Dir(out.ResultFile), PostReviewFile)
+	}
+	out.PostReviewCommand = PostReviewLine(out)
 	out.Reports = make([]Report, len(d.Reports))
 	for i, r := range d.Reports {
 		out.Reports[i] = r.completed()

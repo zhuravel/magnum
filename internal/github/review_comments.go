@@ -14,9 +14,12 @@ type ReviewComment struct {
 	HTMLURL string
 }
 
+// reviewCommentsMaxPages bounds ReviewComments: 1000 comments.
+const reviewCommentsMaxPages = 10
+
 // ReviewComments lists the inline comments of a review (GET
-// /repos/{o}/{r}/pulls/{n}/reviews/{id}/comments), at most 100: the first
-// page, which holds every review magnum posts.
+// /repos/{o}/{r}/pulls/{n}/reviews/{id}/comments), 100 a page until a page
+// is not full, at most reviewCommentsMaxPages pages.
 func (c *Client) ReviewComments(ctx context.Context, owner, repo string, number int, reviewID int64) ([]ReviewComment, error) {
 	if err := checkRepo(owner, repo); err != nil {
 		return nil, err
@@ -24,25 +27,33 @@ func (c *Client) ReviewComments(ctx context.Context, owner, repo string, number 
 	if number <= 0 || reviewID <= 0 {
 		return nil, fmt.Errorf("github: invalid review %d on pull request %d", reviewID, number)
 	}
-	var raw []struct {
-		ID      int64  `json:"id"`
-		Path    string `json:"path"`
-		Line    *int   `json:"line"`
-		Body    string `json:"body"`
-		HTMLURL string `json:"html_url"`
-	}
-	path := fmt.Sprintf("repos/%s/%s/pulls/%d/reviews/%d/comments?per_page=100", owner, repo, number, reviewID)
-	op := fmt.Sprintf("review comments %s/%s#%d/%d", owner, repo, number, reviewID)
-	if err := c.rest(ctx, op, "GET", path, nil, false, &raw); err != nil {
-		return nil, err
-	}
-	out := make([]ReviewComment, 0, len(raw))
-	for _, r := range raw {
-		rc := ReviewComment{ID: r.ID, Path: r.Path, Body: r.Body, HTMLURL: r.HTMLURL}
-		if r.Line != nil {
-			rc.Line = *r.Line
+	out := []ReviewComment{}
+	for page := 1; page <= reviewCommentsMaxPages; page++ {
+		var raw []struct {
+			ID      int64  `json:"id"`
+			Path    string `json:"path"`
+			Line    *int   `json:"line"`
+			Body    string `json:"body"`
+			HTMLURL string `json:"html_url"`
 		}
-		out = append(out, rc)
+		path := fmt.Sprintf("repos/%s/%s/pulls/%d/reviews/%d/comments?per_page=100", owner, repo, number, reviewID)
+		if page > 1 {
+			path += fmt.Sprintf("&page=%d", page)
+		}
+		op := fmt.Sprintf("review comments %s/%s#%d/%d", owner, repo, number, reviewID)
+		if err := c.rest(ctx, op, "GET", path, nil, false, &raw); err != nil {
+			return nil, err
+		}
+		for _, r := range raw {
+			rc := ReviewComment{ID: r.ID, Path: r.Path, Body: r.Body, HTMLURL: r.HTMLURL}
+			if r.Line != nil {
+				rc.Line = *r.Line
+			}
+			out = append(out, rc)
+		}
+		if len(raw) < 100 {
+			break
+		}
 	}
 	return out, nil
 }

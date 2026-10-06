@@ -658,7 +658,7 @@ func (rd *round) judgeData(run store.Run, marker string) agents.JudgeData {
 		IdentityKind: rd.r.Identity.Kind(), ReviewerLogin: rd.login, GhConfigDir: rd.ghDir,
 		NoFindingsEvent: nf, BlockingEvent: be, SelfAuthored: rd.selfAuthored(),
 		Reports: reports, ResultFile: rd.reportPath(run, rd.judge), DryRun: in.DryRun, Blind: in.Blind, PostMerge: in.PostMerge,
-		SkillPath: skill, Model: rd.r.Config.RoleModel(rd.judge), Effort: rd.judge.EffortFor(in.Kind == KindRereview || rd.deltaCheck() != nil),
+		Magnum: rd.r.Layout.Binary(), SkillPath: skill, Model: rd.r.Config.RoleModel(rd.judge), Effort: rd.judge.EffortFor(in.Kind == KindRereview || rd.deltaCheck() != nil),
 		ForcePushed: in.ForcePushed, BaseMerged: in.BaseMerged, MovedFrom: in.MovedFrom, PreviousHeadSHA: rd.previousHead(),
 		NotesPath: in.NotesPath,
 	}

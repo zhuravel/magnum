@@ -88,6 +88,7 @@ the judge data, every other session role gets the role data, and a shell role's 
 | `.SelfAuthored` | the PR's author is the reviewing identity |
 | `.Reports` | one entry per other role of the round, in pipeline order (see below) |
 | `.ResultFile` | where the judge writes its JSON result (the role's `output`) |
+| `.Magnum`, `.ReviewFile`, `.PostReviewCommand` | the magnum binary the daemon runs (absolute; empty: `magnum` on `PATH`), the file the judge writes its review to (`review.json` next to `.ResultFile`, derived when empty) and the shell line that posts it, `magnum post-review` with the run's facts as flags (repository, PR, head, run id, `.ReviewerLogin`, each of `.FormerLogins`, `.GhConfigDir` when set, `--dry-run` under `.DryRun`, `--local-base .BaseSHA` in a blind replay, `--review .ReviewFile`; every value shell-quoted; always derived). The judge prompts render it as the `<magnum>` field `post_review`; what the command does is in the README (The judge skill) |
 | `.DryRun` | plan the review without posting it |
 | `.PostMerge` | GitHub merged the PR before magnum reviewed `.HeadSHA` (`magnum review` of a merged PR): post a COMMENT asking for follow-ups; `.NoFindingsEvent` and `.BlockingEvent` are both `COMMENT`. The judge prompts render `post_merge: true` only then |
 | `.SkillPath` | the role's `skill`, absolute; in the daemon, the copy it took at startup |

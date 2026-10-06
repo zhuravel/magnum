@@ -7,7 +7,16 @@ import (
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/github"
+	"github.com/zhuravel/magnum/internal/postreview"
 )
+
+// post-review refuses a judge-written footer by the marker this package
+// appends the footer under.
+func TestPostReviewRefusesThisFooterMarker(t *testing.T) {
+	if postreview.FooterMarker != footerMarker {
+		t.Fatalf("post-review refuses %q, the footer starts with %q", postreview.FooterMarker, footerMarker)
+	}
+}
 
 // The footer the judge wrote itself before magnum appended one (the old
 // default line).

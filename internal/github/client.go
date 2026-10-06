@@ -29,6 +29,7 @@ package github
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -145,6 +146,11 @@ type APIError struct {
 	Status  int            // HTTP status when known, else 0
 	Message string         // REST message or gh's stderr line
 	Errors  []GraphQLError // GraphQL errors, if any
+	// Details are the entries of a REST error body's "errors" array (a
+	// string as it is, an object as its field and message), e.g. "Can not
+	// approve your own pull request" under the message "Unprocessable
+	// Entity".
+	Details []string
 }
 
 func (e *APIError) Error() string {
@@ -160,6 +166,7 @@ func (e *APIError) Error() string {
 	if e.Message != "" {
 		msgs = append(msgs, e.Message)
 	}
+	msgs = append(msgs, e.Details...)
 	for _, g := range e.Errors {
 		m := g.Message
 		if g.Type != "" {
@@ -360,15 +367,33 @@ func (c *Client) graphqlOnce(ctx context.Context, op, query string, vars map[str
 // out may be nil to ignore the response body. After a 401 it calls Reauth and
 // repeats the call once.
 func (c *Client) rest(ctx context.Context, op, method, path string, fields [][2]string, mutates bool, out any) error {
-	err := c.restOnce(ctx, op, method, path, fields, mutates, out)
+	err := c.restOnce(ctx, op, method, path, fields, nil, mutates, out)
 	retry, err := c.reauthorize(ctx, err)
 	if retry {
-		return c.restOnce(ctx, op, method, path, fields, mutates, out)
+		return c.restOnce(ctx, op, method, path, fields, nil, mutates, out)
 	}
 	return err
 }
 
-func (c *Client) restOnce(ctx context.Context, op, method, path string, fields [][2]string, mutates bool, out any) error {
+// restInput is rest with the request body sent as JSON on gh's stdin (gh
+// api --input -), so none of it reaches argv: a write that carries PR text.
+// out may be nil. After a 401 it calls Reauth and repeats the call once.
+func (c *Client) restInput(ctx context.Context, op, method, path string, body any, mutates bool, out any) error {
+	in, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("github %s: encode request: %w", op, err)
+	}
+	err = c.restOnce(ctx, op, method, path, nil, in, mutates, out)
+	retry, err := c.reauthorize(ctx, err)
+	if retry {
+		return c.restOnce(ctx, op, method, path, nil, in, mutates, out)
+	}
+	return err
+}
+
+// restOnce runs one REST call with fields as gh -f, or with stdin (when
+// non-nil) as its JSON body (--input -).
+func (c *Client) restOnce(ctx context.Context, op, method, path string, fields [][2]string, stdin []byte, mutates bool, out any) error {
 	args := []string{"api"}
 	if method != "GET" {
 		args = append(args, "-X", method)
@@ -378,7 +403,10 @@ func (c *Client) restOnce(ctx context.Context, op, method, path string, fields [
 	for _, f := range fields {
 		args = append(args, "-f", f[0]+"="+f[1])
 	}
-	res, err := c.gh(ctx, op, args, nil, mutates)
+	if stdin != nil {
+		args = append(args, "--input", "-")
+	}
+	res, err := c.gh(ctx, op, args, stdin, mutates)
 	if err != nil {
 		var exitErr *execx.ExitError
 		if errors.As(err, &exitErr) {
@@ -496,8 +524,9 @@ func retrySmaller(size int, what string, call func(size int) error) (int, error)
 // (status in stderr or a REST error body), else wraps the exit error.
 func ghFailure(op string, res execx.Result, exitErr *execx.ExitError) error {
 	var body struct {
-		Message string `json:"message"`
-		Status  string `json:"status"`
+		Message string            `json:"message"`
+		Status  string            `json:"status"`
+		Errors  []json.RawMessage `json:"errors"`
 	}
 	_ = json.Unmarshal(res.Stdout, &body)
 	status := httpStatus(res.Stderr)
@@ -513,7 +542,31 @@ func ghFailure(op string, res execx.Result, exitErr *execx.ExitError) error {
 		msg = strings.TrimPrefix(msg, "gh: ")
 		msg = strings.TrimSpace(httpStatusRe.ReplaceAllString(msg, ""))
 	}
-	return &APIError{Op: op, Status: status, Message: execx.Redact(msg)}
+	return &APIError{Op: op, Status: status, Message: execx.Redact(msg), Details: restErrorDetails(body.Errors)}
+}
+
+// restErrorDetails reads a REST error body's "errors" entries: a string as
+// it is, an object as its field and its message (else its code).
+func restErrorDetails(raw []json.RawMessage) []string {
+	var out []string
+	for _, r := range raw {
+		var text string
+		if json.Unmarshal(r, &text) != nil {
+			var o struct {
+				Field   string `json:"field"`
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			}
+			if json.Unmarshal(r, &o) != nil {
+				continue
+			}
+			text = strings.TrimSpace(o.Field + " " + cmp.Or(o.Message, o.Code))
+		}
+		if text = strings.TrimSpace(text); text != "" {
+			out = append(out, execx.Redact(text))
+		}
+	}
+	return out
 }
 
 func isNull(raw json.RawMessage) bool {

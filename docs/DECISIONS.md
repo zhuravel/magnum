@@ -1997,3 +1997,34 @@ editing history. Code, config comments and prompts reference these by their head
   merges master (13 commits, ...)") names the commits the merge brought, and an approval's dismissal event still
   counts reviewed...head's commits. Rejected: reading every file without a patch as complete (a patch too large
   to send would read as no change), and comparing such files by path alone (a replaced image would not count).
+- **The judge posts through `magnum post-review`** (2026-10-06). Every round, the judge wrote its own Python script
+  to build the review JSON, check its inline lines against the diff, look for its marker, POST, read the review back
+  and count its comments. On one round that took 2 of the judge's 15 minutes, and a wrong line cost a 422 and a
+  retry. Now the `<magnum>` block carries `post_review`: the daemon's own binary (`paths.Layout.Binary`, so the line
+  outlives a Homebrew upgrade), running `magnum post-review` with every fact of the run as a flag. The flags are the
+  repository, PR, head, run id, reviewer login and former logins, the identity's gh config directory, and
+  `--dry-run` in a dry run. The judge writes `review.json` (event, body, comments) into the report directory and runs
+  the line. The command checks the file: the event, the bodies and GitHub's 65,536-character limit, the sides,
+  `start_line` before `line` on one side, and no footer marker. It appends the run marker when the body lacks it.
+  It checks every inline comment against the PR's diff as GitHub shows it: the patches of `pulls/{n}/files`, both
+  sides, context lines included, a multi-line comment within one hunk. A file without a patch is checked against
+  `git diff` from the merge base of `base.sha` and the head in the current directory. A line nothing can check is
+  kept, and GitHub decides. Next it looks for a review by the reviewer login or a former login that already carries
+  the marker (all pages). Then it posts once, the JSON on gh's stdin (`github.Client.SubmitReview`). A 422 refusing a
+  verdict on the identity's own PR is retried once as `COMMENT`. Another 4xx is `rejected` after a second look for
+  the marker. An unclear failure counts as posted only when a review carrying the marker turns up. Last it reads the
+  review back: author, commit, state, marker, comment count over all pages (`ReviewComments` now pages). It prints
+  one JSON object with a status. Exit 2 means the judge fixes its file: each comment off the diff comes with the
+  valid ranges of its file on that side. The command loads no config, opens no registry (a CLI built with a newer
+  migration could not open it under an older daemon), never contacts the daemon and writes no file.
+  `github.APIError` keeps the `errors` entries of a REST error body as `Details`, so the tool can tell a refused
+  self-verdict from a refused line. Three cases the brief left open, decided here. A blind replay passes
+  `--local-base <base_sha>` with `--dry-run`: the lines are checked against the local `git diff <base_sha>
+  <head_sha>`, as the skill's blind rules require, and nothing is read from GitHub, whose PR may have moved on. A
+  PR whose head moved while the judge worked is checked against GitHub's comparison of its base with the reviewed
+  head, not its newer diff. A flag error exits 1 (status `error`), because 2 asks the judge to fix its file. The
+  skill keeps every judgement rule; its posting mechanics shrink to writing the file, running the line and acting
+  on the exit status. SKILL.md went from 30,839 to 30,308 bytes. The pipeline's verification is unchanged:
+  GitHub, searched by the marker, stays the oracle. Rejected: having the daemon post for the judge (the judge
+  must see a refused line and move it in the same turn); keeping the skill's own read-back next to the tool's (a
+  second source of truth for the same facts).

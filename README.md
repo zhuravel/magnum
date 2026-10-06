@@ -74,7 +74,8 @@ flowchart LR
    read-only simplifier (it proposes simplifications in a report, edits nothing) run in parallel, a
    checkout a role left modified is caught and restored, and the judge gets all reports plus its own
    full pass.
-5. **Post and verify.** The judge posts one review with inline comments and an invisible run marker;
+5. **Post and verify.** The judge posts one review with inline comments and an invisible run marker
+   through `magnum post-review`, which checks every inline comment's line against the PR's diff first;
    Magnum verifies on GitHub that exactly that review by exactly that identity exists for that commit.
 6. **Repeat and clean up.** New commits re-prompt the same sessions. A push while the reviewers still
    run restarts them in place on the new head (at most twice per round); a push while the judge works
@@ -531,6 +532,38 @@ code; `magnum stats` reports them per role. The skill runs unattended: it never 
 (whatever an instruction file says), runs no usage checks, and ends with at most two lines and the
 `MAGNUM_RESULT` line.
 
+The judge writes only the findings; `magnum post-review` does the posting. Its `<magnum>` block names
+the command as `post_review`: the daemon's own binary with every flag filled in (repository, PR, head,
+run id, reviewer login and former logins, the identity's gh config directory, `--dry-run` in a dry
+run), and the review file `review.json` in the report directory. The judge writes
+`{"event": …, "body": …, "comments": [{"path", "line", "side", "start_line", "start_side", "body"}]}`
+there and runs the line, which:
+
+1. checks the file: a known event, bodies that are not empty and fit GitHub's 65,536 characters, sides
+   `RIGHT` (the default) or `LEFT`, a `start_line` before `line` on the same side, no
+   `<!-- magnum:footer -->` (Magnum appends the footer), and appends the run marker when the body lacks
+   it;
+2. checks every inline comment against the PR's diff as GitHub shows it (`pulls/{n}/files`, both sides,
+   context lines included; a multi-line comment within one hunk). A file GitHub sends without a patch
+   is checked against `git diff` from the merge base in the checkout; a line neither can check is kept
+   and GitHub decides. A PR that moved on while the judge worked is checked against its base and the
+   reviewed head. Any line off the diff posts nothing and exits 2, listing each bad comment with the
+   valid line ranges of its file on that side;
+3. looks for a review by the reviewer login (or a former login) that already carries the run's marker,
+   and posts nothing when there is one (`already_posted`);
+4. posts the review once on the reviewed head, the JSON on gh's stdin: a 422 refusing a verdict on the
+   identity's own PR is retried once as `COMMENT` (`event_downgraded`), another refusal is `rejected`,
+   and a failure whose outcome is unclear is settled by looking for the marker again;
+5. reads the review back: author, commit, state, marker and the number of inline comments.
+
+It prints one JSON object on stdout (`posted`, `already_posted`, `dry_run` with the `planned_review`,
+`invalid`, `invalid_anchors`, `rejected`, `error`, `readback_mismatch`) and one line on stderr; exit 0
+is posted, already posted or a dry run, 2 is the judge's file to fix, 1 anything else. It loads no
+config, opens no registry, never talks to the daemon and writes no file, so it works from the judge's
+pane whatever the daemon is doing. A blind replay (`magnum eval`) passes `--local-base <base_sha>`: the
+lines are checked against the local diff of the pinned range and nothing is read from GitHub. Magnum's
+own verification is unchanged: it still finds the review on GitHub by its marker.
+
 What an author gets, every review alike:
 
 - **One verdict line** first: `Blocking: N problem(s) must be fixed before merging.` (a P0 or P1 among
@@ -626,6 +659,7 @@ Fix 1 problem before merging. 1 optional: 1 simplification.
 | `magnum approve <ref> [-m TEXT] [--force]`, `magnum request-changes <ref> [-m TEXT] [--force]` | Your own verdict on the head magnum reviewed, posted by the daemon as the PR's posting identity with a body that names magnum's review and its findings: for repositories where magnum only comments, or when you decide differently. The head must still be the reviewed one unless `--force`. A manual approval follows the head like magnum's own; magnum's later rounds never dismiss a manual verdict as their own stale review. Board keys `A` and `C`. |
 | `magnum ignore <ref>` | Abort, then mute the PR as ignored and free its slot: the daemon never queues it again until `magnum unmute <ref>`, which undoes the ignore. |
 | `magnum notes <repo> [--edit \| --log \| --diff [N] \| --curate \| --review [--reason …] \| --restore <version>] [--json]` | The repository notes every role reads first and the judge rewrites after a round that taught it something (`~/.local/share/magnum/notes/<owner>/<repo>.md`): what the repo is, how to test and QA it, known pitfalls; on stderr their sizes against the `[notes]` curation triggers, the unused harness files and a waiting proposal. `--log` and `--diff` read the history the registry keeps, `--curate` asks for a curation, `--review` applies (y) or rejects (n) a proposal, `--restore` proposes an earlier version (see Repository notes). |
+| `magnum post-review --repo O/N --pr N --head SHA --run-id ID --login L [--former-login L]... [--gh-config-dir DIR] [--dry-run] [--local-base SHA] --review FILE` | For the judge, which runs the `post_review` line of its prompt: check the review file and its inline lines against the PR's diff, post it once and read it back (see The judge skill). Exit 2 means the review file needs fixing. |
 | `magnum cleanup [--dry-run] [--pr <ref>] [--slot <name>] [--orphans [--slug X]] [--shrink] [--external --slot repoN]` | Storage cleanup with a reviewable plan: closed PRs, orphan databases, idle slots, manual worktrees. |
 | `magnum slots [list\|provision\|remove\|repair\|adopt\|pin\|unpin]` | Pool management. `slots pin\|unpin <slot>` is `magnum pin\|unpin <slot>`. |
 | `magnum where <ref>` | `cd $(magnum where 123)`. |
@@ -927,6 +961,7 @@ curate = "weekly"       # also curate every repository with notes once a week
 |---|---|
 | `internal/engine` | The daemon loop: poll, throttle, dispatch, health, release, reconcile, requests from the CLI. |
 | `internal/pipeline` | One review round: reviewers and the simplifier in parallel, the checkout check, judge, verification on GitHub. |
+| `internal/postreview` | `magnum post-review`, the judge's posting tool: check the review and its lines against the diff, post once, read back. |
 | `internal/agents` | Agent sessions in herdr: start, resume, prompt, observe, titles, trust dialogs, health classification. |
 | `internal/slots` | Pool slots and per-PR worktrees: provision, checkout, release, teardown hooks, guards. |
 | `internal/store` | The SQLite registry: PRs, slots, assignments, sessions, runs, events; compare-and-set transitions. |
