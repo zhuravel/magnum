@@ -656,6 +656,69 @@ func TestChangedPaths(t *testing.T) {
 	}
 }
 
+// ModifiedPaths is ChangedPaths without the files the head adds: those have
+// no history on the base.
+func TestModifiedPaths(t *testing.T) {
+	ctx := context.Background()
+	c, f := newFake(outRule("app/a b.rb\x00db/old.rb\x00", "git", "-C", slot, "diff"))
+	got, err := c.ModifiedPaths(ctx, slot, sha1, "HEAD")
+	if err != nil || !slices.Equal(got, []string{"app/a b.rb", "db/old.rb"}) {
+		t.Fatalf("ModifiedPaths = %q, %v", got, err)
+	}
+	cmd := wantCall(t, f, 0, false, "git", "-C", slot, "diff", "--name-only", "-z", "--no-renames", "--diff-filter=a", sha1+"...HEAD", "--")
+	if cmd.Env["GIT_OPTIONAL_LOCKS"] != "0" {
+		t.Errorf("env=%v", cmd.Env)
+	}
+	for _, bad := range [][2]string{{"-x", "y"}, {"a..b", "y"}, {"x", ""}} {
+		if _, err := c.ModifiedPaths(ctx, slot, bad[0], bad[1]); err == nil {
+			t.Errorf("ModifiedPaths(%q, %q) must be refused", bad[0], bad[1])
+		}
+	}
+}
+
+// FileLog reads a file's last commits as NUL-separated fields, so a subject
+// keeps any character but NUL and an empty subject keeps its place; the path
+// is taken literally from the repository's top.
+func TestFileLog(t *testing.T) {
+	ctx := context.Background()
+	out := "abc1234\x002026-09-30\x00Fix flaky mock generation; see \"x\" (#11391)\x00" +
+		"def5678\x002026-09-01\x00\x00"
+	c, f := newFake(outRule(out, "git", "-C", slot, "log"))
+	got, err := c.FileLog(ctx, slot, "origin/master", "spec/support/*.rb", 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Commit{
+		{SHA: "abc1234", Date: "2026-09-30", Subject: "Fix flaky mock generation; see \"x\" (#11391)"},
+		{SHA: "def5678", Date: "2026-09-01"},
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("FileLog = %+v, want %+v", got, want)
+	}
+	cmd := wantCall(t, f, 0, false, "git", "-C", slot, "log", "-n", "8", "-z", "--no-color", "--no-show-signature",
+		"--format=%h%x00%cs%x00%s", "origin/master", "--", ":(top,literal)spec/support/*.rb")
+	if cmd.Env["GIT_OPTIONAL_LOCKS"] != "0" {
+		t.Errorf("env=%v", cmd.Env)
+	}
+
+	c, _ = newFake(outRule("", "git"))
+	if got, err := c.FileLog(ctx, slot, sha1, "app/new.rb", 8); err != nil || len(got) != 0 {
+		t.Fatalf("a file without commits = %+v, %v", got, err)
+	}
+	c, _ = newFake(outRule("abc1234\x002026-09-30\x00", "git"))
+	if _, err := c.FileLog(ctx, slot, sha1, "a.rb", 8); err == nil {
+		t.Error("a record without its subject must be an error")
+	}
+	for _, bad := range []struct {
+		rev, path string
+		n         int
+	}{{"--all", "a.rb", 8}, {"a..b", "a.rb", 8}, {sha1, "", 8}, {sha1, "a.rb", 0}} {
+		if _, err := c.FileLog(ctx, slot, bad.rev, bad.path, bad.n); err == nil {
+			t.Errorf("FileLog(%q, %q, %d) must be refused", bad.rev, bad.path, bad.n)
+		}
+	}
+}
+
 func TestBranchPR(t *testing.T) {
 	ctx := context.Background()
 	c, f := newFake(outRule("11483\n", "git", "-C", slot, "config"))

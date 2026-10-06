@@ -11,6 +11,10 @@ Time budget: {{.Budget}}. Your turn must end with the report written. Start back
 
 Repository notes at {{.NotesPath}}: read them first; they are hints from earlier reviews, verify before relying on them.
 {{- end}}
+{{- if .HistoryFile}}
+
+The last commits on the base branch that touched each changed file are in {{.HistoryFile}}: when one fixed something in the code or mechanism this PR touches, read it (`git show <sha>`) and check the PR does not undo or re-break that fix.
+{{- end}}
 {{- if .PostMerge}}
 
 The PR is already merged; review it anyway.

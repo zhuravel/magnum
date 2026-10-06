@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -627,6 +628,54 @@ type fakeGit struct {
 	// ancestors are the commits MergeBase reports as ancestors of any
 	// other; every other pair has no merge base.
 	ancestors map[string]bool
+	// modified is what ModifiedPaths answers (the PR's files on its base),
+	// logs each path's commits, newest first, which FileLog cuts to n, and
+	// logErr fails every FileLog. diffs ("<base>...<head>") and logged
+	// ("<rev> <n> <path>") record the calls.
+	modified []string
+	logs     map[string][]gitx.Commit
+	logErr   error
+	diffs    []string
+	logged   []string
+	// logHangs makes FileLog wait for its context, as a git log walking a
+	// big repository's whole history does (at most 10 seconds).
+	logHangs bool
+}
+
+func (g *fakeGit) ModifiedPaths(ctx context.Context, dir, base, head string) ([]string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.diffs = append(g.diffs, base+"..."+head)
+	return slices.Clone(g.modified), nil
+}
+
+func (g *fakeGit) FileLog(ctx context.Context, dir, rev, path string, n int) ([]gitx.Commit, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.logged = append(g.logged, fmt.Sprintf("%s %d %s", rev, n, path))
+	if g.logErr != nil {
+		return nil, g.logErr
+	}
+	if g.logHangs {
+		g.mu.Unlock()
+		defer g.mu.Lock()
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("fake log %s: %w", rev, ctx.Err())
+		case <-time.After(10 * time.Second):
+			return nil, errors.New("fake log: never cancelled")
+		}
+	}
+	cs := g.logs[path]
+	return slices.Clone(cs[:min(n, len(cs))]), nil
+}
+
+// gitCalls returns the recorded ModifiedPaths and FileLog calls, the latter
+// sorted (FileLog runs in parallel).
+func (g *fakeGit) gitCalls() (diffs, logged []string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return slices.Clone(g.diffs), slices.Sorted(slices.Values(g.logged))
 }
 
 func (g *fakeGit) MergeBase(ctx context.Context, dir, a, b string) (string, error) {

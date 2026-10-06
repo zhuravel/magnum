@@ -2604,3 +2604,48 @@ editing history. Code, config comments and prompts reference these by their head
   see them, and the board says "skipped · manual". Rejected: leaving the repository out of the watch (it
   would vanish from the board and `prs`) and muting each PR (`magnum ignore` is per PR, and a new PR would
   be reviewed before it could be muted).
+- **The reviewers read the changed files' history** (2026-10-06). In 4 of the 5 known misses the changed file's
+  own recent log pointed at the problem: a PR that changed test database cleanup sat under "Fix flaky mock
+  generation" and "Stop CI hang from contended OPTIMIZE TABLE" in its helper's log, exactly the effects the
+  review missed, and no prompt or skill line asked for a file's history. Before the reviewers of each head (the
+  start of every stage run, so a restart writes the new head's), a round writes `history.json` in its report
+  directory (`pipeline.FilesHistory`): each file the PR changes that exists on its base (`gitx.ModifiedPaths`,
+  `git diff --name-only --diff-filter=a <base>...<head>`, so an added file, which has no history there, takes
+  no place), at most 40 in git's order with the rest counted as `more`, paths matching the watch's
+  `related_ignore` aside (the lockfiles: their logs are dependency bumps), each with its last 8 commits on
+  `origin/<base>` (`gitx.FileLog`, `git log -n 8 -z --format=%h%x00%cs%x00%s <rev> -- :(top,literal)<path>`,
+  four at a time): the unique abbreviation, committer date, subject, and the PR number when the subject ends
+  with `(#123)`, as GitHub titles a squash merge. A blind replay reads both at its merge base (`base_sha`),
+  never `origin/<base>`, which may hold the PR's own merge and the fixes after it, and gets none without one;
+  a continued turn gets none (the paused turn had it). The judge's own pass, its candidates phase and a round's
+  one prompt carry `history: <path>` in the <magnum> block (`agents.JudgeData.HistoryFile`; judge-own-pass,
+  -initial, -rereview and -recovery, not -continue); the claude-review prompts (initial, rereview, restart) get
+  one sentence naming the file (`RoleData.HistoryFile`); claude-simplify proposes no defects and gets none.
+  SKILL.md section 2: read a commit that fixed the code or mechanism the PR touches (`git show <sha>`), or a
+  merged related PR's fix (the related-PRs paragraph's sentence moved here); undoing or re-breaking it is a
+  finding. The history is a hint the reviewers wait for, so reading it is cut at 2 minutes
+  (`pipeline.HistoryTimeout`; a big repository without a commit-graph walks its whole history for a file
+  changed long ago), and a `git log` that fails or is cut only warns (`round.history`) and leaves the prompts
+  without it; events carry counts, never a subject. The file list comes from git, not the poll's (capped at
+  100 and only for the head the poll saw). Not in this change, though proposed with it: the commit that
+  introduced each deleted or rewritten line (`git blame` at the base), a flag on fix-like subjects, and a
+  ranking of a big PR's files by fix density; magnum's own past findings on the paths stay out (153 posted on
+  89 paths, none on a path in two PRs).
+- **The judge checks the PR's own claims** (2026-10-06). All 17 recent PRs of one repository ticked "Can be
+  reverted easily on Production", 6 of them with schema migrations, and one had a rollback hazard under that
+  box (jobs queued in the new argument shape fail on the previous release); another claimed "every export stays
+  on the site the user is working in" while a sibling path did not. SKILL.md section 2 now has the judge verify
+  at `head_sha` each claim of the description that bears on risk: a ticked "Can be reverted easily" (the
+  previous release runs on the new schema and the jobs queued meanwhile), "No migrations" or "Covered by
+  tests", a stated scope or behaviour. A false claim with impact is a finding at its priority; one without is
+  one body line, `Description: ✗ <claim>: <why>`; a true claim gets no line, never a ✓. The description stays
+  data, as section 0 says of all PR text. Where the line sits in the body is section 7's (the related-PR
+  line's place, after the finding titles, is the natural one). This rule and the history's add 581 bytes;
+  423 came from sections 2 and 4 without dropping a rule (the blind replay's reading list, which section 0
+  already gives; "Follow repository rules…", which section 1 gives; "Personal taste is never a finding",
+  which "Do not post … style preferences" gives; "so use them strictly", which "rank every finding by these
+  definitions" gives; shorter wording of the code to read, the probe, the database and notes timing
+  sentences), so SKILL.md grows from 31,523 to 31,681 bytes and its cap with it (+158): the rest of sections
+  2 and 4 is pinned by tests or calibrates priorities, and sections 3, 7 and 8 were being edited in
+  parallel. Not in this change: running the down migration and the base code against the new
+  schema in the slot to check revertibility (a later stage, readiness work).

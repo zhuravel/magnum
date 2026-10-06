@@ -697,3 +697,57 @@ func TestRealTreeFilesMatchesLikeChangedPaths(t *testing.T) {
 		t.Fatalf("TreeFiles of a missing ref: err = %v, want ErrNoSuchRef", err)
 	}
 }
+
+// FileLog lists the commits of a revision that changed one file, newest
+// first and at most n, never one that only another branch or a later base
+// has, and takes the path literally; ModifiedPaths leaves out the files the
+// head adds, which have no history on the base.
+func TestRealFileLogAndModifiedPaths(t *testing.T) {
+	fx := newFixture(t)
+	ctx := context.Background()
+	dir := fx.origin
+	fx.commit(dir, "lib/x.rb", "1\n", "Add x")
+	fx.commit(dir, "lib/x.rb", "2\n", "Fix flaky x (#12)")
+	fx.commit(dir, "lib/y.rb", "y\n", "Add y")
+	tune := fx.commit(dir, "lib/x.rb", "3\n", "Tune x")
+	fx.git(dir, "checkout", "--quiet", "-b", "feature")
+	fx.commit(dir, "lib/x.rb", "4\n", "Feature changes x")
+	fx.commit(dir, "lib/new.rb", "n\n", "Feature adds new")
+	fx.git(dir, "rm", "--quiet", "lib/y.rb")
+	fx.git(dir, "commit", "--quiet", "-m", "Feature drops y")
+	fx.git(dir, "checkout", "--quiet", "main")
+	fx.commit(dir, "lib/x.rb", "5\n", "Later fix (#20)")
+
+	got, err := fx.c.ModifiedPaths(ctx, dir, "main", "feature")
+	if err != nil || !slices.Equal(got, []string{"lib/x.rb", "lib/y.rb"}) {
+		t.Fatalf("ModifiedPaths = %q, %v; want lib/x.rb and lib/y.rb, not the added lib/new.rb", got, err)
+	}
+	subjects := func(cs []Commit) []string {
+		var out []string
+		for _, c := range cs {
+			out = append(out, c.Subject)
+		}
+		return out
+	}
+	log, err := fx.c.FileLog(ctx, dir, "main", "lib/x.rb", 2)
+	if err != nil || !slices.Equal(subjects(log), []string{"Later fix (#20)", "Tune x"}) {
+		t.Fatalf("FileLog(main, 2) = %+v, %v", log, err)
+	}
+	if c := log[1]; !strings.HasPrefix(tune, c.SHA) || len(c.SHA) < 7 || len(c.Date) != len("2026-10-06") || c.Date[4] != '-' {
+		t.Fatalf("commit = %+v, want an abbreviation of %s and a YYYY-MM-DD date", c, tune)
+	}
+	log, err = fx.c.FileLog(ctx, dir, tune, "lib/x.rb", 8)
+	if want := []string{"Tune x", "Fix flaky x (#12)", "Add x"}; err != nil || !slices.Equal(subjects(log), want) {
+		t.Fatalf("FileLog(base, 8) = %q, %v; want %q", subjects(log), err, want)
+	}
+	if log, err := fx.c.FileLog(ctx, dir, "main", "lib/*.rb", 8); err != nil || len(log) != 0 {
+		t.Fatalf("FileLog of the literal lib/*.rb = %+v, %v; want none", log, err)
+	}
+	// Each record ends in NUL, so an empty last subject keeps its place.
+	fx.write(dir, "lib/z.rb", "z\n")
+	fx.git(dir, "add", "--", "lib/z.rb")
+	fx.git(dir, "commit", "--quiet", "--allow-empty-message", "-m", "")
+	if log, err := fx.c.FileLog(ctx, dir, "main", "lib/z.rb", 8); err != nil || len(log) != 1 || log[0].Subject != "" || log[0].SHA == "" {
+		t.Fatalf("FileLog of a commit without a message = %+v, %v", log, err)
+	}
+}

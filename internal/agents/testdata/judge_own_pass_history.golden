@@ -1,0 +1,25 @@
+[$magnum-review](/Users/bohdan/Projects/magnum/skills/magnum-review/SKILL.md) Start your own pass on https://github.com/talkable/talkable/pull/11920 now, while magnum's reviewer roles work: `phase: own_pass` in the skill. Write it to /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/judge-own.md, post nothing, then end your turn; their reports follow in the next prompt.
+magnum checked out the PR head `d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3` (detached) in this directory.
+
+<magnum>
+mode: initial
+phase: own_pass
+run_id: r-20261003T120000-7
+pr: talkable/talkable#11920
+url: https://github.com/talkable/talkable/pull/11920
+owner: talkable
+repo: talkable
+number: 11920
+head_sha: d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3
+base_ref: master
+base_sha: 0123456789abcdef0123456789abcdef01234567
+checkout: /Users/bohdan/Projects/talkable.review3
+identity: app
+reviewer_login: talkable[bot]
+gh_config_dir: /Users/bohdan/Projects/magnum/state/gh/talkable-app
+self_authored: false
+related_prs: /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/related.json
+history: /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/history.json
+own_findings: /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/judge-own.md
+dry_run: false
+</magnum>

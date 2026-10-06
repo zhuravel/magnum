@@ -489,6 +489,20 @@ func (c *Client) FileDiff(ctx context.Context, dir, base, head, path string) (st
 // Renames are reported as a deletion plus an addition so a move out of a
 // watched directory still shows up. The result is nil when nothing matches.
 func (c *Client) ChangedPaths(ctx context.Context, dir, base, head string, pathspecs ...string) ([]string, error) {
+	return c.diffNames(ctx, dir, base, head, nil, pathspecs)
+}
+
+// ModifiedPaths is ChangedPaths without the files head adds: the paths that
+// exist at the merge base and that head modifies, deletes or changes the
+// type of (a rename counts as the deletion of its old path), whose history
+// the base holds.
+func (c *Client) ModifiedPaths(ctx context.Context, dir, base, head string) ([]string, error) {
+	return c.diffNames(ctx, dir, base, head, []string{"--diff-filter=a"}, nil)
+}
+
+// diffNames lists the paths of `git diff --name-only base...head`, opts
+// after the fixed options and pathspecs after "--".
+func (c *Client) diffNames(ctx context.Context, dir, base, head string, opts, pathspecs []string) ([]string, error) {
 	for _, rev := range []string{base, head} {
 		if err := checkRev("revision", rev); err != nil {
 			return nil, err
@@ -497,7 +511,8 @@ func (c *Client) ChangedPaths(ctx context.Context, dir, base, head string, paths
 			return nil, fmt.Errorf("gitx: revision %q must not be a range", rev)
 		}
 	}
-	args := append([]string{"diff", "--name-only", "-z", "--no-renames", base + "..." + head, "--"}, pathspecs...)
+	args := append([]string{"diff", "--name-only", "-z", "--no-renames"}, opts...)
+	args = append(append(args, base+"..."+head, "--"), pathspecs...)
 	res, err := c.git(ctx, dir, call{label: fmt.Sprintf("diff --name-only %s...%s", base, head)}, args...)
 	if err != nil {
 		var ee *execx.ExitError
@@ -513,6 +528,50 @@ func (c *Client) ChangedPaths(ctx context.Context, dir, base, head string, paths
 		}
 	}
 	return paths, nil
+}
+
+// Commit is one commit of a file's log (FileLog).
+type Commit struct {
+	SHA     string // git's unique abbreviation of the commit id
+	Date    string // the committer date, YYYY-MM-DD
+	Subject string // the message's subject line ("" when the message is empty)
+}
+
+// FileLog returns the last n commits reachable from rev that changed path,
+// newest first (git log -n <n> <rev> -- path, with git's default history
+// simplification: a merge shows only when it changed the file against
+// every parent; path is relative to the repository's top and taken
+// literally). A path rev never had has no commits.
+func (c *Client) FileLog(ctx context.Context, dir, rev, path string, n int) ([]Commit, error) {
+	if err := checkRev("revision", rev); err != nil {
+		return nil, err
+	}
+	if strings.Contains(rev, "..") {
+		return nil, fmt.Errorf("gitx: revision %q must not be a range", rev)
+	}
+	if path == "" || n <= 0 {
+		return nil, fmt.Errorf("gitx: log needs a path and a positive count (path %q, n %d)", path, n)
+	}
+	res, err := c.git(ctx, dir, call{label: "log " + rev},
+		"log", "-n", strconv.Itoa(n), "-z", "--no-color", "--no-show-signature", "--format=%h%x00%cs%x00%s",
+		rev, "--", ":(top,literal)"+path)
+	if err != nil {
+		return nil, err
+	}
+	out := string(res.Stdout)
+	if out == "" {
+		return nil, nil
+	}
+	// Each commit is "<sha> NUL <date> NUL <subject>", NUL-terminated (-z).
+	f := strings.Split(strings.TrimSuffix(out, "\x00"), "\x00")
+	if len(f)%3 != 0 {
+		return nil, fmt.Errorf("gitx: log %s: unexpected output of %d fields", rev, len(f))
+	}
+	commits := make([]Commit, 0, len(f)/3)
+	for i := 0; i < len(f); i += 3 {
+		commits = append(commits, Commit{SHA: f[i], Date: f[i+1], Subject: f[i+2]})
+	}
+	return commits, nil
 }
 
 // Empty tree ids of the two object formats: TreeFiles diffs a commit against

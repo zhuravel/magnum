@@ -151,13 +151,16 @@ type GitHub interface {
 }
 
 // Git is the subset of *gitx.Client the checkout check after each stage
-// (and its restore) uses, and a restart's check that a head is not an older
-// one (MergeBase).
+// (and its restore) uses, a restart's check that a head is not an older
+// one (MergeBase), and the changed files' history (ModifiedPaths, FileLog;
+// history.go).
 type Git interface {
 	RevParse(ctx context.Context, dir, ref string) (string, error)
 	SwitchDetach(ctx context.Context, dir, ref string) error
 	Status(ctx context.Context, dir string) (gitx.Status, error)
 	MergeBase(ctx context.Context, dir, a, b string) (string, error)
+	ModifiedPaths(ctx context.Context, dir, base, head string) ([]string, error)
+	FileLog(ctx context.Context, dir, rev, path string, n int) ([]gitx.Commit, error)
 }
 
 // Keys interrupts a timed-out role (esc to an agent, ctrl+c twice to the
@@ -315,7 +318,8 @@ type RoundInput struct {
 	OwnPass bool
 	// Related is the PR's watch's related_lookback and related_ignore
 	// (config.Config.RelatedFor): every judge prompt names related.json, the
-	// repository's other PRs that change the same paths (related.go).
+	// repository's other PRs that change the same paths (related.go), and
+	// history.json leaves out the paths related_ignore lists (history.go).
 	Related config.Related
 }
 
@@ -492,6 +496,10 @@ type round struct {
 	// tree is the checkout as the stages found it (checkout.go); read and
 	// written only between stages.
 	tree *treeState
+	// historyFile is the head under review's history.json (history.go),
+	// which the reviewer and judge prompts name; "" = none. Written before
+	// the stages of each head, when no role runs.
+	historyFile string
 	// ownFindings is the file of the judge's own pass once its prompt
 	// reached the judge (ownpass.go): the candidates prompt starts from it;
 	// "" = the judge gets one prompt. Guarded by mu; a restart resets it.

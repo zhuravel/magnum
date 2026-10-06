@@ -79,6 +79,8 @@ The author answers on the thread (`fixed`, `not a bug: <why>`, `won't fix: <why>
 re-reviewed against those answers. A P1 or P2 problem the judge proved next to the PR's changes that the
 PR did not bring is not a finding: up to three go into a collapsed "Found nearby, not this PR's" block
 before Checks, one line each, never counted in the verdict (a security one only into `magnum debt`).
+A false claim of the description that bears on risk (a ticked "Can be reverted easily" the previous
+release cannot keep) is a finding, or one `Description: ✗ <claim>: <why>` line when it harms nothing.
 [The judge skill](#the-judge-skill) has the full format.
 
 ## How it works
@@ -616,6 +618,18 @@ in one line of its review, raise a finding only when merging both provably break
 the PR does not undo what a recently merged one fixed, and record a flaky-test or recurring-bug pattern
 in the repository notes. A blind replay (`magnum eval`) never gets the file: it would tell of later PRs.
 
+The reviewers also get the changed files' history, since in 4 of 5 misses traced the changed file's own
+recent log named the fix the PR undid. Before the reviewers of each head, Magnum writes `history.json` in
+the report directory: each file the PR changes that exists on its base (at most 40, in git's order, paths
+matching `related_ignore` aside) with its last 8 commits on `origin/<base>`, each with its short SHA,
+date, subject and the PR number a subject ending in `(#123)` names, read with `git log` in the checkout.
+The judge's prompts (the own pass, the candidates phase, a round's one prompt) name it as `history`, the
+claude-review prompts in one sentence; the judge reads a commit that fixed the code or mechanism the PR
+touches (`git show <sha>`), and a PR that undoes or re-breaks that fix gets a finding. A restart writes
+the new head's; a blind replay reads the logs at its merge base, never anything newer; a continued turn
+gets none, and a `git log` that fails or takes more than 2 minutes in all only leaves the prompts without
+it (a `round.history` warning).
+
 A session role's turn ends when herdr shows its agent idle on two ticks in a row. Claude Code also ends
 its turn while work it started in the background runs (a command run in the background or moved there by
 its timeout, an asynchronous subagent, a skill forked into the background such as `/code-review`) and
@@ -739,7 +753,10 @@ write a machine-readable result. It reads every caller of a method whose behavio
 generators and scripts included, lists what a replaced mechanism (DELETE for TRUNCATE, another library)
 did implicitly and checks each effect against those callers, probes the real engine while it looks,
 weighs the candidates a reviewer rejected itself, replays a chance test failure to state its rate, and
-counts developers' time (local runs that diverge from CI, a new flaky test) as harm. In re-review mode magnum hands it the threads its login started with
+counts developers' time (local runs that diverge from CI, a new flaky test) as harm. It reads the
+changed files' recent commits (`history`) and checks that the PR does not undo or re-break an earlier
+fix, and it verifies the description's claims that bear on risk (a ticked "Can be reverted easily",
+"No migrations" or "Covered by tests", a stated scope or behaviour) at the reviewed head. In re-review mode magnum hands it the threads its login started with
 every reply classified by its first clause, after an opening "Good catch", "Valid" or "Noted" (`fixed`,
 `not a bug`, `won't fix`; a reply that scores the fix below zero, or says "not worth it" or "we accept the
 risk", declines it); the judge decides a reply by what it does, not by that hint, accepts a fix
@@ -800,6 +817,10 @@ What an author gets, every review alike:
   the trigger, who can produce it and the concrete consequence; a test that proves it as a fenced block
   naming its spec file and line; **Fix** with the code cause and the smallest safe change (a `suggestion`
   is only ever the code fix).
+- **The description's claims checked**: a false claim that bears on risk (a ticked "Can be reverted
+  easily" whose previous release cannot run on the new schema or the jobs queued meanwhile) is a finding
+  at its priority; one without impact is one body line, `Description: ✗ <claim>: <why>`; a true claim
+  gets no line.
 - **Priority by reachability**: P2 is a defect that real use or an attacker reaches, with harm beyond the
   triggering request; one that only crafted input or a stack of unlikely preconditions reaches, harming
   only that request, is P3. A size or timing trigger states its threshold and why real data reaches it.

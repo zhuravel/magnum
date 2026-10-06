@@ -726,6 +726,13 @@ type JudgeData struct {
 	// never PR text), rendered as `related_prs`; "" when there is none, and
 	// always in a blind replay.
 	RelatedPRs string
+	// HistoryFile is history.json in the report directory: each file the PR
+	// changes (at most 40, related_ignore's paths aside) with its last 8
+	// commits on the base (pipeline.FilesHistory), rendered as `history` by
+	// the own pass and the initial, rereview and recovery prompts; "" when
+	// magnum wrote none (no file of the PR on the base, a continued turn, a
+	// git failure).
+	HistoryFile string
 }
     JudgeData feeds every judge prompt (judge-*.md). Fields a template does not
     use may stay zero.
@@ -1335,6 +1342,10 @@ type RoleData struct {
 	// NotesPath is the repository notes file the role reads first (hints from
 	// earlier reviews of the repository); "" = no notes.
 	NotesPath string
+	// HistoryFile is history.json in the report directory, the changed
+	// files' last commits on the base (see JudgeData.HistoryFile): the claude
+	// reviewer prompts name it in one sentence; "" = none.
+	HistoryFile string
 	// Blind: an evaluation replay (pipeline.RoundInput.Blind); the role
 	// must not read reviews, comments or commits after HeadSHA.
 	Blind bool
@@ -3003,8 +3014,9 @@ type Pipeline struct {
 	// only). A [[watch]] may override it (Watch.RelatedLookback).
 	RelatedLookback Duration `toml:"related_lookback"`
 	// RelatedIgnore are path globs (see MatchPath) whose paths never make
-	// two PRs related (default DefaultRelatedIgnore, the lockfiles; [] =
-	// none). A [[watch]] may override it (Watch.RelatedIgnore).
+	// two PRs related and that the changed files' history.json leaves out
+	// (default DefaultRelatedIgnore, the lockfiles; [] = none). A [[watch]]
+	// may override it (Watch.RelatedIgnore).
 	RelatedIgnore []string `toml:"related_ignore"`
 }
     Pipeline is the [pipeline] section.
@@ -6261,6 +6273,13 @@ func (c *Client) FileDiff(ctx context.Context, dir, base, head, path string) (st
     the hunks (an external diff, textconv, a context size). "" when the file did
     not change; a binary file has a header and no hunks.
 
+func (c *Client) FileLog(ctx context.Context, dir, rev, path string, n int) ([]Commit, error)
+    FileLog returns the last n commits reachable from rev that changed path,
+    newest first (git log -n <n> <rev> -- path, with git's default history
+    simplification: a merge shows only when it changed the file against every
+    parent; path is relative to the repository's top and taken literally).
+    A path rev never had has no commits.
+
 func (c *Client) FindClone(ctx context.Context, cloneRoot, owner, name string) (string, error)
     FindClone returns the main clone of github.com/<owner>/<name> under
     cloneRoot (an absolute, already expanded directory). Candidates are tried
@@ -6285,6 +6304,12 @@ func (c *Client) LsRemote(ctx context.Context, dir string, timeout time.Duration
 
 func (c *Client) MergeBase(ctx context.Context, dir, a, b string) (string, error)
     MergeBase returns the best common ancestor of a and b, or ErrNoMergeBase.
+
+func (c *Client) ModifiedPaths(ctx context.Context, dir, base, head string) ([]string, error)
+    ModifiedPaths is ChangedPaths without the files head adds: the paths that
+    exist at the merge base and that head modifies, deletes or changes the type
+    of (a rename counts as the deletion of its old path), whose history the base
+    holds.
 
 func (c *Client) OwnerUsesSSH(ctx context.Context, cloneRoot, owner string) (bool, error)
     OwnerUsesSSH reports whether a clone directly under cloneRoot of any
@@ -6382,6 +6407,13 @@ type CloneOptions struct {
 	CredentialHelper string
 }
     CloneOptions adjust Clone.
+
+type Commit struct {
+	SHA     string // git's unique abbreviation of the commit id
+	Date    string // the committer date, YYYY-MM-DD
+	Subject string // the message's subject line ("" when the message is empty)
+}
+    Commit is one commit of a file's log (FileLog).
 
 type Remote struct {
 	Host  string // lower-cased, e.g. github.com
@@ -8940,6 +8972,9 @@ const DeltaCheckFile = "delta-check.json"
     DeltaCheckFile is the delta check's file list in the round's report
     directory.
 
+const HistoryFile = "history.json"
+    HistoryFile is the changed files' history in the round's report directory.
+
 const PostMergeEvent = "COMMENT"
     PostMergeEvent is the review event of a post-merge round
     (RoundInput.PostMerge), with or without findings.
@@ -8952,6 +8987,11 @@ VARIABLES
 
 var ErrInvalid = errors.New("pipeline: invalid round")
     ErrInvalid marks a RoundInput or Runner that cannot run a round.
+
+var HistoryTimeout = 2 * time.Minute
+    HistoryTimeout bounds reading the history: it is a hint, and the reviewers
+    wait for it (a big repository without a commit-graph walks its whole history
+    for a file changed long ago).
 
 
 FUNCTIONS
@@ -9020,15 +9060,35 @@ type DeltaFile struct {
     DeltaFile is a file of a delta check. Binary: modified without a patch (an
     image, a font), counted as 0 lines.
 
+type FileHistory struct {
+	Path    string          `json:"path"`
+	Commits []HistoryCommit `json:"commits"` // newest first, at most 8
+}
+    FileHistory is one changed file of FilesHistory.
+
+type FilesHistory struct {
+	PR      string `json:"pr"`       // owner/repo#N
+	HeadSHA string `json:"head_sha"` // the head under review, whose changed files are listed
+	// Base is the revision the logs were read at: origin/<base branch>, or
+	// the merge base in a blind replay.
+	Base  string        `json:"base"`
+	Files []FileHistory `json:"files"`
+	More  int           `json:"more,omitempty"` // changed files past the cap of 40
+}
+    FilesHistory is history.json.
+
 type Git interface {
 	RevParse(ctx context.Context, dir, ref string) (string, error)
 	SwitchDetach(ctx context.Context, dir, ref string) error
 	Status(ctx context.Context, dir string) (gitx.Status, error)
 	MergeBase(ctx context.Context, dir, a, b string) (string, error)
+	ModifiedPaths(ctx context.Context, dir, base, head string) ([]string, error)
+	FileLog(ctx context.Context, dir, rev, path string, n int) ([]gitx.Commit, error)
 }
-    Git is the subset of *gitx.Client the checkout check after each stage (and
-    its restore) uses, and a restart's check that a head is not an older one
-    (MergeBase).
+    Git is the subset of *gitx.Client the checkout check after each stage
+    (and its restore) uses, a restart's check that a head is not an older
+    one (MergeBase), and the changed files' history (ModifiedPaths, FileLog;
+    history.go).
 
 type GitHub interface {
 	ReviewsWithMarker(ctx context.Context, owner, repo string, number int, marker string) ([]github.Review, error)
@@ -9039,6 +9099,14 @@ type GitHub interface {
     GitHub is the subset of *github.Client a round uses. It must act as
     the round's Identity (Env from Identity.Env), because DismissReview and
     UpdateReviewBody write.
+
+type HistoryCommit struct {
+	SHA     string `json:"sha"`  // git's unique abbreviation
+	Date    string `json:"date"` // the committer date, YYYY-MM-DD
+	Subject string `json:"subject"`
+	PR      int    `json:"pr,omitempty"` // the PR a subject ending in "(#123)" names
+}
+    HistoryCommit is one commit of a FileHistory.
 
 type Keys interface {
 	AgentSendKeys(ctx context.Context, target string, keys ...string) error
@@ -9267,7 +9335,8 @@ type RoundInput struct {
 	OwnPass bool
 	// Related is the PR's watch's related_lookback and related_ignore
 	// (config.Config.RelatedFor): every judge prompt names related.json, the
-	// repository's other PRs that change the same paths (related.go).
+	// repository's other PRs that change the same paths (related.go), and
+	// history.json leaves out the paths related_ignore lists (history.go).
 	Related config.Related
 }
     RoundInput describes one round. The slot is already checked out at TargetSHA

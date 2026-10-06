@@ -76,6 +76,9 @@ notes_unlock: {{.NotesUnlockCommand}}
 {{- if .RelatedPRs}}
 related_prs: {{.RelatedPRs}}
 {{- end}}
+{{- if .HistoryFile}}
+history: {{.HistoryFile}}
+{{- end}}
 {{- if .OwnFindings}}
 own_findings: {{.OwnFindings}}
 {{- end}}

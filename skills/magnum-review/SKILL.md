@@ -62,9 +62,9 @@ The GitHub PR diff is the review boundary: review only its committed changes. Ne
 
 ## 2. Read all relevant code
 
-Read the PR data: description, every commit, the full diff, all existing review comments and their replies (with `blind: true`: the description, the commits up to `head_sha` and the local diff only).
+Read the PR data: description, every commit, the full diff, all existing review comments and their replies. Verify at `head_sha` each claim of the description that bears on risk: a ticked "Can be reverted easily" (the previous release runs on the new schema and queued jobs), "No migrations" or "Covered by tests"; a stated scope or behaviour. A false one with impact is a finding at its priority, else one body line `Description: ✗ <claim>: <why>`; never a ✓ line.
 
-Read the code: every changed file, enough nearby code to understand each change, relevant callers and callees, schemas, configuration, tests and helpers. Trace the relevant data flow. For a method whose behaviour changed, signature or not, read every caller, non-production ones too (fixtures, factories, seeds, mock generators, test helpers, scripts, rake tasks), and what consumes their output (generated files, snapshots, local runs, not only CI). For a stacked PR, use lower-layer code only as context: report no problem in it, only a broken interaction this PR creates with it.
+Read the code: every changed file, the code around each change, its callers and callees, schemas, configuration, tests and helpers; trace the data flow. For a method whose behaviour changed, signature or not, read every caller, non-production ones too (fixtures, factories, seeds, mock generators, test helpers, scripts, rake tasks), and what consumes their output (generated files, snapshots, local runs, not only CI). For a stacked PR, use lower-layer code only as context: report no problem in it, only a broken interaction this PR creates with it.
 
 Look for wrong behavior or regressions; realistic edge cases and failure paths; authorization, security, privacy and data integrity; concurrency, retries, idempotency and transactions; performance and scaling; databases, shards, migrations and compatibility; broken repository rules or existing patterns; missing tests for changed business behavior.
 
@@ -72,17 +72,19 @@ Structure can hide a defect: a silent fallback or cast over an unclear invariant
 
 When the PR swaps a mechanism for a near-equivalent (DELETE for TRUNCATE, another library or API, sync for async, eager for lazy), list what the old one did implicitly (counters such as auto-increment ids, caches, statistics, ordering, locks, side effects, errors) and check each against every caller.
 
-Probe the real engine and framework while you look, not only to prove a finding (a scratch table, the test runner, a console in the checkout); run any focused check that can prove or reject a candidate.
+Probe the real engine and framework while you look (a scratch table, the test runner, a console in the checkout); run any focused check that can prove or reject a candidate.
 
-Search for existing helpers before you suggest new code. Follow repository rules for tests, databases, generated files and dependencies.
+Search for existing helpers before you suggest new code.
 
-Databases: this worktree owns only its own suffixed databases (`WT_BRANCH` is already exported). Focused specs and scratch tables (dropped after) are allowed there. Never run `db:drop`, `db:create`, `db:setup` or a full test suite.
+Databases: this worktree owns only its own suffixed databases (`WT_BRANCH` is exported); focused specs and scratch tables (dropped after) are allowed there. Never run `db:drop`, `db:create`, `db:setup` or a full test suite.
 
 Repository notes (`notes`): read them first and verify a hint before relying on it; `notes_dir` holds their QA scripts.
 
-Related PRs (`related_prs`): an open one changing the same behaviour (a duplicate or competing fix, conflicting edits, one needing the other) gets one body line naming it; a finding only when merging both provably breaks something. For a merged one, check this PR does not undo or re-break its fix. A fix of a flaky test or a recurring bug class: record the pattern in the notes.
+Related PRs (`related_prs`): an open one changing the same behaviour (a duplicate or competing fix, conflicting edits, one needing the other) gets one body line naming it; a finding only when merging both provably breaks something. A fix of a flaky test or a recurring bug class: record the pattern in the notes.
 
-When the round taught you something durable, update the notes after the review is read back (or found already posted; with `dry_run: true`, after the planned review is built), before you write `result_file`. Other PRs' judges update it at the same time, so:
+History (`history`): each changed file's last commits on the base. If one, or a merged related PR, fixed the code or mechanism this PR touches, read it (`git show <sha>`): undoing or re-breaking that fix is a finding.
+
+When the round taught you something durable, update the notes after the review is posted or found posted (`dry_run: true`: planned), before you write `result_file`. Other PRs' judges update it at the same time, so:
 
 1. Run `notes_lock`. It prints `notes locked`, or `notes busy` after three minutes: then skip the notes this round.
 2. Read `notes` again and merge your lessons into that text: keep every standing decision and harness reference another review wrote, unless you proved it wrong.
@@ -116,14 +118,14 @@ Report only a problem that this PR introduces or exposes. For each finding, prov
 
 Reachability decides the priority: name who produces the trigger (a user in normal use, an API caller, an attacker, a job), every precondition it needs, and how far it fails (the triggering request, one account, every tenant). A size, count or timing trigger states its threshold and why real data reaches it. A test failure or flake the PR brings is not `speculative` or `not_reproducible` without evidence against it: replay the input space (ids, seeds, orderings) and state its rate; one green run proves nothing. A reproduction proves a path exists, not that it matters: a fixture far past realistic sizes, or a test double that allows an ordering, timing or limit the real component forbids, proves nothing; check the real component. When a code comment, the PR description or an earlier reply calls the behaviour deliberate, answer that reason or drop the finding; that reason covers only the consequences it names.
 
-Priorities decide the verdict (section 7), so use them strictly. A candidate report's priority is a claim like any other; rank every finding by these definitions:
+Priorities decide the verdict (section 7). A candidate report's priority is a claim like any other; rank every finding by these definitions:
 
 - `P1` blocks the merge: wrong behaviour on a realistic path, a security or privacy hole, data loss or corruption, a broken build, migration or deploy. Examples: an OAuth callback that skips the HMAC check when the signature header is missing; a migration that drops a column the deployed code still reads.
 - `P2` should be fixed before the merge: a real defect on an edge path that real use or an attacker reaches, with harm beyond the triggering request; or missing tests for changed business behaviour. Examples: a retry that sends the email twice when the first attempt times out; a new query per row on an admin page.
 - `P3` optional: a small real defect the author may leave as is. Examples: an error message that names the wrong field; an expected condition logged at error level; a failure only crafted input or a stack of unlikely preconditions reaches, harming only that request.
 - `P0` is a `P1` that does broad damage as soon as it deploys (rare).
 
-Harm includes developers' time: local runs that diverge from CI, generated files that change, a new flaky test; `P1` when it breaks their normal work. Personal taste is never a finding at any priority.
+Harm includes developers' time: local runs that diverge from CI, generated files that change, a new flaky test; `P1` when it breaks their normal work.
 
 Then read the full PR diff again: check that you inspected every file and that each finding belongs to this PR. Stop only when a pass finds no new material problem.
 

@@ -299,6 +299,17 @@ func TestRenderGolden(t *testing.T) {
 		d.RelatedPRs = ownDir + "related.json"
 		return d
 	}
+	// The changed files' history: the judge prompts with a block (the
+	// continued turn aside) name history.json, the claude reviewers get one
+	// sentence naming it.
+	withHistory := func(d JudgeData) JudgeData {
+		d.HistoryFile = ownDir + "history.json"
+		return d
+	}
+	roleHistory := func(d RoleData) RoleData {
+		d.HistoryFile = ownDir + "history.json"
+		return d
+	}
 
 	cases := []struct {
 		golden, name string
@@ -319,6 +330,13 @@ func TestRenderGolden(t *testing.T) {
 		{"judge_recovery_candidates_related", "judge-recovery.md", withRelated(candidates(judgeFixture()))},
 		{"judge_rereview_delta_check_related", "judge-rereview.md", withRelated(deltaCheck)},
 		{"judge_continue_related", "judge-continue.md", withRelated(withNotes)},
+		{"judge_own_pass_history", "judge-own-pass.md", withHistory(withRelated(ownPass("initial")))},
+		{"judge_initial_history", "judge-initial.md", withHistory(withRelated(judgeFixture()))},
+		{"judge_rereview_candidates_history", "judge-rereview.md", withHistory(candidates(withNotes))},
+		{"judge_recovery_history", "judge-recovery.md", withHistory(judgeFixture())},
+		{"claude_initial_history", "claude-review.md", roleHistory(roleFixture())},
+		{"claude_rereview_history", "claude-rereview.md", roleHistory(roleFixture())},
+		{"claude_restart_history", "claude-restart.md", roleHistory(restartedRereview)},
 		{"judge_initial_candidates", "judge-initial.md", candidates(judgeFixture())},
 		{"judge_initial_candidates_no_own", "judge-initial.md", noOwn},
 		{"judge_rereview_candidates", "judge-rereview.md", candidates(withNotes)},

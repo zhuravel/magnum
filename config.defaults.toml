@@ -187,7 +187,8 @@ related_lookback = "14d"          # every judge prompt names related.json: the r
                                   # merged within this long, that change this PR's paths ("0s": open PRs only)
 related_ignore = ["**/Gemfile.lock", "**/package-lock.json", "**/pnpm-lock.yaml", "**/yarn.lock", "**/bun.lock",
                   "**/go.sum", "**/poetry.lock", "**/uv.lock", "**/Pipfile.lock", "**/Cargo.lock", "**/composer.lock"]
-                                  # paths that never make two PRs related (globs as skip_paths); [] = none
+                                  # paths that never make two PRs related (globs as skip_paths) and that
+                                  # history.json (the changed files' last commits) leaves out; [] = none
 
 # Agent CLIs: codex, claude, droid and omp are built in (values below are their defaults); every key is
 # optional and overrides only itself. Any other herdr agent kind (pi, gemini, ...) can be declared too.

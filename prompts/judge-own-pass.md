@@ -92,6 +92,9 @@ notes_unlock: {{.NotesUnlockCommand}}
 {{- if .RelatedPRs}}
 related_prs: {{.RelatedPRs}}
 {{- end}}
+{{- if .HistoryFile}}
+history: {{.HistoryFile}}
+{{- end}}
 own_findings: {{.OwnFindings}}
 dry_run: {{.DryRun}}
 {{- if .Blind}}

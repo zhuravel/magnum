@@ -308,6 +308,13 @@ type JudgeData struct {
 	// never PR text), rendered as `related_prs`; "" when there is none, and
 	// always in a blind replay.
 	RelatedPRs string
+	// HistoryFile is history.json in the report directory: each file the PR
+	// changes (at most 40, related_ignore's paths aside) with its last 8
+	// commits on the base (pipeline.FilesHistory), rendered as `history` by
+	// the own pass and the initial, rereview and recovery prompts; "" when
+	// magnum wrote none (no file of the PR on the base, a continued turn, a
+	// git failure).
+	HistoryFile string
 }
 
 // Judge phases of JudgeData.Phase.
@@ -379,6 +386,10 @@ type RoleData struct {
 	// NotesPath is the repository notes file the role reads first (hints from
 	// earlier reviews of the repository); "" = no notes.
 	NotesPath string
+	// HistoryFile is history.json in the report directory, the changed
+	// files' last commits on the base (see JudgeData.HistoryFile): the claude
+	// reviewer prompts name it in one sentence; "" = none.
+	HistoryFile string
 	// Blind: an evaluation replay (pipeline.RoundInput.Blind); the role
 	// must not read reviews, comments or commits after HeadSHA.
 	Blind bool
