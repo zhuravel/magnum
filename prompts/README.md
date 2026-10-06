@@ -429,8 +429,8 @@ instead, i.e. what magnum will type to start, resume and name each one. `--json`
 | Role | Kind | What it does |
 |---|---|---|
 | `codex-judge` | codex | Persistent session; reads the reports, runs `$magnum-review` and posts one review. Effort `xhigh`, `high` for re-reviews, 90 minutes. |
-| `claude-review` | claude | Persistent session running `/code-review <url> high` (`medium` for re-reviews), leaving out style-only and pre-existing problems and naming each finding's trigger; writes `claude-review.md`. |
-| `codex-review` | shell | Types `command codex review --base <merge base>` (the base ref when the merge base is unknown) into a plain pane; its output is tee'd into `codex-review.md`. |
+| `claude-review` | claude | Persistent session running `/code-review <url> high` (`medium` for re-reviews), leaving out style-only and pre-existing problems and naming each finding's trigger; it also checks every caller of changed behaviour (non-production ones too), what a replaced mechanism did implicitly and any test failure or flake the change brings, and lists the candidates it rejected with the reason; writes `claude-review.md`. |
+| `codex-review` | shell | Types `command codex review --base <merge base>` (the base ref when the merge base is unknown) into a plain pane; its output is tee'd into `codex-review.md`. `codex review` takes custom instructions only as a review target of their own, in place of `--base`, so it gets none of claude-review's extra checks. |
 | `claude-simplify` | claude | A read-only `/simplify`, alongside the reviewers on a PR's first review, again after `rerun_min_lines` changed lines, or on request (`magnum review --role claude-simplify`, or `--simplify`): four subagents review the diff in parallel for reuse, simplification, efficiency and altitude (one pass without the Agent tool), and instead of editing it writes every qualifying proposal, ranked, removals rather than renames or moves, with exact current and replacement lines, to `claude-simplify.md`. A re-review proposes only on lines changed since the previous review. |
 
 ### Shell roles

@@ -520,7 +520,11 @@ summary = "simplifications and refactors of the changed code"   # what the model
 `skills/magnum-review/SKILL.md` is the judge's method: review the whole PR, treat every candidate
 report as a claim to prove or reject, attach findings to changed lines with reproduction and fix,
 post one review (`REQUEST_CHANGES`, `COMMENT` or the configured no-findings event), verify it, and
-write a machine-readable result. In re-review mode magnum hands it the threads its login started with
+write a machine-readable result. It reads every caller of a method whose behaviour changed, fixtures,
+generators and scripts included, lists what a replaced mechanism (DELETE for TRUNCATE, another library)
+did implicitly and checks each effect against those callers, probes the real engine while it looks,
+weighs the candidates a reviewer rejected itself, replays a chance test failure to state its rate, and
+counts developers' time (local runs that diverge from CI, a new flaky test) as harm. In re-review mode magnum hands it the threads its login started with
 every reply classified by its first clause, after an opening "Good catch", "Valid" or "Noted" (`fixed`,
 `not a bug`, `won't fix`); the judge accepts a fix
 only when the code shows it, honours an answered finding unless it proves the reason wrong (then it

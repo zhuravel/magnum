@@ -288,3 +288,59 @@ func TestClaudeReviewPromptsAskForTheTrigger(t *testing.T) {
 		}
 	}
 }
+
+// A PR that cleaned test databases with DELETE instead of TRUNCATE got "no
+// problems": a mock-data generator also called the changed method and relied
+// on TRUNCATE resetting auto-increment ids, DELETE left full-text statistics
+// behind, and a spec hashing a record id now failed about 1 run in 800.
+// claude-review had raised the first and rejected it itself. The skill reads
+// every caller of changed behaviour, non-production ones included, lists what
+// a replaced mechanism did implicitly, probes while it looks, judges a
+// reviewer's rejections, keeps a stated intent to the consequences it names,
+// replays a chance failure's input space and counts developers' time as harm.
+func TestSkillDigsIntoChangedBehaviourAndReplacedMechanisms(t *testing.T) {
+	skillSays(t, []string{
+		"non-production ones too (fixtures, factories, seeds, mock generators, test helpers, scripts, rake tasks)",
+		"what consumes their output (generated files, snapshots, local runs, not only CI)",
+		"only a broken interaction this PR creates with it",
+		"swaps a mechanism for a near-equivalent (DELETE for TRUNCATE",
+		"list what the old one did implicitly",
+		"check each against every caller",
+		"Probe the real engine and framework while you look",
+		"prove or reject a candidate",
+		"also one a report lists as rejected, dismissed or out of scope",
+		"calls the behaviour deliberate, answer that reason or drop the finding",
+		"covers only the consequences it names",
+		"replay the input space (ids, seeds, orderings) and state its rate; one green run proves nothing",
+		"Harm includes developers' time",
+	}, nil)
+}
+
+// The reviewers check the same blind spots and list the candidates they
+// dropped, so the judge weighs a reviewer's rejection instead of never seeing
+// it. A restart writes the complete report again, so it carries the same
+// paragraph.
+func TestClaudeReviewPromptsCheckChangedBehaviourAndListRejections(t *testing.T) {
+	restart := roleFixture()
+	restart.Mode, restart.RestartedFrom = ModeRestart, "f1cc4f9e0d1c2b3a4f5e6d7c8b9a0f1e2d3c4b5a"
+	rereview := roleFixture()
+	rereview.Mode = ModeRereview
+	for name, d := range map[string]RoleData{"claude-review.md": roleFixture(), "claude-rereview.md": rereview, "claude-restart.md": restart} {
+		got, err := RenderPrompt(prompt(t, name), d)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		for _, want := range []string{
+			"\n\nAlso check every caller and consumer of a method whose behaviour changed",
+			"non-production ones included (fixtures, factories, seeds, mock generators, test helpers, scripts, rake tasks)",
+			"a near-equivalent (DELETE for TRUNCATE",
+			"replay the input space (ids, seeds, orderings)",
+			"one green run proves nothing",
+			"under a `Rejected` heading, list each candidate defect you dropped",
+		} {
+			if !strings.Contains(got, want) {
+				t.Errorf("%s lacks %q:\n%s", name, want, got)
+			}
+		}
+	}
+}

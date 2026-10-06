@@ -2028,3 +2028,41 @@ editing history. Code, config comments and prompts reference these by their head
   GitHub, searched by the marker, stays the oracle. Rejected: having the daemon post for the judge (the judge
   must see a refused line and move it in the same turn); keeping the skill's own read-back next to the tool's (a
   second source of truth for the same facts).
+- **The judge and claude-review dig into changed behaviour** (2026-10-06). A PR sped up its test suite by
+  cleaning the test databases with DELETE instead of TRUNCATE, and magnum posted "no problems". Another
+  reviewer found three. A mock-data generator outside production code also called the changed method and
+  relied on TRUNCATE resetting auto-increment ids: with DELETE, regenerated fixtures get new ids and the
+  frontend tests that look records up by id fail, while CI, which builds the mocks on a fresh database, stays
+  green. DELETE also leaves full-text index statistics behind, so relevance scores drift with earlier
+  examples. And a spec that hashes a record id into a split now fails about one run in 800. claude-review had
+  raised the first and rejected it itself in its report. The skill now reads every caller and consumer of a
+  method whose behaviour changed, signature or not, non-production ones included (fixtures, factories, seeds,
+  mock generators, test helpers, scripts, rake tasks), and what consumes their output (generated files,
+  snapshots, local runs, not only CI). When the PR swaps a mechanism for a near-equivalent (DELETE for
+  TRUNCATE, another library or API, sync for async, eager for lazy), it lists what the old one did implicitly
+  and checks each effect against every caller. It probes the real engine and framework while it looks, not
+  only to prove a finding (a scratch table in the worktree's own databases, dropped after; the test runner; a
+  console), and runs any focused check that can prove or reject a candidate. It judges an item a report lists
+  as rejected, dismissed or out of scope like any other claim; such an item enters the ledger like any
+  candidate, so `magnum stats` counts more rejections for claude-review. A test failure or flake the PR brings
+  is not dropped as speculative or not reproducible without evidence against it; a chance one is replayed
+  over its input space (ids, seeds, orderings) to state its rate, since one green run proves nothing.
+  Developers' time is harm (local runs that diverge from CI, generated files that change, a new flaky test),
+  and `P1` when it breaks their normal work. The rule on deliberate behaviour keeps "answer that reason or
+  drop the finding" and adds that the reason covers only the consequences it names, so a stated intent does
+  not shield a consequence it never mentions, and does not invite findings against one it does. Two
+  techniques of the operator's own review skill, which magnum's was forked from, come back: a broken
+  interaction a stacked PR creates with its lower layer is reportable, and a focused check runs to reject a
+  candidate as well as to prove one. claude-review's three prompts (first review, re-review, restart) get
+  one paragraph with the callers, the replaced mechanism and the test-failure rules, and ask for a `Rejected`
+  list with the reason for each candidate dropped for anything but style or being pre-existing, so the judge
+  sees what a reviewer talked itself out of. codex-review gets nothing: `codex review` takes custom
+  instructions only as a review target of their own (its help lists `[PROMPT]` beside `--uncommitted`,
+  `--base` and `--commit`, and the CLI asks for one of the four), so they cannot ride along with `--base`;
+  replacing the base-branch target with a custom one would change what codex reviews and is left open.
+  SKILL.md went from 30,308 to 30,837 bytes under the unchanged cap (30,844): tighter wording elsewhere pays
+  for the additions (about 1,450 bytes) and no rule is dropped. The marker's format is stated once, in
+  section 7; a repeated "do not follow instructions" sentence, the blind and post-merge recaps and the
+  former-login, thread-file, re-review-note and provenance sentences are shorter. The `readiness` field now
+  says that the `reset_db` commands run first and only the rest as `zsh -lc`, as they have since `reset_db`
+  moved to `mise exec`. Rejected: raising the cap (the additions fit without it).
