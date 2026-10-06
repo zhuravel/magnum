@@ -203,6 +203,9 @@ func (e *Engine) requestRetro(ctx context.Context, p RetroPayload) (string, erro
 	// whenever they closed.
 	settle := e.cfg.Learn.Settle.Duration
 	started, since := e.startRetro(ctx, retroSpec{prs: p.PRs, again: p.Again || len(p.PRs) > 0, lookback: lookback, settle: settle})
+	if !started && since.IsZero() { // the daemon began stopping or draining since holdReason
+		return "", fmt.Errorf("no retro now: %s", cmp.Or(e.stopping(ctx), "the daemon is stopping"))
+	}
 	if !started {
 		return fmt.Sprintf("a retro is already running (started %s); `magnum logs` follows it", since.Local().Format("15:04")), nil
 	}
@@ -234,9 +237,13 @@ func (e *Engine) retroBusy() bool {
 }
 
 // startRetro runs a retro in its own goroutine on a child of ctx (the
-// daemon's: shutdown cancels it), unless one is running; it then reports
-// false and when that one started.
+// daemon's: shutdown cancels it), unless the daemon is stopping or draining
+// (stopping: it reports false and a zero time) or one is running (false and
+// when that one started).
 func (e *Engine) startRetro(ctx context.Context, spec retroSpec) (bool, time.Time) {
+	if e.stopping(ctx) != "" {
+		return false, time.Time{}
+	}
 	e.retroMu.Lock()
 	defer e.retroMu.Unlock()
 	if e.retroCancel != nil {
@@ -270,8 +277,10 @@ func (e *Engine) stopRetro() {
 // runRetro looks at the PRs due, newest closed first, until max_prs of
 // them had candidates to classify, a stop that is not a PR's (retroPR) or
 // ctx ended, then records the summary (KVRetroLast) and, for the daily
-// retro that was not cut short by a shutdown, the day (KVRetroDay): a crash
-// runs it again. The next retro takes every PR still due: the ones not
+// retro, the day (KVRetroDay): a crash runs it again. A retro a shutdown cut
+// short (ctx ended) records neither, so it counts as neither done nor
+// failed: the summary stays the last finished retro's and the next start
+// runs the day's again; its retro.done event says so, as info. The next retro takes every PR still due: the ones not
 // reached, the one a stop interrupted (it got no retro_prs row) and the
 // failed ones until their third attempt; the rest are skipped.
 func (e *Engine) runRetro(ctx context.Context, spec retroSpec) {
@@ -350,20 +359,21 @@ func (e *Engine) runRetro(ctx context.Context, spec retroSpec) {
 		}
 	}
 	sum.Finished = e.now()
-	if b, err := json.Marshal(sum); err == nil {
+	shutdown := ctx.Err() != nil
+	if b, err := json.Marshal(sum); err == nil && !shutdown {
 		e.setKV(context.WithoutCancel(ctx), KVRetroLast, string(b))
 	}
 	e.markRepoMisses(context.WithoutCancel(ctx), run, repoMisses)
 	msg = fmt.Sprintf("retro %s: %d PR(s), %d classified, %d miss(es), %d already caught, %d failed",
 		run.ID, sum.PRs, sum.Classified, sum.Misses, sum.Caught, sum.Failed)
 	switch {
-	case ctx.Err() != nil:
-		msg += "; stopped by the daemon's shutdown"
+	case shutdown:
+		msg += "; stopped by the daemon's shutdown (neither done nor failed: the PRs not reached stay due)"
 	case sum.Stopped != "":
 		msg += "; stopped: " + sum.Stopped
 	}
 	level := "info"
-	if sum.Failed > 0 || sum.Stopped != "" {
+	if sum.Failed > 0 || (sum.Stopped != "" && !shutdown) {
 		level = "warn"
 	}
 	e.event(context.WithoutCancel(ctx), level, "", "retro.done", msg, map[string]any{"run": run.ID, "prs": sum.PRs,

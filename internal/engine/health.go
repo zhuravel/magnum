@@ -294,11 +294,26 @@ func (e *Engine) userPause(ctx context.Context) string {
 	return ""
 }
 
-// holdReason holds every new round, forced or not ("" = none): a drain for a
-// restart, or an infrastructure pause.
-func (e *Engine) holdReason(ctx context.Context) string {
+// stopping says why the daemon starts nothing new now ("" = it may): a
+// shutdown cancelled ctx, the daemon's (a registry read then fails, so a
+// pause, a drain or the day's retro already done would all read as absent,
+// and a retro started on that stopped at once), or it drains for a restart.
+func (e *Engine) stopping(ctx context.Context) string {
+	if ctx.Err() != nil {
+		return "the daemon is stopping"
+	}
 	if v, ok := e.getKV(ctx, KVDaemonDraining); ok && v != "" {
 		return "draining for a restart (magnum daemon-restart --drain)"
+	}
+	return ""
+}
+
+// holdReason holds every new round, forced or not, and every retro and notes
+// curation ("" = none): a shutdown or a drain for a restart (stopping), or
+// an infrastructure pause.
+func (e *Engine) holdReason(ctx context.Context) string {
+	if why := e.stopping(ctx); why != "" {
+		return why
 	}
 	if p, ok := e.infraPause(ctx); ok {
 		return fmt.Sprintf("infrastructure paused (%s), next probe %s", p.Reason, p.Until.Local().Format("15:04"))

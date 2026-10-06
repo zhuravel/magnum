@@ -1230,7 +1230,9 @@ lesson, the repository: general lessons can reach the public review skill, while
 with that repository's notes. A shutdown, an agent that cannot start or goes away, or a limit on the
 agent (a usage limit or a logout, which also pause its CLI as a round's would, a per-model limit or an
 overload) ends the retro without recording the pull request it was on, so the next retro takes that one
-and the rest; no retro starts while the agent's CLI is paused. Trust dialogs, permission prompts
+and the rest; no retro starts while the agent's CLI is paused, nor while the daemon stops or drains for a
+restart, and one a shutdown cuts short counts as neither done nor failed (`magnum status` keeps the last
+finished retro, and the next start runs the day's again). Trust dialogs, permission prompts
 (answered No) and Codex's hooks review behave as in rounds. The agent works in
 `~/.local/share/magnum/learn/retro/` and is closed when the retro ends, quit if it is still busy; an
 agent an earlier retro left running is ended before a new one starts.

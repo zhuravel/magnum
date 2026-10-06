@@ -2839,3 +2839,15 @@ editing history. Code, config comments and prompts reference these by their head
   nothing; the judge still reads them in the next round); a verdict line or review for every reply round
   (a review that repeats the last one is noise); counting reply rounds against the daily cap (they have
   their own interval, and would hold the next push's re-review).
+- **A stopping daemon starts no retro and no curation** (2026-10-07, amends "Learning loop: daily retro").
+  Every daemon restart logged a retro that started during the shutdown and stopped at once ("retro …: 0
+  PR(s) … stopped by the daemon's shutdown", after "append event retro.start: context canceled"), and its
+  summary made `magnum status` report the retro as stopped until the next one. A signal cancels the daemon's
+  context in the middle of a tick, and the tick goes on: every registry read then fails, so the drain, the
+  pauses and the day's retro already done all read as absent, and the day's retro looked due. `holdReason`
+  now starts with `stopping`: a cancelled context ("the daemon is stopping") or a drain for a restart; it
+  already held new rounds, the daily retro, notes curations and the `magnum retro` and `--curate` requests,
+  and `startRetro` and `startCurate` check it too, so no caller starts one. A retro a shutdown cuts short
+  is neither done nor failed: it records neither the day nor its summary (the last finished retro's stays,
+  and the next start runs the day's again), and its `retro.done` event is info, not a warning. Its PRs
+  already behaved so (a stopped PR writes no `retro_prs` row and stays due).

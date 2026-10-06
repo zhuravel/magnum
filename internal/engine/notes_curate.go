@@ -463,6 +463,9 @@ func (e *Engine) requestCurate(ctx context.Context, p NotesCuratePayload) (strin
 		return prefix + "queued: " + queuedText(QueuedJudge) + "; a toast says when its proposal is ready for `magnum notes " + full + " --review`", nil
 	}
 	if started, since, other := e.startCurate(ctx, repo, CurateTriggerRequest); !started {
+		if other == "" { // the daemon began stopping or draining since holdReason
+			return "", fmt.Errorf("no curation now: %s", cmp.Or(e.stopping(ctx), "the daemon is stopping"))
+		}
 		e.queueCurate(ctx, full, CurateTriggerRequest, QueuedBusy)
 		return fmt.Sprintf("%squeued: starts when the running curation (of %s, started %s) ends; `magnum logs` follows it", prefix, other,
 			since.Local().Format("15:04")), nil
@@ -489,10 +492,14 @@ func (e *Engine) curateBusy() bool {
 }
 
 // startCurate runs a curation of repo in its own goroutine on a child of
-// ctx, unless one is running: then it reports false, when that one started
-// and its repository. The curation running is KVNotesCurating while it
-// runs, and the repository leaves the queue.
+// ctx, unless the daemon is stopping or draining (stopping: it reports false,
+// a zero time and no repository) or one is running: then it reports false,
+// when that one started and its repository. The curation running is
+// KVNotesCurating while it runs, and the repository leaves the queue.
 func (e *Engine) startCurate(ctx context.Context, repo store.Repo, trigger string) (bool, time.Time, string) {
+	if e.stopping(ctx) != "" {
+		return false, time.Time{}, ""
+	}
 	e.curateMu.Lock()
 	defer e.curateMu.Unlock()
 	if e.curateCancel != nil {

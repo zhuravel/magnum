@@ -77,7 +77,15 @@ func TestRetroLeavesThePRDueWhenTheRetroIsCutShort(t *testing.T) {
 			if due, err := h.st.RetroDue(h.ctx, store.RetroQuery{Since: h.clock.Now().Add(-7 * 24 * time.Hour)}); err != nil || len(due) != 2 {
 				t.Fatalf("due after the stop = %d PRs, %v; want both", len(due), err)
 			}
-			if sum := h.retroLast(); sum.Failed != 0 || (sum.Stopped == "" && name != "shutdown mid-turn") {
+			if name == "shutdown mid-turn" {
+				// A retro the shutdown cut short is neither done nor failed:
+				// the last finished retro's summary stays, and so does the day.
+				if v, ok, _ := h.st.GetKV(h.ctx, KVRetroLast); ok {
+					t.Fatalf("a retro the shutdown cut short left a summary: %s", v)
+				}
+				return
+			}
+			if sum := h.retroLast(); sum.Failed != 0 || sum.Stopped == "" {
 				t.Fatalf("summary = %+v", sum)
 			}
 		})
