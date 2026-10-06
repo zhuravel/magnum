@@ -616,6 +616,8 @@ type fakeAgents struct {
 	reloads map[string]bool
 	// onQuit, when set, runs as Quit starts, with the session it quits.
 	onQuit func(store.Session)
+	// quitErr, when set, is what Quit returns after onQuit (the session stays live).
+	quitErr error
 }
 
 func (f *fakeAgents) record(s string) {
@@ -769,10 +771,13 @@ func (f *fakeAgents) ReloadsProject(_ context.Context, s store.Session) bool {
 func (f *fakeAgents) Quit(ctx context.Context, s store.Session) error {
 	f.record(fmt.Sprintf("quit:%d:%s", s.PRID, s.Role))
 	f.mu.Lock()
-	onQuit := f.onQuit
+	onQuit, quitErr := f.onQuit, f.quitErr
 	f.mu.Unlock()
 	if onQuit != nil {
 		onQuit(s)
+	}
+	if quitErr != nil {
+		return quitErr
 	}
 	return f.st.TransitionSession(ctx, s.ID, []string{store.SessionStarting, store.SessionLive, store.SessionLost}, store.SessionParked, nil)
 }

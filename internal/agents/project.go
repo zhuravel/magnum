@@ -223,6 +223,25 @@ func (m *Manager) noteSessionProject(ctx context.Context, id int64, kind string,
 	}
 }
 
+// ProjectTouched reports whether paths (a PR's changed files, relative to
+// the repository root) name the project config kind loads from the
+// checkout: a file at or under one of its paths. A kind magnum does not
+// compare touches nothing.
+func ProjectTouched(kind string, paths []string) bool {
+	pc, ok := projectConfigs[kind]
+	if !ok {
+		return false
+	}
+	for _, f := range paths {
+		for _, p := range pc.paths {
+			if f == p.name || (p.dir && strings.HasPrefix(f, p.name+"/")) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // ReloadsProject reports whether session s runs an agent CLI that reloads
 // its project config from the checkout while it runs (Claude Code watches
 // its settings files and skills, and loads a .claude/settings.json created

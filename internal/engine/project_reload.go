@@ -10,6 +10,7 @@ package engine
 // changes .claude/ or .mcp.json runs Claude with the user's settings only").
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"strings"
@@ -26,8 +27,9 @@ import (
 // running session, and each one's next start, a resume, decides with the
 // new head whether the config loads. An agent that works or is blocked
 // cannot be quit safely, so that is an error wrapping agents.ErrBusy (the
-// round retries uncharged) and so is one Quit cannot stop: the checkout must
-// not move under it. It returns the roles it quit, which a
+// round retries uncharged); one Quit cannot stop fails the round's setup
+// (charged: it backs off and asks for attention after its attempts), as the
+// checkout must not move under it either. It returns the roles it quit, which a
 // round.project_reload_parked event names.
 func (e *Engine) parkReloading(ctx context.Context, job *roundJob) ([]string, error) {
 	sessions, err := e.st.SessionsByPR(ctx, job.pr.ID)
@@ -39,12 +41,20 @@ func (e *Engine) parkReloading(ctx context.Context, job *roundJob) ([]string, er
 		if s.State != store.SessionLive || deref(s.AgentName) == "" || !e.d.Agents.ReloadsProject(ctx, s) {
 			continue
 		}
+		if e.leavesProjectAlone(ctx, job, s) {
+			continue
+		}
 		switch st := herdr.Status(deref(s.AgentStatus)); st {
 		case herdr.StatusWorking, herdr.StatusBlocked:
 			return quit, fmt.Errorf("%s is %s and reloads the checkout's project config, so the checkout waits: %w", s.Role, st, agents.ErrBusy)
 		}
 		if err := e.d.Agents.Quit(ctx, s); err != nil {
-			return quit, fmt.Errorf("quit %s before the checkout moves: %w", s.Role, err)
+			// Not agents.ErrBusy: the agent was idle, so a quit that does not
+			// stop it (its MCP servers still in the pane's foreground) will not
+			// stop it on the next tick either. Charged, the round backs off and
+			// the PR needs attention after its attempts instead of retrying
+			// every tick for good.
+			return quit, fmt.Errorf("quit %s before the checkout moves: %s", s.Role, err)
 		}
 		quit = append(quit, s.Role)
 	}
@@ -54,4 +64,22 @@ func (e *Engine) parkReloading(ctx context.Context, job *roundJob) ([]string, er
 				"so it resumes on the new head with what that head allows", map[string]any{"roles": quit})
 	}
 	return quit, nil
+}
+
+// leavesProjectAlone reports whether the head the round checks out leaves the
+// project config s's agent reloads as the merge base has it, by the PR's
+// file list the poller stored for that head (store.PRFiles): then the
+// session has nothing new to reload and need not be quit. A list for
+// another head, a cut-off one, none, or a session of an unknown kind is
+// not proof, so the session is quit as before.
+func (e *Engine) leavesProjectAlone(ctx context.Context, job *roundJob, s store.Session) bool {
+	kind := deref(s.AgentKind)
+	if kind == "" {
+		return false
+	}
+	f, ok, err := e.st.PRFilesOf(ctx, job.pr.ID)
+	if err != nil || !ok || f.Truncated || f.HeadSHA != cmp.Or(job.target, job.pr.HeadSHA) {
+		return false
+	}
+	return !agents.ProjectTouched(kind, f.Paths)
 }

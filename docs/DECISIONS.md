@@ -2851,3 +2851,14 @@ editing history. Code, config comments and prompts reference these by their head
   is neither done nor failed: it records neither the day nor its summary (the last finished retro's stays,
   and the next start runs the day's again), and its `retro.done` event is info, not a warning. Its PRs
   already behaved so (a stopped PR writes no `retro_prs` row and stays due).
+- **A Claude session is quit before the checkout moves only when the new head changes its project config, and a
+  quit that fails is charged** (2026-10-07; amends "A PR that changes .claude/ or .mcp.json runs Claude with the
+  user's settings only"). On the operator's own PR a push held the re-review for good: parkReloading quit the idle
+  claude-review session before every checkout, its agent did not stop within 10 seconds (its MCP servers were still
+  in the pane's foreground), and the "agent busy" error made the round retry every tick without counting an attempt.
+  A session now stays when the PR's stored file list for the head the round checks out (store.PRFiles, the poller's)
+  names nothing at or under the paths its kind reloads (agents.ProjectTouched: `.claude/`, `.mcp.json`): it has
+  nothing new to reload. A list for another head, a cut-off list, no list or a session of unknown kind still quits
+  it. A quit that fails after the session was idle is no longer agents.ErrBusy: the setup failure is charged, backs
+  off and leaves the PR needing attention after its attempts. Rejected: closing the pane to force the quit (it kills
+  the agent's processes, and a quit is rarely needed now).

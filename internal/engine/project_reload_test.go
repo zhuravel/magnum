@@ -145,3 +145,65 @@ func TestRoundRestartParksAReloadingSessionAcrossTheSwitch(t *testing.T) {
 		t.Fatalf("reviewed_sha = %q, want b2", deref(got.ReviewedSHA))
 	}
 }
+
+// A new head that leaves the reloaded project config alone (the PR's file
+// list at that head names nothing under .claude/ or .mcp.json) brings the
+// session nothing new to reload, so magnum does not quit it: a quit that
+// cannot stop the agent (its MCP servers still in the pane's foreground)
+// held such a round for good, retried every tick. A head whose list names
+// that config, or whose list is cut off or missing, still quits it.
+func TestALiveClaudeSessionStaysWhenTheNewHeadLeavesItsConfigAlone(t *testing.T) {
+	for _, c := range []struct {
+		name      string
+		files     []string
+		truncated bool
+		wantQuit  bool
+	}{
+		{"untouched", []string{"app/models/order.rb", "spec/models/order_spec.rb"}, false, false},
+		{"settings changed", []string{"app/models/order.rb", ".claude/settings.json"}, false, true},
+		{"mcp changed", []string{".mcp.json"}, false, true},
+		{"cut-off list", []string{"app/models/order.rb"}, true, true},
+		{"no list", nil, false, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.reviewedPR(2, "b1")
+			at := reloadingClaude(h)
+			h.advance(30 * time.Minute)
+			h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b2", files: c.files, filesTruncated: c.truncated})
+			h.tick()
+			h.advance(5 * time.Minute)
+			h.tick()
+			if n := len(h.rd.all()); n != 2 {
+				t.Fatalf("rounds = %d, want the re-review", n)
+			}
+			if quit := len(*at) > 0; quit != c.wantQuit {
+				t.Fatalf("quits = %v, want a quit: %v", *at, c.wantQuit)
+			}
+		})
+	}
+}
+
+// An idle session whose quit fails (its agent did not stop: MCP servers
+// still in the pane's foreground) keeps the checkout where it is, but the
+// failure is charged, not retried every tick for good: the PR's attempts
+// count it and it backs off.
+func TestAQuitThatFailsIsChargedNotRetriedForGood(t *testing.T) {
+	h := newHarness(t)
+	h.reviewedPR(2, "b1")
+	reloadingClaude(h)
+	h.ag.mu.Lock()
+	h.ag.quitErr = fmt.Errorf("agents: quit session 1: %w: shell not idle after 10s", agents.ErrBusy)
+	h.ag.mu.Unlock()
+	h.advance(30 * time.Minute)
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b2"})
+	h.tick()
+	h.advance(5 * time.Minute)
+	h.tick()
+	if n := len(h.rd.all()); n != 1 {
+		t.Fatalf("rounds = %d, want none on b2", n)
+	}
+	if pr := h.pr(2); pr.Attempts != 1 {
+		t.Fatalf("attempts = %d, want the failed quit charged once", pr.Attempts)
+	}
+}
