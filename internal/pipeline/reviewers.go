@@ -12,10 +12,7 @@ import (
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
-	"github.com/zhuravel/magnum/internal/fsx"
-	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/store"
-	"github.com/zhuravel/magnum/internal/textx"
 )
 
 const (
@@ -36,8 +33,8 @@ func (e *exitError) Error() string {
 	return fmt.Sprintf("%s exited with status %d", e.role, e.status)
 }
 
-// runRole runs one non-judge role whose capture is file (or stdout) and
-// returns its report; the run ends final.
+// runRole runs one non-judge role and returns its report; the run ends
+// final.
 func (rd *round) runRole(ctx context.Context, role config.Role, run store.Run) RoleReport {
 	path := rd.reportPath(run, role)
 	t, anchor, early := rd.turn(ctx, role, run, path)
@@ -48,56 +45,6 @@ func (rd *round) runRole(ctx context.Context, role config.Role, run store.Run) R
 		run = t.run // a continuation on a fallback model
 	}
 	return rd.finishReviewer(ctx, role, run, path, anchor, t)
-}
-
-// runPatchRole runs a git-diff role: its turn, then `git diff` of the slot
-// against TargetSHA saved as its report, then the checkout restored to
-// TargetSHA. A turn cut short (timeout, cancelled round) is interrupted and
-// the restore waits until the agent is seen idle (InterruptWait). The error
-// is set when the checkout could not be restored, or when the agent kept
-// working past the wait (nothing may run on a tree an agent may still edit).
-func (rd *round) runPatchRole(ctx context.Context, role config.Role, run store.Run) (RoleReport, error) {
-	path := rd.reportPath(run, role)
-	t, anchor, early := rd.turn(ctx, role, run, path)
-	if early != nil {
-		return *early, nil // nothing ran, so nothing was edited
-	}
-	if t.run.ID != "" {
-		run = t.run // a continuation on a fallback model
-	}
-	var rep RoleReport
-	switch t.kind {
-	case waitRefused:
-		rep = rd.newReport(role, run.ID)
-		rep.Status, rep.Detail = refusedStatus(t.err), execx.Redact(t.err.Error())
-		return rep, nil // nothing was sent
-	case waitCancelled:
-		rep = rd.newReport(role, run.ID)
-		rep.Status = ReportCancelled
-		if t.unsent {
-			return rep, nil
-		}
-		rd.interrupt(ctx, role, run)
-	case waitEnded:
-		rep = rd.collectPatch(ctx, role, run, path, anchor)
-	default:
-		rep = rd.finishReviewer(ctx, role, run, path, anchor, t) // interrupts a timed-out turn
-	}
-	idle := t.kind == waitEnded || t.unsent || rd.waitIdle(ctx, role, run)
-	if err := rd.restoreTree(ctx, role); err != nil {
-		rep.Status, rep.Detail = ReportFailed, execx.Redact(err.Error())
-		rd.finishReviewerRun(ctx, role, run, rep)
-		return rep, err
-	}
-	if !idle {
-		err := fmt.Errorf("pipeline: %s still works %s after it was interrupted; its checkout was restored but cannot be trusted", role.Name, InterruptWait)
-		rd.warn(ctx, "%v", err)
-		return rep, err
-	}
-	if t.kind == waitEnded {
-		rd.finishReviewerRun(ctx, role, run, rep)
-	}
-	return rep, nil
 }
 
 // turn prompts role (an agent session) or runs its command (a shell role)
@@ -299,7 +246,7 @@ func (rd *round) finishReviewer(ctx context.Context, role config.Role, run store
 }
 
 func (rd *round) finishReviewerRun(ctx context.Context, role config.Role, run store.Run, rep RoleReport) {
-	if rep.Status == ReportOK || rep.Status == ReportEmpty {
+	if rep.Status == ReportOK {
 		rd.finishRun(ctx, run.ID, store.RunVerified, rep.Status, rep.Detail)
 		return
 	}
@@ -359,88 +306,11 @@ func (rd *round) checkReport(ctx context.Context, role config.Role, run store.Ru
 	rep.Status, rep.Detail = ReportMissing, "finished without writing "+filepath.Base(path)
 	if st, err := os.Stat(path); err == nil && st.Size() == 0 {
 		rep.Detail = "empty " + filepath.Base(path)
-		if role.Capture == config.CaptureGitDiff {
-			rep.Status = ReportEmpty
-		}
 	}
 	if h := asUsageLimit(rd.paneHealth(ctx, role, run, anchor)); h.Kind != agents.HealthOK {
 		rep.Status, rep.Detail, rep.Health = string(h.Kind), h.Detail, &h
 	}
 	return rep
-}
-
-// collectPatch writes the slot's changes against TargetSHA (committed or
-// not) to path. Untracked files are not part of the patch.
-func (rd *round) collectPatch(ctx context.Context, role config.Role, run store.Run, path, anchor string) RoleReport {
-	rep := rd.newReport(role, run.ID)
-	res, err := rd.r.Exec.Run(ctx, rd.git(role, false, "diff", "--binary", "--no-color", "--no-ext-diff", rd.in.TargetSHA))
-	if err != nil {
-		rep.Status, rep.Detail = ReportFailed, execx.Redact(fmt.Sprintf("git diff: %v", err))
-		return rep
-	}
-	if len(res.Stdout) == 0 {
-		rep = rd.checkReport(ctx, role, run, path, anchor)
-		if rep.Health == nil {
-			rep.Status, rep.Path, rep.Detail = ReportEmpty, "", "no changes"
-		}
-		return rep
-	}
-	if err := fsx.WriteFileAtomic(path, res.Stdout, 0o600); err != nil {
-		rep.Status, rep.Detail = ReportFailed, fmt.Sprintf("write %s: %v", filepath.Base(path), err)
-		return rep
-	}
-	rep.Status, rep.Path = ReportOK, path
-	return rep
-}
-
-// restoreTree discards a git-diff role's edits, staged ones included, and
-// puts HEAD back on TargetSHA: `git reset --hard` and `git clean -fd`
-// (relative to HEAD, so a branch the agent switched to is never moved), then
-// HEAD switched back to TargetSHA when the agent moved it. A checkout still
-// dirty afterwards is an error.
-func (rd *round) restoreTree(ctx context.Context, role config.Role) error {
-	ctx = context.WithoutCancel(ctx)
-	slot, target := rd.in.SlotPath, rd.in.TargetSHA
-	for _, args := range [][]string{{"reset", "--hard", "--quiet"}, {"clean", "-fd"}} {
-		if _, err := rd.r.Exec.Run(ctx, rd.git(role, true, args...)); err != nil {
-			return fmt.Errorf("pipeline: %s cleanup git %s: %w", role.Name, strings.Join(args, " "), err)
-		}
-	}
-	head, err := rd.r.Git.RevParse(ctx, slot, "HEAD")
-	if err != nil {
-		return fmt.Errorf("pipeline: %s cleanup: %w", role.Name, err)
-	}
-	if head != target {
-		rd.warn(ctx, "%s moved HEAD to %s; switching back to %s", role.Name, textx.ShortSHA(head), textx.ShortSHA(target))
-		if err := rd.r.Git.SwitchDetach(ctx, slot, target); err != nil {
-			return fmt.Errorf("pipeline: %s cleanup: %w", role.Name, err)
-		}
-		if head, err = rd.r.Git.RevParse(ctx, slot, "HEAD"); err != nil {
-			return fmt.Errorf("pipeline: %s cleanup: %w", role.Name, err)
-		}
-		if head != target {
-			return fmt.Errorf("pipeline: %s cleanup: HEAD is %s, want %s", role.Name, textx.ShortSHA(head), textx.ShortSHA(target))
-		}
-	}
-	if st, err := rd.r.Git.Status(ctx, slot); err != nil {
-		rd.warn(ctx, "status after %s cleanup: %v", role.Name, err)
-	} else if st.Dirty() {
-		return fmt.Errorf("pipeline: %s cleanup: checkout still dirty (%d tracked, %d untracked)", role.Name, st.Tracked, st.Untracked)
-	}
-	return nil
-}
-
-// git builds a `git -C <slot>` command. It unsets the variables that would
-// point git at another repository, as gitx does for its own commands.
-func (rd *round) git(role config.Role, mutates bool, args ...string) execx.Cmd {
-	return execx.Cmd{
-		Name:    "git",
-		Args:    append([]string{"-C", rd.in.SlotPath}, args...),
-		Env:     map[string]string{"GIT_TERMINAL_PROMPT": "0"},
-		Unset:   gitx.ScrubbedEnv(),
-		Mutates: mutates,
-		Label:   "pipeline " + role.Name,
-	}
 }
 
 // reportPath is the run's report file (NewRun fills it from the layout).

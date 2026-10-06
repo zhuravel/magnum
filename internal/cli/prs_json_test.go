@@ -53,6 +53,9 @@ func fullBoardRow() tui.PRBoardRow {
 		LastError: "boom", ErrorFix: "run magnum doctor", ErrorDetail: []string{"line one"}, RoundsToday: 3,
 		LastRound: &tui.RoundTimings{Round: 2, Kind: "rereview", Total: 754 * time.Second, Running: true, Stages: []tui.StageTiming{
 			{Name: "fetch/checkout", Duration: 12 * time.Second}, {Name: "claude-review", Duration: 18*time.Minute + 4*time.Second, Running: true, Failed: true}}},
+		Progress: &tui.RoundProgress{StartedAt: at.Add(-20 * time.Minute), Roles: []tui.RoleProgress{
+			{Role: "claude-simplify", Label: "simplify", Started: at.Add(-19 * time.Minute), Working: true},
+			{Role: "codex-judge", Label: "judge", Judge: true}}},
 		Wait: "re-review · quiet", WaitDetail: "waiting for a quiet period", Note: "comment-only push skipped",
 		RequestedToMe: &req, LastRequest: &req, Requests: []tui.RequestInfo{req},
 		ClosedAt: at.Add(2 * time.Hour), Recent: true, MergedUnreviewed: true,
@@ -121,6 +124,13 @@ func TestPRsJSONTimesAreRFC3339AndOmittedWhenUnset(t *testing.T) {
 	if got := review["submitted_at"]; got != "2026-10-05T14:30:00Z" {
 		t.Errorf("last_review.submitted_at = %v", got)
 	}
+	progress := full["progress"].(map[string]any)
+	roles := progress["roles"].([]any)
+	if got := progress["started_at"]; got != "2026-10-05T14:10:00Z" || len(roles) != 2 {
+		t.Errorf("progress = %v", progress)
+	} else if _, ok := roles[1].(map[string]any)["started_at"]; ok {
+		t.Errorf("a role not started yet has a started_at: %v", roles[1])
+	}
 
 	// An open PR nobody scheduled, with a reviewer whose time is not known: no zero times.
 	bare := fullBoardRow()
@@ -166,7 +176,7 @@ func TestPRsJSONDurationsAreSeconds(t *testing.T) {
 // so a consumer indexes without checking the key first.
 func TestPRsJSONOptionalPartsAreNullAndListsAreEmpty(t *testing.T) {
 	out := marshalPRsJSON(t, tui.PRBoardRow{Ref: "talkable/example#1", Number: 1})[0]
-	for _, key := range []string{"last_review", "findings", "ci", "since_review", "last_round", "requested_to_me", "last_request"} {
+	for _, key := range []string{"last_review", "findings", "ci", "since_review", "last_round", "progress", "requested_to_me", "last_request"} {
 		if v, ok := out[key]; !ok || v != nil {
 			t.Errorf("%s = %v (present %v), want null", key, v, ok)
 		}
@@ -210,6 +220,8 @@ func TestPRsJSONMirrorsEveryBoardRowField(t *testing.T) {
 		{tui.RequestInfo{}, prsJSONRequest{}},
 		{tui.RoundWhy{}, prsJSONRoundWhy{}},
 		{tui.RoleRerun{}, prsJSONRoleRerun{}},
+		{tui.RoundProgress{}, prsJSONProgress{}},
+		{tui.RoleProgress{}, prsJSONRoleProgress{}},
 		{tui.SpendInfo{}, prsJSONSpend{}},
 	} {
 		b, o := reflect.TypeOf(p.board), reflect.TypeOf(p.out)

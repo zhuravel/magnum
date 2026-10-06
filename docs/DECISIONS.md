@@ -1773,3 +1773,62 @@ editing history. Code, config comments and prompts reference these by their head
   (the same call, with up to 100 commits listed), and a size measured before this is measured again once
   (`store.SinceReviewVersion`). Rejected: a separate Compare for the size (a third call for a range the gate
   read), and counting only code lines (the column shows what changed, not what the threshold counts).
+- **claude-simplify proposes instead of editing, and runs alongside the reviewers** (2026-10-06; one 187-line
+  PR spent 15 minutes in the reviewers, then waited for the simplify, then for the judge). claude-simplify ran
+  Claude Code's built-in `/simplify`, which edits files, so magnum saved `git diff` as `claude-simplify.patch`,
+  reset the checkout, and ran it after both reviewers (`after`): 7 to 13 more minutes on every first review.
+  Its prompt now keeps `/simplify`'s review (four subagents started together through the Agent tool, each
+  given the diff and one angle: reuse, simplification, efficiency, altitude; one pass without the Agent tool,
+  which the report says) and replaces its fix step with proposals: merged, skipped when they change intended
+  behaviour, reach well outside the diff or are false positives (after looking for a smaller fix inside it),
+  kept only on lines in scope (a re-review: changed since the previous review) when they remove something a
+  reader must hold, are small enough for a suggestion block and leave authorization, sandboxing, money or
+  usage-recording and concurrency code alone, ranked by what they remove, in `claude-simplify.md`
+  (angle, lines, summary, cost removed, exact current and replacement lines, the other sites, why behaviour is
+  unchanged with a probe), then a skipped list that accounts for every other finding. It edits nothing, so
+  it has no `after` and runs in the reviewers' stage; `runs = "first"`, `rerun_min_lines` and a user's model
+  and effort for it are unchanged, and the judge still proves each proposal with its own equivalence probe
+  and posts at most three (SKILL.md reads the proposals instead of hunks, 8 bytes shorter). The `git-diff`
+  capture had no other user and is gone with its patch collection, its per-role tree restore and its
+  `empty`/`no changes` report status (`capture = "git-diff"` is now refused). In its place every stage ends
+  with a check that HEAD and `git status` are what the stages found (after the readiness step, so a file it
+  left modified is no role's edit); a role that changed them gets `round.checkout_dirty` and the checkout
+  reset and switched back to the PR head before anything else runs, and a restart runs the same check once
+  the roles a push cut short are settled, before it switches. A/B (the operator's condition: no worse than
+  the built-in): three first-review rounds with a non-empty patch and posted simplifications, of two small
+  repositories (23 to 127 files, 1.4k to 2.7k added lines), the new prompt run headless on the same head
+  (`claude -p --model opus --effort medium`, the Agent tool used in every run, the checkout clean after each)
+  and compared idea by idea with the old patch. Of the old patches' 18 ideas the final prompt proposed 7,
+  listed 9 among the skipped (below the cut of six, or with a reason: one, a preload, it showed to be
+  ineffective) and missed 2; of the 11 the judge had posted, 3 were proposals, 7 listed, 1 missed (a test
+  helper in the 127-file diff that none of four runs found). Its other 11 proposals were new, mostly larger
+  removals (six hand-copied table rows as one loop), which is why the smaller posted ideas fell below the
+  cut. Three prompt revisions came from the misses: every hunk with small findings named and tests and
+  styles included, a smaller in-scope fix looked for before a skip, and no finding dropped silently. A run
+  took 15 to 16 minutes, about as long as the reviewers (16 to 21), so a first round's reviewer stage now
+  ends when the slowest of them does instead of 7 to 13 minutes later. Rejected: running `/simplify` in
+  parallel and keeping its patch (it edits the checkout the reviewers and the judge read), a second checkout
+  for it (another worktree per round, and a pool slot's databases), and more than six proposals (the judge
+  posts three, and a longer list only moved the ranking work to the judge).
+- **A running round's stage and time on the board** (2026-10-06; with the simplify alongside the reviewers,
+  "reviewing" said nothing about where a 30-minute round was). The state cell of a PR whose round runs names
+  the role at work and the whole minutes since `last_round_started_at` (`⣷ reviewing simplify · 17m`,
+  `reviewers · 9m` while several non-judge roles work, `judge · 31m`, `delta check · judge · 4m`, the time
+  alone during the readiness step and between stages); the card's LAST ROUND lists each role's start, end and
+  duration while the round runs, and the status dashboard's rounds line shows the same stage and time. The
+  data comes only from the run rows of the current round (the PR's highest round minus runs created before
+  the round started, the rule `magnum review` and the crash recovery use): two queries per board refresh
+  whatever the number of rows, none when no round runs. Labels come from the configuration, the shortest of a
+  role's name and aliases (claude-simplify is `simplify`), and the judge is `judge`, so roles stay data. The
+  text changes at most once a minute; the board's rows key already carries the clock and the dashboard's
+  header key gets the drawn stage and time, so a frame is redrawn when a round's minute changes and reused
+  within it. The board stays one line per PR: on a narrow screen the stage gives way (after UPDATED, before CI
+  in the drop order) and the time stays. Rejected: the time since a role started (the round's start is what
+  the throttles and the operator count), and the stage from the panes' agent status (herdr is not read when
+  the board draws, and the runs are the round's record).
+- **The read-only simplify lists every qualifying proposal** (2026-10-06, the operator, after the A/B check). A
+  cut at six, ranked by what a proposal removes, pushed the small ideas the old `/simplify` posted below the
+  cut whenever a diff had bigger ones (7 of its 11 posted ideas in three replayed rounds). The judge already
+  proves each proposal and posts at most three, so the cut only hid candidates from it. With every
+  qualifying proposal listed, the new simplify covered 16 of the old 18 ideas (10 of the 11 posted) and
+  added 11 of its own, most of them larger, in runs alongside the reviewers.

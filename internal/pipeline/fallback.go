@@ -17,7 +17,7 @@ import (
 // model not in tried (Agents.SwitchModel), and a new run of the same role
 // and round (kind continue) is submitted with the model-fallback prompt and
 // awaited like the original. reportPath is what the prompt names as the
-// report ("" for a git-diff role, whose patch magnum collects). A reviewer
+// report or result file. A reviewer
 // passes finishOld so its limited run ends failed with outcome model_limit;
 // the judge keeps its runs for the verdict. The continuation's run id is
 // added to ids (the judge's result-file check) before it is prompted.
@@ -84,22 +84,16 @@ func (rd *round) modelFallback(ctx context.Context, role config.Role, t turn, h 
 // report: up to one switch per fallback model. It returns the last turn and
 // the anchor of its prompt.
 func (rd *round) reviewerFallbacks(ctx context.Context, role config.Role, t turn, path, anchor string) (turn, string) {
-	reportPath := path
-	if role.Capture == config.CaptureGitDiff {
-		reportPath = "" // magnum writes the patch; the agent edits the checkout
-	}
 	var tried []string
 	for t.kind == waitEnded && ctx.Err() == nil {
-		if reportPath != "" {
-			if _, ok := rd.reportFile(role, t.run, path); ok {
-				break
-			}
+		if _, ok := rd.reportFile(role, t.run, path); ok {
+			break
 		}
 		h := rd.paneHealth(ctx, role, t.run, anchor)
 		if h.Kind != agents.HealthModelLimit {
 			break
 		}
-		next, nanchor, _, ok := rd.modelFallback(ctx, role, t, h, &tried, reportPath, "", nil, true)
+		next, nanchor, _, ok := rd.modelFallback(ctx, role, t, h, &tried, path, "", nil, true)
 		if !ok {
 			break
 		}

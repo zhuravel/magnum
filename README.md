@@ -70,9 +70,10 @@ flowchart LR
 3. **Check out.** Pool repositories (big apps with databases) get one of N provisioned slots; small
    repositories get a worktree next to their clone. Checkouts are detached, so they never collide with
    branches you have open yourself.
-4. **Review.** Every role from the pipeline configuration gets a pane: candidate reviewers run in
-   parallel, an optional simplifier applies and captures a cleanup patch (then the tree is restored),
-   and the judge gets all reports plus its own full pass.
+4. **Review.** Every role from the pipeline configuration gets a pane: candidate reviewers and the
+   read-only simplifier (it proposes simplifications in a report, edits nothing) run in parallel, a
+   checkout a role left modified is caught and restored, and the judge gets all reports plus its own
+   full pass.
 5. **Post and verify.** The judge posts one review with inline comments and an invisible run marker;
    Magnum verifies on GitHub that exactly that review by exactly that identity exists for that commit.
 6. **Repeat and clean up.** New commits re-prompt the same sessions. A push while the reviewers still
@@ -383,12 +384,10 @@ capture = "stdout"
 [[role]]
 name = "claude-simplify"
 kind = "claude"
-prompt = "claude-simplify.md"
+prompt = "claude-simplify.md"      # read-only: four angles in parallel subagents, every qualifying proposal, ranked
 runs = "first"                     # first review of a PR, then on request (`magnum review --role claude-simplify`, or `--simplify`)
 rerun_min_lines = 150              # ...and again once 150 code lines changed since its last run (0 = never)
-capture = "git-diff"               # the patch it would apply; the tree is restored afterwards
-output = "claude-simplify.patch"
-after = ["claude-review", "codex-review"]
+output = "claude-simplify.md"      # the proposals; no `after`, so it runs alongside the reviewers
 
 [[role]]
 name = "codex-judge"
@@ -403,7 +402,19 @@ timeout = "90m"
 ```
 
 Non-judge roles run in parallel unless `after = [...]` orders them; the judge runs last and gets every
-other role's report. With no `[[role]]` at all Magnum runs these four built-in roles, which
+other role's report. No role may edit the checkout: after each stage Magnum compares HEAD and `git status`
+with what the stage found, and a role that changed them gets a `round.checkout_dirty` warning and the
+checkout reset to the PR head (`git reset --hard`, `git clean -fd`) before anything else runs on it.
+
+claude-simplify is Claude Code's `/simplify` made read-only. Four subagents review the diff in parallel,
+one angle each: reuse (code the codebase already has), simplification (redundant state, near-copies,
+nesting, dead code), efficiency (repeated work, serial independent steps, hot-path blocking) and altitude
+(a symptom patched instead of the mechanism). Instead of applying the fixes it writes every qualifying
+proposal, ranked, to `claude-simplify.md`: the angle, the lines, what the change removes, the exact current and
+replacement lines, the other sites of the same idea and why behaviour is unchanged, then what it skipped
+and why. The judge proves each with its own equivalence probe and posts at most three.
+
+With no `[[role]]` at all Magnum runs these four built-in roles, which
 `config.defaults.toml` writes out in full; a block named like a built-in role inherits every key it does not
 set.
 
@@ -659,6 +670,15 @@ the PR goes back to closed and is released after a fresh `close_grace`. A round 
 judge is blocked, say) also goes back to closed, with a `pr.post_merge_failed` warning and a toast. A row
 closed without merging, or merged with its head reviewed, refuses at once.
 
+While a round runs, the state cell says what it is doing and for how long, in whole minutes since the
+round started: `⣷ reviewing simplify · 17m`, `reviewers · 9m` while several reviewers work at once,
+`judge · 31m` (a delta check too: `delta check · judge · 4m`), or the time alone (`3m`) during the
+readiness step and between stages. A role is named by the shortest of its name and aliases; the judge is
+always `judge`. On a narrow screen the cell gives up the stage first and keeps the time. The card's LAST
+ROUND lists each role of the running round with when it started and ended and how long it took (a role
+still working shows its time so far, one without a run "not started yet"), and the status dashboard's
+rounds line shows the same stage and time after each PR.
+
 FINDINGS shows what magnum's latest review concluded, also where its repository lets it only comment:
 the verdict (✗ blocking, ● comment, ✔ clean), the findings by priority (`P1 P2×3`) and the optional
 simplifications it suggested (`✂4`); the card spells out the decision, what was posted instead, the
@@ -776,7 +796,7 @@ model = "sonnet"
 | Package | Role |
 |---|---|
 | `internal/engine` | The daemon loop: poll, throttle, dispatch, health, release, reconcile, requests from the CLI. |
-| `internal/pipeline` | One review round: reviewers in parallel, simplifier, judge, verification on GitHub. |
+| `internal/pipeline` | One review round: reviewers and the simplifier in parallel, the checkout check, judge, verification on GitHub. |
 | `internal/agents` | Agent sessions in herdr: start, resume, prompt, observe, titles, trust dialogs, health classification. |
 | `internal/slots` | Pool slots and per-PR worktrees: provision, checkout, release, teardown hooks, guards. |
 | `internal/store` | The SQLite registry: PRs, slots, assignments, sessions, runs, events; compare-and-set transitions. |

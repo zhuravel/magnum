@@ -661,13 +661,13 @@ func (c *Config) validateRole(r Role, kinds map[string]Kind, ids map[string]bool
 		bad("rerun_min_lines must be 0 or more, got %d", r.RerunMinLines)
 	}
 	switch r.Capture {
-	case CaptureFile, CaptureGitDiff:
+	case CaptureFile:
 	case CaptureStdout:
 		if !r.IsShell() {
 			bad("capture stdout is for shell roles only")
 		}
 	default:
-		bad("capture must be file, stdout or git-diff, got %q", r.Capture)
+		bad("capture must be file or stdout, got %q", r.Capture)
 	}
 	if r.Judge {
 		if r.IsShell() {

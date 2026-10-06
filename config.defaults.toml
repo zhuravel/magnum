@@ -267,10 +267,9 @@ runs = "first"                        # always | first (until it ran once, then 
 rerun_min_lines = 150                 # runs again once this many code lines changed since its last run
                                       # (comments, blank lines, whitespace moves, docs and the lines of a merged
                                       # base branch do not count); 0 = never
-prompt = "claude-simplify.md"
-capture = "git-diff"                  # magnum saves `git diff` as output, then reverts the checkout
-output = "claude-simplify.patch"
-after = ["claude-review", "codex-review"]
+prompt = "claude-simplify.md"           # read-only: four parallel angle reviews (reuse, simplification,
+                                      # efficiency, altitude), then at most 6 ranked proposals, edits none
+output = "claude-simplify.md"         # the proposals; no `after`, so it runs alongside the reviewers
 timeout = "40m"
 aliases = ["simplify"]
 

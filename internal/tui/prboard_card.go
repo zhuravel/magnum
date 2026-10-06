@@ -323,7 +323,9 @@ func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
 			add("  " + w)
 		}
 	}
-	if t, why := r.LastRound, r.RoundWhy; t != nil || why != nil {
+	// A round in flight shows its roles' timeline in place of the stage
+	// timings, which were measured when the rows were read.
+	if t, why, g := r.LastRound, r.RoundWhy, roundProgress(r); t != nil || why != nil || g != nil {
 		head := p.g.headed("LAST ROUND")
 		if t != nil {
 			head += fmt.Sprintf(" (%d", t.Round)
@@ -340,7 +342,12 @@ func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
 				}
 			}
 		}
-		if t != nil {
+		switch {
+		case g != nil:
+			for _, l := range p.progressLines(*g) {
+				add("  " + l)
+			}
+		case t != nil:
 			for _, l := range flow(p.timingParts(*t), p.st.Dim.Render(" · "), max(inner-2, 10)) {
 				add("  " + l)
 			}

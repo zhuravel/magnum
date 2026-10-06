@@ -105,7 +105,7 @@ func TestDefaultsEqualExplicitConfig(t *testing.T) {
 		"codex-judge":     {"codex", "session", "always", "file", "codex-judge.json", "judge-initial.md", "judge-rereview.md", "codex", 90 * time.Minute},
 		"claude-review":   {"claude", "session", "always", "file", "claude-review.md", "claude-review.md", "claude-rereview.md", "claude", 40 * time.Minute},
 		"codex-review":    {"shell", "shell", "always", "stdout", "codex-review.md", "", "", "codex", 40 * time.Minute},
-		"claude-simplify": {"claude", "session", "first", "git-diff", "claude-simplify.patch", "claude-simplify.md", "claude-simplify.md", "claude", 40 * time.Minute},
+		"claude-simplify": {"claude", "session", "first", "file", "claude-simplify.md", "claude-simplify.md", "claude-simplify.md", "claude", 40 * time.Minute},
 	}
 	for _, r := range explicit.Roles {
 		x := want[r.Name]
@@ -193,10 +193,14 @@ func TestValidatePipeline(t *testing.T) {
 		"after unknown":      {func(c *Config) { role(c, "claude-simplify").After = []string{"nope"} }, `unknown role "nope"`},
 		"after itself":       {func(c *Config) { role(c, "claude-simplify").After = []string{"claude-simplify"} }, "names itself"},
 		"after judge":        {func(c *Config) { role(c, "claude-simplify").After = []string{"codex-judge"} }, "the judge always runs last"},
-		"after cycle":        {func(c *Config) { role(c, "claude-review").After = []string{"claude-simplify"} }, "cycle"},
+		"after cycle": {func(c *Config) {
+			role(c, "claude-simplify").After = []string{"claude-review"}
+			role(c, "claude-review").After = []string{"claude-simplify"}
+		}, "cycle"},
 		"judge after":        {func(c *Config) { role(c, "codex-judge").After = []string{"claude-review"} }, "a judge takes no after"},
 		"judge runs first":   {func(c *Config) { role(c, "codex-judge").Runs = RunsFirst }, "runs = always"},
-		"judge git-diff":     {func(c *Config) { role(c, "codex-judge").Capture = CaptureGitDiff }, "capture = file"},
+		"judge stdout":       {func(c *Config) { role(c, "codex-judge").Capture = CaptureStdout }, "shell roles only"},
+		"capture git-diff":   {func(c *Config) { role(c, "claude-simplify").Capture = "git-diff" }, `capture must be file or stdout, got "git-diff"`},
 		"judge shell":        {add(Role{Name: "sh-judge", Kind: KindShell, Judge: true, Command: "x"}), "not a shell command"},
 		"bad runs":           {func(c *Config) { role(c, "claude-review").Runs = "sometimes" }, "runs must be"},
 		"stdout on session":  {func(c *Config) { role(c, "claude-review").Capture = CaptureStdout }, "shell roles only"},
@@ -475,7 +479,6 @@ aliases = ["omp"]
 name = "droid-simplify"
 kind = "droid"
 runs = "manual"
-capture = "git-diff"
 after = ["omp"]
 aliases = ["dsimp"]
 [[role]]
@@ -509,7 +512,7 @@ judge = true
 		t.Fatal("omp-review is not one of acme's roles")
 	}
 	ds, ok := cfg.RoleByNameOrAlias(b, "DSIMP")
-	if !ok || ds.Output != "droid-simplify.patch" || ds.Prompt != "droid-simplify.md" || ds.Rereview != "droid-simplify.md" ||
+	if !ok || ds.Output != "droid-simplify.md" || ds.Prompt != "droid-simplify.md" || ds.Rereview != "droid-simplify.md" ||
 		!slices.Equal(ds.After, []string{"omp-review"}) {
 		t.Fatalf("droid-simplify = %+v", ds)
 	}
@@ -530,17 +533,48 @@ judge = true
 	}
 }
 
-func TestStagesDefault(t *testing.T) {
+// A user config that pins only claude-simplify's model and effort (as the
+// maintainer's does) keeps the built-in read-only role: its report file, no
+// after, so it still runs alongside the reviewers.
+func TestUserModelAndEffortKeepTheReadOnlyParallelSimplify(t *testing.T) {
+	t.Setenv("MAGNUM_CONFIG", "")
+	dir := t.TempDir()
+	user := filepath.Join(dir, "user.toml")
+	if err := os.WriteFile(user, []byte("[[role]]\nname = \"claude-simplify\"\nmodel = \"opus\"\neffort = \"medium\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(paths.Layout{Home: dir, UserConfig: user}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, ok := cfg.RoleByNameOrAlias(nil, "simplify")
+	if !ok || s.Model != "opus" || s.Effort != "medium" || s.Capture != CaptureFile || s.ReportFile() != "claude-simplify.md" ||
+		len(s.After) != 0 || s.Runs != RunsFirst || s.RerunMinLines != DefaultSimplifyRerunLines || s.Prompt != "claude-simplify.md" {
+		t.Fatalf("claude-simplify = %+v", s)
+	}
+	if first := roleNames(cfg.Stages(nil)[0]); !slices.Contains(first, "claude-simplify") || !slices.Contains(first, "claude-review") {
+		t.Fatalf("first stage = %v", first)
+	}
+}
+
+// The read-only simplify runs alongside the reviewers instead of after them
+// (it used to wait for both, about 10 minutes of every first review).
+func TestDefaultStagesRunSimplifyAlongsideTheReviewers(t *testing.T) {
 	cfg := validPipelineConfig()
 	var got [][]string
 	for _, s := range cfg.Stages(nil) {
 		got = append(got, roleNames(s))
 	}
-	want := [][]string{{"claude-review", "codex-review"}, {"claude-simplify"}, {"codex-judge"}}
+	want := [][]string{{"claude-review", "codex-review", "claude-simplify"}, {"codex-judge"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Stages = %v, want %v", got, want)
 	}
 	// A dependency outside the watch's set is ignored.
+	for i := range cfg.Roles {
+		if cfg.Roles[i].Name == "claude-simplify" {
+			cfg.Roles[i].After = []string{"claude-review"}
+		}
+	}
 	cfg.Watches[0].Roles = []string{"codex-judge", "claude-simplify"}
 	got = nil
 	for _, s := range cfg.Stages(&cfg.Watches[0]) {

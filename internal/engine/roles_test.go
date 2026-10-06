@@ -50,7 +50,7 @@ func TestWatchRolesRestrictPanesAndAgents(t *testing.T) {
 func TestRequestedRoleGetsAPaneForThatRound(t *testing.T) {
 	h := newHarness(t, func(h *harness) {
 		addRole(h, config.Role{Name: "droid-simplify", Kind: config.KindDroid, Runs: config.RunsManual,
-			Capture: config.CaptureGitDiff, After: []string{store.RoleClaude, store.RoleCodexReview}})
+			After: []string{store.RoleClaude, store.RoleCodexReview}})
 	})
 	pr := h.reviewedPR(2, "b1")
 	if h.lastWorkspaceHas(pr.ID, "droid-simplify") {

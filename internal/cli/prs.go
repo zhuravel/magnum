@@ -331,9 +331,11 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 		if err := timings.fill(ctx, st, cfg, ids, out, inspNow()); err != nil {
 			return nil, err
 		}
-		// The card's spend and round roles: a registry that cannot say leaves
-		// them out rather than the board.
+		// The card's spend and round roles, then the rounds in flight (which
+		// read the round roles): a registry that cannot say leaves them out
+		// rather than the board.
 		_ = boardRoundFacts(ctx, st, ids, out, inspNow())
+		_ = boardRoundProgress(ctx, st, cfg, ids, out)
 		return out, nil
 	}
 }

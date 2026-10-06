@@ -42,9 +42,8 @@ const (
 	RunsManual = "manual" // only when requested (today `magnum review --simplify`, for claude-simplify)
 	RunsNever  = "never"  // disabled; requests are refused
 
-	CaptureFile    = "file"     // the agent (or command) writes ReportFile itself
-	CaptureStdout  = "stdout"   // shell roles: magnum tees the command's stdout into ReportFile (stderr stays in the pane)
-	CaptureGitDiff = "git-diff" // magnum saves `git diff` of the checkout into ReportFile, then reverts the tree
+	CaptureFile   = "file"   // the agent (or command) writes ReportFile itself
+	CaptureStdout = "stdout" // shell roles: magnum tees the command's stdout into ReportFile (stderr stays in the pane)
 
 	WrapperAuto  = "auto"  // probe `zsh -ic 'whence -w <kind>'` once: a function or alias is a wrapper
 	WrapperTrue  = "true"  // the command is a wrapper that supplies its own flags

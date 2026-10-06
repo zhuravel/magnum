@@ -110,12 +110,12 @@ type Role struct {
 	Tool string `toml:"tool"`
 
 	// Output: the report file name in the round's directory. Default
-	// <name>.json for a judge, <name>.patch for capture = "git-diff", else
-	// <name>.md.
+	// <name>.json for a judge, else <name>.md.
 	Output string `toml:"output"`
-	// Capture: "file", "stdout" or "git-diff" (see CaptureFile). Default
-	// "stdout" for shell roles, else "file". "stdout" is for shell roles
-	// only; a judge uses "file".
+	// Capture: "file" or "stdout" (see CaptureFile). Default "stdout" for
+	// shell roles, else "file". "stdout" is for shell roles only; a judge
+	// uses "file". No role may edit the checkout: a round resets a tree a
+	// stage left modified (pipeline).
 	Capture string `toml:"capture"`
 	// Timeout per turn. Default daemon.judge_timeout (90m) for a judge,
 	// daemon.reviewer_timeout (40m) otherwise.
@@ -239,9 +239,10 @@ func (r Role) ShouldRun(ranBefore, requested bool) bool {
 //     {{if .BaseSHA}}{{.BaseSHA}}{{else}}{{.BaseRef}}{{end}}" (the merge base,
 //     else the base ref), ok_status [0], capture stdout; aliases codex,
 //     codex_review.
-//   - claude-simplify: claude, runs first, prompt claude-simplify.md,
-//     capture git-diff, output claude-simplify.patch, after claude-review and
-//     codex-review; aliases simplify.
+//   - claude-simplify: claude, runs first, rerun_min_lines
+//     DefaultSimplifyRerunLines, prompt claude-simplify.md (read-only: it
+//     writes its proposals to claude-simplify.md), no after, so it runs in
+//     parallel with the reviewers; aliases simplify.
 //
 // Each non-judge role carries a Summary, which makes it a candidate for
 // triage ([triage]).
@@ -256,8 +257,7 @@ func DefaultRoles() []Role {
 		{Name: RoleCodexReview, Kind: KindShell, Tool: KindCodex, Command: defaultCodexReviewCommand, Summary: "Codex's own static review of the diff",
 			OKStatus: []int{0}, Capture: CaptureStdout, Aliases: []string{"codex", "codex_review"}},
 		{Name: RoleClaudeSimplify, Kind: KindClaude, Runs: RunsFirst, RerunMinLines: DefaultSimplifyRerunLines, Prompt: "claude-simplify.md",
-			Summary: "simplifications and refactors of the changed code", Capture: CaptureGitDiff, Output: "claude-simplify.patch",
-			After: []string{RoleClaudeReview, RoleCodexReview}, Aliases: []string{"simplify"}},
+			Summary: "simplifications and refactors of the changed code", Aliases: []string{"simplify"}},
 	}
 }
 
@@ -269,11 +269,8 @@ func DefaultRoles() []Role {
 const defaultCodexReviewCommand = "command codex review --base {{if .BaseSHA}}{{.BaseSHA}}{{else}}{{.BaseRef}}{{end}}"
 
 func defaultOutput(r Role) string {
-	switch {
-	case r.Judge:
+	if r.Judge {
 		return r.Name + ".json"
-	case r.Capture == CaptureGitDiff:
-		return r.Name + ".patch"
 	}
 	return r.Name + ".md"
 }

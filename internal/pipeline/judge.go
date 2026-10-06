@@ -616,8 +616,7 @@ const noApproveEvent = "COMMENT"
 // ways in a post-merge round, where a verdict blocks nothing; and COMMENT
 // for no findings when one of the round's reports is missing (an APPROVE
 // once went out while claude-review had hit a usage limit: a review that did
-// not hear every reviewer approves nothing). A git-diff role that found
-// nothing to change (ReportEmpty) did its job and is not missing.
+// not hear every reviewer approves nothing).
 func JudgeEvents(cfg *config.Config, fullName string, id *config.Identity, postMerge bool, reports ...agents.Report) (noFindings, blocking string) {
 	if postMerge {
 		return PostMergeEvent, PostMergeEvent
@@ -630,12 +629,11 @@ func JudgeEvents(cfg *config.Config, fullName string, id *config.Identity, postM
 }
 
 // missingReports names the reports a role left unusable, with why
-// ("claude-review (usage_limit)"); a git-diff role without changes is not
-// one of them.
+// ("claude-review (usage_limit)").
 func missingReports(reports []agents.Report) []string {
 	var out []string
 	for _, r := range reports {
-		if (r.Missing || r.Path == "") && r.Status != ReportEmpty {
+		if r.Missing || r.Path == "" {
 			out = append(out, fmt.Sprintf("%s (%s)", r.Role, cmp.Or(r.Status, r.Detail, "no report")))
 		}
 	}

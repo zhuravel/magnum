@@ -399,21 +399,26 @@ func TestSelfAuthored(t *testing.T) {
 	mustContain(t, "judge prompt", e.ag.submitsFor(agents.RoleJudge)[0].Text, "self_authored: true")
 }
 
-func TestSimplifyCollectsPatchAndRestoresTree(t *testing.T) {
+// The read-only simplify runs in the reviewers' stage, not after it: it is
+// prompted while claude-review still works, and its report is the file it
+// writes, which the judge reads like any reviewer's.
+func TestSimplifyRunsAlongsideTheReviewersAndWritesItsReport(t *testing.T) {
 	e := newEnv(t)
+	prompted := make(chan struct{})
+	var overlapped bool
 	e.ag.behaviors[agents.RoleSimplify] = []behavior{func(f *fakeAgents, run store.Run, text string) error {
-		e.git.mu.Lock()
-		e.git.head = "fffffffffffffffffffffffffffffffffffffff0" // it committed despite the prompt
-		e.git.mu.Unlock()
-		return f.end(run.ID)
+		close(prompted)
+		return writeReport("## 1. Simplification: drop the copy\n")(f, run, text)
+	}}
+	e.ag.behaviors[agents.RoleClaude] = []behavior{func(f *fakeAgents, run store.Run, text string) error {
+		select {
+		case <-prompted:
+			overlapped = true
+		case <-time.After(5 * time.Second):
+		}
+		return writeReport("## P2 something\n")(f, run, text)
 	}}
 	e.ag.behaviors[agents.RoleJudge] = []behavior{e.judgePosts(511, "COMMENTED", "COMMENT").behavior(t)}
-	patch := "diff --git a/app/x.rb b/app/x.rb\n--- a/app/x.rb\n+++ b/app/x.rb\n@@ -1 +1 @@\n-a\n+b\n"
-	e.exec.Rules = []execx.Rule{
-		{Prefix: []string{"git", "-C", slotPath, "diff"}, Result: execx.Result{Stdout: []byte(patch)}},
-		{Prefix: []string{"git", "-C", slotPath, "reset", "--hard", "--quiet"}},
-		{Prefix: []string{"git", "-C", slotPath, "clean", "-fd"}},
-	}
 	in := e.input(KindInitial)
 	in.Requested = []string{"simplify"} // magnum review --simplify
 
@@ -424,46 +429,134 @@ func TestSimplifyCollectsPatchAndRestoresTree(t *testing.T) {
 	if res.Outcome != OutcomePosted {
 		t.Fatalf("result = %+v", res)
 	}
-	path := filepath.Join(e.reportDir(), "claude-simplify.patch")
+	if !overlapped {
+		t.Error("claude-simplify was not prompted while claude-review worked")
+	}
+	path := filepath.Join(e.reportDir(), "claude-simplify.md")
 	if got := res.Reports[agents.RoleSimplify]; got.Status != ReportOK || got.Path != path {
-		t.Errorf("simplify report = %+v", got)
+		t.Errorf("simplify report = %+v, want ok at %s", got, path)
 	}
-	if b, err := os.ReadFile(path); err != nil || string(b) != patch {
-		t.Errorf("claude-simplify.patch = %q, %v", b, err)
+	mustContain(t, "simplify prompt", e.ag.submitsFor(agents.RoleSimplify)[0].Text,
+		"never edit", "Reuse:", "Simplification:", "Efficiency:", "Altitude:", path, in.BaseSHA)
+	mustContain(t, "judge prompt", e.ag.submitsFor(agents.RoleJudge)[0].Text, "claude-simplify: "+path)
+	if run := e.runOf(agents.RoleSimplify, store.RunInitial); run.State != store.RunVerified {
+		t.Errorf("simplify run = %s / %v", run.State, store.Deref(run.Outcome))
 	}
-	diff := e.exec.CallsWithPrefix("git", "-C", slotPath, "diff")
-	if len(diff) != 1 || diff[0].Mutates || !strings.Contains(strings.Join(diff[0].Args, " "), target) {
-		t.Errorf("diff calls = %+v", diff)
+	// A clean checkout is left alone: no git command ran outside gitx.
+	if calls := e.exec.CallsWithPrefix("git"); len(calls) != 0 {
+		t.Errorf("git calls = %+v", calls)
+	}
+}
+
+// restoreRules stub the restore's git commands; the reset cleans the fake
+// tree unless stillDirty.
+func (e *env) restoreRules(stillDirty bool) {
+	e.exec.Rules = []execx.Rule{
+		{Prefix: []string{"git", "-C", slotPath, "reset", "--hard", "--quiet"}, Fn: func(execx.Cmd) (execx.Result, error) {
+			if !stillDirty {
+				e.git.mu.Lock()
+				e.git.status = gitx.Status{}
+				e.git.mu.Unlock()
+			}
+			return execx.Result{}, nil
+		}},
+		{Prefix: []string{"git", "-C", slotPath, "clean", "-fd"}},
+	}
+}
+
+// dirty is a behavior that edits the checkout (and commits, moving HEAD)
+// despite the prompt, then writes its report.
+func (e *env) dirty(head string) behavior {
+	return func(f *fakeAgents, run store.Run, text string) error {
+		e.git.mu.Lock()
+		e.git.status = gitx.Status{Tracked: 2, Untracked: 1}
+		if head != "" {
+			e.git.head = head
+		}
+		e.git.mu.Unlock()
+		return writeReport("## 1. Simplification\n")(f, run, text)
+	}
+}
+
+// A role that edits the checkout is caught after its stage: the round warns
+// (round.checkout_dirty), resets and cleans the tree, switches HEAD back to
+// the target, and only then prompts the judge.
+func TestAReviewerThatEditsTheCheckoutIsCaughtAndReset(t *testing.T) {
+	e := newEnv(t)
+	e.restoreRules(false)
+	e.ag.behaviors[agents.RoleSimplify] = []behavior{e.dirty("fffffffffffffffffffffffffffffffffffffff0")}
+	var judgeSaw gitx.Status
+	judge := e.judgePosts(512, "COMMENTED", "COMMENT").behavior(t)
+	e.ag.behaviors[agents.RoleJudge] = []behavior{func(f *fakeAgents, run store.Run, text string) error {
+		e.git.mu.Lock()
+		judgeSaw = e.git.status
+		e.git.mu.Unlock()
+		return judge(f, run, text)
+	}}
+	in := e.input(KindInitial)
+	in.Requested = []string{"simplify"}
+
+	res, err := e.r.RunRound(e.ctx, in)
+	if err != nil || res.Outcome != OutcomePosted {
+		t.Fatalf("result = %+v, err = %v", res, err)
+	}
+	if judgeSaw.Dirty() {
+		t.Errorf("the judge ran on a dirty checkout: %+v", judgeSaw)
 	}
 	for _, prefix := range [][]string{{"git", "-C", slotPath, "reset", "--hard", "--quiet"}, {"git", "-C", slotPath, "clean", "-fd"}} {
 		calls := e.exec.CallsWithPrefix(prefix...)
-		if len(calls) != 1 || !calls[0].Mutates {
+		if len(calls) != 1 || !calls[0].Mutates || !slices.Equal(calls[0].Unset, gitx.ScrubbedEnv()) {
 			t.Errorf("%v calls = %+v", prefix, calls)
-		}
-	}
-	// Every git command the round runs outside gitx drops the variables that
-	// would point git at another repository.
-	gitCalls := e.exec.CallsWithPrefix("git")
-	if len(gitCalls) == 0 {
-		t.Fatal("no git command ran")
-	}
-	for _, c := range gitCalls {
-		if !slices.Equal(c.Unset, gitx.ScrubbedEnv()) {
-			t.Errorf("%s: Unset = %q, want gitx.ScrubbedEnv() %q", c, c.Unset, gitx.ScrubbedEnv())
 		}
 	}
 	if len(e.git.switches) != 1 || e.git.switches[0] != target || e.git.head != target {
 		t.Errorf("head not restored: switches %v head %s", e.git.switches, e.git.head)
 	}
-	// Simplify runs after both reviewers finished, before the judge.
-	order := strings.Join(e.ag.order, " ")
-	if !strings.HasSuffix(order, "submit:claude-simplify submit:codex-judge") {
-		t.Errorf("call order = %s", order)
+	var warned bool
+	for _, ev := range e.events() {
+		if ev.Kind == "round.checkout_dirty" {
+			warned = true
+			mustContain(t, "event", ev.Message, "claude-review", "claude-simplify", "HEAD moved to fffffff", "2 tracked and 1 untracked")
+		}
 	}
-	mustContain(t, "simplify prompt", e.ag.submitsFor(agents.RoleSimplify)[0].Text, "/simplify", in.BaseSHA)
-	mustContain(t, "judge prompt", e.ag.submitsFor(agents.RoleJudge)[0].Text, "claude-simplify: "+path)
-	if run := e.runOf(agents.RoleSimplify, store.RunInitial); run.State != store.RunVerified {
-		t.Errorf("simplify run = %s / %v", run.State, store.Deref(run.Outcome))
+	if !warned {
+		t.Error("no round.checkout_dirty event")
+	}
+}
+
+// A checkout that stays dirty after the restore fails the round before the
+// judge: nothing may run on it.
+func TestDirtyCheckoutAfterRestoreFailsRound(t *testing.T) {
+	e := newEnv(t)
+	e.restoreRules(true)
+	e.ag.behaviors[agents.RoleClaude] = []behavior{e.dirty("")}
+	res, err := e.r.RunRound(e.ctx, e.input(KindInitial))
+	if err == nil || res.Outcome != OutcomeError || !strings.Contains(res.Error, "still dirty") {
+		t.Fatalf("result = %+v, err = %v", res, err)
+	}
+	if len(e.ag.submitsFor(agents.RoleJudge)) != 0 {
+		t.Fatal("the judge must not run")
+	}
+}
+
+// A file the readiness step left modified is no role's edit: the check
+// compares with the checkout as the stages found it, so it neither warns nor
+// resets.
+func TestACheckoutDirtyBeforeTheReviewersIsLeftAlone(t *testing.T) {
+	e := newEnv(t)
+	e.git.status = gitx.Status{Tracked: 1}
+	e.ag.behaviors[agents.RoleJudge] = []behavior{e.judgePosts(513, "COMMENTED", "COMMENT").behavior(t)}
+	res, err := e.r.RunRound(e.ctx, e.input(KindInitial))
+	if err != nil || res.Outcome != OutcomePosted {
+		t.Fatalf("result = %+v, err = %v", res, err)
+	}
+	if calls := e.exec.CallsWithPrefix("git"); len(calls) != 0 {
+		t.Errorf("git calls = %+v", calls)
+	}
+	for _, ev := range e.events() {
+		if ev.Kind == "round.checkout_dirty" {
+			t.Errorf("unexpected event: %s", ev.Message)
+		}
 	}
 }
 

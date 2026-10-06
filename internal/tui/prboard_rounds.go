@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
@@ -40,6 +42,8 @@ type RoundWhy struct {
 	Skipped   []string
 	Reason    string
 	EveryRole string
+	// At is when the round started (its engine.round_start event).
+	At time.Time
 }
 
 // RoleRerun is a role that ran again because Lines code lines changed
@@ -47,6 +51,93 @@ type RoundWhy struct {
 type RoleRerun struct {
 	Role  string
 	Lines int
+}
+
+// RoundProgress is a round in flight: when it started (the PR's
+// last_round_started_at) and its roles, the ones with a run in the order
+// their runs were created, then the ones the round named that have none
+// yet, the judge last.
+type RoundProgress struct {
+	StartedAt time.Time
+	Roles     []RoleProgress
+}
+
+// RoleProgress is one role of a round in flight. Started is when its run
+// was prompted (zero: not started yet) and Ended when it ended (zero while
+// it works); Working: its run is submitted or working; Failed: it failed or
+// was abandoned. Label is the short name the state cell gives it while it
+// works (the shortest of its name and aliases, see the cli's stageLabel);
+// the judge is "judge" whatever its names.
+type RoleProgress struct {
+	Role, Label     string
+	Judge           bool
+	Started, Ended  time.Time
+	Working, Failed bool
+}
+
+// stageLabel is what the state cell calls r while it works.
+func (r RoleProgress) stageLabel() string {
+	switch {
+	case r.Judge:
+		return "judge"
+	case r.Label != "":
+		return r.Label
+	}
+	return r.Role
+}
+
+// stage is what the round is doing: the label of the one role working, the
+// judge's while it works (it runs last, alone), "reviewers" while several
+// other roles work at once; "" while none works (the readiness step before
+// the reviewers, the time between stages, the verification).
+func (g RoundProgress) stage() string {
+	var working []RoleProgress
+	for _, r := range g.Roles {
+		switch {
+		case !r.Working:
+		case r.Judge:
+			return r.stageLabel()
+		default:
+			working = append(working, r)
+		}
+	}
+	switch len(working) {
+	case 0:
+		return ""
+	case 1:
+		return working[0].stageLabel()
+	}
+	return "reviewers"
+}
+
+// roundElapsed is how long a round has run in whole minutes ("0m", "17m",
+// "1h5m", "2d3h"): HumanDuration of the time cut to the minute, so the text
+// changes at most once a minute.
+func roundElapsed(d time.Duration) string {
+	if d < time.Minute {
+		return "0m"
+	}
+	return HumanDuration(d.Truncate(time.Minute))
+}
+
+// progressText is what a round in flight does and for how long at now:
+// "simplify · 17m"; the time alone ("17m") when no role works or withStage
+// is false.
+func progressText(g RoundProgress, now time.Time, withStage bool) string {
+	t := roundElapsed(max(now.Sub(g.StartedAt), 0))
+	if s := g.stage(); s != "" && withStage {
+		return s + " · " + t
+	}
+	return t
+}
+
+// cleanRoundProgress is g with its text safe to draw.
+func cleanRoundProgress(g RoundProgress) RoundProgress {
+	g.Roles = slices.Clone(g.Roles)
+	for i := range g.Roles {
+		g.Roles[i].Role, g.Roles[i].Label = cleanText(g.Roles[i].Role), cleanText(g.Roles[i].Label)
+	}
+	return g
 }
 
 // cleanRoundWhy is w with its text safe to draw.
@@ -156,6 +247,43 @@ func (p prbPainter) roundWhyLines(w RoundWhy) []string {
 	}
 	if len(asked) > 0 {
 		out = append(out, p.st.Dim.Render("asked for: ")+strings.Join(asked, ", "))
+	}
+	return out
+}
+
+// progressLines are a round in flight on the card: when it started and how
+// long it has run, then its roles one a line, each with when it started and
+// ended and how long it took ("claude-review  started 14:02 · ended 14:15 ·
+// 13m04s"), a working one the time so far ("running 17m02s"), a failed one
+// in red and one without a run "not started yet". Times are the card's
+// StageDuration.
+func (p prbPainter) progressLines(g RoundProgress) []string {
+	clock := func(t time.Time) string { return t.Local().Format("15:04") }
+	sep := p.st.Dim.Render(" · ")
+	out := []string{p.st.Dim.Render("round started ") + clock(g.StartedAt) + sep +
+		p.st.Accent.Render("running "+StageDuration(p.now.Sub(g.StartedAt)))}
+	nameW := 0
+	for _, r := range g.Roles {
+		nameW = max(nameW, ansi.StringWidth(r.Role))
+	}
+	for _, r := range g.Roles {
+		name := r.Role + spaces(nameW-ansi.StringWidth(r.Role)+2)
+		if r.Started.IsZero() {
+			out = append(out, name+p.st.Dim.Render("not started yet"))
+			continue
+		}
+		parts := []string{p.st.Dim.Render("started ") + clock(r.Started)}
+		switch {
+		case r.Working:
+			parts = append(parts, p.st.Accent.Render("running "+StageDuration(p.now.Sub(r.Started))))
+		case !r.Ended.IsZero() && r.Failed:
+			parts = append(parts, p.pal.red.Render("failed "+clock(r.Ended)), StageDuration(r.Ended.Sub(r.Started)))
+		case !r.Ended.IsZero():
+			parts = append(parts, p.st.Dim.Render("ended ")+clock(r.Ended), StageDuration(r.Ended.Sub(r.Started)))
+		case r.Failed:
+			parts = append(parts, p.pal.red.Render("failed"))
+		}
+		out = append(out, name+strings.Join(parts, sep))
 	}
 	return out
 }

@@ -286,7 +286,7 @@ func (e *Engine) onPosted(ctx context.Context, job *roundJob, pr store.PR, in pi
 	simplified := false
 	if r, ok := e.cfg.RoleByNameOrAlias(&job.watch, "simplify"); ok {
 		if rep, ok := res.Reports[agents.Role(r.Name)]; ok {
-			simplified = rep.Status == pipeline.ReportOK || rep.Status == pipeline.ReportEmpty || rep.Status == ""
+			simplified = rep.Status == pipeline.ReportOK || rep.Status == ""
 		}
 	}
 	login := e.reviewerLogin(pr.Identity)
@@ -389,10 +389,6 @@ func (e *Engine) onPosted(ctx context.Context, job *roundJob, pr store.PR, in pi
 		}
 		if k := e.reportKind(&job.watch, rep); k != "" {
 			e.delKV(ctx, kvToolBackoff(k))
-		}
-		if rep.Capture == config.CaptureGitDiff && rep.Path != "" {
-			e.event(ctx, "info", prSubject(job.repo, pr.Number), "round.patch", fmt.Sprintf("%s produced a patch: %s", role, rep.Path),
-				map[string]any{"role": string(role), "path": rep.Path})
 		}
 	}
 	switch {

@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -11,26 +12,26 @@ import (
 
 // A round whose reviewer left no usable report never yields an APPROVE: the
 // judge's no_findings_event is COMMENT for that round (an APPROVE was posted
-// while claude-review had hit a usage limit). A git-diff role that found
-// nothing to change did its job; it is no missing reviewer. The blocking
-// event and a post-merge round are unchanged.
+// while claude-review had hit a usage limit). A simplify with nothing to
+// propose wrote a report that says so; it is no missing reviewer. The
+// blocking event and a post-merge round are unchanged.
 func TestJudgeEventsGiveNoApproveWhileAReviewerReportIsMissing(t *testing.T) {
 	cfg := config.Defaults()
 	id := &config.Identity{Name: "zhuravel", Kind: "gh", Login: "zhuravel", NoFindingsEvent: "APPROVE", BlockingEvent: "REQUEST_CHANGES"}
 	ok := []agents.Report{{Role: "claude-review", Path: "/r/claude-review.md", Status: ReportOK}, {Role: "codex-review", Path: "/r/codex-review.md", Status: ReportOK}}
-	noChanges := agents.Report{Role: "claude-simplify", Status: ReportEmpty, Missing: true, Detail: "no changes"}
+	noProposals := agents.Report{Role: "claude-simplify", Path: "/r/claude-simplify.md", Status: ReportOK}
 	for name, tc := range map[string]struct {
 		reports      []agents.Report
 		postMerge    bool
 		wantNF, want string
 	}{
-		"every report":            {ok, false, "APPROVE", "REQUEST_CHANGES"},
-		"no reviewer ran":         {nil, false, "APPROVE", "REQUEST_CHANGES"},
-		"a simplify without edit": {append(ok[:2:2], noChanges), false, "APPROVE", "REQUEST_CHANGES"},
-		"a usage limit":           {[]agents.Report{{Role: "claude-review", Status: "usage_limit", Missing: true}, ok[1]}, false, "COMMENT", "REQUEST_CHANGES"},
-		"a timeout":               {[]agents.Report{ok[0], {Role: "codex-review", Status: ReportTimeout, Missing: true, Detail: "timed out after 40m"}}, false, "COMMENT", "REQUEST_CHANGES"},
-		"a report without a path": {[]agents.Report{ok[0], {Role: "codex-review", Status: ReportBusy}}, false, "COMMENT", "REQUEST_CHANGES"},
-		"post-merge":              {[]agents.Report{{Role: "claude-review", Status: "usage_limit", Missing: true}}, true, "COMMENT", "COMMENT"},
+		"every report":                 {ok, false, "APPROVE", "REQUEST_CHANGES"},
+		"no reviewer ran":              {nil, false, "APPROVE", "REQUEST_CHANGES"},
+		"a simplify without proposals": {append(ok[:2:2], noProposals), false, "APPROVE", "REQUEST_CHANGES"},
+		"a usage limit":                {[]agents.Report{{Role: "claude-review", Status: "usage_limit", Missing: true}, ok[1]}, false, "COMMENT", "REQUEST_CHANGES"},
+		"a timeout":                    {[]agents.Report{ok[0], {Role: "codex-review", Status: ReportTimeout, Missing: true, Detail: "timed out after 40m"}}, false, "COMMENT", "REQUEST_CHANGES"},
+		"a report without a path":      {[]agents.Report{ok[0], {Role: "codex-review", Status: ReportBusy}}, false, "COMMENT", "REQUEST_CHANGES"},
+		"post-merge":                   {[]agents.Report{{Role: "claude-review", Status: "usage_limit", Missing: true}}, true, "COMMENT", "COMMENT"},
 	} {
 		if nf, be := JudgeEvents(cfg, "talkable/talkable", id, tc.postMerge, tc.reports...); nf != tc.wantNF || be != tc.want {
 			t.Errorf("%s: events %s/%s, want %s/%s", name, nf, be, tc.wantNF, tc.want)
@@ -100,13 +101,12 @@ func TestIdentityFooterReachesTheJudgePrompt(t *testing.T) {
 	}
 }
 
-// A simplify run that changed nothing leaves the identity's APPROVE in place
-// (its report is "missing (no changes)", which is no failure).
-func TestSimplifyWithoutChangesKeepsTheApprove(t *testing.T) {
+// A simplify run with nothing to propose leaves the identity's APPROVE in
+// place: its report says "No proposals.", which is no failure.
+func TestSimplifyWithoutProposalsKeepsTheApprove(t *testing.T) {
 	e := newEnv(t)
-	e.simplifyRules()
 	e.cfg.Repos = []config.Repo{{Repo: "talkable/talkable", NoFindingsEvent: "APPROVE"}}
-	e.ag.behaviors[agents.RoleSimplify] = []behavior{endSilently()}
+	e.ag.behaviors[agents.RoleSimplify] = []behavior{writeReport("No proposals.\n\nSkipped: none.\n")}
 	e.ag.behaviors[agents.RoleJudge] = []behavior{e.judgePosts(664, "APPROVED", "APPROVE").behavior(t)}
 	in := e.input(KindInitial)
 	in.Requested = []string{"simplify"}
@@ -114,10 +114,11 @@ func TestSimplifyWithoutChangesKeepsTheApprove(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunRound: %v", err)
 	}
-	if got := res.Reports[agents.RoleSimplify]; got.Status != ReportEmpty {
+	path := filepath.Join(e.reportDir(), "claude-simplify.md")
+	if got := res.Reports[agents.RoleSimplify]; got.Status != ReportOK || got.Path != path {
 		t.Fatalf("simplify report = %+v", got)
 	}
-	mustContain(t, "judge prompt", e.ag.submitsFor(agents.RoleJudge)[0].Text, "claude-simplify: missing (no changes)", "no_findings_event: APPROVE")
+	mustContain(t, "judge prompt", e.ag.submitsFor(agents.RoleJudge)[0].Text, "claude-simplify: "+path, "no_findings_event: APPROVE")
 	if run := e.runOf(agents.RoleSimplify, store.RunInitial); run.State != store.RunVerified {
 		t.Errorf("simplify run = %s", run.State)
 	}

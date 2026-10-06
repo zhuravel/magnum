@@ -101,7 +101,7 @@ type FallbackData struct {
 	Role       string
 	URL        string
 	HeadSHA    string
-	ReportPath string // the role's report or result file; "" for a git-diff role (magnum collects its patch)
+	ReportPath string // the role's report or result file; "" = the prompt names none
 }
 
 // FallbackPrompt renders FallbackPromptName from pipeline.prompts_dir or

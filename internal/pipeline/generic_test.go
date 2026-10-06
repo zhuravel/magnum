@@ -11,7 +11,6 @@ import (
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
-	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -150,18 +149,6 @@ func wantListed(t *testing.T, prompt string, want ...listedReport) {
 	}
 }
 
-// onePatch is the output of the stubbed `git diff` of a git-diff role.
-const onePatch = "diff --git a/app/x.rb b/app/x.rb\n--- a/app/x.rb\n+++ b/app/x.rb\n@@ -1 +1 @@\n-a\n+b\n"
-
-// patchRules stubs the git calls of a git-diff role (collect, restore).
-func patchRules() []execx.Rule {
-	return []execx.Rule{
-		{Prefix: []string{"git", "-C", slotPath, "diff"}, Result: execx.Result{Stdout: []byte(onePatch)}},
-		{Prefix: []string{"git", "-C", slotPath, "reset", "--hard", "--quiet"}},
-		{Prefix: []string{"git", "-C", slotPath, "clean", "-fd"}},
-	}
-}
-
 func TestDroidAndOmpSessionRoles(t *testing.T) {
 	e := newEnv(t)
 	const droidRole, ompRole = agents.Role("droid-review"), agents.Role("omp-review")
@@ -270,15 +257,13 @@ func TestWatchRolesSubset(t *testing.T) {
 func TestRunsFirstSkippedAfterFirstRun(t *testing.T) {
 	e := newEnv(t)
 	e.editRole(config.RoleClaudeSimplify, func(r *config.Role) { r.Runs = config.RunsFirst })
-	e.ag.behaviors[agents.RoleSimplify] = []behavior{endSilently()}
+	e.ag.behaviors[agents.RoleSimplify] = []behavior{writeReport("## 1. Simplification\n")}
 	e.ag.behaviors[agents.RoleJudge] = []behavior{
 		e.judgePosts(611, "COMMENTED", "COMMENT").behavior(t),
 		e.judgePosts(612, "COMMENTED", "COMMENT").behavior(t),
 		e.judgePosts(613, "COMMENTED", "COMMENT").behavior(t),
 	}
-	e.exec.Rules = patchRules()
-	patch := filepath.Join(e.reportDir(), "claude-simplify.patch")
-	diffs := func() int { return len(e.exec.CallsWithPrefix("git", "-C", slotPath, "diff")) }
+	report := filepath.Join(e.reportDir(), "claude-simplify.md")
 	// what RolesToRun decides for the next round of kind.
 	decide := func(kind string, requested ...string) []string {
 		t.Helper()
@@ -296,11 +281,11 @@ func TestRunsFirstSkippedAfterFirstRun(t *testing.T) {
 		t.Errorf("before round 1 RolesToRun = %v, want %v", got, allFour)
 	}
 	res := e.mustPost(e.input(KindInitial))
-	if got := res.Reports[agents.RoleSimplify]; got.Status != ReportOK || got.Path != patch || got.Capture != config.CaptureGitDiff {
-		t.Errorf("round 1 simplify report = %+v, want ok at %s", got, patch)
+	if got := res.Reports[agents.RoleSimplify]; got.Status != ReportOK || got.Path != report || got.Capture != config.CaptureFile {
+		t.Errorf("round 1 simplify report = %+v, want ok at %s", got, report)
 	}
-	if n := len(e.ag.submitsFor(agents.RoleSimplify)); n != 1 || diffs() != 1 {
-		t.Errorf("after round 1: simplify submits %d, diffs %d, want 1 and 1", n, diffs())
+	if n := len(e.ag.submitsFor(agents.RoleSimplify)); n != 1 {
+		t.Errorf("after round 1: simplify submits %d, want 1", n)
 	}
 	if run := e.runOf(agents.RoleSimplify, store.RunInitial); run.State != store.RunVerified {
 		t.Errorf("round 1 simplify run = %s (outcome %v), want verified", run.State, store.Deref(run.Outcome))
@@ -308,7 +293,7 @@ func TestRunsFirstSkippedAfterFirstRun(t *testing.T) {
 	wantListed(t, e.judgeText(0),
 		listedReport{"claude-review", filepath.Join(e.reportDir(), "claude-review.md")},
 		listedReport{"codex-review", filepath.Join(e.reportDir(), "codex-review.md")},
-		listedReport{"claude-simplify", patch})
+		listedReport{"claude-simplify", report})
 
 	// Round 2: it has run for this PR, so a rereview leaves it out ...
 	if got := decide(KindRereview); !slices.Equal(got, reviewersOnly) {
@@ -321,8 +306,8 @@ func TestRunsFirstSkippedAfterFirstRun(t *testing.T) {
 	if _, ran := res.Reports[agents.RoleSimplify]; ran {
 		t.Errorf("round 2 ran claude-simplify again: %+v", res.Reports[agents.RoleSimplify])
 	}
-	if n := len(e.ag.submitsFor(agents.RoleSimplify)); n != 1 || diffs() != 1 {
-		t.Errorf("after round 2: simplify submits %d, diffs %d, want still 1 and 1", n, diffs())
+	if n := len(e.ag.submitsFor(agents.RoleSimplify)); n != 1 {
+		t.Errorf("after round 2: simplify submits %d, want still 1", n)
 	}
 	if n := len(e.ag.submitsFor(agents.RoleClaude)); n != 2 {
 		t.Errorf("claude-review submits = %d, want 2 (it runs every round)", n)
@@ -341,11 +326,11 @@ func TestRunsFirstSkippedAfterFirstRun(t *testing.T) {
 	in = e.input(KindRereview)
 	in.Round, in.Previous, in.Since, in.Requested = 3, prev, t0, []string{"simplify"}
 	res = e.mustPost(in)
-	if got := res.Reports[agents.RoleSimplify]; got.Status != ReportOK || got.Path != patch {
-		t.Errorf("round 3 simplify report = %+v, want ok at %s", got, patch)
+	if got := res.Reports[agents.RoleSimplify]; got.Status != ReportOK || got.Path != report {
+		t.Errorf("round 3 simplify report = %+v, want ok at %s", got, report)
 	}
-	if n := len(e.ag.submitsFor(agents.RoleSimplify)); n != 2 || diffs() != 2 {
-		t.Errorf("after round 3: simplify submits %d, diffs %d, want 2 and 2", n, diffs())
+	if n := len(e.ag.submitsFor(agents.RoleSimplify)); n != 2 {
+		t.Errorf("after round 3: simplify submits %d, want 2", n)
 	}
 	if got := e.runsOfRole("claude-simplify"); len(got) != 2 || got[1].Round != 3 || got[1].Kind != store.RunRereview {
 		t.Errorf("claude-simplify runs = %+v, want round 1 and a round 3 rereview", got)
@@ -353,10 +338,10 @@ func TestRunsFirstSkippedAfterFirstRun(t *testing.T) {
 	wantListed(t, e.judgeText(2),
 		listedReport{"claude-review", filepath.Join(e.reportDir(), "claude-review.md")},
 		listedReport{"codex-review", filepath.Join(e.reportDir(), "codex-review.md")},
-		listedReport{"claude-simplify", patch})
-	// The checkout was restored after every patch role.
-	if n := len(e.exec.CallsWithPrefix("git", "-C", slotPath, "clean", "-fd")); n != 2 {
-		t.Errorf("clean calls = %d, want 2 (one per simplify run)", n)
+		listedReport{"claude-simplify", report})
+	// The simplify edits nothing, so no round restored the checkout.
+	if calls := e.exec.CallsWithPrefix("git"); len(calls) != 0 {
+		t.Errorf("git calls = %+v", calls)
 	}
 }
 

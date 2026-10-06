@@ -118,6 +118,10 @@ type PRBoardRow struct {
 	LastRound   *RoundTimings // the stages of the last review round; nil when none ran
 	// RoundWhy says which roles the last round ran and why; nil when unknown.
 	RoundWhy *RoundWhy
+	// Progress is the round in flight: its start and its roles, which the
+	// state cell turns into the stage and the time ("simplify · 17m") and
+	// the card into a timeline; nil when no round runs or it is unknown.
+	Progress *RoundProgress
 	// Spend is the agent time the PR's runs took over the last 7 days and
 	// how many rounds they ran in; nil when none ran.
 	Spend *SpendInfo
@@ -612,6 +616,10 @@ func sanitizeRow(r PRBoardRow) PRBoardRow {
 	if r.RoundWhy != nil {
 		w := cleanRoundWhy(*r.RoundWhy)
 		r.RoundWhy = &w
+	}
+	if r.Progress != nil {
+		g := cleanRoundProgress(*r.Progress)
+		r.Progress = &g
 	}
 	return r
 }

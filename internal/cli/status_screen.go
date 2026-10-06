@@ -9,8 +9,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/tui"
@@ -75,9 +77,57 @@ func statusDashSource(d statusDeps, o statusOptions) tui.SourceFunc {
 			return tui.StatusData{}, err
 		}
 		data := statusDashData(r, defRepo)
+		data.Rounds.Progress = statusDashProgress(ctx, d, data.Rounds.ActivePRs)
 		data.Facts = screenFacts(ctx, d)
 		return data, nil
 	}
+}
+
+// statusDashProgress is the progress of the round each label names (the
+// report's rounds: "talkable#11940", " (delta check)" after a delta
+// check's), read as the board reads it (roundProgressOf); nil for a label
+// that no round in flight, or more than one, answers to. Three queries
+// whatever the number of rounds: the PRs in flight, the repositories and
+// the rounds' runs. A registry that cannot say leaves the progress out
+// rather than the dashboard.
+func statusDashProgress(ctx context.Context, d statusDeps, labels []string) []*tui.RoundProgress {
+	if len(labels) == 0 || d.Store == nil {
+		return nil
+	}
+	prs, err := d.Store.ListPRs(ctx, store.PRFilter{States: roundRunningStates})
+	if err != nil || len(prs) == 0 {
+		return nil
+	}
+	repos, err := d.Store.ListRepos(ctx)
+	if err != nil {
+		return nil
+	}
+	cfg := d.Config
+	if cfg == nil {
+		cfg = config.Defaults()
+	}
+	progress, err := roundProgressOf(ctx, d.Store, cfg, prs)
+	if err != nil || len(progress) == 0 {
+		return nil
+	}
+	repoName := make(map[int64]string, len(repos))
+	for _, rp := range repos {
+		repoName[rp.ID] = rp.FullName()
+	}
+	out := make([]*tui.RoundProgress, len(labels))
+	for i, label := range labels {
+		var match []*tui.RoundProgress
+		for _, pr := range prs {
+			key := inspPRLabel(repoName[pr.RepoID], pr.Number)
+			if g := progress[pr.ID]; g != nil && (label == key || strings.HasPrefix(label, key+" ")) {
+				match = append(match, g)
+			}
+		}
+		if len(match) == 1 {
+			out[i] = match[0]
+		}
+	}
+	return out
 }
 
 // statusDashData maps a report onto the dashboard. Cells are formatted as

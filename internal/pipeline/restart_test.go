@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/agents"
-	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/github"
+	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
 )
@@ -302,23 +302,30 @@ func TestPushBetweenStagesRestartsBeforeTheJudge(t *testing.T) {
 	}
 }
 
-func TestPushDuringTheGitDiffRoleRestoresTheTreeThenRestarts(t *testing.T) {
+// A push cuts the stage short before its check: the restart settles the cut
+// roles, then catches the edit one of them left and restores the checkout
+// before it switches to the new head.
+func TestPushRestoresACheckoutAReviewerEditedBeforeTheRestart(t *testing.T) {
 	e := newEnv(t)
 	in := e.input(KindInitial)
 	in.Requested = []string{"simplify"}
 	sw := e.withRestarts(&in, 2)
+	var dirtyAtSwitch bool
 	in.Switch = func(ctx context.Context, sha string) (Switched, error) {
 		e.git.mu.Lock()
+		dirtyAtSwitch = e.git.status.Dirty()
 		e.git.head = sha // the slot's checkout moves with the switch
 		e.git.mu.Unlock()
 		return sw.Switch(ctx, sha)
 	}
-	e.exec.Rules = []execx.Rule{
-		{Prefix: []string{"git", "-C", slotPath, "diff"}},
-		{Prefix: []string{"git", "-C", slotPath, "reset", "--hard", "--quiet"}},
-		{Prefix: []string{"git", "-C", slotPath, "clean", "-fd"}},
+	e.restoreRules(false)
+	edit := func(f *fakeAgents, run store.Run, text string) error {
+		e.git.mu.Lock()
+		e.git.status = gitx.Status{Tracked: 1}
+		e.git.mu.Unlock()
+		return nil
 	}
-	e.ag.behaviors[agents.RoleSimplify] = []behavior{pushThen(e, head2, hang()), endSilently()}
+	e.ag.behaviors[agents.RoleSimplify] = []behavior{pushThen(e, head2, edit), writeReport("No proposals.\n")}
 	post := e.judgePosts(611, "COMMENTED", "COMMENT")
 	post.commit = head2
 	e.ag.behaviors[agents.RoleJudge] = []behavior{post.behavior(t)}
@@ -330,14 +337,18 @@ func TestPushDuringTheGitDiffRoleRestoresTheTreeThenRestarts(t *testing.T) {
 	if res.Outcome != OutcomePosted || res.TargetSHA != head2 || res.Restarts != 1 {
 		t.Fatalf("result = %+v", res)
 	}
-	// Interrupted once (esc), its edits discarded before the switch, then
-	// again after its run on head2.
 	simplifyAgent := agents.AgentName("talkable/talkable", 11920, agents.RoleSimplify)
 	if n := slices.Index(e.keys.sends, "agent:"+simplifyAgent+":esc"); n < 0 {
 		t.Errorf("claude-simplify was not interrupted: %v", e.keys.sends)
 	}
-	if n := len(e.exec.CallsWithPrefix("git", "-C", slotPath, "reset", "--hard", "--quiet")); n != 2 {
-		t.Errorf("tree restores = %d, want 2", n)
+	if dirtyAtSwitch {
+		t.Error("the checkout switched to the new head while still modified")
+	}
+	if n := len(e.exec.CallsWithPrefix("git", "-C", slotPath, "reset", "--hard", "--quiet")); n != 1 {
+		t.Errorf("tree restores = %d, want 1 (before the switch)", n)
+	}
+	if ev := e.eventsOf("round.checkout_dirty"); len(ev) != 1 || !strings.Contains(ev[0].Message, "claude-simplify") {
+		t.Errorf("round.checkout_dirty = %+v", ev)
 	}
 	// Every role ran again on head2: both reviewers and the simplifier.
 	if n := len(e.ag.submitsFor(agents.RoleClaude)); n != 2 {

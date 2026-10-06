@@ -356,9 +356,14 @@ const (
 
 var prbColTitles = [prbNumCols]string{"REPO", "#", "TITLE", "AUTHOR", "ASSIGNEE", "UPDATED", "REQUESTED", "STATE", "LAST REVIEW", "FINDINGS", "CI", "SINCE REVIEW", "REVIEWERS"}
 
+// dropStage stands in prbDropOrder for the stage of a running round's state
+// cell ("simplify · 17m" becomes "17m"): it gives way where it stands, its
+// time only when the column is narrower still. It is no column.
+const dropStage = prbNumCols
+
 var (
 	// prbDropOrder is which columns give way, in turn, on a narrow screen.
-	prbDropOrder = []prbCol{colAssignee, colSince, colAuthor, colRequested, colUpdated, colCI, colLastReview, colReviewers, colFindings}
+	prbDropOrder = []prbCol{colAssignee, colSince, colAuthor, colRequested, colUpdated, dropStage, colCI, colLastReview, colReviewers, colFindings}
 	// prbFlexMin is the narrowest the flexible columns get; the others
 	// keep their content's width (up to prbCap).
 	prbFlexMin = map[prbCol]int{colTitle: 18, colReviewers: 12}
@@ -453,10 +458,13 @@ func (p prbPainter) colTitle(c prbCol) string {
 }
 
 // prbCells are one row's cells; the reviewers are chips joined only once
-// the column's width is known.
+// the column's width is known. stateAlt are the state cell's narrower
+// forms, widest first (a running round's without its stage, then without
+// its time); none when it has no other.
 type prbCells struct {
-	c    [prbNumCols]cell
-	revs []cell
+	c        [prbNumCols]cell
+	revs     []cell
+	stateAlt []cell
 }
 
 func (p prbPainter) cells(r PRBoardRow, since [3]int) prbCells {
@@ -469,12 +477,28 @@ func (p prbPainter) cells(r PRBoardRow, since [3]int) prbCells {
 	cs.c[colUpdated] = p.ageCell(r.UpdatedAt)
 	cs.c[colRequested] = p.requestedCell(r)
 	cs.c[colState] = p.stateWaitCell(r)
+	if roundProgress(r) != nil {
+		cs.stateAlt = []cell{p.stateWaitDetail(r, stateTime), p.stateWaitDetail(r, stateBare)}
+	}
 	cs.c[colLastReview] = p.lastReviewCell(r.LastReview)
 	cs.c[colFindings] = p.findingsCell(r.Findings)
 	cs.c[colCI] = p.ciCell(r.CI)
 	cs.c[colSince] = p.sinceCell(r.SinceReview, since)
 	cs.revs = p.reviewerChips(r.Reviewers)
 	return cs
+}
+
+// stateFit is the state cell at width w: its widest form that fits (a
+// running round's drops its stage, then its time), else its narrowest cut.
+func (cs prbCells) stateFit(w int) cell {
+	c := cs.c[colState]
+	for _, alt := range cs.stateAlt {
+		if c.width() <= w {
+			break
+		}
+		c = alt
+	}
+	return c.fit(w)
 }
 
 func (p prbPainter) refCell(r PRBoardRow) cell {
@@ -619,14 +643,32 @@ func (p prbPainter) requestedCell(r PRBoardRow) cell {
 	return c
 }
 
+// stateDetail is how much of a running round's progress the state cell
+// shows: its stage and time, the time alone, or neither.
+type stateDetail int
+
+const (
+	stateBare stateDetail = iota
+	stateTime
+	stateFull
+)
+
 // stateWaitCell is the state pill followed, for a PR waiting for a round,
-// by what holds it and until when, dimmed ("quiet → 14:09"), and for a
-// skipped PR by why in a word ("· bot"). A merged PR in a post-merge round
-// says so: "post-merge · next tick", and so does a delta check, waiting or
-// in flight: "delta check · quiet → 14:09".
-func (p prbPainter) stateWaitCell(r PRBoardRow) cell {
+// by what holds it and until when, dimmed ("quiet → 14:09"), for a round in
+// flight by its stage and time ("simplify · 17m", progressText; d says how
+// much of it), and for a skipped PR by why in a word ("· bot"). A merged PR
+// in a post-merge round says so: "post-merge · next tick", and so does a
+// delta check, waiting or in flight: "delta check · quiet → 14:09",
+// "delta check · judge · 4m".
+func (p prbPainter) stateWaitCell(r PRBoardRow) cell { return p.stateWaitDetail(r, stateFull) }
+
+// stateWaitDetail is stateWaitCell with d of a running round's progress.
+func (p prbPainter) stateWaitDetail(r PRBoardRow, d stateDetail) cell {
 	c := p.stateCell(rowState(r))
 	_, rest, held := strings.Cut(r.Wait, " · ")
+	if g := roundProgress(r); g != nil && d > stateBare {
+		rest, held = progressText(*g, p.now, d == stateFull), true
+	}
 	switch {
 	case postMergeRound(r):
 		c = append(c, seg{" post-merge", p.st.Dim})
@@ -645,6 +687,15 @@ func (p prbPainter) stateWaitCell(r PRBoardRow) cell {
 		c = append(c, seg{"· " + why, p.st.Dim})
 	}
 	return c
+}
+
+// roundProgress is the round r runs, as its state cell shows it; nil when
+// its pill does not spin or its progress is unknown.
+func roundProgress(r PRBoardRow) *RoundProgress {
+	if r.Progress == nil || r.Progress.StartedAt.IsZero() || !workingState(rowState(r)) {
+		return nil
+	}
+	return r.Progress
 }
 
 // deltaCheckRound reports whether r waits for a delta check or runs one.
@@ -1176,10 +1227,12 @@ func (w prbWidths) named() map[string]int {
 }
 
 // prbNatural is what the layout needs from the rows: each column's
-// content width (capped) and the since-review parts' widths.
+// content width (capped), the state column's width once running rounds
+// drop their stage (stateless) and the since-review parts' widths.
 type prbNatural struct {
-	nat   [prbNumCols]int
-	since [3]int
+	nat       [prbNumCols]int
+	stateless int
+	since     [3]int
 }
 
 // natural measures rows; it is the costly part of a layout.
@@ -1188,6 +1241,7 @@ func (p prbPainter) natural(rows []PRBoardRow) prbNatural {
 	for c := range prbNumCols {
 		n.nat[c] = ansi.StringWidth(p.colTitle(c))
 	}
+	n.stateless = n.nat[colState]
 	for _, r := range rows {
 		cs := p.cells(r, n.since)
 		for c := range prbNumCols {
@@ -1197,6 +1251,11 @@ func (p prbPainter) natural(rows []PRBoardRow) prbNatural {
 			}
 			n.nat[c] = max(n.nat[c], w)
 		}
+		w := cs.c[colState].width()
+		if len(cs.stateAlt) > 0 {
+			w = cs.stateAlt[0].width()
+		}
+		n.stateless = max(n.stateless, w)
 	}
 	for c, limit := range prbCap {
 		if c == colFindings && p.g.rich {
@@ -1214,9 +1273,11 @@ func (p prbPainter) layout(rows []PRBoardRow, width int) prbLayout {
 
 // fit sizes the columns to their content and hides the least important
 // ones (assignee, since review, author, ...) until the table fits width
-// (0 = no limit). Extra room goes to the title and the reviewers. A
-// dragged width (over) replaces a column's content width; the title and
-// the reviewers still give way down to their minimum on a narrow screen.
+// (0 = no limit); in their turn (dropStage) running rounds' state cells
+// give up their stage. Extra room goes to the stage first, then the title
+// and the reviewers. A dragged width (over) replaces a column's content
+// width; the title, the reviewers and the stage still give way down to
+// their minimum on a narrow screen.
 func (p prbPainter) fit(n prbNatural, width int, over prbWidths) prbLayout {
 	lay := prbLayout{since: n.since}
 	nat := n.nat
@@ -1228,9 +1289,13 @@ func (p prbPainter) fit(n prbNatural, width int, over prbWidths) prbLayout {
 			}
 		}
 	}
+	stageless := false
 	minW := func(c prbCol) int {
 		if f, ok := prbFlexMin[c]; ok {
 			return min(nat[c], f)
+		}
+		if c == colState && stageless {
+			return min(nat[c], n.stateless)
 		}
 		return nat[c]
 	}
@@ -1245,6 +1310,10 @@ func (p prbPainter) fit(n prbNatural, width int, over prbWidths) prbLayout {
 	for _, d := range prbDropOrder {
 		if width <= 0 || need(cols) <= width {
 			break
+		}
+		if d == dropStage {
+			stageless = true
+			continue
 		}
 		cols = slices.DeleteFunc(cols, func(c prbCol) bool { return c == d })
 	}
@@ -1281,6 +1350,7 @@ func (p prbPainter) fit(n prbNatural, width int, over prbWidths) prbLayout {
 			extra -= n
 		}
 	}
+	give(colState, min(want(colState), extra))
 	give(colReviewers, min(want(colReviewers), extra/3))
 	give(colTitle, min(want(colTitle), extra))
 	give(colReviewers, min(want(colReviewers), extra))
@@ -1360,6 +1430,8 @@ func (p prbPainter) rowLine(r PRBoardRow, lay prbLayout, width int, selected, qu
 			cl = cs.c[c].fitWhole(w, len(cs.c[c])-1) // a badge or a tag shows whole or not at all
 		case colRef:
 			cl = cs.c[c].fitLeft(w) // keep the distinctive end of a long repository name
+		case colState:
+			cl = cs.stateFit(w)
 		default:
 			cl = cs.c[c].fit(w)
 		}

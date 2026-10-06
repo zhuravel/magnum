@@ -82,7 +82,7 @@ the judge data, every other session role gets the role data, and a shell role's 
 | `.IdentityKind` | `gh` or `app` |
 | `.ReviewerLogin` | the login the review is posted as (REST form, e.g. `talkable[bot]`) |
 | `.GhConfigDir` | `GH_CONFIG_DIR` of the identity; empty for the `gh` identity |
-| `.NoFindingsEvent`, `.BlockingEvent` | review events from the `[[repo]]` or the `[[identity]]`; `.NoFindingsEvent` is `COMMENT` whenever a reviewer of the round left no usable report (anything in `.Reports` that is missing, except a git-diff role's `no changes`): a review that did not hear every reviewer never approves |
+| `.NoFindingsEvent`, `.BlockingEvent` | review events from the `[[repo]]` or the `[[identity]]`; `.NoFindingsEvent` is `COMMENT` whenever a reviewer of the round left no usable report (anything in `.Reports` that is missing): a review that did not hear every reviewer never approves |
 | `.Footer` | the posting identity's `review_footer` (magnum's default line when it sets none), which the judge appends verbatim as the review's last line; empty when the identity sets `""`. The judge prompts render `footer:` only when it is set |
 | `.SelfAuthored` | the PR's author is the reviewing identity |
 | `.Reports` | one entry per other role of the round, in pipeline order (see below) |
@@ -170,7 +170,7 @@ this prompt.
 | `.Model` | the model the session runs now (a `fallback_models` entry) |
 | `.Previous` | the model that hit its limit |
 | `.Role`, `.URL`, `.HeadSHA` | the role's name, the pull request and the commit under review |
-| `.ReportPath` | the role's report (the judge's result file); empty for a `git-diff` role, whose patch magnum collects |
+| `.ReportPath` | the role's report (the judge's result file) |
 
 ### Triage prompt (`triage.md`)
 
@@ -245,7 +245,7 @@ before they are substituted, because the result is typed into a shell.
 | `.Title` | the pane title, e.g. `PR #729 codex-review - talkable`; empty = no title prefix |
 | `.Command` | the role's `command` template text, not quoted (empty in a full-line template: a role sets `command` or `prompt`, not both) |
 | `.Args` | the role's `args`, a list of quoted words (a `command` gets them appended after its text, so use `.Args` in full-line templates) |
-| `.Capture` | the role's `capture`: `file`, `stdout` or `git-diff` |
+| `.Capture` | the role's `capture`: `file` or `stdout` |
 | `.ReportPath` | the role's `output`, absolute |
 | `.Marker` | the done marker, `MAGNUM_DONE_<run id>`; a `command` line gets `; printf '\n<marker> %d\n' "$?"` appended (the marker on a line of its own with the exit status), a full-line template must print it itself |
 | `.BaseRef` | the base ref, e.g. `origin/master` or the parent branch of a stacked PR |
@@ -345,8 +345,8 @@ a switch not confirmed within 30 s backs out of the dialog with Esc and pauses t
 | `skill` | `{{repo}}/skills/magnum-review/SKILL.md` | the judge's skill, `{{.SkillPath}}` |
 | `command`, `tool` | none | shell roles: the command template, and the kind whose login check, pauses and health patterns apply |
 | `ok_status` | `[0]` | shell roles: the exit statuses that count as a finished report; any other status fails the role (its output is then checked for login, usage-limit and overload errors) |
-| `output` | `<name>.md` | the report file in the round's directory; judges `<name>.json`, `git-diff` roles `<name>.patch` |
-| `capture` | `file` | `file` (the role writes `output`), `stdout` (shell roles; output is tee'd) or `git-diff` (magnum saves the checkout's diff, then reverts it) |
+| `output` | `<name>.md` | the report file in the round's directory; judges `<name>.json` |
+| `capture` | `file` | `file` (the role writes `output`) or `stdout` (shell roles; output is tee'd). No role may edit the checkout: one left modified after its stage is reset to the PR head, with a `round.checkout_dirty` warning |
 | `timeout` | `40m` | per turn; judges `90m` (`daemon.reviewer_timeout` / `judge_timeout` are the fallbacks) |
 | `after` | none | roles that must finish first; roles outside the watch's set are ignored |
 | `aliases` | none | other accepted names (the built-in roles keep `judge`, `claude`, `codex`, `codex_review`, `simplify`) |
@@ -400,7 +400,7 @@ instead, i.e. what magnum will type to start, resume and name each one. `--json`
 | `codex-judge` | codex | Persistent session; reads the reports, runs `$magnum-review` and posts one review. Effort `xhigh`, `high` for re-reviews, 90 minutes. |
 | `claude-review` | claude | Persistent session running `/code-review <url> high` (`medium` for re-reviews), leaving out style-only and pre-existing problems and naming each finding's trigger; writes `claude-review.md`. |
 | `codex-review` | shell | Types `command codex review --base <merge base>` (the base ref when the merge base is unknown) into a plain pane; its output is tee'd into `codex-review.md`. |
-| `claude-simplify` | claude | Runs `/simplify`, asking for removals rather than renames or moves, after both reviewers on a PR's first review, or on request (`magnum review --role claude-simplify`, or `--simplify`); its diff becomes `claude-simplify.patch`. |
+| `claude-simplify` | claude | A read-only `/simplify`, alongside the reviewers on a PR's first review, again after `rerun_min_lines` changed lines, or on request (`magnum review --role claude-simplify`, or `--simplify`): four subagents review the diff in parallel for reuse, simplification, efficiency and altitude (one pass without the Agent tool), and instead of editing it writes every qualifying proposal, ranked, removals rather than renames or moves, with exact current and replacement lines, to `claude-simplify.md`. A re-review proposes only on lines changed since the previous review. |
 
 ### Shell roles
 
@@ -418,20 +418,19 @@ success). `codex-review.sh` shows the line magnum types for codex-review.
 
 ## Examples
 
-A droid role that simplifies the PR once, after both reviewers (`magnum review <ref> --role droid-simplify`
-runs it again on request). It needs `prompts/droid-simplify.md`:
+A droid role that proposes simplifications once, after both reviewers (`magnum review <ref> --role
+droid-simplify` runs it again on request). It needs `prompts/droid-simplify.md`:
 
 ```toml
 [[role]]
 name = "droid-simplify"
 kind = "droid"
-runs = "first"
-capture = "git-diff"                  # output defaults to droid-simplify.patch
+runs = "first"                        # output defaults to droid-simplify.md
 after = ["claude-review", "codex-review"]
 ```
 
 ```text
-Simplify only the files changed by {{.URL}} (head `{{.HeadSHA}}` is checked out; `git diff {{.BaseSHA}}..HEAD --name-only` lists them). Edit the working tree directly, do not commit and do not post to GitHub. Reply SIMPLIFY DONE when finished.
+Propose simplifications of the lines {{.URL}} changes (head `{{.HeadSHA}}` is checked out; `git diff {{.BaseSHA}}..HEAD` shows them) and write them to {{.ReportPath}}: for each, the file and lines, what it removes, the exact current and replacement lines. Edit no file, do not commit and do not post to GitHub.
 ```
 
 An omp reviewer on a specific model. It needs `prompts/omp-review.md`, and optionally

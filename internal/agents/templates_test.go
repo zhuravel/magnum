@@ -37,7 +37,7 @@ func judgeFixture() JudgeData {
 		Reports: []Report{
 			{Role: "claude-review", Path: "/Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/claude-review.md"},
 			{Role: "codex-review", Detail: "timed out after 40m"},
-			{Role: "claude-simplify", Path: "/Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/claude-simplify.patch"},
+			{Role: "claude-simplify", Path: "/Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/claude-simplify.md"},
 		},
 		ResultFile:       "/Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/codex-judge.json",
 		DryRun:           false,
@@ -193,6 +193,11 @@ func TestRenderGolden(t *testing.T) {
 	postMerge.PostMerge, postMerge.NoFindingsEvent, postMerge.BlockingEvent = true, "COMMENT", "COMMENT"
 	postMergeRole := roleFixture()
 	postMergeRole.PostMerge = true
+	// The simplify role writes its own report.
+	simplifyData := func(d RoleData) RoleData {
+		d.ReportPath = filepath.Join(filepath.Dir(d.ReportPath), "claude-simplify.md")
+		return d
+	}
 	// The <magnum> fields of an identity's footer and the repository notes
 	// (with a threads file, as a re-review of a reviewed PR has).
 	withNotes := judgeFixture()
@@ -220,9 +225,9 @@ func TestRenderGolden(t *testing.T) {
 		{"judge_rereview_post_merge", "judge-rereview.md", postMerge},
 		{"claude_initial_post_merge", "claude-review.md", postMergeRole},
 		{"claude_rereview_post_merge", "claude-rereview.md", postMergeRole},
-		{"simplify_post_merge", "claude-simplify.md", postMergeRole},
+		{"simplify_post_merge", "claude-simplify.md", simplifyData(postMergeRole)},
 		{"claude_initial_blind", "claude-review.md", blindRole},
-		{"simplify_blind", "claude-simplify.md", blindRole},
+		{"simplify_blind", "claude-simplify.md", simplifyData(blindRole)},
 		{"judge_rereview", "judge-rereview.md", judgeFixture()},
 		{"judge_rereview_forced_moved", "judge-rereview.md", forced},
 		{"judge_continue", "judge-continue.md", judgeFixture()},
@@ -240,7 +245,7 @@ func TestRenderGolden(t *testing.T) {
 		{"claude_restart_rereview", "claude-restart.md", restartedRereview},
 		{"claude_restart_rereview_forced", "claude-restart.md", restartedForced},
 		{"claude_rereview_no_base", "claude-rereview.md", noBase},
-		{"simplify", "claude-simplify.md", roleFixture()},
+		{"simplify", "claude-simplify.md", simplifyData(roleFixture())},
 		{"model_fallback", FallbackPromptName, FallbackData{Model: "opus", Previous: "fable", Role: "claude-review",
 			URL: "https://github.com/talkable/talkable/pull/11920", HeadSHA: "d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3",
 			ReportPath: "/state/reviews/talkable/talkable/11920/d4e5f6a/claude-review.md"}},
@@ -248,7 +253,7 @@ func TestRenderGolden(t *testing.T) {
 		{"triage_rereview", "triage.md", triageFixtureFor("rereview")},
 		{"retro", "retro.md", retroFixtureWith("a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0")},
 		{"retro_two_reviews", "retro.md", retroFixtureWith("a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0", "d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3")},
-		{"model_fallback_patch", FallbackPromptName, FallbackData{Model: "sonnet", Previous: "opus", Role: "claude-simplify",
+		{"model_fallback_no_report", FallbackPromptName, FallbackData{Model: "sonnet", Previous: "opus", Role: "claude-simplify",
 			URL: "https://github.com/talkable/talkable/pull/11920", HeadSHA: "d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3"}},
 	}
 	for _, tc := range cases {
@@ -446,13 +451,13 @@ func TestJudgeInitialCountsReports(t *testing.T) {
 	d.Reports = []Report{
 		{Role: "claude-review", Label: "Claude", Path: "/r/claude-review.md"},
 		{Role: "codex-review", Path: "/r/codex-review.md", Missing: true, Status: "timeout"},
-		{Role: "droid-simplify", Missing: true, Detail: "no changes"},
+		{Role: "droid-simplify", Missing: true, Detail: "lost"},
 	}
 	if got, err = RenderPrompt(p, d); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"Candidate reports from 3 independent reviewer roles are listed below",
-		"  - Claude: /r/claude-review.md\n", "  - codex-review: missing (timeout)\n", "  - droid-simplify: missing (no changes)\n"} {
+		"  - Claude: /r/claude-review.md\n", "  - codex-review: missing (timeout)\n", "  - droid-simplify: missing (lost)\n"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in:\n%s", want, got)
 		}
@@ -463,8 +468,8 @@ func TestJudgeInitialCountsReports(t *testing.T) {
 	}
 	// The older prompt shape ({{.Role}}, {{.Path}}, {{.Reason}}) keeps working.
 	old := config.Prompt{Name: "old.md", Text: "{{range .Reports}}{{.Role}}: {{if .Path}}{{.Path}}{{else}}missing ({{.Reason}}){{end}};{{end}}"}
-	d.Reports = []Report{{Role: "claude-review", Path: "/r/c.md"}, {Role: "codex-review", Detail: "failed"}, {Role: "x", Path: "/r/x.md", Missing: true, Status: "empty"}}
-	if got, err = RenderPrompt(old, d); err != nil || got != "claude-review: /r/c.md;codex-review: missing (failed);x: missing (empty);" {
+	d.Reports = []Report{{Role: "claude-review", Path: "/r/c.md"}, {Role: "codex-review", Detail: "failed"}, {Role: "x", Path: "/r/x.md", Missing: true, Status: "lost"}}
+	if got, err = RenderPrompt(old, d); err != nil || got != "claude-review: /r/c.md;codex-review: missing (failed);x: missing (lost);" {
 		t.Fatalf("old shape = %q, %v", got, err)
 	}
 }

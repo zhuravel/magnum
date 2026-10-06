@@ -113,6 +113,7 @@ func roundWhyOf(evs []store.Event) *tui.RoundWhy {
 		DeltaLines: dataInt(start, "delta_lines"),
 		Roles:      dataStrings(start, "roles"),
 		Requested:  dataStrings(start, "requested"),
+		At:         evs[last].At,
 	}
 	setup := evs[prev+1 : last]
 

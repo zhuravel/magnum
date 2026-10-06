@@ -61,10 +61,26 @@ type GitHubInfo struct {
 	ResetIn          time.Duration
 }
 
-// RoundsInfo is the review rounds in progress.
+// RoundsInfo is the review rounds in progress. Progress[i] is the round of
+// ActivePRs[i], which the rounds line follows with its stage and time
+// ("talkable#1 · simplify · 17m"); nil, or missing, when unknown.
 type RoundsInfo struct {
 	Active, Max int
 	ActivePRs   []string
+	Progress    []*RoundProgress
+}
+
+// progressKey is the rounds' stage and time as the rounds line draws them
+// at now: they change with the minute of a round, and the header with them.
+func (r RoundsInfo) progressKey(now time.Time) string {
+	var b strings.Builder
+	for _, g := range r.Progress {
+		if g != nil {
+			b.WriteString(progressText(*g, now, true))
+		}
+		b.WriteByte('\n')
+	}
+	return b.String()
 }
 
 // AgentsInfo counts working agent panes; a non-empty Error ("herdr
@@ -307,6 +323,7 @@ type dashHeaderKey struct {
 	gen            int64
 	width          int
 	dark, haveData bool
+	rounds         string // RoundsInfo.progressKey: the rounds' minutes
 }
 
 // dashBodyKey is what the body depends on besides the cursor.
@@ -821,7 +838,7 @@ func (m dashboardModel) viewHeight() int {
 // asks the y/N) and dashMinBody body lines: pauses can make it long. The
 // lines are shared with the cache: clone them before changing them.
 func (m dashboardModel) header(w int) []string {
-	k := dashHeaderKey{gen: m.gen, width: w, dark: m.st.dark, haveData: m.haveData}
+	k := dashHeaderKey{gen: m.gen, width: w, dark: m.st.dark, haveData: m.haveData, rounds: m.data.Rounds.progressKey(m.opts.Now())}
 	lines := m.cache.headerFor(k, func() []string { return m.headerLines(w) })
 	return lines[:min(len(lines), max(m.viewHeight()-dashFooter-dashMinBody, 1))]
 }
@@ -958,7 +975,13 @@ func (m dashboardModel) headerLines(w int) []string {
 
 	rounds := fmt.Sprintf("%d/%d active", d.Rounds.Active, d.Rounds.Max)
 	if len(d.Rounds.ActivePRs) > 0 {
-		rounds += " (" + strings.Join(d.Rounds.ActivePRs, ", ") + ")"
+		active, now := slices.Clone(d.Rounds.ActivePRs), m.opts.Now()
+		for i, g := range d.Rounds.Progress[:min(len(d.Rounds.Progress), len(active))] {
+			if g != nil {
+				active[i] += " · " + progressText(*g, now, true)
+			}
+		}
+		rounds += " (" + strings.Join(active, ", ") + ")"
 	}
 	if d.Agents.Error != "" {
 		rounds += " · agents: " + m.st.Warn.Render(d.Agents.Error)
@@ -1347,6 +1370,12 @@ func (m dashboardModel) boxLines(content []string, what string, w, height, scrol
 func sanitizeStatus(d StatusData) StatusData {
 	d.Daemon.Uptime, d.Daemon.Launchd = cleanText(d.Daemon.Uptime), cleanText(d.Daemon.Launchd)
 	d.Rounds.ActivePRs = cleanAll(d.Rounds.ActivePRs)
+	d.Rounds.Progress = cleanEach(d.Rounds.Progress, func(g **RoundProgress) {
+		if *g != nil {
+			c := cleanRoundProgress(**g)
+			*g = &c
+		}
+	})
 	d.Agents.Error = cleanText(d.Agents.Error)
 	d.Agents.Other = cleanEach(d.Agents.Other, func(k *KindCount) { k.Kind = cleanText(k.Kind) })
 	d.Pauses = cleanEach(d.Pauses, func(p *Pause) {

@@ -13,9 +13,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
-	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/github"
-	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -73,82 +71,6 @@ func TestJudgeTimeoutInterruptsJudge(t *testing.T) {
 	res, _ = e2.r.RunRound(e2.ctx, e2.input(KindInitial))
 	if res.Outcome != OutcomeTimeout || !strings.Contains(strings.Join(res.Warnings, "\n"), "codex-judge still works") {
 		t.Fatalf("result = %+v", res)
-	}
-}
-
-func (e *env) simplifyRules() {
-	e.exec.Rules = []execx.Rule{
-		{Prefix: []string{"git", "-C", slotPath, "diff"}},
-		{Prefix: []string{"git", "-C", slotPath, "reset", "--hard", "--quiet"}},
-		{Prefix: []string{"git", "-C", slotPath, "clean", "-fd"}},
-	}
-}
-
-// A round cancelled while a git-diff role edits the checkout interrupts the
-// role and restores the tree once it is idle.
-func TestCancelledSimplifyIsInterruptedAndRestored(t *testing.T) {
-	e := newEnv(t)
-	e.simplifyRules()
-	ctx, cancel := context.WithCancel(e.ctx)
-	e.ag.behaviors[agents.RoleSimplify] = []behavior{func(f *fakeAgents, run store.Run, text string) error {
-		e.setStatus(agents.RoleSimplify, herdr.StatusWorking)
-		cancel()
-		return nil
-	}}
-	e.keys.onAgent = func(target string, keys []string) { e.setStatus(agents.RoleSimplify, herdr.StatusIdle) }
-	in := e.input(KindInitial)
-	in.Requested = []string{"simplify"}
-	res, err := e.r.RunRound(ctx, in)
-	if !errorsIs(err, context.Canceled) || res.Outcome != OutcomeStopped {
-		t.Fatalf("result = %+v, err = %v", res, err)
-	}
-	if got := e.sendsTo(agents.RoleSimplify); len(got) != 1 || got[0] != "esc" {
-		t.Fatalf("simplify keys = %v, want esc", got)
-	}
-	for _, prefix := range [][]string{{"git", "-C", slotPath, "reset", "--hard", "--quiet"}, {"git", "-C", slotPath, "clean", "-fd"}} {
-		if n := len(e.exec.CallsWithPrefix(prefix...)); n != 1 {
-			t.Errorf("%v calls = %d, want the tree restored", prefix, n)
-		}
-	}
-	if len(e.ag.submitsFor(agents.RoleJudge)) != 0 {
-		t.Fatal("the judge must not run")
-	}
-}
-
-// A git-diff role still working after its interrupt fails the round: its
-// checkout is restored but cannot be trusted.
-func TestSimplifyStillWorkingAfterTimeoutFailsRound(t *testing.T) {
-	e := newEnv(t)
-	e.simplifyRules()
-	e.ag.behaviors[agents.RoleSimplify] = []behavior{func(f *fakeAgents, run store.Run, text string) error {
-		e.setStatus(agents.RoleSimplify, herdr.StatusWorking)
-		return nil
-	}}
-	in := e.input(KindInitial)
-	in.Requested = []string{"simplify"}
-	res, err := e.r.RunRound(e.ctx, in)
-	if err == nil || res.Outcome != OutcomeError || !strings.Contains(res.Error, "still works") {
-		t.Fatalf("result = %+v, err = %v", res, err)
-	}
-	if n := len(e.exec.CallsWithPrefix("git", "-C", slotPath, "reset", "--hard", "--quiet")); n != 1 {
-		t.Fatalf("reset calls = %d", n)
-	}
-	if len(e.ag.submitsFor(agents.RoleJudge)) != 0 {
-		t.Fatal("the judge must not run")
-	}
-}
-
-// A checkout still dirty after the restore fails the round.
-func TestDirtyCheckoutAfterRestoreFailsRound(t *testing.T) {
-	e := newEnv(t)
-	e.simplifyRules()
-	e.git.status = gitx.Status{Tracked: 1}
-	e.ag.behaviors[agents.RoleSimplify] = []behavior{endSilently()}
-	in := e.input(KindInitial)
-	in.Requested = []string{"simplify"}
-	res, err := e.r.RunRound(e.ctx, in)
-	if err == nil || res.Outcome != OutcomeError || !strings.Contains(res.Error, "still dirty") {
-		t.Fatalf("result = %+v, err = %v", res, err)
 	}
 }
 

@@ -114,10 +114,14 @@ func (rd *round) reviewers(ctx context.Context, runs map[string]*store.Run, judg
 // runStages runs the stages in order under a context a push cancels while
 // restarts remain. head is the PR's new head when the round must restart: a
 // push noticed while a stage ran, or by the check before each stage and
-// after the last.
+// after the last. It first notes the checkout, which each stage's roles
+// must leave as they found it (checkTree).
 func (rd *round) runStages(ctx context.Context, runs map[string]*store.Run) (head string, err error) {
 	sctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
+	if len(rd.stages) > 0 {
+		rd.noteTree(ctx)
+	}
 	if rd.canRestart() {
 		rd.mu.Lock()
 		rd.stageCancel = cancel
@@ -155,7 +159,7 @@ func (rd *round) runStages(ctx context.Context, runs map[string]*store.Run) (hea
 // that runs gets a new run, the judge too.
 func (rd *round) restart(ctx context.Context, head string, runs map[string]*store.Run, judgeRun *store.Run) (*store.Run, error) {
 	from := rd.in.TargetSHA
-	cut := []string{}
+	cut, ran := []string{}, []string{}
 	rd.mu.Lock()
 	cont := rd.cont
 	rd.cont = nil
@@ -165,11 +169,20 @@ func (rd *round) restart(ctx context.Context, head string, runs map[string]*stor
 		if c, ok := cont[role.Name]; ok && run != nil {
 			run = &c // the turn in flight is the continuation on a fallback model
 		}
-		if run != nil && rd.settleCut(ctx, role, *run, head) {
+		if run == nil {
+			continue
+		}
+		ran = append(ran, role.Name)
+		if rd.settleCut(ctx, role, *run, head) {
 			cut = append(cut, role.Name)
 		}
 	}
 	rd.finishRun(ctx, judgeRun.ID, store.RunAbandoned, ReportHeadMoved, "the PR head moved to "+textx.ShortSHA(head))
+	// The push skipped the check after the stage it cut short; its roles are
+	// settled now, so a stray edit is caught before the checkout switches.
+	if err := rd.checkTree(ctx, ran); err != nil {
+		return nil, fmt.Errorf("pipeline: restart on %s: %w", textx.ShortSHA(head), err)
+	}
 
 	sw, err := rd.in.Switch(ctx, head)
 	if err != nil {
@@ -218,8 +231,7 @@ func (rd *round) restart(ctx context.Context, head string, runs map[string]*stor
 }
 
 // settleCut ends role's run when the push cut it short: a turn still in
-// flight is interrupted, and an agent waited for until idle (InterruptWait;
-// a git-diff role was interrupted and its tree restored by runPatchRole),
+// flight is interrupted, and an agent waited for until idle (InterruptWait),
 // then the run is abandoned with ReportHeadMoved. A finished run keeps its
 // state. It reports whether the run was cut.
 func (rd *round) settleCut(ctx context.Context, role config.Role, run store.Run, head string) bool {
@@ -230,11 +242,9 @@ func (rd *round) settleCut(ctx context.Context, role config.Role, run store.Run,
 	}
 	switch cur.State {
 	case store.RunSubmitted, store.RunWorking:
-		if role.Capture != config.CaptureGitDiff {
-			rd.interrupt(ctx, role, cur)
-			if !rd.waitIdle(ctx, role, cur) {
-				rd.warn(ctx, "%s still works %s after it was interrupted for the restart", role.Name, InterruptWait)
-			}
+		rd.interrupt(ctx, role, cur)
+		if !rd.waitIdle(ctx, role, cur) {
+			rd.warn(ctx, "%s still works %s after it was interrupted for the restart", role.Name, InterruptWait)
 		}
 	case store.RunPending, store.RunEnded:
 	default:

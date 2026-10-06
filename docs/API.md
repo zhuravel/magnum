@@ -52,7 +52,7 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 | [mysqlx](#mysqlx) | Package mysqlx inventories and drops the per-worktree MySQL databases that Talkable's bin/worktree-setup creates (talkable_<env>[_<role>]__<slug>) on the local DBngin server. |
 | [notify](#notify) | Package notify is magnum's user-facing status surface: toasts and herdr sidebar tokens. |
 | [paths](#paths) | Package paths defines magnum's on-disk layout. |
-| [pipeline](#pipeline) | Package pipeline runs one review round for a PR inside its herdr workspace: a readiness step in the checkout (the repository's prepare commands and ready probes and a Ruby check, readiness.go; failures only inform the judge), then the round's configured roles (config.Role: agent sessions on any configured kind, or shell commands) in stages (config.Config.Stages: the roles of a stage in parallel, git-diff roles one at a time after them, each followed by a tree restore), then the judge, then verification on GitHub (the oracle for "review posted") and the optional dismissal of the identity's own stale CHANGES_REQUESTED. |
+| [pipeline](#pipeline) | Package pipeline runs one review round for a PR inside its herdr workspace: a readiness step in the checkout (the repository's prepare commands and ready probes and a Ruby check, readiness.go; failures only inform the judge), then the round's configured roles (config.Role: agent sessions on any configured kind, or shell commands) in stages (config.Config.Stages: the roles of a stage in parallel, then a check that they left HEAD and the tree as they found them, restoring both when not: no role may edit the checkout), then the judge, then verification on GitHub (the oracle for "review posted") and the optional dismissal of the identity's own stale CHANGES_REQUESTED. |
 | [reveal](#reveal) | Package reveal brings the herdr client to the front of the user's terminal: focus the existing client when there is one, otherwise open a new tab or window running `herdr --session <name>`. |
 | [slots](#slots) | Package slots manages the checkouts magnum reviews in: the Talkable pool slots (~/Projects/talkable.reviewN, provisioned once with bin/worktree-setup and reused) and per-PR worktrees for small repositories, next to the repository's main clone whatever it is named (~/Projects/<owner>-<name>__worktrees/pr-N). |
 | [steps](#steps) | Package steps makes multi-step side effects resumable after a crash. |
@@ -465,7 +465,7 @@ type FallbackData struct {
 	Role       string
 	URL        string
 	HeadSHA    string
-	ReportPath string // the role's report or result file; "" for a git-diff role (magnum collects its patch)
+	ReportPath string // the role's report or result file; "" = the prompt names none
 }
     FallbackData feeds the model-fallback prompt.
 
@@ -1917,9 +1917,8 @@ const (
 	RunsManual = "manual" // only when requested (today `magnum review --simplify`, for claude-simplify)
 	RunsNever  = "never"  // disabled; requests are refused
 
-	CaptureFile    = "file"     // the agent (or command) writes ReportFile itself
-	CaptureStdout  = "stdout"   // shell roles: magnum tees the command's stdout into ReportFile (stderr stays in the pane)
-	CaptureGitDiff = "git-diff" // magnum saves `git diff` of the checkout into ReportFile, then reverts the tree
+	CaptureFile   = "file"   // the agent (or command) writes ReportFile itself
+	CaptureStdout = "stdout" // shell roles: magnum tees the command's stdout into ReportFile (stderr stays in the pane)
 
 	WrapperAuto  = "auto"  // probe `zsh -ic 'whence -w <kind>'` once: a function or alias is a wrapper
 	WrapperTrue  = "true"  // the command is a wrapper that supplies its own flags
@@ -2942,12 +2941,12 @@ type Role struct {
 	Tool string `toml:"tool"`
 
 	// Output: the report file name in the round's directory. Default
-	// <name>.json for a judge, <name>.patch for capture = "git-diff", else
-	// <name>.md.
+	// <name>.json for a judge, else <name>.md.
 	Output string `toml:"output"`
-	// Capture: "file", "stdout" or "git-diff" (see CaptureFile). Default
-	// "stdout" for shell roles, else "file". "stdout" is for shell roles
-	// only; a judge uses "file".
+	// Capture: "file" or "stdout" (see CaptureFile). Default "stdout" for
+	// shell roles, else "file". "stdout" is for shell roles only; a judge
+	// uses "file". No role may edit the checkout: a round resets a tree a
+	// stage left modified (pipeline).
 	Capture string `toml:"capture"`
 	// Timeout per turn. Default daemon.judge_timeout (90m) for a judge,
 	// daemon.reviewer_timeout (40m) otherwise.
@@ -2990,9 +2989,10 @@ func DefaultRoles() []Role
         {{if .BaseSHA}}{{.BaseSHA}}{{else}}{{.BaseRef}}{{end}}" (the merge base,
         else the base ref), ok_status [0], capture stdout; aliases codex,
         codex_review.
-      - claude-simplify: claude, runs first, prompt claude-simplify.md,
-        capture git-diff, output claude-simplify.patch, after claude-review and
-        codex-review; aliases simplify.
+      - claude-simplify: claude, runs first, rerun_min_lines
+        DefaultSimplifyRerunLines, prompt claude-simplify.md (read-only:
+        it writes its proposals to claude-simplify.md), no after, so it runs in
+        parallel with the reviewers; aliases simplify.
 
     Each non-judge role carries a Summary, which makes it a candidate for triage
     ([triage]).
@@ -7773,15 +7773,16 @@ package pipeline // import "github.com/zhuravel/magnum/internal/pipeline"
 
 Package pipeline runs one review round for a PR inside its herdr workspace:
 a readiness step in the checkout (the repository's prepare commands and ready
-probes and a Ruby check, readiness.go; failures only inform the judge),
-then the round's configured roles (config.Role: agent sessions on any configured
-kind, or shell commands) in stages (config.Config.Stages: the roles of a
-stage in parallel, git-diff roles one at a time after them, each followed
-by a tree restore), then the judge, then verification on GitHub (the oracle
-for "review posted") and the optional dismissal of the identity's own stale
-CHANGES_REQUESTED. RolesToRun says which roles a round runs; with the built-in
-roles that is claude-review and codex-review in parallel, then claude-simplify
-(its first round, or when requested), then codex-judge.
+probes and a Ruby check, readiness.go; failures only inform the judge), then the
+round's configured roles (config.Role: agent sessions on any configured kind,
+or shell commands) in stages (config.Config.Stages: the roles of a stage in
+parallel, then a check that they left HEAD and the tree as they found them,
+restoring both when not: no role may edit the checkout), then the judge,
+then verification on GitHub (the oracle for "review posted") and the optional
+dismissal of the identity's own stale CHANGES_REQUESTED. RolesToRun says which
+roles a round runs; with the built-in roles that is claude-review, codex-review
+and claude-simplify (its first round, or when requested) in parallel, then
+codex-judge.
 
 RunRound blocks until the round ends and is meant to run in its own goroutine.
 It records every transition on the round's run rows and appends audit events
@@ -7822,7 +7823,6 @@ const (
 
 const (
 	ReportOK          = "ok"           // report written (non-empty)
-	ReportEmpty       = "empty"        // finished without content (a git-diff role: no changes)
 	ReportMissing     = "missing"      // finished without writing the report
 	ReportTimeout     = "timeout"      // the role's timeout passed; the agent or command was interrupted
 	ReportFailed      = "failed"       // the prompt or command failed (a shell command's exit status outside ok_status)
@@ -7844,8 +7844,8 @@ const (
 	// it ends the turn when the agent has not gone idle (status flicker).
 	ResultSettle = 2 * time.Minute
 	// InterruptWait bounds the wait for an interrupted agent (a timed-out
-	// judge, a cancelled or timed-out git-diff role) to be seen idle; the
-	// engine's Observe records agent statuses every tick.
+	// judge, a reviewer a push cut short) to be seen idle; the engine's
+	// Observe records agent statuses every tick.
 	InterruptWait = 60 * time.Second
 )
     Timing.
@@ -7898,8 +7898,7 @@ func JudgeEvents(cfg *config.Config, fullName string, id *config.Identity, postM
     post-merge round, where a verdict blocks nothing; and COMMENT for no
     findings when one of the round's reports is missing (an APPROVE once went
     out while claude-review had hit a usage limit: a review that did not hear
-    every reviewer approves nothing). A git-diff role that found nothing to
-    change (ReportEmpty) did its job and is not missing.
+    every reviewer approves nothing).
 
 func RolesToRun(ctx context.Context, st *store.Store, cfg *config.Config, pr store.PR, roles []config.Role, requested []string, kind string) ([]config.Role, error)
     RolesToRun returns the roles a round of kind runs for pr, in the order
@@ -7955,8 +7954,9 @@ type Git interface {
 	Status(ctx context.Context, dir string) (gitx.Status, error)
 	MergeBase(ctx context.Context, dir, a, b string) (string, error)
 }
-    Git is the subset of *gitx.Client the tree restore after a git-diff role
-    uses, and a restart's check that a head is not an older one (MergeBase).
+    Git is the subset of *gitx.Client the checkout check after each stage (and
+    its restore) uses, and a restart's check that a head is not an older one
+    (MergeBase).
 
 type GitHub interface {
 	ReviewsWithMarker(ctx context.Context, owner, repo string, number int, marker string) ([]github.Review, error)
@@ -8051,10 +8051,10 @@ type ReviewDeleter interface {
 type RoleReport struct {
 	Role    string // the role's name
 	Kind    string // the role's agent kind (config.Role.AgentKind), whose pause a health status asks for; "" = none
-	Capture string // the role's capture (config.CaptureFile, CaptureStdout, CaptureGitDiff)
+	Capture string // the role's capture (config.CaptureFile, CaptureStdout)
 	RunID   string
 	Status  string // Report* or a health kind
-	Path    string // the report file (a patch for git-diff roles) when Status is ok
+	Path    string // the report file when Status is ok
 	Detail  string
 	Health  *agents.Health // pane classification when it explains the status
 }
@@ -8176,8 +8176,8 @@ type RoundResult struct {
 type Runner struct {
 	Agents Agents
 	GitHub GitHub       // as Identity; unused under RoundInput.DryRun
-	Git    Git          // git-diff roles, and restarts (nil = every new head counts as a push)
-	Exec   execx.Runner // git-diff roles only: git diff / checkout / clean in the slot
+	Git    Git          // the checkout check after each stage, and restarts (nil = no check; every new head counts as a push)
+	Exec   execx.Runner // the restore of a checkout a stage left modified: git reset / clean in the slot
 	Keys   Keys         // optional: interrupt timed-out roles (nil = leave them running)
 	Store  *store.Store
 
@@ -11052,6 +11052,10 @@ type PRBoardRow struct {
 	LastRound   *RoundTimings // the stages of the last review round; nil when none ran
 	// RoundWhy says which roles the last round ran and why; nil when unknown.
 	RoundWhy *RoundWhy
+	// Progress is the round in flight: its start and its roles, which the
+	// state cell turns into the stage and the time ("simplify · 17m") and
+	// the card into a timeline; nil when no round runs or it is unknown.
+	Progress *RoundProgress
 	// Spend is the agent time the PR's runs took over the last 7 days and
 	// how many rounds they ran in; nil when none ran.
 	Spend *SpendInfo
@@ -11304,12 +11308,34 @@ type ReviewerInfo struct {
 }
     ReviewerInfo is one reviewer's latest verdict on a PR.
 
+type RoleProgress struct {
+	Role, Label     string
+	Judge           bool
+	Started, Ended  time.Time
+	Working, Failed bool
+}
+    RoleProgress is one role of a round in flight. Started is when its run was
+    prompted (zero: not started yet) and Ended when it ended (zero while it
+    works); Working: its run is submitted or working; Failed: it failed or was
+    abandoned. Label is the short name the state cell gives it while it works
+    (the shortest of its name and aliases, see the cli's stageLabel); the judge
+    is "judge" whatever its names.
+
 type RoleRerun struct {
 	Role  string
 	Lines int
 }
     RoleRerun is a role that ran again because Lines code lines changed since
     its last run.
+
+type RoundProgress struct {
+	StartedAt time.Time
+	Roles     []RoleProgress
+}
+    RoundProgress is a round in flight: when it started (the PR's
+    last_round_started_at) and its roles, the ones with a run in the order
+    their runs were created, then the ones the round named that have none yet,
+    the judge last.
 
 type RoundTimings struct {
 	Round   int
@@ -11339,6 +11365,8 @@ type RoundWhy struct {
 	Skipped   []string
 	Reason    string
 	EveryRole string
+	// At is when the round started (its engine.round_start event).
+	At time.Time
 }
     RoundWhy says which roles a PR's last round ran and why: its kind (a
     continue runs the judge alone), the roles asked for it (`magnum review
@@ -11348,8 +11376,11 @@ type RoundWhy struct {
 type RoundsInfo struct {
 	Active, Max int
 	ActivePRs   []string
+	Progress    []*RoundProgress
 }
-    RoundsInfo is the review rounds in progress.
+    RoundsInfo is the review rounds in progress. Progress[i] is the round
+    of ActivePRs[i], which the rounds line follows with its stage and time
+    ("talkable#1 · simplify · 17m"); nil, or missing, when unknown.
 
 type SlotRow struct {
 	Name, Folder, PRRef, PRState, SlotState, DBs, Disk string

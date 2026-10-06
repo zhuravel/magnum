@@ -51,6 +51,7 @@ type prsJSONRow struct {
 	RoundsToday      int               `json:"rounds_today"`
 	LastRound        *prsJSONRound     `json:"last_round"`
 	RoundWhy         *prsJSONRoundWhy  `json:"round_why"` // which roles the last round ran and why
+	Progress         *prsJSONProgress  `json:"progress"`  // the round in flight; null when none runs
 	Spend            *prsJSONSpend     `json:"spend"`     // agent time over the last 7 days
 	Wait             string            `json:"wait"`
 	WaitDetail       string            `json:"wait_detail"`
@@ -172,12 +173,28 @@ type prsJSONRoundWhy struct {
 	Triaged    bool               `json:"triaged"`
 	Skipped    []string           `json:"skipped"`
 	Reason     string             `json:"reason"`
-	EveryRole  string             `json:"every_role"` // why triage kept every role
+	EveryRole  string             `json:"every_role"`          // why triage kept every role
+	StartedAt  time.Time          `json:"started_at,omitzero"` // its engine.round_start
 }
 
 type prsJSONRoleRerun struct {
 	Role  string `json:"role"`
 	Lines int    `json:"lines"` // code lines changed since its last run
+}
+
+type prsJSONProgress struct {
+	StartedAt time.Time             `json:"started_at,omitzero"` // last_round_started_at
+	Roles     []prsJSONRoleProgress `json:"roles"`               // the judge last
+}
+
+type prsJSONRoleProgress struct {
+	Role      string    `json:"role"`
+	Label     string    `json:"label"` // the state cell's stage: the shortest of its name and aliases
+	Judge     bool      `json:"judge"`
+	StartedAt time.Time `json:"started_at,omitzero"` // unset: not started yet
+	EndedAt   time.Time `json:"ended_at,omitzero"`
+	Working   bool      `json:"working"`
+	Failed    bool      `json:"failed"`
 }
 
 type prsJSONSpend struct {
@@ -214,7 +231,7 @@ func prsJSONOf(r tui.PRBoardRow) prsJSONRow {
 		Slot: r.Slot, Pinned: r.Pinned, Muted: r.Muted, Notes: r.Notes, NextEligibleAt: r.NextEligibleAt,
 		LastError: r.LastError, ErrorFix: r.ErrorFix, ErrorDetail: listOf(r.ErrorDetail), RoundsToday: r.RoundsToday,
 		LastRound: mapPtr(r.LastRound, prsJSONRoundOf), RoundWhy: mapPtr(r.RoundWhy, prsJSONRoundWhyOf),
-		Spend: mapPtr(r.Spend, prsJSONSpendOf), Wait: r.Wait, WaitDetail: r.WaitDetail, DeltaCheck: r.DeltaCheck, Note: r.Note,
+		Progress: mapPtr(r.Progress, prsJSONProgressOf), Spend: mapPtr(r.Spend, prsJSONSpendOf), Wait: r.Wait, WaitDetail: r.WaitDetail, DeltaCheck: r.DeltaCheck, Note: r.Note,
 		RequestedToMe: mapPtr(r.RequestedToMe, prsJSONRequestOf), LastRequest: mapPtr(r.LastRequest, prsJSONRequestOf),
 		Requests: mapList(r.Requests, prsJSONRequestOf), ClosedAt: r.ClosedAt, Recent: r.Recent, MergedUnreviewed: r.MergedUnreviewed, FlagDismissed: r.FlagDismissed,
 	}
@@ -224,7 +241,14 @@ func prsJSONRoundWhyOf(w tui.RoundWhy) prsJSONRoundWhy {
 	return prsJSONRoundWhy{Kind: w.Kind, PostMerge: w.PostMerge, DeltaCheck: w.DeltaCheck, DeltaLines: w.DeltaLines,
 		Roles: listOf(w.Roles), Requested: listOf(w.Requested),
 		Reruns:  mapList(w.Reruns, func(r tui.RoleRerun) prsJSONRoleRerun { return prsJSONRoleRerun{Role: r.Role, Lines: r.Lines} }),
-		Triaged: w.Triaged, Skipped: listOf(w.Skipped), Reason: w.Reason, EveryRole: w.EveryRole}
+		Triaged: w.Triaged, Skipped: listOf(w.Skipped), Reason: w.Reason, EveryRole: w.EveryRole, StartedAt: w.At}
+}
+
+func prsJSONProgressOf(g tui.RoundProgress) prsJSONProgress {
+	return prsJSONProgress{StartedAt: g.StartedAt, Roles: mapList(g.Roles, func(r tui.RoleProgress) prsJSONRoleProgress {
+		return prsJSONRoleProgress{Role: r.Role, Label: r.Label, Judge: r.Judge, StartedAt: r.Started, EndedAt: r.Ended,
+			Working: r.Working, Failed: r.Failed}
+	})}
 }
 
 func prsJSONSpendOf(s tui.SpendInfo) prsJSONSpend {

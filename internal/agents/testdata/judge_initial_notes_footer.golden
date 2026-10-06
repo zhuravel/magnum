@@ -24,7 +24,7 @@ footer: _Automated review by [Magnum](https://github.com/zhuravel/magnum). Reply
 reports:
   - claude-review: /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/claude-review.md
   - codex-review: missing (timed out after 40m)
-  - claude-simplify: /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/claude-simplify.patch
+  - claude-simplify: /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/claude-simplify.md
 notes: /Users/bohdan/Projects/magnum/state/notes/talkable/talkable.md
 notes_dir: /Users/bohdan/Projects/magnum/state/notes/talkable/talkable
 notes_harness: fixtures/, run-spec.sh

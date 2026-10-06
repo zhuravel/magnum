@@ -78,9 +78,15 @@ func (f *roundsFixture) facts() tui.PRBoardRow {
 	return rows[0]
 }
 
+// why is the row's RoundWhy without its time, which
+// TestBoardRoundFactsTellWhenTheRoundStarted checks.
 func (f *roundsFixture) why() *tui.RoundWhy {
 	f.h.t.Helper()
-	return f.facts().RoundWhy
+	w := f.facts().RoundWhy
+	if w != nil {
+		w.At = time.Time{}
+	}
+	return w
 }
 
 func TestBoardRoundFactsContinueRoundRunsTheJudgeAlone(t *testing.T) {

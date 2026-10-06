@@ -3,12 +3,13 @@
 // ready probes and a Ruby check, readiness.go; failures only inform the
 // judge), then the round's configured roles (config.Role: agent sessions on any configured
 // kind, or shell commands) in stages (config.Config.Stages: the roles of a
-// stage in parallel, git-diff roles one at a time after them, each followed
-// by a tree restore), then the judge, then verification on GitHub (the oracle
-// for "review posted") and the optional dismissal of the identity's own stale
-// CHANGES_REQUESTED. RolesToRun says which roles a round runs; with the
-// built-in roles that is claude-review and codex-review in parallel, then
-// claude-simplify (its first round, or when requested), then codex-judge.
+// stage in parallel, then a check that they left HEAD and the tree as they
+// found them, restoring both when not: no role may edit the checkout), then
+// the judge, then verification on GitHub (the oracle for "review posted") and
+// the optional dismissal of the identity's own stale CHANGES_REQUESTED.
+// RolesToRun says which roles a round runs; with the built-in roles that is
+// claude-review, codex-review and claude-simplify (its first round, or when
+// requested) in parallel, then codex-judge.
 //
 // RunRound blocks until the round ends and is meant to run in its own
 // goroutine. It records every transition on the round's run rows and appends
@@ -79,7 +80,6 @@ const (
 // "trust_dialog".
 const (
 	ReportOK          = "ok"           // report written (non-empty)
-	ReportEmpty       = "empty"        // finished without content (a git-diff role: no changes)
 	ReportMissing     = "missing"      // finished without writing the report
 	ReportTimeout     = "timeout"      // the role's timeout passed; the agent or command was interrupted
 	ReportFailed      = "failed"       // the prompt or command failed (a shell command's exit status outside ok_status)
@@ -98,8 +98,8 @@ const (
 	// it ends the turn when the agent has not gone idle (status flicker).
 	ResultSettle = 2 * time.Minute
 	// InterruptWait bounds the wait for an interrupted agent (a timed-out
-	// judge, a cancelled or timed-out git-diff role) to be seen idle; the
-	// engine's Observe records agent statuses every tick.
+	// judge, a reviewer a push cut short) to be seen idle; the engine's
+	// Observe records agent statuses every tick.
 	InterruptWait = 60 * time.Second
 )
 
@@ -135,8 +135,9 @@ type GitHub interface {
 	UpdateReviewBody(ctx context.Context, owner, repo string, number int, reviewID int64, body string) error
 }
 
-// Git is the subset of *gitx.Client the tree restore after a git-diff role
-// uses, and a restart's check that a head is not an older one (MergeBase).
+// Git is the subset of *gitx.Client the checkout check after each stage
+// (and its restore) uses, and a restart's check that a head is not an older
+// one (MergeBase).
 type Git interface {
 	RevParse(ctx context.Context, dir, ref string) (string, error)
 	SwitchDetach(ctx context.Context, dir, ref string) error
@@ -156,8 +157,8 @@ type Keys interface {
 type Runner struct {
 	Agents Agents
 	GitHub GitHub       // as Identity; unused under RoundInput.DryRun
-	Git    Git          // git-diff roles, and restarts (nil = every new head counts as a push)
-	Exec   execx.Runner // git-diff roles only: git diff / checkout / clean in the slot
+	Git    Git          // the checkout check after each stage, and restarts (nil = no check; every new head counts as a push)
+	Exec   execx.Runner // the restore of a checkout a stage left modified: git reset / clean in the slot
 	Keys   Keys         // optional: interrupt timed-out roles (nil = leave them running)
 	Store  *store.Store
 
@@ -302,10 +303,10 @@ type Pause struct {
 type RoleReport struct {
 	Role    string // the role's name
 	Kind    string // the role's agent kind (config.Role.AgentKind), whose pause a health status asks for; "" = none
-	Capture string // the role's capture (config.CaptureFile, CaptureStdout, CaptureGitDiff)
+	Capture string // the role's capture (config.CaptureFile, CaptureStdout)
 	RunID   string
 	Status  string // Report* or a health kind
-	Path    string // the report file (a patch for git-diff roles) when Status is ok
+	Path    string // the report file when Status is ok
 	Detail  string
 	Health  *agents.Health // pane classification when it explains the status
 }
@@ -438,6 +439,10 @@ type round struct {
 	restartedFrom string                  // the head the last restart left ("" = none)
 	seenHead      string                  // the PR row's head as last seen (guarded by mu)
 	stageCancel   context.CancelCauseFunc // cancels the running stages on a push (guarded by mu; nil = none)
+
+	// tree is the checkout as the stages found it (checkout.go); read and
+	// written only between stages.
+	tree *treeState
 }
 
 func (r *Runner) newRound(ctx context.Context, in RoundInput) (*round, error) {
@@ -462,9 +467,6 @@ func (r *Runner) newRound(ctx context.Context, in RoundInput) (*round, error) {
 	for _, x := range toRun {
 		if x.Judge {
 			judge = x
-		}
-		if x.Capture == config.CaptureGitDiff && (r.Git == nil || r.Exec == nil) {
-			return nil, fmt.Errorf("%w: role %s (capture git-diff) needs Git and Exec", ErrInvalid, x.Name)
 		}
 	}
 	if judge.Name == "" {
@@ -675,35 +677,27 @@ func (rd *round) run(ctx context.Context) (RoundResult, error) {
 	return rd.runJudge(ctx, *judgeRun)
 }
 
-// runStage runs one stage: its roles in parallel, except git-diff roles,
-// which edit the checkout and so run one at a time after the others, each
-// followed by a tree restore. The error is ctx's, or a tree that could not
-// be restored (nothing may run on a modified checkout).
+// runStage runs one stage's roles in parallel, then checks that they left
+// the checkout as the stages found it (checkTree). The error is ctx's, or a
+// checkout that could not be restored (nothing may run on a modified one).
+// A push or the round's end skips the check: a role cut short may still be
+// working until the restart has settled it.
 func (rd *round) runStage(ctx context.Context, stage []config.Role, runs map[string]*store.Run) error {
 	var wg sync.WaitGroup
-	var patches []config.Role
+	var ran []string
 	for _, role := range stage {
 		run := runs[role.Name]
-		switch {
-		case run == nil: // skipped: logged out
-		case role.Capture == config.CaptureGitDiff:
-			patches = append(patches, role)
-		default:
-			wg.Go(func() { rd.setReport(role, rd.runRole(ctx, role, *run)) })
+		if run == nil { // skipped: logged out
+			continue
 		}
+		ran = append(ran, role.Name)
+		wg.Go(func() { rd.setReport(role, rd.runRole(ctx, role, *run)) })
 	}
 	wg.Wait()
-	for _, role := range patches {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		rep, err := rd.runPatchRole(ctx, role, *runs[role.Name])
-		rd.setReport(role, rep)
-		if err != nil {
-			return err
-		}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	return ctx.Err()
+	return rd.checkTree(ctx, ran)
 }
 
 // newRun inserts a pending run for role in this round.
@@ -797,11 +791,7 @@ func (rd *round) judgeReports() []agents.Report {
 			out = append(out, agents.Report{Role: role.Name, Path: rep.Path, Status: rep.Status})
 			continue
 		}
-		detail := rep.Status
-		if role.Capture == config.CaptureGitDiff && rep.Status == ReportEmpty {
-			detail = "no changes"
-		}
-		out = append(out, agents.Report{Role: role.Name, Status: rep.Status, Missing: true, Detail: detail})
+		out = append(out, agents.Report{Role: role.Name, Status: rep.Status, Missing: true, Detail: rep.Status})
 	}
 	return out
 }
