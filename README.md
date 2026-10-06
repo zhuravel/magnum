@@ -14,34 +14,68 @@
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-green"></a>
 </p>
 
-Magnum is a private investigator for pull requests. It watches your GitHub repositories all day,
-checks every eligible PR out into its own worktree, lets several coding agents review it side by side
-inside [herdr](https://herdr.dev) panes, and then a **judge** agent proves or rejects every candidate
-finding, runs the checks, and posts exactly **one** review as the identity you choose: your own
-account or a GitHub App. When the author pushes, the same agent sessions pick up where they left off:
-they pull the delta, read the replies, and re-review only what changed. When the PR merges, the folder
-and its databases are released. You keep working; Magnum keeps the review queue empty.
+Magnum reviews your pull requests with the AI coding agents you already use. On every push, several
+agents (Claude Code, Codex, droid, omp or any CLI [herdr](https://herdr.dev) can drive) review the PR
+side by side, a **judge** agent proves or rejects each finding they raise, and Magnum posts exactly
+**one** GitHub review, as you or as a GitHub App. It runs as a daemon on your Mac, on the agent
+subscriptions you already have, and every agent works in a herdr pane you can watch or take over.
+
+<p align="center">
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="#what-the-author-sees">What the author sees</a> ·
+  <a href="#configuration">Configuration</a> ·
+  <a href="#daily-use">Commands</a> ·
+  <a href="#the-pr-board">PR board</a>
+</p>
+
+- **Several reviewers, one review.** Each agent has its own prompt, model, credentials and schedule.
+  Their findings go to a judge, so the author reads one review with one verdict, not four.
+- **Proven or dropped.** The judge reproduces each finding and posts it on the line that must change,
+  with the reproduction and the fix. A finding it cannot prove is not posted.
+- **Re-reviews that remember.** A push goes back to the sessions that reviewed the PR before: they read
+  the author's replies, check the claimed fixes and review only what changed.
+- **Real checkouts.** Each PR gets its own worktree, or a warm slot with its own databases for a big app,
+  so the agents can run the tests; a closed or merged PR releases it.
+- **Your machine, your budget.** No hosted service in between: the agent CLIs you are logged into do the
+  reviewing, and GitHub calls go through `gh`. Quiet periods, minimum intervals and daily caps keep a
+  burst of pushes from burning your subscription, and a model at its limit can hand over to a fallback.
+- **Learns the repository.** The judge keeps notes per repository (how to test it, known pitfalls), and
+  an optional daily retro collects what human reviewers caught that Magnum missed.
 
 > [!NOTE]
 > **Disclaimer:** this repository is 100% vibecoded and, I'd say, 100% awesome. It saves me hours, and I
 > use it every day. If you're happy to let AI review your pull requests, I hope you won't mind that AI
 > wrote the reviewer too.
 
-- **Multiple agents, one review.** Claude, Codex, droid, omp or any CLI herdr can drive, each with its
-  own prompt, model, credentials and schedule, feeding candidate findings to a judge that posts once.
-- **Sessions that remember.** Re-reviews re-prompt the sessions that reviewed the PR before, so the
-  judge knows what it already said, what was fixed and what the author answered.
-- **Reviews you can watch.** Every agent runs in a visible herdr pane titled `PR #123 claude-review - repo`;
-  jump to it, read it, or take over.
-- **A registry, not a guess.** Which folder holds which PR, which databases belong to it, who reviewed
-  what and when, all in SQLite; cleanup happens on close, on merge, or on your command.
-- **Throttled on purpose.** A push is not a review: quiet periods, minimum intervals and daily caps keep
-  agent-driven commit storms from burning your subscription.
-- **Honest about failures.** Logged-out agents, usage limits, overloaded APIs and trust dialogs are
-  detected, surfaced in the dashboard, and retried with backoff. A cap on one model ("You've reached
-  your Fable limit") switches the session to the kind's next `fallback_models` entry and the run
-  carries on; only an account-wide limit pauses the agent kind. GitHub is the only proof a review was
-  posted.
+### What the author sees
+
+One review per round: a verdict line first (`Fix 1 problem before merging.`, or `No problems found.
+LGTM :shipit:`), then each finding as an inline comment on the line that must change, like this one:
+
+> **[P2] Old Reject error appears in a new chat**
+>
+> If Reject fails after the user opens another chat, the old error appears there.
+>
+> **Reproduce** (`app/chat.test.jsx:88`)
+>
+> ```js
+> it("keeps a late Reject error out of a new chat", async () => {
+>   const chat = render(<Chat />);
+>   api.reject.mockRejectedValueOnce(new Error("timeout"));
+>   await chat.click("Reject");
+>   await chat.click("New Chat");
+>   await flushPromises();
+>   expect(chat.text()).not.toContain("timeout"); // fails: the error is shown
+> });
+> ```
+>
+> **Fix**
+>
+> The `catch` changes state before the session check. Check the captured session first.
+
+The author answers on the thread (`fixed`, `not a bug: <why>`, `won't fix: <why>`), and the next push is
+re-reviewed against those answers. [The judge skill](#the-judge-skill) has the full format.
 
 ## How it works
 
