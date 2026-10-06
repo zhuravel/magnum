@@ -1840,3 +1840,23 @@ editing history. Code, config comments and prompts reference these by their head
   saved nothing). The rules now speak of "a listed reviewer that looks for bugs" and the answer line spells
   out the exact allowed names; replayed against haiku, every answer used them. The fallback (an answer
   naming no role runs every role) stays.
+- **A delta check whose judge lost its session runs with a fresh one** (2026-10-06, amends "A small re-review
+  delta gets a judge-only check"; a 1-line push to a 533-line PR qualified for a delta check right after the
+  PR's posting identity migrated to another App, so its judge session was parked, and the fallback ran
+  claude-review, codex-review and the judge at xhigh for that one line). A delta check whose judge has no live
+  or resumable session (a lost session, a resume that fails, an identity migration or change, fresh sessions
+  requested) now runs with a fresh judge session instead of a full recovery round (`round.delta_check_fresh`,
+  "delta check with a fresh judge session: <reason>"): the judge alone, with no triage and no reruns, started
+  at its `rereview_effort` (a fresh judge otherwise starts at its full effort to re-read the history), in a
+  recovery round whose `judge-recovery.md` gets the same `delta_check: true` and one instruction (only the
+  commits since the last review, named by its short SHA, changed; read that review and its threads for
+  context, then review just those changes, the rest stands as reviewed; post one short review), rendered only
+  then, so the other goldens stay as they were (`SKILL.md` is at its size cap and is not touched). The recovery
+  prompt already names the previous review, `threads_file` and `former_logins`, which is the context the old
+  session held. The approval kept for the check follows the same rules. A fresh session needs a review to build
+  on: when no review by the PR's current or former identities is on record (`previousReview` finds none, as
+  after a review posted as another login), the round still runs in full and `round.delta_check_dropped` says
+  so, as it does for a delta that grew past the threshold at the checkout; forced and requested rounds were
+  never delta checks. Both delta-check prompts now say "1 line" for a one-line delta. Rejected: a dedicated
+  prompt file (the recovery prompt carries the check in one conditional line and one field) and a new run kind
+  (a recovery is what the round is: a fresh judge session reading its history).

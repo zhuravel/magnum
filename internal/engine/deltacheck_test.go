@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/pipeline"
@@ -399,19 +400,159 @@ func TestAForcedReviewOfASmallDeltaRunsInFull(t *testing.T) {
 	}
 }
 
-// A judge whose session is gone cannot check a delta in context: the round
-// becomes a recovery with every role.
-func TestADeltaCheckWhoseJudgeLostItsSessionRunsInFull(t *testing.T) {
+// freshCheckWant is what a delta check with a fresh judge session looks
+// like: a recovery of the judge alone on the one-line delta, at its
+// rereview effort, with the previous review to rebuild its context from and
+// round.delta_check_fresh naming why (reason) instead of
+// round.delta_check_dropped.
+func freshCheckWant(t *testing.T, h *harness, reason string) pipeline.RoundInput {
+	t.Helper()
+	ins := h.rd.all()
+	if len(ins) != 2 {
+		t.Fatalf("rounds = %d, want the delta check", len(ins))
+	}
+	in := ins[1]
+	if in.Kind != pipeline.KindRecovery || in.TargetSHA != "b2" || !slices.Equal(roleNames(in.Roles), []string{"codex-judge"}) || in.MaxRestarts != 0 {
+		t.Fatalf("delta check input: kind %s target %s roles %v restarts %d", in.Kind, in.TargetSHA, roleNames(in.Roles), in.MaxRestarts)
+	}
+	if in.DeltaCheck == nil || in.DeltaCheck.Lines != 1 || len(in.DeltaCheck.Files) != 1 {
+		t.Fatalf("delta check = %+v, want the one line", in.DeltaCheck)
+	}
+	if in.Previous == nil || in.Previous.ID != 701 || in.Previous.SHA != "b1" {
+		t.Fatalf("Previous = %+v, want review 701 on b1", in.Previous)
+	}
+	pr := h.pr(2)
+	if got := h.workspaceRoles(pr.ID); !slices.Equal(got, []string{"codex-judge"}) {
+		t.Fatalf("workspace roles = %v, want the judge alone", got)
+	}
+	if n := h.ag.count(fmt.Sprintf("pane:%d:", pr.ID)); n != 0 {
+		t.Fatalf("panes added for other roles: %v", h.ag.all())
+	}
+	h.ag.mu.Lock()
+	starts := slices.Clone(h.ag.efforts)
+	h.ag.mu.Unlock()
+	if last := starts[len(starts)-1]; last != "codex-judge:high:" {
+		t.Fatalf("judge started as %q (starts %v), want a fresh session at its rereview effort", last, starts)
+	}
+	fresh := approvalEvents(t, h, 2, "round.delta_check_fresh")
+	if len(fresh) != 1 || fresh[0].Message != "delta check with a fresh judge session: "+reason {
+		t.Fatalf("round.delta_check_fresh events: %+v", fresh)
+	}
+	if evs := approvalEvents(t, h, 2, "round.delta_check_dropped"); len(evs) != 0 {
+		t.Fatalf("round.delta_check_dropped events: %+v", evs)
+	}
+	roundStarts := approvalEvents(t, h, 2, "engine.round_start")
+	if len(roundStarts) != 2 || roundStarts[1].Message != "delta check (1 line) in review1 at b2: codex-judge" {
+		t.Fatalf("round starts: %+v", roundStarts)
+	}
+	return in
+}
+
+// The live case: a one-line push qualified for a delta check, and the PR's
+// posting identity had just migrated to another App, so the judge's session
+// was parked. The check runs with a fresh judge session that rebuilds its
+// context from the former App's review (the recovery prompt with
+// delta_check), not as a full round of every reviewer; the approval kept for
+// it is superseded as with any delta check.
+func TestAnIdentityMigrationGivesADeltaCheckAFreshJudgeSession(t *testing.T) {
+	h, _, _ := deltaCheckHarness(t, migWithApp("zhuravel-app", "zhuravel[bot]"))
+	verdictRounds(h, "APPROVED")
+	keptForCheck(t, h, codePatch(1))
+	migRun(h, h.pr(2), "run-a", 1, "talkable-app", "talkable[bot]", 701, "APPROVED")
+	h.cfg.Watches[0].Identity = "zhuravel-app"
+
+	pollPR(h, 5*time.Minute, 2, "b2")
+	if evs := approvalEvents(t, h, 2, "pr.identity_migrated"); len(evs) != 1 {
+		t.Fatalf("pr.identity_migrated events: %+v", evs)
+	}
+	in := freshCheckWant(t, h, "identity talkable-app → zhuravel-app")
+	if in.PR.Identity != "zhuravel-app" || !in.Previous.Former {
+		t.Fatalf("identity %q, previous review former %v: want zhuravel-app building on talkable[bot]'s review", in.PR.Identity, in.Previous.Former)
+	}
+	wantStrings(t, "FormerLogins", in.FormerLogins, []string{"talkable[bot]"})
+	if evs := approvalEvents(t, h, 2, "review.approval_superseded"); len(evs) != 1 {
+		t.Fatalf("review.approval_superseded events: %+v", evs)
+	}
+	if pr := h.wantState(2, store.PRReviewed); deref(pr.ReviewedSHA) != "b2" {
+		t.Fatalf("reviewed_sha %q after the check", deref(pr.ReviewedSHA))
+	}
+}
+
+// A judge whose session is gone (parked with no conversation to resume, a
+// resume that fails, fresh sessions requested) checks the delta in a fresh
+// session too.
+func TestADeltaCheckWhoseJudgeLostItsSessionRunsWithAFreshOne(t *testing.T) {
+	for _, tc := range []struct {
+		name, reason string
+		lose         func(h *harness)
+	}{
+		{"no conversation to resume", "the judge's session is gone", func(h *harness) { parkSessions(h, 2) }},
+		{"a resume that fails", "the judge's session is gone", func(h *harness) {
+			parkSessions(h, 2)
+			h.ag.mu.Lock()
+			h.ag.resumeIDs, h.ag.failResume = map[agents.Role]string{agents.RoleJudge: "uuid-judge"}, true
+			h.ag.mu.Unlock()
+		}},
+		{"fresh sessions requested", "fresh sessions were requested", func(h *harness) { h.e.setKV(h.ctx, kvPRFresh(h.pr(2).ID), "1") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _, _ := deltaCheckHarness(t)
+			verdictRounds(h, "APPROVED")
+			keptForCheck(t, h, codePatch(1))
+			tc.lose(h)
+			pollPR(h, 5*time.Minute, 2, "b2")
+			freshCheckWant(t, h, tc.reason)
+			if evs := approvalEvents(t, h, 2, "review.approval_superseded"); len(evs) != 1 {
+				t.Fatalf("review.approval_superseded events: %+v", evs)
+			}
+		})
+	}
+}
+
+// A fresh judge session needs a review of its own to build on: when no
+// review by the PR's current or former identities is on record (the last
+// one was posted as another login), the delta check becomes a full
+// recovery round of every role at the judge's full effort.
+func TestAFreshJudgeWithoutAnEarlierReviewRunsTheDeltaInFull(t *testing.T) {
 	h, _, _ := deltaCheckHarness(t)
 	verdictRounds(h, "APPROVED")
-	keptForCheck(t, h, liveDelta)
-	h.e.setKV(h.ctx, kvPRFresh(h.pr(2).ID), "1") // the next round starts fresh sessions
+	keptForCheck(t, h, codePatch(1))
+	migRun(h, h.pr(2), "run-z", 1, "zhuravel", "zhuravel", 701, "APPROVED") // posted as another login (magnum review --as)
+	parkSessions(h, 2)
 	pollPR(h, 5*time.Minute, 2, "b2")
 	ins := h.rd.all()
 	if len(ins) != 2 || ins[1].Kind != pipeline.KindRecovery || ins[1].DeltaCheck != nil || len(ins[1].Roles) < 3 {
 		t.Fatalf("rounds = %d, second kind %s check %v roles %v: want a full recovery", len(ins), ins[1].Kind, ins[1].DeltaCheck, roleNames(ins[1].Roles))
 	}
-	if evs := approvalEvents(t, h, 2, "round.delta_check_dropped"); len(evs) != 1 {
-		t.Fatalf("round.delta_check_dropped events: %+v", evs)
+	dropped := approvalEvents(t, h, 2, "round.delta_check_dropped")
+	if len(dropped) != 1 || dropped[0].Message != "a full round instead of the delta check: the judge starts in a fresh session (the judge's session is gone), with no review of this PR's identities on record to build on" {
+		t.Fatalf("round.delta_check_dropped events: %+v", dropped)
+	}
+	if evs := approvalEvents(t, h, 2, "round.delta_check_fresh"); len(evs) != 0 {
+		t.Fatalf("round.delta_check_fresh events: %+v", evs)
+	}
+	h.ag.mu.Lock()
+	starts := slices.Clone(h.ag.efforts)
+	h.ag.mu.Unlock()
+	if !slices.Contains(starts, "codex-judge:xhigh:") {
+		t.Fatalf("starts %v: want the judge at its full effort", starts)
+	}
+}
+
+// parkSessions parks PR n's live sessions, as a lost pane or a daemon
+// restart leaves them: nothing to resume unless the agents know an id.
+func parkSessions(h *harness, n int) {
+	h.t.Helper()
+	sessions, err := h.st.SessionsByPR(h.ctx, h.pr(n).ID)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	for _, s := range sessions {
+		if s.State != store.SessionLive {
+			continue
+		}
+		if err := h.st.TransitionSession(h.ctx, s.ID, []string{store.SessionLive}, store.SessionParked, nil); err != nil {
+			h.t.Fatal(err)
+		}
 	}
 }

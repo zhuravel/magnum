@@ -5,7 +5,11 @@ package pipeline
 // commit is small as a round of the judge alone, in its own session, and
 // says so in RoundInput.DeltaCheck. The judge's prompt asks for a short
 // review of those commits and names a file listing them: the file names are
-// the PR's, so no prompt prints them.
+// the PR's, so no prompt prints them. A judge that starts in a fresh session
+// (DECISIONS "A delta check whose judge lost its session runs with a fresh
+// one") checks the delta in a recovery round: the recovery prompt, which
+// rebuilds its context from its previous review and threads, at the same
+// rereview effort.
 
 import (
 	"context"
@@ -37,12 +41,22 @@ type DeltaFile struct {
 	Binary bool   `json:"binary,omitempty"`
 }
 
-// addDeltaCheck fills jd's delta check fields for a re-review that is one,
+// deltaCheck is the round's delta check: RoundInput.DeltaCheck of a
+// re-review, or of a recovery (a fresh judge session); nil for any other
+// round.
+func (rd *round) deltaCheck() *DeltaCheck {
+	if rd.in.Kind != KindRereview && rd.in.Kind != KindRecovery {
+		return nil
+	}
+	return rd.in.DeltaCheck
+}
+
+// addDeltaCheck fills jd's delta check fields for a round that is one,
 // with DeltaCheckFile written to the report directory (a failure leaves the
 // prompt without the file: the judge reads the commits itself).
 func (rd *round) addDeltaCheck(ctx context.Context, jd *agents.JudgeData) {
-	dc := rd.in.DeltaCheck
-	if dc == nil || rd.in.Kind != KindRereview {
+	dc := rd.deltaCheck()
+	if dc == nil {
 		return
 	}
 	jd.DeltaCheck, jd.DeltaLines = true, dc.Lines

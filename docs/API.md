@@ -602,16 +602,20 @@ type JudgeData struct {
 	PreviousHeadSHA  string
 	Since            string // RFC3339: read every comment since then
 	ForcePushed      bool
+	// PreviousHeadShort is PreviousHeadSHA cut to 7 characters (always
+	// derived; see textx.ShortSHA).
+	PreviousHeadShort string
 	// BaseMerged (rereview): the commits since PreviousHeadSHA merged a
 	// branch in, usually the base, so PreviousHeadSHA..HeadSHA carries its
 	// commits: the prompt compares the PR's own diff before and after.
 	BaseMerged bool
-	// DeltaCheck (rereview): the round is a delta check: the judge alone
-	// reviews the commits since its last review, DeltaLines changed code
-	// lines in the files DeltaFile lists (a JSON file in the report
+	// DeltaCheck (rereview, recovery): the round is a delta check: the judge
+	// alone reviews the commits since its last review, DeltaLines changed
+	// code lines in the files DeltaFile lists (a JSON file in the report
 	// directory, "" when it could not be written: the file names are PR
-	// content). Rendered as `delta_check: true` and one instruction, only
-	// then.
+	// content); in a recovery its fresh session first reads its previous
+	// review and threads. Rendered as `delta_check: true` and one
+	// instruction, only then.
 	DeltaCheck      bool
 	DeltaLines      int
 	DeltaFile       string
@@ -8097,9 +8101,10 @@ type RoundInput struct {
 	// (RoleData/JudgeData.BaseMerged). ForcePushed wins over it.
 	BaseMerged bool
 	MovedFrom  string // agents.Workspace.MovedFrom
-	// DeltaCheck (rereview): the round is a delta check: Roles hold the
-	// judge alone, which reviews the small delta since its last review
-	// (JudgeData.DeltaCheck); nil = an ordinary round.
+	// DeltaCheck (rereview, or recovery for a judge in a fresh session): the
+	// round is a delta check: Roles hold the judge alone, which reviews the
+	// small delta since its last review (JudgeData.DeltaCheck) at its
+	// rereview effort; nil = an ordinary round.
 	DeltaCheck *DeltaCheck
 
 	DryRun bool // the judge posts nothing; GitHub is not consulted

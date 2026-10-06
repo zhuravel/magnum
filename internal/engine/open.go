@@ -209,7 +209,7 @@ func (e *Engine) openPR(ctx context.Context, repo store.Repo, w config.Watch, pr
 		}
 	}
 	for _, r := range judgeFirst(start) {
-		if _, err := e.ensureAgent(ctx, pr, r, ws, false, false); err != nil {
+		if _, err := e.ensureAgent(ctx, pr, r, ws, false, effortFull); err != nil {
 			return "", fmt.Errorf("start %s: %w", r.Name, err)
 		}
 	}

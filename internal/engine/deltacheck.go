@@ -11,6 +11,14 @@ package engine
 // triage or reruns; the judge's prompt asks for a short review of those
 // commits. An App's approval of the older commit stands until the check
 // posts (approval.go).
+//
+// A judge without its conversation (a lost session, an identity migration,
+// fresh sessions requested) checks the delta in a fresh session (DECISIONS
+// "A delta check whose judge lost its session runs with a fresh one"): a
+// recovery round of the judge alone at its rereview effort, whose prompt has
+// it read its previous review and threads first (checkFresh). Only when no
+// review of the PR's identities is on record to build on does the round run
+// in full.
 
 import (
 	"context"
@@ -101,6 +109,32 @@ func (e *Engine) confirmDeltaCheck(ctx context.Context, job *roundJob, target st
 		dc.Files = append(dc.Files, pipeline.DeltaFile{Path: fd.Path, Status: fd.Status, Binary: slices.Contains(size.Binaries, fd.Path)})
 	}
 	return dc
+}
+
+// hasOwnReview reports whether a review of pr by login, the identity
+// posting now, or by one of its former identities is on record
+// (previousReview): what a judge in a fresh session builds on.
+func (e *Engine) hasOwnReview(ctx context.Context, pr store.PR, login string) bool {
+	return e.previousReview(ctx, pr, login, e.formerLogins(ctx, pr)).ID != 0
+}
+
+// checkFresh settles a delta check whose judge started without its
+// conversation (the round's kind became a recovery; why says what made the
+// session fresh): with a review of the PR's identities on record to build
+// on (effort is effortCheck, hasOwnReview) the check runs with the fresh
+// session, which reads that review and its threads first (the recovery
+// prompt with delta_check: round.delta_check_fresh). Without one it reports
+// false, with round.delta_check_dropped: the round runs in full.
+func (e *Engine) checkFresh(ctx context.Context, job *roundJob, rs *roundSetup, effort startEffort, why string) bool {
+	subject := prSubject(job.repo, job.pr.Number)
+	data := map[string]any{"kind": rs.kind, "reason": why}
+	if effort == effortCheck && rs.kind == pipeline.KindRecovery {
+		e.event(ctx, "info", subject, "round.delta_check_fresh", "delta check with a fresh judge session: "+why, data)
+		return true
+	}
+	e.event(ctx, "info", subject, "round.delta_check_dropped",
+		"a full round instead of the delta check: the judge starts in a fresh session ("+why+"), with no review of this PR's identities on record to build on", data)
+	return false
 }
 
 // judgeAlone is the first judge of roles (the one a round runs), alone.

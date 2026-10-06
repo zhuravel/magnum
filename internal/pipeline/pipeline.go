@@ -237,9 +237,10 @@ type RoundInput struct {
 	// (RoleData/JudgeData.BaseMerged). ForcePushed wins over it.
 	BaseMerged bool
 	MovedFrom  string // agents.Workspace.MovedFrom
-	// DeltaCheck (rereview): the round is a delta check: Roles hold the
-	// judge alone, which reviews the small delta since its last review
-	// (JudgeData.DeltaCheck); nil = an ordinary round.
+	// DeltaCheck (rereview, or recovery for a judge in a fresh session): the
+	// round is a delta check: Roles hold the judge alone, which reviews the
+	// small delta since its last review (JudgeData.DeltaCheck) at its
+	// rereview effort; nil = an ordinary round.
 	DeltaCheck *DeltaCheck
 
 	DryRun bool // the judge posts nothing; GitHub is not consulted

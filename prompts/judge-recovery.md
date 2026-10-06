@@ -4,6 +4,9 @@ Earlier reviews by `{{.ReviewerLogin}}`{{if .FormerLogins}} or, before magnum mo
   - {{.ID}} {{.Event}} on `{{.SHA}}` ({{.SubmittedAt}})
 {{- end}}
 Read them and their threads first (`gh api repos/{{.Owner}}/{{.Repo}}/pulls/{{.Number}}/reviews/<id>/comments`), then follow the skill's re-review section for head `{{.HeadSHA}}`. Candidate reports for this head are listed below.
+{{- if .DeltaCheck}}
+Only the commits since your last review (`{{.PreviousHeadShort}}`) changed ({{.DeltaLines}} {{if eq .DeltaLines 1}}line{{else}}lines{{end}}{{if .DeltaFile}}; files listed in {{.DeltaFile}}{{end}}). Read your previous review and its threads for context, then review just those changes; the rest stands as reviewed. Post one short review.
+{{- end}}
 {{- if .FormerLogins}}
 The reviews and threads of {{range $i, $l := .FormerLogins}}{{if $i}}, {{end}}`{{$l}}`{{end}} are yours: count their findings as your earlier findings and decide their threads under the reply contract. Post everything new as `{{.ReviewerLogin}}`, and never edit or dismiss their reviews: magnum dismisses what they left standing once your review is posted.
 {{- end}}
@@ -36,6 +39,9 @@ footer: {{.Footer}}
 previous_review_id: {{.PreviousReviewID}}
 previous_head_sha: {{.PreviousHeadSHA}}
 since: {{.Since}}
+{{- if .DeltaCheck}}
+delta_check: true
+{{- end}}
 threads_file: {{.ThreadsFile}}
 reports:
 {{- range .Reports}}

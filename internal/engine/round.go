@@ -235,25 +235,25 @@ func (e *Engine) checkout(ctx context.Context, job *roundJob) (string, error) {
 // startSessions gives the roles that run their panes (one workspace) and
 // starts or resumes their agents, the judge first, then settles the round's
 // kind in rs: a judge without its conversation re-reads the history
-// (recovery, or initial before any review), and a continue that became a
-// full round starts the other roles too.
+// (recovery, or initial before any review; a delta check stays one,
+// checkFresh), and a continue that became a full round starts the other
+// roles too.
 func (e *Engine) startSessions(ctx context.Context, job *roundJob, rs *roundSetup) (agents.Workspace, *setupError) {
 	var ws agents.Workspace
 	fail := func(err error) (agents.Workspace, *setupError) {
 		return ws, classifySetup(err, job.pr, e.cfg, e.now())
 	}
 	pr := job.pr
-	fresh := false
+	fresh, why := false, "" // why: what made the sessions fresh, for the events
 	if v, _ := e.getKV(ctx, kvPRFresh(pr.ID)); v == "1" {
-		fresh = true
+		fresh, why = true, "fresh sessions were requested"
 	}
 	// Sessions post as the identity their panes were created for; a PR whose
 	// identity changed since (watch config, magnum review --as) must not
 	// continue in them, or the review is posted by the wrong login.
 	if v := e.sessionsIdentity(ctx, pr.ID); v != "" && v != pr.Identity {
-		fresh = true
-		e.event(ctx, "info", prSubject(job.repo, pr.Number), "pr.identity_changed",
-			fmt.Sprintf("identity %s → %s: starting fresh sessions", v, pr.Identity), nil)
+		fresh, why = true, fmt.Sprintf("identity %s → %s", v, pr.Identity)
+		e.event(ctx, "info", prSubject(job.repo, pr.Number), "pr.identity_changed", why+": starting fresh sessions", nil)
 	}
 	if fresh {
 		if err := e.d.Agents.Park(ctx, pr); err != nil {
@@ -272,8 +272,12 @@ func (e *Engine) startSessions(ctx context.Context, job *roundJob, rs *roundSetu
 		return fail(fmt.Errorf("workspace: %w", err))
 	}
 	e.setKV(ctx, kvPRSessionsIdentity(pr.ID), pr.Identity)
+	effort := effortOf(job.kind)
+	if rs.delta != nil && e.hasOwnReview(ctx, pr, rs.src.Login()) {
+		effort = effortCheck // a fresh judge checks the delta too (checkFresh)
+	}
 	recovered := false
-	if ws, recovered, err = e.startRoles(ctx, pr, ws, job.slot.Path, env, rs.toRun, fresh, job.kind == pipeline.KindRereview); err != nil {
+	if ws, recovered, err = e.startRoles(ctx, pr, ws, job.slot.Path, env, rs.toRun, fresh, effort); err != nil {
 		return fail(err)
 	}
 
@@ -289,11 +293,7 @@ func (e *Engine) startSessions(ctx context.Context, job *roundJob, rs *roundSetu
 		}
 	}
 	full := job.kind == kindContinue && rs.kind != kindContinue
-	if rs.delta != nil && rs.kind != pipeline.KindRereview {
-		// The judge has no conversation to keep: the round re-reads the PR
-		// with every role, as any recovery does.
-		e.event(ctx, "info", prSubject(job.repo, pr.Number), "round.delta_check_dropped",
-			"a full round instead of the delta check: the judge's session is gone", map[string]any{"kind": rs.kind})
+	if rs.delta != nil && rs.kind != pipeline.KindRereview && !e.checkFresh(ctx, job, rs, effort, cmp.Or(why, "the judge's session is gone")) {
 		rs.delta, rs.roles, full = nil, e.cfg.RolesFor(&job.watch), true
 	}
 	if full {
@@ -309,7 +309,7 @@ func (e *Engine) startSessions(ctx context.Context, job *roundJob, rs *roundSetu
 		if serr := e.preflight(ctx, agentKinds(extra)); serr != nil {
 			return ws, serr
 		}
-		if ws, _, err = e.startRoles(ctx, pr, ws, job.slot.Path, env, extra, fresh, rs.kind == pipeline.KindRereview); err != nil {
+		if ws, _, err = e.startRoles(ctx, pr, ws, job.slot.Path, env, extra, fresh, effortOf(rs.kind)); err != nil {
 			return fail(err)
 		}
 		rs.toRun = append(rs.toRun, extra...)
@@ -567,13 +567,38 @@ func (e *Engine) preflight(ctx context.Context, kinds []string) *setupError {
 	return nil
 }
 
+// startEffort is the effort a round starts its agents at (ensureAgent).
+type startEffort int
+
+const (
+	// effortFull: every role at its effort.
+	effortFull startEffort = iota
+	// effortRereview (a re-review round): at the roles' rereview effort
+	// (config.Role.EffortFor), except a judge without a conversation to
+	// resume: its round becomes a recovery, which re-reads the history at
+	// the full effort.
+	effortRereview
+	// effortCheck (a delta check that may run with a fresh judge,
+	// checkFresh): the judge at its rereview effort, in a fresh session
+	// too, since it reviews the delta alone either way.
+	effortCheck
+)
+
+// effortOf is the start effort of a round of kind.
+func effortOf(kind string) startEffort {
+	if kind == pipeline.KindRereview {
+		return effortRereview
+	}
+	return effortFull
+}
+
 // startRoles gives every role a pane in ws (EnsurePane for one the
 // workspace lacks) and starts or resumes the agent roles' agents, the judge
-// first (at their rereview effort for a re-review round, see ensureAgent,
-// unless the judge had to start fresh: the round becomes a recovery).
+// first, at effort (see startEffort; once the judge had to start fresh, the
+// other roles start at their full effort: the round becomes a recovery).
 // recovered is true when the judge started without a conversation to
 // resume.
-func (e *Engine) startRoles(ctx context.Context, pr store.PR, ws agents.Workspace, slotPath string, env map[string]string, roles []config.Role, fresh, rereview bool) (agents.Workspace, bool, error) {
+func (e *Engine) startRoles(ctx context.Context, pr store.PR, ws agents.Workspace, slotPath string, env map[string]string, roles []config.Role, fresh bool, effort startEffort) (agents.Workspace, bool, error) {
 	recovered := false
 	for _, role := range judgeFirst(roles) {
 		if ws.Panes[agents.Role(role.Name)] == "" {
@@ -585,12 +610,12 @@ func (e *Engine) startRoles(ctx context.Context, pr store.PR, ws agents.Workspac
 		if role.IsShell() {
 			continue
 		}
-		freshStart, err := e.ensureAgent(ctx, pr, role, ws, fresh, rereview)
+		freshStart, err := e.ensureAgent(ctx, pr, role, ws, fresh, effort)
 		if err != nil {
 			return ws, false, fmt.Errorf("start %s: %w", role.Name, err)
 		}
 		if role.Judge && freshStart {
-			recovered, rereview = true, false
+			recovered, effort = true, effortFull
 		}
 	}
 	return ws, recovered, nil
@@ -615,12 +640,10 @@ func judgeFirst(roles []config.Role) []config.Role {
 // ensureAgent starts (or resumes, or adopts) an agent role's agent unless
 // its session is already live. freshStart is true when the agent started
 // without a conversation to resume (ResumeID is "" for a kind with
-// session_source "none"). For a re-review round (rereview) the agent starts
-// at the role's rereview effort (config.Role.EffortFor), except a judge
-// without a conversation to resume: its round becomes a recovery, which
-// re-reads the history at the full effort. A live session keeps the effort
-// it started with; the prompt asks for the round's (pipeline).
-func (e *Engine) ensureAgent(ctx context.Context, pr store.PR, role config.Role, ws agents.Workspace, fresh, rereview bool) (bool, error) {
+// session_source "none"). The agent starts at effort (startEffort). A live
+// session keeps the effort it started with; the prompt asks for the round's
+// (pipeline).
+func (e *Engine) ensureAgent(ctx context.Context, pr store.PR, role config.Role, ws agents.Workspace, fresh bool, effort startEffort) (bool, error) {
 	if s, err := e.st.LiveSessionByPRRole(ctx, pr.ID, role.Name); err == nil && s.State == store.SessionLive && deref(s.AgentName) != "" {
 		return false, nil
 	}
@@ -639,7 +662,7 @@ func (e *Engine) ensureAgent(ctx context.Context, pr store.PR, role config.Role,
 	defer release()
 	at := func(resume string) config.Role {
 		r := role
-		if rereview && (resume != "" || !role.Judge) {
+		if effort == effortCheck || effort == effortRereview && (resume != "" || !role.Judge) {
 			r.Effort = role.EffortFor(true)
 		}
 		return r

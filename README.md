@@ -214,8 +214,12 @@ delta's files listed in `delta-check.json` in the report directory). A modified 
 the re-review interval, the daily cap, capacity and drains hold it as any round, and a forced or requested
 round, or one that names roles, runs in full. The board, the card and `magnum status` call it a delta
 check (`delta check · quiet → 14:09`, `delta check (4 lines)` on the card's last round and in
-`engine.round_start`). A judge whose session is gone makes it a full recovery round. An App's approval of the
-reviewed commit stands meanwhile (`review.approval_kept_for_check`): the check's approval supersedes it
+`engine.round_start`). A judge whose session is gone (lost, parked by an identity migration, or fresh
+sessions requested) checks the delta in a fresh session (`round.delta_check_fresh`): a recovery round of the
+judge alone at its `rereview_effort`, whose prompt has it read its previous review and threads before it
+reviews just those commits (`delta_check: true` in `judge-recovery.md`); only when no review by the PR's
+current or former identities is on record to build on does it become a full recovery round
+(`round.delta_check_dropped`). An App's approval of the reviewed commit stands meanwhile (`review.approval_kept_for_check`): the check's approval supersedes it
 (`review.approval_superseded`); a check that comments, requests changes, fails or needs attention, a later
 push that makes the delta too large, or no check posted within an hour of the push dismisses it then, with
 the reason. `delta_check = false` keeps the wait and the full round.

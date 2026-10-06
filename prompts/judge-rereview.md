@@ -15,7 +15,7 @@ The push merged the base branch, so `{{.PreviousHeadSHA}}..{{.HeadSHA}}` carries
 Read the new commits with `git log --oneline {{.PreviousHeadSHA}}..{{.HeadSHA}}` and `git diff {{.PreviousHeadSHA}}..{{.HeadSHA}}`.
 {{- end}}
 {{- if .DeltaCheck}}
-Only the commits since your last review changed ({{.DeltaLines}} lines{{if .DeltaFile}}; files listed in {{.DeltaFile}}{{end}}). Review just those changes against the PR's purpose and your earlier findings; the rest stands as reviewed. Post one short review.
+Only the commits since your last review changed ({{.DeltaLines}} {{if eq .DeltaLines 1}}line{{else}}lines{{end}}{{if .DeltaFile}}; files listed in {{.DeltaFile}}{{end}}). Review just those changes against the PR's purpose and your earlier findings; the rest stands as reviewed. Post one short review.
 {{- end}}
 {{- if .MovedFrom}}
 This checkout is now {{.Checkout}} (it was {{.MovedFrom}}). Work only here.

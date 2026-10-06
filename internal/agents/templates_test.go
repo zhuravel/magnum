@@ -219,6 +219,9 @@ func TestRenderGolden(t *testing.T) {
 		data         any
 	}{
 		{"judge_rereview_delta_check", "judge-rereview.md", deltaCheck},
+		// The same check by a judge in a fresh session (its old one is gone,
+		// or the PR's identity migrated): the recovery prompt carries it.
+		{"judge_recovery_delta_check", "judge-recovery.md", deltaCheck},
 		{"judge_initial", "judge-initial.md", judgeFixture()},
 		{"judge_initial_blind", "judge-initial.md", blindJudge},
 		{"judge_initial_post_merge", "judge-initial.md", postMerge},

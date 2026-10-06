@@ -10,6 +10,7 @@ import (
 	"unicode"
 
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // RenderPrompt executes a resolved prompt template (config.Config.ResolvePrompt
@@ -232,16 +233,20 @@ type JudgeData struct {
 	PreviousHeadSHA  string
 	Since            string // RFC3339: read every comment since then
 	ForcePushed      bool
+	// PreviousHeadShort is PreviousHeadSHA cut to 7 characters (always
+	// derived; see textx.ShortSHA).
+	PreviousHeadShort string
 	// BaseMerged (rereview): the commits since PreviousHeadSHA merged a
 	// branch in, usually the base, so PreviousHeadSHA..HeadSHA carries its
 	// commits: the prompt compares the PR's own diff before and after.
 	BaseMerged bool
-	// DeltaCheck (rereview): the round is a delta check: the judge alone
-	// reviews the commits since its last review, DeltaLines changed code
-	// lines in the files DeltaFile lists (a JSON file in the report
+	// DeltaCheck (rereview, recovery): the round is a delta check: the judge
+	// alone reviews the commits since its last review, DeltaLines changed
+	// code lines in the files DeltaFile lists (a JSON file in the report
 	// directory, "" when it could not be written: the file names are PR
-	// content). Rendered as `delta_check: true` and one instruction, only
-	// then.
+	// content); in a recovery its fresh session first reads its previous
+	// review and threads. Rendered as `delta_check: true` and one
+	// instruction, only then.
 	DeltaCheck      bool
 	DeltaLines      int
 	DeltaFile       string
@@ -266,10 +271,11 @@ type JudgeData struct {
 	FormerLogins []string
 }
 
-// completed is d with its Reports and notes fields completed (a copy; d is
-// not modified).
+// completed is d with its Reports, notes fields and PreviousHeadShort
+// completed (a copy; d is not modified).
 func (d *JudgeData) completed() JudgeData {
 	out := *d
+	out.PreviousHeadShort = textx.ShortSHA(d.PreviousHeadSHA)
 	out.Reports = make([]Report, len(d.Reports))
 	for i, r := range d.Reports {
 		out.Reports[i] = r.completed()
