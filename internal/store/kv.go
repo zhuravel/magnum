@@ -86,10 +86,12 @@ func KVPRGate(prID int64) string { return fmt.Sprintf("pr.%d.gate", prID) }
 // dry_run) returns the PR to; while set, the next round posts nothing.
 func KVPRDryRun(prID int64) string { return fmt.Sprintf("pr.%d.dry_run", prID) }
 
-// KVPRCodexProject records a Codex session of the PR launched with its
-// checkout untrusted because the PR changes .codex/ (JSON, see
-// agents.CodexProjectNote); a launch that finds .codex/ unchanged clears it.
-func KVPRCodexProject(prID int64) string { return fmt.Sprintf("pr.%d.codex_project", prID) }
+// KVPRProject records a session of agent kind kind ("codex", "claude")
+// launched without the checkout's project configuration because the PR
+// changes it (.codex/; .claude/, .mcp.json), e.g. pr.7.codex_project (JSON,
+// see agents.ProjectNote); a launch of that kind that finds it unchanged
+// clears it.
+func KVPRProject(prID int64, kind string) string { return fmt.Sprintf("pr.%d.%s_project", prID, kind) }
 
 // KVScreenWidths holds the column widths dragged with the mouse on a
 // screen ("board", "dashboard") as a JSON object of column name to cells;

@@ -1,0 +1,276 @@
+package agents
+
+import (
+	"encoding/json"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/store"
+)
+
+// claudeLaunchArgs are claude-review's args in the test env (a wrapper, so
+// no kind args): its name and effort.
+var claudeLaunchArgs = []string{"--name", "PR #11920 claude-review - talkable", "--effort", "high"}
+
+// userSettingsOnly is the claude kind's project_untrust.
+var userSettingsOnly = []string{"--setting-sources", "user"}
+
+func claudeProjectEvents(t *testing.T, e *env) []store.Event {
+	t.Helper()
+	all, err := e.st.EventsBySubject(e.ctx, "pr:talkable/talkable#11920", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []store.Event
+	for _, ev := range all {
+		if ev.Kind == EventClaudeProjectDeclined {
+			out = append(out, ev)
+		}
+	}
+	return out
+}
+
+// A PR controls its checkout's .claude/ (settings with hooks Claude Code
+// runs outside any sandbox, env, plugins; skills, commands, agents) and
+// .mcp.json, and magnum trusts its checkouts and skips Claude's
+// permissions. When the PR changes them against its merge base, a claude
+// role (launched or resumed) loads the user's settings only, so none of
+// the PR's project config loads. The decision is an event (counts, never a
+// path) and the PR's claude record with the head, for the board and the
+// judge.
+func TestClaudeOfAPRChangingClaudeConfigLoadsOnlyTheUserSettings(t *testing.T) {
+	for _, resume := range []string{"", "0f1e-uuid"} {
+		e, dir, ws := projectEnv(t, map[string]string{
+			".claude/settings.json": `{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"evil"}]}]}}`,
+			".mcp.json":             `{"mcpServers":{"evil":{"command":"evil-mcp"}}}`,
+		}, []string{".claude/settings.json", ".mcp.json"}, []string{".claude/settings.local.json"})
+		if err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleClaude), ws.Panes[RoleClaude], resume); err != nil {
+			t.Fatal(err)
+		}
+		want := slices.Concat(claudeLaunchArgs, userSettingsOnly)
+		if resume != "" {
+			want = slices.Concat([]string{"--resume", resume}, want)
+		}
+		if got := e.h.starts[0].Args; !slices.Equal(got, want) {
+			t.Fatalf("resume %q: args = %q\nwant %q", resume, got, want)
+		}
+		if calls := e.run.CallsWithPrefix("git", "-C", dir, "diff", "--name-only", "-z", "--no-renames", "--no-ext-diff", projectMergeBase, "--",
+			":(top,literal).claude", ":(top,literal).mcp.json"); len(calls) != 1 {
+			t.Fatalf("diff calls = %v", e.run.Calls)
+		}
+		evs := claudeProjectEvents(t, e)
+		if len(evs) != 1 || !strings.Contains(evs[0].Message, "3 files under .claude/ or in .mcp.json differ from the merge base") ||
+			!strings.Contains(evs[0].Message, "claude-review") || strings.Contains(evs[0].Message, "settings.local") {
+			t.Fatalf("resume %q: events = %+v", resume, evs)
+		}
+		var data map[string]any
+		if err := json.Unmarshal(evs[0].Data, &data); err != nil || data["role"] != "claude-review" || data["files"] != 3.0 || data["compared"] != true {
+			t.Fatalf("event data = %s (%v)", evs[0].Data, err)
+		}
+		note, ok := ProjectDeclined(e.ctx, e.st, e.pr.ID, KindClaude)
+		if !ok || note.Head != projectHead || note.Files != 3 {
+			t.Fatalf("record = %+v, %v; want head %s", note, ok, projectHead)
+		}
+		if _, ok := ProjectDeclined(e.ctx, e.st, e.pr.ID, KindCodex); ok {
+			t.Fatal("a Claude decision must not be recorded as Codex's")
+		}
+	}
+}
+
+// A PR that only changes .mcp.json (a server Claude Code starts, or one
+// pointed at another URL with the slot's tokens) is declined the same way;
+// a checkout with .mcp.json and no .claude/ is compared too.
+func TestClaudeOfAPRChangingOnlyTheMCPConfigLoadsOnlyTheUserSettings(t *testing.T) {
+	e, _, ws := projectEnv(t, map[string]string{".mcp.json": `{"mcpServers":{}}`}, []string{".mcp.json"}, nil)
+	if err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleClaude), ws.Panes[RoleClaude], ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.h.starts[0].Args; !slices.Equal(got, slices.Concat(claudeLaunchArgs, userSettingsOnly)) {
+		t.Fatalf("args = %q", got)
+	}
+	if evs := claudeProjectEvents(t, e); len(evs) != 1 || !strings.Contains(evs[0].Message, "1 file under .claude/ or in .mcp.json differs") {
+		t.Fatalf("events = %+v", evs)
+	}
+}
+
+// When the PR leaves .claude/ and .mcp.json as its merge base has them,
+// the project config is the team's: it loads as before, and the launch
+// clears an earlier Claude record but never the Codex one, which a Codex
+// session of the same head keeps.
+func TestUnchangedClaudeConfigKeepsTheTeamsSettings(t *testing.T) {
+	e, _, ws := projectEnv(t, map[string]string{".claude/settings.json": "{}", ".mcp.json": "{}"}, nil, nil)
+	for _, kind := range []string{KindClaude, KindCodex} {
+		if err := e.st.SetKV(e.ctx, store.KVPRProject(e.pr.ID, kind), `{"head":"`+projectHead+`","files":1}`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleClaude), ws.Panes[RoleClaude], ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.h.starts[0].Args; !slices.Equal(got, claudeLaunchArgs) {
+		t.Fatalf("args = %q, want the team's settings on", got)
+	}
+	if _, ok := ProjectDeclined(e.ctx, e.st, e.pr.ID, KindClaude); ok {
+		t.Fatal("an unchanged .claude/ must clear the Claude record")
+	}
+	if _, ok := ProjectDeclined(e.ctx, e.st, e.pr.ID, KindCodex); !ok {
+		t.Fatal("a Claude launch cleared the Codex record")
+	}
+	if evs := claudeProjectEvents(t, e); len(evs) != 0 {
+		t.Fatalf("events = %+v", evs)
+	}
+}
+
+// A checkout with neither .claude/ nor .mcp.json gives Claude Code nothing
+// of the PR's to load, so no git runs (a .claude file is no directory); a
+// claude kind with project_untrust = [] loads a changed .claude/.
+func TestClaudeProjectNeedsItsConfigAndProjectUntrust(t *testing.T) {
+	e, dir, ws := projectEnv(t, map[string]string{"README.md": "x\n", ".claude": "a file, not a directory\n"}, []string{".claude"}, nil)
+	if err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleClaude), ws.Panes[RoleClaude], ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.h.starts[0].Args; !slices.Equal(got, claudeLaunchArgs) {
+		t.Fatalf("args = %q", got)
+	}
+	if calls := e.run.CallsWithPrefix("git", "-C", dir, "diff"); len(calls) != 0 {
+		t.Fatalf("git diff ran for a checkout without .claude/ or .mcp.json: %v", calls)
+	}
+
+	e, _, ws = projectEnv(t, map[string]string{".claude/settings.json": "{}"}, []string{".claude/settings.json"}, nil)
+	e.setKind(KindClaude, func(k *config.Kind) { k.ProjectUntrust = nil })
+	if err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleClaude), ws.Panes[RoleClaude], ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.h.starts[0].Args; !slices.Equal(got, claudeLaunchArgs) {
+		t.Fatalf("project_untrust = []: args = %q", got)
+	}
+	if evs := claudeProjectEvents(t, e); len(evs) != 0 {
+		t.Fatalf("project_untrust = []: events = %+v", evs)
+	}
+}
+
+// What magnum cannot compare it does not load: a failing merge base starts
+// Claude with the user's settings only, and the event says why.
+func TestClaudeProjectIsLeftOutWhenItCannotBeCompared(t *testing.T) {
+	e, dir, ws := projectEnv(t, map[string]string{".claude/settings.json": "{}"}, nil, nil)
+	e.run.Rules = slices.Insert(e.run.Rules, 0, execx.Rule{Prefix: []string{"git", "-C", dir, "merge-base"},
+		Result: execx.Result{Code: 1}})
+	if err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleClaude), ws.Panes[RoleClaude], ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.h.starts[0].Args; !slices.Equal(got, slices.Concat(claudeLaunchArgs, userSettingsOnly)) {
+		t.Fatalf("args = %q", got)
+	}
+	evs := claudeProjectEvents(t, e)
+	if len(evs) != 1 || !strings.Contains(evs[0].Message, "could not compare .claude/ and .mcp.json with the merge base") {
+		t.Fatalf("events = %+v", evs)
+	}
+	if note, ok := ProjectDeclined(e.ctx, e.st, e.pr.ID, KindClaude); !ok || note.Compared {
+		t.Fatalf("record = %+v, %v", note, ok)
+	}
+}
+
+// The board's card and the judge learn of each agent's decision for the
+// round's head: one sentence per CLI that ran without the PR's project
+// config, Codex first; a record of another head says nothing.
+func TestDeclinedProjectsOfTheHead(t *testing.T) {
+	e := newEnv(t)
+	set := func(kind, head string) {
+		if err := e.st.SetKV(e.ctx, store.KVPRProject(e.pr.ID, kind), `{"head":"`+head+`","files":1,"compared":true}`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	set(KindClaude, projectHead)
+	if got := ProjectSentences(e.ctx, e.st, e.pr.ID, projectHead); got != ClaudeProjectSentence {
+		t.Fatalf("sentences = %q", got)
+	}
+	var jd JudgeData
+	NoteDeclinedProjects(e.ctx, e.st, e.pr.ID, projectHead, &jd)
+	if !jd.ClaudeProjectDeclined || jd.CodexProjectDeclined {
+		t.Fatalf("judge data: codex %v, claude %v", jd.CodexProjectDeclined, jd.ClaudeProjectDeclined)
+	}
+	set(KindCodex, projectHead)
+	if got := ProjectSentences(e.ctx, e.st, e.pr.ID, projectHead); got != CodexProjectSentence+" "+ClaudeProjectSentence {
+		t.Fatalf("sentences = %q", got)
+	}
+	if got := ProjectSentences(e.ctx, e.st, e.pr.ID, projectMergeBase); got != "" {
+		t.Fatalf("another head: %q", got)
+	}
+	jd = JudgeData{}
+	NoteDeclinedProjects(e.ctx, e.st, e.pr.ID, projectMergeBase, &jd)
+	if jd.ClaudeProjectDeclined || jd.CodexProjectDeclined {
+		t.Fatalf("another head: judge data %+v", jd)
+	}
+}
+
+// Claude Code reloads its settings files and skills while it runs, and
+// loads a .claude/settings.json the checkout gains later, so a session that
+// started with the project config loaded would take a later head's from
+// disk. ReloadsProject names those sessions for the engine, which quits
+// them before it moves the checkout: a Claude session launched with the
+// project config loaded, or one magnum did not launch (adopted: it cannot
+// tell); never one launched with the user's settings only, a Codex session
+// (Codex reads its config at start) or a claude kind whose project_untrust
+// is [] (the operator lets a changed config load anyway).
+func TestReloadsProjectNamesTheClaudeSessionsThatLoadedTheProjectConfig(t *testing.T) {
+	e, _, ws := projectEnv(t, map[string]string{".claude/settings.json": "{}"}, nil, nil)
+	for _, r := range []Role{RoleClaude, RoleJudge} {
+		if err := e.m.StartAgent(e.ctx, e.pr, e.spec(r), ws.Panes[r], ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !e.m.ReloadsProject(e.ctx, e.session(RoleClaude)) {
+		t.Error("a Claude session with the project config loaded must be quit before the checkout moves")
+	}
+	if e.m.ReloadsProject(e.ctx, e.session(RoleJudge)) {
+		t.Error("a Codex session does not reload its project config")
+	}
+	e.setKind(KindClaude, func(k *config.Kind) { k.ProjectUntrust = nil })
+	if e.m.ReloadsProject(e.ctx, e.session(RoleClaude)) {
+		t.Error("project_untrust = []: a changed config loads anyway, so nothing to quit for")
+	}
+
+	e, _, ws = projectEnv(t, map[string]string{".claude/settings.json": "{}"}, []string{".claude/settings.json"}, nil)
+	if err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleClaude), ws.Panes[RoleClaude], ""); err != nil {
+		t.Fatal(err)
+	}
+	if e.m.ReloadsProject(e.ctx, e.session(RoleClaude)) {
+		t.Error("a Claude session with the user's settings only never loads the project config")
+	}
+
+	adopted, err := e.st.CreateSession(e.ctx, store.Session{PRID: e.pr.ID, Role: "claude-simplify", AgentName: store.Ptr("mg-x"),
+		AgentKind: store.Ptr(KindClaude), State: store.SessionLive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !e.m.ReloadsProject(e.ctx, adopted) {
+		t.Error("a Claude session magnum did not launch may have the project config loaded")
+	}
+}
+
+// An agent StartAgent adopts instead of launching (its name already taken,
+// or a conversation herdr restored by itself without magnum's flags) may
+// run with the project config loaded whatever an earlier launch on the same
+// session row did: adopting it drops the mark, so the engine quits it before
+// the checkout moves.
+func TestAnAdoptedClaudeAgentCountsAsReloadingTheProjectConfig(t *testing.T) {
+	e, _, ws := projectEnv(t, map[string]string{".claude/settings.json": "{}"}, []string{".claude/settings.json"}, nil)
+	if err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleClaude), ws.Panes[RoleClaude], ""); err != nil {
+		t.Fatal(err)
+	}
+	if e.m.ReloadsProject(e.ctx, e.session(RoleClaude)) {
+		t.Fatal("launched with the user's settings only")
+	}
+	if err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleClaude), ws.Panes[RoleClaude], ""); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(e.h.starts); n != 1 {
+		t.Fatalf("agent starts = %d, want the second call to adopt", n)
+	}
+	if !e.m.ReloadsProject(e.ctx, e.session(RoleClaude)) {
+		t.Fatal("an adopted agent kept the mark of the launch before it")
+	}
+}

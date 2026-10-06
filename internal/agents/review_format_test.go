@@ -128,11 +128,14 @@ func TestSkillReadsTheHistoryAndChecksTheDescriptionsClaims(t *testing.T) {
 }
 
 // A PR that changes .codex/ gets its checkout untrusted in magnum's Codex
-// sessions (codexProject): the review says so in its Checks.
-func TestSkillSaysARoundRanWithoutThePRsCodexChanges(t *testing.T) {
+// sessions, one that changes .claude/ or .mcp.json gets its Claude sessions
+// started with the user's settings only (checkoutProject): the review says
+// so in its Checks, one line per CLI.
+func TestSkillSaysARoundRanWithoutThePRsAgentConfigChanges(t *testing.T) {
 	skillSays(t, []string{
-		"- `codex_project` (only `declined`): magnum kept the PR's `.codex/` changes out of its Codex sessions; add the Checks line `- Codex ran without the PR's .codex/ changes`.",
-	}, nil)
+		"- `codex_project`, `claude_project` (only `declined`): add the Checks line `- Codex ran without the PR's .codex/ changes`, " +
+			"resp. `- Claude ran without the PR's .claude/ and .mcp.json changes`.",
+	}, []string{"- `codex_project` (only `declined`)"})
 }
 
 // A re-review of an unchanged head posted "Re-review 42a70de → 42a70de" with
@@ -211,10 +214,11 @@ func TestSkillSetsTheOperatorsInteractiveHabitsAside(t *testing.T) {
 // (2026-10-06: they add 581 bytes, shortening sections 2 and 4 won back
 // 423), 92 for listing `history` among the block's fields and the
 // description line in the body's order, 278 for setting the operator's
-// interactive habits aside (2026-10-06), and 171 for the `codex_project`
-// field and its Checks line (2026-10-06). Every rule added must replace or
-// shorten text.
-const skillMaxBytes = 32_222
+// interactive habits aside (2026-10-06), 171 for the `codex_project`
+// field and its Checks line (2026-10-06), and 22 for `claude_project` in
+// the same line, which lost its explanation (2026-10-06). Every rule added
+// must replace or shorten text.
+const skillMaxBytes = 32_244
 
 func TestSkillStaysTight(t *testing.T) {
 	if n := len(magnum.Skill); n > skillMaxBytes {
@@ -233,7 +237,7 @@ func TestSkillDescribesEveryMagnumField(t *testing.T) {
 	d.MovedFrom, d.ForcePushed = "/Users/bohdan/Projects/talkable.review1", true
 	d.Readiness = Readiness{Failed: 1, File: "/r/readiness.json", Checks: []ReadinessCheck{
 		{Kind: ReadinessReady, Command: "bin/db-ready", Status: ReadinessFailed, Duration: "1s"}}}
-	d.RelatedPRs, d.HistoryFile, d.CodexProjectDeclined = "/r/related.json", "/r/history.json", true
+	d.RelatedPRs, d.HistoryFile, d.CodexProjectDeclined, d.ClaudeProjectDeclined = "/r/related.json", "/r/history.json", true, true
 	skill := string(magnum.Skill)
 	seen := map[string]bool{}
 	// A two-phase round: the candidates phase of each prompt, and the own
@@ -262,7 +266,7 @@ func TestSkillDescribesEveryMagnumField(t *testing.T) {
 			seen[m[1]] = true
 		}
 	}
-	for _, f := range []string{"notes", "notes_dir", "notes_harness", "notes_lock", "notes_unlock", "readiness", "reports", "phase", "own_findings", "related_prs", "history", "codex_project"} {
+	for _, f := range []string{"notes", "notes_dir", "notes_harness", "notes_lock", "notes_unlock", "readiness", "reports", "phase", "own_findings", "related_prs", "history", "codex_project", "claude_project"} {
 		if !seen[f] {
 			t.Errorf("no judge prompt renders `%s`", f)
 		}

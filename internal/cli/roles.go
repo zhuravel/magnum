@@ -12,6 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
 )
 
@@ -360,12 +361,16 @@ func rolesKinds(c *Context, cfg *config.Config, o rolesOpts) int {
 		}
 		fmt.Fprintf(tw, "  mcp:\t%s\n", mcp)
 		project := "-"
-		if len(k.ProjectUntrust) > 0 || k.ProjectMCP == config.ProjectMCPOff && len(k.MCPDisable) > 0 {
-			untrust := "- (a changed .codex/ loads)"
-			if len(k.ProjectUntrust) > 0 {
-				untrust = args(k.ProjectUntrust) + " when the PR changes .codex/ (the checkout untrusted for the session)"
+		if paths, effect, servers := agents.ProjectRule(name); paths != "" {
+			if len(k.ProjectUntrust) > 0 || servers && k.ProjectMCP == config.ProjectMCPOff && len(k.MCPDisable) > 0 {
+				project = "- (a changed " + paths + " loads)"
+				if len(k.ProjectUntrust) > 0 {
+					project = args(k.ProjectUntrust) + " when the PR changes " + paths + " (" + effect + ")"
+				}
+				if servers {
+					project += "; else its MCP servers: " + k.ProjectMCP
+				}
 			}
-			project = untrust + "; else its MCP servers: " + k.ProjectMCP
 		}
 		fmt.Fprintf(tw, "  project:\t%s\n", project)
 		fmt.Fprintf(tw, "  name:\t%s\n", args(k.Name))

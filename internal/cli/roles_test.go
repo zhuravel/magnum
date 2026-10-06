@@ -187,7 +187,8 @@ func TestRolesKinds(t *testing.T) {
 		"-c model_reasoning_effort={effort}", "codex -c model_reasoning_effort=xhigh", "claude --name {title}",
 		"-c agents.max_concurrent_threads_per_session={subagents} (none: -c agents.enabled=false)",
 		"mcp:", "-c mcp_servers.{server}.enabled=false per MCP server of the Codex config (allowed: -)",
-		"project:", "-c projects={projects} when the PR changes .codex/ (the checkout untrusted for the session); else its MCP servers: allow")
+		"project:", "-c projects={projects} when the PR changes .codex/ (the checkout untrusted for the session); else its MCP servers: allow",
+		"--setting-sources user when the PR changes .claude/ or .mcp.json (the session loads your user settings only)\n")
 	if i, j := strings.Index(out, "droid (used by"), strings.Index(out, "omp (no role"); i < 0 || j < i {
 		t.Errorf("kinds the roles use come first:\n%s", out)
 	}

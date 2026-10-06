@@ -28,6 +28,8 @@ import (
 //     the role's name so the conversation is never forked; a restored
 //     agent of another kind or checkout is not adopted (logged) and the
 //     conversation is resumed in paneID instead.
+//   - An adopted agent was not launched with magnum's args, so it counts as
+//     one with the checkout's project config loaded (ReloadsProject).
 //   - Otherwise it waits for an idle shell (ErrBusy after IdleShellTimeout),
 //     resolves the kind's wrapper mode (Wrapper), trusts the session's cwd in
 //     the CLI's config (EnsureTrust; a failure is only logged; a no-op for
@@ -38,9 +40,11 @@ import (
 //     ObserveSnapshot), the role's model, effort and subagent-cap args, the
 //     args that turn off the MCP servers of the Codex config (the kind's
 //     mcp_off, read at every launch: mcpServers), the args that keep the
-//     checkout's .codex/ out when the PR changes it, or its servers under
-//     project_mcp "off" (codexProject against origin/<the PR's base>,
-//     recorded by recordProject), the kind's start
+//     checkout's project config (Codex's .codex/, Claude's .claude/ and
+//     .mcp.json) out when the PR changes it, or Codex's servers under
+//     project_mcp "off" (checkoutProject against origin/<the PR's base>,
+//     recorded by recordProject and, for the session, noteSessionProject,
+//     which ReloadsProject reads), the kind's start
 //     args, its args only when it is not a wrapper, then role.Args. While
 //     the role's model is limited (NoteModelLimit), the model args name the
 //     kind's first fallback model that is not, and the session records it
@@ -110,6 +114,7 @@ func (m *Manager) StartAgent(ctx context.Context, pr store.PR, role config.Role,
 				a = b
 			}
 		}
+		m.noteSessionProject(ctx, sess.ID, kindName, projectScope{}) // not launched here: its project config may be loaded
 		return m.markStarted(ctx, sess, a, name, kindName, store.Deref(sess.ResumedFrom), time.Time{})
 	}
 	if resume != "" {
@@ -130,6 +135,7 @@ func (m *Manager) StartAgent(ctx context.Context, pr store.PR, role config.Role,
 						agentName = "" // address it by pane id instead
 					}
 				}
+				m.noteSessionProject(ctx, sess.ID, kindName, projectScope{}) // restored without magnum's flags
 				return m.markStarted(ctx, sess, a, agentName, kindName, resume, time.Time{})
 			}
 		}
@@ -157,11 +163,12 @@ func (m *Manager) StartAgent(ctx context.Context, pr store.PR, role config.Role,
 	ref := paneRef{name: name, pane: paneID}
 	model, onFallback := m.startModel(ctx, role, kind)
 	base := cmp.Or(store.Deref(pr.BaseRef), repo.DefaultBranch)
-	project := m.codexProject(ctx, role, dir, "origin/"+strings.TrimPrefix(base, "origin/"), "")
+	project := m.checkoutProject(ctx, role, dir, "origin/"+strings.TrimPrefix(base, "origin/"), "")
 	args := kind.Argv(config.LaunchArgs{Session: resume, Title: title, Model: model, Effort: role.Effort,
 		Subagents: role.MaxSubagents, MCPServers: m.mcpServers(role), ProjectServers: project.servers, Untrusted: project.paths,
 		Wrapper: wrapper, Extra: role.Args})
 	m.recordProject(ctx, pr.ID, role, dir, project)
+	m.noteSessionProject(ctx, sess.ID, kindName, project)
 	opts := herdr.AgentStartOptions{Name: name, Kind: kindName, PaneID: paneID, Timeout: AgentStartTimeout, Args: args}
 	launched := m.now()
 	gate := trustGate{since: launched} // a fresh agent was never prompted

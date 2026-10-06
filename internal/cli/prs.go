@@ -351,9 +351,7 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 					row.Stalemate = prsStalemate(v)
 				}
 			}
-			if n, ok := agents.CodexProjectDeclined(ctx, st, r.PRID); ok && n.Head != "" && n.Head == r.HeadSHA {
-				row.ProjectNote = agents.CodexProjectSentence
-			}
+			row.ProjectNote = agents.ProjectSentences(ctx, st, r.PRID, r.HeadSHA)
 			out = append(out, row)
 		}
 		sums, err := st.LastReviewSummaries(ctx, ids)

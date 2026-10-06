@@ -38,7 +38,10 @@ when you change a behaviour, do not rewrite old ones.
   checkout declares no hooks of its own (so the hooks are the user's); hooks a checkout brings may come
   from the PR and would run outside the sandbox, so they are declined. A PR that changes the checkout's
   `.codex/` (project config, MCP servers, hooks, rules) gets its Codex sessions started with the
-  checkout untrusted (`project_untrust`), and their "Folder access" is answered "Open restricted".
+  checkout untrusted (`project_untrust`), and their "Folder access" is answered "Open restricted"; one
+  that changes `.claude/` or `.mcp.json` (settings with hooks, MCP servers, skills, commands, agents) gets
+  its Claude sessions started with `--setting-sources user`, and a Claude session that loaded the project
+  config is parked before the checkout moves to a new head (Claude reloads it while it runs).
 
 ## Gate
 

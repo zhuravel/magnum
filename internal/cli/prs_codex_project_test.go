@@ -25,7 +25,7 @@ func TestPRsSourceCarriesTheCodexProjectRecordOfTheHead(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := st.SetKV(ctx, store.KVPRCodexProject(res.PR.ID), `{"head":"abc","files":1,"compared":true}`); err != nil {
+		if err := st.SetKV(ctx, store.KVPRProject(res.PR.ID, "codex"), `{"head":"abc","files":1,"compared":true}`); err != nil {
 			t.Fatal(err)
 		}
 		ids = append(ids, res.PR.ID)

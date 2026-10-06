@@ -165,7 +165,7 @@ const (
 	// PlaceholderServer is an MCP server's name in Kind.MCPDisable.
 	PlaceholderServer = "{server}"
 	// PlaceholderProjects is the TOML table of untrusted paths in
-	// Kind.ProjectUntrust (Kind.UntrustArgs).
+	// Kind.ProjectUntrust (Kind.UntrustArgs), optional there.
 	PlaceholderProjects = "{projects}"
 )
 

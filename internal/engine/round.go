@@ -108,7 +108,13 @@ func (e *Engine) prepare(ctx context.Context, job *roundJob) (pipeline.RoundInpu
 	}
 
 	// 1. Checkout (and a post-merge round's base, which the base branch no
-	// longer gives).
+	// longer gives), once the sessions that would reload the project
+	// config from it are out of its way.
+	if !(job.kind == kindContinue && job.target != "") && job.evalHead == "" {
+		if _, err := e.parkReloading(ctx, job); err != nil {
+			return fail(err)
+		}
+	}
 	if rs.target, err = e.checkout(ctx, job); err != nil {
 		return pipeline.RoundInput{}, ws, e.checkoutFailed(err, job)
 	}
@@ -428,7 +434,7 @@ func (e *Engine) roundInput(ctx context.Context, job *roundJob, rs roundSetup, w
 		if job.kind == kindContinue {
 			in.DispatchedHead = rs.target // a continue that became a full round kept the paused round's checkout
 		}
-		in.Switch = e.switchHead(job, rs.kind, base, ws.WorkspaceID)
+		in.Switch = e.switchHead(job, rs, base, ws)
 	}
 	in.FormerLogins = e.formerLogins(ctx, cur)
 	reviewed := ""
@@ -500,8 +506,12 @@ func (e *Engine) headContext(ctx context.Context, slotPath, base, reviewed, targ
 // Slots.Checkout (whose guard knows magnum's own earlier switch). Checkout
 // refuses a busy slot, so the slot is held for it and busy again after,
 // whatever the outcome; the round's reservation keeps evictions and other
-// rounds away meanwhile.
-func (e *Engine) switchHead(job *roundJob, kind, base, workspaceID string) func(context.Context, string) (pipeline.Switched, error) {
+// rounds away meanwhile. The sessions that would reload the project config
+// from the checkout are parked first (parkReloading) and those of the
+// round's roles resumed after it, so the restart prompts them on the new
+// head with what it allows.
+func (e *Engine) switchHead(job *roundJob, rs roundSetup, base string, ws agents.Workspace) func(context.Context, string) (pipeline.Switched, error) {
+	kind, workspaceID := rs.kind, ws.WorkspaceID
 	return func(ctx context.Context, sha string) (pipeline.Switched, error) {
 		if err := e.st.TransitionSlot(ctx, job.slot.ID, []string{store.SlotBusy}, store.SlotHeld, nil); err != nil {
 			return pipeline.Switched{}, fmt.Errorf("slot %s to held for the checkout: %w", job.slot.Name, err)
@@ -519,8 +529,21 @@ func (e *Engine) switchHead(job *roundJob, kind, base, workspaceID string) func(
 		if job.pool != nil {
 			pool = *job.pool
 		}
+		parked, err := e.parkReloading(ctx, job)
+		if err != nil {
+			return pipeline.Switched{}, err
+		}
 		if err := e.d.Slots.Checkout(ctx, job.slot, pr, pool, sha); err != nil {
 			return pipeline.Switched{}, fmt.Errorf("checkout in %s: %w", job.slot.Name, err)
+		}
+		// The restart prompts every role on the same session: resume the
+		// ones parked for the checkout, which now decide with the new head.
+		for _, role := range rs.toRun {
+			if slices.Contains(parked, role.Name) {
+				if _, err := e.ensureAgent(ctx, pr, role, ws, false, effortOf(kind)); err != nil {
+					return pipeline.Switched{}, fmt.Errorf("resume %s after the checkout: %w", role.Name, err)
+				}
+			}
 		}
 		sl, err := e.st.SlotByID(ctx, job.slot.ID)
 		if err != nil {

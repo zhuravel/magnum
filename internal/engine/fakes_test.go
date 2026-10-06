@@ -611,6 +611,11 @@ type fakeAgents struct {
 	wsMovedFrom  string
 	startedRoles []agents.Role
 	efforts      []string // StartAgent calls as "<role>:<effort>:<resume>"
+	// reloads names the roles whose sessions ReloadsProject reports (an
+	// agent that reloads the checkout's project config it loaded).
+	reloads map[string]bool
+	// onQuit, when set, runs as Quit starts, with the session it quits.
+	onQuit func(store.Session)
 }
 
 func (f *fakeAgents) record(s string) {
@@ -755,8 +760,20 @@ func (f *fakeAgents) Park(ctx context.Context, pr store.PR) error {
 
 // Quit parks one session, as agents.Manager.Quit does with a resumable
 // conversation.
+func (f *fakeAgents) ReloadsProject(_ context.Context, s store.Session) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.reloads[s.Role]
+}
+
 func (f *fakeAgents) Quit(ctx context.Context, s store.Session) error {
 	f.record(fmt.Sprintf("quit:%d:%s", s.PRID, s.Role))
+	f.mu.Lock()
+	onQuit := f.onQuit
+	f.mu.Unlock()
+	if onQuit != nil {
+		onQuit(s)
+	}
 	return f.st.TransitionSession(ctx, s.ID, []string{store.SessionStarting, store.SessionLive, store.SessionLost}, store.SessionParked, nil)
 }
 

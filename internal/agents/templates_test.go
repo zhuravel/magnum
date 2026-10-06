@@ -326,6 +326,12 @@ func TestRenderGolden(t *testing.T) {
 		d.CodexProjectDeclined = true
 		return d
 	}
+	// Its Claude sessions loaded the user's settings only because the PR
+	// changes .claude/ or .mcp.json: the same prompts say so too.
+	withClaudeProject := func(d JudgeData) JudgeData {
+		d.ClaudeProjectDeclined = true
+		return d
+	}
 
 	cases := []struct {
 		golden, name string
@@ -356,6 +362,9 @@ func TestRenderGolden(t *testing.T) {
 		{"judge_initial_codex_project", "judge-initial.md", withCodexProject(candidates(judgeFixture()))},
 		{"judge_rereview_codex_project", "judge-rereview.md", withCodexProject(withNotes)},
 		{"judge_recovery_codex_project", "judge-recovery.md", withCodexProject(judgeFixture())},
+		{"judge_initial_claude_project", "judge-initial.md", withClaudeProject(withCodexProject(candidates(judgeFixture())))},
+		{"judge_rereview_claude_project", "judge-rereview.md", withClaudeProject(withNotes)},
+		{"judge_recovery_claude_project", "judge-recovery.md", withClaudeProject(judgeFixture())},
 		{"judge_initial_candidates", "judge-initial.md", candidates(judgeFixture())},
 		{"judge_initial_candidates_no_own", "judge-initial.md", noOwn},
 		{"judge_rereview_candidates", "judge-rereview.md", candidates(withNotes)},

@@ -122,7 +122,7 @@ func TestJudgeOfAPRChangingCodexStartsWithTheCheckoutUntrusted(t *testing.T) {
 		if err := json.Unmarshal(evs[0].Data, &data); err != nil || data["role"] != "codex-judge" || data["files"] != 2.0 || data["compared"] != true {
 			t.Fatalf("event data = %s (%v)", evs[0].Data, err)
 		}
-		note, ok := CodexProjectDeclined(e.ctx, e.st, e.pr.ID)
+		note, ok := ProjectDeclined(e.ctx, e.st, e.pr.ID, KindCodex)
 		if !ok || note.Head != projectHead || note.Files != 2 {
 			t.Fatalf("record = %+v, %v; want head %s", note, ok, projectHead)
 		}
@@ -148,7 +148,7 @@ func TestCodexReviewOfAPRChangingCodexRunsWithTheCheckoutUntrusted(t *testing.T)
 	if calls := e.run.CallsWithPrefix("git", "-C", dir, "merge-base", "HEAD", projectMergeBase); len(calls) != 1 {
 		t.Fatalf("merge-base calls = %v", e.run.Calls)
 	}
-	if note, ok := CodexProjectDeclined(e.ctx, e.st, e.pr.ID); !ok || note.Head != d.HeadSHA {
+	if note, ok := ProjectDeclined(e.ctx, e.st, e.pr.ID, KindCodex); !ok || note.Head != d.HeadSHA {
 		t.Fatalf("record = %+v, %v", note, ok)
 	}
 	if evs := projectEvents(t, e); len(evs) != 1 || !strings.Contains(evs[0].Message, "codex-review") {
@@ -163,7 +163,7 @@ func TestCodexReviewOfAPRChangingCodexRunsWithTheCheckoutUntrusted(t *testing.T)
 func TestUnchangedCodexKeepsTheTeamsServersUnlessProjectMCPIsOff(t *testing.T) {
 	files := map[string]string{".codex/config.toml": "[mcp_servers.sentry]\nurl = \"https://mcp.example.com\"\n[mcp_servers.tracker]\ncommand = \"tracker-mcp\"\n"}
 	e, _, ws := projectEnv(t, files, nil, nil)
-	if err := e.st.SetKV(e.ctx, store.KVPRCodexProject(e.pr.ID), `{"head":"`+projectHead+`","files":1}`); err != nil {
+	if err := e.st.SetKV(e.ctx, store.KVPRProject(e.pr.ID, KindCodex), `{"head":"`+projectHead+`","files":1}`); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleJudge), ws.Panes[RoleJudge], ""); err != nil {
@@ -172,7 +172,7 @@ func TestUnchangedCodexKeepsTheTeamsServersUnlessProjectMCPIsOff(t *testing.T) {
 	if got := e.h.starts[0].Args; !slices.Equal(got, judgeLaunchArgs) {
 		t.Fatalf("args = %q, want the team's servers on", got)
 	}
-	if _, ok := CodexProjectDeclined(e.ctx, e.st, e.pr.ID); ok {
+	if _, ok := ProjectDeclined(e.ctx, e.st, e.pr.ID, KindCodex); ok {
 		t.Fatal("an unchanged .codex/ must clear the record")
 	}
 	if evs := projectEvents(t, e); len(evs) != 0 {

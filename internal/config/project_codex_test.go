@@ -41,9 +41,9 @@ func TestCodexMarksAChangedCheckoutUntrustedInOneTable(t *testing.T) {
 	if got := codex.UntrustArgs(nil); got != nil {
 		t.Fatalf("no paths: %q", got)
 	}
-	claude, _ := Defaults().KindSpec(KindClaude)
-	if got := claude.UntrustArgs(paths); got != nil {
-		t.Fatalf("claude has no project_untrust: %q", got)
+	omp, _ := Defaults().KindSpec(KindOMP)
+	if got := omp.UntrustArgs(paths); got != nil {
+		t.Fatalf("omp has no project_untrust: %q", got)
 	}
 	none := mustLoad(t, map[string]string{"config.toml": "[kinds.codex]\nproject_untrust = []\n" + minimalConfig})
 	k, _ := none.KindSpec(KindCodex)
@@ -79,10 +79,11 @@ func TestProjectMCPOffTurnsTheCheckoutsServersOffButTheAllowedOnes(t *testing.T)
 	}
 }
 
+// project_mcp takes allow or off; project_untrust needs no {projects}
+// (claude's names no path), see TestClaudeLoadsOnlyTheUserSettingsForAChangedCheckout.
 func TestProjectKeysAreValidated(t *testing.T) {
 	for key, cfg := range map[string]string{
-		"project_mcp":     "[kinds.codex]\nproject_mcp = \"sometimes\"\n",
-		"project_untrust": "[kinds.codex]\nproject_untrust = [\"-c\", \"projects={}\"]\n",
+		"project_mcp": "[kinds.codex]\nproject_mcp = \"sometimes\"\n",
 	} {
 		_, err := loadFiles(t, t.TempDir(), map[string]string{"config.toml": cfg + minimalConfig})
 		if err == nil || !strings.Contains(err.Error(), key) {

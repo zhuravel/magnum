@@ -6,12 +6,12 @@ import (
 	"github.com/zhuravel/magnum/internal/agents"
 )
 
-// addProjectDeclined tells the judge that the round's Codex sessions ran with
-// the checkout untrusted because the PR changes .codex/: the PR's record
-// (agents.CodexProjectDeclined, written at each Codex launch) names the
-// round's head. The skill adds a line to the review's Checks.
+// addProjectDeclined tells the judge which of the round's agent CLIs ran
+// without the PR's changes to their project config in the checkout (Codex
+// with it untrusted, Claude with the user's settings only): the PR's
+// records, written at each launch, name the round's head
+// (agents.NoteDeclinedProjects). The skill adds a line to the review's
+// Checks for each.
 func (rd *round) addProjectDeclined(ctx context.Context, jd *agents.JudgeData) {
-	if n, ok := agents.CodexProjectDeclined(ctx, rd.r.Store, rd.pr.ID); ok && n.Head == rd.in.TargetSHA {
-		jd.CodexProjectDeclined = true
-	}
+	agents.NoteDeclinedProjects(ctx, rd.r.Store, rd.pr.ID, rd.in.TargetSHA, jd)
 }

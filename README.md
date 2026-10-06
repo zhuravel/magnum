@@ -788,6 +788,23 @@ An `agents.codex_project_declined` event records it, the board's card says "Code
 some of its `-c` flags (Codex 0.160), so the MCP servers and the trust may then not be Magnum's to set; a
 session herdr restores by itself starts without Magnum's flags.
 
+Claude Code does the same with the checkout's `.claude/` and `.mcp.json`, which a PR controls too: the
+project settings (hooks, which run outside any sandbox, `env`, plugins, permissions), `settings.local.json`,
+the MCP servers of `.mcp.json`, skills, commands, agents and `CLAUDE.md` (Magnum trusts its checkouts and
+skips Claude's permission prompts). When the files under `.claude/` or `.mcp.json` differ from the PR's
+merge base (or git cannot tell), every launch and resume of a claude role (claude-review, claude-simplify)
+passes `--setting-sources user` (`[kinds.claude] project_untrust`): the session loads your user settings,
+skills, agents and MCP servers and nothing of the checkout's. An `agents.claude_project_declined` event
+records it, the board's card says "Claude ran without the PR's .claude/ and .mcp.json changes" and so
+does the review's Checks. A PR that leaves both alone keeps the team's project config. Claude Code reloads
+its settings and skills while it runs, and loads a `.claude/settings.json` a later commit adds, so a
+Claude session that started with the project config loaded is quit (its conversation parked) before
+Magnum moves the checkout to a new head, at a round's start and at a restart after a push, and resumed
+once the new head is checked out; one that works or is blocked holds the round instead. Add
+`--strict-mcp-config` to `project_untrust` to drop your own MCP servers from such sessions too. Not covered:
+a nested `<dir>/.claude/skills/` (Claude loads it once it works on files there), a team hook that runs a
+script outside `.claude/` the PR changes, and an agent that checks another commit out in the checkout.
+
 A session whose model hits its own limit switches to the kind's next `fallback_models` entry by
 itself (Claude: `["opus", "sonnet"]`) and back once the limit lifts.
 

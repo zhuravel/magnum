@@ -24,8 +24,9 @@ import (
 // title is known), Model (the role's model, else DefaultModel), Effort
 // (when the role sets it), Subagents or NoSubagents (when the role sets
 // max_subagents), MCPDisable per MCP server to turn off and ProjectUntrust
-// for a checkout whose .codex/ the PR changes (ConfigOffArgs), Start, Args
-// (only without a wrapper), then the role's args.
+// for a checkout whose project config (.codex/; .claude/, .mcp.json) the PR
+// changes (ConfigOffArgs), Start, Args (only without a wrapper), then the
+// role's args.
 type Kind struct {
 	// Start: extra args always appended.
 	Start []string `toml:"start"`
@@ -68,13 +69,18 @@ type Kind struct {
 	// ConfigOffArgs). A PR that changes .codex/ loads none of them
 	// (ProjectUntrust).
 	ProjectMCP string `toml:"project_mcp"`
-	// ProjectUntrust: args that make one session treat the checkout as an
-	// untrusted folder, so it loads nothing from the checkout's .codex/
-	// (config, MCP servers, hooks, rules), passed when the PR changes
-	// .codex/ against its merge base; {projects} is a TOML inline table
-	// marking each of the checkout's paths untrusted (UntrustArgs), e.g.
-	// codex's ["-c", "projects={projects}"]. Empty = such a session loads
-	// the PR's .codex/ like any trusted project's.
+	// ProjectUntrust: args that keep the checkout's own project
+	// configuration out of one session, passed when the PR changes it
+	// against its merge base (the paths the agents package knows for the
+	// kind: codex .codex/, claude .claude/ and .mcp.json); {projects}, when
+	// present, is a TOML inline table marking each of the checkout's paths
+	// untrusted (UntrustArgs). codex: ["-c", "projects={projects}"], so the
+	// session treats the checkout as an untrusted folder and loads nothing
+	// from its .codex/ (config, MCP servers, hooks, rules); claude:
+	// ["--setting-sources", "user"], so it loads the user's settings only
+	// (no project or local settings with their hooks, no .mcp.json servers,
+	// skills, commands, agents or CLAUDE.md of the checkout). Empty = such a
+	// session loads the PR's project config like any trusted project's.
 	ProjectUntrust []string `toml:"project_untrust"`
 	// Name: args that name the session {title} at launch (claude --name).
 	Name []string `toml:"name"`
@@ -306,10 +312,10 @@ func DefaultHealthPatterns() HealthPatterns {
 //     project_untrust ["-c","projects={projects}"].
 //   - claude: args ["--dangerously-skip-permissions"],
 //     resume ["--resume","{session}"], model ["--model","{model}"],
-//     name ["--name","{title}"], login_check "claude auth status" + login_ok
-//     "json:loggedIn", switch_model "/model {model}", fallback_models
-//     ["opus","sonnet"], reset_model "default"; no effort flag
-//     (claude-review passes its effort to /code-review in the prompt).
+//     effort ["--effort","{effort}"], name ["--name","{title}"], login_check
+//     "claude auth status" + login_ok "json:loggedIn", switch_model
+//     "/model {model}", fallback_models ["opus","sonnet"], reset_model
+//     "default", project_untrust ["--setting-sources","user"].
 //   - droid (0.232): resume ["--resume","{session}"]; no model, effort or
 //     name flag in interactive mode, no login check.
 //   - omp (18.4): resume ["--resume={session}"], model ["--model={model}"],
@@ -356,6 +362,14 @@ func DefaultKinds() map[string]Kind {
 			Name:       []string{"--name", PlaceholderTitle},
 			LoginCheck: "claude auth status", LoginOK: "json:loggedIn",
 			SwitchModel: "/model " + PlaceholderModel, FallbackModels: []string{"opus", "sonnet"}, ResetModel: "default",
+			// Claude Code loads the checkout's .claude/settings.json (hooks,
+			// env, plugins), .mcp.json, skills, commands, agents and
+			// CLAUDE.md through the "project" setting source, and
+			// .claude/settings.local.json through "local": user alone keeps
+			// all of them out for one session (code.claude.com/docs
+			// permissions "What runs before you trust a folder", mcp
+			// "Project scope"), the operator's settings and servers kept.
+			ProjectUntrust: []string{"--setting-sources", "user"},
 		}),
 		KindDroid: base(Kind{Resume: []string{"--resume", PlaceholderSession}}),
 		KindOMP: base(Kind{
@@ -460,10 +474,12 @@ func (k Kind) ConfigOffArgs(servers, project, untrusted []string) []string {
 	return append(out, k.UntrustArgs(untrusted)...)
 }
 
-// UntrustArgs are ProjectUntrust with {projects} replaced by one TOML
-// inline table marking each path untrusted, e.g.
-// {"/p/x"={trust_level="untrusted"}} (a second -c of the same key would
-// replace the first); nil without paths or ProjectUntrust.
+// UntrustArgs are ProjectUntrust for a checkout at paths, with {projects},
+// where an arg has it, replaced by one TOML inline table marking each path
+// untrusted, e.g. {"/p/x"={trust_level="untrusted"}} (a second -c of the
+// same key would replace the first); args without it (claude's
+// --setting-sources user) as they are. nil without paths or
+// ProjectUntrust.
 func (k Kind) UntrustArgs(paths []string) []string {
 	if len(paths) == 0 || len(k.ProjectUntrust) == 0 {
 		return nil

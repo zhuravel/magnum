@@ -97,6 +97,9 @@ history: {{.HistoryFile}}
 {{- if .CodexProjectDeclined}}
 codex_project: declined
 {{- end}}
+{{- if .ClaudeProjectDeclined}}
+claude_project: declined
+{{- end}}
 {{- if .OwnFindings}}
 own_findings: {{.OwnFindings}}
 {{- end}}

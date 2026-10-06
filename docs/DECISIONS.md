@@ -485,6 +485,46 @@ editing history. Code, config comments and prompts reference these by their head
   W35's flags nor this one may apply there (no daemon socket ran on the operator's machine); a session
   herdr restores by itself starts without magnum's flags; a post-merge review compares with
   `origin/<base>`, which then holds the merged change, so it counts as the base's.
+- **A PR that changes `.claude/` or `.mcp.json` runs Claude with the user's settings only** (2026-10-06).
+  Claude Code 2.1.292 loads from the directory it starts in (the checkout's root) `.claude/settings.json`
+  (hooks, which run outside any sandbox, `env`, `enabledPlugins`, `apiKeyHelper`, permissions), the
+  servers of `.mcp.json` (connected without asking under `--dangerously-skip-permissions`), the skills
+  (a skill folder with `.claude-plugin/plugin.json` is a plugin with hooks and servers of its own),
+  commands, agents and rules under `.claude/` and `CLAUDE.md`, through the `project` setting source, and
+  `.claude/settings.local.json` and `CLAUDE.local.md` through `local`; magnum trusts its checkouts, so a PR
+  could add a hook or a server Claude starts. `--setting-sources user` keeps every one of them out for one
+  session and keeps the operator's settings, skills and servers (docs: permissions "What runs before you
+  trust a folder" and "Pass `--setting-sources user` ... so Claude Code reads neither the project's settings
+  files nor its `.mcp.json`", mcp "Project scope", the Agent SDK's `settingSources` table; in the binary the
+  project skills-directory plugins, skills, commands, agents and the `.mcp.json` loader are each gated on
+  the `projectSettings` source). It becomes `[kinds.claude] project_untrust`, passed at every launch and
+  resume of a claude-kind role when the files under the checkout's `.claude/` or its `.mcp.json` differ
+  from the merge base, or git cannot tell, as for Codex (W36's comparison, now one `git diff` and one
+  `git ls-files --others` over both paths; a checkout without either runs no git); `{projects}` is now
+  optional in `project_untrust`, since Claude's args name no path. `--strict-mcp-config` was not added: it
+  also drops the operator's own servers and claude.ai connectors, and `.mcp.json` already follows the
+  `project` source (`project_untrust` can carry it). The records are per agent kind:
+  `pr.<id>.<kind>_project` (`store.KVPRProject`), `agents.claude_project_declined`, the card's "Claude ran
+  without the PR's .claude/ and .mcp.json changes" after Codex's sentence, and `claude_project: declined`
+  in the judge's initial, rereview and recovery prompts, which the skill turns into its Checks line (the
+  skill's field line lost its explanation, so its cap grows by 22 bytes only). A PR that leaves both alone
+  keeps the team's project config. Unlike Codex, Claude Code watches its settings files (hooks included)
+  and skills and applies a change to the running session, and loads a `.claude/settings.json` created
+  later: a live claude-review that started with the project config loaded (most of them, and every
+  adopted one) would take a later push's from disk the moment magnum checks it out, and a quit after that
+  would run its `SessionEnd` hooks. So before a round's checkout, and before a restart's switch to a newer
+  head, magnum quits such sessions (`agents.Manager.ReloadsProject`; a `session.<id>.project_out` mark tells
+  the ones launched with the user's settings only, which stay), parking their conversations, and resumes
+  them after the checkout, when their start decides with the new head; a round.project_reload_parked
+  event names them. One that works or is blocked holds the round (retried, uncharged). Rejected: always
+  `--setting-sources user` (simplest and airtight, but the team's `CLAUDE.md`, skills, hooks and servers
+  would never load, which the operator keeps for a PR that leaves them alone), and turning hooks off with
+  `--settings '{"disableAllHooks": true}'` (it leaves servers and skills in, and would also drop the
+  operator's hooks). Not covered: a PR that adds a nested `<dir>/.claude/skills/` (Claude loads it once it
+  works on files there; the comparison looks at the checkout's root only), a team hook that runs a script
+  outside `.claude/` the PR changes, an agent that checks another commit out in the checkout while a
+  Claude session with the project config loaded runs, and a declined session kept live across a later
+  head, whose record names the head it started on.
 
 ## Screens and commands
 

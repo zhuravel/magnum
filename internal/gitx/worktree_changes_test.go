@@ -64,3 +64,51 @@ func TestRealWorkTreeChanges(t *testing.T) {
 	}
 	changes(".codex/config.toml")
 }
+
+// Claude Code loads its project config from two paths at the checkout's
+// top, .claude/ and .mcp.json: one comparison takes both, each literally,
+// and a .mcp.json the head changes or deletes counts like a file under
+// .claude/; a nested .mcp.json and the root's CLAUDE.md do not.
+func TestWorkTreeChangesOfSeveralPaths(t *testing.T) {
+	ctx := context.Background()
+	c, f := newFake(
+		outRule(".mcp.json\x00", "git", "-C", slot, "diff"),
+		outRule(".claude/settings.local.json\x00", "git", "-C", slot, "ls-files"),
+	)
+	got, err := c.WorkTreeChanges(ctx, slot, sha1, ".claude", ".mcp.json")
+	if want := []string{".claude/settings.local.json", ".mcp.json"}; err != nil || !slices.Equal(got, want) {
+		t.Fatalf("WorkTreeChanges = %q, %v; want %q", got, err, want)
+	}
+	wantCall(t, f, 0, false, "git", "-C", slot, "diff", "--name-only", "-z", "--no-renames", "--no-ext-diff", sha1, "--",
+		":(top,literal).claude", ":(top,literal).mcp.json")
+	wantCall(t, f, 1, false, "git", "-C", slot, "ls-files", "-z", "--others", "--", ":(top,literal).claude", ":(top,literal).mcp.json")
+	for _, paths := range [][]string{nil, {".claude", ""}} {
+		if _, err := c.WorkTreeChanges(ctx, slot, sha1, paths...); err == nil {
+			t.Errorf("WorkTreeChanges(%q) must be refused", paths)
+		}
+	}
+
+	fx := newFixture(t)
+	dir := fx.origin
+	fx.write(dir, ".gitignore", ".claude/settings.local.json\n")
+	fx.commit(dir, ".claude/settings.json", "{}\n", "Add the team's Claude settings")
+	base := fx.commit(dir, ".mcp.json", "{\"mcpServers\":{}}\n", "Add the team's MCP servers")
+	changes := func(want ...string) {
+		t.Helper()
+		got, err := fx.c.WorkTreeChanges(ctx, dir, base, ".claude", ".mcp.json")
+		if err != nil || !slices.Equal(got, want) {
+			t.Fatalf("WorkTreeChanges = %q, %v; want %q", got, err, want)
+		}
+	}
+	changes()
+	fx.commit(dir, "CLAUDE.md", "x\n", "Change the instructions only")
+	fx.write(dir, "sub/.mcp.json", "{}\n")
+	changes()
+	fx.commit(dir, ".mcp.json", "{\"mcpServers\":{\"evil\":{\"command\":\"evil-mcp\"}}}\n", "Add a server")
+	fx.write(dir, ".claude/settings.local.json", "{\"hooks\":{}}\n")
+	changes(".claude/settings.local.json", ".mcp.json")
+	if err := os.Remove(filepath.Join(dir, ".mcp.json")); err != nil {
+		t.Fatal(err)
+	}
+	changes(".claude/settings.local.json", ".mcp.json")
+}

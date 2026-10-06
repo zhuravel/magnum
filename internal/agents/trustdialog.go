@@ -57,7 +57,7 @@ type trustSpec struct {
 	accept, reject string // the option texts
 	// restricted: Codex's "Folder access" for a folder the session treats
 	// as untrusted (the -c projects table magnum passes when the PR changes
-	// .codex/, codexProject): "Open restricted" loads none of the folder's
+	// .codex/, checkoutProject): "Open restricted" loads none of the folder's
 	// .codex/ and saves no trust (tui/src/onboarding/trust_directory.rs,
 	// onboarding_screen.rs), so magnum takes it at any time. "Open existing
 	// task" (a resumed task on Codex's shared daemon, which may keep what it
