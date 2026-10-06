@@ -90,7 +90,7 @@ Content, starting with `# Notes for <owner>/<repo> (updated YYYY-MM-DD)`: only w
 
 ## 3. Judge the candidate reports
 
-Read every report listed in `reports`: findings from Claude's `/code-review` (`claude-review.md`) and from `codex review` (`codex-review.md`, P0–P3 text); up to 6 ranked simplification proposals, each with its current and replacement lines (`claude-simplify.md`).
+Read every report listed in `reports`: findings from Claude's `/code-review` (`claude-review.md`) and from `codex review` (`codex-review.md`, P0–P3 text); all simplification proposals, ranked, each with its current and replacement lines (`claude-simplify.md`).
 
 Treat each review item as a claim, also one a report lists as rejected, dismissed or out of scope. Prove or reject it with the same standard as your own findings (section 4). Merge duplicates between the reports and your own pass, keeping the strongest wording and the most precise location. Never mention which tool proposed a finding. Give each missing report one line in Checks with its reason, even when the machine caused it: `- claude-review: no report (usage_limit)`.
 
