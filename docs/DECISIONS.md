@@ -425,6 +425,25 @@ editing history. Code, config comments and prompts reference these by their head
   `AGENTS.md` out (Codex reads `$CODEX_HOME/AGENTS.md` unconditionally); a separate `CODEX_HOME` moves the
   login, the session files magnum resumes and reads for usage, the folder trust magnum writes and the hooks
   with it, so it waits for a decision.
+- **Magnum's Codex sessions run without the operator's MCP servers, never with a CODEX_HOME of their
+  own** (2026-10-06). The operator decided: no separate `CODEX_HOME` for magnum, ever (the login, the
+  session files, the folder trust and the hooks stay where they are). So the global `AGENTS.md` keeps
+  loading, and only the MCP servers go: the codex kind's new `mcp_off` (default `true`) makes every launch
+  and resume of a codex-kind role (`agents` `mcpServers`, `config.Kind.MCPOffArgs` in `Argv`, after the
+  subagent args) and codex-review's line (the new `.MCPOff` template variable, which its default command
+  and `codex-review.sh` pass after the effort) turn off each server by name with the kind's new
+  `mcp_disable` args (codex: `-c mcp_servers.{server}.enabled=false`, once per server), except those in
+  `mcp_allow`. The names are read at each launch from the `config.toml` Codex reads: the `CODEX_HOME` of the
+  role's pane env (`Config.RoleEnv`, `~` expanded), else `$CODEX_HOME`, else `~/.codex`; the
+  `[mcp_servers.<name>]` tables that do not set `enabled = false`. A missing file means no servers; an
+  unreadable one and a name that is no TOML bare key are logged (without the path, a pane env value) and
+  leave the servers on: a quoted name could change the `-c` key path, and Codex's handling of quoted path
+  segments was not verified, so it is skipped rather than quoted. A kind without `mcp_disable` ignores
+  `mcp_off`, so `mcp_off = true` on a claude kind (whose `-c` means `--continue`) does nothing. Not
+  covered: MCP servers that a plugin or the checkout's own `.codex/config.toml` brings. The judge skill
+  says, beside its role, that the operator's instructions for interactive work (status lines, usage-limit
+  checks, delegation or orchestration skills) do not apply in a review: check no usage, start a subagent
+  only when a review step needs one, end the turn as the skill says (its cap grows by those 278 bytes).
 
 ## Screens and commands
 

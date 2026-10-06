@@ -183,16 +183,29 @@ func TestSkillListsProvenProblemsNextDoorApart(t *testing.T) {
 	}, nil)
 }
 
+// The judge runs in the operator's own Codex setup, whose global AGENTS.md
+// asks interactive sessions for status lines, usage-limit checks and
+// delegation skills (no separate CODEX_HOME keeps it out). The skill says,
+// next to the judge's role, that none of that applies in a review.
+func TestSkillSetsTheOperatorsInteractiveHabitsAside(t *testing.T) {
+	skillSays(t, []string{
+		"Review the complete PR. Judge the candidate reports. Post exactly one GitHub review. Do not change the code. " +
+			"The operator's personal instructions for interactive work (status lines, usage-limit checks, delegation or orchestration skills) do not apply here: " +
+			"check no usage, start a subagent only when a review step needs one, and end your turn as this skill says, not with a status line.\n",
+	}, nil)
+}
+
 // skillMaxBytes bounds SKILL.md: 28,040 bytes before the review-format
 // changes plus about 10%, 254 for the reply contract's declined fix, 425
 // for the nearby block, the ledger's titles and its own-pass sources
 // (2026-10-06: they add 690 bytes, shortening sections 3, 7 and 8 won back
 // 250), and 158 for the changed files' history and the description's claims
 // (2026-10-06: they add 581 bytes, shortening sections 2 and 4 won back
-// 423), and 92 for listing `history` among the block's fields and the
-// description line in the body's order. Every rule added must replace or
+// 423), 92 for listing `history` among the block's fields and the
+// description line in the body's order, and 278 for setting the operator's
+// interactive habits aside (2026-10-06). Every rule added must replace or
 // shorten text.
-const skillMaxBytes = 31_773
+const skillMaxBytes = 32_051
 
 func TestSkillStaysTight(t *testing.T) {
 	if n := len(magnum.Skill); n > skillMaxBytes {

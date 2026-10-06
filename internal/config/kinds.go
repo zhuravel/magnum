@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,9 +22,9 @@ import (
 // wrapper function or alias that adds its own flags. The launch argv is
 // built by Argv in this order: Resume (resumed sessions only), Name (when a
 // title is known), Model (the role's model, else DefaultModel), Effort
-// (when the role sets it) and Subagents or NoSubagents (when the role sets
-// max_subagents), Start, Args (only without a wrapper), then the role's
-// args.
+// (when the role sets it), Subagents or NoSubagents (when the role sets
+// max_subagents), MCPDisable per MCP server to turn off (MCPOffArgs),
+// Start, Args (only without a wrapper), then the role's args.
 type Kind struct {
 	// Start: extra args always appended.
 	Start []string `toml:"start"`
@@ -49,6 +50,16 @@ type Kind struct {
 	// the kind cannot cap them, and the role key is ignored.
 	Subagents   []string `toml:"subagents"`
 	NoSubagents []string `toml:"no_subagents"`
+	// MCPOff: turn off each MCP server a session would load from the Codex
+	// config ([mcp_servers.<name>] tables not set enabled = false), except
+	// those in MCPAllow, through MCPDisable: Codex merges -c tables into
+	// its config, so servers go off only one by one, by name (see
+	// MCPOffArgs; codex: true). A kind without mcp_disable args ignores it.
+	MCPOff   bool     `toml:"mcp_off"`
+	MCPAllow []string `toml:"mcp_allow"`
+	// MCPDisable: args that turn off MCP server {server}, passed once per
+	// server, e.g. codex's ["-c", "mcp_servers.{server}.enabled=false"].
+	MCPDisable []string `toml:"mcp_disable"`
 	// Name: args that name the session {title} at launch (claude --name).
 	Name []string `toml:"name"`
 	// Rename: a slash command typed while the agent works to (re)name its
@@ -264,7 +275,8 @@ func DefaultHealthPatterns() HealthPatterns {
 //   - codex (0.160): args ["--dangerously-bypass-approvals-and-sandbox"],
 //     resume ["resume","{session}"], model ["--model","{model}"],
 //     effort ["-c","model_reasoning_effort={effort}"], rename "/rename {title}",
-//     login_check "codex login status" + login_ok "text:Logged in".
+//     login_check "codex login status" + login_ok "text:Logged in",
+//     mcp_off true with mcp_disable ["-c","mcp_servers.{server}.enabled=false"].
 //   - claude: args ["--dangerously-skip-permissions"],
 //     resume ["--resume","{session}"], model ["--model","{model}"],
 //     name ["--name","{title}"], login_check "claude auth status" + login_ok
@@ -300,6 +312,7 @@ func DefaultKinds() map[string]Kind {
 			// The spawned-agent threads open at once, the primary excluded
 			// (at least 1); agents.enabled = false removes the tools.
 			Subagents: []string{"-c", "agents.max_concurrent_threads_per_session=" + PlaceholderSubagents}, NoSubagents: []string{"-c", "agents.enabled=false"},
+			MCPOff: true, MCPDisable: []string{"-c", "mcp_servers." + PlaceholderServer + ".enabled=false"},
 		}),
 		KindClaude: base(Kind{
 			Args:       []string{"--dangerously-skip-permissions"},
@@ -331,13 +344,16 @@ type LaunchArgs struct {
 	// Subagents is Role.MaxSubagents: nil skips Subagents and NoSubagents,
 	// 0 takes NoSubagents, more takes Subagents.
 	Subagents *int
+	// MCPServers are the MCP servers the session would load (the Codex
+	// config's); MCPOffArgs turns them off.
+	MCPServers []string
 }
 
 // Argv builds the args after the command name (herdr shell-quotes each one):
 // Resume, Name, Model (a.Model, else DefaultModel), Effort, Subagents (or
-// NoSubagents for 0), Start, Args (no wrapper only), then a.Extra. A group
-// whose value is empty is skipped; placeholders are replaced in every
-// element.
+// NoSubagents for 0), MCPOffArgs(a.MCPServers), Start, Args (no wrapper
+// only), then a.Extra. A group whose value is empty is skipped;
+// placeholders are replaced in every element.
 func (k Kind) Argv(a LaunchArgs) []string {
 	var out []string
 	add := func(group []string, placeholder, value string) {
@@ -359,11 +375,31 @@ func (k Kind) Argv(a LaunchArgs) []string {
 	default:
 		add(k.Subagents, PlaceholderSubagents, strconv.Itoa(*a.Subagents))
 	}
+	out = append(out, k.MCPOffArgs(a.MCPServers)...)
 	out = append(out, k.Start...)
 	if !a.Wrapper {
 		out = append(out, k.Args...)
 	}
 	return append(out, a.Extra...)
+}
+
+// MCPOffArgs are the args that turn off the given MCP servers: MCPDisable
+// with {server} replaced, once per server not in MCPAllow, in order; nil
+// when MCPOff is false or the kind has no MCPDisable args.
+func (k Kind) MCPOffArgs(servers []string) []string {
+	if !k.MCPOff || len(k.MCPDisable) == 0 {
+		return nil
+	}
+	var out []string
+	for _, s := range servers {
+		if slices.Contains(k.MCPAllow, s) {
+			continue
+		}
+		for _, a := range k.MCPDisable {
+			out = append(out, strings.ReplaceAll(a, PlaceholderServer, s))
+		}
+	}
+	return out
 }
 
 // RenameCommand is Rename with {title} replaced ("" when the kind has none).
@@ -477,6 +513,7 @@ func normalizeKinds(kinds map[string]Kind) {
 		k.Start, k.Args, k.Resume, k.Model = cloneOrNil(k.Start), cloneOrNil(k.Args), cloneOrNil(k.Resume), cloneOrNil(k.Model)
 		k.Effort, k.Name, k.FallbackModels = cloneOrNil(k.Effort), cloneOrNil(k.Name), cloneOrNil(k.FallbackModels)
 		k.Subagents, k.NoSubagents = cloneOrNil(k.Subagents), cloneOrNil(k.NoSubagents)
+		k.MCPAllow, k.MCPDisable = cloneOrNil(k.MCPAllow), cloneOrNil(k.MCPDisable)
 		k.SwitchModel, k.DefaultModel = strings.TrimSpace(k.SwitchModel), strings.TrimSpace(k.DefaultModel)
 		k.ResetModel = strings.TrimSpace(k.ResetModel)
 		h := &k.HealthPatterns

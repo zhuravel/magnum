@@ -215,6 +215,11 @@ judge_fresh_after = "90m"         # a judge whose last turn on the PR ended long
 # subagents = ["-c", "agents.max_concurrent_threads_per_session={subagents}"]   # a role's max_subagents: the
 #                                     # spawned-agent threads open at once, the primary excluded (at least 1)
 # no_subagents = ["-c", "agents.enabled=false"]   # max_subagents = 0: no multi-agent tools at all
+# mcp_off = true                      # every launch and resume (and codex-review's line) turns off each MCP
+#                                     # server your Codex config.toml declares (the env's CODEX_HOME, else
+#                                     # ~/.codex), one mcp_disable per server; false = they all load
+# mcp_allow = []                      # MCP servers mcp_off leaves on, e.g. ["docs"]
+# mcp_disable = ["-c", "mcp_servers.{server}.enabled=false"]   # turns off server {server} ([] = mcp_off ignored)
 # name = []                           # codex has no name flag, so magnum types `rename` while it works
 # rename = "/rename {title}"
 # login_check = "codex login status"  # "" = no preflight
@@ -303,7 +308,8 @@ tool = "codex"                        # codex's login check, pauses and health p
 # args = ["-c", "model=gpt-6.1-sol"]  # `codex review` takes the model as a config override
 effort = "high"                       # passed by the command as -c model_reasoning_effort=high, so `codex review`
                                       # never runs at your global Codex effort; args come after it and win
-command = "command codex review{{if .Effort}} -c model_reasoning_effort={{.Effort}}{{end}} --base {{if .BaseSHA}}{{.BaseSHA}}{{else}}{{.BaseRef}}{{end}}"
+command = "command codex review{{if .Effort}} -c model_reasoning_effort={{.Effort}}{{end}}{{range .MCPOff}} {{.}}{{end}} --base {{if .BaseSHA}}{{.BaseSHA}}{{else}}{{.BaseRef}}{{end}}"
+                                      # .MCPOff turns off your Codex MCP servers ([kinds.codex] mcp_off); then
                                       # the merge base (fixed), else the base ref (moves with the base branch)
 args = []                             # appended shell-quoted
 ok_status = [0]                       # exit statuses that count as a report; any other status fails the role

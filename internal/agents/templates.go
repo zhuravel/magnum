@@ -430,6 +430,11 @@ type ShellData struct {
 	// (config.Role.EffortFor); "" = the role's model and effort.
 	// codex-review's command passes Effort as a config override.
 	Model, Effort string
+	// MCPOff are the args that turn off the MCP servers of the Codex config
+	// (the role's tool kind's mcp_off, config.Kind.MCPOffArgs), which
+	// codex-review's command passes after its effort; Manager.ShellLine
+	// fills it when nil.
+	MCPOff []string
 
 	// RunID and ExtraArgs keep full-line templates written for the old
 	// codex_review.sh data working: RunID is Marker without its
@@ -543,7 +548,7 @@ func (d ShellData) shellSafe() (ShellData, error) {
 		Args: quoteAll(d.Args), ExtraArgs: quoteAll(d.ExtraArgs),
 		ReportPath: quoteNonEmpty(d.ReportPath), BaseRef: quoteNonEmpty(d.BaseRef), BaseSHA: quoteNonEmpty(d.BaseSHA),
 		HeadSHA: quoteNonEmpty(d.HeadSHA), URL: quoteNonEmpty(d.URL), Title: quoteNonEmpty(d.Title),
-		Model: quoteNonEmpty(d.Model), Effort: quoteNonEmpty(d.Effort),
+		Model: quoteNonEmpty(d.Model), Effort: quoteNonEmpty(d.Effort), MCPOff: quoteAll(d.MCPOff),
 	}
 	return out, nil
 }
@@ -683,8 +688,15 @@ func promptLine(role config.Role, d ShellData) (string, error) {
 
 // ShellLine is ShellLine with the role's full-line template (role.Prompt)
 // resolved through the configuration (pipeline.prompts_dir, then the
-// embedded defaults) unless d.Template is set.
+// embedded defaults) unless d.Template is set, and d.MCPOff, when nil,
+// turning off the MCP servers a Codex session of the role's tool kind would
+// load (mcpServers).
 func (m *Manager) ShellLine(role config.Role, d ShellData) (string, error) {
+	if d.MCPOff == nil {
+		if k, ok := m.kindSpec(role.AgentKind()); ok {
+			d.MCPOff = k.MCPOffArgs(m.mcpServers(role))
+		}
+	}
 	if d.Template == nil && role.IsShell() && role.Command == "" && d.Command == "" && role.Prompt != "" {
 		p, err := m.d.Config.RolePrompt(role, config.PromptInitial)
 		if err != nil {

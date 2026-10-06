@@ -556,7 +556,7 @@ name = "codex-review"
 kind = "shell"
 tool = "codex"                     # codex's login check, pauses and health patterns apply
 effort = "high"                    # -c model_reasoning_effort=high, never your global Codex effort
-command = "command codex review{{if .Effort}} -c model_reasoning_effort={{.Effort}}{{end}} --base {{if .BaseSHA}}{{.BaseSHA}}{{else}}{{.BaseRef}}{{end}}"   # the merge base
+command = "command codex review{{if .Effort}} -c model_reasoning_effort={{.Effort}}{{end}}{{range .MCPOff}} {{.}}{{end}} --base {{if .BaseSHA}}{{.BaseSHA}}{{else}}{{.BaseRef}}{{end}}"   # no MCP servers; the merge base
 capture = "stdout"
 
 [[role]]
@@ -735,13 +735,20 @@ agents.enabled=false`; a kind without those args ignores the key). The judge def
 started 53 subagent threads in 36 sessions, 27% of the Codex spend, two of them over a million tokens on one
 PR. Codex caps the threads open at once, not how many a session starts in all.
 
-Magnum's Codex sessions (the judge, `codex review`) otherwise run on your own Codex setup: `$CODEX_HOME`'s
-login and session files (which Magnum resumes and reads for usage), and also its `config.toml` (your MCP
-servers, hooks and plugins) and your global `AGENTS.md`. Codex can turn an MCP server off for one launch
-(`-c mcp_servers.<name>.enabled=false`) but has no override for the global `AGENTS.md`; only a separate
-`CODEX_HOME` leaves it out, so Magnum does not isolate its sessions yet. A session whose model hits its own limit switches to
-the kind's next `fallback_models` entry by itself (Claude: `["opus", "sonnet"]`) and back once the limit
-lifts.
+Magnum's Codex sessions (the judge, `codex review`) run on your own Codex setup: `$CODEX_HOME`'s login and
+session files (which Magnum resumes and reads for usage), its `config.toml` (hooks and plugins) and your
+global `AGENTS.md`, but without your MCP servers. Codex merges `-c` tables into your config, so a server
+goes off only by name: every launch and resume of the judge, and `codex review`'s line, reads the
+`[mcp_servers.<name>]` tables of the `config.toml` Codex reads (in the `CODEX_HOME` of the kind's or role's
+`env`, else `$CODEX_HOME`, else `~/.codex`) and passes `-c mcp_servers.<name>.enabled=false` for each one
+not already disabled there. `[kinds.codex] mcp_allow = ["docs"]` keeps the servers it names, `mcp_off =
+false` keeps them all; a name that is no TOML bare key (letters, digits, `_`, `-`) stays on, with a log
+line. A custom codex-review `command` needs `{{range .MCPOff}} {{.}}{{end}}` for the same. Magnum never
+gives its sessions a `CODEX_HOME` of their own (the login, the session files, the folder trust and the
+hooks live there), so your global `AGENTS.md` still loads; the judge skill tells the judge that your
+instructions for interactive work (status lines, usage checks, delegation skills) do not apply in a
+review. A session whose model hits its own limit switches to the kind's next `fallback_models` entry by
+itself (Claude: `["opus", "sonnet"]`) and back once the limit lifts.
 
 #### Triage: fewer reviewers for a small diff
 

@@ -162,6 +162,8 @@ const (
 	PlaceholderEffort  = "{effort}"
 	// PlaceholderSubagents is Role.MaxSubagents in Kind.Subagents.
 	PlaceholderSubagents = "{subagents}"
+	// PlaceholderServer is an MCP server's name in Kind.MCPDisable.
+	PlaceholderServer = "{server}"
 )
 
 // DefaultSkill is the judge's default skill path ({{repo}} = magnum's home).

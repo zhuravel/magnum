@@ -1030,7 +1030,8 @@ func (m *Manager) RunShell(ctx context.Context, pr store.PR, role config.Role, p
 func (m *Manager) ShellLine(role config.Role, d ShellData) (string, error)
     ShellLine is ShellLine with the role's full-line template (role.Prompt)
     resolved through the configuration (pipeline.prompts_dir, then the embedded
-    defaults) unless d.Template is set.
+    defaults) unless d.Template is set, and d.MCPOff, when nil, turning off the
+    MCP servers a Codex session of the role's tool kind would load (mcpServers).
 
 func (m *Manager) StartAgent(ctx context.Context, pr store.PR, role config.Role, paneID, resume string) error
     StartAgent launches (or adopts) the agent of an agent role in paneID and
@@ -1055,10 +1056,12 @@ func (m *Manager) StartAgent(ctx context.Context, pr store.PR, role config.Role,
         Kind.Argv builds: resume args, name args with Title (claude --name;
         kinds without name args but with a rename command are named later,
         by ObserveSnapshot), the role's model, effort and subagent-cap args,
-        the kind's start args, its args only when it is not a wrapper,
-        then role.Args. While the role's model is limited (NoteModelLimit),
-        the model args name the kind's first fallback model that is not, and the
-        session records it (KVSessionModel, an agent.model_switched event).
+        the args that turn off the MCP servers of the Codex config (the kind's
+        mcp_off, read at every launch: mcpServers), the kind's start args,
+        its args only when it is not a wrapper, then role.Args. While the role's
+        model is limited (NoteModelLimit), the model args name the kind's first
+        fallback model that is not, and the session records it (KVSessionModel,
+        an agent.model_switched event).
       - An agent that comes up blocked (agent.start agent_not_ready, timeout,
         or status blocked, also when adopted) gets the trust-dialog fallback:
         within TrustWindow of its start and before its first prompt,
@@ -1385,6 +1388,11 @@ type ShellData struct {
 	// (config.Role.EffortFor); "" = the role's model and effort.
 	// codex-review's command passes Effort as a config override.
 	Model, Effort string
+	// MCPOff are the args that turn off the MCP servers of the Codex config
+	// (the role's tool kind's mcp_off, config.Kind.MCPOffArgs), which
+	// codex-review's command passes after its effort; Manager.ShellLine
+	// fills it when nil.
+	MCPOff []string
 
 	// RunID and ExtraArgs keep full-line templates written for the old
 	// codex_review.sh data working: RunID is Marker without its
@@ -2125,6 +2133,8 @@ const (
 	PlaceholderEffort  = "{effort}"
 	// PlaceholderSubagents is Role.MaxSubagents in Kind.Subagents.
 	PlaceholderSubagents = "{subagents}"
+	// PlaceholderServer is an MCP server's name in Kind.MCPDisable.
+	PlaceholderServer = "{server}"
 )
     Placeholders substituted by Kind.Argv and in Kind.Rename.
 
@@ -2245,7 +2255,8 @@ func DefaultKinds() map[string]Kind
       - codex (0.160): args ["--dangerously-bypass-approvals-and-sandbox"],
         resume ["resume","{session}"], model ["--model","{model}"], effort
         ["-c","model_reasoning_effort={effort}"], rename "/rename {title}",
-        login_check "codex login status" + login_ok "text:Logged in".
+        login_check "codex login status" + login_ok "text:Logged in", mcp_off
+        true with mcp_disable ["-c","mcp_servers.{server}.enabled=false"].
       - claude: args ["--dangerously-skip-permissions"], resume
         ["--resume","{session}"], model ["--model","{model}"], name
         ["--name","{title}"], login_check "claude auth status" + login_ok
@@ -2815,6 +2826,16 @@ type Kind struct {
 	// the kind cannot cap them, and the role key is ignored.
 	Subagents   []string `toml:"subagents"`
 	NoSubagents []string `toml:"no_subagents"`
+	// MCPOff: turn off each MCP server a session would load from the Codex
+	// config ([mcp_servers.<name>] tables not set enabled = false), except
+	// those in MCPAllow, through MCPDisable: Codex merges -c tables into
+	// its config, so servers go off only one by one, by name (see
+	// MCPOffArgs; codex: true). A kind without mcp_disable args ignores it.
+	MCPOff   bool     `toml:"mcp_off"`
+	MCPAllow []string `toml:"mcp_allow"`
+	// MCPDisable: args that turn off MCP server {server}, passed once per
+	// server, e.g. codex's ["-c", "mcp_servers.{server}.enabled=false"].
+	MCPDisable []string `toml:"mcp_disable"`
 	// Name: args that name the session {title} at launch (claude --name).
 	Name []string `toml:"name"`
 	// Rename: a slash command typed while the agent works to (re)name its
@@ -2878,16 +2899,18 @@ type Kind struct {
 
     herdr types the command into the pane's shell, so the CLI may be a zsh
     wrapper function or alias that adds its own flags. The launch argv is built
-    by Argv in this order: Resume (resumed sessions only), Name (when a title is
-    known), Model (the role's model, else DefaultModel), Effort (when the role
-    sets it) and Subagents or NoSubagents (when the role sets max_subagents),
-    Start, Args (only without a wrapper), then the role's args.
+    by Argv in this order: Resume (resumed sessions only), Name (when a title
+    is known), Model (the role's model, else DefaultModel), Effort (when the
+    role sets it), Subagents or NoSubagents (when the role sets max_subagents),
+    MCPDisable per MCP server to turn off (MCPOffArgs), Start, Args (only
+    without a wrapper), then the role's args.
 
 func (k Kind) Argv(a LaunchArgs) []string
     Argv builds the args after the command name (herdr shell-quotes each one):
     Resume, Name, Model (a.Model, else DefaultModel), Effort, Subagents (or
-    NoSubagents for 0), Start, Args (no wrapper only), then a.Extra. A group
-    whose value is empty is skipped; placeholders are replaced in every element.
+    NoSubagents for 0), MCPOffArgs(a.MCPServers), Start, Args (no wrapper only),
+    then a.Extra. A group whose value is empty is skipped; placeholders are
+    replaced in every element.
 
 func (k Kind) LoggedIn(stdout, stderr string, exitOK bool) (loggedIn, readable bool)
     LoggedIn reads LoginCheck's output per LoginOK. exitOK is whether the
@@ -2903,6 +2926,11 @@ func (k Kind) LoggedIn(stdout, stderr string, exitOK bool) (loggedIn, readable b
 func (k Kind) LoginArgv() []string
     LoginArgv splits LoginCheck on spaces: the command name and its args (nil
     when the kind has no login check).
+
+func (k Kind) MCPOffArgs(servers []string) []string
+    MCPOffArgs are the args that turn off the given MCP servers: MCPDisable
+    with {server} replaced, once per server not in MCPAllow, in order; nil when
+    MCPOff is false or the kind has no MCPDisable args.
 
 func (k Kind) RenameCommand(title string) string
     RenameCommand is Rename with {title} replaced ("" when the kind has none).
@@ -2922,6 +2950,9 @@ type LaunchArgs struct {
 	// Subagents is Role.MaxSubagents: nil skips Subagents and NoSubagents,
 	// 0 takes NoSubagents, more takes Subagents.
 	Subagents *int
+	// MCPServers are the MCP servers the session would load (the Codex
+	// config's); MCPOffArgs turns them off.
+	MCPServers []string
 }
     LaunchArgs are the per-start values Kind.Argv substitutes.
 
@@ -3374,9 +3405,9 @@ func DefaultRoles() []Role
         claude-rereview.md, restart claude-restart.md, effort high,
         rereview_effort medium; aliases claude.
       - codex-review: shell, tool codex, effort high, command
-        defaultCodexReviewCommand (its effort as a config override, then the
-        merge base, else the base ref), ok_status [0], capture stdout; aliases
-        codex, codex_review.
+        defaultCodexReviewCommand (its effort and the MCP servers to turn off
+        as config overrides, then the merge base, else the base ref), ok_status
+        [0], capture stdout; aliases codex, codex_review.
       - claude-simplify: claude, runs first, rerun_min_lines
         DefaultSimplifyRerunLines, prompt claude-simplify.md (read-only:
         it writes its proposals to claude-simplify.md), no after, so it runs in

@@ -250,8 +250,9 @@ func (r Role) ShouldRun(ranBefore, requested bool) bool {
 //     claude-rereview.md, restart claude-restart.md, effort high,
 //     rereview_effort medium; aliases claude.
 //   - codex-review: shell, tool codex, effort high, command
-//     defaultCodexReviewCommand (its effort as a config override, then the
-//     merge base, else the base ref), ok_status [0], capture stdout; aliases
+//     defaultCodexReviewCommand (its effort and the MCP servers to turn off
+//     as config overrides, then the merge base, else the base ref),
+//     ok_status [0], capture stdout; aliases
 //     codex, codex_review.
 //   - claude-simplify: claude, runs first, rerun_min_lines
 //     DefaultSimplifyRerunLines, prompt claude-simplify.md (read-only: it
@@ -277,12 +278,13 @@ func DefaultRoles() []Role {
 
 // defaultCodexReviewCommand is the codex-review role's command: `codex
 // review` at the role's effort (a config override, so it never runs at the
-// effort of the user's global Codex config; args after it still win)
-// against the PR's merge base, or its base ref when the merge base is
-// unknown. The merge base does not move: with --base origin/master a review
-// of a PR whose base branch gained commits flagged files the PR does not
-// touch.
-const defaultCodexReviewCommand = "command codex review{{if .Effort}} -c model_reasoning_effort={{.Effort}}{{end}} --base {{if .BaseSHA}}{{.BaseSHA}}{{else}}{{.BaseRef}}{{end}}"
+// effort of the user's global Codex config; args after it still win),
+// without the MCP servers of the user's Codex config (.MCPOff, the codex
+// kind's mcp_off), against the PR's merge base, or its base ref when the
+// merge base is unknown. The merge base does not move: with --base
+// origin/master a review of a PR whose base branch gained commits flagged
+// files the PR does not touch.
+const defaultCodexReviewCommand = "command codex review{{if .Effort}} -c model_reasoning_effort={{.Effort}}{{end}}{{range .MCPOff}} {{.}}{{end}} --base {{if .BaseSHA}}{{.BaseSHA}}{{else}}{{.BaseRef}}{{end}}"
 
 // DefaultJudgeSubagents is the judge's max_subagents: on its own it started
 // 53 subagent threads in 36 sessions, 27% of the Codex spend.

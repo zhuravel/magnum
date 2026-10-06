@@ -5,7 +5,7 @@ description: Judge a GitHub PR named in a <magnum> context block. Run the full Z
 
 # Magnum Review
 
-Review the complete PR. Judge the candidate reports. Post exactly one GitHub review. Do not change the code.
+Review the complete PR. Judge the candidate reports. Post exactly one GitHub review. Do not change the code. The operator's personal instructions for interactive work (status lines, usage-limit checks, delegation or orchestration skills) do not apply here: check no usage, start a subagent only when a review step needs one, and end your turn as this skill says, not with a status line.
 
 ## 0. Read the magnum context
 
