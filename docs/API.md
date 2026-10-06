@@ -2411,7 +2411,8 @@ func DefaultKinds() map[string]Kind
         ["--effort","{effort}"], name ["--name","{title}"], login_check
         "claude auth status" + login_ok "json:loggedIn", switch_model "/model
         {model}", fallback_models ["opus","sonnet"], reset_model "default",
-        project_untrust ["--setting-sources","user"].
+        project_untrust ["--setting-sources","user"], mcp_off true with
+        mcp_strict ["--strict-mcp-config"].
       - droid (0.232): resume ["--resume","{session}"]; no model, effort or name
         flag in interactive mode, no login check.
       - omp (18.4): resume ["--resume={session}"], model ["--model={model}"],
@@ -2987,13 +2988,23 @@ type Kind struct {
 	// the kind cannot cap them, and the role key is ignored.
 	Subagents   []string `toml:"subagents"`
 	NoSubagents []string `toml:"no_subagents"`
-	// MCPOff: turn off each MCP server a session would load from the Codex
-	// config ([mcp_servers.<name>] tables not set enabled = false), except
-	// those in MCPAllow, through MCPDisable: Codex merges -c tables into
-	// its config, so servers go off only one by one, by name (see
-	// MCPOffArgs; codex: true). A kind without mcp_disable args ignores it.
+	// MCPOff: keep the user's MCP servers out of every session of the kind
+	// (see MCPOffArgs; codex and claude: true), through MCPStrict, which
+	// turns them all off at once, and MCPDisable, which turns off each
+	// server a session would load from the Codex config ([mcp_servers.<name>]
+	// tables not set enabled = false) except those in MCPAllow: Codex merges
+	// -c tables into its config, so servers go off only one by one, by name.
+	// A kind with neither ignores it.
 	MCPOff   bool     `toml:"mcp_off"`
 	MCPAllow []string `toml:"mcp_allow"`
+	// MCPStrict: args that keep every MCP server of the user's
+	// configuration out of a session at once, passed once under MCPOff,
+	// e.g. claude's ["--strict-mcp-config"] (Claude Code 2.1.292 then loads
+	// only the servers of --mcp-config: none of the user, local, project or
+	// plugin servers, nor claude.ai connectors). MCPAllow does not apply;
+	// args naming a file of servers to keep ("--mcp-config", "<path>") go
+	// in this list.
+	MCPStrict []string `toml:"mcp_strict"`
 	// MCPDisable: args that turn off MCP server {server}, passed once per
 	// server, e.g. codex's ["-c", "mcp_servers.{server}.enabled=false"].
 	MCPDisable []string `toml:"mcp_disable"`
@@ -3083,8 +3094,8 @@ type Kind struct {
     by Argv in this order: Resume (resumed sessions only), Name (when a title
     is known), Model (the role's model, else DefaultModel), Effort (when the
     role sets it), Subagents or NoSubagents (when the role sets max_subagents),
-    MCPDisable per MCP server to turn off and ProjectUntrust for a checkout
-    whose project config (.codex/; .claude/, .mcp.json) the PR changes
+    MCPStrict and MCPDisable per MCP server to turn off and ProjectUntrust for a
+    checkout whose project config (.codex/; .claude/, .mcp.json) the PR changes
     (ConfigOffArgs), Start, Args (only without a wrapper), then the role's args.
 
 func (k Kind) Argv(a LaunchArgs) []string
@@ -3096,9 +3107,10 @@ func (k Kind) Argv(a LaunchArgs) []string
 
 func (k Kind) ConfigOffArgs(servers, project, untrusted []string) []string
     ConfigOffArgs are the args that keep configuration out of a session:
-    MCPDisable once per server to turn off (servers under MCPOff, then under
-    ProjectMCP "off" each project server not among them; none in MCPAllow,
-    nothing without MCPDisable), then UntrustArgs(untrusted).
+    MCPStrict under MCPOff, MCPDisable once per server to turn off
+    (servers under MCPOff, then under ProjectMCP "off" each project server
+    not among them; none in MCPAllow, nothing without MCPDisable), then
+    UntrustArgs(untrusted).
 
 func (k Kind) LoggedIn(stdout, stderr string, exitOK bool) (loggedIn, readable bool)
     LoggedIn reads LoginCheck's output per LoginOK. exitOK is whether the
@@ -3116,9 +3128,9 @@ func (k Kind) LoginArgv() []string
     when the kind has no login check).
 
 func (k Kind) MCPOffArgs(servers []string) []string
-    MCPOffArgs are the args that turn off the given MCP servers: MCPDisable
-    with {server} replaced, once per server not in MCPAllow, in order; nil when
-    MCPOff is false or the kind has no MCPDisable args.
+    MCPOffArgs are the args that keep the user's MCP servers out of a session:
+    MCPStrict, then MCPDisable with {server} replaced, once per given server not
+    in MCPAllow, in order; nil when MCPOff is false or the kind has neither.
 
 func (k Kind) RenameCommand(title string) string
     RenameCommand is Rename with {title} replaced ("" when the kind has none).

@@ -36,12 +36,18 @@ func TestCodexTurnsOffTheMCPServersItWouldLoadButTheAllowedOnes(t *testing.T) {
 	if got := k.Argv(LaunchArgs{MCPServers: servers, Wrapper: true}); len(got) != 0 {
 		t.Fatalf("mcp_off = false: %q, want none", got)
 	}
-	// A kind without mcp_disable args cannot turn a server off: mcp_off is
-	// ignored, as max_subagents is without subagents args.
+	// A kind without mcp_disable args cannot turn a server off by name: the
+	// claude kind's mcp_strict turns them all off at once, whatever the
+	// servers; without it too, mcp_off is ignored, as max_subagents is
+	// without subagents args.
 	claude := mustLoad(t, map[string]string{"config.toml": "[kinds.claude]\nmcp_off = true\n" + minimalConfig})
 	k, _ = claude.KindSpec(KindClaude)
+	if got := k.MCPOffArgs(servers); !slices.Equal(got, []string{"--strict-mcp-config"}) {
+		t.Fatalf("claude: %q, want --strict-mcp-config alone", got)
+	}
+	k.MCPStrict = nil
 	if got := k.MCPOffArgs(servers); got != nil {
-		t.Fatalf("claude: %q, want none", got)
+		t.Fatalf("claude without mcp_strict: %q, want none", got)
 	}
 }
 

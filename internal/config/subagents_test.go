@@ -41,8 +41,8 @@ func TestTheJudgeCapsItsSubagents(t *testing.T) {
 	// A kind without subagents args cannot cap them: the key is ignored,
 	// as effort is for a kind without effort args.
 	claude, _ := def.KindSpec(KindClaude)
-	if got := claude.Argv(LaunchArgs{Subagents: &two, Wrapper: true}); len(got) != 0 {
-		t.Errorf("claude argv = %q, want none", got)
+	if got := claude.Argv(LaunchArgs{Subagents: &two, Wrapper: true}); !slices.Equal(got, claude.MCPOffArgs(nil)) {
+		t.Errorf("claude argv = %q, want its MCP args alone", got)
 	}
 
 	cfg := mustLoad(t, map[string]string{"config.toml": minimalConfig + `

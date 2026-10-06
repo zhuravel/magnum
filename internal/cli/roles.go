@@ -355,9 +355,16 @@ func rolesKinds(c *Context, cfg *config.Config, o rolesOpts) int {
 		fmt.Fprintf(tw, "  model:\t%s\n", args(k.Model))
 		fmt.Fprintf(tw, "  effort:\t%s\n", args(k.Effort))
 		fmt.Fprintf(tw, "  subagents:\t%s (none: %s)\n", args(k.Subagents), args(k.NoSubagents))
-		mcp := "- (the MCP servers of the CLI's config load)"
+		var mcpOff []string
+		if k.MCPOff && len(k.MCPStrict) > 0 {
+			mcpOff = append(mcpOff, args(k.MCPStrict)+" (none of your MCP servers load)")
+		}
 		if k.MCPOff && len(k.MCPDisable) > 0 {
-			mcp = args(k.MCPDisable) + " per MCP server of the Codex config (allowed: " + inspOrDash(strings.Join(k.MCPAllow, ", ")) + ")"
+			mcpOff = append(mcpOff, args(k.MCPDisable)+" per MCP server of the Codex config (allowed: "+inspOrDash(strings.Join(k.MCPAllow, ", "))+")")
+		}
+		mcp := "- (the MCP servers of the CLI's config load)"
+		if len(mcpOff) > 0 {
+			mcp = strings.Join(mcpOff, "; ")
 		}
 		fmt.Fprintf(tw, "  mcp:\t%s\n", mcp)
 		project := "-"

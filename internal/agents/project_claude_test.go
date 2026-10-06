@@ -12,8 +12,9 @@ import (
 )
 
 // claudeLaunchArgs are claude-review's args in the test env (a wrapper, so
-// no kind args): its name and effort.
-var claudeLaunchArgs = []string{"--name", "PR #11920 claude-review - talkable", "--effort", "high"}
+// no kind args): its name and effort, and none of the operator's MCP
+// servers.
+var claudeLaunchArgs = []string{"--name", "PR #11920 claude-review - talkable", "--effort", "high", "--strict-mcp-config"}
 
 // userSettingsOnly is the claude kind's project_untrust.
 var userSettingsOnly = []string{"--setting-sources", "user"}

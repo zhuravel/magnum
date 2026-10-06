@@ -811,7 +811,7 @@ the MCP servers of `.mcp.json`, skills, commands, agents and `CLAUDE.md` (Magnum
 skips Claude's permission prompts). When the files under `.claude/` or `.mcp.json` differ from the PR's
 merge base (or git cannot tell), every launch and resume of a claude role (claude-review, claude-simplify)
 passes `--setting-sources user` (`[kinds.claude] project_untrust`): the session loads your user settings,
-skills, agents and MCP servers and nothing of the checkout's. An `agents.claude_project_declined` event
+skills and agents and nothing of the checkout's. An `agents.claude_project_declined` event
 records it, the board's card says "Claude ran without the PR's .claude/ and .mcp.json changes" and so
 does the review's Checks. A PR that leaves both alone keeps the team's project config. Claude Code reloads
 its settings and skills while it runs, and loads a `.claude/settings.json` a later commit adds, so a
@@ -821,10 +821,21 @@ and resumed once the new head is checked out; one that works or is blocked holds
 checkout's fetch runs first, and the head it fetched decides: by the PR's file list when the list is
 complete and of that head, else (a PR of more files than the list holds) by git, the files that head
 changes under `.claude/` or in `.mcp.json` since its merge base with the base branch; a git that cannot
-tell quits the session. Add
-`--strict-mcp-config` to `project_untrust` to drop your own MCP servers from such sessions too. Not covered:
+tell quits the session. Not covered:
 a nested `<dir>/.claude/skills/` (Claude loads it once it works on files there), a team hook that runs a
 script outside `.claude/` the PR changes, and an agent that checks another commit out in the checkout.
+
+Magnum's Claude sessions (claude-review, claude-simplify, and the retro's classifier and the notes curator
+when they run Claude) run on your own Claude Code setup too: its login, your user settings (hooks, plugins,
+permissions), skills, agents and `CLAUDE.md`, and the checkout's project config as the paragraph above
+says, but without MCP servers. Claude Code turns servers off only all at once, so every launch and resume
+passes `--strict-mcp-config` with no `--mcp-config` (`[kinds.claude] mcp_off` and `mcp_strict`): none of
+your user, local or plugin servers, the checkout's `.mcp.json` or claude.ai connectors load. They cost
+tokens in every turn, and a session's servers stayed in its pane's foreground after the agent was asked to
+exit, so quitting it before a checkout failed. `mcp_off = false` loads them again; to keep a few, write them
+to a JSON file (`{"mcpServers": {...}}`) and add `"--mcp-config", "/absolute/path.json"` to `mcp_strict`
+(`mcp_allow` names Codex servers only). A running session keeps what it started with until its next start.
+Under a `managed-mcp.json` Claude Code refuses `--strict-mcp-config` and exits: set `mcp_off = false` there.
 
 A session whose model hits its own limit switches to the kind's next `fallback_models` entry by
 itself (Claude: `["opus", "sonnet"]`) and back once the limit lifts.

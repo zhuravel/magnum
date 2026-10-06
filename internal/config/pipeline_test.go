@@ -376,13 +376,13 @@ func TestArgv(t *testing.T) {
 		t.Errorf("codex = %q", got)
 	}
 	if got := k["claude"].Argv(LaunchArgs{Session: "u-2", Title: "PR #1 claude-review - r", Effort: "high", Wrapper: true}); !slices.Equal(got,
-		[]string{"--resume", "u-2", "--name", "PR #1 claude-review - r", "--effort", "high"}) {
+		[]string{"--resume", "u-2", "--name", "PR #1 claude-review - r", "--effort", "high", "--strict-mcp-config"}) {
 		t.Errorf("claude = %q", got)
 	}
 	claude := k["claude"]
 	claude.Args, claude.Start = []string{"--bare"}, []string{"--always"}
 	if got := claude.Argv(LaunchArgs{Title: "t", Model: "opus", Extra: []string{"--role"}}); !slices.Equal(got,
-		[]string{"--name", "t", "--model", "opus", "--always", "--bare", "--role"}) {
+		[]string{"--name", "t", "--model", "opus", "--strict-mcp-config", "--always", "--bare", "--role"}) {
 		t.Errorf("claude without wrapper = %q", got)
 	}
 	if got := k["omp"].Argv(LaunchArgs{Session: "s", Model: "opus", Effort: "high", Wrapper: true}); !slices.Equal(got,

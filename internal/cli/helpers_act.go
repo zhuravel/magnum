@@ -632,6 +632,7 @@ func actResumeArgv(cfg *config.Config, s store.Session) []string {
 	if id == "" || !ok || len(k.Resume) == 0 {
 		return nil
 	}
+	k.MCPOff = false // a person resuming by hand keeps their own MCP servers
 	return append([]string{kind}, k.Argv(config.LaunchArgs{Session: id, Wrapper: true})...)
 }
 

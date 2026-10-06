@@ -274,9 +274,15 @@ judge_fresh_after = "90m"         # a judge whose last turn on the PR ended long
 #                                     # git cannot tell), every launch and resume loads your user settings
 #                                     # only: none of the checkout's settings (hooks, env, plugins), MCP
 #                                     # servers, skills, commands, agents or CLAUDE.md. A session that loaded
-#                                     # them is parked before the checkout moves to a new head (Claude reloads
-#                                     # them while it runs). Add "--strict-mcp-config" to drop your own MCP
-#                                     # servers too; [] = a changed .claude/ loads like any trusted project's
+#                                     # them is parked before the checkout moves to a new head that changes
+#                                     # them (Claude reloads them while it runs); [] = a changed .claude/
+#                                     # loads like any trusted project's
+# mcp_off = true                      # every launch and resume passes mcp_strict: no MCP server of yours (user,
+#                                     # local, project or plugin ones, claude.ai connectors); false = they load
+# mcp_strict = ["--strict-mcp-config"]   # Claude Code turns servers off only all at once, so mcp_allow does not
+#                                     # apply: to keep some, write them to a JSON file ({"mcpServers": {...}})
+#                                     # and add "--mcp-config", "<its absolute path>" here. Claude Code refuses
+#                                     # --strict-mcp-config under a managed-mcp.json: set mcp_off = false there
 #
 # [kinds.droid]                       # droid 0.232: no model, effort or name flag in interactive mode
 # resume = ["--resume", "{session}"]

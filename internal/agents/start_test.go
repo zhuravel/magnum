@@ -31,9 +31,10 @@ func TestStartAgentFreshWrapperPassesOnlyExtras(t *testing.T) {
 	c := e.h.starts[1]
 	// Claude gets its pane title as one --name arg (herdr shell-quotes it)
 	// and the role's effort as --effort, so the session never runs at the
-	// operator's own Claude Code effortLevel.
+	// operator's own Claude Code effortLevel; --strict-mcp-config keeps the
+	// operator's MCP servers out of it, a wrapper's session too.
 	if c.Name != "mg-11920-claude-review-5d01cf" || c.Kind != "claude" || c.PaneID != ws.Panes[RoleClaude] ||
-		!slices.Equal(c.Args, []string{"--name", "PR #11920 claude-review - talkable", "--effort", "high"}) {
+		!slices.Equal(c.Args, []string{"--name", "PR #11920 claude-review - talkable", "--effort", "high", "--strict-mcp-config"}) {
 		t.Fatalf("claude start = %+v", c)
 	}
 	if got := e.h.callsWith("WaitIdleShell"); len(got) != 2 {
@@ -87,9 +88,9 @@ func TestStartAgentResumeArgs(t *testing.T) {
 		probeOutput string
 	}{
 		{"codex wrapper", "auto", RoleJudge, []string{"--x"}, "resume 01a0-uuid -c model_reasoning_effort=xhigh -c agents.max_concurrent_threads_per_session=2", "codex: function"},
-		{"claude wrapper", "true", RoleClaude, []string{"--x"}, "--resume c1d2-id --name PR #11920 claude-review - talkable --effort high", ""},
+		{"claude wrapper", "true", RoleClaude, []string{"--x"}, "--resume c1d2-id --name PR #11920 claude-review - talkable --effort high --strict-mcp-config", ""},
 		{"codex plain", "false", RoleJudge, []string{"--dangerously-bypass-approvals-and-sandbox", "--search"}, "resume 01a0-uuid -c model_reasoning_effort=xhigh -c agents.max_concurrent_threads_per_session=2 --dangerously-bypass-approvals-and-sandbox --search", ""},
-		{"claude plain", "false", RoleClaude, []string{"--dangerously-skip-permissions"}, "--resume c1d2-id --name PR #11920 claude-review - talkable --effort high --dangerously-skip-permissions", ""},
+		{"claude plain", "false", RoleClaude, []string{"--dangerously-skip-permissions"}, "--resume c1d2-id --name PR #11920 claude-review - talkable --effort high --strict-mcp-config --dangerously-skip-permissions", ""},
 		{"codex no function", "auto", RoleJudge, []string{"--search"}, "resume 01a0-uuid -c model_reasoning_effort=xhigh -c agents.max_concurrent_threads_per_session=2 --search", "codex: command"},
 	}
 	for _, tc := range cases {
@@ -310,8 +311,46 @@ func TestStartAgentSimplifyGetsName(t *testing.T) {
 	if err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleSimplify), ws.Panes[RoleSimplify], ""); err != nil {
 		t.Fatal(err)
 	}
-	if len(e.h.starts) != 1 || !slices.Equal(e.h.starts[0].Args, []string{"--name", "PR #11920 claude-simplify - talkable"}) {
+	if len(e.h.starts) != 1 || !slices.Equal(e.h.starts[0].Args, []string{"--name", "PR #11920 claude-simplify - talkable", "--strict-mcp-config"}) {
 		t.Fatalf("simplify start = %+v", e.h.starts)
+	}
+}
+
+// A Claude review session starts with none of the operator's MCP servers
+// (the claude kind's mcp_off and mcp_strict, --strict-mcp-config with no
+// --mcp-config), launched or resumed: they cost tokens, and they stayed in
+// the pane's foreground after the agent was asked to exit, so the quit
+// before a checkout failed. mcp_off = false starts it with them as before,
+// and a server file added to mcp_strict is passed with it.
+func TestClaudeStartsWithoutTheOperatorsMCPServers(t *testing.T) {
+	for _, resume := range []string{"", "c1d2-id"} {
+		e := newEnv(t)
+		ws := e.workspace()
+		if err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleClaude), ws.Panes[RoleClaude], resume); err != nil {
+			t.Fatal(err)
+		}
+		if got := e.h.starts[0].Args; !slices.Contains(got, "--strict-mcp-config") || slices.Contains(got, "--mcp-config") {
+			t.Fatalf("resume %q: args = %q, want --strict-mcp-config alone", resume, got)
+		}
+	}
+
+	e := newEnv(t)
+	e.setKind(KindClaude, func(k *config.Kind) { k.MCPOff = false })
+	if err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleClaude), e.workspace().Panes[RoleClaude], ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.h.starts[0].Args; slices.Contains(got, "--strict-mcp-config") {
+		t.Fatalf("mcp_off = false: args = %q", got)
+	}
+
+	e = newEnv(t)
+	file := "/Users/x/.config/magnum/claude-mcp.json"
+	e.setKind(KindClaude, func(k *config.Kind) { k.MCPStrict = append(k.MCPStrict, "--mcp-config", file) })
+	if err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleClaude), e.workspace().Panes[RoleClaude], ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.h.starts[0].Args; !slices.Equal(got[len(got)-3:], []string{"--strict-mcp-config", "--mcp-config", file}) {
+		t.Fatalf("a server file: args = %q", got)
 	}
 }
 

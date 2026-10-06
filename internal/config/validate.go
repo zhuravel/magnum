@@ -609,6 +609,10 @@ func validateKind(name string, k Kind) []error {
 	default:
 		bad("project_mcp must be allow or off, got %q", k.ProjectMCP)
 	}
+	if len(k.MCPAllow) > 0 && len(k.MCPDisable) == 0 && len(k.MCPStrict) > 0 {
+		bad("mcp_allow %q keeps servers only mcp_disable turns off one by one; mcp_strict turns them all off, "+
+			"so list the ones to keep in a file and add \"--mcp-config\", \"<its absolute path>\" to mcp_strict", k.MCPAllow)
+	}
 	for _, g := range []struct {
 		key, ph string
 		args    []string

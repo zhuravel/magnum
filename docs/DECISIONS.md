@@ -2913,3 +2913,28 @@ editing history. Code, config comments and prompts reference these by their head
   list, else a quit) and the checkout fetches as before; a per-PR worktree the round creates or recreates
   is not fetched first. The same holds at a restart's switch to a newer head, which now names the head it
   switches to instead of the PR the round claimed.
+- **Magnum's Claude sessions run without MCP servers** (2026-10-07; amends "A PR that changes .claude/ or
+  .mcp.json runs Claude with the user's settings only" and extends "Magnum's Codex sessions run without the
+  operator's MCP servers" to Claude). The quit that held the operator's PR failed because the session's
+  stdio MCP servers (the operator's own: node, python, a browser daemon) kept the pane's foreground after
+  the agent was asked to exit, and review sessions need none of them while paying for their tools in every
+  turn. Claude Code 2.1.292 has no flag that turns one server off: `--strict-mcp-config` makes it "only use
+  MCP servers from `--mcp-config`, ignoring all other MCP configurations" (`claude --help`, cli-reference),
+  and with no `--mcp-config` its startup skips the loader of the user, local, project and plugin servers and
+  the claude.ai connectors (the binary resolves the MCP configs to none under the flag, and names the
+  connectors "restricted to explicitly passed config, e.g. --strict-mcp-config"). The claude kind's
+  `mcp_off` is now `true` with the new `mcp_strict = ["--strict-mcp-config"]`, args that keep every server out
+  at once (`config.Kind.MCPStrict`, passed by `MCPOffArgs` before any `mcp_disable`), at every launch and
+  resume: claude-review, claude-simplify, the retro's classifier and the notes curator when they run Claude,
+  and `.MCPOff` of a shell role whose tool is claude. Resumes need the flag again (sessions docs: "Not every
+  configuration flag from the original launch is restored"), and get it. `mcp_off = false` loads the servers
+  again. `mcp_allow` cannot name servers for an all-at-once flag, so a kind with `mcp_strict`, `mcp_allow`
+  and no `mcp_disable` is refused at load; the servers to keep go in a JSON file the operator writes,
+  named by `"--mcp-config", "<absolute path>"` appended to `mcp_strict`. `magnum roles --kinds` prints the
+  mcp line; the "resume by hand" hint leaves the MCP args out (a person keeps their servers). A running
+  session keeps what it started with until its next start. Rejected: magnum writing that file from
+  `mcp_allow` (it would copy the servers' `env`, tokens included, from `~/.claude.json` into a file of its
+  own, and plugin servers and connectors have no entry there to copy); a per-server deny through
+  `--settings` (`deniedMcpServers` is policy, not a documented per-session switch). Known limit: Claude
+  Code exits at startup when it is given `--strict-mcp-config` under a deployed `managed-mcp.json`
+  (managed-mcp docs), so such a machine needs `mcp_off = false`.
