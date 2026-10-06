@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -14,6 +15,7 @@ import (
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -33,6 +35,36 @@ func readinessCheckout(t *testing.T, files map[string]string) string {
 // zshRule answers `zsh -lc <script>`.
 func zshRule(script string, res execx.Result, err error) execx.Rule {
 	return execx.Rule{Prefix: []string{ReadinessShell, "-lc", script}, Result: res, Err: err}
+}
+
+// resetRule answers a reset_db command the way the release runs it: `mise -C
+// <checkout> exec -- env K=V... /bin/sh -c <script>` (slots.MiseExecArgs).
+func resetRule(checkout string, env map[string]string, script string, res execx.Result, err error) execx.Rule {
+	return execx.Rule{Prefix: miseResetPrefix(checkout, env, script), Result: res, Err: err}
+}
+
+func miseResetPrefix(checkout string, env map[string]string, script string) []string {
+	return append([]string{"mise"}, slots.MiseExecArgs(checkout, env, script)...)
+}
+
+// readinessCalls are the commands the readiness step ran: its zsh commands
+// and its reset_db commands through mise.
+func readinessCalls(e *env) []execx.Cmd {
+	var out []execx.Cmd
+	for _, c := range e.exec.Calls {
+		if strings.HasPrefix(c.Label, "readiness ") {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// readinessScript is the script a readiness command ran.
+func readinessScript(c execx.Cmd) string {
+	if c.Name == ReadinessShell {
+		return c.Args[1]
+	}
+	return c.Args[len(c.Args)-1]
 }
 
 func readReadinessFile(t *testing.T, dir string) readinessFile {
@@ -127,20 +159,22 @@ func TestReadinessRunsBeforeTheReviewersAndFailuresDoNotStopTheRound(t *testing.
 }
 
 // A checkout that changes the pool's schema (ReadinessPlan.ResetDB) loads
-// it into the slot's databases before anything else runs, through the same
-// path as prepare (the login shell, the slot's env, the step's budget, a
-// command that may change things); a reset that fails does not stop the
-// round, it reaches the judge's readiness list.
+// it into the slot's databases before anything else runs, the way the
+// release runs reset_db (mise exec in the slot, the slot's env as `env K=V`
+// arguments, /bin/sh -c; its own budget, a command that may change things);
+// a reset that fails does not stop the round, it reaches the judge's
+// readiness list.
 func TestReadinessResetsTheSchemaFirstAndAFailureReachesTheJudge(t *testing.T) {
 	e := newEnv(t)
 	checkout := t.TempDir()
+	slotEnv := map[string]string{"WT_BRANCH": "review1"}
 	e.exec.Rules = []execx.Rule{
-		zshRule("bin/rails db:schema:load", execx.Result{Code: 1, Duration: 2 * time.Second,
+		resetRule(checkout, slotEnv, "bin/rails db:schema:load", execx.Result{Code: 1, Duration: 2 * time.Second,
 			Stderr: []byte("ActiveRecord::StatementInvalid: Table 'talkable_test__review1.offers' doesn't exist\n")}, nil),
-		zshRule("RAILS_ENV=test bin/rails db:schema:load", execx.Result{}, nil),
+		resetRule(checkout, slotEnv, "RAILS_ENV=test bin/rails db:schema:load", execx.Result{}, nil),
 		zshRule("bin/rails db:test:prepare", execx.Result{}, nil),
 	}
-	ready := func() int { return len(e.exec.CallsWithPrefix(ReadinessShell)) }
+	ready := func() int { return len(readinessCalls(e)) }
 	e.ag.behaviors[agents.RoleClaude] = []behavior{func(f *fakeAgents, run store.Run, text string) error {
 		if n := ready(); n != 3 {
 			t.Errorf("claude-review was prompted after %d readiness commands, want the schema reset and prepare first", n)
@@ -162,23 +196,28 @@ func TestReadinessResetsTheSchemaFirstAndAFailureReachesTheJudge(t *testing.T) {
 	in := e.input(KindInitial)
 	in.SlotPath = checkout
 	in.Readiness = ReadinessPlan{ResetDB: []string{"bin/rails db:schema:load", "RAILS_ENV=test bin/rails db:schema:load"},
-		Prepare: []string{"bin/rails db:test:prepare"}, Timeout: 3 * time.Minute, Env: map[string]string{"WT_BRANCH": "review1"}}
+		Prepare: []string{"bin/rails db:test:prepare"}, Timeout: 3 * time.Minute, Env: slotEnv}
 	res, err := e.r.RunRound(e.ctx, in)
 	if err != nil || res.Outcome != OutcomePosted {
 		t.Fatalf("RunRound = %+v, %v", res, err)
 	}
 
 	var scripts []string
-	for _, c := range e.exec.CallsWithPrefix(ReadinessShell) {
-		scripts = append(scripts, c.Args[1])
+	for _, c := range readinessCalls(e) {
+		script := readinessScript(c)
+		scripts = append(scripts, script)
 		// The reset has the release's reset_db budget (slots.ResetDBTimeout,
 		// the plan sets none), prepare the whole ready_timeout after it.
-		limit := 3 * time.Minute
-		if strings.HasSuffix(c.Args[1], "db:schema:load") {
-			limit = slots.ResetDBTimeout
+		limit, name, branch := 3*time.Minute, ReadinessShell, c.Env["WT_BRANCH"]
+		if strings.HasSuffix(script, "db:schema:load") {
+			// The reset's env travels in the args, not in the command's env.
+			limit, name, branch = slots.ResetDBTimeout, "mise", "review1"
+			if !slices.Equal(c.Args, slots.MiseExecArgs(checkout, slotEnv, script)) {
+				t.Errorf("%s: args %q, want what the release runs", script, c.Args)
+			}
 		}
-		if c.Dir != checkout || c.Env["WT_BRANCH"] != "review1" || c.Timeout != limit || !c.Mutates || c.Probe {
-			t.Errorf("%s: dir %q env %v timeout %s (want %s) mutates %v probe %v", c.Args[1], c.Dir, c.Env, c.Timeout, limit, c.Mutates, c.Probe)
+		if c.Name != name || c.Dir != checkout || branch != "review1" || c.Timeout != limit || !c.Mutates || c.Probe {
+			t.Errorf("%s: %s dir %q env %v timeout %s (want %s) mutates %v probe %v", script, c.Name, c.Dir, c.Env, c.Timeout, limit, c.Mutates, c.Probe)
 		}
 	}
 	if want := []string{"bin/rails db:schema:load", "RAILS_ENV=test bin/rails db:schema:load", "bin/rails db:test:prepare"}; !slices.Equal(scripts, want) {
@@ -212,6 +251,7 @@ func TestReadinessResetsTheSchemaFirstAndAFailureReachesTheJudge(t *testing.T) {
 // that outlives its own budget is stopped and the reset_db commands after it
 // skipped, while prepare and ready still run.
 func TestReadinessSchemaResetHasItsOwnBudget(t *testing.T) {
+	checkout := t.TempDir()
 	for _, tc := range []struct {
 		name        string
 		resetTakes  time.Duration
@@ -225,7 +265,7 @@ func TestReadinessSchemaResetHasItsOwnBudget(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newEnv(t)
 			e.exec.Rules = []execx.Rule{
-				{Prefix: []string{ReadinessShell, "-lc", "bin/rails db:schema:load"}, Fn: func(c execx.Cmd) (execx.Result, error) {
+				{Prefix: miseResetPrefix(checkout, nil, "bin/rails db:schema:load"), Fn: func(c execx.Cmd) (execx.Result, error) {
 					if c.Timeout != 30*time.Minute {
 						t.Errorf("first reset_db timeout = %s, want its own 30m budget", c.Timeout)
 					}
@@ -235,7 +275,7 @@ func TestReadinessSchemaResetHasItsOwnBudget(t *testing.T) {
 					}
 					return execx.Result{Duration: tc.resetTakes}, nil
 				}},
-				{Prefix: []string{ReadinessShell, "-lc", "bin/rails db:seed"}, Fn: func(c execx.Cmd) (execx.Result, error) {
+				{Prefix: miseResetPrefix(checkout, nil, "bin/rails db:seed"), Fn: func(c execx.Cmd) (execx.Result, error) {
 					if c.Timeout != 10*time.Minute {
 						t.Errorf("second reset_db timeout = %s, want what the reset budget has left (10m)", c.Timeout)
 					}
@@ -255,7 +295,7 @@ func TestReadinessSchemaResetHasItsOwnBudget(t *testing.T) {
 					return execx.Result{}, nil
 				}},
 			}
-			rd := readinessRound(t, e, KindInitial, t.TempDir(), ReadinessPlan{
+			rd := readinessRound(t, e, KindInitial, checkout, ReadinessPlan{
 				ResetDB: []string{"bin/rails db:schema:load", "bin/rails db:seed"}, ResetDBTimeout: 30 * time.Minute,
 				Prepare: []string{"bin/rails db:test:prepare"}, Ready: []string{"bin/ready"}, Timeout: 5 * time.Minute})
 			if err := rd.readiness(e.ctx); err != nil {
@@ -277,6 +317,66 @@ func TestReadinessSchemaResetHasItsOwnBudget(t *testing.T) {
 			}
 			if f := readReadinessFile(t, rd.dir); f.Timeout != "5m0s" || f.ResetDBTimeout != "30m0s" {
 				t.Errorf("readiness file budgets = %q and %q, want 5m0s and 30m0s", f.Timeout, f.ResetDBTimeout)
+			}
+		})
+	}
+}
+
+// A reset_db command runs the way the release, the provisioning and `magnum
+// open` run the pool's scripts: `mise -C <slot> exec -- env K=V... /bin/sh -c
+// <script>`, the slot's env as arguments. In a login zsh mise's shims come
+// first on PATH, and a bin/rails that starts Ruby through one has the slot's
+// .mise.local.toml [env] applied over the command's own variables (the copied
+// FAKE_AWS="0" beat the pool's FAKE_AWS=1, db:seed called an empty host and
+// failed in every slot). prepare, ready and the Ruby check stay `zsh -lc`:
+// they must see what the agents see.
+func TestReadinessRunsResetDBThroughMiseExecAndTheRestThroughTheLoginShell(t *testing.T) {
+	for _, tc := range []struct{ name, mise, wantMise string }{
+		{"mise on PATH", "", "mise"},
+		{"the configured mise", "/opt/homebrew/bin/mise", "/opt/homebrew/bin/mise"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t)
+			e.r.Mise = tc.mise
+			checkout := readinessCheckout(t, map[string]string{".ruby-version": "3.3.4\n"})
+			slotEnv := map[string]string{"FAKE_AWS": "1", "WT_BRANCH": "review1", "STRIPPED": ""}
+			e.exec.Rules = []execx.Rule{
+				{Prefix: []string{tc.wantMise}},
+				zshRule("bin/rails db:test:prepare", execx.Result{}, nil),
+				zshRule("bin/ready", execx.Result{}, nil),
+				zshRule(RubyCheckCommand, execx.Result{Stdout: []byte("ruby 3.3.4 (2024-07-09 revision be1089c8ec) [arm64-darwin23]\n")}, nil),
+			}
+			rd := readinessRound(t, e, KindInitial, checkout, ReadinessPlan{
+				ResetDB: []string{"bin/rails db:seed"}, Prepare: []string{"bin/rails db:test:prepare"}, Ready: []string{"bin/ready"},
+				Timeout: 3 * time.Minute, Env: slotEnv})
+			if err := rd.readiness(e.ctx); err != nil {
+				t.Fatal(err)
+			}
+			if got := rd.readinessData(); got.Failed != 0 || len(got.Checks) != 4 {
+				t.Fatalf("readiness = %+v", got)
+			}
+
+			calls := readinessCalls(e)
+			if len(calls) != 4 {
+				t.Fatalf("readiness ran %d commands, want 4: %v", len(calls), calls)
+			}
+			reset := calls[0]
+			wantArgs := []string{"-C", checkout, "exec", "--", "env", "FAKE_AWS=1", "STRIPPED=", "WT_BRANCH=review1", "/bin/sh", "-c", "bin/rails db:seed"}
+			if reset.Name != tc.wantMise || !slices.Equal(reset.Args, wantArgs) {
+				t.Errorf("reset_db ran %s %q, want %s %q", reset.Name, reset.Args, tc.wantMise, wantArgs)
+			}
+			if reset.Dir != checkout || len(reset.Env) != 0 || reset.Label != "readiness reset_db" ||
+				!reset.Mutates || reset.Probe || reset.Timeout != slots.ResetDBTimeout || !slices.Equal(reset.Unset, gitx.ScrubbedEnv()) {
+				t.Errorf("reset_db command = %+v", reset)
+			}
+			for i, script := range []string{"bin/rails db:test:prepare", "bin/ready", RubyCheckCommand} {
+				c := calls[i+1]
+				if c.Name != ReadinessShell || !slices.Equal(c.Args, []string{"-lc", script}) {
+					t.Errorf("%q ran %s %q, want zsh -lc", script, c.Name, c.Args)
+				}
+				if c.Dir != checkout || !maps.Equal(c.Env, slotEnv) || !slices.Equal(c.Unset, gitx.ScrubbedEnv()) {
+					t.Errorf("%q: dir %q env %v unset %v", script, c.Dir, c.Env, c.Unset)
+				}
 			}
 		})
 	}

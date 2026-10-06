@@ -350,7 +350,7 @@ func (m *Manager) miseAvailable() bool {
 // /bin/sh -c script with env overlaid (blank values exported blank).
 func (m *Manager) shellCmd(dir string, env map[string]string, script, label string, timeout time.Duration) execx.Cmd {
 	if m.miseAvailable() {
-		return execx.Cmd{Name: m.mise, Args: miseExecArgs(dir, env, script), Dir: dir, Timeout: timeout, Mutates: true, Label: label}
+		return execx.Cmd{Name: m.mise, Args: MiseExecArgs(dir, env, script), Dir: dir, Timeout: timeout, Mutates: true, Label: label}
 	}
 	return execx.Cmd{Name: "/bin/sh", Args: []string{"-c", script}, Env: maps.Clone(env), Dir: dir,
 		Timeout: timeout, Mutates: true, Label: label}

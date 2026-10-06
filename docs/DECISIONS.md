@@ -1860,3 +1860,16 @@ editing history. Code, config comments and prompts reference these by their head
   never delta checks. Both delta-check prompts now say "1 line" for a one-line delta. Rejected: a dedicated
   prompt file (the recovery prompt carries the check in one conditional line and one field) and a new run kind
   (a recovery is what the round is: a fresh judge session reading its history).
+- **The readiness step runs `reset_db` through `mise exec`, as the release does** (2026-10-06, amends
+  "Verification readiness runs before the reviewers"; `bin/rails db:seed` exited 1 in every slot: it called
+  Shopify with an empty host, though the command's own env had `FAKE_AWS=1`). The step ran every command as
+  `zsh -lc <script>`, and a login zsh puts mise's shims first on `PATH`. When `bin/rails` started Ruby through
+  a shim, mise applied the slot's `.mise.local.toml` `[env]` again, whose copied main-clone `FAKE_AWS = "0"`
+  overrode the command's own variable. The release, the provisioning and `magnum open` always ran the same
+  `reset_db` as `mise -C <slot> exec -- env K=V... /bin/sh -c <script>` (`slots.MiseExecArgs`), which puts the
+  real Ruby first, so no shim runs and the command's env holds; those seeds passed. A `reset_db` readiness
+  command now runs exactly so (`pipeline.Runner.Mise`, the slots manager's mise executable, set from
+  `app.Options.Mise`, "" = `mise` on PATH; the env travels in the arguments, as `runHeavy` passes it), with
+  the same budget, label, `Mutates` and scrubbed git environment. `prepare`, `ready` and the Ruby check stay
+  `zsh -lc`: they must see what the agents' tools see, shims included. Rejected: re-exporting the pool's
+  variables inside the login shell (the next variable a seed reads would be the next bug).

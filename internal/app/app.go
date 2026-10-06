@@ -66,6 +66,10 @@ type Options struct {
 	// "eval" with a scratch layout, so its rounds never meet the PR's own
 	// agents or notify like a real review.
 	AgentTag string
+	// Mise is the mise executable that runs the pool's scripts: the slots
+	// manager's (slots.Deps.Mise) and the readiness step's reset_db commands'
+	// (pipeline.Runner.Mise). "" means "mise" on PATH.
+	Mise string
 	// BeforeMigrate is store.Options.BeforeMigrate for the real registry
 	// (the CLI refuses to migrate it under a running daemon); a dry-run copy
 	// migrates freely.
@@ -84,6 +88,8 @@ type App struct {
 	DryRun    bool
 	// AgentTag is Options.AgentTag.
 	AgentTag string
+	// Mise is Options.Mise.
+	Mise string
 
 	Herdr *herdr.Client
 	// GitHub returns the gh client acting as the named identity (nil for an
@@ -209,7 +215,7 @@ func New(cfg *config.Config, layout paths.Layout, opts Options) (*App, error) {
 	}
 	a.GitHub = a.githubFor
 
-	a.AgentTag = opts.AgentTag
+	a.AgentTag, a.Mise = opts.AgentTag, opts.Mise
 	a.wire()
 	ok = true
 	return a, nil
@@ -266,7 +272,7 @@ func (a *App) wire() {
 		Store: a.Store, Run: a.Runner, Git: a.Git, MySQL: my,
 		Snapshot: a.Herdr.Snapshot, ProcessInfo: a.Herdr.PaneProcessInfo,
 		Layout: a.Layout, Log: Printf{Logger: a.Logger, Level: slog.LevelInfo, Src: "slots"},
-		Repos: cfg.Repos, DryRun: a.DryRun,
+		Repos: cfg.Repos, DryRun: a.DryRun, Mise: a.Mise,
 	})
 	var invGH inventory.GitHub
 	if c := a.pollClient(); c != nil {
@@ -285,7 +291,7 @@ func (a *App) wire() {
 		a.Pipeline[name] = &pipeline.Runner{
 			Agents: a.Agents, GitHub: a.gh[name], Git: a.Git, Exec: a.Runner, Keys: a.Herdr,
 			Store: a.Store, Identity: src, SelfLogin: selfLogin(cfg, name),
-			Config: cfg, Layout: a.Layout, AgentTag: a.AgentTag,
+			Config: cfg, Layout: a.Layout, AgentTag: a.AgentTag, Mise: a.Mise,
 			Logger: Printf{Logger: a.Logger, Level: slog.LevelInfo, Src: "pipeline"},
 		}
 	}

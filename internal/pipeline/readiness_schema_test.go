@@ -23,9 +23,10 @@ func TestReadinessReportsALoadedSchemaOnlyWhenEveryResetPassed(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newEnv(t)
+			checkout := t.TempDir()
 			e.exec.Rules = []execx.Rule{
-				zshRule("bin/rails db:schema:load", execx.Result{}, nil),
-				{Prefix: []string{ReadinessShell, "-lc", "bin/rails db:seed"}, Fn: func(c execx.Cmd) (execx.Result, error) {
+				resetRule(checkout, nil, "bin/rails db:schema:load", execx.Result{}, nil),
+				{Prefix: miseResetPrefix(checkout, nil, "bin/rails db:seed"), Fn: func(c execx.Cmd) (execx.Result, error) {
 					if tc.code != 0 {
 						return execx.Result{Code: tc.code}, &execx.ExitError{Cmd: c, Code: tc.code}
 					}
@@ -34,7 +35,7 @@ func TestReadinessReportsALoadedSchemaOnlyWhenEveryResetPassed(t *testing.T) {
 			}
 			loaded := 0
 			note := "reloading the schema: its databases carry the schema of abc1234"
-			rd := readinessRound(t, e, KindInitial, t.TempDir(), ReadinessPlan{
+			rd := readinessRound(t, e, KindInitial, checkout, ReadinessPlan{
 				ResetDB: []string{"bin/rails db:schema:load", "bin/rails db:seed"}, SchemaNote: note,
 				Loaded: func(context.Context) { loaded++ }})
 			if err := rd.readiness(e.ctx); err != nil {

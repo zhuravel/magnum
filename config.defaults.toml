@@ -357,8 +357,10 @@ aliases = ["simplify"]
 #                                         # schema_migrations moved); a release keeps the databases as they are
 # reset_db_on_schema_change = true        # false: reset_db only on release, back to the base schema (the
 #                                         # reviewers of a PR that changes the schema run against the base one);
-#                                         # before the reviewers it runs as the first readiness commands, within
-#                                         # 30m of its own (as on release), and ready_timeout starts after it
+#                                         # before the reviewers it runs as the first readiness commands, through
+#                                         # `mise exec` as on release (not the login shell, whose mise shims put the
+#                                         # checkout's .mise.local.toml env over the pool's), within 30m of its
+#                                         # own, and ready_timeout starts after it
 # post_checkout = ["bundle check >/dev/null || bundle install --jobs 4", "pnpm install --frozen-lockfile"]
 # databases = ["your_app_development__{slug}", "your_app_test__{slug}"]   # each must end in __{slug}
 # prepare = ["bin/rails db:test:prepare"] # readiness: run in the checkout before the reviewers of every

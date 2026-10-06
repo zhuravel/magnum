@@ -133,6 +133,23 @@ func TestNewWiresEverything(t *testing.T) {
 	}
 }
 
+// The mise executable of Options.Mise reaches every round runner, which runs
+// the readiness step's reset_db commands through it as the slots manager runs
+// the release's; without one they use "mise" on PATH.
+func TestNewGivesEveryRoundRunnerTheMiseExecutable(t *testing.T) {
+	for _, mise := range []string{"", "/opt/example/bin/mise"} {
+		a, _ := testApp(t, Options{Mise: mise})
+		if a.Mise != mise || len(a.Pipeline) != 2 {
+			t.Fatalf("Mise = %q, %d runners", a.Mise, len(a.Pipeline))
+		}
+		for name, r := range a.Pipeline {
+			if r.Mise != mise {
+				t.Errorf("runner %s: Mise = %q, want %q", name, r.Mise, mise)
+			}
+		}
+	}
+}
+
 func TestDryRunUsesStoreCopy(t *testing.T) {
 	home := t.TempDir()
 	layout := paths.Layout{Home: home}

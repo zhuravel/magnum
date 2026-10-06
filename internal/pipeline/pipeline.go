@@ -158,7 +158,7 @@ type Runner struct {
 	Agents Agents
 	GitHub GitHub       // as Identity; unused under RoundInput.DryRun
 	Git    Git          // the checkout check after each stage, and restarts (nil = no check; every new head counts as a push)
-	Exec   execx.Runner // the restore of a checkout a stage left modified: git reset / clean in the slot
+	Exec   execx.Runner // the readiness step's commands, and the restore of a checkout a stage left modified
 	Keys   Keys         // optional: interrupt timed-out roles (nil = leave them running)
 	Store  *store.Store
 
@@ -177,6 +177,10 @@ type Runner struct {
 	// AgentTag is agents.Deps.Tag of the agents this runner prompts ("eval"
 	// for magnum eval); it leads the shell roles' pane titles too.
 	AgentTag string
+	// Mise is the mise executable the readiness step runs the pool's reset_db
+	// commands through (slots.MiseExecArgs, as the release does); "" means
+	// "mise" on PATH. It is the slots manager's (slots.Deps.Mise).
+	Mise string
 }
 
 // PreviousReview is the reviewer's earlier review of the PR.

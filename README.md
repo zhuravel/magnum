@@ -348,8 +348,9 @@ reviewers, as `zsh -lc` with the slot's env and within `ready_timeout` (5m) toge
 check that the login shell runs the Ruby the checkout pins; a failure never stops the round, it tells
 the judge what will not work. When the files under a pool's `schema_paths` (such as `["db/"]`) differ
 from those the slot's databases were last loaded from, or the development database's
-`schema_migrations` no longer match them, the pool's `reset_db` commands run first, the same way but
-within 30 minutes of their own (with `ready_timeout` starting after them), so the slot's databases
+`schema_migrations` no longer match them, the pool's `reset_db` commands run first, as a release runs
+them (through `mise exec` in the slot, not `zsh -lc`, so the checkout's `.mise.local.toml` does not
+override the pool's env) within 30 minutes of their own (with `ready_timeout` starting after them), so the slot's databases
 carry the PR's tables and columns. Another round of the same PR, or a PR on the same schema, reloads
 nothing ("schema unchanged since <commit>: no reset"), and a release keeps the databases as they are
 for the next PR to compare (each reload rewrites every table); `magnum open` reloads them the same way

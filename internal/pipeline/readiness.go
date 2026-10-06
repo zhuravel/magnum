@@ -9,9 +9,10 @@ package pipeline
 // the checkout, through the login shell the agents' tools use, and tells
 // the judge what will not work. A failure never stops the round. When the
 // slot's databases carry another schema than the checkout's
-// (slots.CheckSchema), the pool's reset_db commands run first, the same way
-// but within the release's reset_db budget, and ready_timeout starts after
-// them (4 of 9 rounds of a pool repository skipped DB specs on a table or
+// (slots.CheckSchema), the pool's reset_db commands run first, the way the
+// release runs them (mise exec, not the login shell: its shims would put
+// the slot's .mise.local.toml [env] over the command's own variables) and
+// within the release's reset_db budget, and ready_timeout starts after them (4 of 9 rounds of a pool repository skipped DB specs on a table or
 // column the PR added, because the slot's databases had the base schema).
 
 import (
@@ -78,9 +79,11 @@ const (
 	// ReadinessFile is the JSON file the readiness step writes into the
 	// round's report directory, next to the judge's result file.
 	ReadinessFile = "readiness.json"
-	// ReadinessShell runs every readiness command as `zsh -lc <command>`:
-	// the login shell Codex and Claude run their tool commands in, so the
-	// commands see the Ruby, Node and database settings the agents see.
+	// ReadinessShell runs the prepare commands, the ready probes and the
+	// Ruby check as `zsh -lc <command>`: the login shell Codex and Claude
+	// run their tool commands in, so the commands see the Ruby, Node and
+	// database settings the agents see. The pool's reset_db commands do not
+	// run in it: see Runner.Mise.
 	ReadinessShell = "zsh"
 	// RubyCheckCommand is the built-in Ruby check's command.
 	RubyCheckCommand = "ruby -v"
@@ -213,16 +216,27 @@ func (rd *round) runPhase(ctx context.Context, cmds []readinessCmd, env map[stri
 	return checks
 }
 
-// runReadiness runs one command as `zsh -lc <script>` in the checkout with
-// at most left of the budget.
+// runReadiness runs one command in the checkout with at most left of the
+// budget: as `zsh -lc <script>` (prepare, ready, the Ruby check: what the
+// agents' tools see), but a reset_db command as the release runs it,
+// `mise -C <checkout> exec -- env K=V... /bin/sh -c <script>`
+// (slots.MiseExecArgs, env carried by the arguments). In a login zsh mise's
+// shims come first on PATH, and the Ruby a shim starts has the checkout's
+// .mise.local.toml [env] applied over the command's own variables (the
+// main clone's FAKE_AWS="0" over the pool's FAKE_AWS=1, so db:seed failed in
+// every slot); mise exec puts the real Ruby first, so no shim runs.
 func (rd *round) runReadiness(ctx context.Context, c readinessCmd, env map[string]string, left time.Duration, budget readinessBudget) agents.ReadinessCheck {
 	check := agents.ReadinessCheck{Kind: c.kind, Command: c.script}
 	mutates := c.kind == agents.ReadinessPrepare || c.kind == agents.ReadinessResetDB
-	res, err := rd.r.Exec.Run(ctx, execx.Cmd{
+	cmd := execx.Cmd{
 		Name: ReadinessShell, Args: []string{"-lc", c.script}, Dir: rd.in.SlotPath,
 		Env: maps.Clone(env), Unset: gitx.ScrubbedEnv(), Timeout: left,
 		Mutates: mutates, Probe: !mutates, Label: "readiness " + c.kind,
-	})
+	}
+	if c.kind == agents.ReadinessResetDB {
+		cmd.Name, cmd.Args, cmd.Env = cmp.Or(rd.r.Mise, "mise"), slots.MiseExecArgs(rd.in.SlotPath, env, c.script), nil
+	}
+	res, err := rd.r.Exec.Run(ctx, cmd)
 	check.Duration = res.Duration.Round(100 * time.Millisecond).String()
 	check.LastLine = lastLine(res, err != nil)
 	var exit *execx.ExitError

@@ -257,9 +257,12 @@ func (m *Manager) acquireHeavy(ctx context.Context) (release func(), err error) 
 	}
 }
 
-// miseExecArgs builds `-C dir exec -- env K=V… /bin/sh -c script` (keys sorted;
-// blank values blank the variable).
-func miseExecArgs(dir string, env map[string]string, script string) []string {
+// MiseExecArgs builds `-C dir exec -- env K=V… /bin/sh -c script` (keys
+// sorted; blank values blank the variable): the arguments of the mise
+// executable that run a pool script as the release, the provisioning and
+// `magnum open` do, with the real Ruby first on PATH (no shim that would
+// re-apply the checkout's .mise.local.toml [env] over env).
+func MiseExecArgs(dir string, env map[string]string, script string) []string {
 	args := []string{"-C", dir, "exec", "--", "env"}
 	for _, k := range sortedKeys(env) {
 		args = append(args, k+"="+env[k])
@@ -272,7 +275,7 @@ func miseExecArgs(dir string, env map[string]string, script string) []string {
 // layout.Logs()/<logName>.
 func (m *Manager) runHeavy(ctx context.Context, dir string, env map[string]string, script, label, logName string, timeout time.Duration) error {
 	return m.runLogged(ctx, execx.Cmd{
-		Name: m.mise, Args: miseExecArgs(dir, env, script), Dir: dir,
+		Name: m.mise, Args: MiseExecArgs(dir, env, script), Dir: dir,
 		Timeout: timeout, Mutates: true, Label: label,
 	}, logName)
 }

@@ -1348,6 +1348,8 @@ type App struct {
 	DryRun    bool
 	// AgentTag is Options.AgentTag.
 	AgentTag string
+	// Mise is Options.Mise.
+	Mise string
 
 	Herdr *herdr.Client
 	// GitHub returns the gh client acting as the named identity (nil for an
@@ -1422,6 +1424,10 @@ type Options struct {
 	// "eval" with a scratch layout, so its rounds never meet the PR's own
 	// agents or notify like a real review.
 	AgentTag string
+	// Mise is the mise executable that runs the pool's scripts: the slots
+	// manager's (slots.Deps.Mise) and the readiness step's reset_db commands'
+	// (pipeline.Runner.Mise). "" means "mise" on PATH.
+	Mise string
 	// BeforeMigrate is store.Options.BeforeMigrate for the real registry
 	// (the CLI refuses to migrate it under a running daemon); a dry-run copy
 	// migrates freely.
@@ -7858,9 +7864,11 @@ const (
 	// ReadinessFile is the JSON file the readiness step writes into the
 	// round's report directory, next to the judge's result file.
 	ReadinessFile = "readiness.json"
-	// ReadinessShell runs every readiness command as `zsh -lc <command>`:
-	// the login shell Codex and Claude run their tool commands in, so the
-	// commands see the Ruby, Node and database settings the agents see.
+	// ReadinessShell runs the prepare commands, the ready probes and the
+	// Ruby check as `zsh -lc <command>`: the login shell Codex and Claude
+	// run their tool commands in, so the commands see the Ruby, Node and
+	// database settings the agents see. The pool's reset_db commands do not
+	// run in it: see Runner.Mise.
 	ReadinessShell = "zsh"
 	// RubyCheckCommand is the built-in Ruby check's command.
 	RubyCheckCommand = "ruby -v"
@@ -8182,7 +8190,7 @@ type Runner struct {
 	Agents Agents
 	GitHub GitHub       // as Identity; unused under RoundInput.DryRun
 	Git    Git          // the checkout check after each stage, and restarts (nil = no check; every new head counts as a push)
-	Exec   execx.Runner // the restore of a checkout a stage left modified: git reset / clean in the slot
+	Exec   execx.Runner // the readiness step's commands, and the restore of a checkout a stage left modified
 	Keys   Keys         // optional: interrupt timed-out roles (nil = leave them running)
 	Store  *store.Store
 
@@ -8201,6 +8209,10 @@ type Runner struct {
 	// AgentTag is agents.Deps.Tag of the agents this runner prompts ("eval"
 	// for magnum eval); it leads the shell roles' pane titles too.
 	AgentTag string
+	// Mise is the mise executable the readiness step runs the pool's reset_db
+	// commands through (slots.MiseExecArgs, as the release does); "" means
+	// "mise" on PATH. It is the slots manager's (slots.Deps.Mise).
+	Mise string
 }
     Runner runs review rounds. One Runner serves one identity; it holds no
     per-round state and is safe for concurrent RunRound calls.
@@ -8557,6 +8569,13 @@ func ListPoolDatabases(ctx context.Context, c DBLister, pools ...config.Pool) (d
     error instead of a silently empty answer. Templates without "__{slug}" are
     skipped and returned in bad for the caller to report. No pool template at
     all lists nothing (and is not an error).
+
+func MiseExecArgs(dir string, env map[string]string, script string) []string
+    MiseExecArgs builds `-C dir exec -- env K=V… /bin/sh -c script` (keys
+    sorted; blank values blank the variable): the arguments of the mise
+    executable that run a pool script as the release, the provisioning and
+    `magnum open` do, with the real Ruby first on PATH (no shim that would
+    re-apply the checkout's .mise.local.toml [env] over env).
 
 func PRSlotName(repo string, number int) string
     PRSlotName is the slot name of a per-PR worktree: "owner/name#N".
