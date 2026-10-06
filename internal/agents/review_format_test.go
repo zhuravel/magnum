@@ -175,7 +175,7 @@ func TestSkillNamesTheJudgeASourceOnlyForWhatItsOwnPassFound(t *testing.T) {
 // goes only to the result file, where every ledger entry has a title.
 func TestSkillListsProvenProblemsNextDoorApart(t *testing.T) {
 	skillSays(t, []string{
-		"any related-PR line (section 2), any nearby block, the Checks block,",
+		"any related-PR or `Description: ✗` line (section 2), any nearby block, the Checks block,",
 		"A `pre_existing` P1 or P2 you proved at `head_sha` in or near code the PR changes is `nearby`: list up to three in `<details><summary>Found nearby, not this PR's (N)</summary>`, one line each (`path:line`, the problem, its priority), never counted in the verdict line or the event.",
 		"A security one (an authorization bypass, data exposure, injection) goes only to the result file.",
 		"a short `title` on every entry",
@@ -189,8 +189,10 @@ func TestSkillListsProvenProblemsNextDoorApart(t *testing.T) {
 // (2026-10-06: they add 690 bytes, shortening sections 3, 7 and 8 won back
 // 250), and 158 for the changed files' history and the description's claims
 // (2026-10-06: they add 581 bytes, shortening sections 2 and 4 won back
-// 423). Every rule added must replace or shorten text.
-const skillMaxBytes = 31_681
+// 423), and 92 for listing `history` among the block's fields and the
+// description line in the body's order. Every rule added must replace or
+// shorten text.
+const skillMaxBytes = 31_773
 
 func TestSkillStaysTight(t *testing.T) {
 	if n := len(magnum.Skill); n > skillMaxBytes {
