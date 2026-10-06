@@ -58,6 +58,12 @@ type PRDetails struct {
 	Deletions    int
 	ChangedFiles int
 	Commits      int
+	// Files are the paths the pull request changes at HeadRefOid, in
+	// GitHub's order: one page of at most 100 (a rename lists its new path
+	// only); nil when GitHub returned no list. FilesComplete is true when
+	// they are every changed file.
+	Files         []string
+	FilesComplete bool
 	// CI is the head commit's checks.
 	CI CIRollup
 }
@@ -126,13 +132,19 @@ type PRState struct {
 	MergeCommitOid string
 }
 
-// detailsFragment reads labels, latestReviews and the head commit's checks in
-// one page of 100 (GitHub's maximum); pageInfo and totalCount tell whether
-// that page was everything (PRDetails.LabelsComplete,
-// PRDetails.LatestReviewsComplete, CIRollup.Complete). The checks add two
-// connections per pull request (3 points instead of 2 for a batch of 40);
-// with each check's workflow (three objects) a batch stays under 30k of
-// GitHub's 500k nodes.
+// detailsFragment reads labels, latestReviews, the changed files and the
+// head commit's checks in one page of 100 (GitHub's maximum); pageInfo and
+// totalCount tell whether that page was everything (PRDetails.LabelsComplete,
+// PRDetails.LatestReviewsComplete, PRDetails.FilesComplete,
+// CIRollup.Complete). The checks add two connections per pull request (3
+// points instead of 2 for a batch of 40); with each check's workflow (three
+// objects) a batch stays under 30k of GitHub's 500k nodes. The files add one
+// connection and 100 nodes per pull request: GitHub's dry run
+// (rateLimit(dryRun: true), 2026-10-06) priced batches of 1, 10, 20 and 40
+// at 1, 1, 1 and 3 points without them and 1, 1, 2 and 3 with them. A second
+// page would be a query of its own (a point each) for every head of a PR
+// with more than 100 files, so there is none: FilesComplete says the list
+// was cut.
 const detailsFragment = `fragment PRDetails on PullRequest {
   id number title url
   author { login __typename } authorAssociation
@@ -140,6 +152,7 @@ const detailsFragment = `fragment PRDetails on PullRequest {
   headRefName baseRefName isCrossRepository
   state merged mergedAt closedAt updatedAt isDraft headRefOid baseRefOid
   additions deletions changedFiles commits { totalCount }
+  files(first: 100) { totalCount pageInfo { hasNextPage } nodes { path } }
   assignees(first: 10) { nodes { login } }
   reviewRequests(first: 30) { nodes { requestedReviewer { __typename ... on User { login } ... on Bot { login } ... on Mannequin { login } ... on Team { slug } } } }
   latestReviews(first: 100) { totalCount pageInfo { hasNextPage } nodes { state submittedAt author { login __typename } commit { oid } } }
@@ -198,6 +211,12 @@ type detailsJSON struct {
 	Commits           struct {
 		TotalCount int `json:"totalCount"`
 	} `json:"commits"`
+	Files *struct {
+		connInfo
+		Nodes []struct {
+			Path string `json:"path"`
+		} `json:"nodes"`
+	} `json:"files"` // null: GitHub listed no files
 	Assignees struct {
 		Nodes []struct {
 			Login string `json:"login"`
@@ -317,6 +336,13 @@ func (d detailsJSON) details() PRDetails {
 			lr.CommitOid = n.Commit.Oid
 		}
 		out.LatestReviews = append(out.LatestReviews, lr)
+	}
+	if d.Files != nil {
+		out.Files = make([]string, 0, len(d.Files.Nodes))
+		for _, f := range d.Files.Nodes {
+			out.Files = append(out.Files, f.Path)
+		}
+		out.FilesComplete = d.Files.complete(len(d.Files.Nodes))
 	}
 	out.ReviewRequestEvents = d.ReviewRequested.events()
 	out.CI = d.ci()

@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -33,6 +34,45 @@ type Pipeline struct {
 	// reviewers, for both. A [[watch]] may override it (Watch.JudgeOwnPass);
 	// see Config.JudgeOwnPassFor.
 	JudgeOwnPass string `toml:"judge_own_pass"`
+	// RelatedLookback is how long a merged PR stays related: the judge's
+	// related.json lists the open PRs of the repository and those merged
+	// within it that change the same paths (default 14 days; 0 = open PRs
+	// only). A [[watch]] may override it (Watch.RelatedLookback).
+	RelatedLookback Duration `toml:"related_lookback"`
+	// RelatedIgnore are path globs (see MatchPath) whose paths never make
+	// two PRs related (default DefaultRelatedIgnore, the lockfiles; [] =
+	// none). A [[watch]] may override it (Watch.RelatedIgnore).
+	RelatedIgnore []string `toml:"related_ignore"`
+}
+
+// DefaultRelatedIgnore is [pipeline] related_ignore's default: lockfiles,
+// which most dependency changes touch whatever else they do.
+func DefaultRelatedIgnore() []string {
+	return []string{"**/Gemfile.lock", "**/package-lock.json", "**/pnpm-lock.yaml", "**/yarn.lock", "**/bun.lock", "**/go.sum",
+		"**/poetry.lock", "**/uv.lock", "**/Pipfile.lock", "**/Cargo.lock", "**/composer.lock"}
+}
+
+// Related is what decides the related PRs of a watch's PR (Config.RelatedFor).
+type Related struct {
+	Lookback time.Duration // a merged PR within it is related
+	Ignore   []string      // path globs that never relate two PRs
+}
+
+// RelatedFor is the related_lookback and related_ignore that apply to w's
+// PRs: the watch's when it sets them (a positive lookback; any list, []
+// included), else [pipeline]'s. A nil w is [pipeline]'s.
+func (c *Config) RelatedFor(w *Watch) Related {
+	r := Related{Lookback: c.Pipeline.RelatedLookback.Duration, Ignore: c.Pipeline.RelatedIgnore}
+	if w != nil && w.RelatedLookback.Duration > 0 {
+		r.Lookback = w.RelatedLookback.Duration
+	}
+	if w != nil && w.RelatedIgnore != nil {
+		r.Ignore = w.RelatedIgnore
+	}
+	if r.Ignore == nil {
+		r.Ignore = []string{}
+	}
+	return r
 }
 
 // Values of [pipeline] judge_own_pass.

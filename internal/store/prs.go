@@ -143,6 +143,11 @@ type GitHubPR struct {
 	// ReviewRequests are the timeline's newest review requests, oldest first
 	// (nil = keep). Not Changed either: a request moves no eligibility.
 	ReviewRequests []ReviewRequest
+	// Files are the Details' changed paths at Files.HeadSHA (nil = keep),
+	// written only when the PR has no list or its list belongs to another
+	// head (pr_files). Not Changed either: the list moves no eligibility
+	// (skip_paths reads its own).
+	Files *PRFiles
 
 	// InitialState and Identity are used only when the PR is new.
 	InitialState string
@@ -173,6 +178,11 @@ func (s *Store) UpsertPRFromGitHub(ctx context.Context, in GitHubPR) (PRUpsert, 
 			id, err := s.insertPR(ctx, tx, in)
 			if err != nil {
 				return err
+			}
+			if in.Files != nil {
+				if err := s.savePRFiles(ctx, tx, id, *in.Files); err != nil {
+					return err
+				}
 			}
 			res.New, res.Changed = true, true
 			res.PR, err = scanPR(tx.QueryRowContext(ctx, "SELECT "+cols("", prColumns)+" FROM prs WHERE id = ?", id))
@@ -226,6 +236,11 @@ func (s *Store) UpsertPRFromGitHub(ctx context.Context, in GitHubPR) (PRUpsert, 
 		setIf("ci_json", in.CI != nil && (cur.CI == nil || !in.CI.equal(*cur.CI)), in.CI)
 		setIf("review_requests_json", in.ReviewRequests != nil && !slices.EqualFunc(in.ReviewRequests, cur.ReviewRequests, ReviewRequest.equal), in.ReviewRequests)
 		setIf("details_at", in.DetailsAt != nil && (len(u.sets) > 0 || cur.DetailsAt == nil), in.DetailsAt)
+		if in.Files != nil {
+			if err := s.savePRFiles(ctx, tx, cur.ID, *in.Files); err != nil {
+				return err
+			}
+		}
 		if len(u.sets) == 0 && u.err == nil {
 			res.PR = cur
 			return nil

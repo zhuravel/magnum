@@ -79,6 +79,10 @@ type prSpec struct {
 	// base is the branch the PR merges into ("" = master); another
 	// feature branch for a stacked PR.
 	base string
+	// files are the paths Details lists for the head (nil = no list);
+	// filesTruncated makes it report a cut-off list (FilesComplete false).
+	files          []string
+	filesTruncated bool
 }
 
 type fakeGH struct {
@@ -368,6 +372,9 @@ func (g *fakeGH) Details(ctx context.Context, owner, repo string, numbers []int)
 				d.ReviewRequests = []github.Reviewer{{Type: "User", Login: "zhuravel"}, {Type: "Team", Login: "engineers"}}
 			}
 			d.ReviewRequestEvents = append([]github.ReviewRequestEvent{}, p.requests...)
+			if p.files != nil {
+				d.Files, d.FilesComplete = slices.Clone(p.files), !p.filesTruncated
+			}
 			out[n] = d
 		}
 		if !found {

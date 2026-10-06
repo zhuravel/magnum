@@ -503,9 +503,21 @@ func (c *Config) validatePipeline() []error {
 			errs = append(errs, fmt.Errorf("%s: judge_own_pass must be %q or %q, got %q", where, OwnPassParallel, OwnPassAfter, v))
 		}
 	}
+	related := func(where string, lookback Duration, ignore []string) {
+		if lookback.Duration < 0 {
+			errs = append(errs, fmt.Errorf("%s: related_lookback must not be negative, got %s", where, lookback.Duration))
+		}
+		for _, g := range ignore {
+			if err := ValidatePathGlob(g); err != nil {
+				errs = append(errs, fmt.Errorf("%s: related_ignore pattern %q: %w", where, g, err))
+			}
+		}
+	}
 	ownPass("pipeline", c.Pipeline.JudgeOwnPass, true)
+	related("pipeline", c.Pipeline.RelatedLookback, c.Pipeline.RelatedIgnore)
 	for _, w := range c.Watches {
 		ownPass("watch "+w.Owner, w.JudgeOwnPass, true)
+		related("watch "+w.Owner, w.RelatedLookback, w.RelatedIgnore)
 	}
 	kinds := c.kinds()
 	for _, name := range c.KindNames() {

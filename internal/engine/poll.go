@@ -513,6 +513,7 @@ func fillDetails(in *store.GitHubPR, d github.PRDetails, logins []string, now ti
 		in.BaseRef = store.Ptr(d.BaseRefName)
 	}
 	in.IsCrossRepo = store.Ptr(d.IsCrossRepository)
+	in.Files = prFiles(d)
 	labels := d.Labels
 	if labels == nil {
 		labels = []string{}
@@ -530,6 +531,15 @@ func fillDetails(in *store.GitHubPR, d github.PRDetails, logins []string, now ti
 		}
 	}
 	in.ReviewRequested = store.Ptr(req)
+}
+
+// prFiles is the registry's file list of the Details' head (the related
+// PRs' paths); nil when GitHub listed none, which keeps the stored one.
+func prFiles(d github.PRDetails) *store.PRFiles {
+	if d.Files == nil || d.HeadRefOid == "" {
+		return nil
+	}
+	return &store.PRFiles{HeadSHA: d.HeadRefOid, Paths: d.Files, Truncated: !d.FilesComplete}
 }
 
 // ciStatus is the registry's view of the Details' head checks.

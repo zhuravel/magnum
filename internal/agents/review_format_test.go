@@ -140,6 +140,7 @@ func TestSkillDescribesEveryMagnumField(t *testing.T) {
 	d.MovedFrom, d.ForcePushed = "/Users/bohdan/Projects/talkable.review1", true
 	d.Readiness = Readiness{Failed: 1, File: "/r/readiness.json", Checks: []ReadinessCheck{
 		{Kind: ReadinessReady, Command: "bin/db-ready", Status: ReadinessFailed, Duration: "1s"}}}
+	d.RelatedPRs = "/r/related.json"
 	skill := string(magnum.Skill)
 	seen := map[string]bool{}
 	// A two-phase round: the candidates phase of each prompt, and the own
@@ -168,7 +169,7 @@ func TestSkillDescribesEveryMagnumField(t *testing.T) {
 			seen[m[1]] = true
 		}
 	}
-	for _, f := range []string{"notes", "notes_dir", "notes_harness", "notes_lock", "notes_unlock", "readiness", "reports", "phase", "own_findings"} {
+	for _, f := range []string{"notes", "notes_dir", "notes_harness", "notes_lock", "notes_unlock", "readiness", "reports", "phase", "own_findings", "related_prs"} {
 		if !seen[f] {
 			t.Errorf("no judge prompt renders `%s`", f)
 		}

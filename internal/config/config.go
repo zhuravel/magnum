@@ -315,6 +315,12 @@ type Watch struct {
 	// JudgeOwnPass overrides [pipeline] judge_own_pass for this watch's PRs
 	// ("" keeps the pipeline's; see Config.JudgeOwnPassFor).
 	JudgeOwnPass string `toml:"judge_own_pass"`
+	// RelatedLookback and RelatedIgnore override [pipeline]
+	// related_lookback and related_ignore for this watch's PRs: a zero
+	// duration or an unset related_ignore keeps the pipeline's, [] ignores
+	// no path. See Config.RelatedFor.
+	RelatedLookback Duration `toml:"related_lookback"`
+	RelatedIgnore   []string `toml:"related_ignore"`
 	// RequestTeams are team slugs whose review requests count like a
 	// request for the poll login (request_debounce); other teams' do not.
 	RequestTeams []string `toml:"request_teams"`
@@ -718,7 +724,7 @@ func Defaults() *Config {
 		Herdr:    Herdr{Socket: "~/.config/herdr/herdr.sock", Notify: true},
 		Terminal: Terminal{App: "Terminal", Session: "default", Mouse: true, Icons: "unicode"},
 		GitHub:   GitHub{Transport: "gh"},
-		Pipeline: Pipeline{PromptsDir: "{{repo}}/prompts", JudgeOwnPass: OwnPassParallel},
+		Pipeline: Pipeline{PromptsDir: "{{repo}}/prompts", JudgeOwnPass: OwnPassParallel, RelatedLookback: Duration{14 * 24 * time.Hour}, RelatedIgnore: DefaultRelatedIgnore()},
 		Usage:    Usage{CodexSoft: 80, CodexHard: 95},
 		Triage:   DefaultTriage(),
 		Learn:    DefaultLearn(),

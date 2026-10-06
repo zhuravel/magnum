@@ -714,6 +714,12 @@ type JudgeData struct {
 	// head short and the round restarted on HeadSHA; the prompt asks it to
 	// reuse what still applies.
 	RestartedFrom string
+	// RelatedPRs is related.json in the report directory: the repository's
+	// other open PRs, and those merged lately, that change the same paths
+	// (numbers, URLs, heads, the shared paths and magnum's reviews of them;
+	// never PR text), rendered as `related_prs`; "" when there is none, and
+	// always in a blind replay.
+	RelatedPRs string
 }
     JudgeData feeds every judge prompt (judge-*.md). Fields a template does not
     use may stay zero.
@@ -2231,6 +2237,10 @@ func DefaultLearnModel(kind string) string
     for, and "" for every other kind, which then runs on its own default model
     (a Claude model name passed to another CLI fails every PR's retro).
 
+func DefaultRelatedIgnore() []string
+    DefaultRelatedIgnore is [pipeline] related_ignore's default: lockfiles,
+    which most dependency changes touch whatever else they do.
+
 func Issue(title string, trackers []Tracker) (key, url string)
     Issue finds the first issue key in title that one of trackers knows
     (leftmost; at one position, the earlier tracker) and returns the key
@@ -2403,6 +2413,11 @@ func (c *Config) ReadinessFor(fullName string) Readiness
     ("owner/name"): each of prepare, ready and ready_timeout from its [[repo]]
     block when the block sets it, else from its [[pool]]; the timeout defaults
     to DefaultReadyTimeout.
+
+func (c *Config) RelatedFor(w *Watch) Related
+    RelatedFor is the related_lookback and related_ignore that apply to w's PRs:
+    the watch's when it sets them (a positive lookback; any list, [] included),
+    else [pipeline]'s. A nil w is [pipeline]'s.
 
 func (c *Config) RepoFor(fullName string) *Repo
     RepoFor returns the [[repo]] block for owner/name, or nil.
@@ -2925,6 +2940,15 @@ type Pipeline struct {
 	// reviewers, for both. A [[watch]] may override it (Watch.JudgeOwnPass);
 	// see Config.JudgeOwnPassFor.
 	JudgeOwnPass string `toml:"judge_own_pass"`
+	// RelatedLookback is how long a merged PR stays related: the judge's
+	// related.json lists the open PRs of the repository and those merged
+	// within it that change the same paths (default 14 days; 0 = open PRs
+	// only). A [[watch]] may override it (Watch.RelatedLookback).
+	RelatedLookback Duration `toml:"related_lookback"`
+	// RelatedIgnore are path globs (see MatchPath) whose paths never make
+	// two PRs related (default DefaultRelatedIgnore, the lockfiles; [] =
+	// none). A [[watch]] may override it (Watch.RelatedIgnore).
+	RelatedIgnore []string `toml:"related_ignore"`
 }
     Pipeline is the [pipeline] section.
 
@@ -3036,6 +3060,12 @@ type Readiness struct {
 }
     Readiness is a repository's verification readiness step: the commands a
     round runs in the checkout before the reviewers (see Pool.Prepare).
+
+type Related struct {
+	Lookback time.Duration // a merged PR within it is related
+	Ignore   []string      // path globs that never relate two PRs
+}
+    Related is what decides the related PRs of a watch's PR (Config.RelatedFor).
 
 type Repo struct {
 	Repo      string            `toml:"repo"`       // owner/name
@@ -3414,6 +3444,12 @@ type Watch struct {
 	// JudgeOwnPass overrides [pipeline] judge_own_pass for this watch's PRs
 	// ("" keeps the pipeline's; see Config.JudgeOwnPassFor).
 	JudgeOwnPass string `toml:"judge_own_pass"`
+	// RelatedLookback and RelatedIgnore override [pipeline]
+	// related_lookback and related_ignore for this watch's PRs: a zero
+	// duration or an unset related_ignore keeps the pipeline's, [] ignores
+	// no path. See Config.RelatedFor.
+	RelatedLookback Duration `toml:"related_lookback"`
+	RelatedIgnore   []string `toml:"related_ignore"`
 	// RequestTeams are team slugs whose review requests count like a
 	// request for the poll login (request_debounce); other teams' do not.
 	RequestTeams []string `toml:"request_teams"`
@@ -5674,6 +5710,12 @@ type PRDetails struct {
 	Deletions    int
 	ChangedFiles int
 	Commits      int
+	// Files are the paths the pull request changes at HeadRefOid, in
+	// GitHub's order: one page of at most 100 (a rename lists its new path
+	// only); nil when GitHub returned no list. FilesComplete is true when
+	// they are every changed file.
+	Files         []string
+	FilesComplete bool
 	// CI is the head commit's checks.
 	CI CIRollup
 }
@@ -8637,6 +8679,9 @@ const PostMergeEvent = "COMMENT"
     PostMergeEvent is the review event of a post-merge round
     (RoundInput.PostMerge), with or without findings.
 
+const RelatedFile = "related.json"
+    RelatedFile is the related PRs' file in the round's report directory.
+
 
 VARIABLES
 
@@ -8795,6 +8840,45 @@ type ReadinessPlan struct {
     ReadinessPlan is a round's readiness step: the repository's commands
     (config.Readiness) and the slot's environment they run with.
 
+type RelatedPR struct {
+	Number   int        `json:"number"`
+	URL      string     `json:"url"`
+	State    string     `json:"state"` // open | merged
+	Draft    bool       `json:"draft,omitempty"`
+	MergedAt *time.Time `json:"merged_at,omitempty"`
+	HeadSHA  string     `json:"head_sha"` // the head its paths were read at
+	// Overlap counts the changed paths both PRs share (related_ignore's
+	// left out); Paths are the first twenty of them, sorted.
+	Overlap int      `json:"overlap"`
+	Paths   []string `json:"paths"`
+	// FilesTruncated: it changes more files than its list holds (100), so
+	// the overlap may be larger.
+	FilesTruncated bool `json:"files_truncated,omitempty"`
+	// Reviewed: magnum reviewed it; ReviewURL and ReviewVerdict are its last
+	// posted review's (store.ReviewSummary), when magnum has its result.
+	Reviewed      bool   `json:"reviewed"`
+	ReviewURL     string `json:"review_url,omitempty"`
+	ReviewVerdict string `json:"review_verdict,omitempty"`
+	// FindingsOnPaths counts the findings magnum posted on it, over all its
+	// rounds, on the shared paths (all of them, not only Paths).
+	FindingsOnPaths int `json:"findings_on_paths"`
+
+	// Has unexported fields.
+}
+    RelatedPR is one related PR of RelatedPRs.
+
+type RelatedPRs struct {
+	PR      string `json:"pr"`       // owner/repo#N
+	HeadSHA string `json:"head_sha"` // the head under review, whose paths were compared
+	// FilesTruncated: this PR changes more files than its list holds (100),
+	// so a PR sharing only a later one is missing.
+	FilesTruncated bool        `json:"files_truncated,omitempty"`
+	MergedSince    time.Time   `json:"merged_since"` // merged PRs from then on count (related_lookback)
+	Related        []RelatedPR `json:"related"`
+	More           int         `json:"more,omitempty"` // related PRs past the cap of ten
+}
+    RelatedPRs is related.json.
+
 type ReviewCommentLister interface {
 	ReviewComments(ctx context.Context, owner, repo string, number int, reviewID int64) ([]github.ReviewComment, error)
 }
@@ -8911,6 +8995,10 @@ type RoundInput struct {
 	// the reviewers. A judge alone (a delta check, a continued turn, a
 	// round without reviewers) gets one prompt either way.
 	OwnPass bool
+	// Related is the PR's watch's related_lookback and related_ignore
+	// (config.Config.RelatedFor): every judge prompt names related.json, the
+	// repository's other PRs that change the same paths (related.go).
+	Related config.Related
 }
     RoundInput describes one round. The slot is already checked out at TargetSHA
     (re-read the slot after slots.Checkout: CheckedOutSHA is the round's
@@ -10574,6 +10662,18 @@ type Event struct {
 }
     Event is one audit-log row (`magnum logs`).
 
+type FilesPR struct {
+	ID          int64
+	Number      int
+	URL         string
+	GHState     string // GHOpen or GHMerged
+	IsDraft     bool
+	MergedAt    *time.Time
+	ReviewedSHA *string // the head magnum last reviewed; nil = never reviewed
+	Files       PRFiles
+}
+    FilesPR is a PR with its stored file list (PRsWithFiles).
+
 type Finding struct {
 	ID         int64     `json:"id"`
 	RunID      string    `json:"run_id"`
@@ -10636,6 +10736,11 @@ type GitHubPR struct {
 	// ReviewRequests are the timeline's newest review requests, oldest first
 	// (nil = keep). Not Changed either: a request moves no eligibility.
 	ReviewRequests []ReviewRequest
+	// Files are the Details' changed paths at Files.HeadSHA (nil = keep),
+	// written only when the PR has no list or its list belongs to another
+	// head (pr_files). Not Changed either: the list moves no eligibility
+	// (skip_paths reads its own).
+	Files *PRFiles
 
 	// InitialState and Identity are used only when the PR is new.
 	InitialState string
@@ -10925,6 +11030,15 @@ type PRAgentTime struct {
 	Rounds int           // the distinct rounds those runs belong to
 }
     PRAgentTime is what one PR's runs cost over a window (AgentTimeSince).
+
+type PRFiles struct {
+	HeadSHA   string    // the head the paths belong to
+	Paths     []string  // never nil once stored
+	Truncated bool      // the PR changes more files than Paths lists
+	FetchedAt time.Time // when the list was written (set by the store)
+}
+    PRFiles is the paths a PR changes at one head (pr_files): the first page of
+    at most 100 that the poller's Details read (a rename lists its new path).
 
 type PRFilter struct {
 	RepoID int64
@@ -11468,10 +11582,23 @@ func (s *Store) PRByID(ctx context.Context, id int64) (PR, error)
 func (s *Store) PRByRepoNumber(ctx context.Context, repoID int64, number int) (PR, error)
     PRByRepoNumber looks up PR #number of repository repoID.
 
+func (s *Store) PRFilesOf(ctx context.Context, prID int64) (PRFiles, bool, error)
+    PRFilesOf returns the PR's stored file list; ok is false when it has none.
+
+func (s *Store) PRsWithFiles(ctx context.Context, repoID, except int64, mergedSince time.Time) ([]FilesPR, error)
+    PRsWithFiles returns the PRs of the repository that have a file list and are
+    open (drafts included) or were merged at or after mergedSince, except the PR
+    except, by number.
+
 func (s *Store) PendingRequests(ctx context.Context, limit int) ([]Request, error)
     PendingRequests returns up to limit pending requests, oldest first (limit <=
     0 = all), so a consumer can skip a request it already handed to a background
     worker.
+
+func (s *Store) PostedFindingPaths(ctx context.Context, prIDs []int64) (map[int64]map[string]int, error)
+    PostedFindingPaths returns, per PR of prIDs that has any, how many findings
+    magnum posted on each path over all its rounds (findings without a path and
+    rejected candidates excluded).
 
 func (s *Store) ProposalMisses(ctx context.Context, id int64) ([]ProposalMiss, error)
     ProposalMisses lists what proposal id did with the misses it was given,

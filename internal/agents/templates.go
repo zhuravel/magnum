@@ -296,6 +296,12 @@ type JudgeData struct {
 	// head short and the round restarted on HeadSHA; the prompt asks it to
 	// reuse what still applies.
 	RestartedFrom string
+	// RelatedPRs is related.json in the report directory: the repository's
+	// other open PRs, and those merged lately, that change the same paths
+	// (numbers, URLs, heads, the shared paths and magnum's reviews of them;
+	// never PR text), rendered as `related_prs`; "" when there is none, and
+	// always in a blind replay.
+	RelatedPRs string
 }
 
 // Judge phases of JudgeData.Phase.

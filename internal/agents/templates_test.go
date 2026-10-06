@@ -282,6 +282,12 @@ func TestRenderGolden(t *testing.T) {
 	}
 	noOwn := candidates(judgeFixture())
 	noOwn.OwnFindingsMissing = true
+	// The related PRs: every judge prompt names related.json when the
+	// repository has any (never in a blind replay: the pipeline writes none).
+	withRelated := func(d JudgeData) JudgeData {
+		d.RelatedPRs = ownDir + "related.json"
+		return d
+	}
 
 	cases := []struct {
 		golden, name string
@@ -297,6 +303,11 @@ func TestRenderGolden(t *testing.T) {
 		{"judge_own_pass_blind", "judge-own-pass.md", ownBlind},
 		{"judge_own_pass_dry_run", "judge-own-pass.md", ownDryRun},
 		{"judge_own_pass_restart", "judge-own-pass.md", ownRestart},
+		{"judge_own_pass_related", "judge-own-pass.md", withRelated(ownPass("initial"))},
+		{"judge_initial_related", "judge-initial.md", withRelated(judgeFixture())},
+		{"judge_recovery_candidates_related", "judge-recovery.md", withRelated(candidates(judgeFixture()))},
+		{"judge_rereview_delta_check_related", "judge-rereview.md", withRelated(deltaCheck)},
+		{"judge_continue_related", "judge-continue.md", withRelated(withNotes)},
 		{"judge_initial_candidates", "judge-initial.md", candidates(judgeFixture())},
 		{"judge_initial_candidates_no_own", "judge-initial.md", noOwn},
 		{"judge_rereview_candidates", "judge-rereview.md", candidates(withNotes)},

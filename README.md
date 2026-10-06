@@ -516,6 +516,23 @@ with what the stage found (the judge's own pass included while it works), and a 
 gets a `round.checkout_dirty` warning and the checkout reset to the PR head (`git reset --hard`, `git
 clean -fd`) before anything else runs on it.
 
+The judge also knows the repository's other PRs on the same files, since a round otherwise sees only its
+own PR (two open PRs fixing one flaky spec in different ways went unnoticed). The Details the poll reads
+for a changed PR carry its changed paths (GitHub's first 100; a longer list is marked truncated), which
+the registry keeps per PR with the head they belong to, refreshed only when the head moves and kept after
+the PR merges. Every judge prompt (the own pass, the candidates phase, a round's one prompt, a delta
+check) then names `related.json` in the report directory as `related_prs`, when there is any: the open
+PRs (drafts included) and those merged within `[pipeline] related_lookback` (14 days) whose paths overlap
+the PR's at the head under review, paths matching `related_ignore` (lockfiles by default) aside, a
+`[[watch]]` may set both. They are ranked by shared paths, at most 10 with 20 paths each, and each has its
+number, URL, state (and merge time), head, the shared paths, whether Magnum reviewed it with its last
+review's URL and verdict, and how many findings Magnum posted on those paths; no titles, bodies or
+comments (the judge reads a PR itself with `gh` when it matters). The skill has the judge name an open PR
+that changes the same behaviour (a duplicate or competing fix, conflicting edits, one needing the other)
+in one line of its review, raise a finding only when merging both provably breaks something, check that
+the PR does not undo what a recently merged one fixed, and record a flaky-test or recurring-bug pattern
+in the repository notes. A blind replay (`magnum eval`) never gets the file: it would tell of later PRs.
+
 A session role's turn ends when herdr shows its agent idle on two ticks in a row. Claude Code also ends
 its turn while work it started in the background runs (a command run in the background or moved there by
 its timeout, an asynchronous subagent, a skill forked into the background such as `/code-review`) and

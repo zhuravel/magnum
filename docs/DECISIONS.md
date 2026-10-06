@@ -2251,3 +2251,48 @@ editing history. Code, config comments and prompts reference these by their head
   turn after a daemon restart during the own pass (the continue prompt would have it post without the
   reviewers' reports); skipping the candidates prompt when the own pass hit a usage limit (the paused round's
   continue prompt names no reports, so the judge would never see them).
+- **The judge knows the related PRs** (2026-10-06). Two open PRs of one repository fixed the same flaky spec in
+  different ways; the author found out by chance and reverted one, while magnum reviewed both and said nothing,
+  because a round sees only its own PR. A PR that touches lines another PR just fixed can undo that fix too. The
+  Details the poll already reads for a changed PR now carry `files(first: 100) { totalCount pageInfo {
+  hasNextPage } nodes { path } }` (`github.PRDetails.Files`, `FilesComplete`; `files: null` reads as no list).
+  GitHub's dry run (`rateLimit(dryRun: true)`) priced the Details batch of 1, 10, 20 and 40 PRs at 1, 1, 1 and 3
+  points without the files and 1, 1, 2 and 3 with them: at most one point more per poll, usually none, and 100
+  nodes per PR. A PR with more than 100 files is not paged: a second page would be a query of its own (a point)
+  for every head of such a PR, so its list is marked truncated instead and the judge sees the flag. The registry
+  keeps one row per PR in `pr_files` (migration 0016: `head_sha`, `paths_json`, `truncated`, `fetched_at`),
+  written in the upsert's transaction only when the PR has no list or its list belongs to another head, never
+  counted as a GitHub change, kept after the PR closes or merges (with `merged_at` in `prs`); the migration
+  clears the open PRs' `details_at`, so the next poll fetches their lists once. At the start of every judge
+  prompt (the own pass and the candidates phase alike, a round's one prompt, a delta check, a continued turn)
+  the pipeline reads the PR's list at the head under review and the repository's other PRs with a list that are
+  open (drafts included) or merged within `[pipeline] related_lookback` (default 14d), leaves out the paths
+  matching `related_ignore` (path globs as `skip_paths`; default the lockfiles: `Gemfile.lock`,
+  `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `bun.lock`, `go.sum`, `poetry.lock`, `uv.lock`,
+  `Pipfile.lock`, `Cargo.lock`, `composer.lock`), and ranks those sharing a path by the number they share, then
+  the newest PR: at most 10, each with at most 20 of its shared paths. When any is left it writes `related.json`
+  in the report directory (the PR, its head, its truncated flag, the lookback's start, and per related PR its
+  number, URL, `open` or `merged` with `merged_at`, the draft flag, the head its paths were read at, the overlap
+  count and paths, its truncated flag, whether magnum reviewed it with its last posted review's URL and verdict,
+  and the findings magnum posted on the shared paths over all its rounds; `more` counts the PRs past the cap) and
+  the prompt's `<magnum>` block carries `related_prs: <path>`; with none, no field and no file. No titles, bodies
+  or comments: PR text is data, and the judge reads a PR itself with `gh` when it matters. A blind replay never
+  gets it (it would tell of later PRs); a PR without a list for the head under review gets none (the poll writes
+  one with the head's Details; a forced `magnum review` that starts before them goes without). A
+  `[[watch]]` may set both keys (a zero `related_lookback` or an unset `related_ignore` keeps the pipeline's,
+  `[]` ignores no path; `related_lookback = "0s"` in `[pipeline]` keeps only open PRs). SKILL.md lists
+  `related_prs` in section 0, and section 2 says what to do with it: an open PR changing the same behaviour (a
+  duplicate or competing fix, conflicting edits, one needing the other) gets one line in the review body naming
+  it, a finding only when merging both provably breaks something; for a merged one, check this PR does not undo
+  or re-break its fix; a fix of a flaky test or a recurring bug class goes into the notes as a pattern. Section
+  7 places that line after the finding titles. It goes from 30,832 to 30,836 bytes under the unchanged 30,844
+  cap: the frontmatter no longer names the identity kinds, the PR boundary's prohibitions are one sentence,
+  section 6 no longer repeats `moved_from`'s "work only in `checkout`" (the re-review prompt says it), section
+  7's machine failures and section 8's provenance fields point to where they are said already, and the skill no
+  longer describes what `post_review` checks or repeats when to update the notes. `round.related` events name
+  the related PRs. Rejected: paging the files (a query per page and head for a rare case); a table of one row
+  per path (the candidates are the repository's open and lately merged PRs, a few hundred rows read at most);
+  the PR's own paths from `git diff` in the checkout (a second source; the poll's list is at the head a round
+  reviews, and a restart moves both); the REST file list `skip_paths` reads (a call per PR; it stays for
+  `skip_paths`, which needs a rename's old name and three pages); the related PRs in `prs --json` or on the PR
+  card (`prs --json` mirrors the board's row, and a board layout change needs a mockup first).

@@ -23,6 +23,9 @@ notes_harness:{{range $i, $f := .NotesHarness}}{{if $i}},{{end}} {{$f}}{{end}}{{
 notes_lock: {{.NotesLockCommand}}
 notes_unlock: {{.NotesUnlockCommand}}
 {{- end}}
+{{- if .RelatedPRs}}
+related_prs: {{.RelatedPRs}}
+{{- end}}
 result_file: {{.ResultFile}}
 post_review: {{.PostReviewCommand}}
 dry_run: {{.DryRun}}

@@ -308,6 +308,10 @@ type RoundInput struct {
 	// the reviewers. A judge alone (a delta check, a continued turn, a
 	// round without reviewers) gets one prompt either way.
 	OwnPass bool
+	// Related is the PR's watch's related_lookback and related_ignore
+	// (config.Config.RelatedFor): every judge prompt names related.json, the
+	// repository's other PRs that change the same paths (related.go).
+	Related config.Related
 }
 
 // Switched is the checkout after RoundInput.Switch.

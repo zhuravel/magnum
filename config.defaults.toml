@@ -180,6 +180,11 @@ prompts_dir = "{{repo}}/prompts"  # a prompt name reads prompts_dir/<name>, else
 judge_own_pass = "parallel"       # the judge does its own pass (its own_pass prompt) while the reviewers work
                                   # and judges their reports once both ended; "after": one judge prompt after
                                   # the reviewers. A judge alone (delta check, continue) gets one prompt anyway
+related_lookback = "14d"          # every judge prompt names related.json: the repository's open PRs, and those
+                                  # merged within this long, that change this PR's paths ("0s": open PRs only)
+related_ignore = ["**/Gemfile.lock", "**/package-lock.json", "**/pnpm-lock.yaml", "**/yarn.lock", "**/bun.lock",
+                  "**/go.sum", "**/poetry.lock", "**/uv.lock", "**/Pipfile.lock", "**/Cargo.lock", "**/composer.lock"]
+                                  # paths that never make two PRs related (globs as skip_paths); [] = none
 
 # Agent CLIs: codex, claude, droid and omp are built in (values below are their defaults); every key is
 # optional and overrides only itself. Any other herdr agent kind (pi, gemini, ...) can be declared too.
@@ -376,6 +381,8 @@ aliases = ["simplify"]
 # rereview_min_lines = 0                # overrides [daemon] rereview_min_lines / rereview_max_wait (0: no threshold)
 # delta_check = false                   # overrides [daemon] delta_check (false: a small delta waits for a full round)
 # judge_own_pass = "after"              # overrides [pipeline] judge_own_pass ("after": one judge prompt after the reviewers)
+# related_lookback = "30d"              # overrides [pipeline] related_lookback / related_ignore ([] = ignore no path)
+# related_ignore = ["**/*.lock", "db/schema.rb"]
 # request_teams = ["backend"]           # review requests for these team slugs start a round like one for you
 # roles = ["codex-judge", "claude-review", "codex-review", "claude-simplify"]   # omitted or [] = every [[role]]
 # trackers = ["https://linear.app/your-org/issue/PR-{num}"]   # [board] trackers for this owner's PRs: an issue key

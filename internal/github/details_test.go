@@ -429,6 +429,44 @@ func TestDetailsCIFixture(t *testing.T) {
 	}
 }
 
+// details_files.json is synthetic, in the shape GitHub answers the fragment
+// with: #201 lists its three files, #202 (a draft) more than one page of
+// them, #203 none, and #204 came back without a list (files: null).
+func TestDetailsReadsChangedFilePaths(t *testing.T) {
+	f := &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"gh", "api", "graphql"}, Result: execx.Result{Stdout: fixture(t, "details_files.json")}}}}
+	got, missing, err := (&Client{Run: f}).Details(context.Background(), "talkable", "talkable", []int{201, 202, 203, 204})
+	if err != nil || len(missing) != 0 || len(got) != 4 {
+		t.Fatalf("got %d, missing %v, err %v", len(got), missing, err)
+	}
+	q := oneLine(decodeReq(t, f.Calls[0]).Query)
+	if want := "files(first: 100) { totalCount pageInfo { hasNextPage } nodes { path } }"; !strings.Contains(q, want) {
+		t.Errorf("query lacks %q: %s", want, q)
+	}
+	if d := got[201]; !reflect.DeepEqual(d.Files, []string{"Gemfile.lock", "app/models/order.rb", "spec/models/order_spec.rb"}) || !d.FilesComplete {
+		t.Errorf("#201 files = %v complete %v", d.Files, d.FilesComplete)
+	}
+	if d := got[202]; !reflect.DeepEqual(d.Files, []string{"app/a.rb", "app/b.rb"}) || d.FilesComplete {
+		t.Errorf("#202 (a second page) files = %v complete %v", d.Files, d.FilesComplete)
+	}
+	if d := got[203]; d.Files == nil || len(d.Files) != 0 || !d.FilesComplete {
+		t.Errorf("#203 (no files) = %#v complete %v: want an empty, non-nil list", d.Files, d.FilesComplete)
+	}
+	if d := got[204]; d.Files != nil || d.FilesComplete {
+		t.Errorf("#204 (files: null) = %#v complete %v: want no list", d.Files, d.FilesComplete)
+	}
+
+	// A fixture captured before the field existed reads as no list.
+	old := &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"gh", "api", "graphql"},
+		Result: execx.Result{Stdout: fixture(t, "details.json"), Stderr: fixture(t, "details.stderr"), Code: 1}}}}
+	prev, _, err := (&Client{Run: old}).Details(context.Background(), "talkable", "talkable", []int{11975})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := prev[11975]; d.Files != nil || d.FilesComplete {
+		t.Errorf("absent files = %#v complete %v", d.Files, d.FilesComplete)
+	}
+}
+
 func TestCheckStateNormalization(t *testing.T) {
 	runs := map[string][][2]string{ // want -> status, conclusion
 		CheckPassed:  {{"COMPLETED", "SUCCESS"}, {"COMPLETED", "NEUTRAL"}},
