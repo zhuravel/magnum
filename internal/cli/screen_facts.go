@@ -3,8 +3,9 @@ package cli
 // What the titles of the dashboard and the PR board say about the daemon
 // (tui.DaemonFacts): an older build running, a pause and the review requests
 // it holds, a drain, the PRs magnum approved that wait for the operator's
-// approval, the Codex budget's pace when it reaches a cap before the window
-// resets, and the notes curation proposals waiting for review.
+// approval and those magnum approved as the operator, the Codex budget's
+// pace when it reaches a cap before the window resets, and the notes
+// curation proposals waiting for review.
 // Both screens read them from the registry with every refresh, without
 // launchctl or herdr.
 
@@ -53,8 +54,19 @@ func screenFacts(ctx context.Context, d statusDeps) tui.DaemonFacts {
 	if n, err := d.Store.CountNotesProposals(ctx, store.ProposalPending); err == nil {
 		f.NotesProposals = n
 	}
+	approved := map[int64]bool{} // approved as the operator: they are not needed
+	if list, err := d.Store.StandingAutoApprovals(ctx); err == nil {
+		f.AutoApproved = len(list)
+		for _, a := range list {
+			approved[a.PRID] = true
+		}
+	}
 	if list, err := d.Store.NeedsMePRs(ctx, d.Config.CommentsWhenClean, d.Config.SelfMatch()); err == nil {
-		f.NeedsMe = len(list)
+		for _, n := range list {
+			if !approved[n.PR.ID] {
+				f.NeedsMe++
+			}
+		}
 	}
 	return f
 }

@@ -70,6 +70,18 @@ type prsJSONRow struct {
 	// (your changes request is the only one); "" otherwise.
 	NeedsMe        string `json:"needs_me"`
 	ReviewDecision string `json:"review_decision"` // GitHub's: APPROVED, CHANGES_REQUESTED, REVIEW_REQUIRED; "" when none is required or not read yet
+	// AutoApproved is the approval magnum posted as you that stands
+	// ([[watch]] auto_approve); null when none. AutoApproveStopped is why
+	// magnum no longer approves the PR as you; "" when it may.
+	AutoApproved       *prsJSONAutoApproval `json:"auto_approved"`
+	AutoApproveStopped string               `json:"auto_approve_stopped"`
+}
+
+type prsJSONAutoApproval struct {
+	ReviewID int64     `json:"review_id"`
+	Head     string    `json:"head"`
+	URL      string    `json:"url"`
+	At       time.Time `json:"at,omitzero"`
 }
 
 type prsJSONBadge struct {
@@ -241,7 +253,10 @@ func prsJSONOf(r tui.PRBoardRow) prsJSONRow {
 		Progress: mapPtr(r.Progress, prsJSONProgressOf), Spend: mapPtr(r.Spend, prsJSONSpendOf), Wait: r.Wait, WaitDetail: r.WaitDetail, DeltaCheck: r.DeltaCheck, Note: r.Note,
 		RequestedToMe: mapPtr(r.RequestedToMe, prsJSONRequestOf), LastRequest: mapPtr(r.LastRequest, prsJSONRequestOf),
 		Requests: mapList(r.Requests, prsJSONRequestOf), ClosedAt: r.ClosedAt, Recent: r.Recent, MergedUnreviewed: r.MergedUnreviewed, FlagDismissed: r.FlagDismissed,
-		NeedsMe: r.NeedsMe, ReviewDecision: r.ReviewDecision,
+		NeedsMe: r.NeedsMe, ReviewDecision: r.ReviewDecision, AutoApproveStopped: r.AutoStopped,
+		AutoApproved: mapPtr(r.AutoApproved, func(a tui.AutoApproval) prsJSONAutoApproval {
+			return prsJSONAutoApproval{ReviewID: a.ReviewID, Head: a.Head, URL: a.URL, At: a.At}
+		}),
 	}
 }
 

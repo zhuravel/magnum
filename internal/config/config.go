@@ -324,6 +324,18 @@ type Watch struct {
 	// RequestTeams are team slugs whose review requests count like a
 	// request for the poll login (request_debounce); other teams' do not.
 	RequestTeams []string `toml:"request_teams"`
+	// AutoApprove names the watch's repositories (names, any case, or "*"
+	// for every one it covers) on whose PRs magnum posts an approval as
+	// AutoApproveAs once its own review of the head found nothing that must
+	// be fixed before merging (engine autoapprove.go); empty = never (the
+	// default). AutoApproveAs is an [[identity]] of kind gh: the operator's
+	// own account, whose approval GitHub counts (an App's does not).
+	AutoApprove   []string `toml:"auto_approve"`
+	AutoApproveAs string   `toml:"auto_approve_as"`
+	// AutoApproveBody is the approval's one-line body, a template of
+	// AutoApproveData (nil = DefaultAutoApproveBody); magnum appends its
+	// marker.
+	AutoApproveBody *string `toml:"auto_approve_body"`
 }
 
 // TrivialDeltas is the skip_trivial_deltas that applies to w's PRs: the

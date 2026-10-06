@@ -458,6 +458,61 @@ before it hands a person a free slot. `reset_db_on_schema_change = false` on the
 directories, such as `["docs/**", "**/*.md"]`) skips a PR whose changed files all match, while a forced
 `magnum review` still runs it. See the comments in `config.defaults.toml` for every key.
 
+#### Approving as you
+
+GitHub does not count a GitHub App's approval toward a branch's required approvals, so a PR Magnum found
+clean still waits for yours. A watch can let Magnum post your own approval on the repositories it names
+(off by default):
+
+```toml
+[[watch]]
+owner = "talkable"
+include = ["talkable"]
+identity = "reviewer-app"
+auto_approve = ["talkable"]        # repository names of the watch, or ["*"]
+auto_approve_as = "me"             # an identity of kind gh: your own account
+# auto_approve_body = "Approved after magnum's review of {{.Short}}."   # one line; magnum adds its marker
+```
+
+Magnum approves as `auto_approve_as`, on the head it reviewed, only when all of these hold:
+
+- its latest verified review is of the PR's current head and leaves nothing to fix before merging: no
+  P0, P1 or P2 finding, still-open earlier ones included (P3 findings and simplifications are optional).
+  With earlier findings still open, whose priorities the judge's result does not give, the review's
+  verdict line decides (`No blocking problems.`, `No problems found…`, `No new problems since…`); a
+  line it does not know is not clean;
+- the PR is open, not a draft, not muted, not yours, and no round is due or running on it; a dry run or
+  a post-merge review never approves;
+- on GitHub (read just before posting) you have not approved that head, have no review in progress, and
+  have not reviewed the PR by hand.
+
+The body is one line, `Auto-approved: magnum's review of `<sha7>` found no blocking problems ([review](<url>)).`
+(or `auto_approve_body`, a template of `.Short`, `.SHA`, `.ReviewURL`, `.Repo` and `.Number`), with a hidden
+`<!-- magnum:auto-approval head=<sha7> -->` marker Magnum knows its approvals by. One approval per review:
+a post GitHub refuses (403, 422) is not tried again for that review, another failure is tried again after
+5 minutes (three posts at most), and one whose answer was lost is found on GitHub instead of posted twice.
+
+New commits alone leave the approval standing (the repository decides about stale approvals): the next
+review decides. One that leaves something to fix, on any head, withdraws it (Magnum dismisses it as you:
+"magnum's review of <sha7> found blocking problems; this automatic approval is withdrawn ([review](<url>))."),
+a clean one leaves it standing without a second approval, and a clean review after a withdrawal approves
+again.
+
+Your word wins, for good on that PR: once you review it by hand (an approval, a comment or a changes
+request; one you post with `magnum approve` or `magnum request-changes` counts as yours), or you or anyone
+else dismisses one of these approvals, Magnum stops approving that PR as you, and your changes request shows
+as `✓ lift your ✗` instead. `magnum review` does not change that; `magnum unapprove --resume <ref>` does
+(only what you do from then on counts). GitHub dismissing it as stale on a push does not stop it.
+`magnum unapprove <ref>` (y/N on a terminal) and the board's `D` (y/N) withdraw a standing approval and stop
+it too.
+
+You see every one: a toast per approval ("approved as you: talkable#12001", with the link) and per
+withdrawal, `✓ auto` in the board's STATE and "N auto-approved" in the titles, the card, `magnum prs
+--auto-approved`, and "approvals: auto-approved: N today, M standing" in `magnum status`. Each post and
+withdrawal is a row of the registry's `auto_approvals` with begin, ok and fail events
+(`review.auto_approve_begin`, `review.auto_approved`, `review.auto_approve_failed`,
+`review.auto_approval_withdraw_begin`, `review.auto_approval_withdrawn`, `review.auto_approval_withdraw_failed`).
+
 ### Roles and kinds: the review pipeline
 
 The pipeline is data. Each `[[role]]` is a pane: which agent runs it, with which prompt, model,
@@ -787,7 +842,7 @@ Fix 1 problem before merging. 1 optional: 1 simplification.
 | Command | What it does |
 |---|---|
 | `magnum init [--force]` | Write `~/.config/magnum/config.toml` for this machine from three questions: your gh login, one repository, who posts (your login or a GitHub App). |
-| `magnum prs [--repo …] [--view all\|magnum\|mine\|ready] [--sort updated\|last-review\|reviewer-activity\|requested\|changes\|state] [--all] [--needs-me] [--json]` | The PR board: every watched PR with its last review, each reviewer's verdict (with staleness), when a review was last requested (and whether of you), what changed since the last review, assignees; then the PRs merged or closed in the last day (`[board] recent_closed`), flagging one merged before Magnum reviewed its last push. `--view` keeps what Magnum reviewed, what is yours or what is ready to merge. Live screen on a terminal, table or JSON otherwise: snake_case keys, times in RFC 3339 (left out while unset), durations in seconds (`total_seconds`, `duration_seconds`), `null` for a part a PR has none of and `[]` for an empty list; UPDATED is `activity_at`, the PR's last activity, and GitHub's own updatedAt is `github_updated_at`. `--needs-me` lists only the PRs Magnum approved that GitHub still blocks on your approval (below); `needs_me` (`approve`, `lift` or `""`) and `review_decision` (GitHub's) say it in the JSON. |
+| `magnum prs [--repo …] [--view all\|magnum\|mine\|ready] [--sort updated\|last-review\|reviewer-activity\|requested\|changes\|state] [--all] [--needs-me] [--auto-approved] [--json]` | The PR board: every watched PR with its last review, each reviewer's verdict (with staleness), when a review was last requested (and whether of you), what changed since the last review, assignees; then the PRs merged or closed in the last day (`[board] recent_closed`), flagging one merged before Magnum reviewed its last push. `--view` keeps what Magnum reviewed, what is yours or what is ready to merge. Live screen on a terminal, table or JSON otherwise: snake_case keys, times in RFC 3339 (left out while unset), durations in seconds (`total_seconds`, `duration_seconds`), `null` for a part a PR has none of and `[]` for an empty list; UPDATED is `activity_at`, the PR's last activity, and GitHub's own updatedAt is `github_updated_at`. `--needs-me` lists only the PRs Magnum approved that GitHub still blocks on your approval (below); `needs_me` (`approve`, `lift` or `""`) and `review_decision` (GitHub's) say it in the JSON. `--auto-approved` lists only the PRs Magnum approved as you (Approving as you); `auto_approved` (its `review_id`, `head`, `url` and `at`, or `null`) and `auto_approve_stopped` (why Magnum no longer approves the PR as you, or `""`) say it in the JSON, `auto-approved` in the printed STATE. |
 | `magnum status [<ref>\|<slot>] [--all] [--sizes] [--json] [--watch]` | Daemon, slots, queue, pauses; a PR's detail card with its review history and the last round's stage timings. The codex line says how fast the Codex budget is spent, the share used over the share of the window elapsed, and when `[usage]` codex_soft and codex_hard come at that pace if before the reset ("pace 2.8x: 80% Oct 7 13:30, 95% Oct 8 09:10"; `pace`, `soft_at` and `hard_at` in the JSON); the daemon toasts once per window when codex_soft would come before the reset (not in the window's first tenth, when one burst is no pace). The notes line sums up the repositories with notes, the proposals to review and those past a limit (`magnum notes` lists them). `--watch` is the live dashboard (`tab` flips to the PR board). |
 | `magnum stats [--since 7d] [--repo owner/name] [--json]` | Review statistics per local day and repository over a window (`--since` takes `7d`, `36h`, `90m` or a date; default 7d): rounds started and how they ended, findings posted by priority, median and p90 durations per role and per round, how many findings each source raised, had posted, had posted alone or had rejected (with reason codes), model switches, denied prompts and round restarts, and the top 10 PRs by agent time (the sum of their runs' durations in the window, the rounds and the share of all agent time; `top_prs` in the JSON), so a PR burning the budget can be muted. |
 | `magnum eval run\|score\|list\|show` | Measure a prompt, skill or model change: `run` replays the PRs with known defects in `~/.config/magnum/eval.toml` (see `eval.toml.example`) at their pinned heads as blind dry runs and reports, per case, the seeded defects the planned review found, at what severity, and its other findings (noise), next to the previous run. `score` re-scores a run after a match rule is fixed, without the agents. |
@@ -803,6 +858,7 @@ Fix 1 problem before merging. 1 optional: 1 simplification.
 | `magnum pin\|unpin\|release\|mute\|unmute <ref>` | Hold a PR's slot and sessions, hand them back, stop automation for a PR (on a merged PR `mute` dismisses its merged-unreviewed flag and `unmute` restores it). |
 | `magnum abort <ref>` | Kill a PR's running (or paused) review: its agents are interrupted, its runs abandoned, its sessions parked and a pool slot handed back. A review that waits in line (one `magnum review` asked for, or an automatic one) is taken back before it starts: its forced mark and what it asked for go, and nothing else is touched. The PR returns to reviewed (or baseline) until the next push. |
 | `magnum approve <ref> [-m TEXT] [--force]`, `magnum request-changes <ref> [-m TEXT] [--force]` | Your own verdict on the head magnum reviewed, posted by the daemon as the PR's posting identity with a body that names magnum's review and its findings: for repositories where magnum only comments, or when you decide differently. The head must still be the reviewed one unless `--force`. A manual approval follows the head like magnum's own; magnum's later rounds never dismiss a manual verdict as their own stale review. Board keys `A` and `C`. |
+| `magnum unapprove <ref> [--resume] [--yes] [--json]` | Withdraw the approval Magnum posted as you on the PR (Approving as you), dismissing it as you, and stop it approving that PR as you; without one standing it only stops it. Asks y/N on a terminal. `--resume` lets Magnum approve the PR as you again; your reviews from before then no longer stop it. Board key `D`. |
 | `magnum ignore <ref>` | Abort, then mute the PR as ignored and free its slot: the daemon never queues it again until `magnum unmute <ref>`, which undoes the ignore. |
 | `magnum notes [--json]` | Every repository with notes, one row each: the notes' size and lines and the harness's files and size (`!` marks what is past a `[notes]` curation trigger), when they changed and by whom (`judge #11940`, curation, human, import), and the state: ok, over limit (which triggers), curation running, curation queued, proposal N to review, or proposal N stale (the notes changed since it was made); a hint under the table says what to run for each (see Repository notes). |
 | `magnum notes <repo> [--edit \| --log \| --diff [N] \| --curate \| --review [--reason …] \| --restore <version>] [--json]` | The repository notes every role reads first and the judge rewrites after a round that taught it something (`~/.local/share/magnum/notes/<owner>/<repo>.md`): what the repo is, how to test and QA it, known pitfalls; on stderr their sizes against the `[notes]` curation triggers, the unused harness files and a waiting proposal (marked when stale). `--log` and `--diff` read the history the registry keeps, `--curate` asks for a curation (queued while a round of the repository is in its judge stage or another curation runs), `--review` applies (y) or rejects (n) a proposal, a stale one merged with the notes' changes since or followed up by a new curation (c, or y when they conflict), `--restore` proposes an earlier version (see Repository notes). |
@@ -888,6 +944,11 @@ false` keeps it still; with `NO_COLOR` or a terminal without colors it is bold r
 sort lists these PRs first, the titles of the board and the status dashboard count them ("3 need your
 ✓"), `magnum prs --needs-me` lists only them (`needs-you` and `lift-yours` in the printed STATE),
 `magnum pick` marks them, and the daemon toasts each once per head with its link (`[herdr] notify`).
+
+A PR Magnum approved as you (Approving as you) reads `✓ auto` in STATE, in a cyan pill that does not
+shimmer, instead of `✓ needs you`; the titles count them ("2 auto-approved"), the card says which head was
+approved and when, or why Magnum no longer approves the PR as you, `magnum pick` marks them `✓ auto`, and
+`D` withdraws the approval after a y/N (as `magnum unapprove`).
 
 CI shows the head's checks: the repository's required checks when it has some (read from GitHub's
 rulesets, or `[[repo]] required_checks`; `✗ Completion`, `– Completion not run` when it never ran on the

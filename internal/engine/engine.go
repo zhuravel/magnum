@@ -285,6 +285,11 @@ type Engine struct {
 	// needsMe are the toast keys of the PRs that need the operator offered
 	// to the batcher in this run (needs_me.go).
 	needsMe map[string]bool
+	// autoSeen and autoFollow remember, by PR and by automatic approval,
+	// what auto-approval last read GitHub's reviews for (autoapprove.go): a
+	// PR whose latest round and updatedAt did not move since is not asked
+	// again. Tick goroutine only.
+	autoSeen, autoFollow map[int64]string
 
 	infraMu  sync.Mutex // infrastructure failures (infra.go)
 	depsFail depsFailure
@@ -643,6 +648,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	e.maybeReconcile(ctx)
 	e.maybeRetro(ctx)
 	e.maybeCurate(ctx)
+	e.autoApprove(ctx) // before noteNeedsMe: a PR approved as the operator no longer needs them
 	e.noteNeedsMe(ctx)
 	e.surface(ctx)
 	return errors.Join(errs...)

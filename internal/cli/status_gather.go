@@ -47,6 +47,7 @@ func statusGather(ctx context.Context, d statusDeps, o statusOptions) (statusRep
 	statusGatherUsage(d, kv, &r)
 	statusGatherRetro(ctx, d, kv, &r)
 	statusGatherNotes(ctx, d, &r)
+	statusGatherAutoApproved(ctx, d, &r)
 	statusGatherPauses(d, kv, &r)
 	statusGatherDisk(d, &r)
 	if err := statusGatherPRs(ctx, d, now, &r); err != nil {
@@ -228,6 +229,27 @@ func statusGatherNotes(ctx context.Context, d statusDeps, r *statusReport) {
 	}
 	if len(rows) > 0 {
 		r.Notes = &statusNotes{Line: notesSummaryLine(rows), Repos: rows}
+	}
+}
+
+// statusGatherAutoApproved counts the approvals magnum posted as the
+// operator today and those standing, when a watch auto-approves or there
+// are some.
+func statusGatherAutoApproved(ctx context.Context, d statusDeps, r *statusReport) {
+	t := r.GeneratedAt.Local()
+	midnight := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
+	today, err := d.Store.CountAutoApprovedSince(ctx, midnight)
+	if err != nil {
+		r.Warnings = append(r.Warnings, "auto-approvals: "+err.Error())
+		return
+	}
+	standing, err := d.Store.StandingAutoApprovals(ctx)
+	if err != nil {
+		r.Warnings = append(r.Warnings, "auto-approvals: "+err.Error())
+		return
+	}
+	if today > 0 || len(standing) > 0 || (d.Config != nil && d.Config.AutoApproves()) {
+		r.AutoApproved = &statusAutoApproved{Today: today, Standing: len(standing)}
 	}
 }
 

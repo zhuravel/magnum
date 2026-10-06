@@ -1,0 +1,43 @@
+{
+  "data": {
+    "rateLimit": {
+      "limit": 5000,
+      "cost": 1,
+      "remaining": 4960,
+      "used": 40,
+      "resetAt": "2026-10-06T21:50:10Z"
+    },
+    "repository": {
+      "pullRequest": {
+        "timelineItems": {
+          "nodes": [
+            {
+              "createdAt": "2026-10-06T10:00:00Z",
+              "actor": { "login": "zhuravel", "__typename": "User" },
+              "review": { "databaseId": 7001 },
+              "pullRequestCommit": null
+            },
+            {
+              "createdAt": "2026-10-06T11:00:00Z",
+              "actor": { "login": "alice", "__typename": "User" },
+              "review": { "databaseId": 7002 },
+              "pullRequestCommit": { "commit": { "oid": "c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1" } }
+            },
+            {
+              "createdAt": "2026-10-06T12:00:00Z",
+              "actor": null,
+              "review": null,
+              "pullRequestCommit": null
+            },
+            {
+              "createdAt": "2026-10-06T13:00:00Z",
+              "actor": { "login": "helper", "__typename": "Bot" },
+              "review": { "databaseId": 7004 },
+              "pullRequestCommit": null
+            }
+          ]
+        }
+      }
+    }
+  }
+}

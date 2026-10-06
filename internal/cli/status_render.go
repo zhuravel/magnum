@@ -92,6 +92,9 @@ func statusRenderHeader(w io.Writer, r statusReport) {
 	if r.Notes != nil {
 		fmt.Fprintf(w, "notes:    %s\n", statusSafe(r.Notes.Line, 0))
 	}
+	if a := r.AutoApproved; a != nil {
+		fmt.Fprintf(w, "approvals: auto-approved: %d today, %d standing\n", a.Today, a.Standing)
+	}
 	fmt.Fprintf(w, "rounds:   %s\n", statusRoundsText(r))
 	fmt.Fprintf(w, "disk:     %s\n", statusDiskText(r.Disk))
 	if len(r.Pauses) == 0 {

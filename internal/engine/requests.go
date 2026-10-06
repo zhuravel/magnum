@@ -199,6 +199,8 @@ func (e *Engine) handleRequest(ctx context.Context, req store.Request) {
 		answer(e, ctx, req, func(ctx context.Context, p VerdictPayload) (string, error) {
 			return e.requestVerdict(ctx, p, event)
 		})
+	case ReqUnapprove: // autoapprove.go
+		answer(e, ctx, req, e.requestUnapprove)
 	case ReqAbort, ReqIgnore: // abort.go
 		if p, ok := payload[TargetPayload](e, ctx, req); ok {
 			e.requestAbort(ctx, req.ID, p, req.Kind == ReqIgnore)

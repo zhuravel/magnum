@@ -79,6 +79,8 @@ type prbPalette struct {
 	// rainbow are the shimmer's colors, in bold, in the order they slide
 	// across the state cell of a PR that needs the operator (needsMeCell).
 	rainbow []lipgloss.Style
+	// auto is the pill of a PR magnum approved as the operator (autoCell).
+	auto lipgloss.Style
 }
 
 func newPRBPalette(st styles) prbPalette {
@@ -103,6 +105,7 @@ func newPRBPalette(st styles) prbPalette {
 			"magenta": fg(magenta), "cyan": fg(cyan), "gray": fg(dim), "grey": fg(dim)},
 		rainbow: []lipgloss.Style{fg(red).Bold(true), fg(yellow).Bold(true), fg(green).Bold(true),
 			fg(cyan).Bold(true), fg(blue).Bold(true), fg(magenta).Bold(true)},
+		auto: pill(cyan),
 		rule: fg(faint), mine: fg(magenta), num: lipgloss.NewStyle().Bold(true),
 		add: fg(green), del: fg(red), green: fg(green), red: fg(red), yellow: fg(yellow),
 		tag:       fg(dim).Italic(true),
@@ -673,8 +676,12 @@ const (
 func (p prbPainter) stateWaitCell(r PRBoardRow) cell { return p.stateWaitDetail(r, stateFull) }
 
 // stateWaitDetail is stateWaitCell with d of a running round's progress.
-// A PR that needs the operator says so instead (needsMeCell).
+// A PR magnum approved as the operator (autoCell) or that needs them
+// (needsMeCell) says so instead.
 func (p prbPainter) stateWaitDetail(r PRBoardRow, d stateDetail) cell {
+	if autoShown(r) {
+		return p.autoCell()
+	}
 	if needsMeShown(r) {
 		return p.needsMeCell(r.NeedsMe)
 	}
@@ -748,8 +755,23 @@ func skipWord(r PRBoardRow) string {
 }
 
 // needsMeShown reports whether r's state cell says it needs the operator
-// (PRBoardRow.NeedsMe): a round in flight shows its own pill instead.
-func needsMeShown(r PRBoardRow) bool { return r.NeedsMe != "" && !workingState(rowState(r)) }
+// (PRBoardRow.NeedsMe): a round in flight shows its own pill instead, and an
+// approval magnum posted as them says "✓ auto".
+func needsMeShown(r PRBoardRow) bool {
+	return r.NeedsMe != "" && !workingState(rowState(r)) && !autoShown(r)
+}
+
+// autoShown reports whether r's state cell says magnum approved it as the
+// operator (PRBoardRow.AutoApproved): while it is reviewed; a round due or
+// in flight shows its own pill.
+func autoShown(r PRBoardRow) bool {
+	return r.AutoApproved != nil && normState(rowState(r)) == "reviewed"
+}
+
+// autoCell is the state cell of a PR magnum approved as the operator,
+// "✓ auto", in a pill of its own color (it does not shimmer: nothing waits
+// for the operator).
+func (p prbPainter) autoCell() cell { return cell{{" " + p.g.yes + " auto ", p.pal.auto}} }
 
 // shimmerSpan is how many cells each color of the shimmer covers;
 // shimmerCycle (the number of colors times shimmerSpan) is how many frames

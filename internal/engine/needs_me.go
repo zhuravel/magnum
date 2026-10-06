@@ -54,8 +54,17 @@ func (e *Engine) noteNeedsMe(ctx context.Context) {
 	if e.needsMe == nil {
 		e.needsMe = map[string]bool{}
 	}
+	approved := map[int64]bool{} // approved as the operator: they are not needed (autoapprove.go)
+	if live, err := e.st.LiveAutoApprovals(ctx); err == nil {
+		for _, a := range live {
+			approved[a.PRID] = a.State != store.AutoDismissing
+		}
+	}
 	seen := make(map[string]bool, len(list))
 	for _, n := range list {
+		if approved[n.PR.ID] {
+			continue
+		}
 		key := fmt.Sprintf("needs-me:%d:%s", n.PR.ID, n.PR.HeadSHA)
 		seen[key] = true
 		if e.needsMe[key] {

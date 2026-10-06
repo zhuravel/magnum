@@ -62,6 +62,10 @@ poll_identity = "zhuravel"            # who polls (a gh identity)
 skip_authors = ["dependabot"]
 # skip_paths = ["docs/**", "**/*.md"]   # skip a PR when every changed file matches ("**" spans directories, "*" stays in one)
 # request_teams = ["backend"]           # review requests for these team slugs start a round like one for you
+# auto_approve = ["talkable"]           # repositories of the watch (or ["*"]) on whose PRs magnum posts YOUR approval
+#                                       # once its review of the head found nothing to fix (default: none; README, Approving as you)
+# auto_approve_as = "zhuravel"          # the gh identity of your own account (GitHub does not count an App's approval)
+# auto_approve_body = "Approved after magnum's review of {{.Short}}."   # one line: .Short (7 characters), .SHA, .ReviewURL, .Repo, .Number
 # roles = ["codex-judge", "claude-review", "codex-review", "claude-simplify"]   # omitted or [] = every [[role]]
 # judge_own_pass = "after"              # [pipeline]'s "parallel" (the judge's own pass with the reviewers) or "after"
 # related_lookback = "30d"              # [pipeline]'s 14d: how long a merged PR on the same paths stays related

@@ -178,6 +178,23 @@ type PRBoardRow struct {
 	// CHANGES_REQUESTED or REVIEW_REQUIRED; "" when the base branch requires
 	// no review or magnum has not read it yet. prs --json only.
 	ReviewDecision string
+	// AutoApproved is the approval magnum posted as the operator that
+	// stands on the PR ([[watch]] auto_approve); nil when none. The state
+	// cell says "✓ auto" and D withdraws it.
+	AutoApproved *AutoApproval
+	// AutoStopped is why magnum no longer approves the PR as the operator
+	// (they dismissed one of its approvals, reviewed the PR by hand or ran
+	// magnum unapprove); "" when it may. The card says so.
+	AutoStopped string
+}
+
+// AutoApproval is an approval magnum posted as the operator: GitHub's
+// review, the head it approved and when.
+type AutoApproval struct {
+	ReviewID int64
+	Head     string
+	URL      string
+	At       time.Time
 }
 
 // PRBoardRow.NeedsMe values (store.NeedsMe's).

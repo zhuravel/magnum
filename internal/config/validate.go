@@ -100,6 +100,7 @@ func (c *Config) Validate() error {
 				errs = append(errs, fmt.Errorf("watch %s: request_teams entry %q must be a team slug (no owner, no @)", w.Owner, t))
 			}
 		}
+		errs = append(errs, w.validateAutoApprove(ids)...)
 	}
 	pools := map[string]bool{}
 	for _, p := range c.Pools {

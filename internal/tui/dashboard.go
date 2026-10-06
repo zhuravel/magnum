@@ -189,6 +189,9 @@ type DashboardActions interface {
 	// magnum reviewed (magnum approve / request-changes).
 	Approve(ctx context.Context, ref string) (ActionResult, error)
 	RequestChanges(ctx context.Context, ref string) (ActionResult, error)
+	// Unapprove withdraws the approval magnum posted as the operator and
+	// stops it approving the PR as them (magnum unapprove).
+	Unapprove(ctx context.Context, ref string) (ActionResult, error)
 	Attention(ctx context.Context) (ActionResult, error)
 	OpenBrowser(ctx context.Context, url string) error
 	// Requests re-reads the requests ids name; one the registry no longer

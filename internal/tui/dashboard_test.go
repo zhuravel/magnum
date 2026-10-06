@@ -111,6 +111,9 @@ func (f *fakeActions) Approve(_ context.Context, ref string) (ActionResult, erro
 func (f *fakeActions) RequestChanges(_ context.Context, ref string) (ActionResult, error) {
 	return f.record("request-changes " + ref)
 }
+func (f *fakeActions) Unapprove(_ context.Context, ref string) (ActionResult, error) {
+	return f.record("unapprove " + ref)
+}
 func (f *fakeActions) Ignore(_ context.Context, ref string) (ActionResult, error) {
 	return f.record("ignore " + ref)
 }

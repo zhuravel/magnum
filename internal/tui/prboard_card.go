@@ -155,6 +155,9 @@ func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
 	if needsMeShown(r) { // still: only the table's cells shimmer
 		head += " " + p.needsMeCell(r.NeedsMe).render(nil)
 	}
+	if autoShown(r) {
+		head += " " + p.autoCell().render(nil)
+	}
 	var flags []string
 	if r.Pinned {
 		flags = append(flags, p.pinStyle().Render(p.g.pin)+" pinned")
@@ -191,6 +194,16 @@ func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
 	}
 	if r.FlagDismissed {
 		add(p.st.Dim.Render(truncate(flagDismissedNote, inner)))
+	}
+	if a := r.AutoApproved; a != nil {
+		line := "Approved as you by magnum on " + textx.ShortSHA(a.Head)
+		if !a.At.IsZero() {
+			line += " " + shortAge(max(p.now.Sub(a.At), 0)) + " ago"
+		}
+		add(p.pal.named["cyan"].Render(truncate(line+" (D withdraws it and stops it approving this PR)", inner)))
+	}
+	if r.AutoStopped != "" {
+		add(p.st.Dim.Render(truncate("magnum no longer approves it as you: "+oneLine(r.AutoStopped)+" (magnum unapprove --resume)", inner)))
 	}
 	add("")
 

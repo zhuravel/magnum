@@ -70,6 +70,7 @@ func newPRsCmd(c *Context) *cobra.Command {
 	fs.BoolVar(&f.desc, "desc", true, "largest first (newest, latest, most recently requested, most changed, most urgent); --desc=false reverses")
 	fs.BoolVar(&f.all, "all", false, "also list closed and merged PRs")
 	fs.BoolVar(&f.needsMe, "needs-me", false, "only the PRs magnum approved that still need your approval on GitHub")
+	fs.BoolVar(&f.autoApproved, "auto-approved", false, "only the PRs magnum approved as you ([[watch]] auto_approve) whose approval stands")
 	fs.BoolVar(&f.json, "json", false, "print JSON")
 	fs.IntVar(&f.limit, "limit", 0, "show at most N PRs (0 = all)")
 	_ = cmd.RegisterFlagCompletionFunc("repo", completeFlag(c.completeRepos))
@@ -80,9 +81,9 @@ func newPRsCmd(c *Context) *cobra.Command {
 
 // prsFlags are the parsed `magnum prs` flags.
 type prsFlags struct {
-	repo, sort, view         string
-	desc, all, json, needsMe bool
-	limit                    int
+	repo, sort, view                       string
+	desc, all, json, needsMe, autoApproved bool
+	limit                                  int
 }
 
 // prsOptions are what the board and the printed rows show.
@@ -97,6 +98,9 @@ type prsOptions struct {
 	// NeedsMe lists only the PRs that need the operator's approval
 	// (tui.PRBoardRow.NeedsMe): --needs-me.
 	NeedsMe bool
+	// AutoApproved lists only the PRs magnum approved as the operator whose
+	// approval stands (tui.PRBoardRow.AutoApproved): --auto-approved.
+	AutoApproved bool
 }
 
 // filter is the registry query of o. The registry orders by last update,
@@ -125,14 +129,17 @@ func prsRows(ctx context.Context, st *store.Store, cfg *config.Config, o prsOpti
 }
 
 // source is src narrowed to what o shows beyond the registry query: with
-// NeedsMe, the PRs that need the operator's approval.
+// NeedsMe, the PRs that need the operator's approval; with AutoApproved,
+// those magnum approved as the operator.
 func (o prsOptions) source(src tui.PRBoardSourceFunc) tui.PRBoardSourceFunc {
-	if !o.NeedsMe {
+	if !o.NeedsMe && !o.AutoApproved {
 		return src
 	}
 	return func(ctx context.Context) ([]tui.PRBoardRow, error) {
 		rows, err := src(ctx)
-		return slices.DeleteFunc(rows, func(r tui.PRBoardRow) bool { return r.NeedsMe == "" }), err
+		return slices.DeleteFunc(rows, func(r tui.PRBoardRow) bool {
+			return (o.NeedsMe && r.NeedsMe == "") || (o.AutoApproved && r.AutoApproved == nil)
+		}), err
 	}
 }
 
@@ -155,7 +162,7 @@ func runPRs(c *Context, f prsFlags, pos []string) int {
 	if owner, name, ok := strings.Cut(repo, "/"); ok && (owner == "" || name == "" || strings.Contains(name, "/")) {
 		return inspUsage(c, "prs", fmt.Sprintf("--repo %q: want owner/name or name", f.repo), prsUsage)
 	}
-	o := prsOptions{Repo: repo, View: view, Sort: by, Desc: f.desc, All: f.all, Limit: f.limit, NeedsMe: f.needsMe}
+	o := prsOptions{Repo: repo, View: view, Sort: by, Desc: f.desc, All: f.all, Limit: f.limit, NeedsMe: f.needsMe, AutoApproved: f.autoApproved}
 
 	a, err := inspOpenApp(c, false)
 	if err != nil {
@@ -359,6 +366,7 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 			nf.Verdict = sums[r.PRID].Verdict
 			out[i].NeedsMe = store.NeedsMe(nf, mine)
 		}
+		_ = prsAutoApprovals(ctx, st, ids, out) // a registry that cannot say leaves them out rather than the board
 		if err := timings.fill(ctx, st, cfg, ids, out, inspNow()); err != nil {
 			return nil, err
 		}
@@ -659,6 +667,9 @@ func prsStateCell(r tui.PRBoardRow) string {
 	case tui.NeedsMeLift:
 		s += ",lift-yours"
 	}
+	if r.AutoApproved != nil {
+		s += ",auto-approved"
+	}
 	for _, f := range []struct {
 		on   bool
 		name string
@@ -829,4 +840,28 @@ func defaultRepo(cfg *config.Config) string {
 		return ""
 	}
 	return cfg.Daemon.DefaultRepo
+}
+
+// prsAutoApprovals fills the rows' automatic approvals (ids are their PRs):
+// the one standing, and why magnum stopped approving a PR as the operator.
+// A PR approved as the operator no longer needs them.
+func prsAutoApprovals(ctx context.Context, st *store.Store, ids []int64, out []tui.PRBoardRow) error {
+	latest, err := st.LatestAutoApprovals(ctx, ids)
+	if err != nil {
+		return err
+	}
+	holds, err := st.AutoApproveHolds(ctx, ids)
+	if err != nil {
+		return err
+	}
+	for i, id := range ids {
+		if a, ok := latest[id]; ok && a.State == store.AutoStanding {
+			out[i].AutoApproved = &tui.AutoApproval{ReviewID: a.ReviewID, Head: a.HeadSHA, URL: a.ReviewURL, At: store.Deref(a.PostedAt)}
+			out[i].NeedsMe = ""
+		}
+		if h, ok := holds[id]; ok && h.Held {
+			out[i].AutoStopped = h.Reason
+		}
+	}
+	return nil
 }

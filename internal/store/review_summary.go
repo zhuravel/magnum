@@ -23,8 +23,9 @@ const (
 // decided.
 type ReviewSummary struct {
 	RunID           string    `json:"run_id"`
-	SHA             string    `json:"sha"`   // the reviewed head
-	Event           string    `json:"event"` // what was posted: APPROVE, REQUEST_CHANGES or COMMENT
+	ReviewID        int64     `json:"review_id"` // the review the round posted
+	SHA             string    `json:"sha"`       // the reviewed head
+	Event           string    `json:"event"`     // what was posted: APPROVE, REQUEST_CHANGES or COMMENT
 	URL             string    `json:"url,omitempty"`
 	At              time.Time `json:"at"`
 	Counts          [4]int    `json:"counts"`          // P0..P3 posted this round
@@ -46,7 +47,7 @@ func (s *Store) LastReviewSummaries(ctx context.Context, prIDs []int64) (map[int
 	if len(prIDs) == 0 {
 		return out, nil
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT pr_id, id, target_sha, coalesce(review_event, ''), coalesce(review_url, ''),
+	rows, err := s.db.QueryContext(ctx, `SELECT pr_id, id, review_id, target_sha, coalesce(review_event, ''), coalesce(review_url, ''),
   coalesce(verified_at, ended_at, created_at), result_json
 FROM runs
 WHERE pr_id IN (`+placeholders(len(prIDs))+`) AND outcome = 'posted' AND review_id IS NOT NULL AND result_json IS NOT NULL
@@ -61,7 +62,7 @@ ORDER BY pr_id, created_at DESC`, int64Args(prIDs)...)
 			sum         ReviewSummary
 			at, payload string
 		)
-		if err := rows.Scan(&prID, &sum.RunID, &sum.SHA, &sum.Event, &sum.URL, &at, &payload); err != nil {
+		if err := rows.Scan(&prID, &sum.RunID, &sum.ReviewID, &sum.SHA, &sum.Event, &sum.URL, &at, &payload); err != nil {
 			return nil, fmt.Errorf("review summaries: %w", err)
 		}
 		if _, seen := out[prID]; seen {

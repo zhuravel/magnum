@@ -163,6 +163,11 @@ func pickEntries(ctx context.Context, d *actDeps, limit int) ([]pickEntry, error
 			needs[n.PR.ID] = n.NeedsMe
 		}
 	}
+	if list, err := d.Store.StandingAutoApprovals(ctx); err == nil {
+		for _, a := range list {
+			needs[a.PRID] = "auto" // approved as the operator: they are not needed
+		}
+	}
 	for _, pr := range prs {
 		repo, ok := byID[pr.RepoID]
 		if !ok || pr.GHState != store.GHOpen {
@@ -178,6 +183,8 @@ func pickEntries(ctx context.Context, d *actDeps, limit int) ([]pickEntry, error
 			state += ",✓ needs you"
 		case store.NeedsMeLift:
 			state += ",✓ lift your ✗"
+		case "auto":
+			state += ",✓ auto"
 		}
 		if pr.Pinned {
 			state += ",pinned"

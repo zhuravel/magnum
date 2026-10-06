@@ -191,6 +191,14 @@ func (s *screenActions) RequestChanges(ctx context.Context, ref string) (tui.Act
 	})
 }
 
+// Unapprove withdraws the approval magnum posted as the operator and stops
+// it approving the PR as them; the screen asked first.
+func (s *screenActions) Unapprove(ctx context.Context, ref string) (tui.ActionResult, error) {
+	return s.do(ctx, "unapprove", func(ctx context.Context, c *Context, d *actDeps) int {
+		return unapproveMain(ctx, c, d, ref, unapproveOpts{yes: true})
+	})
+}
+
 // Abort kills the PR's running review; the screen asked first.
 func (s *screenActions) Abort(ctx context.Context, ref string) (tui.ActionResult, error) {
 	return s.stop(ctx, stopAbort, ref)

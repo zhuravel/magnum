@@ -169,26 +169,37 @@ type statusOptions struct {
 
 // statusReport is everything `magnum status` shows (and prints with --json).
 type statusReport struct {
-	GeneratedAt time.Time                `json:"generated_at"`
-	Daemon      statusDaemon             `json:"daemon"`
-	GitHub      statusGitHub             `json:"github"`
-	Codex       *statusCodexUsage        `json:"codex_usage,omitempty"`
-	Retro       *statusRetro             `json:"retro,omitempty"`
-	Notes       *statusNotes             `json:"notes,omitempty"`
-	Rounds      statusRounds             `json:"rounds"`
-	Agents      *statusAgents            `json:"agents,omitempty"`
-	Pauses      []statusPause            `json:"pauses"`
-	Disk        statusDisk               `json:"disk"`
-	Slots       []inventory.SlotView     `json:"slots"`
-	External    []inventory.ExternalView `json:"external,omitempty"`
-	Databases   bool                     `json:"databases_listed"`
-	OrphanDBs   int                      `json:"orphan_dbs"`
-	Queue       []statusPRLine           `json:"queue"`
-	Closing     []statusPRLine           `json:"closing"`
-	Attention   []statusAttention        `json:"attention"`
-	Drift       []inventory.Finding      `json:"drift"`
-	Warnings    []string                 `json:"warnings,omitempty"`
-	Detail      *statusDetail            `json:"detail,omitempty"`
+	GeneratedAt time.Time         `json:"generated_at"`
+	Daemon      statusDaemon      `json:"daemon"`
+	GitHub      statusGitHub      `json:"github"`
+	Codex       *statusCodexUsage `json:"codex_usage,omitempty"`
+	Retro       *statusRetro      `json:"retro,omitempty"`
+	Notes       *statusNotes      `json:"notes,omitempty"`
+	// AutoApproved counts the approvals magnum posted as the operator
+	// ([[watch]] auto_approve); nil when no watch auto-approves and none
+	// stands or was posted today.
+	AutoApproved *statusAutoApproved      `json:"auto_approved,omitempty"`
+	Rounds       statusRounds             `json:"rounds"`
+	Agents       *statusAgents            `json:"agents,omitempty"`
+	Pauses       []statusPause            `json:"pauses"`
+	Disk         statusDisk               `json:"disk"`
+	Slots        []inventory.SlotView     `json:"slots"`
+	External     []inventory.ExternalView `json:"external,omitempty"`
+	Databases    bool                     `json:"databases_listed"`
+	OrphanDBs    int                      `json:"orphan_dbs"`
+	Queue        []statusPRLine           `json:"queue"`
+	Closing      []statusPRLine           `json:"closing"`
+	Attention    []statusAttention        `json:"attention"`
+	Drift        []inventory.Finding      `json:"drift"`
+	Warnings     []string                 `json:"warnings,omitempty"`
+	Detail       *statusDetail            `json:"detail,omitempty"`
+}
+
+// statusAutoApproved is how many approvals magnum posted as the operator
+// since local midnight (withdrawn or not) and how many stand on open PRs.
+type statusAutoApproved struct {
+	Today    int `json:"today"`
+	Standing int `json:"standing"`
 }
 
 type statusDaemon struct {

@@ -11,6 +11,7 @@ import (
 	"cmp"
 	"context"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -39,6 +40,7 @@ const (
 	actRelease
 	actMute
 	actUnmute
+	actUnapprove
 )
 
 // rowActDef is a row action's key and words.
@@ -65,12 +67,13 @@ var rowActDefs = [...]rowActDef{
 	actRelease:        {"x", "release", "release", "release"},
 	actMute:           {"M", "mute", "mute", "mute"},
 	actUnmute:         {"U", "unmute", "unmute", "unmute"},
+	actUnapprove:      {"D", "withdraw approval", "withdraw", "unapprove"},
 }
 
 // The actions each screen offers, in the order its menu (and the card) lists
 // them.
 var (
-	boardActs = []rowAct{actReview, actFresh, actSimplify, actAbort, actIgnore, actApprove, actRequestChanges,
+	boardActs = []rowAct{actReview, actFresh, actSimplify, actAbort, actIgnore, actApprove, actRequestChanges, actUnapprove,
 		actOpen, actBrowser, actTracker, actPin, actUnpin, actRelease, actMute, actUnmute}
 	dashActs = []rowAct{actReview, actFresh, actSimplify, actAbort, actIgnore,
 		actOpen, actBrowser, actPin, actUnpin, actRelease, actMute, actUnmute}
@@ -113,8 +116,12 @@ type actRow struct {
 	facts    string // what the review question says about the PR
 	// findings is what magnum's latest review concluded (nil: magnum has not
 	// reviewed the PR); verdicts says the screen knows it, so A and C apply.
-	findings             *FindingsInfo
-	verdicts             bool
+	findings *FindingsInfo
+	verdicts bool
+	// auto is the approval magnum posted as the operator that stands on the
+	// PR (nil: none); autoKnown says the screen knows it, so D applies.
+	auto                 *AutoApproval
+	autoKnown            bool
 	url, issue, issueURL string
 
 	pinned, pinKnown                bool
@@ -225,6 +232,10 @@ func actionRefusal(a rowAct, r actRow) string {
 		case f.SHA != "" && r.head != "" && !sameSHA(r.head, f.SHA):
 			return l + ": the head moved since magnum reviewed " + textx.ShortSHA(f.SHA) + r.orKey(actReview, ": review again first (%k)")
 		}
+	case actUnapprove:
+		if r.autoKnown && r.auto == nil {
+			return "magnum has no approval standing as you on " + l
+		}
 	case actBrowser:
 		if r.url == "" {
 			return "no PR URL for " + strings.TrimPrefix(l, "slot ")
@@ -288,6 +299,8 @@ func actionQuestion(a rowAct, r actRow) string {
 		return ignoreQuestion(r)
 	case actApprove, actRequestChanges:
 		return verdictQuestion(l, a == actApprove, r.findings)
+	case actUnapprove:
+		return unapproveQuestion(l, r.auto)
 	case actRelease:
 		return releaseQuestion(strings.TrimPrefix(l, "slot "))
 	case actMute:
@@ -363,6 +376,8 @@ func actionRun(a rowAct, r actRow) (what string, fn actionFunc) {
 		return what, on(DashboardActions.Approve)
 	case actRequestChanges:
 		return what, on(DashboardActions.RequestChanges)
+	case actUnapprove:
+		return what, on(DashboardActions.Unapprove)
 	case actOpen:
 		return what, on(DashboardActions.Open)
 	case actBrowser, actTracker:
@@ -502,6 +517,16 @@ func ignoreQuestion(r actRow) string {
 	return q + "?"
 }
 
+// unapproveQuestion asks before D withdraws the approval magnum posted as
+// the operator on the PR ref (a; nil when the screen does not know it).
+func unapproveQuestion(ref string, a *AutoApproval) string {
+	what := "the approval magnum posted as you on " + ref
+	if a != nil {
+		what += " (review " + strconv.FormatInt(a.ReviewID, 10) + " on " + textx.ShortSHA(a.Head) + ")"
+	}
+	return "Withdraw " + what + " and stop it approving " + ref + "?"
+}
+
 // andList joins words as "a, b and c".
 func andList(words []string) string {
 	switch n := len(words); n {
@@ -522,7 +547,8 @@ func boardActRow(r PRBoardRow, label string, now time.Time) actRow {
 		state: normState(r.State), ghState: strings.ToUpper(strings.TrimSpace(r.GHState)), head: r.HeadSHA,
 		findings: r.Findings, verdicts: true, url: prURL(r), issue: r.Issue, issueURL: r.IssueURL,
 		pinned: r.Pinned, pinKnown: true, muted: r.Muted || normState(r.State) == "ignored", mutedKnown: true,
-		inSlot: r.Slot != "", slotKnown: true, mergedUnreviewed: r.MergedUnreviewed, flagDismissed: r.FlagDismissed}
+		inSlot: r.Slot != "", slotKnown: true, mergedUnreviewed: r.MergedUnreviewed, flagDismissed: r.FlagDismissed,
+		auto: r.AutoApproved, autoKnown: true}
 	if r.LastReview != nil {
 		row.reviewed = r.LastReview.CommitSHA
 	}

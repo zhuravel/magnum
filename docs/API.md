@@ -2111,6 +2111,9 @@ const (
 )
     Placeholders substituted by Kind.Argv and in Kind.Rename.
 
+const AutoApproveBodyMax = 500
+    AutoApproveBodyMax bounds auto_approve_body, in characters.
+
 const BuiltinDefaults = "built-in defaults (config.defaults.toml)"
     BuiltinDefaults names the embedded base in messages and Sources.
 
@@ -2123,6 +2126,10 @@ const DefaultAfterDenyPrompt = "magnum denied that command: review roles never r
 	"Continue the task without it and finish as instructed."
     DefaultAfterDenyPrompt is every built-in and declared kind's
     after_deny_prompt.
+
+const DefaultAutoApproveBody = "Auto-approved: magnum's review of `{{.Short}}` found no blocking problems{{if .ReviewURL}} ([review]({{.ReviewURL}})){{end}}."
+    DefaultAutoApproveBody is the body of an automatic approval when the watch
+    sets no auto_approve_body.
 
 const DefaultIdleRemoveAfter = 168 * time.Hour
     DefaultIdleRemoveAfter is a pool's idle_remove_after when it sets none (or
@@ -2263,6 +2270,10 @@ func ParseDuration(s string) (time.Duration, error)
     ParseDuration is time.ParseDuration plus a leading whole-day count: "7d",
     "30d", "1d12h". A day is 24 hours.
 
+func RenderAutoApproveBody(tmpl string, d AutoApproveData) (string, error)
+    RenderAutoApproveBody renders an auto_approve_body template with d (Short
+    filled from SHA when empty), trimmed.
+
 func RenderFooter(tmpl string, d FooterData) (string, error)
     RenderFooter renders footer template tmpl with d, trimmed ("" = the footer
     is left out).
@@ -2281,6 +2292,15 @@ func ValidatePathGlob(glob string) error
 
 
 TYPES
+
+type AutoApproveData struct {
+	SHA       string // the approved commit: the head magnum reviewed
+	Short     string // its first 7 characters
+	ReviewURL string // magnum's review the approval follows ("" when unknown)
+	Repo      string // owner/name
+	Number    int    // the PR's number
+}
+    AutoApproveData is what an auto_approve_body template renders with.
 
 type BadgeSpec struct {
 	Text  string
@@ -2372,6 +2392,18 @@ func LoadWithOptions(layout paths.Layout, file string, opts LoadOptions) (*Confi
     (~/.config/magnum/config.toml) when it exists. It appends [[identity]],
     [[watch]], [[pool]] and [[repo]], and overrides keys (see applyOverlay).
     cfg.Sources lists what was read.
+
+func (c *Config) AutoApproveBodyFor(fullName string) string
+    AutoApproveBodyFor is the approval body template of repository fullName's
+    PRs: its watch's auto_approve_body, trimmed, else DefaultAutoApproveBody.
+
+func (c *Config) AutoApproveFor(fullName string) *Identity
+    AutoApproveFor is the identity magnum auto-approves repository fullName's
+    ("owner/name") PRs as: the covering watch's auto_approve_as when its
+    auto_approve names the repository, or "*"; nil otherwise.
+
+func (c *Config) AutoApproves() bool
+    AutoApproves reports whether any watch auto-approves a repository.
 
 func (c *Config) CommentsWhenClean(repo, identity string) bool
     CommentsWhenClean reports whether the identity named identity posts
@@ -3478,6 +3510,18 @@ type Watch struct {
 	// RequestTeams are team slugs whose review requests count like a
 	// request for the poll login (request_debounce); other teams' do not.
 	RequestTeams []string `toml:"request_teams"`
+	// AutoApprove names the watch's repositories (names, any case, or "*"
+	// for every one it covers) on whose PRs magnum posts an approval as
+	// AutoApproveAs once its own review of the head found nothing that must
+	// be fixed before merging (engine autoapprove.go); empty = never (the
+	// default). AutoApproveAs is an [[identity]] of kind gh: the operator's
+	// own account, whose approval GitHub counts (an App's does not).
+	AutoApprove   []string `toml:"auto_approve"`
+	AutoApproveAs string   `toml:"auto_approve_as"`
+	// AutoApproveBody is the approval's one-line body, a template of
+	// AutoApproveData (nil = DefaultAutoApproveBody); magnum appends its
+	// marker.
+	AutoApproveBody *string `toml:"auto_approve_body"`
 }
 
 func (w Watch) BotsSkipped() bool
@@ -3913,6 +3957,9 @@ const FormerDismissMessage = "magnum: superseded by the review of %s posted as %
     shows on GitHub; the arguments are the new review's commit (short) and the
     login it was posted as.
 
+const ReqUnapprove = "unapprove"
+    ReqUnapprove is `magnum unapprove` and the board's D (UnapprovePayload).
+
 const RequestReadyForReview = "(ready for review)"
     RequestReadyForReview is KVPRRequestBy for a draft that became ready for
     review.
@@ -3920,6 +3967,10 @@ const RequestReadyForReview = "(ready for review)"
 const SkipIgnored = skipIgnored
     SkipIgnored is the skip_reason of a PR `magnum ignore` muted: the board
     shows such a PR as ignored.
+
+const UnapproveMessage = "magnum: this automatic approval is withdrawn by its owner (magnum unapprove)."
+    UnapproveMessage is the dismissal message of an automatic approval the
+    operator withdraws (magnum unapprove, the board's D).
 
 
 VARIABLES
@@ -3970,6 +4021,10 @@ func AcquireLock(path string) (unlock func(), held bool, err error)
     layout.Lock(); the CLI takes the same lock before running slot or cleanup
     operations in-process). held reports that another process has it; unlock
     releases it.
+
+func AutoApprovalMarker(head string) string
+    AutoApprovalMarker is the marker of an automatic approval of head: "<!--
+    magnum:auto-approval head=<sha7> -->".
 
 func CheckPrompts(cfg *config.Config) (int, error)
     CheckPrompts renders, with representative data and this binary's renderer,
@@ -4833,6 +4888,13 @@ func (t TrivialSkip) Note() string
     Note is the PR card's line for the skip, e.g. "comment-only push skipped
     (a7b3f8c → 602da9d)".
 
+type UnapprovePayload struct {
+	PRTarget
+	Resume bool `json:"resume,omitempty"`
+}
+    UnapprovePayload withdraws the PR's automatic approval and stops
+    auto-approval of the PR; Resume lets magnum approve it again instead.
+
 type VerdictPayload struct {
 	PRTarget
 	// Message is the reviewer's own words, put before magnum's line.
@@ -5651,6 +5713,11 @@ func (c *Client) ReviewComments(ctx context.Context, owner, repo string, number 
     /repos/{o}/{r}/pulls/{n}/reviews/{id}/comments), 100 a page until a page is
     not full, at most reviewCommentsMaxPages pages.
 
+func (c *Client) ReviewDismissals(ctx context.Context, owner, repo string, number int) ([]ReviewDismissal, error)
+    ReviewDismissals lists the last 100 review dismissals of a pull request,
+    oldest first: who dismissed each review, or that GitHub did on a push.
+    A missing repository or pull request is an error matching ErrNotFound.
+
 func (c *Client) ReviewREST(ctx context.Context, owner, repo string, number int, id int64) (RESTReview, error)
     ReviewREST reads one review over REST (GET
     /repos/{o}/{r}/pulls/{n}/reviews/{id}) for the "[bot]"-suffixed user.login.
@@ -5927,6 +5994,18 @@ type ReviewComment struct {
 	HTMLURL string
 }
     ReviewComment is one inline comment of a review as REST reports it.
+
+type ReviewDismissal struct {
+	ReviewID int64  // the dismissed review's REST id; 0 when the review is gone
+	Actor    string // who dismissed it, in Account form ("" for a deleted account)
+	// ByPush: GitHub dismissed it as stale when Commit was pushed (branch
+	// protection's "dismiss stale approvals"), not a person.
+	ByPush bool
+	Commit string
+	At     time.Time
+}
+    ReviewDismissal is a review's dismissal as a pull request's timeline records
+    it (a ReviewDismissedEvent).
 
 type ReviewGate struct {
 	// Decision is GitHub's reviewDecision: APPROVED, CHANGES_REQUESTED or
@@ -10277,6 +10356,24 @@ and FormatTime), so string comparison in SQL is chronological comparison.
 CONSTANTS
 
 const (
+	AutoPosting    = "posting"    // the approval is being posted
+	AutoStanding   = "standing"   // posted, not withdrawn
+	AutoDismissing = "dismissing" // magnum is withdrawing it
+	AutoDismissed  = "dismissed"  // withdrawn (EndedBy says by whom)
+	AutoFailed     = "failed"     // GitHub did not take it
+)
+    AutoApproval states (auto_approvals.state).
+
+const (
+	AutoEndedMagnum   = "magnum"   // a later review of magnum's found blocking problems
+	AutoEndedOperator = "operator" // the operator: magnum unapprove, the board's D, or on GitHub
+	AutoEndedSomeone  = "someone"  // someone else dismissed it on GitHub
+	AutoEndedPush     = "push"     // GitHub dismissed it as stale when commits were pushed
+	AutoEndedGone     = "gone"     // GitHub no longer has it
+)
+    Who withdrew an automatic approval (auto_approvals.ended_by).
+
+const (
 	FindingPosted   = "posted"
 	FindingRejected = "rejected"
 )
@@ -10561,6 +10658,9 @@ const TimeFormat = "2006-01-02T15:04:05.000000000Z07:00"
 
 VARIABLES
 
+var AutoLiveStates = []string{AutoPosting, AutoStanding, AutoDismissing}
+    AutoLiveStates are the states of a PR's one live automatic approval.
+
 var ClaimableStates = []string{PRQueued, PRRereviewPending}
     ClaimableStates are the PR states ClaimSlot accepts.
 
@@ -10722,6 +10822,57 @@ type Assignment struct {
 	EndReason *string    `json:"end_reason"`
 }
     Assignment records that a PR's code (and databases) lived in a slot.
+
+type AutoApproval struct {
+	ID   int64 `json:"id"`
+	PRID int64 `json:"pr_id"`
+	// RunID is the judge run whose review it follows: one approval per
+	// review. SourceReviewID and SourceURL are that review's.
+	RunID          string `json:"run_id"`
+	SourceReviewID int64  `json:"source_review_id,omitempty"`
+	SourceURL      string `json:"source_url,omitempty"`
+	HeadSHA        string `json:"head_sha"` // the commit approved: the head magnum reviewed
+	Identity       string `json:"identity"` // auto_approve_as
+	Login          string `json:"login"`    // its login
+	State          string `json:"state"`
+	ReviewID       int64  `json:"review_id,omitempty"` // GitHub's id of the approval, once posted
+	ReviewURL      string `json:"review_url,omitempty"`
+	// Attempts counts the posts tried; Error is the last failure.
+	Attempts int    `json:"attempts"`
+	Error    string `json:"error,omitempty"`
+	// EndedBy (AutoEnded*) and EndReason say who withdrew it and why, set
+	// when magnum starts withdrawing it or finds it withdrawn.
+	EndedBy   string     `json:"ended_by,omitempty"`
+	EndReason string     `json:"end_reason,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
+	PostedAt  *time.Time `json:"posted_at,omitempty"`
+	EndedAt   *time.Time `json:"ended_at,omitempty"`
+	UpdatedAt time.Time  `json:"updated_at"`
+}
+    AutoApproval is one approval magnum posted, or tries to post, as the
+    operator's own account.
+
+type AutoApprovalPR struct {
+	AutoApproval
+	PR   PR
+	Repo string
+}
+    AutoApprovalPR is an approval with its PR and repository (owner/name).
+
+type AutoApprovalUpdate struct{ Update }
+    AutoApprovalUpdate is an Update on the auto_approvals table.
+
+type AutoApproveHold struct {
+	PRID   int64     `json:"pr_id"`
+	Held   bool      `json:"held"`
+	Reason string    `json:"reason"`
+	At     time.Time `json:"at"`
+}
+    AutoApproveHold is the operator's word on a PR's automatic approvals:
+    Held stops them (Reason says why: they dismissed one, reviewed the PR by
+    hand, or withdrew it with `magnum unapprove`); a hold lifted with `magnum
+    unapprove --resume` stays with Held false, and only what the operator did
+    after At counts again.
 
 type BoardFilter struct {
 	Repo string // "owner/name" or "name", case-insensitive; "" = every repository
@@ -11363,6 +11514,12 @@ type Repo struct {
 func (r Repo) FullName() string
     FullName is "owner/name".
 
+type RepoPR struct {
+	PR   PR
+	Repo string
+}
+    RepoPR is a PR with its repository (owner/name).
+
 type Request struct {
 	ID        int64           `json:"id"`
 	Kind      string          `json:"kind"`
@@ -11434,8 +11591,9 @@ type ReviewRequest struct {
 
 type ReviewSummary struct {
 	RunID           string    `json:"run_id"`
-	SHA             string    `json:"sha"`   // the reviewed head
-	Event           string    `json:"event"` // what was posted: APPROVE, REQUEST_CHANGES or COMMENT
+	ReviewID        int64     `json:"review_id"` // the review the round posted
+	SHA             string    `json:"sha"`       // the reviewed head
+	Event           string    `json:"event"`     // what was posted: APPROVE, REQUEST_CHANGES or COMMENT
 	URL             string    `json:"url,omitempty"`
 	At              time.Time `json:"at"`
 	Counts          [4]int    `json:"counts"`          // P0..P3 posted this round
@@ -11650,6 +11808,25 @@ func (s *Store) AssignSlot(ctx context.Context, prID, slotID int64, dbNames ...s
 func (s *Store) AssignmentsByPR(ctx context.Context, prID int64) ([]Assignment, error)
     AssignmentsByPR returns the PR's assignment history, oldest first.
 
+func (s *Store) AutoApprovalByID(ctx context.Context, id int64) (AutoApproval, error)
+    AutoApprovalByID reads one approval.
+
+func (s *Store) AutoApprovalOfRun(ctx context.Context, prID int64, runID string) (AutoApproval, bool, error)
+    AutoApprovalOfRun is the latest approval that followed run runID's review of
+    the PR, if any.
+
+func (s *Store) AutoApproveCandidates(ctx context.Context) ([]RepoPR, error)
+    AutoApproveCandidates lists the open PRs magnum may approve as the operator:
+    not drafts, not muted, reviewed (state reviewed, the review on the head)
+    and without a live automatic approval, by repository and number. Whether the
+    configuration and the review allow it is the caller's.
+
+func (s *Store) AutoApproveHold(ctx context.Context, prID int64) (AutoApproveHold, bool, error)
+    AutoApproveHold is the PR's hold, if any.
+
+func (s *Store) AutoApproveHolds(ctx context.Context, prIDs []int64) (map[int64]AutoApproveHold, error)
+    AutoApproveHolds are the holds of the PRs that have one.
+
 func (s *Store) Board(ctx context.Context, f BoardFilter) ([]BoardRow, error)
     Board returns the PRs the board shows, the latest activity first
     (BoardRow.ActivityAt; PRs never fetched last). It reads only the registry.
@@ -11694,6 +11871,10 @@ func (s *Store) ClosedPastGrace(ctx context.Context, now time.Time) ([]PR, error
 func (s *Store) CompleteRequest(ctx context.Context, id int64, state, result string) error
     CompleteRequest marks a pending request done or failed with a result
     message. Completing a request twice is ErrConflict.
+
+func (s *Store) CountAutoApprovedSince(ctx context.Context, since time.Time) (int, error)
+    CountAutoApprovedSince counts the approvals posted at or after since,
+    withdrawn or not.
 
 func (s *Store) CountMisses(ctx context.Context, f MissFilter) (int, error)
     CountMisses counts the misses f selects.
@@ -11785,6 +11966,10 @@ func (s *Store) GitHubRequiredChecks(ctx context.Context, fullName string) (GitH
     GitHubRequiredChecks returns the cached GitHub list of repository fullName
     ("owner/name") and whether there is one.
 
+func (s *Store) InsertAutoApproval(ctx context.Context, a AutoApproval) (AutoApproval, error)
+    InsertAutoApproval records a post about to be tried (state posting,
+    one attempt). It returns ErrConflict when the PR already has a live one.
+
 func (s *Store) LastReviewSummaries(ctx context.Context, prIDs []int64) (map[int64]ReviewSummary, error)
     LastReviewSummaries returns the ReviewSummary of each PR's latest posted
     round, for the PRs that have one. A result file that does not parse is
@@ -11793,6 +11978,9 @@ func (s *Store) LastReviewSummaries(ctx context.Context, prIDs []int64) (map[int
 func (s *Store) LastRoleRunHead(ctx context.Context, prID int64, role string) (string, error)
     LastRoleRunHead is the head of the PR's latest completed run of role (ended
     or verified), "" when the role never completed one.
+
+func (s *Store) LatestAutoApprovals(ctx context.Context, prIDs []int64) (map[int64]AutoApproval, error)
+    LatestAutoApprovals is each PR's latest approval, for the PRs that have one.
 
 func (s *Store) LatestNotesVersion(ctx context.Context, repoID int64) (NotesVersion, error)
     LatestNotesVersion is the newest version of repoID's history (ErrNotFound
@@ -11815,6 +12003,14 @@ func (s *Store) ListSlotDatabases(ctx context.Context, includeDropped bool) ([]S
 
 func (s *Store) ListSlots(ctx context.Context, f SlotFilter) ([]Slot, error)
     ListSlots returns slots matching f ordered by id.
+
+func (s *Store) LiveAutoApproval(ctx context.Context, prID int64) (AutoApproval, bool, error)
+    LiveAutoApproval is the PR's live approval (posting, standing or
+    dismissing), if any.
+
+func (s *Store) LiveAutoApprovals(ctx context.Context) ([]AutoApprovalPR, error)
+    LiveAutoApprovals lists every live approval with its PR, by repository and
+    number.
 
 func (s *Store) LiveSessionByPRRole(ctx context.Context, prID int64, role string) (Session, error)
     LiveSessionByPRRole returns the starting/live session of a PR's role.
@@ -12016,6 +12212,9 @@ func (s *Store) SessionByID(ctx context.Context, id int64) (Session, error)
 func (s *Store) SessionsByPR(ctx context.Context, prID int64) ([]Session, error)
     SessionsByPR returns every session of a PR, oldest first.
 
+func (s *Store) SetAutoApproveHold(ctx context.Context, h AutoApproveHold) error
+    SetAutoApproveHold records h, replacing the PR's earlier hold.
+
 func (s *Store) SetGitHubRequiredChecks(ctx context.Context, fullName string, g GitHubRequiredChecks) error
     SetGitHubRequiredChecks caches g for repository fullName.
 
@@ -12048,10 +12247,19 @@ func (s *Store) SlotByPR(ctx context.Context, prID int64) (Slot, error)
     any state but removed) whose pr_id is prID, or ErrNotFound. The unique index
     slots_pr allows at most one row per PR, so there is never a choice to make.
 
+func (s *Store) StandingAutoApprovals(ctx context.Context) ([]AutoApprovalPR, error)
+    StandingAutoApprovals lists the approvals standing on open PRs, by
+    repository and number.
+
 func (s *Store) StepDone(ctx context.Context, subject, step string) (bool, error)
     StepDone reports whether a step event with phase ok exists for (subject,
     step) after the subject's latest KindStepReset row (its current step
     generation). See package steps.
+
+func (s *Store) TransitionAutoApproval(ctx context.Context, id int64, from []string, to string, set func(*AutoApprovalUpdate)) error
+    TransitionAutoApproval moves approval id to state to only if its state is
+    one of from (nil = any; empty to keeps the state), with set's assignments in
+    the same UPDATE: ErrConflict when the state did not match.
 
 func (s *Store) TransitionPR(ctx context.Context, id int64, from []string, to string, set func(*PRUpdate)) error
     TransitionPR moves PR id to state `to` only if its current state is one
@@ -12357,6 +12565,15 @@ type AttentionRow struct {
 }
     AttentionRow is something that needs the user.
 
+type AutoApproval struct {
+	ReviewID int64
+	Head     string
+	URL      string
+	At       time.Time
+}
+    AutoApproval is an approval magnum posted as the operator: GitHub's review,
+    the head it approved and when.
+
 type Badge struct {
 	Label, Text string
 	// Color is one of red, green, yellow, blue, magenta, cyan or gray ("" =
@@ -12478,6 +12695,9 @@ type DaemonFacts struct {
 	// NeedsMe counts the open PRs magnum approved that GitHub still blocks
 	// on the operator's approval (PRBoardRow.NeedsMe).
 	NeedsMe int
+	// AutoApproved counts the open PRs magnum approved as the operator
+	// whose approval stands (PRBoardRow.AutoApproved).
+	AutoApproved int
 	// Codex is the Codex budget's pace when it reaches a cap before the
 	// window resets; nil otherwise.
 	Codex *CodexPace
@@ -12514,6 +12734,9 @@ type DashboardActions interface {
 	// magnum reviewed (magnum approve / request-changes).
 	Approve(ctx context.Context, ref string) (ActionResult, error)
 	RequestChanges(ctx context.Context, ref string) (ActionResult, error)
+	// Unapprove withdraws the approval magnum posted as the operator and
+	// stops it approving the PR as them (magnum unapprove).
+	Unapprove(ctx context.Context, ref string) (ActionResult, error)
 	Attention(ctx context.Context) (ActionResult, error)
 	OpenBrowser(ctx context.Context, url string) error
 	// Requests re-reads the requests ids name; one the registry no longer
@@ -12772,6 +12995,14 @@ type PRBoardRow struct {
 	// CHANGES_REQUESTED or REVIEW_REQUIRED; "" when the base branch requires
 	// no review or magnum has not read it yet. prs --json only.
 	ReviewDecision string
+	// AutoApproved is the approval magnum posted as the operator that
+	// stands on the PR ([[watch]] auto_approve); nil when none. The state
+	// cell says "✓ auto" and D withdraws it.
+	AutoApproved *AutoApproval
+	// AutoStopped is why magnum no longer approves the PR as the operator
+	// (they dismissed one of its approvals, reviewed the PR by hand or ran
+	// magnum unapprove); "" when it may. The card says so.
+	AutoStopped string
 }
     PRBoardRow is one pull request on the PR board. Ref is what actions receive;
     Owner, Repo and Number label the row (Ref is parsed when they are empty).

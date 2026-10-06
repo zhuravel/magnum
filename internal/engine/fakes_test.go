@@ -127,7 +127,16 @@ type fakeGH struct {
 	// merges marks the "base...head" ranges ComparePush finds a merge
 	// commit in.
 	merges map[string]bool
-	calls  []string
+	// postAs, when set, makes CreateReview list the posted review under
+	// that login in allReviews (as GitHub would) and DismissReview mark it
+	// DISMISSED there; dismissals answers ReviewDismissals by number.
+	postAs     string
+	dismissals map[int][]github.ReviewDismissal
+	// createTakes makes a failing CreateReview still post (the answer is
+	// lost); clock stamps the reviews postAs lists.
+	createTakes bool
+	clock       func() time.Time
+	calls       []string
 	// onRadar and onCIStates run during those calls (outside the lock):
 	// what a person does while the daemon waits for GitHub.
 	onRadar, onCIStates func()
@@ -217,6 +226,13 @@ func (g *fakeGH) DismissReview(_ context.Context, owner, repo string, number int
 	g.record(fmt.Sprintf("dismiss:%s/%s#%d:%d:%s", owner, repo, number, reviewID, message))
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if g.dismissErr == nil && g.postAs != "" {
+		for i, r := range g.allReviews[number] {
+			if r.DatabaseID == reviewID {
+				g.allReviews[number][i].State = "DISMISSED"
+			}
+		}
+	}
 	return g.dismissErr
 }
 
@@ -224,12 +240,61 @@ func (g *fakeGH) CreateReview(_ context.Context, owner, repo string, number int,
 	g.record(fmt.Sprintf("review:%s/%s#%d:%s", owner, repo, number, event))
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.createErr != nil {
+	if g.createErr != nil && !g.createTakes {
 		return github.RESTReview{}, g.createErr
 	}
 	g.created = append(g.created, event+"@"+commitID+":"+body)
-	return github.RESTReview{ID: int64(9000 + len(g.created)), UserLogin: "talkable[bot]", State: event, CommitID: commitID,
-		HTMLURL: fmt.Sprintf("https://github.com/%s/%s/pull/%d#pullrequestreview-%d", owner, repo, number, 9000+len(g.created))}, nil
+	id := int64(9000 + len(g.created))
+	url := fmt.Sprintf("https://github.com/%s/%s/pull/%d#pullrequestreview-%d", owner, repo, number, id)
+	if g.postAs == "" {
+		return github.RESTReview{ID: id, UserLogin: "talkable[bot]", State: event, CommitID: commitID, HTMLURL: url}, nil
+	}
+	if g.allReviews == nil {
+		g.allReviews = map[int][]github.Review{}
+	}
+	state := map[string]string{"APPROVE": "APPROVED", "REQUEST_CHANGES": "CHANGES_REQUESTED", "COMMENT": "COMMENTED"}[event]
+	g.allReviews[number] = append(g.allReviews[number], github.Review{DatabaseID: id, State: state, Body: body, URL: url,
+		CommitOid: commitID, AuthorLogin: g.postAs, AuthorType: "User", SubmittedAt: g.now()})
+	if g.createErr != nil { // GitHub took it, the answer was lost
+		return github.RESTReview{}, g.createErr
+	}
+	return github.RESTReview{ID: id, UserLogin: g.postAs, UserType: "User", State: state, CommitID: commitID, Body: body, HTMLURL: url}, nil
+}
+
+// addReview lists r among PR number's reviews (Reviews, ReviewsWithMarker).
+func (g *fakeGH) addReview(number int, r github.Review) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.allReviews == nil {
+		g.allReviews = map[int][]github.Review{}
+	}
+	g.allReviews[number] = append(g.allReviews[number], r)
+}
+
+// setReviewState sets the state of review id of PR number.
+func (g *fakeGH) setReviewState(number int, id int64, state string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for i, r := range g.allReviews[number] {
+		if r.DatabaseID == id {
+			g.allReviews[number][i].State = state
+		}
+	}
+}
+
+// now is the clock reviews are submitted at (zero without one).
+func (g *fakeGH) now() time.Time {
+	if g.clock == nil {
+		return time.Time{}
+	}
+	return g.clock()
+}
+
+func (g *fakeGH) ReviewDismissals(_ context.Context, owner, repo string, number int) ([]github.ReviewDismissal, error) {
+	g.record(fmt.Sprintf("dismissals:%s/%s#%d", owner, repo, number))
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return slices.Clone(g.dismissals[number]), nil
 }
 
 // fail sets the Details and ConfirmStates errors (nil clears them).

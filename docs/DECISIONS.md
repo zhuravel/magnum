@@ -2507,3 +2507,52 @@ editing history. Code, config comments and prompts reference these by their head
   sessions (`--fresh`) keeps the full round: it asks for reviewers' eyes or a clean start. Rejected: a
   `same_head` field in the `<magnum>` block (the judge sees `previous_head_sha = head_sha`, and the skill
   would have to describe one more field).
+- **Magnum approves as the operator when its review found nothing to fix** (2026-10-06, the operator's design).
+  GitHub does not count a GitHub App's approval toward required approvals, so a PR Magnum found clean still
+  waited for the operator's. A `[[watch]]` may name repositories (`auto_approve = ["talkable"]`, or `["*"]`)
+  and a gh identity (`auto_approve_as`, the operator's own account; validated: declared, kind gh, names the
+  watch covers, no owner or pattern) on whose PRs Magnum posts that identity's APPROVE, on the head it
+  reviewed (`reviewed_sha` = `head_sha`), when its latest verified review of that head leaves nothing to fix
+  before merging: no P0, P1 or P2 finding, still-open earlier ones included. The judge's result gives this
+  round's findings by priority but only a count of the earlier ones still open, so with some open the
+  review's verdict line (SKILL.md section 7) decides: `No blocking problems.`, `No problems found…` or `No
+  new problems since…` are clean, `Blocking:` and `Fix N problem(s)` are not, and an unknown line is not
+  clean. Never on a PR that is not open (so never after a post-merge review), a draft, muted, authored by
+  that login, in a state other than reviewed (a round due or running), whose latest review is not the
+  round's (a manual verdict came after it), or without a posted round (a dry run posts none). Before
+  posting, Magnum reads the PR's reviews (`github.Client.Reviews`): the operator's approval of the head
+  means nothing to post, a review of theirs in progress waits, and any review of theirs Magnum did not post
+  (neither a round's `<!-- magnum:run=` nor an automatic approval's marker; one posted with `magnum approve`
+  or `request-changes` is theirs) is an intervention. The body is one line, `auto_approve_body` (a template
+  of `.Short` (7 characters), `.SHA`, `.ReviewURL`, `.Repo`, `.Number`), default "Auto-approved: magnum's
+  review of `<sha7>` found no blocking problems ([review](<url>)).", plus `<!-- magnum:auto-approval
+  head=<sha7> -->`. The registry keeps each one in `auto_approvals` (migration 0020: posting → standing,
+  failed, dismissing → dismissed, with who ended it and why; a partial unique index allows one live row per
+  PR) and the operator's stops in `auto_approve_holds`. One approval per review (`run_id`): a 403 or 422 is
+  not tried again for it, another failure after 5 minutes (three posts at most), and an approval of the head
+  carrying the marker that GitHub has and the registry lost (an answer lost, a stop mid-post) is recorded,
+  never posted twice; events `review.auto_approve_begin`, `review.auto_approved`, `review.auto_approve_failed`.
+  New commits alone do not withdraw it (the repository's stale-approval setting decides; a dismissal and a
+  new approval per push would be noise): the next posted round does. One that leaves something to fix (or
+  cannot tell: earlier findings open and the verdict line unknown), on any head, dismisses it as the
+  operator ("magnum's review of <sha7> found blocking problems; this automatic approval is withdrawn
+  ([review](url)).", `review.auto_approval_withdraw_begin`, `_withdrawn`, `_withdraw_failed`; a failure stays
+  dismissing, tried again after 5 minutes, with one urgent toast); a clean one leaves it standing without a
+  second; a clean round after a withdrawal approves again. The operator's word wins and sticks: a review of
+  theirs by hand, or a dismissal of one of these approvals by them or anyone else (the PR's timeline,
+  `github.Client.ReviewDismissals`, says who), stops auto-approval of that PR (`review.auto_approve_stopped`);
+  GitHub's own stale dismissal on a push (`pullRequestCommit`) does not. `magnum review` keeps the stop;
+  `magnum unapprove --resume` lifts it (the operator's reviews from before no longer count). `magnum
+  unapprove <ref>` and the board's `D` (y/N each) withdraw the standing approval as the operator ("magnum:
+  this automatic approval is withdrawn by its owner (magnum unapprove).") and stop it. GitHub is read only
+  for a candidate whose latest round or `updatedAt` moved since it said no, and for a standing approval when
+  they moved (a merged or closed PR's is left alone). Visible: a toast per approval ("approved as you:
+  talkable#12001", with the link) and per withdrawal Magnum made, batched with the other informational
+  toasts; no needs-me toast, title count or `✓ needs you` for a PR approved as the operator; STATE `✓ auto`
+  in a cyan pill without the shimmer, the titles' "N auto-approved", the card's line (or why it stopped),
+  `magnum prs --auto-approved` and `auto_approved` / `auto_approve_stopped` in `prs --json`, `✓ auto` in
+  `magnum pick`, and "approvals: auto-approved: N today, M standing" in `magnum status` (`auto_approved` in
+  `status --json`). Rejected: deciding from the review gate the poll stored (it lags the review, and has no
+  bodies to tell Magnum's reviews from the operator's), counting only the operator's dismissals as a stop (a
+  maintainer's dismissal is a person's judgement too), withdrawing on every push, and an approval when the
+  priorities of still-open findings cannot be told.
