@@ -42,9 +42,10 @@ import (
 // with the reviewers: the input asks for it, the judge has an own-pass
 // prompt, and a reviewer runs (runs: the reviewers' runs; none when every
 // reviewer was dropped or logged out). A judge alone gets one prompt: a
-// continued turn, a delta check, a round of the judge alone.
+// continued turn, a delta check, a re-review of the same head, a round of
+// the judge alone.
 func (rd *round) ownPassDue(runs map[string]*store.Run) bool {
-	return rd.in.OwnPass && rd.in.Kind != KindContinue && rd.deltaCheck() == nil &&
+	return rd.in.OwnPass && rd.in.Kind != KindContinue && rd.deltaCheck() == nil && !rd.sameHead() &&
 		rd.judge.PromptFile(config.PromptOwnPass) != "" && len(runs) > 0
 }
 

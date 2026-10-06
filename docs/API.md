@@ -670,9 +670,15 @@ type JudgeData struct {
 	// content); in a recovery its fresh session first reads its previous
 	// review and threads. Rendered as `delta_check: true` and one
 	// instruction, only then.
-	DeltaCheck      bool
-	DeltaLines      int
-	DeltaFile       string
+	DeltaCheck bool
+	DeltaLines int
+	DeltaFile  string
+	// SameHead (rereview, recovery): the round re-reviews the head the
+	// judge's last review covered (no new commits), the judge alone: the
+	// prompt asks it to re-decide its earlier findings from the replies and
+	// comments since, running no check that review already ran. Rendered as
+	// one instruction, only then.
+	SameHead        bool
 	MovedFrom       string // previous checkout path when the PR changed slots
 	PreviousReviews []PreviousReview
 	// Threads are the inline threads the reviewer login started on the PR,
@@ -9115,6 +9121,11 @@ type RoundInput struct {
 	// small delta since its last review (JudgeData.DeltaCheck) at its
 	// rereview effort; nil = an ordinary round.
 	DeltaCheck *DeltaCheck
+	// SameHead (rereview, or recovery for a judge in a fresh session): the
+	// round re-reviews the head the judge's last review covered, with no new
+	// commits: Roles hold the judge alone, which re-decides its earlier
+	// findings from the replies (JudgeData.SameHead) at its rereview effort.
+	SameHead bool
 
 	DryRun bool // the judge posts nothing; GitHub is not consulted
 	// Blind (magnum eval, with DryRun): the round replays a pinned head to

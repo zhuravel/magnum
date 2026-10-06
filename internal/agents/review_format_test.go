@@ -112,6 +112,15 @@ func TestSkillDecidesAReplyByWhatItDoes(t *testing.T) {
 	}, []string{"a `not a bug` or `won't fix` reply that gives a reason", "no fix and no reason,"})
 }
 
+// A re-review of an unchanged head posted "Re-review 42a70de → 42a70de" with
+// Checks listing an empty commit range and an empty diff: its header names
+// the one commit, and its Checks only what ran this time.
+func TestSkillHeadsAReReviewOfAnUnchangedHead(t *testing.T) {
+	skillSays(t, []string{
+		"Body: `**Re-review 9be04f2 → 4c1d2e3:**`, or `**Re-review of 4c1d2e3 (no new commits):**` when `previous_head_sha` is `head_sha` (its Checks list only what ran this time), and the verdict line (section 7).",
+	}, nil)
+}
+
 // claude-review reports only what the judge can post: of the candidates only
 // claude-review raised, 3 were posted and 302 rejected (speculative 108,
 // style_only 73, pre_existing 29). Its prompts no longer ask for uncertain

@@ -150,7 +150,8 @@ func TestCandidatesWaitForTheOwnPass(t *testing.T) {
 
 // A round whose judge is alone prompts it once, as before: no own pass for
 // a round of the judge alone (every reviewer triaged out, or `--role`
-// naming only the judge), a delta check, or a continued turn.
+// naming only the judge), a delta check, a re-review of the same head, or a
+// continued turn.
 func TestLoneJudgeGetsOnePrompt(t *testing.T) {
 	cases := map[string]func(e *env) RoundInput{
 		"judge alone": func(e *env) RoundInput {
@@ -162,6 +163,12 @@ func TestLoneJudgeGetsOnePrompt(t *testing.T) {
 			in := e.ownInput(KindRereview)
 			in.Previous = &PreviousReview{ID: 77, Event: "COMMENTED", SHA: head2}
 			in.Roles, in.DeltaCheck = []config.Role{e.judgeRole()}, &DeltaCheck{Lines: 4}
+			return in
+		},
+		"same head": func(e *env) RoundInput {
+			in := e.ownInput(KindRereview)
+			in.Previous = &PreviousReview{ID: 77, Event: "COMMENTED", SHA: target}
+			in.Roles, in.SameHead = []config.Role{e.judgeRole()}, true
 			return in
 		},
 		"every reviewer logged out": func(e *env) RoundInput {

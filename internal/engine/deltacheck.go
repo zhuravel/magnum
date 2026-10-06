@@ -118,22 +118,28 @@ func (e *Engine) hasOwnReview(ctx context.Context, pr store.PR, login string) bo
 	return e.previousReview(ctx, pr, login, e.formerLogins(ctx, pr)).ID != 0
 }
 
-// checkFresh settles a delta check whose judge started without its
-// conversation (the round's kind became a recovery; why says what made the
-// session fresh): with a review of the PR's identities on record to build
-// on (effort is effortCheck, hasOwnReview) the check runs with the fresh
-// session, which reads that review and its threads first (the recovery
-// prompt with delta_check: round.delta_check_fresh). Without one it reports
-// false, with round.delta_check_dropped: the round runs in full.
+// checkFresh settles a delta check, or a re-review of the same head
+// (same_head.go), whose judge started without its conversation (the round's
+// kind became a recovery; why says what made the session fresh): with a
+// review of the PR's identities on record to build on (effort is
+// effortCheck, hasOwnReview) the judge runs alone with the fresh session,
+// which reads that review and its threads first (the recovery prompt with
+// delta_check: round.delta_check_fresh; round.same_head_fresh). Without one
+// it reports false, with round.delta_check_dropped (round.same_head_dropped):
+// the round runs in full.
 func (e *Engine) checkFresh(ctx context.Context, job *roundJob, rs *roundSetup, effort startEffort, why string) bool {
 	subject := prSubject(job.repo, job.pr.Number)
 	data := map[string]any{"kind": rs.kind, "reason": why}
+	fresh, dropped, what, alone := "round.delta_check_fresh", "round.delta_check_dropped", "delta check", "the delta check"
+	if rs.delta == nil {
+		fresh, dropped, what, alone = "round.same_head_fresh", "round.same_head_dropped", "same head", "the judge alone"
+	}
 	if effort == effortCheck && rs.kind == pipeline.KindRecovery {
-		e.event(ctx, "info", subject, "round.delta_check_fresh", "delta check with a fresh judge session: "+why, data)
+		e.event(ctx, "info", subject, fresh, what+" with a fresh judge session: "+why, data)
 		return true
 	}
-	e.event(ctx, "info", subject, "round.delta_check_dropped",
-		"a full round instead of the delta check: the judge starts in a fresh session ("+why+"), with no review of this PR's identities on record to build on", data)
+	e.event(ctx, "info", subject, dropped,
+		"a full round instead of "+alone+": the judge starts in a fresh session ("+why+"), with no review of this PR's identities on record to build on", data)
 	return false
 }
 

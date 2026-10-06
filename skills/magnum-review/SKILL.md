@@ -1,6 +1,6 @@
 ---
 name: magnum-review
-description: Judge a GitHub PR named in a <magnum> context block. Run the full Zhuravel review yourself, prove or reject every candidate finding from the reviewer reports, and publish exactly one GitHub review as the configured identity. Supports re-review of new commits in the same session. Used by the magnum daemon; invoke only with a <magnum> block.
+description: Judge a GitHub PR named in a <magnum> context block. Run the full Zhuravel review yourself, prove or reject every candidate finding from the reviewer reports, and publish exactly one GitHub review as the configured identity. Supports re-reviews in the same session. Used by the magnum daemon; invoke only with a <magnum> block.
 ---
 
 # Magnum Review
@@ -26,7 +26,7 @@ The latest prompt contains a `<magnum>` block with these fields:
 - `blind` (only in `magnum eval` replays, always with `dry_run: true`): see "Blind evaluation" below.
 - `post_merge` (only when `true`): see "Post-merge review" below.
 - Re-review only: `previous_review_id`, `previous_head_sha`, `since`, `force_pushed`, `base_merged` (only when `true`), `moved_from`. Re-review and recovery: `threads_file`, `former_logins`.
-- `former_logins` (usually empty): logins this PR's earlier reviews were posted as before `reviewer_login`. Their reviews, threads and replies are your own history (earlier findings, threads under the reply contract, rebuttals). Write only as `reviewer_login`: never edit, dismiss or reply as a former login, nor dismiss their reviews; magnum dismisses what they left standing once your review is posted.
+- `former_logins` (usually empty): logins this PR's earlier reviews were posted as before `reviewer_login`. Their reviews, threads and replies are your own history. Write only as `reviewer_login`: never edit, dismiss or reply as a former login, nor dismiss their reviews; magnum dismisses what they left standing once your review is posted.
 
 Read `readiness` before you run any check. A check that is not `ok` tells you what will not work in this checkout (no test database, the wrong Ruby, databases without the PR's schema after a failed `reset_db`): do not rerun it or rediscover the cause; skip the checks it blocks, say which, and record it under `environment_failures` in `result_file` (and in the repository notes when durable), never in the review.
 
@@ -179,7 +179,7 @@ The reply contract. Decide each earlier finding:
 
 Post nothing new for fixed or answered findings, and do not re-post a still-open one inline. A reply that states a standing decision of the repository ("we do X here on purpose") goes into the repository notes (section 2), so later reviews do not raise it again.
 
-Body: `**Re-review 9be04f2 → 4c1d2e3:**` and the verdict line (section 7). Then only what changed since your last review: earlier findings now fixed; now answered, with the author's reason in a few words; still open despite a new reply or commit, each with a link to its thread and one line why (the fix misses the retry path; the reason is wrong because …); the new findings. Unchanged open findings get one count and one link to your previous review (`2 earlier problems are still open: <url>#pullrequestreview-<previous_review_id>`); the verdict still counts them.
+Body: `**Re-review 9be04f2 → 4c1d2e3:**`, or `**Re-review of 4c1d2e3 (no new commits):**` when `previous_head_sha` is `head_sha` (its Checks list only what ran this time), and the verdict line (section 7). Then only what changed since your last review: earlier findings now fixed; now answered, with the author's reason in a few words; still open despite a new reply or commit, each with a link to its thread and one line why (the fix misses the retry path; the reason is wrong because …); the new findings. Unchanged open findings get one count and one link to your previous review (`2 earlier problems are still open: <url>#pullrequestreview-<previous_review_id>`); the verdict still counts them.
 
 `mode: continue` (a usage limit lifted) and `mode: recovery` (a new session after the old one was lost): first list the reviews by `reviewer_login` on this PR. If one already carries `magnum:run=<run_id>`, write the result file with its id and stop. In `recovery`, read your earlier reviews and their threads (by `reviewer_login` and every `former_logins` entry) before anything else.
 
@@ -219,7 +219,7 @@ Event, from the findings you post (an earlier finding that is still open counts 
 - no findings (optional simplifications do not count) → `no_findings_event`;
 - `self_authored: true`, or GitHub refuses a self-verdict → `COMMENT`.
 
-The review covers exactly `head_sha`, the commit magnum checked out. Post it on `head_sha` even when the PR head moved while you worked: do not fetch, read or check out newer commits, and do not drop a finding or mark it fixed because of them. magnum handles a newer head (a restart, or a note and the next round).
+The review covers exactly `head_sha`, the commit magnum checked out. Post it on `head_sha` even when the PR head moved while you worked: do not fetch, read or check out newer commits, and do not drop a finding or mark it fixed because of them. magnum handles a newer head.
 
 Post only through `post_review`. Write the review to the file its `--review` names, `{"event":"…","body":"…","comments":[{"path":"app/x.rb","line":42,"body":"…"}]}` (`"side":"LEFT"` for a deleted line, `start_line` for a range), never putting PR content inside executable shell text, then run the line as given. It prints one JSON object:
 
@@ -254,6 +254,6 @@ At every exit, success or not, write `result_file` atomically (write `<result_fi
 
 `verdict` is your decision whatever this repository lets you post: `blocking` (at least one `P0` or `P1`, a still-open earlier finding included), `non_blocking` (only `P2` and `P3`), `clean` (no findings; optional simplifications do not count). Write it on every review, also when the events or `self_authored` make you post `COMMENT`: magnum shows it to the reviewer.
 
-`provenance` is the ledger of section 3 (`magnum stats` reads it): `id`s unique in the file, `line` `null` for a finding in the body, `reason_code` only on a rejection. Its posted entries add up to `findings`. `previous_findings.rebutted` counts the still-open findings you rebutted in their thread this round. `harness_used`: the `notes_dir` files you ran or read, named as there.
+`provenance` is the ledger of section 3: `id`s unique in the file, `line` `null` for a finding in the body, `reason_code` only on a rejection. Its posted entries add up to `findings`. `previous_findings.rebutted` counts the still-open findings you rebutted in their thread this round. `harness_used`: the `notes_dir` files you ran or read, named as there.
 
 Finish with at most two lines (the review URL or the exact blocker, and the finding counts), then `MAGNUM_RESULT <same json>` as the very last line. If identity, PR discovery, validation or submission blocks the review, make no other GitHub write.

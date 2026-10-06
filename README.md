@@ -303,6 +303,15 @@ current or former identities is on record to build on does it become a full reco
 push that makes the delta too large, or no check posted within an hour of the push dismisses it then, with
 the reason. `delta_check = false` keeps the wait and the full round.
 
+A re-review of a head Magnum already reviewed (no new commits: `magnum review`, or a review request, to
+have it re-read an author's reply) runs the judge alone as a delta check does: no triage, reruns or own
+pass, at its `rereview_effort`, in a fresh session too when the old one is gone (`round.same_head_fresh`).
+Its prompt says the head is unchanged: re-read the replies and comments since the last review, re-decide
+each earlier finding under the reply contract, run no check that review already ran, and post one short
+review, headed `Re-review of <sha> (no new commits):`. `round.same_head` records it. A request that names
+roles (`--role`, `--simplify`) or asks for fresh sessions (`--fresh`) runs every reviewer as before, and so
+does a round whose checkout finds a newer head (`round.same_head_dropped`).
+
 The rest of the re-review sees a base merge the same way: triage reads the PR's own diff of the files whose
 own change differs, the simplify reviewer's rerun measures that change, and the reviewers' and the judge's
 prompts say the push merged the base branch, so they compare the PR's diff before and after it instead of
@@ -509,7 +518,7 @@ the state cell reads `reviewers+judge` while both work), bounded by the judge's 
 it short and the restart prompts it again on the new head, naming the head it moved from, and a pass
 that left no file only makes the candidates prompt ask for it. Crash recovery counts it with the
 reviewers (a daemon restart during it starts the round again), and a usage limit there pauses the round
-at the candidates prompt, whose turn the paused round then continues. A judge alone (a delta check, a continued
+at the candidates prompt, whose turn the paused round then continues. A judge alone (a delta check, a re-review of the same head, a continued
 turn, a round whose reviewers were all dropped) gets one prompt, and `judge_own_pass = "after"` keeps one
 prompt after the reviewers. No role may edit the checkout: after each stage Magnum compares HEAD and `git status`
 with what the stage found (the judge's own pass included while it works), and a role that changed them
@@ -784,7 +793,7 @@ Fix 1 problem before merging. 1 optional: 1 simplification.
 | `magnum eval run\|score\|list\|show` | Measure a prompt, skill or model change: `run` replays the PRs with known defects in `~/.config/magnum/eval.toml` (see `eval.toml.example`) at their pinned heads as blind dry runs and reports, per case, the seeded defects the planned review found, at what severity, and its other findings (noise), next to the previous run. `score` re-scores a run after a match rule is fixed, without the agents. |
 | `magnum retro [<ref>...] [--again] [--lookback 14d] [--json]` | Run the retro now (see Learning from other reviewers): classify what other reviewers said about the PRs closed within the lookback, whether or not `[learn] enabled`. `--again` looks again at PRs a retro already did; PRs named by `<ref>` are looked at again in any case. |
 | `magnum misses [<ref>] [--all] [--class miss\|not_issue\|style\|outside\|unclassified] [--json]` | What other reviewers caught and Magnum did not: the retro's new misses, with the reviewer, where, severity, whether Magnum's judge had raised and rejected it, the title and the lesson. `--all` lists every class and state. |
-| `magnum review <url\|owner/repo#N\|repo#N\|N> [--fresh] [--role <role>] [--simplify] [--as <identity>] [--no-post] [--wait] [--timeout <duration>]` | Force a round now, bypassing throttles. `--role` (repeatable) also runs an on-demand role this round; `--simplify` is its shorthand for the role aliased `simplify` (claude-simplify by default). `--wait` follows the round; `--timeout` stops following after that long while the round goes on. On a PR GitHub merged it is a post-merge review: the commits Magnum missed since its last review (the whole PR when it never reviewed it), posted as a comment only, after which the PR is released again; a merged PR whose head was reviewed and a PR closed without merging are refused. A pinned PR (`magnum open`, `magnum pin`) is unpinned for it; its slot's guards still keep a person's changes or agent safe, and the answer names the guard that holds the round. |
+| `magnum review <url\|owner/repo#N\|repo#N\|N> [--fresh] [--role <role>] [--simplify] [--as <identity>] [--no-post] [--wait] [--timeout <duration>]` | Force a round now, bypassing throttles. `--role` (repeatable) also runs an on-demand role this round; `--simplify` is its shorthand for the role aliased `simplify` (claude-simplify by default). `--wait` follows the round; `--timeout` stops following after that long while the round goes on. On a head Magnum already reviewed (no new commits) only the judge runs, to re-decide its earlier findings from the replies; `--role`, `--simplify` and `--fresh` keep the full round. On a PR GitHub merged it is a post-merge review: the commits Magnum missed since its last review (the whole PR when it never reviewed it), posted as a comment only, after which the PR is released again; a merged PR whose head was reviewed and a PR closed without merging are refused. A pinned PR (`magnum open`, `magnum pin`) is unpinned for it; its slot's guards still keep a person's changes or agent safe, and the answer names the guard that holds the round. |
 | `magnum open <ref> [--role <role>]` | Focus the PR's pane in herdr and reveal the herdr client (focus the existing iTerm2 tab, or open a new one). When macOS refuses its AppleScript (the Automation permission, error -1743) it says so and where to allow it. |
 | `magnum watch <ref> [--role <role>] [--ansi]` | Read-only live mirror of a pane in any terminal. |
 | `magnum roles [--repo owner/name] [--kinds] [--json]` | The effective roles per watch (kind, runs, model, effort, capture, output, prompt file and whether it is yours or built in, after, judge, aliases). `--kinds` shows how each agent CLI is started and resumed, and which models it switches to when one hits its own limit, instead. |

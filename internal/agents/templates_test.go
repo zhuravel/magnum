@@ -261,6 +261,11 @@ func TestRenderGolden(t *testing.T) {
 	recoveryMerged.BaseMerged = true
 	deltaCheckMerged := deltaCheck
 	deltaCheckMerged.BaseMerged = true
+	// A re-review of the head the judge last reviewed (no new commits): the
+	// judge alone re-decides its earlier findings from the replies, in its
+	// session or a fresh one.
+	sameHead := withNotes
+	sameHead.SameHead, sameHead.PreviousHeadSHA, sameHead.Reports = true, sameHead.HeadSHA, nil
 
 	// A round whose judge does its own pass while the reviewers work: the
 	// own-pass prompt (no reports, no posting fields) per round kind, then
@@ -322,6 +327,8 @@ func TestRenderGolden(t *testing.T) {
 		// The same check by a judge in a fresh session (its old one is gone,
 		// or the PR's identity migrated): the recovery prompt carries it.
 		{"judge_recovery_delta_check", "judge-recovery.md", deltaCheck},
+		{"judge_rereview_same_head", "judge-rereview.md", sameHead},
+		{"judge_recovery_same_head", "judge-recovery.md", sameHead},
 		{"judge_initial", "judge-initial.md", judgeFixture()},
 		{"judge_initial_blind", "judge-initial.md", blindJudge},
 		{"judge_initial_post_merge", "judge-initial.md", postMerge},

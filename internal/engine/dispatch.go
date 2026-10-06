@@ -48,6 +48,11 @@ type roundJob struct {
 	// (deltaCheckDue): only the judge runs, unless prepare finds the commits
 	// it reviews no longer make one (confirmDeltaCheck).
 	deltaCheck bool
+	// sameHead: the re-review was dispatched with no commits since the
+	// reviewed one (sameHeadDue): only the judge runs, to re-decide its
+	// earlier findings, unless the checkout finds a newer head
+	// (confirmSameHead).
+	sameHead bool
 
 	// postMerge: GitHub had merged the PR when the round was dispatched, so
 	// it is a post-merge review (post_merge.go); mergeBase is the commit it
@@ -421,6 +426,7 @@ func (e *Engine) startRound(ctx context.Context, pr store.PR, repo store.Repo, w
 		f := e.factsFor(pr, *w, e.now())
 		e.deltaFacts(ctx, pr, &f)
 		job.deltaCheck = e.deltaCheckDue(ctx, *w, pr, f, job.requested)
+		job.sameHead = e.sameHeadDue(ctx, pr)
 	}
 	from := store.ClaimableStates
 	if pr.State == store.PRPaused {
@@ -460,13 +466,13 @@ func (e *Engine) startRound(ctx context.Context, pr store.PR, repo store.Repo, w
 	}
 
 	// The roles the round runs decide which pauses and Codex limit apply
-	// (a delta check's judge alone).
+	// (the judge alone of a delta check or a re-review of the same head).
 	toRun, err := pipeline.RolesToRun(ctx, e.st, e.cfg, pr, e.cfg.RolesFor(w), e.requestedRoles(ctx, pr.ID), job.kind)
 	if err != nil {
 		e.log.Warn("dispatch: roles", "subject", subject, "err", err)
 		return false, 0, gate{}
 	}
-	if job.deltaCheck {
+	if job.deltaCheck || job.sameHead {
 		toRun = judgeAlone(toRun)
 	}
 	if kind, why := e.pausedKind(ctx, agentKinds(toRun)); why != "" {
@@ -599,8 +605,11 @@ func codexRoles(roles []config.Role) int {
 // planStart records what a dry run would do for job.
 func (e *Engine) planStart(ctx context.Context, job *roundJob, subject string) bool {
 	what := job.kind + " round"
-	if job.deltaCheck {
+	switch {
+	case job.deltaCheck:
 		what = "delta check"
+	case job.sameHead:
+		what = "re-review of the same head (the judge alone)"
 	}
 	switch {
 	case job.hasSlo:

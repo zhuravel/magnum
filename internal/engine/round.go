@@ -124,7 +124,10 @@ func (e *Engine) prepare(ctx context.Context, job *roundJob) (pipeline.RoundInpu
 	if job.deltaCheck && job.kind == pipeline.KindRereview {
 		rs.delta = e.confirmDeltaCheck(ctx, job, rs.target) // nil: the round runs in full
 	}
-	if job.kind != kindContinue && job.evalHead == "" && rs.delta == nil {
+	if job.sameHead && job.kind == pipeline.KindRereview {
+		rs.sameHead = e.confirmSameHead(ctx, job, rs.target) // false: the round runs in full
+	}
+	if job.kind != kindContinue && job.evalHead == "" && !rs.judgeOnly() {
 		rs.requested = append(rs.requested, e.rerunRoles(ctx, job, rs.roles, rs.target)...)
 	}
 	if rs.toRun, err = pipeline.RolesToRun(ctx, e.st, e.cfg, pr, rs.roles, rs.requested, job.kind); err != nil {
@@ -133,8 +136,9 @@ func (e *Engine) prepare(ctx context.Context, job *roundJob) (pipeline.RoundInpu
 	if len(rs.toRun) == 0 {
 		return fail(fmt.Errorf("watch %s has no judge among its roles", job.watch.Owner))
 	}
-	if rs.delta != nil {
-		// A delta check: the judge alone, no triage.
+	if rs.judgeOnly() {
+		// A delta check, or a re-review of the same head: the judge alone,
+		// no triage.
 		rs.roles, rs.toRun = judgeAlone(rs.roles), judgeAlone(rs.toRun)
 	} else {
 		// A small diff may not need every reviewer ([triage]): what is
@@ -170,6 +174,11 @@ func (e *Engine) prepare(ctx context.Context, job *roundJob) (pipeline.RoundInpu
 		what = deltaCheckLabel(rs.delta.Lines)
 		data["delta_check"], data["delta_lines"], data["delta_files"] = true, rs.delta.Lines, len(rs.delta.Files)
 	}
+	if rs.sameHead {
+		data["same_head"] = true
+		e.event(ctx, "info", prSubject(job.repo, pr.Number), "round.same_head",
+			"same head: the judge re-decides the threads (no commits since "+textx.ShortSHA(rs.target)+")", map[string]any{"kind": rs.kind, "target_sha": rs.target})
+	}
 	if job.postMerge {
 		what = "post-merge " + what
 	}
@@ -190,7 +199,14 @@ type roundSetup struct {
 	// delta is the delta check the round runs (confirmDeltaCheck); nil = a
 	// round of every role that runs.
 	delta *pipeline.DeltaCheck
+	// sameHead: the round re-reviews the reviewed head, the judge alone
+	// (confirmSameHead).
+	sameHead bool
 }
+
+// judgeOnly reports whether the round runs its judge alone: a delta check
+// or a re-review of the same head.
+func (rs *roundSetup) judgeOnly() bool { return rs.delta != nil || rs.sameHead }
 
 // checkout checks the PR's head out in its slot (a per-PR worktree is
 // created, or recreated, first) and returns the commit the round reviews:
@@ -235,9 +251,9 @@ func (e *Engine) checkout(ctx context.Context, job *roundJob) (string, error) {
 // startSessions gives the roles that run their panes (one workspace) and
 // starts or resumes their agents, the judge first, then settles the round's
 // kind in rs: a judge without its conversation re-reads the history
-// (recovery, or initial before any review; a delta check stays one,
-// checkFresh), and a continue that became a full round starts the other
-// roles too.
+// (recovery, or initial before any review; a delta check or a same-head
+// re-review stays one, checkFresh), and a continue that became a full
+// round starts the other roles too.
 func (e *Engine) startSessions(ctx context.Context, job *roundJob, rs *roundSetup) (agents.Workspace, *setupError) {
 	var ws agents.Workspace
 	fail := func(err error) (agents.Workspace, *setupError) {
@@ -273,8 +289,8 @@ func (e *Engine) startSessions(ctx context.Context, job *roundJob, rs *roundSetu
 	}
 	e.setKV(ctx, kvPRSessionsIdentity(pr.ID), pr.Identity)
 	effort := effortOf(job.kind)
-	if rs.delta != nil && e.hasOwnReview(ctx, pr, rs.src.Login()) {
-		effort = effortCheck // a fresh judge checks the delta too (checkFresh)
+	if rs.judgeOnly() && e.hasOwnReview(ctx, pr, rs.src.Login()) {
+		effort = effortCheck // a fresh judge checks the delta, or the same head, too (checkFresh)
 	}
 	recovered := false
 	if ws, recovered, err = e.startRoles(ctx, pr, ws, job.slot.Path, env, rs.toRun, fresh, effort); err != nil {
@@ -293,11 +309,11 @@ func (e *Engine) startSessions(ctx context.Context, job *roundJob, rs *roundSetu
 		}
 	}
 	full := job.kind == kindContinue && rs.kind != kindContinue
-	if rs.delta != nil && rs.kind != pipeline.KindRereview && !e.checkFresh(ctx, job, rs, effort, cmp.Or(why, "the judge's session is gone")) {
-		rs.delta, rs.roles, full = nil, e.cfg.RolesFor(&job.watch), true
+	if rs.judgeOnly() && rs.kind != pipeline.KindRereview && !e.checkFresh(ctx, job, rs, effort, cmp.Or(why, "the judge's session is gone")) {
+		rs.delta, rs.sameHead, rs.roles, full = nil, false, e.cfg.RolesFor(&job.watch), true
 	}
 	if full {
-		// The continued round (or the delta check) became a full one: the
+		// The continued round (or the judge alone) became a full one: the
 		// other roles that run need their panes and agents too.
 		all, err := pipeline.RolesToRun(ctx, e.st, e.cfg, pr, rs.roles, rs.requested, rs.kind)
 		if err != nil {
@@ -367,7 +383,7 @@ func (e *Engine) roundInput(ctx context.Context, job *roundJob, rs roundSetup, w
 		PR: cur, Repo: job.repo, SlotPath: job.slot.Path, Round: rs.round, Kind: rs.kind,
 		TargetSHA: rs.target, BaseRef: base, Roles: rs.roles, Requested: rs.requested, MovedFrom: ws.MovedFrom,
 		ContinueRunID: job.continueRunID, DryRun: dryRun, PostMerge: job.postMerge,
-		NotesPath: e.roundNotes(job.repo), Readiness: e.readinessPlan(ctx, job, rs.kind), DeltaCheck: rs.delta,
+		NotesPath: e.roundNotes(job.repo), Readiness: e.readinessPlan(ctx, job, rs.kind), DeltaCheck: rs.delta, SameHead: rs.sameHead,
 		OwnPass: e.cfg.JudgeOwnPassFor(&job.watch) == config.OwnPassParallel, Related: e.cfg.RelatedFor(&job.watch),
 	}
 	if job.evalHead != "" {
@@ -379,8 +395,11 @@ func (e *Engine) roundInput(ctx context.Context, job *roundJob, rs roundSetup, w
 	if rs.kind != kindContinue {
 		in.ContinueRunID = ""
 		in.MaxRestarts, in.DispatchedHead = e.cfg.Daemon.MaxRoundRestarts, job.pr.HeadSHA
-		if job.evalHead != "" || job.postMerge || rs.delta != nil {
-			in.MaxRestarts = 0 // a pinned head, or a merged one, never moves; a delta check measured its commits
+		if job.evalHead != "" || job.postMerge || rs.judgeOnly() {
+			// A pinned head, or a merged one, never moves; a delta check
+			// measured its commits, and a same-head judge re-decides its
+			// review of the head it checked out.
+			in.MaxRestarts = 0
 		}
 		if job.kind == kindContinue {
 			in.DispatchedHead = rs.target // a continue that became a full round kept the paused round's checkout

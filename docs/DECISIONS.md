@@ -2486,3 +2486,24 @@ editing history. Code, config comments and prompts reference these by their head
   the poll, at a review's verification and with the configuration, so it would be stale between them);
   `latestReviews` (a later comment hides an outstanding changes request); a new section of the board (one
   line per PR, as decided); truecolor for the rainbow (the screens use the 16 ANSI colors only).
+- **A re-review of an unchanged head is the judge alone** (2026-10-06; extends "A small re-review delta gets
+  a judge-only check"). `magnum review` on a PR whose head Magnum had already reviewed, to have the judge
+  re-read an author's reply after a fix to the reply contract, ran a full round: claude-review, codex-review
+  and the judge, about 17 minutes and a full round's usage, though no code changed and only the threads
+  needed re-deciding; the review it posted was headed "Re-review 42a70de → 42a70de" and its Checks listed an
+  empty commit range and an empty diff. A re-review whose head is the reviewed one (`head_sha =
+  reviewed_sha`, forced or requested, not post-merge) now runs as the delta check does: the judge alone, no
+  triage, reruns, own pass or restarts, at its `rereview_effort` (`round.same_head`, `same_head` in
+  `engine.round_start`). A judge whose session is gone runs alone in a fresh session when a review of the
+  PR's identities is on record (`round.same_head_fresh`), as the delta check's does; else, or when the
+  checkout finds a newer head, the round runs in full (`round.same_head_dropped`). `judge-rereview.md` and
+  `judge-recovery.md` (`.SameHead`) say the head is unchanged instead of naming new commits and candidate
+  reports: re-read the replies and comments since the last review, re-decide each earlier finding under the
+  reply contract, run no check that review already ran on this head, post one short review. SKILL.md heads
+  such a review `**Re-review of <sha7> (no new commits):**`, its Checks listing only what ran this time; the
+  sentence fits the cap (31,098 bytes) by dropping three asides the prompts or the code already carry (what
+  reads `provenance`, how Magnum handles a newer head, the former logins' history spelled out) and
+  shortening the description. A request that names roles (`--role`, `--simplify`) or asks for fresh
+  sessions (`--fresh`) keeps the full round: it asks for reviewers' eyes or a clean start. Rejected: a
+  `same_head` field in the `<magnum>` block (the judge sees `previous_head_sha = head_sha`, and the skill
+  would have to describe one more field).

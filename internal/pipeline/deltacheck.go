@@ -9,7 +9,10 @@ package pipeline
 // (DECISIONS "A delta check whose judge lost its session runs with a fresh
 // one") checks the delta in a recovery round: the recovery prompt, which
 // rebuilds its context from its previous review and threads, at the same
-// rereview effort.
+// rereview effort. A re-review of the head the judge last reviewed
+// (RoundInput.SameHead; DECISIONS "A re-review of an unchanged head is the
+// judge alone") runs the same way, with a prompt that has the judge
+// re-decide its earlier findings from the replies.
 
 import (
 	"context"
@@ -49,6 +52,13 @@ func (rd *round) deltaCheck() *DeltaCheck {
 		return nil
 	}
 	return rd.in.DeltaCheck
+}
+
+// sameHead reports whether the round re-reviews the head the judge's last
+// review covered, the judge alone (RoundInput.SameHead of a re-review, or
+// of a recovery: a fresh judge session).
+func (rd *round) sameHead() bool {
+	return rd.in.SameHead && (rd.in.Kind == KindRereview || rd.in.Kind == KindRecovery)
 }
 
 // addDeltaCheck fills jd's delta check fields for a round that is one,

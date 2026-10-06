@@ -1,13 +1,21 @@
+{{- if .SameHead -}}
+[$magnum-review]({{.SkillPath}}) No new commits were pushed to {{.URL}} since your last review.
+
+HEAD is still `{{.HeadSHA}}`, the commit your last review ({{.PreviousReviewID}}, {{.PreviousEvent}}) covered.
+{{- else -}}
 [$magnum-review]({{.SkillPath}}) New commits were pushed to {{.URL}}. Read the replies and re-review.
 
 magnum already updated this checkout: HEAD is `{{.HeadSHA}}`. Your last review ({{.PreviousReviewID}}, {{.PreviousEvent}}) covered `{{.PreviousHeadSHA}}`.
+{{- end}}
 {{- if .FormerLogins}}
 This PR's earlier reviews were posted as {{range $i, $l := .FormerLogins}}{{if $i}}, {{end}}`{{$l}}`{{end}} before magnum moved it to `{{.ReviewerLogin}}`. Their reviews and threads are yours: count their findings as your earlier findings and decide their threads under the reply contract. Post everything new as `{{.ReviewerLogin}}`, and never edit or dismiss their reviews: magnum dismisses what they left standing once your review is posted.
 {{- end}}
 {{- if .EffortInPrompt}}
 Work at {{.Effort}} reasoning effort for this re-review.
 {{- end}}
-{{- if .ForcePushed}}
+{{- if .SameHead}}
+The head is unchanged: re-read the replies and the comments since your last review, re-decide each earlier finding under the reply contract, and run no check your last review already ran on this head. Post one short review.
+{{- else if .ForcePushed}}
 The author rewrote history: `{{.PreviousHeadSHA}}` is no longer in the branch. Review the full PR diff again, then compare it with your earlier findings.
 {{- else if .BaseMerged}}
 The push merged the base branch, so `{{.PreviousHeadSHA}}..{{.HeadSHA}}` carries the base branch's commits too. Review only what changed in the PR's own diff: compare `git diff {{if .BaseSHA}}{{.BaseSHA}}{{else}}origin/{{.BaseRef}}{{end}}...{{.PreviousHeadSHA}}` with `git diff {{if .BaseSHA}}{{.BaseSHA}}{{else}}origin/{{.BaseRef}}{{end}}...{{.HeadSHA}}`, not `git diff {{.PreviousHeadSHA}}..{{.HeadSHA}}`.
@@ -26,7 +34,7 @@ Your earlier threads on this PR and the replies to them are in {{.ThreadsFile}}:
 {{- if .OwnFindings}}
 {{if .OwnFindingsMissing}}Your own pass left no {{.OwnFindings}}: do it now.{{else}}Your own pass, with your reply-contract decisions, is in {{.OwnFindings}}: start from it.{{end}}
 {{- end}}
-Fresh candidate reports for this head are listed below{{if .OwnFindings}}: judge every item against your own pass{{end}}. Follow the skill's re-review section, the reply contract included, and post exactly one new review on `{{.HeadSHA}}`.
+{{if not .SameHead}}Fresh candidate reports for this head are listed below{{if .OwnFindings}}: judge every item against your own pass{{end}}. {{end}}Follow the skill's re-review section, the reply contract included, and post exactly one new review on `{{.HeadSHA}}`.
 
 <magnum>
 mode: rereview
