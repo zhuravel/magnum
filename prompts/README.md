@@ -236,14 +236,20 @@ the copies.
 | `.Limits` | the [notes] curation triggers: `.MaxBytes`, `.MaxLine`, `.MaxHarnessFiles`, `.MaxHarnessBytes` |
 | `.Over` | the triggers the notes are past (empty: a weekly or requested curation) |
 | `.UnusedRounds` | the rounds without a use after which a harness file is a candidate (20) |
+| `.Misses`, `.MissCount` | `misses.json` and how many misses it holds, when the curation was given the retro's misses of the repository (class miss, scope repo, still new); `""` and 0 otherwise. Each miss is data: its `id`, `severity`, `where` (path:line at the reviewed commit), `title` and `lesson` (scrubbed of logins, pull request references and links again) and `rejections`, the reasons of rejected proposals it was in; never a login, a pull request number or a comment |
 
-`changes.json` is `{"sections": [...], "files": [...]}`, each item `{"name", "action", "into", "reason"}`:
-every `## ` section of the proposal and every proposed harness file `kept` or `added`, every current
-harness file `kept`, `merged` (into a proposed file) or `deleted`, each with a one-line reason saying how
-it helps a review of a future pull request. Magnum checks the proposal (`internal/notes`): every harness
-file named in the notes, nothing outside the scratch directory, no pull request number, branch or probe
-file, no secret and no home directory path; size is not checked. An invalid proposal gets one nudge naming
-its problems, then is kept as invalid.
+`changes.json` is `{"sections": [...], "files": [...], "misses": [...]}`, each section and file item
+`{"name", "action", "into", "reason"}`: every `## ` section of the proposal and every proposed harness file
+`kept` or `added`, every current harness file `kept`, `merged` (into a proposed file) or `deleted`, each
+with a one-line reason saying how it helps a review of a future pull request. With misses, the prompt adds
+one rule (a note for a miss only when a future review of the repository would catch a similar problem
+because of it) and `misses` lists every miss id once, `{"id", "action": "noted", "section"}` with the `## `
+section that covers it now or `{"id", "action": "skipped", "reason"}`; without misses the prompt renders as
+before (the `notes_curate` goldens) and the key may be left out. Magnum checks the proposal
+(`internal/notes`): every harness file named in the notes, every miss given accounted for, nothing outside
+the scratch directory, no pull request number, branch or probe file, no secret and no home directory path;
+size is not checked. A proposal that changes nothing is invalid unless it was given misses and skips them
+all. An invalid proposal gets one nudge naming its problems, then is kept as invalid.
 
 ### Repository notes
 

@@ -1,17 +1,22 @@
 package engine
 
 // Curation of the repository notes (DECISIONS "Repository notes: triggers,
-// history, usage and curation"). A curation runs for one repository at a
-// time: for one marked past its [notes] limits, once a week with curate =
-// "weekly", or when `magnum notes <repo> --curate` asks (ReqNotesCurate). It
-// copies the notes and the harness under the notes lock into a scratch
-// directory, where an interactive agent (the retro's pane machinery, tagged
-// "learn") proposes new notes, a new harness and changes.json; magnum checks
+// history, usage and curation", "The retro's misses become notes
+// proposals"). A curation runs for one repository at a time, on the [notes]
+// curate triggers: a repository marked past its limits (over_limit), once a
+// week (weekly), or one whose retro recorded misses for its notes (misses,
+// KVNotesMisses); or when `magnum notes <repo> --curate` asks
+// (ReqNotesCurate). It copies the notes and the harness under the notes lock
+// into a scratch directory, with the repository's new misses (class miss,
+// scope repo) as misses.json, where an interactive agent (the retro's pane
+// machinery, tagged "learn") proposes new notes, a new harness and
+// changes.json accounting for every section, file and miss; magnum checks
 // the proposal (notes.Validate) with one nudge, and stores it in the registry
 // whatever it is: a valid one waits for the operator (`magnum notes <repo>
-// --review`, a toast and a count in the screens' titles), an invalid one is
-// kept with its problems. The live notes change only when the operator
-// applies a proposal. A proposal nobody reviewed within a week expires.
+// --review`, a toast and a count in the screens' titles) with what it did
+// with each miss, an invalid one is kept with its problems. The live notes
+// change only when the operator applies a proposal. A proposal nobody
+// reviewed within a week expires.
 
 import (
 	"cmp"
@@ -24,11 +29,14 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/fsx"
+	"github.com/zhuravel/magnum/internal/learn"
 	"github.com/zhuravel/magnum/internal/notes"
 	"github.com/zhuravel/magnum/internal/notify"
 	"github.com/zhuravel/magnum/internal/pipeline"
@@ -44,6 +52,7 @@ const (
 	// Curation triggers (notes_proposals.trigger_reason).
 	CurateTriggerOverLimit = config.CurateOverLimit
 	CurateTriggerWeekly    = config.CurateWeekly
+	CurateTriggerMisses    = config.CurateMisses
 	CurateTriggerRequest   = "request"
 
 	// ProposalTTL is how long a proposal waits for the operator before it
@@ -71,6 +80,11 @@ const (
 	// curateRejections is how many earlier rejections the curator is shown.
 	curateRejections = 5
 )
+
+// KVNotesMisses marks a repository whose retro recorded misses for its
+// notes: the time of the retro that did (store.FormatTime). The misses
+// trigger curates it, and a curation that began after that time clears it.
+func KVNotesMisses(fullName string) string { return "notes." + strings.ToLower(fullName) + ".misses" }
 
 // NotesCuratePayload is a `magnum notes <repo> --curate` request.
 type NotesCuratePayload struct {
@@ -179,7 +193,9 @@ func curateNudge(job CurateJob, problems []string) string {
 }
 
 // curateData feeds the curator's prompt (prompts/notes-curate.md): the
-// repository's name, paths and limits, never notes text.
+// repository's name, paths and limits, never notes text; Misses is the
+// path of misses.json ("" when the curation was given none) and MissCount
+// how many it holds.
 type curateData struct {
 	Repo           string
 	Dir            string
@@ -192,6 +208,28 @@ type curateData struct {
 	Limits         notes.Limits
 	Over           []string
 	UnusedRounds   int
+	Misses         string
+	MissCount      int
+}
+
+// curateMissesFile is the misses.json a curator reads: the repository's
+// new misses for its notes, as data. Never a reviewer's or an author's
+// login, a pull request's number, link or text: the title and the lesson
+// pass learn.ScrubLesson again, the place is path:line at the reviewed
+// commit, and the operator's reasons for rejecting earlier proposals that
+// had a miss come with it.
+type curateMissesFile struct {
+	Repo   string       `json:"repo"`
+	Misses []curateMiss `json:"misses"`
+}
+
+type curateMiss struct {
+	ID         int64    `json:"id"`
+	Severity   string   `json:"severity,omitempty"`
+	Where      string   `json:"where,omitempty"` // path:line at the reviewed commit; none for a review summary
+	Title      string   `json:"title,omitempty"`
+	Lesson     string   `json:"lesson,omitempty"`
+	Rejections []string `json:"rejections,omitempty"`
 }
 
 // curateUsage is the usage.json a curator reads.
@@ -234,7 +272,7 @@ func (e *Engine) maybeCurate(ctx context.Context) {
 	}
 	e.curateChecked = now
 	e.expireProposals(ctx)
-	if e.d.Curator == nil || e.cfg.Notes.Curate == config.CurateOff || e.curateBusy() || e.userPause(ctx) != "" || e.holdReason(ctx) != "" || e.curateToolPause(ctx) != "" {
+	if e.d.Curator == nil || len(e.cfg.Notes.Curate) == 0 || e.curateBusy() || e.userPause(ctx) != "" || e.holdReason(ctx) != "" || e.curateToolPause(ctx) != "" {
 		return
 	}
 	if repo, trigger, ok := e.dueCuration(ctx, now); ok {
@@ -242,23 +280,22 @@ func (e *Engine) maybeCurate(ctx context.Context) {
 	}
 }
 
-// dueCuration finds a repository whose notes are due a curation: its notes
-// changed since its last curation began (or applied), no proposal of it
-// waits for the operator, no attempt failed within curateRetry, no round of
-// it is in its judge stage, and either it is marked past a limit and its
-// last curation is a day old, or curate is weekly and that is a week old.
+// dueCuration finds a repository due a curation by an [notes] curate
+// trigger: no proposal of it waits for the operator, no attempt failed
+// within curateRetry, no round of it is in its judge stage, and either its
+// notes changed since its last curation began (or applied) and it is marked
+// past a limit (over_limit) with its last curation a day old, or that is a
+// week old (weekly); or a retro recorded misses for its notes (misses, its
+// KVNotesMisses mark) that are still new, its last curation a day old.
 func (e *Engine) dueCuration(ctx context.Context, now time.Time) (store.Repo, string, bool) {
 	repos, err := e.st.ListRepos(ctx)
 	if err != nil {
 		e.log.Warn("notes curation: list repositories", "err", err)
 		return store.Repo{}, "", false
 	}
+	on := e.cfg.Notes.Curate.Has
 	for _, repo := range repos {
 		if _, ok := notesRepo(e.d.Layout, repo.Owner, repo.Name); !ok || e.curateTriedRecently(repo.ID, now) {
-			continue
-		}
-		latest, err := e.st.LatestNotesVersion(ctx, repo.ID)
-		if err != nil || (latest.Bytes == 0 && len(latest.Files) == 0) {
 			continue
 		}
 		props, err := e.st.NotesProposals(ctx, store.NotesProposalFilter{RepoID: repo.ID, Limit: 50})
@@ -274,18 +311,23 @@ func (e *Engine) dueCuration(ctx context.Context, now time.Time) (store.Repo, st
 		}
 		since := time.Duration(1<<63 - 1)
 		if last != nil {
-			if latest.ID <= max(store.Deref(last.BaseVersionID), store.Deref(last.AppliedVersionID)) {
-				continue // nothing changed since
-			}
 			since = now.Sub(last.CreatedAt)
+		}
+		// The notes' own triggers want notes that changed since the last
+		// curation.
+		changed := false
+		if latest, err := e.st.LatestNotesVersion(ctx, repo.ID); err == nil && (latest.Bytes > 0 || len(latest.Files) > 0) {
+			changed = last == nil || latest.ID > max(store.Deref(last.BaseVersionID), store.Deref(last.AppliedVersionID))
 		}
 		trigger := ""
 		marked, _ := e.getKV(ctx, KVNotesOver(repo.FullName()))
 		switch {
-		case marked != "" && since >= curateOverLimitEvery:
+		case changed && on(CurateTriggerOverLimit) && marked != "" && since >= curateOverLimitEvery:
 			trigger = CurateTriggerOverLimit
-		case e.cfg.Notes.Curate == config.CurateWeekly && since >= curateWeeklyEvery:
+		case changed && on(CurateTriggerWeekly) && since >= curateWeeklyEvery:
 			trigger = CurateTriggerWeekly
+		case on(CurateTriggerMisses) && since >= curateOverLimitEvery && e.missesDue(ctx, repo):
+			trigger = CurateTriggerMisses
 		default:
 			continue
 		}
@@ -295,6 +337,29 @@ func (e *Engine) dueCuration(ctx context.Context, now time.Time) (store.Repo, st
 		return repo, trigger, true
 	}
 	return store.Repo{}, "", false
+}
+
+// missesDue reports whether repo is marked by a retro (KVNotesMisses) and
+// still has new misses for its notes; a mark without them is cleared.
+func (e *Engine) missesDue(ctx context.Context, repo store.Repo) bool {
+	key := KVNotesMisses(repo.FullName())
+	if v, _ := e.getKV(ctx, key); v == "" {
+		return false
+	}
+	n, err := e.st.CountMisses(ctx, notesMissFilter(repo.ID))
+	if err != nil {
+		return false
+	}
+	if n == 0 {
+		e.delKV(ctx, key)
+	}
+	return n > 0
+}
+
+// notesMissFilter selects a repository's misses for its notes: class miss,
+// scope repo, state new.
+func notesMissFilter(repoID int64) store.MissFilter {
+	return store.MissFilter{RepoID: repoID, Classes: []string{store.MissMiss}, Scopes: []string{store.MissScopeRepo}, States: []string{store.MissNew}}
 }
 
 func (e *Engine) curateTriedRecently(repoID int64, now time.Time) bool {
@@ -446,12 +511,20 @@ func (e *Engine) runCurate(ctx context.Context, repo store.Repo, trigger string)
 		stop("usage data: " + oneLine(err.Error(), retroWhyRunes))
 		return
 	}
+	misses, missesJSON, err := e.curateMisses(ctx, repo)
+	if err != nil {
+		stop("the misses: " + oneLine(err.Error(), retroWhyRunes))
+		return
+	}
 	scratch, err := notes.PrepareScratch(run.Dir, state, usage)
+	if err == nil && len(misses) > 0 {
+		err = fsx.WriteFileAtomic(scratch.Misses(), missesJSON, 0o600)
+	}
 	if err != nil {
 		stop("scratch directory: " + oneLine(err.Error(), retroWhyRunes))
 		return
 	}
-	prompt, promptSHA, err := e.curatePrompt(scratch, nr, over)
+	prompt, promptSHA, err := e.curatePrompt(scratch, nr, over, len(misses))
 	if err != nil {
 		stop(oneLine(err.Error(), retroWhyRunes))
 		return
@@ -460,6 +533,9 @@ func (e *Engine) runCurate(ctx context.Context, repo store.Repo, trigger string)
 	if err != nil {
 		stop(oneLine(err.Error(), retroWhyRunes))
 		return
+	}
+	for _, m := range misses {
+		check.Misses = append(check.Misses, m.ID)
 	}
 
 	cur, err := e.d.Curator(ctx, run)
@@ -504,6 +580,8 @@ func (e *Engine) runCurate(ctx context.Context, repo store.Repo, trigger string)
 		p, err := e.st.CreateNotesProposal(octx, in)
 		if err != nil {
 			e.log.Warn("notes curation: store an invalid proposal", "repo", full, "err", err)
+		} else {
+			e.clearMissesMark(octx, full, start)
 		}
 		e.event(octx, "warn", subject, "notes.curate_invalid",
 			fmt.Sprintf("notes curation of %s: the proposal is still invalid after a nudge (%d problem(s)); kept as proposal %d",
@@ -512,19 +590,96 @@ func (e *Engine) runCurate(ctx context.Context, repo store.Repo, trigger string)
 	}
 	proposed := ContentOf(res.Proposal.State)
 	in.State, in.Proposed, in.Changes = store.ProposalPending, &proposed, res.Proposal.ChangesJSON
+	for _, m := range res.Proposal.Changes.Misses {
+		in.Misses = append(in.Misses, store.ProposalMiss{MissID: m.ID, Outcome: m.Action, Section: strings.TrimSpace(m.Section),
+			Reason: strings.TrimSpace(m.Reason)})
+	}
 	p, err := e.st.CreateNotesProposal(octx, in)
 	if err != nil {
 		stop("store the proposal: " + oneLine(err.Error(), retroWhyRunes))
 		return
 	}
+	e.clearMissesMark(octx, full, start)
 	before, after := state.Size(e.cfg.Notes.MaxLine), res.Proposal.State.Size(e.cfg.Notes.MaxLine)
+	noted := 0
+	for _, m := range in.Misses {
+		if m.Outcome == store.MissNoted {
+			noted++
+		}
+	}
+	missText := ""
+	if len(in.Misses) > 0 {
+		missText = fmt.Sprintf(", %d of %s noted", noted, textx.Count(len(in.Misses), "miss", "misses"))
+	}
 	e.event(octx, "info", subject, "notes.curate_ready",
-		fmt.Sprintf("notes curation of %s is ready as proposal %d: %d → %d bytes, %d → %d harness files; `magnum notes %s --review`",
-			full, p.ID, before.Bytes, after.Bytes, before.HarnessFiles, after.HarnessFiles, full),
+		fmt.Sprintf("notes curation of %s is ready as proposal %d: %d → %d bytes, %d → %d harness files%s; `magnum notes %s --review`",
+			full, p.ID, before.Bytes, after.Bytes, before.HarnessFiles, after.HarnessFiles, missText, full),
 		map[string]any{"run": run.ID, "proposal": p.ID, "bytes_before": before.Bytes, "bytes_after": after.Bytes,
-			"harness_before": before.HarnessFiles, "harness_after": after.HarnessFiles})
+			"harness_before": before.HarnessFiles, "harness_after": after.HarnessFiles, "misses": len(in.Misses), "misses_noted": noted})
 	e.info(notify.Item{Key: fmt.Sprintf("notes-proposal:%d", p.ID), Title: "notes curation for " + full + " is ready",
 		Body: "Review it with `magnum notes " + full + " --review`.", Line: "notes curation for " + full + " is ready"})
+}
+
+// clearMissesMark clears full's misses mark (KVNotesMisses) once a
+// curation that began at start stored its proposal, valid or not: the
+// repository got its curation. A mark a retro set after start stays.
+func (e *Engine) clearMissesMark(ctx context.Context, full string, start time.Time) {
+	key := KVNotesMisses(full)
+	if at, ok := e.kvTime(ctx, key); ok && at.After(start) {
+		return
+	}
+	e.delKV(ctx, key)
+}
+
+// curateMisses reads the repository's misses for its notes (class miss,
+// scope repo, state new), oldest first, and writes them as misses.json
+// (curateMissesFile): the title and the lesson scrubbed again of the logins
+// of the miss's PR (its author and the reviewer) and of magnum, a pull
+// request reference or a link (dropped when they have one), and the reasons
+// of the rejected proposals each was in.
+func (e *Engine) curateMisses(ctx context.Context, repo store.Repo) ([]store.Miss, []byte, error) {
+	ms, err := e.st.Misses(ctx, notesMissFilter(repo.ID))
+	if err != nil || len(ms) == 0 {
+		return nil, nil, err
+	}
+	slices.SortFunc(ms, func(a, b store.Miss) int { return cmp.Compare(a.ID, b.ID) })
+	ids := make([]int64, 0, len(ms))
+	for _, m := range ms {
+		ids = append(ids, m.ID)
+	}
+	rejections, err := e.st.MissRejections(ctx, ids)
+	if err != nil {
+		return nil, nil, err
+	}
+	var own []string
+	for _, id := range e.cfg.Identities {
+		own = append(own, id.Login)
+	}
+	authors := map[int64]string{}
+	out := curateMissesFile{Repo: repo.FullName(), Misses: make([]curateMiss, 0, len(ms))}
+	for _, m := range ms {
+		author, ok := authors[m.PRID]
+		if !ok {
+			if pr, err := e.st.PRByID(ctx, m.PRID); err == nil {
+				author = deref(pr.AuthorLogin)
+			}
+			authors[m.PRID] = author
+		}
+		scrub := func(s string) string {
+			s, _ = learn.ScrubLesson(s, store.MissScopeRepo, []string{author, m.Reviewer}, own, []string{repo.Owner, repo.Name})
+			return s
+		}
+		cm := curateMiss{ID: m.ID, Severity: m.Severity, Title: scrub(m.Title), Lesson: scrub(m.Lesson), Rejections: rejections[m.ID]}
+		if m.Path != "" {
+			cm.Where = m.Path
+			if m.Line > 0 {
+				cm.Where += ":" + strconv.Itoa(m.Line)
+			}
+		}
+		out.Misses = append(out.Misses, cm)
+	}
+	b, err := json.MarshalIndent(out, "", "  ")
+	return ms, b, err
 }
 
 // curateUsage writes the curator's usage data: the limits and the sizes,
@@ -561,21 +716,31 @@ func (e *Engine) curateUsage(ctx context.Context, repo store.Repo, nr notes.Repo
 	return b, u.Over, err
 }
 
-// curatePrompt renders the curator's prompt for scratch, and the SHA-256 of
-// its template (kept with the proposal).
-func (e *Engine) curatePrompt(scratch notes.Scratch, nr notes.Repo, over []string) (string, string, error) {
+// curatePrompt renders the curator's prompt for scratch (with misses.json
+// when it was given misses), and the SHA-256 of its template (kept with the
+// proposal).
+func (e *Engine) curatePrompt(scratch notes.Scratch, nr notes.Repo, over []string, misses int) (string, string, error) {
 	p, err := e.cfg.ResolvePrompt(e.cfg.Notes.Prompt)
 	if err != nil {
 		return "", "", fmt.Errorf("the curator's prompt cannot be read: %w", err)
 	}
 	text, err := agents.RenderPrompt(p, curateData{Repo: nr.FullName(), Dir: scratch.Dir, Current: scratch.Current(),
 		CurrentHarness: scratch.CurrentHarness(), Usage: scratch.Usage(), Proposal: scratch.Proposal(), Harness: scratch.Harness(),
-		Changes: scratch.Changes(), Limits: e.notesLimits(), Over: over, UnusedRounds: store.NotesUnusedRounds})
+		Changes: scratch.Changes(), Limits: e.notesLimits(), Over: over, UnusedRounds: store.NotesUnusedRounds,
+		Misses: missesPath(scratch, misses), MissCount: misses})
 	if err != nil {
 		return "", "", fmt.Errorf("the curator's prompt does not render: %w", err)
 	}
 	sum := sha256.Sum256([]byte(p.Text))
 	return text, hex.EncodeToString(sum[:]), nil
+}
+
+// missesPath is misses.json's path when the curation was given misses.
+func missesPath(s notes.Scratch, n int) string {
+	if n == 0 {
+		return ""
+	}
+	return s.Misses()
 }
 
 // curateCheck is what a proposal of repo is validated against: the state

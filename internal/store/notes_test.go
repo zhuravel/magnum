@@ -245,11 +245,17 @@ func TestPruneLeavesNotesFindingsAndMissesAlone(t *testing.T) {
 	if _, err := st.DB().ExecContext(ctx, "UPDATE runs SET result_json = '{}' WHERE id = 'r-1'"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.UpsertMiss(ctx, Miss{PRID: pr.ID, SourceURL: "https://github.com/talkable/talkable/pull/7#discussion_r1", SourceKind: MissSourceThread,
-		Reviewer: "rev-ann", ReviewedSHA: "h", Class: MissStyle, Raised: MissRaisedNone}); err != nil {
+	m, err := st.UpsertMiss(ctx, Miss{PRID: pr.ID, SourceURL: "https://github.com/talkable/talkable/pull/7#discussion_r1", SourceKind: MissSourceThread,
+		Reviewer: "rev-ann", ReviewedSHA: "h", Class: MissMiss, Raised: MissRaisedNone, Scope: MissScopeRepo})
+	if err != nil {
 		t.Fatal(err)
 	}
-	tables := []string{"notes_versions", "harness_blobs", "notes_version_files", "notes_proposals", "notes_files", "notes_usage", "findings", "misses"}
+	if _, err := st.CreateNotesProposal(ctx, NotesProposalInput{RepoID: repo.ID, Kind: ProposalCuration, State: ProposalPending,
+		Misses: []ProposalMiss{{MissID: m.ID, Outcome: MissSkipped, Reason: "covered"}}}); err != nil {
+		t.Fatal(err)
+	}
+	tables := []string{"notes_versions", "harness_blobs", "notes_version_files", "notes_proposals", "notes_files", "notes_usage", "findings", "misses",
+		"notes_proposal_misses"}
 	before := map[string]int{}
 	for _, tb := range tables {
 		before[tb] = countRows(t, st, tb)

@@ -16,16 +16,19 @@ import (
 // measures the notes and the harness directory of QA scripts beside them, and
 // a repository past any limit is marked for curation (a notes.over_limit
 // event). Nothing blocks a review, and a curated proposal may stay above a
-// limit when what it keeps helps future reviews. Curate says when a curation
-// runs: for a marked repository, also once a week, or only on demand (`magnum
-// notes <repo> --curate`). The curator is an interactive agent like the
-// retro's ([learn]): Kind, Model, Effort and Args as a role's (NotesRole).
+// limit when what it keeps helps future reviews. Curate lists what starts a
+// curation besides `magnum notes <repo> --curate`: a repository marked past a
+// limit, once a week, or a retro that recorded misses of the repository for
+// its notes. The curator is an interactive agent like the retro's ([learn]):
+// Kind, Model, Effort and Args as a role's (NotesRole).
 type Notes struct {
-	MaxBytes        int64  `toml:"max_bytes"`
-	MaxLine         int    `toml:"max_line"`
-	MaxHarnessFiles int    `toml:"max_harness_files"`
-	MaxHarnessBytes int64  `toml:"max_harness_bytes"`
-	Curate          string `toml:"curate"`
+	MaxBytes        int64 `toml:"max_bytes"`
+	MaxLine         int   `toml:"max_line"`
+	MaxHarnessFiles int   `toml:"max_harness_files"`
+	MaxHarnessBytes int64 `toml:"max_harness_bytes"`
+	// Curate lists the curation triggers (CurateOverLimit, CurateWeekly,
+	// CurateMisses); empty: only on demand.
+	Curate CurateTriggers `toml:"curate"`
 	// Kind is the curator's [kinds.<name>]; a config that names a kind but no
 	// model gets DefaultLearnModel(kind), as [learn] does.
 	Kind   string   `toml:"kind"`
@@ -38,12 +41,82 @@ type Notes struct {
 	Timeout Duration `toml:"timeout"`
 }
 
-// Curation schedules ([notes] curate).
+// Curation triggers ([notes] curate).
 const (
 	CurateOverLimit = "over_limit" // a repository past a limit, once its notes changed since the last curation
-	CurateWeekly    = "weekly"     // that, and every repository with notes once a week
-	CurateOff       = "off"        // only `magnum notes <repo> --curate`
+	CurateWeekly    = "weekly"     // every repository with notes, once a week, once they changed
+	CurateMisses    = "misses"     // a retro recorded misses of the repository for its notes (class miss, scope repo)
+	// CurateOff, alone, is no trigger: only `magnum notes <repo> --curate`.
+	CurateOff = "off"
 )
+
+// curateTriggers are the values a CurateTriggers list may hold.
+var curateTriggers = []string{CurateOverLimit, CurateWeekly, CurateMisses}
+
+// CurateTriggers is [notes] curate: the triggers of a curation, written as a
+// list (`["over_limit", "misses"]`, `[]` for none). The earlier string form
+// still reads as it meant: "over_limit" that trigger alone, "weekly"
+// over_limit and weekly, "off" none.
+type CurateTriggers []string
+
+// UnmarshalTOML reads a list of trigger names or one of the earlier strings.
+// Values are checked by Validate.
+func (c *CurateTriggers) UnmarshalTOML(v any) error {
+	switch x := v.(type) {
+	case string:
+		switch x {
+		case CurateOff:
+			*c = CurateTriggers{}
+		case CurateWeekly:
+			*c = CurateTriggers{CurateOverLimit, CurateWeekly}
+		default:
+			*c = CurateTriggers{x}
+		}
+		return nil
+	case []any:
+		out := CurateTriggers{}
+		for _, e := range x {
+			s, ok := e.(string)
+			if !ok {
+				return fmt.Errorf("notes.curate: want a list of trigger names, got %v", e)
+			}
+			out = append(out, s)
+		}
+		if len(out) == 1 && out[0] == CurateOff {
+			out = CurateTriggers{}
+		}
+		*c = out
+		return nil
+	}
+	return fmt.Errorf("notes.curate: want a list of triggers such as [\"over_limit\", \"misses\"], got %v", v)
+}
+
+// Has reports whether trigger t is on.
+func (c CurateTriggers) Has(t string) bool { return slices.Contains(c, t) }
+
+// String is the list as the config writes it.
+func (c CurateTriggers) String() string {
+	if len(c) == 0 {
+		return "[]"
+	}
+	return `["` + strings.Join(c, `", "`) + `"]`
+}
+
+// validate checks every trigger: a known one, listed once; "off" only alone.
+func (c CurateTriggers) validate() []error {
+	var errs []error
+	for i, t := range c {
+		switch {
+		case t == CurateOff:
+			errs = append(errs, errors.New(`notes.curate: "off" goes alone (or write [])`))
+		case !slices.Contains(curateTriggers, t):
+			errs = append(errs, fmt.Errorf(`notes.curate: %q is not a trigger (%s; [] or "off" for none)`, t, strings.Join(curateTriggers, ", ")))
+		case slices.Contains(c[:i], t):
+			errs = append(errs, fmt.Errorf("notes.curate: %q is listed twice", t))
+		}
+	}
+	return errs
+}
 
 // DefaultNotesPrompt is the curator's prompt file.
 const DefaultNotesPrompt = "notes-curate.md"
@@ -58,7 +131,7 @@ func DefaultNotes() Notes {
 		MaxLine:         300,
 		MaxHarnessFiles: 15,
 		MaxHarnessBytes: 131072,
-		Curate:          CurateOverLimit,
+		Curate:          CurateTriggers{CurateOverLimit, CurateMisses},
 		Kind:            KindClaude,
 		Model:           DefaultLearnModel(KindClaude),
 		Prompt:          DefaultNotesPrompt,
@@ -91,6 +164,7 @@ func (c *Config) NotesRole() Role {
 // curate says): the limits are positive, curate is one of its values, the
 // kind is a declared agent kind whose role (NotesRole) passes a [[role]]'s
 // checks, the prompt resolves and parses and the timeout is positive.
+// curate lists known triggers, each once.
 func (c *Config) validateNotes() []error {
 	n := c.Notes
 	var errs []error
@@ -102,9 +176,7 @@ func (c *Config) validateNotes() []error {
 			errs = append(errs, fmt.Errorf("notes.%s must be positive, got %d", l.key, l.v))
 		}
 	}
-	if !slices.Contains([]string{CurateOverLimit, CurateWeekly, CurateOff}, n.Curate) {
-		errs = append(errs, fmt.Errorf("notes.curate must be over_limit, weekly or off, got %q", n.Curate))
-	}
+	errs = append(errs, n.Curate.validate()...)
 	if _, ok := c.KindSpec(n.Kind); !ok {
 		errs = append(errs, fmt.Errorf("notes.kind %q is not a declared agent kind (declared: %s)", n.Kind, strings.Join(c.KindNames(), ", ")))
 	} else {

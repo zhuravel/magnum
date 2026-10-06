@@ -182,7 +182,8 @@ func statusCodexText(u statusCodexUsage, now time.Time) string {
 }
 
 // statusRetroText is the retro line's value: when the last retro finished
-// and how it went, then the real misses waiting for a lesson.
+// and how it went, then the real misses waiting for a lesson and the PRs
+// waiting for the settle delay.
 func statusRetroText(ro statusRetro, now time.Time) string {
 	s := "never"
 	if l := ro.Last; l != nil {
@@ -203,6 +204,9 @@ func statusRetroText(ro statusRetro, now time.Time) string {
 	}
 	if ro.NewMisses != nil {
 		s += " · " + textx.Count(*ro.NewMisses, "new miss", "new misses")
+	}
+	if ro.Settling != nil && *ro.Settling > 0 {
+		s += " · " + textx.Count(*ro.Settling, "PR waits", "PRs wait") + " for the " + ro.Settle + " settle delay"
 	}
 	return s
 }

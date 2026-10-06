@@ -25,6 +25,10 @@ type Learn struct {
 	DailyAt string `toml:"daily_at"`
 	// Lookback: PRs merged or closed within it are candidates.
 	Lookback Duration `toml:"lookback"`
+	// Settle: the daily retro and a plain `magnum retro` take a PR only once
+	// it was closed or merged at least this long ago, so the reviews posted
+	// after it closed are in (0 = at once). `magnum retro <ref>` ignores it.
+	Settle Duration `toml:"settle"`
 	// MaxPRs bounds the PRs classified per retro, newest closed first.
 	MaxPRs int `toml:"max_prs"`
 	// MinCommentChars: comments shorter than this are dropped.
@@ -75,11 +79,12 @@ func (c *Config) learnModelFollowsKind(md toml.MetaData) {
 }
 
 // DefaultLearn returns the built-in [learn] values: off, a week of lookback,
-// Claude sonnet classifying.
+// a day to settle, Claude sonnet classifying.
 func DefaultLearn() Learn {
 	return Learn{
 		DailyAt:         "07:00",
 		Lookback:        Duration{7 * 24 * time.Hour},
+		Settle:          Duration{24 * time.Hour},
 		MaxPRs:          20,
 		MinCommentChars: 20,
 		Kind:            KindClaude,
@@ -147,7 +152,8 @@ func (c *Config) validateLearnRole() []error {
 // not the schedule is enabled): daily_at parses, the kind is a declared agent
 // kind ("shell" is not one), the role it builds (LearnRole) passes the checks
 // of a [[role]] (a kind without model args cannot be handed a model), the
-// prompt names a file that resolves and parses, and the limits are positive.
+// prompt names a file that resolves and parses, the limits are positive and
+// settle is 0 or more and shorter than the lookback (else no PR is ever due).
 func (c *Config) validateLearn() []error {
 	l := c.Learn
 	var errs []error
@@ -168,6 +174,12 @@ func (c *Config) validateLearn() []error {
 	}
 	if l.Lookback.Duration <= 0 {
 		errs = append(errs, fmt.Errorf("learn.lookback must be positive, got %s", l.Lookback.Duration))
+	}
+	switch {
+	case l.Settle.Duration < 0:
+		errs = append(errs, fmt.Errorf("learn.settle must not be negative, got %s", l.Settle.Duration))
+	case l.Lookback.Duration > 0 && l.Settle.Duration >= l.Lookback.Duration:
+		errs = append(errs, fmt.Errorf("learn.settle must be shorter than learn.lookback (%s), got %s", l.Lookback.Duration, l.Settle.Duration))
 	}
 	if l.Timeout.Duration <= 0 {
 		errs = append(errs, fmt.Errorf("learn.timeout must be positive, got %s", l.Timeout.Duration))

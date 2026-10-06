@@ -7,20 +7,26 @@ package cli
 // (agents.NotesLockLine): the live notes are read again and must still be
 // what the proposal started from; n rejects it with --reason, which the next
 // curation reads. Nothing a proposal removes is lost: the registry keeps
-// every version and every proposal.
+// every version and every proposal. A curation given the retro's misses
+// shows what it did with each; the decision moves them (store.
+// DecideNotesProposal): used when applied, back to new when rejected,
+// dismissed after a second rejection.
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/notes"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // notesLockWait is how long an apply waits for the notes lock (tests
@@ -80,6 +86,18 @@ type notesHarnessChange struct {
 	Reason string `json:"reason,omitempty"`
 }
 
+// notesReviewMiss is a miss a proposal was given, and what it did with it.
+type notesReviewMiss struct {
+	ID       int64  `json:"id"`
+	Severity string `json:"severity,omitempty"`
+	Where    string `json:"where,omitempty"`
+	Title    string `json:"title,omitempty"`
+	Outcome  string `json:"outcome"` // store.MissNoted | store.MissSkipped
+	Section  string `json:"section,omitempty"`
+	Reason   string `json:"reason,omitempty"`
+	State    string `json:"state"` // the miss's state now
+}
+
 // notesReviewData is a proposal as --review shows it (and --json prints).
 type notesReviewData struct {
 	Repo     string               `json:"repo"`
@@ -87,6 +105,7 @@ type notesReviewData struct {
 	Diff     string               `json:"notes_diff"`
 	Harness  []notesHarnessChange `json:"harness"`
 	Sections []notes.Change       `json:"sections"`
+	Misses   []notesReviewMiss    `json:"misses"`
 	Before   notes.Size           `json:"size_before"`
 	After    notes.Size           `json:"size_after"`
 	Expired  bool                 `json:"expired,omitempty"` // older than engine.ProposalTTL: it can no longer be applied
@@ -188,7 +207,7 @@ func notesReviewProposal(ctx context.Context, c *Context, d *actDeps, f notesFla
 		if err != nil {
 			return cmdFail(c, "notes", err)
 		}
-		fmt.Fprintf(c.Stdout, "applied: the notes of %s are version %d\n", full, store.Deref(applied.AppliedVersionID))
+		fmt.Fprintf(c.Stdout, "applied: the notes of %s are version %d%s\n", full, store.Deref(applied.AppliedVersionID), notesMissesMoved(ctx, d, p.ID))
 	case "n", "no":
 		reason := strings.TrimSpace(f.reason)
 		if _, err := d.Store.DecideNotesProposal(ctx, p.ID, []string{store.ProposalPending}, store.ProposalRejected, reason, notesNow(d), nil); err != nil {
@@ -198,18 +217,46 @@ func notesReviewProposal(ctx context.Context, c *Context, d *actDeps, f notesFla
 		if reason != "" && p.Kind == store.ProposalCuration {
 			msg += "; the next curation reads why"
 		}
-		fmt.Fprintln(c.Stdout, msg)
+		fmt.Fprintln(c.Stdout, msg+notesMissesMoved(ctx, d, p.ID))
 	default:
 		fmt.Fprintf(c.Stdout, "left for later: `magnum notes %s --review`\n", full)
 	}
 	return 0
 }
 
+// notesMissesMoved says where the decision of proposal id left the misses
+// it was given ("" when it had none): used, back to new, dismissed.
+func notesMissesMoved(ctx context.Context, d *actDeps, id int64) string {
+	links, err := d.Store.ProposalMisses(ctx, id)
+	if err != nil || len(links) == 0 {
+		return ""
+	}
+	n := map[string]int{}
+	for _, l := range links {
+		n[l.Miss.State]++
+	}
+	var parts []string
+	if k := n[store.MissUsed]; k > 0 {
+		parts = append(parts, textx.Count(k, "miss", "misses")+" used")
+	}
+	if k := n[store.MissNew]; k > 0 {
+		parts = append(parts, textx.Count(k, "miss", "misses")+" back to new for the next curation")
+	}
+	if k := n[store.MissDismissed]; k > 0 {
+		parts = append(parts, fmt.Sprintf("%s dismissed after %d rejected proposals", textx.Count(k, "miss", "misses"), store.MissDismissRejections))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "; " + strings.Join(parts, ", ")
+}
+
 // notesReviewOf gathers a proposal's review: its base and proposed states,
 // the notes' diff, the harness changes with the curator's reasons, the
-// sections and the sizes before and after.
+// sections, the misses it was given with what it did with them and the
+// sizes before and after.
 func notesReviewOf(ctx context.Context, d *actDeps, full string, p store.NotesProposal) (notesReviewData, error) {
-	data := notesReviewData{Repo: full, Proposal: p, Harness: []notesHarnessChange{}, Sections: []notes.Change{}}
+	data := notesReviewData{Repo: full, Proposal: p, Harness: []notesHarnessChange{}, Sections: []notes.Change{}, Misses: []notesReviewMiss{}}
 	if p.VersionID == nil {
 		return data, fmt.Errorf("proposal %d has no proposed state", p.ID)
 	}
@@ -261,6 +308,15 @@ func notesReviewOf(ctx context.Context, d *actDeps, full string, p store.NotesPr
 		if !seen[b.Path] {
 			add(b.Path, "kept")
 		}
+	}
+	links, err := d.Store.ProposalMisses(ctx, p.ID)
+	if err != nil {
+		return data, err
+	}
+	for _, l := range links {
+		m := *l.Miss
+		data.Misses = append(data.Misses, notesReviewMiss{ID: m.ID, Severity: m.Severity, Where: missesPlace(m), Title: m.Title,
+			Outcome: l.Outcome, Section: l.Section, Reason: l.Reason, State: m.State})
 	}
 	return data, nil
 }
@@ -314,7 +370,39 @@ func notesPrintReview(c *Context, color bool, data notesReviewData) {
 			fmt.Fprintln(w, line+": "+notes.Printable(s.Reason))
 		}
 	}
+	notesPrintMisses(w, data.Misses)
 	fmt.Fprintln(w)
+}
+
+// notesPrintMisses lists the misses a proposal was given (the retro's,
+// for the repository's notes) with what it did with each: noted in a
+// section, or skipped and why.
+func notesPrintMisses(w io.Writer, ms []notesReviewMiss) {
+	if len(ms) == 0 {
+		return
+	}
+	noted := 0
+	for _, m := range ms {
+		if m.Outcome == store.MissNoted {
+			noted++
+		}
+	}
+	fmt.Fprintf(w, "misses: %d noted, %d skipped\n", noted, len(ms)-noted)
+	for _, m := range ms {
+		line := "  " + strconv.FormatInt(m.ID, 10)
+		for _, s := range []string{m.Severity, m.Where, m.Title} {
+			if s = notes.Printable(s); s != "" {
+				line += " " + s
+			}
+		}
+		switch m.Outcome {
+		case store.MissNoted:
+			line += " → noted in " + notes.Printable(m.Section)
+		default:
+			line += " → skipped: " + notes.Printable(m.Reason)
+		}
+		fmt.Fprintln(w, line)
+	}
 }
 
 // notesApply applies proposal p under the notes lock: the live notes are
@@ -361,6 +449,8 @@ func notesApply(ctx context.Context, st *store.Store, nr notes.Repo, p store.Not
 	if p.Kind == store.ProposalRestore {
 		source = store.NotesFromHuman
 	}
+	// Dedupe: a curation that only skips the misses it was given leaves the
+	// notes as they are, and the version they hold is not recorded again.
 	return st.DecideNotesProposal(ctx, p.ID, []string{store.ProposalPending}, store.ProposalApplied, "", now,
-		&store.NotesVersionInput{Source: source, Content: content})
+		&store.NotesVersionInput{Source: source, Content: content, Dedupe: true})
 }

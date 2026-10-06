@@ -158,28 +158,42 @@ type Miss struct {
 	// Repo ("owner/name") and Number name the miss's PR; Misses fills them.
 	Repo   string `json:"repo,omitempty"`
 	Number int    `json:"number,omitempty"`
+	// ProposalID and ProposalState name the latest notes proposal the miss
+	// was given to (notes_proposal_misses) and where that one stands: the
+	// proposal that used it once it is used; Misses fills them.
+	ProposalID    *int64 `json:"proposal_id,omitempty"`
+	ProposalState string `json:"proposal_state,omitempty"`
 }
 
 var missColumns = []string{"id", "pr_id", "source_url", "source_kind", "reviewer", "path", "line", "reviewed_sha",
 	"class", "severity", "raised", "finding_ref", "reason_code", "title", "lesson", "scope", "lines_json",
 	"match_json", "state", "created_at", "updated_at"}
 
-// scanMiss scans a row of missColumns, followed by the PR's repository and
-// number when withPR is set.
+// missListColumns follow missColumns in a listing (Misses): the PR's
+// repository and number, and the latest proposal the miss was given to
+// with its state.
+const missListColumns = `rp.owner || '/' || rp.name, p.number,
+  (SELECT l.proposal_id FROM notes_proposal_misses l WHERE l.miss_id = m.id ORDER BY l.proposal_id DESC LIMIT 1),
+  (SELECT np.state FROM notes_proposal_misses l JOIN notes_proposals np ON np.id = l.proposal_id
+   WHERE l.miss_id = m.id ORDER BY l.proposal_id DESC LIMIT 1)`
+
+// scanMiss scans a row of missColumns, followed by missListColumns when
+// withPR is set.
 func scanMiss(sc scanner, withPR bool) (Miss, error) {
 	var m Miss
 	var line sql.NullInt64
+	var proposalState sql.NullString
 	dest := []any{&m.ID, &m.PRID, &m.SourceURL, &m.SourceKind, &m.Reviewer, textCol(&m.Path), &line, &m.ReviewedSHA,
 		&m.Class, textCol(&m.Severity), &m.Raised, textCol(&m.FindingRef), textCol(&m.ReasonCode), textCol(&m.Title),
 		textCol(&m.Lesson), textCol(&m.Scope), jsonCol(&m.Lines), jsonCol(&m.Match), &m.State,
 		timeCol(&m.CreatedAt), timeCol(&m.UpdatedAt)}
 	if withPR {
-		dest = append(dest, &m.Repo, &m.Number)
+		dest = append(dest, &m.Repo, &m.Number, &m.ProposalID, &proposalState)
 	}
 	if err := sc.Scan(dest...); err != nil {
 		return m, err
 	}
-	m.Line = int(line.Int64)
+	m.Line, m.ProposalState = int(line.Int64), proposalState.String
 	return m, nil
 }
 
@@ -267,7 +281,9 @@ func keepClass(col string) string {
 type MissFilter struct {
 	Classes []string // empty = every class
 	States  []string // empty = every state
+	Scopes  []string // empty = any scope, none included
 	PRID    int64    // 0 = every PR
+	RepoID  int64    // 0 = every repository
 }
 
 // where renders the WHERE clause of f over misses aliased m ("" when f selects everything).
@@ -282,9 +298,17 @@ func (f MissFilter) where() (string, []any) {
 		conds = append(conds, "m.state IN ("+placeholders(len(f.States))+")")
 		args = append(args, anys(f.States)...)
 	}
+	if len(f.Scopes) > 0 {
+		conds = append(conds, "m.scope IN ("+placeholders(len(f.Scopes))+")")
+		args = append(args, anys(f.Scopes)...)
+	}
 	if f.PRID != 0 {
 		conds = append(conds, "m.pr_id = ?")
 		args = append(args, f.PRID)
+	}
+	if f.RepoID != 0 {
+		conds = append(conds, "m.pr_id IN (SELECT id FROM prs WHERE repo_id = ?)")
+		args = append(args, f.RepoID)
 	}
 	if len(conds) == 0 {
 		return "", nil
@@ -293,10 +317,10 @@ func (f MissFilter) where() (string, []any) {
 }
 
 // Misses returns the misses f selects, newest first, each with its PR's
-// repository and number.
+// repository and number and the latest proposal it was given to.
 func (s *Store) Misses(ctx context.Context, f MissFilter) ([]Miss, error) {
 	where, args := f.where()
-	rows, err := s.db.QueryContext(ctx, "SELECT "+cols("m", missColumns)+", rp.owner || '/' || rp.name, p.number"+
+	rows, err := s.db.QueryContext(ctx, "SELECT "+cols("m", missColumns)+", "+missListColumns+
 		" FROM misses m JOIN prs p ON p.id = m.pr_id JOIN repos rp ON rp.id = p.repo_id"+where+
 		" ORDER BY m.created_at DESC, m.id DESC", args...)
 	if err != nil {
@@ -322,17 +346,18 @@ func (s *Store) CountMisses(ctx context.Context, f MissFilter) (int, error) {
 // RetroQuery selects the PRs a retro looks at.
 type RetroQuery struct {
 	Since time.Time // closed or merged at or after Since (ignored when PRIDs is set)
-	Again bool      // also PRs that already have a retro_prs row
-	PRIDs []int64   // only these PRs, whenever they closed
+	// Until is the settle delay's bound: closed or merged at or before it
+	// (zero = no bound; ignored when PRIDs is set).
+	Until time.Time
+	Again bool    // also PRs that already have a retro_prs row
+	PRIDs []int64 // only these PRs, whenever they closed
 }
 
-// RetroDue lists the PRs due for a retro, newest closed first: merged or
-// closed, closed (closed_at, else merged_at) at or after q.Since unless
-// q.PRIDs names the PRs, with at least one run that posted a review, and
-// unless q.Again without a retro record, or with a failed one of fewer than
-// RetroMaxAttempts attempts.
-func (s *Store) RetroDue(ctx context.Context, q RetroQuery) ([]PR, error) {
-	closedAt := "COALESCE(p.closed_at, p.merged_at)"
+// retroClosedAt is when a PR closed for the retro: closed_at, else merged_at.
+const retroClosedAt = "COALESCE(p.closed_at, p.merged_at)"
+
+// retroConds are RetroDue's conditions but the settle delay's.
+func (q RetroQuery) retroConds() ([]string, []any) {
 	conds := []string{"p.gh_state IN ('" + GHMerged + "', '" + GHClosed + "')",
 		"EXISTS (SELECT 1 FROM runs r WHERE r.pr_id = p.id AND r.review_id IS NOT NULL)"}
 	var args []any
@@ -342,15 +367,29 @@ func (s *Store) RetroDue(ctx context.Context, q RetroQuery) ([]PR, error) {
 			args = append(args, id)
 		}
 	} else {
-		conds = append(conds, closedAt+" >= ?")
+		conds = append(conds, retroClosedAt+" >= ?")
 		args = append(args, FormatTime(q.Since))
 	}
 	if !q.Again {
 		conds = append(conds, "NOT EXISTS (SELECT 1 FROM retro_prs t WHERE t.pr_id = p.id AND NOT (t.status = ? AND t.attempts < ?))")
 		args = append(args, RetroFailed, RetroMaxAttempts)
 	}
+	return conds, args
+}
+
+// RetroDue lists the PRs due for a retro, newest closed first: merged or
+// closed, closed (closed_at, else merged_at) at or after q.Since and, with
+// q.Until, at or before it, unless q.PRIDs names the PRs, with at least one
+// run that posted a review, and unless q.Again without a retro record, or
+// with a failed one of fewer than RetroMaxAttempts attempts.
+func (s *Store) RetroDue(ctx context.Context, q RetroQuery) ([]PR, error) {
+	conds, args := q.retroConds()
+	if len(q.PRIDs) == 0 && !q.Until.IsZero() {
+		conds = append(conds, retroClosedAt+" <= ?")
+		args = append(args, FormatTime(q.Until))
+	}
 	rows, err := s.db.QueryContext(ctx, "SELECT "+cols("p", prColumns)+" FROM prs p WHERE "+strings.Join(conds, " AND ")+
-		" ORDER BY "+closedAt+" DESC, p.id DESC", args...)
+		" ORDER BY "+retroClosedAt+" DESC, p.id DESC", args...)
 	if err != nil {
 		return nil, fmt.Errorf("retro due: %w", err)
 	}
@@ -359,6 +398,23 @@ func (s *Store) RetroDue(ctx context.Context, q RetroQuery) ([]PR, error) {
 		return nil, fmt.Errorf("retro due: %w", err)
 	}
 	return out, nil
+}
+
+// RetroSettling counts the PRs that would be due for q's retro but closed
+// after q.Until: they wait for the settle delay. 0 without Until or with
+// PRIDs.
+func (s *Store) RetroSettling(ctx context.Context, q RetroQuery) (int, error) {
+	if q.Until.IsZero() || len(q.PRIDs) > 0 {
+		return 0, nil
+	}
+	conds, args := q.retroConds()
+	conds = append(conds, retroClosedAt+" > ?")
+	args = append(args, FormatTime(q.Until))
+	var n int
+	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM prs p WHERE "+strings.Join(conds, " AND "), args...).Scan(&n); err != nil {
+		return 0, fmt.Errorf("retro settling: %w", err)
+	}
+	return n, nil
 }
 
 // textScanner scans a nullable TEXT column into a string (NULL is "").

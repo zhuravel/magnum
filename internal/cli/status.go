@@ -238,13 +238,16 @@ type statusCodexUsage struct {
 }
 
 // statusRetro is the learning loop: whether [learn] schedules the daily
-// retro, what the last retro did (engine.KVRetroLast) and how many real
-// misses (class miss) no lesson was drawn from yet. It is left out when
-// [learn] is off and no retro ever ran.
+// retro, what the last retro did (engine.KVRetroLast), how many real misses
+// (class miss) no lesson was drawn from yet and how many closed PRs wait
+// for [learn] settle before a retro takes them. It is left out when [learn]
+// is off and no retro ever ran.
 type statusRetro struct {
 	Enabled   bool                 `json:"enabled"`
 	Last      *engine.RetroSummary `json:"last,omitempty"`
 	NewMisses *int                 `json:"new_misses,omitempty"` // nil when the registry could not be read
+	Settling  *int                 `json:"settling,omitempty"`   // nil when none wait (or no settle delay)
+	Settle    string               `json:"settle,omitempty"`     // [learn] settle, when PRs wait for it
 }
 
 type statusGitHub struct {

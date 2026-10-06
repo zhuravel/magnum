@@ -6,9 +6,12 @@ package engine
 // rest is written to a directory with the commented files, a Classifier
 // sorts it, and every comment becomes a row of the misses table. It runs in
 // its own goroutine, one at a time, once a day after [learn] daily_at when
-// [learn] enabled, or whenever `magnum retro` asks (ReqRetro). Comment text
-// stays in the retro's files and the registry: no event or log line carries
-// it.
+// [learn] enabled, or whenever `magnum retro` asks (ReqRetro), and takes a PR
+// only once it closed [learn] settle ago (unless `magnum retro <ref>` names
+// it), so the reviews posted right after a merge are in. A miss for the
+// repository's notes (class miss, scope repo) marks the repository for its
+// next notes curation (KVNotesMisses, notes_curate.go). Comment text stays in
+// the retro's files and the registry: no event or log line carries it.
 
 import (
 	"cmp"
@@ -16,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -149,6 +153,9 @@ type retroSpec struct {
 	prs      []int64
 	again    bool
 	lookback time.Duration
+	// settle: a PR closed more recently waits for a later retro (ignored
+	// when prs names the PRs).
+	settle time.Duration
 }
 
 // maybeRetro starts the day's retro ([learn] enabled, past daily_at, not
@@ -170,7 +177,7 @@ func (e *Engine) maybeRetro(ctx context.Context) {
 	if e.retroBusy() || e.userPause(ctx) != "" || e.holdReason(ctx) != "" || e.retroToolPause(ctx) != "" {
 		return
 	}
-	e.startRetro(ctx, retroSpec{daily: true, lookback: lc.Lookback.Duration})
+	e.startRetro(ctx, retroSpec{daily: true, lookback: lc.Lookback.Duration, settle: lc.Settle.Duration})
 }
 
 // requestRetro serves `magnum retro`: a retro now, unless a drain, an
@@ -192,14 +199,19 @@ func (e *Engine) requestRetro(ctx context.Context, p RetroPayload) (string, erro
 		e.rec.Record(ctx, "", "retro", "a retro of the PRs closed within "+lookback.String())
 		return "dry run: would run a retro", nil
 	}
-	// PRs named explicitly are looked at whether or not a retro did.
-	started, since := e.startRetro(ctx, retroSpec{prs: p.PRs, again: p.Again || len(p.PRs) > 0, lookback: lookback})
+	// PRs named explicitly are looked at whether or not a retro did, and
+	// whenever they closed.
+	settle := e.cfg.Learn.Settle.Duration
+	started, since := e.startRetro(ctx, retroSpec{prs: p.PRs, again: p.Again || len(p.PRs) > 0, lookback: lookback, settle: settle})
 	if !started {
 		return fmt.Sprintf("a retro is already running (started %s); `magnum logs` follows it", since.Local().Format("15:04")), nil
 	}
 	what := "the PRs closed within " + lookback.String()
-	if len(p.PRs) > 0 {
+	switch {
+	case len(p.PRs) > 0:
 		what = fmt.Sprintf("%d PR(s)", len(p.PRs))
+	case settle > 0:
+		what += " and at least " + humanDuration(settle) + " ago"
 	}
 	return "retro started on " + what + "; `magnum misses` lists what it finds", nil
 }
@@ -267,9 +279,19 @@ func (e *Engine) runRetro(ctx context.Context, spec retroSpec) {
 	run := RetroRun{ID: start.Local().Format(retroRunFormat)}
 	run.Dir = filepath.Join(e.d.Layout.Learn(), "retro", run.ID)
 	sum := RetroSummary{Run: run.ID, At: start}
-	e.event(ctx, "info", "", "retro.start", fmt.Sprintf("retro %s: looking at the PRs closed within %s", run.ID, spec.lookback), nil)
+	q := store.RetroQuery{Since: start.Add(-spec.lookback), Again: spec.again, PRIDs: spec.prs}
+	if spec.settle > 0 && len(spec.prs) == 0 {
+		q.Until = start.Add(-spec.settle)
+	}
+	msg := fmt.Sprintf("retro %s: looking at the PRs closed within %s", run.ID, spec.lookback)
+	var data map[string]any
+	if settling, err := e.st.RetroSettling(ctx, q); err == nil && settling > 0 {
+		msg += fmt.Sprintf("; %s for the %s settle delay", textx.Count(settling, "PR waits", "PRs wait"), humanDuration(spec.settle))
+		data = map[string]any{"settling": settling}
+	}
+	e.event(ctx, "info", "", "retro.start", msg, data)
 
-	prs, err := e.st.RetroDue(ctx, store.RetroQuery{Since: start.Add(-spec.lookback), Again: spec.again, PRIDs: spec.prs})
+	prs, err := e.st.RetroDue(ctx, q)
 	if err != nil {
 		// Recorded like any other stop, so the daily retro does not try
 		// again on every tick.
@@ -297,6 +319,7 @@ func (e *Engine) runRetro(ctx context.Context, spec retroSpec) {
 	}()
 
 	withCandidates := 0
+	repoMisses := map[string]int{} // repository -> its misses for the notes
 	for _, pr := range prs {
 		if ctx.Err() != nil || withCandidates >= e.cfg.Learn.MaxPRs {
 			break
@@ -309,6 +332,9 @@ func (e *Engine) runRetro(ctx context.Context, spec retroSpec) {
 		sum.PRs++
 		sum.Misses += o.misses
 		sum.Caught += o.caught
+		if o.repoMisses > 0 {
+			repoMisses[o.repo] += o.repoMisses
+		}
 		if o.candidates > 0 {
 			withCandidates++
 		}
@@ -327,7 +353,8 @@ func (e *Engine) runRetro(ctx context.Context, spec retroSpec) {
 	if b, err := json.Marshal(sum); err == nil {
 		e.setKV(context.WithoutCancel(ctx), KVRetroLast, string(b))
 	}
-	msg := fmt.Sprintf("retro %s: %d PR(s), %d classified, %d miss(es), %d already caught, %d failed",
+	e.markRepoMisses(context.WithoutCancel(ctx), run, repoMisses)
+	msg = fmt.Sprintf("retro %s: %d PR(s), %d classified, %d miss(es), %d already caught, %d failed",
 		run.ID, sum.PRs, sum.Classified, sum.Misses, sum.Caught, sum.Failed)
 	switch {
 	case ctx.Err() != nil:
@@ -353,6 +380,24 @@ type retroOutcome struct {
 	misses     int
 	caught     int
 	stop       string // why the retro stops
+	// repoMisses counts the misses stored for the notes of repo (class
+	// miss, scope repo, still new).
+	repoMisses int
+	repo       string
+}
+
+// markRepoMisses marks every repository a retro stored misses for its
+// notes of (KVNotesMisses), once the retro is over, so the curation they
+// trigger starts after it and takes them all; a notes.misses event says
+// how many.
+func (e *Engine) markRepoMisses(ctx context.Context, run RetroRun, counts map[string]int) {
+	for _, full := range slices.Sorted(maps.Keys(counts)) {
+		n := counts[full]
+		e.setKV(ctx, KVNotesMisses(full), store.FormatTime(e.now()))
+		e.event(ctx, "info", notesSubjectOf(full), "notes.misses",
+			fmt.Sprintf("retro %s: %s for the notes of %s; its next notes curation takes them", run.ID, textx.Count(n, "miss", "misses"), full),
+			map[string]any{"run": run.ID, "misses": n})
+	}
 }
 
 // retroPR runs the retro of one PR: candidates from GitHub and the
@@ -405,12 +450,9 @@ func (e *Engine) retroPR(ctx context.Context, run RetroRun, pr store.PR, classif
 	if err != nil {
 		return fail(retroOutcome{}, err)
 	}
-	o := retroOutcome{candidates: len(res.Candidates), caught: res.Caught}
-	stored := 0
+	o := retroOutcome{candidates: len(res.Candidates), caught: res.Caught, repo: repo.FullName()}
 	for _, c := range res.Outside {
-		if e.storeMiss(ctx, subject, pr, c, learn.Item{Class: store.MissOutside}) {
-			stored++
-		}
+		e.storeMiss(ctx, subject, pr, c, learn.Item{Class: store.MissOutside})
 	}
 	counts := map[string]any{"candidates": len(res.Candidates), "outside": len(res.Outside), "caught": res.Caught, "dropped": res.Dropped}
 	if len(res.Candidates) == 0 {
@@ -463,7 +505,8 @@ func (e *Engine) retroPR(ctx context.Context, run RetroRun, pr store.PR, classif
 			o.status = store.RetroClassified
 		}
 	}
-	rejected := e.storeCandidates(ctx, subject, repo, pr, in.Own, res.Candidates, items)
+	rejected, repoMisses := e.storeCandidates(ctx, subject, repo, pr, in.Own, res.Candidates, items)
+	o.repoMisses = repoMisses
 	for _, it := range items {
 		if it.Class == store.MissMiss {
 			o.misses++
@@ -473,6 +516,9 @@ func (e *Engine) retroPR(ctx context.Context, run RetroRun, pr store.PR, classif
 		return fail(o, why)
 	}
 	counts["misses"], counts["status"] = o.misses, o.status
+	if o.repoMisses > 0 {
+		counts["repo_misses"] = o.repoMisses
+	}
 	if len(rejected) > 0 {
 		counts["lesson_rejected"] = rejected
 	}
@@ -638,15 +684,18 @@ func (e *Engine) retroFetch(ctx context.Context, root *os.Root, repo store.Repo,
 // (nil = unclassified, which never replaces an earlier classification:
 // store.UpsertMiss), and returns the ids whose lesson was dropped
 // (learn.ScrubLesson), each also a retro.lesson_rejected event with the
-// reason and never the lesson. own are magnum's logins.
+// reason and never the lesson, and how many stored rows are misses for the
+// repository's notes (class miss, scope repo, state new). own are magnum's
+// logins.
 func (e *Engine) storeCandidates(ctx context.Context, subject string, repo store.Repo, pr store.PR, own []string,
-	cands []learn.Candidate, items map[string]learn.Item) []string {
+	cands []learn.Candidate, items map[string]learn.Item) ([]string, int) {
 	people := []string{deref(pr.AuthorLogin)}
 	for _, c := range cands {
 		people = append(people, c.Reviewer)
 	}
 	repoWords := []string{repo.Owner, repo.Name}
 	var rejected []string
+	forNotes := 0
 	for _, c := range cands {
 		it, ok := items[c.ID]
 		if !ok {
@@ -660,13 +709,16 @@ func (e *Engine) storeCandidates(ctx context.Context, subject string, repo store
 					map[string]any{"candidate": c.ID, "reason": reason})
 			}
 		}
-		e.storeMiss(ctx, subject, pr, c, it)
+		if m, ok := e.storeMiss(ctx, subject, pr, c, it); ok && m.Class == store.MissMiss && m.Scope == store.MissScopeRepo && m.State == store.MissNew {
+			forNotes++
+		}
 	}
-	return rejected
+	return rejected, forNotes
 }
 
-// storeMiss upserts candidate c as classified by it.
-func (e *Engine) storeMiss(ctx context.Context, subject string, pr store.PR, c learn.Candidate, it learn.Item) bool {
+// storeMiss upserts candidate c as classified by it and returns the stored
+// row.
+func (e *Engine) storeMiss(ctx context.Context, subject string, pr store.PR, c learn.Candidate, it learn.Item) (store.Miss, bool) {
 	m := store.Miss{
 		PRID: pr.ID, SourceURL: c.URL, SourceKind: c.Kind, Reviewer: c.Reviewer, Path: c.Path, Line: c.Line,
 		ReviewedSHA: c.ReviewedSHA, Class: it.Class, Raised: c.Raised, FindingRef: c.FindingRef, ReasonCode: c.ReasonCode,
@@ -675,11 +727,12 @@ func (e *Engine) storeMiss(ctx context.Context, subject string, pr store.PR, c l
 	if it.Class == store.MissMiss {
 		m.Severity, m.Title, m.Lesson, m.Scope, m.Lines, m.Match = it.Severity, it.Title, it.Lesson, it.Scope, it.Lines, it.Match
 	}
-	if _, err := e.st.UpsertMiss(context.WithoutCancel(ctx), m); err != nil {
+	got, err := e.st.UpsertMiss(context.WithoutCancel(ctx), m)
+	if err != nil {
 		e.log.Warn("retro: store a miss", "subject", subject, "candidate", c.ID, "err", err)
-		return false
+		return store.Miss{}, false
 	}
-	return true
+	return got, true
 }
 
 // pruneRetro removes the retro run directories older than retroKeep

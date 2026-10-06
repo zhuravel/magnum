@@ -1934,10 +1934,12 @@ const (
 
 const (
 	CurateOverLimit = "over_limit" // a repository past a limit, once its notes changed since the last curation
-	CurateWeekly    = "weekly"     // that, and every repository with notes once a week
-	CurateOff       = "off"        // only `magnum notes <repo> --curate`
+	CurateWeekly    = "weekly"     // every repository with notes, once a week, once they changed
+	CurateMisses    = "misses"     // a retro recorded misses of the repository for its notes (class miss, scope repo)
+	// CurateOff, alone, is no trigger: only `magnum notes <repo> --curate`.
+	CurateOff = "off"
 )
-    Curation schedules ([notes] curate).
+    Curation triggers ([notes] curate).
 
 const (
 	// KindShell is the Role.Kind of a role that types a shell command into
@@ -2395,6 +2397,22 @@ func (c *Config) Warnings() []string
 func (c *Config) WatchFor(fullName string) *Watch
     WatchFor returns the watch that covers owner/name, or nil.
 
+type CurateTriggers []string
+    CurateTriggers is [notes] curate: the triggers of a curation, written as
+    a list (`["over_limit", "misses"]`, `[]` for none). The earlier string
+    form still reads as it meant: "over_limit" that trigger alone, "weekly"
+    over_limit and weekly, "off" none.
+
+func (c CurateTriggers) Has(t string) bool
+    Has reports whether trigger t is on.
+
+func (c CurateTriggers) String() string
+    String is the list as the config writes it.
+
+func (c *CurateTriggers) UnmarshalTOML(v any) error
+    UnmarshalTOML reads a list of trigger names or one of the earlier strings.
+    Values are checked by Validate.
+
 type Daemon struct {
 	PollInterval             Duration `toml:"poll_interval"`
 	MaxConcurrentReviews     int      `toml:"max_concurrent_reviews"`
@@ -2705,6 +2723,10 @@ type Learn struct {
 	DailyAt string `toml:"daily_at"`
 	// Lookback: PRs merged or closed within it are candidates.
 	Lookback Duration `toml:"lookback"`
+	// Settle: the daily retro and a plain `magnum retro` take a PR only once
+	// it was closed or merged at least this long ago, so the reviews posted
+	// after it closed are in (0 = at once). `magnum retro <ref>` ignores it.
+	Settle Duration `toml:"settle"`
 	// MaxPRs bounds the PRs classified per retro, newest closed first.
 	MaxPRs int `toml:"max_prs"`
 	// MinCommentChars: comments shorter than this are dropped.
@@ -2735,7 +2757,7 @@ type Learn struct {
 
 func DefaultLearn() Learn
     DefaultLearn returns the built-in [learn] values: off, a week of lookback,
-    Claude sonnet classifying.
+    a day to settle, Claude sonnet classifying.
 
 func (l Learn) DailyTime(day time.Time) (time.Time, error)
     DailyTime is the daily_at time on the local calendar day of day (in day's
@@ -2749,11 +2771,13 @@ type LoadOptions struct {
     LoadOptions tunes LoadWithOptions.
 
 type Notes struct {
-	MaxBytes        int64  `toml:"max_bytes"`
-	MaxLine         int    `toml:"max_line"`
-	MaxHarnessFiles int    `toml:"max_harness_files"`
-	MaxHarnessBytes int64  `toml:"max_harness_bytes"`
-	Curate          string `toml:"curate"`
+	MaxBytes        int64 `toml:"max_bytes"`
+	MaxLine         int   `toml:"max_line"`
+	MaxHarnessFiles int   `toml:"max_harness_files"`
+	MaxHarnessBytes int64 `toml:"max_harness_bytes"`
+	// Curate lists the curation triggers (CurateOverLimit, CurateWeekly,
+	// CurateMisses); empty: only on demand.
+	Curate CurateTriggers `toml:"curate"`
 	// Kind is the curator's [kinds.<name>]; a config that names a kind but no
 	// model gets DefaultLearnModel(kind), as [learn] does.
 	Kind   string   `toml:"kind"`
@@ -2771,10 +2795,11 @@ type Notes struct {
     measures the notes and the harness directory of QA scripts beside them,
     and a repository past any limit is marked for curation (a notes.over_limit
     event). Nothing blocks a review, and a curated proposal may stay above a
-    limit when what it keeps helps future reviews. Curate says when a curation
-    runs: for a marked repository, also once a week, or only on demand (`magnum
-    notes <repo> --curate`). The curator is an interactive agent like the
-    retro's ([learn]): Kind, Model, Effort and Args as a role's (NotesRole).
+    limit when what it keeps helps future reviews. Curate lists what starts a
+    curation besides `magnum notes <repo> --curate`: a repository marked past
+    a limit, once a week, or a retro that recorded misses of the repository for
+    its notes. The curator is an interactive agent like the retro's ([learn]):
+    Kind, Model, Effort and Args as a role's (NotesRole).
 
 func DefaultNotes() Notes
     DefaultNotes returns the built-in [notes] values.
@@ -3521,6 +3546,7 @@ const (
 	// Curation triggers (notes_proposals.trigger_reason).
 	CurateTriggerOverLimit = config.CurateOverLimit
 	CurateTriggerWeekly    = config.CurateWeekly
+	CurateTriggerMisses    = config.CurateMisses
 	CurateTriggerRequest   = "request"
 
 	// ProposalTTL is how long a proposal waits for the operator before it
@@ -3800,6 +3826,11 @@ func KVIdentityCheck(name string) string
 func KVIdentityError(name string) string
     KVIdentityError is the kv key holding why the identity's Check failed.
     Same as store.KVIdentityError.
+
+func KVNotesMisses(fullName string) string
+    KVNotesMisses marks a repository whose retro recorded misses for its notes:
+    the time of the retro that did (store.FormatTime). The misses trigger
+    curates it, and a curation that began after that time clears it.
 
 func KVNotesOver(fullName string) string
     KVNotesOver holds the notes limits a repository's notes are past,
@@ -7689,6 +7720,12 @@ so ".curate" never collides with an owner's directory.
 CONSTANTS
 
 const (
+	MissNoted   = "noted"
+	MissSkipped = "skipped"
+)
+    The actions of a MissChange.
+
+const (
 	ActionKept    = "kept"
 	ActionAdded   = "added"
 	ActionMerged  = "merged"
@@ -7789,9 +7826,12 @@ func Validate(p Proposal, c Check) []string
     and changes.json must be there; every proposed section and harness file must
     be accounted for as kept or added with a one-line reason, and every current
     harness file with what became of it; every proposed harness file must be
-    named in the notes; nothing may name a pull request, one of its branches
-    or probe files, carry what looks like a secret or a home directory path.
-    Size is not checked: the limits trigger curations, they do not cap them.
+    named in the notes; nothing may name a pull request, one of its branches or
+    probe files, carry what looks like a secret or a home directory path; every
+    miss given must be accounted for once, noted with a section of the proposal
+    or skipped with a reason. Size is not checked: the limits trigger curations,
+    they do not cap them. A proposal that changes nothing is invalid unless it
+    was given misses and skips them all (the operator confirms the skips).
 
 func WriteSnapshot(dir string, s Snapshot) error
     WriteSnapshot writes s to dir/SnapshotFile.
@@ -7822,11 +7862,13 @@ type Change struct {
     Change is one item of Changes.
 
 type Changes struct {
-	Sections []Change `json:"sections"`
-	Files    []Change `json:"files"`
+	Sections []Change     `json:"sections"`
+	Files    []Change     `json:"files"`
+	Misses   []MissChange `json:"misses,omitempty"`
 }
     Changes is the curator's changes.json: what became of every notes section
-    (by its "## " heading) and every harness file, each with a one-line reason.
+    (by its "## " heading) and every harness file, each with a one-line reason,
+    and of every miss the curation was given (misses.json).
 
 type Check struct {
 	Base State
@@ -7835,6 +7877,9 @@ type Check struct {
 	// branch, carry one pull request's content.
 	PRNumbers []int
 	Branches  []string
+	// Misses are the ids of the misses the curation was given: the proposal
+	// accounts for each.
+	Misses []int64
 }
     Check is what Validate compares a proposal with: the state the curation
     started from and what names one pull request of the repository.
@@ -7860,6 +7905,16 @@ type Limits struct {
 }
     Limits are the notes curation triggers: past any of them the repository is
     marked for curation. None of them blocks a review or a proposal.
+
+type MissChange struct {
+	ID      int64  `json:"id"`
+	Action  string `json:"action"`
+	Section string `json:"section,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+}
+    MissChange is what a curation did with one miss it was given: noted,
+    with the "## " section of the proposal that covers it now, or skipped,
+    with a one-line reason.
 
 type Proposal struct {
 	State       State
@@ -7913,6 +7968,8 @@ func (s Scratch) Current() string
 func (s Scratch) CurrentHarness() string
 
 func (s Scratch) Harness() string
+
+func (s Scratch) Misses() string
 
 func (s Scratch) Proposal() string
 
@@ -10026,6 +10083,13 @@ const (
     Notes proposal kinds and states (notes_proposals.kind, .state).
 
 const (
+	MissNoted   = "noted"   // a note covers it now, in Section
+	MissSkipped = "skipped" // no note helps a future review: Reason says why
+)
+    What a proposal did with a miss it was given
+    (notes_proposal_misses.outcome).
+
+const (
 	RequiredFromConfig = "config" // the [[repo]] block's required_checks
 	RequiredFromGitHub = "github" // the default branch's rulesets or branch protection
 )
@@ -10038,6 +10102,10 @@ const (
 )
     Verdicts: what a review concluded, whatever its repository lets it post
     (ReviewSummary.Verdict).
+
+const MissDismissRejections = 2
+    MissDismissRejections is how many rejected proposals a miss may be in before
+    it is dismissed.
 
 const NotesUnusedRounds = 20
     NotesUnusedRounds is how many judge rounds a harness file must have existed
@@ -10477,6 +10545,11 @@ type Miss struct {
 	// Repo ("owner/name") and Number name the miss's PR; Misses fills them.
 	Repo   string `json:"repo,omitempty"`
 	Number int    `json:"number,omitempty"`
+	// ProposalID and ProposalState name the latest notes proposal the miss
+	// was given to (notes_proposal_misses) and where that one stands: the
+	// proposal that used it once it is used; Misses fills them.
+	ProposalID    *int64 `json:"proposal_id,omitempty"`
+	ProposalState string `json:"proposal_state,omitempty"`
 }
     Miss is a comment another reviewer made on a PR magnum reviewed, with what
     the retro made of it (misses).
@@ -10484,7 +10557,9 @@ type Miss struct {
 type MissFilter struct {
 	Classes []string // empty = every class
 	States  []string // empty = every state
+	Scopes  []string // empty = any scope, none included
 	PRID    int64    // 0 = every PR
+	RepoID  int64    // 0 = every repository
 }
     MissFilter selects misses; zero values select everything.
 
@@ -10566,6 +10641,9 @@ type NotesProposalInput struct {
 	PromptSHA string
 	Scratch   string
 	At        time.Time // zero = now
+	// Misses is what a curation did with each miss it was given
+	// (notes_proposal_misses).
+	Misses []ProposalMiss
 }
     NotesProposalInput is a proposal to store (CreateNotesProposal).
 
@@ -10717,6 +10795,16 @@ type PRUpsert struct {
 }
     PRUpsert reports what UpsertPRFromGitHub did.
 
+type ProposalMiss struct {
+	MissID  int64  `json:"miss_id"`
+	Outcome string `json:"outcome"`           // MissNoted | MissSkipped
+	Section string `json:"section,omitempty"` // noted: the "## " section of the proposed notes
+	Reason  string `json:"reason,omitempty"`  // skipped: why; noted: optional
+	// Miss is the miss as it is now (ProposalMisses fills it).
+	Miss *Miss `json:"miss,omitempty"`
+}
+    ProposalMiss is what a proposal did with one miss it was given.
+
 type PruneResult struct {
 	Events   int64
 	Requests int64
@@ -10777,8 +10865,11 @@ type RetroPR struct {
 
 type RetroQuery struct {
 	Since time.Time // closed or merged at or after Since (ignored when PRIDs is set)
-	Again bool      // also PRs that already have a retro_prs row
-	PRIDs []int64   // only these PRs, whenever they closed
+	// Until is the settle delay's bound: closed or merged at or before it
+	// (zero = no bound; ignored when PRIDs is set).
+	Until time.Time
+	Again bool    // also PRs that already have a retro_prs row
+	PRIDs []int64 // only these PRs, whenever they closed
 }
     RetroQuery selects the PRs a retro looks at.
 
@@ -11060,8 +11151,9 @@ func (s *Store) CountNotesProposals(ctx context.Context, state string) (int, err
     CountNotesProposals counts the proposals in state.
 
 func (s *Store) CreateNotesProposal(ctx context.Context, in NotesProposalInput) (NotesProposal, error)
-    CreateNotesProposal stores a proposal (and a curation's proposed state as a
-    version of source curation) in one transaction.
+    CreateNotesProposal stores a proposal (and a curation's proposed state
+    as a version of source curation, and what it did with its misses) in one
+    transaction.
 
 func (s *Store) CreateRun(ctx context.Context, r Run) (Run, error)
     CreateRun inserts a run and returns it. Role is any non-empty name. An empty
@@ -11087,7 +11179,8 @@ func (s *Store) DecideNotesProposal(ctx context.Context, id int64, from []string
     with reason, compare-and-set (ErrConflict when it is in another state). With
     applied, the state the proposal leads to is recorded in the same transaction
     as a version of the repository (applied.RepoID and ProposalID are set here)
-    and linked as the proposal's applied_version_id.
+    and linked as the proposal's applied_version_id. The misses the proposal was
+    given follow it (decideProposalMisses).
 
 func (s *Store) DeleteKV(ctx context.Context, key string) error
     DeleteKV removes key (no error when absent).
@@ -11182,9 +11275,13 @@ func (s *Store) MarkSlotDatabaseDropped(ctx context.Context, dbName, by string) 
     MarkSlotDatabaseDropped records that dbName was dropped (by = who: a cleanup
     plan id, "cleanup", "reconcile", …).
 
+func (s *Store) MissRejections(ctx context.Context, ids []int64) (map[int64][]string, error)
+    MissRejections returns, per miss of ids, the operator's reasons of the
+    rejected proposals it was in, oldest first (an empty reason is left out).
+
 func (s *Store) Misses(ctx context.Context, f MissFilter) ([]Miss, error)
     Misses returns the misses f selects, newest first, each with its PR's
-    repository and number.
+    repository and number and the latest proposal it was given to.
 
 func (s *Store) NotesFileUses(ctx context.Context, repoID int64) ([]NotesFileUse, error)
     NotesFileUses lists repoID's harness files with their rounds and the uses
@@ -11226,6 +11323,10 @@ func (s *Store) PendingRequests(ctx context.Context, limit int) ([]Request, erro
     PendingRequests returns up to limit pending requests, oldest first (limit <=
     0 = all), so a consumer can skip a request it already handed to a background
     worker.
+
+func (s *Store) ProposalMisses(ctx context.Context, id int64) ([]ProposalMiss, error)
+    ProposalMisses lists what proposal id did with the misses it was given,
+    by miss id, each with the miss as it is now.
 
 func (s *Store) Prune(ctx context.Context, keepEvents, keepRequests time.Duration) (PruneResult, error)
     Prune deletes events older than keepEvents and handled requests (state done
@@ -11297,14 +11398,19 @@ func (s *Store) RequiredChecks(ctx context.Context, fullName string, configured 
 
 func (s *Store) RetroDue(ctx context.Context, q RetroQuery) ([]PR, error)
     RetroDue lists the PRs due for a retro, newest closed first: merged or
-    closed, closed (closed_at, else merged_at) at or after q.Since unless
-    q.PRIDs names the PRs, with at least one run that posted a review, and
-    unless q.Again without a retro record, or with a failed one of fewer than
-    RetroMaxAttempts attempts.
+    closed, closed (closed_at, else merged_at) at or after q.Since and,
+    with q.Until, at or before it, unless q.PRIDs names the PRs, with at least
+    one run that posted a review, and unless q.Again without a retro record,
+    or with a failed one of fewer than RetroMaxAttempts attempts.
 
 func (s *Store) RetroPRByID(ctx context.Context, prID int64) (RetroPR, error)
     RetroPRByID returns the retro record of prID, or an error matching
     ErrNotFound when the PR has none.
+
+func (s *Store) RetroSettling(ctx context.Context, q RetroQuery) (int, error)
+    RetroSettling counts the PRs that would be due for q's retro but closed
+    after q.Until: they wait for the settle delay. 0 without Until or with
+    PRIDs.
 
 func (s *Store) RoleRanBefore(ctx context.Context, prID int64, role string) (bool, error)
     RoleRanBefore reports whether a PR already has an ended or verified run

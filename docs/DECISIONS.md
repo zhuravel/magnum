@@ -2066,3 +2066,44 @@ editing history. Code, config comments and prompts reference these by their head
   former-login, thread-file, re-review-note and provenance sentences are shorter. The `readiness` field now
   says that the `reset_db` commands run first and only the rest as `zsh -lc`, as they have since `reset_db`
   moved to `mise exec`. Rejected: raising the cap (the additions fit without it).
+- **The retro waits for late reviews: `[learn] settle`** (2026-10-06, amends "Learning loop: daily retro"). The
+  retro took a PR once, as soon as it closed: the daily retro at 07:00 took a PR merged at 06:55, and a change
+  request a colleague posted 30 minutes after the merge was never seen. The daily retro and a plain `magnum retro`
+  now take a PR only once it closed or merged at least `settle` ago (24h by default, 0 = at once, validated as 0 or
+  more and shorter than `lookback`, else no PR would ever be due); `magnum retro <ref>` names its PRs and takes them
+  whenever they closed. The retro's start event (`settling` in its data) and `magnum status`'s retro line count
+  the PRs that wait for the delay when there are any. Rejected: looking at a PR again when a review arrives after
+  its retro (another GitHub read per closed PR per day, and a classified miss would be classified twice).
+- **The retro's misses become notes proposals** (2026-10-06, amends "Learning loop: daily retro" and "A curator
+  proposes curated notes; the operator applies or rejects"). Nothing read the misses back: a blocking finding a
+  colleague made after magnum's review changed no later review. A repository's misses of class `miss`, scope `repo`
+  and state `new` are now input to its next notes curation, whatever triggered it (`--curate` too); general ones
+  are left `new` for a later skill-editing stage. A retro that recorded at least one marks the repository once it
+  is over (`KVNotesMisses`, a `notes.misses` event), so the curation starts after the retro and takes all of them;
+  the curation trigger `misses` curates a marked repository with misses still new, under the curations' rules
+  (one curation at a time, none while a round of it is in its judge stage or a proposal of it waits, at most one
+  a day, an attempt that stored nothing waits an hour), and a curation that began after the mark clears it.
+  `[notes] curate` becomes a list of triggers, `["over_limit", "misses"]` by default (`weekly` the third, `[]`
+  none); the earlier string form reads as it meant (`"weekly"` is over_limit and weekly, `"off"` none). The
+  misses reach the curator as
+  data in `misses.json` in its scratch directory (id, severity, path:line at the reviewed commit, title, lesson,
+  the reasons of the rejected proposals each was in), the title and lesson scrubbed again of the logins of the
+  miss's PR and of magnum, pull request references and links; the prompt gets the file's path, the count and one
+  rule: note a miss when a future review of the repository would catch a similar problem because of it, else
+  skip it, and account for every id in `changes.json`'s `misses` (noted with a `## ` section of the proposal, or
+  skipped with a one-line reason). `notes.Validate` makes a proposal that leaves a miss unaccounted for, names one
+  it was not given, or notes one in a section it lacks invalid (one nudge, then `invalid`); a proposal that
+  changes nothing stays invalid unless it was given misses and skips them all, which the operator then confirms
+  (its apply records no second copy of the version). Migration 0014 adds `notes_proposal_misses` (a proposal's
+  misses with the outcome, section and reason; never pruned). A miss stays `new` while its proposal waits; the
+  decision moves it in the same transaction (`DecideNotesProposal`): applied, the noted and skipped misses become
+  `used`, linked to the proposal; rejected, they stay `new` and the next curation reads the reason, and a miss
+  in its second rejected proposal becomes `dismissed`; expired (or refused because the notes changed), they stay
+  `new`. `magnum notes <repo> --review` lists the misses under the diff with what the proposal did with each and
+  says where the decision left them; `magnum misses` shows STATE (with `--all`) and PROPOSAL (the latest proposal
+  a miss was given to, with its state) and `--json` carries `proposal_id` and `proposal_state`. Rejected: a
+  `proposed` miss state (the misses table's CHECK would have to be rewritten, and a waiting proposal already
+  blocks a second curation); the misses in the prompt's text (prompts carry paths, never PR-derived text);
+  marking the repository again after a rejection or an expiry (an operator who ignores proposals would get one a
+  week; the misses wait for the next trigger); applying a curation of misses without review (the notes are read
+  by every later round).

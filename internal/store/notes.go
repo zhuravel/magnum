@@ -386,10 +386,14 @@ type NotesProposalInput struct {
 	PromptSHA string
 	Scratch   string
 	At        time.Time // zero = now
+	// Misses is what a curation did with each miss it was given
+	// (notes_proposal_misses).
+	Misses []ProposalMiss
 }
 
 // CreateNotesProposal stores a proposal (and a curation's proposed state as
-// a version of source curation) in one transaction.
+// a version of source curation, and what it did with its misses) in one
+// transaction.
 func (s *Store) CreateNotesProposal(ctx context.Context, in NotesProposalInput) (NotesProposal, error) {
 	if err := errors.Join(oneOf("proposal kind", in.Kind, proposalKinds), oneOf("proposal state", in.State, proposalStates)); err != nil {
 		return NotesProposal{}, err
@@ -431,6 +435,9 @@ func (s *Store) CreateNotesProposal(ctx context.Context, in NotesProposalInput) 
 			if _, err := tx.ExecContext(ctx, "UPDATE notes_proposals SET version_id = ? WHERE id = ?", v.ID, id); err != nil {
 				return err
 			}
+		}
+		if err := linkProposalMisses(ctx, tx, id, in.Misses); err != nil {
+			return err
 		}
 		out, err = scanNotesProposal(tx.QueryRowContext(ctx, "SELECT "+proposalColumns+" FROM notes_proposals WHERE id = ?", id))
 		return err
@@ -496,7 +503,8 @@ func (s *Store) CountNotesProposals(ctx context.Context, state string) (int, err
 // reason, compare-and-set (ErrConflict when it is in another state). With
 // applied, the state the proposal leads to is recorded in the same
 // transaction as a version of the repository (applied.RepoID and ProposalID
-// are set here) and linked as the proposal's applied_version_id.
+// are set here) and linked as the proposal's applied_version_id. The misses
+// the proposal was given follow it (decideProposalMisses).
 func (s *Store) DecideNotesProposal(ctx context.Context, id int64, from []string, to, reason string, at time.Time, applied *NotesVersionInput) (NotesProposal, error) {
 	if err := oneOf("proposal state", to, proposalStates); err != nil {
 		return NotesProposal{}, err
@@ -525,6 +533,9 @@ func (s *Store) DecideNotesProposal(ctx context.Context, id int64, from []string
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE notes_proposals SET state = ?, reason = COALESCE(?, reason), decided_at = ?,
   applied_version_id = COALESCE(?, applied_version_id) WHERE id = ?`, to, nullString(reason), FormatTime(at), appliedID, id); err != nil {
+			return err
+		}
+		if err := decideProposalMisses(ctx, tx, id, to, at); err != nil {
 			return err
 		}
 		out, err = scanNotesProposal(tx.QueryRowContext(ctx, "SELECT "+proposalColumns+" FROM notes_proposals WHERE id = ?", id))

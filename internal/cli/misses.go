@@ -54,9 +54,12 @@ func newMissesCmd(c *Context) *cobra.Command {
 			"appear. By default it shows the real misses nobody drew a lesson from yet (class miss, state new); "+
 			"--class picks another class and --all lists every class and every state (with --class: that class in "+
 			"every state). A <ref> shows one PR's.\n\n"+
-			"RAISED says what magnum did with the point: rejected:<reason> when its judge raised a similar finding and "+
-			"rejected it, blank when it never raised it. WHERE is path:line, or - for a review summary. The lesson is "+
-			"cut to fit the terminal.",
+			"STATE (with --all) is new until a notes curation used the miss (a proposal accounting for it was applied) "+
+			"or it was dismissed (in two rejected proposals); a miss of class miss and scope repo goes to its "+
+			"repository's next notes curation. PROPOSAL, when one is, is the latest notes proposal a miss was given to "+
+			"and where that stands (`magnum notes <repo> --review`). RAISED says what magnum did with the point: rejected:<reason> when its judge "+
+			"raised a similar finding and rejected it, blank when it never raised it. WHERE is path:line, or - for a "+
+			"review summary. The lesson is cut to fit the terminal.",
 		func(pos []string) int { return runMisses(c, f, pos) })
 	fs := cmd.Flags()
 	fs.BoolVar(&f.all, "all", false, "every class and every state (not only new misses)")
@@ -123,7 +126,7 @@ func runMisses(c *Context, f missesFlags, pos []string) int {
 		fmt.Fprintln(c.Stdout, missesNone(class, f.all))
 		return 0
 	}
-	missesRender(c.Stdout, ms, defaultRepo(a.Config), missesTermWidth(c.Stdout))
+	missesRender(c.Stdout, ms, defaultRepo(a.Config), missesTermWidth(c.Stdout), len(filter.States) != 1)
 	return 0
 }
 
@@ -176,22 +179,39 @@ var missesTermWidth = func(w io.Writer) int {
 }
 
 // missesRender prints the table. Everything from GitHub or the classifier
-// goes through statusSafe. The lesson is the last column and is cut to the
-// terminal's width (width > 0) or to missesLessonRunes.
-func missesRender(w io.Writer, ms []store.Miss, defRepo string, width int) {
-	header := []string{"PR", "REVIEWER", "WHERE", "CLASS", "SEV", "RAISED", "TITLE"}
+// goes through statusSafe. STATE is shown when the listing's states vary
+// (states), PROPOSAL when a miss listed was given to a notes proposal. The
+// lesson is the last column and is cut to the terminal's width (width > 0)
+// or to missesLessonRunes.
+func missesRender(w io.Writer, ms []store.Miss, defRepo string, width int, states bool) {
+	proposals := slices.ContainsFunc(ms, func(m store.Miss) bool { return m.ProposalID != nil })
+	header := []string{"PR", "REVIEWER", "WHERE", "CLASS", "SEV"}
+	if states {
+		header = append(header, "STATE")
+	}
+	header = append(header, "RAISED")
+	if proposals {
+		header = append(header, "PROPOSAL")
+	}
+	header = append(header, "TITLE")
 	rows := make([][]string, 0, len(ms))
 	lessons := make([]string, 0, len(ms))
 	for _, m := range ms {
-		rows = append(rows, []string{
+		row := []string{
 			actRefLabel(defRepo, m.Repo, m.Number),
 			inspOrDash(statusSafe(m.Reviewer, 0)),
 			missesWhere(m),
 			statusSafe(m.Class, 0),
 			inspOrDash(statusSafe(m.Severity, 0)),
-			missesRaised(m),
-			inspOrDash(statusSafe(m.Title, missesTitleRunes)),
-		})
+		}
+		if states {
+			row = append(row, statusSafe(m.State, 0))
+		}
+		row = append(row, missesRaised(m))
+		if proposals {
+			row = append(row, missesProposal(m))
+		}
+		rows = append(rows, append(row, inspOrDash(statusSafe(m.Title, missesTitleRunes))))
 		lessons = append(lessons, statusSafe(m.Lesson, 0))
 	}
 	budget := missesLessonRunes
@@ -215,15 +235,33 @@ func missesRender(w io.Writer, ms []store.Miss, defRepo string, width int) {
 	_ = tw.Flush()
 }
 
-// missesWhere is the comment's place, path:line, "-" for a review summary;
-// a long path keeps its tail.
-func missesWhere(m store.Miss) string {
+// missesProposal is the latest notes proposal the miss was given to and its
+// state ("12 applied"), blank when none.
+func missesProposal(m store.Miss) string {
+	if m.ProposalID == nil {
+		return ""
+	}
+	return strconv.FormatInt(*m.ProposalID, 10) + " " + statusSafe(m.ProposalState, 0)
+}
+
+// missesPlace is the comment's place, path:line ("" for a review summary).
+func missesPlace(m store.Miss) string {
 	if m.Path == "" {
-		return "-"
+		return ""
 	}
 	s := statusSafe(m.Path, 0)
 	if m.Line > 0 {
 		s += ":" + strconv.Itoa(m.Line)
+	}
+	return s
+}
+
+// missesWhere is the comment's place, path:line, "-" for a review summary;
+// a long path keeps its tail.
+func missesWhere(m store.Miss) string {
+	s := missesPlace(m)
+	if s == "" {
+		return "-"
 	}
 	if r := []rune(s); len(r) > missesWhereRunes {
 		s = "…" + string(r[len(r)-missesWhereRunes+1:])

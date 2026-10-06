@@ -199,15 +199,15 @@ func notesExist(l paths.Layout, owner, name string) bool {
 // notesView is what `magnum notes <repo>` says besides the notes text (its
 // --json form).
 type notesView struct {
-	Repo     string               `json:"repo"`
-	Path     string               `json:"path"`
-	Size     notes.Size           `json:"size"`
-	Limits   notes.Limits         `json:"limits"`
-	Over     []string             `json:"over"`
-	Curate   string               `json:"curate"`
-	Unused   []string             `json:"unused"`
-	Proposal *store.NotesProposal `json:"proposal,omitempty"` // the newest waiting for review
-	Registry string               `json:"registry_error,omitempty"`
+	Repo     string                `json:"repo"`
+	Path     string                `json:"path"`
+	Size     notes.Size            `json:"size"`
+	Limits   notes.Limits          `json:"limits"`
+	Over     []string              `json:"over"`
+	Curate   config.CurateTriggers `json:"curate"`
+	Unused   []string              `json:"unused"`
+	Proposal *store.NotesProposal  `json:"proposal,omitempty"` // the newest waiting for review
+	Registry string                `json:"registry_error,omitempty"`
 }
 
 // notesShow prints the notes file, with control characters other than
@@ -319,8 +319,8 @@ func notesSummary(w io.Writer, v notesView) {
 		s.HarnessFiles, l.MaxHarnessFiles, past(notes.LimitHarnessFiles), s.HarnessBytes, l.MaxHarnessBytes, past(notes.LimitHarnessBytes))
 	if len(v.Over) > 0 {
 		how := "the daemon curates them once they change"
-		if v.Curate == config.CurateOff {
-			how = "curate = \"off\""
+		if !v.Curate.Has(config.CurateOverLimit) {
+			how = "[notes] curate = " + v.Curate.String() + " leaves over_limit out"
 		}
 		fmt.Fprintf(w, "past %s, curation triggers, not caps: %s; `magnum notes %s --curate` asks for one now\n",
 			strings.Join(v.Over, ", "), how, v.Repo)

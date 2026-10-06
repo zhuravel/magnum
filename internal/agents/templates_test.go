@@ -124,6 +124,8 @@ type curateFixture struct {
 	}
 	Over         []string
 	UnusedRounds int
+	Misses       string
+	MissCount    int
 }
 
 func curateFixtureWith(over ...string) curateFixture {
@@ -237,6 +239,11 @@ func TestRenderGolden(t *testing.T) {
 	deltaCheck.DeltaCheck, deltaCheck.DeltaLines = true, 4
 	deltaCheck.DeltaFile = "/Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/delta-check.json"
 
+	// A curation given the retro's misses for the repository's notes, which
+	// it reads from misses.json beside usage.json.
+	curateMisses := curateFixtureWith("max_bytes")
+	curateMisses.Misses, curateMisses.MissCount = curateMisses.Dir+"/misses.json", 2
+
 	cases := []struct {
 		golden, name string
 		data         any
@@ -280,6 +287,7 @@ func TestRenderGolden(t *testing.T) {
 		{"retro", "retro.md", retroFixtureWith("a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0")},
 		{"notes_curate", "notes-curate.md", curateFixtureWith("max_bytes", "max_harness_files")},
 		{"notes_curate_within", "notes-curate.md", curateFixtureWith()},
+		{"notes_curate_misses", "notes-curate.md", curateMisses},
 		{"retro_two_reviews", "retro.md", retroFixtureWith("a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0", "d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3")},
 		{"model_fallback_no_report", FallbackPromptName, FallbackData{Model: "sonnet", Previous: "opus", Role: "claude-simplify",
 			URL: "https://github.com/talkable/talkable/pull/11920", HeadSHA: "d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3"}},
@@ -287,6 +295,15 @@ func TestRenderGolden(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.golden, func(t *testing.T) {
 			got, err := RenderPrompt(prompt(t, tc.name), tc.data)
+			if tc.golden == "notes_curate_misses" {
+				// The misses are data in misses.json: the prompt names the
+				// file and the rule, never a login, a PR or a miss's text.
+				for _, leak := range []string{"rev-ann", "alice", "#11920", "pull/", "Coupon lookup"} {
+					if strings.Contains(got, leak) {
+						t.Errorf("the curator's prompt carries %q", leak)
+					}
+				}
+			}
 			if err != nil {
 				t.Fatalf("RenderPrompt(%s): %v", tc.name, err)
 			}

@@ -820,10 +820,13 @@ Other people review the same pull requests, and what they catch that Magnum did 
 of what its review misses. The retro collects it. With `[learn] enabled = true` it runs once a day, on the
 first tick after `daily_at` (07:00), unless Magnum is paused or draining; `magnum retro` runs one at any
 time, also while Magnum is paused (not while it drains for a restart). It looks at the pull requests
-merged or closed within `lookback` (a week) that Magnum posted a review on and that no retro looked at yet
-(or whose retro failed, up to three times), newest first, until `max_prs` (20) of them had something to
-classify. `magnum retro <ref>...` looks at the pull requests it names whenever they closed and whether or
-not a retro already did, like `--again` for those.
+merged or closed within `lookback` (a week) and at least `settle` ago (24 hours, so a review posted after
+the merge is in: the daily retro at 07:00 would otherwise take a pull request merged at 06:55 and never see
+a change request posted at 07:30), that Magnum posted a review on and that no retro looked at yet (or whose
+retro failed, up to three times), newest first, until `max_prs` (20) of them had something to classify;
+the retro's start event and `magnum status` count the pull requests that wait for the settle delay.
+`magnum retro <ref>...` looks at the pull requests it names whenever they closed, settled or not, and
+whether or not a retro already did, like `--again` for those.
 
 For each one it reads the review threads and reviews from GitHub and keeps the root comment of every thread
 and the summary of every review written by someone other than the author, Magnum's own logins (every
@@ -863,15 +866,30 @@ The registry keeps one row per comment in its `misses` table: the comment's URL,
 the reviewed commit, the class, whether Magnum had raised it and, for a miss, what the agent wrote. It never
 keeps a comment's text; that stays in the retro's run directory,
 `~/.local/share/magnum/learn/retro/<run>/<owner>/<repo>/<N>/` (`candidates.json`, the files, `retro.json`),
-which is deleted after 30 days. `magnum misses` lists the new misses, `magnum status` shows when the last
-retro ran and how many new misses wait, and every step is a `retro.*` event (`magnum logs <ref>`) that
-never quotes a comment.
+which is deleted after 30 days. `magnum misses` lists the new misses (`--all` every class and state, with
+the latest notes proposal each was given to), `magnum status` shows when the last retro ran, how many new
+misses wait and how many pull requests wait for the settle delay, and every step is a `retro.*` event
+(`magnum logs <ref>`) that never quotes a comment.
+
+**What happens to a miss.** A miss whose lesson is for its repository (class `miss`, scope `repo`) goes to
+that repository's notes: once the retro is over it marks the repository (a `notes.misses` event), and the
+next notes curation (below) gets every such miss still new as data, with its id, severity, place
+(path:line at the reviewed commit), title and lesson, never a login, a pull request number or a comment.
+The curator adds or sharpens a note for a miss when a future review of the repository would catch a
+similar problem because of it, and skips it otherwise, saying why; you review the proposal with `magnum
+notes <repo> --review`, which lists every miss with what the proposal did with it. Applied, the misses
+become `used`; rejected, they go back to `new` and the next curation reads your reason; a miss in two
+rejected proposals is `dismissed`; an expired proposal leaves its misses `new`. The turnaround: a pull
+request closes, 24 hours later the daily retro classifies what its other reviewers said, a repository miss
+triggers a curation whose proposal you approve, and the next review round of that repository reads the
+note. A `general` miss stays `new`: it is for the review skill, which a later stage edits.
 
 ```toml
 [learn]
 enabled = true          # once a day; `magnum retro` runs one regardless
 daily_at = "07:00"
 lookback = "7d"
+settle = "24h"          # a pull request waits this long after it closes (0 = at once)
 model = "sonnet"
 ```
 
@@ -905,23 +923,30 @@ the lines and harness files each version adds and removes, without quoting them.
 report that names one by its path counts too. A file that existed for 20 judge rounds of its repository
 without a use is a curation candidate; `magnum notes <repo>` lists them.
 
-**Curation.** With `curate = "over_limit"` (the default) a marked repository is curated once its notes
-changed since the last curation, at most once a day; `"weekly"` also curates every repository with notes
-once a week; `"off"` leaves it to `magnum notes <repo> --curate`, which runs one now. A curation copies the
+**Curation.** `[notes] curate` lists what starts a curation, at most one of a repository a day: `over_limit`
+curates a marked repository once its notes changed since the last curation; `weekly` curates every
+repository with notes once a week, once they changed; `misses` curates a repository whose retro recorded
+misses for its notes (above). The default is `["over_limit", "misses"]`; `[]` leaves it to `magnum notes
+<repo> --curate`, which runs one now. (The string form `"over_limit"`, `"weekly"` and `"off"` still reads
+as it did: `"weekly"` is `["over_limit", "weekly"]`.) Every curation takes the repository's pending misses,
+whatever triggered it. A curation copies the
 notes and the harness under the notes lock into a scratch directory (`notes/.curate/<owner>/<repo>/<run>/`,
 kept 30 days) and starts an interactive agent there, tagged `learn` like the retro's, in a herdr workspace
 named `learn notes` (`[notes]` kind, model and effort: Claude sonnet by default). Its prompt
 (`prompts/notes-curate.md`) carries paths, the limits and a usage file only, never notes text; the usage
-file has each harness file's rounds and uses and the operator's reasons for rejecting earlier proposals. It
+file has each harness file's rounds and uses and the operator's reasons for rejecting earlier proposals, and
+`misses.json`, when there are misses, has them with the reasons of the rejected proposals each was in. It
 keeps durable repository knowledge and removes anything about one pull request, machine-specific paths and
 obsolete workarounds, duplicates and contradictions; one-off probes are merged into a few parameterized
 scripts or deleted. It writes `proposal.md`, a `harness/` directory and `changes.json`, where every kept
-section and file carries a one-line reason saying how it helps a future review. Magnum checks the proposal:
-every harness file named in the notes, plain files only, a reason for every item kept, no pull request
-number, branch name or probe file, no secret and no home directory path (size is not checked). An invalid
-proposal gets one nudge naming its problems, then is kept as invalid; the live notes never change during a
-curation. One curation runs at a time, and none starts while a round of the repository is in its judge
-stage or a proposal of it waits.
+section and file carries a one-line reason saying how it helps a future review, and every miss it was given
+is noted (with the section that now covers it) or skipped (with a one-line reason). Magnum checks the
+proposal: every harness file named in the notes, plain files only, a reason for every item kept, every miss
+accounted for, no pull request number, branch name or probe file, no secret and no home directory path
+(size is not checked). A proposal that changes nothing is invalid, unless it skips every miss it was given:
+then you confirm the skips. An invalid proposal gets one nudge naming its problems, then is kept as
+invalid; the live notes never change during a curation. One curation runs at a time, and none starts while
+a round of the repository is in its judge stage or a proposal of it waits.
 
 **Review.** A valid proposal waits for you: a toast says "notes curation for <repo> is ready", and the
 board's and the dashboard's titles count the proposals to review. `magnum notes <repo> --review` prints
@@ -930,14 +955,17 @@ and after, then asks y/N (on a terminal; `--json` prints the data for scripts). 
 notes lock, as the judges take it: the live notes are read again, and when they changed since the
 proposal's base the apply is refused ("notes changed since the proposal; run --curate again"); otherwise
 the notes and the harness are replaced and the version recorded. `n` rejects it, with an optional
-`--reason` the next curation reads; any other answer leaves it waiting. A proposal not reviewed within 7
-days expires. The registry keeps every proposal, applied, rejected, expired or invalid, with its changes,
-the curator's model and the hash of its prompt.
+`--reason` the next curation reads; any other answer leaves it waiting. Under the diff it lists the misses
+the proposal was given, each noted in a section or skipped with its reason; `y` makes them `used`, `n`
+sends them back to `new` (or `dismissed`, for a miss in its second rejected proposal), and the answer says
+which. A proposal not reviewed within 7 days expires, and its misses stay `new`. The registry keeps every
+proposal, applied, rejected, expired or invalid, with its changes, what it did with each miss, the
+curator's model and the hash of its prompt.
 
 ```toml
 [notes]
 max_bytes = 16384       # triggers a curation; not a cap
-curate = "weekly"       # also curate every repository with notes once a week
+curate = ["over_limit", "weekly", "misses"]   # also curate every repository with notes once a week
 ```
 
 ## Integrations

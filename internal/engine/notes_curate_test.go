@@ -207,7 +207,7 @@ func TestCurationsRunWhenDueAndProposalsExpire(t *testing.T) {
 // `magnum notes --curate` runs whatever curate says, but not while a
 // proposal waits or a round of the repository is in its judge stage.
 func TestRequestCurateRefusesWhileAProposalWaits(t *testing.T) {
-	h, _, _ := curationHarness(t, goodProposal, func(h *harness) { h.cfg.Notes.Curate = config.CurateOff })
+	h, _, _ := curationHarness(t, goodProposal, func(h *harness) { h.cfg.Notes.Curate = config.CurateTriggers{} })
 	h.advance(curateCheckEvery)
 	h.tick()
 	if n := len(proposals(t, h)); n != 0 {

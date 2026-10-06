@@ -124,6 +124,9 @@ prompt = "triage.md"              # in prompts_dir; the embedded copy when absen
 enabled = false                   # run the retro once a day (`magnum retro` runs one regardless)
 daily_at = "07:00"                # local time, "HH:MM": the daily retro runs once the clock passes it
 lookback = "7d"                   # PRs merged or closed within it are candidates
+settle = "24h"                    # the daily retro and a plain `magnum retro` take a PR only once it closed this long
+                                  # ago, so the reviews posted after it closed are in (0 = at once; shorter than
+                                  # lookback); `magnum retro <ref>` takes the PRs it names whenever they closed
 max_prs = 20                      # PRs classified per retro, the newest closed first
 min_comment_chars = 20            # shorter comments are dropped
 include_bots = false              # bot accounts other than magnum's count as reviewers
@@ -149,11 +152,13 @@ max_bytes = 16384                 # notes larger than this
 max_line = 300                    # a line longer than this many characters
 max_harness_files = 15            # more harness files than this
 max_harness_bytes = 131072        # a larger harness than this
-curate = "over_limit"             # over_limit: curate a marked repository once its notes changed since the
-                                  # last curation (at most once a day); weekly: that, and every repository with
-                                  # notes once a week; off: only `magnum notes <repo> --curate`. A curator agent
-                                  # proposes new notes and harness in a scratch copy; nothing changes until you
-                                  # accept it with `magnum notes <repo> --review`
+curate = ["over_limit", "misses"] # what starts a curation besides `magnum notes <repo> --curate`: over_limit, a
+                                  # marked repository once its notes changed since the last curation; weekly, every
+                                  # repository with notes once a week once they changed; misses, a repository whose
+                                  # retro recorded misses for its notes (class miss, scope repo), which every
+                                  # curation takes. At most one curation of a repository a day. [] (or "off") = only
+                                  # on demand. A curator agent proposes new notes and harness in a scratch copy;
+                                  # nothing changes until you accept it with `magnum notes <repo> --review`
 kind = "claude"                   # the curator: a [kinds.<name>] that drives a session (not "shell"), checked
 model = "sonnet"                  # like a [[role]]; "sonnet" is the default of kind "claude" only, as in [learn]
 effort = ""                       # passed through the kind's `effort` args ("" = none)

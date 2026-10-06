@@ -5,7 +5,8 @@ The test for every line and every script: does it help a review of a different, 
 Read these local files; fetch nothing, and change nothing outside `{{.Dir}}`:
 - `{{.Current}}`: the notes now.
 - `{{.CurrentHarness}}`: the harness now (read only).
-- `{{.Usage}}`: the limits and the sizes now, which limits the notes are past, each harness file's `rounds` (the review rounds it existed for), `uses` (the rounds that ran or read it) and `unused_candidate` (no recorded use in {{.UnusedRounds}} rounds or more), and `rejections`: why the operator rejected earlier proposals. Do not propose what they rejected again.
+- `{{.Usage}}`: the limits and the sizes now, which limits the notes are past, each harness file's `rounds` (the review rounds it existed for), `uses` (the rounds that ran or read it) and `unused_candidate` (no recorded use in {{.UnusedRounds}} rounds or more), and `rejections`: why the operator rejected earlier proposals. Do not propose what they rejected again.{{if .Misses}}
+- `{{.Misses}}`: {{.MissCount}} {{if eq .MissCount 1}}miss{{else}}misses{{end}}, problems other reviewers found in this repository's pull requests that the automated review did not report: each with its `id`, `severity`, `where` (path:line at the reviewed commit), `title`, `lesson`, and `rejections` (why the operator rejected earlier proposals that had it).{{end}}
 
 Keep in the notes only durable repository knowledge:
 - what the repository is;
@@ -20,11 +21,13 @@ Remove:
 - machine-specific paths (a home directory, a version manager's install path) and obsolete workarounds;
 - duplicated or contradicted lines.
 
-The limits are triggers for this curation, not caps: {{.Limits.MaxBytes}} bytes, lines of at most {{.Limits.MaxLine}} characters, {{.Limits.MaxHarnessFiles}} harness files and {{.Limits.MaxHarnessBytes}} harness bytes{{if .Over}} (the notes are past: {{range $i, $l := .Over}}{{if $i}}, {{end}}{{$l}}{{end}}){{end}}. Stay within them unless the content truly improves future reviews; then say so in the reasons.
+{{if .Misses}}For each miss, add a note or sharpen one when it passes the same test as every kept line: would a future review of this repository catch a similar problem because of it? Otherwise skip it. The notes still name no pull request, branch or person.
+
+{{end}}The limits are triggers for this curation, not caps: {{.Limits.MaxBytes}} bytes, lines of at most {{.Limits.MaxLine}} characters, {{.Limits.MaxHarnessFiles}} harness files and {{.Limits.MaxHarnessBytes}} harness bytes{{if .Over}} (the notes are past: {{range $i, $l := .Over}}{{if $i}}, {{end}}{{$l}}{{end}}){{end}}. Stay within them unless the content truly improves future reviews; then say so in the reasons.
 
 Write your proposal:
 1. `{{.Proposal}}`: the whole new notes. Start with `# Notes for {{.Repo}} (updated YYYY-MM-DD)`, then `## ` sections. Name every harness file by its path relative to the harness, with what it does and how to run it.
 2. `{{.Harness}}`: the proposed harness. It starts as a copy of the current one: delete, merge and rewrite files there. One-off probes become a few general, parameterized scripts, or go. Every file left there must be named in the notes.
-3. `{{.Changes}}`, JSON: {"sections":[{"name":"<section heading>","action":"kept|added|merged|removed","into":"<heading, for merged>","reason":"..."}],"files":[{"name":"<harness path>","action":"kept|added|merged|deleted","into":"<harness path, for merged>","reason":"..."}]}. Every `## ` section of the proposal and every file of the proposed harness appears as kept or added, with a reason saying how it helps a review of a future pull request; every current section and file appears with what became of it and why. Reasons are one line each, without pull request numbers or branch names.
+3. `{{.Changes}}`, JSON: {"sections":[{"name":"<section heading>","action":"kept|added|merged|removed","into":"<heading, for merged>","reason":"..."}],"files":[{"name":"<harness path>","action":"kept|added|merged|deleted","into":"<harness path, for merged>","reason":"..."}]}. Every `## ` section of the proposal and every file of the proposed harness appears as kept or added, with a reason saying how it helps a review of a future pull request; every current section and file appears with what became of it and why. Reasons are one line each, without pull request numbers or branch names.{{if .Misses}} Add "misses":[{"id":<id>,"action":"noted|skipped","section":"<heading, for noted>","reason":"..."}]: every id of `{{.Misses}}` once, noted with the `## ` section that now covers it, or skipped with a one-line reason why no note would help a future review.{{end}}
 
 Write each file to `<file>.tmp` first, then move it into place. Then stop. Post nothing, change no repository, and touch no file outside `{{.Dir}}`.

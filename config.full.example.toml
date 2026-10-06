@@ -15,8 +15,9 @@ default_repo = "talkable/talkable"    # what a bare PR number means (`magnum rev
 app = "iTerm2"                    # Terminal | iTerm2 | Ghostty | WezTerm | custom
 
 [notes]                           # repository notes: the limits trigger a curation, they do not cap the notes
-curate = "weekly"                 # curate a repository past its limits, and every repository with notes once a
-                                  # week; review a proposal with `magnum notes <repo> --review`
+curate = ["over_limit", "weekly", "misses"]  # curate a repository past its limits, every repository with notes once
+                                  # a week, and one whose retro found misses for its notes; review a proposal with
+                                  # `magnum notes <repo> --review`
 
 [board]
 badges = { "Flagged" = "🚩", "Schema Migration" = { text = "\uf1c0", color = "yellow" } }   # 🚩 a flagged Jira issue; \uf1c0 = Nerd Font database icon

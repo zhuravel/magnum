@@ -30,6 +30,7 @@ const (
 	scratchHarness        = "harness"      // the proposed harness, a copy of the current one at first
 	scratchChanges        = "changes.json" // what became of every section and file, and why
 	scratchUsage          = "usage.json"   // the limits, the sizes and the usage data
+	scratchMisses         = "misses.json"  // the retro's misses of the repository, when there are any
 )
 
 // Scratch is one curation's directory.
@@ -41,6 +42,7 @@ func (s Scratch) Proposal() string       { return filepath.Join(s.Dir, scratchPr
 func (s Scratch) Harness() string        { return filepath.Join(s.Dir, scratchHarness) }
 func (s Scratch) Changes() string        { return filepath.Join(s.Dir, scratchChanges) }
 func (s Scratch) Usage() string          { return filepath.Join(s.Dir, scratchUsage) }
+func (s Scratch) Misses() string         { return filepath.Join(s.Dir, scratchMisses) }
 
 // PrepareScratch makes a new scratch directory dir holding base (the notes
 // as current.md, the harness as current/ and as the harness/ the curator
@@ -68,11 +70,29 @@ func PrepareScratch(dir string, base State, usage []byte) (Scratch, error) {
 }
 
 // Changes is the curator's changes.json: what became of every notes section
-// (by its "## " heading) and every harness file, each with a one-line reason.
+// (by its "## " heading) and every harness file, each with a one-line reason,
+// and of every miss the curation was given (misses.json).
 type Changes struct {
-	Sections []Change `json:"sections"`
-	Files    []Change `json:"files"`
+	Sections []Change     `json:"sections"`
+	Files    []Change     `json:"files"`
+	Misses   []MissChange `json:"misses,omitempty"`
 }
+
+// MissChange is what a curation did with one miss it was given: noted, with
+// the "## " section of the proposal that covers it now, or skipped, with a
+// one-line reason.
+type MissChange struct {
+	ID      int64  `json:"id"`
+	Action  string `json:"action"`
+	Section string `json:"section,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+}
+
+// The actions of a MissChange.
+const (
+	MissNoted   = "noted"
+	MissSkipped = "skipped"
+)
 
 // Change is one item of Changes.
 type Change struct {
@@ -192,6 +212,9 @@ type Check struct {
 	// branch, carry one pull request's content.
 	PRNumbers []int
 	Branches  []string
+	// Misses are the ids of the misses the curation was given: the proposal
+	// accounts for each.
+	Misses []int64
 }
 
 var (
@@ -224,8 +247,11 @@ func Sections(text []byte) []string {
 // every current harness file with what became of it; every proposed harness
 // file must be named in the notes; nothing may name a pull request, one of
 // its branches or probe files, carry what looks like a secret or a home
-// directory path. Size is not checked: the limits trigger curations, they
-// do not cap them.
+// directory path; every miss given must be accounted for once, noted with a
+// section of the proposal or skipped with a reason. Size is not checked: the
+// limits trigger curations, they do not cap them. A proposal that changes
+// nothing is invalid unless it was given misses and skips them all (the
+// operator confirms the skips).
 func Validate(p Proposal, c Check) []string {
 	var problems []string
 	add := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
@@ -236,7 +262,7 @@ func Validate(p Proposal, c Check) []string {
 	if strings.ContainsFunc(text, func(r rune) bool { return r != '\r' && isControl(r) }) {
 		add("%s holds control characters", scratchProposal)
 	}
-	if p.State.Same(c.Base) {
+	if p.State.Same(c.Base) && (len(c.Misses) == 0 || slices.ContainsFunc(p.Changes.Misses, func(m MissChange) bool { return m.Action == MissNoted })) {
 		add("the proposal changes nothing")
 	}
 	if p.ChangesJSON == nil {
@@ -288,10 +314,15 @@ func Validate(p Proposal, c Check) []string {
 		}
 	}
 
+	problems = append(problems, checkMisses(p, c.Misses)...)
+
 	// One pull request's content.
-	reasons := make([]string, 0, len(p.Changes.Sections)+len(p.Changes.Files))
+	reasons := make([]string, 0, len(p.Changes.Sections)+len(p.Changes.Files)+len(p.Changes.Misses))
 	for _, ch := range slices.Concat(p.Changes.Sections, p.Changes.Files) {
 		reasons = append(reasons, ch.Reason)
+	}
+	for _, m := range p.Changes.Misses {
+		reasons = append(reasons, m.Reason)
 	}
 	if prRefRe.MatchString(text) {
 		add("%s names a pull request or issue number", scratchProposal)
@@ -335,6 +366,57 @@ func Validate(p Proposal, c Check) []string {
 		}
 	}
 	return problems
+}
+
+// checkMisses checks changes.json's misses against the ids given: each one
+// given appears once, noted with a section of the proposal or skipped with
+// a reason, and none that was not given.
+func checkMisses(p Proposal, given []int64) []string {
+	var out []string
+	sections := map[string]bool{}
+	for _, s := range Sections(p.State.Notes) {
+		sections[normalize(s)] = true
+	}
+	seen := map[int64]bool{}
+	for _, m := range p.Changes.Misses {
+		switch {
+		case !slices.Contains(given, m.ID):
+			out = append(out, fmt.Sprintf("miss %d in %s was not in %s", m.ID, scratchChanges, scratchMisses))
+			continue
+		case seen[m.ID]:
+			out = append(out, fmt.Sprintf("miss %d is in %s's misses twice", m.ID, scratchChanges))
+			continue
+		}
+		seen[m.ID] = true
+		reason := strings.TrimSpace(m.Reason)
+		switch m.Action {
+		case MissNoted:
+			switch section := strings.TrimSpace(m.Section); {
+			case section == "":
+				out = append(out, fmt.Sprintf("miss %d in %s is noted without the section that covers it", m.ID, scratchChanges))
+			case !sections[normalize(section)]:
+				out = append(out, fmt.Sprintf("miss %d in %s is noted in %q, which is not a section of %s", m.ID, scratchChanges, section, scratchProposal))
+			}
+		case MissSkipped:
+			if reason == "" {
+				out = append(out, fmt.Sprintf("miss %d in %s is skipped without a reason", m.ID, scratchChanges))
+			}
+		default:
+			out = append(out, fmt.Sprintf("miss %d in %s: action %q is not one of %s, %s", m.ID, scratchChanges, m.Action, MissNoted, MissSkipped))
+		}
+		switch {
+		case strings.ContainsAny(reason, "\r\n"):
+			out = append(out, fmt.Sprintf("miss %d in %s: the reason is not one line", m.ID, scratchChanges))
+		case utf8.RuneCountInString(reason) > maxReasonRunes:
+			out = append(out, fmt.Sprintf("miss %d in %s: the reason is longer than %d characters", m.ID, scratchChanges, maxReasonRunes))
+		}
+	}
+	for _, id := range given {
+		if !seen[id] {
+			out = append(out, fmt.Sprintf("miss %d of %s is not in %s's misses (noted with its section, or skipped with a reason)", id, scratchMisses, scratchChanges))
+		}
+	}
+	return out
 }
 
 // checkChange checks one item of changes.json.
