@@ -1120,6 +1120,26 @@ type fakeIdentity struct {
 	checks   int
 	ensures  int
 	checkErr string
+	// runErr: the check could not run to completion (a transport failure:
+	// a FAIL line and the error, as identity's appCheck.transport).
+	runErr string
+	// ensureErr: EnsureConfigDir (the tick's token refresh) fails with it.
+	ensureErr string
+}
+
+// fail sets what the fake's next checks and token refreshes fail with (""
+// = they pass).
+func (f *fakeIdentity) fail(checkErr, runErr, ensureErr string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.checkErr, f.runErr, f.ensureErr = checkErr, runErr, ensureErr
+}
+
+// counts returns the checks and token refreshes run so far.
+func (f *fakeIdentity) counts() (checks, ensures int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.checks, f.ensures
 }
 
 func (f *fakeIdentity) Name() string  { return f.name }
@@ -1135,6 +1155,9 @@ func (f *fakeIdentity) Check(context.Context) (identity.Report, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.checks++
+	if f.runErr != "" {
+		return identity.Report{Pass: false, Lines: []string{"FAIL " + f.runErr}}, errors.New("identity " + f.name + " check: " + f.runErr)
+	}
 	if f.checkErr != "" {
 		return identity.Report{Pass: false, Lines: []string{"FAIL " + f.checkErr}}, nil
 	}
@@ -1147,6 +1170,9 @@ func (f *fakeAppIdentity) EnsureConfigDir(context.Context) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.ensures++
+	if f.ensureErr != "" {
+		return "", errors.New(f.ensureErr)
+	}
 	return "/state/gh/" + f.name, nil
 }
 

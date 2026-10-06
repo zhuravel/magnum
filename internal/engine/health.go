@@ -314,27 +314,19 @@ type configDirEnsurer interface {
 type expirer interface{ Expiry() time.Time }
 
 // warmIdentities runs every identity's health Check (all when full, else
-// only unhealthy ones) and records the verdict.
+// only unhealthy ones) and records the verdict (checkIdentity: one that
+// could not reach GitHub is retried before it counts).
 func (e *Engine) warmIdentities(ctx context.Context, full bool) {
 	if e.d.DryRun {
 		return
 	}
 	for _, name := range e.identityNames() {
-		src := e.d.Identities[name]
 		if !full {
 			if ok, _ := e.identityHealthy(ctx, name); ok {
 				continue
 			}
 		}
-		rep, err := src.Check(ctx)
-		pass, reason := err == nil && rep.Pass, firstFail(rep)
-		if err != nil {
-			reason = err.Error()
-		}
-		e.recordIdentityVerdict(ctx, name, pass, reason)
-		if !pass {
-			e.urgent("identity:"+name, "magnum: identity "+name+" unhealthy", reason+" (magnum identities check)", identityToastSpan)
-		}
+		e.checkIdentity(ctx, name)
 	}
 }
 
@@ -342,9 +334,9 @@ func (e *Engine) warmIdentities(ctx context.Context, full bool) {
 // reads it (KVIdentityCheck "pass" or "fail", KVIdentityError the reason).
 // A fail that turns into a pass forgets the "identity unhealthy" toast's
 // dedup record, so the next failure notifies at once; a new failure reason
-// is logged as identity.unhealthy. The daemon's own checks
-// (warmIdentities) and `magnum identities check` (ReqIdentityVerdict) both
-// record through it.
+// is logged as identity.unhealthy. The daemon's own checks (checkIdentity,
+// from warmIdentities and retryIdentities) and `magnum identities check`
+// (ReqIdentityVerdict) both record through it.
 func (e *Engine) recordIdentityVerdict(ctx context.Context, name string, pass bool, reason string) {
 	if pass {
 		if prev, _ := e.getKV(ctx, KVIdentityCheck(name)); prev == "fail" {
@@ -375,24 +367,30 @@ func firstFail(rep identity.Report) string {
 }
 
 // refreshIdentities keeps App tokens and GH_CONFIG_DIR files fresh (every
-// tick, so long-lived panes never see an expired token).
+// tick, so long-lived panes never see an expired token). A refresh that
+// could not reach GitHub is retried on its backoff (identity_net.go), not
+// every tick.
 func (e *Engine) refreshIdentities(ctx context.Context) {
 	if e.d.DryRun {
 		return
 	}
+	now := e.now()
 	for _, name := range e.identityNames() {
 		d, ok := e.d.Identities[name].(configDirEnsurer)
 		if !ok {
 			continue
 		}
-		if _, err := d.EnsureConfigDir(ctx); err != nil {
-			if prev, _ := e.getKV(ctx, kvIdentityTickError(name)); prev != err.Error() {
-				e.setKV(ctx, kvIdentityTickError(name), err.Error())
-				e.event(ctx, "warn", "identity:"+name, "identity.token_error", "token refresh failed: "+err.Error(), nil)
-			}
-			e.urgent("identity-token:"+name, "magnum: identity "+name+" token refresh failed", err.Error(), identityToastSpan)
+		if next, ok := e.netNext(netTokenKey(name)); ok && now.Before(next) {
 			continue
 		}
+		if _, err := d.EnsureConfigDir(ctx); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			e.tokenFailed(ctx, name, err)
+			continue
+		}
+		e.netEnded(netTokenKey(name))
 		if _, had := e.getKV(ctx, kvIdentityTickError(name)); had {
 			e.forgetSend(ctx, "identity-token:"+name)
 			e.delKV(ctx, kvIdentityTickError(name))
@@ -401,6 +399,30 @@ func (e *Engine) refreshIdentities(ctx context.Context) {
 			e.setKV(ctx, kvIdentityExpiry(name), store.FormatTime(x.Expiry()))
 		}
 	}
+}
+
+// tokenFailed records a failed token refresh of name where dispatch reads it
+// (kvIdentityTickError), with the "token refresh failed" toast: a real
+// failure at once, a connection-class one only once it lasted
+// identityNetGrace (netRetrying).
+func (e *Engine) tokenFailed(ctx context.Context, name string, err error) {
+	msg := err.Error()
+	key := netTokenKey(name)
+	prev, had := e.getKV(ctx, kvIdentityTickError(name))
+	if cause := connectionCause(msg); cause != "" {
+		r, retried := e.netRetrying(ctx, name, "token refresh", key, cause, msg, had)
+		if retried {
+			return
+		}
+		msg = r
+	} else {
+		e.netEnded(key)
+	}
+	if prev != msg {
+		e.setKV(ctx, kvIdentityTickError(name), msg)
+		e.event(ctx, "warn", "identity:"+name, "identity.token_error", "token refresh failed: "+msg, nil)
+	}
+	e.urgent("identity-token:"+name, "magnum: identity "+name+" token refresh failed", msg, identityToastSpan)
 }
 
 func (e *Engine) identityNames() []string {

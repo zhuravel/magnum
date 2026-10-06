@@ -286,6 +286,11 @@ type Engine struct {
 	infraMu  sync.Mutex // infrastructure failures (infra.go)
 	depsFail depsFailure
 
+	// netRuns are the identity checks and token refreshes that could not
+	// reach GitHub, retried with backoff (identity_net.go).
+	netMu   sync.Mutex
+	netRuns map[string]netRun
+
 	// build is this daemon's build, checkBuild and supervised come from
 	// Options, and builds tracks new builds on disk (build.go).
 	build      Build
@@ -336,6 +341,7 @@ func New(d Deps) *Engine {
 		logged:       map[string]time.Time{},
 		cleanupTried: map[int64]time.Time{},
 		curateTried:  map[int64]time.Time{},
+		netRuns:      map[string]netRun{},
 		kick:         make(chan struct{}, 1),
 		starts:       starter{codex: make(chan struct{}, maxCodexStarts)},
 	}
@@ -620,6 +626,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	// between its GitHub calls (requestsMidPoll, poll.go).
 	e.handleRequests(ctx)
 	e.refreshIdentities(ctx)
+	e.retryIdentities(ctx)
 	if err := e.poll(ctx); err != nil {
 		errs = append(errs, err)
 	}

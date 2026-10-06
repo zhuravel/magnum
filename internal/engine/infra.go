@@ -33,10 +33,17 @@ const (
 	infraDetailRunes = 300
 )
 
-// infraPatterns are error texts (lower case) of failures outside any PR, with
-// the cause shown in the pause and the toast.
-var infraPatterns = []struct{ match, cause string }{
-	{"permission denied (publickey", "SSH key refused"},
+// errPattern is an error text (lower case) and the cause it names.
+type errPattern struct{ match, cause string }
+
+// infraPatterns are error texts of failures outside any PR, with the cause
+// shown in the pause and the toast: a refused SSH key, then the network's.
+var infraPatterns = append([]errPattern{{"permission denied (publickey", "SSH key refused"}}, networkPatterns...)
+
+// networkPatterns are the infrastructure failures that are the network's
+// (DNS, timeouts, refusals, resets, TLS); connectionCause (identity_net.go)
+// reads them too.
+var networkPatterns = []errPattern{
 	{"could not resolve host", "DNS lookup failed"},
 	{"temporary failure in name resolution", "DNS lookup failed"},
 	{"nodename nor servname provided", "DNS lookup failed"},
@@ -60,8 +67,13 @@ func infraCause(err error) string {
 	if err == nil {
 		return ""
 	}
-	msg := strings.ToLower(err.Error())
-	for _, p := range infraPatterns {
+	return matchPattern(strings.ToLower(err.Error()), infraPatterns)
+}
+
+// matchPattern is the cause of the first of patterns that msg (lower case)
+// contains ("" = none).
+func matchPattern(msg string, patterns []errPattern) string {
+	for _, p := range patterns {
 		if strings.Contains(msg, p.match) {
 			return p.cause
 		}

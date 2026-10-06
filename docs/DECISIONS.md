@@ -2379,3 +2379,24 @@ editing history. Code, config comments and prompts reference these by their head
   harness the notes name by any other name is still caught by its harness name, as before. Rejected: matching
   the report directory's files (a curation has none; the judges keep one round's probes there and the notes
   must not name them, which the file-name rule already catches).
+- **A network blip does not mark an identity unhealthy** (2026-10-06). Right after a daemon restart every
+  GitHub call of the first tick failed with gh's "error connecting to api.github.com" for a few seconds; the
+  identity checks and token refreshes of that tick marked all four identities unhealthy, which held every
+  watch, and unhealthy identities were re-checked only at the reconcile (10 minutes). A failed check or
+  token refresh is now classified (engine `connectionCause`, which shares infraCause's DNS, timeout,
+  refused, reset and TLS patterns and adds gh's "error connecting to", Go's dial, TLS, timeout and EOF
+  errors, HTTP 5xx and 429 and rate limits): a check is connection-class only when every FAIL line and its
+  error are. Such a failure keeps the identity's previous verdict (a pass stays a pass, a token still
+  valid stays in use, a recorded failure stays as it was) and is retried on the following ticks after 30
+  seconds, 1, 2 and 4 minutes, a retry never landing after the fifth minute of the run; only a failure
+  that lasts 5 minutes (identityNetGrace) is recorded, as "network failure (<cause>) since <hh:mm>: <the
+  error>", with the usual identity.unhealthy or identity.token_error event and toast; the run's first
+  failure is an info `identity.unreachable` event. An identity recorded unhealthy for a connection-class
+  reason, by the daemon, `magnum identities check`, a judge's own check or a previous daemon, is
+  re-checked every tick its backoff allows (at most 4 minutes apart); a real verdict (401, 403, 404, a
+  wrong login, a missing permission, a bad key) is recorded at once and re-checked at the reconcile as
+  before. The retries live in the daemon's memory: a restart checks every identity at startup anyway.
+  Rejected: re-checking every unhealthy identity each tick (a real verdict would cost GitHub calls every
+  30 seconds for nothing); retrying inside identity.Check (a check that waits minutes would stall the
+  tick, and the token refresh has its own 30-second mint backoff); a persisted retry schedule (nothing
+  needs it across a restart).
