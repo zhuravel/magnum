@@ -130,6 +130,11 @@ func missesHarness(t *testing.T, fc *fakeClassifier, cur *fakeCurator, mods ...f
 	nr := notesOf(t, h)
 	writeNotes(t, nr, "# Notes for talkable/talkable\n\n## Tests\nRun `run_spec.sh`.\n- `campaign_snapshot_probes_spec.rb` checks one fix\n",
 		map[string]string{"run_spec.sh": "bin/rspec \"$@\"\n", "campaign_snapshot_probes_spec.rb": "probe\n"})
+	// The scan for a curation due counts as just run: a retro runs in its
+	// own goroutine, so the tick that starts it would otherwise race it to
+	// that scan and, when the retro won, curate before the test looked at
+	// the misses. Each test advances curateCheckEvery for the scan it means.
+	h.e.curateChecked = h.clock.Now()
 	return h, nr
 }
 
