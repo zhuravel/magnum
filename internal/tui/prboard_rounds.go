@@ -56,7 +56,7 @@ type RoleRerun struct {
 // RoundProgress is a round in flight: when it started (the PR's
 // last_round_started_at) and its roles, the ones with a run in the order
 // their runs were created, then the ones the round named that have none
-// yet, the judge last.
+// yet, the judge last and its own pass right before it.
 type RoundProgress struct {
 	StartedAt time.Time
 	Roles     []RoleProgress
@@ -69,8 +69,11 @@ type RoundProgress struct {
 // works (the shortest of its name and aliases, see the cli's stageLabel);
 // the judge is "judge" whatever its names.
 type RoleProgress struct {
-	Role, Label     string
-	Judge           bool
+	Role, Label string
+	Judge       bool
+	// OwnPass: the judge's own pass, its runs of kind own_pass, listed as an
+	// entry of its own before the judge's.
+	OwnPass         bool
 	Started, Ended  time.Time
 	Working, Failed bool
 }
@@ -86,28 +89,39 @@ func (r RoleProgress) stageLabel() string {
 	return r.Role
 }
 
-// stage is what the round is doing: the label of the one role working, the
-// judge's while it works (it runs last, alone), "reviewers" while several
-// other roles work at once; "" while none works (the readiness step before
-// the reviewers, the time between stages, the verification).
+// stage is what the round is doing: the label of the one role working,
+// "reviewers" while several other roles work at once, "judge" while the
+// judge (its own pass or its main run) works alone and both joined by "+"
+// while the judge's own pass works with them ("claude+judge",
+// "reviewers+judge"); "" while none works (the readiness step before the
+// reviewers, the time between stages, the verification).
 func (g RoundProgress) stage() string {
 	var working []RoleProgress
+	judge := ""
 	for _, r := range g.Roles {
 		switch {
 		case !r.Working:
 		case r.Judge:
-			return r.stageLabel()
+			judge = r.stageLabel()
 		default:
 			working = append(working, r)
 		}
 	}
+	others := ""
 	switch len(working) {
 	case 0:
-		return ""
 	case 1:
-		return working[0].stageLabel()
+		others = working[0].stageLabel()
+	default:
+		others = "reviewers"
 	}
-	return "reviewers"
+	switch {
+	case others != "" && judge != "":
+		return others + "+" + judge
+	case judge != "":
+		return judge
+	}
+	return others
 }
 
 // roundElapsed is how long a round has run in whole minutes ("0m", "17m",
@@ -255,19 +269,26 @@ func (p prbPainter) roundWhyLines(w RoundWhy) []string {
 // long it has run, then its roles one a line, each with when it started and
 // ended and how long it took ("claude-review  started 14:02 · ended 14:15 ·
 // 13m04s"), a working one the time so far ("running 17m02s"), a failed one
-// in red and one without a run "not started yet". Times are the card's
+// in red and one without a run "not started yet"; the judge's own pass is
+// "<role> own pass" ("codex-judge own pass"). Times are the card's
 // StageDuration.
 func (p prbPainter) progressLines(g RoundProgress) []string {
 	clock := func(t time.Time) string { return t.Local().Format("15:04") }
 	sep := p.st.Dim.Render(" · ")
 	out := []string{p.st.Dim.Render("round started ") + clock(g.StartedAt) + sep +
 		p.st.Accent.Render("running "+StageDuration(p.now.Sub(g.StartedAt)))}
+	nameOf := func(r RoleProgress) string {
+		if r.OwnPass {
+			return r.Role + " own pass"
+		}
+		return r.Role
+	}
 	nameW := 0
 	for _, r := range g.Roles {
-		nameW = max(nameW, ansi.StringWidth(r.Role))
+		nameW = max(nameW, ansi.StringWidth(nameOf(r)))
 	}
 	for _, r := range g.Roles {
-		name := r.Role + spaces(nameW-ansi.StringWidth(r.Role)+2)
+		name := nameOf(r) + spaces(nameW-ansi.StringWidth(nameOf(r))+2)
 		if r.Started.IsZero() {
 			out = append(out, name+p.st.Dim.Render("not started yet"))
 			continue

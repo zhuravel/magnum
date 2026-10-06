@@ -24,6 +24,9 @@ func describeProgress(g *tui.RoundProgress, start time.Time) []string {
 		if r.Judge {
 			s += " (judge)"
 		}
+		if r.OwnPass {
+			s += " (own pass)"
+		}
 		switch {
 		case r.Started.IsZero():
 			s += " not started"
@@ -225,5 +228,93 @@ func TestStatusDashRoundsCarryEachRoundsProgress(t *testing.T) {
 	}
 	if fmt.Sprint(r.Rounds.PRs) != "[talkable#11940]" {
 		t.Errorf("rounds = %v", r.Rounds.PRs)
+	}
+}
+
+// progressRun is a run of a round started at start: created at start+created,
+// submitted and ended at start plus those (nil: not yet).
+func progressRun(role, kind, state string, start time.Time, created time.Duration, submitted, ended *time.Duration) store.Run {
+	at := func(d *time.Duration) *time.Time {
+		if d == nil {
+			return nil
+		}
+		return store.Ptr(start.Add(*d))
+	}
+	return store.Run{Round: 2, Role: role, Kind: kind, State: state, CreatedAt: start.Add(created), SubmittedAt: at(submitted), EndedAt: at(ended)}
+}
+
+// The judge's own pass, its runs of kind own_pass, is an entry of its own
+// right before the judge's: its start, work, end and failure never merge into
+// the judge's main run, created up front and pending while the own pass
+// works, nor the other way round; a model fallback's continuation of the own
+// pass (kind own_pass too) belongs to the own pass.
+func TestRoleProgressKeepsOwnPassApartFromJudge(t *testing.T) {
+	start := roundsNow.Add(-30 * time.Minute)
+	claude := progressRun(store.RoleClaude, store.RunRereview, store.RunWorking, start, time.Minute, after(time.Minute), nil)
+	judge := progressRun(store.RoleJudge, store.RunRereview, store.RunPending, start, time.Minute, nil, nil)
+	own := progressRun(store.RoleJudge, store.RunOwnPass, store.RunWorking, start, time.Minute, after(time.Minute), nil)
+
+	got := describeProgress(&tui.RoundProgress{StartedAt: start, Roles: roleProgress(nil, []store.Run{claude, judge, own})}, start)
+	want := []string{
+		"started 0s",
+		"claude-review claude started 1m0s working",
+		"codex-judge judge (judge) (own pass) started 1m0s working",
+		"codex-judge judge (judge) not started",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("the own pass working with the reviewers:\n%q\nwant\n%q", got, want)
+	}
+
+	// The own pass moved to another model and ended; the judge works.
+	claude.State, claude.EndedAt = store.RunEnded, store.Ptr(start.Add(12*time.Minute))
+	own.State, own.EndedAt = store.RunAbandoned, store.Ptr(start.Add(5*time.Minute))
+	fallback := progressRun(store.RoleJudge, store.RunOwnPass, store.RunEnded, start, 5*time.Minute, after(6*time.Minute), after(15*time.Minute))
+	judge.State, judge.SubmittedAt = store.RunWorking, store.Ptr(start.Add(16*time.Minute))
+	got = describeProgress(&tui.RoundProgress{StartedAt: start, Roles: roleProgress(nil, []store.Run{claude, judge, own, fallback})}, start)
+	want = []string{
+		"started 0s",
+		"claude-review claude started 1m0s ended 12m0s",
+		"codex-judge judge (judge) (own pass) started 1m0s ended 15m0s",
+		"codex-judge judge (judge) started 16m0s working",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("the judge working after its own pass:\n%q\nwant\n%q", got, want)
+	}
+
+	// The own pass failed and the judge's main run ended.
+	fallback.State = store.RunFailed
+	judge.State, judge.EndedAt = store.RunEnded, store.Ptr(start.Add(25*time.Minute))
+	got = describeProgress(&tui.RoundProgress{StartedAt: start, Roles: roleProgress(nil, []store.Run{claude, judge, own, fallback})}, start)
+	want = []string{
+		"started 0s",
+		"claude-review claude started 1m0s ended 12m0s",
+		"codex-judge judge (judge) (own pass) started 1m0s ended 15m0s failed",
+		"codex-judge judge (judge) started 16m0s ended 25m0s",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("a failed own pass beside an ended judge:\n%q\nwant\n%q", got, want)
+	}
+}
+
+// A role the round named without a run is listed as not started, and the
+// judge whose own pass alone has runs is one of them: its own pass's entry
+// does not stand for its main run.
+func TestRoundProgressListsTheJudgeNotStartedBesideItsOwnPass(t *testing.T) {
+	start := roundsNow.Add(-10 * time.Minute)
+	g := &tui.RoundProgress{StartedAt: start, Roles: roleProgress(nil, []store.Run{
+		progressRun(store.RoleClaude, store.RunInitial, store.RunWorking, start, time.Minute, after(time.Minute), nil),
+		progressRun(store.RoleJudge, store.RunOwnPass, store.RunWorking, start, time.Minute, after(time.Minute), nil),
+	})}
+	w := &tui.RoundWhy{At: start.Add(time.Second), Roles: []string{store.RoleJudge, store.RoleClaude, store.RoleCodexReview}}
+	listNamedRoles(nil, g, w)
+	want := []string{
+		"started 0s",
+		"claude-review claude started 1m0s working",
+		"codex-review codex not started",
+		"codex-judge judge (judge) (own pass) started 1m0s working",
+		"codex-judge judge (judge) not started",
+	}
+	if got := describeProgress(g, start); !slices.Equal(got, want) {
+		t.Errorf("Progress:\n%q\nwant\n%q", got, want)
 	}
 }

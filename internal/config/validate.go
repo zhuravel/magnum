@@ -496,6 +496,17 @@ var (
 // role sets.
 func (c *Config) validatePipeline() []error {
 	var errs []error
+	ownPass := func(where, v string, empty bool) {
+		switch {
+		case v == OwnPassParallel || v == OwnPassAfter || (empty && v == ""):
+		default:
+			errs = append(errs, fmt.Errorf("%s: judge_own_pass must be %q or %q, got %q", where, OwnPassParallel, OwnPassAfter, v))
+		}
+	}
+	ownPass("pipeline", c.Pipeline.JudgeOwnPass, true)
+	for _, w := range c.Watches {
+		ownPass("watch "+w.Owner, w.JudgeOwnPass, true)
+	}
 	kinds := c.kinds()
 	for _, name := range c.KindNames() {
 		errs = append(errs, validateKind(name, kinds[name])...)

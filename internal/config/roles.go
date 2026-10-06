@@ -79,6 +79,10 @@ type Role struct {
 	ContinuePrompt string `toml:"continue_prompt"`
 	Recovery       string `toml:"recovery"`
 	Nudge          string `toml:"nudge"`
+	// OwnPass: the judge's own pass, prompted together with the reviewer
+	// roles ([pipeline] judge_own_pass = "parallel"); judges default to
+	// judge-own-pass.md. Judges only.
+	OwnPass string `toml:"own_pass"`
 	// Stop is ignored: magnum never sent the judge a stop prompt. The key
 	// is still accepted so a config that names one (judge-stop.md, gone
 	// since) loads.
@@ -164,10 +168,10 @@ func (r Role) ReportFile() string {
 
 // PromptFile returns the prompt file name for a prompt kind (PromptInitial,
 // PromptRereview, PromptRestart, PromptContinue, PromptRecovery,
-// PromptNudge); "" when the role has none (shell roles driven by Command,
-// non-judge roles for continue/recovery/nudge unless set, a role without a
-// restart prompt, unknown kinds). Rereview falls back to the initial
-// prompt.
+// PromptNudge, PromptOwnPass); "" when the role has none (shell roles
+// driven by Command, non-judge roles for continue/recovery/nudge/own_pass
+// unless set, a role without a restart prompt, unknown kinds). Rereview
+// falls back to the initial prompt.
 func (r Role) PromptFile(kind string) string {
 	switch kind {
 	case PromptInitial:
@@ -185,6 +189,8 @@ func (r Role) PromptFile(kind string) string {
 		return r.Recovery
 	case PromptNudge:
 		return r.Nudge
+	case PromptOwnPass:
+		return r.OwnPass
 	}
 	return ""
 }
@@ -459,6 +465,7 @@ func (c *Config) normalizedRoles(in []Role) []Role {
 			fill(&r.ContinuePrompt, "judge-continue.md")
 			fill(&r.Recovery, "judge-recovery.md")
 			fill(&r.Nudge, "judge-nudge.md")
+			fill(&r.OwnPass, "judge-own-pass.md")
 			if r.Skill == "" {
 				r.Skill = DefaultSkill
 			}

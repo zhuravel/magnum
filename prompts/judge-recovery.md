@@ -8,6 +8,9 @@ Read them and their threads first (`gh api repos/{{.Owner}}/{{.Repo}}/pulls/{{.N
 {{- if $merged}}
 The push merged the base branch, so `{{.PreviousHeadSHA}}..{{.HeadSHA}}` carries the base branch's commits too. Review only what changed in the PR's own diff: compare `git diff {{if .BaseSHA}}{{.BaseSHA}}{{else}}origin/{{.BaseRef}}{{end}}...{{.PreviousHeadSHA}}` with `git diff {{if .BaseSHA}}{{.BaseSHA}}{{else}}origin/{{.BaseRef}}{{end}}...{{.HeadSHA}}`, not `git diff {{.PreviousHeadSHA}}..{{.HeadSHA}}`.
 {{- end}}
+{{- if .OwnFindings}}
+{{if .OwnFindingsMissing}}Your own pass left no {{.OwnFindings}}: do it now.{{else}}Your own pass, with your reply-contract decisions, is in {{.OwnFindings}}: judge every candidate against it.{{end}}
+{{- end}}
 {{- if .DeltaCheck}}
 Only the commits since your last review (`{{.PreviousHeadShort}}`) changed ({{.DeltaLines}} {{if eq .DeltaLines 1}}line{{else}}lines{{end}}{{if .DeltaFile}}; files listed in {{.DeltaFile}}{{end}}){{if $merged}}, counted as the change between the PR's own diff before and after them{{end}}. Read your previous review and its threads for context, then review just those changes; the rest stands as reviewed. Post one short review.
 {{- end}}
@@ -20,6 +23,9 @@ Your earlier threads on this PR and the replies to them are in {{.ThreadsFile}}:
 
 <magnum>
 mode: recovery
+{{- if .Phase}}
+phase: {{.Phase}}
+{{- end}}
 run_id: {{.RunID}}
 pr: {{.Owner}}/{{.Repo}}#{{.Number}}
 url: {{.URL}}
@@ -63,6 +69,9 @@ notes_dir: {{.NotesDir}}
 notes_harness:{{range $i, $f := .NotesHarness}}{{if $i}},{{end}} {{$f}}{{end}}{{if .NotesHarnessMore}} (+{{.NotesHarnessMore}} more){{end}}
 notes_lock: {{.NotesLockCommand}}
 notes_unlock: {{.NotesUnlockCommand}}
+{{- end}}
+{{- if .OwnFindings}}
+own_findings: {{.OwnFindings}}
 {{- end}}
 result_file: {{.ResultFile}}
 post_review: {{.PostReviewCommand}}

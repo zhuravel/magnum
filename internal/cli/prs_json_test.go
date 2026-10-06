@@ -55,6 +55,7 @@ func fullBoardRow() tui.PRBoardRow {
 			{Name: "fetch/checkout", Duration: 12 * time.Second}, {Name: "claude-review", Duration: 18*time.Minute + 4*time.Second, Running: true, Failed: true}}},
 		Progress: &tui.RoundProgress{StartedAt: at.Add(-20 * time.Minute), Roles: []tui.RoleProgress{
 			{Role: "claude-simplify", Label: "simplify", Started: at.Add(-19 * time.Minute), Working: true},
+			{Role: "codex-judge", Label: "judge", Judge: true, OwnPass: true, Started: at.Add(-19 * time.Minute), Working: true},
 			{Role: "codex-judge", Label: "judge", Judge: true}}},
 		Wait: "re-review · quiet", WaitDetail: "waiting for a quiet period", Note: "comment-only push skipped",
 		RequestedToMe: &req, LastRequest: &req, Requests: []tui.RequestInfo{req},
@@ -126,10 +127,10 @@ func TestPRsJSONTimesAreRFC3339AndOmittedWhenUnset(t *testing.T) {
 	}
 	progress := full["progress"].(map[string]any)
 	roles := progress["roles"].([]any)
-	if got := progress["started_at"]; got != "2026-10-05T14:10:00Z" || len(roles) != 2 {
+	if got := progress["started_at"]; got != "2026-10-05T14:10:00Z" || len(roles) != 3 {
 		t.Errorf("progress = %v", progress)
-	} else if _, ok := roles[1].(map[string]any)["started_at"]; ok {
-		t.Errorf("a role not started yet has a started_at: %v", roles[1])
+	} else if _, ok := roles[2].(map[string]any)["started_at"]; ok {
+		t.Errorf("a role not started yet has a started_at: %v", roles[2])
 	}
 
 	// An open PR nobody scheduled, with a reviewer whose time is not known: no zero times.
@@ -169,6 +170,23 @@ func TestPRsJSONDurationsAreSeconds(t *testing.T) {
 		if _, ok := round[k]; ok {
 			t.Errorf("last_round still has a nanosecond %q", k)
 		}
+	}
+}
+
+// A round's progress tells the judge's own pass from its main run: own_pass
+// is true on the own pass's entry and false, never missing, on every other.
+func TestPRsJSONMarksTheJudgesOwnPass(t *testing.T) {
+	roles := marshalPRsJSON(t, fullBoardRow())[0]["progress"].(map[string]any)["roles"].([]any)
+	var got []any
+	for _, r := range roles {
+		v, ok := r.(map[string]any)["own_pass"]
+		if !ok {
+			t.Fatalf("a role without own_pass: %v", r)
+		}
+		got = append(got, v)
+	}
+	if want := []any{false, true, false}; !reflect.DeepEqual(got, want) {
+		t.Errorf("progress.roles[].own_pass = %v, want %v", got, want)
 	}
 }
 

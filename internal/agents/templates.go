@@ -273,7 +273,40 @@ type JudgeData struct {
 	// migration): their reviews and threads are the judge's own history,
 	// while every new write goes as ReviewerLogin. Empty for most PRs.
 	FormerLogins []string
+
+	// Mode is the round's kind (initial, rereview or recovery), which the
+	// own-pass prompt renders as `mode` (each other judge prompt serves one
+	// kind and names it itself).
+	Mode string
+	// Phase is the judge's phase of a round that prompts it twice
+	// ([pipeline] judge_own_pass = "parallel"): PhaseOwnPass for its own
+	// pass, prompted with the reviewers, PhaseCandidates for judging their
+	// reports once both ended; "" for a round with one judge prompt.
+	// Rendered as `phase` only when set.
+	Phase string
+	// OwnFindings is the file the own pass writes (OwnFindingsFile in the
+	// report directory) and the candidates phase starts from, rendered as
+	// `own_findings`; "" outside a two-phase round. OwnFindingsMissing
+	// (candidates phase): the own pass left no such file, or an empty one,
+	// so the prompt asks for the pass now.
+	OwnFindings        string
+	OwnFindingsMissing bool
+	// RestartedFrom (own pass): a push cut the judge's own pass on this
+	// head short and the round restarted on HeadSHA; the prompt asks it to
+	// reuse what still applies.
+	RestartedFrom string
 }
+
+// Judge phases of JudgeData.Phase.
+const (
+	PhaseOwnPass    = "own_pass"   // the judge's own pass, while the reviewers work
+	PhaseCandidates = "candidates" // the judge judges the reviewers' reports against its own pass
+)
+
+// OwnFindingsFile is the file the judge's own pass writes in the round's
+// report directory (JudgeData.OwnFindings): its findings, their proofs and
+// the checks it ran.
+const OwnFindingsFile = "judge-own.md"
 
 // completed is d with its Reports, notes fields, PreviousHeadShort and
 // post-review line completed (a copy; d is not modified).

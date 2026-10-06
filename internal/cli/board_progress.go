@@ -5,6 +5,7 @@ package cli
 // from its runs (the state cell's "simplify · 17m", the card's timeline).
 
 import (
+	"cmp"
 	"context"
 	"slices"
 	"strings"
@@ -43,17 +44,27 @@ func boardRoundProgress(ctx context.Context, st *store.Store, cfg *config.Config
 	}
 	for i := range n {
 		g := progress[ids[i]]
-		if w := rows[i].RoundWhy; g != nil && w != nil && !w.At.Before(g.StartedAt) {
-			for _, role := range w.Roles {
-				if !slices.ContainsFunc(g.Roles, func(r tui.RoleProgress) bool { return r.Role == role }) {
-					g.Roles = append(g.Roles, newRoleProgress(cfg, role))
-				}
-			}
-			judgeLast(g.Roles)
-		}
+		listNamedRoles(cfg, g, rows[i].RoundWhy)
 		rows[i].Progress = g
 	}
 	return nil
+}
+
+// listNamedRoles adds to g, as not started, each role w named that has no
+// entry of its own in g, the judge last: a judge whose own pass alone has
+// runs is one of them, its own pass's entry not standing for its main run.
+// Nothing changes when either is nil or w is older than g (the previous
+// round's round_start, before this one's was written).
+func listNamedRoles(cfg *config.Config, g *tui.RoundProgress, w *tui.RoundWhy) {
+	if g == nil || w == nil || w.At.Before(g.StartedAt) {
+		return
+	}
+	for _, role := range w.Roles {
+		if !slices.ContainsFunc(g.Roles, func(r tui.RoleProgress) bool { return r.Role == role && !r.OwnPass }) {
+			g.Roles = append(g.Roles, newRoleProgress(cfg, role))
+		}
+	}
+	judgeLast(g.Roles)
 }
 
 // roundProgressOf is the round each PR of prs runs, by PR id: its start
@@ -88,17 +99,23 @@ func roundProgressOf(ctx context.Context, st *store.Store, cfg *config.Config, p
 }
 
 // roleProgress is the roles of a round's runs (oldest first) in the order
-// their first runs were created, the judge last. A role started with its
-// earliest prompted run (runStarted), works while one of its runs is
+// their first runs were created, the judge last. The judge's own pass (its
+// runs of kind own_pass, a model fallback's continuation included) is an
+// entry of its own, right before the judge's, so its runs never decide when
+// the judge's main run started, works, ended or failed. A role started with
+// its earliest prompted run (runStarted), works while one of its runs is
 // submitted or working, and otherwise its latest run says when it ended
 // and whether it failed.
 func roleProgress(cfg *config.Config, runs []store.Run) []tui.RoleProgress {
 	var out []tui.RoleProgress
 	for _, r := range runs {
-		i := slices.IndexFunc(out, func(p tui.RoleProgress) bool { return p.Role == r.Role })
+		own := r.Kind == store.RunOwnPass
+		i := slices.IndexFunc(out, func(p tui.RoleProgress) bool { return p.Role == r.Role && p.OwnPass == own })
 		if i < 0 {
 			i = len(out)
-			out = append(out, newRoleProgress(cfg, r.Role))
+			p := newRoleProgress(cfg, r.Role)
+			p.Judge, p.OwnPass = p.Judge || own, own
+			out = append(out, p)
 		}
 		p := &out[i]
 		if at := runStarted(r); !at.IsZero() && (p.Started.IsZero() || at.Before(p.Started)) {
@@ -139,17 +156,19 @@ func newRoleProgress(cfg *config.Config, role string) tui.RoleProgress {
 	return tui.RoleProgress{Role: role, Label: stageLabel(cfg, role), Judge: actIsJudge(cfg, role)}
 }
 
-// judgeLast moves the judge after the other roles, keeping their order.
+// judgeLast moves the judge after the other roles, keeping their order, its
+// own pass right before its main entry.
 func judgeLast(roles []tui.RoleProgress) {
-	slices.SortStableFunc(roles, func(a, b tui.RoleProgress) int {
+	rank := func(r tui.RoleProgress) int {
 		switch {
-		case a.Judge == b.Judge:
+		case !r.Judge:
 			return 0
-		case a.Judge:
+		case r.OwnPass:
 			return 1
 		}
-		return -1
-	})
+		return 2
+	}
+	slices.SortStableFunc(roles, func(a, b tui.RoleProgress) int { return cmp.Compare(rank(a), rank(b)) })
 }
 
 // stageLabel is the short name the board's state cell gives a role while

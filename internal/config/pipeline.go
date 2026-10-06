@@ -26,6 +26,31 @@ type Pipeline struct {
 	// (package prompts); see ResolvePrompt. A missing directory leaves only
 	// the embedded defaults.
 	PromptsDir string `toml:"prompts_dir"`
+	// JudgeOwnPass is when the judge does its own pass of a round:
+	// OwnPassParallel (default) prompts it for that pass together with the
+	// reviewer roles (its own-pass prompt, Role.OwnPass) and for the
+	// candidates once both ended; OwnPassAfter prompts it once, after the
+	// reviewers, for both. A [[watch]] may override it (Watch.JudgeOwnPass);
+	// see Config.JudgeOwnPassFor.
+	JudgeOwnPass string `toml:"judge_own_pass"`
+}
+
+// Values of [pipeline] judge_own_pass.
+const (
+	OwnPassParallel = "parallel" // the judge's own pass runs with the reviewers
+	OwnPassAfter    = "after"    // one judge prompt after the reviewers
+)
+
+// JudgeOwnPassFor is the judge_own_pass that applies to w's PRs: the
+// watch's when it sets one, else [pipeline]'s, else OwnPassParallel.
+func (c *Config) JudgeOwnPassFor(w *Watch) string {
+	if w != nil && w.JudgeOwnPass != "" {
+		return w.JudgeOwnPass
+	}
+	if c.Pipeline.JudgeOwnPass != "" {
+		return c.Pipeline.JudgeOwnPass
+	}
+	return OwnPassParallel
 }
 
 // Role kinds, modes and option values.
@@ -61,10 +86,11 @@ const (
 	PromptContinue = "continue" // Role.ContinuePrompt: a pause ended mid-turn (judge)
 	PromptRecovery = "recovery" // Role.Recovery: a fresh session after the old one was lost (judge)
 	PromptNudge    = "nudge"    // Role.Nudge: the agent stopped without a result (judge)
+	PromptOwnPass  = "own_pass" // Role.OwnPass: the judge's own pass, prompted with the reviewers (judge)
 )
 
 // PromptKinds lists every prompt kind a role may name (Role.PromptFile).
-var PromptKinds = []string{PromptInitial, PromptRereview, PromptRestart, PromptContinue, PromptRecovery, PromptNudge}
+var PromptKinds = []string{PromptInitial, PromptRereview, PromptRestart, PromptContinue, PromptRecovery, PromptNudge, PromptOwnPass}
 
 // Built-in role names (DefaultRoles) and kinds (DefaultKinds).
 const (

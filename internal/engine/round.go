@@ -368,6 +368,7 @@ func (e *Engine) roundInput(ctx context.Context, job *roundJob, rs roundSetup, w
 		TargetSHA: rs.target, BaseRef: base, Roles: rs.roles, Requested: rs.requested, MovedFrom: ws.MovedFrom,
 		ContinueRunID: job.continueRunID, DryRun: dryRun, PostMerge: job.postMerge,
 		NotesPath: e.roundNotes(job.repo), Readiness: e.readinessPlan(ctx, job, rs.kind), DeltaCheck: rs.delta,
+		OwnPass: e.cfg.JudgeOwnPassFor(&job.watch) == config.OwnPassParallel,
 	}
 	if job.evalHead != "" {
 		in.Blind = true

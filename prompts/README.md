@@ -34,6 +34,7 @@ prompts_dir = "{{repo}}/prompts"   # or "~/magnum-prompts" to keep your edits ou
 
 | File | Used by | Data |
 |---|---|---|
+| `judge-own-pass.md` | judge, its own pass while the reviewers work (`[pipeline] judge_own_pass = "parallel"`) | judge |
 | `judge-initial.md` | judge, first review | judge |
 | `judge-rereview.md` | judge, new head after its last review | judge |
 | `judge-continue.md` | judge, after a pause (usage limit) ended mid-turn | judge |
@@ -104,6 +105,10 @@ the judge data, every other session role gets the role data, and a shell role's 
 | `.PreviousReviews` | earlier reviews by the login: `.ID`, `.Event`, `.SHA`, `.SubmittedAt` (recovery) |
 | `.ThreadsFile`, `.ThreadSummary` | the JSON file of the inline threads the login (or a former login) started, every reply classified (`fixed`, `not a bug`, `won't fix`, `other`), and their counts, e.g. `3 threads (1 resolved); replies: 1 fixed, 1 not a bug; 1 thread without a reply` (rereview, and recovery of a reviewed PR; empty when magnum could not read them). `.Threads` holds the same data, but replies are PR content: name the file, never print them |
 | `.FormerLogins` | the logins (REST form) the PR's earlier reviews were posted as before its watch moved to another identity: their reviews and threads are the judge's own history; usually empty |
+| `.Mode` | the round's kind, `initial`, `rereview` or `recovery`: `judge-own-pass.md` serves all three and renders it as `mode` (the other judge prompts serve one kind each) |
+| `.Phase` | the judge's phase in a round that prompts it twice (`[pipeline] judge_own_pass = "parallel"` and at least one reviewer runs): `own_pass` for `judge-own-pass.md`, prompted with the reviewers, `candidates` for the usual prompt once every reviewer and the own pass ended; empty in a round with one judge prompt (`after`, a delta check, a continued turn, a judge alone). The prompts render `phase` only when set |
+| `.OwnFindings`, `.OwnFindingsMissing` | the file the own pass writes, `judge-own.md` in the report directory, rendered as `own_findings`; in the candidates phase `.OwnFindingsMissing` says the own pass left no file (or an empty one), so the prompt asks for the pass then. Empty outside a two-phase round |
+| `.RestartedFrom` | `judge-own-pass.md` after a push cut the own pass short and the round restarted: the head it was on (`.HeadSHA` is the new one), so it reuses what still applies |
 | `.NotesPath` | the repository notes file, `<home>/state/notes/<owner>/<repo>.md` (lower-case); empty when there is none. The judge reads it and rewrites it when a round taught something durable (see Repository notes). The judge prompts pass it and the four rows below as the `<magnum>` fields `notes`, `notes_dir`, `notes_harness`, `notes_lock` and `notes_unlock`, only when it is set; the steps are the skill's |
 | `.NotesDir`, `.NotesLock` | the harness directory next to the notes file (its path without `.md`) and the notes lock (that with `.lock`); empty without notes |
 | `.NotesHarness`, `.NotesHarnessMore` | the harness directory's entries at prompt time (sorted, a directory ends in `/`, at most 40) and how many more there are |
@@ -385,6 +390,7 @@ a switch not confirmed within 30 s backs out of the dialog with Esc and pauses t
 | `prompt`, `rereview` | see below | prompt files for the first review and for a new head |
 | `restart` | see below | session reviewers: the prompt after a push cut the role's turn short and the round restarted on the new head |
 | `continue_prompt`, `recovery`, `nudge` | judge only | the judge's other prompts. A `stop` key is accepted and ignored: magnum never sent a stop prompt |
+| `own_pass` | judge only | the judge's own-pass prompt, sent with the reviewers when `[pipeline] judge_own_pass` (or the watch's) is `parallel` |
 | `skill` | `{{repo}}/skills/magnum-review/SKILL.md` | the judge's skill, `{{.SkillPath}}` |
 | `command`, `tool` | none | shell roles: the command template, and the kind whose login check, pauses and health patterns apply |
 | `ok_status` | `[0]` | shell roles: the exit statuses that count as a finished report; any other status fails the role (its output is then checked for login, usage-limit and overload errors) |
@@ -400,7 +406,12 @@ file exists (else no restart prompt). claude-review's are `claude-review.md`, `c
 `claude-restart.md`.
 
 A round runs the watch's non-judge roles in parallel, layered by `after`, then the judge. The judge gets
-every other role's report path. Declaring any `[[role]]` in the base config (`config.defaults.toml`, or a
+every other role's report path. With `[pipeline] judge_own_pass = "parallel"` (the default; a `[[watch]]`
+may set its own) the judge also starts its own pass with the first stage (`judge-own-pass.md`, a run of
+kind `own_pass` that writes `judge-own.md` and posts nothing), and its usual prompt, in the candidates
+phase, goes out once every stage and that pass ended; `after` prompts it once, after the reviewers. A
+judge alone (a delta check, a continued turn, a round whose reviewers were all dropped) gets one prompt
+either way. Declaring any `[[role]]` in the base config (`config.defaults.toml`, or a
 `--config` file) replaces the built-in list. In your `~/.config/magnum/config.toml`, a `[[role]]` named
 like an existing role overrides only the keys it sets, so `name = "claude-review"` plus `model = "opus"`
 is a complete block, and a new name is appended.

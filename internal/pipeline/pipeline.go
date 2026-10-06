@@ -296,6 +296,13 @@ type RoundInput struct {
 	// Switch checks a newer head out in the round's slot (the caller's
 	// checkout path) for a restart and reports what is checked out now.
 	Switch func(ctx context.Context, sha string) (Switched, error)
+
+	// OwnPass ([pipeline] judge_own_pass = "parallel" for the PR's watch):
+	// the judge does its own pass while the reviewers work (ownpass.go) and
+	// judges their reports once both ended; false prompts it once, after
+	// the reviewers. A judge alone (a delta check, a continued turn, a
+	// round without reviewers) gets one prompt either way.
+	OwnPass bool
 }
 
 // Switched is the checkout after RoundInput.Switch.
@@ -350,6 +357,9 @@ type RoundResult struct {
 
 	Pause   *Pause
 	Reports map[agents.Role]RoleReport // by role name: every non-judge role the round ran (or skipped as logged out)
+	// OwnPass is how the judge's own pass ended (RoundInput.OwnPass; Path
+	// set when it wrote its file); nil when the round prompted none.
+	OwnPass *RoleReport
 	Nudged  bool
 
 	DismissedReviewID int64 // the stale CHANGES_REQUESTED review dismissed after posting
@@ -462,6 +472,10 @@ type round struct {
 	// tree is the checkout as the stages found it (checkout.go); read and
 	// written only between stages.
 	tree *treeState
+	// ownFindings is the file of the judge's own pass once its prompt
+	// reached the judge (ownpass.go): the candidates prompt starts from it;
+	// "" = the judge gets one prompt. Guarded by mu; a restart resets it.
+	ownFindings string
 }
 
 func (r *Runner) newRound(ctx context.Context, in RoundInput) (*round, error) {
@@ -680,6 +694,14 @@ func (rd *round) run(ctx context.Context) (RoundResult, error) {
 	if err != nil {
 		return rd.failed(ctx, err)
 	}
+	// The judge's own pass, created after its run: the run the review's
+	// marker names stays the judge's (ownpass.go).
+	var own *store.Run
+	if rd.ownPassDue(runs) {
+		if own, err = rd.newRun(ctx, rd.judge, store.RunOwnPass); err != nil {
+			return rd.failed(ctx, err)
+		}
+	}
 
 	if in.Kind == KindContinue {
 		rd.existingReports(ctx)
@@ -687,7 +709,7 @@ func (rd *round) run(ctx context.Context) (RoundResult, error) {
 	if err := rd.readiness(ctx); err != nil {
 		return rd.stopped(ctx)
 	}
-	if judgeRun, err = rd.reviewers(ctx, runs, judgeRun); err != nil {
+	if judgeRun, err = rd.reviewers(ctx, runs, judgeRun, own); err != nil {
 		if ctx.Err() != nil {
 			return rd.stopped(ctx)
 		}
@@ -697,11 +719,12 @@ func (rd *round) run(ctx context.Context) (RoundResult, error) {
 }
 
 // runStage runs one stage's roles in parallel, then checks that they left
-// the checkout as the stages found it (checkTree). The error is ctx's, or a
-// checkout that could not be restored (nothing may run on a modified one).
-// A push or the round's end skips the check: a role cut short may still be
-// working until the restart has settled it.
-func (rd *round) runStage(ctx context.Context, stage []config.Role, runs map[string]*store.Run) error {
+// the checkout as the stages found it (checkTree), naming also also (the
+// judge while its own pass works). The error is ctx's, or a checkout that
+// could not be restored (nothing may run on a modified one). A push or the
+// round's end skips the check: a role cut short may still be working until
+// the restart has settled it.
+func (rd *round) runStage(ctx context.Context, stage []config.Role, runs map[string]*store.Run, also func() []string) error {
 	var wg sync.WaitGroup
 	var ran []string
 	for _, role := range stage {
@@ -715,6 +738,9 @@ func (rd *round) runStage(ctx context.Context, stage []config.Role, runs map[str
 	wg.Wait()
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if also != nil {
+		ran = append(ran, also()...)
 	}
 	return rd.checkTree(ctx, ran)
 }
@@ -732,17 +758,21 @@ func (rd *round) newRun(ctx context.Context, role config.Role, kind string) (*st
 }
 
 // setAsideStale renames report files a previous attempt on the same head left
-// behind to <name>.prev, so they are never read as this round's output. A
-// continued round keeps the other roles' reports. A file it cannot move (or
+// behind to <name>.prev, so they are never read as this round's output, the
+// judge's own-pass file included. A continued round keeps the other roles'
+// reports. A file it cannot move (or
 // even stat) fails the round before anything is prompted: a role that then
 // wrote nothing would pass the old file off as its report.
 func (rd *round) setAsideStale() error {
-	roles := []config.Role{rd.judge}
+	files := []string{rd.judge.ReportFile()}
 	if rd.in.Kind != KindContinue {
-		roles = append(roles, rd.order...)
+		for _, role := range rd.order {
+			files = append(files, role.ReportFile())
+		}
+		files = append(files, agents.OwnFindingsFile) // the judge's own pass (ownpass.go)
 	}
-	for _, role := range roles {
-		p := filepath.Join(rd.dir, role.ReportFile())
+	for _, name := range files {
+		p := filepath.Join(rd.dir, name)
 		_, err := os.Lstat(p)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
@@ -751,7 +781,7 @@ func (rd *round) setAsideStale() error {
 			err = os.Rename(p, p+".prev")
 		}
 		if err != nil {
-			return fmt.Errorf("pipeline: set aside the stale %s: %w", role.ReportFile(), err)
+			return fmt.Errorf("pipeline: set aside the stale %s: %w", name, err)
 		}
 	}
 	return nil

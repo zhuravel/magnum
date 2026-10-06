@@ -68,7 +68,8 @@ func newStatsCmd(c *Context) *cobra.Command {
 			"ROUNDS counts the review rounds that began in the window and how each one ended (posted, stopped, "+
 			"error, ..., or running while a run is still going). FINDINGS POSTED adds up the P0 to P3 counts in "+
 			"the judge's result of every posted round.\n\n"+
-			"DURATIONS gives the median and the 90th percentile of each role's turn and of the whole round. "+
+			"DURATIONS gives the median and the 90th percentile of each role's turn (the judge's own pass apart "+
+			"from its main run, as \"<judge> own pass\") and of the whole round. "+
 			"SOURCES shows, for each reviewer role and for the judge's own pass, how many findings the judge "+
 			"weighed, how many it posted, how many only that source raised (unique) and how many it rejected, "+
 			"with the reason codes; it comes from the judge's per-finding provenance, so rounds posted before it "+
@@ -550,12 +551,13 @@ func statsGroupRounds(runs []store.RoundRun) []*statsRound {
 func statsActive(r store.Run) bool { return runActive(r) || r.State == store.RunEnded }
 
 // lastJudgeRun returns the round's last judge run (by creation, then input
-// order) for which keep holds; nil when there is none.
+// order) for which keep holds, never its own pass (kind own_pass, which
+// neither ends the round nor posts); nil when there is none.
 func (rd *statsRound) lastJudgeRun(isJudge func(string) bool, keep func(store.Run) bool) *store.Run {
 	var last *store.Run
 	for i := range rd.runs {
 		r := &rd.runs[i]
-		if isJudge(r.Role) && keep(*r) && (last == nil || !r.CreatedAt.Before(last.CreatedAt)) {
+		if isJudge(r.Role) && r.Kind != store.RunOwnPass && keep(*r) && (last == nil || !r.CreatedAt.Before(last.CreatedAt)) {
 			last = r
 		}
 	}
@@ -625,8 +627,10 @@ func statsResultFindings(resultJSON string) map[string]int {
 
 // durations returns the finished spans of the round: each role's from its
 // first submission (else creation) to its last end, once none of the role's
-// runs is still going, and under statsRoundRole the whole round, from its
-// start to the last end or verification, once no run of it is.
+// runs is still going, the judge's own pass (its runs of kind own_pass)
+// apart from the judge under ownPassStage, and under statsRoundRole the
+// whole round, from its start to the last end or verification, once no run
+// of it is.
 func (rd *statsRound) durations() map[string]time.Duration {
 	type span struct {
 		start, end time.Time
@@ -636,10 +640,14 @@ func (rd *statsRound) durations() map[string]time.Duration {
 	var last time.Time
 	roundActive := false
 	for _, r := range rd.runs {
-		s := byRole[r.Role]
+		name := actRoleName(r.Role)
+		if r.Kind == store.RunOwnPass {
+			name = ownPassStage(r.Role)
+		}
+		s := byRole[name]
 		if s == nil {
 			s = &span{}
-			byRole[r.Role] = s
+			byRole[name] = s
 		}
 		start := r.CreatedAt
 		if r.SubmittedAt != nil {
@@ -660,9 +668,9 @@ func (rd *statsRound) durations() map[string]time.Duration {
 		}
 	}
 	out := map[string]time.Duration{}
-	for role, s := range byRole {
+	for name, s := range byRole {
 		if !s.active && !s.end.IsZero() {
-			out[actRoleName(role)] = max(s.end.Sub(s.start), 0)
+			out[name] = max(s.end.Sub(s.start), 0)
 		}
 	}
 	if !roundActive && !last.IsZero() {

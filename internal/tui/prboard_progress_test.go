@@ -23,8 +23,9 @@ func workingRole(role, label string, started time.Time) RoleProgress {
 
 // The state cell of a round in flight says what it is doing and for how
 // long: the label of the one role working, "reviewers" for several, "judge"
-// for the judge (a delta check's too), and the time alone while no role
-// works; whole minutes since the round started.
+// for the judge (a delta check's too), "reviewers+judge" for several with
+// the judge's own pass, and the time alone while no role works; whole
+// minutes since the round started.
 func TestBoardStateCellShowsTheStageAndTimeOfARunningRound(t *testing.T) {
 	m, _, _ := newBoard(t, 220, 40, PRBoardOptions{})
 	p := m.painter()
@@ -45,6 +46,9 @@ func TestBoardStateCellShowsTheStageAndTimeOfARunningRound(t *testing.T) {
 		{"one role working", runningRow(start, ended, workingRole("claude-simplify", "simplify", since)), " simplify · 17m"},
 		{"several reviewers at once", runningRow(start, workingRole("claude-review", "claude", since), workingRole("codex-review", "codex", since)),
 			" reviewers · 17m"},
+		{"several reviewers with the judge's own pass", runningRow(start, workingRole("claude-review", "claude", since),
+			workingRole("codex-review", "codex", since), RoleProgress{Role: "codex-judge", Label: "cj", Judge: true, OwnPass: true, Started: since, Working: true}),
+			" reviewers+judge · 17m"},
 		{"the judge", runningRow(boardNow.Add(-31*time.Minute), ended, judge), " judge · 31m"},
 		{"a delta check", delta, " delta check · judge · 4m"},
 		{"no role working", runningRow(start, ended), " 17m"},
@@ -203,5 +207,80 @@ func TestCardListsTheRunningRoundsTimelineByRole(t *testing.T) {
 	section = lastRoundSection(t, roundsCard(t, row, 100))
 	if s := strings.Join(section, "\n"); strings.Contains(s, "not started") || !strings.Contains(s, "total 34m00s") {
 		t.Errorf("LAST ROUND of a finished round:\n%s", s)
+	}
+}
+
+// The judge's own pass works with the reviewers: the stage names both, the
+// reviewers by "reviewers" when several work and by the label of the one
+// that does, then "+judge"; the judge working alone, its own pass or its
+// main run, is "judge".
+func TestStageNamesReviewersAndJudgeTogether(t *testing.T) {
+	since := boardNow.Add(-5 * time.Minute)
+	own := RoleProgress{Role: "codex-judge", Label: "judge", Judge: true, OwnPass: true, Started: since, Working: true}
+	judge := RoleProgress{Role: "codex-judge", Label: "judge", Judge: true, Started: since, Working: true}
+	pending := RoleProgress{Role: "codex-judge", Label: "judge", Judge: true}
+	claude, codex := workingRole("claude-review", "claude", since), workingRole("codex-review", "codex", since)
+	simplify := workingRole("claude-simplify", "simplify", since)
+	ended := RoleProgress{Role: "claude-review", Label: "claude", Started: since, Ended: boardNow}
+	for _, tc := range []struct {
+		name  string
+		roles []RoleProgress
+		want  string
+	}{
+		{"several reviewers and the own pass", []RoleProgress{claude, codex, own, pending}, "reviewers+judge"},
+		{"one reviewer and the own pass", []RoleProgress{claude, own, pending}, "claude+judge"},
+		{"the simplifier and the own pass", []RoleProgress{ended, simplify, own, pending}, "simplify+judge"},
+		{"the own pass alone", []RoleProgress{ended, own, pending}, "judge"},
+		{"the judge alone", []RoleProgress{ended, judge}, "judge"},
+		{"several reviewers without the judge", []RoleProgress{claude, codex, pending}, "reviewers"},
+		{"one reviewer without the judge", []RoleProgress{claude, pending}, "claude"},
+		{"nothing working", []RoleProgress{ended, pending}, ""},
+	} {
+		if got := (RoundProgress{StartedAt: since, Roles: tc.roles}).stage(); got != tc.want {
+			t.Errorf("%s: stage = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+// The card's timeline names the judge's own pass "<role> own pass", on a
+// line of its own before the judge's, its times in the same column as the
+// other roles'.
+func TestCardNamesTheJudgesOwnPassInTheTimeline(t *testing.T) {
+	start := boardNow.Add(-20 * time.Minute)
+	at := func(d time.Duration) time.Time { return start.Add(d) }
+	clock := func(t time.Time) string { return t.Local().Format("15:04") }
+	row := roundsRow()
+	row.State = "reviewing"
+	row.Progress = &RoundProgress{StartedAt: start, Roles: []RoleProgress{
+		workingRole("claude-review", "claude", at(time.Minute)),
+		{Role: "codex-judge", Label: "judge", Judge: true, OwnPass: true, Started: at(time.Minute), Working: true},
+		{Role: "codex-judge", Label: "judge", Judge: true},
+	}}
+
+	section := lastRoundSection(t, roundsCard(t, row, 100))
+	var got []string
+	for _, l := range section[1:] {
+		got = append(got, strings.Join(strings.Fields(l), " "))
+	}
+	want := []string{
+		"round started " + clock(start) + " · running 20m00s",
+		"claude-review started " + clock(at(time.Minute)) + " · running 19m00s",
+		"codex-judge own pass started " + clock(at(time.Minute)) + " · running 19m00s",
+		"codex-judge not started yet",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("LAST ROUND with the judge's own pass:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	col := -1
+	for _, l := range section[2:] {
+		l = ansi.Strip(l)
+		i := strings.Index(l, "started")
+		if strings.HasSuffix(l, "not started yet") {
+			i = strings.Index(l, "not started yet")
+		}
+		if col >= 0 && i != col {
+			t.Errorf("the roles' times do not line up (column %d, want %d):\n%s", i, col, strings.Join(section, "\n"))
+		}
+		col = i
 	}
 }

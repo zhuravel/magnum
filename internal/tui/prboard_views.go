@@ -235,7 +235,7 @@ type RoundTimings struct {
 
 // StageTiming is one stage of a round.
 type StageTiming struct {
-	Name     string        // "fetch/checkout", a role's name, "verify"
+	Name     string        // "fetch/checkout", a role's name, the judge's own pass ("codex-judge own pass"), "verify"
 	Duration time.Duration // to now while Running
 	Running  bool
 	Failed   bool

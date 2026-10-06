@@ -312,6 +312,9 @@ type Watch struct {
 	// DeltaCheck overrides [daemon] delta_check for this watch's PRs (unset
 	// keeps the daemon's).
 	DeltaCheck *bool `toml:"delta_check"`
+	// JudgeOwnPass overrides [pipeline] judge_own_pass for this watch's PRs
+	// ("" keeps the pipeline's; see Config.JudgeOwnPassFor).
+	JudgeOwnPass string `toml:"judge_own_pass"`
 	// RequestTeams are team slugs whose review requests count like a
 	// request for the poll login (request_debounce); other teams' do not.
 	RequestTeams []string `toml:"request_teams"`
@@ -715,7 +718,7 @@ func Defaults() *Config {
 		Herdr:    Herdr{Socket: "~/.config/herdr/herdr.sock", Notify: true},
 		Terminal: Terminal{App: "Terminal", Session: "default", Mouse: true, Icons: "unicode"},
 		GitHub:   GitHub{Transport: "gh"},
-		Pipeline: Pipeline{PromptsDir: "{{repo}}/prompts"},
+		Pipeline: Pipeline{PromptsDir: "{{repo}}/prompts", JudgeOwnPass: OwnPassParallel},
 		Usage:    Usage{CodexSoft: 80, CodexHard: 95},
 		Triage:   DefaultTriage(),
 		Learn:    DefaultLearn(),

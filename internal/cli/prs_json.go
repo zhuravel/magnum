@@ -184,13 +184,14 @@ type prsJSONRoleRerun struct {
 
 type prsJSONProgress struct {
 	StartedAt time.Time             `json:"started_at,omitzero"` // last_round_started_at
-	Roles     []prsJSONRoleProgress `json:"roles"`               // the judge last
+	Roles     []prsJSONRoleProgress `json:"roles"`               // the judge last, its own pass right before it
 }
 
 type prsJSONRoleProgress struct {
 	Role      string    `json:"role"`
 	Label     string    `json:"label"` // the state cell's stage: the shortest of its name and aliases
 	Judge     bool      `json:"judge"`
+	OwnPass   bool      `json:"own_pass"`            // the judge's own pass (runs of kind own_pass), an entry before the judge's
 	StartedAt time.Time `json:"started_at,omitzero"` // unset: not started yet
 	EndedAt   time.Time `json:"ended_at,omitzero"`
 	Working   bool      `json:"working"`
@@ -246,7 +247,7 @@ func prsJSONRoundWhyOf(w tui.RoundWhy) prsJSONRoundWhy {
 
 func prsJSONProgressOf(g tui.RoundProgress) prsJSONProgress {
 	return prsJSONProgress{StartedAt: g.StartedAt, Roles: mapList(g.Roles, func(r tui.RoleProgress) prsJSONRoleProgress {
-		return prsJSONRoleProgress{Role: r.Role, Label: r.Label, Judge: r.Judge, StartedAt: r.Started, EndedAt: r.Ended,
+		return prsJSONRoleProgress{Role: r.Role, Label: r.Label, Judge: r.Judge, OwnPass: r.OwnPass, StartedAt: r.Started, EndedAt: r.Ended,
 			Working: r.Working, Failed: r.Failed}
 	})}
 }

@@ -185,6 +185,12 @@ const (
     Readiness check statuses (ReadinessCheck.Status).
 
 const (
+	PhaseOwnPass    = "own_pass"   // the judge's own pass, while the reviewers work
+	PhaseCandidates = "candidates" // the judge judges the reviewers' reports against its own pass
+)
+    Judge phases of JudgeData.Phase.
+
+const (
 	ModeInitial  = config.PromptInitial  // the role's first run for the PR
 	ModeRereview = config.PromptRereview // a new head after the role's earlier run
 	ModeRestart  = config.PromptRestart  // a push cut the role's turn short; the round restarted on the new head
@@ -243,6 +249,11 @@ const MaxReset = 24 * time.Hour
     MaxReset caps a usage-limit reset read from pane text: the text may quote
     or fake a far-off date, so a pause never lasts longer than this from one
     reading (a longer limit is simply hit again).
+
+const OwnFindingsFile = "judge-own.md"
+    OwnFindingsFile is the file the judge's own pass writes in the round's
+    report directory (JudgeData.OwnFindings): its findings, their proofs and the
+    checks it ran.
 
 const PostReviewFile = "review.json"
     PostReviewFile is the file the judge writes its review to for
@@ -666,6 +677,28 @@ type JudgeData struct {
 	// migration): their reviews and threads are the judge's own history,
 	// while every new write goes as ReviewerLogin. Empty for most PRs.
 	FormerLogins []string
+
+	// Mode is the round's kind (initial, rereview or recovery), which the
+	// own-pass prompt renders as `mode` (each other judge prompt serves one
+	// kind and names it itself).
+	Mode string
+	// Phase is the judge's phase of a round that prompts it twice
+	// ([pipeline] judge_own_pass = "parallel"): PhaseOwnPass for its own
+	// pass, prompted with the reviewers, PhaseCandidates for judging their
+	// reports once both ended; "" for a round with one judge prompt.
+	// Rendered as `phase` only when set.
+	Phase string
+	// OwnFindings is the file the own pass writes (OwnFindingsFile in the
+	// report directory) and the candidates phase starts from, rendered as
+	// `own_findings`; "" outside a two-phase round. OwnFindingsMissing
+	// (candidates phase): the own pass left no such file, or an empty one,
+	// so the prompt asks for the pass now.
+	OwnFindings        string
+	OwnFindingsMissing bool
+	// RestartedFrom (own pass): a push cut the judge's own pass on this
+	// head short and the round restarted on HeadSHA; the prompt asks it to
+	// reuse what still applies.
+	RestartedFrom string
 }
     JudgeData feeds every judge prompt (judge-*.md). Fields a template does not
     use may stay zero.
@@ -800,8 +833,9 @@ func (m *Manager) NewRun(ctx context.Context, pr store.PR, role Role, kind strin
     NewRun inserts a pending run for pr's role (a configured role name or
     alias; the run gets the name): id = NewRunID, target_sha = pr.HeadSHA,
     prev_reviewed_sha = pr.ReviewedSHA, identity = pr.Identity, reviewer_login
-    from the identity config, report_path = Layout.ReviewDir(...)/<the role's
-    ReportFile>, session_id = the role's live session when there is one.
+    from the identity config, report_path = Layout.ReviewDir(...)/<the
+    role's ReportFile> (OwnFindingsFile for the judge's own pass, kind
+    store.RunOwnPass), session_id = the role's live session when there is one.
     Create the run first when the prompt must quote its id (judge templates),
     then Submit.
 
@@ -1980,6 +2014,12 @@ const (
     Curation triggers ([notes] curate).
 
 const (
+	OwnPassParallel = "parallel" // the judge's own pass runs with the reviewers
+	OwnPassAfter    = "after"    // one judge prompt after the reviewers
+)
+    Values of [pipeline] judge_own_pass.
+
+const (
 	// KindShell is the Role.Kind of a role that types a shell command into
 	// a plain pane instead of driving an agent CLI (codex-review).
 	KindShell = "shell"
@@ -2011,6 +2051,7 @@ const (
 	PromptContinue = "continue" // Role.ContinuePrompt: a pause ended mid-turn (judge)
 	PromptRecovery = "recovery" // Role.Recovery: a fresh session after the old one was lost (judge)
 	PromptNudge    = "nudge"    // Role.Nudge: the agent stopped without a result (judge)
+	PromptOwnPass  = "own_pass" // Role.OwnPass: the judge's own pass, prompted with the reviewers (judge)
 )
     Prompt kinds accepted by Role.PromptFile.
 
@@ -2122,7 +2163,7 @@ var ErrPromptNotFound = errors.New("prompt not found")
     ErrPromptNotFound: a prompt name exists neither in prompts_dir nor among the
     embedded defaults.
 
-var PromptKinds = []string{PromptInitial, PromptRereview, PromptRestart, PromptContinue, PromptRecovery, PromptNudge}
+var PromptKinds = []string{PromptInitial, PromptRereview, PromptRestart, PromptContinue, PromptRecovery, PromptNudge, PromptOwnPass}
     PromptKinds lists every prompt kind a role may name (Role.PromptFile).
 
 var TrivialDeltaClasses = []string{"comments", "whitespace", "docs", "base"}
@@ -2294,6 +2335,10 @@ func (c *Config) IdentityByName(name string) *Identity
 func (c *Config) JudgeFor(w *Watch) Role
     JudgeFor returns the watch's judge (validation guarantees exactly one);
     the zero Role when there is none.
+
+func (c *Config) JudgeOwnPassFor(w *Watch) string
+    JudgeOwnPassFor is the judge_own_pass that applies to w's PRs: the watch's
+    when it sets one, else [pipeline]'s, else OwnPassParallel.
 
 func (c *Config) KeepApprovals(fullName string) bool
     KeepApprovals reports whether an App identity's approval on a PR of
@@ -2850,6 +2895,13 @@ type Pipeline struct {
 	// (package prompts); see ResolvePrompt. A missing directory leaves only
 	// the embedded defaults.
 	PromptsDir string `toml:"prompts_dir"`
+	// JudgeOwnPass is when the judge does its own pass of a round:
+	// OwnPassParallel (default) prompts it for that pass together with the
+	// reviewer roles (its own-pass prompt, Role.OwnPass) and for the
+	// candidates once both ended; OwnPassAfter prompts it once, after the
+	// reviewers, for both. A [[watch]] may override it (Watch.JudgeOwnPass);
+	// see Config.JudgeOwnPassFor.
+	JudgeOwnPass string `toml:"judge_own_pass"`
 }
     Pipeline is the [pipeline] section.
 
@@ -3082,6 +3134,10 @@ type Role struct {
 	ContinuePrompt string `toml:"continue_prompt"`
 	Recovery       string `toml:"recovery"`
 	Nudge          string `toml:"nudge"`
+	// OwnPass: the judge's own pass, prompted together with the reviewer
+	// roles ([pipeline] judge_own_pass = "parallel"); judges default to
+	// judge-own-pass.md. Judges only.
+	OwnPass string `toml:"own_pass"`
 	// Stop is ignored: magnum never sent the judge a stop prompt. The key
 	// is still accepted so a config that names one (judge-stop.md, gone
 	// since) loads.
@@ -3190,10 +3246,11 @@ func (r Role) Matches(s string) bool
 
 func (r Role) PromptFile(kind string) string
     PromptFile returns the prompt file name for a prompt kind (PromptInitial,
-    PromptRereview, PromptRestart, PromptContinue, PromptRecovery, PromptNudge);
-    "" when the role has none (shell roles driven by Command, non-judge roles
-    for continue/recovery/nudge unless set, a role without a restart prompt,
-    unknown kinds). Rereview falls back to the initial prompt.
+    PromptRereview, PromptRestart, PromptContinue, PromptRecovery, PromptNudge,
+    PromptOwnPass); "" when the role has none (shell roles driven by Command,
+    non-judge roles for continue/recovery/nudge/own_pass unless set, a role
+    without a restart prompt, unknown kinds). Rereview falls back to the initial
+    prompt.
 
 func (r Role) Removable() bool
     Removable is whether triage may drop the role from a round: not the judge,
@@ -3331,6 +3388,9 @@ type Watch struct {
 	// DeltaCheck overrides [daemon] delta_check for this watch's PRs (unset
 	// keeps the daemon's).
 	DeltaCheck *bool `toml:"delta_check"`
+	// JudgeOwnPass overrides [pipeline] judge_own_pass for this watch's PRs
+	// ("" keeps the pipeline's; see Config.JudgeOwnPassFor).
+	JudgeOwnPass string `toml:"judge_own_pass"`
 	// RequestTeams are team slugs whose review requests count like a
 	// request for the poll login (request_debounce); other teams' do not.
 	RequestTeams []string `toml:"request_teams"`
@@ -8816,6 +8876,13 @@ type RoundInput struct {
 	// Switch checks a newer head out in the round's slot (the caller's
 	// checkout path) for a restart and reports what is checked out now.
 	Switch func(ctx context.Context, sha string) (Switched, error)
+
+	// OwnPass ([pipeline] judge_own_pass = "parallel" for the PR's watch):
+	// the judge does its own pass while the reviewers work (ownpass.go) and
+	// judges their reports once both ended; false prompts it once, after
+	// the reviewers. A judge alone (a delta check, a continued turn, a
+	// round without reviewers) gets one prompt either way.
+	OwnPass bool
 }
     RoundInput describes one round. The slot is already checked out at TargetSHA
     (re-read the slot after slots.Checkout: CheckedOutSHA is the round's
@@ -8843,6 +8910,9 @@ type RoundResult struct {
 
 	Pause   *Pause
 	Reports map[agents.Role]RoleReport // by role name: every non-judge role the round ran (or skipped as logged out)
+	// OwnPass is how the judge's own pass ended (RoundInput.OwnPass; Path
+	// set when it wrote its file); nil when the round prompted none.
+	OwnPass *RoleReport
 	Nudged  bool
 
 	DismissedReviewID int64 // the stale CHANGES_REQUESTED review dismissed after posting
@@ -10065,6 +10135,9 @@ const (
 	RunContinue = "continue"
 	RunNudge    = "nudge"
 	RunRecovery = "recovery"
+	// RunOwnPass is the judge's own pass, prompted with the reviewers
+	// (pipeline); its continuations on a fallback model keep the kind.
+	RunOwnPass = "own_pass"
 )
     Run kinds.
 
@@ -12430,8 +12503,11 @@ type ReviewerInfo struct {
     ReviewerInfo is one reviewer's latest verdict on a PR.
 
 type RoleProgress struct {
-	Role, Label     string
-	Judge           bool
+	Role, Label string
+	Judge       bool
+	// OwnPass: the judge's own pass, its runs of kind own_pass, listed as an
+	// entry of its own before the judge's.
+	OwnPass         bool
 	Started, Ended  time.Time
 	Working, Failed bool
 }
@@ -12456,7 +12532,7 @@ type RoundProgress struct {
     RoundProgress is a round in flight: when it started (the PR's
     last_round_started_at) and its roles, the ones with a run in the order
     their runs were created, then the ones the round named that have none yet,
-    the judge last.
+    the judge last and its own pass right before it.
 
 type RoundTimings struct {
 	Round   int
@@ -12530,7 +12606,7 @@ type SpendInfo struct {
     those runs belong to.
 
 type StageTiming struct {
-	Name     string        // "fetch/checkout", a role's name, "verify"
+	Name     string        // "fetch/checkout", a role's name, the judge's own pass ("codex-judge own pass"), "verify"
 	Duration time.Duration // to now while Running
 	Running  bool
 	Failed   bool

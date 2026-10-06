@@ -142,16 +142,33 @@ func TestSkillDescribesEveryMagnumField(t *testing.T) {
 		{Kind: ReadinessReady, Command: "bin/db-ready", Status: ReadinessFailed, Duration: "1s"}}}
 	skill := string(magnum.Skill)
 	seen := map[string]bool{}
+	// A two-phase round: the candidates phase of each prompt, and the own
+	// pass in every round kind.
+	candidates := d
+	candidates.Phase, candidates.OwnFindings = PhaseCandidates, "/r/judge-own.md"
+	type render struct {
+		name string
+		data JudgeData
+	}
+	var renders []render
 	for _, name := range judgePrompts {
-		got, err := RenderPrompt(prompt(t, name), d)
+		renders = append(renders, render{name, d}, render{name, candidates})
+	}
+	for _, mode := range []string{"initial", "rereview", "recovery"} {
+		own := d
+		own.Mode, own.Phase, own.OwnFindings, own.BaseMerged = mode, PhaseOwnPass, "/r/judge-own.md", true
+		renders = append(renders, render{"judge-own-pass.md", own})
+	}
+	for _, r := range renders {
+		got, err := RenderPrompt(prompt(t, r.name), r.data)
 		if err != nil {
-			t.Fatalf("%s: %v", name, err)
+			t.Fatalf("%s: %v", r.name, err)
 		}
 		for _, m := range blockField.FindAllStringSubmatch(magnumBlock(t, got), -1) {
 			seen[m[1]] = true
 		}
 	}
-	for _, f := range []string{"notes", "notes_dir", "notes_harness", "notes_lock", "notes_unlock", "readiness", "reports"} {
+	for _, f := range []string{"notes", "notes_dir", "notes_harness", "notes_lock", "notes_unlock", "readiness", "reports", "phase", "own_findings"} {
 		if !seen[f] {
 			t.Errorf("no judge prompt renders `%s`", f)
 		}
@@ -341,6 +358,30 @@ func TestClaudeReviewPromptsCheckChangedBehaviourAndListRejections(t *testing.T)
 			if !strings.Contains(got, want) {
 				t.Errorf("%s lacks %q:\n%s", name, want, got)
 			}
+		}
+	}
+}
+
+// The skill says what the own pass does and does not do, and that the
+// candidates phase starts from its file.
+func TestSkillDescribesTheOwnPass(t *testing.T) {
+	skill := string(magnum.Skill)
+	for _, want := range []string{"`phase: own_pass`", "`phase: candidates`", "`own_findings`"} {
+		if !strings.Contains(skill, want) {
+			t.Errorf("SKILL.md lacks %q", want)
+		}
+	}
+	i := strings.Index(skill, "`phase: own_pass`")
+	if i < 0 {
+		return
+	}
+	para := skill[i:]
+	if j := strings.Index(para, "\n\n"); j >= 0 {
+		para = para[:j]
+	}
+	for _, want := range []string{"post nothing", "no report", "section 6", "notes"} {
+		if !strings.Contains(para, want) {
+			t.Errorf("the own-pass paragraph lacks %q:\n%s", want, para)
 		}
 	}
 }

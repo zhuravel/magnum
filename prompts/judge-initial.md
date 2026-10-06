@@ -1,9 +1,12 @@
 [$magnum-review]({{.SkillPath}}) Review {{.URL}} and post exactly one GitHub review as `{{.ReviewerLogin}}`.
 
-magnum checked out the PR head `{{.HeadSHA}}` (detached) in this directory. {{with .Reports}}Candidate reports from {{len .}} independent reviewer role{{if ne (len .) 1}}s{{end}} are listed below; judge every item, run your own full pass, dedupe, then post.{{else}}No other reviewer role ran for this head; run your own full pass, then post.{{end}}
+magnum checked out the PR head `{{.HeadSHA}}` (detached) in this directory. {{if .OwnFindings}}{{if .OwnFindingsMissing}}Your own pass left no {{.OwnFindings}}: run your own full pass now. {{else}}Your own pass is in {{.OwnFindings}}: start from it. {{end}}{{end}}{{with .Reports}}Candidate reports from {{len .}} independent reviewer role{{if ne (len .) 1}}s{{end}} are listed below; judge every item{{if $.OwnFindings}} against your own pass, merge{{else}}, run your own full pass, dedupe{{end}}, then post.{{else}}No other reviewer role ran for this head; run your own full pass, then post.{{end}}
 
 <magnum>
 mode: initial
+{{- if .Phase}}
+phase: {{.Phase}}
+{{- end}}
 run_id: {{.RunID}}
 pr: {{.Owner}}/{{.Repo}}#{{.Number}}
 url: {{.URL}}
@@ -36,6 +39,9 @@ notes_dir: {{.NotesDir}}
 notes_harness:{{range $i, $f := .NotesHarness}}{{if $i}},{{end}} {{$f}}{{end}}{{if .NotesHarnessMore}} (+{{.NotesHarnessMore}} more){{end}}
 notes_lock: {{.NotesLockCommand}}
 notes_unlock: {{.NotesUnlockCommand}}
+{{- end}}
+{{- if .OwnFindings}}
+own_findings: {{.OwnFindings}}
 {{- end}}
 result_file: {{.ResultFile}}
 post_review: {{.PostReviewCommand}}

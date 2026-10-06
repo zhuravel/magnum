@@ -22,8 +22,9 @@ import (
 // alias; the run gets the name): id = NewRunID, target_sha = pr.HeadSHA,
 // prev_reviewed_sha = pr.ReviewedSHA, identity = pr.Identity,
 // reviewer_login from the identity config, report_path =
-// Layout.ReviewDir(...)/<the role's ReportFile>, session_id = the role's
-// live session when there is one. Create the run first when the prompt must
+// Layout.ReviewDir(...)/<the role's ReportFile> (OwnFindingsFile for the
+// judge's own pass, kind store.RunOwnPass), session_id = the role's live
+// session when there is one. Create the run first when the prompt must
 // quote its id (judge templates), then Submit.
 func (m *Manager) NewRun(ctx context.Context, pr store.PR, role Role, kind string, round int) (store.Run, error) {
 	spec, ok := m.roleSpec(role)
@@ -42,10 +43,14 @@ func (m *Manager) NewRun(ctx context.Context, pr store.PR, role Role, kind strin
 	if round < 1 {
 		round = 1
 	}
+	report := spec.ReportFile()
+	if kind == store.RunOwnPass {
+		report = OwnFindingsFile
+	}
 	r := store.Run{
 		PRID: pr.ID, Round: round, Role: string(role), Kind: kind, TargetSHA: pr.HeadSHA,
 		PrevReviewedSHA: pr.ReviewedSHA, Identity: pr.Identity, ReviewerLogin: login, State: store.RunPending,
-		ReportPath: store.Ptr(filepath.Join(m.d.Layout.ReviewDir(repo.Owner, repo.Name, pr.Number, pr.HeadSHA), spec.ReportFile())),
+		ReportPath: store.Ptr(filepath.Join(m.d.Layout.ReviewDir(repo.Owner, repo.Name, pr.Number, pr.HeadSHA), report)),
 	}
 	if s, err := m.d.Store.LiveSessionByPRRole(ctx, pr.ID, string(role)); err == nil {
 		r.SessionID = &s.ID

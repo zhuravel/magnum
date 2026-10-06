@@ -13,7 +13,9 @@ type roundJudge struct {
 	round int
 	// prompted is the newest judge run of the round that was sent (a
 	// continue or nudge of the original turn, or the original itself); nil
-	// when the round never prompted its judge.
+	// when the round never prompted its judge. The judge's own pass (runs of
+	// kind own_pass, prompted with the reviewers: pipeline ownpass.go) is
+	// part of the reviewers' stage, never its turn.
 	prompted *store.Run
 	// marker is the run whose id the round's review carries: the round's
 	// first initial, rereview or recovery judge run, skipping one abandoned
@@ -34,7 +36,7 @@ func (e *Engine) latestJudge(runs []store.Run) roundJudge {
 	}
 	for i := range runs {
 		r := &runs[i]
-		if r.Round != j.round || !e.isJudge(r.Role) {
+		if r.Round != j.round || !e.isJudge(r.Role) || r.Kind == store.RunOwnPass {
 			continue
 		}
 		replaced := r.State == store.RunAbandoned && r.SubmittedAt == nil

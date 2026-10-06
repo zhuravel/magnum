@@ -63,6 +63,7 @@ skip_authors = ["dependabot"]
 # skip_paths = ["docs/**", "**/*.md"]   # skip a PR when every changed file matches ("**" spans directories, "*" stays in one)
 # request_teams = ["backend"]           # review requests for these team slugs start a round like one for you
 # roles = ["codex-judge", "claude-review", "codex-review", "claude-simplify"]   # omitted or [] = every [[role]]
+# judge_own_pass = "after"              # [pipeline]'s "parallel" (the judge's own pass with the reviewers) or "after"
 
 [[pool]]
 repo = "talkable/talkable"

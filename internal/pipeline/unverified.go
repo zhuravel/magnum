@@ -73,11 +73,12 @@ func (rd *round) findUnverified(ctx context.Context) *unverifiedRuns {
 		return nil
 	}
 	// A round's review carries the id of its first judge run that was
-	// prompted: nudges and continuations quote it.
+	// prompted: nudges and continuations quote it, and the own pass, which
+	// posts nothing, quoted it before (ownpass.go).
 	marked := map[int]bool{}
 	for _, r := range runs {
 		if !rounds[r.Round] || marked[r.Round] || r.Role != rd.judge.Name || r.SubmittedAt == nil ||
-			r.Kind == store.RunContinue || r.Kind == store.RunNudge {
+			r.Kind == store.RunContinue || r.Kind == store.RunNudge || r.Kind == store.RunOwnPass {
 			continue
 		}
 		marked[r.Round] = true

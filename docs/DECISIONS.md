@@ -2166,3 +2166,45 @@ editing history. Code, config comments and prompts reference these by their head
   marking the repository again after a rejection or an expiry (an operator who ignores proposals would get one a
   week; the misses wait for the next trigger); applying a curation of misses without review (the notes are read
   by every later round).
+- **The judge does its own pass while the reviewers work** (2026-10-06, amends "Three-agent pipeline with a
+  judge" and "A push during the reviewer stage restarts the round in place"). A first review took 32 minutes at
+  the median (51 at p90) over 54 recent rounds: the reviewers' stage 17 (claude-review 16, codex-review 4), then
+  the judge 15, strictly one after the other, while the judge's own full pass (read the code and the PR, run
+  checks, find and prove its findings) needs no candidate report. `[pipeline] judge_own_pass = "parallel"` (the
+  default; a `[[watch]]` may set its own, `"after"` keeps one prompt after the reviewers) prompts the judge with
+  the new `judge-own-pass.md` (the role key `own_pass`) in the first stage: the usual `<magnum>` block for the
+  round's kind with `phase: own_pass` and `own_findings: <report dir>/judge-own.md`, no reports, result file or
+  post-review line; it verifies identity and target, reads the code and the PR, in a re-review decides the reply
+  contract for its earlier threads, runs its checks, writes its findings with their proofs to that file and ends
+  its turn, posting nothing and leaving the notes alone. When every stage and that turn ended, whichever came
+  last, the judge's usual prompt goes out with `phase: candidates`, `own_findings` and a sentence that its own
+  pass is there (or that it left none, so it does the pass now), and the judge judges every candidate against
+  it, merges and does the rest as before. The critical path becomes about max(reviewers, own pass) plus 5 to 8
+  minutes of judging and posting: some 9 minutes off the median, at about the same usage. A judge alone (a delta
+  check, a continued turn, a round of the judge alone or whose reviewers were all dropped or logged out) gets one
+  prompt. The own pass is a run of its own, kind `own_pass` (migration 0015 rebuilds `runs`, and `findings` with
+  it, for the CHECK), created after the judge's run so the review's marker stays the judge's run and the
+  observer's newest run on the judge's session is the one in flight; its model-limit continuations keep the kind.
+  It is shown as such: `round.own_pass` events, `codex-judge own pass` in the card's timeline and last-round
+  stages and in `magnum stats`, `own_pass` in `prs --json`, and the state cell reads `reviewers+judge` (or
+  `claude+judge`) while both work. It is part of the reviewers' stage everywhere a judge used to come after
+  them: a push cuts it short like a reviewer (interrupted with ctrl+c twice, its run abandoned as
+  `head_moved`) and the restart prompts it again on the new head, naming the head it moved from; the checkout
+  check after a stage names the judge while its own pass works, and once more after it ended; the judge's
+  `timeout` bounds each phase (a timed-out pass is interrupted and waited for); a usage limit or any end
+  without its file is no failure: the candidates prompt still goes out once the reviewers ended and pauses the
+  round on the limit, so the paused round continues the judge's candidates turn with every report in its
+  context; the round's cancellation leaves its run in flight as a reviewer's; crash recovery and the
+  continue/refund decisions (`engine.latestJudge`, `judgePrompted`) and the unverified-review marker never take
+  it for the judge's turn, so a daemon restart during the own pass starts the round again, as one while the
+  reviewers run does. Dispatch's working-Codex count already counts the judge: `max_total_working_codex` adds
+  every Codex role of a new round (the judge included) and reads herdr's working Codex agents, which now
+  include a judge on its own pass. SKILL.md's section 0 lists `phase` and `own_findings` and one paragraph says
+  what the own pass does and does not do; it stays at 30,835 bytes under the unchanged 30,844 cap (tighter
+  wording elsewhere: the readiness and former-logins fields, the threads file's keys, the candidate reports
+  list). Rejected: one prompt file per round kind for the own pass (three near-copies of the re-review and
+  recovery context; one file branches on `mode`); the own-pass fields in the usual prompts (a custom
+  `judge-initial.md` without them would have the judge post during the reviewers' stage); continuing a judge
+  turn after a daemon restart during the own pass (the continue prompt would have it post without the
+  reviewers' reports); skipping the candidates prompt when the own pass hit a usage limit (the paused round's
+  continue prompt names no reports, so the judge would never see them).

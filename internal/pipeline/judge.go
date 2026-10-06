@@ -62,15 +62,7 @@ type postedReview struct {
 // a kind that cannot switch pauses as on a usage limit).
 func (rd *round) runJudge(ctx context.Context, run store.Run) (RoundResult, error) {
 	in := rd.in
-	marker := run.ID
-	switch {
-	case in.Kind == KindContinue && in.ContinueRunID != "":
-		marker = in.ContinueRunID
-	case rd.unverified != "":
-		// An earlier review on this head may be on GitHub: the judge looks
-		// for its marker before posting (unverified.go).
-		marker = rd.unverified
-	}
+	marker := rd.marker(run)
 	rd.mu.Lock()
 	rd.res.JudgeRunID = marker
 	rd.mu.Unlock()
@@ -78,6 +70,7 @@ func (rd *round) runJudge(ctx context.Context, run store.Run) (RoundResult, erro
 	jd := rd.judgeData(run, marker)
 	rd.addThreads(ctx, &jd)
 	rd.addDeltaCheck(ctx, &jd)
+	rd.ownPassPhase(&jd)
 	rd.snapshotNotes()
 	text, err := rd.r.Agents.RolePrompt(rd.judge, judgePrompt(in.Kind), jd)
 	if err != nil {
@@ -85,11 +78,17 @@ func (rd *round) runJudge(ctx context.Context, run store.Run) (RoundResult, erro
 		return rd.done(ctx, OutcomeError, fmt.Errorf("pipeline: judge prompt: %w", err))
 	}
 	msg := fmt.Sprintf("prompting %s (run %s, %s)", rd.judge.Name, run.ID, in.Kind)
+	if jd.Phase != "" {
+		msg = fmt.Sprintf("prompting %s for the candidates (run %s, %s; its own pass in %s)", rd.judge.Name, run.ID, in.Kind, agents.OwnFindingsFile)
+		if jd.OwnFindingsMissing {
+			msg = fmt.Sprintf("prompting %s for the candidates (run %s, %s); its own pass left no %s: it does the pass now", rd.judge.Name, run.ID, in.Kind, agents.OwnFindingsFile)
+		}
+	}
 	if usual, _ := JudgeEvents(rd.r.Config, rd.owner+"/"+rd.name, &rd.idCfg, in.PostMerge); usual != jd.NoFindingsEvent {
 		msg += fmt.Sprintf("; no %s this round, a report is missing: %s", usual, strings.Join(missingReports(jd.Reports), ", "))
 	}
 	rd.event(ctx, "info", "round.judge", msg,
-		map[string]any{"run": run.ID, "marker": marker, "reports": jd.Reports, "no_findings_event": jd.NoFindingsEvent})
+		map[string]any{"run": run.ID, "marker": marker, "reports": jd.Reports, "no_findings_event": jd.NoFindingsEvent, "phase": jd.Phase})
 	markers := []string{marker}
 	if marker != run.ID {
 		markers = append(markers, run.ID)
@@ -145,6 +144,21 @@ func (rd *round) runJudge(ctx context.Context, run store.Run) (RoundResult, erro
 		t = rd.submitAndWait(ctx, *nrun, ntext, rd.timeout(rd.judge), jd.ResultFile, ids)
 		anchor = marker
 	}
+}
+
+// marker is the run id the round's review carries: the paused run's for a
+// continued turn, an earlier unverified run's on this head (unverified.go),
+// else run's, the judge's run of the round.
+func (rd *round) marker(run store.Run) string {
+	switch {
+	case rd.in.Kind == KindContinue && rd.in.ContinueRunID != "":
+		return rd.in.ContinueRunID
+	case rd.unverified != "":
+		// An earlier review on this head may be on GitHub: the judge looks
+		// for its marker before posting (unverified.go).
+		return rd.unverified
+	}
+	return run.ID
 }
 
 // judgePrompt is the judge's prompt kind for a round kind.

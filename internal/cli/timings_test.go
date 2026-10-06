@@ -170,3 +170,37 @@ func TestTimingsFromTheRegistry(t *testing.T) {
 		t.Fatalf("json = %s", j)
 	}
 }
+
+// The judge's own pass, prompted with the reviewers, is a stage of its own
+// ("codex-judge own pass", its model fallback's continuation included) after
+// the reviewers and before the judge, whose stage and verification read only
+// its main run: the judge's span does not start with the reviewers. The
+// round's kind is its first run's that is not the own pass.
+func TestRoundTimingsListOwnPassAsItsOwnStage(t *testing.T) {
+	runs, steps := timingRound()
+	co := lastCheckout(steps, timingT0.Add(time.Minute))
+	runs[0].CreatedAt = timingT0.Add(time.Minute) // the judge's main run is created up front
+	own := []store.Run{
+		{ID: "o1", Round: 1, Role: store.RoleJudge, Kind: store.RunOwnPass, State: store.RunAbandoned, CreatedAt: timingT0.Add(59 * time.Second),
+			SubmittedAt: timingAt(time.Minute), EndedAt: timingAt(5 * time.Minute)},
+		{ID: "o2", Round: 1, Role: store.RoleJudge, Kind: store.RunOwnPass, State: store.RunVerified, CreatedAt: timingT0.Add(5 * time.Minute),
+			SubmittedAt: timingAt(5*time.Minute + 30*time.Second), EndedAt: timingAt(16 * time.Minute), VerifiedAt: timingAt(16*time.Minute + time.Second)},
+	}
+	all := append(own, runs...)
+	got := roundTimings(all, co, timingJudge, timingT0.Add(5*time.Hour))
+	want := "fetch/checkout 12s · claude-review 18m04s · codex-review 9m00s (failed) · codex-judge own pass 15m00s · " +
+		"codex-judge 14m00s · verify 3s · total 34m03s"
+	if got == nil || tui.TimingsText(*got) != want || got.Kind != store.RunInitial || got.Running {
+		t.Fatalf("timings = %+v\n%s\nwant %s", got, tui.TimingsText(*got), want)
+	}
+
+	// The own pass failed; the judge still works.
+	all[1].State = store.RunFailed
+	all[2].State, all[2].EndedAt, all[2].VerifiedAt = store.RunWorking, nil, nil
+	got = roundTimings(all, co, timingJudge, timingT0.Add(30*time.Minute))
+	want = "fetch/checkout 12s · claude-review 18m04s · codex-review 9m00s (failed) · codex-judge own pass 15m00s (failed) · " +
+		"codex-judge 10m00s (running) · total 30m00s (running)"
+	if tui.TimingsText(*got) != want {
+		t.Fatalf("judging after a failed own pass = %s\nwant %s", tui.TimingsText(*got), want)
+	}
+}

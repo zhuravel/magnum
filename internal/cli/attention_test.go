@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -78,6 +79,33 @@ func TestAttentionFailedRoundAndParkedPR(t *testing.T) {
 	}
 	actContains(t, h2.out.String(), "talkable#9 needs_attention: identity check failed: App lacks pull_requests: write",
 		"magnum open talkable#9", "fix: `magnum identities check`")
+}
+
+// The failed tier reads the round's judge run: the newest judge run of the
+// latest round that is not the judge's own pass (created after the judge's
+// main run). An own pass that failed beside a judge that posted is no
+// failed round; a judge that failed beside an own pass that ended is one.
+func TestAttentionIgnoresOwnPassFailure(t *testing.T) {
+	t0 := time.Date(2026, 10, 5, 9, 0, 0, 0, time.UTC)
+	run := func(id string, round int, role, kind, state string, created time.Duration) store.Run {
+		return store.Run{ID: id, Round: round, Role: role, Kind: kind, State: state, CreatedAt: t0.Add(created)}
+	}
+	runs := []store.Run{
+		run("j1", 1, store.RoleJudge, store.RunInitial, store.RunVerified, 0),
+		run("c2", 2, store.RoleClaude, store.RunRereview, store.RunVerified, time.Hour),
+		run("j2", 2, store.RoleJudge, store.RunRereview, store.RunVerified, time.Hour),
+		run("o2", 2, store.RoleJudge, store.RunOwnPass, store.RunFailed, time.Hour+time.Second),
+	}
+	if j := latestRoundJudge(nil, runs); j == nil || j.ID != "j2" || j.State == store.RunFailed {
+		t.Errorf("a failed own pass beside a verified judge: judge run = %+v, want j2 verified", j)
+	}
+	runs[2].State, runs[3].State = store.RunFailed, store.RunEnded
+	if j := latestRoundJudge(nil, runs); j == nil || j.ID != "j2" || j.State != store.RunFailed {
+		t.Errorf("a failed judge beside an ended own pass: judge run = %+v, want j2 failed", j)
+	}
+	if j := latestRoundJudge(nil, append(slices.Clone(runs[:2]), runs[3])); j != nil {
+		t.Errorf("a round whose judge has only its own pass: judge run = %+v, want none", j)
+	}
 }
 
 func TestAttentionNothingAndHerdrDown(t *testing.T) {

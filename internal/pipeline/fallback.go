@@ -15,7 +15,8 @@ import (
 // own limit (h, a model_limit verdict on its pane): the limit is recorded
 // (Agents.NoteModelLimit), the session switched to the kind's next fallback
 // model not in tried (Agents.SwitchModel), and a new run of the same role
-// and round (kind continue) is submitted with the model-fallback prompt and
+// and round (kind continue; own_pass for the judge's own pass, whose runs
+// all keep that kind) is submitted with the model-fallback prompt and
 // awaited like the original. reportPath is what the prompt names as the
 // report or result file. A reviewer
 // passes finishOld so its limited run ends failed with outcome model_limit;
@@ -47,7 +48,11 @@ func (rd *round) modelFallback(ctx context.Context, role config.Role, t turn, h 
 	if finishOld {
 		rd.finishRun(ctx, t.run.ID, store.RunFailed, string(agents.HealthModelLimit), h.Detail)
 	}
-	nrun, err := rd.newRun(ctx, role, store.RunContinue)
+	kind := store.RunContinue
+	if t.run.Kind == store.RunOwnPass {
+		kind = store.RunOwnPass
+	}
+	nrun, err := rd.newRun(ctx, role, kind)
 	if err != nil {
 		rd.warn(ctx, "%v", err)
 		return turn{}, "", "", false

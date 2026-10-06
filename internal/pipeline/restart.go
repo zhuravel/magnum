@@ -15,10 +15,11 @@ import (
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
-// A push the poller records while the reviewers run (before the judge is
-// prompted) restarts them in place on the new head, at most
-// RoundInput.MaxRestarts times per round: the turns in flight are
-// interrupted and their runs abandoned (ReportHeadMoved), RoundInput.Switch
+// A push the poller records while the reviewers run (and the judge's own
+// pass, ownpass.go; before the judge is prompted for the candidates)
+// restarts them in place on the new head, at most RoundInput.MaxRestarts
+// times per round: the turns in flight are interrupted and their runs
+// abandoned (ReportHeadMoved), RoundInput.Switch
 // checks the new head out, the round's target and report directory follow
 // it, and every role that runs gets a new run on the same session, a session
 // reviewer with its restart prompt (config.PromptRestart) when it has one.
@@ -98,25 +99,30 @@ func (rd *round) noticePush(ctx context.Context) {
 
 // reviewers runs the stages, restarting them on a newer head while restarts
 // remain, and returns the judge's run (a restart replaces it: a run carries
-// its target and report path).
-func (rd *round) reviewers(ctx context.Context, runs map[string]*store.Run, judgeRun *store.Run) (*store.Run, error) {
+// its target and report path). own is the judge's own-pass run, prompted
+// with the first stage and replaced by a restart too (nil = none:
+// ownPassDue).
+func (rd *round) reviewers(ctx context.Context, runs map[string]*store.Run, judgeRun, own *store.Run) (*store.Run, error) {
 	for {
-		head, err := rd.runStages(ctx, runs)
+		head, err := rd.runStages(ctx, runs, own, rd.marker(*judgeRun))
 		if err != nil || head == "" {
 			return judgeRun, err
 		}
-		if judgeRun, err = rd.restart(ctx, head, runs, judgeRun); err != nil {
+		if judgeRun, own, err = rd.restart(ctx, head, runs, judgeRun, own); err != nil {
 			return nil, err
 		}
 	}
 }
 
 // runStages runs the stages in order under a context a push cancels while
-// restarts remain. head is the PR's new head when the round must restart: a
-// push noticed while a stage ran, or by the check before each stage and
-// after the last. It first notes the checkout, which each stage's roles
-// must leave as they found it (checkTree).
-func (rd *round) runStages(ctx context.Context, runs map[string]*store.Run) (head string, err error) {
+// restarts remain, with the judge's own pass on own (when not nil) beside
+// them from the first stage on, and returns once both ended. head is the
+// PR's new head when the round must restart: a push noticed while a stage
+// or the own pass ran, or by the check before each stage and after the
+// last. It first notes the checkout, which each stage's roles and the own
+// pass must leave as they found it (checkTree). marker is the run id the
+// round's review carries, which the own-pass prompt quotes.
+func (rd *round) runStages(ctx context.Context, runs map[string]*store.Run, own *store.Run, marker string) (head string, err error) {
 	sctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 	if len(rd.stages) > 0 {
@@ -132,37 +138,117 @@ func (rd *round) runStages(ctx context.Context, runs map[string]*store.Run) (hea
 			rd.mu.Unlock()
 		}()
 	}
+	var op *ownPass
+	var also func() []string // names the judge in a stage's checkout check while its own pass works
+	if own != nil {
+		op = rd.startOwnPass(sctx, *own, marker)
+		covered := false // a check ran after the own pass ended: it left nothing unchecked
+		also = func() []string {
+			if covered {
+				return nil
+			}
+			covered = op.finished()
+			return []string{rd.judge.Name}
+		}
+	}
+	// fail ends the stages on err: the own pass stops with them (a push
+	// leaves its run to the restart; anything else interrupts it).
+	fail := func(err error) (string, error) {
+		rd.stopOwnPass(ctx, op, own, cancel, err)
+		return "", err
+	}
 	for _, stage := range rd.stages {
 		if head := rd.movedHead(ctx); head != "" {
+			rd.stopOwnPass(ctx, op, own, cancel, &headMovedError{sha: head})
 			return head, nil
 		}
-		err := rd.runStage(sctx, stage, runs)
+		err := rd.runStage(sctx, stage, runs, also)
+		if ctx.Err() != nil {
+			return fail(ctx.Err())
+		}
+		if moved, ok := errors.AsType[*headMovedError](context.Cause(sctx)); ok {
+			if err != nil && !errors.Is(err, context.Canceled) {
+				return fail(err) // a checkout that could not be restored is no place to restart in
+			}
+			rd.stopOwnPass(ctx, op, own, cancel, moved)
+			return moved.sha, nil
+		}
+		if err != nil {
+			return fail(err)
+		}
+	}
+	if op != nil {
+		<-op.done // its waits notice a push meanwhile
 		if ctx.Err() != nil {
 			return "", ctx.Err()
 		}
 		if moved, ok := errors.AsType[*headMovedError](context.Cause(sctx)); ok {
-			if err != nil && !errors.Is(err, context.Canceled) {
-				return "", err // a checkout that could not be restored is no place to restart in
-			}
 			return moved.sha, nil
 		}
-		if err != nil {
-			return "", err
+		if names := also(); len(names) > 0 {
+			if err := rd.checkTree(ctx, names); err != nil {
+				return "", err
+			}
 		}
 	}
 	return rd.movedHead(ctx), nil
 }
 
+// stopOwnPass ends the judge's own pass (op, on run own) when the stages
+// end before it did: their context is cancelled with cause, and once its
+// turn returned, a turn a push cut is left to the restart (settleCut) and
+// one the round's cancellation stopped stays in flight as a reviewer's;
+// any other cause (a checkout that could not be restored) interrupts the
+// judge and fails the run, so it does not go on working once the round
+// ended. nil op does nothing.
+func (rd *round) stopOwnPass(ctx context.Context, op *ownPass, own *store.Run, cancel context.CancelCauseFunc, cause error) {
+	if op == nil {
+		return
+	}
+	if !op.finished() {
+		cancel(cause)
+		<-op.done
+	}
+	if _, push := cause.(*headMovedError); push || ctx.Err() != nil || op.rep.Status != ReportCancelled {
+		return
+	}
+	run := rd.ownRun(*own)
+	cur, err := rd.r.Store.RunByID(context.WithoutCancel(ctx), run.ID)
+	if err != nil || (cur.State != store.RunSubmitted && cur.State != store.RunWorking && cur.State != store.RunEnded) {
+		return
+	}
+	rd.stopJudge(ctx, cur)
+	rd.finishRun(ctx, cur.ID, store.RunFailed, ReportCancelled, "the round ended before the own pass did: "+cause.Error())
+}
+
+// ownRun is the own pass's latest run: own, or its continuation on a
+// fallback model (modelFallback keeps it under the judge's name).
+func (rd *round) ownRun(own store.Run) store.Run {
+	rd.mu.Lock()
+	defer rd.mu.Unlock()
+	if c, ok := rd.cont[rd.judge.Name]; ok && c.Kind == store.RunOwnPass {
+		return c
+	}
+	return own
+}
+
 // restart starts the reviewers over on head: the turns cut short are
-// settled (settleCut), the checkout switches to head (RoundInput.Switch), the
-// round's target, merge base and report directory follow it, and every role
-// that runs gets a new run, the judge too.
-func (rd *round) restart(ctx context.Context, head string, runs map[string]*store.Run, judgeRun *store.Run) (*store.Run, error) {
+// settled (settleCut), the judge's own pass (own, when not nil) like a
+// reviewer's, the checkout switches to head (RoundInput.Switch), the round's
+// target, merge base and report directory follow it, and every role that
+// runs gets a new run, the judge too, and the own pass a new one after it.
+func (rd *round) restart(ctx context.Context, head string, runs map[string]*store.Run, judgeRun, own *store.Run) (*store.Run, *store.Run, error) {
 	from := rd.in.TargetSHA
 	cut, ran := []string{}, []string{}
+	var ownCut *store.Run
+	if own != nil {
+		r := rd.ownRun(*own)
+		ownCut = &r
+	}
 	rd.mu.Lock()
 	cont := rd.cont
 	rd.cont = nil
+	rd.ownFindings = ""
 	rd.mu.Unlock()
 	for _, role := range rd.running() {
 		run := runs[role.Name]
@@ -177,16 +263,22 @@ func (rd *round) restart(ctx context.Context, head string, runs map[string]*stor
 			cut = append(cut, role.Name)
 		}
 	}
+	if ownCut != nil {
+		ran = append(ran, rd.judge.Name)
+		if rd.settleCut(ctx, rd.judge, *ownCut, head) {
+			cut = append(cut, rd.judge.Name+" (own pass)")
+		}
+	}
 	rd.finishRun(ctx, judgeRun.ID, store.RunAbandoned, ReportHeadMoved, "the PR head moved to "+textx.ShortSHA(head))
 	// The push skipped the check after the stage it cut short; its roles are
 	// settled now, so a stray edit is caught before the checkout switches.
 	if err := rd.checkTree(ctx, ran); err != nil {
-		return nil, fmt.Errorf("pipeline: restart on %s: %w", textx.ShortSHA(head), err)
+		return nil, nil, fmt.Errorf("pipeline: restart on %s: %w", textx.ShortSHA(head), err)
 	}
 
 	sw, err := rd.in.Switch(ctx, head)
 	if err != nil {
-		return nil, fmt.Errorf("pipeline: restart on %s: %w", textx.ShortSHA(head), err)
+		return nil, nil, fmt.Errorf("pipeline: restart on %s: %w", textx.ShortSHA(head), err)
 	}
 	target := cmp.Or(sw.TargetSHA, head)
 	rd.restarts++
@@ -206,13 +298,17 @@ func (rd *round) restart(ctx context.Context, head string, runs map[string]*stor
 	}
 	rd.mu.Unlock()
 	if err := os.MkdirAll(rd.dir, 0o700); err != nil {
-		return nil, fmt.Errorf("pipeline: report dir: %w", err)
+		return nil, nil, fmt.Errorf("pipeline: report dir: %w", err)
 	}
 	if err := rd.setAsideStale(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	msg := fmt.Sprintf("the PR head moved from %s to %s before the judge was prompted: restart %d of %d",
-		textx.ShortSHA(from), textx.ShortSHA(target), rd.restarts, rd.in.MaxRestarts)
+	when := "before the judge was prompted"
+	if own != nil {
+		when += " for the candidates"
+	}
+	msg := fmt.Sprintf("the PR head moved from %s to %s %s: restart %d of %d",
+		textx.ShortSHA(from), textx.ShortSHA(target), when, rd.restarts, rd.in.MaxRestarts)
 	if len(cut) > 0 {
 		msg += " (cut short: " + strings.Join(cut, ", ") + ")"
 	}
@@ -224,10 +320,14 @@ func (rd *round) restart(ctx context.Context, head string, runs map[string]*stor
 			continue
 		}
 		if runs[role.Name], err = rd.newRun(ctx, role, rd.in.Kind); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
-	return rd.newRun(ctx, rd.judge, rd.in.Kind)
+	if judgeRun, err = rd.newRun(ctx, rd.judge, rd.in.Kind); err != nil || own == nil {
+		return judgeRun, nil, err
+	}
+	own, err = rd.newRun(ctx, rd.judge, store.RunOwnPass)
+	return judgeRun, own, err
 }
 
 // settleCut ends role's run when the push cut it short: a turn still in

@@ -256,6 +256,33 @@ func TestRenderGolden(t *testing.T) {
 	deltaCheckMerged := deltaCheck
 	deltaCheckMerged.BaseMerged = true
 
+	// A round whose judge does its own pass while the reviewers work: the
+	// own-pass prompt (no reports, no posting fields) per round kind, then
+	// the candidates phase of the usual prompts.
+	ownDir := "/Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/"
+	ownPass := func(mode string) JudgeData {
+		d := judgeFixture()
+		d.Mode, d.Phase, d.OwnFindings, d.Reports = mode, PhaseOwnPass, ownDir+OwnFindingsFile, nil
+		return d
+	}
+	ownRereview := ownPass("rereview")
+	ownRereview.NotesPath, ownRereview.NotesHarness = withNotes.NotesPath, withNotes.NotesHarness
+	ownRereview.ThreadsFile, ownRereview.ThreadSummary = withNotes.ThreadsFile, withNotes.ThreadSummary
+	ownRecovery := ownPass("recovery")
+	ownRecovery.FormerLogins = []string{"alice"}
+	ownBlind := ownPass("initial")
+	ownBlind.DryRun, ownBlind.Blind = true, true
+	ownDryRun := ownPass("initial")
+	ownDryRun.DryRun, ownDryRun.SelfAuthored = true, true
+	ownRestart := ownPass("rereview")
+	ownRestart.RestartedFrom = "f1cc4f9e0d1c2b3a4f5e6d7c8b9a0f1e2d3c4b5a"
+	candidates := func(d JudgeData) JudgeData {
+		d.Phase, d.OwnFindings = PhaseCandidates, ownDir+OwnFindingsFile
+		return d
+	}
+	noOwn := candidates(judgeFixture())
+	noOwn.OwnFindingsMissing = true
+
 	cases := []struct {
 		golden, name string
 		data         any
@@ -264,6 +291,16 @@ func TestRenderGolden(t *testing.T) {
 		{"simplify_rereview_base_merged", "claude-simplify.md", simplifyData(simplifyMerged)},
 		{"judge_recovery_base_merged", "judge-recovery.md", recoveryMerged},
 		{"judge_recovery_delta_check_base_merged", "judge-recovery.md", deltaCheckMerged},
+		{"judge_own_pass_initial", "judge-own-pass.md", ownPass("initial")},
+		{"judge_own_pass_rereview", "judge-own-pass.md", ownRereview},
+		{"judge_own_pass_recovery", "judge-own-pass.md", ownRecovery},
+		{"judge_own_pass_blind", "judge-own-pass.md", ownBlind},
+		{"judge_own_pass_dry_run", "judge-own-pass.md", ownDryRun},
+		{"judge_own_pass_restart", "judge-own-pass.md", ownRestart},
+		{"judge_initial_candidates", "judge-initial.md", candidates(judgeFixture())},
+		{"judge_initial_candidates_no_own", "judge-initial.md", noOwn},
+		{"judge_rereview_candidates", "judge-rereview.md", candidates(withNotes)},
+		{"judge_recovery_candidates", "judge-recovery.md", candidates(judgeFixture())},
 		{"judge_rereview_delta_check", "judge-rereview.md", deltaCheck},
 		// The same check by a judge in a fresh session (its old one is gone,
 		// or the PR's identity migrated): the recovery prompt carries it.
@@ -380,7 +417,7 @@ func checkGolden(t *testing.T, golden, got string) {
 
 func TestEveryDefaultPromptHasAGolden(t *testing.T) {
 	want := []string{"claude-rereview.md", "claude-restart.md", "claude-review.md", "claude-simplify.md", "codex-review.sh", "judge-continue.md",
-		"judge-initial.md", "judge-nudge.md", "judge-recovery.md", "judge-rereview.md", "model-fallback.md", "notes-curate.md", "retro.md", "triage.md"}
+		"judge-initial.md", "judge-nudge.md", "judge-own-pass.md", "judge-recovery.md", "judge-rereview.md", "model-fallback.md", "notes-curate.md", "retro.md", "triage.md"}
 	if got := prompts.Names(); !slices.Equal(got, want) {
 		t.Fatalf("prompts.Names() = %v, want %v (add a golden case)", got, want)
 	}
@@ -780,5 +817,67 @@ func TestRoleLabel(t *testing.T) {
 	}
 	if RoleJudge != "codex-judge" || RoleClaude != "claude-review" || RoleCodexReview != "codex-review" || RoleSimplify != "claude-simplify" {
 		t.Fatal("built-in role names changed")
+	}
+}
+
+// The own-pass prompt runs while the reviewers work: it names the file the
+// pass goes to and the phase in its <magnum> block, and nothing the judge
+// posts with or reads only later (no reports, result file, post-review line
+// or events), whatever the round's kind.
+func TestOwnPassPromptPostsNothing(t *testing.T) {
+	p := prompt(t, "judge-own-pass.md")
+	for _, mode := range []string{"initial", "rereview", "recovery"} {
+		d := judgeFixture()
+		d.Mode, d.Phase, d.OwnFindings = mode, PhaseOwnPass, "/state/reviews/x/judge-own.md"
+		got, err := RenderPrompt(p, d)
+		if err != nil {
+			t.Fatalf("%s: %v", mode, err)
+		}
+		block := got[strings.Index(got, "<magnum>"):]
+		for _, want := range []string{"\nmode: " + mode + "\n", "\nphase: own_pass\n", "\nown_findings: /state/reviews/x/judge-own.md\n", "\ndry_run: false\n"} {
+			if !strings.Contains(block, want) {
+				t.Errorf("%s: the block lacks %q:\n%s", mode, want, got)
+			}
+		}
+		for _, leak := range []string{"reports:", "claude-review", "result_file", "post_review", "post-review", "codex-judge.json",
+			"no_findings_event", "blocking_event"} {
+			if strings.Contains(got, leak) {
+				t.Errorf("%s: the own-pass prompt carries %q:\n%s", mode, leak, got)
+			}
+		}
+		if !strings.Contains(got, "post nothing") {
+			t.Errorf("%s: the own-pass prompt does not say to post nothing:\n%s", mode, got)
+		}
+	}
+}
+
+// The usual judge prompts name a phase and the own pass's file only in the
+// candidates phase of a two-phase round: a round with one judge prompt
+// renders them as before.
+func TestJudgePromptsNamePhaseOnlyInATwoPhaseRound(t *testing.T) {
+	for _, name := range []string{"judge-initial.md", "judge-rereview.md", "judge-recovery.md"} {
+		p := prompt(t, name)
+		one, err := RenderPrompt(p, judgeFixture())
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if strings.Contains(one, "phase") || strings.Contains(one, "own_findings") || strings.Contains(one, "own pass") {
+			t.Errorf("%s names a phase in a one-prompt round:\n%s", name, one)
+		}
+		d := judgeFixture()
+		d.Phase, d.OwnFindings = PhaseCandidates, "/state/reviews/x/judge-own.md"
+		got, err := RenderPrompt(p, d)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		block := got[strings.Index(got, "<magnum>"):]
+		if !strings.Contains(block, "\nphase: candidates\n") || !strings.Contains(block, "\nown_findings: /state/reviews/x/judge-own.md\n") ||
+			!strings.Contains(block, "\npost_review: ") || !strings.Contains(got, "Your own pass") {
+			t.Errorf("%s: candidates phase:\n%s", name, got)
+		}
+		d.OwnFindingsMissing = true
+		if got, _ := RenderPrompt(p, d); !strings.Contains(got, "Your own pass left no /state/reviews/x/judge-own.md") {
+			t.Errorf("%s: a missing own pass is not named:\n%s", name, got)
+		}
 	}
 }

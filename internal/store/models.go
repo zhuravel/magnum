@@ -94,6 +94,9 @@ const (
 	RunContinue = "continue"
 	RunNudge    = "nudge"
 	RunRecovery = "recovery"
+	// RunOwnPass is the judge's own pass, prompted with the reviewers
+	// (pipeline); its continuations on a fallback model keep the kind.
+	RunOwnPass = "own_pass"
 )
 
 // Run states.

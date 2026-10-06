@@ -89,6 +89,7 @@ flowchart LR
     W --> R1[claude-review pane]
     W --> R2[codex-review pane]
     W --> R3[claude-simplify pane<br/>first round, then after big changes]
+    W -- own pass, with the reviewers --> J
     R1 & R2 & R3 -- reports on disk --> J[codex-judge pane]
     J -- one marked review --> GH
     GH -- new push --> D
@@ -106,15 +107,16 @@ flowchart LR
    repositories get a worktree next to their clone. Checkouts are detached, so they never collide with
    branches you have open yourself.
 4. **Review.** Every role from the pipeline configuration gets a pane: candidate reviewers and the
-   read-only simplifier (it proposes simplifications in a report, edits nothing) run in parallel, a
-   checkout a role left modified is caught and restored, and the judge gets all reports plus its own
-   full pass.
+   read-only simplifier (it proposes simplifications in a report, edits nothing) run in parallel, the
+   judge does its own full pass alongside them, a checkout a role left modified is caught and restored,
+   and once both ended the judge weighs every report against its own pass.
 5. **Post and verify.** The judge posts one review with inline comments and an invisible run marker
    through `magnum post-review`, which checks every inline comment's line against the PR's diff first;
    Magnum verifies on GitHub that exactly that review by exactly that identity exists for that commit.
-6. **Repeat and clean up.** New commits re-prompt the same sessions. A push while the reviewers still
-   run restarts them in place on the new head (at most twice per round); a push while the judge works
-   is noted on the posted review and re-reviewed right after the quiet period. A closed or merged PR
+6. **Repeat and clean up.** New commits re-prompt the same sessions. A push while the reviewers (and the
+   judge's own pass) still run restarts them in place on the new head (at most twice per round); a push
+   while the judge weighs the reports is noted on the posted review and re-reviewed right after the
+   quiet period. A closed or merged PR
    releases its folder after a grace period, with teardown hooks for its databases.
 
 ## Quick start
@@ -493,9 +495,26 @@ timeout = "90m"
 ```
 
 Non-judge roles run in parallel unless `after = [...]` orders them; the judge runs last and gets every
-other role's report. No role may edit the checkout: after each stage Magnum compares HEAD and `git status`
-with what the stage found, and a role that changed them gets a `round.checkout_dirty` warning and the
-checkout reset to the PR head (`git reset --hard`, `git clean -fd`) before anything else runs on it.
+other role's report. The judge's own full pass needs no report, so by default it starts with the
+reviewers: `[pipeline] judge_own_pass = "parallel"` (a `[[watch]]` may set its own) prompts the judge
+with `judge-own-pass.md` in the first stage, and it reads the code, runs its checks and writes its proven
+findings to `judge-own.md` in the report directory, posting nothing; once every reviewer and that pass
+ended, whichever comes last, its usual prompt names `phase: candidates` and that file, and it judges the
+reports against it, posts and updates the notes. Over 54 rounds a first review took 32 minutes at the
+median (51 at p90), the reviewers 17 and then the judge 15 one after the other; overlapping the own pass
+leaves about the longer of the two plus 5 to 8 minutes of judging and posting, some 9 minutes off the
+median at about the same usage. The own pass is a run of its own (kind `own_pass`, `round.own_pass`
+events, `codex-judge own pass` on the board's card, in `magnum stats` and `own_pass` in `prs --json`;
+the state cell reads `reviewers+judge` while both work), bounded by the judge's `timeout`; a push cuts
+it short and the restart prompts it again on the new head, naming the head it moved from, and a pass
+that left no file only makes the candidates prompt ask for it. Crash recovery counts it with the
+reviewers (a daemon restart during it starts the round again), and a usage limit there pauses the round
+at the candidates prompt, whose turn the paused round then continues. A judge alone (a delta check, a continued
+turn, a round whose reviewers were all dropped) gets one prompt, and `judge_own_pass = "after"` keeps one
+prompt after the reviewers. No role may edit the checkout: after each stage Magnum compares HEAD and `git status`
+with what the stage found (the judge's own pass included while it works), and a role that changed them
+gets a `round.checkout_dirty` warning and the checkout reset to the PR head (`git reset --hard`, `git
+clean -fd`) before anything else runs on it.
 
 A session role's turn ends when herdr shows its agent idle on two ticks in a row. Claude Code also ends
 its turn while work it started in the background runs (a command run in the background or moved there by

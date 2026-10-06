@@ -6,6 +6,7 @@ package cli
 // total, all read from the registry.
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"io"
@@ -94,19 +95,29 @@ func runActive(r store.Run) bool {
 	return slices.Contains([]string{store.RunPending, store.RunSubmitted, store.RunWorking}, r.State)
 }
 
+// ownPassStage names a judge's own pass, its runs of kind own_pass, where it
+// is timed apart from the judge (the round's stages, `magnum stats`):
+// "codex-judge own pass".
+func ownPassStage(role string) string { return actRoleName(role) + " own pass" }
+
 // roundTimings computes the stages of a round from its runs (one round,
 // any order) and the checkout before it: fetch/checkout, each role from its
 // first submission (or creation) to its last end in the order the roles
-// started (the judge last), the judge's verification (its run's end to the
-// verification) and the total. A stage still in flight counts to now. Nil
-// without runs.
+// started (the judge last, its own pass right before it as a stage of its
+// own, ownPassStage), the judge's verification (its main run's end to the
+// verification) and the total. A stage still in flight counts to now. The
+// round's kind is its first run's that is not the own pass. Nil without
+// runs.
 func roundTimings(runs []store.Run, co checkoutSpan, isJudge func(string) bool, now time.Time) *tui.RoundTimings {
 	if len(runs) == 0 {
 		return nil
 	}
 	runs = slices.Clone(runs)
 	slices.SortStableFunc(runs, func(a, b store.Run) int { return a.CreatedAt.Compare(b.CreatedAt) })
-	t := &tui.RoundTimings{Round: runs[0].Round, Kind: runs[0].Kind}
+	t := &tui.RoundTimings{Round: runs[0].Round}
+	if i := slices.IndexFunc(runs, func(r store.Run) bool { return r.Kind != store.RunOwnPass }); i >= 0 {
+		t.Kind = runs[i].Kind
+	}
 	first, last := runs[0].CreatedAt, time.Time{}
 	if co.found {
 		t.Stages = append(t.Stages, tui.StageTiming{Name: timingStageCheckout, Duration: co.end.Sub(co.start), Failed: co.failed})
@@ -119,16 +130,24 @@ func roundTimings(runs []store.Run, co checkoutSpan, isJudge func(string) bool, 
 		start, end time.Time
 		running    bool
 		lastState  string
-		judge      bool
+		judge, own bool // own: the judge's own pass
 		lastRun    store.Run
 	}
+	type spanKey struct {
+		role string
+		own  bool
+	}
 	var roles []*roleSpan
-	byRole := map[string]*roleSpan{}
+	byRole := map[spanKey]*roleSpan{}
 	for _, r := range runs {
-		rs := byRole[r.Role]
+		k := spanKey{r.Role, r.Kind == store.RunOwnPass}
+		rs := byRole[k]
 		if rs == nil {
-			rs = &roleSpan{name: actRoleName(r.Role), judge: isJudge != nil && isJudge(r.Role)}
-			byRole[r.Role] = rs
+			rs = &roleSpan{name: actRoleName(r.Role), judge: isJudge != nil && isJudge(r.Role), own: k.own}
+			if k.own {
+				rs.name = ownPassStage(r.Role)
+			}
+			byRole[k] = rs
 			roles = append(roles, rs)
 		}
 		start := r.CreatedAt
@@ -150,15 +169,16 @@ func roundTimings(runs []store.Run, co checkoutSpan, isJudge func(string) bool, 
 		}
 		t.Running = t.Running || runActive(r) || r.State == store.RunEnded // ended: its report or review not collected yet
 	}
-	slices.SortStableFunc(roles, func(a, b *roleSpan) int {
-		if a.judge != b.judge {
-			if a.judge {
-				return 1
-			}
-			return -1
+	rank := func(rs *roleSpan) int {
+		switch {
+		case rs.own:
+			return 1
+		case rs.judge:
+			return 2
 		}
 		return 0
-	})
+	}
+	slices.SortStableFunc(roles, func(a, b *roleSpan) int { return cmp.Compare(rank(a), rank(b)) })
 	var verify *tui.StageTiming
 	for _, rs := range roles {
 		st := tui.StageTiming{Name: rs.name, Running: rs.running,
@@ -170,7 +190,7 @@ func roundTimings(runs []store.Run, co checkoutSpan, isJudge func(string) bool, 
 			st.Duration = rs.end.Sub(rs.start)
 		}
 		t.Stages = append(t.Stages, st)
-		if !rs.judge {
+		if !rs.judge || rs.own {
 			continue
 		}
 		j := rs.lastRun

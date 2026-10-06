@@ -444,6 +444,48 @@ func TestStatsComputeEdges(t *testing.T) {
 	}
 }
 
+// statsOwnPassRound is a finished round of PR 5: claude-review from 1m to
+// 19m, the judge's own pass (kind own_pass) prompted with it from 1m to
+// 16m, and the judge's main run, created up front, prompted at 20m and
+// ended at 34m.
+func statsOwnPassRound(t0 time.Time) (judge, own store.RoundRun, runs []store.RoundRun) {
+	claude := statsRR("c", 1, 5, 1, store.RoleClaude, store.RunVerified, t0.Add(time.Minute))
+	claude.SubmittedAt, claude.EndedAt = statsOpt(t0.Add(time.Minute)), statsOpt(t0.Add(19*time.Minute))
+	judge = statsRR("j", 1, 5, 1, store.RoleJudge, store.RunVerified, t0.Add(time.Minute))
+	judge.SubmittedAt, judge.EndedAt, judge.VerifiedAt = statsOpt(t0.Add(20*time.Minute)), statsOpt(t0.Add(34*time.Minute)), statsOpt(t0.Add(35*time.Minute))
+	own = statsRR("o", 1, 5, 1, store.RoleJudge, store.RunVerified, t0.Add(time.Minute+time.Second))
+	own.Kind = store.RunOwnPass
+	own.SubmittedAt, own.EndedAt = statsOpt(t0.Add(time.Minute)), statsOpt(t0.Add(16*time.Minute))
+	return judge, own, []store.RoundRun{claude, judge, own}
+}
+
+// The judge's own pass is timed under "<role> own pass", so the judge's
+// durations are its main run's alone and do not start with the reviewers.
+func TestStatsDurationsKeepOwnPassApart(t *testing.T) {
+	t0 := statsOct(3, 10, 0)
+	_, _, runs := statsOwnPassRound(t0)
+	r := statsCompute(runs, nil, nil, func(role string) bool { return role == store.RoleJudge }, t0.Add(-time.Hour), t0.Add(time.Hour), "")
+	for role, secs := range map[string]int64{"claude-review": 18 * 60, "codex-judge own pass": 15 * 60, "codex-judge": 14 * 60, "round": 34 * 60} {
+		if d, ok := r.Total.Durations[role]; !ok || d.N != 1 || d.MedianSeconds != secs {
+			t.Errorf("%s = %+v (%v), want one of %ds", role, d, ok, secs)
+		}
+	}
+}
+
+// The round's outcome and the findings it posted come from the judge's main
+// run, never from its own pass, though the own pass was created after it.
+func TestStatsJudgeResultIgnoresTheOwnPass(t *testing.T) {
+	t0 := statsOct(3, 10, 0)
+	judge, own, _ := statsOwnPassRound(t0)
+	judge.Outcome, judge.ResultJSON = store.Ptr("posted"), store.Ptr(`{"findings":{"P1":2}}`)
+	own.Outcome, own.ResultJSON = store.Ptr("error"), store.Ptr(`{"findings":{"P0":5}}`)
+	r := statsCompute([]store.RoundRun{judge, own}, nil, nil, func(role string) bool { return role == store.RoleJudge },
+		t0.Add(-time.Hour), t0.Add(time.Hour), "")
+	if !reflect.DeepEqual(r.Total.Rounds.Outcomes, map[string]int{"posted": 1}) || !reflect.DeepEqual(r.Total.FindingsPosted, map[string]int{"P1": 2}) {
+		t.Errorf("outcomes = %v, findings posted = %v; want posted, P1 2", r.Total.Rounds.Outcomes, r.Total.FindingsPosted)
+	}
+}
+
 func TestStatsComputeSourcesDeduplicatesAndSkipsEmpty(t *testing.T) {
 	t0 := statsOct(3, 10, 0)
 	fs := []store.Finding{

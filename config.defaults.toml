@@ -177,6 +177,9 @@ timeout = "30m"                   # a curator turn that takes longer is abandone
 prompts_dir = "{{repo}}/prompts"  # a prompt name reads prompts_dir/<name>, else magnum's built-in copy;
                                   # {{repo}} is the checkout magnum runs from, none for an installed binary
                                   # (built-in prompts; point it at e.g. ~/.config/magnum/prompts to override)
+judge_own_pass = "parallel"       # the judge does its own pass (its own_pass prompt) while the reviewers work
+                                  # and judges their reports once both ended; "after": one judge prompt after
+                                  # the reviewers. A judge alone (delta check, continue) gets one prompt anyway
 
 # Agent CLIs: codex, claude, droid and omp are built in (values below are their defaults); every key is
 # optional and overrides only itself. Any other herdr agent kind (pi, gemini, ...) can be declared too.
@@ -253,6 +256,7 @@ rereview = "judge-rereview.md"
 continue_prompt = "judge-continue.md"
 recovery = "judge-recovery.md"
 nudge = "judge-nudge.md"
+own_pass = "judge-own-pass.md"        # its own pass, with the reviewers ([pipeline] judge_own_pass = "parallel")
 output = "codex-judge.json"           # the result file in the round's report directory
 timeout = "90m"
 aliases = ["judge"]
@@ -371,6 +375,7 @@ aliases = ["simplify"]
 # skip_trivial_deltas = []              # overrides [daemon] skip_trivial_deltas ([] = re-review every push)
 # rereview_min_lines = 0                # overrides [daemon] rereview_min_lines / rereview_max_wait (0: no threshold)
 # delta_check = false                   # overrides [daemon] delta_check (false: a small delta waits for a full round)
+# judge_own_pass = "after"              # overrides [pipeline] judge_own_pass ("after": one judge prompt after the reviewers)
 # request_teams = ["backend"]           # review requests for these team slugs start a round like one for you
 # roles = ["codex-judge", "claude-review", "codex-review", "claude-simplify"]   # omitted or [] = every [[role]]
 # trackers = ["https://linear.app/your-org/issue/PR-{num}"]   # [board] trackers for this owner's PRs: an issue key

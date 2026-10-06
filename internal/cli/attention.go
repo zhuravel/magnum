@@ -244,18 +244,7 @@ func attentionCollect(ctx context.Context, d *actDeps) ([]attentionItem, error) 
 		if err != nil || len(runs) == 0 {
 			continue
 		}
-		last := runs[0]
-		for _, r := range runs[1:] {
-			if r.Round > last.Round || (r.Round == last.Round && r.CreatedAt.After(last.CreatedAt)) {
-				last = r
-			}
-		}
-		var judge *store.Run
-		for i := range runs {
-			if runs[i].Round == last.Round && actIsJudge(d.Cfg, runs[i].Role) {
-				judge = &runs[i]
-			}
-		}
+		judge := latestRoundJudge(d.Cfg, runs)
 		if judge == nil || judge.State != store.RunFailed {
 			continue
 		}
@@ -315,6 +304,25 @@ func attentionAgent(snap herdr.Snapshot, s store.Session) (herdr.AgentInfo, bool
 		}
 	}
 	return herdr.AgentInfo{}, false
+}
+
+// latestRoundJudge is the judge run of runs' latest round (the highest
+// round number), whose state says how the round ended: the newest judge run
+// of that round that is not its own pass (kind own_pass, prompted with the
+// reviewers); nil when there is none.
+func latestRoundJudge(cfg *config.Config, runs []store.Run) *store.Run {
+	top := 0
+	for _, r := range runs {
+		top = max(top, r.Round)
+	}
+	var judge *store.Run
+	for i := range runs {
+		r := &runs[i]
+		if r.Round == top && r.Kind != store.RunOwnPass && actIsJudge(cfg, r.Role) && (judge == nil || !r.CreatedAt.Before(judge.CreatedAt)) {
+			judge = r
+		}
+	}
+	return judge
 }
 
 // attentionPick prefers the judge session with a pane, then any with a pane.
