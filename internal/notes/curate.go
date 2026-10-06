@@ -252,8 +252,13 @@ var (
 	prRefRe = regexp.MustCompile(`(?i)(?:\bPRs?[ \t#-]*\d+\b|\bpull/\d+|\bpull request #?\d+|(?:^|[^\w&/])#\d{2,}\b)`)
 	// probeRe matches the name of a one-off probe file.
 	probeRe = regexp.MustCompile(`(?i)(?:^|[/_.-])probes?(?:[/_.-]|$)`)
-	// probeTextRe finds probe file names in notes text.
-	probeTextRe = regexp.MustCompile(`(?i)[\w./-]*(?:^|[/_.-])probes?[_.-][\w./-]*`)
+	// pathTokenRe finds the tokens of notes text that may name a file: runs
+	// of word characters, dots, slashes and dashes.
+	pathTokenRe = regexp.MustCompile(`[\w./-]+`)
+	// fileExtRe matches a file extension ending a token: short and lower
+	// case, so a JavaScript global's property (window.PROBE_SELECTOR) or a
+	// setting's key (probe.enabled) is none.
+	fileExtRe = regexp.MustCompile(`\.[a-z][a-z0-9]{0,4}$`)
 	// homePathRe matches a machine-specific path: a home directory.
 	homePathRe = regexp.MustCompile(`(?:/Users|/home)/[^/\s` + "`" + `'"]+/`)
 	// headingRe matches a "## " section heading.
@@ -370,9 +375,11 @@ func Validate(p Proposal, c Check) []string {
 			add("harness file %s is one pull request's probe: merge what is general into a parameterized script, or delete it", b.Path)
 		}
 	}
-	for _, m := range probeTextRe.FindAllString(text, -1) {
-		add("%s names a probe file (%s)", scratchProposal, strings.Trim(m, "./-_"))
-		break
+	for _, m := range pathTokenRe.FindAllString(text, -1) {
+		if tok := strings.Trim(m, "."); probeFileName(tok) {
+			add("%s names a probe file (%s)", scratchProposal, tok)
+			break
+		}
 	}
 	for _, b := range c.Base.Files {
 		if probeName(b.Path, c.PRNumbers) && containsToken(text, b.Path) {
@@ -478,6 +485,19 @@ func checkChange(what string, ch Change, actions []string) []string {
 // heading marks.
 func normalize(s string) string {
 	return strings.Join(strings.Fields(strings.ToLower(strings.Trim(s, "# \t"))), " ")
+}
+
+// probeFileName reports whether a token of notes text names a probe file: a
+// file name (with an extension) or a path (with a slash) whose name, or a
+// directory of it, says probe. A bare identifier that says PROBE
+// (window.PROBE_SELECTOR, PROBE_TIMEOUT) names no file; a harness file the
+// notes name by a name without either is checked against the harness itself.
+func probeFileName(tok string) bool {
+	ext := fileExtRe.FindString(tok)
+	if ext == "" && !strings.Contains(tok, "/") {
+		return false
+	}
+	return probeRe.MatchString(strings.TrimSuffix(tok, ext))
 }
 
 // probeName reports whether a harness path is a one-off probe: "probe" or

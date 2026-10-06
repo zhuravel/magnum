@@ -2368,3 +2368,14 @@ editing history. Code, config comments and prompts reference these by their head
   repository while the operator is away. Rejected: `git merge-file --diff3` on temp files (a fake git in every
   test, files with notes text on disk); re-validating the merge with `notes.Validate` (the judges' changes
   carry no curator reasons; the operator reviews the merge); applying a clean merge without review.
+- **Only a file name or a path names a probe file** (2026-10-06, amends "A curator proposes curated notes; the
+  operator applies or rejects"). A curation was stored as invalid after its nudge with "proposal.md names a
+  probe file (window.PROBE_SELECTOR)": the check matched any token with "probe" between separators, and that
+  is a JavaScript global the notes use in a generic browser-probe technique. `notes.Validate` now takes a token
+  of the notes for a probe file only when it is a file name (a short lower-case extension: `.rb`, `.sh`,
+  `.json`) or a path (a slash) whose name or a directory of it says probe (`coupon_probe.sh`,
+  `qa/probe_coupons.rb`, `spec/probes/coupon_spec.rb`, `probes/`); bare identifiers (`window.PROBE_SELECTOR`,
+  `PROBE_TIMEOUT`, `MY_PROBE_TIMEOUT`, `window.PROBE`) and setting keys (`probe.enabled`) pass. A probe in the
+  harness the notes name by any other name is still caught by its harness name, as before. Rejected: matching
+  the report directory's files (a curation has none; the judges keep one round's probes there and the notes
+  must not name them, which the file-name rule already catches).

@@ -270,6 +270,27 @@ func TestValidateRejectsOnePullRequestsContent(t *testing.T) {
 	}
 }
 
+// Only a file name or a path with "probe" in it names a probe file: a
+// browser-probe technique's JavaScript global or a constant that says
+// PROBE is no file, while a probe script by its name or its path still is.
+func TestValidateTellsProbeFilesFromProbeIdentifiers(t *testing.T) {
+	check := Check{Base: baseState(), PRNumbers: []int{11920}}
+	identifiers := goodNotes + "\n## Browser QA\nSet `window.PROBE_SELECTOR` to the element under test; raise `PROBE_TIMEOUT` " +
+		"(or `MY_PROBE_TIMEOUT`, `window.PROBE`) for a slow page, and `probe.enabled` turns it on.\n"
+	ch := goodChanges()
+	ch.Sections = append(ch.Sections, Change{Name: "Browser QA", Action: ActionAdded, Reason: "a generic way to probe any page"})
+	if problems := Validate(proposal(t, baseState(), identifiers, goodFiles(), ch), check); len(problems) != 0 {
+		t.Errorf("identifiers taken for probe files: %q", problems)
+	}
+	for _, name := range []string{"qa/probe_coupons.rb", "coupon_probe.sh", "spec/probes/coupon_spec.rb", "probes/"} {
+		text := goodNotes + "\n## Browser QA\nRun `" + name + "` first.\n"
+		problems := Validate(proposal(t, baseState(), text, goodFiles(), ch), check)
+		if !slices.ContainsFunc(problems, func(p string) bool { return strings.Contains(p, "proposal.md names a probe file") }) {
+			t.Errorf("%s: problems %q lack the probe file", name, problems)
+		}
+	}
+}
+
 // What the curator did not write, or wrote outside plain files, is a
 // problem of the proposal.
 func TestReadProposalNamesWhatIsMissing(t *testing.T) {

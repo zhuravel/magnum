@@ -1091,7 +1091,8 @@ scripts or deleted. It writes `proposal.md`, a `harness/` directory and `changes
 section and file carries a one-line reason saying how it helps a future review, and every miss it was given
 is noted (with the section that now covers it) or skipped (with a one-line reason). Magnum checks the
 proposal: every harness file named in the notes, plain files only, a reason for every item kept, every miss
-accounted for, no pull request number, branch name or probe file, no secret and no home directory path
+accounted for, no pull request number, branch name or probe file (a file name or path that says probe, not
+an identifier such as `window.PROBE_SELECTOR`), no secret and no home directory path
 (size is not checked). A proposal that changes nothing is invalid, unless it skips every miss it was given:
 then you confirm the skips. An invalid proposal gets one nudge naming its problems, then is kept as
 invalid; the live notes never change during a curation. One curation runs at a time, and none starts while
