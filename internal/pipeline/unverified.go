@@ -99,9 +99,9 @@ func (rd *round) findUnverified(ctx context.Context) *unverifiedRuns {
 // posted its review on this head while GitHub could not be asked
 // (findUnverified) and GitHub now shows it: that review becomes the round's
 // result, recorded on the runs that posted it, and handled as after any post
-// (findings, duplicates, local paths, a stale CHANGES_REQUESTED). nil lets
-// the round run; when there was such a run, its judge's review carries the
-// earlier marker (round.unverified).
+// (findings, duplicates, local paths, the footer, a stale
+// CHANGES_REQUESTED). nil lets the round run; when there was such a run, its
+// judge's review carries the earlier marker (round.unverified).
 func (rd *round) adoptUnverified(ctx context.Context) func() (RoundResult, error) {
 	u := rd.findUnverified(ctx)
 	if u == nil {
@@ -173,6 +173,7 @@ func (rd *round) adoptUnverified(ctx context.Context) func() (RoundResult, error
 		rd.recordFindings(ctx, u.markers[0], &r)
 		rd.handleDuplicates(ctx, found)
 		rd.checkLocalPaths(ctx, found)
+		rd.appendFooter(ctx, found, &r)
 		rd.dismissStale(ctx, res.Event, found.id, found.url)
 	}
 	return func() (RoundResult, error) { return rd.done(ctx, outcome, verr) }

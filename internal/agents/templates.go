@@ -185,13 +185,9 @@ type JudgeData struct {
 	NoFindingsEvent string
 	BlockingEvent   string // REQUEST_CHANGES | COMMENT
 	SelfAuthored    bool
-	// Footer is the posting identity's review footer
-	// (config.Identity.Footer), which the judge appends verbatim as the
-	// review's last line; "" = none, and the prompts leave the field out.
-	Footer     string
-	Reports    []Report // one per non-judge role of the round, in pipeline order
-	ResultFile string   // <report dir>/<the judge's output>, e.g. codex-judge.json
-	DryRun     bool
+	Reports         []Report // one per non-judge role of the round, in pipeline order
+	ResultFile      string   // <report dir>/<the judge's output>, e.g. codex-judge.json
+	DryRun          bool
 	// Blind: an evaluation replay (pipeline.RoundInput.Blind), rendered as
 	// `blind: true`; the skill then judges the local diff of HeadSHA only.
 	Blind bool

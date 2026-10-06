@@ -198,11 +198,9 @@ func TestRenderGolden(t *testing.T) {
 		d.ReportPath = filepath.Join(filepath.Dir(d.ReportPath), "claude-simplify.md")
 		return d
 	}
-	// The <magnum> fields of an identity's footer and the repository notes
-	// (with a threads file, as a re-review of a reviewed PR has).
+	// The <magnum> fields of the repository notes (with a threads file, as a
+	// re-review of a reviewed PR has).
 	withNotes := judgeFixture()
-	withNotes.Footer = "_Automated review by [Magnum](https://github.com/zhuravel/magnum). Reply on a thread with `fixed`, `not a bug: <why>` or `won't fix: <why>`; " +
-		"simplifications are optional. New pushes are re-reviewed automatically._"
 	withNotes.NotesPath = "/Users/bohdan/Projects/magnum/state/notes/talkable/talkable.md"
 	withNotes.NotesHarness, withNotes.NotesHarnessMore = []string{"fixtures/", "run-spec.sh"}, 0
 	withNotes.ThreadsFile = "/Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/review-threads.json"
@@ -237,10 +235,10 @@ func TestRenderGolden(t *testing.T) {
 		{"judge_nudge", "judge-nudge.md", judgeFixture()},
 		{"judge_recovery", "judge-recovery.md", judgeFixture()},
 		{"judge_rereview_effort", "judge-rereview.md", effortJudge},
-		{"judge_initial_notes_footer", "judge-initial.md", withNotes},
-		{"judge_rereview_notes_footer", "judge-rereview.md", withNotes},
-		{"judge_continue_notes_footer", "judge-continue.md", withNotes},
-		{"judge_recovery_notes_footer", "judge-recovery.md", withNotes},
+		{"judge_initial_notes", "judge-initial.md", withNotes},
+		{"judge_rereview_notes", "judge-rereview.md", withNotes},
+		{"judge_continue_notes", "judge-continue.md", withNotes},
+		{"judge_recovery_notes", "judge-recovery.md", withNotes},
 		{"claude_initial", "claude-review.md", roleFixture()},
 		{"claude_rereview", "claude-rereview.md", roleFixture()},
 		{"claude_rereview_forced_effort", "claude-rereview.md", forcedRole},

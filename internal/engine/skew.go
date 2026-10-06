@@ -25,9 +25,11 @@ import (
 // renderer, every prompt file the configured roles name (judges with
 // agents.JudgeData, other session roles with agents.RoleData in each mode,
 // shell roles' command or full-line template through agents.ShellLine), the
-// model-fallback prompt, the triage prompt and the retro prompt. Each template is rendered twice, once with
-// every field set and once with the optional ones empty, so both sides of
-// an {{if}} run. It returns how many renders passed and every failure,
+// model-fallback prompt, the triage prompt, the retro prompt and every
+// identity's review footer template (config.RenderFooter, which magnum
+// renders after each verified review). Each template is rendered twice,
+// once with every field set and once with the optional ones empty, so both
+// sides of an {{if}} run. It returns how many renders passed and every failure,
 // joined: a template field this binary's data lacks (a prompt edited for a
 // newer build) fails here instead of in a round.
 func CheckPrompts(cfg *config.Config) (int, error) {
@@ -96,6 +98,19 @@ func CheckPrompts(cfg *config.Config) (int, error) {
 	} else {
 		render("retro prompt", p, sampleData[retroData](true))
 		render("retro prompt", p, retroData{})
+	}
+	for _, id := range cfg.Identities {
+		tmpl := id.Footer()
+		if tmpl == "" {
+			continue
+		}
+		for _, d := range []config.FooterData{sampleData[config.FooterData](true), sampleData[config.FooterData](false)} {
+			if _, err := config.RenderFooter(tmpl, d); err != nil {
+				errs = append(errs, fmt.Errorf("identity %s: review_footer: %w", id.Name, err))
+				break
+			}
+			ok++
+		}
 	}
 	return ok, errors.Join(errs...)
 }

@@ -103,9 +103,10 @@ func TestHappyPathInitialRound(t *testing.T) {
 	if codexRun.PromptText == "" || codexRun.SubmittedAt == nil || codexRun.EndedAt == nil {
 		t.Errorf("codex run = %+v", codexRun)
 	}
-	// GitHub: marker lookup plus REST login check.
-	if len(e.gh.markerCalls) == 0 || e.gh.markerCalls[0] != "magnum:run="+judgeRun.ID || len(e.gh.restCalls) != 1 {
-		t.Errorf("github calls: markers %v rest %v", e.gh.markerCalls, e.gh.restCalls)
+	// GitHub: marker lookup plus REST login check, then the footer's
+	// author-checked edit (one more REST read, one update).
+	if len(e.gh.markerCalls) == 0 || e.gh.markerCalls[0] != "magnum:run="+judgeRun.ID || len(e.gh.restCalls) != 2 || len(e.gh.updates) != 1 {
+		t.Errorf("github calls: markers %v rest %v updates %d", e.gh.markerCalls, e.gh.restCalls, len(e.gh.updates))
 	}
 	if len(e.gh.dismissed) != 0 {
 		t.Errorf("dismissed = %v", e.gh.dismissed)

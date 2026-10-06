@@ -1,19 +1,23 @@
 package pipeline
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"regexp"
 	"slices"
 	"strings"
 
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/github"
+	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // Checks of a verified review that never change the round's outcome: a
 // review posted twice under the run's marker, local paths in the posted
-// text, failures of the review machine the judge kept out of the review.
+// text, failures of the review machine the judge kept out of the review;
+// and the identity's footer, which magnum appends to it.
 
 // ReviewDeleter is implemented by a GitHub client that can delete a
 // pending (unsubmitted) review: DELETE /repos/{o}/{r}/pulls/{n}/reviews/{id}.
@@ -64,53 +68,110 @@ func (rd *round) handleDuplicates(ctx context.Context, p *postedReview) {
 		"kept": p.id, "duplicates": p.duplicates, "pending": p.pending, "deleted": deleted})
 }
 
-// fixFooter is the safety net for the identity's footer: GitHub keeps an
-// HTML block (</details>, a comment) running until a blank line, so a
-// footer glued to the line before it is posted as raw text. A verified
-// review whose body shows that gets the blank line (round.footer_fixed),
-// through the edit AppendToReview makes.
-func (rd *round) fixFooter(ctx context.Context, p *postedReview) {
-	footer := rd.idCfg.Footer()
-	if p == nil || p.id == 0 || footer == "" {
+// footerMarker starts the footer magnum appends to a verified review
+// (appendFooter): a later edit replaces everything from it on instead of
+// adding a second footer, and AppendToReview puts its notes above it.
+const footerMarker = "<!-- magnum:footer -->"
+
+// oldJudgeFooter starts the footer judges wrote themselves before magnum
+// appended one (the default review_footer until 2026-10-06): a review that
+// carries it gets no second footer.
+const oldJudgeFooter = "_Automated review by [Magnum](https://github.com/zhuravel/magnum)."
+
+// simplifyAlias is the alias of the role that proposes simplifications
+// (config.defaults.toml; `magnum review --simplify` means it too).
+const simplifyAlias = "simplify"
+
+// appendFooter renders the identity's footer template for the verified
+// review p (res is the judge's result: whether the review is clean) and
+// appends it, after a blank line and footerMarker, through the
+// author-checked edit AppendToReview makes (round.footer). It replaces a
+// footer magnum appended before, so verifying a review again changes
+// nothing. review_footer = "" appends nothing; a footer that does not
+// render, or an edit GitHub refuses, is a warning.
+func (rd *round) appendFooter(ctx context.Context, p *postedReview, res *judgeResult) {
+	tmpl := rd.idCfg.Footer()
+	if p == nil || p.id == 0 || tmpl == "" || rd.in.DryRun {
 		return
 	}
-	if _, glued := footerParagraph(p.body, footer); !glued {
+	text, err := config.RenderFooter(tmpl, rd.footerData(p, res))
+	if err != nil {
+		rd.warn(ctx, "review %d: the footer does not render: %v", p.id, err)
+		return
+	}
+	if text == "" {
 		return
 	}
 	changed, err := rd.r.editReview(ctx, rd.owner, rd.name, rd.in.PR.Number, p.id, func(body string) (string, bool) {
-		return footerParagraph(body, footer)
+		return withFooter(body, footerMarker+"\n"+text)
 	})
 	if err != nil {
-		rd.warn(ctx, "review %d: could not give its footer its own paragraph: %v", p.id, err)
+		rd.warn(ctx, "review %d: could not append the footer: %v", p.id, err)
 		return
 	}
 	if changed {
-		rd.event(ctx, "info", "round.footer_fixed", fmt.Sprintf("review %d: the footer was glued to the line before it; added the blank line GitHub needs to render it", p.id),
-			map[string]any{"review_id": p.id})
+		rd.event(ctx, "info", "round.footer", fmt.Sprintf("review %d: appended the identity's footer", p.id), map[string]any{"review_id": p.id})
 	}
 }
 
-// footerParagraph gives footer, its last occurrence in body, the blank line
-// before it that makes it a paragraph of its own; false when body has no
-// footer, starts with it or has the blank line already (it is idempotent).
-func footerParagraph(body, footer string) (string, bool) {
-	i := strings.LastIndex(body, footer)
-	if footer == "" || i < 0 {
+// footerData is what the footer template of review p renders with.
+func (rd *round) footerData(p *postedReview, res *judgeResult) config.FooterData {
+	sha := cmp.Or(p.commit, rd.in.TargetSHA)
+	_, simplify := rd.r.Config.RoleByNameOrAlias(rd.r.Config.WatchFor(rd.owner+"/"+rd.name), simplifyAlias)
+	event := normalizeEvent(p.state)
+	if event == "" && res != nil {
+		event = normalizeEvent(res.Event)
+	}
+	return config.FooterData{SHA: sha, Short: sha[:min(len(sha), 10)], Repo: rd.owner + "/" + rd.name, Number: rd.in.PR.Number,
+		Login: rd.login, Simplify: simplify, Clean: clean(res), Event: reviewEvent(event),
+		PostMerge: rd.in.PostMerge, DeltaCheck: rd.deltaCheck() != nil}
+}
+
+// clean reports whether the judge's result counts nothing at all: no
+// finding of any priority, no earlier finding still open, no
+// simplification. Without a result it is false.
+func clean(res *judgeResult) bool {
+	var sum store.ReviewSummary
+	if res == nil || !store.ParseReviewResult([]byte(res.Raw), &sum) {
+		return false
+	}
+	return sum.Findings() == 0 && sum.Open == 0 && sum.Simplifications == 0
+}
+
+// reviewEvent is the review event (APPROVE, COMMENT, REQUEST_CHANGES) of a
+// review state normalizeEvent returns.
+func reviewEvent(state string) string {
+	switch state {
+	case "APPROVED":
+		return "APPROVE"
+	case "COMMENTED":
+		return "COMMENT"
+	case "CHANGES_REQUESTED":
+		return "REQUEST_CHANGES"
+	}
+	return state
+}
+
+// withFooter puts footer (footerMarker first) last in body, after a blank
+// line: in place of everything from an earlier footerMarker on, else after
+// the body. false when body ends with that footer already, or carries a
+// footer its judge wrote (oldJudgeFooter), which is left as it is.
+func withFooter(body, footer string) (string, bool) {
+	const space = "\r\n\t "
+	head := body
+	if i := strings.LastIndex(body, footerMarker); i >= 0 {
+		head = body[:i]
+	} else if strings.Contains(body, oldJudgeFooter) {
 		return body, false
 	}
-	head, newlines := body[:i], 0
-	for {
-		head = strings.TrimRight(head, " \t\r")
-		if !strings.HasSuffix(head, "\n") {
-			break
-		}
-		head = head[:len(head)-1]
-		newlines++
+	out := footer
+	if head = strings.TrimRight(head, space); head != "" {
+		out = head + "\n\n" + footer
 	}
-	if head == "" || newlines >= 2 {
+	if strings.TrimRight(body, space) == out {
 		return body, false
 	}
-	return head + "\n\n" + body[i:], true
+	return out, true
 }
 
 // localPathRe matches an absolute path of the review machine: under a temp

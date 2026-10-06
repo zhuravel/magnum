@@ -83,7 +83,6 @@ the judge data, every other session role gets the role data, and a shell role's 
 | `.ReviewerLogin` | the login the review is posted as (REST form, e.g. `talkable[bot]`) |
 | `.GhConfigDir` | `GH_CONFIG_DIR` of the identity; empty for the `gh` identity |
 | `.NoFindingsEvent`, `.BlockingEvent` | review events from the `[[repo]]` or the `[[identity]]`; `.NoFindingsEvent` is `COMMENT` whenever a reviewer of the round left no usable report (anything in `.Reports` that is missing): a review that did not hear every reviewer never approves |
-| `.Footer` | the posting identity's `review_footer` (magnum's default line when it sets none), which the judge appends verbatim as the review's last line; empty when the identity sets `""`. The judge prompts render `footer:` only when it is set |
 | `.SelfAuthored` | the PR's author is the reviewing identity |
 | `.Reports` | one entry per other role of the round, in pipeline order (see below) |
 | `.ResultFile` | where the judge writes its JSON result (the role's `output`) |

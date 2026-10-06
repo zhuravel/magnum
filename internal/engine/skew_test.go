@@ -27,6 +27,28 @@ func TestCheckPromptsRendersEveryConfiguredPrompt(t *testing.T) {
 	}
 }
 
+// TestCheckPromptsRendersEveryIdentityFooter: magnum renders an identity's
+// review_footer after every verified review, so a template that does not
+// render fails the startup check like a broken prompt, naming the identity.
+func TestCheckPromptsRendersEveryIdentityFooter(t *testing.T) {
+	h := newHarness(t)
+	base, err := CheckPrompts(h.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	good, broken := "**Reviewed commit:** `{{.Short}}` by {{.Login}}", "**Reviewed commit:** `{{.Commit}}`"
+	h.cfg.Identities = append(h.cfg.Identities,
+		config.Identity{Name: "good", Kind: "gh", Login: "alice", ReviewFooter: &good},
+		config.Identity{Name: "broken", Kind: "gh", Login: "rev-ann", ReviewFooter: &broken})
+	n, err := CheckPrompts(h.cfg)
+	if err == nil || !strings.Contains(err.Error(), "identity broken: review_footer") || strings.Contains(err.Error(), "identity good") {
+		t.Fatalf("a broken footer template: %v", err)
+	}
+	if n != base+2 {
+		t.Fatalf("renders = %d, want %d: the good footer rendered both ways", n, base+2)
+	}
+}
+
 // TestShippedConfigAndPromptFilesRender: the committed config.defaults.toml
 // with the checkout's prompts/ (what the daemon reads at prompt time)
 // renders with this build: a prompt edit that needs a new template field

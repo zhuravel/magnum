@@ -16,7 +16,6 @@ gh_config_dir: /Users/bohdan/Projects/magnum/state/gh/talkable-app
 no_findings_event: COMMENT
 blocking_event: REQUEST_CHANGES
 self_authored: false
-footer: _Automated review by [Magnum](https://github.com/zhuravel/magnum). Reply on a thread with `fixed`, `not a bug: <why>` or `won't fix: <why>`; simplifications are optional. New pushes are re-reviewed automatically._
 notes: /Users/bohdan/Projects/magnum/state/notes/talkable/talkable.md
 notes_dir: /Users/bohdan/Projects/magnum/state/notes/talkable/talkable
 notes_harness: fixtures/, run-spec.sh

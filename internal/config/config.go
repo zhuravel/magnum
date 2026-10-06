@@ -242,8 +242,9 @@ type Identity struct {
 	NoFindingsEvent string `toml:"no_findings_event"` // APPROVE | COMMENT
 	BlockingEvent   string `toml:"blocking_event"`    // REQUEST_CHANGES | COMMENT
 	DismissOwnStale *bool  `toml:"dismiss_own_stale_change_requests"`
-	// ReviewFooter is the line the identity's reviews end with, for the PR's
-	// author (nil = DefaultReviewFooter, "" = none); see Footer.
+	// ReviewFooter is the template of the footer magnum appends to the
+	// identity's reviews, for the PR's author (nil = DefaultReviewFooter,
+	// "" = none); see Footer and FooterData.
 	ReviewFooter *string `toml:"review_footer"`
 }
 
@@ -253,25 +254,6 @@ func (i Identity) DismissStale() bool {
 		return *i.DismissOwnStale
 	}
 	return i.Kind == "app"
-}
-
-// DefaultReviewFooter is the footer of every identity that sets no
-// review_footer: what the review is and how to answer it, in the words the
-// reply classifier knows (config.defaults.toml documents it word for word).
-const DefaultReviewFooter = "_Automated review by [Magnum](https://github.com/zhuravel/magnum). Reply on a thread with `fixed`, `not a bug: <why>` or `won't fix: <why>`; " +
-	"simplifications are optional. New pushes are re-reviewed automatically._"
-
-// ReviewFooterMax bounds review_footer: it must be shorter, in characters.
-const ReviewFooterMax = 400
-
-// Footer is the line the judge appends verbatim to every review the
-// identity posts (the <magnum> block's footer): review_footer, trimmed, else
-// DefaultReviewFooter; "" = no footer.
-func (i Identity) Footer() string {
-	if i.ReviewFooter != nil {
-		return strings.TrimSpace(*i.ReviewFooter)
-	}
-	return DefaultReviewFooter
 }
 
 type Watch struct {

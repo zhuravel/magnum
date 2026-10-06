@@ -1873,3 +1873,30 @@ editing history. Code, config comments and prompts reference these by their head
   the same budget, label, `Mutates` and scrubbed git environment. `prepare`, `ready` and the Ruby check stay
   `zsh -lc`: they must see what the agents' tools see, shims included. Rejected: re-exporting the pool's
   variables inside the login shell (the next variable a seed reads would be the next bug).
+- **Magnum owns the review footer: templated, collapsed, and a clean verdict line** (2026-10-06, amends "A footer
+  tells the author what the review is and how to answer" and "The review footer's paragraph is checked after
+  posting"; the operator, on a clean review: the footer is noise on a review that found nothing, "simplifications
+  are optional" is wrong on repositories where simplify never runs, and "No blocking problems." is dry). The judge
+  no longer writes the footer: the `footer:` field is gone from every judge prompt and its instruction from the
+  skill. Magnum renders it and appends it to the verified review (and to an adopted one) through the author-checked
+  edit `AppendToReview` makes (`round.footer`; one more REST read and one edit per posted round). It is its own
+  paragraph after a blank line and starts with `<!-- magnum:footer -->`, so editing the review again replaces
+  everything from that marker on instead of adding a second footer (verifying it again changes nothing), and the
+  notes `AppendToReview` adds go above it. The run marker stays where the judge put it; a dry run gets no footer.
+  This replaces the safety net that gave a judge-written footer its blank line (`round.footer_fixed`, gone). A
+  review whose judge wrote the old footer itself (a session that started before) is left as it is: no second footer,
+  no rewrite; a note goes at its end. `[[identity]] review_footer` is now a Go `text/template` of
+  `config.FooterData` (`.SHA`, `.Short` of 10 characters, `.Repo`, `.Number`, `.Login`, `.Simplify`: the PR's watch
+  runs a role answering to the alias `simplify`; `.Clean`: the judge's result counts no finding of any priority, no
+  earlier one still open and no simplification; `.Event`, `.PostMerge`, `.DeltaCheck`), at most 2,000 characters
+  with line breaks allowed, that must render with every field set and `.Simplify` and `.Clean` both ways;
+  `CheckPrompts` renders it too, so a broken template fails at start like a broken prompt; `""` still turns it off.
+  The default names the reviewed commit and collapses the rest under `<details><summary>ℹ️ About Magnum</summary>`,
+  as the Codex GitHub reviewer does, and says simplifications are optional only when the watch runs simplify. The
+  skill's verdict line for a review with nothing at all (no finding of any priority, no simplification) is `No
+  problems found. LGTM :shipit:`, for such a re-review `No new problems since <previous sha7>. LGTM :shipit:`, for a
+  post-merge review `No problems found in the merged commits. :shipit:`; `No blocking problems.` stays for a review
+  with only optional ones. SKILL.md went from 30,775 to 30,840 bytes under the unchanged cap (30,844), the footer's
+  field and instruction and a stale "(but `no changes`)" making room. Rejected: a footer field the judge copies (a
+  multi-line template rendered per review is magnum's data, and the judge already glued the one-line footer to
+  `</details>`); `.Clean` from the result's `verdict` (`clean` there ignores simplifications).

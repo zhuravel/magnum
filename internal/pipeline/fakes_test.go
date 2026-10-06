@@ -309,7 +309,7 @@ type judgePost struct {
 	status      string // codex-judge.json status; "" = no file
 	keepWorking bool
 	body        string         // review body text before the marker ("" = a one-line verdict)
-	after       string         // review body text after the marker (a footer, with what precedes it)
+	after       string         // review body text after the marker (an old judge-written footer, with what precedes it)
 	extra       map[string]any // more codex-judge.json fields
 }
 
@@ -326,14 +326,10 @@ func (p judgePost) behavior(t *testing.T) behavior {
 				body += fmt.Sprintf("<!-- magnum:run=%s head=%s -->", id, commit[:7])
 			}
 			body += p.after
-			rest := ""
-			if p.after != "" {
-				rest = body
-			}
 			p.gh.add(github.Review{DatabaseID: p.reviewID, State: p.state, Body: body,
 				URL:         fmt.Sprintf("https://github.com/talkable/talkable/pull/11920#pullrequestreview-%d", p.reviewID),
 				SubmittedAt: f.st.Clock(), CommitOid: commit, AuthorLogin: p.graphLogin, AuthorType: p.graphType},
-				github.RESTReview{ID: p.reviewID, UserLogin: p.restLogin, UserType: p.restType, State: p.state, Body: rest,
+				github.RESTReview{ID: p.reviewID, UserLogin: p.restLogin, UserType: p.restType, State: p.state, Body: body,
 					SubmittedAt: f.st.Clock(), CommitID: commit, HTMLURL: fmt.Sprintf("https://github.com/talkable/talkable/pull/11920#pullrequestreview-%d", p.reviewID)})
 		}
 		if p.status != "" {

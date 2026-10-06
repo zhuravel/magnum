@@ -290,10 +290,24 @@ aliases = ["simplify"]
 #                                         # merged, are never dismissed; a failed dismissal (a missing permission) only
 #                                         # warns. After a watch moves to another identity the new one's review also
 #                                         # dismisses the old identity's change requests, if the old one has this on.
-# review_footer = "_Automated review by [Magnum](https://github.com/zhuravel/magnum). Reply on a thread with `fixed`, `not a bug: <why>` or `won't fix: <why>`; simplifications are optional. New pushes are re-reviewed automatically._"
-#                                         # the last line of every review the identity posts, for the PR's author: the
-#                                         # line above is the default of every identity that does not set its own;
-#                                         # "" = no footer; one paragraph on one line, under 400 characters
+# review_footer = '''
+# **Reviewed commit:** `{{.Short}}`
+#
+# <details><summary>ℹ️ About Magnum</summary>
+#
+# Automated review by [Magnum](https://github.com/zhuravel/magnum). Reply on a thread with `fixed`, `not a bug: <why>` or `won't fix: <why>`{{if .Simplify}}; simplifications are optional{{end}}. New pushes are re-reviewed automatically.
+#
+# </details>'''
+#                                         # the footer magnum appends to every review the identity posts once the review
+#                                         # is verified, for the PR's author: the template above is the default of every
+#                                         # identity that does not set its own; "" = no footer. A Go text/template of at
+#                                         # most 2,000 characters, line breaks allowed, with .SHA and .Short (its first 10
+#                                         # characters) of the reviewed commit, .Repo (owner/name), .Number, .Login (the
+#                                         # posting login), .Simplify (the PR's watch runs a role aliased simplify), .Clean
+#                                         # (no findings and no simplifications), .Event (APPROVE, COMMENT or
+#                                         # REQUEST_CHANGES), .PostMerge and .DeltaCheck. magnum starts it with
+#                                         # <!-- magnum:footer --> and, editing the review again, replaces what follows
+#                                         # that marker instead of adding a second footer. Dry runs get none.
 #
 # [[identity]]
 # name = "reviewer-app"

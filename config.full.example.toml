@@ -30,8 +30,12 @@ no_findings_event = "APPROVE"
 #                                           # CHANGES_REQUESTED review, which would otherwise keep blocking the author's
 #                                           # merge. Default: true for kind = "app", false for "gh" (your own account's
 #                                           # reviews stay unless you opt in); hand-posted change requests are never dismissed
-# review_footer = ""                        # the last line of every review this identity posts; default: magnum's line
-#                                           # (config.defaults.toml shows it); "" = none; one line under 400 characters
+# review_footer = ""                        # the footer magnum appends to every review this identity posts, once it
+#                                           # is verified; default: magnum's (config.defaults.toml shows it); "" = none.
+#                                           # A Go text/template of at most 2,000 characters, line breaks allowed: .SHA,
+#                                           # .Short (10 characters), .Repo, .Number, .Login, .Simplify (the watch runs a
+#                                           # role aliased simplify), .Clean (no findings, no simplifications), .Event
+#                                           # (APPROVE, COMMENT or REQUEST_CHANGES), .PostMerge, .DeltaCheck
 
 [[identity]]
 name = "talkable-app"

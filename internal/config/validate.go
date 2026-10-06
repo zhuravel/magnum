@@ -404,20 +404,6 @@ func validateReadiness(label string, prepare, ready []string, timeout Duration) 
 	return errs
 }
 
-// validateFooter checks an identity's review footer: one paragraph (no line
-// break or other control character: it is the last line of a review and a
-// one-line field of the judge's <magnum> block) shorter than
-// ReviewFooterMax characters.
-func validateFooter(footer string) error {
-	if strings.ContainsFunc(footer, unicode.IsControl) {
-		return errors.New("must be one paragraph on one line, without line breaks or other control characters")
-	}
-	if n := len([]rune(footer)); n >= ReviewFooterMax {
-		return fmt.Errorf("must be under %d characters (it has %d)", ReviewFooterMax, n)
-	}
-	return nil
-}
-
 // validateVerdicts checks the no_findings_event and blocking_event of an
 // [[identity]] or [[repo]] block (label names it); "" means not set.
 func validateVerdicts(label, noFindings, blocking string) []error {

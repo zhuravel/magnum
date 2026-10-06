@@ -71,32 +71,24 @@ func TestNoApproveWhenClaudeReviewHasNoReport(t *testing.T) {
 	mustContain(t, "judge prompt", e2.ag.submitsFor(agents.RoleJudge)[0].Text, "no_findings_event: APPROVE")
 }
 
-// The posting identity's review footer reaches the judge's <magnum> block:
-// the built-in one when the identity sets none, nothing when it sets "".
-func TestIdentityFooterReachesTheJudgePrompt(t *testing.T) {
-	off := ""
-	for name, tc := range map[string]struct {
-		footer *string
-		want   string
-	}{
-		"built-in": {nil, "\nfooter: " + config.DefaultReviewFooter + "\n"},
-		"off":      {&off, ""},
-	} {
+// magnum appends the identity's footer after verification
+// (appendFooter): the judge's prompt names none, whatever the identity sets.
+func TestJudgePromptNamesNoFooter(t *testing.T) {
+	own := "_Reviewed by the team's bot._"
+	for name, footer := range map[string]*string{"built-in": nil, "own": &own} {
 		t.Run(name, func(t *testing.T) {
 			e := newEnv(t)
-			e.cfg.Identities[0].ReviewFooter = tc.footer
+			e.cfg.Identities[0].ReviewFooter = footer
 			e.ag.behaviors[agents.RoleJudge] = []behavior{e.judgePosts(663, "COMMENTED", "COMMENT").behavior(t)}
 			if _, err := e.r.RunRound(e.ctx, e.input(KindInitial)); err != nil {
 				t.Fatalf("RunRound: %v", err)
 			}
 			judge := e.ag.submitsFor(agents.RoleJudge)[0].Text
-			if tc.want == "" {
-				if strings.Contains(judge, "footer") {
-					t.Errorf("footer off, yet the prompt names one:\n%s", judge)
+			for _, s := range []string{"\nfooter:", "Reviewed commit", "About Magnum", own} {
+				if strings.Contains(judge, s) {
+					t.Errorf("the judge prompt carries %q:\n%s", s, judge)
 				}
-				return
 			}
-			mustContain(t, "judge prompt", judge[strings.Index(judge, "<magnum>"):], tc.want)
 		})
 	}
 }

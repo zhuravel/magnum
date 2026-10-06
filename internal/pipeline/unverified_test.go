@@ -54,6 +54,10 @@ func TestNextRoundAdoptsAReviewItCouldNotVerify(t *testing.T) {
 	if len(e.ag.submits) != submits || len(e.ag.codexCalls) != shells {
 		t.Fatalf("the adopting round prompted: submits %d -> %d, shell runs %d -> %d", submits, len(e.ag.submits), shells, len(e.ag.codexCalls))
 	}
+	// The adopted review is a verified one: it gets the identity's footer.
+	if len(e.gh.updates) != 1 || e.gh.updates[0].ID != 800 || !strings.Contains(e.gh.updates[0].Body, "\n\n"+footerMarker+"\n**Reviewed commit:**") {
+		t.Fatalf("footer on the adopted review: %+v", e.gh.updates)
+	}
 	run, err := e.st.RunByID(e.ctx, marker)
 	if err != nil {
 		t.Fatal(err)

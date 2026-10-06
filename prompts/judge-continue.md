@@ -16,9 +16,6 @@ gh_config_dir: {{.GhConfigDir}}
 no_findings_event: {{.NoFindingsEvent}}
 blocking_event: {{.BlockingEvent}}
 self_authored: {{.SelfAuthored}}
-{{- if .Footer}}
-footer: {{.Footer}}
-{{- end}}
 {{- if .NotesPath}}
 notes: {{.NotesPath}}
 notes_dir: {{.NotesDir}}

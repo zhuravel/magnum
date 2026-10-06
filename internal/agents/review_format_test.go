@@ -21,32 +21,38 @@ func magnumBlock(t *testing.T, prompt string) string {
 	return prompt[i:]
 }
 
-// The identity's review footer reaches the judge as a `footer:` field of the
-// <magnum> block, and only when there is one (review_footer = "" turns it
-// off).
-func TestJudgePromptsRenderTheFooterOnlyWhenSet(t *testing.T) {
-	const footer = "_Automated review by [Magnum](https://github.com/zhuravel/magnum). Reply on a thread with `fixed`, `not a bug: <why>` or `won't fix: <why>`._"
-	for _, name := range judgePrompts {
-		d := judgeFixture()
-		plain, err := RenderPrompt(prompt(t, name), d)
-		if err != nil {
-			t.Fatalf("%s: %v", name, err)
-		}
-		if strings.Contains(plain, "footer") {
-			t.Errorf("%s names a footer without one:\n%s", name, plain)
-		}
-		d.Footer = footer
+// magnum appends the identity's footer to a verified review itself
+// (pipeline.appendFooter), so no judge prompt names one and the skill no
+// longer asks the judge to write it.
+func TestJudgePromptsAndSkillLeaveTheFooterToMagnum(t *testing.T) {
+	d := judgeFixture()
+	d.NotesPath, d.Blind, d.PostMerge = testNotesPath, true, true
+	d.ThreadsFile, d.ThreadSummary, d.FormerLogins = "/r/review-threads.json", "1 thread", []string{"talkable-old[bot]"}
+	for _, name := range append(judgePrompts, "judge-nudge.md") {
 		got, err := RenderPrompt(prompt(t, name), d)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		if block := magnumBlock(t, got); !strings.Contains(block, "\nfooter: "+footer+"\n") {
-			t.Errorf("%s: the <magnum> block lacks the footer:\n%s", name, block)
-		}
-		if strings.Replace(got, "\nfooter: "+footer, "", 1) != plain {
-			t.Errorf("%s: the footer changed more than its field:\n%s\n--- without:\n%s", name, got, plain)
+		if strings.Contains(strings.ToLower(got), "footer") {
+			t.Errorf("%s names a footer:\n%s", name, got)
 		}
 	}
+	skillSays(t, nil, []string{"`footer`", "then `footer`"})
+}
+
+// A review with nothing to fix says so warmly instead of "No blocking
+// problems.": the first review, a re-review with nothing new and nothing
+// still open, and a post-merge review each have their line; "No blocking
+// problems." stays for a review with only optional findings.
+func TestSkillStatesTheCleanVerdictLines(t *testing.T) {
+	skillSays(t, []string{
+		"`No problems found. LGTM :shipit:`",
+		"`No new problems since <previous_head_sha, 7 chars>. LGTM :shipit:`",
+		"`No problems found in the merged commits. :shipit:`",
+		"`No blocking problems.`",
+		"`Blocking: N problem(s) must be fixed before merging.`",
+		"`Fix N problem(s) before merging.`",
+	}, []string{"Looks good to merge", "🎉"})
 }
 
 // The readiness facts are <magnum> fields; what to do about a check that did
@@ -129,7 +135,7 @@ var blockField = regexp.MustCompile(`(?m)^([a-z_]+):`)
 // skill, which is the only place that says what to do with it.
 func TestSkillDescribesEveryMagnumField(t *testing.T) {
 	d := judgeFixture()
-	d.NotesPath, d.Footer, d.Blind, d.PostMerge = testNotesPath, "_Automated review._", true, true
+	d.NotesPath, d.Blind, d.PostMerge = testNotesPath, true, true
 	d.ThreadsFile, d.ThreadSummary, d.FormerLogins = "/r/review-threads.json", "1 thread", []string{"talkable-old[bot]"}
 	d.MovedFrom, d.ForcePushed = "/Users/bohdan/Projects/talkable.review1", true
 	d.Readiness = Readiness{Failed: 1, File: "/r/readiness.json", Checks: []ReadinessCheck{
@@ -145,7 +151,7 @@ func TestSkillDescribesEveryMagnumField(t *testing.T) {
 			seen[m[1]] = true
 		}
 	}
-	for _, f := range []string{"footer", "notes", "notes_dir", "notes_harness", "notes_lock", "notes_unlock", "readiness", "reports"} {
+	for _, f := range []string{"notes", "notes_dir", "notes_harness", "notes_lock", "notes_unlock", "readiness", "reports"} {
 		if !seen[f] {
 			t.Errorf("no judge prompt renders `%s`", f)
 		}

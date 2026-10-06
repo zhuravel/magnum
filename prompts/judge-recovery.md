@@ -33,9 +33,6 @@ gh_config_dir: {{.GhConfigDir}}
 no_findings_event: {{.NoFindingsEvent}}
 blocking_event: {{.BlockingEvent}}
 self_authored: {{.SelfAuthored}}
-{{- if .Footer}}
-footer: {{.Footer}}
-{{- end}}
 previous_review_id: {{.PreviousReviewID}}
 previous_head_sha: {{.PreviousHeadSHA}}
 since: {{.Since}}

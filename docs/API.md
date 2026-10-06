@@ -554,13 +554,9 @@ type JudgeData struct {
 	NoFindingsEvent string
 	BlockingEvent   string // REQUEST_CHANGES | COMMENT
 	SelfAuthored    bool
-	// Footer is the posting identity's review footer
-	// (config.Identity.Footer), which the judge appends verbatim as the
-	// review's last line; "" = none, and the prompts leave the field out.
-	Footer     string
-	Reports    []Report // one per non-judge role of the round, in pipeline order
-	ResultFile string   // <report dir>/<the judge's output>, e.g. codex-judge.json
-	DryRun     bool
+	Reports         []Report // one per non-judge role of the round, in pipeline order
+	ResultFile      string   // <report dir>/<the judge's output>, e.g. codex-judge.json
+	DryRun          bool
 	// Blind: an evaluation replay (pipeline.RoundInput.Blind), rendered as
 	// `blind: true`; the skill then judges the local diff of HeadSHA only.
 	Blind bool
@@ -1996,11 +1992,18 @@ const DefaultReadyTimeout = 5 * time.Minute
     DefaultReadyTimeout bounds a round's whole readiness step when neither the
     [[repo]] nor the [[pool]] sets ready_timeout.
 
-const DefaultReviewFooter = "_Automated review by [Magnum](https://github.com/zhuravel/magnum). Reply on a thread with `fixed`, `not a bug: <why>` or `won't fix: <why>`; " +
-	"simplifications are optional. New pushes are re-reviewed automatically._"
-    DefaultReviewFooter is the footer of every identity that sets no
-    review_footer: what the review is and how to answer it, in the words the
-    reply classifier knows (config.defaults.toml documents it word for word).
+const DefaultReviewFooter = "**Reviewed commit:** `{{.Short}}`\n" +
+	"\n" +
+	"<details><summary>ℹ️ About Magnum</summary>\n" +
+	"\n" +
+	"Automated review by [Magnum](https://github.com/zhuravel/magnum). Reply on a thread with `fixed`, `not a bug: <why>` or `won't fix: <why>`" +
+	"{{if .Simplify}}; simplifications are optional{{end}}. New pushes are re-reviewed automatically.\n" +
+	"\n" +
+	"</details>"
+    DefaultReviewFooter is the footer template of every identity that sets
+    no review_footer: the reviewed commit, then what the review is and how
+    to answer it, in the words the reply classifier knows, collapsed under
+    <details> (config.defaults.toml documents it word for word).
 
 const DefaultSimplifyRerunLines = 150
     DefaultSimplifyRerunLines is claude-simplify's rerun_min_lines: about two
@@ -2027,8 +2030,8 @@ const RequiredWorkflowPrefix = "workflow:"
     RequiredWorkflowPrefix marks a required_checks entry naming a whole GitHub
     Actions workflow ("workflow:CI").
 
-const ReviewFooterMax = 400
-    ReviewFooterMax bounds review_footer: it must be shorter, in characters.
+const ReviewFooterMax = 2000
+    ReviewFooterMax bounds review_footer, in characters.
 
 const SkillCopyName = "SKILL.md"
     SkillCopyName is the file name of a judge skill's startup copy (<skill
@@ -2104,6 +2107,10 @@ func MatchPath(glob, name string) bool
 func ParseDuration(s string) (time.Duration, error)
     ParseDuration is time.ParseDuration plus a leading whole-day count: "7d",
     "30d", "1d12h". A day is 24 hours.
+
+func RenderFooter(tmpl string, d FooterData) (string, error)
+    RenderFooter renders footer template tmpl with d, trimmed ("" = the footer
+    is left out).
 
 func SkillPath(skill string, layout paths.Layout) string
     SkillPath is a judge's skill as a round names it: skill with {{repo}}
@@ -2437,6 +2444,25 @@ type Duration struct{ time.Duration }
 
 func (d *Duration) UnmarshalText(b []byte) error
 
+type FooterData struct {
+	SHA    string // the reviewed commit
+	Short  string // its first 10 characters
+	Repo   string // owner/name
+	Number int    // the PR's number
+	Login  string // the login that posted the review
+	// Simplify: the PR's watch runs a role answering to the alias
+	// "simplify", so the review may carry optional simplifications.
+	Simplify bool
+	// Clean: the review has no findings (still-open earlier ones included)
+	// and no simplifications, by the judge's result counts.
+	Clean      bool
+	Event      string // APPROVE, COMMENT or REQUEST_CHANGES
+	PostMerge  bool   // a review of commits GitHub merged before magnum reviewed them
+	DeltaCheck bool   // the judge alone checked a small delta since its last review
+}
+    FooterData is what a review_footer template renders with: the verified
+    review magnum appends the footer to and the round that posted it.
+
 type GitHub struct {
 	// Transport is "gh" (default: requests run as `gh api --include`, so only
 	// the signed gh binary talks to GitHub, which outbound firewalls such as
@@ -2491,8 +2517,9 @@ type Identity struct {
 	NoFindingsEvent string `toml:"no_findings_event"` // APPROVE | COMMENT
 	BlockingEvent   string `toml:"blocking_event"`    // REQUEST_CHANGES | COMMENT
 	DismissOwnStale *bool  `toml:"dismiss_own_stale_change_requests"`
-	// ReviewFooter is the line the identity's reviews end with, for the PR's
-	// author (nil = DefaultReviewFooter, "" = none); see Footer.
+	// ReviewFooter is the template of the footer magnum appends to the
+	// identity's reviews, for the PR's author (nil = DefaultReviewFooter,
+	// "" = none); see Footer and FooterData.
 	ReviewFooter *string `toml:"review_footer"`
 }
 
@@ -2501,9 +2528,9 @@ func (i Identity) DismissStale() bool
     CHANGES_REQUESTED.
 
 func (i Identity) Footer() string
-    Footer is the line the judge appends verbatim to every review the
-    identity posts (the <magnum> block's footer): review_footer, trimmed,
-    else DefaultReviewFooter; "" = no footer.
+    Footer is the identity's footer template, which magnum renders
+    (RenderFooter) and appends to every review the identity posts once it is
+    verified: review_footer, trimmed, else DefaultReviewFooter; "" = no footer.
 
 type Kind struct {
 	// Start: extra args always appended.
@@ -3632,11 +3659,13 @@ func CheckPrompts(cfg *config.Config) (int, error)
     every prompt file the configured roles name (judges with agents.JudgeData,
     other session roles with agents.RoleData in each mode, shell roles' command
     or full-line template through agents.ShellLine), the model-fallback prompt,
-    the triage prompt and the retro prompt. Each template is rendered twice,
-    once with every field set and once with the optional ones empty,
-    so both sides of an {{if}} run. It returns how many renders passed and every
-    failure, joined: a template field this binary's data lacks (a prompt edited
-    for a newer build) fails here instead of in a round.
+    the triage prompt, the retro prompt and every identity's review footer
+    template (config.RenderFooter, which magnum renders after each verified
+    review). Each template is rendered twice, once with every field set and once
+    with the optional ones empty, so both sides of an {{if}} run. It returns
+    how many renders passed and every failure, joined: a template field this
+    binary's data lacks (a prompt edited for a newer build) fails here instead
+    of in a round.
 
 func ClearModelLimits(ctx context.Context, st *store.Store, kind string) ([]string, error)
     ClearModelLimits deletes the per-model limits recorded for kind
@@ -8218,10 +8247,10 @@ type Runner struct {
     per-round state and is safe for concurrent RunRound calls.
 
 func (r *Runner) AppendToReview(ctx context.Context, owner, repo string, number int, reviewID int64, text string) error
-    AppendToReview adds text as the last paragraph of review reviewID,
-    which the runner's identity posted (editReview), before the identity's
-    footer when the body ends with it, so the footer stays the last paragraph.
-    A body that carries text there already is left alone.
+    AppendToReview adds text as the last paragraph of review reviewID, which
+    the runner's identity posted (editReview), above the footer magnum appended
+    (footerMarker), so the footer stays the last paragraph. A body that carries
+    text there already is left alone.
 
 func (r *Runner) RunRound(ctx context.Context, in RoundInput) (RoundResult, error)
     RunRound runs one round and blocks until it ends. The error is non-nil

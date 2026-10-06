@@ -255,17 +255,16 @@ func (rd *round) settleCut(ctx context.Context, role config.Role, run store.Run,
 }
 
 // AppendToReview adds text as the last paragraph of review reviewID, which
-// the runner's identity posted (editReview), before the identity's footer
-// when the body ends with it, so the footer stays the last paragraph. A
-// body that carries text there already is left alone.
+// the runner's identity posted (editReview), above the footer magnum
+// appended (footerMarker), so the footer stays the last paragraph. A body
+// that carries text there already is left alone.
 func (r *Runner) AppendToReview(ctx context.Context, owner, repo string, number int, reviewID int64, text string) error {
 	if r.GitHub == nil || r.Identity == nil {
 		return fmt.Errorf("%w: AppendToReview needs GitHub and Identity", ErrInvalid)
 	}
 	text = strings.TrimSpace(text)
-	footer := r.identityConfig().Footer()
 	_, err := r.editReview(ctx, owner, repo, number, reviewID, func(body string) (string, bool) {
-		return appendNote(body, text, footer)
+		return appendNote(body, text)
 	})
 	return err
 }
@@ -299,13 +298,14 @@ func (r *Runner) editReview(ctx context.Context, owner, repo string, number int,
 	return true, r.GitHub.UpdateReviewBody(ctx, owner, repo, number, reviewID, body)
 }
 
-// appendNote adds text as body's last paragraph, or right before footer
-// when the body ends with it; false when text is there already.
-func appendNote(body, text, footer string) (string, bool) {
+// appendNote adds text as body's last paragraph, or as the last one above
+// the footer magnum appended (from footerMarker on); false when text is
+// there already.
+func appendNote(body, text string) (string, bool) {
 	const space = "\r\n\t "
 	head, tail := strings.TrimRight(body, space), ""
-	if footer != "" && strings.HasSuffix(head, footer) {
-		head, tail = strings.TrimRight(strings.TrimSuffix(head, footer), space), footer
+	if i := strings.LastIndex(head, footerMarker); i >= 0 {
+		head, tail = strings.TrimRight(head[:i], space), head[i:]
 	}
 	if strings.HasSuffix(head, text) {
 		return body, false

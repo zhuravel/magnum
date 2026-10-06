@@ -274,7 +274,7 @@ kind = "gh"                        # your gh login
 login = "your-login"
 no_findings_event = "APPROVE"
 # dismiss_own_stale_change_requests = true   # default: false for kind = "gh", true for "app" (see below)
-# review_footer = "_Reviewed by the team's bot; reply on the thread._"   # default: magnum's (see below); "" = none
+# review_footer = "_Reviewed {{.Short}} by the team's bot; reply on the thread._"   # a template; default: magnum's (see below); "" = none
 
 [[identity]]
 name = "reviewer-app"
@@ -305,11 +305,20 @@ identity is your own account and its reviews are yours to withdraw; set it to `t
 let Magnum do that. A change request you posted by hand (`magnum request-changes`) and any review posted
 after the PR was merged are never dismissed, and a dismissal that fails (a missing permission) only warns.
 
-`review_footer` is the last line of every review the identity posts, there for the PR's author. Without
-the key it is Magnum's: the review is automated, a thread is answered with `fixed`, `not a bug: <why>` or
-`won't fix: <why>` (the words the reply classifier knows), simplifications are optional, and new pushes
-are re-reviewed automatically; `config.defaults.toml` shows it word for word. Set your own text, or `""`
-for no footer: one paragraph on one line, under 400 characters.
+`review_footer` is the footer Magnum appends to every review the identity posts, once the review is
+verified, there for the PR's author (the judge never writes it, and a dry run gets none). Without the key it
+is Magnum's: the reviewed commit, then, collapsed under "About Magnum", that the review is automated, that a
+thread is answered with `fixed`, `not a bug: <why>` or `won't fix: <why>` (the words the reply classifier
+knows), that simplifications are optional (only when the watch runs a role aliased `simplify`) and that new
+pushes are re-reviewed automatically; `config.defaults.toml` shows it word for word. It is a Go
+`text/template` of at most 2,000 characters, line breaks allowed, with `.SHA` and `.Short` (10 characters)
+of the reviewed commit, `.Repo`, `.Number`, `.Login` (the posting login), `.Simplify`, `.Clean` (no
+findings and no simplifications), `.Event` (`APPROVE`, `COMMENT` or `REQUEST_CHANGES`), `.PostMerge` and
+`.DeltaCheck`; `""` turns it off. A template that does not render fails validation and the start check,
+like a broken prompt. Magnum starts the footer with `<!-- magnum:footer -->` after a blank line, puts its
+own notes ("_Reviewed d4e5f6a; 1 commit arrived during the review …_") above it, and replaces it rather than
+adding a second one when it edits the review again; a review whose judge wrote the old footer itself is left
+as it is.
 
 ### Watches, pools and repos: what to review and where
 
@@ -525,8 +534,10 @@ code; `magnum stats` reports them per role. The skill runs unattended: it never 
 What an author gets, every review alike:
 
 - **One verdict line** first: `Blocking: N problem(s) must be fixed before merging.` (a P0 or P1 among
-  them), `Fix N problem(s) before merging.` (P2) or `No blocking problems.`, with the optional ones
-  counted; a re-review puts `Re-review a1b2c3d → d4e5f6a:` before it. No GitHub event names, no notes on
+  them), `Fix N problem(s) before merging.` (P2) or `No blocking problems.` (only optional ones), with the
+  optional ones counted; with nothing at all, `No problems found. LGTM :shipit:` (a re-review: `No new
+  problems since a1b2c3d. LGTM :shipit:`; post-merge: `No problems found in the merged commits. :shipit:`).
+  A re-review puts `Re-review a1b2c3d → d4e5f6a:` before it. No GitHub event names, no notes on
   the process. The event follows `no_findings_event` and `blocking_event`, except that a round where a
   reviewer left no report (a usage limit, a timeout) never approves: its no-findings event is `COMMENT`,
   and Checks names the missing reviewer.
@@ -543,7 +554,54 @@ What an author gets, every review alike:
   or moves code, and none touches authorization, sandboxing, money or usage recording, or concurrency code
   unless it removes a defect-prone construct; a re-review suggests them only on lines changed since the
   previous review.
-- **The identity's footer** as the last line (`review_footer`, see Identities).
+- **The identity's footer** last, appended by Magnum (`review_footer`, see Identities): the reviewed commit,
+  then a collapsed "About Magnum".
+
+A clean review, as GitHub receives it (the comments do not render):
+
+```markdown
+No problems found. LGTM :shipit:
+
+<details><summary>Checks (2 run)</summary>
+
+- `bin/rspec spec/models/order_spec.rb`: 42 passed
+- `bin/rubocop app/models/order.rb`: no offenses
+
+</details>
+<!-- magnum:run=r-20261006T101500-1a2b3c head=d4e5f6a -->
+
+<!-- magnum:footer -->
+**Reviewed commit:** `d4e5f6a7b8`
+
+<details><summary>ℹ️ About Magnum</summary>
+
+Automated review by [Magnum](https://github.com/zhuravel/magnum). Reply on a thread with `fixed`, `not a bug: <why>` or `won't fix: <why>`; simplifications are optional. New pushes are re-reviewed automatically.
+
+</details>
+```
+
+One with findings starts with the verdict and the finding titles, and ends the same way:
+
+```markdown
+Fix 1 problem before merging. 1 optional: 1 simplification.
+
+- [P2] A retry sends the confirmation email twice
+
+<details><summary>Checks (2 run)</summary>
+
+- `bin/rspec spec/jobs/confirmation_job_spec.rb:31`: 1 failed, the reproduction on the finding
+- `bin/rspec spec/models/price_spec.rb` (equivalence probe): 12 passed
+
+</details>
+<!-- magnum:run=r-20261006T113000-4d5e6f head=e7f8a9b -->
+
+<!-- magnum:footer -->
+**Reviewed commit:** `e7f8a9b0c1`
+
+<details><summary>ℹ️ About Magnum</summary>
+…
+</details>
+```
 
 ## Daily use
 
