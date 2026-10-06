@@ -167,7 +167,24 @@ type PRBoardRow struct {
 	// be flagged unmuted (store.IsFlagDismissed): a mute dismissed the
 	// merged-unreviewed flag, and M restores it.
 	FlagDismissed bool
+	// NeedsMe: magnum approved the PR's head, but GitHub, which never counts
+	// a GitHub App's approval, still blocks it on the operator
+	// (store.NeedsMe): NeedsMeApprove while it requires an approval that
+	// counts, NeedsMeLift while the operator's own changes request is the
+	// only one blocking it; "" otherwise. The state cell says "✓ needs you"
+	// or "✓ lift your ✗" and the updated sort lists it first.
+	NeedsMe string
+	// ReviewDecision is GitHub's reviewDecision: APPROVED,
+	// CHANGES_REQUESTED or REVIEW_REQUIRED; "" when the base branch requires
+	// no review or magnum has not read it yet. prs --json only.
+	ReviewDecision string
 }
+
+// PRBoardRow.NeedsMe values (store.NeedsMe's).
+const (
+	NeedsMeApprove = "approve"
+	NeedsMeLift    = "lift"
+)
 
 // RequestInfo is a review request: who was asked, by whom and when.
 type RequestInfo struct {
@@ -278,9 +295,12 @@ func (f PRBoardSourceFunc) Rows(ctx context.Context) ([]PRBoardRow, error) { ret
 // the newest update first, then order by ref. An unknown sort means
 // SortUpdated. The recently closed rows (Recent) come after all the others,
 // newest closed first, whatever the sort: they are the board's own section.
+// The updated sort, the board's default, lists the PRs that need the
+// operator's approval (NeedsMe) first, either way, each part in its order.
 func SortPRBoard(rows []PRBoardRow, by PRSort, desc bool) []PRBoardRow {
 	out := slices.Clone(rows)
 	key := prSortKey(by)
+	needsFirst := by == SortUpdated || !by.valid()
 	slices.SortStableFunc(out, func(a, b PRBoardRow) int {
 		switch {
 		case a.Recent != b.Recent:
@@ -293,6 +313,11 @@ func SortPRBoard(rows []PRBoardRow, by PRSort, desc bool) []PRBoardRow {
 				return c
 			}
 			return cmp.Compare(prRef(a), prRef(b))
+		case needsFirst && (a.NeedsMe != "") != (b.NeedsMe != ""):
+			if a.NeedsMe != "" {
+				return -1
+			}
+			return 1
 		}
 		va, oka := key(a)
 		vb, okb := key(b)

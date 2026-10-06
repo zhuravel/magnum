@@ -81,6 +81,9 @@ type BoardRow struct {
 	// merge, so it is not flagged but would be unmuted (IsFlagDismissed).
 	MergedUnreviewed bool `json:"merged_unreviewed"`
 	FlagDismissed    bool `json:"flag_dismissed"`
+	// ReviewGate is what GitHub's merge gate said of the reviews at the last
+	// Details fetch (prs.review_gate_json); nil until then.
+	ReviewGate *ReviewGate `json:"review_gate"`
 }
 
 // DueStates are the automation states in which magnum means to review a PR:
@@ -161,7 +164,7 @@ func (s *Store) Board(ctx context.Context, f BoardFilter) ([]BoardRow, error) {
   p.state, p.skip_reason, p.gh_state, p.gh_updated_at, p.head_sha, p.reviewed_sha, p.last_review_event,
   p.reviewed_at, p.last_review_login, p.identity, sl.name, sl.path, p.pinned, p.muted, p.next_eligible_at,
   p.last_error, p.rounds_today, p.rounds_day, p.ci_state, p.ci_json, p.review_requests_json,
-  p.prev_state, p.merged_at, p.closed_at, p.forced, COALESCE(p.activity_at, p.gh_updated_at)
+  p.prev_state, p.merged_at, p.closed_at, p.forced, COALESCE(p.activity_at, p.gh_updated_at), p.review_gate_json
 FROM prs p
 JOIN repos r ON r.id = p.repo_id
 LEFT JOIN slots sl ON sl.pr_id = p.id AND sl.state <> ?`
@@ -198,7 +201,7 @@ func scanBoardRow(sc scanner, today string) (BoardRow, error) {
 		jsonCol(&b.SinceReview), &b.State, &skip, &b.GHState, nullTime(&updated), &b.HeadSHA, &reviewed, &event,
 		nullTime(&reviewedAt), &login, &b.Identity, &slot, &path, &b.Pinned, &b.Muted, nullTime(&nextAt),
 		&lastE, &b.RoundsToday, &roundsDay, &ciState, jsonCol(&b.CI), jsonCol(&b.ReviewRequests),
-		&prev, nullTime(&mergedAt), nullTime(&closedAt), &forced, nullTime(&activity))
+		&prev, nullTime(&mergedAt), nullTime(&closedAt), &forced, nullTime(&activity), jsonCol(&b.ReviewGate))
 	if err != nil {
 		return BoardRow{}, err
 	}

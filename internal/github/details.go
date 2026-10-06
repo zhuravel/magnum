@@ -76,6 +76,26 @@ type PRDetails struct {
 	// field, a resolved thread, someone's pending review, a deleted comment).
 	// Zero when GitHub returned no timeline.
 	ActivityAt time.Time
+	// ReviewGate is what GitHub's merge gate says of the reviews; nil when
+	// GitHub returned no reviewDecision or latestOpinionatedReviews.
+	ReviewGate *ReviewGate
+}
+
+// ReviewGate is what GitHub's branch protection makes of a pull request's
+// reviews: its reviewDecision and the reviews that decision counts. A
+// GitHub App's review never counts, so a PR an App approved can still wait
+// for a person's approval.
+type ReviewGate struct {
+	// Decision is GitHub's reviewDecision: APPROVED, CHANGES_REQUESTED or
+	// REVIEW_REQUIRED; "" (null) when the base branch requires no review.
+	Decision string
+	// Opinions are latestOpinionatedReviews(writersOnly: true): the latest
+	// approval or changes request (DISMISSED once dismissed) of each
+	// reviewer with write access, which is what Decision counts; never nil.
+	// SubmittedAt is not read.
+	Opinions []LatestReview
+	// Complete is true when Opinions is every one (one page of at most 100).
+	Complete bool
 }
 
 // CIRollup is the status check rollup of a pull request's head commit.
@@ -157,7 +177,11 @@ type PRState struct {
 // was cut. The activity timeline (PRDetails.ActivityAt) adds one connection
 // of ten small nodes per pull request: the dry run priced batches of 1, 10,
 // 20, 30 and 40 at 1, 1, 2, 3 and 4 points with it and 1, 1, 2, 2 and 3
-// without (2026-10-06), at most one point more per batch.
+// without (2026-10-06), at most one point more per batch. The review gate
+// (PRDetails.ReviewGate: reviewDecision and latestOpinionatedReviews) adds
+// one connection of small nodes per pull request and cost nothing: the dry
+// run priced batches of 1, 10, 20, 30 and 40 at 1, 1, 2, 3 and 4 points with
+// and without it (2026-10-06).
 const detailsFragment = `fragment PRDetails on PullRequest {
   id number title url
   author { login __typename } authorAssociation
@@ -169,6 +193,8 @@ const detailsFragment = `fragment PRDetails on PullRequest {
   assignees(first: 10) { nodes { login } }
   reviewRequests(first: 30) { nodes { requestedReviewer { __typename ... on User { login } ... on Bot { login } ... on Mannequin { login } ... on Team { slug } } } }
   latestReviews(first: 100) { totalCount pageInfo { hasNextPage } nodes { state submittedAt author { login __typename } commit { oid } } }
+  reviewDecision
+  latestOpinionatedReviews(first: 100, writersOnly: true) { totalCount pageInfo { hasNextPage } nodes { state author { login __typename } commit { oid } } }
   timelineItems(itemTypes: [REVIEW_REQUESTED_EVENT], last: 10) { nodes { ... on ReviewRequestedEvent { createdAt actor { login } requestedReviewer { __typename ... on User { login } ... on Bot { login } ... on Mannequin { login } ... on Team { slug } } } } }
   activity: timelineItems(last: 10, itemTypes: [` + activityTypes + `]) { nodes { __typename ... on PullRequestReview { submittedAt } ` + activityEvents + ` } }
   headCommit: commits(last: 1) { nodes { commit { oid statusCheckRollup { state contexts(first: 100) { totalCount pageInfo { hasNextPage } nodes { __typename ... on CheckRun { name status conclusion startedAt completedAt checkSuite { workflowRun { workflow { name } } } } ... on StatusContext { context state createdAt } } } } committedDate } } }
@@ -274,6 +300,17 @@ type detailsJSON struct {
 			} `json:"commit"`
 		} `json:"nodes"`
 	} `json:"latestReviews"`
+	ReviewDecision           *string `json:"reviewDecision"` // null: no review required
+	LatestOpinionatedReviews *struct {
+		connInfo
+		Nodes []struct {
+			State  string     `json:"state"`
+			Author *actorJSON `json:"author"`
+			Commit *struct {
+				Oid string `json:"oid"`
+			} `json:"commit"`
+		} `json:"nodes"`
+	} `json:"latestOpinionatedReviews"` // null: an answer without the gate
 	ReviewRequested reviewRequestsJSON `json:"timelineItems"`
 	Activity        *struct {
 		Nodes []struct {
@@ -386,7 +423,33 @@ func (d detailsJSON) details() PRDetails {
 	out.ReviewRequestEvents = d.ReviewRequested.events()
 	out.CI = d.ci()
 	out.ActivityAt = d.activityAt()
+	out.ReviewGate = d.reviewGate()
 	return out
+}
+
+// reviewGate is PRDetails.ReviewGate; nil when the answer has no
+// latestOpinionatedReviews (reviewDecision alone cannot tell a branch that
+// requires no review from an answer without the field).
+func (d detailsJSON) reviewGate() *ReviewGate {
+	o := d.LatestOpinionatedReviews
+	if o == nil {
+		return nil
+	}
+	g := &ReviewGate{Opinions: []LatestReview{}, Complete: o.complete(len(o.Nodes))}
+	if d.ReviewDecision != nil {
+		g.Decision = *d.ReviewDecision
+	}
+	for _, n := range o.Nodes {
+		r := LatestReview{State: n.State}
+		if n.Author != nil {
+			r.AuthorLogin, r.AuthorType = n.Author.Login, n.Author.Typename
+		}
+		if n.Commit != nil {
+			r.CommitOid = n.Commit.Oid
+		}
+		g.Opinions = append(g.Opinions, r)
+	}
+	return g
 }
 
 // activityAt is PRDetails.ActivityAt: the latest of the activity timeline's

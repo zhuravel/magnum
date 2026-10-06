@@ -729,7 +729,7 @@ func Defaults() *Config {
 		Triage:   DefaultTriage(),
 		Learn:    DefaultLearn(),
 		Notes:    DefaultNotes(),
-		Board:    Board{RecentClosed: Duration{24 * time.Hour}},
+		Board:    Board{RecentClosed: Duration{24 * time.Hour}, Shimmer: true},
 	}
 	c.Normalize()
 	return c

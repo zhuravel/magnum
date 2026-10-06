@@ -154,6 +154,9 @@ type GitHubPR struct {
 	// move moves a stored one without Details too. Not Changed either: it
 	// moves no eligibility.
 	ActivityAt *time.Time
+	// ReviewGate is the Details' review gate (nil = keep the stored one).
+	// Not Changed either: it moves no eligibility.
+	ReviewGate *ReviewGate
 
 	// InitialState and Identity are used only when the PR is new.
 	InitialState string
@@ -243,6 +246,7 @@ func (s *Store) UpsertPRFromGitHub(ctx context.Context, in GitHubPR) (PRUpsert, 
 		setIf("review_requests_json", in.ReviewRequests != nil && !slices.EqualFunc(in.ReviewRequests, cur.ReviewRequests, ReviewRequest.equal), in.ReviewRequests)
 		at := activityAt(in.ActivityAt, cur, res.HeadChanged, now)
 		setIf("activity_at", timeChanged(at, cur.ActivityAt), at)
+		setIf("review_gate_json", in.ReviewGate != nil && (cur.ReviewGate == nil || !in.ReviewGate.equal(*cur.ReviewGate)), in.ReviewGate)
 		setIf("details_at", in.DetailsAt != nil && (len(u.sets) > 0 || cur.DetailsAt == nil), in.DetailsAt)
 		if in.Files != nil {
 			if err := s.savePRFiles(ctx, tx, cur.ID, *in.Files); err != nil {
@@ -295,14 +299,14 @@ INSERT INTO prs (repo_id, node_id, number, url, title, author_login, author_type
   head_sha, head_changed_at, is_draft, is_cross_repo, review_requested, labels_json, gh_state, gh_updated_at,
   merged_at, closed_at, state, identity, created_at, updated_at,
   assignees_json, requested_reviewers_json, latest_reviews_json, base_sha, details_at, author_association,
-  ci_state, ci_json, review_requests_json, activity_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ci_state, ci_json, review_requests_json, activity_at, review_gate_json)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		in.RepoID, in.NodeID, in.Number, in.URL, in.Title, in.AuthorLogin, in.AuthorType, in.HeadRef, in.BaseRef,
 		in.HeadSHA, now, boolInt(in.IsDraft), boolInt(Deref(in.IsCrossRepo)),
 		boolInt(Deref(in.ReviewRequested)), mustDB(labels), ghState,
 		mustDB(in.GHUpdatedAt), mustDB(in.MergedAt), mustDB(in.ClosedAt), in.InitialState, in.Identity, now, now,
 		mustDB(assignees), mustDB(requested), mustDB(in.LatestReviews), in.BaseSHA, mustDB(in.DetailsAt), in.AuthorAssociation,
-		in.CIState, mustDB(in.CI), mustDB(requests), mustDB(in.ActivityAt))
+		in.CIState, mustDB(in.CI), mustDB(requests), mustDB(in.ActivityAt), mustDB(in.ReviewGate))
 	if err != nil {
 		return 0, mapErr(err)
 	}

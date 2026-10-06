@@ -229,6 +229,9 @@ type PR struct {
 	// The screens show Activity; radar change detection and the dispatch
 	// order read GHUpdatedAt.
 	ActivityAt *time.Time `json:"activity_at"`
+	// ReviewGate (migration 0019, review_gate_json) is what GitHub's merge
+	// gate said of the reviews at the last Details fetch; nil until then.
+	ReviewGate *ReviewGate `json:"review_gate"`
 }
 
 // Activity is the PR's last activity as the screens show it (the board's
@@ -548,7 +551,9 @@ var (
 		// 0009_review_requests
 		"review_requests_json",
 		// 0018_activity_at
-		"activity_at"}
+		"activity_at",
+		// 0019_review_gate
+		"review_gate_json"}
 	slotColumns = []string{"id", "name", "repo_id", "repo_full_name", "kind", "path", "main_clone",
 		"placeholder_branch", "db_slug", "state", "pr_id", "pinned", "dirty_schema", "checked_out_sha",
 		"hold_reason", "lock_sha", "last_used_at", "last_error", "created_at", "updated_at",
@@ -603,7 +608,7 @@ func scanPR(sc scanner) (PR, error) {
 		timeCol(&p.CreatedAt), timeCol(&p.UpdatedAt),
 		jsonCol(&p.Assignees), jsonCol(&p.RequestedReviewers), jsonCol(&p.LatestReviews), jsonCol(&p.SinceReview),
 		&p.LastReviewLogin, &p.BaseSHA, nullTime(&p.DetailsAt), &p.AuthorAssociation, &p.CIState, jsonCol(&p.CI),
-		jsonCol(&p.ReviewRequests), nullTime(&p.ActivityAt))
+		jsonCol(&p.ReviewRequests), nullTime(&p.ActivityAt), jsonCol(&p.ReviewGate))
 	return p, err
 }
 

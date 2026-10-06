@@ -209,6 +209,16 @@ func dbValue(v any) (any, error) {
 		}
 		b, err := json.Marshal(x)
 		return string(b), err
+	case *ReviewGate:
+		if x == nil {
+			return nil, nil
+		}
+		g := *x
+		if g.Opinions == nil {
+			g.Opinions = []LatestReview{}
+		}
+		b, err := json.Marshal(g)
+		return string(b), err
 	default:
 		return nil, fmt.Errorf("unsupported value type %T", v)
 	}

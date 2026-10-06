@@ -2305,6 +2305,11 @@ type Board struct {
 	// it); 0 turns the section off. `magnum prs --all` lists every closed PR
 	// whatever it says.
 	RecentClosed Duration `toml:"recent_closed"`
+	// Shimmer slides a rainbow across the state cell of a PR magnum approved
+	// that GitHub still blocks on the operator's approval ("✓ needs you",
+	// "✓ lift your ✗") while one is on screen; false keeps it still. A
+	// terminal without colors (NO_COLOR) shows it in reverse video either way.
+	Shimmer bool `toml:"shimmer"`
 }
     Board tunes the PR board ([board]).
 
@@ -2361,6 +2366,11 @@ func LoadWithOptions(layout paths.Layout, file string, opts LoadOptions) (*Confi
     (~/.config/magnum/config.toml) when it exists. It appends [[identity]],
     [[watch]], [[pool]] and [[repo]], and overrides keys (see applyOverlay).
     cfg.Sources lists what was read.
+
+func (c *Config) CommentsWhenClean(repo, identity string) bool
+    CommentsWhenClean reports whether the identity named identity posts
+    a comment, not an approval, for a clean verdict on repository repo
+    ("owner/name"): VerdictsFor's no-findings event is COMMENT.
 
 func (c *Config) IdentityByName(name string) *Identity
     IdentityByName returns the identity or nil.
@@ -2457,6 +2467,15 @@ func (c *Config) RolesFor(w *Watch) []Role
     RolesFor returns the roles a watch runs, in [[role]] order: every role
     when w is nil or w.Roles is empty, else the ones w.Roles names (names or
     aliases).
+
+func (c *Config) SelfLogins() []string
+    SelfLogins are the logins that count as the operator's own (the board's
+    "mine", ★): every watch's posting identity and every gh identity (the user),
+    each once (textx.FoldLogin tells them apart).
+
+func (c *Config) SelfMatch() func(login string) bool
+    SelfMatch returns a test of whether a login is one of SelfLogins
+    (textx.FoldLogin: case, "@" and "[bot]" do not matter).
 
 func (c *Config) SkillFile(src string) string
     SkillFile is the file a judge prompt names for the skill at src (SkillPath):
@@ -5788,6 +5807,9 @@ type PRDetails struct {
 	// field, a resolved thread, someone's pending review, a deleted comment).
 	// Zero when GitHub returned no timeline.
 	ActivityAt time.Time
+	// ReviewGate is what GitHub's merge gate says of the reviews; nil when
+	// GitHub returned no reviewDecision or latestOpinionatedReviews.
+	ReviewGate *ReviewGate
 }
     PRDetails is what the poller stores for a pull request whose radar row
     changed. Logins are GraphQL logins, which never carry the "[bot]" suffix;
@@ -5899,6 +5921,23 @@ type ReviewComment struct {
 	HTMLURL string
 }
     ReviewComment is one inline comment of a review as REST reports it.
+
+type ReviewGate struct {
+	// Decision is GitHub's reviewDecision: APPROVED, CHANGES_REQUESTED or
+	// REVIEW_REQUIRED; "" (null) when the base branch requires no review.
+	Decision string
+	// Opinions are latestOpinionatedReviews(writersOnly: true): the latest
+	// approval or changes request (DISMISSED once dismissed) of each
+	// reviewer with write access, which is what Decision counts; never nil.
+	// SubmittedAt is not read.
+	Opinions []LatestReview
+	// Complete is true when Opinions is every one (one page of at most 100).
+	Complete bool
+}
+    ReviewGate is what GitHub's branch protection makes of a pull request's
+    reviews: its reviewDecision and the reviews that decision counts. A GitHub
+    App's review never counts, so a PR an App approved can still wait for a
+    person's approval.
 
 type ReviewRequest struct {
 	CommitID string         `json:"commit_id"`
@@ -10428,6 +10467,17 @@ const (
     SinceReview.Source values: what Base is.
 
 const (
+	// NeedsMeApprove: GitHub still requires an approval that counts
+	// (REVIEW_REQUIRED), which the operator's would give.
+	NeedsMeApprove = "approve"
+	// NeedsMeLift: the operator's own changes request is the only one
+	// blocking the PR (CHANGES_REQUESTED): their approval, or a dismissal,
+	// lifts it.
+	NeedsMeLift = "lift"
+)
+    NeedsMe values: what a PR magnum approved waits for from the operator.
+
+const (
 	NotesFromJudge    = "judge"    // a round's judge changed them
 	NotesFromCuration = "curation" // a curator proposed them (applied or not)
 	NotesFromHuman    = "human"    // `magnum notes --edit`, or a restore the operator applied
@@ -10620,6 +10670,16 @@ func LatestSchemaVersion() int
     LatestSchemaVersion is the highest migration version embedded in this
     binary.
 
+func NeedsMe(f NeedsMeFacts, mine func(login string) bool) string
+    NeedsMe is what the operator's approval would fix on a PR magnum approved,
+    "" when nothing: an open PR, not a draft and not authored by one of the
+    operator's logins (mine), whose latest verified magnum review is on the
+    current head and clean (an approval, or a clean comment from an identity
+    that comments when clean), and which GitHub still blocks on a review:
+    NeedsMeApprove for REVIEW_REQUIRED, NeedsMeLift for CHANGES_REQUESTED when
+    every outstanding changes request is the operator's. Anyone else's changes
+    request, an unread gate or a list of opinions GitHub cut leaves it alone.
+
 func ParseReviewResult(data []byte, sum *ReviewSummary) bool
     ParseReviewResult fills sum from a judge result file (the skill's section
     8 JSON): findings by priority, simplifications suggested (the candidates'
@@ -10722,10 +10782,17 @@ type BoardRow struct {
 	// merge, so it is not flagged but would be unmuted (IsFlagDismissed).
 	MergedUnreviewed bool `json:"merged_unreviewed"`
 	FlagDismissed    bool `json:"flag_dismissed"`
+	// ReviewGate is what GitHub's merge gate said of the reviews at the last
+	// Details fetch (prs.review_gate_json); nil until then.
+	ReviewGate *ReviewGate `json:"review_gate"`
 }
     BoardRow is one PR as the board shows it: the prs row flattened with its
     repository and its current slot. Empty strings, zero times and nil pointers
     mean "none".
+
+func (b BoardRow) NeedsMeFacts() NeedsMeFacts
+    NeedsMeFacts are b's facts for NeedsMe; the caller adds CommentWhenClean
+    and, when it WantsVerdict, Verdict.
 
 type CIStatus struct {
 	SHA string `json:"sha"` // the commit the checks ran on
@@ -10880,6 +10947,9 @@ type GitHubPR struct {
 	// move moves a stored one without Details too. Not Changed either: it
 	// moves no eligibility.
 	ActivityAt *time.Time
+	// ReviewGate is the Details' review gate (nil = keep the stored one).
+	// Not Changed either: it moves no eligibility.
+	ReviewGate *ReviewGate
 
 	// InitialState and Identity are used only when the PR is new.
 	InitialState string
@@ -10955,6 +11025,40 @@ type MissFilter struct {
 	RepoID  int64    // 0 = every repository
 }
     MissFilter selects misses; zero values select everything.
+
+type NeedsMeFacts struct {
+	GHState string // prs.gh_state
+	Draft   bool
+	Author  string // the author's login ("" for a ghost)
+	// HeadSHA is the PR's head and ReviewedSHA the commit magnum's latest
+	// verified review stands for (prs.reviewed_sha).
+	HeadSHA, ReviewedSHA string
+	// LastReviewEvent is what magnum's latest review posted
+	// (prs.last_review_event): APPROVED, COMMENTED, CHANGES_REQUESTED or
+	// DISMISSED.
+	LastReviewEvent string
+	// CommentWhenClean: the PR's identity posts a comment, not an approval,
+	// for a clean verdict on its repository ([[identity]] or [[repo]]
+	// no_findings_event = "COMMENT"), so a clean comment is its approval.
+	CommentWhenClean bool
+	// Verdict is the verdict of magnum's latest posted round
+	// (ReviewSummary.Verdict); only a comment reads it.
+	Verdict string
+	Gate    *ReviewGate // nil until the Details read it
+}
+    NeedsMeFacts are what NeedsMe decides from: the PR as the registry has it,
+    and what the configuration and magnum's latest round say of its review.
+
+func (f NeedsMeFacts) WantsVerdict() bool
+    WantsVerdict reports whether NeedsMe reads f.Verdict: magnum's latest review
+    is a comment from an identity that comments when clean.
+
+type NeedsMePR struct {
+	PR      PR
+	Repo    string // owner/name
+	NeedsMe string // NeedsMeApprove or NeedsMeLift
+}
+    NeedsMePR is an open PR that needs the operator.
 
 type NotesBlob struct {
 	Path   string `json:"path"`
@@ -11158,6 +11262,9 @@ type PR struct {
 	// The screens show Activity; radar change detection and the dispatch
 	// order read GHUpdatedAt.
 	ActivityAt *time.Time `json:"activity_at"`
+	// ReviewGate (migration 0019, review_gate_json) is what GitHub's merge
+	// gate said of the reviews at the last Details fetch; nil until then.
+	ReviewGate *ReviewGate `json:"review_gate"`
 }
     PR is one pull request and its automation state.
 
@@ -11171,6 +11278,10 @@ func (p PR) FlagDismissed() bool
 
 func (p PR) MergedUnreviewed() bool
     MergedUnreviewed is IsMergedUnreviewed for p.
+
+func (p PR) NeedsMeFacts() NeedsMeFacts
+    NeedsMeFacts are p's facts for NeedsMe; the caller adds CommentWhenClean
+    and, when it WantsVerdict, Verdict.
 
 type PRAgentTime struct {
 	PRID   int64
@@ -11285,6 +11396,22 @@ type RetroQuery struct {
 	PRIDs []int64 // only these PRs, whenever they closed
 }
     RetroQuery selects the PRs a retro looks at.
+
+type ReviewGate struct {
+	// Decision is GitHub's reviewDecision: APPROVED, CHANGES_REQUESTED or
+	// REVIEW_REQUIRED; "" when the base branch requires no review.
+	Decision string `json:"decision"`
+	// Opinions are the latest approval or changes request (DISMISSED once
+	// dismissed) of each reviewer with write access, which Decision counts
+	// (GitHub's latestOpinionatedReviews, writersOnly); Login in Account
+	// form, SubmittedAt not read.
+	Opinions []LatestReview `json:"opinions"`
+	// Complete is true when Opinions is every one (GitHub returns at most
+	// 100).
+	Complete bool `json:"complete"`
+}
+    ReviewGate is prs.review_gate_json (migration 0019): what GitHub's branch
+    protection made of a PR's reviews at the last Details fetch.
 
 type ReviewRequest struct {
 	At time.Time `json:"at"`
@@ -11696,6 +11823,13 @@ func (s *Store) Misses(ctx context.Context, f MissFilter) ([]Miss, error)
     Misses returns the misses f selects, newest first, each with its PR's
     repository and number and the latest proposal it was given to.
 
+func (s *Store) NeedsMePRs(ctx context.Context, commentsWhenClean func(repo, identity string) bool, mine func(login string) bool) ([]NeedsMePR, error)
+    NeedsMePRs lists the open PRs that need the operator (NeedsMe),
+    by repository and number. commentsWhenClean tells whether an identity posts
+    a comment for a clean verdict on a repository (owner/name); mine whether a
+    login is one of the operator's. It reads magnum's latest round only for a PR
+    whose last review is such a comment.
+
 func (s *Store) NotesFileUses(ctx context.Context, repoID int64) ([]NotesFileUse, error)
     NotesFileUses lists repoID's harness files with their rounds and the uses
     recorded since each was first seen, by file name.
@@ -12043,6 +12177,10 @@ func FoldLogin(s string) string
     a leading "@" and a "[bot]" suffix do not matter, so "@Talkable[bot]" and
     "talkable" fold the same.
 
+func MatchLogins(logins []string) func(login string) bool
+    MatchLogins returns a test of whether a login is one of logins, as FoldLogin
+    folds them; an empty login matches none.
+
 func Plural(n int, one, many string) string
     Plural is one when n is 1, otherwise many.
 
@@ -12087,6 +12225,12 @@ const (
 	RequestFailed  = "failed"
 )
     The states of a Request.
+
+const (
+	NeedsMeApprove = "approve"
+	NeedsMeLift    = "lift"
+)
+    PRBoardRow.NeedsMe values (store.NeedsMe's).
 
 
 VARIABLES
@@ -12320,6 +12464,9 @@ type DaemonFacts struct {
 	// is the draining command (0 when unknown).
 	Draining   bool
 	DrainerPID int
+	// NeedsMe counts the open PRs magnum approved that GitHub still blocks
+	// on the operator's approval (PRBoardRow.NeedsMe).
+	NeedsMe int
 	// Codex is the Codex budget's pace when it reaches a cap before the
 	// window resets; nil otherwise.
 	Codex *CodexPace
@@ -12481,6 +12628,9 @@ type PRBoardOptions struct {
 	// NoMouse starts with mouse support off ([terminal] mouse = false);
 	// m turns it on and off either way.
 	NoMouse bool
+	// NoShimmer keeps the state cells of the PRs that need the operator
+	// still ([board] shimmer = false); by default their colors slide.
+	NoShimmer bool
 	// HideSkipped starts the board with the ignored and skipped PRs hidden
 	// (h toggles it); HideToggled, when set, hears every h so the choice
 	// can be kept.
@@ -12600,6 +12750,17 @@ type PRBoardRow struct {
 	// be flagged unmuted (store.IsFlagDismissed): a mute dismissed the
 	// merged-unreviewed flag, and M restores it.
 	FlagDismissed bool
+	// NeedsMe: magnum approved the PR's head, but GitHub, which never counts
+	// a GitHub App's approval, still blocks it on the operator
+	// (store.NeedsMe): NeedsMeApprove while it requires an approval that
+	// counts, NeedsMeLift while the operator's own changes request is the
+	// only one blocking it; "" otherwise. The state cell says "✓ needs you"
+	// or "✓ lift your ✗" and the updated sort lists it first.
+	NeedsMe string
+	// ReviewDecision is GitHub's reviewDecision: APPROVED,
+	// CHANGES_REQUESTED or REVIEW_REQUIRED; "" when the base branch requires
+	// no review or magnum has not read it yet. prs --json only.
+	ReviewDecision string
 }
     PRBoardRow is one pull request on the PR board. Ref is what actions receive;
     Owner, Repo and Number label the row (Ref is parsed when they are empty).
@@ -12615,7 +12776,9 @@ func SortPRBoard(rows []PRBoardRow, by PRSort, desc bool) []PRBoardRow
     (never reviewed, no request, no delta) come last either way; ties put the
     newest update first, then order by ref. An unknown sort means SortUpdated.
     The recently closed rows (Recent) come after all the others, newest closed
-    first, whatever the sort: they are the board's own section.
+    first, whatever the sort: they are the board's own section. The updated
+    sort, the board's default, lists the PRs that need the operator's approval
+    (NeedsMe) first, either way, each part in its order.
 
 type PRBoardSource interface {
 	Rows(ctx context.Context) ([]PRBoardRow, error)

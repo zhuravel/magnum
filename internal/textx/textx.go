@@ -59,3 +59,15 @@ func FoldLogin(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
 	return strings.TrimSuffix(strings.TrimPrefix(s, "@"), "[bot]")
 }
+
+// MatchLogins returns a test of whether a login is one of logins, as
+// FoldLogin folds them; an empty login matches none.
+func MatchLogins(logins []string) func(login string) bool {
+	set := make(map[string]bool, len(logins))
+	for _, l := range logins {
+		if k := FoldLogin(l); k != "" {
+			set[k] = true
+		}
+	}
+	return func(login string) bool { k := FoldLogin(login); return k != "" && set[k] }
+}

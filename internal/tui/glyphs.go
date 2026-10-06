@@ -48,6 +48,7 @@ type glyphs struct {
 	stale, mine, pin, errMark, fail, ok                     string
 	merge                                                   string // SINCE REVIEW: the base branch's merge is left out
 	bot                                                     string // before a bot's login in the narrow columns; "" = keep "[bot]"
+	yes, no                                                 string // a PR that needs the operator: "✓ needs you", "✓ lift your ✗"
 	// queued marks a row whose action waits for the daemon's answer, in the
 	// cell after the cursor's: one cell wide in every mode.
 	queued                                            string
@@ -79,7 +80,7 @@ func newGlyphs(mode IconMode) glyphs {
 		return glyphs{
 			mode:     IconsASCII,
 			approved: "+", changes: "x", commented: "c", pending: "?", dismissed: "-", other: "*",
-			stale: "~", mine: "*", pin: "pin", errMark: "!", fail: "x", ok: "+", queued: "?", merge: "m",
+			stale: "~", mine: "*", pin: "pin", errMark: "!", fail: "x", ok: "+", queued: "?", merge: "m", yes: "+", no: "x",
 			nonBlocking: "~", simplify: "s", times: "x",
 			ciPass: "+", ciFail: "x", ciPending: "o", ciMissing: "-", ciSkip: "/",
 			cursor: ">", dash: "-", minus: "-", atLeast: ">=", rule: "-", up: "^", down: "v", dot: "",
@@ -116,6 +117,7 @@ func newGlyphs(mode IconMode) glyphs {
 			ok:          "\uf058",     // gh-dash SuccessIcon
 			queued:      "◷",          // a Nerd Font icon may draw two cells wide: no room here
 			cursor:      "▌", dash: "—", minus: "−", atLeast: "≥", rule: "─", up: "▲", down: "▼", dot: "●",
+			yes: "✓", no: "✗", // in a sentence: text, not icons
 			sortDesc: "\uf51a", // nf-oct-sort_desc
 			sortAsc:  "\uf519", // nf-oct-sort_asc
 			refresh:  "\uf43a", // nf-oct-clock
@@ -168,7 +170,7 @@ func newGlyphs(mode IconMode) glyphs {
 	return glyphs{
 		mode:     IconsUnicode,
 		approved: "✔", changes: "✗", commented: "💬", pending: "◌", dismissed: "⊘", other: "•",
-		stale: "⟳", mine: "★", bot: "🤖", pin: "📌", errMark: "!", fail: "✗", ok: "✔", queued: "◷", merge: "⑂",
+		stale: "⟳", mine: "★", bot: "🤖", pin: "📌", errMark: "!", fail: "✗", ok: "✔", queued: "◷", merge: "⑂", yes: "✓", no: "✗",
 		nonBlocking: "●", simplify: "✂", times: "×",
 		ciPass: "✓", ciFail: "✗", ciPending: "◌", ciMissing: "–", ciSkip: "⊘",
 		cursor: "▌", dash: "—", minus: "−", atLeast: "≥", rule: "─", up: "▲", down: "▼", dot: "●",

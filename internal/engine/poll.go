@@ -518,6 +518,7 @@ func fillDetails(in *store.GitHubPR, d github.PRDetails, logins []string, now ti
 	if !d.ActivityAt.IsZero() {
 		in.ActivityAt = store.Ptr(d.ActivityAt) // the registry adds the head moves it saw
 	}
+	in.ReviewGate = reviewGate(d.ReviewGate)
 	labels := d.Labels
 	if labels == nil {
 		labels = []string{}

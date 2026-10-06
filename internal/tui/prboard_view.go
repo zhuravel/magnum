@@ -76,6 +76,9 @@ type prbPalette struct {
 	// named are the colors a badge may ask for ([board] badges color):
 	// red, green, yellow, blue, magenta, cyan and gray, as the pills use them.
 	named map[string]lipgloss.Style
+	// rainbow are the shimmer's colors, in bold, in the order they slide
+	// across the state cell of a PR that needs the operator (needsMeCell).
+	rainbow []lipgloss.Style
 }
 
 func newPRBPalette(st styles) prbPalette {
@@ -98,6 +101,8 @@ func newPRBPalette(st styles) prbPalette {
 	return prbPalette{
 		named: map[string]lipgloss.Style{"red": fg(red), "green": fg(green), "yellow": fg(yellow), "blue": fg(blue),
 			"magenta": fg(magenta), "cyan": fg(cyan), "gray": fg(dim), "grey": fg(dim)},
+		rainbow: []lipgloss.Style{fg(red).Bold(true), fg(yellow).Bold(true), fg(green).Bold(true),
+			fg(cyan).Bold(true), fg(blue).Bold(true), fg(magenta).Bold(true)},
 		rule: fg(faint), mine: fg(magenta), num: lipgloss.NewStyle().Bold(true),
 		add: fg(green), del: fg(red), green: fg(green), red: fg(red), yellow: fg(yellow),
 		tag:       fg(dim).Italic(true),
@@ -408,6 +413,11 @@ type prbPainter struct {
 	desc    bool
 	judge   string // PRBoardOptions.Judge
 	frame   int    // the frame of the reviewing pills' spinner (glyphs.working)
+	// shimmer is the frame of the needs-you cells' shimmer (0 = still);
+	// colorless draws those cells in bold reverse video instead (NO_COLOR,
+	// a terminal without colors).
+	shimmer   int
+	colorless bool
 }
 
 func newPRBPainter(st styles, pal prbPalette, g glyphs, now time.Time, self map[string]bool, all []PRBoardRow, by PRSort, desc bool) prbPainter {
@@ -663,7 +673,11 @@ const (
 func (p prbPainter) stateWaitCell(r PRBoardRow) cell { return p.stateWaitDetail(r, stateFull) }
 
 // stateWaitDetail is stateWaitCell with d of a running round's progress.
+// A PR that needs the operator says so instead (needsMeCell).
 func (p prbPainter) stateWaitDetail(r PRBoardRow, d stateDetail) cell {
+	if needsMeShown(r) {
+		return p.needsMeCell(r.NeedsMe)
+	}
 	c := p.stateCell(rowState(r))
 	_, rest, held := strings.Cut(r.Wait, " · ")
 	if g := roundProgress(r); g != nil && d > stateBare {
@@ -731,6 +745,44 @@ func skipWord(r PRBoardRow) string {
 		}
 	}
 	return ""
+}
+
+// needsMeShown reports whether r's state cell says it needs the operator
+// (PRBoardRow.NeedsMe): a round in flight shows its own pill instead.
+func needsMeShown(r PRBoardRow) bool { return r.NeedsMe != "" && !workingState(rowState(r)) }
+
+// shimmerSpan is how many cells each color of the shimmer covers;
+// shimmerCycle (the number of colors times shimmerSpan) is how many frames
+// the gradient takes to slide by its whole length, one cell a frame.
+const shimmerSpan = 2
+
+func (pal prbPalette) shimmerCycle() int { return max(len(pal.rainbow)*shimmerSpan, 1) }
+
+// needsMeCell is the state cell of a PR magnum approved that waits for the
+// operator: "✓ needs you", or "✓ lift your ✗" when their own changes
+// request is the only one blocking it, in bold with a rainbow that slides
+// one cell to the right every frame (p.shimmer), and in bold reverse video
+// on a terminal without colors.
+func (p prbPainter) needsMeCell(kind string) cell {
+	text := " " + p.g.yes + " needs you "
+	if kind == NeedsMeLift {
+		text = " " + p.g.yes + " lift your " + p.g.no + " "
+	}
+	if p.colorless || len(p.pal.rainbow) == 0 {
+		return cell{{text, lipgloss.NewStyle().Bold(true).Reverse(true)}}
+	}
+	cycle := p.pal.shimmerCycle()
+	var c cell
+	last := -1
+	for i, r := range []rune(text) {
+		k := ((i-p.shimmer)%cycle + cycle) % cycle / shimmerSpan
+		if k == last {
+			c[len(c)-1].text += string(r)
+			continue
+		}
+		c, last = append(c, seg{string(r), p.pal.rainbow[k]}), k
+	}
+	return c
 }
 
 func (p prbPainter) stateCell(state string) cell {
@@ -1447,7 +1499,7 @@ func (p prbPainter) rowLine(r PRBoardRow, lay prbLayout, width int, selected, qu
 			line = append(line, seg{colGap, lipgloss.Style{}})
 		}
 		pad := seg{spaces(w - cl.width()), lipgloss.Style{}}
-		if c == colState && r.MergedUnreviewed {
+		if c == colState && (r.MergedUnreviewed || needsMeShown(r)) {
 			keep = [2]int{len(line), len(line) + len(cl)}
 			if prbRightAligned(c) {
 				keep = [2]int{len(line) + 1, len(line) + 1 + len(cl)}

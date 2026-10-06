@@ -157,6 +157,12 @@ func pickEntries(ctx context.Context, d *actDeps, limit int) ([]pickEntry, error
 	}
 	var rows []row
 	now := d.now()
+	needs := map[int64]string{}
+	if list, err := d.Store.NeedsMePRs(ctx, d.Cfg.CommentsWhenClean, d.Cfg.SelfMatch()); err == nil {
+		for _, n := range list {
+			needs[n.PR.ID] = n.NeedsMe
+		}
+	}
 	for _, pr := range prs {
 		repo, ok := byID[pr.RepoID]
 		if !ok || pr.GHState != store.GHOpen {
@@ -167,6 +173,12 @@ func pickEntries(ctx context.Context, d *actDeps, limit int) ([]pickEntry, error
 			at = *a
 		}
 		state := pr.State
+		switch needs[pr.ID] {
+		case store.NeedsMeApprove:
+			state += ",✓ needs you"
+		case store.NeedsMeLift:
+			state += ",✓ lift your ✗"
+		}
 		if pr.Pinned {
 			state += ",pinned"
 		}

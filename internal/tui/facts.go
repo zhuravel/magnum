@@ -35,6 +35,9 @@ type DaemonFacts struct {
 	// is the draining command (0 when unknown).
 	Draining   bool
 	DrainerPID int
+	// NeedsMe counts the open PRs magnum approved that GitHub still blocks
+	// on the operator's approval (PRBoardRow.NeedsMe).
+	NeedsMe int
 	// Codex is the Codex budget's pace when it reaches a cap before the
 	// window resets; nil otherwise.
 	Codex *CodexPace
@@ -57,7 +60,8 @@ type fact struct{ full, short string }
 
 // list is f's facts, most pressing first: an older build (the daemon may
 // refuse what this build offers), a drain and a pause (no round starts),
-// the Codex pace, then the notes proposals waiting for review.
+// the PRs that wait for the operator's approval, the Codex pace, then the
+// notes proposals waiting for review.
 func (f DaemonFacts) list(now time.Time) []fact {
 	var out []fact
 	if f.SkewOld != "" {
@@ -85,6 +89,9 @@ func (f DaemonFacts) list(now time.Time) []fact {
 			full += " · " + textx.Count(f.Held, "request held", "requests held")
 		}
 		out = append(out, fact{full, s})
+	}
+	if n := f.NeedsMe; n > 0 {
+		out = append(out, fact{textx.Count(n, "needs your ✓", "need your ✓"), fmt.Sprintf("your ✓ ×%d", n)})
 	}
 	if c := f.Codex; c != nil {
 		at := c.At.Local().Format("Mon 15:04")

@@ -1,0 +1,32 @@
+{"data":{"rateLimit":{"limit":5000,"cost":1,"remaining":4990,"used":10,"resetAt":"2026-10-06T10:00:00Z"},"repository":{
+"p401":{"id":"PR_401","number":401,"title":"t","url":"https://github.com/talkable/talkable/pull/401","author":{"login":"alice","__typename":"User"},"state":"OPEN","isDraft":false,"headRefOid":"e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1","updatedAt":"2026-10-06T09:00:00Z",
+ "latestReviews":{"totalCount":1,"pageInfo":{"hasNextPage":false},"nodes":[{"state":"APPROVED","submittedAt":"2026-10-06T08:00:00Z","author":{"login":"zhuravel","__typename":"Bot"},"commit":{"oid":"e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1"}}]},
+ "reviewDecision":"REVIEW_REQUIRED",
+ "latestOpinionatedReviews":{"totalCount":0,"pageInfo":{"hasNextPage":false},"nodes":[]}},
+"p402":{"id":"PR_402","number":402,"title":"t","url":"https://github.com/talkable/talkable/pull/402","author":{"login":"alice","__typename":"User"},"state":"OPEN","isDraft":false,"headRefOid":"e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2","updatedAt":"2026-10-06T09:00:00Z",
+ "latestReviews":{"totalCount":0,"pageInfo":{"hasNextPage":false},"nodes":[]},
+ "reviewDecision":"CHANGES_REQUESTED",
+ "latestOpinionatedReviews":{"totalCount":2,"pageInfo":{"hasNextPage":false},"nodes":[
+  {"state":"CHANGES_REQUESTED","author":{"login":"zhuravel","__typename":"User"},"commit":{"oid":"c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0"}},
+  {"state":"APPROVED","author":{"login":"rev-ann","__typename":"User"},"commit":{"oid":"e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2"}}]}},
+"p403":{"id":"PR_403","number":403,"title":"t","url":"https://github.com/talkable/talkable/pull/403","author":{"login":"alice","__typename":"User"},"state":"OPEN","isDraft":false,"headRefOid":"e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3","updatedAt":"2026-10-06T09:00:00Z",
+ "latestReviews":{"totalCount":0,"pageInfo":{"hasNextPage":false},"nodes":[]},
+ "reviewDecision":"CHANGES_REQUESTED",
+ "latestOpinionatedReviews":{"totalCount":2,"pageInfo":{"hasNextPage":false},"nodes":[
+  {"state":"CHANGES_REQUESTED","author":{"login":"bob-rev","__typename":"User"},"commit":{"oid":"e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3"}},
+  {"state":"DISMISSED","author":{"login":"zhuravel","__typename":"User"},"commit":null}]}},
+"p404":{"id":"PR_404","number":404,"title":"t","url":"https://github.com/talkable/talkable/pull/404","author":{"login":"alice","__typename":"User"},"state":"OPEN","isDraft":false,"headRefOid":"e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4","updatedAt":"2026-10-06T09:00:00Z",
+ "latestReviews":{"totalCount":0,"pageInfo":{"hasNextPage":false},"nodes":[]},
+ "reviewDecision":null,
+ "latestOpinionatedReviews":{"totalCount":0,"pageInfo":{"hasNextPage":false},"nodes":[]}},
+"p405":{"id":"PR_405","number":405,"title":"t","url":"https://github.com/talkable/talkable/pull/405","author":{"login":"alice","__typename":"User"},"state":"OPEN","isDraft":false,"headRefOid":"e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5","updatedAt":"2026-10-06T09:00:00Z",
+ "latestReviews":{"totalCount":0,"pageInfo":{"hasNextPage":false},"nodes":[]},
+ "reviewDecision":"APPROVED",
+ "latestOpinionatedReviews":{"totalCount":1,"pageInfo":{"hasNextPage":false},"nodes":[
+  {"state":"APPROVED","author":{"login":"rev-ann","__typename":"User"},"commit":{"oid":"e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5"}}]}},
+"p406":{"id":"PR_406","number":406,"title":"t","url":"https://github.com/talkable/talkable/pull/406","author":{"login":"alice","__typename":"User"},"state":"OPEN","isDraft":false,"headRefOid":"e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6","updatedAt":"2026-10-06T09:00:00Z",
+ "latestReviews":{"totalCount":0,"pageInfo":{"hasNextPage":false},"nodes":[]},
+ "reviewDecision":"CHANGES_REQUESTED",
+ "latestOpinionatedReviews":{"totalCount":101,"pageInfo":{"hasNextPage":true},"nodes":[
+  {"state":"CHANGES_REQUESTED","author":{"login":"zhuravel","__typename":"User"},"commit":{"oid":"e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6"}}]}}
+}}}

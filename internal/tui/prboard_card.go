@@ -152,6 +152,9 @@ func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
 	}
 
 	head := p.st.Title.Render(orDim(prRef(r))) + "  " + p.stateCell(rowState(r)).render(nil)
+	if needsMeShown(r) { // still: only the table's cells shimmer
+		head += " " + p.needsMeCell(r.NeedsMe).render(nil)
+	}
 	var flags []string
 	if r.Pinned {
 		flags = append(flags, p.pinStyle().Render(p.g.pin)+" pinned")

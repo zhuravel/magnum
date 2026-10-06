@@ -12,6 +12,7 @@ import (
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/colorprofile"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/zhuravel/magnum/internal/textx"
@@ -46,6 +47,9 @@ type PRBoardOptions struct {
 	// NoMouse starts with mouse support off ([terminal] mouse = false);
 	// m turns it on and off either way.
 	NoMouse bool
+	// NoShimmer keeps the state cells of the PRs that need the operator
+	// still ([board] shimmer = false); by default their colors slide.
+	NoShimmer bool
 	// HideSkipped starts the board with the ignored and skipped PRs hidden
 	// (h toggles it); HideToggled, when set, hears every h so the choice
 	// can be kept.
@@ -97,13 +101,18 @@ type (
 		facts DaemonFacts
 		err   error
 	}
-	prbTickMsg struct{}
-	prbAnimMsg struct{} // the next frame of the reviewing pills' spinner
+	prbTickMsg    struct{}
+	prbAnimMsg    struct{} // the next frame of the reviewing pills' spinner
+	prbShimmerMsg struct{} // the next frame of the needs-you cells' shimmer
 )
 
 // prbAnimEvery is the reviewing spinner's frame time: its eight frames turn
 // once a second.
 const prbAnimEvery = 125 * time.Millisecond
+
+// prbShimmerEvery is the shimmer's frame time: four frames a second, the
+// rainbow sliding one cell each.
+const prbShimmerEvery = 250 * time.Millisecond
 
 // scrollKey moves a scroll offset for a key: a line, a page, the top or
 // the bottom (clamped later, once the content's length is known).
@@ -161,6 +170,13 @@ type prBoardModel struct {
 	working     bool // some row in scope has a review round running: its pill spins
 	anim        int  // the spinner's frame
 	animating   bool // a prbAnimMsg is pending
+	// shimmer is the needs-you cells' frame, which moves only while one of
+	// them is on screen (shimmerOn); shimmering: a prbShimmerMsg is pending.
+	// colorless: the terminal shows no colors (NO_COLOR, or none to show),
+	// so those cells are drawn in reverse video and never shimmer.
+	shimmer    int
+	shimmering bool
+	colorless  bool
 
 	sort      PRSort
 	desc      bool
@@ -211,15 +227,19 @@ type prbRowsKey struct {
 	owner      string // the owner scope: the rows, their counts and refs follow it
 	hide       bool   // ignored and skipped rows hidden: the rows and counts follow it
 	desc, dark bool
+	colorless  bool // the needs-you cells are drawn in reverse video
 	clock      int64
 	widths     prbWidths // dragged widths; zero in the natural widths' key
 	queued     string    // the rows marked waiting for the daemon (ActionLog.pendingTargets)
 }
 
-// prbRowKey names one drawn row of a view.
+// prbRowKey names one drawn row of a view. shimmer is the shimmer's frame
+// for a row whose state cell shimmers, 0 for every other: only those rows
+// are drawn again as it moves.
 type prbRowKey struct {
 	index    int
 	selected bool
+	shimmer  int
 }
 
 // prbFrameKey is everything a frame of the board shows.
@@ -244,11 +264,12 @@ type prbFrameKey struct {
 	flashErr, flashInfo      bool
 	mouseOn                  bool
 	menu                     ctxMenu
+	shimmer                  int // the shimmer's frame while a needs-you cell is on screen, else 0
 }
 
 func (m prBoardModel) rowsKey(w int) prbRowsKey {
-	return prbRowsKey{gen: m.gen, width: w, anim: m.animFrame(), sort: m.sort, owner: m.owner, hide: m.hide, desc: m.desc, dark: m.st.dark, clock: clockKey(m.opts.Now), widths: m.widths,
-		queued: strings.Join(m.log.pendingTargets(), "\n")}
+	return prbRowsKey{gen: m.gen, width: w, anim: m.animFrame(), sort: m.sort, owner: m.owner, hide: m.hide, desc: m.desc, dark: m.st.dark,
+		colorless: m.colorless, clock: clockKey(m.opts.Now), widths: m.widths, queued: strings.Join(m.log.pendingTargets(), "\n")}
 }
 
 func (m prBoardModel) frameKey() prbFrameKey {
@@ -260,7 +281,7 @@ func (m prBoardModel) frameKey() prbFrameKey {
 		haveData: m.haveData, loading: m.loading, loadErr: errText(m.loadErr), refreshedAt: m.refreshedAt.UnixNano(),
 		busy: m.busy, leaving: m.leaving, switching: m.switching,
 		flash: m.flash, flashErr: m.flashErr, flashInfo: m.flashInfo,
-		mouseOn: m.mouseOn, menu: m.menu,
+		mouseOn: m.mouseOn, menu: m.menu, shimmer: m.shimmerFrame(),
 	}
 	if m.loading || m.busy != "" || !m.haveData { // the spinner shows (drawing its frame costs)
 		k.spin = m.spin.View()
@@ -395,7 +416,48 @@ func (m *prBoardModel) startSpinner() tea.Cmd {
 func (m prBoardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	next, cmd := m.update(msg)
 	next.fixScroll()
+	if sh := next.startShimmer(); sh != nil {
+		cmd = tea.Batch(cmd, sh)
+	}
 	return next, cmd
+}
+
+// startShimmer starts the shimmer's frames when a needs-you cell is on
+// screen and none are pending; prbShimmerMsg ends the chain once none is.
+// Every Update asks, so a scroll, a load, a mode or a resize that brings
+// one on screen starts it.
+func (m *prBoardModel) startShimmer() tea.Cmd {
+	if m.shimmering || !m.shimmerOn() {
+		return nil
+	}
+	m.shimmering = true
+	return tea.Tick(prbShimmerEvery, func(time.Time) tea.Msg { return prbShimmerMsg{} })
+}
+
+// shimmerOn reports whether the needs-you cells shimmer now: on, colors
+// shown, the table drawn and one of them among its visible rows.
+func (m prBoardModel) shimmerOn() bool {
+	if m.opts.NoShimmer || m.colorless || m.mode != prbTable || !m.haveData || len(m.view) == 0 {
+		return false
+	}
+	start := min(m.scroll, max(len(m.view)-1, 0))
+	end, _ := m.visible(start)
+	for i := start; i < min(end, len(m.view)); i++ {
+		if needsMeShown(m.view[i]) {
+			return true
+		}
+	}
+	return false
+}
+
+// shimmerFrame is the shimmer's frame for the painter and the cache keys:
+// 0 while it does not move, so a board without a needs-you cell on screen
+// keeps its cached frames.
+func (m prBoardModel) shimmerFrame() int {
+	if !m.shimmerOn() {
+		return 0
+	}
+	return m.shimmer
 }
 
 func (m prBoardModel) update(msg tea.Msg) (prBoardModel, tea.Cmd) {
@@ -430,6 +492,14 @@ func (m prBoardModel) update(msg tea.Msg) (prBoardModel, tea.Cmd) {
 			cmd = tea.Batch(cmd, m.startLoad())
 		}
 		return m, cmd
+	case tea.ColorProfileMsg:
+		m.colorless = msg.Profile <= colorprofile.ASCII
+	case prbShimmerMsg:
+		m.shimmering = false // Update starts the next frame while one is on screen
+		if m.shimmerOn() {
+			m.shimmer = (m.shimmer + 1) % m.pal.shimmerCycle()
+		}
+		return m, nil
 	case prbAnimMsg:
 		if !m.working {
 			m.animating = false // let the frame chain end
@@ -963,6 +1033,7 @@ func (m prBoardModel) View() tea.View {
 func (m prBoardModel) painter() prbPainter {
 	p := newPRBPainter(m.st, m.pal, m.g, m.opts.Now(), m.self, m.all, m.sort, m.desc)
 	p.judge, p.frame = m.opts.Judge, m.animFrame()
+	p.shimmer, p.colorless = m.shimmerFrame(), m.colorless
 	return p
 }
 
@@ -1044,7 +1115,11 @@ func (m prBoardModel) tableLines(p prbPainter, w int) (lines []string, below int
 			lines = append(lines, p.recentHeading(w, m.opts.RecentClosed, len(m.view)-m.section))
 		}
 		sel := i == m.cursor
-		lines = append(lines, m.cache.row(rk, prbRowKey{i, sel}, func() string {
+		key := prbRowKey{index: i, selected: sel}
+		if needsMeShown(m.view[i]) {
+			key.shimmer = p.shimmer
+		}
+		lines = append(lines, m.cache.row(rk, key, func() string {
 			return p.rowLine(m.view[i], lay, w, sel, queuedFor(prRef(m.view[i]), queued))
 		}))
 	}

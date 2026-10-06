@@ -79,3 +79,26 @@ func TestBoardRecentClosedWindow(t *testing.T) {
 		t.Fatalf("negative recent_closed: %v", err)
 	}
 }
+
+// [board] shimmer lets the state cells of the PRs that need the operator's
+// approval shimmer (on by default); false keeps them still.
+func TestBoardShimmer(t *testing.T) {
+	user := filepath.Join(t.TempDir(), "config.toml")
+	load := func(body string) *Config {
+		t.Helper()
+		if err := os.WriteFile(user, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := Load(paths.Layout{Home: t.TempDir(), UserConfig: user}, "")
+		if err != nil {
+			t.Fatalf("%q: %v", body, err)
+		}
+		return cfg
+	}
+	if !Defaults().Board.Shimmer || !load("").Board.Shimmer {
+		t.Fatal("the shimmer is off by default")
+	}
+	if load("[board]\nshimmer = false\n").Board.Shimmer {
+		t.Fatal("shimmer = false left it on")
+	}
+}

@@ -282,6 +282,9 @@ type Engine struct {
 	// review requests the running pause holds that were toasted.
 	held         map[int64]heldWait
 	pauseToasted map[string]bool
+	// needsMe are the toast keys of the PRs that need the operator offered
+	// to the batcher in this run (needs_me.go).
+	needsMe map[string]bool
 
 	infraMu  sync.Mutex // infrastructure failures (infra.go)
 	depsFail depsFailure
@@ -640,6 +643,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	e.maybeReconcile(ctx)
 	e.maybeRetro(ctx)
 	e.maybeCurate(ctx)
+	e.noteNeedsMe(ctx)
 	e.surface(ctx)
 	return errors.Join(errs...)
 }

@@ -97,3 +97,15 @@ func TestFoldLoginDropsCaseAtAndBotSuffix(t *testing.T) {
 		}
 	}
 }
+
+// MatchLogins matches the logins as FoldLogin folds them; an empty login,
+// or one that folds to nothing, matches none.
+func TestMatchLoginsFoldsLikeFoldLogin(t *testing.T) {
+	mine := MatchLogins([]string{"zhuravel", "talkable[bot]", ""})
+	for login, want := range map[string]bool{"@Zhuravel": true, "zhuravel[bot]": true, "talkable": true, "TALKABLE[bot]": true,
+		"rev-ann": false, "": false, "[bot]": false} {
+		if got := mine(login); got != want {
+			t.Errorf("mine(%q) = %v, want %v", login, got, want)
+		}
+	}
+}

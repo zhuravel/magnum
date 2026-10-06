@@ -27,7 +27,7 @@ import (
 	"github.com/zhuravel/magnum/internal/tui"
 )
 
-const prsUsage = "[--repo owner/name|name] [--view all|magnum|mine|ready] [--sort updated|last-review|reviewer-activity|requested|changes|state] [--desc] [--all] [--json] [--limit N]"
+const prsUsage = "[--repo owner/name|name] [--view all|magnum|mine|ready] [--sort updated|last-review|reviewer-activity|requested|changes|state] [--desc] [--all] [--needs-me] [--json] [--limit N]"
 
 func newPRsCmd(c *Context) *cobra.Command {
 	var f prsFlags
@@ -53,6 +53,10 @@ func newPRsCmd(c *Context) *cobra.Command {
 			"PRs GitHub merged or closed within [board] recent_closed (24h by default; \"0\" turns it off) follow the "+
 			"open ones, newest closed first, dimmed; \"merged · unreviewed\" (closed,merged,unreviewed in the printed "+
 			"rows) marks one GitHub merged before magnum reviewed its last push. "+
+			"\"✓ needs you\" (needs-you in the printed rows) marks a PR magnum approved on its head that GitHub still "+
+			"blocks on your approval, because it never counts a GitHub App's (its review decision is REVIEW_REQUIRED), "+
+			"and \"✓ lift your ✗\" (lift-yours) one whose only changes request is yours; the updated sort lists them "+
+			"first, the title counts them and --needs-me shows only them. "+
 			"--repo shows one repository, --all adds every closed and merged PR, --limit caps the rows. --sort picks the "+
 			"order (updated, last-review, reviewer-activity, requested, changes, state); --desc (the default) puts the "+
 			"newest, latest, most recently requested, most changed or most urgent first and --desc=false reverses the "+
@@ -65,6 +69,7 @@ func newPRsCmd(c *Context) *cobra.Command {
 	fs.StringVar(&f.sort, "sort", string(tui.SortUpdated), "order: updated, last-review, reviewer-activity, requested, changes or state")
 	fs.BoolVar(&f.desc, "desc", true, "largest first (newest, latest, most recently requested, most changed, most urgent); --desc=false reverses")
 	fs.BoolVar(&f.all, "all", false, "also list closed and merged PRs")
+	fs.BoolVar(&f.needsMe, "needs-me", false, "only the PRs magnum approved that still need your approval on GitHub")
 	fs.BoolVar(&f.json, "json", false, "print JSON")
 	fs.IntVar(&f.limit, "limit", 0, "show at most N PRs (0 = all)")
 	_ = cmd.RegisterFlagCompletionFunc("repo", completeFlag(c.completeRepos))
@@ -75,9 +80,9 @@ func newPRsCmd(c *Context) *cobra.Command {
 
 // prsFlags are the parsed `magnum prs` flags.
 type prsFlags struct {
-	repo, sort, view string
-	desc, all, json  bool
-	limit            int
+	repo, sort, view         string
+	desc, all, json, needsMe bool
+	limit                    int
 }
 
 // prsOptions are what the board and the printed rows show.
@@ -89,6 +94,9 @@ type prsOptions struct {
 	Desc  bool
 	All   bool
 	Limit int
+	// NeedsMe lists only the PRs that need the operator's approval
+	// (tui.PRBoardRow.NeedsMe): --needs-me.
+	NeedsMe bool
 }
 
 // filter is the registry query of o. The registry orders by last update,
@@ -105,7 +113,7 @@ func (o prsOptions) filter() store.BoardFilter {
 func prsRows(ctx context.Context, st *store.Store, cfg *config.Config, o prsOptions, self []string, layout paths.Layout) ([]tui.PRBoardRow, error) {
 	f := o.filter()
 	f.Limit = 0
-	rows, err := prsSource(st, cfg, f, self, layout)(ctx)
+	rows, err := o.source(prsSource(st, cfg, f, self, layout))(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -114,6 +122,18 @@ func prsRows(ctx context.Context, st *store.Store, cfg *config.Config, o prsOpti
 		rows = rows[:o.Limit]
 	}
 	return rows, nil
+}
+
+// source is src narrowed to what o shows beyond the registry query: with
+// NeedsMe, the PRs that need the operator's approval.
+func (o prsOptions) source(src tui.PRBoardSourceFunc) tui.PRBoardSourceFunc {
+	if !o.NeedsMe {
+		return src
+	}
+	return func(ctx context.Context) ([]tui.PRBoardRow, error) {
+		rows, err := src(ctx)
+		return slices.DeleteFunc(rows, func(r tui.PRBoardRow) bool { return r.NeedsMe == "" }), err
+	}
 }
 
 func runPRs(c *Context, f prsFlags, pos []string) int {
@@ -135,7 +155,7 @@ func runPRs(c *Context, f prsFlags, pos []string) int {
 	if owner, name, ok := strings.Cut(repo, "/"); ok && (owner == "" || name == "" || strings.Contains(name, "/")) {
 		return inspUsage(c, "prs", fmt.Sprintf("--repo %q: want owner/name or name", f.repo), prsUsage)
 	}
-	o := prsOptions{Repo: repo, View: view, Sort: by, Desc: f.desc, All: f.all, Limit: f.limit}
+	o := prsOptions{Repo: repo, View: view, Sort: by, Desc: f.desc, All: f.all, Limit: f.limit, NeedsMe: f.needsMe}
 
 	a, err := inspOpenApp(c, false)
 	if err != nil {
@@ -189,8 +209,8 @@ func runInspScreens(ctx context.Context, c *Context, d statusDeps, so statusOpti
 			Icons: screenIcons(d.Config), NoMouse: !mouse, MouseToggled: toggled, Widths: widths, Log: log,
 		})
 	}
-	src := prsSource(d.Store, d.Config, po.filter(), prsSelfLogins(d.Config), c.Layout) // one source: its timings cache survives tab
-	hide := false                                                                       // h: kept in the registry, so the board opens the way it was left
+	src := po.source(prsSource(d.Store, d.Config, po.filter(), prsSelfLogins(d.Config), c.Layout)) // one source: its timings cache survives tab
+	hide := false                                                                                  // h: kept in the registry, so the board opens the way it was left
 	if d.Store != nil {
 		if v, ok, err := d.Store.GetKV(ctx, kvBoardHideSkipped); err == nil && ok {
 			hide = v == "1"
@@ -221,7 +241,7 @@ const kvBoardHideSkipped = "board.hide_skipped"
 func prsBoardOptions(cfg *config.Config, o prsOptions) tui.PRBoardOptions {
 	return tui.PRBoardOptions{SelfLogins: prsSelfLogins(cfg), DefaultSort: o.Sort, DefaultView: o.View, Repo: o.Repo, Now: inspNow,
 		Judge: rolesJudgeName(cfg), Icons: screenIcons(cfg), DefaultRepo: defaultRepo(cfg), DefaultOwner: o.Owner,
-		RecentClosed: prsRecentClosed(cfg)}
+		RecentClosed: prsRecentClosed(cfg), NoShimmer: cfg != nil && !cfg.Board.Shimmer}
 }
 
 // screenIcons is the screens' symbols, [terminal] icons: the screens read
@@ -320,13 +340,24 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 			}
 			out = append(out, row)
 		}
-		if sums, err := st.LastReviewSummaries(ctx, ids); err == nil {
+		sums, err := st.LastReviewSummaries(ctx, ids)
+		if err == nil {
 			for i := range out {
 				if s, ok := sums[ids[i]]; ok {
 					out[i].Findings = &tui.FindingsInfo{Counts: s.Counts, Simplifications: s.Simplifications,
 						Fixed: s.Fixed, Open: s.Open, Answered: s.Answered, Verdict: s.Verdict, Posted: s.Event, SHA: s.SHA}
 				}
 			}
+		}
+		mine := textx.MatchLogins(self)
+		for i, r := range rows {
+			if r.ReviewGate != nil {
+				out[i].ReviewDecision = r.ReviewGate.Decision
+			}
+			nf := r.NeedsMeFacts()
+			nf.CommentWhenClean = cfg.CommentsWhenClean(r.Owner+"/"+r.Name, r.Identity)
+			nf.Verdict = sums[r.PRID].Verdict
+			out[i].NeedsMe = store.NeedsMe(nf, mine)
 		}
 		if err := timings.fill(ctx, st, cfg, ids, out, inspNow()); err != nil {
 			return nil, err
@@ -349,32 +380,10 @@ func prsRecentClosed(cfg *config.Config) time.Duration {
 	return max(cfg.Board.RecentClosed.Duration, 0)
 }
 
-// prsSelfLogins are the logins that count as "me" on the board: every
-// watch's posting identity and every gh identity (the user).
-func prsSelfLogins(cfg *config.Config) []string {
-	if cfg == nil {
-		return nil
-	}
-	var out []string
-	seen := map[string]bool{}
-	add := func(login string) {
-		if k := textx.FoldLogin(login); k != "" && !seen[k] {
-			seen[k] = true
-			out = append(out, login)
-		}
-	}
-	for _, w := range cfg.Watches {
-		if id := cfg.IdentityByName(w.Identity); id != nil {
-			add(id.Login)
-		}
-	}
-	for _, id := range cfg.Identities {
-		if id.Kind == "gh" {
-			add(id.Login)
-		}
-	}
-	return out
-}
+// prsSelfLogins are the logins that count as "me" on the board
+// (config.SelfLogins): every watch's posting identity and every gh identity
+// (the user).
+func prsSelfLogins(cfg *config.Config) []string { return cfg.SelfLogins() }
 
 // prsAccountKey folds a login for telling accounts apart: case and "@"
 // dropped, "[bot]" kept (the App "zhuravel[bot]" is not the user "zhuravel").
@@ -643,6 +652,12 @@ func prsStateCell(r tui.PRBoardRow) string {
 	}
 	if r.MergedUnreviewed {
 		s += ",unreviewed"
+	}
+	switch r.NeedsMe {
+	case tui.NeedsMeApprove:
+		s += ",needs-you"
+	case tui.NeedsMeLift:
+		s += ",lift-yours"
 	}
 	for _, f := range []struct {
 		on   bool

@@ -2451,3 +2451,38 @@ editing history. Code, config comments and prompts reference these by their head
   sentences around it are pinned or carry rules. Rejected: taking "still open" or "undecided" at their word
   (what caused the miss), a positive score as a fix (only "applied" or "fixed" claims one, and the code must
   show it) and scores past the first paragraph (the classifier reads only the first).
+- **PRs Magnum approved that still need the operator's approval** (2026-10-06). GitHub does not count a
+  GitHub App's approval toward a branch's required approvals: on 11 open PRs the App approved, GitHub's
+  `reviewDecision` and `latestOpinionatedReviews` never included it, so a PR Magnum approved can still be
+  blocked on the operator, whose approval is the one that counts, or on their own earlier changes request
+  (one PR had five), which blocks it until they approve or dismiss it. Such a PR "needs me"
+  (`store.NeedsMe`): open, not a draft, not authored by one of the operator's logins (the board's ★:
+  `config.SelfLogins`, every watch's posting identity and every gh identity, folded so an App named after
+  the user is theirs), Magnum's latest verified review on the current head (`reviewed_sha = head_sha`)
+  and clean (`last_review_event` APPROVED, or COMMENTED with the latest posted round's verdict clean for an
+  identity whose `no_findings_event` is COMMENT on that repository), and GitHub's decision one the
+  operator's approval fixes: REVIEW_REQUIRED (`approve`), or CHANGES_REQUESTED with every outstanding
+  changes request theirs (`lift`). Someone else's changes request, a decision not read yet, no review
+  required (null) or a list of opinions cut at 100 is not. The Details the poll reads for a PR whose
+  `updatedAt` moved (a review moves it) now carry `reviewDecision` and `latestOpinionatedReviews(first:
+  100, writersOnly: true) { state author commit }` (`github.PRDetails.ReviewGate`); `writersOnly` because
+  only reviewers with write access count toward the decision. GitHub's dry run priced Details batches of
+  1, 10, 20, 30 and 40 PRs at 1, 1, 2, 3 and 4 points with and without them (2026-10-06): no extra point.
+  The registry keeps them in `prs.review_gate_json` (migration 0019, `store.ReviewGate`), written without
+  counting as a GitHub change; the migration clears the open PRs' `details_at` so the next poll reads each
+  gate once. The board's STATE cell says "✓ needs you" or "✓ lift your ✗" (a round in flight keeps its
+  own pill; the card's head adds it, still) in a rainbow of the six ANSI hues, two cells each, sliding one
+  cell every 250 ms while such a row is on screen; only those rows are drawn again (the frame is in their
+  row keys and, while one is visible, in the frame key, never in the rows' key the layout and the other
+  rows are cached by), and nothing ticks while none is on screen, in the card, with `[board] shimmer =
+  false`, or on a terminal without colors (`tea.ColorProfileMsg` at or below ASCII: NO_COLOR), which shows
+  the cell in bold reverse video. The updated sort (the default) lists these PRs first either way; the
+  other sorts keep their order. The titles of the board and the status dashboard say "N need your ✓"
+  (`tui.DaemonFacts.NeedsMe`, after a pause, before the Codex pace), `magnum prs --needs-me` lists only
+  them (the live board too), `prs --json` gains `needs_me` (`approve`, `lift`, "") and `review_decision`,
+  the printed STATE `needs-you`/`lift-yours`, `magnum pick` `✓ needs you`/`✓ lift your ✗`, and the daemon
+  toasts each PR once per head with its link (`needs-me:<pr>:<head>` deduped for 30 days in the registry,
+  batched with the other informational toasts). Rejected: a stored needs-me column (its inputs change at
+  the poll, at a review's verification and with the configuration, so it would be stale between them);
+  `latestReviews` (a later comment hides an outstanding changes request); a new section of the board (one
+  line per PR, as decided); truecolor for the rainbow (the screens use the 16 ANSI colors only).
