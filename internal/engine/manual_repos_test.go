@@ -84,3 +84,21 @@ func TestManualRepositoryTakesBackAWaitingPR(t *testing.T) {
 	wantManual(t, h, 2)
 	reqWantRounds(t, h, 0)
 }
+
+// A waiting PR a changed configuration now rejects is taken back when the
+// daemon starts, not only at dispatch: dispatch may be held (the Codex
+// soft cap holds first reviews) for days, and meanwhile the board said
+// "queued" for a PR that will never be reviewed on its own.
+func TestStartupTakesBackAWaitingPRTheConfigNowRejects(t *testing.T) {
+	h := newHarness(t)
+	h.open(prSpec{n: 1, head: "base1"})
+	h.startup()
+	h.tick() // first sync: #1 baseline
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b1"})
+	h.tick()
+	h.wantState(2, store.PRQueued)
+
+	h.cfg.Watches[0].ManualRepos = []string{"Talkable"} // the operator's edit, then a restart
+	h.e.reclassifyIneligible(h.ctx)
+	wantManual(t, h, 2)
+}

@@ -296,10 +296,13 @@ func (e *Engine) maintainPool(ctx context.Context, repo string, inv *inventory.I
 // ineligible ones skipBaseline moved go back to baseline when no filter
 // rejects them any more (restoreBaseline), and the other ineligible PRs are
 // classified again, since the config may have relaxed a filter while the
-// poller only re-classifies a PR when GitHub reports a change. (Waiting PRs
-// a filter now rejects are caught at dispatch: reclassify.)
+// poller only re-classifies a PR when GitHub reports a change. Waiting PRs a
+// filter now rejects become ineligible here too (reclassify, which dispatch
+// also applies), since dispatch may be held for days (the Codex soft cap
+// holds first reviews) while the board shows them as queued.
 func (e *Engine) reclassifyIneligible(ctx context.Context) {
 	e.skipBaseline(ctx)
+	e.reclassifyWaiting(ctx)
 	prs, err := e.st.ListPRs(ctx, store.PRFilter{States: []string{store.PRIneligible}})
 	if err != nil {
 		e.log.Warn("ineligible PRs", "err", err)
@@ -323,6 +326,28 @@ func (e *Engine) reclassifyIneligible(ctx context.Context) {
 		if err := e.onSeenPR(ctx, repo, *w, pr, store.PRUpsert{PR: pr, Changed: true}, e.now()); err != nil {
 			e.log.Warn("reclassify ineligible PR", "subject", prSubject(repo, pr.Number), "err", err)
 		}
+	}
+}
+
+// reclassifyWaiting applies the watches' current filters to the PRs waiting
+// for a round (queued, rereview_pending): one a filter now rejects becomes
+// ineligible (reclassify keeps forced, paused and detail-less PRs).
+func (e *Engine) reclassifyWaiting(ctx context.Context) {
+	prs, err := e.st.ListPRs(ctx, store.PRFilter{States: []string{store.PRQueued, store.PRRereviewPending}})
+	if err != nil {
+		e.log.Warn("waiting PRs", "err", err)
+		return
+	}
+	now := e.now()
+	for _, pr := range prs {
+		if pr.GHState != store.GHOpen {
+			continue
+		}
+		repo, err := e.st.RepoByID(ctx, pr.RepoID)
+		if err != nil {
+			continue
+		}
+		e.reclassify(ctx, pr, e.cfg.WatchFor(repo.FullName()), now)
 	}
 }
 
