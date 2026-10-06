@@ -467,6 +467,63 @@ func TestDetailsReadsChangedFilePaths(t *testing.T) {
 	}
 }
 
+// details_activity.json is synthetic, in the shape GitHub answers the
+// fragment with; every PR's updatedAt is 2026-10-06 09:00, moved by something
+// a reviewer never sees. A PR's activity time is the latest of its activity
+// timeline items (wherever the timeline lists them), its latest reviews,
+// its description edit, its head commit (never past updatedAt), its merge or
+// close and its opening; a pending review does not count, and a PR whose
+// timeline GitHub did not return has none.
+func TestDetailsReadsTheLastActivity(t *testing.T) {
+	f := &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"gh", "api", "graphql"}, Result: execx.Result{Stdout: fixture(t, "details_activity.json")}}}}
+	got, missing, err := (&Client{Run: f}).Details(context.Background(), "talkable", "talkable", []int{301, 302, 303, 304, 305, 306, 307, 308})
+	if err != nil || len(missing) != 0 || len(got) != 8 {
+		t.Fatalf("got %d, missing %v, err %v", len(got), missing, err)
+	}
+	q := oneLine(decodeReq(t, f.Calls[0]).Query)
+	for _, want := range []string{"createdAt updatedAt lastEditedAt",
+		"activity: timelineItems(last: 10, itemTypes: [ISSUE_COMMENT, PULL_REQUEST_REVIEW, LABELED_EVENT, UNLABELED_EVENT, " +
+			"REVIEW_REQUESTED_EVENT, REVIEW_REQUEST_REMOVED_EVENT, READY_FOR_REVIEW_EVENT, CONVERT_TO_DRAFT_EVENT, RENAMED_TITLE_EVENT, " +
+			"BASE_REF_CHANGED_EVENT, AUTOMATIC_BASE_CHANGE_SUCCEEDED_EVENT, CLOSED_EVENT, REOPENED_EVENT, MERGED_EVENT, HEAD_REF_FORCE_PUSHED_EVENT])",
+		"... on PullRequestReview { submittedAt }", "} committedDate } } }"} {
+		if !strings.Contains(q, want) {
+			t.Errorf("query lacks %q: %s", want, q)
+		}
+	}
+	at := func(s string) time.Time {
+		v, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	for n, want := range map[int]time.Time{
+		301: at("2026-10-03T10:00:00Z"), // a review the timeline lists before a label and a removed request
+		302: at("2026-10-01T12:00:00Z"), // nothing but its last commit
+		303: at("2026-10-04T08:00:00Z"), // a description edit
+		304: at("2026-10-05T07:00:00Z"), // a label removed; a pending review never counts
+		305: at("2026-10-06T09:00:00Z"), // a commit dated past updatedAt (the committer's clock)
+		306: at("2026-10-05T10:00:00Z"), // merged
+		307: {},                         // no timeline: unknown
+		308: at("2026-10-04T12:00:00Z"), // a latest review the timeline's last ten left out
+	} {
+		if d := got[n]; !d.ActivityAt.Equal(want) {
+			t.Errorf("#%d activity = %v, want %v", n, d.ActivityAt, want)
+		}
+	}
+
+	// A fixture captured before the fields existed has no activity time.
+	old := &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"gh", "api", "graphql"},
+		Result: execx.Result{Stdout: fixture(t, "details.json"), Stderr: fixture(t, "details.stderr"), Code: 1}}}}
+	prev, _, err := (&Client{Run: old}).Details(context.Background(), "talkable", "talkable", []int{11975})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := prev[11975]; !d.ActivityAt.IsZero() {
+		t.Errorf("absent timeline: activity = %v", d.ActivityAt)
+	}
+}
+
 func TestCheckStateNormalization(t *testing.T) {
 	runs := map[string][][2]string{ // want -> status, conclusion
 		CheckPassed:  {{"COMPLETED", "SUCCESS"}, {"COMPLETED", "NEUTRAL"}},

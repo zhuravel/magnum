@@ -148,6 +148,12 @@ type GitHubPR struct {
 	// head (pr_files). Not Changed either: the list moves no eligibility
 	// (skip_paths reads its own).
 	Files *PRFiles
+	// ActivityAt is the Details' activity time (nil = keep the stored one).
+	// The stored prs.activity_at is the later of it and the PR's last head
+	// move the poller saw (head_changed_at, but not its insertion); a head
+	// move moves a stored one without Details too. Not Changed either: it
+	// moves no eligibility.
+	ActivityAt *time.Time
 
 	// InitialState and Identity are used only when the PR is new.
 	InitialState string
@@ -235,6 +241,8 @@ func (s *Store) UpsertPRFromGitHub(ctx context.Context, in GitHubPR) (PRUpsert, 
 		setIf("ci_state", in.CIState != nil && (cur.CIState == nil || *in.CIState != *cur.CIState), in.CIState)
 		setIf("ci_json", in.CI != nil && (cur.CI == nil || !in.CI.equal(*cur.CI)), in.CI)
 		setIf("review_requests_json", in.ReviewRequests != nil && !slices.EqualFunc(in.ReviewRequests, cur.ReviewRequests, ReviewRequest.equal), in.ReviewRequests)
+		at := activityAt(in.ActivityAt, cur, res.HeadChanged, now)
+		setIf("activity_at", timeChanged(at, cur.ActivityAt), at)
 		setIf("details_at", in.DetailsAt != nil && (len(u.sets) > 0 || cur.DetailsAt == nil), in.DetailsAt)
 		if in.Files != nil {
 			if err := s.savePRFiles(ctx, tx, cur.ID, *in.Files); err != nil {
@@ -287,18 +295,43 @@ INSERT INTO prs (repo_id, node_id, number, url, title, author_login, author_type
   head_sha, head_changed_at, is_draft, is_cross_repo, review_requested, labels_json, gh_state, gh_updated_at,
   merged_at, closed_at, state, identity, created_at, updated_at,
   assignees_json, requested_reviewers_json, latest_reviews_json, base_sha, details_at, author_association,
-  ci_state, ci_json, review_requests_json)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ci_state, ci_json, review_requests_json, activity_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		in.RepoID, in.NodeID, in.Number, in.URL, in.Title, in.AuthorLogin, in.AuthorType, in.HeadRef, in.BaseRef,
 		in.HeadSHA, now, boolInt(in.IsDraft), boolInt(Deref(in.IsCrossRepo)),
 		boolInt(Deref(in.ReviewRequested)), mustDB(labels), ghState,
 		mustDB(in.GHUpdatedAt), mustDB(in.MergedAt), mustDB(in.ClosedAt), in.InitialState, in.Identity, now, now,
 		mustDB(assignees), mustDB(requested), mustDB(in.LatestReviews), in.BaseSHA, mustDB(in.DetailsAt), in.AuthorAssociation,
-		in.CIState, mustDB(in.CI), mustDB(requests))
+		in.CIState, mustDB(in.CI), mustDB(requests), mustDB(in.ActivityAt))
 	if err != nil {
 		return 0, mapErr(err)
 	}
 	return res.LastInsertId()
+}
+
+// activityAt is a known PR's prs.activity_at after an upsert: the Details'
+// activity time (else the stored one), or the PR's last head move when
+// later: now when the head just moved, else head_changed_at when it is after
+// the PR's insertion (which sets it too, and is no push); nil while neither
+// the Details nor the registry know one.
+func activityAt(details *time.Time, cur PR, headChanged bool, now time.Time) *time.Time {
+	at := cur.ActivityAt
+	if details != nil {
+		at = details
+	}
+	if at == nil {
+		return nil
+	}
+	moved := cur.HeadChangedAt
+	if headChanged {
+		moved = now
+	} else if !moved.After(cur.CreatedAt) {
+		moved = time.Time{}
+	}
+	if moved.After(*at) {
+		return &moved
+	}
+	return at
 }
 
 func timeChanged(in, cur *time.Time) bool {

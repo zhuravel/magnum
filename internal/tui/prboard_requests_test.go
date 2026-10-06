@@ -20,7 +20,7 @@ func requestRows() []PRBoardRow {
 	}
 	row := func(n int, title string, toMe, last *RequestInfo, all ...RequestInfo) PRBoardRow {
 		return PRBoardRow{Ref: "example#" + strconv.Itoa(n), Owner: "talkable", Repo: "example", Number: n, Title: title,
-			State: "reviewed", GHState: "OPEN", UpdatedAt: ago(time.Duration(n) * time.Minute), HeadSHA: "abcdef1234",
+			State: "reviewed", GHState: "OPEN", ActivityAt: ago(time.Duration(n) * time.Minute), HeadSHA: "abcdef1234",
 			RequestedToMe: toMe, LastRequest: last, Requests: all}
 	}
 	me, other := ask("zhuravel", "alice", 2*time.Hour), ask("bob", "alice", 72*time.Hour)

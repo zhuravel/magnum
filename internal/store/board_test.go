@@ -258,7 +258,7 @@ func TestBoard(t *testing.T) {
 		PRID: held.ID, Ref: "talkable/talkable#1", Owner: "talkable", Name: "talkable", Number: 1, Title: "PR 1", Author: "alice",
 		URL: "u1", Draft: true, Labels: []string{"WIP"}, Assignees: []string{"zhuravel"}, RequestedReviewers: []string{"team:engineers"},
 		ReviewRequested: true, LatestReviews: held.LatestReviews, ReviewRequests: held.ReviewRequests, SinceReview: &since, State: PRReviewed, GHState: GHOpen,
-		UpdatedAt: t0.Add(-time.Hour), HeadSHA: "head1", ReviewedSHA: "head0", LastReviewEvent: "COMMENTED",
+		UpdatedAt: t0.Add(-time.Hour), ActivityAt: t0.Add(-time.Hour), HeadSHA: "head1", ReviewedSHA: "head0", LastReviewEvent: "COMMENTED",
 		LastReviewAt: t0.Add(-2 * time.Hour), LastReviewLogin: "talkable", Identity: "talkable-app", Slot: "review1",
 		SlotPath: sl.Path, Pinned: true, NextEligibleAt: t0.Add(30 * time.Minute), LastError: "boom", RoundsToday: 2,
 	}

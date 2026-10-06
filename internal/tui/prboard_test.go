@@ -28,7 +28,7 @@ func boardRows() []PRBoardRow {
 			Ref: "talkable/talkable#11920", Owner: "talkable", Repo: "talkable", Number: 11920,
 			Title: "Fix referral widget alignment on mobile Safari", Author: "ann", URL: "https://github.com/talkable/talkable/pull/11920",
 			Labels: []string{"bug", "frontend"}, Assignees: []string{"bob"},
-			State: "reviewed", GHState: "OPEN", UpdatedAt: ago(3 * time.Hour), HeadSHA: "abc1234def",
+			State: "reviewed", GHState: "OPEN", ActivityAt: ago(3 * time.Hour), HeadSHA: "abc1234def",
 			LastReview: &ReviewInfo{Login: "zhuravel", Event: "APPROVED", SubmittedAt: ago(2 * time.Hour), CommitSHA: "abc1234def"},
 			Reviewers: []ReviewerInfo{
 				{Login: "cat", Verdict: "commented", SubmittedAt: ago(4 * time.Hour), CommitSHA: "9999999"},
@@ -42,7 +42,7 @@ func boardRows() []PRBoardRow {
 		{
 			Ref: "talkable/talkable#11931", Owner: "talkable", Repo: "talkable", Number: 11931,
 			Title: "Bump rails from 7.1.4 to 7.2.1", Author: "dependabot[bot]", URL: "https://github.com/talkable/talkable/pull/11931",
-			State: "queued", GHState: "OPEN", UpdatedAt: ago(20 * time.Minute), HeadSHA: "5555555",
+			State: "queued", GHState: "OPEN", ActivityAt: ago(20 * time.Minute), HeadSHA: "5555555",
 			Reviewers:      []ReviewerInfo{{Login: "eve", Verdict: "pending", Requested: true}},
 			SinceReview:    &ReviewDelta{Base: "base branch", BaseSHA: "0000000", Commits: 12, Files: 30, Additions: 900, Deletions: 40},
 			NextEligibleAt: boardNow.Add(5 * time.Minute),
@@ -50,7 +50,7 @@ func boardRows() []PRBoardRow {
 		{
 			Ref: "talkable/talkable#11902", Owner: "talkable", Repo: "talkable", Number: 11902,
 			Title: "Referral analytics: add the campaign breakdown to the dashboard export", Author: "zhuravel",
-			Labels: []string{"analytics"}, State: "needs_attention", GHState: "OPEN", UpdatedAt: ago(50 * time.Hour), HeadSHA: "7777777",
+			Labels: []string{"analytics"}, State: "needs_attention", GHState: "OPEN", ActivityAt: ago(50 * time.Hour), HeadSHA: "7777777",
 			LastReview: &ReviewInfo{Login: "talkable[bot]", Event: "CHANGES_REQUESTED", SubmittedAt: ago(26 * time.Hour), CommitSHA: "6666666", Stale: true},
 			Reviewers: []ReviewerInfo{
 				{Login: "ann", Verdict: "approved", SubmittedAt: ago(30 * time.Hour), CommitSHA: "6666666", Stale: true},
@@ -61,17 +61,17 @@ func boardRows() []PRBoardRow {
 		},
 		{
 			Ref: "talkable/magnum#42", Owner: "talkable", Repo: "magnum", Number: 42,
-			Title: "PR board screen", Author: "bob", Draft: true, State: "reviewing", GHState: "OPEN", UpdatedAt: ago(5 * time.Minute),
+			Title: "PR board screen", Author: "bob", Draft: true, State: "reviewing", GHState: "OPEN", ActivityAt: ago(5 * time.Minute),
 		},
 		{
 			Ref: "talkable/talkable#11800", Owner: "talkable", Repo: "talkable", Number: 11800,
-			Title: "Drop the legacy coupon importer", Author: "frank", State: "released", GHState: "MERGED", UpdatedAt: ago(20 * 24 * time.Hour),
+			Title: "Drop the legacy coupon importer", Author: "frank", State: "released", GHState: "MERGED", ActivityAt: ago(20 * 24 * time.Hour),
 			Muted: true,
 		},
 		{
 			Ref: "talkable/talkable#11950", Owner: "talkable", Repo: "talkable", Number: 11950,
 			Title: "Add OAuth login for the merchant portal", Author: "gina", Assignees: []string{"ann", "zhuravel"},
-			State: "rereview_pending", GHState: "OPEN", UpdatedAt: ago(90 * time.Minute), HeadSHA: "8888888",
+			State: "rereview_pending", GHState: "OPEN", ActivityAt: ago(90 * time.Minute), HeadSHA: "8888888",
 			LastReview: &ReviewInfo{Login: "zhuravel", Event: "COMMENTED", SubmittedAt: ago(5 * time.Hour), CommitSHA: "4444444", Stale: true},
 			Reviewers: []ReviewerInfo{
 				{Login: "frank", Verdict: "approved", SubmittedAt: ago(time.Hour), CommitSHA: "8888888"},
@@ -81,7 +81,7 @@ func boardRows() []PRBoardRow {
 		},
 		{
 			Ref: "talkable/talkable#11000", Owner: "talkable", Repo: "talkable", Number: 11000,
-			Title: "Legacy cleanup", Author: "hal", State: "baseline", GHState: "OPEN", UpdatedAt: ago(21 * 24 * time.Hour),
+			Title: "Legacy cleanup", Author: "hal", State: "baseline", GHState: "OPEN", ActivityAt: ago(21 * 24 * time.Hour),
 		},
 	}
 }
@@ -411,7 +411,7 @@ func TestPRBoardFilterKeepsSelectionAndRoom(t *testing.T) {
 // onto the screen; a row naming no PR cannot be released.
 func TestPRBoardSanitizesAndGuards(t *testing.T) {
 	m, _, act := newBoard(t, 120, 24, PRBoardOptions{})
-	evil := PRBoardRow{Title: "\x1b[31mred\x1b[0m\x07 title\nnext", Author: "\x1b]8;;http://x\x07ann\x1b]8;;\x07", State: "queued", UpdatedAt: boardNow}
+	evil := PRBoardRow{Title: "\x1b[31mred\x1b[0m\x07 title\nnext", Author: "\x1b]8;;http://x\x07ann\x1b]8;;\x07", State: "queued", ActivityAt: boardNow}
 	m, _ = send(t, m, prbDataMsg{rows: []PRBoardRow{evil}})
 	raw := m.View().Content
 	if strings.Contains(raw, "\x1b[31mred") || strings.Contains(raw, "\x07") || strings.Contains(raw, "http://x") {
@@ -738,7 +738,7 @@ func TestPRBoardNavigationAndScroll(t *testing.T) {
 	// the cursor follows its PR across refreshes that reorder the rows
 	m, _ = send(t, m, keyMsg("j"), keyMsg("j")) // #11950
 	rows := boardRows()
-	rows[5].UpdatedAt = boardNow // #11950 now the newest
+	rows[5].ActivityAt = boardNow // #11950 now the newest
 	m, _ = send(t, m, prbDataMsg{rows: rows})
 	if r, _ := m.selected(); prRef(r) != "talkable/talkable#11950" || m.cursor != 0 {
 		t.Errorf("cursor on %s at %d after the refresh", prRef(r), m.cursor)
@@ -783,7 +783,7 @@ func TestPRBoardRepoScopeAndOwners(t *testing.T) {
 		t.Errorf("Repo talkable/talkable shows %d rows", len(o.view))
 	}
 
-	rows := append(boardRows(), PRBoardRow{Ref: "acme/widgets#7", Title: "Widgets", State: "queued", UpdatedAt: ago(time.Minute)})
+	rows := append(boardRows(), PRBoardRow{Ref: "acme/widgets#7", Title: "Widgets", State: "queued", ActivityAt: ago(time.Minute)})
 	out := ansi.Strip(RenderPRBoard(rows, 0, PRBoardOptions{Now: func() time.Time { return boardNow }}))
 	mustContain(t, out, "acme/widgets#7", "talkable/talkable#11920", "all repos", "7 open")
 	single := ansi.Strip(RenderPRBoard(boardRows(), 0, PRBoardOptions{Now: func() time.Time { return boardNow }}))
@@ -860,9 +860,9 @@ func TestPRBoardHelpNamesTheJudge(t *testing.T) {
 func TestPRBoardReviewKeysAsk(t *testing.T) {
 	// One PR each key asks about: in line, holding a slot, and a muted one for U.
 	waiting := PRBoardRow{Ref: "talkable/talkable#5", Owner: "talkable", Repo: "talkable", Number: 5, State: "queued", GHState: "OPEN",
-		UpdatedAt: boardNow, Slot: "~/Projects/talkable.review3"}
+		ActivityAt: boardNow, Slot: "~/Projects/talkable.review3"}
 	muted := waiting
-	muted.Ref, muted.Number, muted.Muted, muted.UpdatedAt = "talkable/talkable#6", 6, true, boardNow.Add(-time.Minute)
+	muted.Ref, muted.Number, muted.Muted, muted.ActivityAt = "talkable/talkable#6", 6, true, boardNow.Add(-time.Minute)
 	for _, k := range []string{"r", "R", "i", "M", "U", "x"} {
 		m, _, act := newBoard(t, 220, 24, PRBoardOptions{})
 		m, _ = send(t, m, prbDataMsg{rows: []PRBoardRow{waiting, muted}})
@@ -959,7 +959,7 @@ func TestPRBoardConfirmationTexts(t *testing.T) {
 
 	// several owners: the question names the owner, as the table does
 	m, _, _ := newBoard(t, 220, 24, PRBoardOptions{})
-	rows := append(boardRows(), PRBoardRow{Ref: "acme/talkable#5", Owner: "acme", Repo: "talkable", Number: 5, State: "queued", UpdatedAt: boardNow})
+	rows := append(boardRows(), PRBoardRow{Ref: "acme/talkable#5", Owner: "acme", Repo: "talkable", Number: 5, State: "queued", ActivityAt: boardNow})
 	m, _ = send(t, m, prbDataMsg{rows: rows}, keyMsg("g"), keyMsg("r"))
 	if m.confirm == nil || m.confirm.question != "Review acme/talkable#5 now (not reviewed yet)?" {
 		t.Errorf("several owners asked %+v", m.confirm)
@@ -1003,7 +1003,7 @@ func TestRefColumnTruncatesFromTheLeft(t *testing.T) {
 func TestPRBoardIgnoredRowsAreStruckAndUnmutedWithU(t *testing.T) {
 	m, _, act := newBoard(t, 160, 24, PRBoardOptions{})
 	ignored := PRBoardRow{Ref: "talkable/talkable#7", Owner: "talkable", Repo: "talkable", Number: 7, Title: "Old work",
-		State: "ignored", Muted: true, GHState: "OPEN", UpdatedAt: ago(time.Hour)}
+		State: "ignored", Muted: true, GHState: "OPEN", ActivityAt: ago(time.Hour)}
 	m, _ = send(t, m, prbDataMsg{rows: []PRBoardRow{ignored}})
 
 	var row string
@@ -1046,7 +1046,7 @@ func TestPRBoardIgnoredRowsAreStruckAndUnmutedWithU(t *testing.T) {
 func TestPRBoardShowsFindingsAndPostsAVerdict(t *testing.T) {
 	m, _, act := newBoard(t, 170, 24, PRBoardOptions{})
 	row := PRBoardRow{Ref: "talkable/talkable#8", Owner: "talkable", Repo: "talkable", Number: 8, Title: "Refund metrics",
-		State: "reviewed", GHState: "OPEN", UpdatedAt: ago(time.Hour), HeadSHA: "abcdef1234",
+		State: "reviewed", GHState: "OPEN", ActivityAt: ago(time.Hour), HeadSHA: "abcdef1234",
 		LastReview: &ReviewInfo{Login: "talkable[bot]", Event: "COMMENTED", SubmittedAt: ago(time.Hour), CommitSHA: "abcdef1234"},
 		Findings:   &FindingsInfo{Counts: [4]int{0, 1, 3, 0}, Simplifications: 4, Open: 1, Verdict: "blocking", Posted: "COMMENT", SHA: "abcdef1234"}}
 	clean := row
@@ -1082,7 +1082,7 @@ func TestPRBoardShowsFindingsAndPostsAVerdict(t *testing.T) {
 func TestPRBoardNotReviewedRows(t *testing.T) {
 	m, _, act := newBoard(t, 170, 30, PRBoardOptions{})
 	row := PRBoardRow{Ref: "talkable/talkable#5", Owner: "talkable", Repo: "talkable", Number: 5, Title: "Old feature",
-		State: "baseline", GHState: "OPEN", UpdatedAt: ago(time.Hour)}
+		State: "baseline", GHState: "OPEN", ActivityAt: ago(time.Hour)}
 	m, _ = send(t, m, prbDataMsg{rows: []PRBoardRow{row}})
 	mustContain(t, viewOf(m), "not reviewed")
 	m, _ = send(t, m, keyMsg("A"))
@@ -1112,9 +1112,9 @@ func TestLoginTextMarksBots(t *testing.T) {
 // t opens the issue the PR's title names in its tracker; the card shows it.
 // A row whose title names none opens nothing and says why.
 func TestPRBoardOpensTheIssue(t *testing.T) {
-	withIssue := PRBoardRow{Ref: "talkable/talkable#11483", Title: "[PR-26788] Campaign snapshots", State: "reviewed", UpdatedAt: boardNow,
+	withIssue := PRBoardRow{Ref: "talkable/talkable#11483", Title: "[PR-26788] Campaign snapshots", State: "reviewed", ActivityAt: boardNow,
 		Issue: "PR-26788", IssueURL: "https://example.atlassian.net/browse/PR-26788"}
-	without := PRBoardRow{Ref: "talkable/talkable#11484", Title: "No issue", State: "reviewed", UpdatedAt: boardNow.Add(-time.Hour)}
+	without := PRBoardRow{Ref: "talkable/talkable#11484", Title: "No issue", State: "reviewed", ActivityAt: boardNow.Add(-time.Hour)}
 
 	m, _, act := newBoard(t, 160, 24, PRBoardOptions{})
 	m, _ = send(t, m, prbDataMsg{rows: []PRBoardRow{withIssue, without}})

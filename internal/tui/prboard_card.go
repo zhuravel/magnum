@@ -236,7 +236,7 @@ func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
 		{"Assignees", logins(r.Assignees)},
 		{"Labels", labels},
 		{"Issue", issue},
-		{"Updated", when(r.UpdatedAt)},
+		{"Updated", when(r.ActivityAt)},
 		{"GitHub", gh},
 		{"Head", orDim(textx.ShortSHA(r.HeadSHA))},
 		{"Slot", orDim(r.Slot)},

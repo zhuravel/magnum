@@ -66,6 +66,16 @@ type PRDetails struct {
 	FilesComplete bool
 	// CI is the head commit's checks.
 	CI CIRollup
+	// ActivityAt is the pull request's last activity: the latest of its
+	// opening, a description edit, the head commit (its committer date, never
+	// past UpdatedAt), a force push, a comment, a review (a reply in a thread
+	// is one), a label added or removed, a review requested or removed, ready
+	// for review or back to draft, a title rename, a base change, a close, a
+	// reopen and a merge (activityTypes; bots count, checks do not). Unlike
+	// UpdatedAt it does not move for what a reviewer never sees (a project
+	// field, a resolved thread, someone's pending review, a deleted comment).
+	// Zero when GitHub returned no timeline.
+	ActivityAt time.Time
 }
 
 // CIRollup is the status check rollup of a pull request's head commit.
@@ -144,21 +154,41 @@ type PRState struct {
 // at 1, 1, 1 and 3 points without them and 1, 1, 2 and 3 with them. A second
 // page would be a query of its own (a point each) for every head of a PR
 // with more than 100 files, so there is none: FilesComplete says the list
-// was cut.
+// was cut. The activity timeline (PRDetails.ActivityAt) adds one connection
+// of ten small nodes per pull request: the dry run priced batches of 1, 10,
+// 20, 30 and 40 at 1, 1, 2, 3 and 4 points with it and 1, 1, 2, 2 and 3
+// without (2026-10-06), at most one point more per batch.
 const detailsFragment = `fragment PRDetails on PullRequest {
   id number title url
   author { login __typename } authorAssociation
   labels(first: 100) { totalCount pageInfo { hasNextPage } nodes { name } }
   headRefName baseRefName isCrossRepository
-  state merged mergedAt closedAt updatedAt isDraft headRefOid baseRefOid
+  state merged mergedAt closedAt createdAt updatedAt lastEditedAt isDraft headRefOid baseRefOid
   additions deletions changedFiles commits { totalCount }
   files(first: 100) { totalCount pageInfo { hasNextPage } nodes { path } }
   assignees(first: 10) { nodes { login } }
   reviewRequests(first: 30) { nodes { requestedReviewer { __typename ... on User { login } ... on Bot { login } ... on Mannequin { login } ... on Team { slug } } } }
   latestReviews(first: 100) { totalCount pageInfo { hasNextPage } nodes { state submittedAt author { login __typename } commit { oid } } }
   timelineItems(itemTypes: [REVIEW_REQUESTED_EVENT], last: 10) { nodes { ... on ReviewRequestedEvent { createdAt actor { login } requestedReviewer { __typename ... on User { login } ... on Bot { login } ... on Mannequin { login } ... on Team { slug } } } } }
-  headCommit: commits(last: 1) { nodes { commit { oid statusCheckRollup { state contexts(first: 100) { totalCount pageInfo { hasNextPage } nodes { __typename ... on CheckRun { name status conclusion startedAt completedAt checkSuite { workflowRun { workflow { name } } } } ... on StatusContext { context state createdAt } } } } } } }
+  activity: timelineItems(last: 10, itemTypes: [` + activityTypes + `]) { nodes { __typename ... on PullRequestReview { submittedAt } ` + activityEvents + ` } }
+  headCommit: commits(last: 1) { nodes { commit { oid statusCheckRollup { state contexts(first: 100) { totalCount pageInfo { hasNextPage } nodes { __typename ... on CheckRun { name status conclusion startedAt completedAt checkSuite { workflowRun { workflow { name } } } } ... on StatusContext { context state createdAt } } } } committedDate } } }
 }`
+
+// activityTypes are the timeline items that are activity on a pull request
+// (PRDetails.ActivityAt): what a reviewer sees happen to it. A review counts
+// when submitted (submittedAt; a pending one is null), every other item when
+// it happened (createdAt, activityEvents).
+const activityTypes = "ISSUE_COMMENT, PULL_REQUEST_REVIEW, LABELED_EVENT, UNLABELED_EVENT, " +
+	"REVIEW_REQUESTED_EVENT, REVIEW_REQUEST_REMOVED_EVENT, READY_FOR_REVIEW_EVENT, CONVERT_TO_DRAFT_EVENT, RENAMED_TITLE_EVENT, " +
+	"BASE_REF_CHANGED_EVENT, AUTOMATIC_BASE_CHANGE_SUCCEEDED_EVENT, CLOSED_EVENT, REOPENED_EVENT, MERGED_EVENT, HEAD_REF_FORCE_PUSHED_EVENT"
+
+// activityEvents selects when each activityTypes item but the review
+// happened.
+const activityEvents = "... on IssueComment { createdAt } ... on LabeledEvent { createdAt } ... on UnlabeledEvent { createdAt } " +
+	"... on ReviewRequestedEvent { createdAt } ... on ReviewRequestRemovedEvent { createdAt } ... on ReadyForReviewEvent { createdAt } " +
+	"... on ConvertToDraftEvent { createdAt } ... on RenamedTitleEvent { createdAt } ... on BaseRefChangedEvent { createdAt } " +
+	"... on AutomaticBaseChangeSucceededEvent { createdAt } ... on ClosedEvent { createdAt } ... on ReopenedEvent { createdAt } " +
+	"... on MergedEvent { createdAt } ... on HeadRefForcePushedEvent { createdAt }"
 
 const stateFragment = `fragment PRState on PullRequest { number state merged mergedAt closedAt headRefOid mergeCommit { oid } }`
 
@@ -200,7 +230,9 @@ type detailsJSON struct {
 	Merged            bool      `json:"merged"`
 	MergedAt          time.Time `json:"mergedAt"`
 	ClosedAt          time.Time `json:"closedAt"`
+	CreatedAt         time.Time `json:"createdAt"`
 	UpdatedAt         time.Time `json:"updatedAt"`
+	LastEditedAt      time.Time `json:"lastEditedAt"` // zero (null) when never edited
 	AuthorAssociation string    `json:"authorAssociation"`
 	IsDraft           bool      `json:"isDraft"`
 	HeadRefOid        string    `json:"headRefOid"`
@@ -243,10 +275,17 @@ type detailsJSON struct {
 		} `json:"nodes"`
 	} `json:"latestReviews"`
 	ReviewRequested reviewRequestsJSON `json:"timelineItems"`
-	HeadCommit      struct {
+	Activity        *struct {
+		Nodes []struct {
+			CreatedAt   time.Time `json:"createdAt"`   // every item but a review
+			SubmittedAt time.Time `json:"submittedAt"` // a review; null while pending
+		} `json:"nodes"`
+	} `json:"activity"` // null: GitHub returned no timeline
+	HeadCommit struct {
 		Nodes []struct {
 			Commit struct {
-				Oid               string `json:"oid"`
+				Oid               string    `json:"oid"`
+				CommittedDate     time.Time `json:"committedDate"`
 				StatusCheckRollup *struct {
 					State    string `json:"state"`
 					Contexts struct {
@@ -346,6 +385,46 @@ func (d detailsJSON) details() PRDetails {
 	}
 	out.ReviewRequestEvents = d.ReviewRequested.events()
 	out.CI = d.ci()
+	out.ActivityAt = d.activityAt()
+	return out
+}
+
+// activityAt is PRDetails.ActivityAt: the latest of the activity timeline's
+// items, the latest reviews (the timeline may list a review where it was
+// begun, so it can fall out of the last ten), the description edit, the
+// merge, the close, the opening and the head commit, whose committer date
+// is no push time but never after one: capped at updatedAt, which every push
+// moves, in case the committer's clock ran ahead. Zero when the timeline is
+// missing.
+func (d detailsJSON) activityAt() time.Time {
+	if d.Activity == nil {
+		return time.Time{}
+	}
+	at := latest(d.CreatedAt, d.LastEditedAt, d.MergedAt, d.ClosedAt)
+	for _, n := range d.Activity.Nodes {
+		at = latest(at, n.CreatedAt, n.SubmittedAt)
+	}
+	for _, r := range d.LatestReviews.Nodes {
+		at = latest(at, r.SubmittedAt)
+	}
+	if nodes := d.HeadCommit.Nodes; len(nodes) > 0 {
+		c := nodes[len(nodes)-1].Commit.CommittedDate
+		if !d.UpdatedAt.IsZero() && c.After(d.UpdatedAt) {
+			c = d.UpdatedAt
+		}
+		at = latest(at, c)
+	}
+	return at
+}
+
+// latest is the latest of ts (zero when all are zero).
+func latest(ts ...time.Time) time.Time {
+	var out time.Time
+	for _, t := range ts {
+		if t.After(out) {
+			out = t
+		}
+	}
 	return out
 }
 

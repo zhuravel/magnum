@@ -20,7 +20,7 @@ var iconModes = []IconMode{IconsUnicode, IconsNerd, IconsASCII}
 func findingsRow() PRBoardRow {
 	return PRBoardRow{
 		Ref: "talkable/talkable#8", Owner: "talkable", Repo: "talkable", Number: 8, Title: "Refund metrics",
-		State: "needs_attention", GHState: "OPEN", UpdatedAt: ago(time.Hour), HeadSHA: "abcdef1234",
+		State: "needs_attention", GHState: "OPEN", ActivityAt: ago(time.Hour), HeadSHA: "abcdef1234",
 		LastReview: &ReviewInfo{Login: "alice", Event: "CHANGES_REQUESTED", SubmittedAt: ago(time.Hour), CommitSHA: "abcdef1234"},
 		Reviewers: []ReviewerInfo{
 			{Login: "alice", Verdict: "changes_requested", SubmittedAt: ago(time.Hour), CommitSHA: "abcdef1234"},

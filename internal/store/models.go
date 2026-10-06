@@ -223,6 +223,22 @@ type PR struct {
 	// review requests of the PR's timeline, oldest first; empty until the
 	// next Details fetch.
 	ReviewRequests []ReviewRequest `json:"review_requests"`
+	// ActivityAt (migration 0018) is the PR's last activity: the latest of
+	// the Details' (github.PRDetails.ActivityAt) and the head moves the
+	// poller saw, or its close or merge; nil until the next Details fetch.
+	// The screens show Activity; radar change detection and the dispatch
+	// order read GHUpdatedAt.
+	ActivityAt *time.Time `json:"activity_at"`
+}
+
+// Activity is the PR's last activity as the screens show it (the board's
+// UPDATED): ActivityAt, else GitHub's updatedAt until the next Details
+// fetch reads it; nil when neither is known.
+func (p PR) Activity() *time.Time {
+	if p.ActivityAt != nil {
+		return p.ActivityAt
+	}
+	return p.GHUpdatedAt
 }
 
 // CIStatus is prs.ci_json: the checks of a PR's head commit. Its State can
@@ -530,7 +546,9 @@ var (
 		// 0007_ci
 		"ci_state", "ci_json",
 		// 0009_review_requests
-		"review_requests_json"}
+		"review_requests_json",
+		// 0018_activity_at
+		"activity_at"}
 	slotColumns = []string{"id", "name", "repo_id", "repo_full_name", "kind", "path", "main_clone",
 		"placeholder_branch", "db_slug", "state", "pr_id", "pinned", "dirty_schema", "checked_out_sha",
 		"hold_reason", "lock_sha", "last_used_at", "last_error", "created_at", "updated_at",
@@ -585,7 +603,7 @@ func scanPR(sc scanner) (PR, error) {
 		timeCol(&p.CreatedAt), timeCol(&p.UpdatedAt),
 		jsonCol(&p.Assignees), jsonCol(&p.RequestedReviewers), jsonCol(&p.LatestReviews), jsonCol(&p.SinceReview),
 		&p.LastReviewLogin, &p.BaseSHA, nullTime(&p.DetailsAt), &p.AuthorAssociation, &p.CIState, jsonCol(&p.CI),
-		jsonCol(&p.ReviewRequests))
+		jsonCol(&p.ReviewRequests), nullTime(&p.ActivityAt))
 	return p, err
 }
 

@@ -17,7 +17,7 @@ import (
 func ciRows() []PRBoardRow {
 	row := func(n int, title string, ci *CIInfo) PRBoardRow {
 		return PRBoardRow{Ref: "talkable/example#" + strconv.Itoa(n), Owner: "talkable", Repo: "example", Number: n, Title: title,
-			State: "reviewed", GHState: "OPEN", UpdatedAt: ago(time.Duration(n) * time.Minute), HeadSHA: "abcdef1234", CI: ci}
+			State: "reviewed", GHState: "OPEN", ActivityAt: ago(time.Duration(n) * time.Minute), HeadSHA: "abcdef1234", CI: ci}
 	}
 	return []PRBoardRow{
 		row(20, "Required checks failing", &CIInfo{State: "failed", Total: 65, Passed: 61, Failed: 3, Pending: 1,

@@ -46,7 +46,8 @@ type BoardRow struct {
 	State              string         `json:"state"`        // automation state (prs.state)
 	SkipReason         string         `json:"skip_reason"`
 	GHState            string         `json:"gh_state"`
-	UpdatedAt          time.Time      `json:"updated_at"` // GitHub's updatedAt (prs.gh_updated_at)
+	UpdatedAt          time.Time      `json:"updated_at"`  // GitHub's updatedAt (prs.gh_updated_at)
+	ActivityAt         time.Time      `json:"activity_at"` // the last activity (PR.Activity): prs.activity_at, else UpdatedAt
 	HeadSHA            string         `json:"head_sha"`
 	ReviewedSHA        string         `json:"reviewed_sha"`
 	LastReviewEvent    string         `json:"last_review_event"`
@@ -126,8 +127,8 @@ func (p PR) FlagDismissed() bool {
 // closedPRStates are the automation states IncludeClosed adds.
 var closedPRStates = []string{PRClosed, PRReleasing, PRReleased}
 
-// Board returns the PRs the board shows, most recently updated on GitHub
-// first (PRs never fetched last). It reads only the registry.
+// Board returns the PRs the board shows, the latest activity first
+// (BoardRow.ActivityAt; PRs never fetched last). It reads only the registry.
 func (s *Store) Board(ctx context.Context, f BoardFilter) ([]BoardRow, error) {
 	var where []string
 	var args []any
@@ -160,7 +161,7 @@ func (s *Store) Board(ctx context.Context, f BoardFilter) ([]BoardRow, error) {
   p.state, p.skip_reason, p.gh_state, p.gh_updated_at, p.head_sha, p.reviewed_sha, p.last_review_event,
   p.reviewed_at, p.last_review_login, p.identity, sl.name, sl.path, p.pinned, p.muted, p.next_eligible_at,
   p.last_error, p.rounds_today, p.rounds_day, p.ci_state, p.ci_json, p.review_requests_json,
-  p.prev_state, p.merged_at, p.closed_at, p.forced
+  p.prev_state, p.merged_at, p.closed_at, p.forced, COALESCE(p.activity_at, p.gh_updated_at)
 FROM prs p
 JOIN repos r ON r.id = p.repo_id
 LEFT JOIN slots sl ON sl.pr_id = p.id AND sl.state <> ?`
@@ -168,7 +169,7 @@ LEFT JOIN slots sl ON sl.pr_id = p.id AND sl.state <> ?`
 	if len(where) > 0 {
 		q += "\nWHERE " + strings.Join(where, " AND ")
 	}
-	q += "\nORDER BY p.gh_updated_at IS NULL, p.gh_updated_at DESC, p.id DESC"
+	q += "\nORDER BY COALESCE(p.activity_at, p.gh_updated_at) IS NULL, COALESCE(p.activity_at, p.gh_updated_at) DESC, p.id DESC"
 	if f.Limit > 0 {
 		q += fmt.Sprintf(" LIMIT %d", f.Limit)
 	}
@@ -189,7 +190,7 @@ func scanBoardRow(sc scanner, today string) (BoardRow, error) {
 		b                                                              BoardRow
 		title, author, skip, reviewed, event, login, slot, path, lastE *string
 		roundsDay, ciState, prev                                       *string
-		updated, reviewedAt, nextAt, mergedAt, closedAt                *time.Time
+		updated, reviewedAt, nextAt, mergedAt, closedAt, activity      *time.Time
 		forced                                                         bool
 	)
 	err := sc.Scan(&b.PRID, &b.Owner, &b.Name, &b.Number, &title, &author, &b.URL, &b.Draft, jsonCol(&b.Labels),
@@ -197,7 +198,7 @@ func scanBoardRow(sc scanner, today string) (BoardRow, error) {
 		jsonCol(&b.SinceReview), &b.State, &skip, &b.GHState, nullTime(&updated), &b.HeadSHA, &reviewed, &event,
 		nullTime(&reviewedAt), &login, &b.Identity, &slot, &path, &b.Pinned, &b.Muted, nullTime(&nextAt),
 		&lastE, &b.RoundsToday, &roundsDay, &ciState, jsonCol(&b.CI), jsonCol(&b.ReviewRequests),
-		&prev, nullTime(&mergedAt), nullTime(&closedAt), &forced)
+		&prev, nullTime(&mergedAt), nullTime(&closedAt), &forced, nullTime(&activity))
 	if err != nil {
 		return BoardRow{}, err
 	}
@@ -205,7 +206,7 @@ func scanBoardRow(sc scanner, today string) (BoardRow, error) {
 	b.Title, b.Author, b.SkipReason = Deref(title), Deref(author), Deref(skip)
 	b.ReviewedSHA, b.LastReviewEvent, b.LastReviewLogin = Deref(reviewed), Deref(event), Deref(login)
 	b.Slot, b.SlotPath, b.LastError = Deref(slot), Deref(path), Deref(lastE)
-	b.UpdatedAt, b.LastReviewAt, b.NextEligibleAt = Deref(updated), Deref(reviewedAt), Deref(nextAt)
+	b.UpdatedAt, b.ActivityAt, b.LastReviewAt, b.NextEligibleAt = Deref(updated), Deref(activity), Deref(reviewedAt), Deref(nextAt)
 	b.CIState = Deref(ciState)
 	b.PrevState, b.MergedAt, b.ClosedAt = Deref(prev), Deref(mergedAt), Deref(closedAt)
 	b.MergedUnreviewed = IsMergedUnreviewed(b.GHState, b.PrevState, b.HeadSHA, b.ReviewedSHA, b.Muted, forced)

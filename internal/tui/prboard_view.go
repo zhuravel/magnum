@@ -474,7 +474,7 @@ func (p prbPainter) cells(r PRBoardRow, since [3]int) prbCells {
 	cs.c[colTitle] = p.titleCell(r)
 	cs.c[colAuthor] = p.loginCell(r.Author)
 	cs.c[colAssignee] = p.assigneeCell(r.Assignees)
-	cs.c[colUpdated] = p.ageCell(r.UpdatedAt)
+	cs.c[colUpdated] = p.ageCell(r.ActivityAt)
 	cs.c[colRequested] = p.requestedCell(r)
 	cs.c[colState] = p.stateWaitCell(r)
 	if roundProgress(r) != nil {

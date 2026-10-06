@@ -83,6 +83,9 @@ type prSpec struct {
 	// filesTruncated makes it report a cut-off list (FilesComplete false).
 	files          []string
 	filesTruncated bool
+	// activity is the Details' activity time (zero = GitHub returned no
+	// timeline).
+	activity time.Time
 }
 
 type fakeGH struct {
@@ -375,6 +378,7 @@ func (g *fakeGH) Details(ctx context.Context, owner, repo string, numbers []int)
 			if p.files != nil {
 				d.Files, d.FilesComplete = slices.Clone(p.files), !p.filesTruncated
 			}
+			d.ActivityAt = p.activity
 			out[n] = d
 		}
 		if !found {

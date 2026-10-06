@@ -322,7 +322,8 @@ type statusPRLine struct {
 	Next            string     `json:"next"`
 	Forced          bool       `json:"forced,omitempty"`
 	ReviewRequested bool       `json:"review_requested,omitempty"`
-	UpdatedAt       *time.Time `json:"updated_at,omitempty"`
+	UpdatedAt       *time.Time `json:"updated_at,omitempty"`  // GitHub's updatedAt: the dispatcher's order
+	ActivityAt      *time.Time `json:"activity_at,omitempty"` // the last activity, which the dashboard shows
 
 	url, author string    // for the dashboard (not printed)
 	rec         *store.PR // the registry row, for the dashboard's y/N question (not printed)

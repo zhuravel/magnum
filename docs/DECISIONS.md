@@ -2400,3 +2400,38 @@ editing history. Code, config comments and prompts reference these by their head
   30 seconds for nothing); retrying inside identity.Check (a check that waits minutes would stall the
   tick, and the token refresh has its own 30-second mint backoff); a persisted retry schedule (nothing
   needs it across a restart).
+- **UPDATED is the PR's last activity, not GitHub's updatedAt** (2026-10-06). The board said "11m ago" for a PR
+  whose only change was invisible: no push in five days, no comment, review, label, request or edit since
+  August. It showed GitHub's `updatedAt`, which also moves for what a reviewer never sees and magnum cannot
+  even read (a GitHub Projects field set by someone or an automation, a resolved review thread, someone's
+  pending review, a deleted comment). A PR's activity time (`prs.activity_at`, migration 0018) is now the
+  latest of its opening, a push, a force push, a comment, a submitted review (a reply in a thread is one), a
+  label added or removed, a review requested or removed, ready for review or back to draft, a title rename,
+  a description edit (`lastEditedAt`), a base change (also GitHub's automatic one), a close, reopen and
+  merge; bots count (magnum's own reviews are activity), CI checks do not. The Details the poll already reads
+  for a PR whose `updatedAt` moved carry it (`github.PRDetails.ActivityAt`): a second
+  `timelineItems(last: 10)` of those item types, each node's `createdAt` (`submittedAt` for a review, null
+  while pending), with `createdAt`, `lastEditedAt`, `mergedAt`, `closedAt`, the latest reviews' times (the
+  timeline may list a review where it was begun, so it can fall out of the last ten) and the head commit's
+  `committedDate`, which is no push time but never after one, capped at `updatedAt` for a committer clock
+  that runs ahead; a missing timeline (null) is no activity time. GitHub's dry run (`rateLimit(dryRun:
+  true)`) priced Details batches of 1, 10, 20, 30 and 40 PRs at 1, 1, 2, 2 and 3 points without it and 1,
+  1, 2, 3 and 4 with it: at most one point more per batch, none for the few PRs a poll usually reads. The
+  registry keeps the later of the Details' time and the head moves the poller saw (`head_changed_at`, now
+  when the head just moved; not the PR's insertion, which sets it too), so a push of commits dated days
+  earlier reads as the push; an upsert without Details keeps it and moves it for a push; a merge or close
+  confirmed sets it, since a closed PR's Details are not read again. Never a GitHub change: it moves no
+  eligibility. The board's UPDATED column, the updated sort, the card's Updated, `magnum prs` (table and
+  `--json`: `activity_at`, and GitHub's value as `github_updated_at`, where `updated_at` was), `magnum pick`
+  and the dashboard's queue ages show it (`store.PR.Activity`, `store.BoardRow.ActivityAt`,
+  `tui.PRBoardRow.ActivityAt`; `activity_at` in `status --json`'s queue lines); until the next Details fetch
+  reads it they show GitHub's `updatedAt`, marked nowhere. Radar change detection (which PRs get Details) and
+  the dispatch order keep GitHub's `updatedAt`, and so does the dashboard's queue, which lists the PRs in the
+  dispatcher's order (`updated_at` in its JSON lines). The migration clears the open PRs'
+  `details_at`, so the next poll reads every open PR's activity once, and gives a closed or merged PR its
+  close or merge. No layout change. Rejected: `timelineItems(last: 1)` (the timeline may list a review
+  where it was begun, so its last item need not be the latest; ten cost the same points); `head_changed_at`
+  alone (a repository's first sync stamps it on every PR); a REST timeline call per PR (a call each instead
+  of a part of the batch); counting assignments, review dismissals, milestones, auto-merge, mentions,
+  cross-references and comment edits (not what the operator asked for) or project events (they need
+  `read:project`, which magnum's logins lack).

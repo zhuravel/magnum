@@ -13,13 +13,13 @@ import (
 // skippedRow is a PR the configuration skips: its author is a bot.
 func skippedRow() PRBoardRow {
 	return PRBoardRow{Ref: "talkable/example#40", Owner: "talkable", Repo: "example", Number: 40, Title: "Bump rack from 3.0 to 3.1",
-		Author: "dependabot[bot]", State: "ineligible", SkipReason: "bot author", GHState: "OPEN", UpdatedAt: ago(15 * time.Minute)}
+		Author: "dependabot[bot]", State: "ineligible", SkipReason: "bot author", GHState: "OPEN", ActivityAt: ago(15 * time.Minute)}
 }
 
 // badgeRow is a pinned, failing draft carrying two badges.
 func badgeRow() PRBoardRow {
 	return PRBoardRow{Ref: "talkable/example#41", Owner: "talkable", Repo: "example", Number: 41, Title: "Checkout redesign",
-		Author: "alice", State: "reviewed", GHState: "OPEN", UpdatedAt: ago(16 * time.Minute), Pinned: true, Draft: true,
+		Author: "alice", State: "reviewed", GHState: "OPEN", ActivityAt: ago(16 * time.Minute), Pinned: true, Draft: true,
 		LastError: "judge failed", Labels: []string{"Flagged", "hotfix"},
 		Badges: []Badge{{Label: "Flagged", Text: "🚩"}, {Label: "hotfix", Text: "HOT"}}}
 }
@@ -138,7 +138,7 @@ func TestPRBoardBadges(t *testing.T) {
 
 	second := badgeRow()
 	second.Ref, second.Number, second.Pinned, second.LastError = "talkable/example#43", 43, false, ""
-	second.UpdatedAt = ago(time.Hour)
+	second.ActivityAt = ago(time.Hour)
 	second.Badges = []Badge{{Label: "Flagged", Text: "🚩"}, {Label: "flagged-too", Text: "🚩"}} // one PR, counted once
 	m := iconBoard(t, IconsUnicode, 200, 30, append(boardRows(), badgeRow(), second)...)
 	mustContain(t, lineWith(t, viewOf(m), "stale"), "🚩 2", "HOT 1")
@@ -165,9 +165,9 @@ func TestPRBoardHHidesIgnoredAndSkipped(t *testing.T) {
 	var kept []bool
 	m, _, _ := newBoard(t, 170, 24, PRBoardOptions{HideToggled: func(h bool) { kept = append(kept, h) }})
 	rows := []PRBoardRow{
-		{Ref: "talkable/talkable#1", Owner: "talkable", Repo: "talkable", Number: 1, Title: "Live work", State: "reviewed", GHState: "OPEN", UpdatedAt: ago(time.Hour)},
-		{Ref: "talkable/talkable#2", Owner: "talkable", Repo: "talkable", Number: 2, Title: "Bump gems", State: "ineligible", SkipReason: "bot author", GHState: "OPEN", UpdatedAt: ago(time.Hour)},
-		{Ref: "talkable/talkable#3", Owner: "talkable", Repo: "talkable", Number: 3, Title: "Old idea", State: "ignored", Muted: true, GHState: "OPEN", UpdatedAt: ago(time.Hour)},
+		{Ref: "talkable/talkable#1", Owner: "talkable", Repo: "talkable", Number: 1, Title: "Live work", State: "reviewed", GHState: "OPEN", ActivityAt: ago(time.Hour)},
+		{Ref: "talkable/talkable#2", Owner: "talkable", Repo: "talkable", Number: 2, Title: "Bump gems", State: "ineligible", SkipReason: "bot author", GHState: "OPEN", ActivityAt: ago(time.Hour)},
+		{Ref: "talkable/talkable#3", Owner: "talkable", Repo: "talkable", Number: 3, Title: "Old idea", State: "ignored", Muted: true, GHState: "OPEN", ActivityAt: ago(time.Hour)},
 	}
 	m, _ = send(t, m, prbDataMsg{rows: rows})
 	mustContain(t, viewOf(m), "Live work", "Bump gems", "Old idea")
@@ -213,7 +213,7 @@ func TestPRBoardBadgeColor(t *testing.T) {
 // its color too, as the row does.
 func TestPRBoardBadgeColorInSummaryAndCard(t *testing.T) {
 	m, _, _ := newBoard(t, 170, 24, PRBoardOptions{})
-	r := PRBoardRow{Ref: "talkable/talkable#1", Title: "Schema change", State: "reviewed", UpdatedAt: boardNow,
+	r := PRBoardRow{Ref: "talkable/talkable#1", Title: "Schema change", State: "reviewed", ActivityAt: boardNow,
 		Badges: []Badge{{Label: "Schema Migration", Text: "\uf1c0", Color: "yellow"}}}
 	p := newPRBPainter(m.st, m.pal, m.g, boardNow, nil, []PRBoardRow{r}, SortUpdated, true)
 	yellow := p.pal.yellow.Render("\uf1c0")
@@ -235,7 +235,7 @@ func TestPRBoardReviewingPillSpins(t *testing.T) {
 	if !m.animating {
 		t.Fatal("the fixture's reviewing PR did not start the spinner")
 	}
-	reviewing := PRBoardRow{Ref: "talkable/talkable#1", Title: "Live work", State: "reviewing", UpdatedAt: boardNow}
+	reviewing := PRBoardRow{Ref: "talkable/talkable#1", Title: "Live work", State: "reviewing", ActivityAt: boardNow}
 	done := reviewing
 	done.State = "reviewed"
 

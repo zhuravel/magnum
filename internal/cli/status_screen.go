@@ -5,6 +5,7 @@ package cli
 // (screenActions).
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -200,8 +201,8 @@ func statusDashData(r statusReport, defaultRepo string) tui.StatusData {
 		if q.author != "" {
 			row.Author = "@" + actClean(q.author)
 		}
-		if q.UpdatedAt != nil {
-			row.Age = actAgo(now, *q.UpdatedAt)
+		if a := cmp.Or(q.ActivityAt, q.UpdatedAt); a != nil {
+			row.Age = actAgo(now, *a)
 		}
 		if q.rec != nil {
 			row.Review, row.GHState = reviewFactsOf(*q.rec), q.rec.GHState

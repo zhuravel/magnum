@@ -91,11 +91,19 @@ type PRBoardRow struct {
 	// author", `author "x" is in skip_authors`, ...).
 	SkipReason string
 	// Badges are the PR's labels that [board] badges marks, in its order.
-	Badges     []Badge
-	GHState    string // GitHub's state: OPEN, CLOSED, MERGED
-	UpdatedAt  time.Time
-	HeadSHA    string
-	LastReview *ReviewInfo // the latest review magnum knows of; nil when none
+	Badges  []Badge
+	GHState string // GitHub's state: OPEN, CLOSED, MERGED
+	// ActivityAt is the PR's last activity, which the UPDATED column, the
+	// updated sort and the card show: a push, a comment, a review, a label,
+	// a review request, a draft change, a rename, a description edit, a base
+	// change, a close, reopen or merge; GitHubUpdatedAt until magnum read it.
+	ActivityAt time.Time
+	// GitHubUpdatedAt is GitHub's updatedAt, which also moves for what a
+	// reviewer never sees (a project field, a resolved thread); prs --json
+	// only.
+	GitHubUpdatedAt time.Time
+	HeadSHA         string
+	LastReview      *ReviewInfo // the latest review magnum knows of; nil when none
 	// Findings is what magnum's latest posted review concluded (its findings
 	// by priority, simplifications and verdict), also where it could only
 	// comment; nil when magnum has not reviewed the PR.
@@ -300,7 +308,7 @@ func SortPRBoard(rows []PRBoardRow, by PRSort, desc bool) []PRBoardRow {
 			}
 			return cmp.Compare(va, vb)
 		}
-		if c := b.UpdatedAt.Compare(a.UpdatedAt); c != 0 {
+		if c := b.ActivityAt.Compare(a.ActivityAt); c != 0 {
 			return c
 		}
 		return cmp.Compare(prRef(a), prRef(b))
@@ -340,7 +348,7 @@ func prSortKey(by PRSort) func(PRBoardRow) (int64, bool) {
 	case SortState:
 		return func(r PRBoardRow) (int64, bool) { return int64(stateUrgency(r.State)), true }
 	}
-	return func(r PRBoardRow) (int64, bool) { return at(r.UpdatedAt) }
+	return func(r PRBoardRow) (int64, bool) { return at(r.ActivityAt) }
 }
 
 // shownRequest is the review request the REQUESTED column shows and the

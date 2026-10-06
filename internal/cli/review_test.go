@@ -43,9 +43,10 @@ func TestReviewQueuesForcedRequestAndPrintsPosition(t *testing.T) {
 func TestReviewImportsUnknownPRWithOneDetailsCall(t *testing.T) {
 	h := newActHarness(t)
 	h.pid = 4242 // a daemon runs: reviews and verdicts are queued only then
+	activity := h.now.Add(-3 * time.Hour)
 	h.gh.details[7] = github.PRDetails{NodeID: "PR_w7", Number: 7, Title: "Add widget", URL: "https://github.com/zhuravel/widgets/pull/7",
 		AuthorLogin: "bob", AuthorType: "User", HeadRefName: "feature", BaseRefName: "main", State: "OPEN", HeadRefOid: "fff0001",
-		UpdatedAt: h.now.Add(-time.Hour), ReviewRequests: []github.Reviewer{{Type: "User", Login: "zhuravel"}}}
+		UpdatedAt: h.now.Add(-time.Hour), ActivityAt: activity, ReviewRequests: []github.Reviewer{{Type: "User", Login: "zhuravel"}}}
 	h.run.Rules = []execx.Rule{{Prefix: []string{"gh", "api", "repos/zhuravel/widgets"},
 		Result: execx.Result{Stdout: []byte(`{"node_id":"R_widgets","full_name":"zhuravel/widgets","default_branch":"main"}`)}}}
 
@@ -65,6 +66,9 @@ func TestReviewImportsUnknownPRWithOneDetailsCall(t *testing.T) {
 	pr, err := h.st.PRByRepoNumber(h.ctx, repo.ID, 7)
 	if err != nil || pr.State != store.PRBaseline || pr.HeadSHA != "fff0001" || !pr.ReviewRequested || pr.Identity != "zhuravel" {
 		t.Fatalf("pr = %+v err %v", pr, err)
+	}
+	if pr.ActivityAt == nil || !pr.ActivityAt.Equal(activity) {
+		t.Errorf("activity_at = %v, want the Details' %v", pr.ActivityAt, activity)
 	}
 	evs, _ := h.st.EventsBySubject(h.ctx, "pr:zhuravel/widgets#7", 10)
 	if len(evs) != 1 || evs[0].Kind != "pr.added" {

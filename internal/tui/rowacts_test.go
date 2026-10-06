@@ -15,7 +15,7 @@ import (
 // each case below changes what it is about.
 func actPR(edit func(r *PRBoardRow)) PRBoardRow {
 	r := PRBoardRow{Ref: "talkable/talkable#5", Owner: "talkable", Repo: "talkable", Number: 5, Title: "Coupon export",
-		State: "reviewed", GHState: "OPEN", UpdatedAt: boardNow, HeadSHA: "abcdef1234", Slot: "~/Projects/talkable.review3",
+		State: "reviewed", GHState: "OPEN", ActivityAt: boardNow, HeadSHA: "abcdef1234", Slot: "~/Projects/talkable.review3",
 		LastReview: &ReviewInfo{Login: "zhuravel", Event: "COMMENTED", SubmittedAt: ago(time.Hour), CommitSHA: "abcdef1234"},
 		Findings:   &FindingsInfo{Counts: [4]int{0, 1, 0, 0}, Verdict: "blocking", Posted: "COMMENT", SHA: "abcdef1234"}}
 	if edit != nil {

@@ -31,7 +31,7 @@ func muteMergedRows() []PRBoardRow {
 	closed := func(n int, state, gh string, muted bool) PRBoardRow {
 		return PRBoardRow{Ref: "talkable/talkable#" + strconv.Itoa(n), Owner: "talkable", Repo: "talkable", Number: n,
 			Title: "Row " + strconv.Itoa(n), Author: "alice", State: state, GHState: gh, Muted: muted,
-			UpdatedAt: ago(3 * time.Hour), HeadSHA: "e5e5e5e5e5", ClosedAt: ago(3 * time.Hour), Recent: true}
+			ActivityAt: ago(3 * time.Hour), HeadSHA: "e5e5e5e5e5", ClosedAt: ago(3 * time.Hour), Recent: true}
 	}
 	dismissed := closed(11993, "released", "MERGED", true)
 	dismissed.FlagDismissed = true

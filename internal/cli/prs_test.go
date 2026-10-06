@@ -53,7 +53,7 @@ func prsRichRow() store.BoardRow {
 		},
 		SinceReview: &store.SinceReview{Source: store.SinceFromReviewed, Base: "reviewed", Head: prsHead,
 			Commits: 2, Files: 3, Additions: 40, Deletions: 5, ComputedAt: prsNow},
-		State: store.PRVerifying, GHState: "OPEN", UpdatedAt: prsNow.Add(-30 * time.Minute), HeadSHA: prsHead,
+		State: store.PRVerifying, GHState: "OPEN", UpdatedAt: prsNow.Add(-30 * time.Minute), ActivityAt: prsNow.Add(-3 * time.Hour), HeadSHA: prsHead,
 		ReviewedSHA: "reviewed", LastReviewEvent: "COMMENTED", LastReviewAt: prsNow.Add(-time.Hour), LastReviewLogin: "talkable",
 		Identity: "talkable-app", Slot: "review1", SlotPath: "/w/talkable.review1", Pinned: true, Muted: true,
 		NextEligibleAt: prsNow.Add(time.Hour), LastError: "judge failed", RoundsToday: 2,
@@ -66,7 +66,7 @@ func TestPRsBoardRowMapsEveryField(t *testing.T) {
 		Ref: "talkable/talkable#11920", Owner: "talkable", Repo: "talkable", Number: 11920,
 		Title: "Fix the widget", Author: "ann", URL: "https://github.com/talkable/talkable/pull/11920", Draft: true,
 		Labels: []string{"bug"}, Assignees: []string{"bob", "cat"},
-		State: store.PRReviewing, GHState: "OPEN", UpdatedAt: prsNow.Add(-30 * time.Minute), HeadSHA: prsHead,
+		State: store.PRReviewing, GHState: "OPEN", ActivityAt: prsNow.Add(-3 * time.Hour), GitHubUpdatedAt: prsNow.Add(-30 * time.Minute), HeadSHA: prsHead,
 		LastReview: &tui.ReviewInfo{Login: "talkable", Event: "COMMENTED", SubmittedAt: prsNow.Add(-time.Hour),
 			CommitSHA: "reviewed", Stale: true, Mine: true},
 		Reviewers: []tui.ReviewerInfo{
@@ -301,7 +301,7 @@ func TestPRsRenderCells(t *testing.T) {
 	out := b.String()
 	for _, want := range []string{
 		"REF", "TITLE", "AUTHOR", "ASSIGNEE", "UPDATED", "REQUESTED", "STATE", "LAST REVIEW", "SINCE", "REVIEWERS",
-		"talkable#11920", "Fix the widget", "ann", "bob,cat", "30m", "reviewing,draft,pinned,muted,error",
+		"talkable#11920", "Fix the widget", "ann", "bob,cat", "3h", "reviewing,draft,pinned,muted,error",
 		"commented 1h by talkable, stale", "2c 3f +40/-5",
 		"cat(approved,re-requested)", "bob(changes_requested,stale)", "dan(requested)", "team:core(requested)",
 	} {

@@ -5778,6 +5778,16 @@ type PRDetails struct {
 	FilesComplete bool
 	// CI is the head commit's checks.
 	CI CIRollup
+	// ActivityAt is the pull request's last activity: the latest of its
+	// opening, a description edit, the head commit (its committer date, never
+	// past UpdatedAt), a force push, a comment, a review (a reply in a thread
+	// is one), a label added or removed, a review requested or removed, ready
+	// for review or back to draft, a title rename, a base change, a close, a
+	// reopen and a merge (activityTypes; bots count, checks do not). Unlike
+	// UpdatedAt it does not move for what a reviewer never sees (a project
+	// field, a resolved thread, someone's pending review, a deleted comment).
+	// Zero when GitHub returned no timeline.
+	ActivityAt time.Time
 }
     PRDetails is what the poller stores for a pull request whose radar row
     changed. Logins are GraphQL logins, which never carry the "[bot]" suffix;
@@ -10677,7 +10687,8 @@ type BoardRow struct {
 	State              string         `json:"state"`        // automation state (prs.state)
 	SkipReason         string         `json:"skip_reason"`
 	GHState            string         `json:"gh_state"`
-	UpdatedAt          time.Time      `json:"updated_at"` // GitHub's updatedAt (prs.gh_updated_at)
+	UpdatedAt          time.Time      `json:"updated_at"`  // GitHub's updatedAt (prs.gh_updated_at)
+	ActivityAt         time.Time      `json:"activity_at"` // the last activity (PR.Activity): prs.activity_at, else UpdatedAt
 	HeadSHA            string         `json:"head_sha"`
 	ReviewedSHA        string         `json:"reviewed_sha"`
 	LastReviewEvent    string         `json:"last_review_event"`
@@ -10863,6 +10874,12 @@ type GitHubPR struct {
 	// head (pr_files). Not Changed either: the list moves no eligibility
 	// (skip_paths reads its own).
 	Files *PRFiles
+	// ActivityAt is the Details' activity time (nil = keep the stored one).
+	// The stored prs.activity_at is the later of it and the PR's last head
+	// move the poller saw (head_changed_at, but not its insertion); a head
+	// move moves a stored one without Details too. Not Changed either: it
+	// moves no eligibility.
+	ActivityAt *time.Time
 
 	// InitialState and Identity are used only when the PR is new.
 	InitialState string
@@ -11135,8 +11152,19 @@ type PR struct {
 	// review requests of the PR's timeline, oldest first; empty until the
 	// next Details fetch.
 	ReviewRequests []ReviewRequest `json:"review_requests"`
+	// ActivityAt (migration 0018) is the PR's last activity: the latest of
+	// the Details' (github.PRDetails.ActivityAt) and the head moves the
+	// poller saw, or its close or merge; nil until the next Details fetch.
+	// The screens show Activity; radar change detection and the dispatch
+	// order read GHUpdatedAt.
+	ActivityAt *time.Time `json:"activity_at"`
 }
     PR is one pull request and its automation state.
+
+func (p PR) Activity() *time.Time
+    Activity is the PR's last activity as the screens show it (the board's
+    UPDATED): ActivityAt, else GitHub's updatedAt until the next Details fetch
+    reads it; nil when neither is known.
 
 func (p PR) FlagDismissed() bool
     FlagDismissed is IsFlagDismissed for p.
@@ -11485,8 +11513,8 @@ func (s *Store) AssignmentsByPR(ctx context.Context, prID int64) ([]Assignment, 
     AssignmentsByPR returns the PR's assignment history, oldest first.
 
 func (s *Store) Board(ctx context.Context, f BoardFilter) ([]BoardRow, error)
-    Board returns the PRs the board shows, most recently updated on GitHub first
-    (PRs never fetched last). It reads only the registry.
+    Board returns the PRs the board shows, the latest activity first
+    (BoardRow.ActivityAt; PRs never fetched last). It reads only the registry.
 
 func (s *Store) Candidates(ctx context.Context, p CandidateParams) ([]PR, error)
     Candidates returns the PRs the dispatcher may start a round for, in dispatch
@@ -12496,11 +12524,19 @@ type PRBoardRow struct {
 	// author", `author "x" is in skip_authors`, ...).
 	SkipReason string
 	// Badges are the PR's labels that [board] badges marks, in its order.
-	Badges     []Badge
-	GHState    string // GitHub's state: OPEN, CLOSED, MERGED
-	UpdatedAt  time.Time
-	HeadSHA    string
-	LastReview *ReviewInfo // the latest review magnum knows of; nil when none
+	Badges  []Badge
+	GHState string // GitHub's state: OPEN, CLOSED, MERGED
+	// ActivityAt is the PR's last activity, which the UPDATED column, the
+	// updated sort and the card show: a push, a comment, a review, a label,
+	// a review request, a draft change, a rename, a description edit, a base
+	// change, a close, reopen or merge; GitHubUpdatedAt until magnum read it.
+	ActivityAt time.Time
+	// GitHubUpdatedAt is GitHub's updatedAt, which also moves for what a
+	// reviewer never sees (a project field, a resolved thread); prs --json
+	// only.
+	GitHubUpdatedAt time.Time
+	HeadSHA         string
+	LastReview      *ReviewInfo // the latest review magnum knows of; nil when none
 	// Findings is what magnum's latest posted review concluded (its findings
 	// by priority, simplifications and verdict), also where it could only
 	// comment; nil when magnum has not reviewed the PR.

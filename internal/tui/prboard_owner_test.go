@@ -17,10 +17,10 @@ import (
 func ownerRows() []PRBoardRow {
 	return append(boardRows(),
 		PRBoardRow{Ref: "example/widgets#7", Owner: "example", Repo: "widgets", Number: 7, Title: "Widget OAuth settings", Author: "bob",
-			State: "reviewed", GHState: "OPEN", UpdatedAt: ago(10 * time.Minute), HeadSHA: "7777777",
+			State: "reviewed", GHState: "OPEN", ActivityAt: ago(10 * time.Minute), HeadSHA: "7777777",
 			Reviewers: []ReviewerInfo{{Login: "bob", Verdict: "approved", CommitSHA: "7777777"}}},
 		PRBoardRow{Ref: "alice/dotfiles#3", Owner: "alice", Repo: "dotfiles", Number: 3, Title: "Dotfiles cleanup", Author: "alice",
-			State: "queued", GHState: "OPEN", UpdatedAt: ago(30 * time.Minute)},
+			State: "queued", GHState: "OPEN", ActivityAt: ago(30 * time.Minute)},
 	)
 }
 

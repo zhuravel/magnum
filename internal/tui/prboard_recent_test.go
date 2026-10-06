@@ -22,14 +22,14 @@ func recentRows() []PRBoardRow {
 	return append(boardRows(),
 		PRBoardRow{Ref: "talkable/talkable#11990", Owner: "talkable", Repo: "talkable", Number: 11990,
 			Title: "Retire the coupon v1 API", Author: "alice", State: "closed", GHState: "MERGED",
-			UpdatedAt: ago(2 * time.Hour), HeadSHA: "b2b2b2b2b2", ClosedAt: ago(2 * time.Hour), Recent: true, MergedUnreviewed: true,
+			ActivityAt: ago(2 * time.Hour), HeadSHA: "b2b2b2b2b2", ClosedAt: ago(2 * time.Hour), Recent: true, MergedUnreviewed: true,
 			LastReview: &ReviewInfo{Login: "talkable[bot]", Event: "COMMENTED", SubmittedAt: ago(6 * time.Hour), CommitSHA: "a1a1a1a1a1", Stale: true}},
 		PRBoardRow{Ref: "talkable/talkable#11991", Owner: "talkable", Repo: "talkable", Number: 11991,
 			Title: "Spike: referral sharing via SMS", Author: "rev-ann", State: "closed", GHState: "CLOSED",
-			UpdatedAt: ago(30 * time.Minute), HeadSHA: "c3c3c3c3c3", ClosedAt: ago(30 * time.Minute), Recent: true},
+			ActivityAt: ago(30 * time.Minute), HeadSHA: "c3c3c3c3c3", ClosedAt: ago(30 * time.Minute), Recent: true},
 		PRBoardRow{Ref: "talkable/talkable#11992", Owner: "talkable", Repo: "talkable", Number: 11992,
 			Title: "Speed up the campaign list query", Author: "alice", State: "released", GHState: "MERGED",
-			UpdatedAt: ago(time.Minute), HeadSHA: "d4d4d4d4d4", ClosedAt: ago(5 * time.Hour), Recent: true,
+			ActivityAt: ago(time.Minute), HeadSHA: "d4d4d4d4d4", ClosedAt: ago(5 * time.Hour), Recent: true,
 			LastReview: &ReviewInfo{Login: "talkable[bot]", Event: "APPROVED", SubmittedAt: ago(6 * time.Hour), CommitSHA: "d4d4d4d4d4"}},
 	)
 }
@@ -197,7 +197,7 @@ func TestPRBoardRecentlyClosedFollowFilterViewAndOwner(t *testing.T) {
 	}
 
 	rows := append(recentRows(), PRBoardRow{Ref: "example/widgets#7", Owner: "example", Repo: "widgets", Number: 7, Title: "Widget export",
-		State: "closed", GHState: "MERGED", UpdatedAt: ago(time.Hour), ClosedAt: ago(time.Hour), Recent: true})
+		State: "closed", GHState: "MERGED", ActivityAt: ago(time.Hour), ClosedAt: ago(time.Hour), Recent: true})
 	o := newPRBoardModel(context.Background(), &fakeBoardSource{rows: rows}, &fakeActions{},
 		PRBoardOptions{Now: func() time.Time { return boardNow }, RecentClosed: 24 * time.Hour, DefaultOwner: "example"})
 	o, _ = send(t, o, tea.WindowSizeMsg{Width: 220, Height: 40}, prbDataMsg{rows: rows})

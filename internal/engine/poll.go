@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -514,6 +515,9 @@ func fillDetails(in *store.GitHubPR, d github.PRDetails, logins []string, now ti
 	}
 	in.IsCrossRepo = store.Ptr(d.IsCrossRepository)
 	in.Files = prFiles(d)
+	if !d.ActivityAt.IsZero() {
+		in.ActivityAt = store.Ptr(d.ActivityAt) // the registry adds the head moves it saw
+	}
 	labels := d.Labels
 	if labels == nil {
 		labels = []string{}
@@ -887,6 +891,11 @@ func (e *Engine) confirmMissing(ctx context.Context, gh GitHub, repo store.Repo,
 					}
 					if !st.ClosedAt.IsZero() {
 						u.Set("closed_at", st.ClosedAt)
+					}
+					// The merge or close is the PR's last activity: its
+					// Details are not read again.
+					if at := cmp.Or(st.MergedAt, st.ClosedAt); !at.IsZero() && (pr.ActivityAt == nil || at.After(*pr.ActivityAt)) {
+						u.Set("activity_at", at)
 					}
 				})
 				if err != nil {

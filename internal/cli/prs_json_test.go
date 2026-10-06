@@ -39,7 +39,7 @@ func fullBoardRow() tui.PRBoardRow {
 		Labels: []string{"Flagged"}, Assignees: []string{"bob-rev"},
 		State: "reviewed", SkipReason: "bot author",
 		Badges:  []tui.Badge{{Label: "Flagged", Text: "!", Color: "red"}},
-		GHState: "OPEN", UpdatedAt: at, HeadSHA: "abc1234",
+		GHState: "OPEN", ActivityAt: at.Add(-time.Hour), GitHubUpdatedAt: at, HeadSHA: "abc1234",
 		LastReview: &tui.ReviewInfo{Login: "zhuravel", Event: "APPROVED", SubmittedAt: at, CommitSHA: "abc1234", Stale: true, Mine: true},
 		Findings: &tui.FindingsInfo{Counts: [4]int{1, 2, 3, 4}, Simplifications: 5, Fixed: 6, Open: 7, Answered: 8,
 			Verdict: "blocking", Posted: "REQUEST_CHANGES", SHA: "abc1234"},
@@ -91,7 +91,7 @@ func TestPRsJSONKeysAreSnakeCase(t *testing.T) {
 			t.Errorf("key %q at %q is not snake_case", key, path)
 		}
 	})
-	for _, key := range []string{"ref", "owner", "repo", "number", "title", "author", "url", "gh_state", "updated_at", "head_sha",
+	for _, key := range []string{"ref", "owner", "repo", "number", "title", "author", "url", "gh_state", "activity_at", "github_updated_at", "head_sha",
 		"last_review", "since_review", "next_eligible_at", "rounds_today", "last_round", "requested_to_me", "merged_unreviewed", "closed_at"} {
 		if _, ok := rows[0][key]; !ok {
 			t.Errorf("no %q key in %v", key, keysOf(rows[0]))
@@ -109,7 +109,7 @@ func keysOf(m map[string]any) []string {
 
 func TestPRsJSONTimesAreRFC3339AndOmittedWhenUnset(t *testing.T) {
 	full := marshalPRsJSON(t, fullBoardRow())[0]
-	for _, key := range []string{"updated_at", "next_eligible_at", "closed_at"} {
+	for _, key := range []string{"activity_at", "github_updated_at", "next_eligible_at", "closed_at"} {
 		s, ok := full[key].(string)
 		if !ok {
 			t.Fatalf("%s = %v, want an RFC3339 string", key, full[key])
@@ -118,8 +118,11 @@ func TestPRsJSONTimesAreRFC3339AndOmittedWhenUnset(t *testing.T) {
 			t.Errorf("%s = %q: %v", key, s, err)
 		}
 	}
-	if got := full["updated_at"]; got != "2026-10-05T14:30:00Z" {
-		t.Errorf("updated_at = %v", got)
+	if got := full["github_updated_at"]; got != "2026-10-05T14:30:00Z" {
+		t.Errorf("github_updated_at = %v", got)
+	}
+	if got := full["activity_at"]; got != "2026-10-05T13:30:00Z" {
+		t.Errorf("activity_at = %v", got)
 	}
 	review := full["last_review"].(map[string]any)
 	if got := review["submitted_at"]; got != "2026-10-05T14:30:00Z" {
@@ -135,12 +138,12 @@ func TestPRsJSONTimesAreRFC3339AndOmittedWhenUnset(t *testing.T) {
 
 	// An open PR nobody scheduled, with a reviewer whose time is not known: no zero times.
 	bare := fullBoardRow()
-	bare.UpdatedAt, bare.NextEligibleAt, bare.ClosedAt = time.Time{}, time.Time{}, time.Time{}
+	bare.ActivityAt, bare.GitHubUpdatedAt, bare.NextEligibleAt, bare.ClosedAt = time.Time{}, time.Time{}, time.Time{}, time.Time{}
 	bare.LastReview.SubmittedAt = time.Time{}
 	bare.Reviewers[0].SubmittedAt = time.Time{}
 	bare.RequestedToMe.At = time.Time{}
 	out := marshalPRsJSON(t, bare)[0]
-	for _, key := range []string{"updated_at", "next_eligible_at", "closed_at"} {
+	for _, key := range []string{"activity_at", "github_updated_at", "next_eligible_at", "closed_at"} {
 		if v, ok := out[key]; ok {
 			t.Errorf("unset %s is %v, want the key left out", key, v)
 		}
@@ -275,7 +278,7 @@ func TestPRsJSONCommandPrintsTheSnakeCaseShape(t *testing.T) {
 				t.Errorf("%v: key %q at %q is not snake_case", r["ref"], key, path)
 			}
 		})
-		for _, key := range []string{"ref", "gh_state", "updated_at", "head_sha", "rounds_today"} {
+		for _, key := range []string{"ref", "gh_state", "activity_at", "github_updated_at", "head_sha", "rounds_today"} {
 			if _, ok := r[key]; !ok {
 				t.Errorf("%v: no %q key (have %v)", r["ref"], key, keysOf(r))
 			}

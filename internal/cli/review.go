@@ -470,6 +470,9 @@ func reviewGitHubPR(d *actDeps, w *config.Watch, repo store.Repo, p github.PRDet
 	if !p.UpdatedAt.IsZero() {
 		in.GHUpdatedAt = store.Ptr(p.UpdatedAt)
 	}
+	if !p.ActivityAt.IsZero() {
+		in.ActivityAt = store.Ptr(p.ActivityAt)
+	}
 	in.Labels = p.Labels
 	if in.Labels == nil {
 		in.Labels = []string{}

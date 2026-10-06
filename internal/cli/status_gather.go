@@ -360,7 +360,7 @@ func statusGatherPRs(ctx context.Context, d statusDeps, now time.Time, r *status
 	for _, pr := range prs {
 		repo := repoByID[pr.RepoID].FullName()
 		line := statusPRLine{Repo: repo, Number: pr.Number, Title: store.Deref(pr.Title), State: pr.State, Next: statusNextShort(ctx, st, pr, now),
-			Forced: pr.Forced, ReviewRequested: pr.ReviewRequested, UpdatedAt: pr.GHUpdatedAt,
+			Forced: pr.Forced, ReviewRequested: pr.ReviewRequested, UpdatedAt: pr.GHUpdatedAt, ActivityAt: pr.Activity(),
 			url: pr.URL, author: store.Deref(pr.AuthorLogin), rec: &pr}
 		switch {
 		case slices.Contains(prInFlight, pr.State):

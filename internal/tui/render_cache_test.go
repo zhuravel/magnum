@@ -25,7 +25,7 @@ func synthBoardRows(n int) []PRBoardRow {
 		r.Ref = fmt.Sprintf("%s/%s#%d", r.Owner, r.Repo, r.Number)
 		r.URL = fmt.Sprintf("https://github.com/%s/%s/pull/%d", r.Owner, r.Repo, r.Number)
 		r.Title = fmt.Sprintf("%s (part %d)", r.Title, i)
-		r.UpdatedAt = boardNow.Add(-time.Duration(i) * 17 * time.Minute)
+		r.ActivityAt = boardNow.Add(-time.Duration(i) * 17 * time.Minute)
 		rows[i] = r
 	}
 	return rows

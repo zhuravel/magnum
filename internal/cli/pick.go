@@ -163,8 +163,8 @@ func pickEntries(ctx context.Context, d *actDeps, limit int) ([]pickEntry, error
 			continue
 		}
 		at := pr.UpdatedAt
-		if pr.GHUpdatedAt != nil {
-			at = *pr.GHUpdatedAt
+		if a := pr.Activity(); a != nil {
+			at = *a
 		}
 		state := pr.State
 		if pr.Pinned {

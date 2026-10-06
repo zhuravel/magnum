@@ -32,8 +32,9 @@ type prsJSONRow struct {
 	State            string            `json:"state"` // magnum's state: queued, reviewing, reviewed, ..., ineligible (skipped), ignored
 	SkipReason       string            `json:"skip_reason"`
 	Badges           []prsJSONBadge    `json:"badges"`
-	GHState          string            `json:"gh_state"` // GitHub's: OPEN, CLOSED, MERGED
-	UpdatedAt        time.Time         `json:"updated_at,omitzero"`
+	GHState          string            `json:"gh_state"`                   // GitHub's: OPEN, CLOSED, MERGED
+	ActivityAt       time.Time         `json:"activity_at,omitzero"`       // the last activity (UPDATED); GitHub's updatedAt until magnum read it
+	GitHubUpdatedAt  time.Time         `json:"github_updated_at,omitzero"` // GitHub's updatedAt, which also moves for what a reviewer never sees
 	HeadSHA          string            `json:"head_sha"`
 	LastReview       *prsJSONReview    `json:"last_review"`
 	Findings         *prsJSONFindings  `json:"findings"`
@@ -226,7 +227,7 @@ func prsJSONOf(r tui.PRBoardRow) prsJSONRow {
 		Ref: r.Ref, Owner: r.Owner, Repo: r.Repo, Number: r.Number, Title: r.Title, Author: r.Author, URL: r.URL,
 		Issue: r.Issue, IssueURL: r.IssueURL, Draft: r.Draft, Labels: listOf(r.Labels), Assignees: listOf(r.Assignees),
 		State: r.State, SkipReason: r.SkipReason, Badges: mapList(r.Badges, prsJSONBadgeOf), GHState: r.GHState,
-		UpdatedAt: r.UpdatedAt, HeadSHA: r.HeadSHA, LastReview: mapPtr(r.LastReview, prsJSONReviewOf),
+		ActivityAt: r.ActivityAt, GitHubUpdatedAt: r.GitHubUpdatedAt, HeadSHA: r.HeadSHA, LastReview: mapPtr(r.LastReview, prsJSONReviewOf),
 		Findings: mapPtr(r.Findings, prsJSONFindingsOf), CI: mapPtr(r.CI, prsJSONCIOf),
 		Reviewers: mapList(r.Reviewers, prsJSONReviewerOf), SinceReview: mapPtr(r.SinceReview, prsJSONDeltaOf),
 		Slot: r.Slot, Pinned: r.Pinned, Muted: r.Muted, Notes: r.Notes, NextEligibleAt: r.NextEligibleAt,
