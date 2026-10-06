@@ -24,6 +24,7 @@ subscriptions you already have, and every agent works in a herdr pane you can wa
   <a href="#quick-start">Quick start</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#what-the-author-sees">What the author sees</a> ·
+  <a href="#faq">FAQ</a> ·
   <a href="#configuration">Configuration</a> ·
   <a href="#daily-use">Commands</a> ·
   <a href="#the-pr-board">PR board</a>
@@ -151,6 +152,47 @@ To post as a GitHub App, answer 2 when init asks who posts: it asks for the App'
 to save its private key as, `~/.config/magnum/keys/<app>.pem` (it never asks for the key); `magnum
 identities check` verifies the App. A big repository with its own databases gets a pool of warm slots:
 add a `[[pool]]` (see below), then `magnum slots provision --count 6`.
+
+## FAQ
+
+**How is this different from a hosted review bot?** Magnum is not a service: it runs on your Mac and
+drives the agent CLIs you are already logged into, so reviews come out of subscriptions you already have.
+The agents work in a real checkout of the PR (a worktree, or a pool slot with its own databases), so they
+can run your tests, and you can watch any of them in its pane. A judge has to reproduce a finding before
+it is posted, and later pushes resume the same sessions. The trade-off: reviews happen only while your
+Mac is on and the daemon runs, and they spend your own budget.
+
+**What does it cost?** Magnum is free (MIT); every round spends some of the budget of each agent it runs.
+The defaults keep that down: a push waits for 5 quiet minutes (15 after a burst), a PR gets at most one
+round per 30 minutes (2 hours for a draft) and 12 automatic rounds a day, a push that only touches
+comments, whitespace or docs, or only merges the base branch, is not re-reviewed, and a change under 30
+code lines since the last review gets a check by the judge alone. With 80% of the Codex budget used,
+first reviews wait; at 95%, rounds that need Codex wait. `magnum status` shows how fast that budget goes,
+`magnum stats` lists the PRs that took the most agent time, and
+[triage](#triage-fewer-reviewers-for-a-small-diff) can skip reviewers on a small diff.
+
+**Is it safe to point agents at pull requests?** Reviewing a PR means running its code: the agents run
+its tests in the checkout, with the autonomy your agent CLIs allow. Watch repositories whose contributors
+you would let run code on your machine; PRs from forks are skipped by default. Magnum treats PR content
+as data: PR text never goes into a prompt, the repository's instruction files count only for its
+conventions, permission prompts are answered No, hooks a checkout brings are declined, and your personal
+GitHub tokens are stripped from review worktrees. [Under the hood](#under-the-hood) has the details.
+
+**How noisy is it?** The judge posts only what it can reproduce, ranks findings by who can reach them (P0
+to P3), and offers at most three simplifications, marked optional. Every candidate it rejects is recorded
+with a reason, so `magnum stats` shows per reviewer how many findings were raised, posted and rejected,
+and why. The optional [retro](#learning-from-other-reviewers) measures the other side: what human
+reviewers caught that Magnum missed.
+
+**Why herdr panes and not headless runs?** So you can see what an agent is doing, take it over or answer
+it when it is stuck, and so its session lives on: a re-review continues the conversation that wrote the
+first review. herdr also gives Magnum pane titles, toasts and a plugin for its popups.
+
+**Can it post as a bot instead of me?** Yes: give it a GitHub App and the App posts, so its approvals and
+change requests do not come from your account. See [Identities](#identities-who-posts).
+
+**Does it run on Linux?** Not yet. [Linux](#linux) lists the four macOS-only spots; a small platform
+interface around them is the whole job, and contributions are welcome.
 
 ## Configuration
 
