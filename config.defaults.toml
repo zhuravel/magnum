@@ -85,8 +85,8 @@ icons = "unicode"                 # unicode | nerd (Nerd Font icons in their sta
 recent_closed = "24h"             # merged and closed PRs stay on the PR board this long, in a section after the
                                   # open ones (newest closed first, dimmed; "merged · unreviewed" in red when GitHub
                                   # merged a PR magnum still meant to review); "0" = off (--all lists every closed PR)
-shimmer = true                    # a PR magnum approved that GitHub still blocks on your approval says "✓ needs you"
-                                  # ("✓ lift your ✗" when your changes request is the only one) in a rainbow that
+shimmer = true                    # a PR magnum approved that GitHub still blocks on your approval says "✔ needs you"
+                                  # ("✔ lift your ✗" when your changes request is the only one) in a rainbow that
                                   # slides while it is on screen; false keeps the colors still (NO_COLOR: reverse video)
 
 [github]

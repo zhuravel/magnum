@@ -501,13 +501,13 @@ again.
 Your word wins, for good on that PR: once you review it by hand (an approval, a comment or a changes
 request; one you post with `magnum approve` or `magnum request-changes` counts as yours), or you or anyone
 else dismisses one of these approvals, Magnum stops approving that PR as you, and your changes request shows
-as `✓ lift your ✗` instead. `magnum review` does not change that; `magnum unapprove --resume <ref>` does
+as `✔ lift your ✗` instead. `magnum review` does not change that; `magnum unapprove --resume <ref>` does
 (only what you do from then on counts). GitHub dismissing it as stale on a push does not stop it.
 `magnum unapprove <ref>` (y/N on a terminal) and the board's `D` (y/N) withdraw a standing approval and stop
 it too.
 
 You see every one: a toast per approval ("approved as you: talkable#12001", with the link) and per
-withdrawal, `✓ auto` in the board's STATE and "N auto-approved" in the titles, the card, `magnum prs
+withdrawal, `✔ auto` in the board's STATE and "N auto-approved" in the titles, the card, `magnum prs
 --auto-approved`, and "approvals: auto-approved: N today, M standing" in `magnum status`. Each post and
 withdrawal is a row of the registry's `auto_approvals` with begin, ok and fail events
 (`review.auto_approve_begin`, `review.auto_approved`, `review.auto_approve_failed`,
@@ -930,9 +930,9 @@ the window resets ("codex 51% · at this pace 80% Tue 13:30"). On a narrow scree
 built: daemon-restart", "paused 19h", "codex 80% Tue 13:30") and give way, the least pressing first;
 they never add a line.
 
-A PR Magnum approved that GitHub still blocks on your approval reads `✓ needs you` in STATE: GitHub never
+A PR Magnum approved that GitHub still blocks on your approval reads `✔ needs you` in STATE: GitHub never
 counts a GitHub App's approval toward a branch's required approvals, so while its review decision is
-`REVIEW_REQUIRED` yours is the approval that counts. `✓ lift your ✗` marks one whose only outstanding changes
+`REVIEW_REQUIRED` yours is the approval that counts. `✔ lift your ✗` marks one whose only outstanding changes
 request is yours (an old one counts until you approve or dismiss it). Both need Magnum's latest review to
 approve the PR's current head (or, for an identity that comments when clean, `no_findings_event = "COMMENT"`,
 to comment with a clean verdict), an open PR that is not a draft and not yours, and no changes request of
@@ -945,9 +945,9 @@ sort lists these PRs first, the titles of the board and the status dashboard cou
 ✓"), `magnum prs --needs-me` lists only them (`needs-you` and `lift-yours` in the printed STATE),
 `magnum pick` marks them, and the daemon toasts each once per head with its link (`[herdr] notify`).
 
-A PR Magnum approved as you (Approving as you) reads `✓ auto` in STATE, in a cyan pill that does not
-shimmer, instead of `✓ needs you`; the titles count them ("2 auto-approved"), the card says which head was
-approved and when, or why Magnum no longer approves the PR as you, `magnum pick` marks them `✓ auto`, and
+A PR Magnum approved as you (Approving as you) reads `✔ auto` in STATE, in a cyan pill that does not
+shimmer, instead of `✔ needs you`; the titles count them ("2 auto-approved"), the card says which head was
+approved and when, or why Magnum no longer approves the PR as you, `magnum pick` marks them `✔ auto`, and
 `D` withdraws the approval after a y/N (as `magnum unapprove`).
 
 CI shows the head's checks: the repository's required checks when it has some (read from GitHub's

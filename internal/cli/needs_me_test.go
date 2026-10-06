@@ -179,7 +179,7 @@ func TestPickMarksThePRsThatNeedYou(t *testing.T) {
 	for _, e := range (*calls)[0].entries {
 		states[e.Ref] = e.State
 	}
-	want := map[string]string{"talkable/talkable#5": "reviewed,✓ needs you", "talkable/talkable#6": "reviewed,✓ lift your ✗",
+	want := map[string]string{"talkable/talkable#5": "reviewed,✔ needs you", "talkable/talkable#6": "reviewed,✔ lift your ✗",
 		"talkable/talkable#7": "queued"}
 	for ref, w := range want {
 		if states[ref] != w {

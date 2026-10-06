@@ -171,8 +171,8 @@ type PRBoardRow struct {
 	// a GitHub App's approval, still blocks it on the operator
 	// (store.NeedsMe): NeedsMeApprove while it requires an approval that
 	// counts, NeedsMeLift while the operator's own changes request is the
-	// only one blocking it; "" otherwise. The state cell says "✓ needs you"
-	// or "✓ lift your ✗" and the updated sort lists it first.
+	// only one blocking it; "" otherwise. The state cell says "✔ needs you"
+	// or "✔ lift your ✗" and the updated sort lists it first.
 	NeedsMe string
 	// ReviewDecision is GitHub's reviewDecision: APPROVED,
 	// CHANGES_REQUESTED or REVIEW_REQUIRED; "" when the base branch requires
@@ -180,7 +180,7 @@ type PRBoardRow struct {
 	ReviewDecision string
 	// AutoApproved is the approval magnum posted as the operator that
 	// stands on the PR ([[watch]] auto_approve); nil when none. The state
-	// cell says "✓ auto" and D withdraws it.
+	// cell says "✔ auto" and D withdraws it.
 	AutoApproved *AutoApproval
 	// AutoStopped is why magnum no longer approves the PR as the operator
 	// (they dismissed one of its approvals, reviewed the PR by hand or ran

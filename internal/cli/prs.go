@@ -53,9 +53,9 @@ func newPRsCmd(c *Context) *cobra.Command {
 			"PRs GitHub merged or closed within [board] recent_closed (24h by default; \"0\" turns it off) follow the "+
 			"open ones, newest closed first, dimmed; \"merged · unreviewed\" (closed,merged,unreviewed in the printed "+
 			"rows) marks one GitHub merged before magnum reviewed its last push. "+
-			"\"✓ needs you\" (needs-you in the printed rows) marks a PR magnum approved on its head that GitHub still "+
+			"\"✔ needs you\" (needs-you in the printed rows) marks a PR magnum approved on its head that GitHub still "+
 			"blocks on your approval, because it never counts a GitHub App's (its review decision is REVIEW_REQUIRED), "+
-			"and \"✓ lift your ✗\" (lift-yours) one whose only changes request is yours; the updated sort lists them "+
+			"and \"✔ lift your ✗\" (lift-yours) one whose only changes request is yours; the updated sort lists them "+
 			"first, the title counts them and --needs-me shows only them. "+
 			"--repo shows one repository, --all adds every closed and merged PR, --limit caps the rows. --sort picks the "+
 			"order (updated, last-review, reviewer-activity, requested, changes, state); --desc (the default) puts the "+

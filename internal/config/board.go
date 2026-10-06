@@ -30,8 +30,8 @@ type Board struct {
 	// whatever it says.
 	RecentClosed Duration `toml:"recent_closed"`
 	// Shimmer slides a rainbow across the state cell of a PR magnum approved
-	// that GitHub still blocks on the operator's approval ("✓ needs you",
-	// "✓ lift your ✗") while one is on screen; false keeps it still. A
+	// that GitHub still blocks on the operator's approval ("✔ needs you",
+	// "✔ lift your ✗") while one is on screen; false keeps it still. A
 	// terminal without colors (NO_COLOR) shows it in reverse video either way.
 	Shimmer bool `toml:"shimmer"`
 }

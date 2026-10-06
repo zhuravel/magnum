@@ -180,11 +180,11 @@ func pickEntries(ctx context.Context, d *actDeps, limit int) ([]pickEntry, error
 		state := pr.State
 		switch needs[pr.ID] {
 		case store.NeedsMeApprove:
-			state += ",✓ needs you"
+			state += ",✔ needs you"
 		case store.NeedsMeLift:
-			state += ",✓ lift your ✗"
+			state += ",✔ lift your ✗"
 		case "auto":
-			state += ",✓ auto"
+			state += ",✔ auto"
 		}
 		if pr.Pinned {
 			state += ",pinned"

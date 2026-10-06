@@ -159,7 +159,7 @@ func TestStatusCountsTheAutoApprovalsOfTheDay(t *testing.T) {
 	}
 }
 
-// The picker marks a PR approved as the operator "✓ auto", not as one that
+// The picker marks a PR approved as the operator "✔ auto", not as one that
 // needs them.
 func TestPickMarksTheAutoApprovedPRs(t *testing.T) {
 	h := newActHarness(t)
@@ -178,7 +178,7 @@ func TestPickMarksTheAutoApprovedPRs(t *testing.T) {
 	for _, e := range (*calls)[0].entries {
 		if e.Ref == "talkable/talkable#5" {
 			found = true
-			if e.State != "reviewed,✓ auto" {
+			if e.State != "reviewed,✔ auto" {
 				t.Fatalf("state %q", e.State)
 			}
 		}

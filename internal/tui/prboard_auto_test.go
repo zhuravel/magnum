@@ -19,14 +19,14 @@ func autoRow(edit func(r *PRBoardRow)) PRBoardRow {
 	})
 }
 
-// A PR magnum approved as the operator says "✓ auto" in its state cell, in a
-// pill of its own color that does not shimmer, over "✓ needs you" (the
+// A PR magnum approved as the operator says "✔ auto" in its state cell, in a
+// pill of its own color that does not shimmer, over "✔ needs you" (the
 // gate read before the approval); a round due or in flight shows its own.
 func TestTheAutoCellSaysMagnumApprovedAsYou(t *testing.T) {
 	rows := []PRBoardRow{autoRow(func(r *PRBoardRow) { r.NeedsMe = NeedsMeApprove })}
 	p := needsMePainter(IconsUnicode, rows)
 	got := p.stateWaitCell(rows[0])
-	if cellText(got) != " ✓ auto " || len(got) != 1 {
+	if cellText(got) != " ✔ auto " || len(got) != 1 {
 		t.Fatalf("cell %q", cellText(got))
 	}
 	if st := got[0].st; !st.GetBold() || !st.GetReverse() || st.GetForeground() == p.pal.pills["reviewed"].GetForeground() {
@@ -72,7 +72,7 @@ func TestDWithdrawsTheAutoApprovalAfterAsking(t *testing.T) {
 		r.Ref, r.Number, r.AutoStopped, r.ActivityAt = "talkable/talkable#7", 7, "you commented on it by hand", ago(2*time.Hour)
 	})
 	m, _ = send(t, m, prbDataMsg{rows: []PRBoardRow{autoRow(nil), plain, stopped}})
-	mustContain(t, viewOf(m), "✓ auto")
+	mustContain(t, viewOf(m), "✔ auto")
 
 	m, _ = send(t, m, keyMsg("D"))
 	q := "Withdraw the approval magnum posted as you on talkable#9 (review 9001 on abcdef1) and stop it approving talkable#9?"

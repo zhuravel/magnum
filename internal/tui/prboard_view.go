@@ -769,9 +769,9 @@ func autoShown(r PRBoardRow) bool {
 }
 
 // autoCell is the state cell of a PR magnum approved as the operator,
-// "✓ auto", in a pill of its own color (it does not shimmer: nothing waits
+// "✔ auto" (the approved icon), in a pill of its own color (it does not shimmer: nothing waits
 // for the operator).
-func (p prbPainter) autoCell() cell { return cell{{" " + p.g.yes + " auto ", p.pal.auto}} }
+func (p prbPainter) autoCell() cell { return cell{{" " + p.g.approved + " auto ", p.pal.auto}} }
 
 // shimmerSpan is how many cells each color of the shimmer covers;
 // shimmerCycle (the number of colors times shimmerSpan) is how many frames
@@ -781,14 +781,15 @@ const shimmerSpan = 2
 func (pal prbPalette) shimmerCycle() int { return max(len(pal.rainbow)*shimmerSpan, 1) }
 
 // needsMeCell is the state cell of a PR magnum approved that waits for the
-// operator: "✓ needs you", or "✓ lift your ✗" when their own changes
+// operator: "✔ needs you", or "✔ lift your ✗" (the approved and the
+// changes-requested icons of the glyph set) when their own changes
 // request is the only one blocking it, in bold with a rainbow that slides
 // one cell to the right every frame (p.shimmer), and in bold reverse video
 // on a terminal without colors.
 func (p prbPainter) needsMeCell(kind string) cell {
-	text := " " + p.g.yes + " needs you "
+	text := " " + p.g.approved + " needs you "
 	if kind == NeedsMeLift {
-		text = " " + p.g.yes + " lift your " + p.g.no + " "
+		text = " " + p.g.approved + " lift your " + p.g.changes + " "
 	}
 	if p.colorless || len(p.pal.rainbow) == 0 {
 		return cell{{text, lipgloss.NewStyle().Bold(true).Reverse(true)}}

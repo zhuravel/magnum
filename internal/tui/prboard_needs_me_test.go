@@ -50,7 +50,7 @@ func runeColors(c cell) []color.Color {
 }
 
 // A PR magnum approved that waits for the operator says so in its state
-// cell, "✓ needs you", or "✓ lift your ✗" when their own changes request
+// cell, "✔ needs you", or "✔ lift your ✗" when their own changes request
 // is the only one blocking it (ASCII: "+" and "x"); a round in flight shows
 // its own pill; a terminal without colors gets bold reverse video.
 func TestTheNeedsYouCellSaysWhatTheOperatorsApprovalWouldFix(t *testing.T) {
@@ -62,11 +62,11 @@ func TestTheNeedsYouCellSaysWhatTheOperatorsApprovalWouldFix(t *testing.T) {
 		r    PRBoardRow
 		want string
 	}{
-		{p, approve, " ✓ needs you "},
-		{p, lift, " ✓ lift your ✗ "},
+		{p, approve, " ✔ needs you "},
+		{p, lift, " ✔ lift your ✗ "},
 		{needsMePainter(IconsASCII, rows), approve, " + needs you "},
 		{needsMePainter(IconsASCII, rows), lift, " + lift your x "},
-		{needsMePainter(IconsNerd, rows), lift, " ✓ lift your ✗ "},
+		{needsMePainter(IconsNerd, rows), lift, " \U000F012C lift your \ueb43 "}, // the review icons gh-dash uses
 	} {
 		got := c.p.stateWaitCell(c.r)
 		var b strings.Builder
@@ -91,7 +91,7 @@ func TestTheNeedsYouCellSaysWhatTheOperatorsApprovalWouldFix(t *testing.T) {
 
 	p.colorless = true
 	got := p.stateWaitCell(lift)
-	if len(got) != 1 || got[0].text != " ✓ lift your ✗ " || !got[0].st.GetBold() || !got[0].st.GetReverse() {
+	if len(got) != 1 || got[0].text != " ✔ lift your ✗ " || !got[0].st.GetBold() || !got[0].st.GetReverse() {
 		t.Errorf("colorless cell = %+v, want one bold reverse run", got)
 	}
 }
@@ -238,7 +238,7 @@ func TestTheShimmerRunsOnlyWhileANeedsYouCellIsOnScreen(t *testing.T) {
 		t.Fatal("a needs-you row on screen started no shimmer")
 	}
 	f0, rows0 := m.View().Content, m.rowsKey(m.viewWidth())
-	mustContain(t, viewOf(m), "✓ needs you", "✓ lift your ✗")
+	mustContain(t, viewOf(m), "✔ needs you", "✔ lift your ✗")
 	next, cmd = m.Update(prbShimmerMsg{})
 	m = next.(prBoardModel)
 	if !shimmerTicks(cmd) || m.shimmer != 1 {
@@ -277,13 +277,13 @@ func TestTheShimmerRunsOnlyWhileANeedsYouCellIsOnScreen(t *testing.T) {
 	if next.(prBoardModel).shimmerOn() {
 		t.Fatal("the card shimmers")
 	}
-	mustContain(t, lineWith(t, viewOf(next.(prBoardModel)), nmApprove), "reviewed", "✓ needs you") // the card's head, still
+	mustContain(t, lineWith(t, viewOf(next.(prBoardModel)), nmApprove), "reviewed", "✔ needs you") // the card's head, still
 
 	off, cmd := needsMeBoard(t, 160, 30, PRBoardOptions{NoShimmer: true})
 	if shimmerTicks(cmd) || off.shimmerOn() {
 		t.Fatal("[board] shimmer = false shimmers")
 	}
-	mustContain(t, viewOf(off), "✓ needs you")
+	mustContain(t, viewOf(off), "✔ needs you")
 
 	mono, _ := needsMeBoard(t, 160, 30, PRBoardOptions{})
 	next, cmd = mono.Update(tea.ColorProfileMsg{Profile: colorprofile.ASCII})
@@ -292,7 +292,7 @@ func TestTheShimmerRunsOnlyWhileANeedsYouCellIsOnScreen(t *testing.T) {
 		t.Fatal("a terminal without colors shimmers")
 	}
 	mono.shimmering = false
-	if line := lineWith(t, mono.View().Content, "needs you"); !strings.Contains(line, lipgloss.NewStyle().Bold(true).Reverse(true).Render(" ✓ needs you ")) {
+	if line := lineWith(t, mono.View().Content, "needs you"); !strings.Contains(line, lipgloss.NewStyle().Bold(true).Reverse(true).Render(" ✔ needs you ")) {
 		t.Errorf("colorless needs-you cell is not bold reverse video: %q", line)
 	}
 }
