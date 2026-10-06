@@ -209,6 +209,16 @@ func TestDashboardRendersHeaderAndSections(t *testing.T) {
 	mustNotContain(t, v, "feature/x")
 }
 
+// The header sums the repository notes up in a line of its own, only when
+// a repository has notes.
+func TestDashboardHeaderShowsTheNotesLine(t *testing.T) {
+	m, _, _ := newDash(t, 140, 50)
+	mustNotContain(t, viewOf(m), "notes:")
+	d := StatusData{Notes: "4 repos · 2 proposals to review (talkable/talkable, example/api stale) · 1 over limit"}
+	m, _ = send(t, m, dashDataMsg{data: d})
+	mustContain(t, viewOf(m), "notes:    4 repos · 2 proposals to review (talkable/talkable, example/api stale) · 1 over limit")
+}
+
 func TestDashboardHeaderUnknownsAndWarnings(t *testing.T) {
 	m, _, _ := newDash(t, 120, 40)
 	d := StatusData{Agents: AgentsInfo{Error: "herdr unreachable"}, Disk: DiskInfo{FreeGB: 3, MinGB: 8}, Warnings: []string{"mysql: connection refused"}}

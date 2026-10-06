@@ -31,6 +31,7 @@ const (
 	scratchChanges        = "changes.json" // what became of every section and file, and why
 	scratchUsage          = "usage.json"   // the limits, the sizes and the usage data
 	scratchMisses         = "misses.json"  // the retro's misses of the repository, when there are any
+	scratchSuperseded     = "superseded"   // the stale proposal this curation follows up on, when there is one
 )
 
 // Scratch is one curation's directory.
@@ -43,6 +44,7 @@ func (s Scratch) Harness() string        { return filepath.Join(s.Dir, scratchHa
 func (s Scratch) Changes() string        { return filepath.Join(s.Dir, scratchChanges) }
 func (s Scratch) Usage() string          { return filepath.Join(s.Dir, scratchUsage) }
 func (s Scratch) Misses() string         { return filepath.Join(s.Dir, scratchMisses) }
+func (s Scratch) Superseded() string     { return filepath.Join(s.Dir, scratchSuperseded) }
 
 // PrepareScratch makes a new scratch directory dir holding base (the notes
 // as current.md, the harness as current/ and as the harness/ the curator
@@ -67,6 +69,33 @@ func PrepareScratch(dir string, base State, usage []byte) (Scratch, error) {
 		}
 	}
 	return s, fsx.WriteFileAtomic(s.Usage(), usage, 0o600)
+}
+
+// WriteSuperseded writes the stale proposal a curation follows up on into
+// s's superseded/ directory, for the curator to read: its notes as
+// notes.md, its harness under harness/ and its changes.json, with a reason
+// for every section and file it kept, merged or removed. The notes changed
+// since that proposal was made, so it was superseded rather than applied;
+// its work is not lost.
+func WriteSuperseded(s Scratch, proposed State, changes []byte) error {
+	dir := s.Superseded()
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "notes.md"), proposed.Notes, 0o600); err != nil {
+		return err
+	}
+	harness := filepath.Join(dir, scratchHarness)
+	if err := os.Mkdir(harness, 0o700); err != nil {
+		return err
+	}
+	if err := writeTree(harness, proposed.Files); err != nil {
+		return err
+	}
+	if len(changes) == 0 {
+		changes = []byte("{}")
+	}
+	return os.WriteFile(filepath.Join(dir, scratchChanges), changes, 0o600)
 }
 
 // Changes is the curator's changes.json: what became of every notes section

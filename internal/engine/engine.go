@@ -661,6 +661,8 @@ func (e *Engine) startup(ctx context.Context) {
 	e.recoverRows(ctx)
 	e.reclassifyIneligible(ctx)
 	e.syncNotes(ctx, true) // notes_record.go: the first start imports every repository's notes
+	// No curation runs yet: a mark left behind is a crashed daemon's.
+	e.delKV(ctx, KVNotesCurating)
 	e.lastReconcile = e.now()
 	e.enqueueHeavy("reconcile", e.reconcile)
 }

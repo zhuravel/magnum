@@ -2296,3 +2296,75 @@ editing history. Code, config comments and prompts reference these by their head
   reviews, and a restart moves both); the REST file list `skip_paths` reads (a call per PR; it stays for
   `skip_paths`, which needs a rename's old name and three pages); the related PRs in `prs --json` or on the PR
   card (`prs --json` mirrors the board's row, and a board layout change needs a mockup first).
+- **An overview of every repository's notes** (2026-10-06, amends "Repository notes: triggers, history, usage
+  and curation"). The board said "notes ×2" and the dashboard "2 notes proposals to review", but nothing said
+  which repositories have notes, how big they are or which repositories the proposals are for: `magnum notes`
+  without a repository was a usage error and `magnum status` said nothing of notes. `magnum notes` without a
+  repository now lists one row per repository with notes (a notes file on disk, or in the registry a recorded
+  version with content, a harness on disk, a proposal waiting or a curation running or queued): REPO, NOTES
+  (bytes and lines, the long lines counted, `!` past max_bytes or max_line), HARNESS (files and bytes, `!` past
+  max_harness_files or max_harness_bytes), CHANGED (how long ago and by whom: the latest recorded version's
+  source, `judge #<PR>` for a judge's, or the file's age and "not recorded"), STATE (`ok`, `over limit
+  (<triggers>)`, `curation running (<trigger>, <age>)`, `curation queued (<trigger>, waits for …)`, `proposal N
+  to review (<trigger>, <age>)`, `proposal N stale (…; the notes changed since it was made)`, the first that
+  applies from the last), then a legend for the marks and one hint per row whose state asks for something
+  (`review: magnum notes <repo> --review`, `curate: magnum notes <repo> --curate`). `--json` prints
+  `{limits, repos}` with the same rows. `magnum status` (and its `--json`, `notes`) and the dashboard's header
+  sum the rows up in a `notes:` line ("4 repos · 2 proposals to review (talkable/talkable, example/api stale) ·
+  1 over limit", then a curation running or queued), every part that is zero left out and the line itself
+  while no repository has notes; the titles' "notes ×N" fact stays. Shell completion of `magnum notes <TAB>`
+  offers only the repositories with notes, from the files and a read-only query of the registry, naming a
+  proposal that waits. The toast for a new proposal already named the repository ("notes curation for <repo>
+  is ready"). Rejected: the sizes from the daemon's `KVNotesOver` marks instead of measuring (the list would
+  disagree with `magnum notes <repo>` until the next judge round).
+- **Curations wait for a judge stage instead of being refused or skipped** (2026-10-06, amends "A curator
+  proposes curated notes; the operator applies or rejects"). `magnum notes <repo> --curate` was refused while
+  a round of the repository was in its judge stage ("ask again when it ends"), and since the judge's own pass
+  starts with the reviewers that window covers most of a round: on a busy repository the request almost
+  always failed. The daemon's own triggers skipped such a repository until a scan every 10 minutes landed
+  outside one. Both now queue the curation (`engine.KVNotesCurateQueue`, one entry per repository, oldest
+  first, with its trigger, why it waits and since when; a `notes.curate_queued` event), and the request says
+  "queued: starts when the current round's judge stage ends". A request while another curation runs is
+  queued too ("starts when the running curation (of <repo>, started HH:MM) ends") instead of answered with a
+  note and dropped. Every tick, not only every scan, starts the oldest queued curation whose repository has
+  no round in its judge stage, one at a time, under the holds a request obeys (a drain, an infrastructure
+  pause, a pause of the curator's CLI); a queued daemon trigger also waits out `magnum pause` and is not
+  started under `[notes] curate = []`. An entry whose repository got a proposal meanwhile, or is gone, is
+  dropped. The curation running is `engine.KVNotesCurating` (repository, trigger, start), deleted when it
+  ends and at every daemon start, so `magnum notes` and `magnum status` can say "curation running" and
+  "curation queued". Rejected: keeping the request pending in the requests table until the stage ends (a CLI
+  waiting for its answer would time out, and `magnum status` would count a pending request as unhandled).
+- **A stale notes proposal is merged, or followed up by a new curation** (2026-10-06, amends "A curator
+  proposes curated notes; the operator applies or rejects"). A judge round rewrote a repository's notes 14
+  minutes after its curation took its copy, and `y` refused the proposal ("notes changed since the proposal;
+  run --curate again") only after the operator had read the whole diff, and expired it. A pending proposal
+  whose base version is not the notes on disk (their fingerprints differ: `engine.ProposalStale`, from the
+  version's listing and the files' hashes) is stale; `magnum notes`, `magnum notes <repo>` and `--review` say
+  so first, before the diff. `--review` merges the judges' changes since the base and the proposal's
+  (`notes.MergeStates`, a pure diff3 of the notes text, `notes.Merge3`, in Go over the line diff the notes
+  already use, with changes that overlap or touch, as git's, one region; no git, no temp files): per harness
+  file, live unchanged takes the proposal's, the proposal unchanged or both the same takes live's, a file the
+  proposal deletes that a round changed since is kept as the round left it and listed, both changed merges
+  their texts, and live deleted with the proposal changed, both added differently, or texts that do not merge
+  are conflicts. A clean merge is shown as the diff and harness changes it would apply to the notes now (sizes
+  now → merged); `y` applies it under the lock after checking the notes are still what the review showed,
+  records the notes it replaces as an import first (the history keeps the judge's state even when its round
+  did not record it yet), and records the merge as the curation's version (a restore's as the operator's), as
+  every apply. A conflict (the review names the base version's lines and the files), or `c` on a clean
+  merge, makes `y` ask the daemon for a new curation from the notes now (`NotesCuratePayload.Supersede`): the
+  daemon marks the stale proposal `superseded` (a new state: migration 0017 rebuilds `notes_proposals`, and
+  `notes_proposal_misses` with it, for the CHECK; its misses stay `new` for the new curation; a
+  `notes.proposal_superseded` event) and starts or queues the curation, whose scratch directory gets the
+  superseded proposal as `superseded/` (its notes, harness and `changes.json` with every reason) and whose
+  prompt names it, so the work is not lost (`prompts/notes-curate.md`, `.Superseded`, `.SupersededID`; the
+  repository's latest curation, when superseded, is the one read, so a follow-up that stored nothing leaves
+  it for the next). A stale restore that conflicts cannot be applied: `y` expires it and says to `--restore`
+  again. The notes changing between the review and `y` no longer expire the proposal: the apply is refused and
+  `--review` again shows it against the new notes. The daemon supersedes a stale proposal on its own, with
+  the trigger `stale`, once it is a day old and its changes no longer merge, within the curations' limits (at
+  most one a day, one at a time, queued during a judge stage; not under `[notes] curate = []`); a stale
+  proposal that still merges waits for the operator, since it can still be applied, and on a busy repository
+  every proposal goes stale within hours, so re-curating each after a day would spend a curator run a day per
+  repository while the operator is away. Rejected: `git merge-file --diff3` on temp files (a fake git in every
+  test, files with notes text on disk); re-validating the merge with `notes.Validate` (the judges' changes
+  carry no curator reasons; the operator reviews the merge); applying a clean merge without review.

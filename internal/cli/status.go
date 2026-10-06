@@ -174,6 +174,7 @@ type statusReport struct {
 	GitHub      statusGitHub             `json:"github"`
 	Codex       *statusCodexUsage        `json:"codex_usage,omitempty"`
 	Retro       *statusRetro             `json:"retro,omitempty"`
+	Notes       *statusNotes             `json:"notes,omitempty"`
 	Rounds      statusRounds             `json:"rounds"`
 	Agents      *statusAgents            `json:"agents,omitempty"`
 	Pauses      []statusPause            `json:"pauses"`
@@ -248,6 +249,14 @@ type statusRetro struct {
 	NewMisses *int                 `json:"new_misses,omitempty"` // nil when the registry could not be read
 	Settling  *int                 `json:"settling,omitempty"`   // nil when none wait (or no settle delay)
 	Settle    string               `json:"settle,omitempty"`     // [learn] settle, when PRs wait for it
+}
+
+// statusNotes is the repository notes in sum: the repositories with notes
+// as `magnum notes` lists them, and the line that sums them up
+// (notesSummaryLine). It is left out when no repository has notes.
+type statusNotes struct {
+	Line  string     `json:"line"`
+	Repos []notesRow `json:"repos"`
 }
 
 type statusGitHub struct {

@@ -159,6 +159,9 @@ func statusDashData(r statusReport, defaultRepo string) tui.StatusData {
 		}
 	}
 	out.Rounds = tui.RoundsInfo{Active: r.Rounds.Active, Max: r.Rounds.Max, ActivePRs: slices.Clone(r.Rounds.PRs)}
+	if r.Notes != nil {
+		out.Notes = statusSafe(r.Notes.Line, 0)
+	}
 	switch ag := r.Agents; {
 	case ag == nil:
 		out.Agents.Error = "not checked"

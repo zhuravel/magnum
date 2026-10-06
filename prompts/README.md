@@ -253,6 +253,7 @@ the copies.
 | `.Over` | the triggers the notes are past (empty: a weekly or requested curation) |
 | `.UnusedRounds` | the rounds without a use after which a harness file is a candidate (20) |
 | `.Misses`, `.MissCount` | `misses.json` and how many misses it holds, when the curation was given the retro's misses of the repository (class miss, scope repo, still new); `""` and 0 otherwise. Each miss is data: its `id`, `severity`, `where` (path:line at the reviewed commit), `title` and `lesson` (scrubbed of logins, pull request references and links again) and `rejections`, the reasons of rejected proposals it was in; never a login, a pull request number or a comment |
+| `.Superseded`, `.SupersededID` | `superseded/` and its proposal's id, when the curation follows up a stale proposal that was superseded (the notes changed after it was made, and the operator, or the daemon a day later, asked for a new curation instead): its notes as `notes.md`, its `harness/` and its `changes.json`, which the curator carries over where they still apply; `""` and 0 otherwise |
 
 `changes.json` is `{"sections": [...], "files": [...], "misses": [...]}`, each section and file item
 `{"name", "action", "into", "reason"}`: every `## ` section of the proposal and every proposed harness file

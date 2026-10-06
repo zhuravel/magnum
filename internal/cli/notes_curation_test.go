@@ -156,25 +156,6 @@ func TestNotesReviewYAppliesTheProposalUnderTheLock(t *testing.T) {
 	}
 }
 
-// The notes changed since the proposal was made (a judge wrote them): y
-// refuses, and the proposal expires.
-func TestNotesReviewRefusesWhenTheNotesChangedSinceTheProposal(t *testing.T) {
-	h := newNotesHarness(t)
-	p := h.proposal()
-	h.write(oldNotes+"- a judge's new lesson\n", map[string]string{"run_spec.sh": "bin/rspec \"$@\"\n", "campaign_snapshot_probes_spec.rb": "probe\n"})
-	h.terminal("y\n")
-	if code := h.cmd("notes", "talkable/talkable", "--review"); code != 1 {
-		t.Fatalf("exit %d", code)
-	}
-	actContains(t, h.errb.String(), "notes changed since the proposal; run --curate again")
-	if b, _ := os.ReadFile(h.nr.Notes()); !strings.Contains(string(b), "a judge's new lesson") {
-		t.Error("the refused apply wrote the notes")
-	}
-	if got := h.proposalNow(p.ID); got.State != store.ProposalExpired || got.Reason != "the notes changed since the proposal" {
-		t.Errorf("proposal = %+v", got)
-	}
-}
-
 // n rejects the proposal with --reason, which the registry keeps for the
 // next curation; any other answer leaves it waiting.
 func TestNotesReviewNStoresTheReasonAndOtherAnswersWait(t *testing.T) {
@@ -409,7 +390,7 @@ func TestNotesApplyWaitsForTheJudgesLock(t *testing.T) {
 	prev := notesLockWait
 	notesLockWait = 0
 	t.Cleanup(func() { notesLockWait = prev })
-	if _, err := notesApply(context.Background(), h.st, h.nr, p, h.now); !errors.Is(err, notes.ErrBusy) {
+	if _, err := notesApply(context.Background(), h.st, h.nr, p, "", store.NotesContent{}, false, h.now); !errors.Is(err, notes.ErrBusy) {
 		t.Fatalf("apply under a held lock: %v", err)
 	}
 	if got := h.proposalNow(p.ID); got.State != store.ProposalPending {

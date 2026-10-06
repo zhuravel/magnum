@@ -3714,6 +3714,22 @@ const (
 	NotesLockWait = 3 * time.Minute
 )
 const (
+	// KVNotesCurating holds the curation running now (CurateMark as JSON),
+	// deleted when it ends and at every start of the daemon.
+	KVNotesCurating = "notes.curating"
+	// KVNotesCurateQueue holds the curations waiting for a start
+	// ([]CurateQueued as JSON, oldest first, one per repository).
+	KVNotesCurateQueue = "notes.curate_queue"
+
+	// CurateTriggerStale is the daemon's follow-up of a stale proposal
+	// (notes_proposals.trigger_reason).
+	CurateTriggerStale = "stale"
+
+	// Why a curation waits (CurateQueued.Why).
+	QueuedJudge = "judge" // a round of the repository is in its judge stage
+	QueuedBusy  = "busy"  // another curation runs
+)
+const (
 	KVDaemonPausedAt   = "daemon.paused_at"
 	KVDaemonPausedHeld = "daemon.paused_held"
 )
@@ -4097,6 +4113,11 @@ func PromptsLine(loadedAt time.Time, changed int) string
     loaded them, and how many files changed on disk since (they take effect at
     the next restart). "" when loadedAt is zero (no daemon has recorded it).
 
+func ProposalStale(ctx context.Context, st *store.Store, nr notes.Repo, p store.NotesProposal) (bool, error)
+    ProposalStale reports whether p is stale: the notes on disk are not the
+    state of its base version. It reads the version's listing from the registry
+    and hashes the files on disk, never a version's content.
+
 func SkewNote(daemon Build, cliVersion string, modTime func(path string) (time.Time, bool)) string
     SkewNote says when the running daemon is older than what is built: the CLI's
     version (cliVersion) differs from the daemon's, or the daemon's binary on
@@ -4236,6 +4257,28 @@ type CurateJob struct {
     CurateJob is what a Curator works on: the scratch directory, the rendered
     prompt (prompts/notes-curate.md), and Check, which reads what the curator
     wrote and validates it (no problems: a valid proposal).
+
+type CurateMark struct {
+	Repo    string    `json:"repo"`
+	Trigger string    `json:"trigger"`
+	Started time.Time `json:"started"`
+}
+    CurateMark is the curation running now (KVNotesCurating).
+
+func ReadCurating(ctx context.Context, st *store.Store) *CurateMark
+    ReadCurating is the curation running now, nil when none runs (or the mark is
+    unreadable).
+
+type CurateQueued struct {
+	Repo    string    `json:"repo"`
+	Trigger string    `json:"trigger"`
+	Why     string    `json:"why"` // QueuedJudge | QueuedBusy
+	At      time.Time `json:"at"`
+}
+    CurateQueued is a curation waiting for a start (KVNotesCurateQueue).
+
+func ReadCurateQueue(ctx context.Context, st *store.Store) []CurateQueued
+    ReadCurateQueue lists the curations waiting for a start, oldest first.
 
 type CurateResult struct {
 	Proposal notes.Proposal
@@ -4519,9 +4562,12 @@ type Inventory interface {
     Inventory is the reconcile scanner (*inventory.Scanner).
 
 type NotesCuratePayload struct {
-	Repo string `json:"repo"` // owner/name
+	Repo      string `json:"repo"` // owner/name
+	Supersede int64  `json:"supersede,omitempty"`
 }
-    NotesCuratePayload is a `magnum notes <repo> --curate` request.
+    NotesCuratePayload is a `magnum notes <repo> --curate` request, or the
+    new curation `magnum notes <repo> --review` asks for instead of a stale
+    proposal: Supersede is that proposal's id.
 
 type OpenPayload struct {
 	PRTarget
@@ -4723,6 +4769,20 @@ type Slots interface {
 	EnsureSchema(ctx context.Context, slot store.Slot, pool config.Pool) (string, error)
 }
     Slots is the part of *slots.Manager the engine drives.
+
+type StaleCheck struct {
+	Stale          bool
+	Live           notes.State // the notes now
+	Base, Proposed notes.State
+	Merge          notes.StateMerge // set when Stale
+}
+    StaleCheck is a pending proposal against the notes now: whether it is stale
+    and, when it is, the three-way merge of the notes' changes since its base
+    and its own.
+
+func CheckStale(ctx context.Context, st *store.Store, nr notes.Repo, p store.NotesProposal) (StaleCheck, error)
+    CheckStale reads p's base and proposed states and the notes now and,
+    when the notes are no longer p's base, merges both sides' changes.
 
 type TargetPayload struct {
 	PRTarget
@@ -8006,6 +8066,13 @@ func WriteState(r Repo, s State) error
     r's lock (Lock). A harness path that is not clean (cleanName) is refused
     before anything is written.
 
+func WriteSuperseded(s Scratch, proposed State, changes []byte) error
+    WriteSuperseded writes the stale proposal a curation follows up on into s's
+    superseded/ directory, for the curator to read: its notes as notes.md, its
+    harness under harness/ and its changes.json, with a reason for every section
+    and file it kept, merged or removed. The notes changed since that proposal
+    was made, so it was superseded rather than applied; its work is not lost.
+
 
 TYPES
 
@@ -8068,6 +8135,20 @@ type Limits struct {
 }
     Limits are the notes curation triggers: past any of them the repository is
     marked for curation. None of them blocks a review or a proposal.
+
+type MergeConflict struct{ Start, End int }
+    MergeConflict is a range of base lines both sides changed differently:
+    lines [Start, End) of base, 0-based.
+
+func Merge3(base, ours, theirs string) (merged string, conflicts []MergeConflict)
+    Merge3 merges the changes ours and theirs made to base, line by line (diff3,
+    as `git merge-file` does it). A region of base that only one side changed
+    takes that side's lines, and one both changed the same way takes them once.
+    Changes that overlap or touch (an insertion next to the other side's
+    change included, as git treats changes on adjacent lines) are one region,
+    and when the two sides' lines for it differ the region is a conflict:
+    it is listed in conflicts and merged keeps base's lines there, so merged
+    means something only when conflicts is empty.
 
 type MissChange struct {
 	ID      int64  `json:"id"`
@@ -8136,6 +8217,8 @@ func (s Scratch) Misses() string
 
 func (s Scratch) Proposal() string
 
+func (s Scratch) Superseded() string
+
 func (s Scratch) Usage() string
 
 type Size struct {
@@ -8202,6 +8285,41 @@ func (s State) Same(o State) bool
 
 func (s State) Size(maxLine int) Size
     Size measures s against maxLine (Size.Over compares it with the limits).
+
+type StateMerge struct {
+	State          State           // the merged state; apply it only when Clean
+	Clean          bool            // neither the notes text nor a harness file conflicts
+	NotesConflicts []MergeConflict // in base's lines of the notes
+	Kept           []string        // harness files the proposal deletes that changed since base: kept as live has them
+	Conflicts      []string        // harness files both sides changed in ways that do not merge
+	Merged         []string        // harness files both sides changed whose texts merged line by line
+}
+    StateMerge is the three-way merge of a stale curation proposal: base is the
+    state the proposal started from, live the notes now, proposed the proposal's
+    state.
+
+func MergeStates(base, live, proposed State) StateMerge
+    MergeStates merges proposed into live, both changes of base. The notes text
+    merges line by line (Merge3). Each harness file, compared by its presence
+    and its hash, goes by what each side did to it:
+
+      - live left it as base had it: the proposal's version wins, deletion
+        included;
+      - the proposal left it as base had it, or both made it the same: live's
+        version stays;
+      - the proposal deletes it but live changed it: live's version stays
+        and the path is in Kept, so a file written since the proposal started
+        survives;
+      - live deleted it and the proposal changed it, or both added it with
+        different texts: a conflict;
+      - both changed it: their texts merge line by line, and when they do not
+        the file is a conflict.
+
+    A conflicting file stays as live has it (absent when live deleted it), as
+    the notes text keeps base's lines where its conflicts are; the merged state
+    is to be applied only when Clean. Kept, Conflicts and Merged are in path
+    order, nil when empty, and so are the state's files, which have SHA256 set.
+    The inputs are not modified.
 
 ```
 
@@ -10316,6 +10434,10 @@ const (
 	ProposalRejected = "rejected"
 	ProposalExpired  = "expired"
 	ProposalInvalid  = "invalid"
+	// ProposalSuperseded is a stale curation (the notes changed since it
+	// was made) that a new curation of the notes now follows up on, reading
+	// it as input (migration 0017).
+	ProposalSuperseded = "superseded"
 )
     Notes proposal kinds and states (notes_proposals.kind, .state).
 
@@ -10859,7 +10981,7 @@ type NotesProposal struct {
 	AppliedVersionID *int64          `json:"applied_version_id,omitempty"` // recorded when it was applied
 	Changes          json.RawMessage `json:"changes,omitempty"`            // the curator's changes.json
 	State            string          `json:"state"`
-	Reason           string          `json:"reason,omitempty"` // rejected: the operator's; expired, invalid: magnum's
+	Reason           string          `json:"reason,omitempty"` // rejected: the operator's; expired, invalid, superseded: magnum's
 	Model            string          `json:"model,omitempty"`
 	PromptSHA256     string          `json:"prompt_sha256,omitempty"`
 	Scratch          string          `json:"scratch,omitempty"` // the curation's directory
@@ -12781,6 +12903,9 @@ type StatusData struct {
 	Attention []AttentionRow
 	Manual    []ManualRow // manual worktrees, shown when toggled on
 	Warnings  []string    // sources that could not be read
+	// Notes sums the repository notes up ("4 repos · 2 proposals to review
+	// (...) · 1 over limit"); "" when no repository has notes.
+	Notes string
 	// Facts are what the title says of the daemon: an older build, a pause,
 	// a drain, the Codex budget's pace.
 	Facts       DaemonFacts

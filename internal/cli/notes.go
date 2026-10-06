@@ -18,7 +18,6 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"unicode"
 
@@ -32,7 +31,7 @@ import (
 	"github.com/zhuravel/magnum/internal/store"
 )
 
-const notesUsage = "<repo> [--edit | --log | --diff [N] | --curate | --review [--reason <text>] | --restore <version> [--reason <text>]] [--json]"
+const notesUsage = "[<repo> [--edit | --log | --diff [N] | --curate | --review [--reason <text>] | --restore <version> [--reason <text>]]] [--json]"
 
 // notesMaxShown caps what `magnum notes` prints: notes larger than this are
 // garbage not worth flooding the terminal with.
@@ -49,7 +48,13 @@ type notesFlags struct {
 func newNotesCmd(c *Context) *cobra.Command {
 	var f notesFlags
 	cmd := newCommand(groupInspect, "notes "+notesUsage, "the repository notes reviewers read first, their history and curation",
-		"Print the notes file magnum keeps for a repository, ~/.local/share/magnum/notes/<owner>/<repo>.md: what the "+
+		"Without a repository: list every repository with notes, one row each: the notes' size and lines, the "+
+			"harness's files and size (! marks what is past a [notes] curation trigger), when they changed and by whom "+
+			"(the judge of a PR, a curation, a person, an import) and their state: ok, over limit, curation running, "+
+			"curation queued (it waits for a round's judge stage, or for another curation, to end), proposal N to "+
+			"review, or proposal N stale (the notes changed since it was made). A hint under the table says what to "+
+			"run for each; --json prints the same data.\n\n"+
+			"With a repository: print the notes file magnum keeps for it, ~/.local/share/magnum/notes/<owner>/<repo>.md: what the "+
 			"repository is, how to run its tests and lint, how to QA a change, known pitfalls. Every review role reads it "+
 			"first and the judge rewrites it after a round that taught it something durable; the directory next to it "+
 			"(the same name without .md) holds the QA scripts the notes name, the harness. <repo> is owner/name, or a "+
@@ -62,11 +67,16 @@ func newNotesCmd(c *Context) *cobra.Command {
 			"size, harness changes), --diff [N] shows what changed between the version N back (default 1) and the notes "+
 			"now, and --restore <version> proposes an earlier version, reviewed like a curation.\n\n"+
 			"--curate asks the daemon for a curation now: an agent proposes new notes and harness in a scratch copy, "+
-			"keeping what helps future reviews of the repository; the live notes do not change. --review shows a waiting "+
-			"proposal (the notes as a diff, the harness changes with the curator's reasons, the sizes before and after) "+
-			"and asks y/N: y applies it under the notes lock unless the notes changed since, n rejects it (--reason says "+
-			"why, and the next curation reads it), anything else leaves it for later. --review asks on a terminal only; "+
-			"--json prints the data instead.",
+			"keeping what helps future reviews of the repository; the live notes do not change. While a round of the "+
+			"repository is in its judge stage (which may rewrite the notes), or another curation runs, the curation is "+
+			"queued and starts once that ended. --review shows a waiting proposal (the notes as a diff, the harness "+
+			"changes with the curator's reasons, the sizes before and after) and asks y/N: y applies it under the notes "+
+			"lock, n rejects it (--reason says why, and the next curation reads it), anything else leaves it for later. "+
+			"A stale proposal (the notes changed since it was made) says so first: when its changes and the notes' merge, "+
+			"the review shows the merge and y applies it (a harness file it deletes that a round changed since is kept), "+
+			"and c asks for a new curation instead; when they conflict, y asks for a new curation. The new curation "+
+			"starts from the notes now and reads the stale proposal, which is kept as superseded. --review asks on a "+
+			"terminal only; --json prints the data instead.",
 		func(pos []string) int { return runNotes(c, f, pos) })
 	fs := cmd.Flags()
 	fs.BoolVar(&f.edit, "edit", false, "open the notes in $VISUAL, else $EDITOR, else vi")
@@ -77,7 +87,7 @@ func newNotesCmd(c *Context) *cobra.Command {
 	fs.BoolVar(&f.review, "review", false, "review the waiting curation proposal and apply (y) or reject (n) it")
 	fs.Int64Var(&f.restore, "restore", 0, "propose the recorded `version` back, reviewed like a curation")
 	fs.StringVar(&f.reason, "reason", "", "with --review or --restore: why the proposal is rejected (the next curation reads it)")
-	fs.BoolVar(&f.json, "json", false, "print JSON (the notes' sizes, --log, --curate, --review, --restore)")
+	fs.BoolVar(&f.json, "json", false, "print JSON (the list, the notes' sizes, --log, --curate, --review, --restore)")
 	cmd.ValidArgsFunction = completeFirst(c.completeNotesRepos)
 	return cmd
 }
@@ -95,8 +105,11 @@ func runNotes(c *Context, f notesFlags, pos []string) int {
 			f.diff, pos = pos[0], pos[1:]
 		}
 	}
+	if len(pos) == 0 && !f.edit && !f.log && f.diff == "" && !f.curate && !f.review && f.restore == 0 && f.reason == "" {
+		return notesList(c, f)
+	}
 	if len(pos) != 1 {
-		return inspUsage(c, "notes", "want exactly one repository (owner/name or name)", notesUsage)
+		return inspUsage(c, "notes", "want one repository (owner/name or name), or none to list them all", notesUsage)
 	}
 	actions := 0
 	for _, on := range []bool{f.edit, f.log, f.diff != "", f.curate, f.review, f.restore != 0} {
@@ -206,7 +219,8 @@ type notesView struct {
 	Over     []string              `json:"over"`
 	Curate   config.CurateTriggers `json:"curate"`
 	Unused   []string              `json:"unused"`
-	Proposal *store.NotesProposal  `json:"proposal,omitempty"` // the newest waiting for review
+	Proposal *store.NotesProposal  `json:"proposal,omitempty"`       // the newest waiting for review
+	Stale    bool                  `json:"proposal_stale,omitempty"` // the notes changed since it was made
 	Registry string                `json:"registry_error,omitempty"`
 }
 
@@ -297,6 +311,7 @@ func notesGather(c *Context, full string, nr notes.Repo) notesView {
 	}
 	if ps, err := st.NotesProposals(ctx, store.NotesProposalFilter{RepoID: repo.ID, States: []string{store.ProposalPending}, Limit: 1}); err == nil && len(ps) > 0 {
 		v.Proposal = &ps[0]
+		v.Stale, _ = engine.ProposalStale(ctx, st, nr, ps[0])
 	}
 	return v
 }
@@ -329,8 +344,12 @@ func notesSummary(w io.Writer, v notesView) {
 		fmt.Fprintf(w, "unused harness files (%d rounds or more, no recorded use): %s\n", store.NotesUnusedRounds, strings.Join(v.Unused, ", "))
 	}
 	if p := v.Proposal; p != nil {
-		fmt.Fprintf(w, "proposal %d (%s) waits for review since %s: `magnum notes %s --review`\n", p.ID, p.Kind,
-			p.CreatedAt.Local().Format("2006-01-02 15:04"), v.Repo)
+		stale := ""
+		if v.Stale {
+			stale = " (stale: the notes changed since it was made)"
+		}
+		fmt.Fprintf(w, "proposal %d (%s) waits for review since %s%s: `magnum notes %s --review`\n", p.ID, p.Kind,
+			p.CreatedAt.Local().Format("2006-01-02 15:04"), stale, v.Repo)
 	}
 	if v.Registry != "" {
 		fmt.Fprintf(w, "registry: %s\n", v.Registry)
@@ -411,36 +430,4 @@ var notesRunEditor = func(c *Context, editor, path string) error {
 	signal.Notify(sig, os.Interrupt)
 	defer signal.Stop(sig)
 	return cmd.Run()
-}
-
-// completeNotesRepos offers the repositories completeRepos knows, then the
-// ones that have a notes file but are not in the registry.
-func (c *Context) completeNotesRepos(toComplete string) []cobra.Completion {
-	out := c.completeRepos(toComplete)
-	seen := map[string]bool{}
-	for _, cand := range out {
-		name, _, _ := strings.Cut(cand, "\t")
-		seen[strings.ToLower(name)] = true
-	}
-	root := engine.NotesRoot(c.Layout)
-	if root == "" {
-		return out
-	}
-	owners, _ := os.ReadDir(root)
-	for _, o := range owners {
-		if !o.IsDir() || strings.HasPrefix(o.Name(), ".") { // .curate holds curations, no owner
-			continue
-		}
-		files, _ := os.ReadDir(filepath.Join(root, o.Name()))
-		for _, f := range files {
-			repo, ok := strings.CutSuffix(f.Name(), ".md")
-			full := o.Name() + "/" + repo
-			if !ok || f.IsDir() || seen[full] {
-				continue
-			}
-			seen[full] = true
-			out = append(out, cobra.CompletionWithDesc(full, "repository with notes"))
-		}
-	}
-	return out
 }

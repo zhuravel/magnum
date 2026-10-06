@@ -31,6 +31,9 @@ type StatusData struct {
 	Attention []AttentionRow
 	Manual    []ManualRow // manual worktrees, shown when toggled on
 	Warnings  []string    // sources that could not be read
+	// Notes sums the repository notes up ("4 repos · 2 proposals to review
+	// (...) · 1 over limit"); "" when no repository has notes.
+	Notes string
 	// Facts are what the title says of the daemon: an older build, a pause,
 	// a drain, the Codex budget's pace.
 	Facts       DaemonFacts
@@ -1002,6 +1005,9 @@ func (m dashboardModel) headerLines(w int) []string {
 		}
 	}
 	lines = append(lines, label("disk:")+disk)
+	if d.Notes != "" {
+		lines = append(lines, label("notes:")+cleanText(d.Notes))
+	}
 
 	if len(d.Pauses) == 0 {
 		lines = append(lines, label("pauses:")+m.st.Dim.Render("none"))

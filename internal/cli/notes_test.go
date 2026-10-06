@@ -96,8 +96,9 @@ func TestNotesUsageErrors(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"notes"}, "want exactly one repository"},
-		{[]string{"notes", "a/b", "c/d"}, "want exactly one repository"},
+		{[]string{"notes", "--log"}, "want one repository (owner/name or name), or none to list them all"},
+		{[]string{"notes", "--reason", "x"}, "want one repository"},
+		{[]string{"notes", "a/b", "c/d"}, "want one repository"},
 		{[]string{"notes", "a/b/c"}, "want owner/name or name"},
 		{[]string{"notes", "/b"}, "want owner/name or name"},
 		{[]string{"notes", "a/"}, "want owner/name or name"},
@@ -216,7 +217,8 @@ func TestNotesCompletion(t *testing.T) {
 		name, _, _ := strings.Cut(c, "\t")
 		names = append(names, name)
 	}
-	if got := strings.Join(names, ","); got != "talkable/talkable,talkable,zhuravel/app,example/archived" {
+	// Only the repositories with notes: zhuravel/app has none.
+	if got := strings.Join(names, ","); got != "example/archived,talkable/talkable,talkable" {
 		t.Errorf("notes completions = %q", got)
 	}
 	if got := complete(t, f.Ctx, "notes", "talkable/talkable", ""); len(got) != 0 {

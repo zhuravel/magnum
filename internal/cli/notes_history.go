@@ -31,7 +31,7 @@ func notesRegistryAction(c *Context, f notesFlags, back int, full string, nr not
 	ctx, stop := signalContext()
 	defer stop()
 	if f.curate {
-		return notesCurate(ctx, c, d, f, full)
+		return notesCurate(ctx, c, d, f, full, 0)
 	}
 	repo, err := d.Store.RepoByFullName(ctx, full)
 	if errors.Is(err, store.ErrNotFound) {

@@ -39,12 +39,16 @@ const (
 	ProposalRejected = "rejected"
 	ProposalExpired  = "expired"
 	ProposalInvalid  = "invalid"
+	// ProposalSuperseded is a stale curation (the notes changed since it
+	// was made) that a new curation of the notes now follows up on, reading
+	// it as input (migration 0017).
+	ProposalSuperseded = "superseded"
 )
 
 var (
 	notesSources    = []string{NotesFromJudge, NotesFromCuration, NotesFromHuman, NotesFromImport}
 	proposalKinds   = []string{ProposalCuration, ProposalRestore}
-	proposalStates  = []string{ProposalPending, ProposalApplied, ProposalRejected, ProposalExpired, ProposalInvalid}
+	proposalStates  = []string{ProposalPending, ProposalApplied, ProposalRejected, ProposalExpired, ProposalInvalid, ProposalSuperseded}
 	errNoNotesState = errors.New("store: notes version without content")
 )
 
@@ -347,7 +351,7 @@ type NotesProposal struct {
 	AppliedVersionID *int64          `json:"applied_version_id,omitempty"` // recorded when it was applied
 	Changes          json.RawMessage `json:"changes,omitempty"`            // the curator's changes.json
 	State            string          `json:"state"`
-	Reason           string          `json:"reason,omitempty"` // rejected: the operator's; expired, invalid: magnum's
+	Reason           string          `json:"reason,omitempty"` // rejected: the operator's; expired, invalid, superseded: magnum's
 	Model            string          `json:"model,omitempty"`
 	PromptSHA256     string          `json:"prompt_sha256,omitempty"`
 	Scratch          string          `json:"scratch,omitempty"` // the curation's directory

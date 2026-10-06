@@ -89,6 +89,9 @@ func statusRenderHeader(w io.Writer, r statusReport) {
 	if r.Retro != nil {
 		fmt.Fprintf(w, "retro:    %s\n", statusRetroText(*r.Retro, now))
 	}
+	if r.Notes != nil {
+		fmt.Fprintf(w, "notes:    %s\n", statusSafe(r.Notes.Line, 0))
+	}
 	fmt.Fprintf(w, "rounds:   %s\n", statusRoundsText(r))
 	fmt.Fprintf(w, "disk:     %s\n", statusDiskText(r.Disk))
 	if len(r.Pauses) == 0 {

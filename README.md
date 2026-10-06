@@ -778,7 +778,7 @@ Fix 1 problem before merging. 1 optional: 1 simplification.
 |---|---|
 | `magnum init [--force]` | Write `~/.config/magnum/config.toml` for this machine from three questions: your gh login, one repository, who posts (your login or a GitHub App). |
 | `magnum prs [--repo …] [--view all\|magnum\|mine\|ready] [--sort updated\|last-review\|reviewer-activity\|requested\|changes\|state] [--all] [--json]` | The PR board: every watched PR with its last review, each reviewer's verdict (with staleness), when a review was last requested (and whether of you), what changed since the last review, assignees; then the PRs merged or closed in the last day (`[board] recent_closed`), flagging one merged before Magnum reviewed its last push. `--view` keeps what Magnum reviewed, what is yours or what is ready to merge. Live screen on a terminal, table or JSON otherwise: snake_case keys, times in RFC 3339 (left out while unset), durations in seconds (`total_seconds`, `duration_seconds`), `null` for a part a PR has none of and `[]` for an empty list. |
-| `magnum status [<ref>\|<slot>] [--all] [--sizes] [--json] [--watch]` | Daemon, slots, queue, pauses; a PR's detail card with its review history and the last round's stage timings. The codex line says how fast the Codex budget is spent, the share used over the share of the window elapsed, and when `[usage]` codex_soft and codex_hard come at that pace if before the reset ("pace 2.8x: 80% Oct 7 13:30, 95% Oct 8 09:10"; `pace`, `soft_at` and `hard_at` in the JSON); the daemon toasts once per window when codex_soft would come before the reset (not in the window's first tenth, when one burst is no pace). `--watch` is the live dashboard (`tab` flips to the PR board). |
+| `magnum status [<ref>\|<slot>] [--all] [--sizes] [--json] [--watch]` | Daemon, slots, queue, pauses; a PR's detail card with its review history and the last round's stage timings. The codex line says how fast the Codex budget is spent, the share used over the share of the window elapsed, and when `[usage]` codex_soft and codex_hard come at that pace if before the reset ("pace 2.8x: 80% Oct 7 13:30, 95% Oct 8 09:10"; `pace`, `soft_at` and `hard_at` in the JSON); the daemon toasts once per window when codex_soft would come before the reset (not in the window's first tenth, when one burst is no pace). The notes line sums up the repositories with notes, the proposals to review and those past a limit (`magnum notes` lists them). `--watch` is the live dashboard (`tab` flips to the PR board). |
 | `magnum stats [--since 7d] [--repo owner/name] [--json]` | Review statistics per local day and repository over a window (`--since` takes `7d`, `36h`, `90m` or a date; default 7d): rounds started and how they ended, findings posted by priority, median and p90 durations per role and per round, how many findings each source raised, had posted, had posted alone or had rejected (with reason codes), model switches, denied prompts and round restarts, and the top 10 PRs by agent time (the sum of their runs' durations in the window, the rounds and the share of all agent time; `top_prs` in the JSON), so a PR burning the budget can be muted. |
 | `magnum eval run\|score\|list\|show` | Measure a prompt, skill or model change: `run` replays the PRs with known defects in `~/.config/magnum/eval.toml` (see `eval.toml.example`) at their pinned heads as blind dry runs and reports, per case, the seeded defects the planned review found, at what severity, and its other findings (noise), next to the previous run. `score` re-scores a run after a match rule is fixed, without the agents. |
 | `magnum retro [<ref>...] [--again] [--lookback 14d] [--json]` | Run the retro now (see Learning from other reviewers): classify what other reviewers said about the PRs closed within the lookback, whether or not `[learn] enabled`. `--again` looks again at PRs a retro already did; PRs named by `<ref>` are looked at again in any case. |
@@ -794,7 +794,8 @@ Fix 1 problem before merging. 1 optional: 1 simplification.
 | `magnum abort <ref>` | Kill a PR's running (or paused) review: its agents are interrupted, its runs abandoned, its sessions parked and a pool slot handed back. A review that waits in line (one `magnum review` asked for, or an automatic one) is taken back before it starts: its forced mark and what it asked for go, and nothing else is touched. The PR returns to reviewed (or baseline) until the next push. |
 | `magnum approve <ref> [-m TEXT] [--force]`, `magnum request-changes <ref> [-m TEXT] [--force]` | Your own verdict on the head magnum reviewed, posted by the daemon as the PR's posting identity with a body that names magnum's review and its findings: for repositories where magnum only comments, or when you decide differently. The head must still be the reviewed one unless `--force`. A manual approval follows the head like magnum's own; magnum's later rounds never dismiss a manual verdict as their own stale review. Board keys `A` and `C`. |
 | `magnum ignore <ref>` | Abort, then mute the PR as ignored and free its slot: the daemon never queues it again until `magnum unmute <ref>`, which undoes the ignore. |
-| `magnum notes <repo> [--edit \| --log \| --diff [N] \| --curate \| --review [--reason …] \| --restore <version>] [--json]` | The repository notes every role reads first and the judge rewrites after a round that taught it something (`~/.local/share/magnum/notes/<owner>/<repo>.md`): what the repo is, how to test and QA it, known pitfalls; on stderr their sizes against the `[notes]` curation triggers, the unused harness files and a waiting proposal. `--log` and `--diff` read the history the registry keeps, `--curate` asks for a curation, `--review` applies (y) or rejects (n) a proposal, `--restore` proposes an earlier version (see Repository notes). |
+| `magnum notes [--json]` | Every repository with notes, one row each: the notes' size and lines and the harness's files and size (`!` marks what is past a `[notes]` curation trigger), when they changed and by whom (`judge #11940`, curation, human, import), and the state: ok, over limit (which triggers), curation running, curation queued, proposal N to review, or proposal N stale (the notes changed since it was made); a hint under the table says what to run for each (see Repository notes). |
+| `magnum notes <repo> [--edit \| --log \| --diff [N] \| --curate \| --review [--reason …] \| --restore <version>] [--json]` | The repository notes every role reads first and the judge rewrites after a round that taught it something (`~/.local/share/magnum/notes/<owner>/<repo>.md`): what the repo is, how to test and QA it, known pitfalls; on stderr their sizes against the `[notes]` curation triggers, the unused harness files and a waiting proposal (marked when stale). `--log` and `--diff` read the history the registry keeps, `--curate` asks for a curation (queued while a round of the repository is in its judge stage or another curation runs), `--review` applies (y) or rejects (n) a proposal, a stale one merged with the notes' changes since or followed up by a new curation (c, or y when they conflict), `--restore` proposes an earlier version (see Repository notes). |
 | `magnum post-review --repo O/N --pr N --head SHA --run-id ID --login L [--former-login L]... [--gh-config-dir DIR] [--dry-run] [--local-base SHA] --review FILE` | For the judge, which runs the `post_review` line of its prompt: check the review file and its inline lines against the PR's diff, post it once and read it back (see The judge skill). Exit 2 means the review file needs fixing. |
 | `magnum cleanup [--dry-run] [--pr <ref>] [--slot <name>] [--orphans [--slug X]] [--shrink] [--external --slot repoN]` | Storage cleanup with a reviewable plan: closed PRs, orphan databases, idle slots, manual worktrees. |
 | `magnum slots [list\|provision\|remove\|repair\|adopt\|pin\|unpin]` | Pool management. `slots pin\|unpin <slot>` is `magnum pin\|unpin <slot>`. |
@@ -1034,7 +1035,23 @@ directory beside the file (the same name without `.md`), the harness, holds the 
 The test for every line and script is whether it helps a review of another, future pull request: the
 judge keeps a probe written to verify one pull request in that round's report directory, never in the
 harness, and the notes never describe one pull request's findings or code. `magnum notes <repo>` prints
-them, with their sizes on stderr.
+them, with their sizes on stderr. `magnum notes` lists every repository with notes:
+
+```
+REPO               NOTES                      HARNESS          CHANGED                STATE
+example/api        552 B!, 2 lines (1 long!)  3 files!, 3 B    5d ago, import         over limit (max_bytes, max_line, max_harness_files)
+example/queued     8 B, 1 line                none             1d ago, curation       curation queued (request, waits for a judge stage)
+talkable/talkable  26.5 KB!, 81 lines         12 files, 48 KB  2h ago, judge #11940   proposal 12 stale (over_limit, 3h; the notes changed since it was made)
+
+! past a [notes] limit: a curation trigger, not a cap
+curate: magnum notes example/api --curate (or wait: the daemon curates notes past a limit once they change)
+review: magnum notes talkable/talkable --review (stale: it merges the notes' changes since, or asks for a new curation)
+```
+
+`--json` prints the same rows. `magnum status` and the dashboard sum them up in a `notes:` line ("4 repos ·
+2 proposals to review (talkable/talkable, example/api stale) · 1 over limit", with a curation running or
+queued), left out while no repository has notes, and `magnum notes <TAB>` completes the repositories with
+notes.
 
 **Curation triggers.** After each judge round and at startup Magnum measures the notes against `[notes]`
 `max_bytes` (16 KiB), `max_line` (300 characters), `max_harness_files` (15) and `max_harness_bytes` (128
@@ -1078,20 +1095,34 @@ accounted for, no pull request number, branch name or probe file, no secret and 
 (size is not checked). A proposal that changes nothing is invalid, unless it skips every miss it was given:
 then you confirm the skips. An invalid proposal gets one nudge naming its problems, then is kept as
 invalid; the live notes never change during a curation. One curation runs at a time, and none starts while
-a round of the repository is in its judge stage or a proposal of it waits.
+a round of the repository is in its judge stage (which may rewrite the notes) or a proposal of it waits. A
+curation asked for (`--curate`) or due while a round is in its judge stage, or asked for while another
+curation runs, is queued instead (a `notes.curate_queued` event; "queued: starts when the current round's
+judge stage ends") and starts once that ended; `magnum notes` shows it as "curation queued".
 
 **Review.** A valid proposal waits for you: a toast says "notes curation for <repo> is ready", and the
 board's and the dashboard's titles count the proposals to review. `magnum notes <repo> --review` prints
 the notes as a colored unified diff, the harness changes with the curator's reasons and the sizes before
 and after, then asks y/N (on a terminal; `--json` prints the data for scripts). `y` applies it under the
-notes lock, as the judges take it: the live notes are read again, and when they changed since the
-proposal's base the apply is refused ("notes changed since the proposal; run --curate again"); otherwise
-the notes and the harness are replaced and the version recorded. `n` rejects it, with an optional
-`--reason` the next curation reads; any other answer leaves it waiting. Under the diff it lists the misses
+notes lock, as the judges take it: the live notes are read again and must still be what the review showed
+(else nothing is written and `--review` again shows the proposal against them), then the notes and the
+harness are replaced and the version recorded. `n` rejects it, with an optional `--reason` the next
+curation reads; any other answer leaves it waiting.
+
+**Stale proposals.** Judges keep writing the notes while a proposal waits, so a proposal goes stale: its
+base is no longer the notes on disk. `magnum notes` and `--review` say so first. When the judges' changes
+since the base and the proposal's merge cleanly as text (a three-way merge of the notes and of each harness
+file), the review shows the merge as the diff it would apply to the notes now, and `y` applies it, recording
+the notes it replaces first and the merge as the curation's version; a harness file the proposal deletes
+but a round changed since is kept and named. When they conflict (the review names the base lines and
+files), or you answer `c` to a clean one, `y` asks the daemon for a new curation from the notes now, which
+reads the stale proposal's notes, harness and reasons (`superseded/` in its scratch directory) so its work
+is not lost; the stale proposal is kept as `superseded`. The daemon does the same on its own for a stale
+proposal a day old whose changes no longer merge (trigger `stale`), unless `[notes] curate` is `[]`. Under the diff it lists the misses
 the proposal was given, each noted in a section or skipped with its reason; `y` makes them `used`, `n`
 sends them back to `new` (or `dismissed`, for a miss in its second rejected proposal), and the answer says
 which. A proposal not reviewed within 7 days expires, and its misses stay `new`. The registry keeps every
-proposal, applied, rejected, expired or invalid, with its changes, what it did with each miss, the
+proposal, applied, rejected, expired, invalid or superseded, with its changes, what it did with each miss, the
 curator's model and the hash of its prompt.
 
 ```toml

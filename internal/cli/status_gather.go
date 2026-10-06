@@ -19,6 +19,7 @@ import (
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/inventory"
+	"github.com/zhuravel/magnum/internal/notes"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/tui"
 	"github.com/zhuravel/magnum/internal/usage"
@@ -45,6 +46,7 @@ func statusGather(ctx context.Context, d statusDeps, o statusOptions) (statusRep
 	statusGatherGitHub(kv, now, &r) // before the pauses: the budget pause comes first
 	statusGatherUsage(d, kv, &r)
 	statusGatherRetro(ctx, d, kv, &r)
+	statusGatherNotes(ctx, d, &r)
 	statusGatherPauses(d, kv, &r)
 	statusGatherDisk(d, &r)
 	if err := statusGatherPRs(ctx, d, now, &r); err != nil {
@@ -209,6 +211,24 @@ func statusGatherRetro(ctx context.Context, d statusDeps, kv statusKV, r *status
 		}
 	}
 	r.Retro = ro
+}
+
+// statusGatherNotes fills the repository notes in sum (notesOverview): left
+// out when no repository has notes; a registry that cannot be read is a
+// warning.
+func statusGatherNotes(ctx context.Context, d statusDeps, r *statusReport) {
+	n := config.DefaultNotes()
+	if d.Config != nil {
+		n = d.Config.Notes
+	}
+	limits := notes.Limits{MaxBytes: n.MaxBytes, MaxLine: n.MaxLine, MaxHarnessFiles: n.MaxHarnessFiles, MaxHarnessBytes: n.MaxHarnessBytes}
+	rows, err := notesOverview(ctx, d.Layout, d.Store, limits, r.GeneratedAt)
+	if err != nil {
+		r.Warnings = append(r.Warnings, "notes: "+err.Error())
+	}
+	if len(rows) > 0 {
+		r.Notes = &statusNotes{Line: notesSummaryLine(rows), Repos: rows}
+	}
 }
 
 // statusGatherGitHub fills the GitHub rate budget and, while polling waits

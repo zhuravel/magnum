@@ -86,9 +86,12 @@ const (
 // trigger curates it, and a curation that began after that time clears it.
 func KVNotesMisses(fullName string) string { return "notes." + strings.ToLower(fullName) + ".misses" }
 
-// NotesCuratePayload is a `magnum notes <repo> --curate` request.
+// NotesCuratePayload is a `magnum notes <repo> --curate` request, or the
+// new curation `magnum notes <repo> --review` asks for instead of a stale
+// proposal: Supersede is that proposal's id.
 type NotesCuratePayload struct {
-	Repo string `json:"repo"` // owner/name
+	Repo      string `json:"repo"` // owner/name
+	Supersede int64  `json:"supersede,omitempty"`
 }
 
 // CurateRun is one curation: its id and scratch directory.
@@ -210,6 +213,11 @@ type curateData struct {
 	UnusedRounds   int
 	Misses         string
 	MissCount      int
+	// Superseded is the directory holding the stale proposal this curation
+	// follows up on (notes.WriteSuperseded), "" when there is none, and
+	// SupersededID its id.
+	Superseded   string
+	SupersededID int64
 }
 
 // curateMissesFile is the misses.json a curator reads: the repository's
@@ -257,14 +265,19 @@ type curateRejection struct {
 	Reason string    `json:"reason"`
 }
 
-// maybeCurate expires the proposals nobody reviewed and, unless [notes]
-// curate is off, starts the curation due first (dueCuration), at most every
-// curateCheckEvery: one at a time, none under a pause of any kind or while
-// the curator's CLI is paused. A dry run and `magnum daemon --once` never
-// curate.
+// maybeCurate starts a queued curation that can start now (every tick:
+// queued ones wait for a judge stage to end), expires the proposals nobody
+// reviewed and, unless [notes] curate is off, starts the curation due first
+// (dueCurations), at most every curateCheckEvery: one at a time, none under
+// a pause of any kind or while the curator's CLI is paused. A repository due
+// while a round of it is in its judge stage is queued instead of skipped. A
+// dry run and `magnum daemon --once` never curate.
 func (e *Engine) maybeCurate(ctx context.Context) {
 	if e.d.DryRun || e.once {
 		return
+	}
+	if e.d.Curator != nil && !e.curateBusy() && e.holdReason(ctx) == "" && e.curateToolPause(ctx) == "" {
+		e.startQueuedCuration(ctx)
 	}
 	now := e.now()
 	if !e.curateChecked.IsZero() && now.Sub(e.curateChecked) < curateCheckEvery {
@@ -275,31 +288,61 @@ func (e *Engine) maybeCurate(ctx context.Context) {
 	if e.d.Curator == nil || len(e.cfg.Notes.Curate) == 0 || e.curateBusy() || e.userPause(ctx) != "" || e.holdReason(ctx) != "" || e.curateToolPause(ctx) != "" {
 		return
 	}
-	if repo, trigger, ok := e.dueCuration(ctx, now); ok {
-		e.startCurate(ctx, repo, trigger)
+	for _, due := range e.dueCurations(ctx, now) {
+		full := due.repo.FullName()
+		if due.stale != nil && !e.supersede(ctx, *due.stale, full, "the notes changed since it was made and its changes no longer merge with theirs; "+
+			"a day without a review, so a new curation starts from the notes now") {
+			continue
+		}
+		if e.notesJudging(ctx, due.repo.ID) {
+			e.queueCurate(ctx, full, due.trigger, QueuedJudge)
+			continue
+		}
+		e.startCurate(ctx, due.repo, due.trigger)
+		return
 	}
 }
 
-// dueCuration finds a repository due a curation by an [notes] curate
-// trigger: no proposal of it waits for the operator, no attempt failed
-// within curateRetry, no round of it is in its judge stage, and either its
-// notes changed since its last curation began (or applied) and it is marked
-// past a limit (over_limit) with its last curation a day old, or that is a
-// week old (weekly); or a retro recorded misses for its notes (misses, its
-// KVNotesMisses mark) that are still new, its last curation a day old.
-func (e *Engine) dueCuration(ctx context.Context, now time.Time) (store.Repo, string, bool) {
+// curateDue is a repository due a curation, by trigger; stale is the
+// waiting proposal it supersedes (CurateTriggerStale).
+type curateDue struct {
+	repo    store.Repo
+	trigger string
+	stale   *store.NotesProposal
+}
+
+// dueCurations lists the repositories due a curation by an [notes] curate
+// trigger, in the registry's order, skipping the queued ones and those
+// whose last attempt failed within curateRetry. One with a proposal waiting
+// for the operator is due only when that proposal is a stale curation a day
+// old whose changes no longer merge with the notes' (stale: the new
+// curation supersedes it). Otherwise either its notes changed since its last
+// curation began (or applied) and it is marked past a limit (over_limit)
+// with its last curation a day old, or that is a week old (weekly); or a
+// retro recorded misses for its notes (misses, its KVNotesMisses mark) that
+// are still new, its last curation a day old.
+func (e *Engine) dueCurations(ctx context.Context, now time.Time) []curateDue {
 	repos, err := e.st.ListRepos(ctx)
 	if err != nil {
 		e.log.Warn("notes curation: list repositories", "err", err)
-		return store.Repo{}, "", false
+		return nil
 	}
+	queued := ReadCurateQueue(ctx, e.st)
 	on := e.cfg.Notes.Curate.Has
+	var out []curateDue
 	for _, repo := range repos {
-		if _, ok := notesRepo(e.d.Layout, repo.Owner, repo.Name); !ok || e.curateTriedRecently(repo.ID, now) {
+		if _, ok := notesRepo(e.d.Layout, repo.Owner, repo.Name); !ok || e.curateTriedRecently(repo.ID, now) ||
+			slices.ContainsFunc(queued, func(q CurateQueued) bool { return strings.EqualFold(q.Repo, repo.FullName()) }) {
 			continue
 		}
 		props, err := e.st.NotesProposals(ctx, store.NotesProposalFilter{RepoID: repo.ID, Limit: 50})
-		if err != nil || slices.ContainsFunc(props, func(p store.NotesProposal) bool { return p.State == store.ProposalPending }) {
+		if err != nil {
+			continue
+		}
+		if i := slices.IndexFunc(props, func(p store.NotesProposal) bool { return p.State == store.ProposalPending }); i >= 0 {
+			if p := props[i]; p.Kind == store.ProposalCuration && now.Sub(p.CreatedAt) >= staleRecurateAfter && e.staleConflicts(ctx, repo, p) {
+				out = append(out, curateDue{repo: repo, trigger: CurateTriggerStale, stale: &p})
+			}
 			continue
 		}
 		var last *store.NotesProposal
@@ -331,12 +374,9 @@ func (e *Engine) dueCuration(ctx context.Context, now time.Time) (store.Repo, st
 		default:
 			continue
 		}
-		if e.notesJudging(ctx, repo.ID) {
-			continue
-		}
-		return repo, trigger, true
+		out = append(out, curateDue{repo: repo, trigger: trigger})
 	}
-	return store.Repo{}, "", false
+	return out
 }
 
 // missesDue reports whether repo is marked by a retro (KVNotesMisses) and
@@ -370,9 +410,12 @@ func (e *Engine) curateTriedRecently(repoID int64, now time.Time) bool {
 }
 
 // requestCurate serves `magnum notes <repo> --curate`: a curation now,
-// whatever [notes] curate says, unless a drain, an infrastructure pause or
-// a pause of the curator's CLI holds it, a proposal of the repository waits
-// for review, a round of it is in its judge stage, or a curation runs.
+// whatever [notes] curate says, unless a drain, an infrastructure pause or a
+// pause of the curator's CLI holds it or a proposal of the repository waits
+// for review. With Supersede naming that proposal (a stale one the operator
+// gave up on) it is superseded first and the new curation reads it. While a
+// round of the repository is in its judge stage, or another curation runs,
+// the curation is queued and starts once that ended (startQueuedCuration).
 func (e *Engine) requestCurate(ctx context.Context, p NotesCuratePayload) (string, error) {
 	repo, err := e.st.RepoByFullName(ctx, p.Repo)
 	if errors.Is(err, store.ErrNotFound) {
@@ -392,11 +435,14 @@ func (e *Engine) requestCurate(ctx context.Context, p NotesCuratePayload) (strin
 	if err != nil {
 		return "", err
 	}
-	if len(pending) > 0 {
+	var stale *store.NotesProposal
+	switch {
+	case len(pending) > 0 && p.Supersede != 0 && pending[0].ID == p.Supersede && pending[0].Kind == store.ProposalCuration:
+		stale = &pending[0]
+	case len(pending) > 0:
 		return "", fmt.Errorf("proposal %d for the notes of %s waits for review: `magnum notes %s --review` applies or rejects it first", pending[0].ID, full, full)
-	}
-	if e.notesJudging(ctx, repo.ID) {
-		return "", fmt.Errorf("a round of %s is in its judge stage, which may rewrite the notes; ask again when it ends", full)
+	case p.Supersede != 0:
+		return "", fmt.Errorf("proposal %d for the notes of %s no longer waits for review", p.Supersede, full)
 	}
 	if e.d.DryRun {
 		e.rec.Record(ctx, notesSubjectOf(full), "notes_curate", "a curation of the notes of "+full)
@@ -405,10 +451,23 @@ func (e *Engine) requestCurate(ctx context.Context, p NotesCuratePayload) (strin
 	if e.d.Curator == nil {
 		return "", errors.New("no curator agent: the daemon has no herdr client to run one in")
 	}
-	if started, since, other := e.startCurate(ctx, repo, CurateTriggerRequest); !started {
-		return fmt.Sprintf("a notes curation is already running (of %s, started %s); `magnum logs` follows it", other, since.Local().Format("15:04")), nil
+	prefix := ""
+	if stale != nil {
+		if !e.supersede(ctx, *stale, full, "the notes changed since it was made; the operator asked for a new curation from the notes now") {
+			return "", fmt.Errorf("proposal %d for the notes of %s could not be superseded", stale.ID, full)
+		}
+		prefix = fmt.Sprintf("proposal %d superseded; ", stale.ID)
 	}
-	return "notes curation of " + full + " started; a toast says when its proposal is ready for `magnum notes " + full + " --review`", nil
+	if e.notesJudging(ctx, repo.ID) {
+		e.queueCurate(ctx, full, CurateTriggerRequest, QueuedJudge)
+		return prefix + "queued: " + queuedText(QueuedJudge) + "; a toast says when its proposal is ready for `magnum notes " + full + " --review`", nil
+	}
+	if started, since, other := e.startCurate(ctx, repo, CurateTriggerRequest); !started {
+		e.queueCurate(ctx, full, CurateTriggerRequest, QueuedBusy)
+		return fmt.Sprintf("%squeued: starts when the running curation (of %s, started %s) ends; `magnum logs` follows it", prefix, other,
+			since.Local().Format("15:04")), nil
+	}
+	return prefix + "notes curation of " + full + " started; a toast says when its proposal is ready for `magnum notes " + full + " --review`", nil
 }
 
 func notesSubjectOf(full string) string { return "notes:" + strings.ToLower(full) }
@@ -431,7 +490,8 @@ func (e *Engine) curateBusy() bool {
 
 // startCurate runs a curation of repo in its own goroutine on a child of
 // ctx, unless one is running: then it reports false, when that one started
-// and its repository.
+// and its repository. The curation running is KVNotesCurating while it
+// runs, and the repository leaves the queue.
 func (e *Engine) startCurate(ctx context.Context, repo store.Repo, trigger string) (bool, time.Time, string) {
 	e.curateMu.Lock()
 	defer e.curateMu.Unlock()
@@ -440,10 +500,15 @@ func (e *Engine) startCurate(ctx context.Context, repo store.Repo, trigger strin
 	}
 	cctx, cancel := context.WithCancel(ctx)
 	e.curateCancel, e.curateStarted, e.curateRepo = cancel, e.now(), repo.FullName()
+	e.unqueueCurate(ctx, repo.FullName())
+	if b, err := json.Marshal(CurateMark{Repo: repo.FullName(), Trigger: trigger, Started: e.curateStarted}); err == nil {
+		e.setKV(ctx, KVNotesCurating, string(b))
+	}
 	e.curateWG.Add(1)
 	go func() {
 		defer e.curateWG.Done()
 		defer func() {
+			e.delKV(context.WithoutCancel(ctx), KVNotesCurating)
 			e.curateMu.Lock()
 			e.curateCancel = nil
 			e.curateMu.Unlock()
@@ -524,7 +589,12 @@ func (e *Engine) runCurate(ctx context.Context, repo store.Repo, trigger string)
 		stop("scratch directory: " + oneLine(err.Error(), retroWhyRunes))
 		return
 	}
-	prompt, promptSHA, err := e.curatePrompt(scratch, nr, over, len(misses))
+	superseded, err := e.curateSuperseded(ctx, repo, scratch)
+	if err != nil {
+		stop("the superseded proposal: " + oneLine(err.Error(), retroWhyRunes))
+		return
+	}
+	prompt, promptSHA, err := e.curatePrompt(scratch, nr, over, len(misses), superseded)
 	if err != nil {
 		stop(oneLine(err.Error(), retroWhyRunes))
 		return
@@ -716,10 +786,31 @@ func (e *Engine) curateUsage(ctx context.Context, repo store.Repo, nr notes.Repo
 	return b, u.Over, err
 }
 
+// curateSuperseded writes the stale proposal this curation follows up on
+// into scratch's superseded/ directory and returns its id: the repository's
+// latest curation, when it was superseded (a curation that stored nothing
+// leaves it the latest, so the next one reads it). 0 when there is none.
+func (e *Engine) curateSuperseded(ctx context.Context, repo store.Repo, scratch notes.Scratch) (int64, error) {
+	props, err := e.st.NotesProposals(ctx, store.NotesProposalFilter{RepoID: repo.ID, Limit: 50})
+	if err != nil {
+		return 0, err
+	}
+	i := slices.IndexFunc(props, func(p store.NotesProposal) bool { return p.Kind == store.ProposalCuration })
+	if i < 0 || props[i].State != store.ProposalSuperseded || props[i].VersionID == nil {
+		return 0, nil
+	}
+	p := props[i]
+	content, err := e.st.NotesVersionContent(ctx, *p.VersionID)
+	if err != nil {
+		return 0, err
+	}
+	return p.ID, notes.WriteSuperseded(scratch, StateOf(content), p.Changes)
+}
+
 // curatePrompt renders the curator's prompt for scratch (with misses.json
-// when it was given misses), and the SHA-256 of its template (kept with the
-// proposal).
-func (e *Engine) curatePrompt(scratch notes.Scratch, nr notes.Repo, over []string, misses int) (string, string, error) {
+// when it was given misses, and the superseded proposal it follows up on),
+// and the SHA-256 of its template (kept with the proposal).
+func (e *Engine) curatePrompt(scratch notes.Scratch, nr notes.Repo, over []string, misses int, superseded int64) (string, string, error) {
 	p, err := e.cfg.ResolvePrompt(e.cfg.Notes.Prompt)
 	if err != nil {
 		return "", "", fmt.Errorf("the curator's prompt cannot be read: %w", err)
@@ -727,12 +818,21 @@ func (e *Engine) curatePrompt(scratch notes.Scratch, nr notes.Repo, over []strin
 	text, err := agents.RenderPrompt(p, curateData{Repo: nr.FullName(), Dir: scratch.Dir, Current: scratch.Current(),
 		CurrentHarness: scratch.CurrentHarness(), Usage: scratch.Usage(), Proposal: scratch.Proposal(), Harness: scratch.Harness(),
 		Changes: scratch.Changes(), Limits: e.notesLimits(), Over: over, UnusedRounds: store.NotesUnusedRounds,
-		Misses: missesPath(scratch, misses), MissCount: misses})
+		Misses: missesPath(scratch, misses), MissCount: misses, Superseded: supersededPath(scratch, superseded), SupersededID: superseded})
 	if err != nil {
 		return "", "", fmt.Errorf("the curator's prompt does not render: %w", err)
 	}
 	sum := sha256.Sum256([]byte(p.Text))
 	return text, hex.EncodeToString(sum[:]), nil
+}
+
+// supersededPath is the superseded proposal's directory when the curation
+// follows one up.
+func supersededPath(s notes.Scratch, id int64) string {
+	if id == 0 {
+		return ""
+	}
+	return s.Superseded()
 }
 
 // missesPath is misses.json's path when the curation was given misses.
