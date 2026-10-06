@@ -1832,3 +1832,11 @@ editing history. Code, config comments and prompts reference these by their head
   proves each proposal and posts at most three, so the cut only hid candidates from it. With every
   qualifying proposal listed, the new simplify covered 16 of the old 18 ideas (10 of the 11 posted) and
   added 11 of its own, most of them larger, in runs alongside the reviewers.
+- **Triage answers with the listed names only** (2026-10-06). The triage prompt spoke of "the bug-finding
+  reviewers" and "a reviewer of simplifications" as categories. Once claude-review was made a role triage
+  may not drop, the list often held one reviewer (codex-review), and haiku answered with the categories
+  (`["bug-finding-reviewers"]`, `["security", "authorization", "bug-finder"]`), which name no role: every
+  triage since then logged "its answer names none of the round's roles" and ran every role (safe, but it
+  saved nothing). The rules now speak of "a listed reviewer that looks for bugs" and the answer line spells
+  out the exact allowed names; replayed against haiku, every answer used them. The fallback (an answer
+  naming no role runs every role) stays.
