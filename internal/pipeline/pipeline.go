@@ -60,6 +60,7 @@ const (
 // Round outcomes (RoundResult.Outcome and the judge run's outcome column).
 const (
 	OutcomePosted         = "posted"          // review verified on GitHub (marker, login, commit)
+	OutcomeReplied        = "replied"         // a reply round answered in its threads, no new review: verified by its replies on GitHub
 	OutcomeDryRun         = "dry_run"         // dry run: the judge wrote planned_review, nothing posted
 	OutcomeBlocked        = "blocked"         // the judge reported a blocker, or waits on a dialog
 	OutcomeIdentityError  = "identity_error"  // the judge's identity check failed; nothing posted
@@ -269,6 +270,13 @@ type RoundInput struct {
 	// commits: Roles hold the judge alone, which re-decides its earlier
 	// findings from the replies (JudgeData.SameHead) at its rereview effort.
 	SameHead bool
+	// Replies (with SameHead, or a continue of such a round): the round is
+	// a reply round: that many replies came on the judge's review since it
+	// last read the threads (JudgeData.Replies). When its verdict and event
+	// stay, the judge answers in its threads (post-review --replies) and
+	// posts no review: the round ends OutcomeReplied, verified by the
+	// replies carrying its run's reply marker. 0 = an ordinary round.
+	Replies int
 	// ColdJudge (recovery): the judge alone started in a fresh session
 	// because its conversation's prompt cache had gone cold ([pipeline]
 	// judge_fresh_after), while the reviewers kept theirs: the judge gets
@@ -390,6 +398,36 @@ type RoundResult struct {
 	DismissedReviewID int64 // the stale CHANGES_REQUESTED review dismissed after posting
 	Warnings          []string
 	Error             string
+
+	// Replies are the thread replies of a replied round (OutcomeReplied),
+	// as GitHub shows them; none when the judge found nothing to answer.
+	Replies []PostedReply
+	// JudgePromptedAt is when the judge's first prompt of the round went
+	// out: the replies and comments it re-decided are those it could read
+	// then (zero: no judge prompt).
+	JudgePromptedAt time.Time
+	// ThreadsRead: the round read the reviewer's threads before the judge's
+	// prompt (re-reviews and recoveries), so Stops is what they say now.
+	// Stops are the threads marked stop (agents.ReviewThread.Stop): after
+	// two of the reviewer's rebuttals someone answered again.
+	ThreadsRead bool
+	Stops       []StopThread
+}
+
+// PostedReply is a reply a replied round's judge posted in one of its
+// threads, as GitHub shows it.
+type PostedReply struct {
+	CommentID int64  // the thread's first comment
+	ID        int64  // the reply's REST comment id
+	Kind      string // ack | rebuttal | answer
+	URL       string
+}
+
+// StopThread is a thread where the reviewer stopped arguing (agents.ReviewThread.Stop).
+type StopThread struct {
+	ID        string // GraphQL node id
+	URL       string // its first comment's
+	LastReply int64  // the answer after the second rebuttal (the thread's last reply)
 }
 
 // RunRound runs one round and blocks until it ends. The error is non-nil only
@@ -931,7 +969,7 @@ func (rd *round) done(ctx context.Context, outcome string, err error) (RoundResu
 
 	level := "info"
 	switch outcome {
-	case OutcomePosted, OutcomeDryRun:
+	case OutcomePosted, OutcomeDryRun, OutcomeReplied:
 	case OutcomeError, OutcomeIdentityLeak, OutcomeNeedsAttention:
 		level = "error"
 	default:

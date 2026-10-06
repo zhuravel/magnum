@@ -345,6 +345,11 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 					row.Note = t.Note()
 				}
 			}
+			if r.GHState != store.GHMerged && r.GHState != store.GHClosed { // nothing to decide on a PR that is over
+				if v, ok, err := st.GetKV(ctx, engine.KVPRStalemate(r.PRID)); err == nil && ok {
+					row.Stalemate = prsStalemate(v)
+				}
+			}
 			out = append(out, row)
 		}
 		sums, err := st.LastReviewSummaries(ctx, ids)
@@ -377,6 +382,22 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 		_ = boardRoundProgress(ctx, st, cfg, ids, out)
 		return out, nil
 	}
+}
+
+// prsStalemate is the threads of a KVPRStalemate value as the board names
+// them: each one's URL, else its id; nil when the value names none.
+func prsStalemate(v string) []string {
+	st, ok := engine.ParseStalemate(v)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(st.Threads))
+	for _, t := range st.Threads {
+		if name := cmp.Or(t.URL, t.ID); name != "" {
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 // prsRecentClosed is [board] recent_closed (0 without a config: the section
@@ -456,6 +477,7 @@ func prsBoardRow(b store.BoardRow, self []string) tui.PRBoardRow {
 		Slot: b.Slot, Pinned: b.Pinned, Muted: b.Muted, NextEligibleAt: b.NextEligibleAt,
 		LastError: b.LastError, RoundsToday: b.RoundsToday, SkipReason: b.SkipReason,
 		ClosedAt: cmp.Or(b.MergedAt, b.ClosedAt), MergedUnreviewed: b.MergedUnreviewed, FlagDismissed: b.FlagDismissed,
+		Replies: b.PendingReplies,
 	}
 	if r.Ref == "" && b.Owner != "" && b.Name != "" && b.Number > 0 {
 		r.Ref = fmt.Sprintf("%s/%s#%d", b.Owner, b.Name, b.Number)
@@ -606,7 +628,7 @@ func prsRender(w io.Writer, rows []tui.PRBoardRow, defaultRepo string, now time.
 			actAgo(now, r.ActivityAt),
 			prsRequestedCell(r, now),
 			prsStateCell(r),
-			prsLastReviewCell(r.LastReview, now),
+			prsLastReviewCellOf(r, now),
 			prsFindingsCell(r.Findings),
 			prsCICell(r.CI),
 			prsSinceCell(r.SinceReview),
@@ -673,7 +695,7 @@ func prsStateCell(r tui.PRBoardRow) string {
 	for _, f := range []struct {
 		on   bool
 		name string
-	}{{r.Draft, "draft"}, {r.Pinned, "pinned"}, {r.Muted, "muted"}, {r.LastError != "", "error"}} {
+	}{{r.Draft, "draft"}, {r.Pinned, "pinned"}, {r.Muted, "muted"}, {r.LastError != "", "error"}, {len(r.Stalemate) > 0, "stalemate"}} {
 		if f.on {
 			s += "," + f.name
 		}
@@ -755,6 +777,21 @@ func prsLastReviewCell(li *tui.ReviewInfo, now time.Time) string {
 		s += ", stale"
 	}
 	return s
+}
+
+// prsLastReviewCellOf is the table's LAST REVIEW cell of r: its last
+// review, then the replies waiting for the judge the board marks "↩2"
+// ("approved 3h by talkable, 2 replies"; "2 replies" when it shows no review).
+func prsLastReviewCellOf(r tui.PRBoardRow, now time.Time) string {
+	s := prsLastReviewCell(r.LastReview, now)
+	if r.Replies <= 0 {
+		return s
+	}
+	n := textx.Count(r.Replies, "reply", "replies")
+	if r.LastReview == nil {
+		return n
+	}
+	return s + ", " + n
 }
 
 // prsSinceCell is the change since the last review: "3c 5f +120/-4", with

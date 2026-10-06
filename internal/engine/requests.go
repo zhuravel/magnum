@@ -78,6 +78,12 @@ type ReviewPayload struct {
 	// writes its planned review and posts nothing; afterwards the PR returns
 	// to the state it had (reviewed_sha does not move).
 	DryRun bool `json:"dry_run,omitempty"`
+	// Replies asks the judge alone to re-decide the replies on its review
+	// now (`magnum review --replies`, the board's r on a PR with replies): a
+	// reply round, which answers in the threads unless the verdict changes.
+	// It takes a head magnum reviewed and replies it has not re-decided;
+	// otherwise the round is an ordinary forced one.
+	Replies bool `json:"replies,omitempty"`
 }
 
 // OpenPayload is a `magnum open` request for a PR without a live session:
@@ -398,6 +404,10 @@ func (e *Engine) requestReview(ctx context.Context, p ReviewPayload) (string, er
 	if p.Fresh {
 		e.setKV(ctx, kvPRFresh(pr.ID), "1")
 	}
+	if p.Replies {
+		e.setKV(ctx, kvPRRedecide(pr.ID), "1")
+	}
+	e.seeStalemates(ctx, pr.ID) // the operator acts on the PR: the threads magnum stopped arguing in are seen
 	forced := "forced"
 	if merged {
 		forced = "forced, post-merge"
@@ -593,6 +603,7 @@ func (e *Engine) requestMute(ctx context.Context, p TargetPayload, mute bool) (s
 		}
 	}
 	if mute {
+		e.seeStalemates(ctx, pr.ID) // stalemate.go
 		if dismissed {
 			return "muted " + label + ": merged-unreviewed flag dismissed", nil
 		}

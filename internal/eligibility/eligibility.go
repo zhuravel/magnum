@@ -50,6 +50,13 @@ type PRFacts struct {
 	// ready for review) arrived that no round has started for yet; zero =
 	// none. Throttle then holds the PR only for the request debounce.
 	RequestedAt time.Time
+	// RepliedAt is the latest reply on magnum's review its judge has not
+	// re-decided, on a head magnum reviewed (no push since); zero = none.
+	// Throttle then holds the PR only for the reply debounce and the reply
+	// interval since ReplyRoundAt, the start of the last round such replies
+	// started on that head (zero = none).
+	RepliedAt    time.Time
+	ReplyRoundAt time.Time
 
 	// The unreviewed delta (ReviewedSHA...HeadSHA) for the re-review
 	// threshold. DeltaKnown is false when it was not measured, or a file of

@@ -44,3 +44,27 @@ func TestPostReviewLineCarriesTheRunsFacts(t *testing.T) {
 		t.Errorf("line = %s", got)
 	}
 }
+
+// A reply round's post_replies line is the post_review line with the replies
+// file (next to the result file) instead of the review file; a round that is
+// not one has none.
+func TestPostRepliesLineIsOnlyAReplyRounds(t *testing.T) {
+	d := judgeFixture()
+	d.Magnum = "/Users/bohdan/Projects/magnum/bin/magnum"
+	if got := d.completed(); got.PostRepliesCommand != "" || got.RepliesFile != "" {
+		t.Fatalf("an ordinary round: post_replies %q, file %q", got.PostRepliesCommand, got.RepliesFile)
+	}
+	d.Replies = 2
+	got := d.completed()
+	want := "/Users/bohdan/Projects/magnum/bin/magnum post-review --repo talkable/talkable --pr 11920 " +
+		"--head d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3 --run-id r-20261003T120000-7 --login 'talkable[bot]' " +
+		"--gh-config-dir /Users/bohdan/Projects/magnum/state/gh/talkable-app " +
+		"--replies /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/replies.json"
+	if got.PostRepliesCommand != want || got.RepliesFile != "/Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/replies.json" {
+		t.Errorf("line =\n%s\nwant\n%s (file %s)", got.PostRepliesCommand, want, got.RepliesFile)
+	}
+	d.DryRun = true
+	if got := d.completed().PostRepliesCommand; !strings.Contains(got, " --dry-run --replies ") {
+		t.Errorf("dry-run line = %s", got)
+	}
+}

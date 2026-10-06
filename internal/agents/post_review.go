@@ -11,6 +11,10 @@ import (
 // (JudgeData.ReviewFile).
 const PostReviewFile = "review.json"
 
+// PostRepliesFile is the file the judge of a reply round writes its thread
+// replies to for `magnum post-review --replies` (JudgeData.RepliesFile).
+const PostRepliesFile = "replies.json"
+
 // PostReviewLine is the shell line the judge runs to post its review
 // (JudgeData.PostReviewCommand, `post_review` in the <magnum> block):
 // `magnum post-review` with the run's facts as flags, each value
@@ -18,6 +22,23 @@ const PostReviewFile = "review.json"
 // config; --dry-run in a dry run; --local-base (the base the blind replay's
 // diff starts at) in a blind one, so the tool reads nothing from GitHub.
 func PostReviewLine(d JudgeData) string {
+	args := postArgs(d)
+	if d.DryRun && d.Blind && d.BaseSHA != "" {
+		args = append(args, "--local-base", d.BaseSHA)
+	}
+	return shellLine(append(args, "--review", d.ReviewFile))
+}
+
+// PostRepliesLine is the shell line the judge of a reply round runs to
+// answer in its threads instead of posting a review
+// (JudgeData.PostRepliesCommand, `post_replies`): the post_review line with
+// --replies and the replies file in place of --review.
+func PostRepliesLine(d JudgeData) string {
+	return shellLine(append(postArgs(d), "--replies", d.RepliesFile))
+}
+
+// postArgs are the flags both lines share.
+func postArgs(d JudgeData) []string {
 	args := []string{cmp.Or(d.Magnum, "magnum"), "post-review",
 		"--repo", d.Owner + "/" + d.Repo, "--pr", strconv.Itoa(d.Number), "--head", d.HeadSHA,
 		"--run-id", d.RunID, "--login", d.ReviewerLogin}
@@ -29,11 +50,12 @@ func PostReviewLine(d JudgeData) string {
 	}
 	if d.DryRun {
 		args = append(args, "--dry-run")
-		if d.Blind && d.BaseSHA != "" {
-			args = append(args, "--local-base", d.BaseSHA)
-		}
 	}
-	args = append(args, "--review", d.ReviewFile)
+	return args
+}
+
+// shellLine joins args, each shell-quoted.
+func shellLine(args []string) string {
 	for i, a := range args {
 		args[i] = shellQuote(a)
 	}

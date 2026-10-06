@@ -36,8 +36,12 @@ type judgeResult struct {
 	// HarnessUsed are the files of the repository notes' harness the judge
 	// ran or read this round (SKILL.md section 8), as written.
 	HarnessUsed []string
-	Raw         string // the JSON as written
-	Source      string // file | pane
+	// Replies are the thread replies a reply round's judge says it posted
+	// (status replied; the `replies` post-review printed), nil when the
+	// result names none.
+	Replies []resultReply
+	Raw     string // the JSON as written
+	Source  string // file | pane
 }
 
 // findingRecord is one entry of the result's provenance list.
@@ -56,6 +60,30 @@ type findingRecord struct {
 	// Nearby marks a rejected pre-existing problem the judge proved at the
 	// head in or near code the PR changes (SKILL.md section 7).
 	Nearby bool
+}
+
+// resultReply is one entry of the result's replies list.
+type resultReply struct {
+	CommentID int64 // the thread's first comment
+	ID        int64 // the reply's comment id (0 = not given)
+	Kind      string
+}
+
+// parseReplies reads the result's replies list leniently: entries that are
+// not objects, or name no thread, are skipped.
+func parseReplies(m json.RawMessage) []resultReply {
+	var items []map[string]json.RawMessage
+	if json.Unmarshal(m, &items) != nil {
+		return nil
+	}
+	out := []resultReply{}
+	for _, o := range items {
+		r := resultReply{CommentID: jsonInt(o["comment_id"]), ID: jsonInt(o["id"]), Kind: strings.ToLower(strings.TrimSpace(jsonString(o["kind"])))}
+		if r.CommentID > 0 {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // maxTitleRunes bounds a finding's title.
@@ -222,6 +250,7 @@ func parseEnvFailures(m json.RawMessage) []envFailure {
 // Judge result statuses (skills/magnum-review/SKILL.md section 8).
 const (
 	statusPosted        = "posted"
+	statusReplied       = "replied" // a reply round answered in its threads instead of posting a review
 	statusDryRun        = "dry_run"
 	statusBlocked       = "blocked"
 	statusIdentityError = "identity_error"
@@ -258,6 +287,9 @@ func parseResult(b []byte) (judgeResult, bool) {
 	}
 	if f, ok := raw["harness_used"]; ok {
 		r.HarnessUsed = parseHarnessUsed(f)
+	}
+	if f, ok := raw["replies"]; ok {
+		r.Replies = parseReplies(f)
 	}
 	if f, ok := raw["findings"]; ok {
 		var m map[string]json.RawMessage

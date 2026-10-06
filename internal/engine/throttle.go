@@ -69,6 +69,8 @@ func (e *Engine) throttleFacts(ctx context.Context, pr store.PR, f eligibility.P
 	}
 	if req, ok := e.pendingRequest(ctx, pr); ok && !f.Forced {
 		f.RequestedAt = req.At
+	} else if at, _, ok := e.replyTrigger(ctx, pr); ok && !f.Forced {
+		f.RepliedAt, f.ReplyRoundAt = at, e.lastReplyRound(ctx, pr).At
 	}
 	e.deltaFacts(ctx, pr, &f)
 	return f

@@ -478,6 +478,10 @@ type prbCells struct {
 	c        [prbNumCols]cell
 	revs     []cell
 	stateAlt []cell
+	// lastAlt are the LAST REVIEW cell's narrower forms, widest first (the
+	// replies marker stays, the age and the stale mark go); none when it has
+	// no other.
+	lastAlt []cell
 }
 
 func (p prbPainter) cells(r PRBoardRow, since [3]int) prbCells {
@@ -493,7 +497,10 @@ func (p prbPainter) cells(r PRBoardRow, since [3]int) prbCells {
 	if roundProgress(r) != nil {
 		cs.stateAlt = []cell{p.stateWaitDetail(r, stateTime), p.stateWaitDetail(r, stateBare)}
 	}
-	cs.c[colLastReview] = p.lastReviewCell(r.LastReview)
+	cs.c[colLastReview] = p.lastReviewCell(r)
+	if r.Replies > 0 {
+		cs.lastAlt = p.lastReviewForms(r)[1:]
+	}
 	cs.c[colFindings] = p.findingsCell(r.Findings)
 	cs.c[colCI] = p.ciCell(r.CI)
 	cs.c[colSince] = p.sinceCell(r.SinceReview, since)
@@ -506,6 +513,19 @@ func (p prbPainter) cells(r PRBoardRow, since [3]int) prbCells {
 func (cs prbCells) stateFit(w int) cell {
 	c := cs.c[colState]
 	for _, alt := range cs.stateAlt {
+		if c.width() <= w {
+			break
+		}
+		c = alt
+	}
+	return c.fit(w)
+}
+
+// lastFit is the LAST REVIEW cell at width w: its widest form that fits,
+// else its narrowest cut.
+func (cs prbCells) lastFit(w int) cell {
+	c := cs.c[colLastReview]
+	for _, alt := range cs.lastAlt {
 		if c.width() <= w {
 			break
 		}
@@ -539,15 +559,15 @@ func (p prbPainter) numCell(r PRBoardRow) cell {
 	return cell{{"#" + strconv.Itoa(n), p.pal.num}}
 }
 
-// titleCell is the title after the row's tags: 📌 pinned, ! failed, the
-// label badges, draft, muted. The title is the last run (the cursor row
+// titleCell is the title after the row's tags: 📌 pinned, ! failed or
+// stalemated (a thread magnum stopped arguing in), the label badges, draft, muted. The title is the last run (the cursor row
 // bolds it; titleFit cuts only it).
 func (p prbPainter) titleCell(r PRBoardRow) cell {
 	var c cell
 	if r.Pinned {
 		c = append(c, seg{p.g.pin + " ", p.pinStyle()})
 	}
-	if r.LastError != "" {
+	if r.LastError != "" || len(r.Stalemate) > 0 { // a stalemate waits for you as an error does
 		c = append(c, seg{p.g.errMark + " ", p.st.Err})
 	}
 	for _, b := range r.Badges {
@@ -1088,35 +1108,77 @@ func (p prbPainter) verdict(v string) (glyph, short, long string, st lipgloss.St
 }
 
 // lastReviewCell is "★ ✔ approved 2h": whose (★ mine), the verdict and its
-// age; a stale review (the head moved since) is dimmed and marked ⟳.
-func (p prbPainter) lastReviewCell(li *ReviewInfo) cell {
+// age; a stale review (the head moved since) is dimmed and marked ⟳; replies
+// magnum's judge has not re-decided follow as "↩2" (see lastReviewForms).
+func (p prbPainter) lastReviewCell(r PRBoardRow) cell { return p.lastReviewForms(r)[0] }
+
+// lastReviewForms are the LAST REVIEW cell's forms, widest first. A row with
+// replies waiting has the marker after everything else and gives up the age,
+// then the stale mark, before the marker when the column is too narrow; any
+// other row has one form, which the column cuts.
+func (p prbPainter) lastReviewForms(r PRBoardRow) []cell {
+	li := r.LastReview
+	mark := p.repliesMark(r.Replies)
 	if li == nil {
-		return p.dash()
+		if mark == "" {
+			return []cell{p.dash()}
+		}
+		return []cell{{{mark, p.pal.yellow}}}
 	}
 	glyph, short, _, vst := p.verdict(normVerdict(li.Event))
 	if li.Stale {
 		vst = p.st.Dim
 	}
-	var c cell
+	var lead cell
 	switch {
 	case p.isMine(li.Login, li.Mine):
 		mst := p.pal.mine
 		if li.Stale {
 			mst = p.st.Dim
 		}
-		c = append(c, seg{p.g.mine + " ", mst})
+		lead = cell{{p.g.mine + " ", mst}}
 	case p.anyMine:
-		c = append(c, seg{spaces(ansi.StringWidth(p.g.mine) + 1), lipgloss.Style{}})
+		lead = cell{{spaces(ansi.StringWidth(p.g.mine) + 1), lipgloss.Style{}}}
 	}
 	// Glyphs differ in width (💬 takes two cells): pad so the names align.
-	c = append(c, seg{glyph + spaces(p.glyphW()-ansi.StringWidth(glyph)), vst}, seg{" " + short, vst})
+	verdict := cell{{glyph + spaces(p.glyphW()-ansi.StringWidth(glyph)), vst}, {" " + short, vst}}
+	var age, stale, replies cell
 	if !li.SubmittedAt.IsZero() {
-		c = append(c, seg{" " + shortAge(max(p.now.Sub(li.SubmittedAt), 0)), p.st.Dim})
+		age = cell{{" " + shortAge(max(p.now.Sub(li.SubmittedAt), 0)), p.st.Dim}}
 	}
 	if li.Stale {
-		c = append(c, seg{" " + p.g.stale, p.pal.yellow})
+		stale = cell{{" " + p.g.stale, p.pal.yellow}}
 	}
-	return c
+	if mark != "" {
+		replies = cell{{" " + mark, p.pal.yellow}}
+	}
+	join := func(parts ...cell) cell {
+		var c cell
+		for _, part := range parts {
+			c = append(c, part...)
+		}
+		return c
+	}
+	if mark == "" {
+		return []cell{join(lead, verdict, age, stale)}
+	}
+	forms := []cell{join(lead, verdict, age, stale, replies)}
+	if age != nil {
+		forms = append(forms, join(lead, verdict, stale, replies))
+	}
+	if stale != nil {
+		forms = append(forms, join(lead, verdict, replies))
+	}
+	return forms
+}
+
+// repliesMark is "↩2": n replies on magnum's review wait for its judge; ""
+// for none.
+func (p prbPainter) repliesMark(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	return p.g.reply + strconv.Itoa(n)
 }
 
 // sinceParts are the commits, additions and deletions of a delta.
@@ -1321,8 +1383,11 @@ func (p prbPainter) natural(rows []PRBoardRow) prbNatural {
 		cs := p.cells(r, n.since)
 		for c := range prbNumCols {
 			w := cs.c[c].width()
-			if c == colReviewers {
+			switch c {
+			case colReviewers:
 				w = chipsWidth(cs.revs)
+			case colLastReview: // a row with replies waiting shows its narrower form within the cap
+				w = cs.lastFit(prbCap[colLastReview]).width()
 			}
 			n.nat[c] = max(n.nat[c], w)
 		}
@@ -1507,6 +1572,8 @@ func (p prbPainter) rowLine(r PRBoardRow, lay prbLayout, width int, selected, qu
 			cl = cs.c[c].fitLeft(w) // keep the distinctive end of a long repository name
 		case colState:
 			cl = cs.stateFit(w)
+		case colLastReview:
+			cl = cs.lastFit(w)
 		default:
 			cl = cs.c[c].fit(w)
 		}

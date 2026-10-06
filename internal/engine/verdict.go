@@ -79,6 +79,7 @@ func (e *Engine) requestVerdict(ctx context.Context, p VerdictPayload, event str
 	e.setKV(ctx, KVPRManualVerdict(pr.ID), strconv.FormatInt(rev.ID, 10))
 	done := map[string]string{"APPROVE": "approved", "REQUEST_CHANGES": "requested changes on"}[event]
 	msg := fmt.Sprintf("%s %s at %s as %s: %s", done, label, textx.ShortSHA(reviewed), rev.UserLogin, rev.HTMLURL)
+	e.seeStalemates(ctx, pr.ID) // the operator decided: stalemate.go
 	e.event(ctx, "info", prSubject(repo, pr.Number), "review.manual_verdict", msg,
 		map[string]any{"event": event, "review_id": rev.ID, "sha": reviewed, "identity": pr.Identity})
 	return msg, nil

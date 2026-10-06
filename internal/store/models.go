@@ -232,6 +232,12 @@ type PR struct {
 	// ReviewGate (migration 0019, review_gate_json) is what GitHub's merge
 	// gate said of the reviews at the last Details fetch; nil until then.
 	ReviewGate *ReviewGate `json:"review_gate"`
+	// Replies (migration 0022, replies_json) are the reviews and issue
+	// comments that may answer magnum's review, as the last Details read
+	// listed them (oldest first; nil until then), and RepliesReadAt when
+	// magnum's judge last read the threads; PendingReplies are those after.
+	Replies       []Reply    `json:"replies"`
+	RepliesReadAt *time.Time `json:"replies_read_at"`
 }
 
 // Activity is the PR's last activity as the screens show it (the board's
@@ -553,7 +559,9 @@ var (
 		// 0018_activity_at
 		"activity_at",
 		// 0019_review_gate
-		"review_gate_json"}
+		"review_gate_json",
+		// 0022_replies
+		"replies_json", "replies_read_at"}
 	slotColumns = []string{"id", "name", "repo_id", "repo_full_name", "kind", "path", "main_clone",
 		"placeholder_branch", "db_slug", "state", "pr_id", "pinned", "dirty_schema", "checked_out_sha",
 		"hold_reason", "lock_sha", "last_used_at", "last_error", "created_at", "updated_at",
@@ -608,7 +616,7 @@ func scanPR(sc scanner) (PR, error) {
 		timeCol(&p.CreatedAt), timeCol(&p.UpdatedAt),
 		jsonCol(&p.Assignees), jsonCol(&p.RequestedReviewers), jsonCol(&p.LatestReviews), jsonCol(&p.SinceReview),
 		&p.LastReviewLogin, &p.BaseSHA, nullTime(&p.DetailsAt), &p.AuthorAssociation, &p.CIState, jsonCol(&p.CI),
-		jsonCol(&p.ReviewRequests), nullTime(&p.ActivityAt), jsonCol(&p.ReviewGate))
+		jsonCol(&p.ReviewRequests), nullTime(&p.ActivityAt), jsonCol(&p.ReviewGate), jsonCol(&p.Replies), nullTime(&p.RepliesReadAt))
 	return p, err
 }
 

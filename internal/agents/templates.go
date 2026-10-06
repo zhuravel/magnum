@@ -147,14 +147,23 @@ type ReviewThread struct {
 	Resolved  bool          `json:"resolved"`
 	Outdated  bool          `json:"outdated"`
 	Replies   []ThreadReply `json:"replies"` // oldest first
+	// Rebuttals counts the reviewer's rebuttals in the thread: its replies
+	// of kind rebuttal, and those without a kind (magnum's earlier rebuttals
+	// carried no reply marker). Stop: after two of them someone answered
+	// again; the judge replies there no more, and magnum asks the operator.
+	Rebuttals int  `json:"rebuttals,omitempty"`
+	Stop      bool `json:"stop,omitempty"`
 }
 
 // ThreadReply is one reply of a ReviewThread.
 type ThreadReply struct {
 	ID     int64  `json:"id"` // REST comment id
 	Author string `json:"author"`
-	// Own: the reviewer login wrote it (an earlier rebuttal); it has no Class.
-	Own bool `json:"own,omitempty"`
+	// Own: the reviewer login wrote it (an earlier rebuttal or answer); it
+	// has no Class. Kind is what its reply marker says it was (ack,
+	// rebuttal, answer; "" without a marker).
+	Own  bool   `json:"own,omitempty"`
+	Kind string `json:"kind,omitempty"`
 	// Class is what the reply's first clause claims (past an
 	// acknowledgement such as "Good catch,"): fixed, not a bug, won't fix or
 	// other.
@@ -260,7 +269,20 @@ type JudgeData struct {
 	// prompt asks it to re-decide its earlier findings from the replies and
 	// comments since, running no check that review already ran. Rendered as
 	// one instruction, only then.
-	SameHead        bool
+	SameHead bool
+	// Replies (rereview, recovery; with SameHead): a reply round: Replies
+	// replies came on the judge's review since it last read the threads,
+	// with no new commits. When its verdict and event stay those of its
+	// last review, the judge posts no review but answers in the threads
+	// with PostRepliesCommand (PostRepliesLine, rendered as
+	// `post_replies`), which posts RepliesFile (<report dir>/replies.json,
+	// derived from ResultFile when empty); both always derived, and empty
+	// outside a reply round. 0 = not a reply round.
+	Replies                         int
+	RepliesFile, PostRepliesCommand string
+	// StopThreads counts the threads of Threads marked Stop: the prompt
+	// says not to reply there again.
+	StopThreads     int
 	MovedFrom       string // previous checkout path when the PR changed slots
 	PreviousReviews []PreviousReview
 	// Threads are the inline threads the reviewer login started on the PR,
@@ -337,6 +359,11 @@ func (d *JudgeData) completed() JudgeData {
 		out.ReviewFile = filepath.Join(filepath.Dir(out.ResultFile), PostReviewFile)
 	}
 	out.PostReviewCommand = PostReviewLine(out)
+	out.RepliesFile, out.PostRepliesCommand = "", ""
+	if d.Replies > 0 {
+		out.RepliesFile = cmp.Or(d.RepliesFile, filepath.Join(filepath.Dir(out.ResultFile), PostRepliesFile))
+		out.PostRepliesCommand = PostRepliesLine(out)
+	}
 	out.Reports = make([]Report, len(d.Reports))
 	for i, r := range d.Reports {
 		out.Reports[i] = r.completed()

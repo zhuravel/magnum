@@ -350,6 +350,7 @@ func (e *Engine) applyRadarPRs(ctx context.Context, w config.Watch, gh GitHub, r
 		}
 		if hasD {
 			fillDetails(&in, d, selfLogins, now)
+			in.Replies = repliesOf(d, e.ownLogins(ctx, w, cur))
 			e.noteTruncatedLabels(ctx, w, repo, d)
 		}
 		if !exists {
@@ -388,6 +389,9 @@ func (e *Engine) applyRadarPRs(ctx context.Context, w config.Watch, gh GitHub, r
 		}
 		if err == nil && requested {
 			err = e.onRequest(ctx, repo, w, res.PR.ID, req, now)
+		}
+		if err == nil && hasD && !firstSync && !res.New {
+			err = e.considerReplies(ctx, repo, w, res.PR.ID, now) // replies.go
 		}
 		if err != nil {
 			errs = append(errs, err)

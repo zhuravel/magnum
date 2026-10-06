@@ -60,6 +60,7 @@ func fullBoardRow() tui.PRBoardRow {
 		Wait: "re-review · quiet", WaitDetail: "waiting for a quiet period", Note: "comment-only push skipped",
 		RequestedToMe: &req, LastRequest: &req, Requests: []tui.RequestInfo{req},
 		ClosedAt: at.Add(2 * time.Hour), Recent: true, MergedUnreviewed: true,
+		Replies: 2, Stalemate: []string{"https://github.com/talkable/example/pull/7#discussion_r1"},
 	}
 }
 
@@ -202,12 +203,18 @@ func TestPRsJSONOptionalPartsAreNullAndListsAreEmpty(t *testing.T) {
 			t.Errorf("%s = %v (present %v), want null", key, v, ok)
 		}
 	}
-	for _, key := range []string{"labels", "assignees", "badges", "reviewers", "requests", "error_detail"} {
+	if v, ok := out["pending_replies"]; !ok || v != 0.0 {
+		t.Errorf("pending_replies = %v (present %v), want 0", v, ok)
+	}
+	for _, key := range []string{"labels", "assignees", "badges", "reviewers", "requests", "error_detail", "stalemate_threads"} {
 		if v, ok := out[key].([]any); !ok || len(v) != 0 {
 			t.Errorf("%s = %#v, want []", key, out[key])
 		}
 	}
 	full := marshalPRsJSON(t, fullBoardRow())[0]
+	if full["pending_replies"] != 2.0 || !reflect.DeepEqual(full["stalemate_threads"], []any{"https://github.com/talkable/example/pull/7#discussion_r1"}) {
+		t.Errorf("pending_replies = %v, stalemate_threads = %v", full["pending_replies"], full["stalemate_threads"])
+	}
 	ci := full["ci"].(map[string]any)
 	if v, ok := ci["failing"].([]any); !ok || len(v) != 1 {
 		t.Errorf("ci.failing = %#v", ci["failing"])

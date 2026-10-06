@@ -79,6 +79,26 @@ type PRDetails struct {
 	// ReviewGate is what GitHub's merge gate says of the reviews; nil when
 	// GitHub returned no reviewDecision or latestOpinionatedReviews.
 	ReviewGate *ReviewGate
+	// Remarks are the submitted reviews and issue comments among the
+	// activity timeline's last ten items, as it lists them (oldest first);
+	// nil when GitHub returned no timeline. A reply in a review thread is a
+	// review of its own.
+	Remarks []Remark
+}
+
+// Remark is a submitted review or an issue comment on a pull request
+// (PRDetails.Remarks): who wrote it and when, never what it says.
+type Remark struct {
+	Review bool      // a submitted review (a reply in a thread is one); false: an issue comment
+	At     time.Time // the review's submittedAt, the comment's createdAt
+	Author string    // Account form ("app[bot]" for a bot); "" for a ghost
+	Bot    bool      // the author is a bot
+	// Answers are the authors (Account form) of the threads the review's
+	// inline comments reply to: GitHub's replyTo, a thread's first comment.
+	// They are read for the timeline's last two reviews only
+	// (AnswersKnown); a review that starts threads answers none.
+	Answers      []string
+	AnswersKnown bool
 }
 
 // ReviewGate is what GitHub's branch protection makes of a pull request's
@@ -181,7 +201,15 @@ type PRState struct {
 // (PRDetails.ReviewGate: reviewDecision and latestOpinionatedReviews) adds
 // one connection of small nodes per pull request and cost nothing: the dry
 // run priced batches of 1, 10, 20, 30 and 40 at 1, 1, 2, 3 and 4 points with
-// and without it (2026-10-06).
+// and without it (2026-10-06). The remarks (PRDetails.Remarks) add the
+// authors of the timeline's reviews and issue comments, which cost nothing,
+// and one connection of the last two reviews with the authors of the
+// threads their inline comments answer (replyTo, a nested connection): the
+// dry run priced batches of 1, 5, 10, 15, 20, 30 and 40 at 1, 1, 1, 2, 3, 4
+// and 5 points with them and 1, 1, 1, 2, 2, 3 and 4 without (2026-10-06), at
+// most one point more per batch, none for the few PRs a poll usually reads.
+// The nested connection on every timeline review instead doubled the price
+// (8 points for 40), and three reviews instead of two cost 6.
 const detailsFragment = `fragment PRDetails on PullRequest {
   id number title url
   author { login __typename } authorAssociation
@@ -196,7 +224,8 @@ const detailsFragment = `fragment PRDetails on PullRequest {
   reviewDecision
   latestOpinionatedReviews(first: 100, writersOnly: true) { totalCount pageInfo { hasNextPage } nodes { state author { login __typename } commit { oid } } }
   timelineItems(itemTypes: [REVIEW_REQUESTED_EVENT], last: 10) { nodes { ... on ReviewRequestedEvent { createdAt actor { login } requestedReviewer { __typename ... on User { login } ... on Bot { login } ... on Mannequin { login } ... on Team { slug } } } } }
-  activity: timelineItems(last: 10, itemTypes: [` + activityTypes + `]) { nodes { __typename ... on PullRequestReview { submittedAt } ` + activityEvents + ` } }
+  activity: timelineItems(last: 10, itemTypes: [` + activityTypes + `]) { nodes { __typename ... on PullRequestReview { id submittedAt author { login __typename } } ... on IssueComment { createdAt author { login __typename } } ` + activityEvents + ` } }
+  replies: timelineItems(last: 2, itemTypes: [PULL_REQUEST_REVIEW]) { nodes { ... on PullRequestReview { id comments(first: 10) { nodes { replyTo { author { login __typename } } } } } } }
   headCommit: commits(last: 1) { nodes { commit { oid statusCheckRollup { state contexts(first: 100) { totalCount pageInfo { hasNextPage } nodes { __typename ... on CheckRun { name status conclusion startedAt completedAt checkSuite { workflowRun { workflow { name } } } } ... on StatusContext { context state createdAt } } } } committedDate } } }
 }`
 
@@ -208,9 +237,9 @@ const activityTypes = "ISSUE_COMMENT, PULL_REQUEST_REVIEW, LABELED_EVENT, UNLABE
 	"REVIEW_REQUESTED_EVENT, REVIEW_REQUEST_REMOVED_EVENT, READY_FOR_REVIEW_EVENT, CONVERT_TO_DRAFT_EVENT, RENAMED_TITLE_EVENT, " +
 	"BASE_REF_CHANGED_EVENT, AUTOMATIC_BASE_CHANGE_SUCCEEDED_EVENT, CLOSED_EVENT, REOPENED_EVENT, MERGED_EVENT, HEAD_REF_FORCE_PUSHED_EVENT"
 
-// activityEvents selects when each activityTypes item but the review
-// happened.
-const activityEvents = "... on IssueComment { createdAt } ... on LabeledEvent { createdAt } ... on UnlabeledEvent { createdAt } " +
+// activityEvents selects when each activityTypes item but the review and
+// the issue comment (which the fragment reads with their authors) happened.
+const activityEvents = "... on LabeledEvent { createdAt } ... on UnlabeledEvent { createdAt } " +
 	"... on ReviewRequestedEvent { createdAt } ... on ReviewRequestRemovedEvent { createdAt } ... on ReadyForReviewEvent { createdAt } " +
 	"... on ConvertToDraftEvent { createdAt } ... on RenamedTitleEvent { createdAt } ... on BaseRefChangedEvent { createdAt } " +
 	"... on AutomaticBaseChangeSucceededEvent { createdAt } ... on ClosedEvent { createdAt } ... on ReopenedEvent { createdAt } " +
@@ -314,10 +343,27 @@ type detailsJSON struct {
 	ReviewRequested reviewRequestsJSON `json:"timelineItems"`
 	Activity        *struct {
 		Nodes []struct {
-			CreatedAt   time.Time `json:"createdAt"`   // every item but a review
-			SubmittedAt time.Time `json:"submittedAt"` // a review; null while pending
+			Typename    string     `json:"__typename"`
+			ID          string     `json:"id"`          // a review
+			CreatedAt   time.Time  `json:"createdAt"`   // every item but a review
+			SubmittedAt time.Time  `json:"submittedAt"` // a review; null while pending
+			Author      *actorJSON `json:"author"`      // a review or an issue comment; null: a ghost
 		} `json:"nodes"`
 	} `json:"activity"` // null: GitHub returned no timeline
+	// Replies are the last two reviews with the authors of the comments
+	// their inline comments reply to (Remark.Answers).
+	Replies *struct {
+		Nodes []struct {
+			ID       string `json:"id"`
+			Comments struct {
+				Nodes []struct {
+					ReplyTo *struct {
+						Author *actorJSON `json:"author"`
+					} `json:"replyTo"`
+				} `json:"nodes"`
+			} `json:"comments"`
+		} `json:"nodes"`
+	} `json:"replies"`
 	HeadCommit struct {
 		Nodes []struct {
 			Commit struct {
@@ -424,6 +470,59 @@ func (d detailsJSON) details() PRDetails {
 	out.CI = d.ci()
 	out.ActivityAt = d.activityAt()
 	out.ReviewGate = d.reviewGate()
+	out.Remarks = d.remarks()
+	return out
+}
+
+// remarks is PRDetails.Remarks: the activity timeline's submitted reviews
+// and issue comments, each review's answered threads from the replies
+// connection when it lists the review; nil without a timeline.
+func (d detailsJSON) remarks() []Remark {
+	if d.Activity == nil {
+		return nil
+	}
+	answers := map[string][]string{}
+	if d.Replies != nil {
+		for _, n := range d.Replies.Nodes {
+			if n.ID == "" {
+				continue
+			}
+			to := []string{}
+			for _, c := range n.Comments.Nodes {
+				if c.ReplyTo != nil && c.ReplyTo.Author != nil && c.ReplyTo.Author.Login != "" {
+					if a := Account(c.ReplyTo.Author.Login, c.ReplyTo.Author.Typename); !slices.Contains(to, a) {
+						to = append(to, a)
+					}
+				}
+			}
+			answers[n.ID] = to
+		}
+	}
+	out := []Remark{}
+	for _, n := range d.Activity.Nodes {
+		var r Remark
+		switch n.Typename {
+		case "PullRequestReview":
+			if n.SubmittedAt.IsZero() {
+				continue // pending
+			}
+			r = Remark{Review: true, At: n.SubmittedAt}
+			if to, ok := answers[n.ID]; ok && n.ID != "" {
+				r.AnswersKnown = true
+				if len(to) > 0 {
+					r.Answers = to
+				}
+			}
+		case "IssueComment":
+			r = Remark{At: n.CreatedAt}
+		default:
+			continue
+		}
+		if n.Author != nil {
+			r.Author, r.Bot = Account(n.Author.Login, n.Author.Typename), IsBot(n.Author.Typename, n.Author.Login)
+		}
+		out = append(out, r)
+	}
 	return out
 }
 

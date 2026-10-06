@@ -96,6 +96,17 @@ func (e *Engine) toastRequestedPosted(job *roundJob, pr store.PR, res pipeline.R
 		Kind: notify.KindReviewPosted, Window: requestedToastWindow})
 }
 
+// toastRequestedReplied tells the operator how the re-decision of replies
+// they asked for ended when it posted no review: what the judge answered in
+// its threads.
+func (e *Engine) toastRequestedReplied(job *roundJob, pr store.PR, res pipeline.RoundResult) {
+	label := fmt.Sprintf("%s#%d", job.repo.Name, pr.Number)
+	title := fmt.Sprintf("%s: %s, no new review", label, replyWord(res))
+	e.info(notify.Item{Key: fmt.Sprintf("requested:%d:replied:%s", pr.ID, res.JudgeRunID), Title: title,
+		Body: "The verdict of review " + strconv.FormatInt(deref(pr.LastReviewID), 10) + " stands.", Line: title,
+		Kind: notify.KindReviewPosted, Window: requestedToastWindow})
+}
+
 // toastRequestedFailed tells the operator why the round they asked for
 // failed (what: the outcome, or "setup failed") and when it retries. A PR
 // the failure parked in needs_attention, or a post-merge round put back in

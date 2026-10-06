@@ -485,7 +485,7 @@ func TestDetailsReadsTheLastActivity(t *testing.T) {
 		"activity: timelineItems(last: 10, itemTypes: [ISSUE_COMMENT, PULL_REQUEST_REVIEW, LABELED_EVENT, UNLABELED_EVENT, " +
 			"REVIEW_REQUESTED_EVENT, REVIEW_REQUEST_REMOVED_EVENT, READY_FOR_REVIEW_EVENT, CONVERT_TO_DRAFT_EVENT, RENAMED_TITLE_EVENT, " +
 			"BASE_REF_CHANGED_EVENT, AUTOMATIC_BASE_CHANGE_SUCCEEDED_EVENT, CLOSED_EVENT, REOPENED_EVENT, MERGED_EVENT, HEAD_REF_FORCE_PUSHED_EVENT])",
-		"... on PullRequestReview { submittedAt }", "} committedDate } } }"} {
+		"... on PullRequestReview { id submittedAt", "} committedDate } } }"} {
 		if !strings.Contains(q, want) {
 			t.Errorf("query lacks %q: %s", want, q)
 		}
@@ -521,6 +521,51 @@ func TestDetailsReadsTheLastActivity(t *testing.T) {
 	}
 	if d := prev[11975]; !d.ActivityAt.IsZero() {
 		t.Errorf("absent timeline: activity = %v", d.ActivityAt)
+	}
+}
+
+// details_remarks.json is synthetic, in the shape GitHub answers the
+// fragment with. The activity timeline's submitted reviews and issue
+// comments are a PR's remarks, oldest first, with their authors in Account
+// form; the last two reviews also say whose threads their inline comments
+// answer (a reply in a thread is a review of its own). A pending review is
+// no remark, and a PR whose timeline GitHub did not return has none.
+func TestDetailsReadsTheTimelinesRemarksAndTheThreadsTheyAnswer(t *testing.T) {
+	f := &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"gh", "api", "graphql"}, Result: execx.Result{Stdout: fixture(t, "details_remarks.json")}}}}
+	got, missing, err := (&Client{Run: f}).Details(context.Background(), "talkable", "talkable", []int{401, 402, 403})
+	if err != nil || len(missing) != 0 || len(got) != 3 {
+		t.Fatalf("got %d, missing %v, err %v", len(got), missing, err)
+	}
+	q := oneLine(decodeReq(t, f.Calls[0]).Query)
+	for _, want := range []string{
+		"... on PullRequestReview { id submittedAt author { login __typename } } ... on IssueComment { createdAt author { login __typename } }",
+		"replies: timelineItems(last: 2, itemTypes: [PULL_REQUEST_REVIEW]) { nodes { ... on PullRequestReview { id comments(first: 10) { nodes { replyTo { author { login __typename } } } } } } }",
+	} {
+		if !strings.Contains(q, want) {
+			t.Errorf("query lacks %q: %s", want, q)
+		}
+	}
+	at := func(s string) time.Time {
+		v, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	want := []Remark{
+		{At: at("2026-10-06T09:00:00Z"), Author: "alice"},
+		{Review: true, At: at("2026-10-06T09:10:00Z"), Author: "alice", Answers: []string{"magnum-app[bot]"}, AnswersKnown: true},
+		{Review: true, At: at("2026-10-06T09:20:00Z"), Author: "coder[bot]", Bot: true, Answers: []string{"rev-ann"}, AnswersKnown: true},
+		{Review: true, At: at("2026-10-06T08:00:00Z"), Author: "magnum-app[bot]", Bot: true},
+	}
+	if r := got[401].Remarks; !reflect.DeepEqual(r, want) {
+		t.Errorf("#401 remarks:\n got %+v\nwant %+v", r, want)
+	}
+	if r := got[402].Remarks; r != nil {
+		t.Errorf("#402 (no timeline) remarks = %+v, want none", r)
+	}
+	if r := got[403].Remarks; len(r) != 1 || r[0].Author != "" || r[0].Review {
+		t.Errorf("#403 (a ghost's comment) remarks = %+v", r)
 	}
 }
 

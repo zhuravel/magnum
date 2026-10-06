@@ -152,6 +152,14 @@ type Daemon struct {
 	// counted from the later of that and the last push. Such a requested
 	// round skips every other timing rule and the daily cap; 0 = no wait.
 	RequestDebounce Duration `toml:"request_debounce"`
+	// ReplyDebounce is how long after the last reply on magnum's latest
+	// review (the PR author's review or comment, or anyone's reply in one of
+	// magnum's threads) a reviewed PR whose head has not moved waits before
+	// its judge alone re-decides the threads; 0 = replies start no round.
+	// ReplyMinInterval spaces such rounds of one PR and head (0 = no wait).
+	// A push meanwhile wins: the re-review it gets reads the replies.
+	ReplyDebounce    Duration `toml:"reply_debounce"`
+	ReplyMinInterval Duration `toml:"reply_min_interval"`
 	// RereviewMinLines is the smallest unreviewed delta an automatic
 	// re-review runs for after the quiet period: changed lines (additions
 	// plus deletions) the trivial-delta classifier counts as code, since the
@@ -742,6 +750,8 @@ func Defaults() *Config {
 			ParkIdleAfter:            Duration{2 * time.Hour},
 			SkipTrivialDeltas:        slices.Clone(TrivialDeltaClasses),
 			RequestDebounce:          Duration{time.Minute},
+			ReplyDebounce:            Duration{3 * time.Minute},
+			ReplyMinInterval:         Duration{2 * time.Hour},
 			RereviewMinLines:         30,
 			RereviewMaxWait:          Duration{2 * time.Hour},
 			DeltaCheck:               true,

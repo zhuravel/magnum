@@ -104,6 +104,15 @@ type PRBoardRow struct {
 	GitHubUpdatedAt time.Time
 	HeadSHA         string
 	LastReview      *ReviewInfo // the latest review magnum knows of; nil when none
+	// Replies counts the replies on magnum's review its judge has not
+	// re-decided yet: LAST REVIEW shows "↩N" and r re-decides them now (the
+	// judge alone) while the head is the reviewed one.
+	Replies int
+	// Stalemate are the URLs of the threads where magnum stopped arguing
+	// after two rebuttals, which wait for the operator: the title cell
+	// carries the attention mark and the card's NEEDS YOU says what to do.
+	// Empty when magnum argues in none (or the operator has acted).
+	Stalemate []string
 	// Findings is what magnum's latest posted review concluded (its findings
 	// by priority, simplifications and verdict), also where it could only
 	// comment; nil when magnum has not reviewed the PR.
@@ -594,6 +603,7 @@ func sanitizeRow(r PRBoardRow) PRBoardRow {
 	r.State, r.GHState, r.Slot, r.LastError = cleanText(r.State), cleanText(r.GHState), cleanText(r.Slot), cleanText(r.LastError)
 	r.HeadSHA = cleanText(r.HeadSHA)
 	r.Wait, r.WaitDetail = cleanText(r.Wait), cleanText(r.WaitDetail)
+	r.Stalemate = cleanAll(r.Stalemate)
 	r.Note, r.SkipReason = cleanText(r.Note), cleanText(r.SkipReason)
 	if r.Badges != nil {
 		badges := make([]Badge, 0, len(r.Badges))

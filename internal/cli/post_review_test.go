@@ -94,9 +94,18 @@ func fakePostReview(t *testing.T) *execx.Fake {
 	return f
 }
 
-func postReviewArgs(file string, extra ...string) []string {
+// postBaseArgs are post-review's flags but the file.
+func postBaseArgs(extra ...string) []string {
 	return append([]string{"post-review", "--repo", "talkable/talkable", "--pr", "5", "--head", postReviewHead,
-		"--run-id", "r-20261006T120000-7", "--login", "talkable[bot]", "--review", file}, extra...)
+		"--run-id", "r-20261006T120000-7", "--login", "talkable[bot]"}, extra...)
+}
+
+func postReviewArgs(file string, extra ...string) []string {
+	return postBaseArgs(append([]string{"--review", file}, extra...)...)
+}
+
+func postRepliesArgs(file string, extra ...string) []string {
+	return postBaseArgs(append([]string{"--replies", file}, extra...)...)
 }
 
 func writeReviewFile(t *testing.T, body string) string {
@@ -164,6 +173,13 @@ func TestPostReviewExitCodes(t *testing.T) {
 		{"short head", append(postReviewArgs(writeReviewFile(t, `{}`)), "--head", "d4e5f6a"), 1, "error"},
 		{"repo without owner", append(postReviewArgs(writeReviewFile(t, `{}`)), "--repo", "talkable"), 1, "error"},
 		{"local base without dry run", postReviewArgs(writeReviewFile(t, `{}`), "--local-base", postReviewHead), 1, "error"},
+		{"neither review nor replies", postBaseArgs(), 1, "error"},
+		{"review and replies", postReviewArgs(writeReviewFile(t, `{}`), "--replies", writeReviewFile(t, `{"replies":[]}`)), 1, "error"},
+		{"replies with a local base", append(postRepliesArgs(writeReviewFile(t, `{"replies":[]}`)), "--dry-run", "--local-base", postReviewHead), 1, "error"},
+		{"no replies file", postRepliesArgs(filepath.Join(t.TempDir(), "replies.json")), 2, "invalid"},
+		{"invalid replies", postRepliesArgs(writeReviewFile(t, `{"replies":[{"comment_id":1,"kind":"agree","body":"x"}]}`)), 2, "invalid"},
+		{"replies that are a review", postRepliesArgs(writeReviewFile(t, `{"event":"COMMENT","body":"x","comments":[]}`)), 2, "invalid"},
+		{"empty replies", postRepliesArgs(writeReviewFile(t, `{"replies":[]}`)), 0, "replied"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

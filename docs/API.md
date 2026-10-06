@@ -255,6 +255,10 @@ const OwnFindingsFile = "judge-own.md"
     report directory (JudgeData.OwnFindings): its findings, their proofs and the
     checks it ran.
 
+const PostRepliesFile = "replies.json"
+    PostRepliesFile is the file the judge of a reply round writes its thread
+    replies to for `magnum post-review --replies` (JudgeData.RepliesFile).
+
 const PostReviewFile = "review.json"
     PostReviewFile is the file the judge writes its review to for
     `magnum post-review`, in the report directory next to its result file
@@ -379,6 +383,12 @@ func NotesLockLine(lock string) string
 
 func NotesUnlockLine(lock string) string
     NotesUnlockLine is the shell line that releases the notes lock.
+
+func PostRepliesLine(d JudgeData) string
+    PostRepliesLine is the shell line the judge of a reply round runs to answer
+    in its threads instead of posting a review (JudgeData.PostRepliesCommand,
+    `post_replies`): the post_review line with --replies and the replies file in
+    place of --review.
 
 func PostReviewLine(d JudgeData) string
     PostReviewLine is the shell line the judge runs to post its review
@@ -678,7 +688,20 @@ type JudgeData struct {
 	// prompt asks it to re-decide its earlier findings from the replies and
 	// comments since, running no check that review already ran. Rendered as
 	// one instruction, only then.
-	SameHead        bool
+	SameHead bool
+	// Replies (rereview, recovery; with SameHead): a reply round: Replies
+	// replies came on the judge's review since it last read the threads,
+	// with no new commits. When its verdict and event stay those of its
+	// last review, the judge posts no review but answers in the threads
+	// with PostRepliesCommand (PostRepliesLine, rendered as
+	// `post_replies`), which posts RepliesFile (<report dir>/replies.json,
+	// derived from ResultFile when empty); both always derived, and empty
+	// outside a reply round. 0 = not a reply round.
+	Replies                         int
+	RepliesFile, PostRepliesCommand string
+	// StopThreads counts the threads of Threads marked Stop: the prompt
+	// says not to reply there again.
+	StopThreads     int
 	MovedFrom       string // previous checkout path when the PR changed slots
 	PreviousReviews []PreviousReview
 	// Threads are the inline threads the reviewer login started on the PR,
@@ -1296,6 +1319,12 @@ type ReviewThread struct {
 	Resolved  bool          `json:"resolved"`
 	Outdated  bool          `json:"outdated"`
 	Replies   []ThreadReply `json:"replies"` // oldest first
+	// Rebuttals counts the reviewer's rebuttals in the thread: its replies
+	// of kind rebuttal, and those without a kind (magnum's earlier rebuttals
+	// carried no reply marker). Stop: after two of them someone answered
+	// again; the judge replies there no more, and magnum asks the operator.
+	Rebuttals int  `json:"rebuttals,omitempty"`
+	Stop      bool `json:"stop,omitempty"`
 }
     ReviewThread is an inline thread the reviewer login started on the PR
     (JudgeData.Threads), as magnum writes it to the threads file.
@@ -1415,8 +1444,11 @@ type ShellData struct {
 type ThreadReply struct {
 	ID     int64  `json:"id"` // REST comment id
 	Author string `json:"author"`
-	// Own: the reviewer login wrote it (an earlier rebuttal); it has no Class.
-	Own bool `json:"own,omitempty"`
+	// Own: the reviewer login wrote it (an earlier rebuttal or answer); it
+	// has no Class. Kind is what its reply marker says it was (ack,
+	// rebuttal, answer; "" without a marker).
+	Own  bool   `json:"own,omitempty"`
+	Kind string `json:"kind,omitempty"`
 	// Class is what the reply's first clause claims (past an
 	// acknowledgement such as "Good catch,"): fixed, not a bug, won't fix or
 	// other.
@@ -2680,6 +2712,14 @@ type Daemon struct {
 	// counted from the later of that and the last push. Such a requested
 	// round skips every other timing rule and the daily cap; 0 = no wait.
 	RequestDebounce Duration `toml:"request_debounce"`
+	// ReplyDebounce is how long after the last reply on magnum's latest
+	// review (the PR author's review or comment, or anyone's reply in one of
+	// magnum's threads) a reviewed PR whose head has not moved waits before
+	// its judge alone re-decides the threads; 0 = replies start no round.
+	// ReplyMinInterval spaces such rounds of one PR and head (0 = no wait).
+	// A push meanwhile wins: the re-review it gets reads the replies.
+	ReplyDebounce    Duration `toml:"reply_debounce"`
+	ReplyMinInterval Duration `toml:"reply_min_interval"`
 	// RereviewMinLines is the smallest unreviewed delta an automatic
 	// re-review runs for after the quiet period: changed lines (additions
 	// plus deletions) the trivial-delta classifier counts as code, since the
@@ -3658,6 +3698,8 @@ const (
 	ReasonRequested = "review requested"
 	// ReasonSmallDelta starts the reason of the re-review threshold.
 	ReasonSmallDelta = "small delta"
+	// ReasonReplies starts the reasons of the reply debounce and interval.
+	ReasonReplies = "replies to the review"
 )
     Reason prefixes of two rules (ThrottleDecision.Rule is the code to tell the
     rules apart by).
@@ -3737,6 +3779,13 @@ type PRFacts struct {
 	// ready for review) arrived that no round has started for yet; zero =
 	// none. Throttle then holds the PR only for the request debounce.
 	RequestedAt time.Time
+	// RepliedAt is the latest reply on magnum's review its judge has not
+	// re-decided, on a head magnum reviewed (no push since); zero = none.
+	// Throttle then holds the PR only for the reply debounce and the reply
+	// interval since ReplyRoundAt, the start of the last round such replies
+	// started on that head (zero = none).
+	RepliedAt    time.Time
+	ReplyRoundAt time.Time
 
 	// The unreviewed delta (ReviewedSHA...HeadSHA) for the re-review
 	// threshold. DeltaKnown is false when it was not measured, or a file of
@@ -3768,6 +3817,8 @@ const (
 	RuleDraftInterval Rule = "draft_interval" // the same for a draft
 	RuleCap           Rule = "cap"            // the daily round cap
 	RuleSmallDelta    Rule = "small_delta"    // the re-review threshold
+	RuleReplies       Rule = "replies"        // the reply debounce
+	RuleReplyInterval Rule = "reply_interval" // one reply round per PR and head per reply_min_interval
 )
     The rules Throttle applies.
 
@@ -3813,6 +3864,10 @@ func Throttle(d config.Daemon, f PRFacts, now time.Time) ThrottleDecision
         gets a delta check (DeltaCheck): it is cheap, so it does not wait.
       - Requested (RequestedAt set): every rule above is skipped; the PR waits
         only RequestDebounce after the later of RequestedAt and HeadChangedAt.
+      - Replies (RepliedAt set, no request): every rule above is skipped too;
+        the PR waits ReplyDebounce after RepliedAt and ReplyMinInterval after
+        ReplyRoundAt (the caller sets RepliedAt only while no push came since
+        the review: a push wins, and its re-review reads the replies).
       - Forced bypasses all of it: always ready.
 
     A zero timestamp or zero duration never blocks. When several rules hold
@@ -4026,6 +4081,8 @@ const (
 	WaitCap           = "cap"            // the daily round cap
 	WaitDelta         = "delta"          // the re-review threshold: a small delta waits for more
 	WaitRequested     = "requested"      // a review request (or ready for review): the debounce, then the next dispatch
+	WaitReplies       = "replies"        // replies on the review: the reply debounce after the last one
+	WaitReplyInterval = "reply_interval" // one reply round per PR and head every reply_min_interval
 	WaitRetry         = "retry"          // the backoff after a failed round
 	WaitMuted         = "muted"          // magnum mute
 	WaitQuietHours    = "quiet_hours"    // [daemon] quiet_hours
@@ -4212,6 +4269,11 @@ func KVPRManualVerdict(prID int64) string
     never dismiss it as their own stale review (it is the reviewer's decision),
     while an approval still follows the head (approval.go).
 
+func KVPRReplyRound(prID int64) string
+    KVPRReplyRound holds the last reply round of a PR (ReplyRound as JSON):
+    the head it ran on and when it started, for reply_min_interval, and whether
+    a continued turn of it may still end replied.
+
 func KVPRRequestAt(prID int64) string
     KVPRRequestAt holds the time of the newest review request magnum handled
     for a PR (the edge it reacted to); KVPRRequestBy who asked: the login of the
@@ -4221,6 +4283,11 @@ func KVPRRequestBy(prID int64) string
 func KVPRSkippedBaseline(prID int64) string
     KVPRSkippedBaseline marks a baseline PR skipBaseline made ineligible:
     its value is the head it was skipped on.
+
+func KVPRStalemate(prID int64) string
+    KVPRStalemate holds the threads of a PR where magnum stopped arguing and
+    the operator has not acted since (Stalemate as JSON); the board flags the PR
+    while it is set.
 
 func KVPRTrivial(prID int64) string
     KVPRTrivial holds the last push magnum skipped as trivial for a PR
@@ -4835,6 +4902,13 @@ type RepairPayload struct {
     RepairPayload re-runs provisioning of a free, broken, provisioning or lost
     pool slot.
 
+type ReplyRound struct {
+	Head    string    `json:"head"`
+	At      time.Time `json:"at"`
+	Replies int       `json:"replies"`
+}
+    ReplyRound is a reply round as KVPRReplyRound records it.
+
 type Request struct {
 	At time.Time
 	By string // a login, or RequestReadyForReview
@@ -4908,6 +4982,12 @@ type ReviewPayload struct {
 	// writes its planned review and posts nothing; afterwards the PR returns
 	// to the state it had (reviewed_sha does not move).
 	DryRun bool `json:"dry_run,omitempty"`
+	// Replies asks the judge alone to re-decide the replies on its review
+	// now (`magnum review --replies`, the board's r on a PR with replies): a
+	// reply round, which answers in the threads unless the verdict changes.
+	// It takes a head magnum reviewed and replies it has not re-decided;
+	// otherwise the round is an ordinary forced one.
+	Replies bool `json:"replies,omitempty"`
 }
     ReviewPayload is a `magnum review` request: a forced round that bypasses
     eligibility, the throttle and quiet hours. On a PR GitHub merged it is a
@@ -4960,6 +5040,22 @@ type StaleCheck struct {
 func CheckStale(ctx context.Context, st *store.Store, nr notes.Repo, p store.NotesProposal) (StaleCheck, error)
     CheckStale reads p's base and proposed states and the notes now and,
     when the notes are no longer p's base, merges both sides' changes.
+
+type Stalemate struct {
+	Threads []StalemateThread `json:"threads"`
+}
+    Stalemate is the threads where magnum stopped arguing (KVPRStalemate).
+
+func ParseStalemate(s string) (Stalemate, bool)
+    ParseStalemate reads a KVPRStalemate value; ok is false for "" or a value it
+    cannot read or that names no thread.
+
+type StalemateThread struct {
+	ID        string `json:"id"`
+	URL       string `json:"url"`
+	LastReply int64  `json:"last_reply"`
+}
+    StalemateThread is one of them.
 
 type TargetPayload struct {
 	PRTarget
@@ -5018,6 +5114,9 @@ type Wait struct {
 	// DeltaCheck: the round it waits for is a delta check, the judge alone
 	// on a small delta (deltaCheckDue).
 	DeltaCheck bool `json:"delta_check,omitempty"`
+	// Replies: the round it waits for is a reply round re-deciding that
+	// many replies on the review (replyTrigger).
+	Replies int `json:"replies,omitempty"`
 }
     Wait is why a PR waiting for a round has none yet (KVPRWait).
 
@@ -5795,6 +5894,13 @@ func (c *Client) Radar(ctx context.Context, org string) ([]RepoRadar, RateLimit,
     When a later page fails it still carries what the earlier pages reported,
     so the caller can pause on a low budget.
 
+func (c *Client) ReplyToReviewComment(ctx context.Context, owner, repo string, number int, commentID int64, body string) (ReviewCommentReply, error)
+    ReplyToReviewComment posts body as a reply in the thread whose first comment
+    is commentID (POST /repos/{o}/{r}/pulls/{n}/comments/{id}/replies) as the
+    client's identity, the request {"body": …} sent as JSON on gh's stdin so no
+    text reaches argv. GitHub refuses a reply to a reply, so commentID is the
+    thread's first comment. It is marked Mutates, so execx.DryRun only plans it.
+
 func (c *Client) RequiredChecks(ctx context.Context, owner, repo, branch string) (checks []string, known bool, err error)
     RequiredChecks reads the status checks a pull request into
     branch of owner/repo must pass: the contexts of the rulesets'
@@ -5980,6 +6086,11 @@ type PRDetails struct {
 	// ReviewGate is what GitHub's merge gate says of the reviews; nil when
 	// GitHub returned no reviewDecision or latestOpinionatedReviews.
 	ReviewGate *ReviewGate
+	// Remarks are the submitted reviews and issue comments among the
+	// activity timeline's last ten items, as it lists them (oldest first);
+	// nil when GitHub returned no timeline. A reply in a review thread is a
+	// review of its own.
+	Remarks []Remark
 }
     PRDetails is what the poller stores for a pull request whose radar row
     changed. Logins are GraphQL logins, which never carry the "[bot]" suffix;
@@ -6060,6 +6171,21 @@ type RateLimit struct {
 }
     RateLimit is GitHub's GraphQL rateLimit{} block.
 
+type Remark struct {
+	Review bool      // a submitted review (a reply in a thread is one); false: an issue comment
+	At     time.Time // the review's submittedAt, the comment's createdAt
+	Author string    // Account form ("app[bot]" for a bot); "" for a ghost
+	Bot    bool      // the author is a bot
+	// Answers are the authors (Account form) of the threads the review's
+	// inline comments reply to: GitHub's replyTo, a thread's first comment.
+	// They are read for the timeline's last two reviews only
+	// (AnswersKnown); a review that starts threads answers none.
+	Answers      []string
+	AnswersKnown bool
+}
+    Remark is a submitted review or an issue comment on a pull request
+    (PRDetails.Remarks): who wrote it and when, never what it says.
+
 type RepoRadar struct {
 	NodeID        string
 	NameWithOwner string    // "talkable/talkable"
@@ -6091,6 +6217,13 @@ type ReviewComment struct {
 	HTMLURL string
 }
     ReviewComment is one inline comment of a review as REST reports it.
+
+type ReviewCommentReply struct {
+	ID        int64     // REST comment id
+	URL       string    // html_url
+	CreatedAt time.Time // created_at
+}
+    ReviewCommentReply is a reply posted to a review thread.
 
 type ReviewDismissal struct {
 	ReviewID int64  // the dismissed review's REST id; 0 when the review is gone
@@ -8962,6 +9095,7 @@ const (
 
 const (
 	OutcomePosted         = "posted"          // review verified on GitHub (marker, login, commit)
+	OutcomeReplied        = "replied"         // a reply round answered in its threads, no new review: verified by its replies on GitHub
 	OutcomeDryRun         = "dry_run"         // dry run: the judge wrote planned_review, nothing posted
 	OutcomeBlocked        = "blocked"         // the judge reported a blocker, or waits on a dialog
 	OutcomeIdentityError  = "identity_error"  // the judge's identity check failed; nothing posted
@@ -9195,6 +9329,15 @@ type Pause struct {
 }
     Pause asks the engine to pause an agent kind.
 
+type PostedReply struct {
+	CommentID int64  // the thread's first comment
+	ID        int64  // the reply's REST comment id
+	Kind      string // ack | rebuttal | answer
+	URL       string
+}
+    PostedReply is a reply a replied round's judge posted in one of its threads,
+    as GitHub shows it.
+
 type PreviousReview struct {
 	ID          int64
 	Event       string // review state: APPROVED | COMMENTED | CHANGES_REQUESTED (REQUEST_CHANGES accepted)
@@ -9358,6 +9501,13 @@ type RoundInput struct {
 	// commits: Roles hold the judge alone, which re-decides its earlier
 	// findings from the replies (JudgeData.SameHead) at its rereview effort.
 	SameHead bool
+	// Replies (with SameHead, or a continue of such a round): the round is
+	// a reply round: that many replies came on the judge's review since it
+	// last read the threads (JudgeData.Replies). When its verdict and event
+	// stay, the judge answers in its threads (post-review --replies) and
+	// posts no review: the round ends OutcomeReplied, verified by the
+	// replies carrying its run's reply marker. 0 = an ordinary round.
+	Replies int
 	// ColdJudge (recovery): the judge alone started in a fresh session
 	// because its conversation's prompt cache had gone cold ([pipeline]
 	// judge_fresh_after), while the reviewers kept theirs: the judge gets
@@ -9452,6 +9602,20 @@ type RoundResult struct {
 	DismissedReviewID int64 // the stale CHANGES_REQUESTED review dismissed after posting
 	Warnings          []string
 	Error             string
+
+	// Replies are the thread replies of a replied round (OutcomeReplied),
+	// as GitHub shows them; none when the judge found nothing to answer.
+	Replies []PostedReply
+	// JudgePromptedAt is when the judge's first prompt of the round went
+	// out: the replies and comments it re-decided are those it could read
+	// then (zero: no judge prompt).
+	JudgePromptedAt time.Time
+	// ThreadsRead: the round read the reviewer's threads before the judge's
+	// prompt (re-reviews and recoveries), so Stops is what they say now.
+	// Stops are the threads marked stop (agents.ReviewThread.Stop): after
+	// two of the reviewer's rebuttals someone answered again.
+	ThreadsRead bool
+	Stops       []StopThread
 }
     RoundResult is the round's verdict. The engine decides the PR state from
     Outcome (and Pause).
@@ -9501,6 +9665,14 @@ func (r *Runner) RunRound(ctx context.Context, in RoundInput) (RoundResult, erro
     abandoned; runs already sent stay submitted/working when ctx is cancelled
     (they are observed, never re-sent).
 
+type StopThread struct {
+	ID        string // GraphQL node id
+	URL       string // its first comment's
+	LastReply int64  // the answer after the second rebuttal (the thread's last reply)
+}
+    StopThread is a thread where the reviewer stopped arguing
+    (agents.ReviewThread.Stop).
+
 type Switched struct {
 	TargetSHA   string // the commit now checked out (a fetch may find a newer one); "" = the one asked for
 	BaseSHA     string // its merge base with the base ("" = unknown: the round keeps the old one)
@@ -9527,12 +9699,22 @@ package postreview // import "github.com/zhuravel/magnum/internal/postreview"
 Package postreview is `magnum post-review`, the judge's posting tool.
 The judge writes its review (event, body, inline comments) to a file; Run checks
 it (the fields, then every inline anchor against the pull request's diff),
-posts it once as the judge's identity (never twice: a review carrying the
-run's marker counts as posted) and reads it back. It works from its Options,
-gh and git in the checkout alone: it loads no config, opens no registry,
-never contacts the daemon and writes no file.
+posts it once as the judge's identity (never twice: a review carrying the run's
+marker counts as posted) and reads it back. RunReplies is its replies-only mode:
+when authors answered the judge's threads and the head is unchanged, the judge
+answers in the threads instead, each reply carrying a hidden marker the daemon
+verifies and counts rebuttals by. It works from its Options, gh and git in the
+checkout alone: it loads no config, opens no registry, never contacts the daemon
+and writes no file.
 
 CONSTANTS
+
+const (
+	ReplyAck      = "ack"      // a reason the judge accepts: one short acknowledgement
+	ReplyRebuttal = "rebuttal" // the judge keeps the finding: one sentence with evidence
+	ReplyAnswer   = "answer"   // an answer to a question
+)
+    Reply kinds (Reply.Kind).
 
 const (
 	StatusPosted           = "posted"            // posted and read back
@@ -9567,8 +9749,20 @@ const MaxBody = 65536
     MaxBody is GitHub's limit for a review body and for a comment body,
     in characters.
 
+const StatusReplied = "replied"
+    StatusReplied: the replies are posted, or were all posted already.
+
 
 FUNCTIONS
+
+func ParseReplyMarker(body string) (runID, kind string, ok bool)
+    ParseReplyMarker reads the reply marker in body: its run id and kind;
+    ok is false when body has none.
+
+func ReplyMarker(runID, kind string) string
+    ReplyMarker is the line every reply of run carries: `<!-- magnum:reply
+    run=<run id> kind=<kind> -->`. The daemon finds a round's replies on GitHub
+    by it, and counts magnum's rebuttals per thread.
 
 func RunMarker(runID, head string) string
     RunMarker is the line every review of run carries, on head: `<!--
@@ -9614,6 +9808,9 @@ type GitHub interface {
 	SubmitReview(ctx context.Context, owner, repo string, number int, r github.ReviewRequest) (github.RESTReview, error)
 	ReviewREST(ctx context.Context, owner, repo string, number int, id int64) (github.RESTReview, error)
 	ReviewComments(ctx context.Context, owner, repo string, number int, reviewID int64) ([]github.ReviewComment, error)
+	// ReviewThreads and ReplyToReviewComment are RunReplies's.
+	ReviewThreads(ctx context.Context, owner, repo string, number int) ([]github.Thread, error)
+	ReplyToReviewComment(ctx context.Context, owner, repo string, number int, commentID int64, body string) (github.ReviewCommentReply, error)
 }
     GitHub is what Run reads and writes on GitHub (*github.Client, as the
     judge's identity).
@@ -9641,7 +9838,7 @@ func (o Options) Check() error
 type Outcome struct {
 	Status  string `json:"status"`
 	Message string `json:"message,omitempty"` // what went wrong (error, rejected), or what was found
-	// Problems are the review file's faults (invalid).
+	// Problems are the review or replies file's faults (invalid).
 	Problems []string `json:"problems,omitempty"`
 	// InvalidAnchors are the comments off the diff (invalid_anchors).
 	InvalidAnchors []BadAnchor `json:"invalid_anchors,omitempty"`
@@ -9666,6 +9863,9 @@ type Outcome struct {
 	Mismatches []string `json:"mismatches,omitempty"`
 	// PlannedReview is the request a dry run would have sent.
 	PlannedReview *github.ReviewRequest `json:"planned_review,omitempty"`
+	// Replies are the replies RunReplies posted (so far, after a failure),
+	// found already posted, or planned in a dry run, in the file's order.
+	Replies []PostedReply `json:"replies,omitempty"`
 }
     Outcome is what Run printed: a status and its details. ExitCode maps it to
     the command's exit status.
@@ -9676,12 +9876,44 @@ func Run(ctx context.Context, d Deps, o Options, data []byte) Outcome
     already carrying the run's marker, then post (or, in a dry run, plan) the
     review once and read it back.
 
+func RunReplies(ctx context.Context, d Deps, o Options, data []byte) Outcome
+    RunReplies posts the judge's replies file data for the run o names (o's head
+    is only checked for form: a reply answers a thread, whatever its commit).
+    It checks the file, reads the review threads once, and checks that each
+    reply answers the first comment of a thread of the reviewer (or a former
+    login) and that magnum has not already rebutted twice there; a thread
+    that already holds a reply carrying the run's marker gets nothing more,
+    so the tool is safe to run again after a failure. Then it posts the replies
+    in file order (or, in a dry run, plans them) and stops at the first failure.
+
 func (o Outcome) ExitCode() int
-    ExitCode is 0 for posted, already posted and a dry run, 2 when the judge
-    must fix its review file, 1 otherwise.
+    ExitCode is 0 for posted, already posted, replied and a dry run, 2 when the
+    judge must fix its file, 1 otherwise.
 
 func (o Outcome) Summary() string
     Summary is the outcome in one human line (ids and counts, no PR text).
+
+type PostedReply struct {
+	CommentID int64  `json:"comment_id"`
+	ID        int64  `json:"id,omitempty"`
+	URL       string `json:"url,omitempty"`
+	Kind      string `json:"kind"`
+	Already   bool   `json:"already,omitempty"` // posted by an earlier run of the tool for this run id: not posted again
+}
+    PostedReply is a reply RunReplies posted, found already posted by this run,
+    or (dry run) planned.
+
+type RepliesFile struct {
+	Replies []Reply `json:"replies"`
+}
+    RepliesFile is the file the judge writes for --replies.
+
+type Reply struct {
+	CommentID int64  `json:"comment_id"` // the thread's first comment (threads_file's comment_id)
+	Kind      string `json:"kind"`
+	Body      string `json:"body"`
+}
+    Reply is one answer in a review thread.
 
 type Review struct {
 	Event    string                `json:"event"`
@@ -11108,6 +11340,9 @@ type BoardRow struct {
 	// ReviewGate is what GitHub's merge gate said of the reviews at the last
 	// Details fetch (prs.review_gate_json); nil until then.
 	ReviewGate *ReviewGate `json:"review_gate"`
+	// PendingReplies counts the replies to magnum's review its judge has
+	// not re-decided yet (PendingReplies).
+	PendingReplies int `json:"pending_replies"`
 }
     BoardRow is one PR as the board shows it: the prs row flattened with its
     repository and its current slot. Empty strings, zero times and nil pointers
@@ -11282,6 +11517,10 @@ type GitHubPR struct {
 	// ReviewGate is the Details' review gate (nil = keep the stored one).
 	// Not Changed either: it moves no eligibility.
 	ReviewGate *ReviewGate
+	// Replies are the Details' replies to magnum's reviews (nil = keep the
+	// stored ones; empty = none). Not Changed either: they move no
+	// eligibility (the engine reads them, PendingReplies).
+	Replies []Reply
 
 	// InitialState and Identity are used only when the PR is new.
 	InitialState string
@@ -11597,6 +11836,12 @@ type PR struct {
 	// ReviewGate (migration 0019, review_gate_json) is what GitHub's merge
 	// gate said of the reviews at the last Details fetch; nil until then.
 	ReviewGate *ReviewGate `json:"review_gate"`
+	// Replies (migration 0022, replies_json) are the reviews and issue
+	// comments that may answer magnum's review, as the last Details read
+	// listed them (oldest first; nil until then), and RepliesReadAt when
+	// magnum's judge last read the threads; PendingReplies are those after.
+	Replies       []Reply    `json:"replies"`
+	RepliesReadAt *time.Time `json:"replies_read_at"`
 }
     PR is one pull request and its automation state.
 
@@ -11614,6 +11859,9 @@ func (p PR) MergedUnreviewed() bool
 func (p PR) NeedsMeFacts() NeedsMeFacts
     NeedsMeFacts are p's facts for NeedsMe; the caller adds CommentWhenClean
     and, when it WantsVerdict, Verdict.
+
+func (p PR) PendingReplies() []Reply
+    PendingReplies is PendingReplies for p.
 
 type PRAgentTime struct {
 	PRID   int64
@@ -11666,6 +11914,28 @@ type PruneResult struct {
 	Requests int64
 }
     PruneResult counts the rows Prune deleted.
+
+type Reply struct {
+	At     time.Time `json:"at"`
+	By     string    `json:"by"`               // the author's login, Account form ("" = a ghost)
+	Thread bool      `json:"thread,omitempty"` // a reply in one of magnum's threads
+}
+    Reply is a review or an issue comment that may answer magnum's review
+    of a PR (prs.replies_json, migration 0022): the PR author's own,
+    or anyone's reply in one of magnum's threads (the engine decides which,
+    from the Details' remarks). Who and when only: never what it says, which is
+    PR content.
+
+func PendingReplies(replies []Reply, reviewedSHA string, reviewedAt, readAt *time.Time) []Reply
+    PendingReplies are the replies (oldest first) magnum's judge has
+    not re-decided: those after readAt, when it last read the threads
+    (prs.replies_read_at), else after reviewedAt, its last review; every one
+    when neither time is known. A PR magnum never reviewed (reviewedSHA "") has
+    none.
+
+func (r Reply) Equal(o Reply) bool
+    Equal reports whether two replies are the same (time.Time compared with
+    Equal).
 
 type Repo struct {
 	ID            int64      `json:"id"`
@@ -13096,6 +13366,15 @@ type PRBoardRow struct {
 	GitHubUpdatedAt time.Time
 	HeadSHA         string
 	LastReview      *ReviewInfo // the latest review magnum knows of; nil when none
+	// Replies counts the replies on magnum's review its judge has not
+	// re-decided yet: LAST REVIEW shows "↩N" and r re-decides them now (the
+	// judge alone) while the head is the reviewed one.
+	Replies int
+	// Stalemate are the URLs of the threads where magnum stopped arguing
+	// after two rebuttals, which wait for the operator: the title cell
+	// carries the attention mark and the card's NEEDS YOU says what to do.
+	// Empty when magnum argues in none (or the operator has acted).
+	Stalemate []string
 	// Findings is what magnum's latest posted review concluded (its findings
 	// by priority, simplifications and verdict), also where it could only
 	// comment; nil when magnum has not reviewed the PR.
@@ -13379,6 +13658,10 @@ type ReviewInfo struct {
 type ReviewOpts struct {
 	Fresh    bool // new agent sessions instead of resuming
 	Simplify bool // run the role aliased simplify this round (magnum review --simplify)
+	// Replies has the judge alone re-decide the replies on its review now
+	// (magnum review --replies): a reply round on the head magnum reviewed.
+	// It excludes the other variants.
+	Replies bool
 }
     ReviewOpts are the review variants the screens ask for. A forced round
     reviews the head even when it was reviewed already, so there is no "again"

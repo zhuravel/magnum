@@ -160,6 +160,12 @@ func (c *Config) Validate() error {
 	if c.Daemon.RequestDebounce.Duration < 0 {
 		errs = append(errs, errors.New("daemon.request_debounce must not be negative"))
 	}
+	if c.Daemon.ReplyDebounce.Duration < 0 {
+		errs = append(errs, errors.New("daemon.reply_debounce must not be negative"))
+	}
+	if c.Daemon.ReplyMinInterval.Duration < 0 {
+		errs = append(errs, errors.New("daemon.reply_min_interval must not be negative"))
+	}
 	if c.Daemon.ModelLimitCooldown.Duration < time.Minute {
 		errs = append(errs, fmt.Errorf("daemon.model_limit_cooldown must be at least 1m, got %s", c.Daemon.ModelLimitCooldown.Duration))
 	}

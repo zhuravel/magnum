@@ -66,6 +66,17 @@ func reviewQuestion(ref string, o ReviewOpts, facts string) string {
 	return q + "?"
 }
 
+// repliesQuestion asks before the judge alone re-decides the n replies on
+// magnum's review of ref (a reply round on the reviewed head, what r does on a
+// row with replies waiting), then facts as reviewQuestion does.
+func repliesQuestion(ref string, n int, facts string) string {
+	q := "Judge re-decides " + textx.Count(n, "reply", "replies") + " on " + ref + " now (judge only"
+	if facts != "" {
+		q += "; " + facts
+	}
+	return q + ")?"
+}
+
 // postMergeQuestion asks before a post-merge review of ref, a PR GitHub
 // merged before magnum reviewed its last push: what the variant does, and
 // that the review only comments (there is nothing left to approve or block).

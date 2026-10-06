@@ -19,6 +19,7 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/eligibility"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // KVPRAttention holds why the engine parked a PR in needs_attention (the
@@ -38,6 +39,8 @@ const (
 	WaitCap           = "cap"            // the daily round cap
 	WaitDelta         = "delta"          // the re-review threshold: a small delta waits for more
 	WaitRequested     = "requested"      // a review request (or ready for review): the debounce, then the next dispatch
+	WaitReplies       = "replies"        // replies on the review: the reply debounce after the last one
+	WaitReplyInterval = "reply_interval" // one reply round per PR and head every reply_min_interval
 	WaitRetry         = "retry"          // the backoff after a failed round
 	WaitMuted         = "muted"          // magnum mute
 	WaitQuietHours    = "quiet_hours"    // [daemon] quiet_hours
@@ -72,6 +75,9 @@ type Wait struct {
 	// DeltaCheck: the round it waits for is a delta check, the judge alone
 	// on a small delta (deltaCheckDue).
 	DeltaCheck bool `json:"delta_check,omitempty"`
+	// Replies: the round it waits for is a reply round re-deciding that
+	// many replies on the review (replyTrigger).
+	Replies int `json:"replies,omitempty"`
 }
 
 // ParseWait reads a KVPRWait value; ok is false for "" or a value it cannot
@@ -90,6 +96,8 @@ func (w Wait) kind() string {
 		return "post-merge review"
 	case w.DeltaCheck:
 		return "delta check"
+	case w.Replies > 0:
+		return "re-decision"
 	case w.Rereview:
 		return "re-review"
 	}
@@ -131,6 +139,10 @@ func (w Wait) Short(now time.Time) string {
 		return s + " → now"
 	case WaitDelta:
 		what = fmt.Sprintf("small delta %d/%d lines", w.Count, w.Max)
+	case WaitReplies:
+		what = textx.Count(w.Count, "reply", "replies")
+	case WaitReplyInterval:
+		what = "reply interval"
 	case WaitQuiet:
 		what = "quiet"
 	case WaitBurst:
@@ -219,6 +231,8 @@ func (w Wait) Sentence(ref string, now time.Time) string {
 	}
 	switch {
 	case w.Forced || w.Reason == WaitNext || requestedNow:
+	case (w.Reason == WaitReplies || w.Reason == WaitReplyInterval) && ref != "":
+		s += "; `magnum review --replies " + ref + "` runs it now"
 	case w.overridable() && ref != "":
 		s += "; `magnum review " + ref + "` runs it now"
 	case w.Reason == WaitMuted && ref != "":
@@ -287,8 +301,11 @@ func (e *Engine) waitFor(ctx context.Context, pr store.PR, global *Wait, now tim
 		f = e.throttleFacts(ctx, pr, e.factsFor(ctx, pr, *w, now))
 		base.DeltaCheck = base.Rereview && e.deltaCheckDue(ctx, *w, pr, f, !f.RequestedAt.IsZero())
 	}
+	if !f.RepliedAt.IsZero() {
+		_, base.Replies, _ = e.replyTrigger(ctx, pr)
+	}
 	with := func(w Wait) Wait {
-		w.Rereview, w.Forced, w.PostMerge, w.DeltaCheck = base.Rereview, base.Forced, base.PostMerge, base.DeltaCheck
+		w.Rereview, w.Forced, w.PostMerge, w.DeltaCheck, w.Replies = base.Rereview, base.Forced, base.PostMerge, base.DeltaCheck, base.Replies
 		return w
 	}
 	if pr.NextAttemptAt != nil && pr.NextAttemptAt.After(now) {
@@ -330,6 +347,13 @@ func (e *Engine) throttleWait(ctx context.Context, pr store.PR, w config.Watch, 
 		req, _ := e.pendingRequest(ctx, pr)
 		return Wait{Reason: WaitRequested, Until: until, Subject: req.Phrase(),
 			Detail: fmt.Sprintf("the request debounce (%s after the request or the last push)", humanDuration(d.RequestDebounce.Duration))}
+	case eligibility.RuleReplies:
+		_, n, _ := e.replyTrigger(ctx, pr)
+		return Wait{Reason: WaitReplies, Until: until, Count: n,
+			Detail: fmt.Sprintf("the reply debounce (%s after the last reply)", humanDuration(d.ReplyDebounce.Duration))}
+	case eligibility.RuleReplyInterval:
+		return Wait{Reason: WaitReplyInterval, Until: until,
+			Detail: fmt.Sprintf("the reply interval (one reply round per head every %s)", humanDuration(d.ReplyMinInterval.Duration))}
 	case eligibility.RuleSmallDelta:
 		return Wait{Reason: WaitDelta, Until: until, Count: f.DeltaLines, Max: d.RereviewMinLines,
 			Detail: fmt.Sprintf("a larger delta (%d of %d changed lines since the review) or %s after its first push",

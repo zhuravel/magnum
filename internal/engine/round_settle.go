@@ -156,6 +156,7 @@ func (e *Engine) finish(ctx context.Context, job *roundJob, in pipeline.RoundInp
 	if !cancelled { // a judge a shutdown left working records its notes with the round that continues it
 		e.recordRoundNotes(ctx, job, in, res) // notes_record.go
 	}
+	e.noteStalemates(ctx, job.repo, pr, res) // stalemate.go
 
 	// Role health → pauses of the roles' agent kinds (the round itself may
 	// have posted). A model limit never pauses a kind: the pipeline switched
@@ -195,6 +196,8 @@ func (e *Engine) finish(ctx context.Context, job *roundJob, in pipeline.RoundInp
 		e.onDryRun(ctx, job, pr, in, res, from)
 	case pipeline.OutcomePosted:
 		e.onPosted(ctx, job, pr, in, res, from)
+	case pipeline.OutcomeReplied:
+		e.onReplied(ctx, job, pr, in, res, from) // replies.go
 	case pipeline.OutcomeUsageLimit, pipeline.OutcomeLoginRequired:
 		e.toPaused(ctx, pr, from, outcome+": "+msg, time.Time{}, nil)
 	case pipeline.OutcomeOverloaded:
@@ -293,7 +296,9 @@ func (e *Engine) onPosted(ctx context.Context, job *roundJob, pr store.PR, in pi
 		}
 	}
 	login := e.reviewerLogin(pr.Identity)
+	readAt := repliesReadAt(in.Kind, res, pr.LastRoundStartedAt, now)
 	recordReview := func(u *store.PRUpdate) {
+		u.Set("replies_read_at", readAt)
 		u.Set("reviewed_sha", reviewed)
 		if res.ReviewID != 0 {
 			u.Set("last_review_id", res.ReviewID)
@@ -379,9 +384,14 @@ func (e *Engine) onPosted(ctx context.Context, job *roundJob, pr store.PR, in pi
 	}
 	e.settleKeptApproval(ctx, job.repo, pr, target, res)
 	e.dismissFormer(ctx, job, pr, target, res)
-	e.delKV(ctx, kvPRDryRun(pr.ID)) // the forced request is served
+	e.delKV(ctx, kvPRDryRun(pr.ID), kvPRRedecide(pr.ID)) // the forced request is served
 	// The request is served; the kinds that just worked lose their backoff.
 	e.clearRequested(ctx, pr.ID)
+	if to == store.PRReviewed && err == nil { // replies that came after the judge read them
+		if err := e.considerReplies(ctx, job.repo, job.watch, pr.ID, now); err != nil {
+			e.log.Info("replies after the round", "pr", pr.ID, "err", err)
+		}
+	}
 	if k := e.cfg.JudgeFor(&job.watch).AgentKind(); k != "" {
 		e.delKV(ctx, kvToolBackoff(k))
 	}

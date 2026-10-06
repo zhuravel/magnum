@@ -165,6 +165,10 @@ func (f SourceFunc) Gather(ctx context.Context) (StatusData, error) { return f(c
 type ReviewOpts struct {
 	Fresh    bool // new agent sessions instead of resuming
 	Simplify bool // run the role aliased simplify this round (magnum review --simplify)
+	// Replies has the judge alone re-decide the replies on its review now
+	// (magnum review --replies): a reply round on the head magnum reviewed.
+	// It excludes the other variants.
+	Replies bool
 }
 
 // DashboardActions run what the dashboard's and the board's keys ask for.

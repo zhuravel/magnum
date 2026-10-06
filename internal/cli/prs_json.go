@@ -37,6 +37,8 @@ type prsJSONRow struct {
 	GitHubUpdatedAt  time.Time         `json:"github_updated_at,omitzero"` // GitHub's updatedAt, which also moves for what a reviewer never sees
 	HeadSHA          string            `json:"head_sha"`
 	LastReview       *prsJSONReview    `json:"last_review"`
+	PendingReplies   int               `json:"pending_replies"`   // replies on magnum's review its judge has not re-decided yet
+	StalemateThreads []string          `json:"stalemate_threads"` // URLs of the threads magnum stopped arguing in, waiting for you
 	Findings         *prsJSONFindings  `json:"findings"`
 	CI               *prsJSONCI        `json:"ci"`
 	Reviewers        []prsJSONReviewer `json:"reviewers"`
@@ -245,6 +247,7 @@ func prsJSONOf(r tui.PRBoardRow) prsJSONRow {
 		Issue: r.Issue, IssueURL: r.IssueURL, Draft: r.Draft, Labels: listOf(r.Labels), Assignees: listOf(r.Assignees),
 		State: r.State, SkipReason: r.SkipReason, Badges: mapList(r.Badges, prsJSONBadgeOf), GHState: r.GHState,
 		ActivityAt: r.ActivityAt, GitHubUpdatedAt: r.GitHubUpdatedAt, HeadSHA: r.HeadSHA, LastReview: mapPtr(r.LastReview, prsJSONReviewOf),
+		PendingReplies: r.Replies, StalemateThreads: listOf(r.Stalemate),
 		Findings: mapPtr(r.Findings, prsJSONFindingsOf), CI: mapPtr(r.CI, prsJSONCIOf),
 		Reviewers: mapList(r.Reviewers, prsJSONReviewerOf), SinceReview: mapPtr(r.SinceReview, prsJSONDeltaOf),
 		Slot: r.Slot, Pinned: r.Pinned, Muted: r.Muted, Notes: r.Notes, NextEligibleAt: r.NextEligibleAt,

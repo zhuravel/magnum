@@ -677,6 +677,7 @@ func (e *Engine) startup(ctx context.Context) {
 		e.event(ctx, "info", "", "daemon.drain_ended", "drain ended: the daemon restarted", nil)
 	}
 	e.noteRequestsSince(ctx)
+	e.noteRepliesSince(ctx)
 	e.warmIdentities(ctx, true)
 	e.recoverRows(ctx)
 	e.reclassifyIneligible(ctx)

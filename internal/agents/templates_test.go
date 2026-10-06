@@ -266,6 +266,15 @@ func TestRenderGolden(t *testing.T) {
 	// session or a fresh one.
 	sameHead := withNotes
 	sameHead.SameHead, sameHead.PreviousHeadSHA, sameHead.Reports = true, sameHead.HeadSHA, nil
+	// A reply round: replies came on the review with no new commits, so the
+	// judge alone re-decides the threads and may answer there instead of
+	// posting a review (post_replies), in its session or a fresh one; one
+	// thread is marked stop after two rebuttals. A continued turn of it keeps
+	// the post_replies line. An ordinary re-review names a stopped thread too.
+	replies := sameHead
+	replies.Replies, replies.StopThreads = 2, 1
+	stopped := withNotes
+	stopped.StopThreads = 2
 
 	// A round whose judge does its own pass while the reviewers work: the
 	// own-pass prompt (no reports, no posting fields) per round kind, then
@@ -347,6 +356,10 @@ func TestRenderGolden(t *testing.T) {
 		{"judge_recovery_delta_check", "judge-recovery.md", deltaCheck},
 		{"judge_rereview_same_head", "judge-rereview.md", sameHead},
 		{"judge_recovery_same_head", "judge-recovery.md", sameHead},
+		{"judge_rereview_replies", "judge-rereview.md", replies},
+		{"judge_recovery_replies", "judge-recovery.md", replies},
+		{"judge_continue_replies", "judge-continue.md", replies},
+		{"judge_rereview_stop", "judge-rereview.md", stopped},
 		{"judge_initial", "judge-initial.md", judgeFixture()},
 		{"judge_initial_blind", "judge-initial.md", blindJudge},
 		{"judge_initial_post_merge", "judge-initial.md", postMerge},

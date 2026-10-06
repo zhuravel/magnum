@@ -22,6 +22,8 @@ const (
 	runID    = "r-20261006T120000-7"
 	login    = "talkable[bot]"
 	reviews  = "repos/talkable/talkable/pulls/5/reviews"
+
+	threadComments = "repos/talkable/talkable/pulls/5/comments/"
 )
 
 func opts() Options {
@@ -70,8 +72,17 @@ type world struct {
 	gitDiffs map[string]string // path → git diff output
 	missing  map[string]bool   // commits git does not have
 
-	fake *execx.Fake
-	sent []github.ReviewRequest
+	// threads are the review threads GraphQL lists; a reply posted adds
+	// itself to its thread, as GitHub would.
+	threads    []fakeThread
+	threadsErr error
+	// replyPosts answer the reply POSTs in order (nil: the default, which
+	// creates comment 5000+n as the judge's identity).
+	replyPosts []func(c execx.Cmd) (execx.Result, error)
+
+	fake    *execx.Fake
+	sent    []github.ReviewRequest
+	replies []sentReply
 }
 
 func newWorld(t *testing.T) *world {
@@ -114,6 +125,9 @@ func (w *world) gh(c execx.Cmd) (execx.Result, error) {
 		w.t.Fatalf("unexpected gh call %q", args)
 	}
 	if args[1] == "graphql" {
+		if strings.Contains(string(c.Stdin), "reviewThreads") {
+			return w.listThreads()
+		}
 		if w.listErr != nil {
 			return execx.Result{}, w.listErr
 		}
@@ -142,6 +156,9 @@ func (w *world) gh(c execx.Cmd) (execx.Result, error) {
 		}
 		return ok(map[string]any{"id": 900, "html_url": "https://github.com/talkable/talkable/pull/5#pullrequestreview-900",
 			"state": reviewState(req.Event), "commit_id": req.CommitID, "user": map[string]any{"login": login, "type": "Bot"}})
+	}
+	if len(args) > 3 && args[1] == "-X" && args[2] == "POST" && strings.HasPrefix(args[3], threadComments) && strings.HasSuffix(args[3], "/replies") {
+		return w.postReply(c, args[3])
 	}
 	path := args[1]
 	switch {
@@ -234,4 +251,89 @@ func comment(path string, line int, extra string) string {
 		s += "," + extra
 	}
 	return s + "}"
+}
+
+// fakeThread is a review thread as GraphQL lists it; its first comment
+// starts it.
+type fakeThread struct {
+	Comments []fakeComment
+}
+
+// fakeComment is a review comment of a thread.
+type fakeComment struct {
+	ID     int64
+	Author string // GraphQL login, no [bot]
+	Bot    bool
+	Body   string
+}
+
+// sentReply is a reply as the client posted it.
+type sentReply struct {
+	CommentID int64
+	Body      string
+}
+
+// bot is a comment of the judge's identity (login "talkable[bot]").
+func bot(id int64, body string) fakeComment {
+	return fakeComment{ID: id, Author: "talkable", Bot: true, Body: body}
+}
+
+// human is a comment of the pull request's author.
+func human(id int64, body string) fakeComment {
+	return fakeComment{ID: id, Author: "alice", Body: body}
+}
+
+// thread is a review thread of the given comments, the first one starting it.
+func thread(comments ...fakeComment) fakeThread { return fakeThread{Comments: comments} }
+
+func (w *world) listThreads() (execx.Result, error) {
+	if w.threadsErr != nil {
+		return execx.Result{}, w.threadsErr
+	}
+	nodes := []map[string]any{}
+	for i, t := range w.threads {
+		comments := []map[string]any{}
+		for _, c := range t.Comments {
+			typ := "User"
+			if c.Bot {
+				typ = "Bot"
+			}
+			comments = append(comments, map[string]any{"databaseId": c.ID, "body": c.Body,
+				"url":       fmt.Sprintf("https://github.com/talkable/talkable/pull/5#discussion_r%d", c.ID),
+				"createdAt": "2026-10-06T12:00:00Z", "author": map[string]any{"login": c.Author, "__typename": typ},
+				"pullRequestReview": map[string]any{"databaseId": 77}})
+		}
+		nodes = append(nodes, map[string]any{"id": fmt.Sprintf("PRRT_%d", i), "isResolved": false, "isOutdated": false,
+			"path": "app/x.rb", "line": 12, "originalLine": 12, "diffSide": "RIGHT",
+			"comments": map[string]any{"nodes": comments},
+			"root":     map[string]any{"nodes": []map[string]any{{"originalCommit": map[string]any{"oid": head}, "diffHunk": "@@ -1 +1 @@"}}}})
+	}
+	return ok(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
+		"reviewThreads": map[string]any{"pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""}, "nodes": nodes}}}}})
+}
+
+// postReply answers POST pulls/5/comments/{id}/replies.
+func (w *world) postReply(c execx.Cmd, path string) (execx.Result, error) {
+	var id int64
+	if _, err := fmt.Sscan(strings.TrimSuffix(strings.TrimPrefix(path, threadComments), "/replies"), &id); err != nil {
+		w.t.Fatalf("reply path %q", path)
+	}
+	var req struct {
+		Body string `json:"body"`
+	}
+	if err := json.Unmarshal(c.Stdin, &req); err != nil {
+		w.t.Fatalf("reply POST without a JSON body on stdin: %v", err)
+	}
+	w.replies = append(w.replies, sentReply{CommentID: id, Body: req.Body})
+	if i := len(w.replies) - 1; i < len(w.replyPosts) && w.replyPosts[i] != nil {
+		return w.replyPosts[i](c)
+	}
+	newID := int64(5000 + len(w.replies))
+	for i, t := range w.threads {
+		if len(t.Comments) > 0 && t.Comments[0].ID == id {
+			w.threads[i].Comments = append(w.threads[i].Comments, bot(newID, req.Body))
+		}
+	}
+	return ok(map[string]any{"id": newID, "html_url": fmt.Sprintf("https://github.com/talkable/talkable/pull/5#discussion_r%d", newID),
+		"created_at": "2026-10-06T12:30:00Z", "in_reply_to_id": id})
 }

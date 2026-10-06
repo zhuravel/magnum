@@ -85,7 +85,11 @@ func (f *fakeActions) Open(_ context.Context, ref string) (ActionResult, error) 
 	return f.record("open " + ref)
 }
 func (f *fakeActions) Review(_ context.Context, ref string, o ReviewOpts) (ActionResult, error) {
-	return f.record(fmt.Sprintf("review %s fresh=%t simplify=%t", ref, o.Fresh, o.Simplify))
+	call := fmt.Sprintf("review %s fresh=%t simplify=%t", ref, o.Fresh, o.Simplify)
+	if o.Replies {
+		call += " replies=true"
+	}
+	return f.record(call)
 }
 func (f *fakeActions) Pin(_ context.Context, ref string) (ActionResult, error) {
 	return f.record("pin " + ref)

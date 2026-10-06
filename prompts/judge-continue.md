@@ -28,6 +28,9 @@ related_prs: {{.RelatedPRs}}
 {{- end}}
 result_file: {{.ResultFile}}
 post_review: {{.PostReviewCommand}}
+{{- if .PostRepliesCommand}}
+post_replies: {{.PostRepliesCommand}}
+{{- end}}
 dry_run: {{.DryRun}}
 {{- if .PostMerge}}
 post_merge: true

@@ -2704,3 +2704,57 @@ editing history. Code, config comments and prompts reference these by their head
   2 and 4 is pinned by tests or calibrates priorities, and sections 3, 7 and 8 were being edited in
   parallel. Not in this change: running the down migration and the base code against the new
   schema in the slot to check revertibility (a later stage, readiness work).
+- **Replies on magnum's threads get an answer without a push** (2026-10-06). A reply triggered nothing until
+  the next push: on one PR three author replies waited 16.5 hours for a verdict, on another the operator
+  forced a 17-minute round to have a declined finding re-decided (it then approved); 69 of 75 replies come
+  from the authors' agents, which wait for a verdict. The Details the poll reads for a PR whose activity
+  moved now carry the activity timeline's reviews and issue comments with their authors, and the last two
+  reviews with the authors of the threads their inline comments answer (`replyTo`; `github.PRDetails.Remarks`).
+  GitHub's dry run (`rateLimit(dryRun: true)`, against a public repository) priced Details batches of 1, 5,
+  10, 15, 20, 30 and 40 PRs at 1, 1, 1, 2, 2, 3 and 4 points before and 1, 1, 1, 2, 3, 4 and 5 after: at most
+  one point more per batch, none for the few PRs a poll usually reads; `replyTo` on every timeline review
+  instead doubled the price (8 for 40), and the last three reviews instead of two cost 6. The replies kept
+  (`prs.replies_json`, migration 0022: when and by whom, never what they say) are, by none of magnum's
+  logins (every watch's posting identity, the PR's and its former ones): the PR author's own reviews and
+  comments ("(Claude)" replies the author's agent posts as the author are the author's; a bot author's
+  are not), and anyone's reply in one of magnum's threads, a bot's too. A teammate's review elsewhere and a
+  bot's top-level comment never count. `prs.replies_read_at` is when the judge last read the threads (its
+  prompt; a first review's verification, a continued turn's round start), and the replies after it are
+  pending (`store.PendingReplies`). A pending reply on the head magnum reviewed, newer than reply tracking
+  (`daemon.replies_since`, so an upgrade re-decides no old reply on its own), moves a reviewed PR the
+  watch's filters accept to rereview_pending, held by `eligibility.Throttle` only for `[daemon]
+  reply_debounce` (default 3m) after the last reply and `reply_min_interval` (default 2h) after the last
+  reply round on that head (`pr.<id>.reply_round`); the quiet periods, the re-review interval and the
+  daily cap do not hold it, and it does not count against the cap. A push meanwhile wins: the PR waits for
+  the re-review of the new head, whose judge reads the replies with the rest. A review request wins too
+  (the requested same-head round posts a review). The round is the same-head judge-only round
+  (`pipeline.RoundInput.Replies` with `SameHead`), its prompt (`judge-rereview.md`, `judge-recovery.md`,
+  `post_replies` in the `<magnum>` block of those and `judge-continue.md`) telling the judge: when its
+  verdict and event stay those of its last review, post no review but answer in the threads through
+  `magnum post-review --replies` (an acknowledgement for a reason it accepts, resolving being the
+  author's; one sentence with evidence for a rebuttal; an answer as deep as asked; nothing where none is
+  needed), and write `"status":"replied"`; a changed verdict posts one short review as before (auto-approval
+  follows it as it follows any review). post-review's replies mode checks each reply names the first
+  comment of a thread the reviewer login (or a former login) started, appends `<!-- magnum:reply run=<run
+  id> kind=<ack|rebuttal|answer> -->`, posts each once (a reply of the run already there is not posted
+  again) and prints what it posted. The round ends `replied`, verified by the replies with the run's
+  marker by the reviewer login on GitHub (`review-threads`), or by a replied result listing none (nothing to
+  answer); a result listing replies GitHub does not show needs attention, and so does a replied result in
+  a round that asked for a review. The judge runs are verified with outcome `replied` and no review; no
+  findings are recorded, no footer or dismissal happens; the PR goes back to reviewed with its review
+  fields as they were (`pr.replied`, `round.replied`). A reply in a thread is a review of its own, by the
+  reviewer, on the head, with no body: verification's marker-less last resort now skips a review without a
+  body. After two of magnum's rebuttals in a thread (its replies of kind rebuttal, and its unmarked replies,
+  which were rebuttals) someone's answer marks the thread `stop` in `review-threads.json`: the prompts say
+  to reply there no more, post-review refuses to, and the board flags the PR for the operator
+  (`pr.<id>.stalemate`, `pr.stalemate`) until they act on it (`magnum review`, a verdict, a mute), after which
+  only a newer answer there flags it again. The board shows `↩N` in LAST REVIEW for replies not yet
+  re-decided, the waiting state as `re-decision · 2 replies → 14:09`, and `r` on such a row asks for the
+  judge-only re-decision now (`magnum review --replies`, `ReviewPayload.Replies`), which also re-decides
+  replies older than reply tracking; a plain `magnum review` of the same head still posts a review.
+  SKILL.md is not touched (the prompts carry the reply round's instructions). Rejected: deciding at the poll
+  whether every timeline review answers magnum's threads (the doubled price above); counting a teammate's
+  top-level review or comment (an approval after magnum's review would start a judge turn that answers
+  nothing; the judge still reads them in the next round); a verdict line or review for every reply round
+  (a review that repeats the last one is noise); counting reply rounds against the daily cap (they have
+  their own interval, and would hold the next push's re-review).

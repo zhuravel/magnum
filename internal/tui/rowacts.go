@@ -114,6 +114,10 @@ type actRow struct {
 	// reviewed is the head magnum reviewed last; "" when never or unknown.
 	reviewed string
 	facts    string // what the review question says about the PR
+	// replies counts the replies on magnum's review its judge has not
+	// re-decided yet; 0 when there are none or the screen does not know
+	// (only the board does).
+	replies int
 	// findings is what magnum's latest review concluded (nil: magnum has not
 	// reviewed the PR); verdicts says the screen knows it, so A and C apply.
 	findings *FindingsInfo
@@ -140,6 +144,15 @@ func (r actRow) key(a rowAct) string {
 		return r.keys[a]
 	}
 	return rowActDefs[a].key
+}
+
+// repliesNow reports that r (the review key's row) has replies waiting for
+// the judge on a head magnum reviewed, with no round in flight or over: the
+// review key then has the judge alone re-decide them (a reply round) instead
+// of an ordinary forced review. The daemon decides the same from the
+// registry, so a head that moved meanwhile gets an ordinary round.
+func (r actRow) repliesNow() bool {
+	return r.replies > 0 && sameSHA(r.head, r.reviewed) && !r.merged() && !r.closed() && !r.running() && !r.ended()
 }
 
 // target is what the action receives: the PR, else the empty slot.
@@ -284,7 +297,10 @@ func actionQuestion(a rowAct, r actRow) string {
 	l := r.label
 	switch a {
 	case actReview, actFresh, actSimplify:
-		o := reviewOptsOf(a)
+		o := reviewOptsFor(a, r)
+		if o.Replies {
+			return repliesQuestion(l, r.replies, r.facts)
+		}
 		if r.merged() {
 			return postMergeQuestion(l, o)
 		}
@@ -328,15 +344,28 @@ func reviewOptsOf(a rowAct) ReviewOpts {
 	return ReviewOpts{Fresh: a == actFresh, Simplify: a == actSimplify}
 }
 
+// reviewOptsFor is the review variant a starts on the row r: the review key
+// of a row with replies waiting for the judge has it alone re-decide them.
+func reviewOptsFor(a rowAct, r actRow) ReviewOpts {
+	if a == actReview && r.repliesNow() {
+		return ReviewOpts{Replies: true}
+	}
+	return reviewOptsOf(a)
+}
+
 // actionLabel is a's entry in the menu and on the card for the row r: the
 // review variants of a merged PR are post-merge reviews, M on a merged PR
-// dismisses or restores its merged-unreviewed flag, and U on an ignored PR
-// stops ignoring it.
+// dismisses or restores its merged-unreviewed flag, U on an ignored PR
+// stops ignoring it, and r on a row with replies waiting for the judge
+// re-decides them.
 func actionLabel(a rowAct, r actRow) string {
 	switch a {
 	case actReview, actFresh:
 		if r.merged() {
 			return map[rowAct]string{actReview: "post-merge review", actFresh: "fresh post-merge review"}[a]
+		}
+		if a == actReview && r.repliesNow() {
+			return "re-decide replies"
 		}
 	case actMute:
 		switch act, _ := muteActFor(r.ghState, r.mergedUnreviewed, r.flagDismissed); act {
@@ -364,7 +393,10 @@ func actionRun(a rowAct, r actRow) (what string, fn actionFunc) {
 	}
 	switch a {
 	case actReview, actFresh, actSimplify:
-		o := reviewOptsOf(a)
+		o := reviewOptsFor(a, r)
+		if o.Replies {
+			what = "re-decide replies " + target
+		}
 		return what, func(ctx context.Context, act DashboardActions) (ActionResult, error) {
 			return act.Review(ctx, target, o)
 		}
@@ -553,5 +585,6 @@ func boardActRow(r PRBoardRow, label string, now time.Time) actRow {
 		row.reviewed = r.LastReview.CommitSHA
 	}
 	row.facts = boardReviewFacts(r, now)
+	row.replies = r.Replies
 	return row
 }

@@ -209,6 +209,12 @@ func dbValue(v any) (any, error) {
 		}
 		b, err := json.Marshal(x)
 		return string(b), err
+	case []Reply:
+		if x == nil {
+			return nil, nil
+		}
+		b, err := json.Marshal(x)
+		return string(b), err
 	case *ReviewGate:
 		if x == nil {
 			return nil, nil

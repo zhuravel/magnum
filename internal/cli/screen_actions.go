@@ -142,7 +142,7 @@ func (s *screenActions) Open(ctx context.Context, ref string) (tui.ActionResult,
 
 func (s *screenActions) Review(ctx context.Context, ref string, o tui.ReviewOpts) (tui.ActionResult, error) {
 	return s.do(ctx, "review", func(ctx context.Context, c *Context, d *actDeps) int {
-		return reviewMain(ctx, c, d, ref, reviewOpts{fresh: o.Fresh, simplify: o.Simplify})
+		return reviewMain(ctx, c, d, ref, reviewOpts{fresh: o.Fresh, simplify: o.Simplify, replies: o.Replies})
 	})
 }
 

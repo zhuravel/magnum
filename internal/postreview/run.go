@@ -23,6 +23,9 @@ type GitHub interface {
 	SubmitReview(ctx context.Context, owner, repo string, number int, r github.ReviewRequest) (github.RESTReview, error)
 	ReviewREST(ctx context.Context, owner, repo string, number int, id int64) (github.RESTReview, error)
 	ReviewComments(ctx context.Context, owner, repo string, number int, reviewID int64) ([]github.ReviewComment, error)
+	// ReviewThreads and ReplyToReviewComment are RunReplies's.
+	ReviewThreads(ctx context.Context, owner, repo string, number int) ([]github.Thread, error)
+	ReplyToReviewComment(ctx context.Context, owner, repo string, number int, commentID int64, body string) (github.ReviewCommentReply, error)
 }
 
 // Git is what Run reads from the checkout (*gitx.Client).
@@ -89,7 +92,7 @@ func (o Options) Check() error {
 type Outcome struct {
 	Status  string `json:"status"`
 	Message string `json:"message,omitempty"` // what went wrong (error, rejected), or what was found
-	// Problems are the review file's faults (invalid).
+	// Problems are the review or replies file's faults (invalid).
 	Problems []string `json:"problems,omitempty"`
 	// InvalidAnchors are the comments off the diff (invalid_anchors).
 	InvalidAnchors []BadAnchor `json:"invalid_anchors,omitempty"`
@@ -114,13 +117,16 @@ type Outcome struct {
 	Mismatches []string `json:"mismatches,omitempty"`
 	// PlannedReview is the request a dry run would have sent.
 	PlannedReview *github.ReviewRequest `json:"planned_review,omitempty"`
+	// Replies are the replies RunReplies posted (so far, after a failure),
+	// found already posted, or planned in a dry run, in the file's order.
+	Replies []PostedReply `json:"replies,omitempty"`
 }
 
-// ExitCode is 0 for posted, already posted and a dry run, 2 when the judge
-// must fix its review file, 1 otherwise.
+// ExitCode is 0 for posted, already posted, replied and a dry run, 2 when
+// the judge must fix its file, 1 otherwise.
 func (o Outcome) ExitCode() int {
 	switch o.Status {
-	case StatusPosted, StatusAlreadyPosted, StatusDryRun:
+	case StatusPosted, StatusAlreadyPosted, StatusReplied, StatusDryRun:
 		return 0
 	case StatusInvalid, StatusInvalidAnchors:
 		return 2
@@ -130,6 +136,9 @@ func (o Outcome) ExitCode() int {
 
 // Summary is the outcome in one human line (ids and counts, no PR text).
 func (o Outcome) Summary() string {
+	if o.Status == StatusReplied || o.Status == StatusDryRun && o.PlannedReview == nil {
+		return o.repliesSummary()
+	}
 	n := 0
 	if o.Comments != nil {
 		n = *o.Comments
@@ -147,7 +156,7 @@ func (o Outcome) Summary() string {
 	case StatusDryRun:
 		return fmt.Sprintf("dry run: nothing posted; the planned %s review has %s", o.Event, comments)
 	case StatusInvalid:
-		return fmt.Sprintf("the review file has %s; nothing posted", textx.Count(len(o.Problems), "problem", "problems"))
+		return fmt.Sprintf("the file has %s; nothing posted", textx.Count(len(o.Problems), "problem", "problems"))
 	case StatusInvalidAnchors:
 		return fmt.Sprintf("%s not on lines of the pull request's diff; nothing posted",
 			textx.Count(len(o.InvalidAnchors), "inline comment is", "inline comments are"))

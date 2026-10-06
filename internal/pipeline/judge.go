@@ -35,6 +35,7 @@ type verdict struct {
 	err     error
 	review  *postedReview
 	result  *judgeResult
+	replies []PostedReply // a reply round's replies (OutcomeReplied)
 	pause   *Pause
 	// modelLimit: the turn ended on its model's own limit. The verdict is
 	// the usage limit it was before per-model limits existed; runJudge first
@@ -68,6 +69,9 @@ func (rd *round) runJudge(ctx context.Context, run store.Run) (RoundResult, erro
 	rd.mu.Unlock()
 
 	jd := rd.judgeData(run, marker)
+	rd.mu.Lock()
+	rd.res.JudgePromptedAt = rd.r.now() // the threads and comments it re-decides are those up to now
+	rd.mu.Unlock()
 	rd.addThreads(ctx, &jd)
 	rd.addDeltaCheck(ctx, &jd)
 	rd.addRelated(ctx, &jd)
@@ -230,6 +234,11 @@ func (rd *round) judgeVerdict(ctx context.Context, t turn, resultFile string, ma
 			}
 			return v
 		}
+		if rd.replyRound() {
+			if rv, ok := rd.repliedVerdict(ctx, markers, v.result); ok {
+				return rv
+			}
+		}
 	}
 
 	if hasRes {
@@ -242,6 +251,14 @@ func (rd *round) judgeVerdict(ctx context.Context, t turn, resultFile string, ma
 				return v
 			}
 			v.outcome, v.err = OutcomeNeedsAttention, errors.New("the judge wrote a dry-run result for a live round")
+		case statusReplied:
+			v.outcome = OutcomeNeedsAttention
+			switch {
+			case rd.in.DryRun:
+				v.err = errors.New("the judge reported replies in a dry run")
+			default:
+				v.err = errors.New("the judge answered in its threads, but this round asked for a review")
+			}
 		case statusPosted:
 			v.outcome = OutcomeNeedsAttention
 			if rd.in.DryRun {
@@ -341,8 +358,10 @@ func (rd *round) findReview(ctx context.Context, markers []string, res judgeResu
 	var pick *github.Review
 	for i := range all {
 		rv := all[i]
+		// A reply in a thread is a review of its own, with no body: never
+		// the round's review.
 		if rd.isReviewer(rv.AuthorLogin, rv.AuthorType) && rv.CommitOid == target && submitted(rv.State, rv.SubmittedAt) &&
-			!rv.SubmittedAt.Before(since) {
+			!rv.SubmittedAt.Before(since) && strings.TrimSpace(rv.Body) != "" {
 			pick = &rv
 		}
 	}
@@ -515,7 +534,8 @@ func (rd *round) finalizeJudge(ctx context.Context, runIDs []string, v verdict) 
 		rd.res.ReviewID, rd.res.ReviewURL, rd.res.ReviewCommit = v.review.id, v.review.url, v.review.commit
 		rd.res.Event = normalizeEvent(v.review.state)
 	}
-	if v.result != nil {
+	rd.res.Replies = v.replies
+	if v.result != nil && v.outcome != OutcomeReplied { // a replied round's verdict stays its last review's
 		rd.res.Findings = v.result.Findings
 		rd.res.HarnessUsed = v.result.HarnessUsed
 		if rd.res.Event == "" {
@@ -534,7 +554,7 @@ func (rd *round) finalizeJudge(ctx context.Context, runIDs []string, v verdict) 
 		errMsg = v.err.Error()
 	}
 	for _, id := range runIDs {
-		if v.outcome == OutcomePosted || v.outcome == OutcomeDryRun {
+		if v.outcome == OutcomePosted || v.outcome == OutcomeDryRun || v.outcome == OutcomeReplied {
 			rd.finishRun(ctx, id, store.RunVerified, v.outcome, "", func(u *store.RunUpdate) {
 				if v.review != nil {
 					u.Set("review_id", v.review.id)
@@ -561,7 +581,7 @@ func (rd *round) finalizeJudge(ctx context.Context, runIDs []string, v verdict) 
 		})
 	}
 	level := "info"
-	if v.outcome != OutcomePosted && v.outcome != OutcomeDryRun {
+	if v.outcome != OutcomePosted && v.outcome != OutcomeDryRun && v.outcome != OutcomeReplied {
 		level = "warn"
 	}
 	rd.event(ctx, level, "round.verify", fmt.Sprintf("judge verdict: %s", v.outcome), map[string]any{
@@ -569,6 +589,14 @@ func (rd *round) finalizeJudge(ctx context.Context, runIDs []string, v verdict) 
 
 	if v.result != nil {
 		rd.environmentFailures(ctx, v.result.EnvironmentFailures)
+	}
+	if v.outcome == OutcomeReplied {
+		msg := fmt.Sprintf("replied in %s (%s); no new review: the verdict of review %d stands",
+			textx.Count(len(v.replies), "thread", "threads"), replyKinds(v.replies), previousID(rd.in.Previous))
+		if len(v.replies) == 0 {
+			msg = fmt.Sprintf("nothing to answer; no new review: the verdict of review %d stands", previousID(rd.in.Previous))
+		}
+		rd.event(ctx, "info", "round.replied", msg, map[string]any{"replies": len(v.replies), "runs": runIDs})
 	}
 	if v.outcome == OutcomePosted {
 		rd.recordFindings(ctx, runIDs[0], v.result)
@@ -675,7 +703,7 @@ func (rd *round) judgeData(run store.Run, marker string) agents.JudgeData {
 		Reports: reports, ResultFile: rd.reportPath(run, rd.judge), DryRun: in.DryRun, Blind: in.Blind, PostMerge: in.PostMerge,
 		Magnum: rd.r.Layout.Binary(), SkillPath: skill, Model: rd.r.Config.RoleModel(rd.judge), Effort: rd.judge.EffortFor(in.Kind == KindRereview || rd.deltaCheck() != nil || rd.sameHead()),
 		ForcePushed: in.ForcePushed, BaseMerged: in.BaseMerged, MovedFrom: in.MovedFrom, PreviousHeadSHA: rd.previousHead(),
-		NotesPath: in.NotesPath, SameHead: rd.sameHead(), HistoryFile: rd.historyFile,
+		NotesPath: in.NotesPath, SameHead: rd.sameHead(), Replies: rd.replies(), HistoryFile: rd.historyFile,
 	}
 	jd.EffortInPrompt = rd.effortInPrompt(rd.judge, jd.Effort)
 	if in.NotesPath != "" {

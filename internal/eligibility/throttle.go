@@ -33,6 +33,8 @@ const (
 	RuleDraftInterval Rule = "draft_interval" // the same for a draft
 	RuleCap           Rule = "cap"            // the daily round cap
 	RuleSmallDelta    Rule = "small_delta"    // the re-review threshold
+	RuleReplies       Rule = "replies"        // the reply debounce
+	RuleReplyInterval Rule = "reply_interval" // one reply round per PR and head per reply_min_interval
 )
 
 // Throttle decides whether a PR that is already eligible may start a review
@@ -62,6 +64,10 @@ const (
 //     delta check (DeltaCheck): it is cheap, so it does not wait.
 //   - Requested (RequestedAt set): every rule above is skipped; the PR waits
 //     only RequestDebounce after the later of RequestedAt and HeadChangedAt.
+//   - Replies (RepliedAt set, no request): every rule above is skipped too;
+//     the PR waits ReplyDebounce after RepliedAt and ReplyMinInterval after
+//     ReplyRoundAt (the caller sets RepliedAt only while no push came since
+//     the review: a push wins, and its re-review reads the replies).
 //   - Forced bypasses all of it: always ready.
 //
 // A zero timestamp or zero duration never blocks. When several rules hold the
@@ -95,6 +101,15 @@ func Throttle(d config.Daemon, f PRFacts, now time.Time) ThrottleDecision {
 		}
 		if debounce := d.RequestDebounce.Duration; debounce > 0 {
 			hold(anchor.Add(debounce), RuleRequested, fmt.Sprintf("%s (%s)", ReasonRequested, debounce))
+		}
+		return decide()
+	}
+	if !f.RepliedAt.IsZero() {
+		if debounce := d.ReplyDebounce.Duration; debounce > 0 {
+			hold(f.RepliedAt.Add(debounce), RuleReplies, fmt.Sprintf("%s (%s after the last)", ReasonReplies, debounce))
+		}
+		if gap := d.ReplyMinInterval.Duration; gap > 0 && !f.ReplyRoundAt.IsZero() {
+			hold(f.ReplyRoundAt.Add(gap), RuleReplyInterval, fmt.Sprintf("%s (one round per head every %s)", ReasonReplies, gap))
 		}
 		return decide()
 	}
@@ -138,6 +153,8 @@ const (
 	ReasonRequested = "review requested"
 	// ReasonSmallDelta starts the reason of the re-review threshold.
 	ReasonSmallDelta = "small delta"
+	// ReasonReplies starts the reasons of the reply debounce and interval.
+	ReasonReplies = "replies to the review"
 )
 
 // smallDelta reports whether a measured delta stays under the re-review

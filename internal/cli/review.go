@@ -22,7 +22,7 @@ import (
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
-const reviewUsage = "review <url|owner/repo#N|repo#N|N> [--fresh] [--role <role>]... [--simplify] [--as <identity>] [--no-post] [--focus] [--wait] [--timeout <duration>] [--dry-run] [--json]"
+const reviewUsage = "review <url|owner/repo#N|repo#N|N> [--fresh] [--role <role>]... [--simplify] [--replies] [--as <identity>] [--no-post] [--focus] [--wait] [--timeout <duration>] [--dry-run] [--json]"
 
 const (
 	// reviewDefaultTimeout is how long --wait/--focus follow a round by default.
@@ -32,10 +32,10 @@ const (
 )
 
 type reviewOpts struct {
-	fresh, simplify, focus, wait, dryRun, noPost, json bool
-	as, workspace, cwd                                 string
-	roles                                              []string      // --role: on-request roles to run this round
-	timeout                                            time.Duration // --timeout: stop following after this long (0 = no limit)
+	fresh, simplify, replies, focus, wait, dryRun, noPost, json bool
+	as, workspace, cwd                                          string
+	roles                                                       []string      // --role: on-request roles to run this round
+	timeout                                                     time.Duration // --timeout: stop following after this long (0 = no limit)
 }
 
 // reviewClosing are the end of a PR's life (prInFlight are the states of a
@@ -53,7 +53,10 @@ func newReviewCmd(c *Context) *cobra.Command {
 			"the sessions and starts new conversations, --role also runs an on-request role of the PR's watch "+
 			"this round (runs = \"first\" after its first completion, or \"manual\"; repeat it for several; "+
 			"`magnum roles` lists them), --simplify is the shorthand for the role aliased simplify "+
-			"(claude-simplify by default), --as switches the posting identity from now on, --no-post runs the "+
+			"(claude-simplify by default), --replies has the judge alone re-decide the replies on Magnum's review "+
+			"now (a PR whose head Magnum reviewed; it answers in its threads unless its verdict changes, and "+
+			"it excludes --role, --simplify and --fresh, which ask for a full round), --as switches the "+
+			"posting identity from now on, --no-post runs the "+
 			"round but posts nothing (the judge writes its planned review), and --dry-run only prints the "+
 			"request. --wait follows the round until it is reviewed, needs attention or pauses; --timeout "+
 			"(default 2h, 0 = no limit) stops following it after that long, and the round goes on.",
@@ -62,6 +65,7 @@ func newReviewCmd(c *Context) *cobra.Command {
 	fs.BoolVar(&o.fresh, "fresh", false, "park the sessions and start new conversations (no resume)")
 	fs.StringArrayVar(&o.roles, "role", nil, "also run this on-request `role` this round; repeatable")
 	fs.BoolVar(&o.simplify, "simplify", false, "shorthand for --role <the role aliased simplify> (claude-simplify by default)")
+	fs.BoolVar(&o.replies, "replies", false, "re-decide the replies on magnum's review now: the judge alone, which answers in its threads unless its verdict changes (a PR whose head magnum reviewed)")
 	fs.StringVar(&o.as, "as", "", "post as this identity from now on (an [[identity]] name)")
 	fs.BoolVar(&o.focus, "focus", false, "focus the judge pane once its session starts")
 	fs.BoolVar(&o.wait, "wait", false, "follow the round until it is reviewed, needs attention or pauses")
@@ -125,6 +129,24 @@ func reviewProgress(c *Context, o reviewOpts) io.Writer {
 // reviewCheckOpts refuses an unknown identity or role before anything is
 // resolved; ok is false when it printed why (code is then the exit code).
 func reviewCheckOpts(c *Context, d *actDeps, o reviewOpts) (code int, ok bool) {
+	if o.replies {
+		// A reply round is the judge alone on the reviewed head: what these
+		// ask for is a full round.
+		var with []string
+		if len(o.roles) > 0 {
+			with = append(with, "--role")
+		}
+		if o.simplify {
+			with = append(with, "--simplify")
+		}
+		if o.fresh {
+			with = append(with, "--fresh")
+		}
+		if len(with) > 0 {
+			return actUsage(c, "review", "--replies (the judge alone re-decides the replies) cannot be combined with "+
+				strings.Join(with, ", ")+", which ask for a full round", reviewUsage), false
+		}
+	}
 	if o.as != "" && d.Cfg.IdentityByName(o.as) == nil {
 		names := make([]string, 0, len(d.Cfg.Identities))
 		for _, id := range d.Cfg.Identities {
@@ -186,12 +208,16 @@ func reviewMain(ctx context.Context, c *Context, d *actDeps, ref string, o revie
 	if t.PR.Pinned {
 		fmt.Fprintf(progress, "%s is pinned: this review unpins it (a person's changes in its slot still hold the round)\n", label)
 	}
-	if rs := store.Deref(t.PR.ReviewedSHA); rs != "" && rs == t.PR.HeadSHA {
+	switch rs := store.Deref(t.PR.ReviewedSHA); {
+	case o.replies:
+		fmt.Fprintln(progress, reviewRepliesNote(t.PR, label))
+	case rs != "" && rs == t.PR.HeadSHA:
 		fmt.Fprintf(progress, "head %s was already reviewed (%s); reviewing it again\n", textx.ShortSHA(rs), store.Deref(t.PR.LastReviewEvent))
 	}
 
 	// A forced round always reviews the head again: there is no "again" to send.
-	payload := engine.ReviewPayload{PRTarget: t.prTarget(), Fresh: o.fresh, Simplify: o.simplify, Roles: roles, As: o.as, DryRun: o.noPost}
+	payload := engine.ReviewPayload{PRTarget: t.prTarget(), Fresh: o.fresh, Simplify: o.simplify, Replies: o.replies,
+		Roles: roles, As: o.as, DryRun: o.noPost}
 	if o.dryRun {
 		out.Payload = &payload
 		if o.json {
@@ -203,6 +229,26 @@ func reviewMain(ctx context.Context, c *Context, d *actDeps, ref string, o revie
 		return 0
 	}
 	return reviewQueue(ctx, c, d, t, label, payload, o, out)
+}
+
+// reviewRepliesNote says what --replies will do to pr: the judge alone
+// re-decides the replies (the daemon's reply round) on a head magnum
+// reviewed, anything else is an ordinary forced round, which the daemon runs
+// when it cannot honour the flag.
+func reviewRepliesNote(pr store.PR, label string) string {
+	reviewed := store.Deref(pr.ReviewedSHA)
+	n := len(pr.PendingReplies())
+	switch {
+	case reviewed == "":
+		return label + ": magnum has not reviewed it yet, so --replies has nothing to re-decide: this is an ordinary forced review"
+	case reviewed != pr.HeadSHA:
+		return fmt.Sprintf("%s: the head %s moved since magnum reviewed %s, so --replies has nothing to re-decide there: this is an ordinary forced review",
+			label, textx.ShortSHA(pr.HeadSHA), textx.ShortSHA(reviewed))
+	case n == 0:
+		return fmt.Sprintf("%s: no reply on magnum's review of %s waits for the judge: this is an ordinary forced review", label, textx.ShortSHA(reviewed))
+	}
+	return fmt.Sprintf("%s: the judge alone re-decides %s on magnum's review of %s (a reply round)",
+		label, textx.Count(n, "reply", "replies"), textx.ShortSHA(reviewed))
 }
 
 // reviewAttach handles a PR whose round is already running: the daemon

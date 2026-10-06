@@ -3,6 +3,10 @@
 // checks it (the fields, then every inline anchor against the pull
 // request's diff), posts it once as the judge's identity (never twice: a
 // review carrying the run's marker counts as posted) and reads it back.
+// RunReplies is its replies-only mode: when authors answered the judge's
+// threads and the head is unchanged, the judge answers in the threads
+// instead, each reply carrying a hidden marker the daemon verifies and
+// counts rebuttals by.
 // It works from its Options, gh and git in the checkout alone: it loads no
 // config, opens no registry, never contacts the daemon and writes no file.
 package postreview

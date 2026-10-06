@@ -53,6 +53,10 @@ type roundJob struct {
 	// earlier findings, unless the checkout finds a newer head
 	// (confirmSameHead).
 	sameHead bool
+	// replies: the same-head re-review is a reply round (replyRoundDue):
+	// that many replies came on the review since its judge read the threads,
+	// and it may end with answers in them instead of a review.
+	replies int
 
 	// postMerge: GitHub had merged the PR when the round was dispatched, so
 	// it is a post-merge review (post_merge.go); mergeBase is the commit it
@@ -273,7 +277,9 @@ func (e *Engine) relaxedCandidates(ctx context.Context, p store.CandidateParams,
 			continue
 		}
 		if _, requested := e.pendingRequest(ctx, pr); !requested && !arrivedDuringReview(pr) {
-			continue
+			if _, _, replied := e.replyTrigger(ctx, pr); !replied {
+				continue
+			}
 		}
 		repo, err := e.st.RepoByID(ctx, pr.RepoID)
 		if err != nil {
@@ -427,6 +433,7 @@ func (e *Engine) startRound(ctx context.Context, pr store.PR, repo store.Repo, w
 		e.deltaFacts(ctx, pr, &f)
 		job.deltaCheck = e.deltaCheckDue(ctx, *w, pr, f, job.requested)
 		job.sameHead = e.sameHeadDue(ctx, pr)
+		job.replies = e.replyRoundDue(ctx, pr, job.sameHead, job.requested)
 	}
 	from := store.ClaimableStates
 	if pr.State == store.PRPaused {
@@ -608,6 +615,8 @@ func (e *Engine) planStart(ctx context.Context, job *roundJob, subject string) b
 	switch {
 	case job.deltaCheck:
 		what = "delta check"
+	case job.replies > 0:
+		what = replyLabel(job.replies) + " (the judge alone)"
 	case job.sameHead:
 		what = "re-review of the same head (the judge alone)"
 	}

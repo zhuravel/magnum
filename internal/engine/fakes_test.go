@@ -88,6 +88,9 @@ type prSpec struct {
 	activity time.Time
 	// gate is the Details' review gate (nil = GitHub returned none).
 	gate *github.ReviewGate
+	// remarks are the Details' reviews and issue comments (nil = GitHub
+	// returned no timeline).
+	remarks []github.Remark
 }
 
 type fakeGH struct {
@@ -447,6 +450,7 @@ func (g *fakeGH) Details(ctx context.Context, owner, repo string, numbers []int)
 			}
 			d.ActivityAt = p.activity
 			d.ReviewGate = p.gate
+			d.Remarks = slices.Clone(p.remarks)
 			out[n] = d
 		}
 		if !found {

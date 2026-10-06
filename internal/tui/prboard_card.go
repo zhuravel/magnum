@@ -71,7 +71,7 @@ func (p prbPainter) helpContent(width int) []string {
 		p.pal.green.Render(g.approved) + " approved", p.pal.red.Render(g.changes) + " changes requested",
 		p.pal.yellow.Render(g.commented) + " commented", p.st.Dim.Render(g.pending) + " requested",
 		p.st.Dim.Render(g.dismissed) + " dismissed", p.pal.yellow.Render(g.stale) + " stale: the head moved since",
-		p.pal.mine.Render(g.mine) + " yours", p.pinStyle().Render(g.pin) + " pinned", p.st.Err.Render(g.errMark) + " last round failed",
+		p.pal.mine.Render(g.mine) + " yours", p.pinStyle().Render(g.pin) + " pinned", p.st.Err.Render(g.errMark) + " last round failed or stalemate",
 		p.pal.tag.Render("muted") + " dimmed row",
 	}, "   ", inner)...)
 	lines = append(lines, flow([]string{
@@ -299,6 +299,9 @@ func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
 	for _, l := range p.lastReviewSentence(r) {
 		add("  " + l)
 	}
+	if r.Replies > 0 {
+		add("  " + p.st.Dim.Render(p.repliesSentence(r.Replies)))
+	}
 	if r.Note != "" {
 		add("  " + p.st.Dim.Render(r.Note))
 	}
@@ -381,15 +384,30 @@ func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
 		add(lines...)
 	}
 
+	wrap := func(s string) []string {
+		return strings.Split(lipgloss.NewStyle().Width(max(inner-2, 10)).Render(oneLine(s)), "\n")
+	}
+	if len(r.Stalemate) > 0 { // magnum stopped arguing: the operator decides (an error's NEEDS YOU shares the heading)
+		add("", p.st.Err.Render(p.g.headed("NEEDS YOU")))
+		for _, l := range wrap(stalemateSentence(r.Stalemate)) {
+			add("  " + p.st.Warn.Render(l))
+		}
+		for i, u := range r.Stalemate[1:] {
+			if i == maxStalemateURLs {
+				add("    " + p.st.Dim.Render(fmt.Sprintf("… and %d more", len(r.Stalemate)-1-i)))
+				break
+			}
+			add("    " + p.st.Dim.Render(u))
+		}
+	}
 	if r.LastError != "" {
 		title := "LAST ERROR"
 		if normState(r.State) == "needs_attention" {
 			title = "NEEDS YOU"
 		}
-		wrap := func(s string) []string {
-			return strings.Split(lipgloss.NewStyle().Width(max(inner-2, 10)).Render(oneLine(s)), "\n")
+		if title != "NEEDS YOU" || len(r.Stalemate) == 0 {
+			add("", p.st.Err.Render(p.g.headed(title)))
 		}
-		add("", p.st.Err.Render(p.g.headed(title)))
 		for _, l := range wrap(r.LastError) {
 			add("  " + p.pal.red.Render(l))
 		}
@@ -416,6 +434,33 @@ func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
 		add("  " + l)
 	}
 	return lines
+}
+
+// maxStalemateURLs is how many threads after the first the card lists.
+const maxStalemateURLs = 4
+
+// stalemateSentence says that magnum stopped arguing in the threads at urls
+// and what the operator can do; the card lists the rest of the threads
+// under it.
+func stalemateSentence(urls []string) string {
+	s := "magnum stopped arguing after two rebuttals in " + textx.Count(len(urls), "thread", "threads")
+	if len(urls) > 0 && urls[0] != "" {
+		s += ": " + urls[0]
+		if len(urls) > 1 {
+			s += "…"
+		}
+	}
+	return s + "; decide it (r has the judge re-decide, A/C post your verdict)"
+}
+
+// repliesSentence says that n replies on magnum's review wait for its judge
+// (the LAST REVIEW cell's "↩n").
+func (p prbPainter) repliesSentence(n int) string {
+	s := textx.Count(n, "reply", "replies") + " not re-decided yet"
+	if p.g.mode == IconsASCII {
+		return s
+	}
+	return p.g.reply + " " + s
 }
 
 // flagDismissedNote is what the card of a merged PR muted after it merged

@@ -20,6 +20,7 @@ import (
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/github"
+	"github.com/zhuravel/magnum/internal/postreview"
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
@@ -232,13 +233,31 @@ func (rd *round) ownThreads(ts []github.Thread) []agents.ReviewThread {
 			rep := agents.ThreadReply{ID: c.ID, Author: author, Own: rd.isOwnHistory(c.AuthorLogin, c.AuthorType)}
 			if !rep.Own {
 				rep.Class = classifyReply(c.Body)
+			} else if _, kind, ok := postreview.ParseReplyMarker(c.Body); ok {
+				rep.Kind = kind
 			}
 			rep.Body, rep.Truncated = excerpt(c.Body, replyExcerptMax)
 			rt.Replies = append(rt.Replies, rep)
 		}
+		rt.Rebuttals, rt.Stop = rebuttals(rt.Replies)
 		out = append(out, rt)
 	}
 	return out
+}
+
+// rebuttals counts the reviewer's rebuttals among a thread's replies (its
+// own replies of kind rebuttal, and those without a kind: magnum's
+// rebuttals carried no reply marker before reply rounds existed) and
+// reports whether it stops arguing there: after two of them, the last
+// reply is someone else's. post-review refuses another reply in such a
+// thread, and the engine asks the operator.
+func rebuttals(replies []agents.ThreadReply) (n int, stop bool) {
+	for _, r := range replies {
+		if r.Own && (r.Kind == "" || r.Kind == postreview.ReplyRebuttal) {
+			n++
+		}
+	}
+	return n, n >= 2 && len(replies) > 0 && !replies[len(replies)-1].Own
 }
 
 // threadSummary counts threads and their replies by class for the prompt,
@@ -341,6 +360,16 @@ func (rd *round) addThreads(ctx context.Context, jd *agents.JudgeData) {
 		return
 	}
 	jd.Threads, jd.ThreadsFile, jd.ThreadSummary = threads, path, threadSummary(threads)
+	var stops []StopThread
+	for _, t := range threads {
+		if t.Stop {
+			stops = append(stops, StopThread{ID: t.ID, URL: t.URL, LastReply: t.Replies[len(t.Replies)-1].ID})
+		}
+	}
+	jd.StopThreads = len(stops)
+	rd.mu.Lock()
+	rd.res.ThreadsRead, rd.res.Stops = true, stops
+	rd.mu.Unlock()
 	rd.event(ctx, "info", "round.threads", fmt.Sprintf("%s by %s: %s", ThreadsFile, rd.login, jd.ThreadSummary),
 		map[string]any{"threads": len(threads), "file": path})
 }
