@@ -26,7 +26,7 @@ func TestFromAppDryRunOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	layout := paths.Layout{Home: home}
-	cfg, err := config.Load(layout, "")
+	cfg, err := config.Load(layout, filepath.Join(home, "config.toml"))
 	if err != nil {
 		t.Fatal(err)
 	}

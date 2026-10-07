@@ -1460,7 +1460,7 @@ func newHarness(t *testing.T, mods ...func(*harness)) *harness {
 	if err := layout.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := config.Load(layout, "")
+	cfg, err := config.Load(layout, filepath.Join(home, "config.toml"))
 	if err != nil {
 		t.Fatal(err)
 	}

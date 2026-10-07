@@ -230,7 +230,11 @@ func TestShellLineEndingInRealShell(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		out, _ := exec.Command(sh, "-c", line).CombinedOutput()
+		cmd := exec.Command(sh, "-c", line)
+		// A home of its own: zsh reads ~/.zshenv (or $ZDOTDIR's) on every
+		// start, and the operator's must not run in a test.
+		cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + dir, "ZDOTDIR=" + dir, "LC_ALL=C"}
+		out, _ := cmd.CombinedOutput()
 		m := waitRe.FindString(string(out))
 		if m == "" {
 			t.Fatalf("%s: no marker line in %q", tc.command, out)

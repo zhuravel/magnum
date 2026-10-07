@@ -40,7 +40,7 @@ func cleanupCtx() (context.Context, context.CancelFunc) {
 // realClient returns a client on the local server or skips the test.
 func realClient(t *testing.T) *Client {
 	t.Helper()
-	if os.Getenv("MAGNUM_LIVE_MYSQL") == "" {
+	if os.Getenv("MAGNUM_LIVE_MYSQL") != "1" { // as the other live gates: "0" is off
 		t.Skip("set MAGNUM_LIVE_MYSQL=1 to run against the local DBngin server")
 	}
 	conn, err := net.DialTimeout("tcp", "127.0.0.1:3306", 500*time.Millisecond)

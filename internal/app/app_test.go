@@ -70,7 +70,7 @@ func testApp(t *testing.T, opts Options) (*App, paths.Layout) {
 		t.Fatal(err)
 	}
 	layout := paths.Layout{Home: home}
-	cfg, err := config.Load(layout, "")
+	cfg, err := config.Load(layout, filepath.Join(home, "config.toml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +173,7 @@ func TestDryRunUsesStoreCopy(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(testConfig), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := config.Load(layout, "")
+	cfg, err := config.Load(layout, filepath.Join(home, "config.toml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -428,7 +428,7 @@ func logAppIn(t *testing.T, daemon bool) (*App, string) {
 	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(testConfig), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := config.Load(layout, "")
+	cfg, err := config.Load(layout, filepath.Join(home, "config.toml"))
 	if err != nil {
 		t.Fatal(err)
 	}
