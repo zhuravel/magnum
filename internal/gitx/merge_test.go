@@ -25,7 +25,6 @@ func mergeFixture(t *testing.T) (fx *fixture, ours, clean, clash string) {
 }
 
 func TestRealMergeTreeCommitsTheMergeWithoutTouchingTheWorkTree(t *testing.T) {
-	t.Parallel()
 	fx, ours, clean, _ := mergeFixture(t)
 	ctx := context.Background()
 	headBefore := fx.git(fx.clone, "rev-parse", "HEAD")
@@ -76,7 +75,6 @@ func TestRealMergeTreeCommitsTheMergeWithoutTouchingTheWorkTree(t *testing.T) {
 }
 
 func TestRealMergeTreeReportsAConflictAsAnAnswer(t *testing.T) {
-	t.Parallel()
 	fx, ours, _, clash := mergeFixture(t)
 	tree, conflicts, err := fx.c.MergeTree(context.Background(), fx.clone, ours, clash)
 	if err != nil {
@@ -91,7 +89,6 @@ func TestRealMergeTreeReportsAConflictAsAnAnswer(t *testing.T) {
 }
 
 func TestRealFetchIntoFetchesAPRHeadAndACommitByID(t *testing.T) {
-	t.Parallel()
 	fx := newFixture(t)
 	ctx := context.Background()
 	ref := MergeCheckRefPrefix + "review1/head"
