@@ -3478,3 +3478,19 @@ editing history. Code, config comments and prompts reference these by their head
   failure. SKILL.md's Databases paragraph now says to run it as given (its own timeout is 20 minutes), and
   that a check that waited, then ran, is no `environment_failures` entry; only exit 75 is a check that did not
   run. SKILL.md grows by 98 bytes (`skillMaxBytes` 34,734 to 34,832).
+- **The improvement loop lands DECISIONS-only conflicts by itself, drains before a restart, and has a shared
+  analyst rule file** (2026-10-07). In one run every cherry-pick of a builder's branch conflicted in
+  `docs/DECISIONS.md`, where both sides append entries, and the resolution was always to keep both; after a
+  resolution by hand, `land.sh <branch>` picked the resolved commit again. `land.sh` now resolves a conflicted
+  DECISIONS.md whose commit only appends to it (the parent's file is a prefix of the commit's) as master's file
+  followed by the appended text, unless master already has that text, and stages it; a conflict in any other
+  file stops, and `land.sh --continue <branch>` picks the rest of the range, skipping the commits whose subject
+  master has. It builds unless the registry lacks a migration (one above its `user_version`), so a range landed in
+  two steps, or after a migration the daemon has not restarted on, does not leave a binary the CLI cannot run.
+  `restart.sh` waited more than 30 minutes with `daemon-restart --when-idle` while new rounds kept starting; it now
+  restarts with `daemon-restart --drain` (no round starts while it waits), at most `--max-wait` (default 30m),
+  printing the rounds every 5 minutes. Analysts get `analyst-rules.md` as builders get `common-rules.md`,
+  `eval-at.sh` runs `magnum eval run` from a throwaway worktree at a given commit, and `selftest.sh` tests the
+  scripts against throwaway repositories. Rejected: git's union merge (`merge-file --union`, `merge=union`): it
+  matches lines across the two sides' entries, so when both end with the same line ("No new dependencies.") the
+  line is kept once and the first entry loses it.

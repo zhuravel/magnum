@@ -12,12 +12,18 @@ You land every agent's work yourself, one commit range at a time, on `master` in
 ## Land
 
 `scripts/land.sh <branch-or-sha>` fast-forwards master when it can, and otherwise cherry-picks the commits. It
-dry-runs every new migration on a copy of the registry, runs the gate, pushes, and builds `bin/magnum` unless the
-range adds a migration. It stops at a conflict: resolve it (DECISIONS.md: keep both entries; the config comments:
-keep both sides' keys; SKILL.md: keep both rules and raise its size cap by the minimum) and run
-`git cherry-pick --continue`. Then run `scripts/land.sh HEAD` when that was the last commit of the range (gate, push
-and build only); with more commits left, cherry-pick them by hand first, because `land.sh <branch>` would pick the
-resolved commit again.
+dry-runs every migration the registry lacks on a copy of it, runs the gate, pushes, and builds `bin/magnum` unless
+the registry lacks a migration. Both sides append to `docs/DECISIONS.md`, so it conflicts there nearly every time:
+when the commit only appends, land.sh keeps both sides by itself (master's file, then the commit's entries; read
+them in the diff). Any other conflict stops, with DECISIONS.md already resolved and staged: resolve the rest (the
+config comments: keep both sides' keys; SKILL.md: keep both rules and raise its size cap by the minimum; golden
+files: resolve the files they render first, then `go test ./internal/agents -update`), `git add` it, run
+`git cherry-pick --continue`, then `scripts/land.sh --continue <branch>`: it picks the rest of the range, skipping
+the commits whose subject master already has (a resolved commit no longer matches its patch), then gates, pushes
+and builds.
+
+`scripts/selftest.sh` tests land.sh, restart.sh and eval-at.sh against throwaway repositories with fakes; run it
+after changing a script.
 
 After landing, tell every running agent that master moved: the new sha, the files the landed work touched, and the
 migration numbers now taken.
@@ -26,12 +32,16 @@ migration numbers now taken.
 
 The daemon reads prompts and the review skill when it starts, so landed work is live only after a restart.
 
-- No new migration: `scripts/restart.sh` builds and restarts the daemon when no round is in flight.
-- A new migration: `scripts/restart.sh --migration` pauses automation, waits for the rounds in flight, builds,
-  restarts and resumes. A binary with a newer schema cannot run CLI commands (the board included) until the daemon
-  restarts on it, so the build happens only right before the restart.
+- No new migration: `scripts/restart.sh` builds and runs `magnum daemon-restart --drain`: no new round starts
+  (requested ones included), the rounds in flight end, and the daemon restarts. Waiting for an idle moment without
+  holding new rounds once took more than 30 minutes while rounds kept starting.
+- A new migration: `scripts/restart.sh --migration` pauses automatic reviews with the running binary and waits for
+  the rounds in flight, builds, then restarts with the new binary's drain (which also waits for a round a request
+  started meanwhile) and resumes. A binary with a newer schema cannot run CLI commands (the board included) until
+  the daemon restarts on it, so the build happens only right before the restart.
 
-Run either in the background and check its output when it finishes. Then make sure that `magnum status` shows no
+Both wait at most `--max-wait` (default `30m`; after it nothing is restarted) and print the rounds they wait for
+every 5 minutes. Run either in the background and check its output when it finishes. Then make sure that `magnum status` shows no
 pauses and no build mismatch, and read the warn and error lines of the daemon log since the restart.
 
 ## Run log

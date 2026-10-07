@@ -1,9 +1,10 @@
 # Analysis lenses
 
-Start each lens as one read-only subagent; lenses 0 and 1 run in every run, the others as the evidence warrants. Give it: the repository path, `<run-dir>/evidence.md` and the review
-directory list, `since`, its lens below, and the return format at the end. Analysts never edit files, never run
-`bin/magnum`, herdr, mysql or launchctl, and use `gh api` only for GET requests (the operator's token also serves the
-daemon: keep it to tens of calls). The registry is read with `sqlite3 -readonly`; read `.schema` first.
+Start each lens as one read-only subagent; lenses 0 and 1 run in every run, the others as the evidence warrants. Give
+it: the repository path and master's sha, `<run-dir>/evidence.md` and the review directory list, `since`, its lens
+below, the report path `<run-dir>/analysis/<nn>-<lens>.md`, what the operator declined, and
+[analyst-rules.md](analyst-rules.md) by absolute path: it is binding (read-only work, the limits on `gh api` and the
+registry, the return format), as `common-rules.md` is for builders.
 
 ## 0. Misses: what others found and magnum did not (every run, first)
 
@@ -27,10 +28,10 @@ Then name the smallest change that would have caught it and where it belongs: a 
 the notes curation, not the skill), an input magnum could pass (history, related PRs, a ticket), or nothing (say why).
 Never propose a rule that names the PR, the repository or a person.
 
-Return, besides the format below, one line per miss: PR and head, the person's finding in one sentence, priority,
-the why, the proposed change. Each real P0-P2 miss with a clear head and location is also proposed as an eval case
-for `~/.config/magnum/eval.toml` (the format is in `eval.toml.example`): a case is how the next run proves that a
-skill or prompt change catches it.
+Return, besides the format in analyst-rules.md, one line per miss: PR and head, the person's finding in one
+sentence, priority, the why, the proposed change. Each real P0-P2 miss with a clear head and location is also
+proposed as an eval case for `~/.config/magnum/eval.toml` (the format is in `eval.toml.example`): a case is how the
+next run proves that a skill or prompt change catches it (`scripts/eval-at.sh`).
 
 ## 1. Declined findings: what magnum posted and people rejected or deferred (every run, second)
 
@@ -115,15 +116,32 @@ databases, every past finding and miss, the whole team's PR stream, herdr panes 
 Read the earlier idea reports in `~/.local/share/magnum/improve/ideas/` and `runs.md` first, so nothing is proposed
 twice. At most 5 ideas, each with evidence from the data.
 
-## Return format (every lens)
+## 10. Test-suite health
 
-At most 10 items, ranked by impact over effort, under 1,200 words. For each item:
+How fast and how trustworthy the gate is. Measure per-package durations with and without `-race` (`go test -count=1
+-json ./...`, parsed), the 30 slowest tests and why each is slow (real sleeps, timeouts waited out, polling with a real
+clock, large fixtures, a SQLite migration per test, serial tests that could call `t.Parallel`), flaky tests (the engine
+and pipeline packages three times with `-count=1 -shuffle=on`), tests that touch real directories, sockets or the
+network, and test helpers duplicated across packages. Propose speed-ups ranked by seconds saved, each with the file and
+line and the mechanism (an injected clock, a shared migrated template database, `t.Parallel`, shorter timeouts in
+tests), and say which change no behavior. It may start 2 read-only helpers.
 
-- a one-line title;
-- the evidence (numbers, PR and round, file and line, quoted review line);
-- the change, as the author, reviewer or operator would see it;
-- class: `bug`, `simplify`, `improve` or `idea`;
-- effort (S/M/L and the packages), usage impact, risk;
-- how the next run measures it.
+## 11. Skill and prompt economy
 
-Then one line per thing you checked and found fine, so the next run does not check it again.
+What the review instructions cost, and whether they agree. `skills/magnum-review/SKILL.md` has a size cap
+(`skillMaxBytes` in `internal/agents/review_format_test.go`) and the prompts carry more rules. From the Codex rollouts
+of magnum's judges in `~/.codex/sessions/<recent days>/` (their working directory is a review slot or a PR worktree),
+measure how often a judge reads SKILL.md (each fresh session, each turn) and the input tokens of a session's first
+request. Then audit the text: rules said twice (in SKILL.md and a prompt, or twice in SKILL.md), rules that contradict
+each other or the prompts, rules no evidence supports any more, wording that could be shorter without losing a rule,
+and sections a role never needs. Propose a shorter structure with the bytes saved per change and list every rule that
+must survive (the format tests pin many); do not write the new skill.
+
+## 12. Docs accuracy
+
+Compare README.md, AGENTS.md, prompts/README.md, the comments of config.defaults.toml, the cobra help in
+`internal/cli` and the board's help line (`internal/tui`) with the code: every command and flag (`go run ./cmd/magnum
+<cmd> --help` only prints help; never run a command that acts), every config key and its default, every board key, and
+every event kind and file path the docs name. Report each statement that is wrong or missing (a key the code reads that
+no doc names, a doc that names a removed flag) with the doc's line and the code's file and line, and the docs that
+contradict each other. Fix nothing.

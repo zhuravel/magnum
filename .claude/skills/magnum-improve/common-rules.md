@@ -14,6 +14,8 @@
 - Never run `bin/magnum`, herdr, launchctl, mysql, or git against any directory but your worktree. Never start a real
   agent session (codex, claude); `--help` is fine.
 - Temporary files go only in `<run-dir>/tmp/<your-slug>/`. Delete them before you finish. No `.bak` files.
+- Helper subagents you start work in your own worktree (no `isolation`); one started with its own worktree has that
+  worktree and its branch removed before you report.
 - No real GitHub logins other than the maintainer's own (`zhuravel`) in tests or docs: use `alice`, `rev-ann` and
   `bob-rev`, and `talkable` or `example` for organizations. Never a private organization or repository name.
 - Stop and report when the code contradicts the spec, or when a fix needs a design decision the spec does not

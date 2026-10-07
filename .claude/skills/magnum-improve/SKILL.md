@@ -22,18 +22,24 @@ PR" and "never a second CODEX_HOME".
    other reviewers' comments on recently closed PRs are classified. PRs closed less than 24 hours ago wait for the
    next run, so that late reviews can arrive. Then `scripts/evidence.sh <since> <run-dir>` writes `evidence.md`, a list of review report
    directories, and the git log since. Read the summary yourself; it is the shared input of every analyst.
-3. **Analysis wave.** Start the analysts in [lenses.md](lenses.md) in parallel, read-only, each with the evidence
-   path, its lens and the return format there. Lenses 0 and 1 run every time: what other reviewers
-   found and magnum did not, and what magnum posted that people rejected or deferred. They are how the loop learns.
-   Up to 8 at once.
+3. **Analysis wave.** Start the analysts in [lenses.md](lenses.md) in parallel, each with the evidence path and its
+   lens; every analyst prompt names [analyst-rules.md](analyst-rules.md) (read-only work and the return format) by
+   absolute path. Lenses 0 and 1 run every time: what other reviewers found and magnum did not, and what magnum
+   posted that people rejected or deferred. They are how the loop learns. Up to 8 at once. A later wave of analysts
+   may run beside the builders: the session runs at most 20 subagents at once, builders' helpers included.
 4. **Verify.** For every item you might act on, open the cited files, rerun the cited query or read the cited
    review. Drop an item you cannot confirm. Merge duplicates across lenses.
-5. **Decide.** Sort the confirmed items with the autonomy rules below. Write the plan to `<run-dir>/plan.md`. Ask
+5. **Decide.** Sort the confirmed items with the autonomy rules below. Write the plan to `<run-dir>/plan.md`; it
+   lists each running builder with the files it owns, kept current as builders start and land. Ask
    the operator once, in one message, about every item that needs approval, with your recommendation and its
-   evidence; do not wait for that answer before starting the items that need none.
+   evidence; do not wait for that answer before starting the items that need none. A request the operator makes
+   during the run becomes a spec of the same run.
 6. **Build.** One spec per item from [spec-template.md](spec-template.md), saved in `<run-dir>/specs/`. One worktree
-   agent per spec (Agent tool, `isolation: "worktree"`), at most 4 at a time, never two on the same files.
-   Every agent prompt names `common-rules.md` and its spec by absolute path.
+   agent per spec (Agent tool, `isolation: "worktree"`), at most 4 at a time (up to 6 with disjoint files when the
+   operator asks for a larger push), never two on the same files. Every agent prompt names `common-rules.md` and its
+   spec by absolute path. A builder starts helpers only in its own worktree, or removes their worktrees before it
+   reports. A finding that arrives later (a later analyst, a builder's report) in files a running builder owns goes
+   to that builder by message (SendMessage, with the evidence); any other becomes a new spec.
 7. **Land.** Follow [landing.md](landing.md) for each finished agent: read the diff, land, gate, push, tell the
    running agents that master moved, restart the daemon the right way.
 8. **Close.** Append the run to `runs.md` with [the run log format](landing.md#run-log). Remove finished worktrees
@@ -63,7 +69,9 @@ Do without asking:
 - an eval case for a real P0-P2 miss, added to `~/.config/magnum/eval.toml` (the corpus is local, never tracked).
 
 A skill or prompt change made for a miss counts as visible to authors: ask, and propose to prove it with
-`magnum eval run --case <the miss's case>` before and after (each case costs a review round of Codex usage).
+`MAGNUM_IMPROVE_RUN=<run-dir> scripts/eval-at.sh <sha> <label> <the miss's case>...` at master before and at the
+builder's commit after, in the background (it runs `magnum eval run` from a throwaway worktree at that sha and logs
+to `<run-dir>/tmp/`; each case costs a review round of Codex usage).
 
 Ask first, in the one batched question:
 
