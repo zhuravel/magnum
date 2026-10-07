@@ -40,6 +40,28 @@ func TestFilterPRBoardViews(t *testing.T) {
 	}
 }
 
+// The magnum view also keeps a row magnum skips (a draft include_drafts =
+// false leaves ineligible, a baseline PR) while a review of it is requested
+// from one of the self logins, whatever its state; other ineligible and
+// baseline rows stay hidden.
+func TestMagnumViewKeepsRowsWhoseReviewIsRequestedFromMe(t *testing.T) {
+	asked := func(login string) []ReviewerInfo { return []ReviewerInfo{{Login: login, Requested: true}} }
+	rows := []PRBoardRow{
+		{Ref: "talkable/example#1", Number: 1, State: "ineligible", Draft: true, Reviewers: asked("zhuravel")},
+		{Ref: "talkable/example#2", Number: 2, State: "baseline", Reviewers: asked("talkable[bot]")},
+		{Ref: "talkable/example#3", Number: 3, State: "ineligible", Draft: true, Reviewers: []ReviewerInfo{{Login: "alice", Requested: true, Mine: true}}},
+		{Ref: "talkable/example#4", Number: 4, State: "ineligible", Draft: true, Reviewers: asked("alice")},
+		{Ref: "talkable/example#5", Number: 5, State: "baseline"},
+		{Ref: "talkable/example#6", Number: 6, State: "ineligible", Draft: true, Reviewers: []ReviewerInfo{{Login: "zhuravel", Verdict: "commented"}}},
+		{Ref: "talkable/example#7", Number: 7, State: "reviewed"},
+	}
+	got := refsOf(FilterPRBoard(rows, ViewMagnum, boardSelf))
+	want := []string{"example#1", "example#2", "example#3", "example#7"}
+	if !slices.Equal(got, want) {
+		t.Errorf("magnum view = %v, want %v", got, want)
+	}
+}
+
 // The ready view keeps what looks ready to merge: open and not a draft,
 // approved on the current head with no changes requested (stale or not),
 // magnum's review not blocking and every required check passed (skipped,

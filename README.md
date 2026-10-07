@@ -369,6 +369,10 @@ marks a draft ready for review, the round starts `[daemon] request_debounce` (de
 request and the last push. It skips the quiet periods, the re-review intervals, the delta threshold and
 the daily cap. Requests are edge-triggered by their time on the PR's timeline: one counts once, and only
 when it is newer than the PR's last round start; a review of the head posted after it answers it too.
+On a draft a `[[watch]]` skips (`include_drafts = false`), such a request makes the draft eligible for the
+one round it starts, and the wait says so (`review · requested on a draft by alice → 14:09`); a later
+push to the draft is skipped again until a newer request (GitHub keeps your request after magnum's App
+reviews, so the request alone does not count twice).
 
 The daily cap (`max_rounds_per_pr_per_day`, default 12) counts automatic rounds when they start:
 requested rounds and `magnum review` never count. A round Magnum itself cut short is refunded
@@ -473,7 +477,7 @@ owner = "talkable"
 include = ["talkable"]             # repository globs; ["*"] for the whole organization
 identity = "reviewer-app"          # who posts
 poll_identity = "me"               # who polls
-include_drafts = true
+include_drafts = true              # false: a draft waits until ready for review, or a review request for you (one round per request)
 skip_bot_authors = true
 skip_departed_authors = true       # default: a branch PR by someone no longer a member or collaborator is not reviewed
 roles = ["claude-review", "codex-review", "claude-simplify", "codex-judge"]
@@ -1221,9 +1225,10 @@ simplifications it suggested (`✂4`); the card spells out the decision, what wa
 counts and the earlier findings. A PR that was open before magnum began watching its repository reads
 "not reviewed": a push, a review request for you or a posting identity, or `R` starts its first review.
 
-The views are `all`, `magnum` (what Magnum reviewed or is reviewing: not baseline or ineligible), `mine`
-(assigned to you or your review requested) and `ready`: open and not a draft, approved on the current
-head (a stale approval does not count), no changes requested, magnum's latest review not blocking, and
+The views are `all`, `magnum` (what Magnum reviewed or is reviewing: not baseline or ineligible, and any
+PR your review is requested on, a skipped draft's included), `mine` (assigned to you or your review
+requested) and `ready`: open and not a draft, approved on the current head (a stale approval does not
+count), no changes requested, magnum's latest review not blocking, and
 every required check passed (a skipped, missing or pending required check is not passed; a repository
 without required checks is not held back by its CI). `v` cycles the views and `O` the owners (all, then
 each user or organization with PRs); the title bar names both and `magnum prs --view` picks the view the

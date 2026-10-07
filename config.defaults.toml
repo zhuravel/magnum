@@ -429,7 +429,8 @@ aliases = ["simplify"]
 # identity = "reviewer-app"               # who posts
 # poll_identity = "me"                    # who polls (a gh identity)
 # clone_root = "~/Projects"
-# include_drafts = true
+# include_drafts = true                 # false: a draft waits until ready for review, or until a review request for you,
+#                                       # a posting identity or a request_teams team (one round per request)
 # include_own = true
 # skip_bot_authors = true
 # skip_authors = ["dependabot"]

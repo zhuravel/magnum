@@ -18,7 +18,7 @@ type PRView string
 // The board's views, in the order v cycles through them.
 const (
 	ViewAll    PRView = "all"    // every row
-	ViewMagnum PRView = "magnum" // rows magnum reviewed or is reviewing: state not baseline or ineligible
+	ViewMagnum PRView = "magnum" // rows magnum reviewed or is reviewing (state not baseline or ineligible), or whose review is requested from a self login
 	ViewMine   PRView = "mine"   // assigned to one of the self logins, or their review is requested
 	ViewReady  PRView = "ready"  // open, not a draft, approved on the head, nothing blocking, required checks passed
 )
@@ -59,7 +59,7 @@ func (v PRView) has(r PRBoardRow, self map[string]bool) bool {
 	case ViewMagnum:
 		switch normState(r.State) {
 		case "", "baseline", "ineligible":
-			return false
+			return reviewRequestedFrom(r, self)
 		}
 		return true
 	case ViewMine:

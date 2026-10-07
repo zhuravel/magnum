@@ -3865,6 +3865,10 @@ func (w Watch) DepartedAuthorsSkipped() bool
     DepartedAuthorsSkipped is SkipDepartedAuthors with its default (true).
 
 func (w Watch) DraftsIncluded() bool
+    DraftsIncluded is include_drafts (default true). False skips drafts until
+    they are ready for review, except that a review request for the poll login,
+    a posting identity or a team of request_teams makes a draft eligible for the
+    round the request starts (eligibility.PRFacts.Requested).
 
 func (w Watch) ManualRepo(name string) bool
     ManualRepo reports whether manual_repos names the repository name (without
@@ -4005,9 +4009,10 @@ type Decision struct {
 
 func Classify(w config.Watch, f PRFacts) Decision
     Classify applies the watch's filters to a PR. It looks at Muted,
-    the repository (manual_repos), the author (bots, skip_authors, own), Labels,
-    IsDraft, IsCrossRepo and the author's association (skip_departed_authors),
-    in that order, and reports the first rule that rejects the PR.
+    the repository (manual_repos), the author (bots, skip_authors, own),
+    Labels, IsDraft (unless Requested), IsCrossRepo and the author's association
+    (skip_departed_authors), in that order, and reports the first rule that
+    rejects the PR.
 
     Forced is deliberately not consulted: the filters describe what the daemon
     picks up on its own, and whether a manual request overrides them is the
@@ -4045,6 +4050,12 @@ type PRFacts struct {
 	// ready for review) arrived that no round has started for yet; zero =
 	// none. Throttle then holds the PR only for the request debounce.
 	RequestedAt time.Time
+	// Requested: a review request for magnum (not a draft's move to ready
+	// for review) arrived that no round has started for yet. Classify lets a
+	// draft with one through include_drafts = false: the request makes it
+	// eligible for the round it starts, and a later push to it is skipped
+	// again unless a newer request arrives.
+	Requested bool
 	// RepliedAt is the latest reply on magnum's review its judge has not
 	// re-decided, on a head magnum reviewed (no push since); zero = none.
 	// Throttle then holds the PR only for the reply debounce and the reply
@@ -5206,14 +5217,15 @@ type ReplyRound struct {
     ReplyRound is a reply round as KVPRReplyRound records it.
 
 type Request struct {
-	At time.Time
-	By string // a login, or RequestReadyForReview
+	At    time.Time
+	By    string // a login, or RequestReadyForReview
+	Draft bool   // the PR is a draft
 }
     Request is a review request magnum handled for a PR.
 
 func (r Request) Phrase() string
-    Phrase is how screens name the request: "requested by alice" or "ready for
-    review".
+    Phrase is how screens name the request: "requested by alice", "requested on
+    a draft by alice" or "ready for review".
 
 type RetroGitHub interface {
 	ReviewThreads(ctx context.Context, owner, repo string, number int) ([]github.Thread, error)
@@ -13912,7 +13924,7 @@ type PRView string
 
 const (
 	ViewAll    PRView = "all"    // every row
-	ViewMagnum PRView = "magnum" // rows magnum reviewed or is reviewing: state not baseline or ineligible
+	ViewMagnum PRView = "magnum" // rows magnum reviewed or is reviewing (state not baseline or ineligible), or whose review is requested from a self login
 	ViewMine   PRView = "mine"   // assigned to one of the self logins, or their review is requested
 	ViewReady  PRView = "ready"  // open, not a draft, approved on the head, nothing blocking, required checks passed
 )

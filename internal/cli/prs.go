@@ -48,7 +48,7 @@ func newPRsCmd(c *Context) *cobra.Command {
 			"dragging the gap between two headings resizes a column (W resets) and a right click opens the PR's "+
 			"actions. Elsewhere, or with --json, it prints the rows once; the JSON has snake_case keys, times in RFC 3339 "+
 			"(left out while unset) and durations in seconds.\n\n"+
-			"--view picks the rows: all, magnum (what magnum reviewed or is reviewing), mine (assigned to you or your "+
+			"--view picks the rows: all, magnum (what magnum reviewed or is reviewing, or your review is requested on), mine (assigned to you or your "+
 			"review requested) or ready (approved, no changes requested, not a draft); on the live board it is the "+
 			"view the board opens in. "+
 			"PRs GitHub merged or closed within [board] recent_closed (24h by default; \"0\" turns it off) follow the "+
@@ -850,7 +850,7 @@ func prsReviewersCell(list []tui.ReviewerInfo) string {
 func completeViews(string) []cobra.Completion {
 	desc := map[tui.PRView]string{
 		tui.ViewAll:    "every PR",
-		tui.ViewMagnum: "what magnum reviewed or is reviewing",
+		tui.ViewMagnum: "what magnum reviewed or is reviewing, or your review is requested on",
 		tui.ViewMine:   "assigned to you or your review requested",
 		tui.ViewReady:  "approved, no changes requested, not a draft",
 	}

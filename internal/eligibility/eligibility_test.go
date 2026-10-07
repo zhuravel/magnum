@@ -102,6 +102,12 @@ func TestClassify(t *testing.T) {
 		{name: "include_drafts=false skips drafts", watch: config.Watch{IncludeDrafts: bp(false)}, mutate: func(f *PRFacts) { f.IsDraft = true }, reason: "draft PR (include_drafts = false)"},
 		{name: "include_drafts=false keeps ready PRs", watch: config.Watch{IncludeDrafts: bp(false)}, want: true},
 		{name: "include_drafts=true keeps drafts", watch: config.Watch{IncludeDrafts: bp(true)}, mutate: func(f *PRFacts) { f.IsDraft = true }, want: true},
+		{name: "include_drafts=false keeps a draft with a pending review request", watch: config.Watch{IncludeDrafts: bp(false)},
+			mutate: func(f *PRFacts) { f.IsDraft, f.Requested = true, true }, want: true},
+		{name: "a review request does not lift the other filters", watch: config.Watch{IncludeDrafts: bp(false), SkipLabels: []string{"WIP"}},
+			mutate: func(f *PRFacts) { f.IsDraft, f.Requested, f.Labels = true, true, []string{"WIP"} }, reason: `label "WIP" is in skip_labels`},
+		{name: "a review request does not lift include_own", watch: config.Watch{IncludeDrafts: bp(false), IncludeOwn: bp(false)},
+			mutate: func(f *PRFacts) { f.IsDraft, f.Requested, f.AuthorLogin = true, true, "zhuravel" }, reason: "own PR (include_own = false)"},
 
 		// own PRs
 		{name: "include_own=false skips own PRs", watch: config.Watch{IncludeOwn: bp(false)}, mutate: func(f *PRFacts) { f.AuthorLogin = "zhuravel" }, reason: "own PR (include_own = false)"},

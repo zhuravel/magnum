@@ -50,6 +50,12 @@ type PRFacts struct {
 	// ready for review) arrived that no round has started for yet; zero =
 	// none. Throttle then holds the PR only for the request debounce.
 	RequestedAt time.Time
+	// Requested: a review request for magnum (not a draft's move to ready
+	// for review) arrived that no round has started for yet. Classify lets a
+	// draft with one through include_drafts = false: the request makes it
+	// eligible for the round it starts, and a later push to it is skipped
+	// again unless a newer request arrives.
+	Requested bool
 	// RepliedAt is the latest reply on magnum's review its judge has not
 	// re-decided, on a head magnum reviewed (no push since); zero = none.
 	// Throttle then holds the PR only for the reply debounce and the reply
@@ -91,7 +97,7 @@ type Decision struct {
 
 // Classify applies the watch's filters to a PR. It looks at Muted, the
 // repository (manual_repos), the author (bots, skip_authors, own), Labels,
-// IsDraft, IsCrossRepo and the author's association
+// IsDraft (unless Requested), IsCrossRepo and the author's association
 // (skip_departed_authors), in that order, and reports the first rule that
 // rejects the PR.
 //
@@ -115,7 +121,7 @@ func Classify(w config.Watch, f PRFacts) Decision {
 		}
 	}
 	switch {
-	case f.IsDraft && !w.DraftsIncluded():
+	case f.IsDraft && !w.DraftsIncluded() && !f.Requested:
 		return reject("draft PR (include_drafts = false)")
 	case !w.OwnIncluded() && isOwn(f):
 		return reject("own PR (include_own = false)")

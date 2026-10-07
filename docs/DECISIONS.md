@@ -3053,3 +3053,17 @@ editing history. Code, config comments and prompts reference these by their head
   the variants are other files Claude never opens, so they decline needlessly; that errs on the safe side.
   Not covered: `ChangedUnder`'s git fallback, used only when the PR's file list cannot decide, still misses a
   Unicode-folded variant of `.mcp.json` before a checkout moves (the session's next launch catches it).
+- **A review request on a draft starts its round; the magnum view keeps requested PRs** (2026-10-07). With
+  `include_drafts = false` an author requested the operator's review on a draft: magnum recorded the request
+  (`pr.review_requested`, "the next round skips the timing rules") and started nothing, because
+  `eligibility.Classify` rejected the draft before a request counted, and the board's `magnum` view hid the
+  ineligible PR, so it vanished from there too. A request that would start a requested round (for the poll
+  login, a posting identity or a `request_teams` team; not a draft's move to ready for review) now makes a
+  draft eligible for the round it starts: `PRFacts.Requested`, which the engine fills from the pending
+  request only for a draft a watch skips. It counts only while it is newer than the PR's last round start,
+  as a request always did, because GitHub keeps the operator's request after magnum's App posts: a later
+  push to the draft is skipped again until a newer request, and a request for anyone else changes nothing.
+  The wait, the card and the request's event name it ("requested on a draft by alice"); `magnum review` is
+  unchanged. A counted round that fails leaves no request behind, so its retry is skipped like any push to
+  the draft (a refunded round restores it). The `magnum` view also keeps any row whose review is requested
+  from one of the self logins (the `mine` view's rule), whatever its state.

@@ -576,7 +576,9 @@ func prFromInput(in store.GitHubPR, now time.Time) store.PR {
 }
 
 // factsFor is the eligibility view of a PR. Its repository's name is read
-// only when the watch has manual_repos, the one rule that needs it.
+// only when the watch has manual_repos, and its pending review request
+// (Requested) only for a draft the watch skips: the one rule that needs
+// each.
 func (e *Engine) factsFor(ctx context.Context, pr store.PR, w config.Watch, now time.Time) eligibility.PRFacts {
 	rounds := pr.RoundsToday
 	if deref(pr.RoundsDay) != store.DayKey(now) {
@@ -590,11 +592,16 @@ func (e *Engine) factsFor(ctx context.Context, pr store.PR, w config.Watch, now 
 		}
 		repo = r.Name
 	}
+	requested := false
+	if pr.IsDraft && !w.DraftsIncluded() {
+		req, ok := e.pendingRequest(ctx, pr)
+		requested = ok && req.By != RequestReadyForReview
+	}
 	return eligibility.PRFacts{
 		Repo:   repo,
 		Number: pr.Number, AuthorLogin: deref(pr.AuthorLogin),
 		AuthorIsBot: github.IsBot(deref(pr.AuthorType), deref(pr.AuthorLogin)),
-		IsDraft:     pr.IsDraft, IsCrossRepo: pr.IsCrossRepo, Labels: pr.Labels, SelfLogin: e.selfLogin(w),
+		IsDraft:     pr.IsDraft, Requested: requested, IsCrossRepo: pr.IsCrossRepo, Labels: pr.Labels, SelfLogin: e.selfLogin(w),
 		AuthorAssociation: deref(pr.AuthorAssociation),
 		HeadSHA:           pr.HeadSHA, ReviewedSHA: deref(pr.ReviewedSHA), State: pr.State,
 		HeadChangedAt: pr.HeadChangedAt, PendingSince: deref(pr.PendingSince),
@@ -698,6 +705,9 @@ func (e *Engine) onNewPR(ctx context.Context, repo store.Repo, w config.Watch, p
 		e.event(ctx, "info", subject, "pr.queued", fmt.Sprintf("new PR queued; eligible at %s", td.NextEligibleAt.Local().Format("15:04:05")), nil)
 	case store.PRIneligible:
 		dec := e.classify(ctx, w, pr, now)
+		if dec.Eligible { // a review request this poll recorded lets a draft through
+			return e.queue(ctx, pr, w, []string{store.PRIneligible}, true, now, "new PR, "+e.eligibleWhy(ctx, w, pr))
+		}
 		if err := e.st.UpdatePR(ctx, pr.ID, func(u *store.PRUpdate) { u.Set("skip_reason", dec.Reason) }); err != nil {
 			return err
 		}
@@ -742,7 +752,7 @@ func (e *Engine) onSeenPR(ctx context.Context, repo store.Repo, w config.Watch, 
 		return e.st.TransitionPR(ctx, pr.ID, []string{store.PRIneligible}, store.PRReviewed,
 			func(u *store.PRUpdate) { u.Set("skip_reason", nil) })
 	case pr.State == store.PRIneligible && dec.Eligible:
-		return e.queue(ctx, pr, w, []string{store.PRIneligible}, false, now, "now eligible")
+		return e.queue(ctx, pr, w, []string{store.PRIneligible}, false, now, e.eligibleWhy(ctx, w, pr))
 	case waiting && !dec.Eligible:
 		return e.markIneligible(ctx, pr, []string{pr.State}, dec.Reason, false, now)
 	case waiting && prev.IsDraft != pr.IsDraft:
@@ -751,6 +761,18 @@ func (e *Engine) onSeenPR(ctx context.Context, repo store.Repo, w config.Watch, 
 		return e.queue(ctx, pr, w, []string{pr.State}, false, now, map[bool]string{true: "now a draft", false: "ready for review"}[pr.IsDraft])
 	}
 	return nil
+}
+
+// eligibleWhy is why the watch's filters accept a PR they rejected: the
+// review request that lets a draft through (Request.Phrase), else "now
+// eligible" (the PR or the filters changed).
+func (e *Engine) eligibleWhy(ctx context.Context, w config.Watch, pr store.PR) string {
+	if pr.IsDraft && !w.DraftsIncluded() {
+		if req, ok := e.pendingRequest(ctx, pr); ok {
+			return req.Phrase()
+		}
+	}
+	return "now eligible"
 }
 
 // onHeadChange reacts to a push (recorded for the burst quiet period).

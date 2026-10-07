@@ -4,10 +4,12 @@ package engine
 // or a posting identity (or for a team a watch lists in request_teams), and
 // a draft marked ready for review, start a round after [daemon]
 // request_debounce instead of the quiet period, and skip the re-review
-// interval, the small-delta threshold and the daily cap. Requests are
-// edge-triggered by their time in the PR's timeline: the pending
-// reviewRequests list cannot tell a new request from an old one, and GitHub
-// drops a request once the reviewer reviews.
+// interval, the small-delta threshold and the daily cap. A review request
+// on a draft a watch skips (include_drafts = false) makes it eligible for
+// the round the request starts (factsFor). Requests are edge-triggered by
+// their time in the PR's timeline: the pending reviewRequests list cannot
+// tell a new request from an old one, and GitHub drops a request once the
+// reviewer reviews.
 
 import (
 	"context"
@@ -38,20 +40,25 @@ const RequestReadyForReview = "(ready for review)"
 
 // Request is a review request magnum handled for a PR.
 type Request struct {
-	At time.Time
-	By string // a login, or RequestReadyForReview
+	At    time.Time
+	By    string // a login, or RequestReadyForReview
+	Draft bool   // the PR is a draft
 }
 
-// Phrase is how screens name the request: "requested by alice" or "ready
-// for review".
+// Phrase is how screens name the request: "requested by alice",
+// "requested on a draft by alice" or "ready for review".
 func (r Request) Phrase() string {
 	if r.By == RequestReadyForReview {
 		return "ready for review"
 	}
-	if r.By == "" {
-		return "review requested"
+	what := "requested"
+	if r.Draft {
+		what += " on a draft"
 	}
-	return "requested by " + r.By
+	if r.By == "" {
+		return "review " + what
+	}
+	return what + " by " + r.By
 }
 
 // noteRequestsSince records when request tracking started (once).
@@ -118,8 +125,12 @@ func (e *Engine) noteRequest(ctx context.Context, w config.Watch, repo store.Rep
 	if by == "" {
 		by = pick.Reviewer.Login
 	}
-	req := Request{At: pick.CreatedAt.UTC(), By: by}
-	e.recordRequest(ctx, repo, pr, req, fmt.Sprintf("review requested from %s by %s", requestedName(pick.Reviewer), by))
+	req := Request{At: pick.CreatedAt.UTC(), By: by, Draft: pr.IsDraft}
+	what := fmt.Sprintf("review requested from %s by %s", requestedName(pick.Reviewer), by)
+	if pr.IsDraft && !w.DraftsIncluded() {
+		what += " on a draft, which include_drafts = false skips: the request makes it eligible for the round it starts"
+	}
+	e.recordRequest(ctx, repo, pr, req, what)
 	return req, true
 }
 
@@ -177,13 +188,13 @@ func (e *Engine) pendingRequest(ctx context.Context, pr store.PR) (Request, bool
 		return Request{}, false
 	}
 	by, _ := e.getKV(ctx, KVPRRequestBy(pr.ID))
-	return Request{At: at, By: by}, true
+	return Request{At: at, By: by, Draft: pr.IsDraft}, true
 }
 
 // onRequest acts on a request the poll just recorded: a waiting PR gets its
 // next_eligible_at again (the request's debounce), and a reviewed,
-// needs-attention, baseline or ineligible PR the watch's filters accept is
-// queued. A PR in a round keeps it for later: the round's review answers
+// needs-attention, baseline or ineligible PR the watch's filters accept (a
+// draft include_drafts = false skips, for the request) is queued. A PR in a round keeps it for later: the round's review answers
 // it when it covers the head, else the re-review it leaves runs as
 // requested. A muted PR stays muted.
 func (e *Engine) onRequest(ctx context.Context, repo store.Repo, w config.Watch, prID int64, req Request, now time.Time) error {

@@ -412,6 +412,11 @@ func boolOr(p *bool, def bool) bool {
 	}
 	return *p
 }
+
+// DraftsIncluded is include_drafts (default true). False skips drafts until
+// they are ready for review, except that a review request for the poll
+// login, a posting identity or a team of request_teams makes a draft
+// eligible for the round the request starts (eligibility.PRFacts.Requested).
 func (w Watch) DraftsIncluded() bool   { return boolOr(w.IncludeDrafts, true) }
 func (w Watch) OwnIncluded() bool      { return boolOr(w.IncludeOwn, true) }
 func (w Watch) BotsSkipped() bool      { return boolOr(w.SkipBotAuthors, true) }

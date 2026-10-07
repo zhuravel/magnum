@@ -54,7 +54,7 @@ func (p prbPainter) helpContent(width int) []string {
 	lines := strings.Split(keys, "\n")
 	lines = append(lines, "", p.st.Section.Render("Views and filter"))
 	for _, l := range []string{
-		"magnum: what magnum reviewed or is reviewing · mine: assigned to you or your review requested · " +
+		"magnum: reviewed or reviewing, or your review requested · mine: assigned to you or your review requested · " +
 			"ready: approved on the head, no changes requested, magnum not blocking, required checks passed, not a draft",
 		"/ words match fuzzily; state:<s> assignee:<login> author:<login> (@me: you) review:requested narrow it; " +
 			"a,b lists alternatives",
