@@ -3571,3 +3571,10 @@ editing history. Code, config comments and prompts reference these by their head
   and nor does an import, a curation or the operator's edit. Rejected: a toast per file (a judge that adds
   three scripts would send three); comparing with the round's snapshot (two rounds of one repository that saw
   the same change would announce it twice, while the version is recorded once).
+- **docs/BACKLOG.md is gone; the improvement loop keeps the candidate work** (2026-10-07). Every item in it
+  had shipped (struck through, "None is open"), its "Not worth it" list rejected the Homebrew tap that ships
+  now, and item 21 named `config.local.toml`, which no longer exists, while the README still called it
+  candidate work with evidence. Candidate work now lives in the specs of a `/magnum-improve` run
+  (`.claude/skills/magnum-improve`), which carry their evidence and land through the gate, and each shipped
+  item's decision is already in this file. Rejected: relabelling the file as an archive (a second record of
+  decisions this file holds, which drifts as it did).

@@ -28,7 +28,7 @@ import (
 	"github.com/zhuravel/magnum/internal/tui"
 )
 
-const prsUsage = "[--repo owner/name|name] [--view all|magnum|mine|ready] [--sort updated|last-review|reviewer-activity|requested|changes|state] [--desc] [--all] [--needs-me] [--json] [--limit N]"
+const prsUsage = "[--repo owner/name|name] [--view all|magnum|mine|ready] [--sort updated|last-review|reviewer-activity|requested|changes|state] [--desc] [--all] [--needs-me] [--auto-approved] [--json] [--limit N]"
 
 func newPRsCmd(c *Context) *cobra.Command {
 	var f prsFlags
@@ -37,13 +37,18 @@ func newPRsCmd(c *Context) *cobra.Command {
 			"whether the head moved since), every reviewer's latest verdict or pending request, and what changed "+
 			"since the last review. Rows come from the registry only; the daemon's poller keeps them fresh, so the "+
 			"board never spends GitHub rate budget.\n\n"+
-			"On a terminal this opens the live board, refreshed every 5s: j/k move, enter shows the PR card (with the "+
-			"last round's stage timings), / filters (fuzzy words plus state:<s>, assignee:<login>, author:<login> and "+
-			"review:requested; @me means you), v cycles the views, s cycles the sort and S reverses it, r reviews (R fresh, i with /simplify), o opens the "+
-			"judge's pane, p/u pin and unpin, x releases, M/U mute and unmute (every review, release, mute and unmute "+
-			"key asks y/N first; only y confirms), b opens the PR in the browser, a "+
-			"jumps to what needs you, ctrl+r or F5 refreshes now, tab switches to the status dashboard (and back), ? lists "+
-			"every key and q quits. With the mouse ([terminal] mouse, on by default; m toggles it) the wheel scrolls, a "+
+			"On a terminal this opens the live board, refreshed every 5s: j/k move (g/G to the first and last PR), enter "+
+			"shows the PR card (with the last round's stage timings), / filters (fuzzy words plus state:<s>, "+
+			"assignee:<login>, author:<login> and review:requested; @me means you), v cycles the views and O the "+
+			"owners, s cycles the sort and S reverses it, h hides ignored and skipped PRs. On the selected PR: r "+
+			"reviews (R fresh, i with /simplify), K kills its running or queued review, I ignores it (kill, mute, free "+
+			"its slot), A/C approve and request changes (on a row that needs you, A approves as you), D withdraws "+
+			"the approval magnum posted as you, z snoozes it for 2h (or lifts its snooze), o opens the judge's pane, "+
+			"p/u pin and unpin, x releases, M/U mute and unmute, b opens the PR in the browser and t its issue in "+
+			"the tracker; every one of them but o, p, u, b and t asks y/N first, and only y confirms. a jumps to "+
+			"what needs you, ! shows the action log, ctrl+r or F5 refreshes now, tab switches to the status "+
+			"dashboard (and back), ? lists every key and q quits. With the mouse ([terminal] mouse, on by default; "+
+			"m toggles it) the wheel scrolls, a "+
 			"click selects and a double click opens the card, a click on a heading sorts by it (again reverses), "+
 			"dragging the gap between two headings resizes a column (W resets) and a right click opens the PR's "+
 			"actions. Elsewhere, or with --json, it prints the rows once; the JSON has snake_case keys, times in RFC 3339 "+

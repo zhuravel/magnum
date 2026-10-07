@@ -23,8 +23,9 @@ const identitiesCheckTimeout = 90 * time.Second
 func newIdentitiesCmd(c *Context) *cobra.Command {
 	cmd := newCommand(groupInspect, "identities", "list GitHub identities; `check` verifies logins, App permissions and tokens",
 		"List the GitHub identities of config.toml ([[identity]]) with the watches that post or poll as each one. "+
-			"`check` verifies each identity's login, GitHub App permissions and installation token; run it under "+
-			"`mise exec` so the App private key is in the environment.",
+			"`check` verifies each identity's login, GitHub App permissions and installation token. An App whose "+
+			"key is a file (private_key_file) needs nothing more; one that reads it from an environment variable "+
+			"(private_key_env) needs that variable set: run the command under `mise exec` when mise provides it.",
 		func(pos []string) int {
 			if len(pos) > 0 {
 				return inspUsage(c, "identities", fmt.Sprintf("unknown identities subcommand %q", pos[0]), identitiesUsage)

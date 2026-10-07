@@ -33,7 +33,7 @@ func (p prbPainter) helpContent(width int) []string {
 	}
 	nav := section("Move and view", []hint{
 		{"j/k ↑/↓", "move"}, {"g / G", "first / last PR"}, {"pgup/pgdn", "a page up / down"},
-		{"enter", "details card"}, {"s / S", "next sort / reverse it"}, {"/", "filter (fuzzy)"},
+		{"enter / a", "details card / jump to what needs you"}, {"s / S", "next sort / reverse it"}, {"/", "filter (fuzzy)"},
 		{"v / O", "next view / next owner (all, then each)"},
 		{"esc", "back, clear the filter, quit"}, {"ctrl+r / F5", "refresh now"}, {"tab", "status dashboard"},
 		{"h / W", "hide ignored and skipped / reset widths"}, {"? / " + logKey, "this help / the action log"},
@@ -44,7 +44,8 @@ func (p prbPainter) helpContent(width int) []string {
 		{"i", "review with /simplify (asks y/N)"}, {"o", "open the " + judgeName(p.judge) + " pane"},
 		{"b / t", "open the PR / its issue in the browser"}, {"p / u", "pin / unpin"}, {"M / U", "mute / unmute (asks y/N); merged: dismiss flag"},
 		{"x / z", "release (asks y/N) / snooze 2h or lift it"}, {"K", "kill the running or queued review (asks y/N)"},
-		{"I", "ignore: kill, mute, free slot; U undoes"}, {"A / C", "approve / request changes (asks y/N)"}, {"a", "jump to what needs attention"},
+		{"I", "ignore: kill, mute, free slot; U undoes"}, {"A / C", "approve / request changes (asks y/N)"},
+		{"D", "withdraw magnum's approval as you (asks y/N)"},
 		{"y", "answer yes; any other key, enter too, cancels"},
 	})
 	keys := lipgloss.JoinHorizontal(lipgloss.Top, nav, "     ", acts)

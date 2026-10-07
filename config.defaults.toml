@@ -1,9 +1,11 @@
 # magnum's built-in configuration: embedded in the binary (rebuild after editing), every key documented.
 # Your settings do not go here: put them in ~/.config/magnum/config.toml ($XDG_CONFIG_HOME/magnum/config.toml
 # when that is set; `magnum init` writes one). Its [[watch]], [[identity]], [[pool]] and [[repo]] blocks are
-# appended, any key it sets under [daemon], [herdr], [terminal], [github], [pipeline], [usage], [triage],
+# appended, any key it sets under [daemon], [herdr], [terminal], [board], [github], [pipeline], [usage], [triage],
 # [learn], [notes] or [kinds.<name>] overrides the value here, and its [[role]] blocks override the role of the same
-# name key by key (other names are appended). Secrets go in the checkout's gitignored .mise.local.toml.
+# name key by key (other names are appended). App private keys are PEM files ([[identity]] private_key_file, by
+# convention ~/.config/magnum/keys/<identity>.pem); only the older private_key_env reads one from an environment
+# variable, e.g. from a checkout's gitignored .mise.local.toml (the LaunchAgent then runs through `mise exec`).
 # Durations use Go syntax: "30s", "5m", "2h", with whole days in front: "7d", "1d12h".
 
 [daemon]
@@ -25,8 +27,11 @@ close_grace = "10m"               # wait after CLOSED/MERGED before releasing (c
                                   #   blocks below set theirs, so these change only roles you add without one
                                   #   (`magnum config` warns when they change nothing); to change a built-in
                                   #   role's, set timeout in a [[role]] block of its name in your config
-agent_start_stagger = "15s"
-min_warm = "30m"
+agent_start_stagger = "15s"       # agent launches start at least this far apart, across rounds (and at most 3
+                                  # Codex launches at once)
+min_warm = "30m"                  # a pool slot another PR holds is taken back for a waiting PR (its sessions parked,
+                                  # the slot released) only once unused this long, with no human typing, no
+                                  # session working, blocked or prompted within it, no run and no pin
 human_cooldown = "15m"            # after you type into a magnum pane
 reconcile_interval = "10m"          # reconcile and prune; must be positive (0 would stop the retention below)
 default_repo = ""                 # "owner/name": lets `magnum review 123` omit the repository (set it in your config)
@@ -68,7 +73,11 @@ model_limit_cooldown = "5h"       # a model capped on its own (health pattern mo
                                   # push that merges the base branch (or rebases onto it) and leaves the PR's own
                                   # diff against it as it was ([] = re-review every push; a list without "base"
                                   # re-reviews base merges; [[watch]] may override; `magnum review` always runs)
-# quiet_hours = "01:00-07:00"
+# quiet_hours = "01:00-07:00"     # local "HH:MM-HH:MM" (start included, end excluded; "22:00-06:00" crosses
+                                  # midnight): inside it no automatic round starts (first reviews, re-reviews,
+                                  # delta checks, reply rounds, review requests, continues of a paused turn wait
+                                  # for its end); `magnum review` and the board's review keys still do, a round in
+                                  # flight finishes, and the poll, auto-approval, the retro and curation go on
 restart_on_new_build = false      # true: once a new bin/magnum on disk passes its config check, the daemon restarts
                                   # on it at the first tick with no round claiming, reviewing or verifying (it exits
                                   # for launchd to start the new build; dispatch never stops for it; needs launchd)
@@ -80,9 +89,12 @@ toast_every_review = false        # also toast every automatic review posted
 
 [terminal]
 app = "Terminal"                  # Terminal | iTerm2 | Ghostty | WezTerm | custom (override in your config)
-session = "default"
+session = "default"               # the herdr session `magnum open` focuses a client of, or opens one for
+                                  # (`herdr --session <name>`)
 launcher = ""                     # custom: template with {herdr} {args} {command}
-reveal_on_attention = false
+reveal_on_attention = false       # true: when a PR needs you (an agent waits on a dialog, a round needs attention)
+                                  # the daemon focuses its agent in herdr and brings the terminal's herdr client
+                                  # forward, as `magnum open` does; at most once in 30 minutes per agent or cause
 # mouse = true                    # board and dashboard: wheel, click, double-click, heading sort,
                                   # column drag, right-click menu; m toggles it live (default true)
 icons = "unicode"                 # unicode | nerd (Nerd Font icons in their state's color, gh-dash's for verdicts
@@ -372,7 +384,8 @@ rerun_min_lines = 150                 # runs again once this many code lines cha
                                       # (comments, blank lines, whitespace moves, docs and the lines of a merged
                                       # base branch do not count); 0 = never
 prompt = "claude-simplify.md"           # read-only: four parallel angle reviews (reuse, simplification,
-                                      # efficiency, altitude), then at most 6 ranked proposals, edits none
+                                      # efficiency, altitude), then every qualifying proposal, ranked (the
+                                      # judge posts at most 3); edits none
 output = "claude-simplify.md"         # the proposals; no `after`, so it runs alongside the reviewers
 timeout = "40m"
 aliases = ["simplify"]
@@ -457,6 +470,12 @@ aliases = ["simplify"]
 #                                       # unset = the pipeline's; [] = ignore no path)
 # related_ignore = ["**/*.lock", "db/schema.rb"]
 # request_teams = ["backend"]           # review requests for these team slugs start a round like one for you
+# auto_approve = ["your-app"]           # repositories of the watch (names, or ["*"]) on whose PRs magnum posts YOUR
+#                                       # approval once its review of the head leaves nothing to fix (default: none)
+# auto_approve_as = "me"                # the gh identity of your own account (GitHub does not count an App's approval)
+# auto_approve_body = "Approved after magnum's review of {{.Short}}."   # one line: .Short (7 characters), .SHA,
+#                                       # .ReviewURL, .Repo, .Number (unset: a default line linking the review);
+#                                       # magnum adds its marker
 # roles = ["codex-judge", "claude-review", "codex-review", "claude-simplify"]   # omitted or [] = every [[role]]
 # trackers = ["https://linear.app/your-org/issue/PR-{num}"]   # [board] trackers for this owner's PRs: an issue key
 #                                       # prefix named here wins over [board]'s (another org's PR- in another tracker)

@@ -237,8 +237,8 @@ func newVersionCmd(c *Context) *cobra.Command {
 func newConfigCmd(c *Context) *cobra.Command {
 	return newCommand(groupInspect, "config", "validate config.toml and render every prompt file; print the resolved paths",
 		"Validate the configuration (the built-in defaults with your ~/.config/magnum/config.toml over them), render every prompt file the "+
-			"roles name with this binary's template data, and print the resolved home, config, state and judge "+
-			"skill paths with the number of watches, identities and pools. Fix whatever it reports before installing "+
+			"roles name with this binary's template data, and print the resolved checkout, config, data, state and "+
+			"judge skill paths with the number of watches, identities and pools. Fix whatever it reports before installing "+
 			"or restarting the daemon: `magnum daemon-restart` and `magnum install` run this command with the binary "+
 			"that will run (bin/magnum) and refuse when it fails, and the daemon refuses to start on the same errors.",
 		func([]string) int {

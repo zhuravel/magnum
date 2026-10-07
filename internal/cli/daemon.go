@@ -28,7 +28,8 @@ const daemonUsage = "daemon [--once] [--dry-run [--json]] [--log-level LEVEL]"
 func newDaemonCmd(c *Context) *cobra.Command {
 	var f daemonFlags
 	cmd := newCommand(groupDaemon, daemonUsage, "run the review daemon in the foreground (what launchd runs)",
-		"Run the review daemon in the foreground; the launchd agent runs exactly this through `mise exec`. It "+
+		"Run the review daemon in the foreground; the launchd agent runs exactly this (through `mise exec` only "+
+			"while an App identity reads its key from an environment variable mise provides: private_key_env). It "+
 			"polls GitHub, schedules and runs review rounds in herdr panes, answers CLI requests and releases "+
 			"storage of closed PRs until SIGTERM or ctrl+c. Only one daemon runs per home: a second one exits "+
 			"at once. --once runs startup and one tick, waits for the rounds and heavy jobs it started, then "+

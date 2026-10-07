@@ -25,17 +25,18 @@ func newInstallCmd(c *Context) *cobra.Command {
 	cmd := newCommand(groupDaemon, installUsage, "create state dirs, load the launchd agent, optionally link the herdr plugin",
 		"Create the state directories, write the launchd agent (~/Library/LaunchAgents/zhuravel.magnum.plist, "+
 			"running `magnum daemon`, through `mise exec` while an App key comes from mise) and load it, which also restarts a "+
-			"running daemon on the new binary. --plugin links this checkout as the herdr plugin; --gh writes the "+
-			"gh extension shim gh-magnum, so `gh magnum <command>` runs this checkout's binary (gh-dash keybindings "+
-			"use it, see docs/gh-dash.yml); --dry-run prints what would be written and run. `make install` runs "+
-			"`install --plugin`; `install --gh --no-launchd` only writes the shim. bin/magnum checks the "+
-			"configuration and renders every prompt first (`bin/magnum config`); the install is refused when it "+
+			"running daemon on the new binary. --plugin links the herdr plugin: a checkout's own herdr-plugin.toml, "+
+			"else the embedded plugin, which it writes to herdr-plugin/ in the data directory first; --gh writes the "+
+			"gh extension shim gh-magnum, so `gh magnum <command>` runs this binary (a checkout's bin/magnum; gh-dash "+
+			"keybindings use it, see docs/gh-dash.yml); --dry-run prints what would be written and run. `make install` "+
+			"runs `install --plugin`; `install --gh --no-launchd` only writes the shim. The binary launchd will run "+
+			"checks the configuration and renders every prompt first (`<binary> config`); the install is refused when it "+
 			"fails. Reloading the agent restarts a running daemon, so while review rounds are in flight it is "+
 			"refused (it abandons them); --drain stops new rounds and waits for those in flight (at most "+
 			"--timeout), --now installs at once.",
 		func(pos []string) int { return runInstallCmd(c, f, pos) })
 	fs := cmd.Flags()
-	fs.BoolVar(&f.plugin, "plugin", false, "also link this checkout as the herdr plugin "+pluginID)
+	fs.BoolVar(&f.plugin, "plugin", false, "also link the herdr plugin "+pluginID+" (a checkout's own, else the embedded one written to the data directory)")
 	fs.BoolVar(&f.gh, "gh", false, "also write the gh extension shim (gh magnum <command>)")
 	fs.BoolVar(&f.noLaunchd, "no-launchd", false, "do not write or load the launchd agent")
 	fs.BoolVar(&f.dry, "dry-run", false, "print what would be written and run; change nothing")

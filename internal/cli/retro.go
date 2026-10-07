@@ -38,7 +38,8 @@ func newRetroCmd(c *Context) *cobra.Command {
 			"closed and whether or not a retro did already (--again is implied for them); they must be merged or "+
 			"closed and in the registry.\n\n"+
 			"A retro runs whether or not [learn] enabled schedules the daily one, and even under `magnum pause`, but "+
-			"not while the daemon drains for a restart or an infrastructure failure holds it. The daemon answers "+
+			"not while the daemon drains for a restart, an infrastructure failure holds it or its agent's CLI is "+
+			"paused at a usage limit or a logout. The daemon answers "+
 			"at once and runs the retro in the background, one at a time. Exits 1 when no daemon runs (the request "+
 			"stays queued and starts the retro when one does) or the daemon refuses it.",
 		func(pos []string) int { return runRetro(c, o, pos) })

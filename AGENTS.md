@@ -17,8 +17,9 @@ when you change a behaviour, do not rewrite old ones.
   must stay distributable and must load standalone.
 - **A daemon built from this checkout may be live on the machine.** Never run `bin/magnum` from a
   test or an agent task, never run git, mysql, herdr or launchctl against real directories or sockets.
-  Tests are hermetic: fakes for git, gh, herdr and MySQL; the live tests are opt-in by environment
-  variable.
+  Tests are hermetic: fakes for git, gh, herdr and MySQL; the live tests are read-only and opt-in by
+  environment variable (`MAGNUM_LIVE_GITHUB`, `MAGNUM_LIVE_HERDR`, `MAGNUM_LIVE_MYSQL`,
+  `MAGNUM_LIVE_INVENTORY`, `MAGNUM_LIVE_ENGINE`, each `=1`), never set in the gate.
 - **Prompts are loaded at daemon startup.** The daemon reads `prompts/*.md` and copies
   `skills/magnum-review/SKILL.md` (to `<state dir>/skill/<hash>/`; a binary without a checkout uses the
   prompts and skill it embeds) once, when it starts, right after
@@ -41,7 +42,8 @@ when you change a behaviour, do not rewrite old ones.
   checkout untrusted (`project_untrust`), and their "Folder access" is answered "Open restricted"; one
   that changes `.claude/` or `.mcp.json` (settings with hooks, MCP servers, skills, commands, agents) gets
   its Claude sessions started with `--setting-sources user`, and a Claude session that loaded the project
-  config is parked before the checkout moves to a new head (Claude reloads it while it runs).
+  config is parked before the checkout moves to a new head that changes it (Claude reloads it while it
+  runs).
 
 ## Gate
 

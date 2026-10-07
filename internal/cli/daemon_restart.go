@@ -39,7 +39,7 @@ func addRestartFlags(cmd *cobra.Command, f *restartFlags) {
 	fs := cmd.Flags()
 	fs.BoolVar(&f.now, "now", false, "restart even while review rounds are in flight (they start over)")
 	fs.BoolVar(&f.drain, "drain", false, "start no new rounds, wait for the ones in flight, then restart")
-	fs.DurationVar(&f.timeout, "timeout", defaultDrainTimeout, "with --drain or --when-idle: give up (and restart nothing) after this long")
+	fs.DurationVar(&f.timeout, "timeout", defaultDrainTimeout, "with --drain: give up (and restart nothing) after this long")
 }
 
 // check refuses more than one of --now, --drain and --when-idle, and a
@@ -64,8 +64,8 @@ func newDaemonRestartCmd(c *Context) *cobra.Command {
 	cmd := newCommand(groupDaemon, daemonRestartUsage, "restart the daemon (launchctl kickstart; a daemon outside launchd is stopped)",
 		"Restart the daemon without rewriting the launchd plist: `launchctl kickstart -k` restarts the loaded "+
 			"agent on the current binary, after stopping a daemon that was started by hand. Without a loaded "+
-			"agent a running daemon is stopped (SIGTERM) and `magnum install` is suggested. bin/magnum checks the "+
-			"configuration and renders every prompt first (`bin/magnum config`); the restart is refused when it "+
+			"agent a running daemon is stopped (SIGTERM) and `magnum install` is suggested. The binary launchd runs "+
+			"checks the configuration and renders every prompt first (`<binary> config`); the restart is refused when it "+
 			"fails. While review rounds are in flight the restart is refused, because it abandons them; --drain "+
 			"stops new rounds, waits for those in flight (a line every 15s, at most --timeout, default 2h) and then "+
 			"restarts; --when-idle waits the same way without stopping anything and restarts at the first moment no "+
@@ -73,6 +73,7 @@ func newDaemonRestartCmd(c *Context) *cobra.Command {
 			"terminal, stops a wait and lifts a drain.",
 		func(pos []string) int { return runDaemonRestartCmd(c, pos, f) })
 	addRestartFlags(cmd, &f)
+	cmd.Flags().Lookup("timeout").Usage = "with --drain or --when-idle: give up (and restart nothing) after this long"
 	cmd.Flags().BoolVar(&f.whenIdle, "when-idle", false, "wait, stopping nothing, until no review round is in flight, then restart")
 	return cmd
 }

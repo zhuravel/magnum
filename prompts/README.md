@@ -18,7 +18,7 @@ you delete falls back to the built-in copy. `magnum config` fails when a role na
 in neither place.
 
 The daemon loads every prompt its roles name, `model-fallback.md`, the triage, retro and notes curation prompts and a copy
-of each judge's skill (`state/skill/<hash>/SKILL.md`) once, when it starts, right after checking that its build
+of each judge's skill (`~/.local/state/magnum/skill/<hash>/SKILL.md`, under the state directory) once, when it starts, right after checking that its build
 renders them. An edit here therefore takes effect at the next `magnum daemon-restart`, which checks it again,
 without a rebuild; `magnum status` shows when the prompts were loaded and how many files changed on
 disk since. The CLI (`magnum config`, `magnum roles`, `magnum doctor`) reads the files as they are now.
@@ -119,7 +119,7 @@ the judge data, every other session role gets the role data, and a shell role's 
 | `.FailingChecks` | `failing-checks.json` in the report directory, rendered as the `<magnum>` field `failing_checks` by the initial, rereview, recovery and continue prompts only when set: the PR's checks that failed on `.HeadSHA` (name, state, workflow, time; `complete` false when GitHub listed only part of the checks), from the registry's latest read of the PR (`prs.ci_json`, the poller's last Details fetch) when the prompt goes out. A file, never names in the prompt: the PR's workflows name the checks. Empty when none failed, when the stored checks are another commit's, and always under `.Blind`. What to do with it is the skill's (one Checks line per check: caused by the PR, a P1 broken build, or unrelated) |
 | `.CodexProjectDeclined` | the round's Codex sessions ran with the checkout untrusted because the PR changes `.codex/` (the record their launches keep names the round's head; see `project_untrust` below), rendered as the `<magnum>` field `codex_project: declined` by the initial, rereview and recovery prompts only then, and only when one of the round's roles, the judge included, is a Codex one (the record names the kind's last launch on the head, which may be a session the round did not run); the skill adds a line to the review's Checks |
 | `.ClaudeProjectDeclined` | the same for the round's Claude sessions, which loaded the user's settings only (`--setting-sources user`) because the PR changes `.claude/` or `.mcp.json`, rendered as `claude_project: declined` only in a round with a Claude role |
-| `.NotesPath` | the repository notes file, `<home>/state/notes/<owner>/<repo>.md` (lower-case); empty when there is none. The judge reads it and rewrites it when a round taught something durable (see Repository notes). The judge prompts pass it and the four rows below as the `<magnum>` fields `notes`, `notes_dir`, `notes_harness`, `notes_lock` and `notes_unlock`, only when it is set; the steps are the skill's |
+| `.NotesPath` | the repository notes file, `~/.local/share/magnum/notes/<owner>/<repo>.md` (lower-case; under `<checkout>/state/` with `MAGNUM_HOME`); empty when there is none. The judge reads it and rewrites it when a round taught something durable (see Repository notes). The judge prompts pass it and the four rows below as the `<magnum>` fields `notes`, `notes_dir`, `notes_harness`, `notes_lock` and `notes_unlock`, only when it is set; the steps are the skill's |
 | `.NotesDir`, `.NotesLock` | the harness directory next to the notes file (its path without `.md`) and the notes lock (that with `.lock`); empty without notes |
 | `.NotesHarness`, `.NotesHarnessMore` | the harness directory's entries at prompt time (sorted, a directory ends in `/`, at most 40) and how many more there are |
 | `.NotesLockCommand`, `.NotesUnlockCommand` | the shell lines that take the notes lock (printing `notes locked`, or `notes busy` after three minutes) and release it |
@@ -367,7 +367,7 @@ can see exactly what magnum will type.
 | Kind | resume | model | effort | name / rename | login check |
 |---|---|---|---|---|---|
 | codex | `resume {session}` | `--model {model}` | `-c model_reasoning_effort={effort}` | `/rename {title}` | `codex login status`, `text:Logged in` |
-| claude | `--resume {session}` | `--model {model}` | (prompt only) | `--name {title}` | `claude auth status`, `json:loggedIn` |
+| claude | `--resume {session}` | `--model {model}` | `--effort {effort}` | `--name {title}` | `claude auth status`, `json:loggedIn` |
 | droid | `--resume {session}` | none | none | none | none |
 | omp | `--resume={session}` | `--model={model}` | `--thinking={effort}` | none | none |
 
@@ -451,7 +451,7 @@ starts their agents. Magnum, not the model, holds the limits: see DECISIONS "Tri
 |---|---|---|
 | `enabled` | `false` | ask the model; everything below applies only when it is on |
 | `max_lines` | `120` | a round whose diff changes more lines (added plus deleted) runs every role, unasked |
-| `command` | `["claude", "-p", "--model", "haiku", "--tools", "", "--no-session-persistence"]` | the model's CLI as an argument list; the prompt arrives on stdin and stdout is the answer. It runs in a private directory under `state/`, never in the PR's checkout. A Codex one: `["codex", "exec", "--model", "<a cheap model>", "--sandbox", "read-only", "--ephemeral", "--skip-git-repo-check", "-"]` |
+| `command` | `["claude", "-p", "--model", "haiku", "--tools", "", "--no-session-persistence"]` | the model's CLI as an argument list; the prompt arrives on stdin and stdout is the answer. It runs in a private directory under the state directory (`~/.local/state/magnum/triage`), never in the PR's checkout. A Codex one: `["codex", "exec", "--model", "<a cheap model>", "--sandbox", "read-only", "--ephemeral", "--skip-git-repo-check", "-"]` |
 | `timeout` | `2m` | a command that takes longer is killed and the round runs every role |
 | `prompt` | `triage.md` | the prompt file, resolved like the roles' |
 

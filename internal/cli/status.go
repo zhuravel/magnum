@@ -32,12 +32,13 @@ func newStatusCmd(c *Context) *cobra.Command {
 			"last review. --all adds the manual worktrees (talkable.repoN, *__worktrees/*) and --sizes measures folder "+
 			"sizes with du.\n\n"+
 			"--watch on a terminal opens the live dashboard, refreshed every 2s: j/k select a slot or PR, enter "+
-			"opens its judge pane, r reviews (R fresh, i with /simplify), p/u pin and unpin, x releases, M/U mute "+
-			"and unmute (every review, release, mute and unmute key asks y/N first; only y confirms), ctrl+r or F5 "+
-			"refreshes now, b opens the PR in the browser, a jumps to what needs you, w shows "+
-			"the manual worktrees, m turns the mouse off and on (wheel, click, double click to open, right click "+
-			"for the row's actions), tab (or t) switches to the PR board of `magnum prs` and back, ? lists every key "+
-			"and q quits. Elsewhere, or with a <ref>, --watch redraws "+
+			"(or o) opens its judge pane, r reviews (R fresh, i with /simplify), K kills the PR's running or queued "+
+			"review, I ignores the PR (kill, mute, free its slot), p/u pin and unpin, x releases, M/U mute and "+
+			"unmute (every review, kill, ignore, release, mute and unmute key asks y/N first; only y confirms), g, "+
+			"ctrl+r or F5 refreshes now, b opens the PR in the browser, a jumps to what needs you, w shows the manual "+
+			"worktrees, ! shows the action log, m turns the mouse off and on (wheel, click, double click to open, "+
+			"right click for the row's actions, a drag between two headings resizes a column), W resets the column "+
+			"widths, tab (or t) switches to the PR board of `magnum prs` and back, ? lists every key and q quits. Elsewhere, or with a <ref>, --watch redraws "+
 			"the text every 2s until interrupted.",
 		func(pos []string) int { return runStatus(c, f, pos) })
 	fs := cmd.Flags()

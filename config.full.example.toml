@@ -3,7 +3,7 @@
 # config.defaults.toml (embedded in the binary); set one here only to change it. App private keys are files
 # next to the config (~/.config/magnum/keys/, chmod 600). Your config's [[watch]], [[identity]], [[pool]] and
 # [[repo]] blocks are appended to the defaults, any key it sets under [daemon], [herdr], [terminal], [board],
-# [github], [pipeline], [triage], [learn], [notes] or [kinds.<name>] overrides the default, and its [[role]] blocks
+# [github], [pipeline], [usage], [triage], [learn], [notes] or [kinds.<name>] overrides the default, and its [[role]] blocks
 # override the role of the same name key by key (other names are appended). `magnum roles` prints the
 # effective roles and `magnum config` validates the result.
 # Durations use Go syntax: "30s", "5m", "2h", with whole days in front: "7d", "1d12h".
