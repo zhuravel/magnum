@@ -27,6 +27,9 @@ notes_unlock: {{.NotesUnlockCommand}}
 {{- if .RelatedPRs}}
 related_prs: {{.RelatedPRs}}
 {{- end}}
+{{- if .FailingChecks}}
+failing_checks: {{.FailingChecks}}
+{{- end}}
 result_file: {{.ResultFile}}
 post_review: {{.PostReviewCommand}}
 {{- if .PostRepliesCommand}}

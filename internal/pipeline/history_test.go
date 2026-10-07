@@ -105,7 +105,8 @@ func TestARoundWritesTheChangedFilesHistory(t *testing.T) {
 	if want := []string{in.BaseSHA + "..." + target}; !slices.Equal(diffs, want) {
 		t.Errorf("ModifiedPaths calls = %q, want %q", diffs, want)
 	}
-	if want := []string{"origin/master 8 app/models/order.rb", "origin/master 8 spec/support/database_utils.rb"}; !slices.Equal(logged, want) {
+	if want := []string{in.BaseSHA + " 8 app/models/order.rb", in.BaseSHA + " 8 spec/support/database_utils.rb",
+		"origin/master 8 app/models/order.rb", "origin/master 8 spec/support/database_utils.rb"}; !slices.Equal(logged, want) {
 		t.Errorf("FileLog calls = %q, want %q (no lockfile)", logged, want)
 	}
 	evs := e.eventsOf("round.history")
@@ -117,6 +118,75 @@ func TestARoundWritesTheChangedFilesHistory(t *testing.T) {
 		if strings.Contains(ev.Message+string(ev.Data), "flaky") {
 			t.Errorf("event %s carries a commit subject: %s %s", ev.Kind, ev.Message, ev.Data)
 		}
+	}
+}
+
+// A PR is never tested with the base's commits after its merge base: master
+// merged a change to the same tool and spec hours before magnum's review, and
+// the PR's new example failed once merged, with no textual conflict.
+// history.json marks each such commit `after_merge_base` (a log at the merge
+// base lacks it); a commit the merge base has stays unmarked, and a file
+// without commits on the base needs no second log.
+func TestHistoryMarksTheBaseCommitsAfterTheMergeBase(t *testing.T) {
+	e := newEnv(t)
+	e.git.modified = []string{"lib/tool.rb", "spec/lib/tool_spec.rb", "lib/new_on_base.rb"}
+	e.git.logs = map[string][]gitx.Commit{
+		"lib/tool.rb": {
+			{SHA: "aaa1111", Date: "2026-10-07", Subject: "Count retries in the tool (#12001)"},
+			{SHA: "bbb2222", Date: "2026-09-30", Subject: "Add the tool (#11900)"},
+		},
+		"spec/lib/tool_spec.rb": {{SHA: "aaa1111", Date: "2026-10-07", Subject: "Count retries in the tool (#12001)"}},
+	}
+	e.git.afterBase = map[string]bool{"aaa1111": true}
+	e.ag.behaviors[agents.RoleJudge] = []behavior{e.judgePosts(817, "COMMENTED", "COMMENT").behavior(t)}
+	in := e.input(KindInitial)
+
+	res, err := e.r.RunRound(e.ctx, in)
+	if err != nil || res.Outcome != OutcomePosted {
+		t.Fatalf("RunRound = %+v, %v", res, err)
+	}
+	got, raw := readHistory(t, filepath.Join(res.ReportDir, HistoryFile))
+	want := []FileHistory{
+		{Path: "lib/tool.rb", Commits: []HistoryCommit{
+			{SHA: "aaa1111", Date: "2026-10-07", Subject: "Count retries in the tool (#12001)", PR: 12001, AfterMergeBase: true},
+			{SHA: "bbb2222", Date: "2026-09-30", Subject: "Add the tool (#11900)", PR: 11900},
+		}},
+		{Path: "spec/lib/tool_spec.rb", Commits: []HistoryCommit{
+			{SHA: "aaa1111", Date: "2026-10-07", Subject: "Count retries in the tool (#12001)", PR: 12001, AfterMergeBase: true},
+		}},
+		{Path: "lib/new_on_base.rb", Commits: []HistoryCommit{}},
+	}
+	if !reflect.DeepEqual(got.Files, want) {
+		t.Fatalf("history.json files = %+v\nwant %+v", got.Files, want)
+	}
+	if n := strings.Count(raw, `"after_merge_base": true`); n != 2 || strings.Contains(raw, `"after_merge_base": false`) {
+		t.Errorf("after_merge_base appears %d times (want 2, never false):\n%s", n, raw)
+	}
+	_, logged := e.git.gitCalls()
+	if want := []string{
+		"origin/master 8 lib/new_on_base.rb", "origin/master 8 lib/tool.rb", "origin/master 8 spec/lib/tool_spec.rb",
+		in.BaseSHA + " 8 lib/tool.rb", in.BaseSHA + " 8 spec/lib/tool_spec.rb",
+	}; !slices.Equal(logged, slices.Sorted(slices.Values(want))) {
+		t.Errorf("FileLog calls = %q, want %q", logged, want)
+	}
+
+	// Without a merge base nothing tells which commits are newer: none is
+	// marked, and git reads one log per file.
+	e = newEnv(t)
+	e.git.modified = []string{"lib/tool.rb"}
+	e.git.logs = map[string][]gitx.Commit{"lib/tool.rb": {{SHA: "aaa1111", Date: "2026-10-07", Subject: "Count retries"}}}
+	e.git.afterBase = map[string]bool{"aaa1111": true}
+	e.ag.behaviors[agents.RoleJudge] = []behavior{e.judgePosts(818, "COMMENTED", "COMMENT").behavior(t)}
+	in = e.input(KindInitial)
+	in.BaseSHA = ""
+	if res, err = e.r.RunRound(e.ctx, in); err != nil || res.Outcome != OutcomePosted {
+		t.Fatalf("RunRound without a merge base = %+v, %v", res, err)
+	}
+	if got, _ := readHistory(t, filepath.Join(res.ReportDir, HistoryFile)); len(got.Files) != 1 || got.Files[0].Commits[0].AfterMergeBase {
+		t.Errorf("history.json without a merge base = %+v", got)
+	}
+	if _, logged := e.git.gitCalls(); !slices.Equal(logged, []string{"origin/master 8 lib/tool.rb"}) {
+		t.Errorf("FileLog calls without a merge base = %q", logged)
 	}
 }
 
@@ -149,6 +219,7 @@ func TestTheHistoryCapsFilesAndCommits(t *testing.T) {
 		t.Errorf("a file without commits is not an empty list:\n%s", raw)
 	}
 	_, logged := e.git.gitCalls()
+	logged = slices.DeleteFunc(logged, func(s string) bool { return s == e.input(KindInitial).BaseSHA+" 8 lib/f00.rb" }) // the merge base's log of the one file with commits
 	if len(logged) != maxHistoryFiles || !slices.ContainsFunc(logged, func(s string) bool { return s == "origin/master 8 lib/f39.rb" }) ||
 		slices.ContainsFunc(logged, func(s string) bool { return strings.HasSuffix(s, "lib/f40.rb") }) {
 		t.Errorf("FileLog calls = %q", logged)

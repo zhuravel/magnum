@@ -681,12 +681,26 @@ recent log named the fix the PR undid. Before the reviewers of each head, Magnum
 the report directory: each file the PR changes that exists on its base (at most 40, in git's order, paths
 matching `related_ignore` aside) with its last 8 commits on `origin/<base>`, each with its short SHA,
 date, subject and the PR number a subject ending in `(#123)` names, read with `git log` in the checkout.
-The judge's prompts (the own pass, the candidates phase, a round's one prompt) name it as `history`, the
-claude-review prompts in one sentence; the judge reads a commit that fixed the code or mechanism the PR
-touches (`git show <sha>`), and a PR that undoes or re-breaks that fix gets a finding. A restart writes
+A commit the base got after the PR's merge base is marked `after_merge_base` (a second `git log` at the
+merge base lacks it): the PR was never tested with it, and a PR once passed alone and failed after the
+merge because a newer base commit changed the tool its spec called. The judge's prompts (the own pass,
+the candidates phase, a round's one prompt) name it as `history`, the claude-review prompts in one
+sentence; the judge reads a commit that fixed the code or mechanism the PR touches (`git show <sha>`), and
+a PR that undoes or re-breaks that fix gets a finding; when a commit after the merge base changes what the
+PR's code or tests call, the judge runs the affected specs on the merged tree (`git merge-tree`, checked
+out in a scratch worktree), and a failure there is a broken build. A restart writes
 the new head's; a blind replay reads the logs at its merge base, never anything newer; a continued turn
 gets none, and a `git log` that fails or takes more than 2 minutes in all only leaves the prompts without
 it (a `round.history` warning).
+
+The judge also sees the head's failing CI checks, since a PR once got LGTM while a check had failed on
+that head. When a judge prompt goes out (initial, rereview, continue), Magnum reads the PR's checks from
+the registry (`prs.ci_json`, the poller's last Details fetch) and, when they belong to the head under
+review and one failed, writes `failing-checks.json` in the report directory (name, state, workflow and
+time of each failed check; the PR's workflows name them, so the names stay out of the prompt) and names
+it as `failing_checks`. The review's Checks then say for each one whether the PR causes it, from its log
+(`gh run view --log-failed`): one the PR causes is a P1 broken build, any other is named as unrelated. A
+blind replay never gets the file.
 
 A session role's turn ends when herdr shows its agent idle on two ticks in a row. Claude Code also ends
 its turn while work it started in the background runs (a command run in the background or moved there by
@@ -894,7 +908,16 @@ weighs the candidates a reviewer rejected itself, replays a chance test failure 
 counts developers' time (local runs that diverge from CI, a new flaky test) as harm. It reads the
 changed files' recent commits (`history`) and checks that the PR does not undo or re-break an earlier
 fix, and it verifies the description's claims that bear on risk (a ticked "Can be reverted easily",
-"No migrations" or "Covered by tests", a stated scope or behaviour) at the reviewed head. In re-review mode magnum hands it the threads its login started with
+"No migrations" or "Covered by tests", a stated scope or behaviour) at the reviewed head. A PR that closes
+an access hole gets every parameter of that request traced to its writes, dynamic dispatch included, and
+a hole left there is the PR's finding, not a pre-existing one; parallel copies of the code the PR edits
+(one file per client or provider) are compared for a guard one lacks; a delete of records thought
+unsaved is checked against every path that saves them; and a case called a known edge case or rare gets a
+check of how often real traffic reaches it, while an input no caller produces and no user can send is P3
+at most. It runs the affected specs on the merged tree when a base commit after the merge base changes
+what the PR calls, and gives each of the head's failing checks (`failing_checks`) a Checks line. A
+finding its earlier reviews missed on code the PR did not change since is posted as new, its title
+ending with `(missed earlier)`. In re-review mode magnum hands it the threads its login started with
 every reply classified by its first clause, after an opening "Good catch", "Valid" or "Noted" (`fixed`,
 `not a bug`, `won't fix`; a reply that scores the fix below zero, or says "not worth it" or "we accept the
 risk", declines it); the judge decides a reply by what it does, not by that hint, accepts a fix

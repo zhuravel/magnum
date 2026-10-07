@@ -377,6 +377,13 @@ type JudgeData struct {
 	// magnum wrote none (no file of the PR on the base, a continued turn, a
 	// git failure).
 	HistoryFile string
+	// FailingChecks is failing-checks.json in the report directory: the
+	// head's failed CI checks as the poller last saw them (prs.ci_json:
+	// name, workflow, state, time), rendered as `failing_checks` by the
+	// initial, rereview and continue prompts; "" when none failed, when
+	// the checks are another commit's, and in a blind replay. A file, as
+	// check names come from the PR's workflows.
+	FailingChecks string
 	// CodexProjectDeclined: the round's Codex sessions ran with the
 	// checkout untrusted because the PR changes .codex/ (the PR's Codex
 	// ProjectNote names the round's head), rendered as

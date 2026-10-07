@@ -3067,3 +3067,63 @@ editing history. Code, config comments and prompts reference these by their head
   unchanged. A counted round that fails leaves no request behind, so its retry is skipped like any push to
   the draft (a refunded round restores it). The `magnum` view also keeps any row whose review is requested
   from one of the self logins (the `mine` view's rule), whatever its state.
+- **A security fix secures the whole request** (2026-10-07). A PR that closed five access holes passed
+  claude-review's check of the target authorization, while a person found that the same request's keys reached
+  private methods through `respond_to?(m, true)`, so a read-only user could strip a live record's settings
+  (reproduced). The hole was older than the PR, so a reviewer who raised it would have seen
+  the judge drop it as `pre_existing`. SKILL.md's section 2 now has a PR that closes an access hole or adds an
+  authorization check to an action trace each request parameter of that action to its writes, dynamic dispatch
+  included (`send`, `respond_to?(name, true)`, method names built from request keys); a hole left on that request
+  is the PR's finding, and `pre_existing` excludes a request the PR secures. The claude reviewer prompts
+  (`claude-review.md`, and the same paragraph in `claude-rereview.md` and `claude-restart.md`) carry one clause of
+  the same meaning. Rejected: posting every older hole near a security fix (the nearby block keeps security ones
+  out of posted text; the request the PR claims to secure is its scope).
+- **history.json marks the base's commits after the merge base** (2026-10-07). Master merged a change to the same
+  tool and spec 4 hours before magnum's review; the PR's new example failed once merged ("expected: 1 time,
+  received: 0 times"), without a textual conflict, and the repository's CI did not run on push; the same pattern
+  came up on another PR that week. history.json listed such commits, but its only rule was about a PR that undoes
+  a fix. Each commit the base got after the PR's merge base is now marked `after_merge_base: true` (a second
+  `git log` at the merge base, for each file with commits, lacks it; abbreviations compared by prefix), never
+  without a merge base or in a blind replay. The skill's history rule adds that the PR was never tested with such
+  a commit: when it changes what the PR's code or tests call, the judge runs the affected specs on the merged tree
+  (`git merge-tree --write-tree HEAD origin/<base_ref>`, checked out in a scratch worktree in the result file's
+  directory, removed after, through `db_lock` as every database command), and a failure there is a broken build.
+  Rejected: a `rev-list` of the range in one call (a new gitx method, while gitx was being changed elsewhere; the
+  second log costs one more `git log` per file with commits within the same 2-minute budget); always running the
+  specs on the merged tree (most base commits touch nothing the PR calls).
+- **A rare case gets a check of real traffic** (2026-10-07). claude-review raised a domain fallback on a first
+  page view that the PR's description called a known edge case; the judge did not post it, and a person showed it
+  hits every new visitor, putting one visitor in two country segments. The same person said magnum's three P3s
+  needed callers that do not exist in the repository. SKILL.md's reachability paragraph now has a case called a
+  known edge case or rare checked for how often real traffic reaches it, starting with the paths that traffic
+  takes (a new visitor's first page, the inputs the PR's callers produce), and an input no caller in the
+  repository or its documented API produces, and no user can send, is P3 at most. "No user can send" keeps a
+  crafted request, which an attacker can send, out of that cap.
+- **Parallel copies are compared** (2026-10-07). In one client `atob(null)` sent a garbage email for every
+  anonymous visitor, while the sibling client already had the guard; nobody raised it (older than the PR, in the
+  hook it edits). The skill's "Structure can hide a defect" list now names parallel copies (of a helper, or a file
+  per client, integration or provider) of which one lacks a guard another has: compared when the PR edits one,
+  `nearby` when older than the PR. It replaces "a copy of a helper that misses its edge cases".
+- **A delete of unsaved records is traced to every save path** (2026-10-07). Save kept an "uploaded" list, and a
+  later Reset and Save deleted a saved image; nobody raised it. The same list in the skill now names a delete of
+  records thought unsaved (uploads, drafts, temp records) whose list or flag a save path leaves stale, with every
+  path that saves them traced.
+- **A finding missed earlier is posted as new, with a label** (2026-10-07). codex-review reviews the whole PR on
+  every re-review (`--base <merge base>`). In re-reviews the judge rejected 34 of 58 codex candidates as
+  `outside_diff` or `duplicate`, yet posted 5 such findings as new P2s in rounds 6 and 7 on code reviewed five
+  times (real defects, fixed), with no note to the authors. SKILL.md's re-review scope now says a proved finding
+  the earlier reviews missed on PR code is new, never `outside_diff`, and its title ends with `(missed earlier)`;
+  it counts for the verdict like any new finding. Rejected: narrowing codex-review's base to the previous head
+  (the missed defects were real, and its whole-PR pass found them).
+- **The judge sees the head's failing checks** (2026-10-07). A PR got LGTM and the operator's auto-approval
+  while its RSpec check had failed on that head 25 minutes earlier (1 of 27,820 tests, unrelated to the PR), and
+  the review's Checks did not mention it. When a judge prompt goes out (initial, rereview, continue), the round
+  reads the PR from the registry; when `prs.ci_json` belongs to the head under review and a check failed, it
+  writes `failing-checks.json` in the report directory (`pipeline.FailingChecks`: the failed checks' name, state,
+  workflow and time, and whether GitHub listed every check) and names it as the `<magnum>` field
+  `failing_checks` (`JudgeData.FailingChecks`), with a `round.failing_checks` event that counts them. The skill
+  gives each one a Checks line, caused by the PR (a P1 broken build) or unrelated, from its log (`gh run view
+  --log-failed`, or the check's output). The names stay in the file, since the PR's workflows name the checks
+  (prompts carry no PR text); a blind replay, which reads no CI result, gets none. Rejected: the names in the
+  block (PR text in a prompt); checks of an older head (they say nothing of the reviewed one); the recovery prompt
+  for now (another change in flight edits it; a recovery reads CI itself with `gh` when it matters).

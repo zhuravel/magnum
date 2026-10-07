@@ -9,8 +9,12 @@ package pipeline
 // the watch's related_ignore paths aside) with its last 8 commits on
 // origin/<base> (short SHA, date, subject, and the PR number a squash
 // merge's subject ends with), read through gitx in the checkout; a blind
-// replay reads them at its merge base, never anything newer. The judge
-// prompts name the file as `history`, the claude reviewers in one sentence.
+// replay reads them at its merge base, never anything newer. A commit the
+// base got after the PR's merge base is marked after_merge_base: a PR passed
+// its own tests and failed once merged with a base commit that changed the
+// tool it called, without a textual conflict, so the skill runs the
+// affected specs on the merged tree. The judge prompts name the file as
+// `history`, the claude reviewers in one sentence.
 // Paths and subjects come from the base branch's commits: data in the file,
 // never in a prompt or an event.
 
@@ -29,6 +33,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/fsx"
+	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
@@ -70,6 +75,17 @@ type HistoryCommit struct {
 	Date    string `json:"date"` // the committer date, YYYY-MM-DD
 	Subject string `json:"subject"`
 	PR      int    `json:"pr,omitempty"` // the PR a subject ending in "(#123)" names
+	// AfterMergeBase: the base has the commit after the PR's merge base,
+	// so the PR was never tested with it (a log at the merge base lacks
+	// it). Never set without a merge base, nor in a blind replay, which
+	// reads at the merge base.
+	AfterMergeBase bool `json:"after_merge_base,omitempty"`
+}
+
+// sameCommit: a and b abbreviate the same commit id (git may abbreviate
+// one longer than the other when objects arrive between two logs).
+func sameCommit(a, b string) bool {
+	return a != "" && b != "" && (strings.HasPrefix(a, b) || strings.HasPrefix(b, a))
 }
 
 var historyPRNumber = regexp.MustCompile(`\(#(\d+)\)$`)
@@ -103,7 +119,8 @@ func (rd *round) historyBase() (rev, base string, ok bool) {
 // filesHistory reads history.json's content for the head under review, the
 // logs at rev of the files it changes against base, within HistoryTimeout;
 // Files is empty when it changes no file the base has, related_ignore's
-// aside.
+// aside. When base (the merge base) is not rev, a file with commits gets a
+// second log at base, and its commits that log lacks are AfterMergeBase.
 func (rd *round) filesHistory(ctx context.Context, rev, base string) (FilesHistory, error) {
 	ctx, cancel := context.WithTimeout(ctx, HistoryTimeout)
 	defer cancel()
@@ -128,9 +145,14 @@ func (rd *round) filesHistory(ctx context.Context, rev, base string) (FilesHisto
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			commits, err := rd.r.Git.FileLog(ctx, in.SlotPath, rev, p, maxHistoryCommits)
+			var older []gitx.Commit
+			if err == nil && len(commits) > 0 && base != rev {
+				older, err = rd.r.Git.FileLog(ctx, in.SlotPath, base, p, maxHistoryCommits)
+			}
 			f := FileHistory{Path: p, Commits: make([]HistoryCommit, 0, len(commits))}
 			for _, c := range commits {
-				f.Commits = append(f.Commits, HistoryCommit{SHA: c.SHA, Date: c.Date, Subject: c.Subject, PR: historyPR(c.Subject)})
+				after := base != rev && !slices.ContainsFunc(older, func(o gitx.Commit) bool { return sameCommit(o.SHA, c.SHA) })
+				f.Commits = append(f.Commits, HistoryCommit{SHA: c.SHA, Date: c.Date, Subject: c.Subject, PR: historyPR(c.Subject), AfterMergeBase: after})
 			}
 			out.Files[i], errs[i] = f, err
 		})

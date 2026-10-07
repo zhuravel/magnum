@@ -317,6 +317,11 @@ func TestRenderGolden(t *testing.T) {
 		d.HistoryFile = ownDir + "history.json"
 		return d
 	}
+	// The head's failing checks: the posting judge prompts name the file.
+	withFailingChecks := func(d JudgeData) JudgeData {
+		d.FailingChecks = ownDir + "failing-checks.json"
+		return d
+	}
 	roleHistory := func(d RoleData) RoleData {
 		d.HistoryFile = ownDir + "history.json"
 		return d
@@ -358,6 +363,9 @@ func TestRenderGolden(t *testing.T) {
 		{"judge_initial_history", "judge-initial.md", withHistory(withRelated(judgeFixture()))},
 		{"judge_rereview_candidates_history", "judge-rereview.md", withHistory(candidates(withNotes))},
 		{"judge_recovery_history", "judge-recovery.md", withHistory(judgeFixture())},
+		{"judge_initial_failing_checks", "judge-initial.md", withFailingChecks(withHistory(candidates(judgeFixture())))},
+		{"judge_rereview_failing_checks", "judge-rereview.md", withFailingChecks(withHistory(withNotes))},
+		{"judge_continue_failing_checks", "judge-continue.md", withFailingChecks(withRelated(judgeFixture()))},
 		{"claude_initial_history", "claude-review.md", roleHistory(roleFixture())},
 		{"claude_rereview_history", "claude-rereview.md", roleHistory(roleFixture())},
 		{"claude_restart_history", "claude-restart.md", roleHistory(restartedRereview)},

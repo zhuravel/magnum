@@ -75,6 +75,7 @@ func (rd *round) runJudge(ctx context.Context, run store.Run) (RoundResult, erro
 	rd.addThreads(ctx, &jd)
 	rd.addDeltaCheck(ctx, &jd)
 	rd.addRelated(ctx, &jd)
+	rd.addFailingChecks(ctx, &jd)
 	rd.addProjectDeclined(ctx, &jd)
 	rd.ownPassPhase(&jd)
 	rd.snapshotNotes()

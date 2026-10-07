@@ -252,6 +252,29 @@ func TestNotesCuratorKeepsUndecidedFindingsOutOfStandingDecisions(t *testing.T) 
 
 // A re-review's own pass re-read the whole PR (5-12 responses resumed, up to
 // 56 cold): it covers the new commits, as section 6 scopes them.
+// What people found after magnum's reviews and magnum missed (2026-10-07):
+// a security fix left a hole on the request it secured, reached through
+// dynamic dispatch; a PR passed alone and failed once merged with a newer
+// base commit to the same tool; a "known edge case" hit every new visitor;
+// a sibling client had a guard the edited one lacked; a reset deleted a
+// saved upload its stale list still named; codex's whole-PR findings on
+// code reviewed five times came as new P2s without a note; and a red CI
+// check went unmentioned under an LGTM.
+func TestSkillCarriesTheRulesFromMisses(t *testing.T) {
+	skillSays(t, []string{
+		"When the PR closes an access hole or adds an authorization check to an action, trace each request parameter of that action to its writes, dynamic dispatch included (`send`, `respond_to?(name, true)`, method names built from request keys); a hole left on that request is this PR's finding.",
+		"`pre_existing`: the base has the same problem and this PR neither makes it worse nor secures the request it is on;",
+		"The PR was never tested with a commit marked `after_merge_base`: if one changes what the PR's code or tests call, run the affected specs on the merged tree (`git merge-tree --write-tree HEAD origin/<base_ref>`, in a scratch worktree in the directory of `result_file`, removed after); a failure there is a broken build.",
+		"A case called a known edge case or rare: check how often real traffic reaches it, starting with the paths that traffic takes (a new visitor's first page, the inputs the PR's callers produce).",
+		"An input no caller in the repository or its documented API produces, and no user can send, is P3 at most.",
+		"parallel copies (of a helper, or a file per client, integration or provider) of which one lacks a guard another has (compare them when the PR edits one; `nearby` if older than the PR)",
+		"a delete of records thought unsaved (uploads, drafts, temp records) whose list or flag a save path leaves stale (trace every path that saves them)",
+		"A proved finding your earlier reviews missed on PR code is new, never `outside_diff`: end its title with `(missed earlier)`.",
+		"- `failing_checks` (when present): the head's failed CI checks (section 7).",
+		"Each check in `failing_checks` gets one Checks line: caused by the PR (a P1 broken build) or unrelated, as its log shows (`gh run view --log-failed`, or the check's output).",
+	}, []string{"a copy of a helper that misses its edge cases", "and this PR does not make it worse;"})
+}
+
 func TestSkillOwnPassOfAReReviewCoversTheNewCommits(t *testing.T) {
 	skillSays(t, []string{
 		"In a re-review, section 2 covers section 6's scope (the new commits; your earlier reviews cover the rest), and `own_findings` holds section 6's decisions too.",
@@ -271,9 +294,14 @@ func TestSkillOwnPassOfAReReviewCoversTheNewCommits(t *testing.T) {
 // the same line, which lost its explanation (2026-10-06), and 663 for
 // `db_lock` and the shared databases (211), a role's limits by design
 // (209), standing decisions that need the authors' decision (131) and the
-// own pass's re-review scope (112) (2026-10-07). Every rule added must
-// replace or shorten text.
-const skillMaxBytes = 32_907
+// own pass's re-review scope (112) (2026-10-07), and 1,601 for the rules
+// from what people found and magnum missed: the whole request of a
+// security fix, base commits after the merge base, the real traffic of a
+// rare case, parallel copies, deletes of unsaved records and findings
+// missed earlier (1,350 together, the helper-copy clause they replace
+// counted), and the head's failing checks (251) (2026-10-07). Every rule
+// added must replace or shorten text.
+const skillMaxBytes = 34_508
 
 func TestSkillStaysTight(t *testing.T) {
 	if n := len(magnum.Skill); n > skillMaxBytes {
@@ -293,6 +321,7 @@ func TestSkillDescribesEveryMagnumField(t *testing.T) {
 	d.Readiness = Readiness{Failed: 1, File: "/r/readiness.json", Checks: []ReadinessCheck{
 		{Kind: ReadinessReady, Command: "bin/db-ready", Status: ReadinessFailed, Duration: "1s"}}}
 	d.RelatedPRs, d.HistoryFile, d.CodexProjectDeclined, d.ClaudeProjectDeclined = "/r/related.json", "/r/history.json", true, true
+	d.FailingChecks = "/r/failing-checks.json"
 	skill := string(magnum.Skill)
 	seen := map[string]bool{}
 	// A two-phase round: the candidates phase of each prompt, and the own
@@ -321,7 +350,7 @@ func TestSkillDescribesEveryMagnumField(t *testing.T) {
 			seen[m[1]] = true
 		}
 	}
-	for _, f := range []string{"notes", "notes_dir", "notes_harness", "notes_lock", "notes_unlock", "readiness", "reports", "phase", "own_findings", "related_prs", "history", "codex_project", "claude_project"} {
+	for _, f := range []string{"notes", "notes_dir", "notes_harness", "notes_lock", "notes_unlock", "readiness", "reports", "phase", "own_findings", "related_prs", "history", "failing_checks", "codex_project", "claude_project"} {
 		if !seen[f] {
 			t.Errorf("no judge prompt renders `%s`", f)
 		}
@@ -504,6 +533,9 @@ func TestClaudeReviewPromptsCheckChangedBehaviourAndListRejections(t *testing.T)
 			"\n\nAlso check every caller and consumer of a method whose behaviour changed",
 			"non-production ones included (fixtures, factories, seeds, mock generators, test helpers, scripts, rake tasks)",
 			"a near-equivalent (DELETE for TRUNCATE",
+			// A security fix left a hole on the request it secured: request
+			// keys reached private methods through respond_to?(m, true).
+			"when the PR closes an access hole or adds an authorization check to an action, where each request parameter of that action leads, dynamic dispatch included (`send`, `respond_to?(name, true)`, method names built from request keys), since a hole left on that request is this PR's, not a pre-existing one;",
 			"replay the input space (ids, seeds, orderings)",
 			"one green run proves nothing",
 			"under a `Rejected` heading, list each candidate defect you dropped",
@@ -570,6 +602,45 @@ func TestPromptsNameTheChangedFilesHistory(t *testing.T) {
 	d.HistoryFile = file
 	if got, err := RenderPrompt(prompt(t, "claude-simplify.md"), d); err != nil || strings.Contains(got, file) {
 		t.Errorf("claude-simplify.md names the history: %v\n%s", err, got)
+	}
+}
+
+// A PR got LGTM while its RSpec check had failed on that head 25 minutes
+// earlier, and the review's Checks did not mention it: every judge prompt
+// that posts names the head's failing checks as the <magnum> field
+// `failing_checks` (a file: check names come from the PR's workflows), and
+// none mentions one without the file. The own pass, which posts nothing,
+// never does.
+func TestJudgePromptsNameTheHeadsFailingChecks(t *testing.T) {
+	const file = "/state/reviews/talkable/talkable/11920/d4e5f6a/failing-checks.json"
+	candidates := judgeFixture()
+	candidates.Phase, candidates.OwnFindings = PhaseCandidates, "/r/judge-own.md"
+	for _, tc := range []struct {
+		name string
+		data JudgeData
+	}{
+		{"judge-initial.md", judgeFixture()}, {"judge-initial.md", candidates}, {"judge-rereview.md", candidates},
+		{"judge-rereview.md", judgeFixture()}, {"judge-continue.md", judgeFixture()},
+	} {
+		got, err := RenderPrompt(prompt(t, tc.name), tc.data)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if strings.Contains(got, "failing_checks") || strings.Contains(got, "failing-checks.json") {
+			t.Errorf("%s names failing checks without any:\n%s", tc.name, got)
+		}
+		tc.data.FailingChecks = file
+		if got, err = RenderPrompt(prompt(t, tc.name), tc.data); err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if block := magnumBlock(t, got); !strings.Contains(block, "\nfailing_checks: "+file+"\n") {
+			t.Errorf("%s: the <magnum> block lacks `failing_checks`:\n%s", tc.name, block)
+		}
+	}
+	own := judgeFixture()
+	own.Mode, own.Phase, own.OwnFindings, own.Reports, own.FailingChecks = "initial", PhaseOwnPass, "/r/judge-own.md", nil, file
+	if got, err := RenderPrompt(prompt(t, "judge-own-pass.md"), own); err != nil || strings.Contains(got, file) {
+		t.Errorf("the own pass names the failing checks: %v\n%s", err, got)
 	}
 }
 

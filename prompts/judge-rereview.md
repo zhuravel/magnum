@@ -95,6 +95,9 @@ related_prs: {{.RelatedPRs}}
 {{- if .HistoryFile}}
 history: {{.HistoryFile}}
 {{- end}}
+{{- if .FailingChecks}}
+failing_checks: {{.FailingChecks}}
+{{- end}}
 {{- if .CodexProjectDeclined}}
 codex_project: declined
 {{- end}}

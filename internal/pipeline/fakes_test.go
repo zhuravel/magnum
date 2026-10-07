@@ -640,6 +640,9 @@ type fakeGit struct {
 	// logHangs makes FileLog wait for its context, as a git log walking a
 	// big repository's whole history does (at most 10 seconds).
 	logHangs bool
+	// afterBase are the commits of logs on the base after the PR's merge
+	// base: a log at any revision but origin/* leaves them out.
+	afterBase map[string]bool
 }
 
 func (g *fakeGit) ModifiedPaths(ctx context.Context, dir, base, head string) ([]string, error) {
@@ -667,6 +670,9 @@ func (g *fakeGit) FileLog(ctx context.Context, dir, rev, path string, n int) ([]
 		}
 	}
 	cs := g.logs[path]
+	if !strings.HasPrefix(rev, "origin/") {
+		cs = slices.DeleteFunc(slices.Clone(cs), func(c gitx.Commit) bool { return g.afterBase[c.SHA] })
+	}
 	return slices.Clone(cs[:min(n, len(cs))]), nil
 }
 

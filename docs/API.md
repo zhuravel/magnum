@@ -825,6 +825,13 @@ type JudgeData struct {
 	// magnum wrote none (no file of the PR on the base, a continued turn, a
 	// git failure).
 	HistoryFile string
+	// FailingChecks is failing-checks.json in the report directory: the
+	// head's failed CI checks as the poller last saw them (prs.ci_json:
+	// name, workflow, state, time), rendered as `failing_checks` by the
+	// initial, rereview and continue prompts; "" when none failed, when
+	// the checks are another commit's, and in a blind replay. A file, as
+	// check names come from the PR's workflows.
+	FailingChecks string
 	// CodexProjectDeclined: the round's Codex sessions ran with the
 	// checkout untrusted because the PR changes .codex/ (the PR's Codex
 	// ProjectNote names the round's head), rendered as
@@ -9538,6 +9545,10 @@ const DeltaCheckFile = "delta-check.json"
     DeltaCheckFile is the delta check's file list in the round's report
     directory.
 
+const FailingChecksFile = "failing-checks.json"
+    FailingChecksFile is the head's failing checks in the round's report
+    directory.
+
 const HistoryFile = "history.json"
     HistoryFile is the changed files' history in the round's report directory.
 
@@ -9626,6 +9637,16 @@ type DeltaFile struct {
     DeltaFile is a file of a delta check. Binary: modified without a patch (an
     image, a font), counted as 0 lines.
 
+type FailingChecks struct {
+	PR      string `json:"pr"`       // owner/repo#N
+	HeadSHA string `json:"head_sha"` // the head under review, which the checks ran on
+	// Complete is false when GitHub listed only part of the head's checks
+	// (at most 100): more may have failed.
+	Complete bool                `json:"complete"`
+	Checks   []store.CheckResult `json:"checks"` // the failed ones: name, state, workflow, time
+}
+    FailingChecks is failing-checks.json.
+
 type FileHistory struct {
 	Path    string          `json:"path"`
 	Commits []HistoryCommit `json:"commits"` // newest first, at most 8
@@ -9671,6 +9692,11 @@ type HistoryCommit struct {
 	Date    string `json:"date"` // the committer date, YYYY-MM-DD
 	Subject string `json:"subject"`
 	PR      int    `json:"pr,omitempty"` // the PR a subject ending in "(#123)" names
+	// AfterMergeBase: the base has the commit after the PR's merge base,
+	// so the PR was never tested with it (a log at the merge base lacks
+	// it). Never set without a merge base, nor in a blind replay, which
+	// reads at the merge base.
+	AfterMergeBase bool `json:"after_merge_base,omitempty"`
 }
     HistoryCommit is one commit of a FileHistory.
 
