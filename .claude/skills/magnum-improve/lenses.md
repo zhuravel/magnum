@@ -42,10 +42,11 @@ posted finding, and people's reviews that disagree with magnum (GET with `gh api
 
 People answer in free form. A reply may score the finding ("Net: -3", "I'd rate this -8"), weigh it against its cost,
 accept it and defer the fix to a ticket, fix only part of it, argue with its premise, ask a question, or say "fixed"
-while changing something else. The keyword guess in the table is magnum's classifier and misses most of this: read
-every reply and classify it yourself as fixed, accepted but not fixed yet, declined with a reason, deferred, argued,
-question, or unrelated. Report where your reading and the keyword guess differ: that is evidence for the reply
-classifier and for the judge's reply contract.
+while changing something else. The class in the table is magnum's keyword guess when the round ran (an older round
+had an older classifier) and misses much of this: read every reply and classify it yourself as fixed, accepted but
+not fixed yet, declined with a reason, deferred, argued, question, or unrelated. Report where your reading and the
+keyword guess differ: that is evidence for the reply classifier and for the judge's reply contract. `posted` says when
+magnum posted the finding and marks one posted under the current skill; judge the skill by those.
 
 For each finding that was declined, deferred or argued (by your reading), decide who was right at that head:
 

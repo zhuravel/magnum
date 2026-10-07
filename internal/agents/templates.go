@@ -176,10 +176,17 @@ type ReviewThread struct {
 	ID string `json:"id"` // GraphQL node id
 	// CommentID is the REST id of the thread's first comment: a reply goes
 	// to POST repos/{o}/{r}/pulls/{n}/comments/{CommentID}/replies.
-	CommentID int64         `json:"comment_id"`
-	URL       string        `json:"url"`
-	Finding   string        `json:"finding"`  // the first line of the thread's first comment
-	Location  string        `json:"location"` // path:line; the original line when outdated
+	CommentID int64  `json:"comment_id"`
+	URL       string `json:"url"`
+	Finding   string `json:"finding"`  // the first line of the thread's first comment
+	Location  string `json:"location"` // path:line; the original line when outdated
+	// ReviewID, CreatedAt and Commit say when and where the finding was
+	// posted: the review the first comment belongs to, its creation time
+	// (RFC3339, UTC) and the commit it was made on. Each is omitted when
+	// GitHub reports none.
+	ReviewID  int64         `json:"review_id,omitempty"`
+	CreatedAt string        `json:"created_at,omitempty"`
+	Commit    string        `json:"commit,omitempty"`
 	Resolved  bool          `json:"resolved"`
 	Outdated  bool          `json:"outdated"`
 	Replies   []ThreadReply `json:"replies"` // oldest first

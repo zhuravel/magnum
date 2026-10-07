@@ -3326,3 +3326,35 @@ editing history. Code, config comments and prompts reference these by their head
   not move it (the next round's previous review is still the older one), so its related PRs are named again,
   but a later round on the previous review's head (a reply round, a failed one) replaces that head's record
   and its set counts as named. The `round.related` event counts the PRs left out as `told`.
+- **Replies are read past "Low priority", a deferral and the commit named another way** (2026-10-07; supersedes the
+  rejection of "low priority" alone as won't fix in "Replies are classified by their first clause"). A reading of
+  every reply by meaning found 32 of 57 declined or deferred replies in `other`, all written by the authors' coding
+  agents: 24 of the form "Low priority (Net 0)", "(Net +0.5)" or "(Net +1)" followed by "not worth a change on its
+  own", "stays as is" or "goes with … which stays as is"; three "Noted. … Deferred." or "No guard for now"; two
+  "Valid, left open — not fixed in this PR"; two "by design" or "by decision" mid-sentence; one "Analyzed —
+  correct …, but … rather than …". It also put three fixes in `other`: "Re <id>: right, fixed in <sha>", "… is
+  covered in <sha>" and "<sha> adds …". A low priority acknowledgement (its "(Net …)" score included) that no
+  verdict follows in the first paragraph is now `won't fix`, while "Low priority — fixed in <sha>" stays `fixed`;
+  "stays as (it) is" anywhere in a clause, "left open", "deferred", "not fixed (or changed) in this PR (push,
+  round)" and a clause that starts with "no", "not", "nothing", "none", "kept" or "left" and ends in "for now" ("No
+  guard for now") are `won't fix` verdicts; "by design" or "by decision"
+  anywhere in the paragraph is `not a bug` when no clause names a verdict; a leading "Re <digits>:" is skipped;
+  "<it> is covered in <sha>" and a clause that starts with a commit and a verb ("84c0b1e adds …"; the commit has a
+  letter and a digit, the verb is not "is", "was", "has", "does" or "keeps") are `fixed`. A clause that starts
+  with "fixed" is `fixed` though it ends in "for now" (the fixed verdict is matched first). On the 192 author
+  replies in the threads files on disk the change moves 35 from `other` and none of another class. Not covered:
+  "Analyzed — correct …, but … rather than …" (no keyword tells that decline from a fix described the same way)
+  and a commit and a verb after a clause that is no acknowledgement ("…; so 84c0b1e adds …"). Rejected:
+  "rather than" as a decline (a fix reply can start with it) and any "for now" (as in "added a guard for now").
+- **The threads file says when and where magnum posted each finding** (2026-10-07). Matching 112 answered
+  findings to their runs took a match by path and priority that missed 27 of them, and the posting time was
+  missing, so the improvement loop could not tell findings posted under an older skill (169 of 180 answered
+  threads) from those under the current one. Each thread of `review-threads.json` now carries its first
+  comment's `review_id`, `created_at` (RFC3339, UTC) and `commit` (its original commit), which the threads query
+  already read; each is left out when GitHub reports none. The prompts do not change: the fields are data for
+  the judge and for the loop. `/magnum-improve`'s evidence.sh prints each answered thread's posting time and the
+  run, round and kind whose review it belongs to (`runs.review_id`), marks "current skill" a finding whose run
+  named the skill copy (`<state>/skill/<hash>/SKILL.md`, a content hash) that the running daemon's rounds name,
+  and calls its class column "class at round time". Rejected: marking by time after the last
+  `daemon.prompts_changed` event or daemon start (the registry keeps only the latest start, and a change on
+  disk takes effect only at the next one; the copy's hash in each run's prompt says which skill it used).

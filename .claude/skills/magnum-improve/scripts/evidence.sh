@@ -81,17 +81,43 @@ find "$reviews" -mindepth 4 -maxdepth 4 -type d -newer "$stamp" -print 2>/dev/nu
 rm -f "$stamp"
 
 # Every reply to magnum's threads: the newest review-threads.json of each PR
-# reviewed since then. The class is magnum's keyword guess only; people answer
-# in free form (a score such as "Net: -3", a deferral, an argument), so the
-# declined-findings lens reads each reply and decides its meaning itself.
-python3 - "$dir/reports.txt" >>"$out" <<'PY'
-import json, os, sys, collections
+# reviewed since then. The class is magnum's keyword guess only, made when the
+# round wrote the file (an older round, an older classifier); people answer in
+# free form (a score such as "Net: -3", a deferral, an argument), so the
+# declined-findings lens reads each reply and decides its meaning itself. A
+# thread says when magnum posted its finding (created_at) and in which review
+# (review_id, joined to the run that posted it); "current skill" marks a
+# finding whose run named the skill copy (<state>/skill/<hash>/SKILL.md) that
+# the running daemon's rounds name.
+python3 - "$dir/reports.txt" "$db" >>"$out" <<'PY'
+import json, os, re, subprocess, sys, collections
 latest = {}
 for d in open(sys.argv[1]).read().split():
     pr = os.path.dirname(d)
     if pr not in latest and os.path.exists(os.path.join(d, "review-threads.json")):
         latest[pr] = os.path.join(d, "review-threads.json")
-guess, rows, unanswered = collections.Counter(), [], 0
+
+def sql(q):
+    try:
+        res = subprocess.run(["sqlite3", "-readonly", "-json", sys.argv[2], q], capture_output=True, text=True, check=True)
+        return json.loads(res.stdout or "[]")
+    except Exception:
+        return []
+
+def skill(fragment):
+    m = re.match(r"([0-9a-f]{12})/SKILL\.md", fragment or "")
+    return m.group(1) if m else None
+
+frag = "case when instr(prompt_text, '/skill/') > 0 then substr(prompt_text, instr(prompt_text, '/skill/') + 7, 21) end"
+posted = {}  # review id -> [run id, round, kind, skill]: the first run that names the review
+for r in sql(f"select id, review_id, round, kind, {frag} as skill from runs where review_id is not null order by id"):
+    p = posted.setdefault(r["review_id"], [r["id"], r["round"], r["kind"], None])
+    p[3] = p[3] or skill(r["skill"])
+cur = sql(f"""select {frag} as skill from runs where role like '%judge%' and instr(prompt_text, '/skill/') > 0
+              and created_at >= (select value from kv where key = 'daemon.prompts_loaded_at') order by id desc limit 1""")
+current = skill(cur[0]["skill"]) if cur else None
+
+guess, rows, unanswered, under_current = collections.Counter(), [], 0, 0
 for pr, f in sorted(latest.items()):
     try:
         threads = json.load(open(f))
@@ -105,17 +131,25 @@ for pr, f in sorted(latest.items()):
             continue
         last = theirs[-1]
         guess[last.get("class") or "-"] += 1
+        at = (t.get("created_at") or "-").replace("T", " ")[:16]
+        run = posted.get(t.get("review_id"))
+        where = f"run {run[0]}, r{run[1]} {run[2]}" if run else "-"
+        if run and current and run[3] == current:
+            at += ", current skill"
+            under_current += 1
         text = " ".join((last.get("body") or "").split())[:400].replace("|", "/")
-        rows.append(f"| {last.get('class') or '-'} | {len(theirs)}/{own} | {t.get('finding','')[:90]} | {t.get('location','')} | {t.get('url','')} | {text} |")
+        rows.append(f"| {last.get('class') or '-'} | {len(theirs)}/{own} | {at} | {where} | {t.get('finding','')[:90]} | {t.get('location','')} | {t.get('url','')} | {text} |")
 print("\n## Replies to magnum's threads (latest round per PR)\n")
-print(f"{len(rows)} answered threads, {unanswered} without a reply. The class is a keyword guess, not a verdict:")
+skill_note = f", {under_current} of them posted under the current skill" if current else ""
+print(f"{len(rows)} answered threads{skill_note}, {unanswered} without a reply. The class is a keyword guess made at round time, not a verdict:")
 print("read every reply below and decide what it says.\n")
-print("| keyword guess | threads |\n|---|---|")
+print("| class at round time | threads |\n|---|---|")
 for k, v in guess.most_common():
     print(f"| {k} | {v} |")
 print("\n### Every answered thread\n")
-print("| guess | replies theirs/own | finding | where | thread | last reply (first 400 chars) |\n|---|---|---|---|---|---|")
-print("\n".join(rows) or "| - | - | - | - | - | - |")
+print("| class at round time | replies theirs/own | posted (UTC) | round | finding | where | thread | last reply (first 400 chars) |")
+print("|---|---|---|---|---|---|---|---|")
+print("\n".join(rows) or "| - | - | - | - | - | - | - | - |")
 PY
 
 git -C "$repo" log --since="$since" --format='%h %ad %<(150,trunc)%s' --date=short >"$dir/gitlog.txt"

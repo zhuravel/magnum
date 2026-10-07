@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/zhuravel/magnum/internal/agents"
@@ -61,22 +62,41 @@ var (
 	// conjunction ("but out of scope") and a subject ("this is intentional",
 	// "it was already addressed", "that's incorrect").
 	replyClauseLead = regexp.MustCompile(`(?i)^(?:(?:but|and|so)\s+)?(?:(?:this|that|it)(?:'s|\s+(?:is|was|has\s+been))\s+)?(?:now\s+)?`)
+	// replyRe is the comment an agent answers, before the reply's first
+	// word: "Re 4100000001:".
+	replyRe = regexp.MustCompile(`(?i)^re\s+#?\d+\s*:`)
 	// replyAck is a clause that acknowledges without a verdict ("Good catch",
-	// "Valid", "Analyzed", "Noted", "Low priority"): the verdict follows.
+	// "Valid", "Analyzed", "Noted", "Low priority", "Low priority (Net 0)"):
+	// the verdict follows.
 	replyAck = regexp.MustCompile(`(?i)^(?:(?:good|nice|great)\s+(?:catch|find|point|call)|valid(?:\s+(?:point|concern|finding|catch))?|` +
-		`analy[sz]ed|noted|low\s+priority|thanks?(?:\s+you)?|agreed|true|right|correct|confirmed|acknowledged|fair(?:\s+(?:point|enough))?|` +
+		`analy[sz]ed|noted|low\s+priority(?:\s*\([^)]*\)?)?|thanks?(?:\s+you)?|agreed|true|right|correct|confirmed|acknowledged|fair(?:\s+(?:point|enough))?|` +
 		`yes|yep|ok(?:ay)?|sure|investigated|checked|verified|reviewed)$`)
-	// replyClasses match a verdict clause (replyClauseLead dropped), in order.
+	// replyLowPriority is the acknowledgement that declines the fix unless a
+	// clause says it was made.
+	replyLowPriority = regexp.MustCompile(`(?i)^low\s+priority\b`)
+	// replyClasses match a verdict clause (replyClauseLead dropped), in order:
+	// a clause that starts with "fixed" is ReplyFixed though it ends in "for
+	// now".
 	replyClasses = []struct {
 		class string
 		re    *regexp.Regexp
 	}{
+		{ReplyFixed, regexp.MustCompile("(?i)^(?:(?:already\\s+)?(?:fixed|done|addressed|applied)\\b|" +
+			"(?:|.*\\b(?:is|are|was|were|been)\\s+)(?:already\\s+|now\\s+)?covered\\s+in\\s+`?[0-9a-f]{7,40}\\b)")},
 		{ReplyNotABug, regexp.MustCompile(`(?i)^(?:(?:not\s+a\s+bug|by\s+design|(?:as\s+)?intended|intentional(?:ly)?)\b|` +
 			`(?:incorrect|moot(?:\s+point)?|not\s+applicable)$|(?:(?:this|the)\s+(?:concern|finding|comment|issue)\s+)?does(?:\s+not|n't)\s+apply\b)`)},
-		{ReplyWontFix, regexp.MustCompile(`(?i)^(?:(?:won't\s+fix|wont\s+fix|will\s+not\s+fix|wontfix|out\s+of\s+scope|follow[- ]?up|declined|deprioriti[sz]ed)\b|` +
-			`(?:kept|keeping|left|leaving)(?:\s+(?:it|this|that))?\s+as[- ]is\b|kept$)`)},
-		{ReplyFixed, regexp.MustCompile(`(?i)^(?:already\s+)?(?:fixed|done|addressed|applied)\b`)},
+		{ReplyWontFix, regexp.MustCompile(`(?i)^(?:(?:won't\s+fix|wont\s+fix|will\s+not\s+fix|wontfix|out\s+of\s+scope|follow[- ]?up|declined|deprioriti[sz]ed|` +
+			`left\s+open|deferred|not\s+(?:fixed|changed)\s+in\s+this\s+(?:pr|push|round))\b|` +
+			`(?:kept|keeping|left|leaving)(?:\s+(?:it|this|that))?\s+as[- ]is\b|kept$|` +
+			`.*\bstay(?:s|ing)?\s+as(?:\s+it\s+|[- ])is\b|(?:no|not|nothing|none|kept|keeping|left|leaving)\b.*\bfor\s+now$)`)},
 	}
+	// replyCommitVerb is a clause that starts with a commit and a verb: "84c0b1e
+	// adds …", "9be04f2 also fixes …". replyCommitFixes tells the commit from a
+	// number and the verb from "is" and the like.
+	replyCommitVerb = regexp.MustCompile(`^([0-9a-f]{7,40})\s+(?:also\s+|now\s+)?([a-z]+s)\b`)
+	// replyByDesign anywhere in the first paragraph argues the finding when
+	// no clause names a verdict ("…, so such a behaviour is by design").
+	replyByDesign = regexp.MustCompile(`(?i)\bby\s+(?:design|decision)\b`)
 	// replyNegativeScore is a negative score for the proposed fix, with a
 	// hyphen-minus or a U+2212 minus: "I score that fix at −8", "scored the
 	// fix at -3", "Net: −3", "net -2.5".
@@ -87,20 +107,28 @@ var (
 )
 
 // classifyReply says what a reply claims from its first clause: "fixed",
-// "done", "addressed", "applied" or "already addressed" (ReplyFixed); "not a
+// "done", "addressed", "applied", "already addressed", "<it> is covered in
+// <sha>" or a commit and a verb ("84c0b1e adds …") (ReplyFixed); "not a
 // bug", "incorrect", "moot", "by design", "intended", "intentional"
 // (ReplyNotABug); "won't fix", "declined", "out of scope", "follow-up", "kept
-// as is" (ReplyWontFix). An acknowledgement ("Good catch", "Valid",
-// "Analyzed", "Noted", "Low priority") passes the verdict on to a later
-// clause of the first paragraph ("Good catch, fixed in <sha>", "Noted — left
-// as is", "Low priority — <why>. Kept as is."); anything else is ReplyOther,
-// as is an acknowledgement no verdict follows, unless the paragraph declines
-// the fix before any clause says fixed or not a bug (replyDeclined: "Confirmed.
-// Still open … so I score that fix at −8" is ReplyWontFix). The class is a
-// hint for the judge, not a verdict. Case does not matter; leading
-// quoted lines (">"), markup, emoji and an agent's "(Claude)" tag are
-// skipped, and a verdict may follow "but" or "this is" ("Valid, but out of
-// scope", "Analyzed — this is intentional").
+// as is", "<it> stays as is", "left open", "deferred", "not fixed in this
+// PR" (or push, round; or "not changed"), "No guard for now" (ReplyWontFix).
+// An acknowledgement ("Good catch", "Valid", "Analyzed", "Noted", "Low
+// priority", "Low priority (Net 0)") passes the verdict on to a later clause
+// of the first paragraph ("Good catch, fixed in <sha>", "Noted — left as
+// is", "Noted. <why>. Deferred."); a low priority acknowledgement no verdict
+// follows is ReplyWontFix ("Low priority (Net +1): not worth a change on its
+// own"; "Low priority — fixed in <sha>" stays ReplyFixed). Anything else is
+// ReplyOther, as is another acknowledgement no verdict follows, unless the
+// paragraph declines the fix before any clause says fixed or not a bug
+// (replyDeclined: "Confirmed. Still open … so I score that fix at −8" is
+// ReplyWontFix), or says "by design" or "by decision" anywhere and no clause
+// names a verdict (ReplyNotABug: "…, so such a behaviour is by design"). The
+// class is a hint for the judge, not a verdict. Case does not matter;
+// leading quoted lines (">"), markup, emoji, an agent's "(Claude)" tag and
+// the comment it answers ("Re 4100000001:") are skipped, and a verdict may
+// follow "but" or "this is" ("Valid, but out of scope", "Analyzed — this is
+// intentional").
 func classifyReply(body string) string {
 	s := strings.ReplaceAll(body, "’", "'")
 	for {
@@ -118,22 +146,35 @@ func classifyReply(body string) string {
 	if loc := replyAgentPrefix.FindStringIndex(s); loc != nil {
 		s = trimReplyLead(s[loc[1]:])
 	}
+	if loc := replyRe.FindStringIndex(s); loc != nil {
+		s = trimReplyLead(s[loc[1]:])
+	}
 	if para, _, ok := strings.Cut(s, "\n\n"); ok {
 		s = para
 	}
 	clauses := replyClauses(s)
-	acked := false
+	acked, low := false, false
 	for _, c := range clauses {
 		if class := replyVerdict(c.text); class != "" {
 			return class
 		}
 		if replyAck.MatchString(c.text) {
 			acked = true
+			low = low || replyLowPriority.MatchString(c.text)
 		} else if !acked {
 			break // the first clause claims nothing known
 		}
 	}
-	return replyDeclined(s, clauses)
+	if low {
+		return ReplyWontFix // every clause read, none says fixed
+	}
+	if class := replyDeclined(s, clauses); class != ReplyOther {
+		return class
+	}
+	if replyByDesign.MatchString(s) && !slices.ContainsFunc(clauses, func(c replyClause) bool { return replyVerdict(c.text) != "" }) {
+		return ReplyNotABug
+	}
+	return ReplyOther
 }
 
 // replyDeclined is ReplyWontFix when the paragraph s weighs the proposed fix
@@ -187,7 +228,22 @@ func replyVerdict(c string) string {
 			return rc.class
 		}
 	}
+	if replyCommitFixes(v) {
+		return ReplyFixed
+	}
 	return ""
+}
+
+// replyCommitFixes reports whether a clause starts with a commit and the
+// verb that says what it does ("84c0b1e adds …"): the commit has a letter and
+// a digit (a count such as "2026100 requests" is no commit), and the verb is
+// not "is", "was", "has", "does" or "keeps".
+func replyCommitFixes(c string) bool {
+	m := replyCommitVerb.FindStringSubmatch(c)
+	if m == nil || !strings.ContainsAny(m[1], "abcdef") || !strings.ContainsAny(m[1], "0123456789") {
+		return false
+	}
+	return !slices.Contains([]string{"is", "was", "has", "does", "keeps"}, m[2])
 }
 
 // trimReplyLead drops what precedes a reply's first word: spaces, markup,
@@ -224,7 +280,11 @@ func (rd *round) ownThreads(ts []github.Thread) []agents.ReviewThread {
 			loc = fmt.Sprintf("%s:%d", t.Path, line)
 		}
 		rt := agents.ReviewThread{ID: t.ID, CommentID: root.ID, URL: root.URL, Finding: finding, Location: loc,
+			ReviewID: root.ReviewID, Commit: root.OriginalCommitOid,
 			Resolved: t.Resolved, Outdated: t.Outdated, Replies: []agents.ThreadReply{}}
+		if !root.CreatedAt.IsZero() {
+			rt.CreatedAt = root.CreatedAt.UTC().Format(time.RFC3339)
+		}
 		for _, c := range t.Comments[1:] {
 			author := c.AuthorLogin
 			if author == "" {
