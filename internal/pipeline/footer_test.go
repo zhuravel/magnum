@@ -137,10 +137,10 @@ func TestFooterLeavesSimplificationsOutWhenTheWatchRunsNoSimplifyRole(t *testing
 }
 
 // The footer says when the PR's watch re-reviews a push and whose review
-// request starts a round: outside [daemon] quiet_hours (with the daemon's
-// UTC offset), not on a draft a watch with include_drafts = false skips, and
-// a request for the poll login when that is a person's (a gh identity),
-// else for the posting login.
+// request starts a round: during [daemon] quiet_hours (with the daemon's
+// UTC offset) only a small push, not on a draft a watch with include_drafts
+// = false skips, and a request for the poll login when that is a person's
+// (a gh identity), else for the posting login.
 func TestFooterSaysWhenTheWatchReReviewsAndWhoseRequestStartsARound(t *testing.T) {
 	no := false
 	for _, tc := range []struct {
@@ -151,7 +151,7 @@ func TestFooterSaysWhenTheWatchReReviewsAndWhoseRequestStartsARound(t *testing.T
 	}{
 		{"quiet hours, drafts skipped, a gh poll login", "03:00-12:00",
 			config.Watch{Owner: "talkable", Include: []string{"*"}, Identity: "talkable-app", PollIdentity: "zhuravel", IncludeDrafts: &no},
-			"New pushes are re-reviewed automatically outside 03:00-12:00 UTC, drafts only on request. " +
+			"New pushes are re-reviewed automatically (during 03:00-12:00 UTC only small ones, by a short check), drafts only on request. " +
 				"A thread reply gets an answer without a push, and a review request for `zhuravel` starts a round."},
 		{"an App polls", "",
 			config.Watch{Owner: "talkable", Include: []string{"*"}, Identity: "talkable-app", PollIdentity: "talkable-app"},

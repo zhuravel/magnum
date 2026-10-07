@@ -133,9 +133,9 @@ func TestDefaultFooterSaysWhatStartsARound(t *testing.T) {
 		pushes        string
 	}{
 		{"neither", "", false, "New pushes are re-reviewed automatically."},
-		{"quiet hours", "03:00-12:00 UTC+3", false, "New pushes are re-reviewed automatically outside 03:00-12:00 UTC+3."},
+		{"quiet hours", "03:00-12:00 UTC+3", false, "New pushes are re-reviewed automatically (during 03:00-12:00 UTC+3 only small ones, by a short check)."},
 		{"drafts skipped", "", true, "New pushes are re-reviewed automatically, drafts only on request."},
-		{"both", "22:00-06:00 UTC", true, "New pushes are re-reviewed automatically outside 22:00-06:00 UTC, drafts only on request."},
+		{"both", "22:00-06:00 UTC", true, "New pushes are re-reviewed automatically (during 22:00-06:00 UTC only small ones, by a short check), drafts only on request."},
 	} {
 		d := FooterData{SHA: "d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3", Short: "d4e5f6a7b8", Repo: "talkable/talkable", Number: 11920,
 			Login: "talkable[bot]", Event: "COMMENT", QuietHours: tc.quiet, DraftsSkipped: tc.draftsSkipped, RequestLogin: "zhuravel"}

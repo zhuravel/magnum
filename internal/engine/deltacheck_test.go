@@ -347,36 +347,26 @@ func TestKeptApprovalIsDismissedAnHourAfterItsCheckWasDue(t *testing.T) {
 // The live case (talkable#11920): an approval kept at 10:10 for a check
 // that quiet_hours (03:00-12:00) held was dismissed at 11:11, an hour of
 // wall time after the push, and the check approved again at 12:10: a dismiss
-// and a re-approval the author saw for nothing. The hour counts only time
-// the check may run, so it starts at 12:00 and the check's approval
-// supersedes the kept one.
-func TestKeptApprovalWaitsOutQuietHours(t *testing.T) {
+// and a re-approval the author saw for nothing. Quiet hours no longer hold a
+// delta check: it runs once the push quiet period ends, inside them, and its
+// approval supersedes the kept one; the hour a kept approval stands is wall
+// time again.
+func TestKeptApprovalsCheckRunsInsideQuietHours(t *testing.T) {
 	h, _, _ := deltaCheckHarness(t)
 	verdictRounds(h, "APPROVED")
 	keptForCheck(t, h, liveDelta) // b2 pushed at 10:06
 	h.cfg.Daemon.QuietHours = "03:00-12:00"
-	day := h.clock.Now()
-	at := func(hour, minute int) time.Duration {
-		return time.Date(day.Year(), day.Month(), day.Day(), hour, minute, 0, 0, time.Local).Sub(h.clock.Now())
-	}
-	pollPR(h, at(11, 30), 2, "b2")
-	if got := dismissCalls(h); len(got) != 0 {
-		t.Fatalf("dismissed during quiet hours: %q", got)
-	}
-	reqWantRounds(t, h, 1)
-	pollPR(h, at(12, 10), 2, "b2")
-	if got := dismissCalls(h); len(got) != 0 {
-		t.Fatalf("dismissed before its check: %q", got)
-	}
+	since := h.pr(2).HeadChangedAt
+	pollPR(h, since.Add(5*time.Minute).Sub(h.clock.Now()), 2, "b2")
 	reqWantRounds(t, h, 2)
+	if got := dismissCalls(h); len(got) != 0 {
+		t.Fatalf("dismissed: %q", got)
+	}
 	if evs := approvalEvents(t, h, 2, "review.approval_superseded"); len(evs) != 1 {
 		t.Fatalf("approval_superseded events = %+v", evs)
 	}
-	if got := approvalDeadline("03:00-12:00", time.Date(2026, 10, 5, 13, 30, 0, 0, time.Local), time.Hour); !got.Equal(time.Date(2026, 10, 5, 14, 30, 0, 0, time.Local)) {
-		t.Fatalf("outside quiet hours: deadline %v, want an hour of wall time", got)
-	}
-	if got := approvalDeadline("03:00-12:00", time.Date(2026, 10, 5, 2, 30, 0, 0, time.Local), time.Hour); !got.Equal(time.Date(2026, 10, 5, 12, 30, 0, 0, time.Local)) {
-		t.Fatalf("across the start of quiet hours: deadline %v, want 30m before and 30m after them", got)
+	if got, want := h.e.keptApprovalDeadline(h.cfg.WatchFor("talkable/talkable"), since), since.Add(5*time.Minute+time.Hour); !got.Equal(want) {
+		t.Fatalf("deadline inside quiet hours = %v, want an hour of wall time after the push quiet period (%v)", got, want)
 	}
 }
 

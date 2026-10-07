@@ -1,7 +1,7 @@
 // Package eligibility is magnum's pure decision logic: which pull requests a
 // watch picks up (Classify), when a picked-up PR may start its next review
-// round (Throttle) and whether the daemon is inside its quiet hours
-// (QuietHours).
+// round (Throttle), whether the daemon is inside its quiet hours (QuietHours)
+// and which rounds they hold (QuietHoursHold).
 //
 // Nothing here does I/O, reads the clock or touches the store. Callers build a
 // PRFacts from their rows, pass the current time explicitly, and persist or act

@@ -75,10 +75,11 @@ model_limit_cooldown = "5h"       # a model capped on its own (health pattern mo
                                   # diff against it as it was ([] = re-review every push; a list without "base"
                                   # re-reviews base merges; [[watch]] may override; `magnum review` always runs)
 # quiet_hours = "01:00-07:00"     # local "HH:MM-HH:MM" (start included, end excluded; "22:00-06:00" crosses
-                                  # midnight): inside it no automatic round starts (first reviews, re-reviews,
-                                  # delta checks, reply rounds, review requests, continues of a paused turn wait
-                                  # for its end); `magnum review` and the board's review keys still do, a round in
-                                  # flight finishes, and the poll, auto-approval, the retro and curation go on
+                                  # midnight): inside it first reviews, full re-reviews (a review request's too)
+                                  # and continues of a paused turn wait for its end; a round of the judge alone (a
+                                  # delta check, a reply round, a re-review of the reviewed head) still starts, so
+                                  # do `magnum review` and the board's review keys, a round in flight finishes,
+                                  # and the poll, auto-approval, the retro and curation go on
 restart_on_new_build = false      # true: once a new bin/magnum on disk passes its config check, the daemon restarts
                                   # on it at the first tick with no round claiming, reviewing or verifying and no
                                   # notes curation or retro running (it exits for launchd to start the new build;
@@ -426,7 +427,7 @@ aliases = ["simplify"]
 #
 # <details><summary>ℹ️ About Magnum</summary>
 #
-# Automated review by [Magnum](https://github.com/zhuravel/magnum). Reply on a P0-P2 thread with `fixed`, `not a bug: <why>` or `won't fix: <why>`{{if .Simplify}}; simplifications are optional{{end}}. New pushes are re-reviewed automatically{{with .QuietHours}} outside {{.}}{{end}}{{if .DraftsSkipped}}, drafts only on request{{end}}. A thread reply gets an answer without a push, and a review request for `{{.RequestLogin}}` starts a round.
+# Automated review by [Magnum](https://github.com/zhuravel/magnum). Reply on a P0-P2 thread with `fixed`, `not a bug: <why>` or `won't fix: <why>`{{if .Simplify}}; simplifications are optional{{end}}. New pushes are re-reviewed automatically{{with .QuietHours}} (during {{.}} only small ones, by a short check){{end}}{{if .DraftsSkipped}}, drafts only on request{{end}}. A thread reply gets an answer without a push, and a review request for `{{.RequestLogin}}` starts a round.
 #
 # </details>'''
 #                                         # the footer magnum appends to every review the identity posts once the review

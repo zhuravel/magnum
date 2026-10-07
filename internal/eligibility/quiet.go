@@ -27,3 +27,14 @@ func QuietHours(spec string, now time.Time) bool {
 	}
 	return m >= w.Start || m < w.End
 }
+
+// QuietHoursHold reports whether the quiet hours spec hold, at now, a round
+// nobody forced. Inside them only a re-review of the judge alone starts
+// (judgeAlone: a delta check of a small delta, a re-review of the head magnum
+// reviewed, a reply round), one turn of a few minutes; a first review, a
+// full re-review (a requested one too) and the continue of a paused turn
+// wait for their end. A forced round (`magnum review`) is never held, which
+// the caller checks.
+func QuietHoursHold(spec string, now time.Time, judgeAlone bool) bool {
+	return !judgeAlone && QuietHours(spec, now)
+}

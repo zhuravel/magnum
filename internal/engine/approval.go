@@ -189,7 +189,7 @@ func (e *Engine) dismissApproval(ctx context.Context, repo store.Repo, pr store.
 // before a small delta is not dismissed at the push; the delta check's
 // review supersedes it (an approval) or it goes then (anything else), and
 // it goes when no check posted within approvalCheckWait of the time the
-// check was due, quiet hours left out (keptApprovalDeadline).
+// check was due (keptApprovalDeadline).
 
 // kvApprovalPending holds the approval kept for a delta check
 // (pendingApproval as JSON).
@@ -197,49 +197,18 @@ func kvApprovalPending(prID int64) string { return fmt.Sprintf("pr.%d.approval_p
 
 // approvalCheckWait is how long an approval stands for a delta check that
 // has not posted, counted from the time the check is due (the push quiet
-// period after the first push it does not cover) and only while it may run:
-// [daemon] quiet_hours do not count (approvalDeadline). An approval never
-// covers unreviewed code for long.
+// period after the first push it does not cover). Quiet hours do not hold
+// the check (quietHoursGate), so they count. An approval never covers
+// unreviewed code for long.
 const approvalCheckWait = time.Hour
 
 // keptApprovalDeadline is when an approval kept for a delta check of the
 // commits since the first push it does not cover (since) goes if no check
 // posted: approvalCheckWait after the check is due (since and the watch's
-// push quiet period), quiet hours left out. A `magnum pause` is not left
-// out: the operator holds the rounds on purpose, and an approval of code
-// nobody checks goes.
+// push quiet period). A `magnum pause` counts too: the operator holds the
+// rounds on purpose, and an approval of code nobody checks goes.
 func (e *Engine) keptApprovalDeadline(w *config.Watch, since time.Time) time.Time {
-	due := since.Add(e.cfg.ThrottleFor(w).PushQuietPeriod.Duration)
-	return approvalDeadline(e.cfg.Daemon.QuietHours, due, approvalCheckWait)
-}
-
-// approvalDeadline is the time wait of time outside the quiet hours spec
-// (config.ParseQuietHours, local) has passed since due: quiet hours at due
-// move its start to their end, and quiet hours that begin before the wait
-// ran out add their length. Without quiet hours it is due plus wait.
-func approvalDeadline(spec string, due time.Time, wait time.Duration) time.Time {
-	w, ok, err := config.ParseQuietHours(spec)
-	if err != nil || !ok {
-		return due.Add(wait)
-	}
-	t := due
-	for wait > 0 {
-		if quietHoursNow(spec, t) {
-			t = quietHoursEnd(spec, t)
-			continue
-		}
-		n := t.Local()
-		start := time.Date(n.Year(), n.Month(), n.Day(), w.Start/60, w.Start%60, 0, 0, n.Location())
-		if !start.After(n) {
-			start = start.AddDate(0, 0, 1)
-		}
-		if !t.Add(wait).After(start) {
-			return t.Add(wait)
-		}
-		wait -= start.Sub(t)
-		t = start
-	}
-	return t
+	return since.Add(e.cfg.ThrottleFor(w).PushQuietPeriod.Duration + approvalCheckWait)
 }
 
 // pendingApproval is an approval kept for a delta check (kvApprovalPending).

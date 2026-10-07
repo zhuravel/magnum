@@ -256,7 +256,7 @@ func softCapHolds(job *roundJob) bool {
 	switch {
 	case job.kind != pipeline.KindRereview, job.continued:
 		return false
-	case job.deltaCheck, job.sameHead, job.replies > 0:
+	case job.judgeOnly():
 		return false
 	case job.pr.Forced, job.requested:
 		return false

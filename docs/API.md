@@ -38,7 +38,7 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 | [cli](#cli) | Package cli wires the subcommands into a cobra command tree built per call. |
 | [config](#config) | Package config loads and validates config.toml (kept in the repository). |
 | [dblock](#dblock) | Package dblock is the lock behind `magnum db-lock`: the roles of a review round (the judge's own pass and the reviewers run at the same time) take turns on a checkout's databases. |
-| [eligibility](#eligibility) | Package eligibility is magnum's pure decision logic: which pull requests a watch picks up (Classify), when a picked-up PR may start its next review round (Throttle) and whether the daemon is inside its quiet hours (QuietHours). |
+| [eligibility](#eligibility) | Package eligibility is magnum's pure decision logic: which pull requests a watch picks up (Classify), when a picked-up PR may start its next review round (Throttle), whether the daemon is inside its quiet hours (QuietHours) and which rounds they hold (QuietHoursHold). |
 | [engine](#engine) | Package engine is magnum's daemon: one tick loop that polls GitHub, observes herdr, applies health pauses, consumes CLI requests, dispatches review rounds into slots (each round in its own goroutine), releases closed PRs after their grace and reconciles the registry with disk, MySQL and herdr. |
 | [eval](#eval) | Package eval scores an evaluation replay of magnum's pull request review against a corpus of pull requests with known ("seeded") defects. |
 | [execx](#execx) | Package execx is the single choke point for every subprocess magnum runs (git, gh, mysql, mise exec, launchctl, osascript, codex/claude probes). |
@@ -2447,16 +2447,17 @@ const DefaultReviewFooter = "**Reviewed commit:** `{{.Short}}`\n" +
 	"\n" +
 	"Automated review by [Magnum](https://github.com/zhuravel/magnum). Reply on a P0-P2 thread with `fixed`, `not a bug: <why>` or `won't fix: <why>`" +
 	"{{if .Simplify}}; simplifications are optional{{end}}. New pushes are re-reviewed automatically" +
-	"{{with .QuietHours}} outside {{.}}{{end}}{{if .DraftsSkipped}}, drafts only on request{{end}}. " +
+	"{{with .QuietHours}} (during {{.}} only small ones, by a short check){{end}}{{if .DraftsSkipped}}, drafts only on request{{end}}. " +
 	"A thread reply gets an answer without a push, and a review request for `{{.RequestLogin}}` starts a round.\n" +
 	"\n" +
 	"</details>"
-    DefaultReviewFooter is the footer template of every identity that sets
-    no review_footer: the reviewed commit, then what the review is, how to
-    answer a P0-P2 thread, in the words the reply classifier knows, and what
-    starts a round (a push, outside the quiet hours and not on a draft the
-    watch skips; a thread reply; a review request), collapsed under <details>
-    (config.defaults.toml documents it word for word).
+    DefaultReviewFooter is the footer template of every identity that sets no
+    review_footer: the reviewed commit, then what the review is, how to answer
+    a P0-P2 thread, in the words the reply classifier knows, and what starts
+    a round (a push, during the quiet hours only a small one, which gets a
+    short check, and not on a draft the watch skips; a thread reply; a review
+    request), collapsed under <details> (config.defaults.toml documents it word
+    for word).
 
 const DefaultSimplifyRerunLines = 150
     DefaultSimplifyRerunLines is claude-simplify's rerun_min_lines: about two
@@ -4101,7 +4102,8 @@ package eligibility // import "github.com/zhuravel/magnum/internal/eligibility"
 
 Package eligibility is magnum's pure decision logic: which pull requests a
 watch picks up (Classify), when a picked-up PR may start its next review round
-(Throttle) and whether the daemon is inside its quiet hours (QuietHours).
+(Throttle), whether the daemon is inside its quiet hours (QuietHours) and which
+rounds they hold (QuietHoursHold).
 
 Nothing here does I/O, reads the clock or touches the store. Callers build a
 PRFacts from their rows, pass the current time explicitly, and persist or act on
@@ -4145,6 +4147,15 @@ func QuietHours(spec string, now time.Time) bool
     time.Now() to get local quiet hours. An empty spec means no quiet hours,
     and so does an invalid one (QuietHours cannot report errors; Config.Validate
     rejects one when the config loads).
+
+func QuietHoursHold(spec string, now time.Time, judgeAlone bool) bool
+    QuietHoursHold reports whether the quiet hours spec hold, at now,
+    a round nobody forced. Inside them only a re-review of the judge alone
+    starts (judgeAlone: a delta check of a small delta, a re-review of the head
+    magnum reviewed, a reply round), one turn of a few minutes; a first review,
+    a full re-review (a requested one too) and the continue of a paused turn
+    wait for their end. A forced round (`magnum review`) is never held, which
+    the caller checks.
 
 
 TYPES

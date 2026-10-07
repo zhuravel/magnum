@@ -533,8 +533,8 @@ func (e *Engine) noteMovedHead(ctx context.Context, job *roundJob, pr store.PR, 
 // and whether it is a delta check (check). It does not when a longer timing
 // rule holds the PR (the daily cap, the small-delta threshold, an interval),
 // or when something would hold it once its timing clears: `magnum pause`, a
-// drain or an infrastructure pause, quiet hours, a mute, an agent kind the
-// round's roles use paused (a delta check's judge alone).
+// drain or an infrastructure pause, quiet hours (not a delta check), a mute,
+// an agent kind the round's roles use paused (a delta check's judge alone).
 func (e *Engine) rereviewFollows(ctx context.Context, w config.Watch, prID int64) (when string, check, ok bool) {
 	pr, err := e.st.PRByID(ctx, prID)
 	if err != nil || (pr.State != store.PRRereviewPending && pr.State != store.PRQueued) {
@@ -563,7 +563,7 @@ func (e *Engine) rereviewFollows(ctx context.Context, w config.Watch, prID int64
 	}
 	switch {
 	case e.holdReason(ctx) != "":
-	case !pr.Forced && (e.userPause(ctx) != "" || pr.Muted || quietHoursNow(e.cfg.Daemon.QuietHours, at)):
+	case !pr.Forced && (e.userPause(ctx) != "" || pr.Muted || quietHoursHold(e.cfg.Daemon.QuietHours, at, wait.DeltaCheck)):
 	case e.kindPauseReason(ctx, agentKinds(roles)) != "":
 	default:
 		return when, wait.DeltaCheck, true

@@ -13,8 +13,9 @@ import (
 // DefaultReviewFooter is the footer template of every identity that sets no
 // review_footer: the reviewed commit, then what the review is, how to answer
 // a P0-P2 thread, in the words the reply classifier knows, and what starts a
-// round (a push, outside the quiet hours and not on a draft the watch skips;
-// a thread reply; a review request), collapsed under <details>
+// round (a push, during the quiet hours only a small one, which gets a short
+// check, and not on a draft the watch skips; a thread reply; a review
+// request), collapsed under <details>
 // (config.defaults.toml documents it word for word).
 const DefaultReviewFooter = "**Reviewed commit:** `{{.Short}}`\n" +
 	"\n" +
@@ -22,7 +23,7 @@ const DefaultReviewFooter = "**Reviewed commit:** `{{.Short}}`\n" +
 	"\n" +
 	"Automated review by [Magnum](https://github.com/zhuravel/magnum). Reply on a P0-P2 thread with `fixed`, `not a bug: <why>` or `won't fix: <why>`" +
 	"{{if .Simplify}}; simplifications are optional{{end}}. New pushes are re-reviewed automatically" +
-	"{{with .QuietHours}} outside {{.}}{{end}}{{if .DraftsSkipped}}, drafts only on request{{end}}. " +
+	"{{with .QuietHours}} (during {{.}} only small ones, by a short check){{end}}{{if .DraftsSkipped}}, drafts only on request{{end}}. " +
 	"A thread reply gets an answer without a push, and a review request for `{{.RequestLogin}}` starts a round.\n" +
 	"\n" +
 	"</details>"

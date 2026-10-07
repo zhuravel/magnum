@@ -3867,3 +3867,27 @@ editing history. Code, config comments and prompts reference these by their head
   the latest `pr.muted` event's reason on one line under its head (`muted: <reason>`, clipped to the card),
   next to a Codex flag's line when the PR has both; a mute without a reason adds none, and `prs --json` has
   `mute_reason`. The one-line board row is unchanged.
+- **Quiet hours hold full rounds, not the judge alone** (2026-10-07, amends "The footer says what starts the
+  next round"). `quiet_hours = "03:00-12:00"` held every automatic round, about 11% of colleagues' pushes
+  until 09:00 UTC, small delta checks (one judge turn of 4-7 minutes, about 0.2 Codex points) and reply rounds
+  (the judge alone, no push) included, while the quiet hours are there to keep full rounds from spending the
+  operator's subscriptions when he does not watch. Inside them a re-review of the judge alone now starts: a
+  delta check, a re-review of the head magnum reviewed (a review request after a reply too) and a reply round;
+  first reviews, full re-reviews (a review request's too) and the continue of a paused turn still wait, and
+  their wait still says "quiet hours". The dispatcher decides in `startRound` once it knows the round's kind,
+  from the facts the soft cap reads (`deltaCheck`, `sameHead`, `replies`, `continued`: `roundJob.judgeOnly`,
+  which `softCapHolds` uses too), so the delta comes from the record the poll measured and nothing is measured
+  at the gate; the rule is `eligibility.QuietHoursHold`, the gate `quietHoursGate`, which records its sentence
+  as the other dispatch gates do. `waitFor` lets a delta check or a same-head re-review past quiet hours to
+  what holds it next, and the note on a review that commits outran promises the delta check inside quiet hours
+  too (`rereviewFollows`). A delta check that the checkout turns into a full round has started and runs as one.
+  The default footer's "re-reviewed automatically outside 03:00-12:00 UTC+3" reads "(during 03:00-12:00 UTC+3
+  only small ones, by a short check)". Rejected: letting a continued turn through (it continues the judge of
+  any round, a full one's too); letting a requested full re-review through (it is a full round, and
+  `magnum review` runs one at once).
+- **A kept approval's hour is wall time again** (2026-10-07, amends "An approval kept for a delta check waits
+  out quiet hours"). Quiet hours no longer hold a delta check, so leaving them out of the hour an approval
+  kept for one stands only let an approval of unreviewed code stand up to nine hours longer when something
+  else held the check. `keptApprovalDeadline` is the push quiet period after the first push the approval does
+  not cover plus one hour again, and `approvalDeadline` is deleted; on talkable#11920 the check would have run
+  inside quiet hours once it was due, and its approval would have superseded the kept one.

@@ -315,15 +315,16 @@ terminal that names the account risk; `magnum codex-flag set <ref> [reason]` fla
 Codex warned about elsewhere). A `magnum eval run` case whose replay was refused is recorded in
 `<state>/eval/flagged.json` and never replayed (`eval run` says so; delete its entry to replay it).
 
-`[daemon] quiet_hours` (unset by default) does the same for every PR during a daily window of local time,
-`"HH:MM-HH:MM"` such as `"01:00-07:00"`: inside it no automatic round starts, so first reviews,
-re-reviews, delta checks, reply rounds, rounds for a review request on GitHub and the continue of a judge
-turn a usage limit paused all wait for its end (`re-review · quiet hours → 07:00`), while their timing
-rules keep counting. `magnum review`, the board's and the picker's review keys still start a round, and a
-round in flight finishes. Nothing else stops: the poll, auto-approval, the retro, notes curation, parking
-and cleanup go on. The window includes its start and excludes its end, and crosses midnight when the end
-comes first (`"22:00-06:00"` covers 22:00 to 05:59); a malformed value or an empty window (`"07:00-07:00"`)
-is refused when the config loads.
+`[daemon] quiet_hours` (unset by default) holds the costly rounds of every PR during a daily window of
+local time, `"HH:MM-HH:MM"` such as `"01:00-07:00"`: inside it first reviews, full re-reviews (a review
+request's on GitHub too) and the continue of a judge turn a usage limit paused wait for its end
+(`re-review · quiet hours → 07:00`), while their timing rules keep counting. A round of the judge alone
+still starts: a delta check of a small push, a reply round, and a re-review of the head Magnum reviewed
+(a review request after a reply), each one turn of a few minutes. `magnum review`, the board's and the
+picker's review keys still start any round, and a round in flight finishes. Nothing else stops: the poll,
+auto-approval, the retro, notes curation, parking and cleanup go on. The window includes its start and
+excludes its end, and crosses midnight when the end comes first (`"22:00-06:00"` covers 22:00 to 05:59); a
+malformed value or an empty window (`"07:00-07:00"`) is refused when the config loads.
 
 A push whose changes since the last review are only comment lines, whitespace or documentation is not
 re-reviewed: Magnum compares the reviewed commit with the new head (one GitHub call), moves the review
@@ -372,7 +373,7 @@ current or former identities is on record to build on does it become a full reco
 (`round.delta_check_dropped`). An App's approval of the reviewed commit stands meanwhile (`review.approval_kept_for_check`): the check's approval supersedes it
 (`review.approval_superseded`); a check that comments, requests changes, fails or needs attention, a later
 push that makes the delta too large, or no check posted within an hour of the check becoming due (after the
-push quiet period; `quiet_hours` do not count, a `magnum pause` does) dismisses it then, with the reason. `delta_check = false` keeps the wait and the full round.
+push quiet period; quiet hours do not hold the check, and a `magnum pause` counts) dismisses it then, with the reason. `delta_check = false` keeps the wait and the full round.
 
 A re-review of a head Magnum already reviewed (no new commits: `magnum review`, or a review request, to
 have it re-read an author's reply) runs the judge alone as a delta check does: no triage, reruns or own
@@ -519,9 +520,10 @@ verified, there for the PR's author (the judge never writes it, and a dry run ge
 is Magnum's: the reviewed commit, then, collapsed under "About Magnum", that the review is automated, that a
 P0-P2 thread is answered with `fixed`, `not a bug: <why>` or `won't fix: <why>` (the words the reply
 classifier knows; a P3's title says it needs no reply), that simplifications are optional (only when the
-watch runs a role aliased `simplify`), that new pushes are re-reviewed automatically (outside
-`[daemon] quiet_hours` when set, with the daemon's offset from UTC, "03:00-12:00 UTC+3"; drafts only on
-request when the watch has `include_drafts = false`), that a thread reply gets an answer without a push,
+watch runs a role aliased `simplify`), that new pushes are re-reviewed automatically (when
+`[daemon] quiet_hours` is set, during it only small ones by a short check, the window named with the
+daemon's offset from UTC, "03:00-12:00 UTC+3"; drafts only on request when the watch has
+`include_drafts = false`), that a thread reply gets an answer without a push,
 and whose review request starts a round (the watch's poll login when that is a `gh` identity, else the
 posting login); `config.defaults.toml` shows it word for word. It is a Go
 `text/template` of at most 2,000 characters, line breaks allowed, with `.SHA` and `.Short` (10 characters)
@@ -1173,7 +1175,7 @@ No problems found. LGTM :shipit:
 
 <details><summary>ℹ️ About Magnum</summary>
 
-Automated review by [Magnum](https://github.com/zhuravel/magnum). Reply on a P0-P2 thread with `fixed`, `not a bug: <why>` or `won't fix: <why>`; simplifications are optional. New pushes are re-reviewed automatically outside 03:00-12:00 UTC+3. A thread reply gets an answer without a push, and a review request for `your-login` starts a round.
+Automated review by [Magnum](https://github.com/zhuravel/magnum). Reply on a P0-P2 thread with `fixed`, `not a bug: <why>` or `won't fix: <why>`; simplifications are optional. New pushes are re-reviewed automatically (during 03:00-12:00 UTC+3 only small ones, by a short check). A thread reply gets an answer without a push, and a review request for `your-login` starts a round.
 
 </details>
 ```

@@ -11,7 +11,6 @@ import (
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
-	"github.com/zhuravel/magnum/internal/eligibility"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/store"
@@ -191,7 +190,6 @@ func (e *Engine) dispatch(ctx context.Context, ts tickState) {
 		return
 	}
 	now := e.now()
-	quiet := eligibility.QuietHours(e.cfg.Daemon.QuietHours, now.Local())
 
 	cands, err := e.continueCandidates(ctx, now)
 	if err != nil {
@@ -224,9 +222,6 @@ func (e *Engine) dispatch(ctx context.Context, ts tickState) {
 			// The rest wait for a running round to end; say so (noteWaits).
 			e.noteGate(ctx, pr.ID, gate{reason: WaitCapacity,
 				text: fmt.Sprintf("%s%d rounds running (max_concurrent_reviews %d)", gateCapacity, e.reviewRounds()+e.plannedRounds(), limit)})
-			continue
-		}
-		if quiet && !pr.Forced {
 			continue
 		}
 		if e.snoozeHolds(ctx, pr, now) {
@@ -465,6 +460,9 @@ func (e *Engine) startRound(ctx context.Context, pr store.PR, repo store.Repo, w
 		if !e.prepareContinue(ctx, job) {
 			return false, 0, gate{}
 		}
+	}
+	if g := e.quietHoursGate(job); g.text != "" {
+		return false, 0, g
 	}
 
 	rctx, cancel := context.WithCancel(ctx)

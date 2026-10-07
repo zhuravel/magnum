@@ -322,10 +322,12 @@ func (e *Engine) globalWait(ctx context.Context, ts tickState, now time.Time) *W
 }
 
 // waitFor is why pr waits: its retry backoff, then the timing rules
-// (eligibility.Throttle, unless forced), then a mute, quiet hours, what
-// holds every PR (global), and finally the reason the last dispatch gave
-// (store.KVPRGate); with none of them it starts at the next dispatch. The
-// wait says whether the round is a delta check (deltaCheckDue).
+// (eligibility.Throttle, unless forced), then a mute, quiet hours (unless
+// the round runs the judge alone: a delta check, or a re-review of the same
+// head, a reply round's included; quietHoursGate), what holds every PR
+// (global), and finally the reason the last dispatch gave (store.KVPRGate);
+// with none of them it starts at the next dispatch. The wait says whether
+// the round is a delta check (deltaCheckDue).
 func (e *Engine) waitFor(ctx context.Context, pr store.PR, global *Wait, now time.Time) Wait {
 	base := Wait{Rereview: deref(pr.ReviewedSHA) != "", Forced: pr.Forced, PostMerge: postMerge(pr)}
 	repo, _ := e.st.RepoByID(ctx, pr.RepoID)
@@ -354,7 +356,7 @@ func (e *Engine) waitFor(ctx context.Context, pr store.PR, global *Wait, now tim
 	if pr.Muted && !pr.Forced {
 		return with(Wait{Reason: WaitMuted, Detail: "nothing: the PR is muted"})
 	}
-	if spec := e.cfg.Daemon.QuietHours; !pr.Forced && quietHoursNow(spec, now) {
+	if spec := e.cfg.Daemon.QuietHours; !pr.Forced && quietHoursHold(spec, now, base.DeltaCheck || e.sameHeadDue(ctx, pr)) {
 		return with(Wait{Reason: WaitQuietHours, Until: quietHoursEnd(spec, now), Detail: "the end of quiet hours (" + spec + ")"})
 	}
 	if global != nil {
@@ -516,26 +518,6 @@ func retryCause(lastError string) string {
 		return "infra"
 	}
 	return "setup"
-}
-
-// quietHoursNow reports whether now is inside [daemon] quiet_hours.
-func quietHoursNow(spec string, now time.Time) bool {
-	return spec != "" && eligibility.QuietHours(spec, now.Local())
-}
-
-// quietHoursEnd is the next local time quiet_hours ("HH:MM-HH:MM") end
-// after now; zero when spec cannot be read.
-func quietHoursEnd(spec string, now time.Time) time.Time {
-	w, ok, err := config.ParseQuietHours(spec)
-	if err != nil || !ok {
-		return time.Time{}
-	}
-	n := now.Local()
-	at := time.Date(n.Year(), n.Month(), n.Day(), w.End/60, w.End%60, 0, 0, n.Location())
-	if !at.After(n) {
-		at = at.AddDate(0, 0, 1)
-	}
-	return at
 }
 
 // humanDuration is d without zero units: "5m", "2h", "1h30m", "45s".
