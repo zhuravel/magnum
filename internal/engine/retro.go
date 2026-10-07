@@ -52,8 +52,9 @@ const (
 )
 
 // RetroPayload is a `magnum retro` request: a retro now, whatever [learn]
-// enabled, daily_at and `magnum pause` say (a drain or an infrastructure
-// pause still holds it).
+// enabled and daily_at say (a drain, an infrastructure pause or a pause of
+// the agent's CLI still holds it; `magnum pause` holds neither this nor the
+// daily one).
 type RetroPayload struct {
 	// PRs limits the retro to these pull requests (registry ids), whenever
 	// they closed, and implies Again for them; empty = every PR due within
@@ -159,8 +160,11 @@ type retroSpec struct {
 }
 
 // maybeRetro starts the day's retro ([learn] enabled, past daily_at, not
-// run today, none running, no pause of any kind, the agent's CLI not
-// paused). A dry run and `magnum daemon --once` never start one.
+// run today, none running, no drain or infrastructure pause, the agent's CLI
+// not paused at a usage limit or a logout). `magnum pause` holds automatic
+// reviews only: the retro reviews nothing, and a pause kept overnight
+// started it hours late. A dry run and `magnum daemon --once` never start
+// one.
 func (e *Engine) maybeRetro(ctx context.Context) {
 	lc := e.cfg.Learn
 	if !lc.Enabled || e.d.DryRun || e.once {
@@ -176,7 +180,7 @@ func (e *Engine) maybeRetro(ctx context.Context) {
 	if day, _ := e.getKV(ctx, KVRetroDay); day == store.DayKey(now) || ctx.Err() != nil {
 		return
 	}
-	if e.retroBusy() || e.userPause(ctx) != "" || e.holdReason(ctx) != "" || e.retroToolPause(ctx) != "" {
+	if e.retroBusy() || e.holdReason(ctx) != "" || e.retroToolPause(ctx) != "" {
 		return
 	}
 	e.startRetro(ctx, retroSpec{daily: true, lookback: lc.Lookback.Duration, settle: lc.Settle.Duration})

@@ -113,7 +113,7 @@ func TestManualRepositoryTakesBackAWaitingPR(t *testing.T) {
 
 // A waiting PR a changed configuration now rejects is taken back when the
 // daemon starts, not only at dispatch: dispatch may be held (the Codex
-// soft cap holds first reviews) for days, and meanwhile the board said
+// soft cap holds full re-reviews) for days, and meanwhile the board said
 // "queued" for a PR that will never be reviewed on its own.
 func TestStartupTakesBackAWaitingPRTheConfigNowRejects(t *testing.T) {
 	h := newHarness(t)

@@ -3782,7 +3782,9 @@ func DefaultTriage() Triage
 
 type Usage struct {
 	// CodexSoft: at or above this share (percent) of the Codex budget used,
-	// first reviews wait; re-reviews and forced reviews still run. 0 = off.
+	// automatic full re-reviews wait; first reviews, delta checks, re-reviews
+	// of the same head, reply rounds and requested or forced reviews still
+	// run. 0 = off.
 	CodexSoft float64 `toml:"codex_soft"`
 	// CodexHard: at or above this share every kind backed by Codex pauses
 	// until the budget drops below it again. 0 = off.
@@ -4431,7 +4433,7 @@ const (
 	WaitInfra         = "infra"          // an infrastructure failure paused dispatch
 	WaitHerdr         = "herdr"          // herdr is unreachable
 	WaitKind          = "kind"           // an agent kind the round needs is paused
-	WaitBudget        = "budget"         // the Codex budget's soft cap holds first reviews
+	WaitBudget        = "budget"         // the Codex budget's soft cap holds full re-reviews
 	WaitIdentity      = "identity"       // the posting identity is unhealthy
 	WaitSlot          = "slot"           // the PR's slot, or a free pool slot
 	WaitPinned        = "pinned"         // the PR's slot is pinned (magnum open, magnum pin): the round waits for the unpin
@@ -5320,8 +5322,9 @@ type RetroPayload struct {
 	Lookback string `json:"lookback,omitempty"`
 }
     RetroPayload is a `magnum retro` request: a retro now, whatever learn
-    enabled, daily_at and `magnum pause` say (a drain or an infrastructure pause
-    still holds it).
+    enabled and daily_at say (a drain, an infrastructure pause or a pause of the
+    agent's CLI still holds it; `magnum pause` holds neither this nor the daily
+    one).
 
 type RetroRun struct {
 	ID  string

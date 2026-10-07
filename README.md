@@ -177,7 +177,7 @@ The defaults keep that down: a push waits for 5 quiet minutes (15 after a burst)
 round per 30 minutes (2 hours for a draft) and 12 automatic rounds a day, a push that only touches
 comments, whitespace or docs, or only merges the base branch, is not re-reviewed, and a change under 30
 code lines since the last review gets a check by the judge alone. With 80% of the Codex budget used,
-first reviews wait; at 95%, rounds that need Codex wait. `magnum status` shows how fast that budget goes,
+full re-reviews wait; at 95%, rounds that need Codex wait. `magnum status` shows how fast that budget goes,
 `magnum stats` lists the PRs that took the most agent time, and
 [triage](#triage-fewer-reviewers-for-a-small-diff) can skip reviewers on a small diff.
 
@@ -400,9 +400,11 @@ fails (up to 30), and resumes by itself when it answers; `magnum resume` lifts t
 
 The `[usage]` section watches the Codex budget, which Magnum reads from Codex's own session files
 (`codex_home`, default `$CODEX_HOME` or `~/.codex`) at most once a minute. At `codex_soft` percent
-(default 80) first reviews wait while re-reviews and `magnum review` still run; at `codex_hard` (default
-95) every round that needs Codex waits until the budget is below it again. `magnum status` and the tab
-bar show the gauge (`codex 87%`); `0` turns a cap off.
+(default 80) automatic full re-reviews wait (`re-review · Codex soft cap` on the board), since a full
+re-review costs about twice a first review and finds no more; first reviews, delta checks, re-reviews of
+the same head, reply rounds, a review request and `magnum review` still run. At `codex_hard` (default 95)
+every round that needs Codex waits until the budget is below it again. `magnum status` and the tab bar
+show the gauge (`codex 87%`); `0` turns a cap off.
 
 Once every agent of a reviewed PR has been idle for `[daemon] park_idle_after` (default `"2h"`, `"0"`
 never) its sessions are parked to free memory; the next round resumes them. The same goes for a PR whose
@@ -1125,7 +1127,7 @@ Fix 1 problem before merging. 1 optional: 1 simplification.
 | `magnum slots [list\|provision\|remove\|repair\|adopt\|pin\|unpin]` | Pool management. `slots pin\|unpin <slot>` is `magnum pin\|unpin <slot>`. |
 | `magnum where <ref>` | `cd $(magnum where 123)`. |
 | `magnum config`, `magnum version` | `config` validates the configuration (the built-in defaults with `~/.config/magnum/config.toml` over them, or `--config FILE`), renders every prompt file the roles name with this binary and prints the checkout, config, data, state and judge skill paths; `daemon-restart` and `install` run it with the binary that will run and refuse when it fails. `version` prints the build (`make build` stamps it; `dev` for a plain `go build`). |
-| `magnum pause\|resume`, `magnum logs [<ref>] [-f]`, `magnum doctor`, `magnum identities check`, `magnum kick` | Operations. `pause` holds automatic reviews (`--for 2h` or `--until 15:30` ends it; words after `pause` are the reason, and one that reads as a duration is refused); a review you ask for (`magnum review`, the board, the picker) still runs. `kick` wakes the daemon for a tick, which polls, schedules and reconciles. The tab bar and `magnum status` show since when it holds them and how many review requests people made wait on it. |
+| `magnum pause\|resume`, `magnum logs [<ref>] [-f]`, `magnum doctor`, `magnum identities check`, `magnum kick` | Operations. `pause` holds automatic reviews (`--for 2h` or `--until 15:30` ends it; words after `pause` are the reason, and one that reads as a duration is refused); a review you ask for (`magnum review`, the board, the picker) still runs, and so does the daily retro. `kick` wakes the daemon for a tick, which polls, schedules and reconciles. The tab bar and `magnum status` show since when it holds them and how many review requests people made wait on it. |
 | `magnum daemon [--once] [--dry-run]`, `magnum install\|uninstall\|daemon-restart\|daemon-stop [--now]`, `magnum daemon-restart --when-idle\|--drain [--timeout D]` | The daemon and its launchd job. Stop and restart refuse while review rounds are in flight unless `--now`; `daemon-restart --when-idle` waits, stopping nothing, until no round is in flight and restarts then (it waits again when a round starts in between); `daemon-restart --drain` and `install --drain` stop new rounds, wait for those in flight and then restart; both wait at most `--timeout` (default 2h), and ctrl+c or closing the terminal stops the wait and lifts the drain. A drain names its command's pid: `magnum status` shows it with how to lift it, and the daemon lifts a drain whose command is gone. `daemon-restart` and `install` first run `magnum config` with the binary launchd will run, which validates the configuration and renders every prompt with the build that will run, and refuse when it fails; the daemon refuses to start on the same errors (written to `daemon.log` and `launchd.log`). After a build that adds a registry migration, other commands refuse to run while the older daemon is up (they would migrate the registry under it) and point at `daemon-restart --drain`. |
 
 Shell completion is dynamic: PR references complete from the registry with their titles, slots,
@@ -1317,8 +1319,9 @@ pill spins (herdr-radar's braille spinner) while its round runs. `?` shows the l
 
 Other people review the same pull requests, and what they catch that Magnum did not is the plainest measure
 of what its review misses. The retro collects it. With `[learn] enabled = true` it runs once a day, on the
-first tick after `daily_at` (07:00), unless Magnum is paused or draining; `magnum retro` runs one at any
-time, also while Magnum is paused (not while it drains for a restart). It looks at the pull requests
+first tick after `daily_at` (07:00), also while `magnum pause` holds the reviews (it reviews nothing), but
+not while Magnum drains for a restart or its agent's CLI is paused at a usage limit; `magnum retro` runs
+one at any time, under the same conditions. It looks at the pull requests
 merged or closed within `lookback` (a week) and at least `settle` ago (24 hours, so a review posted after
 the merge is in: the daily retro at 07:00 would otherwise take a pull request merged at 06:55 and never see
 a change request posted at 07:30), that Magnum posted a review on and that no retro looked at yet (or whose

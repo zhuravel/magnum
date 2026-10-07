@@ -341,7 +341,7 @@ func (e *Engine) maintainPool(ctx context.Context, repo string, inv *inventory.I
 // poller only re-classifies a PR when GitHub reports a change. Waiting PRs a
 // filter now rejects become ineligible here too (reclassify, which dispatch
 // also applies), since dispatch may be held for days (the Codex soft cap
-// holds first reviews) while the board shows them as queued.
+// holds full re-reviews) while the board shows them as waiting.
 func (e *Engine) reclassifyIneligible(ctx context.Context) {
 	e.skipBaseline(ctx)
 	e.reclassifyWaiting(ctx)

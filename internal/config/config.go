@@ -199,7 +199,9 @@ var TrivialDeltaClasses = []string{"comments", "whitespace", "docs", "base"}
 // Codex's budget is read from Codex's own session files (internal/usage).
 type Usage struct {
 	// CodexSoft: at or above this share (percent) of the Codex budget used,
-	// first reviews wait; re-reviews and forced reviews still run. 0 = off.
+	// automatic full re-reviews wait; first reviews, delta checks, re-reviews
+	// of the same head, reply rounds and requested or forced reviews still
+	// run. 0 = off.
 	CodexSoft float64 `toml:"codex_soft"`
 	// CodexHard: at or above this share every kind backed by Codex pauses
 	// until the budget drops below it again. 0 = off.

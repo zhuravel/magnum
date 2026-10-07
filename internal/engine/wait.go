@@ -53,7 +53,7 @@ const (
 	WaitInfra         = "infra"          // an infrastructure failure paused dispatch
 	WaitHerdr         = "herdr"          // herdr is unreachable
 	WaitKind          = "kind"           // an agent kind the round needs is paused
-	WaitBudget        = "budget"         // the Codex budget's soft cap holds first reviews
+	WaitBudget        = "budget"         // the Codex budget's soft cap holds full re-reviews
 	WaitIdentity      = "identity"       // the posting identity is unhealthy
 	WaitSlot          = "slot"           // the PR's slot, or a free pool slot
 	WaitPinned        = "pinned"         // the PR's slot is pinned (magnum open, magnum pin): the round waits for the unpin
@@ -200,7 +200,7 @@ func (w Wait) short(now time.Time, cause bool) string {
 	case WaitKind:
 		what = strings.TrimSpace(w.Subject + " paused")
 	case WaitBudget:
-		what = "codex budget"
+		what = "Codex soft cap"
 	case WaitIdentity:
 		what = "identity"
 	case WaitSlot:

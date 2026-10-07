@@ -507,7 +507,7 @@ func (e *Engine) startRound(ctx context.Context, pr store.PR, repo store.Repo, w
 		return false, 0, gate{reason: WaitKind, kind: kind, text: why}
 	}
 	codex := codexRoles(toRun)
-	if why := e.budgetGate(job.kind, pr.Forced, codex); why != "" {
+	if why := e.budgetGate(job, codex); why != "" {
 		return false, 0, gate{reason: WaitBudget, text: why}
 	}
 	if limit := e.cfg.Daemon.MaxTotalWorkingCodex; limit > 0 && codex > 0 && workingCodex+min(codex, limit) > limit {

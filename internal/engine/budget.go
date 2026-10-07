@@ -2,7 +2,7 @@ package engine
 
 // The Codex budget: Codex reports its account's rate-limit windows in its own
 // session files (internal/usage). The health tick reads them at most once a
-// minute; at [usage] codex_soft first reviews wait, at codex_hard the kinds
+// minute; at [usage] codex_soft full re-reviews wait, at codex_hard the kinds
 // backed by Codex pause until the budget is below the cap again. A budget
 // spent so fast that codex_soft comes before the window resets is told once
 // per window (notePace).
@@ -16,6 +16,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/notify"
+	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/usage"
 )
@@ -187,7 +188,7 @@ func (e *Engine) checkBudget(ctx context.Context) {
 
 // notePace warns, once per window, that the budget is spent faster than the
 // window lasts: still below codex_soft, but at the average pace since the
-// window began codex_soft comes before the reset, and first reviews wait from
+// window began codex_soft comes before the reset, and full re-reviews wait from
 // then on. One info toast on the batcher, whose key is reserved in the
 // registry for the window's length (so a restarted daemon stays quiet), and
 // one usage.pace event, guarded the same way. A dry run only records it.
@@ -210,7 +211,7 @@ func (e *Engine) notePace(ctx context.Context, snap usage.Snapshot, now time.Tim
 		return
 	}
 	subject := "tool:" + agents.KindCodex
-	detail := fmt.Sprintf("At this pace it reaches %g%% (codex_soft) %s, before the reset %s: first reviews will wait. Pace %.1fx.",
+	detail := fmt.Sprintf("At this pace it reaches %g%% (codex_soft) %s, before the reset %s: full re-reviews will wait. Pace %.1fx.",
 		soft, reach.Local().Format("Mon 15:04"), w.ResetsAt.Local().Format("Mon 15:04"), pace.Ratio())
 	if e.d.DryRun {
 		e.rec.Record(ctx, subject, "pace", fmt.Sprintf("Codex budget %.0f%% used: %s", snap.Used(), detail))
@@ -228,19 +229,39 @@ func (e *Engine) notePace(ctx context.Context, snap usage.Snapshot, now time.Tim
 }
 
 // budgetGate is why a round must wait for the Codex budget ("" = go): at
-// the soft cap a first review (kind initial) whose roles run Codex waits;
-// re-reviews, continues and forced reviews do not. The hard cap holds rounds
-// through the kind pause (checkBudget).
-func (e *Engine) budgetGate(kind string, forced bool, codexRoles int) string {
-	if kind != "initial" || forced || codexRoles == 0 {
+// the soft cap an automatic full re-review whose roles run Codex waits
+// (softCapHolds). The hard cap holds rounds through the kind pause
+// (checkBudget).
+func (e *Engine) budgetGate(job *roundJob, codexRoles int) string {
+	if codexRoles == 0 || !softCapHolds(job) {
 		return ""
 	}
 	level, snap := e.budgetLevel()
 	if level != usage.Soft {
 		return ""
 	}
-	return fmt.Sprintf("Codex budget %.0f%% used (soft cap %g%%): first reviews wait; re-reviews and `magnum review` still run",
+	return fmt.Sprintf("Codex budget %.0f%% used (soft cap %g%%): full re-reviews wait; first reviews, delta checks and `magnum review` still run",
 		snap.Used(), e.cfg.Usage.CodexSoft)
+}
+
+// softCapHolds reports whether the soft cap holds job: a full re-review
+// nobody asked for. A full re-review costs about twice a first review's
+// Codex points (1.04 against 0.52-0.69) and posts no more findings, so it
+// is the round to hold; a first review, a delta check, a re-review of the
+// same head and a reply round (the judge alone), a continue of a paused
+// round, and a round someone asked for (`magnum review`, a review request)
+// still start. A delta check that the checkout turns into a full round
+// (confirmDeltaCheck, confirmSameHead) has started and runs as one.
+func softCapHolds(job *roundJob) bool {
+	switch {
+	case job.kind != pipeline.KindRereview, job.continued:
+		return false
+	case job.deltaCheck, job.sameHead, job.replies > 0:
+		return false
+	case job.pr.Forced, job.requested:
+		return false
+	}
+	return true
 }
 
 // budgetKnown reports whether a Codex snapshot was ever read.

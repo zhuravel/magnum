@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/learn"
 	"github.com/zhuravel/magnum/internal/pipeline"
@@ -441,7 +442,7 @@ func TestRetroHonoursMaxPRs(t *testing.T) {
 
 // TestDailyRetroRunsOncePerDayAfterDailyAt: with [learn] enabled the
 // retro runs on the first tick past daily_at, once per local day, never
-// while magnum is paused or draining, and never when disabled.
+// while magnum is draining, and never when disabled.
 func TestDailyRetroRunsOncePerDayAfterDailyAt(t *testing.T) {
 	h := newHarness(t, func(h *harness) {
 		h.cfg.Learn.Enabled = true
@@ -459,14 +460,6 @@ func TestDailyRetroRunsOncePerDayAfterDailyAt(t *testing.T) {
 		t.Fatal("the retro ran before daily_at")
 	}
 	h.advance(90 * time.Minute)
-	if err := h.st.SetKV(h.ctx, KVDaemonPaused, "1"); err != nil {
-		t.Fatal(err)
-	}
-	h.tick()
-	if ran() {
-		t.Fatal("the retro ran while magnum was paused")
-	}
-	_ = h.st.DeleteKV(h.ctx, KVDaemonPaused)
 	_ = h.st.SetKV(h.ctx, KVDaemonDraining, store.FormatTime(h.clock.Now()))
 	h.tick()
 	if ran() {
@@ -494,6 +487,61 @@ func TestDailyRetroRunsOncePerDayAfterDailyAt(t *testing.T) {
 	h.tick()
 	if ran() {
 		t.Fatal("a disabled schedule ran")
+	}
+}
+
+// TestDailyRetroRunsDuringAUserPause: `magnum pause` holds automatic
+// reviews only, so a daemon paused overnight starts the day's retro at
+// 07:01 and stays paused; a usage pause of the CLI the retro's agent runs
+// (Claude or Codex) still holds it until that pause ends.
+func TestDailyRetroRunsDuringAUserPause(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		kind  string // the retro's agent kind
+		usage bool   // its CLI is paused at a usage limit
+	}{
+		{"a user pause", agents.KindClaude, false},
+		{"a Claude usage pause", agents.KindClaude, true},
+		{"a Codex usage pause", agents.KindCodex, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := &fakeClassifier{}
+			h := newHarness(t, withClassifier(fc), func(h *harness) {
+				h.cfg.Learn.Enabled = true
+				h.cfg.Learn.DailyAt = "07:00"
+				h.cfg.Learn.Kind = tc.kind
+			})
+			retroPR(h, 7, 24*time.Hour)
+			seedRetroGitHub(h, 7)
+			// The day's retro ran; the operator pauses for the night.
+			for key, v := range map[string]string{KVRetroDay: store.DayKey(h.clock.Now()), KVDaemonPaused: "1", KVDaemonPausedReason: "for the night"} {
+				if err := h.st.SetKV(h.ctx, key, v); err != nil {
+					t.Fatal(err)
+				}
+			}
+			h.advance(time.Date(2026, 10, 6, 7, 1, 0, 0, time.Local).Sub(h.clock.Now()))
+			if tc.usage {
+				h.e.setToolPause(h.ctx, tc.kind, "usage_limit", "limit reached", h.clock.Now().Add(time.Hour))
+			}
+			h.tick()
+			_, ran, _ := h.st.GetKV(h.ctx, KVRetroLast)
+			if ran == tc.usage {
+				t.Fatalf("retro ran at 07:01 = %v with the usage pause %v", ran, tc.usage)
+			}
+			if tc.usage {
+				h.advance(time.Hour)
+				h.tick()
+				if _, ran, _ := h.st.GetKV(h.ctx, KVRetroLast); !ran {
+					t.Fatal("the retro did not run once the usage pause ended")
+				}
+			}
+			if day, _, _ := h.st.GetKV(h.ctx, KVRetroDay); day != store.DayKey(h.clock.Now()) {
+				t.Fatalf("retro day = %q", day)
+			}
+			if h.e.userPause(h.ctx) == "" {
+				t.Fatal("the retro ended the user pause")
+			}
+		})
 	}
 }
 

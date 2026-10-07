@@ -3418,3 +3418,28 @@ editing history. Code, config comments and prompts reference these by their head
   as one check through its usual printing: a failed `registry` check with the schema versions, the daemon's
   pid and the fix `magnum daemon-restart --drain`, or for anything else the `config` check with the
   config.toml fix.
+- **The daily retro runs during `magnum pause`** (2026-10-07, amends "Learning loop: daily retro"). The operator
+  paused at 03:13 and resumed at 12:05, and the retro due at 07:00 ran at 12:05:19. `magnum pause` holds
+  automatic reviews only (2026-10-05), and the retro reviews nothing: it reads closed pull requests and has its
+  agent classify other reviewers' comments. `maybeRetro` no longer checks the user pause, so the retro starts at
+  `daily_at` while the reviews stay paused. A shutdown, a drain, an infrastructure pause and a usage limit or a
+  logout of the CLI the retro's agent runs (`retroToolPause`: Claude by default, Codex when `[learn] kind` says
+  so) still hold it, `magnum retro` is unchanged, and `magnum status` keeps saying when the last retro ran.
+  Rejected: holding it until the pause ends (a pause kept overnight moved it into the working day, where its
+  agent competes with the reviews for the budget); holding it on a usage pause of a CLI it does not run.
+- **At the Codex soft cap full re-reviews wait, not first reviews** (2026-10-07, amends "The Codex budget gates
+  dispatch"). From 10-05 to 10-06 a first review cost 0.52-0.69 Codex points and posted 1.46 P0-P2 findings
+  per round; a full re-review cost 1.04 and posted 1.44. The weekly budget went from 82% to 92% on 7 full
+  re-reviews, and at a pace of 3.4x the soft cap was due around 10-09, where it would have held the cheap
+  rounds and let the expensive ones run. `budgetGate` takes the round's job and, at `codex_soft`, holds a full
+  re-review whose roles run Codex and that nobody asked for (`softCapHolds`); first reviews, delta checks,
+  re-reviews of the same head, reply rounds, continues of a paused turn (`continued`, also one whose checkout
+  is gone and restarts in full) and forced or requested rounds start. A paused round whose judge was never
+  prompted restarts as a new round and waits like one. The dispatcher decides before the round starts, from
+  what it already knows (`deltaCheck`, `sameHead`, `replies`, `requested`); a delta check or a same-head
+  re-review that the checkout turns into a full round (`confirmDeltaCheck`, `confirmSameHead`) has started
+  and runs as one. The board's cell reads `re-review · Codex soft cap` (`WaitBudget`'s short form, which said
+  "codex budget"), the card's sentence says what still runs and that `magnum review` runs it, and the pace
+  toast says full re-reviews will wait. An author who wants the re-review asks for it: a review request runs
+  it. `codex_hard` is unchanged. Rejected: holding first reviews too (the soft cap would hold every new pull
+  request for days); holding delta checks and reply rounds (the judge alone, a fraction of a full round).

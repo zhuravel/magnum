@@ -71,7 +71,7 @@ func TestBudgetPaceWarnsOnceWhenSoftCapComesBeforeTheReset(t *testing.T) {
 	for _, want := range []string{
 		"reaches 80% (codex_soft) " + reach.Local().Format("Mon 15:04"),
 		"before the reset " + resets.Local().Format("Mon 15:04"),
-		"first reviews will wait",
+		"full re-reviews will wait",
 		"Pace 2.8x",
 	} {
 		if !strings.Contains(body, want) {

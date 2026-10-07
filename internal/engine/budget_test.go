@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/agents"
+	"github.com/zhuravel/magnum/internal/github"
+	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/usage"
 )
@@ -70,37 +72,123 @@ func TestBudgetIsReadOnceAMinuteAndRecorded(t *testing.T) {
 	}
 }
 
-// TestBudgetSoftCapDefersOnlyFirstReviews: at the soft cap a new PR's first
-// review waits with a reason; a forced review still runs, and the PR runs
-// once the budget is below the cap.
-func TestBudgetSoftCapDefersOnlyFirstReviews(t *testing.T) {
+// TestBudgetSoftCapHoldsFullReReviews: at the soft cap a new PR's first
+// review starts, a push's full re-review waits with a short reason the
+// board shows ("re-review · Codex soft cap"), a review request runs it at
+// once, and an automatic one runs once the budget is below the cap.
+func TestBudgetSoftCapHoldsFullReReviews(t *testing.T) {
 	h, u := newBudgetHarness(t)
 	u.set(85, h.clock.Now().Add(72*time.Hour))
-	h.open(prSpec{n: 1, head: "a1"})
-	h.startup()
+	h.reviewedPR(2, "b1") // the first review runs at the soft cap
+	pollPR(h, 40*time.Minute, 2, "b2")
+	h.advance(time.Hour) // far past the quiet period and the interval
 	h.tick()
-	h.open(prSpec{n: 1, head: "a1"}, prSpec{n: 2, head: "b1"})
-	h.tick()
-	h.advance(5 * time.Minute)
-	h.tick()
-	pr := h.wantState(2, store.PRQueued)
-	if gate, _ := h.e.getKV(h.ctx, kvPRGate(pr.ID)); !strings.Contains(gate, "soft cap 80%") || !strings.Contains(gate, "first reviews wait") {
+	reqWantRounds(t, h, 1)
+	pr := h.wantState(2, store.PRRereviewPending)
+	if gate, _ := h.e.getKV(h.ctx, kvPRGate(pr.ID)); !strings.Contains(gate, "soft cap 80%") || !strings.Contains(gate, "full re-reviews wait") {
 		t.Fatalf("gate = %q", gate)
 	}
-	if why := h.e.budgetGate("rereview", false, 2); why != "" {
-		t.Fatalf("a re-review waits: %q", why)
+	w := waitOf(t, h, 2)
+	if w.Reason != WaitBudget || !w.Rereview || w.DeltaCheck {
+		t.Fatalf("wait = %+v, want the soft cap on a full re-review", w)
 	}
-	if why := h.e.budgetGate("initial", true, 2); why != "" {
-		t.Fatalf("a forced first review waits: %q", why)
+	if got, want := w.Short(h.clock.Now()), "re-review · Codex soft cap"; got != want {
+		t.Errorf("short = %q, want %q", got, want)
 	}
-	if why := h.e.budgetGate("initial", false, 0); why != "" {
-		t.Fatalf("a round without Codex waits: %q", why)
+	if got := w.Sentence("talkable#2", h.clock.Now()); !strings.Contains(got, "full re-reviews wait") ||
+		!strings.HasSuffix(got, "`magnum review talkable#2` runs it now") {
+		t.Errorf("sentence = %q", got)
 	}
 
+	// A review request runs the held re-review.
+	h.advance(time.Minute)
+	reqPoll(h, prSpec{n: 2, head: "b2", requests: []github.ReviewRequestEvent{reqAsk(h, "alice", askedPoll)}})
+	h.advance(time.Minute)
+	h.tick()
+	if ins := h.rd.all(); len(ins) != 2 || ins[1].TargetSHA != "b2" || ins[1].Kind != pipeline.KindRereview {
+		t.Fatalf("rounds = %d, want the requested re-review of b2", len(ins))
+	}
+
+	// The next push is automatic again: held until the budget is below the cap.
+	pollPR(h, time.Minute, 2, "b3")
+	h.advance(time.Hour)
+	h.tick()
+	reqWantRounds(t, h, 2)
+	if w := waitOf(t, h, 2); w.Reason != WaitBudget {
+		t.Fatalf("wait = %+v, want the soft cap", w)
+	}
 	u.set(50, h.clock.Now().Add(72*time.Hour))
 	h.advance(time.Minute)
 	h.tick()
-	h.wantState(2, store.PRReviewed)
+	if ins := h.rd.all(); len(ins) != 3 || ins[2].TargetSHA != "b3" {
+		t.Fatalf("rounds = %d, want the re-review of b3 below the cap", len(ins))
+	}
+}
+
+// TestBudgetSoftCapLetsADeltaCheckRun: at the soft cap a small delta's
+// check by the judge alone starts after the quiet period.
+func TestBudgetSoftCapLetsADeltaCheckRun(t *testing.T) {
+	h, u := newBudgetHarness(t)
+	u.set(85, h.clock.Now().Add(72*time.Hour))
+	pushedWithDelta(t, h, rubyMixed) // b2 at 10:45: 2 lines
+	if w := waitOf(t, h, 2); !w.DeltaCheck || w.Reason != WaitQuiet {
+		t.Fatalf("wait = %+v, want the delta check after the quiet period", w)
+	}
+	h.advance(5 * time.Minute)
+	h.tick()
+	ins := h.rd.all()
+	if len(ins) != 2 || ins[1].DeltaCheck == nil || ins[1].TargetSHA != "b2" {
+		t.Fatalf("rounds = %d, want the delta check of b2 at the soft cap", len(ins))
+	}
+}
+
+// TestBudgetSoftCapHoldsOnlyAutomaticFullReReviews: the soft cap's gate for
+// each kind of round. A full re-review whose roles run Codex waits; a first
+// review, a delta check, a re-review of the same head, a reply round, a
+// continue, a forced or requested round and a round without Codex start,
+// and nothing waits for it below the soft cap or at the hard cap (the kind
+// pause holds rounds there).
+func TestBudgetSoftCapHoldsOnlyAutomaticFullReReviews(t *testing.T) {
+	h, u := newBudgetHarness(t)
+	u.set(85, h.clock.Now().Add(72*time.Hour))
+	h.startup()
+	h.tick()
+	rereview := func(mod func(j *roundJob)) *roundJob {
+		j := &roundJob{kind: pipeline.KindRereview, pr: store.PR{ReviewedSHA: store.Ptr("b1"), HeadSHA: "b2"}}
+		if mod != nil {
+			mod(j)
+		}
+		return j
+	}
+	for _, tc := range []struct {
+		name  string
+		job   *roundJob
+		codex int
+		waits bool
+	}{
+		{"a full re-review", rereview(nil), 2, true},
+		{"a first review", &roundJob{kind: pipeline.KindInitial}, 2, false},
+		{"a delta check", rereview(func(j *roundJob) { j.deltaCheck = true }), 1, false},
+		{"a re-review of the same head", rereview(func(j *roundJob) { j.sameHead = true }), 1, false},
+		{"a reply round", rereview(func(j *roundJob) { j.sameHead, j.replies = true, 2 }), 1, false},
+		{"a continued turn", rereview(func(j *roundJob) { j.kind, j.continued = kindContinue, true }), 2, false},
+		{"a continue whose checkout is gone", rereview(func(j *roundJob) { j.continued = true }), 2, false},
+		{"a forced re-review", rereview(func(j *roundJob) { j.pr.Forced = true }), 2, false},
+		{"a requested re-review", rereview(func(j *roundJob) { j.requested = true }), 2, false},
+		{"a re-review without Codex", rereview(nil), 0, false},
+	} {
+		if why := h.e.budgetGate(tc.job, tc.codex); (why != "") != tc.waits {
+			t.Errorf("%s: gate = %q, want waiting %v", tc.name, why, tc.waits)
+		}
+	}
+	for _, pct := range []float64{50, 96} {
+		u.set(pct, h.clock.Now().Add(72*time.Hour))
+		h.advance(time.Minute)
+		h.tick()
+		if why := h.e.budgetGate(rereview(nil), 2); why != "" {
+			t.Errorf("at %.0f%%: a full re-review waits for the soft cap: %q", pct, why)
+		}
+	}
 }
 
 // TestBudgetHardCapPausesCodexUntilBelow: at the hard cap the codex kind

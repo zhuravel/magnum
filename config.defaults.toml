@@ -104,7 +104,8 @@ transport = "gh"                  # App JWT/token calls run as `gh api` (gh | di
                                   # which Little Snitch blocks for a rebuilt, unsigned magnum binary
 
 # [usage]                         # the Codex budget, read from Codex's own session files at most once a minute
-# codex_soft = 80                 # at this % used, first reviews wait (re-reviews and `magnum review` still run)
+# codex_soft = 80                 # at this % used, full re-reviews wait (first reviews, delta checks, replies,
+                                  # review requests and `magnum review` still run; 0 = off)
 # codex_hard = 95                 # at this % used, rounds that need Codex wait until it is below again (0 = off)
 # codex_home = ""                 # "" = $CODEX_HOME, else ~/.codex
 
