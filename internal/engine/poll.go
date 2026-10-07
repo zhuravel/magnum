@@ -607,7 +607,7 @@ func (e *Engine) factsFor(ctx context.Context, pr store.PR, w config.Watch, now 
 		Repo:   repo,
 		Number: pr.Number, AuthorLogin: deref(pr.AuthorLogin),
 		AuthorIsBot: github.IsBot(deref(pr.AuthorType), deref(pr.AuthorLogin)),
-		IsDraft:     pr.IsDraft, Requested: requested, IsCrossRepo: pr.IsCrossRepo, Labels: pr.Labels, SelfLogin: e.selfLogin(w),
+		IsDraft:     pr.IsDraft, Requested: requested, IsCrossRepo: pr.IsCrossRepo, Labels: pr.Labels,
 		AuthorAssociation: deref(pr.AuthorAssociation),
 		HeadSHA:           pr.HeadSHA, ReviewedSHA: deref(pr.ReviewedSHA), State: pr.State,
 		HeadChangedAt: pr.HeadChangedAt, PendingSince: deref(pr.PendingSince),

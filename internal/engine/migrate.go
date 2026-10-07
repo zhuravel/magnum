@@ -61,21 +61,12 @@ func (e *Engine) formerLogins(ctx context.Context, pr store.PR) []string {
 	var out []string
 	for _, name := range e.formerIdentities(ctx, pr.ID) {
 		id := e.cfg.IdentityByName(name)
-		if id == nil || id.Login == "" || sameAccount(id.Login, cur) || slices.Contains(out, id.Login) {
+		if id == nil || id.Login == "" || github.SameAccount(id.Login, cur) || slices.Contains(out, id.Login) {
 			continue
 		}
 		out = append(out, id.Login)
 	}
 	return out
-}
-
-// sameAccount reports whether two configured logins (REST form) name the
-// same account: the same login and both or neither an App's ("[bot]").
-// github.SameLogin alone would take the user "zhuravel" for the App
-// "zhuravel[bot]".
-func sameAccount(a, b string) bool {
-	bot := func(l string) bool { return strings.HasSuffix(strings.ToLower(strings.TrimSpace(l)), "[bot]") }
-	return github.SameLogin(a, b) && bot(a) == bot(b)
 }
 
 // migrateIdentity moves a PR about to be dispatched from an identity its
@@ -137,7 +128,7 @@ func (e *Engine) dismissFormer(ctx context.Context, job *roundJob, pr store.PR, 
 	full := job.repo.FullName()
 	for _, name := range e.formerIdentities(ctx, pr.ID) {
 		id := e.cfg.IdentityByName(name)
-		if id == nil || id.Login == "" || sameAccount(id.Login, cur) {
+		if id == nil || id.Login == "" || github.SameAccount(id.Login, cur) {
 			continue
 		}
 		app := id.Kind == "app"
@@ -164,7 +155,7 @@ func (e *Engine) dismissFormer(ctx context.Context, job *roundJob, pr store.PR, 
 			continue
 		}
 		for _, rv := range reviews {
-			if !github.SameLogin(rv.AuthorLogin, id.Login) || github.IsBot(rv.AuthorType, rv.AuthorLogin) != app {
+			if !github.IsAccount(rv.AuthorLogin, rv.AuthorType, id.Login, app) {
 				continue
 			}
 			state := strings.ToUpper(strings.TrimSpace(rv.State))

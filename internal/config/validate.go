@@ -16,8 +16,10 @@ import (
 // Warnings lists human-readable problems that do not make the config
 // invalid: zero [[identity]] or zero [[watch]] blocks are valid (the
 // built-in defaults have neither; they live in the user's ~/.config/magnum/config.toml), but
-// magnum then cannot post or reviews nothing. Print them from `magnum
-// doctor` and `magnum config`.
+// magnum then cannot post or reviews nothing; a [daemon] reviewer_timeout or
+// judge_timeout set while every role it would be the fallback of sets its
+// own timeout changes nothing. Print them from `magnum doctor` and `magnum
+// config`.
 func (c *Config) Warnings() []string {
 	var out []string
 	if len(c.Identities) == 0 {
@@ -25,6 +27,9 @@ func (c *Config) Warnings() []string {
 	}
 	if len(c.Watches) == 0 {
 		out = append(out, "no [[watch]] configured, magnum reviews nothing (declare watches in ~/.config/magnum/config.toml: `magnum init` writes one; examples in config.full.example.toml)")
+	}
+	if w := c.idleFallbackWarning(); w != "" {
+		out = append(out, w)
 	}
 	return out
 }
@@ -128,6 +133,9 @@ func (c *Config) Validate() error {
 		}
 		if p.Min < 0 || p.Max < p.Min || p.Max == 0 {
 			errs = append(errs, fmt.Errorf("pool %s: need 0 <= min <= max, max > 0", p.Repo))
+		}
+		if d := p.IdleRemoveAfter.Duration; d < 0 {
+			errs = append(errs, fmt.Errorf("pool %s: idle_remove_after must not be negative, got %s (0 or unset = %s)", p.Repo, d, DefaultIdleRemoveAfter))
 		}
 		for _, d := range p.Databases {
 			if base, ok := strings.CutSuffix(d, DatabaseSuffix); !ok || base == "" || strings.ContainsAny(base, "{}") {
@@ -522,8 +530,8 @@ func (c *Config) validatePipeline() []error {
 			errs = append(errs, fmt.Errorf("%s: judge_own_pass must be %q or %q, got %q", where, OwnPassParallel, OwnPassAfter, v))
 		}
 	}
-	related := func(where string, lookback Duration, ignore []string) {
-		if lookback.Duration < 0 {
+	related := func(where string, lookback *Duration, ignore []string) {
+		if lookback != nil && lookback.Duration < 0 {
 			errs = append(errs, fmt.Errorf("%s: related_lookback must not be negative, got %s", where, lookback.Duration))
 		}
 		for _, g := range ignore {
@@ -533,7 +541,7 @@ func (c *Config) validatePipeline() []error {
 		}
 	}
 	ownPass("pipeline", c.Pipeline.JudgeOwnPass, true)
-	related("pipeline", c.Pipeline.RelatedLookback, c.Pipeline.RelatedIgnore)
+	related("pipeline", &c.Pipeline.RelatedLookback, c.Pipeline.RelatedIgnore)
 	if d := c.Pipeline.JudgeFreshAfter.Duration; d < 0 {
 		errs = append(errs, fmt.Errorf("pipeline: judge_fresh_after must be 0 (always resume) or positive, got %s", d))
 	}

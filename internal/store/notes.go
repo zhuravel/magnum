@@ -179,8 +179,8 @@ func recordNotesVersion(ctx context.Context, tx *sql.Tx, in NotesVersionInput, n
 		at = now
 	}
 	res, err := tx.ExecContext(ctx, `INSERT INTO notes_versions (repo_id, at, source, pr_id, run_id, proposal_id, bytes, sha256, body)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, in.RepoID, FormatTime(at), in.Source, nullInt64(in.PRID), nullString(in.RunID),
-		nullInt64(in.ProposalID), len(in.Content.Notes), sum, body)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, in.RepoID, FormatTime(at), in.Source, nullInt(in.PRID), nullString(in.RunID),
+		nullInt(in.ProposalID), len(in.Content.Notes), sum, body)
 	if err != nil {
 		return NotesVersion{}, false, err
 	}
@@ -422,7 +422,7 @@ func (s *Store) CreateNotesProposal(ctx context.Context, in NotesProposalInput) 
 		}
 		res, err := tx.ExecContext(ctx, `INSERT INTO notes_proposals (repo_id, kind, trigger_reason, base_version_id, version_id,
   changes_json, state, reason, model, prompt_sha256, scratch, created_at, decided_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			in.RepoID, in.Kind, nullString(in.Trigger), nullInt64(in.BaseVersionID), nullInt64(in.VersionID), changes, in.State,
+			in.RepoID, in.Kind, nullString(in.Trigger), nullInt(in.BaseVersionID), nullInt(in.VersionID), changes, in.State,
 			nullString(in.Reason), nullString(in.Model), nullString(in.PromptSHA), nullString(in.Scratch), FormatTime(at), decided)
 		if err != nil {
 			return err
@@ -451,15 +451,6 @@ func (s *Store) CreateNotesProposal(ctx context.Context, in NotesProposalInput) 
 		return NotesProposal{}, fmt.Errorf("create notes proposal: %w", err)
 	}
 	return out, nil
-}
-
-// NotesProposalByID reads a proposal.
-func (s *Store) NotesProposalByID(ctx context.Context, id int64) (NotesProposal, error) {
-	p, err := scanNotesProposal(s.db.QueryRowContext(ctx, "SELECT "+proposalColumns+" FROM notes_proposals WHERE id = ?", id))
-	if err != nil {
-		return NotesProposal{}, notFound(err, "notes proposal", id)
-	}
-	return p, nil
 }
 
 // NotesProposalFilter selects proposals: of a repository (0 = any), in
@@ -632,13 +623,6 @@ FROM notes_files f WHERE f.repo_id = ? ORDER BY f.file`, repoID)
 		err := sc.Scan(&u.File, timeCol(&u.FirstSeen), &u.Rounds, &u.Uses, nullTime(&u.LastUsed))
 		return u, err
 	})
-}
-
-func nullInt64(n int64) any {
-	if n == 0 {
-		return nil
-	}
-	return n
 }
 
 func sha256Hex(b []byte) string {

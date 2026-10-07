@@ -31,7 +31,6 @@ type PRFacts struct {
 	// repository (OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, …); "" = unknown.
 	AuthorAssociation string
 	Labels            []string
-	SelfLogin         string // login of the user magnum polls as, for include_own
 
 	HeadSHA     string // informational; no rule reads it
 	ReviewedSHA string // "" until a round has been verified; selects first review vs re-review
@@ -65,7 +64,8 @@ type PRFacts struct {
 	ReplyRoundAt time.Time
 
 	// Own: the PR's author is one of the operator's own logins
-	// (config.SelfLogins): its re-review waits OwnMinRereviewInterval.
+	// (config.SelfLogins, the board's "mine"): include_own = false skips it
+	// and its re-review waits OwnMinRereviewInterval.
 	Own bool
 	// SnoozedUntil is when the PR's snooze (`magnum snooze`) ends: until
 	// then no automatic round starts, while a request or a forced round
@@ -123,7 +123,7 @@ func Classify(w config.Watch, f PRFacts) Decision {
 	switch {
 	case f.IsDraft && !w.DraftsIncluded() && !f.Requested:
 		return reject("draft PR (include_drafts = false)")
-	case !w.OwnIncluded() && isOwn(f):
+	case !w.OwnIncluded() && f.Own:
 		return reject("own PR (include_own = false)")
 	case f.IsCrossRepo && w.CrossRepoSkipped():
 		return reject("cross-repository PR (skip_cross_repository = true)")
@@ -160,12 +160,6 @@ const botSuffix = "[bot]"
 
 func isBot(f PRFacts) bool {
 	return f.AuthorIsBot || strings.HasSuffix(strings.ToLower(f.AuthorLogin), botSuffix)
-}
-
-// isOwn reports whether the PR was authored by SelfLogin. An unknown SelfLogin
-// owns nothing, so two blank logins never match.
-func isOwn(f PRFacts) bool {
-	return f.SelfLogin != "" && strings.EqualFold(f.AuthorLogin, f.SelfLogin)
 }
 
 // authorSkipped matches login against skip_authors case-insensitively, ignoring

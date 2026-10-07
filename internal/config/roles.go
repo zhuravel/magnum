@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -129,8 +130,9 @@ type Role struct {
 	// uses "file". No role may edit the checkout: a round resets a tree a
 	// stage left modified (pipeline).
 	Capture string `toml:"capture"`
-	// Timeout per turn. Default daemon.judge_timeout (90m) for a judge,
-	// daemon.reviewer_timeout (40m) otherwise.
+	// Timeout per turn. A role that sets none takes daemon.judge_timeout
+	// (90m) for a judge, daemon.reviewer_timeout (40m) otherwise; the four
+	// roles config.defaults.toml writes out set their own.
 	Timeout Duration `toml:"timeout"`
 	// After: roles (names or aliases) that must finish before this one
 	// starts; roles outside the watch's set are ignored. Load rewrites
@@ -506,6 +508,62 @@ func (c *Config) normalizedRoles(in []Role) []Role {
 		}
 	}
 	return roles
+}
+
+// idleTimeoutFallbacks lists the [daemon] reviewer_timeout and judge_timeout
+// keys a layer sets although every role the key is the fallback of (the
+// judges for judge_timeout, the other roles for reviewer_timeout) sets a
+// timeout of its own: such a key changes nothing. It reads c.Roles as
+// buildPipeline merged them, before Normalize fills the fallbacks in.
+func (c *Config) idleTimeoutFallbacks(layers ...*layer) []string {
+	var out []string
+	for _, k := range []struct {
+		key   string
+		judge bool
+	}{{"reviewer_timeout", false}, {"judge_timeout", true}} {
+		set := slices.ContainsFunc(layers, func(l *layer) bool { return l != nil && l.md.IsDefined("daemon", k.key) })
+		if set && !slices.ContainsFunc(c.Roles, func(r Role) bool { return r.Judge == k.judge && r.Timeout.Duration == 0 }) {
+			out = append(out, k.key)
+		}
+	}
+	return out
+}
+
+// idleFallbackWarning is Warnings' line for the keys idleTimeoutFallbacks
+// found, naming the roles whose own timeout wins; "" when there are none.
+func (c *Config) idleFallbackWarning() string {
+	if len(c.idleFallbacks) == 0 {
+		return ""
+	}
+	var own []string
+	for _, key := range c.idleFallbacks {
+		var roles []string
+		for _, r := range c.Roles {
+			if r.Judge == (key == "judge_timeout") {
+				roles = append(roles, r.Name+" "+shortDuration(r.Timeout.Duration))
+			}
+		}
+		own = append(own, strings.Join(roles, ", "))
+	}
+	verb, pronoun := "changes", "it is"
+	if len(c.idleFallbacks) > 1 {
+		verb, pronoun = "change", "they are"
+	}
+	return fmt.Sprintf("[daemon] %s %s nothing: a role's own timeout wins, and every role %s the fallback of sets one (%s); "+
+		"set timeout in a [[role]] block named like the role instead", strings.Join(c.idleFallbacks, " and "), verb, pronoun, strings.Join(own, "; "))
+}
+
+// shortDuration is d without the zero minutes and seconds Duration.String
+// spells out: "1h30m", "40m", "2h".
+func shortDuration(d time.Duration) string {
+	s := d.String()
+	if strings.HasSuffix(s, "m0s") {
+		s = strings.TrimSuffix(s, "0s")
+	}
+	if strings.HasSuffix(s, "h0m") {
+		s = strings.TrimSuffix(s, "0m")
+	}
+	return s
 }
 
 // DefaultSimplifyRerunLines is claude-simplify's rerun_min_lines: about

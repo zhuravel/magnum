@@ -190,8 +190,8 @@ func nullString(s string) any {
 	return s
 }
 
-// nullInt stores 0 as NULL.
-func nullInt(n int) any {
+// nullInt stores 0 (a count, an id) as NULL.
+func nullInt[T int | int64](n T) any {
 	if n == 0 {
 		return nil
 	}

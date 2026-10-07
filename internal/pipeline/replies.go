@@ -383,7 +383,7 @@ func (rd *round) isOwnHistory(login, typ string) bool {
 		return true
 	}
 	return login != "" && slices.ContainsFunc(rd.in.FormerLogins, func(f string) bool {
-		return github.SameLogin(login, f) && github.IsBot(typ, login) == strings.HasSuffix(strings.ToLower(f), "[bot]")
+		return github.IsAccount(login, typ, f, strings.HasSuffix(strings.ToLower(f), "[bot]"))
 	})
 }
 

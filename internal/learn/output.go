@@ -38,19 +38,6 @@ type Candidates struct {
 	Candidates   []Candidate `json:"candidates"`
 }
 
-// ReadCandidates reads a candidates file.
-func ReadCandidates(p string) (Candidates, error) {
-	b, err := os.ReadFile(p)
-	if err != nil {
-		return Candidates{}, err
-	}
-	var c Candidates
-	if err := json.Unmarshal(b, &c); err != nil {
-		return Candidates{}, fmt.Errorf("learn: %s: %w", p, err)
-	}
-	return c, nil
-}
-
 // FilePath is where the copy of path at sha lives under a retro
 // directory's files: files/<sha12>/<path>, slash-separated.
 func FilePath(sha, p string) string { return path.Join(FilesDir, short(sha), p) }

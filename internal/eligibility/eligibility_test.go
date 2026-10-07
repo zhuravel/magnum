@@ -13,10 +13,13 @@ func base() PRFacts {
 	return PRFacts{
 		Number:      42,
 		AuthorLogin: "alice",
-		SelfLogin:   "zhuravel",
 		Labels:      []string{"backend"},
 	}
 }
+
+// own makes the PR the operator's: its author is one of the self logins
+// (the engine sets Own from config.SelfLogins).
+func own(f *PRFacts) { f.AuthorLogin, f.Own = "zhuravel", true }
 
 func TestClassify(t *testing.T) {
 	tests := []struct {
@@ -28,7 +31,7 @@ func TestClassify(t *testing.T) {
 	}{
 		{name: "plain PR is eligible with an empty reason", want: true},
 		{name: "defaults accept drafts", mutate: func(f *PRFacts) { f.IsDraft = true }, want: true},
-		{name: "defaults accept own PRs", mutate: func(f *PRFacts) { f.AuthorLogin = "zhuravel" }, want: true},
+		{name: "defaults accept own PRs", mutate: own, want: true},
 
 		// departed authors: a branch PR by someone with no access now
 		{name: "a member is eligible", mutate: func(f *PRFacts) { f.AuthorAssociation = "MEMBER" }, want: true},
@@ -107,15 +110,16 @@ func TestClassify(t *testing.T) {
 		{name: "a review request does not lift the other filters", watch: config.Watch{IncludeDrafts: bp(false), SkipLabels: []string{"WIP"}},
 			mutate: func(f *PRFacts) { f.IsDraft, f.Requested, f.Labels = true, true, []string{"WIP"} }, reason: `label "WIP" is in skip_labels`},
 		{name: "a review request does not lift include_own", watch: config.Watch{IncludeDrafts: bp(false), IncludeOwn: bp(false)},
-			mutate: func(f *PRFacts) { f.IsDraft, f.Requested, f.AuthorLogin = true, true, "zhuravel" }, reason: "own PR (include_own = false)"},
+			mutate: func(f *PRFacts) { own(f); f.IsDraft, f.Requested = true, true }, reason: "own PR (include_own = false)"},
 
-		// own PRs
-		{name: "include_own=false skips own PRs", watch: config.Watch{IncludeOwn: bp(false)}, mutate: func(f *PRFacts) { f.AuthorLogin = "zhuravel" }, reason: "own PR (include_own = false)"},
-		{name: "include_own=false compares logins case-insensitively", watch: config.Watch{IncludeOwn: bp(false)}, mutate: func(f *PRFacts) { f.AuthorLogin = "Zhuravel" }, reason: "own PR (include_own = false)"},
+		// own PRs: "own" is any of the self logins, as for the board's "mine"
+		{name: "include_own=false skips own PRs", watch: config.Watch{IncludeOwn: bp(false)}, mutate: own, reason: "own PR (include_own = false)"},
+		{name: "include_own=false skips a PR by a second self login", watch: config.Watch{IncludeOwn: bp(false)},
+			mutate: func(f *PRFacts) { f.AuthorLogin, f.Own = "rev-ann", true }, reason: "own PR (include_own = false)"},
 		{name: "include_own=false keeps other authors", watch: config.Watch{IncludeOwn: bp(false)}, want: true},
-		{name: "include_own=false with unknown SelfLogin never matches an unknown author", watch: config.Watch{IncludeOwn: bp(false)}, mutate: func(f *PRFacts) { f.SelfLogin, f.AuthorLogin = "", "" }, want: true},
-		{name: "include_own=false with unknown SelfLogin keeps everyone", watch: config.Watch{IncludeOwn: bp(false)}, mutate: func(f *PRFacts) { f.SelfLogin = "" }, want: true},
-		{name: "include_own=true keeps own PRs", watch: config.Watch{IncludeOwn: bp(true)}, mutate: func(f *PRFacts) { f.AuthorLogin = "zhuravel" }, want: true},
+		{name: "include_own=false keeps an author none of the self logins matched", watch: config.Watch{IncludeOwn: bp(false)},
+			mutate: func(f *PRFacts) { f.AuthorLogin = "zhuravel" }, want: true},
+		{name: "include_own=true keeps own PRs", watch: config.Watch{IncludeOwn: bp(true)}, mutate: own, want: true},
 
 		// cross-repository
 		{name: "cross-repo PRs are skipped by default", mutate: func(f *PRFacts) { f.IsCrossRepo = true }, reason: "cross-repository PR (skip_cross_repository = true)"},
@@ -131,8 +135,8 @@ func TestClassify(t *testing.T) {
 		{name: "bot is reported before skip_authors", watch: config.Watch{SkipAuthors: []string{"dependabot"}}, mutate: func(f *PRFacts) { f.AuthorLogin = "dependabot[bot]"; f.AuthorIsBot = true }, reason: "bot author"},
 		{name: "skip_authors is reported before labels", watch: config.Watch{SkipAuthors: []string{"mallory"}, SkipLabels: []string{"WIP"}}, mutate: func(f *PRFacts) { f.AuthorLogin = "mallory"; f.Labels = []string{"WIP"} }, reason: `author "mallory" is in skip_authors`},
 		{name: "labels are reported before drafts", watch: config.Watch{SkipLabels: []string{"WIP"}, IncludeDrafts: bp(false)}, mutate: func(f *PRFacts) { f.Labels = []string{"WIP"}; f.IsDraft = true }, reason: `label "WIP" is in skip_labels`},
-		{name: "drafts are reported before own PRs", watch: config.Watch{IncludeDrafts: bp(false), IncludeOwn: bp(false)}, mutate: func(f *PRFacts) { f.IsDraft = true; f.AuthorLogin = "zhuravel" }, reason: "draft PR (include_drafts = false)"},
-		{name: "own PRs are reported before cross-repo", watch: config.Watch{IncludeOwn: bp(false)}, mutate: func(f *PRFacts) { f.AuthorLogin = "zhuravel"; f.IsCrossRepo = true }, reason: "own PR (include_own = false)"},
+		{name: "drafts are reported before own PRs", watch: config.Watch{IncludeDrafts: bp(false), IncludeOwn: bp(false)}, mutate: func(f *PRFacts) { own(f); f.IsDraft = true }, reason: "draft PR (include_drafts = false)"},
+		{name: "own PRs are reported before cross-repo", watch: config.Watch{IncludeOwn: bp(false)}, mutate: func(f *PRFacts) { own(f); f.IsCrossRepo = true }, reason: "own PR (include_own = false)"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -169,11 +173,11 @@ func TestClassifyShippedTalkableWatch(t *testing.T) {
 		f    PRFacts
 		want bool
 	}{
-		{"colleague", PRFacts{AuthorLogin: "alice", SelfLogin: "zhuravel"}, true},
-		{"own draft with LG label", PRFacts{AuthorLogin: "zhuravel", SelfLogin: "zhuravel", IsDraft: true, Labels: []string{"LG"}}, true},
-		{"dependabot as GraphQL bot", PRFacts{AuthorLogin: "dependabot", AuthorIsBot: true, SelfLogin: "zhuravel"}, false},
-		{"dependabot as REST login", PRFacts{AuthorLogin: "dependabot[bot]", SelfLogin: "zhuravel"}, false},
-		{"fork", PRFacts{AuthorLogin: "stranger", IsCrossRepo: true, SelfLogin: "zhuravel"}, false},
+		{"colleague", PRFacts{AuthorLogin: "alice"}, true},
+		{"own draft with LG label", PRFacts{AuthorLogin: "zhuravel", Own: true, IsDraft: true, Labels: []string{"LG"}}, true},
+		{"dependabot as GraphQL bot", PRFacts{AuthorLogin: "dependabot", AuthorIsBot: true}, false},
+		{"dependabot as REST login", PRFacts{AuthorLogin: "dependabot[bot]"}, false},
+		{"fork", PRFacts{AuthorLogin: "stranger", IsCrossRepo: true}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

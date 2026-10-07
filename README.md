@@ -262,9 +262,10 @@ posted review and queues the re-review without waiting for `min_rereview_interva
 (default `"30m"`) waits `burst_quiet_period` (default `"15m"`) instead of `push_quiet_period`; a
 `[[watch]]` can override all three, and `burst_pushes = 0` turns the rule off.
 
-A PR you authored (its author is one of your logins: every gh identity and every watch's posting
-identity, the board's "mine") waits `[daemon] own_min_rereview_interval` after its last round instead of
-`min_rereview_interval` when that is set (default `"0"`: the same interval), say `"2h"` while another
+A watch's `include_own = false` skips the PRs you authored (its author is one of your logins: every gh
+identity and every watch's posting identity, the board's "mine"), whichever of your logins opened them,
+not only the watch's poll login. A PR you authored waits `[daemon] own_min_rereview_interval` after its
+last round instead of `min_rereview_interval` when that is set (default `"0"`: the same interval), say `"2h"` while another
 session of yours pushes to it often; an own draft waits the longer of it and `draft_min_rereview_interval`,
 a `[[watch]]` can override it, and a review request or `magnum review` skips it like the other timing
 rules. The wait names it ("re-review · own PR interval → 16:40").
@@ -527,7 +528,7 @@ for the next PR to compare (each reload rewrites every table); `magnum open` rel
 before it hands a person a free slot. `reset_db_on_schema_change = false` on the `[[pool]]` keeps
 `reset_db` to the release, which then loads the base schema, and `magnum doctor` warns about a pool with
 `schema_paths` and no `reset_db`. A free slot above a pool's `min` is removed once it has been idle for
-`idle_remove_after` (168h when unset). A watch's `skip_paths` (path globs where `**` spans
+`idle_remove_after` (168h when unset or 0; a negative value is refused). A watch's `skip_paths` (path globs where `**` spans
 directories, such as `["docs/**", "**/*.md"]`) skips a PR whose changed files all match, while a forced
 `magnum review` still runs it. A watch's `manual_repos` (names of repositories it covers, without owner
 or pattern, such as `["example"]`) keeps them on the board, in `magnum prs`, the status and the retro,
@@ -640,6 +641,11 @@ max_subagents = 2                  # subagents open at once (0 = none)
 timeout = "90m"
 ```
 
+A role's `timeout` bounds each of its turns (40m, a judge's 90m). `[daemon] reviewer_timeout` and
+`judge_timeout` are only the timeouts of a role that sets none: a role's own wins, and the four built-in roles
+set theirs, so they change only a role you add without one, and `magnum config` (and doctor) warns when they
+change nothing. To give a built-in role another, set `timeout` in a `[[role]]` block of its name.
+
 Non-judge roles run in parallel unless `after = [...]` orders them; the judge runs last and gets every
 other role's report. The judge's own full pass needs no report, so by default it starts with the
 reviewers: `[pipeline] judge_own_pass = "parallel"` (a `[[watch]]` may set its own) prompts the judge
@@ -682,7 +688,8 @@ the PR merges. Every judge prompt (the own pass, the candidates phase, a round's
 check) then names `related.json` in the report directory as `related_prs`, when there is any: the open
 PRs (drafts included) and those merged within `[pipeline] related_lookback` (14 days) whose paths overlap
 the PR's at the head under review, paths matching `related_ignore` (lockfiles by default) aside, a
-`[[watch]]` may set both; an open PR without activity for 30 days (the board's UPDATED) is left out. They
+`[[watch]]` may set both (`related_lookback = "0s"` there, as in `[pipeline]`, keeps only the open PRs;
+unset keeps the pipeline's); an open PR without activity for 30 days (the board's UPDATED) is left out. They
 are ranked by shared paths, at most 10 with 20 paths each, and each has its number, URL, state (and merge
 time), last activity, head, the shared paths, whether Magnum reviewed it with its last review's URL and
 verdict, and how many findings Magnum posted on those paths; no titles, bodies or comments (the judge

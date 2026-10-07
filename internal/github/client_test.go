@@ -60,18 +60,26 @@ func TestClientEnvCanOverrideDefaults(t *testing.T) {
 	}
 }
 
+// lastRateLimit returns the client's last rate-limit snapshot (Client.last);
+// zero before the first call.
+func (c *Client) lastRateLimit() RateLimit {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.last
+}
+
 func TestLastRateLimit(t *testing.T) {
 	f := &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"gh"}, Result: execx.Result{Stdout: fixture(t, "reviews.json")}}}}
 	c := &Client{Run: f}
-	if got := c.LastRateLimit(); got != (RateLimit{}) {
+	if got := c.lastRateLimit(); got != (RateLimit{}) {
 		t.Fatalf("fresh client rate = %+v", got)
 	}
 	if _, err := c.ReviewsWithMarker(context.Background(), "talkable", "talkable", 11973, ""); err != nil {
 		t.Fatal(err)
 	}
 	want := RateLimit{Limit: 5000, Cost: 1, Remaining: 4963, Used: 37, ResetAt: time.Date(2026, 10, 2, 21, 50, 10, 0, time.UTC)}
-	if got := c.LastRateLimit(); got != want {
-		t.Errorf("LastRateLimit = %+v, want %+v", got, want)
+	if got := c.lastRateLimit(); got != want {
+		t.Errorf("lastRateLimit = %+v, want %+v", got, want)
 	}
 }
 

@@ -64,7 +64,7 @@ func TestRetroLeavesThePRDueWhenTheRetroIsCutShort(t *testing.T) {
 			h.requestRetro(RetroPayload{})
 
 			for _, pr := range []store.PR{pr7, pr8} {
-				if rp, err := h.st.RetroPRByID(h.ctx, pr.ID); !errors.Is(err, store.ErrNotFound) {
+				if rp, err := h.retroRecord(pr.ID); !errors.Is(err, store.ErrNotFound) {
 					t.Fatalf("PR %d has a retro row: %+v, %v", pr.Number, rp, err)
 				}
 			}
@@ -106,7 +106,7 @@ func TestRetroRetriesAFailedPRUpToThreeTimes(t *testing.T) {
 		h.advance(time.Second) // a new run directory per retro
 		h.requestRetro(RetroPayload{})
 		want := min(attempt, store.RetroMaxAttempts)
-		if rp, err := h.st.RetroPRByID(h.ctx, pr.ID); err != nil || rp.Status != store.RetroFailed || rp.Attempts != want {
+		if rp, err := h.retroRecord(pr.ID); err != nil || rp.Status != store.RetroFailed || rp.Attempts != want {
 			t.Fatalf("retro %d: retro_prs = %+v, %v; want failed, %d attempts", attempt, rp, err, want)
 		}
 		if len(fc.jobs) != want {
@@ -131,7 +131,7 @@ func TestRetroAgainKeepsClassificationsWhenTheClassifierFails(t *testing.T) {
 	}
 	h.advance(time.Second)
 	h.requestRetro(RetroPayload{Again: true})
-	if rp, _ := h.st.RetroPRByID(h.ctx, pr.ID); rp.Status != store.RetroFailed {
+	if rp, _ := h.retroRecord(pr.ID); rp.Status != store.RetroFailed {
 		t.Fatalf("second retro = %+v", rp)
 	}
 	ms := h.misses(pr.ID)
@@ -199,7 +199,7 @@ func TestDaemonOnceDoesNotStartTheDailyRetro(t *testing.T) {
 // retroCandidatesOf reads the candidates file a classifier was given.
 func retroCandidatesOf(t *testing.T, job ClassifyJob) []learn.Candidate {
 	t.Helper()
-	c, err := learn.ReadCandidates(job.CandidatesPath)
+	c, err := readCandidates(job.CandidatesPath)
 	if err != nil {
 		t.Fatal(err)
 	}

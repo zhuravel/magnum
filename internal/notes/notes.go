@@ -236,13 +236,6 @@ func HarnessDelta(before, after []File) (added, removed, changed []string) {
 	return added, removed, changed
 }
 
-// SameListing reports whether two listings name the same files with the same
-// content.
-func SameListing(a, b []File) bool {
-	added, removed, changed := HarnessDelta(a, b)
-	return len(added)+len(removed)+len(changed) == 0
-}
-
 // Fingerprint identifies a state of the notes and the harness: the notes'
 // content (a missing file is empty notes, as a version records it) and every
 // harness file's name and content.

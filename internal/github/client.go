@@ -60,6 +60,8 @@ type Client struct {
 	// Reauth's error. It may be called from several goroutines at once.
 	Reauth func(ctx context.Context) error
 
+	// last is the most conservative rate-limit snapshot any GraphQL call of
+	// this client saw (latest reset window, lowest remaining; observe).
 	mu   sync.Mutex
 	last RateLimit
 
@@ -74,15 +76,6 @@ type RateLimit struct {
 	Remaining int
 	Used      int
 	ResetAt   time.Time
-}
-
-// LastRateLimit returns the most conservative rate-limit snapshot seen by any
-// GraphQL call of this client (latest reset window, lowest remaining); Cost is
-// that call's cost. Zero before the first call.
-func (c *Client) LastRateLimit() RateLimit {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.last
 }
 
 // tighter reports whether r is a more current/conservative snapshot than o.

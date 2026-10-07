@@ -421,7 +421,7 @@ a switch not confirmed within 30 s backs out of the dialog with Esc and pauses t
 | `ok_status` | `[0]` | shell roles: the exit statuses that count as a finished report; any other status fails the role (its output is then checked for login, usage-limit and overload errors) |
 | `output` | `<name>.md` | the report file in the round's directory; judges `<name>.json` |
 | `capture` | `file` | `file` (the role writes `output`) or `stdout` (shell roles; output is tee'd). No role may edit the checkout: one left modified after its stage is reset to the PR head, with a `round.checkout_dirty` warning |
-| `timeout` | `40m` | per turn; judges `90m` (`daemon.reviewer_timeout` / `judge_timeout` are the fallbacks) |
+| `timeout` | `40m` | per turn; judges `90m` (`daemon.reviewer_timeout` / `judge_timeout` are the timeouts of a role that sets none; the built-in roles set theirs) |
 | `after` | none | roles that must finish first; roles outside the watch's set are ignored |
 | `aliases` | none | other accepted names (the built-in roles keep `judge`, `claude`, `codex`, `codex_review`, `simplify`) |
 

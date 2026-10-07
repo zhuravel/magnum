@@ -55,6 +55,9 @@ func (c *Config) validateTriage() []error {
 	} else if err := parseTemplate(t.Prompt, p.Text); err != nil {
 		errs = append(errs, fmt.Errorf("triage.prompt %s: %w", t.Prompt, err))
 	}
+	if t.Timeout.Duration < 0 {
+		errs = append(errs, fmt.Errorf("triage.timeout must not be negative, got %s", t.Timeout.Duration))
+	}
 	if !t.Enabled {
 		return errs
 	}
@@ -64,7 +67,7 @@ func (c *Config) validateTriage() []error {
 	if len(t.Command) == 0 || strings.TrimSpace(t.Command[0]) == "" {
 		errs = append(errs, errors.New("triage.command must name the model's CLI (an argument list)"))
 	}
-	if t.Timeout.Duration <= 0 {
+	if t.Timeout.Duration == 0 {
 		errs = append(errs, fmt.Errorf("triage.timeout must be positive, got %s", t.Timeout.Duration))
 	}
 	return errs

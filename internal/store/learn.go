@@ -120,18 +120,6 @@ ON CONFLICT(pr_id) DO UPDATE SET retro_at = excluded.retro_at, day = excluded.da
 	return nil
 }
 
-// RetroPRByID returns the retro record of prID, or an error matching
-// ErrNotFound when the PR has none.
-func (s *Store) RetroPRByID(ctx context.Context, prID int64) (RetroPR, error) {
-	var r RetroPR
-	err := s.db.QueryRowContext(ctx, "SELECT pr_id, retro_at, day, status, candidates, error, attempts FROM retro_prs WHERE pr_id = ?", prID).
-		Scan(&r.PRID, timeCol(&r.RetroAt), &r.Day, &r.Status, &r.Candidates, textCol(&r.Error), &r.Attempts)
-	if err != nil {
-		return RetroPR{}, notFound(err, "retro of pr", prID)
-	}
-	return r, nil
-}
-
 // Miss is a comment another reviewer made on a PR magnum reviewed, with what the retro made of it (misses).
 type Miss struct {
 	ID          int64     `json:"id"`

@@ -31,7 +31,7 @@ func TestTheRetroWaitsForTheSettleDelay(t *testing.T) {
 		seedRetroGitHub(h, n)
 	}
 	looked := func(pr store.PR) bool {
-		_, err := h.st.RetroPRByID(h.ctx, pr.ID)
+		_, err := h.retroRecord(pr.ID)
 		if err != nil && !errors.Is(err, store.ErrNotFound) {
 			t.Fatal(err)
 		}

@@ -93,7 +93,7 @@ func (s *Store) InsertAutoApproval(ctx context.Context, a AutoApproval) (AutoApp
 	now := s.now()
 	res, err := s.db.ExecContext(ctx, `INSERT INTO auto_approvals (pr_id, run_id, source_review_id, source_url, head_sha, identity, login,
   state, attempts, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
-		a.PRID, a.RunID, nullID(a.SourceReviewID), nullString(a.SourceURL), a.HeadSHA, a.Identity, a.Login, AutoPosting, FormatTime(now), FormatTime(now))
+		a.PRID, a.RunID, nullInt(a.SourceReviewID), nullString(a.SourceURL), a.HeadSHA, a.Identity, a.Login, AutoPosting, FormatTime(now), FormatTime(now))
 	if err != nil {
 		return AutoApproval{}, fmt.Errorf("auto approval of pr %d: %w", a.PRID, mapErr(err))
 	}
@@ -282,14 +282,6 @@ func (s *Store) AutoApproveHolds(ctx context.Context, prIDs []int64) (map[int64]
 		out[h.PRID] = h
 	}
 	return out, nil
-}
-
-// nullID stores the id 0 as NULL.
-func nullID(v int64) any {
-	if v == 0 {
-		return nil
-	}
-	return v
 }
 
 // RepoPR is a PR with its repository (owner/name).

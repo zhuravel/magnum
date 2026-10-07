@@ -403,7 +403,7 @@ func TestRetroWithThePaneClassifier(t *testing.T) {
 	}
 	p.requestRetro(RetroPayload{})
 
-	if rp, err := p.st.RetroPRByID(p.ctx, pr.ID); err != nil || rp.Status != store.RetroClassified {
+	if rp, err := p.retroRecord(pr.ID); err != nil || rp.Status != store.RetroClassified {
 		t.Fatalf("retro_prs = %+v, %v", rp, err)
 	}
 	if m := p.misses(pr.ID)["101"]; m.Class != store.MissNotIssue {

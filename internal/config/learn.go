@@ -124,26 +124,29 @@ func parseDailyAt(s string) (hour, minute int, ok bool) {
 // timeout, writing retro.json, normalized like a configured role.
 func (c *Config) LearnRole() Role {
 	l := c.Learn
-	r := Role{
-		Name: LearnRoleName, Kind: l.Kind, Mode: ModeSession,
-		Model: l.Model, Effort: l.Effort, Args: l.Args,
-		Prompt: l.Prompt, Capture: CaptureFile, Output: LearnRoleName + ".json",
-		Timeout: l.Timeout,
-	}
+	return c.sessionRole(Role{Name: LearnRoleName, Kind: l.Kind, Model: l.Model, Effort: l.Effort, Args: l.Args,
+		Prompt: l.Prompt, Output: LearnRoleName + ".json", Timeout: l.Timeout})
+}
+
+// sessionRole is r, a role an agent runs outside the review rounds (the
+// retro's classifier, LearnRole; the notes curator, NotesRole), in session
+// mode with its output written as a file, normalized like a configured role.
+func (c *Config) sessionRole(r Role) Role {
+	r.Mode, r.Capture = ModeSession, CaptureFile
 	return c.normalizedRoles([]Role{r})[0]
 }
 
-// validateLearnRole runs LearnRole through validateRole, the checks a [[role]]
-// gets, with its messages worded for [learn] ("learn: kind droid has no model
-// args ..."). The prompt and the timeout are left out: validateLearn checks
-// learn.prompt and learn.timeout itself, with their own wording, so neither is
-// reported twice. The kind is declared (the caller checked).
-func (c *Config) validateLearnRole() []error {
-	r := c.LearnRole()
+// validateSessionRole runs a sessionRole through validateRole, the checks a
+// [[role]] gets, with its messages worded for its section ("learn: kind
+// droid has no model args ..."). The prompt and the timeout are left out:
+// the section's own checks cover its prompt and timeout, with their own
+// wording, so neither is reported twice. The kind is declared (the caller
+// checked).
+func (c *Config) validateSessionRole(section string, r Role) []error {
 	r.Prompt, r.Rereview, r.Timeout = "", "", Duration{time.Minute}
 	var errs []error
 	for _, err := range c.validateRole(r, c.kinds(), nil) {
-		errs = append(errs, errors.New("learn: "+strings.TrimPrefix(err.Error(), "role "+LearnRoleName+": ")))
+		errs = append(errs, errors.New(section+": "+strings.TrimPrefix(err.Error(), "role "+r.Name+": ")))
 	}
 	return errs
 }
@@ -163,7 +166,7 @@ func (c *Config) validateLearn() []error {
 	if _, ok := c.KindSpec(l.Kind); !ok {
 		errs = append(errs, fmt.Errorf("learn.kind %q is not a declared agent kind (declared: %s)", l.Kind, strings.Join(c.KindNames(), ", ")))
 	} else {
-		errs = append(errs, c.validateLearnRole()...)
+		errs = append(errs, c.validateSessionRole("learn", c.LearnRole())...)
 	}
 	if l.Prompt == "" {
 		errs = append(errs, errors.New("learn.prompt must name a prompt file"))

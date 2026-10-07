@@ -45,7 +45,8 @@ func TestThePollStoresEachPRsChangedPaths(t *testing.T) {
 }
 
 // A round gets the related PRs' settings of its watch: [pipeline]
-// related_lookback and related_ignore, which a [[watch]] overrides.
+// related_lookback and related_ignore, which a [[watch]] overrides ("0s"
+// included: no merged PR is related).
 func TestRoundInputCarriesTheWatchsRelatedSettings(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -54,9 +55,12 @@ func TestRoundInputCarriesTheWatchsRelatedSettings(t *testing.T) {
 	}{
 		{"default", func(*config.Config) {}, config.Related{Lookback: 14 * 24 * time.Hour, Ignore: config.DefaultRelatedIgnore()}},
 		{"watch", func(c *config.Config) {
-			c.Watches[0].RelatedLookback = config.Duration{Duration: 30 * 24 * time.Hour}
+			c.Watches[0].RelatedLookback = &config.Duration{Duration: 30 * 24 * time.Hour}
 			c.Watches[0].RelatedIgnore = []string{}
 		}, config.Related{Lookback: 30 * 24 * time.Hour, Ignore: []string{}}},
+		{"watch without a lookback", func(c *config.Config) {
+			c.Watches[0].RelatedLookback = &config.Duration{}
+		}, config.Related{Lookback: 0, Ignore: config.DefaultRelatedIgnore()}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t, func(h *harness) { tc.set(h.cfg) })

@@ -75,7 +75,7 @@ func SameAccount(a, b string) bool { return a != "" && b != "" && strings.EqualF
 
 // SameLogin compares two logins case-insensitively after NormalizeLogin: the
 // same name whether or not either is a bot, so an App and a user of the same
-// name match. Use it only next to a check of the kind (IsBot); SameAccount
+// name match. Use it only next to a check of the kind (IsAccount); SameAccount
 // otherwise.
 func SameLogin(a, b string) bool {
 	return a != "" && b != "" && strings.EqualFold(NormalizeLogin(a), NormalizeLogin(b))
@@ -85,4 +85,12 @@ func SameLogin(a, b string) bool {
 // REST login ending in "[bot]".
 func IsBot(typename, login string) bool {
 	return typename == "Bot" || strings.HasSuffix(login, "[bot]")
+}
+
+// IsAccount reports whether an author (its login in either form and its
+// GraphQL __typename) is the account login names, an App's when bot: the
+// same name (SameLogin) and the same kind of account (IsBot), so the user
+// "zhuravel" is never the App "zhuravel[bot]".
+func IsAccount(author, typename, login string, bot bool) bool {
+	return SameLogin(author, login) && IsBot(typename, author) == bot
 }

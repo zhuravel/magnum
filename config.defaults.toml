@@ -20,7 +20,11 @@ max_rounds_per_pr_per_day = 12    # automatic rounds only: requested and forced 
                                   # magnum cut short (a restart, an error before any prompt, a prompt that did
                                   # not render) are refunded
 close_grace = "10m"               # wait after CLOSED/MERGED before releasing (covers reopen; 0 = release at once)
-# reviewer_timeout / judge_timeout: set per role now ([[role]] timeout below); still read as fallbacks
+# reviewer_timeout = "40m"        # the turn timeout of a non-judge [[role]] that sets no timeout of its own, and
+# judge_timeout = "90m"           #   judge_timeout a judge's; a role's own timeout wins, and the four [[role]]
+                                  #   blocks below set theirs, so these change only roles you add without one
+                                  #   (`magnum config` warns when they change nothing); to change a built-in
+                                  #   role's, set timeout in a [[role]] block of its name in your config
 agent_start_stagger = "15s"
 min_warm = "30m"
 human_cooldown = "15m"            # after you type into a magnum pane
@@ -433,7 +437,8 @@ aliases = ["simplify"]
 # clone_root = "~/Projects"
 # include_drafts = true                 # false: a draft waits until ready for review, or until a review request for you,
 #                                       # a posting identity or a request_teams team (one round per request)
-# include_own = true
+# include_own = true                    # false: skip PRs authored by any of your logins (every gh identity and every
+#                                       # watch's posting identity, the board's "mine"), not only the poll login
 # skip_bot_authors = true
 # skip_authors = ["dependabot"]
 # skip_labels = []
@@ -448,7 +453,8 @@ aliases = ["simplify"]
 # delta_check = false                   # overrides [daemon] delta_check (false: a small delta waits for a full round)
 # own_min_rereview_interval = "4h"      # overrides [daemon] own_min_rereview_interval ("0" keeps the daemon's)
 # judge_own_pass = "after"              # overrides [pipeline] judge_own_pass ("after": one judge prompt after the reviewers)
-# related_lookback = "30d"              # overrides [pipeline] related_lookback / related_ignore ([] = ignore no path)
+# related_lookback = "30d"              # overrides [pipeline] related_lookback / related_ignore ("0s" = open PRs only,
+#                                       # unset = the pipeline's; [] = ignore no path)
 # related_ignore = ["**/*.lock", "db/schema.rb"]
 # request_teams = ["backend"]           # review requests for these team slugs start a round like one for you
 # roles = ["codex-judge", "claude-review", "codex-review", "claude-simplify"]   # omitted or [] = every [[role]]
@@ -464,7 +470,8 @@ aliases = ["simplify"]
 # min = 6
 # max = 8
 # idle_remove_after = "168h"              # a free slot above min goes once idle this long (the default when unset
-#                                         # or 0; each removal is about 1 GB the next provision writes again)
+#                                         # or 0; never negative; each removal is about 1 GB the next provision
+#                                         # writes again)
 # min_free_disk_gb = 15
 # copy_files = [".mise.local.toml", "config/initializers/local.rb"]
 # strip_env = ["GITHUB_PERSONAL_ACCESS_TOKEN"]

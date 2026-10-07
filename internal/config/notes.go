@@ -151,13 +151,8 @@ func (c *Config) notesModelFollowsKind(md toml.MetaData) {
 // normalized like a configured role.
 func (c *Config) NotesRole() Role {
 	n := c.Notes
-	r := Role{
-		Name: NotesRoleName, Kind: n.Kind, Mode: ModeSession,
-		Model: n.Model, Effort: n.Effort, Args: n.Args,
-		Prompt: n.Prompt, Capture: CaptureFile, Output: "changes.json",
-		Timeout: n.Timeout,
-	}
-	return c.normalizedRoles([]Role{r})[0]
+	return c.sessionRole(Role{Name: NotesRoleName, Kind: n.Kind, Model: n.Model, Effort: n.Effort, Args: n.Args,
+		Prompt: n.Prompt, Output: "changes.json", Timeout: n.Timeout})
 }
 
 // validateNotes checks [notes] always (`magnum notes --curate` runs whatever
@@ -180,11 +175,7 @@ func (c *Config) validateNotes() []error {
 	if _, ok := c.KindSpec(n.Kind); !ok {
 		errs = append(errs, fmt.Errorf("notes.kind %q is not a declared agent kind (declared: %s)", n.Kind, strings.Join(c.KindNames(), ", ")))
 	} else {
-		r := c.NotesRole()
-		r.Prompt, r.Rereview, r.Timeout = "", "", Duration{time.Minute}
-		for _, err := range c.validateRole(r, c.kinds(), nil) {
-			errs = append(errs, errors.New("notes: "+strings.TrimPrefix(err.Error(), "role "+NotesRoleName+": ")))
-		}
+		errs = append(errs, c.validateSessionRole("notes", c.NotesRole())...)
 	}
 	if n.Prompt == "" {
 		errs = append(errs, errors.New("notes.prompt must name a prompt file"))

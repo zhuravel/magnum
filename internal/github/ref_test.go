@@ -96,6 +96,26 @@ func TestIsBot(t *testing.T) {
 	}
 }
 
+// An author is an account when the name and the kind match: an App's review
+// in GraphQL ("zhuravel", Bot) or REST ("zhuravel[bot]") form is the App's,
+// never the user's of the same name, and the other way round.
+func TestIsAccount(t *testing.T) {
+	for _, tc := range []struct {
+		author, typ, login string
+		bot, want          bool
+	}{
+		{"zhuravel", "Bot", "zhuravel[bot]", true, true}, {"zhuravel[bot]", "", "zhuravel[bot]", true, true},
+		{"zhuravel", "Bot", "zhuravel", true, true}, // an App configured without its suffix
+		{"Zhuravel", "User", "zhuravel", false, true},
+		{"zhuravel", "User", "zhuravel[bot]", true, false}, {"zhuravel", "Bot", "zhuravel", false, false},
+		{"alice", "User", "zhuravel", false, false}, {"", "", "", false, false},
+	} {
+		if got := IsAccount(tc.author, tc.typ, tc.login, tc.bot); got != tc.want {
+			t.Errorf("IsAccount(%q, %q, %q, %v) = %v, want %v", tc.author, tc.typ, tc.login, tc.bot, got, tc.want)
+		}
+	}
+}
+
 // A bot's GraphQL login gets REST's "[bot]"; an App and the user it is named
 // after are different accounts, while SameLogin (name only) matches them.
 func TestAccount(t *testing.T) {

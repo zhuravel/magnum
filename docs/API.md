@@ -2710,8 +2710,8 @@ func (c *Config) ReadinessFor(fullName string) Readiness
 
 func (c *Config) RelatedFor(w *Watch) Related
     RelatedFor is the related_lookback and related_ignore that apply to w's PRs:
-    the watch's when it sets them (a positive lookback; any list, [] included),
-    else [pipeline]'s. A nil w is [pipeline]'s.
+    the watch's when it sets them (any lookback, "0s" included: open PRs only;
+    any list, [] included), else [pipeline]'s. A nil w is [pipeline]'s.
 
 func (c *Config) RepoFor(fullName string) *Repo
     RepoFor returns the [[repo]] block for owner/name, or nil.
@@ -2814,9 +2814,11 @@ func (c *Config) VerdictsFor(fullName string, id *Identity) (noFindings, blockin
 func (c *Config) Warnings() []string
     Warnings lists human-readable problems that do not make the config invalid:
     zero [[identity]] or zero [[watch]] blocks are valid (the built-in defaults
-    have neither; they live in the user's ~/.config/magnum/config.toml), but
-    magnum then cannot post or reviews nothing. Print them from `magnum doctor`
-    and `magnum config`.
+    have neither; they live in the user's ~/.config/magnum/config.toml),
+    but magnum then cannot post or reviews nothing; a [daemon] reviewer_timeout
+    or judge_timeout set while every role it would be the fallback of sets its
+    own timeout changes nothing. Print them from `magnum doctor` and `magnum
+    config`.
 
 func (c *Config) WatchFor(fullName string) *Watch
     WatchFor returns the watch that covers owner/name, or nil.
@@ -2847,8 +2849,8 @@ type Daemon struct {
 	OwnMinRereviewInterval   Duration `toml:"own_min_rereview_interval"` // MinRereviewInterval for the operator's own PRs (SelfLogins; an own draft takes the longer of it and the draft one; 0 = MinRereviewInterval; Config.ThrottleFor)
 	MaxRoundsPerPRPerDay     int      `toml:"max_rounds_per_pr_per_day"`
 	CloseGrace               Duration `toml:"close_grace"`
-	ReviewerTimeout          Duration `toml:"reviewer_timeout"` // default timeout of non-judge roles (a role's own timeout wins)
-	JudgeTimeout             Duration `toml:"judge_timeout"`    // default timeout of judge roles
+	ReviewerTimeout          Duration `toml:"reviewer_timeout"` // timeout of a non-judge role that sets none (a role's own wins; config.defaults.toml's roles set theirs)
+	JudgeTimeout             Duration `toml:"judge_timeout"`    // timeout of a judge role that sets none (likewise)
 	AgentStartStagger        Duration `toml:"agent_start_stagger"`
 	MinWarm                  Duration `toml:"min_warm"`
 	HumanCooldown            Duration `toml:"human_cooldown"`
@@ -3642,8 +3644,9 @@ type Role struct {
 	// uses "file". No role may edit the checkout: a round resets a tree a
 	// stage left modified (pipeline).
 	Capture string `toml:"capture"`
-	// Timeout per turn. Default daemon.judge_timeout (90m) for a judge,
-	// daemon.reviewer_timeout (40m) otherwise.
+	// Timeout per turn. A role that sets none takes daemon.judge_timeout
+	// (90m) for a judge, daemon.reviewer_timeout (40m) otherwise; the four
+	// roles config.defaults.toml writes out set their own.
 	Timeout Duration `toml:"timeout"`
 	// After: roles (names or aliases) that must finish before this one
 	// starts; roles outside the watch's set are ignored. Load rewrites
@@ -3809,7 +3812,7 @@ type Watch struct {
 	PollIdentity        string   `toml:"poll_identity"`
 	CloneRoot           string   `toml:"clone_root"`
 	IncludeDrafts       *bool    `toml:"include_drafts"`
-	IncludeOwn          *bool    `toml:"include_own"`
+	IncludeOwn          *bool    `toml:"include_own"` // default true; false skips a PR by any of SelfLogins (OwnIncluded)
 	SkipBotAuthors      *bool    `toml:"skip_bot_authors"`
 	SkipAuthors         []string `toml:"skip_authors"`
 	SkipLabels          []string `toml:"skip_labels"`
@@ -3864,11 +3867,12 @@ type Watch struct {
 	// ("" keeps the pipeline's; see Config.JudgeOwnPassFor).
 	JudgeOwnPass string `toml:"judge_own_pass"`
 	// RelatedLookback and RelatedIgnore override [pipeline]
-	// related_lookback and related_ignore for this watch's PRs: a zero
-	// duration or an unset related_ignore keeps the pipeline's, [] ignores
-	// no path. See Config.RelatedFor.
-	RelatedLookback Duration `toml:"related_lookback"`
-	RelatedIgnore   []string `toml:"related_ignore"`
+	// related_lookback and related_ignore for this watch's PRs: unset keeps
+	// the pipeline's, a related_lookback of "0s" turns the lookback off (open
+	// PRs only, as in [pipeline]) and related_ignore = [] ignores no path.
+	// See Config.RelatedFor.
+	RelatedLookback *Duration `toml:"related_lookback"`
+	RelatedIgnore   []string  `toml:"related_ignore"`
 	// RequestTeams are team slugs whose review requests count like a
 	// request for the poll login (request_debounce); other teams' do not.
 	RequestTeams []string `toml:"request_teams"`
@@ -4069,7 +4073,6 @@ type PRFacts struct {
 	// repository (OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, …); "" = unknown.
 	AuthorAssociation string
 	Labels            []string
-	SelfLogin         string // login of the user magnum polls as, for include_own
 
 	HeadSHA     string // informational; no rule reads it
 	ReviewedSHA string // "" until a round has been verified; selects first review vs re-review
@@ -4103,7 +4106,8 @@ type PRFacts struct {
 	ReplyRoundAt time.Time
 
 	// Own: the PR's author is one of the operator's own logins
-	// (config.SelfLogins): its re-review waits OwnMinRereviewInterval.
+	// (config.SelfLogins, the board's "mine"): include_own = false skips it
+	// and its re-review waits OwnMinRereviewInterval.
 	Own bool
 	// SnoozedUntil is when the PR's snooze (`magnum snooze`) ends: until
 	// then no automatic round starts, while a request or a forced round
@@ -6156,6 +6160,12 @@ func ConnectionCause(msg string) string
     a closed connection, a GitHub server error (5xx) or a rate limit (429,
     secondary or primary).
 
+func IsAccount(author, typename, login string, bot bool) bool
+    IsAccount reports whether an author (its login in either form and its
+    GraphQL __typename) is the account login names, an App's when bot:
+    the same name (SameLogin) and the same kind of account (IsBot), so the user
+    "zhuravel" is never the App "zhuravel[bot]".
+
 func IsBot(typename, login string) bool
     IsBot reports whether an author is a bot: GraphQL __typename "Bot" or a REST
     login ending in "[bot]".
@@ -6180,8 +6190,8 @@ func SameAccount(a, b string) bool
 
 func SameLogin(a, b string) bool
     SameLogin compares two logins case-insensitively after NormalizeLogin:
-    the same name whether or not either is a bot, so an App and a user of
-    the same name match. Use it only next to a check of the kind (IsBot);
+    the same name whether or not either is a bot, so an App and a user of the
+    same name match. Use it only next to a check of the kind (IsAccount);
     SameAccount otherwise.
 
 func WithBetweenCalls(ctx context.Context, fn func()) context.Context
@@ -6352,11 +6362,6 @@ func (c *Client) FileAt(ctx context.Context, owner, repo, path, ref string) ([]b
     content. A missing file, ref or repository is an error matching ErrNotFound;
     a file above FileAtLimit an error matching ErrFileTooLarge (checked on the
     bytes received).
-
-func (c *Client) LastRateLimit() RateLimit
-    LastRateLimit returns the most conservative rate-limit snapshot seen by
-    any GraphQL call of this client (latest reset window, lowest remaining);
-    Cost is that call's cost. Zero before the first call.
 
 func (c *Client) ListFiles(ctx context.Context, owner, repo string, number int) (files []string, complete bool, err error)
     ListFiles reads the files a pull request changes: GET
@@ -8572,9 +8577,6 @@ type Candidates struct {
 }
     Candidates is the candidates file.
 
-func ReadCandidates(p string) (Candidates, error)
-    ReadCandidates reads a candidates file.
-
 type Comparison struct {
 	// Descendant: the later commit descends from the reviewed one (GitHub's
 	// status "ahead" or "identical"). The file list is three-dot, so only
@@ -8920,10 +8922,6 @@ func Measure(r Repo, l Limits) (Size, []File, error)
 func Printable(text string) string
     Printable replaces the control characters other than newline and tab in text
     written by an agent, so it cannot drive a terminal.
-
-func SameListing(a, b []File) bool
-    SameListing reports whether two listings name the same files with the same
-    content.
 
 func Sections(text []byte) []string
     Sections lists the "## " headings of notes text.
@@ -13094,9 +13092,6 @@ func (s *Store) NotesHistory(ctx context.Context, repoID int64, limit int) ([]No
     (limit <= 0 = all): every recorded version except the proposed states of
     curations, which appear as the version recorded when one was applied.
 
-func (s *Store) NotesProposalByID(ctx context.Context, id int64) (NotesProposal, error)
-    NotesProposalByID reads a proposal.
-
 func (s *Store) NotesProposals(ctx context.Context, f NotesProposalFilter) ([]NotesProposal, error)
     NotesProposals lists the proposals f selects.
 
@@ -13223,10 +13218,6 @@ func (s *Store) RetroDue(ctx context.Context, q RetroQuery) ([]PR, error)
     with q.Until, at or before it, unless q.PRIDs names the PRs, with at least
     one run that posted a review, and unless q.Again without a retro record,
     or with a failed one of fewer than RetroMaxAttempts attempts.
-
-func (s *Store) RetroPRByID(ctx context.Context, prID int64) (RetroPR, error)
-    RetroPRByID returns the retro record of prID, or an error matching
-    ErrNotFound when the PR has none.
 
 func (s *Store) RetroSettling(ctx context.Context, q RetroQuery) (int, error)
     RetroSettling counts the PRs that would be due for q's retro but closed

@@ -3517,3 +3517,29 @@ editing history. Code, config comments and prompts reference these by their head
   automatic. Rejected: posting as the App there anyway (GitHub ignores it), refusing `A` after the operator's
   own changes request (lifting it is what the row asks of them), and recording it only as a manual verdict
   (no later round would withdraw it).
+- **`reviewer_timeout` and `judge_timeout` stay fallbacks, and say when they change nothing** (2026-10-07).
+  Every `[[role]]` block config.defaults.toml writes out sets its own `timeout` (90m for the judge, 40m for
+  the others), so an operator who set `[daemon] reviewer_timeout` or `judge_timeout` changed no round, and
+  the test of the keys passed only because it loaded no roles. The keys keep their meaning, the timeout of a
+  role that sets none (one an operator adds), and the comments in config.defaults.toml, the README and
+  prompts/README.md say so; `Config.Warnings` (`magnum config`, doctor) prints one line when a loaded file
+  sets one of them while every role it would cover (the judges for `judge_timeout`, the others for
+  `reviewer_timeout`) sets its own, naming those roles and their timeouts, read from the roles as merged
+  before the fallbacks are filled in. Rejected: removing the keys (removing a setting is the operator's
+  call); dropping `timeout` from the shipped roles (the built-in timeouts would then move with a key meant
+  for added roles).
+- **No duration key may be negative** (2026-10-07). `[[pool]] idle_remove_after = "-1h"` loaded and would
+  have removed every surplus free slot at the next reconcile; a disabled `[triage]` with a negative timeout
+  loaded too. Both are refused with the key named (`pool <repo>: idle_remove_after must not be negative`,
+  `triage.timeout must not be negative`, the latter whether or not triage is enabled), and a test walks every
+  duration key of every section and block and fails for one a negative value passes.
+- **A watch can turn the related lookback off** (2026-10-07, amends "The judge knows the related PRs"). A
+  zero `related_lookback` on a `[[watch]]` meant "keep the pipeline's", so a watch could not say what `"0s"`
+  says in `[pipeline]`: open PRs only, no merged one. `Watch.RelatedLookback` is a pointer now: unset keeps
+  the pipeline's, any value (`"0s"` included) is the watch's; the TOML is unchanged.
+- **`include_own = false` skips the PRs of any of the operator's logins** (2026-10-07). It compared the
+  author with the watch's poll login alone, while "own" everywhere else (the board's "mine", `★`,
+  `own_min_rereview_interval`) means `config.SelfLogins`: every gh identity and every watch's posting
+  identity. A PR opened by a second gh identity of the operator's was reviewed on a watch that skips his own
+  PRs. `eligibility.Classify` reads `PRFacts.Own`, which the engine fills from `SelfLogins`, and
+  `PRFacts.SelfLogin` is gone.

@@ -68,11 +68,11 @@ type Related struct {
 }
 
 // RelatedFor is the related_lookback and related_ignore that apply to w's
-// PRs: the watch's when it sets them (a positive lookback; any list, []
-// included), else [pipeline]'s. A nil w is [pipeline]'s.
+// PRs: the watch's when it sets them (any lookback, "0s" included: open PRs
+// only; any list, [] included), else [pipeline]'s. A nil w is [pipeline]'s.
 func (c *Config) RelatedFor(w *Watch) Related {
 	r := Related{Lookback: c.Pipeline.RelatedLookback.Duration, Ignore: c.Pipeline.RelatedIgnore}
-	if w != nil && w.RelatedLookback.Duration > 0 {
+	if w != nil && w.RelatedLookback != nil {
 		r.Lookback = w.RelatedLookback.Duration
 	}
 	if w != nil && w.RelatedIgnore != nil {

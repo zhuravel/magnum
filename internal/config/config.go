@@ -93,6 +93,10 @@ type Config struct {
 	// (SnapshotPrompts); nil = prompts are read from disk when resolved.
 	// Set once, before the daemon starts its goroutines.
 	snapshot *PromptSnapshot
+	// idleFallbacks are the [daemon] reviewer_timeout and judge_timeout keys
+	// a loaded file sets although every role they are the fallback of sets
+	// its own timeout (Load; Warnings names them).
+	idleFallbacks []string
 }
 
 type Daemon struct {
@@ -105,8 +109,8 @@ type Daemon struct {
 	OwnMinRereviewInterval   Duration `toml:"own_min_rereview_interval"` // MinRereviewInterval for the operator's own PRs (SelfLogins; an own draft takes the longer of it and the draft one; 0 = MinRereviewInterval; Config.ThrottleFor)
 	MaxRoundsPerPRPerDay     int      `toml:"max_rounds_per_pr_per_day"`
 	CloseGrace               Duration `toml:"close_grace"`
-	ReviewerTimeout          Duration `toml:"reviewer_timeout"` // default timeout of non-judge roles (a role's own timeout wins)
-	JudgeTimeout             Duration `toml:"judge_timeout"`    // default timeout of judge roles
+	ReviewerTimeout          Duration `toml:"reviewer_timeout"` // timeout of a non-judge role that sets none (a role's own wins; config.defaults.toml's roles set theirs)
+	JudgeTimeout             Duration `toml:"judge_timeout"`    // timeout of a judge role that sets none (likewise)
 	AgentStartStagger        Duration `toml:"agent_start_stagger"`
 	MinWarm                  Duration `toml:"min_warm"`
 	HumanCooldown            Duration `toml:"human_cooldown"`
@@ -276,7 +280,7 @@ type Watch struct {
 	PollIdentity        string   `toml:"poll_identity"`
 	CloneRoot           string   `toml:"clone_root"`
 	IncludeDrafts       *bool    `toml:"include_drafts"`
-	IncludeOwn          *bool    `toml:"include_own"`
+	IncludeOwn          *bool    `toml:"include_own"` // default true; false skips a PR by any of SelfLogins (OwnIncluded)
 	SkipBotAuthors      *bool    `toml:"skip_bot_authors"`
 	SkipAuthors         []string `toml:"skip_authors"`
 	SkipLabels          []string `toml:"skip_labels"`
@@ -331,11 +335,12 @@ type Watch struct {
 	// ("" keeps the pipeline's; see Config.JudgeOwnPassFor).
 	JudgeOwnPass string `toml:"judge_own_pass"`
 	// RelatedLookback and RelatedIgnore override [pipeline]
-	// related_lookback and related_ignore for this watch's PRs: a zero
-	// duration or an unset related_ignore keeps the pipeline's, [] ignores
-	// no path. See Config.RelatedFor.
-	RelatedLookback Duration `toml:"related_lookback"`
-	RelatedIgnore   []string `toml:"related_ignore"`
+	// related_lookback and related_ignore for this watch's PRs: unset keeps
+	// the pipeline's, a related_lookback of "0s" turns the lookback off (open
+	// PRs only, as in [pipeline]) and related_ignore = [] ignores no path.
+	// See Config.RelatedFor.
+	RelatedLookback *Duration `toml:"related_lookback"`
+	RelatedIgnore   []string  `toml:"related_ignore"`
 	// RequestTeams are team slugs whose review requests count like a
 	// request for the poll login (request_debounce); other teams' do not.
 	RequestTeams []string `toml:"request_teams"`
@@ -674,6 +679,7 @@ func LoadWithOptions(layout paths.Layout, file string, opts LoadOptions) (*Confi
 		cfg.Sources = append(cfg.Sources, user)
 	}
 	cfg.buildPipeline(base, over)
+	cfg.idleFallbacks = cfg.idleTimeoutFallbacks(base, over)
 	cfg.expand()
 	cfg.Normalize()
 	cfg.expandPipeline()

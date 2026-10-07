@@ -645,9 +645,9 @@ func (e *Engine) previousReview(ctx context.Context, pr store.PR, login string, 
 	// A run records the login in its configured (REST) form, so a user "x"
 	// and the App "x[bot]" are told apart: neither's review is the other's.
 	isFormer := func(l string) bool {
-		return !sameAccount(l, login) && slices.ContainsFunc(former, func(f string) bool { return sameAccount(l, f) })
+		return !github.SameAccount(l, login) && slices.ContainsFunc(former, func(f string) bool { return github.SameAccount(l, f) })
 	}
-	own := func(l string) bool { return sameAccount(l, login) || isFormer(l) }
+	own := func(l string) bool { return github.SameAccount(l, login) || isFormer(l) }
 	runs, err := e.st.RunsByPR(ctx, pr.ID)
 	if err != nil {
 		return prev

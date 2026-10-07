@@ -157,7 +157,10 @@ func TestNotesProposalsAreKeptWhateverBecomesOfThem(t *testing.T) {
 	if len(all) != 4 || states[ProposalApplied] != 1 || states[ProposalRejected] != 1 || states[ProposalExpired] != 1 || states[ProposalInvalid] != 1 {
 		t.Errorf("proposals = %v", states)
 	}
-	r, _ := st.NotesProposalByID(ctx, rejected.ID)
+	var r NotesProposal
+	if i := slices.IndexFunc(all, func(p NotesProposal) bool { return p.ID == rejected.ID }); i >= 0 {
+		r = all[i]
+	}
 	if r.Reason != "keep the probes list short" || !strings.Contains(string(r.Changes), "one PR's probe") {
 		t.Errorf("rejected proposal = %+v", r)
 	}

@@ -58,6 +58,39 @@ identity = "z"
 	}
 }
 
+// A watch's related_lookback = "0s" turns the lookback off for its PRs, as
+// "0s" in [pipeline] does (open PRs only, no merged one): a zero duration
+// used to mean "keep the pipeline's", so a watch could not set it. Unset
+// still keeps the pipeline's.
+func TestAWatchsZeroRelatedLookbackTurnsTheLookbackOff(t *testing.T) {
+	cfg := mustLoad(t, map[string]string{"config.toml": `
+[pipeline]
+related_lookback = "7d"
+
+[[identity]]
+name = "z"
+kind = "gh"
+login = "z"
+
+[[watch]]
+owner = "acme"
+include = ["*"]
+identity = "z"
+related_lookback = "0s"
+
+[[watch]]
+owner = "example"
+include = ["*"]
+identity = "z"
+`})
+	if a := cfg.RelatedFor(&cfg.Watches[0]); a.Lookback != 0 {
+		t.Errorf("acme (0s) = %+v; want no lookback", a)
+	}
+	if e := cfg.RelatedFor(&cfg.Watches[1]); e.Lookback != 7*24*time.Hour {
+		t.Errorf("example (unset) = %+v; want the pipeline's 7d", e)
+	}
+}
+
 func TestRelatedRefusesANegativeLookbackAndABadPattern(t *testing.T) {
 	for name, tc := range map[string]struct{ body, want string }{
 		"pipeline lookback": {"[pipeline]\nrelated_lookback = \"-1h\"\n" + minimalConfig, "related_lookback"},

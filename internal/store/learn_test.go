@@ -128,20 +128,32 @@ func mustPostedRun(t *testing.T, st *Store, prID int64, round int, reviewID int6
 
 func at(t time.Time) *time.Time { return &t }
 
+// retroPRByID reads the retro record of prID, or an error matching
+// ErrNotFound when the PR has none.
+func (s *Store) retroPRByID(ctx context.Context, prID int64) (RetroPR, error) {
+	var r RetroPR
+	err := s.db.QueryRowContext(ctx, "SELECT pr_id, retro_at, day, status, candidates, error, attempts FROM retro_prs WHERE pr_id = ?", prID).
+		Scan(&r.PRID, timeCol(&r.RetroAt), &r.Day, &r.Status, &r.Candidates, textCol(&r.Error), &r.Attempts)
+	if err != nil {
+		return RetroPR{}, notFound(err, "retro of pr", prID)
+	}
+	return r, nil
+}
+
 func TestRecordRetroPRInsertsThenReplaces(t *testing.T) {
 	st, clk := newStore(t)
 	ctx := context.Background()
 	repo := mustRepo(t, st)
 	pr := mustPR(t, st, repo.ID, 7, PRReviewed)
 
-	if _, err := st.RetroPRByID(ctx, pr.ID); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("RetroPRByID before any retro = %v, want ErrNotFound", err)
+	if _, err := st.retroPRByID(ctx, pr.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("retroPRByID before any retro = %v, want ErrNotFound", err)
 	}
 	// An empty time is now, an empty day is that moment's day, an empty error is NULL.
 	if err := st.RecordRetroPR(ctx, RetroPR{PRID: pr.ID, Status: RetroNothing}); err != nil {
 		t.Fatal(err)
 	}
-	got, err := st.RetroPRByID(ctx, pr.ID)
+	got, err := st.retroPRByID(ctx, pr.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +173,7 @@ func TestRecordRetroPRInsertsThenReplaces(t *testing.T) {
 		t.Fatal(err)
 	}
 	again.Attempts = 1 // a failure counts an attempt (TestRecordRetroPRCountsFailedAttempts)
-	if got, err := st.RetroPRByID(ctx, pr.ID); err != nil || !reflect.DeepEqual(got, again) {
+	if got, err := st.retroPRByID(ctx, pr.ID); err != nil || !reflect.DeepEqual(got, again) {
 		t.Fatalf("replaced retro = %+v, %v\nwant %+v", got, err, again)
 	}
 	var n int
@@ -172,7 +184,7 @@ func TestRecordRetroPRInsertsThenReplaces(t *testing.T) {
 	if err := st.RecordRetroPR(ctx, RetroPR{PRID: pr.ID, Status: RetroClassified, Candidates: 2}); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := st.RetroPRByID(ctx, pr.ID); got.Error != "" || got.Status != RetroClassified || got.Candidates != 2 || !got.RetroAt.Equal(t0.Add(24*time.Hour)) {
+	if got, _ := st.retroPRByID(ctx, pr.ID); got.Error != "" || got.Status != RetroClassified || got.Candidates != 2 || !got.RetroAt.Equal(t0.Add(24*time.Hour)) {
 		t.Fatalf("retro after a clean re-run = %+v", got)
 	}
 }
@@ -481,7 +493,7 @@ func TestRecordRetroPRCountsFailedAttempts(t *testing.T) {
 		if err := st.RecordRetroPR(ctx, RetroPR{PRID: pr.ID, Status: tc.status, Error: "boom"}); err != nil {
 			t.Fatal(err)
 		}
-		got, err := st.RetroPRByID(ctx, pr.ID)
+		got, err := st.retroPRByID(ctx, pr.ID)
 		if err != nil || got.Attempts != tc.want {
 			t.Fatalf("step %d (%s): attempts = %d, %v; want %d", i+1, tc.status, got.Attempts, err, tc.want)
 		}

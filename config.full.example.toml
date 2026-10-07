@@ -68,7 +68,7 @@ skip_authors = ["dependabot"]
 # auto_approve_body = "Approved after magnum's review of {{.Short}}."   # one line: .Short (7 characters), .SHA, .ReviewURL, .Repo, .Number
 # roles = ["codex-judge", "claude-review", "codex-review", "claude-simplify"]   # omitted or [] = every [[role]]
 # judge_own_pass = "after"              # [pipeline]'s "parallel" (the judge's own pass with the reviewers) or "after"
-# related_lookback = "30d"              # [pipeline]'s 14d: how long a merged PR on the same paths stays related
+# related_lookback = "30d"              # [pipeline]'s 14d: how long a merged PR on the same paths stays related ("0s": none)
 # related_ignore = ["**/*.lock", "db/schema.rb"]   # [pipeline]'s lockfiles: paths that never relate two PRs nor reach history.json
 
 [[pool]]

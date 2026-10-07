@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -111,11 +112,15 @@ func (h *notesHarness) terminal(answer string) {
 
 func (h *notesHarness) proposalNow(id int64) store.NotesProposal {
 	h.t.Helper()
-	p, err := h.st.NotesProposalByID(h.ctx, id)
+	ps, err := h.st.NotesProposals(h.ctx, store.NotesProposalFilter{})
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	return p
+	i := slices.IndexFunc(ps, func(p store.NotesProposal) bool { return p.ID == id })
+	if i < 0 {
+		h.t.Fatalf("no notes proposal %d", id)
+	}
+	return ps[i]
 }
 
 // --review shows the proposal (the notes' diff, the harness changes with

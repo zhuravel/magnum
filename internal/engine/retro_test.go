@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"maps"
@@ -140,6 +141,31 @@ func (h *harness) misses(prID int64) map[string]store.Miss {
 	return out
 }
 
+// retroRecord reads the retro record of prID (retro_prs; no retro_at), or
+// an error matching store.ErrNotFound when the PR has none.
+func (h *harness) retroRecord(prID int64) (store.RetroPR, error) {
+	h.t.Helper()
+	r := store.RetroPR{PRID: prID}
+	var errText sql.NullString
+	err := h.st.DB().QueryRowContext(h.ctx, "SELECT day, status, candidates, error, attempts FROM retro_prs WHERE pr_id = ?", prID).
+		Scan(&r.Day, &r.Status, &r.Candidates, &errText, &r.Attempts)
+	if errors.Is(err, sql.ErrNoRows) {
+		return store.RetroPR{}, store.ErrNotFound
+	}
+	r.Error = errText.String
+	return r, err
+}
+
+// readCandidates reads a retro's candidates file (learn.CandidatesFile).
+func readCandidates(p string) (learn.Candidates, error) {
+	var c learn.Candidates
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return c, err
+	}
+	return c, json.Unmarshal(b, &c)
+}
+
 func (h *harness) retroLast() RetroSummary {
 	h.t.Helper()
 	v, ok, err := h.st.GetKV(h.ctx, KVRetroLast)
@@ -207,7 +233,7 @@ func TestRetroStoresCandidatesUnclassifiedWithoutAClassifier(t *testing.T) {
 	if m := ms["201"]; m.SourceKind != store.MissSourceReview || m.Path != "" {
 		t.Errorf("r201: %+v", m)
 	}
-	rp, err := h.st.RetroPRByID(h.ctx, pr.ID)
+	rp, err := h.retroRecord(pr.ID)
 	if err != nil || rp.Status != store.RetroUnclassified || rp.Candidates != 3 {
 		t.Fatalf("retro_prs = %+v, %v", rp, err)
 	}
@@ -216,7 +242,7 @@ func TestRetroStoresCandidatesUnclassifiedWithoutAClassifier(t *testing.T) {
 		t.Fatalf("summary = %+v", sum)
 	}
 	dir := filepath.Join(h.layout.Learn(), "retro", sum.Run, "talkable", "talkable", "7")
-	cands, err := learn.ReadCandidates(filepath.Join(dir, learn.CandidatesFile))
+	cands, err := readCandidates(filepath.Join(dir, learn.CandidatesFile))
 	if err != nil || len(cands.Candidates) != 3 || cands.PR != pr.URL || !slices.Equal(cands.ReviewedSHAs, []string{retroShaA}) {
 		t.Fatalf("candidates file = %+v, %v", cands, err)
 	}
@@ -332,7 +358,7 @@ func TestRetroStoresTheClassifiersAnswer(t *testing.T) {
 	if ms["201"].Class != store.MissStyle || ms["102"].Class != store.MissOutside {
 		t.Fatalf("r201 %s, t102 %s", ms["201"].Class, ms["102"].Class)
 	}
-	if rp, _ := h.st.RetroPRByID(h.ctx, pr.ID); rp.Status != store.RetroClassified {
+	if rp, _ := h.retroRecord(pr.ID); rp.Status != store.RetroClassified {
 		t.Fatalf("retro_prs = %+v", rp)
 	}
 	if sum := h.retroLast(); sum.Classified != 1 || sum.Misses != 2 {
@@ -376,7 +402,7 @@ func TestRetroInvalidAnswerFailsOnlyThatPR(t *testing.T) {
 	h.requestRetro(RetroPayload{})
 
 	for _, pr := range []store.PR{pr7, pr8} {
-		rp, err := h.st.RetroPRByID(h.ctx, pr.ID)
+		rp, err := h.retroRecord(pr.ID)
 		if err != nil || rp.Status != store.RetroFailed || !strings.Contains(rp.Error, "retro.json is invalid") {
 			t.Fatalf("PR %d retro_prs = %+v, %v", pr.Number, rp, err)
 		}
@@ -407,7 +433,7 @@ func TestRetroStopsAtAUsageLimit(t *testing.T) {
 	h.requestRetro(RetroPayload{})
 
 	for _, pr := range []store.PR{pr7, pr8} {
-		if rp, err := h.st.RetroPRByID(h.ctx, pr.ID); !errors.Is(err, store.ErrNotFound) {
+		if rp, err := h.retroRecord(pr.ID); !errors.Is(err, store.ErrNotFound) {
 			t.Fatalf("PR %d was recorded: %+v, %v", pr.Number, rp, err)
 		}
 	}
@@ -435,7 +461,7 @@ func TestRetroHonoursMaxPRs(t *testing.T) {
 	if len(fc.jobs) != 1 || fc.jobs[0].PR.Number != 7 {
 		t.Fatalf("jobs = %d, want PR 7 only (newest closed first)", len(fc.jobs))
 	}
-	if _, err := h.st.RetroPRByID(h.ctx, pr8.ID); !errors.Is(err, store.ErrNotFound) {
+	if _, err := h.retroRecord(pr8.ID); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("PR 8: %v", err)
 	}
 }
@@ -579,7 +605,7 @@ func TestRetroRequestRefusedWhileDrainingOrRunning(t *testing.T) {
 	}
 	close(gate)
 	h.settle()
-	if rp, err := h.st.RetroPRByID(h.ctx, h.pr(7).ID); err != nil || rp.Status != store.RetroUnclassified {
+	if rp, err := h.retroRecord(h.pr(7).ID); err != nil || rp.Status != store.RetroUnclassified {
 		t.Fatalf("retro_prs = %+v, %v", rp, err)
 	}
 	if req := h.requestRetro(RetroPayload{Lookback: "fortnight"}); req.State != store.RequestFailed {
@@ -607,7 +633,7 @@ func TestRetroKeepsCommentedFilesInsideItsDirectory(t *testing.T) {
 
 	sum := h.retroLast()
 	prDir := filepath.Join(h.layout.Learn(), "retro", sum.Run, "talkable", "talkable", "7")
-	cands, err := learn.ReadCandidates(filepath.Join(prDir, learn.CandidatesFile))
+	cands, err := readCandidates(filepath.Join(prDir, learn.CandidatesFile))
 	if err != nil || len(cands.Candidates) != 4 {
 		t.Fatalf("candidates = %+v, %v", cands, err)
 	}
