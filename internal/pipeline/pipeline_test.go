@@ -65,7 +65,7 @@ func TestHappyPathInitialRound(t *testing.T) {
 	}
 	// codex review runs at the role's effort against the merge base, which
 	// does not move with the base branch.
-	mustContain(t, "codex script", cc.Script, "command codex review -c model_reasoning_effort=high --base base000111222333444555666777888999aaabbb; } |", filepath.Join(dir, "codex-review.md"), "MAGNUM_DONE_"+codexRun.ID)
+	mustContain(t, "codex script", cc.Script, "command codex review -c model_reasoning_effort=high -c features.apps=false --base base000111222333444555666777888999aaabbb; } |", filepath.Join(dir, "codex-review.md"), "MAGNUM_DONE_"+codexRun.ID)
 	// The pane's terminal title (herdr sidebar) is set first, the report
 	// starts with the run's marker; the done marker stays last.
 	if !strings.HasPrefix(cc.Script, `printf '\033]0;%s\007' 'PR #11920 codex-review - talkable'; DISABLE_AUTO_TITLE=true; set -o pipefail; `+

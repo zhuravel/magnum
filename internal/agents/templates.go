@@ -385,7 +385,7 @@ type JudgeData struct {
 	// ClaudeProjectDeclined: the same for its Claude sessions, which loaded
 	// the user's settings only because the PR changes .claude/ or
 	// .mcp.json, rendered as `claude_project: declined`. Both are set by
-	// NoteDeclinedProjects.
+	// NoteDeclinedProjects, each only in a round with a role of its kind.
 	CodexProjectDeclined, ClaudeProjectDeclined bool
 }
 

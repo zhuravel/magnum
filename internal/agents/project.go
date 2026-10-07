@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -140,8 +141,8 @@ type projectScope struct {
 // rules; Claude's .claude/ and .mcp.json: settings with hooks, env and
 // plugins, MCP servers, skills, commands, agents). A PR controls them, so
 // when the files on disk there differ from the merge base of HEAD and base
-// (gitx.WorkTreeChanges: the PR's commits, and files a round left there),
-// or git cannot tell, the session gets the kind's project_untrust args for
+// (gitx.WorkTreeChanges: the PR's commits, and files a round left there,
+// untracked logs aside: logFile), or git cannot tell, the session gets the kind's project_untrust args for
 // dir and its symlink-resolved form and loads none of it. Otherwise it is
 // the base branch's, the team's own, and loads as before, except that
 // project_mcp "off" turns its Codex MCP servers off (servers). Nothing for
@@ -177,7 +178,7 @@ func (m *Manager) checkoutProject(ctx context.Context, role config.Role, dir, ba
 		ctx, cancel := context.WithTimeout(ctx, projectTimeout)
 		defer cancel()
 		g := gitx.New(m.d.Runner)
-		files, err := m.projectChanges(ctx, g, dir, base, names)
+		files, err := m.projectChanges(ctx, g, dir, base, pc.logFile, names)
 		if err != nil || len(files) > 0 {
 			if err != nil {
 				m.logf("agents: %s: cannot compare %s with the merge base, so the session leaves them out: %v", role.Name, pc.what, err)
@@ -277,8 +278,8 @@ func (m *Manager) ReloadsProject(ctx context.Context, s store.Session) bool {
 }
 
 // projectChanges lists the files at or under paths in dir that differ from
-// the merge base of HEAD and base.
-func (m *Manager) projectChanges(ctx context.Context, g *gitx.Client, dir, base string, paths []string) ([]string, error) {
+// the merge base of HEAD and base, but the untracked ones skip reports.
+func (m *Manager) projectChanges(ctx context.Context, g *gitx.Client, dir, base string, skip func(string) bool, paths []string) ([]string, error) {
 	switch {
 	case m.d.Runner == nil:
 		return nil, errors.New("no command runner")
@@ -289,7 +290,37 @@ func (m *Manager) projectChanges(ctx context.Context, g *gitx.Client, dir, base 
 	if err != nil {
 		return nil, err
 	}
-	return g.WorkTreeChanges(ctx, dir, mb, paths...)
+	return g.WorkTreeChanges(ctx, dir, mb, skip, paths...)
+}
+
+// logFile reports whether path (relative to the checkout's root), an
+// untracked file, is a log the CLI never loads as configuration: a file
+// under one of its project directories whose base name ends in ".log" or
+// ".log.<digits>" (a rotated log), or that lies under the log/ or logs/
+// directory right inside it (.claude/log/, .codex/logs/). A team's own
+// hook, the base branch's, writes such logs (gitignored) into every
+// checkout it runs in, which would keep each later session from the
+// team's config. Any other untracked file, ignored or not, still counts:
+// settings.local.json, a skill, command, agent or hook, a skill named
+// logs (.claude/skills/logs/), anything a CLI may load now or later; a
+// file of the kind's (.mcp.json) is never a log.
+func (pc projectConfig) logFile(path string) bool {
+	for _, p := range pc.paths {
+		rest, ok := strings.CutPrefix(path, p.name+"/")
+		if !p.dir || !ok {
+			continue
+		}
+		if top, _, nested := strings.Cut(rest, "/"); nested && (top == "log" || top == "logs") {
+			return true
+		}
+		name := rest[strings.LastIndex(rest, "/")+1:]
+		if strings.HasSuffix(name, ".log") {
+			return true
+		}
+		i := strings.LastIndex(name, ".log.")
+		return i >= 0 && i+len(".log.") < len(name) && strings.Trim(name[i+len(".log."):], "0123456789") == ""
+	}
+	return false
 }
 
 // projectServers are the MCP servers the checkout's config.toml at path
@@ -374,10 +405,13 @@ func ProjectSentences(ctx context.Context, st *store.Store, prID int64, head str
 
 // NoteDeclinedProjects sets the judge's CodexProjectDeclined and
 // ClaudeProjectDeclined from the PR's records of head (the round's), which
-// each launch of those CLIs writes.
-func NoteDeclinedProjects(ctx context.Context, st *store.Store, prID int64, head string, jd *JudgeData) {
-	jd.CodexProjectDeclined = declinedFor(ctx, st, prID, KindCodex, head)
-	jd.ClaudeProjectDeclined = declinedFor(ctx, st, prID, KindClaude, head)
+// each launch of those CLIs writes, for the kinds among the round's roles
+// only (kinds: their agent kinds, the judge's included): a record names
+// the kind's last launch on the head, which may be a session the round did
+// not run (a reviewer paused, or left out of the round).
+func NoteDeclinedProjects(ctx context.Context, st *store.Store, prID int64, head string, kinds []string, jd *JudgeData) {
+	jd.CodexProjectDeclined = slices.Contains(kinds, KindCodex) && declinedFor(ctx, st, prID, KindCodex, head)
+	jd.ClaudeProjectDeclined = slices.Contains(kinds, KindClaude) && declinedFor(ctx, st, prID, KindClaude, head)
 }
 
 // recordProject keeps the PR's record of how role's session treats its

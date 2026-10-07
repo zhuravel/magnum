@@ -188,8 +188,9 @@ func TestDeclinedProjectsOfTheHead(t *testing.T) {
 	if got := ProjectSentences(e.ctx, e.st, e.pr.ID, projectHead); got != ClaudeProjectSentence {
 		t.Fatalf("sentences = %q", got)
 	}
+	round := []string{KindCodex, KindClaude, KindClaude}
 	var jd JudgeData
-	NoteDeclinedProjects(e.ctx, e.st, e.pr.ID, projectHead, &jd)
+	NoteDeclinedProjects(e.ctx, e.st, e.pr.ID, projectHead, round, &jd)
 	if !jd.ClaudeProjectDeclined || jd.CodexProjectDeclined {
 		t.Fatalf("judge data: codex %v, claude %v", jd.CodexProjectDeclined, jd.ClaudeProjectDeclined)
 	}
@@ -197,11 +198,17 @@ func TestDeclinedProjectsOfTheHead(t *testing.T) {
 	if got := ProjectSentences(e.ctx, e.st, e.pr.ID, projectHead); got != CodexProjectSentence+" "+ClaudeProjectSentence {
 		t.Fatalf("sentences = %q", got)
 	}
+	// A round none of whose roles is a Claude one hears only of Codex.
+	jd = JudgeData{}
+	NoteDeclinedProjects(e.ctx, e.st, e.pr.ID, projectHead, []string{KindCodex, KindCodex}, &jd)
+	if jd.ClaudeProjectDeclined || !jd.CodexProjectDeclined {
+		t.Fatalf("a round without Claude: judge data: codex %v, claude %v", jd.CodexProjectDeclined, jd.ClaudeProjectDeclined)
+	}
 	if got := ProjectSentences(e.ctx, e.st, e.pr.ID, projectMergeBase); got != "" {
 		t.Fatalf("another head: %q", got)
 	}
 	jd = JudgeData{}
-	NoteDeclinedProjects(e.ctx, e.st, e.pr.ID, projectMergeBase, &jd)
+	NoteDeclinedProjects(e.ctx, e.st, e.pr.ID, projectMergeBase, round, &jd)
 	if jd.ClaudeProjectDeclined || jd.CodexProjectDeclined {
 		t.Fatalf("another head: judge data %+v", jd)
 	}
@@ -273,5 +280,50 @@ func TestAnAdoptedClaudeAgentCountsAsReloadingTheProjectConfig(t *testing.T) {
 	}
 	if !e.m.ReloadsProject(e.ctx, e.session(RoleClaude)) {
 		t.Fatal("an adopted agent kept the mark of the launch before it")
+	}
+}
+
+// A team's own Claude Code hook (the base branch's .claude/settings.json)
+// logs tool use to gitignored files under the checkout's .claude/log/, so
+// every slot it ran in has untracked files there. Claude Code never loads a
+// log file as configuration, so an untracked one (a base name ending in
+// .log or .log.<digits>, or a file under .claude/log/ or .claude/logs/)
+// leaves the team's settings, skills and CLAUDE.md loaded. Every other
+// untracked file still declines, ignored or not (settings.local.json, a
+// skill, even one named logs), and so does a tracked change, a log file's
+// too.
+func TestClaudeKeepsTheTeamsSettingsWhenOnlyLogFilesAreUntracked(t *testing.T) {
+	for _, c := range []struct {
+		name               string
+		changed, untracked []string
+		declined           bool
+	}{
+		{"the hook's logs", nil, []string{".claude/log/tool_use.log", ".claude/log/tool_use.log.1"}, false},
+		{"a log anywhere under .claude/", nil, []string{".claude/hooks/run.log", ".claude/skills/x/out.log.12", ".claude/logs/today.txt"}, false},
+		{"settings.local.json", nil, []string{".claude/log/tool_use.log", ".claude/settings.local.json"}, true},
+		{"a skill", nil, []string{".claude/skills/x/SKILL.md"}, true},
+		{"a skill named logs", nil, []string{".claude/skills/logs/SKILL.md"}, true},
+		{"a log-like name that is none", nil, []string{".claude/tool_use.log.old", ".claude/catalog.md"}, true},
+		{"the PR's settings", []string{".claude/settings.json"}, []string{".claude/log/tool_use.log"}, true},
+		{"a tracked log", []string{".claude/log/tool_use.log"}, nil, true},
+		{"an untracked .mcp.json", nil, []string{".mcp.json"}, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e, _, ws := projectEnv(t, map[string]string{".claude/settings.json": "{}", ".claude/log/tool_use.log": "x\n"}, c.changed, c.untracked)
+			if err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleClaude), ws.Panes[RoleClaude], ""); err != nil {
+				t.Fatal(err)
+			}
+			want := claudeLaunchArgs
+			if c.declined {
+				want = slices.Concat(claudeLaunchArgs, userSettingsOnly)
+			}
+			if got := e.h.starts[0].Args; !slices.Equal(got, want) {
+				t.Fatalf("args = %q\nwant %q", got, want)
+			}
+			_, recorded := ProjectDeclined(e.ctx, e.st, e.pr.ID, KindClaude)
+			if evs := claudeProjectEvents(t, e); recorded != c.declined || len(evs) != map[bool]int{true: 1}[c.declined] {
+				t.Fatalf("record %v, events %+v; want declined %v", recorded, evs, c.declined)
+			}
+		})
 	}
 }

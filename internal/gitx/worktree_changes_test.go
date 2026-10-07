@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -19,7 +20,7 @@ func TestWorkTreeChanges(t *testing.T) {
 		outRule(".codex/config.toml\x00.codex/a b.toml\x00", "git", "-C", slot, "diff"),
 		outRule(".codex/new.toml\x00.codex/config.toml\x00", "git", "-C", slot, "ls-files"),
 	)
-	got, err := c.WorkTreeChanges(ctx, slot, sha1, ".codex")
+	got, err := c.WorkTreeChanges(ctx, slot, sha1, nil, ".codex")
 	if want := []string{".codex/a b.toml", ".codex/config.toml", ".codex/new.toml"}; err != nil || !slices.Equal(got, want) {
 		t.Fatalf("WorkTreeChanges = %q, %v; want %q", got, err, want)
 	}
@@ -29,7 +30,7 @@ func TestWorkTreeChanges(t *testing.T) {
 	}
 	wantCall(t, f, 1, false, "git", "-C", slot, "ls-files", "-z", "--others", "--", ":(top,literal).codex")
 	for _, bad := range [][2]string{{"-x", ".codex"}, {"a..b", ".codex"}, {sha1, ""}} {
-		if _, err := c.WorkTreeChanges(ctx, slot, bad[0], bad[1]); err == nil {
+		if _, err := c.WorkTreeChanges(ctx, slot, bad[0], nil, bad[1]); err == nil {
 			t.Errorf("WorkTreeChanges(%q, %q) must be refused", bad[0], bad[1])
 		}
 	}
@@ -43,7 +44,7 @@ func TestRealWorkTreeChanges(t *testing.T) {
 	base := fx.commit(dir, ".codex/config.toml", "[mcp_servers.docs]\n", "Add the Codex config")
 	changes := func(want ...string) {
 		t.Helper()
-		got, err := fx.c.WorkTreeChanges(ctx, dir, base, ".codex")
+		got, err := fx.c.WorkTreeChanges(ctx, dir, base, nil, ".codex")
 		if err != nil || !slices.Equal(got, want) {
 			t.Fatalf("WorkTreeChanges = %q, %v; want %q", got, err, want)
 		}
@@ -75,7 +76,7 @@ func TestWorkTreeChangesOfSeveralPaths(t *testing.T) {
 		outRule(".mcp.json\x00", "git", "-C", slot, "diff"),
 		outRule(".claude/settings.local.json\x00", "git", "-C", slot, "ls-files"),
 	)
-	got, err := c.WorkTreeChanges(ctx, slot, sha1, ".claude", ".mcp.json")
+	got, err := c.WorkTreeChanges(ctx, slot, sha1, nil, ".claude", ".mcp.json")
 	if want := []string{".claude/settings.local.json", ".mcp.json"}; err != nil || !slices.Equal(got, want) {
 		t.Fatalf("WorkTreeChanges = %q, %v; want %q", got, err, want)
 	}
@@ -83,7 +84,7 @@ func TestWorkTreeChangesOfSeveralPaths(t *testing.T) {
 		":(top,literal).claude", ":(top,literal).mcp.json")
 	wantCall(t, f, 1, false, "git", "-C", slot, "ls-files", "-z", "--others", "--", ":(top,literal).claude", ":(top,literal).mcp.json")
 	for _, paths := range [][]string{nil, {".claude", ""}} {
-		if _, err := c.WorkTreeChanges(ctx, slot, sha1, paths...); err == nil {
+		if _, err := c.WorkTreeChanges(ctx, slot, sha1, nil, paths...); err == nil {
 			t.Errorf("WorkTreeChanges(%q) must be refused", paths)
 		}
 	}
@@ -95,7 +96,7 @@ func TestWorkTreeChangesOfSeveralPaths(t *testing.T) {
 	base := fx.commit(dir, ".mcp.json", "{\"mcpServers\":{}}\n", "Add the team's MCP servers")
 	changes := func(want ...string) {
 		t.Helper()
-		got, err := fx.c.WorkTreeChanges(ctx, dir, base, ".claude", ".mcp.json")
+		got, err := fx.c.WorkTreeChanges(ctx, dir, base, nil, ".claude", ".mcp.json")
 		if err != nil || !slices.Equal(got, want) {
 			t.Fatalf("WorkTreeChanges = %q, %v; want %q", got, err, want)
 		}
@@ -111,6 +112,43 @@ func TestWorkTreeChangesOfSeveralPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	changes(".claude/settings.local.json", ".mcp.json")
+}
+
+// A caller may leave out untracked files a tool never reads (the agents
+// package: log files a hook writes in the checkout): skip sees each
+// untracked file, ignored ones included, and only those; a tracked change
+// counts whatever skip says of its path.
+func TestWorkTreeChangesSkipsOnlyUntrackedFiles(t *testing.T) {
+	ctx := context.Background()
+	isLog := func(p string) bool { return strings.HasSuffix(p, ".log") }
+	c, _ := newFake(
+		outRule(".claude/log/kept.log\x00", "git", "-C", slot, "diff"),
+		outRule(".claude/log/kept.log\x00.claude/log/tool_use.log\x00.claude/settings.local.json\x00", "git", "-C", slot, "ls-files"),
+	)
+	got, err := c.WorkTreeChanges(ctx, slot, sha1, isLog, ".claude")
+	if want := []string{".claude/log/kept.log", ".claude/settings.local.json"}; err != nil || !slices.Equal(got, want) {
+		t.Fatalf("WorkTreeChanges = %q, %v; want %q", got, err, want)
+	}
+
+	fx := newFixture(t)
+	dir := fx.origin
+	fx.write(dir, ".gitignore", ".claude/log/\n.claude/settings.local.json\n")
+	base := fx.commit(dir, ".claude/settings.json", "{}\n", "Add the team's Claude settings")
+	changes := func(want ...string) {
+		t.Helper()
+		got, err := fx.c.WorkTreeChanges(ctx, dir, base, isLog, ".claude")
+		if err != nil || !slices.Equal(got, want) {
+			t.Fatalf("WorkTreeChanges = %q, %v; want %q", got, err, want)
+		}
+	}
+	fx.write(dir, ".claude/log/tool_use.log", "ignored\n")
+	fx.write(dir, ".claude/hook.log", "untracked\n")
+	changes()
+	fx.write(dir, ".claude/settings.local.json", "{\"hooks\":{}}\n")
+	changes(".claude/settings.local.json")
+	fx.git(dir, "add", "--force", ".claude/log/tool_use.log")
+	fx.git(dir, "commit", "--quiet", "-m", "Track a log")
+	changes(".claude/log/tool_use.log", ".claude/settings.local.json")
 }
 
 // ChangedUnder answers whether a head brings changes to a CLI's project

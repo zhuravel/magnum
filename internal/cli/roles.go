@@ -357,7 +357,11 @@ func rolesKinds(c *Context, cfg *config.Config, o rolesOpts) int {
 		fmt.Fprintf(tw, "  subagents:\t%s (none: %s)\n", args(k.Subagents), args(k.NoSubagents))
 		var mcpOff []string
 		if k.MCPOff && len(k.MCPStrict) > 0 {
-			mcpOff = append(mcpOff, args(k.MCPStrict)+" (none of your MCP servers load)")
+			what := " (none of your MCP servers load)"
+			if len(k.MCPDisable) > 0 {
+				what = " (once, whatever the servers' names)" // e.g. Codex's apps connector, which no config table names
+			}
+			mcpOff = append(mcpOff, args(k.MCPStrict)+what)
 		}
 		if k.MCPOff && len(k.MCPDisable) > 0 {
 			mcpOff = append(mcpOff, args(k.MCPDisable)+" per MCP server of the Codex config (allowed: "+inspOrDash(strings.Join(k.MCPAllow, ", "))+")")

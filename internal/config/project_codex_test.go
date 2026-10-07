@@ -21,7 +21,7 @@ func TestCodexMarksAChangedCheckoutUntrustedInOneTable(t *testing.T) {
 	paths := []string{"/Users/x/Projects/talkable.review1", `/private/tmp/a "b"\c`}
 	got := codex.Argv(LaunchArgs{MCPServers: []string{"docs"}, Untrusted: paths})
 	table := `{"/Users/x/Projects/talkable.review1"={trust_level="untrusted"},"/private/tmp/a \"b\"\\c"={trust_level="untrusted"}}`
-	want := []string{"-c", "mcp_servers.docs.enabled=false", "-c", "projects=" + table, "--dangerously-bypass-approvals-and-sandbox"}
+	want := []string{"-c", "features.apps=false", "-c", "mcp_servers.docs.enabled=false", "-c", "projects=" + table, "--dangerously-bypass-approvals-and-sandbox"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("argv = %q\nwant %q", got, want)
 	}
@@ -59,12 +59,12 @@ func TestCodexMarksAChangedCheckoutUntrustedInOneTable(t *testing.T) {
 func TestProjectMCPOffTurnsTheCheckoutsServersOffButTheAllowedOnes(t *testing.T) {
 	user, project := []string{"browser", "docs"}, []string{"docs", "sentry", "tracker"}
 	codex, _ := Defaults().KindSpec(KindCodex)
-	if got := codex.ConfigOffArgs(user, project, nil); !slices.Equal(got, []string{"-c", "mcp_servers.browser.enabled=false", "-c", "mcp_servers.docs.enabled=false"}) {
+	if got := codex.ConfigOffArgs(user, project, nil); !slices.Equal(got, []string{"-c", "features.apps=false", "-c", "mcp_servers.browser.enabled=false", "-c", "mcp_servers.docs.enabled=false"}) {
 		t.Fatalf("project_mcp allow: %q, want the user's servers only", got)
 	}
 	off := mustLoad(t, map[string]string{"config.toml": "[kinds.codex]\nproject_mcp = \"OFF\"\nmcp_allow = [\"tracker\"]\n" + minimalConfig})
 	k, _ := off.KindSpec(KindCodex)
-	want := []string{"-c", "mcp_servers.browser.enabled=false", "-c", "mcp_servers.docs.enabled=false", "-c", "mcp_servers.sentry.enabled=false"}
+	want := []string{"-c", "features.apps=false", "-c", "mcp_servers.browser.enabled=false", "-c", "mcp_servers.docs.enabled=false", "-c", "mcp_servers.sentry.enabled=false"}
 	if got := k.ConfigOffArgs(user, project, nil); !slices.Equal(got, want) {
 		t.Fatalf("project_mcp off: %q\nwant %q", got, want)
 	}

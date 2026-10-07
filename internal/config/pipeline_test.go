@@ -372,7 +372,7 @@ resume = ["--session", "{session}"]
 func TestArgv(t *testing.T) {
 	k := DefaultKinds()
 	if got := k["codex"].Argv(LaunchArgs{Session: "u-1", Title: "PR #1 codex-judge - r", Effort: "xhigh", Wrapper: true}); !slices.Equal(got,
-		[]string{"resume", "u-1", "-c", "model_reasoning_effort=xhigh"}) {
+		[]string{"resume", "u-1", "-c", "model_reasoning_effort=xhigh", "-c", "features.apps=false"}) {
 		t.Errorf("codex = %q", got)
 	}
 	if got := k["claude"].Argv(LaunchArgs{Session: "u-2", Title: "PR #1 claude-review - r", Effort: "high", Wrapper: true}); !slices.Equal(got,

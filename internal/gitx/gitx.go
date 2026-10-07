@@ -529,9 +529,11 @@ func literalPaths(paths []string) ([]string, error) {
 // repository's top, taken literally: a directory or a file) whose state on
 // disk differs from base, as a tool reading them sees them: committed and
 // uncommitted changes and deletions (git diff base -- paths), and the
-// untracked files, ignored ones included (git ls-files --others). Sorted,
-// without duplicates; nil when they all match base.
-func (c *Client) WorkTreeChanges(ctx context.Context, dir, base string, paths ...string) ([]string, error) {
+// untracked files, ignored ones included (git ls-files --others), except
+// those skip reports (nil skips none), e.g. logs the tool never reads; a
+// tracked change counts whatever skip says of its path. Sorted, without
+// duplicates; nil when they all match base.
+func (c *Client) WorkTreeChanges(ctx context.Context, dir, base string, skip func(untracked string) bool, paths ...string) ([]string, error) {
 	if err := checkRev("revision", base); err != nil {
 		return nil, err
 	}
@@ -552,8 +554,13 @@ func (c *Client) WorkTreeChanges(ctx context.Context, dir, base string, paths ..
 		return nil, err
 	}
 	var changed []string
-	for _, p := range strings.Split(string(diff.Stdout)+"\x00"+string(others.Stdout), "\x00") {
+	for _, p := range strings.Split(string(diff.Stdout), "\x00") {
 		if p != "" {
+			changed = append(changed, p)
+		}
+	}
+	for _, p := range strings.Split(string(others.Stdout), "\x00") {
+		if p != "" && (skip == nil || !skip(p)) {
 			changed = append(changed, p)
 		}
 	}

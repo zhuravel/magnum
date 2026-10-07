@@ -25,7 +25,7 @@ func TestClaudeStartsWithoutTheUsersMCPServers(t *testing.T) {
 			t.Fatalf("%+v: argv = %q, want --strict-mcp-config after the effort", a, got)
 		}
 	}
-	if codex, _ := Defaults().KindSpec(KindCodex); len(codex.MCPStrict) > 0 || slices.Contains(codex.Argv(LaunchArgs{}), "--strict-mcp-config") {
+	if codex, _ := Defaults().KindSpec(KindCodex); slices.Contains(codex.Argv(LaunchArgs{}), "--strict-mcp-config") {
 		t.Fatalf("codex mcp_strict = %q", codex.MCPStrict)
 	}
 

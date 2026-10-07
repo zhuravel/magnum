@@ -30,7 +30,7 @@ enabled = false
 command = "dotted-mcp"
 `
 
-var mcpOffArgs = []string{"-c", "mcp_servers.browser.enabled=false", "-c", "mcp_servers.docs.enabled=false"}
+var mcpOffArgs = []string{"-c", "features.apps=false", "-c", "mcp_servers.browser.enabled=false", "-c", "mcp_servers.docs.enabled=false"}
 
 // Magnum's Codex sessions loaded every MCP server of the operator's Codex
 // config. A judge launched or resumed passes -c mcp_servers.<name>.enabled=false
@@ -75,8 +75,8 @@ func TestJudgeKeepsTheMCPServersAllowedOrWhenMCPOffIsFalse(t *testing.T) {
 		edit func(k *config.Kind)
 		want []string
 	}{
-		"allowed":       {func(k *config.Kind) { k.MCPAllow = []string{"docs"} }, []string{"-c", "mcp_servers.browser.enabled=false"}},
-		"all allowed":   {func(k *config.Kind) { k.MCPAllow = []string{"docs", "browser"} }, nil},
+		"allowed":       {func(k *config.Kind) { k.MCPAllow = []string{"docs"} }, []string{"-c", "features.apps=false", "-c", "mcp_servers.browser.enabled=false"}},
+		"all allowed":   {func(k *config.Kind) { k.MCPAllow = []string{"docs", "browser"} }, []string{"-c", "features.apps=false"}},
 		"mcp_off false": {func(k *config.Kind) { k.MCPOff = false }, nil},
 	} {
 		e := newEnv(t)
@@ -150,9 +150,44 @@ enabled = false
 	}
 }
 
+// Codex's built-in apps connector (codex_apps, ChatGPT's connectors) is
+// no [mcp_servers] table, so turning servers off by name misses it: a
+// codex review with every server off still searched the web through it.
+// The codex kind's mcp_off also turns the apps feature off, once, on a
+// launch, a resume and codex-review's line alike, servers or none;
+// mcp_off = false leaves it on.
+func TestCodexRunsWithoutTheAppsConnector(t *testing.T) {
+	appsOff := []string{"-c", "features.apps=false"}
+	for _, resume := range []string{"", "01a0-uuid"} {
+		e := newEnv(t)
+		ws := e.workspace()
+		if err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleJudge), ws.Panes[RoleJudge], resume); err != nil {
+			t.Fatal(err)
+		}
+		want := slices.Concat([]string{"-c", "model_reasoning_effort=xhigh", "-c", "agents.max_concurrent_threads_per_session=2"}, appsOff)
+		if resume != "" {
+			want = slices.Concat([]string{"resume", resume}, want)
+		}
+		if got := e.h.starts[0].Args; !slices.Equal(got, want) {
+			t.Fatalf("resume %q: args = %q\nwant %q", resume, got, want)
+		}
+	}
+	e := newEnv(t)
+	d := ShellData{BaseRef: "origin/master", ReportPath: "/r/codex.md", Marker: DoneMarker("r-1")}
+	role := e.spec(RoleCodexReview)
+	if got, err := e.m.ShellLine(e.ctx, e.pr.ID, role, d); err != nil || !strings.Contains(got, "review -c model_reasoning_effort=high -c features.apps=false --base") {
+		t.Fatalf("codex-review: line = %q, %v", got, err)
+	}
+	e.setKind(KindCodex, func(k *config.Kind) { k.MCPOff = false })
+	if got, err := e.m.ShellLine(e.ctx, e.pr.ID, role, d); err != nil || strings.Contains(got, "features.apps") {
+		t.Fatalf("mcp_off false: line = %q, %v", got, err)
+	}
+}
+
 // codex review is a Codex session too: codex-review's line (its command
 // and the full-line codex-review.sh) passes the same -c per server, after
-// its effort, and none when they are allowed or mcp_off is false.
+// its effort and the apps connector's, none when they are allowed, and
+// neither when mcp_off is false.
 func TestCodexReviewRunsWithoutTheOperatorsMCPServers(t *testing.T) {
 	e := newEnv(t)
 	writeFile(t, e.codexConfig, codexMCPConfig, 0o600)
@@ -168,7 +203,7 @@ func TestCodexReviewRunsWithoutTheOperatorsMCPServers(t *testing.T) {
 		}
 	}
 	e.setKind(KindCodex, func(k *config.Kind) { k.MCPAllow = []string{"browser", "docs"} })
-	if got, err := e.m.ShellLine(e.ctx, e.pr.ID, role, d); err != nil || !strings.Contains(got, "review -c model_reasoning_effort=high --base") {
+	if got, err := e.m.ShellLine(e.ctx, e.pr.ID, role, d); err != nil || !strings.Contains(got, "review -c model_reasoning_effort=high -c features.apps=false --base") {
 		t.Fatalf("all allowed: line = %q, %v", got, err)
 	}
 	e.setKind(KindCodex, func(k *config.Kind) { k.MCPAllow, k.MCPOff = nil, false })

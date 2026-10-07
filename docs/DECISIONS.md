@@ -2991,3 +2991,47 @@ editing history. Code, config comments and prompts reference these by their head
   re-review read the whole PR again: 5 to 12 responses in a resumed session, up to 56 in a cold one. It now says
   that in a re-review section 2 covers section 6's scope (the new commits; the earlier reviews cover the rest) and
   that `own_findings` holds section 6's decisions too.
+- **Untracked log files under `.claude/` and `.codex/` do not decline the project config** (2026-10-07; amends "A
+  PR that changes `.claude/` or `.mcp.json` runs Claude with the user's settings only"). In one day 8
+  `agents.claude_project_declined` events came from PRs that changed no `.claude/` path: a base branch's own team
+  hook writes its gitignored `.claude/log/tool_use.log*` into every slot it runs in, and the comparison counts
+  untracked files, ignored ones included, so every later Claude session of those slots lost the team's settings,
+  skills and `CLAUDE.md`, and six posted reviews said "Claude ran without the PR's .claude/ and .mcp.json
+  changes" when the PR had none. An untracked file under a kind's project directory now counts unless it is a
+  log: a base name ending in `.log` or `.log.<digits>`, or a file under `log/` or `logs/` right inside the
+  directory (`.claude/log/`, `.codex/logs/`; `agents.projectConfig.logFile`, applied by
+  `gitx.Client.WorkTreeChanges` to the `git ls-files --others` list only). The security property holds: neither
+  Claude Code (settings, local settings, skills, commands, agents, rules, output styles, `CLAUDE.md`, `.mcp.json`)
+  nor Codex (`config.toml`, hooks, `*.rules`) loads a log file as configuration, so nothing a PR or a round can
+  put there reaches a session. Every other untracked file, ignored or not, still declines, as does anything a CLI
+  may load now or later: `settings.local.json`, a skill (one named `logs`, `.claude/skills/logs/`, too: the
+  directory rule is for the top level only), a log-like `tool_use.log.old`. A tracked change counts whatever its
+  name, a committed `.claude/log/x.log` too (the PR's commits are what the rule guards first, and a tracked log
+  is rare). The rule ignores whether git ignores the file: the question is what a CLI loads, not what git tracks.
+- **The judge hears of a declined project config only from a kind the round ran** (2026-10-07). The PR's
+  `pr.<id>.<kind>_project` record names the kind's last launch on a head, which may be a session the round did not
+  run: a posted review said "Claude ran without the PR's .claude/ and .mcp.json changes" though no Claude role ran
+  in its round (claude-review had been launched for the head earlier). `NoteDeclinedProjects`
+  now takes the agent kinds of the round's roles that run, the judge's included, and sets `claude_project` or
+  `codex_project` only for a kind among them. The judge counts: a Codex judge that ran on a head whose Codex
+  record declined started either untrusted on it or on an earlier head before the PR's `.codex/` changes (Codex
+  reads its project config at start only), so it ran without them either way; with the default codex judge the
+  Codex note is as before, and a non-Codex judge no longer reports a Codex decline no Codex role of its round had.
+  The board's card still says what the head's sessions did, whichever round ran them.
+- **Codex's apps connector is off with its MCP servers** (2026-10-07; extends "Magnum's Codex sessions run without
+  the operator's MCP servers"). A `codex review` started with every `[mcp_servers]` table turned off still called
+  `mcp__codex_apps__search_service_web_run` with a query naming a private repository and a branch: `codex_apps`
+  is Codex's built-in apps connector (ChatGPT's connectors; the binary's instructions call an app "a set of MCP
+  tools within the `codex_apps` MCP"), declared by no `[mcp_servers]` table, so `-c
+  mcp_servers.<name>.enabled=false` never names it. Codex 0.160 gates it on the stable `apps` feature, on by
+  default (`codex features list`: `apps stable true`; `-c features.apps=false` and `--disable apps`, which
+  `codex review --help` lists too, turn it to `false`). The codex kind's `mcp_strict` is now
+  `["-c", "features.apps=false"]`, passed once under `mcp_off` before the per-server `mcp_disable` args: every
+  launch and resume, and codex-review's `.MCPOff`. `mcp_strict` was Claude's all-at-once switch; it is now any
+  kind's args that keep servers out whatever their names, so no new key. `mcp_allow` does not apply to it;
+  `mcp_strict = []` keeps the connector, `mcp_off = false` keeps it and the servers. `magnum roles --kinds`
+  prints it as "(once, whatever the servers' names)" for a kind that also turns servers off by name. Not
+  verified in a live session (magnum never starts one for a check): that the connector's tools are gone with
+  the feature off; the feature list says it is off. Rejected:
+  `--disable apps` (a flag, where every other Codex override magnum passes is `-c`, and a wrapper gets the same
+  `-c`); `[apps.<id>] enabled = false` per app (the apps are the account's, many and changing).

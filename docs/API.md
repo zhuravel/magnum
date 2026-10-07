@@ -394,10 +394,13 @@ func NewRunID(now time.Time) string
     marker, and a review with the marker posted by another login is an identity
     leak, so the random part keeps outsiders from guessing it.
 
-func NoteDeclinedProjects(ctx context.Context, st *store.Store, prID int64, head string, jd *JudgeData)
+func NoteDeclinedProjects(ctx context.Context, st *store.Store, prID int64, head string, kinds []string, jd *JudgeData)
     NoteDeclinedProjects sets the judge's CodexProjectDeclined and
     ClaudeProjectDeclined from the PR's records of head (the round's), which
-    each launch of those CLIs writes.
+    each launch of those CLIs writes, for the kinds among the round's roles only
+    (kinds: their agent kinds, the judge's included): a record names the kind's
+    last launch on the head, which may be a session the round did not run (a
+    reviewer paused, or left out of the round).
 
 func NotesFiles(notesPath string) (dir, lock string)
     NotesFiles returns the harness directory and the lock of the repository
@@ -829,7 +832,7 @@ type JudgeData struct {
 	// ClaudeProjectDeclined: the same for its Claude sessions, which loaded
 	// the user's settings only because the PR changes .claude/ or
 	// .mcp.json, rendered as `claude_project: declined`. Both are set by
-	// NoteDeclinedProjects.
+	// NoteDeclinedProjects, each only in a round with a role of its kind.
 	CodexProjectDeclined, ClaudeProjectDeclined bool
 }
     JudgeData feeds every judge prompt (judge-*.md). Fields a template does not
@@ -2426,9 +2429,10 @@ func DefaultKinds() map[string]Kind
       - codex (0.160): args ["--dangerously-bypass-approvals-and-sandbox"],
         resume ["resume","{session}"], model ["--model","{model}"], effort
         ["-c","model_reasoning_effort={effort}"], rename "/rename {title}",
-        login_check "codex login status" + login_ok "text:Logged in", mcp_off
-        true with mcp_disable ["-c","mcp_servers.{server}.enabled=false"],
-        project_untrust ["-c","projects={projects}"].
+        login_check "codex login status" + login_ok "text:Logged in",
+        mcp_off true with mcp_strict ["-c","features.apps=false"] and
+        mcp_disable ["-c","mcp_servers.{server}.enabled=false"], project_untrust
+        ["-c","projects={projects}"].
       - claude: args ["--dangerously-skip-permissions"], resume
         ["--resume","{session}"], model ["--model","{model}"], effort
         ["--effort","{effort}"], name ["--name","{title}"], login_check
@@ -3013,20 +3017,22 @@ type Kind struct {
 	NoSubagents []string `toml:"no_subagents"`
 	// MCPOff: keep the user's MCP servers out of every session of the kind
 	// (see MCPOffArgs; codex and claude: true), through MCPStrict, which
-	// turns them all off at once, and MCPDisable, which turns off each
-	// server a session would load from the Codex config ([mcp_servers.<name>]
-	// tables not set enabled = false) except those in MCPAllow: Codex merges
-	// -c tables into its config, so servers go off only one by one, by name.
-	// A kind with neither ignores it.
+	// turns servers off whatever their names, and MCPDisable, which turns
+	// off each server a session would load from the Codex config
+	// ([mcp_servers.<name>] tables not set enabled = false) except those in
+	// MCPAllow: Codex merges -c tables into its config, so servers go off
+	// only one by one, by name. A kind with neither ignores it.
 	MCPOff   bool     `toml:"mcp_off"`
 	MCPAllow []string `toml:"mcp_allow"`
-	// MCPStrict: args that keep every MCP server of the user's
-	// configuration out of a session at once, passed once under MCPOff,
-	// e.g. claude's ["--strict-mcp-config"] (Claude Code 2.1.292 then loads
-	// only the servers of --mcp-config: none of the user, local, project or
-	// plugin servers, nor claude.ai connectors). MCPAllow does not apply;
-	// args naming a file of servers to keep ("--mcp-config", "<path>") go
-	// in this list.
+	// MCPStrict: args passed once under MCPOff that keep MCP servers out of
+	// a session whatever their names: claude's ["--strict-mcp-config"]
+	// (Claude Code 2.1.292 then loads only the servers of --mcp-config:
+	// none of the user, local, project or plugin servers, nor claude.ai
+	// connectors), codex's ["-c", "features.apps=false"] (Codex 0.160's
+	// built-in apps connector, the codex_apps server of ChatGPT's
+	// connectors, which no [mcp_servers] table declares). MCPAllow does not
+	// apply; args naming a file of servers to keep ("--mcp-config",
+	// "<path>") go in this list.
 	MCPStrict []string `toml:"mcp_strict"`
 	// MCPDisable: args that turn off MCP server {server}, passed once per
 	// server, e.g. codex's ["-c", "mcp_servers.{server}.enabled=false"].
@@ -6900,13 +6906,15 @@ func (c *Client) UpdateRefDelete(ctx context.Context, mainClone, ref string) err
     never followed: one pointing outside refs/magnum/ is refused, and the delete
     runs with --no-deref so git removes the ref itself, not its target.
 
-func (c *Client) WorkTreeChanges(ctx context.Context, dir, base string, paths ...string) ([]string, error)
-    WorkTreeChanges lists the files at or under paths (each relative to the
-    repository's top, taken literally: a directory or a file) whose state
-    on disk differs from base, as a tool reading them sees them: committed
-    and uncommitted changes and deletions (git diff base -- paths), and the
-    untracked files, ignored ones included (git ls-files --others). Sorted,
-    without duplicates; nil when they all match base.
+func (c *Client) WorkTreeChanges(ctx context.Context, dir, base string, skip func(untracked string) bool, paths ...string) ([]string, error)
+    WorkTreeChanges lists the files at or under paths (each relative to
+    the repository's top, taken literally: a directory or a file) whose
+    state on disk differs from base, as a tool reading them sees them:
+    committed and uncommitted changes and deletions (git diff base -- paths),
+    and the untracked files, ignored ones included (git ls-files --others),
+    except those skip reports (nil skips none), e.g. logs the tool never reads;
+    a tracked change counts whatever skip says of its path. Sorted, without
+    duplicates; nil when they all match base.
 
 func (c *Client) WorktreeAdd(ctx context.Context, mainClone, path, ref string, detach bool, branch string) error
     WorktreeAdd creates a worktree at the absolute path, checking out ref.

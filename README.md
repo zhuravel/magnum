@@ -782,9 +782,12 @@ global `AGENTS.md`, but without your MCP servers. Codex merges `-c` tables into 
 goes off only by name: every launch and resume of the judge, and `codex review`'s line, reads the
 `[mcp_servers.<name>]` tables of the `config.toml` Codex reads (in the `CODEX_HOME` of the kind's or role's
 `env`, else `$CODEX_HOME`, else `~/.codex`) and passes `-c mcp_servers.<name>.enabled=false` for each one
-not already disabled there. `[kinds.codex] mcp_allow = ["docs"]` keeps the servers it names, `mcp_off =
-false` keeps them all; a name that is no TOML bare key (letters, digits, `_`, `-`) stays on, with a log
-line. A custom codex-review `command` needs `{{range .MCPOff}} {{.}}{{end}}` for the same. Magnum never
+not already disabled there. Codex's built-in apps connector (the `codex_apps` server of ChatGPT's
+connectors, which a `codex review` with every server off still searched the web through) is no such table:
+the same launches pass `-c features.apps=false` once (`[kinds.codex] mcp_strict`; `[]` keeps it on).
+`mcp_allow = ["docs"]` keeps the servers it names, `mcp_off = false` keeps them all and the connector; a
+name that is no TOML bare key (letters, digits, `_`, `-`) stays on, with a log line. A custom
+codex-review `command` needs `{{range .MCPOff}} {{.}}{{end}}` for the same. Magnum never
 gives its sessions a `CODEX_HOME` of their own (the login, the session files, the folder trust and the
 hooks live there), so your global `AGENTS.md` still loads; the judge skill tells the judge that your
 instructions for interactive work (status lines, usage checks, delegation skills) do not apply in a
@@ -799,7 +802,10 @@ project_untrust`): that session treats the checkout as an untrusted folder and l
 nothing is written to your config, and Magnum answers Codex's "Folder access" with "Open restricted".
 Codex then also leaves the checkout's `AGENTS.md` out of its instructions; the judge skill reads it anyway.
 An `agents.codex_project_declined` event records it, the board's card says "Codex ran without the PR's
-.codex/ changes" and so does the review's Checks. A PR that leaves `.codex/` alone gets the base branch's
+.codex/ changes" and so does the review's Checks of a round with a Codex role (the judge included).
+Untracked log files are no change: a file under `.codex/log/` or `.codex/logs/`, or one named `*.log` or
+`*.log.<digits>`, which a team's own hook may write into every checkout and Codex never loads; any other
+untracked file, ignored or not, still counts, and so does a tracked log. A PR that leaves `.codex/` alone gets the base branch's
 (the team's) project config as before; `project_mcp = "off"` turns its MCP servers off too, but for
 `mcp_allow`. Not covered: a Codex TUI that attaches to a running Codex app-server daemon hands it only
 some of its `-c` flags (Codex 0.160), so the MCP servers and the trust may then not be Magnum's to set; a
@@ -813,7 +819,9 @@ merge base (or git cannot tell), every launch and resume of a claude role (claud
 passes `--setting-sources user` (`[kinds.claude] project_untrust`): the session loads your user settings,
 skills and agents and nothing of the checkout's. An `agents.claude_project_declined` event
 records it, the board's card says "Claude ran without the PR's .claude/ and .mcp.json changes" and so
-does the review's Checks. A PR that leaves both alone keeps the team's project config. Claude Code reloads
+does the review's Checks of a round with a Claude role. Untracked logs under `.claude/` are no change, as
+for Codex (a team hook's gitignored `.claude/log/tool_use.log` would otherwise decline every later
+session); a gitignored `settings.local.json`, skill or anything else still declines. A PR that leaves both alone keeps the team's project config. Claude Code reloads
 its settings and skills while it runs, and loads a `.claude/settings.json` a later commit adds, so a
 Claude session that started with the project config loaded is quit (its conversation parked) before
 Magnum moves the checkout to a new head that changes it, at a round's start and at a restart after a push,

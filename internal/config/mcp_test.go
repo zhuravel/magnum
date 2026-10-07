@@ -10,25 +10,28 @@ import (
 // config. Codex merges -c tables into that config, so a server can be
 // turned off only by name: the codex kind's mcp_off (default true) passes
 // mcp_disable once per server the session would load, after the effort and
-// subagent args, except the servers in mcp_allow.
+// subagent args, except the servers in mcp_allow. Its built-in apps
+// connector (codex_apps) is no such table: mcp_strict turns the apps
+// feature off once, servers or none, whatever mcp_allow names.
 func TestCodexTurnsOffTheMCPServersItWouldLoadButTheAllowedOnes(t *testing.T) {
 	codex, _ := Defaults().KindSpec(KindCodex)
 	if !codex.MCPOff || len(codex.MCPAllow) != 0 {
 		t.Fatalf("codex mcp_off = %v, mcp_allow = %q; want true and none", codex.MCPOff, codex.MCPAllow)
 	}
+	appsOff := []string{"-c", "features.apps=false"}
 	servers := []string{"browser", "docs"}
 	got := codex.Argv(LaunchArgs{Effort: "xhigh", MCPServers: servers, Wrapper: true})
-	want := []string{"-c", "model_reasoning_effort=xhigh", "-c", "mcp_servers.browser.enabled=false", "-c", "mcp_servers.docs.enabled=false"}
+	want := []string{"-c", "model_reasoning_effort=xhigh", "-c", "features.apps=false", "-c", "mcp_servers.browser.enabled=false", "-c", "mcp_servers.docs.enabled=false"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("codex argv = %q, want %q", got, want)
 	}
-	if got := codex.MCPOffArgs(nil); got != nil {
-		t.Fatalf("no servers: %q, want none", got)
+	if got := codex.MCPOffArgs(nil); !slices.Equal(got, appsOff) {
+		t.Fatalf("no servers: %q, want the apps connector off alone", got)
 	}
 
 	allowed := mustLoad(t, map[string]string{"config.toml": "[kinds.codex]\nmcp_allow = [\"docs\"]\n" + minimalConfig})
 	k, _ := allowed.KindSpec(KindCodex)
-	if got := k.MCPOffArgs(servers); !slices.Equal(got, []string{"-c", "mcp_servers.browser.enabled=false"}) {
+	if got := k.MCPOffArgs(servers); !slices.Equal(got, slices.Concat(appsOff, []string{"-c", "mcp_servers.browser.enabled=false"})) {
 		t.Fatalf("mcp_allow docs: %q", got)
 	}
 	on := mustLoad(t, map[string]string{"config.toml": "[kinds.codex]\nmcp_off = false\n" + minimalConfig})

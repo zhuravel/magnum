@@ -86,7 +86,7 @@ func untrustArgs(dir string) []string {
 	return k.UntrustArgs(withRealPath(dir))
 }
 
-var judgeLaunchArgs = []string{"-c", "model_reasoning_effort=xhigh", "-c", "agents.max_concurrent_threads_per_session=2"}
+var judgeLaunchArgs = []string{"-c", "model_reasoning_effort=xhigh", "-c", "agents.max_concurrent_threads_per_session=2", "-c", "features.apps=false"}
 
 // A PR controls its checkout's .codex/ (MCP servers Codex starts or sends
 // the slot's secrets to, hooks, rules, settings), and magnum trusts its
@@ -141,7 +141,7 @@ func TestCodexReviewOfAPRChangingCodexRunsWithTheCheckoutUntrusted(t *testing.T)
 		t.Fatal(err)
 	}
 	untrust := untrustArgs(dir)
-	want := "command codex review -c model_reasoning_effort=high -c " + shellQuote(untrust[1]) + " --base " + projectMergeBase
+	want := "command codex review -c model_reasoning_effort=high -c features.apps=false -c " + shellQuote(untrust[1]) + " --base " + projectMergeBase
 	if !strings.Contains(got, want) {
 		t.Fatalf("line = %q\nwant it to contain %q", got, want)
 	}
@@ -309,5 +309,28 @@ func TestRestrictedFolderDialogIsOpenedRestricted(t *testing.T) {
 	}
 	if n := len(e.h.prompts); n != 2 {
 		t.Fatalf("prompts = %d, want 2", n)
+	}
+}
+
+// Codex never loads a log file from .codex/ either: untracked logs there
+// (under .codex/log/ or .codex/logs/, or named *.log or *.log.<digits>)
+// leave the team's .codex/ trusted, while an untracked rule file still
+// untrusts the checkout.
+func TestCodexKeepsTheTeamsProjectWhenOnlyLogFilesAreUntracked(t *testing.T) {
+	for untracked, declined := range map[string]bool{".codex/logs/hook.txt": false, ".codex/hooks/run.log.3": false, ".codex/rules/x.rules": true} {
+		e, dir, ws := projectEnv(t, map[string]string{".codex/config.toml": "model = \"x\"\n"}, nil, []string{untracked})
+		if err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleJudge), ws.Panes[RoleJudge], ""); err != nil {
+			t.Fatal(err)
+		}
+		want := judgeLaunchArgs
+		if declined {
+			want = slices.Concat(judgeLaunchArgs, untrustArgs(dir))
+		}
+		if got := e.h.starts[0].Args; !slices.Equal(got, want) {
+			t.Fatalf("untracked %s: args = %q\nwant %q", untracked, got, want)
+		}
+		if evs := projectEvents(t, e); len(evs) != map[bool]int{true: 1}[declined] {
+			t.Fatalf("untracked %s: events = %+v", untracked, evs)
+		}
 	}
 }
