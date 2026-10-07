@@ -46,7 +46,7 @@ func TestStatusShowsInfraPauseDrainAndCodexBudget(t *testing.T) {
 	actContains(t, out,
 		"daemon: draining for a restart since",
 		"codex:    87% used of the weekly limit (pro), resets ",
-		"at the soft cap 80%: first reviews wait",
+		"at the soft cap 80%: full re-reviews wait",
 		"infra: infrastructure failure SSH key refused until",
 		"Permission denied (publickey)",
 		"magnum probes `git ls-remote` and resumes by itself",

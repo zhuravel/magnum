@@ -107,7 +107,7 @@ func TestStatusCodexPaceSkipsACapAlreadyReached(t *testing.T) {
 		t.Fatalf("codex = %+v", u)
 	}
 	text := statusCodexText(*u, now)
-	if want := "at the soft cap 80%: first reviews wait; pace 1.7x: 95% " + inspClock(now, *u.HardAt); !strings.HasSuffix(text, want) {
+	if want := "at the soft cap 80%: full re-reviews wait; pace 1.7x: 95% " + inspClock(now, *u.HardAt); !strings.HasSuffix(text, want) {
 		t.Fatalf("text = %q, want suffix %q", text, want)
 	}
 

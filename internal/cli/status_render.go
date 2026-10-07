@@ -189,7 +189,7 @@ func statusCodexText(u statusCodexUsage, now time.Time) string {
 	case u.Hard > 0 && pct >= u.Hard:
 		s += fmt.Sprintf("; at the hard cap %g%%: rounds that need Codex pause", u.Hard)
 	case u.Soft > 0 && pct >= u.Soft:
-		s += fmt.Sprintf("; at the soft cap %g%%: first reviews wait", u.Soft)
+		s += fmt.Sprintf("; at the soft cap %g%%: full re-reviews wait", u.Soft)
 	case u.Soft > 0 || u.Hard > 0:
 		s += fmt.Sprintf("; caps %g%%/%g%%", u.Soft, u.Hard)
 	}
