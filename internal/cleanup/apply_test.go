@@ -275,6 +275,9 @@ func TestApplyRemoveWorktree(t *testing.T) {
 	}
 }
 
+// A forced removal runs the live guard, which saves nothing (the slots
+// package's Guard would save the drift or changes the force discards as a
+// hold that outlives a failed removal), and stops at a human's agent.
 func TestApplyForceRunsGuardFirst(t *testing.T) {
 	f := newFixture(t)
 	mk := func(n int) store.Slot {
@@ -283,9 +286,8 @@ func TestApplyForceRunsGuardFirst(t *testing.T) {
 		f.git.status[sl.Path] = gitx.Status{Tracked: 1}
 		return sl
 	}
-	agent, drift, ok := mk(1), mk(2), mk(3)
-	f.slots.errs["guard "+agent.Name] = slots.ErrHold{Reason: slots.HoldForeignAgent, Detail: "pane p1"}
-	f.slots.errs["guard "+drift.Name] = slots.ErrHold{Reason: slots.HoldHeadDrift, Detail: "HEAD moved"}
+	agent, dirty, ok := mk(1), mk(2), mk(3)
+	f.slots.errs["guard_live "+agent.Name] = slots.ErrHold{Reason: slots.HoldForeignAgent, Detail: "pane p1"}
 
 	rep, err := f.apply(f.plan(Options{Force: true}), false)
 	if err == nil || rep.Failed != 1 || rep.Done != 2 {
@@ -295,9 +297,9 @@ func TestApplyForceRunsGuardFirst(t *testing.T) {
 		t.Fatalf("err = %v, want foreign_agent hold", err)
 	}
 	want := []string{
-		"guard " + agent.Name,
-		"guard " + drift.Name, "remove_pr " + drift.Name + " force=true",
-		"guard " + ok.Name, "remove_pr " + ok.Name + " force=true",
+		"guard_live " + agent.Name,
+		"guard_live " + dirty.Name, "remove_pr " + dirty.Name + " force=true",
+		"guard_live " + ok.Name, "remove_pr " + ok.Name + " force=true",
 	}
 	if !slices.Equal(f.slots.calls, want) {
 		t.Fatalf("calls = %v\nwant %v", f.slots.calls, want)
@@ -448,6 +450,48 @@ func TestApplyResetExternal(t *testing.T) {
 	}
 	if evs := f.events("path:" + ev.Path); len(evs) != 1 || evs[0].Kind != "cleanup.reset_external" {
 		t.Fatalf("events = %+v", evs)
+	}
+}
+
+// A forced reset writes what it discards before the reset: the tracked paths
+// (untracked files stay) and the commits HEAD and the placeholder branch were
+// at, so work the force dropped can be found again (git branch <name> <sha>).
+func TestApplyForcedResetExternalRecordsWhatItDiscards(t *testing.T) {
+	f := newFixture(t)
+	ev := f.external("repo3", func(e *inventory.ExternalView) { e.Branch = "feature-x" })
+	f.git.status[ev.Path] = gitx.Status{Tracked: 2, Untracked: 1}
+	f.git.paths[ev.Path] = []gitx.StatusEntry{{X: ' ', Y: 'M', Path: "app/a.rb"}, {X: 'A', Y: ' ', Path: "db/schema.rb"},
+		{X: '?', Y: '?', Path: "notes.txt"}}
+	f.git.unpushed[ev.Path] = 1
+	f.git.branches[ev.Path+" refs/heads/repo3"] = 2
+
+	rep, err := f.apply(f.plan(Options{External: true, Slot: "repo3", Force: true}), false)
+	if err != nil || rep.Done != 1 {
+		t.Fatalf("rep = %+v err = %v", rep, err)
+	}
+	evs := f.events("path:" + ev.Path)
+	if len(evs) != 2 || evs[0].Kind != "cleanup.discarded" || evs[1].Kind != "cleanup.reset_external" {
+		t.Fatalf("events = %+v, want what is discarded, then the reset", evs)
+	}
+	msg := evs[0].Message
+	for _, want := range []string{"2 tracked change(s)", "app/a.rb", "db/schema.rb", "HEAD was " + headSHA,
+		"branch repo3 was " + branchSHA} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("discarded event %q does not name %s", msg, want)
+		}
+	}
+	if strings.Contains(msg, "notes.txt") {
+		t.Errorf("discarded event %q names an untracked file the reset keeps", msg)
+	}
+
+	// Without --force nothing is discarded, and nothing is recorded.
+	g := newFixture(t)
+	clean := g.external("repo3", nil)
+	if _, err := g.apply(g.plan(Options{External: true, Slot: "repo3"}), false); err != nil {
+		t.Fatal(err)
+	}
+	if evs := g.events("path:" + clean.Path); len(evs) != 1 || evs[0].Kind != "cleanup.reset_external" {
+		t.Fatalf("unforced events = %+v", evs)
 	}
 }
 

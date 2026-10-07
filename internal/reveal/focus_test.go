@@ -16,7 +16,7 @@ func TestFocusITerm(t *testing.T) {
 	t.Run("focused when a client tty is an iTerm session", func(t *testing.T) {
 		r, f := newTest(terminalCfg("iTerm2", "work"), psRule(psWithWorkClient),
 			osaRule(func(string) (string, error) { return "/dev/ttys050", nil }))
-		res, err := r.FocusExisting(ctx())
+		res, err := r.focusExisting(ctx())
 		if res != Focused || err != nil {
 			t.Fatalf("got %v %v", res, err)
 		}
@@ -28,13 +28,13 @@ func TestFocusITerm(t *testing.T) {
 	t.Run("missing when the tty is in another terminal", func(t *testing.T) {
 		r, _ := newTest(terminalCfg("iTerm2", "work"), psRule(psWithWorkClient),
 			osaRule(func(string) (string, error) { return "miss", nil }))
-		if res, err := r.FocusExisting(ctx()); res != Missing || err != nil {
+		if res, err := r.focusExisting(ctx()); res != Missing || err != nil {
 			t.Fatalf("got %v %v", res, err)
 		}
 	})
 	t.Run("missing without running osascript when there is no client", func(t *testing.T) {
 		r, f := newTest(terminalCfg("iTerm2", "work"), psRule("100 ttys050  herdr --session other\n"))
-		if res, err := r.FocusExisting(ctx()); res != Missing || err != nil {
+		if res, err := r.focusExisting(ctx()); res != Missing || err != nil {
 			t.Fatalf("got %v %v", res, err)
 		}
 		if len(f.CallsWithPrefix(osascript)) != 0 {
@@ -44,14 +44,14 @@ func TestFocusITerm(t *testing.T) {
 	t.Run("unavailable when ps fails", func(t *testing.T) {
 		boom := errors.New("ps failed")
 		r, _ := newTest(terminalCfg("iTerm2", "work"), errRule(boom, psBin))
-		if res, err := r.FocusExisting(ctx()); res != Unavailable || !errors.Is(err, boom) {
+		if res, err := r.focusExisting(ctx()); res != Unavailable || !errors.Is(err, boom) {
 			t.Fatalf("got %v %v", res, err)
 		}
 	})
 	t.Run("unavailable when osascript fails", func(t *testing.T) {
 		boom := errors.New("not authorized")
 		r, _ := newTest(terminalCfg("iTerm2", "work"), psRule(psWithWorkClient), errRule(boom, osascript))
-		if res, err := r.FocusExisting(ctx()); res != Unavailable || !errors.Is(err, boom) {
+		if res, err := r.focusExisting(ctx()); res != Unavailable || !errors.Is(err, boom) {
 			t.Fatalf("got %v %v", res, err)
 		}
 	})
@@ -60,7 +60,7 @@ func TestFocusITerm(t *testing.T) {
 		// read as "focused".
 		r, _ := newTest(terminalCfg("iTerm2", "work"), psRule(psWithWorkClient),
 			osaRule(func(string) (string, error) { return "", nil }))
-		if res, _ := r.FocusExisting(ctx()); res != Unavailable {
+		if res, _ := r.focusExisting(ctx()); res != Unavailable {
 			t.Fatalf("got %v", res)
 		}
 	})
@@ -70,7 +70,7 @@ func TestFocusITerm(t *testing.T) {
 				mustContain(t, s, `whose tty is "/dev/ttys000"`)
 				return "miss", nil
 			}))
-		if res, err := r.FocusExisting(ctx()); res != Missing || err != nil {
+		if res, err := r.focusExisting(ctx()); res != Missing || err != nil {
 			t.Fatalf("got %v %v", res, err)
 		}
 	})
@@ -79,14 +79,14 @@ func TestFocusITerm(t *testing.T) {
 func TestFocusTerminalApp(t *testing.T) {
 	r, f := newTest(terminalCfg("Terminal", "work"), psRule(psWithWorkClient),
 		osaRule(func(string) (string, error) { return "/dev/ttys050", nil }))
-	if res, err := r.FocusExisting(ctx()); res != Focused || err != nil {
+	if res, err := r.focusExisting(ctx()); res != Focused || err != nil {
 		t.Fatalf("got %v %v", res, err)
 	}
 	mustContain(t, scriptOf(t, f, 0), `tell application "Terminal"`, `set targetTtys to {"/dev/ttys050"}`)
 
 	r, _ = newTest(terminalCfg("Terminal", "work"), psRule(psWithWorkClient),
 		osaRule(func(string) (string, error) { return "miss", nil }))
-	if res, _ := r.FocusExisting(ctx()); res != Missing {
+	if res, _ := r.focusExisting(ctx()); res != Missing {
 		t.Fatalf("got %v", res)
 	}
 }
@@ -110,7 +110,7 @@ func TestFocusGhostty(t *testing.T) {
 				return "focused", nil
 			}),
 			okRule(clearPrefix...))
-		res, err := r.FocusExisting(ctx())
+		res, err := r.focusExisting(ctx())
 		if res != Focused || err != nil {
 			t.Fatalf("got %v %v", res, err)
 		}
@@ -131,14 +131,14 @@ func TestFocusGhostty(t *testing.T) {
 			execx.Rule{Prefix: setPrefix, Result: stdout(`{"changed":true,"reason":"set"}`)},
 			osaRule(func(string) (string, error) { return "focused", nil }),
 			okRule(clearPrefix...))
-		if res, err := r.FocusExisting(ctx()); res != Focused || err != nil {
+		if res, err := r.focusExisting(ctx()); res != Focused || err != nil {
 			t.Fatalf("got %v %v", res, err)
 		}
 	})
 	t.Run("no foreground client is missing and nothing is cleared", func(t *testing.T) {
 		r, f := newTest(terminalCfg("Ghostty", "work"),
 			execx.Rule{Prefix: setPrefix, Result: stdout(titleJSON(false, "no_foreground_client"))})
-		if res, err := r.FocusExisting(ctx()); res != Missing || err != nil {
+		if res, err := r.focusExisting(ctx()); res != Missing || err != nil {
 			t.Fatalf("got %v %v", res, err)
 		}
 		if len(f.Calls) != 1 {
@@ -148,7 +148,7 @@ func TestFocusGhostty(t *testing.T) {
 	t.Run("other unchanged reason is unavailable", func(t *testing.T) {
 		r, f := newTest(terminalCfg("Ghostty", "work"),
 			execx.Rule{Prefix: setPrefix, Result: stdout(titleJSON(false, "unsupported_terminal"))})
-		if res, _ := r.FocusExisting(ctx()); res != Unavailable {
+		if res, _ := r.focusExisting(ctx()); res != Unavailable {
 			t.Fatalf("got %v", res)
 		}
 		if len(f.Calls) != 1 {
@@ -159,7 +159,7 @@ func TestFocusGhostty(t *testing.T) {
 		r, f := newTest(terminalCfg("Ghostty", "work"),
 			errRule(errors.New("timeout"), setPrefix...),
 			okRule(clearPrefix...))
-		if res, _ := r.FocusExisting(ctx()); res != Unavailable {
+		if res, _ := r.focusExisting(ctx()); res != Unavailable {
 			t.Fatalf("got %v", res)
 		}
 		if len(f.CallsWithPrefix(clearPrefix...)) != 1 {
@@ -170,7 +170,7 @@ func TestFocusGhostty(t *testing.T) {
 		r, f := newTest(terminalCfg("Ghostty", "work"),
 			execx.Rule{Prefix: setPrefix, Result: stdout("not json")},
 			okRule(clearPrefix...))
-		if res, _ := r.FocusExisting(ctx()); res != Unavailable {
+		if res, _ := r.focusExisting(ctx()); res != Unavailable {
 			t.Fatalf("got %v", res)
 		}
 		if len(f.CallsWithPrefix(clearPrefix...)) != 1 {
@@ -181,7 +181,7 @@ func TestFocusGhostty(t *testing.T) {
 		r, _ := newTest(terminalCfg("Ghostty", "work"),
 			execx.Rule{Prefix: setPrefix, Result: stdout(`{"error":{"code":"server_not_running","message":"nope"}}`)},
 			okRule(clearPrefix...))
-		if res, err := r.FocusExisting(ctx()); res != Unavailable || err == nil {
+		if res, err := r.focusExisting(ctx()); res != Unavailable || err == nil {
 			t.Fatalf("got %v %v", res, err)
 		}
 	})
@@ -192,7 +192,7 @@ func TestFocusGhostty(t *testing.T) {
 		} {
 			r, f := newTest(terminalCfg("Ghostty", "work"),
 				execx.Rule{Prefix: setPrefix, Result: stdout(titleJSON(true, "set"))}, osa, okRule(clearPrefix...))
-			if res, _ := r.FocusExisting(ctx()); res != Unavailable {
+			if res, _ := r.focusExisting(ctx()); res != Unavailable {
 				t.Fatalf("%s: got %v", name, res)
 			}
 			if len(f.CallsWithPrefix(clearPrefix...)) != 1 {
@@ -212,7 +212,7 @@ func TestFocusGhostty(t *testing.T) {
 				}
 				return execx.Result{}, nil
 			}})
-		if res, _ := r.FocusExisting(ctx()); res != Focused {
+		if res, _ := r.focusExisting(ctx()); res != Focused {
 			t.Fatalf("got %v", res)
 		}
 		if len(f.CallsWithPrefix(clearPrefix...)) != 2 {
@@ -228,9 +228,9 @@ func TestFocusGhostty(t *testing.T) {
 			okRule(clearPrefix...),
 		}}
 		probe := &probeRunner{inner: fake, cancelAfterSet: cancel}
-		r := New(probe, terminalCfg("Ghostty", "work"), testHerdr)
+		r := newRevealer(probe, terminalCfg("Ghostty", "work"), testHerdr)
 		r.newMarker = func() string { return testMarker }
-		_, _ = r.FocusExisting(c)
+		_, _ = r.focusExisting(c)
 		if !probe.cleared {
 			t.Fatalf("clear must still run: %v", names(fake))
 		}
@@ -279,7 +279,7 @@ func TestFocusWezTerm(t *testing.T) {
 			psRule(psWithWorkClient),
 			okRule(testWezTerm, "cli", "activate-pane", "--pane-id", "2"),
 			okRule(openBin, "-a", "WezTerm"))
-		if res, err := r.FocusExisting(ctx()); res != Focused || err != nil {
+		if res, err := r.focusExisting(ctx()); res != Focused || err != nil {
 			t.Fatalf("got %v %v", res, err)
 		}
 		want := []string{
@@ -296,30 +296,30 @@ func TestFocusWezTerm(t *testing.T) {
 		r, _ := newTest(terminalCfg("WezTerm", "work"),
 			execx.Rule{Prefix: listPrefix, Result: stdout(`[{"window_id":4,"pane_id":1,"tty_name":"/dev/ttys001"}]`)},
 			psRule(psWithWorkClient))
-		if res, err := r.FocusExisting(ctx()); res != Missing || err != nil {
+		if res, err := r.focusExisting(ctx()); res != Missing || err != nil {
 			t.Fatalf("got %v %v", res, err)
 		}
 	})
 	t.Run("unavailable when the listing is empty or the CLI fails", func(t *testing.T) {
 		r, _ := newTest(terminalCfg("WezTerm", "work"), execx.Rule{Prefix: listPrefix, Result: stdout("")}, psRule(psWithWorkClient))
-		if res, _ := r.FocusExisting(ctx()); res != Unavailable {
+		if res, _ := r.focusExisting(ctx()); res != Unavailable {
 			t.Fatalf("empty listing: got %v", res)
 		}
 		r, _ = newTest(terminalCfg("WezTerm", "work"), errRule(errors.New("no such file"), testWezTerm), psRule(psWithWorkClient))
-		if res, _ := r.FocusExisting(ctx()); res != Unavailable {
+		if res, _ := r.focusExisting(ctx()); res != Unavailable {
 			t.Fatalf("cli failure: got %v", res)
 		}
 	})
 	t.Run("unavailable when ps or activate-pane fails", func(t *testing.T) {
 		r, _ := newTest(terminalCfg("WezTerm", "work"),
 			execx.Rule{Prefix: listPrefix, Result: stdout(listing)}, errRule(errors.New("ps"), psBin))
-		if res, _ := r.FocusExisting(ctx()); res != Unavailable {
+		if res, _ := r.focusExisting(ctx()); res != Unavailable {
 			t.Fatalf("ps failure: got %v", res)
 		}
 		r, _ = newTest(terminalCfg("WezTerm", "work"),
 			execx.Rule{Prefix: listPrefix, Result: stdout(listing)}, psRule(psWithWorkClient),
 			errRule(errors.New("boom"), testWezTerm, "cli", "activate-pane"))
-		if res, _ := r.FocusExisting(ctx()); res != Unavailable {
+		if res, _ := r.focusExisting(ctx()); res != Unavailable {
 			t.Fatalf("activate failure: got %v", res)
 		}
 	})
@@ -328,7 +328,7 @@ func TestFocusWezTerm(t *testing.T) {
 func TestFocusUnscriptableTerminals(t *testing.T) {
 	for _, app := range []string{"custom", "generic", "Muxy Beta", "Alacritty"} {
 		r, f := newTest(terminalCfg(app, "work"))
-		res, err := r.FocusExisting(ctx())
+		res, err := r.focusExisting(ctx())
 		if res != Unavailable || err == nil {
 			t.Errorf("%s: got %v %v", app, res, err)
 		}
@@ -342,7 +342,7 @@ func TestFocusCancelledContext(t *testing.T) {
 	c, cancel := context.WithCancel(context.Background())
 	cancel()
 	r, f := newTest(terminalCfg("iTerm2", "work"), psRule(psWithWorkClient))
-	res, err := r.FocusExisting(c)
+	res, err := r.focusExisting(c)
 	if res != Unavailable || !errors.Is(err, context.Canceled) {
 		t.Fatalf("got %v %v", res, err)
 	}
@@ -359,7 +359,7 @@ func TestEmptySessionMeansDefault(t *testing.T) {
 			}
 			return "/dev/ttys001", nil
 		}))
-	if res, _ := r.FocusExisting(ctx()); res != Focused {
+	if res, _ := r.focusExisting(ctx()); res != Focused {
 		t.Fatalf("got %v", res)
 	}
 }

@@ -31,6 +31,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/herdr"
@@ -38,6 +39,7 @@ import (
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // Git is the subset of *gitx.Client the scanner reads.
@@ -49,9 +51,7 @@ type Git interface {
 }
 
 // MySQL is the subset of *mysqlx.Client the scanner reads.
-type MySQL interface {
-	ListSuffixed(ctx context.Context) ([]mysqlx.Database, error)
-}
+type MySQL = slots.DBLister
 
 // Herdr is the subset of *herdr.Client the scanner reads.
 type Herdr interface {
@@ -112,15 +112,8 @@ const (
 	StateSourceGitHub = "github"
 )
 
-const (
-	// SlugFile is the worktree's database slug marker (slots.MarkerFile),
-	// written by the Talkable repo's bin/worktree-setup.
-	SlugFile = slots.MarkerFile
-	// AgentPrefix starts every herdr agent name magnum gives (slots.AgentPrefix).
-	AgentPrefix = slots.AgentPrefix
-	// DroppedBy is slot_databases.dropped_by for databases that disappeared from MySQL.
-	DroppedBy = "reconcile"
-)
+// droppedBy is slot_databases.dropped_by for databases that disappeared from MySQL.
+const droppedBy = "reconcile"
 
 // ErrNotListed is returned by UpsertSlotDatabases when the scan could not list
 // MySQL: recording would mark every database dropped.
@@ -352,11 +345,11 @@ func (sc *scan) loadRegistry(ctx context.Context) error {
 			continue
 		}
 		if sl.State == store.SlotRemoved {
-			sc.removedPaths[canon(sl.Path)] = sl.Name
+			sc.removedPaths[fsx.Canon(sl.Path)] = sl.Name
 			continue
 		}
 		sc.managed = append(sc.managed, sl)
-		sc.managedPaths[canon(sl.Path)] = true
+		sc.managedPaths[fsx.Canon(sl.Path)] = true
 	}
 	repos, err := st.ListRepos(ctx)
 	if err != nil {
@@ -458,7 +451,7 @@ func (sc *scan) addClone(path, repo string) {
 		return
 	}
 	path = filepath.Clean(paths.Expand(path))
-	cp := canon(path)
+	cp := fsx.Canon(path)
 	if i, ok := sc.cloneIdx[cp]; ok {
 		c := sc.clones[i]
 		if c.repo == "" {
@@ -481,7 +474,7 @@ func (sc *scan) cloneFor(path string) *clone {
 	if path == "" {
 		return nil
 	}
-	if i, ok := sc.cloneIdx[canon(paths.Expand(path))]; ok {
+	if i, ok := sc.cloneIdx[fsx.Canon(paths.Expand(path))]; ok {
 		return sc.clones[i]
 	}
 	return nil
@@ -524,7 +517,7 @@ func (sc *scan) loadAgents(ctx context.Context) {
 	}
 	sc.inv.AgentsListed = true
 	for _, a := range snap.Agents {
-		sc.agents = append(sc.agents, agentAt{info: a, cwd: canon(a.Cwd), fgd: canon(a.ForegroundCwd)})
+		sc.agents = append(sc.agents, agentAt{info: a, cwd: fsx.Canon(a.Cwd), fgd: fsx.Canon(a.ForegroundCwd)})
 	}
 }
 
@@ -537,7 +530,7 @@ func (sc *scan) agentsUnder(root string) []AgentView {
 		i := a.info
 		v := AgentView{
 			Name: i.Name, Agent: i.Agent, Status: i.AgentStatus, PaneID: i.PaneID, WorkspaceID: i.WorkspaceID, Cwd: i.Cwd,
-			Magnum: sc.ownedNames[i.Name] || sc.ownedPanes[i.PaneID] || strings.HasPrefix(i.Name, AgentPrefix),
+			Magnum: sc.ownedNames[i.Name] || sc.ownedPanes[i.PaneID] || strings.HasPrefix(i.Name, slots.AgentPrefix),
 		}
 		if i.AgentSession != nil {
 			v.SessionID = i.AgentSession.Value
@@ -612,7 +605,7 @@ func (sc *scan) buildSlots(ctx context.Context) error {
 		v.Databases = sc.dbViews(v.Slug, expected)
 		sc.known[v.Slug] = true
 		if v.Exists {
-			v.Agents = sc.agentsUnder(canon(sl.Path))
+			v.Agents = sc.agentsUnder(fsx.Canon(sl.Path))
 		}
 
 		if !v.Exists && !slices.Contains(lostExempt, sl.State) {
@@ -624,7 +617,7 @@ func (sc *scan) buildSlots(ctx context.Context) error {
 			}
 		}
 		if want := store.Deref(sl.CheckedOutSHA); want != "" && v.Head != "" && v.Head != want && slices.Contains(headTracked, sl.State) {
-			sc.addFinding(KindHeadDrift, subject, false, "HEAD is %s, registry checked out %s (slot %s)", short(v.Head), short(want), sl.State)
+			sc.addFinding(KindHeadDrift, subject, false, "HEAD is %s, registry checked out %s (slot %s)", textx.ShortSHA(v.Head), textx.ShortSHA(want), sl.State)
 		}
 		if v.Assignment != nil {
 			if err := sc.checkAssignmentPR(ctx, sl, v.Assignment, v.PR); err != nil {
@@ -694,7 +687,7 @@ func (sc *scan) buildExternal(ctx context.Context) error {
 			continue
 		}
 		for i, wt := range c.list {
-			cp := canon(wt.Path)
+			cp := fsx.Canon(wt.Path)
 			if wt.Bare || seen[cp] || sc.managedPaths[cp] {
 				continue
 			}
@@ -743,7 +736,7 @@ func (sc *scan) fillExternal(ctx context.Context, ev *ExternalView) error {
 	ev.Databases = sc.dbViews(ev.Slug, nil)
 	ev.Agents = []AgentView{}
 	if ev.Exists {
-		ev.Agents = sc.agentsUnder(canon(ev.Path))
+		ev.Agents = sc.agentsUnder(fsx.Canon(ev.Path))
 	}
 	if ev.Branch != "" {
 		dir := ev.MainClone
@@ -792,7 +785,7 @@ func (sc *scan) fillExternal(ctx context.Context, ev *ExternalView) error {
 func (sc *scan) findUnknownDirs() {
 	seen := map[string]bool{}
 	report := func(dir, slotKind string) {
-		cp := canon(dir)
+		cp := fsx.Canon(dir)
 		if seen[cp] || sc.managedPaths[cp] {
 			return
 		}
@@ -811,7 +804,7 @@ func (sc *scan) findUnknownDirs() {
 		if !strings.Contains(tmpl, "{n}") {
 			continue
 		}
-		re := templateRegexp(tmpl)
+		re := slots.TemplateRegexp(tmpl)
 		matches := sc.glob(templateGlob(tmpl))
 		for _, m := range matches {
 			if !re.MatchString(m) {
@@ -1074,12 +1067,12 @@ func (sc *scan) isDir(p string) (dir, conclusive bool) {
 	return false, false
 }
 
-// readSlug returns dir's slug marker (SlugFile), "" when there is none.
+// readSlug returns dir's slug marker (slots.MarkerFile), "" when there is none.
 // conclusive is false when the marker exists but could not be read
 // (permission, I/O): that is warned about and marks ownership discovery
 // incomplete.
 func (sc *scan) readSlug(dir string) (slug string, conclusive bool) {
-	b, err := os.ReadFile(filepath.Join(dir, SlugFile))
+	b, err := os.ReadFile(filepath.Join(dir, slots.MarkerFile))
 	switch {
 	case err == nil:
 		return strings.TrimSpace(string(b)), true
@@ -1120,13 +1113,6 @@ func timePtr(t time.Time) *time.Time {
 		return nil
 	}
 	return &t
-}
-
-func short(sha string) string {
-	if len(sha) > 10 {
-		return sha[:10]
-	}
-	return sha
 }
 
 func orDash(s string) string {

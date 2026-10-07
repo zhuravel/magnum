@@ -44,7 +44,7 @@ paths = ["app/**/search*.rb"]
 `
 
 func TestParseCorpusReadsAFullCorpus(t *testing.T) {
-	c, err := ParseCorpus([]byte(validCorpus))
+	c, err := parseCorpus("", []byte(validCorpus))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestParseCorpusRejectsUnknownKeysNamingTheirCaseAndDefect(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := ParseCorpus([]byte(tt.src))
+			_, err := parseCorpus("", []byte(tt.src))
 			if err == nil {
 				t.Fatal("unknown key was accepted")
 			}
@@ -178,7 +178,7 @@ head = "` + sha + `"
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := ParseCorpus([]byte(tt.src))
+			_, err := parseCorpus("", []byte(tt.src))
 			if err == nil {
 				t.Fatal("invalid corpus was accepted")
 			}
@@ -209,7 +209,7 @@ head = "` + sha + `"
 id = "d"
 title = "t"
 `
-	_, err := ParseCorpus([]byte(src))
+	_, err := parseCorpus("", []byte(src))
 	if err == nil {
 		t.Fatal("invalid corpus was accepted")
 	}
@@ -231,13 +231,13 @@ title = "t"
 paths = ["**/*.rb", "app/**/oauth*.rb", "lib/[a-c]*.rb", "x/**"]
 match = ["(?i)foo|bar", "a{2}", "\\bP1\\b"]
 `
-	if _, err := ParseCorpus([]byte(src)); err != nil {
+	if _, err := parseCorpus("", []byte(src)); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestParseCorpusReportsTOMLSyntaxErrors(t *testing.T) {
-	if _, err := ParseCorpus([]byte("[[case]\nname =")); err == nil || !strings.HasPrefix(err.Error(), "eval: corpus") {
+	if _, err := parseCorpus("", []byte("[[case]\nname =")); err == nil || !strings.HasPrefix(err.Error(), "eval: corpus") {
 		t.Fatalf("syntax error = %v, want an eval: corpus error", err)
 	}
 }
@@ -266,7 +266,7 @@ func TestLoadCorpusReadsAFileAndNamesItInErrors(t *testing.T) {
 }
 
 func TestSelect(t *testing.T) {
-	c, err := ParseCorpus([]byte(validCorpus))
+	c, err := parseCorpus("", []byte(validCorpus))
 	if err != nil {
 		t.Fatal(err)
 	}

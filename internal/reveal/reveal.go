@@ -155,10 +155,10 @@ type Revealer struct {
 	wezTermBin string
 }
 
-// New builds a Revealer from config.Terminal. herdrBin is the herdr executable
+// newRevealer builds a Revealer from config.Terminal. herdrBin is the herdr executable
 // (typed into the new terminal tab and used for the Ghostty title calls); empty
 // means "herdr" on PATH. An empty session means "default".
-func New(run execx.Runner, cfg config.Terminal, herdrBin string) *Revealer {
+func newRevealer(run execx.Runner, cfg config.Terminal, herdrBin string) *Revealer {
 	session := strings.TrimSpace(cfg.Session)
 	if session == "" {
 		session = defaultSession
@@ -177,9 +177,9 @@ func New(run execx.Runner, cfg config.Terminal, herdrBin string) *Revealer {
 	}
 }
 
-// Reveal is New(run, cfg, herdrBin).Reveal(ctx, opts).
+// Reveal builds a Revealer for cfg and herdrBin and runs its Reveal.
 func Reveal(ctx context.Context, run execx.Runner, cfg config.Terminal, herdrBin string, opts Options) (Outcome, error) {
-	return New(run, cfg, herdrBin).Reveal(ctx, opts)
+	return newRevealer(run, cfg, herdrBin).Reveal(ctx, opts)
 }
 
 // Reveal focuses the existing herdr client when there is one. When the
@@ -189,13 +189,13 @@ func Reveal(ctx context.Context, run execx.Runner, cfg config.Terminal, herdrBin
 // see); a custom launcher has no app to raise, so it launches.
 func (r *Revealer) Reveal(ctx context.Context, opts Options) (Outcome, error) {
 	out := Outcome{Kind: r.kind, Session: r.session}
-	res, focusErr := r.FocusExisting(ctx)
+	res, focusErr := r.focusExisting(ctx)
 	switch res {
 	case Focused:
 		out.Action = ActionFocused
 		return out, nil
 	case Missing:
-		if err := r.Launch(ctx, opts); err != nil {
+		if err := r.launch(ctx, opts); err != nil {
 			return out, fmt.Errorf("launch herdr client in %s: %w", r.kind, err)
 		}
 		out.Action = ActionLaunched
@@ -208,7 +208,7 @@ func (r *Revealer) Reveal(ctx context.Context, opts Options) (Outcome, error) {
 		return out, focusErr // bringing the app forward would not show the client
 	}
 	if r.kind == KindCustom {
-		if err := r.Launch(ctx, opts); err != nil {
+		if err := r.launch(ctx, opts); err != nil {
 			return out, fmt.Errorf("launch herdr client with custom launcher: %w", err)
 		}
 		out.Action = ActionLaunched
@@ -224,9 +224,9 @@ func (r *Revealer) Reveal(ctx context.Context, opts Options) (Outcome, error) {
 	return out, nil
 }
 
-// FocusExisting looks for a herdr client of the session in the configured
+// focusExisting looks for a herdr client of the session in the configured
 // terminal and focuses it. The error accompanies Unavailable and says why.
-func (r *Revealer) FocusExisting(ctx context.Context) (FocusResult, error) {
+func (r *Revealer) focusExisting(ctx context.Context) (FocusResult, error) {
 	if err := ctx.Err(); err != nil {
 		return Unavailable, err
 	}

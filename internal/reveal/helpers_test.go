@@ -26,7 +26,7 @@ func terminalCfg(app, session string) config.Terminal {
 // and WezTerm binary so tests never touch the filesystem or randomness.
 func newTest(cfg config.Terminal, rules ...execx.Rule) (*Revealer, *execx.Fake) {
 	f := &execx.Fake{Rules: rules}
-	r := New(f, cfg, testHerdr)
+	r := newRevealer(f, cfg, testHerdr)
 	r.newMarker = func() string { return testMarker }
 	r.wezTermBin = testWezTerm
 	return r, f

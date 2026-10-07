@@ -17,11 +17,12 @@ import (
 
 const (
 	// bootoutWait bounds how long Install waits, after bootout, for launchd to
-	// finish tearing the old job down (bootout returns before the daemon has
-	// exited; its own shutdown and any child it kills can take tens of seconds,
-	// and the CLI budgets 30 s for a SIGTERMed daemon). bootoutPoll separates
-	// the Status polls.
-	bootoutWait = 30 * time.Second
+	// finish tearing the old job down. bootout returns before the daemon has
+	// exited, and its shutdown can take about 52 s (30 s for its rounds, then
+	// the toasts' drain), so launchd lets it run for the plist's ExitTimeOut
+	// and then SIGKILLs it: the wait covers that and the teardown after it.
+	// bootoutPoll separates the Status polls.
+	bootoutWait = ExitTimeOut*time.Second + 5*time.Second
 	bootoutPoll = time.Second
 
 	// bootstrapAttempts is how many times Install runs `launchctl bootstrap`
@@ -71,7 +72,8 @@ func launchctl(label string, mutates bool, args ...string) execx.Cmd {
 // bootout does not wait for the old job to finish tearing down, and
 // bootstrapping into that window fails with "Input/output error". Install
 // therefore polls Status once a second until launchd no longer knows the job
-// (at most 30 s; a job that is still loaded then is reported as such), and
+// (at most bootoutWait, the plist's ExitTimeOut plus 5 s; a job that is still
+// loaded then is reported as such), and
 // only then bootstraps. The transient error can still show up, so bootstrap is
 // retried up to three times, one second apart, on that error only; any other
 // failure is returned immediately. When the retries run out, the error blames

@@ -7,7 +7,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -34,22 +33,17 @@ type (
 type handlerFunc func(p json.RawMessage) (any, *Error)
 
 // fakeServer is an in-process herdr socket. Like the real server it answers
-// exactly one request per connection and then closes it, except for
-// events.subscribe, which acks and then streams whatever is pushed on events.
+// exactly one request per connection and then closes it.
 type fakeServer struct {
-	t      *testing.T
-	path   string
-	ln     net.Listener
-	events chan any
+	t    *testing.T
+	path string
+	ln   net.Listener
 
 	mu       sync.Mutex
 	handlers map[string]handlerFunc
 	reqs     []fakeRequest
 	conns    int
-	// subscribed is closed (once) when a subscription ack has been written.
-	subscribed chan struct{}
-	subOnce    sync.Once
-	done       chan struct{}
+	done     chan struct{}
 }
 
 // shortTempDir returns a temp dir short enough for a unix socket path
@@ -72,13 +66,11 @@ func newFakeServer(t *testing.T) *fakeServer {
 		t.Fatalf("listen: %v", err)
 	}
 	s := &fakeServer{
-		t:          t,
-		path:       path,
-		ln:         ln,
-		events:     make(chan any, 16),
-		handlers:   map[string]handlerFunc{},
-		subscribed: make(chan struct{}),
-		done:       make(chan struct{}),
+		t:        t,
+		path:     path,
+		ln:       ln,
+		handlers: map[string]handlerFunc{},
+		done:     make(chan struct{}),
 	}
 	go s.serve()
 	t.Cleanup(func() {
@@ -165,10 +157,6 @@ func (s *fakeServer) serveConn(conn net.Conn) {
 	h := s.handlers[req.Method]
 	s.mu.Unlock()
 
-	if req.Method == "events.subscribe" && h == nil {
-		s.serveSubscribe(conn, req)
-		return
-	}
 	if h == nil {
 		s.write(conn, map[string]any{"id": "", "error": map[string]string{
 			"code": "invalid_request", "message": fmt.Sprintf("invalid request: unknown variant `%s`", req.Method)}})
@@ -201,52 +189,6 @@ func (s *fakeServer) serveConn(conn net.Conn) {
 		return
 	}
 	s.write(conn, map[string]any{"id": req.ID, "result": res})
-}
-
-func (s *fakeServer) serveSubscribe(conn net.Conn, req fakeRequest) {
-	var p struct {
-		Subscriptions []map[string]any `json:"subscriptions"`
-	}
-	if err := json.Unmarshal(req.Params, &p); err != nil || p.Subscriptions == nil {
-		s.write(conn, map[string]any{"id": "", "error": map[string]string{"code": "invalid_request", "message": "invalid request: missing field `subscriptions`"}})
-		return
-	}
-	for _, sub := range p.Subscriptions {
-		typ, _ := sub["type"].(string)
-		if strings.HasPrefix(typ, "pane.agent_status_changed") || typ == "pane.output_matched" || typ == "pane.scroll_changed" {
-			if _, ok := sub["pane_id"]; !ok {
-				s.write(conn, map[string]any{"id": "", "error": map[string]string{"code": "invalid_request", "message": "invalid request: missing field `pane_id`"}})
-				return
-			}
-		}
-	}
-	s.write(conn, map[string]any{"id": req.ID, "result": map[string]string{"type": "subscription_started"}})
-	s.subOnce.Do(func() { close(s.subscribed) })
-	for {
-		select {
-		case ev, ok := <-s.events:
-			if !ok {
-				return // server goes away: client sees EOF
-			}
-			if raw, isRaw := ev.(string); isRaw {
-				conn.Write([]byte(raw + "\n"))
-				continue
-			}
-			s.write(conn, ev)
-		case <-s.done:
-			return
-		}
-	}
-}
-
-// waitSubscribed blocks until a subscription has been acked.
-func (s *fakeServer) waitSubscribed() {
-	s.t.Helper()
-	select {
-	case <-s.subscribed:
-	case <-time.After(2 * time.Second):
-		s.t.Fatal("no subscription within 2s")
-	}
 }
 
 // recLogger records log lines.

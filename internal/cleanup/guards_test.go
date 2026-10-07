@@ -279,27 +279,6 @@ func TestExternalResetDetachedChecksHeadAndBranch(t *testing.T) {
 	}
 }
 
-func TestExternalResetWithoutUnpushedRef(t *testing.T) {
-	// A Git client without UnpushedRef cannot count the placeholder branch:
-	// the reset is refused unless the placeholder itself is checked out
-	// (then only HEAD is counted).
-	f := newFixture(t)
-	f.p.Git = plainGit{f.git}
-	other := f.external("repo3", func(e *inventory.ExternalView) { e.Branch = "feature-x" })
-	on := f.external("repo4", nil) // on repo4, the placeholder
-
-	if s := mustSkip(t, f.plan(Options{External: true, Slot: "repo3"}), "path:"+other.Path, SkipUnpushed); !strings.Contains(s.Detail, "UnpushedRef") {
-		t.Fatalf("detail = %q", s.Detail)
-	}
-	if p := f.plan(Options{External: true, Slot: "repo4"}); len(actionsOf(p, KindResetExternal)) != 1 || len(p.Skipped) != 0 {
-		t.Fatalf("placeholder checked out: plan = %+v", p)
-	}
-	f.git.unpushed[on.Path] = 1
-	if s := mustSkip(t, f.plan(Options{External: true, Slot: "repo4"}), "path:"+on.Path, SkipUnpushed); !strings.Contains(s.Detail, "branch repo4") {
-		t.Fatalf("HEAD detail = %q", s.Detail)
-	}
-}
-
 func TestExternalResetIgnoresIdleAgent(t *testing.T) {
 	// Unlike a managed slot (TestSlotGuardSkips), a manual worktree is only
 	// blocked by a working or blocked agent: an idle human session is not.
@@ -468,9 +447,9 @@ func TestApplyForcedRemoveSlotGuardHolds(t *testing.T) {
 		f.dirty(name, 1, 2) // a human's changes: a removal needs --force
 		f.slots.evidence[name] = "someone typed into its PR's magnum panes"
 	}
-	f.slots.errs["guard review1"] = slots.ErrHold{Reason: slots.HoldDirtyWorktree, Detail: "1 tracked, 2 untracked"}
-	f.slots.errs["guard review2"] = slots.ErrHold{Reason: slots.HoldForeignAgent, Detail: "pane p1"}
-	f.slots.errs["guard review3"] = errBoom
+	// review1's changes are what the force is for: the live guard passes it.
+	f.slots.errs["guard_live review2"] = slots.ErrHold{Reason: slots.HoldForeignAgent, Detail: "pane p1"}
+	f.slots.errs["guard_live review3"] = errBoom
 
 	var plan Plan
 	for _, name := range []string{"review1", "review2", "review3"} {
@@ -491,7 +470,7 @@ func TestApplyForcedRemoveSlotGuardHolds(t *testing.T) {
 	if !errors.Is(err, errBoom) {
 		t.Fatalf("err = %v, want the guard failure too", err)
 	}
-	want := []string{"guard review1", "remove review1 force=true", "guard review2", "guard review3"}
+	want := []string{"guard_live review1", "remove review1 force=true", "guard_live review2", "guard_live review3"}
 	if !slices.Equal(f.slots.calls, want) {
 		t.Fatalf("slots calls = %v\nwant %v", f.slots.calls, want)
 	}

@@ -202,3 +202,26 @@ func TestExists(t *testing.T) {
 		t.Errorf("a dangling symlink counts as missing (os.Stat follows it)")
 	}
 }
+
+// Canon is the one spelling slots, inventory and cleanup compare paths in: a
+// symlinked directory and its target are equal, a missing path is only
+// cleaned, and "" stays "".
+func TestCanon(t *testing.T) {
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(dir, link); err != nil {
+		t.Fatal(err)
+	}
+	for in, want := range map[string]string{
+		link + "/":                         dir,
+		filepath.Join(dir, "a", "..", "b"): filepath.Join(dir, "b"),
+		"":                                 "",
+	} {
+		if got := Canon(in); got != want {
+			t.Errorf("Canon(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

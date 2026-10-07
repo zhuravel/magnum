@@ -58,8 +58,8 @@ func (f *fakeSlots) RemovePRWorktree(ctx context.Context, slot store.Slot, force
 	return f.record("remove_pr", slot.Name, fmt.Sprintf("force=%v", force))
 }
 
-func (f *fakeSlots) Guard(ctx context.Context, slot store.Slot) error {
-	return f.record("guard", slot.Name, "")
+func (f *fakeSlots) GuardLive(ctx context.Context, slot store.Slot) error {
+	return f.record("guard_live", slot.Name, "")
 }
 
 func (f *fakeSlots) HumanEvidence(ctx context.Context, slot store.Slot) (string, error) {
@@ -97,9 +97,9 @@ func (f *fakeMySQL) DropAll(ctx context.Context, names []string, g mysqlx.Guard)
 	return out
 }
 
-// fakeGit also has the optional RevParse and UnpushedRef (plainGit hides them).
 type fakeGit struct {
 	status   map[string]gitx.Status
+	paths    map[string][]gitx.StatusEntry // StatusPaths by dir
 	unpushed map[string]int
 	branches map[string]int   // "dir refs/heads/<b>" -> its commits on no remote; absent: no such branch
 	errs     map[string]error // keyed "op dir"
@@ -122,37 +122,34 @@ func (f *fakeGit) Status(ctx context.Context, dir string) (gitx.Status, error) {
 	return f.status[dir], f.err("status", dir)
 }
 
+func (f *fakeGit) StatusPaths(ctx context.Context, dir string) ([]gitx.StatusEntry, error) {
+	return f.paths[dir], f.err("status", dir)
+}
+
 func (f *fakeGit) Unpushed(ctx context.Context, dir string) (int, error) {
 	return f.unpushed[dir], f.err("unpushed", dir)
 }
 
+// RevParse answers HEAD with headSHA and a branch in branches with
+// branchSHA; any other ref does not exist.
 func (f *fakeGit) RevParse(ctx context.Context, dir, ref string) (string, error) {
+	if ref == "HEAD" {
+		return headSHA, f.err("rev-parse", dir)
+	}
 	if _, ok := f.branches[dir+" "+ref]; !ok {
 		return "", fmt.Errorf("fake: %s: %w", ref, gitx.ErrNoSuchRef)
 	}
-	return strings.Repeat("a", 40), f.err("rev-parse", dir)
+	return branchSHA, f.err("rev-parse", dir)
 }
 
 func (f *fakeGit) UnpushedRef(ctx context.Context, dir, ref string) (int, error) {
 	return f.branches[dir+" "+ref], f.err("unpushed-ref", dir)
 }
 
-// plainGit is fakeGit without the optional methods (today's gitx.Client has
-// no UnpushedRef).
-type plainGit struct{ g *fakeGit }
-
-func (p plainGit) FetchBranch(ctx context.Context, mainClone, base string) error {
-	return p.g.FetchBranch(ctx, mainClone, base)
-}
-func (p plainGit) ResetPlaceholder(ctx context.Context, dir, branch, base string) error {
-	return p.g.ResetPlaceholder(ctx, dir, branch, base)
-}
-func (p plainGit) Status(ctx context.Context, dir string) (gitx.Status, error) {
-	return p.g.Status(ctx, dir)
-}
-func (p plainGit) Unpushed(ctx context.Context, dir string) (int, error) {
-	return p.g.Unpushed(ctx, dir)
-}
+var (
+	headSHA   = strings.Repeat("b", 40)
+	branchSHA = strings.Repeat("a", 40)
+)
 
 type fixture struct {
 	t        *testing.T
@@ -200,7 +197,7 @@ func newFixture(t *testing.T) *fixture {
 		slots: &fakeSlots{errs: map[string]error{}, evidence: map[string]string{}},
 		inv:   &fakeInventory{inv: inventory.Inventory{DatabasesListed: true, AgentsListed: true, ClonesListed: true, OrphansKnown: true}},
 		mysql: &fakeMySQL{fail: map[string]error{}},
-		git: &fakeGit{status: map[string]gitx.Status{}, unpushed: map[string]int{},
+		git: &fakeGit{status: map[string]gitx.Status{}, paths: map[string][]gitx.StatusEntry{}, unpushed: map[string]int{},
 			branches: map[string]int{}, errs: map[string]error{}},
 		run: &execx.Fake{},
 	}

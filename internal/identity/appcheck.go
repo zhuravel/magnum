@@ -121,8 +121,13 @@ func (c *appCheck) appInfo(ctx context.Context) (bool, error) {
 			return c.transport("GET /app", err)
 		}
 		if ae.Status == http.StatusUnauthorized || ae.Status == http.StatusForbidden {
+			key := "app_id"
+			if a.cfg.ClientID != "" {
+				key = "client_id"
+			}
 			r.fail("GitHub rejected the App JWT: "+ae.Error(),
-				fmt.Sprintf("check client_id %s for identity %s in config.toml and that $%s holds a current private key of that App", a.issuer(), a.cfg.Name, a.cfg.PrivateKeyEnv))
+				fmt.Sprintf("check %s %s for identity %s in config.toml and that %s holds a current private key of that App",
+					key, a.issuer(), a.cfg.Name, a.keySource()))
 		} else {
 			r.fail(ae.Error())
 		}

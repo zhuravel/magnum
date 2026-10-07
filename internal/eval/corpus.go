@@ -62,12 +62,9 @@ func LoadCorpus(path string) (*Corpus, error) {
 	return parseCorpus(path, data)
 }
 
-// ParseCorpus parses and validates a corpus. It is strict: an unknown key is an error, and every
-// problem found is reported (joined), each naming the case, the defect and the rule broken.
-func ParseCorpus(data []byte) (*Corpus, error) {
-	return parseCorpus("", data)
-}
-
+// parseCorpus parses and validates a corpus read from src ("" when it has no
+// file). It is strict: an unknown key is an error, and every problem found is
+// reported (joined), each naming the case, the defect and the rule broken.
 func parseCorpus(src string, data []byte) (*Corpus, error) {
 	p := &problems{prefix: "eval: corpus"}
 	if src != "" {

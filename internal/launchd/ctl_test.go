@@ -215,7 +215,37 @@ func TestInstallWaitsForTheOldJobToUnload(t *testing.T) {
 	}
 }
 
-// A job that never leaves is waited for 30 s (no longer), then bootstrap is
+// The daemon's own shutdown may take about 52 s (30 s for its rounds, then
+// the toasts' drain), and launchd lets it run for ExitTimeOut (45 s) before
+// SIGKILL: Install waits that long and more, so a slow shutdown is reloaded,
+// not left unloaded with "still loaded" while bootstrap meets the old job.
+func TestInstallOutwaitsTheJobsExitTimeOut(t *testing.T) {
+	if bootoutWait <= ExitTimeOut*time.Second {
+		t.Fatalf("bootoutWait = %v, want more than the plist's ExitTimeOut %ds", bootoutWait, ExitTimeOut)
+	}
+	path := filepath.Join(t.TempDir(), testLabel+".plist")
+	var prints, boots int
+	gone := ExitTimeOut + 2 // seconds after bootout: launchd SIGKILLed the job, then tore it down
+	f := &execx.Fake{Rules: okRules(
+		loadedFor(gone, &prints),
+		execx.Rule{Prefix: []string{"launchctl", "bootstrap"}, Fn: func(c execx.Cmd) (execx.Result, error) {
+			boots++
+			if prints <= gone {
+				return execx.Result{Code: 5, Stderr: []byte(eioStderr)}, &execx.ExitError{Cmd: c, Code: 5, Stderr: eioStderr}
+			}
+			return execx.Result{}, nil
+		}},
+	)}
+	clk := newClock()
+	if err := install(context.Background(), f, 501, path, testPlist(), clk.timing()); err != nil {
+		t.Fatalf("install after a %ds shutdown: %v", gone, err)
+	}
+	if boots != 1 {
+		t.Fatalf("bootstrap attempts = %d, want 1 after the job unloaded", boots)
+	}
+}
+
+// A job that never leaves is waited for bootoutWait (no longer), then bootstrap is
 // still tried and the error says the old job was still loaded, not that the
 // Mac has no console session.
 func TestInstallWaitIsBoundedAndReportsTheStuckJob(t *testing.T) {
@@ -233,12 +263,12 @@ func TestInstallWaitIsBoundedAndReportsTheStuckJob(t *testing.T) {
 	if err == nil {
 		t.Fatal("want error")
 	}
-	// 30 one-second sleeps for the wait, 2 for the EIO fallback.
+	// One-second sleeps for the wait, 2 for the EIO fallback.
 	if clk.total() != bootoutWait+2*bootstrapDelay {
 		t.Fatalf("slept %v, want %v", clk.total(), bootoutWait+2*bootstrapDelay)
 	}
-	if prints != 31 || boots != bootstrapAttempts {
-		t.Fatalf("prints=%d bootstraps=%d, want 31 and %d", prints, boots, bootstrapAttempts)
+	if want := int(bootoutWait/bootoutPoll) + 1; prints != want || boots != bootstrapAttempts {
+		t.Fatalf("prints=%d bootstraps=%d, want %d and %d", prints, boots, want, bootstrapAttempts)
 	}
 	if !strings.Contains(err.Error(), "still loaded") || strings.Contains(err.Error(), "console") {
 		t.Fatalf("error should name the stuck job and not the console session: %v", err)

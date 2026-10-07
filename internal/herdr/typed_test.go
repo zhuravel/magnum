@@ -49,12 +49,6 @@ func typedCases() []typedCase {
 			method: "workspace.close", params: `{"workspace_id":"w1"}`, cli: "herdr workspace close w1", result: ok,
 		},
 		{
-			name:   "workspace rename",
-			call:   func(ctx context.Context, c *Client) error { return c.WorkspaceRename(ctx, "w1", "newlabel") },
-			method: "workspace.rename", params: `{"workspace_id":"w1","label":"newlabel"}`, cli: "herdr workspace rename w1 newlabel",
-			result: map[string]any{"type": "workspace_info", "workspace": map[string]any{"workspace_id": "w1"}},
-		},
-		{
 			name: "workspace report metadata",
 			call: func(ctx context.Context, c *Client) error {
 				return c.WorkspaceReportMetadata(ctx, "w1", "magnum", map[string]string{"a": "b"}, 0)
@@ -69,16 +63,6 @@ func typedCases() []typedCase {
 			},
 			method: "workspace.report_metadata", params: `{"workspace_id":"w1","source":"magnum","tokens":{"a":"b"},"ttl_ms":90000}`,
 			cli: "herdr workspace report-metadata w1 --source magnum --token a=b --ttl-ms 90000", result: ok,
-		},
-		{
-			name: "tab create",
-			call: func(ctx context.Context, c *Client) error {
-				_, err := c.TabCreate(ctx, TabCreateOptions{WorkspaceID: "w1", Cwd: "/tmp", Label: "lab"})
-				return err
-			},
-			method: "tab.create", params: `{"workspace_id":"w1","cwd":"/tmp","focus":false,"label":"lab"}`,
-			cli:    "herdr tab create --workspace w1 --cwd /tmp --label lab --no-focus",
-			result: map[string]any{"type": "tab_created", "tab": map[string]any{"tab_id": "w1:t2"}, "root_pane": map[string]any{"pane_id": "w1:p3"}},
 		},
 		{
 			name: "pane split",
@@ -160,18 +144,6 @@ func typedCases() []typedCase {
 			method: "pane.get", params: `{"pane_id":"w1:p1"}`, cli: "herdr pane get w1:p1", result: pane,
 		},
 		{
-			name:   "pane list",
-			call:   func(ctx context.Context, c *Client) error { _, err := c.PaneList(ctx, ""); return err },
-			method: "pane.list", params: `{}`, cli: "herdr pane list",
-			result: map[string]any{"type": "pane_list", "panes": []any{}},
-		},
-		{
-			name:   "pane list workspace",
-			call:   func(ctx context.Context, c *Client) error { _, err := c.PaneList(ctx, "w1"); return err },
-			method: "pane.list", params: `{"workspace_id":"w1"}`, cli: "herdr pane list --workspace w1",
-			result: map[string]any{"type": "pane_list", "panes": []any{}},
-		},
-		{
 			name: "agent start",
 			call: func(ctx context.Context, c *Client) error {
 				_, err := c.AgentStart(ctx, AgentStartOptions{Name: "mg-x-1-judge", Kind: "codex", PaneID: "w1:p1", Timeout: time.Minute, Args: []string{"resume", "abc", "--flag"}})
@@ -220,11 +192,6 @@ func typedCases() []typedCase {
 			result: map[string]any{"type": "agent_prompted", "agent": map[string]any{"pane_id": "w1:p1"}},
 		},
 		{
-			name:   "agent get",
-			call:   func(ctx context.Context, c *Client) error { _, err := c.AgentGet(ctx, "mg-x"); return err },
-			method: "agent.get", params: `{"target":"mg-x"}`, cli: "herdr agent get mg-x", result: agent,
-		},
-		{
 			name: "agent read",
 			call: func(ctx context.Context, c *Client) error {
 				_, err := c.AgentRead(ctx, "mg-x", ReadOptions{Lines: 40})
@@ -232,12 +199,6 @@ func typedCases() []typedCase {
 			},
 			method: "agent.read", params: `{"target":"mg-x","source":"recent_unwrapped","lines":40,"format":"text","strip_ansi":true}`,
 			cli: "herdr agent read mg-x --source recent-unwrapped --lines 40 --format text", result: read,
-		},
-		{
-			name:   "agent list",
-			call:   func(ctx context.Context, c *Client) error { _, err := c.AgentList(ctx); return err },
-			method: "agent.list", params: `{}`, cli: "herdr agent list",
-			result: map[string]any{"type": "agent_list", "agents": []any{}},
 		},
 		{
 			name:   "agent focus",
@@ -273,18 +234,6 @@ func typedCases() []typedCase {
 			method: "plugin.pane.open", params: `{"plugin_id":"zhuravel.magnum","entrypoint":"picker","placement":"popup","width":"80%","height":30,"focus":true,"env":{"X":"1"}}`,
 			cli:    "herdr plugin pane open --plugin zhuravel.magnum --entrypoint picker --placement popup --width 80% --height 30 --env 'X=<redacted>' --focus",
 			result: map[string]any{"type": "plugin_pane_opened", "plugin_pane": map[string]any{"plugin_id": "zhuravel.magnum", "entrypoint": "picker", "pane": map[string]any{"pane_id": "w1:p9"}}},
-		},
-		{
-			name:   "terminal title set",
-			call:   func(ctx context.Context, c *Client) error { _, err := c.TerminalTitleSet(ctx, "marker123"); return err },
-			method: "client.window_title.set", params: `{"title":"marker123"}`, cli: "herdr terminal title set marker123",
-			result: map[string]any{"type": "client_window_title", "changed": true, "reason": "set"},
-		},
-		{
-			name:   "terminal title clear",
-			call:   func(ctx context.Context, c *Client) error { _, err := c.TerminalTitleClear(ctx); return err },
-			method: "client.window_title.clear", params: `{}`, cli: "herdr terminal title clear",
-			result: map[string]any{"type": "client_window_title", "changed": true, "reason": "cleared"},
 		},
 		{
 			name:   "worktree list",
@@ -439,11 +388,6 @@ func TestEnvValuesAreNeverLogged(t *testing.T) {
 				_, err := c.WorkspaceCreate(ctx, WorkspaceCreateOptions{Cwd: "/w", Env: env})
 				return err
 			}},
-		{"tab create", "tab.create", map[string]any{"type": "tab_created", "tab": map[string]any{"tab_id": "w1:t2"}, "root_pane": map[string]any{"pane_id": "w1:p3"}},
-			func(ctx context.Context, c *Client) error {
-				_, err := c.TabCreate(ctx, TabCreateOptions{WorkspaceID: "w1", Env: env})
-				return err
-			}},
 		{"pane split", "pane.split", map[string]any{"type": "pane_info", "pane": map[string]any{"pane_id": "w1:p2", "workspace_id": "w1", "tab_id": "w1:t1", "agent_status": "unknown"}},
 			func(ctx context.Context, c *Client) error {
 				_, err := c.PaneSplit(ctx, "w1:p1", SplitOptions{Direction: SplitRight, Env: env})
@@ -543,12 +487,6 @@ func TestTypedResultsDecode(t *testing.T) {
 		t.Fatalf("WorkspaceCreate = %+v, %v", wc, err)
 	}
 
-	s.reply("tab.create", json.RawMessage(`{"type":"tab_created","tab":{"tab_id":"w9:t2","workspace_id":"w9"},"root_pane":{"pane_id":"w9:p4"}}`))
-	tc, err := c.TabCreate(ctx, TabCreateOptions{WorkspaceID: "w9"})
-	if err != nil || tc.Tab.ID != "w9:t2" || tc.RootPane.ID != "w9:p4" {
-		t.Fatalf("TabCreate = %+v, %v", tc, err)
-	}
-
 	s.reply("pane.split", json.RawMessage(`{"type":"pane_info","pane":{"pane_id":"w9:p2","workspace_id":"w9","tab_id":"w9:t1","agent_status":"unknown"}}`))
 	sp, err := c.PaneSplit(ctx, "w9:p1", SplitOptions{Direction: SplitDown})
 	if err != nil || sp.ID != "w9:p2" {
@@ -575,12 +513,6 @@ func TestTypedResultsDecode(t *testing.T) {
 		t.Fatalf("AgentPrompt = %+v, %v", ap, err)
 	}
 
-	s.reply("agent.list", json.RawMessage(`{"type":"agent_list","agents":[{"pane_id":"a:p1","agent":"codex","agent_status":"working"},{"pane_id":"b:p1","agent":"claude","agent_status":"idle"}]}`))
-	al, err := c.AgentList(ctx)
-	if err != nil || len(al) != 2 || al[0].Agent != "codex" || al[1].AgentStatus != StatusIdle {
-		t.Fatalf("AgentList = %+v, %v", al, err)
-	}
-
 	s.reply("pane.read", json.RawMessage(`{"type":"pane_read","read":{"pane_id":"w9:p1","workspace_id":"w9","tab_id":"w9:t1","source":"recent_unwrapped","format":"text","text":"line1\nline2","revision":0,"truncated":true}}`))
 	rd, err := c.PaneRead(ctx, "w9:p1", ReadOptions{})
 	if err != nil || rd.Text != "line1\nline2" || !rd.Truncated || rd.Source != "recent_unwrapped" {
@@ -600,12 +532,6 @@ func TestTypedResultsDecode(t *testing.T) {
 	}
 	if got := string(s.last().Params); got != `{"title":"t"}` {
 		t.Fatalf("empty body must be omitted: %s", got)
-	}
-
-	s.reply("client.window_title.set", json.RawMessage(`{"type":"client_window_title","changed":false,"reason":"no_foreground_client"}`))
-	wt, err := c.TerminalTitleSet(ctx, "m")
-	if err != nil || wt.Changed || wt.Reason != "no_foreground_client" {
-		t.Fatalf("TerminalTitleSet = %+v, %v", wt, err)
 	}
 
 	s.reply("worktree.list", json.RawMessage(`{"type":"worktree_list","source":{"repo_key":"/p/t/.git","repo_name":"talkable","repo_root":"/p/t","source_checkout_path":"/p/t","source_workspace_id":"wM"},"worktrees":[{"branch":"main","is_bare":false,"is_detached":false,"is_linked_worktree":false,"is_prunable":false,"label":"talkable","open_workspace_id":"wM","path":"/p/t"},{"branch":null,"is_bare":false,"is_detached":true,"is_linked_worktree":true,"is_prunable":false,"label":"talkable.review1","path":"/p/t.review1"}]}`))

@@ -208,15 +208,15 @@ func TestListRunsOfAMissingRootIsEmpty(t *testing.T) {
 // a "signature" instead: the defect was missed because of the expression, not the review.
 func rescoreFixture(t *testing.T, match string) (*Corpus, Run, func(string) ([]byte, error)) {
 	t.Helper()
-	c, err := ParseCorpus([]byte(`[[case]]
+	c, err := parseCorpus("", []byte(`[[case]]
 name = "oauth-hmac"
 pr = "talkable/talkable#11932"
-head = "` + sha + `"
+head = "`+sha+`"
 [[case.defect]]
 id = "hmac-skip"
 title = "OAuth callback skips HMAC verification"
 severity = "P1"
-match = ["` + match + `"]
+match = ["`+match+`"]
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -268,10 +268,10 @@ func TestRescoreKeepsWhatItCannotRescore(t *testing.T) {
 	old := run.Cases[0].Score
 
 	t.Run("case no longer in the corpus", func(t *testing.T) {
-		other, err := ParseCorpus([]byte(`[[case]]
+		other, err := parseCorpus("", []byte(`[[case]]
 name = "other"
 pr = "example/x#1"
-head = "` + sha + `"
+head = "`+sha+`"
 [[case.defect]]
 id = "d"
 title = "t"
@@ -329,6 +329,42 @@ match = ["x"]
 			t.Errorf("case = %+v, want the original error kept", got.Cases[0])
 		}
 	})
+}
+
+// A rescore that succeeds clears the error an earlier one left; a run error
+// (the round's own) stays.
+func TestRescoreClearsItsOwnStaleError(t *testing.T) {
+	c, run, read := rescoreFixture(t, "hmac|signature")
+	run.Cases[0].Error = "rescore: open /abs/oauth-hmac/result.json: no such file or directory"
+	got := Rescore(run, c, read)
+	if got.Cases[0].Error != "" || got.Cases[0].Score == nil || got.Cases[0].Score.Found != 1 {
+		t.Errorf("case = %+v, want the new score and no error", got.Cases[0])
+	}
+	run.Cases[0].Error = "judge stopped: usage limit"
+	if got := Rescore(run, c, read); got.Cases[0].Error != "judge stopped: usage limit" {
+		t.Errorf("error = %q, want the run's own kept", got.Cases[0].Error)
+	}
+}
+
+// A corpus that pins the case to another head than the run reviewed cannot
+// rescore it (its defects name the new head's lines): the old score stays
+// and the case says why.
+func TestRescoreKeepsTheScoreOfAnotherHead(t *testing.T) {
+	c, run, read := rescoreFixture(t, "hmac|signature")
+	old := run.Cases[0].Score
+	run.Cases[0].Head = strings.Repeat("c", 40)
+	got := Rescore(run, c, read)
+	if got.Cases[0].Score != old {
+		t.Errorf("score = %+v, want the old one", got.Cases[0].Score)
+	}
+	if e := got.Cases[0].Error; !strings.HasPrefix(e, "rescore: ") || !strings.Contains(e, "ccccccc") || !strings.Contains(e, sha[:7]) {
+		t.Errorf("error = %q, want a rescore error naming both heads", e)
+	}
+	run.Cases[0].Head = sha // the same head rescores and clears it
+	run.Cases[0].Error = got.Cases[0].Error
+	if got := Rescore(run, c, read); got.Cases[0].Error != "" || got.Cases[0].Score.Found != 1 {
+		t.Errorf("same head: case = %+v", got.Cases[0])
+	}
 }
 
 func TestRescoreScoresACaseThatHadNoScoreWhenItsResultIsThere(t *testing.T) {

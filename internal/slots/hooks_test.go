@@ -118,8 +118,8 @@ func TestExpandTemplateShellEscapes(t *testing.T) {
 		"'":                     `''\'''`,
 		"é":                     "'é'",
 	} {
-		if got := shellQuote(v); got != want {
-			t.Errorf("shellQuote(%q) = %q, want %q", v, got, want)
+		if got := execx.ShellQuote(v); got != want {
+			t.Errorf("ShellQuote(%q) = %q, want %q", v, got, want)
 		}
 	}
 	// /bin/sh reads each substituted value back as exactly one word.

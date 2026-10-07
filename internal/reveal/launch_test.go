@@ -17,7 +17,7 @@ const wantCommand = testHerdr + " --session work"
 func TestLaunchITerm(t *testing.T) {
 	t.Run("opens a tab in the current window by default", func(t *testing.T) {
 		r, f := newTest(terminalCfg("iTerm2", "work"), osaRule(func(string) (string, error) { return "", nil }))
-		if err := r.Launch(ctx(), Options{}); err != nil {
+		if err := r.launch(ctx(), Options{}); err != nil {
 			t.Fatal(err)
 		}
 		s := scriptOf(t, f, 0)
@@ -31,7 +31,7 @@ func TestLaunchITerm(t *testing.T) {
 	})
 	t.Run("opens a new window when asked", func(t *testing.T) {
 		r, f := newTest(terminalCfg("iTerm2", "work"), osaRule(func(string) (string, error) { return "", nil }))
-		if err := r.Launch(ctx(), Options{NewWindow: true}); err != nil {
+		if err := r.launch(ctx(), Options{NewWindow: true}); err != nil {
 			t.Fatal(err)
 		}
 		s := scriptOf(t, f, 0)
@@ -43,14 +43,14 @@ func TestLaunchITerm(t *testing.T) {
 	t.Run("a failing osascript is an error", func(t *testing.T) {
 		boom := errors.New("not authorized")
 		r, _ := newTest(terminalCfg("iTerm2", "work"), errRule(boom, osascript))
-		if err := r.Launch(ctx(), Options{}); !errors.Is(err, boom) {
+		if err := r.launch(ctx(), Options{}); !errors.Is(err, boom) {
 			t.Fatalf("got %v", err)
 		}
 	})
 	t.Run("escapes the command for AppleScript", func(t *testing.T) {
 		f := &execx.Fake{Rules: []execx.Rule{osaRule(func(string) (string, error) { return "", nil })}}
-		r := New(f, terminalCfg("iTerm2", `we"ird`), `/opt/my "tools"/herdr`)
-		if err := r.Launch(ctx(), Options{}); err != nil {
+		r := newRevealer(f, terminalCfg("iTerm2", `we"ird`), `/opt/my "tools"/herdr`)
+		if err := r.launch(ctx(), Options{}); err != nil {
 			t.Fatal(err)
 		}
 		s := scriptOf(t, f, 0)
@@ -61,7 +61,7 @@ func TestLaunchITerm(t *testing.T) {
 
 func TestLaunchTerminalApp(t *testing.T) {
 	r, f := newTest(terminalCfg("Terminal", "work"), osaRule(func(string) (string, error) { return "", nil }))
-	if err := r.Launch(ctx(), Options{}); err != nil {
+	if err := r.launch(ctx(), Options{}); err != nil {
 		t.Fatal(err)
 	}
 	mustContain(t, scriptOf(t, f, 0), `tell application "Terminal"`, "activate", `do script "`+wantCommand+`"`)
@@ -70,7 +70,7 @@ func TestLaunchTerminalApp(t *testing.T) {
 func TestLaunchGhostty(t *testing.T) {
 	t.Run("tab in the front window by default", func(t *testing.T) {
 		r, f := newTest(terminalCfg("Ghostty", "work"), osaRule(func(string) (string, error) { return "opened", nil }))
-		if err := r.Launch(ctx(), Options{}); err != nil {
+		if err := r.launch(ctx(), Options{}); err != nil {
 			t.Fatal(err)
 		}
 		mustContain(t, scriptOf(t, f, 0),
@@ -83,7 +83,7 @@ func TestLaunchGhostty(t *testing.T) {
 	})
 	t.Run("new window when asked", func(t *testing.T) {
 		r, f := newTest(terminalCfg("Ghostty", "work"), osaRule(func(string) (string, error) { return "opened", nil }))
-		if err := r.Launch(ctx(), Options{NewWindow: true}); err != nil {
+		if err := r.launch(ctx(), Options{NewWindow: true}); err != nil {
 			t.Fatal(err)
 		}
 		s := scriptOf(t, f, 0)
@@ -98,7 +98,7 @@ func TestLaunchGhostty(t *testing.T) {
 			"output": osaRule(func(string) (string, error) { return "weird", nil }),
 		} {
 			r, f := newTest(terminalCfg("Ghostty", "work"), osa, okRule(openBin))
-			if err := r.Launch(ctx(), Options{}); err != nil {
+			if err := r.launch(ctx(), Options{}); err != nil {
 				t.Fatalf("%s: %v", name, err)
 			}
 			c := f.CallsWithPrefix(openBin)
@@ -117,7 +117,7 @@ func TestLaunchGhosttyTimeout(t *testing.T) {
 
 	t.Run("no second instance when the session now has a client", func(t *testing.T) {
 		r, f := newTest(terminalCfg("Ghostty", "work"), timedOut, psRule(psWithWorkClient), okRule(openBin))
-		if err := r.Launch(ctx(), Options{}); err != nil {
+		if err := r.launch(ctx(), Options{}); err != nil {
 			t.Fatal(err)
 		}
 		if openedFallback(f) {
@@ -126,7 +126,7 @@ func TestLaunchGhosttyTimeout(t *testing.T) {
 	})
 	t.Run("falls back when no client appeared", func(t *testing.T) {
 		r, f := newTest(terminalCfg("Ghostty", "work"), timedOut, psRule("101 ttys051  herdr --session other\n"), okRule(openBin))
-		if err := r.Launch(ctx(), Options{}); err != nil {
+		if err := r.launch(ctx(), Options{}); err != nil {
 			t.Fatal(err)
 		}
 		if !openedFallback(f) {
@@ -135,7 +135,7 @@ func TestLaunchGhosttyTimeout(t *testing.T) {
 	})
 	t.Run("falls back when the process list fails", func(t *testing.T) {
 		r, f := newTest(terminalCfg("Ghostty", "work"), timedOut, errRule(errors.New("ps broke"), psBin), okRule(openBin))
-		if err := r.Launch(ctx(), Options{}); err != nil {
+		if err := r.launch(ctx(), Options{}); err != nil {
 			t.Fatal(err)
 		}
 		if !openedFallback(f) {
@@ -144,7 +144,7 @@ func TestLaunchGhosttyTimeout(t *testing.T) {
 	})
 	t.Run("an ordinary scripting error never consults ps", func(t *testing.T) {
 		r, f := newTest(terminalCfg("Ghostty", "work"), errRule(errors.New("denied"), osascript), okRule(openBin))
-		if err := r.Launch(ctx(), Options{}); err != nil {
+		if err := r.launch(ctx(), Options{}); err != nil {
 			t.Fatal(err)
 		}
 		if len(f.CallsWithPrefix(psBin)) != 0 || !openedFallback(f) {
@@ -162,7 +162,7 @@ func TestLaunchWezTerm(t *testing.T) {
 			execx.Rule{Prefix: listPrefix, Result: stdout(listing)},
 			execx.Rule{Prefix: []string{testWezTerm, "cli", "spawn"}, Result: stdout("9\n")},
 			okRule(openBin, "-a", "WezTerm"))
-		if err := r.Launch(ctx(), Options{}); err != nil {
+		if err := r.launch(ctx(), Options{}); err != nil {
 			t.Fatal(err)
 		}
 		want := []string{
@@ -178,7 +178,7 @@ func TestLaunchWezTerm(t *testing.T) {
 		r, f := newTest(terminalCfg("WezTerm", "work"),
 			execx.Rule{Prefix: []string{testWezTerm, "cli", "spawn"}, Result: stdout("9")},
 			okRule(openBin, "-a", "WezTerm"))
-		if err := r.Launch(ctx(), Options{NewWindow: true}); err != nil {
+		if err := r.launch(ctx(), Options{NewWindow: true}); err != nil {
 			t.Fatal(err)
 		}
 		if got := f.CallsWithPrefix(testWezTerm, "cli", "spawn"); len(got) != 1 ||
@@ -194,7 +194,7 @@ func TestLaunchWezTerm(t *testing.T) {
 			execx.Rule{Prefix: listPrefix, Result: stdout("[]")},
 			execx.Rule{Prefix: []string{testWezTerm, "cli", "spawn"}, Result: stdout("9")},
 			okRule(openBin))
-		if err := r.Launch(ctx(), Options{}); err != nil {
+		if err := r.launch(ctx(), Options{}); err != nil {
 			t.Fatal(err)
 		}
 		if got := f.CallsWithPrefix(testWezTerm, "cli", "spawn"); len(got) != 1 || got[0].Args[2] != "--new-window" {
@@ -206,7 +206,7 @@ func TestLaunchWezTerm(t *testing.T) {
 			execx.Rule{Prefix: listPrefix, Result: stdout(listing)},
 			execx.Rule{Prefix: []string{testWezTerm, "cli", "spawn"}, Result: stdout("oops")},
 			okRule(openBin))
-		if err := r.Launch(ctx(), Options{}); err != nil {
+		if err := r.launch(ctx(), Options{}); err != nil {
 			t.Fatal(err)
 		}
 		c := f.CallsWithPrefix(openBin)
@@ -217,7 +217,7 @@ func TestLaunchWezTerm(t *testing.T) {
 	t.Run("falls back when the CLI is missing", func(t *testing.T) {
 		r, f := newTest(terminalCfg("WezTerm", "work"),
 			errRule(errors.New("not found"), testWezTerm), okRule(openBin))
-		if err := r.Launch(ctx(), Options{}); err != nil {
+		if err := r.launch(ctx(), Options{}); err != nil {
 			t.Fatal(err)
 		}
 		if len(f.CallsWithPrefix(openBin)) != 1 {
@@ -231,7 +231,7 @@ func TestLaunchCustom(t *testing.T) {
 
 	t.Run("runs the expanded template detached through sh", func(t *testing.T) {
 		r, f := newTest(cfg, okRule("/bin/sh"))
-		if err := r.Launch(ctx(), Options{}); err != nil {
+		if err := r.launch(ctx(), Options{}); err != nil {
 			t.Fatal(err)
 		}
 		if len(f.Calls) != 1 {
@@ -249,7 +249,7 @@ func TestLaunchCustom(t *testing.T) {
 	})
 	t.Run("the launcher wins over a scriptable app when set", func(t *testing.T) {
 		r, f := newTest(config.Terminal{App: "iTerm2", Session: "work", Launcher: "term -e {herdr} {args}"}, okRule("/bin/sh"))
-		if err := r.Launch(ctx(), Options{}); err != nil {
+		if err := r.launch(ctx(), Options{}); err != nil {
 			t.Fatal(err)
 		}
 		if len(f.CallsWithPrefix(osascript)) != 0 || len(f.CallsWithPrefix("/bin/sh")) != 1 {
@@ -258,7 +258,7 @@ func TestLaunchCustom(t *testing.T) {
 	})
 	t.Run("custom without a launcher is a configuration error", func(t *testing.T) {
 		r, f := newTest(config.Terminal{App: "custom", Session: "work"})
-		err := r.Launch(ctx(), Options{})
+		err := r.launch(ctx(), Options{})
 		if err == nil || !strings.Contains(err.Error(), "launcher") {
 			t.Fatalf("got %v", err)
 		}
@@ -269,7 +269,7 @@ func TestLaunchCustom(t *testing.T) {
 	t.Run("an invalid template runs nothing", func(t *testing.T) {
 		for _, tpl := range []string{"term -e", `sh -c "{herdr} {args}"`, `a "b`} {
 			r, f := newTest(config.Terminal{App: "custom", Session: "work", Launcher: tpl})
-			if err := r.Launch(ctx(), Options{}); err == nil {
+			if err := r.launch(ctx(), Options{}); err == nil {
 				t.Errorf("%q: want error", tpl)
 			}
 			if len(f.Calls) != 0 {
@@ -280,7 +280,7 @@ func TestLaunchCustom(t *testing.T) {
 	t.Run("a launcher failure surfaces", func(t *testing.T) {
 		boom := errors.New("launcher not found: term")
 		r, _ := newTest(config.Terminal{App: "custom", Session: "work", Launcher: "term -e {herdr}"}, errRule(boom, "/bin/sh"))
-		if err := r.Launch(ctx(), Options{}); !errors.Is(err, boom) {
+		if err := r.launch(ctx(), Options{}); !errors.Is(err, boom) {
 			t.Fatalf("got %v", err)
 		}
 	})
@@ -288,7 +288,7 @@ func TestLaunchCustom(t *testing.T) {
 
 func TestLaunchGeneric(t *testing.T) {
 	r, f := newTest(terminalCfg("Muxy Beta", "work"), okRule(openBin))
-	if err := r.Launch(ctx(), Options{}); err != nil {
+	if err := r.launch(ctx(), Options{}); err != nil {
 		t.Fatal(err)
 	}
 	c := f.CallsWithPrefix(openBin)
@@ -299,7 +299,7 @@ func TestLaunchGeneric(t *testing.T) {
 
 func TestLaunchEmptySessionNamesDefault(t *testing.T) {
 	r, f := newTest(terminalCfg("Terminal", ""), osaRule(func(string) (string, error) { return "", nil }))
-	if err := r.Launch(ctx(), Options{}); err != nil {
+	if err := r.launch(ctx(), Options{}); err != nil {
 		t.Fatal(err)
 	}
 	mustContain(t, scriptOf(t, f, 0), `do script "`+testHerdr+` --session default"`)
@@ -307,8 +307,8 @@ func TestLaunchEmptySessionNamesDefault(t *testing.T) {
 
 func TestLaunchEmptyHerdrBinFallsBackToName(t *testing.T) {
 	f := &execx.Fake{Rules: []execx.Rule{osaRule(func(string) (string, error) { return "", nil })}}
-	r := New(f, terminalCfg("Terminal", "work"), "")
-	if err := r.Launch(ctx(), Options{}); err != nil {
+	r := newRevealer(f, terminalCfg("Terminal", "work"), "")
+	if err := r.launch(ctx(), Options{}); err != nil {
 		t.Fatal(err)
 	}
 	mustContain(t, scriptOf(t, f, 0), `do script "herdr --session work"`)

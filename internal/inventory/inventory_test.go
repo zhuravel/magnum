@@ -655,7 +655,7 @@ func TestUpsertSlotDatabases(t *testing.T) {
 	}
 	for _, r := range all {
 		if r.DBName == "talkable_development__review7" {
-			if r.DroppedAt == nil || store.Deref(r.DroppedBy) != DroppedBy {
+			if r.DroppedAt == nil || store.Deref(r.DroppedBy) != droppedBy {
 				t.Fatalf("review7 row = %+v", r)
 			}
 		} else if r.DroppedAt != nil {
@@ -852,10 +852,10 @@ func TestPathUnder(t *testing.T) {
 }
 
 func TestDatabasesListedByPoolPrefixes(t *testing.T) {
-	t.Run("prefix lister", func(t *testing.T) {
+	t.Run("listed by the pool's prefixes", func(t *testing.T) {
 		f := newFixture(t)
 		f.cfg.Pools[0].Databases = []string{"example_test__{slug}", "example_development__{slug}"}
-		my := &fakePrefixMySQL{}
+		my := &fakeMySQL{}
 		my.add("review1", 1, "example_test", "example_development")
 		my.add("review1", 1, "talkable_development") // not a template of this pool
 		f.slot("review1", store.SlotFree, true)
@@ -867,8 +867,8 @@ func TestDatabasesListedByPoolPrefixes(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(my.prefixes) != 1 || !slices.Equal(my.prefixes[0], []string{"example_development__", "example_test__"}) || my.suffixed != 0 {
-			t.Fatalf("ListPrefixed calls = %v, ListSuffixed calls = %d", my.prefixes, my.suffixed)
+		if len(my.prefixes) != 1 || !slices.Equal(my.prefixes[0], []string{"example_development__", "example_test__"}) {
+			t.Fatalf("ListPrefixed calls = %v", my.prefixes)
 		}
 		if got, want := dbNames(inv.Databases), []string{"example_development__review1", "example_test__review1"}; !inv.DatabasesListed || !slices.Equal(got, want) {
 			t.Fatalf("listed=%v databases = %v, want %v", inv.DatabasesListed, got, want)
@@ -877,10 +877,10 @@ func TestDatabasesListedByPoolPrefixes(t *testing.T) {
 			t.Fatalf("orphans known=%v %v", inv.OrphansKnown, inv.OrphanDBs)
 		}
 	})
-	t.Run("suffix lister filtered to pool prefixes", func(t *testing.T) {
+	t.Run("a database no template names is not listed", func(t *testing.T) {
 		f := newFixture(t)
 		f.db.add("review7", 1, talkableDBs[0])
-		f.db.add("review7", 1, "talkable_other") // ListSuffixed sees it; no pool template names it
+		f.db.add("review7", 1, "talkable_other") // no pool template names it
 
 		inv := f.scan(Options{})
 		want := []string{"talkable_development__review7"}
@@ -889,19 +889,6 @@ func TestDatabasesListedByPoolPrefixes(t *testing.T) {
 		}
 		if got := dbNames(inv.OrphanDBs); !slices.Equal(got, want) {
 			t.Fatalf("orphans = %v, want %v", got, want)
-		}
-	})
-	t.Run("suffix lister cannot list other prefixes", func(t *testing.T) {
-		f := newFixture(t)
-		f.cfg.Pools[0].Databases = []string{"example_development__{slug}"}
-		f.db.add("review7", 1, "example_development")
-
-		inv := f.scan(Options{})
-		if inv.DatabasesListed || inv.OrphansKnown || len(inv.Databases) != 0 || len(inv.OrphanDBs) != 0 {
-			t.Fatalf("listed=%v known=%v databases=%v orphans=%v", inv.DatabasesListed, inv.OrphansKnown, inv.Databases, inv.OrphanDBs)
-		}
-		if !hasWarning(inv, "mysql:", "ListPrefixed") {
-			t.Fatalf("warnings = %v", inv.Warnings)
 		}
 	})
 	t.Run("bad template is a warning", func(t *testing.T) {

@@ -139,12 +139,17 @@ func ListRuns(root string) ([]Run, error) {
 	return runs, nil
 }
 
+// rescoreError starts the Error a rescore sets; a rescore that succeeds clears one.
+const rescoreError = "rescore: "
+
 // Rescore recomputes the score of every case of r from its saved result file against the current
 // defects of the corpus, so a corrected match expression takes effect without running the agents
 // again. read loads a file (os.ReadFile when nil). The run it returns is a copy; r is not changed.
 //
-// A case the corpus no longer has, or that has no result file, keeps its score. A result that cannot
-// be read or parsed keeps the old score too and, when there was one, sets Error to say so.
+// A case the corpus no longer has, or that has no result file, keeps its score. A case the corpus
+// now pins to another head than the run reviewed keeps its score (the defects name the new head's
+// lines), and so does a result that cannot be read or parsed; either sets Error to say so when the
+// case has a score or no other error. A rescore that succeeds clears an Error an earlier one set.
 func Rescore(r Run, c *Corpus, read func(path string) ([]byte, error)) Run {
 	if read == nil {
 		read = os.ReadFile
@@ -165,21 +170,35 @@ func Rescore(r Run, c *Corpus, read func(path string) ([]byte, error)) Run {
 		if !ok || cr.ResultFile == "" {
 			continue
 		}
+		if cr.Head != "" && cs.Head != cr.Head {
+			noteRescore(cr, fmt.Sprintf("the corpus pins %s, the run reviewed %s: score kept; run the case again",
+				textx.ShortSHA(cs.Head), textx.ShortSHA(cr.Head)))
+			continue
+		}
 		data, err := read(cr.ResultFile)
 		var res Result
 		if err == nil {
 			res, err = ParseResult(data)
 		}
 		if err != nil {
-			if cr.Score != nil {
-				cr.Error = "rescore: " + err.Error()
-			}
+			noteRescore(cr, err.Error())
 			continue
 		}
 		sc := ScoreCase(cs, res)
 		cr.Score = &sc
+		if strings.HasPrefix(cr.Error, rescoreError) {
+			cr.Error = ""
+		}
 	}
 	return out
+}
+
+// noteRescore says why cr was not rescored, unless it has no score to keep
+// and an error of its own (the round's) that says more.
+func noteRescore(cr *CaseRun, why string) {
+	if cr.Score != nil || cr.Error == "" || strings.HasPrefix(cr.Error, rescoreError) {
+		cr.Error = rescoreError + why
+	}
 }
 
 // WriteText writes the human report of r: a table with one row per case and a total, then, when prev

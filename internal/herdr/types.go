@@ -189,12 +189,6 @@ type WorkspaceCreated struct {
 	RootPane  Pane      `json:"root_pane"`
 }
 
-// TabCreated is the tab.create reply.
-type TabCreated struct {
-	Tab      Tab  `json:"tab"`
-	RootPane Pane `json:"root_pane"`
-}
-
 // AgentStarted is the agent.start reply; Argv is what herdr typed/launched.
 type AgentStarted struct {
 	Agent AgentInfo `json:"agent"`
@@ -206,13 +200,6 @@ type AgentStarted struct {
 type NotificationResult struct {
 	Shown  bool   `json:"shown"`
 	Reason string `json:"reason"`
-}
-
-// WindowTitleResult is the client.window_title.* reply. Reason is one of
-// set, cleared, no_foreground_client.
-type WindowTitleResult struct {
-	Changed bool   `json:"changed"`
-	Reason  string `json:"reason"`
 }
 
 // PluginPane is the plugin.pane.open reply.

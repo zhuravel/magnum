@@ -64,24 +64,12 @@ func lockHash(dir string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// canonPath cleans p and resolves symlinks when it exists.
-func canonPath(p string) string {
-	if p == "" {
-		return ""
-	}
-	p = filepath.Clean(p)
-	if r, err := filepath.EvalSymlinks(p); err == nil {
-		return r
-	}
-	return p
-}
-
 // under reports whether p is root or inside it (both canonical).
 func under(p, root string) bool {
 	if p == "" || root == "" {
 		return false
 	}
-	p = canonPath(p)
+	p = fsx.Canon(p)
 	return p == root || strings.HasPrefix(p, root+string(filepath.Separator))
 }
 
@@ -106,20 +94,17 @@ func schemaVersion(dir string) (version string, ok bool, err error) {
 
 // slotNumberForPath returns n such that pool.Path(n) == path.
 func slotNumberForPath(pool config.Pool, path string) (int, bool) {
-	const sentinel = "\x00"
-	parts := strings.Split(paths.Expand(strings.ReplaceAll(pool.SlotPath, "{n}", sentinel)), sentinel)
-	if len(parts) < 2 {
+	tmpl, p := paths.Expand(pool.SlotPath), filepath.Clean(path)
+	pre, _, ok := strings.Cut(tmpl, "{n}")
+	if !ok || !TemplateRegexp(tmpl).MatchString(p) {
 		return 0, false
 	}
-	for i := range parts {
-		parts[i] = regexp.QuoteMeta(parts[i])
+	digits := p[len(pre):]
+	if i := strings.IndexFunc(digits, func(r rune) bool { return r < '0' || r > '9' }); i >= 0 {
+		digits = digits[:i]
 	}
-	m := regexp.MustCompile("^" + strings.Join(parts, "([0-9]+)") + "$").FindStringSubmatch(filepath.Clean(path))
-	if m == nil {
-		return 0, false
-	}
-	n, err := strconv.Atoi(m[1])
-	if err != nil || n <= 0 || canonPath(pool.Path(n)) != canonPath(path) {
+	n, err := strconv.Atoi(digits)
+	if err != nil || n <= 0 || fsx.Canon(pool.Path(n)) != fsx.Canon(path) {
 		return 0, false
 	}
 	return n, true

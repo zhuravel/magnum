@@ -15,6 +15,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/inventory"
@@ -772,6 +773,16 @@ func (b *builder) external(ctx context.Context, name string) error {
 	if ev.PRNumber > 0 {
 		why += strings.TrimRight(fmt.Sprintf(" (PR #%d %s", ev.PRNumber, ev.GHState), " ") + ")"
 	}
+	if b.opts.Force {
+		// What the force resets past, counted best effort for the question.
+		var lost []string
+		for _, r := range externalRisks(ctx, b.p.Git, ev, resetBranch(ev.Path)) {
+			lost = append(lost, r.detail)
+		}
+		if len(lost) > 0 {
+			why += " (--force discards " + strings.Join(lost, "; ") + ")"
+		}
+	}
 	b.add(Action{
 		Kind: KindResetExternal, Subject: subject, Why: why, Repo: ev.Repo, Slot: resetBranch(ev.Path),
 		Path: ev.Path, MainClone: ev.MainClone, Branch: resetBranch(ev.Path), Base: base, Force: b.opts.Force,
@@ -781,8 +792,7 @@ func (b *builder) external(ctx context.Context, name string) error {
 
 // externalBlock returns why a manual worktree must not be reset now: herdr
 // agents that could not be listed or an agent working there (never
-// overridden), tracked changes, or commits the reset would orphan, on HEAD
-// or on the placeholder branch it overwrites (force overrides those).
+// overridden), or the first of externalRisks (force overrides those).
 func externalBlock(ctx context.Context, git Git, agentsListed bool, ev inventory.ExternalView, branch string, force bool) (reason, detail string) {
 	if !agentsListed {
 		return SkipIncomplete, "herdr agents were not listed: cannot tell whether an agent works there"
@@ -793,12 +803,27 @@ func externalBlock(ctx context.Context, git Git, agentsListed bool, ev inventory
 	if force {
 		return "", ""
 	}
-	st, err := git.Status(ctx, ev.Path)
-	if err != nil {
-		return SkipDirty, execx.Redact("could not read git status: " + err.Error())
+	if risks := externalRisks(ctx, git, ev, branch); len(risks) > 0 {
+		return risks[0].reason, risks[0].detail
 	}
-	if st.Tracked > 0 {
-		return SkipDirty, fmt.Sprintf("%d tracked changes", st.Tracked)
+	return "", ""
+}
+
+// risk is one thing resetting a manual worktree would lose (or cannot tell
+// it would not), with the skip reason it gets without --force.
+type risk struct{ reason, detail string }
+
+// externalRisks lists what resetting the manual worktree ev to branch would
+// lose: tracked changes, and commits on no remote that only HEAD or only the
+// placeholder branch reaches. A count that cannot be read is a risk too.
+func externalRisks(ctx context.Context, git Git, ev inventory.ExternalView, branch string) []risk {
+	var out []risk
+	st, err := git.Status(ctx, ev.Path)
+	switch {
+	case err != nil:
+		out = append(out, risk{SkipDirty, execx.Redact("could not read git status: " + err.Error())})
+	case st.Tracked > 0:
+		out = append(out, risk{SkipDirty, fmt.Sprintf("%d tracked changes", st.Tracked)})
 	}
 	// `git switch -C <branch>` moves HEAD off its commit and force-moves
 	// <branch>: commits only HEAD (detached or on <branch>) or only <branch>
@@ -806,66 +831,45 @@ func externalBlock(ctx context.Context, git Git, agentsListed bool, ev inventory
 	// Commits on another checked-out branch stay on it.
 	if ev.Detached || ev.Branch == "" || ev.Branch == branch {
 		n, err := git.Unpushed(ctx, ev.Path)
-		if err != nil {
-			return SkipUnpushed, execx.Redact("could not count unpushed commits: " + err.Error())
+		on := "detached HEAD"
+		if ev.Branch != "" {
+			on = "branch " + ev.Branch
 		}
-		if n > 0 {
-			on := "detached HEAD"
-			if ev.Branch != "" {
-				on = "branch " + ev.Branch
-			}
-			return SkipUnpushed, fmt.Sprintf("%d commits on %s are on no remote", n, on)
+		switch {
+		case err != nil:
+			out = append(out, risk{SkipUnpushed, execx.Redact("could not count unpushed commits: " + err.Error())})
+		case n > 0:
+			out = append(out, risk{SkipUnpushed, fmt.Sprintf("%d commits on %s are on no remote", n, on)})
 		}
 	}
 	if ev.Branch != branch {
 		n, err := unpushedOnBranch(ctx, git, ev.Path, branch)
-		if err != nil {
-			return SkipUnpushed, execx.Redact(fmt.Sprintf("could not count unpushed commits on branch %s: %v", branch, err))
-		}
-		if n > 0 {
-			return SkipUnpushed, fmt.Sprintf("%d commits on branch %s (which the reset overwrites) are on no remote", n, branch)
+		switch {
+		case err != nil:
+			out = append(out, risk{SkipUnpushed, execx.Redact(fmt.Sprintf("could not count unpushed commits on branch %s: %v", branch, err))})
+		case n > 0:
+			out = append(out, risk{SkipUnpushed, fmt.Sprintf("%d commits on branch %s (which the reset overwrites) are on no remote", n, branch)})
 		}
 	}
-	return "", ""
+	return out
 }
 
-// revParser and refUnpushedCounter are optional Git methods: RevParse is
-// (*gitx.Client).RevParse; UnpushedRef (commits reachable from ref that are
-// on no remote and no magnum ref, like Unpushed for HEAD) is requested from
-// gitx.
-type (
-	revParser interface {
-		RevParse(ctx context.Context, dir, ref string) (string, error)
-	}
-	refUnpushedCounter interface {
-		UnpushedRef(ctx context.Context, dir, ref string) (int, error)
-	}
-)
-
 // unpushedOnBranch counts the commits of local branch in dir that are on no
-// remote: 0 when the branch does not exist. A Git client that cannot tell
-// is an error (the reset is refused), never a guess.
+// remote: 0 when the branch does not exist.
 func unpushedOnBranch(ctx context.Context, git Git, dir, branch string) (int, error) {
 	ref := "refs/heads/" + branch
-	if rp, ok := git.(revParser); ok {
-		_, err := rp.RevParse(ctx, dir, ref)
-		if errors.Is(err, gitx.ErrNoSuchRef) {
-			return 0, nil
-		}
-		if err != nil {
-			return 0, err
-		}
+	if _, err := git.RevParse(ctx, dir, ref); errors.Is(err, gitx.ErrNoSuchRef) {
+		return 0, nil
+	} else if err != nil {
+		return 0, err
 	}
-	if c, ok := git.(refUnpushedCounter); ok {
-		return c.UnpushedRef(ctx, dir, ref)
-	}
-	return 0, errors.New("the git client cannot count them (needs UnpushedRef)")
+	return git.UnpushedRef(ctx, dir, ref)
 }
 
 // matchExternal accepts repoN, the directory name (talkable.repoN) or the path.
 func matchExternal(ev inventory.ExternalView, name string) bool {
 	if filepath.IsAbs(paths.Expand(name)) {
-		return canon(paths.Expand(name)) == canon(ev.Path)
+		return fsx.Canon(paths.Expand(name)) == fsx.Canon(ev.Path)
 	}
 	return filepath.Base(ev.Path) == name || resetBranch(ev.Path) == name
 }
@@ -878,14 +882,6 @@ func resetBranch(path string) string {
 		return base[i+1:]
 	}
 	return base
-}
-
-func canon(p string) string {
-	p = filepath.Clean(p)
-	if r, err := filepath.EvalSymlinks(p); err == nil {
-		return r
-	}
-	return p
 }
 
 func (b *builder) baseFor(ctx context.Context, repo string) (string, error) {

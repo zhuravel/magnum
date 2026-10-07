@@ -10,19 +10,6 @@ import (
 	"github.com/zhuravel/magnum/internal/slots"
 )
 
-// canon cleans p and resolves symlinks when it exists, so /var and
-// /private/var spellings compare equal.
-func canon(p string) string {
-	if p == "" {
-		return ""
-	}
-	c := filepath.Clean(p)
-	if r, err := filepath.EvalSymlinks(c); err == nil {
-		return r
-	}
-	return c
-}
-
 // under reports whether p is root or inside it (talkable.review1 does not
 // contain talkable.review10).
 func under(p, root string) bool {
@@ -66,16 +53,6 @@ func branchPRNumber(branch string) (int, bool) {
 }
 
 var perPRName = regexp.MustCompile(`^pr-[0-9]+$`)
-
-// templateRegexp turns a slot template ("/p/talkable.review{n}") into an
-// anchored regexp with [0-9]+ for {n}.
-func templateRegexp(tmpl string) *regexp.Regexp {
-	parts := strings.Split(tmpl, "{n}")
-	for i, p := range parts {
-		parts[i] = regexp.QuoteMeta(p)
-	}
-	return regexp.MustCompile("^" + strings.Join(parts, "[0-9]+") + "$")
-}
 
 // templateGlob turns a slot template into a filepath.Glob pattern.
 func templateGlob(tmpl string) string {

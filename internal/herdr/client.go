@@ -4,9 +4,7 @@
 // Protocol: newline-delimited JSON. Each request {"id","method","params"}
 // goes out on a fresh connection; the server writes exactly one response,
 // {"id","result":{"type":…}} or {"id","error":{"code","message"}}, and closes
-// the connection. events.subscribe is the exception: after the
-// {"type":"subscription_started"} ack the connection stays open and streams
-// {"event","data"} lines (see Subscribe).
+// the connection.
 //
 // Server errors surface as *Error carrying herdr's code (agent_blocked,
 // agent_prompt_stalled, timeout, ui_busy, invalid_key, …). An unreachable
@@ -39,14 +37,20 @@ import (
 const Protocol = 22
 
 // requiredMethods are the socket methods magnum sends: this package's typed
-// calls, events.subscribe and plugin.list (sent through Call).
+// calls, plugin.list (sent through Call by doctor) and, through the herdr
+// CLI reveal runs (`herdr terminal title set|clear`), client.window_title.*.
 var requiredMethods = []string{
-	"ping", "session.snapshot", "workspace.create", "workspace.close", "workspace.rename", "workspace.report_metadata",
-	"tab.create", "pane.split", "pane.send_input", "pane.send_keys", "pane.read", "pane.wait_for_output", "pane.rename",
-	"pane.process_info", "pane.get", "pane.list", "agent.start", "agent.prompt", "agent.get", "agent.list", "agent.read",
+	"ping", "session.snapshot", "workspace.create", "workspace.close", "workspace.report_metadata",
+	"pane.split", "pane.send_input", "pane.send_keys", "pane.read", "pane.wait_for_output", "pane.rename",
+	"pane.process_info", "pane.get", "agent.start", "agent.prompt", "agent.read",
 	"agent.focus", "agent.rename", "agent.send_keys", "notification.show", "plugin.pane.open", "plugin.list",
-	"client.window_title.set", "client.window_title.clear", "worktree.list", "events.subscribe",
+	"client.window_title.set", "client.window_title.clear", "worktree.list",
 }
+
+// notTyped are the required methods magnum sends other than through this
+// package's typed calls: plugin.list through Call, client.window_title.*
+// through the herdr CLI (reveal's Ghostty focus marker).
+var notTyped = []string{"plugin.list", "client.window_title.set", "client.window_title.clear"}
 
 // RequiredMethods returns the socket methods magnum needs the herdr server
 // to offer (`magnum doctor` checks them against `herdr api schema`).

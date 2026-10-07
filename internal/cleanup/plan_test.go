@@ -550,6 +550,39 @@ func TestExternalSkips(t *testing.T) {
 	}
 }
 
+// A forced reset names what it discards in the question (the plan's line):
+// the tracked changes and the commits on no remote it would have refused.
+func TestExternalForcedResetNamesWhatItDiscards(t *testing.T) {
+	f := newFixture(t)
+	dirty := f.external("repo2", func(e *inventory.ExternalView) { e.Detached = true; e.Branch = "" })
+	f.git.status[dirty.Path] = gitx.Status{Tracked: 2, Untracked: 5}
+	f.git.unpushed[dirty.Path] = 3
+	other := f.external("repo4", func(e *inventory.ExternalView) { e.Branch = "feature-x" })
+	f.git.branches[other.Path+" refs/heads/repo4"] = 1
+	f.git.errs["status "+other.Path] = errBoom
+	f.external("repo5", nil)
+
+	why := func(name string) string {
+		t.Helper()
+		r := actionsOf(f.plan(Options{External: true, Slot: name, Force: true}), KindResetExternal)
+		if len(r) != 1 || !r[0].Force {
+			t.Fatalf("%s: forced reset = %+v", name, r)
+		}
+		return r[0].Why
+	}
+	if w := why("repo2"); !strings.Contains(w, "--force discards 2 tracked changes; 3 commits on detached HEAD are on no remote") ||
+		strings.Contains(w, "untracked") {
+		t.Errorf("repo2 why = %q", w)
+	}
+	if w := why("repo4"); !strings.Contains(w, "could not read git status") ||
+		!strings.Contains(w, "1 commits on branch repo4 (which the reset overwrites) are on no remote") {
+		t.Errorf("repo4 why = %q", w)
+	}
+	if w := why("repo5"); strings.Contains(w, "--force") {
+		t.Errorf("clean repo5 why = %q", w)
+	}
+}
+
 func TestPlanDryRunFlag(t *testing.T) {
 	f := newFixture(t)
 	p := f.plan(Options{DryRun: true})

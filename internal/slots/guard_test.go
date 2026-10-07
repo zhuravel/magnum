@@ -170,6 +170,39 @@ func TestGuardHeadDriftPersistsHold(t *testing.T) {
 	}
 }
 
+// Unpin clears the last_error the hold wrote ("slots: held: …", which
+// `magnum slots` shows), and only that: another failure stays until the next
+// operation clears it.
+func TestUnpinClearsTheHoldsLastError(t *testing.T) {
+	h := newHarness(t)
+	sl, _ := h.claimedCheckout(8, h.shaPR8)
+	humanCommit(t, sl.Path)
+	wantHold(t, h.m.Guard(h.ctx, sl), HoldHeadDrift)
+	if got := h.slot(sl.Name); !strings.Contains(store.Deref(got.LastError), "held: head_drift") {
+		t.Fatalf("last_error = %q, want the hold", store.Deref(got.LastError))
+	}
+	if err := h.m.Unpin(h.ctx, h.slot(sl.Name)); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.slot(sl.Name); got.LastError != nil || got.HoldReason != nil {
+		t.Fatalf("after Unpin: last_error %q hold %v", store.Deref(got.LastError), store.Deref(got.HoldReason))
+	}
+
+	const other = "slots: deps review1: bundle install: exit 1"
+	if err := h.st.UpdateSlotFields(h.ctx, sl.ID, func(u *store.SlotUpdate) {
+		u.Set("pinned", true)
+		u.Set("last_error", other)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.m.Unpin(h.ctx, h.slot(sl.Name)); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.slot(sl.Name); store.Deref(got.LastError) != other || got.Pinned {
+		t.Fatalf("after Unpin: last_error %q pinned %v; want the failure kept", store.Deref(got.LastError), got.Pinned)
+	}
+}
+
 func TestGuardUnpushedCommitsOnFreeSlot(t *testing.T) {
 	h := newHarness(t)
 	sl := h.provisioned(1)

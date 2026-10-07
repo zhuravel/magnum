@@ -16,6 +16,7 @@
 package slots
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -90,11 +91,14 @@ type ErrHold struct {
 	Detail string // what was seen (pane, process, shas)
 }
 
+// holdErrorPrefix starts every ErrHold's text.
+const holdErrorPrefix = "slots: held: "
+
 func (e ErrHold) Error() string {
 	if e.Detail == "" {
-		return "slots: held: " + e.Reason
+		return holdErrorPrefix + e.Reason
 	}
-	return "slots: held: " + e.Reason + ": " + e.Detail
+	return holdErrorPrefix + e.Reason + ": " + e.Detail
 }
 
 // AsHold reports whether err carries an ErrHold.
@@ -106,7 +110,7 @@ func AsHold(err error) (ErrHold, bool) {
 
 // MySQL is the part of *mysqlx.Client the slots package uses.
 type MySQL interface {
-	ListSuffixed(ctx context.Context) ([]mysqlx.Database, error)
+	DBLister
 	SchemaMigrationsMax(ctx context.Context, dbName string) (string, error)
 	DropAll(ctx context.Context, names []string, g mysqlx.Guard) []mysqlx.DropResult
 }
@@ -281,7 +285,9 @@ func (m *Manager) runHeavy(ctx context.Context, dir string, env map[string]strin
 }
 
 // runLogged runs a heavy command c, serialized with every other heavy
-// command, and appends a redacted transcript to layout.Logs()/<logName>.
+// command, and appends a redacted transcript to layout.Logs()/<logName>: one
+// block written after the command (begin, output, end), so a rotation moves
+// whole commands, with each stream cut to its last logStreamTail bytes.
 func (m *Manager) runLogged(ctx context.Context, c execx.Cmd, logName string) error {
 	release, err := m.acquireHeavy(ctx)
 	if err != nil {
@@ -289,15 +295,16 @@ func (m *Manager) runLogged(ctx context.Context, c execx.Cmd, logName string) er
 	}
 	defer release()
 	label := c.Label
-	m.transcript(logName, fmt.Sprintf("== %s begin %s: %s\n", store.FormatTime(m.now()), label, c.String()))
+	begin := fmt.Sprintf("== %s begin %s: %s\n", store.FormatTime(m.now()), label, c.String())
 	res, err := m.d.Run.Run(ctx, c)
 	var b strings.Builder
-	b.Write(res.Stdout)
+	b.WriteString(begin)
+	writeTail(&b, res.Stdout)
 	if len(res.Stderr) > 0 {
 		b.WriteString("--- stderr ---\n")
-		b.Write(res.Stderr)
+		writeTail(&b, res.Stderr)
 	}
-	if b.Len() > 0 && !strings.HasSuffix(b.String(), "\n") {
+	if !strings.HasSuffix(b.String(), "\n") {
 		b.WriteString("\n")
 	}
 	status := fmt.Sprintf("exit %d (%s)", res.Code, res.Duration.Round(time.Millisecond))
@@ -312,11 +319,33 @@ func (m *Manager) runLogged(ctx context.Context, c execx.Cmd, logName string) er
 	return nil
 }
 
+// writeTail writes out to b whole when it fits in logStreamTail bytes, else
+// a "[N bytes cut]" line and the last logStreamTail bytes from the first line
+// start in them: a failure shows at the end of a command's output, and a seed
+// that prints its SQL would otherwise fill the log with one command.
+func writeTail(b *strings.Builder, out []byte) {
+	if len(out) <= logStreamTail {
+		b.Write(out)
+		return
+	}
+	cut := len(out) - logStreamTail
+	if i := bytes.IndexByte(out[cut:], '\n'); i >= 0 && i < len(out)-cut-1 {
+		cut += i + 1
+	}
+	fmt.Fprintf(b, "[%d bytes cut]\n", cut)
+	b.Write(out[cut:])
+}
+
 // SlotLogMax caps each log transcript writes (slot-<name>.log,
 // provision-<name>.log, perpr-<slug>.log): the write that would push one past
 // it first moves it to <name>.1, replacing the previous one, as daemon.log
 // rotates. A seed that prints its SQL fills several MB on every reset.
 const SlotLogMax = 2 << 20
+
+// logStreamTail is how much of each output stream a command's block keeps
+// (its end): a block is at most two of them plus its begin and end lines,
+// far under SlotLogMax, so the cap rotates whole commands.
+const logStreamTail = 256 << 10
 
 // transcript appends redacted text to a log file under layout.Logs(),
 // rotated at SlotLogMax; best effort.

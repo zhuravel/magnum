@@ -16,7 +16,6 @@ import (
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/mysqlx"
-	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -26,8 +25,6 @@ var (
 	_ MySQL  = (*mysqlx.Client)(nil)
 	_ Herdr  = (*herdr.Client)(nil)
 	_ GitHub = (*github.Client)(nil)
-
-	_ slots.PrefixLister = (*fakePrefixMySQL)(nil)
 )
 
 type fakeGit struct {
@@ -93,42 +90,14 @@ func (g *fakeGit) FindClone(_ context.Context, root, owner, name string) (string
 	return "", fmt.Errorf("%w: %s/%s", gitx.ErrNoClone, owner, name)
 }
 
+// fakeMySQL lists by name prefix, as (*mysqlx.Client).ListPrefixed does.
 type fakeMySQL struct {
-	dbs []mysqlx.Database
-	err error
-}
-
-func (m *fakeMySQL) ListSuffixed(context.Context) ([]mysqlx.Database, error) {
-	if m.err != nil {
-		return nil, m.err
-	}
-	return slices.Clone(m.dbs), nil
-}
-
-func (m *fakeMySQL) add(slug string, sizeMB float64, names ...string) {
-	for _, n := range names {
-		m.dbs = append(m.dbs, mysqlx.Database{Name: n + "__" + slug, Slug: slug, SizeMB: sizeMB})
-	}
-}
-
-func (m *fakeMySQL) remove(name string) {
-	m.dbs = slices.DeleteFunc(m.dbs, func(d mysqlx.Database) bool { return d.Name == name })
-}
-
-// fakePrefixMySQL is a MySQL client that can list by name prefix
-// (slots.PrefixLister), which slots.ListPoolDatabases prefers.
-type fakePrefixMySQL struct {
-	fakeMySQL
+	dbs      []mysqlx.Database
+	err      error
 	prefixes [][]string // every ListPrefixed call
-	suffixed int        // ListSuffixed calls
 }
 
-func (m *fakePrefixMySQL) ListSuffixed(ctx context.Context) ([]mysqlx.Database, error) {
-	m.suffixed++
-	return m.fakeMySQL.ListSuffixed(ctx)
-}
-
-func (m *fakePrefixMySQL) ListPrefixed(_ context.Context, prefixes []string) ([]mysqlx.Database, error) {
+func (m *fakeMySQL) ListPrefixed(_ context.Context, prefixes []string) ([]mysqlx.Database, error) {
 	m.prefixes = append(m.prefixes, slices.Clone(prefixes))
 	if m.err != nil {
 		return nil, m.err
@@ -140,6 +109,16 @@ func (m *fakePrefixMySQL) ListPrefixed(_ context.Context, prefixes []string) ([]
 		}
 	}
 	return out, nil
+}
+
+func (m *fakeMySQL) add(slug string, sizeMB float64, names ...string) {
+	for _, n := range names {
+		m.dbs = append(m.dbs, mysqlx.Database{Name: n + "__" + slug, Slug: slug, SizeMB: sizeMB})
+	}
+}
+
+func (m *fakeMySQL) remove(name string) {
+	m.dbs = slices.DeleteFunc(m.dbs, func(d mysqlx.Database) bool { return d.Name == name })
 }
 
 type fakeHerdr struct {

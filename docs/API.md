@@ -42,7 +42,7 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 | [engine](#engine) | Package engine is magnum's daemon: one tick loop that polls GitHub, observes herdr, applies health pauses, consumes CLI requests, dispatches review rounds into slots (each round in its own goroutine), releases closed PRs after their grace and reconciles the registry with disk, MySQL and herdr. |
 | [eval](#eval) | Package eval scores an evaluation replay of magnum's pull request review against a corpus of pull requests with known ("seeded") defects. |
 | [execx](#execx) | Package execx is the single choke point for every subprocess magnum runs (git, gh, mysql, mise exec, launchctl, osascript, codex/claude probes). |
-| [fsx](#fsx) | Package fsx holds the file helpers several packages share: an atomic file write, plain or confined to an os.Root, and an existence check. |
+| [fsx](#fsx) | Package fsx holds the file helpers several packages share: an atomic file write, plain or confined to an os.Root, an existence check and a canonical path. |
 | [github](#github) | Package github is magnum's GitHub access layer. |
 | [gitx](#gitx) | Package gitx holds every git operation magnum needs: fetching PR heads into refs/magnum/pr/N, detached switches and placeholder resets in review slots, worktree management, dirty/unpushed guards and the diff queries behind "did this PR touch db/". |
 | [herdr](#herdr) | Package herdr is magnum's client for the herdr terminal multiplexer's Unix-socket API (verified against herdr 0.9.x, protocol 22). |
@@ -1841,7 +1841,9 @@ type RotatingFile struct {
     RotatingFile is an io.Writer that appends to a file and rotates it by size:
     when a write would push the file past Max bytes, path.N-1 becomes path.N
     (the oldest beyond Keep is dropped), path becomes path.1 and a new file is
-    started. Safe for concurrent use.
+    started. A rotation that fails keeps writing to path (reopened), and the
+    next write past Max tries again; a file that could not be reopened is opened
+    again by the next write. Only Close stops it. Safe for concurrent use.
 
 func OpenRotating(path string, max int64, keep int) (*RotatingFile, error)
     OpenRotating opens (or creates, 0600) path for appending.
@@ -2047,7 +2049,12 @@ type Git interface {
 	FetchBranch(ctx context.Context, mainClone, base string) error
 	ResetPlaceholder(ctx context.Context, dir, branch, base string) error
 	Status(ctx context.Context, dir string) (gitx.Status, error)
+	StatusPaths(ctx context.Context, dir string) ([]gitx.StatusEntry, error)
 	Unpushed(ctx context.Context, dir string) (int, error)
+	// UnpushedRef counts the commits reachable from ref that are on no
+	// remote and no magnum ref, like Unpushed for HEAD.
+	UnpushedRef(ctx context.Context, dir, ref string) (int, error)
+	RevParse(ctx context.Context, dir, ref string) (string, error)
 }
     Git is the part of *gitx.Client cleanup uses (dirty checks and the external
     reset).
@@ -2184,7 +2191,9 @@ type Slots interface {
 	Release(ctx context.Context, slot store.Slot, pool config.Pool, reason string) error
 	Remove(ctx context.Context, slot store.Slot, pool config.Pool, force bool) error
 	RemovePRWorktree(ctx context.Context, slot store.Slot, force bool) error
-	Guard(ctx context.Context, slot store.Slot) error
+	// GuardLive refuses a pinned or held slot and a human's agent or
+	// process in it, and saves nothing (a forced removal's guard).
+	GuardLive(ctx context.Context, slot store.Slot) error
 	// HumanEvidence says why changes in the slot's tree are a human's (its
 	// PR's human_active_at after the checkout), "" when they are magnum's
 	// residue, which a release or removal discards.
@@ -5760,11 +5769,6 @@ type Corpus struct {
 func LoadCorpus(path string) (*Corpus, error)
     LoadCorpus reads and parses the corpus file at path.
 
-func ParseCorpus(data []byte) (*Corpus, error)
-    ParseCorpus parses and validates a corpus. It is strict: an unknown key
-    is an error, and every problem found is reported (joined), each naming the
-    case, the defect and the rule broken.
-
 func (c *Corpus) Select(names []string) ([]Case, error)
     Select returns the cases called names, in corpus order; no names selects
     every case. A name the corpus does not know is an error.
@@ -5853,8 +5857,11 @@ func Rescore(r Run, c *Corpus, read func(path string) ([]byte, error)) Run
     (os.ReadFile when nil). The run it returns is a copy; r is not changed.
 
     A case the corpus no longer has, or that has no result file, keeps its
-    score. A result that cannot be read or parsed keeps the old score too and,
-    when there was one, sets Error to say so.
+    score. A case the corpus now pins to another head than the run reviewed
+    keeps its score (the defects name the new head's lines), and so does a
+    result that cannot be read or parsed; either sets Error to say so when the
+    case has a score or no other error. A rescore that succeeds clears an Error
+    an earlier one set.
 
 func (r Run) Totals() Totals
     Totals adds up the scores of the run. Cases without a score count in Cases
@@ -6106,10 +6113,14 @@ type Runner interface {
 package fsx // import "github.com/zhuravel/magnum/internal/fsx"
 
 Package fsx holds the file helpers several packages share: an atomic file write,
-plain or confined to an os.Root, and an existence check. It imports only the
-standard library.
+plain or confined to an os.Root, an existence check and a canonical path.
+It imports only the standard library.
 
 FUNCTIONS
+
+func Canon(p string) string
+    Canon cleans p and resolves its symlinks when it exists, so the /var and
+    /private/var spellings of one directory compare equal; "" stays "".
 
 func Exists(path string) bool
     Exists reports whether path names something os.Stat can see (a symlink
@@ -7302,10 +7313,8 @@ Unix-socket API (verified against herdr 0.9.x, protocol 22).
 
 Protocol: newline-delimited JSON. Each request {"id","method","params"}
 goes out on a fresh connection; the server writes exactly one response,
-{"id","result":{"type":…}} or {"id","error":{"code","message"}},
-and closes the connection. events.subscribe is the exception: after the
-{"type":"subscription_started"} ack the connection stays open and streams
-{"event","data"} lines (see Subscribe).
+{"id","result":{"type":…}} or {"id","error":{"code","message"}}, and closes the
+connection.
 
 Server errors surface as *Error carrying herdr's code (agent_blocked,
 agent_prompt_stalled, timeout, ui_busy, invalid_key, …). An unreachable socket
@@ -7328,26 +7337,6 @@ const (
 	CodeWorkspaceNotFound  = "workspace_not_found"
 )
     Herdr error codes magnum reacts to.
-
-const (
-	SubPaneAgentStatusChanged = "pane.agent_status_changed"
-	SubPaneExited             = "pane.exited"
-	SubPaneClosed             = "pane.closed"
-	SubWorkspaceClosed        = "workspace.closed"
-)
-    Subscription types (dot form, as sent in events.subscribe).
-    SubPaneAgentStatusChanged requires PaneID; the others are global.
-
-const (
-	EventPaneAgentStatusChanged = "pane.agent_status_changed"
-	EventPaneExited             = "pane_exited"
-	EventPaneClosed             = "pane_closed"
-	EventWorkspaceClosed        = "workspace_closed"
-)
-    Streamed event names, as they arrive in Event.Event. The pane-scoped
-    status event uses the dot spelling of the bundled schema's
-    subscription_event.SubscriptionEventKind (the envelope events.subscribe
-    streams); the lifecycle events use the snake_case event_kinds spelling.
 
 const (
 	SplitRight = "right"
@@ -7490,12 +7479,6 @@ type Client struct {
 func (c *Client) AgentFocus(ctx context.Context, target string) error
     AgentFocus focuses the agent's pane inside herdr.
 
-func (c *Client) AgentGet(ctx context.Context, target string) (AgentInfo, error)
-    AgentGet returns one agent by name or pane id.
-
-func (c *Client) AgentList(ctx context.Context) ([]AgentInfo, error)
-    AgentList returns every pane that carries an agent, magnum's or not.
-
 func (c *Client) AgentPrompt(ctx context.Context, target, text string, wait *PromptWait) (AgentInfo, error)
     AgentPrompt submits text to an agent. With wait nil it returns once
     the text is accepted. Errors: agent_blocked (rejected before sending),
@@ -7524,9 +7507,6 @@ func (c *Client) NotificationShow(ctx context.Context, title, body string) (Noti
 
 func (c *Client) PaneGet(ctx context.Context, paneID string) (Pane, error)
     PaneGet returns one pane.
-
-func (c *Client) PaneList(ctx context.Context, workspaceID string) ([]Pane, error)
-    PaneList lists panes, optionally limited to one workspace.
 
 func (c *Client) PaneProcessInfo(ctx context.Context, paneID string) (ProcessInfo, error)
     PaneProcessInfo returns the pane's shell pid and foreground process group.
@@ -7560,24 +7540,6 @@ func (c *Client) PluginPaneOpen(ctx context.Context, o PluginPaneOptions) (Plugi
 func (c *Client) Snapshot(ctx context.Context) (Snapshot, error)
     Snapshot returns the whole live session (session.snapshot).
 
-func (c *Client) Subscribe(ctx context.Context, subs []Subscription, handler func(Event)) error
-    Subscribe opens an events.subscribe stream and calls handler, on this
-    goroutine, for every event until ctx is done (ctx.Err() wrapped),
-    the server closes the stream (io.EOF wrapped) or the connection fails.
-    The ack must arrive within Client.Timeout; after that only ctx bounds the
-    stream. Reconnecting (with jitter) and re-snapshotting are the caller's job.
-    Malformed lines are logged and skipped.
-
-func (c *Client) TabCreate(ctx context.Context, o TabCreateOptions) (TabCreated, error)
-    TabCreate opens a tab with a fresh shell pane.
-
-func (c *Client) TerminalTitleClear(ctx context.Context) (WindowTitleResult, error)
-    TerminalTitleClear restores the client's terminal window title.
-
-func (c *Client) TerminalTitleSet(ctx context.Context, title string) (WindowTitleResult, error)
-    TerminalTitleSet sets the attached client's terminal window title (the CLI's
-    `terminal title set`; used as a focus marker for Ghostty).
-
 func (c *Client) WaitIdleShell(ctx context.Context, paneID string, timeout time.Duration) (ProcessInfo, error)
     WaitIdleShell polls pane.process_info until the pane is an idle shell
     or timeout elapses (ErrTimeout naming the foreground processes).
@@ -7590,9 +7552,6 @@ func (c *Client) WorkspaceClose(ctx context.Context, workspaceID string) error
 
 func (c *Client) WorkspaceCreate(ctx context.Context, o WorkspaceCreateOptions) (WorkspaceCreated, error)
     WorkspaceCreate opens a workspace; its root pane runs a fresh shell.
-
-func (c *Client) WorkspaceRename(ctx context.Context, workspaceID, label string) error
-    WorkspaceRename sets a workspace label.
 
 func (c *Client) WorkspaceReportMetadata(ctx context.Context, workspaceID, source string, tokens map[string]string, ttl time.Duration) error
     WorkspaceReportMetadata publishes display-only tokens (sidebar/tab-bar) for
@@ -7610,17 +7569,6 @@ type Error struct {
     Error is an error response from the herdr server.
 
 func (e *Error) Error() string
-
-type Event struct {
-	Event       string // kind, e.g. EventPaneAgentStatusChanged or "pane_exited"
-	PaneID      string
-	WorkspaceID string
-	AgentStatus Status // EventPaneAgentStatusChanged only
-	Agent       string
-	Data        json.RawMessage
-}
-    Event is one streamed event. The common fields are decoded from Data when
-    present; Data keeps the full payload.
 
 type NotificationResult struct {
 	Shown  bool   `json:"shown"`
@@ -7774,14 +7722,6 @@ const (
 )
     Agent statuses.
 
-type Subscription struct {
-	Type   string `json:"type"`
-	PaneID string `json:"pane_id,omitempty"`
-}
-    Subscription selects one event type. herdr rejects pane-scoped types
-    (pane.agent_status_changed, pane.output_matched, pane.scroll_changed)
-    without PaneID.
-
 type Tab struct {
 	ID          string `json:"tab_id"`
 	WorkspaceID string `json:"workspace_id"`
@@ -7793,21 +7733,6 @@ type Tab struct {
 }
     Tab is a herdr tab (TabInfo).
 
-type TabCreateOptions struct {
-	WorkspaceID string // "" = focused workspace
-	Cwd         string
-	Label       string
-	Env         map[string]string
-	Focus       bool
-}
-    TabCreateOptions configures TabCreate.
-
-type TabCreated struct {
-	Tab      Tab  `json:"tab"`
-	RootPane Pane `json:"root_pane"`
-}
-    TabCreated is the tab.create reply.
-
 type WaitOutputOptions struct {
 	Match   string // literal substring, or a Rust regex when Regex is set
 	Regex   bool
@@ -7816,13 +7741,6 @@ type WaitOutputOptions struct {
 	Timeout time.Duration // 0 = wait until ctx is done
 }
     WaitOutputOptions configures PaneWaitOutput.
-
-type WindowTitleResult struct {
-	Changed bool   `json:"changed"`
-	Reason  string `json:"reason"`
-}
-    WindowTitleResult is the client.window_title.* reply. Reason is one of set,
-    cleared, no_foreground_client.
 
 type Workspace struct {
 	ID          string             `json:"workspace_id"`
@@ -8174,15 +8092,6 @@ const (
 )
     StateSource values: where ExternalView.GHState came from.
 
-const (
-	// SlugFile is the worktree's database slug marker (slots.MarkerFile),
-	// written by the Talkable repo's bin/worktree-setup.
-	SlugFile = slots.MarkerFile
-	// AgentPrefix starts every herdr agent name magnum gives (slots.AgentPrefix).
-	AgentPrefix = slots.AgentPrefix
-	// DroppedBy is slot_databases.dropped_by for databases that disappeared from MySQL.
-	DroppedBy = "reconcile"
-)
 
 VARIABLES
 
@@ -8305,9 +8214,7 @@ type Inventory struct {
     natural name, external worktrees by natural path, databases by name,
     findings by kind then subject) and nil-safe for JSON.
 
-type MySQL interface {
-	ListSuffixed(ctx context.Context) ([]mysqlx.Database, error)
-}
+type MySQL = slots.DBLister
     MySQL is the subset of *mysqlx.Client the scanner reads.
 
 type Options struct {
@@ -8364,7 +8271,7 @@ type SlotView struct {
 
 type SyncResult struct {
 	Seen    int      `json:"seen"`    // databases upserted (last_seen_at = now)
-	Dropped []string `json:"dropped"` // rows newly marked dropped (dropped_by = DroppedBy)
+	Dropped []string `json:"dropped"` // rows newly marked dropped (dropped_by = "reconcile")
 }
     SyncResult reports what UpsertSlotDatabases recorded.
 
@@ -8379,9 +8286,10 @@ Package launchd writes and manages magnum's LaunchAgent (label zhuravel.magnum):
 rendering the plist, installing it into the user's GUI domain, and querying,
 restarting and removing the job.
 
-All launchctl calls go through execx.Runner. The one external file this package
-owns is ~/Library/LaunchAgents/<label>.plist; everything else magnum keeps lives
-in the repository.
+All launchctl calls go through execx.Runner. The one file this package
+writes is ~/Library/LaunchAgents/<label>.plist; magnum keeps everything else
+where internal/paths puts it (~/.config/magnum, ~/.local/share/magnum and
+~/.local/state/magnum, or <checkout>/state under MAGNUM_HOME).
 
 The plist is world-readable (0644), so never put secrets in Options.Env. The
 daemon gets its credentials from mise (`mise -C <repo> exec -- ...`) instead.
@@ -8429,12 +8337,13 @@ func Install(ctx context.Context, run execx.Runner, uid int, path string, plist 
     bootout does not wait for the old job to finish tearing down, and
     bootstrapping into that window fails with "Input/output error". Install
     therefore polls Status once a second until launchd no longer knows the job
-    (at most 30 s; a job that is still loaded then is reported as such), and
-    only then bootstraps. The transient error can still show up, so bootstrap is
-    retried up to three times, one second apart, on that error only; any other
-    failure is returned immediately. When the retries run out, the error blames
-    a missing gui/<uid> domain (no console login session) only if `launchctl
-    print gui/<uid>` itself fails. The label is read from the plist itself.
+    (at most bootoutWait, the plist's ExitTimeOut plus 5 s; a job that is still
+    loaded then is reported as such), and only then bootstraps. The transient
+    error can still show up, so bootstrap is retried up to three times, one
+    second apart, on that error only; any other failure is returned immediately.
+    When the retries run out, the error blames a missing gui/<uid> domain (no
+    console login session) only if `launchctl print gui/<uid>` itself fails.
+    The label is read from the plist itself.
 
 func Kickstart(ctx context.Context, run execx.Runner, uid int, label string) error
     Kickstart restarts the job now (`launchctl kickstart -k`), killing the
@@ -10672,7 +10581,7 @@ type Outcome struct {
     Outcome describes what Reveal did, for `magnum open` output and --json.
 
 func Reveal(ctx context.Context, run execx.Runner, cfg config.Terminal, herdrBin string, opts Options) (Outcome, error)
-    Reveal is New(run, cfg, herdrBin).Reveal(ctx, opts).
+    Reveal builds a Revealer for cfg and herdrBin and runs its Reveal.
 
 func (o Outcome) String() string
     String renders the outcome as one human-readable line.
@@ -10681,23 +10590,6 @@ type Revealer struct {
 	// Has unexported fields.
 }
     Revealer reveals herdr in one configured terminal. Build it with New.
-
-func New(run execx.Runner, cfg config.Terminal, herdrBin string) *Revealer
-    New builds a Revealer from config.Terminal. herdrBin is the herdr executable
-    (typed into the new terminal tab and used for the Ghostty title calls);
-    empty means "herdr" on PATH. An empty session means "default".
-
-func (r *Revealer) FocusExisting(ctx context.Context) (FocusResult, error)
-    FocusExisting looks for a herdr client of the session in the configured
-    terminal and focuses it. The error accompanies Unavailable and says why.
-
-func (r *Revealer) Launch(ctx context.Context, opts Options) error
-    Launch opens a new herdr client for the session in the configured terminal:
-    iTerm2 (new tab, or window with opts.NewWindow) and Terminal.app (do
-    script), Ghostty (new surface configuration), WezTerm (`cli spawn`),
-    a custom launcher template, or `open -a <App>` for generic terminals.
-    A non-empty terminal.launcher wins over the app kind, as in the Raycast
-    extension.
 
 func (r *Revealer) Reveal(ctx context.Context, opts Options) (Outcome, error)
     Reveal focuses the existing herdr client when there is one. When the
@@ -10891,12 +10783,10 @@ func LazySchema(pool config.Pool) bool
 
 func ListPoolDatabases(ctx context.Context, c DBLister, pools ...config.Pool) (dbs []mysqlx.Database, bad []string, err error)
     ListPoolDatabases lists the per-worktree databases of pools: every schema
-    named <prefix><slug> for a prefix of DBListPrefixes, ordered by name.
-    A client that is a PrefixLister lists exactly those; any other client's
-    ListSuffixed is filtered to them, and a prefix ListSuffixed cannot see is an
-    error instead of a silently empty answer. Templates without "__{slug}" are
-    skipped and returned in bad for the caller to report. No pool template at
-    all lists nothing (and is not an error).
+    named <prefix><slug> for a prefix of DBListPrefixes, ordered by name (the
+    client's answer is checked again: a LIKE scan is only a coarse filter).
+    Templates without "__{slug}" are skipped and returned in bad for the caller
+    to report. No pool template at all lists nothing (and is not an error).
 
 func MiseExecArgs(dir string, env map[string]string, script string) []string
     MiseExecArgs builds `-C dir exec -- env K=V… /bin/sh -c script` (keys
@@ -10946,6 +10836,11 @@ func SlotDBSlug(sl store.Slot) string
     sanitized like a workspace name (DBSlug: review3 stays review3, owner/name#7
     becomes owner_name_7). Slots, inventory and cleanup all use it.
 
+func TemplateRegexp(tmpl string) *regexp.Regexp
+    TemplateRegexp matches what a slot template renders to (slot_name review{n},
+    an expanded slot_path): the template anchored, its text quoted, every {n} as
+    [0-9]+ (^review[0-9]+$).
+
 func WriteCheckoutFile(checkout, rel string, data []byte, perm fs.FileMode) (err error)
     WriteCheckoutFile writes data to rel inside checkout atomically (temp file
     in the same directory, then rename), with permission perm, creating parent
@@ -10961,9 +10856,10 @@ func WriteCheckoutFile(checkout, rel string, data []byte, perm fs.FileMode) (err
 TYPES
 
 type DBLister interface {
-	ListSuffixed(ctx context.Context) ([]mysqlx.Database, error)
+	ListPrefixed(ctx context.Context, prefixes []string) ([]mysqlx.Database, error)
 }
-    DBLister is the listing half of *mysqlx.Client.
+    DBLister is the listing half of *mysqlx.Client: the schemas whose names
+    start with one of prefixes followed by a non-empty slug, ordered by name.
 
 type Deps struct {
 	Store *store.Store
@@ -11152,7 +11048,8 @@ func (m *Manager) Guard(ctx context.Context, slot store.Slot) error
         with no recorded sha, HEAD (or, for a pool slot, its placeholder branch,
         which Release resets wherever HEAD is) carries commits on no remote or
         magnum ref (HoldUnpushed). A HEAD equal to the commit an interrupted
-        Checkout was switching to is magnum's own and is recorded instead;
+        Checkout (or a release's reset) was switching to is magnum's own and is
+        recorded instead;
       - the working tree has changes to tracked files and a human was there
         (HoldDirtyWorktree): a foreign agent or process as above, or the PR's
         human_active_at after the slot's last checkout (last_used_at), which the
@@ -11168,6 +11065,16 @@ func (m *Manager) Guard(ctx context.Context, slot store.Slot) error
     tree are transient. A herdr snapshot failure is returned as a plain error
     (not a hold): the caller retries later. Git checks are skipped when the slot
     directory is missing.
+
+func (m *Manager) GuardLive(ctx context.Context, slot store.Slot) error
+    GuardLive is the part of Guard that saves nothing: it refuses a pinned or
+    held slot (HoldPinned, its hold_reason) and a human's agent or process in
+    it or in its PR's workspace (HoldForeignAgent, HoldForegroundProcess),
+    and looks at neither HEAD nor the tree. A forced removal runs it instead of
+    Guard: Guard would save the moved HEAD, the unpushed commits or the changes
+    the force discards as the slot's hold_reason, and a removal that failed
+    after it would leave the slot held in removing, where cleanup skips and
+    refuses it.
 
 func (m *Manager) HumanEvidence(ctx context.Context, sl store.Slot) (string, error)
     HumanEvidence explains why changes in slot sl's tree would be a human's
@@ -11222,7 +11129,9 @@ func (m *Manager) Release(ctx context.Context, slot store.Slot, pool config.Pool
     "slot:<name>:release"): guard (Guard: pins, holds, a human's agent or
     process, HEAD drift, tracked changes a human made), then the slot moves to
     releasing, fetch_base, reset (placeholder branch → origin/<base>, tracked
-    changes discarded after a slot.discarded event, checked_out_sha cleared),
+    changes discarded after a slot.discarded event, checked_out_sha cleared;
+    origin/<base>'s commit is written to the kv store first, as Checkout's
+    switch does, so a release interrupted after the reset is no head drift),
     delete_ref (refs/magnum/pr/N), render_mise, deps, schema_check (resetSchema:
     a LazySchema pool keeps the databases unless MAX(schema_migrations.version)
     of the development database differs from the version of the schema recorded
@@ -11274,28 +11183,21 @@ func (m *Manager) Reserve(ctx context.Context, pr store.PR, pool config.Pool) (s
     PR already has is returned as is; no free slot left is ErrNoFreeSlot.
 
 func (m *Manager) Unpin(ctx context.Context, slot store.Slot) error
-    Unpin hands the slot back to automation: pinned and hold_reason are cleared.
-    A head_drift or unpushed_commits hold is acknowledged by taking the current
-    HEAD as the new checked_out_sha, so the next guard passes and the next
-    release resets the slot. A dirty_worktree hold comes back at the next
-    guard while the changes are there and a human still shows (their agent
-    or process in the slot, or human_active_at after the checkout): commit,
-    stash or discard them first (or remove the slot with force).
+    Unpin hands the slot back to automation: pinned and hold_reason are cleared,
+    and so is a last_error that is a hold ("slots: held: …"). A head_drift or
+    unpushed_commits hold is acknowledged by taking the current HEAD as the new
+    checked_out_sha, so the next guard passes and the next release resets the
+    slot. A dirty_worktree hold comes back at the next guard while the changes
+    are there and a human still shows (their agent or process in the slot,
+    or human_active_at after the checkout): commit, stash or discard them first
+    (or remove the slot with force).
 
 type MySQL interface {
-	ListSuffixed(ctx context.Context) ([]mysqlx.Database, error)
+	DBLister
 	SchemaMigrationsMax(ctx context.Context, dbName string) (string, error)
 	DropAll(ctx context.Context, names []string, g mysqlx.Guard) []mysqlx.DropResult
 }
     MySQL is the part of *mysqlx.Client the slots package uses.
-
-type PrefixLister interface {
-	ListPrefixed(ctx context.Context, prefixes []string) ([]mysqlx.Database, error)
-}
-    PrefixLister is a MySQL client that lists the schemas whose names start with
-    one of prefixes followed by a non-empty slug, ordered by name (requested
-    from mysqlx as (*Client).ListPrefixed). ListPoolDatabases uses it when the
-    client has it.
 
 type SchemaCheck struct {
 	// Need is true when the slot's databases must be reloaded (the pool's

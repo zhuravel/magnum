@@ -353,7 +353,9 @@ func (m *Manager) markSchema(ctx context.Context, sl store.Slot, pool config.Poo
 // "slot:<name>:release"): guard (Guard: pins, holds, a human's agent or
 // process, HEAD drift, tracked changes a human made), then the slot moves to
 // releasing, fetch_base, reset (placeholder branch → origin/<base>, tracked
-// changes discarded after a slot.discarded event, checked_out_sha cleared),
+// changes discarded after a slot.discarded event, checked_out_sha cleared;
+// origin/<base>'s commit is written to the kv store first, as Checkout's
+// switch does, so a release interrupted after the reset is no head drift),
 // delete_ref (refs/magnum/pr/N), render_mise, deps, schema_check
 // (resetSchema: a LazySchema pool keeps the databases unless
 // MAX(schema_migrations.version) of the development database differs from
@@ -413,6 +415,16 @@ func (m *Manager) releaseSteps(ctx context.Context, subject string, sl store.Slo
 		return err
 	}
 	if err := m.step(ctx, subject, "reset", func(ctx context.Context) error {
+		// As switchTo: the commit the reset moves HEAD to is written first, so
+		// the guard of a resumed release takes HEAD there as magnum's own
+		// reset when something fails before checked_out_sha is cleared.
+		base, err := m.git.RevParse(ctx, sl.MainClone, "origin/"+pool.Base)
+		if err != nil {
+			return err
+		}
+		if err := m.d.Store.SetKV(ctx, switchingKey(sl.ID), base); err != nil {
+			return err
+		}
 		m.discarding(ctx, sl)
 		if err := m.git.ResetPlaceholder(ctx, sl.Path, placeholder(sl), pool.Base); err != nil {
 			return err

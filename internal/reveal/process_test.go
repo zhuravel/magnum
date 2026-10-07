@@ -177,7 +177,7 @@ func TestClientTtysUsesPsNotPgrep(t *testing.T) {
 		Prefix: []string{"/bin/ps"},
 		Result: execx.Result{Stdout: []byte(spikePS)},
 	}}}
-	r := New(f, terminalCfg("iTerm2", "default"), "/opt/homebrew/bin/herdr")
+	r := newRevealer(f, terminalCfg("iTerm2", "default"), "/opt/homebrew/bin/herdr")
 	ttys, err := r.clientTtys(context.Background())
 	if err != nil || !reflect.DeepEqual(ttys, []string{"/dev/ttys000"}) {
 		t.Fatalf("got %v %v", ttys, err)
@@ -200,7 +200,7 @@ func TestClientTtysUsesPsNotPgrep(t *testing.T) {
 func TestClientTtysReportsPsFailure(t *testing.T) {
 	boom := errors.New("ps timed out")
 	f := &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"/bin/ps"}, Err: boom}}}
-	r := New(f, terminalCfg("iTerm2", "default"), "/opt/homebrew/bin/herdr")
+	r := newRevealer(f, terminalCfg("iTerm2", "default"), "/opt/homebrew/bin/herdr")
 	ttys, err := r.clientTtys(context.Background())
 	if ttys != nil || !errors.Is(err, boom) {
 		t.Fatalf("got %v %v", ttys, err)
@@ -209,7 +209,7 @@ func TestClientTtysReportsPsFailure(t *testing.T) {
 
 func TestClientTtysNoProcessesIsConfirmedEmpty(t *testing.T) {
 	f := &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"/bin/ps"}, Result: execx.Result{Stdout: []byte("1 ttys001 zsh\n")}}}}
-	r := New(f, terminalCfg("iTerm2", "default"), "/opt/homebrew/bin/herdr")
+	r := newRevealer(f, terminalCfg("iTerm2", "default"), "/opt/homebrew/bin/herdr")
 	ttys, err := r.clientTtys(context.Background())
 	if err != nil || len(ttys) != 0 {
 		t.Fatalf("got %v %v", ttys, err)

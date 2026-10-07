@@ -76,7 +76,9 @@ type Slots interface {
 	Release(ctx context.Context, slot store.Slot, pool config.Pool, reason string) error
 	Remove(ctx context.Context, slot store.Slot, pool config.Pool, force bool) error
 	RemovePRWorktree(ctx context.Context, slot store.Slot, force bool) error
-	Guard(ctx context.Context, slot store.Slot) error
+	// GuardLive refuses a pinned or held slot and a human's agent or
+	// process in it, and saves nothing (a forced removal's guard).
+	GuardLive(ctx context.Context, slot store.Slot) error
 	// HumanEvidence says why changes in the slot's tree are a human's (its
 	// PR's human_active_at after the checkout), "" when they are magnum's
 	// residue, which a release or removal discards.
@@ -99,7 +101,12 @@ type Git interface {
 	FetchBranch(ctx context.Context, mainClone, base string) error
 	ResetPlaceholder(ctx context.Context, dir, branch, base string) error
 	Status(ctx context.Context, dir string) (gitx.Status, error)
+	StatusPaths(ctx context.Context, dir string) ([]gitx.StatusEntry, error)
 	Unpushed(ctx context.Context, dir string) (int, error)
+	// UnpushedRef counts the commits reachable from ref that are on no
+	// remote and no magnum ref, like Unpushed for HEAD.
+	UnpushedRef(ctx context.Context, dir, ref string) (int, error)
+	RevParse(ctx context.Context, dir, ref string) (string, error)
 }
 
 // Planner builds and applies plans. Store, Slots, Inventory and Config are

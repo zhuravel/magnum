@@ -1712,7 +1712,7 @@ watch's roles, in a scratch registry and a detached worktree under `~/.local/sta
 named apart from the PR's own; the roles are told not to read the PR's reviews, comments or later
 commits, and nothing is posted. The report gives recall of the seeded defects and the noise count, and
 compares them with the previous run; `magnum eval score` re-applies the corpus after you fix a match
-rule. A case costs a whole review round, so `run` waits for real reviews: it refuses to start a case
+rule (a case the corpus now pins to another head keeps its score and says so). A case costs a whole review round, so `run` waits for real reviews: it refuses to start a case
 past `[usage] codex_soft` unless `--force`.
 
 Troubleshooting lives in `magnum doctor` (`--json` stays JSON even when the registry cannot be opened: a

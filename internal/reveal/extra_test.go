@@ -15,7 +15,7 @@ import (
 )
 
 func TestAccessors(t *testing.T) {
-	r := New(&execx.Fake{}, config.Terminal{App: "Ghostty"}, "")
+	r := newRevealer(&execx.Fake{}, config.Terminal{App: "Ghostty"}, "")
 	if r.kind != KindGhostty || r.session != "default" || r.herdrBin != "herdr" {
 		t.Fatalf("got kind=%s session=%s bin=%s", r.kind, r.session, r.herdrBin)
 	}
@@ -86,7 +86,7 @@ func testRevealUnderDryRunWezTerm(t *testing.T) {
 		psRule(psWithWorkClient),
 	}}
 	dry := &execx.DryRun{Inner: inner}
-	r := New(dry, terminalCfg("WezTerm", "work"), testHerdr)
+	r := newRevealer(dry, terminalCfg("WezTerm", "work"), testHerdr)
 	r.wezTermBin = testWezTerm
 
 	out, err := r.Reveal(ctx(), Options{})
@@ -108,9 +108,9 @@ func testRevealUnderDryRunWezTerm(t *testing.T) {
 	if want := []string{testWezTerm + " cli activate-pane --pane-id 2", openBin + " -a WezTerm"}; !reflect.DeepEqual(planned, want) {
 		t.Fatalf("planned %v, want %v", planned, want)
 	}
-	// FocusExisting itself reports Unavailable, with the reason.
-	if res, err := r.FocusExisting(ctx()); res != Unavailable || err == nil {
-		t.Fatalf("FocusExisting = %v, %v", res, err)
+	// focusExisting itself reports Unavailable, with the reason.
+	if res, err := r.focusExisting(ctx()); res != Unavailable || err == nil {
+		t.Fatalf("focusExisting = %v, %v", res, err)
 	}
 }
 
@@ -150,7 +150,7 @@ func TestTruncateCutsOnARuneBoundary(t *testing.T) {
 // with the runner's process group once Run returns.
 //
 // The launched command waits for a gate file that only this test creates, after
-// Launch has returned, so "Launch did not wait for it" is checked without a
+// launch has returned, so "Launch did not wait for it" is checked without a
 // wall-clock threshold: a Launch that waited would run into the runner's
 // timeout (and fail) instead of racing a stopwatch on a loaded machine.
 func TestCustomLauncherDetachesWithRealRunner(t *testing.T) {
@@ -163,9 +163,9 @@ func TestCustomLauncherDetachesWithRealRunner(t *testing.T) {
 	// Open the gate on the way out too, so a failed test leaves no waiting process.
 	t.Cleanup(func() { _ = os.WriteFile(gate, nil, 0o600) })
 	launcher := `/bin/sh -c "while [ ! -e ` + gate + ` ]; do sleep 0.05; done; echo \"$0\" > ` + marker + `" {herdr}`
-	r := New(&execx.Real{}, config.Terminal{App: "custom", Session: "work", Launcher: launcher}, "/opt/herdr-test")
+	r := newRevealer(&execx.Real{}, config.Terminal{App: "custom", Session: "work", Launcher: launcher}, "/opt/herdr-test")
 
-	if err := r.Launch(ctx(), Options{}); err != nil {
+	if err := r.launch(ctx(), Options{}); err != nil {
 		t.Fatalf("Launch must return while the launcher is still running: %v", err)
 	}
 	if _, err := os.Stat(marker); err == nil {
@@ -188,8 +188,8 @@ func TestCustomLauncherDetachesWithRealRunner(t *testing.T) {
 }
 
 func TestCustomLauncherMissingExecutableFailsWithRealRunner(t *testing.T) {
-	r := New(&execx.Real{}, config.Terminal{App: "custom", Launcher: "/nonexistent/launcher {herdr}"}, "herdr")
-	err := r.Launch(ctx(), Options{})
+	r := newRevealer(&execx.Real{}, config.Terminal{App: "custom", Launcher: "/nonexistent/launcher {herdr}"}, "herdr")
+	err := r.launch(ctx(), Options{})
 	var ee *execx.ExitError
 	if !errors.As(err, &ee) || ee.Code != 127 || !strings.Contains(err.Error(), "launcher not found") {
 		t.Fatalf("got %v", err)
@@ -202,7 +202,7 @@ func TestClientTtysAgainstRealPs(t *testing.T) {
 	if _, err := os.Stat(psBin); err != nil {
 		t.Skip("no /bin/ps")
 	}
-	r := New(&execx.Real{}, config.Terminal{App: "iTerm2"}, "herdr")
+	r := newRevealer(&execx.Real{}, config.Terminal{App: "iTerm2"}, "herdr")
 	ttys, err := r.clientTtys(ctx())
 	if err != nil {
 		t.Fatal(err)

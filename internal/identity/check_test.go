@@ -206,6 +206,34 @@ func TestAppCheckWrongKey(t *testing.T) {
 	assertNoSecrets(t, r)
 }
 
+// The fix for a rejected JWT names where the key comes from (here
+// private_key_file, with private_key_env unset) and the id the JWT was
+// issued for under its own key (app_id when there is no client_id).
+func TestAppCheckWrongKeyFileNamesTheKeySource(t *testing.T) {
+	clock := newClock()
+	f := newFakeGitHub(t, clock)
+	keyFile := filepath.Join(t.TempDir(), "app.pem")
+	if err := os.WriteFile(keyFile, []byte(pkcs8PEM(t, mustOtherKey(t))), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	id := f.id
+	id.ClientID, id.PrivateKeyEnv, id.PrivateKeyFile = "", "", keyFile
+	app := NewApp(id, newLayout(t), f.server.Client(), func(string) string { return "" }, clock.Now, WithBaseURL(f.server.URL))
+	r, err := app.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Pass {
+		t.Fatalf("want fail:\n%s", r)
+	}
+	assertLines(t, r,
+		"FAIL GitHub rejected the App JWT: GET /app: 401 A JSON web token could not be decoded",
+		"     fix: check app_id 2700610 for identity talkable-app in config.toml and that private_key_file "+keyFile+
+			" holds a current private key of that App",
+	)
+	assertNoSecrets(t, r)
+}
+
 func TestAppCheckMissingKey(t *testing.T) {
 	clock := newClock()
 	f := newFakeGitHub(t, clock)

@@ -58,7 +58,7 @@ func loadExcerpt(t *testing.T) schemaExcerpt {
 func TestTypedMethodsMatchSchema(t *testing.T) {
 	x := loadExcerpt(t)
 	cases := typedCases()
-	methods := map[string]bool{"events.subscribe": true}
+	methods := map[string]bool{}
 	for _, tc := range cases {
 		methods[tc.method] = true
 		def, ok := x.Methods[tc.method]
@@ -86,10 +86,15 @@ func TestTypedMethodsMatchSchema(t *testing.T) {
 // TestTypedCasesMirrorCapturedCLI checks that the expected requests in
 // typedCases are exactly what the real herdr CLI sends for the same command
 // (captured against a fake socket). Fields the CLI sends with their schema
-// default (right_click) are ignored; methods magnum does not use are skipped.
+// default (right_click) are ignored; methods magnum does not send are
+// skipped, and so are those it sends through the herdr CLI itself.
 func TestTypedCasesMirrorCapturedCLI(t *testing.T) {
 	x := loadExcerpt(t)
-	unused := map[string]bool{"agent.wait": true, "workspace.list": true, "tab.list": true}
+	unused := map[string]bool{"agent.wait": true, "workspace.list": true, "tab.list": true, "tab.create": true,
+		"workspace.rename": true, "pane.list": true, "agent.get": true, "agent.list": true}
+	for _, m := range notTyped {
+		unused[m] = true
+	}
 	cases := typedCases()
 	for _, cr := range x.CLIRequests {
 		if unused[cr.Method] {
@@ -120,34 +125,12 @@ func TestTypedCasesMirrorCapturedCLI(t *testing.T) {
 	}
 }
 
-// TestEventConstantsMatchSchema pins the subscription and streamed-event
-// names to the bundled schema: Sub* are request Subscription types, the
-// pane-scoped status event is spelled as subscription_event's kind enum, and
-// the lifecycle events as event_kinds.
-func TestEventConstantsMatchSchema(t *testing.T) {
-	x := loadExcerpt(t)
-	var subTypes []string
-	for _, v := range x.RequestDefs["Subscription"].OneOf {
-		subTypes = append(subTypes, v.Properties.Type.Const)
-	}
-	for _, sub := range []string{SubPaneAgentStatusChanged, SubPaneExited, SubPaneClosed, SubWorkspaceClosed} {
-		if !slices.Contains(subTypes, sub) {
-			t.Errorf("subscription type %q is not in the schema's Subscription types", sub)
-		}
-	}
-	if kinds := x.SubscriptionEvent.Defs.Kind.Enum; !slices.Contains(kinds, EventPaneAgentStatusChanged) {
-		t.Errorf("EventPaneAgentStatusChanged %q is not a SubscriptionEventKind %v", EventPaneAgentStatusChanged, kinds)
-	}
-	for _, ev := range []string{EventPaneExited, EventPaneClosed, EventWorkspaceClosed} {
-		if !slices.Contains(x.EventKinds.Enum, ev) {
-			t.Errorf("event %q is not in the schema's event_kinds", ev)
-		}
-	}
-}
-
 // TestRequiredMethodsCoverEveryCall keeps RequiredMethods (read by `magnum
-// doctor`) in step with the methods this package sends; those must also be in
-// the schema excerpt (plugin.list, sent by the CLI through Call, is not in it).
+// doctor`) in step with the methods magnum sends: every method this package
+// sends is required, and every required one is sent by this package or is
+// one of notTyped (plugin.list through Call, client.window_title.* through
+// the herdr CLI), so doctor never fails a herdr for a method nobody calls.
+// The typed ones must also be in the schema excerpt.
 func TestRequiredMethodsCoverEveryCall(t *testing.T) {
 	required := RequiredMethods()
 	files, err := filepath.Glob("*.go")
@@ -174,6 +157,11 @@ func TestRequiredMethodsCoverEveryCall(t *testing.T) {
 	for m := range sent {
 		if !slices.Contains(required, m) {
 			t.Errorf("method %s is sent but missing from RequiredMethods", m)
+		}
+	}
+	for _, m := range required {
+		if !sent[m] && !slices.Contains(notTyped, m) {
+			t.Errorf("method %s is required but nothing sends it", m)
 		}
 	}
 	x := loadExcerpt(t)

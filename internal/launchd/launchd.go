@@ -2,9 +2,10 @@
 // zhuravel.magnum): rendering the plist, installing it into the user's GUI
 // domain, and querying, restarting and removing the job.
 //
-// All launchctl calls go through execx.Runner. The one external file this
-// package owns is ~/Library/LaunchAgents/<label>.plist; everything else magnum
-// keeps lives in the repository.
+// All launchctl calls go through execx.Runner. The one file this package
+// writes is ~/Library/LaunchAgents/<label>.plist; magnum keeps everything else
+// where internal/paths puts it (~/.config/magnum, ~/.local/share/magnum and
+// ~/.local/state/magnum, or <checkout>/state under MAGNUM_HOME).
 //
 // The plist is world-readable (0644), so never put secrets in Options.Env. The
 // daemon gets its credentials from mise (`mise -C <repo> exec -- ...`) instead.

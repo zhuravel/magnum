@@ -47,11 +47,11 @@ func TestMatchGlob(t *testing.T) {
 // caseOf parses a one-case corpus holding the given defects (TOML text after the case header).
 func caseOf(t *testing.T, defects string) Case {
 	t.Helper()
-	c, err := ParseCorpus([]byte(`[[case]]
+	c, err := parseCorpus("", []byte(`[[case]]
 name = "c"
 pr = "example/repo#7"
-head = "` + sha + `"
-` + defects))
+head = "`+sha+`"
+`+defects))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,7 +333,7 @@ paths = ["c.rb"]
 }
 
 func TestScoreCaseWorksOnADefectBuiltByHand(t *testing.T) {
-	// no ParseCorpus: the regexps are compiled when scoring
+	// no parseCorpus: the regexps are compiled when scoring
 	c := Case{Name: "hand", Defects: []Defect{
 		{ID: "a", Title: "A", Match: []string{"hmac"}},
 		{ID: "b", Title: "B", Match: []string{"(unclosed"}},

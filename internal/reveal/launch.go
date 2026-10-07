@@ -25,12 +25,12 @@ func (r *Revealer) clientArgv() []string {
 	return []string{r.herdrBin, "--session", r.session}
 }
 
-// Launch opens a new herdr client for the session in the configured terminal:
+// launch opens a new herdr client for the session in the configured terminal:
 // iTerm2 (new tab, or window with opts.NewWindow) and Terminal.app (do script),
 // Ghostty (new surface configuration), WezTerm (`cli spawn`), a custom launcher
 // template, or `open -a <App>` for generic terminals. A non-empty
 // terminal.launcher wins over the app kind, as in the Raycast extension.
-func (r *Revealer) Launch(ctx context.Context, opts Options) error {
+func (r *Revealer) launch(ctx context.Context, opts Options) error {
 	if r.launcher != "" || r.kind == KindCustom {
 		return r.launchCustom(ctx)
 	}

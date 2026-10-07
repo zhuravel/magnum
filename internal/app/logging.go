@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -24,15 +25,19 @@ const (
 // RotatingFile is an io.Writer that appends to a file and rotates it by size:
 // when a write would push the file past Max bytes, path.N-1 becomes path.N
 // (the oldest beyond Keep is dropped), path becomes path.1 and a new file is
-// started. Safe for concurrent use.
+// started. A rotation that fails keeps writing to path (reopened), and the
+// next write past Max tries again; a file that could not be reopened is
+// opened again by the next write. Only Close stops it. Safe for concurrent
+// use.
 type RotatingFile struct {
 	Path string
 	Max  int64
 	Keep int
 
-	mu   sync.Mutex
-	f    *os.File
-	size int64
+	mu     sync.Mutex
+	f      *os.File
+	size   int64
+	closed bool
 }
 
 // OpenRotating opens (or creates, 0600) path for appending.
@@ -65,12 +70,23 @@ func (r *RotatingFile) open() error {
 func (r *RotatingFile) Write(p []byte) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.f == nil {
+	if r.closed {
 		return 0, os.ErrClosed
 	}
-	if r.Max > 0 && r.size > 0 && r.size+int64(len(p)) > r.Max {
-		if err := r.rotate(); err != nil {
+	if r.f == nil {
+		// A rotation could not reopen the file: try again.
+		if err := r.open(); err != nil {
 			return 0, err
+		}
+	}
+	if r.Max > 0 && r.size > 0 && r.size+int64(len(p)) > r.Max {
+		// A failed rotation leaves path open for appending (or for the
+		// next write to open): the line is kept, never the writer closed.
+		_ = r.rotate()
+		if r.f == nil {
+			if err := r.open(); err != nil {
+				return 0, err
+			}
 		}
 	}
 	n, err := r.f.Write(p)
@@ -78,26 +94,32 @@ func (r *RotatingFile) Write(p []byte) (int, error) {
 	return n, err
 }
 
+// rotate shifts the rotated files, moves path to path.1 and opens a new
+// path. Whatever fails, path is opened again (appending to the old file
+// when it could not be moved); r.f is nil only when that open failed too.
 func (r *RotatingFile) rotate() error {
-	if err := r.f.Close(); err != nil {
-		return fmt.Errorf("close log: %w", err)
-	}
+	cerr := r.f.Close()
 	r.f = nil
 	keep := max(r.Keep, 1)
 	_ = os.Remove(r.Path + "." + strconv.Itoa(keep))
 	for i := keep - 1; i >= 1; i-- {
 		_ = os.Rename(r.Path+"."+strconv.Itoa(i), r.Path+"."+strconv.Itoa(i+1))
 	}
+	var rerr error
 	if err := os.Rename(r.Path, r.Path+".1"); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("rotate log: %w", err)
+		rerr = fmt.Errorf("rotate log: %w", err)
 	}
-	return r.open()
+	if cerr != nil {
+		rerr = errors.Join(fmt.Errorf("close log: %w", cerr), rerr)
+	}
+	return errors.Join(rerr, r.open())
 }
 
 // Close closes the file.
 func (r *RotatingFile) Close() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.closed = true
 	if r.f == nil {
 		return nil
 	}

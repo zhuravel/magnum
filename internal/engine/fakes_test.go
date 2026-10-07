@@ -1117,6 +1117,9 @@ func (f *fakeSlots) Guard(ctx context.Context, slot store.Slot) error {
 	return f.guardErr
 }
 
+// GuardLive is Guard: the fake saves nothing either way.
+func (f *fakeSlots) GuardLive(ctx context.Context, slot store.Slot) error { return f.Guard(ctx, slot) }
+
 func (f *fakeSlots) ClearPin(ctx context.Context, slot store.Slot) error {
 	f.record("clear_pin:" + slot.Name)
 	return f.st.UpdateSlotFields(ctx, slot.ID, func(u *store.SlotUpdate) { u.Set("pinned", false) })

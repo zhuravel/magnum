@@ -3793,3 +3793,42 @@ editing history. Code, config comments and prompts reference these by their head
   `CLAUDE_CODE_DISABLE_CLAUDE_MDS` for Claude (it drops the operator's own `CLAUDE.md` too); checking only
   a `CLAUDE.md` that links to `AGENTS.md` (Claude loads `AGENTS.md` by itself, and the reverse link is as
   common).
+- **A release interrupted after its reset is no head drift** (2026-10-07). A release's `reset` step moved HEAD
+  to origin/<base> (`git switch -C` of the placeholder branch) and only then cleared `checked_out_sha`, so a
+  stop, `daemon-restart --now`, a held config.lock or a failed store write between the two left HEAD at
+  origin/<base> with the PR's head still recorded, and the resumed release's guard saved a `head_drift` hold
+  ("HEAD is f31eed5, magnum checked out 9ebdb71") for a move magnum made itself: the slot left the pool until
+  `magnum slots unpin`. The reset now writes origin/<base>'s commit to the kv store first, as a checkout's
+  switch does, so the guard takes HEAD there as magnum's own, records it, and the reset runs again.
+- **A forced removal saves no hold** (2026-10-07). A forced `remove_slot` or `remove_worktree` ran the slots
+  `Guard` for its live checks and went past `head_drift`, `unpushed_commits` and `dirty_worktree`; but Guard
+  saves those as the slot's `hold_reason` (with `last_error` and a `slot.hold` event) before it returns them,
+  so a removal whose teardown then failed left the slot in `removing` and held, which the next plan skips and
+  apply refuses. The forced path runs `slots.GuardLive`: a pin, a saved hold, a human's agent or process in
+  the slot refuse it, and nothing is saved.
+- **`magnum install` outwaits the old daemon** (2026-10-07). Install waited 30 s after `launchctl bootout` for
+  the job to unload, while the plist gives the daemon `ExitTimeOut` = 45 s before launchd SIGKILLs it, and a
+  slow shutdown takes about 52 s (30 s for its rounds, 10 s for the toasts' drain, 2 s to cancel them): such
+  an install failed with "still loaded 30s after bootout" and left no daemon loaded. The wait is
+  `ExitTimeOut` plus 5 s.
+- **A slot log keeps each command's end, in one block** (2026-10-07, amends "Fewer small writes"). The 2 MB
+  cap of the `slot-*`, `provision-*` and `perpr-*` logs was checked before each write, and a command wrote its
+  `begin` line alone and then its whole output (up to 2 × 8 MiB) at once: the rotation moved the begin line
+  to `.1` (314-317 bytes on disk) and the 8.4-8.8 MB output stayed, 155 of the 171 MB in `logs/`. A command
+  now writes one block when it ends (begin, output, end), and each stream keeps its last 256 KB after a
+  `[N bytes cut]` line, where a failure shows; a log is never over 2 MB, and a rotation moves whole
+  commands. The begin line now appears when the command ends, not when it starts. An output past execx's
+  8 MiB capture is still cut there, so its kept end is the end of what execx kept.
+- **`magnum eval score` keeps the score of another head and clears its own stale error** (2026-10-07). A
+  rescore matched a saved result against the corpus's defects whatever head the corpus now pins, so findings
+  from the reviewed head were scored against the new head's lines, and a rescore that succeeded kept the
+  "rescore: …" error an earlier one had left. A case the corpus pins to another head keeps its score with
+  "rescore: the corpus pins <sha7>, the run reviewed <sha7>: score kept; run the case again", and a
+  successful rescore clears a rescore error (a round's own error stays).
+- **A forced reset of a manual worktree names what it discards** (2026-10-07). `magnum cleanup --external
+  --slot repoN --force` skipped the status and the unpushed counts, so its question showed only `[force]`,
+  and the reset recorded nothing about what it dropped, while a forced slot removal names it. The plan's line
+  now says "--force discards 2 tracked changes; 3 commits on detached HEAD are on no remote" (counted best
+  effort; a count that cannot be read is said so), and before the reset one `cleanup.discarded` event (warn)
+  names the tracked paths (the first 20) and the commits HEAD and the placeholder branch were at, from which
+  the dropped commits can be found again.

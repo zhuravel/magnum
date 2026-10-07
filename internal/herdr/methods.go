@@ -123,12 +123,6 @@ func (c *Client) WorkspaceClose(ctx context.Context, workspaceID string) error {
 	return c.do(ctx, callSpec{method: "workspace.close", params: params, cli: cliLine("workspace", "close", workspaceID)})
 }
 
-// WorkspaceRename sets a workspace label.
-func (c *Client) WorkspaceRename(ctx context.Context, workspaceID, label string) error {
-	params := map[string]string{"workspace_id": workspaceID, "label": label}
-	return c.do(ctx, callSpec{method: "workspace.rename", params: params, cli: cliLine("workspace", "rename", workspaceID, label)})
-}
-
 // WorkspaceReportMetadata publishes display-only tokens (sidebar/tab-bar)
 // for a workspace under source. ttl zero means no expiry.
 func (c *Client) WorkspaceReportMetadata(ctx context.Context, workspaceID, source string, tokens map[string]string, ttl time.Duration) error {
@@ -154,40 +148,6 @@ func (c *Client) WorkspaceReportMetadata(ctx context.Context, workspaceID, sourc
 		args = append(args, "--ttl-ms", strconv.FormatInt(ms(ttl), 10))
 	}
 	return c.do(ctx, callSpec{method: "workspace.report_metadata", params: params, cli: cliLine(args...)})
-}
-
-// TabCreateOptions configures TabCreate.
-type TabCreateOptions struct {
-	WorkspaceID string // "" = focused workspace
-	Cwd         string
-	Label       string
-	Env         map[string]string
-	Focus       bool
-}
-
-// TabCreate opens a tab with a fresh shell pane.
-func (c *Client) TabCreate(ctx context.Context, o TabCreateOptions) (TabCreated, error) {
-	params := struct {
-		WorkspaceID string            `json:"workspace_id,omitempty"`
-		Cwd         string            `json:"cwd,omitempty"`
-		Focus       bool              `json:"focus"`
-		Label       string            `json:"label,omitempty"`
-		Env         map[string]string `json:"env,omitempty"`
-	}{o.WorkspaceID, o.Cwd, o.Focus, o.Label, o.Env}
-	args := []string{"tab", "create"}
-	if o.WorkspaceID != "" {
-		args = append(args, "--workspace", o.WorkspaceID)
-	}
-	if o.Cwd != "" {
-		args = append(args, "--cwd", o.Cwd)
-	}
-	if o.Label != "" {
-		args = append(args, "--label", o.Label)
-	}
-	args = append(append(args, envFlags(o.Env)...), focusFlag(o.Focus))
-	var out TabCreated
-	err := c.do(ctx, callSpec{method: "tab.create", params: params, out: &out, cli: cliLine(args...)})
-	return out, err
 }
 
 // SplitOptions configures PaneSplit.
@@ -357,21 +317,6 @@ func (c *Client) PaneGet(ctx context.Context, paneID string) (Pane, error) {
 	return out.Pane, err
 }
 
-// PaneList lists panes, optionally limited to one workspace.
-func (c *Client) PaneList(ctx context.Context, workspaceID string) ([]Pane, error) {
-	params := map[string]string{}
-	args := []string{"pane", "list"}
-	if workspaceID != "" {
-		params["workspace_id"] = workspaceID
-		args = append(args, "--workspace", workspaceID)
-	}
-	var out struct {
-		Panes []Pane `json:"panes"`
-	}
-	err := c.do(ctx, callSpec{method: "pane.list", params: params, out: &out, cli: cliLine(args...)})
-	return out.Panes, err
-}
-
 // AgentStartOptions configures AgentStart.
 type AgentStartOptions struct {
 	Name    string // [a-z][a-z0-9_-]{0,31}, unique per server
@@ -450,15 +395,6 @@ func (c *Client) AgentPrompt(ctx context.Context, target, text string, wait *Pro
 	return out.Agent, err
 }
 
-// AgentGet returns one agent by name or pane id.
-func (c *Client) AgentGet(ctx context.Context, target string) (AgentInfo, error) {
-	var out struct {
-		Agent AgentInfo `json:"agent"`
-	}
-	err := c.do(ctx, callSpec{method: "agent.get", params: map[string]string{"target": target}, out: &out, cli: cliLine("agent", "get", target)})
-	return out.Agent, err
-}
-
 // AgentRead returns recent output of an agent's pane.
 func (c *Client) AgentRead(ctx context.Context, target string, o ReadOptions) (ReadResult, error) {
 	p, flags := o.params()
@@ -468,15 +404,6 @@ func (c *Client) AgentRead(ctx context.Context, target string, o ReadOptions) (R
 	}
 	err := c.do(ctx, callSpec{method: "agent.read", params: p, out: &out, cli: cliLine(append([]string{"agent", "read", target}, flags...)...)})
 	return out.Read, err
-}
-
-// AgentList returns every pane that carries an agent, magnum's or not.
-func (c *Client) AgentList(ctx context.Context) ([]AgentInfo, error) {
-	var out struct {
-		Agents []AgentInfo `json:"agents"`
-	}
-	err := c.do(ctx, callSpec{method: "agent.list", out: &out, cli: cliLine("agent", "list")})
-	return out.Agents, err
 }
 
 // AgentFocus focuses the agent's pane inside herdr.
@@ -573,22 +500,6 @@ func (c *Client) PluginPaneOpen(ctx context.Context, o PluginPaneOptions) (Plugi
 	}
 	err := c.do(ctx, callSpec{method: "plugin.pane.open", params: params, out: &out, cli: cliLine(args...)})
 	return out.PluginPane, err
-}
-
-// TerminalTitleSet sets the attached client's terminal window title (the
-// CLI's `terminal title set`; used as a focus marker for Ghostty).
-func (c *Client) TerminalTitleSet(ctx context.Context, title string) (WindowTitleResult, error) {
-	var out WindowTitleResult
-	err := c.do(ctx, callSpec{method: "client.window_title.set", params: map[string]string{"title": title}, out: &out,
-		cli: cliLine("terminal", "title", "set", title)})
-	return out, err
-}
-
-// TerminalTitleClear restores the client's terminal window title.
-func (c *Client) TerminalTitleClear(ctx context.Context) (WindowTitleResult, error) {
-	var out WindowTitleResult
-	err := c.do(ctx, callSpec{method: "client.window_title.clear", out: &out, cli: cliLine("terminal", "title", "clear")})
-	return out, err
 }
 
 // WorktreeList lists the git worktrees of the repository at cwd ("" lets

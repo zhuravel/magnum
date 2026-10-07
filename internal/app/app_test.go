@@ -366,6 +366,49 @@ func TestRotatingFile(t *testing.T) {
 	}
 }
 
+// A rotation whose rename fails (here daemon.log.1 is a directory with a
+// file in it) keeps the daemon logging into daemon.log: before, the writer
+// stayed closed and every later write failed until a restart. A later
+// rotation succeeds once the obstacle is gone, and only Close closes it.
+func TestRotatingFileSurvivesAFailedRotation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "daemon.log")
+	blocker := path + ".1"
+	if err := os.MkdirAll(filepath.Join(blocker, "x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rf, err := OpenRotating(path, 100, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := strings.Repeat("x", 59) + "\n" // 60 bytes: the second write rotates
+	for i := range 3 {
+		if _, err := rf.Write([]byte(line)); err != nil {
+			t.Fatalf("write %d: %v", i, err)
+		}
+	}
+	if b, err := os.ReadFile(path); err != nil || len(b) != 3*len(line) {
+		t.Fatalf("daemon.log = %d bytes, %v; want every line kept in it", len(b), err)
+	}
+	if err := os.RemoveAll(blocker); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rf.Write([]byte(line)); err != nil {
+		t.Fatalf("write after the obstacle went: %v", err)
+	}
+	if b, err := os.ReadFile(path); err != nil || string(b) != line {
+		t.Fatalf("daemon.log = %d bytes, %v; want the rotation done", len(b), err)
+	}
+	if b, err := os.ReadFile(blocker); err != nil || len(b) != 3*len(line) {
+		t.Fatalf("daemon.log.1 = %d bytes, %v", len(b), err)
+	}
+	if err := rf.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rf.Write([]byte(line)); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("write after Close = %v, want os.ErrClosed", err)
+	}
+}
+
 // logAppIn builds an App (default logger, no dry run) whose daemon.log already
 // holds LogMaxBytes bytes, so the first write would rotate a rotating writer.
 func logAppIn(t *testing.T, daemon bool) (*App, string) {

@@ -43,8 +43,8 @@ func TestCallSendsOneRequestPerConnectionAndDecodes(t *testing.T) {
 
 func TestCallNilParamsSendsEmptyObject(t *testing.T) {
 	s := newFakeServer(t)
-	s.reply("agent.list", map[string]any{"type": "agent_list", "agents": []any{}})
-	if err := s.client().Call(context.Background(), "agent.list", nil, nil); err != nil {
+	s.reply("plugin.list", map[string]any{"type": "plugin_list", "plugins": []any{}})
+	if err := s.client().Call(context.Background(), "plugin.list", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := string(s.last().Params); got != "{}" {

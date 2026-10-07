@@ -9,9 +9,12 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/fsx"
+	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/inventory"
 	"github.com/zhuravel/magnum/internal/mysqlx"
 	"github.com/zhuravel/magnum/internal/slots"
@@ -145,15 +148,13 @@ func (p *Planner) applySlot(ctx context.Context, a Action) error {
 	}
 
 	// A forced removal skips the slots guard entirely; keep its live checks
-	// (a human's agent or process in the slot) and accept only what force is
-	// for: a moved HEAD, unpushed commits or a dirty tree.
+	// (a pin, a saved hold, a human's agent or process in the slot) through
+	// GuardLive, which saves nothing: what force is for (a moved HEAD,
+	// unpushed commits, a dirty tree) is never saved as a hold that would
+	// outlive a removal failing after it.
 	if a.SlotID != 0 && a.Force && a.Kind != KindRelease {
-		if err := p.Slots.Guard(ctx, sl); err != nil {
-			h, ok := slots.AsHold(err)
-			if !ok || !slices.Contains([]string{slots.HoldHeadDrift, slots.HoldUnpushed, slots.HoldDirtyWorktree}, h.Reason) {
-				return err
-			}
-			p.logf("cleanup: %s: forcing past %s (%s)", sl.Name, h.Reason, h.Detail)
+		if err := p.Slots.GuardLive(ctx, sl); err != nil {
+			return err
 		}
 	}
 	// A closed PR moves to releasing before the first side effect: whatever
@@ -307,7 +308,7 @@ func (p *Planner) applyReset(ctx context.Context, a Action, ext **inventory.Inve
 	if p.Git == nil {
 		return errors.New("cleanup: Planner.Git is required to reset a manual worktree")
 	}
-	if canon(a.Path) == canon(a.MainClone) {
+	if fsx.Canon(a.Path) == fsx.Canon(a.MainClone) {
 		return fmt.Errorf("cleanup: %s is the main clone: %w", a.Path, ErrOptions)
 	}
 	if *ext == nil {
@@ -317,7 +318,7 @@ func (p *Planner) applyReset(ctx context.Context, a Action, ext **inventory.Inve
 		}
 		*ext = &inv
 	}
-	i := slices.IndexFunc((*ext).External, func(ev inventory.ExternalView) bool { return canon(ev.Path) == canon(a.Path) })
+	i := slices.IndexFunc((*ext).External, func(ev inventory.ExternalView) bool { return fsx.Canon(ev.Path) == fsx.Canon(a.Path) })
 	if i < 0 || !(*ext).External[i].Exists {
 		return stale("manual worktree %s not found", a.Path)
 	}
@@ -327,12 +328,63 @@ func (p *Planner) applyReset(ctx context.Context, a Action, ext **inventory.Inve
 	if err := p.Git.FetchBranch(ctx, a.MainClone, a.Base); err != nil {
 		return err
 	}
+	if a.Force {
+		p.noteResetDiscard(ctx, a)
+	}
 	if err := p.Git.ResetPlaceholder(ctx, a.Path, a.Branch, a.Base); err != nil {
 		return err
 	}
 	// The main clone's .mise.local.toml (it holds secrets: its permissions
 	// are kept), written inside the worktree only.
 	return slots.CopyIntoCheckout(filepath.Join(a.MainClone, slots.MiseLocal), a.Path, slots.MiseLocal)
+}
+
+// maxListed caps the paths a cleanup.discarded event names.
+const maxListed = 20
+
+// noteResetDiscard writes, before a forced reset of a manual worktree, one
+// cleanup.discarded event naming what it drops: the tracked changes (the
+// reset keeps untracked files) and the commits HEAD and the placeholder
+// branch are at, from which commits on no remote can be found again. Best
+// effort: what cannot be read is said so, and never stops the reset the
+// operator forced.
+func (p *Planner) noteResetDiscard(ctx context.Context, a Action) {
+	var parts []string
+	entries, err := p.Git.StatusPaths(ctx, a.Path)
+	var tracked []string
+	for _, e := range entries {
+		if !e.Untracked() && !e.Ignored() {
+			tracked = append(tracked, e.Path)
+		}
+	}
+	switch {
+	case err != nil:
+		parts = append(parts, "could not list the changes: "+err.Error())
+	case len(tracked) > 0:
+		listed := strings.Join(tracked[:min(len(tracked), maxListed)], ", ")
+		if more := len(tracked) - maxListed; more > 0 {
+			listed += fmt.Sprintf(" (+%d more)", more)
+		}
+		parts = append(parts, fmt.Sprintf("%d tracked change(s): %s", len(tracked), listed))
+	}
+	if head, err := p.Git.RevParse(ctx, a.Path, "HEAD"); err == nil {
+		parts = append(parts, "HEAD was "+head)
+	} else {
+		parts = append(parts, "could not read HEAD: "+err.Error())
+	}
+	if tip, err := p.Git.RevParse(ctx, a.Path, "refs/heads/"+a.Branch); err == nil {
+		parts = append(parts, "branch "+a.Branch+" was "+tip)
+	} else if !errors.Is(err, gitx.ErrNoSuchRef) {
+		parts = append(parts, "could not read branch "+a.Branch+": "+err.Error())
+	}
+	subject := logSubject(a)
+	_, e := p.Store.AppendEvent(context.WithoutCancel(ctx), store.Event{
+		Level: "warn", Subject: &subject, Kind: "cleanup.discarded",
+		Message: execx.Redact(fmt.Sprintf("reset --force of %s discards: %s", a.Path, strings.Join(parts, "; "))),
+	})
+	if e != nil {
+		p.logf("cleanup: event %s cleanup.discarded: %v", subject, e)
+	}
 }
 
 // logSubject is the events.subject of an action: slot:<name> for slot

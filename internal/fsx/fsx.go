@@ -1,6 +1,6 @@
 // Package fsx holds the file helpers several packages share: an atomic file
-// write, plain or confined to an os.Root, and an existence check. It imports
-// only the standard library.
+// write, plain or confined to an os.Root, an existence check and a canonical
+// path. It imports only the standard library.
 package fsx
 
 import (
@@ -86,4 +86,17 @@ func WriteFileAtomicIn(root *os.Root, name string, data []byte, perm fs.FileMode
 func Exists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// Canon cleans p and resolves its symlinks when it exists, so the /var and
+// /private/var spellings of one directory compare equal; "" stays "".
+func Canon(p string) string {
+	if p == "" {
+		return ""
+	}
+	p = filepath.Clean(p)
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	return p
 }

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/steps"
@@ -352,6 +353,48 @@ func TestGuardForeignAgentWithChangesPersistsTheHold(t *testing.T) {
 	}
 }
 
+// A forced removal's guard: what the force discards (a moved HEAD, a human's
+// changes) passes and is never saved as a hold; pins, saved holds and a
+// human's agent still refuse, the agent without saving the changes it sits on.
+func TestGuardLiveSavesNothing(t *testing.T) {
+	h := newHarness(t)
+	sl, pr := h.claimedCheckout(8, h.shaPR8)
+	humanCommit(t, sl.Path)
+	writeFile(t, filepath.Join(sl.Path, "README"), "human edit\n")
+	h.humanTyped(pr.ID, h.now.Add(time.Minute))
+	nothingSaved := func(what string) {
+		t.Helper()
+		if got := h.slot(sl.Name); got.HoldReason != nil || got.LastError != nil {
+			t.Fatalf("%s: hold %v last_error %v saved", what, store.Deref(got.HoldReason), store.Deref(got.LastError))
+		}
+		if evs := eventKinds(t, h.st, "slot:"+sl.Name, "slot.hold"); len(evs) != 0 {
+			t.Fatalf("%s: hold events = %+v", what, evs)
+		}
+	}
+
+	if err := h.m.GuardLive(h.ctx, sl); err != nil {
+		t.Fatalf("GuardLive over a moved HEAD and a human's changes: %v", err)
+	}
+	nothingSaved("drift and changes")
+
+	h.foreignAgent(sl.Path)
+	wantHold(t, h.m.GuardLive(h.ctx, sl), HoldForeignAgent)
+	nothingSaved("foreign agent")
+	h.snap = herdr.Snapshot{}
+
+	if err := h.m.Pin(h.ctx, sl); err != nil {
+		t.Fatal(err)
+	}
+	wantHold(t, h.m.GuardLive(h.ctx, sl), HoldPinned)
+	if err := h.st.UpdateSlotFields(h.ctx, sl.ID, func(u *store.SlotUpdate) {
+		u.Set("pinned", false)
+		u.Set("hold_reason", HoldUnpushed)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	wantHold(t, h.m.GuardLive(h.ctx, sl), HoldUnpushed)
+}
+
 func TestReleaseResumeRunsTheGuardFirst(t *testing.T) {
 	for _, human := range []bool{true, false} {
 		name := "untouched"
@@ -552,6 +595,47 @@ func TestRemoveResumeDiscardsResidue(t *testing.T) {
 			}
 			h.wantDiscarded(t, sl.Name, d.file)
 		})
+	}
+}
+
+// The reset step fails after its switch moved HEAD to origin/<base> (here
+// git config cannot be read, as with a held config.lock; a stop or a failed
+// store write is the same): the resumed release takes HEAD as its own reset,
+// not as a human's commit, and frees the slot without a hold.
+func TestReleaseInterruptedAfterTheResetIsNotDrift(t *testing.T) {
+	h := newHarness(t)
+	sl, _ := h.claimedCheckout(8, h.shaPR8)
+	failConfig := true
+	h.run.fakeGit = func(c execx.Cmd) bool {
+		return failConfig && slices.Contains(c.Args, "config") && slices.Contains(c.Args, "--get")
+	}
+	h.fake.Rules = append(h.fake.Rules, execx.Rule{Prefix: []string{"git"},
+		Result: execx.Result{Code: 255}, Err: &execx.ExitError{Code: 255, Stderr: "error: could not lock config file"}})
+
+	if err := h.m.Release(h.ctx, sl, h.pool, "pr_closed"); err == nil {
+		t.Fatal("Release succeeded with git config failing")
+	}
+	if head := gitT(t, sl.Path, "rev-parse", "HEAD"); head != h.shaMaster {
+		t.Fatalf("HEAD = %s, want the reset's origin/master %s", head, h.shaMaster)
+	}
+	if got := h.slot(sl.Name); got.State != store.SlotReleasing || got.HoldReason != nil {
+		t.Fatalf("after the failure: state %s hold %v", got.State, store.Deref(got.HoldReason))
+	}
+
+	failConfig = false
+	if err := h.m.Release(h.ctx, h.slot(sl.Name), h.pool, "pr_closed"); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	got := h.slot(sl.Name)
+	if got.State != store.SlotFree || got.HoldReason != nil || got.LastError != nil || got.CheckedOutSHA != nil {
+		t.Fatalf("after the resume: state %s hold %v last_error %v sha %v", got.State, store.Deref(got.HoldReason),
+			store.Deref(got.LastError), store.Deref(got.CheckedOutSHA))
+	}
+	if evs := eventKinds(t, h.st, "slot:"+sl.Name, "slot.hold"); len(evs) != 0 {
+		t.Fatalf("hold events = %+v", evs)
+	}
+	if v, ok := h.kv(switchingKey(sl.ID)); ok {
+		t.Fatalf("pending switch %s left in the kv store", v)
 	}
 }
 

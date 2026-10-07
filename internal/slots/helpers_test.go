@@ -63,14 +63,14 @@ func (f *fakeMySQL) has(name string) bool {
 	return f.dbs[name]
 }
 
-func (f *fakeMySQL) ListSuffixed(ctx context.Context) ([]mysqlx.Database, error) {
+func (f *fakeMySQL) ListPrefixed(ctx context.Context, prefixes []string) ([]mysqlx.Database, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.listCalls++
 	var out []mysqlx.Database
 	for n := range f.dbs {
 		slug, ok := mysqlx.Slug(n)
-		if !ok {
+		if !ok || !hasDBPrefix(n, prefixes) {
 			continue
 		}
 		out = append(out, mysqlx.Database{Name: n, Slug: slug, SizeMB: 12.5})

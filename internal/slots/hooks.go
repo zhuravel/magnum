@@ -203,7 +203,7 @@ func expandTemplate(cmd string, vars map[string]string) (string, error) {
 			}
 			return m
 		}
-		return shellQuote(v)
+		return execx.ShellQuote(v) // one shell word, as worktrunk escapes template values
 	})
 	if bad != nil {
 		return "", bad
@@ -212,26 +212,6 @@ func expandTemplate(cmd string, vars map[string]string) (string, error) {
 		return "", fmt.Errorf("%w: unsupported template in %q", ErrHook, cmd)
 	}
 	return out, nil
-}
-
-// shellQuote makes v one POSIX shell word, the way worktrunk escapes hook
-// template values: unchanged when it is non-empty and every character is in
-// [A-Za-z0-9_./:@%+=,-], else single-quoted, an embedded single quote
-// closing the quotes, backslash-escaped, then reopening them.
-func shellQuote(v string) string {
-	if v != "" && !strings.ContainsFunc(v, shellSpecial) {
-		return v
-	}
-	return "'" + strings.ReplaceAll(v, "'", `'\''`) + "'"
-}
-
-// shellSpecial reports whether r is outside shellQuote's safe set.
-func shellSpecial(r rune) bool {
-	switch {
-	case 'a' <= r && r <= 'z', 'A' <= r && r <= 'Z', '0' <= r && r <= '9':
-		return false
-	}
-	return !strings.ContainsRune("_./:@%+=,-", r)
 }
 
 // templateVars are the worktrunk variables magnum fills in for a per-PR

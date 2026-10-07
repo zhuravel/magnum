@@ -28,8 +28,8 @@ import (
 //     with no recorded sha, HEAD (or, for a pool slot, its placeholder
 //     branch, which Release resets wherever HEAD is) carries commits on no
 //     remote or magnum ref (HoldUnpushed). A HEAD equal to the commit an
-//     interrupted Checkout was switching to is magnum's own and is recorded
-//     instead;
+//     interrupted Checkout (or a release's reset) was switching to is
+//     magnum's own and is recorded instead;
 //   - the working tree has changes to tracked files and a human was there
 //     (HoldDirtyWorktree): a foreign agent or process as above, or the PR's
 //     human_active_at after the slot's last checkout (last_used_at), which the
@@ -52,20 +52,7 @@ func (m *Manager) Guard(ctx context.Context, slot store.Slot) error {
 // guard is Guard; with untracked, untracked files count as changes too (a
 // removal deletes the whole directory). Ignored files never count.
 func (m *Manager) guard(ctx context.Context, slot store.Slot, untracked bool) error {
-	sl := slot
-	if slot.ID != 0 {
-		var err error
-		if sl, err = m.reload(ctx, slot); err != nil {
-			return err
-		}
-	}
-	if sl.Pinned {
-		return ErrHold{Reason: HoldPinned, Detail: sl.Name + " is pinned"}
-	}
-	if sl.HoldReason != nil && *sl.HoldReason != "" {
-		return ErrHold{Reason: *sl.HoldReason, Detail: sl.Name + " is held"}
-	}
-	pr, err := m.guardPR(ctx, sl)
+	sl, pr, err := m.guardStart(ctx, slot)
 	if err != nil {
 		return err
 	}
@@ -92,6 +79,42 @@ func (m *Manager) guard(ctx context.Context, slot store.Slot, untracked bool) er
 	}
 	// Changes, if any, are magnum's residue.
 	return nil
+}
+
+// GuardLive is the part of Guard that saves nothing: it refuses a pinned or
+// held slot (HoldPinned, its hold_reason) and a human's agent or process in
+// it or in its PR's workspace (HoldForeignAgent, HoldForegroundProcess), and
+// looks at neither HEAD nor the tree. A forced removal runs it instead of
+// Guard: Guard would save the moved HEAD, the unpushed commits or the changes
+// the force discards as the slot's hold_reason, and a removal that failed
+// after it would leave the slot held in removing, where cleanup skips and
+// refuses it.
+func (m *Manager) GuardLive(ctx context.Context, slot store.Slot) error {
+	sl, pr, err := m.guardStart(ctx, slot)
+	if err != nil {
+		return err
+	}
+	return m.guardLive(ctx, sl, pr.ID)
+}
+
+// guardStart reloads slot (unless it has no row yet), refuses it when it is
+// pinned or held, and returns it with its PR (guardPR).
+func (m *Manager) guardStart(ctx context.Context, slot store.Slot) (store.Slot, store.PR, error) {
+	sl := slot
+	if slot.ID != 0 {
+		var err error
+		if sl, err = m.reload(ctx, slot); err != nil {
+			return store.Slot{}, store.PR{}, err
+		}
+	}
+	if sl.Pinned {
+		return sl, store.PR{}, ErrHold{Reason: HoldPinned, Detail: sl.Name + " is pinned"}
+	}
+	if sl.HoldReason != nil && *sl.HoldReason != "" {
+		return sl, store.PR{}, ErrHold{Reason: *sl.HoldReason, Detail: sl.Name + " is held"}
+	}
+	pr, err := m.guardPR(ctx, sl)
+	return sl, pr, err
 }
 
 // guardPR is the PR the slot holds (slotPR) or, for a per-PR worktree not
@@ -139,7 +162,7 @@ func (m *Manager) guardLive(ctx context.Context, sl store.Slot, prID int64) erro
 			prWorkspaces[ws] = prWorkspaces[ws] || (prID != 0 && s.PRID == prID)
 		}
 	}
-	root := canonPath(sl.Path)
+	root := fsx.Canon(sl.Path)
 	inSlot := func(cwd, fgCwd string) bool { return under(cwd, root) || under(fgCwd, root) }
 	// where places a foreign agent: in the slot, else in the PR's workspace
 	// ("" when neither).
@@ -287,13 +310,14 @@ func (m *Manager) guardPlaceholder(ctx context.Context, sl store.Slot) error {
 	return nil
 }
 
-// switchingKey is the kv key holding the commit a Checkout is switching slot
-// id to: written before the switch, deleted once checked_out_sha records it.
+// switchingKey is the kv key holding the commit a Checkout (or a release's
+// reset) is switching slot id to: written before the switch, deleted once
+// checked_out_sha records it (or the reset clears it).
 func switchingKey(id int64) string { return fmt.Sprintf("slot.%d.switching", id) }
 
-// resumeSwitch reports whether head is the commit an interrupted Checkout of
-// sl was switching to (magnum's own switch, not a human's commit) and, if
-// so, records it as checked_out_sha.
+// resumeSwitch reports whether head is the commit an interrupted Checkout
+// (or release reset) of sl was switching to (magnum's own switch, not a
+// human's commit) and, if so, records it as checked_out_sha.
 func (m *Manager) resumeSwitch(ctx context.Context, sl store.Slot, head string) (bool, error) {
 	if sl.ID == 0 {
 		return false, nil
@@ -501,9 +525,10 @@ func (m *Manager) ClearPin(ctx context.Context, slot store.Slot) error {
 }
 
 // Unpin hands the slot back to automation: pinned and hold_reason are
-// cleared. A head_drift or unpushed_commits hold is acknowledged by taking
-// the current HEAD as the new checked_out_sha, so the next guard passes and
-// the next release resets the slot. A dirty_worktree hold comes back at the
+// cleared, and so is a last_error that is a hold ("slots: held: …"). A
+// head_drift or unpushed_commits hold is acknowledged by taking the current
+// HEAD as the new checked_out_sha, so the next guard passes and the next
+// release resets the slot. A dirty_worktree hold comes back at the
 // next guard while the changes are there and a human still shows (their
 // agent or process in the slot, or human_active_at after the checkout):
 // commit, stash or discard them first (or remove the slot with force).
@@ -527,6 +552,9 @@ func (m *Manager) Unpin(ctx context.Context, slot store.Slot) error {
 		u.Set("hold_reason", nil)
 		if rebase != "" {
 			u.Set("checked_out_sha", rebase)
+		}
+		if strings.Contains(store.Deref(sl.LastError), holdErrorPrefix) {
+			u.Set("last_error", nil) // the hold's text; another failure stays
 		}
 	})
 	if err != nil {

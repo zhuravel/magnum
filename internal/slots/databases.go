@@ -2,7 +2,6 @@ package slots
 
 import (
 	"context"
-	"fmt"
 	"regexp"
 	"slices"
 	"strings"
@@ -18,21 +17,9 @@ import (
 // follows the last "__", which is what mysqlx.Slug and mysqlx.Guard expect.
 const dbTemplateSuffix = "__{slug}"
 
-// defaultListPrefix is the only prefix mysqlx's ListSuffixed can see
-// (mysqlx.DefaultPattern is talkable_%__%). Without a PrefixLister, pools
-// whose templates start with anything else cannot be listed.
-const defaultListPrefix = "talkable_"
-
-// DBLister is the listing half of *mysqlx.Client.
+// DBLister is the listing half of *mysqlx.Client: the schemas whose names
+// start with one of prefixes followed by a non-empty slug, ordered by name.
 type DBLister interface {
-	ListSuffixed(ctx context.Context) ([]mysqlx.Database, error)
-}
-
-// PrefixLister is a MySQL client that lists the schemas whose names start
-// with one of prefixes followed by a non-empty slug, ordered by name
-// (requested from mysqlx as (*Client).ListPrefixed). ListPoolDatabases uses
-// it when the client has it.
-type PrefixLister interface {
 	ListPrefixed(ctx context.Context, prefixes []string) ([]mysqlx.Database, error)
 }
 
@@ -58,34 +45,21 @@ func DBListPrefixes(pools ...config.Pool) (prefixes, bad []string) {
 }
 
 // ListPoolDatabases lists the per-worktree databases of pools: every schema
-// named <prefix><slug> for a prefix of DBListPrefixes, ordered by name. A
-// client that is a PrefixLister lists exactly those; any other client's
-// ListSuffixed is filtered to them, and a prefix ListSuffixed cannot see is
-// an error instead of a silently empty answer. Templates without "__{slug}"
-// are skipped and returned in bad for the caller to report. No pool
-// template at all lists nothing (and is not an error).
+// named <prefix><slug> for a prefix of DBListPrefixes, ordered by name (the
+// client's answer is checked again: a LIKE scan is only a coarse filter).
+// Templates without "__{slug}" are skipped and returned in bad for the
+// caller to report. No pool template at all lists nothing (and is not an
+// error).
 func ListPoolDatabases(ctx context.Context, c DBLister, pools ...config.Pool) (dbs []mysqlx.Database, bad []string, err error) {
 	prefixes, bad := DBListPrefixes(pools...)
 	if len(prefixes) == 0 {
 		return nil, bad, nil
 	}
-	if pl, ok := c.(PrefixLister); ok {
-		dbs, err := pl.ListPrefixed(ctx, prefixes)
-		if err != nil {
-			return nil, bad, err
-		}
-		return slices.DeleteFunc(dbs, func(d mysqlx.Database) bool { return !hasDBPrefix(d.Name, prefixes) }), bad, nil
-	}
-	for _, p := range prefixes {
-		if !strings.HasPrefix(p, defaultListPrefix) {
-			return nil, bad, fmt.Errorf("slots: cannot list databases named %s<slug>: the MySQL client lists only %s%%__%% (it needs ListPrefixed)", p, defaultListPrefix)
-		}
-	}
-	all, err := c.ListSuffixed(ctx)
+	dbs, err = c.ListPrefixed(ctx, prefixes)
 	if err != nil {
 		return nil, bad, err
 	}
-	return slices.DeleteFunc(all, func(d mysqlx.Database) bool { return !hasDBPrefix(d.Name, prefixes) }), bad, nil
+	return slices.DeleteFunc(dbs, func(d mysqlx.Database) bool { return !hasDBPrefix(d.Name, prefixes) }), bad, nil
 }
 
 // hasDBPrefix reports whether name is one of prefixes followed by a non-empty slug.
@@ -116,7 +90,7 @@ func DropGuard(pool config.Pool) mysqlx.Guard {
 	if prefix == "" || !strings.Contains(pool.SlotName, "{n}") {
 		return mysqlx.Guard{}
 	}
-	return mysqlx.Guard{Prefix: prefix, AllowRegexp: slotNameRegexp(pool)}
+	return mysqlx.Guard{Prefix: prefix, AllowRegexp: TemplateRegexp(pool.SlotName)}
 }
 
 // DBPrefix is the common start of the pool's database templates before "{"
@@ -144,9 +118,11 @@ func commonPrefix(a, b string) string {
 	return a[:n]
 }
 
-// slotNameRegexp matches the pool's slot names: slot_name with {n} as [0-9]+.
-func slotNameRegexp(pool config.Pool) *regexp.Regexp {
-	parts := strings.Split(pool.SlotName, "{n}")
+// TemplateRegexp matches what a slot template renders to (slot_name
+// review{n}, an expanded slot_path): the template anchored, its text quoted,
+// every {n} as [0-9]+ (^review[0-9]+$).
+func TemplateRegexp(tmpl string) *regexp.Regexp {
+	parts := strings.Split(tmpl, "{n}")
 	for i, p := range parts {
 		parts[i] = regexp.QuoteMeta(p)
 	}

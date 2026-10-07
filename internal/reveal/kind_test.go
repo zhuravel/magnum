@@ -4,6 +4,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/zhuravel/magnum/internal/execx"
 )
 
 func TestDetectKind(t *testing.T) {
@@ -47,8 +49,8 @@ func TestShellQuote(t *testing.T) {
 		"x;y":               "'x;y'",
 	}
 	for in, want := range cases {
-		if got := shellQuote(in); got != want {
-			t.Errorf("shellQuote(%q) = %s, want %s", in, got, want)
+		if got := execx.ShellQuote(in); got != want {
+			t.Errorf("ShellQuote(%q) = %s, want %s", in, got, want)
 		}
 	}
 	if got := shellJoin("/path with space/herdr", "agent", "attach", "reviewer"); got != `'/path with space/herdr' agent attach reviewer` {

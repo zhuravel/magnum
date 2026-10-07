@@ -11,7 +11,7 @@ import (
 // SyncResult reports what UpsertSlotDatabases recorded.
 type SyncResult struct {
 	Seen    int      `json:"seen"`    // databases upserted (last_seen_at = now)
-	Dropped []string `json:"dropped"` // rows newly marked dropped (dropped_by = DroppedBy)
+	Dropped []string `json:"dropped"` // rows newly marked dropped (dropped_by = "reconcile")
 }
 
 // UpsertSlotDatabases records inv's MySQL listing in slot_databases: every
@@ -62,7 +62,7 @@ func (s *Scanner) UpsertSlotDatabases(ctx context.Context, inv Inventory) (SyncR
 		if present[r.DBName] {
 			continue
 		}
-		if err := s.Store.MarkSlotDatabaseDropped(ctx, r.DBName, DroppedBy); err != nil {
+		if err := s.Store.MarkSlotDatabaseDropped(ctx, r.DBName, droppedBy); err != nil {
 			return res, fmt.Errorf("inventory: %w", err)
 		}
 		res.Dropped = append(res.Dropped, r.DBName)

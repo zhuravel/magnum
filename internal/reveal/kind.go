@@ -3,9 +3,10 @@ package reveal
 import (
 	"errors"
 	"fmt"
-	"regexp"
 	"strings"
 	"unicode"
+
+	"github.com/zhuravel/magnum/internal/execx"
 )
 
 // Kind is the family of terminal application magnum reveals herdr in.
@@ -47,25 +48,12 @@ func DetectKind(app string) Kind {
 	}
 }
 
-var shellSafe = regexp.MustCompile(`^[A-Za-z0-9_@%+=:,./-]+$`)
-
-// shellQuote quotes one word for a POSIX shell, leaving plain words readable
-// (the command is typed into a visible terminal tab).
-func shellQuote(s string) string {
-	if s == "" {
-		return "''"
-	}
-	if shellSafe.MatchString(s) {
-		return s
-	}
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
-
-// shellJoin renders argv as one shell command line.
+// shellJoin renders argv as one shell command line, plain words left
+// readable (the command is typed into a visible terminal tab).
 func shellJoin(argv ...string) string {
 	quoted := make([]string, len(argv))
 	for i, a := range argv {
-		quoted[i] = shellQuote(a)
+		quoted[i] = execx.ShellQuote(a)
 	}
 	return strings.Join(quoted, " ")
 }
