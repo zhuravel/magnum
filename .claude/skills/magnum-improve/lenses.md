@@ -34,14 +34,20 @@ skill or prompt change catches it.
 
 ## 1. Declined findings: what magnum posted and people rejected or deferred (every run, second)
 
-The other half of the teacher: precision. Inputs: the evidence's "Author replies to magnum's threads" tables (the
-newest `review-threads.json` of each PR: every magnum thread with its replies and their class), the judge's later
-decisions on those threads (`previous_findings` and the rebuttals in the next round's `codex-judge.json`), the
-`findings` rows of the posted finding, and people's reviews that disagree with magnum (GET with `gh api`, bounded as
-above). Classes are the author's claim, and `other` hides many real answers: read the replies.
+The other half of the teacher: precision. Inputs: the evidence's "Replies to magnum's threads" tables (every
+answered magnum thread of the newest `review-threads.json` of each PR, with the start of its last reply), the full
+replies (`gh api repos/{owner}/{repo}/pulls/comments/{id}` when a reply is cut), the judge's later decisions on those
+threads (`previous_findings` and the rebuttals in the next round's `codex-judge.json`), the `findings` rows of the
+posted finding, and people's reviews that disagree with magnum (GET with `gh api`, bounded as above).
 
-For each finding that was declined (`not a bug`), deferred (`won't fix`, a follow-up, "later", "out of scope") or
-argued, decide who was right at that head:
+People answer in free form. A reply may score the finding ("Net: -3", "I'd rate this -8"), weigh it against its cost,
+accept it and defer the fix to a ticket, fix only part of it, argue with its premise, ask a question, or say "fixed"
+while changing something else. The keyword guess in the table is magnum's classifier and misses most of this: read
+every reply and classify it yourself as fixed, accepted but not fixed yet, declined with a reason, deferred, argued,
+question, or unrelated. Report where your reading and the keyword guess differ: that is evidence for the reply
+classifier and for the judge's reply contract.
+
+For each finding that was declined, deferred or argued (by your reading), decide who was right at that head:
 
 - **magnum was wrong**: the reason holds (intended behavior, a misread, an impossible trigger, a test double that
   hid the real component). Say what led the judge astray and which rule would have stopped it.

@@ -80,9 +80,10 @@ find "$reviews" -mindepth 4 -maxdepth 4 -type d -newer "$stamp" -print 2>/dev/nu
 	xargs -I{} stat -f '%m %N' {} | sort -rn | cut -d' ' -f2- >"$dir/reports.txt" || true
 rm -f "$stamp"
 
-# How authors answered magnum's findings: the newest review-threads.json of each
-# PR reviewed since then, counted by reply class, with the declined and
-# deferred ones listed for the declined-findings lens.
+# Every reply to magnum's threads: the newest review-threads.json of each PR
+# reviewed since then. The class is magnum's keyword guess only; people answer
+# in free form (a score such as "Net: -3", a deferral, an argument), so the
+# declined-findings lens reads each reply and decides its meaning itself.
 python3 - "$dir/reports.txt" >>"$out" <<'PY'
 import json, os, sys, collections
 latest = {}
@@ -90,26 +91,31 @@ for d in open(sys.argv[1]).read().split():
     pr = os.path.dirname(d)
     if pr not in latest and os.path.exists(os.path.join(d, "review-threads.json")):
         latest[pr] = os.path.join(d, "review-threads.json")
-classes, declined = collections.Counter(), []
+guess, rows, unanswered = collections.Counter(), [], 0
 for pr, f in sorted(latest.items()):
     try:
         threads = json.load(open(f))
     except Exception:
         continue
     for t in threads if isinstance(threads, list) else threads.get("threads", []):
-        replies = [r for r in t.get("replies") or [] if not r.get("own")]
-        last = replies[-1]["class"] if replies else "unanswered"
-        classes[last] += 1
-        if last in ("not a bug", "won't fix", "other"):
-            body = " ".join((replies[-1].get("body") or "").split())[:200]
-            declined.append(f"| {last} | {t.get('finding','')[:90]} | {t.get('location','')} | {t.get('url','')} | {body} |")
-print("\n## Author replies to magnum's threads (latest round per PR)\n")
-print("| last reply | threads |\n|---|---|")
-for k, v in classes.most_common():
+        theirs = [r for r in t.get("replies") or [] if not r.get("own")]
+        own = len(t.get("replies") or []) - len(theirs)
+        if not theirs:
+            unanswered += 1
+            continue
+        last = theirs[-1]
+        guess[last.get("class") or "-"] += 1
+        text = " ".join((last.get("body") or "").split())[:400].replace("|", "/")
+        rows.append(f"| {last.get('class') or '-'} | {len(theirs)}/{own} | {t.get('finding','')[:90]} | {t.get('location','')} | {t.get('url','')} | {text} |")
+print("\n## Replies to magnum's threads (latest round per PR)\n")
+print(f"{len(rows)} answered threads, {unanswered} without a reply. The class is a keyword guess, not a verdict:")
+print("read every reply below and decide what it says.\n")
+print("| keyword guess | threads |\n|---|---|")
+for k, v in guess.most_common():
     print(f"| {k} | {v} |")
-print("\n### Declined, deferred or argued threads\n")
-print("| class | finding | where | thread | reply (first 200 chars) |\n|---|---|---|---|---|")
-print("\n".join(declined) or "| - | - | - | - | - |")
+print("\n### Every answered thread\n")
+print("| guess | replies theirs/own | finding | where | thread | last reply (first 400 chars) |\n|---|---|---|---|---|---|")
+print("\n".join(rows) or "| - | - | - | - | - | - |")
 PY
 
 git -C "$repo" log --since="$since" --format='%h %ad %<(150,trunc)%s' --date=short >"$dir/gitlog.txt"
