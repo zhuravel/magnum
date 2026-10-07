@@ -7,3 +7,5 @@
 !internal/store/migrations/*.sql
 /eval.local.toml
 /config.toml
+/.claude/*
+!/.claude/skills/

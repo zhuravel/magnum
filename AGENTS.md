@@ -79,6 +79,7 @@ describe any new key, command or key binding.
 | `internal/launchd`, `reveal` | the LaunchAgent; bringing the herdr client to the front of the terminal |
 | `internal/paths`, `fsx`, `textx` | the on-disk layout; the shared file (atomic write) and text helpers, leaves on the stdlib |
 | `docs/` | API doc (generated), decisions, probe notes (`spikes.md`), gh-dash keys |
+| `.claude/skills/magnum-improve` | the operator's improvement loop (`/magnum-improve` in Claude Code): evidence, analysts, specs, landing |
 
 Where a running magnum keeps its files (`internal/paths`): the user config and App keys in
 `~/.config/magnum`, the registry, reports and notes in `~/.local/share/magnum`, logs, locks and the gh
