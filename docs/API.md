@@ -50,6 +50,7 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 | [inventory](#inventory) | Package inventory is the read-mostly reconciliation view: the registry (slots, assignments, sessions) compared with what is really on disk (`git worktree list` of every watched main clone), in MySQL (per-worktree databases), in herdr (agents per path) and, on request, on GitHub (states of PRs checked out in manual worktrees). |
 | [launchd](#launchd) | Package launchd writes and manages magnum's LaunchAgent (label zhuravel.magnum): rendering the plist, installing it into the user's GUI domain, and querying, restarting and removing the job. |
 | [learn](#learn) | Package learn is the deterministic half of the retro (DECISIONS "Learning loop: daily retro"): after a pull request magnum reviewed closes, Build turns what other reviewers said about it into candidates for a classifier, after dropping what cannot be a miss (the author's and magnum's own comments, short approvals, comments on code magnum never saw, findings magnum already posted), and ParseOutput reads the classifier's answer back, refusing anything off schema and any lesson that retells the pull request instead of teaching (ScrubLesson). |
+| [mergecheck](#mergecheck) | Package mergecheck is `magnum merge-check`: whether an open PR's specs still pass once another PR is merged. |
 | [mysqlx](#mysqlx) | Package mysqlx inventories and drops the per-worktree MySQL databases that Talkable's bin/worktree-setup creates (talkable_<env>[_<role>]__<slug>) on the local DBngin server. |
 | [notes](#notes) | Package notes measures, versions and curates the repository notes (the file every review role reads first and the judge rewrites, engine.NotesPath) and their harness directory of QA scripts. |
 | [notify](#notify) | Package notify is magnum's user-facing status surface: toasts and herdr sidebar tokens. |
@@ -7069,6 +7070,13 @@ const GHCredentialHelper = "!gh auth git-credential"
     GHCredentialHelper is the git credential helper that answers with gh's login
     for github.com (`gh auth git-credential`).
 
+const MergeCheckRefPrefix = "refs/magnum/merge-check/"
+    MergeCheckRefPrefix holds the refs `magnum merge-check` keeps the commits
+    it tests in (refs/magnum/merge-check/<slot>/…), apart from refs/magnum/pr/*
+    (the daemon's PR heads), which it never touches. Being under refs/magnum/,
+    they also keep a merged tree's commit from counting as unpushed work in the
+    slot.
+
 const WorktreesSuffix = "__worktrees"
     WorktreesSuffix is appended to a main clone's path to name the directory
     holding magnum's per-PR worktrees (<clone>__worktrees/pr-N). FindClone skips
@@ -7182,6 +7190,11 @@ func (c *Client) Clone(ctx context.Context, repoURL, dest string) error
 func (c *Client) CloneWith(ctx context.Context, repoURL, dest string, opt CloneOptions) error
     CloneWith is Clone with options (see CloneOptions).
 
+func (c *Client) CommitTree(ctx context.Context, dir, tree, message string, parents ...string) (string, error)
+    CommitTree writes a commit object for tree with parents and message,
+    moving no ref and touching no work tree (`git commit-tree`, unsigned,
+    as "magnum" unless the environment names someone). It returns its id.
+
 func (c *Client) FetchBranch(ctx context.Context, mainClone, base string) error
     FetchBranch updates refs/remotes/origin/<base> in mainClone from the remote.
 
@@ -7193,6 +7206,12 @@ func (c *Client) FetchCommit(ctx context.Context, mainClone, sha string, number 
     PR number's head into refs/magnum/eval/pr-<number> (the commit is there
     unless the PR was force-pushed past it). It never writes refs/magnum/pr/*,
     so the daemon's checkouts are unaffected.
+
+func (c *Client) FetchInto(ctx context.Context, mainClone, src, ref string) (string, error)
+    FetchInto fetches src from origin into ref, a ref under MergeCheckRefPrefix,
+    forcing the update, and returns the commit ref then points to. src is a
+    ref the server has (refs/pull/N/head) or a full commit id (GitHub serves
+    reachable commits by id).
 
 func (c *Client) FetchPR(ctx context.Context, mainClone string, number int) (string, error)
     FetchPR fetches the PR head (refs/pull/N/head) into refs/magnum/pr/N
@@ -7241,6 +7260,13 @@ func (c *Client) LsRemote(ctx context.Context, dir string, timeout time.Duration
 
 func (c *Client) MergeBase(ctx context.Context, dir, a, b string) (string, error)
     MergeBase returns the best common ancestor of a and b, or ErrNoMergeBase.
+
+func (c *Client) MergeTree(ctx context.Context, dir, ours, theirs string) (tree string, conflicts []string, err error)
+    MergeTree merges commit theirs into commit ours as `git merge` would (the
+    ort strategy), without a work tree, an index or a ref: `git merge-tree
+    --write-tree`. It returns the merged tree's id, or the paths that conflict
+    (each once, sorted) when the merge does not apply cleanly, which is an
+    answer, not an error.
 
 func (c *Client) ModifiedPaths(ctx context.Context, dir, base, head string) ([]string, error)
     ModifiedPaths is ChangedPaths without the files head adds: the paths that
@@ -7300,6 +7326,10 @@ func (c *Client) UnpushedRef(ctx context.Context, dir, ref string) (int, error)
     UnpushedRef is Unpushed for an arbitrary ref (a placeholder branch,
     a detached sha): the commits reachable from ref that exist on no
     remote-tracking ref and no refs/magnum/* ref. Read-only.
+
+func (c *Client) UpdateRef(ctx context.Context, dir, ref, sha string) error
+    UpdateRef points ref, a ref under MergeCheckRefPrefix, at commit sha (never
+    through a symbolic ref). UpdateRefDelete removes it.
 
 func (c *Client) UpdateRefDelete(ctx context.Context, mainClone, ref string) error
     UpdateRefDelete deletes a ref under refs/magnum/ (for example PRRef(n)).
@@ -8794,6 +8824,205 @@ type Reviewed struct {
 	At  time.Time // when the review was posted
 }
     Reviewed is a commit magnum posted a review of.
+
+```
+
+## mergecheck
+
+```text
+package mergecheck // import "github.com/zhuravel/magnum/internal/mergecheck"
+
+Package mergecheck is `magnum merge-check`: whether an open PR's specs still
+pass once another PR is merged. Two PRs that change no common line can still
+break the base branch together (talkable on 2026-10-05: #11939 with #11979,
+one failing example; #11959 with #11939, 99), and the repository's CI does not
+run on push.
+
+A check holds a free pool slot (slots.HoldFree, hold_reason Reason), merges
+the PR's head into the merged commit without a work tree (git merge-tree,
+the merge `git merge` makes; a textual conflict is a result) and commits
+the merged tree, unreferenced but for a ref under gitx.MergeCheckRefPrefix,
+so the slot's checkout steps, its schema record and its guard read it like any
+commit. It checks that commit out with the slot's checkout steps and readiness
+(slots.CheckoutHeld, EnsureSchema, the repository's prepare and ready commands),
+runs the spec files the two sides touch through the slot's db-lock line,
+and runs the files of the failing examples again at the PR head alone,
+to tell a clash from a PR that was already red. The result goes to a JSON file
+and a merge_check.result event; the slot is released as a round's release
+does (slots.ReleaseHeld), also after a failure or an interrupt, unless Keep.
+It is an experiment the operator runs from the CLI; the daemon never does.
+
+CONSTANTS
+
+const (
+	// DefaultCommand runs spec files when Options.Command is empty.
+	DefaultCommand = "bin/rspec"
+	// DefaultTimeout bounds each spec run when Options.Timeout is 0.
+	DefaultTimeout = time.Hour
+	// Shell runs the readiness commands and the spec runs as `zsh -lc`, the
+	// login shell a round's readiness step and the agents' tools use.
+	Shell = "zsh"
+	// ResultFile is the check's JSON result, in Options.Dir.
+	ResultFile = "result.json"
+	// EventKind is the event a check records under the PR's subject.
+	EventKind = "merge_check.result"
+)
+const (
+	VerdictPass           = "pass"            // no example fails on the merged tree
+	VerdictNoSpecs        = "no_specs"        // neither side touches a spec file or a subject that has one
+	VerdictConflict       = "conflict"        // the merge does not apply cleanly
+	VerdictClash          = "clash"           // an example fails on the merged tree and not at the PR head
+	VerdictAlreadyFailing = "already_failing" // every failing example fails at the PR head too
+	VerdictUnknown        = "unknown"         // the PR head's run gave no answer for a failing example
+	VerdictError          = "error"           // the check did not finish (Detail says why)
+)
+    Verdicts of a check.
+
+const (
+	AtHeadPassed  = "passed"
+	AtHeadFailed  = "failed"
+	AtHeadPending = "pending"
+	AtHeadAbsent  = "absent"  // the PR head has no such example or file: it came with the merged commit
+	AtHeadNotRun  = "not_run" // the head's run did not happen or gave no report
+)
+    What a failing example does at the PR head (Failure.AtHead).
+
+const (
+	KindExample   = "example"
+	KindLoadError = "load_error"       // the spec file failed to load
+	KindOutside   = "outside_examples" // an error in a hook or the suite's setup
+)
+    Kinds of failures (Failure.Kind).
+
+const Reason = "merge-check"
+    Reason is the hold_reason of the slot a check holds: `magnum slots` and
+    `magnum status` show it.
+
+
+FUNCTIONS
+
+func IsSpec(path string) bool
+    IsSpec reports whether path is an RSpec file: spec/…/*_spec.rb.
+
+func SpecsFor(path string) []string
+    SpecsFor are the spec files Rails convention gives a Ruby file:
+    app/<dir>/<path>.rb → spec/<dir>/<path>_spec.rb (and, for a controller,
+    spec/requests/<path without _controller>_spec.rb), lib/<path>.rb →
+    spec/lib/<path>_spec.rb, any other <path>.rb → spec/<path>_spec.rb. None for
+    a file that is not Ruby or is a spec already.
+
+func Summary(r Result) string
+    Summary is one sentence about r's verdict, with counts only (no PR text).
+
+
+TYPES
+
+type Check struct {
+	Kind    string `json:"kind"` // schema, prepare or ready
+	Command string `json:"command,omitempty"`
+	OK      bool   `json:"ok"`
+	Detail  string `json:"detail,omitempty"`
+}
+    Check is one readiness step of a checkout.
+
+type Deps struct {
+	Store *store.Store
+	Git   *gitx.Client
+	// Run runs the readiness commands and the spec runs in the slot.
+	Run   execx.Runner
+	Slots Slots
+	Now   func() time.Time // nil: time.Now
+	// Progress gets one line per stage (nil: none).
+	Progress func(line string)
+}
+    Deps are a check's collaborators.
+
+type Failure struct {
+	Kind        string `json:"kind"`
+	File        string `json:"file,omitempty"`
+	Line        int    `json:"line,omitempty"`
+	ID          string `json:"id,omitempty"`
+	Description string `json:"description"`
+	Error       string `json:"error,omitempty"`
+	AtHead      string `json:"at_head"`
+	Verdict     string `json:"verdict"` // clash, already_failing or unknown
+}
+    Failure is a failing example (or error) on the merged tree and what it does
+    at the PR head.
+
+type Options struct {
+	Pool      config.Pool
+	Readiness config.Readiness // the repository's prepare and ready commands (config.Config.ReadinessFor)
+	PR        int              // the open PR whose head is merged
+	Merged    string           // the merged commit: a full or abbreviated commit id
+	MergedPR  int              // the PR Merged merged, when known (labels only)
+	Slot      string           // the slot to hold; "" = the least recently used free one
+	Keep      bool             // leave the slot held for inspection instead of releasing it
+	Command   string           // runs spec files; "" = DefaultCommand
+	Magnum    string           // the magnum binary in the db-lock line; "" = magnum on PATH
+	Dir       string           // where the run's files go (created)
+	Timeout   time.Duration    // each spec run's limit; 0 = DefaultTimeout
+}
+    Options say what a check checks.
+
+type Result struct {
+	Repo      string    `json:"repo"`
+	PR        int       `json:"pr"`
+	Head      string    `json:"head,omitempty"`
+	Merged    string    `json:"merged"`
+	MergedPR  int       `json:"merged_pr,omitempty"`
+	Tree      string    `json:"tree,omitempty"` // the merged tree's local commit
+	Slot      string    `json:"slot,omitempty"`
+	Verdict   string    `json:"verdict"`
+	Detail    string    `json:"detail,omitempty"`
+	Conflicts []string  `json:"conflicts,omitempty"`
+	Specs     []string  `json:"specs,omitempty"` // the spec files run on the merged tree
+	MergedRun *SpecRun  `json:"merged_run,omitempty"`
+	HeadRun   *SpecRun  `json:"head_run,omitempty"`
+	Failures  []Failure `json:"failures,omitempty"`
+	Released  bool      `json:"released"`
+	Kept      bool      `json:"kept,omitempty"`
+	// ReleaseError is why the release failed (the slot stays held).
+	ReleaseError string    `json:"release_error,omitempty"`
+	StartedAt    time.Time `json:"started_at"`
+	EndedAt      time.Time `json:"ended_at"`
+	// File is where the result was written ("" when it could not be).
+	File string `json:"-"`
+}
+    Result is a check's outcome, written to ResultFile.
+
+func Run(ctx context.Context, d Deps, o Options) (Result, error)
+    Run runs a check: it holds a slot, checks, releases the slot (unless Keep;
+    with a context that an interrupt does not cancel) and records the result.
+    The error is the check's (the result's Verdict is then VerdictError),
+    the release's or the record's; a slot it could not hold is an error with
+    nothing recorded.
+
+type Slots interface {
+	HoldFree(ctx context.Context, pool config.Pool, name, hold string) (store.Slot, error)
+	CheckoutHeld(ctx context.Context, slot store.Slot, pool config.Pool, hold, sha string) error
+	EnsureSchema(ctx context.Context, slot store.Slot, pool config.Pool) (string, error)
+	ReleaseHeld(ctx context.Context, slot store.Slot, pool config.Pool, hold string, refs ...string) error
+}
+    Slots is the part of *slots.Manager a check drives.
+
+type SpecRun struct {
+	Tree      string   `json:"tree"` // "merged" or "head"
+	SHA       string   `json:"sha"`
+	Readiness []Check  `json:"readiness,omitempty"`
+	Files     []string `json:"files,omitempty"`
+	Examples  int      `json:"examples"`
+	Failed    int      `json:"failed"`
+	Pending   int      `json:"pending,omitempty"`
+	// ErrorsOutside counts the errors outside examples (files that failed to
+	// load, hooks).
+	ErrorsOutside int    `json:"errors_outside_examples,omitempty"`
+	Exit          int    `json:"exit"`
+	Duration      string `json:"duration,omitempty"`
+	Report        string `json:"report,omitempty"` // the runner's JSON report
+	Log           string `json:"log,omitempty"`    // its output
+}
+    SpecRun is a tree's checkout and spec run.
 
 ```
 
@@ -11126,6 +11355,17 @@ func (m *Manager) CheckoutFetched(ctx context.Context, slot store.Slot, pr store
     refs/magnum/pr/N still holds that commit, and fails when a fetch since moved
     it (the caller read fetched, not the newer head).
 
+func (m *Manager) CheckoutHeld(ctx context.Context, slot store.Slot, pool config.Pool, hold, sha string) error
+    CheckoutHeld puts commit sha (present in the slot's main clone) into a
+    slot held for hold, as Checkout puts a PR's head into a claimed one.
+    Steps (subject "slot:<name>:<hold>:<sha7>", a new generation each call):
+    guard (guardHeld), switch (detached at sha, tracked changes discarded after
+    a slot.discarded event, sha written to the kv store first), render_mise,
+    deps, schema (dirty_schema when sha changes pool.schema_paths since its
+    merge base with origin/<base>) and verify (HEAD == sha → checked_out_sha,
+    last_used_at). Whether the databases need the checkout's schema is
+    EnsureSchema's call, as for a person's checkout.
+
 func (m *Manager) Claim(ctx context.Context, pr store.PR, pool config.Pool) (store.Slot, error)
     Claim hands a free pool slot to pr: store.FreeSlots (the slot that last
     held the PR first, then least recently used) and store.ClaimSlot for each
@@ -11232,6 +11472,18 @@ func (m *Manager) GuardLive(ctx context.Context, slot store.Slot) error
     after it would leave the slot held in removing, where cleanup skips and
     refuses it.
 
+func (m *Manager) HoldFree(ctx context.Context, pool config.Pool, name, hold string) (store.Slot, error)
+    HoldFree holds a free slot of pool for hold (a hold_reason such as
+    "merge-check"): the slot named name, or else each of store.FreeSlots in
+    turn (least recently used first). One compare-and-set moves it from free,
+    unpinned, without hold_reason and without a PR to held with hold_reason
+    = hold; a lost race moves on. Then the guard runs on it (guardHeld):
+    a human's agent or process there hands the slot back (free again) and the
+    next one is tried; a hold the guard persists (their changes, a moved HEAD,
+    unpushed commits) keeps it held for them. A named slot that is pinned,
+    held, holds a PR or is not free is refused (ErrHold or store.ErrConflict);
+    none left is ErrNoFreeSlot. It returns the held slot.
+
 func (m *Manager) HumanEvidence(ctx context.Context, sl store.Slot) (string, error)
     HumanEvidence explains why changes in slot sl's tree would be a human's
     rather than magnum's residue: its PR's human_active_at is after the slot's
@@ -11300,6 +11552,17 @@ func (m *Manager) Release(ctx context.Context, slot store.Slot, pool config.Pool
     whatever a human did since the last attempt refuses the release before its
     next destructive step. Per-PR slots are removed instead (RemovePRWorktree
     semantics).
+
+func (m *Manager) ReleaseHeld(ctx context.Context, slot store.Slot, pool config.Pool, hold string, refs ...string) error
+    ReleaseHeld hands a slot held for hold back to the pool with Release's
+    steps (subject "slot:<name>:release": guard, fetch_base, reset to the
+    placeholder at origin/<base>, delete_ref, render_mise, deps, schema_check,
+    mark_free), deleting refs (under gitx.MergeCheckRefPrefix, in the main
+    clone) in delete_ref. The slot stays held for hold until mark_free,
+    one compare-and-set from held with that hold_reason to free with none,
+    so the daemon cannot resume the release meanwhile. A failure leaves it
+    held for hold, with last_error; two failed schema reloads move it to broken
+    (ErrBroken). A guard that finds a human holds it for them.
 
 func (m *Manager) Remove(ctx context.Context, slot store.Slot, pool config.Pool, force bool) error
     Remove tears a pool slot down: steps of subject "slot:<name>:remove" are

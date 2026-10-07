@@ -56,6 +56,13 @@ func (m *Manager) guard(ctx context.Context, slot store.Slot, untracked bool) er
 	if err != nil {
 		return err
 	}
+	return m.guardChecks(ctx, sl, pr, untracked)
+}
+
+// guardChecks is guard after its pin and hold checks: a human's agent or
+// process (their changes then held too), HEAD drift and unpushed commits,
+// and changes after the PR's human activity. sl is the current row.
+func (m *Manager) guardChecks(ctx context.Context, sl store.Slot, pr store.PR, untracked bool) error {
 	if err := m.guardLive(ctx, sl, pr.ID); err != nil {
 		live, ok := AsHold(err)
 		if !ok {

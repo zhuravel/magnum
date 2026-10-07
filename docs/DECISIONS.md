@@ -3891,3 +3891,27 @@ editing history. Code, config comments and prompts reference these by their head
   else held the check. `keptApprovalDeadline` is the push quiet period after the first push the approval does
   not cover plus one hour again, and `approvalDeadline` is deleted; on talkable#11920 the check would have run
   inside quiet hours once it was due, and its approval would have superseded the kept one.
+- **`magnum merge-check`: an experiment the operator runs, never the daemon** (2026-10-07). On 10-05
+  talkable's master broke twice from two PRs that did not conflict as text (#11939 with #11979, one failing
+  example; #11959 with #11939, 99), its CI does not run on push, and 12 of 25 PRs merged that week had no
+  RSpec run at the head that merged. Before the daemon re-runs open PRs' specs after each merge, the command
+  proves the idea on the known clashes: it holds a free pool slot, merges the PR head into the merged commit,
+  runs the spec files either side touches through the slot's db-lock line and runs the failing ones again at
+  the PR head; an example that does not fail there (it passes, or the head has no such example: it came with
+  the merged commit) is a clash, one that fails there too was already failing; a textual conflict is a
+  verdict. It adds no daemon behaviour. The slot is held as state held with hold_reason `merge-check` from the
+  claim (one compare-and-set from free, unpinned, unheld and without a PR, as ClaimSlot's) to the release's
+  last step (one compare-and-set back to free), because the daemon never claims, evicts, resumes, cleans up or
+  releases a slot with a hold_reason; the release runs Release's own steps (`releaseSteps` and `resetSchema`
+  with the hold) instead of moving through releasing and dirty_schema, which stalledRelease resumes: a waiting
+  PR would have the daemon run the same release, and reset_db, next to the command's. The guard runs after the
+  claim (a person's agent or process hands the slot back), before each checkout and before the release. With
+  no daemon the command holds the daemon's lock (acquireOps), so a daemon starting meanwhile waits; it refuses
+  while another command holds ops.lock, while `daemon-restart --drain` drains, and a Codex-flagged PR (the
+  reason `magnum review` gives). The merge is `git merge-tree --write-tree` (the merge `git merge` makes,
+  without touching a work tree, so a conflict leaves nothing half-merged) and a local commit of its tree under
+  `refs/magnum/merge-check/<slot>/`, rather than `git merge --no-commit` in the slot: the schema fingerprint,
+  the guard's HEAD check and the deps hash read HEAD, so the slot's record would have named the merged
+  commit's schema while its databases carried the merge's. Rejected: handing the work to the daemon (new daemon
+  behaviour for an experiment), Release (the race above), and per-example re-runs by id (a merged commit that
+  adds examples to the same file shifts the ids; examples are matched by file and full description).

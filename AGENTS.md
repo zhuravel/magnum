@@ -77,6 +77,7 @@ describe any new key, command or key binding.
 | `internal/store` | SQLite registry, migrations under `migrations/`, compare-and-set transitions |
 | `internal/config`, `prompts/`, `skills/` | configuration (roles, kinds), prompt files, the judge skill |
 | `internal/learn`, `eval` | the daily retro's candidates and answers; replaying seeded PRs to score a change |
+| `internal/mergecheck` | `magnum merge-check`: a PR's specs on the tree another PR's merge leaves (an experiment, CLI only) |
 | `internal/cli`, `internal/tui` | cobra commands, Bubble Tea v2 screens |
 | `internal/attention`, `notify` | why a PR needs the user; toasts and herdr sidebar tokens |
 | `internal/usage` | how much of an agent CLI's budget is used, and its pace |
