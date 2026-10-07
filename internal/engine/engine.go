@@ -316,7 +316,9 @@ type Engine struct {
 	// autoSeen and autoFollow remember, by PR and by automatic approval,
 	// what auto-approval last read GitHub's reviews for (autoapprove.go): a
 	// PR whose latest round and updatedAt did not move since is not asked
-	// again. Tick goroutine only.
+	// again. autoMu guards them and serializes auto-approval, which the tick
+	// and a round's goroutine at its end (autoApproveRound) both run.
+	autoMu               sync.Mutex
 	autoSeen, autoFollow map[int64]string
 
 	infraMu  sync.Mutex // infrastructure failures (infra.go)

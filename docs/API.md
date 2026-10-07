@@ -219,7 +219,8 @@ const CodexProjectSentence = "Codex ran without the PR's .codex/ changes (the ch
 
 const CompletionIdleTicks = 2
     CompletionIdleTicks is how many consecutive idle|done observations end a
-    turn.
+    turn. The pipeline ends a judge's turn sooner, once its result file holds a
+    final status; the agent's work after that is still the run's (turnTail).
 
 const EventBackgroundWait = "agent.background_wait"
     EventBackgroundWait is recorded once per run when background work holds an
@@ -1019,14 +1020,15 @@ func (m *Manager) ObserveSnapshotAt(ctx context.Context, snap herdr.Snapshot, ca
 
       - agent found (by name, else by pane): status/status_at stored; idle|done
         increments idle_ticks, working|blocked resets it; a newly reported
-        agent_session.value becomes session_id; a starting session becomes
-        live. working + a submitted run -> run working (working_seen_at).
-        idle_ticks >= CompletionIdleTicks + a submitted/working run -> run
-        ended, ObsCompleted. working with no pending/submitted/working
-        run (outside a short grace after start/prompt) -> ObsHumanActive,
-        unless the agent is a claude agent whose transcript shows a task
-        notification began the turn (background work of an earlier run resumed
-        it; see notificationTurn). blocked -> ObsBlocked, or ObsPromptDenied
+        agent_session.value becomes session_id; a starting session becomes live.
+        working + a submitted run -> run working (working_seen_at). idle_ticks
+        >= CompletionIdleTicks + a submitted/working run -> run ended,
+        ObsCompleted. working with no pending/submitted/working run (outside a
+        short grace after start/prompt) -> ObsHumanActive, unless the agent is a
+        claude agent whose transcript shows a task notification began the turn
+        (background work of an earlier run resumed it; see notificationTurn),
+        or a judge still finishing the turn of a run the round settled on its
+        result file (see turnTail). blocked -> ObsBlocked, or ObsPromptDenied
         when a pending/submitted/working run is in flight, the kind's
         on_permission_prompt is "deny" and the screen shows a permission prompt,
         which is answered No (see answerPermission; never without a run in
@@ -1086,8 +1088,8 @@ func (m *Manager) Prompt(ctx context.Context, pr store.PR, role Role, kind, text
     RunNudge, RunRecovery) in the PR's latest round (1 when none) and submits
     text to the role's live agent (see Submit). It returns the run id, also
     when Submit fails after the run was created; a run refused before sending
-    (ErrNoSession, ErrHumanActive) is marked abandoned. Start a new round,
-    or quote the run id in the text, with NewRun + Submit.
+    (ErrNoSession, ErrHumanActive, ErrBusy) is marked abandoned. Start a new
+    round, or quote the run id in the text, with NewRun + Submit.
 
 func (m *Manager) Quit(ctx context.Context, s store.Session) error
     Quit stops a session's agent the way a human would: ctrl+c, 1 s, ctrl+c,
@@ -1229,15 +1231,18 @@ func (m *Manager) StartAgent(ctx context.Context, pr store.PR, role config.Role,
 func (m *Manager) Submit(ctx context.Context, run store.Run, text string) error
     Submit sends text to the live agent of run's role and records the
     outcome. The run must be pending (a run once submitted is observed,
-    never re-sent: store.ErrConflict). It refuses with ErrHumanActive inside
-    daemon.human_cooldown after a human typed into the session, and with
-    ErrNoSession unless the role's session is live; both leave the run pending
-    for the caller to retry or abandon. A role whose newest session is lost
-    while a fresh herdr snapshot still shows its agent gets that session back
-    live (rebindLost) instead of a refusal. Before sending, a session on a
-    limited model switches to a fallback, and one magnum switched earlier
-    switches back once its role's model is no longer limited (ensureModel). The
-    prompt waits for the agent to reach working or blocked (PromptAckTimeout):
+    never re-sent: store.ErrConflict). It refuses with ErrHumanActive
+    inside daemon.human_cooldown after a human typed into the session,
+    and with ErrNoSession unless the role's session is live, and it holds a
+    prompt to a judge still finishing the turn of its last run until herdr
+    shows the agent no longer working (awaitTail; ErrBusy after tailWait);
+    each refusal leaves the run pending for the caller to retry or abandon.
+    A role whose newest session is lost while a fresh herdr snapshot still shows
+    its agent gets that session back live (rebindLost) instead of a refusal.
+    Before sending, a session on a limited model switches to a fallback, and one
+    magnum switched earlier switches back once its role's model is no longer
+    limited (ensureModel). The prompt waits for the agent to reach working or
+    blocked (PromptAckTimeout):
 
       - working: run working (submitted_at, working_seen_at).
       - blocked after submission: run submitted, ErrBlocked.
@@ -9576,7 +9581,9 @@ maps RoundResult.Outcome onto the PR state machine.
 Completion of an agent turn is read from the store: the engine's per-tick
 agents.Observe moves a run to ended after two idle ticks, and this package polls
 the run rows (every PollInterval) until then, or until the role's timeout. The
-judge's turn also ends when its result file has been present for ResultSettle.
+judge's turn also ends as soon as its result file holds a final status (its last
+step; the agent may still print its final message, which agents counts as the
+run's), and when a file with another status has been present for ResultSettle.
 
 CONSTANTS
 
@@ -9625,8 +9632,9 @@ const (
 
 const (
 	DefaultPollInterval = 10 * time.Second
-	// ResultSettle is how long the judge's result file must be present before
-	// it ends the turn when the agent has not gone idle (status flicker).
+	// ResultSettle is how long a judge's result file whose status is not a
+	// final one (finalStatus; a final one ends the turn at once) must be
+	// present before it ends the turn when the agent has not gone idle.
 	ResultSettle = 2 * time.Minute
 	// InterruptWait bounds the wait for an interrupted agent (a timed-out
 	// judge, a reviewer a push cut short) to be seen idle; the engine's
@@ -12978,6 +12986,10 @@ func (s *Store) GitHubRequiredChecks(ctx context.Context, fullName string) (GitH
 func (s *Store) InsertAutoApproval(ctx context.Context, a AutoApproval) (AutoApproval, error)
     InsertAutoApproval records a post about to be tried (state posting,
     one attempt). It returns ErrConflict when the PR already has a live one.
+
+func (s *Store) LastEndedRun(ctx context.Context, prID, sessionID int64) (Run, error)
+    LastEndedRun is the run of session sessionID (of PR prID) that ended last
+    (by ended_at, whatever its state now); ErrNotFound when none has ended.
 
 func (s *Store) LastReviewSummaries(ctx context.Context, prIDs []int64) (map[int64]ReviewSummary, error)
     LastReviewSummaries returns the ReviewSummary of each PR's latest posted

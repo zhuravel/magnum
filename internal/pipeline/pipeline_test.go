@@ -567,7 +567,10 @@ func TestACheckoutDirtyBeforeTheReviewersIsLeftAlone(t *testing.T) {
 	}
 }
 
-func TestResultFileCompletesJudge(t *testing.T) {
+// The judge's result file with a final status ends its turn at once: the
+// round verifies on GitHub without waiting for the agent to be seen idle on
+// two ticks (it may still print its last message).
+func TestAFinalResultFileEndsTheJudgesTurnAtOnce(t *testing.T) {
 	e := newEnv(t)
 	p := e.judgePosts(512, "COMMENTED", "COMMENT")
 	p.keepWorking = true // the agent never goes idle
@@ -580,8 +583,9 @@ func TestResultFileCompletesJudge(t *testing.T) {
 	if res.Outcome != OutcomePosted || res.ReviewID != 512 {
 		t.Fatalf("result = %+v", res)
 	}
-	if elapsed := e.clock.Now().Sub(t0); elapsed < ResultSettle || elapsed >= e.cfg.Daemon.JudgeTimeout.Duration {
-		t.Errorf("elapsed = %s", elapsed)
+	run := e.runOf(agents.RoleJudge, KindInitial)
+	if run.State != store.RunVerified || run.SubmittedAt == nil || run.VerifiedAt == nil || !run.VerifiedAt.Equal(*run.SubmittedAt) {
+		t.Fatalf("judge run = %+v, want verified with no wait after its result", run)
 	}
 }
 

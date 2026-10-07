@@ -551,7 +551,8 @@ auto_approve_as = "me"             # an identity of kind gh: your own account
 # auto_approve_body = "Approved after magnum's review of {{.Short}}."   # one line; magnum adds its marker
 ```
 
-Magnum approves as `auto_approve_as`, on the head it reviewed, only when all of these hold:
+Magnum approves as `auto_approve_as`, on the head it reviewed, as soon as the round that posted the review
+ends (each tick looks again, for a post to retry or a PR that changed), only when all of these hold:
 
 - its latest verified review is of the PR's current head and leaves nothing to fix before merging: no
   P0, P1 or P2 finding, still-open earlier ones included (P3 findings and simplifications are optional).
@@ -719,7 +720,14 @@ it as `failing_checks`. The review's Checks then say for each one whether the PR
 (`gh run view --log-failed`): one the PR causes is a P1 broken build, any other is named as unrelated. A
 blind replay never gets the file.
 
-A session role's turn ends when herdr shows its agent idle on two ticks in a row. Claude Code also ends
+A session role's turn ends when herdr shows its agent idle on two ticks in a row. The judge's ends as soon
+as its result file (`codex-judge.json`, the last thing its skill writes) parses with a final status
+(`posted`, `replied`, `dry_run`, `blocked`, `identity_error`, `closed`, `stopped` or `error`), and Magnum
+checks GitHub at once instead of a minute or two later. The agent may still be printing its last message
+then: that work is the turn's, never taken for someone typing into the pane, and Magnum sends the judge
+nothing new until herdr shows it idle (it refuses the prompt as busy after 2 minutes). A result file that
+does not parse, or holds another status, ends the turn as before: two idle ticks, or 2 minutes after the
+file appeared while the agent still shows working. Claude Code also ends
 its turn while work it started in the background runs (a command run in the background or moved there by
 its timeout, an asynchronous subagent, a skill forked into the background such as `/code-review`) and
 resumes when that work notifies it, so for a claude agent Magnum reads the session's transcript too

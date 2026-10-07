@@ -19,8 +19,10 @@
 // Completion of an agent turn is read from the store: the engine's per-tick
 // agents.Observe moves a run to ended after two idle ticks, and this package
 // polls the run rows (every PollInterval) until then, or until the role's
-// timeout. The judge's turn also ends when its result file has been present
-// for ResultSettle.
+// timeout. The judge's turn also ends as soon as its result file holds a
+// final status (its last step; the agent may still print its final message,
+// which agents counts as the run's), and when a file with another status has
+// been present for ResultSettle.
 package pipeline
 
 import (
@@ -95,8 +97,9 @@ const (
 // Timing.
 const (
 	DefaultPollInterval = 10 * time.Second
-	// ResultSettle is how long the judge's result file must be present before
-	// it ends the turn when the agent has not gone idle (status flicker).
+	// ResultSettle is how long a judge's result file whose status is not a
+	// final one (finalStatus; a final one ends the turn at once) must be
+	// present before it ends the turn when the agent has not gone idle.
 	ResultSettle = 2 * time.Minute
 	// InterruptWait bounds the wait for an interrupted agent (a timed-out
 	// judge, a reviewer a push cut short) to be seen idle; the engine's

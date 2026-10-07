@@ -19,7 +19,7 @@ type waitKind int
 
 const (
 	waitEnded     waitKind = iota // the run ended (idle on two ticks)
-	waitResult                    // the judge's result file settled while the agent stayed busy
+	waitResult                    // the judge's result file holds a final status, or settled while the agent stayed busy
 	waitFailed                    // the run failed or was abandoned (by Submit or externally)
 	waitLost                      // the session's pane or agent disappeared
 	waitTimeout                   // the role's timeout passed
@@ -74,9 +74,10 @@ func (rd *round) submitAndWait(ctx context.Context, run store.Run, text string, 
 	return t
 }
 
-// wait polls run until it ends, its session is lost, the result file settles
-// (judge only; a result naming another run id does not count) or timeout
-// passes.
+// wait polls run until it ends, its session is lost, the result file holds a
+// final status (finalStatus) or, with another status, settles for
+// ResultSettle (judge only; a file that does not parse, or names another run
+// id, does not count), or timeout passes.
 func (rd *round) wait(ctx context.Context, runID string, timeout time.Duration, resultFile string, ids map[string]bool) turn {
 	deadline := rd.r.now().Add(timeout)
 	var fileSeen time.Time
@@ -105,6 +106,11 @@ func (rd *round) wait(ctx context.Context, runID string, timeout time.Duration, 
 		now := rd.r.now()
 		if resultFile != "" {
 			if res, ok := readResultFile(resultFile); ok && (res.RunID == "" || ids[res.RunID]) {
+				if finalStatus(res.Status) {
+					// The judge's last step: the agent may still print its
+					// final message, which stays the run's (agents turnTail).
+					return turn{kind: waitResult, run: run}
+				}
 				if fileSeen.IsZero() {
 					fileSeen = now
 				}

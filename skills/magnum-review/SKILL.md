@@ -79,7 +79,7 @@ Probe the real engine and framework while you look (a scratch table, the test ru
 
 Search for existing helpers before you suggest new code.
 
-Databases: other roles use this worktree's suffixed databases (`WT_BRANCH` is exported) at the same time, so run every command that touches them (specs, `rails runner`, rake tasks, migrations, scratch tables, dropped after) as `<db_lock> <command>`. Its exit 75 is a timeout: the check did not run, a machine failure (section 7), not a finding. Never run `db:drop`, `db:create`, `db:setup` or a full test suite.
+Databases: other roles use this worktree's suffixed databases (`WT_BRANCH` is exported) at the same time, so run every command that touches them (specs, `rails runner`, rake tasks, migrations, scratch tables, dropped after) as `<db_lock> <command>`, as given (add no `--timeout`). Its exit 75 is a timeout: the check did not run, a machine failure (section 7), not a finding; a check that waited, then ran, is no `environment_failures` entry. Never run `db:drop`, `db:create`, `db:setup` or a full test suite.
 
 Repository notes (`notes`): read them first and verify a hint before relying on it; `notes_dir` holds their QA scripts.
 

@@ -259,6 +259,14 @@ const (
 	statusError         = "error"
 )
 
+// finalStatus reports whether a result's status is one of the statuses the
+// judge writes as its turn's last step (all of the above): the result file
+// then ends the judge's wait at once.
+func finalStatus(s string) bool {
+	return slices.Contains([]string{statusPosted, statusReplied, statusDryRun, statusBlocked, statusIdentityError,
+		statusClosed, statusStopped, statusError}, s)
+}
+
 // resultMarker prefixes the judge's final line.
 const resultMarker = "MAGNUM_RESULT"
 

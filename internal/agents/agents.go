@@ -71,7 +71,17 @@ const (
 )
 
 // CompletionIdleTicks is how many consecutive idle|done observations end a turn.
+// The pipeline ends a judge's turn sooner, once its result file holds a
+// final status; the agent's work after that is still the run's (turnTail).
 const CompletionIdleTicks = 2
+
+// tailWait bounds how long Submit holds a prompt to a judge still finishing
+// the turn of its last run (turnTail) before it refuses with ErrBusy;
+// tailPoll is how often it asks herdr whether the agent stopped working.
+const (
+	tailWait = 2 * time.Minute
+	tailPoll = 5 * time.Second
+)
 
 // humanGrace keeps a session from being flagged as human-driven right after
 // magnum started or prompted it (startup output and acks can read as working).

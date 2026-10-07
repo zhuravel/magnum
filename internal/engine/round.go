@@ -68,7 +68,8 @@ type setupError struct {
 func (s *setupError) Error() string { return s.err.Error() }
 
 // runRound prepares the slot and sessions, runs the pipeline and maps the
-// result onto the PR state machine.
+// result onto the PR state machine; a posted review goes straight on to
+// auto-approval (autoApproveRound).
 func (e *Engine) runRound(ctx context.Context, job *roundJob) {
 	fctx := context.WithoutCancel(ctx)
 	in, ws, serr := e.prepare(ctx, job)
@@ -82,6 +83,11 @@ func (e *Engine) runRound(ctx context.Context, job *roundJob) {
 	}
 	res, err := e.d.Rounds(job.pr.Identity).RunRound(ctx, in)
 	e.finish(fctx, job, in, ws, res, err, ctx.Err() != nil)
+	if res.Outcome == pipeline.OutcomePosted && ctx.Err() == nil {
+		// A review auto-approval may act on: decide now, not at the next
+		// tick (an abort or a shutdown cancelled ctx: the tick decides).
+		e.autoApproveRound(ctx, job.pr.ID)
+	}
 }
 
 // prepare checks the PR out, starts or resumes its agents and moves the PR

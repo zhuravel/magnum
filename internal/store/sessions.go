@@ -157,6 +157,17 @@ func (s *Store) ActiveRuns(ctx context.Context) ([]Run, error) {
 	return collect(rows, scanRun)
 }
 
+// LastEndedRun is the run of session sessionID (of PR prID) that ended last
+// (by ended_at, whatever its state now); ErrNotFound when none has ended.
+func (s *Store) LastEndedRun(ctx context.Context, prID, sessionID int64) (Run, error) {
+	r, err := scanRun(s.db.QueryRowContext(ctx, "SELECT "+cols("", runColumns)+
+		" FROM runs WHERE pr_id = ? AND session_id = ? AND ended_at IS NOT NULL ORDER BY ended_at DESC, rowid DESC LIMIT 1", prID, sessionID))
+	if err != nil {
+		return Run{}, notFound(err, "ended run of session", sessionID)
+	}
+	return r, nil
+}
+
 // RoleRanBefore reports whether a PR already has an ended or verified run of
 // role, the "runs = first" test: a role configured to run once per PR is
 // skipped after its first completed run. Pending, in-flight, failed and

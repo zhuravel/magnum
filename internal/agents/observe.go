@@ -95,7 +95,8 @@ func (m *Manager) ObserveSnapshot(ctx context.Context, snap herdr.Snapshot) ([]O
 //     short grace after start/prompt) -> ObsHumanActive, unless the agent is
 //     a claude agent whose transcript shows a task notification began the
 //     turn (background work of an earlier run resumed it; see
-//     notificationTurn). blocked -> ObsBlocked,
+//     notificationTurn), or a judge still finishing the turn of a run the
+//     round settled on its result file (see turnTail). blocked -> ObsBlocked,
 //     or ObsPromptDenied when a pending/submitted/working run is in flight,
 //     the kind's on_permission_prompt is "deny" and the screen shows a
 //     permission prompt, which is answered No (see answerPermission; never
@@ -249,7 +250,7 @@ func (m *Manager) observeOne(ctx context.Context, s store.Session, snap herdr.Sn
 			m.nameAgent(ctx, s, pane, terminalTitle(a, panes[pane]))
 		}
 		if len(runs) == 0 && !recent(s.StartedAt, now) && (s.LastPromptAt == nil || !recent(*s.LastPromptAt, now)) &&
-			!m.notificationTurn(s, sid) {
+			!m.notificationTurn(s, sid) && !m.turnTail(ctx, s) {
 			if err := m.d.Store.UpdatePR(ctx, s.PRID, func(u *store.PRUpdate) { u.Set("human_active_at", now) }); err != nil {
 				return o, fmt.Errorf("agents: observe pr %d human activity: %w", s.PRID, err)
 			}
@@ -290,6 +291,25 @@ func (m *Manager) observeOne(ctx context.Context, s store.Session, snap herdr.Sn
 }
 
 func recent(t, now time.Time) bool { return now.Sub(t) < humanGrace }
+
+// turnTail reports whether judge session s (its row after this tick's
+// update) shows its agent still finishing the turn of its last run: the run
+// ended while the agent was working (the round went on once the judge's
+// result file held a final status, so the agent may still print its last
+// message) and the agent has not been seen anything but working since, as
+// agent_status_at, which moves only when the status changes, says. That
+// work is the run's: it is never a human's, and Submit waits for it to end
+// (awaitTail). A reviewer role keeps the plain rule.
+func (m *Manager) turnTail(ctx context.Context, s store.Session) bool {
+	if herdr.Status(store.Deref(s.AgentStatus)) != herdr.StatusWorking || s.AgentStatusAt == nil {
+		return false
+	}
+	if spec, ok := m.roleSpec(Role(s.Role)); !ok || !spec.Judge {
+		return false
+	}
+	r, err := m.d.Store.LastEndedRun(ctx, s.PRID, s.ID)
+	return err == nil && r.EndedAt != nil && !s.AgentStatusAt.After(*r.EndedAt)
+}
 
 // liveSince is the latest sign that session s is (newly) live: started_at,
 // agent_status_at, or when this Manager marked it live.

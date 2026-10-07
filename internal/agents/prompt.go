@@ -99,8 +99,8 @@ func (m *Manager) LatestRound(ctx context.Context, prID int64) (int, error) {
 // RunNudge, RunRecovery) in the PR's latest round (1 when none) and submits
 // text to the role's live agent (see Submit). It returns the run id, also
 // when Submit fails after the run was created; a run refused before sending
-// (ErrNoSession, ErrHumanActive) is marked abandoned. Start a new round, or
-// quote the run id in the text, with NewRun + Submit.
+// (ErrNoSession, ErrHumanActive, ErrBusy) is marked abandoned. Start a new
+// round, or quote the run id in the text, with NewRun + Submit.
 func (m *Manager) Prompt(ctx context.Context, pr store.PR, role Role, kind, text string) (string, error) {
 	if m.shellRole(role) {
 		return "", fmt.Errorf("agents: prompt pr %d %s: %w", pr.Number, role, ErrNotAgent)
@@ -114,7 +114,7 @@ func (m *Manager) Prompt(ctx context.Context, pr store.PR, role Role, kind, text
 		return "", err
 	}
 	err = m.Submit(ctx, run, text)
-	if errors.Is(err, ErrNoSession) || errors.Is(err, ErrHumanActive) {
+	if errors.Is(err, ErrNoSession) || errors.Is(err, ErrHumanActive) || errors.Is(err, ErrBusy) {
 		// Refused before sending: the run this call created must not linger
 		// as pending (it would count as in flight).
 		_ = m.d.Store.TransitionRun(ctx, run.ID, []string{store.RunPending}, store.RunAbandoned, func(u *store.RunUpdate) {
@@ -129,14 +129,16 @@ func (m *Manager) Prompt(ctx context.Context, pr store.PR, role Role, kind, text
 // The run must be pending (a run once submitted is observed, never re-sent:
 // store.ErrConflict). It refuses with ErrHumanActive inside
 // daemon.human_cooldown after a human typed into the session, and with
-// ErrNoSession unless the role's session is live; both leave the run pending
-// for the caller to retry or abandon. A role whose newest session is lost
-// while a fresh herdr snapshot still shows its agent gets that session back
-// live (rebindLost) instead of a refusal. Before sending, a session on a
-// limited model switches to a fallback, and one magnum switched earlier
-// switches back once its role's model is no longer limited (ensureModel).
-// The prompt waits for the agent to reach working or blocked
-// (PromptAckTimeout):
+// ErrNoSession unless the role's session is live, and it holds a prompt to
+// a judge still finishing the turn of its last run until herdr shows the
+// agent no longer working (awaitTail; ErrBusy after tailWait); each refusal
+// leaves the run pending for the caller to retry or abandon. A role whose
+// newest session is lost while a fresh herdr snapshot still shows its agent
+// gets that session back live (rebindLost) instead of a refusal. Before
+// sending, a session on a limited model switches to a fallback, and one
+// magnum switched earlier switches back once its role's model is no longer
+// limited (ensureModel). The prompt waits for the agent to reach working or
+// blocked (PromptAckTimeout):
 //
 //   - working: run working (submitted_at, working_seen_at).
 //   - blocked after submission: run submitted, ErrBlocked.
@@ -187,6 +189,9 @@ func (m *Manager) Submit(ctx context.Context, run store.Run, text string) error 
 	now := m.now()
 	if cd := m.d.Config.Daemon.HumanCooldown.Duration; pr.HumanActiveAt != nil && cd > 0 && now.Before(pr.HumanActiveAt.Add(cd)) {
 		return fmt.Errorf("agents: submit %s: until %s: %w", run.ID, pr.HumanActiveAt.Add(cd).Format(time.RFC3339), ErrHumanActive)
+	}
+	if err := m.awaitTail(ctx, sess); err != nil {
+		return fmt.Errorf("agents: submit %s: %w", run.ID, err) // nothing sent: the run stays pending
 	}
 	m.ensureModel(ctx, sess)
 	// Attach the run to the session before prompting, so Observe never takes
@@ -276,6 +281,30 @@ func (m *Manager) Submit(ctx context.Context, run store.Run, text string) error 
 		return fmt.Errorf("agents: prompt %s: acked as blocked: %w", target(sess), ErrBlocked)
 	}
 	return nil
+}
+
+// awaitTail holds a prompt to a judge whose agent is still finishing the
+// turn of its last run (turnTail): it asks herdr (PaneGet) every tailPoll
+// until the agent no longer works, so nothing is typed into that turn, and
+// refuses with ErrBusy after tailWait. An agent idle, blocked or gone goes
+// on to the prompt, which finds out the rest.
+func (m *Manager) awaitTail(ctx context.Context, s store.Session) error {
+	if !m.turnTail(ctx, s) {
+		return nil
+	}
+	pane := store.Deref(s.HerdrPaneID)
+	for poll := 0; ; poll++ {
+		p, err := m.d.Herdr.PaneGet(ctx, pane)
+		if err != nil || p.AgentStatus != herdr.StatusWorking {
+			return nil
+		}
+		if time.Duration(poll)*tailPoll >= tailWait {
+			return fmt.Errorf("%s still finishes its last turn after %s: %w", s.Role, tailWait, ErrBusy)
+		}
+		if err := m.sleep(ctx, tailPoll); err != nil {
+			return err
+		}
+	}
 }
 
 // promptedSession records a prompt on the session row (best effort: the run

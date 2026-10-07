@@ -264,3 +264,54 @@ func TestRoleRanBefore(t *testing.T) {
 		t.Fatal("RoleRanBefore is per (pr, role)")
 	}
 }
+
+// LastEndedRun is the session's turn that ended last, by ended_at: an own
+// pass created after the judge's run but ended before it is not the latest,
+// and runs of another session or still in flight do not count.
+func TestLastEndedRunIsTheSessionsLatestTurn(t *testing.T) {
+	st, clk := newStore(t)
+	ctx := context.Background()
+	pr := mustPR(t, st, mustRepo(t, st).ID, 1, PRReviewing)
+	judge, err := st.CreateSession(ctx, Session{PRID: pr.ID, Role: RoleJudge, State: SessionLive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := st.CreateSession(ctx, Session{PRID: pr.ID, Role: RoleClaude, State: SessionLive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	newRun := func(sessionID int64, kind string) Run {
+		t.Helper()
+		r, err := st.CreateRun(ctx, Run{PRID: pr.ID, Round: 1, Role: RoleJudge, SessionID: &sessionID, Kind: kind, TargetSHA: "h",
+			Identity: "talkable-app", ReviewerLogin: "talkable[bot]", State: RunWorking, PromptText: "p"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	end := func(id, state string) {
+		t.Helper()
+		if err := st.TransitionRun(ctx, id, nil, state, func(u *RunUpdate) { u.Set("ended_at", clk.Now()) }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := st.LastEndedRun(ctx, pr.ID, judge.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("no run yet: %v", err)
+	}
+	main := newRun(judge.ID, RunInitial)
+	clk.Add(time.Second)
+	own := newRun(judge.ID, RunOwnPass) // created after the judge's run, as a round does
+	clk.Add(time.Minute)
+	end(own.ID, RunEnded)
+	if r, err := st.LastEndedRun(ctx, pr.ID, judge.ID); err != nil || r.ID != own.ID {
+		t.Fatalf("after the own pass: %+v %v", r, err)
+	}
+	clk.Add(time.Minute)
+	end(main.ID, RunVerified)
+	clk.Add(time.Minute)
+	end(newRun(other.ID, RunInitial).ID, RunVerified)
+	newRun(judge.ID, RunNudge) // in flight: no ended_at
+	if r, err := st.LastEndedRun(ctx, pr.ID, judge.ID); err != nil || r.ID != main.ID || r.EndedAt == nil {
+		t.Fatalf("after the judge's run: %+v %v", r, err)
+	}
+}

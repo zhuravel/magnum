@@ -226,6 +226,17 @@ func TestSkillRunsDatabaseCommandsThroughTheLock(t *testing.T) {
 	}, []string{"this worktree owns only its own suffixed databases"})
 }
 
+// On talkable#12006 the own pass added `--timeout 60s` to `db_lock`, gave up
+// while claude-review held the lock, ran the spec later and still reported a
+// machine failure: the skill runs `db_lock` as given (its own timeout is 20
+// minutes) and counts only a check that did not run.
+func TestSkillRunsTheDatabaseLockAsGiven(t *testing.T) {
+	skillSays(t, []string{
+		"as `<db_lock> <command>`, as given (add no `--timeout`).",
+		"a check that waited, then ran, is no `environment_failures` entry.",
+	}, nil)
+}
+
 // codex-review is a static review by design (sandboxed, no network
 // services); its unrun checks were reported as machine failures in 6 of 43
 // environment events.
@@ -385,9 +396,11 @@ func TestSkillOwnPassOfAReReviewCoversTheNewCommits(t *testing.T) {
 // the result's new findings and open ones by priority, `post_replies` for
 // every thread reply (the raw `gh api` rebuttal it replaces counted),
 // `delta_check`, `"status":"replied"` and the exceptions for a missing
-// report's machine cause and a flaky test's anchor (2026-10-07). Every
-// rule added must replace or shorten text.
-const skillMaxBytes = 34_734
+// report's machine cause and a flaky test's anchor (2026-10-07), and 98 for
+// running `db_lock` as given and not counting a check that waited, then ran,
+// as a machine failure (2026-10-07). Every rule added must replace or
+// shorten text.
+const skillMaxBytes = 34_832
 
 func TestSkillStaysTight(t *testing.T) {
 	if n := len(magnum.Skill); n > skillMaxBytes {

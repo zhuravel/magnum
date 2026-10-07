@@ -3443,3 +3443,38 @@ editing history. Code, config comments and prompts reference these by their head
   toast says full re-reviews will wait. An author who wants the re-review asks for it: a review request runs
   it. `codex_hard` is unchanged. Rejected: holding first reviews too (the soft cap would hold every new pull
   request for days); holding delta checks and reply rounds (the judge alone, a fraction of a full round).
+- **Magnum auto-approves as the round that posted the review ends** (2026-10-07; completes "Magnum approves
+  as the operator when its review found nothing to fix"). On talkable#12006 the round ended at 15:48:25 and
+  the operator's approval came at 15:49:02, at the next tick, which runs auto-approval once. The round's
+  goroutine now runs the same decision for that PR alone (`autoApproveRound`: the tick's `autoApprove`
+  filtered to the PR, the same refusals, GitHub reads and gates) right after `finish` records the posted
+  review, unless the round's context was cancelled (an abort or a shutdown: the tick decides). The tick's pass
+  stays the safety net (a failed post, a PR that changed). `autoMu` serializes auto-approval between the tick,
+  a round's goroutine and `magnum unapprove`, so one review is never approved twice and the remembered GitHub
+  reads (`autoSeen`, `autoFollow`) have one writer at a time.
+- **The judge's result file ends its turn; what the agent prints after it is the run's** (2026-10-07). On
+  talkable#12006 the judge wrote `codex-judge.json` at 15:46:26 and ended its turn at 15:47:13, and magnum
+  verified at 15:48:22: a turn ended only after two idle observations 30 seconds apart, and the result file
+  counted only after 2 minutes (`ResultSettle`). The wait now ends as soon as the file parses with a final
+  status (`posted`, `replied`, `dry_run`, `blocked`, `identity_error`, `closed`, `stopped`, `error`; the
+  skill writes it last), and the round goes on to the GitHub check; a file that does not parse or holds
+  another status keeps the old rule, and so do the reviewers. The agent may still print its last message, and
+  the run is verified (not in flight) by then, which used to make that work look like a human typing
+  (`human_active_at`, the `human_cooldown` on the whole PR). The mechanism needs no new state and no new herdr
+  call per tick: a judge session whose stored status is `working` since at or before its last run's
+  `ended_at` (`agent_status_at` moves only when the status changes, so the agent has not been seen anything
+  but working since the run ended; `store.LastEndedRun`) is finishing that run's turn (`turnTail`): Observe
+  never counts it as human activity, and the first observation of another status (idle) ends it, so a human
+  typing after that is a human again: typing into an idle agent moves `agent_status_at` past the run's end.
+  Only a message typed into the turn before it ends counts as the turn's, as it does while a run is in
+  flight. Submit holds a prompt to such a session (`awaitTail`): it asks herdr (`pane.get`) every 5 seconds
+  until the agent no longer works, and refuses with `ErrBusy` after 2 minutes (the run abandoned, nothing
+  typed into the old turn). Rejected: a new run state that Observe ends on the first idle (the runs' state
+  check is a schema change, and verified runs are what every reader takes as the round's); an in-memory
+  mark (lost on a restart); a grace after the result time (a human typing within it would pass, and a long
+  final message outlasts it).
+- **The judge runs `db_lock` as given** (2026-10-07). On talkable#12006 the own pass added `--timeout 60s` to
+  `db_lock`, gave up while claude-review held the lock, ran the spec later and still reported a machine
+  failure. SKILL.md's Databases paragraph now says to run it as given (its own timeout is 20 minutes), and
+  that a check that waited, then ran, is no `environment_failures` entry; only exit 75 is a check that did not
+  run. SKILL.md grows by 98 bytes (`skillMaxBytes` 34,734 to 34,832).

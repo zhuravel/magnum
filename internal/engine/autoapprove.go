@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -290,10 +291,22 @@ func timeKey(t *time.Time) string {
 // autoApprove posts and follows the operator's automatic approvals: every
 // tick, after dispatch and before the needs-me toasts (a PR it approves no
 // longer needs the operator). Dry runs change nothing.
-func (e *Engine) autoApprove(ctx context.Context) {
+func (e *Engine) autoApprove(ctx context.Context) { e.autoApproveFor(ctx, 0) }
+
+// autoApproveRound is autoApprove for PR prID alone, run by a round's
+// goroutine as the round that posted a review of it ends (runRound): the
+// same decision and gates, without waiting for the next tick, whose pass
+// stays the safety net.
+func (e *Engine) autoApproveRound(ctx context.Context, prID int64) { e.autoApproveFor(ctx, prID) }
+
+// autoApproveFor is autoApprove for PR only, or for every PR when only is 0,
+// under autoMu.
+func (e *Engine) autoApproveFor(ctx context.Context, only int64) {
 	if e.d.DryRun || e.d.GitHub == nil {
 		return
 	}
+	e.autoMu.Lock()
+	defer e.autoMu.Unlock()
 	live, err := e.st.LiveAutoApprovals(ctx)
 	if err != nil {
 		e.log.Warn("auto approvals", "err", err)
@@ -305,6 +318,10 @@ func (e *Engine) autoApprove(ctx context.Context) {
 			e.log.Warn("auto approve candidates", "err", err)
 			return
 		}
+	}
+	if only != 0 {
+		live = slices.DeleteFunc(live, func(a store.AutoApprovalPR) bool { return a.PRID != only })
+		cands = slices.DeleteFunc(cands, func(c store.RepoPR) bool { return c.PR.ID != only })
 	}
 	if len(live)+len(cands) == 0 {
 		return
@@ -789,6 +806,8 @@ func (e *Engine) requestUnapprove(ctx context.Context, p UnapprovePayload) (stri
 	if err != nil {
 		return "", err
 	}
+	e.autoMu.Lock() // a round's goroutine may be deciding about the PR (autoApproveRound)
+	defer e.autoMu.Unlock()
 	label := fmt.Sprintf("%s#%d", repo.FullName(), pr.Number)
 	subject := prSubject(repo, pr.Number)
 	if p.Resume {
