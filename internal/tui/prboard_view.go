@@ -941,9 +941,10 @@ func workingState(s string) bool {
 }
 
 // findingsCell is the latest review's verdict glyph, its findings by
-// priority ("P1 P2×3", each behind its mark in the nerd mode: "🔴P1") and
-// its simplifications ("✂4"): what the review concluded, also where it
-// could only comment.
+// priority ("P1 P2×3", each behind its mark in the nerd mode: "🔴P1"), or
+// "3 open" when it posted none new but earlier ones stay open, and its
+// simplifications ("✂4"): what the review concluded, also where it could
+// only comment.
 func (p prbPainter) findingsCell(f *FindingsInfo) cell {
 	if f == nil {
 		return p.dash()
@@ -965,7 +966,12 @@ func (p prbPainter) findingsCell(f *FindingsInfo) cell {
 		}
 		c = append(c, seg{t, p.priorityStyle(i)})
 	}
-	if !listed {
+	switch {
+	case !listed && f.Open > 0:
+		// Nothing new, but earlier findings stay open: they decide the
+		// verdict, so say so rather than "clean" beside its glyph.
+		c = append(c, seg{strconv.Itoa(f.Open) + " open", vst})
+	case !listed:
 		c = append(c, seg{"clean", p.pal.green})
 	}
 	if f.Simplifications > 0 {

@@ -339,3 +339,30 @@ func TestTheTitleSaysHowManyNeedYourApproval(t *testing.T) {
 	d, _ = send(t, d, tea.WindowSizeMsg{Width: 200, Height: 50}, dashDataMsg{data: data})
 	mustContain(t, strings.Split(viewOf(d), "\n")[0], "2 need your ✓")
 }
+
+// A re-review that posted no new finding while earlier ones stay open is
+// blocking (or not) because of those: its FINDINGS cell says how many are
+// still open, not "clean" next to the changes-requested glyph.
+func TestTheFindingsCellCountsStillOpenFindingsWhenNothingNewWasPosted(t *testing.T) {
+	p := needsMePainter(IconsUnicode, nil)
+	text := func(f *FindingsInfo) string {
+		var b strings.Builder
+		for _, s := range p.findingsCell(f) {
+			b.WriteString(s.text)
+		}
+		return b.String()
+	}
+	for _, c := range []struct {
+		f    *FindingsInfo
+		want string
+	}{
+		{&FindingsInfo{Open: 3, Verdict: "blocking"}, "✗ 3 open"},
+		{&FindingsInfo{Open: 1, Verdict: "non_blocking"}, p.g.nonBlocking + " 1 open"},
+		{&FindingsInfo{Verdict: "clean"}, "✔ clean"},
+		{&FindingsInfo{Counts: [4]int{0, 1, 0, 0}, Open: 2, Verdict: "blocking"}, "✗ P1"},
+	} {
+		if got := text(c.f); got != c.want {
+			t.Errorf("findings %+v: cell %q, want %q", *c.f, got, c.want)
+		}
+	}
+}

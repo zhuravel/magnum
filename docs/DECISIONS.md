@@ -2938,3 +2938,8 @@ editing history. Code, config comments and prompts reference these by their head
   `--settings` (`deniedMcpServers` is policy, not a documented per-session switch). Known limit: Claude
   Code exits at startup when it is given `--strict-mcp-config` under a deployed `managed-mcp.json`
   (managed-mcp docs), so such a machine needs `mcp_off = false`.
+- **The FINDINGS cell counts still-open findings when a review posted nothing new** (2026-10-07). A re-review
+  whose earlier findings stayed open and that found nothing new showed "✗ clean": the blocking glyph came from the
+  open findings, while "clean" described only the new ones, and the operator could not tell what it meant. The cell
+  now reads "✗ 3 open" (the verdict's glyph and color) in that case; "clean" stays for a review with nothing new and
+  nothing open, and a review with new findings lists them by priority as before (the card keeps the full counts).

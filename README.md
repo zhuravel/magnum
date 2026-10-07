@@ -1189,7 +1189,8 @@ still working shows its time so far, one without a run "not started yet"), and t
 rounds line shows the same stage and time after each PR.
 
 FINDINGS shows what magnum's latest review concluded, also where its repository lets it only comment:
-the verdict (✗ blocking, ● comment, ✔ clean), the findings by priority (`P1 P2×3`) and the optional
+the verdict (✗ blocking, ● comment, ✔ clean), the findings by priority (`P1 P2×3`), or `3 open` when a
+re-review posted nothing new while earlier findings stay open (they decide its verdict), and the optional
 simplifications it suggested (`✂4`); the card spells out the decision, what was posted instead, the
 counts and the earlier findings. A PR that was open before magnum began watching its repository reads
 "not reviewed": a push, a review request for you or a posting identity, or `R` starts its first review.
