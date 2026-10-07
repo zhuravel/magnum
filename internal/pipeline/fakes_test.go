@@ -26,6 +26,7 @@ import (
 	"github.com/zhuravel/magnum/internal/identity"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // Compile-time checks: the real clients satisfy the interfaces.
@@ -793,11 +794,7 @@ type env struct {
 func newEnv(t *testing.T) *env {
 	t.Helper()
 	ctx := context.Background()
-	st, err := store.Open(filepath.Join(t.TempDir(), "state", "magnum.db"))
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "state", "magnum.db"))
 	clk := &testClock{now: t0}
 	st.Clock = clk.Now
 

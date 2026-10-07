@@ -61,6 +61,7 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 | [slots](#slots) | Package slots manages the checkouts magnum reviews in: the Talkable pool slots (~/Projects/talkable.reviewN, provisioned once with bin/worktree-setup and reused) and per-PR worktrees for small repositories, next to the repository's main clone whatever it is named (~/Projects/<owner>-<name>__worktrees/pr-N). |
 | [steps](#steps) | Package steps makes multi-step side effects resumable after a crash. |
 | [store](#store) | Package store is magnum's SQLite registry: repos, PRs, slots, assignments, slot databases, agent sessions, review runs, CLI requests, the audit event log, small key/value state and notification dedup. |
+| [storetest](#storetest) | Package storetest gives tests a registry without migrating one for each of them: the first call in a test binary migrates a template database, and every call writes a copy of its bytes, which store.Open then finds current. |
 | [textx](#textx) | Package textx holds the small text helpers several packages share: clipping to a number of runes, the first line, a short commit SHA, plurals and login folding. |
 | [tui](#tui) | Package tui holds magnum's interactive terminal screens, built on Bubble Tea: the status dashboard (RunDashboard), the PR board (RunPRBoard), the PR picker (RunPicker), the cleanup plan review (RunCleanupPlan) and the read-only pane mirror (RunWatch). |
 | [usage](#usage) | Package usage reads how much of an agent CLI's subscription budget is used. |
@@ -13879,6 +13880,51 @@ func (u *Update) Where(col string, v any)
     like a state mismatch, so a caller can require that the row still describes
     what it decided on (for example head_sha == the target sha). col may be any
     column of the table; conditions combine with AND.
+
+```
+
+## storetest
+
+```text
+package storetest // import "github.com/zhuravel/magnum/internal/store/storetest"
+
+Package storetest gives tests a registry without migrating one for each of them:
+the first call in a test binary migrates a template database, and every call
+writes a copy of its bytes, which store.Open then finds current. It also holds
+the settable clock the store's users share in their tests. Only _test.go files
+import it.
+
+FUNCTIONS
+
+func Open(t testing.TB, path string) *store.Store
+    Open seeds path (see Seed) and opens it with store.Open; the store is closed
+    when the test ends.
+
+func Seed(t testing.TB, path string)
+    Seed writes a migrated database to path, creating its directory (0700),
+    for code under test that opens the registry itself. A file already at path
+    is left as it is.
+
+
+TYPES
+
+type Clock struct {
+	// Has unexported fields.
+}
+    Clock is a settable clock that is safe for concurrent use. Its Now is what
+    tests hand to store.Store.Clock and the other components' clocks.
+
+func NewClock(t time.Time) *Clock
+    NewClock returns a Clock that reads t.
+
+func (c *Clock) Add(d time.Duration)
+    Add moves the clock forward by d.
+
+func (c *Clock) Now() time.Time
+    Now returns the clock's time.
+
+func (c *Clock) Set(t time.Time)
+    Set moves the clock to t.
 
 ```
 

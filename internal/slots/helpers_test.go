@@ -21,6 +21,7 @@ import (
 	"github.com/zhuravel/magnum/internal/mysqlx"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 var t0 = time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
@@ -275,11 +276,7 @@ func newHarness(t *testing.T) *harness {
 	h.main = filepath.Join(root, "talkable")
 	copyRepo(t, fx.main, h.main)
 
-	st, err := store.Open(filepath.Join(root, "home", "state", "magnum.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
+	st := storetest.Open(t, filepath.Join(root, "home", "state", "magnum.db"))
 	st.Clock = func() time.Time { return h.now }
 	h.st = st
 

@@ -17,6 +17,7 @@ import (
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/mysqlx"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // Compile-time proof that the real clients satisfy the scanner's interfaces.
@@ -216,11 +217,7 @@ func newFixture(t *testing.T) *fixture {
 		}},
 		Watches: []config.Watch{{Owner: "talkable", Include: []string{"talkable"}, CloneRoot: root}},
 	}
-	f.st, err = store.Open(filepath.Join(t.TempDir(), "magnum.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { f.st.Close() })
+	f.st = storetest.Open(t, filepath.Join(t.TempDir(), "magnum.db"))
 	f.repo, err = f.st.UpsertRepo(context.Background(), store.Repo{
 		NodeID: "R_talkable", Owner: "talkable", Name: "talkable", Mode: store.RepoModePool, ClonePath: store.Ptr(f.main),
 	})

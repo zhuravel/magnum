@@ -18,6 +18,7 @@ import (
 	"github.com/zhuravel/magnum/internal/mysqlx"
 	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 var now = time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
@@ -173,11 +174,7 @@ type fixture struct {
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	root := t.TempDir()
-	st, err := store.Open(filepath.Join(root, "state", "magnum.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
+	st := storetest.Open(t, filepath.Join(root, "state", "magnum.db"))
 	st.Clock = func() time.Time { return now }
 	pool := config.Pool{
 		Repo: "talkable/talkable", MainClone: filepath.Join(root, "talkable"),

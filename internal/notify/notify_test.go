@@ -14,6 +14,7 @@ import (
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // The real clients must satisfy the package's small interfaces.
@@ -97,11 +98,7 @@ func newClock() *clock { return &clock{t: time.Date(2026, 10, 3, 12, 0, 0, 0, ti
 
 func realStore(t *testing.T, c *clock) *store.Store {
 	t.Helper()
-	s, err := store.Open(filepath.Join(t.TempDir(), "magnum.db"))
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
+	s := storetest.Open(t, filepath.Join(t.TempDir(), "magnum.db"))
 	s.Clock = c.now
 	return s
 }

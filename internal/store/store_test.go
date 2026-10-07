@@ -27,9 +27,44 @@ func (c *clock) Now() time.Time      { c.mu.Lock(); defer c.mu.Unlock(); return 
 func (c *clock) Set(t time.Time)     { c.mu.Lock(); c.now = t; c.mu.Unlock() }
 func (c *clock) Add(d time.Duration) { c.mu.Lock(); c.now = c.now.Add(d); c.mu.Unlock() }
 
+// migratedImage is a database migrated once per test binary; newStore writes
+// a copy of it, which Open finds current. storetest does the same for the
+// other packages (this one cannot import it).
+var migratedImage = sync.OnceValues(func() ([]byte, error) {
+	dir, err := os.MkdirTemp("", "magnum-store-test-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(dir)
+	path := filepath.Join(dir, "magnum.db")
+	st, err := Open(path)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := st.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		st.Close()
+		return nil, err
+	}
+	if err := st.Close(); err != nil {
+		return nil, err
+	}
+	return os.ReadFile(path)
+})
+
 func newStore(t *testing.T) (*Store, *clock) {
 	t.Helper()
-	st, err := Open(filepath.Join(t.TempDir(), "state", "magnum.db"))
+	path := filepath.Join(t.TempDir(), "state", "magnum.db")
+	image, err := migratedImage()
+	if err != nil {
+		t.Fatalf("migrate the template: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, image, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st, err := Open(path)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

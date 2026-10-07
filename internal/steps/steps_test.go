@@ -9,16 +9,12 @@ import (
 	"testing"
 
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 func newStore(t *testing.T) *store.Store {
 	t.Helper()
-	st, err := store.Open(filepath.Join(t.TempDir(), "magnum.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
-	return st
+	return storetest.Open(t, filepath.Join(t.TempDir(), "magnum.db"))
 }
 
 func phases(t *testing.T, st *store.Store, subject string) []string {

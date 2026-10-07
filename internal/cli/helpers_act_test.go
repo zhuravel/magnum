@@ -20,6 +20,7 @@ import (
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/reveal"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // actFakeHerdr records the herdr calls of the act commands.
@@ -155,10 +156,7 @@ func newActHarness(t *testing.T) *actHarness {
 	}
 	cfg.Pools = []config.Pool{{Repo: "talkable/talkable", MainClone: filepath.Join(home, "talkable"), SlotName: "review{n}",
 		SlotPath: filepath.Join(home, "talkable.review{n}"), Base: "master"}}
-	st, err := store.Open(filepath.Join(home, "state", "magnum.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := storetest.Open(t, filepath.Join(home, "state", "magnum.db"))
 	h := &actHarness{t: t, ctx: context.Background(), st: st, home: home, hd: &actFakeHerdr{},
 		gh: &actFakeGitHub{details: map[int]github.PRDetails{}}, run: &execx.Fake{}, tty: &execx.Fake{},
 		cleaner: &actFakeCleaner{}, env: map[string]string{},

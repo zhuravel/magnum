@@ -15,6 +15,7 @@ import (
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
@@ -122,12 +123,7 @@ func (f *inspFixture) store() *store.Store {
 	if err := f.Ctx.Layout.EnsureDirs(); err != nil {
 		f.t.Fatal(err)
 	}
-	st, err := store.Open(f.Ctx.Layout.DB())
-	if err != nil {
-		f.t.Fatal(err)
-	}
-	f.t.Cleanup(func() { st.Close() })
-	return st
+	return storetest.Open(f.t, f.Ctx.Layout.DB())
 }
 
 // tty makes confirmations read answers from input.

@@ -28,6 +28,7 @@ import (
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
@@ -1478,11 +1479,7 @@ func newHarness(t *testing.T, mods ...func(*harness)) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	st, err := store.Open(filepath.Join(home, "state", "magnum.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
+	st := storetest.Open(t, filepath.Join(home, "state", "magnum.db"))
 	clock := &fakeClock{t: time.Date(2026, 10, 5, 10, 0, 0, 0, time.Local)}
 	st.Clock = clock.Now
 
