@@ -55,9 +55,20 @@ make build       # bin/magnum
 make api-doc     # regenerate docs/API.md after exported API changes
 ```
 
-Run `go test -count=1 -race` on the packages you touched before `make test`. A change is done when
-the gate is green, the API doc is regenerated if exports changed, and the README or config comments
-describe any new key, command or key binding.
+Run `go test -count=1 -race` on the packages you touched before `make test`; go test's 10-minute
+default is enough (the whole suite took about 3 minutes under `-race` at a load of 50-70, the engine
+the longest). A change is done when the gate is green, the API doc is regenerated if exports changed,
+and the README or config comments describe any new key, command or key binding.
+
+Tests open their registry with `storetest.Open` (`internal/store/storetest`: a copy of a database
+migrated once per test binary, never `store.Open` on a fresh file except to test migrations), and the
+fixtures run them in parallel: `newHarness` (engine) and `newEnv` (pipeline, agents) call
+`storetest.Parallel`, gitx's `realEnv` its own. A test that swaps a package variable or calls
+`t.Setenv` calls `storetest.Serial(t)` (gitx: `keepSerial(t)`) before its fixture. A round's fakes
+share one clock that every fake Sleep moves at once: a pipeline role that must still be at work when
+another goroutine ends the round uses `fakeAgents.hangs` (its Submit returns when the round cancels
+it), not `hang()`, whose waits can run out its timeout first on a busy machine. The tui tests build
+screens with `testDashboard`, `testPRBoard` and `testWatch`, whose timers answer at once.
 
 ## Layout
 

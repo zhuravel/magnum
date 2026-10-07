@@ -3982,3 +3982,23 @@ editing history. Code, config comments and prompts reference these by their head
   on a list GitHub cut short; one review event says so until the PR moves. `CreateReview` and
   `DismissReview` sent the body and the message as `gh api -f` fields, so a failing call logged them;
   they go as JSON on gh's stdin (`restInput`), as `UpdateReviewBody` does.
+- **Tests copy a migrated registry and run in parallel** (2026-10-07). Every builder waited 10 to 15 minutes
+  for `go test -race ./internal/engine` (873 to 913 s, past go test's 10-minute default): each run built
+  2,022 registries with all 22 migrations (about 1 s each under `-race`, 26 ms for a copy), and none of the
+  engine's tests ran in parallel. `internal/store/storetest` migrates a template once per test binary and
+  gives each test a copy (`Open`, `Seed`); the store package's own tests copy their own template. The
+  engine's `newHarness`, the pipeline's and agents' `newEnv` and gitx's `realEnv` run their tests in
+  parallel (`storetest.Parallel`, once per test); the four tests that swap a package variable or set the
+  environment stay serial (`storetest.Serial`, gitx's `keepSerial`), and Go runs those before it releases
+  the parallel ones. The tui screens take a `Tick` option (nil is `tea.Tick`) so their tests' timers answer
+  at once instead of waiting out execCmd's 150 ms, and the wheel tests count what a frame measures and draws
+  (the caches' keys and maps) instead of timing it. Measured back to back on master f3ba090 and this
+  change, 16 cores at a load average of 50 to 70: `go test -count=1 -race ./...` 772 s to 175 s (engine 759
+  to 164, cli 222 to 54, pipeline 202 to 18, agents 172 to 10, store 92 to 26, gitx 52 to 9, tui 50 to 24),
+  `go test -count=1 ./...` 282 s to 105 s. The flaky `TestAnOwnPassRefusedAgainEndsTheRoundAtOnce` was the
+  test, not the round: the reviewer's waits and the own pass share a fake clock that every Sleep moves at
+  once, so a descheduled own-pass goroutine let claude-review's waits run out its 40-minute timeout (failed)
+  before the refusal; in real time the refusal comes seconds after the prompt, and finishRun's
+  compare-and-set already keeps whichever end came first. The test's reviewer now hangs until the round
+  cancels it (`fakeAgents.hangs`), as do three tests with the same race. Rejected: `locking_mode=EXCLUSIVE`
+  (no gain in the analyst's profile); making the cli tests parallel (18 `t.Setenv` calls and many seams).
