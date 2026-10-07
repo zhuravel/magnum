@@ -14,8 +14,10 @@ You land every agent's work yourself, one commit range at a time, on `master` in
 `scripts/land.sh <branch-or-sha>` fast-forwards master when it can, and otherwise cherry-picks the commits. It
 dry-runs every new migration on a copy of the registry, runs the gate, pushes, and builds `bin/magnum` unless the
 range adds a migration. It stops at a conflict: resolve it (DECISIONS.md: keep both entries; the config comments:
-keep both sides' keys; SKILL.md: keep both rules and raise its size cap by the minimum), run
-`git cherry-pick --continue`, and run the script again.
+keep both sides' keys; SKILL.md: keep both rules and raise its size cap by the minimum) and run
+`git cherry-pick --continue`. Then run `scripts/land.sh HEAD` when that was the last commit of the range (gate, push
+and build only); with more commits left, cherry-pick them by hand first, because `land.sh <branch>` would pick the
+resolved commit again.
 
 After landing, tell every running agent that master moved: the new sha, the files the landed work touched, and the
 migration numbers now taken.

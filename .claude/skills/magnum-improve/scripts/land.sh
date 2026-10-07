@@ -7,7 +7,9 @@
 # a copy of the live registry. Then the gate, a push, and a build unless the
 # range adds a migration (scripts/restart.sh --migration builds right before
 # the restart, so the board keeps working until then). It stops at a
-# conflict or a failure and says what to do.
+# conflict or a failure and says what to do. After a resolved conflict, a
+# resolved commit no longer matches its original patch, so land.sh <branch>
+# would pick it again: land.sh HEAD runs only the gate, the push and the build.
 set -euo pipefail
 
 target=${1:?usage: land.sh <branch-or-sha>}
@@ -46,7 +48,7 @@ else
 	[[ -n $commits ]] || { echo "land: master already has every commit of $target"; exit 0; }
 	for c in $commits; do
 		if ! git cherry-pick "$c" >/dev/null; then
-			echo "land: conflict in $(git rev-parse --short "$c"); resolve it, run git cherry-pick --continue, then run land.sh again" >&2
+			echo "land: conflict in $(git rev-parse --short "$c"); resolve it, run git cherry-pick --continue, then land.sh $target again (the rest of the range) or land.sh HEAD (gate, push and build only)" >&2
 			git status --short | grep -E '^(UU|AA|DU|UD) ' >&2 || true
 			exit 2
 		fi
