@@ -313,8 +313,11 @@ func (rd *round) finishReviewer(ctx context.Context, role config.Role, run store
 		}
 		if exit, ok := errors.AsType[*exitError](t.err); ok {
 			// The command failed: what it wrote is no report, but its output
-			// may name why (a usage limit pauses the tool).
-			if h := rd.failureHealth(ctx, role, run, path, anchor); h.Kind != agents.HealthOK {
+			// may name why (a refusal ends the round, a usage limit pauses
+			// the tool).
+			if h, ok := rd.shellRefusal(ctx, role, run, path, anchor); ok {
+				rep.Status, rep.Detail, rep.Health = string(h.Kind), h.Detail+" ("+exit.Error()+")", &h
+			} else if h := rd.failureHealth(ctx, role, run, path, anchor); h.Kind != agents.HealthOK {
 				rep.Status, rep.Detail, rep.Health = string(h.Kind), h.Detail+" ("+exit.Error()+")", &h
 			}
 		} else if r, ok := rd.reportFile(role, run, path); ok {
@@ -339,7 +342,15 @@ func (rd *round) finishReviewer(ctx context.Context, role config.Role, run store
 		rd.finishReviewerRun(ctx, role, run, rep, stopped)
 		return rep
 	}
-	// waitEnded (or waitResult, unused for these roles).
+	// waitEnded (or waitResult, unused for these roles). A shell command's
+	// tool may print its refusal and still exit 0.
+	if role.IsShell() {
+		if h, ok := rd.shellRefusal(ctx, role, run, path, anchor); ok {
+			rep.Status, rep.Detail, rep.Health = string(h.Kind), h.Detail, &h
+			rd.finishReviewerRun(ctx, role, run, rep, "")
+			return rep
+		}
+	}
 	rep = rd.checkReport(ctx, role, run, path, anchor)
 	stopped := ""
 	if rep.Status == ReportMissing && role.IsAgent() {
@@ -517,7 +528,7 @@ func (rd *round) failureHealth(ctx context.Context, role config.Role, run store.
 
 // checkReport inspects a finished role: the report on disk, else the pane's
 // health (a model limit still on screen had no fallback left: a usage
-// limit).
+// limit), else a refusal its Codex rollout records (the pane scrolled).
 func (rd *round) checkReport(ctx context.Context, role config.Role, run store.Run, path, anchor string) RoleReport {
 	rep := rd.newReport(role, run.ID)
 	problem := rd.reportProblem(role, path)
@@ -526,7 +537,13 @@ func (rd *round) checkReport(ctx context.Context, role config.Role, run store.Ru
 		return rep
 	}
 	rep.Status, rep.Detail = ReportMissing, problem
-	if h := asUsageLimit(rd.paneHealth(ctx, role, run, anchor)); h.Kind != agents.HealthOK {
+	h := asUsageLimit(rd.paneHealth(ctx, role, run, anchor))
+	if h.Kind == agents.HealthOK {
+		if r, ok := rd.rolloutRefusal(ctx, role, run); ok {
+			h = r
+		}
+	}
+	if h.Kind != agents.HealthOK {
 		rep.Status, rep.Detail, rep.Health = string(h.Kind), h.Detail, &h
 	}
 	return rep

@@ -3835,3 +3835,35 @@ editing history. Code, config comments and prompts reference these by their head
   effort; a count that cannot be read is said so), and before the reset one `cleanup.discarded` event (warn)
   names the tracked paths (the first 20) and the commits HEAD and the placeholder branch were at, from which
   the dropped commits can be found again.
+- **A Codex safety warning ends the round and flags the PR for good** (2026-10-07). On talkable#11990 (an OAuth
+  session-security PR) every judge turn of round 3 ended on Codex's "This content was flagged for possible
+  cybersecurity risk ... apply for Daybreak access" (the rollout's task_complete error, codex_error_info
+  `cyber_policy`): the own pass after 6 s ("finished without writing judge-own.md"), the candidates turn 17
+  minutes later, magnum's nudge again, and the round went to needs_attention as a judge that stopped; 7 Codex
+  sessions hit it since 10-02. Codex may block an account it takes for a cyber abuser, also when all it reads
+  is the team's own code, so the operator decided that such a PR is never tried again. A new health class
+  `refused` (`[kinds.<kind>.health_patterns] refused`, data every kind starts with: the refusal's words
+  anywhere, a usage-policy violation, abuse or a threat only in Codex's own `■`/`⚠`/`ERROR:`/`WARNING:` line,
+  so a review that writes about abuse in the code is none; first on a line) is read from the pane after the
+  turn's prompt and, when a turn ended without its report or result and the pane shows nothing, from the
+  turn's error in the session's Codex rollout (`agents.Manager.TurnError`: `cyber_policy`, or a message the
+  patterns match). Whichever role is refused (the own pass, a reviewer, codex-review's output on any exit
+  status, the candidates, single, nudge or continue turn), the round ends at once with `refused`: a reviewer
+  or own pass cancels the stages (the others interrupted and abandoned, as a lost judge's round does), a judge
+  turn is a final verdict with no nudge; the outcome and last error say "Codex refused the review: content
+  flagged as a cybersecurity risk (role, run)". The engine records the flag (`pr.<id>.codex_flag`: kind, role,
+  run, head, line, time), interrupts what still works as an abort does, makes the PR ineligible (its classify
+  rejects a flagged PR on any head, also for a review request), dispatch takes any flagged candidate out of
+  line (forced, paused, a retry), `magnum review` and the board's `r`/`R` refuse with the reason, and one toast
+  says "Codex flagged · never reviewed again", which the state cell and card read too. Only `magnum codex-flag
+  clear` lifts it, after a y/N question on a terminal naming the account risk; `codex-flag set` flags a PR by
+  hand. Stats count such rounds as `refused`; an eval case whose replay is refused is kept in
+  `<state>/eval/flagged.json` and never replayed. Rejected: a retry or a forced round that may clear the flag
+  when it posts (each try risks the account), needs_attention (a retry path, and it reads as a judge failure),
+  reusing mute (a mute lets `magnum review` run and `unmute` takes no confirmation), and reading the pane only
+  (a long turn scrolls the error away).
+- **The board's card shows why a PR was muted** (2026-10-07). The card showed only the "muted" tag, while
+  `magnum mute <ref> <reason>` keeps the reason in its request and the `pr.muted` event. The card now shows
+  the latest `pr.muted` event's reason on one line under its head (`muted: <reason>`, clipped to the card),
+  next to a Codex flag's line when the PR has both; a mute without a reason adds none, and `prs --json` has
+  `mute_reason`. The one-line board row is unchanged.

@@ -19,7 +19,11 @@ type HealthKind string
 
 // Health kinds.
 const (
-	HealthOK            HealthKind = "ok"
+	HealthOK HealthKind = "ok"
+	// HealthRefused: the provider flagged the content as a safety risk
+	// (Codex's "flagged for possible cybersecurity risk"): the round ends at
+	// once and the PR is flagged, never reviewed again.
+	HealthRefused       HealthKind = "refused"
 	HealthLoginRequired HealthKind = "login_required" // pause the kind; e.g. `codex login` / `claude auth login`
 	HealthModelLimit    HealthKind = "model_limit"    // one model's cap: switch the session to a fallback model (Model, ResetAt)
 	HealthUsageLimit    HealthKind = "usage_limit"    // pause until ResetAt (fallback 1h, doubling)
@@ -92,8 +96,8 @@ var defaultHealth = func() config.HealthRegexps {
 }()
 
 // rulesFor orders a kind's patterns and the built-in lists by tie-break
-// priority (same line: earlier rule wins): login_required > model_limit >
-// usage_limit > trust_dialog > blocked > overloaded > stalled.
+// priority (same line: earlier rule wins): refused > login_required >
+// model_limit > usage_limit > trust_dialog > blocked > overloaded > stalled.
 func rulesFor(rx config.HealthRegexps) []healthRule {
 	wrap := func(kind HealthKind, res []*regexp.Regexp) []healthRule {
 		out := make([]healthRule, 0, len(res))
@@ -103,6 +107,7 @@ func rulesFor(rx config.HealthRegexps) []healthRule {
 		return out
 	}
 	var rules []healthRule
+	rules = append(rules, wrap(HealthRefused, rx.Refused)...)
 	rules = append(rules, wrap(HealthLoginRequired, rx.LoginRequired)...)
 	rules = append(rules, wrap(HealthModelLimit, rx.ModelLimit)...)
 	rules = append(rules, wrap(HealthUsageLimit, rx.UsageLimit)...)
@@ -148,8 +153,8 @@ func ClassifyAt(text string, now time.Time) Health { return classify(defaultRule
 // kind's compiled health patterns (config.HealthPatterns.Compile) plus the
 // built-in trust-dialog, approval and stalled patterns. The match on the
 // latest line wins (pane text keeps old errors above newer output); on one
-// line login_required > model_limit > usage_limit > trust_dialog > blocked >
-// overloaded > stalled. A model_limit match sets Model from the pattern's
+// line refused > login_required > model_limit > usage_limit > trust_dialog >
+// blocked > overloaded > stalled. A model_limit match sets Model from the pattern's
 // "model" group. For usage_limit and model_limit, ResetAt comes from "try
 // again at 3:45 PM", "try again at Oct 5th, 2026 9:05 AM", "try again in 1
 // day 4 hours", "resets 5pm (Europe/Kyiv)", "resets Oct 7, 9am" or "limit

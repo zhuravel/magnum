@@ -209,6 +209,10 @@ const (
 )
     Trust-dialog fallback timing.
 
+const CodexCyberPolicy = "cyber_policy"
+    CodexCyberPolicy is the codex_error_info of Codex's cybersecurity refusal
+    ("This content was flagged for possible cybersecurity risk").
+
 const CompletionIdleTicks = 2
     CompletionIdleTicks is how many consecutive idle|done observations end a
     turn. The pipeline ends a judge's turn sooner, once its result file holds a
@@ -388,6 +392,10 @@ func KVModelLimits(kind string) string
 func KVSessionModel(sessionID int64) string
     KVSessionModel is the kv key holding the model magnum switched a session row
     to (absent while the session runs its role's model).
+
+func KindName(kind string) string
+    KindName is an agent kind as a sentence names it: "Codex" for codex,
+    "Claude" for claude ("The agent" for none).
 
 func NewRunID(now time.Time) string
     NewRunID is a run id: "r-<UTC yyyymmddThhmmss>-<6 random hex digits>",
@@ -581,6 +589,11 @@ type Deps struct {
 	// whose pane env sets CLAUDE_CONFIG_DIR uses that. A test binary never
 	// falls back to the defaults.
 	ClaudeDir string
+	// CodexHome is the Codex home whose sessions/ holds the rollouts
+	// TurnError reads a turn's error from; "" = $CODEX_HOME, else ~/.codex.
+	// A session whose pane env sets CODEX_HOME uses that. A test binary
+	// never falls back to the defaults.
+	CodexHome string
 	// Log receives one line per trust entry added and per trust dialog
 	// answered (optional).
 	Log execx.Logger
@@ -616,10 +629,10 @@ func ClassifyAt(text string, now time.Time) Health
 
 func ClassifyWith(rx config.HealthRegexps, text string, now time.Time) Health
     ClassifyWith classifies recent pane output of an agent session with a
-    kind's compiled health patterns (config.HealthPatterns.Compile) plus
-    the built-in trust-dialog, approval and stalled patterns. The match on
-    the latest line wins (pane text keeps old errors above newer output);
-    on one line login_required > model_limit > usage_limit > trust_dialog
+    kind's compiled health patterns (config.HealthPatterns.Compile) plus the
+    built-in trust-dialog, approval and stalled patterns. The match on the
+    latest line wins (pane text keeps old errors above newer output); on one
+    line refused > login_required > model_limit > usage_limit > trust_dialog
     > blocked > overloaded > stalled. A model_limit match sets Model from
     the pattern's "model" group. For usage_limit and model_limit, ResetAt
     comes from "try again at 3:45 PM", "try again at Oct 5th, 2026 9:05 AM",
@@ -632,7 +645,11 @@ type HealthKind string
     HealthKind classifies an agent pane's recent output.
 
 const (
-	HealthOK            HealthKind = "ok"
+	HealthOK HealthKind = "ok"
+	// HealthRefused: the provider flagged the content as a safety risk
+	// (Codex's "flagged for possible cybersecurity risk"): the round ends at
+	// once and the PR is flagged, never reviewed again.
+	HealthRefused       HealthKind = "refused"
 	HealthLoginRequired HealthKind = "login_required" // pause the kind; e.g. `codex login` / `claude auth login`
 	HealthModelLimit    HealthKind = "model_limit"    // one model's cap: switch the session to a fallback model (Model, ResetAt)
 	HealthUsageLimit    HealthKind = "usage_limit"    // pause until ResetAt (fallback 1h, doubling)
@@ -1306,6 +1323,16 @@ func (m *Manager) TimeUp(ctx context.Context, run store.Run, text string) error
     taken for someone typing). A run without a live agent session fails with
     ErrNoSession (ErrNotAgent for a shell role's pane).
 
+func (m *Manager) TurnError(ctx context.Context, run store.Run) (TurnError, bool)
+    TurnError reads the error the turn of run ended with from its Codex
+    session's rollout: the last task_complete event stamped at or after
+    the run's creation (less transcriptSkew), when it carries an error.
+    The rollout is looked for under the session's CODEX_HOME (its pane env),
+    else Deps.CodexHome, else $CODEX_HOME, else ~/.codex (a test binary never
+    falls back to those). ok is false for a session of another kind or without
+    a Codex session id, a rollout it cannot find or read, and a turn that ended
+    without an error.
+
 func (m *Manager) Wrapper(ctx context.Context, kind string) (bool, error)
     Wrapper reports whether the kind's command is a zsh wrapper function (or
     alias) that supplies its own flags, per [kinds.<kind>] wrapper: "true"
@@ -1633,6 +1660,12 @@ type ThreadReply struct {
 	Truncated bool   `json:"truncated,omitempty"` // Body was cut
 }
     ThreadReply is one reply of a ReviewThread.
+
+type TurnError struct {
+	Message string // the error's message, redacted, at most 300 bytes
+	Info    string // codex_error_info: cyber_policy, usage_limit_exceeded, server_overloaded, unauthorized, other
+}
+    TurnError is the error a Codex turn ended with, as its rollout records it.
 
 type Workspace struct {
 	WorkspaceID string
@@ -3012,6 +3045,7 @@ type GitHub struct {
     installation-token calls; everything else already runs through gh).
 
 type HealthPatterns struct {
+	Refused       []string `toml:"refused"`        // end the round and flag the PR: never reviewed again
 	LoginRequired []string `toml:"login_required"` // pause the kind until the human logs in
 	ModelLimit    []string `toml:"model_limit"`    // switch the session to a fallback model (see Kind.FallbackModels)
 	UsageLimit    []string `toml:"usage_limit"`    // pause until the reset time the text names
@@ -3026,6 +3060,11 @@ type HealthPatterns struct {
     UsageLimit; a named group "model" captures the model, else the session's
     current model is the limited one.
 
+    Refused patterns name a safety warning of the agent's provider about the
+    content (Codex's "flagged for possible cybersecurity risk"): the round ends
+    at once and the PR is never reviewed again (a provider may block an account
+    it takes for an abuser), so they are checked first.
+
 func DefaultHealthPatterns() HealthPatterns
     DefaultHealthPatterns returns the classifier patterns magnum has always used
     for Codex and Claude (a fresh copy); every kind starts from them.
@@ -3034,7 +3073,7 @@ func (h HealthPatterns) Compile() (HealthRegexps, error)
     Compile compiles every pattern with the (?i) flag.
 
 type HealthRegexps struct {
-	LoginRequired, ModelLimit, UsageLimit, Overloaded []*regexp.Regexp
+	Refused, LoginRequired, ModelLimit, UsageLimit, Overloaded []*regexp.Regexp
 }
     HealthRegexps are compiled HealthPatterns.
 
@@ -4527,6 +4566,10 @@ const (
 const ApprovalDismissMessage = "magnum: new commits since this approval; a re-review follows"
     ApprovalDismissMessage is the reason a dismissed approval shows on GitHub.
 
+const EvPRMuted = evPRMuted
+    EvPRMuted is the event a mute records, its reason in the data's "reason"
+    (requestMute); the board's card shows the latest one's next to the flag.
+
 const FormerDismissMessage = "magnum: superseded by the review of %s posted as %s (this PR's reviewer changed)"
     FormerDismissMessage is the reason a dismissed review of a former identity
     shows on GitHub; the arguments are the new review's commit (short) and the
@@ -4537,6 +4580,9 @@ const KVRetroRunning = "learn.retro_running"
     which the CLI reads before it stops the daemon: set by the tick or the
     request that sees it started, deleted by the first one that sees it ended,
     at a restart for a new build, at shutdown and at every start of the daemon.
+
+const ReqCodexFlag = "codex-flag"
+    ReqCodexFlag flags a PR or clears its flag (CodexFlagPayload).
 
 const ReqSnooze = "snooze"
     ReqSnooze snoozes a PR or lifts its snooze (SnoozePayload).
@@ -4686,6 +4732,9 @@ func KVPRAttention(prID int64) string
     KVPRAttention holds why the engine parked a PR in needs_attention (the kind
     attention.Explain takes: failed, blocked, identity_error, …); read only
     while the PR is in that state.
+
+func KVPRCodexFlag(prID int64) string
+    KVPRCodexFlag holds a PR's Codex flag (CodexFlag as JSON).
 
 func KVPRDelta(prID int64) string
     KVPRDelta holds the size of a PR's unreviewed delta (DeltaRecord as JSON),
@@ -4948,6 +4997,48 @@ type CleanupPayload struct {
     CleanupPayload is a cleanup request: Plan (re-checked by Apply) or Options
     (planned again by the daemon). Confirmed is the typed confirmation for
     actions that need it.
+
+type CodexFlag struct {
+	Kind   string    `json:"kind"`
+	Role   string    `json:"role,omitempty"`
+	Run    string    `json:"run,omitempty"`
+	Head   string    `json:"head,omitempty"`
+	Detail string    `json:"detail,omitempty"`
+	At     time.Time `json:"at"`
+	By     string    `json:"by,omitempty"`
+}
+    CodexFlag is why magnum never reviews a PR again: the agent kind whose
+    provider flagged it, the role and run it refused (none when set by hand),
+    the PR's head then, the refusal's line or the operator's reason, when and by
+    whom ("round 3", "magnum codex-flag").
+
+func ParseCodexFlag(s string) (CodexFlag, bool)
+    ParseCodexFlag reads a KVPRCodexFlag value; ok is false for "" or a value it
+    cannot read.
+
+func (f CodexFlag) Sentence(ref string) string
+    Sentence is the flag in full, for the card, `magnum status` and the
+    refusals: when and where it was flagged, what happens and how to lift it
+    (ref names the PR on the command line).
+
+func (f CodexFlag) Short() string
+    Short is the flag in one cell: "Codex flagged · never reviewed again".
+
+func (f CodexFlag) SkipReason() string
+    SkipReason is the flagged PR's skip_reason.
+
+func (f CodexFlag) Who() string
+    Who names the provider that flagged the PR: "Codex".
+
+type CodexFlagPayload struct {
+	PRTarget
+	Clear  bool   `json:"clear,omitempty"`
+	Reason string `json:"reason,omitempty"`
+	By     string `json:"by,omitempty"`
+}
+    CodexFlagPayload is a `magnum codex-flag set|clear` request: flag the
+    PR (Reason: why, from the operator) or clear its flag. By says who asks
+    ("magnum codex-flag").
 
 type CurateJob struct {
 	Repo    string
@@ -5710,7 +5801,22 @@ The package is pure: it starts no process, touches no network and knows nothing
 of the registry. Its only file access is the corpus file and the run directories
 it is told about.
 
+CONSTANTS
+
+const FlaggedFile = "flagged.json"
+    FlaggedFile holds the flagged cases (Flagged by case name) under the runs'
+    root.
+
+
 FUNCTIONS
+
+func LoadFlagged(root string) (map[string]Flagged, error)
+    LoadFlagged reads the flagged cases under root by case name; a missing file
+    is none.
+
+func MarkFlagged(root string, f Flagged) error
+    MarkFlagged adds f to the flagged cases under root (the first record of a
+    case stands).
 
 func SaveRun(dir string, r Run) error
     SaveRun writes dir/run.json atomically (a temporary file in dir, then a
@@ -5811,6 +5917,20 @@ type Finding struct {
 }
     Finding is one thing the review reported: an inline comment, or the review
     body as a whole.
+
+type Flagged struct {
+	Case   string    `json:"case"`
+	PR     string    `json:"pr"`
+	Head   string    `json:"head"`
+	Run    string    `json:"run"`
+	Reason string    `json:"reason"`
+	At     time.Time `json:"at"`
+}
+    Flagged is a case whose replay was refused: in which run, at which head,
+    why and when.
+
+func (f Flagged) Refusal() string
+    Refusal says why the case is not replayed.
 
 type Result struct {
 	Status   string
@@ -9627,6 +9747,12 @@ const (
 	OutcomeTimeout        = "timeout"         // judge_timeout passed without a result
 	OutcomeNeedsAttention = "needs_attention" // nothing posted after one nudge, or an inconsistent result
 	OutcomeError          = "error"           // the round could not run or be evaluated (RunRound's error is set)
+	// OutcomeRefused: a role's turn (the judge's own pass, candidates,
+	// nudge or continue, a reviewer, a shell command's tool) ended on its
+	// provider's safety warning (health kind refused: Codex's
+	// "flagged for possible cybersecurity risk"): the round ended at once,
+	// with no nudge or retry, the other roles stopped (RoundResult.Refusal).
+	OutcomeRefused = "refused"
 )
     Round outcomes (RoundResult.Outcome and the judge run's outcome column).
 
@@ -9644,8 +9770,8 @@ const (
 )
     Role report statuses (RoleReport.Status and the non-judge runs' outcome
     column). Besides these, a status can be a health kind found in the pane:
-    "login_required", "usage_limit", "overloaded", "stalled", "blocked",
-    "trust_dialog".
+    "refused", "login_required", "usage_limit", "overloaded", "stalled",
+    "blocked", "trust_dialog".
 
 const (
 	DefaultPollInterval = 10 * time.Second
@@ -9770,6 +9896,10 @@ type Agents interface {
 	// background during a run and left running (ok false: unknown).
 	TimeUp(ctx context.Context, run store.Run, text string) error
 	BackgroundTasks(ctx context.Context, run store.Run) (int, bool)
+	// TurnError is the error a Codex turn ended with, from its session's
+	// rollout: how a refusal the pane scrolled past is still found
+	// (refused.go).
+	TurnError(ctx context.Context, run store.Run) (agents.TurnError, bool)
 }
     Agents is the subset of *agents.Manager a round uses. The caller must have
     started the sessions of the roles that run (RolesToRun: EnsureWorkspace,
@@ -9928,6 +10058,18 @@ type ReadinessPlan struct {
 }
     ReadinessPlan is a round's readiness step: the repository's commands
     (config.Readiness) and the slot's environment they run with.
+
+type Refusal struct {
+	Role   string // the role whose turn was refused
+	Kind   string // its agent kind (config.Role.AgentKind): whose provider refused it
+	RunID  string // the refused turn's run
+	Detail string // the pane line, or the rollout's message (redacted)
+}
+    Refusal is who was refused in which run (RoundResult.Refusal).
+
+func (r Refusal) Sentence() string
+    Sentence is the round's error and the PR's last error: "Codex refused the
+    review: content flagged as a cybersecurity risk (codex-judge, run r-…)".
 
 type RelatedPR struct {
 	Number   int        `json:"number"`
@@ -10144,7 +10286,10 @@ type RoundResult struct {
 	// notes_dir or paths under it.
 	HarnessUsed []string
 
-	Pause   *Pause
+	Pause *Pause
+	// Refusal is who was refused in which run (OutcomeRefused); nil
+	// otherwise.
+	Refusal *Refusal
 	Reports map[agents.Role]RoleReport // by role name: every non-judge role the round ran (or skipped as logged out)
 	// OwnPass is how the judge's own pass ended (RoundInput.OwnPass; Path
 	// set when it wrote its file); nil when the round prompted none.
@@ -14038,6 +14183,15 @@ type PRBoardRow struct {
 	// else waits there, the card says all three, and z lifts it.
 	SnoozedUntil, SnoozedAt time.Time
 	SnoozedBy               string
+	// CodexFlag is the PR's Codex flag in one cell ("Codex flagged · never
+	// reviewed again", engine.CodexFlag.Short): its provider refused a round
+	// as a possible cybersecurity risk, so magnum never reviews it again,
+	// and the review keys refuse. CodexFlagSentence is the card's account
+	// of it, with the command that lifts it. "" while the PR is not flagged.
+	CodexFlag, CodexFlagSentence string
+	// MuteReason is why the PR was muted (the latest `magnum mute`'s
+	// reason), for the card; "" when it was muted without one or is not.
+	MuteReason string
 	// Note is a one-line remark about the last review shown under LAST REVIEW
 	// on the card (e.g. "comment-only push skipped (a7b3f8c → 602da9d)").
 	Note string

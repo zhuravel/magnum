@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -359,6 +360,12 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 					row.SnoozedUntil, row.SnoozedAt, row.SnoozedBy = s.Until, s.At, s.By
 				}
 			}
+			if f, ok := codexFlagOf(ctx, st, r.PRID); ok { // codex_flag.go
+				row.CodexFlag, row.CodexFlagSentence = f.Short(), f.Sentence(actRefLabel(defaultRepo(cfg), full, r.Number))
+			}
+			if r.Muted {
+				row.MuteReason = prsMuteReason(ctx, st, full, r.Number)
+			}
 			if v, ok, err := st.GetKV(ctx, engine.KVPRTrivial(r.PRID)); err == nil && ok {
 				if t, ok := engine.ParseTrivialSkip(v); ok {
 					row.Note = t.Note()
@@ -407,6 +414,28 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 		_ = boardRoundProgress(ctx, st, cfg, ids, out)
 		return out, nil
 	}
+}
+
+// prsMuteReason is the reason of the PR's latest mute (`magnum mute`'s, in
+// its pr.muted event); "" when it gave none or the registry cannot say.
+func prsMuteReason(ctx context.Context, st *store.Store, full string, number int) string {
+	evs, err := st.EventsBySubject(ctx, fmt.Sprintf("pr:%s#%d", full, number), 0)
+	if err != nil {
+		return ""
+	}
+	for i := len(evs) - 1; i >= 0; i-- {
+		if evs[i].Kind != engine.EvPRMuted {
+			continue
+		}
+		var data struct {
+			Reason string `json:"reason"`
+		}
+		if json.Unmarshal(evs[i].Data, &data) != nil {
+			return ""
+		}
+		return data.Reason
+	}
+	return ""
 }
 
 // prsStalemate is the threads of a KVPRStalemate value as the board names
@@ -721,7 +750,8 @@ func prsStateCell(r tui.PRBoardRow, now time.Time) string {
 	for _, f := range []struct {
 		on   bool
 		name string
-	}{{r.Draft, "draft"}, {r.Pinned, "pinned"}, {r.Muted, "muted"}, {r.LastError != "", "error"}, {len(r.Stalemate) > 0, "stalemate"}} {
+	}{{r.Draft, "draft"}, {r.Pinned, "pinned"}, {r.Muted, "muted"}, {r.CodexFlag != "", "codex-flagged"}, {r.LastError != "", "error"},
+		{len(r.Stalemate) > 0, "stalemate"}} {
 		if f.on {
 			s += "," + f.name
 		}

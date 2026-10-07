@@ -236,7 +236,13 @@ const (
 // usage left ("You've reached your Fable limit"). They are checked before
 // UsageLimit; a named group "model" captures the model, else the session's
 // current model is the limited one.
+//
+// Refused patterns name a safety warning of the agent's provider about the
+// content (Codex's "flagged for possible cybersecurity risk"): the round
+// ends at once and the PR is never reviewed again (a provider may block an
+// account it takes for an abuser), so they are checked first.
 type HealthPatterns struct {
+	Refused       []string `toml:"refused"`        // end the round and flag the PR: never reviewed again
 	LoginRequired []string `toml:"login_required"` // pause the kind until the human logs in
 	ModelLimit    []string `toml:"model_limit"`    // switch the session to a fallback model (see Kind.FallbackModels)
 	UsageLimit    []string `toml:"usage_limit"`    // pause until the reset time the text names
@@ -245,7 +251,7 @@ type HealthPatterns struct {
 
 // HealthRegexps are compiled HealthPatterns.
 type HealthRegexps struct {
-	LoginRequired, ModelLimit, UsageLimit, Overloaded []*regexp.Regexp
+	Refused, LoginRequired, ModelLimit, UsageLimit, Overloaded []*regexp.Regexp
 }
 
 // Compile compiles every pattern with the (?i) flag.
@@ -264,6 +270,7 @@ func (h HealthPatterns) Compile() (HealthRegexps, error) {
 		}
 		return res
 	}
+	out.Refused = compile("refused", h.Refused)
 	out.LoginRequired = compile("login_required", h.LoginRequired)
 	out.ModelLimit = compile("model_limit", h.ModelLimit)
 	out.UsageLimit = compile("usage_limit", h.UsageLimit)
@@ -275,6 +282,19 @@ func (h HealthPatterns) Compile() (HealthRegexps, error) {
 // used for Codex and Claude (a fresh copy); every kind starts from them.
 func DefaultHealthPatterns() HealthPatterns {
 	return HealthPatterns{
+		// Codex's safety warnings: its cybersecurity refusal ("This content
+		// was flagged for possible cybersecurity risk. ... more cyber
+		// permissive safeguards, apply for Daybreak access ..."), whose
+		// words count anywhere (a wrapped line too), and the policy forms
+		// (a usage policy violation, abuse, a threat) only in Codex's own
+		// error (■, ERROR:) and warning (⚠, WARNING:) lines, so a review
+		// that writes about abuse or a threat in the code is none.
+		Refused: []string{
+			`flagged\s+for\s+possible\s+cyber\s*security\s+risk`,
+			`cyber\s+permissive\s+safeguards`,
+			`\bdaybreak\s+access\b`,
+			`(?m)^[ \t]*(?:■|⚠|(?-i:ERROR|WARNING):)[^\n]*(?:violat[^\n]*usage\s+polic|\babus(?:e|ive)\b|\bthreats?\b)`,
+		},
 		LoginRequired: []string{
 			`\bnot logged in\b`,
 			`please run /login`,
@@ -699,7 +719,7 @@ func normalizeKinds(kinds map[string]Kind) {
 		k.SwitchModel, k.DefaultModel = strings.TrimSpace(k.SwitchModel), strings.TrimSpace(k.DefaultModel)
 		k.ResetModel = strings.TrimSpace(k.ResetModel)
 		h := &k.HealthPatterns
-		h.LoginRequired, h.ModelLimit = cloneOrNil(h.LoginRequired), cloneOrNil(h.ModelLimit)
+		h.Refused, h.LoginRequired, h.ModelLimit = cloneOrNil(h.Refused), cloneOrNil(h.LoginRequired), cloneOrNil(h.ModelLimit)
 		h.UsageLimit, h.Overloaded = cloneOrNil(h.UsageLimit), cloneOrNil(h.Overloaded)
 		if len(k.Env) == 0 {
 			k.Env = nil

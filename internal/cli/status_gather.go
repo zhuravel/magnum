@@ -442,6 +442,16 @@ func statusGatherPRs(ctx context.Context, d statusDeps, now time.Time, r *status
 			r.Queue = append(r.Queue, line)
 		case slices.Contains(statusClosing, pr.State):
 			r.Closing = append(r.Closing, line)
+		case pr.GHState == store.GHOpen && statusFlagged(ctx, st, pr):
+			// Codex flagged it: never reviewed again, so it waits for a review by hand (codex_flag.go).
+			ref := inspPRLabel(repo, pr.Number)
+			f, _ := codexFlagOf(ctx, st, pr.ID)
+			msg := f.Short()
+			if f.Detail != "" {
+				msg += ": " + errorSummary(f.Detail)
+			}
+			r.Attention = append(r.Attention, statusAttention{Subject: ref, Message: msg,
+				Fix: "review it by hand; `magnum codex-flag clear " + ref + "` lifts the flag (" + f.Who() + " may block an account it flags)"})
 		case slices.Contains(statusAttn, pr.State):
 			ref := inspPRLabel(repo, pr.Number)
 			msg := pr.State
@@ -463,6 +473,12 @@ func statusGatherPRs(ctx context.Context, d statusDeps, now time.Time, r *status
 		r.Attention = append(r.Attention, statusMergedUnreviewed(prs, repoByID, d.Config.Board.RecentClosed.Duration, now)...)
 	}
 	return nil
+}
+
+// statusFlagged reports whether Codex flagged pr (engine.KVPRCodexFlag).
+func statusFlagged(ctx context.Context, st *store.Store, pr store.PR) bool {
+	_, ok := codexFlagOf(ctx, st, pr.ID)
+	return ok
 }
 
 // statusMergedUnreviewed lists the PRs GitHub merged before magnum reviewed
@@ -786,6 +802,9 @@ func statusGatherDetail(ctx context.Context, d statusDeps, r statusReport, ref s
 	det.Next = statusNextWithGate(ctx, d.Store, pr, now)
 	if w, ok := statusWait(ctx, d.Store, pr); ok && t.Repo != nil {
 		det.Next = w.Sentence(actRefLabel(defRepo, t.Repo.FullName(), pr.Number), now)
+	}
+	if f, ok := codexFlagOf(ctx, d.Store, pr.ID); ok && t.Repo != nil && !slices.Contains(prInFlight, pr.State) {
+		det.Next = f.Sentence(actRefLabel(defRepo, t.Repo.FullName(), pr.Number))
 	}
 	if det.Slot == nil {
 		det.Slot = findView(func(v inventory.SlotView) bool {

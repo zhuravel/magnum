@@ -153,6 +153,9 @@ func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
 	}
 
 	head := p.st.Title.Render(orDim(prRef(r))) + "  " + p.stateCell(rowState(r)).render(nil)
+	if flagShown(r) {
+		head += " " + p.flagCell(r.CodexFlag).render(nil)
+	}
 	if needsMeShown(r) { // still: only the table's cells shimmer
 		head += " " + p.needsMeCell(r.NeedsMe).render(nil)
 	}
@@ -186,6 +189,9 @@ func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
 		head += "  " + strings.Join(flags, p.st.Dim.Render(p.g.sep))
 	}
 	add(head)
+	if r.Muted && r.MuteReason != "" {
+		add(p.st.Dim.Render(truncate("muted: "+oneLine(r.MuteReason), inner)))
+	}
 	title := lipgloss.NewStyle().Bold(true).Width(inner).Render(orDim(oneLine(r.Title)))
 	tl := strings.Split(title, "\n")
 	if len(tl) > 3 {
@@ -218,6 +224,11 @@ func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
 	}
 	if r.SnoozedUntil.After(p.now) {
 		add(p.pal.yellow.Render(truncate(p.snoozeSentence(r), inner)))
+	}
+	if r.CodexFlagSentence != "" {
+		for _, l := range strings.Split(lipgloss.NewStyle().Width(inner).Render(oneLine(r.CodexFlagSentence)), "\n") {
+			add(p.pal.red.Render(l))
+		}
 	}
 	add("")
 
@@ -344,7 +355,7 @@ func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
 			}
 		}
 	}
-	if skipped(r) {
+	if skipped(r) && r.CodexFlag == "" { // a flagged PR's sentence is under its title
 		add("", p.st.Section.Render(p.g.headed("SKIPPED")))
 		why := "magnum's configuration skips this PR"
 		if r.SkipReason != "" {

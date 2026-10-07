@@ -285,6 +285,10 @@ judge_fresh_after = "90m"         # a judge whose last turn on the PR ended long
 #   CODEX_HOME = "~/.codex"
 #   [kinds.codex.health_patterns]     # case-insensitive regexps; a list replaces the built-in one
 #   usage_limit = ['usage limit reached']   # also login_required, model_limit, overloaded
+#   refused = ['flagged\s+for\s+possible\s+cyber\s*security\s+risk', ...]   # the provider's safety warnings
+#                                     # (Codex's cybersecurity refusal, a usage-policy violation, abuse or a
+#                                     # threat in its own ■/⚠ line): the round ends at once and the PR is
+#                                     # flagged, never reviewed again (`magnum codex-flag clear` lifts it)
 #
 # [kinds.claude]
 # args = ["--dangerously-skip-permissions"]  # only without a wrapper, as for codex

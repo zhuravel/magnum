@@ -44,6 +44,8 @@ type verdict struct {
 	// the usage limit it was before per-model limits existed; runJudge first
 	// tries a fallback model (modelFallback).
 	modelLimit *agents.Health
+	// refusal: the turn was refused (OutcomeRefused, refused.go).
+	refusal *Refusal
 }
 
 // postedReview is the review verification found.
@@ -290,6 +292,15 @@ func (rd *round) judgeVerdict(ctx context.Context, t turn, resultFile string, ma
 	}
 
 	h := rd.classifyAfter(rd.judge.AgentKind(), text, anchor)
+	if h.Kind == agents.HealthOK && t.kind == waitEnded {
+		if r, ok := rd.rolloutRefusal(ctx, rd.judge, t.run); ok { // the pane scrolled past it
+			h = r
+		}
+	}
+	if h.Kind == agents.HealthRefused {
+		ref := refusal(rd.judge, t.run.ID, h)
+		return verdict{final: true, outcome: OutcomeRefused, refusal: &ref, err: &refusedError{ref}}
+	}
 	var limit *agents.Health
 	if h.Kind == agents.HealthModelLimit {
 		ml := h
@@ -577,8 +588,12 @@ func (rd *round) finalizeJudge(ctx context.Context, runIDs []string, v verdict) 
 		}
 	}
 	rd.res.Pause = v.pause
+	rd.res.Refusal = v.refusal
 	res := rd.res
 	rd.mu.Unlock()
+	if v.refusal != nil {
+		rd.refusedEvent(ctx, *v.refusal)
+	}
 
 	errMsg := ""
 	if v.err != nil {

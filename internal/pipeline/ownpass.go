@@ -71,7 +71,8 @@ func (op *ownPass) finished() bool {
 // its own, under ctx (the stages' context, which a push cancels). marker
 // is the run id the round's review will carry, which the prompt quotes.
 // When the judge's session is gone for good (ownPassTurn), it cancels the
-// stages through cancel with a *judgeGoneError, which ends the round.
+// stages through cancel with a *judgeGoneError, and when the pass was
+// refused with a *refusedError (refused.go): either ends the round.
 func (rd *round) startOwnPass(ctx context.Context, cancel context.CancelCauseFunc, run store.Run, marker string) *ownPass {
 	op := &ownPass{done: make(chan struct{})}
 	go func() {
@@ -79,7 +80,9 @@ func (rd *round) startOwnPass(ctx context.Context, cancel context.CancelCauseFun
 		var gone *judgeGoneError
 		if op.rep, gone = rd.ownPassTurn(ctx, run, marker); gone != nil {
 			cancel(gone)
+			return
 		}
+		refuseStages(cancel, op.rep)
 	}()
 	return op
 }
@@ -256,7 +259,11 @@ func (rd *round) ownPassEnded(ctx context.Context, rep RoleReport) {
 		if rep.Detail != "" {
 			msg += ": " + rep.Detail
 		}
-		msg += "; the candidates prompt asks for the pass"
+		if rep.Status == string(agents.HealthRefused) {
+			msg += "; the round ends" // refused.go
+		} else {
+			msg += "; the candidates prompt asks for the pass"
+		}
 		if rep.Path != "" {
 			msg = fmt.Sprintf("%s's own pass: %s, %s written", rd.judge.Name, rep.Status, agents.OwnFindingsFile)
 		}

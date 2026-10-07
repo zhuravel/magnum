@@ -214,6 +214,9 @@ func (e *Engine) dispatch(ctx context.Context, ts tickState) {
 
 	working := ts.workingCodex
 	for _, pr := range cands {
+		if e.flagHolds(ctx, pr) {
+			continue // Codex flagged it: no round of any kind (codex_flag.go)
+		}
 		if paused != "" && !pr.Forced {
 			continue // waitFor says why
 		}

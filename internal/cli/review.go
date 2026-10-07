@@ -184,6 +184,9 @@ func reviewMain(ctx context.Context, c *Context, d *actDeps, ref string, o revie
 	}
 	progress := reviewProgress(c, o)
 
+	if f, ok := codexFlagOf(ctx, d.Store, t.PR.ID); ok { // never reviewed again (codex_flag.go)
+		return reviewFailJSON(c, o, out, fmt.Errorf("%s: %s", label, f.Sentence(label)))
+	}
 	merged := t.PR.GHState == store.GHMerged
 	switch {
 	case merged && store.Deref(t.PR.ReviewedSHA) == t.PR.HeadSHA:

@@ -151,6 +151,10 @@ type actRow struct {
 	// releaseAfter is when the close grace of a closed PR ends (zero: none,
 	// or the screen does not know); x waits for it as the daemon does.
 	releaseAfter time.Time
+	// flag is the PR's Codex flag in one cell (PRBoardRow.CodexFlag; "": not
+	// flagged, or the screen does not know): the review keys refuse it, as
+	// `magnum review` does.
+	flag string
 
 	// keys are the screen's keys where they differ from rowActDefs (the
 	// picker's); an action missing from it there has no key.
@@ -249,6 +253,8 @@ func actionRefusal(a rowAct, r actRow) string {
 	switch a {
 	case actReview, actFresh, actSimplify:
 		switch {
+		case r.flag != "":
+			return l + ": " + r.flag + " (`magnum codex-flag clear` lifts it)"
 		case r.closed():
 			return l + " was closed without merging: only open or merged PRs are reviewed"
 		case r.merged() && sameSHA(r.head, r.reviewed):
@@ -679,7 +685,7 @@ func boardActRow(r PRBoardRow, label string, now time.Time) actRow {
 		pinned: r.Pinned, pinKnown: true, muted: r.Muted || normState(r.State) == "ignored", mutedKnown: true,
 		inSlot: r.Slot != "", slotKnown: true, mergedUnreviewed: r.MergedUnreviewed, flagDismissed: r.FlagDismissed,
 		auto: r.AutoApproved, autoKnown: true, snoozedUntil: r.SnoozedUntil, releaseAfter: r.ReleaseAfter, now: now,
-		needsMe: r.NeedsMe, approveAs: r.ApproveAs}
+		needsMe: r.NeedsMe, approveAs: r.ApproveAs, flag: r.CodexFlag}
 	if r.LastReview != nil {
 		row.reviewed = r.LastReview.CommitSHA
 	}

@@ -208,6 +208,8 @@ func (e *Engine) finish(ctx context.Context, job *roundJob, in pipeline.RoundInp
 			break
 		}
 		e.toPaused(ctx, pr, from, outcome+": "+msg, now.Add(backoff(attempts)), setAttempts)
+	case pipeline.OutcomeRefused: // the PR is flagged: never reviewed again (codex_flag.go)
+		e.onRefused(ctx, job, pr, in, res, from)
 	case pipeline.OutcomeBlocked, pipeline.OutcomeNeedsAttention:
 		e.keptApprovalFailed(ctx, job.repo, pr, "its round ended "+outcome)
 		e.needsAttention(ctx, job, pr, from, outcome, msg, nil)

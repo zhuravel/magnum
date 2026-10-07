@@ -166,6 +166,15 @@ type PRBoardRow struct {
 	// else waits there, the card says all three, and z lifts it.
 	SnoozedUntil, SnoozedAt time.Time
 	SnoozedBy               string
+	// CodexFlag is the PR's Codex flag in one cell ("Codex flagged · never
+	// reviewed again", engine.CodexFlag.Short): its provider refused a round
+	// as a possible cybersecurity risk, so magnum never reviews it again,
+	// and the review keys refuse. CodexFlagSentence is the card's account
+	// of it, with the command that lifts it. "" while the PR is not flagged.
+	CodexFlag, CodexFlagSentence string
+	// MuteReason is why the PR was muted (the latest `magnum mute`'s
+	// reason), for the card; "" when it was muted without one or is not.
+	MuteReason string
 	// Note is a one-line remark about the last review shown under LAST REVIEW
 	// on the card (e.g. "comment-only push skipped (a7b3f8c → 602da9d)").
 	Note string
@@ -640,6 +649,7 @@ func sanitizeRow(r PRBoardRow) PRBoardRow {
 	r.HeadSHA = cleanText(r.HeadSHA)
 	r.Wait, r.WaitDetail, r.SnoozedBy = cleanText(r.Wait), cleanText(r.WaitDetail), cleanText(r.SnoozedBy)
 	r.WaitNarrow, r.PinnedBy = cleanText(r.WaitNarrow), cleanText(r.PinnedBy)
+	r.CodexFlag, r.CodexFlagSentence, r.MuteReason = cleanText(r.CodexFlag), cleanText(r.CodexFlagSentence), cleanText(r.MuteReason)
 	r.Stalemate = cleanAll(r.Stalemate)
 	r.Note, r.SkipReason, r.ProjectNote = cleanText(r.Note), cleanText(r.SkipReason), cleanText(r.ProjectNote)
 	if r.Badges != nil {

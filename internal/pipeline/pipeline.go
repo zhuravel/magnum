@@ -75,12 +75,18 @@ const (
 	OutcomeTimeout        = "timeout"         // judge_timeout passed without a result
 	OutcomeNeedsAttention = "needs_attention" // nothing posted after one nudge, or an inconsistent result
 	OutcomeError          = "error"           // the round could not run or be evaluated (RunRound's error is set)
+	// OutcomeRefused: a role's turn (the judge's own pass, candidates,
+	// nudge or continue, a reviewer, a shell command's tool) ended on its
+	// provider's safety warning (health kind refused: Codex's
+	// "flagged for possible cybersecurity risk"): the round ended at once,
+	// with no nudge or retry, the other roles stopped (RoundResult.Refusal).
+	OutcomeRefused = "refused"
 )
 
 // Role report statuses (RoleReport.Status and the non-judge runs' outcome
 // column). Besides these, a status can be a health kind found in the pane:
-// "login_required", "usage_limit", "overloaded", "stalled", "blocked",
-// "trust_dialog".
+// "refused", "login_required", "usage_limit", "overloaded", "stalled",
+// "blocked", "trust_dialog".
 const (
 	ReportOK          = "ok"           // report written (non-empty)
 	ReportMissing     = "missing"      // finished without writing the report
@@ -142,6 +148,10 @@ type Agents interface {
 	// background during a run and left running (ok false: unknown).
 	TimeUp(ctx context.Context, run store.Run, text string) error
 	BackgroundTasks(ctx context.Context, run store.Run) (int, bool)
+	// TurnError is the error a Codex turn ended with, from its session's
+	// rollout: how a refusal the pane scrolled past is still found
+	// (refused.go).
+	TurnError(ctx context.Context, run store.Run) (agents.TurnError, bool)
 }
 
 // GitHub is the subset of *github.Client a round uses. It must act as the
@@ -399,7 +409,10 @@ type RoundResult struct {
 	// notes_dir or paths under it.
 	HarnessUsed []string
 
-	Pause   *Pause
+	Pause *Pause
+	// Refusal is who was refused in which run (OutcomeRefused); nil
+	// otherwise.
+	Refusal *Refusal
 	Reports map[agents.Role]RoleReport // by role name: every non-judge role the round ran (or skipped as logged out)
 	// OwnPass is how the judge's own pass ended (RoundInput.OwnPass; Path
 	// set when it wrote its file); nil when the round prompted none.
@@ -797,6 +810,9 @@ func (rd *round) run(ctx context.Context) (RoundResult, error) {
 		if ctx.Err() != nil {
 			return rd.stopped(ctx)
 		}
+		if ref, ok := errors.AsType[*refusedError](err); ok {
+			return rd.refused(ctx, ref.r)
+		}
 		return rd.done(ctx, OutcomeError, err)
 	}
 	return rd.runJudge(ctx, *judgeRun)
@@ -804,11 +820,12 @@ func (rd *round) run(ctx context.Context) (RoundResult, error) {
 
 // runStage runs one stage's roles in parallel, then checks that they left
 // the checkout as the stages found it (checkTree), naming also also (the
-// judge while its own pass works). The error is ctx's, or a checkout that
-// could not be restored (nothing may run on a modified one). A push or the
-// round's end skips the check: a role cut short may still be working until
-// the restart has settled it.
-func (rd *round) runStage(ctx context.Context, stage []config.Role, runs map[string]*store.Run, also func() []string) error {
+// judge while its own pass works). A role refused cancels the stages
+// (cancel, refuseStages). The error is ctx's, or a checkout that could not
+// be restored (nothing may run on a modified one). A push or the round's
+// end skips the check: a role cut short may still be working until the
+// restart has settled it.
+func (rd *round) runStage(ctx context.Context, cancel context.CancelCauseFunc, stage []config.Role, runs map[string]*store.Run, also func() []string) error {
 	var wg sync.WaitGroup
 	var ran []string
 	for _, role := range stage {
@@ -817,7 +834,11 @@ func (rd *round) runStage(ctx context.Context, stage []config.Role, runs map[str
 			continue
 		}
 		ran = append(ran, role.Name)
-		wg.Go(func() { rd.setReport(role, rd.runRole(ctx, role, *run)) })
+		wg.Go(func() {
+			rep := rd.runRole(ctx, role, *run)
+			rd.setReport(role, rep)
+			refuseStages(cancel, rep)
+		})
 	}
 	wg.Wait()
 	if err := ctx.Err(); err != nil {

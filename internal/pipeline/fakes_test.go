@@ -104,6 +104,9 @@ type fakeAgents struct {
 	timeUpErr error
 	// background is what BackgroundTasks reports per role (absent: unknown).
 	background map[agents.Role]int
+	// turnErrors is what TurnError reports per role (absent: none), the
+	// error a Codex turn's rollout records.
+	turnErrors map[agents.Role]agents.TurnError
 	// marks is the run whose marker (agents.ReportMarker) the last prompt or
 	// line a role got that named one asked its report to start with: an
 	// obedient agent writes it (writeReport), a shell line prints it before
@@ -159,6 +162,14 @@ func (f *fakeAgents) BackgroundTasks(ctx context.Context, run store.Run) (int, b
 	defer f.mu.Unlock()
 	n, ok := f.background[agents.Role(run.Role)]
 	return n, ok
+}
+
+// TurnError reports turnErrors[role] (ok false when absent).
+func (f *fakeAgents) TurnError(ctx context.Context, run store.Run) (agents.TurnError, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	te, ok := f.turnErrors[agents.Role(run.Role)]
+	return te, ok
 }
 
 // switchCall is one SwitchModel the pipeline made.

@@ -205,6 +205,8 @@ func (e *Engine) handleRequest(ctx context.Context, req store.Request) {
 		})
 	case ReqSnooze: // snooze.go
 		answer(e, ctx, req, e.requestSnooze)
+	case ReqCodexFlag: // codex_flag.go
+		answer(e, ctx, req, e.requestCodexFlag)
 	case ReqApprove, ReqRequestChanges:
 		event := map[string]string{ReqApprove: "APPROVE", ReqRequestChanges: "REQUEST_CHANGES"}[req.Kind]
 		answer(e, ctx, req, func(ctx context.Context, p VerdictPayload) (string, error) {
@@ -352,6 +354,9 @@ func (e *Engine) requestReview(ctx context.Context, p ReviewPayload) (string, er
 		return "", err
 	}
 	label := fmt.Sprintf("%s#%d", repo.FullName(), pr.Number)
+	if why := e.codexFlagRefusal(ctx, label, pr); why != "" { // codex_flag.go
+		return "", errors.New(why)
+	}
 	w := e.cfg.WatchFor(repo.FullName())
 	merged := postMerge(pr)
 	switch {

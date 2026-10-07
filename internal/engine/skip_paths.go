@@ -133,9 +133,10 @@ func (e *Engine) wantsFiles(ctx context.Context, w config.Watch, res store.PRUps
 }
 
 // classify is eligibility.Classify plus what only the engine knows: a PR
-// muted by `magnum ignore` keeps the reason "ignored", an eligible PR whose
-// base branch name a shell would read is rejected (safeBase, poll.go), and
-// so is one whose changed files all match the watch's skip_paths. Callers
+// muted by `magnum ignore` keeps the reason "ignored", an eligible PR Codex
+// flagged is rejected (codex_flag.go), so is one whose base branch name a
+// shell would read (safeBase, poll.go), and one whose changed files all
+// match the watch's skip_paths. Callers
 // keep forced PRs out of it, so a manual review still runs (its prompts
 // refuse such a base).
 func (e *Engine) classify(ctx context.Context, w config.Watch, pr store.PR, now time.Time) eligibility.Decision {
@@ -145,6 +146,9 @@ func (e *Engine) classify(ctx context.Context, w config.Watch, pr store.PR, now 
 			dec.Reason = skipIgnored
 		}
 		return dec
+	}
+	if f, ok := e.codexFlag(ctx, pr.ID); ok { // codex_flag.go
+		return eligibility.Decision{Reason: f.SkipReason()}
 	}
 	if !safeBase(deref(pr.BaseRef)) {
 		return eligibility.Decision{Reason: reasonUnsafeBase}

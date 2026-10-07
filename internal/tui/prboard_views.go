@@ -59,7 +59,7 @@ func (v PRView) has(r PRBoardRow, self map[string]bool) bool {
 	case ViewMagnum:
 		switch normState(r.State) {
 		case "", "baseline", "ineligible":
-			return reviewRequestedFrom(r, self)
+			return r.CodexFlag != "" || reviewRequestedFrom(r, self)
 		}
 		return true
 	case ViewMine:

@@ -171,6 +171,11 @@ type Deps struct {
 	// whose pane env sets CLAUDE_CONFIG_DIR uses that. A test binary never
 	// falls back to the defaults.
 	ClaudeDir string
+	// CodexHome is the Codex home whose sessions/ holds the rollouts
+	// TurnError reads a turn's error from; "" = $CODEX_HOME, else ~/.codex.
+	// A session whose pane env sets CODEX_HOME uses that. A test binary
+	// never falls back to the defaults.
+	CodexHome string
 	// Log receives one line per trust entry added and per trust dialog
 	// answered (optional).
 	Log execx.Logger

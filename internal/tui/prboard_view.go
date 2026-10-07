@@ -495,6 +495,8 @@ func (p prbPainter) cells(r PRBoardRow, since [3]int) prbCells {
 	cs.c[colRequested] = p.requestedCell(r)
 	cs.c[colState] = p.stateWaitCell(r)
 	switch {
+	case flagShown(r):
+		cs.stateAlt = []cell{p.flagNarrow(r.CodexFlag)}
 	case roundProgress(r) != nil:
 		cs.stateAlt = []cell{p.stateWaitDetail(r, stateTime), p.stateWaitDetail(r, stateBare)}
 	case r.WaitNarrow != "" && r.WaitNarrow != r.Wait: // a retry without its cause
@@ -702,9 +704,12 @@ const (
 func (p prbPainter) stateWaitCell(r PRBoardRow) cell { return p.stateWaitDetail(r, stateFull) }
 
 // stateWaitDetail is stateWaitCell with d of a running round's progress.
-// A PR magnum approved as the operator (autoCell) or that needs them
-// (needsMeCell) says so instead.
+// A PR Codex flagged (flagCell), magnum approved as the operator (autoCell)
+// or that needs them (needsMeCell) says so instead.
 func (p prbPainter) stateWaitDetail(r PRBoardRow, d stateDetail) cell {
+	if flagShown(r) {
+		return p.flagCell(r.CodexFlag)
+	}
 	if autoShown(r) {
 		return p.autoCell()
 	}
@@ -737,6 +742,25 @@ func (p prbPainter) stateWaitDetail(r PRBoardRow, d stateDetail) cell {
 		c = append(c, seg{"· " + why, p.st.Dim})
 	}
 	return c
+}
+
+// flagShown reports whether r's state cell says that Codex flagged it
+// (PRBoardRow.CodexFlag): an open PR with no round running (one set by
+// hand while a round ran shows that round until it ends).
+func flagShown(r PRBoardRow) bool {
+	return r.CodexFlag != "" && !workingState(rowState(r)) && !mergedOnGitHub(r) && !closedUnmerged(r)
+}
+
+// flagCell is the state cell of a PR Codex flagged, its one line in a red
+// pill: "Codex flagged · never reviewed again".
+func (p prbPainter) flagCell(text string) cell {
+	return cell{{" " + text + " ", p.pal.pills["needs_attention"]}}
+}
+
+// flagNarrow is flagCell for a narrow state cell: "Codex flagged".
+func (p prbPainter) flagNarrow(text string) cell {
+	short, _, _ := strings.Cut(text, " · ")
+	return p.flagCell(short)
 }
 
 // snoozeShown reports whether r's snooze holds at now and its state cell may
@@ -1622,7 +1646,7 @@ func (p prbPainter) rowLine(r PRBoardRow, lay prbLayout, width int, selected, qu
 			line = append(line, seg{colGap, lipgloss.Style{}})
 		}
 		pad := seg{spaces(w - cl.width()), lipgloss.Style{}}
-		if c == colState && (r.MergedUnreviewed || needsMeShown(r)) {
+		if c == colState && (r.MergedUnreviewed || needsMeShown(r) || flagShown(r)) {
 			keep = [2]int{len(line), len(line) + len(cl)}
 			if prbRightAligned(c) {
 				keep = [2]int{len(line) + 1, len(line) + 1 + len(cl)}

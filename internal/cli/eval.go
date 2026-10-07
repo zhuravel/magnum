@@ -49,6 +49,9 @@ const (
 	evalAgentTag = "eval"
 	// evalReleaseTimeout bounds quitting a case's agents after its round.
 	evalReleaseTimeout = 2 * time.Minute
+	// evalFlagged is the outcome of a case an earlier replay of which was
+	// refused (eval.Flagged): it is not replayed.
+	evalFlagged = "flagged"
 )
 
 // evalRunsRoot is where runs live: state/eval/<run id>/.
@@ -181,17 +184,31 @@ func runEvalRun(c *Context, f evalRunFlags) int {
 		return cmdFail(c, "eval run", err)
 	}
 	fmt.Fprintf(c.Stdout, "eval run %s: %d case(s), corpus %s, results in %s\n", run.ID, len(cases), inspTilde(path), inspTilde(r.dir))
+	flagged, err := eval.LoadFlagged(evalRunsRoot(c.Layout)) // eval/flagged.go: refused replays are never run again
+	if err != nil {
+		return cmdFail(c, "eval run", err)
+	}
 	stopped := ""
 	for i, ec := range cases {
 		cr := eval.CaseRun{Case: ec.Name, PR: ec.PR, Head: ec.Head, Started: time.Now()}
+		f, isFlagged := flagged[ec.Name]
 		switch {
 		case stopped != "":
 			cr.Outcome, cr.Error = "skipped", stopped
 		case ctx.Err() != nil:
 			cr.Outcome, cr.Error = "skipped", "interrupted"
+		case isFlagged:
+			cr.Outcome, cr.Error = evalFlagged, f.Refusal()
+			fmt.Fprintf(c.Stdout, "[%d/%d] %s %s refused: %s\n", i+1, len(cases), ec.Name, ec.PR, cr.Error)
 		default:
 			fmt.Fprintf(c.Stdout, "[%d/%d] %s %s at %s\n", i+1, len(cases), ec.Name, ec.PR, textx.ShortSHA(ec.Head))
 			cr = r.runCase(ctx, ec, cr)
+			if cr.Outcome == pipeline.OutcomeRefused {
+				if err := eval.MarkFlagged(evalRunsRoot(c.Layout), eval.Flagged{Case: ec.Name, PR: ec.PR, Head: ec.Head, Run: run.ID,
+					Reason: cr.Error, At: time.Now()}); err != nil {
+					fmt.Fprintf(c.Stderr, "magnum eval run: %v\n", err)
+				}
+			}
 			if cr.Outcome == pipeline.OutcomeUsageLimit || cr.Outcome == pipeline.OutcomeLoginRequired {
 				stopped = "an earlier case hit " + cr.Outcome
 			}
@@ -204,7 +221,7 @@ func runEvalRun(c *Context, f evalRunFlags) int {
 		if err := eval.SaveRun(r.dir, run); err != nil {
 			fmt.Fprintf(c.Stderr, "magnum eval run: saving the run: %v\n", err)
 		}
-		if cr.Outcome != "skipped" {
+		if cr.Outcome != "skipped" && cr.Outcome != evalFlagged {
 			fmt.Fprintf(c.Stdout, "      %s\n", evalCaseLine(cr))
 		}
 	}

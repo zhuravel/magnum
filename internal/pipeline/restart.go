@@ -165,13 +165,17 @@ func (rd *round) runStages(ctx context.Context, runs map[string]*store.Run, own 
 			rd.stopOwnPass(ctx, op, own, cancel, &headMovedError{sha: head})
 			return head, nil
 		}
-		err := rd.runStage(sctx, stage, runs, also)
+		err := rd.runStage(sctx, cancel, stage, runs, also)
 		if ctx.Err() != nil {
 			return fail(ctx.Err())
 		}
 		if gone, ok := errors.AsType[*judgeGoneError](context.Cause(sctx)); ok {
 			rd.stopReviewers(ctx, runs, gone.Error())
 			return fail(gone)
+		}
+		if ref, ok := errors.AsType[*refusedError](context.Cause(sctx)); ok {
+			rd.stopReviewers(ctx, runs, ref.Error())
+			return fail(ref)
 		}
 		if moved, ok := errors.AsType[*headMovedError](context.Cause(sctx)); ok {
 			if err != nil && !errors.Is(err, context.Canceled) {
@@ -191,6 +195,9 @@ func (rd *round) runStages(ctx context.Context, runs map[string]*store.Run, own 
 		}
 		if gone, ok := errors.AsType[*judgeGoneError](context.Cause(sctx)); ok {
 			return "", gone
+		}
+		if ref, ok := errors.AsType[*refusedError](context.Cause(sctx)); ok {
+			return "", ref
 		}
 		if moved, ok := errors.AsType[*headMovedError](context.Cause(sctx)); ok {
 			return moved.sha, nil
@@ -373,7 +380,8 @@ func (rd *round) cutRun(ctx context.Context, role config.Role, run store.Run, wh
 }
 
 // stopReviewers ends the reviewers' turns still in flight when the round
-// ends before them because the judge's session is gone (judgeGoneError):
+// ends before them because the judge's session is gone (judgeGoneError) or
+// a role was refused (refusedError):
 // they are interrupted, so they stop working for a round that is over, and
 // their runs abandoned (ReportCancelled, why).
 func (rd *round) stopReviewers(ctx context.Context, runs map[string]*store.Run, why string) {

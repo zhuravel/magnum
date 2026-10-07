@@ -587,11 +587,14 @@ func (m *prBoardModel) rebuild() {
 }
 
 // hiddenRow reports a row h hides: one `magnum ignore` muted or the
-// configuration skips.
+// configuration skips, but not one Codex flagged, which waits for a review
+// by hand.
 func hiddenRow(r PRBoardRow) bool {
 	switch normState(r.State) {
-	case "ignored", "ineligible":
+	case "ignored":
 		return true
+	case "ineligible":
+		return r.CodexFlag == ""
 	}
 	return false
 }

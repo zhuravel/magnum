@@ -66,6 +66,9 @@ type prsJSONRow struct {
 	SnoozedUntil     time.Time         `json:"snoozed_until,omitzero"` // when the PR's snooze ends (magnum snooze); left out while not snoozed
 	SnoozedAt        time.Time         `json:"snoozed_at,omitzero"`    // when the snooze was set
 	SnoozedBy        string            `json:"snoozed_by"`             // by whom: "magnum snooze", "the board"; "" while not snoozed
+	CodexFlag        string            `json:"codex_flag"`             // "Codex flagged · never reviewed again" (magnum codex-flag); "" while not flagged
+	CodexFlagDetail  string            `json:"codex_flag_detail"`      // when and where it was flagged, and how to lift the flag
+	MuteReason       string            `json:"mute_reason"`            // the latest mute's reason; "" when none was given
 	Note             string            `json:"note"`
 	ProjectNote      string            `json:"project_note"` // the agents ran without the PR's own agent config changes
 	RequestedToMe    *prsJSONRequest   `json:"requested_to_me"`
@@ -274,6 +277,7 @@ func prsJSONOf(r tui.PRBoardRow) prsJSONRow {
 		Progress: mapPtr(r.Progress, prsJSONProgressOf), Spend: mapPtr(r.Spend, prsJSONSpendOf), Wait: r.Wait, WaitDetail: r.WaitDetail,
 		WaitNarrow: r.WaitNarrow, PinWait: r.PinWait, PinnedBy: r.PinnedBy, ReleaseAfter: r.ReleaseAfter, DeltaCheck: r.DeltaCheck, Note: r.Note, ProjectNote: r.ProjectNote,
 		SnoozedUntil: r.SnoozedUntil, SnoozedAt: r.SnoozedAt, SnoozedBy: r.SnoozedBy,
+		CodexFlag: r.CodexFlag, CodexFlagDetail: r.CodexFlagSentence, MuteReason: r.MuteReason,
 		RequestedToMe: mapPtr(r.RequestedToMe, prsJSONRequestOf), LastRequest: mapPtr(r.LastRequest, prsJSONRequestOf),
 		Requests: mapList(r.Requests, prsJSONRequestOf), ClosedAt: r.ClosedAt, Recent: r.Recent, MergedUnreviewed: r.MergedUnreviewed, FlagDismissed: r.FlagDismissed,
 		NeedsMe: r.NeedsMe, ReviewDecision: r.ReviewDecision, AutoApproveStopped: r.AutoStopped,

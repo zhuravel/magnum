@@ -24,6 +24,32 @@ func TestEvalRunWithoutACorpusSaysHowToStart(t *testing.T) {
 	}
 }
 
+// A case whose replay was refused before (Codex flagged it) is never
+// replayed: `eval run` refuses it with the reason and runs nothing for it.
+func TestEvalRunRefusesAFlaggedCase(t *testing.T) {
+	f := newInspFixture(t)
+	corpus := filepath.Join(t.TempDir(), "eval.toml")
+	if err := os.WriteFile(corpus, []byte("[[case]]\nname = \"oauth-session\"\npr = \"example/widgets#3\"\nhead = \""+
+		strings.Repeat("ab", 20)+"\"\n\n[[case.defect]]\nid = \"d\"\ntitle = \"t\"\npaths = [\"a.rb\"]\nmatch = [\"x\"]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := eval.MarkFlagged(evalRunsRoot(f.Ctx.Layout), eval.Flagged{Case: "oauth-session", PR: "example/widgets#3", Run: "20261007-134000",
+		Reason: "Codex refused the review: content flagged as a cybersecurity risk (codex-judge, run r-1)"}); err != nil {
+		t.Fatal(err)
+	}
+	if code := execute(f.Ctx, []string{"eval", "run", "--corpus", corpus}); code != 0 {
+		t.Fatalf("exit %d; stderr %s", code, f.Err)
+	}
+	out := f.Out.String()
+	if !strings.Contains(out, "oauth-session example/widgets#3 refused: flagged in run 20261007-134000") || strings.Contains(out, "[[watch]]") {
+		t.Fatalf("output:\n%s", out)
+	}
+	runs, err := eval.ListRuns(evalRunsRoot(f.Ctx.Layout))
+	if err != nil || len(runs) != 1 || len(runs[0].Cases) != 1 || runs[0].Cases[0].Outcome != evalFlagged {
+		t.Fatalf("runs = %+v, %v", runs, err)
+	}
+}
+
 // A case of an unwatched repository fails before anything is checked out or
 // started: magnum would not know its roles or identity.
 func TestEvalCaseOfAnUnwatchedRepoFailsFirst(t *testing.T) {
