@@ -246,6 +246,11 @@ func (rd *round) checkLocalPaths(ctx context.Context, p *postedReview) {
 	rd.event(ctx, "warn", "round.local_paths", text, map[string]any{"review_id": p.id, "hits": hits})
 }
 
+// envFailureRunes clips each failure in a round.environment message: a
+// judge quotes its command's output (1.4K characters seen); the event's data
+// and the result file keep the whole text.
+const envFailureRunes = 300
+
 // environmentFailures records the failures of the review machine the judge
 // reported (round.environment): the operator fixes the machine, the author
 // never sees them.
@@ -255,7 +260,7 @@ func (rd *round) environmentFailures(ctx context.Context, fs []envFailure) {
 	}
 	var parts []string
 	for _, f := range fs {
-		parts = append(parts, strings.TrimPrefix(f.Cmd+": "+f.Error, ": "))
+		parts = append(parts, textx.Clip(strings.TrimPrefix(f.Cmd+": "+f.Error, ": "), envFailureRunes))
 	}
 	rd.event(ctx, "warn", "round.environment", fmt.Sprintf("the judge hit %s of the review machine: %s", textx.Count(len(fs), "failure", "failures"), strings.Join(parts, "; ")),
 		map[string]any{"failures": fs})

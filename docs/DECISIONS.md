@@ -3683,3 +3683,76 @@ editing history. Code, config comments and prompts reference these by their head
   never with browser automation forging cookies or sessions, exploit or payload scripts, scanners or
   network tools against hosts, and calls a probe a test of the PR's behaviour. What is posted does not
   change: a spec was always the preferred reproduction.
+- **A re-decision mark ends with its request** (2026-10-07). `magnum review --replies` marks its forced round
+  a reply round (`pr.<id>.redecide`); only a posted review, a replied round and an abort cleared the mark, so
+  after a `--replies` round that ended in needs_attention or in a dry run a later plain `magnum review` of the
+  same head was a reply round again: it answered in the threads and posted no review. The mark now also ends
+  with needs_attention, a dry run and a post-merge round that could not post, and a `magnum review` without
+  `--replies` removes one an earlier request (or an older daemon) left.
+- **A reply wait whose replies are gone is taken back** (2026-10-07). A reply queues a reviewed PR for a
+  same-head reply round; when the reply went away before the round (deleted, or out of the timeline items
+  GitHub lists), nothing undid the wait, and the round, no longer a reply round, re-reviewed the unchanged
+  head and posted a review. When the poll finds no pending reply any more, a PR that waits at the head magnum
+  reviewed (rereview_pending, not forced, open) goes back to reviewed in a compare-and-set on both commits,
+  with a `pr.reviewed` event. A review request waiting for its round keeps the PR in line, and so does the
+  retry of a round that was not a reply round (attempts, a retry time or an error, and no reply round on the
+  head since the last round start). Rejected: deciding at dispatch (the board would show the wait until then,
+  and the poll is where the replies change).
+- **A restart waits for a running notes curation and the retro** (2026-10-07). A restart for a new build and
+  the CLI's daemon-restart, install, uninstall and daemon-stop (with their `--drain` and `--when-idle` waits)
+  counted only review rounds as in flight, so they cut a running curation short (no proposal; a requested one
+  never toasted) or the retro (whose day then runs again). Both count now: restart_on_new_build waits for
+  them as for rounds, and the CLI reads them from the registry, the curation from `notes.curating` and the
+  retro from a new mark, `learn.retro_running` (its start), which the engine keeps from its own state at each
+  tick and at a retro request and deletes at shutdown, at a restart for a new build and at every start. The
+  mark can outlive a retro by one tick, which only makes a stop wait longer. The refusal and the waits name
+  them ("1 review round(s) and 1 background job(s) in flight: talkable/talkable#7 (reviewing), retro (since
+  15:04)"). Rejected: holding new curations and retros while a restart for a new build is pending (dispatch
+  is not held for it either; the restart takes the first tick nothing runs).
+- **A requested curation that stops or fails says so** (2026-10-07). `magnum notes <repo> --curate` answers
+  "a toast says when its proposal is ready", but a curation that stopped (its curator could not start, the
+  notes lock, a limit, a shutdown) or whose proposal stayed invalid after its nudge wrote only a warn event. A
+  requested curation now sends one toast either way: "notes curation for talkable/talkable stopped" with why,
+  or "… is invalid" with its count of problems, both ending with the `--curate` command that asks again. A
+  curation the daemon started on its own stays quiet: it is tried again after an hour.
+- **A bad App key is an identity error, not a TLS blip** (2026-10-07). The connection classifier
+  (`github.ConnectionCause`) took any "x509: " for a TLS failure, and crypto/x509 also names a private key that
+  does not parse ("x509: failed to parse private key", "x509: malformed private key"), so a bad App key read
+  as a network problem and was retried as one. Only "x509: certificate" (a server certificate: an unknown
+  authority, expired, another host) and "tls: " stay TLS failures.
+- **A second abort of a PR being stopped is answered** (2026-10-07). `magnum abort` or `ignore` of a paused
+  round, or of a round's state a crash left, stops the PR under a reservation of its own; a second one
+  meanwhile was queued for a round goroutine that does not exist, so its command waited for an answer that
+  never came. It is refused at once: "an earlier abort or ignore is stopping it; run `magnum abort …` again
+  shortly".
+- **magnum confirms its model switch only at the bottom of the screen** (2026-10-07). The model-switch
+  confirmation was the last "Switch model?" on screen with a "Yes, switch to" option anywhere below it, so
+  dialog text that output, the composer or a permission prompt followed still got magnum's Enter, which could
+  land on that prompt. It follows the hooks review's rule now: its options are the last lines but for blanks
+  and key hints, and a screen showing a permission prompt has no switch dialog.
+- **round.environment messages are clipped** (2026-10-07). A judge's failure of the review machine quotes its
+  command's output (1.4K characters seen), which filled `magnum logs` and the screens' event lines. The event's
+  message clips each failure to 300 characters; its data and the judge's result file keep the whole text,
+  which `magnum status`'s machine lines read as before.
+- **An approval kept for a delta check waits out quiet hours** (2026-10-07, amends "An approval stands while a
+  delta check of the commits since is due"). The hour an approval stands for its check ran in wall time from
+  the push, and quiet_hours (03:00-12:00) hold the check: on talkable#11920 the approval was kept at 10:10,
+  the check was due at 10:25 but held, the approval was dismissed at 11:11 ("no check of them posted within 1h")
+  and the check posted APPROVED again at 12:10, a dismissal and a re-approval the author saw for nothing. The
+  hour now counts only time the check may run: it starts when the check is due (the push quiet period after
+  the first push the approval does not cover), and quiet hours at that time or later leave their length out
+  (`approvalDeadline`), so that approval stands until 13:00 and the check's approval supersedes it. A `magnum
+  pause` still counts: the operator holds the rounds on purpose, the pause keeps no start time to leave out,
+  and an approval of code nobody checks should go. Rejected: counting from the PR's next eligible time (the
+  daily cap or a re-review interval could keep an approval of unreviewed code for a day).
+- **Only the author and the repository's people start a reply round** (2026-10-07, amends "Replies on
+  magnum's threads get an answer without a push"). Anyone's reply in one of magnum's threads, a bot's too,
+  started a reply round, and in a public repository anyone may reply, while a reply round's decision can
+  become a standing one in the notes. A reply in a thread now counts only when it is the PR author's or its
+  author's authorAssociation is OWNER, MEMBER or COLLABORATOR; the PR author's own reviews and comments count
+  as before. The Details read the association of each timeline review and issue comment (`authorAssociation`
+  on both, a scalar: no cost; `github.Remark.Association`); other replies are not kept as replies, start
+  nothing and show on no board, and the judge still reads them in the threads file. GitHub reports the
+  association as the poll identity sees it, so a member it does not show as one counts as anyone else.
+  Rejected: reading the association in the threads query only (the reply round is decided from the Details,
+  before any threads are read).

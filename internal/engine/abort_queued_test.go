@@ -3,6 +3,7 @@ package engine
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -86,6 +87,42 @@ func TestAbortStopsAPausedRound(t *testing.T) {
 	if h.ag.count("park:") == 0 {
 		t.Error("the paused round's sessions were not parked")
 	}
+}
+
+// A second abort of a round's state without its round (a paused round, or
+// a state a crash left) while the first one still stops it was queued for
+// a round goroutine that does not exist, so it never got an answer. It is
+// answered at once, and the first stop finishes.
+func TestASecondAbortOfAStoppingPRIsAnswered(t *testing.T) {
+	h := newHarness(t)
+	pr := h.reviewedPR(2, "b1")
+	if err := h.st.TransitionPR(h.ctx, pr.ID, nil, store.PRPaused, nil); err != nil {
+		t.Fatal(err)
+	}
+	h.ag.mu.Lock()
+	h.ag.parkGate = make(chan struct{})
+	h.ag.parkStarted = make(chan struct{}, 1)
+	gate, started := h.ag.parkGate, h.ag.parkStarted
+	h.ag.mu.Unlock()
+	first := h.enqueue(ReqAbort, TargetPayload{PRTarget: PRTarget{Ref: "2"}})
+	h.e.handleRequests(h.ctx)
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first abort never parked the sessions")
+	}
+	second := h.enqueue(ReqAbort, TargetPayload{PRTarget: PRTarget{Ref: "2"}})
+	h.e.handleRequests(h.ctx)
+	r := h.request(second)
+	if r.State != store.RequestFailed || deref(r.Result) != "talkable/talkable#2: an earlier abort or ignore is stopping it; run `magnum abort talkable/talkable#2` again shortly" {
+		t.Fatalf("second abort: %s %q", r.State, deref(r.Result))
+	}
+	close(gate)
+	h.settle()
+	if r := h.request(first); r.State != store.RequestDone || !strings.Contains(deref(r.Result), "PR reviewed") {
+		t.Fatalf("first abort: %s %q", r.State, deref(r.Result))
+	}
+	h.wantState(2, store.PRReviewed)
 }
 
 // A never-reviewed PR whose forced review waits goes back to baseline.

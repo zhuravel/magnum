@@ -2914,8 +2914,9 @@ type Daemon struct {
 	// round skips every other timing rule and the daily cap; 0 = no wait.
 	RequestDebounce Duration `toml:"request_debounce"`
 	// ReplyDebounce is how long after the last reply on magnum's latest
-	// review (the PR author's review or comment, or anyone's reply in one of
-	// magnum's threads) a reviewed PR whose head has not moved waits before
+	// review (the PR author's review or comment, or a reply in one of
+	// magnum's threads by the author or a repository owner, member or
+	// collaborator) a reviewed PR whose head has not moved waits before
 	// its judge alone re-decides the threads; 0 = replies start no round.
 	// ReplyMinInterval spaces such rounds of one PR and head (0 = no wait).
 	// A push meanwhile wins: the re-review it gets reads the replies.
@@ -4493,6 +4494,12 @@ const FormerDismissMessage = "magnum: superseded by the review of %s posted as %
     shows on GitHub; the arguments are the new review's commit (short) and the
     login it was posted as.
 
+const KVRetroRunning = "learn.retro_running"
+    KVRetroRunning holds the start of the retro running now (store.FormatTime),
+    which the CLI reads before it stops the daemon: set by the tick or the
+    request that sees it started, deleted by the first one that sees it ended,
+    at a restart for a new build, at shutdown and at every start of the daemon.
+
 const ReqSnooze = "snooze"
     ReqSnooze snoozes a PR or lifts its snooze (SnoozePayload).
 
@@ -4535,7 +4542,7 @@ var ErrOpsLockHeld = errors.New("a magnum command holds state/ops.lock for in-pr
     command running slot work in-process (it holds layout.OpsLock() too):
     the daemon exits non-zero so launchd starts it again once that work is done.
 
-var ErrRestartForBuild = errors.New("a new build is on disk and no round is in flight; exiting for launchd to start it")
+var ErrRestartForBuild = errors.New("a new build is on disk and nothing is in flight; exiting for launchd to start it")
     ErrRestartForBuild is what Tick and Run return when the daemon exits for a
     new build on disk ([daemon] restart_on_new_build): the exit is non-zero,
     so launchd starts the new binary.
@@ -4969,8 +4976,7 @@ func ParseDeltaCheckRound(s string) (DeltaCheckRound, bool)
 
 type DeltaRecord struct {
 	// Version is deltaRecordVersion for a delta measured with the PR's own
-	// diff in view (base_merge.go); 0, a record from before, is checked
-	// again once (recheckDeltas).
+	// diff in view (base_merge.go); 0 is a record from before.
 	Version int    `json:"version,omitempty"`
 	From    string `json:"from"`
 	To      string `json:"to"`
@@ -6708,6 +6714,11 @@ type Remark struct {
 	At     time.Time // the review's submittedAt, the comment's createdAt
 	Author string    // Account form ("app[bot]" for a bot); "" for a ghost
 	Bot    bool      // the author is a bot
+	// Association is the author's authorAssociation with the repository
+	// (OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, FIRST_TIME_CONTRIBUTOR,
+	// FIRST_TIMER, MANNEQUIN, NONE), as the reading identity sees it; ""
+	// when GitHub did not say.
+	Association string
 	// Answers are the authors (Account form) of the threads the review's
 	// inline comments reply to: GitHub's replyTo, a thread's first comment.
 	// They are read for the timeline's last two reviews only

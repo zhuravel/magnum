@@ -499,12 +499,20 @@ var (
 	switchYes   = regexp.MustCompile(`(?i)^yes,? switch to\b`)
 )
 
-// detectSwitchDialog finds the model-switch confirmation on a pane's visible
-// screen: its title line with a numbered "Yes, switch to …" option below.
-// onYes reports whether the cursor is on that option. It is never a
-// permission prompt (detectPermissionPrompt does not match it), so the deny
-// policy never answers it.
+// detectSwitchDialog finds a live model-switch confirmation at the bottom of
+// a pane's visible screen, as a hooks review is found (detectHooksDialog):
+// its title line (the last one on screen) with a numbered "Yes, switch to …"
+// option below, the options on adjacent lines and nothing below them but
+// blank and key-hint lines. Dialog text that output, the composer or a
+// permission prompt follows is not the dialog, and a screen showing a
+// permission prompt has none: the Enter magnum sends must never land on an
+// approval. onYes reports whether the cursor is on the Yes option. It is
+// never a permission prompt (detectPermissionPrompt does not match it), so
+// the deny policy never answers it.
 func detectSwitchDialog(text string) (onYes, ok bool) {
+	if _, ok := detectPermissionPrompt(text); ok {
+		return false, false
+	}
 	lines := strings.Split(strings.ReplaceAll(text, "\r", ""), "\n")
 	title := -1
 	for i := len(lines) - 1; i >= 0 && title < 0; i-- {
@@ -515,12 +523,25 @@ func detectSwitchDialog(text string) (onYes, ok bool) {
 	if title < 0 {
 		return false, false
 	}
-	for _, l := range lines[title+1:] {
-		if mt := permOptionLine.FindStringSubmatch(stripBox(l)); mt != nil && switchYes.MatchString(strings.TrimSpace(mt[3])) {
-			return mt[1] != "", true
+	yes := -1
+	for i := title + 1; i < len(lines) && yes < 0; i++ {
+		if mt := permOptionLine.FindStringSubmatch(stripBox(lines[i])); mt != nil && switchYes.MatchString(strings.TrimSpace(mt[3])) {
+			yes, onYes = i, mt[1] != ""
 		}
 	}
-	return false, false
+	if yes < 0 {
+		return false, false
+	}
+	last := yes
+	for last+1 < len(lines) && permOptionLine.MatchString(stripBox(lines[last+1])) {
+		last++
+	}
+	for _, l := range lines[last+1:] {
+		if t := stripBox(l); t != "" && !permHint.MatchString(t) {
+			return false, false
+		}
+	}
+	return onYes, true
 }
 
 // setSwitching marks session id as switching models (SwitchModel), during

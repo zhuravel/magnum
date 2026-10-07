@@ -35,13 +35,16 @@ var networkPatterns = []errPattern{
 
 // githubPatterns are the connection-class failures of a GitHub API call that
 // networkPatterns do not name: gh's own "error connecting to", Go's dial,
-// TLS and timeout errors, and GitHub's server errors and rate limits.
+// TLS and timeout errors, and GitHub's server errors and rate limits. Of
+// crypto/x509's errors only a server certificate's are TLS failures: a key
+// that does not parse ("x509: failed to parse private key", "x509: malformed
+// private key") is the identity's own.
 var githubPatterns = []errPattern{
 	{"error connecting to", "GitHub unreachable"},
 	{"no such host", "DNS lookup failed"},
 	{"server misbehaving", "DNS lookup failed"},
 	{"tls: ", "TLS failure"},
-	{"x509: ", "TLS failure"},
+	{"x509: certificate", "TLS failure"},
 	{"i/o timeout", "network timeout"},
 	{"timed out", "network timeout"},
 	{"timeout exceeded", "network timeout"},

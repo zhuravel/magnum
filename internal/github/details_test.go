@@ -527,7 +527,9 @@ func TestDetailsReadsTheLastActivity(t *testing.T) {
 // details_remarks.json is synthetic, in the shape GitHub answers the
 // fragment with. The activity timeline's submitted reviews and issue
 // comments are a PR's remarks, oldest first, with their authors in Account
-// form; the last two reviews also say whose threads their inline comments
+// form and the authors' authorAssociation (which decides whether a reply in
+// magnum's threads starts a reply round); the last two reviews also say
+// whose threads their inline comments
 // answer (a reply in a thread is a review of its own). A pending review is
 // no remark, and a PR whose timeline GitHub did not return has none.
 func TestDetailsReadsTheTimelinesRemarksAndTheThreadsTheyAnswer(t *testing.T) {
@@ -538,7 +540,7 @@ func TestDetailsReadsTheTimelinesRemarksAndTheThreadsTheyAnswer(t *testing.T) {
 	}
 	q := oneLine(decodeReq(t, f.Calls[0]).Query)
 	for _, want := range []string{
-		"... on PullRequestReview { id submittedAt author { login __typename } } ... on IssueComment { createdAt author { login __typename } }",
+		"... on PullRequestReview { id submittedAt author { login __typename } authorAssociation } ... on IssueComment { createdAt author { login __typename } authorAssociation }",
 		"replies: timelineItems(last: 2, itemTypes: [PULL_REQUEST_REVIEW]) { nodes { ... on PullRequestReview { id comments(first: 10) { nodes { replyTo { author { login __typename } } } } } } }",
 	} {
 		if !strings.Contains(q, want) {
@@ -553,10 +555,10 @@ func TestDetailsReadsTheTimelinesRemarksAndTheThreadsTheyAnswer(t *testing.T) {
 		return v
 	}
 	want := []Remark{
-		{At: at("2026-10-06T09:00:00Z"), Author: "alice"},
-		{Review: true, At: at("2026-10-06T09:10:00Z"), Author: "alice", Answers: []string{"magnum-app[bot]"}, AnswersKnown: true},
-		{Review: true, At: at("2026-10-06T09:20:00Z"), Author: "coder[bot]", Bot: true, Answers: []string{"rev-ann"}, AnswersKnown: true},
-		{Review: true, At: at("2026-10-06T08:00:00Z"), Author: "magnum-app[bot]", Bot: true},
+		{At: at("2026-10-06T09:00:00Z"), Author: "alice", Association: "CONTRIBUTOR"},
+		{Review: true, At: at("2026-10-06T09:10:00Z"), Author: "alice", Association: "CONTRIBUTOR", Answers: []string{"magnum-app[bot]"}, AnswersKnown: true},
+		{Review: true, At: at("2026-10-06T09:20:00Z"), Author: "coder[bot]", Bot: true, Association: "NONE", Answers: []string{"rev-ann"}, AnswersKnown: true},
+		{Review: true, At: at("2026-10-06T08:00:00Z"), Author: "magnum-app[bot]", Bot: true, Association: "MEMBER"},
 	}
 	if r := got[401].Remarks; !reflect.DeepEqual(r, want) {
 		t.Errorf("#401 remarks:\n got %+v\nwant %+v", r, want)

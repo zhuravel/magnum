@@ -93,6 +93,11 @@ type Remark struct {
 	At     time.Time // the review's submittedAt, the comment's createdAt
 	Author string    // Account form ("app[bot]" for a bot); "" for a ghost
 	Bot    bool      // the author is a bot
+	// Association is the author's authorAssociation with the repository
+	// (OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, FIRST_TIME_CONTRIBUTOR,
+	// FIRST_TIMER, MANNEQUIN, NONE), as the reading identity sees it; ""
+	// when GitHub did not say.
+	Association string
 	// Answers are the authors (Account form) of the threads the review's
 	// inline comments reply to: GitHub's replyTo, a thread's first comment.
 	// They are read for the timeline's last two reviews only
@@ -202,8 +207,9 @@ type PRState struct {
 // one connection of small nodes per pull request and cost nothing: the dry
 // run priced batches of 1, 10, 20, 30 and 40 at 1, 1, 2, 3 and 4 points with
 // and without it (2026-10-06). The remarks (PRDetails.Remarks) add the
-// authors of the timeline's reviews and issue comments, which cost nothing,
-// and one connection of the last two reviews with the authors of the
+// authors of the timeline's reviews and issue comments and their
+// authorAssociation, which cost nothing (GitHub prices connections, not
+// fields), and one connection of the last two reviews with the authors of the
 // threads their inline comments answer (replyTo, a nested connection): the
 // dry run priced batches of 1, 5, 10, 15, 20, 30 and 40 at 1, 1, 1, 2, 3, 4
 // and 5 points with them and 1, 1, 1, 2, 2, 3 and 4 without (2026-10-06), at
@@ -224,7 +230,7 @@ const detailsFragment = `fragment PRDetails on PullRequest {
   reviewDecision
   latestOpinionatedReviews(first: 100, writersOnly: true) { totalCount pageInfo { hasNextPage } nodes { state author { login __typename } commit { oid } } }
   timelineItems(itemTypes: [REVIEW_REQUESTED_EVENT], last: 10) { nodes { ... on ReviewRequestedEvent { createdAt actor { login } requestedReviewer { __typename ... on User { login } ... on Bot { login } ... on Mannequin { login } ... on Team { slug } } } } }
-  activity: timelineItems(last: 10, itemTypes: [` + activityTypes + `]) { nodes { __typename ... on PullRequestReview { id submittedAt author { login __typename } } ... on IssueComment { createdAt author { login __typename } } ` + activityEvents + ` } }
+  activity: timelineItems(last: 10, itemTypes: [` + activityTypes + `]) { nodes { __typename ... on PullRequestReview { id submittedAt author { login __typename } authorAssociation } ... on IssueComment { createdAt author { login __typename } authorAssociation } ` + activityEvents + ` } }
   replies: timelineItems(last: 2, itemTypes: [PULL_REQUEST_REVIEW]) { nodes { ... on PullRequestReview { id comments(first: 10) { nodes { replyTo { author { login __typename } } } } } } }
   headCommit: commits(last: 1) { nodes { commit { oid statusCheckRollup { state contexts(first: 100) { totalCount pageInfo { hasNextPage } nodes { __typename ... on CheckRun { name status conclusion startedAt completedAt checkSuite { workflowRun { workflow { name } } } } ... on StatusContext { context state createdAt } } } } committedDate } } }
 }`
@@ -344,10 +350,11 @@ type detailsJSON struct {
 	Activity        *struct {
 		Nodes []struct {
 			Typename    string     `json:"__typename"`
-			ID          string     `json:"id"`          // a review
-			CreatedAt   time.Time  `json:"createdAt"`   // every item but a review
-			SubmittedAt time.Time  `json:"submittedAt"` // a review; null while pending
-			Author      *actorJSON `json:"author"`      // a review or an issue comment; null: a ghost
+			ID          string     `json:"id"`                // a review
+			CreatedAt   time.Time  `json:"createdAt"`         // every item but a review
+			SubmittedAt time.Time  `json:"submittedAt"`       // a review; null while pending
+			Author      *actorJSON `json:"author"`            // a review or an issue comment; null: a ghost
+			Association string     `json:"authorAssociation"` // a review or an issue comment
 		} `json:"nodes"`
 	} `json:"activity"` // null: GitHub returned no timeline
 	// Replies are the last two reviews with the authors of the comments
@@ -521,6 +528,7 @@ func (d detailsJSON) remarks() []Remark {
 		if n.Author != nil {
 			r.Author, r.Bot = Account(n.Author.Login, n.Author.Typename), IsBot(n.Author.Typename, n.Author.Login)
 		}
+		r.Association = n.Association
 		out = append(out, r)
 	}
 	return out

@@ -557,6 +557,7 @@ func (e *Engine) runCurate(ctx context.Context, repo store.Repo, trigger string)
 		e.curateMu.Unlock()
 		e.event(context.WithoutCancel(ctx), "warn", subject, "notes.curate_stopped", "notes curation of "+full+" stopped: "+why,
 			map[string]any{"run": run.ID})
+		e.toastRequestedCuration(trigger, run, full, "stopped", why+".")
 	}
 	if e.d.Curator == nil {
 		stop("no curator agent (herdr is not configured)")
@@ -663,6 +664,9 @@ func (e *Engine) runCurate(ctx context.Context, repo store.Repo, trigger string)
 		e.event(octx, "warn", subject, "notes.curate_invalid",
 			fmt.Sprintf("notes curation of %s: the proposal is still invalid after a nudge (%d problem(s)); kept as proposal %d",
 				full, len(res.Problems), p.ID), map[string]any{"run": run.ID, "proposal": p.ID, "problems": len(res.Problems)})
+		e.toastRequestedCuration(trigger, run, full, "is invalid",
+			fmt.Sprintf("Its proposal is still invalid after a nudge (%s), so nothing waits for review; `magnum logs` has the event.",
+				textx.Count(len(res.Problems), "problem", "problems")))
 		return
 	}
 	proposed := ContentOf(res.Proposal.State)
@@ -695,6 +699,21 @@ func (e *Engine) runCurate(ctx context.Context, repo store.Repo, trigger string)
 			"harness_before": before.HarnessFiles, "harness_after": after.HarnessFiles, "misses": len(in.Misses), "misses_noted": noted})
 	e.info(notify.Item{Key: fmt.Sprintf("notes-proposal:%d", p.ID), Title: "notes curation for " + full + " is ready",
 		Body: "Review it with `magnum notes " + full + " --review`.", Line: "notes curation for " + full + " is ready"})
+}
+
+// toastRequestedCuration keeps the promise a `magnum notes <repo> --curate`
+// answer makes ("a toast says when its proposal is ready") when no proposal
+// comes: one toast for a requested curation (trigger request) that stopped
+// or ended invalid, what being "stopped" or "is invalid" and body why. A
+// curation the daemon started on its own is tried again, so only its event
+// says so.
+func (e *Engine) toastRequestedCuration(trigger string, run CurateRun, full, what, body string) {
+	if trigger != CurateTriggerRequest {
+		return
+	}
+	title := "notes curation for " + full + " " + what
+	e.info(notify.Item{Key: fmt.Sprintf("notes-curate:%s:%s", strings.ToLower(full), run.ID), Title: title,
+		Body: oneLine(body, 240) + " `magnum notes " + full + " --curate` asks again.", Line: title})
 }
 
 // clearMissesMark clears full's misses mark (KVNotesMisses) once a

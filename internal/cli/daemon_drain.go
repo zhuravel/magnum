@@ -167,12 +167,12 @@ func drainEvent(ctx context.Context, db *sql.DB, kind, msg string) {
 		store.FormatTime(time.Now()), kind, msg)
 }
 
-// drainRounds stops the daemon from starting new rounds
-// (engine.KVDaemonDraining) and waits until no round is in flight, printing
-// a progress line every drainProgressEvery, for at most timeout. It returns
-// a function that lifts the drain (the new daemon also lifts it when it
-// starts), and false when it gave up (timeout, interrupt, unreadable
-// registry), with the drain already lifted.
+// drainRounds stops the daemon from starting new rounds, notes curations
+// and retros (engine.KVDaemonDraining) and waits until nothing is in flight
+// (activeRounds), printing a progress line every drainProgressEvery, for at
+// most timeout. It returns a function that lifts the drain (the new daemon
+// also lifts it when it starts), and false when it gave up (timeout,
+// interrupt, unreadable registry), with the drain already lifted.
 func drainRounds(ctx context.Context, c *Context, cmd string, timeout time.Duration) (func(), bool) {
 	rounds, err := c.activeRounds(ctx)
 	switch {
@@ -180,7 +180,7 @@ func drainRounds(ctx context.Context, c *Context, cmd string, timeout time.Durat
 		fmt.Fprintf(c.Stderr, "magnum %s: cannot tell whether review rounds are in flight (reading %s: %v)\n"+
 			"fix: retry in a moment, or pass --now to restart anyway\n", cmd, inspTilde(c.Layout.DB()), err)
 		return func() {}, false
-	case len(rounds) == 0:
+	case rounds.none():
 		return func() {}, true
 	}
 	value, err := c.startDrain(ctx, cmd)
@@ -194,8 +194,8 @@ func drainRounds(ctx context.Context, c *Context, cmd string, timeout time.Durat
 			fmt.Fprintf(c.Stderr, "magnum %s: warning: could not lift the drain (%v); the daemon lifts it once this command is gone\n", cmd, err)
 		}
 	}
-	fmt.Fprintf(c.Stdout, "draining (pid %d): no new rounds start; waiting for %d round(s) in flight (at most %s): %s\n",
-		os.Getpid(), len(rounds), timeout, strings.Join(rounds, ", "))
+	fmt.Fprintf(c.Stdout, "draining (pid %d): no new rounds start; waiting for %s in flight (at most %s): %s\n",
+		os.Getpid(), rounds.count("round(s)"), timeout, rounds)
 	var waited, sinceProgress time.Duration
 	for {
 		if ctx.Err() != nil {
@@ -205,10 +205,10 @@ func drainRounds(ctx context.Context, c *Context, cmd string, timeout time.Durat
 		}
 		if waited >= timeout {
 			lift(fmt.Sprintf("`magnum %s --drain` gave up after %s; the daemon was not restarted", cmd, timeout))
-			fmt.Fprintf(c.Stderr, "magnum %s: %d round(s) still in flight after %s: %s\n"+
+			fmt.Fprintf(c.Stderr, "magnum %s: %s still in flight after %s: %s\n"+
 				"the drain is lifted and the daemon was not restarted\n"+
 				"fix: retry with a longer --timeout, or pass --now to restart anyway (the rounds start over)\n",
-				cmd, len(rounds), timeout, strings.Join(rounds, ", "))
+				cmd, rounds.count("round(s)"), timeout, rounds)
 			return func() {}, false
 		}
 		daemonSys.Sleep(drainPollEvery)
@@ -217,48 +217,57 @@ func drainRounds(ctx context.Context, c *Context, cmd string, timeout time.Durat
 		if rounds, err = c.activeRounds(ctx); err != nil {
 			continue // a busy registry: try again on the next poll
 		}
-		if len(rounds) == 0 {
-			fmt.Fprintf(c.Stdout, "drained after %s: no round in flight\n", waited)
+		if rounds.none() {
+			fmt.Fprintf(c.Stdout, "drained after %s: nothing in flight\n", waited)
 			return func() { lift(fmt.Sprintf("`magnum %s --drain` finished", cmd)) }, true
 		}
 		if sinceProgress >= drainProgressEvery {
 			sinceProgress = 0
-			fmt.Fprintf(c.Stdout, "draining: %d round(s) in flight after %s: %s\n", len(rounds), waited, strings.Join(rounds, ", "))
+			fmt.Fprintf(c.Stdout, "draining: %s in flight after %s: %s\n", rounds.count("round(s)"), waited, rounds)
 		}
 	}
 }
 
-// waitIdle waits, without a drain and holding nothing, until no round is
-// claiming, reviewing or verifying, printing a progress line every
+// waitIdle waits, without a drain and holding nothing, until nothing is in
+// flight (activeRounds: no round claiming, reviewing or verifying, no notes
+// curation or retro running), printing a progress line every
 // drainProgressEvery, for at most timeout. False when it gave up (timeout,
 // interrupt).
 func waitIdle(ctx context.Context, c *Context, cmd string, timeout time.Duration) bool {
 	var waited, sinceProgress time.Duration
 	announced := false
+	var last inFlight
 	for {
 		rounds, err := c.activeRounds(ctx)
+		if err == nil {
+			last = rounds
+		}
 		switch {
-		case err == nil && len(rounds) == 0:
+		case err == nil && rounds.none():
 			if announced {
-				fmt.Fprintf(c.Stdout, "idle after %s: no round in flight\n", waited)
+				fmt.Fprintf(c.Stdout, "idle after %s: nothing in flight\n", waited)
 			}
 			return true
 		case err == nil && !announced:
 			announced = true
-			fmt.Fprintf(c.Stdout, "waiting for %d round(s) in flight to end, starting none of its own (at most %s): %s\n",
-				len(rounds), timeout, strings.Join(rounds, ", "))
+			fmt.Fprintf(c.Stdout, "waiting for %s in flight to end, starting none of its own (at most %s): %s\n",
+				rounds.count("round(s)"), timeout, rounds)
 		case err == nil && sinceProgress >= drainProgressEvery:
 			sinceProgress = 0
-			fmt.Fprintf(c.Stdout, "waiting: %d round(s) in flight after %s: %s\n", len(rounds), waited, strings.Join(rounds, ", "))
+			fmt.Fprintf(c.Stdout, "waiting: %s in flight after %s: %s\n", rounds.count("round(s)"), waited, rounds)
 		}
 		if ctx.Err() != nil {
 			fmt.Fprintf(c.Stderr, "magnum %s: stopped waiting after %s; the daemon was not restarted\n", cmd, waited)
 			return false
 		}
 		if waited >= timeout {
-			fmt.Fprintf(c.Stderr, "magnum %s: rounds were still in flight after %s; the daemon was not restarted\n"+
-				"fix: retry with a longer --timeout, --drain to stop new rounds meanwhile, or --now to restart anyway (the rounds start over)\n",
-				cmd, timeout)
+			still := "rounds"
+			if !last.none() {
+				still = last.count("round(s)")
+			}
+			fmt.Fprintf(c.Stderr, "magnum %s: %s still in flight after %s; the daemon was not restarted\n"+
+				"fix: retry with a longer --timeout, --drain to start nothing new meanwhile, or --now to restart anyway (the rounds start over)\n",
+				cmd, still, timeout)
 			return false
 		}
 		daemonSys.Sleep(drainPollEvery)

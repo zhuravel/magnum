@@ -80,9 +80,6 @@ func (e *Engine) poll(ctx context.Context) error {
 			errs = append(errs, err)
 		}
 	}
-	// After the first poll applied the heads it found: pushes it saw were
-	// measured anew, the old records left are checked again once.
-	e.recheckDeltas(ctx)
 	// The poll's attempt, whatever its radar calls did; each watch keeps
 	// its own last good poll (poll_health.go).
 	e.setKV(ctx, kvLastPoll, store.FormatTime(now))

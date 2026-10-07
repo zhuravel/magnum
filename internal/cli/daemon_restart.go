@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"syscall"
 	"time"
 
@@ -37,8 +36,8 @@ type restartFlags struct {
 // addRestartFlags declares --now, --drain and --timeout on cmd.
 func addRestartFlags(cmd *cobra.Command, f *restartFlags) {
 	fs := cmd.Flags()
-	fs.BoolVar(&f.now, "now", false, "restart even while review rounds are in flight (they start over)")
-	fs.BoolVar(&f.drain, "drain", false, "start no new rounds, wait for the ones in flight, then restart")
+	fs.BoolVar(&f.now, "now", false, "restart even while review rounds, a notes curation or the retro are in flight (rounds start over)")
+	fs.BoolVar(&f.drain, "drain", false, "start nothing new, wait for the rounds, curation and retro in flight, then restart")
 	fs.DurationVar(&f.timeout, "timeout", defaultDrainTimeout, "with --drain: give up (and restart nothing) after this long")
 }
 
@@ -66,15 +65,15 @@ func newDaemonRestartCmd(c *Context) *cobra.Command {
 			"agent on the current binary, after stopping a daemon that was started by hand. Without a loaded "+
 			"agent a running daemon is stopped (SIGTERM) and `magnum install` is suggested. The binary launchd runs "+
 			"checks the configuration and renders every prompt first (`<binary> config`); the restart is refused when it "+
-			"fails. While review rounds are in flight the restart is refused, because it abandons them; --drain "+
-			"stops new rounds, waits for those in flight (a line every 15s, at most --timeout, default 2h) and then "+
-			"restarts; --when-idle waits the same way without stopping anything and restarts at the first moment no "+
-			"round runs (it waits again when one starts in between); --now restarts at once. ctrl+c, or closing the "+
-			"terminal, stops a wait and lifts a drain.",
+			"fails. While review rounds, a notes curation or the retro are in flight the restart is refused, because "+
+			"it abandons them; --drain starts nothing new, waits for those in flight (a line every 15s, at most "+
+			"--timeout, default 2h) and then restarts; --when-idle waits the same way without stopping anything and "+
+			"restarts at the first moment nothing runs (it waits again when something starts in between); --now "+
+			"restarts at once. ctrl+c, or closing the terminal, stops a wait and lifts a drain.",
 		func(pos []string) int { return runDaemonRestartCmd(c, pos, f) })
 	addRestartFlags(cmd, &f)
 	cmd.Flags().Lookup("timeout").Usage = "with --drain or --when-idle: give up (and restart nothing) after this long"
-	cmd.Flags().BoolVar(&f.whenIdle, "when-idle", false, "wait, stopping nothing, until no review round is in flight, then restart")
+	cmd.Flags().BoolVar(&f.whenIdle, "when-idle", false, "wait, stopping nothing, until nothing is in flight (rounds, a notes curation, the retro), then restart")
 	return cmd
 }
 
@@ -106,15 +105,20 @@ func runDaemonRestartCmd(c *Context, pos []string, f restartFlags) int {
 		fmt.Fprintf(c.Stderr, "magnum daemon-restart: warning: %v\n", err)
 		pid = 0
 	}
-	// --when-idle holds nothing: a round may have started since the wait
-	// ended. The restart must not abandon it, so the wait starts again.
+	// --when-idle holds nothing: a round (or a notes curation, a retro) may
+	// have started since the wait ended. The restart must not abandon it, so
+	// the wait starts again.
 	for f.whenIdle && pid > 0 {
 		rounds, err := c.activeRounds(ctx)
-		if err == nil && len(rounds) == 0 {
+		if err == nil && rounds.none() {
 			break
 		}
 		if err == nil {
-			fmt.Fprintf(out, "a round started in between (%s); waiting again\n", strings.Join(rounds, ", "))
+			what := "a round"
+			if len(rounds.work) > 0 {
+				what = "work"
+			}
+			fmt.Fprintf(out, "%s started in between (%s); waiting again\n", what, rounds)
 		}
 		if !waitIdle(ctx, c, "daemon-restart", f.timeout) {
 			return 1

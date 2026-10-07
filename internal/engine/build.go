@@ -36,7 +36,7 @@ const (
 // ErrRestartForBuild is what Tick and Run return when the daemon exits for a
 // new build on disk ([daemon] restart_on_new_build): the exit is non-zero, so
 // launchd starts the new binary.
-var ErrRestartForBuild = errors.New("a new build is on disk and no round is in flight; exiting for launchd to start it")
+var ErrRestartForBuild = errors.New("a new build is on disk and nothing is in flight; exiting for launchd to start it")
 
 // Build identifies a magnum binary: the version `make build` stamps
 // (main.version), the commit Go recorded (vcs.revision), and the binary
@@ -155,7 +155,7 @@ type buildWatch struct {
 // noteBuild looks at the daemon's binary on disk (each reconcile). A new one
 // is checked once (Options.CheckBuild: its version, then its configuration
 // check); when it passes and [daemon] restart_on_new_build is on, the restart
-// is pending (daemon.restart_pending) until restartForBuild finds no round in
+// is pending (daemon.restart_pending) until restartForBuild finds nothing in
 // flight. Without launchd to start it again the event says to restart by hand.
 func (e *Engine) noteBuild(ctx context.Context) {
 	b := e.build
@@ -175,7 +175,7 @@ func (e *Engine) noteBuild(ctx context.Context) {
 		return
 	}
 	e.builds.pending, e.builds.version = mt, version
-	msg := fmt.Sprintf("a new build is on disk (%s %s, built %s) and passed its check: the daemon restarts on it at the first tick with no round in flight",
+	msg := fmt.Sprintf("a new build is on disk (%s %s, built %s) and passed its check: the daemon restarts on it at the first tick with no round, notes curation or retro in flight",
 		b.Path, version, mt.Local().Format("15:04:05"))
 	if !e.supervised {
 		e.builds.manual = true
@@ -186,8 +186,9 @@ func (e *Engine) noteBuild(ctx context.Context) {
 }
 
 // restartForBuild reports ErrRestartForBuild when a checked new build waits
-// (noteBuild) and no round is claiming, reviewing or verifying, in the
-// registry or in this process. The binary must still be the one checked: a
+// (noteBuild) and nothing is in flight: no round is claiming, reviewing or
+// verifying, in the registry or in this process, and no notes curation or
+// retro runs (backgroundBusy). The binary must still be the one checked: a
 // newer one is checked again on the next reconcile.
 func (e *Engine) restartForBuild(ctx context.Context) error {
 	w := e.builds
@@ -198,13 +199,14 @@ func (e *Engine) restartForBuild(ctx context.Context) error {
 		e.builds = buildWatch{}
 		return nil
 	}
-	if e.activeRounds() > 0 {
+	if e.activeRounds() > 0 || e.backgroundBusy() != "" {
 		return nil
 	}
 	prs, err := e.st.ListPRs(ctx, store.PRFilter{States: store.InFlightStates})
 	if err != nil || len(prs) > 0 {
 		return nil
 	}
+	e.noteRetroRunning(ctx) // a retro that ran has ended: no CLI waits for it
 	e.setKV(ctx, kvRestartForBuild, e.build.Label())
 	e.log.Info(ErrRestartForBuild.Error(), "from", e.build.Label(), "to", w.version, "path", e.build.Path)
 	return ErrRestartForBuild

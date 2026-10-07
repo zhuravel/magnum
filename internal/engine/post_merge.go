@@ -155,7 +155,7 @@ func (e *Engine) postMergeFailed(ctx context.Context, job *roundJob, pr store.PR
 		e.log.Info("PR moved on during the post-merge round", "pr", pr.ID, "err", err)
 		return
 	}
-	e.delKV(ctx, kvPRDryRun(pr.ID)) // the forced request ended with it
+	e.delKV(ctx, kvPRDryRun(pr.ID), kvPRRedecide(pr.ID)) // the forced request ended with it
 	e.clearRequested(ctx, pr.ID)
 	if job.hasSlo {
 		_ = e.st.TransitionSlot(ctx, job.slot.ID, []string{store.SlotClaimed, store.SlotBusy}, store.SlotHeld, nil)

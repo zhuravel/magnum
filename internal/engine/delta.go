@@ -71,8 +71,7 @@ func KVPRDelta(prID int64) string { return fmt.Sprintf("pr.%d.delta", prID) }
 // and To its head.
 type DeltaRecord struct {
 	// Version is deltaRecordVersion for a delta measured with the PR's own
-	// diff in view (base_merge.go); 0, a record from before, is checked
-	// again once (recheckDeltas).
+	// diff in view (base_merge.go); 0 is a record from before.
 	Version int    `json:"version,omitempty"`
 	From    string `json:"from"`
 	To      string `json:"to"`
@@ -114,18 +113,18 @@ func (dc deltaCheck) change() string {
 	return fmt.Sprintf("changes %s (%d %s)", DeltaLabel(dc.classes), dc.files, textx.Plural(dc.files, "file", "files"))
 }
 
-// checkDelta compares from...to in one GitHub call as the watch's poll
-// identity, when the watch skips trivial deltas or has a re-review
-// threshold. When that push is not trivial but has a merge commit or
-// diverged from the reviewed commit (a rebase, a force push), the measure
-// triage and the rerun share (measureRange) adds two calls that compare the
-// PR's own diff against base before and after it: unchanged is the class
-// DeltaBase, changed gives the size of that change; an incomplete
-// comparison keeps the size of from...to. A failure of the first call
-// measures nothing, and nor does a head GitHub finds behind the reviewed
-// commit (a force push back to an ancestor: no commit and no file to
-// measure, while the review discusses code the push dropped): the PR gets
-// its re-review.
+// checkDelta measures from...to as the watch's poll identity, when the
+// watch skips trivial deltas or has a re-review threshold, with the measure
+// triage and the rerun share (measureRange): one GitHub call, and when the
+// push has a merge commit or diverged from the reviewed commit (a rebase, a
+// force push) two more that compare the PR's own diff against base before
+// and after it. A push trivial by its own files stands as it is; otherwise
+// an unchanged own diff is the class DeltaBase, a changed one gives the size
+// of that change, and an incomplete comparison keeps the size of from...to.
+// A failure of the first call measures nothing, and nor does a head GitHub
+// finds behind the reviewed commit (a force push back to an ancestor: no
+// commit and no file to measure, while the review discusses code the push
+// dropped): the PR gets its re-review.
 func (e *Engine) checkDelta(ctx context.Context, repo store.Repo, w config.Watch, base, from, to string) deltaCheck {
 	allowed := e.cfg.TrivialDeltas(&w)
 	if len(allowed) == 0 && e.cfg.ThrottleFor(&w).RereviewMinLines <= 0 {
@@ -138,11 +137,12 @@ func (e *Engine) checkDelta(ctx context.Context, repo store.Repo, w config.Watch
 	if gh == nil {
 		return deltaCheck{}
 	}
-	pc, err := e.comparePush(ctx, gh, repo, from, to)
+	m, err := e.measureRange(ctx, gh, repo, base, from, to)
 	if err != nil {
 		e.log.Info("delta: compare failed; the push is re-reviewed", "repo", repo.FullName(), "from", textx.ShortSHA(from), "to", textx.ShortSHA(to), "err", err)
 		return deltaCheck{}
 	}
+	pc := m.push
 	if pc.Status == "behind" || pc.Commits == 0 {
 		e.log.Info("delta: the head is behind the reviewed commit; the push is re-reviewed", "repo", repo.FullName(),
 			"from", textx.ShortSHA(from), "to", textx.ShortSHA(to), "status", pc.Status)
@@ -150,12 +150,8 @@ func (e *Engine) checkDelta(ctx context.Context, repo store.Repo, w config.Watch
 	}
 	dc := deltaCheck{measured: true, files: len(pc.Files), commits: pc.Commits}
 	dc.size, dc.classes, dc.trivial = assessDelta(pc.Files, allowed)
-	if dc.trivial || !viaBase(pc) || base == "" {
-		return dc
-	}
-	m, err := e.measureRange(ctx, gh, repo, base, from, to) // this tick's comparison of from...to, and the PR's own diff
 	switch {
-	case err != nil || !m.ownOK:
+	case dc.trivial || !m.ownOK:
 	case len(m.own.changed) > 0:
 		dc.size = m.own.size
 	case slices.Contains(allowed, DeltaBase):
@@ -241,56 +237,6 @@ func (e *Engine) settlePush(ctx context.Context, repo store.Repo, w config.Watch
 		fmt.Sprintf("%s → reviewed: the push to %s %s since the review of %s; no re-review, the review stands",
 			pr.State, textx.ShortSHA(pr.HeadSHA), dc.change(), textx.ShortSHA(from)))
 	return true, nil
-}
-
-// recheckDeltas runs once per daemon, after its first poll: a
-// rereview_pending PR whose delta record predates deltaRecordVersion was
-// measured as reviewed...head even when the push only merged its base
-// branch, so settlePush checks it again, the same compare-and-set from
-// rereview_pending that a push gets. One whose own diff did not change
-// settles; another keeps the new measure and its re-review is timed again
-// with it (the threshold may now hold it back). Forced PRs and a PR whose
-// round started are left alone; a measure that fails leaves the old record
-// for the next daemon.
-func (e *Engine) recheckDeltas(ctx context.Context) {
-	if e.deltasRechecked {
-		return
-	}
-	e.deltasRechecked = true
-	prs, err := e.st.ListPRs(ctx, store.PRFilter{States: []string{store.PRRereviewPending}})
-	if err != nil {
-		e.log.Warn("delta recheck: list PRs", "err", err)
-		return
-	}
-	for _, pr := range prs {
-		if pr.Forced || e.roundActive(pr.ID) {
-			continue
-		}
-		if rec, ok := e.deltaRecord(ctx, pr.ID); !ok || rec.Version >= deltaRecordVersion {
-			continue
-		}
-		repo, err := e.st.RepoByID(ctx, pr.RepoID)
-		if err != nil {
-			continue
-		}
-		w := e.cfg.WatchFor(repo.FullName())
-		if w == nil {
-			continue
-		}
-		settled, err := e.settlePush(ctx, repo, *w, pr)
-		if err != nil {
-			e.log.Info("delta recheck: settle", "subject", prSubject(repo, pr.Number), "err", err)
-		}
-		if settled {
-			continue
-		}
-		if rec, ok := e.deltaRecord(ctx, pr.ID); ok && rec.Version == deltaRecordVersion && rec.From == deref(pr.ReviewedSHA) && rec.To == pr.HeadSHA {
-			why := fmt.Sprintf("delta measured again: %d lines", rec.Lines)
-			if err := e.queue(ctx, pr, *w, []string{store.PRRereviewPending}, false, e.now(), why); err != nil {
-				e.log.Info("delta recheck: queue", "subject", prSubject(repo, pr.Number), "err", err)
-			}
-		}
-	}
 }
 
 // recordTrivial keeps a trivial skip for the card (KVPRTrivial) and records

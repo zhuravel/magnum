@@ -54,6 +54,10 @@ var _ keySender = (*herdr.Client)(nil)
 type roundStop struct {
 	ended bool        // the round goroutine is past its round: too late to stop it
 	reqs  []stopOrder // abort and ignore requests the round serves when it ends
+	// stopping: the reservation is requestAbort's own, a stop (or the take
+	// back of a queued review) without a round goroutine, which serves no
+	// later request: those are answered at once.
+	stopping bool
 }
 
 // stopOrder is one abort (ignore=false) or ignore request.
@@ -90,7 +94,7 @@ func (e *Engine) requestAbort(ctx context.Context, id int64, p TargetPayload, ig
 	e.mu.Lock()
 	h, held := e.rounds[pr.ID]
 	switch {
-	case held && !h.open && !h.stop.ended:
+	case held && !h.open && !h.stop.ended && !h.stop.stopping:
 		h.stop.reqs = append(h.stop.reqs, stopOrder{id: id, ignore: ignore})
 		e.inflight[id] = true
 		cancel := h.cancel
@@ -100,8 +104,11 @@ func (e *Engine) requestAbort(ctx context.Context, id int64, p TargetPayload, ig
 		return
 	case held:
 		why := "its round is ending"
-		if h.open {
+		switch {
+		case h.open:
 			why = "a `magnum open` restore is in progress"
+		case h.stop.stopping:
+			why = "an earlier abort or ignore is stopping it"
 		}
 		e.mu.Unlock()
 		e.complete(ctx, id, fmt.Errorf("%s: %s; run `magnum %s %s` again shortly", label, why, verb, label), "")
@@ -123,7 +130,7 @@ func (e *Engine) requestAbort(ctx context.Context, id int64, p TargetPayload, ig
 		return
 	}
 	rctx, cancel := context.WithCancel(ctx)
-	if !e.reserve(pr.ID, &roundHandle{cancel: cancel}) {
+	if !e.reserve(pr.ID, &roundHandle{cancel: cancel, stop: roundStop{stopping: true}}) {
 		cancel()
 		e.complete(ctx, id, fmt.Errorf("%s: %s; run `magnum %s %s` again shortly", label, e.heldReason(pr.ID), verb, label), "")
 		return

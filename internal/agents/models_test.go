@@ -515,6 +515,27 @@ func TestSwitchDialogIsNoPermissionPrompt(t *testing.T) {
 	}
 }
 
+// The model-switch confirmation is live only at the bottom of the screen,
+// as a hooks review is: its options are the last lines but for blanks and
+// key hints, and no permission prompt is on screen. Its text an agent's
+// output left above a permission prompt, the composer or more output never
+// yields the Enter magnum sends, which could land on "Yes" of the prompt.
+func TestDetectSwitchDialogOnlyAtTheBottom(t *testing.T) {
+	if onYes, ok := detectSwitchDialog(switchDialogScreen + "\n\n  Enter to confirm · Esc to cancel\n"); !ok || !onYes {
+		t.Fatalf("with a key hint below: %v %v, want the dialog with the cursor on Yes", onYes, ok)
+	}
+	for name, text := range map[string]string{
+		"above a permission prompt": switchDialogScreen + "\n" + claudeRmPrompt,
+		"above the composer":        switchDialogScreen + "\n" + claudeIdleScreen,
+		"above an edit prompt":      switchDialogScreen + "\n" + claudeEditPrompt,
+		"output below":              switchDialogScreen + "\n⏺ Review written.\n",
+	} {
+		if onYes, ok := detectSwitchDialog(text); ok {
+			t.Errorf("%s: detected the switch dialog (cursor on yes %v)", name, onYes)
+		}
+	}
+}
+
 func TestModelShownReadsStatusLine(t *testing.T) {
 	for _, tc := range []struct {
 		screen string

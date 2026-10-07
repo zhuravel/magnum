@@ -158,8 +158,9 @@ type Daemon struct {
 	// round skips every other timing rule and the daily cap; 0 = no wait.
 	RequestDebounce Duration `toml:"request_debounce"`
 	// ReplyDebounce is how long after the last reply on magnum's latest
-	// review (the PR author's review or comment, or anyone's reply in one of
-	// magnum's threads) a reviewed PR whose head has not moved waits before
+	// review (the PR author's review or comment, or a reply in one of
+	// magnum's threads by the author or a repository owner, member or
+	// collaborator) a reviewed PR whose head has not moved waits before
 	// its judge alone re-decides the threads; 0 = replies start no round.
 	// ReplyMinInterval spaces such rounds of one PR and head (0 = no wait).
 	// A push meanwhile wins: the re-review it gets reads the replies.

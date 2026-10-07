@@ -188,17 +188,59 @@ func (e *Engine) dismissApproval(ctx context.Context, repo store.Repo, pr store.
 // delta check of the commits since is due"): the approval of the commit
 // before a small delta is not dismissed at the push; the delta check's
 // review supersedes it (an approval) or it goes then (anything else), and
-// it goes when no check posted within approvalCheckWait of the first push
-// it does not cover.
+// it goes when no check posted within approvalCheckWait of the time the
+// check was due, quiet hours left out (keptApprovalDeadline).
 
 // kvApprovalPending holds the approval kept for a delta check
 // (pendingApproval as JSON).
 func kvApprovalPending(prID int64) string { return fmt.Sprintf("pr.%d.approval_pending", prID) }
 
-// approvalCheckWait is how long after the first push it does not cover an
-// approval stands for a delta check that has not posted: an approval never
+// approvalCheckWait is how long an approval stands for a delta check that
+// has not posted, counted from the time the check is due (the push quiet
+// period after the first push it does not cover) and only while it may run:
+// [daemon] quiet_hours do not count (approvalDeadline). An approval never
 // covers unreviewed code for long.
 const approvalCheckWait = time.Hour
+
+// keptApprovalDeadline is when an approval kept for a delta check of the
+// commits since the first push it does not cover (since) goes if no check
+// posted: approvalCheckWait after the check is due (since and the watch's
+// push quiet period), quiet hours left out. A `magnum pause` is not left
+// out: the operator holds the rounds on purpose, and an approval of code
+// nobody checks goes.
+func (e *Engine) keptApprovalDeadline(w *config.Watch, since time.Time) time.Time {
+	due := since.Add(e.cfg.ThrottleFor(w).PushQuietPeriod.Duration)
+	return approvalDeadline(e.cfg.Daemon.QuietHours, due, approvalCheckWait)
+}
+
+// approvalDeadline is the time wait of time outside the quiet hours spec
+// (config.ParseQuietHours, local) has passed since due: quiet hours at due
+// move its start to their end, and quiet hours that begin before the wait
+// ran out add their length. Without quiet hours it is due plus wait.
+func approvalDeadline(spec string, due time.Time, wait time.Duration) time.Time {
+	w, ok, err := config.ParseQuietHours(spec)
+	if err != nil || !ok {
+		return due.Add(wait)
+	}
+	t := due
+	for wait > 0 {
+		if quietHoursNow(spec, t) {
+			t = quietHoursEnd(spec, t)
+			continue
+		}
+		n := t.Local()
+		start := time.Date(n.Year(), n.Month(), n.Day(), w.Start/60, w.Start%60, 0, 0, n.Location())
+		if !start.After(n) {
+			start = start.AddDate(0, 0, 1)
+		}
+		if !t.Add(wait).After(start) {
+			return t.Add(wait)
+		}
+		wait -= start.Sub(t)
+		t = start
+	}
+	return t
+}
 
 // pendingApproval is an approval kept for a delta check (kvApprovalPending).
 type pendingApproval struct {
@@ -234,7 +276,7 @@ func (e *Engine) setPendingApproval(ctx context.Context, prID int64, p pendingAp
 // stands for a delta check: the PR's measured delta from that commit to its
 // head (KVPRDelta; for a head a round in flight has not measured yet, this
 // tick's comparison) gets one (eligibility.DeltaCheck, whatever round the
-// PR then runs) and its first push is less than approvalCheckWait ago. A
+// PR then runs) and its deadline has not passed (keptApprovalDeadline). A
 // newly kept approval is recorded (kvApprovalPending) with
 // review.approval_kept_for_check. When it does not stand and was kept so
 // far, why says why it goes now.
@@ -270,11 +312,12 @@ func (e *Engine) keepForDeltaCheck(ctx context.Context, repo store.Repo, pr stor
 		since = p.Since
 	}
 	f := eligibility.PRFacts{ReviewedSHA: reviewed, DeltaReadable: size.Readable(), DeltaLines: size.Lines, DeltaAddedFiles: size.AddedFiles}
+	deadline := e.keptApprovalDeadline(w, since)
 	switch {
 	case !eligibility.DeltaCheck(e.cfg.ThrottleFor(w), f):
 		return gone("they are no longer a small delta; a re-review follows")
-	case !e.now().Before(since.Add(approvalCheckWait)):
-		return gone(fmt.Sprintf("no check of them posted within %s of the push; a re-review follows", humanDuration(approvalCheckWait)))
+	case !e.now().Before(deadline):
+		return gone(fmt.Sprintf("no check of them posted within %s of becoming due; a re-review follows", humanDuration(approvalCheckWait)))
 	}
 	if pending && p.Head == pr.HeadSHA {
 		return true, ""
@@ -284,7 +327,7 @@ func (e *Engine) keepForDeltaCheck(ctx context.Context, repo store.Repo, pr stor
 	e.event(ctx, "info", prSubject(repo, pr.Number), "review.approval_kept_for_check",
 		fmt.Sprintf("approval %d by %s on %s stands for a delta check of %s up to %s (at most until %s)", reviewID, id.Login,
 			textx.ShortSHA(reviewed), textx.Count(size.Lines, "line", "lines"), textx.ShortSHA(pr.HeadSHA),
-			since.Add(approvalCheckWait).Local().Format("15:04")),
+			deadline.Local().Format("15:04")),
 		map[string]any{"review_id": reviewID, "reviewed_sha": reviewed, "head_sha": pr.HeadSHA, "identity": id.Name, "lines": size.Lines})
 	return true, ""
 }

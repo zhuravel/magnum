@@ -106,7 +106,7 @@ func (e *Engine) needsAttention(ctx context.Context, job *roundJob, pr store.PR,
 		e.log.Info("PR moved on during the round", "pr", pr.ID, "err", err)
 		return
 	}
-	e.delKV(ctx, kvPRDryRun(pr.ID)) // the forced request ended with it
+	e.delKV(ctx, kvPRDryRun(pr.ID), kvPRRedecide(pr.ID)) // the forced request ended with it
 	e.setKV(ctx, KVPRAttention(pr.ID), why)
 	if job.hasSlo {
 		_ = e.st.TransitionSlot(ctx, job.slot.ID, []string{store.SlotClaimed, store.SlotBusy}, store.SlotHeld, nil)
@@ -603,7 +603,7 @@ func (e *Engine) reportKind(w *config.Watch, rep pipeline.RoleReport) string {
 // returns to closed, released after a fresh close grace.
 func (e *Engine) onDryRun(ctx context.Context, job *roundJob, pr store.PR, in pipeline.RoundInput, res pipeline.RoundResult, from []string) {
 	to, _ := e.getKV(ctx, kvPRDryRun(pr.ID))
-	e.delKV(ctx, kvPRDryRun(pr.ID))
+	e.delKV(ctx, kvPRDryRun(pr.ID), kvPRRedecide(pr.ID)) // the forced request ended with it
 	switch {
 	case job.postMerge:
 		to = store.PRClosed

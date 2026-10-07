@@ -165,21 +165,38 @@ func TestAPushWinsOverAReplyRound(t *testing.T) {
 
 // Only replies that may answer magnum count: the PR author's own reviews
 // and comments ("(Claude)" replies an author's agent posts are the
-// author's), and anyone's reply in one of magnum's threads, a bot's too.
-// magnum's own logins, a teammate's review elsewhere and a bot's top-level
-// comment never start a round.
+// author's), and a reply in one of magnum's threads by the author or by an
+// owner, member or collaborator of the repository (authorAssociation). In
+// a public repository anyone could reply, and a reply round's decision can
+// become a standing one in the notes: a non-member's reply, a bot's
+// without that association, magnum's own logins, a teammate's review
+// elsewhere and a bot's top-level comment never start a round (the judge
+// still reads them in the threads file).
 func TestOnlyRepliesThatMayAnswerMagnumStartARound(t *testing.T) {
+	inThread := func(by, assoc string) func(h *harness) github.Remark {
+		return func(h *harness) github.Remark {
+			r := threadReply(h, by)
+			r.Association = assoc
+			return r
+		}
+	}
 	for name, c := range map[string]struct {
 		remark func(h *harness) github.Remark
 		starts bool
 	}{
-		"the author's comment":   {func(h *harness) github.Remark { return github.Remark{At: h.clock.Now(), Author: "alice"} }, true},
-		"a teammate in a thread": {func(h *harness) github.Remark { return threadReply(h, "bob-rev") }, true},
-		"a bot in a thread": {func(h *harness) github.Remark {
-			r := threadReply(h, "coder[bot]")
+		"the author's comment":       {func(h *harness) github.Remark { return github.Remark{At: h.clock.Now(), Author: "alice"} }, true},
+		"the author in a thread":     {inThread("alice", "CONTRIBUTOR"), true},
+		"a member in a thread":       {inThread("bob-rev", "MEMBER"), true},
+		"an owner in a thread":       {inThread("bob-rev", "OWNER"), true},
+		"a collaborator in a thread": {inThread("bob-rev", "COLLABORATOR"), true},
+		"a non-member in a thread":   {inThread("rev-ann", "CONTRIBUTOR"), false},
+		"a first-timer in a thread":  {inThread("rev-ann", "FIRST_TIME_CONTRIBUTOR"), false},
+		"no association in a thread": {inThread("rev-ann", ""), false},
+		"a bot without one in a thread": {func(h *harness) github.Remark {
+			r := inThread("coder[bot]", "NONE")(h)
 			r.Bot = true
 			return r
-		}, true},
+		}, false},
 		"magnum's own reply": {func(h *harness) github.Remark {
 			r := threadReply(h, magnumApp)
 			r.Bot = true
@@ -413,4 +430,111 @@ func mustKV(t *testing.T, h *harness, key string) string {
 		t.Fatalf("kv %s is not set", key)
 	}
 	return v
+}
+
+// A reply that queued a re-decision and is gone before its round (deleted,
+// or past the timeline items GitHub lists) used to leave the PR waiting, and
+// the same-head round with nothing to re-decide posted a full review again.
+// The PR goes back to reviewed, with an event, and no round follows.
+func TestAReplyThatIsGoneTakesThePRBackToReviewed(t *testing.T) {
+	h := newHarness(t)
+	h.reviewedPR(2, "b1")
+	h.advance(10 * time.Minute)
+	reqPoll(h, prSpec{n: 2, head: "b1", remarks: []github.Remark{threadReply(h, "alice")}})
+	h.wantState(2, store.PRRereviewPending)
+	h.advance(time.Minute)
+	reqPoll(h, prSpec{n: 2, head: "b1", remarks: []github.Remark{}})
+	pr := h.wantState(2, store.PRReviewed)
+	if pr.NextEligibleAt != nil || len(pr.PendingReplies()) != 0 || deref(pr.ReviewedSHA) != "b1" {
+		t.Fatalf("back to reviewed: next eligible %v, pending %d, reviewed %q", pr.NextEligibleAt, len(pr.PendingReplies()), deref(pr.ReviewedSHA))
+	}
+	evs := approvalEvents(t, h, 2, "pr.reviewed")
+	if len(evs) != 1 || evs[0].Message != "rereview_pending → reviewed: the replies that queued the re-decision are gone; the review stands" {
+		t.Fatalf("pr.reviewed events: %+v", evs)
+	}
+	h.advance(time.Hour)
+	h.tick()
+	if n := len(h.rd.all()); n != 1 {
+		t.Fatalf("rounds = %d: a same-head round ran with nothing to re-decide", n)
+	}
+}
+
+// A same-head wait that is not the replies' stays when they go: a review
+// request waits for its round, and so does the retry of a requested round
+// that failed.
+func TestAWaitThatIsNotTheRepliesStaysWhenTheyGo(t *testing.T) {
+	t.Run("a review request", func(t *testing.T) {
+		h := newHarness(t)
+		h.reviewedPR(2, "b1")
+		h.advance(10 * time.Minute)
+		ask := reqAsk(h, "alice", askedPoll)
+		reqPoll(h, prSpec{n: 2, head: "b1", requests: []github.ReviewRequestEvent{ask}, remarks: []github.Remark{threadReply(h, "alice")}})
+		h.wantState(2, store.PRRereviewPending)
+		reqPoll(h, prSpec{n: 2, head: "b1", requests: []github.ReviewRequestEvent{ask}, remarks: []github.Remark{}})
+		h.wantState(2, store.PRRereviewPending)
+	})
+	t.Run("the retry of a requested round", func(t *testing.T) {
+		h := newHarness(t)
+		pr := h.reviewedPR(2, "b1")
+		h.advance(10 * time.Minute)
+		started := h.clock.Now()
+		if err := h.st.TransitionPR(h.ctx, pr.ID, []string{store.PRReviewed}, store.PRRereviewPending, func(u *store.PRUpdate) {
+			u.Set("last_round_started_at", started)
+			u.Set("attempts", 1)
+			u.Set("next_attempt_at", started.Add(time.Hour))
+			u.Set("last_error", "timeout: judge_timeout passed")
+		}); err != nil {
+			t.Fatal(err)
+		}
+		reqPoll(h, prSpec{n: 2, head: "b1", remarks: []github.Remark{}})
+		h.wantState(2, store.PRRereviewPending)
+	})
+}
+
+// `magnum review --replies` marks its forced round a re-decision of the
+// replies (kvPRRedecide). A round of it that ended in needs_attention or in
+// a dry run left the mark, so a later plain `magnum review` answered in the
+// threads instead of posting a review. The mark ends with its request, and
+// a plain request clears one an older daemon left.
+func TestAReDecisionMarkEndsWithItsRequest(t *testing.T) {
+	for _, end := range []string{"needs attention", "dry run"} {
+		t.Run(end, func(t *testing.T) {
+			h := newHarness(t)
+			pr := h.reviewedPR(2, "b1")
+			h.advance(10 * time.Minute)
+			// Replies older than reply tracking: no reply round of their own.
+			h.e.setKV(h.ctx, kvRepliesSince, store.FormatTime(h.clock.Now().Add(time.Minute)))
+			reqPoll(h, prSpec{n: 2, head: "b1", remarks: []github.Remark{threadReply(h, "alice")}})
+			h.wantState(2, store.PRReviewed)
+			h.rd.mu.Lock()
+			h.rd.script = func(in pipeline.RoundInput) (pipeline.RoundResult, error) {
+				switch {
+				case in.Replies == 0:
+					return h.rd.posted(h.ctx, in, 99)
+				case in.DryRun:
+					return pipeline.RoundResult{Outcome: pipeline.OutcomeDryRun, Event: "COMMENTED", TargetSHA: in.TargetSHA}, nil
+				}
+				return pipeline.RoundResult{Outcome: pipeline.OutcomeNeedsAttention, TargetSHA: in.TargetSHA, Error: "nothing posted"}, nil
+			}
+			h.rd.mu.Unlock()
+			h.enqueue(ReqReview, ReviewPayload{PRTarget: PRTarget{Ref: "2"}, Replies: true, DryRun: end == "dry run"})
+			h.tick()
+			if ins := h.rd.all(); len(ins) != 2 || ins[1].Replies != 1 {
+				t.Fatalf("magnum review --replies: rounds %d, replies %d", len(ins), ins[len(ins)-1].Replies)
+			}
+			if _, ok := kvValue(h, kvPRRedecide(pr.ID)); ok {
+				t.Fatal("the re-decision mark outlived its round")
+			}
+			h.e.setKV(h.ctx, kvPRRedecide(pr.ID), "1") // left by an older daemon
+			h.enqueue(ReqReview, ReviewPayload{PRTarget: PRTarget{Ref: "2"}})
+			h.tick()
+			ins := h.rd.all()
+			if len(ins) != 3 || !ins[2].SameHead || ins[2].Replies != 0 {
+				t.Fatalf("magnum review: rounds %d, same head %v, replies %d", len(ins), ins[len(ins)-1].SameHead, ins[len(ins)-1].Replies)
+			}
+			if got := h.wantState(2, store.PRReviewed); deref(got.LastReviewID) != 199 {
+				t.Fatalf("last review %d, want the posted 199", deref(got.LastReviewID))
+			}
+		})
+	}
 }

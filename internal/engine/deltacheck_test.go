@@ -316,9 +316,10 @@ func TestKeptApprovalDismissalIsRetriedAtTheNextPoll(t *testing.T) {
 	}
 }
 
-// No check within an hour of the push (a pause holds it): the approval goes,
-// so it never covers unreviewed code for long.
-func TestKeptApprovalIsDismissedAnHourAfterThePush(t *testing.T) {
+// No check within an hour of the time it was due, after the push quiet
+// period (a pause holds it, and the hour runs during a pause): the approval
+// goes, so it never covers unreviewed code for long.
+func TestKeptApprovalIsDismissedAnHourAfterItsCheckWasDue(t *testing.T) {
 	h, _, _ := deltaCheckHarness(t)
 	verdictRounds(h, "APPROVED")
 	keptForCheck(t, h, liveDelta)
@@ -326,12 +327,13 @@ func TestKeptApprovalIsDismissedAnHourAfterThePush(t *testing.T) {
 	if err := h.st.SetKV(h.ctx, KVDaemonPaused, "1"); err != nil {
 		t.Fatal(err)
 	}
-	pollPR(h, pushedAt.Add(time.Hour-time.Second).Sub(h.clock.Now()), 2, "b2")
+	due := pushedAt.Add(5 * time.Minute) // push_quiet_period
+	pollPR(h, due.Add(time.Hour-time.Second).Sub(h.clock.Now()), 2, "b2")
 	if got := dismissCalls(h); len(got) != 0 {
 		t.Fatalf("dismissed before the hour: %q", got)
 	}
 	pollPR(h, time.Second, 2, "b2")
-	why := "no check of them posted within 1h of the push; a re-review follows"
+	why := "no check of them posted within 1h of becoming due; a re-review follows"
 	wantCall := fmt.Sprintf("dismiss:talkable/talkable#2:%d:magnum: new commits since this approval; %s", approvalID, why)
 	if got := dismissCalls(h); !slices.Equal(got, []string{wantCall}) {
 		t.Fatalf("dismiss calls = %q, want %q", got, wantCall)
@@ -340,6 +342,42 @@ func TestKeptApprovalIsDismissedAnHourAfterThePush(t *testing.T) {
 		t.Fatalf("last_review_event = %q", ev)
 	}
 	reqWantRounds(t, h, 1)
+}
+
+// The live case (talkable#11920): an approval kept at 10:10 for a check
+// that quiet_hours (03:00-12:00) held was dismissed at 11:11, an hour of
+// wall time after the push, and the check approved again at 12:10: a dismiss
+// and a re-approval the author saw for nothing. The hour counts only time
+// the check may run, so it starts at 12:00 and the check's approval
+// supersedes the kept one.
+func TestKeptApprovalWaitsOutQuietHours(t *testing.T) {
+	h, _, _ := deltaCheckHarness(t)
+	verdictRounds(h, "APPROVED")
+	keptForCheck(t, h, liveDelta) // b2 pushed at 10:06
+	h.cfg.Daemon.QuietHours = "03:00-12:00"
+	day := h.clock.Now()
+	at := func(hour, minute int) time.Duration {
+		return time.Date(day.Year(), day.Month(), day.Day(), hour, minute, 0, 0, time.Local).Sub(h.clock.Now())
+	}
+	pollPR(h, at(11, 30), 2, "b2")
+	if got := dismissCalls(h); len(got) != 0 {
+		t.Fatalf("dismissed during quiet hours: %q", got)
+	}
+	reqWantRounds(t, h, 1)
+	pollPR(h, at(12, 10), 2, "b2")
+	if got := dismissCalls(h); len(got) != 0 {
+		t.Fatalf("dismissed before its check: %q", got)
+	}
+	reqWantRounds(t, h, 2)
+	if evs := approvalEvents(t, h, 2, "review.approval_superseded"); len(evs) != 1 {
+		t.Fatalf("approval_superseded events = %+v", evs)
+	}
+	if got := approvalDeadline("03:00-12:00", time.Date(2026, 10, 5, 13, 30, 0, 0, time.Local), time.Hour); !got.Equal(time.Date(2026, 10, 5, 14, 30, 0, 0, time.Local)) {
+		t.Fatalf("outside quiet hours: deadline %v, want an hour of wall time", got)
+	}
+	if got := approvalDeadline("03:00-12:00", time.Date(2026, 10, 5, 2, 30, 0, 0, time.Local), time.Hour); !got.Equal(time.Date(2026, 10, 5, 12, 30, 0, 0, time.Local)) {
+		t.Fatalf("across the start of quiet hours: deadline %v, want 30m before and 30m after them", got)
+	}
 }
 
 // A push that takes the delta past the threshold ends the wait for a check:

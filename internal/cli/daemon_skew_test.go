@@ -219,7 +219,7 @@ func TestDaemonRestartWhenIdleGivesUpAfterItsTimeout(t *testing.T) {
 	if code := dt.run("daemon-restart", "--when-idle", "--timeout", "10s"); code != 1 {
 		t.Fatalf("exit %d, want 1", code)
 	}
-	actContains(t, dt.stderr.String(), "rounds were still in flight after 10s", "the daemon was not restarted", "--drain", "--now")
+	actContains(t, dt.stderr.String(), "1 round(s) still in flight after 10s", "the daemon was not restarted", "--drain", "--now")
 	if n := len(dt.fake.CallsWithPrefix("launchctl", "kickstart")); n != 0 {
 		t.Fatalf("kickstart calls = %d", n)
 	}

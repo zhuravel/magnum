@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/github"
@@ -215,6 +216,35 @@ func TestEnvironmentFailuresAreRecorded(t *testing.T) {
 		t.Fatalf("events = %+v", evs)
 	}
 	mustContain(t, "message", evs[0].Message, "2 failures", "bin/rspec spec/a_spec.rb: Table 'app_test.snapshots' doesn't exist", "; Deadlock found")
+}
+
+// A judge's failure carries its command's output (up to 1.4K characters
+// live): the event's message clips each failure to envFailureRunes, while
+// its data, like the result file, keeps the whole text.
+func TestEnvironmentFailureMessagesAreClipped(t *testing.T) {
+	e := newEnv(t)
+	long := "Mysql2::Error: " + strings.Repeat("Lock wait timeout exceeded; ", 50)
+	p := e.judgePosts(601, "COMMENTED", "COMMENT")
+	p.extra = map[string]any{"environment_failures": []any{
+		map[string]any{"cmd": "bin/rspec spec/a_spec.rb", "error": long},
+		"Deadlock found when trying to get lock",
+	}}
+	e.ag.behaviors[agents.RoleJudge] = []behavior{p.behavior(t)}
+	if res, err := e.r.RunRound(e.ctx, e.input(KindInitial)); err != nil || res.Outcome != OutcomePosted {
+		t.Fatalf("RunRound = %+v, %v", res, err)
+	}
+	evs := eventsOfKind(e.events(), "round.environment")
+	if len(evs) != 1 {
+		t.Fatalf("events = %+v", evs)
+	}
+	msg := evs[0].Message
+	if n := utf8.RuneCountInString(msg); n > 2*envFailureRunes+100 {
+		t.Fatalf("message is %d runes: %q", n, msg)
+	}
+	mustContain(t, "message", msg, "bin/rspec spec/a_spec.rb: Mysql2::Error: Lock wait", "…; Deadlock found when trying to get lock")
+	if !strings.Contains(string(evs[0].Data), strings.TrimSpace(long)) {
+		t.Fatalf("data lost the whole error: %s", evs[0].Data)
+	}
 }
 
 func TestParseEnvFailures(t *testing.T) {

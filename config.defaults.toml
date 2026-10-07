@@ -46,8 +46,9 @@ burst_window = "30m"              #   within this window up to the last one ([[w
 request_debounce = "1m"           # a review request for the poll login or a posting identity (or a team in a
                                   # [[watch]] request_teams), or a draft marked ready, starts a round this long
                                   # after it (and the last push), skipping the timing rules above and the cap
-reply_debounce = "3m"             # a reply on magnum's latest review (the PR author's review or comment, or anyone's
-                                  # reply in one of magnum's threads; magnum's own logins never count) with no push
+reply_debounce = "3m"             # a reply on magnum's latest review (the PR author's review or comment, or a reply in
+                                  # one of magnum's threads by the author or a repository owner, member or
+                                  # collaborator; magnum's own logins never count) with no push
                                   # since the review starts a judge-only round this long after the last one: the
                                   # judge re-decides the threads and answers there, or posts a new review when its
                                   # verdict changes ("0" = replies start nothing; a push meanwhile wins: its
@@ -79,8 +80,9 @@ model_limit_cooldown = "5h"       # a model capped on its own (health pattern mo
                                   # for its end); `magnum review` and the board's review keys still do, a round in
                                   # flight finishes, and the poll, auto-approval, the retro and curation go on
 restart_on_new_build = false      # true: once a new bin/magnum on disk passes its config check, the daemon restarts
-                                  # on it at the first tick with no round claiming, reviewing or verifying (it exits
-                                  # for launchd to start the new build; dispatch never stops for it; needs launchd)
+                                  # on it at the first tick with no round claiming, reviewing or verifying and no
+                                  # notes curation or retro running (it exits for launchd to start the new build;
+                                  # dispatch never stops for it; needs launchd)
 
 [herdr]
 socket = "~/.config/herdr/herdr.sock"

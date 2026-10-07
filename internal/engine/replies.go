@@ -7,8 +7,9 @@ package engine
 // judge read a declined finding. Now the Details the poll reads for a PR
 // whose activity moved list its reviews and issue comments (github.Remark),
 // the replies among them are kept (store.Reply: the PR author's own, and
-// anyone's reply in one of magnum's threads; magnum's own logins never
-// count), and a reviewed PR whose head has not moved since gets a same-head
+// a reply in one of magnum's threads by the author or by an owner, member
+// or collaborator of the repository; magnum's own logins never count), and
+// a reviewed PR whose head has not moved since gets a same-head
 // round of the judge alone [daemon] reply_debounce after the last reply, at
 // most once per head every reply_min_interval. Its judge answers in the
 // threads (pipeline.OutcomeReplied) or posts a new review when its verdict
@@ -41,7 +42,9 @@ func KVPRReplyRound(prID int64) string { return fmt.Sprintf("pr.%d.reply_round",
 
 // kvPRRedecide marks a forced round the operator asked to re-decide the
 // replies (`magnum review --replies`, the board's r on a PR with replies):
-// a reply round, though forced.
+// a reply round, though forced. It ends with its request: the end of the
+// round however it ended (posted, replied, needs_attention, a dry run), an
+// abort, or a later `magnum review` without --replies.
 func kvPRRedecide(prID int64) string { return fmt.Sprintf("pr.%d.redecide", prID) }
 
 // ReplyRound is a reply round as KVPRReplyRound records it.
@@ -84,7 +87,11 @@ func (e *Engine) ownLogins(ctx context.Context, w config.Watch, pr store.PR) []s
 // remarks: by none of own (magnum's logins), either the PR author's own
 // review or comment (unless the author is a bot: a bot's remarks count only
 // in magnum's threads), or a review that replies in a thread one of own
-// started (Remark.Answers). "(Claude)" replies an author's agent posts as the
+// started (Remark.Answers) by the PR author or by an owner, member or
+// collaborator of the repository (trustedReplier): in a public repository
+// anyone may reply, and a reply round's decision can become a standing one
+// in the notes. Other replies start nothing; the judge still reads them in
+// the threads file. "(Claude)" replies an author's agent posts as the
 // author are the author's. Nil when the Details carry no timeline.
 func repliesOf(d github.PRDetails, own []string) []store.Reply {
 	if d.Remarks == nil {
@@ -100,12 +107,24 @@ func repliesOf(d github.PRDetails, own []string) []store.Reply {
 		if r.Author == "" || isOwn(r.Author) {
 			continue
 		}
+		byAuthor := github.SameAccount(r.Author, author)
 		thread := r.Review && slices.ContainsFunc(r.Answers, isOwn)
-		if thread || (!authorBot && !r.Bot && github.SameAccount(r.Author, author)) {
+		if (thread && (byAuthor || trustedReplier(r.Association))) || (!authorBot && !r.Bot && byAuthor) {
 			out = append(out, store.Reply{At: r.At.UTC(), By: r.Author, Thread: thread})
 		}
 	}
 	return out
+}
+
+// trustedReplier reports whether an authorAssociation is one whose reply in
+// magnum's threads starts a reply round: an owner, member or collaborator
+// of the repository.
+func trustedReplier(association string) bool {
+	switch association {
+	case "OWNER", "MEMBER", "COLLABORATOR":
+		return true
+	}
+	return false
 }
 
 // replyTrigger is the PR's latest reply that starts a reply round, and how
@@ -144,7 +163,8 @@ func (e *Engine) lastReplyRound(ctx context.Context, pr store.PR) ReplyRound {
 // may need one (replyTrigger): a reviewed PR the watch's filters still
 // accept moves to rereview_pending, held by the reply debounce and interval
 // (eligibility.Throttle with RepliedAt); one already waiting for them gets
-// its time again. Anything else (a round in flight, a push pending, a forced
+// its time again, and one whose replies are gone goes back to reviewed
+// (dropReplyWait). Anything else (a round in flight, a push pending, a forced
 // or paused PR) is left alone: what comes next reads the replies.
 func (e *Engine) considerReplies(ctx context.Context, repo store.Repo, w config.Watch, prID int64, now time.Time) error {
 	pr, err := e.st.PRByID(ctx, prID)
@@ -152,7 +172,10 @@ func (e *Engine) considerReplies(ctx context.Context, repo store.Repo, w config.
 		return err
 	}
 	_, n, ok := e.replyTrigger(ctx, pr)
-	if !ok || pr.Forced || pr.DetailsAt == nil {
+	if !ok {
+		return e.dropReplyWait(ctx, repo, pr)
+	}
+	if pr.Forced || pr.DetailsAt == nil {
 		return nil
 	}
 	why := textx.Count(n, "reply", "replies") + " to the review"
@@ -176,6 +199,46 @@ func (e *Engine) considerReplies(ctx context.Context, repo store.Repo, w config.
 		e.event(ctx, "info", prSubject(repo, pr.Number), "pr.rereview_pending",
 			fmt.Sprintf("%s: eligible at %s", why, td.NextEligibleAt.Local().Format("15:04:05")), nil)
 	}
+	return nil
+}
+
+// dropReplyWait takes back the wait for a reply round whose replies are
+// gone (deleted, or past the timeline items GitHub lists): the PR waits at
+// the head magnum reviewed (rereview_pending, not forced, open) for nothing
+// else, so it goes back to reviewed in a compare-and-set on both commits;
+// its round, no longer a reply round, would post a review of the unchanged
+// head. A review request
+// waiting for its round keeps the PR in line, and so does the retry of a
+// round that was not a reply round (a failed requested one): attempts, a
+// retry time or an error, and no reply round on the head since the last
+// round start (continuedReplies).
+func (e *Engine) dropReplyWait(ctx context.Context, repo store.Repo, pr store.PR) error {
+	if pr.State != store.PRRereviewPending || pr.Forced || pr.GHState != store.GHOpen || postMerge(pr) ||
+		pr.HeadSHA == "" || pr.HeadSHA != deref(pr.ReviewedSHA) {
+		return nil
+	}
+	if _, ok := e.pendingRequest(ctx, pr); ok {
+		return nil
+	}
+	retry := pr.Attempts > 0 || pr.NextAttemptAt != nil || pr.LastError != nil
+	if retry && e.continuedReplies(ctx, pr, pr.HeadSHA) == 0 {
+		return nil
+	}
+	err := e.st.TransitionPR(ctx, pr.ID, []string{store.PRRereviewPending}, store.PRReviewed, func(u *store.PRUpdate) {
+		u.Where("head_sha", pr.HeadSHA)
+		u.Where("reviewed_sha", pr.HeadSHA)
+		u.Set("next_eligible_at", nil)
+		u.Set("pending_since", nil)
+		u.Set("attempts", 0)
+		u.Set("next_attempt_at", nil)
+		u.Set("last_error", nil)
+		u.Set("skip_reason", nil)
+	})
+	if err != nil {
+		return err
+	}
+	e.event(ctx, "info", prSubject(repo, pr.Number), "pr.reviewed",
+		"rereview_pending → reviewed: the replies that queued the re-decision are gone; the review stands", nil)
 	return nil
 }
 

@@ -17,11 +17,11 @@ func newUninstallCmd(c *Context) *cobra.Command {
 	cmd := newCommand(groupDaemon, uninstallUsage, "unload and delete the launchd agent and unlink the herdr plugin (keeps state)",
 		"Unload and delete the launchd agent, which stops the daemon it runs, and unlink the herdr plugin. The "+
 			"state directory (registry, logs, review reports) and the slots are kept. A broken config does not "+
-			"block it. While review rounds are in flight it is refused, because stopping the daemon abandons them; "+
+			"block it. While review rounds, a notes curation or the retro are in flight it is refused, because stopping the daemon abandons them; "+
 			"--now uninstalls anyway.",
 		func(pos []string) int { return runUninstallCmd(c, dry, now, pos) })
 	cmd.Flags().BoolVar(&dry, "dry-run", false, "print what would be removed; change nothing")
-	cmd.Flags().BoolVar(&now, "now", false, "stop the daemon even while review rounds are in flight (they start over)")
+	cmd.Flags().BoolVar(&now, "now", false, "stop the daemon even while review rounds, a notes curation or the retro are in flight (rounds start over)")
 	return cmd
 }
 

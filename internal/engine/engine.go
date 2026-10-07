@@ -278,9 +278,6 @@ type Engine struct {
 	dryRounds     int // rounds a dry run planned this tick
 	lastSeen      map[string]string
 	cleanupTried  map[int64]time.Time // close-grace cleanup attempts per PR
-	// deltasRechecked: the first poll checked the old delta records again
-	// (recheckDeltas, delta.go).
-	deltasRechecked bool
 	// logged: when each repeating error was last logged (logOnce, util.go).
 	logged map[string]time.Time
 	// compares are this tick's GitHub comparisons (compare.go).
@@ -613,6 +610,7 @@ func (e *Engine) shutdown() {
 	case <-time.After(30 * time.Second):
 		e.log.Warn("rounds, the retro or the notes curation did not stop within 30s")
 	}
+	e.noteRetroRunning(context.Background()) // a retro that stopped no longer holds the CLI
 	if e.batch != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -677,6 +675,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	e.parkIdle(ctx, ts)
 	e.maybeReconcile(ctx)
 	e.maybeRetro(ctx)
+	e.noteRetroRunning(ctx) // inflight.go
 	e.maybeCurate(ctx)
 	e.autoApprove(ctx) // before noteNeedsMe: a PR approved as the operator no longer needs them
 	e.noteNeedsMe(ctx)
@@ -710,8 +709,8 @@ func (e *Engine) startup(ctx context.Context) {
 	e.recoverRows(ctx)
 	e.reclassifyIneligible(ctx)
 	e.syncNotes(ctx, true) // notes_record.go: the first start imports every repository's notes
-	// No curation runs yet: a mark left behind is a crashed daemon's.
-	e.delKV(ctx, KVNotesCurating)
+	// No curation or retro runs yet: a mark left behind is a crashed daemon's.
+	e.delKV(ctx, KVNotesCurating, KVRetroRunning)
 	e.lastReconcile = e.now()
 	e.enqueueHeavy("reconcile", e.reconcile)
 }

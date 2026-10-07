@@ -35,8 +35,7 @@ import (
 )
 
 // deltaRecordVersion is the DeltaRecord.Version of a record measured with
-// the PR's own diff in view; a record without it predates DeltaBase and is
-// checked again once (recheckDeltas).
+// the PR's own diff in view; a record without it predates DeltaBase.
 const deltaRecordVersion = 1
 
 // ownDiff is how a PR's own diff against its base changed across a push

@@ -37,6 +37,12 @@ func TestConnectionCause(t *testing.T) {
 		{"identity talkable-app has login \"talkable[bot]\" but the App posts as \"other[bot]\"", ""},
 		{"permission pull_requests: read (need write)", ""},
 		{"private key: no PEM block", ""},
+		// A bad App private key is the identity's, not a TLS blip.
+		{"identity talkable-app: parse private key from private_key_file /keys/app.pem (PKCS#1): x509: failed to parse private key (use ParsePKCS8PrivateKey instead for this key format)", ""},
+		{"parse private key from $MAGNUM_APP_KEY (PRIVATE KEY): x509: malformed private key", ""},
+		{`Get "https://api.github.com/app": tls: failed to verify certificate: x509: certificate signed by unknown authority`, "TLS failure"},
+		{`Get "https://api.github.com/app": x509: certificate has expired or is not yet valid: current time 2026-10-07T10:00:00Z is after 2026-10-06T23:59:59Z`, "TLS failure"},
+		{`Get "https://api.github.com/app": x509: certificate is valid for proxy.example.com, not api.github.com`, "TLS failure"},
 		{"gh token for github.com: gh auth token printed no token", ""},
 		{"gh api repos/talkable/eof-tools with GH_CONFIG_DIR=/state/gh/app: 404 Not Found", ""},
 		{"", ""},

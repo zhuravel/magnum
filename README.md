@@ -155,10 +155,11 @@ magnum completion zsh > "${fpath[1]}/_magnum"
 ```
 
 To upgrade: `brew upgrade magnum && magnum daemon-restart --when-idle` (the daemon keeps running the old
-binary until it restarts; `--when-idle` restarts at the first moment no round is in flight, `--drain` also
-stops new rounds meanwhile). `magnum status` and every reply to a command the daemon answers say when the
-daemon runs an older build than the CLI or the binary on disk; with `[daemon] restart_on_new_build = true`
-the daemon restarts on a new build by itself, at the first tick no round is in flight.
+binary until it restarts; `--when-idle` restarts at the first moment nothing is in flight, no round and no
+notes curation or retro, `--drain` also stops new rounds meanwhile). `magnum status` and every reply to a
+command the daemon answers say when the daemon runs an older build than the CLI or the binary on disk; with
+`[daemon] restart_on_new_build = true` the daemon restarts on a new build by itself, at the first tick
+nothing is in flight.
 
 `magnum init` refuses to replace an existing config without `--force` (the old file is kept as
 `config.toml.bak`); [config.example.toml](config.example.toml) is the same minimal setup to copy by hand.
@@ -350,8 +351,8 @@ reviews just those commits (`delta_check: true` in `judge-recovery.md`); only wh
 current or former identities is on record to build on does it become a full recovery round
 (`round.delta_check_dropped`). An App's approval of the reviewed commit stands meanwhile (`review.approval_kept_for_check`): the check's approval supersedes it
 (`review.approval_superseded`); a check that comments, requests changes, fails or needs attention, a later
-push that makes the delta too large, or no check posted within an hour of the push dismisses it then, with
-the reason. `delta_check = false` keeps the wait and the full round.
+push that makes the delta too large, or no check posted within an hour of the check becoming due (after the
+push quiet period; `quiet_hours` do not count, a `magnum pause` does) dismisses it then, with the reason. `delta_check = false` keeps the wait and the full round.
 
 A re-review of a head Magnum already reviewed (no new commits: `magnum review`, or a review request, to
 have it re-read an author's reply) runs the judge alone as a delta check does: no triage, reruns or own
@@ -363,9 +364,11 @@ roles (`--role`, `--simplify`) or asks for fresh sessions (`--fresh`) runs every
 does a round whose checkout finds a newer head (`round.same_head_dropped`).
 
 Replies get that round on their own, without a push. The poll reads, for a PR whose activity moved, its
-reviews and comments with their authors (no text): a reply in one of Magnum's threads by anyone, a bot
-too, or a review or comment by the PR's author (whose agent's "(Claude)" replies are the author's), never
-one by Magnum's own logins. A teammate's review elsewhere or a bot's top-level comment starts nothing; the
+reviews and comments with their authors and their association with the repository (no text): a reply in
+one of Magnum's threads by the PR's author or by an owner, member or collaborator of the repository, or a
+review or comment by the PR's author (whose agent's "(Claude)" replies are the author's), never one by
+Magnum's own logins. Anyone else's reply in a thread (in a public repository anyone may reply), a bot's
+without that association, a teammate's review elsewhere or a bot's top-level comment starts nothing; the
 next round's judge reads them anyway. When such replies came on a head Magnum reviewed, the PR waits
 `[daemon] reply_debounce` (default `"3m"`, `"0"` turns it off) after the last one and at least
 `reply_min_interval` (default `"2h"`) after the last such round on that head, and then the judge alone
@@ -1198,7 +1201,7 @@ Fix 1 problem before merging. 1 optional: 1 simplification.
 | `magnum where <ref>` | `cd $(magnum where 123)`. |
 | `magnum config`, `magnum version` | `config` validates the configuration (the built-in defaults with `~/.config/magnum/config.toml` over them, or `--config FILE`), renders every prompt file the roles name with this binary and prints the checkout, config, data, state and judge skill paths; `daemon-restart` and `install` run it with the binary that will run and refuse when it fails. `version` prints the build (`make build` stamps it; `dev` for a plain `go build`). |
 | `magnum pause\|resume`, `magnum logs [<ref>] [-f]`, `magnum doctor`, `magnum identities check`, `magnum kick` | Operations. `pause` holds automatic reviews (`--for 2h` or `--until 15:30` ends it; words after `pause` are the reason, and one that reads as a duration is refused); a review you ask for (`magnum review`, the board, the picker) still runs, and so does the daily retro. `kick` wakes the daemon for a tick, which polls, schedules and reconciles. The tab bar and `magnum status` show since when it holds them and how many review requests people made wait on it. |
-| `magnum daemon [--once] [--dry-run]`, `magnum install\|uninstall\|daemon-restart\|daemon-stop [--now]`, `magnum daemon-restart --when-idle\|--drain [--timeout D]` | The daemon and its launchd job. Stop and restart refuse while review rounds are in flight unless `--now`; `daemon-restart --when-idle` waits, stopping nothing, until no round is in flight and restarts then (it waits again when a round starts in between); `daemon-restart --drain` and `install --drain` stop new rounds, wait for those in flight and then restart; both wait at most `--timeout` (default 2h), and ctrl+c or closing the terminal stops the wait and lifts the drain. A drain names its command's pid: `magnum status` shows it with how to lift it, and the daemon lifts a drain whose command is gone. `daemon-restart` and `install` first run `magnum config` with the binary launchd will run, which validates the configuration and renders every prompt with the build that will run, and refuse when it fails; the daemon refuses to start on the same errors (written to `daemon.log` and `launchd.log`). After a build that adds a registry migration, other commands refuse to run while the older daemon is up (they would migrate the registry under it) and point at `daemon-restart --drain`. |
+| `magnum daemon [--once] [--dry-run]`, `magnum install\|uninstall\|daemon-restart\|daemon-stop [--now]`, `magnum daemon-restart --when-idle\|--drain [--timeout D]` | The daemon and its launchd job. Stop and restart refuse while review rounds, a notes curation or the retro are in flight unless `--now`; `daemon-restart --when-idle` waits, stopping nothing, until nothing is in flight and restarts then (it waits again when something starts in between); `daemon-restart --drain` and `install --drain` stop new rounds, curations and retros, wait for those in flight and then restart; both wait at most `--timeout` (default 2h), and ctrl+c or closing the terminal stops the wait and lifts the drain. A drain names its command's pid: `magnum status` shows it with how to lift it, and the daemon lifts a drain whose command is gone. `daemon-restart` and `install` first run `magnum config` with the binary launchd will run, which validates the configuration and renders every prompt with the build that will run, and refuse when it fails; the daemon refuses to start on the same errors (written to `daemon.log` and `launchd.log`). After a build that adds a registry migration, other commands refuse to run while the older daemon is up (they would migrate the registry under it) and point at `daemon-restart --drain`. |
 
 Shell completion is dynamic: PR references complete from the registry with their titles, slots,
 identities, roles and sorts from config.

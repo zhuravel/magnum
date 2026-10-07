@@ -15,9 +15,9 @@ func newDaemonStopCmd(c *Context) *cobra.Command {
 		"Stop the daemon for development: the launchd job is unloaded with `launchctl bootout` so launchd does not "+
 			"restart it, and a daemon started by hand gets SIGTERM. The plist stays in place; `magnum install` (or "+
 			"`launchctl bootstrap`) brings launchd back. `mise run dev` calls this before starting air. While review "+
-			"rounds are in flight the stop is refused, because it abandons them; --now stops anyway.",
+			"rounds, a notes curation or the retro are in flight the stop is refused, because it abandons them; --now stops anyway.",
 		func(pos []string) int { return runDaemonStopCmd(c, pos, now) })
-	cmd.Flags().BoolVar(&now, "now", false, "stop even while review rounds are in flight (they start over)")
+	cmd.Flags().BoolVar(&now, "now", false, "stop even while review rounds, a notes curation or the retro are in flight (rounds start over)")
 	return cmd
 }
 

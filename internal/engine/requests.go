@@ -224,6 +224,7 @@ func (e *Engine) handleRequest(ctx context.Context, req store.Request) {
 		answer(e, ctx, req, e.requestIdentityVerdict)
 	case ReqRetro:
 		answer(e, ctx, req, e.requestRetro)
+		e.noteRetroRunning(ctx) // inflight.go
 	case ReqNotesCurate: // notes_curate.go
 		answer(e, ctx, req, e.requestCurate)
 	case ReqRelease:
@@ -411,6 +412,8 @@ func (e *Engine) requestReview(ctx context.Context, p ReviewPayload) (string, er
 	}
 	if p.Replies {
 		e.setKV(ctx, kvPRRedecide(pr.ID), "1")
+	} else {
+		e.delKV(ctx, kvPRRedecide(pr.ID)) // this request is a review, whatever an earlier one asked
 	}
 	e.seeStalemates(ctx, pr.ID) // the operator acts on the PR: the threads magnum stopped arguing in are seen
 	forced := "forced"
