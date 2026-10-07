@@ -3915,3 +3915,70 @@ editing history. Code, config comments and prompts reference these by their head
   commit's schema while its databases carried the merge's. Rejected: handing the work to the daemon (new daemon
   behaviour for an experiment), Release (the race above), and per-example re-runs by id (a merged commit that
   adds examples to the same file shifts the ids; examples are matched by file and full description).
+- **Auto-approval hears every reviewer** (2026-10-07, amends "magnum approves as the operator when its
+  review found nothing to fix"). The rule "a review that did not hear every reviewer approves nothing"
+  only turned the judge's `no_findings_event` into `COMMENT`, which a GitHub App posts anyway, so a clean
+  round without codex-review's report (a usage limit, a timeout, a logged-out CLI) still got the
+  operator's approval, which counts for merging. Each judge prompt now writes the PR's record of its round
+  (`pipeline.MissingReports`, kv `pr.<id>.missing_reports`: the round, its head and every role that was
+  part of it and left no usable report, with why), and auto-approval refuses when the record of the
+  posted round names one ("magnum's review did not hear every reviewer: codex-review (login_required)").
+  A continue no longer lists as missing a role its paused round never ran (`existingReports` marked
+  every always-run role without a verified report missing, so a continue of a round that ran only some
+  roles posted `COMMENT` and now would have approved nothing): a role is missing when it has a run of the
+  paused round that did not verify its report, or the paused round's record names it (a role skipped as
+  logged out has no run). No migration: a kv record per PR, rewritten by each round. Rejected: a column
+  on the judge's run (a migration, and the run that posts may be a nudge's or a fallback's); run rows
+  alone (a logged-out role leaves none).
+- **Auto-approval leaves a PR its watch would not review to the operator** (2026-10-07). A forced
+  `magnum review` of a PR the watch's filters leave out (a `manual_repos` repository's, a bot's, one with a
+  `skip_labels` label, one whose files all match `skip_paths`) posted a clean review, and auto-approval,
+  which never asked the filters, approved it as the operator. It now asks `classify` (forced rounds
+  included; a PR Codex flagged is rejected there too) and refuses with its reason ("its watch would not
+  review it on its own: manual repository (manual_repos)"). Like the other holds below, it does not refuse `A` on a row that needs the operator,
+  nor `magnum approve --as`: the operator decides by hand there. Each hold is recorded for the card (kv
+  `pr.<id>.auto_approve_refused`: head, round, reason; `auto_approve_refused` in `magnum prs --json`)
+  and as one `review.auto_approve_refused` event per head, round and reason.
+- **Auto-approval waits for the head's checks** (2026-10-07). It approved a head whose checks failed. It
+  now waits while the head's rollup (`prs.ci_state`) is `FAILURE` or `ERROR`, or still `PENDING` or
+  `EXPECTED`, re-reading it every tick, and approves once it passes (or the head has no checks). The
+  judge's result does not say in a field that every failing check is unrelated to the PR (the posted
+  review's Checks lines do, in prose), so a red head waits for green. Rejected: reading the Checks lines of
+  the review's body (prose, not a contract); approving while checks run (the approval would stand on a
+  head that turns red).
+- **Auto-approval never approves a change to the review agents' instructions or hooks** (2026-10-07). It
+  never looked at the PR's paths, and 6 talkable PRs this month changed `AGENTS.md`,
+  `devops/*/CLAUDE.md` or `.claude/` files (3 reached `reviewed`): such files steer the review agents,
+  and their hooks run on every teammate's machine once merged. It refuses ("it changes the review agents'
+  instructions or hooks (<path>)") when the head's file list (`pr_files`) names `AGENTS.md`,
+  `AGENTS.override.md`, `CLAUDE.md` or `CLAUDE.local.md` at any depth and in any case (Unicode folding),
+  or a CLI's project config (`agents.ProjectTouched`: `.claude/`, `.codex/`, `.mcp.json`, for the
+  configured and the built-in kinds), or when a session of the head ran without the PR's project config
+  (`agents.ProjectDeclined`). A path the PR chose shows only when it is plain (ASCII letters, digits,
+  `._-/+@`), else the name it matched. A head without a whole file list (none read, or more than the 100
+  GitHub lists) is refused too: what the list lacks may be one of them. `A` as the operator still
+  approves it. Rejected: asking git for the files of a large PR (a checkout auto-approval does not have).
+- **Auto-approval reads the open findings by priority** (2026-10-07). Now that the judge's result gives
+  `previous_findings.open` by priority, the blocking decision no longer needs the
+  review's verdict line: open P0-P2 findings, like new ones, leave something to fix, open P3s do not, and
+  GitHub is not asked for the body. The verdict line stays the fallback for a result that gives only their
+  number.
+- **A withdrawal of an automatic approval cannot loop** (2026-10-07). `withdrawAutoApproval` treated only
+  a 404 as gone, and `followStanding` withdrew before it looked for a review GitHub had already
+  dismissed, so a 422 kept the row dismissing, retried every 5 minutes with no end, and kept the PR out of
+  auto-approval; the rows of merged PRs stayed live and were read on every tick. Now a dismissal GitHub
+  already lists is recorded first; on a 422 the review is read again, and one dismissed meanwhile or gone
+  ends the row; a withdrawal GitHub keeps refusing counts its dismissals in `attempts` (from 0 when it
+  begins) and after 3 ends `failed` with a `review.auto_approval_withdraw_failed` event and one urgent
+  toast (only then: the approval may still stand); the live row of a merged or closed PR ends as
+  `dismissed` by `closed` (the board still shows the approval). `magnum request-changes` withdraws the
+  operator's standing automatic approval first (GitHub would count it next to the changes request;
+  a withdrawal GitHub refuses refuses the changes request), and manual verdicts, `--as` included, write
+  `review.manual_verdict_begin`, `review.manual_verdict` and `review.manual_verdict_failed`. Rejected: a
+  column for the withdrawal's attempts (a migration for a count `attempts` holds once posting is over).
+- **Auto-approval acts only on every review, and review text stays out of argv** (2026-10-07). It decided
+  on `Reviews`, which may stop at GitHub's page limit without saying so: an operator's review by hand
+  past it would go unseen. It reads `AllReviews` and does not approve (nor conclude that a post was lost)
+  on a list GitHub cut short; one review event says so until the PR moves. `CreateReview` and
+  `DismissReview` sent the body and the message as `gh api -f` fields, so a failing call logged them;
+  they go as JSON on gh's stdin (`restInput`), as `UpdateReviewBody` does.

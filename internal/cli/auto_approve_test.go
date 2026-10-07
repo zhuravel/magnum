@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/tui"
 )
@@ -130,6 +131,66 @@ func TestTheScreensCountTheAutoApprovals(t *testing.T) {
 	}
 	if got[11971].AutoApproved != nil || got[11972].AutoStopped != "you commented on it by hand" {
 		t.Fatalf("#11971 %+v, #11972 stopped %q", got[11971].AutoApproved, got[11972].AutoStopped)
+	}
+}
+
+// The board's rows carry why magnum does not approve a PR as the operator
+// for the head it decided on (engine.KVPRAutoApproveRefused), not for
+// another head; and the approval of a PR that ended with its merge still
+// shows.
+func TestTheBoardSaysWhyMagnumDoesNotApproveAsYou(t *testing.T) {
+	_, st, d, now := statusFixture(t)
+	seedAutoApprovals(t, st, now)
+	ctx := context.Background()
+	repo, err := st.RepoByFullName(ctx, "talkable/talkable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[int]int64{}
+	for _, n := range []int{11970, 11971, 11973} {
+		pr, err := st.PRByRepoNumber(ctx, repo.ID, n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids[n] = pr.ID
+	}
+	set := func(n int, head, reason string) {
+		b, _ := json.Marshal(engine.AutoApproveRefused{Head: head, RunID: "r", Reason: reason, At: now})
+		if err := st.SetKV(ctx, engine.KVPRAutoApproveRefused(ids[n]), string(b)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	set(11973, nmHead, "its head's checks fail (magnum approves it once they pass)")
+	set(11971, "0123456", "it changes the review agents' instructions or hooks (CLAUDE.md)") // another head
+	pr, err := st.PRByID(ctx, ids[11970])
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, _, _ := st.LiveAutoApproval(ctx, pr.ID)
+	if err := st.TransitionAutoApproval(ctx, a.ID, nil, store.AutoDismissed, func(u *store.AutoApprovalUpdate) {
+		u.Set("ended_by", store.AutoEndedClosed)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	out, err := prsSource(st, d.Config, store.BoardFilter{}, prsSelfLogins(d.Config), d.Layout)(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[int]tui.PRBoardRow{}
+	for _, r := range out {
+		got[r.Number] = r
+	}
+	if r := got[11973].AutoRefused; r != "its head's checks fail (magnum approves it once they pass)" {
+		t.Errorf("#11973 refused %q", r)
+	}
+	if r := got[11971].AutoRefused; r != "" {
+		t.Errorf("#11971 refused %q for another head", r)
+	}
+	if got[11970].AutoApproved == nil {
+		t.Error("#11970's approval, ended with its PR, does not show")
+	}
+	if js := prsJSONOf(got[11973]); js.AutoApproveRefused != got[11973].AutoRefused {
+		t.Errorf("json auto_approve_refused %q", js.AutoApproveRefused)
 	}
 }
 

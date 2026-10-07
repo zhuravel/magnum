@@ -4355,6 +4355,14 @@ const (
     PR): see requestAbort.
 
 const (
+	UnapproveMessage      = "magnum: this automatic approval is withdrawn by its owner (magnum unapprove)."
+	RequestChangesMessage = "magnum: this automatic approval is withdrawn: its owner requested changes (magnum request-changes)."
+)
+    UnapproveMessage is the dismissal message of an automatic approval the
+    operator withdraws (magnum unapprove, the board's D); RequestChangesMessage
+    that of one `magnum request-changes` withdraws before it posts.
+
+const (
 
 	// BudgetPauseReason is the tool-pause reason of a kind paused at the
 	// Codex hard cap ([usage] codex_hard).
@@ -4610,10 +4618,6 @@ const SkipIgnored = skipIgnored
     SkipIgnored is the skip_reason of a PR `magnum ignore` muted: the board
     shows such a PR as ignored.
 
-const UnapproveMessage = "magnum: this automatic approval is withdrawn by its owner (magnum unapprove)."
-    UnapproveMessage is the dismissal message of an automatic approval the
-    operator withdraws (magnum unapprove, the board's D).
-
 
 VARIABLES
 
@@ -4745,6 +4749,11 @@ func KVPRAttention(prID int64) string
     attention.Explain takes: failed, blocked, identity_error, …); read only
     while the PR is in that state.
 
+func KVPRAutoApproveRefused(prID int64) string
+    KVPRAutoApproveRefused holds why auto-approval does not approve the PR as
+    the operator although its review left nothing to fix (AutoApproveRefused as
+    JSON); the board's card says it.
+
 func KVPRCodexFlag(prID int64) string
     KVPRCodexFlag holds a PR's Codex flag (CodexFlag as JSON).
 
@@ -4856,7 +4865,11 @@ func OperatorApprovalRefusal(pr store.PR, sum *store.ReviewSummary, login string
     changes request or review by hand, a dismissal, magnum unapprove) and a
     manual verdict posted after magnum's round both keep auto-approval from
     overriding the operator, who here is the one asking: A lifts their own ✗ on
-    purpose. sum is magnum's latest posted round of pr (nil: none).
+    purpose. What auto-approval holds a PR back for besides (autoGateRefusal:
+    a reviewer's missing report, a PR its watch would not review on its own,
+    the agents' instructions, the head's checks) does not refuse it either:
+    the operator decides by hand, the board shows those. sum is magnum's latest
+    posted round of pr (nil: none).
 
 func ProcessCommand(ctx context.Context, run execx.Runner, pid int) (comm, args string, err error)
     ProcessCommand reads what ps knows about pid: comm (`ps -o comm=`, the
@@ -4934,6 +4947,18 @@ type Agents interface {
 	Recover(ctx context.Context, pr store.PR) ([]agents.Recovered, error)
 }
     Agents is the part of *agents.Manager the engine drives.
+
+type AutoApproveRefused struct {
+	Head   string    `json:"head"`
+	RunID  string    `json:"run_id"`
+	Reason string    `json:"reason"`
+	At     time.Time `json:"at"`
+}
+    AutoApproveRefused is why auto-approval holds a PR back (autoGateRefusal),
+    for the head (Head) and magnum's latest posted round (RunID) it decided on.
+
+func ParseAutoApproveRefused(v string) (AutoApproveRefused, bool)
+    ParseAutoApproveRefused reads a KVPRAutoApproveRefused value.
 
 type Build struct {
 	Version   string    `json:"version"`
@@ -6534,8 +6559,9 @@ func (c *Client) CreateReview(ctx context.Context, owner, repo string, number in
     CreateReview submits a review without inline comments (POST
     /repos/{o}/{r}/pulls/{n}/reviews) on commitID as the client's identity.
     event is APPROVE, REQUEST_CHANGES or COMMENT; GitHub wants a body for the
-    last two. GitHub counts each reviewer's latest review, so a new APPROVE
-    or REQUEST_CHANGES supersedes the identity's earlier verdict. It is marked
+    last two. GitHub counts each reviewer's latest review, so a new APPROVE or
+    REQUEST_CHANGES supersedes the identity's earlier verdict. The request goes
+    as JSON on gh's stdin, so a failing call logs none of the body. It is marked
     Mutates, so execx.DryRun only plans it.
 
 func (c *Client) DeletePendingReview(ctx context.Context, owner, repo string, number int, reviewID int64) error
@@ -6552,7 +6578,8 @@ func (c *Client) Details(ctx context.Context, owner, repo string, numbers []int)
 
 func (c *Client) DismissReview(ctx context.Context, owner, repo string, number int, reviewID int64, message string) error
     DismissReview dismisses a review (PUT
-    /repos/{o}/{r}/pulls/{n}/reviews/{id}/dismissals) as the client's identity.
+    /repos/{o}/{r}/pulls/{n}/reviews/{id}/dismissals) as the client's identity,
+    the message as JSON on gh's stdin, so a failing call logs none of it.
     It is marked Mutates, so execx.DryRun only plans it. A missing permission is
     an error matching ErrForbidden; callers report it and do not retry.
 
@@ -10103,6 +10130,10 @@ func JudgeEvents(cfg *config.Config, fullName string, id *config.Identity, comme
     went out while claude-review had hit a usage limit: a review that did not
     hear every reviewer approves nothing).
 
+func KVMissingReports(prID int64) string
+    KVMissingReports is the kv key of the PR's MissingReports, which each judge
+    prompt of its rounds rewrites.
+
 func RolesToRun(ctx context.Context, st *store.Store, cfg *config.Config, pr store.PR, roles []config.Role, requested []string, kind string) ([]config.Role, error)
     RolesToRun returns the roles a round of kind runs for pr, in the order
     of roles (the round's candidates in [[role]] order, judge included;
@@ -10231,6 +10262,32 @@ type Keys interface {
 }
     Keys interrupts a timed-out role (esc to an agent, ctrl+c twice to the
     judge, ctrl+c to a shell role's pane). *herdr.Client satisfies it.
+
+type MissingReport struct {
+	Role   string `json:"role"`
+	Status string `json:"status"`
+}
+    MissingReport is one role's report the judge went without and why:
+    its report status ("missing", "timeout", "login_required", ...).
+
+type MissingReports struct {
+	Round   int             `json:"round"`
+	Head    string          `json:"head"` // the commit the round reviewed
+	Missing []MissingReport `json:"missing"`
+}
+    MissingReports is what the judge of a PR's round went without: the roles of
+    the round that left no usable report (one that ran and wrote none, timed out
+    or failed, one skipped as logged out), with why; empty when it heard every
+    one. A role the round did not run (not configured to, or one a continue's
+    paused round never ran) is none of them.
+
+func ReadMissingReports(ctx context.Context, st *store.Store, prID int64) (MissingReports, bool)
+    ReadMissingReports reads the PR's record of its latest judged round;
+    false when there is none or it cannot be read.
+
+func (m MissingReports) String() string
+    String names the missing reports: "codex-review (login_required),
+    claude-review (timeout)"; "" when none.
 
 type Pause struct {
 	Kind   string    // usage_limit | login_required | overloaded
@@ -11738,7 +11795,7 @@ const (
 	AutoStanding   = "standing"   // posted, not withdrawn
 	AutoDismissing = "dismissing" // magnum is withdrawing it
 	AutoDismissed  = "dismissed"  // withdrawn (EndedBy says by whom)
-	AutoFailed     = "failed"     // GitHub did not take it
+	AutoFailed     = "failed"     // GitHub did not take it: its post, or (EndedBy set) its withdrawal
 )
     AutoApproval states (auto_approvals.state).
 
@@ -11748,6 +11805,7 @@ const (
 	AutoEndedSomeone  = "someone"  // someone else dismissed it on GitHub
 	AutoEndedPush     = "push"     // GitHub dismissed it as stale when commits were pushed
 	AutoEndedGone     = "gone"     // GitHub no longer has it
+	AutoEndedClosed   = "closed"   // the PR was merged or closed: the approval is history, nothing to follow
 )
     Who withdrew an automatic approval (auto_approvals.ended_by).
 
@@ -12228,7 +12286,8 @@ type AutoApproval struct {
 	State          string `json:"state"`
 	ReviewID       int64  `json:"review_id,omitempty"` // GitHub's id of the approval, once posted
 	ReviewURL      string `json:"review_url,omitempty"`
-	// Attempts counts the posts tried; Error is the last failure.
+	// Attempts counts the posts tried, and from the start of a withdrawal
+	// the dismissals GitHub did not take; Error is the last failure.
 	Attempts int    `json:"attempts"`
 	Error    string `json:"error,omitempty"`
 	// EndedBy (AutoEnded*) and EndReason say who withdrew it and why, set
@@ -14517,6 +14576,12 @@ type PRBoardRow struct {
 	// (they dismissed one of its approvals, reviewed the PR by hand or ran
 	// magnum unapprove); "" when it may. The card says so.
 	AutoStopped string
+	// AutoRefused is why magnum does not approve the PR as the operator
+	// although its review of the head left nothing to fix
+	// (engine.AutoApproveRefused: a reviewer's missing report, a PR its
+	// watch would not review on its own, a change to the review agents'
+	// instructions, the head's checks); "" otherwise. The card says so.
+	AutoRefused string
 	// ApproveAs is whom A approves a NeedsMe row as: the watch's
 	// auto_approve_as, the operator's own account, whose approval GitHub
 	// counts. nil on a row that does not need the operator, or whose watch

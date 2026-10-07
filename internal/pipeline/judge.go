@@ -74,6 +74,7 @@ func (rd *round) runJudge(ctx context.Context, run store.Run) (RoundResult, erro
 	rd.mu.Unlock()
 
 	jd := rd.judgeData(run, marker)
+	rd.recordMissing(ctx, jd.Reports) // auto-approval and a continue read it (missing_reports.go)
 	rd.mu.Lock()
 	rd.res.JudgePromptedAt = rd.r.now() // the threads and comments it re-decides are those up to now
 	rd.mu.Unlock()

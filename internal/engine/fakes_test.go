@@ -138,10 +138,15 @@ type fakeGH struct {
 	postAs     string
 	dismissals map[int][]github.ReviewDismissal
 	// createTakes makes a failing CreateReview still post (the answer is
-	// lost); clock stamps the reviews postAs lists.
-	createTakes bool
-	clock       func() time.Time
-	calls       []string
+	// lost), dismissTakes a failing DismissReview still dismiss (GitHub
+	// refuses a dismissal of what someone dismissed meanwhile); clock
+	// stamps the reviews postAs lists.
+	createTakes, dismissTakes bool
+	clock                     func() time.Time
+	// defaultFiles is the Details' file list of a PR whose spec lists none
+	// (nil: no list).
+	defaultFiles []string
+	calls        []string
 	// onRadar and onCIStates run during those calls (outside the lock):
 	// what a person does while the daemon waits for GitHub.
 	onRadar, onCIStates func()
@@ -231,7 +236,7 @@ func (g *fakeGH) DismissReview(_ context.Context, owner, repo string, number int
 	g.record(fmt.Sprintf("dismiss:%s/%s#%d:%d:%s", owner, repo, number, reviewID, message))
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.dismissErr == nil && g.postAs != "" {
+	if (g.dismissErr == nil || g.dismissTakes) && g.postAs != "" {
 		for i, r := range g.allReviews[number] {
 			if r.DatabaseID == reviewID {
 				g.allReviews[number][i].State = "DISMISSED"
@@ -450,8 +455,12 @@ func (g *fakeGH) Details(ctx context.Context, owner, repo string, numbers []int)
 				d.ReviewRequests = []github.Reviewer{{Type: "User", Login: "zhuravel"}, {Type: "Team", Login: "engineers"}}
 			}
 			d.ReviewRequestEvents = append([]github.ReviewRequestEvent{}, p.requests...)
-			if p.files != nil {
-				d.Files, d.FilesComplete = slices.Clone(p.files), !p.filesTruncated
+			files := p.files
+			if files == nil {
+				files = g.defaultFiles
+			}
+			if files != nil {
+				d.Files, d.FilesComplete = slices.Clone(files), !p.filesTruncated
 			}
 			d.ActivityAt = p.activity
 			d.ReviewGate = p.gate

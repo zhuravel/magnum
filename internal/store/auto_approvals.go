@@ -19,7 +19,7 @@ const (
 	AutoStanding   = "standing"   // posted, not withdrawn
 	AutoDismissing = "dismissing" // magnum is withdrawing it
 	AutoDismissed  = "dismissed"  // withdrawn (EndedBy says by whom)
-	AutoFailed     = "failed"     // GitHub did not take it
+	AutoFailed     = "failed"     // GitHub did not take it: its post, or (EndedBy set) its withdrawal
 )
 
 // AutoLiveStates are the states of a PR's one live automatic approval.
@@ -32,6 +32,7 @@ const (
 	AutoEndedSomeone  = "someone"  // someone else dismissed it on GitHub
 	AutoEndedPush     = "push"     // GitHub dismissed it as stale when commits were pushed
 	AutoEndedGone     = "gone"     // GitHub no longer has it
+	AutoEndedClosed   = "closed"   // the PR was merged or closed: the approval is history, nothing to follow
 )
 
 // AutoApproval is one approval magnum posted, or tries to post, as the
@@ -50,7 +51,8 @@ type AutoApproval struct {
 	State          string `json:"state"`
 	ReviewID       int64  `json:"review_id,omitempty"` // GitHub's id of the approval, once posted
 	ReviewURL      string `json:"review_url,omitempty"`
-	// Attempts counts the posts tried; Error is the last failure.
+	// Attempts counts the posts tried, and from the start of a withdrawal
+	// the dismissals GitHub did not take; Error is the last failure.
 	Attempts int    `json:"attempts"`
 	Error    string `json:"error,omitempty"`
 	// EndedBy (AutoEnded*) and EndReason say who withdrew it and why, set

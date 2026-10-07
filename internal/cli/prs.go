@@ -943,8 +943,11 @@ func defaultRepo(cfg *config.Config) string {
 }
 
 // prsAutoApprovals fills the rows' automatic approvals (ids are their PRs):
-// the one standing, and why magnum stopped approving a PR as the operator.
-// A PR approved as the operator no longer needs them.
+// the one standing (or that stood when its PR was merged or closed), why
+// magnum stopped approving a PR as the operator, and why it does not
+// approve the head as them although the review left nothing to fix
+// (engine.KVPRAutoApproveRefused, for the row's head). A PR approved as the
+// operator no longer needs them.
 func prsAutoApprovals(ctx context.Context, st *store.Store, ids []int64, out []tui.PRBoardRow) error {
 	latest, err := st.LatestAutoApprovals(ctx, ids)
 	if err != nil {
@@ -955,12 +958,17 @@ func prsAutoApprovals(ctx context.Context, st *store.Store, ids []int64, out []t
 		return err
 	}
 	for i, id := range ids {
-		if a, ok := latest[id]; ok && a.State == store.AutoStanding {
+		if a, ok := latest[id]; ok && (a.State == store.AutoStanding || a.State == store.AutoDismissed && a.EndedBy == store.AutoEndedClosed) {
 			out[i].AutoApproved = &tui.AutoApproval{ReviewID: a.ReviewID, Head: a.HeadSHA, URL: a.ReviewURL, At: store.Deref(a.PostedAt)}
 			out[i].NeedsMe = ""
 		}
 		if h, ok := holds[id]; ok && h.Held {
 			out[i].AutoStopped = h.Reason
+		}
+		if v, ok, err := st.GetKV(ctx, engine.KVPRAutoApproveRefused(id)); err == nil && ok {
+			if r, ok := engine.ParseAutoApproveRefused(v); ok && r.Head == out[i].HeadSHA && out[i].AutoApproved == nil {
+				out[i].AutoRefused = r.Reason
+			}
 		}
 	}
 	return nil

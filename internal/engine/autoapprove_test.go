@@ -18,12 +18,16 @@ import (
 )
 
 // autoRound is what a scripted round posts: its findings by priority, the
-// earlier ones still open, its verdict and the verdict line of its review.
+// earlier ones still open (openBy: by priority, as the skill writes them
+// now), its verdict and the verdict line of its review; missing are the
+// reports its judge went without (the pipeline's record of the round).
 type autoRound struct {
 	findings map[string]int
 	open     int
+	openBy   map[string]int
 	verdict  string
 	line     string
+	missing  []pipeline.MissingReport
 }
 
 var (
@@ -61,8 +65,10 @@ func (p *autoPlan) next(n int) autoRound {
 // operator (the gh identity zhuravel), whose fake GitHub lists what is
 // posted as zhuravel, and whose rounds post what plan says for their PR
 // (clean by default): each records its judge run with its result, as the
-// pipeline does, and lists its review, with its verdict line, as magnum's
-// App. No toast for every review.
+// pipeline does, and its record of the reports its judge went without, and
+// lists its review, with its verdict line, as magnum's App. Every PR
+// changes one application file (the Details' file list). No toast for
+// every review.
 func newAutoHarness(t *testing.T, mods ...func(*harness)) (*harness, *autoPlan) {
 	t.Helper()
 	plan := &autoPlan{rounds: map[int][]autoRound{}, done: map[int]int{}}
@@ -72,6 +78,7 @@ func newAutoHarness(t *testing.T, mods ...func(*harness)) (*harness, *autoPlan) 
 		h.cfg.Watches[0].AutoApproveAs = "zhuravel"
 		h.gh.postAs = "zhuravel"
 		h.gh.clock = h.clock.Now
+		h.gh.defaultFiles = []string{"app/models/order.rb"}
 		h.rd.script = func(in pipeline.RoundInput) (pipeline.RoundResult, error) {
 			n := len(h.rd.all())
 			r := plan.next(in.PR.Number)
@@ -81,8 +88,16 @@ func newAutoHarness(t *testing.T, mods ...func(*harness)) (*harness, *autoPlan) 
 			if event == "" {
 				event = "COMMENTED" // the App's no_findings_event is COMMENT
 			}
+			var open any = r.open
+			if r.openBy != nil {
+				open = r.openBy
+			}
 			result, _ := json.Marshal(map[string]any{"event": event, "verdict": r.verdict, "findings": r.findings,
-				"previous_findings": map[string]int{"open": r.open}})
+				"previous_findings": map[string]any{"open": open}})
+			rec, _ := json.Marshal(pipeline.MissingReports{Round: n, Head: in.TargetSHA, Missing: append([]pipeline.MissingReport{}, r.missing...)})
+			if err := h.st.SetKV(h.ctx, pipeline.KVMissingReports(in.PR.ID), string(rec)); err != nil {
+				return pipeline.RoundResult{Outcome: pipeline.OutcomeError, Error: err.Error()}, err
+			}
 			if _, err := h.st.DB().ExecContext(h.ctx, `INSERT INTO runs (id, pr_id, round, role, kind, target_sha, identity, reviewer_login,
   state, outcome, review_id, review_url, prompt_text, result_json, created_at)
   VALUES (?, ?, ?, 'codex-judge', 'initial', ?, ?, 'talkable[bot]', 'verified', 'posted', ?, ?, 'p', ?, ?)`,

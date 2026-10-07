@@ -232,8 +232,9 @@ func (r restReviewJSON) review() RESTReview {
 // /repos/{o}/{r}/pulls/{n}/reviews) on commitID as the client's identity.
 // event is APPROVE, REQUEST_CHANGES or COMMENT; GitHub wants a body for the
 // last two. GitHub counts each reviewer's latest review, so a new APPROVE
-// or REQUEST_CHANGES supersedes the identity's earlier verdict. It is
-// marked Mutates, so execx.DryRun only plans it.
+// or REQUEST_CHANGES supersedes the identity's earlier verdict. The request
+// goes as JSON on gh's stdin, so a failing call logs none of the body. It
+// is marked Mutates, so execx.DryRun only plans it.
 func (c *Client) CreateReview(ctx context.Context, owner, repo string, number int, commitID, event, body string) (RESTReview, error) {
 	if err := checkRepo(owner, repo); err != nil {
 		return RESTReview{}, err
@@ -252,8 +253,8 @@ func (c *Client) CreateReview(ctx context.Context, owner, repo string, number in
 	var r restReviewJSON
 	path := fmt.Sprintf("repos/%s/%s/pulls/%d/reviews", owner, repo, number)
 	op := fmt.Sprintf("review %s/%s#%d (%s)", owner, repo, number, event)
-	fields := [][2]string{{"commit_id", commitID}, {"event", event}, {"body", body}}
-	if err := c.rest(ctx, op, "POST", path, fields, true, &r); err != nil {
+	in := map[string]string{"commit_id": commitID, "event": event, "body": body}
+	if err := c.restInput(ctx, op, "POST", path, in, true, &r); err != nil {
 		return RESTReview{}, err
 	}
 	return r.review(), nil
@@ -312,9 +313,10 @@ func (c *Client) SubmitReview(ctx context.Context, owner, repo string, number in
 }
 
 // DismissReview dismisses a review (PUT /repos/{o}/{r}/pulls/{n}/reviews/{id}/dismissals)
-// as the client's identity. It is marked Mutates, so execx.DryRun only plans
-// it. A missing permission is an error matching ErrForbidden; callers report
-// it and do not retry.
+// as the client's identity, the message as JSON on gh's stdin, so a failing
+// call logs none of it. It is marked Mutates, so execx.DryRun only plans it.
+// A missing permission is an error matching ErrForbidden; callers report it
+// and do not retry.
 func (c *Client) DismissReview(ctx context.Context, owner, repo string, number int, reviewID int64, message string) error {
 	if err := checkRepo(owner, repo); err != nil {
 		return err
@@ -327,7 +329,7 @@ func (c *Client) DismissReview(ctx context.Context, owner, repo string, number i
 	}
 	path := fmt.Sprintf("repos/%s/%s/pulls/%d/reviews/%d/dismissals", owner, repo, number, reviewID)
 	op := fmt.Sprintf("dismiss review %s/%s#%d/%d", owner, repo, number, reviewID)
-	return c.rest(ctx, op, "PUT", path, [][2]string{{"message", message}, {"event", "DISMISS"}}, true, nil)
+	return c.restInput(ctx, op, "PUT", path, map[string]string{"message": message, "event": "DISMISS"}, true, nil)
 }
 
 // UpdateReviewBody replaces the summary body of a review (PUT

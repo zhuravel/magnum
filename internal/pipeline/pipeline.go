@@ -894,21 +894,32 @@ func (rd *round) setAsideStale() error {
 
 // existingReports fills Reports for a continued round from the files on
 // disk that the paused round verified (its role's latest run on this head
-// ended verified): a role that runs on every round is listed as missing when
-// its file is absent or was not verified, others (first, manual) only when
-// they left a verified report. A file whose run did not verify it was
-// written after that run ended (a reviewer that kept working): it is not
-// read, with a warning.
+// ended verified). A role the paused round ran (it has a run of the round on
+// this head) is listed as missing when its file is absent or was not
+// verified, as is one the paused round's judge went without (the PR's
+// MissingReports of the round, with its status: a role skipped as logged
+// out has no run); a role the paused round never ran is not listed, so the
+// continue's judge is not told a report is missing that its round never
+// asked for. A file whose run did not verify it was written after that run
+// ended (a reviewer that kept working): it is not read, with a warning.
 func (rd *round) existingReports(ctx context.Context) {
 	verified := map[string]bool{} // role -> its latest run of the paused round on this head is verified
+	ran := map[string]bool{}      // role -> the paused round ran it on this head
 	if runs, err := rd.r.Store.RunsByPR(ctx, rd.in.PR.ID); err == nil {
 		for _, r := range runs {
 			if r.Round == rd.in.Round && r.TargetSHA == rd.in.TargetSHA {
 				verified[r.Role] = r.State == store.RunVerified
+				ran[r.Role] = true
 			}
 		}
 	} else {
 		rd.logf("pipeline: runs of round %d: %v", rd.in.Round, err)
+	}
+	without := map[string]string{} // role -> why the paused round's judge went without its report
+	if rec, ok := ReadMissingReports(ctx, rd.r.Store, rd.in.PR.ID); ok && rec.Round == rd.in.Round {
+		for _, m := range rec.Missing {
+			without[m.Role] = m.Status
+		}
 	}
 	for _, role := range rd.order {
 		p := filepath.Join(rd.dir, role.ReportFile())
@@ -923,10 +934,12 @@ func (rd *round) existingReports(ctx context.Context) {
 		switch {
 		case present:
 			rep.Status, rep.Path = ReportOK, p
-		case role.Runs == config.RunsAlways:
+		case without[role.Name] != "":
+			rep.Status, rep.Detail = without[role.Name], "not available"
+		case ran[role.Name]:
 			rep.Status, rep.Detail = ReportMissing, "not available"
 		default:
-			continue
+			continue // the paused round never ran it
 		}
 		rd.setReport(role, rep)
 	}

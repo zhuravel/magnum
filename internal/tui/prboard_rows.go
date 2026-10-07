@@ -226,6 +226,12 @@ type PRBoardRow struct {
 	// (they dismissed one of its approvals, reviewed the PR by hand or ran
 	// magnum unapprove); "" when it may. The card says so.
 	AutoStopped string
+	// AutoRefused is why magnum does not approve the PR as the operator
+	// although its review of the head left nothing to fix
+	// (engine.AutoApproveRefused: a reviewer's missing report, a PR its
+	// watch would not review on its own, a change to the review agents'
+	// instructions, the head's checks); "" otherwise. The card says so.
+	AutoRefused string
 	// ApproveAs is whom A approves a NeedsMe row as: the watch's
 	// auto_approve_as, the operator's own account, whose approval GitHub
 	// counts. nil on a row that does not need the operator, or whose watch
@@ -652,6 +658,7 @@ func sanitizeRow(r PRBoardRow) PRBoardRow {
 	r.CodexFlag, r.CodexFlagSentence, r.MuteReason = cleanText(r.CodexFlag), cleanText(r.CodexFlagSentence), cleanText(r.MuteReason)
 	r.Stalemate = cleanAll(r.Stalemate)
 	r.Note, r.SkipReason, r.ProjectNote = cleanText(r.Note), cleanText(r.SkipReason), cleanText(r.ProjectNote)
+	r.AutoStopped, r.AutoRefused = cleanText(r.AutoStopped), cleanText(r.AutoRefused)
 	if r.Badges != nil {
 		badges := make([]Badge, 0, len(r.Badges))
 		for _, b := range r.Badges {

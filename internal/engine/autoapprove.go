@@ -8,11 +8,16 @@ package engine
 // gh identity) on the head it reviewed once its latest review of that head
 // left nothing to fix before merging, and withdraws it when a later review
 // finds something that must be fixed; new commits alone leave it to the next
-// review. The operator's word wins: a review of theirs by hand, or a
+// review. It also holds back what autoapprove_gates.go names: a review that
+// did not hear every reviewer, a PR its watch would not review on its own,
+// one that changes the review agents' instructions, a head whose checks
+// fail or run. The operator's word wins: a review of theirs by hand, or a
 // dismissal of one of these approvals, stops it on that PR for good
 // (`magnum unapprove --resume` lifts that). Every post and withdrawal is
 // compare-and-set on the auto_approvals row, writes begin/ok/fail events,
-// and is found on GitHub instead of repeated when its answer was lost.
+// and is found on GitHub instead of repeated when its answer was lost; a
+// withdrawal GitHub keeps refusing ends failed after autoApproveAttempts,
+// and the approval of a merged or closed PR ends as history.
 
 import (
 	"context"
@@ -41,8 +46,12 @@ type UnapprovePayload struct {
 }
 
 // UnapproveMessage is the dismissal message of an automatic approval the
-// operator withdraws (magnum unapprove, the board's D).
-const UnapproveMessage = "magnum: this automatic approval is withdrawn by its owner (magnum unapprove)."
+// operator withdraws (magnum unapprove, the board's D); RequestChangesMessage
+// that of one `magnum request-changes` withdraws before it posts.
+const (
+	UnapproveMessage      = "magnum: this automatic approval is withdrawn by its owner (magnum unapprove)."
+	RequestChangesMessage = "magnum: this automatic approval is withdrawn: its owner requested changes (magnum request-changes)."
+)
 
 // autoApprovalMarker starts the hidden marker that ends an automatic
 // approval's body (AutoApprovalMarker); magnumRunMarker starts the marker
@@ -59,7 +68,8 @@ func AutoApprovalMarker(head string) string {
 }
 
 // autoApproveRetry is how long after a failed post or withdrawal magnum
-// tries again; autoApproveAttempts bounds the posts of one review.
+// tries again; autoApproveAttempts bounds the posts of one review and the
+// dismissals of one withdrawal.
 const (
 	autoApproveRetry    = 5 * time.Minute
 	autoApproveAttempts = 3
@@ -73,11 +83,11 @@ var (
 	kindAutoWithdrawn = notify.Kind{One: "approval of yours withdrawn", Many: "approvals of yours withdrawn"}
 )
 
-// autoApproveGitHub is what auto-approval reads from GitHub besides GitHub
-// (*github.Client): every review of a PR and who dismissed which. A client
-// without it never approves as the operator.
+// autoApproveGitHub is what auto-approval reads from GitHub
+// (*github.Client) beyond the GitHub interface, whose AllReviews lists a
+// PR's reviews: who dismissed which review. A client without it never
+// approves as the operator.
 type autoApproveGitHub interface {
-	Reviews(ctx context.Context, owner, repo string, number int) ([]github.Review, error)
 	ReviewDismissals(ctx context.Context, owner, repo string, number int) ([]github.ReviewDismissal, error)
 }
 
@@ -131,10 +141,12 @@ func reviewVerdictLine(body string) verdictKind {
 
 // roundBlocks says whether a posted round left something that must be
 // fixed before merging: a P0, P1 or P2 finding, new or still open, by the
-// judge's result (sum) or the verdict line of the review it posted (body,
-// "" when not read). known is false when neither tells: earlier findings
-// are still open, the result does not give their priorities, and the
-// verdict line was not read or is not one magnum knows.
+// judge's result (sum: the earlier findings still open by priority, when it
+// gives them) or the verdict line of the review it posted (body, "" when
+// not read), which only a result without those priorities needs. known is
+// false when neither tells: earlier findings are still open, the result
+// does not give their priorities, and the verdict line was not read or is
+// not one magnum knows.
 func roundBlocks(sum store.ReviewSummary, body string) (blocks, known bool) {
 	line := reviewVerdictLine(body)
 	switch {
@@ -142,6 +154,8 @@ func roundBlocks(sum store.ReviewSummary, body string) (blocks, known bool) {
 		return true, true
 	case sum.Counts[0]+sum.Counts[1]+sum.Counts[2] > 0 || sum.Verdict == store.VerdictBlocking:
 		return true, true
+	case sum.OpenCounts != nil:
+		return sum.OpenCounts[0]+sum.OpenCounts[1]+sum.OpenCounts[2] > 0, true
 	case sum.Open == 0:
 		return false, true
 	case line == verdictOptional || line == verdictClean:
@@ -344,7 +358,7 @@ func (e *Engine) autoApproveFor(ctx context.Context, only int64) {
 		return
 	}
 	if e.autoSeen == nil {
-		e.autoSeen, e.autoFollow = map[int64]string{}, map[int64]string{}
+		e.autoSeen, e.autoFollow, e.autoRefused = map[int64]string{}, map[int64]string{}, map[int64]string{}
 	}
 	for _, a := range live {
 		e.followAutoApproval(ctx, a, summaryOf(sums, a.PRID), holdOf(holds, a.PRID))
@@ -377,7 +391,8 @@ func resumedSince(h *store.AutoApproveHold) time.Time {
 	return h.At
 }
 
-// autoClient is identity id's GitHub client when it can do auto-approval.
+// autoClient is identity id's GitHub client when it can do auto-approval
+// (nil both ways when it cannot).
 func (e *Engine) autoClient(id *config.Identity) (GitHub, autoApproveGitHub) {
 	if id == nil {
 		return nil, nil
@@ -396,13 +411,14 @@ func (e *Engine) autoClient(id *config.Identity) (GitHub, autoApproveGitHub) {
 // considerAutoApproval approves candidate c as the operator when its
 // repository opts in, the registry allows it (autoApproveRefusal), no
 // approval followed its latest review yet (one whose post failed is tried
-// again after autoApproveRetry, autoApproveAttempts times), and GitHub's
-// reviews agree: none of the operator's by hand (else auto-approval of the
-// PR stops), none in progress, no approval of the head of theirs, and a
-// verdict line that leaves nothing to fix when the result cannot tell. An
+// again after autoApproveRetry, autoApproveAttempts times), nothing holds
+// it back (autoGateRefusal: recorded for the card), and GitHub's reviews,
+// all of them, agree: none of the operator's by hand (else auto-approval of
+// the PR stops), none in progress, no approval of the head of theirs, and
+// a verdict line that leaves nothing to fix when the result cannot tell. An
 // approval of magnum's GitHub has but the registry lost is recorded instead
 // of posted again. GitHub is asked again only when the PR's latest round or
-// updatedAt moved since it said no.
+// updatedAt moved since it said no (or listed only part of the reviews).
 func (e *Engine) considerAutoApproval(ctx context.Context, c store.RepoPR, sum *store.ReviewSummary, hold *store.AutoApproveHold) {
 	id := e.cfg.AutoApproveFor(c.Repo)
 	pr := c.PR
@@ -417,6 +433,11 @@ func (e *Engine) considerAutoApproval(ctx context.Context, c store.RepoPR, sum *
 	if hasPrior && (prior.State != store.AutoFailed || prior.Attempts >= autoApproveAttempts || e.now().Before(prior.UpdatedAt.Add(autoApproveRetry))) {
 		return
 	}
+	why := e.autoGateRefusal(ctx, c, *sum)
+	e.noteAutoRefused(ctx, c, *sum, why)
+	if why != "" {
+		return
+	}
 	since := resumedSince(hold)
 	fp := sum.RunID + "|" + timeKey(pr.GHUpdatedAt) + "|" + store.FormatTime(since)
 	if !hasPrior && e.autoSeen[pr.ID] == fp {
@@ -427,11 +448,19 @@ func (e *Engine) considerAutoApproval(ctx context.Context, c store.RepoPR, sum *
 		return
 	}
 	repo := repoOf(c.Repo)
-	reviews, err := ag.Reviews(ctx, repo.Owner, repo.Name, pr.Number)
+	reviews, complete, err := gh.AllReviews(ctx, repo.Owner, repo.Name, pr.Number)
 	if err != nil {
 		if ctx.Err() == nil {
 			e.log.Info("auto approval: read the reviews", "pr", pr.ID, "err", err)
 		}
+		return
+	}
+	if !complete { // what GitHub left out may be the operator's review by hand
+		e.autoSeen[pr.ID] = fp
+		e.event(ctx, "info", prSubject(repo, pr.Number), "review.auto_approve_refused",
+			fmt.Sprintf("magnum does not approve %s#%d as you: magnum cannot read all of its reviews on GitHub, so it cannot tell whether "+
+				"you reviewed it by hand (asked again when the PR moves)", repo.FullName(), pr.Number),
+			map[string]any{"reason": "incomplete reviews", "head_sha": pr.HeadSHA, "run_id": sum.RunID})
 		return
 	}
 	var priorPtr *store.AutoApproval
@@ -583,37 +612,55 @@ func (e *Engine) stopAutoApproval(ctx context.Context, repo store.Repo, pr store
 		map[string]any{"reason": why})
 }
 
-// followAutoApproval follows the PR's live approval a: a post the daemon
-// did not see answered is found on GitHub or counted failed; a withdrawal
-// GitHub did not answer is tried again after autoApproveRetry; a standing
-// one goes when a later round leaves something to fix, and is checked
-// against GitHub (a dismissal, a review by hand) when the PR's updatedAt or
-// latest round moved.
+// followAutoApproval follows the PR's live approval a: the approval of a
+// merged or closed PR ends as history (closeAutoApproval); a post the
+// daemon did not see answered is found on GitHub or counted failed; a
+// withdrawal GitHub did not take is tried again after autoApproveRetry (at
+// most autoApproveAttempts times); a standing one goes when a later round
+// leaves something to fix, and is checked against GitHub (a dismissal, a
+// review by hand) when the PR's updatedAt or latest round moved.
 func (e *Engine) followAutoApproval(ctx context.Context, a store.AutoApprovalPR, sum *store.ReviewSummary, hold *store.AutoApproveHold) {
 	repo := repoOf(a.Repo)
+	if a.PR.GHState != store.GHOpen && (a.State == store.AutoStanding || a.State == store.AutoDismissing) {
+		e.closeAutoApproval(ctx, repo, a)
+		return
+	}
 	gh, ag := e.autoClient(e.cfg.IdentityByName(a.Identity))
 	if ag == nil {
 		return // its identity left the configuration: nothing to act as
 	}
 	switch a.State {
 	case store.AutoPosting:
-		e.resumeAutoPost(ctx, repo, a, ag)
+		e.resumeAutoPost(ctx, repo, a, gh)
 	case store.AutoDismissing:
 		if !e.now().Before(a.UpdatedAt.Add(autoApproveRetry)) {
 			_ = e.withdrawAutoApproval(ctx, repo, a.PR, a.AutoApproval, gh, a.EndedBy, a.EndReason)
 		}
 	case store.AutoStanding:
-		if a.PR.GHState == store.GHOpen { // a merged or closed PR's approval is history
-			e.followStanding(ctx, repo, a, sum, hold, gh, ag)
-		}
+		e.followStanding(ctx, repo, a, sum, hold, gh, ag)
 	}
+}
+
+// closeAutoApproval ends live approval a of a merged or closed PR: nothing
+// is left to follow or withdraw there (a withdrawal under way is dropped),
+// and its row stops being read on every tick. It writes
+// review.auto_approval_ended.
+func (e *Engine) closeAutoApproval(ctx context.Context, repo store.Repo, a store.AutoApprovalPR) {
+	what := strings.ToLower(a.PR.GHState)
+	why := "the PR was " + what + ": the approval is history"
+	if a.State == store.AutoDismissing {
+		why = "the PR was " + what + " before its withdrawal went through"
+	}
+	e.endAutoApproval(ctx, repo, a.PR, a.AutoApproval, []string{store.AutoStanding, store.AutoDismissing}, store.AutoEndedClosed, why)
+	delete(e.autoFollow, a.ID)
 }
 
 // resumeAutoPost settles a post a stopped daemon left without its answer:
 // the approval GitHub has with magnum's marker on its head, else failed (a
-// later tick tries again).
-func (e *Engine) resumeAutoPost(ctx context.Context, repo store.Repo, a store.AutoApprovalPR, ag autoApproveGitHub) {
-	reviews, err := ag.Reviews(ctx, repo.Owner, repo.Name, a.PR.Number)
+// later tick tries again). A list GitHub cut short proves nothing: it is
+// asked again on the next tick.
+func (e *Engine) resumeAutoPost(ctx context.Context, repo store.Repo, a store.AutoApprovalPR, gh GitHub) {
+	reviews, complete, err := gh.AllReviews(ctx, repo.Owner, repo.Name, a.PR.Number)
 	if err != nil {
 		return
 	}
@@ -624,18 +671,24 @@ func (e *Engine) resumeAutoPost(ctx context.Context, repo store.Repo, a store.Au
 			store.ReviewSummary{RunID: a.RunID}, data, " (found on GitHub after a restart)")
 		return
 	}
+	if !complete {
+		return
+	}
 	_ = e.st.TransitionAutoApproval(ctx, a.ID, []string{store.AutoPosting}, store.AutoFailed, func(u *store.AutoApprovalUpdate) {
 		u.Set("error", "the daemon stopped before GitHub answered")
 	})
 }
 
-// followStanding withdraws standing approval a when the PR's latest round
-// is a later one that leaves something to fix (or cannot tell: earlier
-// findings open, the verdict line unread or unknown), and reads GitHub's
-// reviews when the PR moved: a dismissal of a is recorded (by the operator
-// or someone else, auto-approval of the PR stops; by GitHub on a push, it
-// does not), and a review of the operator's by hand since stops it (an
-// approval or changes request of theirs also supersedes a).
+// followStanding reads GitHub's reviews when the PR moved: a dismissal of
+// standing approval a is recorded first (by the operator or someone else,
+// auto-approval of the PR stops; by GitHub on a push, it does not), so a
+// review GitHub already dismissed is never withdrawn again; then a is
+// withdrawn when the PR's latest round is a later one that leaves something
+// to fix (or cannot tell: earlier findings open, the verdict line unread or
+// unknown), and a review of the operator's by hand since stops
+// auto-approval (an approval or changes request of theirs also supersedes
+// a). A list GitHub cut short still withdraws (the safe way), and tells
+// nothing else until the PR moves.
 func (e *Engine) followStanding(ctx context.Context, repo store.Repo, a store.AutoApprovalPR, sum *store.ReviewSummary,
 	hold *store.AutoApproveHold, gh GitHub, ag autoApproveGitHub) {
 	runID := ""
@@ -646,12 +699,20 @@ func (e *Engine) followStanding(ctx context.Context, repo store.Repo, a store.Au
 	if e.autoFollow[a.ID] == fp {
 		return
 	}
-	reviews, err := ag.Reviews(ctx, repo.Owner, repo.Name, a.PR.Number)
+	reviews, complete, err := gh.AllReviews(ctx, repo.Owner, repo.Name, a.PR.Number)
 	if err != nil {
 		if ctx.Err() == nil {
 			e.log.Info("auto approval: read the reviews", "pr", a.PRID, "err", err)
 		}
 		return
+	}
+	for _, r := range reviews {
+		if r.DatabaseID == a.ReviewID && strings.EqualFold(r.State, "DISMISSED") {
+			if e.dismissedOnGitHub(ctx, repo, a, ag) {
+				delete(e.autoFollow, a.ID)
+			}
+			return
+		}
 	}
 	if sum != nil && sum.RunID != a.RunID {
 		if blocks, known := roundBlocks(*sum, reviewBody(reviews, sum.ReviewID)); blocks || !known {
@@ -666,13 +727,10 @@ func (e *Engine) followStanding(ctx context.Context, repo store.Repo, a store.Au
 			return
 		}
 	}
-	for _, r := range reviews {
-		if r.DatabaseID == a.ReviewID && strings.EqualFold(r.State, "DISMISSED") {
-			if e.dismissedOnGitHub(ctx, repo, a, ag) {
-				delete(e.autoFollow, a.ID)
-			}
-			return
-		}
+	if !complete {
+		e.log.Info("auto approval: GitHub listed only part of the reviews; followed again when the PR moves", "pr", a.PRID)
+		e.autoFollow[a.ID] = fp
+		return
 	}
 	since := resumedSince(hold)
 	if a.PostedAt != nil && a.PostedAt.After(since) {
@@ -681,7 +739,8 @@ func (e *Engine) followStanding(ctx context.Context, repo store.Repo, a store.Au
 	if w := operatorWord(reviews, a.Login, a.PR.HeadSHA, since); w.hand != nil {
 		e.stopAutoApproval(ctx, repo, a.PR, w.handReason())
 		if s := strings.ToUpper(w.hand.State); s == "APPROVED" || s == "CHANGES_REQUESTED" {
-			e.endAutoApproval(ctx, repo, a.PR, a.AutoApproval, store.AutoEndedOperator, "superseded by your review by hand ("+w.hand.URL+")")
+			e.endAutoApproval(ctx, repo, a.PR, a.AutoApproval, []string{store.AutoStanding}, store.AutoEndedOperator,
+				"superseded by your review by hand ("+w.hand.URL+")")
 			delete(e.autoFollow, a.ID)
 			return
 		}
@@ -717,7 +776,7 @@ func (e *Engine) dismissedOnGitHub(ctx context.Context, repo store.Repo, a store
 	case d.Actor != "":
 		why = d.Actor + " dismissed it"
 	}
-	if !e.endAutoApproval(ctx, repo, a.PR, a.AutoApproval, by, why) {
+	if !e.endAutoApproval(ctx, repo, a.PR, a.AutoApproval, []string{store.AutoStanding}, by, why) {
 		return false
 	}
 	if by != store.AutoEndedPush {
@@ -726,11 +785,11 @@ func (e *Engine) dismissedOnGitHub(ctx context.Context, repo store.Repo, a store
 	return true
 }
 
-// endAutoApproval records standing approval a as ended on GitHub without
-// magnum (by, why) with review.auto_approval_ended; it reports whether the
-// row moved.
-func (e *Engine) endAutoApproval(ctx context.Context, repo store.Repo, pr store.PR, a store.AutoApproval, by, why string) bool {
-	if err := e.st.TransitionAutoApproval(ctx, a.ID, []string{store.AutoStanding}, store.AutoDismissed, func(u *store.AutoApprovalUpdate) {
+// endAutoApproval records approval a, in one of the states from, as ended
+// without magnum's withdrawal (by, why: on GitHub, or with its PR) with
+// review.auto_approval_ended; it reports whether the row moved.
+func (e *Engine) endAutoApproval(ctx context.Context, repo store.Repo, pr store.PR, a store.AutoApproval, from []string, by, why string) bool {
+	if err := e.st.TransitionAutoApproval(ctx, a.ID, from, store.AutoDismissed, func(u *store.AutoApprovalUpdate) {
 		u.Set("ended_by", by)
 		u.Set("end_reason", why)
 		u.Set("ended_at", e.now())
@@ -745,40 +804,47 @@ func (e *Engine) endAutoApproval(ctx context.Context, repo store.Repo, pr store.
 }
 
 // withdrawAutoApproval dismisses approval a as its identity with message:
-// the row goes dismissing (by, message; a row already dismissing keeps its
-// own), then dismissed once GitHub answers (or no longer has the review),
-// with review.auto_approval_withdraw_begin, review.auto_approval_withdrawn
-// or review.auto_approval_withdraw_failed. A withdrawal of magnum's own is
-// toasted; one GitHub did not take stays dismissing, tried again after
-// autoApproveRetry, with one urgent toast.
+// the row goes dismissing (by, message, its attempts from 0; a row already
+// dismissing keeps its own), then dismissed once GitHub answers, no longer
+// has the review, or refuses (422) a review it lists as dismissed already
+// (withdrawnOnGitHub), with review.auto_approval_withdraw_begin,
+// review.auto_approval_withdrawn or review.auto_approval_withdraw_failed. A
+// withdrawal of magnum's own is toasted; one GitHub did not take stays
+// dismissing, tried again after autoApproveRetry, and after
+// autoApproveAttempts it ends failed with one urgent toast.
 func (e *Engine) withdrawAutoApproval(ctx context.Context, repo store.Repo, pr store.PR, a store.AutoApproval, gh GitHub, by, message string) error {
 	subject := prSubject(repo, pr.Number)
 	if a.State == store.AutoStanding {
 		if err := e.st.TransitionAutoApproval(ctx, a.ID, []string{store.AutoStanding}, store.AutoDismissing, func(u *store.AutoApprovalUpdate) {
 			u.Set("ended_by", by)
 			u.Set("end_reason", message)
+			u.Set("attempts", 0)
 		}); err != nil {
 			return fmt.Errorf("automatic approval %d moved on: %w", a.ID, err)
 		}
+		a.State, a.Attempts = store.AutoDismissing, 0
 	}
-	data := map[string]any{"approval_id": a.ID, "review_id": a.ReviewID, "head_sha": a.HeadSHA, "identity": a.Identity, "by": by}
+	attempt := a.Attempts + 1
+	data := map[string]any{"approval_id": a.ID, "review_id": a.ReviewID, "head_sha": a.HeadSHA, "identity": a.Identity, "by": by, "attempt": attempt}
 	e.event(ctx, "info", subject, "review.auto_approval_withdraw_begin",
-		fmt.Sprintf("withdrawing approval %d of %s by %s: %s", a.ReviewID, textx.ShortSHA(a.HeadSHA), a.Login, message), data)
+		fmt.Sprintf("withdrawing approval %d of %s by %s (attempt %d): %s", a.ReviewID, textx.ShortSHA(a.HeadSHA), a.Login, attempt, message), data)
 	err := gh.DismissReview(ctx, repo.Owner, repo.Name, pr.Number, a.ReviewID, message)
-	if err != nil && !errors.Is(err, github.ErrNotFound) {
-		_ = e.st.TransitionAutoApproval(ctx, a.ID, []string{store.AutoDismissing}, "", func(u *store.AutoApprovalUpdate) {
-			u.Set("error", err.Error())
-		})
-		e.event(ctx, "warn", subject, "review.auto_approval_withdraw_failed",
-			fmt.Sprintf("could not withdraw approval %d by %s: %v; tried again in %s", a.ReviewID, a.Login, err, humanDuration(autoApproveRetry)), data)
-		label := fmt.Sprintf("%s#%d", repo.Name, pr.Number)
-		e.urgent(fmt.Sprintf("auto-withdraw-failed:%d", a.ID), "magnum: could not withdraw your approval of "+label,
-			fmt.Sprintf("%s\n%v. magnum tries again; dismiss it on GitHub to be sure.", pr.URL, err), autoToastWindow)
-		return err
+	ended, how := by, ""
+	var apiErr *github.APIError
+	switch {
+	case err == nil:
+	case errors.Is(err, github.ErrNotFound):
+		ended, err = store.AutoEndedGone, nil
+	case errors.As(err, &apiErr) && apiErr.Status == 422:
+		switch e.withdrawnOnGitHub(ctx, gh, repo, pr.Number, a.ReviewID) {
+		case store.AutoEndedGone:
+			ended, how, err = store.AutoEndedGone, " (GitHub no longer has it)", nil
+		case store.AutoDismissed:
+			how, err = " (GitHub lists it as dismissed already)", nil
+		}
 	}
-	ended := by
 	if err != nil {
-		ended = store.AutoEndedGone
+		return e.withdrawFailed(ctx, repo, pr, a, attempt, err, data)
 	}
 	if uerr := e.st.TransitionAutoApproval(ctx, a.ID, []string{store.AutoDismissing}, store.AutoDismissed, func(u *store.AutoApprovalUpdate) {
 		u.Set("ended_by", ended)
@@ -788,13 +854,71 @@ func (e *Engine) withdrawAutoApproval(ctx context.Context, repo store.Repo, pr s
 		e.log.Warn("auto approval withdrawn and not recorded", "approval", a.ID, "err", uerr)
 	}
 	e.event(ctx, "info", subject, "review.auto_approval_withdrawn",
-		fmt.Sprintf("withdrew approval %d of %s by %s: %s", a.ReviewID, textx.ShortSHA(a.HeadSHA), a.Login, message), data)
+		fmt.Sprintf("withdrew approval %d of %s by %s%s: %s", a.ReviewID, textx.ShortSHA(a.HeadSHA), a.Login, how, message), data)
 	if by == store.AutoEndedMagnum {
 		label := fmt.Sprintf("%s#%d", repo.Name, pr.Number)
 		e.info(notify.Item{Key: fmt.Sprintf("auto-withdrawn:%d", a.ID), Title: "magnum: withdrew your approval: " + label,
 			Body: pr.URL + "\n" + message, Line: "withdrew your approval: " + label + " " + pr.URL, Kind: kindAutoWithdrawn, Window: autoToastWindow})
 	}
 	return nil
+}
+
+// withdrawnOnGitHub reads review id of PR number again after GitHub
+// refused its dismissal: store.AutoDismissed when GitHub lists it as
+// dismissed (someone or a push did it meanwhile), store.AutoEndedGone when
+// a whole list lacks it, "" when it still stands or GitHub cannot say.
+func (e *Engine) withdrawnOnGitHub(ctx context.Context, gh GitHub, repo store.Repo, number int, id int64) string {
+	reviews, complete, err := gh.AllReviews(ctx, repo.Owner, repo.Name, number)
+	if err != nil {
+		return ""
+	}
+	for _, r := range reviews {
+		if r.DatabaseID == id {
+			if strings.EqualFold(r.State, "DISMISSED") {
+				return store.AutoDismissed
+			}
+			return ""
+		}
+	}
+	if complete {
+		return store.AutoEndedGone
+	}
+	return ""
+}
+
+// withdrawFailed records the attempt-th dismissal of approval a that
+// GitHub did not take (err): the row stays dismissing, tried again after
+// autoApproveRetry, until autoApproveAttempts, when it ends failed with one
+// urgent toast (the approval may still stand: the operator dismisses it).
+// It returns err.
+func (e *Engine) withdrawFailed(ctx context.Context, repo store.Repo, pr store.PR, a store.AutoApproval, attempt int, err error,
+	data map[string]any) error {
+	final := attempt >= autoApproveAttempts
+	to := "" // stays dismissing
+	if final {
+		to = store.AutoFailed
+	}
+	if uerr := e.st.TransitionAutoApproval(ctx, a.ID, []string{store.AutoDismissing}, to, func(u *store.AutoApprovalUpdate) {
+		u.Set("error", err.Error())
+		u.Set("attempts", attempt)
+		if final {
+			u.Set("ended_at", e.now())
+		}
+	}); uerr != nil {
+		e.log.Warn("auto approval withdrawal failed and not recorded", "approval", a.ID, "err", uerr)
+	}
+	subject := prSubject(repo, pr.Number)
+	if !final {
+		e.event(ctx, "warn", subject, "review.auto_approval_withdraw_failed", fmt.Sprintf("could not withdraw approval %d by %s: %v; tried again in %s "+
+			"(attempt %d of %d)", a.ReviewID, a.Login, err, humanDuration(autoApproveRetry), attempt, autoApproveAttempts), data)
+		return err
+	}
+	e.event(ctx, "warn", subject, "review.auto_approval_withdraw_failed", fmt.Sprintf("could not withdraw approval %d by %s: %v; gave up after %d "+
+		"attempts: it may still stand, dismiss it on GitHub", a.ReviewID, a.Login, err, attempt), data)
+	label := fmt.Sprintf("%s#%d", repo.Name, pr.Number)
+	e.urgent(fmt.Sprintf("auto-withdraw-failed:%d", a.ID), "magnum: could not withdraw your approval of "+label,
+		fmt.Sprintf("%s\n%v. magnum gave up after %d attempts: dismiss it on GitHub.", pr.URL, err, attempt), autoToastWindow)
+	return err
 }
 
 // requestUnapprove is `magnum unapprove` and the board's D: it stops

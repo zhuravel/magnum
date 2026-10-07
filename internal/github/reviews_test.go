@@ -129,6 +129,8 @@ func TestReviewREST404(t *testing.T) {
 	}
 }
 
+// DismissReview sends its message as JSON on gh's stdin: argv (which a
+// failing call logs) holds none of it.
 func TestDismissReview(t *testing.T) {
 	f := &execx.Fake{Rules: []execx.Rule{{
 		Prefix: []string{"gh", "api", "-X", "PUT"},
@@ -139,10 +141,14 @@ func TestDismissReview(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmd := f.Calls[0]
-	want := []string{"api", "-X", "PUT", "repos/talkable/talkable/pulls/5/reviews/77/dismissals", "--hostname", "github.com",
-		"-f", "message=Superseded by a newer review", "-f", "event=DISMISS"}
+	want := []string{"api", "-X", "PUT", "repos/talkable/talkable/pulls/5/reviews/77/dismissals", "--hostname", "github.com", "--input", "-"}
 	if !reflect.DeepEqual(cmd.Args, want) {
 		t.Errorf("args = %q", cmd.Args)
+	}
+	var sent map[string]any
+	if err := json.Unmarshal(cmd.Stdin, &sent); err != nil || len(sent) != 2 || sent["message"] != "Superseded by a newer review" ||
+		sent["event"] != "DISMISS" {
+		t.Errorf("stdin = %s, %v", cmd.Stdin, err)
 	}
 	if !cmd.Mutates {
 		t.Error("dismissal must be marked Mutates")
@@ -176,6 +182,43 @@ func TestDismissReviewDryRun(t *testing.T) {
 	}
 	if len(dry.Planned) != 1 || len(inner.Calls) != 0 {
 		t.Errorf("planned = %d, executed = %d", len(dry.Planned), len(inner.Calls))
+	}
+}
+
+// CreateReview sends its body, which may quote the PR, as JSON on gh's
+// stdin with the commit and the event: argv (which a failing call logs)
+// holds none of it, and a failing call's error neither.
+func TestCreateReviewSendsItsBodyOnStdin(t *testing.T) {
+	f := &execx.Fake{Rules: []execx.Rule{{
+		Prefix: []string{"gh", "api", "-X", "POST"},
+		Result: execx.Result{Stdout: []byte(`{"id":88,"state":"APPROVED","html_url":"u88","user":{"login":"zhuravel","type":"User"}}`)},
+	}}}
+	c := &Client{Run: f}
+	sha := strings.Repeat("b", 40)
+	body := "Auto-approved: magnum's review found no blocking problems.\n\n<!-- magnum:auto-approval head=bbbbbbb -->"
+	r, err := c.CreateReview(context.Background(), "talkable", "talkable", 5, sha, "APPROVE", body)
+	if err != nil || r.ID != 88 || r.UserLogin != "zhuravel" {
+		t.Fatalf("review = %+v, %v", r, err)
+	}
+	cmd := f.Calls[0]
+	want := []string{"api", "-X", "POST", "repos/talkable/talkable/pulls/5/reviews", "--hostname", "github.com", "--input", "-"}
+	if !reflect.DeepEqual(cmd.Args, want) {
+		t.Errorf("args = %q", cmd.Args)
+	}
+	var sent map[string]any
+	if err := json.Unmarshal(cmd.Stdin, &sent); err != nil || len(sent) != 3 || sent["commit_id"] != sha || sent["event"] != "APPROVE" ||
+		sent["body"] != body {
+		t.Errorf("stdin = %s, %v", cmd.Stdin, err)
+	}
+	if !cmd.Mutates {
+		t.Error("a review must be marked Mutates")
+	}
+
+	failing := &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"gh", "api"}, Result: execx.Result{
+		Stdout: compact(t, `{"message":"Validation Failed","status":"422"}`), Stderr: []byte("gh: Validation Failed (HTTP 422)\n"), Code: 1}}}}
+	_, err = (&Client{Run: failing}).CreateReview(context.Background(), "talkable", "talkable", 5, sha, "REQUEST_CHANGES", "The refund path double-counts.")
+	if err == nil || strings.Contains(err.Error(), "refund") {
+		t.Fatalf("err = %v, want one without the body", err)
 	}
 }
 

@@ -46,7 +46,11 @@ type VerdictPayload struct {
 func KVPRManualVerdict(prID int64) string { return fmt.Sprintf("pr.%d.manual_verdict", prID) }
 
 // requestVerdict posts a manual APPROVE or REQUEST_CHANGES on the PR's
-// reviewed head and records it as the PR's latest review.
+// reviewed head and records it as the PR's latest review, with
+// review.manual_verdict_begin, review.manual_verdict or
+// review.manual_verdict_failed. A changes request withdraws the operator's
+// standing automatic approval first (withdrawForChanges): it would still
+// count for merging.
 func (e *Engine) requestVerdict(ctx context.Context, p VerdictPayload, event string) (string, error) {
 	repo, pr, err := e.resolve(ctx, p.PRTarget)
 	if err != nil {
@@ -78,8 +82,18 @@ func (e *Engine) requestVerdict(ctx context.Context, p VerdictPayload, event str
 	if gh == nil {
 		return "", fmt.Errorf("identity %q has no GitHub client", pr.Identity)
 	}
+	if event == "REQUEST_CHANGES" {
+		if err := e.withdrawForChanges(ctx, repo, pr, label); err != nil {
+			return "", err
+		}
+	}
+	subject := prSubject(repo, pr.Number)
+	e.event(ctx, "info", subject, "review.manual_verdict_begin", fmt.Sprintf("posting %s on %s at %s as %s", strings.ToLower(event), label,
+		textx.ShortSHA(reviewed), pr.Identity), map[string]any{"event": event, "sha": reviewed, "identity": pr.Identity})
 	rev, err := gh.CreateReview(ctx, repo.Owner, repo.Name, pr.Number, reviewed, event, verdictBody(event, p.Message, reviewed, sum))
 	if err != nil {
+		e.event(ctx, "warn", subject, "review.manual_verdict_failed", fmt.Sprintf("could not post %s on %s as %s: %v", strings.ToLower(event), label,
+			pr.Identity, err), map[string]any{"event": event, "sha": reviewed, "identity": pr.Identity})
 		return "", fmt.Errorf("post %s on %s: %w", strings.ToLower(event), label, err)
 	}
 	state := map[string]string{"APPROVE": "APPROVED", "REQUEST_CHANGES": "CHANGES_REQUESTED"}[event]
@@ -96,9 +110,38 @@ func (e *Engine) requestVerdict(ctx context.Context, p VerdictPayload, event str
 	done := map[string]string{"APPROVE": "approved", "REQUEST_CHANGES": "requested changes on"}[event]
 	msg := fmt.Sprintf("%s %s at %s as %s: %s", done, label, textx.ShortSHA(reviewed), rev.UserLogin, rev.HTMLURL)
 	e.seeStalemates(ctx, pr.ID) // the operator decided: stalemate.go
-	e.event(ctx, "info", prSubject(repo, pr.Number), "review.manual_verdict", msg,
+	e.event(ctx, "info", subject, "review.manual_verdict", msg,
 		map[string]any{"event": event, "review_id": rev.ID, "sha": reviewed, "identity": pr.Identity})
 	return msg, nil
+}
+
+// withdrawForChanges withdraws the operator's standing automatic approval
+// of pr (label) as its identity before `magnum request-changes` posts:
+// GitHub would count it for merging next to the changes request. One being
+// withdrawn already, or none, is nothing to do; one being posted, or a
+// withdrawal GitHub did not take, refuses the changes request (magnum tries
+// the withdrawal again, and the operator asks again).
+func (e *Engine) withdrawForChanges(ctx context.Context, repo store.Repo, pr store.PR, label string) error {
+	e.autoMu.Lock() // a round's goroutine may be approving the PR as the operator (autoApproveRound)
+	defer e.autoMu.Unlock()
+	live, ok, err := e.st.LiveAutoApproval(ctx, pr.ID)
+	switch {
+	case err != nil:
+		return err
+	case !ok || live.State == store.AutoDismissing:
+		return nil
+	case live.State == store.AutoPosting:
+		return fmt.Errorf("an approval of yours on %s is being posted: try again in a moment", label)
+	}
+	gh, _ := e.autoClient(e.cfg.IdentityByName(live.Identity))
+	if gh == nil {
+		return fmt.Errorf("identity %q has no GitHub client to withdraw your approval of %s (review %d): dismiss it on GitHub first", live.Identity,
+			label, live.ReviewID)
+	}
+	if err := e.withdrawAutoApproval(ctx, repo, pr, live, gh, store.AutoEndedOperator, RequestChangesMessage); err != nil {
+		return fmt.Errorf("withdraw your approval of %s first: %w; no changes were requested (magnum tries the withdrawal again)", label, err)
+	}
+	return nil
 }
 
 // ApproveAsFor is the identity A (on a row GitHub blocks on the operator)
@@ -124,7 +167,11 @@ func ApproveAsFor(cfg *config.Config, fullName string) *config.Identity {
 // (their changes request or review by hand, a dismissal, magnum unapprove)
 // and a manual verdict posted after magnum's round both keep auto-approval
 // from overriding the operator, who here is the one asking: A lifts their
-// own ✗ on purpose. sum is magnum's latest posted round of pr (nil: none).
+// own ✗ on purpose. What auto-approval holds a PR back for besides
+// (autoGateRefusal: a reviewer's missing report, a PR its watch would not
+// review on its own, the agents' instructions, the head's checks) does not
+// refuse it either: the operator decides by hand, the board shows those.
+// sum is magnum's latest posted round of pr (nil: none).
 func OperatorApprovalRefusal(pr store.PR, sum *store.ReviewSummary, login string) string {
 	if sum != nil {
 		id := sum.ReviewID
@@ -178,8 +225,12 @@ func (e *Engine) approveAsOperator(ctx context.Context, repo store.Repo, pr stor
 		return "", fmt.Errorf("approve %s as %s: %w", label, login, err)
 	}
 	body := verdictBody(event, p.Message, pr.HeadSHA, sum) + "\n" + AutoApprovalMarker(pr.HeadSHA)
+	subject := prSubject(repo, pr.Number)
+	data := map[string]any{"event": event, "sha": pr.HeadSHA, "identity": id.Name, "approval_id": a.ID}
+	e.event(ctx, "info", subject, "review.manual_verdict_begin", fmt.Sprintf("approving %s at %s as %s", label, textx.ShortSHA(pr.HeadSHA), login), data)
 	rev, err := gh.CreateReview(ctx, repo.Owner, repo.Name, pr.Number, pr.HeadSHA, event, body)
 	if err != nil { // as postAutoApproval: a 403 or 422 is final, any other may be tried again by auto-approval
+		e.event(ctx, "warn", subject, "review.manual_verdict_failed", fmt.Sprintf("could not approve %s as %s: %v", label, login, err), data)
 		var apiErr *github.APIError
 		final := errors.Is(err, github.ErrForbidden) || (errors.As(err, &apiErr) && apiErr.Status == 422)
 		if uerr := e.st.TransitionAutoApproval(ctx, a.ID, []string{store.AutoPosting}, store.AutoFailed, func(u *store.AutoApprovalUpdate) {
@@ -202,8 +253,8 @@ func (e *Engine) approveAsOperator(ctx context.Context, repo store.Repo, pr stor
 	}
 	msg := fmt.Sprintf("approved %s at %s as %s: %s", label, textx.ShortSHA(pr.HeadSHA), cmp.Or(rev.UserLogin, login), rev.HTMLURL)
 	e.seeStalemates(ctx, pr.ID) // the operator decided: stalemate.go
-	e.event(ctx, "info", prSubject(repo, pr.Number), "review.manual_verdict", msg,
-		map[string]any{"event": event, "review_id": rev.ID, "sha": pr.HeadSHA, "identity": id.Name, "approval_id": a.ID})
+	data["review_id"] = rev.ID
+	e.event(ctx, "info", subject, "review.manual_verdict", msg, data)
 	return msg + " (withdrawn when a later review finds something to fix)", nil
 }
 

@@ -98,3 +98,20 @@ func TestDWithdrawsTheAutoApprovalAfterAsking(t *testing.T) {
 	mustContain(t, viewOf(m), "magnum no longer approves it as you: you commented on it by hand")
 	mustNotContain(t, viewOf(m), "D withdraw approval")
 }
+
+// The card says why magnum does not approve a PR as the operator although
+// its review left nothing to fix; a standing approval says its own instead.
+func TestTheCardSaysWhyMagnumDoesNotApproveAsYou(t *testing.T) {
+	m, _, _ := newBoard(t, 170, 40, PRBoardOptions{})
+	refused := actPR(func(r *PRBoardRow) {
+		r.ActivityAt, r.AutoRefused = ago(time.Hour), "its head's checks fail (magnum approves it once they pass)"
+	})
+	m, _ = send(t, m, prbDataMsg{rows: []PRBoardRow{refused}})
+	c, _ := send(t, m, keyMsg("enter"))
+	mustContain(t, viewOf(c), "magnum does not approve it as you: its head's checks fail")
+
+	approved := autoRow(func(r *PRBoardRow) { r.AutoRefused = "its head's checks fail" })
+	m, _ = send(t, m, prbDataMsg{rows: []PRBoardRow{approved}})
+	c, _ = send(t, m, keyMsg("enter"))
+	mustNotContain(t, viewOf(c), "magnum does not approve it as you")
+}

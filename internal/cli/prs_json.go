@@ -88,6 +88,11 @@ type prsJSONRow struct {
 	// magnum no longer approves the PR as you; "" when it may.
 	AutoApproved       *prsJSONAutoApproval `json:"auto_approved"`
 	AutoApproveStopped string               `json:"auto_approve_stopped"`
+	// AutoApproveRefused is why magnum does not approve the PR as you
+	// although its review of the head left nothing to fix (a reviewer's
+	// missing report, a PR its watch would not review on its own, a change
+	// to the review agents' instructions, the head's checks); "" otherwise.
+	AutoApproveRefused string `json:"auto_approve_refused"`
 	// ApproveAs is whom the board's A approves a PR that needs you as (the
 	// watch's auto_approve_as) and why it would be refused now; null when
 	// the PR does not need you or the watch names none.
@@ -280,7 +285,7 @@ func prsJSONOf(r tui.PRBoardRow) prsJSONRow {
 		CodexFlag: r.CodexFlag, CodexFlagDetail: r.CodexFlagSentence, MuteReason: r.MuteReason,
 		RequestedToMe: mapPtr(r.RequestedToMe, prsJSONRequestOf), LastRequest: mapPtr(r.LastRequest, prsJSONRequestOf),
 		Requests: mapList(r.Requests, prsJSONRequestOf), ClosedAt: r.ClosedAt, Recent: r.Recent, MergedUnreviewed: r.MergedUnreviewed, FlagDismissed: r.FlagDismissed,
-		NeedsMe: r.NeedsMe, ReviewDecision: r.ReviewDecision, AutoApproveStopped: r.AutoStopped,
+		NeedsMe: r.NeedsMe, ReviewDecision: r.ReviewDecision, AutoApproveStopped: r.AutoStopped, AutoApproveRefused: r.AutoRefused,
 		AutoApproved: mapPtr(r.AutoApproved, func(a tui.AutoApproval) prsJSONAutoApproval {
 			return prsJSONAutoApproval{ReviewID: a.ReviewID, Head: a.Head, URL: a.URL, At: a.At}
 		}),

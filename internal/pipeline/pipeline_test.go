@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -672,6 +673,92 @@ func TestClaudeLoginRequiredSkipsReviewerOnly(t *testing.T) {
 		t.Errorf("claude prompted while logged out")
 	}
 	mustContain(t, "judge prompt", e.ag.submitsFor(agents.RoleJudge)[0].Text, "claude-review: missing (login_required)")
+	// The PR's record of the round names the reviewer the judge went
+	// without, which auto-approval reads (a logged-out role has no run row).
+	rec, ok := ReadMissingReports(e.ctx, e.st, e.pr.ID)
+	if !ok || rec.Round != res.Round || rec.Head != target ||
+		!slices.Equal(rec.Missing, []MissingReport{{Role: string(agents.RoleClaude), Status: string(agents.HealthLoginRequired)}}) {
+		t.Fatalf("record = %+v, %v", rec, ok)
+	}
+	if got := rec.String(); got != "claude-review (login_required)" {
+		t.Errorf("record names %q", got)
+	}
+}
+
+// A round whose judge heard every reviewer records that nothing was
+// missing, so a continue of it does not go by the run rows alone.
+func TestARoundThatHeardEveryReviewerRecordsNothingMissing(t *testing.T) {
+	e := newEnv(t)
+	e.ag.behaviors[agents.RoleJudge] = []behavior{e.judgePosts(517, "COMMENTED", "COMMENT").behavior(t)}
+	res, err := e.r.RunRound(e.ctx, e.input(KindInitial))
+	if err != nil || res.Outcome != OutcomePosted {
+		t.Fatalf("result = %+v, %v", res, err)
+	}
+	if rec, ok := ReadMissingReports(e.ctx, e.st, e.pr.ID); !ok || rec.Round != res.Round || len(rec.Missing) != 0 {
+		t.Fatalf("record = %+v, %v", rec, ok)
+	}
+}
+
+// A continue counts only the roles its paused round ran: one that never ran
+// there (here codex-review, which has no run of the round) is no missing
+// report, so the judge's no_findings_event stays the usual one; a role the
+// paused round's judge went without (a logged-out one, which leaves no run
+// row) stays missing.
+func TestAContinueCountsOnlyTheRolesItsPausedRoundRan(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		paused      []MissingReport // the paused round's record (nil: none)
+		wantMissing map[agents.Role]string
+	}{
+		{"no record", nil, map[agents.Role]string{}},
+		{"a logged-out reviewer", []MissingReport{{Role: string(agents.RoleCodexReview), Status: "login_required"}},
+			map[agents.Role]string{agents.RoleCodexReview: "login_required"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t)
+			dir := e.reportDir()
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "claude-review.md"), []byte("old claude"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := e.st.CreateRun(e.ctx, store.Run{PRID: e.pr.ID, Round: 1, Role: string(agents.RoleClaude), Kind: store.RunInitial,
+				TargetSHA: target, State: store.RunVerified, Outcome: store.Ptr(ReportOK), ReportPath: store.Ptr(filepath.Join(dir, "claude-review.md"))}); err != nil {
+				t.Fatal(err)
+			}
+			if tc.paused != nil {
+				b, _ := json.Marshal(MissingReports{Round: 1, Head: target, Missing: tc.paused})
+				if err := e.st.SetKV(e.ctx, KVMissingReports(e.pr.ID), string(b)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			e.ag.behaviors[agents.RoleJudge] = []behavior{e.judgePosts(518, "COMMENTED", "COMMENT").behavior(t)}
+			in := e.input(KindContinue)
+			in.ContinueRunID = "r-20261003T100000-7"
+			res, err := e.r.RunRound(e.ctx, in)
+			if err != nil || res.Outcome != OutcomePosted {
+				t.Fatalf("result = %+v, %v", res, err)
+			}
+			if res.Reports[agents.RoleClaude].Status != ReportOK {
+				t.Errorf("claude report = %+v", res.Reports[agents.RoleClaude])
+			}
+			for _, role := range []agents.Role{agents.RoleCodexReview, agents.RoleSimplify} {
+				rep, ok := res.Reports[role]
+				if want, missing := tc.wantMissing[role]; missing != ok || ok && rep.Status != want {
+					t.Errorf("%s report = %+v (listed %v), want missing %q", role, rep, ok, want)
+				}
+			}
+			text := e.ag.submitsFor(agents.RoleJudge)[0].Text
+			if len(tc.wantMissing) == 0 && strings.Contains(text, ": missing (") {
+				t.Errorf("the continue's prompt names a missing report:\n%s", text)
+			}
+			rec, ok := ReadMissingReports(e.ctx, e.st, e.pr.ID)
+			if !ok || rec.Round != 1 || len(rec.Missing) != len(tc.wantMissing) {
+				t.Fatalf("record = %+v, %v", rec, ok)
+			}
+		})
+	}
 }
 
 func TestContinueSkipsReviewersAndReusesReports(t *testing.T) {
@@ -707,8 +794,8 @@ func TestContinueSkipsReviewersAndReusesReports(t *testing.T) {
 	}
 	judge := e.ag.submitsFor(agents.RoleJudge)
 	mustContain(t, "continue prompt", judge[0].Text, "mode: continue", "run_id: r-20261003T100000-7")
-	if res.Reports[agents.RoleClaude].Status != ReportOK || res.Reports[agents.RoleCodexReview].Status != ReportMissing {
-		t.Errorf("reports = %+v", res.Reports)
+	if _, codex := res.Reports[agents.RoleCodexReview]; res.Reports[agents.RoleClaude].Status != ReportOK || codex {
+		t.Errorf("reports = %+v (codex-review never ran in the paused round)", res.Reports)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "codex-judge.json.prev")); err != nil {
 		t.Errorf("stale codex-judge.json not set aside: %v", err)

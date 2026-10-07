@@ -51,7 +51,9 @@ func newRequestChangesCmd(c *Context) *cobra.Command {
 		"Post a REQUEST_CHANGES review on the head magnum reviewed, as the PR's posting identity, with a body "+
 			"that names magnum's review and its findings (and -m's words first). It stands until you approve "+
 			"or dismiss it: magnum's later rounds never dismiss it as their own stale review. The PR's head must "+
-			"still be the reviewed one (--force posts on the reviewed head anyway).")
+			"still be the reviewed one (--force posts on the reviewed head anyway). An approval magnum posted as "+
+			"you (auto_approve_as) that stands on the PR is withdrawn first, since GitHub would count it next to "+
+			"the changes request.")
 }
 
 func newVerdictCmd(c *Context, name, req, summary, long string) *cobra.Command {

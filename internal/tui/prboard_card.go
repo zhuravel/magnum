@@ -218,6 +218,8 @@ func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
 	}
 	if r.AutoStopped != "" {
 		add(p.st.Dim.Render(truncate("magnum no longer approves it as you: "+oneLine(r.AutoStopped)+" (magnum unapprove --resume)", inner)))
+	} else if r.AutoRefused != "" && r.AutoApproved == nil {
+		add(p.pal.yellow.Render(truncate("magnum does not approve it as you: "+oneLine(r.AutoRefused), inner)))
 	}
 	if r.NeedsMe != "" && r.ApproveAs == nil { // A refuses: no auto_approve_as to approve as
 		add(p.pal.yellow.Render(truncate(onlyYourApproval(rowActDefs[actBrowser].key), inner)))
