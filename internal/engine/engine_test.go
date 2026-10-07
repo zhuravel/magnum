@@ -16,6 +16,7 @@ import (
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 func TestFirstSyncIsBaseline(t *testing.T) {
@@ -1005,6 +1006,7 @@ func TestReleasedPRReopens(t *testing.T) {
 }
 
 func TestKickDaemonSignalsThePidfileProcess(t *testing.T) {
+	storetest.Serial(t) // swaps processCommand, and SIGUSR1 reaches the whole test binary
 	h := newHarness(t)
 	if pid, err := KickDaemon(h.layout); err != nil || pid != 0 {
 		t.Fatalf("no daemon: pid=%d err=%v", pid, err)

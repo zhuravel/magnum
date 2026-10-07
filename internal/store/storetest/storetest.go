@@ -86,6 +86,33 @@ func Open(t testing.TB, path string) *store.Store {
 	return st
 }
 
+// marked holds the tests Parallel already ran in parallel or Serial keeps
+// serial.
+var marked sync.Map
+
+// Parallel runs t in parallel with the other tests (t.Parallel) the first
+// time it is called for t, so a fixture helper can call it and a test that
+// builds two fixtures does not call t.Parallel twice (which panics). A test
+// that called Serial first stays serial.
+func Parallel(t *testing.T) {
+	t.Helper()
+	if _, done := marked.LoadOrStore(t, true); !done {
+		t.Cleanup(func() { marked.Delete(t) })
+		t.Parallel()
+	}
+}
+
+// Serial keeps t serial when its fixture helpers call Parallel: for a test
+// that swaps a package variable or signals the test binary. Go runs every
+// serial test before it releases the parallel ones, so none of them sees
+// the swap. Call it before the helpers.
+func Serial(t *testing.T) {
+	t.Helper()
+	if _, done := marked.LoadOrStore(t, true); !done {
+		t.Cleanup(func() { marked.Delete(t) })
+	}
+}
+
 // Clock is a settable clock that is safe for concurrent use. Its Now is what
 // tests hand to store.Store.Clock and the other components' clocks.
 type Clock struct {

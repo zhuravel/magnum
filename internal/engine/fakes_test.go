@@ -32,25 +32,6 @@ import (
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
-// ---- clock ----
-
-type fakeClock struct {
-	mu sync.Mutex
-	t  time.Time
-}
-
-func (c *fakeClock) Now() time.Time {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.t
-}
-
-func (c *fakeClock) Advance(d time.Duration) {
-	c.mu.Lock()
-	c.t = c.t.Add(d)
-	c.mu.Unlock()
-}
-
 // ---- GitHub ----
 
 type prSpec struct {
@@ -1452,7 +1433,7 @@ type harness struct {
 	st     *store.Store
 	cfg    *config.Config
 	layout paths.Layout
-	clock  *fakeClock
+	clock  *storetest.Clock
 	gh     *fakeGH
 	hd     *fakeHerdr
 	ag     *fakeAgents
@@ -1464,8 +1445,12 @@ type harness struct {
 	app    *fakeAppIdentity
 }
 
+// newHarness builds a daemon on fakes with a registry and a config of its
+// own, and runs t in parallel with the other tests (storetest.Parallel;
+// storetest.Serial before it keeps a test serial).
 func newHarness(t *testing.T, mods ...func(*harness)) *harness {
 	t.Helper()
+	storetest.Parallel(t)
 	home := t.TempDir()
 	cfgText := strings.ReplaceAll(testConfigTOML, "HOME", home)
 	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(cfgText), 0o600); err != nil {
@@ -1480,7 +1465,7 @@ func newHarness(t *testing.T, mods ...func(*harness)) *harness {
 		t.Fatal(err)
 	}
 	st := storetest.Open(t, filepath.Join(home, "state", "magnum.db"))
-	clock := &fakeClock{t: time.Date(2026, 10, 5, 10, 0, 0, 0, time.Local)}
+	clock := storetest.NewClock(time.Date(2026, 10, 5, 10, 0, 0, 0, time.Local))
 	st.Clock = clock.Now
 
 	h := &harness{t: t, ctx: context.Background(), st: st, cfg: cfg, layout: layout, clock: clock,
@@ -1568,7 +1553,7 @@ func (h *harness) startup() {
 	h.settle()
 }
 
-func (h *harness) advance(d time.Duration) { h.clock.Advance(d) }
+func (h *harness) advance(d time.Duration) { h.clock.Add(d) }
 
 func (h *harness) pr(n int) store.PR {
 	h.t.Helper()

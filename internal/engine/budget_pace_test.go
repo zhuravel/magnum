@@ -127,7 +127,7 @@ func TestBudgetPaceWarnsAgainInANewWindow(t *testing.T) {
 		t.Fatalf("first window toasts = %v", got)
 	}
 
-	h.clock.Advance(first.Sub(h.clock.Now()) + time.Duration(0.18*float64(paceWeek)))
+	h.clock.Add(first.Sub(h.clock.Now()) + time.Duration(0.18*float64(paceWeek)))
 	u.set(50, first.Add(paceWeek))
 	h.tick()
 	if got := paceToasts(h); len(got) != 2 {

@@ -133,7 +133,7 @@ func newPaneHarness(t *testing.T, mods ...func(*harness)) *paneHarness {
 		Config: p.cfg, Layout: p.layout, Logger: p.d.Logger, Herdr: p.hd, Now: p.clock.Now,
 		Sleep: func(ctx context.Context, d time.Duration) error {
 			if p.step > 0 {
-				p.clock.Advance(p.step)
+				p.clock.Add(p.step)
 			}
 			return sleepCtx(ctx, time.Millisecond)
 		},

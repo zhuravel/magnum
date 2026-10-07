@@ -13900,10 +13900,22 @@ func Open(t testing.TB, path string) *store.Store
     Open seeds path (see Seed) and opens it with store.Open; the store is closed
     when the test ends.
 
+func Parallel(t *testing.T)
+    Parallel runs t in parallel with the other tests (t.Parallel) the first time
+    it is called for t, so a fixture helper can call it and a test that builds
+    two fixtures does not call t.Parallel twice (which panics). A test that
+    called Serial first stays serial.
+
 func Seed(t testing.TB, path string)
     Seed writes a migrated database to path, creating its directory (0700),
     for code under test that opens the registry itself. A file already at path
     is left as it is.
+
+func Serial(t *testing.T)
+    Serial keeps t serial when its fixture helpers call Parallel: for a test
+    that swaps a package variable or signals the test binary. Go runs every
+    serial test before it releases the parallel ones, so none of them sees the
+    swap. Call it before the helpers.
 
 
 TYPES

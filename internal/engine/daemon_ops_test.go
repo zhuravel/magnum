@@ -12,6 +12,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // events are the events of kind, oldest first.
@@ -236,6 +237,7 @@ func TestNewBuildDoesNotRestartWhenItFailsOrNothingRestartsTheDaemon(t *testing.
 // A drain whose drainer died (its terminal closed: SIGHUP) used to hold
 // every round until the next restart: the daemon lifts it and says so.
 func TestDrainWhoseDrainerIsGoneIsLifted(t *testing.T) {
+	storetest.Serial(t) // swaps processCommand
 	h := newHarness(t)
 	h.startup()
 	defer func(orig func(int) (string, string, error)) { processCommand = orig }(processCommand)

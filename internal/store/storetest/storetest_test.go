@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -47,6 +48,27 @@ func TestSeedLeavesAnExistingRegistryAlone(t *testing.T) {
 	if err != nil || fi.Mode().Perm() != 0o600 {
 		t.Fatalf("mode = %v, %v, want 0600", fi.Mode().Perm(), err)
 	}
+}
+
+func TestParallelRunsATestInParallelOnceAndNeverAfterSerial(t *testing.T) {
+	var order []string
+	t.Cleanup(func() {
+		if want := []string{"serial", "after serial", "after parallel", "parallel"}; !slices.Equal(order, want) {
+			t.Errorf("order = %q, want %q", order, want)
+		}
+	})
+	t.Run("serial", func(t *testing.T) {
+		Serial(t)
+		Parallel(t)
+		order = append(order, "serial")
+	})
+	order = append(order, "after serial")
+	t.Run("parallel", func(t *testing.T) {
+		Parallel(t)
+		Parallel(t) // a second fixture in the same test
+		order = append(order, "parallel")
+	})
+	order = append(order, "after parallel")
 }
 
 func TestClockMovesOnlyWhenTold(t *testing.T) {
