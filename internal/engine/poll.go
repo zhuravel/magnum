@@ -565,9 +565,10 @@ func ciStatus(d github.PRDetails) *store.CIStatus {
 	return ci
 }
 
-// prFromInput builds the PR row a new PR is about to get (for Classify).
+// prFromInput builds the PR row a new PR is about to get (for Classify; its
+// repository for manual_repos).
 func prFromInput(in store.GitHubPR, now time.Time) store.PR {
-	pr := store.PR{Number: in.Number, HeadSHA: in.HeadSHA, IsDraft: in.IsDraft, Labels: in.Labels,
+	pr := store.PR{RepoID: in.RepoID, Number: in.Number, HeadSHA: in.HeadSHA, IsDraft: in.IsDraft, Labels: in.Labels,
 		AuthorLogin: in.AuthorLogin, AuthorType: in.AuthorType, AuthorAssociation: in.AuthorAssociation, HeadChangedAt: now}
 	if in.IsCrossRepo != nil {
 		pr.IsCrossRepo = *in.IsCrossRepo

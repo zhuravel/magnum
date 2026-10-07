@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -65,6 +67,30 @@ func TestManualRepositoryReviewsOnlyOnRequest(t *testing.T) {
 	h.advance(10 * time.Minute)
 	h.tick()
 	reqWantRounds(t, h, 1)
+}
+
+// A new PR of a manual repository goes in ineligible on the poll that first
+// sees it: the classification of a new PR knows its repository, so it is
+// neither inserted queued nor logged as a PR of no repository.
+func TestNewPRInAManualRepositoryGoesInIneligible(t *testing.T) {
+	var logs syncBuffer
+	h := newHarness(t, func(h *harness) {
+		h.d.Logger = slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	})
+	h.cfg.Watches[0].ManualRepos = []string{"talkable"}
+	h.open(prSpec{n: 1, head: "base1"})
+	h.startup()
+	h.tick() // first sync: #1 baseline
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b1"})
+	h.tick()
+	wantManual(t, h, 2)
+	skipped := kindOf(subjectEvents(t, h, "pr:talkable/talkable#2"), "pr.ineligible")
+	if len(skipped) != 1 || skipped[0].Message != "new PR skipped: "+manualReason {
+		t.Fatalf("pr.ineligible events: %+v, want the new PR skipped", skipped)
+	}
+	if strings.Contains(logs.String(), "eligibility: repository") {
+		t.Fatalf("a new PR's classification read no repository:\n%s", logs.String())
+	}
 }
 
 // A PR already waiting when its repository joins manual_repos becomes
