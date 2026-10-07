@@ -45,16 +45,6 @@ const (
 	slotPath = "/Users/x/Projects/talkable.review1"
 )
 
-// testClock is a settable clock shared by the store and the runner; Sleep
-// advances it.
-type testClock struct {
-	mu  sync.Mutex
-	now time.Time
-}
-
-func (c *testClock) Now() time.Time      { c.mu.Lock(); defer c.mu.Unlock(); return c.now }
-func (c *testClock) Add(d time.Duration) { c.mu.Lock(); c.now = c.now.Add(d); c.mu.Unlock() }
-
 // submitCall is one Submit the pipeline made.
 type submitCall struct {
 	Run  store.Run
@@ -95,6 +85,10 @@ type fakeAgents struct {
 	// blocked: the next n Submits of a role are rejected before sending
 	// (herdr agent_blocked): run failed, agents.ErrBlocked.
 	blocked map[agents.Role]int
+	// hangs: a role's Submit, once its run is working, returns only when
+	// ctx ends (or after 10 s, an error): a turn still in flight when the
+	// round cancels it, whose waits cannot move the shared clock before.
+	hangs map[agents.Role]bool
 	// switches are the SwitchModel calls; switchErr fails them.
 	switches  []switchCall
 	switchErr error
@@ -234,7 +228,7 @@ func (f *fakeAgents) Submit(ctx context.Context, run store.Run, text string) err
 			f.behaviors[role] = q[1:]
 		}
 	}
-	refuse := f.refuse[role]
+	refuse, hangs := f.refuse[role], f.hangs[role]
 	f.mu.Unlock()
 	if refuse != nil {
 		return refuse
@@ -250,6 +244,13 @@ func (f *fakeAgents) Submit(ctx context.Context, run store.Run, text string) err
 		u.Set("working_seen_at", f.st.Clock())
 	}); err != nil {
 		return err
+	}
+	if hangs {
+		select {
+		case <-ctx.Done():
+		case <-time.After(10 * time.Second):
+			return fmt.Errorf("fake submit %s: never cancelled", run.Role)
+		}
 	}
 	if b == nil {
 		return nil
@@ -776,7 +777,7 @@ type env struct {
 	t      *testing.T
 	ctx    context.Context
 	st     *store.Store
-	clock  *testClock
+	clock  *storetest.Clock // shared by the store and the runner; Sleep advances it
 	cfg    *config.Config
 	layout paths.Layout
 	repo   store.Repo
@@ -791,11 +792,15 @@ type env struct {
 	sess   map[agents.Role]store.Session
 }
 
+// newEnv builds a round on fakes with a registry of its own, and runs t in
+// parallel with the other tests (storetest.Parallel; storetest.Serial before
+// it keeps a test serial).
 func newEnv(t *testing.T) *env {
 	t.Helper()
+	storetest.Parallel(t)
 	ctx := context.Background()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "state", "magnum.db"))
-	clk := &testClock{now: t0}
+	clk := storetest.NewClock(t0)
 	st.Clock = clk.Now
 
 	repo, err := st.UpsertRepo(ctx, store.Repo{NodeID: "R_1", Owner: "talkable", Name: "talkable", WatchOwner: "talkable",

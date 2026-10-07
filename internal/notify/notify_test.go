@@ -89,17 +89,14 @@ func (f *fakeStore) ShouldSend(_ context.Context, key string, _ time.Duration) (
 	return f.send, f.err
 }
 
-type clock struct{ t time.Time }
+func newClock() *storetest.Clock {
+	return storetest.NewClock(time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC))
+}
 
-func (c *clock) now() time.Time          { return c.t }
-func (c *clock) advance(d time.Duration) { c.t = c.t.Add(d) }
-
-func newClock() *clock { return &clock{t: time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)} }
-
-func realStore(t *testing.T, c *clock) *store.Store {
+func realStore(t *testing.T, c *storetest.Clock) *store.Store {
 	t.Helper()
 	s := storetest.Open(t, filepath.Join(t.TempDir(), "magnum.db"))
-	s.Clock = c.now
+	s.Clock = c.Now
 	return s
 }
 
@@ -155,14 +152,14 @@ func TestToastDedupeWithRealStore(t *testing.T) {
 	if sent, err := n.Toast(ctx, "codex-login", "Codex", "needs login", 10*time.Minute); !sent || err != nil {
 		t.Fatalf("first = %v, %v", sent, err)
 	}
-	c.advance(5 * time.Minute)
+	c.Add(5 * time.Minute)
 	if sent, err := n.Toast(ctx, "codex-login", "Codex", "needs login", 10*time.Minute); sent || err != nil {
 		t.Fatalf("within window = %v, %v; want suppressed", sent, err)
 	}
 	if sent, err := n.Toast(ctx, "other-key", "Other", "x", 10*time.Minute); !sent || err != nil {
 		t.Fatalf("other key = %v, %v; want sent", sent, err)
 	}
-	c.advance(6 * time.Minute)
+	c.Add(6 * time.Minute)
 	if sent, err := n.Toast(ctx, "codex-login", "Codex", "needs login", 10*time.Minute); !sent || err != nil {
 		t.Fatalf("after window = %v, %v; want sent", sent, err)
 	}
@@ -492,7 +489,7 @@ func TestToastFailedDeliveryReleasesDedupeKey(t *testing.T) {
 	// Herdr is back, and the retry is still inside the dedupe window.
 	h.showErr = nil
 	h.shows = nil
-	c.advance(time.Minute)
+	c.Add(time.Minute)
 	if sent, err := n.Toast(ctx, "codex-login", "Codex", "needs login", 10*time.Minute); !sent || err != nil {
 		t.Fatalf("retry Toast = %v, %v; want delivered (the failed send must not consume the window)", sent, err)
 	}
@@ -500,7 +497,7 @@ func TestToastFailedDeliveryReleasesDedupeKey(t *testing.T) {
 		t.Errorf("herdr shows = %v, want exactly the retry", h.shows)
 	}
 	// The successful delivery does arm the gate.
-	c.advance(time.Minute)
+	c.Add(time.Minute)
 	if sent, err := n.Toast(ctx, "codex-login", "Codex", "needs login", 10*time.Minute); sent || err != nil {
 		t.Fatalf("repeat Toast = %v, %v; want suppressed", sent, err)
 	}

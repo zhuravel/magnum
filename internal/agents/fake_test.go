@@ -20,15 +20,6 @@ import (
 
 var t0 = time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
 
-// testClock is a settable clock shared by the store and the manager.
-type testClock struct {
-	mu  sync.Mutex
-	now time.Time
-}
-
-func (c *testClock) Now() time.Time      { c.mu.Lock(); defer c.mu.Unlock(); return c.now }
-func (c *testClock) Add(d time.Duration) { c.mu.Lock(); c.now = c.now.Add(d); c.mu.Unlock() }
-
 // fakeHerdr is an in-memory herdr: workspaces, panes and agents, plus a
 // record of every call. errs injects an error per method name (persistent
 // until deleted).
@@ -517,7 +508,7 @@ type env struct {
 	t     *testing.T
 	ctx   context.Context
 	st    *store.Store
-	clock *testClock
+	clock *storetest.Clock // shared by the store and the manager
 	h     *fakeHerdr
 	run   *execx.Fake
 	cfg   *config.Config
@@ -532,11 +523,15 @@ type env struct {
 	logs                      *logSink
 }
 
+// newEnv builds a manager on fakes with a registry of its own, and runs t in
+// parallel with the other tests (storetest.Parallel; storetest.Serial before
+// it keeps a test serial).
 func newEnv(t *testing.T) *env {
 	t.Helper()
+	storetest.Parallel(t)
 	ctx := context.Background()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "state", "magnum.db"))
-	clk := &testClock{now: t0}
+	clk := storetest.NewClock(t0)
 	st.Clock = clk.Now
 
 	repo, err := st.UpsertRepo(ctx, store.Repo{NodeID: "R_1", Owner: "talkable", Name: "talkable", WatchOwner: "talkable",

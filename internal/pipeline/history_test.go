@@ -15,6 +15,7 @@ import (
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 func readHistory(t *testing.T, path string) (FilesHistory, string) {
@@ -325,6 +326,7 @@ func TestAHistoryGitCannotReadNeverStopsTheRound(t *testing.T) {
 // repository's whole history for long is cut at HistoryTimeout, and the
 // round goes on without it.
 func TestASlowHistoryIsCutShort(t *testing.T) {
+	storetest.Serial(t) // swaps HistoryTimeout
 	defer func(d time.Duration) { HistoryTimeout = d }(HistoryTimeout)
 	HistoryTimeout = 50 * time.Millisecond
 	e := newEnv(t)

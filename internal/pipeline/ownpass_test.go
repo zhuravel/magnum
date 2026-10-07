@@ -366,7 +366,10 @@ func TestAnOwnPassRefusedAgainEndsTheRoundAtOnce(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newEnv(t)
-			e.ag.behaviors[agents.RoleClaude] = []behavior{hang()}
+			// claude-review works until the round cancels its turn: its waits
+			// would otherwise move the shared clock through its whole timeout
+			// while the own pass is refused, and it would end timed out.
+			e.ag.hangs = map[agents.Role]bool{agents.RoleClaude: true}
 			in, restarts := goneJudge(t, e, tc.live, tc.err)
 			start := e.clock.Now()
 			res, err := e.r.RunRound(e.ctx, in)

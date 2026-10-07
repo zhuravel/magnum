@@ -106,7 +106,7 @@ func TestToastUrgentReleasesKeyWhenNothingDelivers(t *testing.T) {
 		t.Fatalf("ToastUrgent = %v, %v; want an error", sent, err)
 	}
 	h.showRes = shownOK
-	c.advance(time.Minute)
+	c.Add(time.Minute)
 	if sent, err := n.ToastUrgent(ctx, "leak:7", "T", "B", time.Hour); !sent || err != nil {
 		t.Fatalf("retry = %v, %v; want delivered (the failed attempt must not consume the window)", sent, err)
 	}

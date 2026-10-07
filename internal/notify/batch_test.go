@@ -9,11 +9,12 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/herdr"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
-func newBatcher(h *fakeHerdr, c *clock) (*Batcher, *Notifier) {
+func newBatcher(h *fakeHerdr, c *storetest.Clock) (*Batcher, *Notifier) {
 	n := &Notifier{Herdr: h, Enabled: true}
-	return &Batcher{Notifier: n, Key: "review-posted", Now: c.now}, n
+	return &Batcher{Notifier: n, Key: "review-posted", Now: c.Now}, n
 }
 
 func item(i int) Item {
@@ -50,7 +51,7 @@ func TestBatcherCoalescesIntoOneSummary(t *testing.T) {
 	b, _ := newBatcher(h, c)
 	for i := 1; i <= 3; i++ {
 		b.Add(item(i))
-		c.advance(10 * time.Second)
+		c.Add(10 * time.Second)
 	}
 
 	sent, err := b.Flush(context.Background())
@@ -117,12 +118,12 @@ func TestBatcherDueGatesOnWindow(t *testing.T) {
 	if b.Due() {
 		t.Errorf("Due immediately after the first Add")
 	}
-	c.advance(30 * time.Second)
+	c.Add(30 * time.Second)
 	b.Add(item(2)) // later items do not restart the window
 	if sent, _ := b.FlushDue(ctx); sent {
 		t.Fatalf("FlushDue sent before the 60s window elapsed")
 	}
-	c.advance(30 * time.Second) // 60s after the first item
+	c.Add(30 * time.Second) // 60s after the first item
 	if !b.Due() {
 		t.Fatalf("not Due 60s after the first item")
 	}
@@ -141,7 +142,7 @@ func TestBatcherWindowIsConfigurable(t *testing.T) {
 	b, _ := newBatcher(h, c)
 	b.Window = 5 * time.Second
 	b.Add(item(1))
-	c.advance(5 * time.Second)
+	c.Add(5 * time.Second)
 	if !b.Due() {
 		t.Errorf("custom 5s window not honoured")
 	}
@@ -209,7 +210,7 @@ func TestBatcherRetainedItemsStayDue(t *testing.T) {
 	h.showErr = errors.New("nope")
 	b, _ := newBatcher(h, c)
 	b.Add(item(1))
-	c.advance(time.Minute)
+	c.Add(time.Minute)
 	if _, err := b.FlushDue(context.Background()); err == nil {
 		t.Fatalf("want an error")
 	}
@@ -246,7 +247,7 @@ func TestBatcherDedupesRepeatedBatchesAcrossFlushes(t *testing.T) {
 	}
 	// The same review is reported again (for example a crash-resume
 	// re-adds it): the store gate suppresses the duplicate toast.
-	c.advance(time.Minute)
+	c.Add(time.Minute)
 	b.Add(item(1))
 	sent, err := b.Flush(ctx)
 	if sent || err != nil {
@@ -264,7 +265,7 @@ func TestBatcherDedupesRepeatedBatchesAcrossFlushes(t *testing.T) {
 		t.Errorf("toasts = %d, want 2", len(h.shows))
 	}
 	// After the dedupe window the original may toast again.
-	c.advance(DefaultBatchDedupe + time.Second)
+	c.Add(DefaultBatchDedupe + time.Second)
 	b.Add(item(1))
 	if sent, _ := b.Flush(ctx); !sent {
 		t.Errorf("item suppressed after the dedupe window")
@@ -355,7 +356,7 @@ func TestBatcherRetriesFailedDeliveryWithRealStore(t *testing.T) {
 
 	h.showErr = nil
 	h.shows = nil
-	c.advance(time.Second)
+	c.Add(time.Second)
 	sent, err := b.Flush(ctx)
 	if err != nil || !sent {
 		t.Fatalf("retry Flush = %v, %v; want the unchanged batch delivered, not suppressed", sent, err)
@@ -460,7 +461,7 @@ func TestBatcherItemWindowDedupesAcrossBatches(t *testing.T) {
 		t.Errorf("toast = %v; want only repo-b, alone", got)
 	}
 
-	c.advance(time.Hour)
+	c.Add(time.Hour)
 	b.Add(newRepoItem("talkable/repo-b"))
 	if sent, err := b.Flush(ctx); sent || err != nil {
 		t.Fatalf("repeat Flush = %v, %v; want suppressed", sent, err)
@@ -468,7 +469,7 @@ func TestBatcherItemWindowDedupesAcrossBatches(t *testing.T) {
 	if b.Pending() != 0 {
 		t.Errorf("suppressed items must be consumed")
 	}
-	c.advance(24 * time.Hour)
+	c.Add(24 * time.Hour)
 	b.Add(newRepoItem("talkable/repo-b"))
 	if sent, _ := b.Flush(ctx); !sent {
 		t.Errorf("item suppressed after its window")
