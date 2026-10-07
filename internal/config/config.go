@@ -344,7 +344,10 @@ type Watch struct {
 	// AutoApproveAs once its own review of the head found nothing that must
 	// be fixed before merging (engine autoapprove.go); empty = never (the
 	// default). AutoApproveAs is an [[identity]] of kind gh: the operator's
-	// own account, whose approval GitHub counts (an App's does not).
+	// own account, whose approval GitHub counts (an App's does not). With or
+	// without AutoApprove, the board's A on a PR that needs the operator
+	// and `magnum approve --as` post the operator's approval as it (engine
+	// verdict.go).
 	AutoApprove   []string `toml:"auto_approve"`
 	AutoApproveAs string   `toml:"auto_approve_as"`
 	// AutoApproveBody is the approval's one-line body, a template of

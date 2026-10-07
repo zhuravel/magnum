@@ -217,6 +217,20 @@ type PRBoardRow struct {
 	// (they dismissed one of its approvals, reviewed the PR by hand or ran
 	// magnum unapprove); "" when it may. The card says so.
 	AutoStopped string
+	// ApproveAs is whom A approves a NeedsMe row as: the watch's
+	// auto_approve_as, the operator's own account, whose approval GitHub
+	// counts. nil on a row that does not need the operator, or whose watch
+	// names none: A then refuses (only an approval by hand counts) and the
+	// card says so.
+	ApproveAs *ApproveAs
+}
+
+// ApproveAs is the operator's own account A approves a row that needs them
+// as: the identity the approval names, its login (the question names it),
+// and why the daemon would refuse the approval now, "" when it would not
+// (engine.OperatorApprovalRefusal).
+type ApproveAs struct {
+	Identity, Login, Refusal string
 }
 
 // AutoApproval is an approval magnum posted as the operator: GitHub's
@@ -659,6 +673,10 @@ func sanitizeRow(r PRBoardRow) PRBoardRow {
 	if r.LastRequest != nil {
 		q := cleanRequest(*r.LastRequest)
 		r.LastRequest = &q
+	}
+	if r.ApproveAs != nil {
+		a := ApproveAs{Identity: cleanText(r.ApproveAs.Identity), Login: cleanText(r.ApproveAs.Login), Refusal: cleanText(r.ApproveAs.Refusal)}
+		r.ApproveAs = &a
 	}
 	if r.Requests != nil {
 		qs := make([]RequestInfo, len(r.Requests))

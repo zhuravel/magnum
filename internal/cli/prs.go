@@ -387,6 +387,11 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 			out[i].NeedsMe = store.NeedsMe(nf, mine)
 		}
 		_ = prsAutoApprovals(ctx, st, ids, out) // a registry that cannot say leaves them out rather than the board
+
+		// With magnum's rounds read: whom A approves the rows that need you as (verdict.go).
+		if sums != nil {
+			_ = prsApproveAs(ctx, st, cfg, rows, sums, out)
+		}
 		if err := timings.fill(ctx, st, cfg, ids, out, inspNow()); err != nil {
 			return nil, err
 		}

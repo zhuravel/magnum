@@ -99,19 +99,40 @@ func releaseQuestion(target string) string {
 // says on which head and what magnum's review f concluded, its new findings
 // and the earlier ones still open (the FINDINGS cell's "3 open"), so the
 // decision is an informed one. A head that moved since is refused before
-// asking (actionRefusal): the screens cannot pass --force.
-func verdictQuestion(ref string, approve bool, f *FindingsInfo) string {
+// asking (actionRefusal): the screens cannot pass --force. as names the
+// operator's own account an approval goes as on a row GitHub blocks on them
+// ("" = the PR's posting identity): their approval is the one that counts,
+// and with lift it lifts their own changes request.
+func verdictQuestion(ref string, approve bool, f *FindingsInfo, as string, lift bool) string {
 	verb := "Request changes on"
 	if approve {
 		verb = "Approve"
 	}
 	q := verb + " " + ref
-	if f == nil {
-		return q + "?"
-	}
-	if f.SHA != "" {
+	if f != nil && f.SHA != "" {
 		q += " at " + f.SHA[:min(7, len(f.SHA))]
 	}
+	var says []string
+	if as != "" {
+		q += " as " + as
+		counts := "Your approval counts"
+		if lift {
+			counts += " and lifts your ✗"
+		}
+		says = append(says, counts)
+	}
+	if f != nil {
+		says = append(says, "magnum found "+verdictFound(f))
+	}
+	if len(says) == 0 {
+		return q + "?"
+	}
+	return q + "? " + strings.Join(says, "; ")
+}
+
+// verdictFound is what magnum's review f found, as the verdict questions
+// say it: its new findings by priority and the earlier ones still open.
+func verdictFound(f *FindingsInfo) string {
 	var parts []string
 	for i, n := range f.Counts {
 		if n > 0 {
@@ -128,7 +149,7 @@ func verdictQuestion(ref string, approve bool, f *FindingsInfo) string {
 	if f.Open > 0 {
 		found += "; " + textx.Count(f.Open, "earlier finding", "earlier findings") + " still open"
 	}
-	return q + "? magnum found " + found
+	return found
 }
 
 // unmuteIgnoredQuestion asks before unmuting a PR `magnum ignore` muted,

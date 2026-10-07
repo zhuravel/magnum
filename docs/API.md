@@ -3877,7 +3877,10 @@ type Watch struct {
 	// AutoApproveAs once its own review of the head found nothing that must
 	// be fixed before merging (engine autoapprove.go); empty = never (the
 	// default). AutoApproveAs is an [[identity]] of kind gh: the operator's
-	// own account, whose approval GitHub counts (an App's does not).
+	// own account, whose approval GitHub counts (an App's does not). With or
+	// without AutoApprove, the board's A on a PR that needs the operator
+	// and `magnum approve --as` post the operator's approval as it (engine
+	// verdict.go).
 	AutoApprove   []string `toml:"auto_approve"`
 	AutoApproveAs string   `toml:"auto_approve_as"`
 	// AutoApproveBody is the approval's one-line body, a template of
@@ -4416,7 +4419,9 @@ const (
     Manual verdicts: `magnum approve` and `magnum request-changes` (and
     the board's A and C) post the reviewer's own verdict on the head magnum
     reviewed, as the PR's posting identity, for a repository whose policy only
-    lets magnum comment or when the reviewer disagrees with its event.
+    lets magnum comment or when the reviewer disagrees with its event. On a
+    PR GitHub blocks on the operator's own approval (an App's never counts),
+    an approval goes as the watch's auto_approve_as instead (approveAsOperator).
 
 const (
 	WaitQuiet         = "quiet"          // the push quiet period
@@ -4523,6 +4528,13 @@ func AcquireLock(path string) (unlock func(), held bool, err error)
     layout.Lock(); the CLI takes the same lock before running slot or cleanup
     operations in-process). held reports that another process has it; unlock
     releases it.
+
+func ApproveAsFor(cfg *config.Config, fullName string) *config.Identity
+    ApproveAsFor is the identity A (on a row GitHub blocks on the operator)
+    and `magnum approve --as` post the operator's own approval of repository
+    fullName's PRs as: the covering watch's auto_approve_as, whether or not its
+    auto_approve names the repository; nil when the watch names none (GitHub
+    then counts only an approval by hand).
 
 func AutoApprovalMarker(head string) string
     AutoApprovalMarker is the marker of an automatic approval of head: "<!--
@@ -4697,6 +4709,16 @@ func NotesPath(l paths.Layout, owner, repo string) string
 func NotesRoot(l paths.Layout) string
     NotesRoot is the directory holding every repository's notes, "" when l names
     no place (paths.Layout.Valid).
+
+func OperatorApprovalRefusal(pr store.PR, sum *store.ReviewSummary, login string) string
+    OperatorApprovalRefusal says why the operator's own approval of pr cannot
+    be posted as login (their auto_approve_as account) now, "" when it can:
+    auto-approval's preconditions (autoApproveRefusal), less the two that exist
+    only because auto-approval acts without asking. The operator's stop (their
+    changes request or review by hand, a dismissal, magnum unapprove) and a
+    manual verdict posted after magnum's round both keep auto-approval from
+    overriding the operator, who here is the one asking: A lifts their own ✗ on
+    purpose. sum is magnum's latest posted round of pr (nil: none).
 
 func ProcessCommand(ctx context.Context, run execx.Runner, pid int) (comm, args string, err error)
     ProcessCommand reads what ps knows about pid: comm (`ps -o comm=`, the
@@ -5514,6 +5536,11 @@ type VerdictPayload struct {
 	Message string `json:"message,omitempty"`
 	// Force posts on the reviewed head although the PR moved on since.
 	Force bool `json:"force,omitempty"`
+	// As is the identity an approval posts as: "" or the PR's posting
+	// identity posts as today; the watch's auto_approve_as, the operator's
+	// own account, posts their approval, which GitHub counts
+	// (approveAsOperator).
+	As string `json:"as,omitempty"`
 }
     VerdictPayload is a manual verdict request.
 
@@ -13589,6 +13616,14 @@ type AgentsInfo struct {
     AgentsInfo counts working agent panes; a non-empty Error ("herdr
     unreachable") replaces the counts.
 
+type ApproveAs struct {
+	Identity, Login, Refusal string
+}
+    ApproveAs is the operator's own account A approves a row that needs them as:
+    the identity the approval names, its login (the question names it),
+    and why the daemon would refuse the approval now, "" when it would not
+    (engine.OperatorApprovalRefusal).
+
 type AttentionRow struct {
 	Subject, Kind, Message string
 	Fix                    string // optional
@@ -13769,8 +13804,9 @@ type DashboardActions interface {
 	Abort(ctx context.Context, ref string) (ActionResult, error)  // kill the PR's running review
 	Ignore(ctx context.Context, ref string) (ActionResult, error) // abort, mute and free the slot
 	// Approve and RequestChanges post the reviewer's own verdict on the head
-	// magnum reviewed (magnum approve / request-changes).
-	Approve(ctx context.Context, ref string) (ActionResult, error)
+	// magnum reviewed (magnum approve / request-changes); an approval goes
+	// as identity as ("" = the PR's posting identity; magnum approve --as).
+	Approve(ctx context.Context, ref, as string) (ActionResult, error)
 	RequestChanges(ctx context.Context, ref string) (ActionResult, error)
 	// Unapprove withdraws the approval magnum posted as the operator and
 	// stops it approving the PR as them (magnum unapprove).
@@ -14072,6 +14108,12 @@ type PRBoardRow struct {
 	// (they dismissed one of its approvals, reviewed the PR by hand or ran
 	// magnum unapprove); "" when it may. The card says so.
 	AutoStopped string
+	// ApproveAs is whom A approves a NeedsMe row as: the watch's
+	// auto_approve_as, the operator's own account, whose approval GitHub
+	// counts. nil on a row that does not need the operator, or whose watch
+	// names none: A then refuses (only an approval by hand counts) and the
+	// card says so.
+	ApproveAs *ApproveAs
 }
     PRBoardRow is one pull request on the PR board. Ref is what actions receive;
     Owner, Repo and Number label the row (Ref is parsed when they are empty).

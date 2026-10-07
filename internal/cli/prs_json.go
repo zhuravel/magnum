@@ -85,6 +85,16 @@ type prsJSONRow struct {
 	// magnum no longer approves the PR as you; "" when it may.
 	AutoApproved       *prsJSONAutoApproval `json:"auto_approved"`
 	AutoApproveStopped string               `json:"auto_approve_stopped"`
+	// ApproveAs is whom the board's A approves a PR that needs you as (the
+	// watch's auto_approve_as) and why it would be refused now; null when
+	// the PR does not need you or the watch names none.
+	ApproveAs *prsJSONApproveAs `json:"approve_as"`
+}
+
+type prsJSONApproveAs struct {
+	Identity string `json:"identity"`
+	Login    string `json:"login"`
+	Refusal  string `json:"refusal"` // "" when it would post
 }
 
 type prsJSONAutoApproval struct {
@@ -269,6 +279,9 @@ func prsJSONOf(r tui.PRBoardRow) prsJSONRow {
 		NeedsMe: r.NeedsMe, ReviewDecision: r.ReviewDecision, AutoApproveStopped: r.AutoStopped,
 		AutoApproved: mapPtr(r.AutoApproved, func(a tui.AutoApproval) prsJSONAutoApproval {
 			return prsJSONAutoApproval{ReviewID: a.ReviewID, Head: a.Head, URL: a.URL, At: a.At}
+		}),
+		ApproveAs: mapPtr(r.ApproveAs, func(a tui.ApproveAs) prsJSONApproveAs {
+			return prsJSONApproveAs{Identity: a.Identity, Login: a.Login, Refusal: a.Refusal}
 		}),
 	}
 }

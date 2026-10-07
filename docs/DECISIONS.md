@@ -3494,3 +3494,26 @@ editing history. Code, config comments and prompts reference these by their head
   scripts against throwaway repositories. Rejected: git's union merge (`merge-file --union`, `merge=union`): it
   matches lines across the two sides' entries, so when both end with the same line ("No new dependencies.") the
   line is kept once and the first entry loses it.
+- **A on a row that needs the operator approves as the operator** (2026-10-07). Every posting identity is
+  a GitHub App, whose approval GitHub never counts, and `A` posted as the PR's identity: on talkable#11980
+  round 5 approved as the App at 16:06:56, auto-approval stopped at 16:07:00 ("you requested changes by
+  hand"), `A` at 16:07:18 approved as `zhuravel[bot]` to no effect, and the operator approved by hand at
+  16:08:00 (as for 8 other PRs, two of them 7 to 9 minutes after the same stop). On a `✔ needs you` or `✔ lift
+  your ✗` row `A` now asks "Approve talkable#N at <sha7> as zhuravel? Your approval counts and lifts your ✗;
+  magnum found …" and posts as the watch's `auto_approve_as` (`VerdictPayload.As`; `magnum approve <ref> --as
+  <identity>`, which takes that identity or the PR's posting identity), through the gh client auto-approval
+  already uses. It is refused, naming the precondition, where auto-approval would refuse
+  (`engine.OperatorApprovalRefusal` calls `autoApproveRefusal`, which the board row carries as
+  `PRBoardRow.ApproveAs.Refusal`), less the two checks that exist only because auto-approval acts without
+  asking: the operator's stop (their own changes request is what they lift on purpose) and a manual verdict
+  after magnum's round. The approval is recorded like an automatic one, with no migration: an
+  `auto_approvals` row (the round's run and review, the identity and login), the body of a manual verdict plus
+  the auto-approval marker (so it never counts as a review by hand, and a post whose answer was lost is found
+  on GitHub), and a `review.manual_verdict` event with the identity; the PR's latest review stays magnum's
+  round's. So a later round that finds P0-P2 withdraws it as it withdraws its own, `D` and `magnum unapprove`
+  withdraw it, the row reads `✔ auto`, and the stop stays (magnum still does not approve that PR on its own).
+  Without `auto_approve_as` on the watch, `A` there refuses with "GitHub counts only your approval: b opens
+  the PR", and the card says it. `auto_approve_as` alone, without `auto_approve`, enables this and nothing
+  automatic. Rejected: posting as the App there anyway (GitHub ignores it), refusing `A` after the operator's
+  own changes request (lifting it is what the row asks of them), and recording it only as a manual verdict
+  (no later round would withdraw it).

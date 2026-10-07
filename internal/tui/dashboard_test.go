@@ -116,7 +116,10 @@ func (f *fakeActions) Unsnooze(_ context.Context, ref string) (ActionResult, err
 func (f *fakeActions) Abort(_ context.Context, ref string) (ActionResult, error) {
 	return f.record("abort " + ref)
 }
-func (f *fakeActions) Approve(_ context.Context, ref string) (ActionResult, error) {
+func (f *fakeActions) Approve(_ context.Context, ref, as string) (ActionResult, error) {
+	if as != "" {
+		ref += " as " + as
+	}
 	return f.record("approve " + ref)
 }
 func (f *fakeActions) RequestChanges(_ context.Context, ref string) (ActionResult, error) {

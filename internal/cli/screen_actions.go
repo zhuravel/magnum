@@ -190,11 +190,11 @@ func (s *screenActions) Unsnooze(ctx context.Context, ref string) (tui.ActionRes
 	})
 }
 
-// Approve posts the reviewer's APPROVE on the reviewed head; the screen
-// asked first.
-func (s *screenActions) Approve(ctx context.Context, ref string) (tui.ActionResult, error) {
+// Approve posts the reviewer's APPROVE on the reviewed head, as identity as
+// ("" = the PR's posting identity); the screen asked first.
+func (s *screenActions) Approve(ctx context.Context, ref, as string) (tui.ActionResult, error) {
 	return s.do(ctx, "approve", func(ctx context.Context, c *Context, d *actDeps) int {
-		return verdictMain(ctx, c, d, "approve", engine.ReqApprove, ref, verdictOpts{})
+		return verdictMain(ctx, c, d, "approve", engine.ReqApprove, ref, verdictOpts{as: as})
 	})
 }
 

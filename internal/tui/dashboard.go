@@ -197,8 +197,9 @@ type DashboardActions interface {
 	Abort(ctx context.Context, ref string) (ActionResult, error)  // kill the PR's running review
 	Ignore(ctx context.Context, ref string) (ActionResult, error) // abort, mute and free the slot
 	// Approve and RequestChanges post the reviewer's own verdict on the head
-	// magnum reviewed (magnum approve / request-changes).
-	Approve(ctx context.Context, ref string) (ActionResult, error)
+	// magnum reviewed (magnum approve / request-changes); an approval goes
+	// as identity as ("" = the PR's posting identity; magnum approve --as).
+	Approve(ctx context.Context, ref, as string) (ActionResult, error)
 	RequestChanges(ctx context.Context, ref string) (ActionResult, error)
 	// Unapprove withdraws the approval magnum posted as the operator and
 	// stops it approving the PR as them (magnum unapprove).

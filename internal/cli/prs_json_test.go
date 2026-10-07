@@ -251,6 +251,7 @@ func TestPRsJSONMirrorsEveryBoardRowField(t *testing.T) {
 		{tui.RoundProgress{}, prsJSONProgress{}},
 		{tui.RoleProgress{}, prsJSONRoleProgress{}},
 		{tui.SpendInfo{}, prsJSONSpend{}},
+		{tui.ApproveAs{}, prsJSONApproveAs{}},
 	} {
 		b, o := reflect.TypeOf(p.board), reflect.TypeOf(p.out)
 		if b.NumField() != o.NumField() {

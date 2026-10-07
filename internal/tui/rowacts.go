@@ -127,6 +127,12 @@ type actRow struct {
 	// reviewed the PR); verdicts says the screen knows it, so A and C apply.
 	findings *FindingsInfo
 	verdicts bool
+	// needsMe is what GitHub blocks the PR on from the operator
+	// (PRBoardRow.NeedsMe; "" = nothing, or the screen does not know), and
+	// approveAs whom A then approves as (nil: the watch names no
+	// auto_approve_as, so only an approval by hand counts).
+	needsMe   string
+	approveAs *ApproveAs
 	// auto is the approval magnum posted as the operator that stands on the
 	// PR (nil: none); autoKnown says the screen knows it, so D applies.
 	auto                 *AutoApproval
@@ -190,6 +196,20 @@ func (r actRow) queued() bool  { return slices.Contains(queuedStates, r.state) }
 func (r actRow) paused() bool  { return r.state == "paused" }
 func (r actRow) ended() bool   { return slices.Contains(endedStates, r.state) }
 func (r actRow) ignored() bool { return r.state == "ignored" }
+
+// asOperator reports whether A approves the row as the operator's own
+// account: GitHub blocks the PR on their approval and the watch names one.
+func (r actRow) asOperator() bool { return r.needsMe != "" && r.approveAs != nil }
+
+// onlyYourApproval says that only the operator's approval by hand counts on
+// a row that needs it when the watch names no auto_approve_as (A's refusal
+// and the card's line); browser is the key that opens the PR ("" = none).
+func onlyYourApproval(browser string) string {
+	if browser == "" {
+		return "GitHub counts only your approval: approve it on GitHub"
+	}
+	return "GitHub counts only your approval: " + browser + " opens the PR"
+}
 
 // orKey is note with the key that runs a on the row's screen, or "" when the
 // screen has no key for it ("; K kills it").
@@ -260,6 +280,11 @@ func actionRefusal(a rowAct, r actRow) string {
 			return l + " is " + cmp.Or(r.ghWord(), r.state) + ": nothing to " + verb
 		case f.SHA != "" && r.head != "" && !sameSHA(r.head, f.SHA):
 			return l + ": the head moved since magnum reviewed " + textx.ShortSHA(f.SHA) + r.orKey(actReview, ": review again first (%k)")
+		case a != actApprove || r.needsMe == "": // the PR's posting identity's verdict
+		case r.approveAs == nil:
+			return onlyYourApproval(r.key(actBrowser))
+		case r.approveAs.Refusal != "":
+			return l + " is not approved as " + r.approveAs.Login + ": " + r.approveAs.Refusal
 		}
 	case actUnapprove:
 		switch {
@@ -343,7 +368,11 @@ func actionQuestion(a rowAct, r actRow) string {
 	case actIgnore:
 		return ignoreQuestion(r)
 	case actApprove, actRequestChanges:
-		return verdictQuestion(l, a == actApprove, r.findings)
+		var as string
+		if a == actApprove && r.asOperator() {
+			as = r.approveAs.Login
+		}
+		return verdictQuestion(l, a == actApprove, r.findings, as, as != "" && r.needsMe == NeedsMeLift)
 	case actUnapprove:
 		return unapproveQuestion(l, r.auto)
 	case actRelease:
@@ -404,10 +433,14 @@ func reviewOptsFor(a rowAct, r actRow) ReviewOpts {
 // actionLabel is a's entry in the menu and on the card for the row r: the
 // review variants of a merged PR are post-merge reviews, M on a merged PR
 // dismisses or restores its merged-unreviewed flag, U on an ignored PR
-// stops ignoring it, and r on a row with replies waiting for the judge
-// re-decides them.
+// stops ignoring it, r on a row with replies waiting for the judge
+// re-decides them, and A on a row that needs the operator approves as them.
 func actionLabel(a rowAct, r actRow) string {
 	switch a {
+	case actApprove:
+		if r.asOperator() {
+			return "approve as " + r.approveAs.Login
+		}
 	case actReview, actFresh:
 		if r.merged() {
 			return map[rowAct]string{actReview: "post-merge review", actFresh: "fresh post-merge review"}[a]
@@ -457,7 +490,13 @@ func actionRun(a rowAct, r actRow) (what string, fn actionFunc) {
 	case actIgnore:
 		return what, on(DashboardActions.Ignore)
 	case actApprove:
-		return what, on(DashboardActions.Approve)
+		var as string
+		if r.asOperator() {
+			as = r.approveAs.Identity
+		}
+		return what, func(ctx context.Context, act DashboardActions) (ActionResult, error) {
+			return act.Approve(ctx, target, as)
+		}
 	case actRequestChanges:
 		return what, on(DashboardActions.RequestChanges)
 	case actUnapprove:
@@ -639,7 +678,8 @@ func boardActRow(r PRBoardRow, label string, now time.Time) actRow {
 		findings: r.Findings, verdicts: true, url: prURL(r), issue: r.Issue, issueURL: r.IssueURL,
 		pinned: r.Pinned, pinKnown: true, muted: r.Muted || normState(r.State) == "ignored", mutedKnown: true,
 		inSlot: r.Slot != "", slotKnown: true, mergedUnreviewed: r.MergedUnreviewed, flagDismissed: r.FlagDismissed,
-		auto: r.AutoApproved, autoKnown: true, snoozedUntil: r.SnoozedUntil, releaseAfter: r.ReleaseAfter, now: now}
+		auto: r.AutoApproved, autoKnown: true, snoozedUntil: r.SnoozedUntil, releaseAfter: r.ReleaseAfter, now: now,
+		needsMe: r.NeedsMe, approveAs: r.ApproveAs}
 	if r.LastReview != nil {
 		row.reviewed = r.LastReview.CommitSHA
 	}
