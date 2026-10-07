@@ -171,7 +171,7 @@ func (m *Manager) StartAgent(ctx context.Context, pr store.PR, role config.Role,
 	base := cmp.Or(store.Deref(pr.BaseRef), repo.DefaultBranch)
 	project := m.checkoutProject(ctx, role, dir, "origin/"+strings.TrimPrefix(base, "origin/"), "")
 	args := kind.Argv(config.LaunchArgs{Session: resume, Title: title, Model: model, Effort: role.Effort,
-		Subagents: role.MaxSubagents, MCPServers: m.mcpServers(role), ProjectServers: project.servers, Untrusted: project.paths,
+		Subagents: role.MaxSubagents, MCPServers: m.mcpServers(role), ProjectServers: project.servers, Untrusted: project.paths, DocsOff: project.docsOff,
 		Wrapper: wrapper, Extra: role.Args})
 	m.recordProject(ctx, pr.ID, role, dir, project)
 	m.noteSessionProject(ctx, sess.ID, kindName, project)

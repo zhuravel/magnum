@@ -92,9 +92,9 @@ func KVPRDryRun(prID int64) string { return fmt.Sprintf("pr.%d.dry_run", prID) }
 
 // KVPRProject records a session of agent kind kind ("codex", "claude")
 // launched without the checkout's project configuration because the PR
-// changes it (.codex/; .claude/, .mcp.json), e.g. pr.7.codex_project (JSON,
-// see agents.ProjectNote); a launch of that kind that finds it unchanged
-// clears it.
+// changes it (.codex/ and AGENTS.md; .claude/, .mcp.json, CLAUDE.md and
+// AGENTS.md), e.g. pr.7.codex_project (JSON, see agents.ProjectNote); a
+// launch of that kind that finds it unchanged clears it.
 func KVPRProject(prID int64, kind string) string { return fmt.Sprintf("pr.%d.%s_project", prID, kind) }
 
 // KVScreenWidths holds the column widths dragged with the mouse on a

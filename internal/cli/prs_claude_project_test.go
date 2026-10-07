@@ -8,10 +8,11 @@ import (
 )
 
 // The board's card says when magnum's Claude sessions of the PR's head
-// loaded the user's settings only because the PR changes .claude/ or
-// .mcp.json, after the Codex sentence when both CLIs ran without the PR's
-// project config; the record of an older head says nothing, and prs --json
-// carries the same note.
+// loaded the user's settings only because the PR changes .claude/,
+// .mcp.json or an instruction file, naming those its record names, after
+// the Codex sentence when both CLIs ran without the PR's project config;
+// the record of an older head says nothing, and prs --json carries the
+// same note.
 func TestPRsSourceCarriesTheClaudeProjectRecordOfTheHead(t *testing.T) {
 	f := newInspFixture(t)
 	st := f.store()
@@ -27,7 +28,8 @@ func TestPRsSourceCarriesTheClaudeProjectRecordOfTheHead(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, kind := range kinds {
-			if err := st.SetKV(ctx, store.KVPRProject(res.PR.ID, kind), `{"head":"abc","files":1,"compared":true}`); err != nil {
+			paths := map[string]string{"claude": `[".claude/","CLAUDE.md"]`, "codex": `["AGENTS.md"],"docs_only":true`}[kind]
+			if err := st.SetKV(ctx, store.KVPRProject(res.PR.ID, kind), `{"head":"abc","files":2,"compared":true,"paths":`+paths+`}`); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -45,8 +47,8 @@ func TestPRsSourceCarriesTheClaudeProjectRecordOfTheHead(t *testing.T) {
 	for _, r := range rows {
 		got[r.Number] = prsJSONOf(r).ProjectNote
 	}
-	const claude = "Claude ran without the PR's .claude/ and .mcp.json changes (its sessions loaded your user settings only)"
-	const codex = "Codex ran without the PR's .codex/ changes (the checkout was untrusted in its sessions)"
+	const claude = "Claude ran without the PR's .claude/ and CLAUDE.md changes (its sessions loaded your user settings only)"
+	const codex = "Codex ran without the PR's AGENTS.md changes (its sessions loaded no AGENTS.md)"
 	if got[90] != claude || got[91] != codex+" "+claude || got[92] != "" {
 		t.Fatalf("project notes: %v", got)
 	}

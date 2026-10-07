@@ -9,7 +9,8 @@ import (
 
 // The board's card says when magnum's Codex sessions of the PR's head ran
 // with its checkout untrusted because the PR changes .codex/: the agents'
-// record names the head; a record of an older head says nothing.
+// record names the head and the paths; a record of an older head says
+// nothing.
 func TestPRsSourceCarriesTheCodexProjectRecordOfTheHead(t *testing.T) {
 	f := newInspFixture(t)
 	st := f.store()
@@ -25,7 +26,7 @@ func TestPRsSourceCarriesTheCodexProjectRecordOfTheHead(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := st.SetKV(ctx, store.KVPRProject(res.PR.ID, "codex"), `{"head":"abc","files":1,"compared":true}`); err != nil {
+		if err := st.SetKV(ctx, store.KVPRProject(res.PR.ID, "codex"), `{"head":"abc","files":1,"compared":true,"paths":[".codex/"]}`); err != nil {
 			t.Fatal(err)
 		}
 		ids = append(ids, res.PR.ID)

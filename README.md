@@ -895,9 +895,16 @@ commits, files a round left there, or git cannot tell), every launch and resume 
 review`'s line pass `-c projects={"<checkout>"={trust_level="untrusted"}}` (`[kinds.codex]
 project_untrust`): that session treats the checkout as an untrusted folder and loads none of its `.codex/`,
 nothing is written to your config, and Magnum answers Codex's "Folder access" with "Open restricted".
-Codex then also leaves the checkout's `AGENTS.md` out of its instructions; the judge skill reads it anyway.
-An `agents.codex_project_declined` event records it, the board's card says "Codex ran without the PR's
-.codex/ changes" and so does the review's Checks of a round with a Codex role (the judge included).
+Codex then also leaves the checkout's `AGENTS.md` out of its instructions. The `AGENTS.md` (or
+`AGENTS.override.md`) at the checkout's root is the project's instructions Codex loads, so a PR that changes
+it is declined too; when the instruction files are all it changes, the session gets `-c
+project_doc_max_bytes=0` instead (`[kinds.codex] project_docs_off`): Codex reads no project `AGENTS.md`
+and loads the rest of the team's `.codex/`, the checkout trusted. Codex loads no `AGENTS.md` below the root
+(Magnum starts it at the root), though its model may read one as a file, as `codex review`'s own rubric
+asks for the files a diff changes. An `agents.codex_project_declined` event records it, the board's card
+says "Codex ran without the PR's AGENTS.md changes (its sessions loaded no AGENTS.md)", naming the files,
+and the review's Checks of a round with a Codex role (the judge included) say the same in one line, which
+Magnum writes (`project_checks`); the judge still reads the files as data.
 Untracked log files are no change: a file under `.codex/log/` or `.codex/logs/`, or one named `*.log` or
 `*.log.<digits>`, which a team's own hook may write into every checkout and Codex never loads; any other
 untracked file, ignored or not, still counts, and so does a tracked log. The paths match in any case:
@@ -910,13 +917,19 @@ session herdr restores by itself starts without Magnum's flags.
 
 Claude Code does the same with the checkout's `.claude/` and `.mcp.json`, which a PR controls too: the
 project settings (hooks, which run outside any sandbox, `env`, plugins, permissions), `settings.local.json`,
-the MCP servers of `.mcp.json`, skills, commands, agents and `CLAUDE.md` (Magnum trusts its checkouts and
-skips Claude's permission prompts). When the files under `.claude/` or `.mcp.json` differ from the PR's
-merge base (or git cannot tell), every launch and resume of a claude role (claude-review, claude-simplify)
-passes `--setting-sources user` (`[kinds.claude] project_untrust`): the session loads your user settings,
-skills and agents and nothing of the checkout's. An `agents.claude_project_declined` event
-records it, the board's card says "Claude ran without the PR's .claude/ and .mcp.json changes" and so
-does the review's Checks of a round with a Claude role. Untracked logs under `.claude/` are no change, as
+the MCP servers of `.mcp.json`, skills, commands, agents (Magnum trusts its checkouts and skips Claude's
+permission prompts), and the instruction files: the `CLAUDE.md` and `CLAUDE.local.md` of the root and of
+each directory Claude reads files in, and where the project has no `CLAUDE.md` its `AGENTS.md` files
+instead (Claude Code 2.1.292). When the files under `.claude/`, `.mcp.json` or a `CLAUDE.md`,
+`CLAUDE.local.md` or `AGENTS.md` in any directory differ from the PR's merge base (or git cannot tell), every
+launch and resume of a claude role (claude-review, claude-simplify) passes `--setting-sources user`
+(`[kinds.claude] project_untrust`): the session loads your user settings, skills, agents and `CLAUDE.md`
+and nothing of the checkout's. A `CLAUDE.md` that links to `AGENTS.md` (or an `AGENTS.md` that links to
+`CLAUDE.md`, for Codex) loads the PR's file through the link: Magnum compares what an instruction file at
+the root links to as well. An ignored instruction file below the root (a package's `AGENTS.md` in
+`node_modules/`) is no change. An `agents.claude_project_declined` event records it, the board's card says
+"Claude ran without the PR's CLAUDE.md changes (its sessions loaded your user settings only)", naming the
+files, and so does the review's Checks of a round with a Claude role. Untracked logs under `.claude/` are no change, as
 for Codex (a team hook's gitignored `.claude/log/tool_use.log` would otherwise decline every later
 session); a gitignored `settings.local.json`, skill or anything else still declines. A PR that leaves both alone keeps the team's project config. Claude Code reloads
 its settings and skills while it runs, and loads a `.claude/settings.json` a later commit adds, so a
@@ -925,10 +938,11 @@ Magnum moves the checkout to a new head that changes it, at a round's start and 
 and resumed once the new head is checked out; one that works or is blocked holds the round instead. The
 checkout's fetch runs first, and the head it fetched decides: by the PR's file list when the list is
 complete and of that head, else (a PR of more files than the list holds) by git, the files that head
-changes under `.claude/` or in `.mcp.json` since its merge base with the base branch; a git that cannot
-tell quits the session. Not covered:
-a nested `<dir>/.claude/skills/` (Claude loads it once it works on files there), a team hook that runs a
-script outside `.claude/` the PR changes, and an agent that checks another commit out in the checkout.
+changes there since its merge base with the base branch; a git that cannot tell quits the session. Not
+covered: a nested `<dir>/.claude/skills/` or `.claude/rules/` (Claude loads them once it works on files
+there), a team `CLAUDE.md` that imports (`@path`) another file the PR changes, an instruction file below
+the root that links to one, a team hook that runs a script outside `.claude/` the PR changes, and an agent
+that checks another commit out in the checkout.
 
 Magnum's Claude sessions (claude-review, claude-simplify, and the retro's classifier and the notes curator
 when they run Claude) run on your own Claude Code setup too: its login, your user settings (hooks, plugins,

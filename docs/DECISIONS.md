@@ -3756,3 +3756,40 @@ editing history. Code, config comments and prompts reference these by their head
   association as the poll identity sees it, so a member it does not show as one counts as anyone else.
   Rejected: reading the association in the threads query only (the reply round is decided from the Details,
   before any threads are read).
+- **A PR's AGENTS.md and CLAUDE.md never become the review sessions' instructions** (2026-10-07; amends "A
+  PR that changes .codex/ runs Codex with its checkout untrusted" and "A PR that changes .claude/ or
+  .mcp.json runs Claude with the user's settings only"). Their paths left out the instruction files the
+  CLIs load from the checkout: a Codex rollout of 2026-10-07 held the "AGENTS.md instructions" of a PR's
+  head, and talkable#11920 (4 rounds) and #11941 (1 round) changed AGENTS.md, so their judges ran under the
+  PR's own instructions, permissions skipped and the App's `GH_CONFIG_DIR` in reach, with one skill
+  sentence as the only guard. Codex 0.160.1 loads `AGENTS.override.md` or `AGENTS.md` from the project
+  root down to the session's working directory, the checkout's root (`core/src/agents_md.rs`), none for an
+  untrusted project, and none at `project_doc_max_bytes = 0`, a session flag that outranks the checkout's
+  `.codex/config.toml` (`config/src/config_layer_source.rs`: session flags 30, project 25). Claude Code
+  2.1.292 loads the `CLAUDE.md` of the root and of each directory it reads files in, `CLAUDE.local.md`,
+  and, through its built-in agents-md plugin (default mode `claude-md-or-agents-md`), a project's
+  `AGENTS.md` files where it has no `CLAUDE.md`; all of them only from the `project` (`local`) setting
+  source, so `--setting-sources user` keeps them out. Codex's paths add `AGENTS.md` and
+  `AGENTS.override.md`; Claude's add `CLAUDE.md`, `CLAUDE.local.md` and `AGENTS.md` at the root and in any
+  directory (`gitx.AnyDir`, git's `:(top,icase,glob)**/<name>`, the `S` of `AGENTS.md` widened to `*` for
+  the long s and the matches checked by name; an ignored untracked file below the root, a package's
+  `AGENTS.md` in `node_modules/`, is no change, while one at the root still is), so Claude now runs git for
+  every checkout. A root instruction file that is a symbolic link into the checkout adds its target, named
+  as the link: `CLAUDE.md` -> `AGENTS.md` declines both CLIs on an `AGENTS.md` change, `AGENTS.md` ->
+  `CLAUDE.md` declines Codex on a `CLAUDE.md` change. When the changed files are all instruction files,
+  Codex gets the new `project_docs_off` (`-c project_doc_max_bytes=0`) instead of `project_untrust`: no
+  project `AGENTS.md` loads, the team's `.codex/` still does and the checkout stays trusted (checked in
+  the source, not in a live session). The records name the paths (`ProjectNote.Paths`, `DocsOnly`), the
+  card says, for example, "Codex ran without the PR's AGENTS.md changes (its sessions loaded no
+  AGENTS.md)", and the judge gets one `project_checks` line magnum writes (`JudgeData.ProjectChecks`)
+  instead of the `codex_project` and `claude_project` fields, which the skill copies into Checks (29,322
+  to 29,198 bytes). About 4 of 166 recent PRs change an instruction file; their sessions of that head lose the
+  team's project files (Codex only its `AGENTS.md`). Not covered: Codex's model reads an `AGENTS.md` below
+  the root as a file when its base prompt or `codex review`'s rubric asks ("Use the root and scoped project
+  instruction files applicable to changed files"), which no switch turns off; a team `CLAUDE.md` that
+  imports (`@path`) a file the PR changes; a link below the root; the operator's own
+  `project_doc_fallback_filenames`. Rejected: declining Codex for an `AGENTS.md` below the root (its
+  loader never reads one, and an untrusted checkout would not stop the model from reading it);
+  `CLAUDE_CODE_DISABLE_CLAUDE_MDS` for Claude (it drops the operator's own `CLAUDE.md` too); checking only
+  a `CLAUDE.md` that links to `AGENTS.md` (Claude loads `AGENTS.md` by itself, and the reverse link is as
+  common).

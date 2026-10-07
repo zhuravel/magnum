@@ -106,11 +106,8 @@ history: {{.HistoryFile}}
 {{- if .FailingChecks}}
 failing_checks: {{.FailingChecks}}
 {{- end}}
-{{- if .CodexProjectDeclined}}
-codex_project: declined
-{{- end}}
-{{- if .ClaudeProjectDeclined}}
-claude_project: declined
+{{- if .ProjectChecks}}
+project_checks: {{.ProjectChecks}}
 {{- end}}
 {{- if .OwnFindings}}
 own_findings: {{.OwnFindings}}

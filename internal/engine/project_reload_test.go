@@ -176,6 +176,10 @@ func (g *projectGit) all() []string {
 	return slices.Clone(g.calls)
 }
 
+// claudePaths are the paths a comparison of Claude's project config names
+// (agents.ProjectPaths), as projectGit records them.
+var claudePaths = strings.Join(agents.ProjectPaths(agents.KindClaude), ",")
+
 // A new head that leaves the reloaded project config alone brings the
 // session nothing new to reload, so magnum does not quit it: a quit that
 // cannot stop the agent (its MCP servers still in the pane's foreground)
@@ -201,15 +205,21 @@ func TestALiveClaudeSessionStaysWhenTheNewHeadLeavesItsConfigAlone(t *testing.T)
 		{name: "untouched list", files: untouched},
 		{name: "settings changed", files: []string{"app/models/order.rb", ".claude/settings.json"}, wantQuit: true},
 		{name: "mcp changed", files: []string{".mcp.json"}, wantQuit: true},
+		// Claude Code loads the CLAUDE.md of each directory it reads files in,
+		// and AGENTS.md where a project has none.
+		{name: "a directory's CLAUDE.md changed", files: []string{"app/models/order.rb", "devops/eks/CLAUDE.md"}, wantQuit: true},
+		{name: "AGENTS.md changed", files: []string{"AGENTS.md"}, wantQuit: true},
+		{name: "cut-off list, the glob matches a wider name only", files: untouched, truncated: true,
+			changed: map[string][]string{"b2": {"docs/AGENTIC.md"}}, wantGit: "origin/master...b2:" + claudePaths},
 		{name: "cut-off list, git finds the config alone", files: untouched, truncated: true,
-			wantGit: "origin/master...b2:.claude,.mcp.json"},
+			wantGit: "origin/master...b2:" + claudePaths},
 		{name: "cut-off list, git finds a change", files: untouched, truncated: true,
-			changed: map[string][]string{"b2": {".claude/settings.json"}}, wantQuit: true, wantGit: "origin/master...b2:.claude,.mcp.json"},
+			changed: map[string][]string{"b2": {".claude/settings.json"}}, wantQuit: true, wantGit: "origin/master...b2:" + claudePaths},
 		{name: "cut-off list, git fails", files: untouched, truncated: true, gitErr: errors.New("fatal: bad object"),
-			wantQuit: true, wantGit: "origin/master...b2:.claude,.mcp.json"},
-		{name: "no list, git finds the config alone", wantGit: "origin/master...b2:.claude,.mcp.json"},
+			wantQuit: true, wantGit: "origin/master...b2:" + claudePaths},
+		{name: "no list, git finds the config alone", wantGit: "origin/master...b2:" + claudePaths},
 		{name: "list for another head than the fetched one", files: untouched, moveHead: "b3",
-			changed: map[string][]string{"b3": {".mcp.json"}}, wantQuit: true, wantGit: "origin/master...b3:.claude,.mcp.json"},
+			changed: map[string][]string{"b3": {".mcp.json"}}, wantQuit: true, wantGit: "origin/master...b3:" + claudePaths},
 		{name: "the fetch fails, the radar head's list decides", files: untouched, fetchErr: errors.New("fetch: network down")},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -278,7 +288,7 @@ func TestRoundRestartDecidesByGitWithoutAListOfTheNewHead(t *testing.T) {
 	if at == nil || len(*at) != 0 {
 		t.Fatalf("quits = %v, want none: git finds b2 leaves the config alone", at)
 	}
-	if calls := g.all(); !slices.Equal(calls, []string{"origin/master...b2:.claude,.mcp.json"}) {
+	if calls := g.all(); !slices.Equal(calls, []string{"origin/master...b2:" + claudePaths}) {
 		t.Fatalf("git comparisons = %q", calls)
 	}
 	id := h.pr(2).ID

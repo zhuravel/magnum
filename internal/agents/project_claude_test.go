@@ -2,6 +2,7 @@ package agents
 
 import (
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -63,16 +64,17 @@ func TestClaudeOfAPRChangingClaudeConfigLoadsOnlyTheUserSettings(t *testing.T) {
 			t.Fatalf("diff calls = %v", e.run.Calls)
 		}
 		evs := claudeProjectEvents(t, e)
-		if len(evs) != 1 || !strings.Contains(evs[0].Message, "3 files under .claude/ or in .mcp.json differ from the merge base") ||
+		if len(evs) != 1 || !strings.Contains(evs[0].Message, "runs without the PR's .claude/ and .mcp.json changes: 3 files differ from the merge base") ||
 			!strings.Contains(evs[0].Message, "claude-review") || strings.Contains(evs[0].Message, "settings.local") {
 			t.Fatalf("resume %q: events = %+v", resume, evs)
 		}
 		var data map[string]any
-		if err := json.Unmarshal(evs[0].Data, &data); err != nil || data["role"] != "claude-review" || data["files"] != 3.0 || data["compared"] != true {
+		if err := json.Unmarshal(evs[0].Data, &data); err != nil || data["role"] != "claude-review" || data["files"] != 3.0 || data["compared"] != true ||
+			fmt.Sprint(data["paths"]) != "[.claude/ .mcp.json]" {
 			t.Fatalf("event data = %s (%v)", evs[0].Data, err)
 		}
 		note, ok := ProjectDeclined(e.ctx, e.st, e.pr.ID, KindClaude)
-		if !ok || note.Head != projectHead || note.Files != 3 {
+		if !ok || note.Head != projectHead || note.Files != 3 || !slices.Equal(note.Paths, []string{".claude/", ".mcp.json"}) || note.DocsOnly {
 			t.Fatalf("record = %+v, %v; want head %s", note, ok, projectHead)
 		}
 		if _, ok := ProjectDeclined(e.ctx, e.st, e.pr.ID, KindCodex); ok {
@@ -92,7 +94,7 @@ func TestClaudeOfAPRChangingOnlyTheMCPConfigLoadsOnlyTheUserSettings(t *testing.
 	if got := e.h.starts[0].Args; !slices.Equal(got, slices.Concat(claudeLaunchArgs, userSettingsOnly)) {
 		t.Fatalf("args = %q", got)
 	}
-	if evs := claudeProjectEvents(t, e); len(evs) != 1 || !strings.Contains(evs[0].Message, "1 file under .claude/ or in .mcp.json differs") {
+	if evs := claudeProjectEvents(t, e); len(evs) != 1 || !strings.Contains(evs[0].Message, "the PR's .mcp.json changes: 1 file differs from the merge base") {
 		t.Fatalf("events = %+v", evs)
 	}
 }
@@ -125,19 +127,21 @@ func TestUnchangedClaudeConfigKeepsTheTeamsSettings(t *testing.T) {
 	}
 }
 
-// A checkout with neither .claude/ nor .mcp.json gives Claude Code nothing
-// of the PR's to load, so no git runs (a .claude file is no directory); a
-// claude kind with project_untrust = [] loads a changed .claude/.
+// A checkout with neither .claude/ nor .mcp.json may still hold a
+// CLAUDE.md or AGENTS.md in any directory, which Claude Code loads when it
+// reads files there, so git compares it; finding none of them changed, the
+// session keeps the team's settings. A claude kind with
+// project_untrust = [] loads a changed .claude/.
 func TestClaudeProjectNeedsItsConfigAndProjectUntrust(t *testing.T) {
-	e, dir, ws := projectEnv(t, map[string]string{"README.md": "x\n", ".claude": "a file, not a directory\n"}, []string{".claude"}, nil)
+	e, dir, ws := projectEnv(t, map[string]string{"README.md": "x\n", ".claude": "a file, not a directory\n"}, nil, nil)
 	if err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleClaude), ws.Panes[RoleClaude], ""); err != nil {
 		t.Fatal(err)
 	}
 	if got := e.h.starts[0].Args; !slices.Equal(got, claudeLaunchArgs) {
 		t.Fatalf("args = %q", got)
 	}
-	if calls := e.run.CallsWithPrefix("git", "-C", dir, "diff"); len(calls) != 0 {
-		t.Fatalf("git diff ran for a checkout without .claude/ or .mcp.json: %v", calls)
+	if calls := e.run.CallsWithPrefix("git", "-C", dir, "diff"); len(calls) != 1 {
+		t.Fatalf("git diff calls for a checkout without .claude/ or .mcp.json: %v", calls)
 	}
 
 	e, _, ws = projectEnv(t, map[string]string{".claude/settings.json": "{}"}, []string{".claude/settings.json"}, nil)
@@ -166,7 +170,7 @@ func TestClaudeProjectIsLeftOutWhenItCannotBeCompared(t *testing.T) {
 		t.Fatalf("args = %q", got)
 	}
 	evs := claudeProjectEvents(t, e)
-	if len(evs) != 1 || !strings.Contains(evs[0].Message, "could not compare .claude/ and .mcp.json with the merge base") {
+	if len(evs) != 1 || !strings.Contains(evs[0].Message, "could not compare .claude/, .mcp.json, CLAUDE.md, CLAUDE.local.md and AGENTS.md with the merge base") {
 		t.Fatalf("events = %+v", evs)
 	}
 	if note, ok := ProjectDeclined(e.ctx, e.st, e.pr.ID, KindClaude); !ok || note.Compared {
@@ -176,40 +180,60 @@ func TestClaudeProjectIsLeftOutWhenItCannotBeCompared(t *testing.T) {
 
 // The board's card and the judge learn of each agent's decision for the
 // round's head: one sentence per CLI that ran without the PR's project
-// config, Codex first; a record of another head says nothing.
+// config, Codex first, naming the files its record names (all of the
+// kind's paths when it names none: git could not compare, or the record is
+// older than the names) and how; the judge gets the same sentences without
+// the how as one Checks line, for the kinds of its round only. A record of
+// another head says nothing.
 func TestDeclinedProjectsOfTheHead(t *testing.T) {
 	e := newEnv(t)
-	set := func(kind, head string) {
-		if err := e.st.SetKV(e.ctx, store.KVPRProject(e.pr.ID, kind), `{"head":"`+head+`","files":1,"compared":true}`); err != nil {
+	set := func(kind, head, extra string) {
+		if err := e.st.SetKV(e.ctx, store.KVPRProject(e.pr.ID, kind), `{"head":"`+head+`","files":1,"compared":true`+extra+`}`); err != nil {
 			t.Fatal(err)
 		}
 	}
-	set(KindClaude, projectHead)
-	if got := ProjectSentences(e.ctx, e.st, e.pr.ID, projectHead); got != ClaudeProjectSentence {
+	const (
+		claude    = "Claude ran without the PR's CLAUDE.md and AGENTS.md changes"
+		claudeHow = " (its sessions loaded your user settings only)"
+		codex     = "Codex ran without the PR's AGENTS.md changes"
+		codexHow  = " (its sessions loaded no AGENTS.md)"
+	)
+	set(KindClaude, projectHead, `,"paths":["AGENTS.md","CLAUDE.md"]`)
+	if got := ProjectSentences(e.ctx, e.st, e.pr.ID, projectHead); got != claude+claudeHow {
 		t.Fatalf("sentences = %q", got)
 	}
 	round := []string{KindCodex, KindClaude, KindClaude}
 	var jd JudgeData
 	NoteDeclinedProjects(e.ctx, e.st, e.pr.ID, projectHead, round, &jd)
-	if !jd.ClaudeProjectDeclined || jd.CodexProjectDeclined {
-		t.Fatalf("judge data: codex %v, claude %v", jd.CodexProjectDeclined, jd.ClaudeProjectDeclined)
+	if jd.ProjectChecks != claude {
+		t.Fatalf("judge's checks = %q", jd.ProjectChecks)
 	}
-	set(KindCodex, projectHead)
-	if got := ProjectSentences(e.ctx, e.st, e.pr.ID, projectHead); got != CodexProjectSentence+" "+ClaudeProjectSentence {
+	set(KindCodex, projectHead, `,"paths":["AGENTS.md"],"docs_only":true`)
+	if got := ProjectSentences(e.ctx, e.st, e.pr.ID, projectHead); got != codex+codexHow+" "+claude+claudeHow {
 		t.Fatalf("sentences = %q", got)
+	}
+	jd = JudgeData{}
+	NoteDeclinedProjects(e.ctx, e.st, e.pr.ID, projectHead, round, &jd)
+	if jd.ProjectChecks != codex+"; "+claude {
+		t.Fatalf("judge's checks = %q", jd.ProjectChecks)
 	}
 	// A round none of whose roles is a Claude one hears only of Codex.
 	jd = JudgeData{}
 	NoteDeclinedProjects(e.ctx, e.st, e.pr.ID, projectHead, []string{KindCodex, KindCodex}, &jd)
-	if jd.ClaudeProjectDeclined || !jd.CodexProjectDeclined {
-		t.Fatalf("a round without Claude: judge data: codex %v, claude %v", jd.CodexProjectDeclined, jd.ClaudeProjectDeclined)
+	if jd.ProjectChecks != codex {
+		t.Fatalf("a round without Claude: judge's checks = %q", jd.ProjectChecks)
+	}
+	set(KindCodex, projectHead, "")
+	if got, want := ProjectSentences(e.ctx, e.st, e.pr.ID, projectHead),
+		"Codex ran without the PR's .codex/, AGENTS.md and AGENTS.override.md changes (the checkout was untrusted in its sessions) "+claude+claudeHow; got != want {
+		t.Fatalf("a record naming no paths: sentences = %q\nwant %q", got, want)
 	}
 	if got := ProjectSentences(e.ctx, e.st, e.pr.ID, projectMergeBase); got != "" {
 		t.Fatalf("another head: %q", got)
 	}
 	jd = JudgeData{}
 	NoteDeclinedProjects(e.ctx, e.st, e.pr.ID, projectMergeBase, round, &jd)
-	if jd.ClaudeProjectDeclined || jd.CodexProjectDeclined {
+	if jd.ProjectChecks != "" {
 		t.Fatalf("another head: judge data %+v", jd)
 	}
 }
@@ -373,6 +397,11 @@ func TestClaudeProjectPathsMatchInAnyCase(t *testing.T) {
 			if _, ok := c.files[longS]; ok {
 				specs = append(specs, ":(top,literal,icase)"+longS)
 			}
+			// Then the instruction files, at the root and in any directory
+			// (AGENTS.md's S has a non-ASCII case, the long s).
+			specs = append(specs, ":(top,literal,icase)CLAUDE.md", ":(top,icase,glob)**/CLAUDE.md",
+				":(top,literal,icase)CLAUDE.local.md", ":(top,icase,glob)**/CLAUDE.local.md",
+				":(top,literal,icase)AGENTS.md", ":(top,icase,glob)**/AGENT*.md")
 			diff := slices.Concat([]string{"git", "-C", dir, "diff", "--name-only", "-z", "--no-renames", "--no-ext-diff", projectMergeBase, "--"}, specs)
 			if calls := e.run.CallsWithPrefix(diff...); len(calls) != 1 || len(calls[0].Args) != len(diff)-1 {
 				t.Fatalf("diff calls = %v\nwant %q", e.run.Calls, diff)

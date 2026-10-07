@@ -209,14 +209,6 @@ const (
 )
     Trust-dialog fallback timing.
 
-const ClaudeProjectSentence = "Claude ran without the PR's .claude/ and .mcp.json changes (its sessions loaded your user settings only)"
-    ClaudeProjectSentence is what the board's card says for a PR whose head's
-    Claude sessions loaded the user's settings only.
-
-const CodexProjectSentence = "Codex ran without the PR's .codex/ changes (the checkout was untrusted in its sessions)"
-    CodexProjectSentence is what the board's card says for a PR whose head's
-    Codex sessions ran with its checkout untrusted.
-
 const CompletionIdleTicks = 2
     CompletionIdleTicks is how many consecutive idle|done observations end a
     turn. The pipeline ends a judge's turn sooner, once its result file holds a
@@ -229,12 +221,15 @@ const EventBackgroundWait = "agent.background_wait"
 const EventClaudeProjectDeclined = "agents.claude_project_declined"
     EventClaudeProjectDeclined is recorded (subject "pr:<owner>/<name>#<N>")
     each time a Claude session of the PR starts with the user's settings only
-    because the PR changes .claude/ or .mcp.json.
+    because the PR changes .claude/, .mcp.json, a CLAUDE.md, CLAUDE.local.md or
+    AGENTS.md.
 
 const EventCodexProjectDeclined = "agents.codex_project_declined"
-    EventCodexProjectDeclined is recorded (subject "pr:<owner>/<name>#<N>") each
-    time a Codex session of the PR starts with its checkout untrusted because
-    the PR changes .codex/.
+    EventCodexProjectDeclined is recorded (subject "pr:<owner>/<name>#<N>")
+    each time a Codex session of the PR starts without the PR's changes to the
+    project config Codex loads from the checkout: with the checkout untrusted
+    because the PR changes .codex/, or with no AGENTS.md when it changes only
+    those.
 
 const EventDefaultModelRestored = "agent.default_model_restored"
     EventDefaultModelRestored is recorded when SwitchModel put the Claude
@@ -401,12 +396,12 @@ func NewRunID(now time.Time) string
     leak, so the random part keeps outsiders from guessing it.
 
 func NoteDeclinedProjects(ctx context.Context, st *store.Store, prID int64, head string, kinds []string, jd *JudgeData)
-    NoteDeclinedProjects sets the judge's CodexProjectDeclined and
-    ClaudeProjectDeclined from the PR's records of head (the round's), which
-    each launch of those CLIs writes, for the kinds among the round's roles only
-    (kinds: their agent kinds, the judge's included): a record names the kind's
-    last launch on the head, which may be a session the round did not run (a
-    reviewer paused, or left out of the round).
+    NoteDeclinedProjects sets the judge's ProjectChecks from the PR's records
+    of head (the round's), which each launch of those CLIs writes, for the
+    kinds among the round's roles only (kinds: their agent kinds, the judge's
+    included), in projectKinds' order: a record names the kind's last launch on
+    the head, which may be a session the round did not run (a reviewer paused,
+    or left out of the round).
 
 func NotesFiles(notesPath string) (dir, lock string)
     NotesFiles returns the harness directory and the lock of the repository
@@ -442,31 +437,36 @@ func PostReviewLine(d JudgeData) string
     blind one, so the tool reads nothing from GitHub.
 
 func ProjectPaths(kind string) []string
-    ProjectPaths are the paths, relative to the checkout's root, that kind loads
-    its project config from (claude: .claude and .mcp.json), for a comparison
-    limited to them (gitx.Client.ChangedUnder); nil for a kind magnum does not
-    compare.
+    ProjectPaths are the paths, relative to the checkout's root, that kind
+    loads its project config from (claude: .claude, .mcp.json and CLAUDE.md,
+    CLAUDE.local.md and AGENTS.md at the root and, as gitx.AnyDir globs, in any
+    directory), for a comparison limited to them (gitx.Client.ChangedUnder,
+    whose answer ProjectTouched reads); nil for a kind magnum does not compare.
 
-func ProjectRule(kind string) (paths, effect string, servers bool)
-    ProjectRule describes for `magnum roles --kinds` the project config of kind
-    magnum compares with the PR's merge base, e.g. ".codex/" or ".claude/ or
-    .mcp.json", what a session of a PR that changes it runs with (the kind's
-    project_untrust), e.g. "the checkout untrusted for the session", and whether
-    project_mcp applies (that config declares MCP servers magnum turns off by
-    name); paths is "" for a kind whose project config magnum does not compare.
+func ProjectRule(kind string) (paths, effect, docs, docsEffect string, servers bool)
+    ProjectRule describes for `magnum roles --kinds` the project config of
+    kind magnum compares with the PR's merge base, e.g. ".codex/, AGENTS.md or
+    AGENTS.override.md", what a session of a PR that changes it runs with (the
+    kind's project_untrust), e.g. "the checkout untrusted for the session",
+    the instruction files among them and what a session of a PR that changes
+    only those runs with (the kind's project_docs_off; "" for a kind without
+    such args), and whether project_mcp applies (that config declares MCP
+    servers magnum turns off by name); paths is "" for a kind whose project
+    config magnum does not compare.
 
 func ProjectSentences(ctx context.Context, st *store.Store, prID int64, head string) string
-    ProjectSentences is what the board's card says of the PR's head:
-    one sentence per CLI whose sessions of that head ran without the PR's
-    project configuration (CodexProjectSentence, ClaudeProjectSentence),
-    in projectKinds' order; "" when none did.
+    ProjectSentences is what the board's card says of the PR's head: one
+    sentence per CLI whose sessions of that head ran without the PR's project
+    configuration, in projectKinds' order, naming the files and how ("Codex ran
+    without the PR's AGENTS.md changes (its sessions loaded no AGENTS.md)");
+    "" when none did.
 
 func ProjectTouched(kind string, paths []string) bool
     ProjectTouched reports whether paths (a PR's changed files, relative to
     the repository root) name the project config kind loads from the checkout:
-    a file at or under one of its paths, in any case (pathOf: macOS opens
-    .Claude/settings.json for .claude/settings.json). A kind magnum does not
-    compare touches nothing.
+    a file at or under one of its paths, or of the name of a path in any
+    directory, in any case (pathOf: macOS opens .Claude/settings.json for
+    .claude/settings.json). A kind magnum does not compare touches nothing.
 
 func RenderPrompt(p config.Prompt, data any) (string, error)
     RenderPrompt executes a resolved prompt template
@@ -850,16 +850,16 @@ type JudgeData struct {
 	// the checks are another commit's, and in a blind replay. A file, as
 	// check names come from the PR's workflows.
 	FailingChecks string
-	// CodexProjectDeclined: the round's Codex sessions ran with the
-	// checkout untrusted because the PR changes .codex/ (the PR's Codex
-	// ProjectNote names the round's head), rendered as
-	// `codex_project: declined` by the initial, rereview and recovery
-	// prompts only then; the skill adds a line to the review's Checks.
-	// ClaudeProjectDeclined: the same for its Claude sessions, which loaded
-	// the user's settings only because the PR changes .claude/ or
-	// .mcp.json, rendered as `claude_project: declined`. Both are set by
-	// NoteDeclinedProjects, each only in a round with a role of its kind.
-	CodexProjectDeclined, ClaudeProjectDeclined bool
+	// ProjectChecks is the review's Checks line for the round's agent CLIs
+	// whose sessions of its head ran without the PR's changes to the
+	// project config they load from the checkout (the PR's ProjectNote of
+	// the kind names the round's head): "Codex ran without the PR's
+	// AGENTS.md changes; Claude ran without the PR's CLAUDE.md and .claude/
+	// changes" (projectChecks; magnum's names of the paths, never a path
+	// the PR named), rendered as `project_checks` by the initial, rereview
+	// and recovery prompts; "" when none did. Set by NoteDeclinedProjects,
+	// each CLI only in a round with a role of its kind.
+	ProjectChecks string
 }
     JudgeData feeds every judge prompt (judge-*.md). Fields a template does not
     use may stay zero.
@@ -1387,6 +1387,14 @@ type ProjectNote struct {
 	At       time.Time `json:"at"`       // the launch
 	Files    int       `json:"files"`    // the files of the project config that differ from the merge base
 	Compared bool      `json:"compared"` // false: git could not compare, so the config was left out anyway
+	// Paths name the kind's paths those files fall in, as a sentence does
+	// (".codex/", "AGENTS.md", never a path the PR named); none = all of
+	// them (git could not compare, or a record written before they were
+	// named).
+	Paths []string `json:"paths,omitempty"`
+	// DocsOnly: they were all instruction files, kept out by the kind's
+	// project_docs_off while the rest of the project config loaded.
+	DocsOnly bool `json:"docs_only,omitempty"`
 }
     ProjectNote is the PR's record of a session of one kind launched without the
     checkout's project configuration (store.KVPRProject).
@@ -2470,13 +2478,14 @@ func DefaultKinds() map[string]Kind
     DefaultKinds returns the built-in kinds (fresh copies):
 
       - codex (0.160): args ["--dangerously-bypass-approvals-and-sandbox"],
-        resume ["resume","{session}"], model ["--model","{model}"], effort
-        ["-c","model_reasoning_effort={effort}"], rename "/rename {title}",
-        login_check "codex login status" + login_ok "text:Logged in",
-        mcp_off true with mcp_strict ["-c","features.apps=false",
-        "-c","skills.include_instructions=false"] and mcp_disable
-        ["-c","mcp_servers.{server}.enabled=false"], project_untrust
-        ["-c","projects={projects}"].
+        resume ["resume","{session}"], model ["--model","{model}"],
+        effort ["-c","model_reasoning_effort={effort}"],
+        rename "/rename {title}", login_check "codex login status"
+        + login_ok "text:Logged in", mcp_off true with mcp_strict
+        ["-c","features.apps=false", "-c","skills.include_instructions=false"]
+        and mcp_disable ["-c","mcp_servers.{server}.enabled=false"],
+        project_untrust ["-c","projects={projects}"], project_docs_off
+        ["-c","project_doc_max_bytes=0"].
       - claude: args ["--dangerously-skip-permissions"], resume
         ["--resume","{session}"], model ["--model","{model}"], effort
         ["--effort","{effort}"], name ["--name","{title}"], login_check
@@ -3112,16 +3121,30 @@ type Kind struct {
 	// ProjectUntrust: args that keep the checkout's own project
 	// configuration out of one session, passed when the PR changes it
 	// against its merge base (the paths the agents package knows for the
-	// kind: codex .codex/, claude .claude/ and .mcp.json); {projects}, when
-	// present, is a TOML inline table marking each of the checkout's paths
-	// untrusted (UntrustArgs). codex: ["-c", "projects={projects}"], so the
-	// session treats the checkout as an untrusted folder and loads nothing
-	// from its .codex/ (config, MCP servers, hooks, rules); claude:
+	// kind: codex .codex/, AGENTS.md and AGENTS.override.md; claude
+	// .claude/, .mcp.json, and CLAUDE.md, CLAUDE.local.md and AGENTS.md in
+	// any directory); {projects}, when present, is a TOML inline table
+	// marking each of the checkout's paths untrusted (UntrustArgs). codex:
+	// ["-c", "projects={projects}"], so the session treats the checkout as
+	// an untrusted folder and loads nothing from its .codex/ (config, MCP
+	// servers, hooks, rules) nor its AGENTS.md; claude:
 	// ["--setting-sources", "user"], so it loads the user's settings only
 	// (no project or local settings with their hooks, no .mcp.json servers,
-	// skills, commands, agents or CLAUDE.md of the checkout). Empty = such a
-	// session loads the PR's project config like any trusted project's.
+	// skills, commands, agents, CLAUDE.md or AGENTS.md of the checkout).
+	// Empty = such a session loads the PR's project config like any trusted
+	// project's (ProjectDocsOff does not apply either).
 	ProjectUntrust []string `toml:"project_untrust"`
+	// ProjectDocsOff: args that keep only the checkout's instruction files
+	// out of one session, passed instead of ProjectUntrust when they are
+	// all the PR changes of the kind's project config, so the rest of it,
+	// the team's, still loads. codex: ["-c", "project_doc_max_bytes=0"]:
+	// Codex 0.160 then reads no AGENTS.md or AGENTS.override.md of the
+	// project (core/src/agents_md.rs) and keeps its global AGENTS.md, and a
+	// -c flag outranks the checkout's .codex/config.toml (session flags
+	// over the project layer, config/src/config_layer_source.rs). Empty =
+	// ProjectUntrust covers them (claude: --setting-sources user keeps its
+	// CLAUDE.md and AGENTS.md out with the rest).
+	ProjectDocsOff []string `toml:"project_docs_off"`
 	// Name: args that name the session {title} at launch (claude --name).
 	Name []string `toml:"name"`
 	// Rename: a slash command typed while the agent works to (re)name its
@@ -3189,22 +3212,25 @@ type Kind struct {
     is known), Model (the role's model, else DefaultModel), Effort (when the
     role sets it), Subagents or NoSubagents (when the role sets max_subagents),
     MCPStrict and MCPDisable per MCP server to turn off and ProjectUntrust for a
-    checkout whose project config (.codex/; .claude/, .mcp.json) the PR changes
-    (ConfigOffArgs), Start, Args (only without a wrapper), then the role's args.
+    checkout whose project config (.codex/ and AGENTS.md; .claude/, .mcp.json,
+    CLAUDE.md and AGENTS.md) the PR changes, or ProjectDocsOff when it changes
+    only the instruction files (ConfigOffArgs), Start, Args (only without a
+    wrapper), then the role's args.
 
 func (k Kind) Argv(a LaunchArgs) []string
     Argv builds the args after the command name (herdr shell-quotes each one):
     Resume, Name, Model (a.Model, else DefaultModel), Effort, Subagents
     (or NoSubagents for 0), ConfigOffArgs(a.MCPServers, a.ProjectServers,
-    a.Untrusted), Start, Args (no wrapper only), then a.Extra. A group whose
-    value is empty is skipped; placeholders are replaced in every element.
+    a.Untrusted, a.DocsOff), Start, Args (no wrapper only), then a.Extra.
+    A group whose value is empty is skipped; placeholders are replaced in every
+    element.
 
-func (k Kind) ConfigOffArgs(servers, project, untrusted []string) []string
+func (k Kind) ConfigOffArgs(servers, project, untrusted []string, docsOff bool) []string
     ConfigOffArgs are the args that keep configuration out of a session:
-    MCPStrict under MCPOff, MCPDisable once per server to turn off
-    (servers under MCPOff, then under ProjectMCP "off" each project server
-    not among them; none in MCPAllow, nothing without MCPDisable), then
-    UntrustArgs(untrusted).
+    MCPStrict under MCPOff, MCPDisable once per server to turn off (servers
+    under MCPOff, then under ProjectMCP "off" each project server not among
+    them; none in MCPAllow, nothing without MCPDisable), then ProjectDocsOff
+    when docsOff and UntrustArgs(untrusted).
 
 func (k Kind) LoggedIn(stdout, stderr string, exitOK bool) (loggedIn, readable bool)
     LoggedIn reads LoginCheck's output per LoginOK. exitOK is whether the
@@ -3259,6 +3285,9 @@ type LaunchArgs struct {
 	// Untrusted are the checkout's paths whose project config the session
 	// must not load (the PR changes .codex/). See ConfigOffArgs.
 	ProjectServers, Untrusted []string
+	// DocsOff: the session gets ProjectDocsOff (the PR changes only the
+	// checkout's instruction files).
+	DocsOff bool
 }
     LaunchArgs are the per-start values Kind.Argv substitutes.
 
@@ -6886,6 +6915,10 @@ see ScrubbedEnv) are removed from the environment of every command.
 
 CONSTANTS
 
+const AnyDir = "**/"
+    AnyDir is the prefix of a path that names a file in any directory of the
+    repository, its top included ("**/CLAUDE.md"; pathspecs).
+
 const EvalRefPrefix = "refs/magnum/eval/"
     EvalRefPrefix holds the refs magnum eval fetches pinned commits into,
     apart from refs/magnum/pr/* (the daemon's PR heads), which it never touches.
@@ -6993,11 +7026,11 @@ func (c *Client) ChangedPaths(ctx context.Context, dir, base, head string, paths
     watched directory still shows up. The result is nil when nothing matches.
 
 func (c *Client) ChangedUnder(ctx context.Context, dir, base, head string, paths ...string) ([]string, error)
-    ChangedUnder is ChangedPaths limited to the files at or under paths,
-    each relative to the repository's top and taken literally (a directory or a
-    file) in any case (literalPaths): what head changes there since its merge
-    base with base, whatever base did since. One git diff; nil when head leaves
-    them all alone.
+    ChangedUnder is ChangedPaths limited to the files paths name, each relative
+    to the repository's top in any case (pathspecs: a directory or a file taken
+    literally, or "**/<name>" in any directory): what head changes there since
+    its merge base with base, whatever base did since. One git diff; nil when
+    head leaves them all alone.
 
 func (c *Client) Clone(ctx context.Context, repoURL, dest string) error
     Clone clones url into the absolute path dest (parents are created). URLs
@@ -7134,14 +7167,18 @@ func (c *Client) UpdateRefDelete(ctx context.Context, mainClone, ref string) err
     runs with --no-deref so git removes the ref itself, not its target.
 
 func (c *Client) WorkTreeChanges(ctx context.Context, dir, base string, skip func(untracked string) bool, paths ...string) ([]string, error)
-    WorkTreeChanges lists the files at or under paths (each relative to the
-    repository's top, taken literally in any case, literalPaths: a directory
-    or a file) whose state on disk differs from base, as a tool reading them
-    sees them: committed and uncommitted changes and deletions (git diff base
-    -- paths), and the untracked files, ignored ones included (git ls-files
-    --others), except those skip reports (nil skips none), e.g. logs the tool
-    never reads; a tracked change counts whatever skip says of its path. Sorted,
-    without duplicates; nil when they all match base.
+    WorkTreeChanges lists the files paths name (each relative to the
+    repository's top in any case, pathspecs: a directory or a file taken
+    literally, or "**/<name>" in any directory) whose state on disk differs
+    from base, as a tool reading them sees them: committed and uncommitted
+    changes and deletions (git diff base -- paths), and the untracked files
+    (git ls-files --others): ignored ones included at or under a literal path,
+    not under an AnyDir one (--exclude-standard: a dependency a setup installed,
+    node_modules/x/AGENTS.md, is no change of the head's, and the walk skips
+    the ignored directories). skip leaves out the untracked files it reports
+    (nil skips none), e.g. logs the tool never reads; a tracked change counts
+    whatever skip says of its path. Sorted, without duplicates; nil when they
+    all match base.
 
 func (c *Client) WorktreeAdd(ctx context.Context, mainClone, path, ref string, detach bool, branch string) error
     WorktreeAdd creates a worktree at the absolute path, checking out ref.
@@ -11759,10 +11796,10 @@ func KVPRGate(prID int64) string
 
 func KVPRProject(prID int64, kind string) string
     KVPRProject records a session of agent kind kind ("codex", "claude")
-    launched without the checkout's project configuration because the PR
-    changes it (.codex/; .claude/, .mcp.json), e.g. pr.7.codex_project (JSON,
-    see agents.ProjectNote); a launch of that kind that finds it unchanged
-    clears it.
+    launched without the checkout's project configuration because the PR changes
+    it (.codex/ and AGENTS.md; .claude/, .mcp.json, CLAUDE.md and AGENTS.md),
+    e.g. pr.7.codex_project (JSON, see agents.ProjectNote); a launch of that
+    kind that finds it unchanged clears it.
 
 func KVPRRoles(prID int64) string
     KVPRRoles holds the role names (a JSON list) requested for the PR's next

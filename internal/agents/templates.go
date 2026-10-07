@@ -431,16 +431,29 @@ type JudgeData struct {
 	// the checks are another commit's, and in a blind replay. A file, as
 	// check names come from the PR's workflows.
 	FailingChecks string
-	// CodexProjectDeclined: the round's Codex sessions ran with the
-	// checkout untrusted because the PR changes .codex/ (the PR's Codex
-	// ProjectNote names the round's head), rendered as
-	// `codex_project: declined` by the initial, rereview and recovery
-	// prompts only then; the skill adds a line to the review's Checks.
-	// ClaudeProjectDeclined: the same for its Claude sessions, which loaded
-	// the user's settings only because the PR changes .claude/ or
-	// .mcp.json, rendered as `claude_project: declined`. Both are set by
-	// NoteDeclinedProjects, each only in a round with a role of its kind.
-	CodexProjectDeclined, ClaudeProjectDeclined bool
+	// ProjectChecks is the review's Checks line for the round's agent CLIs
+	// whose sessions of its head ran without the PR's changes to the
+	// project config they load from the checkout (the PR's ProjectNote of
+	// the kind names the round's head): "Codex ran without the PR's
+	// AGENTS.md changes; Claude ran without the PR's CLAUDE.md and .claude/
+	// changes" (projectChecks; magnum's names of the paths, never a path
+	// the PR named), rendered as `project_checks` by the initial, rereview
+	// and recovery prompts; "" when none did. Set by NoteDeclinedProjects,
+	// each CLI only in a round with a role of its kind.
+	ProjectChecks string
+}
+
+// projectCheck says that the sessions of one agent CLI ran without the
+// PR's changes to the named project paths: "Claude ran without the PR's
+// CLAUDE.md changes" (the board's card adds how, ProjectSentences).
+func projectCheck(cli, paths string) string {
+	return cli + " ran without the PR's " + paths + " changes"
+}
+
+// projectChecks is JudgeData.ProjectChecks: the CLIs' projectCheck
+// sentences as one Checks line.
+func projectChecks(checks []string) string {
+	return strings.Join(checks, "; ")
 }
 
 // Judge phases of JudgeData.Phase.
@@ -849,7 +862,7 @@ func (m *Manager) ShellLine(ctx context.Context, prID int64, role config.Role, d
 	if d.MCPOff == nil {
 		if k, ok := m.kindSpec(role.AgentKind()); ok {
 			project = m.checkoutProject(ctx, role, d.Checkout, cmp.Or(d.BaseSHA, d.BaseRef), d.HeadSHA)
-			d.MCPOff = k.ConfigOffArgs(m.mcpServers(role), project.servers, project.paths)
+			d.MCPOff = k.ConfigOffArgs(m.mcpServers(role), project.servers, project.paths, project.docsOff)
 		}
 	}
 	if d.Template == nil && role.IsShell() && role.Command == "" && d.Command == "" && role.Prompt != "" {

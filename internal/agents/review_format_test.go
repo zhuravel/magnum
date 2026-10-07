@@ -128,15 +128,15 @@ func TestSkillReadsTheHistoryAndChecksTheDescriptionsClaims(t *testing.T) {
 	}, []string{"For a merged one, check this PR does not undo or re-break its fix."})
 }
 
-// A PR that changes .codex/ gets its checkout untrusted in magnum's Codex
-// sessions, one that changes .claude/ or .mcp.json gets its Claude sessions
-// started with the user's settings only (checkoutProject): the review says
-// so in its Checks, one line per CLI.
+// A PR that changes the project config an agent CLI loads from the
+// checkout (.codex/ or AGENTS.md; .claude/, .mcp.json, CLAUDE.md or
+// AGENTS.md) gets magnum's sessions of that CLI started without it
+// (checkoutProject): the review says so in one Checks line, which magnum
+// writes naming the files (project_checks).
 func TestSkillSaysARoundRanWithoutThePRsAgentConfigChanges(t *testing.T) {
 	skillSays(t, []string{
-		"- `codex_project`, `claude_project` (only `declined`): add the Checks line `- Codex ran without the PR's .codex/ changes`, " +
-			"resp. `- Claude ran without the PR's .claude/ and .mcp.json changes`.",
-	}, []string{"- `codex_project` (only `declined`)"})
+		"- `project_checks`: add it as one Checks line, `- <project_checks>`.",
+	}, []string{"`codex_project`", "`claude_project`", "Codex ran without"})
 }
 
 // A re-review of an unchanged head posted "Re-review 42a70de → 42a70de" with
@@ -409,8 +409,11 @@ func TestSkillOwnPassOfAReReviewCoversTheNewCommits(t *testing.T) {
 // `skipped (machine)` (7), and security findings proved with the
 // repository's tests (237 with section 4's reproduction list, which section 5
 // keeps), less the posted test instead of its output (-17) and a shorter
-// local-path line (-61). Every rule added must replace or shorten text.
-const skillMaxBytes = 29_322
+// local-path line (-61). And 124 went when magnum wrote the Checks line of a
+// round run without the PR's project config itself (`project_checks`,
+// naming the files; 2026-10-07). Every rule added must replace or shorten
+// text.
+const skillMaxBytes = 29_198
 
 func TestSkillStaysTight(t *testing.T) {
 	if n := len(magnum.Skill); n > skillMaxBytes {
@@ -429,7 +432,8 @@ func TestSkillDescribesEveryMagnumField(t *testing.T) {
 	d.MovedFrom, d.ForcePushed = "/Users/bohdan/Projects/talkable.review1", true
 	d.Readiness = Readiness{Failed: 1, File: "/r/readiness.json", Checks: []ReadinessCheck{
 		{Kind: ReadinessReady, Command: "bin/db-ready", Status: ReadinessFailed, Duration: "1s"}}}
-	d.RelatedPRs, d.HistoryFile, d.CodexProjectDeclined, d.ClaudeProjectDeclined = "/r/related.json", "/r/history.json", true, true
+	d.RelatedPRs, d.HistoryFile = "/r/related.json", "/r/history.json"
+	d.ProjectChecks = "Codex ran without the PR's AGENTS.md changes; Claude ran without the PR's CLAUDE.md changes"
 	d.FailingChecks = "/r/failing-checks.json"
 	d.DeltaCheck, d.DeltaLines, d.DeltaFile, d.Replies = true, 4, "/r/delta-check.json", 2
 	skill := string(magnum.Skill)
@@ -460,7 +464,7 @@ func TestSkillDescribesEveryMagnumField(t *testing.T) {
 			seen[m[1]] = true
 		}
 	}
-	for _, f := range []string{"notes", "notes_dir", "notes_harness", "notes_lock", "notes_unlock", "readiness", "reports", "phase", "own_findings", "related_prs", "history", "failing_checks", "codex_project", "claude_project", "delta_check", "post_replies"} {
+	for _, f := range []string{"notes", "notes_dir", "notes_harness", "notes_lock", "notes_unlock", "readiness", "reports", "phase", "own_findings", "related_prs", "history", "failing_checks", "project_checks", "delta_check", "post_replies"} {
 		if !seen[f] {
 			t.Errorf("no judge prompt renders `%s`", f)
 		}

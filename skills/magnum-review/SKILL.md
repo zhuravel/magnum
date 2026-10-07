@@ -22,7 +22,7 @@ The latest prompt's `<magnum>` block holds:
 - `related_prs` (when present): open and lately merged PRs on the same paths (section 2).
 - `history`: the changed files' last commits on the base (section 2).
 - `failing_checks` (when present): the head's failed CI checks (section 7).
-- `codex_project`, `claude_project` (only `declined`): add the Checks line `- Codex ran without the PR's .codex/ changes`, resp. `- Claude ran without the PR's .claude/ and .mcp.json changes`.
+- `project_checks`: add it as one Checks line, `- <project_checks>`.
 - `notes` (when present): the repository notes file. `notes_dir`: its harness directory; `notes_harness`: the files there now; `notes_lock`, `notes_unlock`: the commands that take and release its lock (section 2).
 - `result_file`: where to write the JSON result. `post_review`, `post_replies` (re-reviews): the commands that post your review and thread replies (sections 7, 8). `dry_run`: when `true`, post nothing.
 - `blind` (a `magnum eval` replay) and `post_merge` (GitHub merged the PR first): the prompt says what they change.

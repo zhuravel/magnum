@@ -240,3 +240,63 @@ func TestChangedUnder(t *testing.T) {
 	fx.git(dir, "commit", "--quiet", "-m", "Delete the servers")
 	changes(fx.git(dir, "rev-parse", "HEAD"), ".claude/settings.json", ".mcp.json")
 }
+
+// Claude Code loads the CLAUDE.md (and AGENTS.md) of every directory it
+// reads files in, so a comparison may name a file in any directory:
+// "**/CLAUDE.md" is git's glob, from the top, in any case, beside the
+// literal paths. An untracked file of that name counts unless ignored (a
+// package's AGENTS.md in node_modules/ is nobody's change), while a
+// literal path's counts ignored too: one ls-files per kind of path.
+func TestWorkTreeChangesOfAFileInAnyDirectory(t *testing.T) {
+	ctx := context.Background()
+	c, f := newFake(
+		outRule("devops/x/CLAUDE.md\x00", "git", "-C", slot, "diff"),
+		outRule("CLAUDE.local.md\x00", "git", "-C", slot, "ls-files", "-z", "--others", "--", ":(top,literal,icase)CLAUDE.local.md"),
+		outRule("app/AGENTS.md\x00", "git", "-C", slot, "ls-files", "-z", "--others", "--exclude-standard"),
+	)
+	got, err := c.WorkTreeChanges(ctx, slot, sha1, nil, "CLAUDE.local.md", AnyDir+"CLAUDE.md", AnyDir+"AGENTS.md")
+	if want := []string{"CLAUDE.local.md", "app/AGENTS.md", "devops/x/CLAUDE.md"}; err != nil || !slices.Equal(got, want) {
+		t.Fatalf("WorkTreeChanges = %q, %v; want %q", got, err, want)
+	}
+	wantCall(t, f, 0, false, "git", "-C", slot, "diff", "--name-only", "-z", "--no-renames", "--no-ext-diff", sha1, "--",
+		":(top,literal,icase)CLAUDE.local.md", ":(top,icase,glob)**/CLAUDE.md", ":(top,icase,glob)**/AGENTS.md")
+	wantCall(t, f, 1, false, "git", "-C", slot, "ls-files", "-z", "--others", "--", ":(top,literal,icase)CLAUDE.local.md")
+	wantCall(t, f, 2, false, "git", "-C", slot, "ls-files", "-z", "--others", "--exclude-standard", "--",
+		":(top,icase,glob)**/CLAUDE.md", ":(top,icase,glob)**/AGENTS.md")
+	for _, p := range []string{AnyDir, AnyDir + "x/CLAUDE.md"} {
+		if _, err := c.WorkTreeChanges(ctx, slot, sha1, nil, p); err == nil {
+			t.Errorf("WorkTreeChanges(%q) must be refused", p)
+		}
+		if _, err := c.ChangedUnder(ctx, slot, "origin/master", sha1, p); err == nil {
+			t.Errorf("ChangedUnder(%q) must be refused", p)
+		}
+	}
+
+	fx := newFixture(t)
+	dir := fx.origin
+	fx.write(dir, ".gitignore", "node_modules/\nCLAUDE.local.md\n")
+	fx.commit(dir, "CLAUDE.md", "the team's\n", "Add the team's instructions")
+	base := fx.commit(dir, "devops/eks/CLAUDE.md", "the team's\n", "Add the instructions of a directory")
+	changes := func(want ...string) {
+		t.Helper()
+		got, err := fx.c.WorkTreeChanges(ctx, dir, base, nil, "CLAUDE.md", "CLAUDE.local.md", AnyDir+"CLAUDE.md", AnyDir+"AGENTS.md")
+		if err != nil || !slices.Equal(got, want) {
+			t.Fatalf("WorkTreeChanges = %q, %v; want %q", got, err, want)
+		}
+	}
+	changes()
+	fx.write(dir, "node_modules/x/AGENTS.md", "a package's\n")
+	fx.commit(dir, "app/x.rb", "x\n", "Change the app only")
+	changes()
+	fx.commit(dir, "devops/eks/CLAUDE.md", "the PR's\n", "Change a directory's instructions")
+	changes("devops/eks/CLAUDE.md")
+	fx.write(dir, "Lib/agents.MD", "untracked\n")
+	fx.write(dir, "CLAUDE.local.md", "ignored, at the top\n")
+	changes("CLAUDE.local.md", "Lib/agents.MD", "devops/eks/CLAUDE.md")
+	fx.git(dir, "rm", "--quiet", "CLAUDE.md")
+	changes("CLAUDE.local.md", "CLAUDE.md", "Lib/agents.MD", "devops/eks/CLAUDE.md")
+	head := fx.git(dir, "rev-parse", "HEAD")
+	if got, err := fx.c.ChangedUnder(ctx, dir, base, head, ".claude", AnyDir+"CLAUDE.md"); err != nil || !slices.Equal(got, []string{"devops/eks/CLAUDE.md"}) {
+		t.Fatalf("ChangedUnder = %q, %v", got, err)
+	}
+}

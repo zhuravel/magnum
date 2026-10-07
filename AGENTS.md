@@ -43,7 +43,9 @@ when you change a behaviour, do not rewrite old ones.
   that changes `.claude/` or `.mcp.json` (settings with hooks, MCP servers, skills, commands, agents) gets
   its Claude sessions started with `--setting-sources user`, and a Claude session that loaded the project
   config is parked before the checkout moves to a new head that changes it (Claude reloads it while it
-  runs).
+  runs). The PR's instruction files count as that config: a changed root `AGENTS.md` starts Codex without
+  any project `AGENTS.md` (`project_docs_off`), and a changed `CLAUDE.md`, `CLAUDE.local.md` or
+  `AGENTS.md` in any directory starts Claude with `--setting-sources user`.
 
 ## Gate
 

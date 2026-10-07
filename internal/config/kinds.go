@@ -24,9 +24,11 @@ import (
 // title is known), Model (the role's model, else DefaultModel), Effort
 // (when the role sets it), Subagents or NoSubagents (when the role sets
 // max_subagents), MCPStrict and MCPDisable per MCP server to turn off and
-// ProjectUntrust for a checkout whose project config (.codex/; .claude/,
-// .mcp.json) the PR changes (ConfigOffArgs), Start, Args (only without a
-// wrapper), then the role's args.
+// ProjectUntrust for a checkout whose project config (.codex/ and
+// AGENTS.md; .claude/, .mcp.json, CLAUDE.md and AGENTS.md) the PR changes,
+// or ProjectDocsOff when it changes only the instruction files
+// (ConfigOffArgs), Start, Args (only without a wrapper), then the role's
+// args.
 type Kind struct {
 	// Start: extra args always appended.
 	Start []string `toml:"start"`
@@ -86,16 +88,30 @@ type Kind struct {
 	// ProjectUntrust: args that keep the checkout's own project
 	// configuration out of one session, passed when the PR changes it
 	// against its merge base (the paths the agents package knows for the
-	// kind: codex .codex/, claude .claude/ and .mcp.json); {projects}, when
-	// present, is a TOML inline table marking each of the checkout's paths
-	// untrusted (UntrustArgs). codex: ["-c", "projects={projects}"], so the
-	// session treats the checkout as an untrusted folder and loads nothing
-	// from its .codex/ (config, MCP servers, hooks, rules); claude:
+	// kind: codex .codex/, AGENTS.md and AGENTS.override.md; claude
+	// .claude/, .mcp.json, and CLAUDE.md, CLAUDE.local.md and AGENTS.md in
+	// any directory); {projects}, when present, is a TOML inline table
+	// marking each of the checkout's paths untrusted (UntrustArgs). codex:
+	// ["-c", "projects={projects}"], so the session treats the checkout as
+	// an untrusted folder and loads nothing from its .codex/ (config, MCP
+	// servers, hooks, rules) nor its AGENTS.md; claude:
 	// ["--setting-sources", "user"], so it loads the user's settings only
 	// (no project or local settings with their hooks, no .mcp.json servers,
-	// skills, commands, agents or CLAUDE.md of the checkout). Empty = such a
-	// session loads the PR's project config like any trusted project's.
+	// skills, commands, agents, CLAUDE.md or AGENTS.md of the checkout).
+	// Empty = such a session loads the PR's project config like any trusted
+	// project's (ProjectDocsOff does not apply either).
 	ProjectUntrust []string `toml:"project_untrust"`
+	// ProjectDocsOff: args that keep only the checkout's instruction files
+	// out of one session, passed instead of ProjectUntrust when they are
+	// all the PR changes of the kind's project config, so the rest of it,
+	// the team's, still loads. codex: ["-c", "project_doc_max_bytes=0"]:
+	// Codex 0.160 then reads no AGENTS.md or AGENTS.override.md of the
+	// project (core/src/agents_md.rs) and keeps its global AGENTS.md, and a
+	// -c flag outranks the checkout's .codex/config.toml (session flags
+	// over the project layer, config/src/config_layer_source.rs). Empty =
+	// ProjectUntrust covers them (claude: --setting-sources user keeps its
+	// CLAUDE.md and AGENTS.md out with the rest).
+	ProjectDocsOff []string `toml:"project_docs_off"`
 	// Name: args that name the session {title} at launch (claude --name).
 	Name []string `toml:"name"`
 	// Rename: a slash command typed while the agent works to (re)name its
@@ -325,7 +341,8 @@ func DefaultHealthPatterns() HealthPatterns {
 //     mcp_off true with mcp_strict ["-c","features.apps=false",
 //     "-c","skills.include_instructions=false"] and
 //     mcp_disable ["-c","mcp_servers.{server}.enabled=false"],
-//     project_untrust ["-c","projects={projects}"].
+//     project_untrust ["-c","projects={projects}"], project_docs_off
+//     ["-c","project_doc_max_bytes=0"].
 //   - claude: args ["--dangerously-skip-permissions"],
 //     resume ["--resume","{session}"], model ["--model","{model}"],
 //     effort ["--effort","{effort}"], name ["--name","{title}"], login_check
@@ -379,6 +396,10 @@ func DefaultKinds() map[string]Kind {
 			// (config/src/loader/mod.rs), so the table overrides the trust
 			// magnum recorded for one session only.
 			ProjectUntrust: []string{"-c", "projects=" + PlaceholderProjects},
+			// Codex 0.160 loads the project's AGENTS.md (AGENTS.override.md
+			// first) from the root to the session's cwd only when
+			// project_doc_max_bytes is above 0 (core/src/agents_md.rs).
+			ProjectDocsOff: []string{"-c", "project_doc_max_bytes=0"},
 		}),
 		KindClaude: base(Kind{
 			Args:       []string{"--dangerously-skip-permissions"},
@@ -389,12 +410,15 @@ func DefaultKinds() map[string]Kind {
 			LoginCheck: "claude auth status", LoginOK: "json:loggedIn",
 			SwitchModel: "/model " + PlaceholderModel, FallbackModels: []string{"opus", "sonnet"}, ResetModel: "default",
 			// Claude Code loads the checkout's .claude/settings.json (hooks,
-			// env, plugins), .mcp.json, skills, commands, agents and
-			// CLAUDE.md through the "project" setting source, and
-			// .claude/settings.local.json through "local": user alone keeps
-			// all of them out for one session (code.claude.com/docs
-			// permissions "What runs before you trust a folder", mcp
-			// "Project scope"), the operator's settings and servers kept.
+			// env, plugins), .mcp.json, skills, commands, agents, the
+			// CLAUDE.md of each directory and, where a project has no
+			// CLAUDE.md, its AGENTS.md (2.1.292's built-in agents-md
+			// plugin) through the "project" setting source, and
+			// .claude/settings.local.json and CLAUDE.local.md through
+			// "local": user alone keeps all of them out for one session
+			// (code.claude.com/docs permissions "What runs before you trust
+			// a folder", mcp "Project scope"), the operator's settings,
+			// servers and CLAUDE.md kept.
 			ProjectUntrust: []string{"--setting-sources", "user"},
 			// --strict-mcp-config without --mcp-config: Claude Code 2.1.292
 			// skips the loader of the user, local, project and plugin
@@ -432,12 +456,15 @@ type LaunchArgs struct {
 	// Untrusted are the checkout's paths whose project config the session
 	// must not load (the PR changes .codex/). See ConfigOffArgs.
 	ProjectServers, Untrusted []string
+	// DocsOff: the session gets ProjectDocsOff (the PR changes only the
+	// checkout's instruction files).
+	DocsOff bool
 }
 
 // Argv builds the args after the command name (herdr shell-quotes each one):
 // Resume, Name, Model (a.Model, else DefaultModel), Effort, Subagents (or
 // NoSubagents for 0), ConfigOffArgs(a.MCPServers, a.ProjectServers,
-// a.Untrusted), Start, Args (no wrapper only), then a.Extra. A group whose value is empty is skipped;
+// a.Untrusted, a.DocsOff), Start, Args (no wrapper only), then a.Extra. A group whose value is empty is skipped;
 // placeholders are replaced in every element.
 func (k Kind) Argv(a LaunchArgs) []string {
 	var out []string
@@ -460,7 +487,7 @@ func (k Kind) Argv(a LaunchArgs) []string {
 	default:
 		add(k.Subagents, PlaceholderSubagents, strconv.Itoa(*a.Subagents))
 	}
-	out = append(out, k.ConfigOffArgs(a.MCPServers, a.ProjectServers, a.Untrusted)...)
+	out = append(out, k.ConfigOffArgs(a.MCPServers, a.ProjectServers, a.Untrusted, a.DocsOff)...)
 	out = append(out, k.Start...)
 	if !a.Wrapper {
 		out = append(out, k.Args...)
@@ -494,9 +521,9 @@ func (k Kind) MCPOffArgs(servers []string) []string {
 // ConfigOffArgs are the args that keep configuration out of a session:
 // MCPStrict under MCPOff, MCPDisable once per server to turn off (servers
 // under MCPOff, then under ProjectMCP "off" each project server not among
-// them; none in MCPAllow, nothing without MCPDisable), then
-// UntrustArgs(untrusted).
-func (k Kind) ConfigOffArgs(servers, project, untrusted []string) []string {
+// them; none in MCPAllow, nothing without MCPDisable), then ProjectDocsOff
+// when docsOff and UntrustArgs(untrusted).
+func (k Kind) ConfigOffArgs(servers, project, untrusted []string, docsOff bool) []string {
 	out := k.MCPOffArgs(servers)
 	if k.ProjectMCP == ProjectMCPOff && len(k.MCPDisable) > 0 {
 		for _, s := range project {
@@ -507,6 +534,9 @@ func (k Kind) ConfigOffArgs(servers, project, untrusted []string) []string {
 				out = append(out, strings.ReplaceAll(a, PlaceholderServer, s))
 			}
 		}
+	}
+	if docsOff {
+		out = append(out, k.ProjectDocsOff...)
 	}
 	return append(out, k.UntrustArgs(untrusted)...)
 }
@@ -664,6 +694,7 @@ func normalizeKinds(kinds map[string]Kind) {
 		k.Effort, k.Name, k.FallbackModels = cloneOrNil(k.Effort), cloneOrNil(k.Name), cloneOrNil(k.FallbackModels)
 		k.Subagents, k.NoSubagents = cloneOrNil(k.Subagents), cloneOrNil(k.NoSubagents)
 		k.MCPAllow, k.MCPDisable, k.ProjectUntrust = cloneOrNil(k.MCPAllow), cloneOrNil(k.MCPDisable), cloneOrNil(k.ProjectUntrust)
+		k.ProjectDocsOff = cloneOrNil(k.ProjectDocsOff)
 		k.MCPStrict = cloneOrNil(k.MCPStrict)
 		k.SwitchModel, k.DefaultModel = strings.TrimSpace(k.SwitchModel), strings.TrimSpace(k.DefaultModel)
 		k.ResetModel = strings.TrimSpace(k.ResetModel)

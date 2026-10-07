@@ -512,43 +512,62 @@ func (c *Client) ModifiedPaths(ctx context.Context, dir, base, head string) ([]s
 	return c.diffNames(ctx, dir, base, head, []string{"--diff-filter=a"}, nil)
 }
 
-// ChangedUnder is ChangedPaths limited to the files at or under paths, each
-// relative to the repository's top and taken literally (a directory or a
-// file) in any case (literalPaths): what head changes there since its
-// merge base with base, whatever base did since. One git diff; nil when
-// head leaves them all alone.
+// ChangedUnder is ChangedPaths limited to the files paths name, each
+// relative to the repository's top in any case (pathspecs: a directory or
+// a file taken literally, or "**/<name>" in any directory): what head
+// changes there since its merge base with base, whatever base did since.
+// One git diff; nil when head leaves them all alone.
 func (c *Client) ChangedUnder(ctx context.Context, dir, base, head string, paths ...string) ([]string, error) {
-	specs, err := literalPaths(paths)
+	specs, err := pathspecs(paths)
 	if err != nil {
 		return nil, err
 	}
 	return c.diffNames(ctx, dir, base, head, nil, specs)
 }
 
-// literalPaths are paths as pathspecs taken literally from the
-// repository's top, matched in any (ASCII) case: on a case-insensitive
-// filesystem, macOS's default, a tool opening .claude/settings.json reads
-// a .Claude/settings.json a commit added, so a comparison of what a tool
-// loads must count it (on a case-sensitive one it over-counts, which only
-// errs on the safe side). At least one path, none empty.
-func literalPaths(paths []string) ([]string, error) {
+// AnyDir is the prefix of a path that names a file in any directory of
+// the repository, its top included ("**/CLAUDE.md"; pathspecs).
+const AnyDir = "**/"
+
+// pathspecs are paths as pathspecs from the repository's top, matched in
+// any (ASCII) case: on a case-insensitive filesystem, macOS's default, a
+// tool opening .claude/settings.json reads a .Claude/settings.json a
+// commit added, so a comparison of what a tool loads must count it (on a
+// case-sensitive one it over-counts, which only errs on the safe side).
+// A path is taken literally (a directory or a file), but one of AnyDir
+// followed by a name (no "/"; git's glob wildcards apply) matches every
+// file of that name in any directory, the top included (git's glob
+// magic: Claude Code loads the CLAUDE.md of each directory it reads files
+// in). At least one path, none empty.
+func pathspecs(paths []string) ([]string, error) {
 	if len(paths) == 0 || slices.Contains(paths, "") {
 		return nil, errors.New("gitx: the comparison needs a path")
 	}
 	specs := make([]string, len(paths))
 	for i, p := range paths {
-		specs[i] = ":(top,literal,icase)" + p
+		name, nested := strings.CutPrefix(p, AnyDir)
+		switch {
+		case !nested:
+			specs[i] = ":(top,literal,icase)" + p
+		case name == "" || strings.Contains(name, "/"):
+			return nil, fmt.Errorf("gitx: %q must name a file after %s", p, AnyDir)
+		default:
+			specs[i] = ":(top,icase,glob)" + p
+		}
 	}
 	return specs, nil
 }
 
-// WorkTreeChanges lists the files at or under paths (each relative to the
-// repository's top, taken literally in any case, literalPaths: a directory
-// or a file) whose state on
-// disk differs from base, as a tool reading them sees them: committed and
-// uncommitted changes and deletions (git diff base -- paths), and the
-// untracked files, ignored ones included (git ls-files --others), except
-// those skip reports (nil skips none), e.g. logs the tool never reads; a
+// WorkTreeChanges lists the files paths name (each relative to the
+// repository's top in any case, pathspecs: a directory or a file taken
+// literally, or "**/<name>" in any directory) whose state on disk differs
+// from base, as a tool reading them sees them: committed and uncommitted
+// changes and deletions (git diff base -- paths), and the untracked files
+// (git ls-files --others): ignored ones included at or under a literal
+// path, not under an AnyDir one (--exclude-standard: a dependency a setup
+// installed, node_modules/x/AGENTS.md, is no change of the head's, and
+// the walk skips the ignored directories). skip leaves out the untracked
+// files it reports (nil skips none), e.g. logs the tool never reads; a
 // tracked change counts whatever skip says of its path. Sorted, without
 // duplicates; nil when they all match base.
 func (c *Client) WorkTreeChanges(ctx context.Context, dir, base string, skip func(untracked string) bool, paths ...string) ([]string, error) {
@@ -558,7 +577,7 @@ func (c *Client) WorkTreeChanges(ctx context.Context, dir, base string, skip fun
 	if strings.Contains(base, "..") {
 		return nil, fmt.Errorf("gitx: revision %q must not be a range", base)
 	}
-	specs, err := literalPaths(paths)
+	specs, err := pathspecs(paths)
 	if err != nil {
 		return nil, err
 	}
@@ -567,9 +586,28 @@ func (c *Client) WorkTreeChanges(ctx context.Context, dir, base string, skip fun
 	if err != nil {
 		return nil, err
 	}
-	others, err := c.git(ctx, dir, call{label: "ls-files --others"}, append([]string{"ls-files", "-z", "--others", "--"}, specs...)...)
-	if err != nil {
-		return nil, err
+	var literal, anyDir []string
+	for i, p := range paths {
+		if strings.HasPrefix(p, AnyDir) {
+			anyDir = append(anyDir, specs[i])
+		} else {
+			literal = append(literal, specs[i])
+		}
+	}
+	var others []string
+	for _, q := range []struct {
+		opts  []string
+		specs []string
+	}{{[]string{"--others"}, literal}, {[]string{"--others", "--exclude-standard"}, anyDir}} {
+		if len(q.specs) == 0 {
+			continue
+		}
+		res, err := c.git(ctx, dir, call{label: "ls-files " + strings.Join(q.opts, " ")},
+			slices.Concat([]string{"ls-files", "-z"}, q.opts, []string{"--"}, q.specs)...)
+		if err != nil {
+			return nil, err
+		}
+		others = append(others, strings.Split(string(res.Stdout), "\x00")...)
 	}
 	var changed []string
 	for _, p := range strings.Split(string(diff.Stdout), "\x00") {
@@ -577,7 +615,7 @@ func (c *Client) WorkTreeChanges(ctx context.Context, dir, base string, skip fun
 			changed = append(changed, p)
 		}
 	}
-	for _, p := range strings.Split(string(others.Stdout), "\x00") {
+	for _, p := range others {
 		if p != "" && (skip == nil || !skip(p)) {
 			changed = append(changed, p)
 		}

@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
@@ -19,13 +20,16 @@ import (
 )
 
 // EventCodexProjectDeclined is recorded (subject "pr:<owner>/<name>#<N>")
-// each time a Codex session of the PR starts with its checkout untrusted
-// because the PR changes .codex/.
+// each time a Codex session of the PR starts without the PR's changes to
+// the project config Codex loads from the checkout: with the checkout
+// untrusted because the PR changes .codex/, or with no AGENTS.md when it
+// changes only those.
 const EventCodexProjectDeclined = "agents.codex_project_declined"
 
 // EventClaudeProjectDeclined is recorded (subject "pr:<owner>/<name>#<N>")
 // each time a Claude session of the PR starts with the user's settings
-// only because the PR changes .claude/ or .mcp.json.
+// only because the PR changes .claude/, .mcp.json, a CLAUDE.md,
+// CLAUDE.local.md or AGENTS.md.
 const EventClaudeProjectDeclined = "agents.claude_project_declined"
 
 // projectTimeout bounds the git commands that compare a checkout's project
@@ -42,14 +46,16 @@ const codexDir = ".codex"
 // configuration, which a PR controls, and how magnum names keeping it out
 // of a session.
 type projectConfig struct {
+	cli   string // the CLI's name in a sentence: "Codex"
 	paths []projectPath
-	what  string // the paths, for the event: ".codex/"
-	where string // where a changed file is: "under .codex/"
 	kept  string // what a session started without them leaves out
 	short string // the same for `magnum roles --kinds`
-	event string
-	// sentence is what the board's card says for the PR's head.
-	sentence string
+	// docsKept, docsShort: the same for a session started with the kind's
+	// project_docs_off (the PR changes only instruction files).
+	docsKept, docsShort string
+	// how, docsHow: how the card says the sessions ran without them.
+	how, docsHow string
+	event        string
 	// servers is the checkout's file declaring the MCP servers project_mcp
 	// "off" turns off by name (a Codex config.toml); "" = none.
 	servers string
@@ -63,6 +69,21 @@ type projectConfig struct {
 type projectPath struct {
 	name string
 	dir  bool // a directory; else a file (one of the other type is not loaded)
+	// anyDir: a file of that name in any directory below the root too
+	// (Claude Code loads the CLAUDE.md of each directory it reads files in).
+	anyDir bool
+	// docs: an instruction file (AGENTS.md, CLAUDE.md), which the kind's
+	// project_docs_off keeps out on its own.
+	docs bool
+}
+
+// label names p in a sentence: ".codex/", "AGENTS.md" (never a path a PR
+// named: an AGENTS.md in a subdirectory is "AGENTS.md" too).
+func (p projectPath) label() string {
+	if p.dir {
+		return p.name + "/"
+	}
+	return p.name
 }
 
 // projectKinds are the CLIs whose project configuration magnum keeps out of
@@ -71,12 +92,22 @@ type projectPath struct {
 var projectKinds = []string{KindCodex, KindClaude}
 
 var projectConfigs = map[string]projectConfig{
+	// Codex 0.160 loads a trusted folder's .codex/, and the AGENTS.md (or
+	// AGENTS.override.md) of each directory from the project root down to
+	// the session's working directory (core/src/agents_md.rs), which is the
+	// checkout's root: an AGENTS.md below it is not loaded (the model may
+	// still read one as a file). An untrusted folder loads neither, and
+	// project_doc_max_bytes=0 no AGENTS.md alone.
 	KindCodex: {
-		paths: []projectPath{{codexDir, true}},
-		what:  codexDir + "/", where: "under " + codexDir + "/",
-		kept:  "the session treats the checkout as an untrusted folder (none of its .codex/ config, MCP servers, hooks or rules load)",
-		short: "the checkout untrusted for the session",
-		event: EventCodexProjectDeclined, sentence: CodexProjectSentence, servers: filepath.Join(codexDir, "config.toml"),
+		cli:   "Codex",
+		paths: []projectPath{{name: codexDir, dir: true}, {name: "AGENTS.md", docs: true}, {name: "AGENTS.override.md", docs: true}},
+		kept: "the session treats the checkout as an untrusted folder (none of its .codex/ config, MCP servers, hooks or rules, " +
+			"nor its AGENTS.md, load)",
+		short:     "the checkout untrusted for the session",
+		docsKept:  "the session loads none of the checkout's AGENTS.md, and the rest of its project config as before",
+		docsShort: "no AGENTS.md of the checkout",
+		how:       "the checkout was untrusted in its sessions", docsHow: "its sessions loaded no AGENTS.md",
+		event: EventCodexProjectDeclined, servers: filepath.Join(codexDir, "config.toml"),
 	},
 	// Claude Code reads .claude/settings.json (hooks, env, plugins,
 	// permissions), .claude/settings.local.json, the skills, commands,
@@ -85,39 +116,82 @@ var projectConfigs = map[string]projectConfig{
 	// and agents; magnum starts at the checkout's root. It watches the
 	// settings files and skills and applies a change (hooks included) to
 	// the running session, a .claude/settings.json created later too
-	// (code.claude.com/docs settings "When edits take effect").
+	// (code.claude.com/docs settings "When edits take effect"). 2.1.292
+	// loads the CLAUDE.md and CLAUDE.local.md of the root at start and of a
+	// subdirectory when it reads files there, and, where the project has no
+	// CLAUDE.md, its AGENTS.md files instead (the built-in agents-md
+	// plugin; another instructionFiles mode loads them beside CLAUDE.md): a
+	// CLAUDE.md that links to AGENTS.md loads the PR's AGENTS.md either way.
 	KindClaude: {
+		cli:     "Claude",
 		reloads: true,
-		paths:   []projectPath{{".claude", true}, {".mcp.json", false}},
-		what:    ".claude/ and .mcp.json", where: "under .claude/ or in .mcp.json",
+		paths: []projectPath{{name: ".claude", dir: true}, {name: ".mcp.json"},
+			{name: "CLAUDE.md", anyDir: true, docs: true}, {name: "CLAUDE.local.md", anyDir: true, docs: true},
+			{name: "AGENTS.md", anyDir: true, docs: true}},
 		kept: "the session loads the user's settings only (none of the checkout's settings, hooks, MCP servers, skills, " +
-			"commands, agents or CLAUDE.md)",
+			"commands, agents, CLAUDE.md or AGENTS.md)",
 		short: "the session loads your user settings only",
-		event: EventClaudeProjectDeclined, sentence: ClaudeProjectSentence,
+		how:   "its sessions loaded your user settings only",
+		event: EventClaudeProjectDeclined,
 	},
 }
 
-// ProjectRule describes for `magnum roles --kinds` the project config of
-// kind magnum compares with the PR's merge base, e.g. ".codex/" or
-// ".claude/ or .mcp.json", what a session of a PR that changes it runs
-// with (the kind's project_untrust), e.g. "the checkout untrusted for the
-// session", and whether project_mcp applies (that config declares MCP
-// servers magnum turns off by name); paths is "" for a kind whose project
-// config magnum does not compare.
-func ProjectRule(kind string) (paths, effect string, servers bool) {
-	pc, ok := projectConfigs[kind]
-	if !ok {
-		return "", "", false
-	}
-	var names []string
+// labels names paths in a sentence, each once, in the kind's order:
+// ".codex/ and AGENTS.md"; all of the kind's paths when there are none (a
+// session that could not compare them, or a record written before the
+// record named them).
+func (pc projectConfig) labels(names []string) string {
+	var out []string
 	for _, p := range pc.paths {
-		if p.dir {
-			names = append(names, p.name+"/")
-		} else {
-			names = append(names, p.name)
+		if l := p.label(); (len(names) == 0 || slices.Contains(names, l)) && !slices.Contains(out, l) {
+			out = append(out, l)
 		}
 	}
-	return strings.Join(names, " or "), pc.short, pc.servers != ""
+	return joinList(out, "and")
+}
+
+// joinList joins words as a sentence lists them: "a", "a and b", "a, b and
+// c" (conj "and").
+func joinList(words []string, conj string) string {
+	if len(words) < 2 {
+		return strings.Join(words, "")
+	}
+	return strings.Join(words[:len(words)-1], ", ") + " " + conj + " " + words[len(words)-1]
+}
+
+// ProjectRule describes for `magnum roles --kinds` the project config of
+// kind magnum compares with the PR's merge base, e.g. ".codex/, AGENTS.md
+// or AGENTS.override.md", what a session of a PR that changes it runs
+// with (the kind's project_untrust), e.g. "the checkout untrusted for the
+// session", the instruction files among them and what a session of a PR
+// that changes only those runs with (the kind's project_docs_off; "" for a
+// kind without such args), and whether project_mcp applies (that config
+// declares MCP servers magnum turns off by name); paths is "" for a kind
+// whose project config magnum does not compare.
+func ProjectRule(kind string) (paths, effect, docs, docsEffect string, servers bool) {
+	pc, ok := projectConfigs[kind]
+	if !ok {
+		return "", "", "", "", false
+	}
+	var root, anyDir, instructions []string
+	for _, p := range pc.paths {
+		if p.anyDir {
+			anyDir = append(anyDir, p.label())
+		} else {
+			root = append(root, p.label())
+		}
+		if p.docs {
+			instructions = append(instructions, p.label())
+		}
+	}
+	paths = joinList(root, "or")
+	if len(anyDir) > 0 {
+		paths += ", or a " + joinList(anyDir, "or") + " in any directory"
+	}
+	if pc.docsShort != "" {
+		docs, docsEffect = joinList(instructions, "or"), pc.docsShort
+	}
+	return paths, pc.short, docs, docsEffect, pc.servers != ""
 }
 
 // projectScope is what a session keeps out of the PR's checkout
@@ -128,9 +202,14 @@ type projectScope struct {
 	declined bool     // the PR changes the project config (or magnum could not tell)
 	compared bool     // git compared it with the merge base
 	files    int      // the files of the project config that differ from the merge base
+	names    []string // the labels of the paths those files fall in (projectPath.label)
 	head     string   // the checkout's head, when declined
 	paths    []string // the checkout's paths for the kind's UntrustArgs, when declined
-	servers  []string // the MCP servers of the checkout's unchanged Codex config.toml (project_mcp "off")
+	// docsOff: declined, but the files are all instruction files and the
+	// kind has project_docs_off, which the session gets instead of
+	// project_untrust (paths stays empty).
+	docsOff bool
+	servers []string // the MCP servers of the checkout's unchanged Codex config.toml (project_mcp "off")
 }
 
 // checkoutProject decides how a session of role's kind treats the project
@@ -138,18 +217,23 @@ type projectScope struct {
 // Codex's .codex/, for a trusted folder, and magnum trusts its checkouts,
 // EnsureTrust: its config.toml with MCP servers Codex starts or sends
 // tokens from the environment to, model and shell settings, hooks and
-// rules; Claude's .claude/ and .mcp.json: settings with hooks, env and
-// plugins, MCP servers, skills, commands, agents). A PR controls them, so
-// when the files on disk there differ from the merge base of HEAD and base
-// (gitx.WorkTreeChanges: the PR's commits, and files a round left there,
-// untracked logs aside: logFile; the paths in any case, onDisk), or git
-// cannot tell, the session gets the kind's project_untrust args for
-// dir and its symlink-resolved form and loads none of it. Otherwise it is
-// the base branch's, the team's own, and loads as before, except that
+// rules, and the AGENTS.md at its root; Claude's .claude/ and .mcp.json:
+// settings with hooks, env and plugins, MCP servers, skills, commands,
+// agents, and the CLAUDE.md, CLAUDE.local.md and AGENTS.md of any
+// directory). A PR controls them, so when the files on disk there differ
+// from the merge base of HEAD and base (gitx.WorkTreeChanges: the PR's
+// commits, and files a round left there, untracked logs aside: logFile;
+// the paths in any case, onDisk, and what an instruction file at the root
+// links to), or git cannot tell, the session gets the kind's
+// project_untrust args for dir and its symlink-resolved form and loads none
+// of it, or, when the files are all instruction files and the kind has
+// project_docs_off, those args, and loads the rest. Otherwise it is the
+// base branch's, the team's own, and loads as before, except that
 // project_mcp "off" turns its Codex MCP servers off (servers). Nothing for
 // a kind magnum does not compare or without project_untrust and
 // project_mcp "off", for an unknown dir and for a checkout without any of
-// the kind's paths (no git runs then); head is the checkout's head when
+// the kind's paths (no git runs then; a kind with a path in any directory
+// compares every checkout that is there); head is the checkout's head when
 // the caller knows it.
 func (m *Manager) checkoutProject(ctx context.Context, role config.Role, dir, base, head string) projectScope {
 	kind := role.AgentKind()
@@ -164,7 +248,7 @@ func (m *Manager) checkoutProject(ctx context.Context, role config.Role, dir, ba
 		return projectScope{}
 	}
 	s := projectScope{kind: kind, checked: true}
-	names, present := pc.onDisk(dir)
+	disk, present := pc.onDisk(dir)
 	if !present {
 		return s
 	}
@@ -172,16 +256,28 @@ func (m *Manager) checkoutProject(ctx context.Context, role config.Role, dir, ba
 		ctx, cancel := context.WithTimeout(ctx, projectTimeout)
 		defer cancel()
 		g := gitx.New(m.d.Runner)
-		files, err := m.projectChanges(ctx, g, dir, base, pc.logFile, names)
-		if err != nil || len(files) > 0 {
+		files, err := m.projectChanges(ctx, g, dir, base, pc.logFile, disk.git)
+		changed := pc.changed(files, disk.links)
+		if err != nil || len(changed) > 0 {
 			if err != nil {
-				m.logf("agents: %s: cannot compare %s with the merge base, so the session leaves them out: %v", role.Name, pc.what, err)
+				m.logf("agents: %s: cannot compare %s with the merge base, so the session leaves them out: %v", role.Name, pc.labels(nil), err)
 			}
-			s.declined, s.compared, s.files, s.paths = true, err == nil, len(files), withRealPath(dir)
+			s.declined, s.compared, s.files = true, err == nil, len(changed)
+			if err == nil {
+				for _, p := range changed {
+					if l := p.label(); !slices.Contains(s.names, l) {
+						s.names = append(s.names, l)
+					}
+				}
+				s.docsOff = len(k.ProjectDocsOff) > 0 && !slices.ContainsFunc(changed, func(p projectPath) bool { return !p.docs })
+			}
 			if s.head = head; s.head == "" && m.d.Runner != nil {
 				s.head, _ = g.RevParse(ctx, dir, "HEAD")
 			}
-			return s
+			if !s.docsOff {
+				s.paths = withRealPath(dir)
+				return s
+			}
 		}
 	}
 	if serversOff {
@@ -190,16 +286,31 @@ func (m *Manager) checkoutProject(ctx context.Context, role config.Role, dir, ba
 	return s
 }
 
-// onDisk lists the names at dir's root the CLI may open for pc's paths:
-// each path, and every root entry other than it whose name folds to it
+// diskPaths are what git compares for one checkout (projectConfig.onDisk).
+type diskPaths struct {
+	// git: each path (a path in any directory as gitx.AnyDir and its
+	// globName), each root entry folding to one, and each link target.
+	git []string
+	// links: the target, relative to the root, of a path at the root that
+	// is a symbolic link into the checkout, and that path.
+	links map[string]projectPath
+}
+
+// onDisk lists what git compares for pc's paths in the checkout dir: each
+// path; every root entry other than it whose name folds to it
 // (strings.EqualFold: .Claude, .mcp.jſon), which a case-insensitive
 // filesystem (macOS's, which folds Unicode too) opens for it and git's
 // ASCII-only icase pathspec would not always match (gitx.WorkTreeChanges
-// compares each by its own name). present reports whether one of them is
-// there as its path's type (a directory for .claude) or cannot be told; a
+// compares each by its own name); a path in any directory as a glob
+// (gitx.AnyDir, globName); and the target of a root entry that is a
+// symbolic link into the checkout (a CLAUDE.md linking to AGENTS.md loads
+// the PR's AGENTS.md: the CLIs follow links). present reports whether one
+// of them is there as its path's type (a directory for .claude) or cannot
+// be told, and, for a path in any directory, whether the root is there; a
 // root that cannot be read adds no entries.
-func (pc projectConfig) onDisk(dir string) (names []string, present bool) {
-	entries, _ := os.ReadDir(dir)
+func (pc projectConfig) onDisk(dir string) (d diskPaths, present bool) {
+	entries, rerr := os.ReadDir(dir)
+	root := ""
 	for _, p := range pc.paths {
 		found := []string{p.name}
 		for _, e := range entries {
@@ -207,14 +318,94 @@ func (pc projectConfig) onDisk(dir string) (names []string, present bool) {
 				found = append(found, e.Name())
 			}
 		}
+		var targets []string
 		for _, n := range found {
-			if fi, err := os.Stat(filepath.Join(dir, n)); err == nil && fi.IsDir() == p.dir || err != nil && !errors.Is(err, fs.ErrNotExist) {
+			full := filepath.Join(dir, n)
+			if fi, err := os.Stat(full); err == nil && fi.IsDir() == p.dir || err != nil && !errors.Is(err, fs.ErrNotExist) {
 				present = true
 			}
+			if fi, err := os.Lstat(full); err != nil || fi.Mode()&fs.ModeSymlink == 0 {
+				continue
+			}
+			if root == "" {
+				if root, _ = filepath.EvalSymlinks(dir); root == "" {
+					root = dir
+				}
+			}
+			// A target that is one of pc's paths is compared, and named, as itself.
+			if t, ok := linkTarget(root, full); ok && !slices.Contains(targets, t) {
+				if _, _, own := pc.pathOf(t); !own {
+					if d.links == nil {
+						d.links = map[string]projectPath{}
+					}
+					d.links[t] = p
+					targets = append(targets, t)
+				}
+			}
 		}
-		names = append(names, found...)
+		if p.anyDir {
+			present = present || !errors.Is(rerr, fs.ErrNotExist)
+			found = append(found, gitx.AnyDir+globName(p.name))
+		}
+		d.git = append(append(d.git, found...), targets...)
 	}
-	return names, present
+	return d, present
+}
+
+// linkTarget is where the symbolic link path leads, relative to root (the
+// checkout's real path), with forward slashes; false when it leads
+// nowhere or outside the checkout, where no commit of the PR reaches.
+func linkTarget(root, path string) (string, bool) {
+	t, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", false
+	}
+	rel, err := filepath.Rel(root, t)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return "", false
+	}
+	return filepath.ToSlash(rel), true
+}
+
+// globName is name as a glob git matches in any (ASCII) case for every
+// name that folds to it, as macOS opens it: each letter with a case
+// variant outside ASCII (s: ſ, k: the Kelvin sign) becomes *, since git's
+// wildcards count bytes, so AGENTS.md is AGENT*.md. What the glob matches
+// beyond the name, pathOf leaves out.
+func globName(name string) string {
+	var b strings.Builder
+	for _, r := range name {
+		wide := false
+		for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
+			wide = wide || f > unicode.MaxASCII
+		}
+		if wide {
+			b.WriteByte('*')
+		} else {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// changed are the project paths the files git listed fall in, one per file
+// (pathOf, or a link target of disk), leaving out what a glob matched
+// beyond its name.
+func (pc projectConfig) changed(files []string, links map[string]projectPath) []projectPath {
+	var out []projectPath
+	for _, f := range files {
+		if p, _, ok := pc.pathOf(f); ok {
+			out = append(out, p)
+			continue
+		}
+		for t, p := range links {
+			if f == t || strings.HasPrefix(f, t+"/") {
+				out = append(out, p)
+				break
+			}
+		}
+	}
+	return out
 }
 
 // pathOf returns the project path f (relative to the checkout's root) is,
@@ -222,12 +413,19 @@ func (pc projectConfig) onDisk(dir string) (names []string, present bool) {
 // matched in any case and under Unicode folding (strings.EqualFold): a
 // case-insensitive filesystem (macOS's) opens .Claude/settings.json or
 // .mcp.jſon for .claude/settings.json or .mcp.json. Nothing lies under a
-// file's path.
+// file's path; a path in any directory (anyDir) matches f's base name
+// there too.
 func (pc projectConfig) pathOf(f string) (p projectPath, rest string, ok bool) {
 	top, rest, nested := strings.Cut(f, "/")
 	for _, p := range pc.paths {
 		if strings.EqualFold(top, p.name) && (p.dir || !nested) {
 			return p, rest, true
+		}
+	}
+	base := f[strings.LastIndex(f, "/")+1:]
+	for _, p := range pc.paths {
+		if p.anyDir && strings.EqualFold(base, p.name) {
+			return p, "", true
 		}
 	}
 	return projectPath{}, "", false
@@ -241,9 +439,10 @@ func kvSessionProjectOut(sessionID int64) string {
 }
 
 // noteSessionProject marks session id as launched with the checkout's
-// project config kept out (s.declined), or clears the mark, for a kind that
-// reloads it while it runs. Best effort: a store error is logged, and a
-// session without the mark counts as one that loaded it.
+// project config kept out (s.declined, by project_untrust), or clears the
+// mark, for a kind that reloads it while it runs. Best effort: a store
+// error is logged, and a session without the mark counts as one that
+// loaded it.
 func (m *Manager) noteSessionProject(ctx context.Context, id int64, kind string, s projectScope) {
 	if !projectConfigs[kind].reloads {
 		return
@@ -251,7 +450,7 @@ func (m *Manager) noteSessionProject(ctx context.Context, id int64, kind string,
 	ctx = context.WithoutCancel(ctx)
 	key := kvSessionProjectOut(id)
 	var err error
-	if s.declined {
+	if s.declined && !s.docsOff {
 		err = m.d.Store.SetKV(ctx, key, "1")
 	} else {
 		err = m.d.Store.DeleteKV(ctx, key)
@@ -262,22 +461,28 @@ func (m *Manager) noteSessionProject(ctx context.Context, id int64, kind string,
 }
 
 // ProjectPaths are the paths, relative to the checkout's root, that kind
-// loads its project config from (claude: .claude and .mcp.json), for a
-// comparison limited to them (gitx.Client.ChangedUnder); nil for a kind
-// magnum does not compare.
+// loads its project config from (claude: .claude, .mcp.json and CLAUDE.md,
+// CLAUDE.local.md and AGENTS.md at the root and, as gitx.AnyDir globs, in
+// any directory), for a comparison limited to them
+// (gitx.Client.ChangedUnder, whose answer ProjectTouched reads); nil for a
+// kind magnum does not compare.
 func ProjectPaths(kind string) []string {
 	var out []string
 	for _, p := range projectConfigs[kind].paths {
 		out = append(out, p.name)
+		if p.anyDir {
+			out = append(out, gitx.AnyDir+globName(p.name))
+		}
 	}
 	return out
 }
 
 // ProjectTouched reports whether paths (a PR's changed files, relative to
 // the repository root) name the project config kind loads from the
-// checkout: a file at or under one of its paths, in any case (pathOf:
-// macOS opens .Claude/settings.json for .claude/settings.json). A kind
-// magnum does not compare touches nothing.
+// checkout: a file at or under one of its paths, or of the name of a path
+// in any directory, in any case (pathOf: macOS opens .Claude/settings.json
+// for .claude/settings.json). A kind magnum does not compare touches
+// nothing.
 func ProjectTouched(kind string, paths []string) bool {
 	pc, ok := projectConfigs[kind]
 	if !ok {
@@ -313,8 +518,8 @@ func (m *Manager) ReloadsProject(ctx context.Context, s store.Session) bool {
 	return err != nil || !ok || v != "1"
 }
 
-// projectChanges lists the files at or under paths in dir that differ from
-// the merge base of HEAD and base, but the untracked ones skip reports.
+// projectChanges lists the files paths name in dir that differ from the
+// merge base of HEAD and base, but the untracked ones skip reports.
 func (m *Manager) projectChanges(ctx context.Context, g *gitx.Client, dir, base string, skip func(string) bool, paths []string) ([]string, error) {
 	switch {
 	case m.d.Runner == nil:
@@ -339,9 +544,9 @@ func (m *Manager) projectChanges(ctx context.Context, g *gitx.Client, dir, base 
 // team's config. Any other untracked file, ignored or not, still counts:
 // settings.local.json, a skill, command, agent or hook, a skill named
 // logs (.claude/skills/logs/), anything a CLI may load now or later; a
-// file of the kind's (.mcp.json) is never a log. Names match in any case,
-// as the project paths do (pathOf): .CLAUDE/LOG/x.LOG is a log, while
-// .Claude/Settings.Local.JSON still counts.
+// file of the kind's (.mcp.json, CLAUDE.md) is never a log. Names match in
+// any case, as the project paths do (pathOf): .CLAUDE/LOG/x.LOG is a log,
+// while .Claude/Settings.Local.JSON still counts.
 func (pc projectConfig) logFile(path string) bool {
 	p, rest, ok := pc.pathOf(path)
 	if !ok || !p.dir || rest == "" {
@@ -390,15 +595,15 @@ type ProjectNote struct {
 	At       time.Time `json:"at"`       // the launch
 	Files    int       `json:"files"`    // the files of the project config that differ from the merge base
 	Compared bool      `json:"compared"` // false: git could not compare, so the config was left out anyway
+	// Paths name the kind's paths those files fall in, as a sentence does
+	// (".codex/", "AGENTS.md", never a path the PR named); none = all of
+	// them (git could not compare, or a record written before they were
+	// named).
+	Paths []string `json:"paths,omitempty"`
+	// DocsOnly: they were all instruction files, kept out by the kind's
+	// project_docs_off while the rest of the project config loaded.
+	DocsOnly bool `json:"docs_only,omitempty"`
 }
-
-// CodexProjectSentence is what the board's card says for a PR whose head's
-// Codex sessions ran with its checkout untrusted.
-const CodexProjectSentence = "Codex ran without the PR's .codex/ changes (the checkout was untrusted in its sessions)"
-
-// ClaudeProjectSentence is what the board's card says for a PR whose
-// head's Claude sessions loaded the user's settings only.
-const ClaudeProjectSentence = "Claude ran without the PR's .claude/ and .mcp.json changes (its sessions loaded your user settings only)"
 
 // ProjectDeclined reads the PR's record of a session of kind launched
 // without the checkout's project configuration; false when there is none
@@ -418,42 +623,57 @@ func ProjectDeclined(ctx context.Context, st *store.Store, prID int64, kind stri
 	return n, true
 }
 
-// declinedFor reports whether the PR's record of kind names head.
-func declinedFor(ctx context.Context, st *store.Store, prID int64, kind, head string) bool {
+// declinedOf reads the PR's record of kind when it names head.
+func declinedOf(ctx context.Context, st *store.Store, prID int64, kind, head string) (ProjectNote, bool) {
 	n, ok := ProjectDeclined(ctx, st, prID, kind)
-	return ok && head != "" && n.Head == head
+	return n, ok && head != "" && n.Head == head
 }
 
 // ProjectSentences is what the board's card says of the PR's head: one
 // sentence per CLI whose sessions of that head ran without the PR's
-// project configuration (CodexProjectSentence, ClaudeProjectSentence), in
-// projectKinds' order; "" when none did.
+// project configuration, in projectKinds' order, naming the files and how
+// ("Codex ran without the PR's AGENTS.md changes (its sessions loaded no
+// AGENTS.md)"); "" when none did.
 func ProjectSentences(ctx context.Context, st *store.Store, prID int64, head string) string {
 	var out []string
 	for _, kind := range projectKinds {
-		if declinedFor(ctx, st, prID, kind, head) {
-			out = append(out, projectConfigs[kind].sentence)
+		if n, ok := declinedOf(ctx, st, prID, kind, head); ok {
+			pc := projectConfigs[kind]
+			how := pc.how
+			if n.DocsOnly {
+				how = pc.docsHow
+			}
+			out = append(out, projectCheck(pc.cli, pc.labels(n.Paths))+" ("+how+")")
 		}
 	}
 	return strings.Join(out, " ")
 }
 
-// NoteDeclinedProjects sets the judge's CodexProjectDeclined and
-// ClaudeProjectDeclined from the PR's records of head (the round's), which
-// each launch of those CLIs writes, for the kinds among the round's roles
-// only (kinds: their agent kinds, the judge's included): a record names
-// the kind's last launch on the head, which may be a session the round did
-// not run (a reviewer paused, or left out of the round).
+// NoteDeclinedProjects sets the judge's ProjectChecks from the PR's
+// records of head (the round's), which each launch of those CLIs writes,
+// for the kinds among the round's roles only (kinds: their agent kinds,
+// the judge's included), in projectKinds' order: a record names the
+// kind's last launch on the head, which may be a session the round did not
+// run (a reviewer paused, or left out of the round).
 func NoteDeclinedProjects(ctx context.Context, st *store.Store, prID int64, head string, kinds []string, jd *JudgeData) {
-	jd.CodexProjectDeclined = slices.Contains(kinds, KindCodex) && declinedFor(ctx, st, prID, KindCodex, head)
-	jd.ClaudeProjectDeclined = slices.Contains(kinds, KindClaude) && declinedFor(ctx, st, prID, KindClaude, head)
+	var checks []string
+	for _, kind := range projectKinds {
+		if !slices.Contains(kinds, kind) {
+			continue
+		}
+		if n, ok := declinedOf(ctx, st, prID, kind, head); ok {
+			pc := projectConfigs[kind]
+			checks = append(checks, projectCheck(pc.cli, pc.labels(n.Paths)))
+		}
+	}
+	jd.ProjectChecks = projectChecks(checks)
 }
 
 // recordProject keeps the PR's record of how role's session treats its
 // checkout's project configuration (one per kind): a declined one sets it
-// and is the kind's event (counts and the head, never a path the PR named);
-// one that found the config unchanged (or absent) clears it. Best effort: a
-// store error is logged.
+// and is the kind's event (counts, the paths' labels and the head, never a
+// path the PR named); one that found the config unchanged (or absent)
+// clears it. Best effort: a store error is logged.
 func (m *Manager) recordProject(ctx context.Context, prID int64, role config.Role, dir string, s projectScope) {
 	if !s.checked {
 		return
@@ -467,19 +687,25 @@ func (m *Manager) recordProject(ctx context.Context, prID int64, role config.Rol
 		}
 		return
 	}
-	note, _ := json.Marshal(ProjectNote{Head: s.head, At: m.now().UTC(), Files: s.files, Compared: s.compared})
+	note, _ := json.Marshal(ProjectNote{Head: s.head, At: m.now().UTC(), Files: s.files, Compared: s.compared, Paths: s.names, DocsOnly: s.docsOff})
 	if err := m.d.Store.SetKV(ctx, key, string(note)); err != nil {
 		m.logf("agents: %s: record %s: %v", role.Name, key, err)
 	}
-	why := fmt.Sprintf("%d files %s differ from the merge base", s.files, pc.where)
+	names := pc.labels(s.names)
+	why := fmt.Sprintf("%d files differ from the merge base", s.files)
 	if s.files == 1 {
-		why = fmt.Sprintf("1 file %s differs from the merge base", pc.where)
+		why = "1 file differs from the merge base"
 	}
 	if !s.compared {
-		why = fmt.Sprintf("magnum could not compare %s with the merge base", pc.what)
+		why = fmt.Sprintf("magnum could not compare %s with the merge base", names)
 	}
-	msg := fmt.Sprintf("%s runs without the PR's %s changes: %s, so %s", role.Name, pc.what, why, pc.kept)
-	data, _ := json.Marshal(map[string]any{"role": role.Name, "checkout": dir, "files": s.files, "compared": s.compared, "head": s.head})
+	kept := pc.kept
+	if s.docsOff {
+		kept = pc.docsKept
+	}
+	msg := fmt.Sprintf("%s runs without the PR's %s changes: %s, so %s", role.Name, names, why, kept)
+	data, _ := json.Marshal(map[string]any{"role": role.Name, "checkout": dir, "files": s.files, "compared": s.compared, "head": s.head,
+		"paths": s.names, "docs_only": s.docsOff})
 	subject := m.prSubject(ctx, prID)
 	if _, err := m.d.Store.AppendEvent(ctx, store.Event{Level: "info", Subject: &subject, Kind: pc.event,
 		Message: execx.Redact(msg), Data: data}); err != nil {

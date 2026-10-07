@@ -114,7 +114,7 @@ func TestJudgeOfAPRChangingCodexStartsWithTheCheckoutUntrusted(t *testing.T) {
 			t.Fatalf("merge-base calls = %v", calls)
 		}
 		evs := projectEvents(t, e)
-		if len(evs) != 1 || !strings.Contains(evs[0].Message, "2 files under .codex/ differ from the merge base") ||
+		if len(evs) != 1 || !strings.Contains(evs[0].Message, "runs without the PR's .codex/ changes: 2 files differ from the merge base") ||
 			!strings.Contains(evs[0].Message, "codex-judge") || strings.Contains(evs[0].Message, "x.rules") {
 			t.Fatalf("resume %q: events = %+v", resume, evs)
 		}
@@ -227,7 +227,7 @@ func TestCodexProjectIsUntrustedWhenItCannotBeCompared(t *testing.T) {
 		t.Fatalf("args = %q", got)
 	}
 	evs := projectEvents(t, e)
-	if len(evs) != 1 || !strings.Contains(evs[0].Message, "could not compare .codex/ with the merge base") {
+	if len(evs) != 1 || !strings.Contains(evs[0].Message, "could not compare .codex/, AGENTS.md and AGENTS.override.md with the merge base") {
 		t.Fatalf("events = %+v", evs)
 	}
 }

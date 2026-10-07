@@ -1,7 +1,8 @@
 package engine
 
-// A PR controls its checkout's project config for the agent CLIs (.claude/
-// and .mcp.json for Claude Code), and an agent started with it loaded may
+// A PR controls its checkout's project config for the agent CLIs (.claude/,
+// .mcp.json and the CLAUDE.md and AGENTS.md files for Claude Code), and an
+// agent started with it loaded may
 // reload it while it runs: Claude Code watches its settings files (hooks
 // included) and skills, and loads a .claude/settings.json created later.
 // agents keeps a changed config out of each launch and resume (the kind's
@@ -98,9 +99,11 @@ type headProbe struct {
 // (store.PRFiles); otherwise (a PR of more files than the list holds, a
 // list of another head, none) git does: the files the head changes at or
 // under the kind's paths since its merge base with the PR's base branch
-// (gitx.Client.ChangedUnder). A fetch that fails leaves the list of the
-// radar's head; a session of an unknown kind, a git that cannot tell and
-// no answer at all are no proof, so the session is quit.
+// (gitx.Client.ChangedUnder), read like the list (agents.ProjectTouched:
+// a glob of a path in any directory matches wider than its name). A fetch
+// that fails leaves the list of the radar's head; a session of an unknown
+// kind, a git that cannot tell and no answer at all are no proof, so the
+// session is quit.
 func (p *headProbe) leavesProjectAlone(ctx context.Context, s store.Session) bool {
 	kind := deref(s.AgentKind)
 	paths := agents.ProjectPaths(kind)
@@ -122,7 +125,7 @@ func (p *headProbe) leavesProjectAlone(ctx context.Context, s store.Session) boo
 			p.e.log.Warn("project config: cannot compare the head with its merge base, so a session that reloads it is quit",
 				"pr", p.job.pr.ID, "head", head, "err", err)
 		}
-		touched = err != nil || len(changed) > 0
+		touched = err != nil || agents.ProjectTouched(kind, changed)
 		if p.byKind == nil {
 			p.byKind = map[string]bool{}
 		}

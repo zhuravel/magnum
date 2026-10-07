@@ -59,13 +59,13 @@ func TestCodexMarksAChangedCheckoutUntrustedInOneTable(t *testing.T) {
 func TestProjectMCPOffTurnsTheCheckoutsServersOffButTheAllowedOnes(t *testing.T) {
 	user, project := []string{"browser", "docs"}, []string{"docs", "sentry", "tracker"}
 	codex, _ := Defaults().KindSpec(KindCodex)
-	if got := codex.ConfigOffArgs(user, project, nil); !slices.Equal(got, []string{"-c", "features.apps=false", "-c", "skills.include_instructions=false", "-c", "mcp_servers.browser.enabled=false", "-c", "mcp_servers.docs.enabled=false"}) {
+	if got := codex.ConfigOffArgs(user, project, nil, false); !slices.Equal(got, []string{"-c", "features.apps=false", "-c", "skills.include_instructions=false", "-c", "mcp_servers.browser.enabled=false", "-c", "mcp_servers.docs.enabled=false"}) {
 		t.Fatalf("project_mcp allow: %q, want the user's servers only", got)
 	}
 	off := mustLoad(t, map[string]string{"config.toml": "[kinds.codex]\nproject_mcp = \"OFF\"\nmcp_allow = [\"tracker\"]\n" + minimalConfig})
 	k, _ := off.KindSpec(KindCodex)
 	want := []string{"-c", "features.apps=false", "-c", "skills.include_instructions=false", "-c", "mcp_servers.browser.enabled=false", "-c", "mcp_servers.docs.enabled=false", "-c", "mcp_servers.sentry.enabled=false"}
-	if got := k.ConfigOffArgs(user, project, nil); !slices.Equal(got, want) {
+	if got := k.ConfigOffArgs(user, project, nil, false); !slices.Equal(got, want) {
 		t.Fatalf("project_mcp off: %q\nwant %q", got, want)
 	}
 	if got := k.Argv(LaunchArgs{MCPServers: user, ProjectServers: project, Wrapper: true}); !slices.Equal(got, want) {
@@ -74,8 +74,38 @@ func TestProjectMCPOffTurnsTheCheckoutsServersOffButTheAllowedOnes(t *testing.T)
 	userOn := mustLoad(t, map[string]string{"config.toml": "[kinds.codex]\nproject_mcp = \"off\"\nmcp_off = false\n" + minimalConfig})
 	k, _ = userOn.KindSpec(KindCodex)
 	want = []string{"-c", "mcp_servers.docs.enabled=false", "-c", "mcp_servers.sentry.enabled=false", "-c", "mcp_servers.tracker.enabled=false"}
-	if got := k.ConfigOffArgs(user, project, nil); !slices.Equal(got, want) {
+	if got := k.ConfigOffArgs(user, project, nil, false); !slices.Equal(got, want) {
 		t.Fatalf("mcp_off false, project_mcp off: %q\nwant %q", got, want)
+	}
+}
+
+// A PR that changes only the AGENTS.md Codex loads keeps the team's
+// .codex/: the session gets project_docs_off (Codex reads no project
+// AGENTS.md at project_doc_max_bytes=0) where project_untrust would go,
+// after the servers project_mcp "off" turns off, and the checkout stays
+// trusted. Claude has none (--setting-sources user covers its CLAUDE.md),
+// and project_docs_off = [] leaves the flag out.
+func TestCodexKeepsOnlyTheInstructionFilesOutWithProjectDocsOff(t *testing.T) {
+	codex, _ := Defaults().KindSpec(KindCodex)
+	if !slices.Equal(codex.ProjectDocsOff, []string{"-c", "project_doc_max_bytes=0"}) {
+		t.Fatalf("codex project_docs_off = %q", codex.ProjectDocsOff)
+	}
+	got := codex.Argv(LaunchArgs{MCPServers: []string{"docs"}, DocsOff: true, Wrapper: true})
+	if want := []string{"-c", "features.apps=false", "-c", "skills.include_instructions=false", "-c", "mcp_servers.docs.enabled=false", "-c", "project_doc_max_bytes=0"}; !slices.Equal(got, want) {
+		t.Fatalf("argv = %q\nwant %q", got, want)
+	}
+	off := mustLoad(t, map[string]string{"config.toml": "[kinds.codex]\nproject_mcp = \"off\"\n" + minimalConfig})
+	k, _ := off.KindSpec(KindCodex)
+	if got, want := k.ConfigOffArgs(nil, []string{"sentry"}, nil, true), []string{"-c", "features.apps=false", "-c", "skills.include_instructions=false", "-c", "mcp_servers.sentry.enabled=false", "-c", "project_doc_max_bytes=0"}; !slices.Equal(got, want) {
+		t.Fatalf("project_mcp off: %q\nwant %q", got, want)
+	}
+	if claude, _ := Defaults().KindSpec(KindClaude); claude.ProjectDocsOff != nil {
+		t.Fatalf("claude project_docs_off = %q", claude.ProjectDocsOff)
+	}
+	none := mustLoad(t, map[string]string{"config.toml": "[kinds.codex]\nproject_docs_off = []\n" + minimalConfig})
+	k, _ = none.KindSpec(KindCodex)
+	if got := k.ConfigOffArgs(nil, nil, nil, true); !slices.Equal(got, []string{"-c", "features.apps=false", "-c", "skills.include_instructions=false"}) {
+		t.Fatalf("project_docs_off = []: %q", got)
 	}
 }
 

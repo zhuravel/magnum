@@ -372,11 +372,14 @@ func rolesKinds(c *Context, cfg *config.Config, o rolesOpts) int {
 		}
 		fmt.Fprintf(tw, "  mcp:\t%s\n", mcp)
 		project := "-"
-		if paths, effect, servers := agents.ProjectRule(name); paths != "" {
+		if paths, effect, docs, docsEffect, servers := agents.ProjectRule(name); paths != "" {
 			if len(k.ProjectUntrust) > 0 || servers && k.ProjectMCP == config.ProjectMCPOff && len(k.MCPDisable) > 0 {
 				project = "- (a changed " + paths + " loads)"
 				if len(k.ProjectUntrust) > 0 {
 					project = args(k.ProjectUntrust) + " when the PR changes " + paths + " (" + effect + ")"
+					if docs != "" && len(k.ProjectDocsOff) > 0 {
+						project += "; " + args(k.ProjectDocsOff) + " instead when it changes only " + docs + " (" + docsEffect + ")"
+					}
 				}
 				if servers {
 					project += "; else its MCP servers: " + k.ProjectMCP
