@@ -76,24 +76,31 @@ type FilesPR struct {
 	IsDraft     bool
 	MergedAt    *time.Time
 	ReviewedSHA *string // the head magnum last reviewed; nil = never reviewed
-	Files       PRFiles
+	// ActivityAt is the PR's last activity as the board's UPDATED shows it
+	// (PR.Activity: prs.activity_at, else GitHub's updatedAt); nil when
+	// neither is known.
+	ActivityAt *time.Time
+	Files      PRFiles
 }
 
 // PRsWithFiles returns the PRs of the repository that have a file list and
-// are open (drafts included) or were merged at or after mergedSince, except
-// the PR except, by number.
-func (s *Store) PRsWithFiles(ctx context.Context, repoID, except int64, mergedSince time.Time) ([]FilesPR, error) {
+// are open (drafts included) with activity at or after activeSince (or none
+// known), or were merged at or after mergedSince, except the PR except, by
+// number.
+func (s *Store) PRsWithFiles(ctx context.Context, repoID, except int64, mergedSince, activeSince time.Time) ([]FilesPR, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT p.id, p.number, p.url, p.gh_state, p.is_draft, p.merged_at, p.reviewed_sha,
-  f.head_sha, f.paths_json, f.truncated, f.fetched_at
+  COALESCE(p.activity_at, p.gh_updated_at), f.head_sha, f.paths_json, f.truncated, f.fetched_at
 FROM prs p JOIN pr_files f ON f.pr_id = p.id
-WHERE p.repo_id = ? AND p.id != ? AND (p.gh_state = 'OPEN' OR (p.gh_state = 'MERGED' AND p.merged_at >= ?))
-ORDER BY p.number`, repoID, except, FormatTime(mergedSince))
+WHERE p.repo_id = ? AND p.id != ? AND (
+  (p.gh_state = 'OPEN' AND COALESCE(p.activity_at, p.gh_updated_at, ?) >= ?) OR (p.gh_state = 'MERGED' AND p.merged_at >= ?))
+ORDER BY p.number`, repoID, except, FormatTime(activeSince), FormatTime(activeSince), FormatTime(mergedSince))
 	if err != nil {
 		return nil, fmt.Errorf("prs with files of repo %d: %w", repoID, err)
 	}
 	out, err := collect(rows, func(sc scanner) (FilesPR, error) {
 		var p FilesPR
-		dest := append([]any{&p.ID, &p.Number, &p.URL, &p.GHState, &p.IsDraft, nullTime(&p.MergedAt), &p.ReviewedSHA}, scanPRFiles(&p.Files)...)
+		dest := append([]any{&p.ID, &p.Number, &p.URL, &p.GHState, &p.IsDraft, nullTime(&p.MergedAt), &p.ReviewedSHA, nullTime(&p.ActivityAt)},
+			scanPRFiles(&p.Files)...)
 		return p, sc.Scan(dest...)
 	})
 	if err != nil {

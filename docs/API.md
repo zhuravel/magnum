@@ -9824,7 +9824,10 @@ type RelatedPR struct {
 	State    string     `json:"state"` // open | merged
 	Draft    bool       `json:"draft,omitempty"`
 	MergedAt *time.Time `json:"merged_at,omitempty"`
-	HeadSHA  string     `json:"head_sha"` // the head its paths were read at
+	// ActivityAt is its last activity as the board's UPDATED shows it
+	// (store.PR.Activity); an open PR idle for relatedIdle is not related.
+	ActivityAt *time.Time `json:"activity_at,omitempty"`
+	HeadSHA    string     `json:"head_sha"` // the head its paths were read at
 	// Overlap counts the changed paths both PRs share (related_ignore's
 	// left out); Paths are the first twenty of them, sorted.
 	Overlap int      `json:"overlap"`
@@ -11893,7 +11896,11 @@ type FilesPR struct {
 	IsDraft     bool
 	MergedAt    *time.Time
 	ReviewedSHA *string // the head magnum last reviewed; nil = never reviewed
-	Files       PRFiles
+	// ActivityAt is the PR's last activity as the board's UPDATED shows it
+	// (PR.Activity: prs.activity_at, else GitHub's updatedAt); nil when
+	// neither is known.
+	ActivityAt *time.Time
+	Files      PRFiles
 }
     FilesPR is a PR with its stored file list (PRsWithFiles).
 
@@ -12987,10 +12994,11 @@ func (s *Store) PRByRepoNumber(ctx context.Context, repoID int64, number int) (P
 func (s *Store) PRFilesOf(ctx context.Context, prID int64) (PRFiles, bool, error)
     PRFilesOf returns the PR's stored file list; ok is false when it has none.
 
-func (s *Store) PRsWithFiles(ctx context.Context, repoID, except int64, mergedSince time.Time) ([]FilesPR, error)
-    PRsWithFiles returns the PRs of the repository that have a file list and are
-    open (drafts included) or were merged at or after mergedSince, except the PR
-    except, by number.
+func (s *Store) PRsWithFiles(ctx context.Context, repoID, except int64, mergedSince, activeSince time.Time) ([]FilesPR, error)
+    PRsWithFiles returns the PRs of the repository that have a file list and
+    are open (drafts included) with activity at or after activeSince (or none
+    known), or were merged at or after mergedSince, except the PR except,
+    by number.
 
 func (s *Store) PendingRequests(ctx context.Context, limit int) ([]Request, error)
     PendingRequests returns up to limit pending requests, oldest first (limit <=

@@ -3303,3 +3303,26 @@ editing history. Code, config comments and prompts reference these by their head
   what a partial list shows (the former identity's latest verdict may be among the reviews left out); reading
   the reviews newest first for the guard (a marker may still be older than the page read); raising the 5-page
   cap (a PR past 500 reviews is rare, and an incomplete read now says so).
+- **The Related lines name only live PRs and say nothing twice** (2026-10-07; completes "The judge knows the
+  related PRs"). Reviews asked to coordinate with two open PRs whose last activity was 3 and 6 months earlier,
+  another named a draft idle for a month, and one PR's rounds 5, 6 and 7 each repeated the same Related line,
+  while the helpful lines (two PRs fixing the same spec, a proven merge conflict) were about live PRs;
+  `related.json` had no activity date. Each related PR now carries `activity_at`, the board's UPDATED
+  (`prs.activity_at`, else GitHub's `updatedAt`; `store.FilesPR.ActivityAt`), and `PRsWithFiles` leaves out an
+  open PR whose activity is older than its `activeSince`, 30 days before the prompt (`relatedIdle`, not a key);
+  an open PR with no activity known stays, and a merged PR keeps the `related_lookback` rule whatever its
+  activity. Every judge prompt also records its whole set in `related-all.json` in the report directory (the
+  round, the head, the set it compared with as `base`, the set), and in any round but an initial one
+  `related.json` holds only the related PRs that the set recorded for the head the previous review covered
+  (`previousHead`: the previous review's commit, else `reviewed_sha`) lacked or named another way: another state
+  (open or merged) or other shared paths; a new head, activity, the draft flag, reviews and findings change no
+  relation. With none left there is no file (an earlier round's on the same head is removed) and no
+  `related_prs`, so the judge writes no Related line, the skill writing one only from the file. A record the
+  same round wrote (its own pass before the candidates, the paused turn a continue finishes; in the round's
+  directory or, after a restart, the previous head's) gives its `base` again, so the round's prompts agree
+  when the head under review is the previous review's; a head reviewed before the record existed reads its
+  `related.json`, which then held the whole set. The base is found by the previous review's head, never by
+  the judge's session, so a cold judge or a recovery compares the same way. A round that posted nothing does
+  not move it (the next round's previous review is still the older one), so its related PRs are named again,
+  but a later round on the previous review's head (a reply round, a failed one) replaces that head's record
+  and its set counts as named. The `round.related` event counts the PRs left out as `told`.

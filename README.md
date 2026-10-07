@@ -672,10 +672,15 @@ the PR merges. Every judge prompt (the own pass, the candidates phase, a round's
 check) then names `related.json` in the report directory as `related_prs`, when there is any: the open
 PRs (drafts included) and those merged within `[pipeline] related_lookback` (14 days) whose paths overlap
 the PR's at the head under review, paths matching `related_ignore` (lockfiles by default) aside, a
-`[[watch]]` may set both. They are ranked by shared paths, at most 10 with 20 paths each, and each has its
-number, URL, state (and merge time), head, the shared paths, whether Magnum reviewed it with its last
-review's URL and verdict, and how many findings Magnum posted on those paths; no titles, bodies or
-comments (the judge reads a PR itself with `gh` when it matters). The skill has the judge name an open PR
+`[[watch]]` may set both; an open PR without activity for 30 days (the board's UPDATED) is left out. They
+are ranked by shared paths, at most 10 with 20 paths each, and each has its number, URL, state (and merge
+time), last activity, head, the shared paths, whether Magnum reviewed it with its last review's URL and
+verdict, and how many findings Magnum posted on those paths; no titles, bodies or comments (the judge
+reads a PR itself with `gh` when it matters). Every judge prompt records its whole set in
+`related-all.json` beside it, and a later round's `related.json` names only the related PRs that the set
+recorded for the head the previous review covered lacked or named another way (open or merged, the
+shared paths), so a review does not repeat the Related line of the one before; with nothing new there is
+no file and no `related_prs`. The skill has the judge name an open PR
 that changes the same behaviour (a duplicate or competing fix, conflicting edits, one needing the other)
 in one line of its review, raise a finding only when merging both provably breaks something, check that
 the PR does not undo what a recently merged one fixed, and record a flaky-test or recurring-bug pattern

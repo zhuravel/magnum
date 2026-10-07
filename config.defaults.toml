@@ -194,7 +194,8 @@ judge_own_pass = "parallel"       # the judge does its own pass (its own_pass pr
                                   # and judges their reports once both ended; "after": one judge prompt after
                                   # the reviewers. A judge alone (delta check, continue) gets one prompt anyway
 related_lookback = "14d"          # every judge prompt names related.json: the repository's open PRs, and those
-                                  # merged within this long, that change this PR's paths ("0s": open PRs only)
+                                  # merged within this long, that change this PR's paths ("0s": open PRs only);
+                                  # never an open PR idle for 30 days, and after a review only the new ones
 related_ignore = ["**/Gemfile.lock", "**/package-lock.json", "**/pnpm-lock.yaml", "**/yarn.lock", "**/bun.lock",
                   "**/go.sum", "**/poetry.lock", "**/uv.lock", "**/Pipfile.lock", "**/Cargo.lock", "**/composer.lock"]
                                   # paths that never make two PRs related (globs as skip_paths) and that

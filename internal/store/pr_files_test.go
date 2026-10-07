@@ -184,7 +184,7 @@ func TestPRsWithFilesListsOpenAndRecentlyMergedPRs(t *testing.T) {
 	filesPR(t, st, repo.ID, 15, false, GHClosed, nil, "app/x.rb")                          // closed unmerged
 	filesPR(t, st, repo.ID, 16, false, GHOpen, nil)                                        // no list
 	filesPR(t, st, other.ID, 17, false, GHOpen, nil, "app/x.rb")                           // another repository
-	got, err := st.PRsWithFiles(ctx, repo.ID, self.ID, since)
+	got, err := st.PRsWithFiles(ctx, repo.ID, self.ID, since, time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,6 +209,49 @@ func TestPRsWithFilesListsOpenAndRecentlyMergedPRs(t *testing.T) {
 	if p := got[2]; p.URL != "https://github.com/talkable/talkable/pull/13" || p.Files.HeadSHA != "sha-13" ||
 		!reflect.DeepEqual(p.Files.Paths, []string{"app/x.rb", "app/y.rb"}) {
 		t.Fatalf("#13 = %+v", p)
+	}
+}
+
+// An open PR without activity since activeSince is no candidate: its
+// activity is the board's UPDATED (prs.activity_at, else GitHub's
+// updatedAt), and an open PR with neither stays. A merged PR keeps the
+// merge rule whatever its activity.
+func TestPRsWithFilesLeavesOutOpenPRsIdleSinceActiveSince(t *testing.T) {
+	st, _ := newStore(t)
+	ctx := context.Background()
+	repo := mustRepo(t, st)
+	activeSince := t0.Add(-30 * 24 * time.Hour)
+	self := filesPR(t, st, repo.ID, 10, false, GHOpen, nil, "app/x.rb")
+	set := func(p PR, col string, at time.Time) {
+		t.Helper()
+		if err := st.UpdatePR(ctx, p.ID, func(u *PRUpdate) { u.Set(col, at) }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	set(filesPR(t, st, repo.ID, 11, false, GHOpen, nil, "app/x.rb"), "activity_at", t0.Add(-31*24*time.Hour)) // idle 31 days
+	set(filesPR(t, st, repo.ID, 12, true, GHOpen, nil, "app/x.rb"), "activity_at", t0.Add(-29*24*time.Hour))  // a draft idle 29 days
+	idleUpdated := filesPR(t, st, repo.ID, 13, false, GHOpen, nil, "app/x.rb")
+	set(idleUpdated, "gh_updated_at", t0.Add(-40*24*time.Hour)) // no activity_at yet: GitHub's updatedAt
+	both := filesPR(t, st, repo.ID, 14, false, GHOpen, nil, "app/x.rb")
+	set(both, "gh_updated_at", t0.Add(-40*24*time.Hour))
+	set(both, "activity_at", t0.Add(-time.Hour))                // activity_at wins over updatedAt
+	filesPR(t, st, repo.ID, 15, false, GHOpen, nil, "app/x.rb") // activity unknown
+	merged := filesPR(t, st, repo.ID, 16, false, GHMerged, Ptr(t0.Add(-24*time.Hour)), "app/x.rb")
+	set(merged, "activity_at", t0.Add(-60*24*time.Hour))
+	got, err := st.PRsWithFiles(ctx, repo.ID, self.ID, t0.Add(-14*24*time.Hour), activeSince)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sum []string
+	for _, p := range got {
+		s := strconv.Itoa(p.Number)
+		if p.ActivityAt != nil {
+			s += ":" + p.ActivityAt.Format("01-02T15")
+		}
+		sum = append(sum, s)
+	}
+	if want := []string{"12:09-04T12", "14:10-03T11", "15", "16:08-04T12"}; !reflect.DeepEqual(sum, want) {
+		t.Fatalf("PRsWithFiles = %v\nwant %v", sum, want)
 	}
 }
 
