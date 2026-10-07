@@ -76,6 +76,9 @@ type BoardRow struct {
 	PrevState string    `json:"prev_state"`
 	MergedAt  time.Time `json:"merged_at"`
 	ClosedAt  time.Time `json:"closed_at"`
+	// ReleaseAfter is when a closed PR's close grace ends and cleanup
+	// releases its slot (prs.release_after; zero when none).
+	ReleaseAfter time.Time `json:"release_after"`
 	// MergedUnreviewed: GitHub merged the PR before magnum reviewed its last
 	// push (IsMergedUnreviewed). FlagDismissed: the PR was muted after that
 	// merge, so it is not flagged but would be unmuted (IsFlagDismissed).
@@ -168,7 +171,7 @@ func (s *Store) Board(ctx context.Context, f BoardFilter) ([]BoardRow, error) {
   p.reviewed_at, p.last_review_login, p.identity, sl.name, sl.path, p.pinned, p.muted, p.next_eligible_at,
   p.last_error, p.rounds_today, p.rounds_day, p.ci_state, p.ci_json, p.review_requests_json,
   p.prev_state, p.merged_at, p.closed_at, p.forced, COALESCE(p.activity_at, p.gh_updated_at), p.review_gate_json,
-  p.replies_json, p.replies_read_at
+  p.replies_json, p.replies_read_at, p.release_after
 FROM prs p
 JOIN repos r ON r.id = p.repo_id
 LEFT JOIN slots sl ON sl.pr_id = p.id AND sl.state <> ?`
@@ -198,7 +201,7 @@ func scanBoardRow(sc scanner, today string) (BoardRow, error) {
 		title, author, skip, reviewed, event, login, slot, path, lastE *string
 		roundsDay, ciState, prev                                       *string
 		updated, reviewedAt, nextAt, mergedAt, closedAt, activity      *time.Time
-		readAt                                                         *time.Time
+		readAt, releaseAfter                                           *time.Time
 		replies                                                        []Reply
 		forced                                                         bool
 	)
@@ -208,7 +211,7 @@ func scanBoardRow(sc scanner, today string) (BoardRow, error) {
 		nullTime(&reviewedAt), &login, &b.Identity, &slot, &path, &b.Pinned, &b.Muted, nullTime(&nextAt),
 		&lastE, &b.RoundsToday, &roundsDay, &ciState, jsonCol(&b.CI), jsonCol(&b.ReviewRequests),
 		&prev, nullTime(&mergedAt), nullTime(&closedAt), &forced, nullTime(&activity), jsonCol(&b.ReviewGate),
-		jsonCol(&replies), nullTime(&readAt))
+		jsonCol(&replies), nullTime(&readAt), nullTime(&releaseAfter))
 	if err != nil {
 		return BoardRow{}, err
 	}
@@ -219,7 +222,7 @@ func scanBoardRow(sc scanner, today string) (BoardRow, error) {
 	b.Slot, b.SlotPath, b.LastError = Deref(slot), Deref(path), Deref(lastE)
 	b.UpdatedAt, b.ActivityAt, b.LastReviewAt, b.NextEligibleAt = Deref(updated), Deref(activity), Deref(reviewedAt), Deref(nextAt)
 	b.CIState = Deref(ciState)
-	b.PrevState, b.MergedAt, b.ClosedAt = Deref(prev), Deref(mergedAt), Deref(closedAt)
+	b.PrevState, b.MergedAt, b.ClosedAt, b.ReleaseAfter = Deref(prev), Deref(mergedAt), Deref(closedAt), Deref(releaseAfter)
 	b.MergedUnreviewed = IsMergedUnreviewed(b.GHState, b.PrevState, b.HeadSHA, b.ReviewedSHA, b.Muted, forced)
 	b.FlagDismissed = IsFlagDismissed(b.GHState, b.PrevState, b.HeadSHA, b.ReviewedSHA, b.Muted, forced)
 	if Deref(roundsDay) != today {

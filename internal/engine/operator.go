@@ -49,6 +49,11 @@ const (
 	// pauseHeldWindow dedupes the toast of a request a pause holds (its key
 	// names the pause by its start).
 	pauseHeldWindow = 30 * 24 * time.Hour
+	// pinToastAfter is how long a round waits on its pinned slot before it
+	// toasts; pinToastWindow dedupes that toast (its key names the pin by
+	// its time).
+	pinToastAfter  = 30 * time.Minute
+	pinToastWindow = 30 * 24 * time.Hour
 )
 
 // Kinds of the operator's toasts in a batch summary.
@@ -56,6 +61,7 @@ var (
 	kindRequestedFailed = notify.Kind{One: "requested review failed", Many: "requested reviews failed"}
 	kindRequestedHeld   = notify.Kind{One: "requested review held", Many: "requested reviews held"}
 	kindRequestPaused   = notify.Kind{One: "review request paused", Many: "review requests paused"}
+	kindPinWait         = notify.Kind{One: "review waits for your pin", Many: "reviews wait for your pins"}
 )
 
 // heldWait is how long a forced PR has waited for one reason only the
@@ -77,6 +83,55 @@ type prWait struct {
 func (e *Engine) noteOperatorWaits(ctx context.Context, waits []prWait, now time.Time) {
 	e.noteHeldRequested(ctx, waits, now)
 	e.notePauseHeld(ctx, waits, now)
+	e.notePinWaits(ctx, waits, now)
+}
+
+// notePinWaits toasts once per PR and pin when a round has waited
+// pinToastAfter on its pinned slot (WaitPinned): the pin is the operator's,
+// never lapses by itself, and a round behind it would otherwise wait
+// unseen. The wait's start is this run's (a restart counts again); the
+// toast's key names the PR and the pin's time, so a restart does not repeat
+// it.
+func (e *Engine) notePinWaits(ctx context.Context, waits []prWait, now time.Time) {
+	if e.pinWaits == nil {
+		e.pinWaits = map[int64]pinWaitSeen{}
+	}
+	seen := map[int64]bool{}
+	for _, pw := range waits {
+		pr, w := pw.pr, pw.wait
+		if w.Reason != WaitPinned {
+			continue
+		}
+		seen[pr.ID] = true
+		p, ok := e.pinWaits[pr.ID]
+		if !ok || !p.pinned.Equal(w.Since) {
+			p = pinWaitSeen{pinned: w.Since, since: now}
+		}
+		if !p.toasted && now.Sub(p.since) >= pinToastAfter {
+			if repo, err := e.st.RepoByID(ctx, pr.RepoID); err == nil {
+				p.toasted = true
+				label, ref := fmt.Sprintf("%s#%d", repo.Name, pr.Number), fmt.Sprintf("%s#%d", repo.FullName(), pr.Number)
+				title := label + " waits for your pin (magnum unpin " + ref + ")"
+				body := "Its " + w.kind() + " has waited " + tookText(now.Sub(p.since)) + ": " + w.Detail +
+					". A pin never lapses by itself; `magnum unpin " + ref + "` lets the round run."
+				e.info(notify.Item{Key: fmt.Sprintf("pin-wait:%d:%d", pr.ID, w.Since.Unix()), Title: title, Body: body,
+					Line: title, Kind: kindPinWait, Window: pinToastWindow})
+			}
+		}
+		e.pinWaits[pr.ID] = p
+	}
+	for id := range e.pinWaits {
+		if !seen[id] {
+			delete(e.pinWaits, id)
+		}
+	}
+}
+
+// pinWaitSeen is how long a PR's round has waited on one pin (pinned: the
+// pin's time, WaitPinned's Since), and whether that was toasted.
+type pinWaitSeen struct {
+	pinned, since time.Time
+	toasted       bool
 }
 
 // toastRequestedPosted announces a review the operator asked for once it
@@ -196,9 +251,9 @@ func (e *Engine) noteHeldRequested(ctx context.Context, waits []prWait, now time
 // changes), or a drain for a restart.
 func operatorHold(w Wait) bool {
 	switch w.Reason {
-	case WaitKind, WaitIdentity, WaitDraining:
+	case WaitKind, WaitIdentity, WaitDraining, WaitPinned:
 		return true
-	case WaitSlot: // slotGate: "slot X is pinned (…)", "slot X is held: <reason> (…)"
+	case WaitSlot: // slotGate: "slot X is held: <reason> (…)"; an older daemon's pin: "slot X is pinned (…)"
 		return strings.Contains(w.Detail, " is pinned") || strings.Contains(w.Detail, " is held")
 	}
 	return false

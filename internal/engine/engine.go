@@ -299,9 +299,20 @@ type Engine struct {
 	// review requests the running pause holds that were toasted.
 	held         map[int64]heldWait
 	pauseToasted map[string]bool
+	// pinWaits are the PRs whose round waits on their pinned slot, since
+	// when and whether that was toasted (notePinWaits, operator.go).
+	pinWaits map[int64]pinWaitSeen
 	// needsMe are the toast keys of the PRs that need the operator offered
 	// to the batcher in this run (needs_me.go).
 	needsMe map[string]bool
+	// pollToasted is the toast key of each watch owner's (lower case)
+	// failure streak offered to the batcher in this run (poll_health.go).
+	pollToasted map[string]string
+	// machineLast is the newest round.environment event noteMachine read,
+	// and machineToasted the groups it offered to the batcher in this run
+	// and when (environment.go). Tick goroutine only.
+	machineLast    int64
+	machineToasted map[string]time.Time
 	// autoSeen and autoFollow remember, by PR and by automatic approval,
 	// what auto-approval last read GitHub's reviews for (autoapprove.go): a
 	// PR whose latest round and updatedAt did not move since is not asked
@@ -667,6 +678,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	e.maybeCurate(ctx)
 	e.autoApprove(ctx) // before noteNeedsMe: a PR approved as the operator no longer needs them
 	e.noteNeedsMe(ctx)
+	e.noteMachine(ctx)
 	e.surface(ctx)
 	return errors.Join(errs...)
 }

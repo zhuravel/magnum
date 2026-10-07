@@ -179,6 +179,7 @@ type statusReport struct {
 	// ([[watch]] auto_approve); nil when no watch auto-approves and none
 	// stands or was posted today.
 	AutoApproved *statusAutoApproved      `json:"auto_approved,omitempty"`
+	Machine      []statusMachine          `json:"machine,omitempty"`
 	Rounds       statusRounds             `json:"rounds"`
 	Agents       *statusAgents            `json:"agents,omitempty"`
 	Pauses       []statusPause            `json:"pauses"`
@@ -193,6 +194,18 @@ type statusReport struct {
 	Drift        []inventory.Finding      `json:"drift"`
 	Warnings     []string                 `json:"warnings,omitempty"`
 	Detail       *statusDetail            `json:"detail,omitempty"`
+}
+
+// statusMachine is one command failing on the review machine in the rounds
+// of one repository within engine.MachineWindow (engine.MachineGroup; the
+// report's Machine lists them, most rounds first): Cmd is "" when the judge
+// named none, Error is the newest round's (untrusted text), Last its time.
+type statusMachine struct {
+	Repo   string    `json:"repo"`
+	Cmd    string    `json:"cmd,omitempty"`
+	Error  string    `json:"error"`
+	Rounds int       `json:"rounds"`
+	Last   time.Time `json:"last"`
 }
 
 // statusAutoApproved is how many approvals magnum posted as the operator
@@ -212,6 +225,10 @@ type statusDaemon struct {
 	LastPoll      *time.Time `json:"last_poll,omitempty"`
 	LastReconcile *time.Time `json:"last_reconcile,omitempty"`
 	HerdrUp       *bool      `json:"herdr_up,omitempty"` // as the daemon last saw it
+	// PollsFailing are the watches whose radar calls have failed for
+	// engine.PollFailingShown or longer (store.KVWatchPoll), the oldest
+	// failure first; LastPoll is the daemon's attempt whatever they did.
+	PollsFailing []statusPollFailing `json:"polls_failing,omitempty"`
 	// DrainingSince is when `magnum daemon-restart --drain` stopped new
 	// rounds (engine.KVDaemonDraining); nil when no drain is in progress.
 	// DrainerPID is the pid of the command that drains (0 = not recorded).
@@ -229,6 +246,16 @@ type statusDaemon struct {
 	PromptsLoadedAt     *time.Time `json:"prompts_loaded_at,omitempty"`
 	PromptsChanged      int        `json:"prompts_changed,omitempty"`
 	PromptsChangedFiles []string   `json:"prompts_changed_files,omitempty"`
+}
+
+// statusPollFailing is a watch whose radar calls fail: since when, the last
+// failure's cause ("HTTP 502") and when one last answered (nil: not since
+// it was recorded).
+type statusPollFailing struct {
+	Watch  string     `json:"watch"`
+	Since  time.Time  `json:"since"`
+	Error  string     `json:"error,omitempty"`
+	LastOK *time.Time `json:"last_ok,omitempty"`
 }
 
 // statusCodexUsage is the Codex budget as the daemon last read it from Codex's
@@ -335,6 +362,11 @@ type statusPRLine struct {
 	ReviewRequested bool       `json:"review_requested,omitempty"`
 	UpdatedAt       *time.Time `json:"updated_at,omitempty"`  // GitHub's updatedAt: the dispatcher's order
 	ActivityAt      *time.Time `json:"activity_at,omitempty"` // the last activity, which the dashboard shows
+	// SnoozedUntil is when the PR's snooze ends (magnum snooze), while it
+	// holds; Open counts the earlier findings magnum's latest review left
+	// open when it posted none new (the board's "3 open").
+	SnoozedUntil *time.Time `json:"snoozed_until,omitempty"`
+	Open         int        `json:"open,omitempty"`
 
 	url, author string    // for the dashboard (not printed)
 	rec         *store.PR // the registry row, for the dashboard's y/N question (not printed)
@@ -362,6 +394,8 @@ type statusDetail struct {
 	Attention *attention.Reason `json:"attention,omitempty"`
 	// Findings is what magnum's latest posted review concluded.
 	Findings *store.ReviewSummary `json:"findings,omitempty"`
+	// Snooze is the PR's snooze while it holds (magnum snooze, the board's z).
+	Snooze *engine.Snooze `json:"snooze,omitempty"`
 
 	isJudge func(role string) bool // a configured judge's role name (actIsJudge)
 }

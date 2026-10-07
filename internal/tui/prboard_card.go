@@ -160,7 +160,14 @@ func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
 	}
 	var flags []string
 	if r.Pinned {
-		flags = append(flags, p.pinStyle().Render(p.g.pin)+" pinned")
+		pinned := " pinned"
+		if r.PinWait { // a round waits on the pin: say whose it is and how it goes
+			if r.PinnedBy != "" {
+				pinned += " by " + r.PinnedBy
+			}
+			pinned += " (" + rowActDefs[actUnpin].key + " unpins)"
+		}
+		flags = append(flags, p.pinStyle().Render(p.g.pin)+pinned)
 	}
 	for _, b := range r.Badges {
 		flags = append(flags, strings.TrimSpace(p.pal.named[b.Color].Render(b.Text)+" "+b.Label))

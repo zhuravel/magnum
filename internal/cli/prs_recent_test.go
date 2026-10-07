@@ -193,7 +193,7 @@ func TestPRsStateCellFlagsMergedUnreviewed(t *testing.T) {
 		{tui.PRBoardRow{State: "closed", GHState: "MERGED"}, "closed,merged"},
 		{tui.PRBoardRow{State: "closed", GHState: "CLOSED"}, "closed,closed"},
 	} {
-		if got := prsStateCell(c.row); got != c.want {
+		if got := prsStateCell(c.row, prsNow); got != c.want {
 			t.Errorf("%+v: %q, want %q", c.row, got, c.want)
 		}
 	}

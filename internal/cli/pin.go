@@ -31,7 +31,9 @@ var targetKinds = []targetKind{
 			"next round. The daemon does it; without one the release runs here under the lock. --force discards " +
 			"tracked changes and releases inside the close grace, but never overrides pins or running agents."},
 	{"mute", engine.ReqMute, "stop automatic reviews of a PR", false,
-		"Stop automatic reviews of a PR until `magnum unmute`; a forced `magnum review` still runs. On a PR GitHub " +
+		"Stop automatic reviews of a PR until `magnum unmute`; a forced `magnum review` still runs. A PR waiting " +
+			"for an automatic round leaves the queue at once. The words after the PR are the mute's reason, kept in " +
+			"the request and its pr.muted event (`magnum mute talkable#9 waits for the rework`). On a PR GitHub " +
 			"merged before magnum reviewed its last push it dismisses the merged-unreviewed flag instead (`magnum " +
 			"unmute` restores it, `magnum review` still runs a post-merge review)."},
 	{"unmute", engine.ReqUnmute, "resume automatic reviews of a PR (also undoes magnum ignore)", false,
@@ -72,6 +74,7 @@ func newTargetCmd(c *Context, k targetKind) *cobra.Command {
 
 type targetOpts struct {
 	workspace, cwd         string
+	reason                 string // mute: the words after the PR
 	json, force, wait, yes bool
 }
 
@@ -80,7 +83,11 @@ func targetUsage(k targetKind) string {
 	if k.slotOK {
 		u += "|slot"
 	}
-	u += "> [--workspace id] [--cwd path] [--json]"
+	u += ">"
+	if k.req == engine.ReqMute {
+		u += " [reason…]"
+	}
+	u += " [--workspace id] [--cwd path] [--json]"
 	if k.name == "release" {
 		u += " [--force] [--wait] [--yes]"
 	}
@@ -89,12 +96,12 @@ func targetUsage(k targetKind) string {
 
 func runTarget(c *Context, k targetKind, o targetOpts, pos []string) int {
 	usage := targetUsage(k)
-	if len(pos) > 1 {
+	if len(pos) > 1 && k.req != engine.ReqMute {
 		return actUsage(c, k.name, "one target at a time", usage)
 	}
 	ref := ""
-	if len(pos) == 1 {
-		ref = pos[0]
+	if len(pos) > 0 {
+		ref, o.reason = pos[0], strings.Join(pos[1:], " ")
 	}
 	if ref == "" && o.workspace == "" && o.cwd == "" {
 		return actUsage(c, k.name, "which PR?", usage)
@@ -128,6 +135,7 @@ func targetMain(ctx context.Context, c *Context, d *actDeps, k targetKind, ref s
 		label = "slot " + t.Slot.Name
 	case t.hasPR():
 		payload.PRTarget = t.prTarget()
+		payload.Reason = o.reason
 		label = d.actLabel(t.full(), t.PR.Number)
 	case k.slotOK:
 		payload.Slot = t.Slot.Name

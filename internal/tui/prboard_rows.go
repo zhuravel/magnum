@@ -147,7 +147,14 @@ type PRBoardRow struct {
 	// daemon's account): the compact form the state cell shows ("re-review
 	// · quiet → 14:09") and the sentence with the command that lifts it,
 	// which the card shows. "" when the PR does not wait or no daemon said.
-	Wait, WaitDetail string
+	// WaitNarrow is Wait for a narrow state cell (a retry without its cause:
+	// "re-review · retry 2/3 → 22:57"); "" when it has no narrower form.
+	Wait, WaitDetail, WaitNarrow string
+	// PinWait: the round the PR waits for waits on its pinned slot
+	// (engine.WaitPinned), pinned by PinnedBy ("magnum open"; "" when
+	// unknown); the card says who pinned it and that u unpins it.
+	PinWait  bool
+	PinnedBy string
 	// DeltaCheck: the round the PR waits for is a delta check (the judge
 	// alone on a small delta); the state cell says so, as it does for a
 	// round in flight whose RoundWhy is one.
@@ -180,6 +187,9 @@ type PRBoardRow struct {
 	// recent_closed: the board lists it in a section after the open PRs.
 	ClosedAt time.Time
 	Recent   bool
+	// ReleaseAfter is when the close grace of a PR GitHub merged or closed
+	// ends and the daemon releases its slot; zero when there is none.
+	ReleaseAfter time.Time
 	// MergedUnreviewed: GitHub merged the PR before magnum reviewed its last
 	// push (store.IsMergedUnreviewed); LastReview.CommitSHA is the commit
 	// magnum reviewed last, if any.
@@ -615,6 +625,7 @@ func sanitizeRow(r PRBoardRow) PRBoardRow {
 	r.State, r.GHState, r.Slot, r.LastError = cleanText(r.State), cleanText(r.GHState), cleanText(r.Slot), cleanText(r.LastError)
 	r.HeadSHA = cleanText(r.HeadSHA)
 	r.Wait, r.WaitDetail, r.SnoozedBy = cleanText(r.Wait), cleanText(r.WaitDetail), cleanText(r.SnoozedBy)
+	r.WaitNarrow, r.PinnedBy = cleanText(r.WaitNarrow), cleanText(r.PinnedBy)
 	r.Stalemate = cleanAll(r.Stalemate)
 	r.Note, r.SkipReason, r.ProjectNote = cleanText(r.Note), cleanText(r.SkipReason), cleanText(r.ProjectNote)
 	if r.Badges != nil {

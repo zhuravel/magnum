@@ -260,7 +260,7 @@ func TestDashboardFrameCacheFollowsEveryChange(t *testing.T) {
 		{name: "help scroll", msgs: keys("j")},
 		{name: "close help", msgs: keys("?")},
 		{name: "load error", msgs: []tea.Msg{dashDataMsg{err: errors.New("registry locked")}}, want: "registry locked"},
-		{name: "ask", msgs: keys("x"), want: "y/N"},
+		{name: "ask", msgs: keys("M"), want: "y/N"},
 		{name: "cancel", msgs: keys("n"), want: "cancelled"},
 		{name: "flash", msgs: []tea.Msg{actionDoneMsg{what: "pin", text: "pinned it"}}, want: "pinned it"},
 		{name: "another flash", msgs: []tea.Msg{actionDoneMsg{what: "unpin", text: "unpinned it"}}, want: "unpinned it"},

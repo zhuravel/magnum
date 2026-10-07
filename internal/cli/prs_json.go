@@ -58,6 +58,10 @@ type prsJSONRow struct {
 	Spend            *prsJSONSpend     `json:"spend"`     // agent time over the last 7 days
 	Wait             string            `json:"wait"`
 	WaitDetail       string            `json:"wait_detail"`
+	WaitNarrow       string            `json:"wait_narrow"`            // wait for a narrow cell (a retry without its cause)
+	PinWait          bool              `json:"pin_wait"`               // the round waits on the PR's pinned slot
+	PinnedBy         string            `json:"pinned_by"`              // who pinned it ("magnum open"), while a round waits on the pin
+	ReleaseAfter     time.Time         `json:"release_after,omitzero"` // when the close grace ends and the slot is released
 	DeltaCheck       bool              `json:"delta_check"`            // the round it waits for is a delta check
 	SnoozedUntil     time.Time         `json:"snoozed_until,omitzero"` // when the PR's snooze ends (magnum snooze); left out while not snoozed
 	SnoozedAt        time.Time         `json:"snoozed_at,omitzero"`    // when the snooze was set
@@ -257,7 +261,8 @@ func prsJSONOf(r tui.PRBoardRow) prsJSONRow {
 		Slot: r.Slot, Pinned: r.Pinned, Muted: r.Muted, Notes: r.Notes, NextEligibleAt: r.NextEligibleAt,
 		LastError: r.LastError, ErrorFix: r.ErrorFix, ErrorDetail: listOf(r.ErrorDetail), RoundsToday: r.RoundsToday,
 		LastRound: mapPtr(r.LastRound, prsJSONRoundOf), RoundWhy: mapPtr(r.RoundWhy, prsJSONRoundWhyOf),
-		Progress: mapPtr(r.Progress, prsJSONProgressOf), Spend: mapPtr(r.Spend, prsJSONSpendOf), Wait: r.Wait, WaitDetail: r.WaitDetail, DeltaCheck: r.DeltaCheck, Note: r.Note, ProjectNote: r.ProjectNote,
+		Progress: mapPtr(r.Progress, prsJSONProgressOf), Spend: mapPtr(r.Spend, prsJSONSpendOf), Wait: r.Wait, WaitDetail: r.WaitDetail,
+		WaitNarrow: r.WaitNarrow, PinWait: r.PinWait, PinnedBy: r.PinnedBy, ReleaseAfter: r.ReleaseAfter, DeltaCheck: r.DeltaCheck, Note: r.Note, ProjectNote: r.ProjectNote,
 		SnoozedUntil: r.SnoozedUntil, SnoozedAt: r.SnoozedAt, SnoozedBy: r.SnoozedBy,
 		RequestedToMe: mapPtr(r.RequestedToMe, prsJSONRequestOf), LastRequest: mapPtr(r.LastRequest, prsJSONRequestOf),
 		Requests: mapList(r.Requests, prsJSONRequestOf), ClosedAt: r.ClosedAt, Recent: r.Recent, MergedUnreviewed: r.MergedUnreviewed, FlagDismissed: r.FlagDismissed,

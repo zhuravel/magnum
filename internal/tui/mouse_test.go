@@ -613,8 +613,8 @@ func TestDashboardMouse(t *testing.T) {
 	mustContain(t, viewOf(m), "open pane", "o / enter", "reset column widths")
 	m, _ = send(t, m, keyMsg("esc"), rightClick(10, dashRowY(m, 3)))
 	got = menuState(m.menuItems())
-	if !got["kill review"] || got["review"] || !got["release"] || !got["open pane"] || !got["browser"] {
-		t.Fatalf("reviewing PR menu (review is dimmed while its round runs) %v", got)
+	if !got["kill review"] || got["review"] || got["release"] || !got["open pane"] || !got["browser"] {
+		t.Fatalf("reviewing PR menu (review and release are dimmed while its round runs) %v", got)
 	}
 	m, _ = send(t, m, keyMsg("K"))
 	if m.confirm == nil || !strings.Contains(m.confirm.question, "Kill the running review of talkable#1") {

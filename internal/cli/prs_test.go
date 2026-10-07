@@ -916,3 +916,83 @@ func TestPRsTableFindingsCell(t *testing.T) {
 		}
 	}
 }
+
+// The plain table says what the board says: a snooze in the STATE cell
+// ("snoozed→18:00", while no round runs) and the earlier findings still open
+// when the review posted none new ("blocking 3 open").
+func TestPRsTableShowsTheSnoozeAndTheOpenFindings(t *testing.T) {
+	until := prsNow.Add(6 * time.Hour)
+	snoozed := tui.PRBoardRow{State: "reviewed", SnoozedUntil: until}
+	if got, want := prsStateCell(snoozed, prsNow), "reviewed,snoozed→"+until.Local().Format("15:04"); got != want {
+		t.Errorf("snoozed state cell %q, want %q", got, want)
+	}
+	if got := prsStateCell(tui.PRBoardRow{State: "reviewed", SnoozedUntil: prsNow.Add(-time.Minute)}, prsNow); got != "reviewed" {
+		t.Errorf("an ended snooze shows: %q", got)
+	}
+	if got := prsStateCell(tui.PRBoardRow{State: "reviewing", SnoozedUntil: until}, prsNow); got != "reviewing" {
+		t.Errorf("a running round shows the snooze: %q", got)
+	}
+	for _, tc := range []struct {
+		f    *tui.FindingsInfo
+		want string
+	}{
+		{&tui.FindingsInfo{Verdict: "blocking", Open: 3}, "blocking 3 open"},
+		{&tui.FindingsInfo{Verdict: "blocking", Counts: [4]int{0, 1, 0, 0}, Open: 3}, "blocking P1:1"},
+	} {
+		if got := prsFindingsCell(tc.f); got != tc.want {
+			t.Errorf("%+v: %q, want %q", tc.f, got, tc.want)
+		}
+	}
+}
+
+// Board rows carry what the screens need of a wait on a pin, of a retry's
+// narrow form, and of a close grace.
+func TestPRsSourceCarriesThePinWaitTheRetryAndTheGrace(t *testing.T) {
+	f := newInspFixture(t)
+	st := f.store()
+	ctx := context.Background()
+	repo, err := st.UpsertRepo(ctx, store.Repo{NodeID: "RW", Owner: "talkable", Name: "talkable", Mode: store.RepoModePool})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pr := func(n int, state string) store.PR {
+		res, err := st.UpsertPRFromGitHub(ctx, store.GitHubPR{RepoID: repo.ID, NodeID: "P" + strconv.Itoa(n), Number: n, URL: "u",
+			HeadSHA: "abc", InitialState: state, Identity: "talkable-app"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.PR
+	}
+	wait := func(p store.PR, w engine.Wait) {
+		b, _ := json.Marshal(w)
+		if err := st.SetKV(ctx, engine.KVPRWait(p.ID), string(b)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pinned, retry, grace := pr(71, store.PRRereviewPending), pr(72, store.PRRereviewPending), pr(73, store.PRQueued)
+	wait(pinned, engine.Wait{Reason: engine.WaitPinned, Rereview: true, Subject: "magnum open",
+		Detail: "slot review1 is pinned by magnum open since 22:52"})
+	wait(retry, engine.Wait{Reason: engine.WaitRetry, Rereview: true, Count: 2, Max: 3, Subject: "setup",
+		Until: time.Now().Add(20 * time.Minute)})
+	releaseAt := time.Now().Add(8 * time.Minute).UTC().Truncate(time.Second)
+	if err := st.UpdatePR(ctx, grace.ID, func(u *store.PRUpdate) { u.Set("release_after", releaseAt) }); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := prsSource(st, nil, store.BoardFilter{IncludeClosed: true}, nil, f.Ctx.Layout)(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byN := map[int]tui.PRBoardRow{}
+	for _, r := range rows {
+		byN[r.Number] = r
+	}
+	if r := byN[71]; !r.PinWait || r.PinnedBy != "magnum open" || r.Wait != "re-review · pinned → u" {
+		t.Errorf("pin wait row: PinWait %v by %q wait %q", r.PinWait, r.PinnedBy, r.Wait)
+	}
+	if r := byN[72]; !strings.Contains(r.Wait, "retry 2/3 setup → ") || !strings.Contains(r.WaitNarrow, "retry 2/3 → ") || r.PinWait {
+		t.Errorf("retry row: wait %q narrow %q", r.Wait, r.WaitNarrow)
+	}
+	if r := byN[73]; !r.ReleaseAfter.Equal(releaseAt) {
+		t.Errorf("grace row: release after %v, want %v", r.ReleaseAfter, releaseAt)
+	}
+}

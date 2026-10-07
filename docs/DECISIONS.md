@@ -624,6 +624,42 @@ editing history. Code, config comments and prompts reference these by their head
   error. The script now runs them as children and, after a failing exit (ctrl+c's 130 aside), waits for a
   key; `pick` itself waits only after a review, pin or release that worked, so a failure needs one key, not
   two.
+- **A pin is a wait, not an error** (2026-10-07). A round behind a slot `magnum open` pinned read "slot"
+  with the error mark: dispatch wrote "slot review1 is pinned (magnum unpin)" into `last_error`, and the
+  operator asked what "retry, then slot" meant; a forced re-review waited 3h50m on such a pin unseen. The
+  pin is the operator's own choice, so it is its own wait (`WaitPinned`: who pinned it and since when, from
+  the newest pin event), with no `last_error` (an older daemon's pin error is cleared at the next dispatch):
+  the cell reads `re-review · pinned → u`, the card "pinned by magnum open (u unpins)", and once a round has
+  waited 30 minutes on the pin one toast per PR and pin (its key names the pin's time) says
+  "talkable#N waits for your pin (magnum unpin …)". A pin still never lapses by itself and the round never
+  takes another slot. A guard's persisted hold (a person's changes) stays an error. Rejected: unpinning
+  after a while (the pin protects a person's work in the checkout).
+- **A retry names its attempt and its cause** (2026-10-07). A PR whose setup failed 9 times in 27 minutes
+  read `retry` throughout; the attempt was only on the card. The wait now carries the attempt to come and
+  the attempts allowed (`retry 2/3`) and a word for the cause read from the failed attempt's error
+  (`setup`, `judge lost`, `timeout`, `error`, `stopped`, `human active`, `agent busy`, `infra`), and a
+  narrow STATE column drops the cause before anything else (`Wait.Narrow`). Rejected: the error's first
+  line in the cell (a chain of contexts; the card and `magnum status <ref>` keep the sentence).
+- **A mute has a reason and leaves the queue at once** (2026-10-07). 6 of 8 mutes came before any round
+  and none said why; a PR muted while queued stayed `queued` 28 hours, until a restart's reclassification.
+  `magnum mute <ref> [reason…]` sends the words after the PR as the request's `reason`, which the answer and
+  a new `pr.muted` event keep; a mute of a PR waiting for an automatic round (queued or rereview_pending, not
+  forced) moves it to ineligible (`muted`, the filters' reason) in a compare-and-set from those states, and
+  `unmute` decides its eligibility again. A forced round still passes the mute. Rejected: a `--reason`
+  flag (the words after the ref read as the reason, like a commit message).
+- **Board keys promise only what the daemon does** (2026-10-07). `A` and `C` asked "magnum found no
+  findings" while the FINDINGS cell said "✗ 3 open"; `x` was offered on running, paused and close-grace rows
+  that cleanup's plan skips, `I` promised to free a pinned PR's slot that abort keeps, and `D` was offered on
+  merged and closed rows. The verdict question now names the earlier findings still open ("no new findings;
+  3 earlier findings still open"), `x` refuses those rows with the reason (`K` kills a round; the grace says
+  when the slot goes), `I` leaves the slot out for a pinned PR, and `D` refuses a merged or closed PR. The
+  board row carries the close grace's end (`ReleaseAfter`, `prs.release_after`, no migration).
+- **`magnum prs` and `magnum status` say what the board says** (2026-10-07). Neither showed a snooze nor
+  the "3 open" of a review that posted no new finding. The printed STATE adds `snoozed→18:00` while no
+  round runs and FINDINGS `blocking 3 open`; a `magnum status` queue line adds `· snoozed → 18:00 · 3
+  open` (`snoozed_until`, `open` in the JSON) and a PR's card its snooze on the state line. The board's
+  needs-you pill no longer hides a PR that waits for a round, is paused or needs attention: those keep their
+  state's pill (the card shows both). Rejected: a new column (the board stays one line per PR).
 
 ## Operations
 
@@ -3358,3 +3394,27 @@ editing history. Code, config comments and prompts reference these by their head
   and calls its class column "class at round time". Rejected: marking by time after the last
   `daemon.prompts_changed` event or daemon start (the registry keeps only the latest start, and a change on
   disk takes effect only at the next one; the copy's hash in each run's prompt says which skill it used).
+- **A watch whose polls fail is on screen** (2026-10-07). On 10-05 from 10:00 to 17:00 the talkable watch's
+  radar failed 166 times (HTTP 502, 504) while the dashboard said "last poll 1m ago": `daemon.last_poll` is the
+  poll's attempt, written whatever its radar calls did. Each watch owner now keeps its own record
+  (`watch.<owner>.poll`: the last good poll, and while its calls fail since when and the cause, "HTTP 502" or
+  the redacted error clipped; no migration). From 10 minutes the titles of both screens say "talkable polls
+  failing 47m (HTTP 502)" (short "talkable ✗ 47m"), the dashboard's activity line and `magnum status` name
+  the watch after the last poll, and at 15 minutes one toast goes out per failure streak. A poll cut short by
+  a shutdown records nothing. Rejected: writing `daemon.last_poll` only after a good poll (one failing watch
+  of several would hide the others' good polls, and the attempt's time still matters).
+- **The review machine's failures reach the operator** (2026-10-07). 43 `round.environment` warnings since
+  10-05 (db:seed failing in 12 rounds, a repository without a test database for the worktree in 6) were only
+  events, though the judge's report says the operator fixes the machine. `magnum status` now groups the last
+  24 hours of them by repository and command (`engine.MachineGroups`: a round counts once per group, the
+  newest error is kept, a test file's path is left out of the command so `bundle exec rspec spec/a_spec.rb`
+  groups with every other rspec run) and prints one `machine:` line per group, cleaned like other event text;
+  a group that reaches 3 rounds sends one toast a day. The dashboard stays as it is for now. Rejected:
+  grouping by the exact command (every spec file its own group of one, which would never toast).
+- **doctor --json stays JSON when the registry cannot be opened** (2026-10-07). Under a running daemon a
+  build with a new migration cannot open the registry (the CLI refuses to migrate it), and doctor printed
+  plain text under `--json` with "fix config.toml", which is wrong for that refusal. The refusal is a typed
+  error (`migrateRefusal`, its text unchanged for every other command), and doctor reports a failure to open
+  as one check through its usual printing: a failed `registry` check with the schema versions, the daemon's
+  pid and the fix `magnum daemon-restart --drain`, or for anything else the `config` check with the
+  config.toml fix.

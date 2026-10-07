@@ -199,6 +199,7 @@ func TestKVKeys(t *testing.T) {
 		KVIdentityTickError("app"):             "identity.app.tick_error",
 		KVIdentityTokenExpiry("app"):           "identity.app.token_expiry",
 		KVWatchPaused("ZhuraVEL"):              "watch.zhuravel.paused",
+		KVWatchPoll("TalKable"):                "watch.talkable.poll",
 		KVPRSimplify(3):                        "pr.3.simplify",
 		KVPRRoles(3):                           "pr.3.roles",
 		KVPRFresh(3):                           "pr.3.fresh",

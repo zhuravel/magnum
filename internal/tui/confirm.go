@@ -96,9 +96,10 @@ func releaseQuestion(target string) string {
 }
 
 // verdictQuestion asks before posting the reviewer's verdict on ref: it
-// says on which head and what magnum's review f concluded, so the decision
-// is an informed one. A head that moved since is refused before asking
-// (actionRefusal): the screens cannot pass --force.
+// says on which head and what magnum's review f concluded, its new findings
+// and the earlier ones still open (the FINDINGS cell's "3 open"), so the
+// decision is an informed one. A head that moved since is refused before
+// asking (actionRefusal): the screens cannot pass --force.
 func verdictQuestion(ref string, approve bool, f *FindingsInfo) string {
 	verb := "Request changes on"
 	if approve {
@@ -118,8 +119,14 @@ func verdictQuestion(ref string, approve bool, f *FindingsInfo) string {
 		}
 	}
 	found := "no findings"
-	if len(parts) > 0 {
+	switch {
+	case len(parts) > 0:
 		found = strings.Join(parts, ", ")
+	case f.Open > 0:
+		found = "no new findings"
+	}
+	if f.Open > 0 {
+		found += "; " + textx.Count(f.Open, "earlier finding", "earlier findings") + " still open"
 	}
 	return q + "? magnum found " + found
 }

@@ -946,8 +946,11 @@ func TestPinnedSlotWaitsWithoutUsingRetries(t *testing.T) {
 	h.advance(40 * time.Minute)
 	h.tick()
 	pr := h.wantState(2, store.PRRereviewPending)
-	if pr.Attempts != 0 || !strings.Contains(deref(pr.LastError), "pinned") || len(h.rd.all()) != 1 {
+	if pr.Attempts != 0 || deref(pr.LastError) != "" || len(h.rd.all()) != 1 {
 		t.Fatalf("pinned slot: attempts=%d last_error=%q rounds=%d", pr.Attempts, deref(pr.LastError), len(h.rd.all()))
+	}
+	if w := waitOf(t, h, 2); w.Reason != WaitPinned || w.Subject != "magnum slots pin" {
+		t.Fatalf("pinned slot: wait %+v, want the pin", w)
 	}
 	if _, err := h.st.EnqueueRequest(h.ctx, ReqUnpin, TargetPayload{Slot: "review1"}); err != nil {
 		t.Fatal(err)

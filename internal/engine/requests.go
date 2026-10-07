@@ -124,6 +124,9 @@ type TargetPayload struct {
 	PRTarget
 	Slot  string `json:"slot,omitempty"`
 	Force bool   `json:"force,omitempty"` // release: see cleanup.Options.Force
+	// Reason is why the operator mutes the PR (`magnum mute <ref> [reason…]`),
+	// kept in the request, its answer and the pr.muted event.
+	Reason string `json:"reason,omitempty"`
 }
 
 // CleanupPayload is a cleanup request: Plan (re-checked by Apply) or
@@ -567,12 +570,22 @@ func (e *Engine) requestPin(ctx context.Context, p TargetPayload, pin bool) (str
 // state the decision read, so a post-merge review requested in between keeps
 // its mark. An unmute never sets the mark again: the flag comes back with the
 // PR unmuted.
+//
+// A mute takes a PR waiting for an automatic round (queued, rereview_pending,
+// not forced) out of the queue at once: it becomes ineligible with the
+// filters' reason, as the next restart's reclassification would make it, and
+// an unmute decides its eligibility again. The mute's reason (p.Reason) goes
+// into the answer and the pr.muted event.
 func (e *Engine) requestMute(ctx context.Context, p TargetPayload, mute bool) (string, error) {
 	repo, pr, err := e.resolve(ctx, p.PRTarget)
 	if err != nil {
 		return "", err
 	}
 	label := fmt.Sprintf("%s#%d", repo.FullName(), pr.Number)
+	reason := clipRunes(strings.Join(strings.Fields(p.Reason), " "), muteReasonRunes)
+	if mute && reason != "" {
+		label += " (" + reason + ")"
+	}
 	if err := e.st.UpdatePR(ctx, pr.ID, func(u *store.PRUpdate) {
 		u.Set("muted", mute)
 		if !mute && deref(pr.SkipReason) == skipIgnored {
@@ -604,7 +617,18 @@ func (e *Engine) requestMute(ctx context.Context, p TargetPayload, mute bool) (s
 			}
 		}
 	}
+	if mute && !pr.Forced && slices.Contains(waitingStates, pr.State) {
+		// A round that claimed the PR in between finds it muted at its end.
+		if err := e.markIneligible(ctx, pr, waitingStates, skipMuted, false, e.now()); err != nil && !errors.Is(err, store.ErrConflict) {
+			return "", err
+		}
+	}
 	if mute {
+		msg, data := "muted", map[string]any{}
+		if reason != "" {
+			msg, data["reason"] = "muted: "+reason, reason
+		}
+		e.event(ctx, "info", prSubject(repo, pr.Number), evPRMuted, msg, data)
 		e.seeStalemates(ctx, pr.ID) // stalemate.go
 		if dismissed {
 			return "muted " + label + ": merged-unreviewed flag dismissed", nil
@@ -613,6 +637,18 @@ func (e *Engine) requestMute(ctx context.Context, p TargetPayload, mute bool) (s
 	}
 	return "unmuted " + label, nil
 }
+
+const (
+	// evPRMuted records a mute and its reason (requestMute).
+	evPRMuted = "pr.muted"
+	// skipMuted is the skip reason of a muted PR: eligibility.Classify's.
+	skipMuted = "muted"
+	// muteReasonRunes bounds a mute's reason.
+	muteReasonRunes = 200
+)
+
+// waitingStates are the states of a PR waiting for a round.
+var waitingStates = []string{store.PRQueued, store.PRRereviewPending}
 
 func (e *Engine) requestPause(ctx context.Context, p PausePayload, pause bool) (string, error) {
 	if pause {

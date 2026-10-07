@@ -328,7 +328,7 @@ func (e *Engine) noteGate(ctx context.Context, prID int64, g gate) {
 	if prev, _ := e.getKV(ctx, kvPRGate(prID)); prev != g.text {
 		e.setKV(ctx, kvPRGate(prID), g.text)
 	}
-	b, err := json.Marshal(gateCode{Reason: g.reason, Kind: g.kind})
+	b, err := json.Marshal(gateCode{Reason: g.reason, Kind: g.kind, By: g.by, At: g.at})
 	if err != nil {
 		return
 	}
@@ -482,8 +482,8 @@ func (e *Engine) startRound(ctx context.Context, pr store.PR, repo store.Repo, w
 		return false, 0, gate{}
 	}
 	if has {
-		if why := e.slotGate(ctx, job, &slot, subject); why != "" {
-			return false, 0, gate{reason: WaitSlot, text: why}
+		if g := e.slotGate(ctx, job, &slot, subject); g.text != "" {
+			return false, 0, g
 		}
 		job.slot, job.hasSlo = slot, true
 	}
@@ -550,13 +550,16 @@ func (e *Engine) startRound(ctx context.Context, pr store.PR, repo store.Repo, w
 	return true, codex, gate{}
 }
 
-// slotGate checks the PR's own slot before a round: "" when the round can
-// use it, else why the PR waits. A busy slot is left over from a round whose
-// busy → held write failed (the PR is reserved, so no round runs in it) and
-// is repaired; a per-PR worktree that is provisioning, lost or broken is
-// (re)created by the round; a pool slot whose release stalled gets the
-// release resumed; a broken or lost pool slot needs `magnum slots repair`.
-func (e *Engine) slotGate(ctx context.Context, job *roundJob, slot *store.Slot, subject string) string {
+// slotGate checks the PR's own slot before a round: the zero gate when the
+// round can use it, else why the PR waits. A busy slot is left over from a
+// round whose busy → held write failed (the PR is reserved, so no round runs
+// in it) and is repaired; a per-PR worktree that is provisioning, lost or
+// broken is (re)created by the round; a pool slot whose release stalled gets
+// the release resumed; a broken or lost pool slot needs `magnum slots
+// repair`. A pin is the operator's own choice, so it is a wait (WaitPinned,
+// pinWait), never the PR's error; a hold a guard persisted is.
+func (e *Engine) slotGate(ctx context.Context, job *roundJob, slot *store.Slot, subject string) gate {
+	slotWait := func(why string) gate { return gate{reason: WaitSlot, text: why} }
 	perPR := slot.Kind == store.SlotKindPerPR
 	switch {
 	case slot.State == store.SlotClaimed || slot.State == store.SlotHeld:
@@ -564,7 +567,7 @@ func (e *Engine) slotGate(ctx context.Context, job *roundJob, slot *store.Slot, 
 	case slot.State == store.SlotBusy:
 		if !e.d.DryRun {
 			if err := e.st.TransitionSlot(ctx, slot.ID, []string{store.SlotBusy}, store.SlotHeld, nil); err != nil {
-				return fmt.Sprintf("slot %s is busy without a round: %v", slot.Name, err)
+				return slotWait(fmt.Sprintf("slot %s is busy without a round: %v", slot.Name, err))
 			}
 			e.event(ctx, "warn", "slot:"+slot.Name, "slot.repaired", slot.Name+" was busy without a round; back to held", nil)
 		}
@@ -573,7 +576,7 @@ func (e *Engine) slotGate(ctx context.Context, job *roundJob, slot *store.Slot, 
 		if job.pool != nil {
 			e.resumeRelease(ctx, *job.pool, *slot, subject)
 		}
-		return "slot " + slot.Name + " is being released"
+		return slotWait("slot " + slot.Name + " is being released")
 	case slot.State == store.SlotBroken || slot.State == store.SlotLost:
 		why := fmt.Sprintf("slot %s is %s", slot.Name, slot.State)
 		if le := deref(slot.LastError); le != "" {
@@ -581,19 +584,35 @@ func (e *Engine) slotGate(ctx context.Context, job *roundJob, slot *store.Slot, 
 		}
 		why += " (magnum slots repair " + slot.Name + ")"
 		e.noteLastError(ctx, job.pr, why)
-		return why
+		return slotWait(why)
 	default:
-		return fmt.Sprintf("slot %s is %s", slot.Name, slot.State)
+		return slotWait(fmt.Sprintf("slot %s is %s", slot.Name, slot.State))
 	}
-	if slot.Pinned || slot.HoldReason != nil {
-		why := "slot " + slot.Name + " is pinned (magnum unpin)"
-		if slot.HoldReason != nil {
-			why = "slot " + slot.Name + " is held: " + *slot.HoldReason + " (magnum unpin)"
-		}
+	switch {
+	case slot.HoldReason != nil:
+		why := slotHeldReason(*slot)
 		e.noteLastError(ctx, job.pr, why)
-		return why
+		return slotWait(why)
+	case slot.Pinned:
+		return e.pinWait(ctx, job.pr, *slot, subject)
 	}
-	return ""
+	return gate{}
+}
+
+// pinWait is the wait of a PR whose slot is pinned: who pinned it and since
+// when, from the newest pin event (pinOrigin). The error an older daemon
+// recorded for the pin ("slot X is pinned (magnum unpin)") goes, so the
+// screens show the wait without an error mark.
+func (e *Engine) pinWait(ctx context.Context, pr store.PR, slot store.Slot, subject string) gate {
+	if deref(pr.LastError) == "slot "+slot.Name+" is pinned (magnum unpin)" && !e.d.DryRun {
+		_ = e.st.UpdatePR(ctx, pr.ID, func(u *store.PRUpdate) { u.Set("last_error", nil) })
+	}
+	why := "slot " + slot.Name + " is pinned"
+	by, at := e.pinOrigin(ctx, subject) // review_unpin.go
+	if by != "" {
+		why += " by " + by + " since " + pastClock(at, e.now())
+	}
+	return gate{reason: WaitPinned, text: why, by: by, at: at}
 }
 
 // recreatedPerPR are the states of a per-PR worktree row the round's

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"reflect"
 	"strconv"
 	"testing"
 	"time"
@@ -46,7 +47,7 @@ func TestScreenFactsReadWhatHoldsTheDaemon(t *testing.T) {
 	codex := f.Codex
 	f.Codex = nil
 	f.SkewSince, f.PausedSince = f.SkewSince.UTC(), f.PausedSince.UTC()
-	if f != want {
+	if !reflect.DeepEqual(f, want) {
 		t.Fatalf("facts %+v\nwant  %+v", f, want)
 	}
 	start := resets.Add(-window)

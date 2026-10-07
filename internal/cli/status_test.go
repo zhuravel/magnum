@@ -338,6 +338,7 @@ func TestStatusRenderCleansUntrustedText(t *testing.T) {
 		State: store.SlotHeld, HoldReason: store.Ptr("hold " + statusNoise)}
 	r := statusReport{
 		GeneratedAt: now,
+		Daemon:      statusDaemon{PollsFailing: []statusPollFailing{{Watch: "watch" + statusNoise, Since: now.Add(-12 * time.Minute), Error: "HTTP " + statusNoise}}},
 		Pauses: []statusPause{{Scope: "codex" + statusNoise, Reason: "usage " + statusNoise, Until: &until,
 			Detail: "pane " + statusNoise, Fix: "wait " + statusNoise}},
 		Slots: []inventory.SlotView{{Slot: slot, Exists: true, Drift: []string{"drift" + statusNoise},
@@ -371,6 +372,9 @@ func TestStatusRenderCleansUntrustedText(t *testing.T) {
 		if !strings.Contains(out, prefix+clean) {
 			t.Errorf("cleaned output lacks %q:\n%s", prefix+clean, out)
 		}
+	}
+	if !strings.Contains(out, "polls failing 12m (HTTP ") {
+		t.Errorf("cleaned output lacks the failing watch:\n%s", out)
 	}
 	// A detail card on its own (a slot without a PR too).
 	var card bytes.Buffer

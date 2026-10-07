@@ -53,9 +53,12 @@ type DaemonInfo struct {
 }
 
 // ActivityInfo is how long ago the daemon last polled GitHub, ticked and
-// reconciled; zero (or negative) means never.
+// reconciled; zero (or negative) means never. PollsFailing are the watches
+// whose radar calls have failed for engine.PollFailingShown or longer (as
+// of StatusData.GeneratedAt), which the poll's part of the line names.
 type ActivityInfo struct {
 	LastPoll, LastTick, LastReconcile time.Duration
+	PollsFailing                      []WatchFailing
 }
 
 // GitHubInfo is the GraphQL rate budget; Limit 0 means unknown (no poll yet).
@@ -969,7 +972,11 @@ func (m dashboardModel) headerLines(w int) []string {
 	}
 	lines = append(lines, label("daemon:")+daemon)
 
-	act := "last poll " + HumanAgo(d.Activity.LastPoll) + " · last tick " + HumanAgo(d.Activity.LastTick)
+	act := "last poll " + HumanAgo(d.Activity.LastPoll)
+	for _, f := range d.Activity.PollsFailing {
+		act += " · " + m.st.Warn.Render(f.Text(d.GeneratedAt))
+	}
+	act += " · last tick " + HumanAgo(d.Activity.LastTick)
 	if d.Activity.LastReconcile > 0 {
 		act += " · last reconcile " + HumanAgo(d.Activity.LastReconcile)
 	}

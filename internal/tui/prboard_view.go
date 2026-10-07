@@ -494,8 +494,13 @@ func (p prbPainter) cells(r PRBoardRow, since [3]int) prbCells {
 	cs.c[colUpdated] = p.ageCell(r.ActivityAt)
 	cs.c[colRequested] = p.requestedCell(r)
 	cs.c[colState] = p.stateWaitCell(r)
-	if roundProgress(r) != nil {
+	switch {
+	case roundProgress(r) != nil:
 		cs.stateAlt = []cell{p.stateWaitDetail(r, stateTime), p.stateWaitDetail(r, stateBare)}
+	case r.WaitNarrow != "" && r.WaitNarrow != r.Wait: // a retry without its cause
+		narrow := r
+		narrow.Wait = r.WaitNarrow
+		cs.stateAlt = []cell{p.stateWaitCell(narrow)}
 	}
 	cs.c[colLastReview] = p.lastReviewCell(r)
 	if r.Replies > 0 {
@@ -785,10 +790,22 @@ func skipWord(r PRBoardRow) string {
 }
 
 // needsMeShown reports whether r's state cell says it needs the operator
-// (PRBoardRow.NeedsMe): a round in flight shows its own pill instead, and an
+// (PRBoardRow.NeedsMe): a round in flight, due, paused or needing attention
+// shows its own pill instead (the operator's approval waits on it), and an
 // approval magnum posted as them says "✓ auto".
 func needsMeShown(r PRBoardRow) bool {
-	return r.NeedsMe != "" && !workingState(rowState(r)) && !autoShown(r)
+	return r.NeedsMe != "" && !workingState(rowState(r)) && !ownPillState(rowState(r)) && !autoShown(r)
+}
+
+// ownPillState reports whether a PR in state s keeps its state's pill over
+// the needs-you one: a round waits for it (queued, rereview_pending), it is
+// paused, or it needs attention.
+func ownPillState(s string) bool {
+	switch normState(s) {
+	case "queued", "rereview_pending", "paused", "needs_attention":
+		return true
+	}
+	return false
 }
 
 // autoShown reports whether r's state cell says magnum approved it as the

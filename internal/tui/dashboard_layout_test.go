@@ -33,7 +33,7 @@ func TestDashboardFooterStaysOnShortScreens(t *testing.T) {
 		for i := range 4 {
 			d.Pauses = append(d.Pauses, Pause{Key: fmt.Sprintf("identity:bot%d", i), Reason: "token expired"})
 		}
-		m, _ = send(t, m, dashDataMsg{data: d}, keyMsg("x"))
+		m, _ = send(t, m, dashDataMsg{data: d}, keyMsg("M"))
 		v := viewOf(m)
 		if n := lineCount(v); n > h {
 			t.Errorf("height %d: %d lines:\n%s", h, n, v)

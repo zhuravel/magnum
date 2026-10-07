@@ -13,9 +13,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/eligibility"
 	"github.com/zhuravel/magnum/internal/store"
@@ -54,6 +56,7 @@ const (
 	WaitBudget        = "budget"         // the Codex budget's soft cap holds first reviews
 	WaitIdentity      = "identity"       // the posting identity is unhealthy
 	WaitSlot          = "slot"           // the PR's slot, or a free pool slot
+	WaitPinned        = "pinned"         // the PR's slot is pinned (magnum open, magnum pin): the round waits for the unpin
 	WaitCapacity      = "capacity"       // max_concurrent_reviews or max_total_working_codex
 	WaitOther         = "other"          // any other dispatch gate (details, a human, a paused watch, ...)
 	WaitNext          = "next"           // nothing holds it: the next dispatch starts it
@@ -64,16 +67,21 @@ type Wait struct {
 	Reason   string    `json:"reason"`
 	Rereview bool      `json:"rereview"`
 	Forced   bool      `json:"forced,omitempty"`
-	Until    time.Time `json:"until,omitzero"`    // when it ends, when known
-	Count    int       `json:"count,omitempty"`   // WaitCap: automatic rounds today; WaitDelta: changed lines
-	Max      int       `json:"max,omitempty"`     // WaitCap: the cap; WaitDelta: rereview_min_lines
-	Subject  string    `json:"subject,omitempty"` // WaitKind: the paused kind; WaitRequested: Request.Phrase
+	Until    time.Time `json:"until,omitzero"`  // when it ends, when known
+	Count    int       `json:"count,omitempty"` // WaitCap: automatic rounds today; WaitDelta: changed lines; WaitRetry: the attempt to come
+	Max      int       `json:"max,omitempty"`   // WaitCap: the cap; WaitDelta: rereview_min_lines; WaitRetry: the attempts allowed
+	// Subject is WaitKind's paused kind, WaitRequested's Request.Phrase,
+	// WaitRetry's cause in a word or two (retryCause) and WaitPinned's pin
+	// origin ("magnum open"; "" when unknown).
+	Subject string `json:"subject,omitempty"`
 	// Detail is the reason in words, without the round's kind or the time
 	// ("the push quiet period (5m)").
 	Detail string `json:"detail"`
 	// PostMerge: GitHub merged the PR; the round it waits for is a
 	// post-merge review (`magnum review` of a merged PR, always forced).
 	PostMerge bool `json:"post_merge,omitempty"`
+	// Since is when WaitPinned's pin was set (zero when unknown).
+	Since time.Time `json:"since,omitzero"`
 	// DeltaCheck: the round it waits for is a delta check, the judge alone
 	// on a small delta (deltaCheckDue).
 	DeltaCheck bool `json:"delta_check,omitempty"`
@@ -129,8 +137,16 @@ func waitClock(t, now time.Time) string {
 // Short is the compact form for a table cell, e.g. "re-review · cap 6/6 →
 // 00:00", "re-review · quiet → 14:09", "review · codex paused → 15:00",
 // "re-review · small delta 8/30 lines → 16:40", "re-review · requested by
-// alice → now", "delta check · quiet → 14:09".
-func (w Wait) Short(now time.Time) string {
+// alice → now", "delta check · quiet → 14:09", "re-review · retry 2/3 setup
+// → 22:57", "re-review · pinned → u" (u: the screens' unpin key).
+func (w Wait) Short(now time.Time) string { return w.short(now, true) }
+
+// Narrow is Short for a narrower cell: a retry drops its cause first
+// ("re-review · retry 2/3 → 22:57"); any other wait is its Short.
+func (w Wait) Narrow(now time.Time) string { return w.short(now, false) }
+
+// short is Short, with a retry's cause only when cause is set.
+func (w Wait) short(now time.Time, cause bool) string {
 	var what string
 	switch w.Reason {
 	case WaitRequested:
@@ -161,6 +177,14 @@ func (w Wait) Short(now time.Time) string {
 		what = fmt.Sprintf("cap %d/%d", w.Count, w.Max)
 	case WaitRetry:
 		what = "retry"
+		if w.Count > 0 && w.Max > 0 {
+			what += fmt.Sprintf(" %d/%d", w.Count, w.Max)
+		}
+		if cause && w.Subject != "" {
+			what += " " + w.Subject
+		}
+	case WaitPinned:
+		return w.kind() + " · pinned → u" // a pin has no end: the unpin key instead of a time
 	case WaitMuted:
 		what = "muted"
 	case WaitQuietHours:
@@ -245,6 +269,8 @@ func (w Wait) Sentence(ref string, now time.Time) string {
 		s += "; `magnum review " + ref + "` runs it now"
 	case w.Reason == WaitMuted && ref != "":
 		s += "; `magnum unmute " + ref + "` brings it back"
+	case w.Reason == WaitPinned && ref != "":
+		s += "; `magnum unpin " + ref + "` lets it run (a pin never lapses by itself)"
 	case w.Reason == WaitPaused || w.Reason == WaitInfra || w.Reason == WaitKind:
 		s += "; `magnum resume` lifts the pause"
 	}
@@ -317,7 +343,8 @@ func (e *Engine) waitFor(ctx context.Context, pr store.PR, global *Wait, now tim
 		return w
 	}
 	if pr.NextAttemptAt != nil && pr.NextAttemptAt.After(now) {
-		return with(Wait{Reason: WaitRetry, Until: *pr.NextAttemptAt, Detail: fmt.Sprintf("a retry (attempt %d) after: %s", pr.Attempts+1, clipRunes(strings.Join(strings.Fields(deref(pr.LastError)), " "), 120))})
+		return with(Wait{Reason: WaitRetry, Until: *pr.NextAttemptAt, Count: pr.Attempts + 1, Max: maxAttempts,
+			Subject: retryCause(deref(pr.LastError)), Detail: fmt.Sprintf("a retry (attempt %d) after: %s", pr.Attempts+1, clipRunes(strings.Join(strings.Fields(deref(pr.LastError)), " "), 120))})
 	}
 	if !pr.Forced && w != nil {
 		if td := eligibility.Throttle(e.cfg.ThrottleFor(w), f, now.Local()); !td.Ready {
@@ -394,7 +421,7 @@ func (e *Engine) throttleWait(ctx context.Context, pr store.PR, w config.Watch, 
 // (gateWait): Detail is its sentence, not a phrase after "waits for".
 func (w Wait) fromGate() bool {
 	switch w.Reason {
-	case WaitKind, WaitBudget, WaitIdentity, WaitSlot, WaitCapacity, WaitOther:
+	case WaitKind, WaitBudget, WaitIdentity, WaitSlot, WaitPinned, WaitCapacity, WaitOther:
 		return true
 	}
 	return false
@@ -403,12 +430,15 @@ func (w Wait) fromGate() bool {
 // gate is why the dispatcher skips a PR (prGate, startRound and the capacity
 // check return it, noteGate records it): the sentence `magnum status` shows
 // (store.KVPRGate), the Wait reason it becomes (WaitIdentity, WaitBudget,
-// WaitCapacity, WaitSlot, WaitKind or WaitOther) and, for WaitKind, the
-// paused agent kind. The zero gate lets the round start.
+// WaitCapacity, WaitSlot, WaitPinned, WaitKind or WaitOther), for WaitKind
+// the paused agent kind and for WaitPinned who pinned the slot ("" when
+// unknown). The zero gate lets the round start.
 type gate struct {
 	reason string
 	text   string
 	kind   string
+	by     string
+	at     time.Time // WaitPinned: when the slot was pinned (zero when unknown)
 }
 
 // otherGate is a gate of no reason of its own (WaitOther).
@@ -416,8 +446,10 @@ func otherGate(text string) gate { return gate{reason: WaitOther, text: text} }
 
 // gateCode is what kvPRGateReason keeps of a gate.
 type gateCode struct {
-	Reason string `json:"reason"`
-	Kind   string `json:"kind,omitempty"`
+	Reason string    `json:"reason"`
+	Kind   string    `json:"kind,omitempty"`
+	By     string    `json:"by,omitempty"` // WaitPinned: who pinned the slot
+	At     time.Time `json:"at,omitzero"`  // WaitPinned: when
 }
 
 // gateWait is the wait of the reason the last dispatch gave for skipping
@@ -435,6 +467,8 @@ func (e *Engine) gateWait(ctx context.Context, prID int64, text string) Wait {
 	switch c.Reason {
 	case WaitIdentity, WaitBudget, WaitCapacity, WaitSlot:
 		w.Reason = c.Reason
+	case WaitPinned:
+		w.Reason, w.Subject, w.Since = c.Reason, c.By, c.At
 	case WaitKind:
 		if p, ok := e.toolPause(ctx, c.Kind); ok {
 			w.Reason, w.Subject, w.Until = WaitKind, c.Kind, p.Until
@@ -448,6 +482,41 @@ const (
 	gateCapacity   = "review capacity: "    // max_concurrent_reviews is reached
 	gateNoFreeSlot = "no free slot in the " // every slot of the pool is taken
 )
+
+// lostRe finds the role whose session a round lost ("judge session lost").
+var lostRe = regexp.MustCompile(`([\w-]+) session lost`)
+
+// retryCause is what a retry waits after, in a word or two for its cell,
+// read from the error the failed attempt left (prs.last_error): the outcome
+// of a round that ran ("timeout", "judge lost", "error", "stopped") or why
+// one could not start ("human active", "agent busy", "infra", else
+// "setup"). A round outcome leads its error with the outcome's name
+// (round_settle.go); a setup error is the setup's own chain.
+func retryCause(lastError string) string {
+	l := strings.ToLower(strings.TrimSpace(lastError))
+	switch {
+	case l == "":
+		return ""
+	case strings.HasPrefix(l, "timeout:"):
+		return "timeout"
+	case strings.HasPrefix(l, "error:"):
+		if m := lostRe.FindStringSubmatch(l); m != nil {
+			return m[1] + " lost"
+		}
+		return "error"
+	case strings.HasPrefix(l, "round stopped"):
+		return "stopped"
+	case strings.Contains(l, "found the pr closed"):
+		return "found closed"
+	case strings.Contains(l, agents.ErrHumanActive.Error()):
+		return "human active"
+	case strings.Contains(l, agents.ErrBusy.Error()):
+		return "agent busy"
+	case strings.HasPrefix(l, "infrastructure ("):
+		return "infra"
+	}
+	return "setup"
+}
 
 // quietHoursNow reports whether now is inside [daemon] quiet_hours.
 func quietHoursNow(spec string, now time.Time) bool {

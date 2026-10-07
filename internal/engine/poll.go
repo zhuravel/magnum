@@ -53,6 +53,7 @@ func (e *Engine) poll(ctx context.Context) error {
 	type key struct{ owner, poll string }
 	seen := map[key]bool{}
 	var errs []error
+	var radar radarResults
 	for _, w := range e.cfg.Watches {
 		k := key{strings.ToLower(w.Owner), w.PollIdentity}
 		if seen[k] {
@@ -66,6 +67,7 @@ func (e *Engine) poll(ctx context.Context) error {
 		}
 		repos, rl, err := gh.Radar(e.betweenCalls(ctx), w.Owner)
 		e.recordRateLimit(ctx, rl, now)
+		radar.add(w.Owner, err)
 		if err != nil {
 			if e.logOnce("poll:"+w.Owner, err.Error(), now) {
 				e.event(ctx, "warn", "watch:"+w.Owner, "poll.error", fmt.Sprintf("radar %s: %v", w.Owner, err), nil)
@@ -80,7 +82,10 @@ func (e *Engine) poll(ctx context.Context) error {
 	// After the first poll applied the heads it found: pushes it saw were
 	// measured anew, the old records left are checked again once.
 	e.recheckDeltas(ctx)
+	// The poll's attempt, whatever its radar calls did; each watch keeps
+	// its own last good poll (poll_health.go).
 	e.setKV(ctx, kvLastPoll, store.FormatTime(now))
+	e.recordWatchPolls(ctx, radar, now)
 	return errors.Join(errs...)
 }
 

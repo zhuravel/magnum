@@ -2,8 +2,9 @@ package cli
 
 // What the titles of the dashboard and the PR board say about the daemon
 // (tui.DaemonFacts): an older build running, a pause and the review requests
-// it holds, a drain, the PRs magnum approved that wait for the operator's
-// approval and those magnum approved as the operator, the Codex budget's
+// it holds, a drain, the watches whose radar calls fail, the PRs magnum
+// approved that wait for the operator's approval and those magnum approved
+// as the operator, the Codex budget's
 // pace when it reaches a cap before the window resets, and the notes
 // curation proposals waiting for review.
 // Both screens read them from the registry with every refresh, without
@@ -18,9 +19,9 @@ import (
 	"github.com/zhuravel/magnum/internal/tui"
 )
 
-// screenFacts reads the facts: the daemon's pid, build and drain as `magnum
-// status` reads them, the `magnum pause` with the requests it holds, and the
-// Codex budget.
+// screenFacts reads the facts: the daemon's pid, build, drain and failing
+// watches as `magnum status` reads them, the `magnum pause` with the
+// requests it holds, and the Codex budget.
 func screenFacts(ctx context.Context, d statusDeps) tui.DaemonFacts {
 	var f tui.DaemonFacts
 	if d.Store == nil {
@@ -42,6 +43,7 @@ func screenFacts(ctx context.Context, d statusDeps) tui.DaemonFacts {
 	if r.Daemon.DrainingSince != nil {
 		f.Draining, f.DrainerPID = true, r.Daemon.DrainerPID
 	}
+	f.PollsFailing = screenPollsFailing(r.Daemon.PollsFailing)
 	if v, _ := kv.get(store.KVDaemonPaused); v == "1" {
 		f.Paused, f.Held = true, store.Deref(kv.getInt(engine.KVDaemonPausedHeld))
 		if at := kv.getTime(engine.KVDaemonPausedAt); at != nil {
@@ -69,6 +71,16 @@ func screenFacts(ctx context.Context, d statusDeps) tui.DaemonFacts {
 		}
 	}
 	return f
+}
+
+// screenPollsFailing is the watches whose radar calls fail as the screens
+// take them (statusPollsFailing chose and ordered them); nil when none.
+func screenPollsFailing(fs []statusPollFailing) []tui.WatchFailing {
+	var out []tui.WatchFailing
+	for _, f := range fs {
+		out = append(out, tui.WatchFailing{Watch: f.Watch, Since: f.Since, Error: f.Error})
+	}
+	return out
 }
 
 // screenSkewNew is what is built that the daemon does not run, as the titles

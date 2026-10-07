@@ -77,6 +77,9 @@ func statusRenderHeader(w io.Writer, r statusReport) {
 	if dm.LastTick != nil {
 		tick = inspAgo(now, dm.LastTick)
 	}
+	for _, f := range screenPollsFailing(dm.PollsFailing) {
+		poll += ", " + statusSafe(f.Text(now), 0)
+	}
 	fmt.Fprintf(w, "activity: last poll %s, last tick %s", poll, tick)
 	if dm.LastReconcile != nil {
 		fmt.Fprintf(w, ", last reconcile %s", inspAgo(now, dm.LastReconcile))
@@ -95,6 +98,9 @@ func statusRenderHeader(w io.Writer, r statusReport) {
 	if a := r.AutoApproved; a != nil {
 		fmt.Fprintf(w, "approvals: auto-approved: %d today, %d standing\n", a.Today, a.Standing)
 	}
+	for _, m := range r.Machine {
+		fmt.Fprintf(w, "machine:  %s\n", statusMachineText(m, now))
+	}
 	fmt.Fprintf(w, "rounds:   %s\n", statusRoundsText(r))
 	fmt.Fprintf(w, "disk:     %s\n", statusDiskText(r.Disk))
 	if len(r.Pauses) == 0 {
@@ -108,6 +114,25 @@ func statusRenderHeader(w io.Writer, r statusReport) {
 			fmt.Fprintf(w, "    fix: %s\n", statusSafe(p.Fix, 0))
 		}
 	}
+}
+
+// statusMachineText is a machine line's value: "6 rounds of talkable:
+// `bundle exec rspec`: no test database for the worktree, last 09:24" (the
+// repository without its owner; the command and the error are the judge's
+// text, cleaned and cut).
+func statusMachineText(m statusMachine, now time.Time) string {
+	name := m.Repo
+	if i := strings.LastIndex(name, "/"); i >= 0 {
+		name = name[i+1:]
+	}
+	s := textx.Count(m.Rounds, "round", "rounds") + " of " + statusSafe(name, 40)
+	if cmd := strings.TrimSpace(statusSafe(m.Cmd, 60)); cmd != "" {
+		s += ": `" + cmd + "`"
+	}
+	if msg := strings.TrimSpace(statusSafe(m.Error, 160)); msg != "" {
+		s += ": " + msg
+	}
+	return s + ", last " + inspClock(now, m.Last)
 }
 
 // statusPromptsText is the prompts line's value while a running daemon's
@@ -290,7 +315,8 @@ func statusRenderManual(w io.Writer, r statusReport) {
 func statusRenderQueue(w io.Writer, r statusReport) {
 	fmt.Fprintf(w, "\nQUEUE (%d)\n", len(r.Queue))
 	for _, q := range r.Queue {
-		fmt.Fprintf(w, "  %-18s %-17s %s  %s\n", inspPRLabel(q.Repo, q.Number), statusSafe(q.State, 0), statusSafe(q.Next, 0), statusSafe(q.Title, 50))
+		fmt.Fprintf(w, "  %-18s %-17s %s  %s\n", inspPRLabel(q.Repo, q.Number), statusSafe(q.State, 0), statusSafe(q.Next, 0)+statusQueueMarkText(q, r.GeneratedAt),
+			statusSafe(q.Title, 50))
 	}
 	if len(r.Closing) > 0 {
 		fmt.Fprintf(w, "\nCLOSED, pending release (%d)\n", len(r.Closing))
@@ -307,6 +333,20 @@ func statusRenderQueue(w io.Writer, r statusReport) {
 			}
 		}
 	}
+}
+
+// statusQueueMarkText is what a queue line adds after its wait, as the
+// board's row says it: " · snoozed → 18:00" (unless the wait is the snooze)
+// and " · 3 open".
+func statusQueueMarkText(q statusPRLine, now time.Time) string {
+	var s string
+	if q.SnoozedUntil != nil && !strings.Contains(q.Next, "snoozed") {
+		s += " · snoozed → " + inspClock(now, *q.SnoozedUntil)
+	}
+	if q.Open > 0 {
+		s += fmt.Sprintf(" · %d open", q.Open)
+	}
+	return s
 }
 
 // statusPauseText is a pause's reason with its start, length and end, the
@@ -481,6 +521,12 @@ func statusRenderDetail(w io.Writer, d statusDetail, now time.Time) {
 	}
 	if pr.Muted {
 		state += ", muted"
+	}
+	if z := d.Snooze; z != nil {
+		state += ", snoozed until " + inspClock(now, z.Until)
+		if z.By != "" {
+			state += " by " + statusSafe(z.By, 0)
+		}
 	}
 	fmt.Fprintf(w, "  state:     %s\n", state)
 	fmt.Fprintf(w, "  next:      %s\n", statusSafe(d.Next, 0))

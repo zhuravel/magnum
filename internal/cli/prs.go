@@ -327,7 +327,15 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 						if cfg != nil {
 							defRepo = cfg.Daemon.DefaultRepo
 						}
-						row.Wait, row.WaitDetail = w.Short(inspNow()), w.Sentence(actRefLabel(defRepo, full, r.Number), inspNow())
+						now := inspNow()
+						row.Wait, row.WaitDetail = w.Short(now), w.Sentence(actRefLabel(defRepo, full, r.Number), now)
+						if narrow := w.Narrow(now); narrow != row.Wait {
+							row.WaitNarrow = narrow
+						}
+						row.PinWait = w.Reason == engine.WaitPinned
+						if row.PinWait {
+							row.PinnedBy = w.Subject
+						}
 						row.DeltaCheck = w.DeltaCheck
 					}
 				}
@@ -484,7 +492,7 @@ func prsBoardRow(b store.BoardRow, self []string) tui.PRBoardRow {
 		Slot: b.Slot, Pinned: b.Pinned, Muted: b.Muted, NextEligibleAt: b.NextEligibleAt,
 		LastError: b.LastError, RoundsToday: b.RoundsToday, SkipReason: b.SkipReason,
 		ClosedAt: cmp.Or(b.MergedAt, b.ClosedAt), MergedUnreviewed: b.MergedUnreviewed, FlagDismissed: b.FlagDismissed,
-		Replies: b.PendingReplies,
+		Replies: b.PendingReplies, ReleaseAfter: b.ReleaseAfter,
 	}
 	if r.Ref == "" && b.Owner != "" && b.Name != "" && b.Number > 0 {
 		r.Ref = fmt.Sprintf("%s/%s#%d", b.Owner, b.Name, b.Number)
@@ -634,7 +642,7 @@ func prsRender(w io.Writer, rows []tui.PRBoardRow, defaultRepo string, now time.
 			inspOrDash(actClean(strings.Join(r.Assignees, ","))),
 			actAgo(now, r.ActivityAt),
 			prsRequestedCell(r, now),
-			prsStateCell(r),
+			prsStateCell(r, now),
 			prsLastReviewCellOf(r, now),
 			prsFindingsCell(r.Findings),
 			prsCICell(r.CI),
@@ -681,8 +689,9 @@ func prsRequestedCell(r tui.PRBoardRow, now time.Time) string {
 
 // prsStateCell is the magnum state with the flags that matter
 // ("reviewed,pinned,draft"; "closed,merged,unreviewed" for a PR GitHub
-// merged before magnum reviewed its last push).
-func prsStateCell(r tui.PRBoardRow) string {
+// merged before magnum reviewed its last push), and a snooze that holds at
+// now while no round runs ("reviewed,snoozed→18:00", as the board's cell).
+func prsStateCell(r tui.PRBoardRow, now time.Time) string {
 	s := inspOrDash(r.State)
 	if g := strings.ToUpper(r.GHState); g == "MERGED" || g == "CLOSED" {
 		s += "," + strings.ToLower(g)
@@ -706,6 +715,9 @@ func prsStateCell(r tui.PRBoardRow) string {
 		if f.on {
 			s += "," + f.name
 		}
+	}
+	if r.SnoozedUntil.After(now) && !slices.Contains(prInFlight, r.State) {
+		s += ",snoozed→" + inspClock(now, r.SnoozedUntil)
 	}
 	return s
 }
@@ -746,7 +758,8 @@ func prsCICell(ci *tui.CIInfo) string {
 }
 
 // prsFindingsCell is what magnum's latest review concluded:
-// "blocking P1:1 P2:3 simplify:4", "clean", or "-" when it has not
+// "blocking P1:1 P2:3 simplify:4", "clean", "blocking 3 open" (none new,
+// earlier ones still open, as the board says), or "-" when it has not
 // reviewed the PR.
 func prsFindingsCell(f *tui.FindingsInfo) string {
 	if f == nil {
@@ -757,6 +770,9 @@ func prsFindingsCell(f *tui.FindingsInfo) string {
 		if n > 0 {
 			parts = append(parts, fmt.Sprintf("P%d:%d", i, n))
 		}
+	}
+	if len(parts) == 1 && f.Open > 0 {
+		parts = append(parts, fmt.Sprintf("%d open", f.Open))
 	}
 	if f.Simplifications > 0 {
 		parts = append(parts, fmt.Sprintf("simplify:%d", f.Simplifications))

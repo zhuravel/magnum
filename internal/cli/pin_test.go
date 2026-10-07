@@ -77,6 +77,27 @@ func TestTargetsBySlotAndDirectory(t *testing.T) {
 	}
 }
 
+// `magnum mute <ref> [reason…]` sends the words after the PR as the mute's
+// reason; the other target verbs still take one target.
+func TestMuteSendsItsReason(t *testing.T) {
+	h := newActHarness(t)
+	h.seedPR("talkable/talkable", 5, store.PRQueued)
+	if code := h.cmd("mute", "5", "waits", "for", "the", "author's", "rework"); code != 0 {
+		t.Fatalf("mute exit %d: %s", code, h.errb.String())
+	}
+	reqs := h.requests()
+	if len(reqs) != 1 || reqs[0].Kind != engine.ReqMute {
+		t.Fatalf("requests %+v", reqs)
+	}
+	if p := actDecode[engine.TargetPayload](t, reqs[0].Payload); p.Number != 5 || p.Reason != "waits for the author's rework" {
+		t.Fatalf("mute payload %+v", p)
+	}
+	h.errb.Reset()
+	if code := h.cmd("pin", "5", "because"); code != 2 || !strings.Contains(h.errb.String(), "one target at a time") {
+		t.Fatalf("pin with two words: exit %d: %s", code, h.errb.String())
+	}
+}
+
 func TestReleaseHandsOffToTheDaemonAndWaits(t *testing.T) {
 	h := newActHarness(t)
 	h.seedPR("talkable/talkable", 5, store.PRReviewed)

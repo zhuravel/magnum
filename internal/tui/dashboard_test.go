@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -313,7 +314,18 @@ func TestDashboardEmptySlot(t *testing.T) {
 }
 
 func TestDashboardReleaseConfirms(t *testing.T) {
-	m, _, act := newDash(t, 140, 50)
+	m, src, act := newDash(t, 140, 50)
+	// A round runs in review1: x says why it releases nothing, asking nothing.
+	m, _ = send(t, m, keys("x")...)
+	if m.confirm != nil {
+		t.Fatalf("x under a running round asked %q", m.confirm.question)
+	}
+	mustContain(t, viewOf(m), "talkable#1: round in progress (reviewing): no slot is released under a round; K kills it")
+	d := src.data
+	d.Slots = slices.Clone(d.Slots)
+	d.Slots[0].PRState, d.Slots[0].SlotState = "reviewed", "held"
+	d.Queue = d.Queue[:1] // talkable#1's round ended
+	m, _ = send(t, m, dashDataMsg{data: d})
 	m, _ = send(t, m, keys("x")...) // slot review1 holds talkable#1
 	mustContain(t, viewOf(m), "Release talkable#1: hand back its slot now, sessions parked and worktree reset? y/N",
 		"y confirms, any other key cancels")

@@ -38,7 +38,7 @@ func TestStatusDashData(t *testing.T) {
 	if got.GeneratedAt != now || got.Daemon != (tui.DaemonInfo{Running: true, PID: 4242, Uptime: "3h", Launchd: "running"}) {
 		t.Errorf("daemon %+v at %v", got.Daemon, got.GeneratedAt)
 	}
-	if got.Activity != (tui.ActivityInfo{LastPoll: 40 * time.Second}) {
+	if !reflect.DeepEqual(got.Activity, tui.ActivityInfo{LastPoll: 40 * time.Second}) {
 		t.Errorf("activity %+v (never ticked: 0)", got.Activity)
 	}
 	if got.GitHub != (tui.GitHubInfo{Remaining: 4890, Limit: 5000}) {

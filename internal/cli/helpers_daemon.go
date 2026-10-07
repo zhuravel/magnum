@@ -356,7 +356,8 @@ func tabBarTOMLString(s string) string {
 // agent turns of its rounds and preempts any drain. The new build takes over
 // through `daemon-restart --drain`, which never migrates (it writes one kv
 // row) and whose new daemon migrates on start. A stale pidfile naming a
-// recycled pid does not count; a live pid that ps cannot identify does.
+// recycled pid does not count; a live pid that ps cannot identify does. Its
+// refusal is a *migrateRefusal, which app.New and the store wrap.
 func migrateGuard(layout paths.Layout) func(from, to int) error {
 	return func(from, to int) error {
 		pid, err := daemonSys.DaemonPID(layout)
@@ -367,9 +368,22 @@ func migrateGuard(layout paths.Layout) func(from, to int) error {
 		if err == nil && !engine.LooksLikeDaemon(comm, args) {
 			return nil
 		}
-		return fmt.Errorf("the registry is at schema %d and this build needs %d, but the daemon (pid %d) still runs on it; "+
-			"migrating now would make it exit mid-round\n"+
-			"fix: run `magnum daemon-restart --drain` (it waits for the rounds in flight and restarts the daemon on this build, which migrates), then retry",
-			from, to, pid)
+		return &migrateRefusal{from: from, to: to, pid: pid}
 	}
 }
+
+// migrateRefusal is migrateGuard's refusal to migrate the registry from
+// schema from to to while the daemon pid runs on it. Commands print it
+// whole (the reason, then its fix); doctor reports the two apart.
+type migrateRefusal struct{ from, to, pid int }
+
+// migrateRefusalFix is how the operator gets past a migrateRefusal.
+const migrateRefusalFix = "run `magnum daemon-restart --drain` (it waits for the rounds in flight and restarts the daemon on this build, which migrates), then retry"
+
+// reason is the refusal without its fix.
+func (e *migrateRefusal) reason() string {
+	return fmt.Sprintf("the registry is at schema %d and this build needs %d, but the daemon (pid %d) still runs on it; "+
+		"migrating now would make it exit mid-round", e.from, e.to, e.pid)
+}
+
+func (e *migrateRefusal) Error() string { return e.reason() + "\nfix: " + migrateRefusalFix }

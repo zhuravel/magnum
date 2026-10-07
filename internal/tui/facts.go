@@ -3,8 +3,9 @@ package tui
 // What the titles of the PR board and the status dashboard say about the
 // daemon, beyond their rows: an older build running ("daemon on v1 since
 // 17:40 · v2 built: daemon-restart"), a drain, a pause and what it holds,
-// and the Codex budget's pace when it reaches a cap before the window
-// resets. They go on the existing title line, the rows' left alone, and give
+// a watch whose polls fail ("talkable polls failing 47m (HTTP 502)"), and
+// the Codex budget's pace when it reaches a cap before the window resets.
+// They go on the existing title line, the rows' left alone, and give
 // way to its other parts on a narrow screen: short forms first, then the
 // least pressing fact.
 
@@ -35,6 +36,10 @@ type DaemonFacts struct {
 	// is the draining command (0 when unknown).
 	Draining   bool
 	DrainerPID int
+	// PollsFailing are the watches whose radar calls have failed for
+	// engine.PollFailingShown or longer, the oldest failure first: magnum
+	// sees no new PRs or pushes of them.
+	PollsFailing []WatchFailing
 	// NeedsMe counts the open PRs magnum approved that GitHub still blocks
 	// on the operator's approval (PRBoardRow.NeedsMe).
 	NeedsMe int
@@ -58,13 +63,38 @@ type CodexPace struct {
 	At   time.Time
 }
 
+// WatchFailing is a watch whose radar calls fail since Since, the last
+// with Error ("HTTP 502"; "" when unknown).
+type WatchFailing struct {
+	Watch string
+	Since time.Time
+	Error string
+}
+
+// Text is w as the screens and `magnum status` say it at now: "talkable
+// polls failing 47m (HTTP 502)", without the parenthesis when the cause is
+// unknown.
+func (w WatchFailing) Text(now time.Time) string {
+	s := cleanText(w.Watch) + " polls failing " + factAge(now.Sub(w.Since))
+	if e := cleanText(w.Error); e != "" {
+		s += " (" + e + ")"
+	}
+	return s
+}
+
+// fact is w as a title says it, short "talkable ✗ 47m".
+func (w WatchFailing) fact(now time.Time) fact {
+	return fact{w.Text(now), cleanText(w.Watch) + " ✗ " + factAge(now.Sub(w.Since))}
+}
+
 // fact is one thing a title says, whole and short.
 type fact struct{ full, short string }
 
 // list is f's facts, most pressing first: an older build (the daemon may
 // refuse what this build offers), a drain and a pause (no round starts),
-// the PRs that wait for the operator's approval, those magnum approved as
-// them, the Codex pace, then the notes proposals waiting for review.
+// the watches whose polls fail (magnum sees none of their pushes), the PRs
+// that wait for the operator's approval, those magnum approved as them, the
+// Codex pace, then the notes proposals waiting for review.
 func (f DaemonFacts) list(now time.Time) []fact {
 	var out []fact
 	if f.SkewOld != "" {
@@ -92,6 +122,9 @@ func (f DaemonFacts) list(now time.Time) []fact {
 			full += " · " + textx.Count(f.Held, "request held", "requests held")
 		}
 		out = append(out, fact{full, s})
+	}
+	for _, w := range f.PollsFailing {
+		out = append(out, w.fact(now))
 	}
 	if n := f.NeedsMe; n > 0 {
 		out = append(out, fact{textx.Count(n, "needs your ✓", "need your ✓"), fmt.Sprintf("your ✓ ×%d", n)})
@@ -153,8 +186,8 @@ func factClock(now, t time.Time) string {
 	return t.Format("Mon 15:04")
 }
 
-// factAge is how long a pause has lasted, as herdr's tab bar says it: "7m",
-// "19h", "3d".
+// factAge is how long a pause (or a watch's failing polls) has lasted, as
+// herdr's tab bar says it: "7m", "19h", "3d".
 func factAge(d time.Duration) string {
 	switch {
 	case d < time.Hour:

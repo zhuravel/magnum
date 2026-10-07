@@ -926,9 +926,9 @@ func TestPRBoardConfirmationTexts(t *testing.T) {
 		{[]string{"M"}, "Mute magnum#42: stop automatic reviews of it?"},
 		{[]string{"K"}, "Kill the running review of magnum#42?"},
 		{[]string{"j", "K"}, "Drop the queued review of talkable#11931 before it starts?"},
-		// #42 holds no slot: nothing to free; #11920 holds one
+		// #42 holds no slot: nothing to free; #11920 holds a pinned one
 		{[]string{"I"}, "Ignore magnum#42: kill its review and mute it?"},
-		{[]string{"j", "j", "j", "I"}, "Ignore talkable#11920: mute it and free its slot?"},
+		{[]string{"j", "j", "j", "I"}, "Ignore talkable#11920: mute it?"}, // its pinned slot stays (the daemon keeps it)
 	}
 	for _, c := range cases {
 		m, _, _ := newBoard(t, 220, 24, PRBoardOptions{})

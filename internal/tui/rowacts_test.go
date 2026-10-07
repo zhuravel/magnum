@@ -103,6 +103,72 @@ func TestActionRefusalSaysWhyBeforeAsking(t *testing.T) {
 	}
 }
 
+// A key never promises what the daemon will not do: x refuses a row whose
+// round runs or is paused and one in its close grace (the release skips
+// them), D a merged or closed row; A and C name the findings still open, I
+// leaves out the slot of a pinned PR (the daemon keeps it).
+func TestBoardKeysPromiseWhatYDoes(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		act  rowAct
+		edit func(r *PRBoardRow)
+		want string
+	}{
+		{"release while a round runs", actRelease, func(r *PRBoardRow) { r.State = "reviewing" },
+			"talkable#5: round in progress (reviewing): no slot is released under a round; K kills it"},
+		{"release a paused round", actRelease, func(r *PRBoardRow) { r.State = "paused" },
+			"talkable#5: its paused round keeps the slot; K kills it"},
+		{"release in the close grace", actRelease, func(r *PRBoardRow) {
+			r.GHState, r.State, r.ReleaseAfter = "MERGED", "closed", boardNow.Add(8*time.Minute)
+		}, "talkable#5 is in its close grace: magnum releases its slot in 8m"},
+		{"withdraw on merged", actUnapprove, func(r *PRBoardRow) { r.GHState, r.State = "MERGED", "closed" },
+			"talkable#5 is merged: no approval to withdraw"},
+		{"withdraw on closed", actUnapprove, func(r *PRBoardRow) { r.GHState, r.State = "CLOSED", "released" },
+			"talkable#5 is closed: no approval to withdraw"},
+	} {
+		r := boardActRow(actPR(c.edit), "talkable#5", boardNow)
+		if got := actionRefusal(c.act, r); got != c.want {
+			t.Errorf("%s: refusal %q, want %q", c.name, got, c.want)
+		}
+	}
+	// A closed PR past its grace is released.
+	past := boardActRow(actPR(func(r *PRBoardRow) {
+		r.GHState, r.State, r.ReleaseAfter = "MERGED", "closed", boardNow.Add(-time.Minute)
+	}), "talkable#5", boardNow)
+	if got := actionRefusal(actRelease, past); got != "" {
+		t.Errorf("release past the grace: refused %q", got)
+	}
+
+	for _, c := range []struct {
+		name string
+		act  rowAct
+		edit func(r *PRBoardRow)
+		want string
+	}{
+		{"approve with earlier findings open", actApprove, func(r *PRBoardRow) {
+			r.Findings = &FindingsInfo{Open: 3, Verdict: "blocking", SHA: "abcdef1234"}
+		}, "Approve talkable#5 at abcdef1? magnum found no new findings; 3 earlier findings still open"},
+		{"request changes with new and open findings", actRequestChanges, func(r *PRBoardRow) {
+			r.Findings = &FindingsInfo{Counts: [4]int{0, 1, 0, 0}, Open: 1, Verdict: "blocking", SHA: "abcdef1234"}
+		}, "Request changes on talkable#5 at abcdef1? magnum found 1 P1; 1 earlier finding still open"},
+		{"approve a clean review", actApprove, func(r *PRBoardRow) {
+			r.Findings = &FindingsInfo{Verdict: "clean", SHA: "abcdef1234"}
+		}, "Approve talkable#5 at abcdef1? magnum found no findings"},
+		{"ignore a pinned PR", actIgnore, func(r *PRBoardRow) { r.Pinned = true }, "Ignore talkable#5: mute it?"},
+		{"ignore a pinned running PR", actIgnore, func(r *PRBoardRow) { r.Pinned, r.State = true, "reviewing" },
+			"Ignore talkable#5: kill its review and mute it?"},
+	} {
+		r := boardActRow(actPR(c.edit), "talkable#5", boardNow)
+		if why := actionRefusal(c.act, r); why != "" {
+			t.Errorf("%s: refused %q", c.name, why)
+			continue
+		}
+		if got := actionQuestion(c.act, r); got != c.want {
+			t.Errorf("%s: asked %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
 // The picker names its own keys in a refusal, and leaves out one it lacks.
 func TestActionRefusalNamesThePickersKeys(t *testing.T) {
 	pinned := PickEntry{Ref: "talkable/talkable#1", State: "reviewed,pinned", Pinned: true, GHState: "OPEN"}

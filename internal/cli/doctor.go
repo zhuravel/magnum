@@ -98,8 +98,7 @@ func runDoctor(c *Context, asJSON bool, pos []string) int {
 	}
 	a, err := inspOpenApp(c, false)
 	if err != nil {
-		fmt.Fprintf(c.Stdout, "%s  %s\n      fix: %s\n", doctorFail, "config/state: "+err.Error(), "fix config.toml (`magnum config` validates it)")
-		return 1
+		return doctorPrint(c, []doctorCheck{doctorOpenFailed(err)}, asJSON)
 	}
 	defer a.Close()
 	ctx, cancel := signalContext()
@@ -116,6 +115,17 @@ func runDoctor(c *Context, asJSON bool, pos []string) int {
 		d.MySQL = a.MySQL
 	}
 	return doctorPrint(c, doctorRun(ctx, d), asJSON)
+}
+
+// doctorOpenFailed is the one check doctor reports when it cannot open the
+// config and the registry: a migration the CLI refuses under a running
+// daemon (migrateGuard) names the registry and daemon-restart --drain; any
+// other failure points at config.toml.
+func doctorOpenFailed(err error) doctorCheck {
+	if r, ok := errors.AsType[*migrateRefusal](err); ok {
+		return doctorFailed("registry", r.reason(), migrateRefusalFix)
+	}
+	return doctorFailed("config", "config/state: "+err.Error(), "fix config.toml (`magnum config` validates it)")
 }
 
 // doctorPrint prints the checks; exit code 1 when any failed.

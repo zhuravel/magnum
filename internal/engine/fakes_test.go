@@ -99,6 +99,7 @@ type fakeGH struct {
 	closed     map[int]string      // number -> CLOSED|MERGED for ConfirmStates
 	notFound   []int
 	radarErr   error
+	radarErrs  map[string]error               // org -> Radar of that org fails (radarErr wins)
 	ciErr      error                          // CIStates fails
 	compare    map[string]github.CompareStats // "base...head" -> stats; absent = ErrNotFound
 	compareErr error
@@ -351,6 +352,9 @@ func (g *fakeGH) Radar(ctx context.Context, org string) ([]github.RepoRadar, git
 	defer g.mu.Unlock()
 	if g.radarErr != nil {
 		return nil, github.RateLimit{}, g.radarErr
+	}
+	if err := g.radarErrs[org]; err != nil {
+		return nil, github.RateLimit{}, err
 	}
 	var out []github.RepoRadar
 	names := make([]string, 0, len(g.repos))

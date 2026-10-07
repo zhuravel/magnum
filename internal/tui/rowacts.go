@@ -142,6 +142,9 @@ type actRow struct {
 	// screen does not know: only the board offers z); now is the screen's
 	// clock when it built the row, which z's question counts from.
 	snoozedUntil, now time.Time
+	// releaseAfter is when the close grace of a closed PR ends (zero: none,
+	// or the screen does not know); x waits for it as the daemon does.
+	releaseAfter time.Time
 
 	// keys are the screen's keys where they differ from rowActDefs (the
 	// picker's); an action missing from it there has no key.
@@ -259,7 +262,10 @@ func actionRefusal(a rowAct, r actRow) string {
 			return l + ": the head moved since magnum reviewed " + textx.ShortSHA(f.SHA) + r.orKey(actReview, ": review again first (%k)")
 		}
 	case actUnapprove:
-		if r.autoKnown && r.auto == nil {
+		switch {
+		case r.merged() || r.closed():
+			return l + " is " + r.ghWord() + ": no approval to withdraw"
+		case r.autoKnown && r.auto == nil:
 			return "magnum has no approval standing as you on " + l
 		}
 	case actBrowser:
@@ -278,12 +284,18 @@ func actionRefusal(a rowAct, r actRow) string {
 		if r.pinKnown && !r.pinned {
 			return l + " is not pinned"
 		}
-	case actRelease:
+	case actRelease: // the release skips what cleanup's plan skips: a round in flight or paused, a close grace
 		switch {
 		case r.pinKnown && r.pinned:
 			return l + " is pinned: unpin first" + r.orKey(actUnpin, " (%k)")
 		case r.ref != "" && r.slotKnown && !r.inSlot:
 			return l + " holds no slot: nothing to release"
+		case r.running():
+			return l + ": round in progress (" + stateLabel(r.state) + "): no slot is released under a round" + r.orKey(actAbort, "; %k kills it")
+		case r.paused():
+			return l + ": its paused round keeps the slot" + r.orKey(actAbort, "; %k kills it")
+		case r.state == "closed" && r.releaseAfter.After(r.now):
+			return l + " is in its close grace: magnum releases its slot in " + HumanDuration(r.releaseAfter.Sub(r.now))
 		}
 	case actMute:
 		switch act, state := muteActFor(r.ghState, r.mergedUnreviewed, r.flagDismissed); {
@@ -586,7 +598,7 @@ func ignoreQuestion(r actRow) string {
 		does = append(does, "drop its queued review")
 	}
 	does = append(does, "mute it")
-	if !r.ended() && !r.closed() && (r.inSlot || !r.slotKnown) {
+	if !r.ended() && !r.closed() && (r.inSlot || !r.slotKnown) && !(r.pinKnown && r.pinned) { // the daemon keeps a pinned slot
 		does = append(does, "free its slot")
 	}
 	q := "Ignore " + r.label + ": " + andList(does)
@@ -627,7 +639,7 @@ func boardActRow(r PRBoardRow, label string, now time.Time) actRow {
 		findings: r.Findings, verdicts: true, url: prURL(r), issue: r.Issue, issueURL: r.IssueURL,
 		pinned: r.Pinned, pinKnown: true, muted: r.Muted || normState(r.State) == "ignored", mutedKnown: true,
 		inSlot: r.Slot != "", slotKnown: true, mergedUnreviewed: r.MergedUnreviewed, flagDismissed: r.FlagDismissed,
-		auto: r.AutoApproved, autoKnown: true, snoozedUntil: r.SnoozedUntil, now: now}
+		auto: r.AutoApproved, autoKnown: true, snoozedUntil: r.SnoozedUntil, releaseAfter: r.ReleaseAfter, now: now}
 	if r.LastReview != nil {
 		row.reviewed = r.LastReview.CommitSHA
 	}

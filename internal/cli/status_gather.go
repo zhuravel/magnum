@@ -48,6 +48,7 @@ func statusGather(ctx context.Context, d statusDeps, o statusOptions) (statusRep
 	statusGatherRetro(ctx, d, kv, &r)
 	statusGatherNotes(ctx, d, &r)
 	statusGatherAutoApproved(ctx, d, &r)
+	statusGatherMachine(ctx, d, &r)
 	statusGatherPauses(d, kv, &r)
 	statusGatherDisk(d, &r)
 	if err := statusGatherPRs(ctx, d, now, &r); err != nil {
@@ -128,6 +129,7 @@ func statusGatherDaemon(ctx context.Context, d statusDeps, kv statusKV, r *statu
 	r.Daemon.LastTick = kv.getTime(store.KVDaemonLastTick)
 	r.Daemon.LastPoll = kv.getTime(store.KVDaemonLastPoll)
 	r.Daemon.LastReconcile = kv.getTime(store.KVDaemonLastReconcile)
+	r.Daemon.PollsFailing = statusPollsFailing(d, kv, r.GeneratedAt)
 	if v, ok := kv.get(store.KVHerdrUp); ok {
 		up := v == "1"
 		r.Daemon.HerdrUp = &up
@@ -155,6 +157,36 @@ func statusGatherDaemon(ctx context.Context, d statusDeps, kv statusKV, r *statu
 			r.Daemon.PromptsChangedFiles = strings.Split(v, ",")
 		}
 	}
+}
+
+// statusPollsFailing are the configured watch owners (once each, in any
+// case) whose radar calls have failed for engine.PollFailingShown or longer
+// at now, the oldest failure first; nil when none.
+func statusPollsFailing(d statusDeps, kv statusKV, now time.Time) []statusPollFailing {
+	if d.Config == nil {
+		return nil
+	}
+	var out []statusPollFailing
+	seen := map[string]bool{}
+	for _, w := range d.Config.Watches {
+		owner := strings.ToLower(w.Owner)
+		if seen[owner] {
+			continue
+		}
+		seen[owner] = true
+		v, _ := kv.get(store.KVWatchPoll(owner))
+		p, ok := engine.ParseWatchPoll(v)
+		if !ok || p.Failing(now) < engine.PollFailingShown {
+			continue
+		}
+		f := statusPollFailing{Watch: w.Owner, Since: p.FailingSince, Error: p.Error}
+		if !p.LastOK.IsZero() {
+			f.LastOK = &p.LastOK
+		}
+		out = append(out, f)
+	}
+	slices.SortStableFunc(out, func(a, b statusPollFailing) int { return a.Since.Compare(b.Since) })
+	return out
 }
 
 // statusGatherUsage fills the Codex budget the daemon last read (nil when
@@ -250,6 +282,20 @@ func statusGatherAutoApproved(ctx context.Context, d statusDeps, r *statusReport
 	}
 	if today > 0 || len(standing) > 0 || (d.Config != nil && d.Config.AutoApproves()) {
 		r.AutoApproved = &statusAutoApproved{Today: today, Standing: len(standing)}
+	}
+}
+
+// statusGatherMachine groups the review machine's failures the judges
+// reported (round.environment) in the last engine.MachineWindow by
+// repository and command.
+func statusGatherMachine(ctx context.Context, d statusDeps, r *statusReport) {
+	evs, err := d.Store.EventsOfKindsSince(ctx, r.GeneratedAt.Add(-engine.MachineWindow), engine.MachineEventKind)
+	if err != nil {
+		r.Warnings = append(r.Warnings, "review machine failures: "+err.Error())
+		return
+	}
+	for _, g := range engine.MachineGroups(evs) {
+		r.Machine = append(r.Machine, statusMachine{Repo: g.Repo, Cmd: g.Cmd, Error: g.Error, Rounds: g.Rounds, Last: g.Last})
 	}
 }
 
@@ -411,6 +457,7 @@ func statusGatherPRs(ctx context.Context, d statusDeps, now time.Time, r *status
 			r.Attention = append(r.Attention, statusAttention{Subject: inspPRLabel(repo, pr.Number), Message: msg, Fix: fix})
 		}
 	}
+	statusQueueMarks(ctx, st, r.Queue, now)
 	statusSortQueue(r.Queue)
 	if d.Config != nil {
 		r.Attention = append(r.Attention, statusMergedUnreviewed(prs, repoByID, d.Config.Board.RecentClosed.Duration, now)...)
@@ -544,6 +591,41 @@ func statusSortQueue(q []statusPRLine) {
 		}
 		return updated(a).Compare(updated(b))
 	})
+}
+
+// statusQueueMarks adds to the queue's lines what the board's row says of
+// them besides the wait: a snooze that holds at now and the earlier
+// findings magnum's latest review left open when it posted none new.
+func statusQueueMarks(ctx context.Context, st *store.Store, queue []statusPRLine, now time.Time) {
+	ids := make([]int64, 0, len(queue))
+	for _, q := range queue {
+		if q.rec != nil {
+			ids = append(ids, q.rec.ID)
+		}
+	}
+	sums, _ := st.LastReviewSummaries(ctx, ids) // a read error leaves the marks out
+	for i := range queue {
+		q := &queue[i]
+		if q.rec == nil {
+			continue
+		}
+		if z, ok := statusSnooze(ctx, st, q.rec.ID, now); ok {
+			q.SnoozedUntil = &z.Until
+		}
+		if s, ok := sums[q.rec.ID]; ok && s.Counts == [4]int{} {
+			q.Open = s.Open
+		}
+	}
+}
+
+// statusSnooze is the PR's snooze when it holds at now.
+func statusSnooze(ctx context.Context, st *store.Store, prID int64, now time.Time) (engine.Snooze, bool) {
+	v, ok, err := st.GetKV(ctx, engine.KVPRSnooze(prID))
+	if err != nil || !ok {
+		return engine.Snooze{}, false
+	}
+	z, ok := engine.ParseSnooze(v)
+	return z, ok && z.Active(now)
 }
 
 // statusWait is the daemon's account of why a PR waiting for a round
@@ -697,6 +779,9 @@ func statusGatherDetail(ctx context.Context, d statusDeps, r statusReport, ref s
 			}
 		}
 		det.Notes = notesExist(d.Layout, t.Repo.Owner, t.Repo.Name)
+	}
+	if z, ok := statusSnooze(ctx, d.Store, pr.ID, now); ok {
+		det.Snooze = &z
 	}
 	det.Next = statusNextWithGate(ctx, d.Store, pr, now)
 	if w, ok := statusWait(ctx, d.Store, pr); ok && t.Repo != nil {

@@ -4234,6 +4234,18 @@ const (
 	KVDaemonBuild = "daemon.build"
 )
 const (
+	// MachineEventKind is the event a round records the review machine's
+	// failures in: subject pr:<owner>/<name>#<N>, data {"failures": [{"cmd",
+	// "error"} or a bare error string, ...]}.
+	MachineEventKind = "round.environment"
+	// MachineWindow is how far back the failures are grouped, and how long a
+	// group's toast stays deduped.
+	MachineWindow = 24 * time.Hour
+	// MachineToastRounds is the number of rounds of one repository a command
+	// fails in within MachineWindow before the operator gets a toast.
+	MachineToastRounds = 3
+)
+const (
 	// ReqNotesCurate starts a curation of a repository's notes now
 	// (NotesCuratePayload).
 	ReqNotesCurate = "notes_curate"
@@ -4277,6 +4289,12 @@ const (
     (pauseHeldRequest), rewritten by every tick while paused. Both go with the
     pause.
 
+const (
+	// PollFailingShown is how long a watch's radar calls must have failed
+	// before the screens and `magnum status` show it: a 502 or two between
+	// good polls is GitHub's weather, not news.
+	PollFailingShown = 10 * time.Minute
+)
 const (
 	// KVPromptsLoadedAt is when the running daemon loaded its prompts
 	// (store.FormatTime). KVPromptsChanged counts the prompt and skill files
@@ -4416,6 +4434,7 @@ const (
 	WaitBudget        = "budget"         // the Codex budget's soft cap holds first reviews
 	WaitIdentity      = "identity"       // the posting identity is unhealthy
 	WaitSlot          = "slot"           // the PR's slot, or a free pool slot
+	WaitPinned        = "pinned"         // the PR's slot is pinned (magnum open, magnum pin): the round waits for the unpin
 	WaitCapacity      = "capacity"       // max_concurrent_reviews or max_total_working_codex
 	WaitOther         = "other"          // any other dispatch gate (details, a human, a paused watch, ...)
 	WaitNext          = "next"           // nothing holds it: the next dispatch starts it
@@ -5143,6 +5162,28 @@ type Inventory interface {
 }
     Inventory is the reconcile scanner (*inventory.Scanner).
 
+type MachineGroup struct {
+	Repo string // owner/name
+	// Cmd is the command, its test-file arguments left out (machineCommand);
+	// "" when the judge named none.
+	Cmd string
+	// Error is what the newest round said of it (untrusted agent text).
+	Error string
+	// Rounds counts the events (one per round) that list the command.
+	Rounds int
+	// First and Last are the oldest and the newest of those events.
+	First, Last time.Time
+}
+    MachineGroup is one command failing on the review machine in the rounds of
+    one repository.
+
+func MachineGroups(evs []store.Event) []MachineGroup
+    MachineGroups groups the round.environment events of evs (other kinds
+    and events without a PR subject are skipped) by repository and command.
+    An event counts once per group however often it lists the command; an event
+    whose failures cannot be read counts as one failure without a command,
+    its message the error. Most rounds come first, then the newest.
+
 type NotesCuratePayload struct {
 	Repo      string `json:"repo"` // owner/name
 	Supersede int64  `json:"supersede,omitempty"`
@@ -5429,6 +5470,9 @@ type TargetPayload struct {
 	PRTarget
 	Slot  string `json:"slot,omitempty"`
 	Force bool   `json:"force,omitempty"` // release: see cleanup.Options.Force
+	// Reason is why the operator mutes the PR (`magnum mute <ref> [reason…]`),
+	// kept in the request, its answer and the pr.muted event.
+	Reason string `json:"reason,omitempty"`
 }
     TargetPayload names a PR or a slot (release, pin, unpin, mute, unmute).
 
@@ -5469,16 +5513,21 @@ type Wait struct {
 	Reason   string    `json:"reason"`
 	Rereview bool      `json:"rereview"`
 	Forced   bool      `json:"forced,omitempty"`
-	Until    time.Time `json:"until,omitzero"`    // when it ends, when known
-	Count    int       `json:"count,omitempty"`   // WaitCap: automatic rounds today; WaitDelta: changed lines
-	Max      int       `json:"max,omitempty"`     // WaitCap: the cap; WaitDelta: rereview_min_lines
-	Subject  string    `json:"subject,omitempty"` // WaitKind: the paused kind; WaitRequested: Request.Phrase
+	Until    time.Time `json:"until,omitzero"`  // when it ends, when known
+	Count    int       `json:"count,omitempty"` // WaitCap: automatic rounds today; WaitDelta: changed lines; WaitRetry: the attempt to come
+	Max      int       `json:"max,omitempty"`   // WaitCap: the cap; WaitDelta: rereview_min_lines; WaitRetry: the attempts allowed
+	// Subject is WaitKind's paused kind, WaitRequested's Request.Phrase,
+	// WaitRetry's cause in a word or two (retryCause) and WaitPinned's pin
+	// origin ("magnum open"; "" when unknown).
+	Subject string `json:"subject,omitempty"`
 	// Detail is the reason in words, without the round's kind or the time
 	// ("the push quiet period (5m)").
 	Detail string `json:"detail"`
 	// PostMerge: GitHub merged the PR; the round it waits for is a
 	// post-merge review (`magnum review` of a merged PR, always forced).
 	PostMerge bool `json:"post_merge,omitempty"`
+	// Since is when WaitPinned's pin was set (zero when unknown).
+	Since time.Time `json:"since,omitzero"`
 	// DeltaCheck: the round it waits for is a delta check, the judge alone
 	// on a small delta (deltaCheckDue).
 	DeltaCheck bool `json:"delta_check,omitempty"`
@@ -5492,6 +5541,10 @@ func ParseWait(s string) (Wait, bool)
     ParseWait reads a KVPRWait value; ok is false for "" or a value it cannot
     read.
 
+func (w Wait) Narrow(now time.Time) string
+    Narrow is Short for a narrower cell: a retry drops its cause first
+    ("re-review · retry 2/3 → 22:57"); any other wait is its Short.
+
 func (w Wait) Sentence(ref string, now time.Time) string
     Sentence is the full account for a card or `magnum status <ref>`, with the
     hint that lifts it: "re-review waits for the daily round cap (6 of 6 today)
@@ -5502,7 +5555,28 @@ func (w Wait) Short(now time.Time) string
     Short is the compact form for a table cell, e.g. "re-review · cap 6/6 →
     00:00", "re-review · quiet → 14:09", "review · codex paused → 15:00",
     "re-review · small delta 8/30 lines → 16:40", "re-review · requested by
-    alice → now", "delta check · quiet → 14:09".
+    alice → now", "delta check · quiet → 14:09", "re-review · retry 2/3 setup →
+    22:57", "re-review · pinned → u" (u: the screens' unpin key).
+
+type WatchPoll struct {
+	LastOK       time.Time `json:"last_ok,omitzero"`
+	FailingSince time.Time `json:"failing_since,omitzero"`
+	Error        string    `json:"error,omitempty"`
+}
+    WatchPoll is how a watch owner's radar calls went, the store.KVWatchPoll
+    value: when one last answered (zero: never since it was recorded), and,
+    while they fail, since when and the last failure's cause ("HTTP 502",
+    or the error's redacted first line); FailingSince is zero while they answer.
+
+func ParseWatchPoll(v string) (WatchPoll, bool)
+    ParseWatchPoll reads a store.KVWatchPoll value; false for "" or anything
+    that is not one.
+
+func (p WatchPoll) Failing(now time.Time) time.Duration
+    Failing is how long the radar calls have failed at now; 0 while they answer.
+
+func (p WatchPoll) Value() string
+    Value is p as store.KVWatchPoll stores it (times in UTC).
 
 ```
 
@@ -11643,6 +11717,10 @@ func KVWatchPaused(owner string) string
     KVWatchPaused holds the reason a watch owner's automation was paused
     (identity leak); magnum resume --watch clears it.
 
+func KVWatchPoll(owner string) string
+    KVWatchPoll holds how a watch owner's radar calls went (engine.WatchPoll as
+    JSON): when one last answered, and since when they fail and why.
+
 func LatestSchemaVersion() int
     LatestSchemaVersion is the highest migration version embedded in this
     binary.
@@ -11807,6 +11885,9 @@ type BoardRow struct {
 	PrevState string    `json:"prev_state"`
 	MergedAt  time.Time `json:"merged_at"`
 	ClosedAt  time.Time `json:"closed_at"`
+	// ReleaseAfter is when a closed PR's close grace ends and cleanup
+	// releases its slot (prs.release_after; zero when none).
+	ReleaseAfter time.Time `json:"release_after"`
 	// MergedUnreviewed: GitHub merged the PR before magnum reviewed its last
 	// push (IsMergedUnreviewed). FlagDismissed: the PR was muted after that
 	// merge, so it is not flagged but would be unmuted (IsFlagDismissed).
@@ -13478,9 +13559,12 @@ type ActionResult struct {
 
 type ActivityInfo struct {
 	LastPoll, LastTick, LastReconcile time.Duration
+	PollsFailing                      []WatchFailing
 }
     ActivityInfo is how long ago the daemon last polled GitHub, ticked and
-    reconciled; zero (or negative) means never.
+    reconciled; zero (or negative) means never. PollsFailing are the watches
+    whose radar calls have failed for engine.PollFailingShown or longer (as of
+    StatusData.GeneratedAt), which the poll's part of the line names.
 
 type AgentsInfo struct {
 	CodexWorking, CodexMax, ClaudeWorking int
@@ -13623,6 +13707,10 @@ type DaemonFacts struct {
 	// is the draining command (0 when unknown).
 	Draining   bool
 	DrainerPID int
+	// PollsFailing are the watches whose radar calls have failed for
+	// engine.PollFailingShown or longer, the oldest failure first: magnum
+	// sees no new PRs or pushes of them.
+	PollsFailing []WatchFailing
 	// NeedsMe counts the open PRs magnum approved that GitHub still blocks
 	// on the operator's approval (PRBoardRow.NeedsMe).
 	NeedsMe int
@@ -13899,7 +13987,14 @@ type PRBoardRow struct {
 	// daemon's account): the compact form the state cell shows ("re-review
 	// · quiet → 14:09") and the sentence with the command that lifts it,
 	// which the card shows. "" when the PR does not wait or no daemon said.
-	Wait, WaitDetail string
+	// WaitNarrow is Wait for a narrow state cell (a retry without its cause:
+	// "re-review · retry 2/3 → 22:57"); "" when it has no narrower form.
+	Wait, WaitDetail, WaitNarrow string
+	// PinWait: the round the PR waits for waits on its pinned slot
+	// (engine.WaitPinned), pinned by PinnedBy ("magnum open"; "" when
+	// unknown); the card says who pinned it and that u unpins it.
+	PinWait  bool
+	PinnedBy string
 	// DeltaCheck: the round the PR waits for is a delta check (the judge
 	// alone on a small delta); the state cell says so, as it does for a
 	// round in flight whose RoundWhy is one.
@@ -13932,6 +14027,9 @@ type PRBoardRow struct {
 	// recent_closed: the board lists it in a section after the open PRs.
 	ClosedAt time.Time
 	Recent   bool
+	// ReleaseAfter is when the close grace of a PR GitHub merged or closed
+	// ends and the daemon releases its slot; zero when there is none.
+	ReleaseAfter time.Time
 	// MergedUnreviewed: GitHub merged the PR before magnum reviewed its last
 	// push (store.IsMergedUnreviewed); LastReview.CommitSHA is the commit
 	// magnum reviewed last, if any.
@@ -14315,6 +14413,18 @@ type StatusData struct {
     StatusData is one snapshot of what the dashboard shows. Table cells are
     display strings the caller formats (refs, folders, sizes); the header
     numbers are formatted by the dashboard.
+
+type WatchFailing struct {
+	Watch string
+	Since time.Time
+	Error string
+}
+    WatchFailing is a watch whose radar calls fail since Since, the last with
+    Error ("HTTP 502"; "" when unknown).
+
+func (w WatchFailing) Text(now time.Time) string
+    Text is w as the screens and `magnum status` say it at now: "talkable polls
+    failing 47m (HTTP 502)", without the parenthesis when the cause is unknown.
 
 type WatchFetch func(ctx context.Context) (WatchFrame, error)
     WatchFetch reads the current frame. It must honor ctx, which has a deadline

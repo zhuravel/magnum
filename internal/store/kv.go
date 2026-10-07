@@ -60,6 +60,10 @@ func KVIdentityTokenExpiry(name string) string { return "identity." + name + ".t
 // (identity leak); magnum resume --watch clears it.
 func KVWatchPaused(owner string) string { return "watch." + strings.ToLower(owner) + ".paused" }
 
+// KVWatchPoll holds how a watch owner's radar calls went (engine.WatchPoll
+// as JSON): when one last answered, and since when they fail and why.
+func KVWatchPoll(owner string) string { return "watch." + strings.ToLower(owner) + ".poll" }
+
 // KVPRSimplify is "1" when the PR's next round runs /simplify (magnum
 // review --simplify).
 func KVPRSimplify(prID int64) string { return fmt.Sprintf("pr.%d.simplify", prID) }
