@@ -13,6 +13,7 @@ import (
 	"unicode"
 
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
@@ -34,17 +35,29 @@ func RenderPrompt(p config.Prompt, data any) (string, error) {
 	}
 	switch d := data.(type) {
 	case JudgeData:
+		if err := checkBaseRef(name, d.BaseRef); err != nil {
+			return "", err
+		}
 		data = d.completed()
 	case *JudgeData:
 		if d == nil {
 			return "", fmt.Errorf("agents: render %s: nil data", name)
 		}
+		if err := checkBaseRef(name, d.BaseRef); err != nil {
+			return "", err
+		}
 		data = d.completed()
 	case RoleData:
+		if err := checkBaseRef(name, d.BaseRef); err != nil {
+			return "", err
+		}
 		data = d.completed()
 	case *RoleData:
 		if d == nil {
 			return "", fmt.Errorf("agents: render %s: nil data", name)
+		}
+		if err := checkBaseRef(name, d.BaseRef); err != nil {
+			return "", err
 		}
 		data = d.completed()
 	case ShellData:
@@ -64,6 +77,21 @@ func RenderPrompt(p config.Prompt, data any) (string, error) {
 		data = q
 	}
 	return render(name, p.Text, data)
+}
+
+// ErrUnsafeBaseRef: a judge or reviewer prompt's base ref is not a branch
+// name gitx.ShellSafeRef passes. The prompts put it, unquoted, into git
+// commands the agent runs; the error never quotes it.
+var ErrUnsafeBaseRef = errors.New("base branch name has characters magnum does not pass to a shell")
+
+// checkBaseRef refuses a judge or reviewer prompt's base ref that is set and
+// not shell-safe (ErrUnsafeBaseRef). A shell role's line quotes its values
+// instead (ShellData.shellSafe).
+func checkBaseRef(name, ref string) error {
+	if ref != "" && !gitx.ShellSafeRef(ref) {
+		return fmt.Errorf("agents: render %s: %w", name, ErrUnsafeBaseRef)
+	}
+	return nil
 }
 
 // render executes template text with data as is.

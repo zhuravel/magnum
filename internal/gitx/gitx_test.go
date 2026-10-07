@@ -1224,3 +1224,20 @@ func TestFetchCommitKeepsOffTheDaemonsRefs(t *testing.T) {
 		})
 	}
 }
+
+// A base branch name reaches the judge's git commands unquoted when the
+// merge base is unknown: only letters, digits, '.', '_', '/' and '-' pass,
+// and never ".." or a leading '-', whatever git itself allows.
+func TestShellSafeRefPassesOnlyPlainBranchNames(t *testing.T) {
+	for _, ref := range []string{"master", "main", "origin/master", "release/2026.10", "feature/a_b-c", "v1.2.3", "refs/heads/x"} {
+		if !ShellSafeRef(ref) {
+			t.Errorf("ShellSafeRef(%q) = false, want true", ref)
+		}
+	}
+	for _, ref := range []string{"", "main$(x)", "a|b", "a&b", "a;b", "(x)", "a`id`", "a b", "it's", "a\"b", "a\nb",
+		"a..b", "-x", "--upload-pack=x", "a>b", "a<b", "a*b", "maïn", "a\\b", "a{b}", "a@{1}"} {
+		if ShellSafeRef(ref) {
+			t.Errorf("ShellSafeRef(%q) = true, want false", ref)
+		}
+	}
+}

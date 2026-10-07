@@ -302,6 +302,57 @@ func TestPerPRCheckoutAndRemove(t *testing.T) {
 	}
 }
 
+// A per-PR worktree renders its .mise.local.toml again at each round's
+// checkout, as a pool slot does: a strip_env name or [repo.env] key added
+// since the worktree was created reaches the next round's panes (a step
+// render_mise with its events, the file trusted again).
+func TestPerPRCheckoutRendersTheMiseFileAgain(t *testing.T) {
+	f := newPerPR(t, true)
+	h := f.h
+	work := f.ownOrigin(t)
+	writeFile(t, filepath.Join(f.main, MiseLocal), "[env]\nSECRET = \"s\"\nKEEP = \"k\"\n")
+	h.m = h.newManager(Deps{Repos: []config.Repo{{Repo: "zhuravel/widget"}}})
+	sl, err := h.m.CreatePRWorktree(h.ctx, f.watch, "zhuravel/widget", f.pr, f.sha7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	local := filepath.Join(sl.Path, MiseLocal)
+	if got := readFile(t, local); !strings.Contains(got, `SECRET = "s"`) || strings.Contains(got, "DATABASE_NAME") {
+		t.Fatalf("first render:\n%s", got)
+	}
+
+	// The operator strips SECRET and adds an env key; the daemon restarts.
+	h.m = h.newManager(Deps{Repos: []config.Repo{{Repo: "zhuravel/widget", StripEnv: []string{"SECRET"},
+		Env: map[string]string{"DATABASE_NAME": "widget_{slug}"}}}})
+	gitT(t, work, "commit", "--quiet", "--allow-empty", "-m", "more")
+	gitT(t, work, "push", "--quiet", "--force", "origin", "HEAD:refs/pull/7/head")
+	newSHA := gitT(t, work, "rev-parse", "HEAD")
+	trusted := len(h.fake.CallsWithPrefix("mise", "-C", sl.Path, "trust"))
+	if err := h.m.Checkout(h.ctx, h.slot(sl.Name), f.pr, config.Pool{}, newSHA); err != nil {
+		t.Fatalf("Checkout: %v", err)
+	}
+	got := readFile(t, local)
+	if strings.Contains(got, "SECRET") || !strings.Contains(got, `KEEP = "k"`) || !strings.Contains(got, `DATABASE_NAME = "widget_magnum-pr-7"`) {
+		t.Fatalf("second round's render:\n%s", got)
+	}
+	if n := len(h.fake.CallsWithPrefix("mise", "-C", sl.Path, "trust")) - trusted; n != 1 {
+		t.Fatalf("mise trust after the second render: %d calls, want 1", n)
+	}
+	subject := fmt.Sprintf("slot:%s:pr:7:%s", sl.Name, newSHA[:7])
+	var phases []string
+	for _, ev := range eventKinds(t, h.st, subject, store.KindStep) {
+		if store.Deref(ev.Step) == "render_mise" {
+			phases = append(phases, store.Deref(ev.Phase))
+		}
+	}
+	if !slices.Equal(phases, []string{"begin", "ok"}) {
+		t.Fatalf("render_mise step events = %q, want begin and ok", phases)
+	}
+	if n := len(h.scriptCalls("")); n != 0 {
+		t.Fatalf("per-PR checkout ran a script through mise (%d)", n)
+	}
+}
+
 // Tracked changes after a human typed into the PR's panes hold a removal.
 func TestRemovePRWorktreeRefusesTrackedChanges(t *testing.T) {
 	f := newPerPR(t, true)

@@ -388,7 +388,8 @@ func (m *Manager) runHooks(ctx context.Context, sl store.Slot, p perPRPlan, hook
 
 // preparePerPR renders the main clone's .mise.local.toml into the worktree
 // (strip list removed, the per-PR env set; trusted with mise when it is
-// available) and copies the [[repo]] copy_files that exist, every write
+// available) and copies the [[repo]] copy_files that exist, at the
+// worktree's creation and at each round's checkout (render_mise), every write
 // confined to the worktree (WriteCheckoutFile). Without a main
 // .mise.local.toml nothing is rendered.
 func (m *Manager) preparePerPR(ctx context.Context, sl store.Slot, p perPRPlan) error {

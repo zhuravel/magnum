@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/zhuravel/magnum/internal/notes"
+	"github.com/zhuravel/magnum/internal/notify"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
@@ -153,7 +154,64 @@ func (e *Engine) recordNotes(ctx context.Context, repo store.Repo, nr notes.Repo
 		data["run"] = runID
 	}
 	e.event(ctx, "info", notesSubject(nr), "notes.changed", msg, data)
+	if source == store.NotesFromJudge && len(hAdd)+len(hDel)+len(hChg) > 0 {
+		e.announceHarness(ctx, repo, nr, v, runID, hAdd, hChg, hDel)
+	}
 	return v, nil
+}
+
+// kindNotesHarness counts the judges' new or changed harness scripts in a
+// batch summary.
+var kindNotesHarness = notify.Kind{One: "notes harness change", Many: "notes harness changes"}
+
+// harnessToastNames is how many file names a harness toast lists.
+const harnessToastNames = 3
+
+// announceHarness tells the operator that a judge's version of the notes
+// adds, changes or deletes files of the harness (notes_dir), whose scripts
+// later rounds run: one notes.harness_changed event with the repository,
+// the PR, the run and the file names (never their content), and, when it
+// adds or changes one, one toast that names those ("talkable notes: #12's
+// judge added qa/lint.rb"); a deletion is named in the event only.
+func (e *Engine) announceHarness(ctx context.Context, repo store.Repo, nr notes.Repo, v store.NotesVersion, runID string, added, changed, removed []string) {
+	who := "the judge"
+	if v.PRNumber > 0 {
+		who = fmt.Sprintf("#%d's judge", v.PRNumber)
+	}
+	data := map[string]any{"repo": nr.FullName(), "version": v.ID, "added": names(added), "changed": names(changed), "removed": names(removed)}
+	if v.PRNumber > 0 {
+		data["pr"] = v.PRNumber
+	}
+	if runID != "" {
+		data["run"] = runID
+	}
+	all := len(added) + len(changed) + len(removed)
+	e.event(ctx, "info", notesSubject(nr), "notes.harness_changed", oneLine(fmt.Sprintf("notes of %s: %s %s in the harness",
+		nr.FullName(), who, harnessPhrase(all, added, changed, removed)), 2000), data)
+	if len(added)+len(changed) == 0 {
+		return
+	}
+	title := oneLine(fmt.Sprintf("%s notes: %s %s", repo.Name, who, harnessPhrase(harnessToastNames, added, changed, nil)), 200)
+	e.info(notify.Item{Key: fmt.Sprintf("notes-harness:%d", v.ID), Title: title,
+		Body: "Later rounds of " + nr.FullName() + " may run the scripts in " + nr.Harness() + ": read them before they do.",
+		Line: title, Kind: kindNotesHarness})
+}
+
+// harnessPhrase is "added a, b, changed c, removed d", each list cut to limit
+// names and the rest counted ("added a, b and 2 more").
+func harnessPhrase(limit int, added, changed, removed []string) string {
+	var parts []string
+	for i, files := range [][]string{added, changed, removed} {
+		if len(files) == 0 {
+			continue
+		}
+		list := strings.Join(files[:min(limit, len(files))], ", ")
+		if len(files) > limit {
+			list += fmt.Sprintf(" and %d more", len(files)-limit)
+		}
+		parts = append(parts, []string{"added", "changed", "removed"}[i]+" "+list)
+	}
+	return strings.Join(parts, ", ")
 }
 
 // names is ns, never nil (an event's JSON says [] rather than null).

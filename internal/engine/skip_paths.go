@@ -129,13 +129,15 @@ func (e *Engine) wantsFiles(ctx context.Context, w config.Watch, res store.PRUps
 	if !res.New && !res.HeadChanged && !slices.Contains(filesWatchStates, res.PR.State) {
 		return false
 	}
-	return eligibility.Classify(w, e.factsFor(ctx, res.PR, w, now)).Eligible
+	return eligibility.Classify(w, e.factsFor(ctx, res.PR, w, now)).Eligible && safeBase(deref(res.PR.BaseRef))
 }
 
 // classify is eligibility.Classify plus what only the engine knows: a PR
-// muted by `magnum ignore` keeps the reason "ignored", and an eligible PR
-// whose changed files all match the watch's skip_paths is rejected. Callers
-// keep forced PRs out of it, so a manual review still runs.
+// muted by `magnum ignore` keeps the reason "ignored", an eligible PR whose
+// base branch name a shell would read is rejected (safeBase, poll.go), and
+// so is one whose changed files all match the watch's skip_paths. Callers
+// keep forced PRs out of it, so a manual review still runs (its prompts
+// refuse such a base).
 func (e *Engine) classify(ctx context.Context, w config.Watch, pr store.PR, now time.Time) eligibility.Decision {
 	dec := eligibility.Classify(w, e.factsFor(ctx, pr, w, now))
 	if !dec.Eligible {
@@ -143,6 +145,9 @@ func (e *Engine) classify(ctx context.Context, w config.Watch, pr store.PR, now 
 			dec.Reason = skipIgnored
 		}
 		return dec
+	}
+	if !safeBase(deref(pr.BaseRef)) {
+		return eligibility.Decision{Reason: reasonUnsafeBase}
 	}
 	if reason := e.pathSkipReason(ctx, w, pr); reason != "" {
 		return eligibility.Decision{Reason: reason}

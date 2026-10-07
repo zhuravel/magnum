@@ -181,6 +181,87 @@ func TestAJudgeRoundThatChangedTheNotesRecordsAVersion(t *testing.T) {
 	}
 }
 
+// A judge's version that adds or changes a harness script, which later
+// rounds run, writes one notes.harness_changed event (the repository, the
+// PR and the file names, never their content) and one toast; a deleted
+// script is named in the event only, and a version that changes only the
+// notes text writes neither.
+func TestAJudgeThatAddsAHarnessScriptIsAnnounced(t *testing.T) {
+	h := newHarness(t, noEveryReview)
+	nr := notesOf(t, h)
+	writeNotes(t, nr, "# Notes\n", map[string]string{"run_spec.sh": "bin/rspec\n", "old.sh": "x\n"})
+	judgeRounds(t, h, func(nr notes.Repo) {
+		writeNotes(t, nr, "# Notes\n- lint the change\n", map[string]string{"qa/lint.rb": "puts 'probe-body'\n", "run_spec.sh": "bin/rspec --fail-fast\n"})
+		if err := os.Remove(filepath.Join(nr.Harness(), "old.sh")); err != nil {
+			t.Error(err)
+		}
+	}, nil, "")
+	knownRepo(t, h)
+	reviewNext(t, h, 2, "b1")
+	h.flush()
+
+	evs := notesEvents(t, h, "notes.harness_changed")
+	if len(evs) != 1 {
+		t.Fatalf("notes.harness_changed events = %d, want 1", len(evs))
+	}
+	var data map[string]any
+	if err := json.Unmarshal(evs[0].Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if data["repo"] != "talkable/talkable" || data["pr"] != float64(2) || data["run"] != "r-judge-1" ||
+		!slices.Equal(anyStrings(data["added"]), []string{"qa/lint.rb"}) || !slices.Equal(anyStrings(data["changed"]), []string{"run_spec.sh"}) ||
+		!slices.Equal(anyStrings(data["removed"]), []string{"old.sh"}) {
+		t.Errorf("notes.harness_changed data = %v", data)
+	}
+	if !strings.Contains(evs[0].Message, "qa/lint.rb") || strings.Contains(evs[0].Message+string(evs[0].Data), "probe-body") {
+		t.Errorf("event = %s %s: want the file names, never their content", evs[0].Message, evs[0].Data)
+	}
+	toasts := toastsWith(h, "notes:")
+	if len(toasts) != 1 || !strings.HasPrefix(toasts[0], "talkable notes: #2's judge added qa/lint.rb, changed run_spec.sh |") ||
+		strings.Contains(toasts[0], "old.sh") || strings.Contains(toasts[0], "probe-body") {
+		t.Fatalf("toasts = %q, want one that names the added and changed scripts only", toasts)
+	}
+
+	// A judge that rewrites only the notes text: a version, no announcement.
+	judgeRounds(t, h, func(nr notes.Repo) {
+		writeNotes(t, nr, "# Notes\n- lint the change with qa/lint.rb\n", nil)
+	}, nil, "")
+	reviewNext(t, h, 3, "c1")
+	h.flush()
+	if n := len(notesEvents(t, h, "notes.changed")); n != 3 {
+		t.Fatalf("notes.changed events = %d, want the import and two judges' versions", n)
+	}
+	if n := len(notesEvents(t, h, "notes.harness_changed")); n != 1 {
+		t.Errorf("notes.harness_changed events = %d after a notes-only version, want 1", n)
+	}
+	if got := toastsWith(h, "notes:"); len(got) != 1 {
+		t.Errorf("toasts after a notes-only version = %q", got)
+	}
+
+	// A judge that only deletes a script: the event names it, no toast.
+	judgeRounds(t, h, func(nr notes.Repo) {
+		if err := os.Remove(filepath.Join(nr.Harness(), "run_spec.sh")); err != nil {
+			t.Error(err)
+		}
+	}, nil, "")
+	reviewNext(t, h, 4, "d1")
+	h.flush()
+	evs = notesEvents(t, h, "notes.harness_changed")
+	if len(evs) != 2 {
+		t.Fatalf("notes.harness_changed events = %d after a deletion, want 2", len(evs))
+	}
+	slices.SortFunc(evs, func(a, b store.Event) int { return int(b.ID - a.ID) }) // newest first
+	if err := json.Unmarshal(evs[0].Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(anyStrings(data["removed"]), []string{"run_spec.sh"}) || len(anyStrings(data["added"])) != 0 || data["pr"] != float64(4) {
+		t.Errorf("deletion's data = %v", data)
+	}
+	if got := toastsWith(h, "notes:"); len(got) != 1 {
+		t.Errorf("toasts after a deletion = %q, want none new", got)
+	}
+}
+
 func anyStrings(v any) []string {
 	var out []string
 	for _, x := range v.([]any) {

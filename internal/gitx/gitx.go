@@ -178,6 +178,18 @@ func checkBranch(what, s string) error {
 	return nil
 }
 
+// shellSafeRefChars are the characters ShellSafeRef lets through.
+var shellSafeRefChars = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
+
+// ShellSafeRef reports whether ref is a branch name magnum lets reach a
+// command line an agent runs (the judge prompts' `git diff origin/<base>…`
+// when the merge base is unknown): only letters, digits, '.', '_', '/' and
+// '-', no "..", no leading '-'. Git allows '$', '|', '&' and parentheses in
+// branch names, and anyone who can push may name a base branch.
+func ShellSafeRef(ref string) bool {
+	return shellSafeRefChars.MatchString(ref) && !strings.Contains(ref, "..") && !strings.HasPrefix(ref, "-")
+}
+
 func isOID(s string) bool {
 	if len(s) != 40 && len(s) != 64 {
 		return false

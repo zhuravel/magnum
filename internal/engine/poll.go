@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/eligibility"
 	"github.com/zhuravel/magnum/internal/github"
@@ -362,7 +363,7 @@ func (e *Engine) applyRadarPRs(ctx context.Context, w config.Watch, gh GitHub, r
 			in.InitialState = store.PRBaseline
 			if !firstSync {
 				facts := e.factsFor(ctx, prFromInput(in, now), w, now)
-				if dec := eligibility.Classify(w, facts); dec.Eligible {
+				if dec := eligibility.Classify(w, facts); dec.Eligible && safeBase(deref(in.BaseRef)) {
 					in.InitialState = store.PRQueued
 				} else {
 					in.InitialState = store.PRIneligible
@@ -409,6 +410,18 @@ func (e *Engine) applyRadarPRs(ctx context.Context, w config.Watch, gh GitHub, r
 	}
 	return errs, inRadar
 }
+
+// reasonUnsafeBase is the skip reason of a PR whose base branch name
+// safeBase refuses, in agents.ErrUnsafeBaseRef's words.
+var reasonUnsafeBase = agents.ErrUnsafeBaseRef.Error()
+
+// safeBase reports whether a PR's base branch (as the poll records it) may
+// reach the prompts: unknown, or a name gitx.ShellSafeRef passes. The judge
+// prompts put origin/<base> into a git command when the merge base is
+// unknown, and git allows '$', '|', '&' and parentheses in a branch name,
+// which anyone who can push may create; classify makes such a PR
+// ineligible, and the prompts refuse it too (agents.ErrUnsafeBaseRef).
+func safeBase(base string) bool { return base == "" || gitx.ShellSafeRef(base) }
 
 // noteTruncatedLabels reports, once per PR, that GitHub listed only the first
 // page of a PR's labels while the watch has skip_labels: a skip label on that

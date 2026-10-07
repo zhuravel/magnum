@@ -3543,3 +3543,31 @@ editing history. Code, config comments and prompts reference these by their head
   identity. A PR opened by a second gh identity of the operator's was reviewed on a watch that skips his own
   PRs. `eligibility.Classify` reads `PRFacts.Own`, which the engine fills from `SelfLogins`, and
   `PRFacts.SelfLogin` is gone.
+- **A base branch name a shell would read is never reviewed** (2026-10-07). When the merge base is unknown the
+  judge prompts (own pass, rereview, recovery) put `origin/<base>` into a `git diff` the judge runs, and
+  `checkBranch` checked only the pool's base. Git allows `$`, `|`, `&` and parentheses in branch names, and
+  anyone with push access can name a base branch. The poll now makes a PR whose base is not
+  `^[A-Za-z0-9._/-]+$`, or holds `..`, or starts with `-` (`gitx.ShellSafeRef`) ineligible with the reason
+  "base branch name has characters magnum does not pass to a shell" (in `classify`, so a retargeted PR leaves
+  the queue too, and a review request does not bring it back), and `agents.RenderPrompt` refuses judge and
+  reviewer data with such a base (`ErrUnsafeBaseRef`, which never quotes it), so a forced round fails at its
+  prompts. A shell role's line keeps quoting its base instead. Rejected: quoting the base in the prompts (the
+  agent retypes the command, quotes and all, and may drop them); escaping it (an agent does not read escapes
+  reliably either).
+- **A per-PR worktree renders its `.mise.local.toml` at each round's checkout** (2026-10-07). It was rendered
+  only when the worktree was created: a PR's file dated from 10-06 16:41 while its 10-07 rounds ran only fetch,
+  guard, switch and verify, so a `strip_env` name or `[repo.env]` key added since never reached its panes,
+  while a pool slot renders again at every checkout. A per-PR checkout now runs a `render_mise` step after the
+  switch, with the function the creation runs (`preparePerPR`: the main clone's file without the GitHub tokens
+  and the `[[repo]]` `strip_env` keys, the `[repo.env]` set, `copy_files` copied, `mise trust`), with its
+  begin/ok/fail events. The rendered file says it is rewritten on every render, and a pool slot already
+  overwrote it at each checkout, so no hand edit is expected there.
+- **A judge's new or changed harness script is announced** (2026-10-07). Judges write QA scripts into the notes
+  harness (`notes_dir`) and later rounds run them; judges wrote 103 script paths, 22 are live, and the operator
+  saw none of them. When a judge's version of the notes adds or changes a harness file (against the version
+  before it), magnum writes one `notes.harness_changed` event (the repository, the PR, the run and the file
+  names added, changed and removed, never their content) and one toast ("talkable notes: #N's judge added
+  x.rb"). A deletion is named in the event only; a version that changes only the notes text writes neither,
+  and nor does an import, a curation or the operator's edit. Rejected: a toast per file (a judge that adds
+  three scripts would send three); comparing with the round's snapshot (two rounds of one repository that saw
+  the same change would announce it twice, while the version is recorded once).

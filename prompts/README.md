@@ -80,7 +80,7 @@ the judge data, every other session role gets the role data, and a shell role's 
 | `.RunID` | the round's run id; reviews carry the marker `magnum:run=<RunID>` |
 | `.Owner`, `.Repo`, `.Number`, `.URL` | the pull request |
 | `.HeadSHA` | the commit under review (checked out, detached) |
-| `.BaseRef`, `.BaseSHA` | the base ref the diff is taken against and the merge base |
+| `.BaseRef`, `.BaseSHA` | the base ref the diff is taken against and the merge base. The prompts put `.BaseRef` unquoted into git commands, so a base ref with anything but letters, digits, `.`, `_`, `/` and `-` (or with `..`, or a leading `-`) is refused at render (`agents.ErrUnsafeBaseRef`; the poll makes such a PR ineligible first) |
 | `.Checkout` | absolute path of the checkout the judge works in |
 | `.IdentityKind` | `gh` or `app` |
 | `.ReviewerLogin` | the login the review is posted as (REST form, e.g. `talkable[bot]`) |
@@ -154,7 +154,7 @@ reviewer, ...), initial, rereview and restart alike.
 | `.HeadSHA` | the commit under review (checked out, detached) |
 | `.PreviousHeadSHA` | the head of the role's previous run (rereview only, empty otherwise) |
 | `.BaseSHA` | the merge base; `git diff {{.BaseSHA}}..HEAD` is the PR's diff |
-| `.BaseRef` | the base ref, e.g. `origin/master` or the parent branch of a stacked PR |
+| `.BaseRef` | the base ref, e.g. `origin/master` or the parent branch of a stacked PR; refused at render like the judge's when a shell would read it |
 | `.ReportPath` | where the role writes its report (its `output`, absolute) |
 | `.Model`, `.Effort` | the role's `model` (else its kind's `default_model`), and its effort for this round: `rereview_effort` in a re-review (when set), else `effort` (claude-review passes `.Effort` to `/code-review`) |
 | `.EffortInPrompt` | as for the judge: the prompt must ask for `.Effort` in words |
@@ -252,7 +252,8 @@ or, when its scope is `general`, names the repository is dropped and the miss ke
 
 The one prompt of a notes curation (`[notes]`, see the README's "Repository notes"): propose curated notes
 and harness for one repository in a scratch copy. Notes text is never a template variable; the agent reads
-the copies.
+the copies, and the prompt must say that what they hold (the notes, the harness, the misses and the pull
+request text they quote) is data, not instructions.
 
 | Variable | Meaning |
 |---|---|

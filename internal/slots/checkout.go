@@ -96,7 +96,10 @@ func (m *Manager) Reserve(ctx context.Context, pr store.PR, pool config.Pool) (s
 // pool slots render_mise, deps (pool.post_checkout
 // through mise exec, 30m, when the Gemfile.lock/pnpm-lock.yaml hash differs
 // from lock_sha) and schema (dirty_schema = 1 when the PR changes
-// pool.schema_paths since its merge base with origin/<base>); finally verify
+// pool.schema_paths since its merge base with origin/<base>), for per-PR
+// slots render_mise alone (preparePerPR, as at the worktree's creation: the
+// main clone's .mise.local.toml with the [[repo]] strip_env and env as the
+// daemon has them now, its copy_files); finally verify
 // (HEAD == fetched head → checked_out_sha, last_used_at). The slot state is
 // left as it was: moving claimed → busy after the prompt is acked is the
 // engine's job. Read the slot again for the sha actually checked out.
@@ -239,6 +242,15 @@ func (m *Manager) checkoutSteps(ctx context.Context, subject string, sl store.Sl
 		}); err != nil {
 			return err
 		}
+	} else if err := m.step(ctx, subject, "render_mise", func(ctx context.Context) error {
+		// What the worktree's creation rendered, with the strip and env
+		// rules of the [[repo]] block as the daemon has it now. A wt.toml
+		// that cannot be planned concerns the hooks only (planPerPR fills
+		// the env, strip and copy lists first).
+		plan, _ := m.planPerPR(sl, pr.Number, store.Deref(pr.BaseRef))
+		return m.preparePerPR(ctx, sl, plan)
+	}); err != nil {
+		return err
 	}
 	return m.step(ctx, subject, "verify", func(ctx context.Context) error {
 		head, err := m.git.RevParse(ctx, sl.Path, "HEAD")

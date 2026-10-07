@@ -510,7 +510,11 @@ Repositories without a pool get a worktree per PR (`<clone>__worktrees/pr-<N>`).
 [worktrunk](https://worktrunk.dev) hooks in `.config/wt.toml`, Magnum runs them with
 `WT_BRANCH=magnum-pr-<N>` on create and before removal, so apps that derive databases from the
 workspace name get isolated ones. A `[[repo]]` block can declare `setup`, `teardown`, `copy_files` and
-`env` explicitly instead. Its `no_findings_event` and `blocking_event` override the posting identity's
+`env` explicitly instead. The main clone's `.mise.local.toml` is rendered into the worktree (GitHub
+tokens and the `[[repo]]` `strip_env` keys dropped, its `env` set) and its `copy_files` copied when the
+worktree is created and again at each round's checkout, as a pool slot's are, so a `strip_env` name or
+`env` key added since reaches the next round's panes once the daemon runs with it; the rendered file is
+rewritten each time. Its `no_findings_event` and `blocking_event` override the posting identity's
 verdicts for that repository, pooled or not. When a PR an App identity approved gets new commits,
 Magnum dismisses that approval before the re-review is queued (a small delta keeps it until its delta
 check posts, at most an hour); `keep_approvals = true` on the `[[repo]]` (or the `[[watch]]`) keeps it. `prepare` (such as `["bin/rails db:test:prepare"]`) and
@@ -533,8 +537,13 @@ directories, such as `["docs/**", "**/*.md"]`) skips a PR whose changed files al
 `magnum review` still runs it. A watch's `manual_repos` (names of repositories it covers, without owner
 or pattern, such as `["example"]`) keeps them on the board, in `magnum prs`, the status and the retro,
 but starts no round there on its own: not for a new PR, a push or a review request on GitHub. Their PRs
-read "skipped · manual"; `magnum review`, the board's `r`/`R` and the picker review one. See the
-comments in `config.defaults.toml` for every key.
+read "skipped · manual"; `magnum review`, the board's `r`/`R` and the picker review one. A PR whose base
+branch name has anything but letters, digits, `.`, `_`, `/` and `-` (or `..`, or a leading `-`) is never
+reviewed: the judge prompts put `origin/<base>` into a git command when the merge base is unknown, and git
+allows `$`, `|`, `&` and parentheses in a branch name that anyone who can push may create. The poll makes
+such a PR ineligible ("base branch name has characters magnum does not pass to a shell"), and a round
+forced on it fails at its prompts, which refuse such a base. See the comments in `config.defaults.toml` for
+every key.
 
 #### Approving as you
 
@@ -1471,7 +1480,12 @@ content. `magnum notes <repo> --log` lists the versions (time, source, PR, size,
 a version back, reviewed like a curation on a terminal, so nothing is ever unrecoverable (with `--json` it
 prints what the restore would change and records nothing). A version a restore names stays in the
 history, an applied curation's too. A `notes.changed` event counts
-the lines and harness files each version adds and removes, without quoting them.
+the lines and harness files each version adds and removes, without quoting them. Later rounds run the
+harness's scripts, so a judge's version that adds or changes one also writes a `notes.harness_changed`
+event (the repository, the PR, the run and the names of the files added, changed and removed, never their
+content) and one toast, such as "talkable notes: #12's judge added qa/lint.rb, changed run_spec.sh";
+a version that only removes scripts is named in the event alone, and one that changes only the notes text
+writes neither.
 
 **Usage.** The judge's result names the harness files it ran or read (`harness_used`), and a reviewer
 report that names one by its path counts too. A file that existed for 20 judge rounds of its repository

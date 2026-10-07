@@ -335,6 +335,11 @@ var (
 var ErrNoModelSwitch = errors.New("agent kind cannot switch models")
     ErrNoModelSwitch: the session's kind has no switch_model command.
 
+var ErrUnsafeBaseRef = errors.New("base branch name has characters magnum does not pass to a shell")
+    ErrUnsafeBaseRef: a judge or reviewer prompt's base ref is not a branch name
+    gitx.ShellSafeRef passes. The prompts put it, unquoted, into git commands
+    the agent runs; the error never quotes it.
+
 
 FUNCTIONS
 
@@ -6909,6 +6914,13 @@ func ScrubbedEnv() []string
     command it runs. Code that runs git outside gitx should put the same list in
     execx.Cmd.Unset.
 
+func ShellSafeRef(ref string) bool
+    ShellSafeRef reports whether ref is a branch name magnum lets reach a
+    command line an agent runs (the judge prompts' `git diff origin/<base>…`
+    when the merge base is unknown): only letters, digits, '.', '_', '/' and
+    '-', no "..", no leading '-'. Git allows '$', '|', '&' and parentheses in
+    branch names, and anyone who can push may name a base branch.
+
 
 TYPES
 
@@ -10974,11 +10986,14 @@ func (m *Manager) Checkout(ctx context.Context, slot store.Slot, pr store.PR, po
     HEAD as magnum's own switch, not a human's commit), and for pool
     slots render_mise, deps (pool.post_checkout through mise exec, 30m,
     when the Gemfile.lock/pnpm-lock.yaml hash differs from lock_sha) and schema
-    (dirty_schema = 1 when the PR changes pool.schema_paths since its merge base
-    with origin/<base>); finally verify (HEAD == fetched head → checked_out_sha,
-    last_used_at). The slot state is left as it was: moving claimed → busy after
-    the prompt is acked is the engine's job. Read the slot again for the sha
-    actually checked out. pool is ignored for per-PR slots.
+    (dirty_schema = 1 when the PR changes pool.schema_paths since its merge
+    base with origin/<base>), for per-PR slots render_mise alone (preparePerPR,
+    as at the worktree's creation: the main clone's .mise.local.toml with the
+    [[repo]] strip_env and env as the daemon has them now, its copy_files);
+    finally verify (HEAD == fetched head → checked_out_sha, last_used_at).
+    The slot state is left as it was: moving claimed → busy after the prompt is
+    acked is the engine's job. Read the slot again for the sha actually checked
+    out. pool is ignored for per-PR slots.
 
 func (m *Manager) CheckoutFetched(ctx context.Context, slot store.Slot, pr store.PR, pool config.Pool, targetSHA, fetched string) error
     CheckoutFetched is Checkout of the head Fetch brought into the slot's main

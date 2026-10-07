@@ -792,6 +792,34 @@ func TestRenderErrors(t *testing.T) {
 	}
 }
 
+// A judge or reviewer prompt puts its base ref into git commands the agent
+// runs unquoted (`git diff origin/<base>...HEAD` when the merge base is
+// unknown): a base branch name a shell would read is refused, whatever the
+// template, and a plain one renders. A shell role's line quotes it instead
+// (TestCodexReviewScriptQuoting).
+func TestPromptsRefuseABaseRefAShellWouldRead(t *testing.T) {
+	judge := prompt(t, "judge-rereview.md")
+	for _, base := range []string{"main$(x)", "a|b", "-x", "a..b"} {
+		d := judgeFixture()
+		d.BaseSHA, d.BaseRef, d.BaseMerged, d.PreviousHeadSHA = "", base, true, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0"
+		if got, err := RenderPrompt(judge, d); !errors.Is(err, ErrUnsafeBaseRef) || strings.Contains(err.Error(), base) {
+			t.Errorf("judge prompt with base %q = %v (want an error that does not quote it):\n%s", base, err, got)
+		}
+	}
+	for _, base := range []string{"origin/main$(x)", "origin/a|b", "-x", "origin/a..b"} {
+		r := roleFixture()
+		r.BaseSHA, r.BaseRef = "", base
+		if _, err := RenderPrompt(prompt(t, "claude-simplify.md"), &r); !errors.Is(err, ErrUnsafeBaseRef) {
+			t.Errorf("reviewer prompt with base %q = %v, want ErrUnsafeBaseRef", base, err)
+		}
+	}
+	d := judgeFixture()
+	d.BaseSHA, d.BaseRef, d.BaseMerged, d.PreviousHeadSHA = "", "release/2026.10", true, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0"
+	if got, err := RenderPrompt(judge, d); err != nil || !strings.Contains(got, "origin/release/2026.10...") {
+		t.Fatalf("plain base = %v:\n%s", err, got)
+	}
+}
+
 func TestCodexReviewScriptQuoting(t *testing.T) {
 	role := defaultRole(t, RoleCodexReview)
 	role.Args = []string{"$(whoami)"}
