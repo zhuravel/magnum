@@ -140,7 +140,9 @@ type Logger interface {
 // LevelLogger is a Logger that also takes a level per line. Real logs a
 // command that succeeded at slog.LevelDebug and one that failed (a non-zero
 // exit, a failed start, a timeout) at slog.LevelWarn when its Log
-// implements it; a plain Logger gets every line through Printf.
+// implements it, except one the caller's context cancellation ended (the
+// daemon stopping), which is logged at slog.LevelDebug; a plain Logger gets
+// every line through Printf.
 type LevelLogger interface {
 	Logger
 	Logf(level slog.Level, format string, args ...any)
@@ -160,7 +162,7 @@ func logAt(l Logger, level slog.Level, format string, args ...any) {
 type Real struct {
 	// Log, when set, receives a redacted one-line transcript per command:
 	// at debug level for a success and at warn level for a failure when it
-	// is a LevelLogger.
+	// is a LevelLogger (a command the caller's cancellation ended: debug).
 	Log Logger
 	// BaseEnv, when non-empty, replaces os.Environ() as the parent environment.
 	BaseEnv []string
@@ -189,6 +191,7 @@ func (r *Real) Run(ctx context.Context, c Cmd) (Result, error) {
 	if timeout == 0 {
 		timeout = DefaultTimeout
 	}
+	caller := ctx
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -246,7 +249,10 @@ func (r *Real) Run(ctx context.Context, c Cmd) (Result, error) {
 			trunc = " truncated"
 		}
 		level := slog.LevelDebug
-		if err != nil && !(c.Probe && res.Code > 0 && ctx.Err() == nil) {
+		// A command the caller's cancellation ended (the daemon stopping) is
+		// routine; its own timeout or the caller's deadline still warns.
+		stopped := errors.Is(caller.Err(), context.Canceled)
+		if err != nil && !stopped && !(c.Probe && res.Code > 0 && ctx.Err() == nil) {
 			level = slog.LevelWarn
 		}
 		logAt(r.Log, level, "exec %s dir=%s code=%d dur=%s%s err=%v", Redact(c.String()), c.Dir, res.Code, res.Duration.Round(time.Millisecond), trunc, err)

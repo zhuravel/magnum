@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
@@ -33,52 +34,18 @@ const (
 	infraDetailRunes = 300
 )
 
-// errPattern is an error text (lower case) and the cause it names.
-type errPattern struct{ match, cause string }
-
-// infraPatterns are error texts of failures outside any PR, with the cause
-// shown in the pause and the toast: a refused SSH key, then the network's.
-var infraPatterns = append([]errPattern{{"permission denied (publickey", "SSH key refused"}}, networkPatterns...)
-
-// networkPatterns are the infrastructure failures that are the network's
-// (DNS, timeouts, refusals, resets, TLS); connectionCause (identity_net.go)
-// reads them too.
-var networkPatterns = []errPattern{
-	{"could not resolve host", "DNS lookup failed"},
-	{"temporary failure in name resolution", "DNS lookup failed"},
-	{"nodename nor servname provided", "DNS lookup failed"},
-	{"connection timed out", "network timeout"},
-	{"operation timed out", "network timeout"},
-	{"connection refused", "connection refused"},
-	{"connection reset by peer", "connection reset"},
-	{"network is unreachable", "network unreachable"},
-	{"no route to host", "network unreachable"},
-	{"ssl certificate problem", "TLS failure"},
-	{"server certificate verification failed", "TLS failure"},
-	{"ssl_error", "TLS failure"},
-	{"ssl_connect", "TLS failure"},
-	{"gnutls_handshake", "TLS failure"},
-	{"tls handshake", "TLS failure"},
-}
-
 // infraCause names the infrastructure failure err reports ("" = none of the
-// known patterns: SSH key refused, DNS, network timeouts and refusals, TLS).
+// known patterns: SSH key refused, then the network's: DNS, timeouts and
+// refusals, TLS, github.NetworkCause).
 func infraCause(err error) string {
 	if err == nil {
 		return ""
 	}
-	return matchPattern(strings.ToLower(err.Error()), infraPatterns)
-}
-
-// matchPattern is the cause of the first of patterns that msg (lower case)
-// contains ("" = none).
-func matchPattern(msg string, patterns []errPattern) string {
-	for _, p := range patterns {
-		if strings.Contains(msg, p.match) {
-			return p.cause
-		}
+	msg := err.Error()
+	if strings.Contains(strings.ToLower(msg), "permission denied (publickey") {
+		return "SSH key refused"
 	}
-	return ""
+	return github.NetworkCause(msg)
 }
 
 // depsFailure is the last dependency-step failure of a checkout.

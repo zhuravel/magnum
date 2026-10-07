@@ -250,19 +250,34 @@ func replyWord(res pipeline.RoundResult) string {
 
 // onReplied records a reply round whose judge answered in its threads (or
 // found nothing to answer) and posted no review: the review stands, so the
-// PR goes back to reviewed (rereview_pending when a push arrived meanwhile:
-// the re-review reads the replies too) with the replies read up to the
-// judge's prompt; replies that came after it wait for their own round.
+// PR goes back to reviewed with the replies read up to the judge's prompt;
+// replies that came after it wait for their own round. A push that arrived
+// meanwhile is settled as after a review round (settleHead): a trivial one
+// leaves the review standing for the new head, any other is measured for
+// the re-review (a small one gets a delta check), which reads the replies
+// too. The round only answered, so the re-review interval stays timed from
+// the last review round: last_round_started_at goes back to the start
+// before this one (job.prevStart); reply rounds keep their own spacing
+// (reply_min_interval, KVPRReplyRound).
 func (e *Engine) onReplied(ctx context.Context, job *roundJob, pr store.PR, in pipeline.RoundInput, res pipeline.RoundResult, from []string) {
 	now := e.now()
 	readAt := repliesReadAt(in.Kind, res, pr.LastRoundStartedAt, now)
-	to, next := store.PRReviewed, time.Time{}
-	if pr.HeadSHA != in.TargetSHA {
-		to, next = store.PRRereviewPending, e.rereviewAt(ctx, pr, job.watch, in.TargetSHA, now)
-	}
+	m := e.settleHead(ctx, job, pr, in.TargetSHA, now)
+	to, next, trivial := m.to, m.next, m.trivial
+	restore := job.started && pr.LastRoundStartedAt != nil && pr.LastRoundStartedAt.Equal(job.startedAt)
 	set := func(u *store.PRUpdate) {
 		if to == store.PRReviewed {
-			u.Where("head_sha", in.TargetSHA)
+			u.Where("head_sha", m.reviewed)
+			if trivial != nil {
+				u.Set("reviewed_sha", m.reviewed)
+			}
+		}
+		if restore {
+			if job.prevStart != nil {
+				u.Set("last_round_started_at", *job.prevStart)
+			} else {
+				u.Set("last_round_started_at", nil)
+			}
 		}
 		u.Set("replies_read_at", readAt)
 		u.Set("attempts", 0)
@@ -281,14 +296,18 @@ func (e *Engine) onReplied(ctx context.Context, job *roundJob, pr store.PR, in p
 	}
 	err := e.st.TransitionPR(ctx, pr.ID, from, to, set)
 	if err != nil && to == store.PRReviewed {
-		if cur, rerr := e.st.PRByID(ctx, pr.ID); rerr == nil && slices.Contains(from, cur.State) && cur.HeadSHA != in.TargetSHA {
-			pr, to, next = cur, store.PRRereviewPending, e.rereviewAt(ctx, cur, job.watch, in.TargetSHA, now)
+		if cur, rerr := e.st.PRByID(ctx, pr.ID); rerr == nil && slices.Contains(from, cur.State) && cur.HeadSHA != m.reviewed {
+			pr, to, next, trivial = cur, store.PRRereviewPending, e.rereviewAt(ctx, cur, job.watch, in.TargetSHA, now), nil
 			err = e.st.TransitionPR(ctx, pr.ID, from, to, set)
 		}
 	}
 	if err != nil {
 		e.log.Warn("record replies", "pr", pr.ID, "err", err)
 		_ = e.st.UpdatePR(ctx, pr.ID, func(u *store.PRUpdate) { u.Set("replies_read_at", readAt) })
+	} else if trivial != nil {
+		e.recordTrivial(ctx, job.repo, pr, TrivialSkip{From: in.TargetSHA, To: m.reviewed, Classes: trivial, Files: m.settled.files, At: now},
+			fmt.Sprintf("the push to %s during the reply round %s since %s; no re-review, the review stands",
+				textx.ShortSHA(m.reviewed), m.settled.change(), textx.ShortSHA(in.TargetSHA)))
 	}
 	subject := prSubject(job.repo, pr.Number)
 	msg := fmt.Sprintf("%s on %s; no new review: review %d stands", replyWord(res), textx.ShortSHA(in.TargetSHA), deref(pr.LastReviewID))

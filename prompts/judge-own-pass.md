@@ -17,8 +17,12 @@ An earlier session reviewed this PR, but its history is gone. Earlier reviews by
   - {{.ID}} {{.Event}} on `{{.SHA}}` ({{.SubmittedAt}})
 {{- end}}
 Read them and their threads first (`gh api repos/{{.Owner}}/{{.Repo}}/pulls/{{.Number}}/reviews/<id>/comments`).
-{{- if and .BaseMerged (not .ForcePushed)}}
+{{- if .ForcePushed}}
+The author rewrote history: `{{.PreviousHeadSHA}}` is no longer in the branch. Review the full PR diff again, then compare it with your earlier findings.
+{{- else if .BaseMerged}}
 The push merged the base branch, so `{{.PreviousHeadSHA}}..{{.HeadSHA}}` carries the base branch's commits too. Review only what changed in the PR's own diff: compare `git diff {{if .BaseSHA}}{{.BaseSHA}}{{else}}origin/{{.BaseRef}}{{end}}...{{.PreviousHeadSHA}}` with `git diff {{if .BaseSHA}}{{.BaseSHA}}{{else}}origin/{{.BaseRef}}{{end}}...{{.HeadSHA}}`, not `git diff {{.PreviousHeadSHA}}..{{.HeadSHA}}`.
+{{- else if and .ColdJudge .PreviousHeadSHA (ne .PreviousHeadSHA .HeadSHA)}}
+Read the new commits with `git log --oneline {{.PreviousHeadSHA}}..{{.HeadSHA}}` and `git diff {{.PreviousHeadSHA}}..{{.HeadSHA}}` and review those: the earlier reviews cover the rest of the PR.
 {{- end}}
 {{- else}}
 magnum checked out the PR head `{{.HeadSHA}}` (detached) in this directory.
@@ -52,6 +56,7 @@ head_sha: {{.HeadSHA}}
 base_ref: {{.BaseRef}}
 base_sha: {{.BaseSHA}}
 checkout: {{.Checkout}}
+db_lock: {{.DBLockCommand}}
 identity: {{.IdentityKind}}
 reviewer_login: {{.ReviewerLogin}}
 {{- if ne .Mode "initial"}}
@@ -64,7 +69,7 @@ previous_review_id: {{.PreviousReviewID}}
 previous_head_sha: {{.PreviousHeadSHA}}
 since: {{.Since}}
 {{- end}}
-{{- if eq .Mode "rereview"}}
+{{- if ne .Mode "initial"}}
 force_pushed: {{.ForcePushed}}
 {{- end}}
 {{- if and .BaseMerged (or (eq .Mode "rereview") (not .ForcePushed)) (ne .Mode "initial")}}

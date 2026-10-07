@@ -29,8 +29,11 @@ import (
 // is set, the round is not a continue, the judge has a conversation to
 // resume (a live session, or ResumeID's) and its last turn on the PR ended
 // longer than judge_fresh_after ago (judgeLastTurn). A live judge is quit
-// first, which parks its conversation; an agent that works or is blocked,
-// or one Quit cannot stop, is resumed as before. why says why, for
+// first, which parks its conversation, and starts fresh once herdr no
+// longer lists the quit agent (quitAgentGone); an agent that works or is
+// blocked, one Quit cannot stop and one herdr keeps listing are resumed as
+// before. A cold re-review's judge starts and works at its rereview effort
+// (judgeEffort, pipeline.RoundInput.ColdJudge). why says why, for
 // checkFresh; the decision is a round.judge_fresh_cold event with the idle
 // time.
 func (e *Engine) coldJudge(ctx context.Context, job *roundJob, rs *roundSetup) (cold bool, why string) {
@@ -63,6 +66,10 @@ func (e *Engine) coldJudge(ctx context.Context, job *roundJob, rs *roundSetup) (
 			e.log.Warn("cold judge: quit failed; resuming it", "pr", pr.ID, "err", err)
 			return false, ""
 		}
+		if !e.quitAgentGone(ctx, deref(live.AgentName)) {
+			e.log.Warn("cold judge: herdr still lists the agent it quit; resuming it", "pr", pr.ID, "agent", deref(live.AgentName))
+			return false, ""
+		}
 	}
 	ended := fmt.Sprintf("last turn ended %s ago (judge_fresh_after %s)", humanDuration(idle.Round(time.Minute)), humanDuration(after))
 	e.event(ctx, "info", prSubject(job.repo, pr.Number), "round.judge_fresh_cold",
@@ -72,8 +79,41 @@ func (e *Engine) coldJudge(ctx context.Context, job *roundJob, rs *roundSetup) (
 	return true, "the judge's " + ended
 }
 
+// How long coldJudge waits for herdr to drop the agent it quit
+// (quitAgentGone): quitGoneChecks snapshots quitGonePoll apart, about 10 s.
+const (
+	quitGonePoll   = 500 * time.Millisecond
+	quitGoneChecks = 20
+)
+
+// quitAgentGone waits until herdr no longer lists the agent named name,
+// which Quit just stopped. herdr may still list a quitting agent for a
+// moment, and a fresh start under the same name adopts it
+// (agents.StartAgent): of the 3 cold judges that were live, 2 adopted the
+// quitting agent and lost it within a minute. It reports false when the
+// name is still listed after quitGoneChecks snapshots, or herdr could not
+// say: the caller resumes the judge instead.
+func (e *Engine) quitAgentGone(ctx context.Context, name string) bool {
+	if name == "" || e.d.Herdr == nil {
+		return true
+	}
+	for i := 1; ; i++ {
+		if snap, err := e.d.Herdr.Snapshot(ctx); err == nil {
+			if _, listed := snap.AgentByName(name); !listed {
+				return true
+			}
+		}
+		if i >= quitGoneChecks || e.d.Sleep(ctx, quitGonePoll) != nil {
+			return false
+		}
+	}
+}
+
 // judgeLastTurn is when the PR's last turn of judge ended (its run rows'
-// ended_at, under the role's name or an alias); zero when none ended.
+// ended_at, under the role's name or an alias); zero when none ended. Only
+// a run that reached the judge (submitted_at) is a turn: a prompt refused
+// before it was sent ends its run too, and the conversation it never
+// reached stays as cold as it was.
 func (e *Engine) judgeLastTurn(ctx context.Context, prID int64, judge config.Role) time.Time {
 	runs, err := e.st.RunsByPR(ctx, prID)
 	if err != nil {
@@ -82,7 +122,7 @@ func (e *Engine) judgeLastTurn(ctx context.Context, prID int64, judge config.Rol
 	}
 	var last time.Time
 	for _, r := range runs {
-		if r.EndedAt != nil && r.EndedAt.After(last) && judge.Matches(r.Role) {
+		if r.SubmittedAt != nil && r.EndedAt != nil && r.EndedAt.After(last) && judge.Matches(r.Role) {
 			last = *r.EndedAt
 		}
 	}

@@ -319,6 +319,92 @@ func TestAContinuedReplyRoundKeepsItsReplies(t *testing.T) {
 	}
 }
 
+// A reply round only answers in magnum's threads, so it leaves the
+// re-review interval to the last review round: the author's push 10 minutes
+// after it, 3 hours after that review, is not held by min_rereview_interval
+// (30m), only by the push quiet period. A push 10 minutes after a review
+// round still is.
+func TestAReplyRoundDoesNotRestartTheRereviewInterval(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		reply bool
+	}{{"after a reply round", true}, {"after a review round", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			reviewed := h.reviewedPR(2, "b1")
+			start := deref(reviewed.LastRoundStartedAt)
+			var remarks []github.Remark
+			if tc.reply {
+				repliedRounds(h)
+				h.advance(3 * time.Hour)
+				remarks = []github.Remark{threadReply(h, "alice")}
+				reqPoll(h, prSpec{n: 2, head: "b1", remarks: remarks})
+				h.advance(3 * time.Minute)
+				h.tick()
+				if n := len(h.rd.all()); n != 2 {
+					t.Fatalf("rounds = %d, want the reply round", n)
+				}
+				if pr := h.wantState(2, store.PRReviewed); !deref(pr.LastRoundStartedAt).Equal(start) {
+					t.Fatalf("last_round_started_at = %v, want the review round's %v", pr.LastRoundStartedAt, start)
+				}
+			}
+			h.advance(10 * time.Minute)
+			pushed := h.clock.Now()
+			reqPoll(h, prSpec{n: 2, head: "b2", remarks: remarks})
+			pr := h.wantState(2, store.PRRereviewPending)
+			want := pushed.Add(5 * time.Minute) // the push quiet period
+			if !tc.reply {
+				want = start.Add(30 * time.Minute) // the re-review interval
+			}
+			if pr.NextEligibleAt == nil || !pr.NextEligibleAt.Equal(want) {
+				t.Fatalf("next eligible = %v, want %v", pr.NextEligibleAt, want)
+			}
+		})
+	}
+}
+
+// A push during a reply round is settled as one during a review round: its
+// delta since the review is measured, so a small one gets a delta check of
+// the judge alone, not a full round.
+func TestAPushDuringAReplyRoundGetsTheDeltaCheckOfAReviewRound(t *testing.T) {
+	h := newHarness(t)
+	h.reviewedPR(2, "b1")
+	repliedRounds(h)
+	h.advance(3 * time.Hour)
+	reply := threadReply(h, "alice")
+	reqPoll(h, prSpec{n: 2, head: "b1", remarks: []github.Remark{reply}})
+	h.advance(3 * time.Minute)
+	h.rd.gate = make(chan struct{})
+	before := len(h.rd.all())
+	if err := h.e.Tick(h.ctx); err != nil {
+		t.Fatal(err)
+	}
+	h.awaitRound(before)
+	h.advance(time.Minute)
+	h.gh.compare["b1...b2"] = github.CompareStats{Commits: 1}
+	h.gh.files = map[string][]github.FileDelta{"b1...b2": codePatch(1)}
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b2", remarks: []github.Remark{reply}})
+	if err := h.e.Tick(h.ctx); err != nil {
+		t.Fatal(err)
+	}
+	close(h.rd.gate)
+	h.settle()
+	pr := h.wantState(2, store.PRRereviewPending)
+	if rec, ok := h.e.deltaRecord(h.ctx, pr.ID); !ok || rec.From != "b1" || rec.To != "b2" || rec.Lines != 1 {
+		t.Fatalf("delta record = %+v (%v), want b1..b2 measured", rec, ok)
+	}
+	h.rd.gate = nil
+	h.advance(10 * time.Minute)
+	h.tick()
+	ins := h.rd.all()
+	if len(ins) != before+2 {
+		t.Fatalf("rounds = %d, want the check of b2", len(ins))
+	}
+	if in := ins[len(ins)-1]; in.TargetSHA != "b2" || in.DeltaCheck == nil || in.DeltaCheck.Lines != 1 {
+		t.Fatalf("round after the push: target %s delta check %+v, want a delta check of b2", in.TargetSHA, in.DeltaCheck)
+	}
+}
+
 // mustKV reads a kv value that must be set.
 func mustKV(t *testing.T, h *harness, key string) string {
 	t.Helper()

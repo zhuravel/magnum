@@ -5,6 +5,9 @@ Earlier reviews by `{{.ReviewerLogin}}`{{if .FormerLogins}} or, before magnum mo
 {{- end}}
 Read them and their threads first (`gh api repos/{{.Owner}}/{{.Repo}}/pulls/{{.Number}}/reviews/<id>/comments`), then follow the skill's re-review section for head `{{.HeadSHA}}`.{{if not .SameHead}} Candidate reports for this head are listed below.{{end}}
 {{- $merged := and .BaseMerged (not .ForcePushed)}}
+{{- if .ForcePushed}}
+The author rewrote history: `{{.PreviousHeadSHA}}` is no longer in the branch. Review the full PR diff again, then compare it with your earlier findings.
+{{- end}}
 {{- if $merged}}
 The push merged the base branch, so `{{.PreviousHeadSHA}}..{{.HeadSHA}}` carries the base branch's commits too. Review only what changed in the PR's own diff: compare `git diff {{if .BaseSHA}}{{.BaseSHA}}{{else}}origin/{{.BaseRef}}{{end}}...{{.PreviousHeadSHA}}` with `git diff {{if .BaseSHA}}{{.BaseSHA}}{{else}}origin/{{.BaseRef}}{{end}}...{{.HeadSHA}}`, not `git diff {{.PreviousHeadSHA}}..{{.HeadSHA}}`.
 {{- end}}
@@ -51,6 +54,7 @@ self_authored: {{.SelfAuthored}}
 previous_review_id: {{.PreviousReviewID}}
 previous_head_sha: {{.PreviousHeadSHA}}
 since: {{.Since}}
+force_pushed: {{.ForcePushed}}
 {{- if $merged}}
 base_merged: true
 {{- end}}
@@ -80,6 +84,9 @@ related_prs: {{.RelatedPRs}}
 {{- end}}
 {{- if .HistoryFile}}
 history: {{.HistoryFile}}
+{{- end}}
+{{- if .FailingChecks}}
+failing_checks: {{.FailingChecks}}
 {{- end}}
 {{- if .CodexProjectDeclined}}
 codex_project: declined

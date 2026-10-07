@@ -24,6 +24,9 @@ const (
 	judgeReadLines = 200
 	// verifyAttempts bounds GitHub read retries during verification.
 	verifyAttempts = 3
+	// verifyNetRetry is the wait before verification asks GitHub once more
+	// after a network failure outlasted verifyAttempts reads.
+	verifyNetRetry = 30 * time.Second
 	// clockSkew widens "posted after the prompt" for marker-less reviews.
 	clockSkew = 2 * time.Minute
 )
@@ -219,7 +222,9 @@ func (rd *round) judgeVerdict(ctx context.Context, t turn, resultFile string, ma
 	}
 
 	if !rd.in.DryRun {
-		found, err := rd.findReview(ctx, markers, res, since)
+		found, err := askAgainOnNetwork(ctx, rd, "the review", func() (*postedReview, error) {
+			return rd.findReview(ctx, markers, res, since)
+		})
 		if err != nil {
 			if ctx.Err() != nil {
 				return verdict{final: true, outcome: OutcomeStopped, err: ctx.Err()}
@@ -499,6 +504,30 @@ func (rd *round) listReviews(ctx context.Context, marker string) ([]github.Revie
 	}
 }
 
+// askAgainOnNetwork runs ask, one of the round's GitHub reads to verify what
+// its judge posted, and when it still fails with a connection-class cause
+// (github.ConnectionCause) after the read's own retries (listReviews), waits
+// verifyNetRetry and runs it once more: a blip of the network that outlasts
+// a few seconds must not end a round whose review is on GitHub already. A
+// failure of any other kind (a verdict from GitHub, a cancelled round) is
+// returned at once. The event names the cause, never the error text.
+func askAgainOnNetwork[T any](ctx context.Context, rd *round, what string, ask func() (T, error)) (T, error) {
+	v, err := ask()
+	if err == nil || ctx.Err() != nil {
+		return v, err
+	}
+	cause := github.ConnectionCause(err.Error())
+	if cause == "" {
+		return v, err
+	}
+	rd.event(ctx, "warn", "round.verify_retry", fmt.Sprintf("GitHub could not be reached to verify %s (%s); asking again in %s", what, cause, verifyNetRetry),
+		map[string]any{"cause": cause, "wait_seconds": int(verifyNetRetry.Seconds())})
+	if serr := rd.r.sleep(ctx, verifyNetRetry); serr != nil {
+		return v, serr
+	}
+	return ask()
+}
+
 // isReviewer reports whether a review author is the round's reviewer login:
 // same login (ignoring "[bot]") and the same kind of account.
 func (rd *round) isReviewer(login, typ string) bool {
@@ -697,15 +726,21 @@ func (rd *round) judgeData(run store.Run, marker string) agents.JudgeData {
 	if base == "" {
 		base = in.Repo.DefaultBranch
 	}
+	// A judge that started fresh only because its prompt cache was cold
+	// works at its rereview effort, as the engine launched it: the earlier
+	// reviews cover the PR up to the previous head. A lost session's
+	// recovery keeps the full effort.
+	cold := in.ColdJudge && in.Kind == KindRecovery
+	rereview := in.Kind == KindRereview || rd.deltaCheck() != nil || rd.sameHead() || cold
 	jd := agents.JudgeData{
 		RunID: marker, Owner: rd.owner, Repo: rd.name, Number: in.PR.Number, URL: in.PR.URL,
 		HeadSHA: in.TargetSHA, BaseRef: base, BaseSHA: in.BaseSHA, Checkout: in.SlotPath,
 		IdentityKind: rd.r.Identity.Kind(), ReviewerLogin: rd.login, GhConfigDir: rd.ghDir,
 		NoFindingsEvent: nf, BlockingEvent: be, SelfAuthored: rd.selfAuthored(),
 		Reports: reports, ResultFile: rd.reportPath(run, rd.judge), DryRun: in.DryRun, Blind: in.Blind, PostMerge: in.PostMerge,
-		Magnum: rd.r.Layout.Binary(), SkillPath: skill, Model: rd.r.Config.RoleModel(rd.judge), Effort: rd.judge.EffortFor(in.Kind == KindRereview || rd.deltaCheck() != nil || rd.sameHead()),
+		Magnum: rd.r.Layout.Binary(), SkillPath: skill, Model: rd.r.Config.RoleModel(rd.judge), Effort: rd.judge.EffortFor(rereview),
 		ForcePushed: in.ForcePushed, BaseMerged: in.BaseMerged, MovedFrom: in.MovedFrom, PreviousHeadSHA: rd.previousHead(),
-		NotesPath: in.NotesPath, SameHead: rd.sameHead(), Replies: rd.replies(), HistoryFile: rd.historyFile,
+		NotesPath: in.NotesPath, SameHead: rd.sameHead(), Replies: rd.replies(), HistoryFile: rd.historyFile, ColdJudge: cold,
 	}
 	jd.EffortInPrompt = rd.effortInPrompt(rd.judge, jd.Effort)
 	if in.NotesPath != "" {

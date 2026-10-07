@@ -279,13 +279,9 @@ func (e *Engine) onPosted(ctx context.Context, job *roundJob, pr store.PR, in pi
 	var trivial []string
 	var settled deltaCheck
 	var next time.Time
-	if pr.HeadSHA != target && !job.postMerge {
-		if dc := e.checkDelta(ctx, job.repo, job.watch, prBase(job.repo, pr), target, pr.HeadSHA); dc.trivial {
-			reviewed, trivial, settled = pr.HeadSHA, dc.classes, dc
-		} else {
-			e.recordDelta(ctx, pr.ID, target, pr.HeadSHA, dc, pr.HeadChangedAt)
-			to, next = store.PRRereviewPending, e.rereviewAt(ctx, pr, job.watch, target, now)
-		}
+	if !job.postMerge {
+		m := e.settleHead(ctx, job, pr, target, now)
+		reviewed, trivial, settled, to, next = m.reviewed, m.trivial, m.settled, m.to, m.next
 	}
 	// simplify_done (shown by the board) follows the role answering to
 	// "simplify" (claude-simplify by default).
@@ -416,6 +412,37 @@ func (e *Engine) onPosted(ctx context.Context, job *roundJob, pr store.PR, in pi
 			Kind: notify.KindReviewPosted,
 		})
 	}
+}
+
+// headSettle is where a finished round leaves its PR (settleHead).
+type headSettle struct {
+	reviewed string     // the commit the review stands for: the round's target, or the head after a trivial delta
+	trivial  []string   // the trivial delta's classes (nil: none)
+	settled  deltaCheck // the trivial delta's measure
+	to       string     // reviewed, or rereview_pending
+	next     time.Time  // rereview_pending: when the re-review may start
+}
+
+// settleHead settles a round on target whose PR's head may have moved
+// while it ran (a posted round and a reply round alike): a trivial delta
+// since target (checkDelta: comments, whitespace, docs, a base merge) leaves
+// the review standing for the head, reviewed; any other is recorded for the
+// re-review's threshold and delta check (recordDelta), and the PR waits in
+// rereview_pending until rereviewAt. A head still at target stays
+// reviewed.
+func (e *Engine) settleHead(ctx context.Context, job *roundJob, pr store.PR, target string, now time.Time) headSettle {
+	s := headSettle{reviewed: target, to: store.PRReviewed}
+	if pr.HeadSHA == target {
+		return s
+	}
+	dc := e.checkDelta(ctx, job.repo, job.watch, prBase(job.repo, pr), target, pr.HeadSHA)
+	if dc.trivial {
+		s.reviewed, s.trivial, s.settled = pr.HeadSHA, dc.classes, dc
+		return s
+	}
+	e.recordDelta(ctx, pr.ID, target, pr.HeadSHA, dc, pr.HeadChangedAt)
+	s.to, s.next = store.PRRereviewPending, e.rereviewAt(ctx, pr, job.watch, target, now)
+	return s
 }
 
 // rereviewAt is when a PR whose review covered target (not its head) may

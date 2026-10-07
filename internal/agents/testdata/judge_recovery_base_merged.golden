@@ -28,6 +28,7 @@ self_authored: false
 previous_review_id: 3012345678
 previous_head_sha: a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0
 since: 2026-10-03T09:15:00Z
+force_pushed: false
 base_merged: true
 threads_file: 
 reports:

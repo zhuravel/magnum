@@ -160,7 +160,7 @@ type PausePayload struct {
 func (e *Engine) handleRequests(ctx context.Context) {
 	reqs, err := e.st.PendingRequests(ctx, maxRequestsPerTick)
 	if err != nil {
-		e.log.Warn("requests", "err", err)
+		e.warnUnlessStopped(ctx, err, "requests")
 		return
 	}
 	for _, req := range reqs {
@@ -181,7 +181,7 @@ func (e *Engine) complete(ctx context.Context, id int64, err error, result strin
 		result = err.Error()
 	}
 	if cerr := e.st.CompleteRequest(ctx, id, state, result); cerr != nil {
-		e.log.Warn("complete request", "id", id, "err", cerr)
+		e.warnUnlessStopped(ctx, cerr, "complete request", "id", id)
 	}
 	e.event(ctx, "info", fmt.Sprintf("request:%d", id), "request."+state, result, nil)
 }

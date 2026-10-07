@@ -2,8 +2,10 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -24,12 +26,12 @@ func (e *Engine) closeGrace(ctx context.Context) {
 	}
 	due, err := e.st.ClosedPastGrace(ctx, e.now())
 	if err != nil {
-		e.log.Warn("closed past grace", "err", err)
+		e.warnUnlessStopped(ctx, err, "closed past grace")
 		return
 	}
 	releasing, err := e.st.ListPRs(ctx, store.PRFilter{States: []string{store.PRReleasing}})
 	if err != nil {
-		e.log.Warn("releasing PRs", "err", err)
+		e.warnUnlessStopped(ctx, err, "releasing PRs")
 		return
 	}
 	now := e.now()
@@ -86,12 +88,12 @@ func (e *Engine) defaultCleanup(ctx context.Context) error {
 func (e *Engine) closedRoundsRunning(ctx context.Context) bool {
 	due, err := e.st.ClosedPastGrace(ctx, e.now())
 	if err != nil {
-		e.log.Warn("closed past grace", "err", err)
+		e.warnUnlessStopped(ctx, err, "closed past grace")
 		return true
 	}
 	releasing, err := e.st.ListPRs(ctx, store.PRFilter{States: []string{store.PRReleasing}})
 	if err != nil {
-		e.log.Warn("releasing PRs", "err", err)
+		e.warnUnlessStopped(ctx, err, "releasing PRs")
 		return true
 	}
 	return e.roundOnAny(append(due, releasing...))
@@ -232,9 +234,12 @@ func (e *Engine) applyInventory(ctx context.Context, inv inventory.Inventory) {
 			e.event(ctx, "info", "", "reconcile.databases_gone", fmt.Sprintf("%d databases no longer in MySQL: %s", len(res.Dropped), strings.Join(res.Dropped, ", ")), nil)
 		}
 	}
+	due := e.driftDue(ctx, inv.Drift)
 	for _, f := range inv.Drift {
 		if !f.Safe {
-			e.log.Info("drift", "kind", f.Kind, "subject", f.Subject, "message", f.Message)
+			if due[driftKey(f)] {
+				e.log.Info("drift", "kind", f.Kind, "subject", f.Subject, "message", f.Message)
+			}
 			continue
 		}
 		switch f.Kind {
@@ -260,6 +265,43 @@ func (e *Engine) applyInventory(ctx context.Context, inv inventory.Inventory) {
 			// Dropped by cleanup's default plan (same allowlist guard).
 		}
 	}
+}
+
+func driftKey(f inventory.Finding) string { return f.Kind + " " + f.Subject }
+
+// driftDue says which of the unsafe drift findings (those the reconcile only
+// reports) are to be logged now, by driftKey: each once per local day while it
+// persists (the same orphan databases were logged by every reconcile). What
+// was logged is kept in the registry (kvDriftLogged), reduced to the findings
+// of this scan, so a finding that went away and came back is logged again, and
+// a restart does not repeat a day's lines. The scan itself still reports every
+// finding to status and doctor. A stopping daemon (ctx ended) logs and records
+// nothing.
+func (e *Engine) driftDue(ctx context.Context, drift []inventory.Finding) map[string]bool {
+	raw, _ := e.getKV(ctx, kvDriftLogged)
+	if ctx.Err() != nil {
+		return nil
+	}
+	var was map[string]string
+	_ = json.Unmarshal([]byte(raw), &was) // a damaged value is a day nothing was logged
+	day := store.DayKey(e.now())
+	now := map[string]string{}
+	due := map[string]bool{}
+	for _, f := range drift {
+		if f.Safe {
+			continue
+		}
+		now[driftKey(f)] = day
+		if was[driftKey(f)] != day {
+			due[driftKey(f)] = true
+		}
+	}
+	if !maps.Equal(was, now) {
+		if b, err := json.Marshal(now); err == nil {
+			e.setKV(ctx, kvDriftLogged, string(b))
+		}
+	}
+	return due
 }
 
 // maintainPool provisions below pool.min and, with clean, removes free

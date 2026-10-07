@@ -72,6 +72,20 @@ func TestTheJudgeGetsTheHeadsFailingChecks(t *testing.T) {
 		}
 	}
 
+	// A recovery's judge (a lost session, or a cold cache, is common) gets
+	// the field as well.
+	rec := newEnv(t)
+	rec.setCI(store.CIStatus{SHA: target, State: "FAILURE", Total: 3, Complete: true, Checks: checks})
+	rec.ag.behaviors[agents.RoleJudge] = []behavior{rec.judgePosts(823, "COMMENTED", "COMMENT").behavior(t)}
+	recIn := rec.input(KindRecovery)
+	recIn.Previous = &PreviousReview{ID: 901, Event: "COMMENTED", SHA: prevSHA, SubmittedAt: t0.Add(-time.Hour)}
+	if res, err := rec.r.RunRound(rec.ctx, recIn); err != nil || res.Outcome != OutcomePosted {
+		t.Fatalf("recovery: RunRound = %+v, %v", res, err)
+	} else {
+		mustContain(t, "recovery judge prompt", rec.ag.submitsFor(agents.RoleJudge)[0].Text, "mode: recovery",
+			"\nfailing_checks: "+filepath.Join(res.ReportDir, FailingChecksFile)+"\n")
+	}
+
 	none := func(name string, ci store.CIStatus, blind bool) {
 		t.Helper()
 		e := newEnv(t)

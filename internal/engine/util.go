@@ -50,6 +50,10 @@ const (
 	KVInfraPausedDetail = "daemon.infra_paused_detail"
 	KVInfraBackoff      = "daemon.infra_backoff"
 	kvInfraProbeDir     = "daemon.infra_probe_dir"
+	// kvDriftLogged holds, as JSON, the day (store.DayKey) each drift finding
+	// the reconcile logs was last logged on, by kind and subject
+	// (driftDue, maintenance.go).
+	kvDriftLogged = "daemon.drift_logged"
 	// KVUsageCodexPercent is the Codex budget used (percent, no decimals)
 	// as the newest Codex session reported it; KVUsageCodexResetsAt is when
 	// the binding window resets (store.FormatTime), KVUsageCodexWindow its
@@ -100,10 +104,32 @@ func kvPRDryRun(id int64) string           { return store.KVPRDryRun(id) }
 // code, never from the words (gateWait).
 func kvPRGateReason(id int64) string { return fmt.Sprintf("pr.%d.gate_reason", id) }
 
+// isStop reports whether a failure is the daemon stopping rather than a
+// fault: ctx ended (a shutdown cancels the tick's), or err says the work was
+// canceled. Every registry read then fails, so what it returned ("" for a
+// key, nothing for a list) says nothing; callers that decide on it check
+// ctx.Err() as well.
+func isStop(ctx context.Context, err error) bool {
+	return ctx.Err() != nil || errors.Is(err, context.Canceled)
+}
+
+// warnUnlessStopped logs err under msg with args at Warn, or at Debug when
+// the failure is the daemon stopping (isStop): every stop used to log dozens
+// of warnings for the tick it cut short.
+func (e *Engine) warnUnlessStopped(ctx context.Context, err error, msg string, args ...any) {
+	level := slog.LevelWarn
+	if isStop(ctx, err) {
+		level = slog.LevelDebug
+	}
+	e.log.Log(ctx, level, msg, append(args, "err", err)...)
+}
+
+// getKV reads key; a failed read answers "" and false, and is logged unless
+// the daemon is stopping (warnUnlessStopped).
 func (e *Engine) getKV(ctx context.Context, key string) (string, bool) {
 	v, ok, err := e.st.GetKV(ctx, key)
 	if err != nil {
-		e.log.Warn("kv read", "key", key, "err", err)
+		e.warnUnlessStopped(ctx, err, "kv read", "key", key)
 		return "", false
 	}
 	return v, ok
@@ -111,14 +137,14 @@ func (e *Engine) getKV(ctx context.Context, key string) (string, bool) {
 
 func (e *Engine) setKV(ctx context.Context, key, value string) {
 	if err := e.st.SetKV(ctx, key, value); err != nil {
-		e.log.Warn("kv write", "key", key, "err", err)
+		e.warnUnlessStopped(ctx, err, "kv write", "key", key)
 	}
 }
 
 func (e *Engine) delKV(ctx context.Context, keys ...string) {
 	for _, k := range keys {
 		if err := e.st.DeleteKV(ctx, k); err != nil {
-			e.log.Warn("kv delete", "key", k, "err", err)
+			e.warnUnlessStopped(ctx, err, "kv delete", "key", k)
 		}
 	}
 }
@@ -148,7 +174,7 @@ func (e *Engine) event(ctx context.Context, level, subject, kind, msg string, da
 		}
 	}
 	if _, err := e.st.AppendEvent(ctx, ev); err != nil {
-		e.log.Warn("append event", "kind", kind, "err", err)
+		e.warnUnlessStopped(ctx, err, "append event", "kind", kind)
 	}
 	lvl := slog.LevelInfo
 	switch level {

@@ -524,6 +524,20 @@ type fakeHerdr struct {
 	panes      []herdr.Pane
 	closed     []string // WorkspaceClose calls
 	calls      int
+	// lingering lists agents for that many more snapshots (-1: always),
+	// as herdr still lists an agent a moment after it quit.
+	lingering map[string]int
+}
+
+// linger lists an agent named name in the next n snapshots (-1: in every
+// one).
+func (h *fakeHerdr) linger(name string, n int) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.lingering == nil {
+		h.lingering = map[string]int{}
+	}
+	h.lingering[name] = n
 }
 
 func (h *fakeHerdr) Snapshot(context.Context) (herdr.Snapshot, error) {
@@ -533,7 +547,18 @@ func (h *fakeHerdr) Snapshot(context.Context) (herdr.Snapshot, error) {
 	if h.err != nil {
 		return herdr.Snapshot{}, h.err
 	}
-	return herdr.Snapshot{Agents: slices.Clone(h.agents), Workspaces: slices.Clone(h.workspaces), Panes: slices.Clone(h.panes)}, nil
+	snap := herdr.Snapshot{Agents: slices.Clone(h.agents), Workspaces: slices.Clone(h.workspaces), Panes: slices.Clone(h.panes)}
+	for _, name := range slices.Sorted(maps.Keys(h.lingering)) {
+		switch n := h.lingering[name]; {
+		case n == 0:
+			delete(h.lingering, name)
+			continue
+		case n > 0:
+			h.lingering[name] = n - 1
+		}
+		snap.Agents = append(snap.Agents, herdr.AgentInfo{Name: name, Agent: "codex", AgentStatus: herdr.StatusIdle})
+	}
+	return snap, nil
 }
 
 // WorkspaceClose closes a workspace with its panes and agents.
@@ -618,6 +643,9 @@ type fakeAgents struct {
 	onQuit func(store.Session)
 	// quitErr, when set, is what Quit returns after onQuit (the session stays live).
 	quitErr error
+	// onStart, when set, runs as StartAgent starts, with the role and the
+	// conversation it resumes.
+	onStart func(role config.Role, resume string)
 }
 
 func (f *fakeAgents) record(s string) {
@@ -698,6 +726,12 @@ func (f *fakeAgents) EnsurePane(_ context.Context, pr store.PR, ws agents.Worksp
 
 func (f *fakeAgents) StartAgent(ctx context.Context, pr store.PR, role config.Role, paneID, resume string) error {
 	f.record(fmt.Sprintf("start:%d:%s:%s", pr.ID, role.Name, resume))
+	f.mu.Lock()
+	onStart := f.onStart
+	f.mu.Unlock()
+	if onStart != nil {
+		onStart(role, resume)
+	}
 	if resume != "" && f.failResume {
 		return errors.New("resume failed")
 	}

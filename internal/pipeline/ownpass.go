@@ -27,6 +27,7 @@ package pipeline
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -35,6 +36,7 @@ import (
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/store"
 )
 
@@ -68,19 +70,49 @@ func (op *ownPass) finished() bool {
 // startOwnPass prompts the judge for its own pass on run in a goroutine of
 // its own, under ctx (the stages' context, which a push cancels). marker
 // is the run id the round's review will carry, which the prompt quotes.
-func (rd *round) startOwnPass(ctx context.Context, run store.Run, marker string) *ownPass {
+// When the judge's session is gone for good (ownPassTurn), it cancels the
+// stages through cancel with a *judgeGoneError, which ends the round.
+func (rd *round) startOwnPass(ctx context.Context, cancel context.CancelCauseFunc, run store.Run, marker string) *ownPass {
 	op := &ownPass{done: make(chan struct{})}
 	go func() {
 		defer close(op.done)
-		op.rep = rd.ownPassTurn(ctx, run, marker)
+		var gone *judgeGoneError
+		if op.rep, gone = rd.ownPassTurn(ctx, run, marker); gone != nil {
+			cancel(gone)
+		}
 	}()
 	return op
 }
 
+// judgeGoneError is the cause of a stage context the own pass cancelled:
+// the judge's session was gone when its own pass was prompted, and again
+// after the round started it once more (RoundInput.RestartJudge), or the
+// start failed. The round ends at once with it, rather than after the
+// reviewers with the candidates prompt refused.
+type judgeGoneError struct{ err error }
+
+func (e *judgeGoneError) Error() string {
+	return "pipeline: judge prompt refused, also after a restart of the judge: " + e.err.Error()
+}
+
+func (e *judgeGoneError) Unwrap() error { return e.err }
+
+// judgeGone reports whether a prompt that never reached the judge was
+// refused because its session or agent is gone: no live session
+// (agents.ErrNoSession), or herdr no longer knows its agent or pane.
+func judgeGone(t turn) bool {
+	return t.unsent && (errors.Is(t.err, agents.ErrNoSession) || herdr.IsCode(t.err, herdr.CodeAgentNotFound) ||
+		herdr.IsCode(t.err, herdr.CodePaneNotFound))
+}
+
 // ownPassTurn prompts the own pass and waits for its turn to end; its run
 // ends final, except when ctx was cancelled (a push: the restart settles
-// it; the round's end: it stays in flight, observed, as a reviewer's).
-func (rd *round) ownPassTurn(ctx context.Context, run store.Run, marker string) RoleReport {
+// it; the round's end: it stays in flight, observed, as a reviewer's). A
+// prompt refused because the judge's session is gone (judgeGone; a start
+// adopted an agent that was quitting, say) starts the judge once more
+// (RoundInput.RestartJudge) and sends the pass again in a new own_pass run;
+// a second refusal, or a start that fails, returns gone: the round ends.
+func (rd *round) ownPassTurn(ctx context.Context, run store.Run, marker string) (RoleReport, *judgeGoneError) {
 	judge := rd.judge
 	path := filepath.Join(rd.dir, agents.OwnFindingsFile) // the run's report path (NewRun)
 	rep := rd.newReport(judge, run.ID)
@@ -91,7 +123,7 @@ func (rd *round) ownPassTurn(ctx context.Context, run store.Run, marker string) 
 		return rep
 	}
 	if err := setAside(path); err != nil {
-		return fail(ReportFailed, err.Error())
+		return fail(ReportFailed, err.Error()), nil
 	}
 	jd := rd.judgeData(run, marker)
 	jd.Reports, jd.Mode, jd.Phase, jd.OwnFindings = nil, rd.in.Kind, agents.PhaseOwnPass, path
@@ -102,7 +134,7 @@ func (rd *round) ownPassTurn(ctx context.Context, run store.Run, marker string) 
 	rd.addRelated(ctx, &jd)
 	text, err := rd.r.Agents.RolePrompt(judge, config.PromptOwnPass, jd)
 	if err != nil {
-		return fail(ReportFailed, err.Error())
+		return fail(ReportFailed, err.Error()), nil
 	}
 	rd.event(ctx, "info", "round.own_pass", fmt.Sprintf("prompting %s for its own pass while the reviewers work (run %s, %s)", judge.Name, run.ID, rd.in.Kind),
 		map[string]any{"run": run.ID, "role": judge.Name, "marker": marker, "file": path})
@@ -114,6 +146,22 @@ func (rd *round) ownPassTurn(ctx context.Context, run store.Run, marker string) 
 		anchor = path
 	}
 	t := rd.submitAndWait(ctx, run, text, rd.timeout(judge), "", nil)
+	if judgeGone(t) && rd.in.RestartJudge != nil && ctx.Err() == nil {
+		gone := func(err error) (RoleReport, *judgeGoneError) {
+			rep := rd.newReport(judge, t.run.ID)
+			rep.Status, rep.Detail = refusedStatus(err), execx.Redact(err.Error())
+			rd.ownPassEnded(ctx, rep)
+			return rep, &judgeGoneError{err: err}
+		}
+		nrun, err := rd.restartJudge(ctx, t.err)
+		if err != nil {
+			return gone(errors.Join(t.err, err))
+		}
+		run = nrun
+		if t = rd.submitAndWait(ctx, run, text, rd.timeout(judge), "", nil); judgeGone(t) && ctx.Err() == nil {
+			return gone(t.err)
+		}
+	}
 	if t.unsent {
 		rd.mu.Lock()
 		rd.ownFindings = "" // the judge never got it: the candidates prompt is the one prompt
@@ -123,7 +171,31 @@ func (rd *round) ownPassTurn(ctx context.Context, run store.Run, marker string) 
 	if t.run.ID != "" {
 		run = t.run
 	}
-	return rd.finishOwnPass(ctx, run, path, anchor, t)
+	return rd.finishOwnPass(ctx, run, path, anchor, t), nil
+}
+
+// restartJudge starts the judge once more after its session was found gone
+// (cause) at the own pass's prompt (RoundInput.RestartJudge, the engine's
+// start path) and returns the own_pass run the pass is sent again in, the
+// own pass's latest run from now on (ownRun).
+func (rd *round) restartJudge(ctx context.Context, cause error) (store.Run, error) {
+	rd.event(ctx, "warn", "round.judge_restarted",
+		fmt.Sprintf("%s's session was gone at its own pass's prompt (%s): starting it again", rd.judge.Name, execx.Redact(cause.Error())),
+		map[string]any{"role": rd.judge.Name})
+	if err := rd.in.RestartJudge(ctx); err != nil {
+		return store.Run{}, fmt.Errorf("pipeline: start %s again: %w", rd.judge.Name, err)
+	}
+	nrun, err := rd.newRun(ctx, rd.judge, store.RunOwnPass)
+	if err != nil {
+		return store.Run{}, err
+	}
+	rd.mu.Lock()
+	if rd.cont == nil {
+		rd.cont = map[string]store.Run{}
+	}
+	rd.cont[rd.judge.Name] = *nrun
+	rd.mu.Unlock()
+	return *nrun, nil
 }
 
 // finishOwnPass turns the own pass's turn into its report and final run

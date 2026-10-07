@@ -27,7 +27,11 @@ func TestRoundPromptsNameTheCheckoutsDBLock(t *testing.T) {
 		t.Errorf("claude-review's prompt lacks %s:\n%+v", want, claude)
 	}
 	judge := e.ag.submitsFor(agents.RoleJudge)
-	if want := "\ndb_lock: " + agents.DBLockLine(bin, slotPath, string(agents.RoleJudge)) + "\n"; len(judge) != 2 || !strings.Contains(judge[1].Text, want) {
+	want := "\ndb_lock: " + agents.DBLockLine(bin, slotPath, string(agents.RoleJudge)) + "\n"
+	if len(judge) != 2 || !strings.Contains(judge[1].Text, want) {
 		t.Errorf("the judge's candidates prompt lacks %q:\n%+v", want, judge)
+	}
+	if len(judge) == 0 || !strings.Contains(judge[0].Text, want) {
+		t.Errorf("the judge's own-pass prompt lacks %q:\n%+v", want, judge)
 	}
 }

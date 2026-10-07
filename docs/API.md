@@ -734,7 +734,15 @@ type JudgeData struct {
 	PreviousEvent    string
 	PreviousHeadSHA  string
 	Since            string // RFC3339: read every comment since then
-	ForcePushed      bool
+	// ForcePushed (rereview, recovery): PreviousHeadSHA is no longer in the
+	// branch, so the judge reviews the full PR diff again.
+	ForcePushed bool
+	// ColdJudge (recovery): the judge started fresh only because its
+	// conversation's prompt cache had gone cold (pipeline.RoundInput
+	// .ColdJudge), not because its session was lost: the earlier reviews
+	// cover the PR up to PreviousHeadSHA, so the own pass reads the commits
+	// since (unless ForcePushed or BaseMerged says otherwise).
+	ColdJudge bool
 	// PreviousHeadShort is PreviousHeadSHA cut to 7 characters (always
 	// derived; see textx.ShortSHA).
 	PreviousHeadShort string
@@ -1167,10 +1175,12 @@ func (m *Manager) StartAgent(ctx context.Context, pr store.PR, role config.Role,
     marks its session live. The role's kind (role.AgentKind(), a declared
     [kinds.<name>]) says how:
 
-      - An agent already carrying the role's name is adopted as is, when it
-        is of the role's kind and its pane works in the PR's checkout (the
-        session's cwd, else paneID's); otherwise StartAgent fails, since the
-        name is taken.
+      - An agent already carrying the role's name is adopted as is,
+        when it is of the role's kind and its pane works in the PR's checkout
+        (the session's cwd, else paneID's); otherwise StartAgent fails,
+        since the name is taken. A fresh start (resume "") never adopts one
+        whose conversation magnum parked for the role (parkedConversation:
+        herdr still lists an agent Quit just stopped): ErrBusy.
       - With resume set (ignored for a kind with session_source "none"),
         a pane whose agent_session.value equals resume (herdr restored it) is
         adopted instead of starting a second copy, and the agent is renamed to
@@ -5835,7 +5845,9 @@ type LevelLogger interface {
     LevelLogger is a Logger that also takes a level per line. Real logs a
     command that succeeded at slog.LevelDebug and one that failed (a non-zero
     exit, a failed start, a timeout) at slog.LevelWarn when its Log implements
-    it; a plain Logger gets every line through Printf.
+    it, except one the caller's context cancellation ended (the daemon
+    stopping), which is logged at slog.LevelDebug; a plain Logger gets every
+    line through Printf.
 
 type Logger interface {
 	Printf(format string, args ...any)
@@ -5845,7 +5857,7 @@ type Logger interface {
 type Real struct {
 	// Log, when set, receives a redacted one-line transcript per command:
 	// at debug level for a success and at warn level for a failure when it
-	// is a LevelLogger.
+	// is a LevelLogger (a command the caller's cancellation ended: debug).
 	Log Logger
 	// BaseEnv, when non-empty, replaces os.Environ() as the parent environment.
 	BaseEnv []string
@@ -6018,9 +6030,21 @@ func BetweenCalls(ctx context.Context)
     BetweenCalls runs the function WithBetweenCalls put into ctx, if any.
     The client calls it before each gh command; a fake GitHub can do the same.
 
+func ConnectionCause(msg string) string
+    ConnectionCause names the connection-class failure msg reports ("" = none:
+    a real verdict from GitHub, or about an identity): the network's (DNS,
+    a timeout, a refused or reset connection, TLS), gh unable to connect,
+    a closed connection, a GitHub server error (5xx) or a rate limit (429,
+    secondary or primary).
+
 func IsBot(typename, login string) bool
     IsBot reports whether an author is a bot: GraphQL __typename "Bot" or a REST
     login ending in "[bot]".
+
+func NetworkCause(msg string) string
+    NetworkCause names the failure of the network itself that msg reports (""
+    = none): DNS, a timeout, a refused or reset connection, an unreachable
+    network, TLS. What git and ssh print when a remote cannot be reached.
 
 func NormalizeLogin(s string) string
     NormalizeLogin strips a trailing "[bot]" so REST logins ("talkable[bot]")
@@ -9903,8 +9927,16 @@ type RoundInput struct {
 	// judge_fresh_after), while the reviewers kept theirs: the judge gets
 	// the recovery prompt, and the reviewers re-review the commits since
 	// the last review as in a re-review (their rereview prompts and effort)
-	// instead of reviewing the whole PR again.
+	// instead of reviewing the whole PR again. The judge works at its
+	// rereview effort too, and its own pass reads the commits since the
+	// previous head unless the push rewrote history
+	// (agents.JudgeData.ColdJudge); a recovery after a lost session reviews
+	// the whole PR at the full effort.
 	ColdJudge bool
+	// RestartJudge starts the round's judge once more in its pane, the way
+	// the round started it, when its session is gone at the own pass's
+	// prompt (ownPassTurn); nil = the own pass fails as any other.
+	RestartJudge func(ctx context.Context) error
 
 	DryRun bool // the judge posts nothing; GitHub is not consulted
 	// Blind (magnum eval, with DryRun): the round replays a pinned head to

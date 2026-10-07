@@ -286,7 +286,15 @@ type JudgeData struct {
 	PreviousEvent    string
 	PreviousHeadSHA  string
 	Since            string // RFC3339: read every comment since then
-	ForcePushed      bool
+	// ForcePushed (rereview, recovery): PreviousHeadSHA is no longer in the
+	// branch, so the judge reviews the full PR diff again.
+	ForcePushed bool
+	// ColdJudge (recovery): the judge started fresh only because its
+	// conversation's prompt cache had gone cold (pipeline.RoundInput
+	// .ColdJudge), not because its session was lost: the earlier reviews
+	// cover the PR up to PreviousHeadSHA, so the own pass reads the commits
+	// since (unless ForcePushed or BaseMerged says otherwise).
+	ColdJudge bool
 	// PreviousHeadShort is PreviousHeadSHA cut to 7 characters (always
 	// derived; see textx.ShortSHA).
 	PreviousHeadShort string

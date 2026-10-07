@@ -192,6 +192,45 @@ func TestClaudeFollowUpPromptsListNoEarlierFindings(t *testing.T) {
 	}
 }
 
+// A judge that started fresh only because its prompt cache was cold reviews
+// the commits since the earlier reviews in its own pass, as a re-review
+// does (cold own passes averaged 31 responses, a resumed re-review's 5-12);
+// a judge whose session was lost, or a push that rewrote history, reviews
+// the whole PR. Both recovery prompts say when history was rewritten.
+func TestAColdOwnPassReadsTheNewCommits(t *testing.T) {
+	d := judgeFixture()
+	d.Mode, d.Phase, d.OwnFindings, d.Reports = "recovery", PhaseOwnPass, "/state/reviews/judge-own.md", nil
+	commits := "git log --oneline " + d.PreviousHeadSHA + ".." + d.HeadSHA
+	rewrote := "The author rewrote history"
+	render := func(name string, d JudgeData) string {
+		t.Helper()
+		got, err := RenderPrompt(prompt(t, name), d)
+		if err != nil {
+			t.Fatalf("RenderPrompt(%s): %v", name, err)
+		}
+		return got
+	}
+	cold := d
+	cold.ColdJudge = true
+	if got := render("judge-own-pass.md", cold); !strings.Contains(got, commits) || !strings.Contains(got, "the earlier reviews cover the rest of the PR") ||
+		!strings.Contains(got, "force_pushed: false") {
+		t.Errorf("a cold judge's own pass does not name the new commits:\n%s", got)
+	}
+	if got := render("judge-own-pass.md", d); strings.Contains(got, commits) {
+		t.Errorf("a lost session's own pass names only the new commits:\n%s", got)
+	}
+	forced := cold
+	forced.ForcePushed = true
+	if got := render("judge-own-pass.md", forced); strings.Contains(got, commits) || !strings.Contains(got, rewrote) || !strings.Contains(got, "force_pushed: true") {
+		t.Errorf("a cold judge's own pass after a force push:\n%s", got)
+	}
+	recovery := judgeFixture()
+	recovery.ForcePushed = true
+	if got := render("judge-recovery.md", recovery); !strings.Contains(got, rewrote) || !strings.Contains(got, "force_pushed: true") {
+		t.Errorf("the recovery prompt after a force push:\n%s", got)
+	}
+}
+
 func TestRenderGolden(t *testing.T) {
 	forced := judgeFixture()
 	forced.ForcePushed = true
@@ -292,6 +331,16 @@ func TestRenderGolden(t *testing.T) {
 	ownRereview.ThreadsFile, ownRereview.ThreadSummary = withNotes.ThreadsFile, withNotes.ThreadSummary
 	ownRecovery := ownPass("recovery")
 	ownRecovery.FormerLogins = []string{"alice"}
+	// A recovery whose judge started fresh only because its prompt cache
+	// was cold: its own pass reads the commits since the earlier reviews,
+	// unless the push rewrote history (the full PR again, as after a lost
+	// session).
+	ownCold := ownRecovery
+	ownCold.ColdJudge = true
+	ownColdForced := ownCold
+	ownColdForced.ForcePushed = true
+	recoveryForced := judgeFixture()
+	recoveryForced.ForcePushed = true
 	ownBlind := ownPass("initial")
 	ownBlind.DryRun, ownBlind.Blind = true, true
 	ownDryRun := ownPass("initial")
@@ -351,6 +400,9 @@ func TestRenderGolden(t *testing.T) {
 		{"judge_own_pass_initial", "judge-own-pass.md", ownPass("initial")},
 		{"judge_own_pass_rereview", "judge-own-pass.md", ownRereview},
 		{"judge_own_pass_recovery", "judge-own-pass.md", ownRecovery},
+		{"judge_own_pass_recovery_cold", "judge-own-pass.md", ownCold},
+		{"judge_own_pass_recovery_cold_forced", "judge-own-pass.md", ownColdForced},
+		{"judge_recovery_forced", "judge-recovery.md", recoveryForced},
 		{"judge_own_pass_blind", "judge-own-pass.md", ownBlind},
 		{"judge_own_pass_dry_run", "judge-own-pass.md", ownDryRun},
 		{"judge_own_pass_restart", "judge-own-pass.md", ownRestart},
@@ -366,6 +418,7 @@ func TestRenderGolden(t *testing.T) {
 		{"judge_initial_failing_checks", "judge-initial.md", withFailingChecks(withHistory(candidates(judgeFixture())))},
 		{"judge_rereview_failing_checks", "judge-rereview.md", withFailingChecks(withHistory(withNotes))},
 		{"judge_continue_failing_checks", "judge-continue.md", withFailingChecks(withRelated(judgeFixture()))},
+		{"judge_recovery_failing_checks", "judge-recovery.md", withFailingChecks(candidates(judgeFixture()))},
 		{"claude_initial_history", "claude-review.md", roleHistory(roleFixture())},
 		{"claude_rereview_history", "claude-rereview.md", roleHistory(roleFixture())},
 		{"claude_restart_history", "claude-restart.md", roleHistory(restartedRereview)},

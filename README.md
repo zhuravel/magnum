@@ -346,7 +346,8 @@ next round's judge reads them anyway. When such replies came on a head Magnum re
 `reply_min_interval` (default `"2h"`) after the last such round on that head, and then the judge alone
 re-decides the threads (`re-decision · 2 replies → 14:09` while it waits, `reply round (2 replies)` in
 `engine.round_start`). The quiet periods, the re-review interval and the daily cap do not hold it, and it
-does not count against the cap. When its verdict and event stay those of its last review, the judge posts
+does not count against the cap; a round that only answers does not hold the next push either, whose
+re-review interval counts from the last review round. When its verdict and event stay those of its last review, the judge posts
 no review: it answers in the threads through `magnum post-review --replies` (an acknowledgement for a
 reason it accepts, since resolving the thread is the author's; one sentence with its evidence for a
 rebuttal; an answer as deep as asked; nothing where a reply needs none), and the round ends `replied`,
@@ -409,8 +410,10 @@ resumed later re-reads its whole conversation uncached on its first turn (25 of 
 ago (default `"90m"`, `"0"` always resumes) starts the next round in a fresh session instead, the way a judge
 whose session was lost does: a re-review becomes a recovery, whose prompt has the judge read its earlier
 reviews and their threads from GitHub, while the reviewers keep their conversations and re-review the new
-commits as usual; a delta check or a re-review of the same head runs with a fresh judge at its
-`rereview_effort`. A judge still live in its pane is quit first, which parks its conversation (history kept).
+commits as usual. Unlike a lost session's, that judge works at its `rereview_effort` and its own pass reviews
+the commits since the last review (the whole PR again after a force push); a delta check or a re-review of
+the same head runs with a fresh judge at its `rereview_effort` too. A judge still live in its pane is quit
+first, which parks its conversation (history kept), and the fresh one starts once herdr no longer lists it.
 A continue finishes its paused turn in the old conversation. Each such start is a `round.judge_fresh_cold`
 event with the idle time.
 

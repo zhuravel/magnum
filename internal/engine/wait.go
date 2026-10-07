@@ -256,7 +256,7 @@ func (w Wait) Sentence(ref string, now time.Time) string {
 func (e *Engine) noteWaits(ctx context.Context, ts tickState) {
 	prs, err := e.st.ListPRs(ctx, store.PRFilter{States: []string{store.PRQueued, store.PRRereviewPending}})
 	if err != nil {
-		e.log.Warn("wait reasons", "err", err)
+		e.warnUnlessStopped(ctx, err, "wait reasons")
 		return
 	}
 	now := e.now()

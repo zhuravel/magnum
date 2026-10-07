@@ -51,7 +51,7 @@ func (e *Engine) observe(ctx context.Context) tickState {
 	if !e.d.DryRun && e.d.Agents != nil {
 		obs, err := e.d.Agents.ObserveSnapshotAt(ctx, snap, capturedAt)
 		if err != nil {
-			e.log.Warn("observe agents", "err", err)
+			e.warnUnlessStopped(ctx, err, "observe agents")
 		}
 		for _, o := range obs {
 			e.onObservation(ctx, o)
@@ -68,8 +68,14 @@ func (e *Engine) observe(ctx context.Context) tickState {
 	return ts
 }
 
-// noteHerdr logs herdr going down or coming back once per transition.
+// noteHerdr logs herdr going down or coming back once per transition. A
+// snapshot that failed because the daemon is stopping (isStop) says nothing
+// about herdr: nothing is noted, and the next live tick decides.
 func (e *Engine) noteHerdr(ctx context.Context, err error) {
+	if err != nil && isStop(ctx, err) {
+		e.log.Debug("herdr snapshot cut short", "err", err)
+		return
+	}
 	up := err == nil
 	if e.herdrUp != nil && *e.herdrUp == up {
 		return

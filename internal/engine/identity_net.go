@@ -12,10 +12,10 @@ package engine
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"strings"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/identity"
 )
 
@@ -30,60 +30,10 @@ const (
 	identityRetryMax   = 4 * time.Minute
 )
 
-// githubPatterns are the connection-class failures of a GitHub API call that
-// networkPatterns do not name: gh's own "error connecting to", Go's dial,
-// TLS and timeout errors, and GitHub's server errors and rate limits.
-var githubPatterns = []errPattern{
-	{"error connecting to", "GitHub unreachable"},
-	{"no such host", "DNS lookup failed"},
-	{"server misbehaving", "DNS lookup failed"},
-	{"tls: ", "TLS failure"},
-	{"x509: ", "TLS failure"},
-	{"i/o timeout", "network timeout"},
-	{"timed out", "network timeout"},
-	{"timeout exceeded", "network timeout"},
-	{"deadline exceeded", "network timeout"},
-	{"broken pipe", "connection reset"},
-	{"network is down", "network unreachable"},
-	{"rate limit", "rate limited"}, // a secondary one too
-	{"too many requests", "rate limited"},
-	{"internal server error", "GitHub server error"},
-	{"bad gateway", "GitHub server error"},
-	{"service unavailable", "GitHub server error"},
-	{"gateway timeout", "GitHub server error"},
-}
-
-var (
-	// serverErrorRe and rateLimitRe find a status in gh's "(HTTP 502)" or
-	// "HTTP 502:" and in the identity package's "POST /path: 502 Bad Gateway".
-	serverErrorRe = regexp.MustCompile(`\bhttp 5\d\d\b|\b(?:get|post|put|patch|delete) /\S*: 5\d\d\b`)
-	rateLimitRe   = regexp.MustCompile(`\bhttp 429\b|\b(?:get|post|put|patch|delete) /\S*: 429\b`)
-	// eofRe is a connection closed mid-answer (`Get "...": EOF`, "unexpected EOF").
-	eofRe = regexp.MustCompile(`(?:: |unexpected )eof\b`)
-)
-
 // connectionCause names the connection-class failure msg reports ("" = none:
-// a real verdict on the identity): the network's (DNS, a timeout, a refused
-// or reset connection, TLS), gh unable to connect, a closed connection, a
-// GitHub server error (5xx) or a rate limit (429, secondary or primary).
-func connectionCause(msg string) string {
-	msg = strings.ToLower(msg)
-	if cause := matchPattern(msg, networkPatterns); cause != "" {
-		return cause
-	}
-	if cause := matchPattern(msg, githubPatterns); cause != "" {
-		return cause
-	}
-	switch {
-	case serverErrorRe.MatchString(msg):
-		return "GitHub server error"
-	case rateLimitRe.MatchString(msg):
-		return "rate limited"
-	case eofRe.MatchString(msg):
-		return "connection closed"
-	}
-	return ""
-}
+// a real verdict on the identity); the classifier is github.ConnectionCause,
+// shared with the pipeline's verification.
+func connectionCause(msg string) string { return github.ConnectionCause(msg) }
 
 // checkConnectionCause names the connection-class failure of a failed
 // identity check ("" = a real verdict): every FAIL line, and the error when

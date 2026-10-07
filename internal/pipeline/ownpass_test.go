@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -254,6 +255,141 @@ func TestOwnPassOfARereview(t *testing.T) {
 	mustContain(t, "own-pass prompt", submits[0].Text, "mode: rereview", "phase: own_pass", "previous_head_sha: "+head2,
 		"Decide the reply contract")
 	mustContain(t, "candidates prompt", submits[1].Text, "mode: rereview", "phase: candidates", "previous_head_sha: "+head2)
+}
+
+// A judge that started fresh only because its prompt cache was cold is
+// prompted at its rereview effort, and its own pass reads the commits since
+// the earlier reviews (cold full re-reviews ran the judge at xhigh, 43k
+// output tokens each, against high when they resumed it); a judge whose
+// session was lost re-reads the whole PR at its full effort.
+func TestAColdJudgesOwnPassReviewsTheNewCommitsAtTheRereviewEffort(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cold bool
+	}{{"cold cache", true}, {"lost session", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t)
+			e.ag.behaviors[agents.RoleJudge] = []behavior{writeOwn(), e.judgePosts(807, "COMMENTED", "COMMENT").behavior(t)}
+			in := e.ownInput(KindRecovery)
+			in.ColdJudge = tc.cold
+			in.Previous = &PreviousReview{ID: 3012345678, Event: "CHANGES_REQUESTED", SHA: prevSHA}
+			res, err := e.r.RunRound(e.ctx, in)
+			if err != nil || res.Outcome != OutcomePosted {
+				t.Fatalf("RunRound = %+v, %v", res, err)
+			}
+			own := e.ag.submitsFor(agents.RoleJudge)[0].Text
+			commits := "git log --oneline " + prevSHA + ".." + target
+			effort := "Work at high reasoning effort"
+			if tc.cold {
+				mustContain(t, "cold own-pass prompt", own, "mode: recovery", commits, effort)
+				return
+			}
+			if strings.Contains(own, commits) || strings.Contains(own, effort) {
+				t.Errorf("a lost session's own pass is scoped to the new commits or at the rereview effort:\n%s", own)
+			}
+		})
+	}
+}
+
+// goneJudge loses the judge's session before the round, as when its start
+// adopted an agent that was quitting (a live case: the own pass got
+// agent_not_found 0.5 s after the start, and the round failed 9 minutes
+// later, after claude-review, with the candidates prompt refused). restart
+// is RoundInput.RestartJudge: it counts its calls and gives the judge a new
+// live session when live is set.
+func goneJudge(t *testing.T, e *env, live bool, err error) (in RoundInput, restarts *int) {
+	t.Helper()
+	if terr := e.st.TransitionSession(e.ctx, e.sess[agents.RoleJudge].ID, nil, store.SessionLost, nil); terr != nil {
+		t.Fatal(terr)
+	}
+	in = e.ownInput(KindRecovery)
+	in.Previous = &PreviousReview{ID: 3012345678, Event: "CHANGES_REQUESTED", SHA: prevSHA}
+	restarts = new(int)
+	in.RestartJudge = func(ctx context.Context) error {
+		*restarts++
+		if live {
+			e.addSession(e.r.Config.JudgeFor(nil))
+		}
+		return err
+	}
+	return in, restarts
+}
+
+// The own pass refused because the judge's session is gone starts the judge
+// once more and sends the pass again in a new own_pass run; the round goes
+// on as usual.
+func TestAnOwnPassRefusedWithNoSessionStartsTheJudgeOnceMore(t *testing.T) {
+	e := newEnv(t)
+	// The refused prompt takes the first behavior.
+	e.ag.behaviors[agents.RoleJudge] = []behavior{hang(), writeOwn(), e.judgePosts(808, "COMMENTED", "COMMENT").behavior(t)}
+	in, restarts := goneJudge(t, e, true, nil)
+	res, err := e.r.RunRound(e.ctx, in)
+	if err != nil || res.Outcome != OutcomePosted || res.ReviewID != 808 {
+		t.Fatalf("RunRound = %+v, %v", res, err)
+	}
+	if *restarts != 1 {
+		t.Fatalf("restarts = %d, want 1", *restarts)
+	}
+	var own []store.Run
+	for _, r := range e.runs() {
+		if r.Role == string(agents.RoleJudge) && r.Kind == store.RunOwnPass {
+			own = append(own, r)
+		}
+	}
+	if len(own) != 2 || own[0].State != store.RunAbandoned || own[1].State != store.RunVerified {
+		t.Fatalf("own-pass runs = %+v, want the refused one abandoned and the second verified", own)
+	}
+	if res.OwnPass == nil || res.OwnPass.Status != ReportOK || res.OwnPass.RunID != own[1].ID {
+		t.Fatalf("own pass = %+v", res.OwnPass)
+	}
+	submits := e.ag.submitsFor(agents.RoleJudge)
+	if len(submits) != 3 || submits[0].Text != submits[1].Text || !strings.Contains(submits[2].Text, "phase: candidates") {
+		t.Fatalf("judge prompts = %d: want the own pass twice, then the candidates", len(submits))
+	}
+	if len(e.eventsOf("round.judge_restarted")) != 1 {
+		t.Errorf("round.judge_restarted events = %v", e.eventsOf("round.judge_restarted"))
+	}
+}
+
+// A second refusal, or a start that fails, ends the round at once with the
+// refusal, the reviewer still at work interrupted and its run abandoned,
+// instead of after the reviewers.
+func TestAnOwnPassRefusedAgainEndsTheRoundAtOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		live bool
+		err  error
+		want string
+	}{
+		{"refused again", false, nil, "no live agent session"},
+		{"the start fails", false, errors.New("agent_pane_busy"), "agent_pane_busy"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t)
+			e.ag.behaviors[agents.RoleClaude] = []behavior{hang()}
+			in, restarts := goneJudge(t, e, tc.live, tc.err)
+			start := e.clock.Now()
+			res, err := e.r.RunRound(e.ctx, in)
+			if err == nil || res.Outcome != OutcomeError || !strings.Contains(res.Error, "also after a restart of the judge") ||
+				!strings.Contains(res.Error, tc.want) {
+				t.Fatalf("RunRound = %+v, %v; want the refusal at once", res, err)
+			}
+			if *restarts != 1 {
+				t.Fatalf("restarts = %d, want 1", *restarts)
+			}
+			if waited := e.clock.Now().Sub(start); waited >= e.r.Config.JudgeFor(nil).Timeout.Duration {
+				t.Fatalf("the round waited %s, as long as the reviewers' timeout", waited)
+			}
+			if claude := e.runOf(agents.RoleClaude, KindRecovery); claude.State != store.RunAbandoned {
+				t.Fatalf("claude-review run = %s, want it interrupted and abandoned", claude.State)
+			}
+			for _, s := range e.ag.submitsFor(agents.RoleJudge) {
+				if strings.Contains(s.Text, "phase: candidates") {
+					t.Fatalf("the judge got the candidates prompt after its session was gone for good")
+				}
+			}
+		})
+	}
 }
 
 // A push while the judge does its own pass cuts it short like a reviewer:

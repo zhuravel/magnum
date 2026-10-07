@@ -3162,3 +3162,96 @@ editing history. Code, config comments and prompts reference these by their head
   `claude-restart.md` now report a pre-existing P1 or P2 in the code the PR touches, marked `nearby`, for the
   judge to prove and list. SKILL.md grows by 226 bytes for this entry and the two before it (`skillMaxBytes`
   34,734).
+- **A cold judge is not lost to the agent it quit** (2026-10-07; amends "A cold judge starts in a fresh session").
+  Of 16 `round.judge_fresh_cold` starts in a day, the 3 that quit a live judge first (`was_live`) started the
+  fresh one 2-18 ms after the quit, while herdr still listed the quitting Codex under the role's agent name, so
+  `StartAgent` adopted it; 2 of the 3 lost the judge (one own pass got `agent_not_found` 0.5 s after the start,
+  and its round failed with "judge prompt refused … no live agent session" after claude-review had worked for
+  9 minutes; another was lost in 44 s). The 13 cold starts of parked judges all worked. Now the cold start
+  polls the herdr snapshot (every 0.5 s, about 10 s in all, engine `quitAgentGone`) until the quit agent's name
+  is gone, and resumes the judge as before when it never goes. A fresh start (no conversation to resume)
+  never adopts an agent whose conversation magnum parked for the PR's role (`agents` `parkedConversation`,
+  the session id herdr reports): it fails with `ErrBusy` and the round retries. And when the own pass's
+  prompt is refused because the judge's session is gone (no live session, herdr's `agent_not_found` or
+  `pane_not_found`), the round starts the judge once more the way it started it (`RoundInput.RestartJudge`:
+  the gone session is marked lost; fresh, or resumed in a re-review, at the same effort) and sends the pass
+  again in a new `own_pass` run (`round.judge_restarted`); a second refusal, or a start that fails, ends the
+  round at once with the refusal, the reviewers still at work interrupted and their runs abandoned, instead
+  of after them. Not done: restarting the judge for the candidates prompt too (that refusal comes after the
+  reviewers' work, and the next round recovers).
+- **A cold re-review's judge works at its rereview effort and reads the commits since the review**
+  (2026-10-07; reverses part of "A cold judge starts in a fresh session", which started such a judge, like a
+  lost session's, at its full effort on the whole PR). Since `judge_fresh_after` went live all 11 cold full
+  re-reviews ran the judge at `xhigh`: about 43k output tokens and 0.80 Codex points per re-review, against
+  0.50-0.56 at `high` when the same re-reviews resumed the judge, so cold full re-reviews became 90% of the
+  Codex spend (1.04 points each, a resumed one 0.75) and the weekly pace 3.4x; the cold quit exists to save
+  usage. Their own passes re-reviewed the whole PR (31 responses and 0.38 points on average, up to 56 on one
+  PR), where a resumed re-review's takes 5-12. A judge started fresh only because its cache went cold
+  (`RoundInput.ColdJudge`) now launches at its `rereview_effort` (engine `judgeEffort`, also when a push
+  parks and resumes it, and for its in-round restart) and is prompted at it (`judgeData`), and its own pass
+  (`judge-own-pass.md`, recovery branch, `agents.JudgeData.ColdJudge`) reads `git log --oneline
+  <previous head>..<head>` and `git diff <previous head>..<head>` and reviews those, the earlier reviews
+  covering the rest of the PR; a push that merged the base keeps the PR's-own-diff comparison, and one that
+  rewrote history reviews the full PR again. A lost session's recovery keeps its full effort and reviews the
+  whole PR, as do initial rounds whose judge was cold.
+- **Only a turn the judge got makes its prompt cache warm** (2026-10-07). `judgeLastTurn` counted any judge
+  run's `ended_at`, also a run whose prompt never reached the judge: on talkable#11792 round 2 started a fresh
+  judge that was lost after 44 s, its unsent run still got `ended_at`, and round 3 took that for a turn a
+  minute old and resumed the 5h22m-old conversation, the cold re-read the rule exists to prevent. Only runs
+  with `submitted_at` count now.
+- **The recovery prompts say when the push rewrote history** (2026-10-07). `judge-recovery.md` and the
+  recovery branch of `judge-own-pass.md` had no `force_pushed`, which `judge-rereview.md` has; with the cold
+  judge a recovery is common (16 cold starts, 13 recovery posts in two days), and after a rebase a fresh judge
+  scoped its review to a commit no longer in the branch. Both now carry `force_pushed:` and, when it is true,
+  the re-review prompt's sentence (the previous head is no longer in the branch: review the full PR diff
+  again, then compare it with the earlier findings).
+- **A reply round does not restart the re-review interval** (2026-10-07). Every round but a continue set
+  `last_round_started_at`, reply rounds too, so after magnum only answered in its threads the author's next
+  push waited up to the full `min_rereview_interval` again. A reply round that ends replied now puts
+  `last_round_started_at` back to the start before it (`roundJob.prevStart`, as a refund does), so the next
+  push is timed from the last review round; while it runs it stays the round's start, which the board, crash
+  recovery and the continue of a paused reply round read. Reply rounds keep their own spacing on their own
+  record (`reply_min_interval` after `pr.<id>.reply_round`), not on the re-review timer. A reply round that
+  posts a review (its verdict changed) counts as a review round; one that fails keeps its start.
+- **A push during a reply round is settled as one during a review round** (2026-10-07). `onReplied` sent a
+  moved head straight to `rereview_pending` without measuring it, so a 1-line push during a reply round got
+  a full round instead of a delta check, and a trivial one (comments, whitespace, docs, a base merge) a
+  re-review. Both endings now share `settleHead`: a trivial delta leaves the review standing for the new head
+  (`reviewed_sha`, a trivial-skip record), any other is recorded for the threshold and the delta check
+  (`recordDelta`) before the PR waits for its re-review.
+- **A daemon stop logs no warnings for the tick it cuts short, and a drift finding is logged once a day**
+  (2026-10-07). A stop cancels the tick's context, and everything the tick then did failed with `context
+  canceled` or `signal: terminated`: 1,062 of the 2,066 warning and error lines since 10-05 (registry reads 640,
+  event appends 88, writes 82, requests 32, wait reasons 26, closed past grace 26, "herdr unreachable" 23, and the
+  gh and git command lines). Those failures now log at debug (`warnUnlessStopped`, which asks `isStop`: the
+  context ended or the error is `context.Canceled`): the registry reads, writes and event appends, the requests,
+  wait reasons, closed-past-grace and agent-observation reads, and a command execx ran whose caller's context was
+  canceled (a command's own timeout, the caller's deadline and a failing exit still warn). A herdr snapshot that
+  failed that way notes nothing, no `herdr.down` event and no `herdr_up=0`; the next live tick decides. The daily
+  retro checks the context after reading its day, since a canceled read answered "" like a day never run.
+  Separately, the reconcile logged the same two orphan-database drift findings at every run (164 lines on
+  10-07): an unsafe finding is now logged once per local day while it persists (`daemon.drift_logged` holds the
+  day by kind and subject, reduced to the current scan, so a finding that went away and came back is logged
+  again and a restart does not repeat the day's lines); status and doctor scan the inventory themselves and
+  still show every finding.
+- **A network failure of the GitHub check no longer fails a round that posted** (2026-10-07). A live round
+  posted its review, then every read of its verification hit "error connecting to api.github.com" within the 3
+  attempts `listReviews` makes seconds apart; the round ended in error (`errUnverified`) and the next round
+  adopted the review 20 minutes later. A connection-class failure (`github.ConnectionCause`, the classifier the
+  identity checks and the infrastructure pause use, moved from the engine into `internal/github` so the
+  pipeline can share it; `github.NetworkCause` is its network-only part, which the infrastructure pause reads
+  after the refused SSH key) that outlasts those reads now waits `verifyNetRetry` (30 s, through the runner's
+  clock) and asks once more, for the review check and for a reply round's thread check (when the judge's
+  result says replied), with a `round.verify_retry` warn event naming the cause, never the error's text. Any
+  other failure, such as not found, fails at once as before, and a network failure that lasts through the
+  second asking still ends the round unverified, to be adopted by the next one. GitHub's 5xx answers and rate
+  limits are connection-class too and get the same one wait.
+- **The judge's own pass names db_lock too** (2026-10-07; completes "The roles of a round take turns on the
+  slot's databases"). The own pass is the judge's turn that runs beside the reviewers, the one most likely to
+  meet them on the slot's databases, but only the judge's later prompts rendered `db_lock`. `judge-own-pass.md`
+  now renders it after `checkout:` like the others (the field was already filled for it).
+- **A recovery's judge gets the head's failing checks too** (2026-10-07; completes the entry that gave the
+  initial, rereview and continue prompts `failing_checks`). A recovery is common since the cold judge starts
+  fresh (13 recovery posts in two days), and its judge decides the review as the others do, but
+  `judge-recovery.md` did not render the field the pipeline already filled for it. It now renders
+  `failing_checks` the way `judge-initial.md` does, only when set.

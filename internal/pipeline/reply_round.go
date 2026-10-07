@@ -83,7 +83,15 @@ func (rd *round) findReplies(ctx context.Context, markers []string) ([]PostedRep
 // result that lists replies GitHub does not show needs attention. ok is
 // false when neither says replied: the usual verdict follows.
 func (rd *round) repliedVerdict(ctx context.Context, markers []string, res *judgeResult) (verdict, bool) {
-	found, err := rd.findReplies(ctx, markers)
+	ask := func() ([]PostedReply, error) { return rd.findReplies(ctx, markers) }
+	var found []PostedReply
+	var err error
+	if res != nil && res.Status == statusReplied {
+		// An error here ends the round: ask again after a network failure.
+		found, err = askAgainOnNetwork(ctx, rd, "the replies", ask)
+	} else {
+		found, err = ask()
+	}
 	if err != nil {
 		if ctx.Err() != nil {
 			return verdict{final: true, outcome: OutcomeStopped, err: ctx.Err()}, true

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"strings"
 
@@ -143,7 +144,7 @@ func (rd *round) runStages(ctx context.Context, runs map[string]*store.Run, own 
 	var op *ownPass
 	var also func() []string // names the judge in a stage's checkout check while its own pass works
 	if own != nil {
-		op = rd.startOwnPass(sctx, *own, marker)
+		op = rd.startOwnPass(sctx, cancel, *own, marker)
 		covered := false // a check ran after the own pass ended: it left nothing unchecked
 		also = func() []string {
 			if covered {
@@ -168,6 +169,10 @@ func (rd *round) runStages(ctx context.Context, runs map[string]*store.Run, own 
 		if ctx.Err() != nil {
 			return fail(ctx.Err())
 		}
+		if gone, ok := errors.AsType[*judgeGoneError](context.Cause(sctx)); ok {
+			rd.stopReviewers(ctx, runs, gone.Error())
+			return fail(gone)
+		}
 		if moved, ok := errors.AsType[*headMovedError](context.Cause(sctx)); ok {
 			if err != nil && !errors.Is(err, context.Canceled) {
 				return fail(err) // a checkout that could not be restored is no place to restart in
@@ -183,6 +188,9 @@ func (rd *round) runStages(ctx context.Context, runs map[string]*store.Run, own 
 		<-op.done // its waits notice a push meanwhile
 		if ctx.Err() != nil {
 			return "", ctx.Err()
+		}
+		if gone, ok := errors.AsType[*judgeGoneError](context.Cause(sctx)); ok {
+			return "", gone
 		}
 		if moved, ok := errors.AsType[*headMovedError](context.Cause(sctx)); ok {
 			return moved.sha, nil
@@ -337,23 +345,51 @@ func (rd *round) restart(ctx context.Context, head string, runs map[string]*stor
 // then the run is abandoned with ReportHeadMoved. A finished run keeps its
 // state. It reports whether the run was cut.
 func (rd *round) settleCut(ctx context.Context, role config.Role, run store.Run, head string) bool {
+	return rd.cutRun(ctx, role, run, "the restart", ReportHeadMoved, "the PR head moved to "+textx.ShortSHA(head))
+}
+
+// cutRun ends role's run that the round's stages cut short (for what): a
+// turn still in flight is interrupted, and an agent waited for until idle
+// (InterruptWait), then the run is abandoned with status and why. A
+// finished run keeps its state. It reports whether the run was cut.
+func (rd *round) cutRun(ctx context.Context, role config.Role, run store.Run, what, status, why string) bool {
 	cur, err := rd.r.Store.RunByID(context.WithoutCancel(ctx), run.ID)
 	if err != nil {
-		rd.logf("pipeline: restart: run %s: %v", run.ID, err)
+		rd.logf("pipeline: %s: run %s: %v", what, run.ID, err)
 		return false
 	}
 	switch cur.State {
 	case store.RunSubmitted, store.RunWorking:
 		rd.interrupt(ctx, role, cur)
 		if !rd.waitIdle(ctx, role, cur) {
-			rd.warn(ctx, "%s still works %s after it was interrupted for the restart", role.Name, InterruptWait)
+			rd.warn(ctx, "%s still works %s after it was interrupted for %s", role.Name, InterruptWait, what)
 		}
 	case store.RunPending, store.RunEnded:
 	default:
 		return false
 	}
-	rd.finishRun(ctx, cur.ID, store.RunAbandoned, ReportHeadMoved, "the PR head moved to "+textx.ShortSHA(head))
+	rd.finishRun(ctx, cur.ID, store.RunAbandoned, status, why)
 	return true
+}
+
+// stopReviewers ends the reviewers' turns still in flight when the round
+// ends before them because the judge's session is gone (judgeGoneError):
+// they are interrupted, so they stop working for a round that is over, and
+// their runs abandoned (ReportCancelled, why).
+func (rd *round) stopReviewers(ctx context.Context, runs map[string]*store.Run, why string) {
+	rd.mu.Lock()
+	cont := maps.Clone(rd.cont)
+	rd.mu.Unlock()
+	for _, role := range rd.running() {
+		run := runs[role.Name]
+		if run == nil {
+			continue
+		}
+		if c, ok := cont[role.Name]; ok {
+			run = &c // the turn in flight is the continuation on a fallback model
+		}
+		rd.cutRun(ctx, role, *run, "the round's end", ReportCancelled, why)
+	}
 }
 
 // AppendToReview adds text as the last paragraph of review reviewID, which

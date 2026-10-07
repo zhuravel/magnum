@@ -171,7 +171,9 @@ func (e *Engine) maybeRetro(ctx context.Context) {
 	if err != nil || now.Before(at) {
 		return
 	}
-	if day, _ := e.getKV(ctx, KVRetroDay); day == store.DayKey(now) {
+	// A read that failed because the daemon is stopping answers "" like a
+	// day never run: it must not start the retro.
+	if day, _ := e.getKV(ctx, KVRetroDay); day == store.DayKey(now) || ctx.Err() != nil {
 		return
 	}
 	if e.retroBusy() || e.userPause(ctx) != "" || e.holdReason(ctx) != "" || e.retroToolPause(ctx) != "" {

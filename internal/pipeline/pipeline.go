@@ -282,8 +282,16 @@ type RoundInput struct {
 	// judge_fresh_after), while the reviewers kept theirs: the judge gets
 	// the recovery prompt, and the reviewers re-review the commits since
 	// the last review as in a re-review (their rereview prompts and effort)
-	// instead of reviewing the whole PR again.
+	// instead of reviewing the whole PR again. The judge works at its
+	// rereview effort too, and its own pass reads the commits since the
+	// previous head unless the push rewrote history
+	// (agents.JudgeData.ColdJudge); a recovery after a lost session reviews
+	// the whole PR at the full effort.
 	ColdJudge bool
+	// RestartJudge starts the round's judge once more in its pane, the way
+	// the round started it, when its session is gone at the own pass's
+	// prompt (ownPassTurn); nil = the own pass fails as any other.
+	RestartJudge func(ctx context.Context) error
 
 	DryRun bool // the judge posts nothing; GitHub is not consulted
 	// Blind (magnum eval, with DryRun): the round replays a pinned head to

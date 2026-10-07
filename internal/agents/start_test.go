@@ -226,6 +226,47 @@ func TestStartAgentRefusesForeignNamedAgent(t *testing.T) {
 	}
 }
 
+// herdr may still list an agent Quit just stopped under the role's name: a
+// fresh start (no conversation to resume) that adopted it lost the cold
+// judge 0.5 s later. An agent whose conversation is one magnum parked for
+// the PR and role is never adopted by a fresh start (ErrBusy: the round
+// retries); one in another conversation still is.
+func TestAFreshStartNeverAdoptsTheConversationMagnumParked(t *testing.T) {
+	name := AgentName("talkable/talkable", 11920, RoleJudge)
+	for label, tc := range map[string]struct {
+		conversation string
+		adopted      bool
+	}{
+		"the parked conversation": {"01a0-uuid", false},
+		"another conversation":    {"02b1-uuid", true},
+	} {
+		t.Run(label, func(t *testing.T) {
+			e := newEnv(t)
+			if _, err := e.st.CreateSession(e.ctx, store.Session{PRID: e.pr.ID, Role: string(RoleJudge), AgentName: &name,
+				AgentKind: store.Ptr(KindCodex), SessionID: store.Ptr("01a0-uuid"), State: store.SessionParked}); err != nil {
+				t.Fatal(err)
+			}
+			ws := e.workspace()
+			e.h.addPane(herdr.Pane{ID: "w1:p9", WorkspaceID: "w1", Cwd: "/Users/x/Projects/talkable.review1"})
+			e.h.addAgent(herdr.AgentInfo{Name: name, PaneID: "w1:p9", WorkspaceID: "w1", Agent: "codex", AgentStatus: herdr.StatusIdle,
+				AgentSession: &herdr.AgentSession{Kind: "id", Value: tc.conversation}})
+			err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleJudge), ws.Panes[RoleJudge], "")
+			if tc.adopted {
+				if err != nil || len(e.h.starts) != 0 || store.Deref(e.session(RoleJudge).HerdrPaneID) != "w1:p9" {
+					t.Fatalf("err %v, starts %+v: want the agent adopted", err, e.h.starts)
+				}
+				return
+			}
+			if !errors.Is(err, ErrBusy) || len(e.h.starts) != 0 {
+				t.Fatalf("err %v, starts %+v: want ErrBusy and no start", err, e.h.starts)
+			}
+			if s := e.session(RoleJudge); s.State == store.SessionLive {
+				t.Fatalf("session = %+v: the parked conversation's agent was adopted", s)
+			}
+		})
+	}
+}
+
 func TestStartAgentErrors(t *testing.T) {
 	e := newEnv(t)
 	ws := e.workspace()

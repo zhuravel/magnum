@@ -3,11 +3,10 @@ Earlier reviews by `talkable[bot]`:
   - 3012345678 REQUEST_CHANGES on `a1b2c3d` (2026-10-03T09:15:00Z)
   - 3012399999 COMMENT on `b2c3d4e` (2026-10-03T10:40:00Z)
 Read them and their threads first (`gh api repos/talkable/talkable/pulls/11920/reviews/<id>/comments`), then follow the skill's re-review section for head `d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3`. Candidate reports for this head are listed below.
-Your own pass, with your reply-contract decisions, is in /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/judge-own.md: judge every candidate against it.
+The author rewrote history: `a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0` is no longer in the branch. Review the full PR diff again, then compare it with your earlier findings.
 
 <magnum>
 mode: recovery
-phase: candidates
 run_id: r-20261003T120000-7
 pr: talkable/talkable#11920
 url: https://github.com/talkable/talkable/pull/11920
@@ -29,13 +28,12 @@ self_authored: false
 previous_review_id: 3012345678
 previous_head_sha: a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0
 since: 2026-10-03T09:15:00Z
-force_pushed: false
+force_pushed: true
 threads_file: 
 reports:
   - claude-review: /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/claude-review.md
   - codex-review: missing (timed out after 40m)
   - claude-simplify: /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/claude-simplify.md
-own_findings: /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/judge-own.md
 result_file: /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/codex-judge.json
 post_review: /Users/bohdan/Projects/magnum/bin/magnum post-review --repo talkable/talkable --pr 11920 --head d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3 --run-id r-20261003T120000-7 --login 'talkable[bot]' --gh-config-dir /Users/bohdan/Projects/magnum/state/gh/talkable-app --review /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/review.json
 post_replies: /Users/bohdan/Projects/magnum/bin/magnum post-review --repo talkable/talkable --pr 11920 --head d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3 --run-id r-20261003T120000-7 --login 'talkable[bot]' --gh-config-dir /Users/bohdan/Projects/magnum/state/gh/talkable-app --replies /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/replies.json
