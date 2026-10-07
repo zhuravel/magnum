@@ -3811,14 +3811,17 @@ editing history. Code, config comments and prompts reference these by their head
   slow shutdown takes about 52 s (30 s for its rounds, 10 s for the toasts' drain, 2 s to cancel them): such
   an install failed with "still loaded 30s after bootout" and left no daemon loaded. The wait is
   `ExitTimeOut` plus 5 s.
-- **A slot log keeps each command's end, in one block** (2026-10-07, amends "Fewer small writes"). The 2 MB
+- **A slot log keeps each command's end, in one file** (2026-10-07, amends "Fewer small writes"). The 2 MB
   cap of the `slot-*`, `provision-*` and `perpr-*` logs was checked before each write, and a command wrote its
   `begin` line alone and then its whole output (up to 2 × 8 MiB) at once: the rotation moved the begin line
-  to `.1` (314-317 bytes on disk) and the 8.4-8.8 MB output stayed, 155 of the 171 MB in `logs/`. A command
-  now writes one block when it ends (begin, output, end), and each stream keeps its last 256 KB after a
-  `[N bytes cut]` line, where a failure shows; a log is never over 2 MB, and a rotation moves whole
-  commands. The begin line now appears when the command ends, not when it starts. An output past execx's
-  8 MiB capture is still cut there, so its kept end is the end of what execx kept.
+  to `.1` (314-317 bytes on disk) and the 8.4-8.8 MB output stayed, 155 of the 171 MB in `logs/`. Each
+  stream now keeps its last 256 KB after a `[N bytes cut]` line, where a failure shows, and the end line
+  carries the error's first line (at most 1,000 characters; the block holds the stderr). The begin line is
+  still written when the command starts, so `tail -f` on a provision log shows which step runs, and the
+  rotation is decided before it, for the largest block a command can append (the begin line, two tails and
+  8 KB for the cut lines, the stderr header and the end line): a command's lines land in one file, and a log
+  is never over 2 MB. An output past execx's 8 MiB capture is still cut there, so its kept end is the end of
+  what execx kept.
 - **`magnum eval score` keeps the score of another head and clears its own stale error** (2026-10-07). A
   rescore matched a saved result against the corpus's defects whatever head the corpus now pins, so findings
   from the reviewed head were scored against the new head's lines, and a rescore that succeeded kept the

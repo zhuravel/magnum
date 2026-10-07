@@ -33,6 +33,7 @@ import (
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/steps"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 // Timeouts of the heavy commands.
@@ -285,9 +286,12 @@ func (m *Manager) runHeavy(ctx context.Context, dir string, env map[string]strin
 }
 
 // runLogged runs a heavy command c, serialized with every other heavy
-// command, and appends a redacted transcript to layout.Logs()/<logName>: one
-// block written after the command (begin, output, end), so a rotation moves
-// whole commands, with each stream cut to its last logStreamTail bytes.
+// command, and appends a redacted transcript to layout.Logs()/<logName>: the
+// begin line when the command starts (`tail -f` shows which step runs), then
+// its output, each stream cut to its last logStreamTail bytes, and the end
+// line. The rotation is decided before the begin line for the largest block
+// a command can append, so a command's lines land in one file and a log stays
+// under SlotLogMax.
 func (m *Manager) runLogged(ctx context.Context, c execx.Cmd, logName string) error {
 	release, err := m.acquireHeavy(ctx)
 	if err != nil {
@@ -296,9 +300,9 @@ func (m *Manager) runLogged(ctx context.Context, c execx.Cmd, logName string) er
 	defer release()
 	label := c.Label
 	begin := fmt.Sprintf("== %s begin %s: %s\n", store.FormatTime(m.now()), label, c.String())
+	m.appendLog(logName, begin, len(begin)+2*logStreamTail+logBlockSlack)
 	res, err := m.d.Run.Run(ctx, c)
 	var b strings.Builder
-	b.WriteString(begin)
 	writeTail(&b, res.Stdout)
 	if len(res.Stderr) > 0 {
 		b.WriteString("--- stderr ---\n")
@@ -309,10 +313,12 @@ func (m *Manager) runLogged(ctx context.Context, c execx.Cmd, logName string) er
 	}
 	status := fmt.Sprintf("exit %d (%s)", res.Code, res.Duration.Round(time.Millisecond))
 	if err != nil {
-		status += ": " + err.Error()
+		// The error repeats the stderr the block already holds: its first
+		// line, clipped, keeps the end line within logBlockSlack.
+		status += ": " + textx.Clip(textx.FirstLine(err.Error()), logEndErrMax)
 	}
 	fmt.Fprintf(&b, "== %s end %s: %s\n", store.FormatTime(m.now()), label, status)
-	m.transcript(logName, b.String())
+	m.appendLog(logName, b.String(), 0)
 	if err != nil {
 		return fmt.Errorf("slots: %s: %w", label, err)
 	}
@@ -347,9 +353,25 @@ const SlotLogMax = 2 << 20
 // far under SlotLogMax, so the cap rotates whole commands.
 const logStreamTail = 256 << 10
 
+// logBlockSlack bounds the rest of a command's block past its begin line and
+// two stream tails: the cut lines, the stderr header and the end line, whose
+// error is clipped to logEndErrMax characters.
+const (
+	logBlockSlack = 8 << 10
+	logEndErrMax  = 1000
+)
+
 // transcript appends redacted text to a log file under layout.Logs(),
 // rotated at SlotLogMax; best effort.
 func (m *Manager) transcript(logName, text string) {
+	m.appendLog(logName, text, len(text))
+}
+
+// appendLog appends redacted text to layout.Logs()/<logName>, first moving
+// the log to <logName>.1 (replacing the previous one) when its size plus
+// reserve would pass SlotLogMax; reserve 0 never rotates, for the rest of a
+// block whose begin reserved room. Best effort.
+func (m *Manager) appendLog(logName, text string, reserve int) {
 	if !m.d.Layout.Valid() || logName == "" {
 		return
 	}
@@ -360,7 +382,7 @@ func (m *Manager) transcript(logName, text string) {
 	}
 	text = execx.Redact(text)
 	path := filepath.Join(dir, logName)
-	if fi, err := os.Stat(path); err == nil && fi.Size() > 0 && fi.Size()+int64(len(text)) > SlotLogMax {
+	if fi, err := os.Stat(path); err == nil && reserve > 0 && fi.Size() > 0 && fi.Size()+int64(reserve) > SlotLogMax {
 		if err := os.Rename(path, path+".1"); err != nil {
 			m.logf("slots: rotate log: %v", err)
 		}

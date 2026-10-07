@@ -97,3 +97,66 @@ func TestRunLoggedKeepsTheTailOfALargeOutput(t *testing.T) {
 		t.Fatalf("small log = %q", b)
 	}
 }
+
+// The begin line is in the log while the command runs, so `tail -f` on a
+// provision log during a 45-minute setup shows which step runs; the output
+// and the end line follow it when the command ends.
+func TestRunLoggedWritesTheBeginLineAtOnce(t *testing.T) {
+	h := newHarness(t)
+	path := filepath.Join(h.layout.Logs(), "provision-review1.log")
+	started, finish := make(chan struct{}), make(chan struct{})
+	h.fake.Rules = append([]execx.Rule{{Prefix: []string{"setup"}, Fn: func(execx.Cmd) (execx.Result, error) {
+		close(started)
+		<-finish
+		return execx.Result{Stdout: []byte(strings.Repeat("row\n", 1<<20) + "setup done\n")}, nil
+	}}}, h.fake.Rules...)
+	done := make(chan error, 1)
+	go func() {
+		done <- h.m.runLogged(h.ctx, execx.Cmd{Name: "setup", Label: "setup review1: bin/worktree-setup"}, "provision-review1.log")
+	}()
+
+	<-started
+	b, rerr := os.ReadFile(path)
+	running := string(b)
+	close(finish)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if rerr != nil || !strings.Contains(running, "begin setup review1: bin/worktree-setup") || strings.Contains(running, " end ") {
+		t.Fatalf("log while the command runs = %q, %v; want its begin line alone", running, rerr)
+	}
+	log := readFile(t, path)
+	if strings.Count(log, " begin ") != 1 || !strings.HasPrefix(log, running) || !strings.Contains(log, "setup done\n") ||
+		!strings.Contains(log, "end setup review1: bin/worktree-setup: exit 0") {
+		t.Fatalf("log after the command = %d bytes, want the begin line, the output's end and the end line", len(log))
+	}
+}
+
+// The rotation is decided before the begin line, for the largest block a
+// command can append: a log 300 KB under the cap moves to .1 first, and the
+// begin line, the output and the end line land together in the new file,
+// which stays under the cap.
+func TestRunLoggedRotatesBeforeTheBeginLine(t *testing.T) {
+	h := newHarness(t)
+	path := filepath.Join(h.layout.Logs(), "slot-review1.log")
+	before := strings.Repeat("o", SlotLogMax-300<<10-1) + "\n"
+	h.m.transcript("slot-review1.log", before)
+	h.fake.Rules = append([]execx.Rule{{Prefix: []string{"seed"}, Result: execx.Result{
+		Stdout: []byte(strings.Repeat("INSERT INTO t VALUES (1);\n", 3<<20/26) + "seeded\n"),
+		Stderr: []byte(strings.Repeat("warning\n", 64<<10) + "stderr tail\n")}}}, h.fake.Rules...)
+
+	if err := h.m.runLogged(h.ctx, execx.Cmd{Name: "seed", Label: "reset_db review1: bin/rails db:seed"}, "slot-review1.log"); err != nil {
+		t.Fatal(err)
+	}
+	if old := readFile(t, path+".1"); old != before {
+		t.Fatalf(".1 = %d bytes, want the %d bytes before the command and nothing of it", len(old), len(before))
+	}
+	log := readFile(t, path)
+	if !strings.HasPrefix(log, "== ") || !strings.Contains(log, "begin reset_db review1") || !strings.Contains(log, "seeded\n") ||
+		!strings.Contains(log, "stderr tail\n") || !strings.Contains(log, "end reset_db review1: bin/rails db:seed: exit 0") {
+		t.Fatalf("log = %d bytes, want begin, output and end together", len(log))
+	}
+	if len(log) > SlotLogMax {
+		t.Fatalf("log = %d bytes, over the cap", len(log))
+	}
+}
