@@ -43,5 +43,6 @@ notes_unlock: rmdir /Users/bohdan/Projects/magnum/state/notes/talkable/talkable.
 codex_project: declined
 result_file: /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/codex-judge.json
 post_review: /Users/bohdan/Projects/magnum/bin/magnum post-review --repo talkable/talkable --pr 11920 --head d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3 --run-id r-20261003T120000-7 --login 'talkable[bot]' --gh-config-dir /Users/bohdan/Projects/magnum/state/gh/talkable-app --review /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/review.json
+post_replies: /Users/bohdan/Projects/magnum/bin/magnum post-review --repo talkable/talkable --pr 11920 --head d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3 --run-id r-20261003T120000-7 --login 'talkable[bot]' --gh-config-dir /Users/bohdan/Projects/magnum/state/gh/talkable-app --replies /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/replies.json
 dry_run: false
 </magnum>

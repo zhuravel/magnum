@@ -314,10 +314,14 @@ type JudgeData struct {
 	// replies came on the judge's review since it last read the threads,
 	// with no new commits. When its verdict and event stay those of its
 	// last review, the judge posts no review but answers in the threads
-	// with PostRepliesCommand (PostRepliesLine, rendered as
-	// `post_replies`), which posts RepliesFile (<report dir>/replies.json,
-	// derived from ResultFile when empty); both always derived, and empty
-	// outside a reply round. 0 = not a reply round.
+	// with PostRepliesCommand. 0 = not a reply round.
+	//
+	// PostRepliesCommand (PostRepliesLine, rendered as `post_replies`)
+	// posts RepliesFile (<report dir>/replies.json, derived from ResultFile
+	// when empty): every thread reply of the judge, alone in a reply round
+	// or after its review in any round with an earlier review (Replies,
+	// PreviousReviewID or PreviousHeadSHA set). Both always derived; empty
+	// in a first review.
 	Replies                         int
 	RepliesFile, PostRepliesCommand string
 	// StopThreads counts the threads of Threads marked Stop: the prompt
@@ -418,7 +422,7 @@ func (d *JudgeData) completed() JudgeData {
 	out.PostReviewCommand = PostReviewLine(out)
 	out.DBLockCommand = DBLockLine(out.Magnum, out.Checkout, out.Role)
 	out.RepliesFile, out.PostRepliesCommand = "", ""
-	if d.Replies > 0 {
+	if d.Replies > 0 || d.PreviousReviewID != 0 || d.PreviousHeadSHA != "" {
 		out.RepliesFile = cmp.Or(d.RepliesFile, filepath.Join(filepath.Dir(out.ResultFile), PostRepliesFile))
 		out.PostRepliesCommand = PostRepliesLine(out)
 	}

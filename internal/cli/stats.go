@@ -67,7 +67,8 @@ func newStatsCmd(c *Context) *cobra.Command {
 			"no run is still going.\n\n"+
 			"ROUNDS counts the review rounds that began in the window and how each one ended (posted, stopped, "+
 			"error, ..., or running while a run is still going). FINDINGS POSTED adds up the P0 to P3 counts in "+
-			"the judge's result of every posted round.\n\n"+
+			"the judge's result of every posted round: the new findings it posted (a re-review's earlier findings "+
+			"still open count in the round that first posted them).\n\n"+
 			"DURATIONS gives the median and the 90th percentile of each role's turn (the judge's own pass apart "+
 			"from its main run, as \"<judge> own pass\") and of the whole round. "+
 			"SOURCES shows, for each reviewer role and for the judge's own pass, how many findings the judge "+

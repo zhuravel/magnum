@@ -486,6 +486,36 @@ func TestStatsJudgeResultIgnoresTheOwnPass(t *testing.T) {
 	}
 }
 
+// A re-review's result counts only what it posts as new: findings still
+// open from earlier reviews go into previous_findings.open, and a source
+// that raises one again is a duplicate. About 21 of 134 posted findings
+// since 10-05 repeated an earlier round's, mostly under `judge`, so stats
+// overstated the own pass. One new P2 and two still-open P1s: FINDINGS
+// POSTED counts the P2, SOURCES one posted finding for codex-review and none
+// for the judge.
+func TestStatsCountOnlyTheNewFindingsOfAReReview(t *testing.T) {
+	t0 := statsOct(3, 10, 0)
+	judge := statsRR("j", 1, 5, 2, store.RoleJudge, store.RunVerified, t0)
+	judge.Kind, judge.Outcome = store.RunRereview, store.Ptr("posted")
+	judge.SubmittedAt, judge.EndedAt, judge.VerifiedAt = statsOpt(t0), statsOpt(t0.Add(10*time.Minute)), statsOpt(t0.Add(11*time.Minute))
+	judge.ResultJSON = store.Ptr(`{"status":"posted","verdict":"blocking","findings":{"P0":0,"P1":0,"P2":1,"P3":0},` +
+		`"previous_findings":{"fixed":0,"open":{"P0":0,"P1":2,"P2":0,"P3":0},"answered":0,"rebutted":0}}`)
+	fs := []store.Finding{
+		{FindingID: "F1", Severity: "P2", Sources: []string{"codex-review"}, Verdict: store.FindingPosted, CreatedAt: t0.Add(11 * time.Minute), Repo: "talkable/talkable"},
+		{FindingID: "F2", Severity: "P1", Sources: []string{"judge"}, Verdict: store.FindingRejected, ReasonCode: "duplicate", CreatedAt: t0.Add(11 * time.Minute), Repo: "talkable/talkable"},
+	}
+	r := statsCompute([]store.RoundRun{judge}, fs, nil, func(role string) bool { return role == store.RoleJudge }, t0.Add(-time.Hour), t0.Add(time.Hour), "")
+	if !reflect.DeepEqual(r.Total.FindingsPosted, map[string]int{"P2": 1}) {
+		t.Errorf("findings posted = %v, want P2 1", r.Total.FindingsPosted)
+	}
+	if s := r.Total.Sources["codex-review"]; s == nil || s.Judged != 1 || s.Posted != 1 || s.Unique != 1 {
+		t.Errorf("codex-review = %+v, want 1 posted", s)
+	}
+	if s := r.Total.Sources[statsJudgeSource]; s == nil || s.Posted != 0 || s.Rejected != 1 || s.Reasons["duplicate"] != 1 {
+		t.Errorf("judge = %+v, want none posted and one duplicate", s)
+	}
+}
+
 func TestStatsComputeSourcesDeduplicatesAndSkipsEmpty(t *testing.T) {
 	t0 := statsOct(3, 10, 0)
 	fs := []store.Finding{

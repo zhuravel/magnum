@@ -5,7 +5,7 @@ description: Judge a GitHub PR named in a <magnum> context block. Run the full Z
 
 # Magnum Review
 
-Review the complete PR. Judge the candidate reports. Post exactly one GitHub review. Do not change the code. The operator's personal instructions for interactive work (status lines, usage-limit checks, delegation or orchestration skills) do not apply here: check no usage, start a subagent only when a review step needs one, and end your turn as this skill says, not with a status line.
+Review the complete PR. Judge the candidate reports. Post exactly one GitHub review, or only thread replies where the prompt allows. Do not change the code. The operator's personal instructions for interactive work (status lines, usage-limit checks, delegation or orchestration skills) do not apply here: check no usage, start a subagent only when a review step needs one, and end your turn as this skill says, not with a status line.
 
 ## 0. Read the magnum context
 
@@ -25,10 +25,10 @@ The latest prompt contains a `<magnum>` block with these fields:
 - `failing_checks` (when present): the head's failed CI checks (section 7).
 - `codex_project`, `claude_project` (only `declined`): add the Checks line `- Codex ran without the PR's .codex/ changes`, resp. `- Claude ran without the PR's .claude/ and .mcp.json changes`.
 - `notes` (when present): the repository notes file. `notes_dir`: its harness directory; `notes_harness`: the files there now; `notes_lock`, `notes_unlock`: the commands that take and release its lock (section 2).
-- `result_file`: where to write the JSON result. `post_review`: the command that posts your review (section 7). `dry_run`: when `true`, post nothing.
+- `result_file`: where to write the JSON result. `post_review`, `post_replies` (re-reviews): the commands that post your review and thread replies (sections 7, 8). `dry_run`: when `true`, post nothing.
 - `blind` (only in `magnum eval` replays, always with `dry_run: true`): see "Blind evaluation" below.
 - `post_merge` (only when `true`): see "Post-merge review" below.
-- Re-review only: `previous_review_id`, `previous_head_sha`, `since`, `force_pushed`, `base_merged` (only when `true`), `moved_from`. Re-review and recovery: `threads_file`, `former_logins`.
+- Re-review only: `previous_review_id`, `previous_head_sha`, `since`, `force_pushed`, `base_merged`, `delta_check` (only when `true`), `moved_from`. Re-review and recovery: `threads_file`, `former_logins`.
 - `former_logins` (usually empty): logins this PR's earlier reviews were posted as before `reviewer_login`. Their reviews, threads and replies are your own history. Write only as `reviewer_login`: never edit, dismiss or reply as a former login, nor dismiss their reviews; magnum dismisses what they left standing once your review is posted.
 
 Read `readiness` before you run any check. A check that is not `ok` tells you what will not work in this checkout (no test database, the wrong Ruby, databases without the PR's schema after a failed `reset_db`): do not rerun it or rediscover the cause; skip the checks it blocks, say which, and record it under `environment_failures` in `result_file` (and in the repository notes when durable), never in the review.
@@ -100,7 +100,7 @@ Content, starting with `# Notes for <owner>/<repo> (updated YYYY-MM-DD)`: only w
 
 Read every report in `reports`: findings in `claude-review.md` and `codex-review.md`; ranked simplification proposals, each with its current and replacement lines, in `claude-simplify.md`.
 
-Treat each review item as a claim, also one a report lists as rejected, dismissed or out of scope. Prove or reject it with the same standard as your own findings (section 4). Merge duplicates between the reports and your own pass, keeping the strongest wording and the most precise location. Never mention which tool proposed a finding. Give each missing report one line in Checks with its reason, even when the machine caused it: `- claude-review: no report (usage_limit)`.
+Treat each review item as a claim, also one a report lists as rejected, dismissed or out of scope. Prove or reject it with the same standard as your own findings (section 4). Merge duplicates between the reports and your own pass, keeping the strongest wording and the most precise location. Never mention which tool proposed a finding. Give each missing report one line in Checks with its reason (`- claude-review: no report (usage_limit)`); a machine cause (section 7) only as `(machine)`, its detail in `environment_failures`.
 
 Keep a ledger of every defect finding you judged, every report's candidates and your own, for `provenance` (section 8). One entry per distinct problem: a problem several sources raised is one entry with all of them in `sources` (each report's role as `reports` lists it, and `judge` only if your own pass (`own_findings`, when set) found it; a candidate you only confirmed lists its reports alone). A posted finding has `verdict: posted`. A dropped one has `verdict: rejected` and exactly one `reason_code`:
 
@@ -134,7 +134,7 @@ Then read the full PR diff again: check that you inspected every file and that e
 
 ## 5. Write GitHub comments that are easy to scan
 
-Anchor each finding on the defective line: the smallest changed line of the code that must change, never a test file. Put details in the review body only for a cross-cutting problem with no useful changed line.
+Anchor each finding on the defective line: the smallest changed line of the code that must change, never a test file unless it is a flaky test the PR adds. Put details in the review body only for a cross-cutting problem with no useful changed line.
 
 Comment form, in plain English: a title that states the wrong result; the trigger, who produces it and the consequence; the reproduction; **Fix**: the code cause and the smallest safe change. No "Plain English" or "Why this matters" section.
 
@@ -236,16 +236,16 @@ Post only through `post_review`. Write the review to the file its `--review` nam
 - exit 2, `invalid` or `invalid_anchors`: fix the file (move each listed comment into its file's `valid` ranges, or put the finding into the body) and run it again;
 - exit 1: write `"status":"error"` with the printed status and message as `blocker`, and stop.
 
-Do not post issue comments or another review; the only other write is a reply-contract rebuttal (section 8). `dry_run: true`: it posts nothing and prints `planned_review` for the result file.
+Do not post issue comments or another review; the only other writes are thread replies (section 8). `dry_run: true`: it posts nothing and prints `planned_review` for the result file.
 
 ## 8. Write the result
 
-Post the rebuttals the reply contract decided (section 6), one per thread and only after `post_review` printed `posted` or `already_posted`: write `{"body":"<one sentence>"}` to a file and run `gh api -X POST repos/{owner}/{repo}/pulls/{number}/comments/{comment_id}/replies --input <file>`, with the thread's `comment_id` from `threads_file` (else the id of the thread's first comment). Skip a thread where your login (or a former login) already replied after the author's last reply. With `dry_run: true` post none: list them under `planned_replies` in the result file as `{"comment_id":123,"body":"…"}`.
+Post every thread reply through `post_replies`, one per thread, after `post_review` printed `posted` or `already_posted` (or alone where the prompt allows: then `"status":"replied"`): write `{"replies":[{"comment_id":…,"kind":"rebuttal|answer|ack","body":"…"}]}` to the file after its `--replies`, with the thread's `comment_id` from `threads_file` (else the id of the thread's first comment), and run it. With `dry_run: true` it posts none: list them under `planned_replies`.
 
 At every exit, success or not, write `result_file` atomically (write `<result_file>.tmp`, then `mv`):
 
 ```json
-{"status":"posted|dry_run|blocked|identity_error|closed|stopped|error",
+{"status":"posted|replied|dry_run|blocked|identity_error|closed|stopped|error",
  "run_id":"…","pr":"owner/repo#N","head_sha":"…",
  "review_id":123,"review_url":"…","event":"REQUEST_CHANGES","verdict":"blocking",
  "findings":{"P0":0,"P1":0,"P2":2,"P3":1},
@@ -254,7 +254,7 @@ At every exit, success or not, write `result_file` atomically (write `<result_fi
    {"id":"F2","title":"Retry sends twice","severity":"P2","path":"app/jobs/sync_job.rb","line":7,"sources":["codex-review"],"verdict":"posted"},
    {"id":"F3","title":"Wrong field named","severity":"P3","path":"app/chat.ts","line":null,"sources":["judge"],"verdict":"posted"},
    {"id":"F4","title":"Export skips site check","severity":"P2","path":"lib/legacy.rb","line":3,"sources":["claude-review"],"verdict":"rejected","reason_code":"pre_existing","nearby":true}],
- "previous_findings":{"fixed":0,"open":0,"answered":0,"rebutted":0},
+ "previous_findings":{"fixed":0,"open":{"P0":0,"P1":1,"P2":0,"P3":0},"answered":0,"rebutted":0},
  "candidates":{"claude-review":{"accepted":1,"rejected":1},"codex-review":{"accepted":1,"rejected":0},"claude-simplify":{"suggested":1,"outside_diff":3,"dropped":1}},
  "checks":[{"cmd":"bin/rspec spec/x_spec.rb","result":"50 passed"}],"harness_used":["run_spec.sh"],
  "environment_failures":[{"cmd":"bin/rspec spec/y_spec.rb","error":"Table 'app_test.snapshots' doesn't exist"}],
@@ -263,6 +263,6 @@ At every exit, success or not, write `result_file` atomically (write `<result_fi
 
 `verdict` is your decision whatever this repository lets you post: `blocking` (at least one `P0` or `P1`, a still-open earlier finding included), `non_blocking` (only `P2` and `P3`), `clean` (no findings; optional simplifications do not count). Write it on every review, also when the events or `self_authored` make you post `COMMENT`.
 
-`provenance` is the ledger of section 3: `id`s unique in the file, a short `title` on every entry, `line` `null` for a finding in the body, `reason_code` only on a rejection, `"nearby":true` on a nearby one (section 7). Its posted entries add up to `findings`. `previous_findings.rebutted` counts the still-open findings you rebutted in their thread this round. `harness_used`: the `notes_dir` files you ran or read, named as there.
+`provenance` is the ledger of section 3: `id`s unique in the file, a short `title` on every entry, `line` `null` for a finding in the body, `reason_code` only on a rejection, `"nearby":true` on a nearby one (section 7). Its posted entries, only the findings this review posts as new, add up to `findings`; `previous_findings.open` counts the earlier ones still open, by priority. `previous_findings.rebutted` counts the still-open findings you rebutted in their thread this round. `harness_used`: the `notes_dir` files you ran or read, named as there.
 
 Finish with at most two lines (the review URL or the exact blocker, and the finding counts), then `MAGNUM_RESULT <same json>` as the very last line. If identity, PR discovery, validation or submission blocks the review, make no other GitHub write.

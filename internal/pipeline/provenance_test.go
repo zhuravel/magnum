@@ -170,6 +170,43 @@ func TestPostedRoundRecordsFindings(t *testing.T) {
 	}
 }
 
+// A re-review's result counts only the findings it posts as new and gives
+// the earlier ones still open by priority: the round records the new
+// finding alone, and the PR's review summary (what auto-approval and the
+// board read) carries the open counts, so a reader knows the PR is still
+// blocked without the review's verdict line.
+func TestReReviewKeepsTheOpenFindingsByPriority(t *testing.T) {
+	e := newEnv(t)
+	p := e.judgePosts(602, "CHANGES_REQUESTED", "REQUEST_CHANGES")
+	p.findings = map[string]int{"P0": 0, "P1": 0, "P2": 1, "P3": 0}
+	p.extra = map[string]any{
+		"verdict": "blocking",
+		"provenance": []any{
+			map[string]any{"id": "F1", "title": "Retry sends twice", "severity": "P2", "path": "app/jobs/sync_job.rb", "line": 7, "sources": []string{"codex-review"}, "verdict": "posted"},
+		},
+		"previous_findings": map[string]any{"fixed": 0, "open": map[string]int{"P0": 0, "P1": 2, "P2": 0, "P3": 0}, "answered": 0, "rebutted": 0},
+	}
+	e.ag.behaviors[agents.RoleJudge] = []behavior{p.behavior(t)}
+	in := e.input(KindRereview)
+	in.Previous = &PreviousReview{ID: 901, Event: "CHANGES_REQUESTED", SHA: prevSHA, SubmittedAt: t0.Add(-time.Hour)}
+	if res, err := e.r.RunRound(e.ctx, in); err != nil || res.Outcome != OutcomePosted {
+		t.Fatalf("RunRound = %+v, %v", res, err)
+	}
+	fs, err := e.st.FindingsByPR(e.ctx, e.pr.ID)
+	if err != nil || len(fs) != 1 || fs[0].Severity != "P2" || !reflect.DeepEqual(fs[0].Sources, []string{"codex-review"}) {
+		t.Fatalf("findings = %+v, %v", fs, err)
+	}
+	sums, err := e.st.LastReviewSummaries(e.ctx, []int64{e.pr.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum, ok := sums[e.pr.ID]
+	if !ok || sum.Counts != [4]int{0, 0, 1, 0} || sum.Open != 2 || sum.OpenCounts == nil || *sum.OpenCounts != [4]int{0, 2, 0, 0} ||
+		sum.Verdict != store.VerdictBlocking || sum.ReviewID != 602 {
+		t.Fatalf("summary = %+v (%v), open %v", sum, ok, sum.OpenCounts)
+	}
+}
+
 func TestFindingsAreRecordedOnlyForAPostedRoundWithProvenance(t *testing.T) {
 	// An older result file: no provenance, no rows.
 	e := newEnv(t)

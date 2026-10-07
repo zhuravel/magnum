@@ -762,10 +762,14 @@ type JudgeData struct {
 	// replies came on the judge's review since it last read the threads,
 	// with no new commits. When its verdict and event stay those of its
 	// last review, the judge posts no review but answers in the threads
-	// with PostRepliesCommand (PostRepliesLine, rendered as
-	// `post_replies`), which posts RepliesFile (<report dir>/replies.json,
-	// derived from ResultFile when empty); both always derived, and empty
-	// outside a reply round. 0 = not a reply round.
+	// with PostRepliesCommand. 0 = not a reply round.
+	//
+	// PostRepliesCommand (PostRepliesLine, rendered as `post_replies`)
+	// posts RepliesFile (<report dir>/replies.json, derived from ResultFile
+	// when empty): every thread reply of the judge, alone in a reply round
+	// or after its review in any round with an earlier review (Replies,
+	// PreviousReviewID or PreviousHeadSHA set). Both always derived; empty
+	// in a first review.
 	Replies                         int
 	RepliesFile, PostRepliesCommand string
 	// StopThreads counts the threads of Threads marked Stop: the prompt
@@ -11594,12 +11598,14 @@ func NeedsMe(f NeedsMeFacts, mine func(login string) bool) string
     request, an unread gate or a list of opinions GitHub cut leaves it alone.
 
 func ParseReviewResult(data []byte, sum *ReviewSummary) bool
-    ParseReviewResult fills sum from a judge result file (the skill's section
-    8 JSON): findings by priority, simplifications suggested (the candidates'
-    `suggested`), earlier findings, the posted event and the verdict. A result
-    without a verdict (written before the skill had one) gets it from the
-    counts: P0 or P1 blocks, other findings or still-open earlier ones comment,
-    none is clean. It reports false when data is not a result.
+    ParseReviewResult fills sum from a judge result file (the skill's section 8
+    JSON): new findings by priority, simplifications suggested (the candidates'
+    `suggested`), earlier findings (previous_findings.open by priority, or,
+    in an older result, their number), the posted event and the verdict. A
+    result without a verdict (written before the skill had one) gets it from the
+    counts: a P0 or P1, new or still open, blocks, other findings or still-open
+    earlier ones comment, none is clean. It reports false when data is not a
+    result.
 
 func ParseTime(s string) (time.Time, error)
     ParseTime parses any RFC3339 timestamp (with or without a fraction) and
@@ -12445,18 +12451,24 @@ type ReviewSummary struct {
 	Event           string    `json:"event"`     // what was posted: APPROVE, REQUEST_CHANGES or COMMENT
 	URL             string    `json:"url,omitempty"`
 	At              time.Time `json:"at"`
-	Counts          [4]int    `json:"counts"`          // P0..P3 posted this round
+	Counts          [4]int    `json:"counts"`          // P0..P3 posted as new this round
 	Simplifications int       `json:"simplifications"` // optional suggestions posted this round
 	Fixed           int       `json:"fixed"`           // earlier findings fixed (a re-review)
 	Open            int       `json:"open"`            // earlier findings still open
-	Answered        int       `json:"answered"`        // earlier findings answered with a reason
-	Verdict         string    `json:"verdict"`         // VerdictBlocking, VerdictNonBlocking or VerdictClean
+	// OpenCounts is Open by priority, P0..P3 (the result's
+	// previous_findings.open as an object); nil when the result gives only
+	// their number (written before the skill split them), so their
+	// priorities are unknown.
+	OpenCounts *[4]int `json:"open_counts,omitempty"`
+	Answered   int     `json:"answered"` // earlier findings answered with a reason
+	Verdict    string  `json:"verdict"`  // VerdictBlocking, VerdictNonBlocking or VerdictClean
 }
     ReviewSummary is what a PR's latest posted review round concluded,
     read from the judge's result file the round stored (runs.result_json):
-    the findings it posted by priority, the simplifications it suggested,
-    how the earlier findings stood, and its verdict. A repository whose policy
-    only comments still has a verdict here: what the review would have decided.
+    the new findings it posted by priority, the simplifications it suggested,
+    how the earlier findings stood (those still open by priority, when the
+    result gives them), and its verdict. A repository whose policy only comments
+    still has a verdict here: what the review would have decided.
 
 func (s ReviewSummary) Findings() int
     Findings is the number of findings posted this round.

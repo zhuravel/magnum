@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -150,7 +151,10 @@ func TestSkillHeadsAReReviewOfAnUnchangedHead(t *testing.T) {
 // claude-review reports only what the judge can post: of the candidates only
 // claude-review raised, 3 were posted and 302 rejected (speculative 108,
 // style_only 73, pre_existing 29). Its prompts no longer ask for uncertain
-// findings and leave out style-only and pre-existing problems.
+// findings and leave out style-only and pre-existing problems, but for a
+// pre-existing P1 or P2 in the code the PR touches, which the judge lists
+// as nearby (SKILL.md section 7): since migration 0021 the judge rejected
+// 16 candidates as pre_existing and listed none nearby.
 func TestClaudeReviewPromptsLeaveOutUncertainStyleAndPreExistingFindings(t *testing.T) {
 	restart := roleFixture()
 	restart.Mode, restart.RestartedFrom = ModeRestart, "f1cc4f9e0d1c2b3a4f5e6d7c8b9a0f1e2d3c4b5a"
@@ -162,8 +166,9 @@ func TestClaudeReviewPromptsLeaveOutUncertainStyleAndPreExistingFindings(t *test
 		if strings.Contains(got, "uncertain") {
 			t.Errorf("%s asks for uncertain findings:\n%s", name, got)
 		}
-		if !strings.Contains(got, "Leave out style-only problems and pre-existing ones (problems this PR neither introduces nor exposes).") {
-			t.Errorf("%s does not exclude style-only and pre-existing problems:\n%s", name, got)
+		if !strings.Contains(got, "Leave out style-only problems and pre-existing ones (problems this PR neither introduces nor exposes), "+
+			"but report a pre-existing P1 or P2 in the code the PR touches, marked `nearby`.") {
+			t.Errorf("%s does not exclude style-only and pre-existing problems, nearby ones aside:\n%s", name, got)
 		}
 	}
 }
@@ -200,7 +205,7 @@ func TestSkillListsProvenProblemsNextDoorApart(t *testing.T) {
 // next to the judge's role, that none of that applies in a review.
 func TestSkillSetsTheOperatorsInteractiveHabitsAside(t *testing.T) {
 	skillSays(t, []string{
-		"Review the complete PR. Judge the candidate reports. Post exactly one GitHub review. Do not change the code. " +
+		"Review the complete PR. Judge the candidate reports. Post exactly one GitHub review, or only thread replies where the prompt allows. Do not change the code. " +
 			"The operator's personal instructions for interactive work (status lines, usage-limit checks, delegation or orchestration skills) do not apply here: " +
 			"check no usage, start a subagent only when a review step needs one, and end your turn as this skill says, not with a status line.\n",
 	}, nil)
@@ -275,6 +280,83 @@ func TestSkillCarriesTheRulesFromMisses(t *testing.T) {
 	}, []string{"a copy of a helper that misses its edge cases", "and this PR does not make it worse;"})
 }
 
+// Still-open findings were recorded again as posted, mostly as the judge's
+// (about 21 of 134 posted findings since 10-05 repeat an earlier round's),
+// so `magnum stats` overstated the own pass; and a judge posted "Blocking:
+// 1 problem…" with every `findings` count at 0. The result's `findings` and
+// `provenance` hold only the new findings, `previous_findings.open` the
+// still-open ones by priority.
+func TestSkillCountsOnlyNewFindingsInTheResult(t *testing.T) {
+	skillSays(t, []string{
+		"Its posted entries, only the findings this review posts as new, add up to `findings`; `previous_findings.open` counts the earlier ones still open, by priority.",
+		`"previous_findings":{"fixed":0,"open":{"P0":0,"P1":1,"P2":0,"P3":0},`,
+	}, []string{`"open":0,`})
+}
+
+// A reply round answers in its threads without posting a review, and a
+// rebuttal posted with a raw `gh api …/replies` skipped post-review's reply
+// marker, its post-once check and its refusal of a third rebuttal: the
+// skill knows the reply round and sends every thread reply through
+// `post_replies`.
+func TestSkillPostsEveryThreadReplyThroughPostReplies(t *testing.T) {
+	skillSays(t, []string{
+		"Post exactly one GitHub review, or only thread replies where the prompt allows.",
+		"`post_review`, `post_replies` (re-reviews): the commands that post your review and thread replies (sections 7, 8).",
+		"Post every thread reply through `post_replies`, one per thread, after `post_review` printed `posted` or `already_posted` (or alone where the prompt allows: then `\"status\":\"replied\"`)",
+		`{"status":"posted|replied|dry_run|`,
+		"the only other writes are thread replies (section 8).",
+	}, []string{"gh api -X POST", "--input <file>", "the only other write is a reply-contract rebuttal"})
+}
+
+// Three rules contradicted each other: a missing report's Checks line even
+// when the machine caused it against machine failures kept out of Checks;
+// never anchoring on a test file against a flaky test the PR adds; and the
+// reviewer prompts dropping every pre-existing problem against the nearby
+// block (see TestClaudeReviewPromptsLeaveOutUncertainStyleAndPreExistingFindings).
+// Each keeps its rule with one exception clause.
+func TestSkillCarriesOneExceptionPerContradiction(t *testing.T) {
+	skillSays(t, []string{
+		"Give each missing report one line in Checks with its reason (`- claude-review: no report (usage_limit)`); a machine cause (section 7) only as `(machine)`, its detail in `environment_failures`.",
+		"never a test file unless it is a flaky test the PR adds.",
+		"Leave it out of the posted review, Checks included.",
+	}, []string{"even when the machine caused it"})
+}
+
+// Every round after an earlier review can answer in that review's threads,
+// and every thread reply goes through `post_replies`: the re-review,
+// recovery and continue prompts name it whenever the judge has an earlier
+// review, a reply round or not; the first review, the own pass and the
+// continued turn of a first review never do.
+func TestJudgePromptsNamePostRepliesInEveryRoundAfterAReview(t *testing.T) {
+	d := judgeFixture()
+	line := " --replies " + filepath.Join(filepath.Dir(d.ResultFile), PostRepliesFile) + "\n"
+	first := d
+	first.PreviousReviewID, first.PreviousEvent, first.PreviousHeadSHA, first.PreviousReviews = 0, "", "", nil
+	own := d
+	own.Mode, own.Phase, own.OwnFindings, own.Reports = ModeRereview, PhaseOwnPass, "/r/judge-own.md", nil
+	for _, tc := range []struct {
+		name, prompt string
+		data         JudgeData
+		want         bool
+	}{
+		{"re-review", "judge-rereview.md", d, true},
+		{"recovery", "judge-recovery.md", d, true},
+		{"continued re-review", "judge-continue.md", d, true},
+		{"first review", "judge-initial.md", d, false},
+		{"own pass", "judge-own-pass.md", own, false},
+		{"continued first review", "judge-continue.md", first, false},
+	} {
+		got, err := RenderPrompt(prompt(t, tc.prompt), tc.data)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		block := magnumBlock(t, got)
+		if has := strings.Contains(block, "\npost_replies: "); has != tc.want || (has && !strings.Contains(block, line)) {
+			t.Errorf("%s: post_replies %v, want %v:\n%s", tc.name, has, tc.want, block)
+		}
+	}
+}
+
 func TestSkillOwnPassOfAReReviewCoversTheNewCommits(t *testing.T) {
 	skillSays(t, []string{
 		"In a re-review, section 2 covers section 6's scope (the new commits; your earlier reviews cover the rest), and `own_findings` holds section 6's decisions too.",
@@ -299,9 +381,13 @@ func TestSkillOwnPassOfAReReviewCoversTheNewCommits(t *testing.T) {
 // security fix, base commits after the merge base, the real traffic of a
 // rare case, parallel copies, deletes of unsaved records and findings
 // missed earlier (1,350 together, the helper-copy clause they replace
-// counted), and the head's failing checks (251) (2026-10-07). Every rule
-// added must replace or shorten text.
-const skillMaxBytes = 34_508
+// counted), and the head's failing checks (251) (2026-10-07), and 226 for
+// the result's new findings and open ones by priority, `post_replies` for
+// every thread reply (the raw `gh api` rebuttal it replaces counted),
+// `delta_check`, `"status":"replied"` and the exceptions for a missing
+// report's machine cause and a flaky test's anchor (2026-10-07). Every
+// rule added must replace or shorten text.
+const skillMaxBytes = 34_734
 
 func TestSkillStaysTight(t *testing.T) {
 	if n := len(magnum.Skill); n > skillMaxBytes {
@@ -322,6 +408,7 @@ func TestSkillDescribesEveryMagnumField(t *testing.T) {
 		{Kind: ReadinessReady, Command: "bin/db-ready", Status: ReadinessFailed, Duration: "1s"}}}
 	d.RelatedPRs, d.HistoryFile, d.CodexProjectDeclined, d.ClaudeProjectDeclined = "/r/related.json", "/r/history.json", true, true
 	d.FailingChecks = "/r/failing-checks.json"
+	d.DeltaCheck, d.DeltaLines, d.DeltaFile, d.Replies = true, 4, "/r/delta-check.json", 2
 	skill := string(magnum.Skill)
 	seen := map[string]bool{}
 	// A two-phase round: the candidates phase of each prompt, and the own
@@ -350,7 +437,7 @@ func TestSkillDescribesEveryMagnumField(t *testing.T) {
 			seen[m[1]] = true
 		}
 	}
-	for _, f := range []string{"notes", "notes_dir", "notes_harness", "notes_lock", "notes_unlock", "readiness", "reports", "phase", "own_findings", "related_prs", "history", "failing_checks", "codex_project", "claude_project"} {
+	for _, f := range []string{"notes", "notes_dir", "notes_harness", "notes_lock", "notes_unlock", "readiness", "reports", "phase", "own_findings", "related_prs", "history", "failing_checks", "codex_project", "claude_project", "delta_check", "post_replies"} {
 		if !seen[f] {
 			t.Errorf("no judge prompt renders `%s`", f)
 		}

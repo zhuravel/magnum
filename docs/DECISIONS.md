@@ -3127,3 +3127,38 @@ editing history. Code, config comments and prompts reference these by their head
   (prompts carry no PR text); a blind replay, which reads no CI result, gets none. Rejected: the names in the
   block (PR text in a prompt); checks of an older head (they say nothing of the reviewed one); the recovery prompt
   for now (another change in flight edits it; a recovery reads CI itself with `gh` when it matters).
+- **The judge's result counts only new findings; still-open ones go by priority** (2026-10-07). About 21 of 134
+  posted findings since 10-05 repeated an earlier round's finding (same path, line ±5), one PR six times from round
+  2 to round 4; one round-7 finding carried the source `judge` although codex-review had found it in round 6, and 14
+  of 30 judge-only posted findings were such repeats, so `magnum stats` overstated the own pass. Judges also
+  disagreed: one posted "Blocking: 1 problem…" with every `findings` count at 0, leaving auto-approval and the board
+  to parse the verdict line. SKILL.md section 8 now says `findings` and the posted entries of `provenance` hold only
+  what the review posts as new, and `previous_findings.open` counts the earlier findings still open by priority
+  (`{"P0":…,"P1":…,"P2":…,"P3":…}`); a source that raises one again is a `duplicate`. `store.ParseReviewResult`
+  reads either shape: the object fills `ReviewSummary.OpenCounts` (P0..P3, `open_counts` in `status --json`) and
+  `Open` with their sum, an older result's number fills `Open` and leaves `OpenCounts` nil (priorities unknown);
+  without a verdict an open P0 or P1 blocks. The result stays in `runs.result_json` as written, so no migration.
+  Replay scoring reads the planned review's comments and the posted provenance entries' severities, which the
+  change leaves alone. Auto-approval still decides from the verdict line when earlier findings are open; a later
+  change switches it to `OpenCounts`.
+- **Every thread reply goes through `post_replies`** (2026-10-07). The reply rounds (`post_replies`, `delta_check`,
+  `status: "replied"`, the reply kinds and `stop` threads) reached three judge prompts, not SKILL.md, which still
+  said "Post exactly one GitHub review" and had section 8 post rebuttals with a raw `gh api …/replies`, skipping
+  post-review's reply marker, its post-once check and its refusal of a third rebuttal in a thread;
+  `TestSkillDescribesEveryMagnumField` never set `Replies` or `DeltaCheck`, so it missed both fields.
+  `JudgeData.completed` now derives `RepliesFile` and `PostRepliesCommand` in every round after an earlier review
+  (`Replies`, `PreviousReviewID` or `PreviousHeadSHA` set), so the rereview, recovery and continue prompts render
+  `post_replies` then (never in a first review, its continued turn or the own pass), and the skill sends every
+  thread reply (a rebuttal, an answer, an ack) through it, after the review or, where the prompt allows, alone
+  with `"status":"replied"`. The skill names `post_replies` and `delta_check` among the block's fields and leaves
+  their details to the prompts; the field test sets both. Rejected: a second, skill-only description of the reply
+  round (the prompts that start one explain it; the skill's byte budget pays for each rule).
+- **Three contradictions of the skill get one exception each** (2026-10-07). Section 3 asked for a Checks line for
+  each missing report even when the machine caused it, while section 7 keeps machine failures out of Checks: the
+  line stays, its reason only `(machine)`, the detail under `environment_failures`. Section 5 said never to anchor
+  on a test file, but the defect can be a flaky test the PR adds: such a test may carry its finding. The claude
+  reviewer prompts dropped every pre-existing problem while section 7 lists proven nearby P1s and P2s (since
+  migration 0021: 16 `pre_existing` rejections, 0 nearby): `claude-review.md`, `claude-rereview.md` and
+  `claude-restart.md` now report a pre-existing P1 or P2 in the code the PR touches, marked `nearby`, for the
+  judge to prove and list. SKILL.md grows by 226 bytes for this entry and the two before it (`skillMaxBytes`
+  34,734).
