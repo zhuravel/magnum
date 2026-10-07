@@ -7,15 +7,35 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/zhuravel/magnum/internal/execx"
 )
 
+// parallelTests holds the tests realEnv already ran in parallel, or that
+// keepSerial keeps serial: a test that builds two fixtures must not call
+// t.Parallel twice (it panics). storetest.Parallel does the same for the
+// packages that use the registry.
+var parallelTests sync.Map
+
+// keepSerial keeps t serial: a test that sets the environment (t.Setenv
+// panics in a parallel test). Call it before realEnv or newFixture.
+func keepSerial(t *testing.T) {
+	if _, done := parallelTests.LoadOrStore(t, true); !done {
+		t.Cleanup(func() { parallelTests.Delete(t) })
+	}
+}
+
 // realEnv is a hermetic git environment: no user or system config, fixed
-// identity, English messages.
+// identity, English messages. Its environment is its own, so t runs in
+// parallel with the other tests (unless keepSerial).
 func realEnv(t *testing.T) *execx.Real {
 	t.Helper()
+	if _, done := parallelTests.LoadOrStore(t, true); !done {
+		t.Cleanup(func() { parallelTests.Delete(t) })
+		t.Parallel()
+	}
 	return &execx.Real{BaseEnv: []string{
 		"PATH=" + os.Getenv("PATH"),
 		"HOME=" + t.TempDir(),
@@ -596,6 +616,7 @@ func TestRealStatusPaths(t *testing.T) {
 // An exported GIT_DIR (dotfile shells, hook environments) must not redirect
 // gitx to another repository, not even for commands that rewrite HEAD.
 func TestRealIgnoresRedirectingEnvironment(t *testing.T) {
+	keepSerial(t) // sets the environment
 	fx := newFixture(t)
 	ctx := context.Background()
 	fx.fetchPR7()
