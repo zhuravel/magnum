@@ -21,8 +21,9 @@ import (
 // every other session role and ShellData for a shell role's full-line
 // template (values or pointers). Prompts are Go text/template files; a field
 // the template needs but data lacks is an error. JudgeData is completed
-// first: its Reports (see Report) and the notes fields NotesPath implies
-// (NotesDir, NotesLock and the lock commands; see NotesFiles). ShellData values are shell-quoted when needed
+// first: its Reports (see Report), the notes fields NotesPath implies
+// (NotesDir, NotesLock and the lock commands; see NotesFiles) and the
+// derived command lines; RoleData's DBLockCommand too. ShellData values are shell-quoted when needed
 // (see ShellLine; use it to build a shell role's line). Trailing newlines are
 // trimmed: a prompt or typed command must not end with one (a shell line
 // would submit an extra empty command).
@@ -35,6 +36,13 @@ func RenderPrompt(p config.Prompt, data any) (string, error) {
 	case JudgeData:
 		data = d.completed()
 	case *JudgeData:
+		if d == nil {
+			return "", fmt.Errorf("agents: render %s: nil data", name)
+		}
+		data = d.completed()
+	case RoleData:
+		data = d.completed()
+	case *RoleData:
 		if d == nil {
 			return "", fmt.Errorf("agents: render %s: nil data", name)
 		}
@@ -76,13 +84,40 @@ func render(name, text string, data any) (string, error) {
 // see config.Role.PromptFile) in pipeline.prompts_dir or the embedded
 // defaults and renders it with data (see RenderPrompt). A role without such
 // a prompt, or a name that resolves nowhere, wraps ErrUnknownTemplate
-// (config.ErrPromptNotFound).
+// (config.ErrPromptNotFound). JudgeData and RoleData without a Role get
+// role's name.
 func (m *Manager) RolePrompt(role config.Role, promptKind string, data any) (string, error) {
 	p, err := m.d.Config.RolePrompt(role, promptKind)
 	if err != nil {
 		return "", fmt.Errorf("agents: %w", err)
 	}
-	return RenderPrompt(p, data)
+	return RenderPrompt(p, withRole(data, role.Name))
+}
+
+// withRole is data with Role set to name when it is judge or role data
+// without one (a copy; data is not modified).
+func withRole(data any, name string) any {
+	switch d := data.(type) {
+	case JudgeData:
+		d.Role = cmp.Or(d.Role, name)
+		return d
+	case *JudgeData:
+		if d != nil {
+			c := *d
+			c.Role = cmp.Or(c.Role, name)
+			return &c
+		}
+	case RoleData:
+		d.Role = cmp.Or(d.Role, name)
+		return d
+	case *RoleData:
+		if d != nil {
+			c := *d
+			c.Role = cmp.Or(c.Role, name)
+			return &c
+		}
+	}
+	return data
 }
 
 // Report is one candidate report listed in a judge prompt, one per non-judge
@@ -206,7 +241,11 @@ type JudgeData struct {
 	// that posts it, rendered as `post_review` (PostReviewLine; always
 	// derived).
 	Magnum, ReviewFile, PostReviewCommand string
-	DryRun                                bool
+	// Role is the judge role's name (Manager.RolePrompt fills it when
+	// empty), and DBLockCommand the line its database commands run through
+	// in Checkout, rendered as `db_lock` (DBLockLine; always derived).
+	Role, DBLockCommand string
+	DryRun              bool
 	// Blind: an evaluation replay (pipeline.RoundInput.Blind), rendered as
 	// `blind: true`; the skill then judges the local diff of HeadSHA only.
 	Blind bool
@@ -370,6 +409,7 @@ func (d *JudgeData) completed() JudgeData {
 		out.ReviewFile = filepath.Join(filepath.Dir(out.ResultFile), PostReviewFile)
 	}
 	out.PostReviewCommand = PostReviewLine(out)
+	out.DBLockCommand = DBLockLine(out.Magnum, out.Checkout, out.Role)
 	out.RepliesFile, out.PostRepliesCommand = "", ""
 	if d.Replies > 0 {
 		out.RepliesFile = cmp.Or(d.RepliesFile, filepath.Join(filepath.Dir(out.ResultFile), PostRepliesFile))
@@ -443,6 +483,18 @@ type RoleData struct {
 	// marker, ReportMarker(RunID), as the report's first line, and a role
 	// whose prompt names it has a report only when the report carries it.
 	RunID string
+	// Magnum is the magnum executable (the daemon's own, absolute; "" =
+	// magnum on PATH), Checkout the checkout the role works in and Role its
+	// name (Manager.RolePrompt fills it when empty). DBLockCommand is the
+	// line the role runs its database commands through (DBLockLine; always
+	// derived): the prompts of the roles that run tests name it.
+	Magnum, Checkout, Role, DBLockCommand string
+}
+
+// completed is d with DBLockCommand derived (a copy).
+func (d RoleData) completed() RoleData {
+	d.DBLockCommand = DBLockLine(d.Magnum, d.Checkout, d.Role)
+	return d
 }
 
 // ShellData feeds a shell role's line (ShellLine): the role's command

@@ -2943,3 +2943,51 @@ editing history. Code, config comments and prompts reference these by their head
   open findings, while "clean" described only the new ones, and the operator could not tell what it meant. The cell
   now reads "✗ 3 open" (the verdict's glyph and color) in that case; "clean" stays for a review with nothing new and
   nothing open, and a review with new findings lists them by priority as before (the card keeps the full counts).
+- **The roles of a round take turns on the slot's databases** (2026-10-07, amends "The judge does its own pass
+  while the reviewers work"). Since the own pass started with the reviewers, 6 of 13-18 `round.environment` events
+  of rounds with an own pass named deadlocks or overlapping test runners (2 in about 38 rounds before): concurrent
+  RSpec processes on one slot hit Trilogy 1213 deadlocks, 1062 duplicate fixture keys and each other's rows (12 of
+  114 examples failed in one round; `PG::TRDeadlockDetected` and 0 examples run in another), and the judge then
+  reran its checks alone or left them inconclusive, while the skill told each role the databases were its own. A
+  new command, `magnum db-lock [--checkout DIR] [--timeout 20m] [--role NAME] -- COMMAND`, holds an exclusive
+  flock per checkout (`<state>/db-locks/<base>-<hash>.lock`, hashed from the cleaned, symlink-free absolute
+  path, `paths.Layout.DBLock`) while COMMAND runs with the role's stdin, stdout and stderr, and exits with its
+  status; a holder that crashes or is killed frees the lock. The holder writes its role, command, pid and start
+  into the file, and a role that waits prints once `db-lock: waiting for <role> (<command>) since <time>`. After
+  the timeout it exits 75 (EX_TEMPFAIL, a status no test run uses) with `db-lock: waited <timeout> for <role>
+  (<command>); the check did not run`; 125 is db-lock's own failure, 126, 127 and 128+n mean what they mean in a
+  shell, and SIGINT, SIGTERM and SIGHUP reach the command. Like `post-review` it reads no config and opens no
+  registry (`internal/dblock`); `--checkout` defaults to the git work tree it runs in. Each role that runs tests
+  gets the exact line as a derived template field, `.DBLockCommand` (the daemon's binary, the checkout and the
+  role, shell-quoted; `Manager.RolePrompt` fills the role's name): the judge's initial, rereview, recovery and
+  continue prompts render it as the `<magnum>` field `db_lock`, the four claude prompts in one sentence. The
+  skill's Databases paragraph says the databases are shared, sends every command that touches them (specs, `rails
+  runner`, rake tasks, migrations, scratch tables) through `db_lock`, and calls a timeout a check that did not
+  run: a machine failure, not a finding. Rejected: a database per role (three schema loads per slot, and three
+  times the slot's `reset_db` and readiness work); running the own pass after the reviewers again (it gives up
+  the parallel pass's time); a lock in the registry (the panes would need the store or the daemon); a `mkdir` lock
+  like the notes' (a killed holder leaves it behind until a staleness timeout); handing the lock's descriptor to
+  the command with exec (a background server it starts, such as spring, would inherit the descriptor and hold the
+  lock).
+- **A role's limits by design are no machine failure** (2026-10-07). 6 of 43 `round.environment` events (three
+  PRs) were codex-review's sandbox keeping it from localhost Redis. codex-review is a static review by design
+  (`codex review`, sandboxed, no network services), so its unrun checks say nothing about the machine, yet they
+  went into `environment_failures`, the notes' review-machine pitfalls and the operator's environment counts.
+  SKILL.md's machine-failure paragraph now says a limit a role has by design is neither a finding nor a machine
+  failure: codex-review's unrun checks are no `environment_failures`, and the judge runs what it needs itself.
+  Rejected: opening codex-review's sandbox to local services (it is the static second opinion; the checks are
+  the judge's).
+- **A standing decision needs the authors' decision** (2026-10-07). A reply that confirmed a finding on every
+  premise, called it still open and its handling undecided, and scored one fix option at −8 reached a
+  repository's notes as a declined finding under "Standing decisions (do not re-flag)", which would have kept
+  later reviews quiet about a problem nobody had decided on. The reply contract still honours such a reply as
+  `won't fix` for that PR's verdict ("A reply that declines the fix in its own words is `won't fix`"); the notes
+  speak for every later PR. SKILL.md's notes paragraph and `notes-curate.md` now say standing decisions are the
+  authors' decisions only: a finding they confirmed but left undecided is recorded as open with the decision
+  pending, or not at all, never as declined; the curator moves such an entry out. Rejected: changing the reply
+  contract instead (its rule was made the day before from the same reply, for the verdict).
+- **A re-review's own pass covers the new commits** (2026-10-07). The skill's own-pass paragraph named sections
+  1, 2 and 4 and, in a re-review, section 6's decisions, but not section 6's scope, so the own pass of a
+  re-review read the whole PR again: 5 to 12 responses in a resumed session, up to 56 in a cold one. It now says
+  that in a re-review section 2 covers section 6's scope (the new commits; the earlier reviews cover the rest) and
+  that `own_findings` holds section 6's decisions too.

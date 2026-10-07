@@ -40,6 +40,7 @@ head_sha: {{.HeadSHA}}
 base_ref: {{.BaseRef}}
 base_sha: {{.BaseSHA}}
 checkout: {{.Checkout}}
+db_lock: {{.DBLockCommand}}
 identity: {{.IdentityKind}}
 reviewer_login: {{.ReviewerLogin}}
 former_logins: {{range $i, $l := .FormerLogins}}{{if $i}}, {{end}}{{$l}}{{end}}

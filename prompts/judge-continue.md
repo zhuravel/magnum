@@ -10,6 +10,7 @@ repo: {{.Repo}}
 number: {{.Number}}
 head_sha: {{.HeadSHA}}
 checkout: {{.Checkout}}
+db_lock: {{.DBLockCommand}}
 identity: {{.IdentityKind}}
 reviewer_login: {{.ReviewerLogin}}
 gh_config_dir: {{.GhConfigDir}}

@@ -90,6 +90,7 @@ the judge data, every other session role gets the role data, and a shell role's 
 | `.Reports` | one entry per other role of the round, in pipeline order (see below) |
 | `.ResultFile` | where the judge writes its JSON result (the role's `output`) |
 | `.Magnum`, `.ReviewFile`, `.PostReviewCommand` | the magnum binary the daemon runs (absolute; empty: `magnum` on `PATH`), the file the judge writes its review to (`review.json` next to `.ResultFile`, derived when empty) and the shell line that posts it, `magnum post-review` with the run's facts as flags (repository, PR, head, run id, `.ReviewerLogin`, each of `.FormerLogins`, `.GhConfigDir` when set, `--dry-run` under `.DryRun`, `--local-base .BaseSHA` in a blind replay, `--review .ReviewFile`; every value shell-quoted; always derived). The judge prompts render it as the `<magnum>` field `post_review`; what the command does is in the README (The judge skill) |
+| `.Role`, `.DBLockCommand` | the judge role's name (filled from the role the prompt is rendered for), and the line its commands that touch the checkout's databases run through: `magnum db-lock` (`.Magnum`) with `--checkout .Checkout --role .Role --`, every value shell-quoted (always derived; the role appends its command). The initial, rereview, recovery and continue prompts render it as the `<magnum>` field `db_lock`; the roles of a round share the slot's databases and take turns through it (see README, The judge skill) |
 | `.DryRun` | plan the review without posting it |
 | `.PostMerge` | GitHub merged the PR before magnum reviewed `.HeadSHA` (`magnum review` of a merged PR): post a COMMENT asking for follow-ups; `.NoFindingsEvent` and `.BlockingEvent` are both `COMMENT`. The judge prompts render `post_merge: true` only then |
 | `.SkillPath` | the role's `skill`, absolute; in the daemon, the copy it took at startup |
@@ -164,6 +165,8 @@ reviewer, ...), initial, rereview and restart alike.
 | `.HistoryFile` | the round's `history.json`, the changed files' last commits on the base (as the judge's `.HistoryFile`); the claude-review prompts (initial, rereview, restart) name it in one sentence: read a commit that fixed the code or mechanism the PR touches and check the PR does not undo or re-break that fix. Empty when there is none |
 | `.PostMerge` | GitHub merged the PR before magnum reviewed `.HeadSHA` (a post-merge review); the prompts that name the PR say "The PR is already merged; review it anyway." only then |
 | `.Budget` | the role's `timeout` in words (`40 minutes`): the claude prompts give it as the time budget, within which the turn must end with the report written (background work only when it finishes well within it, waited for before the report) |
+| `.Magnum`, `.Checkout`, `.Role` | the magnum binary the daemon runs (absolute; empty: `magnum` on `PATH`), the checkout the role works in, and the role's name |
+| `.DBLockCommand` | the line the role runs each command that touches the checkout's databases through, as the judge's (`magnum db-lock --checkout .Checkout --role .Role --`, shell-quoted, always derived): the claude prompts (review, rereview, restart, simplify) name it in one sentence, `` `{{.DBLockCommand}} <command>` ``, with exit 75 meaning the check did not run |
 | `.RunID` | the run the prompt starts. The shipped prompts ask for `<!-- magnum:run={{.RunID}} -->` as the report's first line; a prompt that names this marker makes it required: a report without it, or with another run's, is stale (`missing`), since report paths are per head and an earlier run that kept working may write there. A prompt that does not name it needs none |
 
 When a session role's `timeout` passes, magnum types one fixed last call into its agent within the same
@@ -285,7 +288,8 @@ mention is visible) and the lock commands as `<magnum>` fields (`notes`, `notes_
 `notes_lock`, `notes_unlock`), and the skill (section 2) holds the steps once: rewrite the file (never
 append) after posting when the round taught something durable that helps review a future pull request
 (what the repository is, how to test, lint and QA a change, failures of the review machine, known
-pitfalls, standing decisions, under a dated header line), never one pull request's findings, code or
+pitfalls, standing decisions the authors made, under a dated header line; a finding they confirmed but left
+undecided is open, never declined), never one pull request's findings, code or
 probes: a probe for one pull request stays in the round's report directory. The judge's result names the
 harness files it ran or read (`harness_used`). Judges of different PRs
 of one repository run at the same time, so the judge takes the notes lock (`.NotesLockCommand`: a

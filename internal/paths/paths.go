@@ -8,6 +8,8 @@ package paths
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -240,6 +242,16 @@ func (l Layout) Notes() string                { return filepath.Join(l.data(), "
 func (l Layout) GhRoot() string               { return filepath.Join(l.State(), "gh") }
 func (l Layout) GhConfigDir(id string) string { return filepath.Join(l.GhRoot(), id) }
 func (l Layout) TabBar() string               { return filepath.Join(l.State(), "tabbar.txt") }
+
+// DBLock is the lock file `magnum db-lock` takes for the databases of
+// checkout (an absolute path): db-locks/<base>-<hash>.lock under State,
+// the hash of the cleaned path, so every spelling of one checkout shares
+// the file and no two checkouts do.
+func (l Layout) DBLock(checkout string) string {
+	clean := filepath.Clean(checkout)
+	sum := sha256.Sum256([]byte(clean))
+	return filepath.Join(l.State(), "db-locks", filepath.Base(clean)+"-"+hex.EncodeToString(sum[:8])+".lock")
+}
 
 // Skill is the checkout's judge skill; "" without a checkout (the binary's
 // embedded copy is used).

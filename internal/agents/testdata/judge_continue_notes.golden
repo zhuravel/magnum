@@ -10,6 +10,7 @@ repo: talkable
 number: 11920
 head_sha: d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3
 checkout: /Users/bohdan/Projects/talkable.review3
+db_lock: /Users/bohdan/Projects/magnum/bin/magnum db-lock --checkout /Users/bohdan/Projects/talkable.review3 --role codex-judge --
 identity: app
 reviewer_login: talkable[bot]
 gh_config_dir: /Users/bohdan/Projects/magnum/state/gh/talkable-app

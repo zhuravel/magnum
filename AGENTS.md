@@ -65,6 +65,7 @@ describe any new key, command or key binding.
 | `internal/eligibility` | pure decisions: which PRs a watch picks up, when a round may start, quiet hours |
 | `internal/pipeline` | one review round: stages, reviewers, judge, verification |
 | `internal/postreview` | `magnum post-review`, the judge's posting tool: no config, no registry, only gh and git |
+| `internal/dblock` | `magnum db-lock`, the roles' turns on a checkout's databases: one flock per checkout, no registry |
 | `internal/steps` | resumable multi-step side effects |
 | `internal/agents` | herdr sessions: start, prompt, observe, trust and permission prompts, titles |
 | `internal/slots`, `cleanup`, `inventory` | pool slots, per-PR worktrees, guards, orphan detection |

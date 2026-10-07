@@ -17,6 +17,7 @@ head_sha: {{.HeadSHA}}
 base_ref: {{.BaseRef}}
 base_sha: {{.BaseSHA}}
 checkout: {{.Checkout}}
+db_lock: {{.DBLockCommand}}
 identity: {{.IdentityKind}}
 reviewer_login: {{.ReviewerLogin}}
 gh_config_dir: {{.GhConfigDir}}

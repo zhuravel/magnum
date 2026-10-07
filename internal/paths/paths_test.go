@@ -314,3 +314,22 @@ func TestResolveLayouts(t *testing.T) {
 		t.Fatalf("MAGNUM_HOME: %+v", l)
 	}
 }
+
+// Each checkout has one database lock file under the state directory, named
+// from its cleaned absolute path: two spellings of one checkout share it,
+// two checkouts never do.
+func TestDBLockIsOneFilePerCheckout(t *testing.T) {
+	l := Layout{StateDir: "/state/magnum"}
+	a := l.DBLock("/slots/talkable.review3")
+	if filepath.Dir(a) != "/state/magnum/db-locks" || filepath.Ext(a) != ".lock" {
+		t.Fatalf("DBLock = %s, want a .lock file in /state/magnum/db-locks", a)
+	}
+	if got := l.DBLock("/slots/x/../talkable.review3/"); got != a {
+		t.Errorf("the same checkout spelled otherwise: %s, want %s", got, a)
+	}
+	for _, other := range []string{"/slots/talkable.review4", "/other/talkable.review3"} {
+		if got := l.DBLock(other); got == a {
+			t.Errorf("%s shares the lock file %s of /slots/talkable.review3", other, got)
+		}
+	}
+}

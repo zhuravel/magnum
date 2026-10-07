@@ -12,7 +12,7 @@ Keep in the notes only durable repository knowledge:
 - what the repository is;
 - how to run its tests and lint;
 - how to QA a change;
-- standing decisions;
+- standing decisions, the authors' decisions only: a finding they confirmed but left undecided is open, decision pending, or goes; never declined;
 - known pitfalls;
 - pitfalls of the review machine, only while they still apply.
 

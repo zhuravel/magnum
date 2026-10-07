@@ -936,6 +936,21 @@ it already rebutted twice, then posts each reply once with `<!-- magnum:reply ru
 lines are checked against the local diff of the pinned range and nothing is read from GitHub. Magnum's
 own verification is unchanged: it still finds the review on GitHub by its marker.
 
+The roles of a round share the slot's databases, and the judge's own pass runs its checks while the
+reviewers run theirs. So every role that runs tests gets `magnum db-lock` in its prompt (the judge as
+`db_lock` in its `<magnum>` block, the claude prompts in one sentence): the daemon's binary with
+`--checkout <slot> --role <role> --`, followed by the command that touches the databases (specs, `rails
+runner`, rake tasks, migrations). It holds an exclusive lock per checkout while the command runs (a
+flock on `db-locks/<checkout>-<hash>.lock` in the state directory, so a holder that crashes or is killed
+frees it), passes the command's output and exit status through, and makes the other roles wait: a
+waiting role prints once `db-lock: waiting for <role> (<command>) since <time>`. After `--timeout`
+(default 20m) it gives up with exit 75 and `db-lock: waited <timeout> for <role> (<command>); the check
+did not run`, which the skill treats as a check that did not run, never a finding. Exit 125 is db-lock's
+own failure (no command, a checkout it cannot find), 126 and 127 a command it cannot start, 128+n one a
+signal ended. Without `--checkout` it locks the git work tree it runs in. Like `post-review` it reads no
+config and no registry. codex-review needs none of this: it is a static review, sandboxed without Redis
+or databases, and the skill does not count the checks it could not run as machine failures.
+
 What an author gets, every review alike:
 
 - **One verdict line** first: `Blocking: N problem(s) must be fixed before merging.` (a P0 or P1 among
@@ -1040,6 +1055,7 @@ Fix 1 problem before merging. 1 optional: 1 simplification.
 | `magnum notes [--json]` | Every repository with notes, one row each: the notes' size and lines and the harness's files and size (`!` marks what is past a `[notes]` curation trigger), when they changed and by whom (`judge #11940`, curation, human, import), and the state: ok, over limit (which triggers), curation running, curation queued, proposal N to review, or proposal N stale (the notes changed since it was made); a hint under the table says what to run for each (see Repository notes). |
 | `magnum notes <repo> [--edit \| --log \| --diff [N] \| --curate \| --review [--reason …] \| --restore <version>] [--json]` | The repository notes every role reads first and the judge rewrites after a round that taught it something (`~/.local/share/magnum/notes/<owner>/<repo>.md`): what the repo is, how to test and QA it, known pitfalls; on stderr their sizes against the `[notes]` curation triggers, the unused harness files and a waiting proposal (marked when stale). `--log` and `--diff` read the history the registry keeps, `--curate` asks for a curation (queued while a round of the repository is in its judge stage or another curation runs), `--review` applies (y) or rejects (n) a proposal, a stale one merged with the notes' changes since or followed up by a new curation (c, or y when they conflict), `--restore` proposes an earlier version (see Repository notes). |
 | `magnum post-review --repo O/N --pr N --head SHA --run-id ID --login L [--former-login L]... [--gh-config-dir DIR] [--dry-run] [--local-base SHA] (--review FILE \| --replies FILE)` | For the judge, which runs the `post_review` line of its prompt: check the review file and its inline lines against the PR's diff, post it once and read it back; with `--replies` (a reply round's `post_replies`), post its answers in its own threads instead (see The judge skill). Exit 2 means the file needs fixing. |
+| `magnum db-lock [--checkout DIR] [--timeout 20m] [--role NAME] -- COMMAND [ARG]...` | For the review roles, which run the `db_lock` line of their prompts: run COMMAND under the checkout's database lock, so the roles sharing a slot's databases take turns (see The judge skill). Exits with COMMAND's status; 75 means it waited `--timeout` and the command did not run, 125 that db-lock itself failed. |
 | `magnum cleanup [--dry-run] [--pr <ref>] [--slot <name>] [--orphans [--slug X]] [--shrink] [--external --slot repoN]` | Storage cleanup with a reviewable plan: closed PRs, orphan databases, idle slots, manual worktrees. |
 | `magnum slots [list\|provision\|remove\|repair\|adopt\|pin\|unpin]` | Pool management. `slots pin\|unpin <slot>` is `magnum pin\|unpin <slot>`. |
 | `magnum where <ref>` | `cd $(magnum where 123)`. |
@@ -1306,8 +1322,9 @@ model = "sonnet"
 
 Every review role reads the repository's notes first, `~/.local/share/magnum/notes/<owner>/<repo>.md`, and
 the judge rewrites them under a lock when a round taught it something durable: what the repository is, how
-to test, lint and QA a change, known pitfalls, standing decisions, failures of the review machine. The
-directory beside the file (the same name without `.md`), the harness, holds the QA scripts the notes name.
+to test, lint and QA a change, known pitfalls, standing decisions (only what the authors decided: a
+finding they confirmed but left undecided is open with the decision pending, never declined), failures of
+the review machine (not a role's limits by design, such as codex-review's sandbox). The directory beside the file (the same name without `.md`), the harness, holds the QA scripts the notes name.
 The test for every line and script is whether it helps a review of another, future pull request: the
 judge keeps a probe written to verify one pull request in that round's report directory, never in the
 harness, and the notes never describe one pull request's findings or code. `magnum notes <repo>` prints
@@ -1434,6 +1451,7 @@ curate = ["over_limit", "weekly", "misses"]   # also curate every repository wit
 | `internal/engine` | The daemon loop: poll, throttle, dispatch, health, release, reconcile, requests from the CLI. |
 | `internal/pipeline` | One review round: reviewers and the simplifier in parallel, the checkout check, judge, verification on GitHub. |
 | `internal/postreview` | `magnum post-review`, the judge's posting tool: check the review and its lines against the diff, post once, read back. |
+| `internal/dblock` | `magnum db-lock`: one lock per checkout, so the roles sharing a slot's databases take turns. |
 | `internal/agents` | Agent sessions in herdr: start, resume, prompt, observe, titles, trust dialogs, health classification. |
 | `internal/slots` | Pool slots and per-PR worktrees: provision, checkout, release, teardown hooks, guards. |
 | `internal/store` | The SQLite registry: PRs, slots, assignments, sessions, runs, events; compare-and-set transitions. |

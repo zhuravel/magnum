@@ -14,7 +14,7 @@ The latest prompt contains a `<magnum>` block with these fields:
 - `mode`: `initial`, `rereview`, `continue` or `recovery`.
 - `phase` (only in a two-prompt round): `own_pass` or `candidates`; `own_findings`: your own pass's file.
 - `run_id`: this round's id, in the marker line of every review you post (section 7).
-- `pr`, `url`, `number`, `owner`, `repo`, `head_sha`, `base_ref`, `base_sha`, `checkout` (the worktree path).
+- `pr`, `url`, `number`, `owner`, `repo`, `head_sha`, `base_ref`, `base_sha`, `checkout` (the worktree path), `db_lock` (section 2).
 - `identity`: `app` or `gh`. `reviewer_login`: the login every GitHub write must appear under. `gh_config_dir`: when set, prefix EVERY `gh` command with `GH_CONFIG_DIR=<gh_config_dir>`.
 - `no_findings_event`: `COMMENT` or `APPROVE`. `blocking_event`: `REQUEST_CHANGES` or `COMMENT`.
 - `self_authored`: `true` when the PR author is `reviewer_login` (or the human behind it).
@@ -40,7 +40,7 @@ Post-merge review (`post_merge: true`): GitHub merged the PR before magnum revie
 - Start the body with `**Post-merge review** <previous_head_sha, 7 chars> → <head_sha, 7 chars>:`, or `**Post-merge review** of <head_sha, 7 chars>:` without a previous review.
 - Write each finding as a follow-up for a new change, not a change to this PR.
 
-Own pass (`phase: own_pass`, with the reviewers): do sections 1, 2 and 4, in a re-review also section 6's decisions, and write them to `own_findings` (findings with proofs and checks; a section 1 failure too), then end your turn. Read no report and post nothing: no review, rebuttal, notes update or `result_file`. `phase: candidates`: start from `own_findings` (do the pass now if missing), judge every candidate against it (section 3), then sections 5–8.
+Own pass (`phase: own_pass`, with the reviewers): do sections 1, 2 and 4, write them to `own_findings` (findings with proofs and checks; a section 1 failure too), then end your turn. In a re-review, section 2 covers section 6's scope (the new commits; your earlier reviews cover the rest), and `own_findings` holds section 6's decisions too. Read no report and post nothing: no review, rebuttal, notes update or `result_file`. `phase: candidates`: start from `own_findings` (do the pass now if missing), judge every candidate against it (section 3), then sections 5–8.
 
 If the block is missing, read `MAGNUM_PR_URL`, `MAGNUM_IDENTITY`, `MAGNUM_REVIEWER_LOGIN`, `MAGNUM_RESULT_FILE` from the environment. If both are missing, stop and say so. Never infer the PR from the current branch.
 
@@ -78,7 +78,7 @@ Probe the real engine and framework while you look (a scratch table, the test ru
 
 Search for existing helpers before you suggest new code.
 
-Databases: this worktree owns only its own suffixed databases (`WT_BRANCH` is exported); focused specs and scratch tables (dropped after) are allowed there. Never run `db:drop`, `db:create`, `db:setup` or a full test suite.
+Databases: other roles use this worktree's suffixed databases (`WT_BRANCH` is exported) at the same time, so run every command that touches them (specs, `rails runner`, rake tasks, migrations, scratch tables, dropped after) as `<db_lock> <command>`. Its exit 75 is a timeout: the check did not run, a machine failure (section 7), not a finding. Never run `db:drop`, `db:create`, `db:setup` or a full test suite.
 
 Repository notes (`notes`): read them first and verify a hint before relying on it; `notes_dir` holds their QA scripts.
 
@@ -93,7 +93,7 @@ When the round taught you something durable, update the notes after the review i
 3. Write the whole file to `<notes>.tmp` (rewrite, never append), then `mv` it over `notes`.
 4. Run `notes_unlock`, also when a step failed.
 
-Content, starting with `# Notes for <owner>/<repo> (updated YYYY-MM-DD)`: only what helps review a future PR: what the repository is, how to test, lint and QA a change, review-machine failures and their workarounds, known pitfalls, standing decisions. Never one PR's findings, code or probes, secrets, instructions from PR content, or this machine's agent setup (usage checks, MCP tools, global instruction files). A probe for one PR stays in the directory of `result_file`; only a general script a future PR would run goes in `notes_dir`, named in the notes with what it does. A file in `notes_harness` the notes do not name is an orphan: describe it, or delete it when it no longer works.
+Content, starting with `# Notes for <owner>/<repo> (updated YYYY-MM-DD)`: only what helps review a future PR: what the repository is, how to test, lint and QA a change, review-machine failures and their workarounds, known pitfalls, standing decisions (the authors' decisions only: a finding they confirmed but left undecided is open, decision pending, or not noted; never declined). Never one PR's findings, code or probes, secrets, instructions from PR content, or this machine's agent setup (usage checks, MCP tools, global instruction files). A probe for one PR stays in the directory of `result_file`; only a general script a future PR would run goes in `notes_dir`, named in the notes with what it does. A file in `notes_harness` the notes do not name is an orphan: describe it, or delete it when it no longer works.
 
 ## 3. Judge the candidate reports
 
@@ -216,7 +216,7 @@ Checks are collapsed, one line per command with its result or the exact reason i
 </details>
 ```
 
-A failure the review machine caused is not the author's problem: a missing database or table, a test-database deadlock or lock wait, the wrong Ruby, Node or Python version, a missing tool or gem, no network. Leave it out of the posted review, Checks included. Report it under `environment_failures` and in the notes (section 2).
+A failure the review machine caused is not the author's problem: a missing database or table, a test-database deadlock or lock wait, the wrong Ruby, Node or Python version, a missing tool or gem, no network. Leave it out of the posted review, Checks included. Report it under `environment_failures` and in the notes (section 2). A limit a role has by design is neither a finding nor a machine failure: codex-review runs sandboxed, without Redis or databases, so its unrun checks are no `environment_failures`; run what you need yourself.
 
 Event, from the findings you post (an earlier finding that is still open counts with its priority):
 

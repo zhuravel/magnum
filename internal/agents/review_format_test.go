@@ -206,6 +206,58 @@ func TestSkillSetsTheOperatorsInteractiveHabitsAside(t *testing.T) {
 	}, nil)
 }
 
+// The judge's own pass runs specs while the reviewers run theirs on the same
+// slot databases (deadlocks, duplicate fixture keys, cross-test evidence in
+// 6 of 13-18 environment events of rounds with an own pass): the skill no
+// longer calls the databases the judge's own, sends every command that
+// touches them through `db_lock`, and a lock timeout is a check that did not
+// run, never a finding.
+func TestSkillRunsDatabaseCommandsThroughTheLock(t *testing.T) {
+	skillSays(t, []string{
+		"Databases: other roles use this worktree's suffixed databases (`WT_BRANCH` is exported) at the same time",
+		"(specs, `rails runner`, rake tasks, migrations, scratch tables, dropped after) as `<db_lock> <command>`",
+		"exit 75", "the check did not run", "not a finding",
+		"`db_lock` (section 2)",
+	}, []string{"this worktree owns only its own suffixed databases"})
+}
+
+// codex-review is a static review by design (sandboxed, no network
+// services); its unrun checks were reported as machine failures in 6 of 43
+// environment events.
+func TestSkillKeepsByDesignLimitsOutOfMachineFailures(t *testing.T) {
+	skillSays(t, []string{
+		"A limit a role has by design is neither a finding nor a machine failure: codex-review runs sandboxed, without Redis or databases, so its unrun checks are no `environment_failures`; run what you need yourself.",
+	}, nil)
+}
+
+// A reply that confirmed a finding and left the decision open landed in a
+// repository's notes as a declined standing decision ("do not re-flag").
+func TestSkillNotesOnlyDecidedStandingDecisions(t *testing.T) {
+	skillSays(t, []string{
+		"standing decisions (the authors' decisions only: a finding they confirmed but left undecided is open, decision pending, or not noted; never declined)",
+	}, nil)
+}
+
+// The notes curator keeps the same rule: it moves such a finding out of the
+// standing decisions instead of carrying it over.
+func TestNotesCuratorKeepsUndecidedFindingsOutOfStandingDecisions(t *testing.T) {
+	got, err := RenderPrompt(prompt(t, "notes-curate.md"), curateFixtureWith())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "- standing decisions, the authors' decisions only: a finding they confirmed but left undecided is open, decision pending, or goes; never declined;\n"; !strings.Contains(got, want) {
+		t.Errorf("notes-curate.md lacks %q:\n%s", want, got)
+	}
+}
+
+// A re-review's own pass re-read the whole PR (5-12 responses resumed, up to
+// 56 cold): it covers the new commits, as section 6 scopes them.
+func TestSkillOwnPassOfAReReviewCoversTheNewCommits(t *testing.T) {
+	skillSays(t, []string{
+		"In a re-review, section 2 covers section 6's scope (the new commits; your earlier reviews cover the rest), and `own_findings` holds section 6's decisions too.",
+	}, []string{"in a re-review also section 6's decisions"})
+}
+
 // skillMaxBytes bounds SKILL.md: 28,040 bytes before the review-format
 // changes plus about 10%, 254 for the reply contract's declined fix, 425
 // for the nearby block, the ledger's titles and its own-pass sources
@@ -216,9 +268,12 @@ func TestSkillSetsTheOperatorsInteractiveHabitsAside(t *testing.T) {
 // description line in the body's order, 278 for setting the operator's
 // interactive habits aside (2026-10-06), 171 for the `codex_project`
 // field and its Checks line (2026-10-06), and 22 for `claude_project` in
-// the same line, which lost its explanation (2026-10-06). Every rule added
-// must replace or shorten text.
-const skillMaxBytes = 32_244
+// the same line, which lost its explanation (2026-10-06), and 663 for
+// `db_lock` and the shared databases (211), a role's limits by design
+// (209), standing decisions that need the authors' decision (131) and the
+// own pass's re-review scope (112) (2026-10-07). Every rule added must
+// replace or shorten text.
+const skillMaxBytes = 32_907
 
 func TestSkillStaysTight(t *testing.T) {
 	if n := len(magnum.Skill); n > skillMaxBytes {

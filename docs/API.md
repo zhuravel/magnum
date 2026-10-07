@@ -37,6 +37,7 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 | [cleanup](#cleanup) | Package cleanup builds and applies storage cleanup plans: releasing the slots of closed PRs, removing per-PR worktrees and surplus pool slots, dropping orphan per-worktree databases and resetting a manual worktree (talkable.repoN). |
 | [cli](#cli) | Package cli wires the subcommands into a cobra command tree built per call. |
 | [config](#config) | Package config loads and validates config.toml (kept in the repository). |
+| [dblock](#dblock) | Package dblock is the lock behind `magnum db-lock`: the roles of a review round (the judge's own pass and the reviewers run at the same time) take turns on a checkout's databases. |
 | [eligibility](#eligibility) | Package eligibility is magnum's pure decision logic: which pull requests a watch picks up (Classify), when a picked-up PR may start its next review round (Throttle) and whether the daemon is inside its quiet hours (QuietHours). |
 | [engine](#engine) | Package engine is magnum's daemon: one tick loop that polls GitHub, observes herdr, applies health pauses, consumes CLI requests, dispatches review rounds into slots (each round in its own goroutine), releases closed PRs after their grace and reconciles the registry with disk, MySQL and herdr. |
 | [eval](#eval) | Package eval scores an evaluation replay of magnum's pull request review against a corpus of pull requests with known ("seeded") defects. |
@@ -356,6 +357,16 @@ func CountWorking(agents []herdr.AgentInfo, kind string) int
     CountWorking counts agents of kind (codex, claude, ...) whose status is
     working, magnum's or not (daemon.max_total_working_codex gate).
 
+func DBLockLine(magnum, checkout, role string) string
+    DBLockLine is the command prefix a role runs each command that
+    touches the checkout's databases with (JudgeData.DBLockCommand and
+    RoleData.DBLockCommand, `db_lock` in the judge's <magnum> block): `magnum
+    db-lock` (the daemon's binary, else magnum on PATH) with the checkout and
+    the role, each shell-quoted, ending in `--`; the role appends its command.
+    The roles of a round run at the same time on one slot, whose databases
+    they share; the lock makes them take turns. An empty checkout is left out
+    (db-lock then takes the git work tree it runs in), and so is an empty role.
+
 func DoneMarker(runID string) string
     DoneMarker is the line a shell role's line prints when its command finished,
     followed by the command's exit status ("<marker> 0").
@@ -453,12 +464,13 @@ func RenderPrompt(p config.Prompt, data any) (string, error)
     judge's prompts, RoleData for every other session role and ShellData for
     a shell role's full-line template (values or pointers). Prompts are Go
     text/template files; a field the template needs but data lacks is an error.
-    JudgeData is completed first: its Reports (see Report) and the notes
-    fields NotesPath implies (NotesDir, NotesLock and the lock commands; see
-    NotesFiles). ShellData values are shell-quoted when needed (see ShellLine;
-    use it to build a shell role's line). Trailing newlines are trimmed:
-    a prompt or typed command must not end with one (a shell line would submit
-    an extra empty command).
+    JudgeData is completed first: its Reports (see Report), the notes
+    fields NotesPath implies (NotesDir, NotesLock and the lock commands;
+    see NotesFiles) and the derived command lines; RoleData's DBLockCommand too.
+    ShellData values are shell-quoted when needed (see ShellLine; use it to
+    build a shell role's line). Trailing newlines are trimmed: a prompt or typed
+    command must not end with one (a shell line would submit an extra empty
+    command).
 
 func ReportMarker(runID string) string
     ReportMarker is the line a role's report starts with to say which run wrote
@@ -673,7 +685,11 @@ type JudgeData struct {
 	// that posts it, rendered as `post_review` (PostReviewLine; always
 	// derived).
 	Magnum, ReviewFile, PostReviewCommand string
-	DryRun                                bool
+	// Role is the judge role's name (Manager.RolePrompt fills it when
+	// empty), and DBLockCommand the line its database commands run through
+	// in Checkout, rendered as `db_lock` (DBLockLine; always derived).
+	Role, DBLockCommand string
+	DryRun              bool
 	// Blind: an evaluation replay (pipeline.RoundInput.Blind), rendered as
 	// `blind: true`; the skill then judges the local diff of HeadSHA only.
 	Blind bool
@@ -1106,7 +1122,8 @@ func (m *Manager) RolePrompt(role config.Role, promptKind string, data any) (str
     PromptNudge, PromptStop; see config.Role.PromptFile) in pipeline.prompts_dir
     or the embedded defaults and renders it with data (see RenderPrompt).
     A role without such a prompt, or a name that resolves nowhere, wraps
-    ErrUnknownTemplate (config.ErrPromptNotFound).
+    ErrUnknownTemplate (config.ErrPromptNotFound). JudgeData and RoleData
+    without a Role get role's name.
 
 func (m *Manager) RunShell(ctx context.Context, pr store.PR, role config.Role, paneID, line, marker string, timeout time.Duration) (int, error)
     RunShell types line (see ShellLine) into the pane of a shell role and blocks
@@ -1489,6 +1506,12 @@ type RoleData struct {
 	// marker, ReportMarker(RunID), as the report's first line, and a role
 	// whose prompt names it has a report only when the report carries it.
 	RunID string
+	// Magnum is the magnum executable (the daemon's own, absolute; "" =
+	// magnum on PATH), Checkout the checkout the role works in and Role its
+	// name (Manager.RolePrompt fills it when empty). DBLockCommand is the
+	// line the role runs its database commands through (DBLockLine; always
+	// derived): the prompts of the roles that run tests name it.
+	Magnum, Checkout, Role, DBLockCommand string
 }
     RoleData feeds the prompts of every non-judge session role (claude-review,
     claude-simplify, a droid or omp reviewer, ...): the union of what those
@@ -3851,6 +3874,64 @@ func (w Watch) PathsSkipped(files []string) bool
     PathsSkipped reports whether every file of a pull request matches at least
     one skip_paths glob. It is false without globs and without files: a PR whose
     changes are unknown is never skipped.
+
+```
+
+## dblock
+
+```text
+package dblock // import "github.com/zhuravel/magnum/internal/dblock"
+
+Package dblock is the lock behind `magnum db-lock`: the roles of a review round
+(the judge's own pass and the reviewers run at the same time) take turns on a
+checkout's databases. One exclusive flock per checkout (paths.Layout.DBLock),
+so a holder that crashes or is killed frees it; the holder writes who it is into
+the file for the roles that wait. It reads no config and opens no registry.
+
+TYPES
+
+type Holder struct {
+	Role    string    `json:"role,omitempty"` // the magnum role, e.g. claude-review ("" = not given)
+	Command string    `json:"command"`        // the command it runs under the lock
+	PID     int       `json:"pid"`
+	Start   time.Time `json:"start"` // when it took the lock
+}
+    Holder is who holds a checkout's database lock.
+
+func ReadHolder(path string) (h Holder, ok bool)
+    ReadHolder reads the holder written into the lock file at path; ok is false
+    for an empty, partly written or missing file.
+
+func (h Holder) String() string
+    String names the holder as db-lock's messages do: "judge (bin/rspec …)",
+    "pid 123 (…)" without a role, "another command" when unknown.
+
+type Lock struct {
+	// Has unexported fields.
+}
+    Lock is a held database lock.
+
+func Acquire(ctx context.Context, path string, me Holder, timeout time.Duration, waiting func(Holder)) (*Lock, error)
+    Acquire takes the exclusive lock at path for me, creating the file (and its
+    directory, private) when needed, and writes me into it (a zero me.Start
+    becomes the time it took the lock). While another process holds it,
+    Acquire tries again every poll until timeout has passed (0: one try),
+    then returns a *TimeoutError; ctx ends the wait early. waiting, when set,
+    is called once with the holder as soon as the lock is found held and the
+    holder readable (after a second, unknown).
+
+func (l *Lock) Release()
+    Release empties the file (no waiter reads a holder that is gone) and
+    releases the lock. A nil or released Lock is a no-op.
+
+type TimeoutError struct {
+	Waited time.Duration
+	Holder Holder // who held it at the end ("another command" when unreadable)
+}
+    TimeoutError is Acquire's answer when the lock stayed held for the whole
+    wait: the command did not run.
+
+func (e *TimeoutError) Error() string
 
 ```
 
@@ -9251,6 +9332,12 @@ func (l Layout) ConfigDir() string
     App keys, prompt overrides; "" without one.
 
 func (l Layout) DB() string
+
+func (l Layout) DBLock(checkout string) string
+    DBLock is the lock file `magnum db-lock` takes for the databases of checkout
+    (an absolute path): db-locks/<base>-<hash>.lock under State, the hash of the
+    cleaned path, so every spelling of one checkout shares the file and no two
+    checkouts do.
 
 func (l Layout) DaemonLog() string
 

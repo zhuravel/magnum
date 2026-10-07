@@ -41,6 +41,7 @@ func judgeFixture() JudgeData {
 		},
 		ResultFile:       "/Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/codex-judge.json",
 		Magnum:           "/Users/bohdan/Projects/magnum/bin/magnum",
+		Role:             "codex-judge",
 		DryRun:           false,
 		SkillPath:        "/Users/bohdan/Projects/magnum/skills/magnum-review/SKILL.md",
 		PreviousReviewID: 3012345678,
@@ -90,6 +91,7 @@ func roleFixture() RoleData {
 		BaseSHA:    "0123456789abcdef0123456789abcdef01234567",
 		ReportPath: "/Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/claude-review.md",
 		Budget:     "40 minutes", RunID: "r-20261003T120000-7",
+		Magnum: "/Users/bohdan/Projects/magnum/bin/magnum", Checkout: "/Users/bohdan/Projects/talkable.review3", Role: "claude-review",
 	}
 }
 
@@ -225,7 +227,7 @@ func TestRenderGolden(t *testing.T) {
 	postMergeRole.PostMerge = true
 	// The simplify role writes its own report.
 	simplifyData := func(d RoleData) RoleData {
-		d.ReportPath = filepath.Join(filepath.Dir(d.ReportPath), "claude-simplify.md")
+		d.ReportPath, d.Role = filepath.Join(filepath.Dir(d.ReportPath), "claude-simplify.md"), "claude-simplify"
 		return d
 	}
 	// The <magnum> fields of the repository notes (with a threads file, as a
