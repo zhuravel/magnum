@@ -3578,3 +3578,60 @@ editing history. Code, config comments and prompts reference these by their head
   (`.claude/skills/magnum-improve`), which carry their evidence and land through the gate, and each shipped
   item's decision is already in this file. Rejected: relabelling the file as an archive (a second record of
   decisions this file holds, which drifts as it did).
+- **The judge ends with a short MAGNUM_RESULT line, and its result holds only what magnum reads**
+  (2026-10-07; supersedes "The judge's final output is two lines and MAGNUM_RESULT"). In 74 final responses
+  the judge echoed its whole result as the last line, 888 output tokens at the median (2.4% of the judge's
+  usage), though magnum reads that line only when the result file is missing. The turn now ends with one
+  line (the review URL or the blocker) and `MAGNUM_RESULT` with the status, run id, review id, verdict and
+  counts: enough to verify the review on GitHub and give the PR's summary its verdict and counts. The
+  skill's example drops what nothing reads (`pr`, `head_sha`, `checks`, the reviewers' accepted and rejected
+  candidates, `previous_findings.rebutted`, `planned_replies`); `candidates` keeps claude-simplify's
+  `suggested`, which the summary counts, and moves to the prompt of a round with its report. Rejected: no
+  last line at all (a judge that failed to write the file would leave nothing to read).
+- **The rules of rare rounds are in their prompts, and the skill says each rule once** (2026-10-07). Since
+  10-04, 0 of 127 judge prompts were blind replays, 1 a post-merge review and 1 had former logins, and
+  claude-simplify ran in about 4 of 100 rounds, yet every session read their 3 KB of rules in the skill (34.7
+  KB, read in 51 of 52 fresh sessions and again after each of 15 skill versions in 37 hours). The blind
+  rules are in the initial and own-pass prompts of a blind replay, the post-merge rules in the initial,
+  rereview, recovery and own-pass prompts of a post-merge round, the simplification rules in the initial,
+  rereview and recovery prompts of a round with a claude-simplify report, and the former logins' rules
+  were already in the prompts that name them; the skill keeps one line per field. The verdict line, its
+  event and the result's `verdict` are one paragraph, the machine-failure rule is stated once, still-open
+  findings count in that paragraph only, and the re-review scope is the prompt's (judge-recovery.md gains the
+  plain push's `git log`/`git diff` sentence the rereview prompt has). SKILL.md goes from 34,832 to 28,764
+  bytes (`skillMaxBytes`). "The notes steps and the readiness paragraph live in the skill only" still
+  holds: those are read in every round. Rejected: splitting the skill by phase (both phases read all of it).
+- **The skill leaves to the code the rules the code enforces** (2026-10-07). The judge ran the identity check
+  in 29 of 30 own passes, which write nothing, and in every candidates turn, read back reviews `post-review`
+  had read back, looked for a `MAGNUM_RESULT_FILE` no round sets and for a run marker a recovery's new run id
+  never carries, and turned the APPROVE magnum passed on 19 self-authored PRs into COMMENT. Now
+  `pipeline.JudgeEvents` passes COMMENT both ways for a self-authored PR, as for a post-merge round (and the
+  round's "no APPROVE" note no longer blames a missing report for it); the skill drops the App identity's
+  check (its token posts only as the App, and a repository outside its installation refuses the post), the
+  read-back, the environment fallback, the marker check (post-review's post-once guard finds the review),
+  the marker line (post-review appends it), the self-verdict rule, the stacked base (the block names
+  `base_ref`) and reading the root `AGENTS.md` Codex already loaded. A gh identity is checked once, before
+  the first GitHub write: it is the operator's own gh login, which can change under a round, and
+  post-review compares the author only after posting. Rejected: dropping that check too (a write as the
+  wrong account cannot be taken back); moving it into post-review (it does not know the identity's kind).
+- **Codex sessions run without the operator's skills list** (2026-10-07). Every judge request carried the
+  skills list of the operator's Codex config (about 5,900 tokens, 2,318 requests in two days), and the
+  judge loaded the operator's efficient-frontier skill from it in 17 of 50 turns, in the same call as
+  SKILL.md, before the skill's sentence against it could act. The codex kind's `mcp_strict` adds
+  `-c skills.include_instructions=false` (Codex 0.160's config schema: "whether turns receive the
+  automatic skills instructions block"; a wrong type fails the config load, so the key is read), passed on
+  every launch, resume and codex-review line with the apps connector's switch. Without that block nothing
+  but the prompt tells the judge to open the skill it links, so every judge prompt with the link (initial,
+  rereview, recovery, continue, own pass) says right after it: "Read <path> first, unless this session
+  already read that file, and follow it; load no other skill." (the path changes with every skill version,
+  so a resumed session reads a new version and keeps the one it has). Rejected: a `CODEX_HOME` of
+  magnum's own ("never with a CODEX_HOME of their own"); one `skills.config` entry per skill (names
+  change, and the list would need reading like the MCP servers); "read it first" without the exception
+  (a resumed session would read 8.7k tokens again every round).
+- **post-review refuses a local path** (2026-10-07). 1 of 31 posted reviews named a scratch file of the
+  judge's machine (`/tmp/magnum…`), against the skill's rule. `magnum post-review` refuses (`invalid`,
+  exit 2) a review body, inline comment or thread reply with a path starting `/private/`, `/var/folders/`,
+  `/Users/` or `~/` at a word's start (not inside a repository path, a URL or a word), or a `/tmp/` path
+  that is there on this machine at check time (as written, or without a `:line` suffix: the judge's own
+  scratch files), and names it, so the judge rewrites the text. Rejected: refusing every `/tmp/` and
+  `/home/` path (a finding quoting the PR's `WORKDIR /home/app` or `/tmp/cache` would be refused).

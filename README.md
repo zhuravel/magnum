@@ -869,8 +869,11 @@ goes off only by name: every launch and resume of the judge, and `codex review`'
 `env`, else `$CODEX_HOME`, else `~/.codex`) and passes `-c mcp_servers.<name>.enabled=false` for each one
 not already disabled there. Codex's built-in apps connector (the `codex_apps` server of ChatGPT's
 connectors, which a `codex review` with every server off still searched the web through) is no such table:
-the same launches pass `-c features.apps=false` once (`[kinds.codex] mcp_strict`; `[]` keeps it on).
-`mcp_allow = ["docs"]` keeps the servers it names, `mcp_off = false` keeps them all and the connector; a
+the same launches pass `-c features.apps=false` once, and `-c skills.include_instructions=false`, which
+keeps your skills list (about 5,900 tokens) out of every turn: the judge reads the skill its prompt links
+(`[kinds.codex] mcp_strict`; `[]` keeps both on).
+`mcp_allow = ["docs"]` keeps the servers it names, `mcp_off = false` keeps them all, the connector and the
+skills list; a
 name that is no TOML bare key (letters, digits, `_`, `-`) stays on, with a log line. A custom
 codex-review `command` needs `{{range .MCPOff}} {{.}}{{end}}` for the same. Magnum never
 gives its sessions a `CODEX_HOME` of their own (the login, the session files, the folder trust and the
@@ -1005,8 +1008,11 @@ in the round that first posted it, under whoever found it then; magnum's summary
 the number. A missing report gets its Checks line with `(machine)` as the reason when the review
 machine caused it (the detail goes to `environment_failures`), and a flaky test the PR adds may carry
 its finding. The skill runs unattended: it never stops to ask a human
-(whatever an instruction file says), runs no usage checks, and ends with at most two lines and the
-`MAGNUM_RESULT` line.
+(whatever an instruction file says), runs no usage checks, and ends with one line (the review URL or the
+blocker) and a short `MAGNUM_RESULT` line: the status, run, review, verdict and counts of its result
+file, which magnum reads only when the file is missing. The rules of rare rounds (a blind replay, a
+post-merge review, former logins, claude-simplify's proposals) are in the prompts of those rounds, not in
+the skill every session reads.
 
 The judge writes only the findings; `magnum post-review` does the posting. Its `<magnum>` block names
 the command as `post_review`: the daemon's own binary with every flag filled in (repository, PR, head,
@@ -1017,8 +1023,10 @@ there and runs the line, which:
 
 1. checks the file: a known event, bodies that are not empty and fit GitHub's 65,536 characters, sides
    `RIGHT` (the default) or `LEFT`, a `start_line` before `line` on the same side, no
-   `<!-- magnum:footer -->` (Magnum appends the footer), and appends the run marker when the body lacks
-   it;
+   `<!-- magnum:footer -->` (Magnum appends the footer), no local path (one starting `/private/`,
+   `/var/folders/`, `/Users/` or `~/`, or a `/tmp/` path that is there on this machine, as the judge's
+   scratch files are; outside a repository path or URL; the problem names it, in a reply too), and appends
+   the run marker when the body lacks it;
 2. checks every inline comment against the PR's diff as GitHub shows it (`pulls/{n}/files`, both sides,
    context lines included; a multi-line comment within one hunk). A file GitHub sends without a patch
    is checked against `git diff` from the merge base in the checkout; a line neither can check is kept
@@ -1077,7 +1085,8 @@ What an author gets, every review alike:
   A re-review puts `Re-review a1b2c3d → d4e5f6a:` before it. No GitHub event names, no notes on
   the process. The event follows `no_findings_event` and `blocking_event`, except that a round where a
   reviewer left no report (a usage limit, a timeout) never approves: its no-findings event is `COMMENT`,
-  and Checks names the missing reviewer.
+  and Checks names the missing reviewer. A PR the posting login (or the human behind it) opened gets
+  `COMMENT` both ways, as a post-merge review does.
 - **Each finding on the defective line**, the code that must change: a title that states the wrong result;
   the trigger, who can produce it and the concrete consequence; a test that proves it as a fenced block
   naming its spec file and line; **Fix** with the code cause and the smallest safe change (a `suggestion`

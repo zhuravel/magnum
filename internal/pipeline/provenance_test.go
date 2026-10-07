@@ -207,6 +207,39 @@ func TestReReviewKeepsTheOpenFindingsByPriority(t *testing.T) {
 	}
 }
 
+// The judge's last line carries only the status, the run, the review, the
+// verdict and the counts (SKILL.md section 8). When the result file is
+// missing, magnum reads that line: the round is posted with its counts, and
+// the PR's review summary gets its verdict and counts from it.
+func TestAShortResultLineStandsInForAMissingResultFile(t *testing.T) {
+	e := newEnv(t)
+	p := e.judgePosts(605, "COMMENTED", "COMMENT")
+	p.status = "" // no result file
+	post := p.behavior(t)
+	e.ag.behaviors[agents.RoleJudge] = []behavior{func(f *fakeAgents, run store.Run, text string) error {
+		id := markerRunID(t, text)
+		f.mu.Lock()
+		f.reads[agents.RoleJudge] = "https://github.com/talkable/talkable/pull/11920#pullrequestreview-605\n" +
+			`MAGNUM_RESULT {"status":"posted","run_id":"` + id + `","review_id":605,"verdict":"non_blocking","findings":{"P0":0,"P1":0,"P2":1,"P3":0}}` + "\n"
+		f.mu.Unlock()
+		return post(f, run, text)
+	}}
+	res, err := e.r.RunRound(e.ctx, e.input(KindInitial))
+	if err != nil || res.Outcome != OutcomePosted || res.ReviewID != 605 {
+		t.Fatalf("RunRound = %+v, %v", res, err)
+	}
+	if !reflect.DeepEqual(res.Findings, map[string]int{"P0": 0, "P1": 0, "P2": 1, "P3": 0}) {
+		t.Errorf("findings = %v", res.Findings)
+	}
+	sums, err := e.st.LastReviewSummaries(e.ctx, []int64{e.pr.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum := sums[e.pr.ID]; sum.Verdict != store.VerdictNonBlocking || sum.Counts != [4]int{0, 0, 1, 0} || sum.ReviewID != 605 {
+		t.Errorf("summary = %+v", sum)
+	}
+}
+
 func TestFindingsAreRecordedOnlyForAPostedRoundWithProvenance(t *testing.T) {
 	// An older result file: no provenance, no rows.
 	e := newEnv(t)

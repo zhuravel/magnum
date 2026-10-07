@@ -246,10 +246,11 @@ judge_fresh_after = "90m"         # a judge whose last turn on the PR ended long
 # mcp_off = true                      # every launch and resume (and codex-review's line) passes mcp_strict and
 #                                     # turns off each MCP server your Codex config.toml declares (the env's
 #                                     # CODEX_HOME, else ~/.codex), one mcp_disable per server; false = they
-#                                     # all load, the apps connector too
-# mcp_strict = ["-c", "features.apps=false"]   # Codex's built-in apps connector (codex_apps: ChatGPT's
-#                                     # connectors), which no [mcp_servers] table declares; mcp_allow does
-#                                     # not apply ([] keeps it on)
+#                                     # all load, the apps connector and the skills list too
+# mcp_strict = ["-c", "features.apps=false", "-c", "skills.include_instructions=false"]   # Codex's built-in
+#                                     # apps connector (codex_apps: ChatGPT's connectors), which no
+#                                     # [mcp_servers] table declares, and your skills list in every turn;
+#                                     # mcp_allow does not apply ([] keeps both on)
 # mcp_allow = []                      # MCP servers mcp_off leaves on, e.g. ["docs"]
 # mcp_disable = ["-c", "mcp_servers.{server}.enabled=false"]   # turns off server {server}
 # project_untrust = ["-c", "projects={projects}"]   # when the PR changes the checkout's .codex/ (against its

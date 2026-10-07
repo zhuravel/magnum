@@ -1,4 +1,4 @@
-The pause is over. Continue the [$magnum-review]({{.SkillPath}}) run for {{.URL}} where you stopped. First list the reviews by `{{.ReviewerLogin}}` on this PR. If one already contains `magnum:run={{.RunID}}`, do not post again: write the result file with its id and stop. Otherwise finish the workflow for head `{{.HeadSHA}}`.
+[$magnum-review]({{.SkillPath}}) Read {{.SkillPath}} first, unless this session already read that file, and follow it; load no other skill. The pause is over. Continue the run for {{.URL}} where you stopped. First list the reviews by `{{.ReviewerLogin}}` on this PR. If one already contains `magnum:run={{.RunID}}`, do not post again: write the result file with its id and stop. Otherwise finish the workflow for head `{{.HeadSHA}}`.
 
 <magnum>
 mode: continue

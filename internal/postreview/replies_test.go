@@ -86,6 +86,8 @@ func TestRunRepliesRejectsAFaultyFileBeforeReadingGitHub(t *testing.T) {
 		{"body with a reply marker", repliesFile(rep(1, "ack", "ok\n"+ReplyMarker(runID, "ack"))), "replies[0]: body carries a <!-- magnum:"},
 		{"body with a footer marker", repliesFile(rep(1, "ack", FooterMarker)), "replies[0]: body carries a <!-- magnum:"},
 		{"body too long with the marker", repliesFile(rep(1, "ack", long)), "replies[0]: body is"},
+		{"body with a local path", repliesFile(rep(1, "rebuttal", "It still fails: /private/tmp/magnum7/run.log")),
+			`replies[0]: body names the local path "/private/tmp/magnum7/run.log"`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

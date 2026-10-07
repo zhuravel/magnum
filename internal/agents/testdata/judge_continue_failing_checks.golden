@@ -1,4 +1,4 @@
-The pause is over. Continue the [$magnum-review](/Users/bohdan/Projects/magnum/skills/magnum-review/SKILL.md) run for https://github.com/talkable/talkable/pull/11920 where you stopped. First list the reviews by `talkable[bot]` on this PR. If one already contains `magnum:run=r-20261003T120000-7`, do not post again: write the result file with its id and stop. Otherwise finish the workflow for head `d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3`.
+[$magnum-review](/Users/bohdan/Projects/magnum/skills/magnum-review/SKILL.md) Read /Users/bohdan/Projects/magnum/skills/magnum-review/SKILL.md first, unless this session already read that file, and follow it; load no other skill. The pause is over. Continue the run for https://github.com/talkable/talkable/pull/11920 where you stopped. First list the reviews by `talkable[bot]` on this PR. If one already contains `magnum:run=r-20261003T120000-7`, do not post again: write the result file with its id and stop. Otherwise finish the workflow for head `d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3`.
 
 <magnum>
 mode: continue

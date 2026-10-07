@@ -353,6 +353,10 @@ func TestRenderGolden(t *testing.T) {
 	}
 	noOwn := candidates(judgeFixture())
 	noOwn.OwnFindingsMissing = true
+	ownPostMerge := ownPass("rereview")
+	ownPostMerge.PostMerge = true
+	simplifyMissing := judgeFixture()
+	simplifyMissing.Reports = []Report{simplifyMissing.Reports[0], {Role: "claude-simplify", Status: "usage_limit", Missing: true}}
 	// The related PRs: every judge prompt names related.json when the
 	// repository has any (never in a blind replay: the pipeline writes none).
 	withRelated := func(d JudgeData) JudgeData {
@@ -446,6 +450,10 @@ func TestRenderGolden(t *testing.T) {
 		{"judge_initial_blind", "judge-initial.md", blindJudge},
 		{"judge_initial_post_merge", "judge-initial.md", postMerge},
 		{"judge_rereview_post_merge", "judge-rereview.md", postMerge},
+		{"judge_recovery_post_merge", "judge-recovery.md", postMerge},
+		{"judge_own_pass_post_merge", "judge-own-pass.md", ownPostMerge},
+		// claude-simplify ended without a report: no simplification rules.
+		{"judge_initial_simplify_missing", "judge-initial.md", simplifyMissing},
 		{"claude_initial_post_merge", "claude-review.md", postMergeRole},
 		{"claude_rereview_post_merge", "claude-rereview.md", postMergeRole},
 		{"simplify_post_merge", "claude-simplify.md", simplifyData(postMergeRole)},

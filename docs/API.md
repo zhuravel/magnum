@@ -2469,8 +2469,9 @@ func DefaultKinds() map[string]Kind
         resume ["resume","{session}"], model ["--model","{model}"], effort
         ["-c","model_reasoning_effort={effort}"], rename "/rename {title}",
         login_check "codex login status" + login_ok "text:Logged in",
-        mcp_off true with mcp_strict ["-c","features.apps=false"] and
-        mcp_disable ["-c","mcp_servers.{server}.enabled=false"], project_untrust
+        mcp_off true with mcp_strict ["-c","features.apps=false",
+        "-c","skills.include_instructions=false"] and mcp_disable
+        ["-c","mcp_servers.{server}.enabled=false"], project_untrust
         ["-c","projects={projects}"].
       - claude: args ["--dangerously-skip-permissions"], resume
         ["--resume","{session}"], model ["--model","{model}"], effort
@@ -3071,9 +3072,11 @@ type Kind struct {
 	// none of the user, local, project or plugin servers, nor claude.ai
 	// connectors), codex's ["-c", "features.apps=false"] (Codex 0.160's
 	// built-in apps connector, the codex_apps server of ChatGPT's
-	// connectors, which no [mcp_servers] table declares). MCPAllow does not
-	// apply; args naming a file of servers to keep ("--mcp-config",
-	// "<path>") go in this list.
+	// connectors, which no [mcp_servers] table declares), and with it
+	// ["-c", "skills.include_instructions=false"], which keeps the user's
+	// skills list out of every turn (the judge reads the skill its prompt
+	// links). MCPAllow does not apply; args naming a file of servers to
+	// keep ("--mcp-config", "<path>") go in this list.
 	MCPStrict []string `toml:"mcp_strict"`
 	// MCPDisable: args that turn off MCP server {server}, passed once per
 	// server, e.g. codex's ["-c", "mcp_servers.{server}.enabled=false"].
@@ -9746,14 +9749,16 @@ var HistoryTimeout = 2 * time.Minute
 
 FUNCTIONS
 
-func JudgeEvents(cfg *config.Config, fullName string, id *config.Identity, postMerge bool, reports ...agents.Report) (noFindings, blocking string)
+func JudgeEvents(cfg *config.Config, fullName string, id *config.Identity, commentOnly bool, reports ...agents.Report) (noFindings, blocking string)
     JudgeEvents are the review events the judge's prompt names for a round of
     repository fullName ("owner/name") posted as identity id: the repository's
-    or the identity's (config.Config.VerdictsFor); COMMENT both ways in a
-    post-merge round, where a verdict blocks nothing; and COMMENT for no
-    findings when one of the round's reports is missing (an APPROVE once went
-    out while claude-review had hit a usage limit: a review that did not hear
-    every reviewer approves nothing).
+    or the identity's (config.Config.VerdictsFor); COMMENT both ways when
+    commentOnly: in a post-merge round, where a verdict blocks nothing,
+    and on a PR the reviewer login or the human behind it opened (the prompt's
+    self_authored), where a verdict of one's own counts for nothing; and COMMENT
+    for no findings when one of the round's reports is missing (an APPROVE once
+    went out while claude-review had hit a usage limit: a review that did not
+    hear every reviewer approves nothing).
 
 func RolesToRun(ctx context.Context, st *store.Store, cfg *config.Config, pr store.PR, roles []config.Role, requested []string, kind string) ([]config.Role, error)
     RolesToRun returns the roles a round of kind runs for pr, in the order

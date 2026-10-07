@@ -30,9 +30,9 @@ func TestTheJudgeCapsItsSubagents(t *testing.T) {
 		n    *int
 		want []string
 	}{
-		{"a cap", &two, []string{"-c", "model_reasoning_effort=xhigh", "-c", "agents.max_concurrent_threads_per_session=2", "-c", "features.apps=false"}},
-		{"none at all", &zero, []string{"-c", "model_reasoning_effort=xhigh", "-c", "agents.enabled=false", "-c", "features.apps=false"}},
-		{"unset", nil, []string{"-c", "model_reasoning_effort=xhigh", "-c", "features.apps=false"}},
+		{"a cap", &two, []string{"-c", "model_reasoning_effort=xhigh", "-c", "agents.max_concurrent_threads_per_session=2", "-c", "features.apps=false", "-c", "skills.include_instructions=false"}},
+		{"none at all", &zero, []string{"-c", "model_reasoning_effort=xhigh", "-c", "agents.enabled=false", "-c", "features.apps=false", "-c", "skills.include_instructions=false"}},
+		{"unset", nil, []string{"-c", "model_reasoning_effort=xhigh", "-c", "features.apps=false", "-c", "skills.include_instructions=false"}},
 	} {
 		if got := codex.Argv(LaunchArgs{Effort: "xhigh", Subagents: tc.n, Wrapper: true}); !slices.Equal(got, tc.want) {
 			t.Errorf("%s: codex argv = %q, want %q", tc.name, got, tc.want)

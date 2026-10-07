@@ -120,6 +120,8 @@ func parseReplies(data []byte, o Options) (RepliesFile, []string) {
 			bad("body is empty")
 		case strings.Contains(r.Body, anyMarker):
 			bad("body carries a %s… marker: magnum appends the reply marker, leave it out", anyMarker)
+		case localPath(r.Body) != "":
+			bad("%s", localPathProblem(r.Body))
 		default:
 			if n := utf8.RuneCountInString(replyBody(o.RunID, r)); n > MaxBody {
 				bad("body is %d characters (the reply marker included); GitHub takes at most %d", n, MaxBody)

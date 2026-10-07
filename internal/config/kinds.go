@@ -67,9 +67,11 @@ type Kind struct {
 	// none of the user, local, project or plugin servers, nor claude.ai
 	// connectors), codex's ["-c", "features.apps=false"] (Codex 0.160's
 	// built-in apps connector, the codex_apps server of ChatGPT's
-	// connectors, which no [mcp_servers] table declares). MCPAllow does not
-	// apply; args naming a file of servers to keep ("--mcp-config",
-	// "<path>") go in this list.
+	// connectors, which no [mcp_servers] table declares), and with it
+	// ["-c", "skills.include_instructions=false"], which keeps the user's
+	// skills list out of every turn (the judge reads the skill its prompt
+	// links). MCPAllow does not apply; args naming a file of servers to
+	// keep ("--mcp-config", "<path>") go in this list.
 	MCPStrict []string `toml:"mcp_strict"`
 	// MCPDisable: args that turn off MCP server {server}, passed once per
 	// server, e.g. codex's ["-c", "mcp_servers.{server}.enabled=false"].
@@ -320,7 +322,8 @@ func DefaultHealthPatterns() HealthPatterns {
 //     resume ["resume","{session}"], model ["--model","{model}"],
 //     effort ["-c","model_reasoning_effort={effort}"], rename "/rename {title}",
 //     login_check "codex login status" + login_ok "text:Logged in",
-//     mcp_off true with mcp_strict ["-c","features.apps=false"] and
+//     mcp_off true with mcp_strict ["-c","features.apps=false",
+//     "-c","skills.include_instructions=false"] and
 //     mcp_disable ["-c","mcp_servers.{server}.enabled=false"],
 //     project_untrust ["-c","projects={projects}"].
 //   - claude: args ["--dangerously-skip-permissions"],
@@ -364,7 +367,11 @@ func DefaultKinds() map[string]Kind {
 			// server, ChatGPT's connectors) is declared by no
 			// [mcp_servers] table: the stable "apps" feature (on by
 			// default; `codex features list`) turns it off as a whole.
-			MCPOff: true, MCPStrict: []string{"-c", "features.apps=false"},
+			// skills.include_instructions (a boolean of Codex's config
+			// schema: "whether turns receive the automatic skills
+			// instructions block") keeps the user's skills list, about 5,900
+			// tokens in every judge request, out of the session.
+			MCPOff: true, MCPStrict: []string{"-c", "features.apps=false", "-c", "skills.include_instructions=false"},
 			MCPDisable: []string{"-c", "mcp_servers." + PlaceholderServer + ".enabled=false"},
 			// Codex 0.160 merges a -c table into the user's config
 			// (config/src/overrides.rs, merge.rs) and decides a folder's

@@ -1,4 +1,4 @@
-[$magnum-review]({{.SkillPath}}) Start your own pass on {{.URL}} now, while magnum's reviewer roles work: `phase: own_pass` in the skill. Write it to {{.OwnFindings}}, post nothing, then end your turn; their reports follow in the next prompt.
+[$magnum-review]({{.SkillPath}}) Read {{.SkillPath}} first, unless this session already read that file, and follow it; load no other skill. Start your own pass on {{.URL}} now, while magnum's reviewer roles work: `phase: own_pass` in the skill. Write it to {{.OwnFindings}}, post nothing, then end your turn; their reports follow in the next prompt.
 {{- if .RestartedFrom}}
 New commits arrived while you worked: magnum moved this checkout from `{{.RestartedFrom}}` to `{{.HeadSHA}}` and restarted the round. Do the pass for `{{.HeadSHA}}`, reusing what still applies (`git diff {{.RestartedFrom}}..{{.HeadSHA}}` shows what changed).
 {{- end}}
@@ -41,6 +41,12 @@ Work at {{.Effort}} reasoning effort for this {{if eq .Mode "rereview"}}re-revie
 {{- end}}
 {{- if .MovedFrom}}
 This checkout is now {{.Checkout}} (it was {{.MovedFrom}}). Work only here.
+{{- end}}
+{{- if .Blind}}
+Blind evaluation: magnum measures what a review of exactly `{{.HeadSHA}}` finds, so nothing written about the PR afterwards may reach you. The PR may be closed or merged and its GitHub head may have moved: skip the `state == open` check, and take `git diff {{.BaseSHA}}..{{.HeadSHA}}` in this checkout as the diff and the review boundary, never GitHub's PR files or diff. Read the PR description and the commits up to `{{.HeadSHA}}` only. Do not read reviews, review comments, issue comments or replies (on this PR or elsewhere), CI results, or any commit, branch or tag newer than `{{.HeadSHA}}` (no `git log --all`, no `refs/magnum/*`, no `origin/{{.BaseRef}}` past `{{.BaseSHA}}`). Otherwise the dry-run rules apply.
+{{- end}}
+{{- if .PostMerge}}
+GitHub merged the PR before magnum reviewed `{{.HeadSHA}}`: expect `merged == true` instead of `state == open`, and find follow-ups for a new change, not changes to this PR.
 {{- end}}
 
 <magnum>

@@ -30,7 +30,7 @@ enabled = false
 command = "dotted-mcp"
 `
 
-var mcpOffArgs = []string{"-c", "features.apps=false", "-c", "mcp_servers.browser.enabled=false", "-c", "mcp_servers.docs.enabled=false"}
+var mcpOffArgs = []string{"-c", "features.apps=false", "-c", "skills.include_instructions=false", "-c", "mcp_servers.browser.enabled=false", "-c", "mcp_servers.docs.enabled=false"}
 
 // Magnum's Codex sessions loaded every MCP server of the operator's Codex
 // config. A judge launched or resumed passes -c mcp_servers.<name>.enabled=false
@@ -75,8 +75,8 @@ func TestJudgeKeepsTheMCPServersAllowedOrWhenMCPOffIsFalse(t *testing.T) {
 		edit func(k *config.Kind)
 		want []string
 	}{
-		"allowed":       {func(k *config.Kind) { k.MCPAllow = []string{"docs"} }, []string{"-c", "features.apps=false", "-c", "mcp_servers.browser.enabled=false"}},
-		"all allowed":   {func(k *config.Kind) { k.MCPAllow = []string{"docs", "browser"} }, []string{"-c", "features.apps=false"}},
+		"allowed":       {func(k *config.Kind) { k.MCPAllow = []string{"docs"} }, []string{"-c", "features.apps=false", "-c", "skills.include_instructions=false", "-c", "mcp_servers.browser.enabled=false"}},
+		"all allowed":   {func(k *config.Kind) { k.MCPAllow = []string{"docs", "browser"} }, []string{"-c", "features.apps=false", "-c", "skills.include_instructions=false"}},
 		"mcp_off false": {func(k *config.Kind) { k.MCPOff = false }, nil},
 	} {
 		e := newEnv(t)
@@ -157,7 +157,7 @@ enabled = false
 // launch, a resume and codex-review's line alike, servers or none;
 // mcp_off = false leaves it on.
 func TestCodexRunsWithoutTheAppsConnector(t *testing.T) {
-	appsOff := []string{"-c", "features.apps=false"}
+	appsOff := []string{"-c", "features.apps=false", "-c", "skills.include_instructions=false"}
 	for _, resume := range []string{"", "01a0-uuid"} {
 		e := newEnv(t)
 		ws := e.workspace()
@@ -175,7 +175,7 @@ func TestCodexRunsWithoutTheAppsConnector(t *testing.T) {
 	e := newEnv(t)
 	d := ShellData{BaseRef: "origin/master", ReportPath: "/r/codex.md", Marker: DoneMarker("r-1")}
 	role := e.spec(RoleCodexReview)
-	if got, err := e.m.ShellLine(e.ctx, e.pr.ID, role, d); err != nil || !strings.Contains(got, "review -c model_reasoning_effort=high -c features.apps=false --base") {
+	if got, err := e.m.ShellLine(e.ctx, e.pr.ID, role, d); err != nil || !strings.Contains(got, "review -c model_reasoning_effort=high -c features.apps=false -c skills.include_instructions=false --base") {
 		t.Fatalf("codex-review: line = %q, %v", got, err)
 	}
 	e.setKind(KindCodex, func(k *config.Kind) { k.MCPOff = false })
@@ -203,7 +203,7 @@ func TestCodexReviewRunsWithoutTheOperatorsMCPServers(t *testing.T) {
 		}
 	}
 	e.setKind(KindCodex, func(k *config.Kind) { k.MCPAllow = []string{"browser", "docs"} })
-	if got, err := e.m.ShellLine(e.ctx, e.pr.ID, role, d); err != nil || !strings.Contains(got, "review -c model_reasoning_effort=high -c features.apps=false --base") {
+	if got, err := e.m.ShellLine(e.ctx, e.pr.ID, role, d); err != nil || !strings.Contains(got, "review -c model_reasoning_effort=high -c features.apps=false -c skills.include_instructions=false --base") {
 		t.Fatalf("all allowed: line = %q, %v", got, err)
 	}
 	e.setKind(KindCodex, func(k *config.Kind) { k.MCPAllow, k.MCPOff = nil, false })

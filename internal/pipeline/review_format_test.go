@@ -115,3 +115,34 @@ func TestSimplifyWithoutProposalsKeepsTheApprove(t *testing.T) {
 		t.Errorf("simplify run = %s", run.State)
 	}
 }
+
+// A self-authored PR gets COMMENT both ways from magnum, as a post-merge
+// round does: on 19 self-authored PRs magnum passed APPROVE and only a skill
+// rule turned it into COMMENT. The repository's APPROVE is no missing report,
+// so the round's judge event says nothing about one.
+func TestSelfAuthoredPRGetsCommentBothWays(t *testing.T) {
+	e := newEnv(t)
+	e.cfg.Repos = []config.Repo{{Repo: "talkable/talkable", NoFindingsEvent: "APPROVE"}}
+	e.pr.AuthorLogin = store.Ptr("Zhuravel")
+	e.ag.behaviors[agents.RoleJudge] = []behavior{e.judgePosts(511, "COMMENTED", "COMMENT").behavior(t)}
+	if _, err := e.r.RunRound(e.ctx, e.input(KindInitial)); err != nil {
+		t.Fatalf("RunRound: %v", err)
+	}
+	mustContain(t, "judge prompt", e.ag.submitsFor(agents.RoleJudge)[0].Text,
+		"self_authored: true", "no_findings_event: COMMENT", "blocking_event: COMMENT")
+	for _, ev := range e.events() {
+		if strings.Contains(ev.Message, "no APPROVE this round") {
+			t.Errorf("a self-authored round blames a missing report: %s", ev.Message)
+		}
+	}
+
+	// Control: someone else's PR keeps the repository's events.
+	e2 := newEnv(t)
+	e2.cfg.Repos = e.cfg.Repos
+	e2.ag.behaviors[agents.RoleJudge] = []behavior{e2.judgePosts(512, "APPROVED", "APPROVE").behavior(t)}
+	if _, err := e2.r.RunRound(e2.ctx, e2.input(KindInitial)); err != nil {
+		t.Fatalf("RunRound: %v", err)
+	}
+	mustContain(t, "judge prompt", e2.ag.submitsFor(agents.RoleJudge)[0].Text,
+		"self_authored: false", "no_findings_event: APPROVE", "blocking_event: REQUEST_CHANGES")
+}

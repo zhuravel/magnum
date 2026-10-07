@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -102,6 +103,8 @@ func Parse(data []byte, o Options) (r Review, appended bool, problems []string) 
 		problems = append(problems, "body is empty")
 	case strings.Contains(r.Body, FooterMarker):
 		problems = append(problems, "body carries "+FooterMarker+": magnum appends the footer, leave it out")
+	case localPath(r.Body) != "":
+		problems = append(problems, localPathProblem(r.Body))
 	}
 	if len(problems) == 0 && !markerRe(o.RunID).MatchString(r.Body) {
 		r.Body = strings.TrimRight(r.Body, " \t\r\n") + "\n\n" + RunMarker(o.RunID, o.HeadSHA)
@@ -122,6 +125,46 @@ func Parse(data []byte, o Options) (r Review, appended bool, problems []string) 
 	return r, appended, nil
 }
 
+// localPathRe finds a path that may be on the judge's machine (SKILL.md: no
+// local path in posted text): under a home directory or macOS's temp
+// directories, or /tmp, at a word's start (not inside a repository path, a
+// URL or a word; a `~/` not after a slash either), up to a blank, quote,
+// backtick or bracket. /home is left out: a PR's Dockerfile or CI config
+// names /home/app, and this machine (macOS) keeps no one's home there.
+var localPathRe = regexp.MustCompile("(?:^|[^A-Za-z0-9_.~/-])(~/[^\\s`'\"()<>\\[\\]{}]*)" +
+	"|(?:^|[^A-Za-z0-9_.~-])((?:/tmp|/private|/var/folders|/Users)/[^\\s`'\"()<>\\[\\]{}]*)")
+
+// lineSuffix is a `:12` or `:12:5` after a file's path.
+var lineSuffix = regexp.MustCompile(`(?::\d+){1,2}$`)
+
+// localPath is the first local path text names (localPathRe), without
+// trailing punctuation; "" when it names none. A /tmp path counts only when
+// it is there on this machine now (as written, or without a line suffix):
+// the judge's own scratch files are, a path the PR's code names usually is
+// not.
+func localPath(text string) string {
+	for _, m := range localPathRe.FindAllStringSubmatch(text, -1) {
+		p := strings.TrimRight(m[1]+m[2], ".,;:!?")
+		if !strings.HasPrefix(p, "/tmp/") || exists(p) || exists(lineSuffix.ReplaceAllString(p, "")) {
+			return p
+		}
+	}
+	return ""
+}
+
+// exists reports whether path is there on this machine.
+func exists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// localPathProblem says which local path a body names (at most 80
+// characters of it), for a body localPath finds one in.
+func localPathProblem(body string) string {
+	return fmt.Sprintf("body names the local path %q: name files by their repository path and describe output instead",
+		textx.Clip(localPath(body), 80))
+}
+
 // checkComment checks comment i and fills in its sides.
 func checkComment(i int, c *github.DraftComment) []string {
 	var out []string
@@ -139,6 +182,8 @@ func checkComment(i int, c *github.DraftComment) []string {
 		bad("body is empty")
 	case utf8.RuneCountInString(c.Body) > MaxBody:
 		bad("body is %d characters; GitHub takes at most %d", utf8.RuneCountInString(c.Body), MaxBody)
+	case localPath(c.Body) != "":
+		bad("%s", localPathProblem(c.Body))
 	}
 	if c.Side == "" {
 		c.Side = SideRight

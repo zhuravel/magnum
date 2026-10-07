@@ -94,7 +94,7 @@ func (rd *round) runJudge(ctx context.Context, run store.Run) (RoundResult, erro
 			msg = fmt.Sprintf("prompting %s for the candidates (run %s, %s); its own pass left no %s: it does the pass now", rd.judge.Name, run.ID, in.Kind, agents.OwnFindingsFile)
 		}
 	}
-	if usual, _ := JudgeEvents(rd.r.Config, rd.owner+"/"+rd.name, &rd.idCfg, in.PostMerge); usual != jd.NoFindingsEvent {
+	if usual, _ := JudgeEvents(rd.r.Config, rd.owner+"/"+rd.name, &rd.idCfg, in.PostMerge || jd.SelfAuthored); usual != jd.NoFindingsEvent {
 		msg += fmt.Sprintf("; no %s this round, a report is missing: %s", usual, strings.Join(missingReports(jd.Reports), ", "))
 	}
 	rd.event(ctx, "info", "round.judge", msg,
@@ -689,12 +689,14 @@ const noApproveEvent = "COMMENT"
 // JudgeEvents are the review events the judge's prompt names for a round of
 // repository fullName ("owner/name") posted as identity id: the
 // repository's or the identity's (config.Config.VerdictsFor); COMMENT both
-// ways in a post-merge round, where a verdict blocks nothing; and COMMENT
-// for no findings when one of the round's reports is missing (an APPROVE
-// once went out while claude-review had hit a usage limit: a review that did
-// not hear every reviewer approves nothing).
-func JudgeEvents(cfg *config.Config, fullName string, id *config.Identity, postMerge bool, reports ...agents.Report) (noFindings, blocking string) {
-	if postMerge {
+// ways when commentOnly: in a post-merge round, where a verdict blocks
+// nothing, and on a PR the reviewer login or the human behind it opened (the
+// prompt's self_authored), where a verdict of one's own counts for nothing;
+// and COMMENT for no findings when one of the round's reports is missing (an
+// APPROVE once went out while claude-review had hit a usage limit: a review
+// that did not hear every reviewer approves nothing).
+func JudgeEvents(cfg *config.Config, fullName string, id *config.Identity, commentOnly bool, reports ...agents.Report) (noFindings, blocking string) {
+	if commentOnly {
 		return PostMergeEvent, PostMergeEvent
 	}
 	noFindings, blocking = cfg.VerdictsFor(fullName, id)
@@ -720,7 +722,8 @@ func missingReports(reports []agents.Report) []string {
 func (rd *round) judgeData(run store.Run, marker string) agents.JudgeData {
 	in := rd.in
 	reports := rd.judgeReports()
-	nf, be := JudgeEvents(rd.r.Config, rd.owner+"/"+rd.name, &rd.idCfg, in.PostMerge, reports...)
+	self := rd.selfAuthored()
+	nf, be := JudgeEvents(rd.r.Config, rd.owner+"/"+rd.name, &rd.idCfg, in.PostMerge || self, reports...)
 	skill := config.SkillPath(rd.judge.Skill, rd.r.Layout) // config.Defaults keeps {{repo}} unexpanded
 	base := in.BaseRef
 	if base == "" {
@@ -736,7 +739,7 @@ func (rd *round) judgeData(run store.Run, marker string) agents.JudgeData {
 		RunID: marker, Owner: rd.owner, Repo: rd.name, Number: in.PR.Number, URL: in.PR.URL,
 		HeadSHA: in.TargetSHA, BaseRef: base, BaseSHA: in.BaseSHA, Checkout: in.SlotPath,
 		IdentityKind: rd.r.Identity.Kind(), ReviewerLogin: rd.login, GhConfigDir: rd.ghDir,
-		NoFindingsEvent: nf, BlockingEvent: be, SelfAuthored: rd.selfAuthored(),
+		NoFindingsEvent: nf, BlockingEvent: be, SelfAuthored: self,
 		Reports: reports, ResultFile: rd.reportPath(run, rd.judge), DryRun: in.DryRun, Blind: in.Blind, PostMerge: in.PostMerge,
 		Magnum: rd.r.Layout.Binary(), SkillPath: skill, Model: rd.r.Config.RoleModel(rd.judge), Effort: rd.judge.EffortFor(rereview),
 		ForcePushed: in.ForcePushed, BaseMerged: in.BaseMerged, MovedFrom: in.MovedFrom, PreviousHeadSHA: rd.previousHead(),

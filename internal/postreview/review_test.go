@@ -1,6 +1,10 @@
 package postreview
 
 import (
+	"os"
+	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -35,6 +39,12 @@ func TestParseRefusesEachInvalidReview(t *testing.T) {
 		{"sides differ", review("COMMENT", "x", comment("app/x.rb", 14, `"side":"LEFT","start_line":12,"start_side":"RIGHT"`)),
 			`comments[0]: start_side "RIGHT" differs from side "LEFT"`},
 		{"second comment named", review("COMMENT", "x", comment("app/x.rb", 3, ""), comment("app/x.rb", 0, "")), "comments[1]: line 0"},
+		// Paths on the judge's machine (a /tmp path: TestParseRefusesATmpPathOnlyWhenItIsHere).
+		{"home path in a comment", review("COMMENT", "x", `{"path":"app/x.rb","line":3,"body":"Fails at /Users/alice/talkable.review3/app/x.rb:3."}`),
+			`comments[0]: body names the local path "/Users/alice/talkable.review3/app/x.rb:3"`},
+		{"tilde path", review("COMMENT", "See (~/.config/magnum/notes.md)."), `body names the local path "~/.config/magnum/notes.md"`},
+		{"temp dir path", review("COMMENT", "x", comment("app/x.rb", 3, ""), `{"path":"app/x.rb","line":4,"body":"Output: /var/folders/c7/T/x.log"}`),
+			`comments[1]: body names the local path "/var/folders/c7/T/x.log"`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -48,6 +58,63 @@ func TestParseRefusesEachInvalidReview(t *testing.T) {
 				t.Errorf("Run: status %s exit %d after %d calls, want invalid, 2, none", out.Status, out.ExitCode(), len(w.fake.Calls))
 			}
 		})
+	}
+}
+
+// A path that only looks like a local one is no local path: a repository
+// path with such a directory inside it, a URL, a word before the slash; and
+// a path the PR's code names (a Dockerfile's /home/app, a /tmp file that is
+// not on this machine) is a quote, in a review and in a reply alike.
+func TestParseKeepsPathsThatAreNotLocal(t *testing.T) {
+	for _, text := range []string{
+		"`app/private/keys.rb` and `spec/fixtures/home/index.html` are repository paths.",
+		"See https://example.com/tmp/report and https://example.com/Users/x.",
+		"The job writes to /tmp without a name, and `Rails.root.join(\"tmp/cache\")` stays.",
+		"lib/tasks/~/x is odd, a.b/home/x too.",
+		"`WORKDIR /home/app` runs as root, and the job writes `/tmp/magnum-no-such-dir/cache/x.csv`.",
+	} {
+		if _, _, problems := Parse([]byte(review("COMMENT", text, `{"path":"app/x.rb","line":3,"body":`+strconv.Quote(text)+`}`)), opts()); len(problems) > 0 {
+			t.Errorf("%q: problems %q", text, problems)
+		}
+		if _, problems := parseReplies([]byte(repliesFile(rep(1, "rebuttal", text))), opts()); len(problems) > 0 {
+			t.Errorf("reply %q: problems %q", text, problems)
+		}
+	}
+}
+
+// 1 of 31 posted reviews named a scratch file of the judge's machine
+// (/tmp/magnum11483/…): a /tmp path is refused when it is there at check
+// time (as written, or without a :line suffix), in a review body, an inline
+// comment and a reply; another path under the same directory passes.
+func TestParseRefusesATmpPathOnlyWhenItIsHere(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "magnum-post-review-")
+	if err != nil {
+		t.Skipf("no /tmp here: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	file := filepath.Join(dir, "out.txt")
+	if err := os.WriteFile(file, []byte("1 failure\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ name, text, path string }{
+		{"the scratch file", "The run in `" + file + "` fails.", file},
+		{"with a line", "It fails at " + file + ":12.", file + ":12"},
+		{"the scratch directory", "Logs are in " + dir + "/.", dir + "/"},
+	} {
+		want := "body names the local path " + strconv.Quote(tc.path)
+		if _, _, problems := Parse([]byte(review("COMMENT", tc.text)), opts()); !slices.ContainsFunc(problems, func(p string) bool { return strings.HasPrefix(p, want) }) {
+			t.Errorf("%s: body problems %q, want %q", tc.name, problems, want)
+		}
+		if _, _, problems := Parse([]byte(review("COMMENT", "x", `{"path":"app/x.rb","line":3,"body":`+strconv.Quote(tc.text)+`}`)), opts()); !slices.Contains(problems, "comments[0]: "+localPathProblem(tc.text)) || !strings.Contains(strings.Join(problems, ""), want) {
+			t.Errorf("%s: comment problems %q", tc.name, problems)
+		}
+		if _, problems := parseReplies([]byte(repliesFile(rep(1, "rebuttal", tc.text))), opts()); !slices.ContainsFunc(problems, func(p string) bool { return strings.HasPrefix(p, "replies[0]: "+want) }) {
+			t.Errorf("%s: reply problems %q", tc.name, problems)
+		}
+	}
+	gone := "It writes " + filepath.Join(dir, "gone", "x.csv") + " and " + dir + "-gone/y."
+	if _, _, problems := Parse([]byte(review("COMMENT", gone)), opts()); len(problems) > 0 {
+		t.Errorf("a /tmp path not on this machine: problems %q", problems)
 	}
 }
 

@@ -1,9 +1,9 @@
 {{- if .SameHead -}}
-[$magnum-review]({{.SkillPath}}) No new commits were pushed to {{.URL}} since your last review.
+[$magnum-review]({{.SkillPath}}) Read {{.SkillPath}} first, unless this session already read that file, and follow it; load no other skill. No new commits were pushed to {{.URL}} since your last review.
 
 HEAD is still `{{.HeadSHA}}`, the commit your last review ({{.PreviousReviewID}}, {{.PreviousEvent}}) covered.
 {{- else -}}
-[$magnum-review]({{.SkillPath}}) New commits were pushed to {{.URL}}. Read the replies and re-review.
+[$magnum-review]({{.SkillPath}}) Read {{.SkillPath}} first, unless this session already read that file, and follow it; load no other skill. New commits were pushed to {{.URL}}. Read the replies and re-review.
 
 magnum already updated this checkout: HEAD is `{{.HeadSHA}}`. Your last review ({{.PreviousReviewID}}, {{.PreviousEvent}}) covered `{{.PreviousHeadSHA}}`.
 {{- end}}
@@ -36,6 +36,14 @@ Your earlier threads on this PR and the replies to them are in {{.ThreadsFile}}:
 {{if .OwnFindingsMissing}}Your own pass left no {{.OwnFindings}}: do it now.{{else}}Your own pass, with your reply-contract decisions, is in {{.OwnFindings}}: start from it.{{end}}
 {{- end}}
 {{if not .SameHead}}Fresh candidate reports for this head are listed below{{if .OwnFindings}}: judge every item against your own pass{{end}}. {{end}}Follow the skill's re-review section, the reply contract included, and post exactly one new review on `{{.HeadSHA}}`{{if .Replies}}, or only the replies when your verdict and event stay{{end}}.
+{{- range .Reports}}{{if and (eq .Role "claude-simplify") (not .Missing)}}
+
+{{.Label}}'s report holds optional simplification proposals, each with its current and replacement lines, no defect claims: never judge them by the defect standard or put them in the ledger. Keep a proposal when all hold: its current lines match `{{$.HeadSHA}}` and are lines this PR added or modified (in a re-review, lines changed since the previous review), it removes something a reader must hold (a branch, helper, mode, flag, duplicated block, allocation or control-flow trap), not just moves, renames or rephrases code, and your own equivalence probe proves it preserves behaviour: a focused test, or a command that runs the old and the new code on the same inputs. Give each probe one line in Checks: the command, marked `(equivalence probe)`, and its result. Drop a proposal without one, and any that edits authorization, sandboxing, money or usage recording, or concurrency code, unless it removes a defect-prone construct. One comment per idea: a proposal becomes a ```suggestion at its first site plus "Same change at L…" for the others. Its first line is the title alone, `**Simplification** (optional, no reply needed)`, then a blank line, one sentence on what it removes, and the suggestion. Post at most three, the most substantial, ordered by what they remove, most first. They never affect the verdict. Add `"candidates":{"{{.Role}}":{"suggested":N}}` to the result file, N the ones you post.
+{{- end}}{{end}}
+{{- if .PostMerge}}
+
+Post-merge review: GitHub merged the PR before magnum reviewed `{{.HeadSHA}}`. Expect `merged == true` instead of `state == open`. Post `COMMENT` whatever you find (`no_findings_event` and `blocking_event` say so), start the body with `**Post-merge review** <previous_head_sha, 7 chars> → <head_sha, 7 chars>:`, write each finding as a follow-up for a new change, not a change to this PR, and say `in a follow-up` instead of `before merging`.
+{{- end}}
 
 <magnum>
 mode: rereview

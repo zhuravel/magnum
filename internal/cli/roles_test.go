@@ -186,7 +186,7 @@ func TestRolesKinds(t *testing.T) {
 		"omp (no role uses it)\n", "codex login status (logged in: text:Logged in; fix: codex login)", "--resume {session}",
 		"-c model_reasoning_effort={effort}", "codex -c model_reasoning_effort=xhigh", "claude --name {title}",
 		"-c agents.max_concurrent_threads_per_session={subagents} (none: -c agents.enabled=false)",
-		"mcp:", "-c features.apps=false (once, whatever the servers' names); -c mcp_servers.{server}.enabled=false per MCP server of the Codex config (allowed: -)",
+		"mcp:", "-c features.apps=false -c skills.include_instructions=false (once, whatever the servers' names); -c mcp_servers.{server}.enabled=false per MCP server of the Codex config (allowed: -)",
 		"--strict-mcp-config (none of your MCP servers load)",
 		"project:", "-c projects={projects} when the PR changes .codex/ (the checkout untrusted for the session); else its MCP servers: allow",
 		"--setting-sources user when the PR changes .claude/ or .mcp.json (the session loads your user settings only)\n")
