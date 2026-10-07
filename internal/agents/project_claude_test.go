@@ -59,7 +59,7 @@ func TestClaudeOfAPRChangingClaudeConfigLoadsOnlyTheUserSettings(t *testing.T) {
 			t.Fatalf("resume %q: args = %q\nwant %q", resume, got, want)
 		}
 		if calls := e.run.CallsWithPrefix("git", "-C", dir, "diff", "--name-only", "-z", "--no-renames", "--no-ext-diff", projectMergeBase, "--",
-			":(top,literal).claude", ":(top,literal).mcp.json"); len(calls) != 1 {
+			":(top,literal,icase).claude", ":(top,literal,icase).mcp.json"); len(calls) != 1 {
 			t.Fatalf("diff calls = %v", e.run.Calls)
 		}
 		evs := claudeProjectEvents(t, e)
@@ -325,5 +325,87 @@ func TestClaudeKeepsTheTeamsSettingsWhenOnlyLogFilesAreUntracked(t *testing.T) {
 				t.Fatalf("record %v, events %+v; want declined %v", recorded, evs, c.declined)
 			}
 		})
+	}
+}
+
+// macOS's filesystem ignores case, and folds Unicode too ("ſ" is "s"), so
+// Claude Code opening .claude/settings.json or .mcp.json reads the
+// .Claude/settings.json or .mcp.jſon a PR added: such a path is the
+// project config like the real one. A tracked .Claude/settings.json, an
+// untracked .CLAUDE/ skill or .Claude/Settings.Local.JSON decline; an
+// untracked .CLAUDE/LOG/ log does not. Every root entry that folds to a
+// path is compared by its own name too, since git's case matching is
+// ASCII-only and would miss .mcp.jſon.
+func TestClaudeProjectPathsMatchInAnyCase(t *testing.T) {
+	longS := ".mcp.jſon"
+	for _, c := range []struct {
+		name               string
+		files              map[string]string
+		changed, untracked []string
+		declined           bool
+	}{
+		{"a tracked .Claude/settings.json", map[string]string{".Claude/settings.json": "{}"}, []string{".Claude/settings.json"}, nil, true},
+		{"an untracked .CLAUDE/ skill", map[string]string{".CLAUDE/skills/x/SKILL.md": "x"}, nil, []string{".CLAUDE/skills/x/SKILL.md"}, true},
+		{"an untracked .Claude/Settings.Local.JSON", map[string]string{".Claude/Settings.Local.JSON": "{}"}, nil, []string{".Claude/Settings.Local.JSON"}, true},
+		{"an untracked .CLAUDE/LOG/ log", map[string]string{".CLAUDE/LOG/tool_use.LOG": "x"}, nil, []string{".CLAUDE/LOG/tool_use.LOG"}, false},
+		{"a .mcp.json with a long s", map[string]string{longS: "{}"}, []string{longS}, nil, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e, dir, ws := projectEnv(t, c.files, c.changed, c.untracked)
+			if err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleClaude), ws.Panes[RoleClaude], ""); err != nil {
+				t.Fatal(err)
+			}
+			want := claudeLaunchArgs
+			if c.declined {
+				want = slices.Concat(claudeLaunchArgs, userSettingsOnly)
+			}
+			if got := e.h.starts[0].Args; !slices.Equal(got, want) {
+				t.Fatalf("args = %q\nwant %q", got, want)
+			}
+			// Each path, then each root entry folding to it by its own name.
+			specs := []string{":(top,literal,icase).claude"}
+			for f := range c.files {
+				if top, _, _ := strings.Cut(f, "/"); top != ".claude" && strings.EqualFold(top, ".claude") {
+					specs = append(specs, ":(top,literal,icase)"+top)
+				}
+			}
+			specs = append(specs, ":(top,literal,icase).mcp.json")
+			if _, ok := c.files[longS]; ok {
+				specs = append(specs, ":(top,literal,icase)"+longS)
+			}
+			diff := slices.Concat([]string{"git", "-C", dir, "diff", "--name-only", "-z", "--no-renames", "--no-ext-diff", projectMergeBase, "--"}, specs)
+			if calls := e.run.CallsWithPrefix(diff...); len(calls) != 1 || len(calls[0].Args) != len(diff)-1 {
+				t.Fatalf("diff calls = %v\nwant %q", e.run.Calls, diff)
+			}
+		})
+	}
+}
+
+// Codex too opens a .Codex/config.toml for .codex/config.toml on macOS: a
+// PR adding one untrusts the checkout. A PR's file list names the project
+// config in any case, so the engine parks a Claude session before such a
+// head too; a longer name is another path.
+func TestCodexProjectAndThePRsFileListMatchInAnyCase(t *testing.T) {
+	e, dir, ws := projectEnv(t, map[string]string{".Codex/config.toml": "[mcp_servers.evil]\n"}, []string{".Codex/config.toml"}, nil)
+	if err := e.m.StartAgent(e.ctx, e.pr, e.spec(RoleJudge), ws.Panes[RoleJudge], ""); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := e.h.starts[0].Args, slices.Concat(judgeLaunchArgs, untrustArgs(dir)); !slices.Equal(got, want) {
+		t.Fatalf("args = %q\nwant %q", got, want)
+	}
+	for kind, paths := range map[string][]string{
+		KindClaude: {".Claude/settings.json", ".MCP.JSON", ".mcp.jſon", ".CLAUDE"},
+		KindCodex:  {".Codex/config.toml", ".CODEX/hooks.json"},
+	} {
+		for _, p := range paths {
+			if !ProjectTouched(kind, []string{"app/x.rb", p}) {
+				t.Errorf("%s: %s must touch the project config", kind, p)
+			}
+		}
+	}
+	for _, p := range []string{".claudex/settings.json", "app/.claude/settings.json", ".mcp.json.bak", ".MCP.JSON/x"} {
+		if ProjectTouched(KindClaude, []string{p}) {
+			t.Errorf("%s touches no Claude project config", p)
+		}
 	}
 }

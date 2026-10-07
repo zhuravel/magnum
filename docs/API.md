@@ -458,8 +458,9 @@ func ProjectSentences(ctx context.Context, st *store.Store, prID int64, head str
 func ProjectTouched(kind string, paths []string) bool
     ProjectTouched reports whether paths (a PR's changed files, relative to
     the repository root) name the project config kind loads from the checkout:
-    a file at or under one of its paths. A kind magnum does not compare touches
-    nothing.
+    a file at or under one of its paths, in any case (pathOf: macOS opens
+    .Claude/settings.json for .claude/settings.json). A kind magnum does not
+    compare touches nothing.
 
 func RenderPrompt(p config.Prompt, data any) (string, error)
     RenderPrompt executes a resolved prompt template
@@ -6769,8 +6770,9 @@ func (c *Client) ChangedPaths(ctx context.Context, dir, base, head string, paths
 func (c *Client) ChangedUnder(ctx context.Context, dir, base, head string, paths ...string) ([]string, error)
     ChangedUnder is ChangedPaths limited to the files at or under paths,
     each relative to the repository's top and taken literally (a directory or a
-    file): what head changes there since its merge base with base, whatever base
-    did since. One git diff; nil when head leaves them all alone.
+    file) in any case (literalPaths): what head changes there since its merge
+    base with base, whatever base did since. One git diff; nil when head leaves
+    them all alone.
 
 func (c *Client) Clone(ctx context.Context, repoURL, dest string) error
     Clone clones url into the absolute path dest (parents are created). URLs
@@ -6907,14 +6909,14 @@ func (c *Client) UpdateRefDelete(ctx context.Context, mainClone, ref string) err
     runs with --no-deref so git removes the ref itself, not its target.
 
 func (c *Client) WorkTreeChanges(ctx context.Context, dir, base string, skip func(untracked string) bool, paths ...string) ([]string, error)
-    WorkTreeChanges lists the files at or under paths (each relative to
-    the repository's top, taken literally: a directory or a file) whose
-    state on disk differs from base, as a tool reading them sees them:
-    committed and uncommitted changes and deletions (git diff base -- paths),
-    and the untracked files, ignored ones included (git ls-files --others),
-    except those skip reports (nil skips none), e.g. logs the tool never reads;
-    a tracked change counts whatever skip says of its path. Sorted, without
-    duplicates; nil when they all match base.
+    WorkTreeChanges lists the files at or under paths (each relative to the
+    repository's top, taken literally in any case, literalPaths: a directory
+    or a file) whose state on disk differs from base, as a tool reading them
+    sees them: committed and uncommitted changes and deletions (git diff base
+    -- paths), and the untracked files, ignored ones included (git ls-files
+    --others), except those skip reports (nil skips none), e.g. logs the tool
+    never reads; a tracked change counts whatever skip says of its path. Sorted,
+    without duplicates; nil when they all match base.
 
 func (c *Client) WorktreeAdd(ctx context.Context, mainClone, path, ref string, detach bool, branch string) error
     WorktreeAdd creates a worktree at the absolute path, checking out ref.

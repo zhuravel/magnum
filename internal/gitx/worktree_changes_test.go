@@ -24,11 +24,11 @@ func TestWorkTreeChanges(t *testing.T) {
 	if want := []string{".codex/a b.toml", ".codex/config.toml", ".codex/new.toml"}; err != nil || !slices.Equal(got, want) {
 		t.Fatalf("WorkTreeChanges = %q, %v; want %q", got, err, want)
 	}
-	cmd := wantCall(t, f, 0, false, "git", "-C", slot, "diff", "--name-only", "-z", "--no-renames", "--no-ext-diff", sha1, "--", ":(top,literal).codex")
+	cmd := wantCall(t, f, 0, false, "git", "-C", slot, "diff", "--name-only", "-z", "--no-renames", "--no-ext-diff", sha1, "--", ":(top,literal,icase).codex")
 	if cmd.Env["GIT_OPTIONAL_LOCKS"] != "0" {
 		t.Errorf("env=%v", cmd.Env)
 	}
-	wantCall(t, f, 1, false, "git", "-C", slot, "ls-files", "-z", "--others", "--", ":(top,literal).codex")
+	wantCall(t, f, 1, false, "git", "-C", slot, "ls-files", "-z", "--others", "--", ":(top,literal,icase).codex")
 	for _, bad := range [][2]string{{"-x", ".codex"}, {"a..b", ".codex"}, {sha1, ""}} {
 		if _, err := c.WorkTreeChanges(ctx, slot, bad[0], nil, bad[1]); err == nil {
 			t.Errorf("WorkTreeChanges(%q, %q) must be refused", bad[0], bad[1])
@@ -81,8 +81,8 @@ func TestWorkTreeChangesOfSeveralPaths(t *testing.T) {
 		t.Fatalf("WorkTreeChanges = %q, %v; want %q", got, err, want)
 	}
 	wantCall(t, f, 0, false, "git", "-C", slot, "diff", "--name-only", "-z", "--no-renames", "--no-ext-diff", sha1, "--",
-		":(top,literal).claude", ":(top,literal).mcp.json")
-	wantCall(t, f, 1, false, "git", "-C", slot, "ls-files", "-z", "--others", "--", ":(top,literal).claude", ":(top,literal).mcp.json")
+		":(top,literal,icase).claude", ":(top,literal,icase).mcp.json")
+	wantCall(t, f, 1, false, "git", "-C", slot, "ls-files", "-z", "--others", "--", ":(top,literal,icase).claude", ":(top,literal,icase).mcp.json")
 	for _, paths := range [][]string{nil, {".claude", ""}} {
 		if _, err := c.WorkTreeChanges(ctx, slot, sha1, nil, paths...); err == nil {
 			t.Errorf("WorkTreeChanges(%q) must be refused", paths)
@@ -151,6 +151,48 @@ func TestWorkTreeChangesSkipsOnlyUntrackedFiles(t *testing.T) {
 	changes(".claude/log/tool_use.log", ".claude/settings.local.json")
 }
 
+// macOS's filesystem ignores case, so Claude Code opening
+// .claude/settings.json reads a .Claude/settings.json a PR added, and
+// Codex .codex/config.toml a .Codex/config.toml: both comparisons match
+// the paths in any case (still literally, from the top), the committed
+// change, the change on disk and the untracked file alike; a longer name
+// (.claudex/) is still another path.
+func TestProjectPathsMatchInAnyCase(t *testing.T) {
+	ctx := context.Background()
+	fx := newFixture(t)
+	dir := fx.origin
+	fx.commit(dir, "README.md", "x\n", "Start")
+	fx.git(dir, "checkout", "--quiet", "-b", "topic")
+	fx.write(dir, ".claudex/settings.json", "{}\n")
+	fx.commit(dir, ".Claude/settings.json", "{\"hooks\":{}}\n", "Add hooks in another case")
+	head := fx.commit(dir, ".MCP.json", "{\"mcpServers\":{}}\n", "Add servers in another case")
+	want := []string{".Claude/settings.json", ".MCP.json"}
+	if got, err := fx.c.ChangedUnder(ctx, dir, "main", head, ".claude", ".mcp.json"); err != nil || !slices.Equal(got, want) {
+		t.Fatalf("ChangedUnder = %q, %v; want %q", got, err, want)
+	}
+	base := fx.git(dir, "merge-base", "HEAD", "main")
+	if got, err := fx.c.WorkTreeChanges(ctx, dir, base, nil, ".claude", ".mcp.json"); err != nil || !slices.Equal(got, want) {
+		t.Fatalf("WorkTreeChanges = %q, %v; want %q", got, err, want)
+	}
+	fx.write(dir, ".CODEX/config.toml", "[mcp_servers.evil]\n")
+	if got, err := fx.c.WorkTreeChanges(ctx, dir, base, nil, ".codex"); err != nil || !slices.Equal(got, []string{".CODEX/config.toml"}) {
+		t.Fatalf("an untracked .CODEX/: WorkTreeChanges = %q, %v", got, err)
+	}
+
+	// Git folds ASCII only: a name macOS folds further (a long s) is
+	// matched only when the caller names it, as the agents package does.
+	fx = newFixture(t)
+	dir = fx.origin
+	base = fx.commit(dir, "README.md", "x\n", "Start")
+	fx.write(dir, ".mcp.jſon", "{}\n")
+	if got, err := fx.c.WorkTreeChanges(ctx, dir, base, nil, ".mcp.json"); err != nil || len(got) != 0 {
+		t.Fatalf("a .mcp.json with a long s, unnamed: WorkTreeChanges = %q, %v; want git to miss it", got, err)
+	}
+	if got, err := fx.c.WorkTreeChanges(ctx, dir, base, nil, ".mcp.json", ".mcp.jſon"); err != nil || !slices.Equal(got, []string{".mcp.jſon"}) {
+		t.Fatalf("a .mcp.json with a long s, named: WorkTreeChanges = %q, %v", got, err)
+	}
+}
+
 // ChangedUnder answers whether a head brings changes to a CLI's project
 // config before it is checked out (the engine's question for a Claude
 // session that reloads .claude/ and .mcp.json): one `git diff --name-only`
@@ -165,7 +207,7 @@ func TestChangedUnder(t *testing.T) {
 		t.Fatalf("ChangedUnder = %q, %v; want %q", got, err, want)
 	}
 	wantCall(t, f, 0, false, "git", "-C", slot, "diff", "--name-only", "-z", "--no-renames", "origin/master..."+sha1, "--",
-		":(top,literal).claude", ":(top,literal).mcp.json")
+		":(top,literal,icase).claude", ":(top,literal,icase).mcp.json")
 	for _, bad := range [][]string{{"-x", sha1, ".claude"}, {"a..b", sha1, ".claude"}, {"origin/master", sha1}, {"origin/master", sha1, ""}} {
 		if _, err := c.ChangedUnder(ctx, slot, bad[0], bad[1], bad[2:]...); err == nil {
 			t.Errorf("ChangedUnder(%q) must be refused", bad)

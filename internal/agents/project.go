@@ -142,7 +142,8 @@ type projectScope struct {
 // plugins, MCP servers, skills, commands, agents). A PR controls them, so
 // when the files on disk there differ from the merge base of HEAD and base
 // (gitx.WorkTreeChanges: the PR's commits, and files a round left there,
-// untracked logs aside: logFile), or git cannot tell, the session gets the kind's project_untrust args for
+// untracked logs aside: logFile; the paths in any case, onDisk), or git
+// cannot tell, the session gets the kind's project_untrust args for
 // dir and its symlink-resolved form and loads none of it. Otherwise it is
 // the base branch's, the team's own, and loads as before, except that
 // project_mcp "off" turns its Codex MCP servers off (servers). Nothing for
@@ -163,14 +164,7 @@ func (m *Manager) checkoutProject(ctx context.Context, role config.Role, dir, ba
 		return projectScope{}
 	}
 	s := projectScope{kind: kind, checked: true}
-	var names []string
-	present := false
-	for _, p := range pc.paths {
-		names = append(names, p.name)
-		if fi, err := os.Stat(filepath.Join(dir, p.name)); err == nil && fi.IsDir() == p.dir || err != nil && !errors.Is(err, fs.ErrNotExist) {
-			present = true
-		}
-	}
+	names, present := pc.onDisk(dir)
 	if !present {
 		return s
 	}
@@ -194,6 +188,49 @@ func (m *Manager) checkoutProject(ctx context.Context, role config.Role, dir, ba
 		s.servers = m.projectServers(role, filepath.Join(dir, pc.servers))
 	}
 	return s
+}
+
+// onDisk lists the names at dir's root the CLI may open for pc's paths:
+// each path, and every root entry other than it whose name folds to it
+// (strings.EqualFold: .Claude, .mcp.jſon), which a case-insensitive
+// filesystem (macOS's, which folds Unicode too) opens for it and git's
+// ASCII-only icase pathspec would not always match (gitx.WorkTreeChanges
+// compares each by its own name). present reports whether one of them is
+// there as its path's type (a directory for .claude) or cannot be told; a
+// root that cannot be read adds no entries.
+func (pc projectConfig) onDisk(dir string) (names []string, present bool) {
+	entries, _ := os.ReadDir(dir)
+	for _, p := range pc.paths {
+		found := []string{p.name}
+		for _, e := range entries {
+			if e.Name() != p.name && strings.EqualFold(e.Name(), p.name) {
+				found = append(found, e.Name())
+			}
+		}
+		for _, n := range found {
+			if fi, err := os.Stat(filepath.Join(dir, n)); err == nil && fi.IsDir() == p.dir || err != nil && !errors.Is(err, fs.ErrNotExist) {
+				present = true
+			}
+		}
+		names = append(names, found...)
+	}
+	return names, present
+}
+
+// pathOf returns the project path f (relative to the checkout's root) is,
+// or lies under, and the rest of f under it ("" for the path itself),
+// matched in any case and under Unicode folding (strings.EqualFold): a
+// case-insensitive filesystem (macOS's) opens .Claude/settings.json or
+// .mcp.jſon for .claude/settings.json or .mcp.json. Nothing lies under a
+// file's path.
+func (pc projectConfig) pathOf(f string) (p projectPath, rest string, ok bool) {
+	top, rest, nested := strings.Cut(f, "/")
+	for _, p := range pc.paths {
+		if strings.EqualFold(top, p.name) && (p.dir || !nested) {
+			return p, rest, true
+		}
+	}
+	return projectPath{}, "", false
 }
 
 // kvSessionProjectOut marks a session (by id) launched with its kind's
@@ -238,18 +275,17 @@ func ProjectPaths(kind string) []string {
 
 // ProjectTouched reports whether paths (a PR's changed files, relative to
 // the repository root) name the project config kind loads from the
-// checkout: a file at or under one of its paths. A kind magnum does not
-// compare touches nothing.
+// checkout: a file at or under one of its paths, in any case (pathOf:
+// macOS opens .Claude/settings.json for .claude/settings.json). A kind
+// magnum does not compare touches nothing.
 func ProjectTouched(kind string, paths []string) bool {
 	pc, ok := projectConfigs[kind]
 	if !ok {
 		return false
 	}
 	for _, f := range paths {
-		for _, p := range pc.paths {
-			if f == p.name || (p.dir && strings.HasPrefix(f, p.name+"/")) {
-				return true
-			}
+		if _, _, ok := pc.pathOf(f); ok {
+			return true
 		}
 	}
 	return false
@@ -303,24 +339,23 @@ func (m *Manager) projectChanges(ctx context.Context, g *gitx.Client, dir, base 
 // team's config. Any other untracked file, ignored or not, still counts:
 // settings.local.json, a skill, command, agent or hook, a skill named
 // logs (.claude/skills/logs/), anything a CLI may load now or later; a
-// file of the kind's (.mcp.json) is never a log.
+// file of the kind's (.mcp.json) is never a log. Names match in any case,
+// as the project paths do (pathOf): .CLAUDE/LOG/x.LOG is a log, while
+// .Claude/Settings.Local.JSON still counts.
 func (pc projectConfig) logFile(path string) bool {
-	for _, p := range pc.paths {
-		rest, ok := strings.CutPrefix(path, p.name+"/")
-		if !p.dir || !ok {
-			continue
-		}
-		if top, _, nested := strings.Cut(rest, "/"); nested && (top == "log" || top == "logs") {
-			return true
-		}
-		name := rest[strings.LastIndex(rest, "/")+1:]
-		if strings.HasSuffix(name, ".log") {
-			return true
-		}
-		i := strings.LastIndex(name, ".log.")
-		return i >= 0 && i+len(".log.") < len(name) && strings.Trim(name[i+len(".log."):], "0123456789") == ""
+	p, rest, ok := pc.pathOf(path)
+	if !ok || !p.dir || rest == "" {
+		return false
 	}
-	return false
+	if top, _, nested := strings.Cut(rest, "/"); nested && (strings.EqualFold(top, "log") || strings.EqualFold(top, "logs")) {
+		return true
+	}
+	name := strings.ToLower(rest[strings.LastIndex(rest, "/")+1:])
+	if strings.HasSuffix(name, ".log") {
+		return true
+	}
+	i := strings.LastIndex(name, ".log.")
+	return i >= 0 && i+len(".log.") < len(name) && strings.Trim(name[i+len(".log."):], "0123456789") == ""
 }
 
 // projectServers are the MCP servers the checkout's config.toml at path

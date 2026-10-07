@@ -3035,3 +3035,21 @@ editing history. Code, config comments and prompts reference these by their head
   the feature off; the feature list says it is off. Rejected:
   `--disable apps` (a flag, where every other Codex override magnum passes is `-c`, and a wrapper gets the same
   `-c`); `[apps.<id>] enabled = false` per app (the apps are the account's, many and changing).
+- **The project-config check matches its paths in any case** (2026-10-07; a security fix to "A PR that changes
+  `.codex/` ..." and "A PR that changes `.claude/` or `.mcp.json` runs Claude with the user's settings only").
+  macOS's filesystem ignores case, so Claude Code opening `.claude/settings.json` reads a `.Claude/settings.json`
+  a PR added (and Codex a `.Codex/config.toml`, Claude a `.MCP.json`), while git, which keeps the PR's own case,
+  showed no change under the literal pathspec `.claude`: the session started with the project config loaded,
+  and the PR's hooks ran outside the sandbox (reproduced in a scratch repository by the code-health analyst).
+  `gitx` now builds the comparison's pathspecs as `:(top,literal,icase)<path>` (git 2.56: `icase` combines with
+  `literal`, only `glob` is incompatible with it, `git help glossary`; `git diff` and `git ls-files --others`
+  both honor it, tested on a real repository), for `WorkTreeChanges` at a launch and `ChangedUnder` before a
+  checkout moves. APFS also folds Unicode (a file `.mcp.jſon`, with a long s, opens as `.mcp.json`; checked on
+  the operator's volume) and git's `icase` is ASCII only, so the launch's check reads the checkout's root and
+  compares every entry whose name folds to a project path (`strings.EqualFold`) by its own name as well
+  (`agents.projectConfig.onDisk`), which also finds the config present when only a variant exists.
+  `ProjectTouched`, which reads a PR's file list, and the log exception match the same way (`pathOf`:
+  `.CLAUDE/LOG/x.LOG` is a log, `.Claude/Settings.Local.JSON` still declines). On a case-sensitive filesystem
+  the variants are other files Claude never opens, so they decline needlessly; that errs on the safe side.
+  Not covered: `ChangedUnder`'s git fallback, used only when the PR's file list cannot decide, still misses a
+  Unicode-folded variant of `.mcp.json` before a checkout moves (the session's next launch catches it).

@@ -805,7 +805,9 @@ An `agents.codex_project_declined` event records it, the board's card says "Code
 .codex/ changes" and so does the review's Checks of a round with a Codex role (the judge included).
 Untracked log files are no change: a file under `.codex/log/` or `.codex/logs/`, or one named `*.log` or
 `*.log.<digits>`, which a team's own hook may write into every checkout and Codex never loads; any other
-untracked file, ignored or not, still counts, and so does a tracked log. A PR that leaves `.codex/` alone gets the base branch's
+untracked file, ignored or not, still counts, and so does a tracked log. The paths match in any case:
+macOS's filesystem ignores case (and folds Unicode, so `ſ` is `s`), so Codex opening `.codex/config.toml`
+reads a `.Codex/config.toml` a PR added, and Claude `.claude/` and `.mcp.json` likewise. A PR that leaves `.codex/` alone gets the base branch's
 (the team's) project config as before; `project_mcp = "off"` turns its MCP servers off too, but for
 `mcp_allow`. Not covered: a Codex TUI that attaches to a running Codex app-server daemon hands it only
 some of its `-c` flags (Codex 0.160), so the MCP servers and the trust may then not be Magnum's to set; a

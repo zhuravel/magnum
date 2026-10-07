@@ -502,8 +502,9 @@ func (c *Client) ModifiedPaths(ctx context.Context, dir, base, head string) ([]s
 
 // ChangedUnder is ChangedPaths limited to the files at or under paths, each
 // relative to the repository's top and taken literally (a directory or a
-// file): what head changes there since its merge base with base, whatever
-// base did since. One git diff; nil when head leaves them all alone.
+// file) in any case (literalPaths): what head changes there since its
+// merge base with base, whatever base did since. One git diff; nil when
+// head leaves them all alone.
 func (c *Client) ChangedUnder(ctx context.Context, dir, base, head string, paths ...string) ([]string, error) {
 	specs, err := literalPaths(paths)
 	if err != nil {
@@ -513,20 +514,25 @@ func (c *Client) ChangedUnder(ctx context.Context, dir, base, head string, paths
 }
 
 // literalPaths are paths as pathspecs taken literally from the
-// repository's top; at least one, none empty.
+// repository's top, matched in any (ASCII) case: on a case-insensitive
+// filesystem, macOS's default, a tool opening .claude/settings.json reads
+// a .Claude/settings.json a commit added, so a comparison of what a tool
+// loads must count it (on a case-sensitive one it over-counts, which only
+// errs on the safe side). At least one path, none empty.
 func literalPaths(paths []string) ([]string, error) {
 	if len(paths) == 0 || slices.Contains(paths, "") {
 		return nil, errors.New("gitx: the comparison needs a path")
 	}
 	specs := make([]string, len(paths))
 	for i, p := range paths {
-		specs[i] = ":(top,literal)" + p
+		specs[i] = ":(top,literal,icase)" + p
 	}
 	return specs, nil
 }
 
 // WorkTreeChanges lists the files at or under paths (each relative to the
-// repository's top, taken literally: a directory or a file) whose state on
+// repository's top, taken literally in any case, literalPaths: a directory
+// or a file) whose state on
 // disk differs from base, as a tool reading them sees them: committed and
 // uncommitted changes and deletions (git diff base -- paths), and the
 // untracked files, ignored ones included (git ls-files --others), except
