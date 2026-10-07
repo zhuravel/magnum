@@ -18,10 +18,13 @@ PR" and "never a second CODEX_HOME".
    the items it left pending. Make sure that the checkout is clean on `master`, that `magnum status` shows a running
    daemon, and that usage leaves room: Claude (`npx -y ccusage@latest blocks --active --json`) and Codex (the
    `codex:` line). Stop and say so when either window is at or above 90%.
-2. **Evidence.** `scripts/evidence.sh <since> <run-dir>` writes `evidence.md`, a list of review report directories,
-   and the git log since. Read the summary yourself; it is the shared input of every analyst.
+2. **Evidence.** First run `magnum retro --lookback <days since>` and wait for `magnum logs` to show it done, so
+   other reviewers' comments on recently closed PRs are classified. PRs closed less than 24 hours ago wait for the
+   next run, so that late reviews can arrive. Then `scripts/evidence.sh <since> <run-dir>` writes `evidence.md`, a list of review report
+   directories, and the git log since. Read the summary yourself; it is the shared input of every analyst.
 3. **Analysis wave.** Start the analysts in [lenses.md](lenses.md) in parallel, read-only, each with the evidence
-   path, its lens and the return format there. Up to 8 at once.
+   path, its lens and the return format there. Lens 0 (misses: what other reviewers found and magnum did not) runs
+   every time; it is how the loop learns. Up to 8 at once.
 4. **Verify.** For every item you might act on, open the cited files, rerun the cited query or read the cited
    review. Drop an item you cannot confirm. Merge duplicates across lenses.
 5. **Decide.** Sort the confirmed items with the autonomy rules below. Write the plan to `<run-dir>/plan.md`. Ask
@@ -55,7 +58,11 @@ Do without asking:
 
 - a bug or regression, fixed test first;
 - a simplification with no change of behavior;
-- flaky tests, documentation that is wrong, and new measurements.
+- flaky tests, documentation that is wrong, and new measurements;
+- an eval case for a real P0-P2 miss, added to `~/.config/magnum/eval.toml` (the corpus is local, never tracked).
+
+A skill or prompt change made for a miss counts as visible to authors: ask, and propose to prove it with
+`magnum eval run --case <the miss's case>` before and after (each case costs a review round of Codex usage).
 
 Ask first, in the one batched question:
 

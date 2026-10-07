@@ -1,16 +1,42 @@
 # Analysis lenses
 
-Start each lens as one read-only subagent. Give it: the repository path, `<run-dir>/evidence.md` and the review
+Start each lens as one read-only subagent; lens 0 runs in every run, the others as the evidence warrants. Give it: the repository path, `<run-dir>/evidence.md` and the review
 directory list, `since`, its lens below, and the return format at the end. Analysts never edit files, never run
 `bin/magnum`, herdr, mysql or launchctl, and use `gh api` only for GET requests (the operator's token also serves the
 daemon: keep it to tens of calls). The registry is read with `sqlite3 -readonly`; read `.schema` first.
 
+## 0. Misses: what others found and magnum did not (every run, first)
+
+This lens is the loop's main teacher; start it in every run. Inputs: `magnum misses --all` (the retro's
+classification of other reviewers' comments on closed PRs), the evidence's misses section, and, for open PRs, the
+comments and reviews by people (not magnum's logins, not the author) posted after magnum's latest review on the same
+head: read them with `gh api` (GET) for the PRs magnum reviewed since `since`, at most 30 PRs.
+
+For each real miss (a problem a person raised that magnum's review on that head did not post), find out why:
+
+- **nobody raised it**: no reviewer report and not the judge's own pass (`judge-own.md`) mention it;
+- **raised and rejected**: a reviewer or the own pass raised it and the judge dropped it (`findings` with that path
+  and its reason code, the ledger in `codex-judge.json`): was the reason wrong?
+- **raised and under-ranked**: posted, but at a priority the person disagreed with;
+- **out of reach**: outside the diff, pre-existing, or it needed something magnum cannot see (production data, a
+  ticket, another repository): say which input would have shown it;
+- **environment**: a check the review needed could not run (readiness, databases, tools).
+
+Then name the smallest change that would have caught it and where it belongs: a general rule in
+`skills/magnum-review/SKILL.md` or a reviewer prompt, a repository note (repository-specific lessons go to
+the notes curation, not the skill), an input magnum could pass (history, related PRs, a ticket), or nothing (say why).
+Never propose a rule that names the PR, the repository or a person.
+
+Return, besides the format below, one line per miss: PR and head, the person's finding in one sentence, priority,
+the why, the proposed change. Each real P0-P2 miss with a clear head and location is also proposed as an eval case
+for `~/.config/magnum/eval.toml` (the format is in `eval.toml.example`): a case is how the next run proves that a
+skill or prompt change catches it.
+
 ## 1. Review quality
 
-What magnum posted since `since`, and whether it was right. Sample at least 10 posted reviews: read `review.json`,
-`judge-own.md`, the candidate reports and `review-threads.json` in their report directories, and the authors'
-replies on GitHub. Look for false positives (declined findings with a sound reason), misses (`misses` table, human
-reviewers' comments after magnum's review), findings the judge rejected that a human later raised, weak proofs,
+What magnum posted since `since`, and whether it was right (misses are lens 0's). Sample at least 10 posted reviews:
+read `review.json`, `judge-own.md`, the candidate reports and `review-threads.json` in their report directories, and
+the authors' replies on GitHub. Look for false positives (declined findings with a sound reason), weak proofs,
 verdict lines that misstate the findings, and noise (re-reviews that only restate open findings).
 
 ## 2. Reviewee experience
