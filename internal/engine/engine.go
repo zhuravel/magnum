@@ -62,6 +62,9 @@ type GitHub interface {
 	// ReviewsWithMarker with an empty marker lists a PR's last 30 reviews:
 	// the since_review fallback when Details' latestReviews was truncated.
 	ReviewsWithMarker(ctx context.Context, owner, repo string, number int, marker string) ([]github.Review, error)
+	// AllReviews lists every review of a PR and whether the list is
+	// complete: what a former identity left standing (dismissFormer).
+	AllReviews(ctx context.Context, owner, repo string, number int) ([]github.Review, bool, error)
 	DismissReview(ctx context.Context, owner, repo string, number int, reviewID int64, message string) error
 	// CreateReview posts a manual verdict (verdict.go).
 	CreateReview(ctx context.Context, owner, repo string, number int, commitID, event, body string) (github.RESTReview, error)

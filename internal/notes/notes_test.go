@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -142,6 +143,66 @@ func TestLockFollowsTheJudgesProtocol(t *testing.T) {
 	unlock()
 }
 
+// A stale lock that cannot be removed (a directory with a file in it) is
+// waited for like a live one: Lock sleeps between its attempts, gives up
+// with ErrBusy at the deadline, and returns at once when the context is
+// canceled, rather than retrying the removal in a loop that never sleeps.
+func TestLockWaitsForAStaleLockItCannotRemove(t *testing.T) {
+	r := testRepo(t)
+	if err := os.MkdirAll(r.Lock(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(r.Lock(), "owner"), "a judge's pid\n")
+	old := time.Now().Add(-11 * time.Minute)
+	if err := os.Chtimes(r.Lock(), old, old); err != nil {
+		t.Fatal(err)
+	}
+	orig := lockSleep
+	t.Cleanup(func() { lockSleep = orig })
+	var sleeps atomic.Int64
+	lockSleep = func(ctx context.Context, d time.Duration) error {
+		sleeps.Add(1)
+		return orig(ctx, d)
+	}
+	lock := func(ctx context.Context, wait time.Duration) error {
+		t.Helper()
+		done := make(chan error, 1)
+		go func() {
+			unlock, err := Lock(ctx, r.Lock(), wait)
+			if err == nil {
+				unlock()
+			}
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			return err
+		case <-time.After(5 * time.Second):
+			t.Fatalf("Lock(%v) did not return: it spins on the stale lock (%d sleeps)", wait, sleeps.Load())
+			return nil
+		}
+	}
+
+	if err := lock(context.Background(), 30*time.Millisecond); !errors.Is(err, ErrBusy) {
+		t.Fatalf("Lock = %v, want ErrBusy at the deadline", err)
+	}
+	if sleeps.Load() == 0 {
+		t.Error("Lock never slept between its attempts")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := time.Now()
+	if err := lock(ctx, time.Hour); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Lock with a canceled context = %v, want context.Canceled", err)
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("Lock took %v to see the canceled context", d)
+	}
+	if _, err := os.Stat(filepath.Join(r.Lock(), "owner")); err != nil {
+		t.Errorf("the stale lock's content is gone: %v", err)
+	}
+}
+
 // proposal builds a scratch directory holding base and a curator's output.
 func proposal(t *testing.T, base State, notes string, files map[string]string, changes Changes) Proposal {
 	t.Helper()
@@ -241,6 +302,11 @@ func TestValidateRejectsOnePullRequestsContent(t *testing.T) {
 			*n = strings.Replace(*n, "`qa/smoke.rb <path>`", "the smoke script", 1)
 		}, "harness file qa/smoke.rb is not named in proposal.md"},
 		{"a current file unaccounted for", func(_ *string, _ map[string]string, ch *Changes) { ch.Files = ch.Files[:2] }, "current harness file campaign_snapshot_probes_spec.rb is not in changes.json"},
+		{"a kept file missing", func(_ *string, f map[string]string, _ *Changes) { delete(f, "run_spec.sh") },
+			`harness file "run_spec.sh" is kept in changes.json but not in harness/`},
+		{"an added file missing", func(_ *string, _ map[string]string, ch *Changes) {
+			ch.Files = append(ch.Files, Change{Name: "lint.sh", Action: ActionAdded, Reason: "lints any change"})
+		}, `harness file "lint.sh" is added in changes.json but not in harness/`},
 		{"a secret in a script", func(_ *string, f map[string]string, _ *Changes) {
 			f["run_spec.sh"] = "GH_TOKEN=ghp_" + strings.Repeat("a", 36) + " bin/rspec\n"
 		}, "harness/run_spec.sh holds what looks like a secret"},
@@ -314,5 +380,41 @@ func TestReadProposalNamesWhatIsMissing(t *testing.T) {
 	}
 	if b, err := os.ReadFile(s.Current()); err != nil || !strings.HasPrefix(string(b), "# Notes for") {
 		t.Errorf("current.md = %q, %v", b, err)
+	}
+}
+
+// The curator's proposal.md and changes.json are read only as regular
+// files of its directory: a symbolic link, to a file outside the directory
+// or to one inside, is refused and nothing it points to is read.
+func TestReadProposalRefusesSymbolicLinks(t *testing.T) {
+	outside := filepath.Join(t.TempDir(), "elsewhere")
+	write(t, outside+".md", "# Notes\n\n## Secrets\nwhat the curator must not reach\n")
+	write(t, outside+".json", `{"sections":[],"files":[]}`)
+	for _, target := range []string{"outside", "inside"} {
+		t.Run(target, func(t *testing.T) {
+			s, err := PrepareScratch(filepath.Join(t.TempDir(), "c1"), baseState(), []byte("{}"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			md, js := outside+".md", outside+".json"
+			if target == "inside" {
+				md, js = s.Current(), s.Usage()
+			}
+			if err := os.Symlink(md, s.Proposal()); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(js, s.Changes()); err != nil {
+				t.Fatal(err)
+			}
+			p, problems := ReadProposal(s)
+			for _, want := range []string{"proposal.md is not a regular file", "changes.json is not a regular file"} {
+				if !slices.ContainsFunc(problems, func(p string) bool { return strings.Contains(p, want) }) {
+					t.Errorf("problems %q lack %q", problems, want)
+				}
+			}
+			if len(p.State.Notes) != 0 || p.State.Exists || p.ChangesJSON != nil {
+				t.Errorf("the linked files were read: %q %q", p.State.Notes, p.ChangesJSON)
+			}
+		})
 	}
 }

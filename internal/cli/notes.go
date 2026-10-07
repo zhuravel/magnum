@@ -75,8 +75,9 @@ func newNotesCmd(c *Context) *cobra.Command {
 			"A stale proposal (the notes changed since it was made) says so first: when its changes and the notes' merge, "+
 			"the review shows the merge and y applies it (a harness file it deletes that a round changed since is kept), "+
 			"and c asks for a new curation instead; when they conflict, y asks for a new curation. The new curation "+
-			"starts from the notes now and reads the stale proposal, which is kept as superseded. --review asks on a "+
-			"terminal only; --json prints the data instead.",
+			"starts from the notes now and reads the stale proposal, which is kept as superseded. --review and --restore "+
+			"ask on a terminal only; --json prints the data instead (--restore --json: what the restore would change, "+
+			"proposing and recording nothing).",
 		func(pos []string) int { return runNotes(c, f, pos) })
 	fs := cmd.Flags()
 	fs.BoolVar(&f.edit, "edit", false, "open the notes in $VISUAL, else $EDITOR, else vi")

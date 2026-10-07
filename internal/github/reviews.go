@@ -125,16 +125,26 @@ func (c *Client) ReviewsWithMarker(ctx context.Context, owner, repo string, numb
 	return out, nil
 }
 
-// Reviews lists every review of a pull request, oldest first: reviewsPageSize
-// (100) per page, at most reviewsMaxPages (5) pages (later reviews beyond that
-// are left out). A missing repository or pull request is an error matching
-// ErrNotFound.
+// Reviews is AllReviews without saying whether the list is complete: for a
+// reader that takes the first reviewsMaxPages pages as they are. A caller
+// that acts on what the list lacks (a review to dismiss, a review already
+// posted) reads AllReviews.
 func (c *Client) Reviews(ctx context.Context, owner, repo string, number int) ([]Review, error) {
+	out, _, err := c.AllReviews(ctx, owner, repo, number)
+	return out, err
+}
+
+// AllReviews lists every review of a pull request, oldest first:
+// reviewsPageSize (100) per page, at most reviewsMaxPages (5) pages. It
+// reports whether the list is complete: false when the pull request has
+// more reviews than that, the later ones left out. A missing repository or
+// pull request is an error matching ErrNotFound.
+func (c *Client) AllReviews(ctx context.Context, owner, repo string, number int) ([]Review, bool, error) {
 	if err := checkRepo(owner, repo); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if number <= 0 {
-		return nil, fmt.Errorf("github: invalid pull request number %d", number)
+		return nil, false, fmt.Errorf("github: invalid pull request number %d", number)
 	}
 	op := fmt.Sprintf("all reviews %s/%s#%d", owner, repo, number)
 	out := []Review{}
@@ -156,21 +166,24 @@ func (c *Client) Reviews(ctx context.Context, owner, repo string, number int) ([
 		vars := map[string]any{"owner": owner, "name": repo, "number": number, "cursor": cursor}
 		_, notFound, err := c.graphql(ctx, op, reviewsPagedQuery, vars, &data)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		if len(notFound) > 0 || data.Repository == nil || data.Repository.PullRequest == nil {
-			return nil, &APIError{Op: op, Errors: notFoundOr(notFound, op)}
+			return nil, false, &APIError{Op: op, Errors: notFoundOr(notFound, op)}
 		}
 		rv := data.Repository.PullRequest.Reviews
 		for _, n := range rv.Nodes {
 			out = append(out, n.review())
 		}
-		if !rv.PageInfo.HasNextPage || rv.PageInfo.EndCursor == "" {
-			return out, nil
+		if !rv.PageInfo.HasNextPage {
+			return out, true, nil
+		}
+		if rv.PageInfo.EndCursor == "" {
+			return out, false, nil // more pages, and no way to ask for them
 		}
 		cursor = rv.PageInfo.EndCursor
 	}
-	return out, nil
+	return out, false, nil
 }
 
 // ReviewREST reads one review over REST (GET /repos/{o}/{r}/pulls/{n}/reviews/{id})
@@ -320,8 +333,9 @@ func (c *Client) DismissReview(ctx context.Context, owner, repo string, number i
 // UpdateReviewBody replaces the summary body of a review (PUT
 // /repos/{o}/{r}/pulls/{n}/reviews/{id}) as the client's identity; GitHub
 // lets only the review's author edit it, so another login's review fails
-// (an error matching ErrForbidden or ErrNotFound). It is marked Mutates, so
-// execx.DryRun only plans it.
+// (an error matching ErrForbidden or ErrNotFound). The body, which quotes
+// the PR, goes as JSON on gh's stdin, so a failing call logs none of it. It
+// is marked Mutates, so execx.DryRun only plans it.
 func (c *Client) UpdateReviewBody(ctx context.Context, owner, repo string, number int, reviewID int64, body string) error {
 	if err := checkRepo(owner, repo); err != nil {
 		return err
@@ -334,5 +348,5 @@ func (c *Client) UpdateReviewBody(ctx context.Context, owner, repo string, numbe
 	}
 	path := fmt.Sprintf("repos/%s/%s/pulls/%d/reviews/%d", owner, repo, number, reviewID)
 	op := fmt.Sprintf("update review %s/%s#%d/%d", owner, repo, number, reviewID)
-	return c.rest(ctx, op, "PUT", path, [][2]string{{"body", body}}, true, nil)
+	return c.restInput(ctx, op, "PUT", path, map[string]string{"body": body}, true, nil)
 }

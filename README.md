@@ -446,8 +446,10 @@ check` verifies the key, the App, the installation, its permissions and that `lo
 round of each of its PRs posts as the new one (`pr.identity_migrated`): it parks the sessions the old
 identity ran in, reads the old login's reviews and threads as its own history (the previous review, the
 replies to answer, the earlier findings), and once its review is posted dismisses what the old identity
-left standing, its change requests and an App's approvals, with the old identity's own credentials.
-`magnum review --as <identity>` pins one PR to an identity, and a pinned PR never migrates.
+left standing, its change requests and an App's approvals, with the old identity's own credentials. It
+reads every review of the PR for that (up to 500); a PR with more dismisses nothing and says so in a
+`review.former_dismiss_failed` warning. `magnum review --as <identity>` pins one PR to an identity, and a
+pinned PR never migrates.
 
 `dismiss_own_stale_change_requests` says what happens to an identity's own earlier REQUEST_CHANGES review
 once a newer review of the PR has nothing blocking: `true` dismisses it ("Superseded by the newer magnum
@@ -961,7 +963,9 @@ there and runs the line, which:
    reviewed head. Any line off the diff posts nothing and exits 2, listing each bad comment with the
    valid line ranges of its file on that side;
 3. looks for a review by the reviewer login (or a former login) that already carries the run's marker,
-   and posts nothing when there is one (`already_posted`);
+   and posts nothing when there is one (`already_posted`); it reads every review of the PR (up to 500),
+   and a PR with more whose reviews read carry no marker posts nothing either (`error`: the review may be
+   among the later ones);
 4. posts the review once on the reviewed head, the JSON on gh's stdin: a 422 refusing a verdict on the
    identity's own PR is retried once as `COMMENT` (`event_downgraded`), another refusal is `rejected`,
    and a failure whose outcome is unclear is settled by looking for the marker again;
@@ -1409,7 +1413,9 @@ when what it keeps helps future reviews.
 without a record of it (the first start, an edit by hand). Bodies are gzip-compressed and stored once per
 content. `magnum notes <repo> --log` lists the versions (time, source, PR, size, harness changes),
 `--diff [N]` shows what changed since the version N back (default 1), and `--restore <version>` proposes
-a version back, reviewed like a curation, so nothing is ever unrecoverable. A `notes.changed` event counts
+a version back, reviewed like a curation on a terminal, so nothing is ever unrecoverable (with `--json` it
+prints what the restore would change and records nothing). A version a restore names stays in the
+history, an applied curation's too. A `notes.changed` event counts
 the lines and harness files each version adds and removes, without quoting them.
 
 **Usage.** The judge's result names the harness files it ran or read (`harness_used`), and a reviewer
@@ -1434,7 +1440,9 @@ obsolete workarounds, duplicates and contradictions; one-off probes are merged i
 scripts or deleted. It writes `proposal.md`, a `harness/` directory and `changes.json`, where every kept
 section and file carries a one-line reason saying how it helps a future review, and every miss it was given
 is noted (with the section that now covers it) or skipped (with a one-line reason). Magnum checks the
-proposal: every harness file named in the notes, plain files only, a reason for every item kept, every miss
+proposal: every harness file named in the notes, plain files only (`proposal.md` and `changes.json` too: a
+symbolic link is refused, never followed), every file kept or added present in `harness/`, a reason for
+every item kept, every miss
 accounted for, no pull request number, branch name or probe file (a file name or path that says probe, not
 an identifier such as `window.PROBE_SELECTOR`), no secret and no home directory path
 (size is not checked). A proposal that changes nothing is invalid, unless it skips every miss it was given:

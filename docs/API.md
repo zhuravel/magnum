@@ -5103,6 +5103,9 @@ type GitHub interface {
 	// ReviewsWithMarker with an empty marker lists a PR's last 30 reviews:
 	// the since_review fallback when Details' latestReviews was truncated.
 	ReviewsWithMarker(ctx context.Context, owner, repo string, number int, marker string) ([]github.Review, error)
+	// AllReviews lists every review of a PR and whether the list is
+	// complete: what a former identity left standing (dismissFormer).
+	AllReviews(ctx context.Context, owner, repo string, number int) ([]github.Review, bool, error)
 	DismissReview(ctx context.Context, owner, repo string, number int, reviewID int64, message string) error
 	// CreateReview posts a manual verdict (verdict.go).
 	CreateReview(ctx context.Context, owner, repo string, number int, commitID, event, body string) (github.RESTReview, error)
@@ -6141,6 +6144,13 @@ type Client struct {
 }
     Client runs gh as one identity. The zero value is unusable; set Run.
 
+func (c *Client) AllReviews(ctx context.Context, owner, repo string, number int) ([]Review, bool, error)
+    AllReviews lists every review of a pull request, oldest first:
+    reviewsPageSize (100) per page, at most reviewsMaxPages (5) pages.
+    It reports whether the list is complete: false when the pull request has
+    more reviews than that, the later ones left out. A missing repository or
+    pull request is an error matching ErrNotFound.
+
 func (c *Client) CIStates(ctx context.Context, prs []PRRadar) (map[string]string, RateLimit, error)
     CIStates reads the check rollup of each pull request's head (SUCCESS,
     FAILURE, PENDING, ERROR, EXPECTED; "" when the head has no checks) by node
@@ -6307,10 +6317,10 @@ func (c *Client) ReviewThreads(ctx context.Context, owner, repo string, number i
     request is an error matching ErrNotFound.
 
 func (c *Client) Reviews(ctx context.Context, owner, repo string, number int) ([]Review, error)
-    Reviews lists every review of a pull request, oldest first: reviewsPageSize
-    (100) per page, at most reviewsMaxPages (5) pages (later reviews beyond that
-    are left out). A missing repository or pull request is an error matching
-    ErrNotFound.
+    Reviews is AllReviews without saying whether the list is complete: for a
+    reader that takes the first reviewsMaxPages pages as they are. A caller that
+    acts on what the list lacks (a review to dismiss, a review already posted)
+    reads AllReviews.
 
 func (c *Client) ReviewsWithMarker(ctx context.Context, owner, repo string, number int, marker string) ([]Review, error)
     ReviewsWithMarker returns the last 30 reviews of a pull request whose
@@ -6326,10 +6336,11 @@ func (c *Client) SubmitReview(ctx context.Context, owner, repo string, number in
 
 func (c *Client) UpdateReviewBody(ctx context.Context, owner, repo string, number int, reviewID int64, body string) error
     UpdateReviewBody replaces the summary body of a review (PUT
-    /repos/{o}/{r}/pulls/{n}/reviews/{id}) as the client's identity; GitHub lets
-    only the review's author edit it, so another login's review fails (an error
-    matching ErrForbidden or ErrNotFound). It is marked Mutates, so execx.DryRun
-    only plans it.
+    /repos/{o}/{r}/pulls/{n}/reviews/{id}) as the client's identity; GitHub
+    lets only the review's author edit it, so another login's review fails (an
+    error matching ErrForbidden or ErrNotFound). The body, which quotes the PR,
+    goes as JSON on gh's stdin, so a failing call logs none of it. It is marked
+    Mutates, so execx.DryRun only plans it.
 
 type CompareStats struct {
 	Commits   int // total_commits
@@ -8531,9 +8542,11 @@ func Build(in Input) (Result, error)
     has no line, so neither). A comment made on a reviewed commit applies to it;
     an inline comment on another commit applies to the newest commit magnum
     reviewed before the comment when that commit descends from the reviewed
-    one and the commented file did not change between the two (Compare), and is
-    outside otherwise, as is a review body on a commit magnum did not review.
-    Only a failing Compare is an error.
+    one and the commented file did not change between the two (Compare),
+    and is outside otherwise, as is a review body on a commit magnum did not
+    review. Only a failing Compare is an error; one GitHub answers with a 404
+    (github.ErrNotFound: a commit it no longer has) proves nothing, so the
+    comment is outside and the build goes on.
 
 type Reviewed struct {
 	SHA string
@@ -8780,7 +8793,9 @@ func LineChanges(a, b string) (added, removed int)
 
 func Lock(ctx context.Context, path string, wait time.Duration) (func(), error)
     Lock takes the notes lock at path (Repo.Lock) as the judges do, retrying
-    until wait has passed (ErrBusy); it returns the release.
+    until wait has passed (ErrBusy) or ctx ends; it returns the release. A stale
+    lock it cannot remove (a directory with something in it) is waited for like
+    a live one: every retry sleeps, and the deadline and ctx hold.
 
 func Measure(r Repo, l Limits) (Size, []File, error)
     Measure measures r's notes file and harness. A missing notes file or harness
@@ -8942,8 +8957,9 @@ type Proposal struct {
     changes.json (raw and parsed).
 
 func ReadProposal(s Scratch) (Proposal, []string)
-    ReadProposal reads what the curator wrote in s. Problems name what is
-    missing or unreadable, in words fit for a nudge (paths, never content).
+    ReadProposal reads what the curator wrote in s, regular files of its
+    directory only (readRegular). Problems name what is missing or unreadable,
+    in words fit for a nudge (paths, never content).
 
 type Repo struct {
 	Root, Owner, Name string
@@ -10226,7 +10242,9 @@ type GitHub interface {
 	PullSHAs(ctx context.Context, owner, repo string, number int) (base, head string, err error)
 	PullFiles(ctx context.Context, owner, repo string, number int) ([]github.FileDelta, bool, error)
 	CompareFiles(ctx context.Context, owner, repo, base, head string) ([]github.FileDelta, error)
-	Reviews(ctx context.Context, owner, repo string, number int) ([]github.Review, error)
+	// AllReviews (and whether the list is complete) is the post-once
+	// guard's: a review carrying the run's marker is the review.
+	AllReviews(ctx context.Context, owner, repo string, number int) ([]github.Review, bool, error)
 	SubmitReview(ctx context.Context, owner, repo string, number int, r github.ReviewRequest) (github.RESTReview, error)
 	ReviewREST(ctx context.Context, owner, repo string, number int, id int64) (github.RESTReview, error)
 	ReviewComments(ctx context.Context, owner, repo string, number int, reviewID int64) ([]github.ReviewComment, error)

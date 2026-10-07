@@ -155,7 +155,10 @@ func notesReview(ctx context.Context, c *Context, d *actDeps, f notesFlags, repo
 
 // notesRestore proposes version f.restore of the repository's notes back,
 // based on the notes as they are now (recorded first when the registry has
-// no record of them), and reviews it as a curation.
+// no record of them), and reviews it as a curation. Nothing is written
+// before the operator can answer: without a terminal it refuses, and --json
+// prints the restore as it would be proposed (proposal id 0) and records
+// nothing, so no run that cannot answer leaves a proposal waiting.
 func notesRestore(ctx context.Context, c *Context, d *actDeps, f notesFlags, repo store.Repo, nr notes.Repo) int {
 	full := repo.FullName()
 	v, err := d.Store.NotesVersionByID(ctx, f.restore)
@@ -169,14 +172,20 @@ func notesRestore(ctx context.Context, c *Context, d *actDeps, f notesFlags, rep
 	if err != nil {
 		return cmdFail(c, "notes", err)
 	}
+	if live.Fingerprint() == notesFingerprint(v) {
+		fmt.Fprintf(c.Stderr, "the notes of %s hold version %d already\n", full, v.ID)
+		return 0
+	}
+	switch {
+	case f.json:
+		return notesRestorePreview(ctx, c, d, repo, v, live)
+	case !d.StdinTTY:
+		return inspUsage(c, "notes", "--restore asks y/N on a terminal; --json prints the restore for scripts", notesUsage)
+	}
 	base, _, err := d.Store.RecordNotesVersion(ctx, store.NotesVersionInput{RepoID: repo.ID, Source: store.NotesFromImport,
 		Content: engine.ContentOf(live), Dedupe: true})
 	if err != nil {
 		return cmdFail(c, "notes", err)
-	}
-	if notesFingerprint(base) == notesFingerprint(v) {
-		fmt.Fprintf(c.Stderr, "the notes of %s hold version %d already\n", full, v.ID)
-		return 0
 	}
 	p, err := d.Store.CreateNotesProposal(ctx, store.NotesProposalInput{RepoID: repo.ID, Kind: store.ProposalRestore, Trigger: "restore",
 		BaseVersionID: base.ID, VersionID: v.ID, State: store.ProposalPending})
@@ -184,6 +193,30 @@ func notesRestore(ctx context.Context, c *Context, d *actDeps, f notesFlags, rep
 		return cmdFail(c, "notes", err)
 	}
 	return notesReviewProposal(ctx, c, d, f, repo, nr, p)
+}
+
+// notesRestorePreview prints, as --review --json does, what a restore of
+// version v would change in the notes now (live), without recording
+// anything: the proposal has no id (0) nor state, and its base is the
+// latest version when that holds the notes now (none when they are not
+// recorded yet).
+func notesRestorePreview(ctx context.Context, c *Context, d *actDeps, repo store.Repo, v store.NotesVersion, live notes.State) int {
+	content, err := d.Store.NotesVersionContent(ctx, v.ID)
+	if err != nil {
+		return cmdFail(c, "notes", err)
+	}
+	p := store.NotesProposal{RepoID: repo.ID, Kind: store.ProposalRestore, Trigger: "restore", VersionID: &v.ID, CreatedAt: notesNow(d)}
+	if latest, err := d.Store.LatestNotesVersion(ctx, repo.ID); err == nil && notesFingerprint(latest) == live.Fingerprint() {
+		p.BaseVersionID = &latest.ID
+	}
+	data, err := notesReviewFrom(ctx, d, repo.FullName(), p, engine.StaleCheck{Live: live, Base: live, Proposed: engine.StateOf(content)})
+	if err != nil {
+		return cmdFail(c, "notes", err)
+	}
+	if err := writeJSON(c.Stdout, data); err != nil {
+		return cmdFail(c, "notes", err)
+	}
+	return 0
 }
 
 // notesReviewProposal shows proposal p and asks y/N on a terminal: y
@@ -315,11 +348,17 @@ func notesMissesMoved(ctx context.Context, d *actDeps, id int64) string {
 // with them and the sizes before and after: of the proposal against its
 // base, or of a clean merge against the notes now.
 func notesReviewOf(ctx context.Context, d *actDeps, full string, nr notes.Repo, p store.NotesProposal) (notesReviewData, error) {
-	data := notesReviewData{Repo: full, Proposal: p, Harness: []notesHarnessChange{}, Sections: []notes.Change{}, Misses: []notesReviewMiss{}}
 	check, err := engine.CheckStale(ctx, d.Store, nr, p)
 	if err != nil {
-		return data, err
+		return notesReviewData{}, err
 	}
+	return notesReviewFrom(ctx, d, full, p, check)
+}
+
+// notesReviewFrom is notesReviewOf from p's states as check read them (a
+// restore not proposed yet has no states in the registry to read).
+func notesReviewFrom(ctx context.Context, d *actDeps, full string, p store.NotesProposal, check engine.StaleCheck) (notesReviewData, error) {
+	data := notesReviewData{Repo: full, Proposal: p, Harness: []notesHarnessChange{}, Sections: []notes.Change{}, Misses: []notesReviewMiss{}}
 	data.base, data.proposed, data.live, data.Stale = check.Base, check.Proposed, check.Live, check.Stale
 	if len(p.Changes) > 0 {
 		if err := json.Unmarshal(p.Changes, &data.changes); err != nil {
@@ -345,7 +384,11 @@ func notesReviewOf(ctx context.Context, d *actDeps, full string, nr notes.Repo, 
 		maxLine = d.Cfg.Notes.MaxLine
 	}
 	data.Before, data.After = from.Size(maxLine), to.Size(maxLine)
-	data.Diff = notes.Unified(fromName, fmt.Sprintf("proposal %d", p.ID), string(from.Notes), string(to.Notes), 3)
+	toName := fmt.Sprintf("proposal %d", p.ID)
+	if p.ID == 0 { // a restore not proposed
+		toName = fmt.Sprintf("version %d", store.Deref(p.VersionID))
+	}
+	data.Diff = notes.Unified(fromName, toName, string(from.Notes), string(to.Notes), 3)
 	reasons := map[string]notes.Change{}
 	for _, ch := range data.changes.Files {
 		reasons[ch.Name] = ch

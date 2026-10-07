@@ -181,6 +181,34 @@ func TestBuildMovesCommentsToTheReviewedCommitWhenTheFileIsUnchanged(t *testing.
 	}
 }
 
+// TestBuildPutsACommentOutsideWhenGitHubCannotCompare: GitHub answers 404
+// for a comparison whose commit is gone (a force push, a deleted branch):
+// the comment on it is outside, as for a comparison that proves nothing,
+// the comparison is asked once, and the rest of the pull request is built.
+func TestBuildPutsACommentOutsideWhenGitHubCannotCompare(t *testing.T) {
+	threads := []github.Thread{
+		thread(1, "a.rb", 5, shaB, longish),
+		thread(2, "b.rb", 5, shaB, longish),
+		thread(3, "c.rb", 5, shaA, longish),
+	}
+	asked := 0
+	in := input(threads, nil)
+	in.Compare = func(string, string) (Comparison, error) {
+		asked++
+		return Comparison{}, &github.APIError{Op: "compare", Status: 404, Message: "Not Found"}
+	}
+	res, err := Build(in)
+	if err != nil {
+		t.Fatalf("a comparison GitHub cannot make failed the build: %v", err)
+	}
+	if !slices.Equal(ids(res.Candidates), []string{"t3"}) || !slices.Equal(ids(res.Outside), []string{"t1", "t2"}) {
+		t.Fatalf("candidates %v, outside %v", ids(res.Candidates), ids(res.Outside))
+	}
+	if asked != 1 {
+		t.Errorf("comparisons asked = %d, want 1", asked)
+	}
+}
+
 // TestBuildPicksTheNewestReviewBeforeTheComment: of the reviewed commits,
 // the comparison starts from the newest one magnum posted before the
 // comment.

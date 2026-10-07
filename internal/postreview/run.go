@@ -19,7 +19,9 @@ type GitHub interface {
 	PullSHAs(ctx context.Context, owner, repo string, number int) (base, head string, err error)
 	PullFiles(ctx context.Context, owner, repo string, number int) ([]github.FileDelta, bool, error)
 	CompareFiles(ctx context.Context, owner, repo, base, head string) ([]github.FileDelta, error)
-	Reviews(ctx context.Context, owner, repo string, number int) ([]github.Review, error)
+	// AllReviews (and whether the list is complete) is the post-once
+	// guard's: a review carrying the run's marker is the review.
+	AllReviews(ctx context.Context, owner, repo string, number int) ([]github.Review, bool, error)
 	SubmitReview(ctx context.Context, owner, repo string, number int, r github.ReviewRequest) (github.RESTReview, error)
 	ReviewREST(ctx context.Context, owner, repo string, number int, id int64) (github.RESTReview, error)
 	ReviewComments(ctx context.Context, owner, repo string, number int, reviewID int64) ([]github.ReviewComment, error)
@@ -273,9 +275,11 @@ func refused(err error) bool {
 }
 
 // findPosted returns the first submitted review by the reviewer login (or a
-// former login) carrying the run's marker, or nil.
+// former login) carrying the run's marker, or nil. A list of the PR's
+// reviews cut at the client's page limit without one is an error: the
+// review may be among the ones left out, and posting would post it twice.
 func (r *run) findPosted(ctx context.Context) (*github.Review, error) {
-	reviews, err := r.d.GitHub.Reviews(ctx, r.o.Owner, r.o.Repo, r.o.Number)
+	reviews, complete, err := r.d.GitHub.AllReviews(ctx, r.o.Owner, r.o.Repo, r.o.Number)
 	if err != nil {
 		return nil, err
 	}
@@ -285,6 +289,10 @@ func (r *run) findPosted(ctx context.Context) (*github.Review, error) {
 			continue
 		}
 		return &rv, nil
+	}
+	if !complete {
+		return nil, fmt.Errorf("the PR has more reviews than the list holds (%d read) and none read carries the run marker: "+
+			"the review may be among the ones left out, so nothing is posted", len(reviews))
 	}
 	return nil, nil
 }

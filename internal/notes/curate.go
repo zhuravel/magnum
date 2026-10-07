@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"maps"
 	"os"
@@ -151,15 +152,23 @@ type Proposal struct {
 	ChangesJSON []byte
 }
 
-// ReadProposal reads what the curator wrote in s. Problems name what is
-// missing or unreadable, in words fit for a nudge (paths, never content).
+// ReadProposal reads what the curator wrote in s, regular files of its
+// directory only (readRegular). Problems name what is missing or
+// unreadable, in words fit for a nudge (paths, never content).
 func ReadProposal(s Scratch) (Proposal, []string) {
 	var p Proposal
+	root, err := os.OpenRoot(s.Dir)
+	if err != nil {
+		return p, []string{"the curation's directory cannot be read: " + err.Error()}
+	}
+	defer root.Close()
 	var problems []string
-	text, err := os.ReadFile(s.Proposal())
+	text, err := readRegular(root, scratchProposal)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		problems = append(problems, scratchProposal+" was not written")
+	case errors.Is(err, errNotRegular):
+		problems = append(problems, scratchProposal+" is "+errNotRegular.Error())
 	case err != nil:
 		problems = append(problems, scratchProposal+" cannot be read: "+err.Error())
 	case len(strings.TrimSpace(string(text))) == 0:
@@ -170,10 +179,12 @@ func ReadProposal(s Scratch) (Proposal, []string) {
 	files, bad := readTree(s.Harness())
 	problems = append(problems, bad...)
 	p.State.Files = files
-	b, err := os.ReadFile(s.Changes())
+	b, err := readRegular(root, scratchChanges)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		problems = append(problems, scratchChanges+" was not written")
+	case errors.Is(err, errNotRegular):
+		problems = append(problems, scratchChanges+" is "+errNotRegular.Error())
 	case err != nil:
 		problems = append(problems, scratchChanges+" cannot be read: "+err.Error())
 	default:
@@ -186,6 +197,34 @@ func ReadProposal(s Scratch) (Proposal, []string) {
 		}
 	}
 	return p, problems
+}
+
+// errNotRegular is readRegular's error for a symbolic link or a special
+// file.
+var errNotRegular = errors.New("not a regular file (no symbolic links or special files)")
+
+// readRegular reads name, a regular file of root's directory. The curator
+// reads misses that quote other people's comments, so what it leaves is
+// not trusted: a symbolic link (even to a file inside the directory) or a
+// special file is errNotRegular and nothing it points to is read, and
+// root keeps every path inside the directory.
+func readRegular(root *os.Root, name string) ([]byte, error) {
+	fi, err := root.Lstat(name)
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, errNotRegular
+	}
+	f, err := root.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	if st, err := f.Stat(); err != nil || !os.SameFile(fi, st) {
+		return nil, errNotRegular // replaced since it was checked
+	}
+	return io.ReadAll(f)
 }
 
 // readTree reads every file under dir as harness blobs; symbolic links and
@@ -334,6 +373,11 @@ func Validate(p Proposal, c Check) []string {
 		}
 		if !strings.Contains(text, b.Path) {
 			add("harness file %s is not named in %s", b.Path, scratchProposal)
+		}
+	}
+	for _, ch := range p.Changes.Files {
+		if (ch.Action == ActionKept || ch.Action == ActionAdded) && !proposed[ch.Name] {
+			add("harness file %q is %s in %s but not in %s/", ch.Name, ch.Action, scratchChanges, scratchHarness)
 		}
 	}
 	for _, b := range c.Base.Files {

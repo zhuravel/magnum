@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -166,6 +167,58 @@ func TestNotesProposalsAreKeptWhateverBecomesOfThem(t *testing.T) {
 	}
 	if len(hist) != 2 || hist[0].ID != *p.AppliedVersionID || hist[0].Source != NotesFromCuration || hist[0].ProposalID == nil || *hist[0].ProposalID != applied.ID {
 		t.Errorf("history after the apply = %+v", hist)
+	}
+}
+
+// A restore names the version it proposes, which may be an applied
+// curation's (of source curation too): that version stays in the history
+// and is still the latest, whatever becomes of the restore, so the notes it
+// holds are not recorded again. Only a curation's own proposed state is
+// left out of the history.
+func TestARestoreNeverHidesTheVersionItProposes(t *testing.T) {
+	st, clk := newStore(t)
+	ctx := context.Background()
+	repo := mustRepo(t, st)
+	base, _, err := st.RecordNotesVersion(ctx, NotesVersionInput{RepoID: repo.ID, Source: NotesFromImport, Content: notesContent("old\n")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposed := notesContent("new\n", "run.sh", "bin/rspec\n")
+	cur, err := st.CreateNotesProposal(ctx, NotesProposalInput{RepoID: repo.ID, Kind: ProposalCuration, BaseVersionID: base.ID,
+		Proposed: &proposed, State: ProposalPending})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clk.Add(time.Hour)
+	applied, err := st.DecideNotesProposal(ctx, cur.ID, []string{ProposalPending}, ProposalApplied, "", time.Time{},
+		&NotesVersionInput{Source: NotesFromCuration, Content: proposed, Dedupe: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	av := *applied.AppliedVersionID
+	// A restore of the applied version left waiting (a run that never
+	// answered), and one rejected.
+	for _, state := range []string{ProposalPending, ProposalRejected} {
+		if _, err := st.CreateNotesProposal(ctx, NotesProposalInput{RepoID: repo.ID, Kind: ProposalRestore, Trigger: "restore",
+			BaseVersionID: base.ID, VersionID: av, State: state}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hist, err := st.NotesHistory(ctx, repo.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hist) != 2 || hist[0].ID != av || hist[1].ID != base.ID {
+		t.Fatalf("history = %+v, want the applied curation %d and the import %d", hist, av, base.ID)
+	}
+	if latest, err := st.LatestNotesVersion(ctx, repo.ID); err != nil || latest.ID != av {
+		t.Fatalf("latest = %+v, %v, want the applied curation %d", latest, err, av)
+	}
+	if v, added, err := st.RecordNotesVersion(ctx, NotesVersionInput{RepoID: repo.ID, Source: NotesFromImport, Content: proposed, Dedupe: true}); err != nil || added || v.ID != av {
+		t.Fatalf("recording the applied state again = %+v added %v err %v, want version %d kept", v, added, err, av)
+	}
+	if slices.ContainsFunc(hist, func(v NotesVersion) bool { return v.ID == *cur.VersionID }) {
+		t.Errorf("the curation's proposed state %d joined the history", *cur.VersionID)
 	}
 }
 

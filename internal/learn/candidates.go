@@ -14,6 +14,7 @@ package learn
 
 import (
 	"cmp"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -154,7 +155,9 @@ type Result struct {
 // newest commit magnum reviewed before the comment when that commit
 // descends from the reviewed one and the commented file did not change
 // between the two (Compare), and is outside otherwise, as is a review body
-// on a commit magnum did not review. Only a failing Compare is an error.
+// on a commit magnum did not review. Only a failing Compare is an error; one
+// GitHub answers with a 404 (github.ErrNotFound: a commit it no longer has)
+// proves nothing, so the comment is outside and the build goes on.
 func Build(in Input) (Result, error) {
 	var res Result
 	reviewed := map[string]bool{}
@@ -170,7 +173,9 @@ func Build(in Input) (Result, error) {
 		cmpd, ok := compared[key]
 		if !ok {
 			var err error
-			if cmpd, err = in.Compare(from, to); err != nil {
+			// GitHub cannot compare a commit it no longer has (a force
+			// push, a deleted branch): a comparison that proves nothing.
+			if cmpd, err = in.Compare(from, to); err != nil && !errors.Is(err, github.ErrNotFound) {
 				return false, fmt.Errorf("compare %s...%s: %w", short(from), short(to), err)
 			}
 			compared[key] = cmpd

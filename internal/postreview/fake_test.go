@@ -63,6 +63,7 @@ type world struct {
 	compareFiles   []prFile // the comparison used when the PR moved on
 	nodes          []node
 	listErr        error
+	listCut        bool // every page of the reviews says another follows: the list is cut at the client's page limit
 	// posts answer the POSTs in order; the default creates review 900.
 	posts []func(c execx.Cmd) (execx.Result, error)
 	// readback overrides the review GET returns (user, commit, state, body).
@@ -143,7 +144,7 @@ func (w *world) gh(c execx.Cmd) (execx.Result, error) {
 				"author": map[string]any{"login": n.Author, "__typename": typ}})
 		}
 		return ok(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
-			"reviews": map[string]any{"pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""}, "nodes": nodes}}}}})
+			"reviews": map[string]any{"pageInfo": map[string]any{"hasNextPage": w.listCut, "endCursor": "c"}, "nodes": nodes}}}}})
 	}
 	if args[1] == "-X" && args[2] == "POST" && args[3] == reviews {
 		var req github.ReviewRequest

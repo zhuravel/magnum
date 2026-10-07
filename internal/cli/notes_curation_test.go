@@ -292,6 +292,51 @@ func TestNotesRestoreRoundTrips(t *testing.T) {
 	}
 }
 
+// A --restore that cannot ask writes nothing: without a terminal it refuses
+// before it records the notes now or proposes anything, and --json prints
+// what the restore would change without proposing it. Neither leaves a
+// proposal waiting, nor a version.
+func TestNotesRestoreThatCannotAskWritesNothing(t *testing.T) {
+	h := newNotesHarness(t)
+	v1 := h.record(h.write(oldNotes, map[string]string{"run_spec.sh": "x", "campaign_snapshot_probes_spec.rb": "probe\n"}), store.NotesFromImport)
+	h.write(newNotes, map[string]string{"run_spec.sh": "x"}) // edited by hand: not recorded yet
+	nothingWritten := func(what string) {
+		t.Helper()
+		if ps, err := h.st.NotesProposals(h.ctx, store.NotesProposalFilter{RepoID: h.repo.ID}); err != nil || len(ps) != 0 {
+			t.Errorf("%s: proposals = %+v, %v, want none", what, ps, err)
+		}
+		if hist, err := h.st.NotesHistory(h.ctx, h.repo.ID, 0); err != nil || len(hist) != 1 {
+			t.Errorf("%s: history = %+v, %v, want the one version", what, hist, err)
+		}
+	}
+
+	if code := h.cmd("notes", "talkable/talkable", "--restore", itoa(v1.ID)); code != 2 {
+		t.Fatalf("not a terminal: exit %d: %s", code, h.errb.String())
+	}
+	actContains(t, h.errb.String(), "--restore asks y/N on a terminal")
+	nothingWritten("without a terminal")
+
+	if code := h.cmd("notes", "talkable/talkable", "--restore", itoa(v1.ID), "--json"); code != 0 {
+		t.Fatalf("--json: exit %d: %s", code, h.errb.String())
+	}
+	var data struct {
+		Proposal store.NotesProposal `json:"proposal"`
+		Diff     string              `json:"notes_diff"`
+		Harness  []notesHarnessChange
+		Stale    bool `json:"stale"`
+	}
+	if err := json.Unmarshal(h.out.Bytes(), &data); err != nil {
+		t.Fatalf("%v\n%s", err, h.out.String())
+	}
+	p := data.Proposal
+	if p.ID != 0 || p.Kind != store.ProposalRestore || store.Deref(p.VersionID) != v1.ID || p.BaseVersionID != nil || data.Stale ||
+		!strings.Contains(data.Diff, "+- `campaign_snapshot_probes_spec.rb` probes a fix") || !strings.Contains(data.Diff, "+++ version "+itoa(v1.ID)) ||
+		len(data.Harness) != 2 {
+		t.Errorf("--json = %+v", data)
+	}
+	nothingWritten("--json")
+}
+
 // --curate hands the request to the daemon and prints its answer.
 func TestNotesCurateQueuesTheRequest(t *testing.T) {
 	h := newNotesHarness(t)

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -389,6 +390,60 @@ func TestMigrationFormerDismissErrorIsAWarning(t *testing.T) {
 	}
 	if got.State != store.PRReviewed || deref(got.LastReviewID) != 501 || deref(got.ReviewedSHA) != "b2" {
 		t.Fatalf("PR after the round: %s review %v at %q, want reviewed by 501 at b2", got.State, got.LastReviewID, deref(got.ReviewedSHA))
+	}
+}
+
+// busyReviews are 45 reviews on PR #2, oldest first: the former App's
+// change request is the 5th, with 40 newer reviews (replies, other
+// reviewers) after it, past the last 30 a single read returns.
+func busyReviews() []github.Review {
+	var out []github.Review
+	for i := range int64(45) {
+		rv := migReview(600+i, "COMMENTED", "rev-ann", "User")
+		if i == 4 {
+			rv = migReview(600+i, "CHANGES_REQUESTED", "talkable", "Bot")
+		}
+		out = append(out, rv)
+	}
+	return out
+}
+
+// The former identity's blocking review is found among all the PR's
+// reviews, however many came after it, and dismissed.
+func TestMigrationDismissesAFormerReviewFortyReviewsBack(t *testing.T) {
+	m := newMigHarness(t)
+	m.reviewedByA()
+	a := m.client("talkable-app")
+	a.allReviews = map[int][]github.Review{2: busyReviews()}
+
+	m.cfg.Watches[0].Identity = "zhuravel-app"
+	migRereview(m.harness, 2, "b2")
+
+	wantStrings(t, "dismiss calls on A's client", callsWith(a, "dismiss:"), []string{migDismissCall(604, "b2", "zhuravel[bot]")})
+}
+
+// A list of the PR's reviews cut at GitHub's page limit may lack the former
+// identity's latest reviews: nothing is dismissed from it, and a warning
+// says why.
+func TestMigrationDismissesNothingFromAnIncompleteList(t *testing.T) {
+	m := newMigHarness(t)
+	m.reviewedByA()
+	a := m.client("talkable-app")
+	a.allReviews = map[int][]github.Review{2: aLeftReviews()}
+	a.reviewsCut = map[int]bool{2: true}
+
+	m.cfg.Watches[0].Identity = "zhuravel-app"
+	got := migRereview(m.harness, 2, "b2")
+
+	if calls := callsWith(a, "dismiss:"); len(calls) != 0 {
+		t.Fatalf("dismiss calls = %q, want none from an incomplete list", calls)
+	}
+	failed := approvalEvents(t, m.harness, 2, "review.former_dismiss_failed")
+	if len(failed) != 1 || failed[0].Level != "warn" || !strings.Contains(failed[0].Message, "incomplete") {
+		t.Fatalf("review.former_dismiss_failed events: %+v", failed)
+	}
+	if got.State != store.PRReviewed || deref(got.LastReviewID) != 501 {
+		t.Fatalf("PR after the round: %s review %v", got.State, got.LastReviewID)
 	}
 }
 

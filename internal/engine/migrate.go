@@ -123,9 +123,11 @@ func (e *Engine) migrateIdentity(ctx context.Context, pr *store.PR, repo store.R
 // own CHANGES_REQUESTED reviews (when it dismisses its stale change
 // requests, dismiss_own_stale_change_requests) and an App's approvals
 // (unless keep_approvals), each dismissed with that identity's own
-// credentials. Other logins' reviews are never touched. Failures are
-// warnings: the new review stands either way. A post-merge review dismisses
-// nothing: a verdict after the merge blocks nothing.
+// credentials. Other logins' reviews are never touched. Every review of
+// the PR is read (github.Client.AllReviews); a list cut at GitHub's page
+// limit dismisses nothing. Failures are warnings: the new review stands
+// either way. A post-merge review dismisses nothing: a verdict after the
+// merge blocks nothing.
 func (e *Engine) dismissFormer(ctx context.Context, job *roundJob, pr store.PR, target string, res pipeline.RoundResult) {
 	if e.d.DryRun || res.ReviewID == 0 || e.d.GitHub == nil || job.postMerge {
 		return
@@ -149,10 +151,16 @@ func (e *Engine) dismissFormer(ctx context.Context, job *roundJob, pr store.PR, 
 				fmt.Sprintf("no GitHub client for the former identity %s: its reviews stay as they are", id.Name), nil)
 			continue
 		}
-		reviews, err := gh.ReviewsWithMarker(ctx, job.repo.Owner, job.repo.Name, pr.Number, "")
+		reviews, complete, err := gh.AllReviews(ctx, job.repo.Owner, job.repo.Name, pr.Number)
 		if err != nil {
 			e.event(ctx, "warn", subject, "review.former_dismiss_failed",
 				fmt.Sprintf("could not list the reviews of the former identity %s: %v", id.Name, err), nil)
+			continue
+		}
+		if !complete { // its latest reviews may be among the ones left out
+			e.event(ctx, "warn", subject, "review.former_dismiss_failed",
+				fmt.Sprintf("the list of the PR's reviews is incomplete (%d read, GitHub has more): the reviews of the former identity %s stay as they are",
+					len(reviews), id.Name), map[string]any{"identity": id.Name, "reviews_read": len(reviews)})
 			continue
 		}
 		for _, rv := range reviews {

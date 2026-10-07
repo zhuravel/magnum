@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -178,6 +179,8 @@ func TestDismissReviewDryRun(t *testing.T) {
 	}
 }
 
+// UpdateReviewBody sends the body, which quotes the PR, as JSON on gh's
+// stdin: argv (which a failing call logs) holds none of it.
 func TestUpdateReviewBody(t *testing.T) {
 	f := &execx.Fake{Rules: []execx.Rule{{
 		Prefix: []string{"gh", "api", "-X", "PUT"},
@@ -189,9 +192,13 @@ func TestUpdateReviewBody(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmd := f.Calls[0]
-	want := []string{"api", "-X", "PUT", "repos/talkable/talkable/pulls/5/reviews/77", "--hostname", "github.com", "-f", "body=" + body}
+	want := []string{"api", "-X", "PUT", "repos/talkable/talkable/pulls/5/reviews/77", "--hostname", "github.com", "--input", "-"}
 	if !reflect.DeepEqual(cmd.Args, want) {
 		t.Errorf("args = %q", cmd.Args)
+	}
+	var sent map[string]any
+	if err := json.Unmarshal(cmd.Stdin, &sent); err != nil || len(sent) != 1 || sent["body"] != body {
+		t.Errorf("stdin = %s, %v", cmd.Stdin, err)
 	}
 	if !cmd.Mutates {
 		t.Error("an update must be marked Mutates")
@@ -298,6 +305,33 @@ func TestReviewsStopsAtTheMaxPages(t *testing.T) {
 	}
 	if got[0].DatabaseID != 1 || got[len(got)-1].DatabaseID != int64(reviewsMaxPages) {
 		t.Errorf("order = %d..%d", got[0].DatabaseID, got[len(got)-1].DatabaseID)
+	}
+}
+
+// AllReviews says whether it read every review: a list cut at
+// reviewsMaxPages pages is incomplete, one whose last page says so is
+// complete, however many pages it took.
+func TestAllReviewsSaysWhetherTheListIsComplete(t *testing.T) {
+	pages := func(last int) *execx.Fake {
+		calls := 0
+		return &execx.Fake{Rules: []execx.Rule{gqlRule(t, func(c execx.Cmd, req gqlReq) (execx.Result, error) {
+			calls++
+			return okResult(compact(t, fmt.Sprintf(`{"data":{"repository":{"pullRequest":{"reviews":{"pageInfo":{"hasNextPage":%v,"endCursor":"c%d"},"nodes":[
+			 {"databaseId":%d,"state":"COMMENTED","body":"","url":"u","submittedAt":"2026-10-03T09:00:00Z","commit":null,"author":null}]}}}}}`, calls < last, calls, calls)))
+		})}}
+	}
+	for _, tc := range []struct {
+		pages    int
+		complete bool
+	}{{1, true}, {reviewsMaxPages, true}, {reviewsMaxPages + 1, false}} {
+		f := pages(tc.pages)
+		got, complete, err := (&Client{Run: f}).AllReviews(context.Background(), "talkable", "talkable", 5)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if complete != tc.complete || len(got) != min(tc.pages, reviewsMaxPages) || len(f.Calls) != min(tc.pages, reviewsMaxPages) {
+			t.Errorf("%d pages: %d reviews in %d calls, complete %v, want %v", tc.pages, len(got), len(f.Calls), complete, tc.complete)
+		}
 	}
 }
 

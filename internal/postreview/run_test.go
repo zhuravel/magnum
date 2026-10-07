@@ -167,6 +167,30 @@ func TestRunAlreadyPostedShortCircuitsThePost(t *testing.T) {
 	}
 }
 
+// The post-once guard needs every review of the PR: when GitHub has more
+// than the list holds and none read carries the run's marker, the review
+// may be among the ones left out, so nothing is posted. A marker found in
+// the part read is the review all the same.
+func TestRunPostsNothingWhenTheReviewsListIsIncomplete(t *testing.T) {
+	w := newWorld(t)
+	w.listCut = true
+	w.nodes = []node{{ID: 700, Body: "older\n<!-- magnum:run=r-20261006T120000-6 head=d4e5f6a -->", Author: "talkable", Bot: true}}
+	out := w.run(opts(), review("COMMENT", "x", comment("app/x.rb", 12, "")))
+	if out.Status != StatusError || out.ExitCode() == 0 || !strings.Contains(out.Message, "more reviews") {
+		t.Fatalf("outcome = %+v", out)
+	}
+	if w.postCount() != 0 {
+		t.Fatalf("%d POSTs on an incomplete list", w.postCount())
+	}
+
+	w = newWorld(t)
+	w.listCut = true
+	w.nodes = []node{{ID: 703, Body: "x\n<!-- magnum:run=" + runID + " head=d4e5f6a -->", Author: "talkable", Bot: true}}
+	if out := w.run(opts(), review("COMMENT", "x")); out.Status != StatusAlreadyPosted || out.ReviewID != 703 || w.postCount() != 0 {
+		t.Fatalf("a marker in the part read: outcome = %+v, %d POSTs", out, w.postCount())
+	}
+}
+
 // A former login's review carrying the marker counts as posted.
 func TestRunAlreadyPostedByAFormerLogin(t *testing.T) {
 	w := newWorld(t)

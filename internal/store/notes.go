@@ -112,11 +112,12 @@ type NotesVersionInput struct {
 }
 
 // historyClause selects a repository's history: every version but the
-// proposed states of curations (a proposal's version_id of source
-// curation), which join it only through the version recorded when one is
-// applied.
+// proposed states of curations (a curation proposal's version_id, of
+// source curation), which join it only through the version recorded when
+// one is applied. A restore's version_id is a version of the history (an
+// applied curation's, say) and stays in it, whatever becomes of the restore.
 const historyClause = `v.repo_id = ? AND NOT (v.source = 'curation' AND v.id IN
-  (SELECT p.version_id FROM notes_proposals p WHERE p.version_id IS NOT NULL))`
+  (SELECT p.version_id FROM notes_proposals p WHERE p.kind = 'curation' AND p.version_id IS NOT NULL))`
 
 // RecordNotesVersion records in's state as a version of its repository: the
 // notes text gzip-compressed (or NULL when an earlier version holds the same

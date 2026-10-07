@@ -263,3 +263,51 @@ func TestTheFirstStartImportsTheNotes(t *testing.T) {
 		t.Fatalf("history = %+v, want one import", hist)
 	}
 }
+
+// A restore proposed of an applied curation (left waiting, as a run that
+// never answered leaves it) keeps that version the latest: the notes on
+// disk, which hold it, are not imported again.
+func TestARestoreOfAnAppliedCurationIsNotImportedAgain(t *testing.T) {
+	h := newHarness(t)
+	nr := notesOf(t, h)
+	writeNotes(t, nr, "# Notes\n", nil)
+	knownRepo(t, h)
+	repo, err := h.st.RepoByFullName(h.ctx, "talkable/talkable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hist, err := h.st.NotesHistory(h.ctx, repo.ID, 0)
+	if err != nil || len(hist) != 1 {
+		t.Fatalf("history after the start = %+v, %v", hist, err)
+	}
+	writeNotes(t, nr, "# Notes\n\n## Tests\nRun `run_spec.sh`.\n", map[string]string{"run_spec.sh": "x"})
+	curated, err := notes.ReadState(nr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := h.st.CreateNotesProposal(h.ctx, store.NotesProposalInput{RepoID: repo.ID, Kind: store.ProposalCuration, BaseVersionID: hist[0].ID,
+		Proposed: new(ContentOf(curated)), State: store.ProposalPending})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err = h.st.DecideNotesProposal(h.ctx, p.ID, []string{store.ProposalPending}, store.ProposalApplied, "", time.Time{},
+		&store.NotesVersionInput{Source: store.NotesFromCuration, Content: ContentOf(curated), Dedupe: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.st.CreateNotesProposal(h.ctx, store.NotesProposalInput{RepoID: repo.ID, Kind: store.ProposalRestore, Trigger: "restore",
+		BaseVersionID: hist[0].ID, VersionID: *p.AppliedVersionID, State: store.ProposalPending}); err != nil {
+		t.Fatal(err)
+	}
+	v, err := h.e.recordNotes(h.ctx, repo, nr, curated, store.NotesFromImport, 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.ID != *p.AppliedVersionID {
+		t.Errorf("recordNotes = version %d (%s), want the applied curation %d", v.ID, v.Source, *p.AppliedVersionID)
+	}
+	imports := slices.DeleteFunc(notesEvents(t, h, "notes.changed"), func(e store.Event) bool { return !strings.Contains(e.Message, "(import)") })
+	if len(imports) != 1 {
+		t.Errorf("imports = %+v, want the first start's only", imports)
+	}
+}

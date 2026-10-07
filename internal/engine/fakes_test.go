@@ -104,7 +104,8 @@ type fakeGH struct {
 	compareErr error
 	detailsErr error                   // Details fails
 	confirmErr error                   // ConfirmStates fails
-	allReviews map[int][]github.Review // number -> ReviewsWithMarker, oldest first
+	allReviews map[int][]github.Review // number -> AllReviews, oldest first (ReviewsWithMarker: the last 30, as GitHub)
+	reviewsCut map[int]bool            // number -> AllReviews reports the list incomplete
 	dismissErr error                   // DismissReview fails
 	createErr  error                   // CreateReview fails
 	created    []string                // CreateReview calls: "<event>@<sha>:<body>"
@@ -474,12 +475,21 @@ func (g *fakeGH) Compare(_ context.Context, owner, repo, base, head string) (git
 	return cs, nil
 }
 
+func (g *fakeGH) AllReviews(_ context.Context, owner, repo string, number int) ([]github.Review, bool, error) {
+	g.record(fmt.Sprintf("all_reviews:%s/%s#%d", owner, repo, number))
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return slices.Clone(g.allReviews[number]), !g.reviewsCut[number], nil
+}
+
+// ReviewsWithMarker reads the last 30 reviews, as github.Client's does.
 func (g *fakeGH) ReviewsWithMarker(_ context.Context, owner, repo string, number int, marker string) ([]github.Review, error) {
 	g.record(fmt.Sprintf("reviews:%s/%s#%d", owner, repo, number))
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	var out []github.Review
-	for _, r := range g.allReviews[number] {
+	all := g.allReviews[number]
+	for _, r := range all[max(len(all)-30, 0):] {
 		if strings.Contains(r.Body, marker) {
 			out = append(out, r)
 		}

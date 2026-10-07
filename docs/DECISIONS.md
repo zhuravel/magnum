@@ -3255,3 +3255,51 @@ editing history. Code, config comments and prompts reference these by their head
   fresh (13 recovery posts in two days), and its judge decides the review as the others do, but
   `judge-recovery.md` did not render the field the pipeline already filled for it. It now renders
   `failing_checks` the way `judge-initial.md` does, only when set.
+- **A restore is proposed only when the operator can answer, and never hides the version it names**
+  (2026-10-07). `magnum notes <repo> --restore <version>` recorded the notes now and created a pending restore
+  proposal before it checked for a terminal, so every `--json`, headless or "later" run left one, and the
+  board's and the dashboard's titles counted them for 7 days. Worse, the history left out every curation-sourced
+  version any proposal named: a restore of an applied curation (whose recorded version is of source curation)
+  hid that version from `--log`, `--diff` and `LatestNotesVersion` for good, and the next `recordNotes` imported
+  the notes, which still held it, as a duplicate version. Now the restore reads first (the version, the notes
+  now, "hold version N already"), refuses without a terminal before any write, and with `--json` prints what the
+  restore would change (proposal id 0, no state; its base the latest version when that holds the notes now)
+  and records nothing; only y on a terminal records the notes now and proposes the restore. The history leaves
+  out only the proposed states of curation proposals (`historyClause`: `p.kind = 'curation'`), so a restore,
+  whatever becomes of it, hides nothing. Leftover pending restores stay in the registry (every proposal is kept)
+  and expire after 7 days as before; the new clause ignores them, so no data migration. "Later" on a terminal
+  still leaves the restore pending: the operator chose to keep it for `--review`.
+- **The curator's files are read as regular files of its directory only** (2026-10-07). The curator reads the
+  retro's misses, which quote other people's PR comments, and its `proposal.md` and `changes.json` were read
+  with `os.ReadFile`, which follows a symbolic link: a manipulated curator could link a file outside its
+  directory, and magnum would store it as a version and show it in the review. `notes.ReadProposal` now opens
+  the scratch directory as an `os.Root` and reads both with `readRegular`: `Lstat` must say a regular file
+  (a link, even to a file inside, or a special file is "not a regular file", and nothing it points to is read),
+  the opened file must be the one checked (`os.SameFile`, against a swap), and the root keeps every path inside.
+  The harness was read that way already. `Validate` also refuses a harness file `changes.json` declares kept or
+  added that is not in `harness/` (it passed before, and the review then showed a file the proposal lacks).
+- **The notes lock waits for a stale lock it cannot remove** (2026-10-07). `notes.Lock` takes over a lock
+  directory older than ten minutes by removing it; when the removal failed (the directory not empty, a
+  permission), it retried at once with no sleep, no deadline and no context check: 100% CPU, and a daemon that
+  cannot stop. A failed removal now falls through to the normal wait: every retry sleeps (`lockSleep`), the
+  deadline gives `ErrBusy` (naming the removal's error), and a canceled context returns at once, checked before
+  every attempt. A removal that succeeds still retries at once, so a takeover is not delayed.
+- **Decisions on a PR's reviews read the whole list, and say when they cannot** (2026-10-07). The dismissal of
+  what a former identity left standing (`dismissFormer`) read `reviews(last: 30)`, and reply rounds push busy
+  PRs past 30 reviews, so an older change request of the former identity stayed standing; post-review's
+  post-once guard read `Reviews`, which stopped at 5 pages of 100 without a sign, so on a PR past 500 reviews
+  the marker of a review already posted could be among the ones left out and the review posted twice.
+  `github.Client.AllReviews` pages from the start and reports whether the list is complete (`Reviews` is it
+  without the flag, for the readers that take what they get: auto-approval, the retro). `dismissFormer` reads
+  it and, on an incomplete list, dismisses nothing and says so in a `review.former_dismiss_failed` warning;
+  post-review returns a review found in the part read, and otherwise, on an incomplete list, posts nothing
+  (`error`: the review may be among the later ones). The cost: the dismissal, which runs only for a PR with a
+  former identity after a posted review, makes one call per 100 reviews (at most 5) instead of one; the guard
+  already paged. `UpdateReviewBody` (the footer and the notes magnum adds to a posted review) now sends the
+  body through `restInput` on gh's stdin like the other writes: in argv a routine 403 wrote the body, which
+  quotes the PR, to the logs. And the retro's candidate builder (`learn.Build`) takes a comparison GitHub
+  answers with a 404 (a commit it no longer has, after a force push) as one that proves nothing, so the comment
+  on it is outside and the rest of the PR's retro goes on, where one 404 failed it all. Rejected: dismissing
+  what a partial list shows (the former identity's latest verdict may be among the reviews left out); reading
+  the reviews newest first for the guard (a marker may still be older than the page read); raising the 5-page
+  cap (a PR past 500 reviews is rare, and an incomplete read now says so).

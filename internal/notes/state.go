@@ -207,13 +207,19 @@ var lockSleep = func(ctx context.Context, d time.Duration) error {
 }
 
 // Lock takes the notes lock at path (Repo.Lock) as the judges do, retrying
-// until wait has passed (ErrBusy); it returns the release.
+// until wait has passed (ErrBusy) or ctx ends; it returns the release. A
+// stale lock it cannot remove (a directory with something in it) is waited
+// for like a live one: every retry sleeps, and the deadline and ctx hold.
 func Lock(ctx context.Context, path string, wait time.Duration) (func(), error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
 	deadline := time.Now().Add(wait)
+	var stuck error // the last failed removal of a stale lock
 	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		err := os.Mkdir(path, 0o700)
 		if err == nil {
 			return func() { _ = os.Remove(path) }, nil
@@ -222,10 +228,14 @@ func Lock(ctx context.Context, path string, wait time.Duration) (func(), error) 
 			return nil, err
 		}
 		if fi, serr := os.Stat(path); serr == nil && time.Since(fi.ModTime()) > lockStale {
-			_ = os.Remove(path)
-			continue
+			if stuck = os.Remove(path); stuck == nil {
+				continue // taken over: try again at once
+			}
 		}
 		if !time.Now().Before(deadline) {
+			if stuck != nil {
+				return nil, fmt.Errorf("%w (its stale lock cannot be removed: %v)", ErrBusy, stuck)
+			}
 			return nil, ErrBusy
 		}
 		if err := lockSleep(ctx, min(lockPoll, max(time.Until(deadline), time.Millisecond))); err != nil {
