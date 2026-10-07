@@ -38,7 +38,7 @@ func findingsRow() PRBoardRow {
 // worktrees shown.
 func iconDash(t *testing.T, mode IconMode, w, h int) dashboardModel {
 	t.Helper()
-	m := newDashboardModel(context.Background(), &fakeSource{data: dashData()}, &fakeActions{},
+	m := testDashboard(context.Background(), &fakeSource{data: dashData()}, &fakeActions{},
 		DashboardOptions{Now: func() time.Time { return dashNow }, Icons: mode})
 	m, _ = send(t, m, tea.WindowSizeMsg{Width: w, Height: h}, dashDataMsg{data: dashData()}, keyMsg("w"))
 	return m

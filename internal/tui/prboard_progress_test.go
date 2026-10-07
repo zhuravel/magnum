@@ -116,7 +116,7 @@ func TestBoardFrameFollowsTheRoundTimeByTheMinute(t *testing.T) {
 	now := boardNow
 	rows := []PRBoardRow{runningRow(boardNow.Add(-17*time.Minute-10*time.Second),
 		workingRole("claude-simplify", "simplify", boardNow.Add(-5*time.Minute)))}
-	m := newPRBoardModel(context.Background(), &fakeBoardSource{rows: rows}, &fakeActions{},
+	m := testPRBoard(context.Background(), &fakeBoardSource{rows: rows}, &fakeActions{},
 		PRBoardOptions{Now: func() time.Time { return now }, SelfLogins: boardSelf})
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 220, Height: 30})
 	next, _ = next.(prBoardModel).Update(prbDataMsg{rows: rows})
@@ -148,7 +148,7 @@ func TestDashboardRoundsLineFollowsEachRoundsMinute(t *testing.T) {
 	d := dashData()
 	d.Rounds.Progress = []*RoundProgress{{StartedAt: dashNow.Add(-17*time.Minute - 10*time.Second),
 		Roles: []RoleProgress{workingRole("claude-simplify", "simplify", dashNow.Add(-5*time.Minute))}}}
-	m := newDashboardModel(context.Background(), &fakeSource{data: d}, nil, DashboardOptions{Now: func() time.Time { return now }})
+	m := testDashboard(context.Background(), &fakeSource{data: d}, nil, DashboardOptions{Now: func() time.Time { return now }})
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 160, Height: 40})
 	next, _ = next.(dashboardModel).Update(dashDataMsg{data: d})
 	m = next.(dashboardModel)

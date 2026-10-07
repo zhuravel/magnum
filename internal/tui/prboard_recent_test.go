@@ -45,7 +45,7 @@ func recentBoard(t *testing.T, w, h int, opts PRBoardOptions) prBoardModel {
 		opts.RecentClosed = 24 * time.Hour
 	}
 	src := &fakeBoardSource{rows: recentRows()}
-	m := newPRBoardModel(context.Background(), src, &fakeActions{}, opts)
+	m := testPRBoard(context.Background(), src, &fakeActions{}, opts)
 	m, _ = send(t, m, tea.WindowSizeMsg{Width: w, Height: h}, prbDataMsg{rows: src.rows})
 	return m
 }
@@ -198,7 +198,7 @@ func TestPRBoardRecentlyClosedFollowFilterViewAndOwner(t *testing.T) {
 
 	rows := append(recentRows(), PRBoardRow{Ref: "example/widgets#7", Owner: "example", Repo: "widgets", Number: 7, Title: "Widget export",
 		State: "closed", GHState: "MERGED", ActivityAt: ago(time.Hour), ClosedAt: ago(time.Hour), Recent: true})
-	o := newPRBoardModel(context.Background(), &fakeBoardSource{rows: rows}, &fakeActions{},
+	o := testPRBoard(context.Background(), &fakeBoardSource{rows: rows}, &fakeActions{},
 		PRBoardOptions{Now: func() time.Time { return boardNow }, RecentClosed: 24 * time.Hour, DefaultOwner: "example"})
 	o, _ = send(t, o, tea.WindowSizeMsg{Width: 220, Height: 40}, prbDataMsg{rows: rows})
 	if got := boardRefs(o); !slices.Equal(got, []string{"example/widgets#7"}) {

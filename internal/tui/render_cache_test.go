@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -54,61 +55,114 @@ func stormBoard(t testing.TB, rows int) prBoardModel {
 
 func stormDash(t testing.TB, rows int) dashboardModel {
 	src := &fakeSource{data: synthStatus(rows)}
-	m := newDashboardModel(context.Background(), src, &fakeActions{}, DashboardOptions{Now: func() time.Time { return dashNow }})
+	m := testDashboard(context.Background(), src, &fakeActions{}, DashboardOptions{Now: func() time.Time { return dashNow }})
 	n, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	n, _ = n.Update(dashDataMsg{data: src.data})
 	return n.(dashboardModel)
 }
 
-// storm feeds msg n times, rendering after each, the way a wheel or
-// trackpad swipe reaches the screen: down keys with the mouse off (iTerm2
-// turns the wheel into arrow keys), wheel events with it on.
-func storm(m tea.Model, n int, msg tea.Msg) (tea.Model, time.Duration) {
-	start := time.Now()
-	for range n {
-		m, _ = m.Update(msg)
-		_ = m.View()
-	}
-	return m, time.Since(start)
+// parts is what a partCache holds at one moment: its key and its map. While
+// both stay, the cache built only the parts it lacked; a new key starts a
+// new map, and every part is built again.
+type parts[K comparable] struct {
+	key K
+	m   uintptr
+	n   int
 }
 
+func partsOf[K, P comparable, V any](c *partCache[K, P, V]) parts[K] {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return parts[K]{key: c.key, m: reflect.ValueOf(c.parts).Pointer(), n: len(c.parts)}
+}
+
+// measures is what a screen's caches hold: the rows measured for the
+// column widths and the layout (board), the rows drawn (board), the body
+// and the header (dashboard). A frame that measures or draws every row again
+// changes one of them by more than the rows it adds.
+type measures struct {
+	natural, layout, summary, rows parts[prbRowsKey]
+	body                           parts[dashBodyKey]
+	header                         parts[dashHeaderKey]
+}
+
+func measuresOf(m tea.Model) measures {
+	switch m := m.(type) {
+	case prBoardModel:
+		c := m.cache
+		return measures{natural: partsOf(&c.natural), layout: partsOf(&c.layout), summary: partsOf(&c.summary), rows: partsOf(&c.rows)}
+	case dashboardModel:
+		return measures{body: partsOf(&m.cache.body), header: partsOf(&m.cache.header)}
+	}
+	panic(fmt.Sprintf("measuresOf(%T)", m))
+}
+
+// sameMeasures reports whether after holds what before held, plus drawn
+// rows at most: no part was measured or drawn again.
+func sameMeasures(before, after measures) bool {
+	rows := after.rows
+	rows.n = before.rows.n
+	after.rows = rows
+	return before == after
+}
+
+// storm feeds msg n times, rendering after each, the way a wheel or
+// trackpad swipe reaches the screen: down keys with the mouse off (iTerm2
+// turns the wheel into arrow keys), wheel events with it on. It fails t
+// when a frame measured or drew again what an earlier one had, and returns
+// the rows drawn in all.
+func storm(t *testing.T, m tea.Model, n int, msg func(i int) tea.Msg) int {
+	t.Helper()
+	_ = m.View()
+	first := measuresOf(m)
+	start := time.Now()
+	for i := range n {
+		m, _ = m.Update(msg(i))
+		_ = m.View()
+		if now := measuresOf(m); !sameMeasures(first, now) {
+			t.Fatalf("event %d measured or drew the screen again: caches %+v, before %+v", i, now, first)
+		}
+	}
+	t.Logf("%d events, each rendered: %v", n, time.Since(start))
+	return measuresOf(m).rows.n
+}
+
+// A storm of down keys or wheel events reuses what the first frame
+// measured and drew: the column widths, the layout, the summary and the
+// dashboard's body and header; each row of the board is drawn at most once
+// with the cursor on it and once without.
 func TestWheelStormStaysCheap(t *testing.T) {
 	for _, c := range []struct {
 		name string
-		m    tea.Model
-	}{{"board", stormBoard(t, 200)}, {"dashboard", stormDash(t, 200)}} {
+		m    func() tea.Model
+	}{{"board", func() tea.Model { return stormBoard(t, 200) }}, {"dashboard", func() tea.Model { return stormDash(t, 200) }}} {
 		for _, ev := range []struct {
 			name string
 			msg  tea.Msg
 		}{{"down keys", keyMsg("down")}, {"wheel events", tea.MouseWheelMsg{X: 20, Y: 20, Button: tea.MouseWheelDown}}} {
-			_, d := storm(c.m, 5000, ev.msg)
-			t.Logf("%s: 5000 %s, each rendered: %v", c.name, ev.name, d)
-			if limit := raceSlowdown * time.Second; d > limit {
-				t.Errorf("%s: 5000 %s took %v, want well under %v", c.name, ev.name, d, limit)
-			}
+			t.Run(c.name+" "+ev.name, func(t *testing.T) {
+				if drawn := storm(t, c.m(), 5000, func(int) tea.Msg { return ev.msg }); drawn > 2*200 {
+					t.Errorf("%d rows drawn for a board of 200", drawn)
+				}
+			})
 		}
 	}
 }
 
 // Wheel events up and down the whole board, each notch moving every row
-// on screen, still reuse the layout and the drawn rows: a frame that
-// measured the rows again would take this past its limit many times over.
+// on screen, still reuse the layout and the drawn rows: no frame measures
+// the rows again, and each row is drawn at most once with the cursor on it
+// and once without.
 func TestWheelEventsUpAndDownStayCheap(t *testing.T) {
-	m := tea.Model(stormBoard(t, 200))
 	down, up := tea.MouseWheelMsg{Button: tea.MouseWheelDown}, tea.MouseWheelMsg{Button: tea.MouseWheelUp}
-	start := time.Now()
-	for i := range 1000 {
-		msg := down
+	drawn := storm(t, stormBoard(t, 200), 1000, func(i int) tea.Msg {
 		if (i/60)%2 == 1 {
-			msg = up
+			return up
 		}
-		m, _ = m.Update(msg)
-		_ = m.View()
-	}
-	d := time.Since(start)
-	t.Logf("1000 wheel events up and down, each rendered: %v", d)
-	if limit := raceSlowdown * time.Second; d > limit {
-		t.Errorf("1000 wheel events took %v, want well under %v", d, limit)
+		return down
+	})
+	if drawn == 0 || drawn > 2*200 {
+		t.Errorf("%d rows drawn for a board of 200, want some, each at most twice", drawn)
 	}
 }
 
@@ -273,14 +327,14 @@ func TestDashboardFrameCacheFollowsEveryChange(t *testing.T) {
 func TestFrameCacheFollowsTheClock(t *testing.T) {
 	now := dashNow
 	clock := func() time.Time { return now }
-	d := newDashboardModel(context.Background(), &fakeSource{}, nil, DashboardOptions{Now: clock})
+	d := testDashboard(context.Background(), &fakeSource{}, nil, DashboardOptions{Now: clock})
 	next, _ := d.Update(dashDataMsg{data: dashData()})
 	d = next.(dashboardModel)
 	mustContain(t, viewOf(d), "updated 3s ago")
 	now = now.Add(time.Minute)
 	mustContain(t, viewOf(d), "updated 1m")
 
-	b := newPRBoardModel(context.Background(), &fakeBoardSource{}, nil, PRBoardOptions{Now: clock})
+	b := testPRBoard(context.Background(), &fakeBoardSource{}, nil, PRBoardOptions{Now: clock})
 	next, _ = b.Update(prbDataMsg{rows: boardRows()})
 	b = next.(prBoardModel)
 	v := viewOf(b)

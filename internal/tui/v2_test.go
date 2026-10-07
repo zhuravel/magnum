@@ -29,7 +29,7 @@ func TestScreensFollowTerminalBackground(t *testing.T) {
 	mustContain(t, viewOf(p), "talkable/talkable#7")
 	mustContain(t, viewOf(d), "SLOTS (2)")
 
-	m := newDashboardModel(context.Background(), &fakeSource{}, nil, DashboardOptions{})
+	m := testDashboard(context.Background(), &fakeSource{}, nil, DashboardOptions{})
 	if _, ok := m.Init()().(tea.BatchMsg); !ok {
 		t.Error("dashboard Init must batch the background query with its own commands")
 	}

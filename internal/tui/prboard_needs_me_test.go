@@ -192,7 +192,7 @@ func needsMeBoard(t *testing.T, w, h int, opts PRBoardOptions) (prBoardModel, te
 	t.Helper()
 	opts.Now = func() time.Time { return boardNow }
 	opts.SelfLogins = boardSelf
-	m := newPRBoardModel(context.Background(), &fakeBoardSource{rows: needsMeRows()}, &fakeActions{}, opts)
+	m := testPRBoard(context.Background(), &fakeBoardSource{rows: needsMeRows()}, &fakeActions{}, opts)
 	next, _ := m.Update(tea.WindowSizeMsg{Width: w, Height: h})
 	next, cmd := next.(prBoardModel).Update(prbDataMsg{rows: needsMeRows()})
 	return next.(prBoardModel), cmd
@@ -335,7 +335,7 @@ func TestTheTitleSaysHowManyNeedYourApproval(t *testing.T) {
 	// The status dashboard's title says it too.
 	data := dashData()
 	data.Facts = DaemonFacts{NeedsMe: 2}
-	d := newDashboardModel(context.Background(), &fakeSource{data: data}, &fakeActions{}, DashboardOptions{Now: func() time.Time { return dashNow }})
+	d := testDashboard(context.Background(), &fakeSource{data: data}, &fakeActions{}, DashboardOptions{Now: func() time.Time { return dashNow }})
 	d, _ = send(t, d, tea.WindowSizeMsg{Width: 200, Height: 50}, dashDataMsg{data: data})
 	mustContain(t, strings.Split(viewOf(d), "\n")[0], "2 need your ✓")
 }

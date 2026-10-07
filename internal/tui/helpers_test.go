@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"reflect"
 	"regexp"
 	"strings"
@@ -71,12 +72,48 @@ func typed(s string) []tea.Msg {
 	return out
 }
 
+// instantTick is the Tick of the screens tests build: its command answers
+// at once with the timer's message, so a test that runs it sees what the
+// timer sends, and execCmd drops it unrun like a timer still running.
+func instantTick(_ time.Duration, fn func(time.Time) tea.Msg) tea.Cmd {
+	return func() tea.Msg { return fn(time.Now()) }
+}
+
+// isInstantTick reports whether cmd is a timer instantTick scheduled: every
+// command it returns is the same function literal.
+func isInstantTick(cmd tea.Cmd) bool {
+	return reflect.ValueOf(cmd).Pointer() == reflect.ValueOf(instantTick(0, nil)).Pointer()
+}
+
+// testDashboard, testPRBoard and testWatch build a screen as its Run
+// function does, with instantTick for timers unless opts set a Tick.
+func testDashboard(ctx context.Context, src DashboardSource, act DashboardActions, opts DashboardOptions) dashboardModel {
+	if opts.Tick == nil {
+		opts.Tick = instantTick
+	}
+	return newDashboardModel(ctx, src, act, opts)
+}
+
+func testPRBoard(ctx context.Context, src PRBoardSource, act DashboardActions, opts PRBoardOptions) prBoardModel {
+	if opts.Tick == nil {
+		opts.Tick = instantTick
+	}
+	return newPRBoardModel(ctx, src, act, opts)
+}
+
+func testWatch(ctx context.Context, fetch WatchFetch, opts WatchOptions) watchModel {
+	if opts.Tick == nil {
+		opts.Tick = instantTick
+	}
+	return newWatchModel(ctx, fetch, opts)
+}
+
 // execCmd runs cmd and returns the messages it produces, expanding batches.
-// Commands still running after a short wait (tickers, timers), spinner
-// ticks and terminal queries are dropped, so tests see only the immediate
-// results.
+// Timers (instantTick's, or commands still running after a short wait),
+// spinner ticks and terminal queries are dropped, so tests see only the
+// immediate results.
 func execCmd(cmd tea.Cmd) []tea.Msg {
-	if cmd == nil {
+	if cmd == nil || isInstantTick(cmd) {
 		return nil
 	}
 	ch := make(chan tea.Msg, 1)

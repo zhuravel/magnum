@@ -35,7 +35,7 @@ func watchAt(t *testing.T, w, h int, clock *time.Time) watchModel {
 	if clock != nil {
 		opts.Now = func() time.Time { return *clock }
 	}
-	m := newWatchModel(context.Background(), okFetch(WatchFrame{}), opts)
+	m := testWatch(context.Background(), okFetch(WatchFrame{}), opts)
 	m, _ = send(t, m, tea.WindowSizeMsg{Width: w, Height: h})
 	return m
 }
@@ -278,7 +278,7 @@ func TestWatchIntervalDefaultAndClamp(t *testing.T) {
 		{5 * time.Second, 5 * time.Second},
 	}
 	for _, c := range cases {
-		m := newWatchModel(context.Background(), okFetch(WatchFrame{}), WatchOptions{Interval: c.in})
+		m := testWatch(context.Background(), okFetch(WatchFrame{}), WatchOptions{Interval: c.in})
 		if m.interval != c.want {
 			t.Errorf("Interval %v -> %v, want %v", c.in, m.interval, c.want)
 		}
@@ -306,7 +306,7 @@ func TestWatchFetchLoop(t *testing.T) {
 		calls.Add(1)
 		return numberedFrame(3), nil
 	}
-	m := newWatchModel(context.Background(), fetch, WatchOptions{Interval: time.Hour})
+	m := testWatch(context.Background(), fetch, WatchOptions{Interval: time.Hour})
 
 	// Init fetches once; nothing else fetches until a tick arrives.
 	msgs := execCmd(m.Init())
@@ -340,7 +340,7 @@ func TestWatchFetchGetsTheModelContext(t *testing.T) {
 	type key struct{}
 	ctx := context.WithValue(context.Background(), key{}, "v")
 	var got any
-	m := newWatchModel(ctx, func(c context.Context) (WatchFrame, error) {
+	m := testWatch(ctx, func(c context.Context) (WatchFrame, error) {
 		got = c.Value(key{})
 		return WatchFrame{}, nil
 	}, WatchOptions{})
@@ -354,7 +354,7 @@ func TestWatchFetchGetsTheModelContext(t *testing.T) {
 // header then says so) instead of freezing the frame and its age.
 func TestWatchFetchHasADeadline(t *testing.T) {
 	var limit time.Duration
-	m := newWatchModel(context.Background(), func(c context.Context) (WatchFrame, error) {
+	m := testWatch(context.Background(), func(c context.Context) (WatchFrame, error) {
 		if dl, ok := c.Deadline(); ok {
 			limit = time.Until(dl)
 		}
@@ -368,7 +368,7 @@ func TestWatchFetchHasADeadline(t *testing.T) {
 
 func TestWatchResultAfterContextEndedQuits(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	m := newWatchModel(ctx, okFetch(WatchFrame{}), WatchOptions{})
+	m := testWatch(ctx, okFetch(WatchFrame{}), WatchOptions{})
 	cancel()
 	m, cmd := send(t, m, watchResultMsg{err: context.Canceled})
 	if !isQuit(execCmd(cmd)) || m.stopError() != nil {
@@ -422,7 +422,7 @@ func TestWatchNarrowHeaderKeepsStateAndError(t *testing.T) {
 }
 
 func TestWatchDefaultSizeBeforeResize(t *testing.T) {
-	m := newWatchModel(context.Background(), okFetch(WatchFrame{}), WatchOptions{})
+	m := testWatch(context.Background(), okFetch(WatchFrame{}), WatchOptions{})
 	m, _ = send(t, m, frameMsg(numberedFrame(100)))
 	v := viewOf(m)
 	if n := len(strings.Split(v, "\n")); n != 24 {

@@ -65,6 +65,8 @@ type actionBar struct {
 	act DashboardActions
 	log *ActionLog       // shared with the other screen
 	now func() time.Time // the screen's clock
+	// tick schedules the flash's end and the wait before closing (tea.Tick).
+	tick func(time.Duration, func(time.Time) tea.Msg) tea.Cmd
 
 	confirm    *pendingAction // the action awaiting y/N
 	busy       string         // the action in flight
@@ -81,11 +83,12 @@ type actionBar struct {
 	flashSeq   int
 }
 
-func newActionBar(ctx context.Context, act DashboardActions, log *ActionLog, now func() time.Time) actionBar {
+func newActionBar(ctx context.Context, act DashboardActions, log *ActionLog, now func() time.Time,
+	tick func(time.Duration, func(time.Time) tea.Msg) tea.Cmd) actionBar {
 	if log == nil {
 		log = NewActionLog()
 	}
-	return actionBar{ctx: ctx, act: act, log: log, now: now}
+	return actionBar{ctx: ctx, act: act, log: log, now: now, tick: tick}
 }
 
 // setFlash shows text in the footer for flashFor.
@@ -93,7 +96,7 @@ func (b *actionBar) setFlash(text string, isErr bool) tea.Cmd {
 	b.flash, b.flashErr, b.flashInfo, b.flashStuck = text, isErr, false, false
 	b.flashSeq++
 	seq := b.flashSeq
-	return tea.Tick(flashFor, func(time.Time) tea.Msg { return flashExpireMsg{seq: seq} })
+	return b.tick(flashFor, func(time.Time) tea.Msg { return flashExpireMsg{seq: seq} })
 }
 
 // failure shows a failed action's text in red until a key is pressed: it
@@ -257,7 +260,7 @@ func (b *actionBar) leave(switching bool) tea.Cmd {
 		return nil
 	}
 	b.leaving = true
-	return tea.Tick(finishGrace, func(time.Time) tea.Msg { return finishGraceMsg{} })
+	return b.tick(finishGrace, func(time.Time) tea.Msg { return finishGraceMsg{} })
 }
 
 // leavingKey handles a key while the screen waits to close: ctrl+c

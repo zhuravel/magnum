@@ -163,7 +163,7 @@ func newDash(t *testing.T, w, h int) (dashboardModel, *fakeSource, *fakeActions)
 	t.Helper()
 	src := &fakeSource{data: dashData()}
 	act := &fakeActions{}
-	m := newDashboardModel(context.Background(), src, act, DashboardOptions{Now: func() time.Time { return dashNow }})
+	m := testDashboard(context.Background(), src, act, DashboardOptions{Now: func() time.Time { return dashNow }})
 	m, _ = send(t, m, tea.WindowSizeMsg{Width: w, Height: h}, dashDataMsg{data: src.data})
 	return m, src, act
 }
@@ -186,7 +186,7 @@ func dashAct(t *testing.T, m dashboardModel, names ...string) (dashboardModel, [
 
 func TestDashboardInitGathersAndShowsLoading(t *testing.T) {
 	src := &fakeSource{data: dashData()}
-	m := newDashboardModel(context.Background(), src, nil, DashboardOptions{})
+	m := testDashboard(context.Background(), src, nil, DashboardOptions{})
 	mustContain(t, viewOf(m), "magnum status", "loading status")
 	msgs := execCmd(m.Init())
 	var got *dashDataMsg
@@ -201,7 +201,7 @@ func TestDashboardInitGathersAndShowsLoading(t *testing.T) {
 	if m.opts.Refresh != defaultRefresh {
 		t.Errorf("default refresh = %v, want %v", m.opts.Refresh, defaultRefresh)
 	}
-	if fast := newDashboardModel(context.Background(), src, nil, DashboardOptions{Refresh: time.Millisecond}); fast.opts.Refresh != minRefresh {
+	if fast := testDashboard(context.Background(), src, nil, DashboardOptions{Refresh: time.Millisecond}); fast.opts.Refresh != minRefresh {
 		t.Errorf("refresh not clamped: %v", fast.opts.Refresh)
 	}
 }
@@ -359,7 +359,7 @@ func TestDashboardActionErrorsAndBusy(t *testing.T) {
 	}
 	mustContain(t, viewOf(m), "still running: pin talkable#7")
 
-	none := newDashboardModel(context.Background(), &fakeSource{}, nil, DashboardOptions{})
+	none := testDashboard(context.Background(), &fakeSource{}, nil, DashboardOptions{})
 	none, _ = send(t, none, dashDataMsg{data: dashData()}, keyMsg("r"))
 	mustContain(t, viewOf(none), "actions are not available")
 }
@@ -388,7 +388,7 @@ func TestDashboardManualToggleAndHelp(t *testing.T) {
 		t.Fatal("esc in help quit")
 	}
 	mustContain(t, viewOf(m), "SLOTS (2)")
-	opened := newDashboardModel(context.Background(), &fakeSource{}, nil, DashboardOptions{ShowManual: true})
+	opened := testDashboard(context.Background(), &fakeSource{}, nil, DashboardOptions{ShowManual: true})
 	opened, _ = send(t, opened, tea.WindowSizeMsg{Width: 140, Height: 50}, dashDataMsg{data: dashData()})
 	mustContain(t, viewOf(opened), "feature/x")
 }
@@ -398,7 +398,7 @@ func TestDashboardRefreshErrorKeepsData(t *testing.T) {
 	m, _ = send(t, m, dashDataMsg{err: errors.New("store locked")})
 	mustContain(t, viewOf(m), "refresh failed: store locked", "SLOTS (2)", "Fix the referral widget")
 
-	first := newDashboardModel(context.Background(), &fakeSource{}, nil, DashboardOptions{})
+	first := testDashboard(context.Background(), &fakeSource{}, nil, DashboardOptions{})
 	first, _ = send(t, first, dashDataMsg{err: errors.New("no store")})
 	mustContain(t, viewOf(first), "could not load status: no store")
 }
@@ -511,13 +511,13 @@ func TestRunDashboardEndsWithContext(t *testing.T) {
 func TestDashboardNamesConfiguredKindsAndJudge(t *testing.T) {
 	d := dashData()
 	d.Agents.Other = []KindCount{{Kind: "droid", Working: 2}}
-	m := newDashboardModel(context.Background(), &fakeSource{}, nil, DashboardOptions{Judge: "omp-judge", Now: func() time.Time { return dashNow }})
+	m := testDashboard(context.Background(), &fakeSource{}, nil, DashboardOptions{Judge: "omp-judge", Now: func() time.Time { return dashNow }})
 	m, _ = send(t, m, tea.WindowSizeMsg{Width: 140, Height: 50}, dashDataMsg{data: d})
 	mustContain(t, viewOf(m), "agents: codex 1/2, claude 0, droid 2 working")
 	m, _ = send(t, m, keys("?")...)
 	mustContain(t, viewOf(m), "open the PR's omp-judge pane")
 
-	plain := newDashboardModel(context.Background(), &fakeSource{}, nil, DashboardOptions{})
+	plain := testDashboard(context.Background(), &fakeSource{}, nil, DashboardOptions{})
 	plain, _ = send(t, plain, tea.WindowSizeMsg{Width: 140, Height: 50}, dashDataMsg{data: dashData()})
 	plain, _ = send(t, plain, keys("?")...)
 	mustContain(t, viewOf(plain), "open the PR's judge pane")

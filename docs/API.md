@@ -14350,6 +14350,9 @@ type DashboardOptions struct {
 	Now        func() time.Time // clock for "updated Xs ago"; default time.Now
 	Judge      string           // the judge role's name in the help ("open the PR's <Judge> pane"); default "judge"
 	Icons      IconMode         // the symbols: unicode (default), nerd (Nerd Font icons and emoji) or ascii
+	// Tick schedules the screen's timers (refresh, flash, the wait before
+	// closing); default tea.Tick.
+	Tick func(time.Duration, func(time.Time) tea.Msg) tea.Cmd
 	// NoMouse starts with mouse support off ([terminal] mouse = false);
 	// m turns it on and off either way.
 	NoMouse bool
@@ -14429,6 +14432,9 @@ type PRBoardOptions struct {
 	Refresh time.Duration    // between Rows calls; default 5s, at least 200ms
 	Title   string           // default "magnum · pull requests"
 	Now     func() time.Time // clock for ages and the refresh time; default time.Now
+	// Tick schedules the board's timers (refresh, spinner and shimmer
+	// frames, flash, the wait before closing); default tea.Tick.
+	Tick func(time.Duration, func(time.Time) tea.Msg) tea.Cmd
 	// SelfLogins are the logins that count as "me": the user and magnum's
 	// own reviewer (e.g. "zhuravel", "talkable[bot]"). Case, a leading "@"
 	// and a "[bot]" suffix do not matter.
@@ -15034,6 +15040,8 @@ type WatchFrame struct {
 type WatchOptions struct {
 	Interval time.Duration    // between fetches; default 2s, minimum 200ms
 	Now      func() time.Time // clock for the header age; default time.Now
+	// Tick schedules the next fetch; default tea.Tick.
+	Tick func(time.Duration, func(time.Time) tea.Msg) tea.Cmd
 }
     WatchOptions tunes RunWatch.
 

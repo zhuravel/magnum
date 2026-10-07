@@ -88,7 +88,7 @@ func TestDashboardTitleSaysWhatHoldsTheDaemon(t *testing.T) {
 	data := dashData()
 	data.Facts = allFacts()
 	data.Facts.SkewSince, data.Facts.PausedSince = dashNow.Add(-(18*time.Hour + 20*time.Minute)), dashNow.Add(-19*time.Hour)
-	m := newDashboardModel(context.Background(), &fakeSource{data: data}, &fakeActions{}, DashboardOptions{Now: func() time.Time { return dashNow }})
+	m := testDashboard(context.Background(), &fakeSource{data: data}, &fakeActions{}, DashboardOptions{Now: func() time.Time { return dashNow }})
 	m, _ = send(t, m, tea.WindowSizeMsg{Width: 400, Height: 50}, dashDataMsg{data: data}, keyMsg("j"))
 	plain, _ = send(t, plain, keyMsg("j"))
 	v, pv := viewOf(m), viewOf(plain)

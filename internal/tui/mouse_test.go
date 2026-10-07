@@ -453,7 +453,7 @@ func TestBoardRightClickMenu(t *testing.T) {
 	mustContain(t, v, "+----", "| review")
 
 	// Without actions every action is dimmed.
-	none := newPRBoardModel(context.Background(), &fakeBoardSource{}, nil, PRBoardOptions{Now: func() time.Time { return boardNow }})
+	none := testPRBoard(context.Background(), &fakeBoardSource{}, nil, PRBoardOptions{Now: func() time.Time { return boardNow }})
 	none, _ = send(t, none, tea.WindowSizeMsg{Width: 160, Height: 30}, prbDataMsg{rows: boardRows()})
 	none, _ = send(t, none, rightClick(40, boardRowY(none, 0)))
 	for label, ok := range menuState(none.menuItems()) {
@@ -573,7 +573,7 @@ func TestDashboardMouse(t *testing.T) {
 	src := &fakeSource{data: dashData()}
 	act := &fakeActions{}
 	now := dashNow
-	m := newDashboardModel(context.Background(), src, act, DashboardOptions{Now: func() time.Time { return now }, Widths: kept})
+	m := testDashboard(context.Background(), src, act, DashboardOptions{Now: func() time.Time { return now }, Widths: kept})
 	m, _ = send(t, m, tea.WindowSizeMsg{Width: 140, Height: 50}, dashDataMsg{data: src.data})
 
 	// rows: review1, review2 (empty), talkable#7, talkable#1 (reviewing)
@@ -653,7 +653,7 @@ func TestDashboardMouse(t *testing.T) {
 	if mw := maxLineWidth(viewOf(m)); mw > 140 {
 		t.Fatalf("a dragged column overflows: %d cells", mw)
 	}
-	reloaded := newDashboardModel(context.Background(), src, act, DashboardOptions{Now: func() time.Time { return now }, Widths: kept})
+	reloaded := testDashboard(context.Background(), src, act, DashboardOptions{Now: func() time.Time { return now }, Widths: kept})
 	reloaded, _ = send(t, reloaded, tea.WindowSizeMsg{Width: 140, Height: 50}, dashDataMsg{data: src.data})
 	reloaded = run(t, reloaded, reloaded.saver.load(reloaded.ctx))
 	if reloaded.widths["queue.next"] != m.widths["queue.next"] {

@@ -56,7 +56,7 @@ func muteMergedBoard(t *testing.T, ref string) (prBoardModel, *fakeActions) {
 	t.Helper()
 	src := &fakeBoardSource{rows: muteMergedRows()}
 	act := &fakeActions{}
-	m := newPRBoardModel(context.Background(), src, act, PRBoardOptions{
+	m := testPRBoard(context.Background(), src, act, PRBoardOptions{
 		Now: func() time.Time { return boardNow }, SelfLogins: boardSelf, RecentClosed: 24 * time.Hour})
 	m, _ = send(t, m, tea.WindowSizeMsg{Width: 220, Height: 50}, prbDataMsg{rows: src.rows})
 	at := slices.Index(boardRefs(m), ref)

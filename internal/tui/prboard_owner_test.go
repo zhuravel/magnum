@@ -32,7 +32,7 @@ func ownerBoard(t *testing.T, w, h int, opts PRBoardOptions) prBoardModel {
 		opts.SelfLogins = boardSelf
 	}
 	src := &fakeBoardSource{rows: ownerRows()}
-	m := newPRBoardModel(context.Background(), src, &fakeActions{}, opts)
+	m := testPRBoard(context.Background(), src, &fakeActions{}, opts)
 	m, _ = send(t, m, tea.WindowSizeMsg{Width: w, Height: h}, prbDataMsg{rows: src.rows})
 	return m
 }

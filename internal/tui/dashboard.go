@@ -219,6 +219,9 @@ type DashboardOptions struct {
 	Now        func() time.Time // clock for "updated Xs ago"; default time.Now
 	Judge      string           // the judge role's name in the help ("open the PR's <Judge> pane"); default "judge"
 	Icons      IconMode         // the symbols: unicode (default), nerd (Nerd Font icons and emoji) or ascii
+	// Tick schedules the screen's timers (refresh, flash, the wait before
+	// closing); default tea.Tick.
+	Tick func(time.Duration, func(time.Time) tea.Msg) tea.Cmd
 	// NoMouse starts with mouse support off ([terminal] mouse = false);
 	// m turns it on and off either way.
 	NoMouse bool
@@ -409,10 +412,13 @@ func newDashboardModel(ctx context.Context, src DashboardSource, act DashboardAc
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
+	if opts.Tick == nil {
+		opts.Tick = tea.Tick
+	}
 	g := newGlyphs(opts.Icons)
 	sp := spinner.New(spinner.WithSpinner(g.spinner), spinner.WithStyle(defaultStyles.Accent))
 	m := dashboardModel{
-		actionBar: newActionBar(ctx, act, opts.Log, opts.Now), src: src, opts: opts, st: defaultStyles, pal: newPRBPalette(defaultStyles), g: g, spin: sp, cache: &dashCache{},
+		actionBar: newActionBar(ctx, act, opts.Log, opts.Now, opts.Tick), src: src, opts: opts, st: defaultStyles, pal: newPRBPalette(defaultStyles), g: g, spin: sp, cache: &dashCache{},
 		showManual: opts.ShowManual,
 		loading:    true, spinning: true, // Init starts the first gather and the spinner
 		saver: newWidthSaver(opts.Widths, widthsDashboard),
@@ -436,7 +442,7 @@ func (m dashboardModel) gatherCmd() tea.Cmd {
 }
 
 func (m dashboardModel) tickCmd() tea.Cmd {
-	return tea.Tick(m.opts.Refresh, func(time.Time) tea.Msg { return dashTickMsg{} })
+	return m.opts.Tick(m.opts.Refresh, func(time.Time) tea.Msg { return dashTickMsg{} })
 }
 
 // startLoad begins a gather unless one is in flight.

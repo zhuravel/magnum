@@ -38,7 +38,7 @@ func repliesBoard(t *testing.T, w, h int, opts PRBoardOptions, rows ...PRBoardRo
 	act := &fakeActions{}
 	opts.Now = func() time.Time { return boardNow }
 	opts.SelfLogins = boardSelf
-	m := newPRBoardModel(context.Background(), &fakeBoardSource{rows: rows}, act, opts)
+	m := testPRBoard(context.Background(), &fakeBoardSource{rows: rows}, act, opts)
 	next, _ := m.Update(tea.WindowSizeMsg{Width: w, Height: h})
 	next, _ = next.(prBoardModel).Update(prbDataMsg{rows: rows})
 	return next.(prBoardModel), act

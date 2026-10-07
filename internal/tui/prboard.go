@@ -23,6 +23,9 @@ type PRBoardOptions struct {
 	Refresh time.Duration    // between Rows calls; default 5s, at least 200ms
 	Title   string           // default "magnum · pull requests"
 	Now     func() time.Time // clock for ages and the refresh time; default time.Now
+	// Tick schedules the board's timers (refresh, spinner and shimmer
+	// frames, flash, the wait before closing); default tea.Tick.
+	Tick func(time.Duration, func(time.Time) tea.Msg) tea.Cmd
 	// SelfLogins are the logins that count as "me": the user and magnum's
 	// own reviewer (e.g. "zhuravel", "talkable[bot]"). Case, a leading "@"
 	// and a "[bot]" suffix do not matter.
@@ -306,6 +309,9 @@ func newPRBoardModel(ctx context.Context, src PRBoardSource, act DashboardAction
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
+	if opts.Tick == nil {
+		opts.Tick = tea.Tick
+	}
 	if !opts.DefaultSort.valid() {
 		opts.DefaultSort = SortUpdated
 	}
@@ -319,7 +325,7 @@ func newPRBoardModel(ctx context.Context, src PRBoardSource, act DashboardAction
 	in.Placeholder = "ref, title, author, reviewer, label; state: assignee: author: review:requested"
 	in.CharLimit = 120
 	m := prBoardModel{
-		actionBar: newActionBar(ctx, act, opts.Log, opts.Now), src: src, opts: opts, g: g, spin: sp, filter: in, cache: &prbCache{},
+		actionBar: newActionBar(ctx, act, opts.Log, opts.Now, opts.Tick), src: src, opts: opts, g: g, spin: sp, filter: in, cache: &prbCache{},
 		self: selfSet(opts.SelfLogins), sort: opts.DefaultSort, desc: true, boardView: opts.DefaultView,
 		owner: strings.TrimSpace(opts.DefaultOwner), hide: opts.HideSkipped, section: -1,
 		loading: true, spinning: true, // Init starts the first load and the spinner
@@ -370,7 +376,7 @@ func (m prBoardModel) loadCmd() tea.Cmd {
 }
 
 func (m prBoardModel) tickCmd() tea.Cmd {
-	return tea.Tick(m.opts.Refresh, func(time.Time) tea.Msg { return prbTickMsg{} })
+	return m.opts.Tick(m.opts.Refresh, func(time.Time) tea.Msg { return prbTickMsg{} })
 }
 
 // startLoad begins a load unless one is in flight.
@@ -393,7 +399,7 @@ func (m *prBoardModel) startAnim() tea.Cmd {
 }
 
 func (m prBoardModel) animCmd() tea.Cmd {
-	return tea.Tick(prbAnimEvery, func(time.Time) tea.Msg { return prbAnimMsg{} })
+	return m.opts.Tick(prbAnimEvery, func(time.Time) tea.Msg { return prbAnimMsg{} })
 }
 
 // animFrame is the spinner's frame for the cache keys: 0 while nothing
@@ -431,7 +437,7 @@ func (m *prBoardModel) startShimmer() tea.Cmd {
 		return nil
 	}
 	m.shimmering = true
-	return tea.Tick(prbShimmerEvery, func(time.Time) tea.Msg { return prbShimmerMsg{} })
+	return m.opts.Tick(prbShimmerEvery, func(time.Time) tea.Msg { return prbShimmerMsg{} })
 }
 
 // shimmerOn reports whether the needs-you cells shimmer now: on, colors

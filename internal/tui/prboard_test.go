@@ -117,7 +117,7 @@ func newBoard(t interface{ Helper() }, w, h int, opts PRBoardOptions) (prBoardMo
 	if opts.SelfLogins == nil {
 		opts.SelfLogins = boardSelf
 	}
-	m := newPRBoardModel(context.Background(), src, act, opts)
+	m := testPRBoard(context.Background(), src, act, opts)
 	next, _ := m.Update(tea.WindowSizeMsg{Width: w, Height: h})
 	next, _ = next.(prBoardModel).Update(prbDataMsg{rows: src.rows})
 	return next.(prBoardModel), src, act
@@ -668,7 +668,7 @@ func TestPRBoardActionKeys(t *testing.T) {
 	e, _ = send(t, e, keyMsg("j"))
 	mustNotContain(t, viewOf(e), "slot busy")
 
-	n := newPRBoardModel(context.Background(), &fakeBoardSource{rows: boardRows()}, nil, PRBoardOptions{})
+	n := testPRBoard(context.Background(), &fakeBoardSource{rows: boardRows()}, nil, PRBoardOptions{})
 	n, _ = send(t, n, prbDataMsg{rows: boardRows()}, keyMsg("r"))
 	mustContain(t, viewOf(n), "actions are not available here")
 }
@@ -677,7 +677,7 @@ func TestPRBoardActionKeys(t *testing.T) {
 // and says so in the footer; ctrl+r refreshes at once.
 func TestPRBoardRefresh(t *testing.T) {
 	src := &fakeBoardSource{rows: boardRows()}
-	m := newPRBoardModel(context.Background(), src, nil, PRBoardOptions{Now: func() time.Time { return boardNow }, Refresh: time.Second})
+	m := testPRBoard(context.Background(), src, nil, PRBoardOptions{Now: func() time.Time { return boardNow }, Refresh: time.Second})
 	if _, ok := m.Init()().(tea.BatchMsg); !ok {
 		t.Fatal("Init must batch its commands")
 	}
@@ -706,7 +706,7 @@ func TestPRBoardRefresh(t *testing.T) {
 		t.Error("a second ctrl+r while loading must not start another load")
 	}
 
-	bad := newPRBoardModel(context.Background(), &fakeBoardSource{err: errors.New("no registry")}, nil, PRBoardOptions{})
+	bad := testPRBoard(context.Background(), &fakeBoardSource{err: errors.New("no registry")}, nil, PRBoardOptions{})
 	bad, _ = send(t, bad, prbDataMsg{err: errors.New("no registry")})
 	mustContain(t, viewOf(bad), "could not load pull requests: no registry")
 	if err := RunPRBoard(context.Background(), nil, nil, PRBoardOptions{}); err == nil {

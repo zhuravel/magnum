@@ -25,6 +25,8 @@ type WatchFrame struct {
 type WatchOptions struct {
 	Interval time.Duration    // between fetches; default 2s, minimum 200ms
 	Now      func() time.Time // clock for the header age; default time.Now
+	// Tick schedules the next fetch; default tea.Tick.
+	Tick func(time.Duration, func(time.Time) tea.Msg) tea.Cmd
 }
 
 // WatchFetch reads the current frame. It must honor ctx, which has a
@@ -91,6 +93,7 @@ type watchModel struct {
 	fetch    WatchFetch
 	interval time.Duration
 	now      func() time.Time
+	tick     func(time.Duration, func(time.Time) tea.Msg) tea.Cmd
 
 	vp            viewport.Model
 	width, height int
@@ -120,7 +123,11 @@ func newWatchModel(ctx context.Context, fetch WatchFetch, opts WatchOptions) wat
 	if now == nil {
 		now = time.Now
 	}
-	m := watchModel{ctx: ctx, fetch: fetch, interval: interval, now: now, follow: true, st: defaultStyles, vp: viewport.New()}
+	tick := opts.Tick
+	if tick == nil {
+		tick = tea.Tick
+	}
+	m := watchModel{ctx: ctx, fetch: fetch, interval: interval, now: now, tick: tick, follow: true, st: defaultStyles, vp: viewport.New()}
 	m.resize(80, 24)
 	return m
 }
@@ -142,7 +149,7 @@ func (m watchModel) fetchCmd() tea.Cmd {
 }
 
 func (m watchModel) tickCmd() tea.Cmd {
-	return tea.Tick(m.interval, func(time.Time) tea.Msg { return watchTickMsg{} })
+	return m.tick(m.interval, func(time.Time) tea.Msg { return watchTickMsg{} })
 }
 
 // resize fits the viewport between the header and the footer.

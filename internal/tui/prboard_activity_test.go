@@ -22,7 +22,7 @@ func TestPRBoardUpdatedIsTheActivityTime(t *testing.T) {
 			State: "reviewed", GHState: "OPEN", ActivityAt: ago(2 * time.Hour), GitHubUpdatedAt: ago(2 * time.Hour)},
 	}
 	src := &fakeBoardSource{rows: rows}
-	m := newPRBoardModel(context.Background(), src, &fakeActions{}, PRBoardOptions{Now: func() time.Time { return boardNow }, SelfLogins: boardSelf})
+	m := testPRBoard(context.Background(), src, &fakeActions{}, PRBoardOptions{Now: func() time.Time { return boardNow }, SelfLogins: boardSelf})
 	m, _ = send(t, m, tea.WindowSizeMsg{Width: 200, Height: 20}, prbDataMsg{rows: src.rows})
 	if got := boardRefs(m); !slices.Equal(got, []string{"talkable/talkable#2", "talkable/talkable#1"}) {
 		t.Fatalf("updated sort = %v, want the latest activity first", got)

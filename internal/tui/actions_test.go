@@ -179,11 +179,11 @@ func TestBusyLetsNavigationThrough(t *testing.T) {
 // failed" instead of stopping every later refresh.
 func TestScreenLoadsHaveADeadline(t *testing.T) {
 	var got []context.Context
-	dash := newDashboardModel(context.Background(), SourceFunc(func(ctx context.Context) (StatusData, error) {
+	dash := testDashboard(context.Background(), SourceFunc(func(ctx context.Context) (StatusData, error) {
 		got = append(got, ctx)
 		return StatusData{}, nil
 	}), nil, DashboardOptions{})
-	board := newPRBoardModel(context.Background(), PRBoardSourceFunc(func(ctx context.Context) ([]PRBoardRow, error) {
+	board := testPRBoard(context.Background(), PRBoardSourceFunc(func(ctx context.Context) ([]PRBoardRow, error) {
 		got = append(got, ctx)
 		return nil, nil
 	}), nil, PRBoardOptions{})
