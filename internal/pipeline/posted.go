@@ -114,17 +114,29 @@ func (rd *round) appendFooter(ctx context.Context, p *postedReview, res *judgeRe
 	}
 }
 
-// footerData is what the footer template of review p renders with.
+// footerData is what the footer template of review p renders with: the
+// PR's watch says whether drafts are skipped and whose review request
+// starts a round (its poll login when a gh identity's, else the posting
+// login), [daemon] quiet_hours when pushes wait.
 func (rd *round) footerData(p *postedReview, res *judgeResult) config.FooterData {
 	sha := cmp.Or(p.commit, rd.in.TargetSHA)
-	_, simplify := rd.r.Config.RoleByNameOrAlias(rd.r.Config.WatchFor(rd.owner+"/"+rd.name), simplifyAlias)
+	w := rd.r.Config.WatchFor(rd.owner + "/" + rd.name)
+	_, simplify := rd.r.Config.RoleByNameOrAlias(w, simplifyAlias)
 	event := normalizeEvent(p.state)
 	if event == "" && res != nil {
 		event = normalizeEvent(res.Event)
 	}
+	request := rd.login
+	if w != nil {
+		if poll := rd.r.Config.IdentityByName(w.PollIdentity); poll != nil && poll.Kind == "gh" && poll.Login != "" {
+			request = poll.Login
+		}
+	}
 	return config.FooterData{SHA: sha, Short: sha[:min(len(sha), 10)], Repo: rd.owner + "/" + rd.name, Number: rd.in.PR.Number,
 		Login: rd.login, Simplify: simplify, Clean: clean(res), Event: reviewEvent(event),
-		PostMerge: rd.in.PostMerge, DeltaCheck: rd.deltaCheck() != nil}
+		PostMerge: rd.in.PostMerge, DeltaCheck: rd.deltaCheck() != nil,
+		QuietHours: config.QuietHoursLabel(rd.r.Config.Daemon.QuietHours, rd.r.now()), DraftsSkipped: w != nil && !w.DraftsIncluded(),
+		RequestLogin: request}
 }
 
 // clean reports whether the judge's result counts nothing at all: no

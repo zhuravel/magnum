@@ -3635,3 +3635,51 @@ editing history. Code, config comments and prompts reference these by their head
   that is there on this machine at check time (as written, or without a `:line` suffix: the judge's own
   scratch files), and names it, so the judge rewrites the text. Rejected: refusing every `/tmp/` and
   `/home/` path (a finding quoting the PR's `WORKDIR /home/app` or `/tmp/cache` would be refused).
+- **A Fix says what it keeps and is run before it is posted** (2026-10-07). A PR got the advice "add
+  `data = data || {}`" twice and then a P3 on that code; following another PR's "insert the returned
+  snapshot" produced the next round's P3; about 14 of ~45 new re-review findings sat in code written to fix
+  an earlier finding. The skill's **Fix** gives one smallest safe change and what it must keep (the
+  behaviour the surrounding code relies on), the judge runs any code it suggests with the reproduction (a
+  probe, or a scratch worktree as for the merged tree) before posting it, and a re-review finding in code
+  written to fix an earlier one ends its title with `(in the fix for <earlier title>)`. Rejected: posting
+  tested fix patches (larger, and the author owns the change); two fixes to choose from (6 comments
+  offered two, which the authors' agents did not weigh).
+- **A reproduction the judge ran is posted as its test, not its output** (2026-10-07). On 4 findings the
+  judge posted the output of a test it ran ("HEAD: scrollTop 300 -> 2100") instead of the test, while 9
+  author replies reused posted tests as their specs. The skill posts the test or script the judge ran as
+  its code, at most about 25 lines with its file and line, never only its output; a command's output and
+  numbered steps for a UI flow no test covers stay. Section 4's copy of the reproduction list goes
+  (section 5 keeps it), and the local-path line names its paths in one parenthesis.
+- **A P3 asks for no reply** (2026-10-07). 10 of 36 P3 threads outside one repository got no answer
+  (P2: 7 of 99), and the footer asked for a reply on every thread. A P3's title ends with `(optional, no
+  reply needed)`, as a simplification's does, and the footer asks for a reply on a P0-P2 thread only.
+  Rejected: leaving P3s out of the review (18 of 36 were fixed).
+- **`outside_diff` means neither in nor caused by the PR's lines, and a machine-blocked check reads
+  `skipped (machine)`** (2026-10-07). The skill's `outside_diff` was "not in lines this PR changes" while
+  its caller and access-hole rules make a defect the PR causes in unchanged code this PR's finding: 52
+  rejections as outside_diff since 10-06, 23 of them P0-P2. It is now "neither in nor caused by lines this
+  PR changes" (or in a lower layer of a stack). A check skipped for a machine cause had three answers (the
+  exact reason, left out of the review "Checks included", and skipped): wherever the skill speaks of it
+  (the readiness paragraph, `db_lock`'s exit 75, the machine-failure rule) it reads `skipped (machine)` in
+  Checks, as a missing report's machine cause reads `(machine)`, its detail only under
+  `environment_failures` and in the notes.
+- **The footer says what starts the next round** (2026-10-07). "New pushes are re-reviewed automatically"
+  was false for a draft a watch skips and during quiet hours, and the footer said nothing of replies or
+  review requests: two authors waited 64 minutes and 4 hours after pushing to a draft before they
+  requested a review. `FooterData` gains `QuietHours` (`[daemon] quiet_hours` with the daemon's offset
+  from UTC, `config.QuietHoursLabel`: "03:00-12:00 UTC+3", so an author in another zone can read it),
+  `DraftsSkipped` (the watch's `include_drafts = false`) and `RequestLogin` (the watch's poll login when
+  it is a gh identity's, else the posting login: all 27 review requests in the daemon's log named the
+  operator's poll login). The default footer says pushes are
+  re-reviewed automatically outside the quiet hours, drafts only on request, that a thread reply gets an
+  answer without a push and that a review request for that login starts a round: one sentence more.
+  Rejected: "starts a round at once" (quiet hours hold a request too); naming the posting App's
+  `<slug>[bot]` (no request named it; a person is what authors request).
+- **Security findings are proved with the repository's tests, never with attack tooling** (2026-10-07).
+  Codex ended every judge turn of an OAuth session-security PR with "This content was flagged for possible
+  cybersecurity risk" after the judge drove headless Chromium through Playwright to plant an OAuth cookie
+  on a sibling host, and Codex blocks accounts it takes for cyber abuse. The skill proves a security
+  finding with the repository's own tests (a focused or request spec on the PR's code, through `db_lock`),
+  never with browser automation forging cookies or sessions, exploit or payload scripts, scanners or
+  network tools against hosts, and calls a probe a test of the PR's behaviour. What is posted does not
+  change: a spec was always the preferred reproduction.

@@ -55,7 +55,8 @@ func TestVerifiedReviewGetsTheFooterOnceAfterABlankLine(t *testing.T) {
 		t.Fatalf("edited body = %q", got)
 	}
 	if !strings.HasPrefix(footer, "**Reviewed commit:** `"+target[:10]+"`\n\n<details><summary>ℹ️ About Magnum</summary>\n\n") ||
-		!strings.HasSuffix(footer, "New pushes are re-reviewed automatically.\n\n</details>") ||
+		!strings.HasSuffix(footer, "New pushes are re-reviewed automatically. A thread reply gets an answer without a push, "+
+			"and a review request for `talkable[bot]` starts a round.\n\n</details>") ||
 		!strings.Contains(footer, "; simplifications are optional") {
 		t.Fatalf("footer = %q", footer)
 	}
@@ -132,6 +133,43 @@ func TestFooterLeavesSimplificationsOutWhenTheWatchRunsNoSimplifyRole(t *testing
 	got := e.lastUpdate()
 	if !strings.Contains(got, footerMarker+"\n**Reviewed commit:**") || strings.Contains(got, "simplifications") {
 		t.Fatalf("footer without a simplify role: %q", got)
+	}
+}
+
+// The footer says when the PR's watch re-reviews a push and whose review
+// request starts a round: outside [daemon] quiet_hours (with the daemon's
+// UTC offset), not on a draft a watch with include_drafts = false skips, and
+// a request for the poll login when that is a person's (a gh identity),
+// else for the posting login.
+func TestFooterSaysWhenTheWatchReReviewsAndWhoseRequestStartsARound(t *testing.T) {
+	no := false
+	for _, tc := range []struct {
+		name  string
+		quiet string
+		watch config.Watch
+		want  string
+	}{
+		{"quiet hours, drafts skipped, a gh poll login", "03:00-12:00",
+			config.Watch{Owner: "talkable", Include: []string{"*"}, Identity: "talkable-app", PollIdentity: "zhuravel", IncludeDrafts: &no},
+			"New pushes are re-reviewed automatically outside 03:00-12:00 UTC, drafts only on request. " +
+				"A thread reply gets an answer without a push, and a review request for `zhuravel` starts a round."},
+		{"an App polls", "",
+			config.Watch{Owner: "talkable", Include: []string{"*"}, Identity: "talkable-app", PollIdentity: "talkable-app"},
+			"New pushes are re-reviewed automatically. " +
+				"A thread reply gets an answer without a push, and a review request for `talkable[bot]` starts a round."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t)
+			e.cfg.Daemon.QuietHours = tc.quiet
+			e.cfg.Watches = []config.Watch{tc.watch}
+			e.ag.behaviors[agents.RoleJudge] = []behavior{e.judgePosts(670, "COMMENTED", "COMMENT").behavior(t)}
+			if res, err := e.r.RunRound(e.ctx, e.input(KindInitial)); err != nil || res.Outcome != OutcomePosted {
+				t.Fatalf("RunRound = %+v, %v", res, err)
+			}
+			if got := e.lastUpdate(); !strings.HasSuffix(got, tc.want+"\n\n</details>") {
+				t.Fatalf("footer = %q, want it to end %q", got, tc.want)
+			}
+		})
 	}
 }
 

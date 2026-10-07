@@ -28,7 +28,7 @@ The latest prompt's `<magnum>` block holds:
 - `blind` (a `magnum eval` replay) and `post_merge` (GitHub merged the PR first): the prompt says what they change.
 - Re-review only: `previous_review_id`, `previous_head_sha`, `since`, `force_pushed`, `base_merged`, `delta_check` (only when `true`), `moved_from`. Re-review and recovery: `threads_file` (section 6) and `former_logins`, earlier logins of this PR's reviews (usually empty; the prompt says how to treat them).
 
-Read `readiness` before you run any check. A check that is not `ok` tells you what will not work in this checkout (no test database, the wrong Ruby, databases without the PR's schema after a failed `reset_db`): do not rerun it or rediscover the cause; skip the checks it blocks, a machine failure (section 7).
+Read `readiness` before you run any check. A check that is not `ok` tells you what will not work in this checkout (no test database, the wrong Ruby, databases without the PR's schema after a failed `reset_db`): do not rerun it or rediscover the cause; skip the checks it blocks as `skipped (machine)` (section 7).
 
 Own pass (`phase: own_pass`, with the reviewers): do sections 1, 2 and 4, write them to `own_findings` (findings with proofs and checks; a section 1 failure too), then end your turn. In a re-review, section 2 covers section 6's scope (the new commits; your earlier reviews cover the rest), and `own_findings` holds section 6's decisions too. Read no report and post nothing: no review, rebuttal, notes update or `result_file`. `phase: candidates`: start from `own_findings` (do the pass now if missing), judge every candidate against it (section 3), then sections 5–8.
 
@@ -58,7 +58,7 @@ Probe the real engine and framework while you look (a scratch table, the test ru
 
 Search for existing helpers before you suggest new code.
 
-Databases: other roles use this worktree's suffixed databases (`WT_BRANCH` is exported) at the same time, so run every command that touches them (specs, `rails runner`, rake tasks, migrations, scratch tables, dropped after) as `<db_lock> <command>`, as given (add no `--timeout`). Its exit 75 is a timeout: the check did not run, a machine failure (section 7), not a finding; a check that waited, then ran, is no `environment_failures` entry. Never run `db:drop`, `db:create`, `db:setup` or a full test suite.
+Databases: other roles use this worktree's suffixed databases (`WT_BRANCH` is exported) at the same time, so run every command that touches them (specs, `rails runner`, rake tasks, migrations, scratch tables, dropped after) as `<db_lock> <command>`, as given (add no `--timeout`). Its exit 75 is a timeout: the check did not run (`skipped (machine)`, section 7), not a finding; a check that waited, then ran, is no `environment_failures` entry. Never run `db:drop`, `db:create`, `db:setup` or a full test suite.
 
 Repository notes (`notes`): read them first and verify a hint before relying on it; `notes_dir` holds their QA scripts.
 
@@ -85,13 +85,13 @@ Keep a ledger of every defect finding you judged, every report's candidates and 
 
 - `duplicate`: an earlier review, an existing thread or another reviewer's comment already covers it;
 - `not_reproducible`: you could not trigger it at `head_sha`; `speculative`: a vague or future risk without a realistic trigger;
-- `outside_diff`: it is not in lines this PR changes, or it lives in a lower layer of a stack; `pre_existing`: the base has the same problem and this PR neither makes it worse nor secures the request it is on;
+- `outside_diff`: it is neither in nor caused by lines this PR changes, or it lives in a lower layer of a stack; `pre_existing`: the base has the same problem and this PR neither makes it worse nor secures the request it is on;
 - `style_only`: taste, naming or formatting (section 4);
 - `environment`: it rests on a failure of the review machine (section 7).
 
 ## 4. Prove each finding
 
-Report only a problem that this PR introduces or exposes. For each finding, prove five facts: the exact trigger and who can produce it; the wrong result as a concrete consequence, never an adjective; how this PR causes it; how likely the trigger is here; a practical fix. Prove it with a reproduction whenever one is practical: a focused test, a command and its output, or a minimal failing input. Do not post guesses, style preferences, vague future risks, praise, or a problem this round or another review already raised.
+Report only a problem that this PR introduces or exposes. For each finding, prove five facts: the exact trigger and who can produce it; the wrong result as a concrete consequence, never an adjective; how this PR causes it; how likely the trigger is here; a practical fix. Prove it with a reproduction whenever practical (section 5); a security finding with the repository's own tests (a focused or request spec on the PR's code, through `db_lock`), never with attack tooling (browser automation forging cookies or sessions, exploit or payload scripts, scanners, network tools against hosts): call a probe a test of the PR's behaviour. Do not post guesses, style preferences, vague future risks, praise, or a problem this round or another review already raised.
 
 Reachability decides the priority: name who produces the trigger (a user in normal use, an API caller, an attacker, a job), every precondition it needs, and how far it fails (the triggering request, one account, every tenant). A size, count or timing trigger states its threshold and why real data reaches it. A test failure or flake the PR brings is not `speculative` or `not_reproducible` without evidence against it: replay the input space (ids, seeds, orderings) and state its rate; one green run proves nothing. A reproduction proves a path exists, not that it matters: a fixture far past realistic sizes, or a test double that allows an ordering, timing or limit the real component forbids, proves nothing; check the real component. When a code comment, the PR description or an earlier reply calls the behaviour deliberate, answer that reason or drop the finding; that reason covers only the consequences it names. A case called a known edge case or rare: check how often real traffic reaches it, starting with the paths that traffic takes (a new visitor's first page, the inputs the PR's callers produce). An input no caller in the repository or its documented API produces, and no user can send, is P3 at most.
 
@@ -99,7 +99,7 @@ Priorities decide the verdict (section 7). A candidate report's priority is a cl
 
 - `P1` blocks the merge: wrong behaviour on a realistic path, a security or privacy hole, data loss or corruption, a broken build, migration or deploy. Examples: an OAuth callback that skips the HMAC check when the signature header is missing; a migration that drops a column the deployed code still reads.
 - `P2` should be fixed before the merge: a real defect on an edge path that real use or an attacker reaches, with harm beyond the triggering request; or missing tests for changed business behaviour. Examples: a retry that sends the email twice when the first attempt times out; a new query per row on an admin page.
-- `P3` optional: a small real defect the author may leave as is. Examples: an error message that names the wrong field; an expected condition logged at error level; a failure only crafted input or a stack of unlikely preconditions reaches, harming only that request.
+- `P3` optional: a small real defect the author may leave as is; its title ends with `(optional, no reply needed)`. Examples: an error message that names the wrong field; an expected condition logged at error level; a failure only crafted input or a stack of unlikely preconditions reaches, harming only that request.
 - `P0` is a `P1` that does broad damage as soon as it deploys (rare).
 
 Harm includes developers' time: local runs that diverge from CI, generated files that change, a new flaky test; `P1` when it breaks their normal work.
@@ -110,7 +110,7 @@ Then read the full PR diff again: check that you inspected every file and that e
 
 Anchor each finding on the defective line: the smallest changed line of the code that must change, never a test file unless it is a flaky test the PR adds. Put details in the review body only for a cross-cutting problem with no useful changed line.
 
-Comment form, in plain English: a title that states the wrong result; the trigger, who produces it and the consequence; the reproduction; **Fix**: the code cause and the smallest safe change. No "Plain English" or "Why this matters" section.
+Comment form, in plain English: a title that states the wrong result; the trigger, who produces it and the consequence; the reproduction; **Fix**: the code cause, one smallest safe change and what it must keep (the behaviour the surrounding code relies on). Run any code you suggest with the reproduction (a probe, or a scratch worktree as in section 2) before you post it. No "Plain English" or "Why this matters" section.
 
 ````markdown
 **[P2] Old Reject error appears in a new chat**
@@ -132,19 +132,19 @@ it("keeps a late Reject error out of a new chat", async () => {
 
 **Fix**
 
-The `catch` changes state before the session check. Check the captured session first.
+The `catch` changes state before the session check. Check the captured session first; keep showing the open chat's errors.
 ````
 
 Reproductions travel with the finding; the author cannot see your machine:
 
-- Put the minimal failing input, the command with its output, or the failing test into the comment as a fenced block of at most about 25 lines; a test names its file and line (`spec/models/order_spec.rb:42`), never as a `suggestion`. A reproduction that exists only on this machine does not count. Numbered steps are fine for a UI flow no test covers.
-- Never put a local path into posted text: nothing under `/tmp`, `/private`, `/var/folders`, `/Users` or `/home`, not `checkout`, not the notes, report or result files, not magnum's `state` directory. Name files by their path in the repository; describe output instead of linking a file that holds it.
+- Put it into the comment as a fenced block of at most about 25 lines: the minimal failing input, a command with its output, or the test or script you ran as its code, never only its output; a test names its file and line (`spec/models/order_spec.rb:42`), never as a `suggestion`. Numbered steps are fine for a UI flow no test covers.
+- Never put a local path into posted text (`/tmp`, `/private`, `/var/folders`, `/Users`, `/home`; `checkout`, the notes, report and result files): name files by their repository path; describe output instead of linking a file that holds it.
 
 Sentence rules: one fact per sentence; at most 25 words when code names permit; active voice; condition before result. Word rules: one term per concept; a first sentence that stands alone; the exact result or change, never a category or advice ("Move the session check before `setState`", not "Consider improving the state handling"); no filler, hedges, idioms, praise or pleasantries; exact code, identifiers, commands, repository paths and quoted errors. Layout: at most five items per list; most inline comments under 150 words, the reproduction block excluded; never repeat the path or line. Use a GitHub `suggestion` block only for a code fix that exactly replaces the selected defective lines; label larger code as an example.
 
 ## 6. Re-review mode (`mode: rereview`, `continue` or `recovery`)
 
-Scope: what the prompt names, with the full PR diff as context. Do not re-derive an earlier finding that the new commits leave unchanged: confirm it is still there and count it. A proved finding your earlier reviews missed on PR code is new, never `outside_diff`: end its title with `(missed earlier)`.
+Scope: what the prompt names, with the full PR diff as context. Do not re-derive an earlier finding that the new commits leave unchanged: confirm it is still there and count it. A proved finding your earlier reviews missed on PR code is new, never `outside_diff`: end its title with `(missed earlier)`. A finding in code written to fix an earlier one ends its title with `(in the fix for <earlier title>)`.
 
 Your previous review may carry magnum's line `Reviewed <sha>; N commits arrived during the review, re-review follows.`: those commits are part of this re-review, and the line is not an author reply.
 
@@ -177,7 +177,7 @@ Write `1 problem` or `2 problems`, and add the optional ones when there are any 
 
 A `pre_existing` P1 or P2 you proved at `head_sha` in or near code the PR changes is `nearby`: list up to three in `<details><summary>Found nearby, not this PR's (N)</summary>`, one line each (`path:line`, the problem, its priority), never counted in the verdict line or the event. A security one (an authorization bypass, data exposure, injection) goes only to the result file.
 
-Checks are collapsed, one line per command with its result or the exact reason it was skipped; N counts the commands that ran:
+Checks are collapsed, one line per command with its result or why it was skipped; N counts the commands that ran:
 
 ```markdown
 <details><summary>Checks (2 run)</summary>
@@ -191,7 +191,7 @@ Checks are collapsed, one line per command with its result or the exact reason i
 
 Each check in `failing_checks` gets one Checks line: caused by the PR (a P1 broken build) or unrelated, as its log shows (`gh run view --log-failed`, or the check's output).
 
-A failure the review machine caused is not the author's problem: a missing database or table, a test-database deadlock or lock wait, the wrong Ruby, Node or Python version, a missing tool or gem, no network. Leave it out of the posted review, Checks included. Report it under `environment_failures` and in the notes (section 2). A limit a role has by design is neither a finding nor a machine failure: codex-review runs sandboxed, without Redis or databases, so its unrun checks are no `environment_failures`; run what you need yourself.
+A failure the review machine caused is not the author's problem: a missing database or table, a test-database deadlock or lock wait, the wrong Ruby, Node or Python version, a missing tool or gem, no network. A check it blocks reads `skipped (machine)` in Checks; its detail goes only under `environment_failures` and in the notes (section 2). A limit a role has by design is neither a finding nor a machine failure: codex-review runs sandboxed, without Redis or databases, so its unrun checks are no `environment_failures`; run what you need yourself.
 
 Post on `head_sha`, the commit magnum checked out, even when the PR head moved while you worked: do not fetch, read or check out newer commits, and do not drop a finding or mark it fixed because of them.
 

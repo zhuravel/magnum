@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/BurntSushi/toml"
 
@@ -106,13 +107,72 @@ func TestDefaultFooterCollapsesAndNamesSimplificationsOnlyWhenSimplifyRuns(t *te
 	}
 	for _, want := range []string{"**Reviewed commit:** `d4e5f6a7b8`\n\n<details><summary>",
 		"About Magnum</summary>\n\n", "Automated review by [Magnum](https://github.com/zhuravel/magnum).",
-		"`fixed`, `not a bug: <why>` or `won't fix: <why>`", "New pushes are re-reviewed automatically.\n\n</details>"} {
+		"`fixed`, `not a bug: <why>` or `won't fix: <why>`", "New pushes are re-reviewed automatically", ".\n\n</details>"} {
 		if !strings.Contains(with, want) {
 			t.Errorf("default footer lacks %q:\n%s", want, with)
 		}
 	}
 	if with != strings.TrimSpace(with) {
 		t.Errorf("rendered footer is not trimmed: %q", with)
+	}
+}
+
+// "New pushes are re-reviewed automatically" was false for a draft a watch
+// skips and during quiet hours, and the footer said nothing of replies or
+// review requests: two authors waited 64 minutes and 4 hours after pushing
+// to a draft before they requested a review. The footer says, from the
+// watch's configuration, when a push is re-reviewed, that a reply gets an
+// answer without a push and whose review request starts a round; it asks
+// for a reply on P0-P2 threads only, P3 titles saying none is needed.
+func TestDefaultFooterSaysWhatStartsARound(t *testing.T) {
+	const tail = " A thread reply gets an answer without a push, and a review request for `zhuravel` starts a round.\n\n</details>"
+	for _, tc := range []struct {
+		name          string
+		quiet         string
+		draftsSkipped bool
+		pushes        string
+	}{
+		{"neither", "", false, "New pushes are re-reviewed automatically."},
+		{"quiet hours", "03:00-12:00 UTC+3", false, "New pushes are re-reviewed automatically outside 03:00-12:00 UTC+3."},
+		{"drafts skipped", "", true, "New pushes are re-reviewed automatically, drafts only on request."},
+		{"both", "22:00-06:00 UTC", true, "New pushes are re-reviewed automatically outside 22:00-06:00 UTC, drafts only on request."},
+	} {
+		d := FooterData{SHA: "d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3", Short: "d4e5f6a7b8", Repo: "talkable/talkable", Number: 11920,
+			Login: "talkable[bot]", Event: "COMMENT", QuietHours: tc.quiet, DraftsSkipped: tc.draftsSkipped, RequestLogin: "zhuravel"}
+		got, err := RenderFooter(DefaultReviewFooter, d)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if want := "Reply on a P0-P2 thread with `fixed`, `not a bug: <why>` or `won't fix: <why>`. " + tc.pushes + tail; !strings.HasSuffix(got, want) {
+			t.Errorf("%s: footer ends\n%q\nwant\n%q", tc.name, got, want)
+		}
+	}
+}
+
+// The footer names the quiet hours in the daemon's zone, as an offset from
+// UTC an author anywhere can read; unset or invalid quiet hours name none.
+func TestQuietHoursLabelNamesTheWindowWithItsUTCOffset(t *testing.T) {
+	at := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	for spec, want := range map[string]string{
+		"03:00-12:00": "03:00-12:00 UTC",
+		"3:00-7:30":   "03:00-07:30 UTC",
+		"":            "",
+		"07:00-07:00": "",
+		"later":       "",
+	} {
+		if got := QuietHoursLabel(spec, at); got != want {
+			t.Errorf("QuietHoursLabel(%q) = %q, want %q", spec, got, want)
+		}
+	}
+	for zone, want := range map[*time.Location]string{
+		time.FixedZone("EEST", 3*3600):          "01:00-07:00 UTC+3",
+		time.FixedZone("EDT", -4*3600):          "01:00-07:00 UTC-4",
+		time.FixedZone("IST", 5*3600+30*60):     "01:00-07:00 UTC+5:30",
+		time.FixedZone("NDT", -(2*3600 + 1800)): "01:00-07:00 UTC-2:30",
+	} {
+		if got := QuietHoursLabel("01:00-07:00", at.In(zone)); got != want {
+			t.Errorf("QuietHoursLabel in %s = %q, want %q", zone, got, want)
+		}
 	}
 }
 

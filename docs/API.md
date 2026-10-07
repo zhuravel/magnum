@@ -2395,14 +2395,18 @@ const DefaultReviewFooter = "**Reviewed commit:** `{{.Short}}`\n" +
 	"\n" +
 	"<details><summary>ℹ️ About Magnum</summary>\n" +
 	"\n" +
-	"Automated review by [Magnum](https://github.com/zhuravel/magnum). Reply on a thread with `fixed`, `not a bug: <why>` or `won't fix: <why>`" +
-	"{{if .Simplify}}; simplifications are optional{{end}}. New pushes are re-reviewed automatically.\n" +
+	"Automated review by [Magnum](https://github.com/zhuravel/magnum). Reply on a P0-P2 thread with `fixed`, `not a bug: <why>` or `won't fix: <why>`" +
+	"{{if .Simplify}}; simplifications are optional{{end}}. New pushes are re-reviewed automatically" +
+	"{{with .QuietHours}} outside {{.}}{{end}}{{if .DraftsSkipped}}, drafts only on request{{end}}. " +
+	"A thread reply gets an answer without a push, and a review request for `{{.RequestLogin}}` starts a round.\n" +
 	"\n" +
 	"</details>"
     DefaultReviewFooter is the footer template of every identity that sets
-    no review_footer: the reviewed commit, then what the review is and how
-    to answer it, in the words the reply classifier knows, collapsed under
-    <details> (config.defaults.toml documents it word for word).
+    no review_footer: the reviewed commit, then what the review is, how to
+    answer a P0-P2 thread, in the words the reply classifier knows, and what
+    starts a round (a push, outside the quiet hours and not on a draft the
+    watch skips; a thread reply; a review request), collapsed under <details>
+    (config.defaults.toml documents it word for word).
 
 const DefaultSimplifyRerunLines = 150
     DefaultSimplifyRerunLines is claude-simplify's rerun_min_lines: about two
@@ -2518,6 +2522,12 @@ func MatchPath(glob, name string) bool
 func ParseDuration(s string) (time.Duration, error)
     ParseDuration is time.ParseDuration plus a leading whole-day count: "7d",
     "30d", "1d12h". A day is 24 hours.
+
+func QuietHoursLabel(spec string, at time.Time) string
+    QuietHoursLabel is the quiet-hours window spec (ParseQuietHours) as an
+    author anywhere can read it: both clocks as HH:MM and at's offset from UTC
+    ("03:00-12:00 UTC+3", "01:00-07:00 UTC-2:30", "22:00-06:00 UTC"). "" when
+    spec is blank or invalid.
 
 func RenderAutoApproveBody(tmpl string, d AutoApproveData) (string, error)
     RenderAutoApproveBody renders an auto_approve_body template with d (Short
@@ -2959,6 +2969,16 @@ type FooterData struct {
 	Event      string // APPROVE, COMMENT or REQUEST_CHANGES
 	PostMerge  bool   // a review of commits GitHub merged before magnum reviewed them
 	DeltaCheck bool   // the judge alone checked a small delta since its last review
+	// QuietHours is [daemon] quiet_hours with the daemon's offset from UTC
+	// (QuietHoursLabel: "03:00-12:00 UTC+3"); "" = none.
+	QuietHours string
+	// DraftsSkipped: the PR's watch skips drafts (include_drafts = false),
+	// so a push to a draft starts no round; a review request does.
+	DraftsSkipped bool
+	// RequestLogin is the login a review request names to start a round:
+	// the watch's poll login when it is a person's (a gh identity), else
+	// Login.
+	RequestLogin string
 }
     FooterData is what a review_footer template renders with: the verified
     review magnum appends the footer to and the round that posted it.

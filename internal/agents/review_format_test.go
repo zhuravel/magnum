@@ -329,7 +329,7 @@ func TestSkillCarriesOneExceptionPerContradiction(t *testing.T) {
 	skillSays(t, []string{
 		"Give each missing report one line in Checks with its reason (`- claude-review: no report (usage_limit)`); a machine cause (section 7) only as `(machine)`, its detail in `environment_failures`.",
 		"never a test file unless it is a flaky test the PR adds.",
-		"Leave it out of the posted review, Checks included.",
+		"A check it blocks reads `skipped (machine)` in Checks;",
 	}, []string{"even when the machine caused it"})
 }
 
@@ -402,9 +402,15 @@ func TestSkillOwnPassOfAReReviewCoversTheNewCommits(t *testing.T) {
 // 28,764, 2026-10-07): the result fields magnum never reads and the echo of
 // the whole result, rules post-review and magnum enforce, the blind,
 // post-merge, former-login and simplification text that the prompts of those
-// rare rounds now carry, and rules the skill said more than once. Every rule
-// added must replace or shorten text.
-const skillMaxBytes = 28_764
+// rare rounds now carry, and rules the skill said more than once. Then 558
+// for what authors see and how findings are proved (2026-10-07): a Fix that
+// says what it keeps and is run first, with its example (219), titles in fix
+// code (104), the P3 label (51), outside_diff's definition (18) and
+// `skipped (machine)` (7), and security findings proved with the
+// repository's tests (237 with section 4's reproduction list, which section 5
+// keeps), less the posted test instead of its output (-17) and a shorter
+// local-path line (-61). Every rule added must replace or shorten text.
+const skillMaxBytes = 29_322
 
 func TestSkillStaysTight(t *testing.T) {
 	if n := len(magnum.Skill); n > skillMaxBytes {
@@ -559,11 +565,76 @@ func TestJudgePromptsPostAtMostThreeSimplificationsThatRemoveSomething(t *testin
 // input that goes wrong; the drafted review is reread once before posting.
 func TestSkillShapesCommentsAroundTriggerAndSmallestFix(t *testing.T) {
 	skillSays(t, []string{
-		"**Fix**: the code cause and the smallest safe change",
+		"**Fix**: the code cause, one smallest safe change and what it must keep",
 		"Structure can hide a defect",
 		"Report one only with the input that goes wrong.",
 		"reread every comment once",
 	}, nil)
+}
+
+// Fix advice was never run and did not say what the fix must keep: a PR got
+// "add `data = data || {}`" twice and then a P3 on that code, and about 14
+// of ~45 new re-review findings sat in code written to fix an earlier
+// finding. The Fix gives one change and what it keeps, code in it is run
+// with the reproduction first, and a finding in such code says so.
+func TestSkillChecksTheFixAndSaysWhatItKeeps(t *testing.T) {
+	skillSays(t, []string{
+		"**Fix**: the code cause, one smallest safe change and what it must keep (the behaviour the surrounding code relies on).",
+		"Run any code you suggest with the reproduction (a probe, or a scratch worktree as in section 2) before you post it.",
+		"A finding in code written to fix an earlier one ends its title with `(in the fix for <earlier title>)`.",
+	}, []string{"**Fix**: the code cause and the smallest safe change"})
+}
+
+// On 4 findings the judge posted the output of a test it ran instead of the
+// test, while authors' agents reused posted tests as their own specs.
+func TestSkillPostsTheTestItRanNotItsOutput(t *testing.T) {
+	skillSays(t, []string{
+		"the test or script you ran as its code, never only its output;",
+		"a test names its file and line (`spec/models/order_spec.rb:42`), never as a `suggestion`.",
+	}, nil)
+}
+
+// On an OAuth session-security PR the judge drove headless Chromium to plant
+// a cookie on a sibling host, and Codex flagged every turn as a possible
+// cybersecurity risk, which can block the account. A security finding is
+// proved with the repository's own tests, never with attack tooling, and a
+// probe is described as a test of the PR's behaviour.
+func TestSkillProvesSecurityFindingsWithTheRepositorysTests(t *testing.T) {
+	skillSays(t, []string{
+		"Prove it with a reproduction whenever practical (section 5); a security finding with the repository's own tests (a focused or request spec on the PR's code, through `db_lock`), " +
+			"never with attack tooling (browser automation forging cookies or sessions, exploit or payload scripts, scanners, network tools against hosts): " +
+			"call a probe a test of the PR's behaviour.",
+	}, nil)
+}
+
+// 10 of 36 P3 threads got no answer: a P3's title says no reply is needed,
+// as a simplification's does.
+func TestSkillTitlesAP3OptionalWithNoReplyNeeded(t *testing.T) {
+	skillSays(t, []string{
+		"- `P3` optional: a small real defect the author may leave as is; its title ends with `(optional, no reply needed)`.",
+	}, nil)
+}
+
+// `outside_diff` said "not in lines this PR changes" while the caller and
+// access-hole rules make a defect the PR causes in unchanged code its
+// finding: 52 rejections as outside_diff in a day, 23 of them P0-P2.
+func TestSkillRejectsAsOutsideDiffOnlyWhatThePRNeitherHoldsNorCauses(t *testing.T) {
+	skillSays(t, []string{
+		"- `outside_diff`: it is neither in nor caused by lines this PR changes, or it lives in a lower layer of a stack;",
+	}, []string{"- `outside_diff`: it is not in lines this PR changes"})
+}
+
+// A check skipped for a machine cause had three answers: the exact reason,
+// left out of the review with Checks included, and a skipped check. It reads
+// `skipped (machine)` in Checks wherever the skill speaks of it, as a
+// missing report's machine cause does.
+func TestSkillListsAMachineSkippedCheckAsSkippedMachine(t *testing.T) {
+	skillSays(t, []string{
+		"skip the checks it blocks as `skipped (machine)` (section 7).",
+		"Its exit 75 is a timeout: the check did not run (`skipped (machine)`, section 7), not a finding;",
+		"A check it blocks reads `skipped (machine)` in Checks; its detail goes only under `environment_failures` and in the notes (section 2).",
+		"one line per command with its result or why it was skipped;",
+	}, []string{"Checks included", "the exact reason it was skipped", "a machine failure (section 7)"})
 }
 
 // The simplify reviewer is read-only: it reviews the diff from four angles

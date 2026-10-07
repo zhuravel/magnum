@@ -413,7 +413,7 @@ aliases = ["simplify"]
 #
 # <details><summary>ℹ️ About Magnum</summary>
 #
-# Automated review by [Magnum](https://github.com/zhuravel/magnum). Reply on a thread with `fixed`, `not a bug: <why>` or `won't fix: <why>`{{if .Simplify}}; simplifications are optional{{end}}. New pushes are re-reviewed automatically.
+# Automated review by [Magnum](https://github.com/zhuravel/magnum). Reply on a P0-P2 thread with `fixed`, `not a bug: <why>` or `won't fix: <why>`{{if .Simplify}}; simplifications are optional{{end}}. New pushes are re-reviewed automatically{{with .QuietHours}} outside {{.}}{{end}}{{if .DraftsSkipped}}, drafts only on request{{end}}. A thread reply gets an answer without a push, and a review request for `{{.RequestLogin}}` starts a round.
 #
 # </details>'''
 #                                         # the footer magnum appends to every review the identity posts once the review
@@ -423,7 +423,11 @@ aliases = ["simplify"]
 #                                         # characters) of the reviewed commit, .Repo (owner/name), .Number, .Login (the
 #                                         # posting login), .Simplify (the PR's watch runs a role aliased simplify), .Clean
 #                                         # (no findings and no simplifications), .Event (APPROVE, COMMENT or
-#                                         # REQUEST_CHANGES), .PostMerge and .DeltaCheck. magnum starts it with
+#                                         # REQUEST_CHANGES), .PostMerge, .DeltaCheck, .QuietHours ([daemon] quiet_hours
+#                                         # with the daemon's UTC offset, "03:00-12:00 UTC+3"; "" when unset),
+#                                         # .DraftsSkipped (the watch's include_drafts = false) and .RequestLogin (whose
+#                                         # review request starts a round: the watch's poll login when it is a gh
+#                                         # identity's, else the posting login). magnum starts it with
 #                                         # <!-- magnum:footer --> and, editing the review again, replaces what follows
 #                                         # that marker instead of adding a second footer. Dry runs get none.
 #

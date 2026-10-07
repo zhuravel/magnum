@@ -494,13 +494,17 @@ after the PR was merged are never dismissed, and a dismissal that fails (a missi
 `review_footer` is the footer Magnum appends to every review the identity posts, once the review is
 verified, there for the PR's author (the judge never writes it, and a dry run gets none). Without the key it
 is Magnum's: the reviewed commit, then, collapsed under "About Magnum", that the review is automated, that a
-thread is answered with `fixed`, `not a bug: <why>` or `won't fix: <why>` (the words the reply classifier
-knows), that simplifications are optional (only when the watch runs a role aliased `simplify`) and that new
-pushes are re-reviewed automatically; `config.defaults.toml` shows it word for word. It is a Go
+P0-P2 thread is answered with `fixed`, `not a bug: <why>` or `won't fix: <why>` (the words the reply
+classifier knows; a P3's title says it needs no reply), that simplifications are optional (only when the
+watch runs a role aliased `simplify`), that new pushes are re-reviewed automatically (outside
+`[daemon] quiet_hours` when set, with the daemon's offset from UTC, "03:00-12:00 UTC+3"; drafts only on
+request when the watch has `include_drafts = false`), that a thread reply gets an answer without a push,
+and whose review request starts a round (the watch's poll login when that is a `gh` identity, else the
+posting login); `config.defaults.toml` shows it word for word. It is a Go
 `text/template` of at most 2,000 characters, line breaks allowed, with `.SHA` and `.Short` (10 characters)
 of the reviewed commit, `.Repo`, `.Number`, `.Login` (the posting login), `.Simplify`, `.Clean` (no
-findings and no simplifications), `.Event` (`APPROVE`, `COMMENT` or `REQUEST_CHANGES`), `.PostMerge` and
-`.DeltaCheck`; `""` turns it off. A template that does not render fails validation and the start check,
+findings and no simplifications), `.Event` (`APPROVE`, `COMMENT` or `REQUEST_CHANGES`), `.PostMerge`,
+`.DeltaCheck`, `.QuietHours` (`""` when unset), `.DraftsSkipped` and `.RequestLogin`; `""` turns it off. A template that does not render fails validation and the start check,
 like a broken prompt. Magnum starts the footer with `<!-- magnum:footer -->` after a blank line, puts its
 own notes ("_Reviewed d4e5f6a; 1 commit arrived during the review …_") above it, and replaces it rather than
 adding a second one when it edits the review again; a review whose judge wrote the old footer itself is left
@@ -997,7 +1001,8 @@ says why in one sentence in that thread), and lists only what changed since its 
 now fixed or answered, findings still open despite a reply or a commit, and new ones; the unchanged open
 findings are one count with a link to the previous review.
 The result records every finding the judge weighed with a short title, its sources (`judge` only when
-its own pass found it, not when it confirmed a report) and, for a rejection, a reason code, marking
+its own pass found it, not when it confirmed a report) and, for a rejection, a reason code
+(`outside_diff` only for a problem neither in nor caused by the lines the PR changes), marking
 `nearby` a pre-existing P1 or P2 it proved in or near the code the PR changes (the claude reviewers
 report such a problem marked `nearby` instead of leaving it out); `magnum stats` reports
 them per role and `magnum debt` lists the nearby ones across PRs. Its finding counts and posted entries
@@ -1006,8 +1011,11 @@ are only what the review posts as new: an earlier finding still open counts in
 in the round that first posted it, under whoever found it then; magnum's summary of the round
 (`open_counts` next to `open` in `status --json`) reads those priorities, an older result giving only
 the number. A missing report gets its Checks line with `(machine)` as the reason when the review
-machine caused it (the detail goes to `environment_failures`), and a flaky test the PR adds may carry
-its finding. The skill runs unattended: it never stops to ask a human
+machine caused it, and a check the machine blocked reads `skipped (machine)` (the detail goes to
+`environment_failures`); a flaky test the PR adds may carry its finding. A security finding is proved
+with the repository's own tests (a focused or request spec, through `db_lock`), never with attack tooling
+(browser automation forging cookies or sessions, exploit or payload scripts, scanners, network tools
+against hosts), which the agent CLI's provider may flag as abuse. The skill runs unattended: it never stops to ask a human
 (whatever an instruction file says), runs no usage checks, and ends with one line (the review URL or the
 blocker) and a short `MAGNUM_RESULT` line: the status, run, review, verdict and counts of its result
 file, which magnum reads only when the file is missing. The rules of rare rounds (a blind replay, a
@@ -1089,8 +1097,11 @@ What an author gets, every review alike:
   `COMMENT` both ways, as a post-merge review does.
 - **Each finding on the defective line**, the code that must change: a title that states the wrong result;
   the trigger, who can produce it and the concrete consequence; a test that proves it as a fenced block
-  naming its spec file and line; **Fix** with the code cause and the smallest safe change (a `suggestion`
-  is only ever the code fix).
+  naming its spec file and line (the test the judge ran, never only its output); **Fix** with the code
+  cause, one smallest safe change and the behaviour it must keep, any code in it run with the reproduction
+  before it is posted (a `suggestion` is only ever the code fix). A P3's title ends "(optional, no reply
+  needed)"; a re-review's finding in code written to fix an earlier one ends "(in the fix for <earlier
+  title>)".
 - **The description's claims checked**: a false claim that bears on risk (a ticked "Can be reverted
   easily" whose previous release cannot run on the new schema or the jobs queued meanwhile) is a finding
   at its priority; one without impact is one body line, `Description: ✗ <claim>: <why>`; a true claim
@@ -1105,7 +1116,7 @@ What an author gets, every review alike:
   unless it removes a defect-prone construct; a re-review suggests them only on lines changed since the
   previous review.
 - **The identity's footer** last, appended by Magnum (`review_footer`, see Identities): the reviewed commit,
-  then a collapsed "About Magnum".
+  then a collapsed "About Magnum" that says how to answer and what starts the next round.
 
 A clean review, as GitHub receives it (the comments do not render):
 
@@ -1125,7 +1136,7 @@ No problems found. LGTM :shipit:
 
 <details><summary>ℹ️ About Magnum</summary>
 
-Automated review by [Magnum](https://github.com/zhuravel/magnum). Reply on a thread with `fixed`, `not a bug: <why>` or `won't fix: <why>`; simplifications are optional. New pushes are re-reviewed automatically.
+Automated review by [Magnum](https://github.com/zhuravel/magnum). Reply on a P0-P2 thread with `fixed`, `not a bug: <why>` or `won't fix: <why>`; simplifications are optional. New pushes are re-reviewed automatically outside 03:00-12:00 UTC+3. A thread reply gets an answer without a push, and a review request for `your-login` starts a round.
 
 </details>
 ```
