@@ -44,7 +44,7 @@ func TestARefusedOwnPassEndsTheRoundAtOnce(t *testing.T) {
 	e := newEnv(t)
 	e.ag.reads[agents.RoleJudge] = codexRefusal
 	e.ag.behaviors[agents.RoleJudge] = []behavior{endSilently()}
-	e.ag.behaviors[agents.RoleClaude] = []behavior{hang()}
+	e.ag.hangs = map[agents.Role]bool{agents.RoleClaude: true} // at work until the round cancels it
 
 	res, err := e.r.RunRound(e.ctx, e.ownInput(KindInitial))
 	if err != nil {
@@ -105,7 +105,7 @@ func TestARefusedCodexReviewEndsTheRoundNamingIt(t *testing.T) {
 				return os.WriteFile(filepath.Join(e.reportDir(), "codex-review.md"),
 					[]byte("Reviewing the diff against the base\nERROR: This content was flagged for possible cybersecurity risk.\n"), 0o600)
 			}
-			e.ag.behaviors[agents.RoleClaude] = []behavior{hang()}
+			e.ag.hangs = map[agents.Role]bool{agents.RoleClaude: true} // at work until the round cancels it
 
 			res, err := e.r.RunRound(e.ctx, e.input(KindInitial))
 			if err != nil {

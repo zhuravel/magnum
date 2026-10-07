@@ -86,8 +86,9 @@ type fakeAgents struct {
 	// (herdr agent_blocked): run failed, agents.ErrBlocked.
 	blocked map[agents.Role]int
 	// hangs: a role's Submit, once its run is working, returns only when
-	// ctx ends (or after 10 s, an error): a turn still in flight when the
-	// round cancels it, whose waits cannot move the shared clock before.
+	// ctx ends (or after 10 s, an error), and its behaviors never run: a
+	// turn still in flight when the round cancels it, whose waits cannot
+	// move the shared clock before.
 	hangs map[agents.Role]bool
 	// switches are the SwitchModel calls; switchErr fails them.
 	switches  []switchCall
@@ -248,6 +249,7 @@ func (f *fakeAgents) Submit(ctx context.Context, run store.Run, text string) err
 	if hangs {
 		select {
 		case <-ctx.Done():
+			return nil // the text arrived; the agent works on
 		case <-time.After(10 * time.Second):
 			return fmt.Errorf("fake submit %s: never cancelled", run.Role)
 		}

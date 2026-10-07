@@ -34,7 +34,7 @@ func flagBoard(t *testing.T, muteReason string) (prBoardModel, *fakeActions) {
 	}
 	src := &fakeBoardSource{rows: rows}
 	act := &fakeActions{}
-	m := newPRBoardModel(context.Background(), src, act, PRBoardOptions{Now: func() time.Time { return boardNow }, SelfLogins: boardSelf})
+	m := testPRBoard(context.Background(), src, act, PRBoardOptions{Now: func() time.Time { return boardNow }, SelfLogins: boardSelf})
 	m, _ = send(t, m, tea.WindowSizeMsg{Width: 220, Height: 50}, prbDataMsg{rows: src.rows})
 	at := slices.Index(boardRefs(m), snzOpen)
 	if at < 0 {

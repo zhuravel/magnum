@@ -495,7 +495,7 @@ func TestCancelDuringOwnPassStopsTheRound(t *testing.T) {
 	e := newEnv(t)
 	ctx, cancel := context.WithCancel(e.ctx)
 	defer cancel()
-	e.ag.behaviors[agents.RoleJudge] = []behavior{hang()}
+	e.ag.hangs = map[agents.Role]bool{agents.RoleJudge: true} // its own pass works until the round is cancelled
 	e.ag.behaviors[agents.RoleClaude] = []behavior{func(f *fakeAgents, run store.Run, text string) error {
 		e.waitRun(agents.RoleJudge, target, store.RunWorking)
 		cancel()
