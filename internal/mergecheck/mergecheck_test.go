@@ -18,6 +18,7 @@ import (
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 var (
@@ -123,11 +124,7 @@ func newWorld(t *testing.T) *world {
 	if err != nil {
 		t.Fatal(err)
 	}
-	st, err := store.Open(filepath.Join(root, "magnum.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
+	st := storetest.Open(t, filepath.Join(root, "magnum.db"))
 	slotDir := filepath.Join(root, "talkable.review2")
 	if err := os.MkdirAll(slotDir, 0o755); err != nil {
 		t.Fatal(err)
