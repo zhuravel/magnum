@@ -80,6 +80,38 @@ find "$reviews" -mindepth 4 -maxdepth 4 -type d -newer "$stamp" -print 2>/dev/nu
 	xargs -I{} stat -f '%m %N' {} | sort -rn | cut -d' ' -f2- >"$dir/reports.txt" || true
 rm -f "$stamp"
 
+# How authors answered magnum's findings: the newest review-threads.json of each
+# PR reviewed since then, counted by reply class, with the declined and
+# deferred ones listed for the declined-findings lens.
+python3 - "$dir/reports.txt" >>"$out" <<'PY'
+import json, os, sys, collections
+latest = {}
+for d in open(sys.argv[1]).read().split():
+    pr = os.path.dirname(d)
+    if pr not in latest and os.path.exists(os.path.join(d, "review-threads.json")):
+        latest[pr] = os.path.join(d, "review-threads.json")
+classes, declined = collections.Counter(), []
+for pr, f in sorted(latest.items()):
+    try:
+        threads = json.load(open(f))
+    except Exception:
+        continue
+    for t in threads if isinstance(threads, list) else threads.get("threads", []):
+        replies = [r for r in t.get("replies") or [] if not r.get("own")]
+        last = replies[-1]["class"] if replies else "unanswered"
+        classes[last] += 1
+        if last in ("not a bug", "won't fix", "other"):
+            body = " ".join((replies[-1].get("body") or "").split())[:200]
+            declined.append(f"| {last} | {t.get('finding','')[:90]} | {t.get('location','')} | {t.get('url','')} | {body} |")
+print("\n## Author replies to magnum's threads (latest round per PR)\n")
+print("| last reply | threads |\n|---|---|")
+for k, v in classes.most_common():
+    print(f"| {k} | {v} |")
+print("\n### Declined, deferred or argued threads\n")
+print("| class | finding | where | thread | reply (first 200 chars) |\n|---|---|---|---|---|")
+print("\n".join(declined) or "| - | - | - | - | - |")
+PY
+
 git -C "$repo" log --since="$since" --format='%h %ad %<(150,trunc)%s' --date=short >"$dir/gitlog.txt"
 
 echo "$out ($(wc -l <"$out" | tr -d ' ') lines), $(wc -l <"$dir/reports.txt" | tr -d ' ') report dirs, $(wc -l <"$dir/gitlog.txt" | tr -d ' ') commits"

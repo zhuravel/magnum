@@ -23,8 +23,9 @@ PR" and "never a second CODEX_HOME".
    next run, so that late reviews can arrive. Then `scripts/evidence.sh <since> <run-dir>` writes `evidence.md`, a list of review report
    directories, and the git log since. Read the summary yourself; it is the shared input of every analyst.
 3. **Analysis wave.** Start the analysts in [lenses.md](lenses.md) in parallel, read-only, each with the evidence
-   path, its lens and the return format there. Lens 0 (misses: what other reviewers found and magnum did not) runs
-   every time; it is how the loop learns. Up to 8 at once.
+   path, its lens and the return format there. Lenses 0 and 1 run every time: what other reviewers
+   found and magnum did not, and what magnum posted that people rejected or deferred. They are how the loop learns.
+   Up to 8 at once.
 4. **Verify.** For every item you might act on, open the cited files, rerun the cited query or read the cited
    review. Drop an item you cannot confirm. Merge duplicates across lenses.
 5. **Decide.** Sort the confirmed items with the autonomy rules below. Write the plan to `<run-dir>/plan.md`. Ask
