@@ -88,9 +88,17 @@ rm -f "$stamp"
 # thread says when magnum posted its finding (created_at) and in which review
 # (review_id, joined to the run that posted it); "current skill" marks a
 # finding whose run named the skill copy (<state>/skill/<hash>/SKILL.md) that
-# the running daemon's rounds name.
-python3 - "$dir/reports.txt" "$db" >>"$out" <<'PY'
-import json, os, re, subprocess, sys, collections
+# the running daemon's rounds name: the newest judge run since the daemon
+# loaded its prompts (kv daemon.prompts_loaded_at) tells which. Right after a
+# restart no judge has run yet; then, when nothing changed on disk since the
+# daemon loaded (kv daemon.prompts_changed absent), the hash is the first 12
+# hex characters of the SHA-256 of $repo/skills/magnum-review/SKILL.md, the
+# name the daemon gave its copy, and the summary says so. "net" is the score
+# the author's last reply gives the fix ("Net +3", "Net: -2", "net 0", "Low
+# priority (Net 0)"; a minus may be U+2212), as "+3", "-2", "0" or "+0.5",
+# empty when the reply names none.
+python3 - "$dir/reports.txt" "$db" "$repo" >>"$out" <<'PY'
+import hashlib, json, os, re, subprocess, sys, collections
 latest = {}
 for d in open(sys.argv[1]).read().split():
     pr = os.path.dirname(d)
@@ -108,6 +116,17 @@ def skill(fragment):
     m = re.match(r"([0-9a-f]{12})/SKILL\.md", fragment or "")
     return m.group(1) if m else None
 
+NET = re.compile(r"\bnet\b:?\s*([-+−]?)\s*(\d+(?:\.\d+)?)(?!\w)", re.I)
+
+def net(body):
+    m = NET.search(body or "")
+    if not m:
+        return ""
+    num = m.group(2)
+    if float(num) == 0:
+        return "0"
+    return ("-" if m.group(1) in ("-", "−") else "+") + num
+
 frag = "case when instr(prompt_text, '/skill/') > 0 then substr(prompt_text, instr(prompt_text, '/skill/') + 7, 21) end"
 posted = {}  # review id -> [run id, round, kind, skill]: the first run that names the review
 for r in sql(f"select id, review_id, round, kind, {frag} as skill from runs where review_id is not null order by id"):
@@ -115,7 +134,14 @@ for r in sql(f"select id, review_id, round, kind, {frag} as skill from runs wher
     p[3] = p[3] or skill(r["skill"])
 cur = sql(f"""select {frag} as skill from runs where role like '%judge%' and instr(prompt_text, '/skill/') > 0
               and created_at >= (select value from kv where key = 'daemon.prompts_loaded_at') order by id desc limit 1""")
-current = skill(cur[0]["skill"]) if cur else None
+current, from_file = (skill(cur[0]["skill"]) if cur else None), False
+changed = sql("select count(*) as n from kv where key = 'daemon.prompts_changed'")
+if not cur and changed and changed[0]["n"] == 0:
+    try:
+        with open(os.path.join(sys.argv[3], "skills", "magnum-review", "SKILL.md"), "rb") as f:
+            current, from_file = hashlib.sha256(f.read()).hexdigest()[:12], True
+    except OSError:
+        pass
 
 guess, rows, unanswered, under_current = collections.Counter(), [], 0, 0
 for pr, f in sorted(latest.items()):
@@ -138,18 +164,20 @@ for pr, f in sorted(latest.items()):
             at += ", current skill"
             under_current += 1
         text = " ".join((last.get("body") or "").split())[:400].replace("|", "/")
-        rows.append(f"| {last.get('class') or '-'} | {len(theirs)}/{own} | {at} | {where} | {t.get('finding','')[:90]} | {t.get('location','')} | {t.get('url','')} | {text} |")
+        rows.append(f"| {last.get('class') or '-'} | {net(last.get('body'))} | {len(theirs)}/{own} | {at} | {where} | {t.get('finding','')[:90]} | {t.get('location','')} | {t.get('url','')} | {text} |")
 print("\n## Replies to magnum's threads (latest round per PR)\n")
 skill_note = f", {under_current} of them posted under the current skill" if current else ""
+if from_file:
+    skill_note += f" ({current}, from SKILL.md: no judge ran since the restart)"
 print(f"{len(rows)} answered threads{skill_note}, {unanswered} without a reply. The class is a keyword guess made at round time, not a verdict:")
 print("read every reply below and decide what it says.\n")
 print("| class at round time | threads |\n|---|---|")
 for k, v in guess.most_common():
     print(f"| {k} | {v} |")
 print("\n### Every answered thread\n")
-print("| class at round time | replies theirs/own | posted (UTC) | round | finding | where | thread | last reply (first 400 chars) |")
-print("|---|---|---|---|---|---|---|---|")
-print("\n".join(rows) or "| - | - | - | - | - | - | - | - |")
+print("| class at round time | net | replies theirs/own | posted (UTC) | round | finding | where | thread | last reply (first 400 chars) |")
+print("|---|---|---|---|---|---|---|---|---|")
+print("\n".join(rows) or "| - | - | - | - | - | - | - | - | - |")
 PY
 
 git -C "$repo" log --since="$since" --format='%h %ad %<(150,trunc)%s' --date=short >"$dir/gitlog.txt"

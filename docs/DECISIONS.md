@@ -4181,3 +4181,11 @@ editing history. Code, config comments and prompts reference these by their head
   "Correction" and "you're right" (or "you are right", "you're correct") are acknowledgements a later verdict
   follows. A bare "Resolved", one by a later PR or by hand, and "not resolved by <sha>" stay no verdict. The
   class is still a hint for the judge; nothing branches on it.
+- **The loop's evidence shows the authors' Net scores and the current skill right after a restart**
+  (2026-10-08). 90 of 131 last replies carry the score the author's agent gives the fix ("Net +3", "Low priority
+  (Net 0)"), which evidence.sh dropped, and an evidence run 8 minutes after a daemon restart marked no thread as
+  posted under the current skill, because no judge had run since the daemon loaded its prompts, though 11 were.
+  The answered-threads table has a `net` column ("+3", "-2", "0", "+0.5"; a U+2212 minus too; empty without a
+  score), and with no judge run since `daemon.prompts_loaded_at` and no `daemon.prompts_changed`, the current
+  skill is the first 12 hex of the SHA-256 of skills/magnum-review/SKILL.md, the name of the daemon's copy; the
+  summary says it came from the file.
