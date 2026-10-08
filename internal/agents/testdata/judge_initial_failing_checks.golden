@@ -29,6 +29,7 @@ reports:
   - codex-review: missing (timed out after 40m)
   - claude-simplify: /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/claude-simplify.md
 history: /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/history.json
+docs: /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/docs.json
 failing_checks: /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/failing-checks.json
 own_findings: /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/judge-own.md
 result_file: /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/codex-judge.json

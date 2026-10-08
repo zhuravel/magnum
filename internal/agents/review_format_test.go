@@ -419,9 +419,12 @@ func TestSkillOwnPassOfAReReviewCoversTheNewCommits(t *testing.T) {
 // 1,240 from text said twice or enforced by post-review (the local-path
 // list, the readiness field, the reply classes' glosses, a fourth
 // provenance example, the word rules' example, `run_id`'s marker note, the
-// MCP sentence and shorter wording elsewhere). Every rule added must
-// replace or shorten text.
-const skillMaxBytes = 29_771
+// MCP sentence and shorter wording elsewhere). Then 230 for the base docs
+// that name the changed files (2026-10-08): `docs` in the block's list and
+// its section 2 rule (282), less 52 from listing `history` and `docs` on the
+// `related_prs` line and a shorter merge-duplicates sentence. Every rule
+// added must replace or shorten text.
+const skillMaxBytes = 30_001
 
 func TestSkillStaysTight(t *testing.T) {
 	if n := len(magnum.Skill); n > skillMaxBytes {
@@ -440,7 +443,7 @@ func TestSkillDescribesEveryMagnumField(t *testing.T) {
 	d.MovedFrom, d.ForcePushed = "/Users/bohdan/Projects/talkable.review1", true
 	d.Readiness = Readiness{Failed: 1, File: "/r/readiness.json", Checks: []ReadinessCheck{
 		{Kind: ReadinessReady, Command: "bin/db-ready", Status: ReadinessFailed, Duration: "1s"}}}
-	d.RelatedPRs, d.HistoryFile = "/r/related.json", "/r/history.json"
+	d.RelatedPRs, d.HistoryFile, d.DocsFile = "/r/related.json", "/r/history.json", "/r/docs.json"
 	d.ProjectChecks = "Codex ran without the PR's AGENTS.md changes; Claude ran without the PR's CLAUDE.md changes"
 	d.FailingChecks = "/r/failing-checks.json"
 	d.DeltaCheck, d.DeltaLines, d.DeltaFile, d.Replies = true, 4, "/r/delta-check.json", 2
@@ -472,7 +475,7 @@ func TestSkillDescribesEveryMagnumField(t *testing.T) {
 			seen[m[1]] = true
 		}
 	}
-	for _, f := range []string{"notes", "notes_dir", "notes_harness", "notes_lock", "notes_unlock", "readiness", "reports", "phase", "own_findings", "related_prs", "history", "failing_checks", "project_checks", "delta_check", "post_replies"} {
+	for _, f := range []string{"notes", "notes_dir", "notes_harness", "notes_lock", "notes_unlock", "readiness", "reports", "phase", "own_findings", "related_prs", "history", "docs", "failing_checks", "project_checks", "delta_check", "post_replies"} {
 		if !seen[f] {
 			t.Errorf("no judge prompt renders `%s`", f)
 		}
@@ -819,6 +822,73 @@ func TestPromptsNameTheChangedFilesHistory(t *testing.T) {
 	if got, err := RenderPrompt(prompt(t, "claude-simplify.md"), d); err != nil || strings.Contains(got, file) {
 		t.Errorf("claude-simplify.md names the history: %v\n%s", err, got)
 	}
+}
+
+// Agents opened a repository's docs only on the PRs that edited them, while
+// most PRs change a path a page of the base names. The base docs that name
+// the changed files reach every reviewer that judges defects: the judge's
+// own pass and its one or candidates prompt name docs.json as the <magnum>
+// field `docs`, each claude-review prompt has one sentence naming it, and
+// the skill says how to read the pages and weigh what they record. Without
+// the file no prompt mentions it, and the simplify role never does.
+func TestPromptsNameTheBaseDocs(t *testing.T) {
+	const file = "/state/reviews/talkable/talkable/11920/d4e5f6a/docs.json"
+	own := judgeFixture()
+	own.Mode, own.Phase, own.OwnFindings, own.Reports = "initial", PhaseOwnPass, "/r/judge-own.md", nil
+	candidates := judgeFixture()
+	candidates.Phase, candidates.OwnFindings = PhaseCandidates, "/r/judge-own.md"
+	for _, tc := range []struct {
+		name string
+		data JudgeData
+	}{
+		{"judge-own-pass.md", own}, {"judge-initial.md", judgeFixture()}, {"judge-initial.md", candidates},
+		{"judge-rereview.md", candidates}, {"judge-recovery.md", judgeFixture()},
+	} {
+		got, err := RenderPrompt(prompt(t, tc.name), tc.data)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if strings.Contains(got, "\ndocs:") || strings.Contains(got, "docs.json") {
+			t.Errorf("%s names docs without them:\n%s", tc.name, got)
+		}
+		tc.data.DocsFile = file
+		if got, err = RenderPrompt(prompt(t, tc.name), tc.data); err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if block := magnumBlock(t, got); !strings.Contains(block, "\ndocs: "+file+"\n") {
+			t.Errorf("%s: the <magnum> block lacks `docs`:\n%s", tc.name, block)
+		}
+	}
+
+	sentence := "The base branch's pages that name each changed file, or else its directory, are listed in " + file +
+		": read those that bear on this change as the base has them (`git show <base>:<page>`, with `base` from that file)," +
+		" and report behaviour a page records as deliberate, or as a known gap, only as pre-existing (`nearby` at most)."
+	restart := roleFixture()
+	restart.Mode, restart.RestartedFrom = ModeRestart, "f1cc4f9e0d1c2b3a4f5e6d7c8b9a0f1e2d3c4b5a"
+	for name, d := range map[string]RoleData{"claude-review.md": roleFixture(), "claude-rereview.md": roleFixture(), "claude-restart.md": restart} {
+		got, err := RenderPrompt(prompt(t, name), d)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if strings.Contains(got, "docs.json") || strings.Contains(got, "<page>") {
+			t.Errorf("%s names docs without them:\n%s", name, got)
+		}
+		d.DocsFile = file
+		if got, err = RenderPrompt(prompt(t, name), d); err != nil || !strings.Contains(got, "\n\n"+sentence) {
+			t.Errorf("%s lacks the sentence %q: %v\n%s", name, sentence, err, got)
+		}
+	}
+	d := roleFixture()
+	d.DocsFile = file
+	if got, err := RenderPrompt(prompt(t, "claude-simplify.md"), d); err != nil || strings.Contains(got, file) {
+		t.Errorf("claude-simplify.md names the docs: %v\n%s", err, got)
+	}
+
+	skillSays(t, []string{
+		"`history`, `docs`: section 2.",
+		"Docs (`docs`): base pages naming each changed file or its directory; read the relevant ones with `git show <base>:<page>` (`base` from the file).",
+		"What a page records as deliberate or as a known gap is `nearby` at most; a finding against documented behaviour needs a proof.",
+	}, nil)
 }
 
 // A PR got LGTM while its RSpec check had failed on that head 25 minutes

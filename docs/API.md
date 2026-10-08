@@ -869,8 +869,10 @@ type JudgeData struct {
 	// DocsFile is docs.json in the report directory: for each file the PR
 	// changes (related_ignore's paths aside), the .md pages of the base
 	// that name it, or else that name its directory (pipeline.BaseDocs:
-	// page paths, never their text; at most 10 per path); "" when no page
-	// names a changed path, and as for HistoryFile.
+	// page paths, never their text; at most 10 per path), rendered as
+	// `docs` by the own pass and the initial, rereview and recovery
+	// prompts; "" when no page names a changed path, and as for
+	// HistoryFile.
 	DocsFile string
 	// FailingChecks is failing-checks.json in the report directory: the
 	// head's failed CI checks as the poller last saw them (prs.ci_json:
@@ -1593,7 +1595,8 @@ type RoleData struct {
 	// reviewer prompts name it in one sentence; "" = none.
 	HistoryFile string
 	// DocsFile is docs.json in the report directory, the base's pages that
-	// name the changed files (see JudgeData.DocsFile); "" = none.
+	// name the changed files (see JudgeData.DocsFile): the claude reviewer
+	// prompts name it in one sentence; "" = none.
 	DocsFile string
 	// Blind: an evaluation replay (pipeline.RoundInput.Blind); the role
 	// must not read reviews, comments or commits after HeadSHA.
@@ -12041,7 +12044,7 @@ const (
     AutoApproval states (auto_approvals.state).
 
 const (
-	AutoEndedMagnum   = "magnum"   // a later review of magnum's found blocking problems
+	AutoEndedMagnum   = "magnum"   // a later review of magnum's found blocking problems, or its gates refuse it (EndReason says which)
 	AutoEndedOperator = "operator" // the operator: magnum unapprove, the board's D, or on GitHub
 	AutoEndedSomeone  = "someone"  // someone else dismissed it on GitHub
 	AutoEndedPush     = "push"     // GitHub dismissed it as stale when commits were pushed

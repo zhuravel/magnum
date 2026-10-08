@@ -4512,3 +4512,16 @@ editing history. Code, config comments and prompts reference these by their head
   the repository, and it fetches nothing. So it points only to a doc that the notes name by its path and say
   covers the topic. Rejected for now: a list of the base docs for the curator. The engine must write that list
   into the scratch directory. The docs list of a round can supply it in a later change.
+- **The reviewers read the base docs that name the changed files** (2026-10-08, completes "A round lists the
+  base docs that name the changed files"). The judge's own pass, its candidates phase and a round's one
+  prompt now carry `docs: <path>` in the <magnum> block after `history` (judge-own-pass, -initial, -rereview
+  and -recovery, not -continue, whose paused turn had it). The claude-review prompts (initial, rereview,
+  restart) get one sentence naming the file: read the pages that bear on the change as the base has them
+  (`git show <base>:<page>`, with `base` from the file), and report what a page records as deliberate, or as a
+  known gap, only as pre-existing (`nearby` at most). claude-simplify proposes no defects and gets none. SKILL.md
+  lists `docs` with `history` in section 0, and section 2 says: read the relevant pages with
+  `git show <base>:<page>`; what a page records as deliberate or as a known gap is `nearby` at most; a finding
+  against documented behaviour needs a proof. The file's `base`, not `origin/<base_ref>`, names the revision,
+  so a blind replay reads the pages at its merge base. The skill grew by 282 bytes; 52 came back by listing
+  `history` and `docs` on the `related_prs` line and shortening the merge-duplicates sentence of section 3,
+  and the cap (`skillMaxBytes`) rose by the other 230, to 30,001. Without the file, no prompt names docs.

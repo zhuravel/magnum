@@ -29,24 +29,6 @@ func readDocs(t *testing.T, path string) BaseDocs {
 	return d
 }
 
-// docsPrompts gives the env the shipped claude-review and judge-initial
-// prompts with a last line that renders the role data's DocsFile.
-func (e *env) docsPrompts() {
-	e.t.Helper()
-	dir := e.t.TempDir()
-	for _, name := range []string{"claude-review.md", "judge-initial.md"} {
-		text, err := os.ReadFile(filepath.Join("..", "..", "prompts", name))
-		if err != nil {
-			e.t.Fatal(err)
-		}
-		text = append(text, "\ndocs-file=[{{.DocsFile}}]\n"...)
-		if err := os.WriteFile(filepath.Join(dir, name), text, 0o600); err != nil {
-			e.t.Fatal(err)
-		}
-	}
-	e.cfg.Pipeline.PromptsDir = dir
-}
-
 // noDocs fails when the round wrote docs.json in dir or a prompt names one.
 func (e *env) noDocs(dir string) {
 	e.t.Helper()
@@ -55,7 +37,7 @@ func (e *env) noDocs(dir string) {
 	}
 	for _, role := range []agents.Role{agents.RoleJudge, agents.RoleClaude} {
 		for _, p := range e.ag.submitsFor(role) {
-			if strings.Contains(p.Text, DocsFile) {
+			if strings.Contains(p.Text, DocsFile) || strings.Contains(p.Text, "\ndocs:") {
 				e.t.Errorf("a %s prompt names the docs:\n%s", role, p.Text)
 			}
 		}
@@ -72,7 +54,6 @@ func (e *env) noDocs(dir string) {
 // file; the event counts the pages and names none of them.
 func TestARoundListsTheBaseDocsThatNameTheChangedFiles(t *testing.T) {
 	e := newEnv(t)
-	e.docsPrompts()
 	e.git.modified = []string{"Gemfile.lock", "app/models/view_screenshot.rb", "spec/models/order_spec.rb", "Rakefile", "lib/thing.rb",
 		".docs/wiki/index.md"}
 	e.git.added = []string{"app/services/mailer/client.rb", "app/services/mailer/grouping.rb"}
@@ -115,8 +96,8 @@ func TestARoundListsTheBaseDocsThatNameTheChangedFiles(t *testing.T) {
 	}; !slices.Equal(greps, want) {
 		t.Errorf("Mentions calls = %q\nwant %q (the base's .md files only, no lockfile, no top-level directory)", greps, want)
 	}
-	mustContain(t, "judge prompt", e.ag.submitsFor(agents.RoleJudge)[0].Text, "docs-file=["+path+"]")
-	mustContain(t, "claude-review prompt", e.ag.submitsFor(agents.RoleClaude)[0].Text, "docs-file=["+path+"]")
+	mustContain(t, "judge prompt", e.ag.submitsFor(agents.RoleJudge)[0].Text, "\ndocs: "+path+"\n")
+	mustContain(t, "claude-review prompt", e.ag.submitsFor(agents.RoleClaude)[0].Text, "are listed in "+path+": read those")
 
 	evs := e.eventsOf("round.docs")
 	if len(evs) != 1 || evs[0].Level != "info" {
@@ -195,14 +176,12 @@ func TestABlindReplaysDocsAreTheMergeBases(t *testing.T) {
 // review goes on.
 func TestARoundWithoutDocsGoesOn(t *testing.T) {
 	e := newEnv(t)
-	e.docsPrompts()
 	e.git.modified = []string{"app/models/order.rb", "Rakefile"}
 	e.ag.behaviors[agents.RoleJudge] = []behavior{e.judgePosts(833, "COMMENTED", "COMMENT").behavior(t)}
 	if res, err := e.r.RunRound(e.ctx, e.input(KindInitial)); err != nil || res.Outcome != OutcomePosted {
 		t.Fatalf("RunRound = %+v, %v", res, err)
 	}
 	e.noDocs(e.reportDir())
-	mustContain(t, "judge prompt", e.ag.submitsFor(agents.RoleJudge)[0].Text, "docs-file=[]")
 	evs := e.eventsOf("round.docs")
 	if len(evs) != 1 || evs[0].Level != "info" || !strings.Contains(string(evs[0].Data), `"pages":0`) {
 		t.Fatalf("round.docs events = %+v", evs)
@@ -244,7 +223,6 @@ func TestASlowDocsGrepIsCutShort(t *testing.T) {
 // directory, and the judge names that one.
 func TestARestartWritesTheDocsOfTheNewHead(t *testing.T) {
 	e := newEnv(t)
-	e.docsPrompts()
 	e.git.modified = []string{"app/models/order.rb"}
 	e.git.mentions = map[string]map[string]int{"app/models/order.rb": {"docs/orders.md": 1}}
 	in := e.input(KindInitial)
@@ -270,8 +248,13 @@ func TestARestartWritesTheDocsOfTheNewHead(t *testing.T) {
 	if d := readDocs(t, newer); d.HeadSHA != head2 {
 		t.Fatalf("the new head's docs.json = %+v", d)
 	}
-	mustContain(t, "claude's first prompt", e.ag.submitsFor(agents.RoleClaude)[0].Text, "docs-file=["+old+"]")
-	mustContain(t, "judge prompt", e.ag.submitsFor(agents.RoleJudge)[0].Text, "docs-file=["+newer+"]")
+	claude := e.ag.submitsFor(agents.RoleClaude)
+	if len(claude) != 2 {
+		t.Fatalf("claude prompts = %d, want 2", len(claude))
+	}
+	mustContain(t, "claude's first prompt", claude[0].Text, "are listed in "+old+": ")
+	mustContain(t, "claude's restart prompt", claude[1].Text, "are listed in "+newer+": ")
+	mustContain(t, "judge prompt", e.ag.submitsFor(agents.RoleJudge)[0].Text, "\ndocs: "+newer+"\n")
 	if changes, _ := e.git.docsCalls(); !slices.Equal(changes, []string{in.BaseSHA + "..." + target, "base-" + head2[:7] + "..." + head2}) {
 		t.Errorf("ChangedPaths calls = %q", changes)
 	}

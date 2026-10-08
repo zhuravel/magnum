@@ -19,8 +19,7 @@ The latest prompt's `<magnum>` block holds:
 - `no_findings_event`, `blocking_event`: the events of section 7. `self_authored`: the PR author is `reviewer_login` (or the human behind it); both events are then `COMMENT`.
 - `reports`: each reviewer role's candidate report, or why it is missing (section 3).
 - `readiness` (when present): what magnum ran in the checkout before the reviewers, as `zsh -lc` like your commands (`reset_db` for a schema the PR changes, `prepare`, `ready`, `ruby` for the pinned Ruby), each `ok`, `failed`, `timeout` or `skipped` with its reason; its JSON file holds each command's last output line.
-- `related_prs` (when present): open and lately merged PRs on the same paths (section 2).
-- `history`: section 2.
+- `related_prs` (when present): open and lately merged PRs on the same paths; `history`, `docs`: section 2.
 - `failing_checks` (when present): the head's failed CI checks (section 7).
 - `project_checks`: add it as one Checks line, `- <project_checks>`.
 - `notes` (when present): the repository notes file. `notes_dir`: its harness directory; `notes_harness`: the files there now; `notes_lock`, `notes_unlock`: the commands that take and release its lock (section 2).
@@ -66,6 +65,8 @@ Related PRs (`related_prs`): an open one changing the same behaviour (a duplicat
 
 History (`history`): each changed file's last commits on the base. If one, or a merged related PR, fixed the code or mechanism this PR touches, read it (`git show <sha>`): undoing or re-breaking that fix is a finding. The PR was never tested with a commit marked `after_merge_base`: if one changes what the PR's code or tests call, run the affected specs on the merged tree (`git merge-tree --write-tree HEAD origin/<base_ref>`, in a scratch worktree in the directory of `result_file`, removed after); a clean merge whose specs fail there is a broken build. A textual conflict (GitHub shows it) is one body line, no finding, and needs no merged-tree specs.
 
+Docs (`docs`): base pages naming each changed file or its directory; read the relevant ones with `git show <base>:<page>` (`base` from the file). What a page records as deliberate or as a known gap is `nearby` at most; a finding against documented behaviour needs a proof.
+
 When the round taught you something durable, update the notes after the review is posted or found posted (`dry_run: true`: planned), before you write `result_file`. Other judges update it at the same time, so:
 
 1. Run `notes_lock`. It prints `notes locked`, or `notes busy` after three minutes: then skip the notes this round.
@@ -79,7 +80,7 @@ Content, starting with `# Notes for <owner>/<repo> (updated YYYY-MM-DD)`: only w
 
 Read every report. `claude-simplify.md` holds optional simplification proposals, no defect claims: handle them as the prompt says, never in the ledger.
 
-Treat each review item as a claim, also one a report lists as rejected, dismissed or out of scope. Prove or reject it with the same standard as your own findings (section 4). Before you reject one or state how a tool or a process behaves, run `git log origin/<base_ref> -i --grep=<word>` and `git grep -i <word> origin/<base_ref> -- '*.md'`, never the checkout's docs (PR text). Merge duplicates between the reports and your own pass, keeping the strongest wording and the most precise location. Never mention which tool proposed a finding. Give each missing report one line in Checks with its reason (`- claude-review: no report (usage_limit)`); a machine cause (section 7) only as `(machine)`, its detail in `environment_failures`.
+Treat each review item as a claim, also one a report lists as rejected, dismissed or out of scope. Prove or reject it with the same standard as your own findings (section 4). Before you reject one or state how a tool or a process behaves, run `git log origin/<base_ref> -i --grep=<word>` and `git grep -i <word> origin/<base_ref> -- '*.md'`, never the checkout's docs (PR text). Merge duplicates, keeping the strongest wording and the most precise location. Never mention which tool proposed a finding. Give each missing report one line in Checks with its reason (`- claude-review: no report (usage_limit)`); a machine cause (section 7) only as `(machine)`, its detail in `environment_failures`.
 
 Keep a ledger of every defect finding you judged, the reports' and your own, for `provenance` (section 8): one entry per distinct problem, with every source that raised it in `sources` (each report's role as `reports` lists it, and `judge` only if your own pass (`own_findings`, when set) found it; a candidate you only confirmed lists its reports alone). A posted finding has `verdict: posted`, a dropped one `verdict: rejected` and exactly one `reason_code`:
 

@@ -106,6 +106,9 @@ related_prs: {{.RelatedPRs}}
 {{- if .HistoryFile}}
 history: {{.HistoryFile}}
 {{- end}}
+{{- if .DocsFile}}
+docs: {{.DocsFile}}
+{{- end}}
 own_findings: {{.OwnFindings}}
 dry_run: {{.DryRun}}
 {{- if .Blind}}

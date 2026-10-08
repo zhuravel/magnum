@@ -24,6 +24,10 @@ Repository notes at {{.NotesPath}}: read them first; they are hints from earlier
 
 The last commits on the base branch that touched each changed file are in {{.HistoryFile}}: when one fixed something in the code or mechanism this PR touches, read it (`git show <sha>`) and check the PR does not undo or re-break that fix.
 {{- end}}
+{{- if .DocsFile}}
+
+The base branch's pages that name each changed file, or else its directory, are listed in {{.DocsFile}}: read those that bear on this change as the base has them (`git show <base>:<page>`, with `base` from that file), and report behaviour a page records as deliberate, or as a known gap, only as pre-existing (`nearby` at most).
+{{- end}}
 {{- if .PostMerge}}
 
 The PR is already merged; review it anyway.

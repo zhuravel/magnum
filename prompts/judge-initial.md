@@ -59,6 +59,9 @@ related_prs: {{.RelatedPRs}}
 {{- if .HistoryFile}}
 history: {{.HistoryFile}}
 {{- end}}
+{{- if .DocsFile}}
+docs: {{.DocsFile}}
+{{- end}}
 {{- if .FailingChecks}}
 failing_checks: {{.FailingChecks}}
 {{- end}}

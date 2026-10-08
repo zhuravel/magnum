@@ -849,7 +849,11 @@ first (at most 10, the rest counted); for the paths no page names, the pages tha
 text. The pages are read with one `git grep` on the base's tree, never in the checkout, whose copy of a page
 is the PR's: a PR that edits a page gets the base's version listed. A blind replay reads them at its merge
 base. A round without a page that names a changed path gets no file; each head's `round.docs` event counts
-the pages listed (0 for none), and a grep that fails or takes more than 30 seconds only warns.
+the pages listed (0 for none), and a grep that fails or takes more than 30 seconds only warns. The judge's
+prompts (the own pass, the candidates phase, a round's one prompt) name the file as `docs`, the
+claude-review prompts in one sentence. The reviewers read the pages that bear on the change as the base has
+them (`git show <base>:<page>`); what a page records as deliberate, or as a known gap, is a nearby problem
+at most, never this PR's finding, and a finding against documented behaviour needs a proof.
 
 The judge also sees the head's failing CI checks, since a PR once got LGTM while a check had failed on
 that head. When a judge prompt goes out (initial, rereview, continue), Magnum reads the PR's checks from

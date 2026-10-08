@@ -13,3 +13,5 @@ Time budget: 40 minutes. Your turn must end with the report written. Start backg
 Repository notes at /Users/bohdan/Projects/magnum/state/notes/talkable/talkable.md: read them first; they are hints from earlier reviews, verify before relying on them.
 
 The last commits on the base branch that touched each changed file are in /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/history.json: when one fixed something in the code or mechanism this PR touches, read it (`git show <sha>`) and check the PR does not undo or re-break that fix.
+
+The base branch's pages that name each changed file, or else its directory, are listed in /Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/docs.json: read those that bear on this change as the base has them (`git show <base>:<page>`, with `base` from that file), and report behaviour a page records as deliberate, or as a known gap, only as pre-existing (`nearby` at most).
