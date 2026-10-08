@@ -329,7 +329,7 @@ func (e *Engine) startSessions(ctx context.Context, job *roundJob, rs *roundSetu
 	}
 	label := fmt.Sprintf("%s#%d", job.repo.Name, pr.Number)
 	if job.evalHead != "" {
-		label = "eval " + label
+		label = evalWorkspaceLabel(job.repo.Name, pr.Number)
 	}
 	if ws, err = e.d.Agents.EnsureWorkspace(ctx, pr, job.slot.Path, env, label, rs.toRun); err != nil {
 		return fail(fmt.Errorf("workspace: %w", err))

@@ -1832,8 +1832,12 @@ of PRs whose defects you know in `~/.config/magnum/eval.toml` (a checkout's giti
 works; the format is in `eval.toml.example`)
 and run `magnum eval run --label "<the change>"`. Each case replays the PR at its pinned head with the
 watch's roles, in a scratch registry and a detached worktree under `~/.local/state/magnum/eval/<run>/`, with agents
-named apart from the PR's own; the roles are told not to read the PR's reviews, comments or later
-commits, and nothing is posted. The report gives recall of the seeded defects and the noise count, and
+named apart from the PR's own and from every other run's (tagged `eval-<6 hex digits of the run id>`), in a herdr
+workspace `eval <repo>#<N>`; the roles are told not to read the PR's reviews, comments or later
+commits, and nothing is posted. When a case ends, a judge still at work gets one ctrl+c, an agent esc, and the
+workspace is closed (a message names any workspace that stays open); before a case starts, an `eval <repo>#<N>`
+workspace of the same PR whose panes all work in the eval worktrees, which an earlier run left open, is closed,
+and a case whose agent would run anywhere but its own workspace fails before the first prompt. The report gives recall of the seeded defects and the noise count, and
 compares them with the previous run; `magnum eval score` re-applies the corpus after you fix a match
 rule (a case the corpus now pins to another head keeps its score and says so). A defect with `body = true`
 counts a mention in the review body's finding list or its "Found nearby" block, never one in a `Description: ✗`

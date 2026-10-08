@@ -4525,3 +4525,22 @@ editing history. Code, config comments and prompts reference these by their head
   so a blind replay reads the pages at its merge base. The skill grew by 282 bytes; 52 came back by listing
   `history` and `docs` on the `related_prs` line and shortening the merge-duplicates sentence of section 3,
   and the cap (`skillMaxBytes`) rose by the other 230, to 30,001. Without the file, no prompt names docs.
+- **An eval run never adopts another run's agents, and closes its own workspace even when its judge is busy**
+  (2026-10-08, amends "Evaluation replays are blind dry runs in a scratch tree"). Two runs of one case ran one
+  after the other. The first one's close failed ("codex-judge is working": the judge was finishing its turn
+  after it wrote its result), so its workspace stayed open. The second run created a workspace of its own, but
+  its judge and Claude reviewers bound by name to the first run's agents: the eval tag was the fixed `eval`, the
+  names were the same in every run, the worktree path too, and StartAgent adopts an agent that carries the
+  role's name in the PR's checkout. The judge's pane was a shell by then, so every prompt stalled and the case
+  ended with no review; the reviewers ran with the first run's conversation. Now: (1) a run tags its agents
+  `eval-` and the first 6 hex digits of the SHA-256 of its id (`evalAgentTag`; the tag joins the names' hash),
+  so no run's names are another's; the daemon's names and its adoption rule are unchanged. (2) Before a case
+  starts, `RunEval` closes every herdr workspace labelled `eval <repo>#<N>` whose panes all work under the eval
+  worktrees (`EvalCase.Worktrees`, `state/eval/wt`): an earlier replay's, of any case of the PR; a workspace
+  with another label or a pane elsewhere is never touched. (3) `ReleaseEval` gives a judge herdr shows working or
+  blocked one ctrl+c, as a cut own pass (another agent esc), waits up to `abortQuietWait`, then parks; when Park
+  still refuses, it closes the replay's own workspace (its label, holding the PR's sessions) with what still
+  runs there, and the error names each workspace that stays open. (4) After the round's preparation, a session
+  bound to a pane outside the replay's workspace fails the case before the first prompt, naming the pane. Kept:
+  two runs of one PR at the same time are not supported (they share the label and the worktree). Rejected: a
+  fresh worktree path per run (Codex and Claude add a trusted directory per path to their config).

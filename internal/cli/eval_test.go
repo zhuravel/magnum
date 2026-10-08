@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/eval"
 	"github.com/zhuravel/magnum/internal/paths"
@@ -178,5 +179,35 @@ func TestEvalFindsRunsByPrefix(t *testing.T) {
 	}
 	if p := evalPrevious(l, "20261003-101500"); p != nil {
 		t.Fatalf("previous of the first: %+v", p)
+	}
+}
+
+// Each run tags its agents with a tag of its own, so no role's agent name
+// is that of another run (StartAgent adopts an agent carrying the role's
+// name: on 2026-10-08 a run adopted the agents the run before it left
+// behind) or of the PR's own agents; one run's tag stays the same for all
+// its cases.
+func TestEvalRunsTagTheirAgentsApart(t *testing.T) {
+	runs := []string{"20261008-204959", "20261008-214426", "20261009-204959"}
+	tags := map[string]string{}
+	for _, id := range runs {
+		tag := evalAgentTag(id)
+		if tag != evalAgentTag(id) || !strings.HasPrefix(tag, "eval-") || len(tag) > len("eval-")+6 {
+			t.Fatalf("run %s: tag %q", id, tag)
+		}
+		if other, ok := tags[tag]; ok {
+			t.Fatalf("runs %s and %s share the tag %q", other, id, tag)
+		}
+		tags[tag] = id
+	}
+	for _, role := range []agents.Role{agents.RoleJudge, agents.RoleClaude, agents.RoleSimplify} {
+		seen := map[string]string{agents.AgentName("talkable/talkable", 11920, role): "the PR's own"}
+		for _, id := range runs {
+			name := agents.TaggedAgentName(evalAgentTag(id), "talkable/talkable", 11920, role)
+			if other, ok := seen[name]; ok {
+				t.Fatalf("%s: run %s's agent name %s is %s's too", role, id, name, other)
+			}
+			seen[name] = "run " + id
+		}
 	}
 }

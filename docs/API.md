@@ -5330,9 +5330,16 @@ func (e *Engine) Planned() []PlannedOp
     Planned returns what a dry run would have done (empty otherwise).
 
 func (e *Engine) ReleaseEval(ctx context.Context, pr store.PR) error
-    ReleaseEval quits the agents of an eval round's PR and closes its workspace
-    (agents.Manager.Park); the conversations stay resumable in the agents' own
-    history.
+    ReleaseEval closes the agents of an eval round's PR and its workspace.
+    An agent herdr shows still at work (the judge finishing its turn after it
+    wrote its result: turnTail) is interrupted first, the judge with one ctrl+c,
+    which ends its turn as a cut own pass does, another agent with esc, and
+    awaited up to abortQuietWait. Then the PR is parked (agents.Manager.Park,
+    which closes the workspace; the conversations stay resumable in the agents'
+    own history). When Park refuses, an agent still working, the replay's own
+    workspaces (labelled "eval <repo>#<N>", holding the PR's sessions) are
+    closed with whatever still runs there: they hold nothing to keep. The error
+    names every workspace that stays open.
 
 func (e *Engine) Run(ctx context.Context, opts Options) error
     Run is the daemon: lock, pidfile, startup, then a tick every
@@ -5345,14 +5352,16 @@ func (e *Engine) Run(ctx context.Context, opts Options) error
     see).
 
 func (e *Engine) RunEval(ctx context.Context, c EvalCase) (pipeline.RoundResult, store.PR, error)
-    RunEval runs one blind dry-run round for c and returns the pipeline's result
-    and the agents' PR row (for Release). It refuses an engine whose layout has
-    no Scratch, so a replay never writes the live registry, reports or notes.
-    It runs the engine's own round preparation (preflight, pane environment,
-    workspace "eval <repo>#<N>", agents, readiness probes) and pipeline,
-    then stops: no pause, refund, toast or dismissal follows, those belong to
-    the PR's real rounds. The registry rows it seeds (repo, PR in claiming,
-    a per-PR slot at Checkout) live in the scratch store.
+    RunEval runs one blind dry-run round for c and returns the pipeline's
+    result and the agents' PR row (for Release). It refuses an engine whose
+    layout has no Scratch, so a replay never writes the live registry, reports
+    or notes. It closes the workspaces earlier replays of the PR left open
+    (closeEvalLeftovers), runs the engine's own round preparation (preflight,
+    pane environment, workspace "eval <repo>#<N>", agents, readiness probes),
+    checks that every session works in that workspace (evalSessionsIn) and runs
+    the pipeline, then stops: no pause, refund, toast or dismissal follows,
+    those belong to the PR's real rounds. The registry rows it seeds (repo,
+    PR in claiming, a per-PR slot at Checkout) live in the scratch store.
 
 func (e *Engine) Tick(ctx context.Context) error
     Tick runs one iteration of the daemon loop. Steps log their own
@@ -5375,6 +5384,12 @@ type EvalCase struct {
 	MainClone     string // the clone the worktree belongs to
 	Watch         config.Watch
 	Identity      string // the posting identity whose rights the judge checks (it posts nothing)
+	// Worktrees is the directory that holds every replay's worktree,
+	// Checkout among them (magnum eval: state/eval/wt). A workspace
+	// labelled as a replay of this PR whose panes all work under it is one
+	// an earlier replay left open, closed before this one starts ("" =
+	// Checkout alone).
+	Worktrees string
 	// Notes gives the judge the scratch copy of the repository notes
 	// (paths.Layout.Notes under Scratch; the caller copies the live file).
 	Notes bool

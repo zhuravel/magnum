@@ -4,15 +4,17 @@ package cli
 // as blind dry-run rounds, and report how many of the defects the review
 // found (recall) and how many other findings it posted (noise). Each case
 // runs in its own scratch layout (registry, reports, notes copy) and a
-// detached worktree of the repository's clone, with agents tagged "eval",
-// so the live registry, the PR's own agents and its reports are never
-// touched. The corpus is a local, gitignored file: it describes defects in
-// real code.
+// detached worktree of the repository's clone, with agents tagged for the
+// run (evalAgentTag), so the live registry, the PR's own agents, another
+// run's agents and the PR's reports are never touched. The corpus is a
+// local, gitignored file: it describes defects in real code.
 
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -47,9 +49,7 @@ const (
 	// (~/.config/magnum); evalLegacyCorpusFile its old place in a checkout.
 	evalCorpusFile       = "eval.toml"
 	evalLegacyCorpusFile = "eval.local.toml"
-	// evalAgentTag tags eval agents (agents.Deps.Tag).
-	evalAgentTag = "eval"
-	// evalReleaseTimeout bounds quitting a case's agents after its round.
+	// evalReleaseTimeout bounds closing a case's agents after its round.
 	evalReleaseTimeout = 2 * time.Minute
 	// evalFlagged is the outcome of a case that is not replayed: an earlier
 	// replay of it or of its PR was refused (eval.FlaggedCase), or the live
@@ -60,6 +60,17 @@ const (
 // evalRunsRoot is where runs live: state/eval/<run id>/.
 func evalRunsRoot(l paths.Layout) string { return filepath.Join(l.State(), "eval") }
 
+// evalAgentTag tags the agents of run id (agents.Deps.Tag): "eval-" and the
+// first 6 hex digits of the id's SHA-256, the same for all the run's cases.
+// The tag joins the agents' names' hash, so they are named apart from the
+// PR's own agents and from every other run's: StartAgent adopts an agent
+// that carries a role's name, and a run once adopted the agents the run
+// before it left behind. It also leads their titles and pane labels.
+func evalAgentTag(id string) string {
+	sum := sha256.Sum256([]byte(id))
+	return "eval-" + hex.EncodeToString(sum[:3])
+}
+
 func newEvalCmd(c *Context) *cobra.Command {
 	cmd := newCommand(groupAct, "eval "+evalUsage, "replay PRs with known defects and score the reviews (recall, noise)",
 		"Measure the review pipeline on a corpus of PRs with known defects, after a prompt, skill or model change: "+
@@ -68,7 +79,9 @@ func newEvalCmd(c *Context) *cobra.Command {
 			"seeded defects the planned review found, at what severity, and how many other findings it made.\n\n"+
 			"The corpus is ~/.config/magnum/"+evalCorpusFile+" (a checkout's eval.local.toml still works; see eval.toml.example). Each case runs "+
 			"in a scratch registry and report tree under state/eval/<run>/ and a detached worktree of the repository's "+
-			"clone, with agents named apart from the PR's own; the live registry, reports and notes are never "+
+			"clone, with agents named apart from the PR's own and from every other run's, in a herdr workspace "+
+			"\"eval <repo>#<N>\" that is closed when the case ends (a judge still at work is interrupted first) and "+
+			"before a later case of the PR starts; the live registry, reports and notes are never "+
 			"written. The prompts and the skill are read from disk, so an edit is measured before the daemon restarts.\n\n"+
 			"A case costs a full review round (every reviewer role and the judge). `run` refuses to start a case while "+
 			"the Codex budget is at or above [usage] codex_soft unless --force, and stops at a usage limit. It never "+
@@ -178,11 +191,11 @@ func runEvalRun(c *Context, f evalRunFlags) int {
 	ctx, stop := signalContext()
 	defer stop()
 
-	r := &evalRunner{c: c, cfg: c.Config, flags: f, out: c.Stdout}
 	run := eval.Run{
 		ID: time.Now().Format("20060102-150405"), Label: f.label, Corpus: path, Started: time.Now(),
 		Models: evalModels(c.Config), Inputs: evalInputs(c.Config), NoNotes: f.noNotes, // eval_inputs.go
 	}
+	r := &evalRunner{c: c, cfg: c.Config, flags: f, out: c.Stdout, tag: evalAgentTag(run.ID)}
 	run.Commit, run.Dirty = evalMagnumCommit(ctx, c)
 	r.dir = filepath.Join(evalRunsRoot(c.Layout), run.ID)
 	if err := os.MkdirAll(r.dir, 0o700); err != nil {
@@ -300,6 +313,7 @@ type evalRunner struct {
 	flags evalRunFlags
 	out   io.Writer
 	dir   string
+	tag   string // the run's agent tag (evalAgentTag)
 }
 
 func (r *evalRunner) progress(format string, args ...any) {
@@ -338,7 +352,7 @@ func (r *evalRunner) runCase(ctx context.Context, ec eval.Case, cr eval.CaseRun)
 		cr.Notes = evalNotesHashes(layout, ec.Owner, ec.Repo) // eval_inputs.go
 	}
 	a, err := app.New(r.cfg, layout, app.Options{
-		AgentTag: evalAgentTag, Stderr: r.c.Stderr,
+		AgentTag: r.tag, Stderr: r.c.Stderr,
 		Logger: app.NewLogger(nil, r.c.Stderr, slog.LevelWarn),
 	})
 	if err != nil {
@@ -370,7 +384,8 @@ func (r *evalRunner) runCase(ctx context.Context, ec eval.Case, cr eval.CaseRun)
 	// start in (Codex's and Claude's own config files), and a new path per
 	// run would add an entry there every time. A worktree left by --keep or
 	// an interrupted run is replaced.
-	wt := filepath.Join(evalRunsRoot(r.c.Layout), "wt", ec.Name)
+	worktrees := filepath.Join(evalRunsRoot(r.c.Layout), "wt")
+	wt := filepath.Join(worktrees, ec.Name)
 	if _, err := os.Stat(wt); err == nil {
 		if err := a.Git.WorktreeRemove(ctx, mainClone, wt, true); err != nil {
 			return fail("error", fmt.Errorf("replace the previous worktree %s: %w", inspTilde(wt), err))
@@ -390,14 +405,16 @@ func (r *evalRunner) runCase(ctx context.Context, ec eval.Case, cr eval.CaseRun)
 	}
 
 	e := engine.FromApp(a)
-	r.progress("reviewing in herdr workspace \"%s %s#%d\" (blind, nothing is posted)", evalAgentTag, ec.Repo, ec.Number)
+	r.progress("reviewing in herdr workspace \"eval %s#%d\", agents tagged %s (blind, nothing is posted)", ec.Repo, ec.Number, a.AgentTag)
 	res, pr, runErr := e.RunEval(ctx, engine.EvalCase{
 		Owner: ec.Owner, Repo: ec.Repo, Number: ec.Number, URL: cmp.Or(d.URL, fmt.Sprintf("https://github.com/%s/pull/%d", full, ec.Number)),
 		Head: ec.Head, BaseRef: cmp.Or(ec.Base, d.BaseRefName), DefaultBranch: cmp.Or(ec.Base, d.BaseRefName),
 		Title: d.Title, Author: d.AuthorLogin, AuthorType: d.AuthorType,
-		Checkout: wt, MainClone: mainClone, Watch: *w, Identity: w.Identity, Notes: notes,
+		Checkout: wt, Worktrees: worktrees, MainClone: mainClone, Watch: *w, Identity: w.Identity, Notes: notes,
 	})
 	if pr.ID != 0 {
+		// A judge still at work is interrupted, then the workspace closed;
+		// the error names each workspace that stays open.
 		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), evalReleaseTimeout)
 		if err := e.ReleaseEval(rctx, pr); err != nil {
 			fmt.Fprintf(r.c.Stderr, "magnum eval run: %s: closing the eval agents: %v (close the herdr workspace by hand)\n", ec.Name, err)
