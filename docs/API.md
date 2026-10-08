@@ -10056,7 +10056,7 @@ const (
 	// is interrupted as timed out.
 	TimeUpGrace = 5 * time.Minute
 	// StopGrace bounds the wait for an interrupted reviewer, told to stop
-	// the background tasks it left running (round.stopReviewer), until its
+	// the background tasks it left running (round.stopBackground), until its
 	// transcript shows none.
 	StopGrace = 2 * time.Minute
 )
@@ -10163,7 +10163,7 @@ type Agents interface {
 	FallbackPrompt(d agents.FallbackData) (string, error)
 	// A reviewer whose time ran out (see round.timeUp): TimeUp types the
 	// last call into its agent within its run, and after an interrupt the
-	// message to stop its background work (round.stopReviewer);
+	// message to stop its background work (round.stopBackground);
 	// BackgroundTasks counts the work a claude agent started in the
 	// background during a run and left running (ok false: unknown).
 	TimeUp(ctx context.Context, run store.Run, text string) error

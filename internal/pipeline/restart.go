@@ -347,42 +347,63 @@ func (rd *round) restart(ctx context.Context, head string, runs map[string]*stor
 	return judgeRun, own, err
 }
 
-// settleCut ends role's run when the push cut it short: a turn still in
-// flight is interrupted, and an agent waited for until idle (InterruptWait),
-// then the run is abandoned with ReportHeadMoved. A finished run keeps its
-// state. It reports whether the run was cut.
+// settleCut ends role's run when the push cut it short (cutRun), with
+// ReportHeadMoved. The session is prompted again on the new head, so the
+// judge's own pass is interrupted with one ctrl+c, which keeps its session,
+// and a reviewer's background work is stopped with headMovedStopText.
 func (rd *round) settleCut(ctx context.Context, role config.Role, run store.Run, head string) bool {
-	return rd.cutRun(ctx, role, run, "the restart", ReportHeadMoved, "the PR head moved to "+textx.ShortSHA(head))
+	return rd.cutRun(ctx, role, run, cutBy{what: "the restart", status: ReportHeadMoved,
+		why: "the PR head moved to " + textx.ShortSHA(head), stop: headMovedStopText, keep: true})
 }
 
-// cutRun ends role's run that the round's stages cut short (for what): a
-// turn still in flight is interrupted, and an agent waited for until idle
-// (InterruptWait), then the run is abandoned with status and why. A
+// cutBy is what cut the turns cutRun ends short: a push the round restarts
+// on (settleCut) or the round's end (stopReviewers).
+type cutBy struct {
+	what   string // for the warning: "the restart", "the round's end"
+	status string // the abandoned run's outcome
+	why    string // and its error
+	stop   string // the message that stops a reviewer's background work (stopBackground)
+	keep   bool   // the session is prompted again: interrupt keeps the judge's
+}
+
+// cutRun ends role's run that the round's stages cut short (by c): a turn
+// still in flight is interrupted, an agent waited for until idle
+// (InterruptWait) and told to stop the background work it left running
+// (stopBackground, c.stop), then the run is abandoned with c.status and
+// c.why. A warning says when the agent still worked or was told to stop. A
 // finished run keeps its state. It reports whether the run was cut.
-func (rd *round) cutRun(ctx context.Context, role config.Role, run store.Run, what, status, why string) bool {
+func (rd *round) cutRun(ctx context.Context, role config.Role, run store.Run, c cutBy) bool {
 	cur, err := rd.r.Store.RunByID(context.WithoutCancel(ctx), run.ID)
 	if err != nil {
-		rd.logf("pipeline: %s: run %s: %v", what, run.ID, err)
+		rd.logf("pipeline: %s: run %s: %v", c.what, run.ID, err)
 		return false
 	}
 	switch cur.State {
 	case store.RunSubmitted, store.RunWorking:
-		rd.interrupt(ctx, role, cur)
+		rd.interrupt(ctx, role, cur, c.keep)
+		msg := ""
 		if !rd.waitIdle(ctx, role, cur) {
-			rd.warn(ctx, "%s still works %s after it was interrupted for %s", role.Name, InterruptWait, what)
+			msg = fmt.Sprintf("%s still works %s after it was interrupted for %s", role.Name, InterruptWait, c.what)
+		}
+		if bg := rd.stopBackground(ctx, role, cur, c.stop, false); bg != "" {
+			msg = cmp.Or(msg, fmt.Sprintf("interrupted %s for %s", role.Name, c.what)) + "; " + bg
+		}
+		if msg != "" {
+			rd.warn(ctx, "%s", msg)
 		}
 	case store.RunPending, store.RunEnded:
 	default:
 		return false
 	}
-	rd.finishRun(ctx, cur.ID, store.RunAbandoned, status, why)
+	rd.finishRun(ctx, cur.ID, store.RunAbandoned, c.status, c.why)
 	return true
 }
 
 // stopReviewers ends the reviewers' turns still in flight when the round
 // ends before them because the judge's session is gone (judgeGoneError) or
 // a role was refused (refusedError):
-// they are interrupted, so they stop working for a round that is over, and
+// they are interrupted, and told to stop their background work
+// (stopBackgroundText), so they stop working for a round that is over, and
 // their runs abandoned (ReportCancelled, why).
 func (rd *round) stopReviewers(ctx context.Context, runs map[string]*store.Run, why string) {
 	rd.mu.Lock()
@@ -396,7 +417,7 @@ func (rd *round) stopReviewers(ctx context.Context, runs map[string]*store.Run, 
 		if c, ok := cont[role.Name]; ok {
 			run = &c // the turn in flight is the continuation on a fallback model
 		}
-		rd.cutRun(ctx, role, *run, "the round's end", ReportCancelled, why)
+		rd.cutRun(ctx, role, *run, cutBy{what: "the round's end", status: ReportCancelled, why: why, stop: stopBackgroundText})
 	}
 }
 

@@ -4002,3 +4002,31 @@ editing history. Code, config comments and prompts reference these by their head
   compare-and-set already keeps whichever end came first. The test's reviewer now hangs until the round
   cancels it (`fakeAgents.hangs`), as do three tests with the same race. Rejected: `locking_mode=EXCLUSIVE`
   (no gain in the analyst's profile); making the cli tests parallel (18 `t.Setenv` calls and many seams).
+- **A push that cuts the judge's own pass keeps the judge's session** (2026-10-08, amends "The judge does its
+  own pass while the reviewers work"). A push cut the own pass with ctrl+c twice, a second apart: the
+  sequence that quits Codex (spikes.md, probe 5), which `stopJudge` uses so that a judge that timed out, or
+  whose round ended before its own pass, cannot go on and post. On a push the restart prompts the same session
+  again on the new head, and that session was gone: both pushes so far that cut an own pass lost the judge.
+  On one, the judge's rollout records `turn_aborted` (reason `interrupted`) at the first ctrl+c and ends
+  there; herdr lost the agent 34 s later, and the restart started a new judge without the old session's
+  2.1M tokens of context. A push now interrupts the own pass with one ctrl+c (`interrupt`'s `keep`, set by
+  `settleCut`), which aborts the turn and keeps the session; `stopJudge` keeps the two presses for a judge
+  turn or own pass that timed out and for stages that end on a failure before the own pass did
+  (`stopOwnPass`).
+- **A reviewer a push or the round's end cuts short is told to stop its background tasks** (2026-10-08,
+  amends "An interrupted reviewer is told to stop its background tasks"). `cutRun`, which settles the turns
+  a push (`settleCut`) or the round's end (`stopReviewers`) cut short, interrupted a claude reviewer with esc
+  and abandoned its run; esc does not stop its background work. On one PR the two asynchronous subagents of a
+  cut claude-review ran 5 and 9 more minutes for a head already replaced, woke the session twice with task
+  notifications, and kept herdr showing it working, so the interrupt's wait ran its full 60 s. `cutRun` now
+  stops that work as `stopReviewer` does (`stopBackground`, the code they share): when the transcript shows
+  background work the run started still running, the agent gets one message within the cut run, once the
+  wait for idle is over and before the run is abandoned, and the transcript is read until none is left or
+  `StopGrace` (2 minutes) passed. At the round's end the message is `stopBackgroundText`; on a push, whose
+  restart prompt follows, it must not say that the review is over: "The PR head moved, so stop here. Stop
+  every background task you started with TaskStop and do nothing else. The next message restarts the review
+  on the new head." The `round.warning` says what happened ("interrupted claude-review for the restart; asked
+  it to stop the 2 background tasks it started: it did", after "claude-review still works 1m0s after it was
+  interrupted for the restart" when the agent did not go idle). A codex agent, a shell role and a transcript
+  magnum cannot read get no message (`BackgroundTasks` reports ok false), nor does an agent that shows none.
+  A restart or the round's end can take up to 2 more minutes per such reviewer.

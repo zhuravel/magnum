@@ -270,8 +270,10 @@ quiet periods (`close_grace`, `push_quiet_period`, ...) and `min_free_disk_gb` n
 render the same `slot_name` or `slot_path`.
 
 A push that lands while a round's reviewers still run restarts them on the new head, up to
-`[daemon] max_round_restarts` times per round (default 2; `0` turns restarts off). A push that lands
-while the judge works lets the round finish: Magnum appends "Reviewed <sha>; N commits arrived during
+`[daemon] max_round_restarts` times per round (default 2; `0` turns restarts off). The turns it cuts
+short are interrupted and their roles prompted again on the new head: an agent reviewer with esc, a shell
+role's command with ctrl+c, and the judge's own pass with one ctrl+c, which aborts Codex's turn and keeps
+the session with its context (two quit Codex, as for a judge that timed out). A push that lands while the judge works lets the round finish: Magnum appends "Reviewed <sha>; N commits arrived during
 the review, re-review follows" (or, for a small delta, "a short check of those commits follows") to the
 posted review and queues the re-review without waiting for `min_rereview_interval`. A PR whose head changed `burst_pushes` times (default 3) within `burst_window`
 (default `"30m"`) waits `burst_quiet_period` (default `"15m"`) instead of `push_quiet_period`; a
@@ -832,9 +834,11 @@ its notification (one `agent.background_wait` event per run). The role's `timeou
 as the time budget, still bounds the turn: when it passes, Magnum asks the agent once to stop its background
 tasks (TaskStop), write its report with what it found and list the checks it stopped as pending
 (`round.time_up`), and waits 5 more minutes before it interrupts the agent and counts the report as
-`timeout`. A reviewer whose turn ended without a report is interrupted too. An interrupt does not stop a
-claude agent's background work, so an agent whose transcript still shows some is told once more to stop it
-with TaskStop and do nothing else, and the warning says whether it did within 2 minutes; work that
+`timeout`. A reviewer whose turn ended without a report is interrupted too, and so is one whose turn a push
+or the end of the round cuts short. An interrupt does not stop a claude agent's background work, so an
+agent whose transcript still shows some is told once more to stop it with TaskStop and do nothing else
+(after a push, that the head moved and the next message restarts the review on it), and the warning says
+whether it did within 2 minutes; work that
 finishes later anyway resumes the agent, and that turn is not taken for someone typing into the pane. A
 reviewer's report starts with its run's marker (`<!-- magnum:run=<run id> -->`, which the prompts ask for
 and codex-review's line prints before the output), a report file already there when its role is prompted

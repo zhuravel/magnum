@@ -97,8 +97,16 @@ const timeUpText = "Time is up: this review had %s. Stop every background task y
 const timeUpMark = " (its first line: `%s`)"
 
 // stopBackgroundText is the one message an interrupted reviewer that left
-// background work running gets (stopReviewer).
+// background work running gets (stopBackground): one that timed out or
+// ended without its report (stopReviewer), or that the round's end cut
+// short (stopReviewers).
 const stopBackgroundText = "This review is over. Stop every background task you started with TaskStop and do nothing else."
+
+// headMovedStopText is that message for a reviewer a push cut short
+// (settleCut): the restart prompt follows it, so it does not say that the
+// review is over.
+const headMovedStopText = "The PR head moved, so stop here. Stop every background task you started with TaskStop and do nothing else. " +
+	"The next message restarts the review on the new head."
 
 // timeUp gives a session reviewer whose turn t ran out of time one last
 // call (the live case: a spec run in the background, the report not
@@ -277,7 +285,7 @@ func (rd *round) shellTurn(ctx context.Context, role config.Role, run store.Run,
 	case ctx.Err() != nil:
 		// Nobody will read the command's output, and left running it would
 		// hold the pane: the next round's command would find it busy.
-		rd.interrupt(ctx, role, run)
+		rd.interrupt(ctx, role, run, false)
 		return end(store.RunFailed, ReportCancelled, "round cancelled")
 	case errors.Is(err, agents.ErrBusy):
 		return end(store.RunFailed, ReportBusy, execx.Redact(err.Error()))
@@ -362,29 +370,44 @@ func (rd *round) finishReviewer(ctx context.Context, role config.Role, run store
 
 // stopReviewer interrupts a reviewer whose run magnum ends without its
 // report (timed out, or ended without writing it), so it does not go on
-// working in the checkout once the round moves on, and says what it did
-// for the run's event. An interrupt does not stop the background work a
-// claude agent started, whose notifications would resume it: while its
-// transcript shows some running, the agent is told once, within the run,
-// to stop it with TaskStop and do nothing else (stopBackgroundText), and
-// the transcript is read again until none is left or StopGrace passed. The
-// event counts what is left; magnum kills no process it did not start.
+// working in the checkout once the round moves on, stops the background
+// work it left running (stopBackground, stopBackgroundText) and says what it
+// did for the run's event.
 func (rd *round) stopReviewer(ctx context.Context, role config.Role, run store.Run) string {
-	rd.interrupt(ctx, role, run)
+	rd.interrupt(ctx, role, run, false)
 	note := "interrupted " + role.Name
+	if bg := rd.stopBackground(ctx, role, run, stopBackgroundText, true); bg != "" {
+		note += "; " + bg
+	}
+	return note
+}
+
+// stopBackground stops the background work that role's agent, whose turn
+// on run was interrupted, started during the run and left running, and
+// says what it did ("" = none runs, or its transcript cannot be read: a
+// codex agent, a shell role). An interrupt does not stop a claude agent's
+// background work, whose notifications would resume it: the agent is told
+// once, within the run, to stop it with TaskStop and do nothing else (text),
+// and the transcript is read again until none is left or StopGrace passed.
+// settle first waits for the interrupted turn to end (waitIdle), so the
+// message does not land in it; a caller that waited already passes false.
+// The note counts what is left; magnum kills no process it did not start.
+func (rd *round) stopBackground(ctx context.Context, role config.Role, run store.Run, text string, settle bool) string {
 	bg := context.WithoutCancel(ctx)
 	n, ok := rd.r.Agents.BackgroundTasks(bg, run)
 	if !ok || n == 0 {
-		return note
+		return ""
 	}
 	if !role.IsAgent() || ctx.Err() != nil {
-		return note + fmt.Sprintf("; %s it started still %s", backgroundTasks(n), runVerb(n))
+		return fmt.Sprintf("%s it started still %s", backgroundTasks(n), runVerb(n))
 	}
-	rd.waitIdle(ctx, role, run) // the message must not land in the interrupted turn
-	if err := rd.r.Agents.TimeUp(bg, run, stopBackgroundText); err != nil {
-		return note + fmt.Sprintf("; %s it started still %s (could not ask it to stop: %v)", backgroundTasks(n), runVerb(n), err)
+	if settle {
+		rd.waitIdle(ctx, role, run)
 	}
-	note += fmt.Sprintf("; asked it to stop the %s it started", backgroundTasks(n))
+	if err := rd.r.Agents.TimeUp(bg, run, text); err != nil {
+		return fmt.Sprintf("%s it started still %s (could not ask it to stop: %v)", backgroundTasks(n), runVerb(n), err)
+	}
+	note := fmt.Sprintf("asked it to stop the %s it started", backgroundTasks(n))
 	switch left, ok := rd.backgroundLeft(ctx, run); {
 	case !ok:
 		return note

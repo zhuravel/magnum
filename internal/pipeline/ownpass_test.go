@@ -396,13 +396,23 @@ func TestAnOwnPassRefusedAgainEndsTheRoundAtOnce(t *testing.T) {
 }
 
 // A push while the judge does its own pass cuts it short like a reviewer:
-// its turn is interrupted (ctrl+c twice) and its run abandoned, and the
-// restarted round prompts it for its own pass on the new head, naming the
-// head it moved from.
+// its turn is interrupted with one ctrl+c, which aborts Codex's turn and
+// keeps its session (a second would quit Codex), and its run abandoned, and
+// the restarted round prompts the same session for its own pass on the new
+// head, naming the head it moved from.
 func TestPushDuringOwnPassRestartsItOnTheNewHead(t *testing.T) {
 	e := newEnv(t)
 	in := e.ownInput(KindInitial)
 	sw := e.withRestarts(&in, 2)
+	judgeAgent := agents.AgentName("talkable/talkable", 11920, agents.RoleJudge)
+	idle := e.keys.onAgent
+	var promptedAtPress []int // the judge's prompts sent when each ctrl+c reached it
+	e.keys.onAgent = func(target string, keys []string) {
+		if target == judgeAgent && slices.Equal(keys, []string{"ctrl+c"}) {
+			promptedAtPress = append(promptedAtPress, len(e.ag.submitsFor(agents.RoleJudge)))
+		}
+		idle(target, keys)
+	}
 	post := e.judgePosts(807, "COMMENTED", "COMMENT")
 	post.commit = head2
 	e.ag.behaviors[agents.RoleJudge] = []behavior{
@@ -420,15 +430,11 @@ func TestPushDuringOwnPassRestartsItOnTheNewHead(t *testing.T) {
 	if got := sw.asked(); !slices.Equal(got, []string{head2}) {
 		t.Errorf("switches = %v", got)
 	}
-	judgeAgent := agents.AgentName("talkable/talkable", 11920, agents.RoleJudge)
-	var presses int
-	for _, s := range e.keys.sends {
-		if s == "agent:"+judgeAgent+":ctrl+c" {
-			presses++
-		}
+	if got := strings.Join(e.sendsTo(agents.RoleJudge), " "); got != "ctrl+c" {
+		t.Errorf("judge keys = %q, want ctrl+c once", got)
 	}
-	if presses != 2 {
-		t.Errorf("judge interrupts = %d (%v), want ctrl+c twice", presses, e.keys.sends)
+	if !slices.Equal(promptedAtPress, []int{1}) {
+		t.Errorf("judge prompts at each ctrl+c = %v, want the ctrl+c after the own pass and before the restart's prompt", promptedAtPress)
 	}
 	owns := e.runsOf(agents.RoleJudge, store.RunOwnPass)
 	if len(owns) != 2 {

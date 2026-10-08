@@ -2,8 +2,10 @@ package pipeline
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -145,6 +147,161 @@ func TestAnInterruptedReviewerIsToldToStopItsBackgroundTasks(t *testing.T) {
 	if len(warns) != 1 || warns[0] != "claude-review report missing: finished without writing claude-review.md; "+
 		"interrupted claude-review; asked it to stop the 1 background task it started: it did" {
 		t.Fatalf("claude warnings: %q", warns)
+	}
+}
+
+// cutClaude sets up a round whose stages cut claude-review's turn short
+// while it works: a push, on which the round restarts (restart), or
+// codex-review's refusal, which ends the round (else; claude-review hangs
+// until the round cancels it). It returns the round's input.
+func (e *env) cutClaude(restart bool) RoundInput {
+	in := e.input(KindInitial)
+	if !restart {
+		e.ag.exitStatus[agents.RoleCodexReview] = 1
+		e.ag.codex = func(f *fakeAgents, c codexCall) error {
+			return os.WriteFile(filepath.Join(e.reportDir(), "codex-review.md"),
+				[]byte("ERROR: This content was flagged for possible cybersecurity risk.\n"), 0o600)
+		}
+		e.ag.hangs = map[agents.Role]bool{agents.RoleClaude: true} // at work until the round cancels it
+		return in
+	}
+	e.withRestarts(&in, 2)
+	pushAfterCodex := func(f *fakeAgents, run store.Run, text string) error {
+		e.waitRun(agents.RoleCodexReview, target, store.RunVerified)
+		e.push(head2)
+		return nil // the turn stays in flight until the push cuts it
+	}
+	e.ag.behaviors[agents.RoleClaude] = []behavior{pushAfterCodex, writeReport("## P2 on the new head\n")}
+	post := e.judgePosts(611, "COMMENTED", "COMMENT")
+	post.commit = head2
+	e.ag.behaviors[agents.RoleJudge] = []behavior{post.behavior(e.t)}
+	return in
+}
+
+// stopsWhenTold makes claude-review stop its background work when it is
+// told so with text, and returns how its run stood at each message: its
+// state and whether its turn was interrupted (esc) before.
+func (e *env) stopsWhenTold(text string) *[]string {
+	var seen []string
+	e.ag.onTimeUp = func(f *fakeAgents, run store.Run, got string) error {
+		seen = append(seen, fmt.Sprintf("%s esc=%t", run.State, slices.Contains(e.sendsTo(agents.RoleClaude), "esc")))
+		if got == text {
+			f.mu.Lock()
+			f.background[agents.RoleClaude] = 0
+			f.mu.Unlock()
+		}
+		return nil
+	}
+	return &seen
+}
+
+// A push that cuts claude-review short while work it started in the
+// background still runs: once its turn is interrupted (esc), it is told
+// within the cut run to stop that work, in words that leave the review to
+// the restart prompt that follows; the run is abandoned after, and the
+// warning says what happened.
+func TestAPushTellsACutReviewerToStopItsBackgroundTasks(t *testing.T) {
+	e := newEnv(t)
+	in := e.cutClaude(true)
+	e.ag.background = map[agents.Role]int{agents.RoleClaude: 2}
+	seen := e.stopsWhenTold(headMovedStopText)
+
+	res, err := e.r.RunRound(e.ctx, in)
+	if err != nil {
+		t.Fatalf("RunRound: %v", err)
+	}
+	if res.Outcome != OutcomePosted || res.Restarts != 1 {
+		t.Fatalf("result = %+v", res)
+	}
+	if len(e.ag.timeUps) != 1 || e.ag.timeUps[0].Text != headMovedStopText || e.ag.timeUps[0].Run.TargetSHA != target {
+		t.Fatalf("messages = %+v, want the restart's stop within the cut run", e.ag.timeUps)
+	}
+	mustContain(t, "stop message", headMovedStopText, "head moved", "TaskStop", "do nothing else", "The next message restarts the review")
+	if strings.Contains(headMovedStopText, "over") {
+		t.Errorf("the restart's stop says the review is over: %q", headMovedStopText)
+	}
+	if want := []string{store.RunWorking + " esc=true"}; !slices.Equal(*seen, want) {
+		t.Errorf("cut run at the message = %v, want %v (interrupted, not yet abandoned)", *seen, want)
+	}
+	var claude []string // claude-review's prompts and messages, in order
+	for _, o := range e.ag.order {
+		if strings.HasSuffix(o, ":claude-review") {
+			claude = append(claude, o)
+		}
+	}
+	if want := []string{"submit:claude-review", "time_up:claude-review", "submit:claude-review"}; !slices.Equal(claude, want) {
+		t.Errorf("claude-review got %v, want the stop between its prompt and the restart's", claude)
+	}
+	for _, r := range e.runs() {
+		if r.Role == string(agents.RoleClaude) && r.TargetSHA == target {
+			wantRun(t, r, store.RunAbandoned, ReportHeadMoved)
+		}
+	}
+	want := "interrupted claude-review for the restart; asked it to stop the 2 background tasks it started: it did"
+	if !slices.Contains(res.Warnings, want) {
+		t.Errorf("warnings = %q, want %q", res.Warnings, want)
+	}
+}
+
+// The end of the round does the same for a reviewer it cuts short, with
+// the words that say the review is over; one that still shows working after
+// the interrupt says that too.
+func TestARoundsEndTellsACutReviewerToStopItsBackgroundTasks(t *testing.T) {
+	e := newEnv(t)
+	in := e.cutClaude(false)
+	e.ag.background = map[agents.Role]int{agents.RoleClaude: 1}
+	seen := e.stopsWhenTold(stopBackgroundText)
+
+	res, err := e.r.RunRound(e.ctx, in)
+	if err != nil {
+		t.Fatalf("RunRound: %v", err)
+	}
+	if res.Outcome != OutcomeRefused {
+		t.Fatalf("result = %+v", res)
+	}
+	if len(e.ag.timeUps) != 1 || e.ag.timeUps[0].Text != stopBackgroundText {
+		t.Fatalf("messages = %+v, want only the stop", e.ag.timeUps)
+	}
+	if want := []string{store.RunWorking + " esc=true"}; !slices.Equal(*seen, want) {
+		t.Errorf("cut run at the message = %v, want %v (interrupted, not yet abandoned)", *seen, want)
+	}
+	wantRun(t, e.runOf(agents.RoleClaude, store.RunInitial), store.RunAbandoned, ReportCancelled)
+	want := "claude-review still works 1m0s after it was interrupted for the round's end; " +
+		"asked it to stop the 1 background task it started: it did"
+	if !slices.Contains(res.Warnings, want) {
+		t.Errorf("warnings = %q, want %q", res.Warnings, want)
+	}
+}
+
+// A cut reviewer whose transcript shows no background work, or cannot be
+// read (not a claude agent, no transcript), gets no message, as before.
+func TestACutReviewerWithNoBackgroundTasksGetsNoMessage(t *testing.T) {
+	for _, restart := range []bool{true, false} {
+		for name, background := range map[string]map[agents.Role]int{
+			"none running":          {agents.RoleClaude: 0},
+			"transcript unreadable": nil,
+		} {
+			t.Run(fmt.Sprintf("restart=%t/%s", restart, name), func(t *testing.T) {
+				e := newEnv(t)
+				in := e.cutClaude(restart)
+				e.ag.background = background
+				res, err := e.r.RunRound(e.ctx, in)
+				if err != nil {
+					t.Fatalf("RunRound: %v", err)
+				}
+				if !slices.Contains(e.sendsTo(agents.RoleClaude), "esc") {
+					t.Fatalf("claude-review was not interrupted: %v", e.keys.sends)
+				}
+				if len(e.ag.timeUps) != 0 {
+					t.Errorf("messages = %+v, want none", e.ag.timeUps)
+				}
+				for _, w := range res.Warnings {
+					if strings.Contains(w, "background") {
+						t.Errorf("warning %q", w)
+					}
+				}
+			})
+		}
 	}
 }
 

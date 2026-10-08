@@ -195,10 +195,15 @@ func (rd *round) session(ctx context.Context, run store.Run) (store.Session, boo
 	return s, true
 }
 
-// interrupt stops a turn without closing the session: esc for an agent,
-// ctrl+c twice (a second apart) for the judge, ctrl+c for a shell role's
-// pane.
-func (rd *round) interrupt(ctx context.Context, role config.Role, run store.Run) {
+// interrupt stops the turn in flight on run: esc for an agent, which keeps
+// its session, and ctrl+c for a shell role's pane. The judge gets ctrl+c
+// twice, a second apart, which quits Codex and so ends its session
+// (docs/spikes.md, probe 5): a judge that timed out or whose round ended
+// must not go on and post (stopJudge). With keep it gets ctrl+c once, which
+// aborts Codex's turn and keeps the session: a push cut its own pass short,
+// and the restart prompts the same session, with the context it built, on
+// the new head (settleCut).
+func (rd *round) interrupt(ctx context.Context, role config.Role, run store.Run, keep bool) {
 	if rd.r.Keys == nil {
 		return
 	}
@@ -217,7 +222,10 @@ func (rd *round) interrupt(ctx context.Context, role config.Role, run store.Run)
 			return
 		}
 		presses := []string{"esc"}
-		if role.Judge {
+		switch {
+		case role.Judge && keep:
+			presses = []string{"ctrl+c"}
+		case role.Judge:
 			presses = []string{"ctrl+c", "ctrl+c"}
 		}
 		for i, key := range presses {
