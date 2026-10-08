@@ -4545,12 +4545,16 @@ const (
 	// as the newest Codex session reported it; KVUsageCodexResetsAt is when
 	// the binding window resets (store.FormatTime), KVUsageCodexWindow its
 	// length in minutes, KVUsageCodexPlan the plan and KVUsageCodexAt when
-	// Codex reported it (budget.go).
+	// Codex reported it (budget.go). KVUsageCodexPace24h is the binding
+	// window's pace over the last 24 hours (the share of the budget used in
+	// them over the share of the window they are, two decimals); absent
+	// when Codex's reading from a day ago is unknown or of another window.
 	KVUsageCodexPercent  = "usage.codex_percent"
 	KVUsageCodexResetsAt = "usage.codex_resets_at"
 	KVUsageCodexWindow   = "usage.codex_window_minutes"
 	KVUsageCodexPlan     = "usage.codex_plan"
 	KVUsageCodexAt       = "usage.codex_at"
+	KVUsageCodexPace24h  = "usage.codex_pace_24h"
 )
     kv keys of the daemon's own operations, read by `magnum status`.
 
@@ -5242,6 +5246,10 @@ type Deps struct {
 	// Usage reads Codex's rate-limit snapshot (usage.Codex, which FromApp
 	// sets); nil = no budget gauge and no caps.
 	Usage func(ctx context.Context, codexHome string, now time.Time) (usage.Snapshot, error)
+	// UsageAt reads Codex's rate-limit snapshot at or before a past time
+	// (usage.CodexAt, which FromApp sets); nil = no last-day pace next to
+	// the window's average.
+	UsageAt func(ctx context.Context, codexHome string, at time.Time) (usage.Snapshot, error)
 	// Probe checks that a clone's origin answers (`git ls-remote` with the
 	// environment gitx gives git); it lifts an infrastructure pause. nil =
 	// no probe: the pause lifts when its backoff ends.
@@ -5859,6 +5867,13 @@ const FlaggedFile = "flagged.json"
 
 FUNCTIONS
 
+func HashNotes(file, dir string) (map[string]string, error)
+    HashNotes is the SHA-256 (hex) of each notes file a replay gives the judge:
+    the repository's notes file, keyed by its base name ("" when there is none),
+    and every regular file under its harness directory dir, keyed by the
+    directory's base name and the path below it ("web/qa.sh"). Two runs whose
+    maps differ for a case gave its judge other notes (WriteText says so).
+
 func LoadFlagged(root string) (map[string]Flagged, error)
     LoadFlagged reads the flagged cases under root by case name; a missing file
     is none.
@@ -5877,12 +5892,30 @@ func WriteMarkdown(w io.Writer, r Run)
     and the findings that matched no defect.
 
 func WriteText(w io.Writer, r Run, prev *Run)
-    WriteText writes the human report of r: a table with one row per case and a
-    total, then, when prev is not nil, how the totals moved since it, then one
-    line per missed defect and per case error.
+    WriteText writes the human report of r: a table with one row per case and
+    a total, the Codex points the cases used, then, when prev is not nil,
+    how the totals moved since it and which cases read other notes than in prev,
+    then one line per missed defect and per case error.
 
 
 TYPES
+
+type Baseline struct {
+	Run    string  // the stored run's ID
+	Commit string  // magnum's commit that ran it
+	Case   CaseRun // the case as that run recorded it
+}
+    Baseline is a stored replay of a case that a run with the same inputs need
+    not repeat.
+
+func Baselines(runs []Run, inputs string, c Case) []Baseline
+    Baselines lists, newest run first, the stored replays of c that a run with
+    inputs (Run.Inputs: the judge skill, the roles' prompts and the role config)
+    may reuse instead of replaying c: runs that recorded the same inputs from a
+    clean checkout, whose case of c's name reviewed c's head and has a score.
+    Unknown inputs ("") reuse nothing. The inputs leave magnum's code out,
+    so the caller decides whether the code of Commit reviews as its own does
+    (eval-at.sh compares the Go files of the two commits).
 
 type Case struct {
 	Name    string   `toml:"name"` // unique, [a-z0-9][a-z0-9-]{0,47}
@@ -5911,9 +5944,21 @@ type CaseRun struct {
 	Started    time.Time `json:"started,omitzero"`
 	Finished   time.Time `json:"finished,omitzero"`
 	Score      *Score    `json:"score,omitempty"` // nil when there was no result to score
+	// Notes is what notes the judge read (HashNotes): file -> SHA-256, "" for a notes file there
+	// was none of; nil when the run withheld them (Run.NoNotes) or did not record them.
+	Notes map[string]string `json:"notes,omitempty"`
+	// CodexBefore and CodexAfter are the Codex budget used (percent, in Codex's whole points) as
+	// the gauge read when the case started and when it ended; nil when it could not be read. The
+	// gauge counts every Codex session of the account, live rounds included.
+	CodexBefore *float64 `json:"codex_before,omitempty"`
+	CodexAfter  *float64 `json:"codex_after,omitempty"`
 }
     CaseRun is one case of a replay: what became of the review round and,
     when it left a result, the score.
+
+func (c CaseRun) Points() (float64, bool)
+    Points is how far the Codex gauge moved while the case ran; ok is false when
+    either reading is missing or the window reset in between (the gauge fell).
 
 type Corpus struct {
 	Cases []Case `toml:"case"`
@@ -6009,6 +6054,11 @@ type Run struct {
 	Started  time.Time         `json:"started,omitzero"`
 	Finished time.Time         `json:"finished,omitzero"`
 	Cases    []CaseRun         `json:"cases"`
+	// Inputs identifies what the review read besides the PR and the notes: a hash of the judge
+	// skill, the roles' prompts and the role config ("" in runs before it was recorded). Baselines
+	// matches on it.
+	Inputs  string `json:"inputs,omitempty"`
+	NoNotes bool   `json:"no_notes,omitempty"` // the judge was given no notes (--no-notes)
 }
     Run is one replay of a corpus.
 
@@ -6051,11 +6101,12 @@ type Score struct {
 
 func ScoreCase(c Case, r Result) Score
     ScoreCase tells, for every defect of c, whether the findings of r report it.
-    An inline finding matches a defect when its path matches one of the defect's
-    paths (any when none), its line range comes within three lines of the
-    defect's lines (when set) and its body matches one of the defect's regexps
-    (when set). A review body matches only a defect with body = true, by its
-    regexps alone. Simplification suggestions match nothing and are not noise.
+    An inline finding matches a defect when its path matches one of the
+    defect's paths (any when none), its line range comes within three lines
+    of the defect's lines (when set) and its body matches one of the defect's
+    regexps (when set). A review body matches only a defect with body = true,
+    by its regexps alone, and only with its finding list and nearby block
+    (bodyFindings). Simplification suggestions match nothing and are not noise.
     One finding may match several defects.
 
 func (s Score) SeverityOK() int
@@ -15109,9 +15160,9 @@ carries the account's rate-limit windows as Codex last saw them:
      "rate_limits":{"primary":{"used_percent":7.0,"window_minutes":10080,
      "resets_at":1791710538},"secondary":null,"plan_type":"pro"}}}
 
-Codex reads the newest of those snapshots without starting Codex or calling
-any API. Decide turns a snapshot into a soft/hard verdict for the scheduler.
-Everything here is read-only.
+Codex reads the newest of those snapshots without starting Codex or calling any
+API, CodexAt the newest one at or before a past time. Decide turns a snapshot
+into a soft/hard verdict for the scheduler. Everything here is read-only.
 
 CONSTANTS
 
@@ -15121,6 +15172,10 @@ const (
 	MaxFiles = 8
 	// MaxTailBytes is how far from its end a session file is read.
 	MaxTailBytes = 4 << 20
+	// MaxHeads is how many session files written at or after the time
+	// CodexAt asks about have their first line read, to tell whether the
+	// session began before that time.
+	MaxHeads = 256
 )
     Bounds of one Codex read.
 
@@ -15136,6 +15191,17 @@ FUNCTIONS
 
 func DefaultCodexHome() string
     DefaultCodexHome is $CODEX_HOME, or ~/.codex when it is unset.
+
+func PaceSince(cur Window, past Snapshot, from, now time.Time) (float64, bool)
+    PaceSince is the pace of window cur from from to now: the share of its
+    budget used since past, Codex's reading at or before from (which stands
+    for the usage at from), over the share of the window between from and now.
+    The window of past as long as cur (primary or secondary) is compared,
+    and it is cur's window when its reset is within an hour of cur's. ok is
+    false when past has no such window or it is another one (a reset in between:
+    the budget before it is not comparable), cur's length or reset is unknown,
+    its window began after from or ended by now, the used share went down,
+    or now is not after from.
 
 
 TYPES
@@ -15211,6 +15277,19 @@ func Codex(ctx context.Context, home string, now time.Time) (Snapshot, error)
     limits, and returns the snapshot with the latest timestamp. Windows whose
     reset time is at or before now read 0% used. It returns ErrNoData when
     nothing is found.
+
+func CodexAt(ctx context.Context, home string, at time.Time) (Snapshot, error)
+    CodexAt returns the newest rate-limit snapshot in home's session files
+    (empty means DefaultCodexHome) stamped at or before at: the budget as Codex
+    last reported it then. Its windows read as reported, one that has reset
+    since included; the caller compares ResetsAt. It reads, each from its end
+    (at most MaxTailBytes), the files last written before at as Codex reads the
+    newest (the newest one usually settles it) and the sessions spanning at,
+    written at or after it but started at or before it; at most MaxFiles of
+    each. Of a file written at or after at only the first line, the session_meta
+    record stamped when the session started, is read to tell (of the MaxHeads
+    such files written closest to at). It returns ErrNoData when nothing is
+    found.
 
 func (s Snapshot) Used() float64
     Used is the higher used percentage of the primary and secondary windows:
