@@ -51,7 +51,7 @@ const (
 
 // bgWatch is what the transcript of one claude session says about the run
 // in flight. mu guards everything; the observer and BackgroundTasks read the
-// transcript under it, TimeUp sets timeUp.
+// transcript under it, Tell sets released.
 type bgWatch struct {
 	mu  sync.Mutex
 	run string // "" = no run: the observer's watch of an agent working without one (turnWatch)
@@ -77,11 +77,11 @@ type bgWatch struct {
 	// agent worked, a task notification) that the agent has not taken yet
 	// -> when each was queued, oldest first.
 	queued map[string][]time.Time
-	// timeUp: the agent was told to stop waiting for its background work
-	// (TimeUp), so that work no longer holds the run.
-	timeUp bool
-	told   bool   // EventBackgroundWait recorded
-	failed string // the last read error logged ("" = none)
+	// released: the agent was told to stop waiting for its background work
+	// (Tell), so that work no longer holds the run.
+	released bool
+	told     bool   // EventBackgroundWait recorded
+	failed   string // the last read error logged ("" = none)
 }
 
 // reset forgets what was read (a new session id, a transcript that shrank).
@@ -123,7 +123,7 @@ func (m *Manager) turnWatch(sessionID int64) *bgWatch {
 // backgroundWait reads the transcript of session s, a claude agent seen idle
 // while run is in flight, as Claude Code session sid. tasks is the
 // background work started during run that has neither notified nor been
-// stopped; hold is true while there is any (until TimeUp) or while a task
+// stopped; hold is true while there is any (until Tell) or while a task
 // notification is not answered yet. A transcript it cannot find or read
 // holds nothing: the run ends on herdr's status, as before.
 func (m *Manager) backgroundWait(ctx context.Context, s store.Session, sid string, run store.Run) (tasks int, hold bool) {
@@ -137,8 +137,8 @@ func (m *Manager) backgroundWait(ctx context.Context, s store.Session, sid strin
 		return 0, false
 	}
 	tasks = len(w.tasks)
-	hold = (tasks > 0 && !w.timeUp) || w.note.After(w.reply)
-	if tasks > 0 && !w.timeUp && !w.told {
+	hold = (tasks > 0 && !w.released) || w.note.After(w.reply)
+	if tasks > 0 && !w.released && !w.told {
 		w.told = true
 		noun := "tasks"
 		if tasks == 1 {
@@ -201,30 +201,30 @@ func (m *Manager) humanTurn(s store.Session, sid string) bool {
 	return w.typed.After(last.Add(transcriptSkew))
 }
 
-// TimeUp sends text to the agent of run's session within that run, without
-// a new run (as continueAfterDeny sends after_deny_prompt): the pipeline's
-// last call to a reviewer whose time ran out to stop its background tasks
-// and write its report now, or, once the reviewer was interrupted, to stop
-// the background tasks it left running. From then on the agent's
-// background work no longer holds the run open (the text tells it to stop
-// that work); a task notification it has not answered still does. The
-// session's idle_ticks are reset and its last_prompt_at set (so the turn
-// the text starts is not taken for someone typing). A run without a live
-// agent session fails with ErrNoSession (ErrNotAgent for a shell role's
-// pane).
-func (m *Manager) TimeUp(ctx context.Context, run store.Run, text string) error {
+// Tell sends text to the agent of run's session within that run, without a
+// new run (as continueAfterDeny sends after_deny_prompt). The pipeline tells
+// a reviewer three things this way, each asking it to stop its background
+// tasks: the last call when its time ran out (and to write its report
+// now), and, once it was interrupted, to stop the background work it left
+// running at the end of a round or before a push restarts the round. From
+// then on the agent's background work no longer holds the run open; a task
+// notification it has not answered still does. The session's idle_ticks
+// are reset and its last_prompt_at set (so the turn the text starts is not
+// taken for someone typing). A run without a live agent session fails with
+// ErrNoSession (ErrNotAgent for a shell role's pane).
+func (m *Manager) Tell(ctx context.Context, run store.Run, text string) error {
 	if run.SessionID == nil {
-		return fmt.Errorf("agents: time up %s: %w", run.ID, ErrNoSession)
+		return fmt.Errorf("agents: tell %s: %w", run.ID, ErrNoSession)
 	}
 	s, err := m.d.Store.SessionByID(ctx, *run.SessionID)
 	if errors.Is(err, store.ErrNotFound) || (err == nil && s.State != store.SessionLive) {
-		return fmt.Errorf("agents: time up %s: %w", run.ID, ErrNoSession)
+		return fmt.Errorf("agents: tell %s: %w", run.ID, ErrNoSession)
 	}
 	if err != nil {
-		return fmt.Errorf("agents: time up %s: %w", run.ID, err)
+		return fmt.Errorf("agents: tell %s: %w", run.ID, err)
 	}
 	if !m.isAgentSession(s) {
-		return fmt.Errorf("agents: time up %s: %w", run.ID, ErrNotAgent)
+		return fmt.Errorf("agents: tell %s: %w", run.ID, ErrNotAgent)
 	}
 	// The text ends with Enter: never type it into a dialog (herdr refuses
 	// an agent it sees blocked; this also covers a screen it does not).
@@ -233,22 +233,22 @@ func (m *Manager) TimeUp(ctx context.Context, run store.Run, text string) error 
 		_, trust := detectTrustDialog(screen)
 		_, prompt := detectPermissionPrompt(screen)
 		if trust || prompt {
-			return fmt.Errorf("agents: time up %s: a dialog is on screen: %w", run.ID, ErrBlocked)
+			return fmt.Errorf("agents: tell %s: a dialog is on screen: %w", run.ID, ErrBlocked)
 		}
 	}
 	if _, err := m.d.Herdr.AgentPrompt(ctx, target(s), text, nil); err != nil {
-		return fmt.Errorf("agents: time up %s: %w", run.ID, mapHerdr(err))
+		return fmt.Errorf("agents: tell %s: %w", run.ID, mapHerdr(err))
 	}
 	w := m.watch(s.ID, run)
 	w.mu.Lock()
-	w.timeUp = true
+	w.released = true
 	w.mu.Unlock()
 	now := m.now()
 	if err := m.d.Store.UpdateSession(context.WithoutCancel(ctx), s.ID, func(u *store.SessionUpdate) {
 		u.Set("idle_ticks", 0)
 		u.Set("last_prompt_at", now)
 	}); err != nil {
-		m.logf("agents: time up %s: session %d: %v", run.ID, s.ID, err)
+		m.logf("agents: tell %s: session %d: %v", run.ID, s.ID, err)
 	}
 	return nil
 }

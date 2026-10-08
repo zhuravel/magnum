@@ -120,7 +120,7 @@ func (m *Manager) ObserveSnapshot(ctx context.Context, snap herdr.Snapshot) ([]O
 //     shows background work started during the run still running, or a
 //     task notification not answered yet, counts as working for completion
 //     (idle_ticks 0, Background set; see backgroundWait), until the
-//     pipeline's TimeUp tells it to stop waiting for that work.
+//     pipeline tells it (Tell) to stop waiting for that work.
 //     An agent of a kind named by a rename command (codex), working on a
 //     submitted/working run, whose terminal title lacks Title gets that
 //     command (`/rename <Title>`) typed into its pane (at most once per call,
@@ -316,11 +316,11 @@ func (m *Manager) humanActive(ctx context.Context, prID int64, now time.Time) (t
 	if err := m.d.Store.UpdatePR(ctx, prID, func(u *store.PRUpdate) { u.Set("human_active_at", now) }); err != nil {
 		return time.Time{}, err
 	}
-	cd := m.d.Config.Daemon.HumanCooldown.Duration
-	if cd <= 0 || (pr.HumanActiveAt != nil && now.Before(pr.HumanActiveAt.Add(cd))) {
+	cfg := m.d.Config.Daemon
+	if now.Before(cfg.CooldownUntil(pr.HumanActiveAt)) {
 		return time.Time{}, nil
 	}
-	return now.Add(cd), nil
+	return cfg.CooldownUntil(&now), nil
 }
 
 // turnTail reports whether judge session s (its row after this tick's

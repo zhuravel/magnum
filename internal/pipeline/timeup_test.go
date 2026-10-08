@@ -34,7 +34,7 @@ func (e *env) reviewerWarnings(role agents.Role) []string {
 func TestAReviewerOutOfTimeIsAskedForItsReport(t *testing.T) {
 	e := newEnv(t)
 	e.ag.behaviors[agents.RoleClaude] = []behavior{hang()}
-	e.ag.onTimeUp = writeReport("## P1 found before the time ran out\n\n- pending: spec/models (still running)\n")
+	e.ag.onTell = writeReport("## P1 found before the time ran out\n\n- pending: spec/models (still running)\n")
 	e.ag.behaviors[agents.RoleJudge] = []behavior{e.judgePosts(601, "COMMENTED", "COMMENT").behavior(t)}
 
 	res, err := e.r.RunRound(e.ctx, e.input(KindInitial))
@@ -44,10 +44,10 @@ func TestAReviewerOutOfTimeIsAskedForItsReport(t *testing.T) {
 	if got := res.Reports[agents.RoleClaude]; got.Status != ReportOK {
 		t.Fatalf("claude report = %+v, want the report written after the time-up", got)
 	}
-	if len(e.ag.timeUps) != 1 {
-		t.Fatalf("time-ups = %d, want 1", len(e.ag.timeUps))
+	if len(e.ag.tells) != 1 {
+		t.Fatalf("time-ups = %d, want 1", len(e.ag.tells))
 	}
-	up := e.ag.timeUps[0]
+	up := e.ag.tells[0]
 	run := e.runOf(agents.RoleClaude, store.RunInitial)
 	if up.Run.ID != run.ID {
 		t.Fatalf("time-up sent for run %s, want the reviewer's run %s", up.Run.ID, run.ID)
@@ -88,11 +88,11 @@ func TestAReviewerThatIgnoresTheTimeUpIsInterruptedAfterTheGrace(t *testing.T) {
 	if got := res.Reports[agents.RoleClaude]; got.Status != ReportTimeout {
 		t.Fatalf("claude report = %+v, want timeout", got)
 	}
-	if len(e.ag.timeUps) != 2 {
-		t.Fatalf("messages = %d, want the time-up and the stop after the interrupt", len(e.ag.timeUps))
+	if len(e.ag.tells) != 2 {
+		t.Fatalf("messages = %d, want the time-up and the stop after the interrupt", len(e.ag.tells))
 	}
 	run := e.runOf(agents.RoleClaude, store.RunInitial)
-	if stop := e.ag.timeUps[1]; stop.Run.ID != run.ID || stop.Text != stopBackgroundText {
+	if stop := e.ag.tells[1]; stop.Run.ID != run.ID || stop.Text != stopBackgroundText {
 		t.Fatalf("after the interrupt: %+v, want %q to run %s", stop, stopBackgroundText, run.ID)
 	}
 	if elapsed := e.clock.Now().Sub(t0); elapsed < e.cfg.Daemon.ReviewerTimeout.Duration+TimeUpGrace+StopGrace {
@@ -119,7 +119,7 @@ func TestAnInterruptedReviewerIsToldToStopItsBackgroundTasks(t *testing.T) {
 	e := newEnv(t)
 	e.ag.behaviors[agents.RoleClaude] = []behavior{endSilently()}
 	e.ag.background = map[agents.Role]int{agents.RoleClaude: 1}
-	e.ag.onTimeUp = func(f *fakeAgents, run store.Run, text string) error {
+	e.ag.onTell = func(f *fakeAgents, run store.Run, text string) error {
 		if text == stopBackgroundText {
 			f.mu.Lock()
 			f.background[agents.RoleClaude] = 0
@@ -139,8 +139,8 @@ func TestAnInterruptedReviewerIsToldToStopItsBackgroundTasks(t *testing.T) {
 	if len(e.keys.sends) != 1 {
 		t.Fatalf("interrupt keys = %v", e.keys.sends)
 	}
-	if len(e.ag.timeUps) != 1 || e.ag.timeUps[0].Text != stopBackgroundText {
-		t.Fatalf("messages = %+v, want only the stop", e.ag.timeUps)
+	if len(e.ag.tells) != 1 || e.ag.tells[0].Text != stopBackgroundText {
+		t.Fatalf("messages = %+v, want only the stop", e.ag.tells)
 	}
 	mustContain(t, "stop message", stopBackgroundText, "TaskStop", "do nothing else")
 	warns := e.reviewerWarnings(agents.RoleClaude)
@@ -183,7 +183,7 @@ func (e *env) cutClaude(restart bool) RoundInput {
 // state and whether its turn was interrupted (esc) before.
 func (e *env) stopsWhenTold(text string) *[]string {
 	var seen []string
-	e.ag.onTimeUp = func(f *fakeAgents, run store.Run, got string) error {
+	e.ag.onTell = func(f *fakeAgents, run store.Run, got string) error {
 		seen = append(seen, fmt.Sprintf("%s esc=%t", run.State, slices.Contains(e.sendsTo(agents.RoleClaude), "esc")))
 		if got == text {
 			f.mu.Lock()
@@ -213,8 +213,8 @@ func TestAPushTellsACutReviewerToStopItsBackgroundTasks(t *testing.T) {
 	if res.Outcome != OutcomePosted || res.Restarts != 1 {
 		t.Fatalf("result = %+v", res)
 	}
-	if len(e.ag.timeUps) != 1 || e.ag.timeUps[0].Text != headMovedStopText || e.ag.timeUps[0].Run.TargetSHA != target {
-		t.Fatalf("messages = %+v, want the restart's stop within the cut run", e.ag.timeUps)
+	if len(e.ag.tells) != 1 || e.ag.tells[0].Text != headMovedStopText || e.ag.tells[0].Run.TargetSHA != target {
+		t.Fatalf("messages = %+v, want the restart's stop within the cut run", e.ag.tells)
 	}
 	mustContain(t, "stop message", headMovedStopText, "head moved", "TaskStop", "do nothing else", "The next message restarts the review")
 	if strings.Contains(headMovedStopText, "over") {
@@ -229,7 +229,7 @@ func TestAPushTellsACutReviewerToStopItsBackgroundTasks(t *testing.T) {
 			claude = append(claude, o)
 		}
 	}
-	if want := []string{"submit:claude-review", "time_up:claude-review", "submit:claude-review"}; !slices.Equal(claude, want) {
+	if want := []string{"submit:claude-review", "tell:claude-review", "submit:claude-review"}; !slices.Equal(claude, want) {
 		t.Errorf("claude-review got %v, want the stop between its prompt and the restart's", claude)
 	}
 	for _, r := range e.runs() {
@@ -259,8 +259,8 @@ func TestARoundsEndTellsACutReviewerToStopItsBackgroundTasks(t *testing.T) {
 	if res.Outcome != OutcomeRefused {
 		t.Fatalf("result = %+v", res)
 	}
-	if len(e.ag.timeUps) != 1 || e.ag.timeUps[0].Text != stopBackgroundText {
-		t.Fatalf("messages = %+v, want only the stop", e.ag.timeUps)
+	if len(e.ag.tells) != 1 || e.ag.tells[0].Text != stopBackgroundText {
+		t.Fatalf("messages = %+v, want only the stop", e.ag.tells)
 	}
 	if want := []string{store.RunWorking + " esc=true"}; !slices.Equal(*seen, want) {
 		t.Errorf("cut run at the message = %v, want %v (interrupted, not yet abandoned)", *seen, want)
@@ -292,8 +292,8 @@ func TestACutReviewerWithNoBackgroundTasksGetsNoMessage(t *testing.T) {
 				if !slices.Contains(e.sendsTo(agents.RoleClaude), "esc") {
 					t.Fatalf("claude-review was not interrupted: %v", e.keys.sends)
 				}
-				if len(e.ag.timeUps) != 0 {
-					t.Errorf("messages = %+v, want none", e.ag.timeUps)
+				if len(e.ag.tells) != 0 {
+					t.Errorf("messages = %+v, want none", e.ag.tells)
 				}
 				for _, w := range res.Warnings {
 					if strings.Contains(w, "background") {
@@ -309,7 +309,7 @@ func TestACutReviewerWithNoBackgroundTasksGetsNoMessage(t *testing.T) {
 func TestATimeUpThatCannotBeSentEndsTheTurnAtItsTimeout(t *testing.T) {
 	e := newEnv(t)
 	e.ag.behaviors[agents.RoleClaude] = []behavior{hang()}
-	e.ag.timeUpErr = errors.New("agents: time up: herdr agent.prompt: agent_not_found")
+	e.ag.tellErr = errors.New("agents: tell: herdr agent.prompt: agent_not_found")
 	e.ag.behaviors[agents.RoleJudge] = []behavior{e.judgePosts(603, "COMMENTED", "COMMENT").behavior(t)}
 
 	res, err := e.r.RunRound(e.ctx, e.input(KindInitial))
@@ -345,8 +345,8 @@ func TestAShellRoleOutOfTimeIsNotAskedForItsReport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunRound: %v", err)
 	}
-	if res.Reports[agents.RoleCodexReview].Status != ReportTimeout || len(e.ag.timeUps) != 0 {
-		t.Fatalf("codex report %+v, time-ups %d", res.Reports[agents.RoleCodexReview], len(e.ag.timeUps))
+	if res.Reports[agents.RoleCodexReview].Status != ReportTimeout || len(e.ag.tells) != 0 {
+		t.Fatalf("codex report %+v, time-ups %d", res.Reports[agents.RoleCodexReview], len(e.ag.tells))
 	}
 	warns := e.reviewerWarnings(agents.RoleCodexReview)
 	if len(warns) != 1 || !strings.Contains(warns[0], "interrupted codex-review") {
@@ -376,8 +376,8 @@ func TestAReviewerThatEndedWithoutAReportIsInterrupted(t *testing.T) {
 	if len(warns) != 1 || warns[0] != "claude-review report missing: finished without writing claude-review.md; interrupted claude-review" {
 		t.Fatalf("claude warnings: %q", warns)
 	}
-	if len(e.ag.timeUps) != 0 {
-		t.Fatalf("time-ups = %d for a turn that ended in time", len(e.ag.timeUps))
+	if len(e.ag.tells) != 0 {
+		t.Fatalf("time-ups = %d for a turn that ended in time", len(e.ag.tells))
 	}
 }
 

@@ -336,11 +336,7 @@ func (e *Engine) onReplied(ctx context.Context, job *roundJob, pr store.PR, in p
 			}
 		}
 		if restore {
-			if job.prevStart != nil {
-				u.Set("last_round_started_at", *job.prevStart)
-			} else {
-				u.Set("last_round_started_at", nil)
-			}
+			u.Set("last_round_started_at", job.prevStart) // nil stores NULL
 		}
 		u.Set("replies_read_at", readAt)
 		u.Set("attempts", 0)

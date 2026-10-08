@@ -4332,3 +4332,13 @@ editing history. Code, config comments and prompts reference these by their head
   not a rate limit. The three git calls take only exit 1 (`call.noExit`). Any other exit of these commands
   still warns: a 500, a rate limit, or git's 128 outside a repository. `Probe`, which takes every exit, stays
   for the callers that set it.
+- **Every release of a slot deletes its merge-check refs** (2026-10-08, amends "`magnum merge-check`: an
+  experiment the operator runs, never the daemon"). The check's commits live under
+  `refs/magnum/merge-check/<slot>/` (head, merged, tree), and only `slots.ReleaseHeld` deleted them, with the
+  refs merge-check passed. A check kept with `--keep` and handed back with `magnum slots unpin` is released by
+  the daemon's next eviction (`Release`), which passed none, so the refs stayed in the main clone for good and
+  kept the commits they name from git's garbage collection. Now the release's `delete_ref` step deletes the
+  slot's `slots.MergeCheckRefs` in every release, the daemon's and the command's; merge-check takes its ref
+  names from the same function, and a test checks that it writes no other. Rejected: listing the refs under the
+  slot's prefix with `git for-each-ref` (one more git call and gitx method for three fixed names), and deleting
+  them in `Unpin` (an unpin moves nothing in the clone; the release resets the slot anyway).

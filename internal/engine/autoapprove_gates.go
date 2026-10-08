@@ -129,15 +129,16 @@ func (e *Engine) agentConfigRefusal(ctx context.Context, pr store.PR) string {
 	if err != nil {
 		return "magnum cannot read the files it changes: " + err.Error()
 	}
+	kinds := e.projectKinds()
 	listed := ok && f.HeadSHA == pr.HeadSHA
 	if listed {
 		for _, p := range f.Paths {
-			if name, hit := e.agentConfigPath(p); hit {
+			if name, hit := agentConfigPath(kinds, p); hit {
 				return "it changes " + what + " (" + name + ")"
 			}
 		}
 	}
-	for _, kind := range e.projectKinds() {
+	for _, kind := range kinds {
 		if n, ok := agents.ProjectDeclined(ctx, e.st, pr.ID, kind); ok && n.Head == pr.HeadSHA {
 			names := strings.Join(n.Paths, ", ") // the kind's labels, never a path the PR named
 			if names == "" {
@@ -156,17 +157,18 @@ func (e *Engine) agentConfigRefusal(ctx context.Context, pr store.PR) string {
 }
 
 // agentConfigPath reports whether p, a path the PR changes, is one of the
-// review agents' instruction files or under a CLI's project config, and how
-// the refusal names it: p itself when it is a plain path, else the name it
-// matched (the PR chose the path; its odd characters stay out of events).
-func (e *Engine) agentConfigPath(p string) (string, bool) {
+// review agents' instruction files or under the project config of one of
+// kinds (projectKinds), and how the refusal names it: p itself when it is a
+// plain path, else the name it matched (the PR chose the path; its odd
+// characters stay out of events).
+func agentConfigPath(kinds []string, p string) (string, bool) {
 	base := path.Base(p)
 	for _, f := range agentInstructionFiles {
 		if strings.EqualFold(base, f) {
 			return shownPath(p, f), true
 		}
 	}
-	for _, kind := range e.projectKinds() {
+	for _, kind := range kinds {
 		if agents.ProjectTouched(kind, []string{p}) {
 			return shownPath(p, projectLabel(kind, p)), true
 		}

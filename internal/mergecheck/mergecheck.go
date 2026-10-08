@@ -16,8 +16,10 @@
 // failing examples again at the PR head alone, to tell a clash from a PR
 // that was already red. The result goes to a JSON file and a
 // merge_check.result event; the slot is released as a round's release does
-// (slots.ReleaseHeld), also after a failure or an interrupt, unless Keep.
-// It is an experiment the operator runs from the CLI; the daemon never does.
+// (slots.ReleaseHeld), also after a failure or an interrupt, unless Keep;
+// any release of the slot deletes the check's refs (slots.MergeCheckRefs),
+// the daemon's too after `magnum slots unpin`. It is an experiment the
+// operator runs from the CLI; the daemon never does.
 package mergecheck
 
 import (
@@ -39,6 +41,7 @@ import (
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/gitx"
+	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
 )
@@ -245,12 +248,13 @@ func (c *check) progress(format string, args ...any) {
 	}
 }
 
-// ref is the check's ref name under gitx.MergeCheckRefPrefix in the held
-// slot's main clone: head (the PR head), merged (a merged commit fetched by
-// id) or tree (the merged tree's commit).
-func (c *check) ref(name string) string { return gitx.MergeCheckRefPrefix + c.sl.Name + "/" + name }
+// ref is the check's ref name in the held slot's main clone
+// (slots.MergeCheckRef): head (the PR head), merged (a merged commit
+// fetched by id) or tree (the merged tree's commit).
+func (c *check) ref(name string) string { return slots.MergeCheckRef(c.sl.Name, name) }
 
-func (c *check) refs() []string { return []string{c.ref("head"), c.ref("merged"), c.ref("tree")} }
+// refs are all of them, which every release of the slot deletes.
+func (c *check) refs() []string { return slots.MergeCheckRefs(c.sl.Name) }
 
 // run is the check after the slot is held; it fills c.res.
 func (c *check) run(ctx context.Context) error {

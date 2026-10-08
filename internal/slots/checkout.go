@@ -356,7 +356,8 @@ func (m *Manager) markSchema(ctx context.Context, sl store.Slot, pool config.Poo
 // changes discarded after a slot.discarded event, checked_out_sha cleared;
 // origin/<base>'s commit is written to the kv store first, as Checkout's
 // switch does, so a release interrupted after the reset is no head drift),
-// delete_ref (refs/magnum/pr/N), render_mise, deps, schema_check
+// delete_ref (refs/magnum/pr/N, and the slot's MergeCheckRefs: a check kept
+// with --keep and handed back by an unpin), render_mise, deps, schema_check
 // (resetSchema: a LazySchema pool keeps the databases unless
 // MAX(schema_migrations.version) of the development database differs from
 // the version of the schema recorded for them; otherwise when dirty_schema
@@ -412,7 +413,8 @@ func (m *Manager) Release(ctx context.Context, slot store.Slot, pool config.Pool
 // are a round's release, from releasing (or dirty_schema) to free. With a
 // hold they are ReleaseHeld's: the slot stays held with that hold_reason,
 // which the daemon never touches, until mark_free frees it in one
-// compare-and-set; delete_ref also deletes refs (the check's own refs).
+// compare-and-set. delete_ref deletes refs, the slot's MergeCheckRefs and
+// its PR's refs/magnum/pr/N.
 func (m *Manager) releaseSteps(ctx context.Context, subject string, sl store.Slot, pool config.Pool, reason, hold string, refs []string) error {
 	if err := m.step(ctx, subject, "fetch_base", func(ctx context.Context) error {
 		return m.git.FetchBranch(ctx, sl.MainClone, pool.Base)
@@ -442,7 +444,9 @@ func (m *Manager) releaseSteps(ctx context.Context, subject string, sl store.Slo
 		return err
 	}
 	if err := m.step(ctx, subject, "delete_ref", func(ctx context.Context) error {
-		for _, ref := range refs {
+		del := slices.Concat(refs, MergeCheckRefs(sl.Name))
+		slices.Sort(del)
+		for _, ref := range slices.Compact(del) {
 			if err := m.git.UpdateRefDelete(ctx, sl.MainClone, ref); err != nil {
 				return err
 			}

@@ -149,11 +149,7 @@ func (e *Engine) refund(ctx context.Context, job *roundJob, round int, reason, o
 			u.Set("rounds_today", left)
 		}
 		if restore {
-			if job.prevStart != nil {
-				u.Set("last_round_started_at", *job.prevStart)
-			} else {
-				u.Set("last_round_started_at", nil)
-			}
+			u.Set("last_round_started_at", job.prevStart) // nil stores NULL
 		}
 	})
 	if err != nil {

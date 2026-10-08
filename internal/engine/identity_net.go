@@ -30,11 +30,6 @@ const (
 	identityRetryMax   = 4 * time.Minute
 )
 
-// connectionCause names the connection-class failure msg reports ("" = none:
-// a real verdict on the identity); the classifier is github.ConnectionCause,
-// shared with the pipeline's verification.
-func connectionCause(msg string) string { return github.ConnectionCause(msg) }
-
 // checkConnectionCause names the connection-class failure of a failed
 // identity check ("" = a real verdict): every FAIL line, and the error when
 // the check could not complete, must be one. A check that found a real
@@ -51,7 +46,7 @@ func checkConnectionCause(rep identity.Report, err error) string {
 	}
 	first := ""
 	for _, m := range msgs {
-		cause := connectionCause(m)
+		cause := github.ConnectionCause(m)
 		if cause == "" {
 			return ""
 		}
@@ -192,7 +187,7 @@ func (e *Engine) retryIdentities(ctx context.Context) {
 		if v, _ := e.getKV(ctx, KVIdentityCheck(name)); v != "fail" {
 			continue
 		}
-		if r, _ := e.getKV(ctx, KVIdentityError(name)); connectionCause(r) != "" {
+		if r, _ := e.getKV(ctx, KVIdentityError(name)); github.ConnectionCause(r) != "" {
 			e.checkIdentity(ctx, name)
 		}
 	}

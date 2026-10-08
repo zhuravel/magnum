@@ -241,6 +241,21 @@ func (m *Manager) checkoutHeldSteps(ctx context.Context, subject string, sl stor
 	})
 }
 
+// MergeCheckRef is the ref name, under gitx.MergeCheckRefPrefix in slot's
+// main clone, that `magnum merge-check` keeps one of its commits in: head
+// (the PR head), merged (a merged commit fetched by id) or tree (the merged
+// tree's commit).
+func MergeCheckRef(slot, name string) string {
+	return gitx.MergeCheckRefPrefix + slot + "/" + name
+}
+
+// MergeCheckRefs are all of slot's MergeCheckRef refs. Every release of the
+// slot deletes them (delete_ref), so a check kept with --keep and handed
+// back with `magnum slots unpin`, which the daemon releases, leaves none.
+func MergeCheckRefs(slot string) []string {
+	return []string{MergeCheckRef(slot, "head"), MergeCheckRef(slot, "merged"), MergeCheckRef(slot, "tree")}
+}
+
 // ReleaseHeld hands a slot held for hold back to the pool with Release's
 // steps (subject "slot:<name>:release": guard, fetch_base, reset to the
 // placeholder at origin/<base>, delete_ref, render_mise, deps,

@@ -221,6 +221,42 @@ func TestReleaseHeldThatFailsLeavesTheSlotHeldForTheCheck(t *testing.T) {
 	}
 }
 
+// A check kept with --keep and handed back with `magnum slots unpin` is
+// released by the daemon's next eviction (Release, no refs given), which
+// deletes the check's refs as ReleaseHeld does: nothing is left under
+// refs/magnum/merge-check/<slot>/, and another slot's refs stay.
+func TestReleaseAfterUnpinLeavesNoMergeCheckRefs(t *testing.T) {
+	h := newHarness(t)
+	sl, _ := h.heldCheckout()
+	var mine []string
+	for _, name := range []string{"head", "merged", "tree"} {
+		mine = append(mine, gitx.MergeCheckRefPrefix+sl.Name+"/"+name)
+	}
+	other := gitx.MergeCheckRefPrefix + "other/head"
+	for _, ref := range append(mine[1:], other) {
+		if err := h.m.git.UpdateRef(h.ctx, h.main, ref, h.shaPR7); err != nil {
+			t.Fatalf("UpdateRef %s: %v", ref, err)
+		}
+	}
+	if err := h.m.Unpin(h.ctx, h.slot(sl.Name)); err != nil {
+		t.Fatalf("Unpin: %v", err)
+	}
+	if err := h.m.Release(h.ctx, h.slot(sl.Name), h.pool, "evicted"); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	if got := h.slot(sl.Name); got.State != store.SlotFree {
+		t.Fatalf("slot = %s, want free", got.State)
+	}
+	for _, ref := range mine {
+		if _, err := h.m.git.RevParse(h.ctx, h.main, ref); !errors.Is(err, gitx.ErrNoSuchRef) {
+			t.Errorf("%s after the release: %v, want it deleted", ref, err)
+		}
+	}
+	if _, err := h.m.git.RevParse(h.ctx, h.main, other); err != nil {
+		t.Errorf("%s, another slot's ref: %v", other, err)
+	}
+}
+
 func TestReleaseHeldRefusesARefOutsideItsNamespace(t *testing.T) {
 	h := newHarness(t)
 	sl, _ := h.heldCheckout()

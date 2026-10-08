@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/agents"
+	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/identity"
 	"github.com/zhuravel/magnum/internal/pipeline"
@@ -436,7 +437,7 @@ func (e *Engine) tokenFailed(ctx context.Context, name string, err error) {
 	msg := err.Error()
 	key := netTokenKey(name)
 	prev, had := e.getKV(ctx, kvIdentityTickError(name))
-	if cause := connectionCause(msg); cause != "" {
+	if cause := github.ConnectionCause(msg); cause != "" {
 		r, retried := e.netRetrying(ctx, name, "token refresh", key, cause, msg, had)
 		if retried {
 			return

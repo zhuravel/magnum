@@ -937,12 +937,8 @@ func classifySetup(err error, pr store.PR, cfg *config.Config, now time.Time) *s
 	se := &setupError{err: err}
 	switch {
 	case errors.Is(err, agents.ErrHumanActive):
-		se.noCharge = true
-		if pr.HumanActiveAt != nil {
-			se.retryAt = pr.HumanActiveAt.Add(cfg.Daemon.HumanCooldown.Duration)
-		} else {
-			se.retryAt = now.Add(cfg.Daemon.HumanCooldown.Duration)
-		}
+		// The cooldown's end, or a whole cooldown from now without a start.
+		se.noCharge, se.retryAt = true, cfg.Daemon.CooldownUntil(cmp.Or(pr.HumanActiveAt, &now))
 	case errors.Is(err, agents.ErrBusy):
 		se.noCharge, se.retryAt = true, now.Add(busyRetry)
 	case errors.Is(err, store.ErrConflict):

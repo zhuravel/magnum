@@ -1070,11 +1070,11 @@ func (m *Manager) ObserveSnapshotAt(ctx context.Context, snap herdr.Snapshot, ca
         submitted/working run whose transcript shows background work started
         during the run still running, or a task notification not answered yet,
         counts as working for completion (idle_ticks 0, Background set; see
-        backgroundWait), until the pipeline's TimeUp tells it to stop waiting
-        for that work. An agent of a kind named by a rename command (codex),
-        working on a submitted/working run, whose terminal title lacks Title
-        gets that command (`/rename <Title>`) typed into its pane (at most once
-        per call, TitleAttempts per session row; see nameAgent).
+        backgroundWait), until the pipeline tells it (Tell) to stop waiting for
+        that work. An agent of a kind named by a rename command (codex), working
+        on a submitted/working run, whose terminal title lacks Title gets that
+        command (`/rename <Title>`) typed into its pane (at most once per call,
+        TitleAttempts per session row; see nameAgent).
       - live agent session without its agent, or any session whose pane is gone
         -> session lost, ObsLost. A starting session (agent not started yet)
         with its pane still present is left alone, and so is a session that
@@ -1319,17 +1319,18 @@ func (m *Manager) SwitchModel(ctx context.Context, s store.Session, model, reaso
     EventDefaultModelRestored when it had changed). Claude switches run one at a
     time for that.
 
-func (m *Manager) TimeUp(ctx context.Context, run store.Run, text string) error
-    TimeUp sends text to the agent of run's session within that run, without
-    a new run (as continueAfterDeny sends after_deny_prompt): the pipeline's
-    last call to a reviewer whose time ran out to stop its background tasks
-    and write its report now, or, once the reviewer was interrupted, to stop
-    the background tasks it left running. From then on the agent's background
-    work no longer holds the run open (the text tells it to stop that work);
-    a task notification it has not answered still does. The session's idle_ticks
-    are reset and its last_prompt_at set (so the turn the text starts is not
-    taken for someone typing). A run without a live agent session fails with
-    ErrNoSession (ErrNotAgent for a shell role's pane).
+func (m *Manager) Tell(ctx context.Context, run store.Run, text string) error
+    Tell sends text to the agent of run's session within that run, without a
+    new run (as continueAfterDeny sends after_deny_prompt). The pipeline tells a
+    reviewer three things this way, each asking it to stop its background tasks:
+    the last call when its time ran out (and to write its report now), and,
+    once it was interrupted, to stop the background work it left running at
+    the end of a round or before a push restarts the round. From then on the
+    agent's background work no longer holds the run open; a task notification
+    it has not answered still does. The session's idle_ticks are reset and its
+    last_prompt_at set (so the turn the text starts is not taken for someone
+    typing). A run without a live agent session fails with ErrNoSession
+    (ErrNotAgent for a shell role's pane).
 
 func (m *Manager) TurnError(ctx context.Context, run store.Run) (TurnError, bool)
     TurnError reads the error the turn of run ended with from its Codex
@@ -3021,6 +3022,12 @@ type Daemon struct {
 	// stops for it. Needs launchd (`magnum install`).
 	RestartOnNewBuild bool `toml:"restart_on_new_build"`
 }
+
+func (d Daemon) CooldownUntil(at *time.Time) time.Time
+    CooldownUntil is at + human_cooldown, the end of the human cooldown a PR's
+    human_active_at (at: someone typed into its panes) began: the PR's prompts,
+    rounds, parking and slot release wait while now is before it. Zero, which
+    holds nothing, when at is nil or human_cooldown is 0.
 
 type Duration struct{ time.Duration }
     Duration is a time.Duration that unmarshals from Go syntax ("30s", "5m",
@@ -9003,8 +9010,10 @@ runs the spec files the two sides touch through the slot's db-lock line,
 and runs the files of the failing examples again at the PR head alone,
 to tell a clash from a PR that was already red. The result goes to a JSON file
 and a merge_check.result event; the slot is released as a round's release
-does (slots.ReleaseHeld), also after a failure or an interrupt, unless Keep.
-It is an experiment the operator runs from the CLI; the daemon never does.
+does (slots.ReleaseHeld), also after a failure or an interrupt, unless Keep;
+any release of the slot deletes the check's refs (slots.MergeCheckRefs),
+the daemon's too after `magnum slots unpin`. It is an experiment the operator
+runs from the CLI; the daemon never does.
 
 CONSTANTS
 
@@ -10289,12 +10298,13 @@ type Agents interface {
 	FallbackModel(ctx context.Context, s store.Session, tried []string) (string, bool)
 	SwitchModel(ctx context.Context, s store.Session, model, reason string) error
 	FallbackPrompt(d agents.FallbackData) (string, error)
-	// A reviewer whose time ran out (see round.timeUp): TimeUp types the
-	// last call into its agent within its run, and after an interrupt the
-	// message to stop its background work (round.stopBackground);
-	// BackgroundTasks counts the work a claude agent started in the
-	// background during a run and left running (ok false: unknown).
-	TimeUp(ctx context.Context, run store.Run, text string) error
+	// Tell types text into a reviewer's agent within its run: the last call
+	// to one whose time ran out (round.timeUp), and after an interrupt the
+	// message to stop its background work, at the end of a round or before
+	// a push restarts it (round.stopBackground); BackgroundTasks counts the
+	// work a claude agent started in the background during a run and left
+	// running (ok false: unknown).
+	Tell(ctx context.Context, run store.Run, text string) error
 	BackgroundTasks(ctx context.Context, run store.Run) (int, bool)
 	// TurnError is the error a Codex turn ended with, from its session's
 	// rollout: how a refusal the pane scrolled past is still found
@@ -11387,6 +11397,17 @@ func ListPoolDatabases(ctx context.Context, c DBLister, pools ...config.Pool) (d
     Templates without "__{slug}" are skipped and returned in bad for the caller
     to report. No pool template at all lists nothing (and is not an error).
 
+func MergeCheckRef(slot, name string) string
+    MergeCheckRef is the ref name, under gitx.MergeCheckRefPrefix in slot's main
+    clone, that `magnum merge-check` keeps one of its commits in: head (the PR
+    head), merged (a merged commit fetched by id) or tree (the merged tree's
+    commit).
+
+func MergeCheckRefs(slot string) []string
+    MergeCheckRefs are all of slot's MergeCheckRef refs. Every release of the
+    slot deletes them (delete_ref), so a check kept with --keep and handed back
+    with `magnum slots unpin`, which the daemon releases, leaves none.
+
 func MiseExecArgs(dir string, env map[string]string, script string) []string
     MiseExecArgs builds `-C dir exec -- env K=V… /bin/sh -c script` (keys
     sorted; blank values blank the variable): the arguments of the mise
@@ -11749,23 +11770,24 @@ func (m *Manager) RecordSchema(ctx context.Context, slot store.Slot, c SchemaChe
 func (m *Manager) Release(ctx context.Context, slot store.Slot, pool config.Pool, reason string) error
     Release hands a claimed or held pool slot back to the pool. Steps (subject
     "slot:<name>:release"): guard (Guard: pins, holds, a human's agent or
-    process, HEAD drift, tracked changes a human made), then the slot moves to
-    releasing, fetch_base, reset (placeholder branch → origin/<base>, tracked
-    changes discarded after a slot.discarded event, checked_out_sha cleared;
-    origin/<base>'s commit is written to the kv store first, as Checkout's
-    switch does, so a release interrupted after the reset is no head drift),
-    delete_ref (refs/magnum/pr/N), render_mise, deps, schema_check (resetSchema:
-    a LazySchema pool keeps the databases unless MAX(schema_migrations.version)
-    of the development database differs from the version of the schema recorded
-    for them; otherwise when dirty_schema is set or that version differs from
-    db/schema.rb at HEAD: the slot moves to dirty_schema and pool.reset_db
-    runs through mise exec, 30m; a second failure in a row moves the slot to
-    broken and returns ErrBroken) and mark_free (store.ReleaseSlot: free,
-    pr_id cleared, assignment closed with reason). A releasing or dirty_schema
-    slot resumes after its last completed step, after Guard ran again:
-    whatever a human did since the last attempt refuses the release before its
-    next destructive step. Per-PR slots are removed instead (RemovePRWorktree
-    semantics).
+    process, HEAD drift, tracked changes a human made), then the slot moves
+    to releasing, fetch_base, reset (placeholder branch → origin/<base>,
+    tracked changes discarded after a slot.discarded event, checked_out_sha
+    cleared; origin/<base>'s commit is written to the kv store first,
+    as Checkout's switch does, so a release interrupted after the reset is no
+    head drift), delete_ref (refs/magnum/pr/N, and the slot's MergeCheckRefs:
+    a check kept with --keep and handed back by an unpin), render_mise, deps,
+    schema_check (resetSchema: a LazySchema pool keeps the databases unless
+    MAX(schema_migrations.version) of the development database differs from
+    the version of the schema recorded for them; otherwise when dirty_schema
+    is set or that version differs from db/schema.rb at HEAD: the slot moves to
+    dirty_schema and pool.reset_db runs through mise exec, 30m; a second failure
+    in a row moves the slot to broken and returns ErrBroken) and mark_free
+    (store.ReleaseSlot: free, pr_id cleared, assignment closed with reason).
+    A releasing or dirty_schema slot resumes after its last completed step,
+    after Guard ran again: whatever a human did since the last attempt refuses
+    the release before its next destructive step. Per-PR slots are removed
+    instead (RemovePRWorktree semantics).
 
 func (m *Manager) ReleaseHeld(ctx context.Context, slot store.Slot, pool config.Pool, hold string, refs ...string) error
     ReleaseHeld hands a slot held for hold back to the pool with Release's

@@ -96,11 +96,11 @@ type fakeAgents struct {
 	// switches are the SwitchModel calls; switchErr fails them.
 	switches  []switchCall
 	switchErr error
-	// timeUps are the TimeUp calls; onTimeUp is what the agent does with
-	// the text (nil: nothing), timeUpErr fails them.
-	timeUps   []submitCall
-	onTimeUp  behavior
-	timeUpErr error
+	// tells are the Tell calls; onTell is what the agent does with
+	// the text (nil: nothing), tellErr fails them.
+	tells   []submitCall
+	onTell  behavior
+	tellErr error
 	// background is what BackgroundTasks reports per role (absent: unknown).
 	background map[agents.Role]int
 	// turnErrors is what TurnError reports per role (absent: none), the
@@ -137,13 +137,13 @@ func (f *fakeAgents) markOf(role agents.Role) string {
 	return f.marks[role]
 }
 
-// TimeUp records the call (the real one types the text into the run's
-// agent within the same run) and runs onTimeUp.
-func (f *fakeAgents) TimeUp(ctx context.Context, run store.Run, text string) error {
+// Tell records the call (the real one types the text into the run's
+// agent within the same run) and runs onTell.
+func (f *fakeAgents) Tell(ctx context.Context, run store.Run, text string) error {
 	f.mu.Lock()
-	f.timeUps = append(f.timeUps, submitCall{Run: run, Role: agents.Role(run.Role), Text: text})
-	f.order = append(f.order, "time_up:"+run.Role)
-	hook, err := f.onTimeUp, f.timeUpErr
+	f.tells = append(f.tells, submitCall{Run: run, Role: agents.Role(run.Role), Text: text})
+	f.order = append(f.order, "tell:"+run.Role)
+	hook, err := f.onTell, f.tellErr
 	f.mu.Unlock()
 	if err != nil || hook == nil {
 		return err

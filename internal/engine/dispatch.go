@@ -380,7 +380,7 @@ func (e *Engine) prGate(ctx context.Context, pr store.PR, repo store.Repo, w *co
 	if ts.busyPR[pr.ID] {
 		return otherGate("an agent of the PR is working or blocked")
 	}
-	if pr.HumanActiveAt != nil && now.Before(pr.HumanActiveAt.Add(e.cfg.Daemon.HumanCooldown.Duration)) {
+	if now.Before(e.cfg.Daemon.CooldownUntil(pr.HumanActiveAt)) {
 		return otherGate("human active in the PR's panes")
 	}
 	if w == nil {

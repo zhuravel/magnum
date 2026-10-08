@@ -77,7 +77,7 @@ func (e *Engine) parkable(ctx context.Context, prID int64, sessions []store.Sess
 	default:
 		return pr, time.Time{}, false
 	}
-	if pr.HumanActiveAt != nil && now.Before(pr.HumanActiveAt.Add(e.cfg.Daemon.HumanCooldown.Duration)) {
+	if now.Before(e.cfg.Daemon.CooldownUntil(pr.HumanActiveAt)) {
 		return pr, time.Time{}, false
 	}
 	if sl, has, err := e.slotOf(ctx, prID); err != nil || (has && (sl.Pinned || sl.HoldReason != nil)) {
@@ -242,7 +242,7 @@ func (e *Engine) flagReleasable(ctx context.Context, prID int64, now time.Time) 
 	if err != nil || pr.Pinned {
 		return pr, sl, false, false
 	}
-	if pr.HumanActiveAt != nil && now.Before(pr.HumanActiveAt.Add(e.cfg.Daemon.HumanCooldown.Duration)) {
+	if now.Before(e.cfg.Daemon.CooldownUntil(pr.HumanActiveAt)) {
 		return pr, sl, false, false
 	}
 	sl, has, err = e.slotOf(ctx, prID)

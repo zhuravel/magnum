@@ -106,7 +106,7 @@ func TestAPushInterruptsEveryCutTurnBeforeAnyWait(t *testing.T) {
 	e.codexUntilCut(sw, 1, "")
 	e.ag.background = map[agents.Role]int{agents.RoleClaude: 2} // never stops
 	var stopAt []time.Time
-	e.ag.onTimeUp = func(f *fakeAgents, run store.Run, text string) error {
+	e.ag.onTell = func(f *fakeAgents, run store.Run, text string) error {
 		stopAt = append(stopAt, e.clock.Now())
 		return nil
 	}
@@ -250,7 +250,7 @@ func TestACutShellCommandIsPressedUntilItStops(t *testing.T) {
 			e.codexUntilCut(sw, tc.presses, head2)
 			e.ag.background = map[agents.Role]int{agents.RoleClaude: 1} // never stops
 			var stopAt []time.Time
-			e.ag.onTimeUp = func(f *fakeAgents, run store.Run, text string) error {
+			e.ag.onTell = func(f *fakeAgents, run store.Run, text string) error {
 				stopAt = append(stopAt, e.clock.Now())
 				return nil
 			}

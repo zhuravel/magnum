@@ -22,7 +22,7 @@ const (
 // the background and waits on them; then a restart cuts its run short: esc
 // ends the turn (Claude Code's interrupt line), the pipeline counts the
 // work the agent left running and, with stop, tells the agent within the
-// run to stop it (TimeUp), and the run is abandoned, as the pipeline's cut does, while
+// run to stop it (Tell), and the run is abandoned, as the pipeline's cut does, while
 // herdr still shows the agent working on its subagents (stopping them did
 // not work). It returns the run id.
 func (e *env) interruptedReview(tr *transcript, stop bool) string {
@@ -45,7 +45,7 @@ func (e *env) interruptedReview(tr *transcript, stop bool) string {
 	}
 	if stop {
 		const text = "The PR head moved, so stop here. Stop every background task you started with TaskStop and do nothing else."
-		if err := e.m.TimeUp(e.ctx, e.run1(id), text); err != nil {
+		if err := e.m.Tell(e.ctx, e.run1(id), text); err != nil {
 			e.t.Fatal(err)
 		}
 		at := e.clock.Now()
@@ -241,7 +241,7 @@ func TestAPromptTakenIntoTheTurnCountsByWhenItWasTyped(t *testing.T) {
 		tr.add(toolUse(now.Add(time.Minute), "toolu_specs1", "Bash", map[string]any{"command": "bin/rspec spec/models"}))
 		e.clock.Add(40 * time.Minute)
 		const stop = "Time is up: write the report now."
-		if err := e.m.TimeUp(e.ctx, e.run1(id), stop); err != nil {
+		if err := e.m.Tell(e.ctx, e.run1(id), stop); err != nil {
 			t.Fatal(err)
 		}
 		at := e.clock.Now()

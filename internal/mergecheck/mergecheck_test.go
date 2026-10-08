@@ -17,6 +17,7 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/gitx"
+	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/store/storetest"
 )
@@ -587,6 +588,32 @@ func TestMergeCheckFetchesAMergedCommitByIDWhenTheBaseLacksIt(t *testing.T) {
 	}
 	if w.refs[gitx.MergeCheckRefPrefix+"review2/merged"] != shaMerged {
 		t.Fatalf("refs = %v", w.refs)
+	}
+}
+
+// Every ref a check writes is one any release of its slot deletes
+// (slots.MergeCheckRefs): the daemon's release of a slot kept with --keep
+// and handed back by an unpin, which passes no refs, leaves none.
+func TestMergeCheckWritesOnlyRefsTheSlotsReleaseDeletes(t *testing.T) {
+	w := newWorld(t)
+	w.clashSetup("passed")
+	w.refs = map[string]string{}
+	w.remote[shaMerged] = shaMerged
+	o := w.options()
+	o.Merged = shaMerged
+	if _, err := w.run(w.ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	deleted := slots.MergeCheckRefs(w.slots.slot.Name)
+	var wrote []string
+	for ref := range w.refs {
+		if strings.HasPrefix(ref, gitx.MergeCheckRefPrefix) {
+			wrote = append(wrote, ref)
+		}
+	}
+	slices.Sort(wrote)
+	if !slices.Equal(wrote, deleted) {
+		t.Fatalf("the check wrote %v, a release deletes %v", wrote, deleted)
 	}
 }
 

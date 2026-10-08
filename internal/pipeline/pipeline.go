@@ -147,12 +147,13 @@ type Agents interface {
 	FallbackModel(ctx context.Context, s store.Session, tried []string) (string, bool)
 	SwitchModel(ctx context.Context, s store.Session, model, reason string) error
 	FallbackPrompt(d agents.FallbackData) (string, error)
-	// A reviewer whose time ran out (see round.timeUp): TimeUp types the
-	// last call into its agent within its run, and after an interrupt the
-	// message to stop its background work (round.stopBackground);
-	// BackgroundTasks counts the work a claude agent started in the
-	// background during a run and left running (ok false: unknown).
-	TimeUp(ctx context.Context, run store.Run, text string) error
+	// Tell types text into a reviewer's agent within its run: the last call
+	// to one whose time ran out (round.timeUp), and after an interrupt the
+	// message to stop its background work, at the end of a round or before
+	// a push restarts it (round.stopBackground); BackgroundTasks counts the
+	// work a claude agent started in the background during a run and left
+	// running (ok false: unknown).
+	Tell(ctx context.Context, run store.Run, text string) error
 	BackgroundTasks(ctx context.Context, run store.Run) (int, bool)
 	// TurnError is the error a Codex turn ended with, from its session's
 	// rollout: how a refusal the pane scrolled past is still found

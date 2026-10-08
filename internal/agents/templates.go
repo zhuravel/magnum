@@ -29,54 +29,44 @@ import (
 // trimmed: a prompt or typed command must not end with one (a shell line
 // would submit an extra empty command).
 func RenderPrompt(p config.Prompt, data any) (string, error) {
-	name := p.Name
-	if name == "" {
-		name = "prompt"
+	name := cmp.Or(p.Name, "prompt")
+	ok := true
+	switch d := data.(type) {
+	case *JudgeData:
+		data, ok = pointee(d)
+	case *RoleData:
+		data, ok = pointee(d)
+	case *ShellData:
+		data, ok = pointee(d)
 	}
+	if !ok {
+		return "", fmt.Errorf("agents: render %s: nil data", name)
+	}
+	base := ""
 	switch d := data.(type) {
 	case JudgeData:
-		if err := checkBaseRef(name, d.BaseRef); err != nil {
-			return "", err
-		}
-		data = d.completed()
-	case *JudgeData:
-		if d == nil {
-			return "", fmt.Errorf("agents: render %s: nil data", name)
-		}
-		if err := checkBaseRef(name, d.BaseRef); err != nil {
-			return "", err
-		}
-		data = d.completed()
+		base, data = d.BaseRef, d.completed()
 	case RoleData:
-		if err := checkBaseRef(name, d.BaseRef); err != nil {
-			return "", err
-		}
-		data = d.completed()
-	case *RoleData:
-		if d == nil {
-			return "", fmt.Errorf("agents: render %s: nil data", name)
-		}
-		if err := checkBaseRef(name, d.BaseRef); err != nil {
-			return "", err
-		}
-		data = d.completed()
+		base, data = d.BaseRef, d.completed()
 	case ShellData:
 		q, err := d.shellSafe()
 		if err != nil {
 			return "", fmt.Errorf("agents: render %s: %w", name, err)
 		}
 		data = q
-	case *ShellData:
-		if d == nil {
-			return "", fmt.Errorf("agents: render %s: nil data", name)
-		}
-		q, err := d.shellSafe()
-		if err != nil {
-			return "", fmt.Errorf("agents: render %s: %w", name, err)
-		}
-		data = q
+	}
+	if err := checkBaseRef(name, base); err != nil {
+		return "", err
 	}
 	return render(name, p.Text, data)
+}
+
+// pointee is *p as data for a template, false for a nil p.
+func pointee[T any](p *T) (any, bool) {
+	if p == nil {
+		return nil, false
+	}
+	return *p, true
 }
 
 // ErrUnsafeBaseRef: a judge or reviewer prompt's base ref is not a branch

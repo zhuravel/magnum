@@ -110,7 +110,7 @@ const headMovedStopText = "The PR head moved, so stop here. Stop every backgroun
 
 // timeUp gives a session reviewer whose turn t ran out of time one last
 // call (the live case: a spec run in the background, the report not
-// written): Agents.TimeUp asks its agent, within the same run, to stop its
+// written): Agents.Tell asks its agent, within the same run, to stop its
 // background tasks (TaskStop) and write its report now, and the run is
 // waited for TimeUpGrace more. A turn that then ends is read as any ended
 // turn (its report, else missing); one that does not is the timeout it
@@ -124,7 +124,7 @@ func (rd *round) timeUp(ctx context.Context, role config.Role, t turn, path stri
 	if id := rd.markOf(role); id != "" {
 		mark = fmt.Sprintf(timeUpMark, agents.ReportMarker(id))
 	}
-	if err := rd.r.Agents.TimeUp(ctx, t.run, fmt.Sprintf(timeUpText, budget, path, mark)); err != nil {
+	if err := rd.r.Agents.Tell(ctx, t.run, fmt.Sprintf(timeUpText, budget, path, mark)); err != nil {
 		rd.warn(ctx, "%s ran out of its %s and could not be asked for its report: %v", role.Name, budget, err)
 		return t
 	}
@@ -404,7 +404,7 @@ func (rd *round) stopBackground(ctx context.Context, role config.Role, run store
 	if settle {
 		rd.waitIdle(ctx, role, run)
 	}
-	if err := rd.r.Agents.TimeUp(bg, run, text); err != nil {
+	if err := rd.r.Agents.Tell(bg, run, text); err != nil {
 		return fmt.Sprintf("%s it started still %s (could not ask it to stop: %v)", backgroundTasks(n), runVerb(n), err)
 	}
 	note := fmt.Sprintf("asked it to stop the %s it started", backgroundTasks(n))

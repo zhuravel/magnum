@@ -505,25 +505,25 @@ func mustJSON(t *testing.T, v any) []byte {
 	return b
 }
 
-// TimeUp is the pipeline's last call to a reviewer whose time ran out: the
-// text reaches the agent within its run, and from then on the agent's
+// Tell carries the pipeline's last call to a reviewer whose time ran out:
+// the text reaches the agent within its run, and from then on the agent's
 // background work no longer holds the run open (it was told to stop waiting
 // for it), so its run ends once it is idle again.
-func TestTimeUpStopsHoldingTheRunForBackgroundWork(t *testing.T) {
+func TestTellStopsHoldingTheRunForBackgroundWork(t *testing.T) {
 	e := newEnv(t)
 	tr := e.claudeTranscript()
 	id := e.promptClaude()
 	tr.addAll(bashInBackground(e.clock.Now(), "toolu_bash1", "bg1"))
 	if o := e.idleTicks(3); o.Kind != "" || o.Background != 1 {
-		t.Fatalf("before TimeUp = kind %q background %d, want held", o.Kind, o.Background)
+		t.Fatalf("before Tell = kind %q background %d, want held", o.Kind, o.Background)
 	}
 	if n, ok := e.m.BackgroundTasks(e.ctx, e.run1(id)); !ok || n != 1 {
 		t.Fatalf("BackgroundTasks = %d, %v; want 1", n, ok)
 	}
 
 	const text = "Time is up: write the report now."
-	if err := e.m.TimeUp(e.ctx, e.run1(id), text); err != nil {
-		t.Fatalf("TimeUp: %v", err)
+	if err := e.m.Tell(e.ctx, e.run1(id), text); err != nil {
+		t.Fatalf("Tell: %v", err)
 	}
 	e.h.mu.Lock()
 	last := e.h.prompts[len(e.h.prompts)-1]
@@ -532,30 +532,30 @@ func TestTimeUpStopsHoldingTheRunForBackgroundWork(t *testing.T) {
 		t.Fatalf("prompt = %+v, want the text to the claude agent", last)
 	}
 	if s := e.session(RoleClaude); s.IdleTicks != 0 || s.LastPromptAt == nil || !s.LastPromptAt.Equal(e.clock.Now()) {
-		t.Fatalf("session after TimeUp: idle_ticks %d last_prompt_at %v", s.IdleTicks, s.LastPromptAt)
+		t.Fatalf("session after Tell: idle_ticks %d last_prompt_at %v", s.IdleTicks, s.LastPromptAt)
 	}
 	if r := e.run1(id); r.State != store.RunWorking {
 		t.Fatalf("run = %s, want the same run still in flight", r.State)
 	}
 	tr.add(assistantSays(e.clock.Now(), "Report written; specs still running are listed as pending."), turnEnded(e.clock.Now()))
 	if o := e.idleTicks(2); o.Kind != ObsCompleted || o.Run.ID != id || o.Background != 1 {
-		t.Fatalf("after TimeUp = %+v, want completed with the task still listed", o)
+		t.Fatalf("after Tell = %+v, want completed with the task still listed", o)
 	}
 	if n, ok := e.m.BackgroundTasks(e.ctx, e.run1(id)); !ok || n != 1 {
 		t.Fatalf("BackgroundTasks after the run = %d, %v; want the task it left running", n, ok)
 	}
 }
 
-// TimeUp refuses a run whose session is gone.
-func TestTimeUpNeedsALiveAgent(t *testing.T) {
+// Tell refuses a run whose session is gone.
+func TestTellNeedsALiveAgent(t *testing.T) {
 	e := newEnv(t)
 	id := e.promptClaude()
 	run := e.run1(id)
 	if err := e.st.TransitionSession(e.ctx, *run.SessionID, []string{store.SessionLive}, store.SessionLost, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.m.TimeUp(e.ctx, run, "x"); err == nil || !strings.Contains(err.Error(), ErrNoSession.Error()) {
-		t.Fatalf("TimeUp on a lost session = %v, want %v", err, ErrNoSession)
+	if err := e.m.Tell(e.ctx, run, "x"); err == nil || !strings.Contains(err.Error(), ErrNoSession.Error()) {
+		t.Fatalf("Tell on a lost session = %v, want %v", err, ErrNoSession)
 	}
 	if n, ok := e.m.BackgroundTasks(e.ctx, store.Run{ID: "r-none"}); ok || n != 0 {
 		t.Fatalf("BackgroundTasks without a session = %d, %v", n, ok)
@@ -565,7 +565,7 @@ func TestTimeUpNeedsALiveAgent(t *testing.T) {
 // The time-up text ends with Enter, so it is never typed into a dialog: a
 // permission prompt on screen refuses it, and the agent's background work
 // keeps holding the run.
-func TestTimeUpIsNeverTypedIntoADialog(t *testing.T) {
+func TestTellIsNeverTypedIntoADialog(t *testing.T) {
 	e := newEnv(t)
 	tr := e.claudeTranscript()
 	id := e.promptClaude()
@@ -574,8 +574,8 @@ func TestTimeUpIsNeverTypedIntoADialog(t *testing.T) {
 	e.h.reads[claudeAgent] = claudeRmPrompt
 	sent := len(e.h.prompts)
 	e.h.mu.Unlock()
-	if err := e.m.TimeUp(e.ctx, e.run1(id), "Time is up."); !errors.Is(err, ErrBlocked) {
-		t.Fatalf("TimeUp over a permission prompt = %v, want %v", err, ErrBlocked)
+	if err := e.m.Tell(e.ctx, e.run1(id), "Time is up."); !errors.Is(err, ErrBlocked) {
+		t.Fatalf("Tell over a permission prompt = %v, want %v", err, ErrBlocked)
 	}
 	e.h.mu.Lock()
 	n := len(e.h.prompts)
@@ -584,7 +584,7 @@ func TestTimeUpIsNeverTypedIntoADialog(t *testing.T) {
 		t.Fatalf("prompts sent: %d, want none", n-sent)
 	}
 	if o := e.idleTicks(3); o.Kind != "" || o.Background != 1 {
-		t.Fatalf("after a refused TimeUp = kind %q background %d, want still held", o.Kind, o.Background)
+		t.Fatalf("after a refused Tell = kind %q background %d, want still held", o.Kind, o.Background)
 	}
 }
 
@@ -629,7 +629,7 @@ func TestObserveTakesATurnATaskNotificationStartedForNoHuman(t *testing.T) {
 			tr.add(assistantSays(now.Add(2*time.Second), "Waiting for the spec run."), turnEnded(now.Add(2*time.Second)))
 			// The run ends with the spec run still going: time is up, the
 			// agent answers and goes idle.
-			if err := e.m.TimeUp(e.ctx, e.run1(id), "Time is up."); err != nil {
+			if err := e.m.Tell(e.ctx, e.run1(id), "Time is up."); err != nil {
 				t.Fatal(err)
 			}
 			tr.add(assistantSays(e.clock.Now(), "Report written."), turnEnded(e.clock.Now()))

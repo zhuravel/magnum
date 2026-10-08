@@ -187,8 +187,8 @@ func (m *Manager) Submit(ctx context.Context, run store.Run, text string) error 
 		return fmt.Errorf("agents: submit %s: %w", run.ID, err)
 	}
 	now := m.now()
-	if cd := m.d.Config.Daemon.HumanCooldown.Duration; pr.HumanActiveAt != nil && cd > 0 && now.Before(pr.HumanActiveAt.Add(cd)) {
-		return fmt.Errorf("agents: submit %s: until %s: %w", run.ID, pr.HumanActiveAt.Add(cd).Format(time.RFC3339), ErrHumanActive)
+	if until := m.d.Config.Daemon.CooldownUntil(pr.HumanActiveAt); now.Before(until) {
+		return fmt.Errorf("agents: submit %s: until %s: %w", run.ID, until.Format(time.RFC3339), ErrHumanActive)
 	}
 	if err := m.awaitTail(ctx, sess); err != nil {
 		return fmt.Errorf("agents: submit %s: %w", run.ID, err) // nothing sent: the run stays pending
@@ -350,8 +350,8 @@ func (m *Manager) RunShell(ctx context.Context, pr store.PR, role config.Role, p
 		return fail(errors.New("empty marker"))
 	}
 	if cur, err := m.d.Store.PRByID(ctx, pr.ID); err == nil {
-		if cd := m.d.Config.Daemon.HumanCooldown.Duration; cur.HumanActiveAt != nil && cd > 0 && m.now().Before(cur.HumanActiveAt.Add(cd)) {
-			return fail(fmt.Errorf("until %s: %w", cur.HumanActiveAt.Add(cd).Format(time.RFC3339), ErrHumanActive))
+		if until := m.d.Config.Daemon.CooldownUntil(cur.HumanActiveAt); m.now().Before(until) {
+			return fail(fmt.Errorf("until %s: %w", until.Format(time.RFC3339), ErrHumanActive))
 		}
 	}
 	if _, err := m.d.Herdr.WaitIdleShell(ctx, paneID, IdleShellTimeout); err != nil {

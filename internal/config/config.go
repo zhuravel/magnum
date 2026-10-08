@@ -193,6 +193,17 @@ type Daemon struct {
 	RestartOnNewBuild bool `toml:"restart_on_new_build"`
 }
 
+// CooldownUntil is at + human_cooldown, the end of the human cooldown a
+// PR's human_active_at (at: someone typed into its panes) began: the PR's
+// prompts, rounds, parking and slot release wait while now is before it.
+// Zero, which holds nothing, when at is nil or human_cooldown is 0.
+func (d Daemon) CooldownUntil(at *time.Time) time.Time {
+	if at == nil || d.HumanCooldown.Duration <= 0 {
+		return time.Time{}
+	}
+	return at.Add(d.HumanCooldown.Duration)
+}
+
 // TrivialDeltaClasses are the values of skip_trivial_deltas: a push that
 // only changes comment lines, only whitespace (blank lines, re-indented
 // code where indentation carries no meaning), only documentation files, or
