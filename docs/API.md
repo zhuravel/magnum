@@ -10143,8 +10143,10 @@ func JudgeEvents(cfg *config.Config, fullName string, id *config.Identity, comme
     hear every reviewer approves nothing).
 
 func KVMissingReports(prID int64) string
-    KVMissingReports is the kv key of the PR's MissingReports, which each judge
-    prompt of its rounds rewrites.
+    KVMissingReports is the kv key of the PR's record of missing reports:
+    a MissingReports for each of its latest judged rounds (missingRecords),
+    as a JSON list by round; one written before the record kept every round is a
+    lone object.
 
 func RolesToRun(ctx context.Context, st *store.Store, cfg *config.Config, pr store.PR, roles []config.Role, requested []string, kind string) ([]config.Role, error)
     RolesToRun returns the roles a round of kind runs for pr, in the order
@@ -10281,28 +10283,53 @@ type Keys interface {
 type MissingReport struct {
 	Role   string `json:"role"`
 	Status string `json:"status"`
+	Round  int    `json:"round,omitempty"`
 }
     MissingReport is one role's report the judge went without and why:
-    its report status ("missing", "timeout", "login_required", ...).
+    its report status ("missing", "timeout", "login_required", ...); Round,
+    in MissingReports.Carried, is the round whose judge went without it.
 
 type MissingReports struct {
 	Round   int             `json:"round"`
 	Head    string          `json:"head"` // the commit the round reviewed
 	Missing []MissingReport `json:"missing"`
+	Carried []MissingReport `json:"carried,omitempty"`
 }
-    MissingReports is what the judge of a PR's round went without: the roles of
-    the round that left no usable report (one that ran and wrote none, timed out
-    or failed, one skipped as logged out), with why; empty when it heard every
-    one. A role the round did not run (not configured to, or one a continue's
-    paused round never ran) is none of them.
+    MissingReports is what the judge of a PR's round went without: the roles
+    of the round that left no usable report (one that ran and wrote none,
+    timed out or failed, one skipped as logged out), with why; empty when
+    it heard every one. A role the round did not run (not configured to,
+    or one a continue's paused round never ran) is none of them. A round that
+    ran no reviewer (the judge alone: a delta check, a same-head re-review,
+    a reply round) carries what the round before it went without (Carried, each
+    with the round that went without it): its review builds on that round's,
+    whose reviewers it did not hear again.
 
 func ReadMissingReports(ctx context.Context, st *store.Store, prID int64) (MissingReports, bool)
     ReadMissingReports reads the PR's record of its latest judged round;
     false when there is none or it cannot be read.
 
+func ReadRoundMissingReports(ctx context.Context, st *store.Store, prID int64, round int) (MissingReports, bool)
+    ReadRoundMissingReports reads the PR's record of round; false when
+    there is none (a round judged before the records, or before the latest
+    missingRecords) or it cannot be read.
+
+func RecordMissingReports(ctx context.Context, st *store.Store, prID int64, round int, head string,
+	reports []agents.Report) (MissingReports, error)
+    RecordMissingReports keeps, as the PR's record of round (which reviewed
+    head), the reports its judge's prompt names as missing (reports,
+    judgeReports'): a round already recorded (a continue's judge) is replaced,
+    and a round that ran no reviewer (no reports) carries what the latest round
+    before it went without. It returns the round's record.
+
 func (m MissingReports) String() string
-    String names the missing reports: "codex-review (login_required),
-    claude-review (timeout)"; "" when none.
+    String names the reports the round's review went without: "codex-review
+    (login_required), claude-review (timeout)", a carried one with its round
+    ("codex-review (login_required in round 5)"); "" when none.
+
+func (m MissingReports) Unheard() []MissingReport
+    Unheard is every report the round's review went without: its judge's own
+    (Missing) and those it carried.
 
 type Pause struct {
 	Kind   string    // usage_limit | login_required | overloaded

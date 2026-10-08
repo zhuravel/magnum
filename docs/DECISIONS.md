@@ -4106,3 +4106,31 @@ editing history. Code, config comments and prompts reference these by their head
   refused, whatever cancelled the stage first, and nothing is prompted again. Not covered: a Codex turn whose
   refusal is still only on its screen when a push cuts it (the observer has not seen its run end) is cut and
   restarted as before.
+- **The "heard every reviewer" gate reads the record of the review's own round** (2026-10-08, amends "Auto-approval
+  hears every reviewer" and "A withdrawal of an automatic approval cannot loop"). The PR's one record of missing
+  reports was rewritten by every judge prompt, and auto-approval let a review through when the record was another
+  round's: a probe had a clean round 5 refused for going without codex-review, then an author's reply started a
+  reply round 6 whose judge ran alone and wrote `{round 6, missing []}`; the PR's latest review was still round
+  5's, and the next tick approved it as the operator (`APPROVE@b1`). A same-head re-review or a delta check did
+  the same with the review it posted. Now kv `pr.<id>.missing_reports` keeps one record per judged round (a JSON
+  list of the latest 20; a lone object written before is read as its round's), a judge prompt replaces only its
+  own round's (a continue's), and a round that runs no reviewer (the judge alone: a delta check, a same-head
+  re-review, a reply round) carries what the latest round before it went without, with that round
+  (`MissingReports.Carried`, "codex-review (login_required in round 5)"): its review builds on that round's.
+  Auto-approval reads the record of the round of the run whose review it approves
+  (`pipeline.ReadRoundMissingReports`), and refuses a round it has no record of ("magnum cannot tell whether its
+  review heard every reviewer: it has no record of round 3's reports"), as it does one whose run it cannot read. A
+  continue still reads only what its paused round's judge went without (`Missing`). Four smaller gaps close with
+  it. `magnum request-changes` holds auto-approval's lock from the withdrawal of the operator's approval until the
+  changes request is recorded as the PR's latest review: a round's end in between could approve the PR as the
+  operator next to the changes request, and later rounds of the same review kept it. A manual verdict GitHub took
+  that the registry could not record writes `review.manual_verdict_failed` ("posted … but could not record it")
+  after its begin event; it wrote none. The card's refusal reason goes when a later round of the PR refuses for its
+  own reason (it found something to fix): the reason named the round before. A withdrawal GitHub refuses (422)
+  because the approval was dismissed meanwhile ends the row by whom the PR's timeline names and stops
+  auto-approval of the PR as any dismissal by the operator or someone else does (GitHub's on a push does not), with
+  no "withdrew your approval" toast; it was credited to magnum, with no stop. A dismissal that was magnum's own,
+  whose answer was lost, reads as the operator's (magnum dismisses as them): that stop is the safe way, and
+  `magnum unapprove --resume` lifts it. No migration. Rejected: carrying `Missing` forward in the single record
+  (a reply round after a clean round would leave the review it follows without a record, and refuse a PR the gates
+  allow once its checks pass); a column on the judge's run (a migration, and a logged-out role has no run).

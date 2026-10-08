@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
@@ -20,14 +21,17 @@ import (
 // autoRound is what a scripted round posts: its findings by priority, the
 // earlier ones still open (openBy: by priority, as the skill writes them
 // now), its verdict and the verdict line of its review; missing are the
-// reports its judge went without (the pipeline's record of the round).
+// reports its judge went without (the pipeline's record of the round), and
+// judgeAlone says the round ran no reviewer (a delta check's, a same-head
+// re-review's).
 type autoRound struct {
-	findings map[string]int
-	open     int
-	openBy   map[string]int
-	verdict  string
-	line     string
-	missing  []pipeline.MissingReport
+	findings   map[string]int
+	open       int
+	openBy     map[string]int
+	verdict    string
+	line       string
+	missing    []pipeline.MissingReport
+	judgeAlone bool
 }
 
 var (
@@ -66,8 +70,9 @@ func (p *autoPlan) next(n int) autoRound {
 // posted as zhuravel, and whose rounds post what plan says for their PR
 // (clean by default): each records its judge run with its result, as the
 // pipeline does, and its record of the reports its judge went without, and
-// lists its review, with its verdict line, as magnum's App. Every PR
-// changes one application file (the Details' file list). No toast for
+// lists its review, with its verdict line, as magnum's App. A reply round
+// records its judge's, which runs alone, and ends replied: no review. Every
+// PR changes one application file (the Details' file list). No toast for
 // every review.
 func newAutoHarness(t *testing.T, mods ...func(*harness)) (*harness, *autoPlan) {
 	t.Helper()
@@ -81,6 +86,13 @@ func newAutoHarness(t *testing.T, mods ...func(*harness)) (*harness, *autoPlan) 
 		h.gh.defaultFiles = []string{"app/models/order.rb"}
 		h.rd.script = func(in pipeline.RoundInput) (pipeline.RoundResult, error) {
 			n := len(h.rd.all())
+			if in.Replies > 0 {
+				if err := recordAutoRound(h, in, n, autoRound{judgeAlone: true}); err != nil {
+					return pipeline.RoundResult{Outcome: pipeline.OutcomeError, Error: err.Error()}, err
+				}
+				return pipeline.RoundResult{Outcome: pipeline.OutcomeReplied, Round: n, TargetSHA: in.TargetSHA, JudgePromptedAt: h.clock.Now(),
+					Replies: []pipeline.PostedReply{{CommentID: 101, ID: 800, Kind: "rebuttal"}}, ThreadsRead: true}, nil
+			}
 			r := plan.next(in.PR.Number)
 			id := int64(500 + n)
 			url := fmt.Sprintf("https://github.com/talkable/talkable/pull/%d#pullrequestreview-%d", in.PR.Number, id)
@@ -94,8 +106,7 @@ func newAutoHarness(t *testing.T, mods ...func(*harness)) (*harness, *autoPlan) 
 			}
 			result, _ := json.Marshal(map[string]any{"event": event, "verdict": r.verdict, "findings": r.findings,
 				"previous_findings": map[string]any{"open": open}})
-			rec, _ := json.Marshal(pipeline.MissingReports{Round: n, Head: in.TargetSHA, Missing: append([]pipeline.MissingReport{}, r.missing...)})
-			if err := h.st.SetKV(h.ctx, pipeline.KVMissingReports(in.PR.ID), string(rec)); err != nil {
+			if err := recordAutoRound(h, in, n, r); err != nil {
 				return pipeline.RoundResult{Outcome: pipeline.OutcomeError, Error: err.Error()}, err
 			}
 			if _, err := h.st.DB().ExecContext(h.ctx, `INSERT INTO runs (id, pr_id, round, role, kind, target_sha, identity, reviewer_login,
@@ -112,6 +123,21 @@ func newAutoHarness(t *testing.T, mods ...func(*harness)) (*harness, *autoPlan) 
 		}
 	}
 	return newHarness(t, append([]func(*harness){setup}, mods...)...), plan
+}
+
+// recordAutoRound keeps the PR's record of round n's missing reports, as
+// its judge's prompt does: claude-review's report and r.missing, none in a
+// round of the judge alone.
+func recordAutoRound(h *harness, in pipeline.RoundInput, n int, r autoRound) error {
+	var reports []agents.Report
+	if !r.judgeAlone {
+		reports = append(reports, agents.Report{Role: string(agents.RoleClaude), Path: "claude-review.md", Status: pipeline.ReportOK})
+		for _, m := range r.missing {
+			reports = append(reports, agents.Report{Role: m.Role, Status: m.Status, Missing: true})
+		}
+	}
+	_, err := pipeline.RecordMissingReports(h.ctx, h.st, in.PR.ID, n, in.TargetSHA, reports)
+	return err
 }
 
 // created lists the reviews posted through the fake GitHub:

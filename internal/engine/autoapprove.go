@@ -423,6 +423,9 @@ func (e *Engine) considerAutoApproval(ctx context.Context, c store.RepoPR, sum *
 	id := e.cfg.AutoApproveFor(c.Repo)
 	pr := c.PR
 	if id == nil || autoApproveRefusal(autoFacts{PR: pr, Sum: sum, Login: id.Login, Hold: hold}) != "" {
+		if sum != nil {
+			e.forgetAutoRefused(ctx, c, *sum) // a later round's own refusal: the card's reason was the round before's
+		}
 		return
 	}
 	prior, hasPrior, err := e.st.AutoApprovalOfRun(ctx, pr.ID, sum.RunID)
@@ -753,12 +756,27 @@ func (e *Engine) followStanding(ctx context.Context, repo store.Repo, a store.Au
 // and a stop of auto-approval of the PR unless GitHub dismissed it as stale
 // on a push. It reports whether it was recorded.
 func (e *Engine) dismissedOnGitHub(ctx context.Context, repo store.Repo, a store.AutoApprovalPR, ag autoApproveGitHub) bool {
-	ds, err := ag.ReviewDismissals(ctx, repo.Owner, repo.Name, a.PR.Number)
+	by, why, err := dismissalBy(ctx, ag, repo, a.PR.Number, a.AutoApproval)
 	if err != nil {
 		if ctx.Err() == nil {
 			e.log.Info("auto approval: read the dismissals", "pr", a.PRID, "err", err)
 		}
 		return false
+	}
+	if !e.endAutoApproval(ctx, repo, a.PR, a.AutoApproval, []string{store.AutoStanding}, by, why) {
+		return false
+	}
+	e.stopForDismissal(ctx, repo, a.PR, a.AutoApproval, by, why)
+	return true
+}
+
+// dismissalBy says who dismissed approval a of PR number, by its timeline
+// (AutoEndedOperator, AutoEndedSomeone, AutoEndedPush: GitHub as stale on
+// a push), and how the stop says it ("you dismissed it").
+func dismissalBy(ctx context.Context, ag autoApproveGitHub, repo store.Repo, number int, a store.AutoApproval) (by, why string, err error) {
+	ds, err := ag.ReviewDismissals(ctx, repo.Owner, repo.Name, number)
+	if err != nil {
+		return "", "", err
 	}
 	var d *github.ReviewDismissal
 	for i := range ds {
@@ -766,7 +784,7 @@ func (e *Engine) dismissedOnGitHub(ctx context.Context, repo store.Repo, a store
 			d = &ds[i]
 		}
 	}
-	by, why := store.AutoEndedSomeone, "dismissed on GitHub (by whom, its timeline does not say)"
+	by, why = store.AutoEndedSomeone, "dismissed on GitHub (by whom, its timeline does not say)"
 	switch {
 	case d == nil:
 	case d.ByPush:
@@ -776,13 +794,15 @@ func (e *Engine) dismissedOnGitHub(ctx context.Context, repo store.Repo, a store
 	case d.Actor != "":
 		why = d.Actor + " dismissed it"
 	}
-	if !e.endAutoApproval(ctx, repo, a.PR, a.AutoApproval, []string{store.AutoStanding}, by, why) {
-		return false
-	}
+	return by, why, nil
+}
+
+// stopForDismissal stops auto-approval of pr for a dismissal of approval a
+// on GitHub (by, why: dismissalBy), unless GitHub dismissed it on a push.
+func (e *Engine) stopForDismissal(ctx context.Context, repo store.Repo, pr store.PR, a store.AutoApproval, by, why string) {
 	if by != store.AutoEndedPush {
-		e.stopAutoApproval(ctx, repo, a.PR, why+" (review "+fmt.Sprint(a.ReviewID)+")")
+		e.stopAutoApproval(ctx, repo, pr, why+" (review "+fmt.Sprint(a.ReviewID)+")")
 	}
-	return true
 }
 
 // endAutoApproval records approval a, in one of the states from, as ended
@@ -808,7 +828,10 @@ func (e *Engine) endAutoApproval(ctx context.Context, repo store.Repo, pr store.
 // dismissing keeps its own), then dismissed once GitHub answers, no longer
 // has the review, or refuses (422) a review it lists as dismissed already
 // (withdrawnOnGitHub), with review.auto_approval_withdraw_begin,
-// review.auto_approval_withdrawn or review.auto_approval_withdraw_failed. A
+// review.auto_approval_withdrawn or review.auto_approval_withdraw_failed.
+// A review dismissed already was dismissed by someone else meanwhile: the
+// row ends by whom its timeline says, and that stops auto-approval of the
+// PR as any such dismissal does (dismissalBy, stopForDismissal). A
 // withdrawal of magnum's own is toasted; one GitHub did not take stays
 // dismissing, tried again after autoApproveRetry, and after
 // autoApproveAttempts it ends failed with one urgent toast.
@@ -829,7 +852,7 @@ func (e *Engine) withdrawAutoApproval(ctx context.Context, repo store.Repo, pr s
 	e.event(ctx, "info", subject, "review.auto_approval_withdraw_begin",
 		fmt.Sprintf("withdrawing approval %d of %s by %s (attempt %d): %s", a.ReviewID, textx.ShortSHA(a.HeadSHA), a.Login, attempt, message), data)
 	err := gh.DismissReview(ctx, repo.Owner, repo.Name, pr.Number, a.ReviewID, message)
-	ended, how := by, ""
+	ended, how, theirs := by, "", ""
 	var apiErr *github.APIError
 	switch {
 	case err == nil:
@@ -840,7 +863,13 @@ func (e *Engine) withdrawAutoApproval(ctx context.Context, repo store.Repo, pr s
 		case store.AutoEndedGone:
 			ended, how, err = store.AutoEndedGone, " (GitHub no longer has it)", nil
 		case store.AutoDismissed:
-			how, err = " (GitHub lists it as dismissed already)", nil
+			ended, theirs = store.AutoEndedSomeone, "dismissed on GitHub (by whom, magnum cannot read its timeline)"
+			if ag, ok := gh.(autoApproveGitHub); ok {
+				if b, w, derr := dismissalBy(ctx, ag, repo, pr.Number, a); derr == nil {
+					ended, theirs = b, w
+				}
+			}
+			how, err = " (GitHub lists it as dismissed already: "+theirs+")", nil
 		}
 	}
 	if err != nil {
@@ -855,6 +884,10 @@ func (e *Engine) withdrawAutoApproval(ctx context.Context, repo store.Repo, pr s
 	}
 	e.event(ctx, "info", subject, "review.auto_approval_withdrawn",
 		fmt.Sprintf("withdrew approval %d of %s by %s%s: %s", a.ReviewID, textx.ShortSHA(a.HeadSHA), a.Login, how, message), data)
+	if theirs != "" {
+		e.stopForDismissal(ctx, repo, pr, a, ended, theirs)
+		return nil // not magnum's withdrawal: no toast says it was
+	}
 	if by == store.AutoEndedMagnum {
 		label := fmt.Sprintf("%s#%d", repo.Name, pr.Number)
 		e.info(notify.Item{Key: fmt.Sprintf("auto-withdrawn:%d", a.ID), Title: "magnum: withdrew your approval: " + label,

@@ -1,10 +1,13 @@
 package engine
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -75,6 +78,120 @@ func TestAReviewThatDidNotHearEveryReviewerIsNotAutoApproved(t *testing.T) {
 	}
 	if got := h.autoRefused(2); got != "" {
 		t.Fatalf("still held back: %q", got)
+	}
+}
+
+// withoutCodexReview is a clean round whose judge went without
+// codex-review's report, and heardNothingReason why auto-approval refuses
+// its review.
+var (
+	withoutCodexReview = autoRound{findings: map[string]int{}, verdict: store.VerdictClean, line: "No problems found. LGTM :shipit:",
+		missing: []pipeline.MissingReport{{Role: "codex-review", Status: "login_required"}}}
+	heardNothingReason = "magnum's review did not hear every reviewer: codex-review (login_required)"
+)
+
+// The live case (the 2026-10-08 probe approved b1): a clean round that did
+// not hear codex-review is refused, then an author's reply starts a reply
+// round, whose judge runs alone, records its own round and posts no
+// review. The review auto-approval decides on is still the first round's,
+// and so is the record it reads: the next ticks still refuse, with the same
+// reason.
+func TestAReplyRoundKeepsTheRefusalOfAReviewThatDidNotHearEveryReviewer(t *testing.T) {
+	h, plan := newAutoHarness(t)
+	plan.set(2, withoutCodexReview)
+	h.reviewedPR(2, "b1")
+	h.flush()
+	h.wantRefused(2, heardNothingReason)
+
+	h.advance(10 * time.Minute)
+	reqPoll(h, prSpec{n: 2, head: "b1", remarks: []github.Remark{threadReply(h, "alice")}})
+	h.advance(3 * time.Minute)
+	h.tick()
+	if ins := h.rd.all(); len(ins) != 2 || ins[1].Replies == 0 {
+		t.Fatalf("rounds = %d, want the reply round", len(ins))
+	}
+	h.wantState(2, store.PRReviewed)
+	h.flush()
+	h.flush()
+	h.wantRefused(2, heardNothingReason)
+}
+
+// A round of the judge alone that posts a review (a same-head re-review, a
+// delta check of a new head) builds on the round before it, whose judge did
+// not hear codex-review: its review is refused too.
+func TestAJudgeAloneRoundAfterOneThatDidNotHearEveryReviewerIsRefused(t *testing.T) {
+	for _, tc := range []struct{ name, head string }{{"a same-head re-review", "b1"}, {"a delta check", "b2"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, plan := newAutoHarness(t)
+			judgeAlone := cleanRound
+			judgeAlone.judgeAlone = true
+			plan.set(2, withoutCodexReview, judgeAlone)
+			h.reviewedPR(2, "b1")
+			h.flush()
+			h.wantRefused(2, heardNothingReason)
+
+			if tc.head == "b1" {
+				h.reviewAgain(2)
+			} else {
+				h.push(2, tc.head)
+				h.reviewTo(2, tc.head)
+			}
+			h.flush()
+			h.flush()
+			if n := len(h.rd.all()); n != 2 {
+				t.Fatalf("rounds = %d, want 2", n)
+			}
+			if got := h.created(); len(got) != 0 {
+				t.Fatalf("posted = %q", got)
+			}
+			if got := h.autoRefused(2); !strings.Contains(got, "magnum's review did not hear every reviewer: codex-review (login_required") {
+				t.Fatalf("held back for %q", got)
+			}
+			if r, _ := ParseAutoApproveRefused(mustKV(t, h, KVPRAutoApproveRefused(h.pr(2).ID))); r.RunID != "run-2" {
+				t.Fatalf("the reason names %s, want the judge-alone round's review (run-2)", r.RunID)
+			}
+		})
+	}
+}
+
+// reviewAgain asks for a review of PR #n's head (magnum review), and ticks
+// until its round ran.
+func (h *harness) reviewAgain(n int) {
+	h.t.Helper()
+	before := len(h.rd.all())
+	id := h.enqueue(ReqReview, ReviewPayload{PRTarget: PRTarget{Ref: strconv.Itoa(n)}})
+	for i := 0; i < 20 && (len(h.rd.all()) == before || h.pr(n).State != store.PRReviewed); i++ {
+		h.advance(time.Minute)
+		h.tick()
+	}
+	if r := h.request(id); r.State != store.RequestDone || len(h.rd.all()) == before {
+		h.t.Fatalf("review request: %s %q, rounds %d", r.State, deref(r.Result), len(h.rd.all()))
+	}
+	h.wantState(n, store.PRReviewed)
+}
+
+// The card's reason names the review it was decided on: a later round
+// that leaves something to fix (here on the same head) clears what held
+// the review before it back.
+func TestTheCardsRefusalGoesWithALaterBlockingRound(t *testing.T) {
+	h, plan := newAutoHarness(t)
+	plan.set(2, cleanRound, blockingRound)
+	h.open(prSpec{n: 1, head: "base1"})
+	h.startup()
+	h.tick()
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b1", ci: "FAILURE"})
+	h.tick()
+	h.reviewTo(2, "b1")
+	h.flush()
+	h.wantRefused(2, "its head's checks fail")
+
+	h.reviewAgain(2)
+	h.flush()
+	if got := h.autoRefused(2); got != "" {
+		t.Fatalf("the card still says %q after a review that found something to fix", got)
+	}
+	if got := h.created(); len(got) != 0 {
+		t.Fatalf("posted = %q", got)
 	}
 }
 
@@ -280,8 +397,9 @@ func TestAnIncompleteReviewListApprovesNothing(t *testing.T) {
 }
 
 // approvedThenBlocked approves PR #2 at b1, then reviews b2 with a
-// blocking round, whose withdrawal GitHub answers with err.
-func approvedThenBlocked(t *testing.T, err error, takes bool) *harness {
+// blocking round, whose withdrawal GitHub answers with err; the PR's
+// timeline lists dismissals.
+func approvedThenBlocked(t *testing.T, err error, takes bool, dismissals ...github.ReviewDismissal) *harness {
 	t.Helper()
 	h, plan := newAutoHarness(t)
 	plan.set(2, cleanRound, blockingRound)
@@ -290,6 +408,9 @@ func approvedThenBlocked(t *testing.T, err error, takes bool) *harness {
 	if a := h.autoApproval(2); a.State != store.AutoStanding {
 		t.Fatalf("approval = %+v", a)
 	}
+	h.gh.mu.Lock()
+	h.gh.dismissals = map[int][]github.ReviewDismissal{2: dismissals}
+	h.gh.mu.Unlock()
 	h.gh.dismissErr, h.gh.dismissTakes = err, takes
 	h.push(2, "b2")
 	h.reviewTo(2, "b2")
@@ -301,13 +422,14 @@ var errUnprocessable = &github.APIError{Op: "dismiss review", Status: 422, Messa
 
 // A withdrawal GitHub refuses with a 422 reads the review again: one
 // dismissed meanwhile (or gone) ends the row instead of a retry every 5
-// minutes for good.
+// minutes for good, as a dismissal by someone (its timeline does not say
+// by whom).
 func TestARefusedWithdrawalOfADismissedReviewEndsTheRow(t *testing.T) {
 	h := approvedThenBlocked(t, errUnprocessable, true)
 	if d := h.ghCalls("dismiss:"); len(d) != 1 {
 		t.Fatalf("dismissals = %q", d)
 	}
-	if a := h.autoApproval(2); a.State != store.AutoDismissed || a.EndedBy != store.AutoEndedMagnum || a.EndedAt == nil {
+	if a := h.autoApproval(2); a.State != store.AutoDismissed || a.EndedBy != store.AutoEndedSomeone || a.EndedAt == nil {
 		t.Fatalf("approval = %+v", a)
 	}
 	h.advance(time.Hour)
@@ -317,6 +439,134 @@ func TestARefusedWithdrawalOfADismissedReviewEndsTheRow(t *testing.T) {
 	}
 	if toasts := toastsWith(h, "could not withdraw"); len(toasts) != 0 {
 		t.Fatalf("toasts = %q", toasts)
+	}
+}
+
+// A withdrawal GitHub refuses (422) because the approval was dismissed
+// meanwhile counts as that dismissal, as one magnum finds before it
+// withdraws does: the operator's, or anyone else's, stops auto-approval of
+// the PR; GitHub's on a push does not. magnum withdrew nothing: no toast
+// says it did.
+func TestARefusedWithdrawalOfAnApprovalDismissedByHandStopsAutoApproval(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		dismissal github.ReviewDismissal
+		by        string
+		stop      string // the hold's reason ("" = none)
+	}{
+		{"by the operator", github.ReviewDismissal{ReviewID: 9001, Actor: "zhuravel"}, store.AutoEndedOperator, "you dismissed it (review 9001)"},
+		{"by someone else", github.ReviewDismissal{ReviewID: 9001, Actor: "alice"}, store.AutoEndedSomeone, "alice dismissed it (review 9001)"},
+		{"by a push", github.ReviewDismissal{ReviewID: 9001, ByPush: true, Commit: "b2"}, store.AutoEndedPush, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := approvedThenBlocked(t, errUnprocessable, true, tc.dismissal)
+			if a := h.autoApproval(2); a.State != store.AutoDismissed || a.EndedBy != tc.by || a.EndedAt == nil {
+				t.Fatalf("approval = %+v, want ended by %s", a, tc.by)
+			}
+			if hd := h.hold(2); hd.Held != (tc.stop != "") || hd.Reason != tc.stop {
+				t.Fatalf("hold = %+v, want %q", hd, tc.stop)
+			}
+			h.flush()
+			if toasts := toastsWith(h, "withdrew your approval"); len(toasts) != 0 {
+				t.Fatalf("toasts = %q", toasts)
+			}
+		})
+	}
+}
+
+// raceGH is the fake GitHub whose changes request, posted as magnum's App,
+// lets a round's end in (autoApproveRound) once GitHub took it and before
+// magnum records it: at once when nothing holds auto-approval, else as soon
+// as it is free.
+type raceGH struct {
+	*fakeGH
+	h    *harness
+	prID int64
+	wg   sync.WaitGroup
+}
+
+func (g *raceGH) CreateReview(ctx context.Context, owner, repo string, number int, commitID, event, body string) (github.RESTReview, error) {
+	if event != "REQUEST_CHANGES" {
+		return g.fakeGH.CreateReview(ctx, owner, repo, number, commitID, event, body)
+	}
+	g.mu.Lock()
+	g.created = append(g.created, event+"@"+commitID+":"+body)
+	id := int64(9000 + len(g.created))
+	g.mu.Unlock()
+	url := fmt.Sprintf("https://github.com/%s/%s/pull/%d#pullrequestreview-%d", owner, repo, number, id)
+	g.addReview(number, github.Review{DatabaseID: id, State: "CHANGES_REQUESTED", Body: body, URL: url, CommitOid: commitID,
+		AuthorLogin: "talkable", AuthorType: "Bot", SubmittedAt: g.h.clock.Now()})
+	if e := g.h.e; e.autoMu.TryLock() {
+		e.autoMu.Unlock()
+		e.autoApproveRound(g.h.ctx, g.prID)
+	} else {
+		g.wg.Go(func() { e.autoApproveRound(g.h.ctx, g.prID) })
+	}
+	return github.RESTReview{ID: id, UserLogin: "talkable[bot]", UserType: "Bot", State: "CHANGES_REQUESTED", CommitID: commitID, HTMLURL: url}, nil
+}
+
+// `magnum request-changes` at the moment a round's end approves the PR as
+// the operator: the approval does not stand next to the changes request
+// (here the round's auto-approval waits for it, then finds the PR's
+// latest review is the changes request).
+func TestRequestChangesAndARoundsAutoApprovalAtOnceLeaveNoApprovalStanding(t *testing.T) {
+	race := &raceGH{}
+	h, _ := newAutoHarness(t, func(h *harness) {
+		h.cfg.Watches[0].AutoApprove = nil // until the changes request
+		race.fakeGH, race.h = h.gh, h
+		h.d.GitHub = func(string) GitHub { return race }
+	})
+	h.reviewedPR(2, "b1")
+	h.flush()
+	if got := h.created(); len(got) != 0 {
+		t.Fatalf("posted = %q", got)
+	}
+	h.cfg.Watches[0].AutoApprove = []string{"talkable"}
+	race.prID = h.pr(2).ID
+	if _, err := h.e.requestVerdict(h.ctx, VerdictPayload{PRTarget: PRTarget{Ref: "2"}}, "REQUEST_CHANGES"); err != nil {
+		t.Fatal(err)
+	}
+	race.wg.Wait()
+	h.flush()
+	if a, ok, err := h.st.LiveAutoApproval(h.ctx, h.pr(2).ID); err != nil || ok {
+		t.Fatalf("an approval as the operator stands next to the changes request: %+v %v", a, err)
+	}
+	if got := h.created(); len(got) != 1 || !strings.HasPrefix(got[0], "REQUEST_CHANGES@b1:") {
+		t.Fatalf("posted = %q", got)
+	}
+}
+
+// A manual verdict GitHub took that the registry could not record ends its
+// begin event with a failure that says it was posted, for a changes request
+// as the PR's identity and for an approval as the operator.
+func TestAManualVerdictPostedButNotRecordedWritesItsFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name, kind, as, trigger string
+	}{
+		{"a changes request", ReqRequestChanges, "",
+			"CREATE TRIGGER no_record BEFORE UPDATE OF last_review_id ON prs WHEN NEW.last_review_id >= 9000 BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END"},
+		{"an approval as the operator", ReqApprove, "zhuravel",
+			"CREATE TRIGGER no_record BEFORE UPDATE OF state ON auto_approvals WHEN NEW.state = 'standing' BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _ := newAutoHarness(t, verdictClients, func(h *harness) { h.cfg.Watches[0].AutoApprove = nil })
+			h.reviewedPR(2, "b1")
+			h.flush()
+			if _, err := h.st.DB().ExecContext(h.ctx, tc.trigger); err != nil {
+				t.Fatal(err)
+			}
+			if r := h.verdictAs(tc.kind, 2, tc.as); r.State != store.RequestFailed || !strings.Contains(deref(r.Result), "but not recorded") {
+				t.Fatalf("verdict: %s %q", r.State, deref(r.Result))
+			}
+			begun, failed := h.events("review.manual_verdict_begin"), h.events("review.manual_verdict_failed")
+			if len(begun) != 1 || len(failed) != 1 || !strings.Contains(failed[0].Message, "but could not record it") ||
+				!strings.Contains(failed[0].Message, prURL2+"#pullrequestreview-9001") {
+				t.Fatalf("begin %+v, failed %+v", begun, failed)
+			}
+			if evs := h.events("review.manual_verdict"); len(evs) != 0 {
+				t.Fatalf("ok events %+v", evs)
+			}
+		})
 	}
 }
 

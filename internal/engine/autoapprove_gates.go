@@ -60,17 +60,17 @@ var agentInstructionFiles = []string{"AGENTS.md", "AGENTS.override.md", "CLAUDE.
 
 // autoGateRefusal says why auto-approval holds c back after magnum's round
 // sum although the registry lets it approve (autoApproveRefusal); "" when
-// it does not. In order: the round's judge went without a reviewer's
-// report (pipeline.MissingReports), the PR's watch would not review it on
-// its own (classify: a manual repository's, a bot's, one skip_paths leaves
-// out, one Codex flagged; a forced round's included), it changes what
-// steers the review agents (agentConfigRefusal), and its head's check
-// rollup fails or runs (wait for green: the judge's result says nothing of
-// the failures it found unrelated).
+// it does not. In order: the review did not hear every reviewer
+// (missingReports), the PR's watch would not review it on its own
+// (classify: a manual repository's, a bot's, one skip_paths leaves out, one
+// Codex flagged; a forced round's included), it changes what steers the
+// review agents (agentConfigRefusal), and its head's check rollup fails or
+// runs (wait for green: the judge's result says nothing of the failures it
+// found unrelated).
 func (e *Engine) autoGateRefusal(ctx context.Context, c store.RepoPR, sum store.ReviewSummary) string {
 	pr := c.PR
-	if m := e.missingReports(ctx, pr.ID, sum); m != "" {
-		return "magnum's review did not hear every reviewer: " + m
+	if why := e.missingReports(ctx, pr.ID, sum); why != "" {
+		return why
 	}
 	if w := e.cfg.WatchFor(c.Repo); w != nil {
 		if dec := e.classify(ctx, *w, pr, e.now()); !dec.Eligible {
@@ -89,19 +89,29 @@ func (e *Engine) autoGateRefusal(ctx context.Context, c store.RepoPR, sum store.
 	return ""
 }
 
-// missingReports names the reports the judge of sum's round went without
-// ("codex-review (login_required)"), from the pipeline's record of the
-// PR's latest judged round; "" when it heard every one, or the record is
-// another round's (or none: a round before the record existed).
+// missingReports says why auto-approval refuses sum's review for the
+// reports it went without, by the pipeline's record of the review's round
+// (pipeline.ReadRoundMissingReports): the reports its judge went without,
+// and those a round of the judge alone carried from the round its review
+// builds on ("magnum's review did not hear every reviewer: codex-review
+// (login_required)"). A round magnum has no record of (one before the
+// records, or a run that cannot be read) is refused too: nothing says it
+// heard every reviewer. "" when it heard every one.
 func (e *Engine) missingReports(ctx context.Context, prID int64, sum store.ReviewSummary) string {
-	rec, ok := pipeline.ReadMissingReports(ctx, e.st, prID)
-	if !ok || len(rec.Missing) == 0 {
-		return ""
+	const unknown = "magnum cannot tell whether its review heard every reviewer: "
+	run, err := e.st.RunByID(ctx, sum.RunID)
+	if err != nil {
+		e.log.Warn("auto approval: the review's run", "pr", prID, "run", sum.RunID, "err", err)
+		return unknown + "it cannot read the review's run"
 	}
-	if run, err := e.st.RunByID(ctx, sum.RunID); err == nil && run.Round != rec.Round {
-		return "" // another round's record (a run that cannot be read is no proof: the record stands)
+	rec, ok := pipeline.ReadRoundMissingReports(ctx, e.st, prID, run.Round)
+	switch {
+	case !ok:
+		return fmt.Sprintf("%sit has no record of round %d's reports", unknown, run.Round)
+	case len(rec.Unheard()) > 0:
+		return "magnum's review did not hear every reviewer: " + rec.String()
 	}
-	return rec.String()
+	return ""
 }
 
 // agentConfigRefusal says why auto-approval leaves pr to the operator for
@@ -248,4 +258,24 @@ func (e *Engine) noteAutoRefused(ctx context.Context, c store.RepoPR, sum store.
 	e.event(ctx, "info", prSubject(repo, pr.Number), "review.auto_approve_refused",
 		fmt.Sprintf("magnum does not approve %s#%d as you: %s", repo.FullName(), pr.Number, reason),
 		map[string]any{"reason": reason, "head_sha": pr.HeadSHA, "run_id": sum.RunID})
+}
+
+// forgetAutoRefused clears the card's reason (noteAutoRefused) when it
+// names a round other than sum, magnum's latest posted round of c, which
+// autoApproveRefusal holds back for its own reason (it found something to
+// fix): the reason was the review before it's. The reason recorded is read
+// once (e.autoRefused keeps it).
+func (e *Engine) forgetAutoRefused(ctx context.Context, c store.RepoPR, sum store.ReviewSummary) {
+	fp, known := e.autoRefused[c.PR.ID]
+	if !known {
+		v, _ := e.getKV(ctx, KVPRAutoApproveRefused(c.PR.ID))
+		if r, ok := ParseAutoApproveRefused(v); ok {
+			fp = r.Head + "|" + r.RunID + "|" + r.Reason
+		}
+		e.autoRefused[c.PR.ID] = fp
+	}
+	if _, rest, ok := strings.Cut(fp, "|"); !ok || strings.HasPrefix(rest, sum.RunID+"|") {
+		return // none recorded, or it names sum's round
+	}
+	e.noteAutoRefused(ctx, c, sum, "")
 }

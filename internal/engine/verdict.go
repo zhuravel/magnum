@@ -48,9 +48,10 @@ func KVPRManualVerdict(prID int64) string { return fmt.Sprintf("pr.%d.manual_ver
 // requestVerdict posts a manual APPROVE or REQUEST_CHANGES on the PR's
 // reviewed head and records it as the PR's latest review, with
 // review.manual_verdict_begin, review.manual_verdict or
-// review.manual_verdict_failed. A changes request withdraws the operator's
+// review.manual_verdict_failed (a verdict GitHub took that the registry
+// could not record too). A changes request withdraws the operator's
 // standing automatic approval first (withdrawForChanges): it would still
-// count for merging.
+// count for merging; auto-approval waits until it is recorded.
 func (e *Engine) requestVerdict(ctx context.Context, p VerdictPayload, event string) (string, error) {
 	repo, pr, err := e.resolve(ctx, p.PRTarget)
 	if err != nil {
@@ -83,19 +84,27 @@ func (e *Engine) requestVerdict(ctx context.Context, p VerdictPayload, event str
 		return "", fmt.Errorf("identity %q has no GitHub client", pr.Identity)
 	}
 	if event == "REQUEST_CHANGES" {
+		// From the withdrawal until the changes request is the PR's latest
+		// review, which then refuses auto-approval: a round's end
+		// (autoApproveRound) in between would approve the PR as the
+		// operator next to it, and keep that approval (the same round).
+		e.autoMu.Lock()
+		defer e.autoMu.Unlock()
 		if err := e.withdrawForChanges(ctx, repo, pr, label); err != nil {
 			return "", err
 		}
 	}
 	subject := prSubject(repo, pr.Number)
+	data := map[string]any{"event": event, "sha": reviewed, "identity": pr.Identity}
 	e.event(ctx, "info", subject, "review.manual_verdict_begin", fmt.Sprintf("posting %s on %s at %s as %s", strings.ToLower(event), label,
-		textx.ShortSHA(reviewed), pr.Identity), map[string]any{"event": event, "sha": reviewed, "identity": pr.Identity})
+		textx.ShortSHA(reviewed), pr.Identity), data)
 	rev, err := gh.CreateReview(ctx, repo.Owner, repo.Name, pr.Number, reviewed, event, verdictBody(event, p.Message, reviewed, sum))
 	if err != nil {
 		e.event(ctx, "warn", subject, "review.manual_verdict_failed", fmt.Sprintf("could not post %s on %s as %s: %v", strings.ToLower(event), label,
-			pr.Identity, err), map[string]any{"event": event, "sha": reviewed, "identity": pr.Identity})
+			pr.Identity, err), data)
 		return "", fmt.Errorf("post %s on %s: %w", strings.ToLower(event), label, err)
 	}
+	data["review_id"] = rev.ID
 	state := map[string]string{"APPROVE": "APPROVED", "REQUEST_CHANGES": "CHANGES_REQUESTED"}[event]
 	if err := e.st.UpdatePR(ctx, pr.ID, func(u *store.PRUpdate) {
 		u.Set("last_review_id", rev.ID)
@@ -104,14 +113,15 @@ func (e *Engine) requestVerdict(ctx context.Context, p VerdictPayload, event str
 			u.Set("last_review_login", l)
 		}
 	}); err != nil {
+		e.event(ctx, "warn", subject, "review.manual_verdict_failed", fmt.Sprintf("posted %s on %s as %s (%s) but could not record it: %v",
+			strings.ToLower(event), label, pr.Identity, rev.HTMLURL, err), data)
 		return "", fmt.Errorf("%s posted (%s) but not recorded: %w", label, rev.HTMLURL, err)
 	}
 	e.setKV(ctx, KVPRManualVerdict(pr.ID), strconv.FormatInt(rev.ID, 10))
 	done := map[string]string{"APPROVE": "approved", "REQUEST_CHANGES": "requested changes on"}[event]
 	msg := fmt.Sprintf("%s %s at %s as %s: %s", done, label, textx.ShortSHA(reviewed), rev.UserLogin, rev.HTMLURL)
 	e.seeStalemates(ctx, pr.ID) // the operator decided: stalemate.go
-	e.event(ctx, "info", subject, "review.manual_verdict", msg,
-		map[string]any{"event": event, "review_id": rev.ID, "sha": reviewed, "identity": pr.Identity})
+	e.event(ctx, "info", subject, "review.manual_verdict", msg, data)
 	return msg, nil
 }
 
@@ -120,10 +130,10 @@ func (e *Engine) requestVerdict(ctx context.Context, p VerdictPayload, event str
 // GitHub would count it for merging next to the changes request. One being
 // withdrawn already, or none, is nothing to do; one being posted, or a
 // withdrawal GitHub did not take, refuses the changes request (magnum tries
-// the withdrawal again, and the operator asks again).
+// the withdrawal again, and the operator asks again). The caller holds
+// autoMu: a round's goroutine may be approving the PR as the operator
+// (autoApproveRound).
 func (e *Engine) withdrawForChanges(ctx context.Context, repo store.Repo, pr store.PR, label string) error {
-	e.autoMu.Lock() // a round's goroutine may be approving the PR as the operator (autoApproveRound)
-	defer e.autoMu.Unlock()
 	live, ok, err := e.st.LiveAutoApproval(ctx, pr.ID)
 	switch {
 	case err != nil:
@@ -248,7 +258,10 @@ func (e *Engine) approveAsOperator(ctx context.Context, repo store.Repo, pr stor
 		u.Set("review_url", rev.HTMLURL)
 		u.Set("posted_at", e.now())
 		u.Set("error", nil)
-	}); err != nil {
+	}); err != nil { // the row stays posting: auto-approval finds the approval on GitHub (resumeAutoPost)
+		data["review_id"] = rev.ID
+		e.event(ctx, "warn", subject, "review.manual_verdict_failed", fmt.Sprintf("approved %s as %s (%s) but could not record it: %v", label, login,
+			rev.HTMLURL, err), data)
 		return "", fmt.Errorf("%s approved as %s (%s) but not recorded: %w", label, login, rev.HTMLURL, err)
 	}
 	msg := fmt.Sprintf("approved %s at %s as %s: %s", label, textx.ShortSHA(pr.HeadSHA), cmp.Or(rev.UserLogin, login), rev.HTMLURL)

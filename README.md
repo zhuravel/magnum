@@ -632,7 +632,10 @@ ends (each tick looks again, for a post to retry or a PR that changed), only whe
   problems since…`); a line it does not know is not clean;
 - the review heard every reviewer of its round: none ran and left no report (wrote none, timed out,
   failed) or was skipped as logged out (the judge then posts `COMMENT`, which an App posts anyway). A
-  round continued after a pause counts only the roles its paused round ran;
+  round continued after a pause counts only the roles its paused round ran; a round of the judge alone (a
+  delta check, a same-head re-review, a reply round) counts what the round before it went without, since
+  its review builds on that one. Magnum keeps the record of each round's reports, and a review whose round
+  it has no record of (one posted before Magnum kept them) is not approved;
 - the PR is open, not a draft, not muted, not yours, and no round is due or running on it; a dry run or
   a post-merge review never approves;
 - its watch would review it on its own: a `magnum review` of a PR the watch's filters leave out (a
@@ -663,10 +666,12 @@ New commits alone leave the approval standing (the repository decides about stal
 review decides. One that leaves something to fix, on any head, withdraws it (Magnum dismisses it as you:
 "magnum's review of <sha7> found blocking problems; this automatic approval is withdrawn ([review](<url>))."),
 a clean one leaves it standing without a second approval, and a clean review after a withdrawal approves
-again. A withdrawal GitHub refuses (422) reads the review again: one dismissed meanwhile, or gone, ends
-there; one GitHub keeps refusing is tried three times, 5 minutes apart, then ends failed with an event and
-one urgent toast (dismiss it on GitHub). `magnum request-changes` withdraws your standing approval first,
-as you, since GitHub would count it next to the changes request. The approval of a PR that was merged or
+again. A withdrawal GitHub refuses (422) reads the review again: one gone ends there, and one dismissed
+meanwhile counts as that dismissal (below: by you or anyone else it stops auto-approval of the PR, by GitHub
+on a push it does not); one GitHub keeps refusing is tried three times, 5 minutes apart, then ends failed
+with an event and one urgent toast (dismiss it on GitHub). `magnum request-changes` withdraws your standing
+approval first, as you, since GitHub would count it next to the changes request, and auto-approval waits
+until the changes request is recorded. The approval of a PR that was merged or
 closed ends as history (`review.auto_approval_ended`): nothing follows it any more.
 
 Your word wins, for good on that PR: once you review it by hand (an approval, a comment or a changes
