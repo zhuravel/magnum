@@ -341,7 +341,9 @@ func (e *Engine) startSessions(ctx context.Context, job *roundJob, rs *roundSetu
 	}
 	if !fresh {
 		var cold string
-		if rs.coldJudge, cold = e.coldJudge(ctx, job, rs); rs.coldJudge {
+		if rs.coldJudge, cold, err = e.coldJudge(ctx, job, rs); err != nil {
+			return fail(err) // judge_fresh.go
+		} else if rs.coldJudge {
 			why = cold
 		}
 	}

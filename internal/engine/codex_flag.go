@@ -7,13 +7,21 @@ package engine
 // magnum never reviews that PR again: no automatic round on any head, no
 // retry, no continue, no reply round or delta check, and no forced round
 // either (`magnum review` and the board's review keys refuse with the
-// reason). The flag is the PR's KVPRCodexFlag record (the refused head,
-// role, run and time), set by the refused round (onRefused, one toast) or
-// by `magnum codex-flag set` for a PR found before, and lifted only by
-// `magnum codex-flag clear`, which asks y/N naming the account risk. The
-// engine's classify reads it like a filter (the PR is ineligible with the
-// flag's reason, also after a push or a review request), and dispatch
-// holds whatever still waits (holdFlagged).
+// reason). The flag is the PR's store.KVPRCodexFlag record (the refused
+// head, role, run and time), set by the refused round (onRefused, one
+// toast) or by `magnum codex-flag set` for a PR found before, and lifted
+// only by `magnum codex-flag clear`, which asks y/N naming the account
+// risk. The engine's classify reads it like a filter (the PR is ineligible
+// with the flag's reason, also after a push or a review request), and
+// dispatch holds whatever still waits (holdFlagged).
+//
+// The flag fails closed (DECISIONS "A Codex flag fails closed"): a record
+// that cannot be parsed is a flag, a registry that cannot be read holds the
+// PR this time, and a refused round whose write failed keeps the flag in
+// memory (unwritten) and writes it again every tick. Each tick a flagged PR
+// that `magnum open` did not pin gives back what it holds (DECISIONS "A
+// Codex-flagged PR gives back its slot and its agents", releaseFlagged):
+// its idle agents are parked and its pool slot released.
 
 import (
 	"cmp"
@@ -21,6 +29,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -50,9 +59,6 @@ type CodexFlagPayload struct {
 	By     string `json:"by,omitempty"`
 }
 
-// KVPRCodexFlag holds a PR's Codex flag (CodexFlag as JSON).
-func KVPRCodexFlag(prID int64) string { return fmt.Sprintf("pr.%d.codex_flag", prID) }
-
 // CodexFlag is why magnum never reviews a PR again: the agent kind whose
 // provider flagged it, the role and run it refused (none when set by hand),
 // the PR's head then, the refusal's line or the operator's reason, when and
@@ -65,16 +71,27 @@ type CodexFlag struct {
 	Detail string    `json:"detail,omitempty"`
 	At     time.Time `json:"at"`
 	By     string    `json:"by,omitempty"`
+	// unread: the registry could not say whether the PR is flagged (the
+	// read failed). It counts as flagged, but holdFlagged leaves the PR's
+	// state alone: the next tick reads again.
+	unread bool
 }
 
-// ParseCodexFlag reads a KVPRCodexFlag value; ok is false for "" or a value
-// it cannot read.
-func ParseCodexFlag(s string) (CodexFlag, bool) {
+// ParseCodexFlag reads a store.KVPRCodexFlag value. A value it cannot read
+// is a flag still (UnreadableCodexFlag): magnum never reviews a PR on a
+// flag it failed to read.
+func ParseCodexFlag(s string) CodexFlag {
 	var f CodexFlag
-	if s == "" || json.Unmarshal([]byte(s), &f) != nil {
-		return CodexFlag{}, false
+	if json.Unmarshal([]byte(s), &f) != nil {
+		return UnreadableCodexFlag("its record is no flag")
 	}
-	return f, true
+	return f
+}
+
+// UnreadableCodexFlag is the flag of a PR whose flag record could not be
+// read (why): it counts as flagged.
+func UnreadableCodexFlag(why string) CodexFlag {
+	return CodexFlag{Kind: config.KindCodex, Detail: "the flag could not be read (" + why + "), so it counts"}
 }
 
 // Who names the provider that flagged the PR: "Codex".
@@ -85,6 +102,9 @@ func (f CodexFlag) Short() string { return f.Who() + " flagged · never reviewed
 
 // SkipReason is the flagged PR's skip_reason.
 func (f CodexFlag) SkipReason() string {
+	if f.unread {
+		return "its " + f.Who() + " flag could not be read: not reviewed until it can be"
+	}
 	return f.Who() + " flagged it as a possible cybersecurity risk: never reviewed again"
 }
 
@@ -124,10 +144,25 @@ func (f CodexFlag) marshal() (string, error) {
 	return string(b), err
 }
 
-// codexFlag is the PR's flag, when it has one.
+// codexFlag is the PR's flag, when it has one: one a refused round could
+// not write yet (unwritten), else its record, whatever it holds
+// (ParseCodexFlag). A registry that cannot be read counts as a flag
+// (unread), so nothing starts on a PR whose flag magnum could not read.
 func (e *Engine) codexFlag(ctx context.Context, prID int64) (CodexFlag, bool) {
-	v, _ := e.getKV(ctx, KVPRCodexFlag(prID))
-	return ParseCodexFlag(v)
+	if f, ok := e.unwrittenFlag(prID); ok {
+		return f, true
+	}
+	v, ok, err := e.st.GetKV(ctx, store.KVPRCodexFlag(prID))
+	switch {
+	case err != nil:
+		e.warnUnlessStopped(ctx, err, "read a Codex flag", "pr", prID)
+		f := UnreadableCodexFlag(err.Error())
+		f.unread = true
+		return f, true
+	case !ok:
+		return CodexFlag{}, false
+	}
+	return ParseCodexFlag(v), true
 }
 
 // setCodexFlag records f as the PR's flag.
@@ -136,7 +171,66 @@ func (e *Engine) setCodexFlag(ctx context.Context, prID int64, f CodexFlag) erro
 	if err != nil {
 		return err
 	}
-	return e.st.SetKV(ctx, KVPRCodexFlag(prID), v)
+	return e.st.SetKV(ctx, store.KVPRCodexFlag(prID), v)
+}
+
+// unwrittenFlag is the flag a refused round could not write for the PR.
+func (e *Engine) unwrittenFlag(prID int64) (CodexFlag, bool) {
+	e.flagMu.Lock()
+	defer e.flagMu.Unlock()
+	f, ok := e.unwritten[prID]
+	return f, ok
+}
+
+// keepUnwritten keeps f, which could not be written, as the PR's flag
+// until writeUnwritten writes it (or the flag is cleared).
+func (e *Engine) keepUnwritten(prID int64, f CodexFlag) {
+	e.flagMu.Lock()
+	defer e.flagMu.Unlock()
+	if e.unwritten == nil {
+		e.unwritten = map[int64]CodexFlag{}
+	}
+	e.unwritten[prID] = f
+}
+
+// dropUnwritten forgets the PR's unwritten flag (written, or cleared).
+func (e *Engine) dropUnwritten(prID int64) {
+	e.flagMu.Lock()
+	defer e.flagMu.Unlock()
+	delete(e.unwritten, prID)
+}
+
+// writeUnwritten writes the flags refused rounds could not write, each
+// tick until the write takes; a PR flagged since keeps its flag (the first
+// one stands).
+func (e *Engine) writeUnwritten(ctx context.Context) {
+	e.flagMu.Lock()
+	ids := slices.Sorted(maps.Keys(e.unwritten))
+	e.flagMu.Unlock()
+	for _, id := range ids {
+		f, ok := e.unwrittenFlag(id)
+		if !ok {
+			continue
+		}
+		if _, has, err := e.st.GetKV(ctx, store.KVPRCodexFlag(id)); err == nil && has {
+			e.dropUnwritten(id)
+			continue
+		}
+		if err := e.setCodexFlag(ctx, id, f); err != nil {
+			e.warnUnlessStopped(ctx, err, "write a Codex flag again", "pr", id)
+			continue
+		}
+		e.dropUnwritten(id)
+		e.log.Info("wrote the Codex flag a refused round could not write", "pr", id)
+	}
+}
+
+// flagTick is the Codex flag's part of the tick: the flags refused rounds
+// could not write are written again (writeUnwritten), and the flagged PRs
+// give back their agents and slots (releaseFlagged, park.go).
+func (e *Engine) flagTick(ctx context.Context, ts tickState) {
+	e.writeUnwritten(ctx)
+	e.releaseFlagged(ctx, ts)
 }
 
 // codexFlagRefusal is why a round asked for (magnum review, the board's
@@ -150,7 +244,7 @@ func (e *Engine) codexFlagRefusal(ctx context.Context, label string, pr store.PR
 }
 
 // flagHolds takes a flagged candidate out of dispatch (holdFlagged) and
-// reports whether it was flagged.
+// reports whether it was flagged (or its flag could not be read).
 func (e *Engine) flagHolds(ctx context.Context, pr store.PR) bool {
 	f, ok := e.codexFlag(ctx, pr.ID)
 	if !ok {
@@ -169,9 +263,11 @@ var flagHeldStates = []string{store.PRQueued, store.PRRereviewPending, store.PRP
 // merged PR's post-merge round: closed again), and its forced mark and what
 // a request asked for this round go. A reviewed PR keeps its review, an
 // ineligible one its reason (a mute, a filter), and a round in flight
-// finishes. It reports whether it moved the PR.
+// finishes. A flag the registry could not read moves nothing: dispatch
+// passes the PR over this tick, the next one reads again. It reports
+// whether it moved the PR.
 func (e *Engine) holdFlagged(ctx context.Context, pr store.PR, f CodexFlag) bool {
-	if !slices.Contains(flagHeldStates, pr.State) {
+	if f.unread || !slices.Contains(flagHeldStates, pr.State) {
 		return false
 	}
 	to := store.PRIneligible
@@ -206,6 +302,10 @@ func (e *Engine) holdFlagged(ctx context.Context, pr store.PR, f CodexFlag) bool
 // (interruptPR; the pipeline cut the turns it ran), a kept approval goes,
 // the PR becomes ineligible with the flag's reason and the refusal as its
 // last error (a post-merge round's PR: closed again), and one toast says so.
+// A flag it cannot write is kept in memory, which holds the PR as the
+// record would, and written again every tick (writeUnwritten). The tick it
+// asks for (Kick) parks the PR's agents and releases its slot
+// (releaseFlagged) once the round let go of the PR.
 func (e *Engine) onRefused(ctx context.Context, job *roundJob, pr store.PR, in pipeline.RoundInput, res pipeline.RoundResult, from []string) {
 	now := e.now()
 	ref := pipeline.Refusal{Detail: res.Error}
@@ -215,9 +315,11 @@ func (e *Engine) onRefused(ctx context.Context, job *roundJob, pr store.PR, in p
 	msg := cmp.Or(res.Error, ref.Sentence())
 	f := CodexFlag{Kind: ref.Kind, Role: ref.Role, Run: ref.RunID, Head: in.TargetSHA, Detail: ref.Detail, At: now.UTC(),
 		By: fmt.Sprintf("round %d", res.Round)}
-	if err := e.setCodexFlag(ctx, pr.ID, f); err != nil {
-		e.log.Warn("flag a refused PR", "pr", pr.ID, "err", err)
+	if err := e.setCodexFlag(context.WithoutCancel(ctx), pr.ID, f); err != nil {
+		e.keepUnwritten(pr.ID, f)
+		e.log.Warn("flag a refused PR: the write failed; the flag holds the PR and is written again every tick", "pr", pr.ID, "err", err)
 	}
+	defer e.Kick()
 	subject := prSubject(job.repo, pr.Number)
 	if n := e.interruptPR(ctx, pr, &job.watch); n > 0 { // abort.go
 		e.log.Info("refused round: agents interrupted", "subject", subject, "agents", n)
@@ -273,7 +375,10 @@ func (e *Engine) requestCodexFlag(ctx context.Context, p CodexFlagPayload) (stri
 		if _, ok := e.codexFlag(ctx, pr.ID); !ok {
 			return label + " is not flagged", nil
 		}
-		e.delKV(ctx, KVPRCodexFlag(pr.ID))
+		if err := e.st.DeleteKV(ctx, store.KVPRCodexFlag(pr.ID)); err != nil {
+			return "", err
+		}
+		e.dropUnwritten(pr.ID)
 		e.event(ctx, "warn", subject, "pr.codex_flag_cleared", "the Codex flag was cleared by "+by+": magnum reviews the PR again",
 			map[string]any{"by": by})
 		if w := e.cfg.WatchFor(repo.FullName()); w != nil && pr.State == store.PRIneligible {
@@ -286,7 +391,7 @@ func (e *Engine) requestCodexFlag(ctx context.Context, p CodexFlagPayload) (stri
 	}
 	reason := clipRunes(strings.Join(strings.Fields(p.Reason), " "), muteReasonRunes)
 	f := CodexFlag{Kind: config.KindCodex, Head: pr.HeadSHA, Detail: reason, At: now.UTC(), By: by}
-	if prev, ok := e.codexFlag(ctx, pr.ID); ok {
+	if prev, ok := e.codexFlag(ctx, pr.ID); ok && !prev.unread {
 		f = prev // the first flag stands
 	} else if err := e.setCodexFlag(ctx, pr.ID, f); err != nil {
 		return "", err

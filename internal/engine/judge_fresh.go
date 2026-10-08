@@ -31,44 +31,46 @@ import (
 // longer than judge_fresh_after ago (judgeLastTurn). A live judge is quit
 // first, which parks its conversation, and starts fresh once herdr no
 // longer lists the quit agent (quitAgentGone); an agent that works or is
-// blocked, one Quit cannot stop and one herdr keeps listing are resumed as
-// before. A cold re-review's judge starts and works at its rereview effort
+// blocked and one Quit cannot stop are resumed as before. One herdr keeps
+// listing fails the setup as busy (agents.ErrBusy: retried after
+// busyRetry, uncharged), since resuming the judge would adopt the quitting
+// agent under the role's name and lose it, the loss quitAgentGone exists
+// for. A cold re-review's judge starts and works at its rereview effort
 // (judgeEffort, pipeline.RoundInput.ColdJudge). why says why, for
 // checkFresh; the decision is a round.judge_fresh_cold event with the idle
 // time.
-func (e *Engine) coldJudge(ctx context.Context, job *roundJob, rs *roundSetup) (cold bool, why string) {
+func (e *Engine) coldJudge(ctx context.Context, job *roundJob, rs *roundSetup) (cold bool, why string, err error) {
 	after := e.cfg.Pipeline.JudgeFreshAfter.Duration
 	if after <= 0 || job.kind == kindContinue || e.d.Agents == nil {
-		return false, ""
+		return false, "", nil
 	}
 	i := slices.IndexFunc(rs.toRun, func(r config.Role) bool { return r.Judge && r.IsAgent() })
 	if i < 0 {
-		return false, ""
+		return false, "", nil
 	}
 	judge, pr := rs.toRun[i], job.pr
 	last := e.judgeLastTurn(ctx, pr.ID, judge)
 	idle := e.now().Sub(last)
 	if last.IsZero() || idle <= after {
-		return false, ""
+		return false, "", nil
 	}
 	live, err := e.st.LiveSessionByPRRole(ctx, pr.ID, judge.Name)
 	isLive := err == nil && live.State == store.SessionLive && deref(live.AgentName) != ""
 	if !isLive {
 		if id, _ := e.d.Agents.ResumeID(ctx, pr.ID, agents.Role(judge.Name)); id == "" {
-			return false, "" // nothing to resume: the judge starts fresh anyway
+			return false, "", nil // nothing to resume: the judge starts fresh anyway
 		}
 	} else {
 		switch herdr.Status(deref(live.AgentStatus)) {
 		case herdr.StatusWorking, herdr.StatusBlocked:
-			return false, ""
+			return false, "", nil
 		}
 		if err := e.d.Agents.Quit(ctx, live); err != nil {
 			e.log.Warn("cold judge: quit failed; resuming it", "pr", pr.ID, "err", err)
-			return false, ""
+			return false, "", nil
 		}
-		if !e.quitAgentGone(ctx, deref(live.AgentName)) {
-			e.log.Warn("cold judge: herdr still lists the agent it quit; resuming it", "pr", pr.ID, "agent", deref(live.AgentName))
-			return false, ""
+		if name := deref(live.AgentName); !e.quitAgentGone(ctx, name) {
+			return false, "", fmt.Errorf("cold judge: herdr still lists the agent %s it quit, which a start would adopt: %w", name, agents.ErrBusy)
 		}
 	}
 	ended := fmt.Sprintf("last turn ended %s ago (judge_fresh_after %s)", humanDuration(idle.Round(time.Minute)), humanDuration(after))
@@ -76,7 +78,7 @@ func (e *Engine) coldJudge(ctx context.Context, job *roundJob, rs *roundSetup) (
 		"the judge starts in a fresh session: its "+ended+", so its prompt cache is cold",
 		map[string]any{"idle_seconds": int64(idle.Seconds()), "last_turn_at": last.UTC().Format(time.RFC3339),
 			"fresh_after": after.String(), "kind": job.kind, "was_live": isLive})
-	return true, "the judge's " + ended
+	return true, "the judge's " + ended, nil
 }
 
 // How long coldJudge waits for herdr to drop the agent it quit
@@ -92,7 +94,8 @@ const (
 // (agents.StartAgent): of the 3 cold judges that were live, 2 adopted the
 // quitting agent and lost it within a minute. It reports false when the
 // name is still listed after quitGoneChecks snapshots, or herdr could not
-// say: the caller resumes the judge instead.
+// say: the caller fails the setup as busy, and the round's next attempt
+// finds the judge parked.
 func (e *Engine) quitAgentGone(ctx context.Context, name string) bool {
 	if name == "" || e.d.Herdr == nil {
 		return true

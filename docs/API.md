@@ -1335,11 +1335,15 @@ func (m *Manager) TurnError(ctx context.Context, run store.Run) (TurnError, bool
     TurnError reads the error the turn of run ended with from its Codex
     session's rollout: the last task_complete event stamped at or after
     the run's creation (less transcriptSkew), when it carries an error.
-    The rollout is looked for under the session's CODEX_HOME (its pane env),
+    A cybersecurity refusal (cyber_policy) of a turn a helper agent of the
+    session ended within the run (helperTurnError) comes before any error
+    of the session's own but its own refusal, and a helper's other error
+    stands in when the session's turn has none (Helper names the helper).
+    The rollouts are looked for under the session's CODEX_HOME (its pane env),
     else Deps.CodexHome, else $CODEX_HOME, else ~/.codex (a test binary never
     falls back to those). ok is false for a session of another kind or without
     a Codex session id, a rollout it cannot find or read, and a turn that ended
-    without an error.
+    without an error, its helpers' turns too.
 
 func (m *Manager) Wrapper(ctx context.Context, kind string) (bool, error)
     Wrapper reports whether the kind's command is a zsh wrapper function (or
@@ -1677,6 +1681,10 @@ type ThreadReply struct {
 type TurnError struct {
 	Message string // the error's message, redacted, at most 300 bytes
 	Info    string // codex_error_info: cyber_policy, usage_limit_exceeded, server_overloaded, unauthorized, other
+	// Helper is the thread id of the helper agent (a Codex sub-agent the
+	// session spawned) whose turn ended with the error; "" for the
+	// session's own turn.
+	Helper string
 }
     TurnError is the error a Codex turn ended with, as its rollout records it.
 
@@ -4770,9 +4778,6 @@ func KVPRAutoApproveRefused(prID int64) string
     the operator although its review left nothing to fix (AutoApproveRefused as
     JSON); the board's card says it.
 
-func KVPRCodexFlag(prID int64) string
-    KVPRCodexFlag holds a PR's Codex flag (CodexFlag as JSON).
-
 func KVPRDelta(prID int64) string
     KVPRDelta holds the size of a PR's unreviewed delta (DeltaRecord as JSON),
     which the re-review threshold reads ([daemon] rereview_min_lines).
@@ -5061,15 +5066,22 @@ type CodexFlag struct {
 	Detail string    `json:"detail,omitempty"`
 	At     time.Time `json:"at"`
 	By     string    `json:"by,omitempty"`
+
+	// Has unexported fields.
 }
     CodexFlag is why magnum never reviews a PR again: the agent kind whose
     provider flagged it, the role and run it refused (none when set by hand),
     the PR's head then, the refusal's line or the operator's reason, when and by
     whom ("round 3", "magnum codex-flag").
 
-func ParseCodexFlag(s string) (CodexFlag, bool)
-    ParseCodexFlag reads a KVPRCodexFlag value; ok is false for "" or a value it
-    cannot read.
+func ParseCodexFlag(s string) CodexFlag
+    ParseCodexFlag reads a store.KVPRCodexFlag value. A value it cannot read is
+    a flag still (UnreadableCodexFlag): magnum never reviews a PR on a flag it
+    failed to read.
+
+func UnreadableCodexFlag(why string) CodexFlag
+    UnreadableCodexFlag is the flag of a PR whose flag record could not be read
+    (why): it counts as flagged.
 
 func (f CodexFlag) Sentence(ref string) string
     Sentence is the flag in full, for the card, `magnum status` and the
@@ -6024,6 +6036,11 @@ type Flagged struct {
 }
     Flagged is a case whose replay was refused: in which run, at which head,
     why and when.
+
+func FlaggedCase(flagged map[string]Flagged, c Case) (Flagged, bool)
+    FlaggedCase is the flagged record of case c: the one of its name, else one
+    of its PR (owner/repo#N, letter case aside), so a refused PR stays out under
+    another case name.
 
 func (f Flagged) Refusal() string
     Refusal says why the case is not replayed.
@@ -12293,6 +12310,12 @@ func KVIdentityTokenExpiry(name string) string
     KVIdentityTokenExpiry holds when an App identity's token expires
     (store.FormatTime).
 
+func KVPRCodexFlag(prID int64) string
+    KVPRCodexFlag holds a PR's Codex flag (engine.CodexFlag as JSON):
+    Codex flagged its review as a possible cybersecurity risk, and magnum never
+    reviews it again nor names it to another PR's agents. Any value counts,
+    one that cannot be read too.
+
 func KVPRDryRun(prID int64) string
     KVPRDryRun holds the PR state a dry-run round (review request with dry_run)
     returns the PR to; while set, the next round posts nothing.
@@ -13510,6 +13533,10 @@ func (s *Store) ClosedPastGrace(ctx context.Context, now time.Time) ([]PR, error
     ClosedPastGrace returns closed PRs whose release_after has passed (an unset
     release_after counts as passed) and that have no active run, oldest deadline
     first.
+
+func (s *Store) CodexFlaggedPRs(ctx context.Context) (map[int64]bool, error)
+    CodexFlaggedPRs returns the ids of the PRs that hold a Codex flag
+    (KVPRCodexFlag), whatever its value.
 
 func (s *Store) CompleteRequest(ctx context.Context, id int64, state, result string) error
     CompleteRequest marks a pending request done or failed with a result

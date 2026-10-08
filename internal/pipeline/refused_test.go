@@ -144,6 +144,69 @@ func TestARefusalTheRolloutRecordsEndsTheRound(t *testing.T) {
 	}
 }
 
+// helperRefusalError is what TurnError reports for a turn whose helper agent
+// (a Codex sub-agent the session spawned) was refused.
+var helperRefusalError = agents.TurnError{Message: "This content was flagged for possible cybersecurity risk.",
+	Info: agents.CodexCyberPolicy, Helper: "01a0fbf8-0000-7000-8000-000000000002"}
+
+// On 10-06 a judge's helper agent was refused, its
+// turn ended ok and the review went out: the operator flagged the PR by
+// hand. A judge turn whose helper was refused ends the round refused,
+// though the judge posted its review, with no nudge; the refusal names the
+// helper.
+func TestARefusedHelperAgentOfTheJudgeEndsTheRound(t *testing.T) {
+	e := newEnv(t)
+	e.ag.reads[agents.RoleJudge] = "Done.\n"
+	e.ag.turnErrors = map[agents.Role]agents.TurnError{agents.RoleJudge: helperRefusalError}
+	e.ag.behaviors[agents.RoleJudge] = []behavior{e.judgePosts(611, "COMMENTED", "COMMENT").behavior(t)}
+
+	res, err := e.r.RunRound(e.ctx, e.input(KindInitial))
+	if err != nil {
+		t.Fatalf("RunRound: %v", err)
+	}
+	wantRefused(t, res, string(agents.RoleJudge), e.runOf(agents.RoleJudge, store.RunInitial).ID)
+	if !strings.Contains(res.Refusal.Detail, "helper agent "+helperRefusalError.Helper) {
+		t.Errorf("refusal detail %q does not name the helper", res.Refusal.Detail)
+	}
+	if n := len(e.ag.submitsFor(agents.RoleJudge)); n != 1 {
+		t.Errorf("judge submits = %d, want 1", n)
+	}
+}
+
+// The own pass wrote its file while its helper agent was refused: the
+// round ends at once, the judge gets no candidates prompt.
+func TestARefusedHelperAgentOfTheOwnPassEndsTheRound(t *testing.T) {
+	e := newEnv(t)
+	e.ag.turnErrors = map[agents.Role]agents.TurnError{agents.RoleJudge: helperRefusalError}
+	e.ag.behaviors[agents.RoleJudge] = []behavior{writeOwn(), endSilently()}
+
+	res, err := e.r.RunRound(e.ctx, e.ownInput(KindInitial))
+	if err != nil {
+		t.Fatalf("RunRound: %v", err)
+	}
+	own := e.runOf(agents.RoleJudge, store.RunOwnPass)
+	wantRefused(t, res, string(agents.RoleJudge), own.ID)
+	wantRun(t, own, store.RunFailed, string(agents.HealthRefused))
+	if n := len(e.ag.submitsFor(agents.RoleJudge)); n != 1 {
+		t.Errorf("judge submits = %d, want the own pass alone", n)
+	}
+}
+
+// A helper agent's error that is no refusal changes nothing.
+func TestAHelperAgentsOtherErrorIsNoRefusal(t *testing.T) {
+	e := newEnv(t)
+	e.ag.turnErrors = map[agents.Role]agents.TurnError{agents.RoleJudge: {Message: "stream disconnected", Info: "other", Helper: helperRefusalError.Helper}}
+	e.ag.behaviors[agents.RoleJudge] = []behavior{e.judgePosts(611, "COMMENTED", "COMMENT").behavior(t)}
+
+	res, err := e.r.RunRound(e.ctx, e.input(KindInitial))
+	if err != nil {
+		t.Fatalf("RunRound: %v", err)
+	}
+	if res.Outcome != OutcomePosted || res.Refusal != nil {
+		t.Fatalf("result = %+v, want posted", res)
+	}
+}
+
 // A judge that just stops, with another error in its rollout, is nudged as
 // before: only a refusal ends the round at once.
 func TestAJudgeThatJustStopsIsStillNudged(t *testing.T) {

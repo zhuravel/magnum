@@ -171,7 +171,10 @@ func TestReplayedDryRunRequestKeepsTheOriginalState(t *testing.T) {
 }
 
 // A dry run never posts: when its marker cannot be read the round does not
-// start (the setup fails without using the retry budget).
+// start (the setup fails without using the retry budget). With the kv
+// table gone the PR's Codex flag cannot be read either, which holds it out
+// of dispatch before its setup (DECISIONS "A Codex flag fails closed"), so
+// the setup's own check is asked directly.
 func TestDryRunMarkerReadFailureFailsClosed(t *testing.T) {
 	h := newHarness(t)
 	h.reviewedPR(2, "b1")
@@ -189,8 +192,14 @@ func TestDryRunMarkerReadFailureFailsClosed(t *testing.T) {
 		t.Fatalf("a round ran without its dry-run mode: %d rounds", n)
 	}
 	pr := h.wantState(2, store.PRRereviewPending)
-	if !strings.Contains(deref(pr.LastError), "dry-run marker") || pr.Attempts != 0 {
-		t.Fatalf("last_error %q attempts %d", deref(pr.LastError), pr.Attempts)
+	if pr.Attempts != 0 {
+		t.Fatalf("attempts %d", pr.Attempts)
+	}
+	if _, err := h.e.dryRunRound(h.ctx, pr); err == nil || !strings.Contains(err.Error(), "dry-run marker") {
+		t.Fatalf("dryRunRound = %v, want the marker's read error", err)
+	}
+	if _, _, serr := h.e.prepare(h.ctx, &roundJob{pr: pr}); serr == nil || !serr.noCharge || !strings.Contains(serr.Error(), "dry-run marker") {
+		t.Fatalf("prepare = %v, want an uncharged setup failure on the marker", serr)
 	}
 }
 

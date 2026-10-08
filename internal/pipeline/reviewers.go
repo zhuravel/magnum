@@ -554,6 +554,9 @@ func (rd *round) failureHealth(ctx context.Context, role config.Role, run store.
 // limit), else a refusal its Codex rollout records (the pane scrolled).
 func (rd *round) checkReport(ctx context.Context, role config.Role, run store.Run, path, anchor string) RoleReport {
 	rep := rd.newReport(role, run.ID)
+	if rd.helperRefused(ctx, role, run, &rep) { // refused.go
+		return rep
+	}
 	problem := rd.reportProblem(role, path)
 	if problem == "" {
 		rep.Status, rep.Path = ReportOK, path

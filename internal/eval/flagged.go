@@ -6,16 +6,21 @@ package eval
 // it takes for a cyber abuser. The run records the case's outcome as any
 // other; the cases flagged so far are kept in FlaggedFile under the runs'
 // root, which `magnum eval run` reads before it starts a case and refuses
-// a flagged one with the reason. Deleting a case's entry there replays it
-// again.
+// a flagged one with the reason, matched by the case's name or its PR
+// (FlaggedCase). Deleting a case's entry there replays it again, unless the
+// live registry holds a Codex flag for its PR (`magnum eval run` reads that
+// too).
 
 import (
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/zhuravel/magnum/internal/fsx"
@@ -63,6 +68,21 @@ func LoadFlagged(root string) (map[string]Flagged, error) {
 		return nil, fmt.Errorf("eval: flagged cases %s: %w", filepath.Join(root, FlaggedFile), err)
 	}
 	return out, nil
+}
+
+// FlaggedCase is the flagged record of case c: the one of its name, else
+// one of its PR (owner/repo#N, letter case aside), so a refused PR stays
+// out under another case name.
+func FlaggedCase(flagged map[string]Flagged, c Case) (Flagged, bool) {
+	if f, ok := flagged[c.Name]; ok {
+		return f, true
+	}
+	for _, name := range slices.Sorted(maps.Keys(flagged)) {
+		if f := flagged[name]; f.PR != "" && strings.EqualFold(strings.TrimSpace(f.PR), strings.TrimSpace(c.PR)) {
+			return f, true
+		}
+	}
+	return Flagged{}, false
 }
 
 // MarkFlagged adds f to the flagged cases under root (the first record of

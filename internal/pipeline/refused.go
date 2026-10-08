@@ -13,6 +13,12 @@ package pipeline
 // does), a refused judge turn (candidates, single prompt, continue) is a
 // final verdict with no nudge, and RoundResult.Refusal names the role and
 // the run. The engine flags the PR (engine.CodexFlag).
+//
+// A helper agent (a Codex sub-agent the role's session spawned) runs in a
+// rollout of its own, and its refusal leaves the session's turn ending ok:
+// every ended turn of a reviewer, the own pass and the judge is checked for
+// one first (helperRefusal), so a refused helper ends the round as its
+// session's refusal would, whatever report or review the turn left.
 
 import (
 	"context"
@@ -64,21 +70,73 @@ func refuseStages(cancel context.CancelCauseFunc, rep RoleReport) {
 }
 
 // rolloutRefusal reads the error role's ended turn (run) recorded in its
-// Codex rollout: a refusal when its codex_error_info is cyber_policy or its
-// message matches the kind's refused patterns. ok is false otherwise (no
-// rollout, another error, none).
+// Codex rollout, or one of a helper agent the session spawned
+// (Agents.TurnError): a refusal when its codex_error_info is cyber_policy
+// or its message matches the kind's refused patterns. ok is false otherwise
+// (no rollout, another error, none).
 func (rd *round) rolloutRefusal(ctx context.Context, role config.Role, run store.Run) (agents.Health, bool) {
 	te, ok := rd.r.Agents.TurnError(context.WithoutCancel(ctx), run)
 	if !ok {
 		return agents.Health{}, false
 	}
-	if te.Info == agents.CodexCyberPolicy {
-		return agents.Health{Kind: agents.HealthRefused, Detail: execx.Redact(te.Message)}, true
+	return rd.turnRefusal(role, te)
+}
+
+// turnRefusal is the refusal te stands for, if it is one; the detail names
+// the helper agent it came from.
+func (rd *round) turnRefusal(role config.Role, te agents.TurnError) (agents.Health, bool) {
+	h := agents.Health{Kind: agents.HealthRefused, Detail: execx.Redact(te.Message)}
+	if te.Info != agents.CodexCyberPolicy {
+		if h = rd.classify(role.AgentKind(), te.Message); h.Kind != agents.HealthRefused {
+			return agents.Health{}, false
+		}
 	}
-	if h := rd.classify(role.AgentKind(), te.Message); h.Kind == agents.HealthRefused {
-		return h, true
+	if te.Helper != "" {
+		h.Detail = "helper agent " + te.Helper + ": " + h.Detail
 	}
-	return agents.Health{}, false
+	return h, true
+}
+
+// helperRefusal reads the rollouts of the helper agents (Codex sub-agents)
+// the session of role's run spawned for a refusal of a turn one of them
+// ended within the run (DECISIONS "A refused helper agent ends the round"):
+// a refused helper leaves the session's own turn ending ok, so a turn whose
+// report or review is there is still a refused one. ok is false for a
+// session of another kind, a run without helpers, and helpers whose turns
+// ended without one.
+func (rd *round) helperRefusal(ctx context.Context, role config.Role, run store.Run) (agents.Health, bool) {
+	te, ok := rd.r.Agents.TurnError(context.WithoutCancel(ctx), run)
+	if !ok || te.Helper == "" {
+		return agents.Health{}, false
+	}
+	return rd.turnRefusal(role, te)
+}
+
+// helperRefused makes rep, the report of role's ended run, a refusal when
+// a helper agent of it was refused (helperRefusal), and reports whether it
+// did: checkReport's first check, for the reviewers and the judge's own
+// pass, whose report file a refused helper does not keep from being
+// written.
+func (rd *round) helperRefused(ctx context.Context, role config.Role, run store.Run, rep *RoleReport) bool {
+	h, ok := rd.helperRefusal(ctx, role, run)
+	if !ok {
+		return false
+	}
+	rep.Status, rep.Detail, rep.Health = string(h.Kind), h.Detail, &h
+	return true
+}
+
+// helperRefusedVerdict is the final verdict of a judge turn t that was
+// sent when a helper agent of it was refused (helperRefusal): the round
+// ends refused before verification looks for the review, which a judge may
+// post after its helper's refusal (it stays posted).
+func (rd *round) helperRefusedVerdict(ctx context.Context, t turn) (verdict, bool) {
+	h, ok := rd.helperRefusal(ctx, rd.judge, t.run)
+	if !ok {
+		return verdict{}, false
+	}
+	ref := refusal(rd.judge, t.run.ID, h)
+	return verdict{final: true, outcome: OutcomeRefused, refusal: &ref, err: &refusedError{ref}}, true
 }
 
 // shellRefusal reads a shell role's output for its tool's refusal: the pane

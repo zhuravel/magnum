@@ -34,3 +34,24 @@ func TestFlaggedCasesAreKeptUnderTheRunsRoot(t *testing.T) {
 		}
 	}
 }
+
+// A flagged case stays flagged under another name: FlaggedCase matches by
+// the case's name and by its PR (owner/repo#N, any letter case), never
+// another PR.
+func TestAFlaggedCaseMatchesByNameOrPR(t *testing.T) {
+	flagged := map[string]Flagged{"oauth-session": {Case: "oauth-session", PR: "talkable/talkable#11990", Run: "r1"}}
+	for _, tc := range []struct {
+		c    Case
+		want bool
+	}{
+		{Case{Name: "oauth-session", PR: "talkable/talkable#1"}, true},
+		{Case{Name: "another-name", PR: "talkable/talkable#11990"}, true},
+		{Case{Name: "another-name", PR: "Talkable/Talkable#11990"}, true},
+		{Case{Name: "another-name", PR: "talkable/talkable#11999"}, false},
+		{Case{Name: "another-name", PR: "example/talkable#11990"}, false},
+	} {
+		if f, ok := FlaggedCase(flagged, tc.c); ok != tc.want || (ok && f.Run != "r1") {
+			t.Errorf("FlaggedCase(%s %s) = %+v, %v; want %v", tc.c.Name, tc.c.PR, f, ok, tc.want)
+		}
+	}
+}

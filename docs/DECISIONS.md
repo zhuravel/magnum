@@ -4225,3 +4225,68 @@ editing history. Code, config comments and prompts reference these by their head
   link the nearness rule made (an item that leaves the field out by oversight would erase a right link, and the
   rule stays the fallback); matching posted findings the same way (a comment near a posted one is caught before
   the classifier sees it).
+- **A refused helper agent ends the round** (2026-10-08, amends "A Codex safety warning ends the round and flags
+  the PR for good"). On 10-06 a Codex judge's helper agent (a sub-agent the judge spawned, `spawn_agent`) was
+  refused with `cyber_policy` while the judge's own turn ended `ok`, so the review went out and the operator
+  flagged the PR by hand. A helper runs in a rollout of its own: its `session_meta` names the session as
+  `parent_thread_id`, and the session's rollout records each helper it starts or messages as an `item_completed`
+  event whose item is a `SubAgentActivity` with the helper's `agent_thread_id` (Codex 0.151 to 0.161: each of
+  the 297 helper starts in two months of rollouts named a helper rollout with that parent; the refused helper
+  went on to a turn that ended ok). `agents.Manager.TurnError` now also
+  reads every turn the session's helpers ended within the run (a helper an earlier turn started included; a
+  rollout last written before the run, or one that names another parent, is skipped): a helper's `cyber_policy`
+  comes before the session's own other error, and `TurnError.Helper` names the helper. The pipeline checks for a
+  helper's refusal first wherever a turn ended: `checkReport` (the reviewers and the own pass, whose report file
+  a refused helper does not keep from being written) and the judge's verdict before verification looks for the
+  review, so the round ends refused even when the judge posted (the review stays posted) and the refusal's line
+  names the helper ("helper agent <thread id>: This content was flagged …"); the engine flags the PR as for any
+  refusal. Rejected: scanning every rollout of the day for a `parent_thread_id` (the parent's own rollout names
+  its helpers), and checking only the turn's last `task_complete` of a helper (it goes on after a refusal).
+- **related.json never names a Codex-flagged PR** (2026-10-08, amends "The judge knows the related PRs"). In
+  round 1 of talkable#11966 related.json named two flagged PRs; the judge read them with `gh api`, and Codex
+  refused that conversation 45 minutes later. The cause is not proven, but the content of a flagged PR must not
+  reach another PR's agents. The related set leaves out every PR with a Codex flag record, whatever it holds
+  (`store.CodexFlaggedPRs`; the key `store.KVPRCodexFlag`, moved from the engine so the pipeline reads it), and
+  a registry that cannot list them leaves the round without related.json (a warning) rather than name one.
+- **`magnum eval run` never replays a Codex-flagged PR** (2026-10-08). It refused only the cases
+  `<state>/eval/flagged.json` names, by case name, and the file did not exist: a `#` in the corpus was all that
+  kept the flagged talkable#11999 out of a replay. Now a case is refused (outcome `flagged`, nothing runs) when
+  flagged.json names it or its PR (`owner/repo#N`, `eval.FlaggedCase`), or when the live registry, opened
+  read-only, holds a Codex flag for its PR (the flag's sentence is the reason); a registry it cannot read
+  refuses the case too. No registry, or a PR it does not know, holds no flag.
+- **A Codex flag fails closed** (2026-10-08, amends "A Codex safety warning ends the round and flags the PR for
+  good"). A flag record that could not be parsed, or a registry read that failed, counted as no flag in the
+  daemon and in the CLI, and a refused round whose flag write failed only logged it. Now a record that cannot be
+  parsed is a flag (`engine.ParseCodexFlag` returns `UnreadableCodexFlag`, whose line says so; `codex-flag
+  clear` lifts it), in the daemon and in every CLI reader (`magnum review`, merge-check, status, the board). A
+  failed registry read holds the PR from dispatch that tick without moving it (the next tick reads again) and
+  makes a classification ineligible ("its Codex flag could not be read"). A refused round writes the flag even
+  when its context is cancelled, and a write that fails keeps the flag in the engine's memory, which every
+  reader of the flag in the daemon consults first, so the PR stays out of rounds (also after a push or a
+  `magnum review`), and every tick writes it again until the write takes (unless a flag was written meanwhile:
+  the first stands); `codex-flag clear` drops it too. Kept: the in-memory flag does not outlive the daemon; the
+  PR's state (ineligible with the flag's reason) holds it until its next change.
+- **A Codex-flagged PR gives back its slot and its agents** (2026-10-08). A flagged PR kept its pool slot and
+  its three live agents: talkable#11990 held review17 and #11966 held review7 while all 18 slots were in use, and
+  parking only took reviewed and waiting PRs, eviction only the least recently used warm slots. Now every tick,
+  and the tick the refused round asks for (`Kick`), a flagged PR (by its record or the in-memory flag) with no
+  round in flight, no agent at work and no human within `human_cooldown` gets a heavy job under its slot-work
+  reservation: its live sessions are parked, then its held pool slot is released (reason `codex-flagged`, a
+  `pr.codex_flag_released` event); a park that fails keeps the slot (the agents work in it) and the next tick
+  tries again, a release that fails waits 10 minutes (`flagReleaseRetry`), and nothing is done while herdr does
+  not answer. A PR `magnum open` pinned, or a slot pinned or held for a human, keeps both, so the operator can
+  review a flagged PR by hand there; a per-PR worktree stays (it takes no pool place). Rejected: releasing in
+  the refused round's own goroutine (it holds the round's capacity while a release can take minutes).
+- **A cold judge that herdr keeps listing waits for the next attempt** (2026-10-08, amends "A cold judge is not
+  lost to the agent it quit"). When herdr still listed the quit judge after about 10 s, the cold start resumed
+  the judge, and `StartAgent` adopts an agent listed under the role's name before it resumes: the loss
+  `quitAgentGone` exists for (none seen yet). Now `coldJudge` fails the round's setup as busy (`agents.ErrBusy`:
+  retried after `busyRetry`, not charged to the PR), no agent starts, and the next attempt finds the judge parked
+  and starts it fresh (`StartAgent` refuses to adopt the agent of a parked conversation, so a name herdr still
+  lists makes that attempt busy too). Rejected: the parked-conversation check on a resume too (a conversation
+  herdr restored under the role's name would then never be adopted).
+- **The Codex flags since 10-02, corrected** (2026-10-08, corrects a count in "A Codex safety warning ends the
+  round and flags the PR for good"). Of the 7 Codex sessions that entry counted since 10-02, 3 were the
+  operator's own interactive Codex reviews on 10-02, not magnum's. From 10-02 to 10-08 magnum's Codex sessions
+  were refused in 3 judge sessions (6 turns, on 10-07 and 10-08) and 1 judge helper (10-06); codex-review, 310
+  sessions, never.

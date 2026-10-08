@@ -157,48 +157,73 @@ func TestAColdLiveJudgeIsQuitAndStartsFresh(t *testing.T) {
 // herdr may still list a quit judge for a moment, and a fresh start under
 // the same name adopted the quitting agent: 2 of the 3 cold judges that
 // were live were lost (one after 0.5 s, its round failing 9 minutes later).
-// The judge starts fresh only once herdr no longer lists the name; a name
-// that never goes away resumes the judge as before.
+// The judge starts fresh only once herdr no longer lists the name.
 func TestAColdJudgeStartsFreshOnlyOnceHerdrDropsTheQuitAgent(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		linger int // snapshots that still list the quit agent (-1: all)
-		cold   bool
-	}{{"listed for one more snapshot", 1, true}, {"never goes away", -1, false}} {
-		t.Run(tc.name, func(t *testing.T) {
-			h := newHarness(t)
-			quit := ""
-			h.ag.onQuit = func(s store.Session) {
-				quit = deref(s.AgentName)
-				h.hd.linger(quit, tc.linger)
-			}
-			listedAtStart := false
-			h.ag.onStart = func(role config.Role, resume string) {
-				if !role.Judge {
-					return
-				}
-				snap, _ := h.hd.Snapshot(h.ctx)
-				_, listedAtStart = snap.AgentByName(quit)
-			}
-			h.ag.mu.Lock()
-			h.ag.resumeIDs = map[agents.Role]string{agents.RoleJudge: "uuid-judge"} // the conversation Quit parked
-			h.ag.mu.Unlock()
-			in := coldRereview(t, h, 100*time.Minute, false)
-			starts := agentStarts(h)
-			cold := approvalEvents(t, h, 2, "round.judge_fresh_cold")
-			if !tc.cold {
-				if in.Kind != pipeline.KindRereview || !slices.Equal(starts, []string{"codex-judge:high:uuid-judge"}) || len(cold) != 0 {
-					t.Fatalf("kind %s starts %v cold events %d: want the judge resumed", in.Kind, starts, len(cold))
-				}
-				return
-			}
-			if in.Kind != pipeline.KindRecovery || !slices.Equal(starts, []string{"codex-judge:high:"}) || len(cold) != 1 {
-				t.Fatalf("kind %s starts %v cold events %d: want a fresh judge", in.Kind, starts, len(cold))
-			}
-			if listedAtStart {
-				t.Fatalf("the fresh judge started while herdr still listed %s, which it would adopt", quit)
-			}
-		})
+	h := newHarness(t)
+	quit := ""
+	h.ag.onQuit = func(s store.Session) {
+		quit = deref(s.AgentName)
+		h.hd.linger(quit, 1) // listed for one more snapshot
+	}
+	listedAtStart := false
+	h.ag.onStart = func(role config.Role, resume string) {
+		if !role.Judge {
+			return
+		}
+		snap, _ := h.hd.Snapshot(h.ctx)
+		_, listedAtStart = snap.AgentByName(quit)
+	}
+	h.ag.mu.Lock()
+	h.ag.resumeIDs = map[agents.Role]string{agents.RoleJudge: "uuid-judge"} // the conversation Quit parked
+	h.ag.mu.Unlock()
+	in := coldRereview(t, h, 100*time.Minute, false)
+	starts := agentStarts(h)
+	cold := approvalEvents(t, h, 2, "round.judge_fresh_cold")
+	if in.Kind != pipeline.KindRecovery || !slices.Equal(starts, []string{"codex-judge:high:"}) || len(cold) != 1 {
+		t.Fatalf("kind %s starts %v cold events %d: want a fresh judge", in.Kind, starts, len(cold))
+	}
+	if listedAtStart {
+		t.Fatalf("the fresh judge started while herdr still listed %s, which it would adopt", quit)
+	}
+}
+
+// When herdr keeps listing the quit judge, resuming it adopted the quitting
+// agent under the role's name and lost it (agents.StartAgent adopts an
+// agent of the role's name before it resumes): the cold judge fails the
+// round's setup as busy instead, no agent starts and the PR waits, and the
+// attempt after busyRetry finds the judge parked and starts it fresh.
+func TestAColdJudgeHerdrKeepsListingIsNeitherResumedNorAdopted(t *testing.T) {
+	h := newHarness(t)
+	h.ag.onQuit = func(s store.Session) { h.hd.linger(deref(s.AgentName), -1) }
+	h.ag.mu.Lock()
+	h.ag.resumeIDs = map[agents.Role]string{agents.RoleJudge: "uuid-judge"} // the conversation Quit parked
+	h.ag.mu.Unlock()
+	h.reviewedPR(2, "b1")
+	h.ag.mu.Lock()
+	h.ag.efforts = nil
+	h.ag.mu.Unlock()
+	h.advance(30 * time.Minute)
+	judgeTurnEnded(h, 2, h.clock.Now().Add(-95*time.Minute))
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b2"})
+	h.tick()
+	h.advance(5 * time.Minute)
+	h.tick()
+	if n := len(h.rd.all()); n != 1 {
+		t.Fatalf("rounds = %d: the re-review ran while herdr listed the quit judge", n)
+	}
+	if starts := agentStarts(h); len(starts) != 0 {
+		t.Fatalf("starts %v: want none, the quit judge neither resumed nor adopted", starts)
+	}
+	h.wantState(2, store.PRRereviewPending)
+
+	h.advance(busyRetry + time.Minute)
+	h.tick()
+	ins := h.rd.all()
+	if len(ins) != 2 || ins[1].Kind != pipeline.KindRecovery {
+		t.Fatalf("rounds %d: want the re-review on the next attempt, as a recovery", len(ins))
+	}
+	if starts := agentStarts(h); !slices.Equal(starts, []string{"codex-judge:high:"}) {
+		t.Fatalf("starts %v: want a fresh judge", starts)
 	}
 }
 
@@ -330,8 +355,8 @@ func TestAContinueKeepsAColdJudgesConversation(t *testing.T) {
 	h.advance(3 * time.Hour)
 	job := &roundJob{pr: h.pr(2), kind: kindContinue}
 	rs := &roundSetup{toRun: h.cfg.RolesFor(nil)}
-	if cold, why := h.e.coldJudge(h.ctx, job, rs); cold {
-		t.Fatalf("a continue starts the judge fresh: %s", why)
+	if cold, why, err := h.e.coldJudge(h.ctx, job, rs); cold || err != nil {
+		t.Fatalf("a continue starts the judge fresh: %s %v", why, err)
 	}
 }
 

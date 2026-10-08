@@ -481,7 +481,7 @@ func statusGatherPRs(ctx context.Context, d statusDeps, now time.Time, r *status
 	return nil
 }
 
-// statusFlagged reports whether Codex flagged pr (engine.KVPRCodexFlag).
+// statusFlagged reports whether Codex flagged pr (store.KVPRCodexFlag).
 func statusFlagged(ctx context.Context, st *store.Store, pr store.PR) bool {
 	_, ok := codexFlagOf(ctx, st, pr.ID)
 	return ok

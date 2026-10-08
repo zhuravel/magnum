@@ -186,7 +186,7 @@ func mergeCheckPool(cfg *config.Config, repo string) (config.Pool, error) {
 	return config.Pool{}, fmt.Errorf("several pools are named %s; give owner/name", repo)
 }
 
-// mergeCheckFlagged refuses a PR Codex flagged (engine.KVPRCodexFlag) with
+// mergeCheckFlagged refuses a PR Codex flagged (store.KVPRCodexFlag) with
 // the reason `magnum review` gives: no agent runs here, but magnum leaves a
 // flagged PR alone. A PR the registry does not know is not flagged.
 func mergeCheckFlagged(ctx context.Context, st *store.Store, defRepo, repo string, number int) error {

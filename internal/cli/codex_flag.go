@@ -96,15 +96,20 @@ func codexFlagMain(ctx context.Context, c *Context, d *actDeps, clear bool, ref,
 	return out.print(c.Stdout, c.Stderr)
 }
 
-// codexFlagOf is the PR's Codex flag (engine.KVPRCodexFlag), when it has
-// one; a registry that cannot say reads as none.
+// codexFlagOf is the PR's Codex flag (store.KVPRCodexFlag), when it has
+// one. A record that cannot be parsed, and a registry that cannot be read,
+// count as a flag (engine.UnreadableCodexFlag): the CLI fails closed as the
+// daemon does. No registry or no PR knows of no flag.
 func codexFlagOf(ctx context.Context, st *store.Store, prID int64) (engine.CodexFlag, bool) {
 	if st == nil || prID == 0 {
 		return engine.CodexFlag{}, false
 	}
-	v, ok, err := st.GetKV(ctx, engine.KVPRCodexFlag(prID))
-	if err != nil || !ok {
+	v, ok, err := st.GetKV(ctx, store.KVPRCodexFlag(prID))
+	switch {
+	case err != nil:
+		return engine.UnreadableCodexFlag(err.Error()), true
+	case !ok:
 		return engine.CodexFlag{}, false
 	}
-	return engine.ParseCodexFlag(v)
+	return engine.ParseCodexFlag(v), true
 }

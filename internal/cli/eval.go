@@ -12,6 +12,7 @@ package cli
 import (
 	"cmp"
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -34,6 +35,7 @@ import (
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/pipeline"
+	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
 	"github.com/zhuravel/magnum/internal/usage"
 )
@@ -49,8 +51,9 @@ const (
 	evalAgentTag = "eval"
 	// evalReleaseTimeout bounds quitting a case's agents after its round.
 	evalReleaseTimeout = 2 * time.Minute
-	// evalFlagged is the outcome of a case an earlier replay of which was
-	// refused (eval.Flagged): it is not replayed.
+	// evalFlagged is the outcome of a case that is not replayed: an earlier
+	// replay of it or of its PR was refused (eval.FlaggedCase), or the live
+	// registry holds a Codex flag for its PR (evalLiveFlag).
 	evalFlagged = "flagged"
 )
 
@@ -68,7 +71,9 @@ func newEvalCmd(c *Context) *cobra.Command {
 			"clone, with agents named apart from the PR's own; the live registry, reports and notes are never "+
 			"written. The prompts and the skill are read from disk, so an edit is measured before the daemon restarts.\n\n"+
 			"A case costs a full review round (every reviewer role and the judge). `run` refuses to start a case while "+
-			"the Codex budget is at or above [usage] codex_soft unless --force, and stops at a usage limit.",
+			"the Codex budget is at or above [usage] codex_soft unless --force, and stops at a usage limit. It never "+
+			"replays a case whose PR Codex flagged: one the registry holds a Codex flag for (`magnum codex-flag`), or "+
+			"one whose replay, under any case name, was refused before (state/eval/"+eval.FlaggedFile+").",
 		func(pos []string) int {
 			if len(pos) > 0 && pos[0] != "help" {
 				return inspUsage(c, "eval", fmt.Sprintf("unknown eval subcommand %q", pos[0]), evalUsage)
@@ -191,14 +196,19 @@ func runEvalRun(c *Context, f evalRunFlags) int {
 	stopped := ""
 	for i, ec := range cases {
 		cr := eval.CaseRun{Case: ec.Name, PR: ec.PR, Head: ec.Head, Started: time.Now()}
-		f, isFlagged := flagged[ec.Name]
+		refused := ""
+		if f, ok := eval.FlaggedCase(flagged, ec); ok {
+			refused = f.Refusal()
+		} else if stopped == "" && ctx.Err() == nil {
+			refused = evalLiveFlag(ctx, c, ec)
+		}
 		switch {
 		case stopped != "":
 			cr.Outcome, cr.Error = "skipped", stopped
 		case ctx.Err() != nil:
 			cr.Outcome, cr.Error = "skipped", "interrupted"
-		case isFlagged:
-			cr.Outcome, cr.Error = evalFlagged, f.Refusal()
+		case refused != "":
+			cr.Outcome, cr.Error = evalFlagged, refused
 			fmt.Fprintf(c.Stdout, "[%d/%d] %s %s refused: %s\n", i+1, len(cases), ec.Name, ec.PR, cr.Error)
 		default:
 			fmt.Fprintf(c.Stdout, "[%d/%d] %s %s at %s\n", i+1, len(cases), ec.Name, ec.PR, textx.ShortSHA(ec.Head))
@@ -232,6 +242,45 @@ func runEvalRun(c *Context, f evalRunFlags) int {
 	fmt.Fprintln(c.Stdout)
 	eval.WriteText(c.Stdout, run, evalPrevious(c.Layout, run.ID))
 	return 0
+}
+
+// evalLiveFlag is why case ec is not replayed when the live registry holds a
+// Codex flag for its PR (store.KVPRCodexFlag; "" = none): the flag's
+// sentence, or why the registry could not say, which refuses the case too
+// (a flag that cannot be read counts). The registry is opened read-only,
+// never created; a registry that is not there, or does not know the PR,
+// holds no flag.
+func evalLiveFlag(ctx context.Context, c *Context, ec eval.Case) string {
+	path := c.Layout.DB()
+	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+		return ""
+	}
+	cannot := func(err error) string {
+		return "the registry cannot say whether Codex flagged " + ec.PR + " (" + err.Error() + "), so the case is not replayed"
+	}
+	db, err := sql.Open("sqlite", registryReadOnlyDSN(path))
+	if err != nil {
+		return cannot(err)
+	}
+	defer db.Close()
+	var id int64
+	err = db.QueryRowContext(ctx, `SELECT p.id FROM prs p JOIN repos r ON r.id = p.repo_id
+WHERE lower(r.owner) = lower(?) AND lower(r.name) = lower(?) AND p.number = ?`, ec.Owner, ec.Repo, ec.Number).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ""
+	}
+	if err != nil {
+		return cannot(err)
+	}
+	var v string
+	err = db.QueryRowContext(ctx, "SELECT value FROM kv WHERE key = ?", store.KVPRCodexFlag(id)).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ""
+	}
+	if err != nil {
+		return cannot(err)
+	}
+	return engine.ParseCodexFlag(v).Sentence(ec.PR)
 }
 
 // evalCaseLine is the one-line outcome of a case.

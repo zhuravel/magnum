@@ -22,7 +22,7 @@ func flagPR(t *testing.T, st *store.Store, prID int64, at time.Time) engine.Code
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SetKV(context.Background(), engine.KVPRCodexFlag(prID), string(b)); err != nil {
+	if err := st.SetKV(context.Background(), store.KVPRCodexFlag(prID), string(b)); err != nil {
 		t.Fatal(err)
 	}
 	return f
@@ -159,6 +159,28 @@ func TestReviewRefusesAFlaggedPR(t *testing.T) {
 		t.Fatalf("review of a flagged PR: exit 0: %s", h.out.String())
 	}
 	actContains(t, h.errb.String(), "Codex flagged this PR", "never reviews it again", "magnum codex-flag clear talkable#5")
+	if n := len(h.requests()); n != 0 {
+		t.Fatalf("requests queued: %d", n)
+	}
+}
+
+// A flag record the CLI cannot parse counts as a flag, as in the daemon:
+// `magnum review` refuses the PR naming the unreadable flag, and queues
+// nothing. A PR without a record is not flagged.
+func TestAnUnreadableFlagCountsInTheCLI(t *testing.T) {
+	h := newActHarness(t)
+	pr := h.seedPR("talkable/talkable", 5, store.PRIneligible)
+	h.pid = 10
+	if _, ok := codexFlagOf(context.Background(), h.st, pr.ID); ok {
+		t.Fatal("a PR without a flag record reads as flagged")
+	}
+	if err := h.st.SetKV(context.Background(), store.KVPRCodexFlag(pr.ID), "{truncated"); err != nil {
+		t.Fatal(err)
+	}
+	if code := h.cmd("review", "talkable#5"); code == 0 {
+		t.Fatalf("review of a PR with an unreadable flag: exit 0: %s", h.out.String())
+	}
+	actContains(t, h.errb.String(), "Codex flagged this PR", "the flag could not be read", "magnum codex-flag clear talkable#5")
 	if n := len(h.requests()); n != 0 {
 		t.Fatalf("requests queued: %d", n)
 	}

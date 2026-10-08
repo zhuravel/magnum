@@ -97,6 +97,37 @@ func KVPRDryRun(prID int64) string { return fmt.Sprintf("pr.%d.dry_run", prID) }
 // launch of that kind that finds it unchanged clears it.
 func KVPRProject(prID int64, kind string) string { return fmt.Sprintf("pr.%d.%s_project", prID, kind) }
 
+// KVPRCodexFlag holds a PR's Codex flag (engine.CodexFlag as JSON): Codex
+// flagged its review as a possible cybersecurity risk, and magnum never
+// reviews it again nor names it to another PR's agents. Any value counts,
+// one that cannot be read too.
+func KVPRCodexFlag(prID int64) string { return fmt.Sprintf("pr.%d.codex_flag", prID) }
+
+// CodexFlaggedPRs returns the ids of the PRs that hold a Codex flag
+// (KVPRCodexFlag), whatever its value.
+func (s *Store) CodexFlaggedPRs(ctx context.Context) (map[int64]bool, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT key FROM kv WHERE key GLOB 'pr.*.codex_flag'")
+	if err != nil {
+		return nil, fmt.Errorf("codex-flagged prs: %w", err)
+	}
+	defer rows.Close()
+	out := map[int64]bool{}
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return nil, fmt.Errorf("codex-flagged prs: %w", err)
+		}
+		var id int64
+		if _, err := fmt.Sscanf(key, "pr.%d.codex_flag", &id); err == nil && KVPRCodexFlag(id) == key {
+			out[id] = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("codex-flagged prs: %w", err)
+	}
+	return out, nil
+}
+
 // KVScreenWidths holds the column widths dragged with the mouse on a
 // screen ("board", "dashboard") as a JSON object of column name to cells;
 // written by the CLI's screens, absent until a column is dragged.

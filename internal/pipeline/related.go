@@ -9,7 +9,9 @@ package pipeline
 // pr_files) overlap this PR's at the head under review, with what magnum
 // knows of them. Numbers, URLs, heads and paths only: PR text is data, never
 // in magnum's files (the judge reads a PR itself with gh when it matters).
-// A blind replay never gets one: it would tell of later PRs.
+// A blind replay never gets one: it would tell of later PRs. A PR Codex
+// flagged is never named (DECISIONS "related.json never names a
+// Codex-flagged PR").
 //
 // The Related lines say nothing twice and name only live PRs (DECISIONS
 // "The Related lines name only live PRs and say nothing twice"): an open PR
@@ -143,7 +145,10 @@ func relatedPRs(own []string, cands []store.FilesPR, ignore []string) (out []Rel
 }
 
 // related computes the round's whole related set; an empty Related when
-// the PR has no file list for the head under review.
+// the PR has no file list for the head under review. A PR Codex flagged
+// (store.KVPRCodexFlag) is never in it: its content must not reach another
+// PR's agents, and a flag that cannot be read leaves the round without
+// related PRs.
 func (rd *round) related(ctx context.Context) (RelatedPRs, error) {
 	in := rd.in
 	now := rd.r.now()
@@ -158,6 +163,11 @@ func (rd *round) related(ctx context.Context) (RelatedPRs, error) {
 	if err != nil {
 		return out, err
 	}
+	flagged, err := rd.r.Store.CodexFlaggedPRs(ctx)
+	if err != nil {
+		return out, err
+	}
+	cands = slices.DeleteFunc(cands, func(c store.FilesPR) bool { return flagged[c.ID] })
 	out.Related, out.More = relatedPRs(own.Paths, cands, in.Related.Ignore)
 	if len(out.Related) == 0 {
 		return out, nil

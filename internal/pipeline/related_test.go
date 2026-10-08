@@ -366,6 +366,42 @@ func TestRelatedLeavesOutOpenPRsIdleForThirtyDays(t *testing.T) {
 	mustContain(t, RelatedFile, raw, `"activity_at": "`)
 }
 
+// related.json never names a PR Codex flagged (store.KVPRCodexFlag), open or
+// merged, whatever its flag holds: in round 1 of talkable#11966 the judge
+// read two flagged PRs it named with gh api, and Codex refused that
+// conversation 45 minutes later. With only flagged PRs related there is no
+// file.
+func TestRelatedNeverNamesACodexFlaggedPR(t *testing.T) {
+	e := newEnv(t)
+	e.ownFiles(target, "app/models/order.rb")
+	e.otherPR(7, false, nil, "app/models/order.rb")
+	flagged := e.otherPR(8, false, nil, "app/models/order.rb")
+	merged := e.otherPR(9, false, store.Ptr(t0.Add(-3*24*time.Hour)), "app/models/order.rb")
+	for pr, v := range map[int64]string{flagged.ID: `{"kind":"codex","role":"codex-judge"}`, merged.ID: "not json"} {
+		if err := e.st.SetKV(e.ctx, store.KVPRCodexFlag(pr), v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e.ag.behaviors[agents.RoleJudge] = []behavior{e.judgePosts(811, "COMMENTED", "COMMENT").behavior(t)}
+	in := e.input(KindInitial)
+	in.Related, in.Roles = defaultRelated, judgeAlone(e)
+	res, err := e.r.RunRound(e.ctx, in)
+	if err != nil || res.Outcome != OutcomePosted {
+		t.Fatalf("RunRound = %+v, %v", res, err)
+	}
+	if nums := relatedNumbers(t, res.ReportDir, e.ag.submitsFor(agents.RoleJudge)); !slices.Equal(nums, []int{7}) {
+		t.Fatalf("related = %v, want #7 alone, not the flagged #8 and #9", nums)
+	}
+
+	if err := e.st.SetKV(e.ctx, store.KVPRCodexFlag(e.otherPR(7, false, nil, "app/models/order.rb").ID), "{}"); err != nil {
+		t.Fatal(err)
+	}
+	dir, prompts := e.relatedRound(2, KindInitial, "ffff000011112222333344445555666677778888", "", "app/models/order.rb")
+	if nums := relatedNumbers(t, dir, prompts); nums != nil {
+		t.Fatalf("related = %v, want no file with every related PR flagged", nums)
+	}
+}
+
 // A re-review's related.json names only the related PRs that the previous
 // round's set lacked or named with another relation (its state, or the
 // paths both PRs share): one PR's rounds 5, 6 and 7 each repeated the same

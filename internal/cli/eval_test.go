@@ -11,6 +11,7 @@ import (
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/eval"
 	"github.com/zhuravel/magnum/internal/paths"
+	"github.com/zhuravel/magnum/internal/store"
 )
 
 // Without a corpus, `eval run` says where it belongs and what to copy.
@@ -47,6 +48,53 @@ func TestEvalRunRefusesAFlaggedCase(t *testing.T) {
 	runs, err := eval.ListRuns(evalRunsRoot(f.Ctx.Layout))
 	if err != nil || len(runs) != 1 || len(runs[0].Cases) != 1 || runs[0].Cases[0].Outcome != evalFlagged {
 		t.Fatalf("runs = %+v, %v", runs, err)
+	}
+}
+
+// evalCorpusOf writes a corpus of one case, name on pr, and returns its path.
+func evalCorpusOf(t *testing.T, name, pr string) string {
+	t.Helper()
+	corpus := filepath.Join(t.TempDir(), "eval.toml")
+	if err := os.WriteFile(corpus, []byte("[[case]]\nname = \""+name+"\"\npr = \""+pr+"\"\nhead = \""+
+		strings.Repeat("ab", 20)+"\"\n\n[[case.defect]]\nid = \"d\"\ntitle = \"t\"\npaths = [\"a.rb\"]\nmatch = [\"x\"]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return corpus
+}
+
+// Only a '#' in the corpus kept the flagged talkable#11999 out of a replay:
+// `eval run` read flagged.json alone, by case name. A case whose PR the live
+// registry holds a Codex flag for is refused whatever the case is called,
+// with the flag's sentence, and so is one whose PR flagged.json names under
+// another case name. Nothing runs for either.
+func TestEvalRunRefusesACaseWhosePRIsFlagged(t *testing.T) {
+	f := newInspFixture(t)
+	st := f.store()
+	_, pr := inspSeedPR(t, st, "example/widgets", 3, store.PRIneligible, nil)
+	flagPR(t, st, pr.ID, time.Date(2026, 10, 7, 9, 30, 0, 0, time.UTC))
+	if code := execute(f.Ctx, []string{"eval", "run", "--corpus", evalCorpusOf(t, "renamed-case", "example/widgets#3")}); code != 0 {
+		t.Fatalf("exit %d; stderr %s", code, f.Err)
+	}
+	if out := f.Out.String(); !strings.Contains(out, "renamed-case example/widgets#3 refused: Codex flagged this PR") ||
+		strings.Contains(out, "[[watch]]") {
+		t.Fatalf("output:\n%s", out)
+	}
+	runs, err := eval.ListRuns(evalRunsRoot(f.Ctx.Layout))
+	if err != nil || len(runs) != 1 || len(runs[0].Cases) != 1 || runs[0].Cases[0].Outcome != evalFlagged {
+		t.Fatalf("runs = %+v, %v", runs, err)
+	}
+
+	f.Out.Reset()
+	if err := eval.MarkFlagged(evalRunsRoot(f.Ctx.Layout), eval.Flagged{Case: "oauth-session", PR: "example/gadgets#5", Run: "20261007-134000",
+		Reason: "Codex refused the review"}); err != nil {
+		t.Fatal(err)
+	}
+	if code := execute(f.Ctx, []string{"eval", "run", "--corpus", evalCorpusOf(t, "session-renamed", "example/gadgets#5")}); code != 0 {
+		t.Fatalf("exit %d; stderr %s", code, f.Err)
+	}
+	if out := f.Out.String(); !strings.Contains(out, "session-renamed example/gadgets#5 refused: flagged in run 20261007-134000") ||
+		strings.Contains(out, "[[watch]]") {
+		t.Fatalf("output:\n%s", out)
 	}
 }
 

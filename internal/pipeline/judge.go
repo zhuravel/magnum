@@ -202,6 +202,9 @@ func (rd *round) judgeVerdict(ctx context.Context, t turn, resultFile string, ma
 		}
 		return verdict{final: true, outcome: OutcomeError, err: fmt.Errorf("pipeline: judge prompt failed: %w", t.err)}
 	}
+	if v, ok := rd.helperRefusedVerdict(ctx, t); ok { // refused.go
+		return v
+	}
 
 	text := ""
 	if s, ok := rd.judgeSession(ctx, t.run); ok {

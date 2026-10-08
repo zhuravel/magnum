@@ -327,6 +327,15 @@ type Engine struct {
 	infraMu  sync.Mutex // infrastructure failures (infra.go)
 	depsFail depsFailure
 
+	// unwritten are the Codex flags a refused round could not write, by PR:
+	// they count as written and are written again every tick until the
+	// write takes (codex_flag.go); releaseFailed, when the release of a
+	// flagged PR's slot last failed (park.go). flagMu guards them: a
+	// round's goroutine and the heavy worker add to them, the tick reads.
+	flagMu        sync.Mutex
+	unwritten     map[int64]CodexFlag
+	releaseFailed map[int64]time.Time
+
 	// netRuns are the identity checks and token refreshes that could not
 	// reach GitHub, retried with backoff (identity_net.go).
 	netMu   sync.Mutex
@@ -684,6 +693,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	e.dispatch(ctx, ts)
 	e.noteWaits(ctx, ts)
 	e.parkIdle(ctx, ts)
+	e.flagTick(ctx, ts) // codex_flag.go
 	e.maybeReconcile(ctx)
 	e.maybeRetro(ctx)
 	e.noteRetroRunning(ctx) // inflight.go
