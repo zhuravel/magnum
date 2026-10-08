@@ -662,6 +662,61 @@ type fakeGit struct {
 	// afterBase are the commits of logs on the base after the PR's merge
 	// base: a log at any revision but origin/* leaves them out.
 	afterBase map[string]bool
+	// added are the files the PR adds: ChangedPaths answers them with
+	// modified, sorted. mentions is what the base's pages name, by word
+	// (Mentions answers the words it is asked for), and grepErr fails every
+	// Mentions; grepHangs makes it wait for its context (at most 10
+	// seconds). changes ("<base>...<head>") and greps ("<rev> <pathspec>
+	// <word>,<word>...") record the calls.
+	added     []string
+	mentions  map[string]map[string]int
+	grepErr   error
+	grepHangs bool
+	changes   []string
+	greps     []string
+}
+
+func (g *fakeGit) ChangedPaths(ctx context.Context, dir, base, head string, pathspecs ...string) ([]string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.changes = append(g.changes, base+"..."+head)
+	return slices.Sorted(slices.Values(append(slices.Clone(g.modified), g.added...))), nil
+}
+
+func (g *fakeGit) Mentions(ctx context.Context, dir, rev string, words []string, pathspecs ...string) (map[string]map[string]int, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.greps = append(g.greps, rev+" "+strings.Join(pathspecs, " ")+" "+strings.Join(words, ","))
+	if g.grepErr != nil {
+		return nil, g.grepErr
+	}
+	if g.grepHangs {
+		g.mu.Unlock()
+		defer g.mu.Lock()
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("fake grep %s: %w", rev, ctx.Err())
+		case <-time.After(10 * time.Second):
+			return nil, errors.New("fake grep: never cancelled")
+		}
+	}
+	var out map[string]map[string]int
+	for _, w := range words {
+		if pages := g.mentions[w]; len(pages) > 0 {
+			if out == nil {
+				out = map[string]map[string]int{}
+			}
+			out[w] = maps.Clone(pages)
+		}
+	}
+	return out, nil
+}
+
+// docsCalls returns the recorded ChangedPaths and Mentions calls.
+func (g *fakeGit) docsCalls() (changes, greps []string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return slices.Clone(g.changes), slices.Clone(g.greps)
 }
 
 func (g *fakeGit) ModifiedPaths(ctx context.Context, dir, base, head string) ([]string, error) {

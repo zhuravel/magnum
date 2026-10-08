@@ -414,6 +414,12 @@ type JudgeData struct {
 	// magnum wrote none (no file of the PR on the base, a continued turn, a
 	// git failure).
 	HistoryFile string
+	// DocsFile is docs.json in the report directory: for each file the PR
+	// changes (related_ignore's paths aside), the .md pages of the base
+	// that name it, or else that name its directory (pipeline.BaseDocs:
+	// page paths, never their text; at most 10 per path); "" when no page
+	// names a changed path, and as for HistoryFile.
+	DocsFile string
 	// FailingChecks is failing-checks.json in the report directory: the
 	// head's failed CI checks as the poller last saw them (prs.ci_json:
 	// name, workflow, state, time), rendered as `failing_checks` by the
@@ -525,6 +531,9 @@ type RoleData struct {
 	// files' last commits on the base (see JudgeData.HistoryFile): the claude
 	// reviewer prompts name it in one sentence; "" = none.
 	HistoryFile string
+	// DocsFile is docs.json in the report directory, the base's pages that
+	// name the changed files (see JudgeData.DocsFile); "" = none.
+	DocsFile string
 	// Blind: an evaluation replay (pipeline.RoundInput.Blind); the role
 	// must not read reviews, comments or commits after HeadSHA.
 	Blind bool

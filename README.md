@@ -838,6 +838,18 @@ the new head's; a blind replay reads the logs at its merge base, never anything 
 gets none, and a `git log` that fails or takes more than 2 minutes in all only leaves the prompts without
 it (a `round.history` warning).
 
+The reviewers also learn which of the repository's own docs name the changed files, since agents opened a
+repository's wiki only on the PRs that edited it. Beside `history.json`, Magnum writes `docs.json` in the
+report directory: for each path the PR changes (added files included, paths matching `related_ignore`
+aside, at most 400), the `.md` files on `origin/<base>` whose text names it, those naming it most often
+first (at most 10, the rest counted); for the paths no page names, the pages that name their directory
+(`app/services/mailer/`; two levels deep at least, since nearly every page names `app/`). It lists at most
+40 paths and directories, the paths first, and counts the rest as `more`; only page paths, never their
+text. The pages are read with one `git grep` on the base's tree, never in the checkout, whose copy of a page
+is the PR's: a PR that edits a page gets the base's version listed. A blind replay reads them at its merge
+base. A round without a page that names a changed path gets no file; each head's `round.docs` event counts
+the pages listed (0 for none), and a grep that fails or takes more than 30 seconds only warns.
+
 The judge also sees the head's failing CI checks, since a PR once got LGTM while a check had failed on
 that head. When a judge prompt goes out (initial, rereview, continue), Magnum reads the PR's checks from
 the registry (`prs.ci_json`, the poller's last Details fetch) and, when they belong to the head under

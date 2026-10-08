@@ -764,7 +764,7 @@ func (rd *round) judgeData(run store.Run, marker string) agents.JudgeData {
 		Reports: reports, ResultFile: rd.reportPath(run, rd.judge), DryRun: in.DryRun, Blind: in.Blind, PostMerge: in.PostMerge,
 		Magnum: rd.r.Layout.Binary(), SkillPath: skill, Model: rd.r.Config.RoleModel(rd.judge), Effort: rd.judge.EffortFor(rereview),
 		ForcePushed: in.ForcePushed, BaseMerged: in.BaseMerged, MovedFrom: in.MovedFrom, PreviousHeadSHA: rd.previousHead(),
-		NotesPath: in.NotesPath, SameHead: rd.sameHead(), Replies: rd.replies(), HistoryFile: rd.historyFile, ColdJudge: cold,
+		NotesPath: in.NotesPath, SameHead: rd.sameHead(), Replies: rd.replies(), HistoryFile: rd.historyFile, DocsFile: rd.docsFile, ColdJudge: cold,
 	}
 	jd.EffortInPrompt = rd.effortInPrompt(rd.judge, jd.Effort)
 	if in.NotesPath != "" {

@@ -866,6 +866,12 @@ type JudgeData struct {
 	// magnum wrote none (no file of the PR on the base, a continued turn, a
 	// git failure).
 	HistoryFile string
+	// DocsFile is docs.json in the report directory: for each file the PR
+	// changes (related_ignore's paths aside), the .md pages of the base
+	// that name it, or else that name its directory (pipeline.BaseDocs:
+	// page paths, never their text; at most 10 per path); "" when no page
+	// names a changed path, and as for HistoryFile.
+	DocsFile string
 	// FailingChecks is failing-checks.json in the report directory: the
 	// head's failed CI checks as the poller last saw them (prs.ci_json:
 	// name, workflow, state, time), rendered as `failing_checks` by the
@@ -1586,6 +1592,9 @@ type RoleData struct {
 	// files' last commits on the base (see JudgeData.HistoryFile): the claude
 	// reviewer prompts name it in one sentence; "" = none.
 	HistoryFile string
+	// DocsFile is docs.json in the report directory, the base's pages that
+	// name the changed files (see JudgeData.DocsFile); "" = none.
+	DocsFile string
 	// Blind: an evaluation replay (pipeline.RoundInput.Blind); the role
 	// must not read reviews, comments or commits after HeadSHA.
 	Blind bool
@@ -3479,9 +3488,9 @@ type Pipeline struct {
 	// only). A [[watch]] may override it (Watch.RelatedLookback).
 	RelatedLookback Duration `toml:"related_lookback"`
 	// RelatedIgnore are path globs (see MatchPath) whose paths never make
-	// two PRs related and that the changed files' history.json leaves out
-	// (default DefaultRelatedIgnore, the lockfiles; [] = none). A [[watch]]
-	// may override it (Watch.RelatedIgnore).
+	// two PRs related and that the changed files' history.json and docs.json
+	// leave out (default DefaultRelatedIgnore, the lockfiles; [] = none). A
+	// [[watch]] may override it (Watch.RelatedIgnore).
 	RelatedIgnore []string `toml:"related_ignore"`
 	// JudgeFreshAfter: a judge whose last turn on the PR ended longer ago
 	// than this starts the PR's next round in a fresh session (the recovery
@@ -7381,6 +7390,18 @@ func (c *Client) LsRemote(ctx context.Context, dir string, timeout time.Duration
     the way fetches do (NetworkRemote with HTTPSFetch), and returns its output.
     A failure is an expected answer (logged at Debug): callers probe with it.
 
+func (c *Client) Mentions(ctx context.Context, dir, rev string, words []string, pathspecs ...string) (map[string]map[string]int, error)
+    Mentions returns where the files of rev name each of words: for each word,
+    the files that pathspecs match (pathspec magic allowed) whose text contains
+    it, with the number of its occurrences in each. It is one `git grep -o -F`
+    on rev's tree, which reads the object store only: a file the work tree
+    or the index has in another version, or only there, is never read. Words
+    are taken literally and in their case, one line each; where two overlap,
+    an occurrence counts for the one that starts first, then for the longer
+    (git grep -o). Binary files are left out. A word no file names is absent;
+    nil when none is named or words is empty. rev must name a commit (no range,
+    no "<rev>:<path>").
+
 func (c *Client) MergeBase(ctx context.Context, dir, a, b string) (string, error)
     MergeBase returns the best common ancestor of a and b, or ErrNoMergeBase.
 
@@ -8160,10 +8181,11 @@ func NewApp(cfg config.Identity, layout paths.Layout, client *http.Client, geten
 func (a *App) Check(ctx context.Context) (Report, error)
     Check verifies, in order: the private key, the JWT (GET /app), the
     installation and its permissions (pull_requests must be write; contents
-    is reported), minting a token, writing ConfigDir, the installation's
-    repositories (every WithRepos repo must be listed), and that `gh api
-    repos/<first repo>` works with GH_CONFIG_DIR. It keeps going after a failure
-    where the next step can still run, so one pass shows every problem.
+    is reported; actions, checks and statuses without read access warn),
+    minting a token, writing ConfigDir, the installation's repositories (every
+    WithRepos repo must be listed), and that `gh api repos/<first repo>` works
+    with GH_CONFIG_DIR. It keeps going after a failure where the next step can
+    still run, so one pass shows every problem.
 
     Check proves minting works by minting a token itself; a failed mint leaves
     the daemon's cached token alone, a successful one replaces it only when it
@@ -10227,6 +10249,10 @@ const DeltaCheckFile = "delta-check.json"
     DeltaCheckFile is the delta check's file list in the round's report
     directory.
 
+const DocsFile = "docs.json"
+    DocsFile is the base docs that name the changed files, in the round's report
+    directory.
+
 const FailingChecksFile = "failing-checks.json"
     FailingChecksFile is the head's failing checks in the round's report
     directory.
@@ -10243,6 +10269,10 @@ const RelatedFile = "related.json"
 
 
 VARIABLES
+
+var DocsTimeout = 30 * time.Second
+    DocsTimeout bounds the two greps: the docs are a hint the reviewers wait for
+    (on talkable, 191 pages and 400 paths, the grep took 0.05 s).
 
 var ErrInvalid = errors.New("pipeline: invalid round")
     ErrInvalid marks a RoundInput or Runner that cannot run a round.
@@ -10316,6 +10346,20 @@ type Agents interface {
     EnsurePane, StartAgent) before RunRound; a role without a live session is
     reported as no_session.
 
+type BaseDocs struct {
+	PR      string `json:"pr"`       // owner/repo#N
+	HeadSHA string `json:"head_sha"` // the head under review, whose changed paths are looked up
+	// Base is the revision the pages were read at: origin/<base branch>, or
+	// the merge base in a blind replay.
+	Base  string     `json:"base"`
+	Files []PathDocs `json:"files,omitempty"` // the changed paths that pages name
+	Dirs  []DirDocs  `json:"dirs,omitempty"`  // the directories of the changed paths no page names, that pages name
+	// More counts the changed paths left out: past the 40 paths and
+	// directories listed, and past the 400 searched.
+	More int `json:"more,omitempty"`
+}
+    BaseDocs is docs.json.
+
 type DeltaCheck struct {
 	Lines int         `json:"lines"`
 	Files []DeltaFile `json:"files"`
@@ -10331,6 +10375,15 @@ type DeltaFile struct {
 }
     DeltaFile is a file of a delta check. Binary: modified without a patch (an
     image, a font), counted as 0 lines.
+
+type DirDocs struct {
+	Dir   string   `json:"dir"`
+	Paths []string `json:"paths"`
+	Pages []string `json:"pages"`          // at most 10, those naming the directory most often first
+	More  int      `json:"more,omitempty"` // pages past the 10
+}
+    DirDocs is one directory of BaseDocs: changed paths in it that no page
+    names, and the pages that name the directory ("<dir>/").
 
 type FailingChecks struct {
 	PR      string `json:"pr"`       // owner/repo#N
@@ -10366,6 +10419,8 @@ type Git interface {
 	MergeBase(ctx context.Context, dir, a, b string) (string, error)
 	ModifiedPaths(ctx context.Context, dir, base, head string) ([]string, error)
 	FileLog(ctx context.Context, dir, rev, path string, n int) ([]gitx.Commit, error)
+	ChangedPaths(ctx context.Context, dir, base, head string, pathspecs ...string) ([]string, error)
+	Mentions(ctx context.Context, dir, rev string, words []string, pathspecs ...string) (map[string]map[string]int, error)
 }
     Git is the subset of *gitx.Client the checkout check after each stage
     (and its restore) uses, a restart's check that a head is not an older
@@ -10455,6 +10510,13 @@ func (m MissingReports) String() string
 func (m MissingReports) Unheard() []MissingReport
     Unheard is every report the round's review went without: its judge's own
     (Missing) and those it carried.
+
+type PathDocs struct {
+	Path  string   `json:"path"`
+	Pages []string `json:"pages"`          // at most 10, those naming the path most often first
+	More  int      `json:"more,omitempty"` // pages past the 10
+}
+    PathDocs is one changed path of BaseDocs and the pages that name it.
 
 type Pause struct {
 	Kind   string    // usage_limit | login_required | overloaded

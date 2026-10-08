@@ -219,7 +219,8 @@ related_lookback = "14d"          # every judge prompt names related.json: the r
 related_ignore = ["**/Gemfile.lock", "**/package-lock.json", "**/pnpm-lock.yaml", "**/yarn.lock", "**/bun.lock",
                   "**/go.sum", "**/poetry.lock", "**/uv.lock", "**/Pipfile.lock", "**/Cargo.lock", "**/composer.lock"]
                                   # paths that never make two PRs related (globs as skip_paths) and that
-                                  # history.json (the changed files' last commits) leaves out; [] = none
+                                  # history.json (the changed files' last commits) and docs.json (the base's
+                                  # .md pages that name them) leave out; [] = none
 judge_fresh_after = "90m"         # a judge whose last turn on the PR ended longer ago starts the next round in a
                                   # fresh session (the recovery, which reads the earlier reviews and threads from
                                   # GitHub): Codex's prompt cache lasts about 1.5 h, so resuming re-reads the whole

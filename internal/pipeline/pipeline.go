@@ -182,6 +182,8 @@ type Git interface {
 	MergeBase(ctx context.Context, dir, a, b string) (string, error)
 	ModifiedPaths(ctx context.Context, dir, base, head string) ([]string, error)
 	FileLog(ctx context.Context, dir, rev, path string, n int) ([]gitx.Commit, error)
+	ChangedPaths(ctx context.Context, dir, base, head string, pathspecs ...string) ([]string, error)
+	Mentions(ctx context.Context, dir, rev string, words []string, pathspecs ...string) (map[string]map[string]int, error)
 }
 
 // Keys interrupts a timed-out or cut role (esc to an agent, ctrl+c twice to
@@ -579,6 +581,9 @@ type round struct {
 	// which the reviewer and judge prompts name; "" = none. Written before
 	// the stages of each head, when no role runs.
 	historyFile string
+	// docsFile is the head under review's docs.json (docs.go), as
+	// historyFile.
+	docsFile string
 	// ownFindings is the file of the judge's own pass once its prompt
 	// reached the judge (ownpass.go): the candidates prompt starts from it;
 	// "" = the judge gets one prompt. Guarded by mu; a restart resets it.

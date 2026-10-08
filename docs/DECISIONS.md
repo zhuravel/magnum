@@ -4383,3 +4383,35 @@ editing history. Code, config comments and prompts reference these by their head
   every tick (a mute, a label or a red re-run of a check that had passed would withdraw an approval its round let
   through, and the approval of the first head is not held to them after it posts either), and withdrawing on a
   push before magnum reviews the head (new commits alone stay the next review's to decide).
+- **A round lists the base docs that name the changed files** (2026-10-08). The agents opened a repository's
+  docs only on the PRs that edited them: `.docs` in 5 of 51 talkable judge sessions and in 1 of 33 Claude
+  sessions. On 10-08 talkable's base gained 191 wiki and ADR pages (870 KB, 42 times its notes), whose text
+  names 774 repository paths, and 66 of 113 talkable PRs with a file list change a path that a page names.
+  For example, `view_screenshot.rb` maps to `view-testing.md`, which records the decision that a reviewer
+  finding on talkable#11920 contradicted. Before the reviewers of each head, beside `history.json`, a round
+  now writes `docs.json` in its report directory (`pipeline.BaseDocs`). For each changed path
+  (`gitx.ChangedPaths`, so added files count; the watch's `related_ignore` paths aside; at most 400), it
+  lists the `.md` files at `origin/<base>` whose text names the path, those naming it most often first, at
+  most 10 with the rest counted. For the paths that no page names, it lists the pages that name their
+  directory (`<dir>/`), one entry per directory. A top-level directory is never looked up, because nearly
+  every page names `app/`. The file has at most 40 paths and directories, the paths first, the rest counted
+  as `more`, and only page paths, never their text. A page never counts for itself. `gitx.Mentions` is one
+  `git grep -o -z -F -I` on the revision's tree for the paths and one for the directories. It reads the
+  object store only, never the checkout, whose copy of a page is PR text, so a PR that edits a page gets
+  the base's version listed. Where two paths overlap in a line, `-o` counts the occurrence for the one that
+  starts first, then for the longer. A blind replay reads the pages at its merge base (`base_sha`), and
+  gets none without one. On talkable the grep took 0.02 to 0.03 s for 40 paths, 0.05 to 0.06 s for 400 paths
+  and 0.05 s for 74 directories, so no cache. A grep that fails or takes more than 30 s
+  (`pipeline.DocsTimeout`) only warns. Each head's `round.docs` event counts the pages listed (`pages`, 0
+  when no page names a changed path, which writes no file), so the next run can measure the share of
+  rounds with docs; no event names a path or a page. The role data carry the file as `DocsFile` (the
+  judge's and the claude reviewers'), empty when there is none.
+  Rejected for now: a search index, qmd (BM25, vectors and a reranker). A trial on 706 documents (4 notes,
+  the 191 pages, 244 commits, 267 findings with replies) ran 15 queries from real misses and declines, and
+  13 of them have an answer. `rg` with all keywords, then with any keyword, found all 13 in two calls at
+  0.02 to 0.09 s each. `qmd query` (expansion and rerank) found 12 at 1.6 to 7.4 s, 20 to 70 times the
+  latency, and `qmd vsearch` 11 at 3 to 7 s. Of 23 past misses and missing-context declines, qmd would have
+  changed about none. It also needs Bun or Node 22+, 608 npm packages (427 MB) and 2.25 GB of models
+  fetched unpinned, an index refresh after each move of the base, and write access outside the sandbox,
+  and it adopts a `.qmd/index.yml` that a PR's checkout could supply. Reopen it when 3 or more declines
+  a week cite base docs that this path lookup and a grep missed.

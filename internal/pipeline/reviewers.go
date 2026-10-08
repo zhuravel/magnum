@@ -190,7 +190,7 @@ func (rd *round) roleData(role config.Role, runID, path string) (string, agents.
 		URL: rd.pr.URL, Owner: rd.owner, Repo: rd.name, Number: in.PR.Number,
 		HeadSHA: in.TargetSHA, BaseSHA: in.BaseSHA, BaseRef: rd.baseRef(), ReportPath: path,
 		Model: rd.r.Config.RoleModel(role), Effort: effort, EffortInPrompt: rd.effortInPrompt(role, effort),
-		Mode: agents.ModeInitial, NotesPath: in.NotesPath, HistoryFile: rd.historyFile, Blind: in.Blind, PostMerge: in.PostMerge,
+		Mode: agents.ModeInitial, NotesPath: in.NotesPath, HistoryFile: rd.historyFile, DocsFile: rd.docsFile, Blind: in.Blind, PostMerge: in.PostMerge,
 		Budget: durationWords(rd.timeout(role)), RunID: runID,
 		Magnum: rd.r.Layout.Binary(), Checkout: in.SlotPath, Role: role.Name,
 	}

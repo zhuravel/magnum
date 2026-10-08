@@ -122,8 +122,8 @@ func (rd *round) reviewers(ctx context.Context, runs map[string]*store.Run, judg
 // them from the first stage on, and returns once both ended. head is the
 // PR's new head when the round must restart: a push noticed while a stage
 // or the own pass ran, or by the check before each stage and after the
-// last. It first writes the head's history.json, which the prompts name
-// (writeHistory), and notes the checkout, which each stage's roles and the
+// last. It first writes the head's history.json and docs.json, which the
+// prompts name (writeHistory, writeDocs), and notes the checkout, which each stage's roles and the
 // own pass must leave as they found it (checkTree). marker is the run id
 // the round's review carries, which the own-pass prompt quotes.
 //
@@ -134,6 +134,7 @@ func (rd *round) runStages(ctx context.Context, runs map[string]*store.Run, own 
 	sctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 	rd.writeHistory(ctx)
+	rd.writeDocs(ctx)
 	if len(rd.stages) > 0 {
 		rd.noteTree(ctx)
 	}

@@ -40,9 +40,9 @@ type Pipeline struct {
 	// only). A [[watch]] may override it (Watch.RelatedLookback).
 	RelatedLookback Duration `toml:"related_lookback"`
 	// RelatedIgnore are path globs (see MatchPath) whose paths never make
-	// two PRs related and that the changed files' history.json leaves out
-	// (default DefaultRelatedIgnore, the lockfiles; [] = none). A [[watch]]
-	// may override it (Watch.RelatedIgnore).
+	// two PRs related and that the changed files' history.json and docs.json
+	// leave out (default DefaultRelatedIgnore, the lockfiles; [] = none). A
+	// [[watch]] may override it (Watch.RelatedIgnore).
 	RelatedIgnore []string `toml:"related_ignore"`
 	// JudgeFreshAfter: a judge whose last turn on the PR ended longer ago
 	// than this starts the PR's next round in a fresh session (the recovery
