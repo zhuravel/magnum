@@ -41,6 +41,10 @@ const (
 	ObsLost ObservationKind = "lost"
 )
 
+// EventHumanActive is recorded on the PR when an ObsHumanActive begins its
+// cooldown (Observation.CooldownUntil; data: role, until).
+const EventHumanActive = "agent.human_active"
+
 // Observation is the result of one tick for one starting/live session.
 type Observation struct {
 	Kind    ObservationKind
@@ -53,6 +57,11 @@ type Observation struct {
 	// during Run and left running, as its transcript shows (see
 	// backgroundWait); while there is any, the run does not end.
 	Background int
+	// CooldownUntil is, for an ObsHumanActive that began the PR's cooldown
+	// (its human_active_at was unset, or daemon.human_cooldown had passed
+	// since), when that cooldown ends; zero when the tick only extended a
+	// cooldown already running, and when human_cooldown is 0 (none).
+	CooldownUntil time.Time
 }
 
 // LostGrace keeps an observe tick from judging a session lost from a
@@ -92,11 +101,13 @@ func (m *Manager) ObserveSnapshot(ctx context.Context, snap herdr.Snapshot) ([]O
 //     working + a submitted run -> run working (working_seen_at).
 //     idle_ticks >= CompletionIdleTicks + a submitted/working run -> run ended,
 //     ObsCompleted. working with no pending/submitted/working run (outside a
-//     short grace after start/prompt) -> ObsHumanActive, unless the agent is
-//     a claude agent whose transcript shows a task notification began the
-//     turn (background work of an earlier run resumed it; see
-//     notificationTurn), or a judge still finishing the turn of a run the
-//     round settled on its result file (see turnTail). blocked -> ObsBlocked,
+//     short grace after start/prompt) -> ObsHumanActive (CooldownUntil set
+//     when it begins the PR's cooldown), unless the agent is a claude agent
+//     whose transcript shows no prompt typed into the pane after magnum's
+//     last prompt to it (magnum's turn going on after esc cut it short, a
+//     turn a task notification began; see humanTurn), or a judge still
+//     finishing the turn of a run the round settled on its result file (see
+//     turnTail). blocked -> ObsBlocked,
 //     or ObsPromptDenied when a pending/submitted/working run is in flight,
 //     the kind's on_permission_prompt is "deny" and the screen shows a
 //     permission prompt, which is answered No (see answerPermission; never
@@ -250,11 +261,12 @@ func (m *Manager) observeOne(ctx context.Context, s store.Session, snap herdr.Sn
 			m.nameAgent(ctx, s, pane, terminalTitle(a, panes[pane]))
 		}
 		if len(runs) == 0 && !recent(s.StartedAt, now) && (s.LastPromptAt == nil || !recent(*s.LastPromptAt, now)) &&
-			!m.notificationTurn(s, sid) && !m.turnTail(ctx, s) {
-			if err := m.d.Store.UpdatePR(ctx, s.PRID, func(u *store.PRUpdate) { u.Set("human_active_at", now) }); err != nil {
+			m.humanTurn(s, sid) && !m.turnTail(ctx, s) {
+			until, err := m.humanActive(ctx, s.PRID, now)
+			if err != nil {
 				return o, fmt.Errorf("agents: observe pr %d human activity: %w", s.PRID, err)
 			}
-			o.Kind = ObsHumanActive
+			o.Kind, o.CooldownUntil = ObsHumanActive, until
 		}
 	case a.AgentStatus == herdr.StatusBlocked && m.isSwitching(s.ID):
 		// magnum's own model-switch confirmation (SwitchModel answers it)
@@ -291,6 +303,25 @@ func (m *Manager) observeOne(ctx context.Context, s store.Session, snap herdr.Sn
 }
 
 func recent(t, now time.Time) bool { return now.Sub(t) < humanGrace }
+
+// humanActive sets PR prID's human_active_at to now, which holds prompts to
+// the PR for daemon.human_cooldown (Submit, RunShell), and returns when the
+// cooldown this begins ends: zero when the cooldown of the PR's last
+// human_active_at still ran (now only extends it) or human_cooldown is 0.
+func (m *Manager) humanActive(ctx context.Context, prID int64, now time.Time) (time.Time, error) {
+	pr, err := m.d.Store.PRByID(ctx, prID)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if err := m.d.Store.UpdatePR(ctx, prID, func(u *store.PRUpdate) { u.Set("human_active_at", now) }); err != nil {
+		return time.Time{}, err
+	}
+	cd := m.d.Config.Daemon.HumanCooldown.Duration
+	if cd <= 0 || (pr.HumanActiveAt != nil && now.Before(pr.HumanActiveAt.Add(cd))) {
+		return time.Time{}, nil
+	}
+	return now.Add(cd), nil
+}
 
 // turnTail reports whether judge session s (its row after this tick's
 // update) shows its agent still finishing the turn of its last run: the run

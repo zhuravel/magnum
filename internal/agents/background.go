@@ -30,10 +30,12 @@ import (
 // the session's transcript, the JSONL file Claude Code appends every entry
 // to, and holds the run open while background work started during the run
 // has neither notified nor been stopped (TaskStop), or while the agent has
-// not answered a notification yet. A notification that resumes the agent
-// with no run in flight (work an earlier run left running) starts a turn
-// nobody typed: the observer reads where the turn began before it takes
-// the agent for a human's (notificationTurn).
+// not answered a notification yet. With no run in flight the agent still
+// works on its own: on background work an earlier run left running (the
+// subagents of a turn the restart's esc cut short) or on the turn a task
+// notification began. The observer takes it for a human's only when the
+// transcript shows a prompt typed into the pane after magnum's last prompt
+// to the session (humanTurn).
 
 // EventBackgroundWait is recorded once per run when background work holds
 // an idle claude agent's run open (data: role, run, tasks).
@@ -65,10 +67,16 @@ type bgWatch struct {
 	stops map[string]string // TaskStop/KillShell tool_use id -> the task it stops
 	note  time.Time         // the newest task notification
 	reply time.Time         // the newest assistant entry
-	// notifiedTurn: the newest turn the transcript shows began with a task
-	// notification (background work finishing), not a prompt typed into
-	// the pane.
-	notifiedTurn bool
+	// typed is when the newest prompt typed into the pane that the current
+	// turn holds was typed: the prompt that began the turn, or one Claude
+	// Code took into it while it ran (a queued command). Zero when the turn
+	// began with a task notification and took no prompt in, or no turn
+	// start was read.
+	typed time.Time
+	// queued are the texts Claude Code queued (a prompt typed while the
+	// agent worked, a task notification) that the agent has not taken yet
+	// -> when each was queued, oldest first.
+	queued map[string][]time.Time
 	// timeUp: the agent was told to stop waiting for its background work
 	// (TimeUp), so that work no longer holds the run.
 	timeUp bool
@@ -79,7 +87,7 @@ type bgWatch struct {
 // reset forgets what was read (a new session id, a transcript that shrank).
 func (w *bgWatch) reset() {
 	w.offset, w.tasks, w.stops, w.note, w.reply = -1, map[string]string{}, map[string]string{}, time.Time{}, time.Time{}
-	w.notifiedTurn = false
+	w.typed, w.queued = time.Time{}, map[string][]time.Time{}
 }
 
 // watch is the bgWatch of session s for run, a fresh one when s had none or
@@ -163,21 +171,34 @@ func (m *Manager) BackgroundTasks(ctx context.Context, run store.Run) (int, bool
 	return len(w.tasks), true
 }
 
-// notificationTurn reports whether the claude agent of session s (Claude
-// Code session sid), seen working with no run in flight, works on a turn a
-// task notification began: background work it started earlier finished and
-// resumed it, nobody typed into its pane. The newest turn-starting user
-// entry of its transcript tells (Claude Code's turnOrigin or origin, else
-// a text that is a <task-notification>). Any other kind, and a transcript
-// it cannot read, report false: the turn counts as a human's, as before.
-func (m *Manager) notificationTurn(s store.Session, sid string) bool {
+// humanTurn reports whether the agent of session s (Claude Code session
+// sid for a claude agent), seen working with no run in flight past the
+// grace after its start and its last prompt, works for someone who typed
+// into its pane. A claude agent does only when its transcript shows a
+// prompt typed after magnum's last prompt to the session (last_prompt_at,
+// else started_at, plus transcriptSkew) in the turn it is in: the prompt
+// that began the turn, unless a task notification did (when it was typed
+// is the stamp of its enqueue when Claude Code queued it, else of its
+// entry), or one Claude Code took into the turn. Otherwise the work is
+// magnum's turn going on (cut short by esc, whose interrupt line begins no
+// turn, while its subagents run) or a turn a task notification began. Any
+// other kind, and a transcript it cannot read, report true: an agent at
+// work with no run is a human, as before.
+func (m *Manager) humanTurn(s store.Session, sid string) bool {
 	if m.sessionKind(s) != KindClaude || sid == "" {
-		return false
+		return true
 	}
 	w := m.turnWatch(s.ID)
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return m.readTranscript(s, sid, w) && w.notifiedTurn
+	if !m.readTranscript(s, sid, w) {
+		return true
+	}
+	last := s.StartedAt
+	if s.LastPromptAt != nil {
+		last = *s.LastPromptAt
+	}
+	return w.typed.After(last.Add(transcriptSkew))
 }
 
 // TimeUp sends text to the agent of run's session within that run, without
@@ -383,22 +404,66 @@ func transcriptStart(r io.ReaderAt, size int64, since time.Time) (int64, error) 
 	return end, nil
 }
 
-// lastTurnStart is the offset of the transcript's last turn-starting user
-// entry (see tEntry.prompt) in r (size bytes), where a watch without a run
-// starts reading; 0 when there is none.
+// lastTurnStart is where a watch without a run starts reading r (size
+// bytes): the transcript's last turn-starting user entry (see
+// tEntry.prompt), or the enqueue of its prompt when Claude Code queued it
+// (typed while the agent worked, the prompt is taken later; its enqueue,
+// after the turn before began, says when it was typed); 0 when there is
+// none.
 func lastTurnStart(r io.ReaderAt, size int64) (int64, error) {
-	start, _, _, err := lastLine(r, size, func(line []byte) bool {
-		if !bytes.Contains(line, []byte(`"user"`)) {
-			return false // most lines: no JSON decoding
+	var text string
+	start, _, ok, err := lastLine(r, size, func(line []byte) bool {
+		t, ok := turnPrompt(line)
+		if ok {
+			text = t
 		}
-		var e tEntry
-		if json.Unmarshal(line, &e) != nil || e.IsSidechain {
-			return false
-		}
-		_, ok := e.prompt(contentBlocks(e.Message.Content))
 		return ok
 	})
-	return start, err
+	if !ok || err != nil {
+		return start, err
+	}
+	queued := false
+	at, _, ok, err := lastLine(r, start, func(line []byte) bool {
+		if t, ok := enqueuedText(line); ok {
+			queued = t == text
+			return queued
+		}
+		_, ok := turnPrompt(line)
+		return ok // the turn before began: the prompt was not queued during it
+	})
+	if err != nil {
+		return 0, err
+	}
+	if ok && queued {
+		return at, nil
+	}
+	return start, nil
+}
+
+// turnPrompt is the prompt of a transcript line that starts a turn (see
+// tEntry.prompt).
+func turnPrompt(line []byte) (string, bool) {
+	if !bytes.Contains(line, []byte(`"user"`)) {
+		return "", false // most lines: no JSON decoding
+	}
+	var e tEntry
+	if json.Unmarshal(line, &e) != nil || e.IsSidechain {
+		return "", false
+	}
+	return e.prompt(contentBlocks(e.Message.Content))
+}
+
+// enqueuedText is the text a queue-operation enqueue line queued.
+func enqueuedText(line []byte) (string, bool) {
+	if !bytes.Contains(line, []byte(`"enqueue"`)) {
+		return "", false
+	}
+	var e tEntry
+	if json.Unmarshal(line, &e) != nil || e.Type != "queue-operation" || e.Operation != "enqueue" {
+		return "", false
+	}
+	text, ok := e.Content.(string)
+	return text, ok
 }
 
 // lastLine finds the last line of r (size bytes) that match accepts,
@@ -457,12 +522,17 @@ type (
 		Timestamp   time.Time `json:"timestamp"`
 		IsSidechain bool      `json:"isSidechain"`
 		IsMeta      bool      `json:"isMeta"`    // text Claude Code adds itself (a skill's body), no prompt
-		Operation   string    `json:"operation"` // queue-operation: enqueue, dequeue, ...
+		Operation   string    `json:"operation"` // queue-operation: enqueue, dequeue, remove, popAll
 		Content     any       `json:"content"`   // queue-operation: the queued text
 		Message     struct {
 			Content json.RawMessage `json:"content"` // a string, or content blocks
 		} `json:"message"`
 		ToolUseResult any `json:"toolUseResult"` // an object, or a string for an error
+		// Attachment of an "attachment" entry: a queued prompt Claude Code
+		// took into the turn it was in is {"type": "queued_command",
+		// "prompt", "commandMode": "prompt" or "task-notification",
+		// "origin"}, the entry stamped when the prompt was queued.
+		Attachment any `json:"attachment"`
 		// What began the turn a prompt starts: turnOrigin "human" or
 		// "task_notification", origin {"kind": "human" or
 		// "task-notification"} (absent before Claude Code recorded them;
@@ -487,26 +557,57 @@ var stopTools = map[string]bool{"TaskStop": true, "KillShell": true, "KillBash":
 
 // prompt is the text of a user entry that starts a turn: a prompt typed
 // into the pane or a task notification, as a string or a first text block
-// (not a tool result, not text Claude Code adds itself).
+// (not a tool result, not text Claude Code adds itself, not the line esc
+// writes into the turn it ends).
 func (e *tEntry) prompt(blocks []tBlock) (string, bool) {
-	if e.Type != "user" || e.IsMeta || len(blocks) == 0 || blocks[0].Type != "text" {
+	if e.Type != "user" || e.IsMeta || len(blocks) == 0 || blocks[0].Type != "text" || e.interruption(blocks[0].Text) {
 		return "", false
 	}
 	return blocks[0].Text, true
+}
+
+// interruption reports whether text, a user entry's, is the line Claude
+// Code writes when esc ends a turn ("[Request interrupted by user]", "...
+// for tool use]"): it begins no turn. A prompt carries an origin, the line
+// none. Its promptId, usually the one of the turn it ends, sometimes is the
+// next prompt's, so it does not tell.
+func (e *tEntry) interruption(text string) bool {
+	return e.TurnOrigin == nil && e.Origin == nil && strings.HasPrefix(text, "[Request interrupted by user")
 }
 
 // byNotification reports whether the turn prompt e starts (text) began
 // with a task notification: as Claude Code records the turn's origin, else
 // (older versions) when the text is one.
 func (e *tEntry) byNotification(text string) bool {
-	origin, _ := e.Origin.(map[string]any)
-	switch kind := str(origin["kind"]); {
-	case str(e.TurnOrigin) != "":
-		return str(e.TurnOrigin) == "task_notification"
+	return fromNotification(str(e.TurnOrigin), e.Origin, "", text)
+}
+
+// fromNotification reports whether a prompt (text) came from a task
+// notification: by Claude Code's turnOrigin, origin.kind or, for a queued
+// command, commandMode, else by its text.
+func fromNotification(turnOrigin string, origin any, mode, text string) bool {
+	o, _ := origin.(map[string]any)
+	switch kind := str(o["kind"]); {
+	case turnOrigin != "":
+		return turnOrigin == "task_notification"
 	case kind != "":
 		return kind == "task-notification"
+	case mode != "":
+		return mode == "task-notification"
 	}
 	return strings.HasPrefix(strings.TrimSpace(text), "<task-notification>")
+}
+
+// takenIn is when a prompt typed into the pane that Claude Code took into
+// the turn it was in (an attachment entry holding a queued command that is
+// no task notification) was queued.
+func (e *tEntry) takenIn() (time.Time, bool) {
+	a, _ := e.Attachment.(map[string]any)
+	if e.Type != "attachment" || str(a["type"]) != "queued_command" ||
+		fromNotification("", a["origin"], str(a["commandMode"]), str(a["prompt"])) {
+		return time.Time{}, false
+	}
+	return e.Timestamp, true
 }
 
 // apply reads one transcript line into w. Entries stamped before w.since,
@@ -522,7 +623,18 @@ func (w *bgWatch) apply(line []byte) {
 		blocks = contentBlocks(e.Message.Content)
 	}
 	if text, ok := e.prompt(blocks); ok {
-		w.notifiedTurn = e.byNotification(text)
+		typed := e.Timestamp
+		if q := w.queued[text]; len(q) > 0 {
+			typed = q[0] // typed while the agent worked: queued then, taken now
+			w.unqueue(text)
+		}
+		w.typed = time.Time{}
+		if !e.byNotification(text) {
+			w.typed = typed
+		}
+	}
+	if at, ok := e.takenIn(); ok && at.After(w.typed) {
+		w.typed = at
 	}
 	switch e.Type {
 	case "assistant":
@@ -553,9 +665,26 @@ func (w *bgWatch) apply(line []byte) {
 			}
 		}
 	case "queue-operation":
-		if text, ok := e.Content.(string); ok && e.Operation == "enqueue" {
+		text, ok := e.Content.(string)
+		switch {
+		case e.Operation == "popAll": // the queue went back into the input box
+			clear(w.queued)
+		case !ok:
+		case e.Operation == "enqueue":
 			w.notified(text, e.Timestamp)
+			w.queued[text] = append(w.queued[text], e.Timestamp)
+		case e.Operation == "remove": // taken into the turn (its attachment says when it was queued), or dropped
+			w.unqueue(text)
 		}
+	}
+}
+
+// unqueue forgets the oldest queuing of text.
+func (w *bgWatch) unqueue(text string) {
+	if q := w.queued[text]; len(q) > 1 {
+		w.queued[text] = q[1:]
+	} else {
+		delete(w.queued, text)
 	}
 }
 

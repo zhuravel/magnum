@@ -89,6 +89,43 @@ func notification(at time.Time, toolUseID, taskID, status string) []tline {
 	}
 }
 
+// interruption is the user entry Claude Code writes when esc ends its turn
+// during a tool use: no origin, and the promptId of the prompt that began
+// the turn.
+func interruption(at time.Time, promptID string) tline {
+	return tline{"type": "user", "isSidechain": false, "timestamp": stamp(at), "sessionId": claudeSID, "promptId": promptID,
+		"message": map[string]any{"role": "user", "content": []any{
+			map[string]any{"type": "text", "text": "[Request interrupted by user for tool use]"}}}}
+}
+
+// enqueued is the entry Claude Code writes when a prompt is typed into the
+// pane while the agent works: the prompt waits in its queue until the agent
+// takes it (taken).
+func enqueued(at time.Time, text string) tline {
+	return tline{"type": "queue-operation", "operation": "enqueue", "timestamp": stamp(at), "sessionId": claudeSID, "content": text}
+}
+
+// taken is what Claude Code writes when the agent takes a queued prompt:
+// the dequeue and the prompt's user entry, both stamped then.
+func taken(at time.Time, text string) []tline {
+	return []tline{
+		{"type": "queue-operation", "operation": "dequeue", "timestamp": stamp(at), "sessionId": claudeSID},
+		humanPrompt(at, text),
+	}
+}
+
+// absorbed is what Claude Code writes when the agent takes a queued prompt
+// into the turn it is in (at): the removal from the queue and the queued
+// command, stamped when the prompt was typed (typed).
+func absorbed(typed, at time.Time, text string) []tline {
+	return []tline{
+		{"type": "queue-operation", "operation": "remove", "reason": "absorbed_mid_turn", "timestamp": stamp(at), "sessionId": claudeSID, "content": text},
+		{"type": "attachment", "isSidechain": false, "timestamp": stamp(typed), "sessionId": claudeSID,
+			"attachment": map[string]any{"type": "queued_command", "prompt": text, "commandMode": "prompt",
+				"origin": map[string]any{"kind": "human"}, "timestamp": stamp(typed), "humanTurn": true}},
+	}
+}
+
 // Launches of background work, each as its tool use and its result.
 
 func bashInBackground(at time.Time, id, task string) []tline {

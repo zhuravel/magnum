@@ -427,6 +427,70 @@ func TestLoginRequiredPreflightPausesAndRechecks(t *testing.T) {
 	h.wantState(2, store.PRReviewed)
 }
 
+// Only the daemon's log named what started a human cooldown, which holds
+// every prompt to the PR. A tick whose observation begins one records one
+// agent.human_active event on the PR naming the role and when prompts may
+// go out again; ticks that only extend it record none, and activity after
+// it ran out records another.
+func TestANewHumanCooldownIsAnEvent(t *testing.T) {
+	h := newHarness(t)
+	h.open(prSpec{n: 1, head: "base1"})
+	h.startup()
+	h.tick()
+	pr := h.pr(1)
+	cd := h.cfg.Daemon.HumanCooldown.Duration
+	observe := func(begins bool) {
+		t.Helper()
+		o := agents.Observation{Kind: agents.ObsHumanActive, Role: agents.Role(store.RoleClaude), PRID: pr.ID}
+		if begins {
+			o.CooldownUntil = h.clock.Now().Add(cd)
+		}
+		h.ag.mu.Lock()
+		h.ag.obs = []agents.Observation{o}
+		h.ag.mu.Unlock()
+		h.tick()
+	}
+	events := func(want int) []store.Event {
+		t.Helper()
+		evs, err := h.st.EventsOfKindsSince(h.ctx, time.Time{}, agents.EventHumanActive)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(evs) != want {
+			t.Fatalf("%s events: %+v, want %d", agents.EventHumanActive, evs, want)
+		}
+		return evs
+	}
+	check := func(ev store.Event, until time.Time) {
+		t.Helper()
+		msg := "claude-review works with no magnum prompt in flight, taken for someone typing: prompts to this PR wait until " +
+			until.Local().Format("15:04:05") + " (human_cooldown 15m)"
+		if ev.Message != msg || ev.Subject == nil || *ev.Subject != "pr:talkable/talkable#1" {
+			t.Fatalf("event %q on %v, want %q on the PR", ev.Message, ev.Subject, msg)
+		}
+		var data map[string]string
+		if err := json.Unmarshal(ev.Data, &data); err != nil || data["role"] != store.RoleClaude || data["until"] != store.FormatTime(until) {
+			t.Fatalf("event data %s (%v), want the role and %s", ev.Data, err, store.FormatTime(until))
+		}
+	}
+
+	observe(true)
+	check(events(1)[0], h.clock.Now().Add(cd))
+	for range 3 {
+		h.advance(30 * time.Second)
+		observe(false)
+	}
+	events(1)
+	h.advance(cd)
+	observe(true)
+	evs := events(2)
+	last := evs[0]
+	if evs[1].ID > last.ID {
+		last = evs[1]
+	}
+	check(last, h.clock.Now().Add(cd))
+}
+
 func TestForcedRequestBypassesThrottle(t *testing.T) {
 	h := newHarness(t)
 	h.reviewedPR(2, "b1")

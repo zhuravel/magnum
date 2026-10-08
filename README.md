@@ -839,7 +839,10 @@ or the end of the round cuts short. An interrupt does not stop a claude agent's 
 agent whose transcript still shows some is told once more to stop it with TaskStop and do nothing else
 (after a push, that the head moved and the next message restarts the review on it), and the warning says
 whether it did within 2 minutes; work that
-finishes later anyway resumes the agent, and that turn is not taken for someone typing into the pane. A
+finishes later anyway resumes the agent, and that turn is not taken for someone typing into the pane. If
+its transcript shows a prompt typed after Magnum's last prompt to it, a claude agent at work with no Magnum
+prompt in flight counts as someone typing into its pane (prompts to the PR wait `human_cooldown`, and an
+`agent.human_active` event says until when), and otherwise not. A
 reviewer's report starts with its run's marker (`<!-- magnum:run=<run id> -->`, which the prompts ask for
 and codex-review's line prints before the output), a report file already there when its role is prompted
 is set aside (`<name>.prev`), a report without its run's marker counts as missing, and a continued round

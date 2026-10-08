@@ -242,6 +242,10 @@ const EventDefaultModelRestored = "agent.default_model_restored"
     settings' default model back (data: session, role, file, model, found;
     model and found are null when the key was absent).
 
+const EventHumanActive = "agent.human_active"
+    EventHumanActive is recorded on the PR when an ObsHumanActive begins its
+    cooldown (Observation.CooldownUntil; data: role, until).
+
 const EventTrustDialogAnswered = "agents.trust_dialog_answered"
     EventTrustDialogAnswered is the event kind recorded (subject
     "pr:<owner>/<name>#<N>") each time a trust dialog is answered.
@@ -1044,13 +1048,15 @@ func (m *Manager) ObserveSnapshotAt(ctx context.Context, snap herdr.Snapshot, ca
 
       - agent found (by name, else by pane): status/status_at stored; idle|done
         increments idle_ticks, working|blocked resets it; a newly reported
-        agent_session.value becomes session_id; a starting session becomes live.
-        working + a submitted run -> run working (working_seen_at). idle_ticks
-        >= CompletionIdleTicks + a submitted/working run -> run ended,
-        ObsCompleted. working with no pending/submitted/working run (outside a
-        short grace after start/prompt) -> ObsHumanActive, unless the agent is a
-        claude agent whose transcript shows a task notification began the turn
-        (background work of an earlier run resumed it; see notificationTurn),
+        agent_session.value becomes session_id; a starting session becomes
+        live. working + a submitted run -> run working (working_seen_at).
+        idle_ticks >= CompletionIdleTicks + a submitted/working run -> run
+        ended, ObsCompleted. working with no pending/submitted/working
+        run (outside a short grace after start/prompt) -> ObsHumanActive
+        (CooldownUntil set when it begins the PR's cooldown), unless the agent
+        is a claude agent whose transcript shows no prompt typed into the
+        pane after magnum's last prompt to it (magnum's turn going on after
+        esc cut it short, a turn a task notification began; see humanTurn),
         or a judge still finishing the turn of a run the round settled on its
         result file (see turnTail). blocked -> ObsBlocked, or ObsPromptDenied
         when a pending/submitted/working run is in flight, the kind's
@@ -1369,6 +1375,11 @@ type Observation struct {
 	// during Run and left running, as its transcript shows (see
 	// backgroundWait); while there is any, the run does not end.
 	Background int
+	// CooldownUntil is, for an ObsHumanActive that began the PR's cooldown
+	// (its human_active_at was unset, or daemon.human_cooldown had passed
+	// since), when that cooldown ends; zero when the tick only extended a
+	// cooldown already running, and when human_cooldown is 0 (none).
+	CooldownUntil time.Time
 }
     Observation is the result of one tick for one starting/live session.
 

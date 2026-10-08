@@ -115,6 +115,12 @@ func (e *Engine) onObservation(ctx context.Context, o agents.Observation) {
 	case agents.ObsHumanActive:
 		e.log.Info("someone is typing into a magnum pane; prompts wait", "subject", subject, "role", o.Role,
 			"cooldown", e.cfg.Daemon.HumanCooldown.Duration)
+		if !o.CooldownUntil.IsZero() { // a new cooldown, not one this tick extends
+			e.event(ctx, "warn", subject, agents.EventHumanActive,
+				fmt.Sprintf("%s works with no magnum prompt in flight, taken for someone typing: prompts to this PR wait until %s (human_cooldown %s)",
+					o.Role.Label(), o.CooldownUntil.Local().Format("15:04:05"), humanDuration(e.cfg.Daemon.HumanCooldown.Duration)),
+				map[string]any{"role": string(o.Role), "until": store.FormatTime(o.CooldownUntil)})
+		}
 	case agents.ObsCompleted:
 		e.log.Debug("agent turn completed", "subject", subject, "role", o.Role)
 	}

@@ -4030,3 +4030,37 @@ editing history. Code, config comments and prompts reference these by their head
   interrupted for the restart" when the agent did not go idle). A codex agent, a shell role and a transcript
   magnum cannot read get no message (`BackgroundTasks` reports ok false), nor does an agent that shows none.
   A restart or the round's end can take up to 2 more minutes per such reviewer.
+- **Magnum's own interrupted turn is no human activity, and a new cooldown is an event** (2026-10-08, amends "A
+  turn a task notification began is nobody typing"). In the round the previous entry describes, claude-review
+  started two subagents in the background (`async_launched`); the author pushed, the restart pressed esc and
+  abandoned the run after `InterruptWait`. Esc wrote Claude Code's interrupt line (`[Request interrupted by user
+  for tool use]`: a user entry with no `turnOrigin` and no `origin`), which the observer took for the newest turn
+  start, and the turn before it was magnum's own prompt, whose origin is `human` because magnum types into the
+  pane. The subagents ran about 5 and 9 more minutes with herdr showing the agent working and no run in flight,
+  so the observer set `human_active_at` on every tick for about 4 minutes; the 15-minute per-PR cooldown refused
+  all three prompts of the restarted round ("judge prompt refused: human active in agent pane"), and only
+  daemon.log said why. Nobody typed. Now a claude agent at work with no run in flight, past the grace, is someone
+  typing only when its transcript shows a prompt typed after magnum's last prompt to the session
+  (`last_prompt_at`, else `started_at`, plus `transcriptSkew`) in the turn it is in (`agents.Manager.humanTurn`):
+  the prompt that began the turn unless a task notification did, or a prompt Claude Code took into it. When a
+  prompt was typed is the stamp of its `queue-operation` enqueue when Claude Code queued it (typed while the
+  agent worked; the user entry, byte-equal, comes when the agent takes it, so magnum's prompt to a busy agent
+  counts from before `last_prompt_at`), else its entry's. Real transcripts showed that most prompts typed into a
+  busy agent never begin a turn: Claude Code takes them into the turn it is in (a `remove` with `reason:
+  absorbed_mid_turn` and an `attachment` entry `queued_command`, `commandMode: prompt`, `origin.kind: human`,
+  stamped when it was queued), so such a prompt counts too, while a queued command that is a task notification
+  does not. Esc's interrupt line begins no turn (`tEntry.prompt`: a user entry with no origin whose text begins
+  `[Request interrupted by user`); its `promptId` is usually the ended turn's but sometimes the next prompt's, so
+  it is not the test. The run-less watch after a daemon restart scans back past the interrupt line to the last
+  turn start, and on to its enqueue when there is one before the turn before began; reads stay incremental. The
+  message that now stops a cut reviewer's background work goes out through `TimeUp`, which sets `last_prompt_at`,
+  so the turn it begins is magnum's too. Other kinds (codex) and a transcript magnum cannot read keep the old
+  rule: any work with no run is a human. The tick that sets `human_active_at` on a PR whose cooldown was not
+  running (none, or over) says so (`Observation.CooldownUntil`; none when `human_cooldown` is 0), and the engine
+  records one `agent.human_active` warning on the PR (data `role`, `until`): "claude-review works with no magnum
+  prompt in flight, taken for someone typing: prompts to this PR wait until 17:26:59 (human_cooldown 15m)"; ticks
+  that only extend it record nothing, the log line stays. The cooldown's scope (the PR) and length are unchanged.
+  Rejected: again, taking any work shortly after a run for magnum's (this rule rests on what the transcript
+  shows, and a person who types is a human at once); the interrupt line's `promptId` as the test; counting a
+  prompt still in the queue (not yet taken) as typing (the tick after the agent takes it does); an event on every
+  tick of a cooldown.
