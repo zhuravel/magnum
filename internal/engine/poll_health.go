@@ -4,9 +4,11 @@ package engine
 // GitHub answers 502 and 504 (on 10-05 one watch's did 166 times in seven
 // hours), and the daemon's last poll, the time of its attempt, kept saying
 // "1m ago". Each watch owner keeps its last good poll and, while its radar
-// calls fail, since when and why (store.KVWatchPoll); the screens show a
-// watch failing for PollFailingShown, and one toast goes out per failure
-// streak once it lasts pollFailingToast.
+// calls fail, since when, how many in a row and why (store.KVWatchPoll); the
+// screens show a watch failing for PollFailingShown, and one toast goes out
+// per failure streak once it lasts pollFailingToast and pollFailingPolls
+// polls. A tick after a sleep of the Mac (sleptBefore) starts no streak: the
+// polls of its dark wakes failed while its network came up.
 
 import (
 	"context"
@@ -29,8 +31,13 @@ const (
 	// good polls is GitHub's weather, not news.
 	PollFailingShown = 10 * time.Minute
 	// pollFailingToast is how long they must have failed before the one
-	// toast of the streak.
+	// toast of the streak, and pollFailingPolls how many polls in a row: 3
+	// failed polls over 35 minutes of dark wakes were toasted.
 	pollFailingToast = 15 * time.Minute
+	pollFailingPolls = 10
+	// sleepTicks: a wait between ticks longer than this many poll intervals
+	// was a sleep (sleptBefore).
+	sleepTicks = 3
 	// pollFailingWindow: a streak is toasted again, at most, a day later.
 	pollFailingWindow = 24 * time.Hour
 	// pollCauseRunes bounds the cause a failure keeps.
@@ -42,11 +49,13 @@ var kindPollFailing = notify.Kind{One: "watch failing to poll", Many: "watches f
 
 // WatchPoll is how a watch owner's radar calls went, the store.KVWatchPoll
 // value: when one last answered (zero: never since it was recorded), and,
-// while they fail, since when and the last failure's cause ("HTTP 502", or
-// the error's redacted first line); FailingSince is zero while they answer.
+// while they fail, since when, how many polls in a row failed and the last
+// failure's cause ("HTTP 502", or the error's redacted first line);
+// FailingSince is zero while they answer.
 type WatchPoll struct {
 	LastOK       time.Time `json:"last_ok,omitzero"`
 	FailingSince time.Time `json:"failing_since,omitzero"`
+	Failures     int       `json:"failures,omitempty"`
 	Error        string    `json:"error,omitempty"`
 }
 
@@ -117,32 +126,50 @@ func (r *radarResults) add(owner string, err error) {
 }
 
 // recordWatchPolls writes each polled owner's WatchPoll when it changed
-// and toasts a streak that reached pollFailingToast. A poll cut short by
-// shutdown records nothing: its failures are the daemon's, not GitHub's.
+// and toasts a streak that reached pollFailingToast and pollFailingPolls. A
+// poll cut short by shutdown records nothing: its failures are the
+// daemon's, not GitHub's; nor does a failure right after a sleep
+// (afterSleep): the Mac's network was not up yet.
 func (e *Engine) recordWatchPolls(ctx context.Context, r radarResults, now time.Time) {
 	if ctx.Err() != nil {
 		return
 	}
 	for _, owner := range r.owners {
+		err := r.errs[owner]
+		if err != nil && e.afterSleep {
+			continue
+		}
 		key := store.KVWatchPoll(owner)
 		old, _ := e.getKV(ctx, key)
 		p, _ := ParseWatchPoll(old)
-		if err := r.errs[owner]; err == nil {
+		if err == nil {
 			p = WatchPoll{LastOK: now}
 			delete(e.pollToasted, owner)
 		} else {
 			if p.FailingSince.IsZero() {
-				p.FailingSince = now
+				p.FailingSince, p.Failures = now, 0
 			}
+			p.Failures++
 			p.Error = pollCause(err)
 		}
 		if v := p.Value(); v != old {
 			e.setKV(ctx, key, v)
 		}
-		if d := p.Failing(now); d >= pollFailingToast {
+		if d := p.Failing(now); d >= pollFailingToast && p.Failures >= pollFailingPolls {
 			e.toastPollFailing(r.names[owner], p, d)
 		}
 	}
+}
+
+// sleptBefore reports whether the wait since the last tick ended (none
+// before the first) lasted more than sleepTicks poll intervals by the wall
+// clock: the Mac slept, and the polls of its dark wakes fail while the
+// network comes up. The run loop waits one poll interval between ticks
+// (less after a kick), so only a sleep stretches it; a long tick (GitHub
+// timing out) does not count. The wall clock, because Go's monotonic clock
+// stops while macOS sleeps.
+func (e *Engine) sleptBefore(now time.Time) bool {
+	return !e.tickEnded.IsZero() && now.Round(0).Sub(e.tickEnded) > sleepTicks*e.cfg.Daemon.PollInterval.Duration
 }
 
 // toastPollFailing offers the batcher the one toast of a watch's failure

@@ -121,6 +121,7 @@ func TestPollErrorLoggedOncePerErrorPerHour(t *testing.T) {
 	poll(e504, 2) // another error
 	poll(e502, 2)
 	h.advance(time.Hour)
+	poll(e502, 2) // the tick after an hour without one follows a sleep: it records nothing
 	poll(e502, 3) // an hour later
 }
 

@@ -22,7 +22,7 @@ func TestLiveReadOnly(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	c := &Client{Run: &execx.Real{}}
-	if _, err := c.gh(ctx, "auth probe", []string{"api", "rate_limit", "--hostname", "github.com"}, nil, false); err != nil {
+	if _, err := c.gh(ctx, "auth probe", []string{"api", "rate_limit", "--hostname", "github.com"}, nil, false, nil); err != nil {
 		t.Skipf("GitHub unreachable or gh unauthenticated: %v", err)
 	}
 

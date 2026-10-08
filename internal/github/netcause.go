@@ -57,6 +57,11 @@ var githubPatterns = []errPattern{
 	{"bad gateway", "GitHub server error"},
 	{"service unavailable", "GitHub server error"},
 	{"gateway timeout", "GitHub server error"},
+	// GraphQL's 10 s limit answers an empty body, which gh (or a decode)
+	// reports as "unexpected end of JSON input" 11-12 s later; 499 is
+	// GitHub's own timeout.
+	{"unexpected end of json input", "GitHub server error"},
+	{"http 499", "GitHub server error"},
 }
 
 var (
@@ -89,8 +94,8 @@ func NetworkCause(msg string) string {
 // ConnectionCause names the connection-class failure msg reports ("" = none:
 // a real verdict from GitHub, or about an identity): the network's (DNS, a
 // timeout, a refused or reset connection, TLS), gh unable to connect, a
-// closed connection, a GitHub server error (5xx) or a rate limit (429,
-// secondary or primary).
+// closed connection, a GitHub server error (5xx, 499, an empty answer) or a
+// rate limit (429, secondary or primary).
 func ConnectionCause(msg string) string {
 	msg = strings.ToLower(msg)
 	if cause := matchPattern(msg, networkPatterns); cause != "" {

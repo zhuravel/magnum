@@ -49,6 +49,9 @@ const (
 	retroWhyRunes = 200
 	// retroCloseTimeout bounds closing the classifier after a retro.
 	retroCloseTimeout = 2 * time.Minute
+	// retroOfflineRetry is how long the daily retro waits after GitHub could
+	// not be reached before it starts again (the day is not done).
+	retroOfflineRetry = 15 * time.Minute
 )
 
 // RetroPayload is a `magnum retro` request: a retro now, whatever [learn]
@@ -162,8 +165,9 @@ type retroSpec struct {
 }
 
 // maybeRetro starts the day's retro ([learn] enabled, past daily_at, not
-// run today, none running, no drain or infrastructure pause, the agent's CLI
-// not paused at a usage limit or a logout). `magnum pause` holds automatic
+// run today, none running, none waiting after GitHub stopped it, no drain
+// or infrastructure pause, the agent's CLI not paused at a usage limit or a
+// logout). `magnum pause` holds automatic
 // reviews only: the retro reviews nothing, and a pause kept overnight
 // started it hours late. A dry run and `magnum daemon --once` never start
 // one.
@@ -182,7 +186,7 @@ func (e *Engine) maybeRetro(ctx context.Context) {
 	if day, _ := e.getKV(ctx, KVRetroDay); day == store.DayKey(now) || ctx.Err() != nil {
 		return
 	}
-	if e.retroBusy() || e.holdReason(ctx) != "" || e.retroToolPause(ctx) != "" {
+	if e.retroBusy() || now.Before(e.retryRetroAt()) || e.holdReason(ctx) != "" || e.retroToolPause(ctx) != "" {
 		return
 	}
 	e.startRetro(ctx, retroSpec{daily: true, lookback: lc.Lookback.Duration, settle: lc.Settle.Duration})
@@ -244,6 +248,14 @@ func (e *Engine) retroBusy() bool {
 	return e.retroCancel != nil
 }
 
+// retryRetroAt is when the daily retro that GitHub stopped starts again
+// (zero: none waits).
+func (e *Engine) retryRetroAt() time.Time {
+	e.retroMu.Lock()
+	defer e.retroMu.Unlock()
+	return e.retroRetry
+}
+
 // startRetro runs a retro in its own goroutine on a child of ctx (the
 // daemon's: shutdown cancels it), unless the daemon is stopping or draining
 // (stopping: it reports false and a zero time) or one is running (false and
@@ -285,12 +297,15 @@ func (e *Engine) stopRetro() {
 // runRetro looks at the PRs due, newest closed first, until max_prs of
 // them had candidates to classify, a stop that is not a PR's (retroPR) or
 // ctx ended, then records the summary (KVRetroLast) and, for the daily
-// retro, the day (KVRetroDay): a crash runs it again. A retro a shutdown cut
-// short (ctx ended) records neither, so it counts as neither done nor
-// failed: the summary stays the last finished retro's and the next start
-// runs the day's again; its retro.done event says so, as info. The next retro takes every PR still due: the ones not
-// reached, the one a stop interrupted (it got no retro_prs row) and the
-// failed ones until their third attempt; the rest are skipped.
+// retro, the day (KVRetroDay): a crash runs it again. A daily retro that
+// GitHub stopped (retroOutcome.offline) records no day: it starts again
+// retroOfflineRetry later. A retro a shutdown cut short (ctx ended) records
+// neither, so it counts as neither done nor failed: the summary stays the
+// last finished retro's and the next start runs the day's again; its
+// retro.done event says so, as info. The next retro takes every PR still
+// due: the ones not reached, the one a stop interrupted (it got no
+// retro_prs row) and the failed ones until their third attempt; the rest
+// are skipped.
 func (e *Engine) runRetro(ctx context.Context, spec retroSpec) {
 	start := e.now()
 	run := RetroRun{ID: start.Local().Format(retroRunFormat)}
@@ -336,6 +351,7 @@ func (e *Engine) runRetro(ctx context.Context, spec retroSpec) {
 	}()
 
 	withCandidates := 0
+	offline := false               // GitHub could not be reached
 	repoMisses := map[string]int{} // repository -> its misses for the notes
 	for _, pr := range prs {
 		if ctx.Err() != nil || withCandidates >= e.cfg.Learn.MaxPRs {
@@ -343,7 +359,7 @@ func (e *Engine) runRetro(ctx context.Context, spec retroSpec) {
 		}
 		o := e.retroPR(ctx, run, pr, classifier)
 		if o.stop != "" && o.status == "" { // interrupted: the PR stays due
-			sum.Stopped = o.stop
+			sum.Stopped, offline = o.stop, o.offline
 			break
 		}
 		sum.PRs++
@@ -379,6 +395,9 @@ func (e *Engine) runRetro(ctx context.Context, spec retroSpec) {
 		msg += "; stopped by the daemon's shutdown (neither done nor failed: the PRs not reached stay due)"
 	case sum.Stopped != "":
 		msg += "; stopped: " + sum.Stopped
+		if offline && spec.daily {
+			msg += "; the daily retro starts again in " + humanDuration(retroOfflineRetry)
+		}
 	}
 	level := "info"
 	if sum.Failed > 0 || (sum.Stopped != "" && !shutdown) {
@@ -386,7 +405,13 @@ func (e *Engine) runRetro(ctx context.Context, spec retroSpec) {
 	}
 	e.event(context.WithoutCancel(ctx), level, "", "retro.done", msg, map[string]any{"run": run.ID, "prs": sum.PRs,
 		"classified": sum.Classified, "misses": sum.Misses, "caught": sum.Caught, "failed": sum.Failed})
-	if spec.daily && ctx.Err() == nil {
+	switch {
+	case !spec.daily || ctx.Err() != nil:
+	case offline:
+		e.retroMu.Lock()
+		e.retroRetry = e.now().Add(retroOfflineRetry)
+		e.retroMu.Unlock()
+	default:
 		e.setKV(ctx, KVRetroDay, store.DayKey(start))
 	}
 }
@@ -398,6 +423,8 @@ type retroOutcome struct {
 	misses     int
 	caught     int
 	stop       string // why the retro stops
+	// offline: the stop is GitHub's (it could not be reached).
+	offline bool
 	// repoMisses counts the misses stored for the notes of repo (class
 	// miss, scope repo, still new).
 	repoMisses int
@@ -424,8 +451,9 @@ func (e *Engine) markRepoMisses(ctx context.Context, run RetroRun, counts map[st
 // PR's retro_prs row and its retro.* events. A failure of the PR's own (an
 // answer still invalid after the nudge, GitHub refusing the PR) is a failed
 // row, which later retros try again (store.RetroMaxAttempts). One that is
-// not the PR's (a shutdown, a classifier that cannot start or went away,
-// ErrClassifierDown, or a limit the classifier hit) writes no row and
+// not the PR's (a shutdown, a GitHub read that failed for a connection
+// cause, github.ConnectionCause, a classifier that cannot start or went
+// away, ErrClassifierDown, or a limit the classifier hit) writes no row and
 // stops the retro, so the PR stays due; only a usage limit and a logout
 // pause the tool, as in rounds (a per-model limit and an overload are the
 // model's or the moment's).
@@ -458,15 +486,28 @@ func (e *Engine) retroPR(ctx context.Context, run RetroRun, pr store.PR, classif
 		e.event(context.WithoutCancel(ctx), "warn", subject, "retro.fail", "retro: "+why, nil)
 		return record(o, why)
 	}
+	// readFail is fail for what GitHub answered: a read it could not answer
+	// (the network, a server error, a rate limit) is not the PR's.
+	readFail := func(o retroOutcome, err error) retroOutcome {
+		cause := github.ConnectionCause(err.Error())
+		if cause == "" || ctx.Err() != nil {
+			return fail(o, err)
+		}
+		o.offline = true
+		if why := "GitHub unreachable"; cause != why {
+			return stop(o, why+" ("+cause+")")
+		}
+		return stop(o, cause)
+	}
 	e.event(ctx, "info", subject, "retro.begin", fmt.Sprintf("retro %s: reading what other reviewers said", run.ID), nil)
 
 	in, gh, err := e.retroInput(ctx, repo, pr)
 	if err != nil {
-		return fail(retroOutcome{}, err)
+		return readFail(retroOutcome{}, err)
 	}
-	res, err := learn.Build(in)
+	res, err := learn.Build(in) // compares commits on GitHub
 	if err != nil {
-		return fail(retroOutcome{}, err)
+		return readFail(retroOutcome{}, err)
 	}
 	o := retroOutcome{candidates: len(res.Candidates), caught: res.Caught, repo: repo.FullName()}
 	for _, c := range res.Outside {

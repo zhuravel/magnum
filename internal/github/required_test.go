@@ -110,6 +110,51 @@ func TestRequiredChecks(t *testing.T) {
 	}
 }
 
+// TestRequiredChecksAnswersLogAtDebug: a 404 or a 403 (not a rate limit)
+// from these endpoints is GitHub's answer (known false), not a failure, yet
+// it was 55 of the 132 exec warnings in a day and a half. gh exits 1 for it
+// as for a 500, so each call carries execx.Cmd.Expected, which takes only
+// those answers: a server error and a rate limit still warn.
+func TestRequiredChecksAnswersLogAtDebug(t *testing.T) {
+	for _, tc := range []struct {
+		name                       string
+		rulesStatus, classicStatus int
+		rules, classic             string
+		expected                   []bool // per failed call: logged at Debug
+	}{
+		{"no rules, classic 404", 200, 404, `[]`, notFoundBody, []bool{true}},
+		{"free plan: 403 from both", 403, 403, upgradeBody, upgradeBody, []bool{true, true}},
+		{"rules 404, classic 404", 404, 404, notFoundBody, notFoundBody, []bool{true, true}},
+		{"rules fail", 502, 0, `{"message":"Server Error"}`, "", []bool{false}},
+		{"rules rate limited", 403, 0, `{"message":"API rate limit exceeded for installation"}`, "", []bool{false}},
+		{"classic fails", 200, 500, `[]`, `{"message":"Server Error"}`, []bool{false}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &answerRunner{Runner: requiredFake(t, tc.rulesStatus, tc.rules, tc.classicStatus, tc.classic)}
+			_, _, _ = (&Client{Run: r}).RequiredChecks(context.Background(), "talkable", "talkable", "master")
+			if !reflect.DeepEqual(r.expected, tc.expected) {
+				t.Fatalf("failed calls taken for answers = %v, want %v", r.expected, tc.expected)
+			}
+		})
+	}
+}
+
+// answerRunner records, for each call that failed, whether its
+// execx.Cmd.Expected takes the exit for an answer (execx.Real logs it at
+// Debug then).
+type answerRunner struct {
+	execx.Runner
+	expected []bool
+}
+
+func (r *answerRunner) Run(ctx context.Context, c execx.Cmd) (execx.Result, error) {
+	res, err := r.Runner.Run(ctx, c)
+	if err != nil {
+		r.expected = append(r.expected, c.Expected != nil && c.Expected(res))
+	}
+	return res, err
+}
+
 func TestRequiredChecksInvalidInput(t *testing.T) {
 	f := &execx.Fake{}
 	for _, in := range [][3]string{{"talkable", "talkable", "a b"}, {"talkable", "talkable", "../x"}, {"talkable", "talkable", ""}, {"a b", "talkable", "main"}} {

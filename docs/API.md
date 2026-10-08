@@ -5834,12 +5834,14 @@ func (w Wait) Short(now time.Time) string
 type WatchPoll struct {
 	LastOK       time.Time `json:"last_ok,omitzero"`
 	FailingSince time.Time `json:"failing_since,omitzero"`
+	Failures     int       `json:"failures,omitempty"`
 	Error        string    `json:"error,omitempty"`
 }
     WatchPoll is how a watch owner's radar calls went, the store.KVWatchPoll
     value: when one last answered (zero: never since it was recorded), and,
-    while they fail, since when and the last failure's cause ("HTTP 502",
-    or the error's redacted first line); FailingSince is zero while they answer.
+    while they fail, since when, how many polls in a row failed and the
+    last failure's cause ("HTTP 502", or the error's redacted first line);
+    FailingSince is zero while they answer.
 
 func ParseWatchPoll(v string) (WatchPoll, bool)
     ParseWatchPoll reads a store.KVWatchPoll value; false for "" or anything
@@ -6219,6 +6221,10 @@ type Cmd struct {
 	// this a git repository? does this ref exist?): a failed exit is logged
 	// at Debug instead of Warn. Start failures and timeouts still warn.
 	Probe bool
+	// Expected, when set, picks the non-zero exits that are expected answers,
+	// logged at Debug as Probe logs every one: gh api exits 1 for a 404 as
+	// for a 500, and only its output tells them apart. Other exits still warn.
+	Expected func(Result) bool
 	// NoTTY starts the process in a new session, without a controlling
 	// terminal (setsid), as launchd starts the daemon. An interactive shell
 	// (`zsh -ic`) run from a CLI in a terminal otherwise shares that
@@ -6470,8 +6476,8 @@ func ConnectionCause(msg string) string
     ConnectionCause names the connection-class failure msg reports ("" = none:
     a real verdict from GitHub, or about an identity): the network's (DNS,
     a timeout, a refused or reset connection, TLS), gh unable to connect,
-    a closed connection, a GitHub server error (5xx) or a rate limit (429,
-    secondary or primary).
+    a closed connection, a GitHub server error (5xx, 499, an empty answer) or a
+    rate limit (429, secondary or primary).
 
 func IsAccount(author, typename, login string, bot bool) bool
     IsAccount reports whether an author (its login in either form and its
@@ -6727,7 +6733,8 @@ func (c *Client) RequiredChecks(ctx context.Context, owner, repo, branch string)
     (.../branches/{branch}/protection/required_status_checks, which usually
     answers 404 without admin access). known is false when GitHub does not say:
     403 (a private repository on a free plan) or 404 from the endpoint that
-    would have to answer. Any other failure is an error.
+    would have to answer, logged at Debug (restProbe). Any other failure is an
+    error.
 
 func (c *Client) ReviewComments(ctx context.Context, owner, repo string, number int, reviewID int64) ([]ReviewComment, error)
     ReviewComments lists the inline comments of a review (GET

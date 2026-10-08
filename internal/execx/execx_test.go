@@ -236,6 +236,27 @@ func TestProbeFailureLogsAtDebug(t *testing.T) {
 	}
 }
 
+// An exit that Expected takes for an answer logs at Debug; any other exit
+// of the same command still warns (gh api exits 1 for a 404 and a 500
+// alike, git config --get exits 1 for a key not set and 3 for a broken file).
+func TestExpectedExitLogsAtDebug(t *testing.T) {
+	for _, tc := range []struct {
+		code string
+		want slog.Level
+	}{{"1", slog.LevelDebug}, {"3", slog.LevelWarn}} {
+		var got []slog.Level
+		r := &Real{Log: levelRecorder(func(l slog.Level) { got = append(got, l) })}
+		answer := func(res Result) bool { return res.Code == 1 }
+		_, err := r.Run(context.Background(), Cmd{Name: "sh", Args: []string{"-c", "exit " + tc.code}, Expected: answer})
+		if err == nil {
+			t.Fatalf("exit %s must be an error", tc.code)
+		}
+		if len(got) != 1 || got[0] != tc.want {
+			t.Fatalf("exit %s: levels %v, want [%v]", tc.code, got, tc.want)
+		}
+	}
+}
+
 type levelRecorder func(slog.Level)
 
 func (f levelRecorder) Printf(string, ...any)                 { f(slog.LevelInfo) }

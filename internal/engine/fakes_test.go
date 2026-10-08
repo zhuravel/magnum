@@ -108,6 +108,8 @@ type fakeGH struct {
 	threads  map[int][]github.Thread
 	contents map[string][]byte
 	statuses map[string]string
+	// threadsErr fails ReviewThreads.
+	threadsErr error
 	// mergeCommits answers ConfirmStates' MergeCommitOid of a merged PR by
 	// number.
 	mergeCommits map[int]string
@@ -163,6 +165,9 @@ func (g *fakeGH) ReviewThreads(_ context.Context, owner, repo string, number int
 	g.record(fmt.Sprintf("threads:%s/%s#%d", owner, repo, number))
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if g.threadsErr != nil {
+		return nil, g.threadsErr
+	}
 	return slices.Clone(g.threads[number]), nil
 }
 

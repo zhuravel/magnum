@@ -172,6 +172,32 @@ func TestVerifyAsksAgainAfterANetworkFailureOutlastsTheReadRetries(t *testing.T)
 	}
 }
 
+// GitHub's GraphQL limit of 10 s answers an empty body, and gh reports
+// "unexpected end of JSON input" 11-12 s later: a GitHub server error, so the
+// round's review check waits and asks again as after a network failure
+// instead of ending the round with its check failed.
+func TestVerifyAsksAgainAfterGitHubAnsweredNothing(t *testing.T) {
+	e := newEnv(t)
+	gh := &flakyGitHub{fakeGitHub: e.gh}
+	e.r.GitHub = gh
+	slept := e.recordSleeps()
+	empty := errors.New("github reviews talkable/talkable#7: gh api graphql --input - exited 1: unexpected end of JSON input")
+	e.ag.behaviors[agents.RoleJudge] = []behavior{judgeAfterArming(
+		func() { gh.arm(verifyAttempts, empty) },
+		e.judgePosts(703, "CHANGES_REQUESTED", "REQUEST_CHANGES").behavior(t))}
+
+	res, err := e.r.RunRound(e.ctx, e.input(KindInitial))
+	if err != nil || res.Outcome != OutcomePosted || res.ReviewID != 703 {
+		t.Fatalf("RunRound = %+v, %v", res, err)
+	}
+	if n := slept(verifyNetRetry); n != 1 {
+		t.Errorf("slept %s %d times, want once", verifyNetRetry, n)
+	}
+	if evs := eventsOfKind(e.events(), "round.verify_retry"); len(evs) != 1 || !strings.Contains(evs[0].Message, "GitHub server error") {
+		t.Fatalf("round.verify_retry events: %+v", evs)
+	}
+}
+
 // A network failure that lasts through the second asking too ends the round
 // as before: unverified, to be adopted by the next round.
 func TestVerifyFailsWhenTheNetworkStaysDownAfterTheRetry(t *testing.T) {

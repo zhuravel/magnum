@@ -24,6 +24,11 @@ func TestConnectionCause(t *testing.T) {
 		{"GET /app: 503 Service Unavailable", "GitHub server error"},
 		{"gh api repos/talkable/talkable exited 1: gh: Server Error (HTTP 500)", "GitHub server error"},
 		{"gh: HTTP 504: Gateway Timeout (https://api.github.com/user)", "GitHub server error"},
+		// GraphQL's 10 s limit answers an empty body; gh reports it 11-12 s
+		// later, and so does a decode of the empty answer.
+		{"github radar talkable page 1: gh api graphql --input - exited 1: unexpected end of JSON input", "GitHub server error"},
+		{"github auto-approve talkable/talkable#7: decode response: unexpected end of JSON input", "GitHub server error"},
+		{"gh api graphql exited 1: gh: Client Closed Request (HTTP 499)", "GitHub server error"},
 		{"GET /app/installations/2: 429 Too Many Requests", "rate limited"},
 		{"gh: You have exceeded a secondary rate limit. Please wait a few minutes before you try again. (HTTP 403)", "rate limited"},
 		{"GET /installation/repositories: 403 API rate limit exceeded for installation ID 2.", "rate limited"},

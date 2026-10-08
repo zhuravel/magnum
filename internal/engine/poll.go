@@ -70,7 +70,8 @@ func (e *Engine) poll(ctx context.Context) error {
 		e.recordRateLimit(ctx, rl, now)
 		radar.add(w.Owner, err)
 		if err != nil {
-			if e.logOnce("poll:"+w.Owner, err.Error(), now) {
+			// A failure right after a sleep is the Mac's network (sleptBefore).
+			if !e.afterSleep && e.logOnce("poll:"+w.Owner, err.Error(), now) {
 				e.event(ctx, "warn", "watch:"+w.Owner, "poll.error", fmt.Sprintf("radar %s: %v", w.Owner, err), nil)
 			}
 			errs = append(errs, fmt.Errorf("poll %s: %w", w.Owner, err))
@@ -167,7 +168,7 @@ func (e *Engine) pollOwner(ctx context.Context, w config.Watch, gh GitHub, repos
 // open PR of every repository it lists (its first page ran out of time). A
 // failed read leaves the rollups it did not read unknown, which keeps the
 // stored CI and fetches nothing for it, and is one warning per distinct
-// error an hour; the poll goes on.
+// error an hour (none right after a sleep, sleptBefore); the poll goes on.
 func (e *Engine) readCI(ctx context.Context, w config.Watch, gh GitHub, repos []github.RepoRadar, watches []*config.Watch, now time.Time) {
 	var prs []github.PRRadar
 	for i, rr := range repos {
@@ -180,7 +181,7 @@ func (e *Engine) readCI(ctx context.Context, w config.Watch, gh GitHub, repos []
 	}
 	states, rl, err := gh.CIStates(ctx, prs)
 	e.recordRateLimit(ctx, rl, now)
-	if err != nil && e.logOnce("ci:"+w.Owner, err.Error(), now) {
+	if err != nil && !e.afterSleep && e.logOnce("ci:"+w.Owner, err.Error(), now) {
 		e.event(ctx, "warn", "watch:"+w.Owner, "poll.ci_error", fmt.Sprintf("CI of %d PRs (%d read): %v", len(prs), len(states), err), nil)
 	}
 	for i := range repos {

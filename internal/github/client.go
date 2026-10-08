@@ -239,8 +239,9 @@ func BetweenCalls(ctx context.Context) {
 }
 
 // gh runs one gh command with the client's env and directory, after
-// BetweenCalls.
-func (c *Client) gh(ctx context.Context, label string, args []string, stdin []byte, mutates bool) (execx.Result, error) {
+// BetweenCalls; expected (nil = none) picks the failed exits that are
+// answers (execx.Cmd.Expected).
+func (c *Client) gh(ctx context.Context, label string, args []string, stdin []byte, mutates bool, expected func(execx.Result) bool) (execx.Result, error) {
 	if c.Run == nil {
 		return execx.Result{}, errors.New("github: Client.Run is nil")
 	}
@@ -248,13 +249,14 @@ func (c *Client) gh(ctx context.Context, label string, args []string, stdin []by
 	env := maps.Clone(ghDefaults)
 	maps.Copy(env, c.Env)
 	return c.Run.Run(ctx, execx.Cmd{
-		Name:    "gh",
-		Args:    args,
-		Dir:     c.Dir,
-		Env:     env,
-		Stdin:   stdin,
-		Mutates: mutates,
-		Label:   "gh " + label,
+		Name:     "gh",
+		Args:     args,
+		Dir:      c.Dir,
+		Env:      env,
+		Stdin:    stdin,
+		Mutates:  mutates,
+		Label:    "gh " + label,
+		Expected: expected,
 	})
 }
 
@@ -308,7 +310,7 @@ func (c *Client) graphqlOnce(ctx context.Context, op, query string, vars map[str
 	}
 	args := append([]string{"api", "graphql"}, ghHost...)
 	args = append(args, "--input", "-")
-	res, runErr := c.gh(ctx, op, args, body, false)
+	res, runErr := c.gh(ctx, op, args, body, false, nil)
 	var exitErr *execx.ExitError
 	if runErr != nil && !errors.As(runErr, &exitErr) {
 		return RateLimit{}, nil, fmt.Errorf("github %s: %w", op, runErr)
@@ -360,10 +362,23 @@ func (c *Client) graphqlOnce(ctx context.Context, op, query string, vars map[str
 // out may be nil to ignore the response body. After a 401 it calls Reauth and
 // repeats the call once.
 func (c *Client) rest(ctx context.Context, op, method, path string, fields [][2]string, mutates bool, out any) error {
-	err := c.restOnce(ctx, op, method, path, fields, nil, mutates, out)
+	err := c.restOnce(ctx, op, method, path, fields, nil, mutates, out, nil)
 	retry, err := c.reauthorize(ctx, err)
 	if retry {
-		return c.restOnce(ctx, op, method, path, fields, nil, mutates, out)
+		return c.restOnce(ctx, op, method, path, fields, nil, mutates, out, nil)
+	}
+	return err
+}
+
+// restProbe is rest for a GET whose 403 (not a rate limit) or 404 is
+// GitHub's answer, not a failure (unanswered): gh exits 1 for it as for a
+// 500, so its status decides, and only such an answer is logged at Debug.
+func (c *Client) restProbe(ctx context.Context, op, path string, out any) error {
+	answer := func(res execx.Result) bool { return unanswered(ghFailure(op, res, &execx.ExitError{Code: res.Code})) }
+	err := c.restOnce(ctx, op, "GET", path, nil, nil, false, out, answer)
+	retry, err := c.reauthorize(ctx, err)
+	if retry {
+		return c.restOnce(ctx, op, "GET", path, nil, nil, false, out, answer)
 	}
 	return err
 }
@@ -376,17 +391,17 @@ func (c *Client) restInput(ctx context.Context, op, method, path string, body an
 	if err != nil {
 		return fmt.Errorf("github %s: encode request: %w", op, err)
 	}
-	err = c.restOnce(ctx, op, method, path, nil, in, mutates, out)
+	err = c.restOnce(ctx, op, method, path, nil, in, mutates, out, nil)
 	retry, err := c.reauthorize(ctx, err)
 	if retry {
-		return c.restOnce(ctx, op, method, path, nil, in, mutates, out)
+		return c.restOnce(ctx, op, method, path, nil, in, mutates, out, nil)
 	}
 	return err
 }
 
 // restOnce runs one REST call with fields as gh -f, or with stdin (when
-// non-nil) as its JSON body (--input -).
-func (c *Client) restOnce(ctx context.Context, op, method, path string, fields [][2]string, stdin []byte, mutates bool, out any) error {
+// non-nil) as its JSON body (--input -); expected as in gh.
+func (c *Client) restOnce(ctx context.Context, op, method, path string, fields [][2]string, stdin []byte, mutates bool, out any, expected func(execx.Result) bool) error {
 	args := []string{"api"}
 	if method != "GET" {
 		args = append(args, "-X", method)
@@ -399,7 +414,7 @@ func (c *Client) restOnce(ctx context.Context, op, method, path string, fields [
 	if stdin != nil {
 		args = append(args, "--input", "-")
 	}
-	res, err := c.gh(ctx, op, args, stdin, mutates)
+	res, err := c.gh(ctx, op, args, stdin, mutates, expected)
 	if err != nil {
 		var exitErr *execx.ExitError
 		if errors.As(err, &exitErr) {
@@ -437,7 +452,7 @@ func (c *Client) restRaw(ctx context.Context, op, path, accept string) ([]byte, 
 func (c *Client) restRawOnce(ctx context.Context, op, path, accept string) ([]byte, error) {
 	args := append([]string{"api", path}, ghHost...)
 	args = append(args, "-H", "Accept: "+accept)
-	res, err := c.gh(ctx, op, args, nil, false)
+	res, err := c.gh(ctx, op, args, nil, false, nil)
 	if err != nil {
 		var exitErr *execx.ExitError
 		if errors.As(err, &exitErr) {

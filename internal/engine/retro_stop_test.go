@@ -92,6 +92,127 @@ func TestRetroLeavesThePRDueWhenTheRetroIsCutShort(t *testing.T) {
 	}
 }
 
+// TestRetroStopsWhenGitHubCannotBeReached: a forced retro 10 s into a DNS
+// outage failed 5 of 5 PRs in a second, each spending one of its three
+// attempts. A GitHub read that fails for a connection cause (the threads,
+// or the comparison learn.Build asks for) is not the PR's: it writes no
+// retro_prs row and leaves the attempts as they were, the PR stays due, the
+// PRs after it are not reached, and retro.done says "stopped: GitHub
+// unreachable".
+func TestRetroStopsWhenGitHubCannotBeReached(t *testing.T) {
+	for name, tc := range map[string]struct {
+		cut   func(*fakeGH, error)
+		err   string
+		cause string
+	}{
+		"the threads": {cut: func(g *fakeGH, err error) { g.threadsErr = err },
+			err:   "github review threads talkable/talkable#7: gh api graphql exited 1: error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com",
+			cause: "GitHub unreachable"},
+		"the comparison": {cut: func(g *fakeGH, err error) { g.filesErr = err },
+			err:   `github compare talkable/talkable: Get "https://api.github.com/repos/talkable/talkable/compare/a...b": dial tcp: lookup api.github.com: no such host`,
+			cause: "GitHub unreachable (DNS lookup failed)"},
+		"an empty answer": {cut: func(g *fakeGH, err error) { g.threadsErr = err },
+			err:   "github review threads talkable/talkable#7: unexpected end of JSON input",
+			cause: "GitHub unreachable (GitHub server error)"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fc := &fakeClassifier{answer: func(job ClassifyJob) (ClassifyResult, error) {
+				return ClassifyResult{}, os.WriteFile(job.OutputPath, []byte(`not json`), 0o600)
+			}}
+			h := newHarness(t, withClassifier(fc))
+			pr7, pr8 := retroPR(h, 7, 24*time.Hour), retroPR(h, 8, 48*time.Hour)
+			seedRetroGitHub(h, 7)
+			seedRetroGitHub(h, 8)
+			// PR 7 failed once already (an invalid answer): one attempt spent.
+			h.requestRetro(RetroPayload{PRs: []int64{pr7.ID}})
+			if rp, err := h.retroRecord(pr7.ID); err != nil || rp.Status != store.RetroFailed || rp.Attempts != 1 {
+				t.Fatalf("PR 7 before the outage: %+v, %v", rp, err)
+			}
+			fails, jobs := len(h.events("retro.fail")), len(fc.jobs)
+
+			h.gh.mu.Lock()
+			tc.cut(h.gh, errors.New(tc.err))
+			h.gh.mu.Unlock()
+			h.advance(time.Second)
+			h.requestRetro(RetroPayload{})
+
+			if rp, err := h.retroRecord(pr7.ID); err != nil || rp.Status != store.RetroFailed || rp.Attempts != 1 {
+				t.Fatalf("PR 7 after the outage: %+v, %v; want its one attempt", rp, err)
+			}
+			if rp, err := h.retroRecord(pr8.ID); !errors.Is(err, store.ErrNotFound) {
+				t.Fatalf("PR 8 has a retro row: %+v, %v", rp, err)
+			}
+			if n := len(h.events("retro.fail")); n != fails {
+				t.Fatalf("retro.fail events %d, want %d", n, fails)
+			}
+			if len(fc.jobs) != jobs {
+				t.Fatalf("classified %d times during the outage", len(fc.jobs)-jobs)
+			}
+			if due, err := h.st.RetroDue(h.ctx, store.RetroQuery{Since: h.clock.Now().Add(-7 * 24 * time.Hour)}); err != nil || len(due) != 2 {
+				t.Fatalf("due after the outage = %d PRs, %v; want both", len(due), err)
+			}
+			done := h.events("retro.done")
+			if msg := done[len(done)-1].Message; !strings.Contains(msg, "0 failed; stopped: "+tc.cause) {
+				t.Fatalf("retro.done = %q, want it stopped: %s", msg, tc.cause)
+			}
+			if sum := h.retroLast(); sum.Failed != 0 || sum.Stopped != tc.cause {
+				t.Fatalf("summary = %+v", sum)
+			}
+			if stopped := h.events("retro.stopped"); len(stopped) != 1 || strings.Contains(stopped[0].Message, "api.github.com") {
+				t.Errorf("retro.stopped events = %+v, want one that names the cause, not the error", stopped)
+			}
+		})
+	}
+}
+
+// TestDailyRetroTriesAgainAfterGitHubStoppedIt: a daily retro that GitHub
+// stopped does not count as the day's: it starts again 15 minutes later,
+// not on every tick meanwhile, and the day is done once a retro finishes.
+func TestDailyRetroTriesAgainAfterGitHubStoppedIt(t *testing.T) {
+	h := newHarness(t, func(h *harness) {
+		h.cfg.Learn.Enabled = true
+		h.cfg.Learn.DailyAt = "07:00"
+	})
+	pr := retroPR(h, 7, 24*time.Hour)
+	seedRetroGitHub(h, 7)
+	h.gh.mu.Lock()
+	h.gh.threadsErr = errors.New("github review threads talkable/talkable#7: gh api graphql exited 1: error connecting to api.github.com")
+	h.gh.mu.Unlock()
+	h.tick()
+	if n := h.gh.count("threads:"); n != 1 {
+		t.Fatalf("the daily retro read threads %d times, want once", n)
+	}
+	if day, ok, _ := h.st.GetKV(h.ctx, KVRetroDay); ok {
+		t.Fatalf("a retro GitHub stopped marked the day: %q", day)
+	}
+	for range 14 {
+		h.advance(time.Minute)
+		h.tick()
+	}
+	if n := h.gh.count("threads:"); n != 1 {
+		t.Fatalf("the daily retro started again within 15 minutes (%d reads)", n)
+	}
+	h.gh.mu.Lock()
+	h.gh.threadsErr = nil
+	h.gh.mu.Unlock()
+	h.advance(time.Minute)
+	h.tick()
+	if n := h.gh.count("threads:"); n != 2 {
+		t.Fatalf("the daily retro did not start again after 15 minutes (%d reads)", n)
+	}
+	if day, _, _ := h.st.GetKV(h.ctx, KVRetroDay); day != store.DayKey(h.clock.Now()) {
+		t.Fatalf("retro day = %q after a retro that finished", day)
+	}
+	if rp, err := h.retroRecord(pr.ID); err != nil || rp.Status != store.RetroUnclassified {
+		t.Fatalf("retro row = %+v, %v", rp, err)
+	}
+	h.advance(time.Hour)
+	h.tick()
+	if n := h.gh.count("threads:"); n != 2 {
+		t.Fatalf("the daily retro ran twice in a day (%d reads)", n)
+	}
+}
+
 // TestRetroRetriesAFailedPRUpToThreeTimes: an answer that stays invalid is
 // the PR's failure: recorded, and tried again by the next retros until
 // store.RetroMaxAttempts.

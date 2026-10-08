@@ -15,7 +15,8 @@ import (
 // (.../branches/{branch}/protection/required_status_checks, which usually
 // answers 404 without admin access). known is false when GitHub does not
 // say: 403 (a private repository on a free plan) or 404 from the endpoint
-// that would have to answer. Any other failure is an error.
+// that would have to answer, logged at Debug (restProbe). Any other failure
+// is an error.
 func (c *Client) RequiredChecks(ctx context.Context, owner, repo, branch string) (checks []string, known bool, err error) {
 	if err := checkRepo(owner, repo); err != nil {
 		return nil, false, err
@@ -32,7 +33,7 @@ func (c *Client) RequiredChecks(ctx context.Context, owner, repo, branch string)
 		} `json:"parameters"`
 	}
 	op := fmt.Sprintf("rules %s/%s %s", owner, repo, branch)
-	err = c.rest(ctx, op, "GET", fmt.Sprintf("repos/%s/%s/rules/branches/%s?per_page=100", owner, repo, branch), nil, false, &rules)
+	err = c.restProbe(ctx, op, fmt.Sprintf("repos/%s/%s/rules/branches/%s?per_page=100", owner, repo, branch), &rules)
 	if err != nil && !unanswered(err) {
 		return nil, false, err
 	}
@@ -57,7 +58,7 @@ func (c *Client) RequiredChecks(ctx context.Context, owner, repo, branch string)
 		} `json:"checks"`
 	}
 	op = fmt.Sprintf("branch protection %s/%s %s", owner, repo, branch)
-	err = c.rest(ctx, op, "GET", fmt.Sprintf("repos/%s/%s/branches/%s/protection/required_status_checks", owner, repo, branch), nil, false, &classic)
+	err = c.restProbe(ctx, op, fmt.Sprintf("repos/%s/%s/branches/%s/protection/required_status_checks", owner, repo, branch), &classic)
 	switch {
 	case unanswered(err):
 		return nil, false, nil

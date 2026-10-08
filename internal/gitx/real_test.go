@@ -3,6 +3,8 @@ package gitx
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -445,6 +447,69 @@ func TestRealBranchPR(t *testing.T) {
 	if n, ok, err := fx.c.BranchPR(ctx, fx.clone, "main"); err != nil || ok || n != 0 {
 		t.Fatalf("unset: %d %v %v", n, ok, err)
 	}
+}
+
+// TestRealExpectedAnswersLogAtDebug: git's "no" to a question gitx asks
+// (`config --get` of a key not set, `symbolic-ref -q` of a ref that is not
+// symbolic: exit 1) is an answer and logs at Debug; 21 of the 132 exec
+// warnings in a day and a half were these. Another exit of the same command
+// (128: not a repository) still warns.
+func TestRealExpectedAnswersLogAtDebug(t *testing.T) {
+	fx := newFixture(t)
+	ctx := context.Background()
+	var log levelLines
+	fx.r.Log = &log
+	if _, ok, err := fx.c.BranchPR(ctx, fx.clone, "main"); err != nil || ok {
+		t.Fatalf("BranchPR(main) = %v, %v", ok, err)
+	}
+	if err := fx.c.ResetPlaceholder(ctx, fx.clone, "review1", "main"); err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.c.UpdateRefDelete(ctx, fx.clone, PRRef(9)); err != nil {
+		t.Fatal(err)
+	}
+	notRepo := t.TempDir()
+	if err := fx.c.UpdateRefDelete(ctx, notRepo, PRRef(9)); err == nil {
+		t.Fatal("symbolic-ref outside a repository must fail")
+	}
+	for _, tc := range []struct{ match, dir, level string }{
+		{"config --get branch.main.pr", fx.clone, "DEBUG"},
+		{"config --get branch.review1.merge", fx.clone, "DEBUG"},
+		{"symbolic-ref -q " + PRRef(9), fx.clone, "DEBUG"},
+		{"symbolic-ref -q " + PRRef(9), notRepo, "WARN"},
+	} {
+		got := log.find(tc.match, "dir="+tc.dir+" ")
+		if len(got) != 1 || !strings.HasPrefix(got[0], tc.level+" ") {
+			t.Errorf("%s in %s: logged %q, want one line at %s", tc.match, tc.dir, got, tc.level)
+		}
+	}
+}
+
+// levelLines records each exec line with its level (an execx.LevelLogger).
+type levelLines struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (l *levelLines) Printf(format string, args ...any) { l.Logf(slog.LevelInfo, format, args...) }
+
+func (l *levelLines) Logf(level slog.Level, format string, args ...any) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.lines = append(l.lines, level.String()+" "+fmt.Sprintf(format, args...))
+}
+
+// find returns the lines that contain every one of subs.
+func (l *levelLines) find(subs ...string) []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var out []string
+	for _, line := range l.lines {
+		if !slices.ContainsFunc(subs, func(s string) bool { return !strings.Contains(line, s) }) {
+			out = append(out, line)
+		}
+	}
+	return out
 }
 
 func TestRealRemoteAndClone(t *testing.T) {

@@ -309,6 +309,11 @@ type Engine struct {
 	// pollToasted is the toast key of each watch owner's (lower case)
 	// failure streak offered to the batcher in this run (poll_health.go).
 	pollToasted map[string]string
+	// tickEnded is when the last tick ended, by the wall clock, and
+	// afterSleep says that the wait since lasted long enough for a sleep of
+	// the Mac (poll_health.go). Tick goroutine only.
+	tickEnded  time.Time
+	afterSleep bool
 	// machineLast is the newest round.environment event noteMachine read,
 	// and machineToasted the groups it offered to the batcher in this run
 	// and when (environment.go). Tick goroutine only.
@@ -352,6 +357,7 @@ type Engine struct {
 	retroMu      sync.Mutex // the running retro (retro.go)
 	retroCancel  context.CancelFunc
 	retroStarted time.Time
+	retroRetry   time.Time // the daily retro GitHub stopped starts again then
 	retroWG      sync.WaitGroup
 
 	curateMu      sync.Mutex // the running notes curation (notes_curate.go)
@@ -672,6 +678,8 @@ func (e *Engine) Tick(ctx context.Context) error {
 		return err
 	}
 	now := e.now()
+	e.afterSleep = e.sleptBefore(now)
+	defer func() { e.tickEnded = e.now().Round(0) }()
 	var errs []error
 	e.compares.reset() // a comparison serves the tick that made it
 	e.setKV(ctx, kvLastTick, store.FormatTime(now))

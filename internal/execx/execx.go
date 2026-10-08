@@ -50,6 +50,10 @@ type Cmd struct {
 	// this a git repository? does this ref exist?): a failed exit is logged
 	// at Debug instead of Warn. Start failures and timeouts still warn.
 	Probe bool
+	// Expected, when set, picks the non-zero exits that are expected answers,
+	// logged at Debug as Probe logs every one: gh api exits 1 for a 404 as
+	// for a 500, and only its output tells them apart. Other exits still warn.
+	Expected func(Result) bool
 	// NoTTY starts the process in a new session, without a controlling
 	// terminal (setsid), as launchd starts the daemon. An interactive shell
 	// (`zsh -ic`) run from a CLI in a terminal otherwise shares that
@@ -252,7 +256,8 @@ func (r *Real) Run(ctx context.Context, c Cmd) (Result, error) {
 		// A command the caller's cancellation ended (the daemon stopping) is
 		// routine; its own timeout or the caller's deadline still warns.
 		stopped := errors.Is(caller.Err(), context.Canceled)
-		if err != nil && !stopped && !(c.Probe && res.Code > 0 && ctx.Err() == nil) {
+		answer := res.Code > 0 && ctx.Err() == nil && (c.Probe || c.Expected != nil && c.Expected(res))
+		if err != nil && !stopped && !answer {
 			level = slog.LevelWarn
 		}
 		logAt(r.Log, level, "exec %s dir=%s code=%d dur=%s%s err=%v", Redact(c.String()), c.Dir, res.Code, res.Duration.Round(time.Millisecond), trunc, err)

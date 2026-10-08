@@ -95,6 +95,10 @@ type call struct {
 	mutates bool
 	timeout time.Duration
 	probe   bool // a non-zero exit is an expected answer, logged at Debug
+	// noExit is the one exit code that answers no (1: `config --get` has no
+	// such key, `symbolic-ref -q` no symbolic ref), logged at Debug; any other
+	// failure warns. 0 = none.
+	noExit int
 }
 
 // git runs `git -C dir args...`. Errors are wrapped with the label and keep the
@@ -112,6 +116,9 @@ func (c *Client) git(ctx context.Context, dir string, k call, args ...string) (e
 		Mutates: k.mutates,
 		Label:   "git " + k.label,
 		Probe:   k.probe,
+	}
+	if k.noExit != 0 {
+		cmd.Expected = func(r execx.Result) bool { return r.Code == k.noExit }
 	}
 	// -C is resolved against the process cwd, so only an absolute dir may also
 	// become Dir (a relative one would be applied twice).
@@ -386,7 +393,7 @@ func (c *Client) ResetPlaceholder(ctx context.Context, dir, branch, base string)
 	// `git branch --unset-upstream` fails on a branch without upstream, so ask
 	// first; exit code 1 of `config --get` means the key is not set, and an
 	// empty value names no upstream either.
-	res, err := c.git(ctx, dir, call{label: "config branch." + branch + ".merge"}, "config", "--get", "branch."+branch+".merge")
+	res, err := c.git(ctx, dir, call{label: "config branch." + branch + ".merge", noExit: 1}, "config", "--get", "branch."+branch+".merge")
 	if err != nil {
 		if code, isExit := exitCode(err); isExit && code == 1 {
 			return nil
@@ -438,7 +445,7 @@ func (c *Client) UpdateRefDelete(ctx context.Context, mainClone, ref string) err
 	}
 	// symbolic-ref -q exits 1 for a missing or non-symbolic ref and prints
 	// the target of a symbolic one.
-	res, err := c.git(ctx, mainClone, call{label: "symbolic-ref " + ref}, "symbolic-ref", "-q", ref)
+	res, err := c.git(ctx, mainClone, call{label: "symbolic-ref " + ref, noExit: 1}, "symbolic-ref", "-q", ref)
 	if err == nil {
 		if target := res.Out(); target != "" && !strings.HasPrefix(target, magnumRefs) {
 			return fmt.Errorf("gitx: refusing to delete %q: it is a symbolic ref to %q outside refs/magnum/", ref, target)
@@ -747,7 +754,7 @@ func (c *Client) BranchPR(ctx context.Context, dir, branch string) (number int, 
 	if err := checkBranch("branch", branch); err != nil {
 		return 0, false, err
 	}
-	res, err := c.git(ctx, dir, call{label: "config branch." + branch + ".pr"}, "config", "--get", "branch."+branch+".pr")
+	res, err := c.git(ctx, dir, call{label: "config branch." + branch + ".pr", noExit: 1}, "config", "--get", "branch."+branch+".pr")
 	if err != nil {
 		if code, isExit := exitCode(err); isExit && code == 1 {
 			return 0, false, nil

@@ -4290,3 +4290,45 @@ editing history. Code, config comments and prompts reference these by their head
   operator's own interactive Codex reviews on 10-02, not magnum's. From 10-02 to 10-08 magnum's Codex sessions
   were refused in 3 judge sessions (6 turns, on 10-07 and 10-08) and 1 judge helper (10-06); codex-review, 310
   sessions, never.
+- **A retro that cannot reach GitHub stops and leaves its PRs due** (2026-10-08, amends "Learning loop: daily
+  retro"). A forced retro started 10 s into a DNS outage of about 90 s. It failed 5 of 5 PRs in 1.1 s. `fail`
+  took every error of `retroInput` for the PR's own. So each PR spent one of its three attempts, and the
+  operator had to run the retro again. The rule "a stop that is not the PR's records nothing" covered the
+  classifier, not GitHub. Now look at a failed read of the threads, the reviews or the comparison that
+  learn.Build asks for. If `github.ConnectionCause` names its error, the read stops the retro. The cause can
+  be the network, a GitHub server error or a rate limit. The stop is the same as for a classifier that went
+  away. The retro writes no `retro_prs` row, and the
+  attempts stay as they were. The PR and the PRs after it stay due. A `retro.stopped` event names the cause,
+  and `retro.done` says "stopped: GitHub unreachable (DNS lookup failed)". Neither event quotes the error.
+  Such a daily retro does not mark the day done. It starts again 15 minutes later (`retroOfflineRetry`), not
+  on every tick in between. The engine keeps that time in memory, so a restarted daemon tries at once. Any
+  other failed read (a 404, a 403, a PR that no watch covers) is still the PR's.
+- **GitHub's empty answer and HTTP 499 are connection failures** (2026-10-08, amends "A network blip does not
+  mark an identity unhealthy"). The GraphQL limit of 10 s answers an empty body. gh reports it 11-12 s later
+  as "unexpected end of JSON input". In one day it caused 2 `poll.error` and 2 `review.auto_approve_failed`
+  events, and 15 log lines since 10-03. `ConnectionCause` did not name it. So a round's review check that met
+  it ended the round with its check failed. The check did not wait `verifyNetRetry` and ask again. An
+  identity check also took the error for a verdict. Now this text and gh's "(HTTP 499)" are a "GitHub server
+  error" (`githubPatterns`), as 5xx answers are.
+- **A poll right after a sleep counts for nothing, and the polls-failing toast needs 10 failed polls**
+  (2026-10-08, amends "A watch whose polls fail is on screen"). The Mac slept from 03:31 to 12:10 with 25
+  dark wakes. The polls of the wakes failed while its network came up (resets, 30 s timeouts). They caused 3
+  of the 10 `poll.error` events and 3 of the 5 `poll.ci_error` events. One "talkable polls failing" toast
+  went out after 3 failed polls over 35 minutes, because a streak's length is wall time. Now, at the end of
+  each tick, the engine keeps the wall-clock time in memory. It cannot use Go's monotonic clock, which
+  stops while macOS sleeps. When a tick starts more than 3 poll intervals later, it follows a sleep
+  (`sleptBefore`). The run loop waits one poll interval between ticks. Thus only a sleep makes the wait
+  long, and a long tick (GitHub timing out) does not count. After a sleep, a failed radar or CI read records
+  no event, and it does not start or extend a streak. A read that answers is recorded. Each watch's record
+  now counts the failed polls of its streak (`failures` in `watch.<owner>.poll`, no migration). The toast
+  needs 10 of them in addition to its 15 minutes. The screens still show a failing watch from 10 minutes.
+  Rejected: reading the sleep from `pmset`. That adds a subprocess per tick for what the wall clock says.
+- **Expected exits of gh and git log at debug** (2026-10-08, amends "Subprocess transcripts log at debug,
+  failures at warn"). In a day and a half, 58% of the 132 exec warnings were answers that the code expects.
+  55 were RequiredChecks 404s (no ruleset, or no admin access: `known` is false). 11 were `symbolic-ref -q`
+  exit 1 (not a symbolic ref). 10 were `config --get branch.*.merge` or `.pr` exit 1 (not set). gh exits 1
+  for a 404 and for a 500. So `execx.Cmd` gets `Expected`, which reads the result and picks the failed exits
+  that are answers. The RequiredChecks calls go through `restProbe`. It takes only a 404, and a 403 that is
+  not a rate limit. The three git calls take only exit 1 (`call.noExit`). Any other exit of these commands
+  still warns: a 500, a rate limit, or git's 128 outside a repository. `Probe`, which takes every exit, stays
+  for the callers that set it.

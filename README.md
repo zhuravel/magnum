@@ -1364,7 +1364,9 @@ built: daemon-restart", "paused 19h", "talkable ✗ 47m", "codex 80% Tue 13:30")
 pressing first; they never add a line. Each watch keeps its last good poll (`watch.<owner>.poll`): the
 dashboard's activity line and `magnum status` name a failing watch after the last poll ("last poll 12s ago ·
 talkable polls failing 47m (HTTP 502)"; `polls_failing` in the JSON), and the daemon toasts once when it has
-failed for 15 minutes.
+failed for 15 minutes and 10 polls in a row. A poll right after the Mac slept counts for nothing. That is a
+tick that starts more than 3 poll intervals after the last one ended. Its failures record no event and start
+no streak, because the network of a waking Mac is often not up yet.
 
 A PR Magnum approved that GitHub still blocks on your approval reads `✔ needs you` in STATE: GitHub never
 counts a GitHub App's approval toward a branch's required approvals, so while its review decision is
@@ -1541,10 +1543,12 @@ recorded as failed and the retro goes on; the next retros try a failed pull requ
 in all. A lesson is dropped (a `retro.lesson_rejected` event says why, never what) when it names a pull
 request or issue, a URL, the author or a reviewer, mentions one of Magnum's logins, or, for a `general`
 lesson, the repository: general lessons can reach the public review skill, while a `repo` lesson stays
-with that repository's notes. A shutdown, an agent that cannot start or goes away, or a limit on the
+with that repository's notes. A shutdown, an agent that cannot start or goes away, a limit on the
 agent (a usage limit or a logout, which also pause its CLI as a round's would, a per-model limit or an
-overload) ends the retro without recording the pull request it was on, so the next retro takes that one
-and the rest; no retro starts while the agent's CLI is paused, nor while the daemon stops, drains for a
+overload), or GitHub that cannot be reached (the network, a server error, a rate limit) ends the retro
+without recording the pull request it was on, so the next retro takes that one and the rest, and the
+pull request keeps its attempts. A daily retro that GitHub stopped is not the day's: it starts again 15
+minutes later. No retro starts while the agent's CLI is paused, nor while the daemon stops, drains for a
 restart or holds dispatch for an infrastructure pause, and one a shutdown cuts short counts as neither done nor failed (`magnum status` keeps the last
 finished retro, and the next start runs the day's again). Trust dialogs, permission prompts
 (answered No) and Codex's hooks review behave as in rounds. The agent works in
@@ -1711,8 +1715,8 @@ curate = ["over_limit", "weekly", "misses"]   # also curate every repository wit
   (why, and when it retries), and once when it cannot start for something only you can lift (a guard
   keeping its slot, an unhealthy identity, a paused agent kind, a drain past 15 minutes); a review request
   someone made that `magnum pause` holds toasts once per pause, and a round that has waited 30 minutes on
-  its pinned slot once per PR and pin. A watch whose radar calls have failed for 15 minutes toasts once per
-  failure streak, and a command the judges report failing on the review machine in 3 rounds of one
+  its pinned slot once per PR and pin. A watch whose radar calls have failed for 15 minutes and 10 polls in a
+  row toasts once per failure streak, and a command the judges report failing on the review machine in 3 rounds of one
   repository once a day. These, new repositories and, with `[herdr]
   toast_every_review = true`, every automatic review posted come as one summary a minute; `[herdr] notify
   = false` turns all toasts off. `magnum install` prints a tab-bar entry for herdr's config that shows the
