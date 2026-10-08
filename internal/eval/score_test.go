@@ -201,6 +201,42 @@ body = true
 	}
 }
 
+// A replay scored a defect found from the review body's line on a false description claim
+// ("Description: ✗ Affiliates also use domain fallback"), which reports no defect; nor do the
+// commands of the Checks block. The finding list and the nearby block still count.
+func TestScoreCaseMatchesNeitherTheDescriptionLinesNorTheChecksOfAReviewBody(t *testing.T) {
+	c := caseOf(t, `[[case.defect]]
+id = "two-segments"
+title = "Domain fallback before geo puts one visitor in two segments"
+match = ["domain.{0,80}(geo|fallback)"]
+body = true
+`)
+	body := func(extra string) string {
+		return "Fix 1 problem before merging.\n\n- [P2] Country reporting has no regression tests.\n" + extra +
+			"\nDescription: ✗ Affiliates also use domain fallback. Nested authentication still checks `data.email`.\n" +
+			"- Description: ✗ The domain fallback list: it names geo.\n\n" +
+			"<details><summary>Checks (2 run)</summary>\n\n- `node probe.js`: domain fallback before geo, 12 assertions passed\n" +
+			"- `node --check src/a.js`: passed\n\n</details>\n\n<!-- magnum:run=r-1 head=abc1234 -->\n"
+	}
+	tests := []struct {
+		name, extra string
+		want        bool
+	}{
+		{"only the description line and the checks mention it", "", false},
+		{"the finding list names it", "- [P2] The domain fallback runs before geo arrives.\n", true},
+		{"the nearby block names it", "\n<details><summary>Found nearby, not this PR's (1)</summary>\n\n" +
+			"- `src/a.js:4`: [P2] the domain fallback runs before geo arrives.\n\n</details>\n", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := ScoreCase(c, Result{Findings: []Finding{{Body: body(tt.extra), InBody: true}}})
+			if s.Defects[0].Found != tt.want {
+				t.Errorf("found = %v, want %v", s.Defects[0].Found, tt.want)
+			}
+		})
+	}
+}
+
 func TestScoreCaseOneFindingMayMatchSeveralDefects(t *testing.T) {
 	c := caseOf(t, `[[case.defect]]
 id = "a"

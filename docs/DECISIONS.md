@@ -4134,3 +4134,12 @@ editing history. Code, config comments and prompts reference these by their head
   `magnum unapprove --resume` lifts it. No migration. Rejected: carrying `Missing` forward in the single record
   (a reply round after a clean round would leave the review it follows without a record, and refuse a PR the gates
   allow once its checks pass); a column on the judge's run (a migration, and a logged-out role has no run).
+- **An eval scores a review body by its finding list and nearby block only** (2026-10-08). The replay after
+  the miss rules (run 20261007-163947, magnum c107627) scored the `domain-fallback-two-segments` defect found
+  from the body line "Description: ✗ Affiliates also use domain fallback": the case's `body = true` regexp
+  `domain.{0,80}(geo|fallback)` matched a description claim the judge had proved false without impact, which
+  reports no defect, so the run read 5/6 where the reviews had found 4. A body now matches without its
+  `Description: ✗` lines and its collapsed Checks block (the commands that ran: a probe named after the
+  defect is no finding), so only the verdict line, the finding list and the "Found nearby" block count
+  (`eval.bodyFindings`). `magnum eval score <run>` applies it to a stored run without replaying. Rejected:
+  dropping body matches (a finding title or a nearby P2 in the body is a report).

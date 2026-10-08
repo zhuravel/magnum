@@ -8,6 +8,21 @@ import (
 // lineSlack is how many lines a finding may be off a defect's range and still count.
 const lineSlack = 3
 
+var (
+	// descriptionLine is a review body's line on a description claim proved false without impact
+	// (`Description: ✗ <claim>: <why>`, the skill's section 2): it reports no defect.
+	descriptionLine = regexp.MustCompile(`(?m)^[ \t]*(?:[-*][ \t]+)?Description:[ \t]*[✗✘❌].*$`)
+	// checksBlock is a review body's collapsed Checks block: the commands that ran, no defects.
+	checksBlock = regexp.MustCompile(`(?is)<details>\s*<summary>\s*Checks\b.*?</details>`)
+)
+
+// bodyFindings is the part of a review body that reports defects: the body without its
+// `Description: ✗` lines and its Checks block, so that only the finding list and the nearby block
+// are matched.
+func bodyFindings(body string) string {
+	return checksBlock.ReplaceAllString(descriptionLine.ReplaceAllString(body, ""), "")
+}
+
 // DefectResult is the outcome for one defect of a case.
 type DefectResult struct {
 	ID         string `json:"id"`
@@ -46,7 +61,8 @@ func (s Score) SeverityOK() int {
 // ScoreCase tells, for every defect of c, whether the findings of r report it. An inline finding
 // matches a defect when its path matches one of the defect's paths (any when none), its line range
 // comes within three lines of the defect's lines (when set) and its body matches one of the defect's
-// regexps (when set). A review body matches only a defect with body = true, by its regexps alone.
+// regexps (when set). A review body matches only a defect with body = true, by its regexps alone,
+// and only with its finding list and nearby block (bodyFindings).
 // Simplification suggestions match nothing and are not noise. One finding may match several defects.
 func ScoreCase(c Case, r Result) Score {
 	s := Score{Case: c.Name, Status: r.Status, Event: r.Event, Total: len(c.Defects)}
@@ -89,7 +105,7 @@ func (d Defect) matches(res []*regexp.Regexp, f Finding) bool {
 		return false
 	}
 	if f.InBody {
-		return d.Body && anyMatch(res, f.Body)
+		return d.Body && anyMatch(res, bodyFindings(f.Body))
 	}
 	if len(d.Paths) > 0 && !slices.ContainsFunc(d.Paths, func(g string) bool { return matchGlob(g, f.Path) }) {
 		return false
