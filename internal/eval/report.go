@@ -35,6 +35,23 @@ type CaseRun struct {
 	Started    time.Time `json:"started,omitzero"`
 	Finished   time.Time `json:"finished,omitzero"`
 	Score      *Score    `json:"score,omitempty"` // nil when there was no result to score
+	// Notes is what notes the judge read (HashNotes): file -> SHA-256, "" for a notes file there
+	// was none of; nil when the run withheld them (Run.NoNotes) or did not record them.
+	Notes map[string]string `json:"notes,omitempty"`
+	// CodexBefore and CodexAfter are the Codex budget used (percent, in Codex's whole points) as
+	// the gauge read when the case started and when it ended; nil when it could not be read. The
+	// gauge counts every Codex session of the account, live rounds included.
+	CodexBefore *float64 `json:"codex_before,omitempty"`
+	CodexAfter  *float64 `json:"codex_after,omitempty"`
+}
+
+// Points is how far the Codex gauge moved while the case ran; ok is false when either reading is
+// missing or the window reset in between (the gauge fell).
+func (c CaseRun) Points() (float64, bool) {
+	if c.CodexBefore == nil || c.CodexAfter == nil || *c.CodexAfter < *c.CodexBefore {
+		return 0, false
+	}
+	return *c.CodexAfter - *c.CodexBefore, true
 }
 
 // Run is one replay of a corpus.
@@ -48,6 +65,11 @@ type Run struct {
 	Started  time.Time         `json:"started,omitzero"`
 	Finished time.Time         `json:"finished,omitzero"`
 	Cases    []CaseRun         `json:"cases"`
+	// Inputs identifies what the review read besides the PR and the notes: a hash of the judge
+	// skill, the roles' prompts and the role config ("" in runs before it was recorded). Baselines
+	// matches on it.
+	Inputs  string `json:"inputs,omitempty"`
+	NoNotes bool   `json:"no_notes,omitempty"` // the judge was given no notes (--no-notes)
 }
 
 // Totals sums the scored cases of a run.
@@ -201,8 +223,26 @@ func noteRescore(cr *CaseRun, why string) {
 	}
 }
 
-// WriteText writes the human report of r: a table with one row per case and a total, then, when prev
-// is not nil, how the totals moved since it, then one line per missed defect and per case error.
+// codexLine is the Codex points the cases of r used ("codex: +2 points (geo +1, copy +1)"), the
+// cases whose points are unknown left out; "" when none is known.
+func codexLine(r Run) string {
+	var total float64
+	var each []string
+	for _, c := range r.Cases {
+		if p, ok := c.Points(); ok {
+			total += p
+			each = append(each, fmt.Sprintf("%s %+g", c.Case, p))
+		}
+	}
+	if len(each) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("codex: %+g points (%s)", total, strings.Join(each, ", "))
+}
+
+// WriteText writes the human report of r: a table with one row per case and a total, the Codex
+// points the cases used, then, when prev is not nil, how the totals moved since it and which cases
+// read other notes than in prev, then one line per missed defect and per case error.
 func WriteText(w io.Writer, r Run, prev *Run) {
 	fmt.Fprintln(w, runHeader(r))
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
@@ -219,10 +259,16 @@ func WriteText(w io.Writer, r Run, prev *Run) {
 	t := r.Totals()
 	fmt.Fprintf(tw, "total\t\t%s\t%d/%d\t%d\t%d\n", foundWithRecall(t), t.SeverityOK, t.Found, t.Noise, t.Simplifications)
 	tw.Flush()
+	if line := codexLine(r); line != "" {
+		fmt.Fprintln(w, line)
+	}
 	if prev != nil {
 		p := prev.Totals()
 		fmt.Fprintf(w, "vs %s: recall %d%% → %d%% (%+d pts), noise %d → %d\n",
 			prev.ID, percent(p.Recall), percent(t.Recall), percent(t.Recall)-percent(p.Recall), p.Noise, t.Noise)
+		for _, d := range notesDiff(r, *prev) {
+			fmt.Fprintf(w, "notes differ from %s: %s\n", prev.ID, d)
+		}
 	}
 	for _, c := range r.Cases {
 		if c.Score == nil {
@@ -253,6 +299,15 @@ func WriteMarkdown(w io.Writer, r Run) {
 	}
 	if r.Corpus != "" {
 		fmt.Fprintf(w, "- Corpus: `%s`\n", r.Corpus)
+	}
+	if r.Inputs != "" {
+		fmt.Fprintf(w, "- Inputs (skill, prompts, roles): `%s`\n", r.Inputs)
+	}
+	if r.NoNotes {
+		fmt.Fprintf(w, "- Notes: withheld\n")
+	}
+	if line := codexLine(r); line != "" {
+		fmt.Fprintf(w, "- Codex: %s\n", strings.TrimPrefix(line, "codex: "))
 	}
 	if len(r.Models) > 0 {
 		var roles []string
