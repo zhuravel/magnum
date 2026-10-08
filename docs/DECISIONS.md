@@ -4161,3 +4161,16 @@ editing history. Code, config comments and prompts reference these by their head
   whose `inputs` are the ones this binary and config give a review now; it only reads and never replays. The
   hooks in `internal/cli/eval.go` are a line each; the rest is in `eval_inputs.go`. Runs from before have no
   `inputs` and are never a baseline.
+- **eval-at.sh reuses a stored baseline and prints the points each case used** (2026-10-08). Every loop eval
+  replayed its cases at master and again after the change, though the "before" side usually had the skill,
+  prompts and roles of a stored run, and the replays cost 6.3 points of one week. eval-at.sh builds at the sha,
+  asks that binary's `magnum eval baseline` for the stored replays of the cases it was given, and for each case
+  reuses the newest one whose magnum commit has the same Go files as the sha (`git diff --quiet <commit> <sha>
+  -- '*.go' go.mod go.sum`), else the newest, saying "same skill, prompts and roles, but other Go code than
+  <sha> (--fresh replays)". It replays only the rest, runs nothing when no case is left, and prints the report
+  the run ends with, its `codex:` points line included. `--fresh` replays every case: the inputs leave magnum's
+  code out, so a code change is measured with it. selftest.sh covers the reuse, the note, the preference for
+  the same code, an unknown commit, `--fresh` and the report; its temporary directory no longer doubles the
+  slash of a `$TMPDIR` that ends in one (a check compared paths as strings). Rejected: reusing only replays at
+  the same Go code (master's code moves with every landed builder, so the baseline would almost never be
+  reused) and refusing a replay above a pace (the caps and `--force` of `eval run` already hold it).

@@ -71,7 +71,13 @@ Do without asking:
 A skill or prompt change made for a miss counts as visible to authors: ask, and propose to prove it with
 `MAGNUM_IMPROVE_RUN=<run-dir> scripts/eval-at.sh <sha> <label> <the miss's case>...` at master before and at the
 builder's commit after, in the background (it runs `magnum eval run` from a throwaway worktree at that sha and logs
-to `<run-dir>/tmp/`; each case costs a review round of Codex usage).
+to `<run-dir>/tmp/`; each replayed case costs a review round of Codex usage). Name only the cases the change
+targets. A case a stored run replayed with the same skill, prompts and role config (run.json's `inputs`) is
+reused, not replayed, so the "before" usually costs nothing; one at a commit with other Go code is reused with a
+note that says so. The inputs leave magnum's code out: to measure a code change, pass `--fresh`, which replays
+every case. It prints the report with the Codex points each replayed case used (`codex: +2 points (…)`): record them in
+runs.md. A report line `notes differ from <run>` means the two runs' judges read other repository notes, so the
+comparison mixes a notes change with the skill change.
 
 Ask first, in the one batched question:
 

@@ -12,14 +12,17 @@
 #     duplicates an entry, and a migration the registry lacks is dry-run and
 #     not built;
 #   - restart.sh: its arguments and the drain it runs;
-#   - eval-at.sh: its arguments, run directory, worktree, build and log, and
-#     the cleanup on a failure.
+#   - eval-at.sh: its arguments, run directory, worktree, build and log, the
+#     cleanup on a failure, the reuse of a stored replay with the same inputs
+#     and Go files (and none with other Go files, an unknown commit or
+#     --fresh), and the report with the points it prints.
 # git, make and sqlite3 are real; mise, go and bin/magnum are fakes on PATH.
 # It prints one line per check and stops at the first failure.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
-tmp=$(mktemp -d "${TMPDIR:-/tmp}/magnum-selftest.XXXXXX")
+tmp_root=${TMPDIR:-/tmp}
+tmp=$(mktemp -d "${tmp_root%/}/magnum-selftest.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
 
 checks=0
@@ -49,7 +52,9 @@ export GIT_AUTHOR_NAME=selftest GIT_AUTHOR_EMAIL=selftest@example.com
 export GIT_COMMITTER_NAME=selftest GIT_COMMITTER_EMAIL=selftest@example.com
 
 # Fakes: mise runs what follows "--", go build writes the fake magnum, which
-# records its arguments and prints what a drain prints.
+# records its arguments and prints what a drain prints, the stored replays in
+# $FAKE_BASELINE for `eval baseline`, and a run's first line and report for
+# `eval run`.
 mkdir -p "$tmp/bin"
 cat >"$tmp/bin/mise" <<'EOF'
 #!/bin/sh
@@ -74,7 +79,16 @@ daemon-restart)
     echo "draining: 1 round(s) in flight after 15s: example/app#1 (reviewing)"
     echo "drained after 20s: no round in flight"
     echo "restarted the daemon" ;;
-eval) echo "fake magnum: $*" ;;
+eval)
+    if [ "$2" = baseline ]; then
+        [ -z "${FAKE_BASELINE:-}" ] || cat "$FAKE_BASELINE"
+        exit 0
+    fi
+    echo "fake magnum: $*"
+    echo "eval run 20261008-120000: 1 case(s), corpus eval.toml, results in state"
+    echo
+    echo "run 20261008-120000  \"label\""
+    echo "codex: +1 points (case-b +1)" ;;
 esac
 exit "${FAKE_MAGNUM_EXIT:-0}"
 EOF
@@ -271,11 +285,14 @@ run "$scripts/eval-at.sh" "$sha" "After: miss rules (c107627)" case-a case-b
 [[ $rc == 0 ]] || fail "eval-at.sh exits 0 (got $rc)"
 wt=$run_dir/tmp/eval-after-miss-rules-c107627
 [[ $(cat "$FAKE_GO_PWD") == "$wt" ]] || fail "the build ran in $wt (it ran in $(cat "$FAKE_GO_PWD"))"
-printf '%s\n' eval run --case case-a --case case-b --label "After: miss rules (c107627)" >"$tmp/want"
-cmp -s "$FAKE_MAGNUM_ARGS" "$tmp/want" || fail "bin/magnum eval run got --case case-a --case case-b --label <label>"
+printf '%s\n' eval baseline --case case-a --case case-b eval run --case case-a --case case-b --label "After: miss rules (c107627)" >"$tmp/want"
+cmp -s "$FAKE_MAGNUM_ARGS" "$tmp/want" || fail "bin/magnum eval baseline, then eval run got --case case-a --case case-b --label <label>"
 grep -qF "fake magnum: eval run" "$wt.log" || fail "the eval's output is in $wt.log"
 [[ ! -e $wt && $(git worktree list --porcelain | grep -c '^worktree ') == 1 ]] || fail "the worktree is removed"
 ok "eval-at.sh builds in a detached worktree at the sha, runs eval run with the cases and label, logs, removes it"
+has 'run 20261008-120000  "label"' && has "codex: +1 points (case-b +1)" && ! has "fake magnum: eval run" ||
+    fail "eval-at.sh prints the run's report, from its header on, with the points"
+ok "eval-at.sh prints the report the run ends with, the Codex points included"
 
 : >"$FAKE_MAGNUM_ARGS"
 run_dir2=$tmp/run2
@@ -291,5 +308,46 @@ mkdir -p "$run_dir/tmp/eval-busy"
 run "$scripts/eval-at.sh" HEAD busy case-a
 [[ $rc == 2 ]] && has "exists" || fail "eval-at.sh refuses a worktree path that exists"
 ok "eval-at.sh refuses a label whose worktree exists"
+rmdir "$run_dir/tmp/eval-busy"
+
+# 8. eval-at.sh reuses a stored replay with the same inputs (`eval baseline`),
+#    one whose commit has the same Go files as the sha first, says when the
+#    code differs, and replays the rest; --fresh replays everything.
+commit_on "" "go code" "x.go=package x"
+go_a=$(git rev-parse --short HEAD)
+commit_on "" "docs only" "docs/notes.md=text"
+go_b=$(git rev-parse --short HEAD)
+commit_on "" "go change" "x.go=package x // changed"
+go_c=$(git rev-parse --short HEAD)
+printf 'inputs\tabc123def456\nreuse\tcase-a\t20261007-100000\t%s\t1/2\nrun\tcase-b\n' "$go_a" >"$tmp/baseline"
+export FAKE_BASELINE=$tmp/baseline
+: >"$FAKE_MAGNUM_ARGS"
+run "$scripts/eval-at.sh" "$go_b" reuse-docs case-a case-b
+[[ $rc == 0 ]] && has "case-a: reused run 20261007-100000 (magnum $go_a, found 1/2): same skill, prompts, roles and Go code" ||
+    fail "case-a is reused at a commit with the same Go files"
+printf '%s\n' eval baseline --case case-a --case case-b eval run --case case-b --label reuse-docs >"$tmp/want"
+cmp -s "$FAKE_MAGNUM_ARGS" "$tmp/want" || fail "only case-b is replayed"
+ok "a stored replay with the same inputs is reused; a case with none is replayed"
+
+: >"$FAKE_MAGNUM_ARGS"
+run "$scripts/eval-at.sh" "$go_c" reuse-code case-a
+printf '%s\n' eval baseline --case case-a >"$tmp/want"
+[[ $rc == 0 ]] && has "case-a: reused run 20261007-100000 (magnum $go_a, found 1/2): same skill, prompts and roles, but other Go code than $go_c (--fresh replays)" &&
+    has "every case reused" && cmp -s "$FAKE_MAGNUM_ARGS" "$tmp/want" || fail "a replay at other Go code is reused with a note"
+ok "a stored replay whose commit has other Go files is reused and says so; nothing runs when every case is reused"
+
+printf 'inputs\tabc123def456\nreuse\tcase-a\t20261008-090000\t%s\t2/2\nreuse\tcase-a\t20261007-100000\t%s\t1/2\nreuse\tcase-b\t20261007-100000\t-\t1/1\nrun\tcase-c\n' \
+    "$go_c" "$go_a" >"$tmp/baseline"
+run "$scripts/eval-at.sh" "$go_b" reuse-same case-a case-b
+[[ $rc == 0 ]] && has "case-a: reused run 20261007-100000 (magnum $go_a" && has "case-b: reused run 20261007-100000 (magnum -, found 1/1): same skill, prompts and roles, but other Go code" ||
+    fail "the newest replay at the same Go code wins over a newer one; an unknown commit is reused with the note"
+ok "a replay at the same Go code wins over a newer one at other code; an unknown commit gets the note"
+
+: >"$FAKE_MAGNUM_ARGS"
+run "$scripts/eval-at.sh" --fresh "$go_b" fresh case-a
+printf '%s\n' eval run --case case-a --label fresh >"$tmp/want"
+[[ $rc == 0 ]] && cmp -s "$FAKE_MAGNUM_ARGS" "$tmp/want" || fail "--fresh replays without asking for a baseline"
+ok "--fresh replays every case"
+unset FAKE_BASELINE
 
 echo "selftest: $checks checks passed"
