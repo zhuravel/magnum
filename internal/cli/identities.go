@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -46,7 +47,9 @@ func newIdentitiesCmd(c *Context) *cobra.Command {
 	check := newCommand("", "check [<identity>] [--name <identity>] [--json]", "verify logins, App permissions and tokens",
 		"Verify every identity, or only the named one: a gh identity's token must belong to its login; a GitHub "+
 			"App needs its private key, pull_requests write permission, an installation token and every watched "+
-			"repository in the installation. The verdict is recorded like the daemon's own check, so a pass "+
+			"repository in the installation; an App without read access to Actions, Checks or Commit statuses "+
+			"passes with a WARN line, since the judge cannot read the PR's CI with it. "+
+			"The verdict is recorded like the daemon's own check, so a pass "+
 			"unblocks the identity's PRs on the next tick.",
 		func(pos []string) int {
 			n := name
@@ -136,7 +139,7 @@ func identitiesCheck(ctx context.Context, c *Context, st *store.Store, srcs []id
 	}
 	results := []identitiesResult{}
 	var verdicts []identitiesVerdict
-	failed := 0
+	failed, warned := 0, 0
 	for _, s := range srcs {
 		cctx, cancel := context.WithTimeout(ctx, identitiesCheckTimeout)
 		rep, err := s.Check(cctx)
@@ -160,6 +163,8 @@ func identitiesCheck(ctx context.Context, c *Context, st *store.Store, srcs []id
 		}
 		if !r.Pass {
 			failed++
+		} else if slices.ContainsFunc(r.Lines, func(l string) bool { return strings.HasPrefix(l, "WARN ") }) {
+			warned++
 		}
 		verdicts = append(verdicts, identitiesVerdict{name: s.Name(), pass: r.Pass, reason: reason})
 		results = append(results, r)
@@ -180,6 +185,8 @@ func identitiesCheck(ctx context.Context, c *Context, st *store.Store, srcs []id
 		}
 	} else if failed > 0 {
 		fmt.Fprintf(c.Stdout, "%d of %d identities failed; PRs that post as them wait until this passes\n", failed, len(results))
+	} else if warned > 0 {
+		fmt.Fprintf(c.Stdout, "all %d identities pass; %d with warnings above, which hold no PR\n", len(results), warned)
 	} else {
 		fmt.Fprintf(c.Stdout, "all %d identities pass\n", len(results))
 	}

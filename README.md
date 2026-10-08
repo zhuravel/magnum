@@ -514,16 +514,19 @@ no_findings_event = "COMMENT"      # never let a bot approval unlock a merge by 
 ```
 
 App tokens are minted from a short-lived JWT and refreshed before they expire; every GitHub call,
-including those, goes through `gh api`, so no extra firewall rules are needed. `magnum identities
-check` verifies the key, the App, the installation, its permissions and that `login` is the App's
-`<slug>[bot]`. A PR follows its watch's identity. When you move a watch to another identity, the next
-round of each of its PRs posts as the new one (`pr.identity_migrated`): it parks the sessions the old
-identity ran in, reads the old login's reviews and threads as its own history (the previous review, the
-replies to answer, the earlier findings), and once its review is posted dismisses what the old identity
-left standing, its change requests and an App's approvals, with the old identity's own credentials. It
-reads every review of the PR for that (up to 500); a PR with more dismisses nothing and says so in a
-`review.former_dismiss_failed` warning. `magnum review --as <identity>` pins one PR to an identity, and a
-pinned PR never migrates.
+including those, goes through `gh api`, so no extra firewall rules are needed. The App needs the repository
+permission Pull requests "Read and write"; Actions, Checks and Commit statuses "Read-only" are
+recommended, since the judge reads the PR's CI with the App's token (without Actions it cannot read why a
+CI job failed). `magnum identities check` verifies the key, the App, the installation, its permissions and
+that `login` is the App's `<slug>[bot]`; a recommended permission the installation lacks is a WARN line
+that does not fail the check. A PR follows its watch's identity. When you move a watch to another
+identity, the next round of each of its PRs posts as the new one (`pr.identity_migrated`): it parks the
+sessions the old identity ran in, reads the old login's reviews and threads as its own history (the
+previous review, the replies to answer, the earlier findings), and once its review is posted dismisses
+what the old identity left standing, its change requests and an App's approvals, with the old identity's
+own credentials. It reads every review of the PR for that (up to 500); a PR with more dismisses nothing
+and says so in a `review.former_dismiss_failed` warning. `magnum review --as <identity>` pins one PR to an
+identity, and a pinned PR never migrates.
 
 `dismiss_own_stale_change_requests` says what happens to an identity's own earlier REQUEST_CHANGES review
 once a newer review of the PR has nothing blocking: `true` dismisses it ("Superseded by the newer magnum

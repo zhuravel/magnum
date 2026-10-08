@@ -4342,3 +4342,17 @@ editing history. Code, config comments and prompts reference these by their head
   names from the same function, and a test checks that it writes no other. Rejected: listing the refs under the
   slot's prefix with `git for-each-ref` (one more git call and gitx method for three fixed names), and deleting
   them in `Unpin` (an unpin moves nothing in the clone; the release resets the slot anyway).
+- **`magnum identities check` warns when a posting App cannot read CI** (2026-10-08). The judge reads a
+  PR's CI with the posting identity's token: the check runs, the commit statuses and, through
+  `gh run view --log-failed`, a failed job's log. The App had no access to Actions, Checks or Commit
+  statuses, so GitHub answered 403 on all of them, and on one PR the review said that the cause of a failed
+  `build` check was unknown. These 403s were 2 of the 4 environment events in the run's window. The check
+  printed PASS for every identity, because it showed only `pull_requests` and `contents`. Now, for an App,
+  it also reads `actions`, `checks` and `statuses` from the installation's permissions (the same
+  `GET /app/installations/<id>` answer). Read access or more is a PASS line. A missing one is a WARN line
+  that names what the judge cannot do without it, with the fix: the App's permissions page, or, when the
+  App already requests the permission, the installation page where an owner accepts it. A WARN does not
+  fail the check: posting works without these permissions, so the verdict stays a pass, PRs are not held
+  and the command exits 0. Its summary counts the passing identities that warned. The README lists the
+  three as recommended read permissions. Rejected: failing the check (it would hold every PR of the
+  identity for a permission that only makes CI findings better).

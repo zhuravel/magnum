@@ -36,9 +36,10 @@ type installationInfo struct {
 
 // Check verifies, in order: the private key, the JWT (GET /app), the
 // installation and its permissions (pull_requests must be write; contents is
-// reported), minting a token, writing ConfigDir, the installation's
-// repositories (every WithRepos repo must be listed), and that
-// `gh api repos/<first repo>` works with GH_CONFIG_DIR. It keeps going after a
+// reported; actions, checks and statuses without read access warn), minting
+// a token, writing ConfigDir, the installation's repositories (every
+// WithRepos repo must be listed), and that `gh api repos/<first repo>` works
+// with GH_CONFIG_DIR. It keeps going after a
 // failure where the next step can still run, so one pass shows every problem.
 //
 // Check proves minting works by minting a token itself; a failed mint leaves
@@ -192,7 +193,31 @@ func (c *appCheck) permissions(context.Context) (bool, error) {
 	default:
 		r.info("permission contents: " + contents)
 	}
+	for _, p := range ciReadPermissions {
+		have := permission(inst.Permissions, p.name)
+		if have != "none" {
+			r.pass(fmt.Sprintf("permission %s: %s", p.name, have))
+			continue
+		}
+		msg := fmt.Sprintf("permission %s: none; without read the judge cannot %s", p.name, p.without)
+		if want := permission(c.app.Permissions, p.name); want != "none" {
+			r.warn(msg, fmt.Sprintf("the App already requests %s; an owner of %s accepts the new permissions at %s", want, inst.Account.Login, installURL))
+		} else {
+			r.warn(msg, fmt.Sprintf(`open %s -> Repository permissions -> %s: "Read-only" -> Save changes`, appPermissionsURL(c.app), p.label),
+				fmt.Sprintf("then an owner of %s accepts the new permissions at %s", inst.Account.Login, installURL))
+		}
+	}
 	return false, nil
+}
+
+// ciReadPermissions are the installation permissions the judge reads a PR's
+// CI with through the App's token; GitHub answers 403 without them. Read
+// access or more passes, and a missing one only warns: posting works
+// without them.
+var ciReadPermissions = []struct{ name, label, without string }{
+	{"actions", "Actions", "read why a CI job failed (gh run view --log-failed)"},
+	{"checks", "Checks", "read the PR's check runs"},
+	{"statuses", "Commit statuses", "read the PR's commit statuses"},
 }
 
 // token mints an installation token (not through the daemon's cache, which a

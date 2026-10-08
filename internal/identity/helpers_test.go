@@ -155,8 +155,8 @@ func newFakeGitHub(t *testing.T, clock *fakeClock) *fakeGitHub {
 		pub:       &testKey(t).PublicKey,
 		clock:     clock,
 		id:        appIdentity(),
-		appPerms:  map[string]string{"pull_requests": "write", "contents": "read", "metadata": "read"},
-		instPerms: map[string]string{"pull_requests": "write", "contents": "read", "metadata": "read"},
+		appPerms:  allPerms(),
+		instPerms: allPerms(),
 		repos:     []string{"talkable/talkable", "talkable/other"},
 		selection: "selected",
 		ttl:       time.Hour,
@@ -164,6 +164,13 @@ func newFakeGitHub(t *testing.T, clock *fakeClock) *fakeGitHub {
 	f.server = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.server.Close)
 	return f
+}
+
+// allPerms is what the fake App requests and its installation granted by
+// default: every permission App.Check asks for.
+func allPerms() map[string]string {
+	return map[string]string{"pull_requests": "write", "contents": "read", "metadata": "read",
+		"actions": "read", "checks": "read", "statuses": "read"}
 }
 
 func (f *fakeGitHub) mintCount() int {

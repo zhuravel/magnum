@@ -128,6 +128,34 @@ func TestIdentitiesCheckNameAndJSON(t *testing.T) {
 	}
 }
 
+// A WARN line (an App that cannot read CI) does not fail the identity: the
+// command exits 0, records a pass and says that a passing identity warned.
+func TestIdentitiesCheckWarningPassesAndIsCounted(t *testing.T) {
+	f := newInspFixture(t)
+	st := f.store()
+	ctx := context.Background()
+	gh, appID := identitiesFixture()
+	const warn = "WARN permission actions: none; without read the judge cannot read why a CI job failed (gh run view --log-failed)"
+	appID.rep = identity.Report{Pass: true, Lines: []string{"PASS permission pull_requests: write", warn,
+		`     fix: open https://github.com/settings/apps/example/permissions -> Repository permissions -> Actions: "Read-only" -> Save changes`,
+		"PASS permission checks: read", "PASS permission statuses: read"}}
+	oldKick := identitiesKick
+	identitiesKick = func(paths.Layout) (int, error) { return 0, nil }
+	t.Cleanup(func() { identitiesKick = oldKick })
+	if code := identitiesCheck(ctx, f.Ctx, st, []identity.Source{gh, appID}, "", false); code != 0 {
+		t.Fatalf("code %d, want 0:\n%s", code, f.Out.String())
+	}
+	out := f.Out.String()
+	for _, want := range []string{warn, `Actions: "Read-only"`, "all 2 identities pass; 1 with warnings above, which hold no PR"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("lacks %q:\n%s", want, out)
+		}
+	}
+	if v, _, _ := st.GetKV(ctx, engine.KVIdentityCheck("talkable-app")); v != "pass" {
+		t.Fatalf("app kv = %q", v)
+	}
+}
+
 func TestIdentitiesCommand(t *testing.T) {
 	f := newInspFixture(t)
 	st := f.store()

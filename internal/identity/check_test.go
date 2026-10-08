@@ -61,14 +61,86 @@ func TestAppCheckPass(t *testing.T) {
 		"PASS installation 105365229 on talkable (repository selection: selected)",
 		"PASS permission pull_requests: write",
 		"INFO permission contents: read",
+		"PASS permission actions: read",
+		"PASS permission checks: read",
+		"PASS permission statuses: read",
 		"PASS installation token minted, expires 2026-10-03T13:00:00Z (in 1h0m0s)",
 		"PASS gh config dir "+dir,
 		"PASS installation repositories (2): talkable/talkable, talkable/other",
 		"PASS gh api repos/talkable/talkable with GH_CONFIG_DIR="+dir,
 	)
+	for _, l := range r.Lines {
+		if strings.HasPrefix(l, "WARN ") {
+			t.Errorf("unexpected warning %q", l)
+		}
+	}
 	assertNoSecrets(t, r)
 	if len(run.CallsWithPrefix("gh", "api")) != 1 {
 		t.Fatalf("calls %v", run.Calls)
+	}
+}
+
+// The judge reads a PR's CI with the posting App's token: a failed job's log
+// (Actions), its check runs (Checks) and its commit statuses (Commit
+// statuses). Without read access GitHub answers 403 and the review cannot say
+// why CI failed, yet posting works, so a missing one warns and the check
+// still passes (`magnum identities check` exits 0).
+func TestAppCheckWarnsWithoutCIReadPermissions(t *testing.T) {
+	const warnActions = "WARN permission actions: none; without read the judge cannot read why a CI job failed (gh run view --log-failed)"
+	cases := []struct {
+		name      string
+		appPerm   string // what the App requests for actions ("" = absent)
+		instPerm  string // what the installation granted for actions ("" = absent)
+		wantLines []string
+	}{
+		{
+			name: "app does not request it", appPerm: "", instPerm: "",
+			wantLines: []string{
+				warnActions,
+				`     fix: open ` + appSettingsURL + ` -> Repository permissions -> Actions: "Read-only" -> Save changes`,
+				"     fix: then an owner of talkable accepts the new permissions at " + installURL,
+			},
+		},
+		{
+			name: "installation has not accepted", appPerm: "read", instPerm: "",
+			wantLines: []string{
+				warnActions,
+				"     fix: the App already requests read; an owner of talkable accepts the new permissions at " + installURL,
+			},
+		},
+		{
+			name: "write is more than read", appPerm: "write", instPerm: "write",
+			wantLines: []string{"PASS permission actions: write"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			clock := newClock()
+			f := newFakeGitHub(t, clock)
+			setPerm := func(m map[string]string, v string) {
+				if v == "" {
+					delete(m, "actions")
+				} else {
+					m["actions"] = v
+				}
+			}
+			setPerm(f.appPerms, tc.appPerm)
+			setPerm(f.instPerms, tc.instPerm)
+			run := &execx.Fake{}
+			app, layout := newTestApp(t, f, clock, WithRunner(run), WithRepos("talkable/talkable"))
+			run.Rules = []execx.Rule{ghRepoRule(t, "talkable/talkable", layout.GhConfigDir("talkable-app"))}
+
+			r, err := app.Check(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !r.Pass {
+				t.Fatalf("a missing CI read permission must not fail the check:\n%s", r)
+			}
+			assertLines(t, r, tc.wantLines...)
+			assertLines(t, r, "PASS permission checks: read", "PASS permission statuses: read")
+			assertNoSecrets(t, r)
+		})
 	}
 }
 
