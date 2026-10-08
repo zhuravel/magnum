@@ -66,11 +66,11 @@ var (
 	// word: "Re 4100000001:".
 	replyRe = regexp.MustCompile(`(?i)^re\s+#?\d+\s*:`)
 	// replyAck is a clause that acknowledges without a verdict ("Good catch",
-	// "Valid", "Analyzed", "Noted", "Low priority", "Low priority (Net 0)"):
-	// the verdict follows.
+	// "Valid", "Analyzed", "Noted", "Low priority", "Low priority (Net 0)",
+	// "Correction", "You're right"): the verdict follows.
 	replyAck = regexp.MustCompile(`(?i)^(?:(?:good|nice|great)\s+(?:catch|find|point|call)|valid(?:\s+(?:point|concern|finding|catch))?|` +
 		`analy[sz]ed|noted|low\s+priority(?:\s*\([^)]*\)?)?|thanks?(?:\s+you)?|agreed|true|right|correct|confirmed|acknowledged|fair(?:\s+(?:point|enough))?|` +
-		`yes|yep|ok(?:ay)?|sure|investigated|checked|verified|reviewed)$`)
+		`yes|yep|ok(?:ay)?|sure|investigated|checked|verified|reviewed|correction|you(?:'re|\s+are)\s+(?:right|correct))$`)
 	// replyLowPriority is the acknowledgement that declines the fix unless a
 	// clause says it was made.
 	replyLowPriority = regexp.MustCompile(`(?i)^low\s+priority\b`)
@@ -82,7 +82,8 @@ var (
 		re    *regexp.Regexp
 	}{
 		{ReplyFixed, regexp.MustCompile("(?i)^(?:(?:already\\s+)?(?:fixed|done|addressed|applied)\\b|" +
-			"(?:|.*\\b(?:is|are|was|were|been)\\s+)(?:already\\s+|now\\s+)?covered\\s+in\\s+`?[0-9a-f]{7,40}\\b)")},
+			"(?:|.*\\b(?:is|are|was|were|been)\\s+)(?:already\\s+|now\\s+)?(?:covered\\s+in|resolved\\s+(?:by|in))\\s+`?[0-9a-f]{7,40}\\b|" +
+			"(?:|.*\\b(?:is|are|was|were|been|now|also|landed)\\s+)on\\s+this\\s+branch\\s+as\\s+`?[0-9a-f]{7,40}\\b)")},
 		{ReplyNotABug, regexp.MustCompile(`(?i)^(?:(?:not\s+a\s+bug|by\s+design|(?:as\s+)?intended|intentional(?:ly)?)\b|` +
 			`(?:incorrect|moot(?:\s+point)?|not\s+applicable)$|(?:(?:this|the)\s+(?:concern|finding|comment|issue)\s+)?does(?:\s+not|n't)\s+apply\b)`)},
 		{ReplyWontFix, regexp.MustCompile(`(?i)^(?:(?:won't\s+fix|wont\s+fix|will\s+not\s+fix|wontfix|out\s+of\s+scope|follow[- ]?up|declined|deprioriti[sz]ed|` +
@@ -108,25 +109,28 @@ var (
 
 // classifyReply says what a reply claims from its first clause: "fixed",
 // "done", "addressed", "applied", "already addressed", "<it> is covered in
-// <sha>" or a commit and a verb ("84c0b1e adds …") (ReplyFixed); "not a
+// <sha>", "(already) resolved by <sha>" (or "in"), "<it> is now on this branch
+// as <sha>" or a commit and a verb ("84c0b1e adds …") (ReplyFixed); "not a
 // bug", "incorrect", "moot", "by design", "intended", "intentional"
 // (ReplyNotABug); "won't fix", "declined", "out of scope", "follow-up", "kept
 // as is", "<it> stays as is", "left open", "deferred", "not fixed in this
 // PR" (or push, round; or "not changed"), "No guard for now" (ReplyWontFix).
 // An acknowledgement ("Good catch", "Valid", "Analyzed", "Noted", "Low
-// priority", "Low priority (Net 0)") passes the verdict on to a later clause
-// of the first paragraph ("Good catch, fixed in <sha>", "Noted — left as
-// is", "Noted. <why>. Deferred."); a low priority acknowledgement no verdict
-// follows is ReplyWontFix ("Low priority (Net +1): not worth a change on its
-// own"; "Low priority — fixed in <sha>" stays ReplyFixed). Anything else is
-// ReplyOther, as is another acknowledgement no verdict follows, unless the
-// paragraph declines the fix before any clause says fixed or not a bug
-// (replyDeclined: "Confirmed. Still open … so I score that fix at −8" is
-// ReplyWontFix), or says "by design" or "by decision" anywhere and no clause
-// names a verdict (ReplyNotABug: "…, so such a behaviour is by design"). The
-// class is a hint for the judge, not a verdict. Case does not matter;
-// leading quoted lines (">"), markup, emoji, an agent's "(Claude)" tag and
-// the comment it answers ("Re 4100000001:") are skipped, and a verdict may
+// priority", "Low priority (Net 0)", "Correction", "You're right") passes the
+// verdict on to a later clause of the first paragraph ("Good catch, fixed in
+// <sha>", "Noted — left as is", "Noted. <why>. Deferred.", "Correction:
+// you're right. <where it landed>. The same fix is now on this branch as
+// <sha>"); a low priority acknowledgement no verdict follows is ReplyWontFix
+// ("Low priority (Net +1): not worth a change on its own"; "Low priority —
+// fixed in <sha>" stays ReplyFixed). "Resolved" without a commit is no verdict.
+// Anything else is ReplyOther, as is another acknowledgement no verdict
+// follows, unless the paragraph declines the fix before any clause says fixed
+// or not a bug (replyDeclined: "Confirmed. Still open … so I score that fix at
+// −8" is ReplyWontFix), or says "by design" or "by decision" anywhere and no
+// clause names a verdict (ReplyNotABug: "…, so such a behaviour is by
+// design"). The class is a hint for the judge, not a verdict. Case does not
+// matter; leading quoted lines (">"), markup, emoji, an agent's "(Claude)" tag
+// and the comment it answers ("Re 4100000001:") are skipped, and a verdict may
 // follow "but" or "this is" ("Valid, but out of scope", "Analyzed — this is
 // intentional").
 func classifyReply(body string) string {

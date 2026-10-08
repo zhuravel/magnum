@@ -185,6 +185,57 @@ func TestClassifyReplyReadsLowPriorityDeferralsAndCommitFixes(t *testing.T) {
 	}
 }
 
+// Two fixes the classifier read as other: "Already resolved by <sha> together
+// with …" (a commit that closes the finding, named with "resolved" instead of
+// "covered" or "fixed"), and a correction that opens with "Correction: you're
+// right", says where the first commit landed, and names the fix on this branch
+// ("The same fix is now on this branch as <sha>"). A bare "resolved" or a
+// resolved question claims nothing, and "Correction" alone is only an
+// acknowledgement.
+func TestClassifyReplyReadsResolvedByCommitAndFixOnThisBranch(t *testing.T) {
+	for _, tc := range []struct{ body, want string }{
+		// Resolved by or in a commit.
+		{"(Claude) Already resolved by 64b00a2 together with example/app#7. The page body carries the log-in note, " +
+			"and the dashboard campaign renders only for a known customer.", ReplyFixed},
+		{"Resolved by 64b00a2.", ReplyFixed},
+		{"(Claude) Resolved in `64b00a2`: the guard runs first.", ReplyFixed},
+		{"Good catch, already resolved by 64b00a2e5d.", ReplyFixed},
+		{"(Claude) This was resolved by 64b00a2.", ReplyFixed},
+		{"The empty-list case is already resolved in 5052817: the loader returns before it reads the cache.", ReplyFixed},
+		// Resolved without a commit, or not resolved.
+		{"Resolved? Not sure this applies.", ReplyOther},
+		{"(Claude) Resolved.", ReplyOther},
+		{"Resolved by the next PR.", ReplyOther},
+		{"Resolved by hand, no commit.", ReplyOther},
+		{"Not resolved by 64b00a2 yet.", ReplyOther},
+		{"The empty-list case is not resolved by 64b00a2.", ReplyOther},
+		{"This will be resolved by 64b00a2 after the rebase.", ReplyOther},
+		// A correction that ends in the fix on this branch.
+		{"(Claude) Correction: you're right. 0374ea3 landed on #27's branch, which stacks on this one, not here. " +
+			"The same fix is now on this branch as 64ecdcf: before saving, the fork asks git for the branch's tip. " +
+			"Your test fails on 17a6e44 and passes on 64ecdcf.", ReplyFixed},
+		{"(Claude) Correction: you’re right. The fix is on this branch as `64ecdcf`.", ReplyFixed},
+		{"You are right. It is on this branch as 64ecdcf.", ReplyFixed},
+		{"Correction — the same fix landed on this branch as 64ecdcf.", ReplyFixed},
+		{"Correction, on this branch as 64ecdcf.", ReplyFixed},
+		// A correction that fixes nothing.
+		{"Correction: you're right.", ReplyOther},
+		{"(Claude) Correction: you're right. 0374ea3 landed on #27's branch, which stacks on this one, not here.", ReplyOther},
+		{"Correction: the fix is not on this branch as 64ecdcf.", ReplyOther},
+		{"Correction: the same fix is on this branch as 64ecdc.", ReplyOther},
+		{"Correction: the fix is on the branch as 64ecdcf.", ReplyOther},
+		{"The same fix is on this branch as the one in #27.", ReplyOther},
+		// Controls: the acknowledgement passes any other verdict on.
+		{"Correction: not a bug, the caller holds the lock.", ReplyNotABug},
+		{"You're right, fixed in 64ecdcf.", ReplyFixed},
+		{"You're right, left as is for now.", ReplyWontFix},
+	} {
+		if got := classifyReply(tc.body); got != tc.want {
+			t.Errorf("classifyReply(%q) = %q, want %q", tc.body, got, tc.want)
+		}
+	}
+}
+
 func TestExcerpt(t *testing.T) {
 	if s, cut := excerpt("  short  ", 600); s != "short" || cut {
 		t.Fatalf("short = %q, %v", s, cut)

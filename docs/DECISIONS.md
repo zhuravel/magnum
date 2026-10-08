@@ -4174,3 +4174,10 @@ editing history. Code, config comments and prompts reference these by their head
   slash of a `$TMPDIR` that ends in one (a check compared paths as strings). Rejected: reusing only replays at
   the same Go code (master's code moves with every landed builder, so the baseline would almost never be
   reused) and refusing a replay above a pace (the caps and `--force` of `eval run` already hold it).
+- **Two more replies read as fixed** (2026-10-08). "Already resolved by <sha> together with …" and "Correction:
+  you're right. <where the first commit landed>. The same fix is now on this branch as <sha>" were classed
+  `other` (lens 1 found them among 131 last replies; the other 126 agreed with a reading). The fixed pattern
+  takes "(already) resolved by|in <sha>" and "<it> is|was|now|landed … on this branch as <sha>", and
+  "Correction" and "you're right" (or "you are right", "you're correct") are acknowledgements a later verdict
+  follows. A bare "Resolved", one by a later PR or by hand, and "not resolved by <sha>" stay no verdict. The
+  class is still a hint for the judge; nothing branches on it.
