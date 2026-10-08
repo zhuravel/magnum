@@ -215,6 +215,10 @@ type Deps struct {
 	// Usage reads Codex's rate-limit snapshot (usage.Codex, which FromApp
 	// sets); nil = no budget gauge and no caps.
 	Usage func(ctx context.Context, codexHome string, now time.Time) (usage.Snapshot, error)
+	// UsageAt reads Codex's rate-limit snapshot at or before a past time
+	// (usage.CodexAt, which FromApp sets); nil = no last-day pace next to
+	// the window's average.
+	UsageAt func(ctx context.Context, codexHome string, at time.Time) (usage.Snapshot, error)
 	// Probe checks that a clone's origin answers (`git ls-remote` with the
 	// environment gitx gives git); it lifts an infrastructure pause. nil =
 	// no probe: the pause lifts when its backoff ends.
@@ -354,6 +358,11 @@ type Engine struct {
 	usageSnap *usage.Snapshot
 	// usageRecorded is what recordBudget last wrote to kv.
 	usageRecorded string
+	usagePastRead time.Time
+	usagePast     *usage.Snapshot // Codex's reading from recentSpan ago (readPast)
+	// usagePaceRecorded is what recordRecentPace last wrote to kv ("none":
+	// deleted).
+	usagePaceRecorded string
 }
 
 // New returns an engine over d.
@@ -397,7 +406,7 @@ func FromApp(a *app.App) *Engine {
 	d := Deps{
 		Config: a.Config, Layout: a.Layout, Store: a.Store, Logger: a.Logger, DryRun: a.DryRun,
 		Herdr: a.Herdr, Agents: a.Agents, Slots: a.Slots, Git: a.Git, Inventory: a.Inventory,
-		Cleanup: a.Cleanup, Notifier: a.Notify, Identities: a.Identities, Usage: usage.Codex, Runner: a.Runner,
+		Cleanup: a.Cleanup, Notifier: a.Notify, Identities: a.Identities, Usage: usage.Codex, UsageAt: usage.CodexAt, Runner: a.Runner,
 	}
 	d.GitHub = func(id string) GitHub {
 		if c := a.GitHub(id); c != nil {

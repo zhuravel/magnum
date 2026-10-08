@@ -264,6 +264,10 @@ type statusPollFailing struct {
 // the share of the budget used over the share of the window elapsed (2.7 runs
 // out at 37% of the window); SoftAt and HardAt are when the caps are reached
 // at that average pace, left out once reached and when the reset comes first.
+// Pace24h is the same ratio over the last 24 hours as the daemon last
+// recorded it (engine.KVUsageCodexPace24h), which leaves out one-off spending
+// days ago; nil when unknown, when the window reset within the last 24 hours,
+// and whenever Pace is.
 type statusCodexUsage struct {
 	Percent       int        `json:"percent"`
 	WindowMinutes int        `json:"window_minutes,omitempty"`
@@ -273,6 +277,7 @@ type statusCodexUsage struct {
 	Soft          float64    `json:"soft"`
 	Hard          float64    `json:"hard"`
 	Pace          float64    `json:"pace,omitempty"`
+	Pace24h       *float64   `json:"pace_24h,omitempty"`
 	SoftAt        *time.Time `json:"soft_at,omitempty"`
 	HardAt        *time.Time `json:"hard_at,omitempty"`
 }

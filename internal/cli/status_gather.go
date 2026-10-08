@@ -190,7 +190,8 @@ func statusPollsFailing(d statusDeps, kv statusKV, now time.Time) []statusPollFa
 }
 
 // statusGatherUsage fills the Codex budget the daemon last read (nil when
-// it never found a Codex rate-limit snapshot).
+// it never found a Codex rate-limit snapshot), with the last day's pace only
+// next to the window's average.
 func statusGatherUsage(d statusDeps, kv statusKV, r *statusReport) {
 	pct := kv.getInt(engine.KVUsageCodexPercent)
 	if pct == nil {
@@ -214,6 +215,11 @@ func statusGatherUsage(d statusDeps, kv statusKV, r *statusReport) {
 				return nil
 			}
 			u.SoftAt, u.HardAt = reach(u.Soft), reach(u.Hard)
+			if v, ok := kv.get(engine.KVUsageCodexPace24h); ok {
+				if recent, err := strconv.ParseFloat(v, 64); err == nil {
+					u.Pace24h = &recent
+				}
+			}
 		}
 	}
 	r.Codex = u

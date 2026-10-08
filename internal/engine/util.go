@@ -58,12 +58,16 @@ const (
 	// as the newest Codex session reported it; KVUsageCodexResetsAt is when
 	// the binding window resets (store.FormatTime), KVUsageCodexWindow its
 	// length in minutes, KVUsageCodexPlan the plan and KVUsageCodexAt when
-	// Codex reported it (budget.go).
+	// Codex reported it (budget.go). KVUsageCodexPace24h is the binding
+	// window's pace over the last 24 hours (the share of the budget used in
+	// them over the share of the window they are, two decimals); absent
+	// when Codex's reading from a day ago is unknown or of another window.
 	KVUsageCodexPercent  = "usage.codex_percent"
 	KVUsageCodexResetsAt = "usage.codex_resets_at"
 	KVUsageCodexWindow   = "usage.codex_window_minutes"
 	KVUsageCodexPlan     = "usage.codex_plan"
 	KVUsageCodexAt       = "usage.codex_at"
+	KVUsageCodexPace24h  = "usage.codex_pace_24h"
 )
 
 // KVToolPausedUntil is the kv key holding when a tool's pause ends ("codex",

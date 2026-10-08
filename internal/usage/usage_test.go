@@ -284,3 +284,116 @@ func TestCodexFollowsASymlinkedSessionsDirectory(t *testing.T) {
 		t.Fatalf("Codex = %+v, %v", snap, err)
 	}
 }
+
+// sessionMeta is a rollout's first line: the session_meta record stamped
+// when the session started, longer than the head CodexAt reads of it (a
+// real one carries the instructions and runs to tens of kilobytes).
+func sessionMeta(started time.Time) string {
+	return fmt.Sprintf(`{"timestamp":%q,"ordinal":0,"type":"session_meta","payload":{"instructions":%q}}`+"\n",
+		started.Format(time.RFC3339Nano), strings.Repeat("x", 4096))
+}
+
+// TestCodexAtTakesTheSnapshotBeforeAtFromASessionSpanningIt: a session that
+// started before at and was written after it holds the newest snapshot at
+// or before at, newer than the last one of the file last written before at;
+// its snapshots after at do not count.
+func TestCodexAtTakesTheSnapshotBeforeAtFromASessionSpanningIt(t *testing.T) {
+	home := t.TempDir()
+	at := now.Add(-24 * time.Hour)
+	session(t, home, "2026/10/02", "old", sessionMeta(at.Add(-6*time.Hour))+tokenCount(at.Add(-3*time.Hour), 20, "pro"), at.Add(-2*time.Hour))
+	spanning := session(t, home, "2026/10/03", "spanning",
+		sessionMeta(at.Add(-5*time.Hour))+tokenCount(at.Add(-time.Hour), 30, "pro")+tokenCount(at.Add(time.Hour), 40, "pro"), at.Add(time.Hour))
+
+	snap, err := CodexAt(context.Background(), home, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.UsedPercent != 30 || !snap.At.Equal(at.Add(-time.Hour)) || snap.Path != spanning {
+		t.Fatalf("snapshot = %+v; want the spanning session's 30%% an hour before at", snap)
+	}
+}
+
+// TestCodexAtReadsOnlyTheFirstLineOfASessionStartedAfterAt: a session that
+// began after at cannot hold a snapshot from before it; only its first line
+// is read, so a token_count in it stamped before at (bogus here) is never
+// seen.
+func TestCodexAtReadsOnlyTheFirstLineOfASessionStartedAfterAt(t *testing.T) {
+	home := t.TempDir()
+	at := now.Add(-24 * time.Hour)
+	session(t, home, "2026/10/02", "old", tokenCount(at.Add(-3*time.Hour), 20, "pro"), at.Add(-2*time.Hour))
+	session(t, home, "2026/10/04", "later", sessionMeta(at.Add(time.Hour))+tokenCount(at.Add(-10*time.Minute), 99, "pro"), now)
+
+	snap, err := CodexAt(context.Background(), home, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.UsedPercent != 20 || !strings.Contains(snap.Path, "old") {
+		t.Fatalf("snapshot = %+v; want the old file's 20%%", snap)
+	}
+}
+
+// TestCodexAtTakesTheLastSnapshotOfAFileWrittenBeforeAt: the file last
+// written before at gives its last snapshot, its windows as Codex reported
+// them even when they reset since (the caller compares the reset).
+func TestCodexAtTakesTheLastSnapshotOfAFileWrittenBeforeAt(t *testing.T) {
+	home := t.TempDir()
+	session(t, home, "2025/09/20", "legacy", "testdata/legacy.jsonl", now.Add(-48*time.Hour))
+	at := now.Add(-24 * time.Hour) // after both of the fixture's resets
+
+	snap, err := CodexAt(context.Background(), home, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.UsedPercent != 12 || snap.Secondary == nil || snap.Secondary.UsedPercent != 63 {
+		t.Fatalf("snapshot = %+v (secondary %+v); want 12%% / 63%% as reported", snap, snap.Secondary)
+	}
+}
+
+// TestCodexAtBoundsTheFilesItOpens: of the files written after at, only the
+// maxHeads written closest to at have their first line read, and only
+// maxFiles of the sessions spanning at are read for a snapshot.
+func TestCodexAtBoundsTheFilesItOpens(t *testing.T) {
+	home := t.TempDir()
+	at := now.Add(-24 * time.Hour)
+	started := sessionMeta(at.Add(-5 * time.Hour))
+	session(t, home, "2026/10/03", "near", started+tokenCount(at.Add(-time.Hour), 30, "pro"), at.Add(time.Hour))
+	session(t, home, "2026/10/03", "far", started+tokenCount(at.Add(-30*time.Minute), 35, "pro"), at.Add(2*time.Hour))
+
+	for _, c := range []struct {
+		heads, files int
+		want         float64
+	}{
+		{heads: 1, files: MaxFiles, want: 30},
+		{heads: 2, files: 1, want: 30},
+		{heads: 2, files: 2, want: 35},
+	} {
+		snap, err := codexAt(context.Background(), home, at, c.heads, c.files, MaxTailBytes)
+		if err != nil || snap.UsedPercent != c.want {
+			t.Errorf("heads %d, files %d: %+v, %v; want %g%%", c.heads, c.files, snap, err, c.want)
+		}
+	}
+}
+
+func TestCodexAtNoData(t *testing.T) {
+	at := now.Add(-24 * time.Hour)
+	for name, setup := range map[string]func(home string){
+		"no sessions directory": func(string) {},
+		"only sessions started after at": func(h string) {
+			session(t, h, "2026/10/04", "a", sessionMeta(at.Add(time.Minute))+tokenCount(at.Add(time.Hour), 5, "pro"), now)
+		},
+		"spanning session without a snapshot before at": func(h string) {
+			session(t, h, "2026/10/03", "a", sessionMeta(at.Add(-time.Hour))+tokenCount(at.Add(time.Hour), 5, "pro"), now)
+		},
+		"no first-line timestamp": func(h string) {
+			session(t, h, "2026/10/03", "a", `{"type":"session_meta"}`+"\n"+tokenCount(at.Add(-time.Hour), 5, "pro"), now)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			home := t.TempDir()
+			setup(home)
+			if snap, err := CodexAt(context.Background(), home, at); !errors.Is(err, ErrNoData) {
+				t.Fatalf("CodexAt = %+v, %v; want ErrNoData", snap, err)
+			}
+		})
+	}
+}

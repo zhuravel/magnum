@@ -9,8 +9,9 @@
 //	 "resets_at":1791710538},"secondary":null,"plan_type":"pro"}}}
 //
 // Codex reads the newest of those snapshots without starting Codex or calling
-// any API. Decide turns a snapshot into a soft/hard verdict for the
-// scheduler. Everything here is read-only.
+// any API, CodexAt the newest one at or before a past time. Decide turns a
+// snapshot into a soft/hard verdict for the scheduler. Everything here is
+// read-only.
 package usage
 
 import (
@@ -35,7 +36,12 @@ const (
 	MaxFiles = 8
 	// MaxTailBytes is how far from its end a session file is read.
 	MaxTailBytes = 4 << 20
-	chunkBytes   = 64 << 10
+	// MaxHeads is how many session files written at or after the time
+	// CodexAt asks about have their first line read, to tell whether the
+	// session began before that time.
+	MaxHeads   = 256
+	headBytes  = 512
+	chunkBytes = 64 << 10
 )
 
 // ErrNoData means no rate-limit snapshot was found: no session directory, no
@@ -146,32 +152,84 @@ type sessionFile struct {
 }
 
 func codex(ctx context.Context, home string, now time.Time, maxFiles int, maxTail int64) (Snapshot, error) {
-	files, err := newestSessions(ctx, filepath.Join(home, "sessions"), maxFiles)
+	files, err := sessions(ctx, filepath.Join(home, "sessions"))
 	if err != nil {
 		return Snapshot{}, err
 	}
+	best, err := newestSnapshot(ctx, files[:min(maxFiles, len(files))], maxTail, time.Time{})
+	if err != nil {
+		return Snapshot{}, err
+	}
+	best.Window = best.expire(now)
+	if best.Secondary != nil {
+		w := best.Secondary.expire(now)
+		best.Secondary = &w
+	}
+	return best, nil
+}
+
+// CodexAt returns the newest rate-limit snapshot in home's session files
+// (empty means DefaultCodexHome) stamped at or before at: the budget as
+// Codex last reported it then. Its windows read as reported, one that has
+// reset since included; the caller compares ResetsAt. It reads, each from
+// its end (at most MaxTailBytes), the files last written before at as Codex
+// reads the newest (the newest one usually settles it) and the sessions
+// spanning at, written at or after it but started at or before it; at most
+// MaxFiles of each. Of a file written at or after at only the first line,
+// the session_meta record stamped when the session started, is read to tell
+// (of the MaxHeads such files written closest to at). It returns ErrNoData
+// when nothing is found.
+func CodexAt(ctx context.Context, home string, at time.Time) (Snapshot, error) {
+	return codexAt(ctx, cmp.Or(home, DefaultCodexHome()), at, MaxHeads, MaxFiles, MaxTailBytes)
+}
+
+func codexAt(ctx context.Context, home string, at time.Time, maxHeads, maxFiles int, maxTail int64) (Snapshot, error) {
+	files, err := sessions(ctx, filepath.Join(home, "sessions"))
+	if err != nil {
+		return Snapshot{}, err
+	}
+	// files is newest first: those written at or after at, then the rest.
+	before := slices.IndexFunc(files, func(f sessionFile) bool { return f.mtime.Before(at) })
+	if before < 0 {
+		before = len(files)
+	}
+	var read []sessionFile
+	for i := before - 1; i >= max(before-maxHeads, 0) && len(read) < maxFiles; i-- {
+		if err := ctx.Err(); err != nil {
+			return Snapshot{}, err
+		}
+		if started, ok := sessionStart(files[i].path); ok && !started.After(at) {
+			read = append(read, files[i])
+		}
+	}
+	slices.Reverse(read) // newest first again
+	older := files[before:]
+	read = append(read, older[:min(maxFiles, len(older))]...)
+	return newestSnapshot(ctx, read, maxTail, at)
+}
+
+// newestSnapshot is the snapshot with the latest timestamp at or before
+// until (any time when until is zero) in files, which are sorted newest
+// modification first. A file last written before the best snapshot found
+// cannot hold a newer one: the files from it on are not read. It returns
+// ErrNoData when there is none.
+func newestSnapshot(ctx context.Context, files []sessionFile, maxTail int64, until time.Time) (Snapshot, error) {
 	var best Snapshot
 	found := false
 	for _, f := range files {
 		if err := ctx.Err(); err != nil {
 			return Snapshot{}, err
 		}
-		// A file last written before the best snapshot cannot hold a newer one.
 		if found && f.mtime.Before(best.At) {
 			break
 		}
-		snap, ok := lastSnapshot(f.path, maxTail)
+		snap, ok := lastSnapshot(f.path, maxTail, until)
 		if ok && (!found || snap.At.After(best.At)) {
 			best, found = snap, true
 		}
 	}
 	if !found {
 		return Snapshot{}, ErrNoData
-	}
-	best.Window = best.expire(now)
-	if best.Secondary != nil {
-		w := best.Secondary.expire(now)
-		best.Secondary = &w
 	}
 	return best, nil
 }
@@ -184,11 +242,11 @@ func (w Window) expire(now time.Time) Window {
 	return w
 }
 
-// newestSessions lists dir's YYYY/MM/DD/rollout-*.jsonl files, newest
-// modification first, at most n. It stats every session file (a few
-// thousand stats, no reads): a resumed session appends to its original file
-// under an old date, so the date directories alone do not say what is new.
-func newestSessions(ctx context.Context, dir string, n int) ([]sessionFile, error) {
+// sessions lists dir's YYYY/MM/DD/rollout-*.jsonl files, newest
+// modification first. It stats every session file (a few thousand stats, no
+// reads): a resumed session appends to its original file under an old date,
+// so the date directories alone do not say what is new.
+func sessions(ctx context.Context, dir string) ([]sessionFile, error) {
 	if fi, err := os.Lstat(dir); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
 		if real, err := filepath.EvalSymlinks(dir); err == nil {
 			dir = real // WalkDir does not follow a symlinked root
@@ -228,7 +286,37 @@ func newestSessions(ctx context.Context, dir string, n int) ([]sessionFile, erro
 	slices.SortFunc(files, func(a, b sessionFile) int {
 		return cmp.Or(b.mtime.Compare(a.mtime), strings.Compare(b.path, a.path))
 	})
-	return files[:min(n, len(files))], nil
+	return files, nil
+}
+
+var sessionStartPrefix = []byte(`{"timestamp":"`)
+
+// sessionStart is when the session in path began: the timestamp of its first
+// line, the session_meta record, which Codex writes with the timestamp
+// first. Only the first headBytes are read (the record carries the session's
+// instructions and runs to tens of kilobytes); ok is false when they hold no
+// such timestamp.
+func sessionStart(path string) (time.Time, bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return time.Time{}, false
+	}
+	defer f.Close()
+	head := make([]byte, headBytes)
+	n, err := io.ReadFull(f, head)
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return time.Time{}, false
+	}
+	stamp, ok := bytes.CutPrefix(head[:n], sessionStartPrefix)
+	if !ok {
+		return time.Time{}, false
+	}
+	stamp, _, ok = bytes.Cut(stamp, []byte(`"`))
+	if !ok {
+		return time.Time{}, false
+	}
+	at, err := time.Parse(time.RFC3339Nano, string(stamp))
+	return at, err == nil
 }
 
 func isDigits(s string) bool {
@@ -293,8 +381,9 @@ func parseSnapshot(line []byte) (Snapshot, bool) {
 	return snap, true
 }
 
-// lastSnapshot is the last snapshot line in path's final maxTail bytes.
-func lastSnapshot(path string, maxTail int64) (Snapshot, bool) {
+// lastSnapshot is the last snapshot line in path's final maxTail bytes
+// stamped at or before until (any time when until is zero).
+func lastSnapshot(path string, maxTail int64, until time.Time) (Snapshot, bool) {
 	f, err := os.Open(path)
 	if err != nil {
 		return Snapshot{}, false
@@ -308,6 +397,7 @@ func lastSnapshot(path string, maxTail int64) (Snapshot, bool) {
 	found := false
 	_ = scanBackward(f, info.Size(), maxTail, func(line []byte) bool {
 		snap, found = parseSnapshot(line)
+		found = found && (until.IsZero() || !snap.At.After(until))
 		return found
 	})
 	if found {

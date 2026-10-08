@@ -161,3 +161,88 @@ func TestPaceElapsedAndRatio(t *testing.T) {
 		})
 	}
 }
+
+// TestPaceSinceLeavesOutABurstDaysAgo: half the weekly budget is used half
+// way through the window, the sustainable rate on average (1.0x), but 40 of
+// the 50 points went in one burst three days ago; the last 24h, a seventh of
+// the window, spent 5 points: 0.35x.
+func TestPaceSinceLeavesOutABurstDaysAgo(t *testing.T) {
+	resets := time.Date(2026, 10, 10, 10, 0, 0, 0, time.UTC)
+	now := weeklyAt(resets, 50)
+	cur := Window{UsedPercent: 50, WindowMinutes: weekMinutes, ResetsAt: resets}
+	// Codex's last reading before the last 24h, after the burst; its reset
+	// time jitters by a second between readings.
+	past := Snapshot{Window: Window{UsedPercent: 45, WindowMinutes: weekMinutes, ResetsAt: resets.Add(time.Second)}, At: now.Add(-30 * time.Hour)}
+
+	recent, ok := PaceSince(cur, past, now.Add(-24*time.Hour), now)
+	if !ok {
+		t.Fatal("no pace over the last 24h")
+	}
+	avg, _ := PaceOf(50, weekMinutes, resets, now)
+	if math.Abs(recent-0.35) > 1e-9 || recent >= avg.Ratio() {
+		t.Fatalf("last 24h %.3fx, window %.3fx; want 0.35x, below the window's", recent, avg.Ratio())
+	}
+}
+
+// TestPaceSinceIsUnknownAcrossAReset: the window reset 10 hours ago, so the
+// reading from before the last 24h is of the window before (another reset
+// time); the budget it reports is not comparable and there is no pace.
+func TestPaceSinceIsUnknownAcrossAReset(t *testing.T) {
+	now := time.Date(2026, 10, 8, 20, 0, 0, 0, time.UTC)
+	resets := now.Add(weekMinutes*time.Minute - 10*time.Hour)
+	cur := Window{UsedPercent: 4, WindowMinutes: weekMinutes, ResetsAt: resets}
+	past := Snapshot{Window: Window{UsedPercent: 70, WindowMinutes: weekMinutes, ResetsAt: resets.Add(-weekMinutes * time.Minute)}, At: now.Add(-25 * time.Hour)}
+	if r, ok := PaceSince(cur, past, now.Add(-24*time.Hour), now); ok {
+		t.Fatalf("pace across a reset = %v", r)
+	}
+}
+
+// TestPaceSinceMatchesTheWindowByLength: a reading that reports the weekly
+// window as its secondary (older Codex: a 5-hour primary) is compared on
+// that one.
+func TestPaceSinceMatchesTheWindowByLength(t *testing.T) {
+	resets := time.Date(2026, 10, 10, 10, 0, 0, 0, time.UTC)
+	now := weeklyAt(resets, 50)
+	cur := Window{UsedPercent: 50, WindowMinutes: weekMinutes, ResetsAt: resets}
+	past := Snapshot{
+		Window:    Window{UsedPercent: 90, WindowMinutes: 300, ResetsAt: now.Add(-20 * time.Hour)},
+		Secondary: &Window{UsedPercent: 40, WindowMinutes: weekMinutes, ResetsAt: resets},
+	}
+	if r, ok := PaceSince(cur, past, now.Add(-24*time.Hour), now); !ok || math.Abs(r-0.7) > 1e-9 {
+		t.Fatalf("pace = %v, %v; want 0.7 from the weekly secondary", r, ok)
+	}
+}
+
+func TestPaceSinceRefusesWhatIsNotComparable(t *testing.T) {
+	resets := time.Date(2026, 10, 10, 10, 0, 0, 0, time.UTC)
+	now := weeklyAt(resets, 50)
+	from := now.Add(-24 * time.Hour)
+	cur := Window{UsedPercent: 50, WindowMinutes: weekMinutes, ResetsAt: resets}
+	weekly := func(used float64, resets time.Time) Snapshot {
+		return Snapshot{Window: Window{UsedPercent: used, WindowMinutes: weekMinutes, ResetsAt: resets}, At: from.Add(-time.Hour)}
+	}
+	young := Window{UsedPercent: 5, WindowMinutes: weekMinutes, ResetsAt: now.Add(weekMinutes*time.Minute - 10*time.Hour)}
+	tests := []struct {
+		name      string
+		cur       Window
+		past      Snapshot
+		from, now time.Time
+	}{
+		{"resets two hours apart", cur, weekly(45, resets.Add(2*time.Hour)), from, now},
+		{"no window of that length", cur, Snapshot{Window: Window{UsedPercent: 45, WindowMinutes: 300, ResetsAt: resets}}, from, now},
+		{"the reading names no reset", cur, weekly(45, time.Time{}), from, now},
+		{"the window began after from", young, weekly(0, young.ResetsAt), from, now},
+		{"the used share went down", cur, weekly(60, resets), from, now},
+		{"nothing elapsed", cur, weekly(45, resets), now, now},
+		{"from after now", cur, weekly(45, resets), now.Add(time.Hour), now},
+		{"the window has reset", cur, weekly(45, resets), resets.Add(-24 * time.Hour), resets},
+		{"window length unknown", Window{UsedPercent: 50, ResetsAt: resets}, Snapshot{Window: Window{UsedPercent: 45, ResetsAt: resets}}, from, now},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if r, ok := PaceSince(tt.cur, tt.past, tt.from, tt.now); ok {
+				t.Fatalf("pace = %v, want none", r)
+			}
+		})
+	}
+}

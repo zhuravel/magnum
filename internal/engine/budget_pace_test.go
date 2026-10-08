@@ -42,6 +42,17 @@ func paceToasts(h *harness) []string {
 	return h.nh.titles("Codex budget")
 }
 
+// paceBody is the body of the last toast about the Codex budget.
+func paceBody(h *harness) string {
+	var body string
+	for _, toast := range h.nh.all() {
+		if strings.Contains(toast, "Codex budget") {
+			_, body, _ = strings.Cut(toast, " | ")
+		}
+	}
+	return body
+}
+
 // TestBudgetPaceWarnsOnceWhenSoftCapComesBeforeTheReset: half the weekly
 // budget used with 18% of the window elapsed (2.8x the sustainable rate)
 // reaches codex_soft (80%) about two days into the window, long before the
@@ -62,12 +73,7 @@ func TestBudgetPaceWarnsOnceWhenSoftCapComesBeforeTheReset(t *testing.T) {
 	if got := paceToasts(h); len(got) != 1 || got[0] != "magnum: Codex budget at 50%" {
 		t.Fatalf("toasts = %v", got)
 	}
-	var body string
-	for _, toast := range h.nh.all() {
-		if strings.Contains(toast, "Codex budget") {
-			_, body, _ = strings.Cut(toast, " | ")
-		}
-	}
+	body := paceBody(h)
 	for _, want := range []string{
 		"reaches 80% (codex_soft) " + reach.Local().Format("Mon 15:04"),
 		"before the reset " + resets.Local().Format("Mon 15:04"),
@@ -208,5 +214,91 @@ func TestBudgetPaceDryRunOnlyRecords(t *testing.T) {
 	}
 	if n := paceEvents(h, "dryrun.pace"); n != 1 {
 		t.Fatalf("dryrun.pace records = %d", n)
+	}
+}
+
+// TestBudgetPaceNamesTheLastDayNextToTheWindowAverage: the window's average
+// (2.8x) counts what was spent days ago; Codex's reading from a day ago says
+// 10 of the 50 points went in the last 24h, a seventh of the window (0.7x).
+// The toast names both, and status gets the last day's pace from kv.
+func TestBudgetPaceNamesTheLastDayNextToTheWindowAverage(t *testing.T) {
+	h, u := newBudgetHarness(t)
+	now := h.clock.Now()
+	resets := paceResets(now, 18)
+	u.set(50, resets)
+	u.setPast(40, resets.Add(time.Second)) // the reset jitters between readings
+	h.startup()
+	h.tick()
+
+	if len(u.pastAts) != 1 || !u.pastAts[0].Equal(now.Add(-24*time.Hour)) {
+		t.Fatalf("readings asked for = %v, want one at %v", u.pastAts, now.Add(-24*time.Hour))
+	}
+	if got := paceToasts(h); len(got) != 1 {
+		t.Fatalf("toasts = %v", got)
+	}
+	if body := paceBody(h); !strings.HasSuffix(body, "full re-reviews will wait. Pace 2.8x since the reset, 0.7x in the last 24h.") {
+		t.Fatalf("toast body = %q", body)
+	}
+	if v, _ := h.e.getKV(h.ctx, KVUsageCodexPace24h); v != "0.70" {
+		t.Fatalf("kv %s = %q, want 0.70", KVUsageCodexPace24h, v)
+	}
+}
+
+// TestBudgetPaceSaysOnlySinceTheResetWithoutTheLastDay: with no reading
+// from a day ago the toast names the window's average alone, and a last-day
+// pace a previous daemon recorded is deleted.
+func TestBudgetPaceSaysOnlySinceTheResetWithoutTheLastDay(t *testing.T) {
+	h, u := newBudgetHarness(t)
+	u.set(50, paceResets(h.clock.Now(), 18))
+	h.e.setKV(h.ctx, KVUsageCodexPace24h, "1.10")
+	h.startup()
+	h.tick()
+
+	if got := paceToasts(h); len(got) != 1 {
+		t.Fatalf("toasts = %v", got)
+	}
+	if body := paceBody(h); !strings.HasSuffix(body, "full re-reviews will wait. Pace 2.8x since the reset.") {
+		t.Fatalf("toast body = %q", body)
+	}
+	if v, ok := h.e.getKV(h.ctx, KVUsageCodexPace24h); ok {
+		t.Fatalf("kv %s = %q, want none", KVUsageCodexPace24h, v)
+	}
+}
+
+// TestBudgetLastDayPaceIsReadEveryQuarterHour: the reading from a day ago is
+// read at most every 15 minutes; one that finds nothing keeps the previous
+// reading, and one of the window before a reset (not comparable) deletes the
+// recorded pace.
+func TestBudgetLastDayPaceIsReadEveryQuarterHour(t *testing.T) {
+	h, u := newBudgetHarness(t)
+	resets := paceResets(h.clock.Now(), 50)
+	u.set(50, resets)
+	u.setPast(45, resets)
+	h.startup()
+	h.tick()
+	h.advance(10 * time.Minute)
+	h.tick()
+	if len(u.pastAts) != 1 {
+		t.Fatalf("readings within 15 minutes = %d", len(u.pastAts))
+	}
+	if v, _ := h.e.getKV(h.ctx, KVUsageCodexPace24h); v != "0.35" {
+		t.Fatalf("kv %s = %q, want 0.35", KVUsageCodexPace24h, v)
+	}
+
+	u.setPast(-1, time.Time{})
+	h.advance(5 * time.Minute)
+	h.tick()
+	if len(u.pastAts) != 2 {
+		t.Fatalf("readings after 15 minutes = %d", len(u.pastAts))
+	}
+	if v, _ := h.e.getKV(h.ctx, KVUsageCodexPace24h); v != "0.35" {
+		t.Fatalf("kv %s = %q after a read that found nothing, want 0.35 kept", KVUsageCodexPace24h, v)
+	}
+
+	u.setPast(70, resets.Add(-paceWeek))
+	h.advance(15 * time.Minute)
+	h.tick()
+	if v, ok := h.e.getKV(h.ctx, KVUsageCodexPace24h); ok {
+		t.Fatalf("kv %s = %q across a reset, want none", KVUsageCodexPace24h, v)
 	}
 }

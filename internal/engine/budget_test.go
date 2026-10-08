@@ -14,17 +14,31 @@ import (
 	"github.com/zhuravel/magnum/internal/usage"
 )
 
-// fakeUsage is a Codex usage reader whose snapshot a test sets.
+// fakeUsage is a Codex usage reader whose snapshots a test sets: the newest
+// (read) and the one from a past time (readAt).
 type fakeUsage struct {
-	mu    sync.Mutex
-	snap  *usage.Snapshot
-	reads int
+	mu      sync.Mutex
+	snap    *usage.Snapshot
+	past    *usage.Snapshot
+	reads   int
+	pastAts []time.Time // the times readAt was asked about
 }
 
 func (f *fakeUsage) set(pct float64, resets time.Time) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.snap = &usage.Snapshot{Window: usage.Window{UsedPercent: pct, WindowMinutes: 10080, ResetsAt: resets}, Plan: "pro", At: resets.Add(-time.Hour)}
+}
+
+// setPast sets what readAt finds: pct of the weekly window resetting at
+// resets; nothing (usage.ErrNoData) when pct is negative.
+func (f *fakeUsage) setPast(pct float64, resets time.Time) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.past = nil
+	if pct >= 0 {
+		f.past = &usage.Snapshot{Window: usage.Window{UsedPercent: pct, WindowMinutes: 10080, ResetsAt: resets}, Plan: "pro"}
+	}
 }
 
 func (f *fakeUsage) read(context.Context, string, time.Time) (usage.Snapshot, error) {
@@ -37,9 +51,19 @@ func (f *fakeUsage) read(context.Context, string, time.Time) (usage.Snapshot, er
 	return *f.snap, nil
 }
 
+func (f *fakeUsage) readAt(_ context.Context, _ string, at time.Time) (usage.Snapshot, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pastAts = append(f.pastAts, at)
+	if f.past == nil {
+		return usage.Snapshot{}, usage.ErrNoData
+	}
+	return *f.past, nil
+}
+
 func newBudgetHarness(t *testing.T) (*harness, *fakeUsage) {
 	u := &fakeUsage{}
-	h := newHarness(t, func(h *harness) { h.d.Usage = u.read })
+	h := newHarness(t, func(h *harness) { h.d.Usage, h.d.UsageAt = u.read, u.readAt })
 	return h, u
 }
 

@@ -5,7 +5,8 @@ package engine
 // minute; at [usage] codex_soft full re-reviews wait, at codex_hard the kinds
 // backed by Codex pause until the budget is below the cap again. A budget
 // spent so fast that codex_soft comes before the window resets is told once
-// per window (notePace).
+// per window (notePace). Codex's reading from a day ago, read at most every
+// quarter hour, gives the last day's pace shown next to the window's average.
 
 import (
 	"context"
@@ -36,6 +37,12 @@ const (
 	// elapsed before its pace is judged: the average over the first hours is
 	// one burst, and the one warning a window gets is not for that.
 	paceMinElapsed = 10
+	// recentSpan is the stretch whose pace is shown next to the window's
+	// average, which counts one-off spending days ago (eval replays, held
+	// re-reviews); recentEvery bounds how often Codex's reading from
+	// recentSpan ago is read.
+	recentSpan  = 24 * time.Hour
+	recentEvery = 15 * time.Minute
 )
 
 // readBudget returns the newest Codex snapshot, reading the session files
@@ -62,8 +69,63 @@ func (e *Engine) readBudget(ctx context.Context) (usage.Snapshot, bool) {
 	if e.usageSnap == nil {
 		return usage.Snapshot{}, false
 	}
+	e.readPast(ctx, now)
 	e.recordBudget(ctx, *e.usageSnap, now)
+	e.recordRecentPace(ctx, now)
 	return currentBudget(*e.usageSnap, now), true
+}
+
+// readPast reads Codex's reading from recentSpan ago (Deps.UsageAt), the
+// start of the recent pace, when the last read is recentEvery old. A read
+// that fails keeps the previous reading, which is from before then too. The
+// caller holds usageMu.
+func (e *Engine) readPast(ctx context.Context, now time.Time) {
+	if e.d.UsageAt == nil || (!e.usagePastRead.IsZero() && now.Sub(e.usagePastRead) < recentEvery) {
+		return
+	}
+	e.usagePastRead = now
+	past, err := e.d.UsageAt(ctx, e.cfg.Usage.CodexHome, now.Add(-recentSpan))
+	switch {
+	case err == nil:
+		e.usagePast = &past
+	case errors.Is(err, usage.ErrNoData):
+		e.log.Debug("codex usage a day ago: no snapshot", "err", err)
+	default:
+		if e.changed("usage.codex_past", err.Error()) {
+			e.log.Warn("codex usage a day ago", "err", err)
+		}
+	}
+}
+
+// recentPace is the pace of the cached budget's binding window over the
+// last recentSpan, from Codex's reading then to now (usage.PaceSince); ok is
+// false without such a reading or when it is not comparable. The caller
+// holds usageMu.
+func (e *Engine) recentPace(now time.Time) (float64, bool) {
+	if e.usageSnap == nil || e.usagePast == nil {
+		return 0, false
+	}
+	return usage.PaceSince(bindingWindow(currentBudget(*e.usageSnap, now)), *e.usagePast, now.Add(-recentSpan), now)
+}
+
+// recordRecentPace writes the recent pace (two decimals) to kv for `magnum
+// status` when it changed, and deletes it when it is not known. The caller
+// holds usageMu.
+func (e *Engine) recordRecentPace(ctx context.Context, now time.Time) {
+	pace, ok := e.recentPace(now)
+	v := "none"
+	if ok {
+		v = strconv.FormatFloat(pace, 'f', 2, 64)
+	}
+	if v == e.usagePaceRecorded {
+		return
+	}
+	e.usagePaceRecorded = v
+	if !ok {
+		e.delKV(ctx, KVUsageCodexPace24h)
+		return
+	}
+	e.setKV(ctx, KVUsageCodexPace24h, v)
 }
 
 // currentBudget is snap with the windows whose reset passed since it was
@@ -191,7 +253,10 @@ func (e *Engine) checkBudget(ctx context.Context) {
 // window began codex_soft comes before the reset, and full re-reviews wait from
 // then on. One info toast on the batcher, whose key is reserved in the
 // registry for the window's length (so a restarted daemon stays quiet), and
-// one usage.pace event, guarded the same way. A dry run only records it.
+// one usage.pace event, guarded the same way. A dry run only records it. The
+// text names the average pace and, when known, the last day's (recentPace),
+// which leaves out one-off spending days ago; the warning goes by the
+// average.
 func (e *Engine) notePace(ctx context.Context, snap usage.Snapshot, now time.Time) {
 	soft := e.cfg.Usage.CodexSoft
 	if soft <= 0 || snap.Used() >= soft {
@@ -211,8 +276,15 @@ func (e *Engine) notePace(ctx context.Context, snap usage.Snapshot, now time.Tim
 		return
 	}
 	subject := "tool:" + agents.KindCodex
-	detail := fmt.Sprintf("At this pace it reaches %g%% (codex_soft) %s, before the reset %s: full re-reviews will wait. Pace %.1fx.",
+	detail := fmt.Sprintf("At this pace it reaches %g%% (codex_soft) %s, before the reset %s: full re-reviews will wait. Pace %.1fx since the reset",
 		soft, reach.Local().Format("Mon 15:04"), w.ResetsAt.Local().Format("Mon 15:04"), pace.Ratio())
+	e.usageMu.Lock()
+	recent, ok := e.recentPace(now)
+	e.usageMu.Unlock()
+	if ok {
+		detail += fmt.Sprintf(", %.1fx in the last 24h", recent)
+	}
+	detail += "."
 	if e.d.DryRun {
 		e.rec.Record(ctx, subject, "pace", fmt.Sprintf("Codex budget %.0f%% used: %s", snap.Used(), detail))
 		return

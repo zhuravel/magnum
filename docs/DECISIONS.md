@@ -4189,3 +4189,19 @@ editing history. Code, config comments and prompts reference these by their head
   score), and with no judge run since `daemon.prompts_loaded_at` and no `daemon.prompts_changed`, the current
   skill is the first 12 hex of the SHA-256 of skills/magnum-review/SKILL.md, the name of the daemon's copy; the
   summary says it came from the file.
+- **`magnum status` and the pace toast add the last 24 hours' pace** (2026-10-08). The codex line read "pace
+  1.7x" when 9.1 of the week's 30 points were one-offs (eval replays, re-reviews the soft cap held until the
+  reset), so the window's average said the week would end near the cap while the normal weekday rate was
+  lower. The line now reads "pace 1.7x since the reset, 1.1x in the last 24h" (`pace_24h` in the JSON), and
+  the toast's text names both. The usage package keeps no history, but Codex's rollouts hold every
+  `token_count` reading, so `usage.CodexAt` returns the newest reading at or before a time: it reads, each
+  from its end within the tail bound, the files last written before then and the sessions spanning it (files
+  written since then whose first line, the `session_meta` stamped at the session's start, is no later; only
+  their first 512 bytes are read, of at most 256 files), on the same stat walk `usage.Codex` does every minute.
+  The engine reads the reading from 24 hours ago at most every 15 minutes (`Deps.UsageAt`) and records the
+  binding window's pace since then in kv `usage.codex_pace_24h` (`usage.PaceSince`: the points used since that
+  reading over the share of the window 24 hours are). A reading of another window (its reset more than an hour
+  from the current one: a reset in between) is not comparable, and a window that began within the last 24
+  hours has only its average: the line then says "since the reset" alone. The soft and hard caps, the
+  toast's trigger and the reach times keep the window's average. Rejected: a usage history in the registry
+  (a migration and a day without the figure, for data Codex already keeps).

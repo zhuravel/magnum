@@ -168,7 +168,8 @@ func statusGitHubText(g statusGitHub, now time.Time) string {
 }
 
 // statusCodexText is the codex line's value: the budget used, its window
-// and reset, and what the [usage] caps do at that level.
+// and reset, what the [usage] caps do at that level, and the pace since the
+// reset (and in the last 24h, when known) with when it reaches the caps.
 func statusCodexText(u statusCodexUsage, now time.Time) string {
 	s := fmt.Sprintf("%d%% used", u.Percent)
 	switch u.WindowMinutes {
@@ -194,7 +195,10 @@ func statusCodexText(u statusCodexUsage, now time.Time) string {
 		s += fmt.Sprintf("; caps %g%%/%g%%", u.Soft, u.Hard)
 	}
 	if u.Pace > 0 && (u.Hard <= 0 || pct < u.Hard) {
-		s += fmt.Sprintf("; pace %.1fx", u.Pace)
+		s += fmt.Sprintf("; pace %.1fx since the reset", u.Pace)
+		if u.Pace24h != nil {
+			s += fmt.Sprintf(", %.1fx in the last 24h", *u.Pace24h)
+		}
 		var reach []string
 		if u.SoftAt != nil {
 			reach = append(reach, fmt.Sprintf("%g%% %s", u.Soft, inspClock(now, *u.SoftAt)))
