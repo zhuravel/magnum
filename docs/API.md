@@ -10271,9 +10271,12 @@ type HistoryCommit struct {
 type Keys interface {
 	AgentSendKeys(ctx context.Context, target string, keys ...string) error
 	PaneSendKeys(ctx context.Context, paneID string, keys ...string) error
+	WaitIdleShell(ctx context.Context, paneID string, timeout time.Duration) (herdr.ProcessInfo, error)
 }
-    Keys interrupts a timed-out role (esc to an agent, ctrl+c twice to the
-    judge, ctrl+c to a shell role's pane). *herdr.Client satisfies it.
+    Keys interrupts a timed-out or cut role (esc to an agent, ctrl+c twice to
+    the judge, ctrl+c to a shell role's pane) and waits for a cut shell role's
+    pane to be an idle shell again (round.stopShell). *herdr.Client satisfies
+    it.
 
 type MissingReport struct {
 	Role   string `json:"role"`

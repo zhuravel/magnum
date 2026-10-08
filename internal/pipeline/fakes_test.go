@@ -57,6 +57,9 @@ type codexCall struct {
 	Role                 agents.Role
 	Pane, Script, Marker string
 	Timeout              time.Duration
+	// Ctx is RunShell's: a hook that waits for it to end plays a command
+	// still running when its stage is cut.
+	Ctx context.Context
 }
 
 // behavior scripts what an agent does with a submitted prompt. It runs after
@@ -261,7 +264,7 @@ func (f *fakeAgents) Submit(ctx context.Context, run store.Run, text string) err
 }
 
 func (f *fakeAgents) RunShell(ctx context.Context, pr store.PR, role config.Role, paneID, line, marker string, timeout time.Duration) (int, error) {
-	c := codexCall{Role: agents.Role(role.Name), Pane: paneID, Script: line, Marker: marker, Timeout: timeout}
+	c := codexCall{Role: agents.Role(role.Name), Pane: paneID, Script: line, Marker: marker, Timeout: timeout, Ctx: ctx}
 	f.mu.Lock()
 	f.codexCalls = append(f.codexCalls, c)
 	f.order = append(f.order, "shell:"+role.Name)
@@ -283,13 +286,14 @@ func (f *fakeAgents) RunShell(ctx context.Context, pr store.PR, role config.Role
 
 // teeMark puts the run marker a shell line prints before the command's
 // output at the top of the report the command wrote, as the line's tee
-// does (a report already starting with a marker is left alone).
+// does (a report already starting with a marker is left alone), also for a
+// command that ended as its stage was cut.
 func (f *fakeAgents) teeMark(ctx context.Context, line string) error {
 	m := reportMark.FindStringSubmatch(line)
 	if m == nil {
 		return nil
 	}
-	run, err := f.st.RunByID(ctx, m[1])
+	run, err := f.st.RunByID(context.WithoutCancel(ctx), m[1])
 	if err != nil {
 		return err
 	}
@@ -734,16 +738,24 @@ func (g *fakeGit) Status(ctx context.Context, dir string) (gitx.Status, error) {
 // fakeKeys implements Keys.
 type fakeKeys struct {
 	mu    sync.Mutex
-	sends []string // "agent:<target>:<keys>" / "pane:<id>:<keys>"
+	sends []string    // "agent:<target>:<keys>" / "pane:<id>:<keys>"
+	at    []time.Time // the clock at each of sends
+	clock *storetest.Clock
 	// onAgent runs after every AgentSendKeys (e.g. the agent goes idle).
 	onAgent func(target string, keys []string)
 	// onPane runs after every PaneSendKeys (e.g. ctrl+c ends a command).
 	onPane func(paneID string, keys []string)
+	// commands is how many more ctrl+c the command running in a shell pane
+	// takes to stop (absent or 0: the pane is an idle shell); WaitIdleShell
+	// waits its whole timeout on the clock for a pane whose command runs.
+	commands map[string]int
+	waits    []string // the pane of each WaitIdleShell
 }
 
 func (k *fakeKeys) AgentSendKeys(ctx context.Context, target string, keys ...string) error {
 	k.mu.Lock()
 	k.sends = append(k.sends, "agent:"+target+":"+strings.Join(keys, ","))
+	k.at = append(k.at, k.clock.Now())
 	hook := k.onAgent
 	k.mu.Unlock()
 	if hook != nil {
@@ -755,12 +767,47 @@ func (k *fakeKeys) AgentSendKeys(ctx context.Context, target string, keys ...str
 func (k *fakeKeys) PaneSendKeys(ctx context.Context, paneID string, keys ...string) error {
 	k.mu.Lock()
 	k.sends = append(k.sends, "pane:"+paneID+":"+strings.Join(keys, ","))
+	k.at = append(k.at, k.clock.Now())
+	if k.commands[paneID] > 0 && slices.Contains(keys, "ctrl+c") {
+		k.commands[paneID]--
+	}
 	hook := k.onPane
 	k.mu.Unlock()
 	if hook != nil {
 		hook(paneID, keys)
 	}
 	return nil
+}
+
+// WaitIdleShell answers at once for an idle shell; for a pane whose command
+// runs it waits timeout on the clock and returns herdr's timeout.
+func (k *fakeKeys) WaitIdleShell(ctx context.Context, paneID string, timeout time.Duration) (herdr.ProcessInfo, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.waits = append(k.waits, paneID)
+	if k.commands[paneID] == 0 {
+		return herdr.ProcessInfo{PaneID: paneID}, nil
+	}
+	k.clock.Add(timeout)
+	return herdr.ProcessInfo{PaneID: paneID, Foreground: []herdr.Process{{Name: "codex"}}},
+		fmt.Errorf("herdr pane %s: not an idle shell after %s: %w", paneID, timeout, herdr.ErrTimeout)
+}
+
+// run starts a command in a shell pane that stops at the presses-th ctrl+c.
+func (k *fakeKeys) run(paneID string, presses int) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.commands == nil {
+		k.commands = map[string]int{}
+	}
+	k.commands[paneID] = presses
+}
+
+// busy reports whether a command still runs in a shell pane.
+func (k *fakeKeys) busy(paneID string) bool {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.commands[paneID] > 0
 }
 
 type logSink struct {
@@ -836,7 +883,7 @@ func newEnv(t *testing.T) *env {
 	}
 
 	e := &env{t: t, ctx: ctx, st: st, clock: clk, cfg: cfg, layout: layout, repo: repo, pr: up.PR,
-		gh: newFakeGitHub(), git: &fakeGit{head: target}, exec: &execx.Fake{}, keys: &fakeKeys{}, log: &logSink{},
+		gh: newFakeGitHub(), git: &fakeGit{head: target}, exec: &execx.Fake{}, keys: &fakeKeys{clock: clk}, log: &logSink{},
 		sess: map[agents.Role]store.Session{}}
 	e.ag = &fakeAgents{t: t, st: st, behaviors: map[agents.Role][]behavior{}, reads: map[agents.Role]string{},
 		preflight: map[string]error{}, refuse: map[agents.Role]error{}, blocked: map[agents.Role]int{},

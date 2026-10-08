@@ -331,10 +331,11 @@ func (rd *round) judgeVerdict(ctx context.Context, t turn, resultFile string, ma
 	return verdict{} // ended quietly: nudge
 }
 
-// stopJudge interrupts a judge whose turn timed out, or whose round ended
-// before its own pass did, with ctrl+c twice, which quits it (interrupt), so
-// it cannot post after the round ended, and waits up to InterruptWait for it
-// to be seen idle (a warning when it is not).
+// stopJudge interrupts a judge whose turn or own pass timed out with ctrl+c
+// twice, which quits it (interrupt), so it cannot post after the round
+// ended, and waits up to InterruptWait for it to be seen idle (a warning
+// when it is not). An own pass the round's end cut gets the same two
+// presses with the other cut turns (cut).
 func (rd *round) stopJudge(ctx context.Context, run store.Run) {
 	rd.interrupt(ctx, rd.judge, run, false)
 	if !rd.waitIdle(ctx, rd.judge, run) {

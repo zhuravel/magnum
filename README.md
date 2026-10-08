@@ -273,7 +273,12 @@ A push that lands while a round's reviewers still run restarts them on the new h
 `[daemon] max_round_restarts` times per round (default 2; `0` turns restarts off). The turns it cuts
 short are interrupted and their roles prompted again on the new head: an agent reviewer with esc, a shell
 role's command with ctrl+c, and the judge's own pass with one ctrl+c, which aborts Codex's turn and keeps
-the session with its context (two quit Codex, as for a judge that timed out). A push that lands while the judge works lets the round finish: Magnum appends "Reviewed <sha>; N commits arrived during
+the session with its context (two quit Codex, as for a judge that timed out). All of them get their keys
+at once, before Magnum waits for any of them; a shell role's command that still runs 10 seconds after its
+ctrl+c gets another, three in all, and a warning names the role when it runs on, since the restart's line
+would find its pane busy. When a refusal or a lost judge ends the round instead, the turns still at work
+are stopped the same way.
+A push that lands while the judge works lets the round finish: Magnum appends "Reviewed <sha>; N commits arrived during
 the review, re-review follows" (or, for a small delta, "a short check of those commits follows") to the
 posted review and queues the re-review without waiting for `min_rereview_interval`. A PR whose head changed `burst_pushes` times (default 3) within `burst_window`
 (default `"30m"`) waits `burst_quiet_period` (default `"15m"`) instead of `push_quiet_period`; a
@@ -304,7 +309,8 @@ violation, abuse or a threat named in Codex's own `■`/`⚠`/`ERROR:` line; the
 `refused` list, read from the pane after the turn's prompt and, when the pane scrolled past it, from the
 turn's error in the session's Codex rollout, `codex_error_info` `cyber_policy`), the round ends at once,
 whichever role it was (the judge's own pass, its candidates turn, a nudge or a continue, a reviewer,
-codex-review's output): no nudge, no retry, the other roles are interrupted, and the round's outcome and
+codex-review's output; also when a push cut the stage a moment before): no nudge, no retry, the other
+roles are interrupted (the turns of the refused kind first), and the round's outcome and
 the PR's last error say "Codex refused the review: content flagged as a cybersecurity risk (codex-judge,
 run r-…)". The PR is flagged for good (the refused head, role, run and time) and one toast says so:
 magnum never reviews it again, on any head, by itself or when asked (no retry, continue, reply round or

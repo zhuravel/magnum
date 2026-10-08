@@ -99,11 +99,11 @@ const timeUpMark = " (its first line: `%s`)"
 // stopBackgroundText is the one message an interrupted reviewer that left
 // background work running gets (stopBackground): one that timed out or
 // ended without its report (stopReviewer), or that the round's end cut
-// short (stopReviewers).
+// short (endStages).
 const stopBackgroundText = "This review is over. Stop every background task you started with TaskStop and do nothing else."
 
 // headMovedStopText is that message for a reviewer a push cut short
-// (settleCut): the restart prompt follows it, so it does not say that the
+// (restart): the restart prompt follows it, so it does not say that the
 // review is over.
 const headMovedStopText = "The PR head moved, so stop here. Stop every background task you started with TaskStop and do nothing else. " +
 	"The next message restarts the review on the new head."

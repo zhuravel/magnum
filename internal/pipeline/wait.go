@@ -199,10 +199,11 @@ func (rd *round) session(ctx context.Context, run store.Run) (store.Session, boo
 // its session, and ctrl+c for a shell role's pane. The judge gets ctrl+c
 // twice, a second apart, which quits Codex and so ends its session
 // (docs/spikes.md, probe 5): a judge that timed out or whose round ended
-// must not go on and post (stopJudge). With keep it gets ctrl+c once, which
-// aborts Codex's turn and keeps the session: a push cut its own pass short,
-// and the restart prompts the same session, with the context it built, on
-// the new head (settleCut).
+// must not go on and post (stopJudge, and cut at the round's end). With keep
+// it gets ctrl+c once, which aborts Codex's turn and keeps the session: a
+// push cut its own pass short, and the restart prompts the same session,
+// with the context it built, on the new head (restart). A cut shell role's
+// command is then made sure to stop (stopShell).
 func (rd *round) interrupt(ctx context.Context, role config.Role, run store.Run, keep bool) {
 	if rd.r.Keys == nil {
 		return
@@ -265,6 +266,39 @@ func (rd *round) waitIdle(ctx context.Context, role config.Role, run store.Run) 
 		}
 		if !rd.r.now().Before(deadline) || rd.r.sleep(ctx, rd.r.poll()) != nil {
 			return false
+		}
+	}
+}
+
+// stopShell makes sure that the command a shell role ran for run in its
+// pane stopped after its interrupt (one ctrl+c): it waits up to
+// shellStopWait for an idle shell (Keys.WaitIdleShell) and presses ctrl+c
+// again while the command runs, shellStopPresses in all (a command may go
+// on after one). Left running, it would hold the pane: the restart's line
+// would find it busy. It reports false when the command still runs after
+// the last press; true when the shell is idle or nothing says otherwise (no
+// Keys or pane, an error that is no timeout: a pane that is gone).
+func (rd *round) stopShell(ctx context.Context, run store.Run) bool {
+	s, ok := rd.session(ctx, run)
+	pane := store.Deref(s.HerdrPaneID)
+	if rd.r.Keys == nil || !ok || pane == "" {
+		return true
+	}
+	ctx = context.WithoutCancel(ctx)
+	for press := 1; ; press++ {
+		_, err := rd.r.Keys.WaitIdleShell(ctx, pane, shellStopWait)
+		switch {
+		case err == nil:
+			return true
+		case !herdr.IsTimeout(err):
+			rd.logf("pipeline: %s: wait for an idle shell in pane %s: %v", run.Role, pane, err)
+			return true
+		case press == shellStopPresses:
+			return false
+		}
+		if err := rd.r.Keys.PaneSendKeys(ctx, pane, "ctrl+c"); err != nil {
+			rd.warn(ctx, "interrupt %s: %v", run.Role, err)
+			return true
 		}
 	}
 }

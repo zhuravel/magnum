@@ -4064,3 +4064,45 @@ editing history. Code, config comments and prompts reference these by their head
   shows, and a person who types is a human at once); the interrupt line's `promptId` as the test; counting a
   prompt still in the queue (not yet taken) as typing (the tick after the agent takes it does); an event on every
   tick of a cooldown.
+- **A cut interrupts every turn before it waits for any** (2026-10-08, amends "A push that cuts the judge's own
+  pass keeps the judge's session" and "A reviewer a push or the round's end cuts short is told to stop its
+  background tasks"). Since those entries one cut claude reviewer can take `InterruptWait` plus `StopGrace` (60 s
+  plus 2 minutes) to settle, and the restart (`settleCut`) and the round's end (`stopReviewers`) settled the cut
+  turns one role at a time, so a role later in the list got its key only after the waits of those before it. Both
+  restarts since then waited the full 60 s for claude-review while `codex review` and the judge's own pass went
+  on working on the old head. After a refusal the reviewers were settled before the own pass (`stopOwnPass` came
+  after `stopReviewers`), so a Codex own pass could go on sending the flagged content for 3 to 6 minutes: an
+  account risk. Now one function settles every cut (`cut`, for `restart` and for `endStages`, the round's end
+  on a refusal, a lost judge or a checkout that could not be restored) in two phases. First every turn in flight
+  gets its interrupt keys, the own pass's included: esc to an agent, ctrl+c to a shell role's pane, and to the
+  own pass one ctrl+c on a push and two at the round's end, as before; the order is the stage order with the own
+  pass last, and on a refusal the turns of the refused role's kind come first. Then each turn is settled, shell
+  roles first (next entry): the wait for idle, the message about its background work, and the run ended as
+  before (abandoned with `head_moved` or `cancelled`; an own pass the round's end cut ends `failed`). All keys go
+  out within seconds of the cut; a test checks the order and the times on the fake clock. Changed on the way: at
+  the round's end the own pass's warning says what cut it ("codex-judge still works 1m0s after it was interrupted
+  for the round's end"); an own pass whose run had already ended (its agent idle) gets no keys there, only a turn
+  in flight does; and a checkout that could not be restored after a push now stops the reviewers that push cut
+  instead of leaving them at work. The round's cancellation (a shutdown, `magnum abort`) still leaves its turns
+  in flight for the engine.
+- **A cut shell command is pressed until it stops** (2026-10-08, amends "A cancelled round stops its shell
+  command"). A push cut codex-review on one PR; the restart's run typed its line 46 s later and failed `busy`
+  ("shell not idle after 1m0s (foreground: codex)"), so the review posted without codex-review, the source of 10
+  of the 33 findings posted in the run's window. A shell role got one ctrl+c and `waitIdle` returned at once for
+  it: nothing made sure that the command stopped. Now, after the cut's ctrl+c, magnum waits up to 10 s
+  (`shellStopWait`) for the pane to be an idle shell (`stopShell`, through `Keys.WaitIdleShell`), and presses
+  ctrl+c again while the command runs, 3 presses in all (`shellStopPresses`): at most 30 s. A command that runs
+  on gets a `round.warning` naming the role ("codex-review still runs 10s after 3 ctrl+c for the restart"), and
+  the restart's line is refused `busy` as before. The cut settles shell roles before agents, so these presses do
+  not wait for a claude reviewer's waits. This is not the longer wait for an idle shell that the entry above
+  rejected: magnum does not wait for a command to finish, it makes sure that it stopped. A cancelled round keeps
+  its one ctrl+c (the daemon's shutdown gives its rounds 30 s), and so does a shell role that timed out
+  (`stopReviewer`).
+- **A refusal wins over a push** (2026-10-08, amends "A Codex safety warning ends the round and flags the PR for
+  good"). A push cancels the stages with its cause first. When codex-review or the own pass then ended refused,
+  `refuseStages` changed nothing (a context keeps its first cause), so the round restarted every role on the new
+  head, Codex included: more Codex turns on content it had flagged. Now, once the stages and the own pass ended,
+  `cutCause` looks at the reports for a `refused` status before it reads the push: a round with a refused role ends
+  refused, whatever cancelled the stage first, and nothing is prompted again. Not covered: a Codex turn whose
+  refusal is still only on its screen when a push cuts it (the observer has not seen its run end) is cut and
+  restarted as before.

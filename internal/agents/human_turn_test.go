@@ -22,7 +22,7 @@ const (
 // the background and waits on them; then a restart cuts its run short: esc
 // ends the turn (Claude Code's interrupt line), the pipeline counts the
 // work the agent left running and, with stop, tells the agent within the
-// run to stop it (TimeUp), and the run is abandoned, as cutRun does, while
+// run to stop it (TimeUp), and the run is abandoned, as the pipeline's cut does, while
 // herdr still shows the agent working on its subagents (stopping them did
 // not work). It returns the run id.
 func (e *env) interruptedReview(tr *transcript, stop bool) string {
@@ -59,7 +59,7 @@ func (e *env) interruptedReview(tr *transcript, stop bool) string {
 	return id
 }
 
-// abandon ends run id as the pipeline's cutRun does.
+// abandon ends run id as the pipeline's cut does.
 func (e *env) abandon(id string) {
 	e.t.Helper()
 	if err := e.st.TransitionRun(e.ctx, id, []string{store.RunSubmitted, store.RunWorking}, store.RunAbandoned, func(u *store.RunUpdate) {

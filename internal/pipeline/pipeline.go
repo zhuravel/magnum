@@ -45,6 +45,7 @@ import (
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/gitx"
+	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/identity"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
@@ -119,6 +120,11 @@ const (
 	// the background tasks it left running (round.stopBackground), until its
 	// transcript shows none.
 	StopGrace = 2 * time.Minute
+	// shellStopWait bounds the wait for a cut shell role's pane to be an
+	// idle shell after each ctrl+c, and shellStopPresses is how many ctrl+c
+	// its command gets at most, the interrupt's included (round.stopShell).
+	shellStopWait    = 10 * time.Second
+	shellStopPresses = 3
 )
 
 // ErrInvalid marks a RoundInput or Runner that cannot run a round.
@@ -177,11 +183,14 @@ type Git interface {
 	FileLog(ctx context.Context, dir, rev, path string, n int) ([]gitx.Commit, error)
 }
 
-// Keys interrupts a timed-out role (esc to an agent, ctrl+c twice to the
-// judge, ctrl+c to a shell role's pane). *herdr.Client satisfies it.
+// Keys interrupts a timed-out or cut role (esc to an agent, ctrl+c twice to
+// the judge, ctrl+c to a shell role's pane) and waits for a cut shell role's
+// pane to be an idle shell again (round.stopShell). *herdr.Client satisfies
+// it.
 type Keys interface {
 	AgentSendKeys(ctx context.Context, target string, keys ...string) error
 	PaneSendKeys(ctx context.Context, paneID string, keys ...string) error
+	WaitIdleShell(ctx context.Context, paneID string, timeout time.Duration) (herdr.ProcessInfo, error)
 }
 
 // Runner runs review rounds. One Runner serves one identity; it holds no
