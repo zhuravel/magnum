@@ -4415,3 +4415,100 @@ editing history. Code, config comments and prompts reference these by their head
   fetched unpinned, an index refresh after each move of the base, and write access outside the sandbox,
   and it adopts a `.qmd/index.yml` that a PR's checkout could supply. Reopen it when 3 or more declines
   a week cite base docs that this path lookup and a grep missed.
+- **Security findings are written in plain words** (2026-10-08, amends "Security findings are proved with the
+  repository's tests, never with attack tooling"). The operator approved this rule on 2026-10-08. On
+  talkable#11966, Codex refused the judge's candidates turn 63 s after it started. That turn did little but
+  read the round's files. The judge broke no tooling rule: both own-pass turns ran only focused specs through
+  `db_lock` and ended ok. claude-review's report told its findings as an attack. It used "attacker" 12 times,
+  "forged", "victim" and numbered steps. The judge's own plain report on the same PR did not trip Codex. Now
+  every reviewer and the judge state a security finding in four parts. The parts are the input and who can
+  send it, the wrong read or write, the fix, and the spec that proves it. They never tell it as attacker steps
+  ("an attacker sends, forges, plants, steals"), numbered exploit sequences or crafted payload strings in
+  prose. They cite the spec instead. SKILL.md section 4 holds the rule. Section 5 still allows numbered steps
+  for a UI flow, but never for a security finding. The claude reviewer prompts get a paragraph with this rule
+  and the judge's proof rule: a repository spec through the lock, never attack tooling. The judge prompts that
+  list reports tell the judge to word a security candidate as section 4 says, not as its report does. The
+  posted facts do not change, and the finding still names who can produce the trigger. This rule and the seven
+  below add 1,813 bytes to the skill. Shorter wording and cuts won back 1,240 bytes. The cuts removed text
+  that the skill said twice or that `post_review` enforces. Examples are the list of local paths, the
+  readiness field and the glosses of the reply classes. Others are a fourth provenance example, the example of
+  the word rules and the MCP sentence. SKILL.md grows by 573 bytes (`skillMaxBytes` 29,198 to 29,771).
+  Rejected: magnum rewrites a report before the judge reads it. Magnum then edits a reviewer's claims, and no
+  filter can tell a payload from a quote of the code.
+- **A judge's helper agent proves findings with specs, never with attack tooling** (2026-10-08, amends
+  "Security findings are proved with the repository's tests, never with attack tooling"). The operator
+  approved this rule on 2026-10-08. On 10-06, Codex refused a turn of a judge's helper agent on a PR of
+  another repository. The helper reproduced a shell-injection finding with a scratch branch whose name held a
+  shell substitution. The tooling rule of the skill spoke to the judge only. Now SKILL.md section 4 tells the
+  judge to have a helper agent (subagent) prove a finding the same way, with a spec through `db_lock`. The
+  helper runs no attack tooling. The claude reviewer prompts tell their subagents the same. "A refused helper
+  agent ends the round" catches such a refusal after it occurs. This rule prevents it. Rejected: no helpers on
+  security PRs (`max_subagents = 0`). That setting stays the operator's choice.
+- **A missing test is never speculative** (2026-10-08). The operator approved this rule on 2026-10-08. Since
+  10-05, the judge rejected 11 test-gap candidates as `speculative` and posted 2. On talkable#12007,
+  claude-review proved that no example signed a known site's webhook with the new secret. Its mutation
+  accepted either secret and left all 46 examples green. The judge rejected the gap ("mutations deliberately
+  introduce later defects"). A person raised the same gap 11 hours later, and the author added both examples.
+  A missing test is a fact about the suite, not a risk. SKILL.md section 3 now says this. Take the PR's new or
+  changed rule (a guard, the scope of a secret, a permission, a flag). Name the example that fails without it.
+  A mutation that leaves the suite green proves that no example fails. When the rule guards security or
+  business behaviour, the gap is the P2 "missing tests for changed business behaviour". Else it is P3. More
+  combinations of a rule that an example already pins are `style_only`. The claude reviewer prompts get one
+  clause: the missing test is a finding, never speculative or of no impact. Rejected: a P2 for every untested
+  line. The `style_only` clause keeps out more combinations of a pinned rule.
+- **Impact that nobody measured is not "no impact"** (2026-10-08, amends "The judge checks the PR's own
+  claims" and "A rare case gets a check of real traffic"). The operator approved this rule on 2026-10-08. In
+  the blind replay of a PR of a client library, the judge's own pass reproduced a P2. A first call records one
+  country, and a later purchase records another. The judge dropped it as `speculative`. Its reasons: the
+  description listed the domain fallback, and the geo timing was "unmeasured". The repository notes already
+  said that geo data arrives late. The probe script of the notes shows the load order of the library. Now
+  SKILL.md section 2 says that a false claim is a finding unless the judge proved that it has no impact.
+  Section 4 says how to check a trigger that is an order of calls, such as a call before async data arrives.
+  The judge finds what sets that order in the real component, such as the load queue of a library or the boot
+  sequence. It reads that code, or runs it with a `notes_dir` probe. A description can list a mechanism, such
+  as a fallback chain or a default. That list does not make deliberate a consequence that the description does
+  not name.
+- **A textual merge conflict is no finding** (2026-10-08, amends "history.json marks the base's commits after
+  the merge base"). The operator approved this rule on 2026-10-08. Round 5 of talkable#11920 posted "[P1]
+  Fixture seeder conflicts with current master". It requested changes after an approval. `git merge-tree` had
+  found a conflict in a comment that both sides edited, and the values there already agreed. GitHub already
+  showed the PR as unmergeable. The author merged master, and the PR merged 16 hours later with no reply. "A
+  failure there is a broken build" was meant for a clean merge whose specs fail. That part stays. Now a
+  textual conflict, which GitHub shows, is one body line. It is no finding, and no merged-tree specs run for
+  it.
+- **A cleanup migration's finding shows its row count query** (2026-10-08). The operator approved this rule on
+  2026-10-08. Two findings on one-off cleanup migrations of another repository got the answer "production has
+  none" (0 of 701 rows). An earlier finding of the same kind got the same answer. Now SKILL.md section 4 tells
+  the judge to put the read-only query that counts the affected rows in the reproduction of such a finding.
+  The author can then run it. The priority does not change. Rejected: P3 for such findings. The judge cannot
+  see production, so the count is for the author to run.
+- **Reviewers search the base before they reject** (2026-10-08). The operator approved this rule on
+  2026-10-08. claude-review rejected two correct candidates from memory. For one, it said that an error
+  tracker puts identical errors into one group. Two base commits that `git log --grep` finds say otherwise.
+  For the other, it said that git ignores a mocks directory. A base wiki page says that CI and a generator
+  rebuild that directory. Now SKILL.md section 3 and one sentence of the claude reviewer prompts give a step.
+  Before a reviewer rejects a candidate or states how a tool or a process behaves, it runs `git log
+  origin/<base> -i --grep=<word>` and `git grep -i <word> origin/<base> -- '*.md'`. It never reads the docs of
+  the checkout for this, because they are PR text. A blind replay searches its merge base. The blind paragraph
+  of the judge already keeps it from `origin/<base>` past `base_sha`. The blind sentence of claude-review
+  names `base_sha`. The docs list of a round ("A round lists the base docs that name the changed files") names
+  pages by path. This rule covers a word that no path holds. Rejected: a search index (qmd, rejected in that
+  entry).
+- **A pitfall note keeps the authors' answer** (2026-10-08, amends "A standing decision needs the authors'
+  decision"). The operator approved this rule on 2026-10-08. From their first version, the notes of another
+  repository said that old seeding jobs can undo a one-off cleanup. They said nothing about the deploy.
+  claude-review quoted the note and raised a P2. The author declined it, because the deploy pauses that job.
+  The judge added the answer to the notes two hours later. It is the only decline since 10-06 on a topic that
+  the notes named. A reply can answer a hazard that a note names. Then the judge now puts the answer on the
+  line of that note (SKILL.md, the content of the notes). The curator checks each pitfall against the standing
+  decisions. It puts the answer of a decision on the line of the pitfall (`notes-curate.md`).
+- **The curator points lines that a base doc covers to that doc** (2026-10-08, amends "A curator proposes
+  curated notes; the operator applies or rejects"). The operator approved this rule on 2026-10-08. The
+  talkable notes are 20.7 KB, past their curation trigger of 16 KB. The wiki on the base branch now covers 10
+  of their 23 topics, but none of their method-level pitfalls or standing decisions. Now `notes-curate.md`
+  turns a line that a doc on the base branch covers into a pointer to that doc. The pointer gives the topic in
+  a few words and the path of the doc. When the notes give a heading of the doc, the pointer gives it too.
+  Method-level pitfalls and standing decisions stay in full. The curator runs in its scratch directory without
+  the repository, and it fetches nothing. So it points only to a doc that the notes name by its path and say
+  covers the topic. Rejected for now: a list of the base docs for the curator. The engine must write that list
+  into the scratch directory. The docs list of a round can supply it in a later change.

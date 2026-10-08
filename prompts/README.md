@@ -281,7 +281,10 @@ section that covers it now or `{"id", "action": "skipped", "reason"}`; without m
 before (the `notes_curate` goldens) and the key may be left out. Magnum checks the proposal
 (`internal/notes`): every harness file named in the notes, every miss given accounted for, nothing outside
 the scratch directory, no pull request number, branch or probe file, no secret and no home directory path;
-size is not checked. A proposal that changes nothing is invalid unless it was given misses and skips them
+size is not checked. The prompt also has the curator check each pitfall against the standing decisions
+(the answer one gives goes on the pitfall's line) and turn a line that a base-branch doc covers into a
+pointer to that doc (its path and heading), only for a doc the notes name: the curator runs in its scratch
+directory, without the repository. A proposal that changes nothing is invalid unless it was given misses and skips them
 all. An invalid proposal gets one nudge naming its problems, then is kept as invalid.
 
 ### Repository notes
@@ -294,7 +297,7 @@ mention is visible) and the lock commands as `<magnum>` fields (`notes`, `notes_
 `notes_lock`, `notes_unlock`), and the skill (section 2) holds the steps once: rewrite the file (never
 append) after posting when the round taught something durable that helps review a future pull request
 (what the repository is, how to test, lint and QA a change, failures of the review machine, known
-pitfalls, standing decisions the authors made, under a dated header line; a finding they confirmed but left
+pitfalls with the authors' answer to one on its line, standing decisions the authors made, under a dated header line; a finding they confirmed but left
 undecided is open, never declined), never one pull request's findings, code or
 probes: a probe for one pull request stays in the round's report directory. The judge's result names the
 harness files it ran or read (`harness_used`). Judges of different PRs
@@ -481,7 +484,7 @@ instead, i.e. what magnum will type to start, resume and name each one. `--json`
 | Role | Kind | What it does |
 |---|---|---|
 | `codex-judge` | codex | Persistent session; reads the reports, runs `$magnum-review` and posts one review. Effort `xhigh`, `high` for re-reviews, at most 2 subagents open at once, 90 minutes. Starts fresh instead of resuming once its last turn on the PR ended more than `[pipeline] judge_fresh_after` (90m) ago. |
-| `claude-review` | claude | Persistent session running `/code-review <url> high` (`medium` for re-reviews), leaving out style-only and pre-existing problems (but a pre-existing P1 or P2 in the code the PR touches, marked `nearby` for the judge's nearby block) and naming each finding's trigger; it also checks every caller of changed behaviour (non-production ones too), what a replaced mechanism did implicitly and any test failure or flake the change brings, and lists the candidates it rejected with the reason; writes `claude-review.md`. |
+| `claude-review` | claude | Persistent session running `/code-review <url> high` (`medium` for re-reviews), leaving out style-only and pre-existing problems (but a pre-existing P1 or P2 in the code the PR touches, marked `nearby` for the judge's nearby block) and naming each finding's trigger; it also checks every caller of changed behaviour (non-production ones too), what a replaced mechanism did implicitly and any test failure or flake the change brings, and lists the candidates it rejected with the reason, after it searched the base branch's log and docs (never the checkout's) for each; counts an untested new or changed rule as a missing test, never too unlikely; proves a security finding with a spec, never with attack tooling (its subagents too), and writes it as the input, the wrong read or write, the fix and the spec, never as an attacker's steps; writes `claude-review.md`. |
 | `codex-review` | shell | Types `command codex review -c model_reasoning_effort=high [-c mcp_servers.<name>.enabled=false ...] --base <merge base>` (its `effort`, so never your global Codex effort; your Codex MCP servers off, see `mcp_off`; the base ref when the merge base is unknown) into a plain pane; its output is tee'd into `codex-review.md`. `codex review` takes custom instructions only as a review target of their own, in place of `--base`, so it gets none of claude-review's extra checks. |
 | `claude-simplify` | claude | A read-only `/simplify`, alongside the reviewers on a PR's first review, again after `rerun_min_lines` changed lines, or on request (`magnum review --role claude-simplify`, or `--simplify`): four subagents review the diff in parallel for reuse, simplification, efficiency and altitude (one pass without the Agent tool), and instead of editing it writes every qualifying proposal, ranked, removals rather than renames or moves, with exact current and replacement lines, to `claude-simplify.md`. A re-review proposes only on lines changed since the previous review. |
 

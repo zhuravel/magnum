@@ -3,7 +3,7 @@ Earlier reviews by `{{.ReviewerLogin}}`{{if .FormerLogins}} or, before magnum mo
 {{- range .PreviousReviews}}
   - {{.ID}} {{.Event}} on `{{.SHA}}` ({{.SubmittedAt}})
 {{- end}}
-Read them and their threads first (`gh api repos/{{.Owner}}/{{.Repo}}/pulls/{{.Number}}/reviews/<id>/comments`), then follow the skill's re-review section for head `{{.HeadSHA}}`.{{if not .SameHead}} Candidate reports for this head are listed below.{{end}}
+Read them and their threads first (`gh api repos/{{.Owner}}/{{.Repo}}/pulls/{{.Number}}/reviews/<id>/comments`), then follow the skill's re-review section for head `{{.HeadSHA}}`.{{if not .SameHead}} Candidate reports for this head are listed below; word a security candidate as the skill's section 4 says, not as its report does.{{end}}
 {{- $merged := and .BaseMerged (not .ForcePushed)}}
 {{- if .ForcePushed}}
 The author rewrote history: `{{.PreviousHeadSHA}}` is no longer in the branch. Review the full PR diff again, then compare it with your earlier findings.

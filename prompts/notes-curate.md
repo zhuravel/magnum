@@ -16,13 +16,15 @@ Keep in the notes only durable repository knowledge:
 - how to run its tests and lint;
 - how to QA a change;
 - standing decisions, the authors' decisions only: a finding they confirmed but left undecided is open, decision pending, or goes; never declined;
-- known pitfalls;
+- known pitfalls, each checked against the standing decisions: when a decision or an author's answer in the notes answers a pitfall, put that answer on the pitfall's line;
 - pitfalls of the review machine, only while they still apply.
 
 Remove:
 - anything about one pull request: its number, branch, code, findings or probes;
 - machine-specific paths (a home directory, a version manager's install path) and obsolete workarounds;
 - duplicated or contradicted lines.
+
+A line that a doc on the repository's base branch covers becomes a pointer to that doc: the topic in a few words, the doc's path and its heading when the notes give one. You cannot read the repository here, so point only to a doc the notes name by its path and say it covers that topic. Method-level pitfalls and standing decisions stay in the notes in full.
 
 {{if .Misses}}For each miss, add a note or sharpen one when it passes the same test as every kept line: would a future review of this repository catch a similar problem because of it? Otherwise skip it. The notes still name no pull request, branch or person.
 

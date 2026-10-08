@@ -833,7 +833,8 @@ the candidates phase, a round's one prompt) name it as `history`, the claude-rev
 sentence; the judge reads a commit that fixed the code or mechanism the PR touches (`git show <sha>`), and
 a PR that undoes or re-breaks that fix gets a finding; when a commit after the merge base changes what the
 PR's code or tests call, the judge runs the affected specs on the merged tree (`git merge-tree`, checked
-out in a scratch worktree), and a failure there is a broken build. A restart writes
+out in a scratch worktree), and a clean merge whose specs fail there is a broken build; a textual conflict,
+which GitHub shows, is one body line and no finding. A restart writes
 the new head's; a blind replay reads the logs at its merge base, never anything newer; a continued turn
 gets none, and a `git log` that fails or takes more than 2 minutes in all only leaves the prompts without
 it (a `round.history` warning).
@@ -1100,7 +1101,13 @@ a hole left there is the PR's finding, not a pre-existing one; parallel copies o
 (one file per client or provider) are compared for a guard one lacks; a delete of records thought
 unsaved is checked against every path that saves them; and a case called a known edge case or rare gets a
 check of how often real traffic reaches it, while an input no caller produces and no user can send is P3
-at most. It runs the affected specs on the merged tree when a base commit after the merge base changes
+at most. A false claim is a finding unless its impact is proved to be none (impact nobody measured is not
+none), an order of calls is checked in the real component, and a mechanism the description lists does
+not make its unnamed consequences deliberate. A missing test for the PR's new or changed rule is never
+speculative (P2 when the rule guards security or business behaviour, else P3), a finding in a cleanup or
+backfill migration carries the read-only query that counts the rows it affects, and before it rejects a
+candidate the judge searches the base branch's log and docs, never the checkout's (the claude reviewers
+do the same). It runs the affected specs on the merged tree when a base commit after the merge base changes
 what the PR calls, and gives each of the head's failing checks (`failing_checks`) a Checks line. A
 finding its earlier reviews missed on code the PR did not change since is posted as new, its title
 ending with `(missed earlier)`. In re-review mode magnum hands it the threads its login started with
@@ -1127,7 +1134,10 @@ machine caused it, and a check the machine blocked reads `skipped (machine)` (th
 `environment_failures`); a flaky test the PR adds may carry its finding. A security finding is proved
 with the repository's own tests (a focused or request spec, through `db_lock`), never with attack tooling
 (browser automation forging cookies or sessions, exploit or payload scripts, scanners, network tools
-against hosts), which the agent CLI's provider may flag as abuse. The skill runs unattended: it never stops to ask a human
+against hosts), which the agent CLI's provider may flag as abuse, and the judge tells a helper agent it
+starts the same. Every reviewer states a security finding as the input and who can send it, the wrong read
+or write, the fix and the spec that proves it, never as an attacker's steps, numbered exploit sequences or
+crafted payloads: a judge turn that only read such a report was refused. The skill runs unattended: it never stops to ask a human
 (whatever an instruction file says), runs no usage checks, and ends with one line (the review URL or the
 blocker) and a short `MAGNUM_RESULT` line: the status, run, review, verdict and counts of its result
 file, which magnum reads only when the file is missing. The rules of rare rounds (a blind replay, a
@@ -1611,7 +1621,8 @@ model = "sonnet"
 
 Every review role reads the repository's notes first, `~/.local/share/magnum/notes/<owner>/<repo>.md`, and
 the judge rewrites them under a lock when a round taught it something durable: what the repository is, how
-to test, lint and QA a change, known pitfalls, standing decisions (only what the authors decided: a
+to test, lint and QA a change, known pitfalls (with the authors' answer to one on its line), standing
+decisions (only what the authors decided: a
 finding they confirmed but left undecided is open with the decision pending, never declined), failures of
 the review machine (not a role's limits by design, such as codex-review's sandbox). The directory beside the file (the same name without `.md`), the harness, holds the QA scripts the notes name.
 The test for every line and script is whether it helps a review of another, future pull request: the
@@ -1676,7 +1687,9 @@ file has each harness file's rounds and uses and the operator's reasons for reje
 `misses.json`, when there are misses, has them with the reasons of the rejected proposals each was in. It
 keeps durable repository knowledge and removes anything about one pull request, machine-specific paths and
 obsolete workarounds, duplicates and contradictions; one-off probes are merged into a few parameterized
-scripts or deleted. It writes `proposal.md`, a `harness/` directory and `changes.json`, where every kept
+scripts or deleted. It checks each pitfall against the standing decisions and puts the answer one gives on
+the pitfall's line, and turns a line that a base-branch doc the notes name covers into a pointer to that
+doc (its path and heading); it runs without the repository, so it points only to docs the notes name. It writes `proposal.md`, a `harness/` directory and `changes.json`, where every kept
 section and file carries a one-line reason saying how it helps a future review, and every miss it was given
 is noted (with the section that now covers it) or skipped (with a one-line reason). Magnum checks the
 proposal: every harness file named in the notes, plain files only (`proposal.md` and `changes.json` too: a

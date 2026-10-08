@@ -1,6 +1,6 @@
 [$magnum-review](/Users/bohdan/Projects/magnum/skills/magnum-review/SKILL.md) Read /Users/bohdan/Projects/magnum/skills/magnum-review/SKILL.md first, unless this session already read that file, and follow it; load no other skill. Review https://github.com/talkable/talkable/pull/11920 and post exactly one GitHub review as `talkable[bot]`.
 
-magnum checked out the PR head `d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3` (detached) in this directory. Candidate reports from 2 independent reviewer roles are listed below; judge every item, run your own full pass, dedupe, then post.
+magnum checked out the PR head `d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3` (detached) in this directory. Candidate reports from 2 independent reviewer roles are listed below; judge every item, run your own full pass, dedupe, then post. Word a security candidate as the skill's section 4 says, not as its report does.
 
 <magnum>
 mode: initial
