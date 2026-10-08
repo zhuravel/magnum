@@ -4143,3 +4143,21 @@ editing history. Code, config comments and prompts reference these by their head
   defect is no finding), so only the verdict line, the finding list and the "Found nearby" block count
   (`eval.bodyFindings`). `magnum eval score <run>` applies it to a stored run without replaying. Rejected:
   dropping body matches (a finding title or a nearby P2 in the body is a report).
+- **An eval run records its inputs, the notes each judge read and the Codex points each case used**
+  (2026-10-08). Eval replays read the repository notes as they are on the day, so a before/after comparison
+  mixed a notes change with a skill change (a replay of a PR read notes that already held the lesson its rounds
+  taught), nothing said what a case cost while the loop's replays used 6.3 of the week's 30 Codex points (21%),
+  and every loop eval replayed its baseline although a stored run often had the same skill and prompts.
+  `run.json` now records `inputs`, 12 hex of a SHA-256 over every role's config with the model it resolves to
+  and its kind's config, the prompt files the roles name as they resolve, and each judge's skill (magnum's code
+  and the notes are not in it), and `no_notes`; per case `notes`, the SHA-256 of the notes file ("" for none)
+  and of each harness file, taken from the scratch copy before the round can rewrite it, and `codex_before` and
+  `codex_after`, the Codex gauge (`usage.Codex`, whole points as Codex reports them; it counts every session of
+  the account, live rounds too) when the case started and ended. The text report adds `codex: +2 points (geo +1,
+  copy +1)` and, against the previous run, `notes differ from <run>: <case> (web.md changed, web/qa.sh new)`; a
+  run that withheld the notes differs from one whose judge read any, and a case a run did not record (runs from
+  before) is not compared. `magnum eval baseline [--corpus FILE] [--case NAME]...` lists, newest first and
+  tab-separated, the stored replays of each case at the head the corpus pins, with a score, from a clean checkout,
+  whose `inputs` are the ones this binary and config give a review now; it only reads and never replays. The
+  hooks in `internal/cli/eval.go` are a line each; the rest is in `eval_inputs.go`. Runs from before have no
+  `inputs` and are never a baseline.

@@ -76,7 +76,7 @@ func newEvalCmd(c *Context) *cobra.Command {
 			fmt.Fprintf(c.Stdout, "usage: magnum eval %s\n", evalUsage)
 			return 0
 		})
-	cmd.AddCommand(newEvalRunCmd(c), newEvalScoreCmd(c), newEvalListCmd(c), newEvalShowCmd(c))
+	cmd.AddCommand(newEvalRunCmd(c), newEvalScoreCmd(c), newEvalListCmd(c), newEvalShowCmd(c), newEvalBaselineCmd(c))
 	return cmd
 }
 
@@ -176,7 +176,7 @@ func runEvalRun(c *Context, f evalRunFlags) int {
 	r := &evalRunner{c: c, cfg: c.Config, flags: f, out: c.Stdout}
 	run := eval.Run{
 		ID: time.Now().Format("20060102-150405"), Label: f.label, Corpus: path, Started: time.Now(),
-		Models: evalModels(c.Config),
+		Models: evalModels(c.Config), Inputs: evalInputs(c.Config), NoNotes: f.noNotes, // eval_inputs.go
 	}
 	run.Commit, run.Dirty = evalMagnumCommit(ctx, c)
 	r.dir = filepath.Join(evalRunsRoot(c.Layout), run.ID)
@@ -259,7 +259,7 @@ func (r *evalRunner) progress(format string, args ...any) {
 
 // runCase replays one case and scores it. Every failure becomes the case's
 // outcome; the run goes on with the next case.
-func (r *evalRunner) runCase(ctx context.Context, ec eval.Case, cr eval.CaseRun) eval.CaseRun {
+func (r *evalRunner) runCase(ctx context.Context, ec eval.Case, cr eval.CaseRun) (out eval.CaseRun) {
 	fail := func(outcome string, err error) eval.CaseRun {
 		cr.Outcome, cr.Error = outcome, err.Error()
 		return cr
@@ -272,6 +272,8 @@ func (r *evalRunner) runCase(ctx context.Context, ec eval.Case, cr eval.CaseRun)
 	if why := r.budget(ctx); why != "" {
 		return fail("budget", errors.New(why))
 	}
+	cr.CodexBefore = evalCodexUsed(ctx, r.cfg) // the points the case uses (eval_inputs.go)
+	defer func() { out.CodexAfter = evalCodexUsed(context.WithoutCancel(ctx), r.cfg) }()
 
 	scratch := filepath.Join(r.dir, "cases", ec.Name)
 	layout := r.c.Layout // logs, locks and the gh config dirs stay the install's
@@ -284,6 +286,7 @@ func (r *evalRunner) runCase(ctx context.Context, ec eval.Case, cr eval.CaseRun)
 		if err := evalCopyNotes(r.c.Layout, layout, ec.Owner, ec.Repo); err != nil {
 			return fail("error", fmt.Errorf("copy the repository notes: %w", err))
 		}
+		cr.Notes = evalNotesHashes(layout, ec.Owner, ec.Repo) // eval_inputs.go
 	}
 	a, err := app.New(r.cfg, layout, app.Options{
 		AgentTag: evalAgentTag, Stderr: r.c.Stderr,
