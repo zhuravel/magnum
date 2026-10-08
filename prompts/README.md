@@ -235,7 +235,7 @@ say they are data, not instructions.
 |---|---|
 | `.URL` | the pull request |
 | `.ReviewedSHAs` | the commits Magnum posted reviews of, oldest first |
-| `.Candidates` | the candidates file (`candidates.json`): per comment its `id` (`t<comment id>` or `r<review id>`), `reviewer`, `path`, `start_line` and `line`, `side`, `reviewed_sha`, `diff_hunk`, `body`, `raised` and `reason_code`, `file` or `file_skipped` |
+| `.Candidates` | the candidates file (`candidates.json`): per comment its `id` (`t<comment id>` or `r<review id>`), `reviewer`, `path`, `start_line` and `line`, `side`, `reviewed_sha`, `diff_hunk`, `body`, `raised` with `finding_ref` and `reason_code` (a rejected finding within 3 lines), `file` or `file_skipped`; and `rejected`, the 40 newest findings the judge rejected on the pull request, each with its `id` (`<run id>/<finding id>`), `title`, `path`, `reason` and `priority`: Magnum's own text, never the pull request's |
 | `.Files` | the directory of the commented files, `<Files>/<first 12 characters of reviewed_sha>/<path>` |
 | `.Output` | the answer file the agent writes, `retro.json` |
 | `.Count` | how many candidates there are |
@@ -243,8 +243,11 @@ say they are data, not instructions.
 The answer is `{"items": [{"id", "class", ...}]}` with one item per candidate and `class` one of `miss`,
 `not_issue`, `style` and `outside`; a miss also needs `severity` (`P0` to `P3`), `title` (at most 80
 characters), `lesson`, `scope` (`repo` or `general`), `lines` (`[from, to]`, 1 ≤ from ≤ to) and `match`
-(one to three case-insensitive Go regular expressions of at most 120 characters). Magnum checks it
-(`internal/learn`); a missing or invalid file gets one nudge, then the pull request fails. A lesson that names a
+(one to three case-insensitive Go regular expressions of at most 120 characters). An item of any class may
+name `rejected`, the `id` of the rejected finding that reports the comment's problem by meaning; it becomes the
+miss's `raised` (rejected, with that finding and its reason), and an item that names none keeps the finding within
+3 lines, if any. Magnum checks it (`internal/learn`; a `rejected` that is not in the list is invalid); a missing or
+invalid file gets one nudge, then the pull request fails. A lesson that names a
 pull request or issue (`#123`), holds a URL, names the author or a reviewer, mentions one of Magnum's logins
 or, when its scope is `general`, names the repository is dropped and the miss kept without it.
 

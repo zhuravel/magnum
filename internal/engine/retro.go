@@ -97,8 +97,10 @@ type ClassifyJob struct {
 	Repo           store.Repo
 	// ReviewedSHAs are the commits magnum reviewed, oldest first.
 	ReviewedSHAs []string
-	// Candidates are the candidates file's, for checking the answer.
+	// Candidates are the candidates file's, for checking the answer, and
+	// Rejected its rejected findings, which the answer may name.
 	Candidates []learn.Candidate
+	Rejected   []learn.Rejected
 }
 
 // ClassifyResult is how a Classifier's turn ended, besides its error.
@@ -478,7 +480,7 @@ func (e *Engine) retroPR(ctx context.Context, run RetroRun, pr store.PR, classif
 		return record(o, "")
 	}
 
-	job, err := e.retroFiles(ctx, run, repo, pr, gh, in.Reviewed, res.Candidates)
+	job, err := e.retroFiles(ctx, run, repo, pr, gh, in.Reviewed, res.Candidates, res.Rejected)
 	if err != nil {
 		if ctx.Err() == nil {
 			e.storeCandidates(ctx, subject, repo, pr, in.Own, res.Candidates, nil)
@@ -514,14 +516,14 @@ func (e *Engine) retroPR(ctx context.Context, run RetroRun, pr store.PR, classif
 				why = fmt.Errorf("the classifier wrote no %s", learn.OutputFile)
 				break
 			}
-			if items, rerr = learn.ParseOutput(data, res.Candidates); rerr != nil {
+			if items, rerr = learn.ParseOutput(data, res.Candidates, res.Rejected); rerr != nil {
 				why = fmt.Errorf("%s is invalid: %w", learn.OutputFile, rerr)
 				break
 			}
 			o.status = store.RetroClassified
 		}
 	}
-	rejected, repoMisses := e.storeCandidates(ctx, subject, repo, pr, in.Own, res.Candidates, items)
+	rejected, repoMisses := e.storeCandidates(ctx, subject, repo, pr, in.Own, learn.LinkRejected(res.Candidates, items, res.Rejected), items)
 	o.repoMisses = repoMisses
 	for _, it := range items {
 		if it.Class == store.MissMiss {
@@ -629,10 +631,10 @@ func (e *Engine) retroInput(ctx context.Context, repo store.Repo, pr store.PR) (
 // retroFiles writes the PR's retro directory, run/<owner>/<repo>/<N>/: each
 // commented file at its reviewed commit under files/ (skipped, and said so
 // in the candidate, when GitHub has no copy or it is above
-// github.FileAtLimit) and candidates.json, every write confined to the
-// directory (os.Root): the paths come from GitHub.
+// github.FileAtLimit) and candidates.json with the rejected findings, every
+// write confined to the directory (os.Root): the paths come from GitHub.
 func (e *Engine) retroFiles(ctx context.Context, run RetroRun, repo store.Repo, pr store.PR, gh RetroGitHub,
-	reviewed []learn.Reviewed, cands []learn.Candidate) (ClassifyJob, error) {
+	reviewed []learn.Reviewed, cands []learn.Candidate, rejected []learn.Rejected) (ClassifyJob, error) {
 	dir := filepath.Join(run.Dir, repo.Owner, repo.Name, strconv.Itoa(pr.Number))
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return ClassifyJob{}, err
@@ -665,7 +667,8 @@ func (e *Engine) retroFiles(ctx context.Context, run RetroRun, repo store.Repo, 
 	for _, r := range reviewed {
 		shas = append(shas, r.SHA)
 	}
-	b, err := json.MarshalIndent(learn.Candidates{PR: pr.URL, ReviewedSHAs: shas, FilesDir: learn.FilesDir, Candidates: cands}, "", "  ")
+	b, err := json.MarshalIndent(learn.Candidates{PR: pr.URL, ReviewedSHAs: shas, FilesDir: learn.FilesDir, Candidates: cands,
+		Rejected: rejected}, "", "  ")
 	if err != nil {
 		return ClassifyJob{}, err
 	}
@@ -673,7 +676,7 @@ func (e *Engine) retroFiles(ctx context.Context, run RetroRun, repo store.Repo, 
 		return ClassifyJob{}, err
 	}
 	return ClassifyJob{Dir: dir, CandidatesPath: filepath.Join(dir, learn.CandidatesFile), OutputPath: filepath.Join(dir, learn.OutputFile),
-		PR: pr, Repo: repo, ReviewedSHAs: shas, Candidates: cands}, nil
+		PR: pr, Repo: repo, ReviewedSHAs: shas, Candidates: cands, Rejected: rejected}, nil
 }
 
 // retroFetch copies path at sha to rel inside root; it returns why it did

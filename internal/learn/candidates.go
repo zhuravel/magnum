@@ -52,7 +52,8 @@ type Input struct {
 	Reviews []github.Review
 	// Findings are the judge's findings of the pull request
 	// (store.Store.FindingsByPR): a posted one near a comment means magnum
-	// caught it; a rejected one, that magnum raised it and let it go.
+	// caught it; a rejected one, that magnum raised it and let it go. The
+	// rejected ones also go to the classifier (Result.Rejected).
 	Findings []store.Finding
 	// MinChars drops a comment whose text, without quotes and code blocks,
 	// is shorter.
@@ -112,7 +113,8 @@ type Candidate struct {
 	CreatedAt   time.Time `json:"created_at"`
 	// Raised is store.MissRaisedRejected when the judge raised a finding
 	// near the comment and rejected it (FindingRef "<run id>/<finding id>",
-	// ReasonCode its reason), else store.MissRaisedNone.
+	// ReasonCode its reason), else store.MissRaisedNone. A rejected finding
+	// the classifier names replaces it (LinkRejected).
 	Raised     string `json:"raised"`
 	FindingRef string `json:"finding_ref,omitempty"`
 	ReasonCode string `json:"reason_code,omitempty"`
@@ -140,6 +142,10 @@ type Result struct {
 	// Caught counts comments near a finding magnum posted, Dropped the
 	// comments too short or only an approval. Neither is stored.
 	Caught, Dropped int
+	// Rejected are the findings the judge rejected, the newest RejectedMax
+	// with a title, oldest first: the classifier names the one that
+	// reports a candidate's problem (Item.Rejected, LinkRejected).
+	Rejected []Rejected
 }
 
 // Build makes the candidates of a pull request: the root comment of every
@@ -150,7 +156,8 @@ type Result struct {
 // A comment shorter than MinChars without its quotes and code blocks, or
 // that only approves, is dropped. One near a finding magnum posted on the
 // same path is caught; one near a rejected finding is raised (a comment on
-// deleted lines has no line, so neither). A comment made on a reviewed
+// deleted lines has no line, so neither), until the classifier names
+// another (Result.Rejected lists them). A comment made on a reviewed
 // commit applies to it; an inline comment on another commit applies to the
 // newest commit magnum reviewed before the comment when that commit
 // descends from the reviewed one and the commented file did not change
@@ -159,7 +166,7 @@ type Result struct {
 // GitHub answers with a 404 (github.ErrNotFound: a commit it no longer has)
 // proves nothing, so the comment is outside and the build goes on.
 func Build(in Input) (Result, error) {
-	var res Result
+	res := Result{Rejected: rejectedRows(in.Findings)}
 	reviewed := map[string]bool{}
 	for _, r := range in.Reviewed {
 		reviewed[r.SHA] = true
@@ -210,7 +217,7 @@ func Build(in Input) (Result, error) {
 			continue
 		}
 		if f := near(in.Findings, store.FindingRejected, c); f != nil {
-			c.Raised, c.FindingRef, c.ReasonCode = store.MissRaisedRejected, f.RunID+"/"+f.FindingID, f.ReasonCode
+			c.Raised, c.FindingRef, c.ReasonCode = store.MissRaisedRejected, findingRef(*f), f.ReasonCode
 		}
 		base := in.reviewedBefore(cm.CreatedAt)
 		switch {

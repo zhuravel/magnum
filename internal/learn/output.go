@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -36,6 +37,8 @@ type Candidates struct {
 	ReviewedSHAs []string    `json:"reviewed_shas"` // what magnum reviewed, oldest first
 	FilesDir     string      `json:"files_dir"`     // relative to the file's directory
 	Candidates   []Candidate `json:"candidates"`
+	// Rejected are the findings the judge rejected (Result.Rejected).
+	Rejected []Rejected `json:"rejected,omitempty"`
 }
 
 // FilePath is where the copy of path at sha lives under a retro
@@ -52,6 +55,10 @@ type Item struct {
 	Scope    string   `json:"scope,omitempty"`
 	Lines    []int    `json:"lines,omitempty"`
 	Match    []string `json:"match,omitempty"`
+	// Rejected is the id of the rejected finding (Candidates.Rejected) that
+	// reports the comment's problem, by meaning; "" when none does. Any
+	// class may name one.
+	Rejected string `json:"rejected,omitempty"`
 }
 
 // Output is the classifier's answer file.
@@ -59,15 +66,17 @@ type Output struct {
 	Items []Item `json:"items"`
 }
 
-// ParseOutput reads the classifier's answer for cands: one item per
-// candidate, no other id, a known class; a miss also has a severity (P0 to
-// P3), a title of at most TitleMax runes, a lesson, a scope (repo or
-// general), lines [from, to] with 1 <= from <= to and one to MatchMax
-// patterns of at most PatternMax bytes that compile as case-insensitive Go
-// regular expressions. Only a miss keeps those fields: the other classes
-// keep their id and class. The error names ids and fields, never the
-// classifier's text, so it can go back into a prompt.
-func ParseOutput(data []byte, cands []Candidate) (map[string]Item, error) {
+// ParseOutput reads the classifier's answer for cands and the rejected
+// findings it was given: one item per candidate, no other id, a known
+// class, and a rejected finding it names one of rejected's; a miss also has
+// a severity (P0 to P3), a title of at most TitleMax runes, a lesson, a
+// scope (repo or general), lines [from, to] with 1 <= from <= to and one to
+// MatchMax patterns of at most PatternMax bytes that compile as
+// case-insensitive Go regular expressions. Only a miss keeps those fields:
+// the other classes keep their id, class and rejected finding. The error
+// names ids and fields, never the classifier's text, so it can go back into
+// a prompt.
+func ParseOutput(data []byte, cands []Candidate, rejected []Rejected) (map[string]Item, error) {
 	var out Output
 	dec := json.NewDecoder(bytes.NewReader(data))
 	if err := dec.Decode(&out); err != nil {
@@ -92,6 +101,11 @@ func ParseOutput(data []byte, cands []Candidate) (map[string]Item, error) {
 		}
 		seen[id] = true
 		it.ID = id
+		it.Rejected = strings.TrimSpace(it.Rejected)
+		if it.Rejected != "" && !slices.ContainsFunc(rejected, func(r Rejected) bool { return r.ID == it.Rejected }) {
+			errs = append(errs, fmt.Errorf("item %s: rejected names no rejected finding of the candidates file", id))
+			continue
+		}
 		v, err := checkItem(it)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("item %s: %w", id, err))
@@ -114,7 +128,7 @@ func ParseOutput(data []byte, cands []Candidate) (map[string]Item, error) {
 func checkItem(it Item) (Item, error) {
 	switch it.Class {
 	case store.MissNotIssue, store.MissStyle, store.MissOutside:
-		return Item{ID: it.ID, Class: it.Class}, nil
+		return Item{ID: it.ID, Class: it.Class, Rejected: it.Rejected}, nil
 	case store.MissMiss:
 	default:
 		return Item{}, fmt.Errorf("class must be miss, not_issue, style or outside")

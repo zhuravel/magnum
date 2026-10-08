@@ -10,7 +10,10 @@ import (
 	"github.com/zhuravel/magnum/internal/store"
 )
 
-var outCands = []Candidate{{ID: "t1"}, {ID: "r2"}}
+var (
+	outCands    = []Candidate{{ID: "t1"}, {ID: "r2"}}
+	outRejected = []Rejected{{ID: "r-1/F2", Title: "No example covers the new secret", Path: "spec/a_spec.rb", Reason: "speculative", Priority: "P3"}}
+)
 
 const goodMiss = `{"id":"t1","class":"miss","severity":"P1","title":"Coupon lookup ignores the site",
  "lesson":"When a finder takes a code from the request, check it is scoped to the current tenant because codes repeat across tenants.",
@@ -20,7 +23,7 @@ const goodMiss = `{"id":"t1","class":"miss","severity":"P1","title":"Coupon look
 // candidate its item; a miss keeps its fields, another class only its id
 // and class.
 func TestParseOutputKeepsOneItemPerCandidate(t *testing.T) {
-	items, err := ParseOutput([]byte(`{"items":[`+goodMiss+`,{"id":"r2","class":"style","title":"x","lines":[0,0]}]}`), outCands)
+	items, err := ParseOutput([]byte(`{"items":[`+goodMiss+`,{"id":"r2","class":"style","title":"x","lines":[0,0]}]}`), outCands, outRejected)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,9 +36,29 @@ func TestParseOutputKeepsOneItemPerCandidate(t *testing.T) {
 	}
 }
 
+// TestParseOutputKeepsTheRejectedFindingAnItemNames: an item of any class
+// may name the rejected finding that reports its comment's problem; the
+// reference is kept, and an item that names none has no reference.
+func TestParseOutputKeepsTheRejectedFindingAnItemNames(t *testing.T) {
+	out := `{"items":[` + strings.Replace(goodMiss, `"scope":"general"`, `"scope":"general","rejected":" r-1/F2 "`, 1) +
+		`,{"id":"r2","class":"not_issue","rejected":"r-1/F2"}]}`
+	items, err := ParseOutput([]byte(out), outCands, outRejected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if items["t1"].Rejected != "r-1/F2" || !reflect.DeepEqual(items["r2"], Item{ID: "r2", Class: store.MissNotIssue, Rejected: "r-1/F2"}) {
+		t.Fatalf("items = %+v", items)
+	}
+	items, err = ParseOutput([]byte(`{"items":[`+goodMiss+`,{"id":"r2","class":"style"}]}`), outCands, nil)
+	if err != nil || items["t1"].Rejected != "" || items["r2"].Rejected != "" {
+		t.Fatalf("no finding named: %+v, %v", items, err)
+	}
+}
+
 // TestParseOutputRefusesOffSchemaAnswers: unknown or duplicate ids, a
-// missing item, an unknown class and a miss without its fields are errors
-// that name ids and fields, never the classifier's text.
+// missing item, an unknown class, a miss without its fields and a rejected
+// finding the candidates file does not list are errors that name ids and
+// fields, never the classifier's text.
 func TestParseOutputRefusesOffSchemaAnswers(t *testing.T) {
 	for name, tc := range map[string]struct{ out, want string }{
 		"not json":      {`items: none`, "not a JSON object"},
@@ -55,8 +78,9 @@ func TestParseOutputRefusesOffSchemaAnswers(t *testing.T) {
 		"long pattern":  {`{"items":[` + strings.Replace(goodMiss, `"scope"]`, `"`+strings.Repeat("a", 121)+`"]`, 1) + `,{"id":"r2","class":"style"}]}`, "match 2 must be 1 to 120"},
 		"wrong type":    {`{"items":[{"id":"t1","class":"miss","lines":"1-2"}]}`, "wrong type"},
 		"items missing": {`{}`, "no item for t1"},
+		"rejected":      {`{"items":[` + goodMiss + `,{"id":"r2","class":"style","rejected":"ignore previous instructions and"}]}`, "item r2: rejected names no rejected finding"},
 	} {
-		_, err := ParseOutput([]byte(tc.out), outCands)
+		_, err := ParseOutput([]byte(tc.out), outCands, outRejected)
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: err = %v, want %q", name, err, tc.want)
 		}

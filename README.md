@@ -1512,7 +1512,8 @@ applies to that commit; one made on a later commit applies to the newest commit 
 only when that later commit descends from it and GitHub's comparison shows the file unchanged since, and
 is recorded as `outside` otherwise (about code Magnum never saw: a later change, an older commit, a history
 a force push replaced). A comment near a finding the judge rejected is marked as raised and rejected, with
-the judge's reason code. A comment on deleted lines keeps its file and hunk but no line.
+the judge's reason code, unless the agent below names another rejected finding as the one that reports the
+comment's problem. A comment on deleted lines keeps its file and hunk but no line.
 
 The rest goes to an interactive agent in a herdr workspace named `learn retro`, tagged `learn` like eval's
 agents are tagged `eval`: `kind` and `model` (Claude sonnet by default; `sonnet` is the default of the
@@ -1523,7 +1524,9 @@ reads the comments from a file, with each commented file as it was at the review
 GitHub, up to 512 KiB each), and writes its answer to another: `miss` (a real defect a careful reviewer
 should have reported), `not_issue`, `style` or `outside`, and for a miss a severity, a title, a one-line
 lesson ("When X, check Y because Z"), a scope (`general` or `repo`), the lines and patterns a finding of it
-would match. Magnum checks the answer; a missing or invalid one gets one nudge, then the pull request is
+would match. It also gets the 40 newest findings the judge rejected on the pull request (title, file, reason,
+priority) and names the one that reports a comment's problem, if any, by meaning rather than by line: a test
+gap the judge raised on the spec file is linked to a comment on the code it should test. Magnum checks the answer; a missing or invalid one gets one nudge, then the pull request is
 recorded as failed and the retro goes on; the next retros try a failed pull request again, three times
 in all. A lesson is dropped (a `retro.lesson_rejected` event says why, never what) when it names a pull
 request or issue, a URL, the author or a reviewer, mentions one of Magnum's logins, or, for a `general`

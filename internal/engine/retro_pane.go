@@ -228,7 +228,7 @@ func answered(job ClassifyJob) (missing, valid bool) {
 	if err != nil {
 		return true, false
 	}
-	_, err = learn.ParseOutput(data, job.Candidates)
+	_, err = learn.ParseOutput(data, job.Candidates, job.Rejected)
 	return false, err == nil
 }
 

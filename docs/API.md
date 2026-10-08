@@ -5015,8 +5015,10 @@ type ClassifyJob struct {
 	Repo           store.Repo
 	// ReviewedSHAs are the commits magnum reviewed, oldest first.
 	ReviewedSHAs []string
-	// Candidates are the candidates file's, for checking the answer.
+	// Candidates are the candidates file's, for checking the answer, and
+	// Rejected its rejected findings, which the answer may name.
 	Candidates []learn.Candidate
+	Rejected   []learn.Rejected
 }
     ClassifyJob is one PR's candidates for a Classifier: Dir holds
     CandidatesPath (learn.Candidates) and the commented files (learn.FilePath);
@@ -8734,6 +8736,10 @@ const NearLines = 3
     NearLines is how far, in lines, a comment may be from one of magnum's
     findings on the same path and still be about it.
 
+const RejectedMax = 40
+    RejectedMax bounds the rejected findings the classifier gets: the newest of
+    the pull request's.
+
 
 FUNCTIONS
 
@@ -8741,15 +8747,16 @@ func FilePath(sha, p string) string
     FilePath is where the copy of path at sha lives under a retro directory's
     files: files/<sha12>/<path>, slash-separated.
 
-func ParseOutput(data []byte, cands []Candidate) (map[string]Item, error)
-    ParseOutput reads the classifier's answer for cands: one item per candidate,
-    no other id, a known class; a miss also has a severity (P0 to P3), a title
-    of at most TitleMax runes, a lesson, a scope (repo or general), lines [from,
-    to] with 1 <= from <= to and one to MatchMax patterns of at most PatternMax
-    bytes that compile as case-insensitive Go regular expressions. Only a miss
-    keeps those fields: the other classes keep their id and class. The error
-    names ids and fields, never the classifier's text, so it can go back into a
-    prompt.
+func ParseOutput(data []byte, cands []Candidate, rejected []Rejected) (map[string]Item, error)
+    ParseOutput reads the classifier's answer for cands and the rejected
+    findings it was given: one item per candidate, no other id, a known class,
+    and a rejected finding it names one of rejected's; a miss also has a
+    severity (P0 to P3), a title of at most TitleMax runes, a lesson, a scope
+    (repo or general), lines [from, to] with 1 <= from <= to and one to MatchMax
+    patterns of at most PatternMax bytes that compile as case-insensitive Go
+    regular expressions. Only a miss keeps those fields: the other classes
+    keep their id, class and rejected finding. The error names ids and fields,
+    never the classifier's text, so it can go back into a prompt.
 
 func ScrubLesson(lesson, scope string, people, own, repo []string) (string, string)
     ScrubLesson returns lesson when it teaches without retelling the pull
@@ -8795,7 +8802,8 @@ type Candidate struct {
 	CreatedAt   time.Time `json:"created_at"`
 	// Raised is store.MissRaisedRejected when the judge raised a finding
 	// near the comment and rejected it (FindingRef "<run id>/<finding id>",
-	// ReasonCode its reason), else store.MissRaisedNone.
+	// ReasonCode its reason), else store.MissRaisedNone. A rejected finding
+	// the classifier names replaces it (LinkRejected).
 	Raised     string `json:"raised"`
 	FindingRef string `json:"finding_ref,omitempty"`
 	ReasonCode string `json:"reason_code,omitempty"`
@@ -8809,6 +8817,13 @@ type Candidate struct {
     comment of a review thread ("t<comment id>") or the body of a review
     ("r<review id>").
 
+func LinkRejected(cands []Candidate, items map[string]Item, rows []Rejected) []Candidate
+    LinkRejected returns a copy of cands in which each candidate whose item
+    names a rejected finding of rows (Item.Rejected) raised that finding:
+    Raised rejected, FindingRef the finding's and ReasonCode its reason.
+    A candidate whose item names none, or that has no item, keeps what Build
+    found near it by path and line.
+
 func (c Candidate) Lines() []int
     Lines is the candidate's line range as [from, to] (nil without a line).
 
@@ -8817,6 +8832,8 @@ type Candidates struct {
 	ReviewedSHAs []string    `json:"reviewed_shas"` // what magnum reviewed, oldest first
 	FilesDir     string      `json:"files_dir"`     // relative to the file's directory
 	Candidates   []Candidate `json:"candidates"`
+	// Rejected are the findings the judge rejected (Result.Rejected).
+	Rejected []Rejected `json:"rejected,omitempty"`
 }
     Candidates is the candidates file.
 
@@ -8848,7 +8865,8 @@ type Input struct {
 	Reviews []github.Review
 	// Findings are the judge's findings of the pull request
 	// (store.Store.FindingsByPR): a posted one near a comment means magnum
-	// caught it; a rejected one, that magnum raised it and let it go.
+	// caught it; a rejected one, that magnum raised it and let it go. The
+	// rejected ones also go to the classifier (Result.Rejected).
 	Findings []store.Finding
 	// MinChars drops a comment whose text, without quotes and code blocks,
 	// is shorter.
@@ -8872,6 +8890,10 @@ type Item struct {
 	Scope    string   `json:"scope,omitempty"`
 	Lines    []int    `json:"lines,omitempty"`
 	Match    []string `json:"match,omitempty"`
+	// Rejected is the id of the rejected finding (Candidates.Rejected) that
+	// reports the comment's problem, by meaning; "" when none does. Any
+	// class may name one.
+	Rejected string `json:"rejected,omitempty"`
 }
     Item is the classifier's verdict on one candidate.
 
@@ -8879,6 +8901,19 @@ type Output struct {
 	Items []Item `json:"items"`
 }
     Output is the classifier's answer file.
+
+type Rejected struct {
+	ID       string `json:"id"` // "<run id>/<finding id>", the miss's FindingRef
+	Title    string `json:"title"`
+	Path     string `json:"path,omitempty"`
+	Reason   string `json:"reason"`             // the judge's reason code
+	Priority string `json:"priority,omitempty"` // P0..P3 as the judge wrote it
+}
+    Rejected is a finding the judge raised and rejected, as the classifier
+    gets it to name the one that reports a comment's problem by meaning
+    (Item.Rejected): a test gap sits on the spec file while a person comments
+    on the code under test, and the finding nearest the comment by line can be
+    about something else. Every field is magnum's own text.
 
 type Result struct {
 	// Candidates are the comments to classify, Outside the ones about code
@@ -8888,6 +8923,10 @@ type Result struct {
 	// Caught counts comments near a finding magnum posted, Dropped the
 	// comments too short or only an approval. Neither is stored.
 	Caught, Dropped int
+	// Rejected are the findings the judge rejected, the newest RejectedMax
+	// with a title, oldest first: the classifier names the one that
+	// reports a candidate's problem (Item.Rejected, LinkRejected).
+	Rejected []Rejected
 }
     Result is what Build made of a pull request.
 
@@ -8897,11 +8936,12 @@ func Build(in Input) (Result, error)
     author, not one of magnum's logins, not a bot unless IncludeBots). Replies
     are never candidates.
 
-    A comment shorter than MinChars without its quotes and code blocks, or that
-    only approves, is dropped. One near a finding magnum posted on the same path
-    is caught; one near a rejected finding is raised (a comment on deleted lines
-    has no line, so neither). A comment made on a reviewed commit applies to it;
-    an inline comment on another commit applies to the newest commit magnum
+    A comment shorter than MinChars without its quotes and code blocks,
+    or that only approves, is dropped. One near a finding magnum posted on the
+    same path is caught; one near a rejected finding is raised (a comment on
+    deleted lines has no line, so neither), until the classifier names another
+    (Result.Rejected lists them). A comment made on a reviewed commit applies to
+    it; an inline comment on another commit applies to the newest commit magnum
     reviewed before the comment when that commit descends from the reviewed
     one and the commented file did not change between the two (Compare),
     and is outside otherwise, as is a review body on a commit magnum did not

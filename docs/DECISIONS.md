@@ -4205,3 +4205,23 @@ editing history. Code, config comments and prompts reference these by their head
   hours has only its average: the line then says "since the reset" alone. The soft and hard caps, the
   toast's trigger and the reach times keep the window's average. Rejected: a usage history in the registry
   (a migration and a day without the figure, for data Codex already keeps).
+- **The retro's classifier names the rejected finding a miss matches** (2026-10-08, amends "Learning loop: daily
+  retro"). A miss's `raised` came from position alone: a comment within 3 lines of a finding the judge rejected on
+  the same file was linked to it. Test gaps sit on spec files while people comment on the code under test, so a
+  person's comment on a controller line no example covers, which claude-review had raised as a test gap on the spec
+  file and the judge had rejected as `speculative`, would have read "raised: rejected pre_existing", linked to an
+  unrelated finding 2 lines from the comment. The improvement loop reads this field to see which rejections were
+  wrong, and the wrong link hid a run of test gaps rejected as `speculative`. The candidates file now lists the 40
+  newest findings the judge rejected on the pull request (`rejected`: `id` "<run id>/<finding id>", `title`,
+  `path`, `reason`, `priority`, Magnum's own text; rows recorded before findings had titles are left out), and
+  `prompts/retro.md` asks the classifier to name, for any item whatever its class, the one that reports the
+  comment's problem by meaning (`rejected`), or none. A named finding sets the miss's `raised` (rejected, that
+  finding's reference and reason, `learn.LinkRejected`); an item that names none keeps the finding within 3 lines,
+  as before, and so does a comment classified as `outside` before the classifier runs. A name that is not in the
+  list makes the answer invalid (one nudge, as for any off-schema answer). No migration: `finding_ref` and
+  `reason_code` already hold the link. This partly reverses the rejection of "matching other reviewers' comments to
+  findings with a model": the nearness rule stays the fallback, and the classifier, which already reads the
+  comment and the file, only names a row from a bounded list. Rejected: letting an item that names no row clear a
+  link the nearness rule made (an item that leaves the field out by oversight would erase a right link, and the
+  rule stays the fallback); matching posted findings the same way (a comment near a posted one is caught before
+  the classifier sees it).
