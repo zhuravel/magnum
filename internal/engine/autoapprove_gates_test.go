@@ -376,6 +376,157 @@ func TestRoundBlocksReadsTheOpenFindingsByPriority(t *testing.T) {
 	}
 }
 
+// approvedThenReviewedOn approves PR #2 at b1 after a clean round, then
+// pushes next (#2 at its new head) and ticks until magnum's round r
+// reviewed that head.
+func approvedThenReviewedOn(t *testing.T, next prSpec, r autoRound) *harness {
+	t.Helper()
+	h, plan := newAutoHarness(t)
+	plan.set(2, cleanRound, r)
+	h.reviewedPR(2, "b1")
+	h.tick()
+	if a := h.autoApproval(2); a.State != store.AutoStanding {
+		t.Fatalf("approval = %+v", a)
+	}
+	h.advance(time.Minute)
+	h.open(prSpec{n: 1, head: "base1"}, next)
+	h.reviewTo(2, next.head)
+	h.tick()
+	return h
+}
+
+// wantGateWithdrawal fails unless the operator's approval of PR #2's b1
+// was withdrawn once, by magnum, after its clean review of b2 (review 502),
+// for the gate's reason want: in the dismissal's message, the row's end
+// reason, the withdrawn event and one toast. auto-approval of the PR does
+// not stop.
+func (h *harness) wantGateWithdrawal(want string) {
+	h.t.Helper()
+	d := h.ghCalls("dismiss:")
+	if len(d) != 1 || !strings.HasPrefix(d[0], "dismiss:talkable/talkable#2:9001:magnum's review of b2 found nothing to fix, but ") ||
+		!strings.Contains(d[0], want) || !strings.HasSuffix(d[0], "; this automatic approval is withdrawn ([review]("+prURL2+"#pullrequestreview-502)).") {
+		h.t.Fatalf("dismissals = %q, want one for %q", d, want)
+	}
+	if a := h.autoApproval(2); a.State != store.AutoDismissed || a.EndedBy != store.AutoEndedMagnum || a.HeadSHA != "b1" ||
+		!strings.Contains(a.EndReason, want) || a.EndedAt == nil {
+		h.t.Fatalf("approval = %+v", a)
+	}
+	if evs := h.events("review.auto_approval_withdrawn"); len(evs) != 1 || !strings.Contains(evs[0].Message, want) {
+		h.t.Fatalf("withdrawn events = %+v", evs)
+	}
+	h.flush()
+	if toasts := toastsWith(h, "withdrew your approval: talkable#2"); len(toasts) != 1 || !strings.Contains(toasts[0], want) {
+		h.t.Fatalf("toasts = %q (all %q)", toasts, h.nh.shown())
+	}
+	if hd := h.hold(2); hd.Held {
+		h.t.Fatalf("magnum's own withdrawal stopped auto-approval: %+v", hd)
+	}
+}
+
+// A standing approval of b1 is checked again when magnum reviews a new
+// head: a clean review of b2 that a new approval's gates would refuse (b2
+// adds AGENTS.md, its review went without codex-review, its checks fail)
+// withdraws the operator's approval with the gate's reason, and the card
+// then says why magnum does not approve b2.
+func TestAStandingApprovalIsWithdrawnWhenTheGatesRefuseANewHead(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		next  prSpec
+		round autoRound
+		want  string
+	}{
+		{"b2 adds AGENTS.md", prSpec{n: 2, head: "b2", files: []string{"app/models/order.rb", "AGENTS.md"}}, cleanRound,
+			"it changes the review agents' instructions or hooks (AGENTS.md)"},
+		{"b2 reviewed without codex-review", prSpec{n: 2, head: "b2"}, withoutCodexReview, heardNothingReason},
+		{"b2's checks fail", prSpec{n: 2, head: "b2", ci: "FAILURE"}, cleanRound, "its head's checks fail"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := approvedThenReviewedOn(t, tc.next, tc.round)
+			h.wantGateWithdrawal(tc.want)
+			if got := h.autoRefused(2); !strings.Contains(got, tc.want) {
+				t.Fatalf("the card says %q, want %q", got, tc.want)
+			}
+			if got := h.created(); len(got) != 1 {
+				t.Fatalf("posted = %q, want only the approval of b1", got)
+			}
+		})
+	}
+}
+
+// Checks of the new head that still run withdraw nothing: magnum waits for
+// them as before a new approval. Once they fail the approval is withdrawn,
+// and once they pass magnum approves the new head.
+func TestAStandingApprovalWaitsWhileTheNewHeadsChecksRun(t *testing.T) {
+	h := approvedThenReviewedOn(t, prSpec{n: 2, head: "b2", ci: "PENDING"}, cleanRound)
+	h.flush()
+	h.flush()
+	if d := h.ghCalls("dismiss:"); len(d) != 0 {
+		t.Fatalf("withdrawn while the checks run: %q", d)
+	}
+	if a := h.autoApproval(2); a.State != store.AutoStanding || a.HeadSHA != "b1" {
+		t.Fatalf("approval = %+v", a)
+	}
+
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b2", ci: "FAILURE"})
+	h.flush()
+	h.wantGateWithdrawal("its head's checks fail")
+
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b2", ci: "SUCCESS"})
+	h.flush()
+	if got := h.created(); len(got) != 2 || !strings.HasPrefix(got[1], "APPROVE@b2:") {
+		t.Fatalf("posted = %q, want the approval of b2 once its checks pass", got)
+	}
+}
+
+// A head magnum has not reviewed changes nothing: the approval of b1 stands
+// while b2, which adds AGENTS.md and fails its checks, waits for its round,
+// and that round decides.
+func TestAStandingApprovalStandsUntilMagnumReviewsTheNewHead(t *testing.T) {
+	h, _ := newAutoHarness(t)
+	h.reviewedPR(2, "b1")
+	h.tick()
+	h.advance(time.Minute)
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b2", ci: "FAILURE", files: []string{"AGENTS.md"}})
+	h.tick()
+	h.advance(time.Minute)
+	h.tick()
+	if n := len(h.rd.all()); n != 1 {
+		t.Fatalf("rounds = %d, want b1's alone", n)
+	}
+	if d := h.ghCalls("dismiss:"); len(d) != 0 {
+		t.Fatalf("withdrawn before magnum reviewed b2: %q", d)
+	}
+	if a := h.autoApproval(2); a.State != store.AutoStanding {
+		t.Fatalf("approval = %+v", a)
+	}
+	h.reviewTo(2, "b2")
+	h.tick()
+	h.wantGateWithdrawal("it changes the review agents' instructions or hooks (AGENTS.md)")
+}
+
+// The gates decide once on each round, as before a new approval: once
+// magnum's review of b2 passes them the approval stands until the next
+// round, though b2's checks fail afterwards and the daemon restarts, and a
+// push of b3 that adds AGENTS.md waits for b3's round.
+func TestAStandingApprovalThatPassedTheGatesWaitsForTheNextRound(t *testing.T) {
+	h := approvedThenReviewedOn(t, prSpec{n: 2, head: "b2", ci: "SUCCESS"}, cleanRound)
+	h.flush()
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b2", ci: "FAILURE"})
+	h.flush()
+	h.e = New(h.d) // the daemon restarts on the same registry
+	h.startup()
+	h.flush()
+	h.advance(time.Minute)
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b3", files: []string{"AGENTS.md"}})
+	h.tick()
+	if d := h.ghCalls("dismiss:"); len(d) != 0 {
+		t.Fatalf("dismissals = %q", d)
+	}
+	if a := h.autoApproval(2); a.State != store.AutoStanding || a.HeadSHA != "b1" {
+		t.Fatalf("approval = %+v", a)
+	}
+}
+
 // A PR with more reviews than magnum reads is not approved: what it cannot
 // read may be the operator's review by hand.
 func TestAnIncompleteReviewListApprovesNothing(t *testing.T) {

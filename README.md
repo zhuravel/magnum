@@ -678,8 +678,14 @@ a post GitHub refuses (403, 422) is not tried again for that review, another fai
 New commits alone leave the approval standing (the repository decides about stale approvals): the next
 review decides. One that leaves something to fix, on any head, withdraws it (Magnum dismisses it as you:
 "magnum's review of <sha7> found blocking problems; this automatic approval is withdrawn ([review](<url>))."),
-a clean one leaves it standing without a second approval, and a clean review after a withdrawal approves
-again. A withdrawal GitHub refuses (422) reads the review again: one gone ends there, and one dismissed
+and a clean one of the PR's head is held to the reviewers, watch, agents' files and checks conditions above
+as a new approval is: one they refuse withdraws it too ("magnum's review of <sha7> found nothing to fix, but
+it changes the review agents' instructions or hooks (AGENTS.md); this automatic approval is withdrawn
+([review](<url>)).") with the same event and toast, while the head's checks still run Magnum waits, and a
+head it has not reviewed yet changes nothing. A clean review they let through leaves the approval standing
+without a second one, and they decide once per review: checks that fail afterwards do not withdraw it before
+the next review. A clean review after a withdrawal approves again (a head whose checks pass later included).
+A withdrawal GitHub refuses (422) reads the review again: one gone ends there, and one dismissed
 meanwhile counts as that dismissal (below: by you or anyone else it stops auto-approval of the PR, by GitHub
 on a push it does not); one GitHub keeps refusing is tried three times, 5 minutes apart, then ends failed
 with an event and one urgent toast (dismiss it on GitHub). `magnum request-changes` withdraws your standing

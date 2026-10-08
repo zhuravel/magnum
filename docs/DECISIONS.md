@@ -4356,3 +4356,30 @@ editing history. Code, config comments and prompts reference these by their head
   and the command exits 0. Its summary counts the passing identities that warned. The README lists the
   three as recommended read permissions. Rejected: failing the check (it would hold every PR of the
   identity for a permission that only makes CI findings better).
+- **A standing automatic approval is held to the gates when magnum reviews a new head** (2026-10-08, the
+  operator's call; amends "Magnum approves as the operator when its review found nothing to fix" and the gates
+  entries "Auto-approval hears every reviewer", "Auto-approval leaves a PR its watch would not review to the
+  operator", "Auto-approval waits for the head's checks" and "Auto-approval never approves a change to the review
+  agents' instructions or hooks"). After magnum approved head A as the operator, `followStanding` withdrew the
+  approval only when a later round found something to fix, and a PR with a live approval is never a candidate, so
+  the gates never saw a later head. talkable keeps approvals across pushes, so a head B could merge on the
+  operator's approval of A although B added `AGENTS.md` or `.claude/` files, its review went without
+  codex-review, or its checks failed; a probe kept such an approval standing with no refusal. Now a later round of
+  magnum's that reviewed the PR's current head and leaves nothing to fix goes through the gates a new approval
+  runs (`autoGateRefusal`; the heard-every-reviewer gate reads that round's own record). One they refuse withdraws
+  the approval through the path a blocking round takes (`standingWithdrawal`, one message for both): dismissed as
+  the operator with "magnum's review of <sha7> found nothing to fix, but <reason>; this automatic approval is
+  withdrawn ([review](<url>)).", the row ended by `magnum` with that reason, the withdraw events and one toast. A
+  head whose checks still run (`PENDING`, `EXPECTED`) withdraws nothing: magnum waits, asking every tick, and
+  withdraws once they fail. A head magnum has not reviewed changes nothing: the approval stands and the round on
+  it decides. The gates decide once on each round, as before a new approval: a round they let through is recorded
+  (kv `pr.<id>.auto_approval_gated`, `<approval id>|<run id>`), so checks that fail later, a mute, a label or a
+  configuration change do not withdraw the approval before the next round, after a restart either. A withdrawn
+  PR is a candidate again: the card says why magnum does not approve the head, and a head whose checks pass later
+  is approved again. A gate's reason no longer carries an error's text (`agentConfigRefusal` logs a failed read
+  of the PR's files instead), since it can now be posted on GitHub. This is not the freshness gate the operator
+  declined on 2026-10-07, which asked how old the review behind an approval was: this asks what the head that a
+  newer review covers changed, and acts only once magnum reviewed it. No migration. Rejected: running the gates on
+  every tick (a mute, a label or a red re-run of a check that had passed would withdraw an approval its round let
+  through, and the approval of the first head is not held to them after it posts either), and withdrawing on a
+  push before magnum reviews the head (new commits alone stay the next review's to decide).

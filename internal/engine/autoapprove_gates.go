@@ -9,7 +9,9 @@ package engine
 // the review agents, and a head whose checks fail or still run are not
 // approved; the card says why (KVPRAutoApproveRefused) and a
 // review.auto_approve_refused event records it once per head, round and
-// reason.
+// reason. A later round of magnum's on the head of a PR it approved as the
+// operator is held to them too: one they refuse withdraws the approval
+// (standingGateRefusal).
 
 import (
 	"context"
@@ -66,27 +68,66 @@ var agentInstructionFiles = []string{"AGENTS.md", "AGENTS.override.md", "CLAUDE.
 // Codex flagged; a forced round's included), it changes what steers the
 // review agents (agentConfigRefusal), and its head's check rollup fails or
 // runs (wait for green: the judge's result says nothing of the failures it
-// found unrelated).
-func (e *Engine) autoGateRefusal(ctx context.Context, c store.RepoPR, sum store.ReviewSummary) string {
+// found unrelated). waits says the refusal is only checks that still run,
+// which a standing approval waits out (standingGateRefusal). A reason never
+// carries an error's text: a withdrawal posts it on GitHub.
+func (e *Engine) autoGateRefusal(ctx context.Context, c store.RepoPR, sum store.ReviewSummary) (why string, waits bool) {
 	pr := c.PR
 	if why := e.missingReports(ctx, pr.ID, sum); why != "" {
-		return why
+		return why, false
 	}
 	if w := e.cfg.WatchFor(c.Repo); w != nil {
 		if dec := e.classify(ctx, *w, pr, e.now()); !dec.Eligible {
-			return "its watch would not review it on its own: " + dec.Reason
+			return "its watch would not review it on its own: " + dec.Reason, false
 		}
 	}
 	if why := e.agentConfigRefusal(ctx, pr); why != "" {
-		return why
+		return why, false
 	}
 	switch strings.ToUpper(deref(pr.CIState)) {
 	case "FAILURE", "ERROR":
-		return "its head's checks fail (magnum approves it once they pass)"
+		return "its head's checks fail (magnum approves it once they pass)", false
 	case "PENDING", "EXPECTED":
-		return "its head's checks have not finished (magnum approves it once they pass)"
+		return "its head's checks have not finished (magnum approves it once they pass)", true
 	}
-	return ""
+	return "", false
+}
+
+// kvAutoApprovalGated records "<approval id>|<run id>" once the gates let
+// the PR's standing automatic approval stand after that later round of
+// magnum's (standingGateRefusal): they decide once on each round, as they
+// do before a new approval, also across a restart.
+func kvAutoApprovalGated(prID int64) string { return fmt.Sprintf("pr.%d.auto_approval_gated", prID) }
+
+// standingGateRefusal says why the gates a new approval runs
+// (autoGateRefusal) refuse sum, magnum's latest posted round of standing
+// approval a's PR, which then withdraws a: a new head that adds an
+// AGENTS.md, whose review went without codex-review or whose checks fail
+// is not covered by the operator's approval of an earlier head. "" when a
+// stands: sum is a's own round or none, the PR's head is not the one sum
+// reviewed (a head magnum has not reviewed changes nothing: its round
+// decides), sum leaves something to fix (that withdraws a anyway), the
+// head's checks still run (magnum waits for them, asked again every tick),
+// or the gates let sum's round through already (kvAutoApprovalGated).
+func (e *Engine) standingGateRefusal(ctx context.Context, a store.AutoApprovalPR, sum *store.ReviewSummary) string {
+	if sum == nil || sum.RunID == a.RunID || sum.SHA != a.PR.HeadSHA {
+		return ""
+	}
+	if blocks, _ := roundBlocks(*sum, ""); blocks {
+		return ""
+	}
+	key, mark := kvAutoApprovalGated(a.PRID), fmt.Sprintf("%d|%s", a.ID, sum.RunID)
+	if v, _ := e.getKV(ctx, key); v == mark {
+		return ""
+	}
+	why, waits := e.autoGateRefusal(ctx, store.RepoPR{PR: a.PR, Repo: a.Repo}, *sum)
+	switch {
+	case waits:
+		return ""
+	case why == "":
+		e.setKV(ctx, key, mark)
+	}
+	return why
 }
 
 // missingReports says why auto-approval refuses sum's review for the
@@ -127,7 +168,8 @@ func (e *Engine) agentConfigRefusal(ctx context.Context, pr store.PR) string {
 	const what = "the review agents' instructions or hooks"
 	f, ok, err := e.st.PRFilesOf(ctx, pr.ID)
 	if err != nil {
-		return "magnum cannot read the files it changes: " + err.Error()
+		e.log.Warn("auto approval: the PR's files", "pr", pr.ID, "err", err)
+		return "magnum cannot read the files it changes"
 	}
 	kinds := e.projectKinds()
 	listed := ok && f.HeadSHA == pr.HeadSHA

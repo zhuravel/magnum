@@ -11,7 +11,9 @@ package engine
 // review. It also holds back what autoapprove_gates.go names: a review that
 // did not hear every reviewer, a PR its watch would not review on its own,
 // one that changes the review agents' instructions, a head whose checks
-// fail or run. The operator's word wins: a review of theirs by hand, or a
+// fail or run; a later review of the head that those gates refuse
+// withdraws the approval too, once that head's checks finished. The
+// operator's word wins: a review of theirs by hand, or a
 // dismissal of one of these approvals, stops it on that PR for good
 // (`magnum unapprove --resume` lifts that). Every post and withdrawal is
 // compare-and-set on the auto_approvals row, writes begin/ok/fail events,
@@ -436,7 +438,7 @@ func (e *Engine) considerAutoApproval(ctx context.Context, c store.RepoPR, sum *
 	if hasPrior && (prior.State != store.AutoFailed || prior.Attempts >= autoApproveAttempts || e.now().Before(prior.UpdatedAt.Add(autoApproveRetry))) {
 		return
 	}
-	why := e.autoGateRefusal(ctx, c, *sum)
+	why, _ := e.autoGateRefusal(ctx, c, *sum)
 	e.noteAutoRefused(ctx, c, *sum, why)
 	if why != "" {
 		return
@@ -682,13 +684,15 @@ func (e *Engine) resumeAutoPost(ctx context.Context, repo store.Repo, a store.Au
 	})
 }
 
-// followStanding reads GitHub's reviews when the PR moved: a dismissal of
-// standing approval a is recorded first (by the operator or someone else,
-// auto-approval of the PR stops; by GitHub on a push, it does not), so a
-// review GitHub already dismissed is never withdrawn again; then a is
-// withdrawn when the PR's latest round is a later one that leaves something
-// to fix (or cannot tell: earlier findings open, the verdict line unread or
-// unknown), and a review of the operator's by hand since stops
+// followStanding reads GitHub's reviews when the PR moved, or when the
+// gates refuse a later round (standingGateRefusal: the PR's checks move
+// without it): a dismissal of standing approval a is recorded first (by the
+// operator or someone else, auto-approval of the PR stops; by GitHub on a
+// push, it does not), so a review GitHub already dismissed is never
+// withdrawn again; then a is withdrawn when the PR's latest round is a
+// later one that leaves something to fix (or cannot tell: earlier findings
+// open, the verdict line unread or unknown) or that the gates refuse
+// (standingWithdrawal), and a review of the operator's by hand since stops
 // auto-approval (an approval or changes request of theirs also supersedes
 // a). A list GitHub cut short still withdraws (the safe way), and tells
 // nothing else until the PR moves.
@@ -698,8 +702,9 @@ func (e *Engine) followStanding(ctx context.Context, repo store.Repo, a store.Au
 	if sum != nil {
 		runID = sum.RunID
 	}
+	gate := e.standingGateRefusal(ctx, a, sum)
 	fp := runID + "|" + timeKey(a.PR.GHUpdatedAt)
-	if e.autoFollow[a.ID] == fp {
+	if gate == "" && e.autoFollow[a.ID] == fp {
 		return
 	}
 	reviews, complete, err := gh.AllReviews(ctx, repo.Owner, repo.Name, a.PR.Number)
@@ -718,12 +723,7 @@ func (e *Engine) followStanding(ctx context.Context, repo store.Repo, a store.Au
 		}
 	}
 	if sum != nil && sum.RunID != a.RunID {
-		if blocks, known := roundBlocks(*sum, reviewBody(reviews, sum.ReviewID)); blocks || !known {
-			what := "found blocking problems"
-			if !known {
-				what = "left earlier findings open"
-			}
-			msg := fmt.Sprintf("magnum's review of %s %s; this automatic approval is withdrawn ([review](%s)).", textx.ShortSHA(sum.SHA), what, sum.URL)
+		if msg := standingWithdrawal(*sum, reviewBody(reviews, sum.ReviewID), gate); msg != "" {
 			if err := e.withdrawAutoApproval(ctx, repo, a.PR, a.AutoApproval, gh, store.AutoEndedMagnum, msg); err == nil {
 				delete(e.autoFollow, a.ID)
 			}
@@ -749,6 +749,27 @@ func (e *Engine) followStanding(ctx context.Context, repo store.Repo, a store.Au
 		}
 	}
 	e.autoFollow[a.ID] = fp
+}
+
+// standingWithdrawal is the message that withdraws a standing automatic
+// approval after sum, a later round of magnum's (body: its review's, ""
+// when not read), and that GitHub shows on the dismissal; "" when the
+// approval stands. A round that leaves something to fix (or cannot tell)
+// withdraws it, and so does one the gates refuse (gate:
+// standingGateRefusal).
+func standingWithdrawal(sum store.ReviewSummary, body, gate string) string {
+	var what string
+	switch blocks, known := roundBlocks(sum, body); {
+	case blocks:
+		what = "found blocking problems"
+	case !known:
+		what = "left earlier findings open"
+	case gate != "":
+		what = "found nothing to fix, but " + gate
+	default:
+		return ""
+	}
+	return fmt.Sprintf("magnum's review of %s %s; this automatic approval is withdrawn ([review](%s)).", textx.ShortSHA(sum.SHA), what, sum.URL)
 }
 
 // dismissedOnGitHub records standing approval a, which GitHub lists as

@@ -27,7 +27,7 @@ var AutoLiveStates = []string{AutoPosting, AutoStanding, AutoDismissing}
 
 // Who withdrew an automatic approval (auto_approvals.ended_by).
 const (
-	AutoEndedMagnum   = "magnum"   // a later review of magnum's found blocking problems
+	AutoEndedMagnum   = "magnum"   // a later review of magnum's found blocking problems, or its gates refuse it (EndReason says which)
 	AutoEndedOperator = "operator" // the operator: magnum unapprove, the board's D, or on GitHub
 	AutoEndedSomeone  = "someone"  // someone else dismissed it on GitHub
 	AutoEndedPush     = "push"     // GitHub dismissed it as stale when commits were pushed
