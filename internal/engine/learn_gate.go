@@ -307,214 +307,271 @@ type gateRun struct {
 // score that the verdict needs (noScore), a shutdown, an unreadable
 // registry, inputs or runs, a verdict the registry did not take.
 func (e *Engine) runGate(ctx context.Context, p store.LearnProposal) error {
-	octx := context.WithoutCancel(ctx)
-	waits := func(why string) error {
-		e.event(octx, "info", learnSubject, "learn.gate_waiting", fmt.Sprintf("the gate of skill proposal %d stopped and waits: %s", p.ID, why),
-			map[string]any{"proposal": p.ID, "reason": why})
-		return errors.New(why)
-	}
+	g := &gateWork{e: e, ctx: ctx, octx: context.WithoutCancel(ctx), p: p}
 	if why := e.gateUnavailable(); why != "" {
 		return errors.New(why)
 	}
 	if err := e.ensureCandidate(ctx, p, false); errors.Is(err, errCandidateGone) {
-		return e.gateDecide(octx, p, GateResult{State: learn.GateFailed, Rule: oneLine(err.Error(), retroWhyRunes), Mode: learn.Mode(p.Files)})
+		return e.gateDecide(g.octx, p, GateResult{State: learn.GateFailed, Rule: oneLine(err.Error(), retroWhyRunes), Mode: learn.Mode(p.Files)})
 	} else if err != nil {
-		return waits("the worktree: " + oneLine(err.Error(), retroWhyRunes))
+		return g.waits("the worktree: " + oneLine(err.Error(), retroWhyRunes))
 	}
 	baseDir, err := e.addGateBase(ctx, p.BaseSHA)
-	defer e.dropGateBase(octx) // whatever ends the gate
+	defer e.dropGateBase(g.octx) // whatever ends the gate
 	if err != nil {
-		return waits("the worktree of its base: " + oneLine(err.Error(), retroWhyRunes))
+		return g.waits("the worktree of its base: " + oneLine(err.Error(), retroWhyRunes))
 	}
 	mode := learn.Mode(p.Files)
-	res := GateResult{Mode: mode, Cases: []GateCase{}}
+	g.baseDir, g.judgeOnly, g.res = baseDir, mode == learn.GateJudgeOnly, GateResult{Mode: mode, Cases: []GateCase{}}
 	targets, err := e.gateTargets(ctx, p)
 	if err != nil {
-		return waits("the proposal's inputs: " + oneLine(err.Error(), retroWhyRunes))
+		return g.waits("the proposal's inputs: " + oneLine(err.Error(), retroWhyRunes))
 	}
 	corpus, corpusPath, err := e.d.EvalCorpus()
 	if err != nil {
-		res.CorpusError, corpus = oneLine(err.Error(), retroWhyRunes), nil
+		g.res.CorpusError, corpus = oneLine(err.Error(), retroWhyRunes), nil
 	}
+	g.corpusPath = corpusPath
 	cases := learn.SelectCases(corpus, targets, e.gateWatched, e.gateFlagged(ctx), e.cfg.Learn.GateCases)
-	baseIn, baseRev, err := e.d.EvalInputs(baseDir)
-	if err != nil {
-		return waits("the base's inputs: " + oneLine(err.Error(), retroWhyRunes))
+	if g.baseIn, g.baseRev, err = e.d.EvalInputs(baseDir); err != nil {
+		return g.waits("the base's inputs: " + oneLine(err.Error(), retroWhyRunes))
 	}
-	candIn, candRev, err := e.d.EvalInputs(p.Scratch)
-	if err != nil {
-		return waits("the candidate's inputs: " + oneLine(err.Error(), retroWhyRunes))
+	if g.candIn, g.candRev, err = e.d.EvalInputs(p.Scratch); err != nil {
+		return g.waits("the candidate's inputs: " + oneLine(err.Error(), retroWhyRunes))
 	}
-	res.Inputs, res.BaselineInputs = candIn, baseIn
-	runs, err := e.d.EvalRuns()
-	if err != nil {
-		return waits("the eval runs: " + oneLine(err.Error(), retroWhyRunes))
+	g.res.Inputs, g.res.BaselineInputs = g.candIn, g.baseIn
+	if g.runs, err = e.d.EvalRuns(); err != nil {
+		return g.waits("the eval runs: " + oneLine(err.Error(), retroWhyRunes))
 	}
 	e.event(ctx, "info", learnSubject, "learn.gate_start", fmt.Sprintf("the gate of skill proposal %d started: %s, %s (%s)", p.ID,
 		textx.Count(len(cases), "case", "cases"), strings.Join(targets, ", "), mode), map[string]any{"proposal": p.ID, "cases": len(cases), "mode": mode})
 
-	var base, baseJudge, cand, retry *gateRun
-	mkRun := func(slot **gateRun, label, dir string, judgeOnly bool, in, rev string) (*gateRun, error) {
-		if *slot != nil {
-			return *slot, nil
+	defer g.finishRuns()
+	for _, gc := range cases {
+		row, stop, err := g.caseRow(gc)
+		if stop {
+			return err
 		}
-		commit, dirty := e.treeState(ctx, dir)
-		id, rdir, err := eval.NewRunDir(e.d.Layout.Eval(), e.now())
-		if err != nil {
-			return nil, err
-		}
-		r := &gateRun{dir: rdir, tag: eval.AgentTag(id), run: eval.Run{ID: id, Label: fmt.Sprintf("learn gate of proposal %d: %s", p.ID, label),
-			Commit: commit, Dirty: dirty, Corpus: corpusPath, Started: e.now(), Cases: []eval.CaseRun{}, Inputs: in, ReviewerInputs: rev,
-			Candidate: dir}}
-		r.opts = EvalGateOptions{Candidate: dir, JudgeOnly: judgeOnly, RunDir: rdir, AgentTag: r.tag}
-		*slot = r
-		res.Runs = append(res.Runs, id)
-		return r, nil
+		g.res.Cases = append(g.res.Cases, row)
 	}
-	defer func() { // every run the gate made is finished, whatever stopped it
-		for _, r := range []*gateRun{base, baseJudge, cand, retry} {
-			if r != nil {
-				r.run.Finished = e.now()
-				if err := eval.SaveRun(r.dir, r.run); err != nil {
-					e.log.Warn("skill gate: save an eval run", "run", r.run.ID, "err", err)
-				}
+	if stop, err := g.retryLost(cases); stop {
+		return err
+	}
+	return g.decide()
+}
+
+// gateWork is one gate's state (runGate): the proposal, what its base and
+// its candidate replay with, the stored runs as the gate last read them,
+// the eval runs it made, one per kind of replay, and its result so far.
+type gateWork struct {
+	e         *Engine
+	ctx, octx context.Context
+	p         store.LearnProposal
+	res       GateResult
+	runs      []eval.Run
+
+	corpusPath, baseDir              string
+	baseIn, baseRev, candIn, candRev string
+	judgeOnly                        bool
+
+	base, baseJudge, cand, retry *gateRun
+}
+
+// waits ends the gate short with why, p staying gating: a
+// learn.gate_waiting event and the error runGate returns.
+func (g *gateWork) waits(why string) error {
+	g.e.event(g.octx, "info", learnSubject, "learn.gate_waiting", fmt.Sprintf("the gate of skill proposal %d stopped and waits: %s", g.p.ID, why),
+		map[string]any{"proposal": g.p.ID, "reason": why})
+	return errors.New(why)
+}
+
+// mkRun is the run in slot, made on its first replay: its directory under
+// Layout.Eval, its agent tag, and the inputs and the tree (treeState of
+// dir) it replays.
+func (g *gateWork) mkRun(slot **gateRun, label, dir string, judgeOnly bool, in, rev string) (*gateRun, error) {
+	if *slot != nil {
+		return *slot, nil
+	}
+	e := g.e
+	commit, dirty := e.treeState(g.ctx, dir)
+	id, rdir, err := eval.NewRunDir(e.d.Layout.Eval(), e.now())
+	if err != nil {
+		return nil, err
+	}
+	r := &gateRun{dir: rdir, tag: eval.AgentTag(id), run: eval.Run{ID: id, Label: fmt.Sprintf("learn gate of proposal %d: %s", g.p.ID, label),
+		Commit: commit, Dirty: dirty, Corpus: g.corpusPath, Started: e.now(), Cases: []eval.CaseRun{}, Inputs: in, ReviewerInputs: rev,
+		Candidate: dir}}
+	r.opts = EvalGateOptions{Candidate: dir, JudgeOnly: judgeOnly, RunDir: rdir, AgentTag: r.tag}
+	*slot = r
+	g.res.Runs = append(g.res.Runs, id)
+	return r, nil
+}
+
+// finishRuns finishes and saves every run the gate made, whatever stopped
+// it.
+func (g *gateWork) finishRuns() {
+	for _, r := range []*gateRun{g.base, g.baseJudge, g.cand, g.retry} {
+		if r != nil {
+			r.run.Finished = g.e.now()
+			if err := eval.SaveRun(r.dir, r.run); err != nil {
+				g.e.log.Warn("skill gate: save an eval run", "run", r.run.ID, "err", err)
 			}
 		}
-	}()
-	// replay replays c into the run in slot (judge-only: on the reviewer
-	// reports of the run want names, "" = any; a judge that read others
-	// has no score).
-	replay := func(slot **gateRun, label, dir string, judgeOnly bool, in, rev string, c eval.Case, want string) gateReplay {
-		if why := e.gateHold(ctx); why != "" { // a drain or a pause since the gate started
-			return gateReplay{stop: why}
-		}
-		r, err := mkRun(slot, label, dir, judgeOnly, in, rev)
-		if err != nil {
-			return gateReplay{stop: "the eval run's directory: " + oneLine(err.Error(), retroWhyRunes)}
-		}
-		cr := e.d.EvalCase(ctx, c, r.opts)
-		cr.Finished = e.now()
-		r.run.Cases = append(r.run.Cases, cr)
-		if err := eval.SaveRun(r.dir, r.run); err != nil {
-			e.log.Warn("skill gate: save an eval run", "run", r.run.ID, "err", err)
-		}
-		if rs, err := e.d.EvalRuns(); err == nil {
-			runs = rs
-		}
-		out := gateReplay{run: r.run.ID, reports: cr.ReportsRun}
-		why := cmp.Or(oneLine(cr.Error, retroWhyRunes), "no result to score")
-		switch {
-		case ctx.Err() != nil:
-			out.stop = "the daemon is stopping"
-		case cr.Outcome == eval.OutcomeBudget, cr.Outcome == pipeline.OutcomeUsageLimit, cr.Outcome == pipeline.OutcomeLoginRequired:
-			out.stop = fmt.Sprintf("case %s: %s (%s)", c.Name, cr.Outcome, why)
-		case cr.Outcome == eval.OutcomeFlagged:
-			out.skip = learn.SkipFlagged
-		case cr.Score == nil:
-			out.missing = fmt.Sprintf("the %s replay of %s ended %s: %s", label, c.Name, cr.Outcome, why)
-		case judgeOnly && want != "" && cr.ReportsRun != want: // a full replay newer than the gate's choice
-			out.missing = fmt.Sprintf("the %s replay of %s read the reviewer reports of run %s, not those of run %s", label, c.Name,
-				cmp.Or(cr.ReportsRun, "none"), want)
-		default:
-			out.score = trimScore(cr.Score)
-		}
-		return out
 	}
-	// noScore stops the gate on a replay that ended without a score where
-	// the verdict needs one (a target's or its baseline's, a lost case's
-	// second): p stays gating for a later try, and only the gateStopLimit-th
-	// gate of p that stopped so holds it, saying why.
-	noScore := func(why string) error {
-		n := e.countGateStop(octx, p.ID)
-		if n < gateStopLimit {
-			return waits(why)
-		}
-		res.State, res.Rule = learn.GateHeld, fmt.Sprintf("%d gates in a row stopped on a replay without a score, the last: %s", n, why)
-		return e.gateDecide(octx, p, res)
+}
+
+// replay replays c into the run in slot (judge-only: on the reviewer
+// reports of the run want names, "" = any; a judge that read others has no
+// score), after checking what holds the gate (gateHold: a drain or a pause
+// since it started).
+func (g *gateWork) replay(slot **gateRun, label, dir string, judgeOnly bool, in, rev string, c eval.Case, want string) gateReplay {
+	e, ctx := g.e, g.ctx
+	if why := e.gateHold(ctx); why != "" {
+		return gateReplay{stop: why}
 	}
-	// halt is whether replay rp ends the gate, and with what: a stop, or
-	// one without a score where the verdict needs one (need).
-	halt := func(rp gateReplay, need bool) (bool, error) {
-		switch {
-		case rp.stop != "":
-			return true, waits(rp.stop)
-		case rp.missing != "" && need:
-			return true, noScore(rp.missing)
+	r, err := g.mkRun(slot, label, dir, judgeOnly, in, rev)
+	if err != nil {
+		return gateReplay{stop: "the eval run's directory: " + oneLine(err.Error(), retroWhyRunes)}
+	}
+	cr := e.d.EvalCase(ctx, c, r.opts)
+	cr.Finished = e.now()
+	r.run.Cases = append(r.run.Cases, cr)
+	if err := eval.SaveRun(r.dir, r.run); err != nil {
+		e.log.Warn("skill gate: save an eval run", "run", r.run.ID, "err", err)
+	}
+	if rs, err := e.d.EvalRuns(); err == nil {
+		g.runs = rs
+	}
+	out := gateReplay{run: r.run.ID, reports: cr.ReportsRun}
+	why := cmp.Or(oneLine(cr.Error, retroWhyRunes), "no result to score")
+	switch {
+	case ctx.Err() != nil:
+		out.stop = "the daemon is stopping"
+	case cr.Outcome == eval.OutcomeBudget, cr.Outcome == pipeline.OutcomeUsageLimit, cr.Outcome == pipeline.OutcomeLoginRequired:
+		out.stop = fmt.Sprintf("case %s: %s (%s)", c.Name, cr.Outcome, why)
+	case cr.Outcome == eval.OutcomeFlagged:
+		out.skip = learn.SkipFlagged
+	case cr.Score == nil:
+		out.missing = fmt.Sprintf("the %s replay of %s ended %s: %s", label, c.Name, cr.Outcome, why)
+	case judgeOnly && want != "" && cr.ReportsRun != want: // a full replay newer than the gate's choice
+		out.missing = fmt.Sprintf("the %s replay of %s read the reviewer reports of run %s, not those of run %s", label, c.Name,
+			cmp.Or(cr.ReportsRun, "none"), want)
+	default:
+		out.score = trimScore(cr.Score)
+	}
+	return out
+}
+
+// noScore stops the gate on a replay that ended without a score where the
+// verdict needs one (a target's or its baseline's, a lost case's second):
+// p stays gating for a later try, and only the gateStopLimit-th gate of p
+// that stopped so holds it, saying why.
+func (g *gateWork) noScore(why string) error {
+	n := g.e.countGateStop(g.octx, g.p.ID)
+	if n < gateStopLimit {
+		return g.waits(why)
+	}
+	g.res.State, g.res.Rule = learn.GateHeld, fmt.Sprintf("%d gates in a row stopped on a replay without a score, the last: %s", n, why)
+	return g.e.gateDecide(g.octx, g.p, g.res)
+}
+
+// halt is whether replay rp ends the gate, and with what: a stop, or one
+// without a score where the verdict needs one (need).
+func (g *gateWork) halt(rp gateReplay, need bool) (bool, error) {
+	switch {
+	case rp.stop != "":
+		return true, g.waits(rp.stop)
+	case rp.missing != "" && need:
+		return true, g.noScore(rp.missing)
+	}
+	return false, nil
+}
+
+// noFullReplay is why a judge-only gate leaves a case out.
+const noFullReplay = "no full replay whose reviewers read the candidate's prompts, for the judge alone"
+
+// caseRow is case gc's row: its baseline (baseline), then the candidate's
+// replay; stop when the gate ends there, with what runGate returns.
+func (g *gateWork) caseRow(gc learn.GateCase) (GateCase, bool, error) {
+	row := GateCase{GateRow: learn.GateRow{Case: gc.Case.Name, Target: gc.Target, Skip: gc.Skip}}
+	if row.Skip != "" {
+		return row, false, nil
+	}
+	if g.ctx.Err() != nil {
+		return row, true, g.waits("the daemon is stopping")
+	}
+	if stop, err := g.baseline(gc, &row); stop {
+		return row, true, err
+	}
+	if row.Skip == "" {
+		rp := g.replay(&g.cand, "candidate", g.p.Scratch, g.judgeOnly, g.candIn, g.candRev, gc.Case, row.ReportsRun)
+		if stop, err := g.halt(rp, gc.Target); stop {
+			return row, true, err
 		}
+		row.After, row.CandidateRun, row.Skip = rp.score, rp.run, cmp.Or(rp.skip, rp.missing)
+	}
+	return row, false, nil
+}
+
+// baseline sets row's baseline: a stored replay with the base's inputs,
+// else a replay of the base. Judge-only, both judges read the reviewer
+// reports of the case's newest full replay whose reviewers read the
+// candidate's prompts: the baseline is that replay itself when the base's
+// judge made it, else the base's judge alone on its reports (stored, or
+// replayed now); without one the base's full replay is the baseline and
+// makes it, and a stored baseline that recorded no reviewer inputs is no
+// full replay (the case is left out). Stop when the gate ends there.
+func (g *gateWork) baseline(gc learn.GateCase, row *GateCase) (bool, error) {
+	fr, fc, full := eval.FullReplayFor(g.runs, gc.Case.Name, gc.Case.Head, &eval.Run{ReviewerInputs: g.candRev})
+	switch {
+	case g.judgeOnly && full && fc.ReportDir != "":
+		row.ReportsRun = fr.ID
+		if bs := eval.JudgeBaselines(g.runs, g.baseIn, gc.Case, fr.ID); len(bs) > 0 {
+			row.Before, row.BaselineRun = trimScore(bs[0].Case.Score), bs[0].Run
+			return false, nil
+		}
+		rp := g.replay(&g.baseJudge, "baseline judge", g.baseDir, true, g.baseIn, g.baseRev, gc.Case, fr.ID)
+		if stop, err := g.halt(rp, gc.Target); stop {
+			return true, err
+		}
+		row.Before, row.BaselineRun, row.Skip = rp.score, rp.run, cmp.Or(rp.skip, rp.missing)
+		return false, nil
+	case g.judgeOnly && len(eval.Baselines(g.runs, g.baseIn, gc.Case)) > 0:
+		row.Skip = noFullReplay
 		return false, nil
 	}
-
-	judgeOnly := mode == learn.GateJudgeOnly
-	for _, gc := range cases {
-		row := GateCase{GateRow: learn.GateRow{Case: gc.Case.Name, Target: gc.Target, Skip: gc.Skip}}
-		if row.Skip != "" {
-			res.Cases = append(res.Cases, row)
-			continue
-		}
-		if ctx.Err() != nil {
-			return waits("the daemon is stopping")
-		}
-		// The baseline: a stored replay with the base's inputs, else a
-		// replay of the base. Judge-only, both judges read the reviewer
-		// reports of the case's newest full replay whose reviewers read the
-		// candidate's prompts: the baseline is that replay itself when the
-		// base's judge made it, else the base's judge alone on its reports
-		// (stored, or replayed now); without one the base's full replay is
-		// the baseline and makes it, and a stored baseline that recorded no
-		// reviewer inputs is no full replay (the case is skipped).
-		fr, fc, full := eval.FullReplayFor(runs, gc.Case.Name, gc.Case.Head, &eval.Run{ReviewerInputs: candRev})
-		switch {
-		case judgeOnly && full && fc.ReportDir != "":
-			row.ReportsRun = fr.ID
-			if bs := eval.JudgeBaselines(runs, baseIn, gc.Case, fr.ID); len(bs) > 0 {
-				row.Before, row.BaselineRun = trimScore(bs[0].Case.Score), bs[0].Run
-				break
-			}
-			rp := replay(&baseJudge, "baseline judge", baseDir, true, baseIn, baseRev, gc.Case, fr.ID)
-			if stop, err := halt(rp, gc.Target); stop {
-				return err
-			}
-			row.Before, row.BaselineRun, row.Skip = rp.score, rp.run, cmp.Or(rp.skip, rp.missing)
-		case judgeOnly && len(eval.Baselines(runs, baseIn, gc.Case)) > 0:
-			row.Skip = "no full replay whose reviewers read the candidate's prompts, for the judge alone"
-		default:
-			if bs := eval.Baselines(runs, baseIn, gc.Case); len(bs) > 0 {
-				row.Before, row.BaselineRun = trimScore(bs[0].Case.Score), bs[0].Run
-				break
-			}
-			rp := replay(&base, "baseline", baseDir, false, baseIn, baseRev, gc.Case, "")
-			if stop, err := halt(rp, gc.Target); stop {
-				return err
-			}
-			row.Before, row.BaselineRun, row.Skip = rp.score, rp.run, cmp.Or(rp.skip, rp.missing)
-			if judgeOnly && row.Skip == "" { // its reviewers' reports are the candidate's judge's
-				if fr, fc, ok := eval.FullReplayFor(runs, gc.Case.Name, gc.Case.Head, &eval.Run{ReviewerInputs: candRev}); ok && fc.ReportDir != "" &&
-					fr.ID == rp.run {
-					row.ReportsRun = fr.ID
-				} else {
-					row.Skip = "no full replay whose reviewers read the candidate's prompts, for the judge alone"
-				}
-			}
-		}
-		if row.Skip == "" {
-			rp := replay(&cand, "candidate", p.Scratch, judgeOnly, candIn, candRev, gc.Case, row.ReportsRun)
-			if stop, err := halt(rp, gc.Target); stop {
-				return err
-			}
-			row.After, row.CandidateRun, row.Skip = rp.score, rp.run, cmp.Or(rp.skip, rp.missing)
-		}
-		res.Cases = append(res.Cases, row)
+	if bs := eval.Baselines(g.runs, g.baseIn, gc.Case); len(bs) > 0 {
+		row.Before, row.BaselineRun = trimScore(bs[0].Case.Score), bs[0].Run
+		return false, nil
 	}
-	// A case the candidate lost is replayed once more before it counts.
-	for i := range res.Cases {
-		row := &res.Cases[i]
+	rp := g.replay(&g.base, "baseline", g.baseDir, false, g.baseIn, g.baseRev, gc.Case, "")
+	if stop, err := g.halt(rp, gc.Target); stop {
+		return true, err
+	}
+	row.Before, row.BaselineRun, row.Skip = rp.score, rp.run, cmp.Or(rp.skip, rp.missing)
+	if g.judgeOnly && row.Skip == "" { // its reviewers' reports are the candidate's judge's
+		if fr, fc, ok := eval.FullReplayFor(g.runs, gc.Case.Name, gc.Case.Head, &eval.Run{ReviewerInputs: g.candRev}); ok && fc.ReportDir != "" &&
+			fr.ID == rp.run {
+			row.ReportsRun = fr.ID
+		} else {
+			row.Skip = noFullReplay
+		}
+	}
+	return false, nil
+}
+
+// retryLost replays a case the candidate lost once more before the loss
+// counts; stop when the gate ends there, with what runGate returns.
+func (g *gateWork) retryLost(cases []learn.GateCase) (bool, error) {
+	for i := range g.res.Cases {
+		row := &g.res.Cases[i]
 		if len(row.Lost()) == 0 {
 			continue
 		}
 		c := cases[slices.IndexFunc(cases, func(gc learn.GateCase) bool { return gc.Case.Name == row.Case })].Case
-		rp := replay(&retry, "second", p.Scratch, judgeOnly, candIn, candRev, c, row.ReportsRun)
-		if stop, err := halt(rp, true); stop { // without its score the loss would count
-			return err
+		rp := g.replay(&g.retry, "second", g.p.Scratch, g.judgeOnly, g.candIn, g.candRev, c, row.ReportsRun)
+		if stop, err := g.halt(rp, true); stop { // without its score the loss would count
+			return true, err
 		}
 		if rp.skip != "" {
 			row.Skip = rp.skip
@@ -522,6 +579,13 @@ func (e *Engine) runGate(ctx context.Context, p store.LearnProposal) error {
 		}
 		row.Retried, row.After, row.CandidateRun = true, rp.score, rp.run
 	}
+	return false, nil
+}
+
+// decide judges the rows (learn.Judge; a revert is held whatever it
+// decides) and moves p to the verdict's state (gateDecide).
+func (g *gateWork) decide() error {
+	res, p := &g.res, g.p
 	rows := make([]learn.GateRow, len(res.Cases))
 	for i, c := range res.Cases {
 		rows[i] = c.GateRow
@@ -535,7 +599,7 @@ func (e *Engine) runGate(ctx context.Context, p store.LearnProposal) error {
 		res.State, res.Rule = learn.GateHeld, fmt.Sprintf("a revert of skill version %d waits for the operator whatever the gate found "+
 			"(it would have %s it: %s)", p.Reverts, v.State, res.Rule)
 	}
-	return e.gateDecide(octx, p, res)
+	return g.e.gateDecide(g.octx, p, *res)
 }
 
 // countGateStop counts one more gate of proposal id that stopped on a
