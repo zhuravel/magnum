@@ -59,6 +59,13 @@ func (f *gateFixture) decide(state string) {
 // commit on learnMaster.
 func (f *gateFixture) addPassed(run, sha string) store.LearnProposal {
 	f.h.t.Helper()
+	return f.addProposal(run, sha, store.LearnPassed, 0)
+}
+
+// addProposal adds another proposal of run in state, a revert of version
+// reverts when not 0, its worktree on its own commit on learnMaster.
+func (f *gateFixture) addProposal(run, sha, state string, reverts int64) store.LearnProposal {
+	f.h.t.Helper()
 	wt := filepath.Join(f.h.layout.LearnWorktrees(), run)
 	candidateFiles(f.h.t, wt)
 	f.git.set(wt, "HEAD", sha)
@@ -67,8 +74,12 @@ func (f *gateFixture) addPassed(run, sha string) store.LearnProposal {
 	f.git.parent[sha] = learnMaster
 	f.git.worktree[wt] = [2]string{f.checkout, "learn/" + run}
 	f.git.mu.Unlock()
-	p, err := f.h.st.CreateLearnProposal(f.h.ctx, store.LearnProposalInput{Trigger: store.LearnTriggerEvidence, BaseSHA: learnMaster,
-		Branch: "learn/" + run, CandidateSHA: sha, Files: gateFullFiles, State: store.LearnPassed, Scratch: wt,
+	trigger := store.LearnTriggerEvidence
+	if reverts != 0 {
+		trigger = store.LearnTriggerRegression
+	}
+	p, err := f.h.st.CreateLearnProposal(f.h.ctx, store.LearnProposalInput{Trigger: trigger, BaseSHA: learnMaster,
+		Branch: "learn/" + run, CandidateSHA: sha, Files: gateFullFiles, State: state, Scratch: wt, Reverts: reverts,
 		RunDir: filepath.Join(f.h.layout.LearnSkill(), run)})
 	if err != nil {
 		f.h.t.Fatal(err)
@@ -386,6 +397,31 @@ func TestALandRequestWaitsForTheRestartOnTheLastVersion(t *testing.T) {
 	f.h.startup()
 	if got, err := f.h.e.requestLearnLand(f.h.ctx, LearnDecisionPayload{ID: second.ID}); err != nil || !strings.Contains(got, "landed") {
 		t.Fatalf("requestLearnLand after the restart = %q, %v", got, err)
+	}
+}
+
+// A revert lands only on the operator's y, so it is the likeliest to be
+// asked for before the restart on the version landed last: it waits for
+// that restart too, and lands after it.
+func TestARevertsLandRequestWaitsForTheRestartToo(t *testing.T) {
+	f := newLandFixture(t)
+	f.h.e.supervised = false // the restart is the operator's: the daemon keeps ticking
+	f.h.tick()               // the fixture's proposal lands: version 1
+	vs := f.versions()
+	if len(vs) != 1 {
+		t.Fatalf("versions = %+v", vs)
+	}
+	revert := f.addProposal("20261005-094500", strings.Repeat("7", 40), store.LearnHeld, vs[0].ID)
+	_, err := f.h.e.requestLearnLand(f.h.ctx, LearnDecisionPayload{ID: revert.ID})
+	if err == nil || !strings.Contains(err.Error(), "ask again after the restart") {
+		t.Fatalf("the revert's y before the restart = %v", err)
+	}
+	if p, _ := f.h.st.LearnProposalByID(f.h.ctx, revert.ID); p.State != store.LearnHeld || len(f.versions()) != 1 {
+		t.Fatalf("the revert = %s, versions %d", p.State, len(f.versions()))
+	}
+	f.h.startup()
+	if got, err := f.h.e.requestLearnLand(f.h.ctx, LearnDecisionPayload{ID: revert.ID}); err != nil || !strings.Contains(got, "landed") {
+		t.Fatalf("the revert's y after the restart = %q, %v", got, err)
 	}
 }
 
