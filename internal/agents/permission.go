@@ -223,12 +223,13 @@ func promptOptions(lines []string, q int) (opts []permOption, end int, ok bool) 
 // denyState is the deny policy's progress for one session row (memory only:
 // a daemon restart gives a run a fresh budget).
 type denyState struct {
-	run     string // the run whose denies are counted
-	count   int    // prompts denied plus continuations sent during run
-	limited bool   // EventPromptDeniedLimit recorded for run
-	key     string // the prompt denied last
-	tick    uint64 // observe tick of that deny
-	cont    bool   // that deny still awaits its continuation (continueAfterDeny)
+	run     string    // the run whose denies are counted
+	count   int       // prompts denied plus continuations sent during run
+	limited bool      // EventPromptDeniedLimit recorded for run
+	key     string    // the prompt denied last
+	tick    uint64    // observe tick of that deny
+	at      time.Time // when that deny's keys were sent
+	cont    bool      // that deny still awaits its continuation (continueAfterDeny)
 }
 
 // answerPermission applies the kind's on_permission_prompt policy to an
@@ -281,7 +282,7 @@ func (m *Manager) answerPermission(ctx context.Context, s store.Session, run sto
 		return ObsBlocked
 	}
 	st.count++
-	st.key, st.tick = p.key, m.tick
+	st.key, st.tick, st.at = p.key, m.tick, m.now()
 	n := st.count
 	m.mu.Unlock()
 	keys, err := m.sendDeny(ctx, ref, p)
@@ -302,6 +303,38 @@ func (m *Manager) answerPermission(ctx context.Context, s store.Session, run sto
 	return ObsPromptDenied
 }
 
+// denyPending reports whether session s still awaits the continuation of a
+// deny during run (pending) and, for a claude agent (Claude Code session
+// sid) whose transcript magnum reads, that its working on after the deny is
+// no resumption (holds): Claude Code ends its turn on a No, so the agent
+// works only on background work it started before (a forked /code-review
+// keeps herdr showing it working until the fork reports) or on the turn
+// the fork's notification begins. cut is true once that transcript shows
+// the turn cut by the rejection (the "[Request interrupted by user for tool
+// use]" line, stamped after the deny): the composer is free from then on.
+// Any other kind, and a transcript it cannot read, hold nothing: an agent
+// working after a deny carried on by itself, as before.
+func (m *Manager) denyPending(s store.Session, sid string, run *store.Run) (pending, holds, cut bool) {
+	m.mu.Lock()
+	st := m.denies[s.ID]
+	pending = run != nil && st != nil && st.run == run.ID && st.cont
+	var at time.Time
+	if st != nil {
+		at = st.at
+	}
+	m.mu.Unlock()
+	if !pending || m.sessionKind(s) != KindClaude || sid == "" {
+		return pending, false, false
+	}
+	w := m.watch(s.ID, *run)
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !m.readTranscript(s, sid, w) {
+		return pending, false, false
+	}
+	return pending, true, w.cut.After(at.Add(-transcriptSkew))
+}
+
 // denyResumed notes that a session's agent works again: a deny that still
 // awaited its continuation needs none (the agent carried on by itself).
 func (m *Manager) denyResumed(sessionID int64) {
@@ -312,10 +345,14 @@ func (m *Manager) denyResumed(sessionID int64) {
 	}
 }
 
-// continueAfterDeny sends the kind's after_deny_prompt to an idle agent
-// whose permission prompt magnum denied during run (the same run, still in
-// flight) and that has not worked since: Claude Code ends its turn on a No
-// and would otherwise end the run unfinished. It is sent through herdr
+// continueAfterDeny sends the kind's after_deny_prompt to an agent whose
+// permission prompt magnum denied during run (the same run, still in
+// flight) and whose turn ended on it: one herdr shows idle and that has not
+// worked since, or a claude agent whose transcript shows the turn cut by
+// the rejection while its background work keeps it working (denyPending).
+// Claude Code ends its turn on a No and would otherwise end the run
+// unfinished, or answer its fork's notification only to say it stopped
+// (a round lost its claude-review report so). It is sent through herdr
 // agent.prompt without creating a run, at most once per denied prompt, only
 // when the visible screen shows no trust or permission dialog and an empty
 // composer (composerEmpty), and only while the kind's on_permission_prompt

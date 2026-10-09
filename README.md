@@ -1793,7 +1793,8 @@ only if its author matches that identity. Magnum pre-trusts only the directories
 the same entries Codex and Claude write when you click "trust". An approval prompt that stops an agent
 during a review (Claude Code asks before some commands even with `--dangerously-skip-permissions`) is
 answered No, never Yes, at most 10 times per run and recorded as an `agent.prompt_denied` event, and an
-agent that stops after the No is told once to finish without the command (`after_deny_prompt`); set
+agent that stops after the No is told once to finish without the command (`after_deny_prompt`), a Claude
+agent as soon as its transcript shows the turn ended, even while a forked `/code-review` keeps it busy; set
 `on_permission_prompt = "wait"` under `[kinds.<name>]` to leave such prompts to you. Codex's "Hooks need
 review" (your hooks changed since Codex last trusted them) is answered "Trust all" only when the checkout
 declares no hooks of its own, so every hook it lists is yours; hooks a repository brings are declined

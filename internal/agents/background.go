@@ -67,6 +67,10 @@ type bgWatch struct {
 	stops map[string]string // TaskStop/KillShell tool_use id -> the task it stops
 	note  time.Time         // the newest task notification
 	reply time.Time         // the newest assistant entry
+	// cut is the newest line Claude Code wrote when its turn was cut short
+	// (esc, or a tool use it asked about and was refused): the turn ended
+	// there, whatever herdr shows while background work runs on.
+	cut time.Time
 	// typed is when the newest prompt typed into the pane that the current
 	// turn holds was typed: the prompt that began the turn, or one Claude
 	// Code took into it while it ran (a queued command). Zero when the turn
@@ -87,7 +91,7 @@ type bgWatch struct {
 // reset forgets what was read (a new session id, a transcript that shrank).
 func (w *bgWatch) reset() {
 	w.offset, w.tasks, w.stops, w.note, w.reply = -1, map[string]string{}, map[string]string{}, time.Time{}, time.Time{}
-	w.typed, w.queued = time.Time{}, map[string][]time.Time{}
+	w.cut, w.typed, w.queued = time.Time{}, time.Time{}, map[string][]time.Time{}
 }
 
 // watch is the bgWatch of session s for run, a fresh one when s had none or
@@ -660,6 +664,9 @@ func (w *bgWatch) apply(line []byte) {
 			switch b.Type {
 			case "text":
 				w.notified(b.Text, e.Timestamp)
+				if e.interruption(b.Text) && e.Timestamp.After(w.cut) {
+					w.cut = e.Timestamp
+				}
 			case "tool_result":
 				w.result(b, result, i == 0)
 			}

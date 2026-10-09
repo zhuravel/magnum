@@ -336,6 +336,22 @@ editing history. Code, config comments and prompts reference these by their head
   background work only when it finishes well within the budget and wait for it, prefer the changed code's
   specs to a whole-suite run. Rejected: a config key for the grace (no case for tuning it yet) and a prompt
   file for the message (it carries only the budget and the path, like `after_deny_prompt`).
+- **A claude agent's deny stays pending while its background work keeps it working** (2026-10-08). The
+  `after_deny_prompt` message had never been sent (7 `agent.prompt_denied` events, no `agent.deny_continued`):
+  claude-review runs `/code-review` as a fork, Claude Code's refusal of the rm it then asked about ends its
+  turn ("STOP what you are doing and wait for the user"), but the fork keeps herdr showing the agent working
+  ("Waiting for 1 background agent to finish"), and the observer took working after a deny for the agent
+  carrying on by itself and dropped the continuation; when the fork reported, the agent answered its
+  notification only to say it had stopped and went idle, and the run ended with its report missing
+  (a rereview round on another repository, then talkable-esp#372, both on 2026-10-08). Now a deny on a claude agent whose transcript magnum reads
+  (the same file as the background wait's) stays pending while the agent works, and the message is typed
+  as soon as the transcript shows the turn cut by the rejection (the `[Request interrupted by user for tool
+  use]` line stamped after the deny) and the screen shows no dialog and a free composer, which Claude Code
+  accepts while its fork runs; an idle agent gets it as before. Any other kind, and a claude agent without a
+  transcript to read, keep the old rule (working after a deny is a resumption). Rejected: waiting for the
+  fork to end (the agent then answers its notification with the refusal still in force, and only a prompt
+  moves it) and sending the message blind on the tick after the deny (the screen may still show the
+  prompt, or text someone typed).
 - **A report is its run's only if its run verified it** (2026-10-06). Report paths are per head
   (`reviews/<owner>/<repo>/<N>/<sha>/<output>`), not per run, so a reviewer that kept working after its run
   ended can write where a later round on the same head looks. The round's start already set aside the files

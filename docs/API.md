@@ -1054,33 +1054,40 @@ func (m *Manager) ObserveSnapshotAt(ctx context.Context, snap herdr.Snapshot, ca
     capturedAt (read the clock before herdr's snapshot call), and returns one
     Observation per session:
 
-      - agent found (by name, else by pane): status/status_at stored; idle|done
-        increments idle_ticks, working|blocked resets it; a newly reported
-        agent_session.value becomes session_id; a starting session becomes
-        live. working + a submitted run -> run working (working_seen_at).
-        idle_ticks >= CompletionIdleTicks + a submitted/working run -> run
-        ended, ObsCompleted. working with no pending/submitted/working
-        run (outside a short grace after start/prompt) -> ObsHumanActive
-        (CooldownUntil set when it begins the PR's cooldown), unless the agent
-        is a claude agent whose transcript shows no prompt typed into the
-        pane after magnum's last prompt to it (magnum's turn going on after
-        esc cut it short, a turn a task notification began; see humanTurn),
-        or a judge still finishing the turn of a run the round settled on its
-        result file (see turnTail). blocked -> ObsBlocked, or ObsPromptDenied
-        when a pending/submitted/working run is in flight, the kind's
-        on_permission_prompt is "deny" and the screen shows a permission prompt,
-        which is answered No (see answerPermission; never without a run in
-        flight, where the human may be driving the agent, so an agent that
-        resumes working after a deny is never human_active). idle after such
-        a deny, with that run still in flight and the agent not seen working
-        since -> the kind's after_deny_prompt is sent (see continueAfterDeny),
-        ObsDenyContinued, and the run does not end. A claude agent idle with a
-        submitted/working run whose transcript shows background work started
-        during the run still running, or a task notification not answered yet,
-        counts as working for completion (idle_ticks 0, Background set; see
-        backgroundWait), until the pipeline tells it (Tell) to stop waiting for
-        that work. An agent of a kind named by a rename command (codex), working
-        on a submitted/working run, whose terminal title lacks Title gets that
+      - agent found (by name, else by pane): status/status_at stored;
+        idle|done increments idle_ticks, working|blocked resets it;
+        a newly reported agent_session.value becomes session_id;
+        a starting session becomes live. working + a submitted run -> run
+        working (working_seen_at). idle_ticks >= CompletionIdleTicks + a
+        submitted/working run -> run ended, ObsCompleted. working with no
+        pending/submitted/working run (outside a short grace after start/prompt)
+        -> ObsHumanActive (CooldownUntil set when it begins the PR's cooldown),
+        unless the agent is a claude agent whose transcript shows no prompt
+        typed into the pane after magnum's last prompt to it (magnum's turn
+        going on after esc cut it short, a turn a task notification began;
+        see humanTurn), or a judge still finishing the turn of a run the round
+        settled on its result file (see turnTail). blocked -> ObsBlocked,
+        or ObsPromptDenied when a pending/submitted/working run is in flight,
+        the kind's on_permission_prompt is "deny" and the screen shows a
+        permission prompt, which is answered No (see answerPermission;
+        never without a run in flight, where the human may be driving the agent,
+        so an agent that resumes working after a deny is never human_active).
+        idle after such a deny, with that run still in flight and the agent
+        not seen working since -> the kind's after_deny_prompt is sent (see
+        continueAfterDeny), ObsDenyContinued, and the run does not end. A claude
+        agent working after a deny has not resumed: Claude Code ends its turn
+        on a No, and only its background work (a forked /code-review) or the
+        turn that work's notification begins keeps it working, so its deny stays
+        pending, and the message is sent as soon as its transcript shows the
+        turn cut by the rejection and the composer is free (see denyPending);
+        any other kind, and a claude agent without a transcript to read,
+        carried on by itself. A claude agent idle with a submitted/working run
+        whose transcript shows background work started during the run still
+        running, or a task notification not answered yet, counts as working
+        for completion (idle_ticks 0, Background set; see backgroundWait),
+        until the pipeline tells it (Tell) to stop waiting for that work.
+        An agent of a kind named by a rename command (codex), working on a
+        submitted/working run, whose terminal title lacks Title gets that
         command (`/rename <Title>`) typed into its pane (at most once per call,
         TitleAttempts per session row; see nameAgent).
       - live agent session without its agent, or any session whose pane is gone

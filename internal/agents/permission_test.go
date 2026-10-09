@@ -634,3 +634,129 @@ func TestComposerEmpty(t *testing.T) {
 		}
 	}
 }
+
+// rejected is what Claude Code writes when a tool use is denied: the error
+// result, the interruption line and the end of the turn, all stamped at
+// once.
+func rejected(at time.Time, toolUseID string) []tline {
+	r := toolResult(at, toolUseID, "The user doesn't want to proceed with this tool use. The tool use was rejected "+
+		"(eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.", nil, true)
+	r["toolUseResult"], r["toolDenialKind"] = "User rejected tool use", "user-rejected"
+	return []tline{r, interruption(at, "p1"), turnEnded(at)}
+}
+
+// forkedThenDenied starts the claude agent on a run whose turn forked
+// /code-review into the background, then asks for an rm that magnum denies;
+// herdr keeps showing the agent working (its fork runs). It returns the run
+// id and when the deny was sent.
+func (e *env) forkedThenDenied(tr *transcript) (run string, denied time.Time) {
+	e.t.Helper()
+	run = e.promptClaude()
+	now := e.clock.Now()
+	tr.add(humanPrompt(now, "/code-review https://github.com/talkable/talkable/pull/11920 high"))
+	tr.addAll(skillForked(now.Add(5*time.Second), "toolu_skill1", "a2f00d"))
+	tr.add(toolUse(now.Add(time.Minute), "toolu_rm", "Bash", map[string]any{"command": `rm -rf "$S/run"`}))
+	e.clock.Add(time.Minute)
+	e.h.setAgentStatus(claudeAgent, herdr.StatusBlocked)
+	e.h.mu.Lock()
+	e.h.reads[claudeAgent] = claudeRmPrompt
+	e.h.keys = nil
+	e.h.mu.Unlock()
+	e.h.onKeys = resolveOn("2")
+	if o := e.observe()[RoleClaude]; o.Kind != ObsPromptDenied {
+		e.t.Fatalf("deny tick = %+v", o)
+	}
+	e.h.onKeys = nil
+	return run, e.clock.Now()
+}
+
+// The live case (two rounds on 2026-10-08): the deny ends Claude
+// Code's turn, but the /code-review fork it started keeps herdr showing the
+// agent working, so the observer took the agent for one that carried on by
+// itself and dropped the continuation; when the fork reported, the agent
+// answered that it had stopped, and the run ended without a report. The
+// transcript shows the turn cut by the rejection: the continuation is typed
+// then, into the free composer, and the run goes on.
+func TestObserveContinuesAfterADenyWhileTheAgentWaitsForItsBackgroundWork(t *testing.T) {
+	e := newEnv(t)
+	tr := e.claudeTranscript()
+	run, denied := e.forkedThenDenied(tr)
+	tr.addAll(rejected(denied, "toolu_rm"))
+
+	e.clock.Add(30 * time.Second)
+	o := e.observe()[RoleClaude]
+	if o.Kind != ObsDenyContinued || o.Status != herdr.StatusWorking || o.Run == nil || o.Run.ID != run ||
+		o.Session.IdleTicks != 0 || o.Session.LastPromptAt == nil {
+		t.Fatalf("working tick after the deny = %+v, want deny_continued", o)
+	}
+	if c := e.continuations(); len(c) != 1 || c[0].Target != claudeAgent {
+		t.Fatalf("continuations = %+v, want one to the agent", c)
+	}
+	if evs := e.promptEvents(EventDenyContinued); len(evs) != 1 || !strings.Contains(string(evs[0].Data), run) {
+		t.Fatalf("events = %+v, want one continuation", evs)
+	}
+	if r := e.run1(run); r.State != store.RunWorking {
+		t.Fatalf("run = %+v, want still working", r)
+	}
+	if pr := e.reloadPR(); pr.HumanActiveAt != nil {
+		t.Fatalf("human_active_at = %v after a deny", pr.HumanActiveAt)
+	}
+
+	// The agent takes the message and works on; its fork reports; the run
+	// ends as before, with no second message.
+	tr.add(humanPrompt(e.clock.Now(), config.DefaultAfterDenyPrompt))
+	e.clock.Add(30 * time.Second)
+	if o := e.observe()[RoleClaude]; o.Kind != "" || o.Status != herdr.StatusWorking {
+		t.Fatalf("working tick = %+v", o)
+	}
+	done := e.clock.Now()
+	tr.addAll(notification(done, "toolu_skill1", "a2f00d", "completed"))
+	tr.add(assistantSays(done.Add(2*time.Second), "Report written."), turnEnded(done.Add(3*time.Second)))
+	if o := e.idleTicks(2); o.Kind != ObsCompleted || o.Run == nil || o.Run.ID != run {
+		t.Fatalf("finish = %+v, want completed", o)
+	}
+	if n := len(e.continuations()); n != 1 {
+		t.Fatalf("continuations = %d, want 1", n)
+	}
+}
+
+// A deny stays pending while a claude agent works after it: before its
+// transcript shows the turn cut (the file lags the screen), while text sits
+// in its composer, and while it answers its fork's notification. The
+// continuation goes when the composer is free, here once the agent is idle.
+func TestADenyStaysPendingWhileAClaudeAgentWorksAfterIt(t *testing.T) {
+	e := newEnv(t)
+	tr := e.claudeTranscript()
+	run, denied := e.forkedThenDenied(tr)
+
+	e.clock.Add(30 * time.Second)
+	if o := e.observe()[RoleClaude]; o.Kind != "" || o.Status != herdr.StatusWorking || len(e.continuations()) != 0 {
+		t.Fatalf("working tick before the transcript caught up = %+v, continuations %d", o, len(e.continuations()))
+	}
+
+	tr.addAll(rejected(denied, "toolu_rm"))
+	e.h.mu.Lock()
+	e.h.reads[claudeAgent] = strings.Replace(claudeRejected, "│ >    │", "│ > finish the review without it │", 1)
+	e.h.mu.Unlock()
+	e.clock.Add(30 * time.Second)
+	if o := e.observe()[RoleClaude]; o.Kind != "" || len(e.continuations()) != 0 {
+		t.Fatalf("working tick with text in the composer = %+v, continuations %d", o, len(e.continuations()))
+	}
+
+	done := e.clock.Now()
+	tr.addAll(notification(done, "toolu_skill1", "a2f00d", "completed"))
+	tr.add(assistantSays(done.Add(2*time.Second), "I stopped when you rejected the command, and I have run nothing since."), turnEnded(done.Add(3*time.Second)))
+	e.clock.Add(30 * time.Second)
+	if o := e.observe()[RoleClaude]; o.Kind != "" || len(e.continuations()) != 0 {
+		t.Fatalf("working tick while the agent answers its notification = %+v, continuations %d", o, len(e.continuations()))
+	}
+	e.idleAfterDeny(claudeRejected)
+	e.clock.Add(30 * time.Second)
+	o := e.observe()[RoleClaude]
+	if o.Kind != ObsDenyContinued || o.Run == nil || o.Run.ID != run || len(e.continuations()) != 1 {
+		t.Fatalf("idle tick = %+v, continuations %d, want deny_continued", o, len(e.continuations()))
+	}
+	if r := e.run1(run); r.State == store.RunEnded || r.EndedAt != nil {
+		t.Fatalf("run = %+v, want still in flight", r)
+	}
+}

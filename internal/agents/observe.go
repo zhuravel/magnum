@@ -115,7 +115,14 @@ func (m *Manager) ObserveSnapshot(ctx context.Context, snap herdr.Snapshot) ([]O
 //     an agent that resumes working after a deny is never human_active).
 //     idle after such a deny, with that run still in flight and the agent
 //     not seen working since -> the kind's after_deny_prompt is sent (see
-//     continueAfterDeny), ObsDenyContinued, and the run does not end.
+//     continueAfterDeny), ObsDenyContinued, and the run does not end. A
+//     claude agent working after a deny has not resumed: Claude Code ends
+//     its turn on a No, and only its background work (a forked
+//     /code-review) or the turn that work's notification begins keeps it
+//     working, so its deny stays pending, and the message is sent as soon
+//     as its transcript shows the turn cut by the rejection and the
+//     composer is free (see denyPending); any other kind, and a claude
+//     agent without a transcript to read, carried on by itself.
 //     A claude agent idle with a submitted/working run whose transcript
 //     shows background work started during the run still running, or a
 //     task notification not answered yet, counts as working for completion
@@ -243,7 +250,15 @@ func (m *Manager) observeOne(ctx context.Context, s store.Session, snap herdr.Sn
 	}
 	switch {
 	case a.AgentStatus == herdr.StatusWorking:
-		m.denyResumed(s.ID)
+		switch pending, holds, cut := m.denyPending(s, sid, o.Run); {
+		case pending && cut && m.continueAfterDeny(ctx, s, *o.Run, ref):
+			o.Kind = ObsDenyContinued
+			if fresh, err := m.d.Store.SessionByID(ctx, s.ID); err == nil {
+				o.Session = fresh
+			}
+		case !holds:
+			m.denyResumed(s.ID)
+		}
 		turn := false // magnum's prompt is what the agent works on
 		for _, r := range runs {
 			if r.State == store.RunSubmitted {
