@@ -5609,3 +5609,17 @@ editing history. Code, config comments and prompts reference these by their head
   on either side), `git revert` of the version's commit (a three-way merge whose conflicts need a
   person; restoring the files and refusing when master changed them since is exact), and holding the
   revert's proposal until no other proposal waits (a regression would wait out a held proposal's week).
+- **A skill proposal nobody decided within a week expires** (2026-10-09, stage 5 of the self-improving
+  review loop). The spec's window (section 6) has proposals expire like a notes proposal, and no task
+  built it: a `held` proposal the operator never reviewed, or a `passed` one that never landed (the
+  day's landings, a restart never made, a checkout never clean), kept its worktree and branch and
+  blocked the scheduled editor, which waits while a proposal waits, for good. At the loop's scan
+  (`expireLearnProposals`, every 10 minutes, none in a dry run or `--once`) a `held` or `passed`
+  proposal made `engine.ProposalTTL` (7 days) ago or more becomes `expired` (compare-and-set from those
+  two states, so a landing or an answer that came first wins), with the reason "nobody decided it within
+  7 days" and `learn.expired` naming the state it left; its worktree and branch go (`dropCandidate`),
+  its inputs stay as they are (`DecideLearnProposal` moves none for this state), so a later edit takes
+  them again, and the registry keeps the row. No toast: the toast that held it said what to do. A
+  `gating` proposal is left to the gate, which always decides it. Rejected: counting the week from the
+  gate's decision (no column records it, and the editor's run is the same day in practice) and expiring
+  a gating proposal (its gate only waits for the budget or a pause).

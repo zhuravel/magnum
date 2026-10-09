@@ -89,10 +89,11 @@ func (e *Engine) learnOneAtATime() string {
 	return fmt.Sprintf("%s runs (started %s), and learn jobs run one at a time; ask again once it ends", job, since.Local().Format("15:04"))
 }
 
-// maybeLearnScan is the loop's scan, at most every learnCheckEvery: a
-// revert of a version that regressed (maybeRegression, learn_revert.go),
-// then the scheduled editor (maybeEdit). A dry run and `magnum daemon
-// --once` scan nothing.
+// maybeLearnScan is the loop's scan, at most every learnCheckEvery: the
+// proposals nobody decided within ProposalTTL expire
+// (expireLearnProposals), a version that regressed gets a revert
+// (maybeRegression, learn_revert.go), then the scheduled editor
+// (maybeEdit). A dry run and `magnum daemon --once` scan nothing.
 func (e *Engine) maybeLearnScan(ctx context.Context) {
 	if e.d.DryRun || e.once {
 		return
@@ -102,8 +103,39 @@ func (e *Engine) maybeLearnScan(ctx context.Context) {
 		return
 	}
 	e.learnChecked = now
+	e.expireLearnProposals(ctx)
 	e.maybeRegression(ctx)
 	e.maybeEdit(ctx)
+}
+
+// expireLearnProposals expires the proposals held for the operator or
+// passed for the landing that nobody decided within ProposalTTL of their
+// making, as a notes proposal expires: learn.expired, the worktree and the
+// branch go, and the inputs stay as they are (new, for a later edit). A
+// gating one is the gate's to decide; the registry keeps them all.
+func (e *Engine) expireLearnProposals(ctx context.Context) {
+	waiting, err := e.st.LearnProposals(ctx, []string{store.LearnHeld, store.LearnPassed})
+	if err != nil {
+		e.warnUnlessStopped(ctx, err, "skill proposals: list the waiting ones to expire")
+		return
+	}
+	now := e.now()
+	for _, p := range waiting {
+		if now.Sub(p.CreatedAt) < ProposalTTL {
+			continue
+		}
+		got, err := e.st.DecideLearnProposal(ctx, p.ID, []string{store.LearnHeld, store.LearnPassed}, store.LearnExpired,
+			"nobody decided it within 7 days", now, nil)
+		if err != nil {
+			if !errors.Is(err, store.ErrConflict) {
+				e.log.Warn("skill proposals: expire one", "proposal", p.ID, "err", err)
+			}
+			continue
+		}
+		e.dropCandidate(ctx, p.Scratch, p.Branch)
+		e.event(ctx, "info", learnSubject, "learn.expired", fmt.Sprintf("skill proposal %d expired: %s for 7 days and nobody decided it",
+			p.ID, p.State), map[string]any{"proposal": got.ID, "was": p.State})
+	}
 }
 
 // maybeEdit starts the scheduled editor when editWait lets it: it records
