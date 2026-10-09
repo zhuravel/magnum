@@ -285,10 +285,14 @@ WHERE l.kind = ? AND l.input_id = ? AND p.state = ? AND p.reason IS NOT NULL AND
 // replaces the stored one when not empty, gate the gate's result when not
 // nil, and a state that is a decision stamps decided_at with at (zero =
 // now). The inputs follow it in the same transaction (decideLearnInputs).
-// Landing sets nothing else: MarkLearnLanded records the commit.
+// It never lands one: LandLearnProposal records a landing with its commit
+// and its version.
 func (s *Store) DecideLearnProposal(ctx context.Context, id int64, from []string, to, reason string, at time.Time, gate []byte) (LearnProposal, error) {
 	if err := oneOf("learn proposal state", to, learnStates); err != nil {
 		return LearnProposal{}, fmt.Errorf("decide learn proposal %d: %w", id, err)
+	}
+	if to == LearnLanded {
+		return LearnProposal{}, fmt.Errorf("decide learn proposal %d: a landing is LandLearnProposal's, with its commit and its version", id)
 	}
 	if gate != nil && !json.Valid(gate) {
 		return LearnProposal{}, fmt.Errorf("decide learn proposal %d: the gate is not JSON", id)
@@ -328,32 +332,50 @@ func (s *Store) DecideLearnProposal(ctx context.Context, id int64, from []string
 	return out, nil
 }
 
-// MarkLearnLanded records the commit landed proposal id moved master to
-// and when (zero = now); ErrConflict when the proposal is not landed, and
-// a second mark changes nothing (the first landing stands).
-func (s *Store) MarkLearnLanded(ctx context.Context, id int64, sha string, at time.Time) error {
-	if sha == "" {
-		return fmt.Errorf("mark learn proposal %d landed: no commit", id)
+// LandLearnProposal records that proposal id landed, in one transaction:
+// it moves from one of from to landed (compare-and-set, ErrConflict when
+// it is in another state), decided_at and landed_at become v.LandedAt
+// (zero = now) and landed_sha v.LandedSHA, its noted inputs become used
+// (decideLearnInputs), and v is stored as the version that landed, its
+// ProposalID id (LandedSHA, SkillSHA and PromptsSHA are required, as for
+// CreateLearnVersion). Nothing of it is written when any of it fails, so a
+// landed proposal always has its commit and its version.
+func (s *Store) LandLearnProposal(ctx context.Context, id int64, from []string, v LearnVersion) (LearnProposal, LearnVersion, error) {
+	if v.LandedSHA == "" || v.SkillSHA == "" || v.PromptsSHA == "" {
+		return LearnProposal{}, LearnVersion{}, fmt.Errorf("land learn proposal %d: landed_sha, skill_sha and prompts_sha are required", id)
 	}
-	if at.IsZero() {
-		at = s.now()
+	if v.LandedAt.IsZero() {
+		v.LandedAt = s.now()
 	}
+	v.ProposalID = id
+	var p LearnProposal
 	err := s.tx(ctx, func(tx *sql.Tx) error {
-		p, err := learnProposalByID(ctx, tx, id)
+		cur, err := learnProposalByID(ctx, tx, id)
 		if err != nil {
 			return err
 		}
-		if p.State != LearnLanded {
-			return fmt.Errorf("%w: learn proposal %d is %s", ErrConflict, id, p.State)
+		if !slices.Contains(from, cur.State) {
+			return fmt.Errorf("%w: learn proposal %d is %s", ErrConflict, id, cur.State)
 		}
-		_, err = tx.ExecContext(ctx, "UPDATE learn_proposals SET landed_sha = ?, landed_at = ? WHERE id = ? AND landed_sha IS NULL",
-			sha, FormatTime(at), id)
+		at := FormatTime(v.LandedAt)
+		if _, err := tx.ExecContext(ctx, "UPDATE learn_proposals SET state = ?, decided_at = ?, landed_sha = ?, landed_at = ? WHERE id = ?",
+			LearnLanded, at, v.LandedSHA, at, id); err != nil {
+			return err
+		}
+		if err := decideLearnInputs(ctx, tx, id, LearnLanded, v.LandedAt); err != nil {
+			return err
+		}
+		if v, err = scanLearnVersion(tx.QueryRowContext(ctx, `INSERT INTO learn_versions (proposal_id, landed_sha, skill_sha, prompts_sha,
+  landed_at) VALUES (?, ?, ?, ?, ?) RETURNING `+learnVersionColumns, id, v.LandedSHA, v.SkillSHA, v.PromptsSHA, at)); err != nil {
+			return mapErr(err)
+		}
+		p, err = learnProposalByID(ctx, tx, id)
 		return err
 	})
 	if err != nil {
-		return fmt.Errorf("mark learn proposal %d landed: %w", id, err)
+		return LearnProposal{}, LearnVersion{}, fmt.Errorf("land learn proposal %d: %w", id, err)
 	}
-	return nil
+	return p, v, nil
 }
 
 // decideLearnInputs moves the inputs of proposal id as its new state to

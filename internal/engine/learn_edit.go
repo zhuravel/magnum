@@ -120,7 +120,8 @@ type LearnGit interface {
 	BranchDelete(ctx context.Context, mainClone, branch string, force bool) error
 	InProgress(ctx context.Context, repo string) (string, error)
 	MergeBase(ctx context.Context, dir, a, b string) (string, error)
-	RebaseOnto(ctx context.Context, dir, onto string) error
+	RebaseOnto(ctx context.Context, dir, onto, upstream string) error
+	PatchID(ctx context.Context, dir, rev string) (string, error)
 	DirtyPaths(ctx context.Context, dir string, paths ...string) ([]string, error)
 	MergeFFOnly(ctx context.Context, repo, branch string) error
 	RestoreFrom(ctx context.Context, dir, rev string, paths ...string) error
@@ -1078,7 +1079,9 @@ func (e *Engine) requestEdit(ctx context.Context, _ LearnProposePayload) (string
 // reads; its worktree and branch go, its inputs go back to new or, once in
 // two rejected proposals, are dismissed, and the learned corpus is
 // rewritten at once, so a dismissed input's case is not replayed until the
-// next retro (Amendment A3).
+// next retro (Amendment A3). One whose branch master holds already (a
+// landing the operator asked for, cut short after the fast-forward) is
+// recorded as landed instead (learn_land.go), and the answer says so.
 func (e *Engine) requestLearnReject(ctx context.Context, p LearnDecisionPayload) (string, error) {
 	prop, err := e.st.LearnProposalByID(ctx, p.ID)
 	if errors.Is(err, store.ErrNotFound) {
@@ -1089,6 +1092,17 @@ func (e *Engine) requestLearnReject(ctx context.Context, p LearnDecisionPayload)
 	}
 	if prop.State != store.LearnHeld {
 		return "", fmt.Errorf("proposal %d is %s: only a held proposal waits for review", p.ID, prop.State)
+	}
+	if landed, ok, err := e.landedAlready(ctx, prop); err != nil {
+		return "", err
+	} else if ok && !e.d.DryRun {
+		_, v, err := e.recordLanding(context.WithoutCancel(ctx), prop, landed, true)
+		if err != nil {
+			return "", fmt.Errorf("proposal %d is on master already as %s (a landing cut short), and recording it failed: %w", p.ID,
+				learnShort(landed), err)
+		}
+		return "", fmt.Errorf("proposal %d was not rejected: it is on master already as %s (a landing cut short), now recorded as skill version %d",
+			p.ID, learnShort(landed), v.ID)
 	}
 	if _, err := e.st.DecideLearnProposal(ctx, p.ID, []string{store.LearnHeld}, store.LearnRejected, strings.TrimSpace(p.Reason), e.now(), nil); err != nil {
 		return "", err

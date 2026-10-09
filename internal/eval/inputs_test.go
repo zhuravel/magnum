@@ -137,3 +137,32 @@ func TestBaselinesLeaveOutJudgeOnlyReplays(t *testing.T) {
 		t.Fatalf("Baselines = %+v, want the full replay alone", got)
 	}
 }
+
+// A judge's baseline for a judge-only comparison read the same reviewer reports: the full run that
+// made them, when its judge read the same inputs, or a judge-only replay on them; a replay on
+// another run's reports, with other inputs, from a dirty checkout or unscored is none.
+func TestJudgeBaselinesTakeOnlyTheSameReports(t *testing.T) {
+	c := Case{Name: "geo", Head: sha}
+	scored := &Score{Found: 1, Total: 2}
+	runs := []Run{
+		{ID: "1-full", Inputs: "aaa", Cases: []CaseRun{{Case: "geo", Head: sha, Score: scored}}},
+		{ID: "2-full-other-judge", Inputs: "bbb", Cases: []CaseRun{{Case: "geo", Head: sha, Score: scored}}},
+		{ID: "3-judge-on-2", Inputs: "aaa", Commit: "c3", Cases: []CaseRun{{Case: "geo", Head: sha, Score: scored, JudgeOnly: true, ReportsRun: "2-full-other-judge"}}},
+		{ID: "4-judge-on-1", Inputs: "aaa", Cases: []CaseRun{{Case: "geo", Head: sha, Score: scored, JudgeOnly: true, ReportsRun: "1-full"}}},
+		{ID: "5-dirty", Inputs: "aaa", Dirty: true, Cases: []CaseRun{{Case: "geo", Head: sha, Score: scored, JudgeOnly: true, ReportsRun: "2-full-other-judge"}}},
+		{ID: "6-unscored", Inputs: "aaa", Cases: []CaseRun{{Case: "geo", Head: sha, JudgeOnly: true, ReportsRun: "2-full-other-judge"}}},
+		{ID: "7-other-inputs", Inputs: "ccc", Cases: []CaseRun{{Case: "geo", Head: sha, Score: scored, JudgeOnly: true, ReportsRun: "2-full-other-judge"}}},
+	}
+	if got := JudgeBaselines(runs, "aaa", c, "2-full-other-judge"); len(got) != 1 || got[0].Run != "3-judge-on-2" || got[0].Commit != "c3" {
+		t.Fatalf("JudgeBaselines on 2 = %+v, want the judge-only replay on its reports", got)
+	}
+	if got := JudgeBaselines(runs, "aaa", c, "1-full"); len(got) != 2 || got[0].Run != "4-judge-on-1" || got[1].Run != "1-full" {
+		t.Fatalf("JudgeBaselines on 1 = %+v, want the replay on its reports, then the full run itself", got)
+	}
+	if got := JudgeBaselines(runs, "bbb", c, "1-full"); len(got) != 0 {
+		t.Fatalf("JudgeBaselines with other inputs = %+v", got)
+	}
+	if got := JudgeBaselines(runs, "", c, "1-full"); len(got) != 0 {
+		t.Fatalf("unknown inputs reuse %+v", got)
+	}
+}

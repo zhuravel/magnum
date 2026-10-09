@@ -5704,3 +5704,104 @@ skill versions, which its first entry creates); people add theirs to the section
   timed-out turn whose check passes is still a candidate, and one timeout of the two is still judged
   by what the agent wrote. Rejected: stopping at the first timeout (the nudge often finishes the
   work an interrupted turn started).
+- **The gate's baseline is the proposal's base commit** (2026-10-09, review of stage 4 of the
+  self-improving review loop). The baseline read `prompts/` and `SKILL.md` from the checkout's working
+  tree (the inputs hash and the replay of the checkout), whatever branch the operator had checked out and
+  whatever he left uncommitted: a worse experiment in a judge prompt made the target look improved, and a
+  commit on `master` after the edit that finds a defect made the candidate lose it for a change it never
+  made. The gate now adds a detached worktree at the proposal's `base_sha` under the learn worktrees
+  (`gate-base`, in place of one a crash left), hashes the baseline's inputs and replays the baseline
+  there, and removes it whatever ends the gate. Each eval run of the gate records the commit and the dirty
+  state of the tree it read (the base's worktree, the proposal's), no longer the checkout's: since
+  `eval.Baselines` reuses no dirty run, any uncommitted file in the checkout kept every later gate from
+  reusing a baseline. Rejected: waiting while the checkout is not on `master` at the base or has dirty
+  prompts (the operator's own work would stall the loop) and comparing against `master`'s head (the gate
+  measures the change the editor made, on the tree it made it on; the landing checks what `master` became
+  since).
+- **A gate that cannot score stops instead of deciding** (2026-10-09, review of stage 4 of the
+  self-improving review loop). A replay that ended without a score for any reason but the budget, a usage
+  limit or a login (herdr restarting, a GitHub read that failed, `needs_attention`, a judge's timeout)
+  became a skipped row, and a proposal none of whose targets was compared was held, which never goes back
+  to `gating`: a herdr restart settled a proposal for good. Now a target's replay or its baseline's, or
+  the second replay of a lost case (whose loss would otherwise count), that ends without a score stops the
+  gate like the soft cap does: the proposal stays `gating` and the gate waits out its 30 minutes. Only the
+  third gate of the proposal that stops so (`learn.gate_stops` counts them, cleared by a verdict) holds
+  it, naming the replay, since a replay that never scores (a pull request GitHub no longer serves) would
+  keep the oldest gating proposal, and the editor and the gates behind it, waiting for good. A case that
+  is no target and ends without a score is still left out of the verdict, as a flagged one is. The gate
+  also checks what holds it (`gateHold`: a drain, an infrastructure pause, `magnum pause`, a paused
+  reviewing CLI) before each replay, not only when it starts, so `daemon-restart --drain` no longer waits
+  for hours of replays, and a verdict the registry did not take (`gateDecide` failing) stops the gate
+  short too, so the next tick does not replay every case again. Rejected: holding at once, as the spec's
+  hold reasons do (those are about the corpus, which a later try does not change), and retrying without a
+  bound.
+- **A judge-only gate compares both judges on the same reports** (2026-10-09, review of stage 4 of the
+  self-improving review loop). In judge-only mode the candidate's judge read the reviewer reports of the
+  case's newest full replay whose reviewers read the candidate's prompts (`eval.FullReplayFor`), while its
+  baseline was the newest replay with the base's inputs (`eval.Baselines`), often another full replay
+  whose reviewers had found more or less: the reviewers' variance, not the judge change, decided the case.
+  Now both read the reports of that full replay (`GateCase.ReportsRun` in `gate_json`): the baseline is
+  that replay itself when its judge read the base's inputs, else a replay of the base's judge alone on
+  its reports, stored (`eval.JudgeBaselines` finds it, or a full replay's own case, for a later gate) or
+  made in a run of its own ("baseline judge"); a case with no such full replay gets the base's full
+  replay as its baseline, whose reports the candidate's judge then reads, and a judge that read another
+  run's reports (a full replay newer than the gate's choice) counts as a replay without a score. Rejected:
+  replaying the base in full whenever the stored baseline is another run (twice the cost of the judge
+  alone, and the reports would differ again).
+- **A landing replays the candidate alone, on a master that still holds its base** (2026-10-09, review
+  of stage 4 of the self-improving review loop). The landing rebased when `master` was not the merge base
+  and ran `git rebase master`, which replays every commit of `master..branch`: when the operator dropped a
+  commit from `master` after the branch was cut on it (`git reset --hard HEAD~1`), the merge base was the
+  new `master`, nothing was rebased, and the fast-forward brought the dropped commit back. Now `master`
+  must still hold the proposal's `base_sha` (else the proposal is held: the gate measured it on a base
+  `master` no longer has), and the rebase is `git rebase --onto master <upstream>` (`gitx.RebaseOnto`
+  takes the upstream), the upstream being the base, so only the candidate's commit is replayed. A branch
+  that moved from the candidate's commit was accepted whatever it held, so a commit made in its worktree
+  landed ungated; now a moved head is accepted only as the candidate an earlier landing rebased: a single
+  commit (no second parent) on a commit `master` holds whose patch id (`gitx.PatchID`, `git patch-id
+  --stable` over a diff with no context lines, so a `master` that changed lines near the candidate's does
+  not change it) is the candidate's, and its own parent is then the rebase's upstream. Rejected: requiring
+  `master` to equal `base_sha` (any commit of the operator's would hold every proposal) and patch ids over
+  the default three context lines (a clean rebase near the operator's edit would read as a foreign commit
+  and hold the proposal for good).
+- **A landing is recorded in one transaction, and a landing cut short is recorded wherever it is found**
+  (2026-10-09, review of stage 4 of the self-improving review loop). After the fast-forward the landing
+  wrote the state, the commit (`MarkLearnLanded`) and the version (`CreateLearnVersion`) separately, an
+  error of the last two only logged ("skill version 0"), and only a `passed` proposal found on `master`
+  was recovered: a crash after the merge of a landing the operator asked for left it `held` with its
+  commit on `master`, and his `n` then rejected it and deleted its branch; a crash after the state change
+  left a landed proposal without its commit or its version. Now `store.LandLearnProposal` writes the
+  state, `landed_sha`, `landed_at`, the inputs and the version in one transaction (`DecideLearnProposal`
+  refuses `landed`, and `MarkLearnLanded` is gone), and a proposal whose branch `master` holds is recorded
+  as landed by the landing before any check of the checkout, by the operator's `n` (refused, saying so)
+  and by the expiry (instead of expiring it). The rebase, the dirty check, the fast-forward and the read
+  of the new `master` run on `context.WithoutCancel` with a 5-minute timeout, so a stop no longer cuts the
+  landing between them. A start that finds no `KVLearnRestart` marks the newest version restarted when it
+  never was (a crash between the transaction and the key). Rejected: writing the restart mark in the same
+  transaction (the store would encode the engine's mark) and scanning every waiting proposal at startup
+  (the landing, the answer and the expiry already meet each one).
+- **The operator's y waits for the restart, and the tree that lands must render** (2026-10-09, review of
+  stage 4 of the self-improving review loop). The tick lands nothing before the daemon restarted on the
+  version landed last, and the landing's entry rejects landing two versions before a restart, but
+  `requestLearnLand` did not check it: the operator's `y` could land a second version the first would
+  never run without. It is now refused while `KVLearnRestart` names a version, with "ask again after the
+  restart". And the landing never checked the tree it fast-forwards to: an operator's commit that renamed
+  a template field rebased cleanly under a candidate that still used the old one, landed, and the idle
+  restart refused to start ("do not render with this build") with launchd starting it again and again.
+  The landing now runs `CheckPrompts` on the config pointed at the worktree (`WithCandidate`), after the
+  rebase and before the fast-forward, every time (the build may also have changed since the edit), and
+  holds the proposal when it fails. Rejected: checking only after a rebase (a daemon rebuilt since the edit
+  renders with other data too).
+- **What the gate cannot read stops it, and a restart starts every version waiting for one** (2026-10-09,
+  review of the stage 4 fixes of the self-improving review loop). A corpus the gate could not read left
+  every target "not in the corpus" and a list of flagged replays it could not read flagged every pull
+  request, so a passing read error held the proposal for good, as a replay without a score did; both now
+  stop the gate before any replay and count toward the third stop that holds it. A branch was recorded
+  as a landing cut short whenever `master` held its head, a branch reset below its base included; it must
+  now also descend from the proposal's base. A start marked only the version its mark named (or the
+  newest without one), so a version whose mark a later recorded landing replaced never got a window;
+  every version not restarted on yet is now marked at the start (one that never ran alone has an empty
+  window). And a tree whose status cannot be read is recorded dirty in the gate's run, so no later gate
+  reuses an unverified baseline. Rejected: holding at once on an unreadable corpus (the operator's next
+  save of the file fixes it) and a registry error on a single pull request's Codex flag as a stop (it
+  counts as flagged: a pull request that may be flagged is never replayed).

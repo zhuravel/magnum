@@ -1712,31 +1712,48 @@ The gate then decides the proposal with the eval, in the daemon's process, one c
 are the learned cases of the inputs it noted (its targets: `miss-<n>`, `decline-<n>`), then the newest other
 cases of your corpus and the learned one, up to `gate_cases` (6); a case whose pull request is in no watch
 or Codex-flagged is never replayed. Only the judge replays when the change touches `SKILL.md` and
-`prompts/judge-*.md` alone (on the reviewers' reports of a full replay whose reviewers read the same
-prompts), every role otherwise. A case's baseline is the newest stored replay with `master`'s prompts and
-skill, else a replay of the checkout first; the candidate replays with the worktree, and a case it lost is
-replayed once more. It passes when a target improved (the missed finding found, the declined one no longer
-reported) and nothing regressed (no defect the baseline found lost, no declined finding reported that the
-baseline did not), fails when something regressed or no target improved (its worktree and branch go, its
-inputs stay `new`), and is held for you when none of its targets could be replayed. Its replays are stored
-like `magnum eval run`'s (`magnum eval list` shows them), and the result with the proposal. The gate waits
+`prompts/judge-*.md` alone (on the reviewers' reports of the newest full replay whose reviewers read the
+same prompts), every role otherwise; then both judges read the same reports, so the baseline is that full
+replay when the judge it compares against made it, else that judge replayed alone on those reports. A
+case's baseline is the newest stored replay with the prompts and skill of
+the commit the proposal started from, else a replay of that commit first, from a worktree of its own that
+goes after the gate (never the checkout: the branch you have checked out and your uncommitted edits are no
+baseline); the candidate replays with the worktree, and a case it lost is replayed once more. It passes
+when a target improved (the missed finding found, the declined one no longer reported) and nothing
+regressed (no defect the baseline found lost, no declined finding reported that the baseline did not),
+fails when something regressed or no target improved (its worktree and branch go, its inputs stay `new`),
+and is held for you when none of its targets could be replayed. Its replays are stored like `magnum eval
+run`'s (`magnum eval list` shows them), and the result with the proposal. The gate waits
 while the Codex budget is at `[usage] codex_soft` (one toast per window), under a drain, `magnum pause` or a
-paused reviewing CLI, and counts as background work for a restart.
+paused reviewing CLI (checked before each replay, so one that comes while it runs stops it), and counts as
+background work for a restart. A replay of a target or of its baseline, or the second replay of a lost
+case, that ends without a score (herdr away, a GitHub read that failed, a judge that timed out) stops the
+gate instead of deciding without it: the proposal stays `gating` and the gate tries again 30 minutes later,
+and only the third gate of it that stops so holds it for you, naming the replay. A corpus or a list of
+flagged replays the gate cannot read stops it the same way, before any replay.
 
 A `passed` proposal lands at the next tick, at most `land_per_day` (1) a local day and not before the
 daemon restarted on the previous landed version, and never while a gate or an edit runs. The landing
 works on the checkout's `master` and holds the proposal for you (a toast, `magnum learn --review`) when it
 cannot go on: the checkout must have `master` checked out with no rebase, merge or cherry-pick in progress;
-when `master` moved since the proposal's base, its branch is rebased once in its worktree, and a conflict
-holds it; the files it changes must have no uncommitted change in the checkout (your edit of `SKILL.md`
-is never merged over). Then `master` fast-forwards to the branch (`git merge --ff-only`), the branch and
-the worktree go, its noted inputs become `used`, and a skill version records the commit and the hashes of
-the skill and the prompts it landed. Nothing is pushed: `magnum learn` says how many landed versions
+the branch must hold the proposal's commit, or that commit as an earlier landing rebased it (one commit on
+`master` with the same patch id: a commit made in its worktree holds it); `master` must still hold the
+proposal's base (one you reset below it holds it); when `master` moved past the base, the proposal's commit
+alone is rebased once in its worktree (`git rebase --onto master <base>`), and a conflict holds it; its
+prompts must render with the daemon's build, as the restart on it checks first (a commit of yours that
+renamed a template field the candidate still uses holds it); the files it changes must have no uncommitted
+change in the checkout (your edit of `SKILL.md` is never merged over). Then `master` fast-forwards to the branch (`git merge --ff-only`; the rebase and the
+fast-forward are not cut short by a daemon that stops), the proposal is `landed` with its commit, its
+noted inputs become `used` and a skill version records the commit and the hashes of the skill and the
+prompts it landed, all in one registry transaction, and the branch and the worktree go. A landing a crash
+cut short after the fast-forward is recorded as landed at the next try, and so is a `held` one you answer
+`n` (the answer says so) or one that would expire. Nothing is pushed: `magnum learn` says how many landed versions
 `origin/master` does not hold yet. The daemon reads its prompts and skill when it starts, so with `restart
 = "idle"` it exits at the first tick with no round, retro, notes curation, edit or gate in flight, and
 launchd starts it on the landed version; with `restart = "manual"`, or a daemon launchd does not run, a
 toast and `magnum status` ask for `magnum daemon-restart --when-idle`. The next start marks the version
-restarted, which starts its measurement window. `magnum status` has a `learn:` line (the newest
+restarted (the newest version, when a crash kept the landing from noting the restart it waits for), which
+starts its measurement window. `magnum status` has a `learn:` line (the newest
 proposal, the held, passed and gating ones, a restart waiting), and the board's and the dashboard's titles
 count the held proposals ("2 skill proposals to review", "skill ×2" when space is short).
 
@@ -1769,8 +1786,9 @@ paused). `magnum learn --review` shows the oldest `held` proposal, one the gate 
 input with its title and lesson and what the editor did with it, the diff of each file its commit changes
 against the `master` it started from (from the checkout's `learn/<run>` branch), its design-log entry and
 the gate's table (each case's baseline and candidate scores, a target starred), and asks y/N on a terminal
-(`--json` prints it instead). `y` asks the daemon to land it at once, whatever the day's count says (the
-answer says why when it stays held); `n` rejects it with `--reason`, which the next
+(`--json` prints it instead). `y` asks the daemon to land it at once, whatever the day's count says, but
+not before the daemon restarted on the version landed last (ask again after the restart; the answer says
+why when it stays held); `n` rejects it with `--reason`, which the next
 edit reads: the daemon removes its worktree and branch, its inputs go back to `new`, an input in two
 rejected proposals is `dismissed`, and the learned eval corpus is rewritten at once, so a dismissed input's
 case is gone from the next `magnum eval run`; anything else leaves it. A `held` or `passed` proposal

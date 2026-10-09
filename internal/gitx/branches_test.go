@@ -141,16 +141,17 @@ func TestRebaseOntoReportsAConflictAndAborts(t *testing.T) {
 	dir := learnWorktree(t, fx, "learn/a")
 	fx.commit(dir, "docs/a.md", "a\n", "a")
 	fx.commit(fx.clone, "docs/main.md", "main moves\n", "main moves")
-	if err := fx.c.RebaseOnto(ctx, dir, "main"); err != nil {
+	if err := fx.c.RebaseOnto(ctx, dir, "main", fx.base); err != nil {
 		t.Fatalf("a clean rebase: %v", err)
 	}
 	if fx.git(dir, "rev-parse", "HEAD~1") != fx.git(fx.clone, "rev-parse", "main") {
 		t.Fatal("the branch is not on main after the rebase")
 	}
 
+	upstream := fx.git(fx.clone, "rev-parse", "main")
 	before := fx.commit(dir, "README.md", "hello, branch\n", "branch edits the readme")
 	fx.commit(fx.clone, "README.md", "hello, main\n", "main edits the readme")
-	err := fx.c.RebaseOnto(ctx, dir, "main")
+	err := fx.c.RebaseOnto(ctx, dir, "main", upstream)
 	if !errors.Is(err, ErrRebaseConflict) {
 		t.Fatalf("a conflicting rebase = %v, want ErrRebaseConflict", err)
 	}
@@ -162,6 +163,68 @@ func TestRebaseOntoReportsAConflictAndAborts(t *testing.T) {
 	}
 	if b, _ := fx.c.CurrentBranch(ctx, dir); b != "learn/a" {
 		t.Fatalf("branch after the abort = %q", b)
+	}
+	if err := fx.c.RebaseOnto(ctx, dir, "main", "-x"); err == nil {
+		t.Fatal("an option as the upstream was taken")
+	}
+}
+
+// A rebase replays only the commits after upstream: when the operator
+// dropped a commit from main after the branch was cut on it (`git reset
+// --hard HEAD~1`), the branch rebased onto main with its base as upstream
+// lands without it, where `git rebase main` would bring it back.
+func TestRebaseOntoLeavesOutACommitMainDropped(t *testing.T) {
+	fx := newFixture(t)
+	ctx := context.Background()
+	dropped := fx.commit(fx.clone, "docs/dropped.md", "a commit the operator drops\n", "dropped")
+	dir := learnWorktree(t, fx, "learn/a")
+	fx.commit(dir, "docs/a.md", "the candidate\n", "the candidate")
+	fx.git(fx.clone, "reset", "--quiet", "--hard", "HEAD~1")
+	if err := fx.c.RebaseOnto(ctx, dir, "main", dropped); err != nil {
+		t.Fatalf("RebaseOnto: %v", err)
+	}
+	if fx.git(dir, "rev-parse", "HEAD~1") != fx.git(fx.clone, "rev-parse", "main") {
+		t.Fatal("the branch is not a single commit on main after the rebase")
+	}
+	if err := fx.c.MergeFFOnly(ctx, fx.clone, "learn/a"); err != nil {
+		t.Fatalf("MergeFFOnly: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(fx.clone, "docs", "dropped.md")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the dropped commit came back with the landing: %v", err)
+	}
+	if b, err := os.ReadFile(filepath.Join(fx.clone, "docs", "a.md")); err != nil || string(b) != "the candidate\n" {
+		t.Fatalf("the candidate's file = %q, %v", b, err)
+	}
+}
+
+// A candidate rebased onto a main that changed a line near its own keeps
+// its patch id (no context lines count); a commit that changes anything
+// else has another.
+func TestPatchIDIsTheSameForTheCandidateRebased(t *testing.T) {
+	fx := newFixture(t)
+	ctx := context.Background()
+	const text = "one\ntwo\nthree\nfour\nfive\nsix\nseven\n"
+	base := fx.commit(fx.clone, "docs/skill.md", text, "the skill")
+	dir := learnWorktree(t, fx, "learn/a")
+	cand := fx.commit(dir, "docs/skill.md", strings.Replace(text, "five", "FIVE", 1), "the candidate")
+	fx.commit(fx.clone, "docs/skill.md", strings.Replace(text, "two", "TWO", 1), "main edits a line of the candidate's context")
+	if err := fx.c.RebaseOnto(ctx, dir, "main", base); err != nil {
+		t.Fatalf("RebaseOnto: %v", err)
+	}
+	rebased := fx.git(dir, "rev-parse", "HEAD")
+	id, err := fx.c.PatchID(ctx, dir, cand)
+	if err != nil || len(id) != 40 {
+		t.Fatalf("PatchID(candidate) = %q, %v", id, err)
+	}
+	if got, err := fx.c.PatchID(ctx, dir, rebased); err != nil || got != id || rebased == cand {
+		t.Fatalf("PatchID(rebased %s) = %q, %v; want the candidate's %s", rebased, got, err, id)
+	}
+	more := fx.commit(dir, "docs/skill.md", strings.Replace(text, "five", "FIVE, and more", 1), "a commit made in the worktree")
+	if got, err := fx.c.PatchID(ctx, dir, more); err != nil || got == id {
+		t.Fatalf("PatchID(another change) = %q, %v; want other than %s", got, err, id)
+	}
+	if _, err := fx.c.PatchID(ctx, dir, "-x"); err == nil {
+		t.Fatal("an option as the commit was taken")
 	}
 }
 

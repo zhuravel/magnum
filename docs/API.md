@@ -5609,20 +5609,22 @@ type EvalGateOptions struct {
 	AgentTag  string
 }
     EvalGateOptions are one replay of the gate (evalrun.Options' part the gate
-    sets): the directory whose prompts and judge skill it reads (the checkout
-    for a baseline, the proposal's worktree for the candidate), whether the
-    judge alone reviews (on the reviewers' reports of the case's newest full
-    replay whose reviewers read what this one's would), and the run it belongs
-    to, its directory under Layout.Eval and its agent tag (eval.AgentTag),
-    both its own.
+    sets): the directory whose prompts and judge skill it reads (the gate's
+    worktree of the base for a baseline, the proposal's worktree for the
+    candidate), whether the judge alone reviews (on the reviewers' reports of
+    the case's newest full replay whose reviewers read what this one's would),
+    and the run it belongs to, its directory under Layout.Eval and its agent tag
+    (eval.AgentTag), both its own.
 
 type GateCase struct {
 	learn.GateRow
 	BaselineRun  string `json:"baseline_run,omitempty"`
 	CandidateRun string `json:"candidate_run,omitempty"` // a second replay's when Retried
+	ReportsRun   string `json:"reports_run,omitempty"`
 }
-    GateCase is one case of a gate's result: the row learn.Judge read and the
-    eval runs its two scores come from.
+    GateCase is one case of a gate's result: the row learn.Judge read, the
+    eval runs its two scores come from and, judge-only, the full replay whose
+    reviewer reports both judges read.
 
 type GateMark struct {
 	Proposal int64     `json:"proposal"`
@@ -5734,7 +5736,8 @@ type LearnGit interface {
 	BranchDelete(ctx context.Context, mainClone, branch string, force bool) error
 	InProgress(ctx context.Context, repo string) (string, error)
 	MergeBase(ctx context.Context, dir, a, b string) (string, error)
-	RebaseOnto(ctx context.Context, dir, onto string) error
+	RebaseOnto(ctx context.Context, dir, onto, upstream string) error
+	PatchID(ctx context.Context, dir, rev string) (string, error)
 	DirtyPaths(ctx context.Context, dir string, paths ...string) ([]string, error)
 	MergeFFOnly(ctx context.Context, repo, branch string) error
 	RestoreFrom(ctx context.Context, dir, rev string, paths ...string) error
@@ -6326,6 +6329,16 @@ func Baselines(runs []Run, inputs string, c Case) []Baseline
     Unknown inputs ("") reuse nothing. The inputs leave magnum's code out,
     so the caller decides whether the code of Commit reviews as its own does
     (eval-at.sh compares the Go files of the two commits).
+
+func JudgeBaselines(runs []Run, inputs string, c Case, reports string) []Baseline
+    JudgeBaselines lists, newest run first, the stored replays of c whose
+    judge read inputs on the reviewer reports of run reports (the full replay a
+    judge-only replay of c takes them from, FullReplayFor): that run's own case
+    of c when it recorded inputs, and judge-only replays of c on its reports
+    (CaseRun.ReportsRun) that recorded inputs; clean runs with a score only,
+    as for Baselines. Comparing a judge-only candidate with one of these,
+    never with another full replay, keeps the reviewers' variance between two
+    full replays out of the comparison.
 
 type Case struct {
 	Name    string   `toml:"name"`           // unique, [a-z0-9][a-z0-9-]{0,47}
@@ -8126,8 +8139,18 @@ func (c *Client) OwnerUsesSSH(ctx context.Context, cloneRoot, owner string) (boo
     until the clone's config changes), so right after a FindClone miss over the
     same root it costs no subprocess. A missing root is (false, nil).
 
-func (c *Client) RebaseOnto(ctx context.Context, dir, onto string) error
-    RebaseOnto rebases the branch checked out at dir onto onto, unsigned.
+func (c *Client) PatchID(ctx context.Context, dir, rev string) (string, error)
+    PatchID is the stable patch id of commit rev's change from its first
+    parent (`git diff-tree --patch --unified=0 rev | git patch-id --stable`):
+    with no context lines, a commit rebased onto a branch that changed lines
+    near its own keeps the id it had, and a commit that changes anything else
+    has another. An error for a commit with no change to hash.
+
+func (c *Client) RebaseOnto(ctx context.Context, dir, onto, upstream string) error
+    RebaseOnto replays the commits of the branch checked out at dir that
+    follow upstream onto onto, unsigned (`git rebase --onto onto upstream`):
+    only those, so a commit onto no longer has (one the operator dropped from
+    master after the branch was cut on it) does not come back with them.
     A rebase that stops (a conflict) is aborted, so the branch and its work tree
     are as they were, and the error is ErrRebaseConflict.
 
@@ -15033,10 +15056,10 @@ func (s *Store) DB() *sql.DB
 func (s *Store) DecideLearnProposal(ctx context.Context, id int64, from []string, to, reason string, at time.Time, gate []byte) (LearnProposal, error)
     DecideLearnProposal moves proposal id from one of from to state to,
     compare-and-set (ErrConflict when it is in another state): reason replaces
-    the stored one when not empty, gate the gate's result when not nil,
-    and a state that is a decision stamps decided_at with at (zero = now).
-    The inputs follow it in the same transaction (decideLearnInputs). Landing
-    sets nothing else: MarkLearnLanded records the commit.
+    the stored one when not empty, gate the gate's result when not nil, and a
+    state that is a decision stamps decided_at with at (zero = now). The inputs
+    follow it in the same transaction (decideLearnInputs). It never lands one:
+    LandLearnProposal records a landing with its commit and its version.
 
 func (s *Store) DecideNotesProposal(ctx context.Context, id int64, from []string, to, reason string, at time.Time, applied *NotesVersionInput) (NotesProposal, error)
     DecideNotesProposal moves proposal id from one of from to state to,
@@ -15105,6 +15128,16 @@ func (s *Store) GitHubRequiredChecks(ctx context.Context, fullName string) (GitH
 func (s *Store) InsertAutoApproval(ctx context.Context, a AutoApproval) (AutoApproval, error)
     InsertAutoApproval records a post about to be tried (state posting,
     one attempt). It returns ErrConflict when the PR already has a live one.
+
+func (s *Store) LandLearnProposal(ctx context.Context, id int64, from []string, v LearnVersion) (LearnProposal, LearnVersion, error)
+    LandLearnProposal records that proposal id landed, in one transaction: it
+    moves from one of from to landed (compare-and-set, ErrConflict when it is in
+    another state), decided_at and landed_at become v.LandedAt (zero = now) and
+    landed_sha v.LandedSHA, its noted inputs become used (decideLearnInputs),
+    and v is stored as the version that landed, its ProposalID id (LandedSHA,
+    SkillSHA and PromptsSHA are required, as for CreateLearnVersion). Nothing
+    of it is written when any of it fails, so a landed proposal always has its
+    commit and its version.
 
 func (s *Store) LastEndedRun(ctx context.Context, prID, sessionID int64) (Run, error)
     LastEndedRun is the run of session sessionID (of PR prID) that ended last
@@ -15176,11 +15209,6 @@ func (s *Store) LiveSessionByPRRole(ctx context.Context, prID int64, role string
 
 func (s *Store) LiveSessions(ctx context.Context) ([]Session, error)
     LiveSessions returns every starting/live session, oldest first.
-
-func (s *Store) MarkLearnLanded(ctx context.Context, id int64, sha string, at time.Time) error
-    MarkLearnLanded records the commit landed proposal id moved master to and
-    when (zero = now); ErrConflict when the proposal is not landed, and a second
-    mark changes nothing (the first landing stands).
 
 func (s *Store) MarkLearnRestarted(ctx context.Context, id int64, at time.Time) error
     MarkLearnRestarted records the first restart of the daemon on version id at

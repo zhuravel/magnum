@@ -167,3 +167,31 @@ func Baselines(runs []Run, inputs string, c Case) []Baseline {
 	}
 	return out
 }
+
+// JudgeBaselines lists, newest run first, the stored replays of c whose judge read inputs on the
+// reviewer reports of run reports (the full replay a judge-only replay of c takes them from,
+// FullReplayFor): that run's own case of c when it recorded inputs, and judge-only replays of c on
+// its reports (CaseRun.ReportsRun) that recorded inputs; clean runs with a score only, as for
+// Baselines. Comparing a judge-only candidate with one of these, never with another full replay,
+// keeps the reviewers' variance between two full replays out of the comparison.
+func JudgeBaselines(runs []Run, inputs string, c Case, reports string) []Baseline {
+	if inputs == "" || reports == "" {
+		return nil
+	}
+	var out []Baseline
+	for _, r := range slices.Backward(runs) {
+		if r.Inputs != inputs || r.Dirty {
+			continue
+		}
+		for _, cr := range r.Cases {
+			if cr.Case != c.Name || cr.Head != c.Head || cr.Score == nil {
+				continue
+			}
+			if cr.JudgeOnly && cr.ReportsRun == reports || !cr.JudgeOnly && r.ID == reports {
+				out = append(out, Baseline{Run: r.ID, Commit: r.Commit, Case: cr})
+				break
+			}
+		}
+	}
+	return out
+}

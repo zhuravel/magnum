@@ -3,10 +3,10 @@ package gitx
 // The branch work of the skill editor and its landing (internal/engine
 // learn_edit.go): a commit of named paths on a worktree's branch, paths
 // restored as an earlier commit had them (a revert), a fast-forward of the
-// checkout's branch, a rebase that aborts itself on a conflict, which of
-// some paths are dirty, the branches under a prefix, the branch checked
-// out and the operation a repository is in the middle of. Like every gitx
-// command they run none of the clone's hooks (hooksOff).
+// checkout's branch, a rebase that aborts itself on a conflict, a commit's
+// patch id, which of some paths are dirty, the branches under a prefix, the
+// branch checked out and the operation a repository is in the middle of.
+// Like every gitx command they run none of the clone's hooks (hooksOff).
 
 import (
 	"context"
@@ -149,15 +149,21 @@ func (c *Client) MergeFFOnly(ctx context.Context, repo, branch string) error {
 	return err
 }
 
-// RebaseOnto rebases the branch checked out at dir onto onto, unsigned. A
-// rebase that stops (a conflict) is aborted, so the branch and its work
-// tree are as they were, and the error is ErrRebaseConflict.
-func (c *Client) RebaseOnto(ctx context.Context, dir, onto string) error {
+// RebaseOnto replays the commits of the branch checked out at dir that
+// follow upstream onto onto, unsigned (`git rebase --onto onto upstream`):
+// only those, so a commit onto no longer has (one the operator dropped
+// from master after the branch was cut on it) does not come back with
+// them. A rebase that stops (a conflict) is aborted, so the branch and its
+// work tree are as they were, and the error is ErrRebaseConflict.
+func (c *Client) RebaseOnto(ctx context.Context, dir, onto, upstream string) error {
 	if err := checkRev("onto", onto); err != nil {
 		return err
 	}
-	_, err := c.git(ctx, dir, call{label: "rebase " + onto, mutates: true, timeout: commitTimeout},
-		"-c", "commit.gpgsign=false", "rebase", "--quiet", "--no-autostash", onto)
+	if err := checkRev("upstream", upstream); err != nil {
+		return err
+	}
+	_, err := c.git(ctx, dir, call{label: "rebase --onto " + onto + " " + upstream, mutates: true, timeout: commitTimeout},
+		"-c", "commit.gpgsign=false", "rebase", "--quiet", "--no-autostash", "--onto", onto, upstream)
 	if err == nil {
 		return nil
 	}
@@ -168,6 +174,34 @@ func (c *Client) RebaseOnto(ctx context.Context, dir, onto string) error {
 		return errors.Join(fmt.Errorf("gitx: rebase %s: %w", onto, ErrRebaseConflict), aerr)
 	}
 	return fmt.Errorf("gitx: rebase %s: %w", onto, ErrRebaseConflict)
+}
+
+// PatchID is the stable patch id of commit rev's change from its first
+// parent (`git diff-tree --patch --unified=0 rev | git patch-id --stable`):
+// with no context lines, a commit rebased onto a branch that changed lines
+// near its own keeps the id it had, and a commit that changes anything else
+// has another. An error for a commit with no change to hash.
+func (c *Client) PatchID(ctx context.Context, dir, rev string) (string, error) {
+	if err := checkRev("rev", rev); err != nil {
+		return "", err
+	}
+	diff, err := c.git(ctx, dir, call{label: "diff-tree --patch " + rev},
+		"diff-tree", "--patch", "--unified=0", "--no-color", "--no-ext-diff", "--no-textconv", rev)
+	if err != nil {
+		return "", err
+	}
+	if diff.Truncated {
+		return "", fmt.Errorf("gitx: patch-id %s: the diff is too large", rev)
+	}
+	out, err := c.runStdin(ctx, dir, call{label: "patch-id"}, diff.Stdout, "patch-id", "--stable")
+	if err != nil {
+		return "", err
+	}
+	id, _, _ := strings.Cut(out, " ")
+	if !isOID(id) {
+		return "", fmt.Errorf("gitx: patch-id %s: no change to hash", rev)
+	}
+	return id, nil
 }
 
 // DirtyPaths returns the paths among paths (relative to the top of the

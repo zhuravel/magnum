@@ -151,7 +151,15 @@ For a proposal in `gating`, the daemon selects the cases: the learned cases of t
 (targets) plus every other case in both corpora whose head is in a watched, non-flagged PR, capped by
 `[learn] gate_cases` (default 6, targets first, then the newest). Mode: judge-only when only
 `SKILL.md` and `prompts/judge-*.md` changed, else full. The baseline is the newest stored run with the
-same inputs hash as `master` (through `eval.Baselines`), else a baseline replay first. The candidate
+same inputs hash as the proposal's `base_sha` (through `eval.Baselines`), else a baseline replay first.
+Both read a detached worktree at `base_sha` under the learn worktrees, never the checkout (its branch and
+its uncommitted edits are the operator's), removed after the gate; each run of the gate records the
+commit of the tree it read and that tree's clean state, so a later gate reuses it. In judge-only mode
+both judges read the reviewer reports of the case's newest full replay whose reviewers read the
+candidate's prompts (`eval.FullReplayFor`): the baseline is that replay itself when its judge read the
+base's inputs, else the base's judge alone on its reports (stored, `eval.JudgeBaselines`, or replayed
+then), and without such a replay the base's full replay is the baseline and gives the candidate's judge
+its reports. The candidate
 replay runs in-process with `--candidate` = the worktree, under the eval agent tag, one case at a time,
 refused above `codex_soft` (then the proposal waits in `gating` and is retried at the next tick after the
 window moves) and never on a flagged PR.
@@ -165,6 +173,13 @@ Verdict (`learn.Judge`):
   judge-only) but nothing regressed;
 - fail: anything regressed, or no target improved.
 
+A replay without a score is no verdict: on a target or its baseline, or on the second replay of a lost
+case, one that ended without a score (anything but a flagged PR) stops the gate like the soft cap does, and
+the proposal stays `gating` for a try 30 minutes later; only the third gate of the proposal that stops so
+holds it, with the replay named; a corpus or a list of flagged replays that cannot be read counts the
+same, before any replay. A drain or a pause is checked before each replay and stops a running gate the
+same way, and so does a verdict the registry did not take.
+
 The results are stored in `gate_json` (baseline run id, candidate run id, per-case before/after, the
 rule that decided) and the state becomes `passed`, `held` or `failed`. `failed` proposals keep their
 inputs `new`. a `held` one waits for the operator. a `passed` one lands.
@@ -172,17 +187,31 @@ inputs `new`. a `held` one waits for the operator. a `passed` one lands.
 ## 5. Landing and restart
 
 Landing (`engine.landProposal`): the checkout must be on `master` with no rebase or merge in progress;
-`master` must equal the proposal's `base_sha`, else the branch is rebased once in the worktree (a conflict
-holds the proposal with the reason). the files the commit touches must be clean in the checkout's working
-tree (else held, reason named). Then `git -C <checkout> merge --ff-only learn/<run>`, the branch is
-deleted, the worktree removed, the proposal becomes `landed` with `landed_sha`, and a `learn_versions`
-row records the new skill and prompts hashes. A toast says what landed. At most one landing per local day
-(`[learn] land_per_day`, default 1): a second passed proposal waits as `passed` until the next day.
+the branch must be at the proposal's `candidate_sha`, or at that commit as an earlier landing rebased it (a
+single commit on a commit `master` holds, with the same `git patch-id`), else it is held: a commit made in
+the worktree would land ungated. `master` must hold the proposal's `base_sha` (else held: it was reset or
+rewritten since the edit); when it moved past it, the candidate's commit alone is rebased once in the
+worktree (`git rebase --onto master <base_sha>`, so a commit the operator dropped from `master` does not
+come back; a conflict holds the proposal with the reason). the tree that lands must render with the
+daemon's build (`CheckPrompts` on the worktree, as the restart on it checks first; else held). the files
+the commit touches must be clean in the checkout's working tree (else held, reason named). Then `git -C
+<checkout> merge --ff-only learn/<run>` (the rebase and the merge run on a context a shutdown does not
+cancel, with a timeout), the
+proposal becomes `landed` with `landed_sha` and a `learn_versions` row records the new skill and prompts
+hashes in one transaction (`store.LandLearnProposal`), then the branch is deleted and the worktree
+removed. A branch `master` already holds (a landing a crash cut short after the merge) is recorded as
+landed, at the next landing, at the operator's `n` (instead of the rejection) and at the expiry (instead
+of it). A toast says what landed. At most one landing per local day (`[learn] land_per_day`, default 1): a
+second passed proposal waits as `passed` until the next day. No proposal lands, at a tick or on the
+operator's `y` (which is refused: "ask again after the restart"), before the daemon restarted on the
+version landed last.
 
 Restart: the daemon sets `KVLearnRestart` and exits for launchd at the first tick with no round, retro,
 curation, editor or gate in flight (the `restartForBuild` path), unless `[learn] restart` is `manual`,
 in which case `magnum status` and a toast ask for `daemon-restart --when-idle`. The restart is recorded on
-the version (`restarted_at`), which starts its measurement window.
+the version (`restarted_at`), which starts its measurement window; a start without `KVLearnRestart`
+records it on the newest version when that one was never restarted on (a crash between the landing's
+transaction and the key).
 
 Nothing is pushed. `magnum learn` says how many landed versions are ahead of `origin/master`.
 

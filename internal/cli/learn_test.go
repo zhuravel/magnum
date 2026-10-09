@@ -169,8 +169,8 @@ func TestLearnReviewShowsTheDiffAndTheGateAndAsksYN(t *testing.T) {
 	h := newLearnHarness(t)
 	m, d := learn.MissInputID(h.miss.ID), learn.DeclineInputID(h.decline.ID)
 	h.pid = 4242
-	refusal := "proposal " + itoa(h.proposal.ID) + " stays held: skills/magnum-review/SKILL.md has uncommitted changes in the checkout: " +
-		"commit or stash them, then `magnum learn --review` lands it"
+	refusal := "proposal " + itoa(h.proposal.ID) + " cannot land before the daemon restarted on skill version 1 (each version runs " +
+		"before the next lands); ask again after the restart"
 	h.onSleep = func(h *actHarness) {
 		h.completePending(store.RequestFailed, refusal)
 	}
