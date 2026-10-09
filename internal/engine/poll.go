@@ -234,7 +234,7 @@ func (e *Engine) pollRepo(ctx context.Context, w config.Watch, gh GitHub, rr git
 			Kind: notify.KindNewRepo, Window: newRepoWindow})
 	}
 
-	stored, err := e.st.ListPRs(ctx, store.PRFilter{RepoID: repo.ID})
+	stored, err := e.pollRows(ctx, repo.ID, rr.PRs)
 	if err != nil {
 		return fmt.Errorf("poll %s: %w", full, err)
 	}
@@ -275,6 +275,19 @@ func (e *Engine) pollRepo(ctx context.Context, w config.Watch, gh GitHub, rr git
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// pollRows reads the repository's rows a poll uses: the PRs GitHub has
+// open, which the PRs missing from the radar are confirmed against, and the
+// PRs the radar lists, whatever their GitHub state (a reopened PR keeps its
+// row). The closed, merged and released rows, most of a repository's, stay
+// unread.
+func (e *Engine) pollRows(ctx context.Context, repoID int64, radar []github.PRRadar) ([]store.PR, error) {
+	nodes := make([]string, len(radar))
+	for i, p := range radar {
+		nodes[i] = p.NodeID
+	}
+	return e.st.ListPRs(ctx, store.PRFilter{RepoID: repoID, GHOpen: true, OrNodeIDs: nodes})
 }
 
 // fetchDetails fetches the Details of the radar PRs that are new or changed

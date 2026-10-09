@@ -12,16 +12,11 @@ import (
 // first. prIDs limits the PRs; empty means every PR with a run. A PR
 // without runs has no entry.
 func (s *Store) LatestRoundRuns(ctx context.Context, prIDs ...int64) (map[int64][]Run, error) {
-	q := "SELECT " + cols("r", runColumns) + " FROM runs r WHERE r.round = (SELECT MAX(x.round) FROM runs x WHERE x.pr_id = r.pr_id)"
 	args := make([]any, 0, len(prIDs))
-	if len(prIDs) > 0 {
-		q += " AND r.pr_id IN (" + placeholders(len(prIDs)) + ")"
-		for _, id := range prIDs {
-			args = append(args, id)
-		}
+	for _, id := range prIDs {
+		args = append(args, id)
 	}
-	q += " ORDER BY r.pr_id, r.created_at, r.rowid"
-	rows, err := s.db.QueryContext(ctx, q, args...)
+	rows, err := s.db.QueryContext(ctx, latestRoundRunsQuery(len(prIDs)), args...)
 	if err != nil {
 		return nil, fmt.Errorf("latest round runs: %w", err)
 	}
@@ -34,6 +29,18 @@ func (s *Store) LatestRoundRuns(ctx context.Context, prIDs ...int64) (map[int64]
 		out[r.PRID] = append(out[r.PRID], r)
 	}
 	return out, nil
+}
+
+// latestRoundRunsQuery is LatestRoundRuns' query for n PR ids (0 = all):
+// the PRs' highest rounds grouped once, joined back to their runs (a
+// correlated MAX would read a PR's runs again for each of them).
+func latestRoundRunsQuery(n int) string {
+	latest := "SELECT pr_id, MAX(round) AS round FROM runs"
+	if n > 0 {
+		latest += " WHERE pr_id IN (" + placeholders(n) + ")"
+	}
+	return "SELECT " + cols("r", runColumns) + " FROM (" + latest + " GROUP BY pr_id) m" +
+		" JOIN runs r ON r.pr_id = m.pr_id AND r.round = m.round ORDER BY r.pr_id, r.created_at, r.rowid"
 }
 
 // CheckoutSteps returns the step events (KindStep and KindStepReset) of the

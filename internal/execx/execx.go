@@ -24,6 +24,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	"unicode/utf8"
 )
 
 // Cmd describes one subprocess.
@@ -76,15 +77,70 @@ type Result struct {
 // Out returns trimmed stdout.
 func (r Result) Out() string { return strings.TrimSpace(string(r.Stdout)) }
 
+// stderrKeep is how much of a failed command's stderr its ExitError keeps
+// from each end.
+const stderrKeep = 32 << 10
+
 // ExitError is returned when the process ran but exited non-zero.
 type ExitError struct {
-	Cmd    Cmd
-	Code   int
+	Cmd  Cmd
+	Code int
+	// Stderr is what the process wrote to stderr, redacted, and when longer
+	// than 64 KiB only its first and last 32 KiB around a "[N bytes cut]"
+	// line (Result.Stderr keeps it whole): the error is wrapped into step
+	// rows, a PR's last_error and log lines.
 	Stderr string
+	msg    string // the text of Error, rendered once by exitError
+}
+
+// exitError is the ExitError of c exiting code with stderr: the excerpt is
+// taken from the redacted stderr, so the cut never splits a token before it
+// is masked, and the text is rendered once.
+func exitError(c Cmd, code int, stderr []byte) *ExitError {
+	e := &ExitError{Cmd: c, Code: code, Stderr: stderrExcerpt(Redact(string(stderr)))}
+	e.msg = e.render(e.Stderr)
+	return e
 }
 
 func (e *ExitError) Error() string {
-	return fmt.Sprintf("%s exited %d: %s", Redact(e.Cmd.String()), e.Code, strings.TrimSpace(Redact(e.Stderr)))
+	if e.msg != "" {
+		return e.msg
+	}
+	// Built by hand (a fake): its Stderr was never redacted or cut.
+	return e.render(stderrExcerpt(Redact(e.Stderr)))
+}
+
+func (e *ExitError) render(stderr string) string {
+	return fmt.Sprintf("%s exited %d: %s", Redact(e.Cmd.String()), e.Code, strings.TrimSpace(stderr))
+}
+
+// stderrExcerpt is s whole when it fits in two stderrKeep, else its first
+// stderrKeep bytes, a "[N bytes cut]" line and its last stderrKeep bytes
+// from the first line start in them, as a slot log keeps a stream's tail.
+// Neither cut splits a UTF-8 sequence.
+func stderrExcerpt(s string) string {
+	if len(s) <= 2*stderrKeep {
+		return s
+	}
+	head, tail := stderrKeep, len(s)-stderrKeep
+	for head > 0 && !utf8.RuneStart(s[head]) {
+		head--
+	}
+	if i := strings.IndexByte(s[tail:], '\n'); i >= 0 && tail+i+1 < len(s) {
+		tail += i + 1
+	}
+	for tail < len(s) && !utf8.RuneStart(s[tail]) {
+		tail++
+	}
+	var b strings.Builder
+	b.Grow(head + len(s) - tail + 32)
+	b.WriteString(s[:head])
+	if !strings.HasSuffix(s[:head], "\n") {
+		b.WriteByte('\n')
+	}
+	fmt.Fprintf(&b, "[%d bytes cut]\n", tail-head)
+	b.WriteString(s[tail:])
+	return b.String()
 }
 
 // RunError is a runner failure other than a non-zero exit: a missing working
@@ -319,9 +375,8 @@ func (r *Real) Run(ctx context.Context, c Cmd) (Result, error) {
 		if ctx.Err() != nil {
 			return res, &RunError{Cmd: c, Err: ctx.Err()}
 		}
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
-			return res, &ExitError{Cmd: c, Code: res.Code, Stderr: Redact(string(res.Stderr))}
+		if _, exited := errors.AsType[*exec.ExitError](err); exited {
+			return res, exitError(c, res.Code, res.Stderr)
 		}
 		return res, &RunError{Cmd: c, Err: err}
 	}
@@ -477,7 +532,7 @@ func (f *Fake) Run(ctx context.Context, c Cmd) (Result, error) {
 				return rule.Result, rule.Err
 			}
 			if rule.Result.Code != 0 {
-				return rule.Result, &ExitError{Cmd: c, Code: rule.Result.Code, Stderr: string(rule.Result.Stderr)}
+				return rule.Result, exitError(c, rule.Result.Code, rule.Result.Stderr)
 			}
 			return rule.Result, nil
 		}

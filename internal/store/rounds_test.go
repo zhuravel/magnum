@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -96,5 +97,23 @@ func TestCheckoutStepsSelectsThePRsSlotSubjects(t *testing.T) {
 	}
 	if none, err := st.CheckoutSteps(ctx, other.ID, 0); err != nil || len(none) != 1 || *none[0].Subject != "slot:talkable/talkable#123" {
 		t.Fatalf("other PR = %+v, %v", none, err)
+	}
+}
+
+// The board asks for its rows' latest rounds every 5 s: the query reads each
+// PR's runs once to find its highest round, never once per run as a
+// correlated subquery does.
+func TestLatestRoundRunsReadsEachPRsRunsOnce(t *testing.T) {
+	st, _ := newStore(t)
+	for _, n := range []int{0, 1, 3} {
+		args := make([]any, n)
+		for i := range args {
+			args[i] = i + 1
+		}
+		if plan := queryPlan(t, st, latestRoundRunsQuery(n), args...); strings.Contains(plan, "CORRELATED") {
+			t.Errorf("%d ids: plan %s\nwant no correlated subquery", n, plan)
+		} else {
+			t.Logf("%d ids: %s", n, plan)
+		}
 	}
 }

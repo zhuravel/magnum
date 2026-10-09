@@ -310,6 +310,15 @@ editing history. Code, config comments and prompts reference these by their head
   (switched) when the status line already names the new model, which needs that model's name to be known
   (verify). The observer still leaves the pane alone until then. Rejected: polling until the dialog is
   gone (the caller's ctx has ended; a single read and one key keep the exit short).
+- **A poll reads only its repository's open rows and the rows its radar lists** (2026-10-09). pollRepo
+  listed and decoded every PR row the repository ever had on each tick. It uses only the radar's rows and
+  the open rows, which a PR missing from the radar is confirmed against. Now it reads `gh_state = 'OPEN'
+  OR node_id IN <the radar's node ids>` (new store.PRFilter fields GHOpen and OrNodeIDs, through
+  json_each; engine.pollRows). A reopened PR is on the radar, so it keeps its row and returns to its
+  state; a closed, merged, unknown or released row off the radar is no longer read. On 2,000 rows with 100
+  open: 10.9 MB and 115,600 allocations per call become 0.49 MB and 5,700, about 7x faster (49-78 ms to
+  7-9 ms under load). Rejected: an index on gh_state (a migration, and the repository's rows are already
+  found through (repo_id, number)).
 
 ## Agents in panes
 
@@ -699,6 +708,41 @@ editing history. Code, config comments and prompts reference these by their head
   failure other than store.ErrConflict, as pipeline.abandonPending does: `agents: abandon run <id>:
   <err>`, and `agents: record the prompt (the run) on the <role> session <id>: <err>`. A lost race
   (ErrConflict) stays silent, and nothing else changes.
+- **The observe tick's queries name their states as the partial indexes do** (2026-10-09). ActiveRuns,
+  LiveSessions and LiveSessionByPRRole bound their constant state lists as `?` parameters. SQLite uses a
+  partial index only when the query names the index's predicate as written, so every observe tick read the
+  whole runs table (never pruned, each row holding its prompt) through runs_created, and the whole
+  sessions table, while holding the store's only connection. Measured on 2,000 PRs with 30 runs and 30
+  sessions each: ActiveRuns took 24.4 ms and LiveSessions 6.1 ms. Now the three queries are built once
+  from the constants with the lists as SQL literals (`sqlStrings`, constants only, in the indexes' order),
+  so ActiveRuns searches runs_active and LiveSessionByPRRole searches sessions_live_role. LiveSessions
+  names `INDEXED BY sessions_live_role`: its `ORDER BY id` otherwise makes SQLite prefer a full table scan
+  in rowid order, and INDEXED BY makes the query fail rather than scan if that index ever goes. The
+  timings drop to 34 µs and 18 µs. A test checks each plan with EXPLAIN QUERY PLAN. No migration: the
+  existing indexes serve all three. Rejected: a new index (it blocks the CLI until the daemon restarts,
+  and none is needed); running ANALYZE so the planner picks the index itself (the stats would have to be
+  kept fresh).
+- **LatestRoundRuns groups the highest rounds once** (2026-10-09). The board asks for its rows' latest
+  rounds every 5 s. The query compared each run's round with a correlated `MAX(round)` over the PR's runs,
+  so it read a PR's runs again for each of them (17.9 ms for 100 board rows, 368 ms for every PR, on 2,000
+  PRs with 30 runs each). Now it joins `SELECT pr_id, MAX(round) ... GROUP BY pr_id` (filtered to the
+  asked PRs) back to the runs: 2.7 ms and 107 ms, same result and order. Rejected: an index on runs(pr_id,
+  round), which would need a migration.
+- **The notes history reads every version's files in one query** (2026-10-09). withFiles ran one query per
+  version, and `magnum notes history` asks for every version. Now one query takes the version ids as a
+  JSON array (`version_id IN (SELECT value FROM json_each(?))`, which searches the files' primary key) and
+  hands each version its files, in path order, with an empty list for a version that has none. For 300
+  versions: 300 queries become 1, and the time halves (34-58 ms to 13-24 ms under load). Rejected: a list
+  of `?` placeholders (bound by SQLite's variable limit on long histories).
+- **lastLine reads a long transcript line once** (2026-10-09). Looking back through a Claude transcript,
+  lastLine copied the whole partial line read so far into each new 64 KiB chunk until it found a newline.
+  One 8 MiB line (a tool result that printed a file) cost about 512 MiB of copying: 520-725 ms and 549 MB
+  per call. Now it reuses one chunk buffer and scans it for newlines, keeping offsets. A line within one
+  chunk is matched in place. A longer one is read whole once, into a reused buffer, when the chunk holding
+  its start is read. The same 8 MiB case takes 16-35 ms, 8.5 MB and 3 allocations. A test compares the
+  results, and the text each match call sees, with a plain line splitter over long lines at the start,
+  middle and end of a file, both file endings and several sizes; the old function passes the same test.
+  match must not keep the line it is shown (the three callers decode it and keep only strings).
 - **A request whose heavy job panics ends as failed, once** (2026-10-09). The heavy worker recovered a
   panic in a request:<id> job (provision, repair, adopt, cleanup), but the request left the in-flight set
   uncompleted, so every tick ran it, and it panicked, again. Now heavyRequest runs the job under
@@ -4793,6 +4837,20 @@ editing history. Code, config comments and prompts reference these by their head
   past int's range into the largest int, which wrapped too). Each number and the sum are now clamped to
   maxParsedWait (30 days) before they can wrap. parseReset still caps a reset at MaxReset (24h), so such a
   limit pauses the kind for 24h, as a far-off date does.
+- **An ExitError keeps an excerpt of its stderr, redacted once** (2026-10-09). An ExitError kept the whole
+  stderr (up to 8 MiB) and redacted it again each time Error() ran. Every wrap therefore carried
+  megabytes, and a redaction pass over them, into step fail rows, the PR's last_error and log lines.
+  Wrapping the error of an 8 MiB stderr with fmt.Errorf took 1.9-2.2 s and 49 MB. Now Result.Stderr stays
+  whole. When a command exits non-zero, Real.Run and Fake.Run build the ExitError (execx.exitError) once:
+  they redact the whole stderr first, then keep its first 32 KiB, a "[N bytes cut]" line and its last 32
+  KiB from the first line start in them, like runLogged's tail, with neither cut splitting a UTF-8
+  sequence. The error text is rendered once. The wrap takes 85-181 µs and 148 KB. An ExitError built by
+  hand (a fake in another package) still renders, bounded, on each call. Redacting before cutting means a
+  cut never leaves part of a token unmasked: a test shows that the opposite order leaks the end of a token
+  that straddles the tail's start. Matching on ExitError.Stderr still works, since what callers look for
+  is short and sits at the end. Rejected: redacting only a margin around the cuts (a PEM block or a JWT
+  has no bounded length, so no margin is safe); keeping the whole stderr behind a method (every caller of
+  Error() would still carry it).
 - **The layers log at the level of what they report** (2026-10-09). The pipeline, agents, slots, cleanup
   and notify packages logged every line through app.Printf at Info, and 79% of daemon.log came through
   that bridge, so a round that ended in error, a model limit, a failed permission deny or a failed

@@ -473,40 +473,64 @@ func enqueuedText(line []byte) (string, bool) {
 
 // lastLine finds the last line of r (size bytes) that match accepts,
 // reading backwards transcriptChunk at a time, and returns where it starts
-// and ends (past its newline, at most size).
+// and ends (past its newline, at most size). A line within one chunk is
+// matched in place; a longer one, found once the chunk holding its start
+// is read, is read whole once, so a line of megabytes costs its size, not
+// a copy of it per chunk. match must not keep line.
 func lastLine(r io.ReaderAt, size int64, match func(line []byte) bool) (start, end int64, ok bool, err error) {
-	pos := size
-	var tail []byte // the bytes after pos not looked at yet: the start of a line that began before pos
+	chunk := make([]byte, min(int64(transcriptChunk), size))
+	var in, long []byte        // the bytes of chunk read at pos; the last line read whole
+	pos, lineEnd := size, size // lineEnd: where the line whose start is looked for ends
+	// text is the line [from, lineEnd) without its newline: in place when in
+	// holds it, else read whole into long.
+	text := func(from int64) ([]byte, error) {
+		var b []byte
+		if lineEnd <= pos+int64(len(in)) {
+			b = in[from-pos : lineEnd-pos]
+		} else {
+			if int64(cap(long)) < lineEnd-from {
+				long = make([]byte, lineEnd-from)
+			}
+			b = long[:lineEnd-from]
+			if _, err := r.ReadAt(b, from); err != nil && !errors.Is(err, io.EOF) {
+				return nil, err
+			}
+		}
+		return bytes.TrimSuffix(b, []byte("\n")), nil
+	}
 	for pos > 0 {
 		n := min(int64(transcriptChunk), pos)
 		pos -= n
-		buf := make([]byte, n, n+int64(len(tail)))
-		if _, err := r.ReadAt(buf, pos); err != nil && !errors.Is(err, io.EOF) {
+		in = chunk[:n]
+		if _, err := r.ReadAt(in, pos); err != nil && !errors.Is(err, io.EOF) {
 			return 0, 0, false, err
 		}
-		buf = append(buf, tail...)
-		first := 0 // buf[first:] holds whole lines
-		if pos > 0 {
-			i := bytes.IndexByte(buf, '\n')
-			if i < 0 {
-				tail = buf // one line longer than what was read: read further back
-				continue
+		for i := len(in); i > 0; {
+			if i = bytes.LastIndexByte(in[:i], '\n'); i < 0 {
+				break // the line starts in an earlier chunk
 			}
-			first = i + 1
-		}
-		lines := buf[first:]
-		for len(lines) > 0 {
-			body := bytes.TrimSuffix(lines, []byte("\n"))
-			i := bytes.LastIndexByte(body, '\n')
-			if match(body[i+1:]) {
-				at := pos + int64(first)
-				return at + int64(i+1), min(at+int64(len(lines)), size), true, nil
+			from := pos + int64(i) + 1
+			if from == size {
+				continue // the newline ending the last line
 			}
-			lines = body[:i+1]
+			b, err := text(from)
+			if err != nil {
+				return 0, 0, false, err
+			}
+			if match(b) {
+				return from, lineEnd, true, nil
+			}
+			lineEnd = from
 		}
-		tail = buf[:first]
 	}
-	return 0, 0, false, nil
+	if lineEnd == 0 {
+		return 0, 0, false, nil
+	}
+	b, err := text(0) // the first line
+	if err != nil || !match(b) {
+		return 0, 0, false, err
+	}
+	return 0, lineEnd, true, nil
 }
 
 // lineTime is the timestamp of a transcript entry.

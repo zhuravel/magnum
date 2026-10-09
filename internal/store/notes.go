@@ -231,27 +231,40 @@ func scanNotesVersion(sc scanner) (NotesVersion, error) {
 	return v, err
 }
 
-// withFiles fills the Files (without bodies) of vs.
+// withFiles fills the Files (without bodies) of vs, in one query for all of
+// them (`magnum notes history` reads every version).
 func withFiles(ctx context.Context, q querier, vs []NotesVersion) error {
-	for i := range vs {
-		rows, err := q.QueryContext(ctx, `SELECT f.path, f.sha256, b.bytes FROM notes_version_files f
-JOIN harness_blobs b ON b.sha256 = f.sha256 WHERE f.version_id = ? ORDER BY f.path`, vs[i].ID)
-		if err != nil {
-			return err
-		}
-		vs[i].Files, err = collect(rows, func(sc scanner) (NotesBlob, error) {
-			var f NotesBlob
-			err := sc.Scan(&f.Path, &f.SHA256, &f.Bytes)
-			return f, err
-		})
-		if err != nil {
-			return err
-		}
-		if vs[i].Files == nil {
-			vs[i].Files = []NotesBlob{}
-		}
+	if len(vs) == 0 {
+		return nil
 	}
-	return nil
+	at := make(map[int64]int, len(vs))
+	ids := make([]int64, len(vs))
+	for i := range vs {
+		at[vs[i].ID], ids[i] = i, vs[i].ID
+		vs[i].Files = []NotesBlob{}
+	}
+	idList, err := json.Marshal(ids)
+	if err != nil {
+		return err
+	}
+	rows, err := q.QueryContext(ctx, `SELECT f.version_id, f.path, f.sha256, b.bytes FROM notes_version_files f
+JOIN harness_blobs b ON b.sha256 = f.sha256 WHERE f.version_id IN (SELECT value FROM json_each(?)) ORDER BY f.version_id, f.path`,
+		string(idList))
+	if err != nil {
+		return err
+	}
+	_, err = collect(rows, func(sc scanner) (struct{}, error) {
+		var version int64
+		var f NotesBlob
+		if err := sc.Scan(&version, &f.Path, &f.SHA256, &f.Bytes); err != nil {
+			return struct{}{}, err
+		}
+		if i, ok := at[version]; ok {
+			vs[i].Files = append(vs[i].Files, f)
+		}
+		return struct{}{}, nil
+	})
+	return err
 }
 
 func notesVersionByID(ctx context.Context, q querier, id int64) (NotesVersion, error) {

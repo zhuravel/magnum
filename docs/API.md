@@ -6339,9 +6339,14 @@ func (d *DryRun) Run(ctx context.Context, c Cmd) (Result, error)
     Run implements Runner.
 
 type ExitError struct {
-	Cmd    Cmd
-	Code   int
+	Cmd  Cmd
+	Code int
+	// Stderr is what the process wrote to stderr, redacted, and when longer
+	// than 64 KiB only its first and last 32 KiB around a "[N bytes cut]"
+	// line (Result.Stderr keeps it whole): the error is wrapped into step
+	// rows, a PR's last_error and log lines.
 	Stderr string
+	// Has unexported fields.
 }
     ExitError is returned when the process ran but exited non-zero.
 
@@ -13299,7 +13304,13 @@ type PRFiles struct {
 type PRFilter struct {
 	RepoID int64
 	States []string
-	Limit  int
+	// GHOpen keeps only the PRs GitHub has open and those whose node id
+	// OrNodeIDs lists, whatever their GitHub state: the rows a poll of a
+	// repository uses (a PR its radar shows again keeps its row). OrNodeIDs
+	// is ignored without GHOpen.
+	GHOpen    bool
+	OrNodeIDs []string
+	Limit     int
 }
     PRFilter selects PRs for ListPRs. Zero values match everything.
 

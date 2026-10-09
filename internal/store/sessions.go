@@ -5,7 +5,35 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 )
+
+// The queries of the live sessions and the in-flight runs, which the
+// observe tick runs on tables no retention prunes. Their state lists are SQL
+// literals rendered from the constants (no input reaches them), in the
+// partial indexes' order: SQLite uses a partial index only when the query
+// names its predicate, which a list of bound parameters never does.
+// LiveSessions' order by id would otherwise have SQLite read the whole table
+// in rowid order rather than the few rows sessions_live_role holds; INDEXED
+// BY also makes the query fail, not scan, should that index go.
+var (
+	liveSessionByPRRoleQuery = "SELECT " + cols("", sessionColumns) +
+		" FROM sessions WHERE pr_id = ? AND role = ? AND state IN (" + sqlStrings(liveSessionStates) + ")"
+	liveSessionsQuery = "SELECT " + cols("", sessionColumns) +
+		" FROM sessions INDEXED BY sessions_live_role WHERE state IN (" + sqlStrings(liveSessionStates) + ") ORDER BY id"
+	activeRunsQuery = "SELECT " + cols("", runColumns) +
+		" FROM runs WHERE state IN (" + sqlStrings(activeRunStates) + ") ORDER BY created_at, rowid"
+)
+
+// sqlStrings renders ss as a list of SQL string literals ('a','b'), for the
+// queries whose constant lists must match an index predicate as written.
+func sqlStrings(ss []string) string {
+	quoted := make([]string, len(ss))
+	for i, s := range ss {
+		quoted[i] = "'" + strings.ReplaceAll(s, "'", "''") + "'"
+	}
+	return strings.Join(quoted, ",")
+}
 
 // CreateSession inserts a session and returns it. Role is any non-empty name
 // (config-defined; see RoleJudge for the defaults). Generation 0 means "next
@@ -64,9 +92,7 @@ func (s *Store) SessionByID(ctx context.Context, id int64) (Session, error) {
 
 // LiveSessionByPRRole returns the starting/live session of a PR's role.
 func (s *Store) LiveSessionByPRRole(ctx context.Context, prID int64, role string) (Session, error) {
-	x, err := scanSession(s.db.QueryRowContext(ctx, "SELECT "+cols("", sessionColumns)+
-		" FROM sessions WHERE pr_id = ? AND role = ? AND state IN ("+placeholders(len(liveSessionStates))+")",
-		append([]any{prID, role}, anys(liveSessionStates)...)...))
+	x, err := scanSession(s.db.QueryRowContext(ctx, liveSessionByPRRoleQuery, prID, role))
 	if err != nil {
 		return Session{}, notFound(err, "live session", fmt.Sprintf("pr %d %s", prID, role))
 	}
@@ -84,8 +110,7 @@ func (s *Store) SessionsByPR(ctx context.Context, prID int64) ([]Session, error)
 
 // LiveSessions returns every starting/live session, oldest first.
 func (s *Store) LiveSessions(ctx context.Context) ([]Session, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT "+cols("", sessionColumns)+
-		" FROM sessions WHERE state IN ("+placeholders(len(liveSessionStates))+") ORDER BY id", anys(liveSessionStates)...)
+	rows, err := s.db.QueryContext(ctx, liveSessionsQuery)
 	if err != nil {
 		return nil, fmt.Errorf("live sessions: %w", err)
 	}
@@ -149,8 +174,7 @@ func (s *Store) RunsByPR(ctx context.Context, prID int64) ([]Run, error) {
 // ActiveRuns returns runs still in flight (pending, submitted, working,
 // ended-but-unverified), oldest first.
 func (s *Store) ActiveRuns(ctx context.Context) ([]Run, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT "+cols("", runColumns)+
-		" FROM runs WHERE state IN ("+placeholders(len(activeRunStates))+") ORDER BY created_at, rowid", anys(activeRunStates)...)
+	rows, err := s.db.QueryContext(ctx, activeRunsQuery)
 	if err != nil {
 		return nil, fmt.Errorf("active runs: %w", err)
 	}

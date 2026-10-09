@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -379,7 +380,13 @@ func (s *Store) PRByRepoNumber(ctx context.Context, repoID int64, number int) (P
 type PRFilter struct {
 	RepoID int64
 	States []string
-	Limit  int
+	// GHOpen keeps only the PRs GitHub has open and those whose node id
+	// OrNodeIDs lists, whatever their GitHub state: the rows a poll of a
+	// repository uses (a PR its radar shows again keeps its row). OrNodeIDs
+	// is ignored without GHOpen.
+	GHOpen    bool
+	OrNodeIDs []string
+	Limit     int
 }
 
 // ListPRs returns PRs matching f ordered by repo and number.
@@ -393,6 +400,18 @@ func (s *Store) ListPRs(ctx context.Context, f PRFilter) ([]PR, error) {
 	if len(f.States) > 0 {
 		where = append(where, "state IN ("+placeholders(len(f.States))+")")
 		args = append(args, anys(f.States)...)
+	}
+	switch {
+	case f.GHOpen && len(f.OrNodeIDs) > 0:
+		nodes, err := json.Marshal(f.OrNodeIDs)
+		if err != nil {
+			return nil, fmt.Errorf("list prs: %w", err)
+		}
+		where = append(where, "(gh_state = ? OR node_id IN (SELECT value FROM json_each(?)))")
+		args = append(args, GHOpen, string(nodes))
+	case f.GHOpen:
+		where = append(where, "gh_state = ?")
+		args = append(args, GHOpen)
 	}
 	q := "SELECT " + cols("", prColumns) + " FROM prs"
 	if len(where) > 0 {
