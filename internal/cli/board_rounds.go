@@ -25,13 +25,16 @@ const boardRoundsWindow = 7 * 24 * time.Hour
 // for a delta check, {"delta_check", "delta_lines"};
 // round.triage (triage.go), before it, with {"runs", "skips", "reason"} for a
 // decision or {"why"} when every role runs; round.rerun_role (rerun.go),
-// before triage, with {"role", "lines"}. Triage and the reruns run during the
-// round's setup, so the ones between the previous round's start and this
-// round's start are this round's.
+// before triage, with {"role", "lines"}; agent.session_rotated
+// (session_rotate.go), when the agents start, with {"role", "rounds"}.
+// Triage, the reruns and the agents' start happen during the round's setup,
+// so the ones between the previous round's start and this round's start are
+// this round's.
 const (
-	evRoundStart = "engine.round_start"
-	evTriage     = "round.triage"
-	evRerunRole  = "round.rerun_role"
+	evRoundStart     = "engine.round_start"
+	evTriage         = "round.triage"
+	evRerunRole      = "round.rerun_role"
+	evSessionRotated = "agent.session_rotated"
 )
 
 // boardRoundFacts fills the rows' RoundWhy and Spend (ids[i] is rows[i]'s PR
@@ -46,7 +49,7 @@ func boardRoundFacts(ctx context.Context, st *store.Store, ids []int64, rows []t
 	if err != nil {
 		return err
 	}
-	evs, err := st.EventsOfKindsSince(ctx, since, evRoundStart, evTriage, evRerunRole)
+	evs, err := st.EventsOfKindsSince(ctx, since, evRoundStart, evTriage, evRerunRole, evSessionRotated)
 	if err != nil {
 		return err
 	}
@@ -134,7 +137,7 @@ func roundWhyOf(evs []store.Event) *tui.RoundWhy {
 		}
 	}
 	for _, e := range setup {
-		if e.Kind != evRerunRole {
+		if e.Kind != evRerunRole && e.Kind != evSessionRotated {
 			continue
 		}
 		d := eventData(e)
@@ -142,14 +145,23 @@ func roundWhyOf(evs []store.Event) *tui.RoundWhy {
 		if role == "" {
 			continue
 		}
-		rr := tui.RoleRerun{Role: role, Lines: dataInt(d, "lines")}
-		if at := slices.IndexFunc(w.Reruns, func(x tui.RoleRerun) bool { return x.Role == role }); at >= 0 {
-			w.Reruns[at] = rr // the newer count
-		} else {
-			w.Reruns = append(w.Reruns, rr)
+		if e.Kind == evSessionRotated {
+			w.Rotated = newerPerRole(w.Rotated, tui.RoleRotation{Role: role, Rounds: dataInt(d, "rounds")}, func(x tui.RoleRotation) string { return x.Role })
+			continue
 		}
+		w.Reruns = newerPerRole(w.Reruns, tui.RoleRerun{Role: role, Lines: dataInt(d, "lines")}, func(x tui.RoleRerun) string { return x.Role })
 	}
 	return w
+}
+
+// newerPerRole adds x to xs, or replaces the entry of the same role with
+// it: a setup that was retried recorded a role twice, the newer counts.
+func newerPerRole[T any](xs []T, x T, role func(T) string) []T {
+	if at := slices.IndexFunc(xs, func(y T) bool { return role(y) == role(x) }); at >= 0 {
+		xs[at] = x
+		return xs
+	}
+	return append(xs, x)
 }
 
 // eventData is an event's data as an object; nil when it has none or is

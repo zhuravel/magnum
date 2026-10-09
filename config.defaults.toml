@@ -347,6 +347,12 @@ rereview_effort = "high"              # re-reviews of new commits; codex sets ef
 max_subagents = 2                     # subagents the judge may have open at once (the kind's `subagents` args;
                                       # 0 = none, through `no_subagents`); on its own it started 53 in 36
                                       # sessions, 27% of the Codex spend. Codex caps open threads, not a total
+max_session_rounds = 6                # review rounds one judge session serves on a PR, then the next round
+                                      # starts it fresh (the recovery, which reads the earlier reviews and
+                                      # threads from GitHub; the reviewers keep theirs). A Codex session resumed
+                                      # round after round carries every round's context, and a cybersecurity
+                                      # refusal flags the PR for good: one came in round 15 of a session with
+                                      # 29M tokens of history. 0 = no limit (any session role may set it)
 skill = "{{repo}}/skills/magnum-review/SKILL.md"   # without a checkout: the binary's built-in copy
 prompt = "judge-initial.md"
 rereview = "judge-rereview.md"

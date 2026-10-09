@@ -94,7 +94,7 @@ func TestRolesPrintsTheEffectiveRolesPerWatch(t *testing.T) {
 	}
 	out := f.Out.String()
 	actContains(t, out, "prompts_dir: "+f.Home+"/prompts",
-		"NAME           KIND    RUNS    MODEL  EFFORT  CAPTURE  OUTPUT            PROMPT",
+		"NAME           KIND    RUNS    MODEL  EFFORT  SESSION   CAPTURE  OUTPUT            PROMPT",
 		"claude-review.md (prompts_dir)", "judge-initial.md (embedded)")
 	groups := rolesGroups(out)
 	want := map[string][]string{
@@ -114,7 +114,7 @@ func TestRolesPrintsTheEffectiveRolesPerWatch(t *testing.T) {
 			break
 		}
 	}
-	if want := "droid-lint droid manual - - file droid-lint.md claude-review.md (prompts_dir) - - lint"; lint != want {
+	if want := "droid-lint droid manual - - - file droid-lint.md claude-review.md (prompts_dir) - - lint"; lint != want {
 		t.Errorf("droid-lint row = %q, want %q", lint, want)
 	}
 
@@ -136,6 +136,46 @@ func TestRolesPrintsTheEffectiveRolesPerWatch(t *testing.T) {
 	}
 	if code := f.run("roles", "extra"); code != 2 {
 		t.Errorf("extra argument: exit %d", code)
+	}
+}
+
+// The rounds one session of a role serves (max_session_rounds) are shown
+// with the other role keys: the built-in judge's 6, "-" for no limit and for
+// a shell role, which keeps no session; --json keys it like config.toml.
+func TestRolesPrintsMaxSessionRounds(t *testing.T) {
+	f := newRolesFixture(t)
+	if code := f.run("roles", "--repo", "talkable/talkable"); code != 0 {
+		t.Fatalf("exit %d: %s", code, f.Err.String())
+	}
+	out := f.Out.String()
+	actContains(t, out, "EFFORT  SESSION   CAPTURE")
+	rows := map[string]string{}
+	for line := range strings.SplitSeq(out, "\n") {
+		if fs := strings.Fields(line); len(fs) > 0 {
+			rows[fs[0]] = strings.Join(fs, " ")
+		}
+	}
+	for role, want := range map[string]string{
+		"codex-judge":   "codex-judge codex always - xhigh 6 rounds file codex-judge.json",
+		"claude-review": "claude-review claude always - high - file claude-review.md",
+		"droid-lint":    "droid-lint droid manual - - - file droid-lint.md",
+	} {
+		if !strings.HasPrefix(rows[role], want) {
+			t.Errorf("%s row = %q, want it to start %q", role, rows[role], want)
+		}
+	}
+
+	if code := f.run("roles", "--repo", "example/site", "--json"); code != 0 {
+		t.Fatalf("--json exit %d: %s", code, f.Err.String())
+	}
+	var got []struct {
+		Roles []map[string]any `json:"roles"`
+	}
+	if err := json.Unmarshal(f.Out.Bytes(), &got); err != nil {
+		t.Fatalf("%v\n%s", err, f.Out.String())
+	}
+	if len(got) != 1 || len(got[0].Roles) != 2 || got[0].Roles[0]["max_session_rounds"] != float64(6) {
+		t.Fatalf("roles = %+v, want the judge's max_session_rounds 6", got)
 	}
 }
 

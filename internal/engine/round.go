@@ -259,9 +259,14 @@ type roundSetup struct {
 	// sameHead: the round re-reviews the reviewed head, the judge alone
 	// (confirmSameHead).
 	sameHead bool
-	// coldJudge: the judge alone started in a fresh session because its
-	// prompt cache was cold (coldJudge); the reviewers kept theirs.
-	coldJudge bool
+	// freshJudge: the judge alone started in a fresh session on purpose,
+	// because its prompt cache was cold (coldJudge) or its session served
+	// its max_session_rounds (renewRoles); the reviewers kept theirs.
+	freshJudge bool
+	// renew: the other roles started in a fresh session because theirs
+	// served their max_session_rounds (renewRoles), with the round's
+	// prompts and effort.
+	renew []string
 	// replies: the round is a reply round (pipeline.RoundInput.Replies), or
 	// continues one.
 	replies int
@@ -374,15 +379,20 @@ func (e *Engine) startSessions(ctx context.Context, job *roundJob, rs *roundSetu
 		effort = effortCheck // a fresh judge checks the delta, or the same head, too (checkFresh)
 	}
 	if !fresh {
+		if why, err = e.renewRoles(ctx, job, rs, rs.toRun); err != nil {
+			return fail(err) // session_rotate.go
+		}
+	}
+	if !fresh && !rs.freshJudge {
 		var cold string
-		if rs.coldJudge, cold, err = e.coldJudge(ctx, job, rs); err != nil {
+		if rs.freshJudge, cold, err = e.coldJudge(ctx, job, rs); err != nil {
 			return fail(err) // judge_fresh.go
-		} else if rs.coldJudge {
+		} else if rs.freshJudge {
 			why = cold
 		}
 	}
 	recovered := false
-	if ws, recovered, err = e.startRoles(ctx, pr, ws, job.slot.Path, env, rs.toRun, fresh, rs.coldJudge, effort); err != nil {
+	if ws, recovered, err = e.startRoles(ctx, pr, ws, job.slot.Path, env, rs.toRun, fresh, rs.freshJudge, rs.renew, effort); err != nil {
 		return fail(err)
 	}
 
@@ -414,7 +424,12 @@ func (e *Engine) startSessions(ctx context.Context, job *roundJob, rs *roundSetu
 		if serr := e.preflight(ctx, agentKinds(extra)); serr != nil {
 			return ws, serr
 		}
-		if ws, _, err = e.startRoles(ctx, pr, ws, job.slot.Path, env, extra, fresh, false, effortOf(rs.kind)); err != nil {
+		if !fresh {
+			if _, err := e.renewRoles(ctx, job, rs, extra); err != nil {
+				return fail(err) // a continue renews none
+			}
+		}
+		if ws, _, err = e.startRoles(ctx, pr, ws, job.slot.Path, env, extra, fresh, false, rs.renew, effortOf(rs.kind)); err != nil {
 			return fail(err)
 		}
 		rs.toRun = append(rs.toRun, extra...)
@@ -476,7 +491,7 @@ func (e *Engine) roundInput(ctx context.Context, job *roundJob, rs roundSetup, w
 		ContinueRunID: job.continueRunID, DryRun: dryRun, PostMerge: job.postMerge,
 		NotesPath: e.roundNotes(job.repo), Readiness: e.readinessPlan(ctx, job, rs.kind), DeltaCheck: rs.delta, SameHead: rs.sameHead, Replies: rs.replies,
 		OwnPass: e.cfg.JudgeOwnPassFor(&job.watch) == config.OwnPassParallel, Related: e.cfg.RelatedFor(&job.watch),
-		ColdJudge: rs.coldJudge && rs.kind == pipeline.KindRecovery,
+		ColdJudge: rs.freshJudge && rs.kind == pipeline.KindRecovery,
 	}
 	if job.evalHead != "" {
 		in.Blind = true
@@ -533,7 +548,7 @@ func (e *Engine) restartJudge(job *roundJob, rs roundSetup, ws agents.Workspace)
 		return nil
 	}
 	judge, pr := rs.toRun[i], job.pr
-	fresh, effort := rs.kind != pipeline.KindRereview, judgeEffort(effortOf(job.kind), rs.coldJudge)
+	fresh, effort := rs.kind != pipeline.KindRereview, judgeEffort(effortOf(job.kind), rs.freshJudge)
 	return func(ctx context.Context) error {
 		if s, err := e.st.LiveSessionByPRRole(ctx, pr.ID, judge.Name); err == nil {
 			err := e.st.TransitionSession(ctx, s.ID, []string{store.SessionStarting, store.SessionLive}, store.SessionLost, nil)
@@ -632,7 +647,7 @@ func (e *Engine) switchHead(job *roundJob, rs roundSetup, base string, ws agents
 		for _, role := range rs.toRun {
 			if slices.Contains(parked, role.Name) {
 				effort := effortOf(kind)
-				if role.Judge && rs.coldJudge {
+				if role.Judge && rs.freshJudge {
 					effort = judgeEffort(effortOf(job.kind), true) // as startRoles started it
 				}
 				if _, err := e.ensureAgent(ctx, pr, role, ws, false, effort); err != nil {
@@ -750,8 +765,9 @@ const (
 	// effortCheck: the judge at its rereview effort, in a fresh session
 	// too. A delta check or a same-head re-review that may run with a
 	// fresh judge (checkFresh) reviews the delta alone either way; a
-	// re-review whose judge starts fresh only because its prompt cache is
-	// cold (coldJudge, startRoles) reviews the commits since the earlier
+	// re-review whose judge starts fresh on purpose (its prompt cache is
+	// cold, coldJudge, or its session served its max_session_rounds,
+	// renewRoles; startRoles) reviews the commits since the earlier
 	// reviews, which it reads from GitHub.
 	effortCheck
 )
@@ -768,12 +784,15 @@ func effortOf(kind string) startEffort {
 // workspace lacks) and starts or resumes the agent roles' agents, the judge
 // first, at effort (see startEffort; once the judge had to start fresh, the
 // other roles start at their full effort: the round becomes a recovery).
-// coldJudge starts the judge alone fresh (its prompt cache is cold,
-// coldJudge), at its rereview effort in a re-review (judgeEffort): the
-// others keep their conversations and effort, since they re-review as
-// before (pipeline.RoundInput.ColdJudge). recovered is true when the judge
-// started without a conversation to resume.
-func (e *Engine) startRoles(ctx context.Context, pr store.PR, ws agents.Workspace, slotPath string, env map[string]string, roles []config.Role, fresh, coldJudge bool, effort startEffort) (agents.Workspace, bool, error) {
+// freshJudge starts the judge alone fresh (its prompt cache is cold,
+// coldJudge, or its session served its max_session_rounds, renewRoles), at
+// its rereview effort in a re-review (judgeEffort): the others keep their
+// conversations and effort, since they re-review as before
+// (pipeline.RoundInput.ColdJudge). renew names the other roles started
+// fresh because their sessions served their max_session_rounds, at the
+// round's effort. recovered is true when the judge started without a
+// conversation to resume.
+func (e *Engine) startRoles(ctx context.Context, pr store.PR, ws agents.Workspace, slotPath string, env map[string]string, roles []config.Role, fresh, freshJudge bool, renew []string, effort startEffort) (agents.Workspace, bool, error) {
 	recovered := false
 	for _, role := range judgeFirst(roles) {
 		if ws.Panes[agents.Role(role.Name)] == "" {
@@ -787,15 +806,16 @@ func (e *Engine) startRoles(ctx context.Context, pr store.PR, ws agents.Workspac
 		}
 		at := effort
 		if role.Judge {
-			at = judgeEffort(effort, coldJudge)
+			at = judgeEffort(effort, freshJudge)
 		}
-		freshStart, err := e.ensureAgent(ctx, pr, role, ws, fresh || role.Judge && coldJudge, at)
+		renewed := role.Judge && freshJudge || slices.Contains(renew, role.Name)
+		freshStart, err := e.ensureAgent(ctx, pr, role, ws, fresh || renewed, at)
 		if err != nil {
 			return ws, false, fmt.Errorf("start %s: %w", role.Name, err)
 		}
 		if role.Judge && freshStart {
 			recovered = true
-			if !coldJudge {
+			if !freshJudge {
 				effort = effortFull
 			}
 		}
@@ -804,13 +824,14 @@ func (e *Engine) startRoles(ctx context.Context, pr store.PR, ws agents.Workspac
 }
 
 // judgeEffort is the start effort of a round's judge: a re-review's judge
-// that starts fresh only because its prompt cache is cold (coldJudge)
-// starts at its rereview effort (effortCheck), as the pipeline prompts it
-// (pipeline.RoundInput.ColdJudge), since the earlier reviews cover the rest
-// of the PR; a judge whose conversation is lost re-reads the history at
-// its full effort (effortRereview's rule).
-func judgeEffort(effort startEffort, coldJudge bool) startEffort {
-	if coldJudge && effort == effortRereview {
+// that starts fresh on purpose (freshJudge: its prompt cache is cold, or
+// its session served its max_session_rounds) starts at its rereview effort
+// (effortCheck), as the pipeline prompts it (pipeline.RoundInput.ColdJudge),
+// since the earlier reviews cover the rest of the PR; a judge whose
+// conversation is lost re-reads the history at its full effort
+// (effortRereview's rule).
+func judgeEffort(effort startEffort, freshJudge bool) startEffort {
+	if freshJudge && effort == effortRereview {
 		return effortCheck
 	}
 	return effort

@@ -67,6 +67,12 @@ type Role struct {
 	// A kind without those args ignores it, as it does Effort. The judge
 	// defaults to 2 (DefaultRoles).
 	MaxSubagents *int `toml:"max_subagents"`
+	// MaxSessionRounds is how many review rounds one session of the role
+	// may serve on a PR (its conversation, across parks and resumes): the
+	// round after that many starts the role in a fresh session (engine
+	// rotateSessions). 0 = no limit. Session roles only; the judge defaults
+	// to DefaultJudgeSessionRounds (DefaultRoles).
+	MaxSessionRounds int `toml:"max_session_rounds"`
 	// Args: session roles append them to the CLI's launch args; shell roles
 	// append them, shell-quoted, to the rendered Command.
 	Args []string `toml:"args"`
@@ -247,8 +253,9 @@ func (r Role) ShouldRun(ranBefore, requested bool) bool {
 // Timeout and the judge's prompt names):
 //
 //   - codex-judge: codex, judge, effort xhigh, rereview_effort high,
-//     max_subagents DefaultJudgeSubagents, skill DefaultSkill, prompts
-//     judge-*.md, timeout daemon.judge_timeout; aliases judge.
+//     max_subagents DefaultJudgeSubagents, max_session_rounds
+//     DefaultJudgeSessionRounds, skill DefaultSkill, prompts judge-*.md,
+//     timeout daemon.judge_timeout; aliases judge.
 //   - claude-review: claude, prompt claude-review.md, rereview
 //     claude-rereview.md, restart claude-restart.md, effort high,
 //     rereview_effort medium; aliases claude.
@@ -266,7 +273,8 @@ func (r Role) ShouldRun(ranBefore, requested bool) bool {
 // triage ([triage]).
 func DefaultRoles() []Role {
 	return []Role{
-		{Name: RoleCodexJudge, Kind: KindCodex, Judge: true, Effort: "xhigh", RereviewEffort: "high", MaxSubagents: new(DefaultJudgeSubagents), Skill: DefaultSkill,
+		{Name: RoleCodexJudge, Kind: KindCodex, Judge: true, Effort: "xhigh", RereviewEffort: "high", MaxSubagents: new(DefaultJudgeSubagents),
+			MaxSessionRounds: DefaultJudgeSessionRounds, Skill: DefaultSkill,
 			Prompt: "judge-initial.md", Rereview: "judge-rereview.md", ContinuePrompt: "judge-continue.md",
 			Recovery: "judge-recovery.md", Nudge: "judge-nudge.md",
 			Aliases: []string{"judge"}},
@@ -292,6 +300,13 @@ const defaultCodexReviewCommand = "command codex review{{if .Effort}} -c model_r
 // DefaultJudgeSubagents is the judge's max_subagents: on its own it started
 // 53 subagent threads in 36 sessions, 27% of the Codex spend.
 const DefaultJudgeSubagents = 2
+
+// DefaultJudgeSessionRounds is the judge's max_session_rounds: a Codex
+// session resumed round after round carries every round's context (29M
+// tokens of history after fifteen rounds on one PR), and its fifteenth turn
+// was refused by Codex's cybersecurity classifier, which flags the PR for
+// good.
+const DefaultJudgeSessionRounds = 6
 
 func defaultOutput(r Role) string {
 	if r.Judge {

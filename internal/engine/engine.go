@@ -88,7 +88,8 @@ type Agents interface {
 	Preflight(ctx context.Context, kind string) error
 	Park(ctx context.Context, pr store.PR) error
 	// Quit stops one session's agent and parks its conversation (a cold
-	// judge, coldJudge; a session parkReloading takes out of the checkout's
+	// judge, coldJudge; a session that served its max_session_rounds,
+	// rotateSessions; a session parkReloading takes out of the checkout's
 	// way).
 	Quit(ctx context.Context, s store.Session) error
 	// ReloadsProject reports whether a session's agent reloads the

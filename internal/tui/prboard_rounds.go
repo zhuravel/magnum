@@ -42,6 +42,9 @@ type RoundWhy struct {
 	Skipped   []string
 	Reason    string
 	EveryRole string
+	// Rotated are the roles the round started in a fresh session because
+	// their sessions served their max_session_rounds.
+	Rotated []RoleRotation
 	// At is when the round started (its engine.round_start event).
 	At time.Time
 }
@@ -51,6 +54,13 @@ type RoundWhy struct {
 type RoleRerun struct {
 	Role  string
 	Lines int
+}
+
+// RoleRotation is a role whose session served Rounds review rounds, its
+// max_session_rounds, so the round started it in a fresh session.
+type RoleRotation struct {
+	Role   string
+	Rounds int
 }
 
 // RoundProgress is a round in flight: when it started (the PR's
@@ -162,6 +172,10 @@ func cleanRoundWhy(w RoundWhy) RoundWhy {
 	for i := range w.Reruns {
 		w.Reruns[i].Role = cleanText(w.Reruns[i].Role)
 	}
+	w.Rotated = slices.Clone(w.Rotated)
+	for i := range w.Rotated {
+		w.Rotated[i].Role = cleanText(w.Rotated[i].Role)
+	}
 	return w
 }
 
@@ -214,7 +228,8 @@ func DeltaCheckPhrase(lines int) string {
 
 // roundWhyLines say which roles the last round ran and why, one fact a line
 // (the caller wraps them): the round's kind and roles, what triage decided,
-// the roles a change of their code added and the ones asked for. A continue
+// the roles a change of their code added, the ones asked for and the ones
+// it started in a fresh session after their max_session_rounds. A continue
 // round and a delta check run the judge alone, which they say instead of
 // naming it.
 func (p *prbPainter) roundWhyLines(w RoundWhy) []string {
@@ -261,6 +276,13 @@ func (p *prbPainter) roundWhyLines(w RoundWhy) []string {
 	}
 	if len(asked) > 0 {
 		out = append(out, p.st.Dim.Render("asked for: ")+strings.Join(asked, ", "))
+	}
+	if len(w.Rotated) > 0 {
+		var fresh []string
+		for _, r := range w.Rotated {
+			fresh = append(fresh, r.Role+" after "+textx.Count(r.Rounds, "round", "rounds"))
+		}
+		out = append(out, p.st.Dim.Render("fresh "+textx.Plural(len(fresh), "session", "sessions")+": ")+strings.Join(fresh, ", "))
 	}
 	return out
 }

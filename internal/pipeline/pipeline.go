@@ -306,7 +306,8 @@ type RoundInput struct {
 	Replies int
 	// ColdJudge (recovery): the judge alone started in a fresh session
 	// because its conversation's prompt cache had gone cold ([pipeline]
-	// judge_fresh_after), while the reviewers kept theirs: the judge gets
+	// judge_fresh_after) or its session served the role's
+	// max_session_rounds, while the reviewers kept theirs: the judge gets
 	// the recovery prompt, and the reviewers re-review the commits since
 	// the last review as in a re-review (their rereview prompts and effort)
 	// instead of reviewing the whole PR again. The judge works at its

@@ -758,8 +758,9 @@ func (rd *round) judgeData(run store.Run, marker string) agents.JudgeData {
 	if base == "" {
 		base = in.Repo.DefaultBranch
 	}
-	// A judge that started fresh only because its prompt cache was cold
-	// works at its rereview effort, as the engine launched it: the earlier
+	// A judge that started fresh on purpose (its prompt cache was cold, or
+	// its session served its max_session_rounds) works at its rereview
+	// effort, as the engine launched it: the earlier
 	// reviews cover the PR up to the previous head. A lost session's
 	// recovery keeps the full effort.
 	cold := in.ColdJudge && in.Kind == KindRecovery

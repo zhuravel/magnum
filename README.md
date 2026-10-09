@@ -493,7 +493,8 @@ the commits since the last review (the whole PR again after a force push); a del
 the same head runs with a fresh judge at its `rereview_effort` too. A judge still live in its pane is quit
 first, which parks its conversation (history kept), and the fresh one starts once herdr no longer lists it.
 A continue finishes its paused turn in the old conversation. Each such start is a `round.judge_fresh_cold`
-event with the idle time.
+event with the idle time. A session that has served its role's `max_session_rounds` (the judge's 6) starts
+fresh the same way, however recent its last turn (see Roles and kinds).
 
 ### Identities: who posts
 
@@ -760,6 +761,7 @@ rereview = "judge-rereview.md"
 effort = "xhigh"
 rereview_effort = "high"           # re-reviews of new commits; the first review stays at xhigh
 max_subagents = 2                  # subagents open at once (0 = none)
+max_session_rounds = 6             # rounds one session serves on a PR, then a fresh one (0 = no limit)
 timeout = "90m"
 ```
 
@@ -971,6 +973,20 @@ args (Codex: `-c agents.max_concurrent_threads_per_session=N`; `0` turns them of
 agents.enabled=false`; a kind without those args ignores the key). The judge defaults to 2: on its own it
 started 53 subagent threads in 36 sessions, 27% of the Codex spend, two of them over a million tokens on one
 PR. Codex caps the threads open at once, not how many a session starts in all.
+
+A role's `max_session_rounds` is how many review rounds one of its sessions may serve on a PR (`0`, the
+default, sets no limit; shell roles keep no session). The built-in judge serves 6: a Codex session resumed
+round after round carries every round's context, and on one PR the judge's fifteenth round in one session
+(29 million tokens of history) was refused by Codex's cybersecurity classifier, which flags the PR for
+good. When a round starts and the role's conversation on the PR (its resumes included) has served that
+many rounds (an own pass, a continue or a nudge is part of its round, not a round of its own), the role
+starts in a fresh session instead: a live one is quit first (parked, history kept), a parked one is not
+resumed. The judge goes the way a cold judge does (see `judge_fresh_after`): the round becomes a recovery
+whose prompt has it read its earlier reviews, their threads and its findings from GitHub, at its
+`rereview_effort`, while the reviewers keep their conversations; any other role starts fresh alone with
+the round's prompt. A continue finishes its turn in the old session, and a session at work or at a dialog
+is never quit. Each such start is an `agent.session_rotated` event ("codex-judge: fresh session after 6
+rounds") in `magnum logs`, and the board's card lists it under LAST ROUND.
 
 Magnum's Codex sessions (the judge, `codex review`) run on your own Codex setup: `$CODEX_HOME`'s login and
 session files (which Magnum resumes and reads for usage), its `config.toml` (hooks and plugins) and your
@@ -1311,7 +1327,7 @@ Fix 1 problem before merging. 1 optional: 1 simplification.
 | `magnum review <url\|owner/repo#N\|repo#N\|N> [--fresh] [--role <role>] [--simplify] [--replies] [--as <identity>] [--no-post] [--wait] [--timeout <duration>]` | Force a round now, bypassing throttles. `--replies` has the judge alone re-decide the replies on Magnum's review now, answering in the threads unless its verdict changes (a head Magnum reviewed; see the replies under Re-reviews). `--role` (repeatable) also runs an on-demand role this round; `--simplify` is its shorthand for the role aliased `simplify` (claude-simplify by default). `--wait` follows the round; `--timeout` stops following after that long while the round goes on. On a head Magnum already reviewed (no new commits) only the judge runs, to re-decide its earlier findings from the replies; `--role`, `--simplify` and `--fresh` keep the full round. On a PR GitHub merged it is a post-merge review: the commits Magnum missed since its last review (the whole PR when it never reviewed it), posted as a comment only, after which the PR is released again; a merged PR whose head was reviewed and a PR closed without merging are refused. A pinned PR (`magnum open`, `magnum pin`) is unpinned for it; its slot's guards still keep a person's changes or agent safe, and the answer names the guard that holds the round. |
 | `magnum open <ref> [--role <role>]` | Focus the PR's pane in herdr and reveal the herdr client of `[terminal] session` (default `default`) in `[terminal] app` (Terminal, iTerm2, Ghostty, WezTerm, or `custom` with a `launcher` template): focus the tab that runs it, or open a new one. When macOS refuses its AppleScript (the Automation permission, error -1743) it says so and where to allow it. With `[terminal] reveal_on_attention = true` the daemon does the same by itself for a PR that needs you (an agent waiting on a dialog, a round that needs attention), at most once in 30 minutes for the same agent or cause. |
 | `magnum watch <ref> [--role <role>] [--ansi]` | Read-only live mirror of a pane in any terminal. `--ansi` keeps the pane's colors and text styles only: links, clipboard writes, cursor moves and screen erases are dropped, and both modes show a control character as a space. |
-| `magnum roles [--repo owner/name] [--kinds] [--json]` | The effective roles per watch (kind, runs, model, effort, capture, output, prompt file and whether it is yours or built in, after, judge, aliases). `--kinds` shows how each agent CLI is started and resumed, and which models it switches to when one hits its own limit, instead. |
+| `magnum roles [--repo owner/name] [--kinds] [--json]` | The effective roles per watch (kind, runs, model, effort, the rounds one session serves (`max_session_rounds`), capture, output, prompt file and whether it is yours or built in, after, judge, aliases). `--kinds` shows how each agent CLI is started and resumed, and which models it switches to when one hits its own limit, instead. |
 | `magnum attention [--list]` | Jump to whatever needs you: a blocked agent, a failed round, an unseen result. A PR in needs_attention is explained in one line (the stage, how many attempts on which head, the line of the output that names the cause) with the next step; `magnum status <ref>` adds the failing step and the end of its output, and the dashboard, the PR board's card and `magnum review --wait` say the same. `--json` omits `since` for an item that has no time. |
 | `magnum pick` | Filterable PR picker; the herdr popup and ctrl+click on PR links use it. `enter` reviews (a reviewed head again too), `ctrl+f` fresh, `ctrl+g` opens the pane, `ctrl+o` the browser, `ctrl+p` pins or unpins, `ctrl+x` releases, `ctrl+r` refreshes the list; a key that cannot act on the PR says why instead (a review while its round runs, a release of a pinned PR). In the herdr popup a failure stays on screen until a key is pressed. |
 | `magnum ui open picker\|status\|cleanup\|doctor [--workspace id] [--width 90%] [--height 60%]` | Open one of the herdr plugin's popup panes over the herdr socket (what the plugin's keys run); the sizes come from the `[[panes]]` of `herdr-plugin.toml` unless given, the workspace from the plugin's context. |

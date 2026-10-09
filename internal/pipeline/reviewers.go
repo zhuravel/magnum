@@ -589,8 +589,9 @@ func (rd *round) timeout(role config.Role) time.Duration { return role.Timeout.D
 
 // reviewersRereview reports whether the round's reviewers re-review the
 // commits since the previous review (their rereview prompts and effort): a
-// re-review, or a recovery whose judge alone started fresh because its
-// prompt cache was cold (RoundInput.ColdJudge), with a previous head.
+// re-review, or a recovery whose judge alone started fresh on purpose (its
+// prompt cache was cold, or its session served its max_session_rounds:
+// RoundInput.ColdJudge), with a previous head.
 func (rd *round) reviewersRereview() bool {
 	k := rd.in.Kind
 	return (k == KindRereview || k == KindRecovery && rd.in.ColdJudge) && rd.previousHead() != ""

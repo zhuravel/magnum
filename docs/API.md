@@ -772,11 +772,12 @@ type JudgeData struct {
 	// ForcePushed (rereview, recovery): PreviousHeadSHA is no longer in the
 	// branch, so the judge reviews the full PR diff again.
 	ForcePushed bool
-	// ColdJudge (recovery): the judge started fresh only because its
-	// conversation's prompt cache had gone cold (pipeline.RoundInput
-	// .ColdJudge), not because its session was lost: the earlier reviews
-	// cover the PR up to PreviousHeadSHA, so the own pass reads the commits
-	// since (unless ForcePushed or BaseMerged says otherwise).
+	// ColdJudge (recovery): the judge started fresh on purpose, because its
+	// conversation's prompt cache had gone cold or its session served its
+	// max_session_rounds (pipeline.RoundInput.ColdJudge), not because its
+	// session was lost: the earlier reviews cover the PR up to
+	// PreviousHeadSHA, so the own pass reads the commits since (unless
+	// ForcePushed or BaseMerged says otherwise).
 	ColdJudge bool
 	// PreviousHeadShort is PreviousHeadSHA cut to 7 characters (always
 	// derived; see textx.ShortSHA).
@@ -2486,6 +2487,12 @@ const DefaultIdleRemoveAfter = 168 * time.Hour
     Without it every reconcile removed the surplus at once, and the next
     provision wrote about 1 GB again.
 
+const DefaultJudgeSessionRounds = 6
+    DefaultJudgeSessionRounds is the judge's max_session_rounds: a Codex session
+    resumed round after round carries every round's context (29M tokens of
+    history after fifteen rounds on one PR), and its fifteenth turn was refused
+    by Codex's cybersecurity classifier, which flags the PR for good.
+
 const DefaultJudgeSubagents = 2
     DefaultJudgeSubagents is the judge's max_subagents: on its own it started 53
     subagent threads in 36 sessions, 27% of the Codex spend.
@@ -3758,6 +3765,12 @@ type Role struct {
 	// A kind without those args ignores it, as it does Effort. The judge
 	// defaults to 2 (DefaultRoles).
 	MaxSubagents *int `toml:"max_subagents"`
+	// MaxSessionRounds is how many review rounds one session of the role
+	// may serve on a PR (its conversation, across parks and resumes): the
+	// round after that many starts the role in a fresh session (engine
+	// rotateSessions). 0 = no limit. Session roles only; the judge defaults
+	// to DefaultJudgeSessionRounds (DefaultRoles).
+	MaxSessionRounds int `toml:"max_session_rounds"`
 	// Args: session roles append them to the CLI's launch args; shell roles
 	// append them, shell-quoted, to the rendered Command.
 	Args []string `toml:"args"`
@@ -3855,8 +3868,9 @@ func DefaultRoles() []Role
     and the judge's prompt names):
 
       - codex-judge: codex, judge, effort xhigh, rereview_effort high,
-        max_subagents DefaultJudgeSubagents, skill DefaultSkill, prompts
-        judge-*.md, timeout daemon.judge_timeout; aliases judge.
+        max_subagents DefaultJudgeSubagents, max_session_rounds
+        DefaultJudgeSessionRounds, skill DefaultSkill, prompts judge-*.md,
+        timeout daemon.judge_timeout; aliases judge.
       - claude-review: claude, prompt claude-review.md, rereview
         claude-rereview.md, restart claude-restart.md, effort high,
         rereview_effort medium; aliases claude.
@@ -4976,7 +4990,8 @@ type Agents interface {
 	Preflight(ctx context.Context, kind string) error
 	Park(ctx context.Context, pr store.PR) error
 	// Quit stops one session's agent and parks its conversation (a cold
-	// judge, coldJudge; a session parkReloading takes out of the checkout's
+	// judge, coldJudge; a session that served its max_session_rounds,
+	// rotateSessions; a session parkReloading takes out of the checkout's
 	// way).
 	Quit(ctx context.Context, s store.Session) error
 	// ReloadsProject reports whether a session's agent reloads the
@@ -11199,7 +11214,8 @@ type RoundInput struct {
 	Replies int
 	// ColdJudge (recovery): the judge alone started in a fresh session
 	// because its conversation's prompt cache had gone cold ([pipeline]
-	// judge_fresh_after), while the reviewers kept theirs: the judge gets
+	// judge_fresh_after) or its session served the role's
+	// max_session_rounds, while the reviewers kept theirs: the judge gets
 	// the recovery prompt, and the reviewers re-review the commits since
 	// the last review as in a re-review (their rereview prompts and effort)
 	// instead of reviewing the whole PR again. The judge works at its
@@ -15722,6 +15738,13 @@ type RoleRerun struct {
     RoleRerun is a role that ran again because Lines code lines changed since
     its last run.
 
+type RoleRotation struct {
+	Role   string
+	Rounds int
+}
+    RoleRotation is a role whose session served Rounds review rounds, its
+    max_session_rounds, so the round started it in a fresh session.
+
 type RoundProgress struct {
 	StartedAt time.Time
 	Roles     []RoleProgress
@@ -15759,6 +15782,9 @@ type RoundWhy struct {
 	Skipped   []string
 	Reason    string
 	EveryRole string
+	// Rotated are the roles the round started in a fresh session because
+	// their sessions served their max_session_rounds.
+	Rotated []RoleRotation
 	// At is when the round started (its engine.round_start event).
 	At time.Time
 }

@@ -5324,3 +5324,28 @@ editing history. Code, config comments and prompts reference these by their head
   skillMaxBytes 30,182 to 30,436. The session's length is addressed apart (`max_session_rounds`). Rejected:
   forbidding mutants (the 2026-10-08 rule needs the failing example a mutant names); a rule for the reviewers'
   prompts (the refusals have come from the Codex judge, whose session carries every round).
+- **A role's session starts fresh after `max_session_rounds` rounds** (2026-10-09, amends "A cold judge
+  starts in a fresh session"). The Codex judge of talkable/talkable#11483 was refused by Codex's
+  cybersecurity classifier in round 15, on a session resumed across all fifteen rounds (29 million
+  tokens of history, 272 thousand in the refused turn), and a refusal flags the PR for good. A
+  `[[role]]` key `max_session_rounds` (0 = no limit; session roles only; the built-in codex-judge 6, the
+  other built-in roles 0) is how many review rounds one session of the role may serve on a PR. When a
+  round starts, a role whose conversation served that many starts in a fresh session, a new generation
+  (engine `rotateSessions`). A conversation's rounds are the distinct round numbers of the runs that
+  reached it on any of its session rows: a resume is a row of its own, followed through `session_id`
+  and `resumed_from`, and an own pass, a continue or a nudge counts with its round. A live session is
+  quit first (parked, history kept) and the role starts once herdr no longer lists the quit agent, as
+  for a cold judge; a parked or lost one is not resumed. The judge takes the cold judge's path
+  (`pipeline.RoundInput.ColdJudge`): a re-review becomes a recovery whose prompt has it read its
+  earlier reviews, their threads and its previous findings, at its `rereview_effort`, while the
+  reviewers keep their conversations, and a delta check or a re-review of the same head runs with a
+  fresh judge ("the judge's session served 6 rounds (max_session_rounds 6)"). Another role starts
+  fresh alone, with the round's prompt and effort. A continue, or a round that continues a paused
+  one, never rotates, nor does a session that works or is blocked: rotation happens only when a round
+  starts. Each is an `agent.session_rotated` event ("codex-judge: fresh session after 6 rounds", with
+  `role`, `rounds`, `max_session_rounds`, `was_live`), which the card's LAST ROUND lists ("fresh
+  session: codex-judge after 6 rounds"; `rotated` in `prs --json`); `magnum roles` shows the key as
+  SESSION. Rejected: rotating by token count, which magnum does not read for a Codex conversation (its
+  usage reader takes only the account's rate-limit windows from Codex's session files), and a time
+  limit (the history grows with the rounds, not with the hours between them, and `judge_fresh_after`
+  already starts a judge fresh once its prompt cache has gone cold).

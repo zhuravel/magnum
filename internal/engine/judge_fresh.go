@@ -60,18 +60,8 @@ func (e *Engine) coldJudge(ctx context.Context, job *roundJob, rs *roundSetup) (
 		if id, _ := e.d.Agents.ResumeID(ctx, pr.ID, agents.Role(judge.Name)); id == "" {
 			return false, "", nil // nothing to resume: the judge starts fresh anyway
 		}
-	} else {
-		switch herdr.Status(deref(live.AgentStatus)) {
-		case herdr.StatusWorking, herdr.StatusBlocked:
-			return false, "", nil
-		}
-		if err := e.d.Agents.Quit(ctx, live); err != nil {
-			e.log.Warn("cold judge: quit failed; resuming it", "pr", pr.ID, "err", err)
-			return false, "", nil
-		}
-		if name := deref(live.AgentName); !e.quitAgentGone(ctx, name) {
-			return false, "", fmt.Errorf("cold judge: herdr still lists the agent %s it quit, which a start would adopt: %w", name, agents.ErrBusy)
-		}
+	} else if quit, err := e.quitToRenew(ctx, live, "cold judge"); !quit || err != nil {
+		return false, "", err
 	}
 	ended := fmt.Sprintf("last turn ended %s ago (judge_fresh_after %s)", humanDuration(idle.Round(time.Minute)), humanDuration(after))
 	e.event(ctx, "info", prSubject(job.repo, pr.Number), "round.judge_fresh_cold",
@@ -81,7 +71,30 @@ func (e *Engine) coldJudge(ctx context.Context, job *roundJob, rs *roundSetup) (
 	return true, "the judge's " + ended, nil
 }
 
-// How long coldJudge waits for herdr to drop the agent it quit
+// quitToRenew quits the live agent of session s so that its role starts in
+// a fresh session (coldJudge, rotateSessions); Quit parks the conversation,
+// history kept. It reports false, the session kept for the round, when the
+// agent works or is blocked, or Quit cannot stop it (logged); an error
+// (agents.ErrBusy: the setup is retried after busyRetry, uncharged) when
+// herdr keeps listing the quit agent, which a start under the role's name
+// would adopt and lose (quitAgentGone). what names the caller in the log
+// and the error.
+func (e *Engine) quitToRenew(ctx context.Context, s store.Session, what string) (bool, error) {
+	switch herdr.Status(deref(s.AgentStatus)) {
+	case herdr.StatusWorking, herdr.StatusBlocked:
+		return false, nil
+	}
+	if err := e.d.Agents.Quit(ctx, s); err != nil {
+		e.log.Warn(what+": quit failed; resuming it", "pr", s.PRID, "role", s.Role, "err", err)
+		return false, nil
+	}
+	if name := deref(s.AgentName); !e.quitAgentGone(ctx, name) {
+		return false, fmt.Errorf("%s: herdr still lists the agent %s it quit, which a start would adopt: %w", what, name, agents.ErrBusy)
+	}
+	return true, nil
+}
+
+// How long quitToRenew waits for herdr to drop the agent it quit
 // (quitAgentGone): quitGoneChecks snapshots quitGonePoll apart, about 10 s.
 const (
 	quitGonePoll   = 500 * time.Millisecond

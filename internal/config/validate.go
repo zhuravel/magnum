@@ -782,6 +782,12 @@ func (c *Config) validateRole(r Role, kinds map[string]Kind, ids map[string]bool
 	if r.MaxSubagents != nil && *r.MaxSubagents < 0 {
 		bad("max_subagents must be 0 (none) or more, got %d", *r.MaxSubagents)
 	}
+	switch {
+	case r.MaxSessionRounds < 0:
+		bad("max_session_rounds must be 0 (no limit) or more, got %d", r.MaxSessionRounds)
+	case r.MaxSessionRounds > 0 && r.IsShell():
+		bad("max_session_rounds is for session roles only (a shell role keeps no session)")
+	}
 	for key := range r.Env {
 		if !envKeyRe.MatchString(key) {
 			bad("env key %q is not a valid variable name", key)

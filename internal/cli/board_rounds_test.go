@@ -149,6 +149,25 @@ func TestBoardRoundFactsRerunAddedARole(t *testing.T) {
 	}
 }
 
+// A role whose session served its max_session_rounds started the round in
+// a fresh session (agent.session_rotated, during the setup): once per role
+// (a retried setup recorded it twice, the newer count counts), and never
+// one an earlier round's setup recorded.
+func TestBoardRoundFactsSayWhichSessionsStartedFresh(t *testing.T) {
+	f := newRoundsFixture(t)
+	f.event("agent.session_rotated", map[string]any{"role": "claude-review", "rounds": 4, "max_session_rounds": 4})
+	f.roundStart("rereview", []string{"codex-judge", "claude-review"}, nil, false)
+	f.event("agent.session_rotated", map[string]any{"role": "codex-judge", "rounds": 7, "max_session_rounds": 6})
+	f.event("agent.session_rotated", map[string]any{"role": "codex-judge", "rounds": 6, "max_session_rounds": 6})
+	f.event("agent.session_rotated", map[string]any{"rounds": 6})
+	f.roundStart("recovery", []string{"codex-judge", "claude-review"}, nil, false)
+	want := &tui.RoundWhy{Kind: "recovery", Roles: []string{"codex-judge", "claude-review"},
+		Rotated: []tui.RoleRotation{{Role: "codex-judge", Rounds: 6}}}
+	if got := f.why(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("RoundWhy = %+v, want %+v", got, want)
+	}
+}
+
 func TestBoardRoundFactsRequestedRole(t *testing.T) {
 	f := newRoundsFixture(t)
 	f.roundStart("rereview", []string{"codex-judge", "claude-simplify"}, []string{"claude-simplify"}, true)

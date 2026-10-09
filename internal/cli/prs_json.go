@@ -220,12 +220,18 @@ type prsJSONRoundWhy struct {
 	Skipped    []string           `json:"skipped"`
 	Reason     string             `json:"reason"`
 	EveryRole  string             `json:"every_role"`          // why triage kept every role
+	Rotated    []prsJSONRotation  `json:"rotated"`             // roles started in a fresh session after their max_session_rounds
 	StartedAt  time.Time          `json:"started_at,omitzero"` // its engine.round_start
 }
 
 type prsJSONRoleRerun struct {
 	Role  string `json:"role"`
 	Lines int    `json:"lines"` // code lines changed since its last run
+}
+
+type prsJSONRotation struct {
+	Role   string `json:"role"`
+	Rounds int    `json:"rounds"` // the rounds its old session served
 }
 
 type prsJSONProgress struct {
@@ -299,7 +305,8 @@ func prsJSONRoundWhyOf(w tui.RoundWhy) prsJSONRoundWhy {
 	return prsJSONRoundWhy{Kind: w.Kind, PostMerge: w.PostMerge, DeltaCheck: w.DeltaCheck, DeltaLines: w.DeltaLines,
 		Roles: listOf(w.Roles), Requested: listOf(w.Requested),
 		Reruns:  mapList(w.Reruns, func(r tui.RoleRerun) prsJSONRoleRerun { return prsJSONRoleRerun{Role: r.Role, Lines: r.Lines} }),
-		Triaged: w.Triaged, Skipped: listOf(w.Skipped), Reason: w.Reason, EveryRole: w.EveryRole, StartedAt: w.At}
+		Triaged: w.Triaged, Skipped: listOf(w.Skipped), Reason: w.Reason, EveryRole: w.EveryRole, StartedAt: w.At,
+		Rotated: mapList(w.Rotated, func(r tui.RoleRotation) prsJSONRotation { return prsJSONRotation{Role: r.Role, Rounds: r.Rounds} })}
 }
 
 func prsJSONProgressOf(g tui.RoundProgress) prsJSONProgress {

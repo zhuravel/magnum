@@ -14,6 +14,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/textx"
 )
 
 const rolesUsage = "[--repo owner/name] [--kinds] [--json]"
@@ -27,7 +28,7 @@ func newRolesCmd(c *Context) *cobra.Command {
 	var o rolesOpts
 	cmd := newCommand(groupInspect, "roles "+rolesUsage, "the effective review roles per watch (--kinds: the agent CLIs magnum drives)",
 		"Print the review roles each [[watch]] runs, resolved from [[role]] and the built-in defaults: name, kind, "+
-			"runs, model, effort, capture, report file, initial prompt (and whether prompts_dir or the embedded copy "+
+			"runs, model, effort, the rounds one session serves (max_session_rounds), capture, report file, initial prompt (and whether prompts_dir or the embedded copy "+
 			"provides it), the roles it runs after, the judge and the aliases --role accepts. --repo shows the roles "+
 			"of the watch covering one repository. --kinds prints the [kinds.<name>] specs instead: wrapper mode, "+
 			"login check, the resume, model, effort, subagents, MCP-off and name args, the session source and the command line each "+
@@ -175,7 +176,7 @@ func rolesRender(w io.Writer, cfg *config.Config, groups []rolesGroup) {
 			continue
 		}
 		tw := inspTable(w)
-		fmt.Fprintln(tw, "  NAME\tKIND\tRUNS\tMODEL\tEFFORT\tCAPTURE\tOUTPUT\tPROMPT\tAFTER\tJUDGE\tALIASES")
+		fmt.Fprintln(tw, "  NAME\tKIND\tRUNS\tMODEL\tEFFORT\tSESSION\tCAPTURE\tOUTPUT\tPROMPT\tAFTER\tJUDGE\tALIASES")
 		var commands []string
 		for _, r := range g.Roles {
 			kind := r.Kind
@@ -190,8 +191,12 @@ func rolesRender(w io.Writer, cfg *config.Config, groups []rolesGroup) {
 			if r.Judge {
 				judge = "yes"
 			}
-			fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", r.Name, kind, r.Runs, inspOrDash(r.Model), inspOrDash(r.Effort),
-				r.Capture, r.ReportFile(), prompt, inspOrDash(strings.Join(r.After, ",")), inspOrDash(judge), inspOrDash(strings.Join(r.Aliases, ",")))
+			session := "" // the rounds one session serves (max_session_rounds); "-" = no limit
+			if r.MaxSessionRounds > 0 {
+				session = textx.Count(r.MaxSessionRounds, "round", "rounds")
+			}
+			fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", r.Name, kind, r.Runs, inspOrDash(r.Model), inspOrDash(r.Effort),
+				inspOrDash(session), r.Capture, r.ReportFile(), prompt, inspOrDash(strings.Join(r.After, ",")), inspOrDash(judge), inspOrDash(strings.Join(r.Aliases, ",")))
 			if r.IsShell() && r.Command != "" {
 				commands = append(commands, fmt.Sprintf("  %s runs: %s", r.Name, strings.Join(append([]string{r.Command}, r.Args...), " ")))
 			}
