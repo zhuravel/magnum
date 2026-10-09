@@ -250,10 +250,14 @@ func (b *actionBar) clock() time.Time {
 
 // leave closes the screen (to switch to the other one, with switching).
 // With an action in flight it first waits for that action, at most
-// finishGrace; ctrl+c during the wait closes at once.
+// finishGrace; ctrl+c during the wait closes at once. Either way the screen
+// is leaving from now on and the question still up is dropped, so the keys
+// Bubble Tea hands it before it handles tea.Quit go to leavingKey: a y
+// typed after ctrl+c starts no action on a context about to end.
 func (b *actionBar) leave(switching bool) tea.Cmd {
-	b.switching = switching
+	b.switching, b.confirm = switching, nil
 	if b.busy == "" {
+		b.leaving = true
 		return tea.Quit
 	}
 	if b.leaving {

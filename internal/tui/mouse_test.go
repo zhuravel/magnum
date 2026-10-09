@@ -87,7 +87,7 @@ func boardRow(t *testing.T, m prBoardModel, ref string) int {
 // run executes cmd and feeds its messages back into m.
 func run[M tea.Model](t *testing.T, m M, cmd tea.Cmd) M {
 	t.Helper()
-	m, _ = send(t, m, execCmd(cmd)...)
+	m, _ = send(t, m, execCmd(t, cmd)...)
 	return m
 }
 

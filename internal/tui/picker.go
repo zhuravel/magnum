@@ -263,7 +263,13 @@ func (m *pickerModel) resize(w, h int) {
 	m.list.FilterInput.SetWidth(max(listW-len(pickPrompt)-1, 8))
 }
 
+// Update implements tea.Model. Once the picker finished (done), the keys
+// Bubble Tea still hands it before it handles tea.Quit do nothing, so an
+// action key or a y typed after esc never turns the cancel into an action.
 func (m pickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.done {
+		return m, nil
+	}
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.resize(msg.Width, msg.Height)

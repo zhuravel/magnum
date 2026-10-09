@@ -209,7 +209,7 @@ func TestWatchStopWatchEndsTheScreen(t *testing.T) {
 	m := watchAt(t, 80, 10, nil)
 	m, _ = send(t, m, frameMsg(numberedFrame(5)))
 	m, cmd := send(t, m, watchResultMsg{err: StopWatch(errSentinel)})
-	if !isQuit(execCmd(cmd)) {
+	if !isQuit(execCmd(t, cmd)) {
 		t.Fatal("a StopWatch error must quit")
 	}
 	if got := m.stopError(); got != errSentinel {
@@ -219,14 +219,14 @@ func TestWatchStopWatchEndsTheScreen(t *testing.T) {
 	// Wrapped further by the fetch function, it still stops.
 	m = watchAt(t, 80, 10, nil)
 	m, cmd = send(t, m, watchResultMsg{err: fmt.Errorf("pane gone: %w", StopWatch(errSentinel))})
-	if !isQuit(execCmd(cmd)) || !errors.Is(m.stopError(), errSentinel) {
-		t.Errorf("wrapped StopWatch: quit=%v err=%v", isQuit(execCmd(cmd)), m.stopError())
+	if !isQuit(execCmd(t, cmd)) || !errors.Is(m.stopError(), errSentinel) {
+		t.Errorf("wrapped StopWatch: quit=%v err=%v", isQuit(execCmd(t, cmd)), m.stopError())
 	}
 
 	// A plain error never stops.
 	m = watchAt(t, 80, 10, nil)
 	m, cmd = send(t, m, watchResultMsg{err: errSentinel})
-	if m.stopError() != nil || isQuit(execCmd(cmd)) {
+	if m.stopError() != nil || isQuit(execCmd(t, cmd)) {
 		t.Error("a plain fetch error must not stop the watch")
 	}
 }
@@ -290,7 +290,7 @@ func TestWatchQuitKeys(t *testing.T) {
 		t.Run(k, func(t *testing.T) {
 			m := watchAt(t, 80, 10, nil)
 			m, cmd := send(t, m, keys(k)...)
-			if !isQuit(execCmd(cmd)) {
+			if !isQuit(execCmd(t, cmd)) {
 				t.Errorf("%s did not quit", k)
 			}
 			if m.stopError() != nil {
@@ -309,7 +309,7 @@ func TestWatchFetchLoop(t *testing.T) {
 	m := testWatch(context.Background(), fetch, WatchOptions{Interval: time.Hour})
 
 	// Init fetches once; nothing else fetches until a tick arrives.
-	msgs := execCmd(m.Init())
+	msgs := execCmd(t, m.Init())
 	if len(msgs) != 1 || calls.Load() != 1 {
 		t.Fatalf("Init produced %v after %d fetches", msgs, calls.Load())
 	}
@@ -321,7 +321,7 @@ func TestWatchFetchLoop(t *testing.T) {
 	if cmd == nil || calls.Load() != 1 {
 		t.Fatalf("after a result: cmd=%v fetches=%d, want a pending tick and no new fetch", cmd != nil, calls.Load())
 	}
-	if got := execCmd(cmd); len(got) != 0 {
+	if got := execCmd(t, cmd); len(got) != 0 {
 		t.Fatalf("the tick fired before the interval: %v", got)
 	}
 	m, _ = send(t, m, tea.WindowSizeMsg{Width: 80, Height: 10}, keys("j")[0])
@@ -330,7 +330,7 @@ func TestWatchFetchLoop(t *testing.T) {
 	}
 
 	_, cmd = send(t, m, watchTickMsg{})
-	msgs = execCmd(cmd)
+	msgs = execCmd(t, cmd)
 	if len(msgs) != 1 || calls.Load() != 2 {
 		t.Fatalf("a tick must start exactly one fetch; msgs=%v fetches=%d", msgs, calls.Load())
 	}
@@ -344,7 +344,7 @@ func TestWatchFetchGetsTheModelContext(t *testing.T) {
 		got = c.Value(key{})
 		return WatchFrame{}, nil
 	}, WatchOptions{})
-	execCmd(m.Init())
+	execCmd(t, m.Init())
 	if got != "v" {
 		t.Errorf("fetch ctx value = %v", got)
 	}
@@ -360,7 +360,7 @@ func TestWatchFetchHasADeadline(t *testing.T) {
 		}
 		return WatchFrame{}, nil
 	}, WatchOptions{Interval: 3 * time.Second})
-	execCmd(m.Init())
+	execCmd(t, m.Init())
 	if limit <= 10*time.Second || limit > 15*time.Second {
 		t.Errorf("fetch deadline in %v, want five 3s intervals", limit)
 	}
@@ -371,8 +371,8 @@ func TestWatchResultAfterContextEndedQuits(t *testing.T) {
 	m := testWatch(ctx, okFetch(WatchFrame{}), WatchOptions{})
 	cancel()
 	m, cmd := send(t, m, watchResultMsg{err: context.Canceled})
-	if !isQuit(execCmd(cmd)) || m.stopError() != nil {
-		t.Errorf("quit=%v stop=%v", isQuit(execCmd(cmd)), m.stopError())
+	if !isQuit(execCmd(t, cmd)) || m.stopError() != nil {
+		t.Errorf("quit=%v stop=%v", isQuit(execCmd(t, cmd)), m.stopError())
 	}
 }
 

@@ -43,7 +43,11 @@ func wantRefused(t *testing.T, res RoundResult, role, runID string) {
 func TestARefusedOwnPassEndsTheRoundAtOnce(t *testing.T) {
 	e := newEnv(t)
 	e.ag.reads[agents.RoleJudge] = codexRefusal
-	e.ag.behaviors[agents.RoleJudge] = []behavior{endSilently()}
+	end := endSilently()
+	e.ag.behaviors[agents.RoleJudge] = []behavior{func(f *fakeAgents, run store.Run, text string) error {
+		e.waitRun(agents.RoleClaude, target, store.RunWorking)
+		return end(f, run, text)
+	}}
 	e.ag.hangs = map[agents.Role]bool{agents.RoleClaude: true} // at work until the round cancels it
 
 	res, err := e.r.RunRound(e.ctx, e.ownInput(KindInitial))

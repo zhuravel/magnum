@@ -72,7 +72,7 @@ func TestPRBoardPostMergeReviewKeysAskTheirOwnQuestions(t *testing.T) {
 	for _, c := range cases {
 		m, act := postMergeBoard(t, pmMergedUnreviewed)
 		m, cmd := send(t, m, keyMsg(c.key))
-		if hasMsg[actionDoneMsg](execCmd(cmd)) || len(act.calls) != 0 {
+		if hasMsg[actionDoneMsg](execCmd(t, cmd)) || len(act.calls) != 0 {
 			t.Fatalf("%s alone ran an action: %v", c.key, act.calls)
 		}
 		if m.confirm == nil || m.confirm.question != c.question {
@@ -102,7 +102,7 @@ func TestPRBoardRefusesToReviewAPRClosedWithoutMerging(t *testing.T) {
 	for _, k := range []string{"r", "R", "i"} {
 		m, act := postMergeBoard(t, pmClosedUnmerged)
 		m, cmd := send(t, m, keyMsg(k))
-		if hasMsg[actionDoneMsg](execCmd(cmd)) || len(act.calls) != 0 || m.confirm != nil || m.busy != "" {
+		if hasMsg[actionDoneMsg](execCmd(t, cmd)) || len(act.calls) != 0 || m.confirm != nil || m.busy != "" {
 			t.Fatalf("%s on a closed PR asked or ran: %v (confirm %+v, busy %q)", k, act.calls, m.confirm, m.busy)
 		}
 		if m.flash != want || !m.flashErr {
@@ -120,7 +120,7 @@ func TestPRBoardRefusesToReviewAMergedHeadTwice(t *testing.T) {
 	for _, k := range []string{"r", "R", "i"} {
 		m, act := postMergeBoard(t, pmMergedReviewed)
 		m, cmd := send(t, m, keyMsg(k))
-		if hasMsg[actionDoneMsg](execCmd(cmd)) || len(act.calls) != 0 || m.confirm != nil || m.busy != "" {
+		if hasMsg[actionDoneMsg](execCmd(t, cmd)) || len(act.calls) != 0 || m.confirm != nil || m.busy != "" {
 			t.Fatalf("%s on a reviewed merged PR asked or ran: %v (confirm %+v, busy %q)", k, act.calls, m.confirm, m.busy)
 		}
 		if m.flash != want || !m.flashErr {

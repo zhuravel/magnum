@@ -44,7 +44,7 @@ func TestPRBoardZSnoozesThePRAfterYes(t *testing.T) {
 	const want = "Snooze talkable#11950 for 2h: no automatic review starts on it until 14:00 (r and review requests still run)?"
 	m, act := snoozeBoard(t, snzOpen, time.Time{})
 	m, cmd := send(t, m, keyMsg("z"))
-	if hasMsg[actionDoneMsg](execCmd(cmd)) || len(act.calls) != 0 {
+	if hasMsg[actionDoneMsg](execCmd(t, cmd)) || len(act.calls) != 0 {
 		t.Fatalf("z alone ran %v", act.calls)
 	}
 	if m.confirm == nil || m.confirm.question != want {

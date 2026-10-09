@@ -146,11 +146,11 @@ func boardAct(t *testing.T, m prBoardModel, names ...string) (prBoardModel, []te
 	t.Helper()
 	m, cmd := send(t, m, keys(names...)...)
 	var follow []tea.Msg
-	for _, msg := range execCmd(cmd) {
+	for _, msg := range execCmd(t, cmd) {
 		if am, ok := msg.(actionDoneMsg); ok {
 			var next tea.Cmd
 			m, next = send(t, m, am)
-			follow = append(follow, execCmd(next)...)
+			follow = append(follow, execCmd(t, next)...)
 		}
 	}
 	return m, follow
@@ -684,7 +684,7 @@ func TestPRBoardRefresh(t *testing.T) {
 	m, _ = send(t, m, tea.WindowSizeMsg{Width: 120, Height: 20})
 	mustContain(t, viewOf(m), "loading pull requests…", "loading…")
 
-	msgs := execCmd(m.loadCmd())
+	msgs := execCmd(t, m.loadCmd())
 	m, _ = send(t, m, msgs...)
 	mustContain(t, viewOf(m), "6 open", "↻ 12:00:00", "talkable#11920")
 
@@ -692,13 +692,13 @@ func TestPRBoardRefresh(t *testing.T) {
 	src.err = errors.New("gh: rate limited")
 	src.mu.Unlock()
 	m, cmd := send(t, m, prbTickMsg{})
-	m, _ = send(t, m, execCmd(cmd)...)
+	m, _ = send(t, m, execCmd(t, cmd)...)
 	v := viewOf(m)
 	mustContain(t, v, "refresh failed: gh: rate limited (showing data from 12:00:00)", "talkable#11920")
 
 	before := src.count()
 	m, cmd = send(t, m, keyMsg("ctrl+r"))
-	execCmd(cmd)
+	execCmd(t, cmd)
 	if src.count() != before+1 {
 		t.Error("ctrl+r did not load")
 	}
@@ -745,15 +745,15 @@ func TestPRBoardNavigationAndScroll(t *testing.T) {
 	}
 
 	q, cmd := send(t, m, keyMsg("q"))
-	if !isQuit(execCmd(cmd)) || q.mode != prbTable {
+	if !isQuit(execCmd(t, cmd)) || q.mode != prbTable {
 		t.Error("q must quit")
 	}
 	_, cmd = send(t, m, keyMsg("esc"))
-	if !isQuit(execCmd(cmd)) {
+	if !isQuit(execCmd(t, cmd)) {
 		t.Error("esc with nothing to clear must quit")
 	}
 	_, cmd = send(t, m, keyMsg("ctrl+c"))
-	if !isQuit(execCmd(cmd)) {
+	if !isQuit(execCmd(t, cmd)) {
 		t.Error("ctrl+c must quit")
 	}
 }
@@ -870,7 +870,7 @@ func TestPRBoardReviewKeysAsk(t *testing.T) {
 			m, _ = send(t, m, keyMsg("j"))
 		}
 		m, cmd := send(t, m, keyMsg(k))
-		if hasMsg[actionDoneMsg](execCmd(cmd)) || len(act.calls) != 0 {
+		if hasMsg[actionDoneMsg](execCmd(t, cmd)) || len(act.calls) != 0 {
 			t.Fatalf("%s alone ran an action: %v", k, act.calls)
 		}
 		if m.confirm == nil || m.busy != "" {
@@ -897,7 +897,7 @@ func TestPRBoardReviewKeysAsk(t *testing.T) {
 			mustNotContain(t, viewOf(c), "y/N")
 		}
 		// ctrl+c still quits
-		if _, cmd := send(t, m, keyMsg("ctrl+c")); !isQuit(execCmd(cmd)) {
+		if _, cmd := send(t, m, keyMsg("ctrl+c")); !isQuit(execCmd(t, cmd)) {
 			t.Errorf("%s then ctrl+c did not quit", k)
 		}
 	}
@@ -972,7 +972,7 @@ func TestPRBoardRefreshKeysOnlyRefresh(t *testing.T) {
 		m, src, act := newBoard(t, 160, 24, PRBoardOptions{})
 		before := src.count()
 		m, cmd := send(t, m, k)
-		msgs := execCmd(cmd)
+		msgs := execCmd(t, cmd)
 		if !hasMsg[prbDataMsg](msgs) || src.count() != before+1 {
 			t.Errorf("%s did not refresh", k)
 		}

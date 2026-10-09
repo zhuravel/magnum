@@ -159,6 +159,7 @@ func (e *env) cutClaude(restart bool) RoundInput {
 	if !restart {
 		e.ag.exitStatus[agents.RoleCodexReview] = 1
 		e.ag.codex = func(f *fakeAgents, c codexCall) error {
+			e.waitRun(agents.RoleClaude, target, store.RunWorking) // the refusal comes while claude-review works
 			return os.WriteFile(filepath.Join(e.reportDir(), "codex-review.md"),
 				[]byte("ERROR: This content was flagged for possible cybersecurity risk.\n"), 0o600)
 		}

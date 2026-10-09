@@ -78,7 +78,7 @@ func TestPRBoardMuteOnAFlaggedMergedPRAsksToDismissTheFlag(t *testing.T) {
 		want := "Dismiss the merged-unreviewed flag on " + tc.label + "? (r still runs a post-merge review)"
 		m, act := muteMergedBoard(t, tc.ref)
 		m, cmd := send(t, m, keyMsg("M"))
-		if hasMsg[actionDoneMsg](execCmd(cmd)) || len(act.calls) != 0 {
+		if hasMsg[actionDoneMsg](execCmd(t, cmd)) || len(act.calls) != 0 {
 			t.Fatalf("%s: M alone ran %v", tc.ref, act.calls)
 		}
 		if m.confirm == nil || m.confirm.question != want {
@@ -133,7 +133,7 @@ func TestPRBoardMuteOnAPlainMergedOrClosedPRFlashesAndSendsNothing(t *testing.T)
 	} {
 		m, act := muteMergedBoard(t, tc.ref)
 		m, cmd := send(t, m, keyMsg("M"))
-		if hasMsg[actionDoneMsg](execCmd(cmd)) || len(act.calls) != 0 || m.confirm != nil || m.busy != "" {
+		if hasMsg[actionDoneMsg](execCmd(t, cmd)) || len(act.calls) != 0 || m.confirm != nil || m.busy != "" {
 			t.Fatalf("%s: M asked or ran: %v (confirm %+v, busy %q)", tc.ref, act.calls, m.confirm, m.busy)
 		}
 		if m.flash != tc.want {

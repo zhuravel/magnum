@@ -33,7 +33,7 @@ func pickOutcome(t *testing.T, m pickerModel, names ...string) (pickerModel, Pic
 	if !m.done {
 		return m, PickOutcome{}, false
 	}
-	if !isQuit(execCmd(cmd)) {
+	if !isQuit(execCmd(t, cmd)) {
 		t.Fatal("picker finished without quitting")
 	}
 	return m, m.outcome, true
@@ -330,5 +330,36 @@ func TestPickerQuestionUsesReviewFacts(t *testing.T) {
 			continue
 		}
 		mustContain(t, viewOf(got), c.want+" y/N")
+	}
+}
+
+// TestPickerKeysQueuedBehindACancelDoNothing: Bubble Tea hands the picker
+// the keys it already read before it handles tea.Quit, so an action key, or
+// a y answering a question still up, typed right after esc or ctrl+c must
+// not turn the cancel into a review, an open or a release.
+func TestPickerKeysQueuedBehindACancelDoNothing(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		keys []string
+	}{
+		{"esc then enter and y", []string{"esc", "enter", "y"}},
+		{"ctrl+c then ctrl+g", []string{"ctrl+c", "ctrl+g"}},
+		{"esc then ctrl+x", []string{"esc", "ctrl+x"}},
+		{"ctrl+c with a question up, then y", []string{"enter", "ctrl+c", "y"}},
+		{"ctrl+c then typing", []string{"ctrl+c", "b", "u"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			m := newPicker(t, "", 120, 24)
+			m, cmd := send(t, m, keys(c.keys...)...)
+			if !m.done || m.outcome.Action != PickActionCancel || m.outcome.Entry != nil {
+				t.Fatalf("outcome = %+v (done %v), want the cancel", m.outcome, m.done)
+			}
+			if m.outcome.Query != "" {
+				t.Errorf("query = %q, want the one at the cancel", m.outcome.Query)
+			}
+			if cmd != nil {
+				t.Errorf("a key after the cancel returned a command: %v", execCmd(t, cmd))
+			}
+		})
 	}
 }

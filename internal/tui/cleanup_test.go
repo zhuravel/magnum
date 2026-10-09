@@ -96,7 +96,7 @@ func TestCleanupEnterWithNothingSelectedStays(t *testing.T) {
 	m := newCleanupTest(t, cleanupFixture(), 100, 30)
 	m, _ = send(t, m, keys("n")...)
 	m, cmd := send(t, m, keys("enter")...)
-	if isQuit(execCmd(cmd)) {
+	if isQuit(execCmd(t, cmd)) {
 		t.Fatal("enter with nothing selected must not quit")
 	}
 	mustContain(t, viewOf(m), "select at least one action", "Cleanup plan")
@@ -151,7 +151,7 @@ func TestCleanupYAppliesInPlanOrder(t *testing.T) {
 	m, _ = send(t, m, keys("j", " ")...) // deselect the middle one
 	m, _ = send(t, m, keys("enter")...)
 	m, cmd := send(t, m, keys("y")...)
-	if !isQuit(execCmd(cmd)) {
+	if !isQuit(execCmd(t, cmd)) {
 		t.Fatal("y did not quit")
 	}
 	want := CleanupOutcome{Apply: true, SelectedIDs: []string{"slot-3", "slot-5"}}
@@ -167,7 +167,7 @@ func TestCleanupDoubleEnterDoesNotApply(t *testing.T) {
 	m := newCleanupTest(t, cleanupFixture(), 100, 30)
 	m, _ = send(t, m, keys("enter")...)
 	m, cmd := send(t, m, keys("enter", "enter")...)
-	if isQuit(execCmd(cmd)) || m.outcome.Apply {
+	if isQuit(execCmd(t, cmd)) || m.outcome.Apply {
 		t.Fatalf("enter applied the plan: outcome = %+v", m.outcome)
 	}
 	v := viewOf(m)
@@ -175,7 +175,7 @@ func TestCleanupDoubleEnterDoesNotApply(t *testing.T) {
 	mustNotContain(t, v, "y/enter")
 
 	m, cmd = send(t, m, keys("y")...)
-	if !isQuit(execCmd(cmd)) || !m.outcome.Apply || !slices.Equal(m.outcome.SelectedIDs, []string{"slot-3", "slot-4"}) {
+	if !isQuit(execCmd(t, cmd)) || !m.outcome.Apply || !slices.Equal(m.outcome.SelectedIDs, []string{"slot-3", "slot-4"}) {
 		t.Fatalf("outcome = %+v", m.outcome)
 	}
 }
@@ -191,7 +191,7 @@ func TestCleanupRendersAfterTheLastTypedText(t *testing.T) {
 		for _, text := range m.texts {
 			m, cmd = send(t, m, append(typed(text), keys("enter")...)...)
 		}
-		if !isQuit(execCmd(cmd)) || !m.outcome.Apply {
+		if !isQuit(execCmd(t, cmd)) || !m.outcome.Apply {
 			t.Fatalf("outcome = %+v", m.outcome)
 		}
 		if v := viewOf(m); strings.Contains(v, "Type ") {
@@ -206,7 +206,7 @@ func TestCleanupConfirmBackKeepsSelection(t *testing.T) {
 			m := newCleanupTest(t, cleanupFixture(), 100, 30)
 			m, _ = send(t, m, keys(" ", "enter")...) // deselect the first, review
 			m, cmd := send(t, m, keys(back)...)
-			if isQuit(execCmd(cmd)) {
+			if isQuit(execCmd(t, cmd)) {
 				t.Fatalf("%s must not quit", back)
 			}
 			v := viewOf(m)
@@ -222,20 +222,63 @@ func TestCleanupConfirmBackKeepsSelection(t *testing.T) {
 func TestCleanupCtrlCCancelsFromEveryStep(t *testing.T) {
 	m := newCleanupTest(t, cleanupFixture(), 100, 30)
 	_, cmd := send(t, m, keys("ctrl+c")...)
-	if !isQuit(execCmd(cmd)) {
+	if !isQuit(execCmd(t, cmd)) {
 		t.Error("ctrl+c in select did not quit")
 	}
 	m, _ = send(t, m, keys("enter")...)
 	m2, cmd := send(t, m, keys("ctrl+c")...)
-	if !isQuit(execCmd(cmd)) || m2.outcome.Apply || m2.outcome.SelectedIDs != nil {
+	if !isQuit(execCmd(t, cmd)) || m2.outcome.Apply || m2.outcome.SelectedIDs != nil {
 		t.Errorf("ctrl+c in confirm: outcome %+v", m2.outcome)
 	}
 
 	m = newCleanupTest(t, typedFixture(), 100, 30)
 	m, _ = send(t, m, keys("enter")...)
 	m, cmd = send(t, m, keys("ctrl+c")...)
-	if !isQuit(execCmd(cmd)) || m.outcome.Apply {
+	if !isQuit(execCmd(t, cmd)) || m.outcome.Apply {
 		t.Errorf("ctrl+c in typed confirm: outcome %+v", m.outcome)
+	}
+}
+
+// TestCleanupKeysQueuedBehindACancelDoNothing: Bubble Tea hands the model
+// the keys already read before it handles tea.Quit, so a y (or an enter
+// and a y) typed right after ctrl+c, esc or q must not apply the plan the
+// user cancelled.
+func TestCleanupKeysQueuedBehindACancelDoNothing(t *testing.T) {
+	for name, script := range map[string][]string{
+		"ctrl+c in confirm": {"enter", "ctrl+c", "y"},
+		"ctrl+c in select":  {"ctrl+c", "enter", "y"},
+		"esc in select":     {"esc", "enter", "y"},
+		"q in select":       {"q", "enter", "y"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := newCleanupTest(t, cleanupFixture(), 100, 30)
+			m, cmd := send(t, m, keys(script...)...)
+			if m.outcome.Apply || m.outcome.SelectedIDs != nil {
+				t.Fatalf("outcome = %+v, want zero", m.outcome)
+			}
+			if cmd != nil {
+				t.Errorf("a key after the cancel returned a command: %v", execCmd(t, cmd))
+			}
+			if v := viewOf(m); v != "" {
+				t.Errorf("view after the cancel:\n%s", v)
+			}
+		})
+	}
+}
+
+// TestCleanupEnterQueuedBehindTheLastTypedTextDoesNotPanic: an enter (or a
+// y) read after the enter that confirmed the last typed text reaches the
+// model after it finished; it must neither index past the texts nor change
+// the confirmed outcome.
+func TestCleanupEnterQueuedBehindTheLastTypedTextDoesNotPanic(t *testing.T) {
+	m := newCleanupTest(t, CleanupPlan{Actions: typedFixture().Actions[1:2]}, 100, 30)
+	m, _ = send(t, m, keys("enter")...)
+	m, cmd := send(t, m, append(typed("review9"), keys("enter", "enter", "y", "esc")...)...)
+	if cmd != nil {
+		t.Errorf("a key after the confirmation returned a command: %v", execCmd(t, cmd))
+	}
+	if !m.outcome.Apply || !slices.Equal(m.outcome.SelectedIDs, []string{"d9"}) {
+		t.Fatalf("outcome = %+v, want the confirmed d9", m.outcome)
 	}
 }
 
@@ -244,7 +287,7 @@ func TestCleanupCancelInSelectStep(t *testing.T) {
 		t.Run(k, func(t *testing.T) {
 			m := newCleanupTest(t, cleanupFixture(), 100, 30)
 			m, cmd := send(t, m, keys(k)...)
-			if !isQuit(execCmd(cmd)) {
+			if !isQuit(execCmd(t, cmd)) {
 				t.Fatalf("%s did not quit", k)
 			}
 			if m.outcome.Apply || m.outcome.SelectedIDs != nil {
@@ -267,14 +310,14 @@ func TestCleanupTypedConfirmMismatchThenMatch(t *testing.T) {
 
 	// y and n are typed, not intercepted; the wrong text is rejected.
 	m, cmd = send(t, m, append(typed("ny"), keys("enter")...)...)
-	if isQuit(execCmd(cmd)) || m.outcome.Apply {
+	if isQuit(execCmd(t, cmd)) || m.outcome.Apply {
 		t.Fatal("a mismatch must not apply")
 	}
 	mustContain(t, viewOf(m), "does not match review9", "Type review9")
 
 	// Input was cleared; the exact text applies.
 	m, cmd = send(t, m, append(typed("review9"), keys("enter")...)...)
-	if !isQuit(execCmd(cmd)) {
+	if !isQuit(execCmd(t, cmd)) {
 		t.Fatal("exact text did not quit")
 	}
 	if !m.outcome.Apply || !slices.Equal(m.outcome.SelectedIDs, []string{"p1", "d9"}) {
@@ -304,14 +347,14 @@ func TestCleanupTwoTypedTextsAskedInSequence(t *testing.T) {
 	mustContain(t, viewOf(m), "does not match review9", "(1 of 2)")
 
 	m, cmd := send(t, m, append(typed("review9"), keys("enter")...)...)
-	if isQuit(execCmd(cmd)) || m.outcome.Apply {
+	if isQuit(execCmd(t, cmd)) || m.outcome.Apply {
 		t.Fatal("the second text is still outstanding")
 	}
 	mustContain(t, viewOf(m), "Type review8 to confirm", "(2 of 2)")
 	mustNotContain(t, viewOf(m), "does not match")
 
 	m, cmd = send(t, m, append(typed("review8"), keys("enter")...)...)
-	if !isQuit(execCmd(cmd)) {
+	if !isQuit(execCmd(t, cmd)) {
 		t.Fatal("did not quit after the last text")
 	}
 	want := []string{"p1", "d9", "p2", "d8", "d9b"}
@@ -329,7 +372,7 @@ func TestCleanupDeselectingTypedActionSkipsTyping(t *testing.T) {
 	mustContain(t, viewOf(m), "Apply 2 action(s)?", "y apply")
 	mustNotContain(t, viewOf(m), "Type ")
 	m, cmd := send(t, m, keys("y")...)
-	if !isQuit(execCmd(cmd)) || !slices.Equal(m.outcome.SelectedIDs, []string{"p1", "p2"}) {
+	if !isQuit(execCmd(t, cmd)) || !slices.Equal(m.outcome.SelectedIDs, []string{"p1", "p2"}) {
 		t.Fatalf("outcome = %+v", m.outcome)
 	}
 
@@ -346,7 +389,7 @@ func TestCleanupEscInTypedStepForgetsProgress(t *testing.T) {
 	m, _ = send(t, m, append(typed("review9"), keys("enter")...)...)
 	mustContain(t, viewOf(m), "(2 of 2)")
 	m, cmd := send(t, m, keys("esc")...)
-	if isQuit(execCmd(cmd)) {
+	if isQuit(execCmd(t, cmd)) {
 		t.Fatal("esc must go back, not quit")
 	}
 	mustContain(t, viewOf(m), "Cleanup plan", "selected 5/5")
@@ -463,7 +506,7 @@ func TestCleanupEmptyPlan(t *testing.T) {
 	m, _ = send(t, m, keys("j", " ", "a", "enter")...)
 	mustContain(t, viewOf(m), "select at least one action")
 	_, cmd := send(t, m, keys("q")...)
-	if !isQuit(execCmd(cmd)) {
+	if !isQuit(execCmd(t, cmd)) {
 		t.Error("q did not quit")
 	}
 }

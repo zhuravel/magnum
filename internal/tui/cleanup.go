@@ -122,8 +122,13 @@ func (m *cleanupModel) applyStyles(st styles) {
 // Init implements tea.Model.
 func (m cleanupModel) Init() tea.Cmd { return tea.RequestBackgroundColor }
 
-// Update implements tea.Model.
+// Update implements tea.Model. Once the user decided (done), Bubble Tea may
+// still hand it the keys read before it handles tea.Quit: they do nothing,
+// so a y queued behind a cancel never applies the cancelled plan.
 func (m cleanupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.done {
+		return m, nil
+	}
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -242,6 +247,9 @@ func (m cleanupModel) updateConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		return m.backToSelect(), nil
 	case "enter":
+		if m.typedIdx >= len(m.texts) {
+			return m, nil // every text is typed: finish has quit
+		}
 		want := m.texts[m.typedIdx]
 		got := m.input.Value()
 		if got != want && strings.TrimSpace(got) != want {

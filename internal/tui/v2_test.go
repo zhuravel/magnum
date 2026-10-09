@@ -60,7 +60,7 @@ func TestCleanupTypedConfirmAcceptsPaste(t *testing.T) {
 	m := newCleanupTest(t, plan, 100, 30)
 	m, _ = send(t, m, keyMsg("enter"), tea.PasteMsg{Content: "review9"})
 	m, cmd := send(t, m, keyMsg("enter"))
-	if !m.outcome.Apply || !isQuit(execCmd(cmd)) {
+	if !m.outcome.Apply || !isQuit(execCmd(t, cmd)) {
 		t.Fatalf("pasted slug not accepted: %+v", m.outcome)
 	}
 }

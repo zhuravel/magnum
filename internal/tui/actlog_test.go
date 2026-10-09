@@ -16,11 +16,11 @@ func refresh[M tea.Model](t *testing.T, m M, tick tea.Msg) (M, []tea.Msg) {
 	t.Helper()
 	m, cmd := send(t, m, tick)
 	var follow []tea.Msg
-	for _, msg := range execCmd(cmd) {
+	for _, msg := range execCmd(t, cmd) {
 		if rm, ok := msg.(requestsMsg); ok {
 			var next tea.Cmd
 			m, next = send(t, m, rm)
-			follow = append(follow, execCmd(next)...)
+			follow = append(follow, execCmd(t, next)...)
 		}
 	}
 	return m, follow

@@ -676,6 +676,24 @@ editing history. Code, config comments and prompts reference these by their head
   open` (`snoozed_until`, `open` in the JSON) and a PR's card its snooze on the state line. The board's
   needs-you pill no longer hides a PR that waits for a round, is paused or needs attention: those keep their
   state's pill (the card shows both). Rejected: a new column (the board stays one line per PR).
+- **A key queued behind a quit does nothing** (2026-10-09). Bubble Tea passes a model the keys it has
+  already read before it handles `tea.Quit`, and the screens acted on those keys. On the cleanup screen,
+  the model ignored `done`. A `y` typed after ctrl+c, esc or q applied the plan the user had cancelled. An
+  enter typed after the enter that confirmed the last typed text read past the end of the texts and
+  panicked. On the board and the dashboard, `leave` returned `tea.Quit` without marking the screen as
+  leaving when no action ran. ctrl+c is handled before the y/N question, so a `y` typed after it answered
+  the question still on screen. After q, esc or tab, a key that asks a question and its `y` started the
+  action. That action then ran on the context that RunPRBoard and RunDashboard cancel as they return. The
+  picker also kept acting after it finished: esc, enter, y gave back a review instead of the cancel. Now
+  the cleanup model and the picker ignore every message once they are done. The cleanup confirm step
+  checks its index before it reads the next text. `leave` drops the question and sets `leaving` before it
+  returns `tea.Quit`, so `leavingKey` gets the queued keys, as it already did while an action finished (q,
+  esc and tab still choose between quitting and switching). Two pipeline tests had the same kind of race
+  and were also made deterministic. A fake refusal could win before claude-review's hung Submit marked its
+  run working, so the round's cut saw a pending run and sent no esc. Now the refusing fake first waits for
+  that run to be working (`e.waitRun`), as `pushAfterCodex` already does. Rejected: dropping only the
+  question on ctrl+c (a queued key that asks and its `y` would still start an action after q, esc or tab);
+  a separate guard in each screen's key handler (`leavingKey` already is that guard).
 
 ## Operations
 

@@ -174,11 +174,11 @@ func dashAct(t *testing.T, m dashboardModel, names ...string) (dashboardModel, [
 	t.Helper()
 	m, cmd := send(t, m, keys(names...)...)
 	var follow []tea.Msg
-	for _, msg := range execCmd(cmd) {
+	for _, msg := range execCmd(t, cmd) {
 		if am, ok := msg.(actionDoneMsg); ok {
 			var next tea.Cmd
 			m, next = send(t, m, am)
-			follow = append(follow, execCmd(next)...)
+			follow = append(follow, execCmd(t, next)...)
 		}
 	}
 	return m, follow
@@ -188,7 +188,7 @@ func TestDashboardInitGathersAndShowsLoading(t *testing.T) {
 	src := &fakeSource{data: dashData()}
 	m := testDashboard(context.Background(), src, nil, DashboardOptions{})
 	mustContain(t, viewOf(m), "magnum status", "loading status")
-	msgs := execCmd(m.Init())
+	msgs := execCmd(t, m.Init())
 	var got *dashDataMsg
 	for _, msg := range msgs {
 		if d, ok := msg.(dashDataMsg); ok {
@@ -384,7 +384,7 @@ func TestDashboardManualToggleAndHelp(t *testing.T) {
 		"release (asks y/N)", "answer yes; any other key, enter too, cancels", "g, ctrl+r", "refresh now (F5 too)", "close this help")
 	mustNotContain(t, v, "SLOTS (2)")
 	m, cmd := send(t, m, keys("esc")...)
-	if isQuit(execCmd(cmd)) {
+	if isQuit(execCmd(t, cmd)) {
 		t.Fatal("esc in help quit")
 	}
 	mustContain(t, viewOf(m), "SLOTS (2)")
@@ -410,7 +410,7 @@ func TestDashboardTickAndManualRefreshDoNotOverlap(t *testing.T) {
 		t.Fatal("g did not start a refresh")
 	}
 	m, cmd = send(t, m, dashTickMsg{}) // already loading: only the next tick
-	for _, msg := range execCmd(cmd) {
+	for _, msg := range execCmd(t, cmd) {
 		if _, ok := msg.(dashDataMsg); ok {
 			t.Fatal("tick gathered while a gather was in flight")
 		}
@@ -469,7 +469,7 @@ func TestDashboardQuitKeys(t *testing.T) {
 	for _, k := range []string{"q", "esc", "ctrl+c"} {
 		m, _, _ := newDash(t, 100, 30)
 		_, cmd := send(t, m, keyMsg(k))
-		if !isQuit(execCmd(cmd)) {
+		if !isQuit(execCmd(t, cmd)) {
 			t.Errorf("%s did not quit", k)
 		}
 	}
@@ -533,7 +533,7 @@ func TestDashboardReviewKeysAsk(t *testing.T) {
 		m, src, act := newDash(t, 220, 50)
 		m, _ = send(t, m, dashDataMsg{data: data})
 		m, cmd := send(t, m, keys("j", "j", k)...) // talkable#7, reviewed
-		if len(execCmd(cmd)) != 0 || len(act.calls) != 0 || m.confirm == nil {
+		if len(execCmd(t, cmd)) != 0 || len(act.calls) != 0 || m.confirm == nil {
 			t.Fatalf("%s alone acted (%v) or did not ask", k, act.calls)
 		}
 		mustContain(t, viewOf(m), "talkable#7", "y/N", "y confirms, any other key cancels")
@@ -576,7 +576,7 @@ func TestDashboardRefreshKeysOnlyRefresh(t *testing.T) {
 		m, src, act := newDash(t, 140, 50)
 		before := src.count()
 		m, cmd := send(t, m, k)
-		msgs := execCmd(cmd)
+		msgs := execCmd(t, cmd)
 		if !hasMsg[dashDataMsg](msgs) || src.count() != before+1 {
 			t.Errorf("%s did not refresh", k)
 		}

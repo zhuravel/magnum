@@ -108,11 +108,17 @@ func testWatch(ctx context.Context, fetch WatchFetch, opts WatchOptions) watchMo
 	return newWatchModel(ctx, fetch, opts)
 }
 
+// execCmdWait bounds how long execCmd waits for a command: one still
+// running then fails the test, so an action descheduled on a busy machine
+// is never mistaken for one that sent nothing.
+const execCmdWait = 5 * time.Second
+
 // execCmd runs cmd and returns the messages it produces, expanding batches.
-// Timers (instantTick's, or commands still running after a short wait),
-// spinner ticks and terminal queries are dropped, so tests see only the
-// immediate results.
-func execCmd(cmd tea.Cmd) []tea.Msg {
+// Timers (instantTick's), spinner ticks and terminal queries are dropped, so
+// tests see only the immediate results; a command still running after
+// execCmdWait fails tb.
+func execCmd(tb testing.TB, cmd tea.Cmd) []tea.Msg {
+	tb.Helper()
 	if cmd == nil || isInstantTick(cmd) {
 		return nil
 	}
@@ -121,8 +127,8 @@ func execCmd(cmd tea.Cmd) []tea.Msg {
 	var msg tea.Msg
 	select {
 	case msg = <-ch:
-	case <-time.After(150 * time.Millisecond):
-		return nil
+	case <-time.After(execCmdWait):
+		tb.Fatalf("a command still runs after %v", execCmdWait)
 	}
 	if reflect.TypeOf(msg) == reflect.TypeOf(tea.RequestBackgroundColor()) {
 		return nil // a query for the terminal, which tests do not have
@@ -133,7 +139,7 @@ func execCmd(cmd tea.Cmd) []tea.Msg {
 	case tea.BatchMsg:
 		var out []tea.Msg
 		for _, c := range m {
-			out = append(out, execCmd(c)...)
+			out = append(out, execCmd(tb, c)...)
 		}
 		return out
 	}
@@ -141,7 +147,7 @@ func execCmd(cmd tea.Cmd) []tea.Msg {
 	if v := reflect.ValueOf(msg); v.Kind() == reflect.Slice && v.Type().Elem() == reflect.TypeOf(tea.Cmd(nil)) {
 		var out []tea.Msg
 		for i := range v.Len() {
-			out = append(out, execCmd(v.Index(i).Interface().(tea.Cmd))...)
+			out = append(out, execCmd(tb, v.Index(i).Interface().(tea.Cmd))...)
 		}
 		return out
 	}

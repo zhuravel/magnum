@@ -94,7 +94,7 @@ func TestDWithdrawsTheAutoApprovalAfterAsking(t *testing.T) {
 	if got := act.last(); got != "unapprove talkable/talkable#9" {
 		t.Fatalf("D on a PR without one called %q", got)
 	}
-	m, _ = send(t, m, keyMsg("esc"), keyMsg("j"), keyMsg("enter"))
+	m, _ = send(t, m, keyMsg("j"), keyMsg("enter"))
 	mustContain(t, viewOf(m), "magnum no longer approves it as you: you commented on it by hand")
 	mustNotContain(t, viewOf(m), "D withdraw approval")
 }

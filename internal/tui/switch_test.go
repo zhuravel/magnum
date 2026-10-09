@@ -47,12 +47,12 @@ func TestDashboardTabSwitchesToTheBoard(t *testing.T) {
 	for _, k := range []string{"tab", "t"} {
 		m, _, _ := newDash(t, 160, 30)
 		m, cmd := send(t, m, keyMsg(k))
-		if !m.switching || !isQuit(execCmd(cmd)) {
+		if !m.switching || !isQuit(execCmd(t, cmd)) {
 			t.Errorf("%s: switching %v, want a quit to switch", k, m.switching)
 		}
 	}
 	m, _, _ := newDash(t, 160, 30)
-	if m, _ = send(t, m, keyMsg("q")); m.switching {
+	if q, _ := send(t, m, keyMsg("q")); q.switching {
 		t.Error("q asked to switch")
 	}
 	mustContain(t, viewOf(m), "tab PRs")
@@ -78,7 +78,7 @@ func TestPRBoardTabSwitchesToTheDashboard(t *testing.T) {
 	m, _, _ := newBoard(t, 200, 40, PRBoardOptions{})
 	mustContain(t, viewOf(m), "tab overview")
 	m, cmd := send(t, m, keyMsg("tab"))
-	if !m.switching || !isQuit(execCmd(cmd)) {
+	if !m.switching || !isQuit(execCmd(t, cmd)) {
 		t.Fatal("tab on the table did not quit to switch")
 	}
 

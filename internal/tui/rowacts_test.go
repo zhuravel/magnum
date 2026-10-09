@@ -247,7 +247,7 @@ func TestPRBoardRefusesAtTheKeypress(t *testing.T) {
 		m, _, act := newBoard(t, 200, 24, PRBoardOptions{})
 		m, _ = send(t, m, prbDataMsg{rows: []PRBoardRow{actPR(c.edit)}})
 		m, cmd := send(t, m, keyMsg(c.key))
-		if m.confirm != nil || m.busy != "" || hasMsg[actionDoneMsg](execCmd(cmd)) {
+		if m.confirm != nil || m.busy != "" || hasMsg[actionDoneMsg](execCmd(t, cmd)) {
 			t.Errorf("%s asked (%+v) or ran (%q)", c.key, m.confirm, m.busy)
 		}
 		if !strings.Contains(m.flash, c.want) || !m.flashErr {
@@ -414,7 +414,7 @@ func TestPickerRefreshKeys(t *testing.T) {
 		if m.done || m.confirm != nil {
 			t.Fatalf("%s finished or asked", k)
 		}
-		m, _ = send(t, m, execCmd(cmd)...)
+		m, _ = send(t, m, execCmd(t, cmd)...)
 		if got := visibleRefs(m); !slices.Equal(slices.Sorted(slices.Values(got)), []string{"talkable/talkable#12", "talkable/talkable#99"}) {
 			t.Errorf("%s: after the refresh the filter shows %v", k, got)
 		}
@@ -426,7 +426,7 @@ func TestPickerRefreshKeys(t *testing.T) {
 
 	failing := newPickerModel(pickEntries(), PickerOptions{Reload: func(context.Context) ([]PickEntry, error) { return nil, errors.New("registry locked") }})
 	failing, cmd := send(t, failing, keyMsg("ctrl+r"))
-	failing, _ = send(t, failing, execCmd(cmd)...)
+	failing, _ = send(t, failing, execCmd(t, cmd)...)
 	mustContain(t, viewOf(failing), "refresh failed: registry locked")
 	if len(failing.entries) != len(pickEntries()) {
 		t.Errorf("a failed refresh changed the list: %d entries", len(failing.entries))
