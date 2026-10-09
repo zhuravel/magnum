@@ -135,6 +135,35 @@ func TestMergeFFOnlyRefusesADivergedMaster(t *testing.T) {
 	}
 }
 
+// The landing's fast-forward never stashes the checkout's own changes,
+// whatever merge.autoStash says: a change staged in a file the branch does
+// not touch stays staged (an autostash would re-apply it without the
+// index), and its text stays as it was.
+func TestMergeFFOnlyLeavesStagedChangesStagedWhateverAutoStashSays(t *testing.T) {
+	fx := newFixture(t)
+	ctx := context.Background()
+	fx.git(fx.clone, "config", "merge.autoStash", "true")
+	dir := learnWorktree(t, fx, "learn/a")
+	fx.commit(dir, "docs/a.md", "the candidate\n", "a")
+	fx.write(fx.clone, "README.md", "hello, staged by the operator\n")
+	fx.git(fx.clone, "add", "README.md")
+	if err := fx.c.MergeFFOnly(ctx, fx.clone, "learn/a"); err != nil {
+		t.Fatalf("MergeFFOnly: %v", err)
+	}
+	if fx.git(fx.clone, "rev-parse", "main") != fx.git(dir, "rev-parse", "HEAD") {
+		t.Fatal("main did not move to the branch")
+	}
+	if staged := fx.git(fx.clone, "diff", "--cached", "--name-only"); staged != "README.md" {
+		t.Fatalf("staged after the fast-forward = %q, want README.md still staged", staged)
+	}
+	if b, err := os.ReadFile(filepath.Join(fx.clone, "README.md")); err != nil || string(b) != "hello, staged by the operator\n" {
+		t.Fatalf("README.md = %q, %v", b, err)
+	}
+	if stashes := fx.git(fx.clone, "stash", "list"); stashes != "" {
+		t.Fatalf("stashes = %q, want none", stashes)
+	}
+}
+
 func TestRebaseOntoReportsAConflictAndAborts(t *testing.T) {
 	fx := newFixture(t)
 	ctx := context.Background()

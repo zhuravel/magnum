@@ -5893,6 +5893,14 @@ skill versions); people add theirs to the sections before it, at the end of the 
   log without the section is resolved as before. A commit that writes into the section is not merged by
   itself. The skill's common rules and landing notes say where entries go; `scripts/selftest.sh` covers
   both cases. Rejected: leaving the resolution to the operator (it is the common case).
+- **The landing's fast-forward never stashes the operator's changes** (2026-10-10, the final review of
+  the self-improving review loop). `gitx.MergeFFOnly` ran `git merge --ff-only`, which follows the
+  operator's `merge.autoStash`: with it set and a change staged in a file the candidate does not touch,
+  the unattended fast-forward stashed the change and applied it again without the index, so what the
+  operator had staged came back unstaged. The merge now passes `--no-autostash`, as `RebaseOnto` already
+  did; a change the move would overwrite still makes git refuse (the landing holds), and the others stay
+  as they were, staged ones staged. Rejected: a clean checkout as a landing condition (the landing
+  already checks the files it changes, and an operator works in the checkout).
 
 ## Learned rules
 

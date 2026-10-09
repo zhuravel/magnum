@@ -125,7 +125,9 @@ func (c *Client) runStdin(ctx context.Context, dir string, k call, stdin []byte,
 // MergeFFOnly fast-forwards the branch checked out in repo to branch:
 // ErrNotFastForward, with nothing changed, when branch does not descend
 // from HEAD. Local changes the move would overwrite make git refuse, which
-// is an error too.
+// is an error too; the others stay as they are, staged ones staged: the
+// merge never stashes them (--no-autostash, whatever merge.autoStash says,
+// as RebaseOnto).
 func (c *Client) MergeFFOnly(ctx context.Context, repo, branch string) error {
 	if err := checkBranch("branch", branch); err != nil {
 		return err
@@ -145,7 +147,7 @@ func (c *Client) MergeFFOnly(ctx context.Context, repo, branch string) error {
 		return err
 	}
 	_, err = c.git(ctx, repo, call{label: "merge --ff-only " + branch, mutates: true, timeout: commitTimeout},
-		"merge", "--ff-only", "--quiet", "--no-verify", to)
+		"merge", "--ff-only", "--quiet", "--no-verify", "--no-autostash", to)
 	return err
 }
 
