@@ -471,6 +471,31 @@ func Validate(p Proposal, c Check) []string {
 	return problems
 }
 
+// CheckLeaks applies Validate's leak rules to one text that is not notes
+// (the skill editor's diff and DECISIONS entry): it returns, as phrases to
+// follow the text's name, that it names a pull request or issue number,
+// one of check's branches, holds what looks like a secret, or names a home
+// directory path. nil = none.
+func CheckLeaks(text string, check Check) []string {
+	var out []string
+	if prRefRe.MatchString(text) {
+		out = append(out, "names a pull request or issue number")
+	}
+	for _, br := range check.Branches {
+		if branchLike(br) && containsToken(text, br) {
+			out = append(out, "names a pull request's branch")
+			break
+		}
+	}
+	if execx.Redact(text) != text {
+		out = append(out, "holds what looks like a secret (a token or a key)")
+	}
+	if homePathRe.MatchString(text) {
+		out = append(out, "names a home directory path (machine-specific)")
+	}
+	return out
+}
+
 // checkMisses checks changes.json's misses against the ids given: each one
 // given appears once, noted with a section of the proposal or skipped with
 // a reason, and none that was not given.

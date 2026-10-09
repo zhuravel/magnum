@@ -5310,3 +5310,25 @@ editing history. Code, config comments and prompts reference these by their head
   proposals (they share no column that matters: a repository, versions of notes and harness blobs
   against a branch, a commit and a gate) and a foreign key on `input_id` (it names a row of `misses` or
   of `declines`, by `kind`).
+- **The skill's pins are a generated file, and magnum checks an edit before any test runs** (2026-10-09,
+  stage 3 of the self-improving review loop). 41 tests pin sentences of `SKILL.md` (`skillSays`), and an
+  editor that cannot see them learns of a lost one only when the format gate's `go test` fails.
+  `skillSays` now records its wants, and `TestSkillPinsFileIsCurrent` compares them, trimmed, sorted and
+  one per line, with the skill's cap (`skillMaxBytes`, in a `# cap:` line) against
+  `internal/agents/testdata/skill_pins.txt`, which `go test ./internal/agents -update` rewrites with the
+  goldens (`learn.FormatPins`, `learn.ParsePins`). The pins come from the other tests as they run (the
+  file sorts after `review_format_test.go`, and none of those runs in parallel), so the test skips under
+  `-run`, `-skip` or `-shuffle`; the gate and `make test` run the whole package. The editor reads the
+  file of its own worktree, so the pins and the cap are always master's. `learn.ValidateEdit` checks the
+  editor's `changes.json` against its inputs: every input (`m<id>` for a miss, `d<id>` for a decline)
+  accounted for once, noted with where or skipped with a one-line reason of at most 300 characters;
+  every file the worktree's status lists is one of `learn.EditAllowedGlobs`
+  (`skills/magnum-review/SKILL.md`, `prompts/judge-*.md`, `prompts/claude-*.md`) and listed edited, and
+  a file listed edited changed; the skill within its cap and keeping every pin; the diff's added lines
+  and the DECISIONS text free of what `notes.CheckLeaks` finds (Validate's leak rules, exported for a
+  text that is not notes: a pull request reference, one of the inputs' branches, a secret, a home
+  directory path); and the DECISIONS text of 1 to 1,200 characters that `learn.ScrubLesson` keeps as a
+  general lesson. Rejected: a `-pins <path>` test flag that dumps the pins on demand (the spec's first
+  idea: a `go test` run inside every editor run, before the agent starts) and moving `skillMaxBytes`
+  into the package's code (the daemon's binary may be older than the checkout the editor works in; the
+  worktree's file is what its gate enforces).

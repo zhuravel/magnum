@@ -515,9 +515,11 @@ func TestSkillCarriesTheNotesProcedure(t *testing.T) {
 }
 
 // skillSays fails for every phrase SKILL.md lacks (want) or still carries
-// (gone).
+// (gone), and records the wants as the skill's pins (skill_pins_test.go):
+// the sentences the skill editor must keep.
 func skillSays(t *testing.T, want, gone []string) {
 	t.Helper()
+	recordSkillPins(want)
 	skill := string(magnum.Skill)
 	for _, w := range want {
 		if !strings.Contains(skill, w) {

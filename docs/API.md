@@ -9100,6 +9100,39 @@ const (
     Candidate kinds (store.MissSourceThread, store.MissSourceReview).
 
 const (
+	// InputsFile and PinsFile are in the run directory, which the agent
+	// reads; ChangesFile is the answer it writes at the root of its
+	// worktree (magnum keeps a copy in the run directory).
+	InputsFile  = "inputs.json"
+	PinsFile    = "pins.json"
+	ChangesFile = "changes.json"
+	// SkillFile is the judge skill, relative to a checkout.
+	SkillFile = "skills/magnum-review/SKILL.md"
+	// PinsSource is the pins file the skill tests generate, relative to a
+	// checkout (FormatPins).
+	PinsSource = "internal/agents/testdata/skill_pins.txt"
+	// DecisionsFile is where magnum appends the edit's DECISIONS entry.
+	DecisionsFile = "docs/DECISIONS.md"
+)
+    The files of an editor run.
+
+const (
+	DecisionMaxRunes = 1200 // the DECISIONS entry
+	EditReasonRunes  = 300  // a one-line reason
+	// ChangesMaxBytes bounds changes.json.
+	ChangesMaxBytes = 256 << 10
+)
+    Limits of the editor's answer.
+
+const (
+	FileEdited    = "edited"
+	FileUnchanged = "unchanged"
+	InputNoted    = store.MissNoted
+	InputSkipped  = store.MissSkipped
+)
+    What changes.json says of a file and of an input.
+
+const (
 	CandidatesFile = "candidates.json" // what Build kept, for the classifier
 	OutputFile     = "retro.json"      // the classifier's answer (ParseOutput)
 	FilesDir       = "files"           // the commented files: files/<sha12>/<path>
@@ -9137,7 +9170,20 @@ const RejectedMax = 40
     the pull request's.
 
 
+VARIABLES
+
+var EditAllowedGlobs = []string{"skills/magnum-review/SKILL.md", "prompts/judge-*.md", "prompts/claude-*.md"}
+    EditAllowedGlobs are the files the editor may change, relative to the
+    checkout: the judge skill, the judge prompts and the Claude reviewers'
+    prompts. Nothing else: no Go code, no test, no configuration, not the
+    retro's or the curator's prompts.
+
+
 FUNCTIONS
+
+func AllowedEditFile(p string) bool
+    AllowedEditFile reports whether p (slash-separated, relative to the
+    checkout) is one of EditAllowedGlobs.
 
 func CaseFromDecline(d store.Decline) (eval.Case, bool)
     CaseFromDecline is the learned case of decline d: ok when the author's
@@ -9161,9 +9207,23 @@ func CaseFromMiss(m store.Miss) (eval.Case, bool)
     A row the corpus would refuse (no path nor match left, a PR it cannot name)
     makes no case.
 
+func DeclineInputID(id int64) string
+    DeclineInputID is a decline's id in inputs.json.
+
 func FilePath(sha, p string) string
     FilePath is where the copy of path at sha lives under a retro directory's
     files: files/<sha12>/<path>, slash-separated.
+
+func FormatPins(pins []string, limit int) []byte
+    FormatPins renders the pins file (PinsSource): a comment, the skill's size
+    cap, then one pinned sentence per line, sorted.
+
+func MissInputID(id int64) string
+    MissInputID is a miss's id in inputs.json.
+
+func ParseInputID(s string) (kind string, id int64, ok bool)
+    ParseInputID reads an id of inputs.json: its kind (store.LearnInputMiss or
+    store.LearnInputDecline) and row id.
 
 func ParseOutput(data []byte, cands []Candidate, rejected []Rejected, threads []OwnThread) (map[string]Item, map[string]ThreadItem, error)
     ParseOutput reads the classifier's answer for cands, the rejected findings
@@ -9180,6 +9240,10 @@ func ParseOutput(data []byte, cands []Candidate, rejected []Rejected, threads []
     The error names ids and fields, never the classifier's text, so it can go
     back into a prompt.
 
+func ParsePins(b []byte) ([]string, int, error)
+    ParsePins reads a pins file: the pins and the skill's cap. A file without a
+    cap line is an error.
+
 func ScrubLesson(lesson, scope string, people, own, repo []string) (string, string)
     ScrubLesson returns lesson when it teaches without retelling the pull
     request, else "" and why (Lesson*): a pull request or issue reference
@@ -9191,6 +9255,16 @@ func ScrubLesson(lesson, scope string, people, own, repo []string) (string, stri
     backticks or not, since general lessons can reach the public judge skill;
     a repo lesson goes to that repository's own notes and may. Words match whole
     and case-insensitively.
+
+func ValidateEdit(c EditCheck, changes Changes) []string
+    ValidateEdit returns what is wrong with an editor's answer (nil = valid),
+    in words fit for a nudge and the registry: every input of c is accounted for
+    exactly once, noted with where or skipped with a one-line reason of at most
+    EditReasonRunes; every changed file is an allowed one and listed edited,
+    and a file listed edited changed; the skill is within its cap and keeps
+    every pin; the diff's added lines and the decision pass notes.CheckLeaks;
+    and the decision is 1 to DecisionMaxRunes runes that ScrubLesson keeps as a
+    general lesson (no pull request number, link, login or repository).
 
 func WriteFileAtomic(root *os.Root, name string, data []byte) error
     WriteFileAtomic writes data to name inside root: a temporary file next
@@ -9263,6 +9337,17 @@ type Candidates struct {
 }
     Candidates is the candidates file.
 
+type Changes struct {
+	Files    []FileChange  `json:"files"`
+	Inputs   []InputChange `json:"inputs"`
+	Decision string        `json:"decision"`
+}
+    Changes is changes.json: what the editor did with every file it may change
+    and every input it was given, and the DECISIONS entry it drafts.
+
+func ParseChanges(b []byte) (Changes, error)
+    ParseChanges decodes changes.json strictly (an unknown field is an error).
+
 type Comparison struct {
 	// Descendant: the later commit descends from the reviewed one (GitHub's
 	// status "ahead" or "identical"). The file list is three-dot, so only
@@ -9275,6 +9360,80 @@ type Comparison struct {
 	Complete bool
 }
     Comparison is what Build needs of GitHub's comparison of two commits.
+
+type EditCheck struct {
+	Inputs EditInputs
+	// Changed are the paths the worktree's status lists (relative to it,
+	// slash-separated), changes.json and magnum's own files left out.
+	Changed []string
+	// Allowed are the globs a changed file must match (nil =
+	// EditAllowedGlobs).
+	Allowed []string
+	// Skill is the edited SKILL.md, Pins the sentences it must keep.
+	Skill []byte
+	Pins  []string
+	// Diff is the worktree's diff against the base (its added lines are
+	// checked), Decision the DECISIONS entry.
+	Diff     string
+	Decision string
+	// Leaks is what names one pull request (notes.CheckLeaks): the
+	// branches of the inputs' pull requests. People, Own and Repos are
+	// ScrubLesson's for the decision: the inputs' authors and reviewers,
+	// magnum's logins, the inputs' repositories' owners and names.
+	Leaks              notes.Check
+	People, Own, Repos []string
+}
+    EditCheck is what ValidateEdit compares an answer with.
+
+type EditDecline struct {
+	ID       string   `json:"id"` // "d<id>"
+	Priority string   `json:"priority,omitempty"`
+	Verdict  string   `json:"verdict"`
+	Title    string   `json:"title,omitempty"`
+	Lesson   string   `json:"lesson,omitempty"`
+	Match    []string `json:"match"`
+}
+    EditDecline is a general finding of magnum's an author declined: wrong,
+    or ranked too high.
+
+type EditInputs struct {
+	Misses     []EditMiss      `json:"misses"`
+	Declines   []EditDecline   `json:"declines"`
+	Rejections []EditRejection `json:"rejections"`
+	SkillBytes int             `json:"skill_bytes"`
+	SkillCap   int             `json:"skill_cap"`
+	Files      []string        `json:"files"`
+}
+    EditInputs is inputs.json: the inputs to account for, the operator's reasons
+    for rejecting earlier proposals, the skill's size and cap and the files the
+    editor may change.
+
+func (in EditInputs) IDs() []string
+    IDs lists every input's id, the misses first.
+
+type EditMiss struct {
+	ID       string   `json:"id"` // "m<id>"
+	Severity string   `json:"severity,omitempty"`
+	Title    string   `json:"title,omitempty"`
+	Lesson   string   `json:"lesson,omitempty"`
+	Match    []string `json:"match"`
+}
+    EditMiss is a general miss: what another reviewer caught that magnum did
+    not.
+
+type EditRejection struct {
+	Input  string `json:"input,omitempty"`
+	Reason string `json:"reason"`
+}
+    EditRejection is the operator's reason for rejecting an earlier proposal:
+    of one input (Input, its id) or of the proposal (Input "").
+
+type FileChange struct {
+	Name   string `json:"name"`
+	Action string `json:"action"`
+	Reason string `json:"reason"`
+}
+    FileChange is one file of Changes: edited or unchanged, and why.
 
 type Input struct {
 	// Author is the pull request's author in Account form
@@ -9314,6 +9473,15 @@ type Input struct {
 	Compare func(from, to string) (Comparison, error)
 }
     Input is everything Build reads about one pull request.
+
+type InputChange struct {
+	ID     string `json:"id"`
+	Action string `json:"action"`
+	Where  string `json:"where,omitempty"`
+	Reason string `json:"reason,omitempty"`
+}
+    InputChange is one input of Changes: noted, with where the change covers it,
+    or skipped, with a one-line reason.
 
 type Item struct {
 	ID       string   `json:"id"`
@@ -9877,6 +10045,13 @@ var ErrTooLarge = errors.New("notes: the harness is too large to record")
 
 
 FUNCTIONS
+
+func CheckLeaks(text string, check Check) []string
+    CheckLeaks applies Validate's leak rules to one text that is not notes
+    (the skill editor's diff and DECISIONS entry): it returns, as phrases to
+    follow the text's name, that it names a pull request or issue number, one of
+    check's branches, holds what looks like a secret, or names a home directory
+    path. nil = none.
 
 func Fingerprint(notes []byte, files []File) string
     Fingerprint identifies a state of the notes and the harness: the notes'
