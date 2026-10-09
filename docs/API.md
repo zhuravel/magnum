@@ -9147,8 +9147,10 @@ func CaseFromDecline(d store.Decline) (eval.Case, bool)
     finding's title, with one absent defect, decline-<id>, on the finding's path
     (literally) and line with d's match expressions: a finding that reports it
     again is a false positive. An over-ranked one is a hit only at the priority
-    magnum posted or stronger (eval.Defect.Severity), so the point ranked lower
-    is no hit.
+    magnum posted or stronger (eval.Defect.Severity), so the point ranked
+    lower is no hit; one whose posted priority is not P0 to P3 makes no case,
+    since every matching finding would be a hit and the point could stop being
+    one only by not being reported.
 
 func CaseFromMiss(m store.Miss) (eval.Case, bool)
     CaseFromMiss is the learned case of miss m: ok when m is a miss (class miss)

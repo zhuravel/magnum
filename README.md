@@ -1638,8 +1638,8 @@ answers by source and by priority, and `magnum status` adds how many declined fi
 `magnum eval` reads after your corpus: one case per `general` miss of severity P0 to P2 (`miss-<id>`, a
 defect to find at the miss's path, lines and patterns) and per finding an author declined as `wrong` or
 `over_ranked` for every repository (`decline-<id>`, an absent defect: reporting it again is a false
-positive; an over-ranked one only at the priority Magnum posted or stronger), each at the commit Magnum
-reviewed. A case leaves the file once its row is dismissed or its pull request is in no watch or was
+positive; an over-ranked one only at the priority Magnum posted or stronger, and no case for one posted
+without a priority), each at the commit Magnum reviewed. A case leaves the file once its row is dismissed or its pull request is in no watch or was
 flagged by Codex; the file is rewritten only when it changes, and removed when no case is left.
 
 ```toml

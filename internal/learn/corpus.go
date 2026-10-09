@@ -48,7 +48,9 @@ func CaseFromMiss(m store.Miss) (eval.Case, bool) {
 // path (literally) and line with d's match expressions: a finding that
 // reports it again is a false positive. An over-ranked one is a hit only at
 // the priority magnum posted or stronger (eval.Defect.Severity), so the
-// point ranked lower is no hit.
+// point ranked lower is no hit; one whose posted priority is not P0 to P3
+// makes no case, since every matching finding would be a hit and the point
+// could stop being one only by not being reported.
 func CaseFromDecline(d store.Decline) (eval.Case, bool) {
 	if (d.Verdict != store.VerdictWrong && d.Verdict != store.VerdictOverRanked) || d.Scope != store.MissScopeGeneral ||
 		!learnedState(d.State) {
@@ -57,7 +59,10 @@ func CaseFromDecline(d store.Decline) (eval.Case, bool) {
 	name := fmt.Sprintf("decline-%d", d.ID)
 	def := eval.Defect{ID: name, Title: cmp.Or(strings.TrimSpace(d.Title), fmt.Sprintf("decline %d", d.ID)), Expect: eval.ExpectAbsent,
 		Paths: literalPaths(d.Path), Lines: defectLines(nil, d.Line), Match: compiling(d.Match)}
-	if d.Verdict == store.VerdictOverRanked && slices.Contains([]string{"P0", "P1", "P2", "P3"}, d.Priority) {
+	if d.Verdict == store.VerdictOverRanked {
+		if !slices.Contains([]string{"P0", "P1", "P2", "P3"}, d.Priority) {
+			return eval.Case{}, false
+		}
 		def.Severity = d.Priority
 	}
 	return learnedCase(name, d.Repo, d.Number, d.ReviewedSHA, d.Title, def)

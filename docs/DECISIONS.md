@@ -5216,8 +5216,10 @@ editing history. Code, config comments and prompts reference these by their head
   general miss of severity P0 to P2 (`learn.CaseFromMiss`: `miss-<id>`, a defect to find with the row's
   path, lines, match and severity) and per general decline with verdict `wrong` or `over_ranked`
   (`learn.CaseFromDecline`: `decline-<id>`, an absent defect on the finding's path and line; an
-  over-ranked one carries the posted priority, so the point ranked lower is no hit), new or used, at the
-  reviewed commit, oldest row first. A path is written literally (glob characters escaped), match
+  over-ranked one carries the posted priority, so the point ranked lower is no hit, and one posted
+  without a P0 to P3 priority makes no case, since every matching finding would be a hit and the point
+  could stop being one only by not being reported), new or used, at the reviewed commit, oldest row
+  first. A path is written literally (glob characters escaped), match
   expressions that do not compile are left out, and a row the corpus would refuse makes no case
   (`eval.Case.Validate`), so one row never blocks the file. A PR no watch covers (no roles, no identity)
   or one Codex flagged, or whose flag cannot be read, is left out, and so is a dismissed row.

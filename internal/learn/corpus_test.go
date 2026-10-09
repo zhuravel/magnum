@@ -147,6 +147,10 @@ func TestCaseFromDeclineMakesAnAbsentDefect(t *testing.T) {
 		"repo scope":            func(d *store.Decline) { d.Scope = store.MissScopeRepo },
 		"dismissed":             func(d *store.Decline) { d.State = store.MissDismissed },
 		"short reviewed commit": func(d *store.Decline) { d.ReviewedSHA = "abc" },
+		// Without the posted priority every matching finding would be a hit, so the point ranked
+		// lower, the fix the verdict asks for, could only stop being one by not being reported.
+		"over-ranked, no priority":      func(d *store.Decline) { d.Verdict, d.Priority = store.VerdictOverRanked, "" },
+		"over-ranked, unknown priority": func(d *store.Decline) { d.Verdict, d.Priority = store.VerdictOverRanked, "high" },
 	} {
 		d := generalDecline()
 		m(&d)
