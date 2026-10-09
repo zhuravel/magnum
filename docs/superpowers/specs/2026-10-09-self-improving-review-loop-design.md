@@ -1,6 +1,7 @@
 # The self-improving review loop
 
-Date: 2026-10-09. Status: approved in conversation, implementation planned.
+Date: 2026-10-09. Status: approved in conversation on 2026-10-09 and implemented in five stages (branch
+`loop/final`), with the final review's findings applied on 2026-10-10.
 
 ## Goal
 
@@ -107,27 +108,40 @@ editor_kind`, `editor_model` (default claude, sonnet), `editor_effort`, `editor_
 `<data>/learn/skill/<run>/` holds:
 
 - `inputs.json`: the general misses and the general `wrong`/`over_ranked` declines in state `new`
-  (ids prefixed `m` and `d`, severity, title, lesson, match), the operator's rejection reasons from the
+  (ids prefixed `m` and `d`, severity, title, lesson, match, and `history`: the earlier proposals that
+  noted the input and failed at the gate, with the gate's rule), the newest 40 of them (misses and
+  declines each newest first; `left_out` counts the older ones), the operator's rejection reasons from the
   last 5 rejected proposals and per input, the last 3 landed versions with their measurements, the size
   cap and the current size, and the list of files it may edit;
-- `pins.json`: the sentences the skill must keep, produced by a test helper
-  (`go test ./internal/agents -run TestSkillPinsDump -args -pins <path>`), so the editor knows them before
-  it writes;
+- `pins.json`: the sentences the skill must keep and the skill's cap, read from the worktree's
+  `internal/agents/testdata/skill_pins.txt` (which `go test ./internal/agents -update` regenerates and
+  the skill tests check against), so the editor knows them before it writes;
 - the editor's outputs inside the worktree: the edited files, `changes.json` ({`files`: [{`name`,
   `action` edited|unchanged, `reason`}], `inputs`: [{`id`, `action` noted|skipped, `where`, `reason`}],
-  `decision`: the DECISIONS entry text}), and the DECISIONS entry appended by magnum, not the agent.
+  `decision`: the DECISIONS entry text}), and the DECISIONS entry appended by magnum, not the agent, at
+  the end of `docs/DECISIONS.md`'s last section, `## Learned rules`, which the file carries from the
+  start (with an introduction that says whose it is) and which holds only the loop's entries (the
+  editor's and the reverts'):
+  people append theirs to the sections before it, so an operator's entry on master and a candidate's
+  never touch the same lines and the landing's rebase does not conflict over them.
 
 It may edit `skills/magnum-review/SKILL.md`, `prompts/judge-*.md` and `prompts/claude-*.md`. Nothing
 else. Rules in the prompt: keep the skill at or under the cap by shortening. keep every pinned sentence;
 general rules only, no PR number, login, URL, repository or person. one change per input or a skip with a
 reason. do not weaken a rule a landed version added for a measured gain. keep section numbers.
 
-Magnum checks the result (`learn.Validate`): every input accounted for once. only allowed files changed
+Magnum checks the result (`learn.ValidateEdit`): every input accounted for once. only allowed files changed
 (`git status` of the worktree). the skill size. no pinned sentence lost. `notes.Validate`'s leak rules
 (PR references, branches, secrets, home paths) on the diff. `learn.ScrubLesson` rules on the DECISIONS
-text. the prompts render (`engine.CheckPrompts` on a config pointed at the worktree). Then the format gate
+text. the prompts render (`engine.CheckPrompts` on a config pointed at the worktree). Then magnum appends
+the DECISIONS entry to the worktree's `docs/DECISIONS.md` (put back to the base before each check, so a
+nudge does not append twice, and part of the late-write fingerprint), so the format gate's
+`make check-private` sees the entry, whose first sentence is also the commit subject. Then the format gate
 runs in the worktree: `go test ./internal/agents ./internal/pipeline -update` is not used. instead
-`go test ./internal/agents -run 'TestRenderGolden' -update` regenerates goldens, then
+`go test ./internal/agents -run '^(TestRenderGolden|TestJudgePromptsNameTheFormerLogins|TestRereviewPromptNamesTheThreadsFile)$' -update`
+regenerates goldens (every test that writes one, `TestTheFormatGateRegeneratesEveryGolden` checks; never
+the whole package, whose `-update` rewrites the pins; the goldens go back to the base before each check,
+so a golden edited by hand is not committed), then
 `go test ./internal/agents ./internal/pipeline ./internal/config` must pass, and
 `mise -C <checkout> exec -- make check-private` must pass. One nudge with the problems, then the candidate
 is committed on its branch (message: the DECISIONS headline, the inputs it answers by id, the byte
@@ -138,41 +152,90 @@ the run is `stopped`.
 ## 4. The gate
 
 For a proposal in `gating`, the daemon selects the cases: the learned cases of the inputs it noted
-(targets) plus every other case in both corpora whose head is in a watched, non-flagged PR, capped by
-`[learn] gate_cases` (default 6, targets first, then the newest). Mode: judge-only when only
+(targets: those no gate compared yet first, then the others, the misses first and the newest first) plus
+every other case in both corpora whose head is in a watched, non-flagged PR, capped by
+`[learn] gate_cases` (default 6, targets first, then the newest). A target whose baseline already covers
+it (a `miss-` case it finds, a `decline-` case it no longer hits: `learn.AtBaseline`) is no target: it
+is skipped as "found at the baseline" or "not reported at the baseline", gives its place to the next
+target past the cap (`learn.PromoteTarget`), and its input is dismissed by the gate's decision
+(`store.GateLearnProposal`, the link row's `gate` = `baseline` and `dismissed` saying why); its learned
+case stays in the corpus as a regression check. A proposal whose every target is so fails. Mode: judge-only when only
 `SKILL.md` and `prompts/judge-*.md` changed, else full. The baseline is the newest stored run with the
-same inputs hash as `master` (through `eval.Baselines`), else a baseline replay first. The candidate
+same inputs hash as the proposal's `base_sha` (through `eval.Baselines`), else a baseline replay first.
+Both read a detached worktree at `base_sha` under the learn worktrees, never the checkout (its branch and
+its uncommitted edits are the operator's), removed after the gate (and at the next start, when a crash left it); each run of the gate records the
+commit of the tree it read and that tree's clean state, so a later gate reuses it. In judge-only mode
+both judges read the reviewer reports of the case's newest full replay whose reviewers read the
+candidate's prompts (`eval.FullReplayFor`): the baseline is that replay itself when its judge read the
+base's inputs, else the base's judge alone on its reports (stored, `eval.JudgeBaselines`, or replayed
+then), and without such a replay the base's full replay is the baseline and gives the candidate's judge
+its reports. The candidate
 replay runs in-process with `--candidate` = the worktree, under the eval agent tag, one case at a time,
 refused above `codex_soft` (then the proposal waits in `gating` and is retried at the next tick after the
 window moves) and never on a flagged PR.
 
 Verdict (`learn.Judge`):
 
-- pass: at least one target found (a `miss-` case) or no longer hit (a `decline-` case). no case found at
-  the baseline is lost (a lost case is replayed once more before it counts as lost). no absent case gets a
-  hit that the baseline did not have;
+- pass: at least one `miss-` target found more often. no case found at the baseline is lost (a lost case
+  is replayed once more before it counts as lost). no absent case gets a hit that the baseline did not
+  have;
 - hold: the targets could not be replayed (no corpus case, a flagged PR, no stored full replay for
-  judge-only) but nothing regressed;
+  judge-only) but nothing regressed; or the only targets that improved are `decline-` cases no longer
+  hit ("only declined findings improved: review the rule it adds"), with nothing regressed: a rule that
+  stops a kind of finding lands only on the operator's `y`;
 - fail: anything regressed, or no target improved.
 
+A replay without a score is no verdict: on a target or its baseline, or on the second replay of a lost
+case, one that ended without a score (anything but a flagged PR) stops the gate like the soft cap does, and
+the proposal stays `gating` for a try 30 minutes later; only the third gate of the proposal that stops so
+holds it, with the replay named; a corpus or a list of flagged replays that cannot be read counts the
+same, before any replay. A drain or a pause is checked before each replay and stops a running gate the
+same way, and so does a verdict the registry did not take. A gate that stops short keeps its replays: the
+next gate takes the candidate's stored replays of a case and a lost case's second replay (`eval.Baselines`
+over clean runs with the candidate's inputs hash; judge-only, `eval.JudgeBaselines` on the same reports)
+instead of replaying them. Every stop but a shutdown's counts in `learn.gate_stops` (`attempts`, with
+the last stop's reason), and the sixth holds the proposal; one still `gating` 3 days after it was made is
+held whether or not a gate could start. `magnum learn --review` shows the oldest `gating` proposal when
+none is held and rejects it on `y`, stopping its running gate first.
+
 The results are stored in `gate_json` (baseline run id, candidate run id, per-case before/after, the
-rule that decided) and the state becomes `passed`, `held` or `failed`. `failed` proposals keep their
-inputs `new`. a `held` one waits for the operator. a `passed` one lands.
+rule that decided) and the state becomes `passed`, `held` or `failed`, with what the gate made of each
+target on its input's link row (`improved`, `not_improved`, `baseline`). `failed` proposals keep their
+inputs `new`, but an input whose case two failed gates compared without improving it
+(`store.LearnDismissFailures`) is dismissed ("noted in 2 failed gates"). a `held` one waits for the
+operator. a `passed` one lands. `magnum misses --all` (and `--declines --all`) shows why a skill proposal
+dismissed a row and which one.
 
 ## 5. Landing and restart
 
 Landing (`engine.landProposal`): the checkout must be on `master` with no rebase or merge in progress;
-`master` must equal the proposal's `base_sha`, else the branch is rebased once in the worktree (a conflict
-holds the proposal with the reason). the files the commit touches must be clean in the checkout's working
-tree (else held, reason named). Then `git -C <checkout> merge --ff-only learn/<run>`, the branch is
-deleted, the worktree removed, the proposal becomes `landed` with `landed_sha`, and a `learn_versions`
-row records the new skill and prompts hashes. A toast says what landed. At most one landing per local day
-(`[learn] land_per_day`, default 1): a second passed proposal waits as `passed` until the next day.
+the branch must be at the proposal's `candidate_sha`, or at that commit as an earlier landing rebased it (a
+single commit on a commit `master` holds, with the same `git patch-id`), else it is held: a commit made in
+the worktree would land ungated. `master` must hold the proposal's `base_sha` (else held: it was reset or
+rewritten since the edit); when it moved past it, the candidate's commit alone is rebased once in the
+worktree (`git rebase --onto master <base_sha>`, so a commit the operator dropped from `master` does not
+come back; a conflict holds the proposal with the reason). the tree that lands must render with the
+daemon's build (`CheckPrompts` on the worktree, as the restart on it checks first; else held). the files
+the commit touches must be clean in the checkout's working tree (else held, reason named). Then `git -C
+<checkout> merge --ff-only --no-autostash learn/<run>` (the rebase and the merge run on a context a shutdown
+does not cancel, with a timeout; `gitx.MergeFFOnly` checks that `HEAD` is `refs/heads/master` right before
+the merge and that `master` is at the branch's commit right after it, and the landing holds the proposal
+when either fails), the
+proposal becomes `landed` with `landed_sha` and a `learn_versions` row records the new skill and prompts
+hashes in one transaction (`store.LandLearnProposal`), then the branch is deleted and the worktree
+removed. A branch `master` already holds (a landing a crash cut short after the merge) is recorded as
+landed, at the next landing, at the operator's `n` (instead of the rejection) and at the expiry (instead
+of it). A toast says what landed. At most one landing per local day (`[learn] land_per_day`, default 1): a
+second passed proposal waits as `passed` until the next day. No proposal lands, at a tick or on the
+operator's `y` (which is refused: "ask again after the restart"), before the daemon restarted on the
+version landed last.
 
 Restart: the daemon sets `KVLearnRestart` and exits for launchd at the first tick with no round, retro,
 curation, editor or gate in flight (the `restartForBuild` path), unless `[learn] restart` is `manual`,
 in which case `magnum status` and a toast ask for `daemon-restart --when-idle`. The restart is recorded on
-the version (`restarted_at`), which starts its measurement window.
+the version (`restarted_at`), which starts its measurement window; a start without `KVLearnRestart`
+records it on the newest version when that one was never restarted on (a crash between the landing's
+transaction and the key).
 
 Nothing is pushed. `magnum learn` says how many landed versions are ahead of `origin/master`.
 
@@ -189,11 +252,16 @@ lesson), the diff of the skill and prompts (`notes.Unified`, `notes.Printable`),
 gate table, and the question. `y` lands it through the landing path (the daemon does the landing. the CLI
 sends `ReqLearnLand` and reports the answer), `n` rejects it with the reason (the branch and worktree are
 removed, the inputs go back to `new`, or `dismissed` after a second rejection), anything else leaves it.
-`--json` prints the data. A proposal not decided within 7 days expires like a notes proposal.
+`--json` prints the data. A proposal not decided within 7 days of becoming `held` or `passed`
+(`waiting_since`, so a gate that waited days for the budget or a pause takes none of the week) expires
+like a notes proposal.
 
 `magnum learn --propose`: `ReqLearnPropose`, an editor run now (refused while one runs or a proposal is
 `gating`, `passed` or `held`. the refusal names it). `magnum learn --revert <version>`: a proposal that
-restores the files of the version before it, through the gate, held for review.
+restores the files of the version before it, through the gate, held for review; its `--reason` goes
+into the design log's entry and the commit's subject, so the daemon refuses one that names a pull
+request, a link, a login of the registry's pull requests (`store.PeopleLogins`) or a watched
+repository's owner or name, and the format gate's `make check-private` checks the entry.
 
 Counters and toasts: `tui.DaemonFacts.LearnProposals` counts `held` proposals ("N skill proposals to
 review", short "skill ×N") on the board and dashboard titles. the `magnum status` learn line shows the
@@ -209,9 +277,17 @@ A `learn_versions` row: `id`, `proposal_id`, `landed_sha`, `skill_sha`, `prompts
 files), `landed_at`, `restarted_at`. A version's window is from its `restarted_at` to the next version's.
 `store.VersionMeasure(id)` counts, in the window: judge runs posted, findings posted by priority, declines
 by outcome (joined by `skill_sha`), misses by class and scope (by `reviewed_sha` of runs in the window).
+Each count takes only the rounds that ran the version's skill (a run of the review whose `prompt_text`
+names the copy `<state>/skill/<skill_sha>/`), so a skill changed outside the loop does not count toward
+the version that runs before or after it, and a review counts once however many judge runs a nudge or
+a model fallback stamped with its id; the skill before the first version counts every round.
 The editor's `inputs.json` carries the last 3 versions' measures. When a version with at least 20 posted
 findings has a `declined`+`argued` share higher by 10 points than the previous version's, the daemon
 creates one held revert proposal (`trigger = regression`) and toasts it. never twice for the same version.
+It creates none when a waiting or landed proposal reverts that version already (the operator's
+`--revert`), and the version is remembered only once its revert started (or none is possible), so a
+revert another learn job or a drain kept from starting is proposed at a later scan.
+A revert's DECISIONS entry ("Reverts skill version N: <why>") goes to the `## Learned rules` section too.
 
 ## 8. Scheduling, cost and configuration
 
@@ -222,7 +298,7 @@ copy is about to be re-read), under a hold, a user pause, or a tool pause of its
 checkout is missing or `go` is not on PATH (`[learn] editor = false` is implied and `magnum doctor` says
 why). Learn-tagged jobs (retro, curation, editor, gate) are serialized by one mutex in the engine, which
 also removes the current retro/curation overlap. The gate and the editor count as background work for
-`daemon-restart` and `backgroundBusy`, their KV marks (`learn.editing`, `learn.gating`) are cleared at
+`daemon-restart` and `backgroundBusy`, their KV marks (`learn.editing`, `learn.gating`) are cleared (with the gate's worktree of the base) at
 startup, and shutdown cancels them.
 
 Configuration under `[learn]`: `editor` (bool, default false), `editor_kind`, `editor_model`,
@@ -233,27 +309,35 @@ Everything is validated whether or not enabled. `config.defaults.toml` documents
 ## 9. Data model
 
 Migration 0023: `declines` (section 1) with indexes on `(pr_id)`, `(state, scope, verdict)` and
-`(skill_sha)`. Migration 0024: `learn_proposals` (`id`, `trigger` evidence|request|regression,
-`base_sha`, `branch`, `candidate_sha`, `files_json`, `state` editing|invalid|stopped|gating|passed|held|
-failed|landed|rejected|expired|superseded, `gate_json`, `reason`, `model`, `prompt_sha256`, `scratch`,
-`run_dir`, `created_at`, `decided_at`, `landed_sha`, `landed_at`), `learn_proposal_inputs`
-(`proposal_id`, `kind` miss|decline, `input_id`, `outcome` noted|skipped, `where`, `reason`, primary key
-on the three), `learn_versions` (section 7). The `misses` and `declines` state transitions move through
+`(skill_sha)`. Migration 0024: `learn_proposals` (`id`, `trigger_reason` evidence|request|regression,
+`base_sha`, `branch`, `candidate_sha`, `files_json`, `state` invalid|stopped|gating|passed|held|
+failed|landed|rejected|expired (a row is made when its editor run ends, and none replaces another, so
+there is no editing or superseded state), `gate_json`, `reason`, `model`, `prompt_sha256`, `scratch`,
+`run_dir`, `created_at`, `waiting_since`, `decided_at`, `landed_sha`, `landed_at`, `reverts`: the version
+a revert restores the files before), `learn_proposal_inputs`
+(`proposal_id`, `kind` miss|decline, `input_id`, `outcome` noted|skipped, `location`, `reason`, `gate`
+improved|not_improved|baseline, `dismissed`, primary key on the three), `learn_versions` (section 7). The `misses` and `declines` state transitions move through
 the proposal decision in one transaction, as `decideProposalMisses` does, and a `dismissed` input is
-removed from the learned corpus.
+removed from the learned corpus (but for one a gate found covered at its baseline). The proposals that
+wait are gating, passed and held; reverts are proposals too (`trigger_reason` regression, `reverts` set).
 
-KV: `learn.edit_day`, `learn.editing` (run id and start), `learn.gating` (proposal id and start),
-`learn.restart` (version id), `learn.land_day`. Every new key is added to `kvkeys_test.go`.
+KV: `learn.evidence` (the time of the retro that stored new general evidence), `learn.edit_day`,
+`learn.editing` (run id, start and the version a revert reverts), `learn.gating` (proposal id and start),
+`learn.gate_stops` (the gates of the proposal gated now that stopped short: on a replay without a score,
+in all, and why the last did), `learn.restart` (version id), `learn.land_day`, `learn.regression` (the
+newest version the regression scan proposed a revert for, or found none possible for). Every new key is added to `kvkeys_test.go`.
 
 Files: `<data>/learn/skill/<run>/` (inputs, pins, changes.json copy, log), pruned after 30 days with the
 retro runs. `<state>/learn/wt/<run>` (the worktree, removed at landing, rejection, expiry or stop);
-`<data>/learn/corpus.toml`.
+`<state>/learn/eval/wt/<case>` (the gate's case worktrees, never `magnum eval run`'s `<state>/eval/wt/<case>`;
+`eval run` refuses to start while `learn.gating` is set); `<data>/learn/corpus.toml`.
 
 ## 10. Testing
 
 Hermetic, as the retro and curation tests: a fake editor (`Deps.Editor`) that writes files into the
-worktree. a fake git for the worktree operations (`gitx` fake with `worktree add`, `merge --ff-only`,
-`rebase`, `status`). the gate's eval through a fake runner that returns stored scores. the store
+worktree. real git in temporary repositories for the worktree, commit, rebase, fast-forward and discard
+operations (`gitx`'s tests and the editor's fixture), and a fake `engine.LearnGit` over a map of refs for
+the gate's and the landing's decisions. the gate's eval through a fake runner that returns stored scores. the store
 transitions through `storetest`. The format gate's `go test` subprocess is behind a seam that the tests
 replace. The retro's decline classification is tested with the fake classifier and seeded threads. Every
 new behaviour has a named test. `docs/DECISIONS.md` gets one entry per decision above. the README gets a

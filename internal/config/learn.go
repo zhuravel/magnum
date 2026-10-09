@@ -48,7 +48,51 @@ type Learn struct {
 	Prompt string `toml:"prompt"`
 	// Timeout bounds the agent's turn on one PR.
 	Timeout Duration `toml:"timeout"`
+
+	// The self-improving loop (internal/engine/learn_edit.go, DECISIONS "The
+	// editor proposes skill and prompt changes on a branch"). Editor turns
+	// on the editor after a retro that found new general misses or
+	// declines (`magnum learn --propose` runs it regardless): a pane agent
+	// that drafts a change to the judge skill and the prompts on a branch
+	// of the checkout. EditorKind, EditorModel, EditorEffort and EditorArgs
+	// are its role's (EditorRole; editor_kind without editor_model gets
+	// DefaultLearnModel of that kind), EditorPrompt its template and
+	// EditorTimeout the bound of one turn.
+	Editor        bool     `toml:"editor"`
+	EditorKind    string   `toml:"editor_kind"`
+	EditorModel   string   `toml:"editor_model"`
+	EditorEffort  string   `toml:"editor_effort"`
+	EditorArgs    []string `toml:"editor_args"`
+	EditorPrompt  string   `toml:"editor_prompt"`
+	EditorTimeout Duration `toml:"editor_timeout"`
+	// GateCases bounds the eval cases the gate of a proposal replays,
+	// LandPerDay the proposals that land per local day; Restart is idle
+	// (the daemon restarts on a landed change once nothing is in flight) or
+	// manual (it asks for `magnum daemon-restart --when-idle`). The newest
+	// landed version whose declined and argued share of its posted
+	// findings grows by RegressionPoints over the previous version's, both
+	// with at least RegressionMinFindings posted findings, gets one revert
+	// proposal, which the gate holds for review (internal/engine
+	// learn_revert.go).
+	GateCases             int    `toml:"gate_cases"`
+	LandPerDay            int    `toml:"land_per_day"`
+	Restart               string `toml:"restart"`
+	RegressionPoints      int    `toml:"regression_points"`
+	RegressionMinFindings int    `toml:"regression_min_findings"`
 }
+
+// DefaultEditorPrompt is the skill editor's prompt file.
+const DefaultEditorPrompt = "skill-edit.md"
+
+// EditorRoleName is the name of the role the skill editor runs as
+// (EditorRole).
+const EditorRoleName = "skill"
+
+// The values of [learn] restart.
+const (
+	LearnRestartIdle   = "idle"
+	LearnRestartManual = "manual"
+)
 
 // DefaultLearnPrompt is the retro prompt file.
 const DefaultLearnPrompt = "retro.md"
@@ -76,21 +120,35 @@ func (c *Config) learnModelFollowsKind(md toml.MetaData) {
 	if md.IsDefined("learn", "kind") && !md.IsDefined("learn", "model") {
 		c.Learn.Model = DefaultLearnModel(c.Learn.Kind)
 	}
+	if md.IsDefined("learn", "editor_kind") && !md.IsDefined("learn", "editor_model") {
+		c.Learn.EditorModel = DefaultLearnModel(c.Learn.EditorKind)
+	}
 }
 
 // DefaultLearn returns the built-in [learn] values: off, a week of lookback,
-// a day to settle, Claude sonnet classifying.
+// a day to settle, Claude sonnet classifying; the editor off, Claude sonnet
+// editing for at most 45 minutes a turn, a gate of 6 cases, one landing a
+// day, an idle restart, a regression of 10 points over 20 findings.
 func DefaultLearn() Learn {
 	return Learn{
-		DailyAt:         "07:00",
-		Lookback:        Duration{7 * 24 * time.Hour},
-		Settle:          Duration{24 * time.Hour},
-		MaxPRs:          20,
-		MinCommentChars: 20,
-		Kind:            KindClaude,
-		Model:           DefaultLearnModel(KindClaude),
-		Prompt:          DefaultLearnPrompt,
-		Timeout:         Duration{20 * time.Minute},
+		DailyAt:               "07:00",
+		Lookback:              Duration{7 * 24 * time.Hour},
+		Settle:                Duration{24 * time.Hour},
+		MaxPRs:                20,
+		MinCommentChars:       20,
+		Kind:                  KindClaude,
+		Model:                 DefaultLearnModel(KindClaude),
+		Prompt:                DefaultLearnPrompt,
+		Timeout:               Duration{20 * time.Minute},
+		EditorKind:            KindClaude,
+		EditorModel:           DefaultLearnModel(KindClaude),
+		EditorPrompt:          DefaultEditorPrompt,
+		EditorTimeout:         Duration{45 * time.Minute},
+		GateCases:             6,
+		LandPerDay:            1,
+		Restart:               LearnRestartIdle,
+		RegressionPoints:      10,
+		RegressionMinFindings: 20,
 	}
 }
 
@@ -126,6 +184,16 @@ func (c *Config) LearnRole() Role {
 	l := c.Learn
 	return c.sessionRole(Role{Name: LearnRoleName, Kind: l.Kind, Model: l.Model, Effort: l.Effort, Args: l.Args,
 		Prompt: l.Prompt, Output: LearnRoleName + ".json", Timeout: l.Timeout})
+}
+
+// EditorRole is the role the skill editor runs as: EditorRoleName, the
+// [learn] editor_kind in session mode with its editor_model, editor_effort,
+// editor_args, editor_prompt and editor_timeout, writing changes.json,
+// normalized like a configured role.
+func (c *Config) EditorRole() Role {
+	l := c.Learn
+	return c.sessionRole(Role{Name: EditorRoleName, Kind: l.EditorKind, Model: l.EditorModel, Effort: l.EditorEffort, Args: l.EditorArgs,
+		Prompt: l.EditorPrompt, Output: "changes.json", Timeout: l.EditorTimeout})
 }
 
 // sessionRole is r, a role an agent runs outside the review rounds (the
@@ -192,6 +260,46 @@ func (c *Config) validateLearn() []error {
 	}
 	if l.MinCommentChars <= 0 {
 		errs = append(errs, fmt.Errorf("learn.min_comment_chars must be positive, got %d", l.MinCommentChars))
+	}
+	return append(errs, c.validateEditor()...)
+}
+
+// validateEditor checks the skill editor's keys of [learn] always (`magnum
+// learn --propose` runs it whether or not editor is on): editor_kind is a
+// declared agent kind whose role (EditorRole) passes a [[role]]'s checks,
+// editor_prompt resolves and parses, the timeout and the gate's numbers are
+// positive, restart is idle or manual and regression_points is 1 to 100.
+func (c *Config) validateEditor() []error {
+	l := c.Learn
+	var errs []error
+	if _, ok := c.KindSpec(l.EditorKind); !ok {
+		errs = append(errs, fmt.Errorf("learn.editor_kind %q is not a declared agent kind (declared: %s)", l.EditorKind, strings.Join(c.KindNames(), ", ")))
+	} else {
+		errs = append(errs, c.validateSessionRole("learn editor", c.EditorRole())...)
+	}
+	if l.EditorPrompt == "" {
+		errs = append(errs, errors.New("learn.editor_prompt must name a prompt file"))
+	} else if p, err := c.ResolvePrompt(l.EditorPrompt); err != nil {
+		errs = append(errs, fmt.Errorf("learn.editor_prompt: %w", err))
+	} else if err := parseTemplate(l.EditorPrompt, p.Text); err != nil {
+		errs = append(errs, fmt.Errorf("learn.editor_prompt %s: %w", l.EditorPrompt, err))
+	}
+	if l.EditorTimeout.Duration <= 0 {
+		errs = append(errs, fmt.Errorf("learn.editor_timeout must be positive, got %s", l.EditorTimeout.Duration))
+	}
+	for _, n := range []struct {
+		key string
+		v   int
+	}{{"gate_cases", l.GateCases}, {"land_per_day", l.LandPerDay}, {"regression_min_findings", l.RegressionMinFindings}} {
+		if n.v <= 0 {
+			errs = append(errs, fmt.Errorf("learn.%s must be positive, got %d", n.key, n.v))
+		}
+	}
+	if l.Restart != LearnRestartIdle && l.Restart != LearnRestartManual {
+		errs = append(errs, fmt.Errorf("learn.restart %q: want %s or %s", l.Restart, LearnRestartIdle, LearnRestartManual))
+	}
+	if l.RegressionPoints < 1 || l.RegressionPoints > 100 {
+		errs = append(errs, fmt.Errorf("learn.regression_points must be 1 to 100, got %d", l.RegressionPoints))
 	}
 	return errs
 }

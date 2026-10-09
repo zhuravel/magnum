@@ -2,7 +2,9 @@
 
 Read this before changing anything here, whether you are a person or a coding agent.
 [docs/DECISIONS.md](docs/DECISIONS.md) records why things are the way they are; add an entry there
-when you change a behaviour, do not rewrite old ones.
+when you change a behaviour, do not rewrite old ones. Append it at the end of the section it belongs
+to, never inside `## Learned rules`: that last section is the self-improving loop's (the skill editor's
+entries and the reverts of skill versions), and keeping out of it keeps its landings' rebases clean.
 
 ## Ground rules
 

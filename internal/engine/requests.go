@@ -41,7 +41,30 @@ const (
 	ReqIdentityVerdict = "identity_verdict"
 	// ReqRetro starts a retro now (RetroPayload, retro.go).
 	ReqRetro = "retro"
+	// ReqLearnPropose starts a skill edit now (LearnProposePayload,
+	// learn_edit.go); ReqLearnLand lands a held proposal and ReqLearnReject
+	// rejects a held or gating one, stopping its gate first
+	// (LearnDecisionPayload), as `magnum learn --review` asks.
+	ReqLearnPropose = "learn_propose"
+	ReqLearnLand    = "learn_land"
+	ReqLearnReject  = "learn_reject"
+	// ReqLearnRevert proposes a revert of a landed version
+	// (LearnRevertPayload, learn_revert.go), as `magnum learn --revert`
+	// asks.
+	ReqLearnRevert = "learn_revert"
 )
+
+// LearnProposePayload is a `magnum learn --propose` request.
+type LearnProposePayload struct{}
+
+// LearnDecisionPayload is the operator's answer to a held skill proposal
+// (`magnum learn --review`): land it (ReqLearnLand) or reject it
+// (ReqLearnReject, a gating one's only answer) with Reason, which the next
+// edit reads.
+type LearnDecisionPayload struct {
+	ID     int64  `json:"id"`
+	Reason string `json:"reason,omitempty"`
+}
 
 // maxRequestsPerTick bounds the requests one tick handles.
 const maxRequestsPerTick = 50
@@ -229,6 +252,14 @@ func (e *Engine) handleRequest(ctx context.Context, req store.Request) {
 		e.noteRetroRunning(ctx) // inflight.go
 	case ReqNotesCurate: // notes_curate.go
 		answer(e, ctx, req, e.requestCurate)
+	case ReqLearnPropose: // learn_edit.go
+		answer(e, ctx, req, e.requestEdit)
+	case ReqLearnReject:
+		answer(e, ctx, req, e.requestLearnReject)
+	case ReqLearnLand:
+		answer(e, ctx, req, e.requestLearnLand)
+	case ReqLearnRevert: // learn_revert.go
+		answer(e, ctx, req, e.requestLearnRevert)
 	case ReqRelease:
 		p, ok := payload[TargetPayload](e, ctx, req)
 		if !ok {

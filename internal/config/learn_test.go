@@ -15,7 +15,7 @@ import (
 // config.defaults.toml's: loading the file and a config without the section
 // give the same values.
 func TestLearnDefaults(t *testing.T) {
-	want := Learn{
+	want := withEditorDefaults(Learn{
 		DailyAt:         "07:00",
 		Lookback:        Duration{7 * 24 * time.Hour},
 		Settle:          Duration{24 * time.Hour},
@@ -25,7 +25,7 @@ func TestLearnDefaults(t *testing.T) {
 		Model:           "sonnet",
 		Prompt:          "retro.md",
 		Timeout:         Duration{20 * time.Minute},
-	}
+	})
 	if got := Defaults().Learn; !reflect.DeepEqual(got, want) {
 		t.Fatalf("built-in learn = %+v, want %+v", got, want)
 	}
@@ -36,6 +36,55 @@ func TestLearnDefaults(t *testing.T) {
 	}
 	if !reflect.DeepEqual(explicit.Learn, want) {
 		t.Fatalf("config.defaults.toml learn = %+v, want %+v", explicit.Learn, want)
+	}
+}
+
+// withEditorDefaults is l with the skill editor's built-in keys: off,
+// Claude sonnet editing skill-edit.md for at most 45 minutes, a gate of 6
+// cases, one landing a day, an idle restart, a regression of 10 points
+// over 20 findings.
+func withEditorDefaults(l Learn) Learn {
+	l.EditorKind, l.EditorModel, l.EditorPrompt, l.EditorTimeout = "claude", "sonnet", "skill-edit.md", Duration{45 * time.Minute}
+	l.GateCases, l.LandPerDay, l.Restart, l.RegressionPoints, l.RegressionMinFindings = 6, 1, "idle", 10, 20
+	return l
+}
+
+// The editor runs as an ordinary session role named skill, taking its kind,
+// model, effort, args, prompt and timeout from the editor_* keys of
+// [learn], and writes changes.json itself.
+func TestEditorRoleFollowsTheEditorKeys(t *testing.T) {
+	cfg := validPipelineConfig()
+	r := cfg.EditorRole()
+	if r.Name != "skill" || EditorRoleName != "skill" || r.Kind != "claude" || r.Mode != ModeSession || !r.IsAgent() || r.Judge {
+		t.Fatalf("role = %+v, want the claude session role skill", r)
+	}
+	if r.Model != "sonnet" || r.Effort != "" || r.Prompt != "skill-edit.md" || r.Output != "changes.json" || r.Capture != CaptureFile ||
+		r.Timeout.Duration != 45*time.Minute {
+		t.Fatalf("role = %+v", r)
+	}
+	cfg.Learn.EditorKind, cfg.Learn.EditorModel, cfg.Learn.EditorEffort = KindCodex, "cheap", "high"
+	cfg.Learn.EditorArgs, cfg.Learn.EditorTimeout = []string{"--search"}, Duration{time.Hour}
+	r = cfg.EditorRole()
+	if r.Kind != KindCodex || r.Model != "cheap" || r.Effort != "high" || !slices.Equal(r.Args, []string{"--search"}) || r.Timeout.Duration != time.Hour {
+		t.Fatalf("role = %+v, want codex cheap high --search 1h", r)
+	}
+	if errs := cfg.validateRole(cfg.EditorRole(), cfg.kinds(), map[string]bool{}); len(errs) > 0 {
+		t.Fatalf("the editor role is invalid: %v", errs)
+	}
+}
+
+// A layer that sets editor_kind but not editor_model gets that kind's
+// default model, as [learn] kind does.
+func TestEditorModelFollowsTheEditorKind(t *testing.T) {
+	cfg, err := loadCommittedWithLocal(t, testLocalConfig+`
+[learn]
+editor_kind = "codex"
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Learn.EditorKind != KindCodex || cfg.Learn.EditorModel != "" || cfg.Learn.Model != "sonnet" {
+		t.Fatalf("editor kind, model; retro model = %q, %q; %q", cfg.Learn.EditorKind, cfg.Learn.EditorModel, cfg.Learn.Model)
 	}
 }
 
@@ -146,6 +195,25 @@ func TestValidateLearn(t *testing.T) {
 		{name: "negative min_comment_chars", edit: func(c *Config) { c.Learn.MinCommentChars = -1 }, want: "learn.min_comment_chars must be positive, got -1"},
 		// a forced `magnum retro` runs whether or not the schedule is on
 		{name: "disabled is checked too", edit: func(c *Config) { c.Learn.Enabled, c.Learn.MaxPRs = false, 0 }, want: "learn.max_prs must be positive"},
+		// the editor's keys are checked whether or not it is on (`magnum
+		// learn --propose` runs it regardless)
+		{name: "editor on", edit: func(c *Config) { c.Learn.Editor = true }},
+		{name: "codex editor", edit: func(c *Config) { c.Learn.EditorKind, c.Learn.EditorModel = KindCodex, "" }},
+		{name: "manual restart", edit: func(c *Config) { c.Learn.Restart = "manual" }},
+		{name: "undeclared editor kind", edit: func(c *Config) { c.Learn.EditorKind = "nope" }, want: `learn.editor_kind "nope" is not a declared agent kind`},
+		{name: "shell editor kind", edit: func(c *Config) { c.Learn.EditorKind = KindShell }, want: `learn.editor_kind "shell"`},
+		{name: "missing editor prompt", edit: func(c *Config) { c.Learn.EditorPrompt = "nope.md" }, want: "learn.editor_prompt: prompt nope.md"},
+		{name: "no editor prompt", edit: func(c *Config) { c.Learn.EditorPrompt = "" }, want: "learn.editor_prompt must name a prompt file"},
+		{name: "editor prompt that does not parse", edit: func(c *Config) {
+			c.Pipeline.PromptsDir, c.Learn.EditorPrompt = badPrompts, "broken.md"
+		}, want: "learn.editor_prompt broken.md"},
+		{name: "zero editor timeout", edit: func(c *Config) { c.Learn.EditorTimeout = Duration{} }, want: "learn.editor_timeout must be positive, got 0s"},
+		{name: "zero gate cases", edit: func(c *Config) { c.Learn.GateCases = 0 }, want: "learn.gate_cases must be positive, got 0"},
+		{name: "zero landings", edit: func(c *Config) { c.Learn.LandPerDay = 0 }, want: "learn.land_per_day must be positive, got 0"},
+		{name: "bad restart", edit: func(c *Config) { c.Learn.Restart = "now" }, want: `learn.restart "now": want idle or manual`},
+		{name: "zero regression points", edit: func(c *Config) { c.Learn.RegressionPoints = 0 }, want: "learn.regression_points must be 1 to 100, got 0"},
+		{name: "regression points past 100", edit: func(c *Config) { c.Learn.RegressionPoints = 101 }, want: "learn.regression_points must be 1 to 100, got 101"},
+		{name: "zero regression findings", edit: func(c *Config) { c.Learn.RegressionMinFindings = 0 }, want: "learn.regression_min_findings must be positive, got 0"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := validPipelineConfig()
@@ -166,7 +234,9 @@ func TestValidateLearn(t *testing.T) {
 func TestValidateLearnReportsEveryProblem(t *testing.T) {
 	cfg := validPipelineConfig()
 	cfg.Learn = Learn{}
-	wantError(t, cfg.Validate(), "learn.daily_at", "learn.kind", "learn.prompt", "learn.lookback", "learn.timeout", "learn.max_prs", "learn.min_comment_chars")
+	wantError(t, cfg.Validate(), "learn.daily_at", "learn.kind", "learn.prompt", "learn.lookback", "learn.timeout", "learn.max_prs", "learn.min_comment_chars",
+		"learn.editor_kind", "learn.editor_prompt", "learn.editor_timeout", "learn.gate_cases", "learn.land_per_day", "learn.restart",
+		"learn.regression_points", "learn.regression_min_findings")
 }
 
 // A misspelled key under [learn] is refused, like everywhere else: it would
@@ -195,7 +265,7 @@ args = ["--search"]
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Learn{
+	want := withEditorDefaults(Learn{
 		Enabled:         true,
 		DailyAt:         "06:30",
 		Lookback:        Duration{72 * time.Hour},
@@ -209,7 +279,7 @@ args = ["--search"]
 		Args:            []string{"--search"},
 		Prompt:          "retro.md",
 		Timeout:         Duration{20 * time.Minute},
-	}
+	})
 	if !reflect.DeepEqual(cfg.Learn, want) {
 		t.Fatalf("learn = %+v, want %+v", cfg.Learn, want)
 	}

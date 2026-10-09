@@ -40,9 +40,13 @@ const (
 	// longer merge must be before the daemon supersedes it on its own.
 	staleRecurateAfter = 24 * time.Hour
 
-	// Why a curation waits (CurateQueued.Why).
-	QueuedJudge = "judge" // a round of the repository is in its judge stage
-	QueuedBusy  = "busy"  // another curation runs
+	// QueuedJudge is why a curation waits (CurateQueued.Why) while a round
+	// of the repository is in its judge stage.
+	QueuedJudge = "judge"
+	// QueuedBusy is why a curation waits (CurateQueued.Why) while another
+	// learn job runs: a curation, the retro, a skill edit or revert, or a
+	// skill gate.
+	QueuedBusy = "busy"
 )
 
 // CurateMark is the curation running now (KVNotesCurating).
@@ -213,7 +217,7 @@ func (e *Engine) writeCurateQueue(ctx context.Context, q []CurateQueued) {
 // queuedText says what a queued curation waits for.
 func queuedText(why string) string {
 	if why == QueuedBusy {
-		return "starts when the running curation ends"
+		return "starts when the learn job running now (a curation, the retro, a skill edit or gate) ends"
 	}
 	return "starts when the current round's judge stage ends"
 }

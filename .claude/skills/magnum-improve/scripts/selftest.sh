@@ -5,8 +5,9 @@
 # directory (under $TMPDIR), never the real repository, registry or daemon:
 #   - bash -n on every script;
 #   - land.sh: a conflict confined to docs/DECISIONS.md lands with both
-#     entries whole and in order, a commit that edits an old entry or another
-#     conflicted file stops, golden files name `go test ./<pkg> -update`, a
+#     entries whole and in order (above the Learned rules section when the
+#     log ends with one), a commit that edits an old entry, writes into that
+#     section or has another conflicted file stops, golden files name `go test ./<pkg> -update`, a
 #     cherry-pick in progress is refused, --continue after a resolution by
 #     hand picks the rest and skips the resolved commit, a re-pick never
 #     duplicates an entry, and a migration the registry lacks is dry-run and
@@ -230,6 +231,45 @@ run "$scripts/land.sh" b4
 [[ $rc == 2 ]] && has 'go test ./internal/agents -update' || fail "a golden conflict names go test ./internal/agents -update"
 git cherry-pick --abort
 ok "a conflict in golden files says to regenerate them with go test ./internal/agents -update"
+
+# 4b. The log ends with the self-improving loop's `## Learned rules` section:
+#     both sides insert their entries above it, and the landing keeps both
+#     there, master's first, with the section as master has it (an entry the
+#     loop added meanwhile included).
+ops=$(<docs/DECISIONS.md)
+section='## Learned rules
+
+The loop appends these.'
+commit_on "" "learned rules" "docs/DECISIONS.md=$ops
+
+$section"
+base=$(git rev-parse HEAD)
+commit_on b6 "branch six" "docs/DECISIONS.md=$ops
+- **Branch six.** text
+
+$section" "b6.txt=b"
+commit_on "" "master six" "docs/DECISIONS.md=$ops
+- **Master six.** text
+
+$section
+
+- **A learned rule.** text"
+printf '%s\n' "$ops" "- **Master six.** text" "- **Branch six.** text" "" "$section" "" "- **A learned rule.** text" >"$tmp/want"
+run "$scripts/land.sh" b6
+[[ $rc == 0 ]] || fail "land.sh b6 exits 0 (got $rc)"
+cmp -s docs/DECISIONS.md "$tmp/want" || { diff "$tmp/want" docs/DECISIONS.md >&2 || true; fail "both entries above the Learned rules section, the section whole"; }
+[[ -f b6.txt ]] && has "kept both sides of docs/DECISIONS.md" || fail "the commit landed with both sides of DECISIONS.md kept"
+ok "entries both sides insert above the Learned rules section land with both kept there, master's first"
+base=$(git rev-parse HEAD)
+commit_on b7 "branch seven" "docs/DECISIONS.md=$(<docs/DECISIONS.md)
+- **Into the section.** text"
+commit_on "" "master seven" "docs/DECISIONS.md=+- **Another learned rule.** text"
+before=$(git rev-parse HEAD)
+run "$scripts/land.sh" b7
+[[ $rc == 2 ]] && has "not merged by itself" || fail "a commit that writes into the Learned rules section stops with exit 2"
+git cherry-pick --abort
+[[ $(git rev-parse HEAD) == "$before" ]] || fail "nothing landed"
+ok "a commit that writes into the Learned rules section is not merged by itself"
 
 # 5. A migration the registry lacks is dry-run on a copy and not built.
 if command -v sqlite3 >/dev/null; then

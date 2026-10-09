@@ -27,6 +27,7 @@ import (
 	"github.com/zhuravel/magnum/internal/app"
 	"github.com/zhuravel/magnum/internal/cleanup"
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/eval"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/gitx"
@@ -212,6 +213,29 @@ type Deps struct {
 	// Curator sets up the notes curator for one curation ([notes],
 	// notes_curate.go); nil = no curation runs.
 	Curator func(ctx context.Context, run CurateRun) (Curator, error)
+	// Editor sets up the skill editor for one run ([learn] editor_*,
+	// learn_edit.go); nil = no edit runs. It works on Checkout, magnum's own
+	// checkout (Layout.Home; "" for an installed binary: no edit), through
+	// LearnGit, and GoTest runs the format gate's commands there: go or
+	// make (args[0]) on dir with the checkout's mise environment.
+	Editor   func(ctx context.Context, run EditRun) (Editor, error)
+	Checkout string
+	LearnGit LearnGit
+	GoTest   func(ctx context.Context, dir string, args ...string) (string, error)
+	// The gate of a skill proposal (learn_gate.go) replays eval cases
+	// in-process; the daemon's wiring sets these to internal/evalrun's (the
+	// engine cannot import it: evalrun runs the engine). EvalCase replays
+	// one case (evalrun.RunCase), EvalInputs hashes what the review reads
+	// with candidate's prompts and skill (evalrun.Inputs and ReviewerInputs
+	// of evalrun.WithCandidate; "" = the config itself), EvalRuns lists the
+	// stored runs, oldest first (eval.ListRuns of Layout.Eval), and
+	// EvalCorpus reads the corpora `magnum eval run` reads by default, with
+	// the operator's file ("" = none). Any of them nil: no gate runs and a
+	// proposal stays gating.
+	EvalCase   func(ctx context.Context, c eval.Case, o EvalGateOptions) eval.CaseRun
+	EvalInputs func(candidate string) (inputs, reviewerInputs string, err error)
+	EvalRuns   func() ([]eval.Run, error)
+	EvalCorpus func() (corpus *eval.Corpus, path string, err error)
 
 	// Usage reads Codex's rate-limit snapshot (usage.Codex, which FromApp
 	// sets); nil = no budget gauge and no caps.
@@ -373,6 +397,27 @@ type Engine struct {
 	curateTried   map[int64]time.Time // repositories whose last curation stored nothing, and when
 	curateChecked time.Time           // the last scan for a curation due (the tick's goroutine only)
 
+	editMu       sync.Mutex // the running skill edit (learn_edit.go)
+	editCancel   context.CancelFunc
+	editStarted  time.Time
+	editWhat     string // what runs: the skill edit, or the revert of a version (learnRunning)
+	editWG       sync.WaitGroup
+	gateMu       sync.Mutex // the running gate of a skill proposal (learn_gate.go)
+	gateCancel   context.CancelFunc
+	gateStarted  time.Time
+	gateProposal int64         // the proposal the running gate decides
+	gateDone     chan struct{} // closed when the running gate ended (stopGateOf)
+	gateRetry    time.Time     // a gate that stopped short starts again after it
+	gateWG       sync.WaitGroup
+	// learnMu serializes the starts of the learn jobs (the retro, a notes
+	// curation, a skill edit, a gate; learn_schedule.go): a start holds it
+	// while it checks that no other runs and marks its own running. It is
+	// taken before a job's own mutex, never after.
+	learnMu      sync.Mutex
+	learnChecked time.Time  // the loop's last scan (maybeLearnScan; the tick's goroutine only)
+	landRetry    time.Time  // a landing that failed short of a hold tries again after it (the tick's goroutine only)
+	corpusMu     sync.Mutex // one rewrite of the learned corpus at a time (learn_corpus.go)
+
 	usageMu   sync.Mutex // the Codex budget (budget.go)
 	usageRead time.Time
 	usageSnap *usage.Snapshot
@@ -421,8 +466,9 @@ func New(d Deps) *Engine {
 	return e
 }
 
-// FromApp wires an engine to the App's real components.
-func FromApp(a *app.App) *Engine {
+// FromApp wires an engine to the App's real components; mods then change
+// its Deps (the daemon's wiring sets the gate's eval seams there).
+func FromApp(a *app.App, mods ...func(*Deps)) *Engine {
 	d := Deps{
 		Config: a.Config, Layout: a.Layout, Store: a.Store, Logger: a.Logger, DryRun: a.DryRun,
 		Herdr: a.Herdr, Agents: a.Agents, Slots: a.Slots, Git: a.Git, Inventory: a.Inventory,
@@ -454,8 +500,21 @@ func FromApp(a *app.App) *Engine {
 			},
 		}
 		d.Classifier = paneClassifiers(pd)
-		// The notes curator (notes_curate.go) is the same kind of agent.
+		// The notes curator (notes_curate.go) and the skill editor
+		// (learn_edit.go) are the same kind of agent.
 		d.Curator = paneCurators(pd)
+		d.Editor = paneEditors(pd)
+	}
+	if a.Layout.Home != "" && !a.DryRun && a.AgentTag == "" && a.Git != nil && a.Runner != nil && a.Config != nil {
+		// The skill editor works on the checkout the daemon runs from.
+		d.Checkout, d.LearnGit = a.Layout.Home, a.Git
+		var keys []string
+		for _, id := range a.Config.Identities {
+			if id.PrivateKeyEnv != "" {
+				keys = append(keys, id.PrivateKeyEnv)
+			}
+		}
+		d.GoTest = goTestRunner(a.Runner, a.Mise, a.Layout.Home, a.Layout.DB(), keys)
 	}
 	if a.Git != nil {
 		d.Probe = gitProbe(a.Git)
@@ -466,6 +525,9 @@ func FromApp(a *app.App) *Engine {
 			_, err := reveal.Reveal(ctx, a.Runner, terminal, herdrBin, reveal.Options{})
 			return err
 		}
+	}
+	for _, m := range mods {
+		m(&d)
 	}
 	return New(d)
 }
@@ -590,7 +652,7 @@ func (e *Engine) Run(ctx context.Context, opts Options) error {
 		case <-e.kick:
 			timer.Stop()
 		}
-		if err := e.Tick(ctx); errors.Is(err, ErrSchemaChanged) || errors.Is(err, ErrRestartForBuild) {
+		if err := e.Tick(ctx); errors.Is(err, ErrSchemaChanged) || errors.Is(err, ErrRestartForBuild) || errors.Is(err, ErrRestartForLearn) {
 			return err
 		} else if err != nil && ctx.Err() == nil {
 			e.warnTick(err)
@@ -620,7 +682,7 @@ func (e *Engine) lockHeld() error {
 }
 
 // shutdown stops rounds (their runs stay observed, never re-sent), a
-// running retro and a running notes curation, waits for them briefly,
+// running retro, notes curation, skill edit and gate, waits for them briefly,
 // flushes pending toasts and gives urgent toasts still retrying a bounded
 // time before cancelling them.
 func (e *Engine) shutdown() {
@@ -631,12 +693,21 @@ func (e *Engine) shutdown() {
 	e.mu.Unlock()
 	e.stopRetro()
 	e.stopCurate()
+	e.stopEdit()
+	e.stopGate()
 	done := make(chan struct{})
-	go func() { e.roundWG.Wait(); e.retroWG.Wait(); e.curateWG.Wait(); close(done) }()
+	go func() {
+		e.roundWG.Wait()
+		e.retroWG.Wait()
+		e.curateWG.Wait()
+		e.editWG.Wait()
+		e.gateWG.Wait()
+		close(done)
+	}()
 	select {
 	case <-done:
 	case <-time.After(30 * time.Second):
-		e.log.Warn("rounds, the retro or the notes curation did not stop within 30s")
+		e.log.Warn("rounds, the retro, the notes curation, the skill edit or the skill gate did not stop within 30s")
 	}
 	e.noteRetroRunning(context.Background()) // a retro that stopped no longer holds the CLI
 	if e.batch != nil {
@@ -708,7 +779,10 @@ func (e *Engine) Tick(ctx context.Context) error {
 	e.maybeRetro(ctx)
 	e.noteRetroRunning(ctx) // inflight.go
 	e.maybeCurate(ctx)
-	e.autoApprove(ctx) // before noteNeedsMe: a PR approved as the operator no longer needs them
+	e.maybeLearnScan(ctx) // learn_schedule.go: the scheduled editor
+	e.maybeGate(ctx)      // learn_gate.go
+	e.maybeLearnLand(ctx) // learn_land.go
+	e.autoApprove(ctx)    // before noteNeedsMe: a PR approved as the operator no longer needs them
 	e.noteNeedsMe(ctx)
 	e.noteMachine(ctx)
 	e.surface(ctx)
@@ -727,6 +801,7 @@ func (e *Engine) startup(ctx context.Context) {
 		e.setKV(ctx, store.KVDaemonPid, strconv.Itoa(os.Getpid()))
 	}
 	e.recordBuild(ctx)
+	e.noteLearnRestarted(ctx) // learn_land.go: this start runs the landed skill version
 	e.expireRequests(ctx, lastTick)
 	// A drain (daemon-restart --drain) ends with the restart: this daemon
 	// is the one that was waited for.
@@ -740,8 +815,12 @@ func (e *Engine) startup(ctx context.Context) {
 	e.recoverRows(ctx)
 	e.reclassifyIneligible(ctx)
 	e.syncNotes(ctx, true) // notes_record.go: the first start imports every repository's notes
-	// No curation or retro runs yet: a mark left behind is a crashed daemon's.
-	e.delKV(ctx, KVNotesCurating, KVRetroRunning)
+	// No curation, retro, skill edit or gate runs yet: a mark left behind
+	// is a crashed daemon's (a gating proposal keeps its state and its gate
+	// starts again at a tick, maybeGate), and so is the gate's worktree of
+	// the base (learn_gate.go).
+	e.delKV(ctx, KVNotesCurating, KVRetroRunning, KVLearnEditing, KVLearnGating)
+	e.dropStaleGateBase(ctx)
 	e.lastReconcile = e.now()
 	e.enqueueHeavy("reconcile", e.reconcile)
 }

@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +11,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/eval"
 	"github.com/zhuravel/magnum/internal/evalrun"
 	"github.com/zhuravel/magnum/internal/paths"
@@ -275,5 +278,42 @@ func TestEvalRunsTagTheirAgentsApart(t *testing.T) {
 			}
 			seen[name] = "run " + id
 		}
+	}
+}
+
+// The daemon's skill gate replays eval cases in-process: `eval run` refuses
+// while one runs (the learn.gating mark names its proposal) and replays
+// nothing, so the two never compete for a case, and runs once it ended.
+func TestEvalRunRefusesWhileASkillGateRuns(t *testing.T) {
+	f := newInspFixture(t)
+	st := f.store()
+	ctx := context.Background()
+	b, err := json.Marshal(engine.GateMark{Proposal: 4, Started: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetKV(ctx, engine.KVLearnGating, string(b)); err != nil {
+		t.Fatal(err)
+	}
+	corpus := evalCorpusOf(t, "oauth-session", "example/widgets#3")
+	if code := execute(f.Ctx, []string{"eval", "run", "--corpus", corpus}); code != 1 {
+		t.Fatalf("exit %d, want 1; stderr %s", code, f.Err)
+	}
+	if e := f.Err.String(); !strings.Contains(e, "the skill gate of proposal 4") || !strings.Contains(e, "fix:") {
+		t.Fatalf("stderr = %s, want the gate named and a fix", e)
+	}
+	if runs, err := eval.ListRuns(evalRunsRoot(f.Ctx.Layout)); err != nil || len(runs) != 0 {
+		t.Fatalf("runs = %+v, %v, want none", runs, err)
+	}
+	if err := st.DeleteKV(ctx, engine.KVLearnGating); err != nil {
+		t.Fatal(err)
+	}
+	f.Err.Reset()
+	execute(f.Ctx, []string{"eval", "run", "--corpus", corpus})
+	if strings.Contains(f.Err.String(), "skill gate") {
+		t.Fatalf("with no gate running: %s", f.Err)
+	}
+	if runs, err := eval.ListRuns(evalRunsRoot(f.Ctx.Layout)); err != nil || len(runs) != 1 {
+		t.Fatalf("runs = %+v, %v, want the run", runs, err)
 	}
 }

@@ -25,15 +25,22 @@ import (
 // row first, the misses before the declines, leaving out a PR no watch
 // covers (a replay would have no roles or identity) and one Codex flagged,
 // or whose flag cannot be read (never replayed). A row dismissed since drops
-// out. A file that would not change is left as it is; no case removes it.
+// out, unless a gate dismissed it because its baseline covers it already
+// (store.LearnDismissedFound, LearnDismissedNotReported): its case stays, a
+// check that a later candidate does not lose what the skill does. A file
+// that would not change is left as it is; no case removes it. One rewrite
+// at a time (corpusMu): the retro's goroutine and a rejection in the tick
+// both write it, and the older read must not win.
 func (e *Engine) syncLearnedCorpus(ctx context.Context) error {
-	misses, err := e.st.Misses(ctx, store.MissFilter{Classes: []string{store.MissMiss}, Scopes: []string{store.MissScopeGeneral},
-		States: []string{store.MissNew, store.MissUsed}})
+	e.corpusMu.Lock()
+	defer e.corpusMu.Unlock()
+	states := []string{store.MissNew, store.MissUsed, store.MissDismissed} // learn's Case* keep the dismissed ones the baseline covers
+	misses, err := e.st.Misses(ctx, store.MissFilter{Classes: []string{store.MissMiss}, Scopes: []string{store.MissScopeGeneral}, States: states})
 	if err != nil {
 		return fmt.Errorf("learned corpus: %w", err)
 	}
 	declines, err := e.st.Declines(ctx, store.DeclineFilter{Verdicts: []string{store.VerdictWrong, store.VerdictOverRanked},
-		Scopes: []string{store.MissScopeGeneral}, States: []string{store.MissNew, store.MissUsed}})
+		Scopes: []string{store.MissScopeGeneral}, States: states})
 	if err != nil {
 		return fmt.Errorf("learned corpus: %w", err)
 	}

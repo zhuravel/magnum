@@ -84,3 +84,25 @@ func TestValidateTakesAnUnchangedProposalThatSkipsEveryMiss(t *testing.T) {
 		t.Errorf("a noted miss without a change: %q", problems)
 	}
 }
+
+// CheckLeaks holds a text that is not notes (the skill editor's diff and
+// DECISIONS entry) to Validate's leak rules: a pull request reference, one
+// of the pull requests' branches, a secret, a home directory path.
+func TestCheckLeaksAppliesTheNotesLeakRules(t *testing.T) {
+	check := Check{Branches: []string{"fix/coupon-expiry", "main"}}
+	for _, tc := range []struct{ text, want string }{
+		{"as pull/1234 showed", "names a pull request or issue number"},
+		{"see #1234", "names a pull request or issue number"},
+		{"on fix/coupon-expiry", "names a pull request's branch"},
+		{"GH_TOKEN=ghp_" + strings.Repeat("a", 36), "holds what looks like a secret"},
+		{"run /Users/alice/src/x.sh", "names a home directory path"},
+	} {
+		got := CheckLeaks(tc.text, check)
+		if len(got) != 1 || !strings.Contains(got[0], tc.want) {
+			t.Errorf("CheckLeaks(%q) = %q, want %q", tc.text, got, tc.want)
+		}
+	}
+	if got := CheckLeaks("Check the lock of a row two writers share on main; P1 when reachable.", check); got != nil {
+		t.Errorf("a general rule = %q", got)
+	}
+}

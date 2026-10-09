@@ -23,7 +23,8 @@ import (
 var learnedSeverities = []string{"P0", "P1", "P2"}
 
 // CaseFromMiss is the learned case of miss m: ok when m is a miss (class
-// miss) of scope general, P0 to P2, still new or used, on a reviewed commit
+// miss) of scope general, P0 to P2, still new or used (or dismissed as
+// covered at a gate's baseline, learnedState), on a reviewed commit
 // the case can pin. The case is miss-<id> on m's PR at that commit, why its
 // title, with one defect to find, miss-<id>: m's path (literally, not as a
 // glob), its lines (or its line), the match expressions that compile and
@@ -31,7 +32,7 @@ var learnedSeverities = []string{"P0", "P1", "P2"}
 // PR it cannot name) makes no case.
 func CaseFromMiss(m store.Miss) (eval.Case, bool) {
 	if m.Class != store.MissMiss || m.Scope != store.MissScopeGeneral || !slices.Contains(learnedSeverities, m.Severity) ||
-		!learnedState(m.State) {
+		!learnedState(m.State, m.Dismissed) {
 		return eval.Case{}, false
 	}
 	name := fmt.Sprintf("miss-%d", m.ID)
@@ -43,7 +44,8 @@ func CaseFromMiss(m store.Miss) (eval.Case, bool) {
 // CaseFromDecline is the learned case of decline d: ok when the author's
 // answer showed magnum's finding wrong or ranked too high (verdict wrong or
 // over_ranked) for every repository (scope general), and d is still new or
-// used. The case is decline-<id> on d's PR at the reviewed commit, why the
+// used (or dismissed as covered at a gate's baseline, learnedState). The
+// case is decline-<id> on d's PR at the reviewed commit, why the
 // finding's title, with one absent defect, decline-<id>, on the finding's
 // path (literally) and line with d's match expressions: a finding that
 // reports it again is a false positive. An over-ranked one is a hit only at
@@ -53,7 +55,7 @@ func CaseFromMiss(m store.Miss) (eval.Case, bool) {
 // could stop being one only by not being reported.
 func CaseFromDecline(d store.Decline) (eval.Case, bool) {
 	if (d.Verdict != store.VerdictWrong && d.Verdict != store.VerdictOverRanked) || d.Scope != store.MissScopeGeneral ||
-		!learnedState(d.State) {
+		!learnedState(d.State, d.Dismissed) {
 		return eval.Case{}, false
 	}
 	name := fmt.Sprintf("decline-%d", d.ID)
@@ -68,8 +70,19 @@ func CaseFromDecline(d store.Decline) (eval.Case, bool) {
 	return learnedCase(name, d.Repo, d.Number, d.ReviewedSHA, d.Title, def)
 }
 
-// learnedState: a dismissed row teaches nothing; a used one still measures.
-func learnedState(state string) bool { return state == store.MissNew || state == store.MissUsed }
+// learnedState: a dismissed row teaches nothing, unless a gate dismissed it
+// because its baseline covers it already (dismissed, store.LearnDismissedFound
+// or LearnDismissedNotReported): its case checks that a later candidate
+// does not lose what the skill does; a used one still measures.
+func learnedState(state, dismissed string) bool {
+	switch state {
+	case store.MissNew, store.MissUsed:
+		return true
+	case store.MissDismissed:
+		return dismissed == store.LearnDismissedFound || dismissed == store.LearnDismissedNotReported
+	}
+	return false
+}
 
 // learnedCase is the case name of repo#number at head with the one defect
 // d, why title; ok is false when the corpus would refuse it.

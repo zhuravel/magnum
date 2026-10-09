@@ -161,6 +161,20 @@ func retroFixtureWith(shas ...string) retroFixture {
 		Candidates: dir + "/candidates.json", Files: dir + "/files", Output: dir + "/retro.json", Count: 3}
 }
 
+// skillEditFixture has the shape of the engine's skill editor data
+// (internal/engine editData); the engine checks the shipped prompt against
+// the real type (CheckPrompts).
+type skillEditData struct {
+	Dir, Worktree, Inputs, Pins, Changes, Skill, Prompts string
+	Cap                                                  int
+}
+
+func skillEditFixture() skillEditData {
+	dir, wt := "/data/learn/skill/20261009-070000", "/state/learn/wt/20261009-070000"
+	return skillEditData{Dir: dir, Worktree: wt, Inputs: dir + "/inputs.json", Pins: dir + "/pins.json", Changes: wt + "/changes.json",
+		Skill: wt + "/skills/magnum-review/SKILL.md", Prompts: wt + "/prompts", Cap: 30182}
+}
+
 // A reviewer's follow-up report holds what is new and no "Earlier findings"
 // list: each report carried the previous one's list forward, so the lists
 // snowballed and the judge rejected the same findings again every round (it
@@ -487,6 +501,7 @@ func TestRenderGolden(t *testing.T) {
 		{"notes_curate_superseded", "notes-curate.md", curateSuperseded},
 		{"retro_two_reviews", "retro.md", retroFixtureWith("a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0", "d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3")},
 		{"retro_threads", "retro.md", retroThreads},
+		{"skill_edit", "skill-edit.md", skillEditFixture()},
 		{"model_fallback_no_report", FallbackPromptName, FallbackData{Model: "sonnet", Previous: "opus", Role: "claude-simplify",
 			URL: "https://github.com/talkable/talkable/pull/11920", HeadSHA: "d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3"}},
 	}
@@ -562,7 +577,8 @@ func checkGolden(t *testing.T, golden, got string) {
 
 func TestEveryDefaultPromptHasAGolden(t *testing.T) {
 	want := []string{"claude-rereview.md", "claude-restart.md", "claude-review.md", "claude-simplify.md", "codex-review.sh", "judge-continue.md",
-		"judge-initial.md", "judge-nudge.md", "judge-own-pass.md", "judge-recovery.md", "judge-rereview.md", "model-fallback.md", "notes-curate.md", "retro.md", "triage.md"}
+		"judge-initial.md", "judge-nudge.md", "judge-own-pass.md", "judge-recovery.md", "judge-rereview.md", "model-fallback.md", "notes-curate.md", "retro.md",
+		"skill-edit.md", "triage.md"}
 	if got := prompts.Names(); !slices.Equal(got, want) {
 		t.Fatalf("prompts.Names() = %v, want %v (add a golden case)", got, want)
 	}

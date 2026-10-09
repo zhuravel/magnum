@@ -3,6 +3,7 @@ package agents
 import (
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -121,9 +122,7 @@ func TestJudgePromptsSayTheReplyClassComesFromTheFirstClause(t *testing.T) {
 			t.Errorf("%s:\n%s", name, got)
 		}
 	}
-	if s := string(magnum.Skill); strings.Contains(s, "first words") || !strings.Contains(s, "first clause") {
-		t.Error("SKILL.md still says a reply's class comes from its first words")
-	}
+	skillSays(t, []string{"first clause"}, []string{"first words"})
 }
 
 // A reply is decided by what it does, not by its keywords: a judge kept a
@@ -478,7 +477,6 @@ func TestSkillDescribesEveryMagnumField(t *testing.T) {
 	d.ProjectChecks = "Codex ran without the PR's AGENTS.md changes; Claude ran without the PR's CLAUDE.md changes"
 	d.FailingChecks = "/r/failing-checks.json"
 	d.DeltaCheck, d.DeltaLines, d.DeltaFile, d.Replies = true, 4, "/r/delta-check.json", 2
-	skill := string(magnum.Skill)
 	seen := map[string]bool{}
 	// A two-phase round: the candidates phase of each prompt, and the own
 	// pass in every round kind.
@@ -511,28 +509,30 @@ func TestSkillDescribesEveryMagnumField(t *testing.T) {
 			t.Errorf("no judge prompt renders `%s`", f)
 		}
 	}
+	var fields []string
 	for f := range seen {
-		if !strings.Contains(skill, "`"+f+"`") {
-			t.Errorf("SKILL.md does not describe the <magnum> field `%s`", f)
-		}
+		fields = append(fields, "`"+f+"`")
 	}
+	skillSays(t, fields, nil)
 }
 
 // The notes procedure lives in the skill once, with the commands named by
-// their <magnum> fields.
+// their <magnum> fields. A pin cannot start with "#" (the pins file's
+// comments do), so the header line is pinned without it.
 func TestSkillCarriesTheNotesProcedure(t *testing.T) {
-	skill := string(magnum.Skill)
-	for _, want := range []string{"`notes_lock`", "`notes_unlock`", "`notes busy`", ".tmp", "mv", "orphan", "# Notes for <owner>/<repo> (updated YYYY-MM-DD)"} {
-		if !strings.Contains(skill, want) {
-			t.Errorf("SKILL.md lacks %q", want)
-		}
+	const header = "Notes for <owner>/<repo> (updated YYYY-MM-DD)"
+	skillSays(t, []string{"`notes_lock`", "`notes_unlock`", "`notes busy`", ".tmp", "mv", "orphan", header}, nil)
+	if !strings.Contains(string(magnum.Skill), "# "+header) {
+		t.Errorf("SKILL.md lacks %q", "# "+header)
 	}
 }
 
 // skillSays fails for every phrase SKILL.md lacks (want) or still carries
-// (gone).
+// (gone), and records the wants as the skill's pins (skill_pins_test.go):
+// the sentences the skill editor must keep.
 func skillSays(t *testing.T, want, gone []string) {
 	t.Helper()
+	recordSkillPins(want)
 	skill := string(magnum.Skill)
 	for _, w := range want {
 		if !strings.Contains(skill, w) {
@@ -962,14 +962,12 @@ func TestJudgePromptsNameTheHeadsFailingChecks(t *testing.T) {
 }
 
 // The skill says what the own pass does and does not do, and that the
-// candidates phase starts from its file.
+// candidates phase starts from its file. The paragraph's phrases are pins
+// too: a pin says only that the skill holds it, not where.
 func TestSkillDescribesTheOwnPass(t *testing.T) {
 	skill := string(magnum.Skill)
-	for _, want := range []string{"`phase: own_pass`", "`phase: candidates`", "`own_findings`"} {
-		if !strings.Contains(skill, want) {
-			t.Errorf("SKILL.md lacks %q", want)
-		}
-	}
+	paragraph := []string{"post nothing", "no report", "section 6", "notes"}
+	skillSays(t, slices.Concat([]string{"`phase: own_pass`", "`phase: candidates`", "`own_findings`"}, paragraph), nil)
 	i := strings.Index(skill, "`phase: own_pass`")
 	if i < 0 {
 		return
@@ -978,7 +976,7 @@ func TestSkillDescribesTheOwnPass(t *testing.T) {
 	if j := strings.Index(para, "\n\n"); j >= 0 {
 		para = para[:j]
 	}
-	for _, want := range []string{"post nothing", "no report", "section 6", "notes"} {
+	for _, want := range paragraph {
 		if !strings.Contains(para, want) {
 			t.Errorf("the own-pass paragraph lacks %q:\n%s", want, para)
 		}
@@ -1115,6 +1113,34 @@ func TestSkillEndsWithAShortResultLine(t *testing.T) {
 			t.Errorf("the result example carries %s, which magnum never reads", unread)
 		}
 	}
+}
+
+// The example result file of section 8 is what internal/pipeline's parser
+// reads in TestTheSkillsExampleResultCarriesTitlesAndANearbyFinding (a
+// title on every provenance entry, one nearby pre-existing finding): the
+// section's heading (a pin cannot start with "#") and every line of the
+// example are pins, so the skill editor keeps the example whole.
+func TestSkillKeepsTheExampleResultOfSection8(t *testing.T) {
+	const heading = "8. Write the result"
+	_, sec8, ok := strings.Cut(string(magnum.Skill), "## "+heading)
+	if !ok {
+		t.Fatal("SKILL.md has no section 8")
+	}
+	_, block, ok := strings.Cut(sec8, "```json\n")
+	if !ok {
+		t.Fatal("section 8 has no JSON example")
+	}
+	block, _, _ = strings.Cut(block, "```")
+	want := []string{heading, "```json"}
+	for line := range strings.SplitSeq(block, "\n") {
+		if l := strings.TrimSpace(line); l != "" {
+			want = append(want, l)
+		}
+	}
+	if len(want) < 6 || !slices.ContainsFunc(want, func(l string) bool { return strings.Contains(l, `"nearby":true`) }) {
+		t.Fatalf("the example's lines = %q", want)
+	}
+	skillSays(t, want, nil)
 }
 
 // The checkout's files, CI logs and the notes reach the judge as text it

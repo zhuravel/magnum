@@ -13,9 +13,11 @@ You land every agent's work yourself, one commit range at a time, on `master` in
 
 `scripts/land.sh <branch-or-sha>` fast-forwards master when it can, and otherwise cherry-picks the commits. It
 dry-runs every migration the registry lacks on a copy of it, runs the gate, pushes, and builds `bin/magnum` unless
-the registry lacks a migration. Both sides append to `docs/DECISIONS.md`, so it conflicts there nearly every time:
-when the commit only appends, land.sh keeps both sides by itself (master's file, then the commit's entries; read
-them in the diff). Any other conflict stops, with DECISIONS.md already resolved and staged: resolve the rest (the
+the registry lacks a migration. Both sides append to `docs/DECISIONS.md`, above its last section, `## Learned
+rules` (the self-improving loop's), so it conflicts there nearly every time: when the commit only appends there,
+land.sh keeps both sides by itself (master's file, then the commit's entries, then master's Learned rules; read
+them in the diff). A commit that writes into the Learned rules section is not merged by itself: move its entry
+above the section. Any other conflict stops, with DECISIONS.md already resolved and staged: resolve the rest (the
 config comments: keep both sides' keys; SKILL.md: keep both rules and raise its size cap by the minimum; golden
 files: resolve the files they render first, then `go test ./internal/agents -update`), `git add` it, run
 `git cherry-pick --continue`, then `scripts/land.sh --continue <branch>`: it picks the rest of the range, skipping

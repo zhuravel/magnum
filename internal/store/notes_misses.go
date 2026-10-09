@@ -26,6 +26,12 @@ const (
 // before it is dismissed.
 const MissDismissRejections = 2
 
+// LearnDismissFailures is how many failed gates of skill proposals may
+// compare an input's learned case without improving it before the input is
+// dismissed (learn_proposal_inputs.gate not_improved): an editor that notes
+// it again would fail the same way.
+const LearnDismissFailures = 2
+
 var missOutcomes = []string{MissNoted, MissSkipped}
 
 // ProposalMiss is what a proposal did with one miss it was given.

@@ -335,6 +335,26 @@ func (l Layout) Learn() string { return filepath.Join(l.data(), "learn") }
 // operator's corpus.
 func (l Layout) LearnCorpus() string { return filepath.Join(l.Learn(), "corpus.toml") }
 
+// Eval is where the eval runs live, Eval()/<run id>/ (`magnum eval run`
+// and the gate of a skill proposal), with the flagged cases and the cases'
+// worktrees (wt/).
+func (l Layout) Eval() string { return filepath.Join(l.State(), "eval") }
+
+// LearnSkill holds the skill editor's run directories,
+// LearnSkill()/<run>/: its inputs, the pins and a copy of its answer.
+func (l Layout) LearnSkill() string { return filepath.Join(l.Learn(), "skill") }
+
+// LearnWorktrees holds the skill editor's git worktrees of the checkout,
+// LearnWorktrees()/<run>, each on its branch learn/<run> until the proposal
+// lands or goes.
+func (l Layout) LearnWorktrees() string { return filepath.Join(l.State(), "learn", "wt") }
+
+// LearnEvalWorktrees holds the worktrees of the cases the gate of a skill
+// proposal replays, LearnEvalWorktrees()/<case> in the case's clone: its
+// own, so a `magnum eval run` of the same case (Eval()/wt/<case>) never
+// removes the gate's.
+func (l Layout) LearnEvalWorktrees() string { return filepath.Join(l.State(), "learn", "eval", "wt") }
+
 // ReviewDir is where one review round's reports live.
 func (l Layout) ReviewDir(owner, repo string, number int, sha string) string {
 	if len(sha) > 12 {

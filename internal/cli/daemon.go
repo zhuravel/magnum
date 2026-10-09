@@ -163,7 +163,7 @@ func runDaemonEngine(ctx context.Context, c *Context, o daemonOptions) (daemonDr
 			fmt.Fprintf(c.Stderr, "magnum daemon: refresh the herdr plugin in %s: %v\n", dir, err)
 		}
 	}
-	e := engine.FromApp(a)
+	e := engine.FromApp(a, daemonGate(c, a))
 	eo := o.Engine
 	eo.Once = o.Once
 	err = e.Run(ctx, eo)

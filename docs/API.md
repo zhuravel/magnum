@@ -2383,6 +2383,12 @@ const (
     Kind.ProjectMCP values.
 
 const (
+	LearnRestartIdle   = "idle"
+	LearnRestartManual = "manual"
+)
+    The values of [learn] restart.
+
+const (
 	CurateOverLimit = "over_limit" // a repository past a limit, once its notes changed since the last curation
 	CurateWeekly    = "weekly"     // every repository with notes, once a week, once they changed
 	CurateMisses    = "misses"     // a retro recorded misses of the repository for its notes (class miss, scope repo)
@@ -2467,6 +2473,10 @@ const AutoApproveBodyMax = 500
 const BuiltinDefaults = "built-in defaults (config.defaults.toml)"
     BuiltinDefaults names the embedded base in messages and Sources.
 
+const CandidateSkill = "skills/magnum-review/SKILL.md"
+    CandidateSkill is where a candidate directory holds the judge skill,
+    as magnum's checkout does.
+
 const DatabaseSuffix = "__{slug}"
     DatabaseSuffix ends every pool database template ([[pool]] databases):
     the slot's slug follows the last "__", which is how magnum lists and guards
@@ -2480,6 +2490,9 @@ const DefaultAfterDenyPrompt = "magnum denied that command: review roles never r
 const DefaultAutoApproveBody = "Auto-approved: magnum's review of `{{.Short}}` found no blocking problems{{if .ReviewURL}} ([review]({{.ReviewURL}})){{end}}."
     DefaultAutoApproveBody is the body of an automatic approval when the watch
     sets no auto_approve_body.
+
+const DefaultEditorPrompt = "skill-edit.md"
+    DefaultEditorPrompt is the skill editor's prompt file.
 
 const DefaultIdleRemoveAfter = 168 * time.Hour
     DefaultIdleRemoveAfter is a pool's idle_remove_after when it sets none (or
@@ -2534,6 +2547,10 @@ const DefaultSkill = "{{repo}}/skills/magnum-review/SKILL.md"
 
 const DefaultTriagePrompt = "triage.md"
     DefaultTriagePrompt is the triage prompt file.
+
+const EditorRoleName = "skill"
+    EditorRoleName is the name of the role the skill editor runs as
+    (EditorRole).
 
 const EmbeddedSkill = "builtin:skills/magnum-review/SKILL.md"
     EmbeddedSkill names the binary's own copy of the judge skill (magnum.Skill)
@@ -2790,6 +2807,12 @@ func (c *Config) CommentsWhenClean(repo, identity string) bool
     a comment, not an approval, for a clean verdict on repository repo
     ("owner/name"): VerdictsFor's no-findings event is COMMENT.
 
+func (c *Config) EditorRole() Role
+    EditorRole is the role the skill editor runs as: EditorRoleName, the
+    [learn] editor_kind in session mode with its editor_model, editor_effort,
+    editor_args, editor_prompt and editor_timeout, writing changes.json,
+    normalized like a configured role.
+
 func (c *Config) IdentityByName(name string) *Identity
     IdentityByName returns the identity or nil.
 
@@ -2956,6 +2979,16 @@ func (c *Config) Warnings() []string
 
 func (c *Config) WatchFor(fullName string) *Watch
     WatchFor returns the watch that covers owner/name, or nil.
+
+func (c *Config) WithCandidate(dir string) (*Config, error)
+    WithCandidate is the config a replay or a check of candidate dir runs with:
+    a copy of c (WithoutSnapshot: read from disk, whatever the daemon loaded
+    at startup) whose prompts_dir is <dir>/prompts and whose every judge reads
+    <dir>/skills/magnum-review/SKILL.md, both absolute. dir is a checkout or
+    a worktree of magnum with a change to the prompts or the skill (an eval
+    candidate, the skill editor's worktree); a prompt it lacks resolves to the
+    embedded default, as in any checkout. An error when dir has no prompts
+    directory or no skill file; c is never changed.
 
 func (c *Config) WithoutSnapshot() *Config
     WithoutSnapshot is a copy of c that reads its prompts and judge skills from
@@ -3450,6 +3483,37 @@ type Learn struct {
 	Prompt string `toml:"prompt"`
 	// Timeout bounds the agent's turn on one PR.
 	Timeout Duration `toml:"timeout"`
+
+	// The self-improving loop (internal/engine/learn_edit.go, DECISIONS "The
+	// editor proposes skill and prompt changes on a branch"). Editor turns
+	// on the editor after a retro that found new general misses or
+	// declines (`magnum learn --propose` runs it regardless): a pane agent
+	// that drafts a change to the judge skill and the prompts on a branch
+	// of the checkout. EditorKind, EditorModel, EditorEffort and EditorArgs
+	// are its role's (EditorRole; editor_kind without editor_model gets
+	// DefaultLearnModel of that kind), EditorPrompt its template and
+	// EditorTimeout the bound of one turn.
+	Editor        bool     `toml:"editor"`
+	EditorKind    string   `toml:"editor_kind"`
+	EditorModel   string   `toml:"editor_model"`
+	EditorEffort  string   `toml:"editor_effort"`
+	EditorArgs    []string `toml:"editor_args"`
+	EditorPrompt  string   `toml:"editor_prompt"`
+	EditorTimeout Duration `toml:"editor_timeout"`
+	// GateCases bounds the eval cases the gate of a proposal replays,
+	// LandPerDay the proposals that land per local day; Restart is idle
+	// (the daemon restarts on a landed change once nothing is in flight) or
+	// manual (it asks for `magnum daemon-restart --when-idle`). The newest
+	// landed version whose declined and argued share of its posted
+	// findings grows by RegressionPoints over the previous version's, both
+	// with at least RegressionMinFindings posted findings, gets one revert
+	// proposal, which the gate holds for review (internal/engine
+	// learn_revert.go).
+	GateCases             int    `toml:"gate_cases"`
+	LandPerDay            int    `toml:"land_per_day"`
+	Restart               string `toml:"restart"`
+	RegressionPoints      int    `toml:"regression_points"`
+	RegressionMinFindings int    `toml:"regression_min_findings"`
 }
     Learn is the [learn] section: the daily retro. After a PR closes,
     magnum collects what the other reviewers commented on it, drops what its own
@@ -3461,7 +3525,9 @@ type Learn struct {
 
 func DefaultLearn() Learn
     DefaultLearn returns the built-in [learn] values: off, a week of lookback,
-    a day to settle, Claude sonnet classifying.
+    a day to settle, Claude sonnet classifying; the editor off, Claude sonnet
+    editing for at most 45 minutes a turn, a gate of 6 cases, one landing a day,
+    an idle restart, a regression of 10 points over 20 findings.
 
 func (l Learn) DailyTime(day time.Time) (time.Time, error)
     DailyTime is the daily_at time on the local calendar day of day (in day's
@@ -4470,6 +4536,32 @@ const (
 	MachineToastRounds = 3
 )
 const (
+
+	// FormatGateTimeout bounds one command of the format gate.
+	FormatGateTimeout = 20 * time.Minute
+)
+const (
+	// KVLearnLandDay counts the landings of a local day (LandDay as JSON),
+	// which [learn] land_per_day bounds.
+	KVLearnLandDay = "learn.land_day"
+	// KVLearnRestart is the landed version the daemon is to restart on
+	// (LearnRestartMark as JSON): set by a landing, read by restartForBuild
+	// and `magnum status`, and cleared by the next start of the daemon,
+	// which marks the version restarted.
+	KVLearnRestart = "learn.restart"
+)
+const (
+	// KVLearnEvidence marks new general evidence for the skill editor: the
+	// time of the retro that stored a general miss of P0 to P2 or a general
+	// finding declined as wrong or over-ranked that was not an input
+	// before (store.FormatTime). The scheduled editor clears it when it
+	// starts, and sets it again when its run stops short.
+	KVLearnEvidence = "learn.evidence"
+	// KVLearnEditDay is the local day (store.DayKey) the scheduled editor
+	// last started on; it starts at most once a day.
+	KVLearnEditDay = "learn.edit_day"
+)
+const (
 	// ReqNotesCurate starts a curation of a repository's notes now
 	// (NotesCuratePayload).
 	ReqNotesCurate = "notes_curate"
@@ -4499,9 +4591,13 @@ const (
 	// (notes_proposals.trigger_reason).
 	CurateTriggerStale = "stale"
 
-	// Why a curation waits (CurateQueued.Why).
-	QueuedJudge = "judge" // a round of the repository is in its judge stage
-	QueuedBusy  = "busy"  // another curation runs
+	// QueuedJudge is why a curation waits (CurateQueued.Why) while a round
+	// of the repository is in its judge stage.
+	QueuedJudge = "judge"
+	// QueuedBusy is why a curation waits (CurateQueued.Why) while another
+	// learn job runs: a curation, the retro, a skill edit or revert, or a
+	// skill gate.
+	QueuedBusy = "busy"
 )
 const (
 	KVDaemonPausedAt   = "daemon.paused_at"
@@ -4561,6 +4657,17 @@ const (
 	ReqIdentityVerdict = "identity_verdict"
 	// ReqRetro starts a retro now (RetroPayload, retro.go).
 	ReqRetro = "retro"
+	// ReqLearnPropose starts a skill edit now (LearnProposePayload,
+	// learn_edit.go); ReqLearnLand lands a held proposal and ReqLearnReject
+	// rejects a held or gating one, stopping its gate first
+	// (LearnDecisionPayload), as `magnum learn --review` asks.
+	ReqLearnPropose = "learn_propose"
+	ReqLearnLand    = "learn_land"
+	ReqLearnReject  = "learn_reject"
+	// ReqLearnRevert proposes a revert of a landed version
+	// (LearnRevertPayload, learn_revert.go), as `magnum learn --revert`
+	// asks.
+	ReqLearnRevert = "learn_revert"
 )
     Request kinds (requests.kind) the daemon consumes.
 
@@ -4672,6 +4779,21 @@ const FormerDismissMessage = "magnum: superseded by the review of %s posted as %
     shows on GitHub; the arguments are the new review's commit (short) and the
     login it was posted as.
 
+const KVLearnEditing = "learn.editing"
+    KVLearnEditing holds the skill edit running now (EditMark as JSON), which
+    the CLI reads before it stops the daemon: set when it starts, deleted when
+    it ends and at every start of the daemon.
+
+const KVLearnGating = "learn.gating"
+    KVLearnGating holds the gate of a skill proposal running now (GateMark as
+    JSON), which the CLI reads before it stops the daemon: set when it starts,
+    deleted when it ends and at every start of the daemon (the proposal stays
+    gating, and its gate starts again).
+
+const KVLearnRegression = "learn.regression"
+    KVLearnRegression is the newest version a regression revert was proposed for
+    (its id): the scan proposes one revert per version, never two.
+
 const KVRetroRunning = "learn.retro_running"
     KVRetroRunning holds the start of the retro running now (store.FormatTime),
     which the CLI reads before it stops the daemon: set by the tick or the
@@ -4712,6 +4834,10 @@ var ErrCuratorDown = errors.New("engine: the notes curator is not available")
     ErrCuratorDown wraps a Curator's error that is not the proposal's: the agent
     could not be set up or started, or went away.
 
+var ErrEditorDown = errors.New("engine: the skill editor is not available")
+    ErrEditorDown wraps an Editor's error that is not the edit's: the agent
+    could not be set up or started, or went away.
+
 var ErrEvalLayout = errors.New("engine: magnum eval needs a scratch layout (paths.Layout.Scratch), never the live registry")
     ErrEvalLayout: RunEval needs an engine built on a scratch layout.
 
@@ -4724,6 +4850,12 @@ var ErrRestartForBuild = errors.New("a new build is on disk and nothing is in fl
     ErrRestartForBuild is what Tick and Run return when the daemon exits for a
     new build on disk ([daemon] restart_on_new_build): the exit is non-zero,
     so launchd starts the new binary.
+
+var ErrRestartForLearn = errors.New("a skill version landed and nothing is in flight; exiting for launchd to start the daemon on it")
+    ErrRestartForLearn is what Tick and Run return when the daemon exits
+    to restart on a landed skill version (learn restart idle): the exit is
+    non-zero, so launchd starts it again, and the new daemon reads the landed
+    prompts and skill.
 
 var ErrSchemaChanged = errors.New("schema migrated under the daemon; exiting for launchd to restart")
     ErrSchemaChanged is what Tick and Run return once another magnum binary
@@ -4762,13 +4894,14 @@ func CheckPrompts(cfg *config.Config) (int, error)
     every prompt file the configured roles name (judges with agents.JudgeData,
     other session roles with agents.RoleData in each mode, shell roles' command
     or full-line template through agents.ShellLine), the model-fallback prompt,
-    the triage prompt, the retro prompt and every identity's review footer
-    template (config.RenderFooter, which magnum renders after each verified
-    review). Each template is rendered twice, once with every field set and once
-    with the optional ones empty, so both sides of an {{if}} run. It returns
-    how many renders passed and every failure, joined: a template field this
-    binary's data lacks (a prompt edited for a newer build) fails here instead
-    of in a round.
+    the triage prompt, the retro prompt, the notes curation prompt,
+    the skill editor's prompt and every identity's review footer template
+    (config.RenderFooter, which magnum renders after each verified review).
+    Each template is rendered twice, once with every field set and once with
+    the optional ones empty, so both sides of an {{if}} run. It returns how many
+    renders passed and every failure, joined: a template field this binary's
+    data lacks (a prompt edited for a newer build) fails here instead of in a
+    round.
 
 func ClearModelLimits(ctx context.Context, st *store.Store, kind string) ([]string, error)
     ClearModelLimits deletes the per-model limits recorded for kind
@@ -4797,6 +4930,11 @@ func DrainerAlive(pid int) bool
     A pid that is gone, or that now belongs to another program (pids are
     reused), is not; a process ps cannot describe counts as alive (the drain
     stays: lifting it by mistake would start rounds the restart then abandons).
+
+func EditNext(editor bool, evidence, editDay string, now time.Time) string
+    EditNext says when the scheduled editor runs next, for `magnum learn` and
+    its JSON: from learn editor, the evidence mark (KVLearnEvidence) and the day
+    of its last start (KVLearnEditDay).
 
 func FileModTime(path string) (time.Time, bool)
     FileModTime is SkewNote's reader of a binary's mtime on disk.
@@ -5290,6 +5428,29 @@ type Deps struct {
 	// Curator sets up the notes curator for one curation ([notes],
 	// notes_curate.go); nil = no curation runs.
 	Curator func(ctx context.Context, run CurateRun) (Curator, error)
+	// Editor sets up the skill editor for one run ([learn] editor_*,
+	// learn_edit.go); nil = no edit runs. It works on Checkout, magnum's own
+	// checkout (Layout.Home; "" for an installed binary: no edit), through
+	// LearnGit, and GoTest runs the format gate's commands there: go or
+	// make (args[0]) on dir with the checkout's mise environment.
+	Editor   func(ctx context.Context, run EditRun) (Editor, error)
+	Checkout string
+	LearnGit LearnGit
+	GoTest   func(ctx context.Context, dir string, args ...string) (string, error)
+	// The gate of a skill proposal (learn_gate.go) replays eval cases
+	// in-process; the daemon's wiring sets these to internal/evalrun's (the
+	// engine cannot import it: evalrun runs the engine). EvalCase replays
+	// one case (evalrun.RunCase), EvalInputs hashes what the review reads
+	// with candidate's prompts and skill (evalrun.Inputs and ReviewerInputs
+	// of evalrun.WithCandidate; "" = the config itself), EvalRuns lists the
+	// stored runs, oldest first (eval.ListRuns of Layout.Eval), and
+	// EvalCorpus reads the corpora `magnum eval run` reads by default, with
+	// the operator's file ("" = none). Any of them nil: no gate runs and a
+	// proposal stays gating.
+	EvalCase   func(ctx context.Context, c eval.Case, o EvalGateOptions) eval.CaseRun
+	EvalInputs func(candidate string) (inputs, reviewerInputs string, err error)
+	EvalRuns   func() ([]eval.Run, error)
+	EvalCorpus func() (corpus *eval.Corpus, path string, err error)
 
 	// Usage reads Codex's rate-limit snapshot (usage.Codex, which FromApp
 	// sets); nil = no budget gauge and no caps.
@@ -5327,13 +5488,51 @@ func ParseDrain(v string) (Drain, bool)
 func (d Drain) Value() string
     Value is d as KVDaemonDraining stores it.
 
+type EditJob struct {
+	Run    EditRun
+	Prompt string
+	Check  func() (learn.Changes, []string)
+}
+    EditJob is what an Editor works on: the run, the rendered prompt
+    (prompts/skill-edit.md) and Check, which reads what the editor wrote and
+    returns its changes and every problem with it (none: a candidate).
+
+type EditMark struct {
+	Run     string    `json:"run"`
+	Trigger string    `json:"trigger"`
+	Started time.Time `json:"started"`
+	Revert  int64     `json:"revert,omitempty"`
+}
+    EditMark is the editor run in flight (KVLearnEditing): Revert names the
+    version a revert restores the files before (0 = an edit).
+
+type EditResult struct {
+	Changes  learn.Changes
+	Problems []string
+	Pause    *pipeline.Pause
+}
+    EditResult is how an editor's turns ended: its changes, valid when Problems
+    is empty, or a Pause (a limit the agent hit).
+
+type EditRun struct {
+	ID, Dir, Worktree string
+}
+    EditRun is one editor run: its id, its run directory and its worktree.
+
+type Editor interface {
+	Edit(ctx context.Context, job EditJob) (EditResult, error)
+	Close(ctx context.Context) error
+}
+    Editor drafts the skill change of one run; Close ends it.
+
 type Engine struct {
 	// Has unexported fields.
 }
     Engine is the daemon. Create it with New or FromApp.
 
-func FromApp(a *app.App) *Engine
-    FromApp wires an engine to the App's real components.
+func FromApp(a *app.App, mods ...func(*Deps)) *Engine
+    FromApp wires an engine to the App's real components; mods then change its
+    Deps (the daemon's wiring sets the gate's eval seams there).
 
 func New(d Deps) *Engine
     New returns an engine over d.
@@ -5423,6 +5622,51 @@ type EvalCase struct {
     roles as a blind dry run. The PR fields come from GitHub; nothing here is
     written to the live registry.
 
+type EvalGateOptions struct {
+	Candidate string
+	JudgeOnly bool
+	RunDir    string
+	AgentTag  string
+}
+    EvalGateOptions are one replay of the gate (evalrun.Options' part the gate
+    sets): the directory whose prompts and judge skill it reads (the gate's
+    worktree of the base for a baseline, the proposal's worktree for the
+    candidate), whether the judge alone reviews (on the reviewers' reports of
+    the case's newest full replay whose reviewers read what this one's would),
+    and the run it belongs to, its directory under Layout.Eval and its agent tag
+    (eval.AgentTag), both its own.
+
+type GateCase struct {
+	learn.GateRow
+	BaselineRun  string `json:"baseline_run,omitempty"`
+	CandidateRun string `json:"candidate_run,omitempty"` // a second replay's when Retried
+	ReportsRun   string `json:"reports_run,omitempty"`
+}
+    GateCase is one case of a gate's result: the row learn.Judge read, the
+    eval runs its two scores come from and, judge-only, the full replay whose
+    reviewer reports both judges read.
+
+type GateMark struct {
+	Proposal int64     `json:"proposal"`
+	Started  time.Time `json:"started"`
+}
+    GateMark is the gate in flight (KVLearnGating).
+
+type GateResult struct {
+	State          string     `json:"state"`
+	Rule           string     `json:"rule"`
+	Mode           string     `json:"mode"`
+	Inputs         string     `json:"inputs,omitempty"`
+	BaselineInputs string     `json:"baseline_inputs,omitempty"`
+	Cases          []GateCase `json:"cases"`
+	Runs           []string   `json:"runs,omitempty"`
+	CorpusError    string     `json:"corpus_error,omitempty"`
+}
+    GateResult is what a proposal's gate decided (learn_proposals.gate_json):
+    the verdict and its rule, the mode, the inputs hashes the candidate and the
+    baseline replayed with (eval.Run.Inputs), every case, the eval runs the gate
+    stored and why the corpus could not be read, if it could not.
+
 type Git interface {
 	MergeBase(ctx context.Context, dir, a, b string) (string, error)
 	FindClone(ctx context.Context, cloneRoot, owner, name string) (string, error)
@@ -5486,6 +5730,63 @@ type Inventory interface {
 	UpsertSlotDatabases(ctx context.Context, inv inventory.Inventory) (inventory.SyncResult, error)
 }
     Inventory is the reconcile scanner (*inventory.Scanner).
+
+type LandDay struct {
+	Day    string `json:"day"`
+	Landed int    `json:"landed"`
+}
+    LandDay is how many proposals landed on Day (store.DayKey).
+
+type LearnDecisionPayload struct {
+	ID     int64  `json:"id"`
+	Reason string `json:"reason,omitempty"`
+}
+    LearnDecisionPayload is the operator's answer to a held skill proposal
+    (`magnum learn --review`): land it (ReqLearnLand) or reject it
+    (ReqLearnReject, a gating one's only answer) with Reason, which the next
+    edit reads.
+
+type LearnGit interface {
+	RevParse(ctx context.Context, dir, ref string) (string, error)
+	WorktreeAdd(ctx context.Context, mainClone, path, ref string, detach bool, branch string) error
+	WorktreeDiscard(ctx context.Context, repo, root, dir string) error
+	StatusPaths(ctx context.Context, dir string) ([]gitx.StatusEntry, error)
+	CurrentBranch(ctx context.Context, repo string) (string, error)
+	CommitAll(ctx context.Context, dir, message string, paths ...string) (string, error)
+	ChangedPaths(ctx context.Context, dir, base, head string, pathspecs ...string) ([]string, error)
+	BranchDelete(ctx context.Context, mainClone, branch string, force bool) error
+	InProgress(ctx context.Context, repo string) (string, error)
+	MergeBase(ctx context.Context, dir, a, b string) (string, error)
+	RebaseOnto(ctx context.Context, dir, onto, upstream string) error
+	PatchID(ctx context.Context, dir, rev string) (string, error)
+	DirtyPaths(ctx context.Context, dir string, paths ...string) ([]string, error)
+	MergeFFOnly(ctx context.Context, repo, base, branch string) error
+	RestoreFrom(ctx context.Context, dir, rev string, paths ...string) error
+	BranchesUnder(ctx context.Context, repo, prefix string) ([]string, error)
+}
+    LearnGit is the git work of an editor run, its gate and its landing
+    (learn_land.go) (*gitx.Client).
+
+type LearnProposePayload struct{}
+    LearnProposePayload is a `magnum learn --propose` request.
+
+type LearnRestartMark struct {
+	Version  int64     `json:"version"`
+	Proposal int64     `json:"proposal"`
+	Landed   time.Time `json:"landed"`
+	Manual   bool      `json:"manual,omitempty"`
+}
+    LearnRestartMark is the landed version the daemon waits to restart on
+    (KVLearnRestart): Manual when the operator restarts it (learn restart
+    manual, or no launchd to start it again).
+
+type LearnRevertPayload struct {
+	Version int64  `json:"version"`
+	Reason  string `json:"reason,omitempty"`
+}
+    LearnRevertPayload is a `magnum learn --revert <version>` request:
+    a proposal that restores the files of the version before Version, for Reason
+    (the design log's entry says it).
 
 type MachineGroup struct {
 	Repo string // owner/name
@@ -5946,12 +6247,35 @@ const (
     the default, or not report it, a finding an author declined as wrong (a
     match is a false positive, Score.AbsentHits).
 
+const (
+	// OutcomeFlagged: the case is not replayed, since an earlier replay of
+	// it or of its PR was refused or the live registry holds a Codex flag
+	// for its PR.
+	OutcomeFlagged = "flagged"
+	// OutcomeBudget: the Codex budget is at or past [usage] codex_soft; no
+	// later case should start either.
+	OutcomeBudget = "budget"
+)
+    Case outcomes of a replay besides the round's (pipeline.Outcome*), which
+    evalrun.RunCase records and the daemon's gate of a skill proposal reads.
+
 const FlaggedFile = "flagged.json"
     FlaggedFile holds the flagged cases (Flagged by case name) under the runs'
     root.
 
+const RunIDFormat = "20060102-150405"
+    RunIDFormat is a run id's time part: sortable, to the second.
+
 
 FUNCTIONS
+
+func AgentTag(id string) string
+    AgentTag tags the agents of run id (agents.Deps.Tag): "eval-" and the
+    first 6 hex digits of the id's SHA-256, the same for all the run's cases.
+    The tag joins the agents' names' hash, so they are named apart from the
+    PR's own agents and from every other run's: StartAgent adopts an agent that
+    carries a role's name, and a run once adopted the agents the run before it
+    left behind. It also leads their titles and pane labels.
 
 func FullReplayFor(runs []Run, caseName, head string, like *Run) (Run, CaseRun, bool)
     FullReplayFor finds the replay a judge-only replay of case caseName at head
@@ -5976,6 +6300,13 @@ func LoadFlagged(root string) (map[string]Flagged, error)
 func MarkFlagged(root string, f Flagged) error
     MarkFlagged adds f to the flagged cases under root (the first record of a
     case stands).
+
+func NewRunDir(root string, now time.Time) (id, dir string, err error)
+    NewRunDir creates the directory of a run started at now under root and
+    returns the run's id and directory. The id is now to the second, with "-2",
+    "-3"... when a run started in the same second holds it (os.Mkdir fails
+    with ErrExist), so no two runs share a directory, a record or an agent tag
+    (AgentTag).
 
 func SaveRun(dir string, r Run) error
     SaveRun writes dir/run.json atomically (a temporary file in dir, then a
@@ -6019,6 +6350,16 @@ func Baselines(runs []Run, inputs string, c Case) []Baseline
     Unknown inputs ("") reuse nothing. The inputs leave magnum's code out,
     so the caller decides whether the code of Commit reviews as its own does
     (eval-at.sh compares the Go files of the two commits).
+
+func JudgeBaselines(runs []Run, inputs string, c Case, reports string) []Baseline
+    JudgeBaselines lists, newest run first, the stored replays of c whose
+    judge read inputs on the reviewer reports of run reports (the full replay a
+    judge-only replay of c takes them from, FullReplayFor): that run's own case
+    of c when it recorded inputs, and judge-only replays of c on its reports
+    (CaseRun.ReportsRun) that recorded inputs; clean runs with a score only,
+    as for Baselines. Comparing a judge-only candidate with one of these,
+    never with another full replay, keeps the reviewers' variance between two
+    full replays out of the comparison.
 
 type Case struct {
 	Name    string   `toml:"name"`           // unique, [a-z0-9][a-z0-9-]{0,47}
@@ -6309,16 +6650,16 @@ const (
 	// OutcomeFlagged: the case is not replayed: an earlier replay of it or
 	// of its PR was refused (eval.FlaggedCase), or the live registry holds
 	// a Codex flag for its PR (Refused).
-	OutcomeFlagged = "flagged"
+	OutcomeFlagged = eval.OutcomeFlagged
 	// OutcomeBudget: the Codex budget is at or past [usage] codex_soft
 	// (Options.Force runs anyway); no later case should start either.
-	OutcomeBudget = "budget"
+	OutcomeBudget = eval.OutcomeBudget
 	// OutcomeError: the case could not run (the round's error outcome).
 	OutcomeError = pipeline.OutcomeError
 )
     Case outcomes of RunCase besides the round's (pipeline.Outcome*).
 
-const CandidateSkill = "skills/magnum-review/SKILL.md"
+const CandidateSkill = config.CandidateSkill
     CandidateSkill is where a candidate directory holds the judge skill,
     as magnum's checkout does.
 
@@ -6369,10 +6710,12 @@ func RunCase(ctx context.Context, d Deps, ec eval.Case, o Options) (out eval.Cas
 
 func RunsRoot(l paths.Layout) string
     RunsRoot is where a layout's eval runs live: <state>/eval/<run id>/,
-    with the flagged cases (eval.FlaggedFile) and the cases' worktrees (wt/).
+    with the flagged cases (eval.FlaggedFile) and the cases' worktrees (wt/)
+    (paths.Layout.Eval).
 
 func WithCandidate(cfg *config.Config, dir string) (*config.Config, error)
-    WithCandidate is the config a replay of candidate dir reviews with:
+    WithCandidate is the config a replay of candidate dir reviews with
+    (config.Config.WithCandidate, which the skill editor's checks share):
     a copy of cfg (config.Config.WithoutSnapshot: read from disk, whatever the
     daemon loaded at startup) whose prompts_dir is <dir>/prompts and whose every
     judge reads <dir>/skills/magnum-review/SKILL.md, both absolute. dir is a
@@ -6436,6 +6779,12 @@ type Options struct {
 	// the case's scratch tree is RunDir/cases/<case>, and a refused replay
 	// is flagged under the run's id, its base name.
 	RunDir string
+	// Worktrees is the directory the case's worktree goes in,
+	// Worktrees/<case> (caseWorktree); "" = RunsRoot/wt, `magnum eval
+	// run`'s. The daemon's gate gives its own
+	// (paths.Layout.LearnEvalWorktrees), so the two never replace each
+	// other's worktree of a case.
+	Worktrees string
 }
     Options are a case's settings, the run's.
 
@@ -7557,6 +7906,18 @@ const WorktreesSuffix = "__worktrees"
 VARIABLES
 
 var (
+	// ErrNotFastForward is MergeFFOnly refusing a branch that does not
+	// descend from the checkout's HEAD.
+	ErrNotFastForward = errors.New("gitx: not a fast-forward")
+	// ErrRebaseConflict is RebaseOnto stopping on a conflict; the rebase
+	// was aborted and the branch is as it was.
+	ErrRebaseConflict = errors.New("gitx: the rebase conflicts")
+	// ErrNotOnBranch is MergeFFOnly finding another branch (or a detached
+	// HEAD) checked out than the one it is to fast-forward, right before
+	// its merge, or that branch not at the commit it merged right after.
+	ErrNotOnBranch = errors.New("gitx: the checkout is not on the branch to fast-forward")
+)
+var (
 	// ErrNoSuchRef is returned when a ref or revision does not resolve.
 	ErrNoSuchRef = errors.New("gitx: no such ref")
 	// ErrNoMergeBase is returned when two revisions share no history.
@@ -7655,6 +8016,11 @@ func (c *Client) BranchPR(ctx context.Context, dir, branch string) (number int, 
     convention of Bohdan's `pull` helper; a PR URL is accepted too). ok is false
     when the key is not set.
 
+func (c *Client) BranchesUnder(ctx context.Context, repo, prefix string) ([]string, error)
+    BranchesUnder lists the local branches of repo under prefix, one or more
+    path segments ending in "/" ("learn/"), by their short names, sorted:
+    the skill editor's orphan cleanup finds the branches no proposal holds.
+
 func (c *Client) ChangedPaths(ctx context.Context, dir, base, head string, pathspecs ...string) ([]string, error)
     ChangedPaths lists the files head changed relative to its merge base with
     base (git diff base...head), optionally limited to pathspecs such as "db/".
@@ -7676,10 +8042,25 @@ func (c *Client) Clone(ctx context.Context, repoURL, dest string) error
 func (c *Client) CloneWith(ctx context.Context, repoURL, dest string, opt CloneOptions) error
     CloneWith is Clone with options (see CloneOptions).
 
+func (c *Client) CommitAll(ctx context.Context, dir, message string, paths ...string) (string, error)
+    CommitAll commits paths of the work tree at dir (their changes, additions
+    and deletions; nothing else, whatever else is dirty) on its current branch
+    with message, unsigned (commit.gpgsign=false whatever the repository says),
+    and returns the new commit's id. Nothing to commit is an error.
+
 func (c *Client) CommitTree(ctx context.Context, dir, tree, message string, parents ...string) (string, error)
     CommitTree writes a commit object for tree with parents and message,
     moving no ref and touching no work tree (`git commit-tree`, unsigned,
     as "magnum" unless the environment names someone). It returns its id.
+
+func (c *Client) CurrentBranch(ctx context.Context, repo string) (string, error)
+    CurrentBranch is the branch checked out in repo, "" when its HEAD is
+    detached (a rebase in progress included).
+
+func (c *Client) DirtyPaths(ctx context.Context, dir string, paths ...string) ([]string, error)
+    DirtyPaths returns the paths among paths (relative to the top of the work
+    tree at dir) that differ from HEAD or are untracked, sorted, nil when none;
+    ignored files are not listed. At least one path.
 
 func (c *Client) FetchBranch(ctx context.Context, mainClone, base string) error
     FetchBranch updates refs/remotes/origin/<base> in mainClone from the remote.
@@ -7739,6 +8120,10 @@ func (c *Client) FindClone(ctx context.Context, cloneRoot, owner, name string) (
     lookups cost a directory listing and a few stats. ErrNoClone (wrapped) means
     nothing matched; any other error is an unreadable root.
 
+func (c *Client) InProgress(ctx context.Context, repo string) (string, error)
+    InProgress names the operation repo is in the middle of: "rebase", "merge",
+    "cherry-pick", "revert", or "" for none.
+
 func (c *Client) LsRemote(ctx context.Context, dir string, timeout time.Duration, patterns ...string) (string, error)
     LsRemote runs `git ls-remote <origin> patterns...` in dir, reaching origin
     the way fetches do (NetworkRemote with HTTPSFetch), and returns its output.
@@ -7758,6 +8143,18 @@ func (c *Client) Mentions(ctx context.Context, dir, rev string, words []string, 
 
 func (c *Client) MergeBase(ctx context.Context, dir, a, b string) (string, error)
     MergeBase returns the best common ancestor of a and b, or ErrNoMergeBase.
+
+func (c *Client) MergeFFOnly(ctx context.Context, repo, base, branch string) error
+    MergeFFOnly fast-forwards base, the branch checked out in repo, to branch:
+    ErrNotFastForward, with nothing changed, when branch does not descend from
+    HEAD. git merges into whatever HEAD is, so HEAD must be refs/heads/<base>
+    right before the merge (symbolic-ref; ErrNotOnBranch, with nothing changed,
+    for another branch or a detached HEAD), and refs/heads/<base> must be
+    branch's commit right after it (ErrNotOnBranch too: a checkout that switched
+    branch in between had the other branch moved). Local changes the move would
+    overwrite make git refuse, which is an error too; the others stay as they
+    are, staged ones staged: the merge never stashes them (--no-autostash,
+    whatever merge.autoStash says, as RebaseOnto).
 
 func (c *Client) MergeTree(ctx context.Context, dir, ours, theirs string) (tree string, conflicts []string, err error)
     MergeTree merges commit theirs into commit ours as `git merge` would (the
@@ -7779,6 +8176,21 @@ func (c *Client) OwnerUsesSSH(ctx context.Context, cloneRoot, owner string) (boo
     until the clone's config changes), so right after a FindClone miss over the
     same root it costs no subprocess. A missing root is (false, nil).
 
+func (c *Client) PatchID(ctx context.Context, dir, rev string) (string, error)
+    PatchID is the stable patch id of commit rev's change from its first
+    parent (`git diff-tree --patch --unified=0 rev | git patch-id --stable`):
+    with no context lines, a commit rebased onto a branch that changed lines
+    near its own keeps the id it had, and a commit that changes anything else
+    has another. An error for a commit with no change to hash.
+
+func (c *Client) RebaseOnto(ctx context.Context, dir, onto, upstream string) error
+    RebaseOnto replays the commits of the branch checked out at dir that
+    follow upstream onto onto, unsigned (`git rebase --onto onto upstream`):
+    only those, so a commit onto no longer has (one the operator dropped from
+    master after the branch was cut on it) does not come back with them.
+    A rebase that stops (a conflict) is aborted, so the branch and its work tree
+    are as they were, and the error is ErrRebaseConflict.
+
 func (c *Client) RemoteURL(ctx context.Context, dir string) (string, error)
     RemoteURL returns the URL of origin in dir. Credentials embedded in the URL
     are stripped (see stripUserinfo) so the value is safe to log.
@@ -7789,6 +8201,14 @@ func (c *Client) ResetPlaceholder(ctx context.Context, dir, branch, base string)
     `switch -C --no-track` only stops git from creating tracking; a branch
     that already tracks something keeps it, so an existing upstream is unset
     afterwards (placeholders must not follow, or push to, a remote branch).
+
+func (c *Client) RestoreFrom(ctx context.Context, dir, rev string, paths ...string) error
+    RestoreFrom sets paths (relative to the top of the work tree at dir) in
+    the work tree to their content at rev, and removes a path rev does not have
+    (`git restore --source=<rev> --worktree`; the index stays, so CommitAll of
+    the same paths commits the change): a revert of a skill version restores its
+    files as the commit before it had them. At least one path; nothing else in
+    the work tree changes.
 
 func (c *Client) RevParse(ctx context.Context, dir, ref string) (string, error)
     RevParse resolves ref to a full commit sha (tags are peeled). A ref that
@@ -7856,6 +8276,16 @@ func (c *Client) WorktreeAdd(ctx context.Context, mainClone, path, ref string, d
     branch at ref without upstream tracking; with neither, git decides (a branch
     name checks the branch out, anything else detaches). Callers that must be
     idempotent check WorktreeList first, since git refuses an existing path.
+
+func (c *Client) WorktreeDiscard(ctx context.Context, repo, root, dir string) error
+    WorktreeDiscard removes the worktree at dir of repo, modified and
+    untracked files included, then forgets the stale registrations below root,
+    the directory of worktrees dir is in (the worktree list's prunable entries
+    there, whose directory is gone, dir's included; a locked one stays), and no
+    other: never WorktreePrune, which would forget every stale worktree of repo,
+    one the operator keeps on a volume that is not mounted now too. A worktree
+    someone removed already, or a second discard, is fine; a dir outside root is
+    an error.
 
 func (c *Client) WorktreeList(ctx context.Context, mainClone string) ([]Worktree, error)
     WorktreeList returns every worktree of the repository, the main one first.
@@ -9120,6 +9550,64 @@ const (
     Candidate kinds (store.MissSourceThread, store.MissSourceReview).
 
 const (
+	// InputsFile and PinsFile are in the run directory, which the agent
+	// reads; ChangesFile is the answer it writes at the root of its
+	// worktree (magnum keeps a copy in the run directory).
+	InputsFile  = "inputs.json"
+	PinsFile    = "pins.json"
+	ChangesFile = "changes.json"
+	// SkillFile is the judge skill, relative to a checkout.
+	SkillFile = "skills/magnum-review/SKILL.md"
+	// PinsSource is the pins file the skill tests generate, relative to a
+	// checkout (FormatPins).
+	PinsSource = "internal/agents/testdata/skill_pins.txt"
+	// DecisionsFile is where magnum appends the edit's DECISIONS entry.
+	DecisionsFile = "docs/DECISIONS.md"
+)
+    The files of an editor run.
+
+const (
+	DecisionMaxRunes = 1200 // the DECISIONS entry
+	EditReasonRunes  = 300  // a one-line reason
+	// ChangesMaxBytes bounds changes.json.
+	ChangesMaxBytes = 256 << 10
+)
+    Limits of the editor's answer.
+
+const (
+	FileEdited    = "edited"
+	FileUnchanged = "unchanged"
+	InputNoted    = store.MissNoted
+	InputSkipped  = store.MissSkipped
+)
+    What changes.json says of a file and of an input.
+
+const (
+	GatePassed = store.LearnPassed // it lands
+	GateHeld   = store.LearnHeld   // the operator decides
+	GateFailed = store.LearnFailed // it goes
+)
+    The gate's verdicts (Verdict.State), the proposal's next state.
+
+const (
+	GateJudgeOnly = "judge_only" // the judge alone, on a full replay's reviewer reports
+	GateFull      = "full"       // every role
+)
+    The gate's modes (Mode).
+
+const (
+	SkipNotInCorpus = "not in the corpus"
+	SkipFlagged     = "flagged: never replayed"
+	SkipNotWatched  = "not watched"
+	// SkipFoundAtBaseline and SkipNotReportedAtBaseline are a target the
+	// baseline covers already: its input retires (store.LearnTargetBaseline).
+	SkipFoundAtBaseline       = store.LearnDismissedFound
+	SkipNotReportedAtBaseline = store.LearnDismissedNotReported
+)
+    Why SelectCases leaves a target out, and why the gate does once it has the
+    target's baseline (AtBaseline).
+
+const (
 	CandidatesFile = "candidates.json" // what Build kept, for the classifier
 	OutputFile     = "retro.json"      // the classifier's answer (ParseOutput)
 	FilesDir       = "files"           // the commented files: files/<sha12>/<path>
@@ -9141,6 +9629,16 @@ const (
 )
     Why ScrubLesson dropped a lesson (the reason of a lesson_rejected event).
 
+const DecisionWidth = 104
+    DecisionWidth is the design log's line width.
+
+const LearnedHeading = "## Learned rules"
+    LearnedHeading heads the design log's last section, which holds the entries
+    of the self-improving loop (the editor's decisions and the reverts of skill
+    versions) and nobody else's: the operators append theirs to the sections
+    before it, so an entry of theirs on master and a candidate's entry never
+    touch the same lines, and a landing's rebase does not conflict over them.
+
 const NearLines = 3
     NearLines is how far, in lines, a comment may be from one of magnum's
     findings on the same path and still be about it.
@@ -9156,34 +9654,98 @@ const RejectedMax = 40
     RejectedMax bounds the rejected findings the classifier gets: the newest of
     the pull request's.
 
+const RuleOnlyDeclines = "only declined findings improved: review the rule it adds"
+    RuleOnlyDeclines opens the rule of a proposal the gate holds because the
+    only targets it improved are declined findings (Judge).
+
+
+VARIABLES
+
+var EditAllowedGlobs = []string{"skills/magnum-review/SKILL.md", "prompts/judge-*.md", "prompts/claude-*.md"}
+    EditAllowedGlobs are the files the editor may change, relative to the
+    checkout: the judge skill, the judge prompts and the Claude reviewers'
+    prompts. Nothing else: no Go code, no test, no configuration, not the
+    retro's or the curator's prompts.
+
 
 FUNCTIONS
+
+func AllowedEditFile(p string) bool
+    AllowedEditFile reports whether p (slash-separated, relative to the
+    checkout) is one of EditAllowedGlobs.
+
+func AppendLearned(doc []byte, entry string) []byte
+    AppendLearned adds entry to the design log doc at the end of its Learned
+    rules section (LearnedHeading), before a section someone added after it;
+    the section's first entry follows its introduction after a blank line.
+    A log without the section gets it at its end, with the introduction, after a
+    blank line.
+
+func AtBaseline(name string, before *eval.Score) string
+    AtBaseline is why target name is no target once before, its baseline's
+    score, is known ("" = it is one): a miss- case whose every defect the
+    baseline found (SkipFoundAtBaseline) or a decline- case whose declined
+    finding the baseline no longer reports (SkipNotReportedAtBaseline): nothing
+    is left to improve.
 
 func CaseFromDecline(d store.Decline) (eval.Case, bool)
     CaseFromDecline is the learned case of decline d: ok when the author's
     answer showed magnum's finding wrong or ranked too high (verdict wrong or
     over_ranked) for every repository (scope general), and d is still new or
-    used. The case is decline-<id> on d's PR at the reviewed commit, why the
-    finding's title, with one absent defect, decline-<id>, on the finding's path
-    (literally) and line with d's match expressions: a finding that reports it
-    again is a false positive. An over-ranked one is a hit only at the priority
-    magnum posted or stronger (eval.Defect.Severity), so the point ranked
-    lower is no hit; one whose posted priority is not P0 to P3 makes no case,
-    since every matching finding would be a hit and the point could stop being
-    one only by not being reported.
+    used (or dismissed as covered at a gate's baseline, learnedState). The case
+    is decline-<id> on d's PR at the reviewed commit, why the finding's title,
+    with one absent defect, decline-<id>, on the finding's path (literally) and
+    line with d's match expressions: a finding that reports it again is a false
+    positive. An over-ranked one is a hit only at the priority magnum posted or
+    stronger (eval.Defect.Severity), so the point ranked lower is no hit; one
+    whose posted priority is not P0 to P3 makes no case, since every matching
+    finding would be a hit and the point could stop being one only by not being
+    reported.
 
 func CaseFromMiss(m store.Miss) (eval.Case, bool)
     CaseFromMiss is the learned case of miss m: ok when m is a miss (class miss)
-    of scope general, P0 to P2, still new or used, on a reviewed commit the case
-    can pin. The case is miss-<id> on m's PR at that commit, why its title,
-    with one defect to find, miss-<id>: m's path (literally, not as a glob), its
-    lines (or its line), the match expressions that compile and its severity.
-    A row the corpus would refuse (no path nor match left, a PR it cannot name)
-    makes no case.
+    of scope general, P0 to P2, still new or used (or dismissed as covered at a
+    gate's baseline, learnedState), on a reviewed commit the case can pin. The
+    case is miss-<id> on m's PR at that commit, why its title, with one defect
+    to find, miss-<id>: m's path (literally, not as a glob), its lines (or its
+    line), the match expressions that compile and its severity. A row the corpus
+    would refuse (no path nor match left, a PR it cannot name) makes no case.
+
+func DecisionEntry(decision, day string, inputs []string) string
+    DecisionEntry is the design log's entry for an editor's decision:
+    its headline in bold without the final stop, the day and the inputs the
+    proposal answers in parentheses, then the rest, one paragraph wrapped at
+    DecisionWidth runes with two-space continuation lines, as every entry of
+    docs/DECISIONS.md.
+
+func DeclineInputID(id int64) string
+    DeclineInputID is a decline's id in inputs.json.
 
 func FilePath(sha, p string) string
     FilePath is where the copy of path at sha lives under a retro directory's
     files: files/<sha12>/<path>, slash-separated.
+
+func FormatPins(pins []string, limit int) []byte
+    FormatPins renders the pins file (PinsSource): a comment, the skill's size
+    cap, then one pinned sentence per line, sorted.
+
+func Headline(decision string) (headline, rest string)
+    Headline splits a decision into its first sentence (up to the first ".",
+    "!" or "?" that ends the text or is followed by a space) and the rest.
+
+func MissInputID(id int64) string
+    MissInputID is a miss's id in inputs.json.
+
+func Mode(files []string) string
+    Mode is how the gate replays a proposal that changes files: the judge
+    alone (GateJudgeOnly) when the only files a review reads that it changes
+    are the judge skill and the judge prompts (prompts/judge-*.md), every role
+    (GateFull) when it changes anything else; the design log and the golden
+    files the format gate regenerated change no review.
+
+func ParseInputID(s string) (kind string, id int64, ok bool)
+    ParseInputID reads an id of inputs.json: its kind (store.LearnInputMiss or
+    store.LearnInputDecline) and row id.
 
 func ParseOutput(data []byte, cands []Candidate, rejected []Rejected, threads []OwnThread) (map[string]Item, map[string]ThreadItem, error)
     ParseOutput reads the classifier's answer for cands, the rejected findings
@@ -9200,6 +9762,20 @@ func ParseOutput(data []byte, cands []Candidate, rejected []Rejected, threads []
     The error names ids and fields, never the classifier's text, so it can go
     back into a prompt.
 
+func ParsePins(b []byte) ([]string, int, error)
+    ParsePins reads a pins file: the pins and the skill's cap. A file without a
+    cap line is an error.
+
+func PromoteTarget(cases []GateCase, after int) bool
+    PromoteTarget gives the place of the target at cases[after], which the
+    baseline covers, to the first target after it that SelectCases left out over
+    its cap, which becomes runnable; false when there is none.
+
+func RevertEntry(decision, day string) string
+    RevertEntry is the design log's entry for a revert of a skill version:
+    its headline in bold without the final stop, the day and what made it,
+    then the rest, wrapped as DecisionEntry wraps.
+
 func ScrubLesson(lesson, scope string, people, own, repo []string) (string, string)
     ScrubLesson returns lesson when it teaches without retelling the pull
     request, else "" and why (Lesson*): a pull request or issue reference
@@ -9211,6 +9787,26 @@ func ScrubLesson(lesson, scope string, people, own, repo []string) (string, stri
     backticks or not, since general lessons can reach the public judge skill;
     a repo lesson goes to that repository's own notes and may. Words match whole
     and case-insensitively.
+
+func TargetName(kind string, id int64) string
+    TargetName is the learned case of a proposal's input of kind
+    (store.LearnInputMiss, store.LearnInputDecline) and id: miss-<id>
+    (CaseFromMiss) or decline-<id> (CaseFromDecline).
+
+func TemplateActions(text string) []string
+    TemplateActions lists the template actions of a prompt in order: an edit of
+    the prompts may change the text around them, never them (a dropped field,
+    a new define or template call, a changed condition).
+
+func ValidateEdit(c EditCheck, changes Changes) []string
+    ValidateEdit returns what is wrong with an editor's answer (nil = valid),
+    in words fit for a nudge and the registry: every input of c is accounted for
+    exactly once, noted with where or skipped with a one-line reason of at most
+    EditReasonRunes; every changed file is an allowed one and listed edited,
+    and a file listed edited changed; the skill is within its cap and keeps
+    every pin; the diff's added lines and the decision pass notes.CheckLeaks
+    and ScrubLesson's rules for a general lesson (no pull request number, link,
+    login or repository); and the decision is 1 to DecisionMaxRunes runes.
 
 func WriteFileAtomic(root *os.Root, name string, data []byte) error
     WriteFileAtomic writes data to name inside root: a temporary file next
@@ -9283,6 +9879,17 @@ type Candidates struct {
 }
     Candidates is the candidates file.
 
+type Changes struct {
+	Files    []FileChange  `json:"files"`
+	Inputs   []InputChange `json:"inputs"`
+	Decision string        `json:"decision"`
+}
+    Changes is changes.json: what the editor did with every file it may change
+    and every input it was given, and the DECISIONS entry it drafts.
+
+func ParseChanges(b []byte) (Changes, error)
+    ParseChanges decodes changes.json strictly (an unknown field is an error).
+
 type Comparison struct {
 	// Descendant: the later commit descends from the reviewed one (GitHub's
 	// status "ahead" or "identical"). The file list is three-dot, so only
@@ -9295,6 +9902,132 @@ type Comparison struct {
 	Complete bool
 }
     Comparison is what Build needs of GitHub's comparison of two commits.
+
+type EditCheck struct {
+	Inputs EditInputs
+	// Changed are the paths the worktree's status lists (relative to it,
+	// slash-separated), changes.json and magnum's own files left out.
+	Changed []string
+	// Allowed are the globs a changed file must match (nil =
+	// EditAllowedGlobs).
+	Allowed []string
+	// Skill is the edited SKILL.md, Pins the sentences it must keep.
+	Skill []byte
+	Pins  []string
+	// Diff is the worktree's diff against the base (its added lines are
+	// checked), Decision the DECISIONS entry.
+	Diff     string
+	Decision string
+	// Leaks is what names one pull request (notes.CheckLeaks): the
+	// branches of the inputs' pull requests. People, Own and Repos are
+	// ScrubLesson's for the decision: the inputs' authors and reviewers,
+	// magnum's logins, the inputs' repositories' owners and names.
+	Leaks              notes.Check
+	People, Own, Repos []string
+}
+    EditCheck is what ValidateEdit compares an answer with.
+
+type EditDecline struct {
+	ID       string   `json:"id"` // "d<id>"
+	Priority string   `json:"priority,omitempty"`
+	Verdict  string   `json:"verdict"`
+	Title    string   `json:"title,omitempty"`
+	Lesson   string   `json:"lesson,omitempty"`
+	Match    []string `json:"match"`
+	// History is as EditMiss's.
+	History []store.LearnInputGate `json:"history,omitempty"`
+}
+    EditDecline is a general finding of magnum's an author declined: wrong,
+    or ranked too high.
+
+type EditInputs struct {
+	Misses     []EditMiss             `json:"misses"`
+	Declines   []EditDecline          `json:"declines"`
+	LeftOut    int                    `json:"left_out"`
+	Rejections []EditRejection        `json:"rejections"`
+	Versions   []store.VersionMeasure `json:"versions"`
+	SkillBytes int                    `json:"skill_bytes"`
+	SkillCap   int                    `json:"skill_cap"`
+	Files      []string               `json:"files"`
+}
+    EditInputs is inputs.json: the inputs to account for (the newest, each
+    with the earlier proposals that noted it and failed at the gate), how many
+    older ones it leaves out (LeftOut), the operator's reasons for rejecting
+    earlier proposals, what the last landed versions did (newest first,
+    store.VersionMeasure: a version whose reviews had fewer of their findings
+    declined than the one before measured a gain), the skill's size and cap and
+    the files the editor may change.
+
+func (in EditInputs) IDs() []string
+    IDs lists every input's id, the misses first.
+
+type EditMiss struct {
+	ID       string   `json:"id"` // "m<id>"
+	Severity string   `json:"severity,omitempty"`
+	Title    string   `json:"title,omitempty"`
+	Lesson   string   `json:"lesson,omitempty"`
+	Match    []string `json:"match"`
+	// History is the earlier proposals that noted it and failed at the
+	// gate, oldest first, with the gate's rule (store.LearnInputHistory).
+	History []store.LearnInputGate `json:"history,omitempty"`
+}
+    EditMiss is a general miss: what another reviewer caught that magnum did
+    not.
+
+type EditRejection struct {
+	Input  string `json:"input,omitempty"`
+	Reason string `json:"reason"`
+}
+    EditRejection is the operator's reason for rejecting an earlier proposal:
+    of one input (Input, its id) or of the proposal (Input "").
+
+type FileChange struct {
+	Name   string `json:"name"`
+	Action string `json:"action"`
+	Reason string `json:"reason"`
+}
+    FileChange is one file of Changes: edited or unchanged, and why.
+
+type GateCase struct {
+	Case   eval.Case
+	Target bool
+	Skip   string
+}
+    GateCase is a case the gate replays, or a target it cannot (Skip says why;
+    Case has the target's name alone when the corpus lacks it).
+
+func SelectCases(corpus *eval.Corpus, targets []string, watched func(pr string) bool, flagged func(pr string) bool, limit int) []GateCase
+    SelectCases picks a proposal's cases from corpus (nil = none): every target,
+    in its order, first (one the corpus lacks, whose PR is flagged or in no
+    watch is skipped with why, and one past limit too), then the newest other
+    cases (the corpus's last first: the learned ones come after the operator's,
+    oldest first) whose PR is watched and not flagged, until limit cases can
+    run. A flagged PR is never replayed, watched or not.
+
+type GateRow struct {
+	Case    string      `json:"case"`
+	Target  bool        `json:"target,omitempty"`
+	Before  *eval.Score `json:"before,omitempty"`
+	After   *eval.Score `json:"after,omitempty"`
+	Retried bool        `json:"retried,omitempty"`
+	Skip    string      `json:"skip,omitempty"`
+}
+    GateRow is a case of the gate: its score at the baseline (the newest replay
+    with master's prompts and skill) and with the candidate's, or why it was not
+    compared (Skip). Retried is set once the caller replayed a lost case again,
+    After then being the second replay's: only then does a loss count.
+
+func (r GateRow) Lost() []string
+    Lost names the defects the baseline found that the candidate did not.
+
+func (r GateRow) NewHits() []string
+    NewHits names the absent defects (findings authors declined) the candidate
+    reported that the baseline did not.
+
+func (r GateRow) TargetGate() string
+    TargetGate is what target row r says of its input's learned case
+    (store.LearnTarget*): covered at the baseline, improved or not once
+    compared; "" for a row that is no target or was not compared.
 
 type Input struct {
 	// Author is the pull request's author in Account form
@@ -9334,6 +10067,15 @@ type Input struct {
 	Compare func(from, to string) (Comparison, error)
 }
     Input is everything Build reads about one pull request.
+
+type InputChange struct {
+	ID     string `json:"id"`
+	Action string `json:"action"`
+	Where  string `json:"where,omitempty"`
+	Reason string `json:"reason,omitempty"`
+}
+    InputChange is one input of Changes: noted, with where the change covers it,
+    or skipped, with a one-line reason.
 
 type Item struct {
 	ID       string   `json:"id"`
@@ -9477,6 +10219,26 @@ type ThreadReply struct {
 }
     ThreadReply is one reply in an own thread: who wrote it (Account form,
     OwnAuthor for magnum) and what it says, data for the classifier only.
+
+type Verdict struct {
+	State string    `json:"state"`
+	Rule  string    `json:"rule"`
+	Rows  []GateRow `json:"rows"`
+}
+    Verdict is the gate's decision on a proposal: State (GatePassed, GateHeld,
+    GateFailed), the Rule that decided it, as a sentence, and the rows it read.
+
+func Judge(rows []GateRow) Verdict
+    Judge decides a proposal on its rows. It fails one that regressed: a defect
+    the baseline found and the candidate lost, once replayed again (Retried),
+    or a declined finding the candidate reports and the baseline did not;
+    else it passes one whose targets include a miss that improved (improved),
+    and holds one whose improved targets are all declines (RuleOnlyDeclines:
+    one author's reply and one classifier's answer would otherwise remove a
+    class of findings from every review unseen); a target the baseline covers
+    (AtBaseline) is no target, so it fails one whose every target is so (nothing
+    to improve); else it holds one none of whose targets could be compared,
+    and fails the rest (no target improved).
 
 ```
 
@@ -9903,6 +10665,13 @@ var ErrTooLarge = errors.New("notes: the harness is too large to record")
 
 
 FUNCTIONS
+
+func CheckLeaks(text string, check Check) []string
+    CheckLeaks applies Validate's leak rules to one text that is not notes
+    (the skill editor's diff and DECISIONS entry): it returns, as phrases to
+    follow the text's name, that it names a pull request or issue number, one of
+    check's branches, holds what looks like a secret, or names a home directory
+    path. nil = none.
 
 func Fingerprint(notes []byte, files []File) string
     Fingerprint identifies a state of the notes and the harness: the notes'
@@ -10552,6 +11321,11 @@ func (l Layout) EnsureDirs() error
     a manual mkdir) is tightened explicitly: it holds the database, logs and the
     per-identity gh credentials.
 
+func (l Layout) Eval() string
+    Eval is where the eval runs live, Eval()/<run id>/ (`magnum eval run`
+    and the gate of a skill proposal), with the flagged cases and the cases'
+    worktrees (wt/).
+
 func (l Layout) GhConfigDir(id string) string
     GhConfigDir is identity id's gh config directory in GhRoot.
 
@@ -10565,6 +11339,21 @@ func (l Layout) Learn() string
 func (l Layout) LearnCorpus() string
     LearnCorpus is the learned eval corpus the daemon writes from the registry's
     misses and declines, which `magnum eval` reads after the operator's corpus.
+
+func (l Layout) LearnEvalWorktrees() string
+    LearnEvalWorktrees holds the worktrees of the cases the gate of a skill
+    proposal replays, LearnEvalWorktrees()/<case> in the case's clone: its own,
+    so a `magnum eval run` of the same case (Eval()/wt/<case>) never removes the
+    gate's.
+
+func (l Layout) LearnSkill() string
+    LearnSkill holds the skill editor's run directories, LearnSkill()/<run>/:
+    its inputs, the pins and a copy of its answer.
+
+func (l Layout) LearnWorktrees() string
+    LearnWorktrees holds the skill editor's git worktrees of the checkout,
+    LearnWorktrees()/<run>, each on its branch learn/<run> until the proposal
+    lands or goes.
 
 func (l Layout) Lock() string
     Lock is the daemon's lock file under State, held for the daemon's whole
@@ -12645,6 +13434,56 @@ const (
     repository.
 
 const (
+	LearnTriggerEvidence   = "evidence"   // the daily retro stored new general misses or declines
+	LearnTriggerRequest    = "request"    // `magnum learn --propose`
+	LearnTriggerRegression = "regression" // a landed version measured worse: a revert
+)
+    Why the editor ran (learn_proposals.trigger_reason).
+
+const (
+	LearnInvalid  = "invalid"  // its result failed magnum's checks after a nudge: Reason says how
+	LearnStopped  = "stopped"  // the editor stopped (a pause, a timeout, a shutdown)
+	LearnGating   = "gating"   // committed on its branch, waiting for the gate
+	LearnPassed   = "passed"   // the gate passed it: it lands
+	LearnHeld     = "held"     // the gate could not decide, or left it to the operator: the operator does
+	LearnFailed   = "failed"   // the gate failed it
+	LearnLanded   = "landed"   // fast-forwarded onto master
+	LearnRejected = "rejected" // the operator said no: Reason says why
+	LearnExpired  = "expired"  // nobody decided within a week
+)
+    Proposal states (learn_proposals.state). A proposal is stored when its
+    editor run ends (an edit in flight is the KV mark learn.editing, not a row),
+    and none replaces another (an edit waits while one waits), so there is no
+    editing or superseded state.
+
+const (
+	LearnInputMiss    = "miss"    // misses.id
+	LearnInputDecline = "decline" // declines.id
+)
+    The kinds of a proposal's input (learn_proposal_inputs.kind).
+
+const (
+	LearnTargetImproved    = "improved"     // the candidate found the miss more often, or no longer reported the declined finding
+	LearnTargetNotImproved = "not_improved" // compared, and no better than the baseline
+	// LearnTargetBaseline: the baseline already found the miss, or no
+	// longer reported the declined finding: no target, and the input is
+	// dismissed.
+	LearnTargetBaseline = "baseline"
+)
+    What a proposal's gate made of the learned case of an input it noted
+    (learn_proposal_inputs.gate; "" = no gate compared it).
+
+const (
+	LearnDismissedFound       = "found at the baseline"        // a miss its gate's baseline found
+	LearnDismissedNotReported = "not reported at the baseline" // a decline its gate's baseline no longer reported
+	LearnDismissedFailures    = "noted in 2 failed gates"      // LearnDismissFailures
+	LearnDismissedRejections  = "in 2 rejected proposals"      // MissDismissRejections
+)
+    Why a proposal's decision dismissed an input
+    (learn_proposal_inputs.dismissed, LearnInput.Dismissed, Miss.Dismissed,
+    Decline.Dismissed).
+
+const (
 	RepoModePool  = "pool"
 	RepoModePerPR = "per_pr"
 )
@@ -12827,6 +13666,12 @@ const (
 )
     Verdicts: what a review concluded, whatever its repository lets it post
     (ReviewSummary.Verdict).
+
+const LearnDismissFailures = 2
+    LearnDismissFailures is how many failed gates of skill proposals may compare
+    an input's learned case without improving it before the input is dismissed
+    (learn_proposal_inputs.gate not_improved): an editor that notes it again
+    would fail the same way.
 
 const MissDismissRejections = 2
     MissDismissRejections is how many rejected proposals a miss may be in before
@@ -13264,6 +14109,11 @@ type Decline struct {
 	// them.
 	Repo   string `json:"repo,omitempty"`
 	Number int    `json:"number,omitempty"`
+	// Dismissed says why the decision of skill proposal DismissedBy
+	// dismissed the decline (LearnDismissed*), "" and nil when none did;
+	// Declines fills them.
+	Dismissed   string `json:"dismissed,omitempty"`
+	DismissedBy *int64 `json:"dismissed_by,omitempty"`
 }
     Decline is how an author answered one of magnum's posted findings
     (declines).
@@ -13430,6 +14280,103 @@ type LatestReview struct {
     LatestReview is one entry of prs.latest_reviews_json: GitHub's latest review
     of one reviewer.
 
+type LearnInput struct {
+	Kind    string `json:"kind"`             // LearnInputMiss | LearnInputDecline
+	InputID int64  `json:"input_id"`         // misses.id or declines.id
+	Outcome string `json:"outcome"`          // MissNoted | MissSkipped
+	Where   string `json:"where,omitempty"`  // noted: the file and section that cover it now
+	Reason  string `json:"reason,omitempty"` // skipped: why; noted: optional
+	// State is the input's state now (LearnProposalInputs fills it; ""
+	// when its row is gone).
+	State string `json:"state,omitempty"`
+	// Gate is what the proposal's gate made of the input's learned case
+	// (LearnTarget*; "" = it compared none), Dismissed why the proposal's
+	// decision dismissed the input ("" = it did not), and Gated how many
+	// gates of any proposal made something of that case
+	// (LearnProposalInputs fills them; CreateLearnProposal stores none).
+	Gate      string `json:"gate,omitempty"`
+	Dismissed string `json:"dismissed,omitempty"`
+	Gated     int    `json:"gated,omitempty"`
+}
+    LearnInput is what a proposal did with one input it was given
+    (learn_proposal_inputs).
+
+type LearnInputGate struct {
+	Proposal int64  `json:"proposal"`
+	State    string `json:"state"`
+	Rule     string `json:"rule"`
+}
+    LearnInputGate is an earlier proposal that noted an input and failed at its
+    gate, with the gate's rule (LearnInputHistory).
+
+type LearnProposal struct {
+	ID           int64           `json:"id"`
+	Trigger      string          `json:"trigger"`                 // LearnTrigger*
+	BaseSHA      string          `json:"base_sha"`                // master when the editor started
+	Branch       string          `json:"branch"`                  // learn/<run>
+	CandidateSHA string          `json:"candidate_sha,omitempty"` // the commit on Branch
+	Files        []string        `json:"files"`                   // the files the commit changes
+	State        string          `json:"state"`                   // Learn*
+	Gate         json.RawMessage `json:"gate,omitempty"`          // the gate's result
+	Reason       string          `json:"reason,omitempty"`        // invalid, stopped: magnum's; rejected: the operator's
+	Model        string          `json:"model,omitempty"`         // the editor's
+	PromptSHA256 string          `json:"prompt_sha256,omitempty"`
+	Scratch      string          `json:"scratch,omitempty"` // the worktree
+	RunDir       string          `json:"run_dir,omitempty"` // inputs.json, pins.json, the changes.json copy
+	CreatedAt    time.Time       `json:"created_at"`
+	// WaitingSince is when it last became passed or held, to wait for the
+	// landing or the operator (nil: it never did); its expiry counts from
+	// it.
+	WaitingSince *time.Time `json:"waiting_since,omitempty"`
+	DecidedAt    *time.Time `json:"decided_at,omitempty"`
+	LandedSHA    string     `json:"landed_sha,omitempty"`
+	LandedAt     *time.Time `json:"landed_at,omitempty"`
+	// Reverts is the version whose files a revert restores as they were
+	// before it (0 = not a revert): the gate holds it for the operator.
+	Reverts int64 `json:"reverts,omitempty"`
+}
+    LearnProposal is a change the skill editor drafted (learn_proposals).
+
+type LearnProposalInput struct {
+	Trigger      string
+	BaseSHA      string
+	Branch       string
+	CandidateSHA string
+	Files        []string
+	State        string
+	Gate         []byte // nil = none
+	Reason       string
+	Model        string
+	PromptSHA    string
+	Scratch      string
+	RunDir       string
+	At           time.Time // zero = now
+	Inputs       []LearnInput
+	Reverts      int64 // the version a revert restores the files before (0 = none)
+}
+    LearnProposalInput is a proposal to store (CreateLearnProposal).
+
+type LearnTarget struct {
+	Kind    string // LearnInputMiss | LearnInputDecline
+	InputID int64
+	Gate    string // LearnTarget*
+}
+    LearnTarget is what a gate made of the learned case of an input its proposal
+    noted (GateLearnProposal).
+
+type LearnVersion struct {
+	ID          int64      `json:"id"`
+	ProposalID  int64      `json:"proposal_id,omitempty"` // 0 = none
+	LandedSHA   string     `json:"landed_sha"`
+	SkillSHA    string     `json:"skill_sha"`
+	PromptsSHA  string     `json:"prompts_sha"`
+	LandedAt    time.Time  `json:"landed_at"`
+	RestartedAt *time.Time `json:"restarted_at,omitempty"`
+}
+    LearnVersion is a landed change of the skill and the prompts
+    (learn_versions): its measurement window starts at RestartedAt and ends at
+    the next version's.
+
 type Miss struct {
 	ID          int64     `json:"id"`
 	PRID        int64     `json:"pr_id"`
@@ -13460,6 +14407,11 @@ type Miss struct {
 	// proposal that used it once it is used; Misses fills them.
 	ProposalID    *int64 `json:"proposal_id,omitempty"`
 	ProposalState string `json:"proposal_state,omitempty"`
+	// Dismissed says why the decision of skill proposal DismissedBy
+	// dismissed the miss (LearnDismissed*; learn_proposal_inputs.dismissed),
+	// "" and nil when none did; Misses fills them.
+	Dismissed   string `json:"dismissed,omitempty"`
+	DismissedBy *int64 `json:"dismissed_by,omitempty"`
 }
     Miss is a comment another reviewer made on a PR magnum reviewed, with what
     the retro made of it (misses).
@@ -14211,11 +15163,26 @@ func (s *Store) CountAutoApprovedSince(ctx context.Context, since time.Time) (in
 func (s *Store) CountDeclines(ctx context.Context, f DeclineFilter) (int, error)
     CountDeclines counts the declines f selects.
 
+func (s *Store) CountLearnProposals(ctx context.Context, state string) (int, error)
+    CountLearnProposals counts the proposals in state.
+
 func (s *Store) CountMisses(ctx context.Context, f MissFilter) (int, error)
     CountMisses counts the misses f selects.
 
 func (s *Store) CountNotesProposals(ctx context.Context, state string) (int, error)
     CountNotesProposals counts the proposals in state.
+
+func (s *Store) CreateLearnProposal(ctx context.Context, in LearnProposalInput) (LearnProposal, error)
+    CreateLearnProposal stores a proposal and what it did with every input it
+    was given, in one transaction. A proposal in a state that is a decision
+    (anything but gating, passed or held) is decided at once, and one made
+    passed or held waits since it is made (waiting_since). Trigger, BaseSHA,
+    Branch and State are required; an input is in it once.
+
+func (s *Store) CreateLearnVersion(ctx context.Context, v LearnVersion) (LearnVersion, error)
+    CreateLearnVersion records a landed change (a zero LandedAt is now;
+    RestartedAt is MarkLearnRestarted's). LandedSHA, SkillSHA and PromptsSHA are
+    required.
 
 func (s *Store) CreateNotesProposal(ctx context.Context, in NotesProposalInput) (NotesProposal, error)
     CreateNotesProposal stores a proposal (and a curation's proposed state
@@ -14241,6 +15208,16 @@ func (s *Store) DB() *sql.DB
     DB exposes the underlying handle for ad hoc read-only queries (status views,
     tests). Writes should go through the typed methods.
 
+func (s *Store) DecideLearnProposal(ctx context.Context, id int64, from []string, to, reason string, at time.Time, gate []byte) (LearnProposal, error)
+    DecideLearnProposal moves proposal id from one of from to state to,
+    compare-and-set (ErrConflict when it is in another state): reason replaces
+    the stored one when not empty, gate the gate's result when not nil, a state
+    that is a decision stamps decided_at with at (zero = now) and passed or held
+    stamps waiting_since with it (a landing that holds a held proposal again
+    too). The inputs follow it in the same transaction (decideLearnInputs).
+    It never lands one: LandLearnProposal records a landing with its commit and
+    its version.
+
 func (s *Store) DecideNotesProposal(ctx context.Context, id int64, from []string, to, reason string, at time.Time, applied *NotesVersionInput) (NotesProposal, error)
     DecideNotesProposal moves proposal id from one of from to state to,
     with reason, compare-and-set (ErrConflict when it is in another state). With
@@ -14251,7 +15228,7 @@ func (s *Store) DecideNotesProposal(ctx context.Context, id int64, from []string
 
 func (s *Store) Declines(ctx context.Context, f DeclineFilter) ([]Decline, error)
     Declines returns the declines f selects, newest first, each with its PR's
-    repository and number.
+    repository and number and why a skill proposal dismissed it, if one did.
 
 func (s *Store) DeleteKV(ctx context.Context, key string) error
     DeleteKV removes key (no error when absent).
@@ -14298,6 +15275,16 @@ func (s *Store) FreeSlots(ctx context.Context, repoFullName string, preferPRID i
     not pinned, no hold_reason): the slot that last held preferPRID first (0 =
     no preference), then least recently used.
 
+func (s *Store) GateLearnProposal(ctx context.Context, id int64, to, reason string, at time.Time, gate []byte, targets []LearnTarget) (LearnProposal, error)
+    GateLearnProposal is the gate's decision on proposal id: from gating
+    to passed, held or failed, as DecideLearnProposal moves it, with what
+    the gate made of the learned case of each input it noted (targets,
+    stored on the input's link row) in the same transaction: an input whose
+    case the baseline already covered is dismissed (LearnDismissedFound,
+    LearnDismissedNotReported) whatever the verdict, and a failed decision
+    dismisses an input LearnDismissFailures failed gates compared without
+    improving it (decideLearnInputs).
+
 func (s *Store) GetKV(ctx context.Context, key string) (string, bool, error)
     GetKV returns the value for key and whether it exists.
 
@@ -14308,6 +15295,16 @@ func (s *Store) GitHubRequiredChecks(ctx context.Context, fullName string) (GitH
 func (s *Store) InsertAutoApproval(ctx context.Context, a AutoApproval) (AutoApproval, error)
     InsertAutoApproval records a post about to be tried (state posting,
     one attempt). It returns ErrConflict when the PR already has a live one.
+
+func (s *Store) LandLearnProposal(ctx context.Context, id int64, from []string, v LearnVersion) (LearnProposal, LearnVersion, error)
+    LandLearnProposal records that proposal id landed, in one transaction: it
+    moves from one of from to landed (compare-and-set, ErrConflict when it is in
+    another state), decided_at and landed_at become v.LandedAt (zero = now) and
+    landed_sha v.LandedSHA, its noted inputs become used (decideLearnInputs),
+    and v is stored as the version that landed, its ProposalID id (LandedSHA,
+    SkillSHA and PromptsSHA are required, as for CreateLearnVersion). Nothing
+    of it is written when any of it fails, so a landed proposal always has its
+    commit and its version.
 
 func (s *Store) LastEndedRun(ctx context.Context, prID, sessionID int64) (Run, error)
     LastEndedRun is the run of session sessionID (of PR prID) that ended last
@@ -14333,6 +15330,32 @@ func (s *Store) LatestRoundRuns(ctx context.Context, prIDs ...int64) (map[int64]
     LatestRoundRuns returns, per PR, the runs of its highest round, oldest
     first. prIDs limits the PRs; empty means every PR with a run. A PR without
     runs has no entry.
+
+func (s *Store) LearnInputHistory(ctx context.Context, kind string, id int64) ([]LearnInputGate, error)
+    LearnInputHistory lists the proposals that noted the input (kind, id) and
+    failed at their gate, oldest first, each with the gate's rule (its reason):
+    what the editor tried for it that did not help.
+
+func (s *Store) LearnInputRejections(ctx context.Context, kind string, id int64) ([]string, error)
+    LearnInputRejections returns the operator's reasons of the rejected
+    proposals the input (kind, id) was in, oldest first; an empty reason is left
+    out.
+
+func (s *Store) LearnProposalByID(ctx context.Context, id int64) (LearnProposal, error)
+    LearnProposalByID reads proposal id (ErrNotFound when there is none).
+
+func (s *Store) LearnProposalInputs(ctx context.Context, id int64) ([]LearnInput, error)
+    LearnProposalInputs lists what proposal id did with its inputs, by kind and
+    id, each with the input's state now, what the proposal's gate made of its
+    case, why the proposal dismissed it and how many gates made something of its
+    case.
+
+func (s *Store) LearnProposals(ctx context.Context, states []string) ([]LearnProposal, error)
+    LearnProposals lists the proposals in states (empty = every state), newest
+    first.
+
+func (s *Store) LearnVersions(ctx context.Context) ([]LearnVersion, error)
+    LearnVersions lists the landed versions, newest first.
 
 func (s *Store) ListPRs(ctx context.Context, f PRFilter) ([]PR, error)
     ListPRs returns PRs matching f ordered by repo and number.
@@ -14360,6 +15383,11 @@ func (s *Store) LiveSessionByPRRole(ctx context.Context, prID int64, role string
 
 func (s *Store) LiveSessions(ctx context.Context) ([]Session, error)
     LiveSessions returns every starting/live session, oldest first.
+
+func (s *Store) MarkLearnRestarted(ctx context.Context, id int64, at time.Time) error
+    MarkLearnRestarted records the first restart of the daemon on version id at
+    at, which starts its measurement window; a later restart changes nothing
+    (ErrNotFound when there is no such version).
 
 func (s *Store) MarkSlotDatabaseDropped(ctx context.Context, dbName, by string) error
     MarkSlotDatabaseDropped records that dbName was dropped (by = who: a cleanup
@@ -14426,6 +15454,12 @@ func (s *Store) PendingRequests(ctx context.Context, limit int) ([]Request, erro
     PendingRequests returns up to limit pending requests, oldest first (limit <=
     0 = all), so a consumer can skip a request it already handed to a background
     worker.
+
+func (s *Store) PeopleLogins(ctx context.Context) ([]string, error)
+    PeopleLogins lists the human logins the pull requests name, as
+    scripts/check-logins.sh reads them for `make check-private`: the authors
+    that are users, the assignees and the requested reviewers (not teams),
+    without a "[bot]" suffix, once each and sorted.
 
 func (s *Store) PostedFindingPaths(ctx context.Context, prIDs []int64) (map[int64]map[string]int, error)
     PostedFindingPaths returns, per PR of prIDs that has any, how many findings
@@ -14679,6 +15713,18 @@ func (s *Store) UpsertSlotDatabase(ctx context.Context, d SlotDatabase) (SlotDat
     once, last_seen_at = now, a nil SlotID or SizeMB keeps the stored value,
     and a database seen again after a drop is no longer marked dropped.
 
+func (s *Store) VersionMeasure(ctx context.Context, v LearnVersion, next *LearnVersion) (VersionMeasure, error)
+    VersionMeasure measures v over its window: from v.RestartedAt (its LandedAt
+    while the daemon has not restarted on it) to next.RestartedAt (open when
+    next is nil or has not restarted yet), over the rounds that ran v's skill
+    copy. A v without a SkillSHA (the skill before the first version, which no
+    row records) counts every round of the window and every decline of its runs.
+
+func (s *Store) VersionMeasures(ctx context.Context, vs []LearnVersion, n int) ([]VersionMeasure, error)
+    VersionMeasures measures the newest n versions of vs (newest first,
+    as LearnVersions lists them; n <= 0 = all), each up to the restart on the
+    version after it.
+
 type SubjectMatch struct {
 	Exact  string
 	Prefix string
@@ -14722,6 +15768,34 @@ func (u *Update) Where(col string, v any)
     like a state mismatch, so a caller can require that the row still describes
     what it decided on (for example head_sha == the target sha). col may be any
     column of the table; conditions combine with AND.
+
+type VersionMeasure struct {
+	VersionID int64      `json:"version"` // learn_versions.id; 0 for the skill before the first version
+	Commit    string     `json:"commit,omitempty"`
+	From      time.Time  `json:"from"`
+	To        *time.Time `json:"to,omitempty"` // nil: the window is open (the version runs now)
+	// JudgeRuns counts the posted reviews (a nudged round's once), Posted
+	// the findings they posted and ByPriority those by priority ("" for
+	// none).
+	JudgeRuns  int            `json:"judge_runs"`
+	Posted     int            `json:"posted"`
+	ByPriority map[string]int `json:"by_priority"`
+	// Outcomes counts how authors answered those findings (Decline*).
+	Outcomes map[string]int `json:"outcomes"`
+	// MissesGeneral and MissesRepo count what other reviewers caught on a
+	// commit those reviews covered, by the lesson's scope.
+	MissesGeneral int `json:"misses_general"`
+	MissesRepo    int `json:"misses_repo"`
+}
+    VersionMeasure is what the rounds of one landed version did in its window
+    (Store.VersionMeasure).
+
+func (m VersionMeasure) Declined() int
+    Declined is how many of the findings authors declined or argued.
+
+func (m VersionMeasure) DeclinedShare() (float64, bool)
+    DeclinedShare is the declined and argued findings' share of the posted ones,
+    in percent; false without a posted finding.
 
 ```
 
@@ -15132,6 +16206,9 @@ type DaemonFacts struct {
 	// NotesProposals counts the curation proposals for repository notes
 	// that wait for the operator (`magnum notes <repo> --review`).
 	NotesProposals int
+	// LearnProposals counts the skill proposals the gate held for the
+	// operator (`magnum learn --review`).
+	LearnProposals int
 }
     DaemonFacts are what the titles say of the daemon; the zero value says
     nothing.

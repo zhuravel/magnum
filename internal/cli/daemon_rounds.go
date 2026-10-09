@@ -6,13 +6,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/app"
 	"github.com/zhuravel/magnum/internal/engine"
+	"github.com/zhuravel/magnum/internal/eval"
+	"github.com/zhuravel/magnum/internal/evalrun"
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/launchd"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -25,12 +30,56 @@ func registryReadOnlyDSN(path string) string {
 	return u.String()
 }
 
+// daemonGate wires the gate of a skill proposal (engine.Deps.EvalCase,
+// EvalInputs, EvalRuns, EvalCorpus) to the eval replays `magnum eval run`
+// makes, in the daemon's process (Amendment A1: the engine cannot import
+// evalrun, which runs it): a case replays with the daemon's layout, config,
+// registry (for the PR's Codex flag) and logger, in a worktree of the
+// gate's own (paths.Layout.LearnEvalWorktrees, never `magnum eval run`'s,
+// which refuses to run while a gate does); the inputs are those of
+// the config pointed at a candidate directory; the runs and the corpora are
+// the ones `magnum eval` reads. A dry run, an eval's own app and a config
+// that did not load wire none.
+func daemonGate(c *Context, a *app.App) func(*engine.Deps) {
+	return func(d *engine.Deps) {
+		if a.DryRun || a.AgentTag != "" || a.Config == nil {
+			return
+		}
+		deps := evalrun.Deps{Layout: a.Layout, Config: a.Config, Store: a.Store, Logger: a.Logger, Stderr: io.Discard,
+			Warn: func(format string, args ...any) { a.Logger.Warn("skill gate: " + fmt.Sprintf(format, args...)) }}
+		d.EvalCase = func(ctx context.Context, ec eval.Case, o engine.EvalGateOptions) eval.CaseRun {
+			return evalrun.RunCase(ctx, deps, ec, evalrun.Options{Candidate: o.Candidate, JudgeOnly: o.JudgeOnly, RunDir: o.RunDir, AgentTag: o.AgentTag,
+				Worktrees: a.Layout.LearnEvalWorktrees()})
+		}
+		d.EvalInputs = func(candidate string) (string, string, error) {
+			cfg := a.Config
+			if candidate != "" {
+				var err error
+				if cfg, err = evalrun.WithCandidate(a.Config, candidate); err != nil {
+					return "", "", err
+				}
+			}
+			return evalrun.Inputs(cfg), evalrun.ReviewerInputs(cfg), nil
+		}
+		d.EvalRuns = func() ([]eval.Run, error) { return eval.ListRuns(evalrun.RunsRoot(a.Layout)) }
+		d.EvalCorpus = func() (*eval.Corpus, string, error) {
+			user, learned := evalCorpusPath(c, "")
+			if user != "" && !fsx.Exists(user) {
+				user = ""
+			}
+			corpus, err := eval.LoadCorpora(user, learned)
+			return corpus, user, err
+		}
+	}
+}
+
 // inFlight is what stopping the daemon now would cut short: the review
 // rounds in flight and the background work running (the notes curation,
-// engine.KVNotesCurating, and the retro, engine.KVRetroRunning).
+// engine.KVNotesCurating, the retro, engine.KVRetroRunning, and the skill
+// edit, engine.KVLearnEditing).
 type inFlight struct {
 	rounds []string // "owner/repo#N (state)"
-	work   []string // "notes curation of owner/repo (since 15:04)", "retro (since 15:04)"
+	work   []string // "notes curation of owner/repo (since 15:04)", "retro (since 15:04)", "skill edit (since 15:04)"
 }
 
 func (f inFlight) none() bool { return len(f.rounds) == 0 && len(f.work) == 0 }
@@ -60,27 +109,22 @@ func (f inFlight) cutShort() string {
 		parts = append(parts, "abandons the rounds (their agents keep running, the rounds start over later)")
 	}
 	if len(f.work) > 0 {
-		parts = append(parts, "cuts the background work short (a notes curation proposes nothing, a retro runs again)")
+		parts = append(parts, "cuts the background work short (a notes curation or a skill edit proposes nothing, a retro or a skill gate runs again)")
 	}
 	return "stopping the daemon now " + strings.Join(parts, " and ")
 }
 
 // activeRounds reads what is in flight, read-only: the PRs whose review
 // round is claiming, reviewing or verifying, as "owner/repo#N (state)", and
-// the notes curation and the retro running (backgroundWork). Stopping the
-// daemon abandons the rounds (their agents keep working in herdr but nobody
-// collects the result, and the next daemon starts them over) and cuts the
-// curation and the retro short. No registry yet means nothing; any other
+// the notes curation, the retro and the skill edit running
+// (backgroundWork). Stopping the daemon abandons the rounds (their agents
+// keep working in herdr but nobody collects the result, and the next daemon
+// starts them over) and cuts the curation, the retro and the edit short.
+// No registry yet means nothing; any other
 // read failure is an error, so callers fail closed.
 func (c *Context) activeRounds(ctx context.Context) (inFlight, error) {
-	path := c.Layout.DB()
-	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
-		return inFlight{}, nil
-	} else if err != nil {
-		return inFlight{}, err
-	}
-	db, err := sql.Open("sqlite", registryReadOnlyDSN(path))
-	if err != nil {
+	db, err := c.registryReadOnly()
+	if db == nil || err != nil {
 		return inFlight{}, err
 	}
 	defer db.Close()
@@ -115,12 +159,50 @@ func (c *Context) activeRounds(ctx context.Context) (inFlight, error) {
 	return out, nil
 }
 
-// backgroundWork reads the notes curation and the retro running from their
-// kv marks: "notes curation of owner/repo (since 15:04)", "retro (since
-// 15:04)". A mark it cannot parse still counts.
+// registryReadOnly opens the registry read-only, never creating it: nil
+// (and no error) when there is none yet.
+func (c *Context) registryReadOnly() (*sql.DB, error) {
+	path := c.Layout.DB()
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+	return sql.Open("sqlite", registryReadOnlyDSN(path))
+}
+
+// gateRunning names the daemon's skill gate when one runs, as
+// backgroundWork does ("skill gate of proposal 3 (since 15:04)"; "" =
+// none, or no registry yet): its learn.gating mark, read-only.
+func (c *Context) gateRunning(ctx context.Context) (string, error) {
+	db, err := c.registryReadOnly()
+	if db == nil || err != nil {
+		return "", err
+	}
+	defer db.Close()
+	ctx, cancel := context.WithTimeout(ctx, completeTimeout)
+	defer cancel()
+	work, err := backgroundWork(ctx, db)
+	if err != nil {
+		return "", err
+	}
+	for _, w := range work {
+		if strings.HasPrefix(w, "skill gate") {
+			return w, nil
+		}
+	}
+	return "", nil
+}
+
+// backgroundWork reads the notes curation, the retro, the skill edit and
+// the skill gate running from their kv marks: "notes curation of
+// owner/repo (since 15:04)", "retro (since 15:04)", "skill edit (since
+// 15:04)" (or "revert of skill version 2 (since 15:04)", which runs in the
+// edit's slot), "skill gate of proposal 3 (since 15:04)". A mark it cannot
+// parse still counts.
 func backgroundWork(ctx context.Context, db *sql.DB) ([]string, error) {
-	rows, err := db.QueryContext(ctx, `SELECT key, value FROM kv WHERE key IN (?, ?) AND value != '' ORDER BY key`,
-		engine.KVNotesCurating, engine.KVRetroRunning)
+	rows, err := db.QueryContext(ctx, `SELECT key, value FROM kv WHERE key IN (?, ?, ?, ?) AND value != '' ORDER BY key`,
+		engine.KVNotesCurating, engine.KVRetroRunning, engine.KVLearnEditing, engine.KVLearnGating)
 	if err != nil {
 		return nil, err
 	}
@@ -139,6 +221,21 @@ func backgroundWork(ctx context.Context, db *sql.DB) ([]string, error) {
 			var m engine.CurateMark
 			if json.Unmarshal([]byte(value), &m) == nil && m.Repo != "" {
 				what, since = "notes curation of "+m.Repo, m.Started
+			}
+		case engine.KVLearnEditing:
+			what = "skill edit"
+			var m engine.EditMark
+			if json.Unmarshal([]byte(value), &m) == nil {
+				since = m.Started
+				if m.Revert != 0 {
+					what = fmt.Sprintf("revert of skill version %d", m.Revert)
+				}
+			}
+		case engine.KVLearnGating:
+			what = "skill gate"
+			var m engine.GateMark
+			if json.Unmarshal([]byte(value), &m) == nil && m.Proposal != 0 {
+				what, since = fmt.Sprintf("skill gate of proposal %d", m.Proposal), m.Started
 			}
 		default:
 			if t, err := store.ParseTime(value); err == nil {

@@ -614,3 +614,48 @@ func TestDoctorWarnsAboutSchemaPathsWithoutResetDB(t *testing.T) {
 		t.Fatalf("a pool without schema_paths got a schema check: %+v", c)
 	}
 }
+
+// The learn editor check says why the skill editor is off: [learn] editor
+// itself, no checkout of magnum (an installed binary), or go that does not
+// run in the checkout's mise environment, where the format gate runs it; it
+// fails only when [learn] editor is on and the editor cannot run.
+func TestDoctorSaysWhyTheEditorIsOff(t *testing.T) {
+	_, d, _, _ := doctorFixture(t)
+	home := d.Layout.Home
+	fake := d.Run.(*execx.Fake)
+	goVersion := execx.Rule{Prefix: []string{"mise", "-C", home, "exec", "--", "go", "version"},
+		Result: execx.Result{Stdout: []byte("go version go1.27.0 darwin/arm64\n")}}
+	fake.Rules = append([]execx.Rule{goVersion}, fake.Rules...)
+	check := func(on bool) doctorCheck {
+		t.Helper()
+		cfg := *d.Config
+		cfg.Learn.Editor = on
+		d := d
+		d.Config = &cfg
+		c, ok := doctorByName(doctorRun(context.Background(), d))["learn editor"]
+		if !ok {
+			t.Fatal("no learn editor check")
+		}
+		return c
+	}
+	if c := check(false); c.Status != doctorSkip || !strings.Contains(c.Detail, "[learn] editor = false") || !strings.Contains(c.Detail, "not a git checkout") {
+		t.Fatalf("off, no checkout = %+v", c)
+	}
+	if c := check(true); c.Status != doctorFail || !strings.Contains(c.Detail, "not a git checkout") || !strings.Contains(c.Fix, "[learn] editor = false") {
+		t.Fatalf("on, no checkout = %+v", c)
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if c := check(true); c.Status != doctorPass || !strings.Contains(c.Detail, "go1.27.0") || !strings.Contains(c.Detail, "once a day") {
+		t.Fatalf("on, checkout and go = %+v", c)
+	}
+	if c := check(false); c.Status != doctorSkip || !strings.Contains(c.Detail, "--propose") {
+		t.Fatalf("off, checkout and go = %+v", c)
+	}
+	fake.Rules[0] = execx.Rule{Prefix: goVersion.Prefix, Err: &execx.ExitError{Code: 127, Stderr: "mise ERROR go not found"}}
+	if c := check(true); c.Status != doctorFail || !strings.Contains(c.Detail, "go does not run") || !strings.Contains(c.Detail, "go not found") ||
+		!strings.Contains(c.Fix, "mise") {
+		t.Fatalf("on, no go = %+v", c)
+	}
+}

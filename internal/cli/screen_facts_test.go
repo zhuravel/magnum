@@ -91,6 +91,23 @@ func TestScreenFactsCountTheNotesProposalsToReview(t *testing.T) {
 	}
 }
 
+// TestScreenFactsCountTheHeldSkillProposals: the titles count the skill
+// proposals the gate held for the operator, not the ones that wait for the
+// gate or the landing.
+func TestScreenFactsCountTheHeldSkillProposals(t *testing.T) {
+	_, st, d, _ := statusFixture(t)
+	ctx := context.Background()
+	for _, state := range []string{store.LearnHeld, store.LearnGating, store.LearnPassed, store.LearnHeld} {
+		if _, err := st.CreateLearnProposal(ctx, store.LearnProposalInput{Trigger: store.LearnTriggerRequest, BaseSHA: "b", Branch: "learn/x",
+			State: state}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if f := screenFacts(ctx, d); f.LearnProposals != 2 {
+		t.Errorf("LearnProposals = %d, want 2", f.LearnProposals)
+	}
+}
+
 // TestScreenFactsNameTheBinaryOnDisk: with the same version, a binary
 // rebuilt on disk is named by when it was built.
 func TestScreenFactsNameTheBinaryOnDisk(t *testing.T) {

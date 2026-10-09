@@ -268,15 +268,16 @@ type curateRejection struct {
 // maybeCurate starts a queued curation that can start now (every tick:
 // queued ones wait for a judge stage to end), expires the proposals nobody
 // reviewed and, unless [notes] curate is off, starts the curation due first
-// (dueCurations), at most every curateCheckEvery: one at a time, none under
-// a pause of any kind or while the curator's CLI is paused. A repository due
+// (dueCurations), at most every curateCheckEvery: none while another learn
+// job runs (learnBusy), none under a pause of any kind or while the
+// curator's CLI is paused. A repository due
 // while a round of it is in its judge stage is queued instead of skipped. A
 // dry run and `magnum daemon --once` never curate.
 func (e *Engine) maybeCurate(ctx context.Context) {
 	if e.d.DryRun || e.once {
 		return
 	}
-	if e.d.Curator != nil && !e.curateBusy() && e.holdReason(ctx) == "" && e.curateToolPause(ctx) == "" {
+	if e.d.Curator != nil && e.learnBusy() == "" && e.holdReason(ctx) == "" && e.curateToolPause(ctx) == "" {
 		e.startQueuedCuration(ctx)
 	}
 	now := e.now()
@@ -285,7 +286,8 @@ func (e *Engine) maybeCurate(ctx context.Context) {
 	}
 	e.curateChecked = now
 	e.expireProposals(ctx)
-	if e.d.Curator == nil || len(e.cfg.Notes.Curate) == 0 || e.curateBusy() || e.userPause(ctx) != "" || e.holdReason(ctx) != "" || e.curateToolPause(ctx) != "" {
+	if e.d.Curator == nil || len(e.cfg.Notes.Curate) == 0 || e.learnBusy() != "" || e.userPause(ctx) != "" || e.holdReason(ctx) != "" ||
+		e.curateToolPause(ctx) != "" {
 		return
 	}
 	for _, due := range e.dueCurations(ctx, now) {
@@ -414,8 +416,9 @@ func (e *Engine) curateTriedRecently(repoID int64, now time.Time) bool {
 // pause of the curator's CLI holds it or a proposal of the repository waits
 // for review. With Supersede naming that proposal (a stale one the operator
 // gave up on) it is superseded first and the new curation reads it. While a
-// round of the repository is in its judge stage, or another curation runs,
-// the curation is queued and starts once that ended (startQueuedCuration).
+// round of the repository is in its judge stage, or another learn job runs
+// (a curation, the retro, a skill edit or gate), the curation is queued and
+// starts once that ended (startQueuedCuration).
 func (e *Engine) requestCurate(ctx context.Context, p NotesCuratePayload) (string, error) {
 	repo, err := e.st.RepoByFullName(ctx, p.Repo)
 	if errors.Is(err, store.ErrNotFound) {
@@ -462,6 +465,10 @@ func (e *Engine) requestCurate(ctx context.Context, p NotesCuratePayload) (strin
 		e.queueCurate(ctx, full, CurateTriggerRequest, QueuedJudge)
 		return prefix + "queued: " + queuedText(QueuedJudge) + "; a toast says when its proposal is ready for `magnum notes " + full + " --review`", nil
 	}
+	if job, since := e.learnRunning(); job != "" && !e.curateBusy() { // learn jobs run one at a time
+		e.queueCurate(ctx, full, CurateTriggerRequest, QueuedBusy)
+		return fmt.Sprintf("%squeued: starts when %s (started %s) ends; `magnum logs` follows it", prefix, job, since.Local().Format("15:04")), nil
+	}
 	if started, since, other := e.startCurate(ctx, repo, CurateTriggerRequest); !started {
 		if other == "" { // the daemon began stopping or draining since holdReason
 			return "", fmt.Errorf("no curation now: %s", cmp.Or(e.stopping(ctx), "the daemon is stopping"))
@@ -493,18 +500,27 @@ func (e *Engine) curateBusy() bool {
 
 // startCurate runs a curation of repo in its own goroutine on a child of
 // ctx, unless the daemon is stopping or draining (stopping: it reports false,
-// a zero time and no repository) or one is running: then it reports false,
-// when that one started and its repository. The curation running is
-// KVNotesCurating while it runs, and the repository leaves the queue.
+// a zero time and no repository) or a learn job runs: then it reports false,
+// when that one started and, for a curation, its repository (another learn
+// job: its name). The curation running is KVNotesCurating while it runs,
+// and the repository leaves the queue.
 func (e *Engine) startCurate(ctx context.Context, repo store.Repo, trigger string) (bool, time.Time, string) {
 	if e.stopping(ctx) != "" {
 		return false, time.Time{}, ""
 	}
+	e.learnMu.Lock()
+	defer e.learnMu.Unlock()
+	if job, since := e.learnRunning(); job != "" {
+		e.curateMu.Lock()
+		curating, other := e.curateCancel != nil, e.curateRepo
+		e.curateMu.Unlock()
+		if !curating {
+			other = job
+		}
+		return false, since, other
+	}
 	e.curateMu.Lock()
 	defer e.curateMu.Unlock()
-	if e.curateCancel != nil {
-		return false, e.curateStarted, e.curateRepo
-	}
 	cctx, cancel := context.WithCancel(ctx)
 	e.curateCancel, e.curateStarted, e.curateRepo = cancel, e.now(), repo.FullName()
 	e.unqueueCurate(ctx, repo.FullName())

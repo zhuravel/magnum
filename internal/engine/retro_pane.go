@@ -15,6 +15,7 @@ package engine
 // paneSpec.
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -149,6 +150,9 @@ type paneAgent struct {
 	spec paneSpec
 	dir  string // the run's directory: the scratch registry is in it, the agent works in its parent
 	id   string // the run's id
+	// cwd, when set, is where the agent works instead of dir's parent (the
+	// skill editor: its worktree).
+	cwd string
 
 	scratch string // the scratch registry's directory
 	cfg     *config.Config
@@ -170,6 +174,9 @@ type paneTurn struct {
 	// down: the turn never reached the agent (the prompt was refused
 	// before it was sent) or the agent went away (its session was lost).
 	down bool
+	// timedOut: the role's timeout passed before the turn ended (it was
+	// interrupted and its run abandoned).
+	timedOut bool
 }
 
 // Classify prompts the agent with job's paths (prompts/retro.md) and waits
@@ -335,7 +342,7 @@ func (c *paneAgent) ensureAgent(ctx context.Context) (*pipeline.Pause, error) {
 	if err := c.clearLeftover(ctx); err != nil {
 		return nil, err
 	}
-	cwd := filepath.Dir(c.dir)
+	cwd := cmp.Or(c.cwd, filepath.Dir(c.dir))
 	ws, err := c.mgr.EnsureWorkspace(ctx, c.pr, cwd, nil, c.spec.workspace, []config.Role{c.role})
 	if err != nil {
 		return nil, err
@@ -472,7 +479,7 @@ func (c *paneAgent) wait(ctx context.Context, id string) paneTurn {
 			c.interrupt(ctx, run)
 			err := fmt.Errorf("no answer within %s", c.role.Timeout.Duration)
 			c.finish(ctx, run.ID, err)
-			return paneTurn{run: run, err: err}
+			return paneTurn{run: run, err: err, timedOut: true}
 		}
 		if err := c.d.Sleep(ctx, c.d.Poll); err != nil {
 			return paneTurn{run: run, err: err}

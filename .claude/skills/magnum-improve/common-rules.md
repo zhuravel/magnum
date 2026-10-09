@@ -8,8 +8,9 @@
   patterns, load them through `mise -C <main checkout> exec`; never print them or copy the file.
 - Commit on your worktree branch in the style of `git log`: one paragraph that says what changed and why, ending
   with "No new dependencies." when true. No attribution lines, no private names. Do not push.
-- Docs: one `docs/DECISIONS.md` entry per changed behavior (append; never rewrite an old entry), and README or config
-  comments for every new key, command or key binding.
+- Docs: one `docs/DECISIONS.md` entry per changed behavior (append it at the end of the section it belongs to, the
+  Operations section for most, never inside the last one, `## Learned rules`, which is the self-improving loop's;
+  never rewrite an old entry), and README or config comments for every new key, command or key binding.
 - A new migration takes the next free number on master when you commit.
 - Never run `bin/magnum`, herdr, launchctl, mysql, or git against any directory but your worktree. Never start a real
   agent session (codex, claude); `--help` is fine.

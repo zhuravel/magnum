@@ -186,28 +186,50 @@ func (e *Engine) noteBuild(ctx context.Context) {
 }
 
 // restartForBuild reports ErrRestartForBuild when a checked new build waits
-// (noteBuild) and nothing is in flight: no round is claiming, reviewing or
-// verifying, in the registry or in this process, and no notes curation or
-// retro runs (backgroundBusy). The binary must still be the one checked: a
-// newer one is checked again on the next reconcile.
+// (noteBuild), or ErrRestartForLearn when a landed skill version waits for
+// an idle restart (learnRestartDue, KVLearnRestart), and nothing is in
+// flight: no round is claiming, reviewing or verifying, in the registry or
+// in this process, and no notes curation, retro, skill edit or gate runs
+// (backgroundBusy). The binary must still be the one checked: a newer one
+// is checked again on the next reconcile. One restart serves both: the
+// next start marks the version restarted either way.
 func (e *Engine) restartForBuild(ctx context.Context) error {
-	w := e.builds
-	if w.pending.IsZero() || w.manual {
+	build := e.buildPending()
+	version, learn := e.learnRestartDue(ctx)
+	if !build && !learn {
 		return nil
 	}
-	if mt, ok := FileModTime(e.build.Path); !ok || !mt.Equal(w.pending) {
-		e.builds = buildWatch{}
-		return nil
-	}
-	if e.activeRounds() > 0 || e.backgroundBusy() != "" {
-		return nil
-	}
-	prs, err := e.st.ListPRs(ctx, store.PRFilter{States: store.InFlightStates})
-	if err != nil || len(prs) > 0 {
+	if e.activeRounds() > 0 || e.backgroundBusy() != "" || e.roundsInFlight(ctx) {
 		return nil
 	}
 	e.noteRetroRunning(ctx) // a retro that ran has ended: no CLI waits for it
-	e.setKV(ctx, kvRestartForBuild, e.build.Label())
-	e.log.Info(ErrRestartForBuild.Error(), "from", e.build.Label(), "to", w.version, "path", e.build.Path)
-	return ErrRestartForBuild
+	if build {
+		e.setKV(ctx, kvRestartForBuild, e.build.Label())
+		e.log.Info(ErrRestartForBuild.Error(), "from", e.build.Label(), "to", e.builds.version, "path", e.build.Path)
+		return ErrRestartForBuild
+	}
+	e.log.Info(ErrRestartForLearn.Error(), "version", version.Version, "proposal", version.Proposal)
+	return ErrRestartForLearn
+}
+
+// roundsInFlight reports whether the registry holds a PR whose round is
+// claiming, reviewing or verifying; a registry it cannot read counts as one
+// (no restart on an unknown).
+func (e *Engine) roundsInFlight(ctx context.Context) bool {
+	prs, err := e.st.ListPRs(ctx, store.PRFilter{States: store.InFlightStates})
+	return err != nil || len(prs) > 0
+}
+
+// buildPending reports whether a checked new build waits for the restart
+// (noteBuild) and is still the binary on disk; a newer one forgets it.
+func (e *Engine) buildPending() bool {
+	w := e.builds
+	if w.pending.IsZero() || w.manual {
+		return false
+	}
+	if mt, ok := FileModTime(e.build.Path); !ok || !mt.Equal(w.pending) {
+		e.builds = buildWatch{}
+		return false
+	}
+	return true
 }
