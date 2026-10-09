@@ -19,6 +19,7 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"embed"
@@ -27,7 +28,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -193,7 +194,7 @@ func mustLoadMigrations() []migration {
 		}
 		out = append(out, migration{version: v, name: e.Name(), sql: string(body)})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].version < out[j].version })
+	slices.SortFunc(out, func(a, b migration) int { return cmp.Compare(a.version, b.version) })
 	for i, m := range out {
 		if m.version != i+1 {
 			panic(fmt.Sprintf("store: migration %s: expected version %d", m.name, i+1))
@@ -286,8 +287,7 @@ const (
 
 // mapErr turns uniqueness violations into ErrConflict and keeps the rest.
 func mapErr(err error) error {
-	var se *sqlite.Error
-	if errors.As(err, &se) {
+	if se, ok := errors.AsType[*sqlite.Error](err); ok {
 		if c := se.Code(); c == sqliteConstraintUnique || c == sqliteConstraintPrimaryKey {
 			return fmt.Errorf("%w: %w", ErrConflict, err)
 		}
@@ -324,9 +324,6 @@ func ParseTime(s string) (time.Time, error) {
 // DayKey is the local calendar day of t ("2006-01-02"), the value stored in
 // prs.rounds_day next to rounds_today.
 func DayKey(t time.Time) string { return t.Local().Format("2006-01-02") }
-
-// Ptr returns a pointer to v (for nullable fields).
-func Ptr[T any](v T) *T { return &v }
 
 // Deref returns *p, or the zero value when p is nil.
 func Deref[T any](p *T) T {

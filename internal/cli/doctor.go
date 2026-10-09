@@ -167,16 +167,14 @@ func doctorRun(ctx context.Context, d doctorDeps) []doctorCheck {
 	out := make([][]doctorCheck, len(groups))
 	var wg sync.WaitGroup
 	for i, g := range groups {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			defer func() {
 				if r := recover(); r != nil {
 					out[i] = []doctorCheck{{Name: fmt.Sprintf("check %d", i), Status: doctorFail, Detail: fmt.Sprintf("check crashed: %v", r)}}
 				}
 			}()
 			out[i] = g(ctx, d)
-		}()
+		})
 	}
 	wg.Wait()
 	var all []doctorCheck

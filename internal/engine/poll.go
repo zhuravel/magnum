@@ -212,7 +212,7 @@ func (e *Engine) pollRepo(ctx context.Context, w config.Watch, gh GitHub, rr git
 		Mode: store.RepoModePerPR, DefaultBranch: existing.DefaultBranch}
 	staleClone := false
 	if pool := e.cfg.PoolFor(full); pool != nil {
-		repoRow.Mode, repoRow.DefaultBranch, repoRow.ClonePath = store.RepoModePool, pool.Base, store.Ptr(pool.MainClone)
+		repoRow.Mode, repoRow.DefaultBranch, repoRow.ClonePath = store.RepoModePool, pool.Base, new(pool.MainClone)
 	} else {
 		repoRow.ClonePath, staleClone = e.clonePath(ctx, w, existing, owner, name)
 	}
@@ -267,7 +267,7 @@ func (e *Engine) pollRepo(ctx context.Context, w config.Watch, gh GitHub, rr git
 	}
 
 	if firstSync && len(errs) == 0 {
-		repoRow.FirstSyncedAt = store.Ptr(now)
+		repoRow.FirstSyncedAt = new(now)
 		if _, err := e.st.UpsertRepo(ctx, repoRow); err != nil {
 			errs = append(errs, err)
 		} else {
@@ -353,14 +353,14 @@ func (e *Engine) applyRadarPRs(ctx context.Context, w config.Watch, gh GitHub, r
 		}
 		in := store.GitHubPR{
 			RepoID: repo.ID, NodeID: p.NodeID, Number: p.Number, HeadSHA: p.HeadRefOid, IsDraft: p.IsDraft,
-			URL: fmt.Sprintf("https://github.com/%s/pull/%d", full, p.Number), BaseRef: store.Ptr(p.BaseRefName),
+			URL: fmt.Sprintf("https://github.com/%s/pull/%d", full, p.Number), BaseRef: new(p.BaseRefName),
 			GHState: store.GHOpen, Identity: w.Identity,
 		}
 		if !p.UpdatedAt.IsZero() && (hasD || !needed[p.Number]) {
-			in.GHUpdatedAt = store.Ptr(p.UpdatedAt) // else: details missed, fetch them next poll
+			in.GHUpdatedAt = new(p.UpdatedAt) // else: details missed, fetch them next poll
 		}
 		if p.CIKnown {
-			in.CIState = store.Ptr(p.CIState) // fillDetails replaces it with the Details' (newer) one
+			in.CIState = new(p.CIState) // fillDetails replaces it with the Details' (newer) one
 		}
 		if exists {
 			in.URL = cur.URL
@@ -504,9 +504,9 @@ func fillDetails(in *store.GitHubPR, d github.PRDetails, logins []string, now ti
 	if d.URL != "" {
 		in.URL = d.URL
 	}
-	in.DetailsAt = store.Ptr(now)
+	in.DetailsAt = new(now)
 	if d.BaseRefOid != "" {
-		in.BaseSHA = store.Ptr(d.BaseRefOid)
+		in.BaseSHA = new(d.BaseRefOid)
 	}
 	in.Assignees = make([]string, 0, len(d.Assignees))
 	for _, a := range d.Assignees {
@@ -524,7 +524,7 @@ func fillDetails(in *store.GitHubPR, d github.PRDetails, logins []string, now ti
 	for _, r := range d.LatestReviews {
 		lr := store.LatestReview{Login: github.Account(r.AuthorLogin, r.AuthorType), State: r.State, CommitSHA: r.CommitOid}
 		if !r.SubmittedAt.IsZero() {
-			lr.SubmittedAt = store.Ptr(r.SubmittedAt.UTC())
+			lr.SubmittedAt = new(r.SubmittedAt.UTC())
 		}
 		in.LatestReviews = append(in.LatestReviews, lr)
 	}
@@ -536,20 +536,20 @@ func fillDetails(in *store.GitHubPR, d github.PRDetails, logins []string, now ti
 		}
 		in.ReviewRequests = append(in.ReviewRequests, store.ReviewRequest{At: ev.CreatedAt.UTC(), By: ev.Actor, To: to})
 	}
-	in.Title = store.Ptr(d.Title)
-	in.AuthorLogin = store.Ptr(d.AuthorLogin)
-	in.AuthorType = store.Ptr(d.AuthorType)
-	in.AuthorAssociation = store.Ptr(d.AuthorAssociation) // "" = fetched but unknown: never fetched again for it
-	in.HeadRef = store.Ptr(d.HeadRefName)
+	in.Title = new(d.Title)
+	in.AuthorLogin = new(d.AuthorLogin)
+	in.AuthorType = new(d.AuthorType)
+	in.AuthorAssociation = new(d.AuthorAssociation) // "" = fetched but unknown: never fetched again for it
+	in.HeadRef = new(d.HeadRefName)
 	in.CI = ciStatus(d)
-	in.CIState = store.Ptr(in.CI.State)
+	in.CIState = new(in.CI.State)
 	if d.BaseRefName != "" {
-		in.BaseRef = store.Ptr(d.BaseRefName)
+		in.BaseRef = new(d.BaseRefName)
 	}
-	in.IsCrossRepo = store.Ptr(d.IsCrossRepository)
+	in.IsCrossRepo = new(d.IsCrossRepository)
 	in.Files = prFiles(d)
 	if !d.ActivityAt.IsZero() {
-		in.ActivityAt = store.Ptr(d.ActivityAt) // the registry adds the head moves it saw
+		in.ActivityAt = new(d.ActivityAt) // the registry adds the head moves it saw
 	}
 	in.ReviewGate = reviewGate(d.ReviewGate)
 	labels := d.Labels
@@ -568,7 +568,7 @@ func fillDetails(in *store.GitHubPR, d github.PRDetails, logins []string, now ti
 			}
 		}
 	}
-	in.ReviewRequested = store.Ptr(req)
+	in.ReviewRequested = new(req)
 }
 
 // prFiles is the registry's file list of the Details' head (the related

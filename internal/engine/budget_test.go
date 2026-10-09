@@ -178,7 +178,7 @@ func TestBudgetSoftCapHoldsOnlyAutomaticFullReReviews(t *testing.T) {
 	h.startup()
 	h.tick()
 	rereview := func(mod func(j *roundJob)) *roundJob {
-		j := &roundJob{kind: pipeline.KindRereview, pr: store.PR{ReviewedSHA: store.Ptr("b1"), HeadSHA: "b2"}}
+		j := &roundJob{kind: pipeline.KindRereview, pr: store.PR{ReviewedSHA: new("b1"), HeadSHA: "b2"}}
 		if mod != nil {
 			mod(j)
 		}

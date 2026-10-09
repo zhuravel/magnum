@@ -365,7 +365,7 @@ func waitingOnHeavyLock(gids ...int64) bool {
 		buf = make([]byte, 2*len(buf))
 	}
 	blocked := map[int64]bool{}
-	for _, g := range strings.Split(string(buf), "\n\n") {
+	for g := range strings.SplitSeq(string(buf), "\n\n") {
 		for _, id := range gids {
 			if strings.HasPrefix(g, fmt.Sprintf("goroutine %d [select", id)) && strings.Contains(g, ".(*Manager).acquireHeavy(") {
 				blocked[id] = true

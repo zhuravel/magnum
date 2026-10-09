@@ -307,7 +307,7 @@ func mergeDefined(dst, src reflect.Value, path []string, defined func([]string) 
 	t := dst.Type()
 	for i := range t.NumField() {
 		f := t.Field(i)
-		tag := strings.Split(f.Tag.Get("toml"), ",")[0]
+		tag, _, _ := strings.Cut(f.Tag.Get("toml"), ",")
 		if tag == "" || tag == "-" {
 			continue
 		}

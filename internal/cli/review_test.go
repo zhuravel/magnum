@@ -591,7 +591,7 @@ func TestReviewFreshFocusWaitsForTheNewJudgeSession(t *testing.T) {
 	h := newActHarness(t)
 	pr := h.seedPR("talkable/talkable", 5, store.PRQueued)
 	old, err := h.st.CreateSession(h.ctx, store.Session{PRID: pr.ID, Role: store.RoleJudge, State: store.SessionLive,
-		AgentName: store.Ptr("judge-old"), HerdrPaneID: store.Ptr("p_old"), StartedAt: h.now.Add(-time.Hour)})
+		AgentName: new("judge-old"), HerdrPaneID: new("p_old"), StartedAt: h.now.Add(-time.Hour)})
 	if err != nil {
 		t.Fatal(err)
 	}

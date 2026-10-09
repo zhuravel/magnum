@@ -1,10 +1,10 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"slices"
-	"sort"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -265,14 +265,8 @@ func attentionCollect(ctx context.Context, d *actDeps) ([]attentionItem, error) 
 	}
 
 	// One item per pane: the most urgent tier wins.
-	sort.SliceStable(items, func(i, j int) bool {
-		if items[i].Tier != items[j].Tier {
-			return items[i].Tier < items[j].Tier
-		}
-		if !items[i].Since.Equal(items[j].Since) {
-			return items[i].Since.Before(items[j].Since)
-		}
-		return items[i].PR < items[j].PR
+	slices.SortStableFunc(items, func(a, b attentionItem) int {
+		return cmp.Or(cmp.Compare(a.Tier, b.Tier), a.Since.Compare(b.Since), cmp.Compare(a.PR, b.PR))
 	})
 	out := items[:0]
 	panes := map[string]bool{}

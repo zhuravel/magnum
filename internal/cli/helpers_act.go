@@ -25,7 +25,6 @@ import (
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/app"
-	"github.com/zhuravel/magnum/internal/cleanup"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/execx"
@@ -58,12 +57,6 @@ type actGitHub interface {
 	Details(ctx context.Context, owner, repo string, numbers []int) (map[int]github.PRDetails, []int, error)
 }
 
-// actCleaner plans and applies a release in-process (*cleanup.Planner).
-type actCleaner interface {
-	Plan(ctx context.Context, opts cleanup.Options) (cleanup.Plan, error)
-	Apply(ctx context.Context, plan cleanup.Plan, confirmed bool) (cleanup.Report, error)
-}
-
 // actDeps is everything the act commands touch. actNewDeps builds it from
 // app.New; tests replace actNewDeps with fakes.
 type actDeps struct {
@@ -85,7 +78,7 @@ type actDeps struct {
 	Run     execx.Runner
 	TTY     execx.Runner
 	Reveal  func(ctx context.Context, opts reveal.Options) (reveal.Outcome, error)
-	Cleanup actCleaner
+	Cleanup cleanupPlanner
 
 	Kick func() (int, error)                              // engine.KickDaemon
 	Lock func() (unlock func(), who opsHolder, err error) // acquireOps(layout)
@@ -771,8 +764,7 @@ func (r actTTYRunner) Run(ctx context.Context, c execx.Cmd) (execx.Result, error
 	err := cmd.Run()
 	res := execx.Result{Stdout: out.Bytes(), Duration: time.Since(start)}
 	if err != nil {
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
+		if ee, ok := errors.AsType[*exec.ExitError](err); ok {
 			res.Code = ee.ExitCode()
 			return res, &execx.ExitError{Cmd: c, Code: res.Code}
 		}

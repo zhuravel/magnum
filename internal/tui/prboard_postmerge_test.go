@@ -292,7 +292,7 @@ func TestPRBoardHelpMentionsPostMergeReview(t *testing.T) {
 	m, _, _ := newBoard(t, 120, 40, PRBoardOptions{})
 	m, _ = send(t, m, keyMsg("?"))
 	mustContain(t, viewOf(m), "review now (asks y/N); post-merge if merged")
-	for _, l := range strings.Split(viewOf(m), "\n") {
+	for l := range strings.SplitSeq(viewOf(m), "\n") {
 		if strings.Contains(l, "review now (asks y/N)") && !strings.Contains(l, "Move and view") && !strings.Contains(l, "j/k") {
 			t.Errorf("the help stacked its columns, the r line stands alone: %q", l)
 		}

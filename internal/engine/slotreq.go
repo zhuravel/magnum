@@ -67,7 +67,7 @@ func (e *Engine) provisionSlots(ctx context.Context, pool config.Pool, count int
 		return "", fmt.Errorf("%s allows at most %d slots and has %d; lower --count or raise max in config.toml", pool.Repo, pool.Max, live)
 	}
 	var done []string
-	for i := 0; i < count; i++ {
+	for range count {
 		var n int
 		if len(resumable) > 0 {
 			n, resumable = resumable[0], resumable[1:]

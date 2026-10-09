@@ -159,7 +159,7 @@ func boardAct(t *testing.T, m prBoardModel, names ...string) (prBoardModel, []te
 // lineWith is the first line of view holding s.
 func lineWith(t *testing.T, view, s string) string {
 	t.Helper()
-	for _, l := range strings.Split(view, "\n") {
+	for l := range strings.SplitSeq(view, "\n") {
 		if strings.Contains(ansi.Strip(l), s) {
 			return l
 		}
@@ -327,7 +327,7 @@ func TestPRBoardNoLineOverflows(t *testing.T) {
 	mustContain(t, viewOf(m), "Fresh review", "y/N")
 	// a narrow title bar sheds words, not the sort
 	n, _, _ := newBoard(t, 70, 20, PRBoardOptions{})
-	title := strings.Split(viewOf(n), "\n")[0]
+	title, _, _ := strings.Cut(viewOf(n), "\n")
 	mustContain(t, title, "6 open", "updated ↓")
 	mustNotContain(t, title, "all repos")
 }
@@ -365,7 +365,7 @@ func TestPRBoardHelpFitsAndScrolls(t *testing.T) {
 	m, _, _ := newBoard(t, 100, 30, PRBoardOptions{})
 	m, _ = send(t, m, keyMsg("?"))
 	var box []string
-	for _, l := range strings.Split(viewOf(m), "\n") {
+	for l := range strings.SplitSeq(viewOf(m), "\n") {
 		if s := strings.TrimSpace(l); strings.HasPrefix(s, "│") {
 			box = append(box, s)
 		}
@@ -844,8 +844,6 @@ func hasStyled(raw string, st lipgloss.Style, text string) bool {
 	return false
 }
 
-var _ sync.Locker = (*sync.Mutex)(nil)
-
 func TestPRBoardHelpNamesTheJudge(t *testing.T) {
 	m, _, _ := newBoard(t, 140, 60, PRBoardOptions{Judge: "codex-judge"})
 	m, _ = send(t, m, keyMsg("?"))
@@ -1007,7 +1005,7 @@ func TestPRBoardIgnoredRowsAreStruckAndUnmutedWithU(t *testing.T) {
 	m, _ = send(t, m, prbDataMsg{rows: []PRBoardRow{ignored}})
 
 	var row string
-	for _, l := range strings.Split(m.View().Content, "\n") {
+	for l := range strings.SplitSeq(m.View().Content, "\n") {
 		if strings.Contains(l, "#7") {
 			row = l
 		}

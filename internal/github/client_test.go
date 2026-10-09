@@ -167,8 +167,7 @@ func TestExitWithoutJSONKeepsStderr(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "error connecting to api.github.com") {
 		t.Fatalf("err = %v", err)
 	}
-	var exitErr *execx.ExitError
-	if !errors.As(err, &exitErr) {
+	if _, ok := errors.AsType[*execx.ExitError](err); !ok {
 		t.Error("transport failures should wrap the execx.ExitError")
 	}
 }

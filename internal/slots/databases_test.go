@@ -86,10 +86,10 @@ func TestSlotDBSlug(t *testing.T) {
 		sl   store.Slot
 		want string
 	}{
-		{store.Slot{Name: "review3", DBSlug: store.Ptr("review3")}, "review3"},
+		{store.Slot{Name: "review3", DBSlug: new("review3")}, "review3"},
 		{store.Slot{Name: "review3"}, "review3"},
 		{store.Slot{Name: "zhuravel/widget#7"}, "zhuravel_widget_7"},
-		{store.Slot{Name: "zhuravel/widget#7", DBSlug: store.Ptr(" magnum_pr_7 ")}, "magnum_pr_7"},
+		{store.Slot{Name: "zhuravel/widget#7", DBSlug: new(" magnum_pr_7 ")}, "magnum_pr_7"},
 	}
 	for _, c := range cases {
 		if got := SlotDBSlug(c.sl); got != c.want {

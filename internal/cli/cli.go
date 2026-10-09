@@ -131,8 +131,7 @@ func execute(c *Context, args []string) int {
 	if err == nil {
 		return 0
 	}
-	var code exitCode
-	if errors.As(err, &code) {
+	if code, ok := errors.AsType[exitCode](err); ok {
 		return int(code)
 	}
 	// cobra's own errors: an unknown command or flag, a bad flag value.
@@ -187,7 +186,7 @@ func wrapText(s string, width int) string {
 	for i, p := range paras {
 		var b strings.Builder
 		col := 0
-		for _, w := range strings.Fields(p) {
+		for w := range strings.FieldsSeq(p) {
 			switch {
 			case col == 0:
 			case col+1+len(w) > width:

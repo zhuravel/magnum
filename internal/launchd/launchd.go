@@ -14,8 +14,9 @@ package launchd
 import (
 	"bytes"
 	"fmt"
+	"maps"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"unicode/utf8"
 )
@@ -101,12 +102,7 @@ func Plist(opts Options) []byte {
 	if len(opts.Env) > 0 {
 		key("EnvironmentVariables")
 		b.WriteString("\t<dict>\n")
-		names := make([]string, 0, len(opts.Env))
-		for k := range opts.Env {
-			names = append(names, k)
-		}
-		sort.Strings(names)
-		for _, k := range names {
+		for _, k := range slices.Sorted(maps.Keys(opts.Env)) {
 			fmt.Fprintf(&b, "\t\t<key>%s</key>\n\t\t<string>%s</string>\n", escapeXML(k), escapeXML(opts.Env[k]))
 		}
 		b.WriteString("\t</dict>\n")

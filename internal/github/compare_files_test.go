@@ -20,7 +20,7 @@ func compareFilesClient(body string) (*Client, *execx.Fake) {
 // listingOf builds a compare response with n files, each carrying a patch.
 func listingOf(n int) string {
 	var files []string
-	for i := 0; i < n; i++ {
+	for i := range n {
 		files = append(files, fmt.Sprintf(`{"filename":"app/f%d.rb","status":"modified","patch":"@@ -1 +1 @@\n-a\n+b"}`, i))
 	}
 	return `{"files":[` + strings.Join(files, ",") + `]}`

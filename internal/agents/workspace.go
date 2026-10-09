@@ -210,9 +210,7 @@ func (m *Manager) EnsurePane(ctx context.Context, pr store.PR, ws Workspace, slo
 	r := Role(role.Name)
 	out := ws
 	out.Panes = make(map[Role]string, len(ws.Panes)+1)
-	for k, p := range ws.Panes {
-		out.Panes[k] = p
-	}
+	maps.Copy(out.Panes, ws.Panes)
 	out.Roles = slices.Clone(ws.Roles)
 	if !slices.Contains(out.Roles, r) {
 		out.Roles = append(out.Roles, r)
@@ -393,13 +391,13 @@ func (m *Manager) recordPane(ctx context.Context, pr store.PR, ws Workspace, rol
 		State:            store.SessionStarting,
 	}
 	if role.IsShell() {
-		x.AgentKind = store.Ptr(KindShell)
+		x.AgentKind = new(KindShell)
 	} else {
 		name, err := m.agentName(ctx, pr, r)
 		if err != nil {
 			return err
 		}
-		x.AgentName, x.AgentKind = &name, store.Ptr(role.AgentKind())
+		x.AgentName, x.AgentKind = &name, new(role.AgentKind())
 	}
 	if _, err := m.d.Store.CreateSession(ctx, x); err != nil {
 		return fmt.Errorf("agents: session pr %d %s: %w", pr.Number, r, err)
@@ -430,8 +428,8 @@ func (m *Manager) markLost(ctx context.Context, s store.Session) error {
 // reusableWorkspace picks the workspace of the newest starting/live/lost
 // session that herdr still has.
 func reusableWorkspace(snap herdr.Snapshot, sessions []store.Session) (wsID, tabID, cwd string) {
-	for i := len(sessions) - 1; i >= 0; i-- {
-		s := sessions[i]
+	for _, s := range slices.Backward(sessions) {
+
 		if !isLive(s) && s.State != store.SessionLost {
 			continue
 		}
@@ -444,9 +442,9 @@ func reusableWorkspace(snap herdr.Snapshot, sessions []store.Session) (wsID, tab
 
 // latest returns the newest session of role matching keep.
 func latest(sessions []store.Session, role Role, keep func(store.Session) bool) (store.Session, bool) {
-	for i := len(sessions) - 1; i >= 0; i-- {
-		if sessions[i].Role == string(role) && keep(sessions[i]) {
-			return sessions[i], true
+	for _, session := range slices.Backward(sessions) {
+		if session.Role == string(role) && keep(session) {
+			return session, true
 		}
 	}
 	return store.Session{}, false

@@ -70,8 +70,7 @@ func depsSignature(err error, slotName, slotPath string) string {
 	if i := strings.Index(sig, depsStepMarker); i >= 0 {
 		sig = sig[i:]
 	}
-	var xe *execx.ExitError
-	if errors.As(err, &xe) {
+	if xe, ok := errors.AsType[*execx.ExitError](err); ok {
 		last := ""
 		for l := range strings.Lines(execx.Redact(xe.Stderr)) {
 			if t := strings.TrimSpace(l); t != "" {

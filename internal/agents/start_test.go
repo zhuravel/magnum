@@ -243,7 +243,7 @@ func TestAFreshStartNeverAdoptsTheConversationMagnumParked(t *testing.T) {
 		t.Run(label, func(t *testing.T) {
 			e := newEnv(t)
 			if _, err := e.st.CreateSession(e.ctx, store.Session{PRID: e.pr.ID, Role: string(RoleJudge), AgentName: &name,
-				AgentKind: store.Ptr(KindCodex), SessionID: store.Ptr("01a0-uuid"), State: store.SessionParked}); err != nil {
+				AgentKind: new(KindCodex), SessionID: new("01a0-uuid"), State: store.SessionParked}); err != nil {
 				t.Fatal(err)
 			}
 			ws := e.workspace()

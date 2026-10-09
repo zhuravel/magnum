@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -378,8 +379,8 @@ type members []member
 // index is the position of the last member named key (the one JSON parsers
 // keep), -1 when absent.
 func (ms members) index(key string) int {
-	for i := len(ms) - 1; i >= 0; i-- {
-		if ms[i].key == key {
+	for i, m := range slices.Backward(ms) {
+		if m.key == key {
 			return i
 		}
 	}
@@ -442,7 +443,7 @@ func parseObject(data []byte) (members, error) {
 	if _, err := dec.Token(); err != nil { // the closing brace
 		return nil, err
 	}
-	if _, err := dec.Token(); err != io.EOF {
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
 		return nil, errors.New("trailing data after the JSON object")
 	}
 	return out, nil

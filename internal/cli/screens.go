@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 
@@ -98,8 +99,8 @@ func (b *actCapture) empty() bool {
 // lastLine is the last non-empty line of s, trimmed.
 func lastLine(s string) string {
 	lines := strings.Split(strings.TrimSpace(s), "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		if l := strings.TrimSpace(lines[i]); l != "" {
+	for _, line := range slices.Backward(lines) {
+		if l := strings.TrimSpace(line); l != "" {
 			return l
 		}
 	}

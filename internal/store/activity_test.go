@@ -77,7 +77,7 @@ func TestUpsertKeepsTheLastActivity(t *testing.T) {
 	ctx := context.Background()
 	repo := mustRepo(t, st)
 	in := GitHubPR{RepoID: repo.ID, NodeID: "PR_7", Number: 7, URL: "u7", HeadSHA: "h1", GHState: GHOpen,
-		GHUpdatedAt: Ptr(t0), InitialState: PRBaseline, Identity: "talkable-app"}
+		GHUpdatedAt: new(t0), InitialState: PRBaseline, Identity: "talkable-app"}
 	res, err := st.UpsertPRFromGitHub(ctx, in)
 	if err != nil {
 		t.Fatal(err)
@@ -106,7 +106,7 @@ func TestUpsertKeepsTheLastActivity(t *testing.T) {
 	// The Details' activity (a comment three days ago) for an unchanged
 	// updatedAt: written, not a change. The insertion was no push.
 	clk.Add(time.Hour)
-	in.ActivityAt = Ptr(t0.Add(-72 * time.Hour))
+	in.ActivityAt = new(t0.Add(-72 * time.Hour))
 	if res, err = st.UpsertPRFromGitHub(ctx, in); err != nil || res.Changed {
 		t.Fatalf("activity only: changed %v, %v", res.Changed, err)
 	}
@@ -114,7 +114,7 @@ func TestUpsertKeepsTheLastActivity(t *testing.T) {
 
 	// A push the poller sees now, whose commit is dated two days ago.
 	clk.Add(time.Hour)
-	in.HeadSHA, in.ActivityAt = "h2", Ptr(t0.Add(-48*time.Hour))
+	in.HeadSHA, in.ActivityAt = "h2", new(t0.Add(-48*time.Hour))
 	if res, err = st.UpsertPRFromGitHub(ctx, in); err != nil || !res.HeadChanged {
 		t.Fatalf("push: head changed %v, %v", res.HeadChanged, err)
 	}
@@ -123,14 +123,14 @@ func TestUpsertKeepsTheLastActivity(t *testing.T) {
 
 	// Later Details with the same activity keep the push.
 	clk.Add(time.Hour)
-	in.GHUpdatedAt = Ptr(t0.Add(3 * time.Hour)) // a project field moved: no activity
+	in.GHUpdatedAt = new(t0.Add(3 * time.Hour)) // a project field moved: no activity
 	if _, err = st.UpsertPRFromGitHub(ctx, in); err != nil {
 		t.Fatal(err)
 	}
 	check("invisible change", pushed)
 
 	// A comment after the push.
-	in.ActivityAt = Ptr(t0.Add(3 * time.Hour))
+	in.ActivityAt = new(t0.Add(3 * time.Hour))
 	if _, err = st.UpsertPRFromGitHub(ctx, in); err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +151,7 @@ func TestUpsertKeepsTheLastActivity(t *testing.T) {
 
 	// A PR inserted with its Details has their activity.
 	res, err = st.UpsertPRFromGitHub(ctx, GitHubPR{RepoID: repo.ID, NodeID: "PR_8", Number: 8, URL: "u8", HeadSHA: "h8",
-		GHState: GHOpen, GHUpdatedAt: Ptr(t0), ActivityAt: Ptr(t0.Add(-240 * time.Hour)), InitialState: PRQueued, Identity: "talkable-app"})
+		GHState: GHOpen, GHUpdatedAt: new(t0), ActivityAt: new(t0.Add(-240 * time.Hour)), InitialState: PRQueued, Identity: "talkable-app"})
 	if err != nil || res.PR.ActivityAt == nil || !res.PR.ActivityAt.Equal(t0.Add(-240*time.Hour)) {
 		t.Fatalf("inserted with Details: activity %v, %v", res.PR.ActivityAt, err)
 	}
@@ -166,15 +166,15 @@ func TestBoardOrdersByTheActivityTime(t *testing.T) {
 	upsert := func(n int, updated time.Time, activity *time.Time) {
 		t.Helper()
 		if _, err := st.UpsertPRFromGitHub(ctx, GitHubPR{RepoID: repo.ID, NodeID: "PR_" + itoa(int64(n)), Number: n,
-			URL: "u" + itoa(int64(n)), HeadSHA: "h" + itoa(int64(n)), GHState: GHOpen, GHUpdatedAt: Ptr(updated), ActivityAt: activity,
+			URL: "u" + itoa(int64(n)), HeadSHA: "h" + itoa(int64(n)), GHState: GHOpen, GHUpdatedAt: new(updated), ActivityAt: activity,
 			InitialState: PRQueued, Identity: "talkable-app"}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	upsert(1, t0, Ptr(t0.Add(-120*time.Hour)))                    // only an invisible change since five days
-	upsert(2, t0.Add(-time.Hour), Ptr(t0.Add(-time.Hour)))        // a comment an hour ago
+	upsert(1, t0, new(t0.Add(-120*time.Hour)))                    // only an invisible change since five days
+	upsert(2, t0.Add(-time.Hour), new(t0.Add(-time.Hour)))        // a comment an hour ago
 	upsert(3, t0.Add(-2*time.Hour), nil)                          // not read yet
-	upsert(4, t0.Add(-30*time.Minute), Ptr(t0.Add(-3*time.Hour))) // a label three hours ago
+	upsert(4, t0.Add(-30*time.Minute), new(t0.Add(-3*time.Hour))) // a label three hours ago
 	rows, err := st.Board(ctx, BoardFilter{})
 	if err != nil {
 		t.Fatal(err)

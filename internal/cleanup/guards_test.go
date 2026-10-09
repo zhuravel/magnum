@@ -312,11 +312,11 @@ func TestShrinkIgnoresUnusableSlots(t *testing.T) {
 	f.poolSlot("review6", store.SlotRemoving, 0, true, nil)
 
 	// Only the two free slots hold capacity: pool.min 2 keeps both.
-	if p := f.plan(Options{Shrink: store.Ptr(0)}); len(p.Actions) != 0 {
+	if p := f.plan(Options{Shrink: new(0)}); len(p.Actions) != 0 {
 		t.Fatalf("shrink 0 over 2 usable slots = %+v", p.Actions)
 	}
 	f.poolSlot("review7", store.SlotFree, 0, true, nil)
-	if rm := actionsOf(f.plan(Options{Shrink: store.Ptr(0)}), KindRemoveSlot); len(rm) != 1 {
+	if rm := actionsOf(f.plan(Options{Shrink: new(0)}), KindRemoveSlot); len(rm) != 1 {
 		t.Fatalf("shrink 0 over 3 usable slots = %+v", rm)
 	}
 }
@@ -327,7 +327,7 @@ func TestShrinkCountsExplicitRemoval(t *testing.T) {
 	f.poolSlot("review2", store.SlotFree, 0, true, nil)
 	f.poolSlot("review3", store.SlotFree, 0, true, nil)
 
-	p := f.plan(Options{Slot: "review2", Remove: true, Shrink: store.Ptr(2)})
+	p := f.plan(Options{Slot: "review2", Remove: true, Shrink: new(2)})
 	rm := actionsOf(p, KindRemoveSlot)
 	if len(p.Actions) != 1 || len(rm) != 1 || rm[0].Slot != "review2" || rm[0].Why != "requested" {
 		t.Fatalf("plan = %+v", p.Actions)

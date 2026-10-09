@@ -291,7 +291,7 @@ func (d *Defect) validate(ctx string, p *problems) {
 
 // regexps returns the compiled Match. A defect built by hand rather than parsed gets them compiled
 // here; one that does not compile never matches.
-func (d Defect) regexps() []*regexp.Regexp {
+func (d *Defect) regexps() []*regexp.Regexp {
 	if len(d.res) == len(d.Match) {
 		return d.res
 	}

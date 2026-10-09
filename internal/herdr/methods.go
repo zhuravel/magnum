@@ -3,7 +3,8 @@ package herdr
 import (
 	"context"
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -53,13 +54,8 @@ func cliSource(s string) string { return strings.ReplaceAll(s, "_", "-") }
 // pattern-based redaction would recognise): each shows as KEY=<redacted>.
 // The socket payload keeps the real values.
 func envFlags(env map[string]string) []string {
-	keys := make([]string, 0, len(env))
-	for k := range env {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
 	var out []string
-	for _, k := range keys {
+	for _, k := range slices.Sorted(maps.Keys(env)) {
 		out = append(out, "--env", k+"=<redacted>")
 	}
 	return out
@@ -136,12 +132,7 @@ func (c *Client) WorkspaceReportMetadata(ctx context.Context, workspaceID, sourc
 		TTLMS       int64             `json:"ttl_ms,omitempty"`
 	}{workspaceID, source, tokens, ms(ttl)}
 	args := []string{"workspace", "report-metadata", workspaceID, "--source", source}
-	keys := make([]string, 0, len(tokens))
-	for k := range tokens {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
+	for _, k := range slices.Sorted(maps.Keys(tokens)) {
 		args = append(args, "--token", k+"="+tokens[k])
 	}
 	if ttl > 0 {

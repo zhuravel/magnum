@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/fsx"
 )
@@ -295,10 +296,8 @@ func declaresHooks(v any) bool {
 			}
 		}
 	case []any:
-		for _, sub := range x {
-			if declaresHooks(sub) {
-				return true
-			}
+		if slices.ContainsFunc(x, declaresHooks) {
+			return true
 		}
 	}
 	return false

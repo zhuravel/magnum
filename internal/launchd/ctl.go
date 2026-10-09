@@ -164,8 +164,7 @@ func bootstrapEvidence(ctx context.Context, run execx.Runner, uid int, label str
 		Timeout: launchctlTimeout,
 		Label:   "launchctl print",
 	})
-	var ee *execx.ExitError
-	if errors.As(err, &ee) {
+	if _, ok := errors.AsType[*execx.ExitError](err); ok {
 		return fmt.Sprintf("; `launchctl print %s` also fails, so the domain may not exist "+
 			"(is there a console login session? log in on the console, then re-install)", domain(uid))
 	}

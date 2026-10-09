@@ -2,12 +2,13 @@ package pipeline
 
 import (
 	"fmt"
-	"github.com/zhuravel/magnum/internal/config"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/zhuravel/magnum/internal/config"
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/store"

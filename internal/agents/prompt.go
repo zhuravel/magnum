@@ -50,7 +50,7 @@ func (m *Manager) NewRun(ctx context.Context, pr store.PR, role Role, kind strin
 	r := store.Run{
 		PRID: pr.ID, Round: round, Role: string(role), Kind: kind, TargetSHA: pr.HeadSHA,
 		PrevReviewedSHA: pr.ReviewedSHA, Identity: pr.Identity, ReviewerLogin: login, State: store.RunPending,
-		ReportPath: store.Ptr(filepath.Join(m.d.Layout.ReviewDir(repo.Owner, repo.Name, pr.Number, pr.HeadSHA), report)),
+		ReportPath: new(filepath.Join(m.d.Layout.ReviewDir(repo.Owner, repo.Name, pr.Number, pr.HeadSHA), report)),
 	}
 	if s, err := m.d.Store.LiveSessionByPRRole(ctx, pr.ID, string(role)); err == nil {
 		r.SessionID = &s.ID

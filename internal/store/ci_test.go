@@ -75,7 +75,7 @@ func TestUpsertPRCI(t *testing.T) {
 		t.Fatalf("Tally = %+v", pending)
 	}
 	in := GitHubPR{RepoID: repo.ID, NodeID: "PR_9", Number: 9, URL: "u9", HeadSHA: "h1", InitialState: PRQueued, Identity: "talkable-app",
-		DetailsAt: Ptr(t0), CIState: Ptr("PENDING"), CI: pending}
+		DetailsAt: new(t0), CIState: new("PENDING"), CI: pending}
 	res, err := st.UpsertPRFromGitHub(ctx, in)
 	if err != nil || !res.New {
 		t.Fatalf("insert = %+v, %v", res, err)
@@ -86,14 +86,14 @@ func TestUpsertPRCI(t *testing.T) {
 
 	// The same CI again: nothing written.
 	c.Add(time.Minute)
-	in.DetailsAt = Ptr(t0.Add(time.Minute))
+	in.DetailsAt = new(t0.Add(time.Minute))
 	in.CI = ciFixture("h1", "PENDING", pending.Checks...)
 	if res, err = st.UpsertPRFromGitHub(ctx, in); err != nil || res.Changed || !res.PR.UpdatedAt.Equal(t0) || !res.PR.DetailsAt.Equal(t0) {
 		t.Fatalf("no-op CI refresh = %+v, %v", res, err)
 	}
 
 	// The radar alone moves ci_state; ci_json stays.
-	radar := GitHubPR{RepoID: repo.ID, NodeID: "PR_9", Number: 9, URL: "u9", HeadSHA: "h1", CIState: Ptr("FAILURE")}
+	radar := GitHubPR{RepoID: repo.ID, NodeID: "PR_9", Number: 9, URL: "u9", HeadSHA: "h1", CIState: new("FAILURE")}
 	if res, err = st.UpsertPRFromGitHub(ctx, radar); err != nil || res.Changed || res.HeadChanged {
 		t.Fatalf("radar CI = %+v, %v", res, err)
 	}
@@ -106,7 +106,7 @@ func TestUpsertPRCI(t *testing.T) {
 	failed := ciFixture("h1", "FAILURE", CheckResult{Name: "rspec (1)", State: CheckPassed, Workflow: "CI", At: t0.Add(-time.Hour)},
 		CheckResult{Name: "jest", State: CheckFailed, Workflow: "CI", At: t0.Add(time.Minute)},
 		CheckResult{Name: "completion", State: CheckPending, At: t0}, CheckResult{Name: "deploy-preview", State: CheckSkipped, Workflow: "CI"})
-	in.CI, in.CIState, in.DetailsAt = failed, Ptr("FAILURE"), Ptr(t0.Add(2*time.Minute))
+	in.CI, in.CIState, in.DetailsAt = failed, new("FAILURE"), new(t0.Add(2*time.Minute))
 	if res, err = st.UpsertPRFromGitHub(ctx, in); err != nil || res.Changed {
 		t.Fatalf("CI change = %+v, %v", res, err)
 	}
@@ -121,7 +121,7 @@ func TestUpsertPRCI(t *testing.T) {
 		t.Fatalf("nil CI = %+v, %v", res.PR, err)
 	}
 	none := ciFixture("h2", "")
-	in.HeadSHA, in.CI, in.CIState = "h2", none, Ptr("")
+	in.HeadSHA, in.CI, in.CIState = "h2", none, new("")
 	if res, err = st.UpsertPRFromGitHub(ctx, in); err != nil || !res.HeadChanged {
 		t.Fatalf("push = %+v, %v", res, err)
 	}
@@ -136,7 +136,7 @@ func TestUpsertPRCI(t *testing.T) {
 	if rows[0].CIState != "" || rows[0].CI == nil || !reflect.DeepEqual(*rows[0].CI, *none) {
 		t.Fatalf("board CI = %q %+v", rows[0].CIState, rows[0].CI)
 	}
-	in.CI, in.CIState = failed, Ptr("FAILURE")
+	in.CI, in.CIState = failed, new("FAILURE")
 	if _, err := st.UpsertPRFromGitHub(ctx, in); err != nil {
 		t.Fatal(err)
 	}

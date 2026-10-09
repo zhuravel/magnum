@@ -5085,3 +5085,22 @@ editing history. Code, config comments and prompts reference these by their head
   into store (it exports 14 names only the engine uses, and parts each value format from the engine type
   that encodes it, such as Wait and Stalemate); keeping engine.KV* aliases for the CLI (a second name for
   one key is what had drifted).
+- **One modernize sweep, the tools first** (2026-10-09, after the lint and documentation audits).
+  golangci-lint counted 690 issues, 430 of them modernize and 28 intrange. `go fix` applied twelve of its
+  analyzers in two passes: newexpr, errorsastype, stringsseq, slicesbackward, rangeint, slicescontains,
+  stringscut, stringscutprefix, mapsloop, waitgroupgo, stditerators and reflecttypefor. The second pass
+  inlined the pointer helpers newexpr had marked `//go:fix inline`, and the eight it left unused are
+  deleted: store.Ptr (248 callers, the last four converted by hand) and seven test helpers. `make
+  lint-fix` finished the intrange loops and the imports. By hand: MergeEnv's and ErrUnsafeBaseRef's doc
+  comments and the paths.Layout accessors' docs; roundJob.hasSlot; one cleanup interface in the CLI
+  (cleanupPlanner); autoPosted without its unused summary and heavyRequest without its unused context; no
+  timer drain after Stop in the daemon loop (Go 1.23 timers); slices.Sort, SortFunc, SortStableFunc and
+  Sorted(maps.Keys) for sort.*; errors.Is for os.IsNotExist and io.EOF in production code;
+  slog.NewMultiHandler for app's own multiHandler; pointer receivers on eval.Defect; reveal's revealer
+  unexported (callers use reveal.Reveal); and Engine.inflight beside mu, which guards it. 212 issues
+  remain, none modernize or intrange. Refused: embedlit (explicit embedded type names, and a field set
+  after the literal, read better) and stringsbuilder (short UI and SQL strings built with += read better
+  than a Builder); `make lint-fix` applied both anyway, so the hunks were reverted and .golangci.yml now
+  turns both off for every file. Test files keep os.IsNotExist. No behaviour changed; the one visible
+  difference is that when both log handlers fail, Handle returns both errors joined, which slog.Logger
+  discards.

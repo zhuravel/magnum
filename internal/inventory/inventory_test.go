@@ -136,7 +136,7 @@ func TestUnknownPerPRDir(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
 	clone := f.mkrepo("tool")
-	if _, err := f.st.UpsertRepo(ctx, store.Repo{NodeID: "R_tool", Owner: "zhuravel", Name: "tool", Mode: store.RepoModePerPR, ClonePath: store.Ptr(clone)}); err != nil {
+	if _, err := f.st.UpsertRepo(ctx, store.Repo{NodeID: "R_tool", Owner: "zhuravel", Name: "tool", Mode: store.RepoModePerPR, ClonePath: new(clone)}); err != nil {
 		t.Fatal(err)
 	}
 	f.git.lists[clone] = []gitx.Worktree{{Path: clone, Head: sha("t"), Branch: "main"}}
@@ -159,7 +159,7 @@ func TestCloneDiscovery(t *testing.T) {
 	f.mkdir("widgets")
 	real := f.mkrepo("zhuravel-widgets")
 	for _, r := range []store.Repo{
-		{NodeID: "R_tb", Owner: "zhuravel", Name: "widgets", Mode: store.RepoModePerPR, ClonePath: store.Ptr(f.path("widgets"))},
+		{NodeID: "R_tb", Owner: "zhuravel", Name: "widgets", Mode: store.RepoModePerPR, ClonePath: new(f.path("widgets"))},
 		{NodeID: "R_ms", Owner: "zhuravel", Name: "marketplace", Mode: store.RepoModePerPR}, // never cloned
 	} {
 		if _, err := f.st.UpsertRepo(ctx, r); err != nil {
@@ -223,8 +223,8 @@ func TestForeignAgentInManagedSlot(t *testing.T) {
 	f.claim(pr.ID, "review1")
 	f.worktree(gitx.Worktree{Path: f.path("talkable.review1"), Head: sha("h"), Detached: true})
 	if _, err := f.st.CreateSession(ctx, store.Session{
-		PRID: pr.ID, Role: store.RoleJudge, AgentName: store.Ptr("mg-talkable-11920-judge"),
-		HerdrPaneID: store.Ptr("w9:p1"), State: store.SessionLive,
+		PRID: pr.ID, Role: store.RoleJudge, AgentName: new("mg-talkable-11920-judge"),
+		HerdrPaneID: new("w9:p1"), State: store.SessionLive,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -458,7 +458,7 @@ func TestExternalGitHubStatesBatchedPerRepo(t *testing.T) {
 	f.worktree(gitx.Worktree{Path: f.path("talkable.repo7"), Head: sha("r7"), Branch: "e-PR-99999-x"}) // guess, not found
 	// a per-PR repo with its own clone and one external worktree
 	clone := f.mkrepo("tool")
-	if _, err := f.st.UpsertRepo(ctx, store.Repo{NodeID: "R_tool", Owner: "zhuravel", Name: "tool", Mode: store.RepoModePerPR, ClonePath: store.Ptr(clone)}); err != nil {
+	if _, err := f.st.UpsertRepo(ctx, store.Repo{NodeID: "R_tool", Owner: "zhuravel", Name: "tool", Mode: store.RepoModePerPR, ClonePath: new(clone)}); err != nil {
 		t.Fatal(err)
 	}
 	f.mkdir("tool-feature")
@@ -1060,7 +1060,7 @@ func TestUnreadableSlotDirIsNotLost(t *testing.T) {
 func TestUnknownPerPRDirProtectsItsDatabases(t *testing.T) {
 	f := newFixture(t)
 	clone := f.mkrepo("tool")
-	if _, err := f.st.UpsertRepo(context.Background(), store.Repo{NodeID: "R_tool", Owner: "example", Name: "tool", Mode: store.RepoModePerPR, ClonePath: store.Ptr(clone)}); err != nil {
+	if _, err := f.st.UpsertRepo(context.Background(), store.Repo{NodeID: "R_tool", Owner: "example", Name: "tool", Mode: store.RepoModePerPR, ClonePath: new(clone)}); err != nil {
 		t.Fatal(err)
 	}
 	f.git.lists[clone] = []gitx.Worktree{{Path: clone, Head: sha("t"), Branch: "main"}}
@@ -1089,7 +1089,7 @@ func TestUnknownPerPRDirProtectsItsDatabases(t *testing.T) {
 func TestUnreadableWorktreesDirSuppressesOrphans(t *testing.T) {
 	f := newFixture(t)
 	clone := f.mkrepo("tool")
-	if _, err := f.st.UpsertRepo(context.Background(), store.Repo{NodeID: "R_tool", Owner: "example", Name: "tool", Mode: store.RepoModePerPR, ClonePath: store.Ptr(clone)}); err != nil {
+	if _, err := f.st.UpsertRepo(context.Background(), store.Repo{NodeID: "R_tool", Owner: "example", Name: "tool", Mode: store.RepoModePerPR, ClonePath: new(clone)}); err != nil {
 		t.Fatal(err)
 	}
 	f.git.lists[clone] = []gitx.Worktree{{Path: clone, Head: sha("t"), Branch: "main"}}

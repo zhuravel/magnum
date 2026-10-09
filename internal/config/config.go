@@ -745,8 +745,8 @@ func overlaySection(md toml.MetaData, section string, dst, src any) {
 	dv := reflect.ValueOf(dst).Elem()
 	sv := reflect.ValueOf(src).Elem()
 	t := dv.Type()
-	for i := 0; i < t.NumField(); i++ {
-		tag := strings.Split(t.Field(i).Tag.Get("toml"), ",")[0]
+	for i := range t.NumField() {
+		tag, _, _ := strings.Cut(t.Field(i).Tag.Get("toml"), ",")
 		if tag == "" || tag == "-" {
 			continue
 		}

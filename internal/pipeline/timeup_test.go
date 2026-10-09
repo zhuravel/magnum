@@ -434,11 +434,11 @@ func TestAContinuedRoundReadsOnlyReportsItsRoundVerified(t *testing.T) {
 		}
 	}
 	for _, r := range []store.Run{
-		{Role: config.RoleClaudeReview, State: store.RunFailed, Outcome: store.Ptr(ReportMissing)},
-		{Role: config.RoleCodexReview, State: store.RunVerified, Outcome: store.Ptr(ReportOK)},
+		{Role: config.RoleClaudeReview, State: store.RunFailed, Outcome: new(ReportMissing)},
+		{Role: config.RoleCodexReview, State: store.RunVerified, Outcome: new(ReportOK)},
 	} {
 		r.PRID, r.Round, r.Kind, r.TargetSHA = e.pr.ID, 1, store.RunInitial, target
-		r.ReportPath = store.Ptr(filepath.Join(dir, map[string]string{config.RoleClaudeReview: "claude-review.md", config.RoleCodexReview: "codex-review.md"}[r.Role]))
+		r.ReportPath = new(filepath.Join(dir, map[string]string{config.RoleClaudeReview: "claude-review.md", config.RoleCodexReview: "codex-review.md"}[r.Role]))
 		if _, err := e.st.CreateRun(e.ctx, r); err != nil {
 			t.Fatal(err)
 		}

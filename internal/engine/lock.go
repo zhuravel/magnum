@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -47,7 +48,7 @@ func writePid(path string) error {
 // lock (probing it could make a starting daemon exit as "already running").
 func DaemonPID(layout paths.Layout) (int, error) {
 	b, err := os.ReadFile(layout.Pid())
-	if os.IsNotExist(err) {
+	if errors.Is(err, fs.ErrNotExist) {
 		return 0, nil
 	}
 	if err != nil {

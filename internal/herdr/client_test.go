@@ -17,7 +17,7 @@ func TestCallSendsOneRequestPerConnectionAndDecodes(t *testing.T) {
 	s.reply("pane.get", map[string]any{"type": "pane_info", "pane": map[string]any{"pane_id": "w1:p1", "agent_status": "idle"}})
 	c := s.client()
 
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		var out struct {
 			Type string `json:"type"`
 			Pane Pane   `json:"pane"`
@@ -152,8 +152,7 @@ func TestCallConnectionClosedWithoutReply(t *testing.T) {
 	if err == nil || IsTimeout(err) {
 		t.Fatalf("want a closed-connection error, got %v", err)
 	}
-	var he *Error
-	if errors.As(err, &he) {
+	if _, ok := errors.AsType[*Error](err); ok {
 		t.Fatalf("closed connection must not look like a server error: %v", err)
 	}
 }

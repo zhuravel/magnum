@@ -1455,8 +1455,8 @@ func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 // lastLine is the last non-empty line of s, folded to one line.
 func lastLine(s string) string {
 	lines := strings.Split(strings.TrimSpace(s), "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		if l := oneLine(lines[i]); l != "" {
+	for _, line := range slices.Backward(lines) {
+		if l := oneLine(line); l != "" {
 			return l
 		}
 	}

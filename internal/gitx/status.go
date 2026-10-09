@@ -25,7 +25,7 @@ func (c *Client) Status(ctx context.Context, dir string) (Status, error) {
 		return Status{}, err
 	}
 	var st Status
-	for _, line := range strings.Split(string(res.Stdout), "\n") {
+	for line := range strings.SplitSeq(string(res.Stdout), "\n") {
 		switch {
 		case strings.TrimSpace(line) == "":
 		case strings.HasPrefix(line, "!! "):

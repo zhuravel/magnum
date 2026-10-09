@@ -104,7 +104,7 @@ func TestCloseConfirmationGapFromFirstSuccess(t *testing.T) {
 	h.gh.closed[2] = "MERGED"
 	h.gh.fail(nil, errors.New("confirm down"))
 
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		h.advance(time.Minute)
 		h.tick()
 		pr := h.wantState(2, store.PRReviewed)
@@ -329,7 +329,7 @@ func TestOpenRequestRestartsAStartingSession(t *testing.T) {
 	h := newHarness(t)
 	pr := h.parkedPR()
 	if _, err := h.st.CreateSession(h.ctx, store.Session{PRID: pr.ID, Role: store.RoleJudge,
-		HerdrPaneID: store.Ptr("p-old"), State: store.SessionStarting}); err != nil {
+		HerdrPaneID: new("p-old"), State: store.SessionStarting}); err != nil {
 		t.Fatal(err)
 	}
 	earlier := len(h.ag.all())

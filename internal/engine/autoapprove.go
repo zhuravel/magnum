@@ -114,7 +114,7 @@ var fixLine = regexp.MustCompile(`^Fix \d+ problems? `)
 // the line before); verdictUnknown when that line is none of the four.
 func reviewVerdictLine(body string) verdictKind {
 	var line string
-	for _, l := range strings.Split(body, "\n") {
+	for l := range strings.SplitSeq(body, "\n") {
 		if l = strings.TrimSpace(l); l == "" {
 			continue
 		}
@@ -546,14 +546,14 @@ func (e *Engine) postAutoApproval(ctx context.Context, repo store.Repo, pr store
 			textx.ShortSHA(pr.HeadSHA), id.Login, err, again), data)
 		return
 	}
-	e.autoPosted(ctx, repo, pr, a, rev.ID, rev.HTMLURL, e.now(), sum, data, "")
+	e.autoPosted(ctx, repo, pr, a, rev.ID, rev.HTMLURL, e.now(), data, "")
 }
 
 // autoPosted records approval a posted as GitHub's review reviewID (url) at
 // at, with review.auto_approved and a toast; how says how it was found
 // ("" = its post answered).
 func (e *Engine) autoPosted(ctx context.Context, repo store.Repo, pr store.PR, a store.AutoApproval, reviewID int64, url string, at time.Time,
-	sum store.ReviewSummary, data map[string]any, how string) {
+	data map[string]any, how string) {
 	if err := e.st.TransitionAutoApproval(ctx, a.ID, []string{store.AutoPosting}, store.AutoStanding, func(u *store.AutoApprovalUpdate) {
 		u.Set("review_id", reviewID)
 		u.Set("review_url", url)
@@ -597,7 +597,7 @@ func (e *Engine) adoptAutoApproval(ctx context.Context, repo store.Repo, pr stor
 		at = e.now()
 	}
 	data := map[string]any{"approval_id": a.ID, "head_sha": pr.HeadSHA, "identity": id.Name, "run_id": sum.RunID, "source_review_id": sum.ReviewID}
-	e.autoPosted(ctx, repo, pr, a, r.DatabaseID, r.URL, at, sum, data, " (found on GitHub: the answer to its post was lost)")
+	e.autoPosted(ctx, repo, pr, a, r.DatabaseID, r.URL, at, data, " (found on GitHub: the answer to its post was lost)")
 }
 
 // stopAutoApproval stops auto-approval of pr for good (until `magnum
@@ -673,7 +673,7 @@ func (e *Engine) resumeAutoPost(ctx context.Context, repo store.Repo, a store.Au
 	if w.approved != nil && w.approvedByMagnum {
 		data := map[string]any{"approval_id": a.ID, "head_sha": a.HeadSHA, "identity": a.Identity, "run_id": a.RunID}
 		e.autoPosted(ctx, repo, a.PR, a.AutoApproval, w.approved.DatabaseID, w.approved.URL, w.approved.SubmittedAt,
-			store.ReviewSummary{RunID: a.RunID}, data, " (found on GitHub after a restart)")
+			data, " (found on GitHub after a restart)")
 		return
 	}
 	if !complete {

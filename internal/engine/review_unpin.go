@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/zhuravel/magnum/internal/slots"
@@ -141,8 +142,8 @@ func (e *Engine) pinOrigin(ctx context.Context, subject string) (string, time.Ti
 		e.log.Warn("pin events", "subject", subject, "err", err)
 		return "", time.Time{}
 	}
-	for i := len(evs) - 1; i >= 0; i-- {
-		ev := evs[i]
+	for _, ev := range slices.Backward(evs) {
+
 		if deref(ev.Subject) != subject {
 			continue
 		}

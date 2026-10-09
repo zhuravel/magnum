@@ -969,9 +969,7 @@ func (sc *scan) sizes(ctx context.Context) {
 	sem := make(chan struct{}, sizeWorkers)
 	var wg sync.WaitGroup
 	for _, t := range targets {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			kb, err := sc.du(ctx, t.path)
@@ -980,7 +978,7 @@ func (sc *scan) sizes(ctx context.Context) {
 				return
 			}
 			*t.dst = &kb
-		}()
+		})
 	}
 	wg.Wait()
 }

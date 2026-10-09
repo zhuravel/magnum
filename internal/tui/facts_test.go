@@ -36,7 +36,7 @@ func boardWithFacts(t *testing.T, w, h int, facts DaemonFacts) prBoardModel {
 func TestBoardTitleSaysWhatHoldsTheDaemon(t *testing.T) {
 	wide := boardWithFacts(t, 400, 24, allFacts())
 	v := viewOf(wide)
-	title := strings.Split(v, "\n")[0]
+	title, _, _ := strings.Cut(v, "\n")
 	for _, want := range []string{
 		"daemon on v1.4.0 since Fri 17:40 · v1.5.0 built: daemon-restart", "draining (pid 4242)",
 		"paused 19h · 6 requests held", "codex 51% · at this pace 80% Tue 13:30", "magnum · pull requests", "↻ 12:00:00",
@@ -92,7 +92,7 @@ func TestDashboardTitleSaysWhatHoldsTheDaemon(t *testing.T) {
 	m, _ = send(t, m, tea.WindowSizeMsg{Width: 400, Height: 50}, dashDataMsg{data: data}, keyMsg("j"))
 	plain, _ = send(t, plain, keyMsg("j"))
 	v, pv := viewOf(m), viewOf(plain)
-	title := strings.Split(v, "\n")[0]
+	title, _, _ := strings.Cut(v, "\n")
 	mustContain(t, title, "magnum status · updated 3s ago", "v1.5.0 built: daemon-restart", "draining (pid 4242)",
 		"paused 19h · 6 requests held", "codex 51% · at this pace 80%")
 	vl, pl := strings.Split(v, "\n"), strings.Split(pv, "\n")
@@ -110,7 +110,7 @@ func TestDashboardTitleSaysWhatHoldsTheDaemon(t *testing.T) {
 
 	narrow := m
 	narrow, _ = send(t, narrow, tea.WindowSizeMsg{Width: 120, Height: 50})
-	nt := strings.Split(viewOf(narrow), "\n")[0]
+	nt, _, _ := strings.Cut(viewOf(narrow), "\n")
 	mustContain(t, nt, "magnum status · updated 3s ago")
 	if w := maxLineWidth(viewOf(narrow)); w > 120 {
 		t.Errorf("a line is %d cells wide", w)
@@ -129,7 +129,7 @@ func TestTitlesCountTheNotesProposalsToReview(t *testing.T) {
 	if got := (DaemonFacts{NotesProposals: 1}).list(boardNow)[0].full; got != "1 notes proposal to review" {
 		t.Errorf("one proposal: %q", got)
 	}
-	title := strings.Split(viewOf(boardWithFacts(t, 400, 24, DaemonFacts{NotesProposals: 1})), "\n")[0]
+	title, _, _ := strings.Cut(viewOf(boardWithFacts(t, 400, 24, DaemonFacts{NotesProposals: 1})), "\n")
 	mustContain(t, title, "1 notes proposal to review")
 }
 

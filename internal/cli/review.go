@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -435,7 +436,7 @@ func reviewImport(ctx context.Context, d *actDeps, owner, name string, number in
 	if err != nil {
 		return actTarget{}, err
 	}
-	_, _ = d.Store.AppendEvent(ctx, store.Event{Level: "info", Subject: store.Ptr(fmt.Sprintf("pr:%s#%d", repo.FullName(), number)),
+	_, _ = d.Store.AppendEvent(ctx, store.Event{Level: "info", Subject: new(fmt.Sprintf("pr:%s#%d", repo.FullName(), number)),
 		Kind: "pr.added", Message: "magnum review added the PR to the registry (baseline until the forced round)"})
 	return actTarget{Repo: repo, PR: res.PR}, nil
 }
@@ -496,7 +497,7 @@ func reviewRecordRepo(ctx context.Context, d *actDeps, w *config.Watch, ident, o
 	row := store.Repo{NodeID: info.NodeID, Owner: owner, Name: name, WatchOwner: w.Owner,
 		Mode: store.RepoModePerPR, DefaultBranch: info.DefaultBranch}
 	if pool := d.Cfg.PoolFor(full); pool != nil {
-		row.Mode, row.DefaultBranch, row.ClonePath = store.RepoModePool, pool.Base, store.Ptr(pool.MainClone)
+		row.Mode, row.DefaultBranch, row.ClonePath = store.RepoModePool, pool.Base, new(pool.MainClone)
 	}
 	if dry {
 		return row, nil
@@ -509,24 +510,24 @@ func reviewRecordRepo(ctx context.Context, d *actDeps, w *config.Watch, ident, o
 func reviewGitHubPR(d *actDeps, w *config.Watch, repo store.Repo, p github.PRDetails, number int, url string) store.GitHubPR {
 	in := store.GitHubPR{
 		RepoID: repo.ID, NodeID: p.NodeID, Number: number, URL: url, HeadSHA: p.HeadRefOid, IsDraft: p.IsDraft,
-		Title: store.Ptr(p.Title), AuthorLogin: store.Ptr(p.AuthorLogin), AuthorType: store.Ptr(p.AuthorType),
-		HeadRef: store.Ptr(p.HeadRefName), IsCrossRepo: store.Ptr(p.IsCrossRepository),
+		Title: new(p.Title), AuthorLogin: new(p.AuthorLogin), AuthorType: new(p.AuthorType),
+		HeadRef: new(p.HeadRefName), IsCrossRepo: new(p.IsCrossRepository),
 		GHState: store.GHOpen, InitialState: store.PRBaseline, Identity: w.Identity,
 	}
 	if p.BaseRefName != "" {
-		in.BaseRef = store.Ptr(p.BaseRefName)
+		in.BaseRef = new(p.BaseRefName)
 	}
 	if !p.UpdatedAt.IsZero() {
-		in.GHUpdatedAt = store.Ptr(p.UpdatedAt)
+		in.GHUpdatedAt = new(p.UpdatedAt)
 	}
 	if !p.ActivityAt.IsZero() {
-		in.ActivityAt = store.Ptr(p.ActivityAt)
+		in.ActivityAt = new(p.ActivityAt)
 	}
 	in.Labels = p.Labels
 	if in.Labels == nil {
 		in.Labels = []string{}
 	}
-	in.ReviewRequested = store.Ptr(reviewRequested(d, *w, p.ReviewRequests))
+	in.ReviewRequested = new(reviewRequested(d, *w, p.ReviewRequests))
 	return in
 }
 
@@ -563,9 +564,7 @@ type reviewRepo struct {
 func reviewRepoInfo(ctx context.Context, d *actDeps, ident, owner, name string) (reviewRepo, error) {
 	env := map[string]string{"GH_PROMPT_DISABLED": "1", "GH_NO_UPDATE_NOTIFIER": "1"}
 	if d.GHEnv != nil {
-		for k, v := range d.GHEnv(ident) {
-			env[k] = v
-		}
+		maps.Copy(env, d.GHEnv(ident))
 	}
 	res, err := d.Run.Run(ctx, execx.Cmd{Name: "gh", Args: []string{"api", "repos/" + owner + "/" + name}, Env: env,
 		Timeout: 30 * time.Second, Label: "gh repo"})
@@ -907,8 +906,8 @@ func reviewDryRunEnded(ctx context.Context, d *actDeps, t actTarget, start time.
 	if err != nil {
 		return "", false
 	}
-	for i := len(evs) - 1; i >= 0; i-- {
-		if ev := evs[i]; ev.Kind == "round.dry_run" && !ev.At.Before(start) {
+	for _, ev := range slices.Backward(evs) {
+		if ev.Kind == "round.dry_run" && !ev.At.Before(start) {
 			return ev.Message, true
 		}
 	}
@@ -922,8 +921,8 @@ func reviewPosted(ctx context.Context, d *actDeps, pr store.PR, start time.Time)
 	if err != nil {
 		return event, "", ""
 	}
-	for i := len(rs) - 1; i >= 0; i-- {
-		r := rs[i]
+	for _, r := range slices.Backward(rs) {
+
 		if !actIsJudge(d.Cfg, r.Role) || r.CreatedAt.Before(start) || store.Deref(r.ReviewURL) == "" {
 			continue
 		}

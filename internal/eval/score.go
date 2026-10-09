@@ -100,7 +100,7 @@ func ScoreCase(c Case, r Result) Score {
 	return s
 }
 
-func (d Defect) matches(res []*regexp.Regexp, f Finding) bool {
+func (d *Defect) matches(res []*regexp.Regexp, f Finding) bool {
 	if f.Simplification || (len(d.Paths) == 0 && len(d.Match) == 0) {
 		return false
 	}

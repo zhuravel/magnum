@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -316,11 +317,8 @@ func (c *Config) RolesFor(w *Watch) []Role {
 	}
 	var out []Role
 	for _, r := range all {
-		for _, s := range w.Roles {
-			if r.Matches(s) {
-				out = append(out, r)
-				break
-			}
+		if slices.ContainsFunc(w.Roles, r.Matches) {
+			out = append(out, r)
 		}
 	}
 	return out
@@ -410,13 +408,9 @@ func (c *Config) Stages(w *Watch) [][]Role {
 func (c *Config) RoleEnv(r Role) map[string]string {
 	out := map[string]string{}
 	if k, ok := c.KindSpec(r.AgentKind()); ok {
-		for key, v := range k.Env {
-			out[key] = v
-		}
+		maps.Copy(out, k.Env)
 	}
-	for key, v := range r.Env {
-		out[key] = v
-	}
+	maps.Copy(out, r.Env)
 	return out
 }
 

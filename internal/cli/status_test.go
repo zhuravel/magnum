@@ -77,27 +77,27 @@ func statusFixture(t *testing.T) (*inspFixture, *store.Store, statusDeps, time.T
 	}
 	slot, err := st.CreateSlot(ctx, store.Slot{Name: "review1", Kind: store.SlotKindPool, Path: f.Home + "/talkable.review1",
 		MainClone: f.Home + "/talkable", RepoFullName: "talkable/talkable", State: store.SlotHeld, PRID: &held.ID,
-		CheckedOutSHA: store.Ptr("abcdef0123456789abcdef0123456789abcdef01")})
+		CheckedOutSHA: new("abcdef0123456789abcdef0123456789abcdef01")})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.CreateSession(ctx, store.Session{PRID: held.ID, Role: store.RoleJudge, State: store.SessionLive,
-		AgentName: store.Ptr("mg-talkable-11920-judge"), AgentKind: store.Ptr("codex"), SessionID: store.Ptr("01a0fe66-uuid"),
-		HerdrPaneID: store.Ptr("p7"), Cwd: store.Ptr(slot.Path)}); err != nil {
+		AgentName: new("mg-talkable-11920-judge"), AgentKind: new("codex"), SessionID: new("01a0fe66-uuid"),
+		HerdrPaneID: new("p7"), Cwd: new(slot.Path)}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.CreateSession(ctx, store.Session{PRID: held.ID, Role: store.RoleClaude, State: store.SessionParked,
-		AgentKind: store.Ptr("claude"), SessionID: store.Ptr("c-123")}); err != nil {
+		AgentKind: new("claude"), SessionID: new("c-123")}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.CreateRun(ctx, store.Run{PRID: held.ID, Round: 1, Role: store.RoleJudge, Kind: store.RunInitial,
-		TargetSHA: "abcdef0123456789", State: store.RunVerified, ReviewEvent: store.Ptr("COMMENTED"),
-		ReviewURL: store.Ptr("https://github.com/talkable/talkable/pull/11920#pullrequestreview-1"), Identity: "talkable-app",
+		TargetSHA: "abcdef0123456789", State: store.RunVerified, ReviewEvent: new("COMMENTED"),
+		ReviewURL: new("https://github.com/talkable/talkable/pull/11920#pullrequestreview-1"), Identity: "talkable-app",
 		ReviewerLogin: "talkable[bot]", PromptText: "x"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.CreateRun(ctx, store.Run{PRID: held.ID, Round: 1, Role: store.RoleClaude, Kind: store.RunInitial,
-		TargetSHA: "abcdef0123456789", State: store.RunVerified, Outcome: store.Ptr("ok"), Identity: "talkable-app",
+		TargetSHA: "abcdef0123456789", State: store.RunVerified, Outcome: new("ok"), Identity: "talkable-app",
 		ReviewerLogin: "talkable[bot]", PromptText: "x"}); err != nil {
 		t.Fatal(err)
 	}
@@ -332,10 +332,10 @@ func TestStatusRenderCleansUntrustedText(t *testing.T) {
 	now := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
 	until := now.Add(time.Hour)
 	pr := &store.PR{Number: 7, URL: "https://github.com/talkable/talkable/pull/7?" + statusNoise, State: store.PRReviewed, GHState: "open",
-		Title: store.Ptr("title " + statusNoise), LastError: store.Ptr("boom " + statusNoise), AuthorLogin: store.Ptr("dev" + statusNoise),
+		Title: new("title " + statusNoise), LastError: new("boom " + statusNoise), AuthorLogin: new("dev" + statusNoise),
 		Identity: "talkable-app", HeadSHA: "abcdef0123456789"}
 	slot := store.Slot{Name: "review1" + statusNoise, Kind: store.SlotKindPool, Path: "/x/talkable.review1" + statusNoise,
-		State: store.SlotHeld, HoldReason: store.Ptr("hold " + statusNoise)}
+		State: store.SlotHeld, HoldReason: new("hold " + statusNoise)}
 	r := statusReport{
 		GeneratedAt: now,
 		Daemon:      statusDaemon{PollsFailing: []statusPollFailing{{Watch: "watch" + statusNoise, Since: now.Add(-12 * time.Minute), Error: "HTTP " + statusNoise}}},
@@ -352,11 +352,11 @@ func TestStatusRenderCleansUntrustedText(t *testing.T) {
 		Warnings:  []string{"mysql: " + statusNoise},
 		Detail: &statusDetail{Repo: "talkable/talkable", PR: pr, Next: "needs you: " + statusNoise, Slot: &inventory.SlotView{Slot: slot},
 			Sessions: []statusSession{{Session: store.Session{Role: store.RoleJudge, State: store.SessionLive,
-				AgentName: store.Ptr("mg" + statusNoise), HerdrPaneID: store.Ptr("p" + statusNoise)},
+				AgentName: new("mg" + statusNoise), HerdrPaneID: new("p" + statusNoise)},
 				Live: "idle" + statusNoise, Resume: "cd '/x' && codex resume 'a" + statusNoise + "'"}},
 			Runs: []store.Run{{Round: 1, Role: store.RoleJudge, Kind: store.RunInitial, TargetSHA: "abcdef0123456789", State: store.RunFailed,
-				ReviewEvent: store.Ptr("COMMENTED" + statusNoise), ReviewURL: store.Ptr("https://x/" + statusNoise),
-				Error: store.Ptr("err " + statusNoise), CreatedAt: now}}},
+				ReviewEvent: new("COMMENTED" + statusNoise), ReviewURL: new("https://x/" + statusNoise),
+				Error: new("err " + statusNoise), CreatedAt: now}}},
 	}
 	var b bytes.Buffer
 	statusRender(&b, r)
@@ -402,7 +402,7 @@ func TestStatusRenderCleansUntrustedText(t *testing.T) {
 
 func TestStatusResumeQuotesEveryWord(t *testing.T) {
 	id, cwd := "a b;rm -rf $HOME", "/tmp/it's here"
-	s := store.Session{Role: "codex-judge", SessionID: &id, AgentKind: store.Ptr("codex"), Cwd: &cwd}
+	s := store.Session{Role: "codex-judge", SessionID: &id, AgentKind: new("codex"), Cwd: &cwd}
 	want := `cd '/tmp/it'\''s here' && codex resume 'a b;rm -rf $HOME'`
 	if got := statusResume(config.Defaults(), s); got != want {
 		t.Fatalf("statusResume = %q\nwant         %q", got, want)
@@ -410,7 +410,7 @@ func TestStatusResumeQuotesEveryWord(t *testing.T) {
 	// Plainly safe words stay bare, and a home path keeps its ~.
 	t.Setenv("HOME", "/Users/x")
 	id, cwd = "s-1", "/Users/x/talkable.review1"
-	s = store.Session{Role: "codex-judge", SessionID: &id, AgentKind: store.Ptr("codex"), Cwd: &cwd}
+	s = store.Session{Role: "codex-judge", SessionID: &id, AgentKind: new("codex"), Cwd: &cwd}
 	if got := statusResume(config.Defaults(), s); got != "cd ~/talkable.review1 && codex resume s-1" {
 		t.Fatalf("statusResume = %q", got)
 	}

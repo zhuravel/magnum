@@ -178,9 +178,9 @@ func TestPRsWithFilesListsOpenAndRecentlyMergedPRs(t *testing.T) {
 	since := t0.Add(-14 * 24 * time.Hour)
 	self := filesPR(t, st, repo.ID, 10, false, GHOpen, nil, "app/x.rb")
 	filesPR(t, st, repo.ID, 11, true, GHOpen, nil, "app/x.rb")                             // an open draft
-	filesPR(t, st, repo.ID, 12, false, GHMerged, Ptr(t0.Add(-3*24*time.Hour)), "app/x.rb") // merged within
-	filesPR(t, st, repo.ID, 13, false, GHMerged, Ptr(since), "app/x.rb", "app/y.rb")       // merged right at the start
-	filesPR(t, st, repo.ID, 14, false, GHMerged, Ptr(since.Add(-time.Second)), "app/x.rb") // merged before it
+	filesPR(t, st, repo.ID, 12, false, GHMerged, new(t0.Add(-3*24*time.Hour)), "app/x.rb") // merged within
+	filesPR(t, st, repo.ID, 13, false, GHMerged, new(since), "app/x.rb", "app/y.rb")       // merged right at the start
+	filesPR(t, st, repo.ID, 14, false, GHMerged, new(since.Add(-time.Second)), "app/x.rb") // merged before it
 	filesPR(t, st, repo.ID, 15, false, GHClosed, nil, "app/x.rb")                          // closed unmerged
 	filesPR(t, st, repo.ID, 16, false, GHOpen, nil)                                        // no list
 	filesPR(t, st, other.ID, 17, false, GHOpen, nil, "app/x.rb")                           // another repository
@@ -236,7 +236,7 @@ func TestPRsWithFilesLeavesOutOpenPRsIdleSinceActiveSince(t *testing.T) {
 	set(both, "gh_updated_at", t0.Add(-40*24*time.Hour))
 	set(both, "activity_at", t0.Add(-time.Hour))                // activity_at wins over updatedAt
 	filesPR(t, st, repo.ID, 15, false, GHOpen, nil, "app/x.rb") // activity unknown
-	merged := filesPR(t, st, repo.ID, 16, false, GHMerged, Ptr(t0.Add(-24*time.Hour)), "app/x.rb")
+	merged := filesPR(t, st, repo.ID, 16, false, GHMerged, new(t0.Add(-24*time.Hour)), "app/x.rb")
 	set(merged, "activity_at", t0.Add(-60*24*time.Hour))
 	got, err := st.PRsWithFiles(ctx, repo.ID, self.ID, t0.Add(-14*24*time.Hour), activeSince)
 	if err != nil {

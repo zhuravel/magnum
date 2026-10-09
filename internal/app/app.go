@@ -368,8 +368,8 @@ func (a *App) IdentityNames() []string {
 // store copy), in reverse order.
 func (a *App) Close() error {
 	var errs []error
-	for i := len(a.closers) - 1; i >= 0; i-- {
-		if err := a.closers[i](); err != nil {
+	for _, v := range slices.Backward(a.closers) {
+		if err := v(); err != nil {
 			errs = append(errs, err)
 		}
 	}

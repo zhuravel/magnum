@@ -127,14 +127,12 @@ func TestFetchesAreSerializedPerClone(t *testing.T) {
 	}}
 	c, _ := newFake(slow)
 	var wg sync.WaitGroup
-	for i := 0; i < 6; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 6 {
+		wg.Go(func() {
 			if err := c.FetchBranch(context.Background(), clone, "master"); err != nil {
 				t.Error(err)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	if peak.Load() != 1 {

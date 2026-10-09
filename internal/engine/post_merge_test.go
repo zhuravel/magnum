@@ -65,7 +65,7 @@ func TestPostMergeReviewOfAPRMergedBeforeItsReReview(t *testing.T) {
 	h := newHarness(t, withRepoVerdicts, func(h *harness) {
 		for i := range h.cfg.Identities {
 			if h.cfg.Identities[i].Name == "zhuravel" {
-				h.cfg.Identities[i].DismissOwnStale = store.Ptr(true)
+				h.cfg.Identities[i].DismissOwnStale = new(true)
 			}
 		}
 	})

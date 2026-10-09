@@ -128,7 +128,7 @@ func (e *AutomationError) Error() string {
 
 // automationDenied is an AutomationError for r's terminal when err is
 // osascript's error -1743; ok is false for any other error.
-func (r *Revealer) automationDenied(err error) (ae *AutomationError, ok bool) {
+func (r *revealer) automationDenied(err error) (ae *AutomationError, ok bool) {
 	if ee, isExit := errors.AsType[*execx.ExitError](err); !isExit || !strings.Contains(ee.Stderr, "(-1743)") {
 		return nil, false
 	}
@@ -141,8 +141,8 @@ func (r *Revealer) automationDenied(err error) (ae *AutomationError, ok bool) {
 
 var errCannotFocus = errors.New("this terminal cannot be scripted to focus an existing herdr client")
 
-// Revealer reveals herdr in one configured terminal. Build it with New.
-type Revealer struct {
+// revealer reveals herdr in one configured terminal. Build it with newRevealer.
+type revealer struct {
 	run      execx.Runner
 	herdrBin string
 	app      string
@@ -155,10 +155,10 @@ type Revealer struct {
 	wezTermBin string
 }
 
-// newRevealer builds a Revealer from config.Terminal. herdrBin is the herdr executable
+// newRevealer builds a revealer from config.Terminal. herdrBin is the herdr executable
 // (typed into the new terminal tab and used for the Ghostty title calls); empty
 // means "herdr" on PATH. An empty session means "default".
-func newRevealer(run execx.Runner, cfg config.Terminal, herdrBin string) *Revealer {
+func newRevealer(run execx.Runner, cfg config.Terminal, herdrBin string) *revealer {
 	session := strings.TrimSpace(cfg.Session)
 	if session == "" {
 		session = defaultSession
@@ -166,7 +166,7 @@ func newRevealer(run execx.Runner, cfg config.Terminal, herdrBin string) *Reveal
 	if herdrBin == "" {
 		herdrBin = defaultHerdr
 	}
-	return &Revealer{
+	return &revealer{
 		run:       run,
 		herdrBin:  herdrBin,
 		app:       strings.TrimSpace(cfg.App),
@@ -177,7 +177,7 @@ func newRevealer(run execx.Runner, cfg config.Terminal, herdrBin string) *Reveal
 	}
 }
 
-// Reveal builds a Revealer for cfg and herdrBin and runs its Reveal.
+// Reveal builds a revealer for cfg and herdrBin and runs its Reveal.
 func Reveal(ctx context.Context, run execx.Runner, cfg config.Terminal, herdrBin string, opts Options) (Outcome, error) {
 	return newRevealer(run, cfg, herdrBin).Reveal(ctx, opts)
 }
@@ -187,7 +187,7 @@ func Reveal(ctx context.Context, run execx.Runner, cfg config.Terminal, herdrBin
 // with opts.NewWindow). When focus cannot be determined it only brings the
 // terminal app forward (opening a second client could duplicate one it cannot
 // see); a custom launcher has no app to raise, so it launches.
-func (r *Revealer) Reveal(ctx context.Context, opts Options) (Outcome, error) {
+func (r *revealer) Reveal(ctx context.Context, opts Options) (Outcome, error) {
 	out := Outcome{Kind: r.kind, Session: r.session}
 	res, focusErr := r.focusExisting(ctx)
 	switch res {
@@ -226,7 +226,7 @@ func (r *Revealer) Reveal(ctx context.Context, opts Options) (Outcome, error) {
 
 // focusExisting looks for a herdr client of the session in the configured
 // terminal and focuses it. The error accompanies Unavailable and says why.
-func (r *Revealer) focusExisting(ctx context.Context) (FocusResult, error) {
+func (r *revealer) focusExisting(ctx context.Context) (FocusResult, error) {
 	if err := ctx.Err(); err != nil {
 		return Unavailable, err
 	}
@@ -244,7 +244,7 @@ func (r *Revealer) focusExisting(ctx context.Context) (FocusResult, error) {
 
 // focusByTty serves iTerm2 and Terminal.app: find the client ttys with ps, then
 // let AppleScript select the tab that owns one of them.
-func (r *Revealer) focusByTty(ctx context.Context) (FocusResult, error) {
+func (r *revealer) focusByTty(ctx context.Context) (FocusResult, error) {
 	ttys, err := r.clientTtys(ctx)
 	if err != nil {
 		return Unavailable, err
@@ -277,7 +277,7 @@ func (r *Revealer) focusByTty(ctx context.Context) (FocusResult, error) {
 }
 
 // bringToFront activates the terminal app (`open -a`).
-func (r *Revealer) bringToFront(ctx context.Context) error {
+func (r *revealer) bringToFront(ctx context.Context) error {
 	name, err := r.activationName()
 	if err != nil {
 		return err
@@ -291,7 +291,7 @@ func (r *Revealer) bringToFront(ctx context.Context) error {
 
 // activationName is the application name `open -a` is given. Known kinds use
 // the canonical name; a generic terminal uses the configured one.
-func (r *Revealer) activationName() (string, error) {
+func (r *revealer) activationName() (string, error) {
 	switch r.kind {
 	case KindITerm:
 		return "iTerm", nil
@@ -331,7 +331,7 @@ func resolveWezTermBin() string {
 	return "wezterm"
 }
 
-func (r *Revealer) wezTerm() string {
+func (r *revealer) wezTerm() string {
 	if r.wezTermBin == "" {
 		r.wezTermBin = resolveWezTermBin()
 	}
@@ -339,7 +339,7 @@ func (r *Revealer) wezTerm() string {
 }
 
 // wezTermList runs `wezterm cli list --format json`.
-func (r *Revealer) wezTermList(ctx context.Context) (string, error) {
+func (r *revealer) wezTermList(ctx context.Context) (string, error) {
 	res, err := r.run.Run(ctx, execx.Cmd{
 		Name: r.wezTerm(), Args: []string{"cli", "list", "--format", "json"}, Timeout: focusTimeout,
 		Label: "list wezterm panes",

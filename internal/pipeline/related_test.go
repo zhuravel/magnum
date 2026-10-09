@@ -34,7 +34,7 @@ func (e *env) otherPR(number int, draft bool, mergedAt *time.Time, paths ...stri
 	e.t.Helper()
 	n := fmt.Sprint(number)
 	res, err := e.st.UpsertPRFromGitHub(e.ctx, store.GitHubPR{RepoID: e.repo.ID, NodeID: "PR_" + n, Number: number,
-		URL: "https://github.com/talkable/talkable/pull/" + n, HeadSHA: "head" + n, IsDraft: draft, Title: store.Ptr("Secret title " + n),
+		URL: "https://github.com/talkable/talkable/pull/" + n, HeadSHA: "head" + n, IsDraft: draft, Title: new("Secret title " + n),
 		GHState: store.GHOpen, InitialState: store.PRQueued, Identity: "talkable-app",
 		Files: &store.PRFiles{HeadSHA: "head" + n, Paths: paths}})
 	if err != nil {
@@ -57,8 +57,8 @@ func (e *env) reviewedBy(pr store.PR, url string, findingPaths ...string) {
 	e.t.Helper()
 	run, err := e.st.CreateRun(e.ctx, store.Run{PRID: pr.ID, Round: 1, Role: "codex-judge", Kind: store.RunInitial, State: store.RunVerified,
 		TargetSHA: pr.HeadSHA, Identity: "talkable-app", ReviewerLogin: "talkable[bot]", PromptText: "p", CreatedAt: t0.Add(-time.Hour),
-		Outcome: store.Ptr(OutcomePosted), ReviewID: store.Ptr(int64(pr.Number)), ReviewEvent: store.Ptr("REQUEST_CHANGES"), ReviewURL: store.Ptr(url),
-		ResultJSON: store.Ptr(`{"event":"REQUEST_CHANGES","verdict":"blocking","findings":{"P1":1}}`)})
+		Outcome: new(OutcomePosted), ReviewID: new(int64(pr.Number)), ReviewEvent: new("REQUEST_CHANGES"), ReviewURL: new(url),
+		ResultJSON: new(`{"event":"REQUEST_CHANGES","verdict":"blocking","findings":{"P1":1}}`)})
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func TestRelatedPRsRankByOverlapAndCap(t *testing.T) {
 		p := store.FilesPR{ID: int64(n), Number: n, URL: fmt.Sprintf("u%d", n), GHState: store.GHOpen,
 			Files: store.PRFiles{HeadSHA: fmt.Sprintf("h%d", n), Paths: paths, Truncated: truncated}}
 		if merged {
-			p.GHState, p.MergedAt = store.GHMerged, store.Ptr(t0.Add(-time.Duration(n)*time.Hour))
+			p.GHState, p.MergedAt = store.GHMerged, new(t0.Add(-time.Duration(n)*time.Hour))
 		}
 		return p
 	}
@@ -221,9 +221,9 @@ func TestTheJudgeLearnsTheRelatedPRs(t *testing.T) {
 	e.ownFiles(target, "Gemfile.lock", "app/models/order.rb", "spec/models/order_spec.rb")
 	draft := e.otherPR(7, true, nil, "Gemfile.lock", "app/models/order.rb", "app/other.rb")
 	e.reviewedBy(draft, "https://github.com/talkable/talkable/pull/7#pullrequestreview-7", "app/models/order.rb", "app/models/order.rb", "app/other.rb")
-	e.otherPR(8, false, store.Ptr(t0.Add(-3*24*time.Hour)), "spec/models/order_spec.rb")
-	e.otherPR(9, false, store.Ptr(t0.Add(-20*24*time.Hour)), "app/models/order.rb") // merged before the lookback
-	e.otherPR(10, false, nil, "Gemfile.lock")                                       // a lockfile alone
+	e.otherPR(8, false, new(t0.Add(-3*24*time.Hour)), "spec/models/order_spec.rb")
+	e.otherPR(9, false, new(t0.Add(-20*24*time.Hour)), "app/models/order.rb") // merged before the lookback
+	e.otherPR(10, false, nil, "Gemfile.lock")                                 // a lockfile alone
 	e.otherPR(11, false, nil, "app/unrelated.rb")
 	e.ag.behaviors[agents.RoleJudge] = []behavior{writeOwn(), e.judgePosts(811, "CHANGES_REQUESTED", "REQUEST_CHANGES").behavior(t)}
 	in := e.ownInput(KindInitial)
@@ -341,7 +341,7 @@ func TestRelatedLeavesOutOpenPRsIdleForThirtyDays(t *testing.T) {
 	e.ownFiles(target, "app/models/order.rb")
 	e.active(e.otherPR(7, false, nil, "app/models/order.rb"), t0.Add(-31*24*time.Hour))
 	e.active(e.otherPR(8, true, nil, "app/models/order.rb"), t0.Add(-29*24*time.Hour))
-	e.active(e.otherPR(9, false, store.Ptr(t0.Add(-3*24*time.Hour)), "app/models/order.rb"), t0.Add(-45*24*time.Hour))
+	e.active(e.otherPR(9, false, new(t0.Add(-3*24*time.Hour)), "app/models/order.rb"), t0.Add(-45*24*time.Hour))
 	e.ag.behaviors[agents.RoleJudge] = []behavior{e.judgePosts(811, "COMMENTED", "COMMENT").behavior(t)}
 	in := e.input(KindInitial)
 	in.Related, in.Roles = defaultRelated, judgeAlone(e)
@@ -376,7 +376,7 @@ func TestRelatedNeverNamesACodexFlaggedPR(t *testing.T) {
 	e.ownFiles(target, "app/models/order.rb")
 	e.otherPR(7, false, nil, "app/models/order.rb")
 	flagged := e.otherPR(8, false, nil, "app/models/order.rb")
-	merged := e.otherPR(9, false, store.Ptr(t0.Add(-3*24*time.Hour)), "app/models/order.rb")
+	merged := e.otherPR(9, false, new(t0.Add(-3*24*time.Hour)), "app/models/order.rb")
 	for pr, v := range map[int64]string{flagged.ID: `{"kind":"codex","role":"codex-judge"}`, merged.ID: "not json"} {
 		if err := e.st.SetKV(e.ctx, store.KVPRCodexFlag(pr), v); err != nil {
 			t.Fatal(err)

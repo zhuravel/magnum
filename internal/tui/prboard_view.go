@@ -257,8 +257,8 @@ func (c cell) fitLeft(w int) cell {
 	room := w - 1
 	var out cell
 	var first lipgloss.Style
-	for i := len(c) - 1; i >= 0; i-- {
-		s := c[i]
+	for _, s := range slices.Backward(c) {
+
 		first = s.st
 		if sw := ansi.StringWidth(s.text); sw <= room {
 			out = append(cell{s}, out...)

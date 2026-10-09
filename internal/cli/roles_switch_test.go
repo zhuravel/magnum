@@ -14,9 +14,9 @@ func TestRolesKindsShowModelSwitch(t *testing.T) {
 		t.Fatalf("exit %d: %s", code, f.Err.String())
 	}
 	lines := map[string]string{}
-	for _, section := range strings.Split(f.Out.String(), "\n\n") {
+	for section := range strings.SplitSeq(f.Out.String(), "\n\n") {
 		kind, _, _ := strings.Cut(section, " ")
-		for _, line := range strings.Split(section, "\n") {
+		for line := range strings.SplitSeq(section, "\n") {
 			if v, ok := strings.CutPrefix(strings.TrimSpace(line), "model switch:"); ok {
 				lines[kind] = strings.TrimSpace(v)
 			}

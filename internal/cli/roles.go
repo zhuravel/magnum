@@ -425,7 +425,7 @@ func rolesModelSwitch(k config.Kind) string {
 func tomlJSON(v any, extra ...string) json.RawMessage {
 	var enc func(rv reflect.Value, extra []string) []byte
 	enc = func(rv reflect.Value, extra []string) []byte {
-		if d, ok := rv.Interface().(config.Duration); ok {
+		if d, ok := reflect.TypeAssert[config.Duration](rv); ok {
 			b, _ := json.Marshal(d.String())
 			return b
 		}

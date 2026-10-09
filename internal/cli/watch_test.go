@@ -125,7 +125,7 @@ func TestWatchScreenFramesAndClosedPane(t *testing.T) {
 	h := newActHarness(t)
 	pr := h.seedPR("talkable/talkable", 5, store.PRReviewing)
 	if _, err := h.st.CreateSession(h.ctx, store.Session{PRID: pr.ID, Role: store.RoleClaude, State: store.SessionLive,
-		AgentName: store.Ptr("mg-talkable-5-claude"), HerdrPaneID: store.Ptr("p_2"), AgentStatus: store.Ptr("working")}); err != nil {
+		AgentName: new("mg-talkable-5-claude"), HerdrPaneID: new("p_2"), AgentStatus: new("working")}); err != nil {
 		t.Fatal(err)
 	}
 	h.hd.reads = []herdr.ReadResult{{Text: "line a\nline b\n", Revision: 1}}

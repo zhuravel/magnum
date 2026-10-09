@@ -430,9 +430,8 @@ func (c *check) readiness(ctx context.Context) []Check {
 
 // failureText is a failed command's exit and last output line, redacted.
 func failureText(res execx.Result, err error) string {
-	var ee *execx.ExitError
 	what := "could not run"
-	if errors.As(err, &ee) {
+	if ee, ok := errors.AsType[*execx.ExitError](err); ok {
 		what = fmt.Sprintf("exit %d", ee.Code)
 	} else if errors.Is(err, context.DeadlineExceeded) {
 		what = "timed out"
@@ -448,8 +447,8 @@ func failureText(res execx.Result, err error) string {
 func lastLine(res execx.Result) string {
 	for _, s := range [][]byte{res.Stderr, res.Stdout} {
 		lines := strings.Split(strings.TrimSpace(string(s)), "\n")
-		for i := len(lines) - 1; i >= 0; i-- {
-			if l := strings.TrimSpace(lines[i]); l != "" {
+		for _, line := range slices.Backward(lines) {
+			if l := strings.TrimSpace(line); l != "" {
 				return textx.Clip(execx.Redact(strings.ToValidUTF8(l, "")), 200)
 			}
 		}

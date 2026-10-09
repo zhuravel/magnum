@@ -149,7 +149,7 @@ func TestUpsertKeepsTheReviewGate(t *testing.T) {
 	ctx := context.Background()
 	repo := mustRepo(t, st)
 	in := GitHubPR{RepoID: repo.ID, NodeID: "PR_7", Number: 7, URL: "u7", HeadSHA: "h1", GHState: GHOpen,
-		GHUpdatedAt: Ptr(t0), InitialState: PRBaseline, Identity: "talkable-app",
+		GHUpdatedAt: new(t0), InitialState: PRBaseline, Identity: "talkable-app",
 		ReviewGate: &ReviewGate{Decision: "REVIEW_REQUIRED", Opinions: []LatestReview{}, Complete: true}}
 	res, err := st.UpsertPRFromGitHub(ctx, in)
 	if err != nil {
@@ -196,7 +196,7 @@ func TestNeedsMePRsListsThePRsWaitingForTheOperator(t *testing.T) {
 		t.Helper()
 		head := "h" + string(rune('0'+n))
 		res, err := st.UpsertPRFromGitHub(ctx, GitHubPR{RepoID: repo.ID, NodeID: "PR_" + head, Number: n, URL: "https://github.com/talkable/talkable/pull/" + head,
-			HeadSHA: head, GHState: GHOpen, AuthorLogin: Ptr(author), ReviewGate: gate, InitialState: PRReviewed, Identity: identity})
+			HeadSHA: head, GHState: GHOpen, AuthorLogin: new(author), ReviewGate: gate, InitialState: PRReviewed, Identity: identity})
 		if err != nil {
 			t.Fatal(err)
 		}

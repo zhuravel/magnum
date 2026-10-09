@@ -171,8 +171,8 @@ func reviewEvent(state string) string {
 func withFooter(body, footer string) (string, bool) {
 	const space = "\r\n\t "
 	head := body
-	if i := strings.LastIndex(body, footerMarker); i >= 0 {
-		head = body[:i]
+	if before, _, ok := strings.CutLast(body, footerMarker); ok {
+		head = before
 	} else if strings.Contains(body, oldJudgeFooter) {
 		return body, false
 	}

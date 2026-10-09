@@ -308,8 +308,8 @@ func lastLine(res execx.Result, failed bool) string {
 	for _, s := range streams {
 		s = bytes.TrimSuffix(s, []byte(execx.TruncationMarker))
 		lines := strings.Split(strings.TrimSpace(string(s)), "\n")
-		for i := len(lines) - 1; i >= 0; i-- {
-			if l := oneLine(execx.Redact(lines[i])); l != "" {
+		for _, line := range slices.Backward(lines) {
+			if l := oneLine(execx.Redact(line)); l != "" {
 				return l
 			}
 		}

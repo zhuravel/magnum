@@ -45,9 +45,9 @@ func (s *Scanner) UpsertSlotDatabases(ctx context.Context, inv Inventory) (SyncR
 			}
 		}
 		present[d.Name] = true
-		row := store.SlotDatabase{DBName: d.Name, Slug: slug, SizeMB: store.Ptr(d.SizeMB)}
+		row := store.SlotDatabase{DBName: d.Name, Slug: slug, SizeMB: new(d.SizeMB)}
 		if id, ok := owner[d.Name]; ok {
-			row.SlotID = store.Ptr(id)
+			row.SlotID = new(id)
 		}
 		if _, err := s.Store.UpsertSlotDatabase(ctx, row); err != nil {
 			return res, fmt.Errorf("inventory: %w", err)

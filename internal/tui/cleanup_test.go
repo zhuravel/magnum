@@ -42,7 +42,7 @@ func newCleanupTest(t *testing.T, plan CleanupPlan, width, height int) cleanupMo
 
 // cursorLine is the view line that starts with the cursor mark.
 func cursorLine(view string) string {
-	for _, l := range strings.Split(view, "\n") {
+	for l := range strings.SplitSeq(view, "\n") {
 		if strings.HasPrefix(l, cursorMark) {
 			return l
 		}

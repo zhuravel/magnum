@@ -266,12 +266,16 @@ type Engine struct {
 	mu       sync.Mutex
 	rounds   map[int64]*roundHandle // PRs reserved by a round or an open (reserve)
 	evicting map[int64]string       // PRs under slot work (an eviction, a park) and why (reserveSlotWork)
+	// inflight are the requests answered asynchronously, which handleRequests
+	// skips until they complete: those handed to the heavy worker
+	// (heavyRequest), an open's (open.go) and an abort's or an ignore's
+	// (abort.go).
+	inflight map[int64]bool
 	roundWG  sync.WaitGroup
 
 	heavy     chan heavyJob
 	heavyMu   sync.Mutex
 	heavyKeys map[string]bool
-	inflight  map[int64]bool // async requests handed to the heavy worker
 
 	kick          chan struct{}
 	batch         *notify.Batcher
@@ -583,12 +587,7 @@ func (e *Engine) Run(ctx context.Context, opts Options) error {
 			return nil
 		case <-timer.C:
 		case <-e.kick:
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
+			timer.Stop()
 		}
 		if err := e.Tick(ctx); errors.Is(err, ErrSchemaChanged) || errors.Is(err, ErrRestartForBuild) {
 			return err

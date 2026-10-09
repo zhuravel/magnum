@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 )
@@ -649,7 +649,7 @@ func (k Kind) LoggedIn(stdout, stderr string, exitOK bool) (loggedIn, readable b
 		if json.NewDecoder(strings.NewReader(stdout[i:])).Decode(&v) != nil {
 			return false, false
 		}
-		for _, key := range strings.Split(value, ".") {
+		for key := range strings.SplitSeq(value, ".") {
 			m, ok := v.(map[string]any)
 			if !ok {
 				return false, false
@@ -691,12 +691,7 @@ func (c *Config) KindSpec(name string) (Kind, bool) {
 
 // KindNames lists the declared kinds, sorted.
 func (c *Config) KindNames() []string {
-	out := make([]string, 0, len(c.kinds()))
-	for n := range c.kinds() {
-		out = append(out, n)
-	}
-	sort.Strings(out)
-	return out
+	return slices.Sorted(maps.Keys(c.kinds()))
 }
 
 func (c *Config) kinds() map[string]Kind {

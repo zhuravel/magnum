@@ -11,9 +11,9 @@ import (
 // step is set) and returns its id.
 func stepEvent(t *testing.T, st *Store, ago time.Duration, subject, kind, step, phase string) int64 {
 	t.Helper()
-	e := Event{At: t0.Add(-ago), Level: "info", Subject: Ptr(subject), Kind: kind, Message: kind + "/" + step}
+	e := Event{At: t0.Add(-ago), Level: "info", Subject: new(subject), Kind: kind, Message: kind + "/" + step}
 	if step != "" {
-		e.Step, e.Phase = Ptr(step), Ptr(phase)
+		e.Step, e.Phase = new(step), new(phase)
 	}
 	id, err := st.AppendEvent(context.Background(), e)
 	if err != nil {

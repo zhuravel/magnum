@@ -329,7 +329,7 @@ func (e *Engine) seedEval(ctx context.Context, c EvalCase) (*roundJob, error) {
 	}
 	repo, err := e.st.UpsertRepo(ctx, store.Repo{
 		NodeID: "eval:" + c.Owner + "/" + c.Repo, Owner: c.Owner, Name: c.Repo, WatchOwner: c.Watch.Owner,
-		ClonePath: store.Ptr(c.MainClone), DefaultBranch: c.DefaultBranch, Mode: store.RepoModePerPR,
+		ClonePath: new(c.MainClone), DefaultBranch: c.DefaultBranch, Mode: store.RepoModePerPR,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("seed repo: %w", err)
@@ -340,7 +340,7 @@ func (e *Engine) seedEval(ctx context.Context, c EvalCase) (*roundJob, error) {
 	}
 	up, err := e.st.UpsertPRFromGitHub(ctx, store.GitHubPR{
 		RepoID: repo.ID, NodeID: fmt.Sprintf("eval:%s/%s#%d", c.Owner, c.Repo, c.Number), Number: c.Number, URL: c.URL,
-		HeadSHA: c.Head, Title: nonEmptyPtr(c.Title), AuthorLogin: nonEmptyPtr(c.Author), AuthorType: store.Ptr(authorType),
+		HeadSHA: c.Head, Title: nonEmptyPtr(c.Title), AuthorLogin: nonEmptyPtr(c.Author), AuthorType: new(authorType),
 		BaseRef: nonEmptyPtr(c.BaseRef), GHState: store.GHOpen, InitialState: store.PRClaiming, Identity: c.Identity,
 	})
 	if err != nil {
@@ -363,7 +363,7 @@ func (e *Engine) seedEval(ctx context.Context, c EvalCase) (*roundJob, error) {
 	}
 	sl, err := e.st.CreateSlot(ctx, store.Slot{
 		Name: fmt.Sprintf("eval-%s-%d", c.Repo, c.Number), RepoID: &repo.ID, RepoFullName: repo.FullName(), Kind: store.SlotKindPerPR,
-		Path: c.Checkout, MainClone: c.MainClone, State: store.SlotClaimed, PRID: &pr.ID, CheckedOutSHA: store.Ptr(c.Head),
+		Path: c.Checkout, MainClone: c.MainClone, State: store.SlotClaimed, PRID: &pr.ID, CheckedOutSHA: new(c.Head),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("seed slot: %w", err)

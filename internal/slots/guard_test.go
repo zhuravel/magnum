@@ -17,7 +17,7 @@ func TestGuardHerdrCases(t *testing.T) {
 	sl := h.provisioned(1)
 	pr := h.pr(h.repo().ID, 7, h.shaPR7, store.PRQueued)
 	if _, err := h.st.CreateSession(h.ctx, store.Session{PRID: pr.ID, Role: store.RoleCodexReview,
-		HerdrWorkspaceID: store.Ptr("wOurs"), HerdrPaneID: store.Ptr("wOurs:p3"), State: store.SessionLive}); err != nil {
+		HerdrWorkspaceID: new("wOurs"), HerdrPaneID: new("wOurs:p3"), State: store.SessionLive}); err != nil {
 		t.Fatal(err)
 	}
 	sub := filepath.Join(sl.Path, "app", "models")
@@ -351,7 +351,7 @@ func TestClearPinKeepsAPersistedHold(t *testing.T) {
 
 func TestGuardMissingDirectorySkipsGit(t *testing.T) {
 	h := newHarness(t)
-	sl := store.Slot{Name: "ghost", Path: filepath.Join(h.root, "nope"), CheckedOutSHA: store.Ptr(h.shaPR7)}
+	sl := store.Slot{Name: "ghost", Path: filepath.Join(h.root, "nope"), CheckedOutSHA: new(h.shaPR7)}
 	if err := h.m.Guard(h.ctx, sl); err != nil {
 		t.Fatalf("Guard on a missing dir: %v", err)
 	}
@@ -364,8 +364,8 @@ func TestGuardForeignAgentInThePRWorkspace(t *testing.T) {
 	sl, pr := h.claimedCheckout(8, h.shaPR8)
 	other := h.pr(h.repo().ID, 7, h.shaPR7, store.PRQueued)
 	for _, s := range []store.Session{
-		{PRID: pr.ID, Role: store.RoleCodexReview, HerdrWorkspaceID: store.Ptr("wPR8"), HerdrPaneID: store.Ptr("wPR8:p1"), State: store.SessionLive},
-		{PRID: other.ID, Role: store.RoleCodexReview, HerdrWorkspaceID: store.Ptr("wPR7"), HerdrPaneID: store.Ptr("wPR7:p1"), State: store.SessionLive},
+		{PRID: pr.ID, Role: store.RoleCodexReview, HerdrWorkspaceID: new("wPR8"), HerdrPaneID: new("wPR8:p1"), State: store.SessionLive},
+		{PRID: other.ID, Role: store.RoleCodexReview, HerdrWorkspaceID: new("wPR7"), HerdrPaneID: new("wPR7:p1"), State: store.SessionLive},
 	} {
 		if _, err := h.st.CreateSession(h.ctx, s); err != nil {
 			t.Fatal(err)

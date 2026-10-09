@@ -38,8 +38,6 @@ type prFile struct {
 	Patch    *string `json:"patch"`
 }
 
-func patch(s string) *string { return &s }
-
 // appPatch: a hunk of app/x.rb with RIGHT lines 10-16 and LEFT lines
 // 10-15, then a second hunk with RIGHT 40-45 and LEFT 39-43.
 const appPatch = "@@ -10,6 +10,7 @@ class X\n ctx\n ctx\n ctx\n+added\n ctx\n-gone\n+new\n ctx\n" +
@@ -88,7 +86,7 @@ type world struct {
 
 func newWorld(t *testing.T) *world {
 	w := &world{t: t, prBase: base, prHead: head, readComments: -1,
-		files:    []prFile{{Filename: "app/x.rb", Status: "modified", Patch: patch(appPatch)}},
+		files:    []prFile{{Filename: "app/x.rb", Status: "modified", Patch: new(appPatch)}},
 		gitDiffs: map[string]string{}, missing: map[string]bool{}}
 	w.fake = &execx.Fake{Rules: []execx.Rule{
 		{Prefix: []string{"gh"}, Fn: w.gh},

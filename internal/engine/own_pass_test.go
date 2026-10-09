@@ -22,7 +22,7 @@ func TestLatestJudgeNeverTakesTheOwnPass(t *testing.T) {
 		{ID: "r-judge", Round: 2, Role: store.RoleJudge, Kind: store.RunInitial, State: store.RunPending, TargetSHA: "b1"},
 		{ID: "r-own", Round: 2, Role: store.RoleJudge, Kind: store.RunOwnPass, State: store.RunWorking, TargetSHA: "b1", SubmittedAt: &at},
 		{ID: "r-own-cont", Round: 2, Role: store.RoleJudge, Kind: store.RunOwnPass, State: store.RunFailed, TargetSHA: "b1",
-			SubmittedAt: &at, Outcome: store.Ptr("usage_limit")},
+			SubmittedAt: &at, Outcome: new("usage_limit")},
 	}
 	j := h.e.latestJudge(ownOnly)
 	if j.marker == nil || j.marker.ID != "r-judge" || j.prompted != nil {
@@ -31,7 +31,7 @@ func TestLatestJudgeNeverTakesTheOwnPass(t *testing.T) {
 	// Once the candidates prompt went out, it is the judge's turn.
 	candidates := append([]store.Run(nil), ownOnly...)
 	candidates[1].State, candidates[1].SubmittedAt = store.RunFailed, &at
-	candidates[1].Outcome = store.Ptr("usage_limit")
+	candidates[1].Outcome = new("usage_limit")
 	j = h.e.latestJudge(candidates)
 	if j.marker == nil || j.marker.ID != "r-judge" || j.prompted == nil || j.prompted.ID != "r-judge" {
 		t.Fatalf("candidates prompted: latestJudge = marker %+v prompted %+v", j.marker, j.prompted)

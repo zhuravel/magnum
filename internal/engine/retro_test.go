@@ -42,7 +42,7 @@ func retroPR(h *harness, n int, ago time.Duration) store.PR {
 	closed := h.clock.Now().Add(-ago)
 	up, err := h.st.UpsertPRFromGitHub(h.ctx, store.GitHubPR{
 		RepoID: repo.ID, NodeID: "PR_" + strconv.Itoa(n), Number: n, URL: "https://github.com/talkable/talkable/pull/" + strconv.Itoa(n),
-		HeadSHA: retroShaB, AuthorLogin: store.Ptr("alice"), AuthorType: store.Ptr("User"),
+		HeadSHA: retroShaB, AuthorLogin: new("alice"), AuthorType: new("User"),
 		GHState: store.GHMerged, MergedAt: &closed, ClosedAt: &closed, InitialState: store.PRReviewed, Identity: "talkable-app",
 	})
 	if err != nil {

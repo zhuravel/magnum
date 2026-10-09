@@ -269,7 +269,7 @@ func TestRunChecksAMovedPRAgainstTheReviewedHead(t *testing.T) {
 	w := newWorld(t)
 	w.prHead = "ffffffffffffffffffffffffffffffffffffffff"
 	w.files = nil // the newer diff would not have app/x.rb
-	w.compareFiles = []prFile{{Filename: "app/x.rb", Status: "modified", Patch: patch(appPatch)}}
+	w.compareFiles = []prFile{{Filename: "app/x.rb", Status: "modified", Patch: new(appPatch)}}
 	out := w.run(opts(), review("COMMENT", "x", comment("app/x.rb", 12, "")))
 	if out.Status != StatusPosted {
 		t.Fatalf("outcome = %+v", out)

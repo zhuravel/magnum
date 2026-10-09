@@ -747,7 +747,7 @@ func (f *fakeAgents) StartAgent(ctx context.Context, pr store.PR, role config.Ro
 	}
 	name := fmt.Sprintf("mg-t-%d-%s", pr.Number, role.Name)
 	_, err := f.st.CreateSession(ctx, store.Session{PRID: pr.ID, Role: role.Name, AgentName: &name,
-		AgentKind: store.Ptr(role.AgentKind()), HerdrPaneID: &paneID, HerdrWorkspaceID: store.Ptr("w1"), State: store.SessionLive})
+		AgentKind: new(role.AgentKind()), HerdrPaneID: &paneID, HerdrWorkspaceID: new("w1"), State: store.SessionLive})
 	if err != nil && !errors.Is(err, store.ErrConflict) {
 		return err
 	}
@@ -1228,7 +1228,7 @@ func (f *fakeSlots) HumanEvidence(context.Context, store.Slot) (string, error) {
 func (f *fakeSlots) ProvisionPool(ctx context.Context, pool config.Pool, n int) error {
 	f.record(fmt.Sprintf("provision:%d", n))
 	_, err := f.st.CreateSlot(ctx, store.Slot{Name: pool.Slot(n), RepoFullName: pool.Repo, Kind: store.SlotKindPool,
-		Path: pool.Path(n), MainClone: pool.MainClone, PlaceholderBranch: store.Ptr(pool.Slot(n)), DBSlug: store.Ptr(pool.Slot(n)), State: store.SlotFree})
+		Path: pool.Path(n), MainClone: pool.MainClone, PlaceholderBranch: new(pool.Slot(n)), DBSlug: new(pool.Slot(n)), State: store.SlotFree})
 	return err
 }
 
@@ -1539,7 +1539,7 @@ func newHarness(t *testing.T, mods ...func(*harness)) *harness {
 	// The pool's one slot exists and is free.
 	pool := cfg.Pools[0]
 	if _, err := st.CreateSlot(h.ctx, store.Slot{Name: pool.Slot(1), RepoFullName: pool.Repo, Kind: store.SlotKindPool,
-		Path: pool.Path(1), MainClone: pool.MainClone, PlaceholderBranch: store.Ptr("review1"), DBSlug: store.Ptr("review1"),
+		Path: pool.Path(1), MainClone: pool.MainClone, PlaceholderBranch: new("review1"), DBSlug: new("review1"),
 		State: store.SlotFree}); err != nil {
 		t.Fatal(err)
 	}

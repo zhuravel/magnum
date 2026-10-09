@@ -7,9 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/textproto"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -104,9 +105,7 @@ func (t *GhTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		args = append(args, "--input", "-")
 	}
 	env := map[string]string{"NO_COLOR": "1", "CLICOLOR_FORCE": "", "GH_FORCE_TTY": ""}
-	for k, v := range t.Env {
-		env[k] = v
-	}
+	maps.Copy(env, t.Env)
 	if installToken != "" {
 		env["GH_TOKEN"] = installToken
 	}
@@ -161,7 +160,7 @@ func ghAPIArgs(req *http.Request) (args []string, token string, err error) {
 			names = append(names, name)
 		}
 	}
-	sort.Strings(names)
+	slices.Sort(names)
 	for _, name := range names {
 		for _, v := range req.Header[name] {
 			if strings.ContainsAny(name+v, "\r\n") {
@@ -187,8 +186,7 @@ func ghRunError(ctx context.Context, what string, res execx.Result, err error) e
 	if errors.Is(err, context.DeadlineExceeded) {
 		return fmt.Errorf("%s: gh timed out: %w", what, context.DeadlineExceeded)
 	}
-	var ee *execx.ExitError
-	if errors.As(err, &ee) {
+	if ee, ok := errors.AsType[*execx.ExitError](err); ok {
 		msg := strings.TrimSpace(execx.Redact(string(res.Stderr)))
 		if msg == "" {
 			msg = strings.TrimSpace(ee.Stderr)
@@ -200,8 +198,7 @@ func ghRunError(ctx context.Context, what string, res execx.Result, err error) e
 	}
 	// execx.RunError renders the command line first; its cause alone is the
 	// useful part (missing binary, start failure).
-	var re *execx.RunError
-	if errors.As(err, &re) {
+	if re, ok := errors.AsType[*execx.RunError](err); ok {
 		err = re.Err
 	}
 	return fmt.Errorf("%s: %s", what, execx.Redact(err.Error()))

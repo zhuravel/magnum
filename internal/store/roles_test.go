@@ -162,7 +162,7 @@ func TestMigrationV2ToV3FreeFormRoles(t *testing.T) {
 			t.Fatal("foreign_key_check reports violations after 0003")
 		}
 	}
-	if _, err := st.CreateRun(ctx, Run{PRID: 1, Round: 2, Role: RoleJudge, SessionID: Ptr(int64(999)), Kind: RunRereview,
+	if _, err := st.CreateRun(ctx, Run{PRID: 1, Round: 2, Role: RoleJudge, SessionID: new(int64(999)), Kind: RunRereview,
 		TargetSHA: "h1", Identity: "talkable-app", ReviewerLogin: "talkable[bot]", State: RunPending, PromptText: "p"}); err == nil {
 		t.Fatal("a run pointing at a missing session must fail the foreign key")
 	}
@@ -174,7 +174,7 @@ func TestMigrationV2ToV3FreeFormRoles(t *testing.T) {
 	if _, err := st.CreateSession(ctx, Session{PRID: 1, Role: RoleSimplify, State: SessionStarting}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("second starting %s on a migrated PR: %v", RoleSimplify, err)
 	}
-	if _, err := st.CreateSession(ctx, Session{PRID: 1, Role: "droid-simplify", AgentName: Ptr("mg-talkable-7-judge"), State: SessionLive}); !errors.Is(err, ErrConflict) {
+	if _, err := st.CreateSession(ctx, Session{PRID: 1, Role: "droid-simplify", AgentName: new("mg-talkable-7-judge"), State: SessionLive}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("live agent name reused: %v", err)
 	}
 	live, err := st.LiveSessionByPRRole(ctx, 1, RoleJudge)
@@ -187,7 +187,7 @@ func TestMigrationV2ToV3FreeFormRoles(t *testing.T) {
 	}
 
 	// Free-form roles from config work for sessions and runs.
-	droid, err := st.CreateSession(ctx, Session{PRID: 1, Role: "droid-simplify", AgentName: Ptr("mg-talkable-7-droid-simplify"), State: SessionLive})
+	droid, err := st.CreateSession(ctx, Session{PRID: 1, Role: "droid-simplify", AgentName: new("mg-talkable-7-droid-simplify"), State: SessionLive})
 	if err != nil || droid.Role != "droid-simplify" || droid.Generation != 1 {
 		t.Fatalf("free-form session: %+v, %v", droid, err)
 	}

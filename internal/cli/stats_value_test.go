@@ -34,7 +34,7 @@ func statsValueRuns(t0 time.Time, rounds []statsValueSpec) ([]store.RoundRun, []
 			rr.Kind = r.kind
 			rr.SubmittedAt, rr.EndedAt = statsOpt(t0.Add(time.Duration(r.from)*time.Minute)), statsOpt(t0.Add(time.Duration(r.to)*time.Minute))
 			if r.role == store.RoleJudge && r.kind != store.RunOwnPass {
-				rr.Outcome = store.Ptr(rd.outcome)
+				rr.Outcome = new(rd.outcome)
 			}
 			runs = append(runs, rr)
 		}

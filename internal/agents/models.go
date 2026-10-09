@@ -526,7 +526,7 @@ const switchStatusLines = 3
 // "Set model to …" line does.
 func modelShown(text, cmd string, names []string) bool {
 	var lines []string
-	for _, l := range strings.Split(strings.ReplaceAll(text, "\r", ""), "\n") {
+	for l := range strings.SplitSeq(strings.ReplaceAll(text, "\r", ""), "\n") {
 		if t := strings.TrimSpace(l); t != "" && !strings.Contains(l, cmd) {
 			lines = append(lines, t)
 		}
@@ -728,7 +728,7 @@ func orUnknown(model string) string {
 
 func splitList(s string) []string {
 	var out []string
-	for _, x := range strings.Split(s, ",") {
+	for x := range strings.SplitSeq(s, ",") {
 		if x = strings.TrimSpace(x); x != "" {
 			out = append(out, x)
 		}

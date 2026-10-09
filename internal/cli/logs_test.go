@@ -225,7 +225,7 @@ func TestLogsBacklogWithoutAnyEvents(t *testing.T) {
 
 func TestLogsCleansUntrustedText(t *testing.T) {
 	ev := store.Event{At: time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC), Level: "warn", Kind: store.KindStep,
-		Subject: store.Ptr("slot:r1" + statusNoise), Step: store.Ptr("step" + statusNoise), Message: "msg " + statusNoise}
+		Subject: new("slot:r1" + statusNoise), Step: new("step" + statusNoise), Message: "msg " + statusNoise}
 	var b bytes.Buffer
 	logsPrintEvent(&b, ev, false)
 	line := strings.TrimSuffix(b.String(), "\n")

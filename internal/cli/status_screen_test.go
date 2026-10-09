@@ -69,7 +69,7 @@ func TestStatusDashData(t *testing.T) {
 
 	// A slot whose PR `magnum ignore` muted says "ignored", as the board does,
 	// so the dashboard's U asks to stop ignoring it.
-	ignored := store.PR{Number: 7, State: store.PRIneligible, Muted: true, SkipReason: store.Ptr(engine.SkipIgnored), GHState: store.GHOpen}
+	ignored := store.PR{Number: 7, State: store.PRIneligible, Muted: true, SkipReason: new(engine.SkipIgnored), GHState: store.GHOpen}
 	if d := statusDashData(statusReport{Slots: []inventory.SlotView{{Slot: store.Slot{Name: "review2", RepoFullName: "talkable/talkable"}, PR: &ignored}}},
 		"talkable/talkable"); len(d.Slots) != 1 || d.Slots[0].PRState != "ignored" {
 		t.Errorf("an ignored PR's slot row: %+v", d.Slots)
@@ -232,7 +232,7 @@ func TestStatusDashActionsCaptureOutput(t *testing.T) {
 // and the current reviewed head.
 func TestReviewFactsOf(t *testing.T) {
 	at := time.Date(2026, 10, 3, 11, 40, 0, 0, time.UTC)
-	base := store.PR{HeadSHA: "head2", ReviewedSHA: store.Ptr("head1"), ReviewedAt: &at, LastReviewLogin: store.Ptr("zhuravel")}
+	base := store.PR{HeadSHA: "head2", ReviewedSHA: new("head1"), ReviewedAt: &at, LastReviewLogin: new("zhuravel")}
 	since := func(src, b, head string, n int) *store.SinceReview {
 		return &store.SinceReview{Source: src, Base: b, Head: head, Commits: n, Files: 4, Additions: 10}
 	}

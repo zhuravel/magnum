@@ -69,9 +69,9 @@ func pointee[T any](p *T) (any, bool) {
 	return *p, true
 }
 
-// ErrUnsafeBaseRef: a judge or reviewer prompt's base ref is not a branch
-// name gitx.ShellSafeRef passes. The prompts put it, unquoted, into git
-// commands the agent runs; the error never quotes it.
+// ErrUnsafeBaseRef means a judge or reviewer prompt's base ref is not a
+// branch name gitx.ShellSafeRef passes. The prompts put it, unquoted, into
+// git commands the agent runs; the error never quotes it.
 var ErrUnsafeBaseRef = errors.New("base branch name has characters magnum does not pass to a shell")
 
 // checkBaseRef refuses a judge or reviewer prompt's base ref that is set and

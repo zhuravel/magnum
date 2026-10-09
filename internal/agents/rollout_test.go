@@ -53,8 +53,8 @@ func taskComplete(at time.Time, errMsg, info string) map[string]any {
 // codexSID, created at the clock's now.
 func (e *env) codexRun(role Role, env map[string]string) store.Run {
 	e.t.Helper()
-	s, err := e.st.CreateSession(e.ctx, store.Session{PRID: e.pr.ID, Role: string(role), AgentName: store.Ptr("magnum-" + string(role)),
-		AgentKind: store.Ptr(KindCodex), SessionID: store.Ptr(codexSID), HerdrPaneID: store.Ptr("p1"), Env: env,
+	s, err := e.st.CreateSession(e.ctx, store.Session{PRID: e.pr.ID, Role: string(role), AgentName: new("magnum-" + string(role)),
+		AgentKind: new(KindCodex), SessionID: new(codexSID), HerdrPaneID: new("p1"), Env: env,
 		State: store.SessionLive, StartedAt: e.clock.Now().Add(-time.Hour)})
 	if err != nil {
 		e.t.Fatal(err)

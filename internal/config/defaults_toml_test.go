@@ -33,7 +33,7 @@ func TestGoDefaultsEqualTheEmbeddedDefaultsFile(t *testing.T) {
 
 	checked := 0
 	cfgType := reflect.TypeOf(fromGo).Elem()
-	for i := 0; i < cfgType.NumField(); i++ {
+	for i := range cfgType.NumField() {
 		field := cfgType.Field(i)
 		section := field.Tag.Get("toml")
 		if !field.IsExported() || field.Type.Kind() != reflect.Struct || section == "" || section == "-" {
@@ -41,7 +41,7 @@ func TestGoDefaultsEqualTheEmbeddedDefaultsFile(t *testing.T) {
 		}
 		goSection := reflect.ValueOf(fromGo).Elem().Field(i)
 		fileSection := reflect.ValueOf(&fromFile).Elem().Field(i)
-		for j := 0; j < field.Type.NumField(); j++ {
+		for j := range field.Type.NumField() {
 			key := field.Type.Field(j)
 			name, _, _ := strings.Cut(key.Tag.Get("toml"), ",")
 			if !key.IsExported() || name == "" || name == "-" || !md.IsDefined(section, name) {

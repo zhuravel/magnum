@@ -55,7 +55,7 @@ func roundRun(t *testing.T, h *actHarness, prID int64, round int, role, state st
 		if d == nil {
 			return nil
 		}
-		return store.Ptr(start.Add(*d))
+		return new(start.Add(*d))
 	}
 	r := store.Run{PRID: prID, Round: round, Role: role, Kind: store.RunRereview, State: state, TargetSHA: "h1",
 		Identity: "i", ReviewerLogin: "l", PromptText: "p", CreatedAt: start.Add(created), SubmittedAt: at(submitted), EndedAt: at(ended)}
@@ -63,8 +63,6 @@ func roundRun(t *testing.T, h *actHarness, prID int64, round int, role, state st
 		t.Fatal(err)
 	}
 }
-
-func after(d time.Duration) *time.Duration { return &d }
 
 // The board's progress of a round in flight comes from the runs of that
 // round only: a run of an earlier round, or of the round's number but
@@ -82,13 +80,13 @@ func TestBoardRoundProgressReadsOnlyTheCurrentRoundsRuns(t *testing.T) {
 	claiming := h.seedPR("talkable/talkable", 731, store.PRReviewed)
 	h.setPR(claiming.ID, store.PRClaiming, func(u *store.PRUpdate) { u.Set("last_round_started_at", start.Add(-2*time.Hour)) })
 
-	roundRun(t, h, f.pr.ID, 1, store.RoleClaude, store.RunVerified, start, -2*time.Hour, after(-2*time.Hour), after(-90*time.Minute))
-	roundRun(t, h, f.pr.ID, 2, store.RoleJudge, store.RunAbandoned, start, -time.Minute, after(-time.Minute), nil)
-	roundRun(t, h, f.pr.ID, 2, store.RoleClaude, store.RunEnded, start, time.Minute, after(time.Minute), after(12*time.Minute))
-	roundRun(t, h, f.pr.ID, 2, store.RoleSimplify, store.RunWorking, start, time.Minute, after(2*time.Minute), nil)
+	roundRun(t, h, f.pr.ID, 1, store.RoleClaude, store.RunVerified, start, -2*time.Hour, new(-2*time.Hour), new(-90*time.Minute))
+	roundRun(t, h, f.pr.ID, 2, store.RoleJudge, store.RunAbandoned, start, -time.Minute, new(-time.Minute), nil)
+	roundRun(t, h, f.pr.ID, 2, store.RoleClaude, store.RunEnded, start, time.Minute, new(time.Minute), new(12*time.Minute))
+	roundRun(t, h, f.pr.ID, 2, store.RoleSimplify, store.RunWorking, start, time.Minute, new(2*time.Minute), nil)
 	roundRun(t, h, f.pr.ID, 2, store.RoleCodexReview, store.RunPending, start, 3*time.Minute, nil, nil)
-	roundRun(t, h, reviewed.ID, 1, store.RoleJudge, store.RunVerified, start, 0, after(0), after(5*time.Minute))
-	roundRun(t, h, claiming.ID, 1, store.RoleJudge, store.RunVerified, start, -2*time.Hour, after(-2*time.Hour), after(-time.Hour))
+	roundRun(t, h, reviewed.ID, 1, store.RoleJudge, store.RunVerified, start, 0, new(time.Duration(0)), new(5*time.Minute))
+	roundRun(t, h, claiming.ID, 1, store.RoleJudge, store.RunVerified, start, -2*time.Hour, new(-2*time.Hour), new(-time.Hour))
 
 	f.at = start.Add(10 * time.Second)
 	f.roundStart("rereview", []string{store.RoleJudge, store.RoleClaude, store.RoleSimplify, store.RoleCodexReview}, nil, false)
@@ -200,7 +198,7 @@ func TestStatusDashRoundsCarryEachRoundsProgress(t *testing.T) {
 	}
 	if _, err := st.CreateRun(ctx, store.Run{PRID: prs[0].ID, Round: 1, Role: store.RoleSimplify, Kind: store.RunInitial,
 		TargetSHA: "h1", State: store.RunWorking, Identity: "i", ReviewerLogin: "l", PromptText: "p",
-		CreatedAt: start.Add(time.Minute), SubmittedAt: store.Ptr(start.Add(time.Minute))}); err != nil {
+		CreatedAt: start.Add(time.Minute), SubmittedAt: new(start.Add(time.Minute))}); err != nil {
 		t.Fatal(err)
 	}
 	r, err := statusGather(ctx, d, statusOptions{All: true})
@@ -238,7 +236,7 @@ func progressRun(role, kind, state string, start time.Time, created time.Duratio
 		if d == nil {
 			return nil
 		}
-		return store.Ptr(start.Add(*d))
+		return new(start.Add(*d))
 	}
 	return store.Run{Round: 2, Role: role, Kind: kind, State: state, CreatedAt: start.Add(created), SubmittedAt: at(submitted), EndedAt: at(ended)}
 }
@@ -250,9 +248,9 @@ func progressRun(role, kind, state string, start time.Time, created time.Duratio
 // pass (kind own_pass too) belongs to the own pass.
 func TestRoleProgressKeepsOwnPassApartFromJudge(t *testing.T) {
 	start := roundsNow.Add(-30 * time.Minute)
-	claude := progressRun(store.RoleClaude, store.RunRereview, store.RunWorking, start, time.Minute, after(time.Minute), nil)
+	claude := progressRun(store.RoleClaude, store.RunRereview, store.RunWorking, start, time.Minute, new(time.Minute), nil)
 	judge := progressRun(store.RoleJudge, store.RunRereview, store.RunPending, start, time.Minute, nil, nil)
-	own := progressRun(store.RoleJudge, store.RunOwnPass, store.RunWorking, start, time.Minute, after(time.Minute), nil)
+	own := progressRun(store.RoleJudge, store.RunOwnPass, store.RunWorking, start, time.Minute, new(time.Minute), nil)
 
 	got := describeProgress(&tui.RoundProgress{StartedAt: start, Roles: roleProgress(nil, []store.Run{claude, judge, own})}, start)
 	want := []string{
@@ -266,10 +264,10 @@ func TestRoleProgressKeepsOwnPassApartFromJudge(t *testing.T) {
 	}
 
 	// The own pass moved to another model and ended; the judge works.
-	claude.State, claude.EndedAt = store.RunEnded, store.Ptr(start.Add(12*time.Minute))
-	own.State, own.EndedAt = store.RunAbandoned, store.Ptr(start.Add(5*time.Minute))
-	fallback := progressRun(store.RoleJudge, store.RunOwnPass, store.RunEnded, start, 5*time.Minute, after(6*time.Minute), after(15*time.Minute))
-	judge.State, judge.SubmittedAt = store.RunWorking, store.Ptr(start.Add(16*time.Minute))
+	claude.State, claude.EndedAt = store.RunEnded, new(start.Add(12*time.Minute))
+	own.State, own.EndedAt = store.RunAbandoned, new(start.Add(5*time.Minute))
+	fallback := progressRun(store.RoleJudge, store.RunOwnPass, store.RunEnded, start, 5*time.Minute, new(6*time.Minute), new(15*time.Minute))
+	judge.State, judge.SubmittedAt = store.RunWorking, new(start.Add(16*time.Minute))
 	got = describeProgress(&tui.RoundProgress{StartedAt: start, Roles: roleProgress(nil, []store.Run{claude, judge, own, fallback})}, start)
 	want = []string{
 		"started 0s",
@@ -283,7 +281,7 @@ func TestRoleProgressKeepsOwnPassApartFromJudge(t *testing.T) {
 
 	// The own pass failed and the judge's main run ended.
 	fallback.State = store.RunFailed
-	judge.State, judge.EndedAt = store.RunEnded, store.Ptr(start.Add(25*time.Minute))
+	judge.State, judge.EndedAt = store.RunEnded, new(start.Add(25*time.Minute))
 	got = describeProgress(&tui.RoundProgress{StartedAt: start, Roles: roleProgress(nil, []store.Run{claude, judge, own, fallback})}, start)
 	want = []string{
 		"started 0s",
@@ -302,8 +300,8 @@ func TestRoleProgressKeepsOwnPassApartFromJudge(t *testing.T) {
 func TestRoundProgressListsTheJudgeNotStartedBesideItsOwnPass(t *testing.T) {
 	start := roundsNow.Add(-10 * time.Minute)
 	g := &tui.RoundProgress{StartedAt: start, Roles: roleProgress(nil, []store.Run{
-		progressRun(store.RoleClaude, store.RunInitial, store.RunWorking, start, time.Minute, after(time.Minute), nil),
-		progressRun(store.RoleJudge, store.RunOwnPass, store.RunWorking, start, time.Minute, after(time.Minute), nil),
+		progressRun(store.RoleClaude, store.RunInitial, store.RunWorking, start, time.Minute, new(time.Minute), nil),
+		progressRun(store.RoleJudge, store.RunOwnPass, store.RunWorking, start, time.Minute, new(time.Minute), nil),
 	})}
 	w := &tui.RoundWhy{At: start.Add(time.Second), Roles: []string{store.RoleJudge, store.RoleClaude, store.RoleCodexReview}}
 	listNamedRoles(nil, g, w)

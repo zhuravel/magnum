@@ -215,7 +215,7 @@ func ownCommits(before, after github.PushComparison) int {
 func ownChange(patch string) []string {
 	var out []string
 	var prev byte
-	for _, l := range strings.Split(patch, "\n") {
+	for l := range strings.SplitSeq(patch, "\n") {
 		if l == "" {
 			prev = ' '
 			continue

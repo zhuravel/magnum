@@ -123,7 +123,7 @@ func TestSimplifyWithoutProposalsKeepsTheApprove(t *testing.T) {
 func TestSelfAuthoredPRGetsCommentBothWays(t *testing.T) {
 	e := newEnv(t)
 	e.cfg.Repos = []config.Repo{{Repo: "talkable/talkable", NoFindingsEvent: "APPROVE"}}
-	e.pr.AuthorLogin = store.Ptr("Zhuravel")
+	e.pr.AuthorLogin = new("Zhuravel")
 	e.ag.behaviors[agents.RoleJudge] = []behavior{e.judgePosts(511, "COMMENTED", "COMMENT").behavior(t)}
 	if _, err := e.r.RunRound(e.ctx, e.input(KindInitial)); err != nil {
 		t.Fatalf("RunRound: %v", err)

@@ -91,8 +91,8 @@ func prEventSubject(full string, number int) string {
 // defensively: a part that is missing or of another type is left out.
 func roundWhyOf(evs []store.Event) *tui.RoundWhy {
 	last, prev := -1, -1
-	for i := len(evs) - 1; i >= 0; i-- {
-		if evs[i].Kind != evRoundStart {
+	for i, ev := range slices.Backward(evs) {
+		if ev.Kind != evRoundStart {
 			continue
 		}
 		if last < 0 {

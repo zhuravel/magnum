@@ -423,14 +423,14 @@ func prsMuteReason(ctx context.Context, st *store.Store, full string, number int
 	if err != nil {
 		return ""
 	}
-	for i := len(evs) - 1; i >= 0; i-- {
-		if evs[i].Kind != engine.EvPRMuted {
+	for _, ev := range slices.Backward(evs) {
+		if ev.Kind != engine.EvPRMuted {
 			continue
 		}
 		var data struct {
 			Reason string `json:"reason"`
 		}
-		if json.Unmarshal(evs[i].Data, &data) != nil {
+		if json.Unmarshal(ev.Data, &data) != nil {
 			return ""
 		}
 		return data.Reason

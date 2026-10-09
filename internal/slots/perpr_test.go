@@ -519,7 +519,7 @@ func TestCreatePRWorktreeMovesAStaleRowToTheFoundClone(t *testing.T) {
 	repoID := f.repo.ID
 	if _, err := h.st.CreateSlot(h.ctx, store.Slot{Name: PRSlotName("zhuravel/widget", 7), RepoID: &repoID, RepoFullName: "zhuravel/widget",
 		Kind: store.SlotKindPerPR, Path: filepath.Join(f.cloneRt, "widget__worktrees", "pr-7"), MainClone: filepath.Join(f.cloneRt, "widget"),
-		State: store.SlotProvisioning, LastError: store.Ptr("slots: clone origin does not match")}); err != nil {
+		State: store.SlotProvisioning, LastError: new("slots: clone origin does not match")}); err != nil {
 		t.Fatal(err)
 	}
 	sl, err := h.m.CreatePRWorktree(h.ctx, f.watch, "zhuravel/widget", f.pr, f.sha7)

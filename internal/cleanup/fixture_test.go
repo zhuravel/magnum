@@ -237,10 +237,10 @@ func (f *fixture) pr(repo store.Repo, number int, state, gh string, set func(*st
 	}
 	switch gh {
 	case store.GHMerged:
-		g.MergedAt = store.Ptr(now.Add(-14 * time.Minute))
+		g.MergedAt = new(now.Add(-14 * time.Minute))
 		g.ClosedAt = g.MergedAt
 	case store.GHClosed:
-		g.ClosedAt = store.Ptr(now.Add(-2 * time.Hour))
+		g.ClosedAt = new(now.Add(-2 * time.Hour))
 	}
 	up, err := f.st.UpsertPRFromGitHub(f.ctx, g)
 	if err != nil {
@@ -270,7 +270,7 @@ func (f *fixture) poolSlot(name, state string, prID int64, dir bool, set func(*s
 	sl := store.Slot{
 		Name: name, RepoID: &f.talkable.ID, RepoFullName: "talkable/talkable", Kind: store.SlotKindPool,
 		Path: filepath.Join(f.root, "talkable."+name), MainClone: filepath.Join(f.root, "talkable"),
-		PlaceholderBranch: store.Ptr(name), DBSlug: store.Ptr(name), State: state,
+		PlaceholderBranch: new(name), DBSlug: new(name), State: state,
 	}
 	if prID != 0 {
 		sl.PRID = &prID

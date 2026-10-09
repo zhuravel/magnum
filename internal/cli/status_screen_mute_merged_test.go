@@ -14,11 +14,11 @@ import (
 // closing rows from the registry row, slot rows from the slot's PR.
 func TestStatusDashDataCarriesTheMergeFlag(t *testing.T) {
 	merged := func(n int, muted, forced bool) store.PR {
-		return store.PR{Number: n, State: store.PRClosed, GHState: store.GHMerged, PrevState: store.Ptr(store.PRQueued),
-			HeadSHA: "b2", ReviewedSHA: store.Ptr("b1"), Muted: muted, Forced: forced}
+		return store.PR{Number: n, State: store.PRClosed, GHState: store.GHMerged, PrevState: new(store.PRQueued),
+			HeadSHA: "b2", ReviewedSHA: new("b1"), Muted: muted, Forced: forced}
 	}
 	flagged, dismissed, mutedForced := merged(5, false, false), merged(6, true, false), merged(7, true, true)
-	open := store.PR{Number: 8, State: store.PRReviewed, GHState: store.GHOpen, HeadSHA: "b2", ReviewedSHA: store.Ptr("b1"), Muted: true}
+	open := store.PR{Number: 8, State: store.PRReviewed, GHState: store.GHOpen, HeadSHA: "b2", ReviewedSHA: new("b1"), Muted: true}
 	r := statusReport{
 		GeneratedAt: time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC),
 		Slots: []inventory.SlotView{

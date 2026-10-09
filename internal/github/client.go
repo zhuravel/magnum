@@ -416,8 +416,7 @@ func (c *Client) restOnce(ctx context.Context, op, method, path string, fields [
 	}
 	res, err := c.gh(ctx, op, args, stdin, mutates, expected)
 	if err != nil {
-		var exitErr *execx.ExitError
-		if errors.As(err, &exitErr) {
+		if exitErr, ok := errors.AsType[*execx.ExitError](err); ok {
 			return ghFailure(op, res, exitErr)
 		}
 		return fmt.Errorf("github %s: %w", op, err)
@@ -454,8 +453,7 @@ func (c *Client) restRawOnce(ctx context.Context, op, path, accept string) ([]by
 	args = append(args, "-H", "Accept: "+accept)
 	res, err := c.gh(ctx, op, args, nil, false, nil)
 	if err != nil {
-		var exitErr *execx.ExitError
-		if errors.As(err, &exitErr) {
+		if exitErr, ok := errors.AsType[*execx.ExitError](err); ok {
 			return nil, ghFailure(op, res, exitErr)
 		}
 		return nil, fmt.Errorf("github %s: %w", op, err)
@@ -490,8 +488,7 @@ func httpStatus(stderr []byte) int {
 // A smaller query may succeed where this one did not; a network failure, a
 // refused or a malformed query would fail the same way again.
 func overloaded(err error) bool {
-	var apiErr *APIError
-	if errors.As(err, &apiErr) {
+	if apiErr, ok := errors.AsType[*APIError](err); ok {
 		if apiErr.Status >= 500 {
 			return true
 		}

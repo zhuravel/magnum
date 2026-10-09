@@ -309,8 +309,8 @@ func lastTurnError(path string, since time.Time) (TurnError, bool, error) {
 		return TurnError{}, false, err
 	}
 	lines := strings.Split(string(b), "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		line := lines[i]
+	for _, line := range slices.Backward(lines) {
+
 		if !strings.Contains(line, `"task_complete"`) {
 			continue // most lines: no JSON decoding
 		}

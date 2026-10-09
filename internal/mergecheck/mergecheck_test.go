@@ -142,7 +142,7 @@ func newWorld(t *testing.T) *world {
 	}
 	w.slots = &fakeSlots{
 		slot: store.Slot{ID: 2, Name: "review2", Path: slotDir, MainClone: "/main", Kind: store.SlotKindPool, State: store.SlotHeld,
-			HoldReason: store.Ptr(Reason)},
+			HoldReason: new(Reason)},
 		trees: map[string][]string{},
 	}
 	w.fake = &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"git"}, Fn: w.git}, {Prefix: []string{Shell}, Fn: w.shell}}}

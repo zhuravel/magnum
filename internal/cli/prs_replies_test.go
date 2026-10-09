@@ -124,7 +124,7 @@ func TestPRsJSONAndTableSayTheRepliesAndTheStalemate(t *testing.T) {
 		t.Fatalf("code %d err %s", code, f.Err.String())
 	}
 	var withReplies, without string
-	for _, l := range strings.Split(f.Out.String(), "\n") {
+	for l := range strings.SplitSeq(f.Out.String(), "\n") {
 		switch {
 		case strings.HasPrefix(l, "talkable#11960"):
 			withReplies = l

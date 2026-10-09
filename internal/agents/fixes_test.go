@@ -73,8 +73,8 @@ func TestEnsureWorkspaceClosesUnrecordedWorkspace(t *testing.T) {
 func TestResumeIDMatchesTheRolesKind(t *testing.T) {
 	e := newEnv(t)
 	add := func(kind, id string) {
-		if _, err := e.st.CreateSession(e.ctx, store.Session{PRID: e.pr.ID, Role: string(RoleClaude), AgentName: store.Ptr("x"),
-			AgentKind: store.Ptr(kind), SessionID: store.Ptr(id), State: store.SessionParked}); err != nil {
+		if _, err := e.st.CreateSession(e.ctx, store.Session{PRID: e.pr.ID, Role: string(RoleClaude), AgentName: new("x"),
+			AgentKind: new(kind), SessionID: new(id), State: store.SessionParked}); err != nil {
 			t.Fatal(err)
 		}
 	}

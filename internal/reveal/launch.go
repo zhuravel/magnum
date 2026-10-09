@@ -21,7 +21,7 @@ var paneID = regexp.MustCompile(`^\d+$`)
 
 // clientArgv is the herdr client command line typed into a new terminal. The
 // session is always named so a leaked HERDR_SESSION cannot retarget it.
-func (r *Revealer) clientArgv() []string {
+func (r *revealer) clientArgv() []string {
 	return []string{r.herdrBin, "--session", r.session}
 }
 
@@ -30,7 +30,7 @@ func (r *Revealer) clientArgv() []string {
 // Ghostty (new surface configuration), WezTerm (`cli spawn`), a custom launcher
 // template, or `open -a <App>` for generic terminals. A non-empty
 // terminal.launcher wins over the app kind, as in the Raycast extension.
-func (r *Revealer) launch(ctx context.Context, opts Options) error {
+func (r *revealer) launch(ctx context.Context, opts Options) error {
 	if r.launcher != "" || r.kind == KindCustom {
 		return r.launchCustom(ctx)
 	}
@@ -48,13 +48,13 @@ func (r *Revealer) launch(ctx context.Context, opts Options) error {
 	}
 }
 
-func (r *Revealer) osascriptLaunch(ctx context.Context, label, script string) (execx.Result, error) {
+func (r *revealer) osascriptLaunch(ctx context.Context, label, script string) (execx.Result, error) {
 	return r.run.Run(ctx, execx.Cmd{
 		Name: cmdOsascript, Args: []string{"-e", script}, Timeout: launchTimeout, Mutates: true, Label: label,
 	})
 }
 
-func (r *Revealer) launchTerminal(ctx context.Context) error {
+func (r *revealer) launchTerminal(ctx context.Context) error {
 	command := shellJoin(r.clientArgv()...)
 	script := "tell application \"Terminal\"\nactivate\ndo script " + appleScriptString(command) + "\nend tell"
 	if _, err := r.osascriptLaunch(ctx, "open herdr in Terminal", script); err != nil {
@@ -63,7 +63,7 @@ func (r *Revealer) launchTerminal(ctx context.Context) error {
 	return nil
 }
 
-func (r *Revealer) launchITerm(ctx context.Context, opts Options) error {
+func (r *revealer) launchITerm(ctx context.Context, opts Options) error {
 	placement := `if (count windows) > 0 then
   set targetWindow to current window
   set targetTab to create tab with default profile targetWindow
@@ -84,7 +84,7 @@ set targetSession to current session of targetWindow`
 	return nil
 }
 
-func (r *Revealer) launchGhostty(ctx context.Context, opts Options) error {
+func (r *revealer) launchGhostty(ctx context.Context, opts Options) error {
 	placement := `if (count windows) > 0 then
   new tab in front window with configuration cfg
 else
@@ -118,12 +118,12 @@ end if`
 
 // hasClient reports whether a herdr client of the session is running now. A
 // failing process list counts as no.
-func (r *Revealer) hasClient(ctx context.Context) bool {
+func (r *revealer) hasClient(ctx context.Context) bool {
 	ttys, err := r.clientTtys(ctx)
 	return err == nil && len(ttys) > 0
 }
 
-func (r *Revealer) launchWezTerm(ctx context.Context, opts Options) error {
+func (r *revealer) launchWezTerm(ctx context.Context, opts Options) error {
 	placement := []string{"--new-window"}
 	if !opts.NewWindow {
 		if listing, err := r.wezTermList(ctx); err == nil {
@@ -153,7 +153,7 @@ func (r *Revealer) launchWezTerm(ctx context.Context, opts Options) error {
 	return nil
 }
 
-func (r *Revealer) launchCustom(ctx context.Context) error {
+func (r *revealer) launchCustom(ctx context.Context) error {
 	if r.launcher == "" {
 		return errors.New(`terminal.app is "custom" but terminal.launcher is empty`)
 	}

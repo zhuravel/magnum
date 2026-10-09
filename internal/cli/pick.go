@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -202,7 +201,7 @@ func pickEntries(ctx context.Context, d *actDeps, limit int) ([]pickEntry, error
 			Author: author, Age: actAgo(now, at), Pinned: pr.Pinned, Known: true, Review: reviewFactsOf(pr), GHState: pr.GHState,
 		}})
 	}
-	sort.SliceStable(rows, func(i, j int) bool { return rows[i].at.After(rows[j].at) })
+	slices.SortStableFunc(rows, func(a, b row) int { return b.at.Compare(a.at) })
 	if limit > 0 && len(rows) > limit {
 		rows = rows[:limit]
 	}

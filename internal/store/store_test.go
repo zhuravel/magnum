@@ -91,7 +91,7 @@ func mustPR(t *testing.T, st *Store, repoID int64, number int, state string) PR 
 	res, err := st.UpsertPRFromGitHub(context.Background(), GitHubPR{
 		RepoID: repoID, NodeID: "PR_" + strconv.Itoa(number), Number: number,
 		URL: "https://github.com/talkable/talkable/pull/" + strconv.Itoa(number), HeadSHA: "sha-" + strconv.Itoa(number),
-		Title: Ptr("PR " + strconv.Itoa(number)), GHState: GHOpen,
+		Title: new("PR " + strconv.Itoa(number)), GHState: GHOpen,
 		InitialState: state, Identity: "talkable-app",
 	})
 	if err != nil {
@@ -105,7 +105,7 @@ func mustSlot(t *testing.T, st *Store, name, state string) Slot {
 	s, err := st.CreateSlot(context.Background(), Slot{
 		Name: name, RepoFullName: "talkable/talkable", Kind: SlotKindPool,
 		Path: "/tmp/talkable." + name, MainClone: "/tmp/talkable", State: state,
-		PlaceholderBranch: Ptr(name), DBSlug: Ptr(name),
+		PlaceholderBranch: new(name), DBSlug: new(name),
 	})
 	if err != nil {
 		t.Fatalf("CreateSlot: %v", err)
@@ -314,7 +314,7 @@ func TestUpsertRepoKeepsFirstSyncedAt(t *testing.T) {
 	clk.Add(time.Minute)
 	first := clk.Now()
 	r.FirstSyncedAt = &first
-	r.ClonePath = Ptr("/Users/x/Projects/talkable")
+	r.ClonePath = new("/Users/x/Projects/talkable")
 	r2, err := st.UpsertRepo(ctx, r)
 	if err != nil {
 		t.Fatal(err)
@@ -347,7 +347,7 @@ func TestUpsertPRFromGitHubChangeDetection(t *testing.T) {
 	repo := mustRepo(t, st)
 	in := GitHubPR{
 		RepoID: repo.ID, NodeID: "PR_1", Number: 1, URL: "u1", HeadSHA: "aaa",
-		Title: Ptr("first"), AuthorLogin: Ptr("alice"), Labels: []string{"x"}, GHState: GHOpen,
+		Title: new("first"), AuthorLogin: new("alice"), Labels: []string{"x"}, GHState: GHOpen,
 		InitialState: PRBaseline, Identity: "zhuravel",
 	}
 	res, err := st.UpsertPRFromGitHub(ctx, in)
@@ -427,7 +427,7 @@ func TestUpsertPRFromGitHubReviewRequested(t *testing.T) {
 	// false -> true is a change; true is persisted and round-trips through reads.
 	clk.Add(time.Minute)
 	in := base
-	in.ReviewRequested = Ptr(true)
+	in.ReviewRequested = new(true)
 	res, err = st.UpsertPRFromGitHub(ctx, in)
 	if err != nil {
 		t.Fatal(err)
@@ -462,7 +462,7 @@ func TestUpsertPRFromGitHubReviewRequested(t *testing.T) {
 
 	// true -> false clears it.
 	clk.Add(time.Minute)
-	in.ReviewRequested = Ptr(false)
+	in.ReviewRequested = new(false)
 	res, err = st.UpsertPRFromGitHub(ctx, in)
 	if err != nil {
 		t.Fatal(err)
@@ -473,7 +473,7 @@ func TestUpsertPRFromGitHubReviewRequested(t *testing.T) {
 
 	// New PR inserted with true.
 	n := base
-	n.NodeID, n.Number, n.URL, n.ReviewRequested = "PR_2", 2, "u2", Ptr(true)
+	n.NodeID, n.Number, n.URL, n.ReviewRequested = "PR_2", 2, "u2", new(true)
 	res, err = st.UpsertPRFromGitHub(ctx, n)
 	if err != nil {
 		t.Fatal(err)
@@ -698,8 +698,7 @@ func TestClaimSlotConcurrentSingleWinner(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make([]error, len(prs))
 	for i, p := range prs {
-		wg.Add(1)
-		go func() { defer wg.Done(); _, errs[i] = st.ClaimSlot(ctx, p.ID, slot.ID) }()
+		wg.Go(func() { _, errs[i] = st.ClaimSlot(ctx, p.ID, slot.ID) })
 	}
 	wg.Wait()
 	wins := 0
@@ -975,7 +974,7 @@ func TestSessionsAndRuns(t *testing.T) {
 	repo := mustRepo(t, st)
 	pr := mustPR(t, st, repo.ID, 1, PRReviewing)
 
-	s1, err := st.CreateSession(ctx, Session{PRID: pr.ID, Role: RoleJudge, AgentName: Ptr("mg-talkable-1-judge"), State: SessionStarting,
+	s1, err := st.CreateSession(ctx, Session{PRID: pr.ID, Role: RoleJudge, AgentName: new("mg-talkable-1-judge"), State: SessionStarting,
 		Env: map[string]string{"WT_BRANCH": "review1"}})
 	if err != nil {
 		t.Fatal(err)
@@ -998,7 +997,7 @@ func TestSessionsAndRuns(t *testing.T) {
 	if _, err := st.LiveSessionByPRRole(ctx, pr.ID, RoleJudge); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("parked session still live: %v", err)
 	}
-	s2, err := st.CreateSession(ctx, Session{PRID: pr.ID, Role: RoleJudge, State: SessionLive, ResumedFrom: Ptr("uuid-1")})
+	s2, err := st.CreateSession(ctx, Session{PRID: pr.ID, Role: RoleJudge, State: SessionLive, ResumedFrom: new("uuid-1")})
 	if err != nil || s2.Generation != 2 {
 		t.Fatalf("resumed session: %+v %v", s2, err)
 	}
@@ -1044,14 +1043,14 @@ func TestSlotDatabases(t *testing.T) {
 	st, clk := newStore(t)
 	ctx := context.Background()
 	slot := mustSlot(t, st, "review1", SlotFree)
-	if _, err := st.UpsertSlotDatabase(ctx, SlotDatabase{SlotID: &slot.ID, DBName: "talkable_development__review1", Slug: "review1", SizeMB: Ptr(12.5)}); err != nil {
+	if _, err := st.UpsertSlotDatabase(ctx, SlotDatabase{SlotID: &slot.ID, DBName: "talkable_development__review1", Slug: "review1", SizeMB: new(12.5)}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.UpsertSlotDatabase(ctx, SlotDatabase{DBName: "talkable_test__orphan", Slug: "orphan"}); err != nil {
 		t.Fatal(err)
 	}
 	clk.Add(time.Minute)
-	d, err := st.UpsertSlotDatabase(ctx, SlotDatabase{SlotID: &slot.ID, DBName: "talkable_development__review1", Slug: "review1", SizeMB: Ptr(13.0)})
+	d, err := st.UpsertSlotDatabase(ctx, SlotDatabase{SlotID: &slot.ID, DBName: "talkable_development__review1", Slug: "review1", SizeMB: new(13.0)})
 	if err != nil || !d.FirstSeenAt.Equal(t0) || !d.LastSeenAt.Equal(clk.Now()) || Deref(d.SizeMB) != 13.0 {
 		t.Fatalf("re-upsert: %+v %v", d, err)
 	}
@@ -1108,12 +1107,12 @@ func TestEventsKVNotifications(t *testing.T) {
 	st, clk := newStore(t)
 	ctx := context.Background()
 	for i, m := range []string{"one", "two", "three"} {
-		if _, err := st.AppendEvent(ctx, Event{Level: "info", Subject: Ptr("pr:1"), Kind: "poll", Message: m, Data: json.RawMessage(`{"i":` + strconv.Itoa(i) + `}`)}); err != nil {
+		if _, err := st.AppendEvent(ctx, Event{Level: "info", Subject: new("pr:1"), Kind: "poll", Message: m, Data: json.RawMessage(`{"i":` + strconv.Itoa(i) + `}`)}); err != nil {
 			t.Fatal(err)
 		}
 		clk.Add(time.Second)
 	}
-	if _, err := st.AppendEvent(ctx, Event{Level: "info", Subject: Ptr("pr:2"), Kind: "poll", Message: "other"}); err != nil {
+	if _, err := st.AppendEvent(ctx, Event{Level: "info", Subject: new("pr:2"), Kind: "poll", Message: "other"}); err != nil {
 		t.Fatal(err)
 	}
 	evs, err := st.EventsBySubject(ctx, "pr:1", 2)
@@ -1206,8 +1205,7 @@ func TestClaimSlotAcrossHandles(t *testing.T) {
 		if i%2 == 1 {
 			h = b
 		}
-		wg.Add(1)
-		go func() { defer wg.Done(); _, errs[i] = h.ClaimSlot(ctx, p.ID, slot.ID) }()
+		wg.Go(func() { _, errs[i] = h.ClaimSlot(ctx, p.ID, slot.ID) })
 	}
 	wg.Wait()
 	wins := 0

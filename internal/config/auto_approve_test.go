@@ -18,8 +18,6 @@ func autoApproveConfig() *Config {
 	return cfg
 }
 
-func strPtr(s string) *string { return &s }
-
 // Auto-approval is off unless a watch names its repositories: no
 // repository gets an identity to approve as.
 func TestAutoApproveIsOffByDefault(t *testing.T) {
@@ -56,11 +54,11 @@ func TestAutoApproveValidatesItsRepositoriesAndIdentity(t *testing.T) {
 		"a glob":           {func(w *Watch) { w.AutoApprove, w.AutoApproveAs = []string{"web-*"}, "z" }, `auto_approve entry "web-*" must be a repository name`},
 		"empty":            {func(w *Watch) { w.AutoApprove, w.AutoApproveAs = []string{" "}, "z" }, `auto_approve entry " " must be a repository name`},
 		"body": {func(w *Watch) {
-			w.AutoApprove, w.AutoApproveAs, w.AutoApproveBody = []string{"app"}, "z", strPtr("{{.Nope}}")
+			w.AutoApprove, w.AutoApproveAs, w.AutoApproveBody = []string{"app"}, "z", new("{{.Nope}}")
 		},
 			"watch acme: auto_approve_body does not render"},
 		"body lines": {func(w *Watch) {
-			w.AutoApprove, w.AutoApproveAs, w.AutoApproveBody = []string{"app"}, "z", strPtr("one\ntwo")
+			w.AutoApprove, w.AutoApproveAs, w.AutoApproveBody = []string{"app"}, "z", new("one\ntwo")
 		},
 			"watch acme: auto_approve_body must be one line"},
 		"unknown as alone": {func(w *Watch) { w.AutoApproveAs = "ghost" }, `unknown auto_approve_as "ghost"`},
@@ -121,7 +119,7 @@ func TestAutoApproveBodyRendersTheTemplate(t *testing.T) {
 	if got, _ := RenderAutoApproveBody(DefaultAutoApproveBody, d); got != "Auto-approved: magnum's review of `0123456` found no blocking problems." {
 		t.Errorf("without a review URL: %q", got)
 	}
-	cfg.Watches[0].AutoApproveBody = strPtr("LGTM per magnum ({{.Repo}}#{{.Number}} at {{.Short}})")
+	cfg.Watches[0].AutoApproveBody = new("LGTM per magnum ({{.Repo}}#{{.Number}} at {{.Short}})")
 	if got, err := RenderAutoApproveBody(cfg.AutoApproveBodyFor("acme/app"), d); err != nil || got != "LGTM per magnum (acme/app#7 at 0123456)" {
 		t.Errorf("template body = %q, %v", got, err)
 	}

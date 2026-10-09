@@ -387,8 +387,8 @@ func (e *Engine) recordIdentityVerdict(ctx context.Context, name string, pass bo
 
 func firstFail(rep identity.Report) string {
 	for _, l := range rep.Lines {
-		if strings.HasPrefix(l, "FAIL ") {
-			return strings.TrimPrefix(l, "FAIL ")
+		if after, ok := strings.CutPrefix(l, "FAIL "); ok {
+			return after
 		}
 	}
 	return "check failed"

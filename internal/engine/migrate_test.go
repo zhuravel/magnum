@@ -119,7 +119,7 @@ func migRun(h *harness, pr store.PR, id string, round int, identity, login strin
 	h.t.Helper()
 	if _, err := h.st.CreateRun(h.ctx, store.Run{ID: id, PRID: pr.ID, Round: round, Role: store.RoleJudge, Kind: store.RunInitial,
 		TargetSHA: "b1", Identity: identity, ReviewerLogin: login, State: store.RunVerified,
-		ReviewID: store.Ptr(reviewID), ReviewEvent: store.Ptr(event)}); err != nil {
+		ReviewID: new(reviewID), ReviewEvent: new(event)}); err != nil {
 		h.t.Fatal(err)
 	}
 }
@@ -157,9 +157,9 @@ func migRereview(h *harness, n int, head string) store.PR {
 func (h *harness) lastInput(n int) pipeline.RoundInput {
 	h.t.Helper()
 	ins := h.rd.all()
-	for i := len(ins) - 1; i >= 0; i-- {
-		if ins[i].PR.Number == n {
-			return ins[i]
+	for _, in := range slices.Backward(ins) {
+		if in.PR.Number == n {
+			return in
 		}
 	}
 	h.t.Fatalf("no round ran for PR #%d", n)
@@ -312,14 +312,14 @@ func TestMigrationDismissesWhatTheFormerAppLeftStanding(t *testing.T) {
 		{"both", func(*harness) {}, []int64{401, 402}},
 		{"keep_approvals on the watch keeps the approval", func(h *harness) { h.cfg.Watches[0].KeepApprovals = true }, []int64{401}},
 		{"keep_approvals on the repo keeps the approval", func(h *harness) {
-			h.cfg.Repos = append(h.cfg.Repos, config.Repo{Repo: "talkable/talkable", KeepApprovals: store.Ptr(true)})
+			h.cfg.Repos = append(h.cfg.Repos, config.Repo{Repo: "talkable/talkable", KeepApprovals: new(true)})
 		}, []int64{401}},
 		{"dismiss_own_stale_change_requests off keeps the change request", func(h *harness) {
-			h.cfg.IdentityByName("talkable-app").DismissOwnStale = store.Ptr(false)
+			h.cfg.IdentityByName("talkable-app").DismissOwnStale = new(false)
 		}, []int64{402}},
 		{"both off leaves everything", func(h *harness) {
 			h.cfg.Watches[0].KeepApprovals = true
-			h.cfg.IdentityByName("talkable-app").DismissOwnStale = store.Ptr(false)
+			h.cfg.IdentityByName("talkable-app").DismissOwnStale = new(false)
 		}, nil},
 	}
 	for _, tc := range cases {
@@ -486,7 +486,7 @@ func TestMigrationFromAUserDismissesOnlyWhenOptedIn(t *testing.T) {
 			m := newMigHarness(t, func(h *harness) {
 				h.cfg.Watches[0].Identity = "zhuravel"
 				if optIn {
-					h.cfg.IdentityByName("zhuravel").DismissOwnStale = store.Ptr(true)
+					h.cfg.IdentityByName("zhuravel").DismissOwnStale = new(true)
 				}
 			})
 			migPosts(m.harness, "COMMENTED")
@@ -524,7 +524,7 @@ func TestMigrationFromAUserToAnAppOfTheSameName(t *testing.T) {
 	setup := func(t *testing.T) (*migHarness, store.PR) {
 		m := newMigHarness(t, func(h *harness) {
 			h.cfg.Watches[0].Identity = "zhuravel"
-			h.cfg.IdentityByName("zhuravel").DismissOwnStale = store.Ptr(true)
+			h.cfg.IdentityByName("zhuravel").DismissOwnStale = new(true)
 		})
 		migPosts(m.harness, "COMMENTED")
 		pr := m.reviewedPR(2, "b1")
@@ -930,7 +930,7 @@ func TestPreviousReviewCountsAFormerLoginsReview(t *testing.T) {
 		pr := m.reviewedByA()
 		migRun(m.harness, pr, "run-user", 4, "zhuravel", "zhuravel", 800, "CHANGES_REQUESTED")
 		user := m.pr(2)
-		user.LastReviewID, user.LastReviewEvent, user.LastReviewLogin = store.Ptr(int64(800)), store.Ptr("CHANGES_REQUESTED"), store.Ptr("zhuravel")
+		user.LastReviewID, user.LastReviewEvent, user.LastReviewLogin = new(int64(800)), new("CHANGES_REQUESTED"), new("zhuravel")
 		prev := m.e.previousReview(m.ctx, user, "zhuravel[bot]", []string{"zhuravel"})
 		if prev.ID != 800 || prev.Login != "zhuravel" || !prev.Former {
 			t.Fatalf("previous = %+v, want the user's review 800 marked former", prev)
@@ -944,7 +944,7 @@ func TestPreviousReviewCountsAFormerLoginsReview(t *testing.T) {
 		migRun(m.harness, pr, "run-bob", 2, "zhuravel", "bob", 700, "CHANGES_REQUESTED")
 		migRun(m.harness, pr, "run-b", 3, "zhuravel-app", "zhuravel[bot]", 600, "APPROVED")
 		last := cur
-		last.LastReviewID, last.LastReviewEvent, last.LastReviewLogin = store.Ptr(int64(700)), store.Ptr("CHANGES_REQUESTED"), store.Ptr("bob")
+		last.LastReviewID, last.LastReviewEvent, last.LastReviewLogin = new(int64(700)), new("CHANGES_REQUESTED"), new("bob")
 
 		prev := m.e.previousReview(m.ctx, last, nowLogin, former)
 		if prev.ID != 600 || prev.Event != "APPROVED" || prev.Login != "zhuravel[bot]" {
@@ -966,7 +966,7 @@ func TestPreviousReviewCountsAFormerLoginsReview(t *testing.T) {
 	})
 	t.Run("no run on record: the PR row's reviewer names it", func(t *testing.T) {
 		alone := cur
-		alone.LastReviewID = store.Ptr(int64(999))
+		alone.LastReviewID = new(int64(999))
 		prev := m.e.previousReview(m.ctx, alone, nowLogin, former)
 		if prev.ID != 999 || prev.Login != "talkable[bot]" {
 			t.Fatalf("previous = %+v, want review 999 by talkable[bot] (last_review_login)", prev)

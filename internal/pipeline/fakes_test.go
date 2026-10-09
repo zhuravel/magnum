@@ -969,8 +969,8 @@ func newEnv(t *testing.T) *env {
 		t.Fatalf("UpsertRepo: %v", err)
 	}
 	up, err := st.UpsertPRFromGitHub(ctx, store.GitHubPR{RepoID: repo.ID, NodeID: "PR_11920", Number: 11920,
-		URL: "https://github.com/talkable/talkable/pull/11920", HeadSHA: target, AuthorLogin: store.Ptr("someone"),
-		Title: store.Ptr("Ignored title"), GHState: store.GHOpen, InitialState: store.PRReviewing, Identity: "talkable-app"})
+		URL: "https://github.com/talkable/talkable/pull/11920", HeadSHA: target, AuthorLogin: new("someone"),
+		Title: new("Ignored title"), GHState: store.GHOpen, InitialState: store.PRReviewing, Identity: "talkable-app"})
 	if err != nil {
 		t.Fatalf("UpsertPRFromGitHub: %v", err)
 	}
@@ -1031,11 +1031,11 @@ func newEnv(t *testing.T) *env {
 func (e *env) addSession(role config.Role) store.Session {
 	e.t.Helper()
 	r := agents.Role(role.Name)
-	s := store.Session{PRID: e.pr.ID, Role: role.Name, AgentName: store.Ptr(agents.AgentName("talkable/talkable", 11920, r)),
-		AgentKind: store.Ptr(role.AgentKind()), HerdrWorkspaceID: store.Ptr("w1"), HerdrPaneID: store.Ptr(fmt.Sprintf("p%d", len(e.sess)+1)),
-		Cwd: store.Ptr(slotPath), State: store.SessionLive, StartedAt: t0.Add(-time.Hour)}
+	s := store.Session{PRID: e.pr.ID, Role: role.Name, AgentName: new(agents.AgentName("talkable/talkable", 11920, r)),
+		AgentKind: new(role.AgentKind()), HerdrWorkspaceID: new("w1"), HerdrPaneID: new(fmt.Sprintf("p%d", len(e.sess)+1)),
+		Cwd: new(slotPath), State: store.SessionLive, StartedAt: t0.Add(-time.Hour)}
 	if role.IsShell() {
-		s.AgentName, s.AgentKind = nil, store.Ptr(agents.KindShell)
+		s.AgentName, s.AgentKind = nil, new(agents.KindShell)
 	}
 	s, err := e.st.CreateSession(e.ctx, s)
 	if err != nil {

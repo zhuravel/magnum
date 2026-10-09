@@ -168,7 +168,7 @@ func execCmd(tb testing.TB, cmd tea.Cmd) []tea.Msg {
 		return out
 	}
 	// tea.Sequence's message type is unexported; expand it by reflection.
-	if v := reflect.ValueOf(msg); v.Kind() == reflect.Slice && v.Type().Elem() == reflect.TypeOf(tea.Cmd(nil)) {
+	if v := reflect.ValueOf(msg); v.Kind() == reflect.Slice && v.Type().Elem() == reflect.TypeFor[tea.Cmd]() {
 		var out []tea.Msg
 		for i := range v.Len() {
 			out = append(out, execCmd(tb, v.Index(i).Interface().(tea.Cmd))...)
@@ -226,7 +226,7 @@ func mustNotContain(t *testing.T, view string, unwanted ...string) {
 // maxLineWidth is the widest line of view in cells.
 func maxLineWidth(view string) int {
 	w := 0
-	for _, l := range strings.Split(view, "\n") {
+	for l := range strings.SplitSeq(view, "\n") {
 		w = max(w, ansi.StringWidth(l))
 	}
 	return w

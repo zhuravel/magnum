@@ -73,7 +73,7 @@ func newRolesFixture(t *testing.T) *inspFixture {
 func rolesGroups(out string) map[string][]string {
 	groups := map[string][]string{}
 	head := ""
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		switch {
 		case line == "" || strings.HasPrefix(line, "prompts_dir:"):
 		case !strings.HasPrefix(line, "  "):
@@ -108,7 +108,7 @@ func TestRolesPrintsTheEffectiveRolesPerWatch(t *testing.T) {
 		}
 	}
 	var lint string
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "droid-lint") {
 			lint = strings.Join(strings.Fields(line), " ")
 			break
@@ -197,9 +197,9 @@ func TestRolesKinds(t *testing.T) {
 	}
 	// Each kind says what magnum does at a permission prompt.
 	permission := map[string]string{}
-	for _, section := range strings.Split(out, "\n\n") {
+	for section := range strings.SplitSeq(out, "\n\n") {
 		kind, _, _ := strings.Cut(section, " ")
-		for _, line := range strings.Split(section, "\n") {
+		for line := range strings.SplitSeq(section, "\n") {
 			if v, ok := strings.CutPrefix(strings.TrimSpace(line), "permission prompts:"); ok {
 				permission[kind] = strings.TrimSpace(v)
 			}

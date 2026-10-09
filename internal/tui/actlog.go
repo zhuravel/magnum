@@ -243,12 +243,12 @@ func logContent(st styles, g glyphs, entries []logEntry, width int) []string {
 		return append(lines, st.Dim.Render("no actions yet"))
 	}
 	wrap := func(s string, style lipgloss.Style) {
-		for _, raw := range strings.Split(strings.TrimSpace(s), "\n") {
+		for raw := range strings.SplitSeq(strings.TrimSpace(s), "\n") {
 			l := cleanText(raw)
 			if l == "" {
 				continue
 			}
-			for _, w := range strings.Split(lipgloss.NewStyle().Width(max(width-2, 10)).Render(l), "\n") {
+			for w := range strings.SplitSeq(lipgloss.NewStyle().Width(max(width-2, 10)).Render(l), "\n") {
 				lines = append(lines, "  "+style.Render(strings.TrimRight(w, " ")))
 			}
 		}

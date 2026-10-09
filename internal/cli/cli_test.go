@@ -147,7 +147,7 @@ func complete(t *testing.T, c *Context, args ...string) []string {
 		t.Fatalf("__complete %v: exit %d", args, code)
 	}
 	var lines []string
-	for _, l := range strings.Split(strings.TrimSpace(out.String()), "\n") {
+	for l := range strings.SplitSeq(strings.TrimSpace(out.String()), "\n") {
 		if l != "" && !strings.HasPrefix(l, ":") {
 			lines = append(lines, l)
 		}

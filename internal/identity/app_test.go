@@ -157,7 +157,7 @@ func TestTokenSingleFlight(t *testing.T) {
 	var wg sync.WaitGroup
 	toks := make([]string, n)
 	errs := make([]error, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
@@ -175,7 +175,7 @@ func TestTokenSingleFlight(t *testing.T) {
 	}
 	release()
 	wg.Wait()
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if errs[i] != nil || toks[i] != "ghs_test1" {
 			t.Fatalf("caller %d: %q %v", i, toks[i], errs[i])
 		}
@@ -336,13 +336,11 @@ func TestReauthInParallelMintsOnce(t *testing.T) {
 	clock.Advance(time.Minute)
 	var wg sync.WaitGroup
 	for range 8 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if err := app.Reauth(context.Background()); err != nil {
 				t.Error(err)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	if f.mintCount() != 2 {

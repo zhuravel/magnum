@@ -429,7 +429,7 @@ func (h *harness) pr(repoID int64, number int, sha, state string) store.PR {
 	res, err := h.st.UpsertPRFromGitHub(h.ctx, store.GitHubPR{
 		RepoID: repoID, NodeID: "PR_" + strconv.Itoa(number) + "_" + strconv.FormatInt(repoID, 10), Number: number,
 		URL: "https://github.com/x/y/pull/" + strconv.Itoa(number), HeadSHA: sha, GHState: store.GHOpen,
-		BaseRef: store.Ptr("master"), InitialState: state, Identity: "talkable-app",
+		BaseRef: new("master"), InitialState: state, Identity: "talkable-app",
 	})
 	if err != nil {
 		h.t.Fatal(err)

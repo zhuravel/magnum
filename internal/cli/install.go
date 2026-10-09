@@ -3,7 +3,9 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -324,7 +326,7 @@ func installGhShim(ctx context.Context, c *Context, run execx.Runner, dry bool) 
 		case err == nil:
 			fi, serr := os.Stat(path)
 			current = string(old) == script && serr == nil && fi.Mode().Perm() == 0o755
-		case !os.IsNotExist(err):
+		case !errors.Is(err, fs.ErrNotExist):
 			return fmt.Errorf("read %s: %w", path, err)
 		}
 	}

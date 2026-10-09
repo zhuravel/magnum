@@ -92,13 +92,11 @@ func (f *fakePaneAgents) Submit(ctx context.Context, run store.Run, text string)
 	if err := f.st.TransitionRun(ctx, run.ID, []string{store.RunPending}, store.RunWorking, nil); err != nil {
 		return err
 	}
-	f.wg.Add(1)
-	go func() {
-		defer f.wg.Done()
+	f.wg.Go(func() {
 		if f.reply == nil || f.reply(n, text) {
 			_ = f.st.TransitionRun(context.Background(), run.ID, []string{store.RunWorking}, store.RunEnded, nil)
 		}
-	}()
+	})
 	return nil
 }
 

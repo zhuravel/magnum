@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -251,12 +252,7 @@ type probeRunner struct {
 
 func (p *probeRunner) Run(ctx context.Context, c execx.Cmd) (execx.Result, error) {
 	isArg := func(s string) bool {
-		for _, a := range c.Args {
-			if a == s {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(c.Args, s)
 	}
 	if isArg("clear") {
 		p.cleared = true

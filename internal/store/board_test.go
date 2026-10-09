@@ -105,7 +105,7 @@ func TestUpsertPRBoardFields(t *testing.T) {
 	requests := []ReviewRequest{{At: asked, By: "alice", To: "rev-ann"}, {At: asked.Add(time.Hour), By: "alice", To: "team:engineers"}}
 	in := GitHubPR{RepoID: repo.ID, NodeID: "PR_9", Number: 9, URL: "u9", HeadSHA: "h1", InitialState: PRQueued, Identity: "zhuravel",
 		Assignees: []string{"zhuravel"}, RequestedReviewers: []string{"team:engineers", "rev-ann"}, LatestReviews: reviews,
-		ReviewRequests: requests, BaseSHA: Ptr("b1"), DetailsAt: Ptr(t0)}
+		ReviewRequests: requests, BaseSHA: new("b1"), DetailsAt: new(t0)}
 	res, err := st.UpsertPRFromGitHub(ctx, in)
 	if err != nil || !res.New {
 		t.Fatalf("insert = %+v, %v", res, err)
@@ -125,7 +125,7 @@ func TestUpsertPRBoardFields(t *testing.T) {
 	sub2 := sub // equal instant, different pointer
 	in.LatestReviews = []LatestReview{{Login: "rev-ann", State: "APPROVED", SubmittedAt: &sub2, CommitSHA: "h1"}}
 	in.ReviewRequests = []ReviewRequest{{At: asked.In(time.FixedZone("EEST", 3*3600)), By: "alice", To: "rev-ann"}, requests[1]}
-	in.DetailsAt = Ptr(t0.Add(time.Minute))
+	in.DetailsAt = new(t0.Add(time.Minute))
 	if res, err = st.UpsertPRFromGitHub(ctx, in); err != nil || res.Changed || !res.PR.DetailsAt.Equal(t0) || !res.PR.UpdatedAt.Equal(t0) {
 		t.Fatalf("no-op refresh = %+v, %v", res, err)
 	}
@@ -144,7 +144,7 @@ func TestUpsertPRBoardFields(t *testing.T) {
 	c.Add(time.Minute)
 	again := in
 	again.ReviewRequests = append(slices.Clone(requests), ReviewRequest{At: t0, By: "alice", To: "rev-ann"})
-	again.DetailsAt = Ptr(t0.Add(2 * time.Minute))
+	again.DetailsAt = new(t0.Add(2 * time.Minute))
 	if res, err = st.UpsertPRFromGitHub(ctx, again); err != nil || res.Changed || len(res.PR.ReviewRequests) != 3 || !res.PR.ReviewRequests[2].At.Equal(t0) ||
 		!res.PR.DetailsAt.Equal(t0.Add(2*time.Minute)) {
 		t.Fatalf("a new review request = %+v, %v", res, err)
@@ -199,8 +199,8 @@ func TestBoard(t *testing.T) {
 	upsert := func(repoID int64, n int, state string, updated time.Time, mod func(*GitHubPR)) PR {
 		t.Helper()
 		in := GitHubPR{RepoID: repoID, NodeID: "PR_" + itoa(repoID) + "_" + itoa(int64(n)), Number: n, URL: "u" + itoa(int64(n)),
-			HeadSHA: "head" + itoa(int64(n)), Title: Ptr("PR " + itoa(int64(n))), AuthorLogin: Ptr("alice"),
-			GHState: GHOpen, GHUpdatedAt: Ptr(updated), InitialState: state, Identity: "talkable-app"}
+			HeadSHA: "head" + itoa(int64(n)), Title: new("PR " + itoa(int64(n))), AuthorLogin: new("alice"),
+			GHState: GHOpen, GHUpdatedAt: new(updated), InitialState: state, Identity: "talkable-app"}
 		if mod != nil {
 			mod(&in)
 		}
@@ -214,7 +214,7 @@ func TestBoard(t *testing.T) {
 	held := upsert(repo.ID, 1, PRReviewed, t0.Add(-time.Hour), func(in *GitHubPR) {
 		in.Assignees = []string{"zhuravel"}
 		in.RequestedReviewers = []string{"team:engineers"}
-		in.ReviewRequested = Ptr(true)
+		in.ReviewRequested = new(true)
 		in.LatestReviews = []LatestReview{{Login: "talkable", State: "COMMENTED", SubmittedAt: &sub, CommitSHA: "head0"}}
 		in.ReviewRequests = []ReviewRequest{{At: t0.Add(-3 * time.Hour), By: "alice", To: "team:engineers"}}
 		in.Labels = []string{"WIP"}

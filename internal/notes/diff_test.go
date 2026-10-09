@@ -499,7 +499,7 @@ func TestLineChangesCountsAddedAndRemovedLines(t *testing.T) {
 func randomText(rng *rand.Rand, maxLines, alphabet int) string {
 	n := rng.IntN(maxLines + 1)
 	var sb strings.Builder
-	for i := 0; i < n; i++ {
+	for i := range n {
 		sb.WriteByte(byte('a' + rng.IntN(alphabet)))
 		if i < n-1 || rng.IntN(4) != 0 {
 			sb.WriteByte('\n')

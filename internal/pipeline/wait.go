@@ -360,7 +360,7 @@ func (rd *round) patterns(kind string) *config.HealthRegexps {
 func tailLines(s string, n int) string {
 	s = strings.TrimRight(s, "\n")
 	idx := len(s)
-	for i := 0; i < n; i++ {
+	for range n {
 		j := strings.LastIndexByte(s[:idx], '\n')
 		if j < 0 {
 			return s

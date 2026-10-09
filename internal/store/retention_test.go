@@ -13,9 +13,9 @@ func TestPruneEventsAndRequests(t *testing.T) {
 	ctx := context.Background()
 	event := func(ageDays int, subject, kind, step, phase string) int64 {
 		t.Helper()
-		e := Event{At: t0.Add(-time.Duration(ageDays) * day), Level: "info", Subject: Ptr(subject), Kind: kind, Message: kind + "/" + step}
+		e := Event{At: t0.Add(-time.Duration(ageDays) * day), Level: "info", Subject: new(subject), Kind: kind, Message: kind + "/" + step}
 		if step != "" {
-			e.Step, e.Phase = Ptr(step), Ptr(phase)
+			e.Step, e.Phase = new(step), new(phase)
 		}
 		id, err := st.AppendEvent(ctx, e)
 		if err != nil {

@@ -202,7 +202,7 @@ func (p *prbPainter) cardContent(r PRBoardRow, inner int) []string {
 		add(p.st.Accent.Render(url))
 	}
 	if r.MergedUnreviewed {
-		for _, l := range strings.Split(lipgloss.NewStyle().Width(inner).Render(p.mergedUnreviewedSentence(r)), "\n") {
+		for l := range strings.SplitSeq(lipgloss.NewStyle().Width(inner).Render(p.mergedUnreviewedSentence(r)), "\n") {
 			add(p.pal.red.Render(l))
 		}
 	}
@@ -228,7 +228,7 @@ func (p *prbPainter) cardContent(r PRBoardRow, inner int) []string {
 		add(p.pal.yellow.Render(truncate(p.snoozeSentence(r), inner)))
 	}
 	if r.CodexFlagSentence != "" {
-		for _, l := range strings.Split(lipgloss.NewStyle().Width(inner).Render(oneLine(r.CodexFlagSentence)), "\n") {
+		for l := range strings.SplitSeq(lipgloss.NewStyle().Width(inner).Render(oneLine(r.CodexFlagSentence)), "\n") {
 			add(p.pal.red.Render(l))
 		}
 	}
@@ -313,7 +313,7 @@ func (p *prbPainter) cardContent(r PRBoardRow, inner int) []string {
 
 	if r.WaitDetail != "" {
 		add("", p.st.Section.Render(p.g.headed("WAITING")))
-		for _, l := range strings.Split(lipgloss.NewStyle().Width(max(inner-2, 10)).Render(r.WaitDetail), "\n") {
+		for l := range strings.SplitSeq(lipgloss.NewStyle().Width(max(inner-2, 10)).Render(r.WaitDetail), "\n") {
 			add("  " + l)
 		}
 	}
@@ -333,14 +333,14 @@ func (p *prbPainter) cardContent(r PRBoardRow, inner int) []string {
 		add("  " + p.st.Dim.Render(r.Note))
 	}
 	if r.ProjectNote != "" {
-		for _, l := range strings.Split(lipgloss.NewStyle().Width(max(inner-2, 10)).Render(r.ProjectNote), "\n") {
+		for l := range strings.SplitSeq(lipgloss.NewStyle().Width(max(inner-2, 10)).Render(r.ProjectNote), "\n") {
 			add("  " + p.pal.yellow.Render(l))
 		}
 	}
 	if f := r.Findings; f != nil {
 		add("", p.st.Section.Render(p.g.headed("FINDINGS")))
 		for _, l := range p.findingsLines(*f) {
-			for _, w := range strings.Split(lipgloss.NewStyle().Width(max(inner-2, 10)).Render(l), "\n") {
+			for w := range strings.SplitSeq(lipgloss.NewStyle().Width(max(inner-2, 10)).Render(l), "\n") {
 				add("  " + w)
 			}
 		}
@@ -352,7 +352,7 @@ func (p *prbPainter) cardContent(r PRBoardRow, inner int) []string {
 		}
 		add("", head)
 		for _, l := range p.ciLines(*ci) {
-			for _, w := range strings.Split(lipgloss.NewStyle().Width(max(inner-2, 10)).Render(l), "\n") {
+			for w := range strings.SplitSeq(lipgloss.NewStyle().Width(max(inner-2, 10)).Render(l), "\n") {
 				add("  " + w)
 			}
 		}
@@ -363,14 +363,14 @@ func (p *prbPainter) cardContent(r PRBoardRow, inner int) []string {
 		if r.SkipReason != "" {
 			why += ": " + r.SkipReason
 		}
-		for _, w := range strings.Split(lipgloss.NewStyle().Width(max(inner-2, 10)).Render(why), "\n") {
+		for w := range strings.SplitSeq(lipgloss.NewStyle().Width(max(inner-2, 10)).Render(why), "\n") {
 			add("  " + w)
 		}
 		add("  " + p.st.Key.Render("R") + " reviews it anyway (asks y/N)")
 	}
 	if normState(r.State) == "baseline" {
 		add("", p.st.Section.Render(p.g.headed("NOT REVIEWED")))
-		for _, w := range strings.Split(lipgloss.NewStyle().Width(max(inner-2, 10)).Render(notReviewedSentence), "\n") {
+		for w := range strings.SplitSeq(lipgloss.NewStyle().Width(max(inner-2, 10)).Render(notReviewedSentence), "\n") {
 			add("  " + w)
 		}
 	}
@@ -388,7 +388,7 @@ func (p *prbPainter) cardContent(r PRBoardRow, inner int) []string {
 		add("", p.st.Section.Render(head))
 		if why != nil {
 			for _, l := range p.roundWhyLines(*why) {
-				for _, w := range strings.Split(lipgloss.NewStyle().Width(max(inner-2, 10)).Render(l), "\n") {
+				for w := range strings.SplitSeq(lipgloss.NewStyle().Width(max(inner-2, 10)).Render(l), "\n") {
 					add("  " + strings.TrimRight(w, " "))
 				}
 			}

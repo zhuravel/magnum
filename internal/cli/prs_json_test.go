@@ -257,9 +257,9 @@ func TestPRsJSONMirrorsEveryBoardRowField(t *testing.T) {
 		if b.NumField() != o.NumField() {
 			t.Errorf("%s has %d fields, %s has %d: map the new field", b, b.NumField(), o, o.NumField())
 		}
-		for i := 0; i < o.NumField(); i++ {
-			if tag := o.Field(i).Tag.Get("json"); tag == "" || tag == "-" {
-				t.Errorf("%s.%s has no json tag", o, o.Field(i).Name)
+		for field := range o.Fields() {
+			if tag := field.Tag.Get("json"); tag == "" || tag == "-" {
+				t.Errorf("%s.%s has no json tag", o, field.Name)
 			}
 		}
 	}

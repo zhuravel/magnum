@@ -788,7 +788,7 @@ func TestCrashRecovery(t *testing.T) {
 	for _, role := range []string{store.RoleJudge, store.RoleClaude} {
 		name := "mg-t-3-" + role
 		if _, err := h.st.CreateSession(h.ctx, store.Session{PRID: p3.ID, Role: role, AgentName: &name,
-			SessionID: store.Ptr("sess-" + role), State: store.SessionLive}); err != nil {
+			SessionID: new("sess-" + role), State: store.SessionLive}); err != nil {
 			t.Fatal(err)
 		}
 	}

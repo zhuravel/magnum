@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -362,12 +363,7 @@ func newLayout(t *testing.T) paths.Layout { return paths.Layout{Home: t.TempDir(
 
 // hasLine reports whether lines contains want exactly.
 func hasLine(lines []string, want string) bool {
-	for _, l := range lines {
-		if l == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(lines, want)
 }
 
 func assertLines(t *testing.T, r Report, want ...string) {

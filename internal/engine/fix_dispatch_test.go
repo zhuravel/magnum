@@ -253,8 +253,8 @@ func TestFailedProvisioningBacksOffAndEvicts(t *testing.T) {
 	// review2 failed to provision just now.
 	pool := h.cfg.Pools[0]
 	review2, err := h.st.CreateSlot(h.ctx, store.Slot{Name: pool.Slot(2), RepoFullName: pool.Repo, Kind: store.SlotKindPool,
-		Path: pool.Path(2), MainClone: pool.MainClone, PlaceholderBranch: store.Ptr("review2"), DBSlug: store.Ptr("review2"),
-		State: store.SlotProvisioning, LastError: store.Ptr("setup failed")})
+		Path: pool.Path(2), MainClone: pool.MainClone, PlaceholderBranch: new("review2"), DBSlug: new("review2"),
+		State: store.SlotProvisioning, LastError: new("setup failed")})
 	if err != nil {
 		t.Fatal(err)
 	}

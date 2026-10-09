@@ -3,7 +3,9 @@ package app
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -22,7 +24,7 @@ func copyStore(ctx context.Context, src string) (string, func() error, error) {
 	}
 	remove := func() error { return os.RemoveAll(dir) }
 	dst := filepath.Join(dir, "magnum.db")
-	if _, err := os.Stat(src); os.IsNotExist(err) {
+	if _, err := os.Stat(src); errors.Is(err, fs.ErrNotExist) {
 		return dst, remove, nil
 	}
 	u := url.URL{Scheme: "file", Path: src, RawQuery: "mode=ro&_pragma=busy_timeout(5000)"}

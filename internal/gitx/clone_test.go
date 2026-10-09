@@ -390,7 +390,7 @@ func TestOriginStamps(t *testing.T) {
 		}
 	}
 	c, f := newFake(outRule("git@github.com:o/r.git\n", "git"))
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		if got, err := c.FindClone(context.Background(), base, "o", "nothing"); !errors.Is(err, ErrNoClone) {
 			t.Fatalf("FindClone = %q, %v; want ErrNoClone", got, err)
 		}

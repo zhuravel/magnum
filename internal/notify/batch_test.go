@@ -321,11 +321,11 @@ func TestBatcherConcurrentAddAndFlush(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		for i := 0; i < 200; i++ {
+		for i := range 200 {
 			b.Add(Item{Key: fmt.Sprint(i), Title: "t"})
 		}
 	}()
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		_, _ = b.Flush(context.Background())
 	}
 	<-done

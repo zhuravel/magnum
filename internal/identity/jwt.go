@@ -110,8 +110,7 @@ func loadPrivateKey(envName, value string) (*rsa.PrivateKey, error) {
 		}
 		b, err := os.ReadFile(paths.Expand(v))
 		if err != nil {
-			var pe *fs.PathError
-			if errors.As(err, &pe) {
+			if pe, ok := errors.AsType[*fs.PathError](err); ok {
 				err = pe.Err // drop the path: the value might be key material, not a path
 			}
 			return nil, fmt.Errorf("read private key file named by %s: %w", source, err)

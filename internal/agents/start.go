@@ -94,7 +94,7 @@ func (m *Manager) StartAgent(ctx context.Context, pr store.PR, role config.Role,
 	}
 	sess, err := m.d.Store.LiveSessionByPRRole(ctx, pr.ID, role.Name)
 	if errors.Is(err, store.ErrNotFound) {
-		x := store.Session{PRID: pr.ID, Role: role.Name, AgentName: &name, AgentKind: store.Ptr(kindName),
+		x := store.Session{PRID: pr.ID, Role: role.Name, AgentName: &name, AgentKind: new(kindName),
 			HerdrPaneID: nonEmpty(paneID), State: store.SessionStarting}
 		if p, ok := paneIndex(snap)[paneID]; ok {
 			x.HerdrWorkspaceID, x.HerdrTabID, x.Cwd = nonEmpty(p.WorkspaceID), nonEmpty(p.TabID), nonEmpty(p.Cwd)
@@ -364,7 +364,7 @@ func (m *Manager) Wrapper(ctx context.Context, kind string) (bool, error) {
 // parseWhence reads `whence -w <kind>` output ("codex: function"); ok is
 // false when no line names kind (zsh failed, noisy rc output only).
 func parseWhence(out, kind string) (wrapper, ok bool) {
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		rest, found := strings.CutPrefix(strings.TrimSpace(line), kind+":")
 		if !found {
 			continue

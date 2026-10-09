@@ -138,14 +138,14 @@ var prQualKeys = []string{"state", "assignee", "author", "review"}
 // alternatives separated by commas; an empty value matches every row.
 func parsePRQuery(q string) prQuery {
 	var out prQuery
-	for _, w := range strings.Fields(strings.ToLower(q)) {
+	for w := range strings.FieldsSeq(strings.ToLower(q)) {
 		key, val, ok := strings.Cut(w, ":")
 		if !ok || !slices.Contains(prQualKeys, key) {
 			out.words = append(out.words, w)
 			continue
 		}
 		var alts []string
-		for _, a := range strings.Split(val, ",") {
+		for a := range strings.SplitSeq(val, ",") {
 			if a = strings.TrimSpace(a); a != "" {
 				alts = append(alts, a)
 			}

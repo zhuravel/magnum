@@ -277,7 +277,7 @@ func walkPatch(p, patch string) (lines int, classes []string) {
 			lines++
 		}
 	}
-	for _, l := range strings.Split(patch, "\n") {
+	for l := range strings.SplitSeq(patch, "\n") {
 		if strings.HasPrefix(l, "@@") {
 			settle()
 			oldState, newState = blockUnknown, blockUnknown

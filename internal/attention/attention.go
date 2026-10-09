@@ -243,7 +243,7 @@ func salient(lines []string) string {
 // the noise removed; a tool's "mise ruby@3.4.11 " prefix is dropped.
 func cleanLines(output string) []string {
 	var out []string
-	for _, l := range strings.Split(output, "\n") {
+	for l := range strings.SplitSeq(output, "\n") {
 		l = strings.TrimSpace(l)
 		if m := toolVerRe.FindStringSubmatch(l + " "); m != nil && strings.HasPrefix(l+" ", m[0]) {
 			l = strings.TrimSpace(l[min(len(m[0]), len(l)):])

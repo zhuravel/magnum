@@ -425,7 +425,7 @@ func TestAVerifiedReviewsFollowUpsOutliveTheRound(t *testing.T) {
 
 func TestSelfAuthored(t *testing.T) {
 	e := newEnv(t)
-	e.pr.AuthorLogin = store.Ptr("Zhuravel")
+	e.pr.AuthorLogin = new("Zhuravel")
 	e.ag.behaviors[agents.RoleJudge] = []behavior{e.judgePosts(510, "COMMENTED", "COMMENT").behavior(t)}
 	if _, err := e.r.RunRound(e.ctx, e.input(KindInitial)); err != nil {
 		t.Fatalf("RunRound: %v", err)
@@ -750,7 +750,7 @@ func TestAContinueCountsOnlyTheRolesItsPausedRoundRan(t *testing.T) {
 				t.Fatal(err)
 			}
 			if _, err := e.st.CreateRun(e.ctx, store.Run{PRID: e.pr.ID, Round: 1, Role: string(agents.RoleClaude), Kind: store.RunInitial,
-				TargetSHA: target, State: store.RunVerified, Outcome: store.Ptr(ReportOK), ReportPath: store.Ptr(filepath.Join(dir, "claude-review.md"))}); err != nil {
+				TargetSHA: target, State: store.RunVerified, Outcome: new(ReportOK), ReportPath: new(filepath.Join(dir, "claude-review.md"))}); err != nil {
 				t.Fatal(err)
 			}
 			if tc.paused != nil {
@@ -798,7 +798,7 @@ func TestContinueSkipsReviewersAndReusesReports(t *testing.T) {
 	}
 	// The paused round verified claude-review's report.
 	if _, err := e.st.CreateRun(e.ctx, store.Run{PRID: e.pr.ID, Round: 1, Role: string(agents.RoleClaude), Kind: store.RunInitial,
-		TargetSHA: target, State: store.RunVerified, Outcome: store.Ptr(ReportOK), ReportPath: store.Ptr(filepath.Join(dir, "claude-review.md"))}); err != nil {
+		TargetSHA: target, State: store.RunVerified, Outcome: new(ReportOK), ReportPath: new(filepath.Join(dir, "claude-review.md"))}); err != nil {
 		t.Fatal(err)
 	}
 	if err := writeJudgeJSON(filepath.Join(dir, "codex-judge.json"), map[string]any{"status": "error"}); err != nil {

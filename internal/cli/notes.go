@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -321,10 +322,8 @@ func notesGather(c *Context, full string, nr notes.Repo) notesView {
 // files and a waiting proposal.
 func notesSummary(w io.Writer, v notesView) {
 	past := func(limit string) string {
-		for _, o := range v.Over {
-			if o == limit {
-				return ": past"
-			}
+		if slices.Contains(v.Over, limit) {
+			return ": past"
 		}
 		return ""
 	}

@@ -29,7 +29,7 @@ func doctorInstall(kind string) string {
 // "function", "alias", "command", "builtin", ... or "none".
 func doctorWhence(ctx context.Context, d doctorDeps, kind string) (string, error) {
 	out, err := doctorShellProbe(ctx, d, 15*time.Second, "whence -w "+kind)
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), kind+":"); ok {
 			return strings.TrimSpace(rest), nil
 		}

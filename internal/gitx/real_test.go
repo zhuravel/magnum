@@ -185,7 +185,7 @@ func TestRealFetchPRAndBranch(t *testing.T) {
 	}
 
 	// Ref cleanup is idempotent.
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		if err := fx.c.UpdateRefDelete(ctx, fx.clone, PRRef(7)); err != nil {
 			t.Fatalf("UpdateRefDelete #%d: %v", i, err)
 		}
@@ -399,7 +399,7 @@ func TestRealPlaceholderReset(t *testing.T) {
 	if err := fx.c.FetchBranch(ctx, fx.clone, "main"); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 2; i++ { // repeating must be harmless (crash-safe step)
+	for i := range 2 { // repeating must be harmless (crash-safe step)
 		if err := fx.c.ResetPlaceholder(ctx, slotPath, "review1", "main"); err != nil {
 			t.Fatalf("ResetPlaceholder #%d: %v", i, err)
 		}
@@ -427,7 +427,7 @@ func TestRealPlaceholderReset(t *testing.T) {
 	if err := fx.c.SwitchDetach(ctx, slotPath, "HEAD"); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		if err := fx.c.BranchDelete(ctx, fx.clone, "review1", true); err != nil {
 			t.Fatalf("BranchDelete #%d: %v", i, err)
 		}
@@ -590,7 +590,7 @@ func TestRealPlaceholderResetUnsetsUpstream(t *testing.T) {
 		t.Fatalf("setup: merge = %q", got)
 	}
 
-	for i := 0; i < 2; i++ { // idempotent: the second run has nothing to unset
+	for i := range 2 { // idempotent: the second run has nothing to unset
 		if err := fx.c.ResetPlaceholder(ctx, slotPath, "review1", "main"); err != nil {
 			t.Fatalf("ResetPlaceholder #%d: %v", i, err)
 		}

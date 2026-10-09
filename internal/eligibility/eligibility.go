@@ -10,6 +10,7 @@ package eligibility
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -184,10 +185,5 @@ func normalizeLogin(s string) string {
 }
 
 func containsExact(list []string, s string) bool {
-	for _, v := range list {
-		if v == s {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(list, s)
 }

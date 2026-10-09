@@ -66,7 +66,7 @@ func TestUpsertKeepsTheReplies(t *testing.T) {
 	repo := mustRepo(t, st)
 	first := []Reply{{At: t0.Add(time.Minute), By: "alice", Thread: true}}
 	in := GitHubPR{RepoID: repo.ID, NodeID: "PR_7", Number: 7, URL: "u7", HeadSHA: "h1", GHState: GHOpen,
-		GHUpdatedAt: Ptr(t0), InitialState: PRBaseline, Identity: "talkable-app", Replies: first}
+		GHUpdatedAt: new(t0), InitialState: PRBaseline, Identity: "talkable-app", Replies: first}
 	res, err := st.UpsertPRFromGitHub(ctx, in)
 	if err != nil {
 		t.Fatal(err)
@@ -103,9 +103,9 @@ func TestPendingRepliesAreThoseAfterTheJudgeLastReadTheThreads(t *testing.T) {
 		wantLatestMins int
 	}{
 		"never reviewed":                {reviewed: "", want: 0},
-		"after the review":              {reviewed: "h1", reviewedAt: Ptr(at(2)), want: 2, wantLatestMins: 9},
-		"after the judge read them":     {reviewed: "h1", reviewedAt: Ptr(at(2)), readAt: Ptr(at(6)), want: 1, wantLatestMins: 9},
-		"read after the last one":       {reviewed: "h1", reviewedAt: Ptr(at(2)), readAt: Ptr(at(9)), want: 0},
+		"after the review":              {reviewed: "h1", reviewedAt: new(at(2)), want: 2, wantLatestMins: 9},
+		"after the judge read them":     {reviewed: "h1", reviewedAt: new(at(2)), readAt: new(at(6)), want: 1, wantLatestMins: 9},
+		"read after the last one":       {reviewed: "h1", reviewedAt: new(at(2)), readAt: new(at(9)), want: 0},
 		"a review without its time yet": {reviewed: "h1", want: 3, wantLatestMins: 9},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -123,7 +123,7 @@ func TestPendingRepliesAreThoseAfterTheJudgeLastReadTheThreads(t *testing.T) {
 	ctx := context.Background()
 	repo := mustRepo(t, st)
 	res, err := st.UpsertPRFromGitHub(ctx, GitHubPR{RepoID: repo.ID, NodeID: "PR_7", Number: 7, URL: "u7", HeadSHA: "h1", GHState: GHOpen,
-		GHUpdatedAt: Ptr(t0), InitialState: PRReviewed, Identity: "talkable-app", Replies: replies})
+		GHUpdatedAt: new(t0), InitialState: PRReviewed, Identity: "talkable-app", Replies: replies})
 	if err != nil {
 		t.Fatal(err)
 	}

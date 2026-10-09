@@ -11,8 +11,6 @@ import (
 	"github.com/zhuravel/magnum/internal/paths"
 )
 
-func intp(n int) *int { return &n }
-
 // schedulingConfig is a two-watch config: the first watch sets every new
 // per-watch key, the second sets none of them.
 const schedulingConfig = `
@@ -167,11 +165,11 @@ func TestThrottleForRereviewOverrides(t *testing.T) {
 	}{
 		{"nil watch is the daemon's", nil, nil, 30, 2 * time.Hour},
 		{"watch without overrides is the daemon's", nil, &Watch{Owner: "acme"}, 30, 2 * time.Hour},
-		{"watch with min lines 0 turns the threshold off", nil, &Watch{RereviewMinLines: intp(0)}, 0, 2 * time.Hour},
-		{"watch with 10 lines and 30m max wait", nil, &Watch{RereviewMinLines: intp(10), RereviewMaxWait: Duration{30 * time.Minute}}, 10, 30 * time.Minute},
+		{"watch with min lines 0 turns the threshold off", nil, &Watch{RereviewMinLines: new(0)}, 0, 2 * time.Hour},
+		{"watch with 10 lines and 30m max wait", nil, &Watch{RereviewMinLines: new(10), RereviewMaxWait: Duration{30 * time.Minute}}, 10, 30 * time.Minute},
 		{"watch with only a max wait keeps the daemon's lines", nil, &Watch{RereviewMaxWait: Duration{15 * time.Minute}}, 30, 15 * time.Minute},
-		{"zero max wait on a watch keeps the daemon's", nil, &Watch{RereviewMinLines: intp(5), RereviewMaxWait: Duration{0}}, 5, 2 * time.Hour},
-		{"watch can turn a daemon-off threshold on", func(d *Daemon) { d.RereviewMinLines = 0 }, &Watch{RereviewMinLines: intp(50)}, 50, 2 * time.Hour},
+		{"zero max wait on a watch keeps the daemon's", nil, &Watch{RereviewMinLines: new(5), RereviewMaxWait: Duration{0}}, 5, 2 * time.Hour},
+		{"watch can turn a daemon-off threshold on", func(d *Daemon) { d.RereviewMinLines = 0 }, &Watch{RereviewMinLines: new(50)}, 50, 2 * time.Hour},
 		{"unset watch lines keep a daemon-off threshold off", func(d *Daemon) { d.RereviewMinLines = 0 }, &Watch{}, 0, 2 * time.Hour},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -229,7 +227,7 @@ func TestValidateSchedulingKeysAcceptEdgeValues(t *testing.T) {
 	cfg.Daemon.RequestDebounce.Duration = 0
 	cfg.Daemon.RereviewMinLines = 0
 	cfg.Daemon.RereviewMaxWait.Duration = 0
-	cfg.Watches[0].RereviewMinLines = intp(0)
+	cfg.Watches[0].RereviewMinLines = new(0)
 	cfg.Watches[0].RereviewMaxWait.Duration = time.Second
 	cfg.Watches[0].RequestTeams = []string{"reviewers", "backend-team", "team_1", "T2"}
 	if err := cfg.Validate(); err != nil {
@@ -242,7 +240,7 @@ func TestValidateSchedulingReportsEveryProblem(t *testing.T) {
 	cfg.Daemon.RereviewMinLines = -5
 	cfg.Daemon.RereviewMaxWait.Duration = -time.Hour
 	cfg.Daemon.RequestDebounce.Duration = -time.Minute
-	cfg.Watches[0].RereviewMinLines = intp(-2)
+	cfg.Watches[0].RereviewMinLines = new(-2)
 	cfg.Watches[0].RequestTeams = []string{"a/b", "@c"}
 	err := cfg.Validate()
 	wantError(t, err,

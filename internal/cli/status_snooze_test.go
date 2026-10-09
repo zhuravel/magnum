@@ -32,8 +32,8 @@ func TestStatusShowsTheSnoozeAndTheOpenFindings(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := st.CreateRun(ctx, store.Run{PRID: pr.ID, Round: 1, Role: store.RoleJudge, Kind: store.RunInitial,
-		TargetSHA: "abcdef0123456789", State: store.RunVerified, Outcome: store.Ptr("posted"), ReviewID: store.Ptr(int64(7)),
-		ResultJSON: store.Ptr(`{"verdict":"blocking","findings":{},"previous_findings":{"open":3}}`),
+		TargetSHA: "abcdef0123456789", State: store.RunVerified, Outcome: new("posted"), ReviewID: new(int64(7)),
+		ResultJSON: new(`{"verdict":"blocking","findings":{},"previous_findings":{"open":3}}`),
 		Identity:   "talkable-app", ReviewerLogin: "talkable[bot]", PromptText: "x"}); err != nil {
 		t.Fatal(err)
 	}

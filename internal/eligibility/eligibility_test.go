@@ -6,8 +6,6 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 )
 
-func bp(b bool) *bool { return &b }
-
 // base returns an unremarkable PR that every default watch accepts.
 func base() PRFacts {
 	return PRFacts{
@@ -43,9 +41,9 @@ func TestClassify(t *testing.T) {
 			reason: "author alice left talkable: no longer a member or collaborator (skip_departed_authors = true)"},
 		{name: "a first-time contributor's branch is skipped", mutate: func(f *PRFacts) { f.AuthorAssociation = "FIRST_TIME_CONTRIBUTOR" },
 			reason: "author alice left the repository: no longer a member or collaborator (skip_departed_authors = true)"},
-		{name: "skip_departed_authors = false keeps them", watch: config.Watch{SkipDepartedAuthors: bp(false)},
+		{name: "skip_departed_authors = false keeps them", watch: config.Watch{SkipDepartedAuthors: new(false)},
 			mutate: func(f *PRFacts) { f.AuthorAssociation = "CONTRIBUTOR" }, want: true},
-		{name: "a fork PR is skip_cross_repository's business", watch: config.Watch{SkipCrossRepository: bp(false)},
+		{name: "a fork PR is skip_cross_repository's business", watch: config.Watch{SkipCrossRepository: new(false)},
 			mutate: func(f *PRFacts) { f.AuthorAssociation, f.IsCrossRepo = "FIRST_TIME_CONTRIBUTOR", true }, want: true},
 
 		// muted
@@ -75,20 +73,20 @@ func TestClassify(t *testing.T) {
 		{name: "[BOT] suffix is case-insensitive", mutate: func(f *PRFacts) { f.AuthorLogin = "Renovate[BOT]" }, reason: "bot author"},
 		{name: "login merely containing bot is not a bot", mutate: func(f *PRFacts) { f.AuthorLogin = "robot" }, want: true},
 		{name: "[bot] in the middle of a login is not a suffix", mutate: func(f *PRFacts) { f.AuthorLogin = "a[bot]b" }, want: true},
-		{name: "skip_bot_authors=true skips bots", watch: config.Watch{SkipBotAuthors: bp(true)}, mutate: func(f *PRFacts) { f.AuthorIsBot = true }, reason: "bot author"},
-		{name: "skip_bot_authors=false keeps AuthorIsBot", watch: config.Watch{SkipBotAuthors: bp(false)}, mutate: func(f *PRFacts) { f.AuthorIsBot = true }, want: true},
-		{name: "skip_bot_authors=false keeps [bot] logins", watch: config.Watch{SkipBotAuthors: bp(false)}, mutate: func(f *PRFacts) { f.AuthorLogin = "dependabot[bot]" }, want: true},
+		{name: "skip_bot_authors=true skips bots", watch: config.Watch{SkipBotAuthors: new(true)}, mutate: func(f *PRFacts) { f.AuthorIsBot = true }, reason: "bot author"},
+		{name: "skip_bot_authors=false keeps AuthorIsBot", watch: config.Watch{SkipBotAuthors: new(false)}, mutate: func(f *PRFacts) { f.AuthorIsBot = true }, want: true},
+		{name: "skip_bot_authors=false keeps [bot] logins", watch: config.Watch{SkipBotAuthors: new(false)}, mutate: func(f *PRFacts) { f.AuthorLogin = "dependabot[bot]" }, want: true},
 
 		// skip_authors
 		{name: "skip_authors exact", watch: config.Watch{SkipAuthors: []string{"mallory"}}, mutate: func(f *PRFacts) { f.AuthorLogin = "mallory" }, reason: `author "mallory" is in skip_authors`},
 		{name: "skip_authors case-insensitive", watch: config.Watch{SkipAuthors: []string{"mallory"}}, mutate: func(f *PRFacts) { f.AuthorLogin = "Mallory" }, reason: `author "Mallory" is in skip_authors`},
-		{name: "skip_authors entry without [bot] matches login with [bot]", watch: config.Watch{SkipBotAuthors: bp(false), SkipAuthors: []string{"dependabot"}}, mutate: func(f *PRFacts) { f.AuthorLogin = "dependabot[bot]" }, reason: `author "dependabot[bot]" is in skip_authors`},
+		{name: "skip_authors entry without [bot] matches login with [bot]", watch: config.Watch{SkipBotAuthors: new(false), SkipAuthors: []string{"dependabot"}}, mutate: func(f *PRFacts) { f.AuthorLogin = "dependabot[bot]" }, reason: `author "dependabot[bot]" is in skip_authors`},
 		{name: "skip_authors entry with [bot] matches login without [bot]", watch: config.Watch{SkipAuthors: []string{"dependabot[bot]"}}, mutate: func(f *PRFacts) { f.AuthorLogin = "dependabot" }, reason: `author "dependabot" is in skip_authors`},
-		{name: "skip_authors entry with [bot] matches login with [bot] case-insensitively", watch: config.Watch{SkipBotAuthors: bp(false), SkipAuthors: []string{"Dependabot[Bot]"}}, mutate: func(f *PRFacts) { f.AuthorLogin = "dependabot[bot]" }, reason: `author "dependabot[bot]" is in skip_authors`},
+		{name: "skip_authors entry with [bot] matches login with [bot] case-insensitively", watch: config.Watch{SkipBotAuthors: new(false), SkipAuthors: []string{"Dependabot[Bot]"}}, mutate: func(f *PRFacts) { f.AuthorLogin = "dependabot[bot]" }, reason: `author "dependabot[bot]" is in skip_authors`},
 		{name: "skip_authors second entry matches", watch: config.Watch{SkipAuthors: []string{"x", "mallory"}}, mutate: func(f *PRFacts) { f.AuthorLogin = "mallory" }, reason: `author "mallory" is in skip_authors`},
 		{name: "skip_authors is not a prefix match", watch: config.Watch{SkipAuthors: []string{"dependabot"}}, mutate: func(f *PRFacts) { f.AuthorLogin = "dependabot-preview" }, want: true},
 		{name: "skip_authors is not a substring match", watch: config.Watch{SkipAuthors: []string{"bot"}}, mutate: func(f *PRFacts) { f.AuthorLogin = "abot" }, want: true},
-		{name: "skip_authors applies even when bots are not skipped", watch: config.Watch{SkipBotAuthors: bp(false), SkipAuthors: []string{"dependabot"}}, mutate: func(f *PRFacts) { f.AuthorLogin = "dependabot"; f.AuthorIsBot = true }, reason: `author "dependabot" is in skip_authors`},
+		{name: "skip_authors applies even when bots are not skipped", watch: config.Watch{SkipBotAuthors: new(false), SkipAuthors: []string{"dependabot"}}, mutate: func(f *PRFacts) { f.AuthorLogin = "dependabot"; f.AuthorIsBot = true }, reason: `author "dependabot" is in skip_authors`},
 		{name: "empty skip_authors entry never matches an empty login", watch: config.Watch{SkipAuthors: []string{"", "  "}}, mutate: func(f *PRFacts) { f.AuthorLogin = "" }, want: true},
 		{name: "skip_authors entry is trimmed", watch: config.Watch{SkipAuthors: []string{" mallory "}}, mutate: func(f *PRFacts) { f.AuthorLogin = "mallory" }, reason: `author "mallory" is in skip_authors`},
 
@@ -102,30 +100,30 @@ func TestClassify(t *testing.T) {
 		{name: "skip_labels second entry matches", watch: config.Watch{SkipLabels: []string{"LG", "WIP"}}, mutate: func(f *PRFacts) { f.Labels = []string{"WIP"} }, reason: `label "WIP" is in skip_labels`},
 
 		// drafts
-		{name: "include_drafts=false skips drafts", watch: config.Watch{IncludeDrafts: bp(false)}, mutate: func(f *PRFacts) { f.IsDraft = true }, reason: "draft PR (include_drafts = false)"},
-		{name: "include_drafts=false keeps ready PRs", watch: config.Watch{IncludeDrafts: bp(false)}, want: true},
-		{name: "include_drafts=true keeps drafts", watch: config.Watch{IncludeDrafts: bp(true)}, mutate: func(f *PRFacts) { f.IsDraft = true }, want: true},
-		{name: "include_drafts=false keeps a draft with a pending review request", watch: config.Watch{IncludeDrafts: bp(false)},
+		{name: "include_drafts=false skips drafts", watch: config.Watch{IncludeDrafts: new(false)}, mutate: func(f *PRFacts) { f.IsDraft = true }, reason: "draft PR (include_drafts = false)"},
+		{name: "include_drafts=false keeps ready PRs", watch: config.Watch{IncludeDrafts: new(false)}, want: true},
+		{name: "include_drafts=true keeps drafts", watch: config.Watch{IncludeDrafts: new(true)}, mutate: func(f *PRFacts) { f.IsDraft = true }, want: true},
+		{name: "include_drafts=false keeps a draft with a pending review request", watch: config.Watch{IncludeDrafts: new(false)},
 			mutate: func(f *PRFacts) { f.IsDraft, f.Requested = true, true }, want: true},
-		{name: "a review request does not lift the other filters", watch: config.Watch{IncludeDrafts: bp(false), SkipLabels: []string{"WIP"}},
+		{name: "a review request does not lift the other filters", watch: config.Watch{IncludeDrafts: new(false), SkipLabels: []string{"WIP"}},
 			mutate: func(f *PRFacts) { f.IsDraft, f.Requested, f.Labels = true, true, []string{"WIP"} }, reason: `label "WIP" is in skip_labels`},
-		{name: "a review request does not lift include_own", watch: config.Watch{IncludeDrafts: bp(false), IncludeOwn: bp(false)},
+		{name: "a review request does not lift include_own", watch: config.Watch{IncludeDrafts: new(false), IncludeOwn: new(false)},
 			mutate: func(f *PRFacts) { own(f); f.IsDraft, f.Requested = true, true }, reason: "own PR (include_own = false)"},
 
 		// own PRs: "own" is any of the self logins, as for the board's "mine"
-		{name: "include_own=false skips own PRs", watch: config.Watch{IncludeOwn: bp(false)}, mutate: own, reason: "own PR (include_own = false)"},
-		{name: "include_own=false skips a PR by a second self login", watch: config.Watch{IncludeOwn: bp(false)},
+		{name: "include_own=false skips own PRs", watch: config.Watch{IncludeOwn: new(false)}, mutate: own, reason: "own PR (include_own = false)"},
+		{name: "include_own=false skips a PR by a second self login", watch: config.Watch{IncludeOwn: new(false)},
 			mutate: func(f *PRFacts) { f.AuthorLogin, f.Own = "rev-ann", true }, reason: "own PR (include_own = false)"},
-		{name: "include_own=false keeps other authors", watch: config.Watch{IncludeOwn: bp(false)}, want: true},
-		{name: "include_own=false keeps an author none of the self logins matched", watch: config.Watch{IncludeOwn: bp(false)},
+		{name: "include_own=false keeps other authors", watch: config.Watch{IncludeOwn: new(false)}, want: true},
+		{name: "include_own=false keeps an author none of the self logins matched", watch: config.Watch{IncludeOwn: new(false)},
 			mutate: func(f *PRFacts) { f.AuthorLogin = "zhuravel" }, want: true},
-		{name: "include_own=true keeps own PRs", watch: config.Watch{IncludeOwn: bp(true)}, mutate: own, want: true},
+		{name: "include_own=true keeps own PRs", watch: config.Watch{IncludeOwn: new(true)}, mutate: own, want: true},
 
 		// cross-repository
 		{name: "cross-repo PRs are skipped by default", mutate: func(f *PRFacts) { f.IsCrossRepo = true }, reason: "cross-repository PR (skip_cross_repository = true)"},
-		{name: "skip_cross_repository=true skips forks", watch: config.Watch{SkipCrossRepository: bp(true)}, mutate: func(f *PRFacts) { f.IsCrossRepo = true }, reason: "cross-repository PR (skip_cross_repository = true)"},
-		{name: "skip_cross_repository=false keeps forks", watch: config.Watch{SkipCrossRepository: bp(false)}, mutate: func(f *PRFacts) { f.IsCrossRepo = true }, want: true},
-		{name: "same-repo PRs are kept", watch: config.Watch{SkipCrossRepository: bp(true)}, want: true},
+		{name: "skip_cross_repository=true skips forks", watch: config.Watch{SkipCrossRepository: new(true)}, mutate: func(f *PRFacts) { f.IsCrossRepo = true }, reason: "cross-repository PR (skip_cross_repository = true)"},
+		{name: "skip_cross_repository=false keeps forks", watch: config.Watch{SkipCrossRepository: new(false)}, mutate: func(f *PRFacts) { f.IsCrossRepo = true }, want: true},
+		{name: "same-repo PRs are kept", watch: config.Watch{SkipCrossRepository: new(true)}, want: true},
 
 		// manual overrides are the engine's call, not a filter concern
 		{name: "Forced does not bypass filters", mutate: func(f *PRFacts) { f.Forced, f.IsCrossRepo = true, true }, reason: "cross-repository PR (skip_cross_repository = true)"},
@@ -134,9 +132,9 @@ func TestClassify(t *testing.T) {
 		// rule order after muted: bot, authors, labels, drafts, own, cross-repo
 		{name: "bot is reported before skip_authors", watch: config.Watch{SkipAuthors: []string{"dependabot"}}, mutate: func(f *PRFacts) { f.AuthorLogin = "dependabot[bot]"; f.AuthorIsBot = true }, reason: "bot author"},
 		{name: "skip_authors is reported before labels", watch: config.Watch{SkipAuthors: []string{"mallory"}, SkipLabels: []string{"WIP"}}, mutate: func(f *PRFacts) { f.AuthorLogin = "mallory"; f.Labels = []string{"WIP"} }, reason: `author "mallory" is in skip_authors`},
-		{name: "labels are reported before drafts", watch: config.Watch{SkipLabels: []string{"WIP"}, IncludeDrafts: bp(false)}, mutate: func(f *PRFacts) { f.Labels = []string{"WIP"}; f.IsDraft = true }, reason: `label "WIP" is in skip_labels`},
-		{name: "drafts are reported before own PRs", watch: config.Watch{IncludeDrafts: bp(false), IncludeOwn: bp(false)}, mutate: func(f *PRFacts) { own(f); f.IsDraft = true }, reason: "draft PR (include_drafts = false)"},
-		{name: "own PRs are reported before cross-repo", watch: config.Watch{IncludeOwn: bp(false)}, mutate: func(f *PRFacts) { own(f); f.IsCrossRepo = true }, reason: "own PR (include_own = false)"},
+		{name: "labels are reported before drafts", watch: config.Watch{SkipLabels: []string{"WIP"}, IncludeDrafts: new(false)}, mutate: func(f *PRFacts) { f.Labels = []string{"WIP"}; f.IsDraft = true }, reason: `label "WIP" is in skip_labels`},
+		{name: "drafts are reported before own PRs", watch: config.Watch{IncludeDrafts: new(false), IncludeOwn: new(false)}, mutate: func(f *PRFacts) { own(f); f.IsDraft = true }, reason: "draft PR (include_drafts = false)"},
+		{name: "own PRs are reported before cross-repo", watch: config.Watch{IncludeOwn: new(false)}, mutate: func(f *PRFacts) { own(f); f.IsCrossRepo = true }, reason: "own PR (include_own = false)"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -161,12 +159,12 @@ func TestClassify(t *testing.T) {
 func TestClassifyShippedTalkableWatch(t *testing.T) {
 	w := config.Watch{
 		Owner:               "talkable",
-		IncludeDrafts:       bp(true),
-		IncludeOwn:          bp(true),
-		SkipBotAuthors:      bp(true),
+		IncludeDrafts:       new(true),
+		IncludeOwn:          new(true),
+		SkipBotAuthors:      new(true),
 		SkipAuthors:         []string{"dependabot"},
 		SkipLabels:          []string{},
-		SkipCrossRepository: bp(true),
+		SkipCrossRepository: new(true),
 	}
 	cases := []struct {
 		name string

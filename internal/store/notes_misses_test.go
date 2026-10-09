@@ -17,7 +17,7 @@ func TestRetroDueWaitsForTheSettleDelay(t *testing.T) {
 	repo := mustRepo(t, st)
 	closedAgo := func(number int, ago time.Duration) PR {
 		pr := mustPR(t, st, repo.ID, number, PRReviewed)
-		mustClosePR(t, st, pr.ID, GHMerged, nil, at(t0.Add(-ago)))
+		mustClosePR(t, st, pr.ID, GHMerged, nil, new(t0.Add(-ago)))
 		mustPostedRun(t, st, pr.ID, 1, int64(number))
 		return pr
 	}

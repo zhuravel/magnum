@@ -61,7 +61,8 @@ func runCleanup(c *Context, f *cleanupFlags) int {
 	return cleanupExec(ctx, c, a.Cleanup, a.Store, f, a.Config.Daemon.DefaultRepo)
 }
 
-// cleanupPlanner is the part of *cleanup.Planner the command drives.
+// cleanupPlanner plans and applies a release in-process: the part of
+// *cleanup.Planner that cleanup, slots remove and the act commands drive.
 type cleanupPlanner interface {
 	Plan(ctx context.Context, opts cleanup.Options) (cleanup.Plan, error)
 	Apply(ctx context.Context, plan cleanup.Plan, confirmed bool) (cleanup.Report, error)

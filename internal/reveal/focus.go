@@ -14,7 +14,7 @@ import (
 
 // focusWezTerm matches the session's client ttys to WezTerm panes and
 // activates the pane.
-func (r *Revealer) focusWezTerm(ctx context.Context) (FocusResult, error) {
+func (r *revealer) focusWezTerm(ctx context.Context) (FocusResult, error) {
 	listing, err := r.wezTermList(ctx)
 	if err != nil {
 		return Unavailable, err
@@ -52,7 +52,7 @@ func (r *Revealer) focusWezTerm(ctx context.Context) (FocusResult, error) {
 // focusGhostty runs the marker-title flow: set a unique outer terminal title
 // through herdr, let AppleScript focus the Ghostty terminal with that name,
 // then clear the title.
-func (r *Revealer) focusGhostty(ctx context.Context) (FocusResult, error) {
+func (r *revealer) focusGhostty(ctx context.Context) (FocusResult, error) {
 	marker := r.newMarker()
 	// The clear is armed before the set is awaited: a client-side timeout can
 	// leave the title changed server-side, and clearing an unchanged title is
@@ -98,7 +98,7 @@ func (r *Revealer) focusGhostty(ctx context.Context) (FocusResult, error) {
 
 // herdrCmd builds a herdr CLI call that always names the session, so an
 // inherited HERDR_SESSION cannot retarget it.
-func (r *Revealer) herdrCmd(timeout time.Duration, label string, args ...string) execx.Cmd {
+func (r *revealer) herdrCmd(timeout time.Duration, label string, args ...string) execx.Cmd {
 	return execx.Cmd{
 		Name:    r.herdrBin,
 		Args:    append([]string{"--session", r.session}, args...),
@@ -111,7 +111,7 @@ func (r *Revealer) herdrCmd(timeout time.Duration, label string, args ...string)
 // clearTitle removes the marker title. It must succeed even when the caller's
 // context is already cancelled, so it runs on a context detached from it, with
 // one generous retry.
-func (r *Revealer) clearTitle(ctx context.Context) {
+func (r *revealer) clearTitle(ctx context.Context) {
 	ctx = context.WithoutCancel(ctx)
 	if _, err := r.run.Run(ctx, r.herdrCmd(clearTimeout, "clear outer title", "terminal", "title", "clear")); err == nil {
 		return

@@ -259,7 +259,7 @@ func TestBoardRoundFactsSpendOverTheLastWeek(t *testing.T) {
 		r := store.Run{PRID: prID, Round: round, Role: role, Kind: store.RunInitial, State: store.RunVerified, TargetSHA: "h1",
 			Identity: "i", ReviewerLogin: "l", PromptText: "p", CreatedAt: roundsNow.Add(created)}
 		if ended != nil {
-			r.EndedAt = store.Ptr(roundsNow.Add(*ended))
+			r.EndedAt = new(roundsNow.Add(*ended))
 		} else {
 			r.State = store.RunWorking
 		}

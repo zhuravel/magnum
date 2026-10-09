@@ -81,11 +81,11 @@ func PRSlotName(repo string, number int) string { return repo + "#" + strconv.It
 
 // perPRNumber is the PR number in a PRSlotName (0 when there is none).
 func perPRNumber(name string) int {
-	i := strings.LastIndexByte(name, '#')
-	if i < 0 {
+	_, after, ok := strings.CutLast(name, "#")
+	if !ok {
 		return 0
 	}
-	n, _ := strconv.Atoi(name[i+1:])
+	n, _ := strconv.Atoi(after)
 	return n
 }
 

@@ -383,9 +383,9 @@ func TestStatsComputeEdges(t *testing.T) {
 	// Round 2 of PR 5: three judge runs; the result of the last one that has
 	// a result counts, and the latest round.end (its Data) decides the outcome.
 	earlier := statsRR("j1", 1, 5, 2, store.RoleJudge, store.RunVerified, t0)
-	earlier.ResultJSON = store.Ptr(`{"findings":{"P0":9}}`)
+	earlier.ResultJSON = new(`{"findings":{"P0":9}}`)
 	later := statsRR("j2", 1, 5, 2, store.RoleJudge, store.RunVerified, t0.Add(time.Hour))
-	later.ResultJSON = store.Ptr(`{"findings":{"P1":1,"p2":"2","P3":2.5}}`)
+	later.ResultJSON = new(`{"findings":{"P1":1,"p2":"2","P3":2.5}}`)
 	noResult := statsRR("j3", 1, 5, 2, store.RoleJudge, store.RunVerified, t0.Add(2*time.Hour))
 	// Round 3: only a message tells the outcome (a trailing error text follows it).
 	msgOnly := statsRR("m1", 1, 5, 3, store.RoleClaude, store.RunFailed, t0)
@@ -477,8 +477,8 @@ func TestStatsDurationsKeepOwnPassApart(t *testing.T) {
 func TestStatsJudgeResultIgnoresTheOwnPass(t *testing.T) {
 	t0 := statsOct(3, 10, 0)
 	judge, own, _ := statsOwnPassRound(t0)
-	judge.Outcome, judge.ResultJSON = store.Ptr("posted"), store.Ptr(`{"findings":{"P1":2}}`)
-	own.Outcome, own.ResultJSON = store.Ptr("error"), store.Ptr(`{"findings":{"P0":5}}`)
+	judge.Outcome, judge.ResultJSON = new("posted"), new(`{"findings":{"P1":2}}`)
+	own.Outcome, own.ResultJSON = new("error"), new(`{"findings":{"P0":5}}`)
 	r := statsCompute([]store.RoundRun{judge, own}, nil, nil, func(role string) bool { return role == store.RoleJudge },
 		t0.Add(-time.Hour), t0.Add(time.Hour), "")
 	if !reflect.DeepEqual(r.Total.Rounds.Outcomes, map[string]int{"posted": 1}) || !reflect.DeepEqual(r.Total.FindingsPosted, map[string]int{"P1": 2}) {
@@ -496,9 +496,9 @@ func TestStatsJudgeResultIgnoresTheOwnPass(t *testing.T) {
 func TestStatsCountOnlyTheNewFindingsOfAReReview(t *testing.T) {
 	t0 := statsOct(3, 10, 0)
 	judge := statsRR("j", 1, 5, 2, store.RoleJudge, store.RunVerified, t0)
-	judge.Kind, judge.Outcome = store.RunRereview, store.Ptr("posted")
+	judge.Kind, judge.Outcome = store.RunRereview, new("posted")
 	judge.SubmittedAt, judge.EndedAt, judge.VerifiedAt = statsOpt(t0), statsOpt(t0.Add(10*time.Minute)), statsOpt(t0.Add(11*time.Minute))
-	judge.ResultJSON = store.Ptr(`{"status":"posted","verdict":"blocking","findings":{"P0":0,"P1":0,"P2":1,"P3":0},` +
+	judge.ResultJSON = new(`{"status":"posted","verdict":"blocking","findings":{"P0":0,"P1":0,"P2":1,"P3":0},` +
 		`"previous_findings":{"fixed":0,"open":{"P0":0,"P1":2,"P2":0,"P3":0},"answered":0,"rebutted":0}}`)
 	fs := []store.Finding{
 		{FindingID: "F1", Severity: "P2", Sources: []string{"codex-review"}, Verdict: store.FindingPosted, CreatedAt: t0.Add(11 * time.Minute), Repo: "talkable/talkable"},

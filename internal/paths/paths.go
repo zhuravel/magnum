@@ -231,17 +231,40 @@ func (l Layout) State() string {
 	return filepath.Join(l.Home, "state")
 }
 
-func (l Layout) DB() string                   { return filepath.Join(l.data(), "magnum.db") }
-func (l Layout) Lock() string                 { return filepath.Join(l.State(), "magnum.lock") }
-func (l Layout) OpsLock() string              { return filepath.Join(l.State(), "ops.lock") }
-func (l Layout) Pid() string                  { return filepath.Join(l.State(), "daemon.pid") }
-func (l Layout) Logs() string                 { return filepath.Join(l.State(), "logs") }
-func (l Layout) DaemonLog() string            { return filepath.Join(l.Logs(), "daemon.log") }
-func (l Layout) Reviews() string              { return filepath.Join(l.data(), "reviews") }
-func (l Layout) Notes() string                { return filepath.Join(l.data(), "notes") }
-func (l Layout) GhRoot() string               { return filepath.Join(l.State(), "gh") }
+// DB is the SQLite registry, magnum.db in the data directory.
+func (l Layout) DB() string { return filepath.Join(l.data(), "magnum.db") }
+
+// Lock is the daemon's lock file under State, held for the daemon's whole
+// life; a CLI command takes it too before in-process slot or cleanup work.
+func (l Layout) Lock() string { return filepath.Join(l.State(), "magnum.lock") }
+
+// OpsLock is the lock a CLI command takes before Lock for in-process work,
+// so a daemon that starts meanwhile can tell the command from a daemon.
+func (l Layout) OpsLock() string { return filepath.Join(l.State(), "ops.lock") }
+
+// Pid is the daemon's pidfile under State.
+func (l Layout) Pid() string { return filepath.Join(l.State(), "daemon.pid") }
+
+// Logs is the log directory under State.
+func (l Layout) Logs() string { return filepath.Join(l.State(), "logs") }
+
+// DaemonLog is the daemon's log file in Logs.
+func (l Layout) DaemonLog() string { return filepath.Join(l.Logs(), "daemon.log") }
+
+// Reviews is the root of the review reports in the data directory.
+func (l Layout) Reviews() string { return filepath.Join(l.data(), "reviews") }
+
+// Notes is the root of the repository notes in the data directory.
+func (l Layout) Notes() string { return filepath.Join(l.data(), "notes") }
+
+// GhRoot holds the identities' gh config directories under State.
+func (l Layout) GhRoot() string { return filepath.Join(l.State(), "gh") }
+
+// GhConfigDir is identity id's gh config directory in GhRoot.
 func (l Layout) GhConfigDir(id string) string { return filepath.Join(l.GhRoot(), id) }
-func (l Layout) TabBar() string               { return filepath.Join(l.State(), "tabbar.txt") }
+
+// TabBar is the herdr tab-bar status file the daemon writes under State.
+func (l Layout) TabBar() string { return filepath.Join(l.State(), "tabbar.txt") }
 
 // DBLock is the lock file `magnum db-lock` takes for the databases of
 // checkout (an absolute path): db-locks/<base>-<hash>.lock under State,

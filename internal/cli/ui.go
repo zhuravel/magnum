@@ -3,7 +3,8 @@ package cli
 import (
 	"context"
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -76,11 +77,7 @@ func uiOpen(ctx context.Context, c *Context, d *actDeps, entry string, o uiOpts)
 	panes := uiManifest(d.Layout.Plugin())
 	p, ok := panes[entry]
 	if !ok {
-		ids := make([]string, 0, len(panes))
-		for id := range panes {
-			ids = append(ids, id)
-		}
-		sort.Strings(ids)
+		ids := slices.Sorted(maps.Keys(panes))
 		return cmdFail(c, "ui", fmt.Errorf("unknown entrypoint %q: use one of %s ([[panes]] in herdr-plugin.toml)", entry, strings.Join(ids, ", ")))
 	}
 	opts := herdr.PluginPaneOptions{
@@ -156,7 +153,7 @@ func uiComplete(c *Context) cobra.CompletionFunc {
 			for id, p := range uiManifest(c.Layout.Plugin()) {
 				out = append(out, cobra.CompletionWithDesc(id, fmt.Sprintf("%s %s x %s", p.Placement, p.Width, p.Height)))
 			}
-			sort.Strings(out)
+			slices.Sort(out)
 		}
 		return out, cobra.ShellCompDirectiveNoFileComp
 	}

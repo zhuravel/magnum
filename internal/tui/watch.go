@@ -187,8 +187,7 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.ctx.Err() != nil {
 			return m, tea.Quit
 		}
-		var stop *stopWatchError
-		if errors.As(msg.err, &stop) {
+		if stop, ok := errors.AsType[*stopWatchError](msg.err); ok {
 			m.stopped = stop.err
 			return m, tea.Quit
 		}

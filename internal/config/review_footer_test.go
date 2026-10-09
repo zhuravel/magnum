@@ -185,7 +185,7 @@ func TestDefaultsFileDocumentsTheBuiltInFooter(t *testing.T) {
 		t.Fatal("config.defaults.toml has no commented `# review_footer = '''…'''` block")
 	}
 	var lines []string
-	for _, l := range strings.Split(string(m), "\n") {
+	for l := range strings.SplitSeq(string(m), "\n") {
 		lines = append(lines, strings.TrimPrefix(strings.TrimPrefix(l, "#"), " "))
 	}
 	doc := strings.Join(lines, "\n")

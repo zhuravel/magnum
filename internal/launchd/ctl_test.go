@@ -330,8 +330,7 @@ func TestInstallGivesUpAfterThreeEIOAttempts(t *testing.T) {
 	if len(clk.slept) != 2 {
 		t.Fatalf("sleeps = %v, want 2 (none after the last attempt)", clk.slept)
 	}
-	var ee *execx.ExitError
-	if !errors.As(err, &ee) {
+	if _, ok := errors.AsType[*execx.ExitError](err); !ok {
 		t.Fatalf("error should wrap the ExitError: %v", err)
 	}
 	// The domain probe failed, which is the evidence for the console hint.
@@ -547,8 +546,7 @@ func TestKickstart(t *testing.T) {
 
 	f = &execx.Fake{Rules: []execx.Rule{{Prefix: []string{"launchctl", "kickstart"}, Result: execx.Result{Code: 113, Stderr: []byte("Could not find service")}}}}
 	err := Kickstart(context.Background(), f, 501, testLabel)
-	var ee *execx.ExitError
-	if !errors.As(err, &ee) {
+	if _, ok := errors.AsType[*execx.ExitError](err); !ok {
 		t.Fatalf("err = %v, want wrapped ExitError", err)
 	}
 }

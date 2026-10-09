@@ -94,7 +94,7 @@ func TestPlistGolden(t *testing.T) {
 func TestPlistDictOrderingIsStable(t *testing.T) {
 	opts := fullOptions()
 	first := Plist(opts)
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		if !bytes.Equal(first, Plist(opts)) {
 			t.Fatal("plist output differs between calls")
 		}
@@ -207,8 +207,7 @@ func TestPlistPassesPlutilLint(t *testing.T) {
 	}
 	res, err := r.Run(context.Background(), execx.Cmd{Name: "plutil", Args: []string{"-lint", path}})
 	if err != nil {
-		var ee *execx.ExitError
-		if errors.As(err, &ee) {
+		if _, ok := errors.AsType[*execx.ExitError](err); ok {
 			t.Fatalf("plutil -lint: %v\n%s", err, res.Stdout)
 		}
 		t.Skipf("plutil unavailable: %v", err)

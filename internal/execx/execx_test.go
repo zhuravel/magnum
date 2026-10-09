@@ -37,8 +37,7 @@ func TestRealMissingDir(t *testing.T) {
 	if !errors.Is(err, fs.ErrNotExist) || !strings.Contains(err.Error(), "working directory") || res.Code != -1 {
 		t.Fatalf("want a working-directory error and code -1, got %v (code %d)", err, res.Code)
 	}
-	var ee *ExitError
-	if errors.As(err, &ee) {
+	if _, ok := errors.AsType[*ExitError](err); ok {
 		t.Fatalf("a missing dir is not an exit error: %v", err)
 	}
 }

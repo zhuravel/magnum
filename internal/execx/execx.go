@@ -428,8 +428,6 @@ func (r *Real) baseEnv() []string {
 	return os.Environ()
 }
 
-// mergeEnv overlays env onto base: keys in env win (empty values are kept as
-// KEY=), keys in unset that are not in env are dropped entirely.
 // MergeEnv returns base with env's keys overriding and unset's keys removed;
 // it is what Run gives every subprocess and what other runners (the CLI's
 // TTY runner) use to honour Cmd.Env and Cmd.Unset the same way.
@@ -437,6 +435,8 @@ func MergeEnv(base []string, env map[string]string, unset []string) []string {
 	return mergeEnv(base, env, unset)
 }
 
+// mergeEnv overlays env onto base: keys in env win (empty values are kept as
+// KEY=), keys in unset that are not in env are dropped entirely.
 func mergeEnv(base []string, env map[string]string, unset []string) []string {
 	if len(env) == 0 && len(unset) == 0 {
 		return base

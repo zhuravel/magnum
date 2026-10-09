@@ -242,7 +242,7 @@ func oldDeltaPatchClasses(p, patch string) (classes []string, ok bool) {
 		removed, added = removed[:0], added[:0]
 		return ok && (oldState == blockIn) == (newState == blockIn)
 	}
-	for _, l := range strings.Split(patch, "\n") {
+	for l := range strings.SplitSeq(patch, "\n") {
 		if strings.HasPrefix(l, "@@") {
 			if !settle() {
 				return nil, false
@@ -342,7 +342,7 @@ func oldPatchChangedLines(p, patch string) int {
 			n++
 		}
 	}
-	for _, l := range strings.Split(patch, "\n") {
+	for l := range strings.SplitSeq(patch, "\n") {
 		if strings.HasPrefix(l, "@@") {
 			settle()
 			oldState, newState = blockUnknown, blockUnknown

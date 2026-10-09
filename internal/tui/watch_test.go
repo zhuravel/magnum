@@ -411,7 +411,7 @@ func TestWatchNarrowHeaderKeepsStateAndError(t *testing.T) {
 	f.Title = "talkable-with-a-very-long-title#11920"
 	m, _ = send(t, m, frameMsg(f))
 	m, _ = send(t, m, watchResultMsg{err: errors.New("herdr is unreachable at /some/long/socket/path")}, keys("k")[0])
-	header := strings.SplitN(viewOf(m), "\n", 2)[0]
+	header, _, _ := strings.Cut(viewOf(m), "\n")
 	mustContain(t, header, "paused (f follows)", "fetch failed")
 	if w := len([]rune(header)); w > 40 {
 		t.Errorf("header is %d cells wide: %q", w, header)

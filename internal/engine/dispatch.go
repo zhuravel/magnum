@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"sort"
 	"time"
 
 	"github.com/zhuravel/magnum/internal/agents"
@@ -419,7 +418,7 @@ func (e *Engine) continueCandidates(ctx context.Context, now time.Time) ([]store
 		}
 		out = append(out, pr)
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].UpdatedAt.Before(out[j].UpdatedAt) })
+	slices.SortStableFunc(out, func(a, b store.PR) int { return a.UpdatedAt.Compare(b.UpdatedAt) })
 	return out, nil
 }
 

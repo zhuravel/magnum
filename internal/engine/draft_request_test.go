@@ -12,7 +12,7 @@ import (
 )
 
 // withoutDrafts sets include_drafts = false on every watch.
-var withoutDrafts = reqWatches(func(w *config.Watch) { w.IncludeDrafts = store.Ptr(false) })
+var withoutDrafts = reqWatches(func(w *config.Watch) { w.IncludeDrafts = new(false) })
 
 // draftSynced is a harness past the first sync (#1 the baseline).
 func draftSynced(t *testing.T, mods ...func(*harness)) *harness {

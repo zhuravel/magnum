@@ -542,7 +542,7 @@ func newEnv(t *testing.T) *env {
 	}
 	up, err := st.UpsertPRFromGitHub(ctx, store.GitHubPR{RepoID: repo.ID, NodeID: "PR_11920", Number: 11920,
 		URL: "https://github.com/talkable/talkable/pull/11920", HeadSHA: "abc1234def5678abc1234def5678abc1234def56",
-		Title: store.Ptr("Ignored title"), GHState: store.GHOpen, InitialState: store.PRReviewing, Identity: "talkable-app"})
+		Title: new("Ignored title"), GHState: store.GHOpen, InitialState: store.PRReviewing, Identity: "talkable-app"})
 	if err != nil {
 		t.Fatalf("UpsertPRFromGitHub: %v", err)
 	}

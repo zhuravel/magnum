@@ -300,14 +300,14 @@ func TestAutoApprovalRefusesPRsItMustLeaveAlone(t *testing.T) {
 	clean := &store.ReviewSummary{RunID: "r1", ReviewID: 501, SHA: "h1", Verdict: store.VerdictClean}
 	ok := func() autoFacts {
 		return autoFacts{Login: "zhuravel", Sum: clean, PR: store.PR{GHState: store.GHOpen, State: store.PRReviewed, HeadSHA: "h1",
-			ReviewedSHA: store.Ptr("h1"), LastReviewID: store.Ptr(int64(501)), AuthorLogin: store.Ptr("alice"), AuthorType: store.Ptr("User")}}
+			ReviewedSHA: new("h1"), LastReviewID: new(int64(501)), AuthorLogin: new("alice"), AuthorType: new("User")}}
 	}
 	if why := autoApproveRefusal(ok()); why != "" {
 		t.Fatalf("a clean reviewed PR is refused: %s", why)
 	}
 	cases := map[string]func(*autoFacts){
 		"draft":             func(f *autoFacts) { f.PR.IsDraft = true },
-		"the operator's":    func(f *autoFacts) { f.PR.AuthorLogin = store.Ptr("Zhuravel") },
+		"the operator's":    func(f *autoFacts) { f.PR.AuthorLogin = new("Zhuravel") },
 		"closed":            func(f *autoFacts) { f.PR.GHState = store.GHClosed },
 		"merged":            func(f *autoFacts) { f.PR.GHState = store.GHMerged },
 		"head moved":        func(f *autoFacts) { f.PR.HeadSHA = "h2" },
@@ -316,7 +316,7 @@ func TestAutoApprovalRefusesPRsItMustLeaveAlone(t *testing.T) {
 		"due again":         func(f *autoFacts) { f.PR.State = store.PRRereviewPending },
 		"muted":             func(f *autoFacts) { f.PR.Muted = true },
 		"no posted round":   func(f *autoFacts) { f.Sum = nil },
-		"a manual verdict":  func(f *autoFacts) { f.PR.LastReviewID = store.Ptr(int64(777)) },
+		"a manual verdict":  func(f *autoFacts) { f.PR.LastReviewID = new(int64(777)) },
 		"held":              func(f *autoFacts) { f.Hold = &store.AutoApproveHold{Held: true, Reason: "you reviewed it by hand"} },
 		"blocking": func(f *autoFacts) {
 			f.Sum = &store.ReviewSummary{RunID: "r1", ReviewID: 501, Counts: [4]int{0, 0, 1, 0}}
@@ -330,7 +330,7 @@ func TestAutoApprovalRefusesPRsItMustLeaveAlone(t *testing.T) {
 		}
 	}
 	f := ok()
-	f.PR.AuthorLogin, f.PR.AuthorType = store.Ptr("zhuravel"), store.Ptr("Bot") // an App named after the operator
+	f.PR.AuthorLogin, f.PR.AuthorType = new("zhuravel"), new("Bot") // an App named after the operator
 	if why := autoApproveRefusal(f); why != "" {
 		t.Errorf("a bot named zhuravel[bot] is refused: %s", why)
 	}

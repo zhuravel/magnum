@@ -308,12 +308,12 @@ func TestKeepApprovalsLeavesTheApprovalAlone(t *testing.T) {
 	}{
 		{"by default the approval goes", func(*config.Config) {}, false},
 		{"[[repo]] keep_approvals", func(c *config.Config) {
-			c.Repos = append(c.Repos, config.Repo{Repo: "talkable/talkable", KeepApprovals: store.Ptr(true)})
+			c.Repos = append(c.Repos, config.Repo{Repo: "talkable/talkable", KeepApprovals: new(true)})
 		}, true},
 		{"[[watch]] keep_approvals", func(c *config.Config) { c.Watches[0].KeepApprovals = true }, true},
 		{"[[repo]] keep_approvals = false overrides the watch", func(c *config.Config) {
 			c.Watches[0].KeepApprovals = true
-			c.Repos = append(c.Repos, config.Repo{Repo: "talkable/talkable", KeepApprovals: store.Ptr(false)})
+			c.Repos = append(c.Repos, config.Repo{Repo: "talkable/talkable", KeepApprovals: new(false)})
 		}, false},
 	}
 	for _, tc := range tests {

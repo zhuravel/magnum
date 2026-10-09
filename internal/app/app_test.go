@@ -377,7 +377,7 @@ func TestRotatingFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	line := strings.Repeat("x", 39) + "\n" // 40 bytes
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		if _, err := rf.Write([]byte(line)); err != nil {
 			t.Fatal(err)
 		}

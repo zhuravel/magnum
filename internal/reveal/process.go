@@ -40,7 +40,7 @@ var (
 func parseHerdrProcesses(output, binary string) []herdrProcess {
 	binaryName := filepath.Base(binary)
 	var procs []herdrProcess
-	for _, line := range strings.Split(output, "\n") {
+	for line := range strings.SplitSeq(output, "\n") {
 		m := psLine.FindStringSubmatch(strings.TrimSpace(line))
 		if m == nil {
 			continue
@@ -173,7 +173,7 @@ func parseClientTtys(output, binary, session string) []string {
 // clientTtys lists the ttys of the session's herdr clients with one `ps` call
 // (not pgrep: `pgrep -x herdr` finds nothing on this machine while ps shows the
 // client, probe 8). A ps failure is an error; no clients is an empty result.
-func (r *Revealer) clientTtys(ctx context.Context) ([]string, error) {
+func (r *revealer) clientTtys(ctx context.Context) ([]string, error) {
 	res, err := r.run.Run(ctx, execx.Cmd{
 		Name:    cmdPS,
 		Args:    []string{"-axo", psColumns},

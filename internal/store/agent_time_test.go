@@ -15,7 +15,7 @@ func agentRun(t *testing.T, st *Store, prID int64, round int, role, state string
 		if d == nil {
 			return nil
 		}
-		return Ptr(t0.Add(*d))
+		return new(t0.Add(*d))
 	}
 	r, err := st.CreateRun(context.Background(), Run{PRID: prID, Round: round, Role: role, Kind: RunInitial, State: state,
 		TargetSHA: "h1", Identity: "talkable-app", ReviewerLogin: "talkable[bot]", PromptText: "p",
@@ -25,8 +25,6 @@ func agentRun(t *testing.T, st *Store, prID int64, round int, role, state string
 	}
 	return r
 }
-
-func dur(d time.Duration) *time.Duration { return &d }
 
 func TestAgentTimeSumsRunDurationsAndCountsDistinctRounds(t *testing.T) {
 	st, _ := newStore(t)
@@ -39,14 +37,14 @@ func TestAgentTimeSumsRunDurationsAndCountsDistinctRounds(t *testing.T) {
 
 	// Round 1: two roles; the first from its submission, the second (never
 	// submitted) from its creation.
-	agentRun(t, st, pr.ID, 1, RoleClaude, RunVerified, time.Minute, dur(2*time.Minute), nil, dur(12*time.Minute)) // 10m
-	agentRun(t, st, pr.ID, 1, RoleCodexReview, RunVerified, time.Minute, nil, nil, dur(6*time.Minute))            // 5m
+	agentRun(t, st, pr.ID, 1, RoleClaude, RunVerified, time.Minute, new(2*time.Minute), nil, new(12*time.Minute)) // 10m
+	agentRun(t, st, pr.ID, 1, RoleCodexReview, RunVerified, time.Minute, nil, nil, new(6*time.Minute))            // 5m
 	// Round 2: the judge is still going, to now.
-	agentRun(t, st, pr.ID, 2, RoleJudge, RunWorking, time.Hour, dur(time.Hour+time.Minute), dur(time.Hour+30*time.Minute), nil) // 59m
+	agentRun(t, st, pr.ID, 2, RoleJudge, RunWorking, time.Hour, new(time.Hour+time.Minute), new(time.Hour+30*time.Minute), nil) // 59m
 	// Before the window: neither its time nor its round counts.
-	agentRun(t, st, pr.ID, 0, RoleJudge, RunVerified, -48*time.Hour, nil, nil, dur(-47*time.Hour))
+	agentRun(t, st, pr.ID, 0, RoleJudge, RunVerified, -48*time.Hour, nil, nil, new(-47*time.Hour))
 	// Another PR.
-	agentRun(t, st, other.ID, 1, RoleClaude, RunVerified, 0, nil, nil, dur(30*time.Minute)) // 30m
+	agentRun(t, st, other.ID, 1, RoleClaude, RunVerified, 0, nil, nil, new(30*time.Minute)) // 30m
 
 	got, err := st.AgentTimeSince(ctx, since, now)
 	if err != nil {
@@ -76,9 +74,9 @@ func TestAgentTimeIsSortedByTimeThenPR(t *testing.T) {
 	a := mustPR(t, st, repo.ID, 1, PRReviewed)
 	b := mustPR(t, st, repo.ID, 2, PRReviewed)
 	c := mustPR(t, st, repo.ID, 3, PRReviewed)
-	agentRun(t, st, a.ID, 1, RoleClaude, RunVerified, 0, nil, nil, dur(10*time.Minute))
-	agentRun(t, st, b.ID, 1, RoleClaude, RunVerified, 0, nil, nil, dur(40*time.Minute))
-	agentRun(t, st, c.ID, 1, RoleClaude, RunVerified, 0, nil, nil, dur(10*time.Minute))
+	agentRun(t, st, a.ID, 1, RoleClaude, RunVerified, 0, nil, nil, new(10*time.Minute))
+	agentRun(t, st, b.ID, 1, RoleClaude, RunVerified, 0, nil, nil, new(40*time.Minute))
+	agentRun(t, st, c.ID, 1, RoleClaude, RunVerified, 0, nil, nil, new(10*time.Minute))
 
 	got, err := st.AgentTimeSince(context.Background(), t0.Add(-time.Hour), t0.Add(time.Hour))
 	if err != nil {
@@ -101,10 +99,10 @@ func TestAgentTimeNeverCountsANegativeOrUnendedFinishedRun(t *testing.T) {
 	now := t0.Add(10 * time.Hour)
 
 	// Ended before it started (clocks differ between the daemon and the agent).
-	agentRun(t, st, pr.ID, 1, RoleClaude, RunVerified, 0, dur(10*time.Minute), nil, dur(5*time.Minute))
+	agentRun(t, st, pr.ID, 1, RoleClaude, RunVerified, 0, new(10*time.Minute), nil, new(5*time.Minute))
 	// A failed run that never got an end counts to the last time it was seen
 	// working, not to now.
-	agentRun(t, st, pr.ID, 1, RoleCodexReview, RunFailed, 0, dur(time.Minute), dur(21*time.Minute), nil) // 20m
+	agentRun(t, st, pr.ID, 1, RoleCodexReview, RunFailed, 0, new(time.Minute), new(21*time.Minute), nil) // 20m
 	// A failed run never seen working has no time.
 	agentRun(t, st, pr.ID, 2, RoleClaude, RunAbandoned, 0, nil, nil, nil)
 	// Waiting for its prompt to go: counted to now.

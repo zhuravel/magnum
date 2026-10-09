@@ -16,7 +16,7 @@ func TestBoardClosedSinceAddsRecentlyClosedPRs(t *testing.T) {
 	upsert := func(n int, gh string, merged, closed *time.Time) PR {
 		t.Helper()
 		res, err := st.UpsertPRFromGitHub(ctx, GitHubPR{RepoID: repo.ID, NodeID: "PR_" + itoa(int64(n)), Number: n, URL: "u" + itoa(int64(n)),
-			HeadSHA: "head" + itoa(int64(n)), GHState: gh, GHUpdatedAt: Ptr(t0), MergedAt: merged, ClosedAt: closed,
+			HeadSHA: "head" + itoa(int64(n)), GHState: gh, GHUpdatedAt: new(t0), MergedAt: merged, ClosedAt: closed,
 			InitialState: PRQueued, Identity: "talkable-app"})
 		if err != nil {
 			t.Fatal(err)
@@ -24,10 +24,10 @@ func TestBoardClosedSinceAddsRecentlyClosedPRs(t *testing.T) {
 		return res.PR
 	}
 	upsert(1, GHOpen, nil, nil)
-	upsert(2, GHMerged, Ptr(t0.Add(-time.Hour)), Ptr(t0.Add(-time.Hour)))       // merged an hour ago
-	upsert(3, GHClosed, nil, Ptr(t0.Add(-2*time.Hour)))                         // closed two hours ago
-	upsert(4, GHMerged, Ptr(t0.Add(-48*time.Hour)), Ptr(t0.Add(-48*time.Hour))) // merged two days ago
-	upsert(5, GHMerged, Ptr(t0.Add(-30*time.Hour)), Ptr(t0.Add(-time.Hour)))    // merged_at wins over closed_at
+	upsert(2, GHMerged, new(t0.Add(-time.Hour)), new(t0.Add(-time.Hour)))       // merged an hour ago
+	upsert(3, GHClosed, nil, new(t0.Add(-2*time.Hour)))                         // closed two hours ago
+	upsert(4, GHMerged, new(t0.Add(-48*time.Hour)), new(t0.Add(-48*time.Hour))) // merged two days ago
+	upsert(5, GHMerged, new(t0.Add(-30*time.Hour)), new(t0.Add(-time.Hour)))    // merged_at wins over closed_at
 	numbers := func(f BoardFilter) []int {
 		t.Helper()
 		rows, err := st.Board(ctx, f)
@@ -124,10 +124,10 @@ func TestIsMergedUnreviewed(t *testing.T) {
 		}
 		pr := PR{GHState: c.gh, HeadSHA: c.head, Muted: c.muted, Forced: c.forced}
 		if c.prev != "" {
-			pr.PrevState = Ptr(c.prev)
+			pr.PrevState = new(c.prev)
 		}
 		if c.reviewed != "" {
-			pr.ReviewedSHA = Ptr(c.reviewed)
+			pr.ReviewedSHA = new(c.reviewed)
 		}
 		if got := pr.MergedUnreviewed(); got != c.want {
 			t.Errorf("%s: PR.MergedUnreviewed = %v, want %v", c.name, got, c.want)
@@ -150,7 +150,7 @@ func TestBoardRowMergedUnreviewed(t *testing.T) {
 	mk := func(n int, state, reviewed string) PR {
 		t.Helper()
 		res, err := st.UpsertPRFromGitHub(ctx, GitHubPR{RepoID: repo.ID, NodeID: "PR_" + itoa(int64(n)), Number: n, URL: "u" + itoa(int64(n)),
-			HeadSHA: "b2", GHState: GHOpen, GHUpdatedAt: Ptr(t0), InitialState: state, Identity: "talkable-app"})
+			HeadSHA: "b2", GHState: GHOpen, GHUpdatedAt: new(t0), InitialState: state, Identity: "talkable-app"})
 		if err != nil {
 			t.Fatal(err)
 		}

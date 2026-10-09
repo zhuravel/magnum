@@ -238,8 +238,8 @@ func (h *actHarness) seedPR(full string, n int, state string) store.PR {
 		h.t.Fatal(err)
 	}
 	res, err := h.st.UpsertPRFromGitHub(h.ctx, store.GitHubPR{RepoID: repo.ID, NodeID: fmt.Sprintf("PR_%s_%d", full, n), Number: n,
-		URL: fmt.Sprintf("https://github.com/%s/pull/%d", full, n), HeadSHA: "abc1234def5678", Title: store.Ptr("Fix coupon export"),
-		AuthorLogin: store.Ptr("alice"), GHState: store.GHOpen, InitialState: state, Identity: "talkable-app"})
+		URL: fmt.Sprintf("https://github.com/%s/pull/%d", full, n), HeadSHA: "abc1234def5678", Title: new("Fix coupon export"),
+		AuthorLogin: new("alice"), GHState: store.GHOpen, InitialState: state, Identity: "talkable-app"})
 	if err != nil {
 		h.t.Fatal(err)
 	}
@@ -250,13 +250,13 @@ func (h *actHarness) session(prID int64, role, state, agent, pane, workspace str
 	h.t.Helper()
 	s := store.Session{PRID: prID, Role: role, State: state}
 	if agent != "" {
-		s.AgentName = store.Ptr(agent)
+		s.AgentName = new(agent)
 	}
 	if pane != "" {
-		s.HerdrPaneID = store.Ptr(pane)
+		s.HerdrPaneID = new(pane)
 	}
 	if workspace != "" {
-		s.HerdrWorkspaceID = store.Ptr(workspace)
+		s.HerdrWorkspaceID = new(workspace)
 	}
 	out, err := h.st.CreateSession(h.ctx, s)
 	if err != nil {

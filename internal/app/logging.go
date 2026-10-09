@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"sync"
 
 	"github.com/charmbracelet/x/term"
+
 	"github.com/zhuravel/magnum/internal/execx"
 )
 
@@ -107,7 +109,7 @@ func (r *RotatingFile) rotate() error {
 		_ = os.Rename(r.Path+"."+strconv.Itoa(i), r.Path+"."+strconv.Itoa(i+1))
 	}
 	var rerr error
-	if err := os.Rename(r.Path, r.Path+".1"); err != nil && !os.IsNotExist(err) {
+	if err := os.Rename(r.Path, r.Path+".1"); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		rerr = fmt.Errorf("rotate log: %w", err)
 	}
 	if cerr != nil {
@@ -244,54 +246,13 @@ func anyText(v any) string {
 	return fmt.Sprint(v)
 }
 
-// multiHandler fans a record out to several handlers.
-type multiHandler []slog.Handler
-
-func (m multiHandler) Enabled(ctx context.Context, l slog.Level) bool {
-	for _, h := range m {
-		if h.Enabled(ctx, l) {
-			return true
-		}
-	}
-	return false
-}
-
-func (m multiHandler) Handle(ctx context.Context, r slog.Record) error {
-	var first error
-	for _, h := range m {
-		if !h.Enabled(ctx, r.Level) {
-			continue
-		}
-		if err := h.Handle(ctx, r.Clone()); err != nil && first == nil {
-			first = err
-		}
-	}
-	return first
-}
-
-func (m multiHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	out := make(multiHandler, len(m))
-	for i, h := range m {
-		out[i] = h.WithAttrs(attrs)
-	}
-	return out
-}
-
-func (m multiHandler) WithGroup(name string) slog.Handler {
-	out := make(multiHandler, len(m))
-	for i, h := range m {
-		out[i] = h.WithGroup(name)
-	}
-	return out
-}
-
 // NewLogger builds magnum's logger: JSON lines to file (when non-nil) plus
 // human-readable text to stderr (when non-nil), both behind RedactHandler.
 func NewLogger(file io.Writer, stderr io.Writer, level slog.Leveler) *slog.Logger {
 	if level == nil {
 		level = slog.LevelInfo
 	}
-	var hs multiHandler
+	var hs []slog.Handler
 	if file != nil {
 		hs = append(hs, slog.NewJSONHandler(file, &slog.HandlerOptions{Level: level}))
 	}
@@ -301,9 +262,9 @@ func NewLogger(file io.Writer, stderr io.Writer, level slog.Leveler) *slog.Logge
 	if len(hs) == 0 {
 		return slog.New(slog.DiscardHandler)
 	}
-	var h slog.Handler = hs
-	if len(hs) == 1 {
-		h = hs[0]
+	h := hs[0]
+	if len(hs) > 1 {
+		h = slog.NewMultiHandler(hs...)
 	}
 	return slog.New(RedactHandler{Inner: h})
 }

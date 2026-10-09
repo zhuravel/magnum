@@ -341,9 +341,9 @@ var ErrNoModelSwitch = errors.New("agent kind cannot switch models")
     ErrNoModelSwitch: the session's kind has no switch_model command.
 
 var ErrUnsafeBaseRef = errors.New("base branch name has characters magnum does not pass to a shell")
-    ErrUnsafeBaseRef: a judge or reviewer prompt's base ref is not a branch name
-    gitx.ShellSafeRef passes. The prompts put it, unquoted, into git commands
-    the agent runs; the error never quotes it.
+    ErrUnsafeBaseRef means a judge or reviewer prompt's base ref is not a
+    branch name gitx.ShellSafeRef passes. The prompts put it, unquoted, into git
+    commands the agent runs; the error never quotes it.
 
 
 FUNCTIONS
@@ -6228,8 +6228,6 @@ func LogEvent(l Logger, level, subject, kind, line string)
     AttrLogger, else as LogAt sends it. The caller redacts line.
 
 func MergeEnv(base []string, env map[string]string, unset []string) []string
-    mergeEnv overlays env onto base: keys in env win (empty values are
-    kept as KEY=), keys in unset that are not in env are dropped entirely.
     MergeEnv returns base with env's keys overriding and unset's keys removed;
     it is what Run gives every subprocess and what other runners (the CLI's TTY
     runner) use to honour Cmd.Env and Cmd.Unset the same way.
@@ -10149,6 +10147,7 @@ func (l Layout) ConfigDir() string
     App keys, prompt overrides; "" without one.
 
 func (l Layout) DB() string
+    DB is the SQLite registry, magnum.db in the data directory.
 
 func (l Layout) DBLock(checkout string) string
     DBLock is the lock file `magnum db-lock` takes for the databases of checkout
@@ -10157,6 +10156,7 @@ func (l Layout) DBLock(checkout string) string
     checkouts do.
 
 func (l Layout) DaemonLog() string
+    DaemonLog is the daemon's log file in Logs.
 
 func (l Layout) Data() string
     Data is where the registry, reports and notes live (see data).
@@ -10169,22 +10169,31 @@ func (l Layout) EnsureDirs() error
     per-identity gh credentials.
 
 func (l Layout) GhConfigDir(id string) string
+    GhConfigDir is identity id's gh config directory in GhRoot.
 
 func (l Layout) GhRoot() string
+    GhRoot holds the identities' gh config directories under State.
 
 func (l Layout) Learn() string
     Learn is where the learning loop keeps its inputs and outputs: the retro's
     runs live under Learn()/retro/<run>/.
 
 func (l Layout) Lock() string
+    Lock is the daemon's lock file under State, held for the daemon's whole
+    life; a CLI command takes it too before in-process slot or cleanup work.
 
 func (l Layout) Logs() string
+    Logs is the log directory under State.
 
 func (l Layout) Notes() string
+    Notes is the root of the repository notes in the data directory.
 
 func (l Layout) OpsLock() string
+    OpsLock is the lock a CLI command takes before Lock for in-process work,
+    so a daemon that starts meanwhile can tell the command from a daemon.
 
 func (l Layout) Pid() string
+    Pid is the daemon's pidfile under State.
 
 func (l Layout) Plugin() string
     Plugin is the checkout's herdr plugin manifest; "" without a checkout.
@@ -10193,6 +10202,7 @@ func (l Layout) ReviewDir(owner, repo string, number int, sha string) string
     ReviewDir is where one review round's reports live.
 
 func (l Layout) Reviews() string
+    Reviews is the root of the review reports in the data directory.
 
 func (l Layout) Skill() string
     Skill is the checkout's judge skill; "" without a checkout (the binary's
@@ -10203,6 +10213,7 @@ func (l Layout) State() string
     StateDir, else Home/state.
 
 func (l Layout) TabBar() string
+    TabBar is the herdr tab-bar status file the daemon writes under State.
 
 func (l Layout) Valid() bool
     Valid reports whether the layout names where magnum's files live (a zero
@@ -11345,22 +11356,10 @@ type Outcome struct {
     Outcome describes what Reveal did, for `magnum open` output and --json.
 
 func Reveal(ctx context.Context, run execx.Runner, cfg config.Terminal, herdrBin string, opts Options) (Outcome, error)
-    Reveal builds a Revealer for cfg and herdrBin and runs its Reveal.
+    Reveal builds a revealer for cfg and herdrBin and runs its Reveal.
 
 func (o Outcome) String() string
     String renders the outcome as one human-readable line.
-
-type Revealer struct {
-	// Has unexported fields.
-}
-    Revealer reveals herdr in one configured terminal. Build it with New.
-
-func (r *Revealer) Reveal(ctx context.Context, opts Options) (Outcome, error)
-    Reveal focuses the existing herdr client when there is one. When the
-    terminal confirms there is none it launches a new client (a tab, or a window
-    with opts.NewWindow). When focus cannot be determined it only brings the
-    terminal app forward (opening a second client could duplicate one it cannot
-    see); a custom launcher has no app to raise, so it launches.
 
 ```
 
@@ -12605,9 +12604,6 @@ func ParseReviewResult(data []byte, sum *ReviewSummary) bool
 func ParseTime(s string) (time.Time, error)
     ParseTime parses any RFC3339 timestamp (with or without a fraction) and
     returns it in UTC.
-
-func Ptr[T any](v T) *T
-    Ptr returns a pointer to v (for nullable fields).
 
 
 TYPES

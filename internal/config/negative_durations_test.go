@@ -56,7 +56,7 @@ func walkDurations(v reflect.Value, where string, visit func(where, key string, 
 	t := v.Type()
 	for i := range t.NumField() {
 		f := t.Field(i)
-		tag := strings.Split(f.Tag.Get("toml"), ",")[0]
+		tag, _, _ := strings.Cut(f.Tag.Get("toml"), ",")
 		if !f.IsExported() || tag == "" || tag == "-" {
 			continue
 		}

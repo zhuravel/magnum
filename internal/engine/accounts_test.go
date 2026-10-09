@@ -92,7 +92,7 @@ func TestApprovalIdentityTellsTheUserFromTheApp(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			pr := store.PR{Identity: tc.identity}
 			if tc.login != "" {
-				pr.LastReviewLogin = store.Ptr(tc.login)
+				pr.LastReviewLogin = new(tc.login)
 			}
 			got := ""
 			if id := h.e.approvalIdentity(pr); id != nil {
@@ -110,7 +110,7 @@ func TestApprovalIdentityTellsTheUserFromTheApp(t *testing.T) {
 func TestSinceBaseIsTheIdentitysOwnReviewNotTheNamesakes(t *testing.T) {
 	h := newHarness(t)
 	h.cfg.Identities = append(h.cfg.Identities, config.Identity{Name: "app", Kind: "app", Login: "zhuravel[bot]"})
-	pr := store.PR{Identity: "app", BaseSHA: store.Ptr("base"), LatestReviews: []store.LatestReview{
+	pr := store.PR{Identity: "app", BaseSHA: new("base"), LatestReviews: []store.LatestReview{
 		{Login: "zhuravel", State: "APPROVED", CommitSHA: "c-user"},
 		{Login: "zhuravel[bot]", State: "COMMENTED", CommitSHA: "c-bot"},
 	}}

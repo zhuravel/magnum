@@ -569,7 +569,7 @@ func TestTriageGates(t *testing.T) {
 			h, model := triageHarness(t, modelAnswers(`{"run": [], "reason": "tiny"}`))
 			h.gh.files = map[string][]github.FileDelta{"master...t1": codePatch(2), "r1...t1": codePatch(2)}
 			job := &roundJob{
-				pr:   store.PR{ID: 7, Number: 2, BaseRef: store.Ptr("master"), ReviewedSHA: store.Ptr("r1")},
+				pr:   store.PR{ID: 7, Number: 2, BaseRef: new("master"), ReviewedSHA: new("r1")},
 				repo: triageRepo, watch: config.Watch{PollIdentity: "zhuravel"}, kind: pipeline.KindInitial,
 			}
 			roles := h.cfg.RolesFor(nil)
@@ -596,7 +596,7 @@ func TestTriageGates(t *testing.T) {
 func TestTriageNeverAddsRolesAndLeavesTheConfigAlone(t *testing.T) {
 	h, _ := triageHarness(t, modelAnswers(`{"run": ["claude-review", "claude-simplify", "codex-review"]}`))
 	h.gh.files = map[string][]github.FileDelta{"master...t1": codePatch(2)}
-	job := &roundJob{pr: store.PR{ID: 7, Number: 2, BaseRef: store.Ptr("master")}, repo: triageRepo,
+	job := &roundJob{pr: store.PR{ID: 7, Number: 2, BaseRef: new("master")}, repo: triageRepo,
 		watch: config.Watch{PollIdentity: "zhuravel"}, kind: pipeline.KindInitial}
 	all := h.cfg.RolesFor(nil)
 	// The round runs without claude-simplify (it ran before, say).
@@ -728,7 +728,7 @@ func TestTriageDiffText(t *testing.T) {
 func TestTriageStoppedRoundRecordsNothing(t *testing.T) {
 	h, _ := triageHarness(t, execx.Rule{Prefix: []string{"claude"}, Err: context.Canceled})
 	h.gh.files = map[string][]github.FileDelta{"master...t1": codePatch(2)}
-	job := &roundJob{pr: store.PR{ID: 7, Number: 2, BaseRef: store.Ptr("master")}, repo: triageRepo,
+	job := &roundJob{pr: store.PR{ID: 7, Number: 2, BaseRef: new("master")}, repo: triageRepo,
 		watch: config.Watch{PollIdentity: "zhuravel"}, kind: pipeline.KindInitial}
 	roles := h.cfg.RolesFor(nil)
 	rs := &roundSetup{target: "t1", roles: roles, toRun: slices.Clone(roles)}

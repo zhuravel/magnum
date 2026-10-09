@@ -22,9 +22,9 @@ func terminalCfg(app, session string) config.Terminal {
 	return config.Terminal{App: app, Session: session}
 }
 
-// newTest builds a Revealer over a scripted Fake with a fixed Ghostty marker
+// newTest builds a revealer over a scripted Fake with a fixed Ghostty marker
 // and WezTerm binary so tests never touch the filesystem or randomness.
-func newTest(cfg config.Terminal, rules ...execx.Rule) (*Revealer, *execx.Fake) {
+func newTest(cfg config.Terminal, rules ...execx.Rule) (*revealer, *execx.Fake) {
 	f := &execx.Fake{Rules: rules}
 	r := newRevealer(f, cfg, testHerdr)
 	r.newMarker = func() string { return testMarker }

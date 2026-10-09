@@ -119,14 +119,12 @@ func mustPostedRun(t *testing.T, st *Store, prID int64, round int, reviewID int6
 	t.Helper()
 	r, err := st.CreateRun(context.Background(), Run{PRID: prID, Round: round, Role: RoleJudge, Kind: RunInitial, State: RunVerified,
 		TargetSHA: "h1", Identity: "talkable-app", ReviewerLogin: "talkable[bot]", PromptText: "p", CreatedAt: t0,
-		ReviewID: Ptr(reviewID)})
+		ReviewID: new(reviewID)})
 	if err != nil {
 		t.Fatalf("CreateRun: %v", err)
 	}
 	return r
 }
-
-func at(t time.Time) *time.Time { return &t }
 
 // retroPRByID reads the retro record of prID, or an error matching
 // ErrNotFound when the PR has none.
@@ -421,36 +419,36 @@ func TestRetroDueSelectsClosedReviewedPRsNewestFirst(t *testing.T) {
 	mustPostedRun(t, st, open7.ID, 1, 1)
 
 	old8 := newPR(8) // closed ten days ago: outside Since
-	mustClosePR(t, st, old8.ID, GHClosed, at(t0.Add(-240*time.Hour)), nil)
+	mustClosePR(t, st, old8.ID, GHClosed, new(t0.Add(-240*time.Hour)), nil)
 	mustPostedRun(t, st, old8.ID, 1, 2)
 
 	silent9 := newPR(9) // merged, but no run posted a review
-	mustClosePR(t, st, silent9.ID, GHMerged, nil, at(t0.Add(-time.Hour)))
+	mustClosePR(t, st, silent9.ID, GHMerged, nil, new(t0.Add(-time.Hour)))
 	mustRunAt(t, st, silent9.ID, 1, RoleJudge, 0)
 
 	done10 := newPR(10) // merged, already looked at
-	mustClosePR(t, st, done10.ID, GHMerged, nil, at(t0.Add(-2*time.Hour)))
+	mustClosePR(t, st, done10.ID, GHMerged, nil, new(t0.Add(-2*time.Hour)))
 	mustPostedRun(t, st, done10.ID, 1, 3)
 	if err := st.RecordRetroPR(ctx, RetroPR{PRID: done10.ID, Status: RetroNothing}); err != nil {
 		t.Fatal(err)
 	}
 
 	merged11 := newPR(11) // merged, closed_at unset: merged_at counts; several posted runs still list it once
-	mustClosePR(t, st, merged11.ID, GHMerged, nil, at(t0.Add(-3*time.Hour)))
+	mustClosePR(t, st, merged11.ID, GHMerged, nil, new(t0.Add(-3*time.Hour)))
 	mustPostedRun(t, st, merged11.ID, 1, 4)
 	mustPostedRun(t, st, merged11.ID, 2, 5)
 	mustRunAt(t, st, merged11.ID, 3, RoleJudge, 0)
 
 	closed12 := newPR(12) // closed an hour ago
-	mustClosePR(t, st, closed12.ID, GHClosed, at(t0.Add(-time.Hour)), nil)
+	mustClosePR(t, st, closed12.ID, GHClosed, new(t0.Add(-time.Hour)), nil)
 	mustPostedRun(t, st, closed12.ID, 1, 6)
 
 	merged13 := newPR(13) // merged long ago but closed_at is later: closed_at wins
-	mustClosePR(t, st, merged13.ID, GHMerged, at(t0.Add(-30*time.Minute)), at(t0.Add(-5*time.Hour)))
+	mustClosePR(t, st, merged13.ID, GHMerged, new(t0.Add(-30*time.Minute)), new(t0.Add(-5*time.Hour)))
 	mustPostedRun(t, st, merged13.ID, 1, 7)
 
 	closed14 := newPR(14) // closed at the same instant as 12: the later id comes first
-	mustClosePR(t, st, closed14.ID, GHClosed, at(t0.Add(-time.Hour)), nil)
+	mustClosePR(t, st, closed14.ID, GHClosed, new(t0.Add(-time.Hour)), nil)
 	mustPostedRun(t, st, closed14.ID, 1, 8)
 
 	if got, want := due(RetroQuery{Since: since}), []int{13, 14, 12, 11}; !reflect.DeepEqual(got, want) {
@@ -517,7 +515,7 @@ func TestRetroDueRetriesFailedPRsUpToThreeAttempts(t *testing.T) {
 	var prs []PR
 	for i, n := range []int{21, 22, 23, 24} {
 		pr := mustPR(t, st, repo.ID, n, PRReviewed)
-		mustClosePR(t, st, pr.ID, GHMerged, nil, at(t0.Add(-time.Duration(i+1)*time.Hour)))
+		mustClosePR(t, st, pr.ID, GHMerged, nil, new(t0.Add(-time.Duration(i+1)*time.Hour)))
 		mustPostedRun(t, st, pr.ID, 1, int64(100+n))
 		prs = append(prs, pr)
 	}

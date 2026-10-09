@@ -139,7 +139,7 @@ func TestNameJudgeStopsAfterFiveAttempts(t *testing.T) {
 	if got := e.renames(pane); len(got) != 1 {
 		t.Fatalf("second attempt in the same tick = %q", got)
 	}
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		e.clock.Add(30 * time.Second)
 		e.observe()
 		e.m.nameAgent(e.ctx, e.session(RoleJudge), pane, "") // same tick: no-op
@@ -177,7 +177,7 @@ func TestNameJudgeNeverWhenBlockedOrIdle(t *testing.T) {
 	if _, err := e.m.Prompt(e.ctx, e.pr, RoleJudge, store.RunInitial, "review"); !errors.Is(err, ErrBlocked) {
 		t.Fatalf("Prompt = %v, want ErrBlocked", err)
 	}
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		e.clock.Add(30 * time.Second)
 		if o := e.observe()[RoleJudge]; o.Kind != ObsBlocked {
 			t.Fatalf("tick %d = %+v", i, o)
@@ -197,7 +197,7 @@ func TestNameJudgeNeverWhenBlockedOrIdle(t *testing.T) {
 
 	// Idle (the turn ended): no rename, the composer may hold a draft.
 	e.h.setAgentStatus(judge, herdr.StatusIdle)
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		e.clock.Add(30 * time.Second)
 		e.observe()
 	}

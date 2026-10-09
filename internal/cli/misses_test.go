@@ -222,7 +222,7 @@ func TestMissesLessonIsCutToFitTheOutput(t *testing.T) {
 	for _, width := range []int{100, 120, 160} {
 		missesTermWidth = func(io.Writer) int { return width }
 		out := missesRun(t, f)
-		for _, l := range strings.Split(strings.TrimSpace(out), "\n") {
+		for l := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
 			if n := utf8.RuneCountInString(l); n > width {
 				t.Errorf("width %d: a line is %d runes: %q", width, n, l)
 			}

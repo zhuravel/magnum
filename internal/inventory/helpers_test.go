@@ -219,7 +219,7 @@ func newFixture(t *testing.T) *fixture {
 	}
 	f.st = storetest.Open(t, filepath.Join(t.TempDir(), "magnum.db"))
 	f.repo, err = f.st.UpsertRepo(context.Background(), store.Repo{
-		NodeID: "R_talkable", Owner: "talkable", Name: "talkable", Mode: store.RepoModePool, ClonePath: store.Ptr(f.main),
+		NodeID: "R_talkable", Owner: "talkable", Name: "talkable", Mode: store.RepoModePool, ClonePath: new(f.main),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -289,8 +289,8 @@ func (f *fixture) slot(name, state string, exists bool) store.Slot {
 func (f *fixture) slotAt(name, path, state string) store.Slot {
 	f.t.Helper()
 	sl, err := f.st.CreateSlot(context.Background(), store.Slot{
-		Name: name, RepoID: store.Ptr(f.repo.ID), RepoFullName: "talkable/talkable", Kind: store.SlotKindPool,
-		Path: path, MainClone: f.main, PlaceholderBranch: store.Ptr(name), DBSlug: store.Ptr(name), State: state,
+		Name: name, RepoID: new(f.repo.ID), RepoFullName: "talkable/talkable", Kind: store.SlotKindPool,
+		Path: path, MainClone: f.main, PlaceholderBranch: new(name), DBSlug: new(name), State: state,
 	})
 	if err != nil {
 		f.t.Fatal(err)

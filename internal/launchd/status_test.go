@@ -200,10 +200,10 @@ func TestStatusReportsRunnerFailures(t *testing.T) {
 // Status must never expose the raw `print` output: it echoes the job's full
 // argument list and environment, which can carry secrets.
 func TestStatusDoesNotLeakRawOutput(t *testing.T) {
-	typ := reflect.TypeOf(Info{})
-	for i := 0; i < typ.NumField(); i++ {
-		if typ.Field(i).Type.Kind() == reflect.String && typ.Field(i).Name != "State" {
-			t.Fatalf("unexpected string field %s on Info", typ.Field(i).Name)
+	typ := reflect.TypeFor[Info]()
+	for field := range typ.Fields() {
+		if field.Type.Kind() == reflect.String && field.Name != "State" {
+			t.Fatalf("unexpected string field %s on Info", field.Name)
 		}
 	}
 }

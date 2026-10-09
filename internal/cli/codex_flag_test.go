@@ -132,11 +132,11 @@ func TestStatusShowsAFlaggedPR(t *testing.T) {
 func TestStatsCountARefusedRoundAsRefused(t *testing.T) {
 	t0 := statsOct(3, 10, 0)
 	refused := statsRR("j1", 1, 5, 1, store.RoleJudge, store.RunFailed, t0)
-	refused.Outcome = store.Ptr("refused")
+	refused.Outcome = new("refused")
 	noEvent := statsRR("j2", 2, 6, 1, store.RoleJudge, store.RunFailed, t0)
-	noEvent.Outcome = store.Ptr("refused")
+	noEvent.Outcome = new("refused")
 	failed := statsRR("j3", 3, 7, 1, store.RoleJudge, store.RunFailed, t0)
-	failed.Outcome = store.Ptr("needs_attention")
+	failed.Outcome = new("needs_attention")
 	events := []store.Event{
 		statsEnd(t0.Add(time.Minute), "pr:talkable/talkable#5", "round 1 ended: refused: Codex refused the review", `{"outcome":"refused"}`),
 		statsEnd(t0.Add(time.Minute), "pr:talkable/talkable#7", "round 1 ended: needs_attention", `{"outcome":"needs_attention"}`),
@@ -211,9 +211,9 @@ func TestPRsRowsCarryTheFlagAndTheMuteReason(t *testing.T) {
 	}
 	flagPR(t, st, ids[0], time.Now().Add(-time.Hour))
 	for _, ev := range []store.Event{
-		{Level: "info", Subject: store.Ptr("pr:talkable/talkable#11990"), Kind: engine.EvPRMuted, Message: "muted: older", Data: json.RawMessage(`{"reason":"older"}`)},
-		{Level: "info", Subject: store.Ptr("pr:talkable/talkable#11990"), Kind: engine.EvPRMuted, Message: "muted: Codex warned", Data: json.RawMessage(`{"reason":"Codex warned"}`)},
-		{Level: "info", Subject: store.Ptr("pr:talkable/talkable#11991"), Kind: engine.EvPRMuted, Message: "muted", Data: json.RawMessage(`{}`)},
+		{Level: "info", Subject: new("pr:talkable/talkable#11990"), Kind: engine.EvPRMuted, Message: "muted: older", Data: json.RawMessage(`{"reason":"older"}`)},
+		{Level: "info", Subject: new("pr:talkable/talkable#11990"), Kind: engine.EvPRMuted, Message: "muted: Codex warned", Data: json.RawMessage(`{"reason":"Codex warned"}`)},
+		{Level: "info", Subject: new("pr:talkable/talkable#11991"), Kind: engine.EvPRMuted, Message: "muted", Data: json.RawMessage(`{}`)},
 	} {
 		if _, err := st.AppendEvent(ctx, ev); err != nil {
 			t.Fatal(err)

@@ -29,7 +29,7 @@ func TestPlanOptionValidation(t *testing.T) {
 		{External: true, Slot: "repo3", Remove: true},
 		{Orphans: true, Slug: "bad slug"},
 		{PR: &PRRef{Repo: "talkable/talkable"}},
-		{Shrink: store.Ptr(-1)},
+		{Shrink: new(-1)},
 	} {
 		_, err := f.p.Plan(f.ctx, opts)
 		if !errors.Is(err, ErrOptions) {
@@ -124,7 +124,7 @@ func TestSlotGuardSkips(t *testing.T) {
 		return pr
 	}
 	mk(1, "review1", func(s *store.Slot) { s.Pinned = true })
-	mk(2, "review2", func(s *store.Slot) { s.HoldReason = store.Ptr("head_drift") })
+	mk(2, "review2", func(s *store.Slot) { s.HoldReason = new("head_drift") })
 	mk(3, "review3", nil)
 	f.agent("review3", inventory.AgentView{Name: "codex", Agent: "codex", Status: herdr.StatusWorking, PaneID: "p1"})
 	mk(4, "review4", nil)
@@ -437,7 +437,7 @@ func TestPlanForPerPRSlotByName(t *testing.T) {
 func TestShrink(t *testing.T) {
 	f := newFixture(t)
 	used := func(d time.Duration) func(*store.Slot) {
-		return func(s *store.Slot) { s.LastUsedAt = store.Ptr(now.Add(-d)) }
+		return func(s *store.Slot) { s.LastUsedAt = new(now.Add(-d)) }
 	}
 	pr := f.pr(f.talkable, 1, store.PRReviewed, store.GHOpen, nil)
 	f.poolSlot("review1", store.SlotHeld, pr.ID, true, used(time.Hour))
@@ -448,7 +448,7 @@ func TestShrink(t *testing.T) {
 	f.poolSlot("review6", store.SlotRemoved, 0, false, nil)
 
 	// 5 live slots, min 2: shrink to max(2, 0) removes up to 3 free ones, oldest idle first.
-	p := f.plan(Options{Shrink: store.Ptr(0)})
+	p := f.plan(Options{Shrink: new(0)})
 	rm := actionsOf(p, KindRemoveSlot)
 	var got []string
 	for _, a := range rm {
@@ -463,17 +463,17 @@ func TestShrink(t *testing.T) {
 	mustSkip(t, p, "slot:review3", SkipPinned)
 
 	// max(min, 4) keeps 4 of 5.
-	p = f.plan(Options{Shrink: store.Ptr(4)})
+	p = f.plan(Options{Shrink: new(4)})
 	if rm := actionsOf(p, KindRemoveSlot); len(rm) != 1 || rm[0].Slot != "review4" {
 		t.Fatalf("shrink 4 = %+v", p.Actions)
 	}
 	// N below min keeps min.
-	p = f.plan(Options{Shrink: store.Ptr(1)})
+	p = f.plan(Options{Shrink: new(1)})
 	if rm := actionsOf(p, KindRemoveSlot); len(rm) != 3 {
 		t.Fatalf("shrink 1 = %+v", p.Actions)
 	}
 	// Idle: only slots idle longer than idle_remove_after (48h).
-	p = f.plan(Options{Shrink: store.Ptr(0), Idle: true})
+	p = f.plan(Options{Shrink: new(0), Idle: true})
 	got = nil
 	for _, a := range actionsOf(p, KindRemoveSlot) {
 		got = append(got, a.Slot)

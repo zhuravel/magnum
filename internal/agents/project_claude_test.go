@@ -273,8 +273,8 @@ func TestReloadsProjectNamesTheClaudeSessionsThatLoadedTheProjectConfig(t *testi
 		t.Error("a Claude session with the user's settings only never loads the project config")
 	}
 
-	adopted, err := e.st.CreateSession(e.ctx, store.Session{PRID: e.pr.ID, Role: "claude-simplify", AgentName: store.Ptr("mg-x"),
-		AgentKind: store.Ptr(KindClaude), State: store.SessionLive})
+	adopted, err := e.st.CreateSession(e.ctx, store.Session{PRID: e.pr.ID, Role: "claude-simplify", AgentName: new("mg-x"),
+		AgentKind: new(KindClaude), State: store.SessionLive})
 	if err != nil {
 		t.Fatal(err)
 	}

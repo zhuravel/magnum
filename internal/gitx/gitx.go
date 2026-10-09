@@ -170,8 +170,7 @@ func gitEnv(mutates bool) map[string]string {
 
 // exitCode returns the process exit code carried by err, if any.
 func exitCode(err error) (int, bool) {
-	var ee *execx.ExitError
-	if errors.As(err, &ee) {
+	if ee, ok := errors.AsType[*execx.ExitError](err); ok {
 		return ee.Code, true
 	}
 	return 0, false
@@ -642,7 +641,7 @@ func (c *Client) WorkTreeChanges(ctx context.Context, dir, base string, skip fun
 		others = append(others, strings.Split(string(res.Stdout), "\x00")...)
 	}
 	var changed []string
-	for _, p := range strings.Split(string(diff.Stdout), "\x00") {
+	for p := range strings.SplitSeq(string(diff.Stdout), "\x00") {
 		if p != "" {
 			changed = append(changed, p)
 		}
@@ -678,7 +677,7 @@ func (c *Client) diffNames(ctx context.Context, dir, base, head string, opts, pa
 		return nil, err
 	}
 	var paths []string
-	for _, p := range strings.Split(string(res.Stdout), "\x00") {
+	for p := range strings.SplitSeq(string(res.Stdout), "\x00") {
 		if p != "" {
 			paths = append(paths, p)
 		}

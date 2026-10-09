@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -404,7 +405,7 @@ func (e *slotsEnv) provision(ctx context.Context, pool config.Pool, count int) i
 		return code
 	}
 	defer unlock()
-	for i := 0; i < count; i++ {
+	for i := range count {
 		var n int
 		if len(resumable) > 0 {
 			sl := resumable[0]
@@ -486,7 +487,7 @@ func (e *slotsEnv) adopt(ctx context.Context, path string) int {
 	if err != nil {
 		return cmdFail(e.c, cmd, err)
 	}
-	if _, err := os.Stat(abs); err != nil && !os.IsNotExist(err) {
+	if _, err := os.Stat(abs); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return cmdFail(e.c, cmd, err)
 	}
 	var pool *config.Pool

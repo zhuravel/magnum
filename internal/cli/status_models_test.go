@@ -90,7 +90,7 @@ func TestStatusShowsAModelLimitAndTheFallbackInUse(t *testing.T) {
 		}
 	}
 	line := ""
-	for _, l := range strings.Split(out, "\n") {
+	for l := range strings.SplitSeq(out, "\n") {
 		if strings.Contains(l, "fable limited") {
 			line = l
 		}

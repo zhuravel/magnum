@@ -410,7 +410,7 @@ func TestPreviousReviewOnlyFromTheCurrentLogin(t *testing.T) {
 	pr := h.reviewedPR(2, "b1")
 	if _, err := h.st.CreateRun(h.ctx, store.Run{ID: "run-app", PRID: pr.ID, Round: 1, Role: store.RoleJudge, Kind: "initial",
 		TargetSHA: "b1", Identity: "talkable-app", ReviewerLogin: "talkable[bot]", State: store.RunVerified,
-		ReviewID: store.Ptr(int64(500)), ReviewEvent: store.Ptr("CHANGES_REQUESTED")}); err != nil {
+		ReviewID: new(int64(500)), ReviewEvent: new("CHANGES_REQUESTED")}); err != nil {
 		t.Fatal(err)
 	}
 	// Same login: the previous review is the App's own.
@@ -426,7 +426,7 @@ func TestPreviousReviewOnlyFromTheCurrentLogin(t *testing.T) {
 	// An older review by zhuravel stands in.
 	if _, err := h.st.CreateRun(h.ctx, store.Run{ID: "run-z", PRID: pr.ID, Round: 0, Role: store.RoleJudge, Kind: "initial",
 		TargetSHA: "a0", Identity: "zhuravel", ReviewerLogin: "zhuravel", State: store.RunVerified,
-		ReviewID: store.Ptr(int64(400)), ReviewEvent: store.Ptr("CHANGES_REQUESTED")}); err != nil {
+		ReviewID: new(int64(400)), ReviewEvent: new("CHANGES_REQUESTED")}); err != nil {
 		t.Fatal(err)
 	}
 	prev = h.e.previousReview(h.ctx, h.pr(2), "zhuravel", nil)
@@ -451,7 +451,7 @@ func TestPollPersistsTheDiscoveredClone(t *testing.T) {
 	})
 	// A stale clone path from an earlier version (a folder, not a clone).
 	if _, err := h.st.UpsertRepo(h.ctx, store.Repo{NodeID: "R_zhuravel/app", Owner: "zhuravel", Name: "app",
-		WatchOwner: "zhuravel", Mode: store.RepoModePerPR, ClonePath: store.Ptr(t.TempDir())}); err != nil {
+		WatchOwner: "zhuravel", Mode: store.RepoModePerPR, ClonePath: new(t.TempDir())}); err != nil {
 		t.Fatal(err)
 	}
 	h.open(prSpec{n: 1, head: "a1"})

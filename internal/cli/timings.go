@@ -44,8 +44,8 @@ type checkoutSpan struct {
 func lastCheckout(steps []store.Event, before time.Time) checkoutSpan {
 	subject := ""
 	last := -1
-	for i := len(steps) - 1; i >= 0; i-- {
-		e := steps[i]
+	for i, e := range slices.Backward(steps) {
+
 		if e.Kind == store.KindStep && e.Subject != nil && !e.At.After(before) {
 			subject, last = *e.Subject, i
 			break

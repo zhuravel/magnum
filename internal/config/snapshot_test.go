@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -35,9 +36,7 @@ const snapDay = 24 * time.Hour
 func snapLoad(t *testing.T, files map[string]string) (*Config, string) {
 	t.Helper()
 	all := map[string]string{"config.toml": snapTOML}
-	for k, v := range files {
-		all[k] = v
-	}
+	maps.Copy(all, files)
 	home := t.TempDir()
 	cfg, err := loadFiles(t, home, all)
 	if err != nil {

@@ -167,7 +167,7 @@ func inspSeedPR(t *testing.T, st *store.Store, fullName string, number int, stat
 	res, err := st.UpsertPRFromGitHub(ctx, store.GitHubPR{
 		RepoID: repo.ID, NodeID: "PR_" + fullName + "_" + strconv.Itoa(number), Number: number,
 		URL: "https://github.com/" + fullName + "/pull/" + strconv.Itoa(number), HeadSHA: "abcdef0123456789abcdef0123456789abcdef01",
-		Title: &title, AuthorLogin: store.Ptr("dev"), GHState: store.GHOpen, InitialState: store.PRBaseline, Identity: "talkable-app",
+		Title: &title, AuthorLogin: new("dev"), GHState: store.GHOpen, InitialState: store.PRBaseline, Identity: "talkable-app",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -256,7 +256,7 @@ func TestInspSubmitWaitsForCompletion(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		for i := 0; i < 200; i++ {
+		for range 200 {
 			if req, err := nextPendingRequest(ctx, st); err == nil {
 				_ = st.CompleteRequest(ctx, req.ID, store.RequestDone, "pinned review1")
 				return

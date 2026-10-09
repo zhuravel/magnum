@@ -288,8 +288,8 @@ func logsTail(f *os.File, n int) ([]string, logsFilePos, error) {
 			}
 		}
 		var data []byte
-		for i := len(chunks) - 1; i >= 0; i-- {
-			data = append(data, chunks[i]...)
+		for _, chunk := range slices.Backward(chunks) {
+			data = append(data, chunk...)
 		}
 		complete := data[:bytes.LastIndexByte(data, '\n')+1]
 		var lines []string
