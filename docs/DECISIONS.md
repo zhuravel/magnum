@@ -5219,17 +5219,24 @@ editing history. Code, config comments and prompts reference these by their head
   over-ranked one carries the posted priority, so the point ranked lower is no hit, and one posted
   without a P0 to P3 priority makes no case, since every matching finding would be a hit and the point
   could stop being one only by not being reported), new or used, at the reviewed commit, oldest row
-  first. A path is written literally (glob characters escaped), match
-  expressions that do not compile are left out, and a row the corpus would refuse makes no case
-  (`eval.Case.Validate`), so one row never blocks the file. A PR no watch covers (no roles, no identity)
-  or one Codex flagged, or whose flag cannot be read, is left out, and so is a dismissed row.
+  first. A path is written literally (glob characters escaped), match expressions that do not compile
+  are left out, and a row the corpus would refuse makes no case (`eval.Case.Validate`), so one row never
+  blocks the file. A PR no watch covers (no roles, no identity) or one Codex flagged, or whose flag
+  cannot be read, is left out, and so is a dismissed row. Only a retro rewrites the file, so such a case
+  leaves it at the next retro: a flagged PR is not replayed meanwhile (`evalrun.Refused` reads the flag
+  before each case), and nothing dismisses a general row yet (the notes curation dismisses repository
+  misses only); the skill editor's decision that will dismiss one is to rewrite the file as it does.
   `eval.WriteCorpus` encodes TOML that LoadCorpus reads back as written, validates it first, writes
   atomically and leaves an unchanged file alone; no case removes the file. `eval.LoadCorpora` reads the
   operator's corpus, then the learned one: a learned file that is not there adds nothing, the learned
   cases run alone when the operator has no corpus, and a case name in both is an error naming it.
-  `magnum eval run`, `score` and `baseline` read both. Rejected: writing the learned cases into the
-  operator's file (it is theirs, and a hand edit would be overwritten) and rewriting the file on every
-  tick (the rows change only with a retro or a decision on them).
+  `magnum eval run`, `score` and `baseline` read both with the default corpus; `--corpus FILE` names a
+  corpus to read alone. The learned cases grow with every retro and each costs a review round, so `run`
+  counts them on its start line (`3 case(s) (2 learned)`) before the first case starts. Rejected:
+  writing the learned cases into the operator's file (it is theirs, and a hand edit would be
+  overwritten), rewriting the file on every tick (the rows change only with a retro or a decision on
+  them) and adding the learned cases to an explicit `--corpus` (three cases the operator picked would
+  silently become every case the retros learned).
 - **A replay is a package the daemon can call, and it can take a candidate directory** (2026-10-09, the
   self-improving loop's eval). The case runner lived in the CLI (`evalRunner.runCase`), so the daemon
   could not replay a case to gate a skill change, and a replay read the prompts and skill of the

@@ -38,7 +38,7 @@ func newEvalBaselineCmd(c *Context) *cobra.Command {
 			return runEvalBaseline(c, corpus, cases)
 		})
 	fs := cmd.Flags()
-	fs.StringVar(&corpus, "corpus", "", "corpus file (default: "+evalCorpusFile+" next to config.toml)")
+	fs.StringVar(&corpus, "corpus", "", evalCorpusFlagUsage)
 	fs.StringArrayVar(&cases, "case", nil, "only this case (repeatable)")
 	return cmd
 }

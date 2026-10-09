@@ -53,7 +53,9 @@ func TestEvalRunRefusesAFlaggedCase(t *testing.T) {
 }
 
 // `eval run` reads the learned corpus the daemon writes after the operator's corpus, and alone when
-// the operator has none. Both cases here are on flagged PRs, so nothing replays.
+// the operator has none, and its start line counts the learned cases, which grow with every retro.
+// An explicit --corpus is that file alone: the learned cases are not replayed with it. Every case here
+// is on a flagged PR, so nothing replays.
 func TestEvalRunReadsTheLearnedCorpusAfterTheOperators(t *testing.T) {
 	f := newInspFixture(t)
 	learned := f.Ctx.Layout.LearnCorpus()
@@ -69,17 +71,31 @@ func TestEvalRunReadsTheLearnedCorpusAfterTheOperators(t *testing.T) {
 	if code := execute(f.Ctx, []string{"eval", "run"}); code != 0 {
 		t.Fatalf("learned corpus alone: exit %d; stderr %s", code, f.Err)
 	}
-	if out := f.Out.String(); !strings.Contains(out, "1 case(s)") || !strings.Contains(out, "decline-7 example/gadgets#5 refused") {
+	if out := f.Out.String(); !strings.Contains(out, "1 case(s) (1 learned)") || !strings.Contains(out, "decline-7 example/gadgets#5 refused") {
 		t.Fatalf("learned corpus alone:\n%s", out)
 	}
 	f.Out.Reset()
-	if code := execute(f.Ctx, []string{"eval", "run", "--corpus", evalCorpusOf(t, "oauth-session", "example/widgets#3")}); code != 0 {
+	operators := evalCorpusOf(t, "oauth-session", "example/widgets#3")
+	b, err := os.ReadFile(operators)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeEvalFile(t, filepath.Join(f.Ctx.Layout.Home, evalLegacyCorpusFile), string(b)) // the default corpus of this test's own
+	if code := execute(f.Ctx, []string{"eval", "run"}); code != 0 {
 		t.Fatalf("both corpora: exit %d; stderr %s", code, f.Err)
 	}
 	out := f.Out.String()
 	first, second := strings.Index(out, "oauth-session example/widgets#3 refused"), strings.Index(out, "decline-7 example/gadgets#5 refused")
-	if !strings.Contains(out, "2 case(s)") || first < 0 || second < first {
+	if !strings.Contains(out, "2 case(s) (1 learned)") || first < 0 || second < first {
 		t.Fatalf("both corpora, the operator's first:\n%s", out)
+	}
+	f.Out.Reset()
+	if code := execute(f.Ctx, []string{"eval", "run", "--corpus", operators}); code != 0 {
+		t.Fatalf("--corpus: exit %d; stderr %s", code, f.Err)
+	}
+	if out := f.Out.String(); !strings.Contains(out, "1 case(s), corpus") || strings.Contains(out, "learned") ||
+		strings.Contains(out, "decline-7") || !strings.Contains(out, "oauth-session example/widgets#3 refused") {
+		t.Fatalf("--corpus, that file alone:\n%s", out)
 	}
 }
 
