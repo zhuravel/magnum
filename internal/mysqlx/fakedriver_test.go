@@ -22,6 +22,19 @@ type fakeServer struct {
 	onQuery func(query string, args []driver.NamedValue) (cols []string, rows [][]driver.Value, err error)
 	// onExec returns an error for a statement, or nil.
 	onExec func(stmt string) error
+	// stall makes every Exec, Query and Ping wait until its context ends
+	// and return its error, as a stalled mysqld, or a DROP waiting on a
+	// metadata lock, does.
+	stall bool
+}
+
+// wait is the stall: ctx's error once it ends, at once without a stall.
+func (s *fakeServer) wait(ctx context.Context) error {
+	if !s.stall {
+		return nil
+	}
+	<-ctx.Done()
+	return ctx.Err()
 }
 
 type fakeQuery struct {
@@ -91,13 +104,16 @@ func (c *fakeConn) Begin() (driver.Tx, error) {
 	return nil, errors.New("fakedriver: Begin unsupported")
 }
 
-// Ping lets db.PingContext succeed.
-func (c *fakeConn) Ping(context.Context) error { return nil }
+// Ping lets db.PingContext succeed (after the stall, if any).
+func (c *fakeConn) Ping(ctx context.Context) error { return c.srv.wait(ctx) }
 
-func (c *fakeConn) ExecContext(_ context.Context, q string, _ []driver.NamedValue) (driver.Result, error) {
+func (c *fakeConn) ExecContext(ctx context.Context, q string, _ []driver.NamedValue) (driver.Result, error) {
 	c.srv.mu.Lock()
 	c.srv.execs = append(c.srv.execs, q)
 	c.srv.mu.Unlock()
+	if err := c.srv.wait(ctx); err != nil {
+		return nil, err
+	}
 	if c.srv.onExec != nil {
 		if err := c.srv.onExec(q); err != nil {
 			return nil, err
@@ -106,10 +122,13 @@ func (c *fakeConn) ExecContext(_ context.Context, q string, _ []driver.NamedValu
 	return driver.RowsAffected(0), nil
 }
 
-func (c *fakeConn) QueryContext(_ context.Context, q string, args []driver.NamedValue) (driver.Rows, error) {
+func (c *fakeConn) QueryContext(ctx context.Context, q string, args []driver.NamedValue) (driver.Rows, error) {
 	c.srv.mu.Lock()
 	c.srv.queries = append(c.srv.queries, fakeQuery{SQL: q, Args: args})
 	c.srv.mu.Unlock()
+	if err := c.srv.wait(ctx); err != nil {
+		return nil, err
+	}
 	if c.srv.onQuery == nil {
 		return nil, errors.New("fakedriver: no onQuery")
 	}

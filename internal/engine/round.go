@@ -41,15 +41,43 @@ func backoff(attempts int) time.Duration {
 }
 
 // launch starts the round goroutine for job under the PR's reservation
-// (reserve, whose context ctx is), which it drops when the round ends.
+// (reserve, whose context ctx is), which it drops when the round ends. A
+// round that panics is a failed round (roundPanicked); the daemon goes on.
 func (e *Engine) launch(ctx context.Context, job *roundJob) {
-	e.roundWG.Add(1)
-	go func() {
-		defer e.roundWG.Done()
+	subject := prSubject(job.repo, job.pr.Number)
+	e.roundWG.Go(func() {
 		defer e.unreserve(job.pr.ID)
-		e.runRound(ctx, job)
-		e.afterRound(ctx, job.pr.ID) // magnum abort / ignore (abort.go)
-	}()
+		e.safely(ctx, "round", subject, func() { e.runRound(ctx, job) },
+			func(ctx context.Context, msg string) { e.roundPanicked(ctx, job, msg) })
+		e.safely(ctx, "round", subject, func() { e.afterRound(ctx, job.pr.ID) }, // magnum abort / ignore (abort.go)
+			func(ctx context.Context, msg string) { e.stopsPanicked(ctx, e.roundStops(job.pr.ID), msg) })
+	})
+}
+
+// roundPanicked settles the PR of a round that panicked as a failed round:
+// its runs still active end (finalizeRuns), its slot goes back to held, a
+// kept approval is withdrawn as after any failed round, and the PR retries
+// with a charged attempt, or needs attention once maxAttempts are spent. A
+// PR the round had settled before the panic (no longer claiming or
+// reviewing) keeps its state, runs and slot.
+func (e *Engine) roundPanicked(ctx context.Context, job *roundJob, msg string) {
+	pr, err := e.st.PRByID(ctx, job.pr.ID)
+	if err != nil {
+		e.log.Warn("round panicked and PR is gone", "pr", job.pr.ID, "err", err)
+		return
+	}
+	from := []string{store.PRClaiming, store.PRReviewing}
+	if !slices.Contains(from, pr.State) {
+		return
+	}
+	e.finalizeRuns(ctx, pr.ID, "the round panicked")
+	if job.hasSlot {
+		_ = e.st.TransitionSlot(ctx, job.slot.ID, []string{store.SlotClaimed, store.SlotBusy}, store.SlotHeld, nil)
+	}
+	why := "panic: " + msg
+	e.keptApprovalFailed(ctx, job.repo, pr, "its round panicked")
+	e.retryOrAttention(ctx, job, pr, from, claimableState(pr), why, true, time.Time{})
+	e.toastRequestedFailed(ctx, job, pr, "panic", msg) // operator.go
 }
 
 // setupError is a failure before the pipeline ran.
@@ -241,7 +269,7 @@ func (rs *roundSetup) judgeOnly() bool { return rs.delta != nil || rs.sameHead }
 // it already has (Slots.Checkout), rather than in a per-PR worktree created
 // or recreated for it.
 func (job *roundJob) checksOutInPlace() bool {
-	return job.hasSlo && !(job.slot.Kind == store.SlotKindPerPR && slices.Contains(recreatedPerPR, job.slot.State))
+	return job.hasSlot && !(job.slot.Kind == store.SlotKindPerPR && slices.Contains(recreatedPerPR, job.slot.State))
 }
 
 // checkout checks the PR's head out in its slot (a per-PR worktree is
@@ -266,7 +294,7 @@ func (e *Engine) checkout(ctx context.Context, job *roundJob, fetched string) (s
 		if err != nil {
 			return "", fmt.Errorf("per-PR worktree: %w", err)
 		}
-		job.slot, job.hasSlo = sl, true
+		job.slot, job.hasSlot = sl, true
 	} else if err := e.checkoutHead(ctx, job, pr, pool, pr.HeadSHA, fetched); err != nil {
 		return "", fmt.Errorf("checkout in %s: %w", job.slot.Name, err)
 	}
@@ -915,6 +943,12 @@ func (e *Engine) readinessPlan(ctx context.Context, job *roundJob, kind string) 
 // pause): pending → abandoned, sent ones → failed. Without this they would
 // count as active forever and block the close-grace release.
 func (e *Engine) finalizeStaleRuns(ctx context.Context, prID int64) {
+	e.finalizeRuns(ctx, prID, "superseded by a new round")
+}
+
+// finalizeRuns closes the PR's active runs: pending → abandoned, sent ones
+// → failed with why.
+func (e *Engine) finalizeRuns(ctx context.Context, prID int64, why string) {
 	runs, err := e.st.RunsByPR(ctx, prID)
 	if err != nil {
 		return
@@ -926,7 +960,7 @@ func (e *Engine) finalizeStaleRuns(ctx context.Context, prID int64) {
 		case store.RunSubmitted, store.RunWorking, store.RunEnded:
 			sent := []string{store.RunSubmitted, store.RunWorking, store.RunEnded}
 			_ = e.st.TransitionRun(ctx, r.ID, sent, store.RunFailed, func(u *store.RunUpdate) {
-				u.Set("error", "superseded by a new round")
+				u.Set("error", why)
 			})
 		}
 	}

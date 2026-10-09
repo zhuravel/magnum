@@ -264,14 +264,14 @@ func (e *Engine) handleRequest(ctx context.Context, req store.Request) {
 			e.complete(ctx, req.ID, err, "")
 			return
 		}
-		e.heavyRequest(ctx, req.ID, func(ctx context.Context) (string, error) { return e.provisionSlots(ctx, pool, p.Count) })
+		e.heavyRequest(req.ID, func(ctx context.Context) (string, error) { return e.provisionSlots(ctx, pool, p.Count) })
 	case ReqRepair:
 		if p, ok := payload[RepairPayload](e, ctx, req); ok {
-			e.heavyRequest(ctx, req.ID, func(ctx context.Context) (string, error) { return e.repairSlot(ctx, p.Slot) })
+			e.heavyRequest(req.ID, func(ctx context.Context) (string, error) { return e.repairSlot(ctx, p.Slot) })
 		}
 	case ReqAdopt:
 		if p, ok := payload[AdoptPayload](e, ctx, req); ok {
-			e.heavyRequest(ctx, req.ID, func(ctx context.Context) (string, error) { return e.adoptSlot(ctx, p) })
+			e.heavyRequest(req.ID, func(ctx context.Context) (string, error) { return e.adoptSlot(ctx, p) })
 		}
 	default:
 		e.complete(ctx, req.ID, fmt.Errorf("unknown request kind %q", req.Kind), "")
@@ -740,7 +740,7 @@ func (e *Engine) cleanupAsync(ctx context.Context, id int64, p CleanupPayload) {
 		e.complete(ctx, id, errors.New("cleanup is not available"), "")
 		return
 	}
-	e.heavyRequest(ctx, id, func(ctx context.Context) (string, error) {
+	e.heavyRequest(id, func(ctx context.Context) (string, error) {
 		plan := p.Plan
 		if plan == nil {
 			opts := p.Options
@@ -766,8 +766,9 @@ func (e *Engine) cleanupAsync(ctx context.Context, id int64, p CleanupPayload) {
 // heavyRequest runs fn for request id on the heavy worker and completes the
 // request with its result. The request stays in flight (skipped by
 // handleRequests) until then; a full queue leaves it pending for the next
-// tick.
-func (e *Engine) heavyRequest(ctx context.Context, id int64, fn func(ctx context.Context) (string, error)) {
+// tick. A panic in fn completes the request as failed, so it does not run,
+// and panic, again on every tick.
+func (e *Engine) heavyRequest(id int64, fn func(ctx context.Context) (string, error)) {
 	e.mu.Lock()
 	e.inflight[id] = true
 	e.mu.Unlock()
@@ -776,9 +777,16 @@ func (e *Engine) heavyRequest(ctx context.Context, id int64, fn func(ctx context
 		delete(e.inflight, id)
 		e.mu.Unlock()
 	}
-	queued := e.enqueueHeavy(fmt.Sprintf("request:%d", id), func(ctx context.Context) error {
+	key := fmt.Sprintf("request:%d", id)
+	queued := e.enqueueHeavy(key, func(ctx context.Context) error {
 		defer done()
-		res, err := fn(ctx)
+		var res string
+		var err error
+		if e.safely(ctx, "heavy job "+key, "", func() { res, err = fn(ctx) }, func(ctx context.Context, msg string) {
+			e.complete(ctx, id, errors.New("panicked: "+msg), "")
+		}) {
+			return nil // logged and recorded as engine.panic
+		}
 		if ctx.Err() != nil {
 			return err // shutting down: the request stays pending for the next daemon (steps resume)
 		}

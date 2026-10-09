@@ -41,7 +41,7 @@ func TestPaneEnvPerPRWorktree(t *testing.T) {
 		t.Fatalf("agent calls %v lack %s", h.ag.all(), want)
 	}
 
-	job := &roundJob{pr: pr, repo: repo, watch: *h.cfg.WatchFor("zhuravel/app"), slot: sl, hasSlo: true}
+	job := &roundJob{pr: pr, repo: repo, watch: *h.cfg.WatchFor("zhuravel/app"), slot: sl, hasSlot: true}
 	env, err := h.e.paneEnv(h.ctx, job, h.ids["zhuravel"], "y1")
 	if err != nil {
 		t.Fatal(err)

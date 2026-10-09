@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 
 	"github.com/zhuravel/magnum/internal/agents"
@@ -77,6 +78,12 @@ func (rd *round) startOwnPass(ctx context.Context, cancel context.CancelCauseFun
 	op := &ownPass{done: make(chan struct{})}
 	go func() {
 		defer close(op.done)
+		defer func() { // a panic is a failed own pass (rolePanicked), never the daemon's end
+			if r := recover(); r != nil {
+				op.rep = rd.rolePanicked(ctx, rd.judge, run, r, debug.Stack())
+				rd.ownPassEnded(ctx, op.rep)
+			}
+		}()
 		var gone *judgeGoneError
 		if op.rep, gone = rd.ownPassTurn(ctx, run, marker); gone != nil {
 			cancel(gone)

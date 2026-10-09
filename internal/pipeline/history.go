@@ -23,8 +23,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -144,6 +146,12 @@ func (rd *round) filesHistory(ctx context.Context, rev, base string) (FilesHisto
 		wg.Go(func() {
 			sem <- struct{}{}
 			defer func() { <-sem }()
+			defer func() { // a panic fails the history, which only warns, never the daemon
+				if r := recover(); r != nil {
+					rd.logAt(slog.LevelError, "pipeline: %s a changed file's history panicked: %v\n%s", rd.subject, r, debug.Stack())
+					errs[i] = fmt.Errorf("pipeline: a changed file's history panicked: %v", r)
+				}
+			}()
 			commits, err := rd.r.Git.FileLog(ctx, in.SlotPath, rev, p, maxHistoryCommits)
 			var older []gitx.Commit
 			if err == nil && len(commits) > 0 && base != rev {

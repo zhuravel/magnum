@@ -397,6 +397,32 @@ func TestRereviewDismissesStaleChangesRequested(t *testing.T) {
 	})
 }
 
+// A round that ends (an abort, the daemon stopping) once its review is
+// posted and verified still finishes the review's follow-ups: the footer
+// edit, and the dismissal of the stale CHANGES_REQUESTED the new review
+// supersedes, which would otherwise block the merge with nothing to retry it.
+func TestAVerifiedReviewsFollowUpsOutliveTheRound(t *testing.T) {
+	e := newEnv(t)
+	e.ag.behaviors[agents.RoleJudge] = []behavior{e.judgePosts(510, "COMMENTED", "COMMENT").behavior(t)}
+	in := e.input(KindRereview)
+	in.Round = 2
+	in.Previous = &PreviousReview{ID: 900, Event: "CHANGES_REQUESTED", SHA: prevSHA, SubmittedAt: t0.Add(-3 * time.Hour)}
+	ctx, cancel := context.WithCancel(e.ctx)
+	defer cancel()
+	e.gh.onUpdate = cancel
+
+	res, _ := e.r.RunRound(ctx, in)
+	if ctx.Err() == nil {
+		t.Fatal("the footer edit never ran: the round was not cancelled during the follow-ups")
+	}
+	if len(e.gh.updates) != 1 || e.gh.updates[0].ID != 510 {
+		t.Errorf("footer edits = %+v, want one of review 510", e.gh.updates)
+	}
+	if len(e.gh.dismissed) != 1 || e.gh.dismissed[0].ID != 900 || res.DismissedReviewID != 900 {
+		t.Fatalf("dismissed %+v (result %+v), want review 900", e.gh.dismissed, res)
+	}
+}
+
 func TestSelfAuthored(t *testing.T) {
 	e := newEnv(t)
 	e.pr.AuthorLogin = store.Ptr("Zhuravel")

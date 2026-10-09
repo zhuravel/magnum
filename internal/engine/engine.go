@@ -517,7 +517,9 @@ func (e *Engine) Run(ctx context.Context, opts Options) error {
 		sigs := make(chan os.Signal, 4)
 		signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT, syscall.SIGUSR1)
 		defer signal.Stop(sigs)
-		go func() {
+		// A signal handler that panicked would leave SIGTERM caught and
+		// unanswered: the daemon stops instead.
+		go e.safely(ctx, "signal handler", "", func() {
 			for {
 				select {
 				case <-ctx.Done():
@@ -532,7 +534,7 @@ func (e *Engine) Run(ctx context.Context, opts Options) error {
 					return
 				}
 			}
-		}()
+		}, func(context.Context, string) { cancel() })
 	}
 	defer e.shutdown()
 

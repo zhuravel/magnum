@@ -511,9 +511,8 @@ func (e *Engine) startCurate(ctx context.Context, repo store.Repo, trigger strin
 	if b, err := json.Marshal(CurateMark{Repo: repo.FullName(), Trigger: trigger, Started: e.curateStarted}); err == nil {
 		e.setKV(ctx, KVNotesCurating, string(b))
 	}
-	e.curateWG.Add(1)
-	go func() {
-		defer e.curateWG.Done()
+	started := e.curateStarted
+	e.curateWG.Go(func() {
 		defer func() {
 			e.delKV(context.WithoutCancel(ctx), KVNotesCurating)
 			e.curateMu.Lock()
@@ -521,8 +520,15 @@ func (e *Engine) startCurate(ctx context.Context, repo store.Repo, trigger strin
 			e.curateMu.Unlock()
 			cancel()
 		}()
-		e.runCurate(cctx, repo, trigger)
-	}()
+		// A curation that panicked stored nothing: it waits curateRetry, as
+		// one stopped does (curateTried).
+		e.safely(cctx, "notes curation", notesSubjectOf(repo.FullName()), func() { e.runCurate(cctx, repo, trigger) },
+			func(context.Context, string) {
+				e.curateMu.Lock()
+				e.curateTried[repo.ID] = started
+				e.curateMu.Unlock()
+			})
+	})
 	return true, e.curateStarted, ""
 }
 

@@ -271,18 +271,31 @@ func (e *Engine) startRetro(ctx context.Context, spec retroSpec) (bool, time.Tim
 	}
 	rctx, cancel := context.WithCancel(ctx)
 	e.retroCancel, e.retroStarted = cancel, e.now()
-	e.retroWG.Add(1)
-	go func() {
-		defer e.retroWG.Done()
+	started := e.retroStarted
+	e.retroWG.Go(func() {
 		defer func() {
 			e.retroMu.Lock()
 			e.retroCancel = nil
 			e.retroMu.Unlock()
 			cancel()
 		}()
-		e.runRetro(rctx, spec)
-	}()
+		e.safely(rctx, "retro", "", func() { e.runRetro(rctx, spec) },
+			func(ctx context.Context, msg string) { e.retroPanicked(ctx, spec, started, msg) })
+	})
 	return true, e.retroStarted
+}
+
+// retroPanicked records a retro that panicked as a stopped one (KVRetroLast)
+// and, for the daily retro, as the day's (KVRetroDay), so it is not started
+// again on every tick; the PRs it did not finish stay due for the next one.
+func (e *Engine) retroPanicked(ctx context.Context, spec retroSpec, started time.Time, msg string) {
+	sum := RetroSummary{At: started, Finished: e.now(), Stopped: "the retro panicked: " + msg}
+	if b, err := json.Marshal(sum); err == nil {
+		e.setKV(ctx, KVRetroLast, string(b))
+	}
+	if spec.daily {
+		e.setKV(ctx, KVRetroDay, store.DayKey(started))
+	}
 }
 
 // stopRetro cancels a running retro (shutdown).

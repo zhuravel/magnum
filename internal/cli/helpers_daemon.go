@@ -41,8 +41,12 @@ type daemonGroupSys struct {
 	Kill func(pid int, sig syscall.Signal) error
 	// DaemonPID reads the daemon pidfile (engine.DaemonPID).
 	DaemonPID func(paths.Layout) (int, error)
-	// Sleep waits between polls.
-	Sleep func(time.Duration)
+	// Sleep waits d between polls; it returns ctx's error, at once, when ctx
+	// ends first (ctrl+c), and nil otherwise.
+	Sleep func(ctx context.Context, d time.Duration) error
+	// Signals is the context a command of the group runs under, ended by
+	// ctrl+c, SIGTERM or SIGHUP; nil means signalContext.
+	Signals func() (context.Context, context.CancelFunc)
 	// RunEngine runs the daemon in the foreground (app.New + engine.Run).
 	RunEngine func(ctx context.Context, c *Context, o daemonOptions) (daemonDryRunReport, error)
 }
@@ -53,8 +57,17 @@ var daemonSys = daemonGroupSys{
 	Getenv:    os.Getenv,
 	Kill:      syscall.Kill,
 	DaemonPID: engine.DaemonPID,
-	Sleep:     time.Sleep,
+	Sleep:     actSleep,
 	RunEngine: runDaemonEngine,
+}
+
+// signals is the context a command of the group runs under (Signals, else
+// signalContext).
+func (s daemonGroupSys) signals() (context.Context, context.CancelFunc) {
+	if s.Signals != nil {
+		return s.Signals()
+	}
+	return signalContext()
 }
 
 // runner returns the subprocess runner for one command. Under --dry-run it

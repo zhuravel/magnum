@@ -18,14 +18,37 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	mysqldrv "github.com/go-sql-driver/mysql"
 )
 
 // DefaultDSN is DBngin's stock local server: root, empty password, 127.0.0.1:3306.
 // The timeout bounds only the TCP dial; per-call deadlines come from the
-// context passed to each method.
+// context passed to each method, or from callTimeout and dropTimeout when it
+// has none.
 const DefaultDSN = "root:@tcp(127.0.0.1:3306)/?timeout=5s"
+
+// The deadline a call gets when its caller's context has none: a stalled
+// mysqld, or a DROP waiting on a metadata lock, must not block the caller
+// (the engine's single heavy worker) for good. A caller's own deadline,
+// longer or shorter, is kept. Variables so tests can shorten them.
+var (
+	// callTimeout bounds Ping, the listings and SchemaMigrationsMax.
+	callTimeout = 30 * time.Second
+	// dropTimeout bounds one Drop: dropping a big schema takes a while. A
+	// DROP the deadline cut short may still finish on the server; Drop's
+	// IF EXISTS makes the retry harmless either way.
+	dropTimeout = 5 * time.Minute
+)
+
+// bounded is ctx with a deadline d from now when it has none, else ctx.
+func bounded(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	if _, ok := ctx.Deadline(); ok {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, d)
+}
 
 // DefaultPattern is the schemata LIKE pattern ListSuffixed uses:
 // talkable_%__% with every literal underscore escaped by likeEscape. Queries
@@ -103,6 +126,8 @@ func (c *Client) Close() error { return c.db.Close() }
 
 // Ping verifies that the server is reachable and the credentials work.
 func (c *Client) Ping(ctx context.Context) error {
+	ctx, cancel := bounded(ctx, callTimeout)
+	defer cancel()
 	if err := c.db.PingContext(ctx); err != nil {
 		return fmt.Errorf("mysqlx: ping: %w", err)
 	}
@@ -174,6 +199,8 @@ func (c *Client) schemata(ctx context.Context, patterns []string) ([]Database, e
 	if len(patterns) == 0 {
 		return nil, nil
 	}
+	ctx, cancel := bounded(ctx, callTimeout)
+	defer cancel()
 	conn, err := c.db.Conn(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("mysqlx: list databases: %w", err)
@@ -228,6 +255,8 @@ func (c *Client) SchemaMigrationsMax(ctx context.Context, dbName string) (string
 	if err != nil {
 		return "", fmt.Errorf("mysqlx: schema_migrations max: %w", err)
 	}
+	ctx, cancel := bounded(ctx, callTimeout)
+	defer cancel()
 	var v sql.NullString
 	if err := c.db.QueryRowContext(ctx, "SELECT MAX(version) FROM "+q+".`schema_migrations`").Scan(&v); err != nil {
 		return "", fmt.Errorf("mysqlx: schema_migrations max of %s: %w", dbName, mapNotFound(err))
@@ -236,8 +265,8 @@ func (c *Client) SchemaMigrationsMax(ctx context.Context, dbName string) (string
 }
 
 // Drop removes one database (DROP DATABASE IF EXISTS, so a retry after a crash
-// is harmless) after g.Check approves its name. A refusal wraps ErrGuard and
-// sends nothing to the server.
+// is harmless) after g.Check approves its name, within dropTimeout when ctx
+// has no deadline. A refusal wraps ErrGuard and sends nothing to the server.
 func (c *Client) Drop(ctx context.Context, name string, g Guard) error {
 	if err := g.Check(name); err != nil {
 		return err
@@ -246,6 +275,8 @@ func (c *Client) Drop(ctx context.Context, name string, g Guard) error {
 	if err != nil { // unreachable after Check; kept so the SQL line stands on its own
 		return fmt.Errorf("%w: %w", ErrGuard, err)
 	}
+	ctx, cancel := bounded(ctx, dropTimeout)
+	defer cancel()
 	if _, err := c.db.ExecContext(ctx, "DROP DATABASE IF EXISTS "+q); err != nil {
 		return fmt.Errorf("mysqlx: drop %s: %w", name, err)
 	}

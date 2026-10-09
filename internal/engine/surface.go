@@ -52,9 +52,11 @@ func (e *Engine) urgent(key, title, body string, window time.Duration) {
 	e.toastMu.Unlock()
 	go func() {
 		defer e.toastWG.Done()
-		if _, err := e.d.Notifier.ToastUrgent(e.toastCtx, key, title, body, window); err != nil {
-			e.log.Warn("urgent toast failed", "key", key, "err", err)
-		}
+		e.safely(e.toastCtx, "urgent toast "+key, "", func() {
+			if _, err := e.d.Notifier.ToastUrgent(e.toastCtx, key, title, body, window); err != nil {
+				e.log.Warn("urgent toast failed", "key", key, "err", err)
+			}
+		}, nil)
 	}()
 }
 

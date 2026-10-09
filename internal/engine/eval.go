@@ -87,7 +87,7 @@ func (e *Engine) RunEval(ctx context.Context, c EvalCase) (pipeline.RoundResult,
 	observed := make(chan struct{})
 	go func() {
 		defer close(observed)
-		e.observeEvery(octx, EvalObserveEvery)
+		e.safely(octx, "eval observer", "", func() { e.observeEvery(octx, EvalObserveEvery) }, nil)
 	}()
 	defer func() {
 		stopObserving()
@@ -369,7 +369,7 @@ func (e *Engine) seedEval(ctx context.Context, c EvalCase) (*roundJob, error) {
 		return nil, fmt.Errorf("seed slot: %w", err)
 	}
 	return &roundJob{
-		pr: pr, repo: repo, watch: c.Watch, slot: sl, hasSlo: true, kind: pipeline.KindInitial,
+		pr: pr, repo: repo, watch: c.Watch, slot: sl, hasSlot: true, kind: pipeline.KindInitial,
 		evalHead: c.Head, evalNotes: c.Notes,
 	}, nil
 }

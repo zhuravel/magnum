@@ -145,12 +145,37 @@ func (e *Engine) requestAbort(ctx context.Context, id int64, p TargetPayload, ig
 	e.mu.Lock()
 	e.inflight[id] = true
 	e.mu.Unlock()
-	e.roundWG.Add(1)
-	go func() {
-		defer e.roundWG.Done()
+	orders := []stopOrder{{id: id, ignore: ignore}}
+	e.roundWG.Go(func() {
 		defer e.unreserve(pr.ID)
-		e.serveStop(rctx, pr.ID, []stopOrder{{id: id, ignore: ignore}}, false)
-	}()
+		e.safely(rctx, verb, prSubject(repo, pr.Number), func() { e.serveStop(rctx, pr.ID, orders, false) },
+			func(ctx context.Context, msg string) { e.stopsPanicked(ctx, orders, msg) })
+	})
+}
+
+// stopsPanicked fails the stop requests of orders (magnum abort / ignore)
+// that a panic left in flight: they leave the in-flight set, and their CLI
+// hears why, rather than waiting for an answer that never comes.
+func (e *Engine) stopsPanicked(ctx context.Context, orders []stopOrder, msg string) {
+	for _, o := range orders {
+		e.mu.Lock()
+		open := e.inflight[o.id]
+		delete(e.inflight, o.id)
+		e.mu.Unlock()
+		if open {
+			e.complete(ctx, o.id, fmt.Errorf("the stop panicked: %s", msg), "")
+		}
+	}
+}
+
+// roundStops are the stop requests the PR's round holds (roundStop.reqs).
+func (e *Engine) roundStops(prID int64) []stopOrder {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if h := e.rounds[prID]; h != nil {
+		return slices.Clone(h.stop.reqs)
+	}
+	return nil
 }
 
 // dropQueued takes back a review that waits in line, before any of it ran:

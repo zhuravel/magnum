@@ -1,8 +1,10 @@
 package pipeline
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/store"
@@ -70,6 +72,34 @@ func TestNextRoundAdoptsAReviewItCouldNotVerify(t *testing.T) {
 	res, err = e.r.RunRound(e.ctx, e.nextRound())
 	if err != nil || res.Outcome != OutcomePosted || res.ReviewID != 801 || res.JudgeRunID == marker || res.Round != 2 {
 		t.Fatalf("later round: result = %+v, err = %v", res, err)
+	}
+}
+
+// A round that ends (an abort, the daemon stopping) while it adopts a review
+// it could not verify still finishes the review's follow-ups, as after a
+// review verified at once: the footer edit, and the dismissal of the stale
+// CHANGES_REQUESTED the adopted review supersedes.
+func TestAnAdoptedReviewsFollowUpsOutliveTheRound(t *testing.T) {
+	e := newEnv(t)
+	marker := e.unverifiedRound(e.judgePosts(802, "COMMENTED", "COMMENT"))
+	in := e.nextRound()
+	in.Previous = &PreviousReview{ID: 900, Event: "CHANGES_REQUESTED", SHA: prevSHA, SubmittedAt: t0.Add(-3 * time.Hour)}
+	ctx, cancel := context.WithCancel(e.ctx)
+	defer cancel()
+	e.gh.onUpdate = cancel
+
+	res, _ := e.r.RunRound(ctx, in)
+	if ctx.Err() == nil {
+		t.Fatal("the footer edit never ran: the round was not cancelled during the follow-ups")
+	}
+	if res.ReviewID != 802 || res.JudgeRunID != marker {
+		t.Fatalf("adopting round: result = %+v", res)
+	}
+	if len(e.gh.updates) != 1 || e.gh.updates[0].ID != 802 {
+		t.Errorf("footer edits = %+v, want one of review 802", e.gh.updates)
+	}
+	if len(e.gh.dismissed) != 1 || e.gh.dismissed[0].ID != 900 {
+		t.Fatalf("dismissed %+v, want review 900", e.gh.dismissed)
 	}
 }
 

@@ -66,25 +66,27 @@ func (e *Engine) requestOpen(ctx context.Context, id int64, p OpenPayload) {
 	e.mu.Lock()
 	e.inflight[id] = true
 	e.mu.Unlock()
-	e.roundWG.Add(1)
-	go func() {
-		defer e.roundWG.Done()
+	e.roundWG.Go(func() {
 		defer func() {
 			e.unreserve(pr.ID)
 			e.mu.Lock()
 			delete(e.inflight, id)
 			e.mu.Unlock()
 		}()
-		res, err := e.openPR(rctx, repo, *w, pr, spec)
-		if rctx.Err() != nil && ctx.Err() != nil {
-			return // daemon shutdown: the request stays pending for the next start
-		}
-		fctx := context.WithoutCancel(rctx)
-		if err != nil {
-			e.event(fctx, "warn", subject, "pr.open_failed", "magnum open: "+err.Error(), nil)
-		}
-		e.complete(fctx, id, err, res)
-	}()
+		e.safely(rctx, "open", subject, func() {
+			res, err := e.openPR(rctx, repo, *w, pr, spec)
+			if rctx.Err() != nil && ctx.Err() != nil {
+				return // daemon shutdown: the request stays pending for the next start
+			}
+			fctx := context.WithoutCancel(rctx)
+			if err != nil {
+				e.event(fctx, "warn", subject, "pr.open_failed", "magnum open: "+err.Error(), nil)
+			}
+			e.complete(fctx, id, err, res)
+		}, func(ctx context.Context, msg string) {
+			e.complete(ctx, id, fmt.Errorf("magnum open panicked: %s", msg), "")
+		})
+	})
 }
 
 // openPR gives pr a checkout and live sessions again for a human: its own
@@ -194,7 +196,7 @@ func (e *Engine) openPR(ctx context.Context, repo store.Repo, w config.Watch, pr
 			return "", err
 		}
 	}
-	job := &roundJob{pr: pr, repo: repo, watch: w, pool: pool, slot: slot, hasSlo: true}
+	job := &roundJob{pr: pr, repo: repo, watch: w, pool: pool, slot: slot, hasSlot: true}
 	env, err := e.paneEnv(ctx, job, src, deref(slot.CheckedOutSHA))
 	if err != nil {
 		return "", err

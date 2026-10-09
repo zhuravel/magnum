@@ -9328,7 +9328,8 @@ CONSTANTS
 const DefaultDSN = "root:@tcp(127.0.0.1:3306)/?timeout=5s"
     DefaultDSN is DBngin's stock local server: root, empty password,
     127.0.0.1:3306. The timeout bounds only the TCP dial; per-call deadlines
-    come from the context passed to each method.
+    come from the context passed to each method, or from callTimeout and
+    dropTimeout when it has none.
 
 
 VARIABLES
@@ -9383,8 +9384,8 @@ func (c *Client) Close() error
 
 func (c *Client) Drop(ctx context.Context, name string, g Guard) error
     Drop removes one database (DROP DATABASE IF EXISTS, so a retry after a crash
-    is harmless) after g.Check approves its name. A refusal wraps ErrGuard and
-    sends nothing to the server.
+    is harmless) after g.Check approves its name, within dropTimeout when ctx
+    has no deadline. A refusal wraps ErrGuard and sends nothing to the server.
 
 func (c *Client) DropAll(ctx context.Context, names []string, g Guard) []DropResult
     DropAll drops each name in order with Drop and returns one result per name,

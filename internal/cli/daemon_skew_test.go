@@ -176,7 +176,7 @@ func TestDaemonRestartWhenIdleWaitsWithoutADrain(t *testing.T) {
 	}
 	seedRoundInFlight(t, dt)
 	sleeps := 0
-	daemonSys.Sleep = func(time.Duration) {
+	daemonSys.Sleep = func(context.Context, time.Duration) error {
 		sleeps++
 		if _, ok := draining(t, dt); ok {
 			t.Errorf("sleep %d: --when-idle drained", sleeps)
@@ -195,6 +195,7 @@ func TestDaemonRestartWhenIdleWaitsWithoutADrain(t *testing.T) {
 			}
 			st.Close()
 		}
+		return nil
 	}
 	if code := dt.run("daemon-restart", "--when-idle"); code != 0 {
 		t.Fatalf("exit %d, stderr: %s", code, dt.stderr)

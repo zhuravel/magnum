@@ -19,13 +19,13 @@ import (
 
 // roundJob is one round the dispatcher decided to run.
 type roundJob struct {
-	pr     store.PR
-	repo   store.Repo
-	watch  config.Watch
-	pool   *config.Pool
-	slot   store.Slot
-	hasSlo bool
-	kind   string // initial | rereview | continue
+	pr      store.PR
+	repo    store.Repo
+	watch   config.Watch
+	pool    *config.Pool
+	slot    store.Slot
+	hasSlot bool
+	kind    string // initial | rereview | continue
 
 	// continue
 	round         int
@@ -486,7 +486,7 @@ func (e *Engine) startRound(ctx context.Context, pr store.PR, repo store.Repo, w
 		if g := e.slotGate(ctx, job, &slot, subject); g.text != "" {
 			return false, 0, g
 		}
-		job.slot, job.hasSlo = slot, true
+		job.slot, job.hasSlot = slot, true
 	}
 	if job.kind == kindContinue && !has {
 		// The paused round's checkout is gone: start over on the current head.
@@ -543,7 +543,7 @@ func (e *Engine) startRound(ctx context.Context, pr store.PR, repo store.Repo, w
 			e.log.Info("dispatch: claim", "subject", subject, "err", err)
 			return false, 0, gate{}
 		}
-		job.slot, job.hasSlo = sl, true
+		job.slot, job.hasSlot = sl, true
 		e.event(ctx, "info", subject, "slot.claimed", "claimed "+sl.Name, nil)
 	}
 	launched = true
@@ -662,7 +662,7 @@ func (e *Engine) planStart(ctx context.Context, job *roundJob, subject string) b
 		what = "re-review of the same head (the judge alone)"
 	}
 	switch {
-	case job.hasSlo:
+	case job.hasSlot:
 		e.rec.Record(ctx, subject, "review", fmt.Sprintf("%s in %s at %s", what, job.slot.Name, textx.ShortSHA(job.pr.HeadSHA)))
 	case job.pool == nil:
 		e.rec.Record(ctx, subject, "review", fmt.Sprintf("%s in a new per-PR worktree at %s", what, textx.ShortSHA(job.pr.HeadSHA)))

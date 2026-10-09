@@ -170,12 +170,14 @@ func (rd *round) adoptUnverified(ctx context.Context) func() (RoundResult, error
 		"adopted without a new round", found.id, u.markers[0], u.round, textx.ShortSHA(rd.in.TargetSHA)),
 		map[string]any{"review_id": found.id, "markers": u.markers, "runs": u.runs, "outcome": outcome})
 	if outcome == OutcomePosted {
+		// The adopted review is verified: its follow-ups finish even when
+		// the round ends now, as after a review verified at once (judge.go).
 		r := u.result
-		rd.recordFindings(ctx, u.markers[0], &r)
-		rd.handleDuplicates(ctx, found)
-		rd.checkLocalPaths(ctx, found)
-		rd.appendFooter(ctx, found, &r)
-		rd.dismissStale(ctx, res.Event, found.id, found.url)
+		rd.recordFindings(wctx, u.markers[0], &r)
+		rd.handleDuplicates(wctx, found)
+		rd.checkLocalPaths(wctx, found)
+		rd.appendFooter(wctx, found, &r)
+		rd.dismissStale(wctx, res.Event, found.id, found.url)
 	}
 	return func() (RoundResult, error) { return rd.done(ctx, outcome, verr) }
 }

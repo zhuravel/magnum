@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -256,15 +257,60 @@ func (e *Engine) enqueueHeavy(key string, fn func(ctx context.Context) error) bo
 	}
 }
 
+// runHeavy runs one heavy job; a job that panics fails alone (safely), and
+// its key is free again either way.
 func (e *Engine) runHeavy(ctx context.Context, j heavyJob) {
 	defer func() {
 		e.heavyMu.Lock()
 		delete(e.heavyKeys, j.key)
 		e.heavyMu.Unlock()
 	}()
-	if err := j.fn(ctx); err != nil && !errors.Is(err, context.Canceled) {
+	var err error
+	e.safely(ctx, "heavy job "+j.key, "", func() { err = j.fn(ctx) }, nil)
+	if err != nil && !errors.Is(err, context.Canceled) {
 		e.log.Warn("heavy job failed", "job", j.key, "err", err)
 	}
+}
+
+// safely runs fn, the body of a daemon goroutine (unit names it: "round",
+// "heavy job reconcile", "retro"), and recovers a panic in it, so one PR's
+// data, or one bug, does not take the daemon down and with it every round
+// in flight (a crash's recovery would send the PR again, uncharged, and
+// crash again). A panic is logged as an error with its value and stack,
+// recorded as an engine.panic event on subject (a PR's, or "" for the
+// daemon's), and handed to failed (when set) to settle the unit as a
+// failure on a context the panic's cancellation does not reach. A settle
+// that panics too is only logged. It reports whether fn panicked; a
+// runtime.Goexit is no panic.
+func (e *Engine) safely(ctx context.Context, unit, subject string, fn func(), failed func(ctx context.Context, msg string)) (panicked bool) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+		panicked = true
+		e.panicked(context.WithoutCancel(ctx), unit, subject, r, debug.Stack(), failed)
+	}()
+	fn()
+	return false
+}
+
+// panicked records the panic r of unit (safely) and settles the unit.
+func (e *Engine) panicked(ctx context.Context, unit, subject string, r any, stack []byte, failed func(ctx context.Context, msg string)) {
+	msg := oneLine(fmt.Sprint(r), 300)
+	e.log.Error("panic recovered; the daemon goes on", "unit", unit, "subject", subject, "panic", msg,
+		"stack", execx.Redact(string(stack)))
+	e.event(ctx, "error", subject, "engine.panic", unit+" panicked: "+msg, map[string]any{"unit": unit})
+	if failed == nil {
+		return
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			e.log.Error("panic while settling a panic", "unit", unit, "subject", subject,
+				"panic", oneLine(fmt.Sprint(r), 300), "stack", execx.Redact(string(debug.Stack())))
+		}
+	}()
+	failed(ctx, msg)
 }
 
 // heavyWorker runs heavy jobs one at a time until ctx ends.

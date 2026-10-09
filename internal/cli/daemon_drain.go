@@ -197,11 +197,14 @@ func drainRounds(ctx context.Context, c *Context, cmd string, timeout time.Durat
 	fmt.Fprintf(c.Stdout, "draining (pid %d): no new rounds start; waiting for %s in flight (at most %s): %s\n",
 		os.Getpid(), rounds.count("round(s)"), timeout, rounds)
 	var waited, sinceProgress time.Duration
+	interrupted := func() (func(), bool) {
+		lift(fmt.Sprintf("`magnum %s --drain` was interrupted; the daemon was not restarted", cmd))
+		fmt.Fprintf(c.Stderr, "magnum %s: interrupted after %s; the drain is lifted and the daemon was not restarted\n", cmd, waited)
+		return func() {}, false
+	}
 	for {
 		if ctx.Err() != nil {
-			lift(fmt.Sprintf("`magnum %s --drain` was interrupted; the daemon was not restarted", cmd))
-			fmt.Fprintf(c.Stderr, "magnum %s: interrupted after %s; the drain is lifted and the daemon was not restarted\n", cmd, waited)
-			return func() {}, false
+			return interrupted()
 		}
 		if waited >= timeout {
 			lift(fmt.Sprintf("`magnum %s --drain` gave up after %s; the daemon was not restarted", cmd, timeout))
@@ -211,7 +214,9 @@ func drainRounds(ctx context.Context, c *Context, cmd string, timeout time.Durat
 				cmd, rounds.count("round(s)"), timeout, rounds)
 			return func() {}, false
 		}
-		daemonSys.Sleep(drainPollEvery)
+		if daemonSys.Sleep(ctx, drainPollEvery) != nil {
+			return interrupted()
+		}
 		waited += drainPollEvery
 		sinceProgress += drainPollEvery
 		if rounds, err = c.activeRounds(ctx); err != nil {
@@ -237,6 +242,10 @@ func waitIdle(ctx context.Context, c *Context, cmd string, timeout time.Duration
 	var waited, sinceProgress time.Duration
 	announced := false
 	var last inFlight
+	interrupted := func() bool {
+		fmt.Fprintf(c.Stderr, "magnum %s: interrupted after %s of waiting; the daemon was not restarted\n", cmd, waited)
+		return false
+	}
 	for {
 		rounds, err := c.activeRounds(ctx)
 		if err == nil {
@@ -257,8 +266,7 @@ func waitIdle(ctx context.Context, c *Context, cmd string, timeout time.Duration
 			fmt.Fprintf(c.Stdout, "waiting: %s in flight after %s: %s\n", rounds.count("round(s)"), waited, rounds)
 		}
 		if ctx.Err() != nil {
-			fmt.Fprintf(c.Stderr, "magnum %s: stopped waiting after %s; the daemon was not restarted\n", cmd, waited)
-			return false
+			return interrupted()
 		}
 		if waited >= timeout {
 			still := "rounds"
@@ -270,7 +278,9 @@ func waitIdle(ctx context.Context, c *Context, cmd string, timeout time.Duration
 				cmd, still, timeout)
 			return false
 		}
-		daemonSys.Sleep(drainPollEvery)
+		if daemonSys.Sleep(ctx, drainPollEvery) != nil {
+			return interrupted()
+		}
 		waited += drainPollEvery
 		sinceProgress += drainPollEvery
 	}

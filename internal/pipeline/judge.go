@@ -651,11 +651,16 @@ func (rd *round) finalizeJudge(ctx context.Context, runIDs []string, v verdict) 
 		rd.event(ctx, "info", "round.replied", msg, map[string]any{"replies": len(v.replies), "runs": runIDs})
 	}
 	if v.outcome == OutcomePosted {
-		rd.recordFindings(ctx, runIDs[0], v.result)
-		rd.handleDuplicates(ctx, v.review)
-		rd.checkLocalPaths(ctx, v.review)
-		rd.appendFooter(ctx, v.review, v.result)
-		rd.dismissStale(ctx, res.Event, res.ReviewID, res.ReviewURL)
+		// The review is verified: its follow-ups finish even when the round
+		// ends now (an abort, the daemon stopping), since nothing retries
+		// them and a stale CHANGES_REQUESTED left standing blocks the merge.
+		// Each gh call stays bounded by execx's timeout.
+		fctx := context.WithoutCancel(ctx)
+		rd.recordFindings(fctx, runIDs[0], v.result)
+		rd.handleDuplicates(fctx, v.review)
+		rd.checkLocalPaths(fctx, v.review)
+		rd.appendFooter(fctx, v.review, v.result)
+		rd.dismissStale(fctx, res.Event, res.ReviewID, res.ReviewURL)
 	}
 	return rd.done(ctx, v.outcome, v.err)
 }
@@ -670,8 +675,11 @@ func (rd *round) abandonIfPending(ctx context.Context, id string) {
 // dismissStale dismisses the identity's previous CHANGES_REQUESTED once a
 // non-blocking review superseded it (identity.dismiss_own_stale_change_requests,
 // on by default for apps). Failure, including a missing permission, is a
-// warning only. A post-merge review dismisses nothing.
+// warning only. A post-merge review dismisses nothing. It runs only once the
+// new review is verified, so the round ending (an abort, the daemon
+// stopping) does not cut the dismissal short.
 func (rd *round) dismissStale(ctx context.Context, event string, newID int64, newURL string) {
+	ctx = context.WithoutCancel(ctx)
 	prev := rd.in.Previous
 	if rd.in.DryRun || rd.in.PostMerge || prev == nil || prev.ID == 0 || prev.ID == newID || !rd.idCfg.DismissStale() ||
 		!isChangesRequested(prev.Event) || isChangesRequested(event) ||

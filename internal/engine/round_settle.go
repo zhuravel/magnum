@@ -43,7 +43,7 @@ func (e *Engine) setupFailed(ctx context.Context, job *roundJob, se *setupError)
 	if !se.noCharge {
 		e.keptApprovalFailed(ctx, job.repo, pr, "its round could not start")
 	}
-	if job.hasSlo {
+	if job.hasSlot {
 		// The slot stays the PR's, idle (held): claimed would keep it from
 		// eviction while the PR waits for its retry.
 		_ = e.st.TransitionSlot(ctx, job.slot.ID, []string{store.SlotClaimed}, store.SlotHeld, nil)
@@ -108,7 +108,7 @@ func (e *Engine) needsAttention(ctx context.Context, job *roundJob, pr store.PR,
 	}
 	e.delKV(ctx, kvPRDryRun(pr.ID), kvPRRedecide(pr.ID)) // the forced request ended with it
 	e.setKV(ctx, KVPRAttention(pr.ID), why)
-	if job.hasSlo {
+	if job.hasSlot {
 		_ = e.st.TransitionSlot(ctx, job.slot.ID, []string{store.SlotClaimed, store.SlotBusy}, store.SlotHeld, nil)
 	}
 	label := fmt.Sprintf("%s#%d", job.repo.Name, pr.Number)

@@ -536,6 +536,10 @@ type fakeGitHub struct {
 	updateErr   error
 	listErr     error
 	failLists   int // the next n ReviewsWithMarker calls fail transiently
+	// onUpdate runs at the start of UpdateReviewBody (the footer edit), as
+	// something ending the round then would. UpdateReviewBody and
+	// DismissReview fail on an ended context, as a gh call killed with it.
+	onUpdate func()
 }
 
 type dismissCall struct {
@@ -589,6 +593,9 @@ func (g *fakeGitHub) ReviewREST(ctx context.Context, owner, repo string, number 
 }
 
 func (g *fakeGitHub) DismissReview(ctx context.Context, owner, repo string, number int, reviewID int64, message string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.dismissed = append(g.dismissed, dismissCall{reviewID, message})
@@ -598,6 +605,15 @@ func (g *fakeGitHub) DismissReview(ctx context.Context, owner, repo string, numb
 // UpdateReviewBody records the call and, unless updateErr is set, replaces
 // the review's body in both views.
 func (g *fakeGitHub) UpdateReviewBody(ctx context.Context, owner, repo string, number int, reviewID int64, body string) error {
+	g.mu.Lock()
+	hook := g.onUpdate
+	g.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.updates = append(g.updates, updateCall{reviewID, body})
@@ -660,6 +676,8 @@ type fakeGit struct {
 	// logHangs makes FileLog wait for its context, as a git log walking a
 	// big repository's whole history does (at most 10 seconds).
 	logHangs bool
+	// logPanics makes FileLog panic, as a bug on one file's log would.
+	logPanics bool
 	// afterBase are the commits of logs on the base after the PR's merge
 	// base: a log at any revision but origin/* leaves them out.
 	afterBase map[string]bool
@@ -733,6 +751,11 @@ func (g *fakeGit) FileLog(ctx context.Context, dir, rev, path string, n int) ([]
 	g.logged = append(g.logged, fmt.Sprintf("%s %d %s", rev, n, path))
 	if g.logErr != nil {
 		return nil, g.logErr
+	}
+	if g.logPanics {
+		g.mu.Unlock()
+		defer g.mu.Lock()
+		panic("fake log: index out of range")
 	}
 	if g.logHangs {
 		g.mu.Unlock()

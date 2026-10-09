@@ -403,7 +403,7 @@ func (c *paneAgent) observe(ctx context.Context) {
 	c.stopObserving, c.observed = stop, make(chan struct{})
 	go func() {
 		defer close(c.observed)
-		c.obs.observeEvery(octx, c.d.ObserveEvery)
+		c.obs.safely(octx, "pane observer", "", func() { c.obs.observeEvery(octx, c.d.ObserveEvery) }, nil)
 	}()
 }
 

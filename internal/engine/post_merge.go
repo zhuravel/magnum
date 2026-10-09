@@ -157,7 +157,7 @@ func (e *Engine) postMergeFailed(ctx context.Context, job *roundJob, pr store.PR
 	}
 	e.delKV(ctx, kvPRDryRun(pr.ID), kvPRRedecide(pr.ID)) // the forced request ended with it
 	e.clearRequested(ctx, pr.ID)
-	if job.hasSlo {
+	if job.hasSlot {
 		_ = e.st.TransitionSlot(ctx, job.slot.ID, []string{store.SlotClaimed, store.SlotBusy}, store.SlotHeld, nil)
 	}
 	label := fmt.Sprintf("%s#%d", job.repo.Name, pr.Number)

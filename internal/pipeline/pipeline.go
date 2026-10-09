@@ -36,6 +36,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"sync"
@@ -851,7 +852,7 @@ func (rd *round) runStage(ctx context.Context, cancel context.CancelCauseFunc, s
 		}
 		ran = append(ran, role.Name)
 		wg.Go(func() {
-			rep := rd.runRole(ctx, role, *run)
+			rep := rd.runRoleSafely(ctx, role, *run)
 			rd.setReport(role, rep)
 			refuseStages(cancel, rep)
 		})
@@ -864,6 +865,44 @@ func (rd *round) runStage(ctx context.Context, cancel context.CancelCauseFunc, s
 		ran = append(ran, also()...)
 	}
 	return rd.checkTree(ctx, ran)
+}
+
+// runRoleSafely is runRole on a stage's goroutine, whose panic would take
+// the daemon down with every round in flight: a role that panics ends as a
+// failed report (rolePanicked), and the stage goes on without it.
+func (rd *round) runRoleSafely(ctx context.Context, role config.Role, run store.Run) (rep RoleReport) {
+	defer func() {
+		if r := recover(); r != nil {
+			rep = rd.rolePanicked(ctx, role, run, r, debug.Stack())
+		}
+	}()
+	return rd.runRole(ctx, role, run)
+}
+
+// rolePanicked settles role's turn on run after its goroutine panicked with
+// r (a stage's reviewer, the judge's own pass): the panic is logged with its
+// stack and recorded (round.panic), the turn still in flight is interrupted
+// (keeping a judge's session for its candidates prompt), the run fails and
+// the report is ReportFailed, so the round goes on without it as without
+// any failed report. A settle that panics too is only logged.
+func (rd *round) rolePanicked(ctx context.Context, role config.Role, run store.Run, r any, stack []byte) RoleReport {
+	detail := "panicked: " + strings.Join(strings.Fields(execx.Redact(fmt.Sprint(r))), " ")
+	rep := rd.newReport(role, run.ID)
+	rep.Status, rep.Detail = ReportFailed, detail
+	rd.logAt(slog.LevelError, "pipeline: %s %s (run %s) %s\n%s", rd.subject, role.Name, run.ID, detail, stack)
+	defer func() {
+		if r := recover(); r != nil {
+			rd.logAt(slog.LevelError, "pipeline: %s %s: panic while settling a panic: %v\n%s", rd.subject, role.Name, r, debug.Stack())
+		}
+	}()
+	rd.event(ctx, "error", "round.panic", fmt.Sprintf("%s (run %s) %s", role.Name, run.ID, detail),
+		map[string]any{"run": run.ID, "role": role.Name})
+	if cur, err := rd.r.Store.RunByID(context.WithoutCancel(ctx), run.ID); err == nil &&
+		(cur.State == store.RunSubmitted || cur.State == store.RunWorking) {
+		rd.interrupt(ctx, role, cur, true)
+	}
+	rd.finishRun(ctx, run.ID, store.RunFailed, ReportFailed, detail)
+	return rep
 }
 
 // newRun inserts a pending run for role in this round.

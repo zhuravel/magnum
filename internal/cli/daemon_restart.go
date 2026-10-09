@@ -16,13 +16,25 @@ import (
 )
 
 const (
-	// daemonStopTimeout bounds the wait for a SIGTERMed daemon to exit
-	// (rounds and heavy jobs are cancelled on stop).
-	daemonStopTimeout = 30 * time.Second
+	// daemonStopTimeout bounds the wait for a SIGTERMed daemon to exit: its
+	// shutdown (rounds and heavy jobs are cancelled, then the toasts drain)
+	// may take as long as launchd lets the job run after SIGTERM (the plist's
+	// ExitTimeOut), and a little more.
+	daemonStopTimeout = launchd.ExitTimeOut*time.Second + 5*time.Second
 	daemonPollEvery   = 500 * time.Millisecond
 	// launchdStartWait bounds the wait for launchd to report the new pid.
 	launchdStartWait = 5 * time.Second
+	// restartStepBudget bounds daemon-restart's stop-then-start step, which
+	// an interrupt no longer cuts short: the stop of a daemon started by
+	// hand, the kickstart (which waits out the old daemon's shutdown like a
+	// stop), the wait for the new pid, and a minute for the launchctl and ps
+	// calls between.
+	restartStepBudget = 2*daemonStopTimeout + launchdStartWait + time.Minute
 )
+
+// errLaunchdNotStarted is waitLaunchdStarted's answer when no new daemon ran
+// within launchdStartWait.
+var errLaunchdNotStarted = errors.New("no new daemon was running")
 
 const daemonRestartUsage = "daemon-restart [--now | --drain | --when-idle] [--timeout D]"
 
@@ -69,7 +81,8 @@ func newDaemonRestartCmd(c *Context) *cobra.Command {
 			"it abandons them; --drain starts nothing new, waits for those in flight (a line every 15s, at most "+
 			"--timeout, default 2h) and then restarts; --when-idle waits the same way without stopping anything and "+
 			"restarts at the first moment nothing runs (it waits again when something starts in between); --now "+
-			"restarts at once. ctrl+c, or closing the terminal, stops a wait and lifts a drain.",
+			"restarts at once. ctrl+c, or closing the terminal, stops a wait and lifts a drain; once the restart "+
+			"stops the daemon it finishes even after ctrl+c, so the daemon is not left down.",
 		func(pos []string) int { return runDaemonRestartCmd(c, pos, f) })
 	addRestartFlags(cmd, &f)
 	cmd.Flags().Lookup("timeout").Usage = "with --drain or --when-idle: give up (and restart nothing) after this long"
@@ -81,7 +94,7 @@ func runDaemonRestartCmd(c *Context, pos []string, f restartFlags) int {
 	if !daemonGroupNoArgs(c, "daemon-restart", daemonRestartUsage, pos) || !f.check(c, "daemon-restart", daemonRestartUsage) {
 		return 2
 	}
-	ctx, stop := signalContext()
+	ctx, stop := daemonSys.signals()
 	defer stop()
 	out := c.Stdout
 	run := daemonSys.runner(false, out)
@@ -125,25 +138,35 @@ func runDaemonRestartCmd(c *Context, pos []string, f restartFlags) int {
 		}
 	}
 
+	// From here on the restart stops a daemon: an interrupt that cut the step
+	// short between the stop and the start would leave no daemon running, so
+	// the step runs to its end, bounded by its own budget.
+	step, cancelStep := context.WithTimeout(context.WithoutCancel(ctx), restartStepBudget)
+	defer cancelStep()
 	if st.Loaded() {
+		fmt.Fprintln(out, "restarting: the restart finishes even after ctrl+c, so the daemon is not left down")
 		// A daemon started by hand holds the lock: launchd's copy would exit
 		// at once as "already running", so stop it first.
 		if pid > 0 && pid != st.PID {
-			if err := stopMagnumDaemon(ctx, run, c.Layout, pid); err != nil {
+			if err := stopMagnumDaemon(step, run, c.Layout, pid); err != nil {
 				fmt.Fprintf(c.Stderr, "magnum daemon-restart: %v\n", err)
 				return 1
 			}
 			fmt.Fprintf(out, "stopped the daemon running outside launchd (pid %d)\n", pid)
 		}
-		if err := launchd.Kickstart(ctx, run, uid, label); err != nil {
+		if err := launchd.Kickstart(step, run, uid, label); err != nil {
 			fmt.Fprintf(c.Stderr, "magnum daemon-restart: %v\nfix: reload the job with `magnum install`\n", err)
 			return 1
 		}
-		after, ok := waitLaunchdStarted(ctx, run, uid, label, st.PID)
-		if !ok {
-			fmt.Fprintf(c.Stderr, "magnum daemon-restart: launchd restarted %s, but no new daemon was running after %s (%s)\n"+
+		after, err := waitLaunchdStarted(step, run, uid, label, st.PID)
+		if err != nil {
+			why := fmt.Sprintf("no new daemon was running after %s", launchdStartWait)
+			if !errors.Is(err, errLaunchdNotStarted) {
+				why = fmt.Sprintf("the wait for the new daemon was cut short (%v)", err)
+			}
+			fmt.Fprintf(c.Stderr, "magnum daemon-restart: launchd restarted %s, but %s (%s)\n"+
 				"fix: read %s and %s, then `magnum daemon-restart` again (or `magnum install` to reload the job)\n",
-				label, launchdStartWait, describeLaunchdState(after), launchd.LogPath(c.Layout.Logs()), c.Layout.DaemonLog())
+				label, why, describeLaunchdState(after), launchd.LogPath(c.Layout.Logs()), c.Layout.DaemonLog())
 			return 1
 		}
 		fmt.Fprintf(out, "restarted %s via launchd (%s); logs: %s\n", label, describeLaunchdState(after), c.Layout.DaemonLog())
@@ -156,7 +179,7 @@ func runDaemonRestartCmd(c *Context, pos []string, f restartFlags) int {
 			"fix: run `magnum install` to let launchd run it, or start it in the foreground with `magnum daemon`\n", uid, label)
 		return 1
 	}
-	if err := stopMagnumDaemon(ctx, run, c.Layout, pid); err != nil {
+	if err := stopMagnumDaemon(step, run, c.Layout, pid); err != nil {
 		fmt.Fprintf(c.Stderr, "magnum daemon-restart: %v\n", err)
 		return 1
 	}
@@ -166,7 +189,9 @@ func runDaemonRestartCmd(c *Context, pos []string, f restartFlags) int {
 }
 
 // stopMagnumDaemon sends SIGTERM to pid after checking it really is a magnum
-// daemon (the pidfile may name a recycled pid), then waits for it to exit.
+// daemon (the pidfile may name a recycled pid), then waits for it to exit,
+// at most daemonStopTimeout, or until ctx ends (an error saying the wait was
+// interrupted; the SIGTERM stays sent).
 func stopMagnumDaemon(ctx context.Context, run execx.Runner, layout paths.Layout, pid int) error {
 	comm, args, err := engine.ProcessCommand(ctx, run, pid)
 	if err != nil {
@@ -191,24 +216,28 @@ func stopMagnumDaemon(ctx context.Context, run execx.Runner, layout paths.Layout
 		if cur, err := daemonSys.DaemonPID(layout); err == nil && cur != pid {
 			return nil
 		}
-		daemonSys.Sleep(daemonPollEvery)
+		if err := daemonSys.Sleep(ctx, daemonPollEvery); err != nil {
+			return fmt.Errorf("interrupted while waiting for daemon pid %d to exit after SIGTERM: %w\nfix: `magnum status` shows whether it still runs", pid, err)
+		}
 	}
 	return fmt.Errorf("daemon pid %d did not exit within %s of SIGTERM\nfix: check %s, then `kill %d` again", pid, daemonStopTimeout, layout.DaemonLog(), pid)
 }
 
 // waitLaunchdStarted polls launchd until the job runs with a pid other than
-// oldPID (ok), or launchdStartWait passes (not ok); it returns the last state
-// seen either way.
-func waitLaunchdStarted(ctx context.Context, run execx.Runner, uid int, label string, oldPID int) (launchd.Info, bool) {
+// oldPID (nil), launchdStartWait passes (errLaunchdNotStarted), or ctx ends
+// (ctx's error); it returns the last state seen either way.
+func waitLaunchdStarted(ctx context.Context, run execx.Runner, uid int, label string, oldPID int) (launchd.Info, error) {
 	var st launchd.Info
 	for waited := time.Duration(0); ; waited += daemonPollEvery {
 		st, _ = launchd.Status(ctx, run, uid, label)
 		if st.State == launchd.Running && st.PID > 0 && st.PID != oldPID {
-			return st, true
+			return st, nil
 		}
 		if waited >= launchdStartWait {
-			return st, false
+			return st, errLaunchdNotStarted
 		}
-		daemonSys.Sleep(daemonPollEvery)
+		if err := daemonSys.Sleep(ctx, daemonPollEvery); err != nil {
+			return st, err
+		}
 	}
 }

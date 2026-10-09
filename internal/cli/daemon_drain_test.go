@@ -82,7 +82,7 @@ func TestDaemonRestartDrainWaitsForRoundsThenRestarts(t *testing.T) {
 	daemonSys.DaemonPID = func(paths.Layout) (int, error) { return 100, nil }
 	seedRoundInFlight(t, dt)
 	sleeps := 0
-	daemonSys.Sleep = func(d time.Duration) {
+	daemonSys.Sleep = func(context.Context, time.Duration) error {
 		sleeps++
 		v, ok := draining(t, dt)
 		if dr, parsed := engine.ParseDrain(v); !ok || !parsed || dr.PID != os.Getpid() {
@@ -91,6 +91,7 @@ func TestDaemonRestartDrainWaitsForRoundsThenRestarts(t *testing.T) {
 		if sleeps == 4 {
 			finishRound(t, dt)
 		}
+		return nil
 	}
 	if code := dt.run("daemon-restart", "--drain"); code != 0 {
 		t.Fatalf("exit %d, stderr: %s", code, dt.stderr)

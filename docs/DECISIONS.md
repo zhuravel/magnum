@@ -152,6 +152,34 @@ editing history. Code, config comments and prompts reference these by their head
   parent-directory symlink can only reach a regular file under the cap); 1 MiB caps for lockfiles and
   schema.rb (large applications already have files of about 0.6 MiB, and a lockfile over the cap blocks
   every checkout of the repository).
+- **A park cut short by ctrl+c or the daemon's stop still puts the PR back in closed** (2026-10-09, an
+  audit found that the promise of the releasing entry did not hold). cleanup's apply moves a closed PR to
+  releasing before it parks the sessions, and a failed park moves it back. But the rollback ran on the
+  same context as the park, so a park that failed because that context ended (ctrl+c on `magnum cleanup`,
+  the daemon stopping) also failed the rollback, and the PR stayed releasing. Now the rollback runs on
+  `context.WithoutCancel(ctx)`, as the slots compensations do. Rejected: leaving it for the next plan's
+  resume of a releasing PR (that resumes a release nothing had begun, and the sessions were never parked).
+- **A panic ends its unit, not the daemon** (2026-10-09). No daemon goroutine recovered a panic, and crash
+  recovery sent the interrupted PR again without charging an attempt. So a panic tied to one PR's data
+  crash-looped the daemon and killed every round in flight each time. Now Engine.safely (util.go) runs
+  each goroutine body and recovers its panic. It logs slog.Error with the panic value and debug.Stack()
+  (redacted), writes an engine.panic event (on the PR's subject for a round, the stop and the open; on the
+  notes subject for a curation; daemon-level otherwise), and settles the unit on a detached context. A
+  settle that panics too is only logged. The units: a round (roundPanicked: if the PR is still claiming or
+  reviewing, its active runs end as abandoned or failed 'the round panicked', the slot goes back to held,
+  a kept approval is withdrawn as after any failed round, and retryOrAttention charges an attempt, so
+  maxAttempts leads to needs_attention), afterRound's stop orders and a `magnum abort|ignore` stop (the
+  requests fail, out of the in-flight set), `magnum open` (the request fails), a heavy job (it fails alone
+  and its key is free again), the retro (KVRetroLast says it panicked, and a daily retro records the day
+  so it does not restart every tick), a notes curation (it waits curateRetry, as a stopped one does), an
+  urgent toast, the eval and pane observers, and the signal handler (it stops the daemon, since SIGTERM
+  would otherwise stay caught and unanswered). In the pipeline, a stage role's goroutine (runRoleSafely)
+  and the judge's own pass turn a panic into a ReportFailed report (rolePanicked: a round.panic event, the
+  turn in flight interrupted with the judge's session kept, the run failed), so the round goes on without
+  that report. A changed file's history worker turns a panic into the history's error, which only warns
+  and names no path. Rejected: re-raising after recording (that keeps the crash loop); recovering around
+  Tick (it is not a goroutine boundary, and a lock held at the panic could hang the loop instead of
+  restarting it).
 - **`magnum pin/unpin --slot` writes the PR's pinned flag before it touches the slot** (2026-10-09, after
   an audit: requestPin threw away the error from UpdatePR on the slot's PR, then pinned or unpinned the
   slot and reported success, so a PR could stay pinned while its slot was unpinned, or the reverse). Now a
@@ -620,6 +648,29 @@ editing history. Code, config comments and prompts reference these by their head
   outside `.claude/` the PR changes, an agent that checks another commit out in the checkout while a
   Claude session with the project config loaded runs, and a declined session kept live across a later
   head, whose record names the head it started on.
+- **A verified review's follow-ups finish after the round ends** (2026-10-09). After the review is posted
+  and its runs are marked verified, the follow-ups run gh calls on the round's cancellable context:
+  recording the findings, deleting pending duplicates, the local-path check, the footer edit and the
+  dismissal of the stale CHANGES_REQUESTED. Nothing retries them, so an abort or a shutdown in that window
+  left a stale CHANGES_REQUESTED that blocked the merge. Now finalizeJudge runs the follow-ups on
+  `context.WithoutCancel(ctx)`, and dismissStale detaches as well (it runs only after a verified review,
+  also for an adopted unverified review). Each gh call stays bounded by execx's timeout. Rejected:
+  retrying the follow-ups at the next tick (more state, for calls that take seconds).
+- **daemon-restart: ctrl+c ends its waits at once, the stop outwaits the daemon's shutdown, and the
+  stop-then-start finishes after an interrupt** (2026-10-09). The daemon group's Sleep took no context.
+  Under the signal context, ctrl+c was ignored for up to 30 s, and waitLaunchdStarted then printed a false
+  'no new daemon was running'. Also, daemonStopTimeout (30 s) was shorter than the daemon's own shutdown
+  (about 50 s: 30 s for the rounds, then the toasts drain), and an interrupt between the stop and the
+  start left the daemon down. Now (1) daemonGroupSys.Sleep is `(ctx, d) error`, and all four wait loops
+  (the stop wait, the launchd start wait, --drain and --when-idle) return at once on its error and say
+  'interrupted'. waitLaunchdStarted returns an error, errLaunchdNotStarted or the context's error, and the
+  restart reports which one. (2) daemonStopTimeout is launchd.ExitTimeOut + 5 s (50 s), and a test keeps
+  it above ExitTimeOut. (3) Once verifyBuild and the rounds guard pass (and after --when-idle's last
+  check), the stop and the start run on `context.WithTimeout(context.WithoutCancel(ctx),
+  restartStepBudget)`, where restartStepBudget = 2 x daemonStopTimeout + launchdStartWait + 1 min. A
+  launchd restart prints that it finishes even after ctrl+c, and the help text says so. A Signals seam on
+  daemonGroupSys lets tests end the command's context. Rejected: ignoring SIGINT during the step (closing
+  the terminal sends SIGHUP too, and the budget still bounds a hung launchctl).
 - **WriteState swaps the harness before it writes the notes, and puts the old harness back on any
   failure** (2026-10-09, after an audit: the notes file was replaced first, and when the stage-to-harness
   rename then failed, the restore's error was thrown away, so the new notes sat beside the old harness, or
@@ -648,6 +699,11 @@ editing history. Code, config comments and prompts reference these by their head
   failure other than store.ErrConflict, as pipeline.abandonPending does: `agents: abandon run <id>:
   <err>`, and `agents: record the prompt (the run) on the <role> session <id>: <err>`. A lost race
   (ErrConflict) stays silent, and nothing else changes.
+- **A request whose heavy job panics ends as failed, once** (2026-10-09). The heavy worker recovered a
+  panic in a request:<id> job (provision, repair, adopt, cleanup), but the request left the in-flight set
+  uncompleted, so every tick ran it, and it panicked, again. Now heavyRequest runs the job under
+  Engine.safely, and its settle completes the request as failed ("panicked: <value>") beside the
+  engine.panic event.
 
 ## Screens and commands
 
@@ -4719,6 +4775,14 @@ editing history. Code, config comments and prompts reference these by their head
   for no defect class); wsl, paralleltest and goconst (thousands of hits with no defect class behind them;
   the fixtures call t.Parallel themselves); a concurrency group per ref (a third master push would cancel
   the queued second one). No new dependencies.
+- **MySQL calls get a deadline of their own** (2026-10-09). No mysqlx call had a deadline. A stalled
+  mysqld, or a DROP waiting on a metadata lock, blocked the engine's single heavy worker for good, and
+  with it the provisioning, evictions, cleanup and heavy requests. Now, when the caller's context has no
+  deadline, Ping, ListSuffixed, ListPrefixed and SchemaMigrationsMax get callTimeout (30 s), and each Drop
+  gets dropTimeout (5 min), so DropAll bounds each name separately. A caller's own deadline, shorter or
+  longer, is kept. A DROP cut short may still finish on the server, and IF EXISTS makes the retry
+  harmless. Rejected: a readTimeout/writeTimeout in the DSN (it would also cut a legitimately long DROP of
+  a big schema, and the user's DSN would override it).
 - **usage.codex_soft and codex_hard refuse nan** (2026-10-09, after an audit: TOML accepts `nan` for a
   float, and NaN passes both `< 0` and `> 100`, so a threshold that is not a number loaded silently. inf
   and -inf were already refused by the range check). validateUsage now refuses NaN and Inf with the range

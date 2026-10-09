@@ -161,7 +161,9 @@ func (p *Planner) applySlot(ctx context.Context, a Action) error {
 	// races the release for it (a reopen, or a post-merge review request,
 	// which moves it closed → rereview_pending) loses this compare-and-set,
 	// or wins it and the release stops here, before anything was parked.
-	// A failed park puts the PR back in closed.
+	// A failed park puts the PR back in closed, also when the park failed
+	// because ctx ended (ctrl+c, the daemon stopping): the rollback runs on a
+	// context the cancellation does not reach.
 	closingPR := a.PRID != 0 && closing(pr.State)
 	toReleasing := closingPR && pr.State == store.PRClosed
 	if toReleasing {
@@ -172,7 +174,7 @@ func (p *Planner) applySlot(ctx context.Context, a Action) error {
 	if a.PRID != 0 && p.Park != nil {
 		if err := p.Park(ctx, pr); err != nil {
 			if toReleasing {
-				if rerr := p.Store.TransitionPR(ctx, pr.ID, []string{store.PRReleasing}, store.PRClosed, nil); rerr != nil {
+				if rerr := p.Store.TransitionPR(context.WithoutCancel(ctx), pr.ID, []string{store.PRReleasing}, store.PRClosed, nil); rerr != nil {
 					err = errors.Join(err, fmt.Errorf("PR back to closed: %w", rerr))
 				}
 			}

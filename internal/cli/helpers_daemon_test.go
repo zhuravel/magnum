@@ -62,7 +62,7 @@ func newDaemonGroupTest(t *testing.T, rules ...execx.Rule) *daemonGroupTest {
 			return nil
 		},
 		DaemonPID: func(paths.Layout) (int, error) { return 0, nil },
-		Sleep:     func(time.Duration) {},
+		Sleep:     func(context.Context, time.Duration) error { return nil },
 		RunEngine: func(context.Context, *Context, daemonOptions) (daemonDryRunReport, error) {
 			t.Fatal("RunEngine not expected")
 			return daemonDryRunReport{}, nil

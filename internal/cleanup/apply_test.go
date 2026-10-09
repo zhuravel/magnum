@@ -1,6 +1,7 @@
 package cleanup
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -159,6 +160,31 @@ func TestApplyParkBusyLeavesPRClosed(t *testing.T) {
 	}
 	if len(f.slots.calls) != 0 {
 		t.Fatalf("slots touched: %v", f.slots.calls)
+	}
+	if got := f.prState(pr.ID); got != store.PRClosed {
+		t.Fatalf("PR state = %s, want closed", got)
+	}
+}
+
+// A park cut short by the end of the context (ctrl+c on `magnum cleanup`, the
+// daemon stopping) still puts the PR back in closed: the rollback runs on a
+// context the cancellation does not reach, so the PR is never left releasing
+// with nothing to resume it as a release that began.
+func TestApplyParkInterruptedLeavesPRClosed(t *testing.T) {
+	f := newFixture(t)
+	pr := f.closedPR(f.talkable, 1, store.GHMerged, -time.Minute)
+	f.poolSlot("review1", store.SlotHeld, pr.ID, true, nil)
+	plan := f.plan(Options{})
+	ctx, cancel := context.WithCancel(f.ctx)
+	defer cancel()
+	f.parkHook = func(store.PR) { cancel() }
+	f.parkErr = context.Canceled
+	rep, err := f.p.Apply(ctx, plan, false)
+	if !errors.Is(err, context.Canceled) || rep.Failed != 1 {
+		t.Fatalf("rep = %+v err = %v", rep, err)
+	}
+	if strings.Contains(err.Error(), "PR back to closed") {
+		t.Fatalf("the rollback failed: %v", err)
 	}
 	if got := f.prState(pr.ID); got != store.PRClosed {
 		t.Fatalf("PR state = %s, want closed", got)
