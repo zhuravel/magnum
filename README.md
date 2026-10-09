@@ -1759,7 +1759,8 @@ count the held proposals ("2 skill proposals to review", "skill ×2" when space 
 
 With `editor = true` the editor also runs on its own. A retro that stores a `general` miss of P0 to P2 or
 a `general` finding declined as `wrong` or `over_ranked` that was not an input before marks new evidence
-(`learn.evidence`; the retro's `retro.done` event counts the new inputs), and the loop's scan, every 10
+(`learn.evidence`; the retro's `retro.done` event counts the new inputs; a retro a shutdown cut short
+marks what it stored too), and the loop's scan, every 10
 minutes, starts the editor at most once a local day (`learn.edit_day`) once nothing holds it: no other learn
 job runs, no proposal is `gating`, `passed` or `held`, no round of any repository is in its judge stage (the
 judge is about to read its skill), no drain, infrastructure pause or `magnum pause`, the editor's CLI is not

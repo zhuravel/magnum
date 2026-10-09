@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -262,5 +263,39 @@ func TestARetroThatStoresNewGeneralEvidenceWakesTheEditor(t *testing.T) {
 	h.requestRetro(RetroPayload{Again: true})
 	if v, ok := h.e.getKV(h.ctx, KVLearnEvidence); ok && v != "" {
 		t.Fatalf("a retro that found nothing new marked evidence: %q", v)
+	}
+}
+
+// A retro a shutdown cuts short after it stored new general evidence marks
+// the evidence all the same: the inputs are in the registry, and the day's
+// retro that runs again at the next start finds them there already, so
+// nothing else would wake the editor for them.
+func TestARetroAShutdownCutsShortStillMarksItsNewEvidence(t *testing.T) {
+	fc := &fakeClassifier{}
+	h := newHarness(t, withClassifier(fc))
+	retroPR(h, 7, 12*time.Hour) // the newest closed: looked at first
+	seedRetroGitHub(h, 7)
+	retroPR(h, 8, 24*time.Hour)
+	seedRetroGitHub(h, 8)
+	ctx, cancel := context.WithCancel(h.ctx)
+	defer cancel()
+	plain := &fakeClassifier{}
+	fc.answer = func(job ClassifyJob) (ClassifyResult, error) {
+		if job.PR.Number == 8 { // the shutdown comes during the second pull request
+			cancel()
+			return ClassifyResult{}, context.Canceled
+		}
+		return plain.Classify(ctx, job)
+	}
+	h.e.runRetro(ctx, retroSpec{lookback: 30 * 24 * time.Hour})
+	if len(plain.jobs) != 1 || plain.jobs[0].PR.Number != 7 {
+		t.Fatalf("classified = %+v", plain.jobs)
+	}
+	if v, _ := h.e.getKV(h.ctx, KVLearnEvidence); v == "" {
+		t.Fatal("a retro cut short after storing a new general miss left no evidence mark")
+	}
+	evs, err := h.st.EventsOfKindsSince(h.ctx, time.Time{}, "retro.done")
+	if err != nil || len(evs) != 1 || !strings.Contains(evs[0].Message, "shutdown") || !strings.Contains(string(evs[0].Data), `"learn_inputs":1`) {
+		t.Fatalf("retro.done = %+v, %v", evs, err)
 	}
 }

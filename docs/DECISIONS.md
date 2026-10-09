@@ -5852,6 +5852,16 @@ skill versions); people add theirs to the sections before it, at the end of the 
   before the format gate (as the editor's is), so the gitignored `MAGNUM_PRIVATE_PATTERNS`, which the
   daemon does not read, still make such a revert invalid. Rejected: reading the patterns into the daemon
   (they belong to `make check-private`, which the gate runs on the entry).
+- **A retro a shutdown cuts short still marks the evidence it stored** (2026-10-09, a review finding on
+  stage 5 of the self-improving review loop). The retro compared the editor's inputs before and after it
+  and marked new general evidence (`KVLearnEvidence`) only when it finished, so a retro a shutdown
+  interrupted after it stored a new general miss or decline left no mark, and the day's retro that ran
+  again at the next start found those inputs already there before it began: no retro ever counted them
+  as new, and the scheduled editor never woke for them. The mark now follows what the retro stored
+  whatever ended it (the inputs are in the registry, and the comparison already ran on a context the
+  shutdown does not cancel); the rest of a cut-short retro stays as it was (no summary, no day).
+  Rejected: comparing against the inputs at the editor's last start instead of per retro (a second
+  record to keep for the same answer).
 
 ## Learned rules
 

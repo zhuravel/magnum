@@ -333,10 +333,12 @@ func (e *Engine) stopRetro() {
 // retroOfflineRetry later. A retro a shutdown cut short (ctx ended) records
 // neither, so it counts as neither done nor failed: the summary stays the
 // last finished retro's and the next start runs the day's again; its
-// retro.done event says so, as info. The next retro takes every PR still
-// due: the ones not reached, the one a stop interrupted (it got no
-// retro_prs row) and the failed ones until their third attempt; the rest
-// are skipped.
+// retro.done event says so, as info, and the new general evidence it
+// stored is marked for the editor as a finished retro's is
+// (KVLearnEvidence: the retro run again finds it stored already). The next
+// retro takes every PR still due: the ones not reached, the one a stop
+// interrupted (it got no retro_prs row) and the failed ones until their
+// third attempt; the rest are skipped.
 func (e *Engine) runRetro(ctx context.Context, spec retroSpec) {
 	start := e.now()
 	run := RetroRun{ID: start.Local().Format(retroRunFormat)}
@@ -436,7 +438,9 @@ func (e *Engine) runRetro(ctx context.Context, spec retroSpec) {
 		run.ID, sum.PRs, sum.Classified, sum.Misses, sum.Caught, sum.Failed)
 	data = map[string]any{"run": run.ID, "prs": sum.PRs, "classified": sum.Classified, "misses": sum.Misses, "caught": sum.Caught,
 		"failed": sum.Failed}
-	if inputsErr == nil && !shutdown {
+	// The evidence is marked whatever the shutdown: what the retro stored
+	// stays, and the day's retro run again finds it there already.
+	if inputsErr == nil {
 		if after, err := e.generalEvidence(context.WithoutCancel(ctx)); err == nil {
 			if n := newEvidence(inputsBefore, after); n > 0 {
 				e.markEvidence(context.WithoutCancel(ctx), run.ID, n)
