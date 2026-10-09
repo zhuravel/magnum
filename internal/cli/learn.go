@@ -172,10 +172,9 @@ func learnGather(ctx context.Context, d *actDeps) (learnListData, error) {
 		}
 	}
 	data.Ahead = learnAhead(ctx, d, vs)
-	data.Next = "on request: `magnum learn --propose` runs the editor now"
-	if d.Cfg != nil && d.Cfg.Learn.Editor {
-		data.Next = "on request (`magnum learn --propose`); [learn] editor's runs after a retro come with the loop's gate"
-	}
+	evidence, _, _ := d.Store.GetKV(ctx, engine.KVLearnEvidence)
+	editDay, _, _ := d.Store.GetKV(ctx, engine.KVLearnEditDay)
+	data.Next = engine.EditNext(d.Cfg != nil && d.Cfg.Learn.Editor, evidence, editDay, notesNow(d))
 	return data, nil
 }
 

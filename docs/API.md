@@ -4535,6 +4535,17 @@ const (
 	KVLearnRestart = "learn.restart"
 )
 const (
+	// KVLearnEvidence marks new general evidence for the skill editor: the
+	// time of the retro that stored a general miss of P0 to P2 or a general
+	// finding declined as wrong or over-ranked that was not an input
+	// before (store.FormatTime). The scheduled editor clears it when it
+	// starts, and sets it again when its run stops short.
+	KVLearnEvidence = "learn.evidence"
+	// KVLearnEditDay is the local day (store.DayKey) the scheduled editor
+	// last started on; it starts at most once a day.
+	KVLearnEditDay = "learn.edit_day"
+)
+const (
 	// ReqNotesCurate starts a curation of a repository's notes now
 	// (NotesCuratePayload).
 	ReqNotesCurate = "notes_curate"
@@ -4566,7 +4577,7 @@ const (
 
 	// Why a curation waits (CurateQueued.Why).
 	QueuedJudge = "judge" // a round of the repository is in its judge stage
-	QueuedBusy  = "busy"  // another curation runs
+	QueuedBusy  = "busy"  // another learn job runs: a curation, the retro, a skill edit or gate
 )
 const (
 	KVDaemonPausedAt   = "daemon.paused_at"
@@ -4890,6 +4901,11 @@ func DrainerAlive(pid int) bool
     A pid that is gone, or that now belongs to another program (pids are
     reused), is not; a process ps cannot describe counts as alive (the drain
     stays: lifting it by mistake would start rounds the restart then abandons).
+
+func EditNext(editor bool, evidence, editDay string, now time.Time) string
+    EditNext says when the scheduled editor runs next, for `magnum learn` and
+    its JSON: from learn editor, the evidence mark (KVLearnEvidence) and the day
+    of its last start (KVLearnEditDay).
 
 func FileModTime(path string) (time.Time, bool)
     FileModTime is SkewNote's reader of a binary's mtime on disk.

@@ -11,6 +11,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
@@ -179,6 +180,44 @@ func doctorLogin(ctx context.Context, d doctorDeps, kind string, k config.Kind, 
 		return doctorFailed(name, fmt.Sprintf("%s is logged out (`%s`)", kind, check), "run `"+rolesLoginCommand(kind)+"` (reviews pause until it passes)")
 	}
 	return doctorOK(name, fmt.Sprintf("%s is logged in (`%s`)", kind, check))
+}
+
+// doctorLearnEditor says whether the skill editor can run, and why it is
+// off: [learn] editor itself, no checkout of magnum to edit (Layout.Home: an
+// installed binary has none) or go that does not run in the checkout's mise
+// environment, where the format gate runs `go test` (`mise -C <checkout>
+// exec -- go version`, as the daemon checks before a scheduled edit). It
+// fails only when [learn] editor is on and the editor cannot run.
+func doctorLearnEditor(ctx context.Context, d doctorDeps) []doctorCheck {
+	const name = "learn editor"
+	home := d.Layout.Home
+	var why, fix, version string
+	switch {
+	case home == "":
+		why, fix = "magnum runs without a checkout of its repository (an installed binary has none)",
+			"run magnum from a checkout of its repository (MAGNUM_HOME=<checkout>), or set [learn] editor = false"
+	case !gitx.IsRepo(home):
+		why, fix = inspTilde(home)+" is not a git checkout of magnum", "run magnum from a checkout of its repository, or set [learn] editor = false"
+	default:
+		out, err := doctorExec(ctx, d, time.Minute, home, nil, "mise", "-C", home, "exec", "--", "go", "version")
+		if err != nil {
+			why = fmt.Sprintf("go does not run in the checkout's mise environment (`mise -C %s exec -- go version`: %s)", inspTilde(home), err.Error())
+			fix = fmt.Sprintf("install the checkout's go (`mise -C %s install`), or set [learn] editor = false", inspTilde(home))
+		} else {
+			version = textx.FirstLine(out)
+		}
+	}
+	switch {
+	case !d.Config.Learn.Editor && why != "":
+		return []doctorCheck{doctorSkipped(name, "the skill editor is off ([learn] editor = false), and `magnum learn --propose` cannot run it either: "+why)}
+	case !d.Config.Learn.Editor:
+		return []doctorCheck{doctorSkipped(name, fmt.Sprintf("the skill editor is off ([learn] editor = false); `magnum learn --propose` runs it on request (checkout %s, %s)",
+			inspTilde(home), version))}
+	case why != "":
+		return []doctorCheck{doctorFailed(name, "[learn] editor is on, but the skill editor cannot run, so it is off: "+why, fix)}
+	}
+	return []doctorCheck{doctorOK(name, fmt.Sprintf("the skill editor runs after a retro that stored new general misses or declines, at most once a day (checkout %s, %s)",
+		inspTilde(home), version))}
 }
 
 // doctorSkill checks every judge role's skill file.

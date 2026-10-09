@@ -142,13 +142,14 @@ func (e *Engine) gateHold(ctx context.Context) string {
 }
 
 // maybeGate starts the gate of the oldest gating proposal (every tick),
-// unless one runs, an edit runs, a stopped gate waits out gateRetryAfter,
+// unless a learn job runs (a gate, an edit, the retro or a notes curation:
+// learnBusy), a stopped gate waits out gateRetryAfter,
 // something holds it (gateHold) or the Codex budget is at the soft cap
 // (gateBudget). A gating proposal a crashed or restarted daemon left
 // behind is picked up the same way. A dry run and `magnum daemon --once`
 // never start one.
 func (e *Engine) maybeGate(ctx context.Context) {
-	if e.d.DryRun || e.once || e.gateUnavailable() != "" || e.gateBusy() || e.editBusy() || e.gateWaits() {
+	if e.d.DryRun || e.once || e.gateUnavailable() != "" || e.learnBusy() != "" || e.gateWaits() {
 		return
 	}
 	if e.gateHold(ctx) != "" {
@@ -195,18 +196,21 @@ func (e *Engine) gateBudget(ctx context.Context, p store.LearnProposal, snap usa
 }
 
 // startGate runs the gate of p in its own goroutine on a child of ctx
-// (the daemon's: shutdown cancels it); it is KVLearnGating while it runs.
+// (the daemon's: shutdown cancels it), unless the daemon is stopping or a
+// learn job runs; it is KVLearnGating while it runs.
 func (e *Engine) startGate(ctx context.Context, p store.LearnProposal) bool {
 	if e.stopping(ctx) != "" {
 		return false
 	}
-	e.gateMu.Lock()
-	defer e.gateMu.Unlock()
-	if e.gateCancel != nil {
+	e.learnMu.Lock()
+	defer e.learnMu.Unlock()
+	if e.learnBusy() != "" {
 		return false
 	}
+	e.gateMu.Lock()
+	defer e.gateMu.Unlock()
 	gctx, cancel := context.WithCancel(ctx)
-	e.gateCancel, e.gateStarted = cancel, e.now()
+	e.gateCancel, e.gateStarted, e.gateProposal = cancel, e.now(), p.ID
 	if b, err := json.Marshal(GateMark{Proposal: p.ID, Started: e.gateStarted}); err == nil {
 		e.setKV(ctx, KVLearnGating, string(b))
 	}

@@ -1324,7 +1324,7 @@ Fix 1 problem before merging. 1 optional: 1 simplification.
 | `magnum unapprove <ref> [--resume] [--yes] [--json]` | Withdraw the approval Magnum posted as you on the PR (Approving as you), dismissing it as you, and stop it approving that PR as you; without one standing it only stops it. Asks y/N on a terminal. `--resume` lets Magnum approve the PR as you again; your reviews from before then no longer stop it. Board key `D`. On a terminal `--json` needs `--yes`: without it the command refuses (exit 2) instead of skipping the question. |
 | `magnum ignore <ref>` | Abort, then mute the PR as ignored and free its slot: the daemon never queues it again until `magnum unmute <ref>`, which undoes the ignore. |
 | `magnum notes [--json]` | Every repository with notes, one row each: the notes' size and lines and the harness's files and size (`!` marks what is past a `[notes]` curation trigger), when they changed and by whom (`judge #11940`, curation, human, import), and the state: ok, over limit (which triggers), curation running, curation queued, proposal N to review, or proposal N stale (the notes changed since it was made); a hint under the table says what to run for each (see Repository notes). |
-| `magnum notes <repo> [--edit \| --log \| --diff [N] \| --curate \| --review [--reason …] \| --restore <version>] [--json]` | The repository notes every role reads first and the judge rewrites after a round that taught it something (`~/.local/share/magnum/notes/<owner>/<repo>.md`): what the repo is, how to test and QA it, known pitfalls; on stderr their sizes against the `[notes]` curation triggers, the unused harness files and a waiting proposal (marked when stale). `--log` and `--diff` read the history the registry keeps, `--curate` asks for a curation (queued while a round of the repository is in its judge stage or another curation runs), `--review` applies (y) or rejects (n) a proposal, a stale one merged with the notes' changes since or followed up by a new curation (c, or y when they conflict), `--restore` proposes an earlier version (see Repository notes). |
+| `magnum notes <repo> [--edit \| --log \| --diff [N] \| --curate \| --review [--reason …] \| --restore <version>] [--json]` | The repository notes every role reads first and the judge rewrites after a round that taught it something (`~/.local/share/magnum/notes/<owner>/<repo>.md`): what the repo is, how to test and QA it, known pitfalls; on stderr their sizes against the `[notes]` curation triggers, the unused harness files and a waiting proposal (marked when stale). `--log` and `--diff` read the history the registry keeps, `--curate` asks for a curation (queued while a round of the repository is in its judge stage or another learn job runs: a curation, the retro, a skill edit or gate), `--review` applies (y) or rejects (n) a proposal, a stale one merged with the notes' changes since or followed up by a new curation (c, or y when they conflict), `--restore` proposes an earlier version (see Repository notes). |
 | `magnum post-review --repo O/N --pr N --head SHA --run-id ID --login L [--former-login L]... [--gh-config-dir DIR] [--dry-run] [--local-base SHA] (--review FILE \| --replies FILE)` | For the judge, which runs the `post_review` line of its prompt: check the review file and its inline lines against the PR's diff, post it once and read it back; with `--replies` (a reply round's `post_replies`), post its answers in its own threads instead (see The judge skill). Exit 2 means the file needs fixing. |
 | `magnum db-lock [--checkout DIR] [--timeout 20m] [--role NAME] -- COMMAND [ARG]...` | For the review roles, which run the `db_lock` line of their prompts: run COMMAND under the checkout's database lock, so the roles sharing a slot's databases take turns (see The judge skill). Exits with COMMAND's status; 75 means it waited `--timeout` and the command did not run, 125 that db-lock itself failed. |
 | `magnum cleanup [--dry-run] [--pr <ref>] [--slot <name>] [--orphans [--slug X]] [--shrink] [--external --slot repoN]` | Storage cleanup with a reviewable plan: closed PRs, orphan databases, idle slots, manual worktrees. It asks its y/N and typed-slug questions on stderr, only when stdin and stderr are both terminals; otherwise it applies nothing unless you pass `--yes`. |
@@ -1729,8 +1729,22 @@ launchd starts it on the landed version; with `restart = "manual"`, or a daemon 
 toast and `magnum status` ask for `magnum daemon-restart --when-idle`. The next start marks the version
 restarted, which starts its measurement window. `magnum status` has a `learn:` line (the newest
 proposal, the held, passed and gating ones, a restart waiting), and the board's and the dashboard's titles
-count the held proposals ("2 skill proposals to review", "skill ×2" when space is short). `editor` and the
-regression keys are checked but change nothing yet: the editor runs on `magnum learn --propose`.
+count the held proposals ("2 skill proposals to review", "skill ×2" when space is short).
+
+With `editor = true` the editor also runs on its own. A retro that stores a `general` miss of P0 to P2 or
+a `general` finding declined as `wrong` or `over_ranked` that was not an input before marks new evidence
+(`learn.evidence`; the retro's `retro.done` event counts the new inputs), and the loop's scan, every 10
+minutes, starts the editor at most once a local day (`learn.edit_day`) once nothing holds it: no other learn
+job runs, no proposal is `gating`, `passed` or `held`, no round of any repository is in its judge stage (the
+judge is about to read its skill), no drain, infrastructure pause or `magnum pause`, the editor's CLI is not
+paused, and `go version` runs in the checkout's `mise` environment (the format gate runs `go test` there).
+The start consumes the mark and the day; a run that stops short (a limit, a shutdown) marks the evidence
+again, so a later day tries again. `magnum doctor` has a `learn editor` check that says why the editor is
+off: `editor = false`, no checkout of Magnum (an installed binary has none), or go that does not run in the
+checkout. The retro, a notes curation, a skill edit and a skill gate are learn jobs, and they run one at a
+time: the day's retro waits for a running curation (and a curation for the retro), `magnum retro` and
+`magnum learn --propose` are refused while another learn job runs (the answer names it), and a requested
+curation is queued behind it.
 
 `magnum learn` is the window: the landed versions newest first, each with what its reviews did from the
 daemon's restart on it to the restart on the next version (the reviews posted, their posted findings, how
@@ -1846,11 +1860,12 @@ accounted for, no pull request number, branch name or probe file (a file name or
 an identifier such as `window.PROBE_SELECTOR`), no secret and no home directory path
 (size is not checked). A proposal that changes nothing is invalid, unless it skips every miss it was given:
 then you confirm the skips. An invalid proposal gets one nudge naming its problems, then is kept as
-invalid; the live notes never change during a curation. One curation runs at a time, and none starts while
-a round of the repository is in its judge stage (which may rewrite the notes) or a proposal of it waits. A
-curation asked for (`--curate`) or due while a round is in its judge stage, or asked for while another
-curation runs, is queued instead (a `notes.curate_queued` event; "queued: starts when the current round's
-judge stage ends") and starts once that ended; `magnum notes` shows it as "curation queued".
+invalid; the live notes never change during a curation. One curation runs at a time, none while the retro,
+a skill edit or a skill gate runs (learn jobs run one at a time), and none starts while a round of the
+repository is in its judge stage (which may rewrite the notes) or a proposal of it waits. A curation asked
+for (`--curate`) or due while a round is in its judge stage, or asked for while another learn job runs, is
+queued instead (a `notes.curate_queued` event; "queued: starts when the current round's judge stage ends")
+and starts once that ended; `magnum notes` shows it as "curation queued".
 
 **Review.** A valid proposal waits for you: a toast says "notes curation for <repo> is ready", and the
 board's and the dashboard's titles count the proposals to review. `magnum notes <repo> --review` prints

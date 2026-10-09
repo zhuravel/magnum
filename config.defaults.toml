@@ -184,8 +184,10 @@ timeout = "20m"                   # per PR: a turn that takes longer is abandone
 # skill, in-process and below [usage] codex_soft, and passes, holds (for `magnum learn --review`) or fails it. A
 # passed proposal lands on the checkout's master as a local commit (fast-forward; held when master is not checked
 # out, an operation is in progress, a rebase conflicts or a file it changes has uncommitted edits), and the
-# daemon restarts on it. editor and the regression keys take effect with the loop's scheduling and measurement;
-# until then only `magnum learn --propose` runs the editor.
+# daemon restarts on it. With editor on, the editor runs at most once a local day after a retro stored a new
+# general miss of P0 to P2 or a general finding declined as wrong or over-ranked, once no other learn job (the
+# retro, a notes curation, an edit, a gate) runs, no proposal waits, no round is in its judge stage, nothing
+# pauses it and go runs in the checkout (`magnum doctor` says why it is off).
 editor = false                    # run the editor after a retro that stored new general misses or declines
 editor_kind = "claude"            # the editing agent: a [kinds.<name>] that drives a session; checked like a [[role]]
 editor_model = "sonnet"           # as model above: "sonnet" for kind "claude", "" (the kind's default) for another kind

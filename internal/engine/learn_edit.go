@@ -228,21 +228,37 @@ func (e *Engine) editBusy() bool {
 
 // startEdit runs an editor run in its own goroutine on a child of ctx (the
 // daemon's: shutdown cancels it), unless the daemon is stopping or draining
-// (false and a zero time) or one is running (false and when that one
-// started). The run is KVLearnEditing while it runs.
+// (false and a zero time) or a learn job runs, an edit or another (false
+// and when that one started). The run is KVLearnEditing while it runs; a
+// scheduled one (trigger evidence) that stops short marks the evidence
+// again (scheduledEditStopped).
 func (e *Engine) startEdit(ctx context.Context, trigger string) (bool, time.Time) {
+	return e.startEditJob(ctx, EditMark{Trigger: trigger}, "the skill edit", func(ectx context.Context, started time.Time) {
+		_, err := e.runEditAt(ectx, trigger, started)
+		if trigger == store.LearnTriggerEvidence {
+			e.scheduledEditStopped(ectx, err)
+		}
+	})
+}
+
+// startEditJob runs run, the skill edit or a revert (what names it), as
+// startEdit says, KVLearnEditing holding mark with the run's id and start.
+func (e *Engine) startEditJob(ctx context.Context, mark EditMark, what string, run func(context.Context, time.Time)) (bool, time.Time) {
 	if e.stopping(ctx) != "" {
 		return false, time.Time{}
 	}
+	e.learnMu.Lock()
+	defer e.learnMu.Unlock()
+	if job, since := e.learnRunning(); job != "" {
+		return false, since
+	}
 	e.editMu.Lock()
 	defer e.editMu.Unlock()
-	if e.editCancel != nil {
-		return false, e.editStarted
-	}
 	ectx, cancel := context.WithCancel(ctx)
-	e.editCancel, e.editStarted = cancel, e.now()
+	e.editCancel, e.editStarted, e.editWhat = cancel, e.now(), what
 	started := e.editStarted
-	if b, err := json.Marshal(EditMark{Run: started.Local().Format(editRunFormat), Trigger: trigger, Started: started}); err == nil {
+	mark.Run, mark.Started = started.Local().Format(editRunFormat), started
+	if b, err := json.Marshal(mark); err == nil {
 		e.setKV(ctx, KVLearnEditing, string(b))
 	}
 	e.editWG.Go(func() {
@@ -253,7 +269,7 @@ func (e *Engine) startEdit(ctx context.Context, trigger string) (bool, time.Time
 			e.editMu.Unlock()
 			cancel()
 		}()
-		e.safely(ectx, "skill edit", learnSubject, func() { _, _ = e.runEditAt(ectx, trigger, started) }, nil)
+		e.safely(ectx, strings.TrimPrefix(what, "the "), learnSubject, func() { run(ectx, started) }, nil)
 	})
 	return true, started
 }
@@ -460,7 +476,8 @@ func (e *Engine) runEditAt(ctx context.Context, trigger string, start time.Time)
 		return stop("the inputs: " + oneLine(err.Error(), retroWhyRunes))
 	}
 	if len(inputs.IDs()) == 0 {
-		return stop("no new general miss or declined finding to learn from")
+		p, _ := stop(errNothingToLearn.Error())
+		return p, errNothingToLearn
 	}
 	if base, err = git.RevParse(ctx, checkout, "refs/heads/"+learnBase); err != nil {
 		return stop("the checkout's " + learnBase + ": " + oneLine(err.Error(), retroWhyRunes))
@@ -919,8 +936,9 @@ func (e *Engine) editToolPause(ctx context.Context) string {
 // requestEdit serves `magnum learn --propose`: a skill edit now, whatever
 // [learn] editor says, unless a drain, an infrastructure pause or a pause
 // of the editor's CLI holds it, nothing can run it (editUnavailable), one
-// runs, a proposal waits for the gate, the landing or the operator (the
-// refusal names it), or there is nothing to learn from.
+// runs, another learn job runs, a proposal waits for the gate, the landing
+// or the operator (the refusal names it), or there is nothing to learn
+// from.
 func (e *Engine) requestEdit(ctx context.Context, _ LearnProposePayload) (string, error) {
 	if reason := cmp.Or(e.holdReason(ctx), e.editToolPause(ctx)); reason != "" {
 		return "", fmt.Errorf("no skill edit now: %s", reason)
@@ -930,6 +948,9 @@ func (e *Engine) requestEdit(ctx context.Context, _ LearnProposePayload) (string
 	e.editMu.Unlock()
 	if running {
 		return "", fmt.Errorf("a skill edit is running (started %s); `magnum learn` lists it", since.Local().Format("15:04"))
+	}
+	if why := e.learnOneAtATime(); why != "" {
+		return "", fmt.Errorf("no skill edit now: %s", why)
 	}
 	waiting, err := e.st.LearnProposals(ctx, []string{store.LearnGating, store.LearnPassed, store.LearnHeld})
 	if err != nil {

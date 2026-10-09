@@ -175,7 +175,8 @@ type retroSpec struct {
 }
 
 // maybeRetro starts the day's retro ([learn] enabled, past daily_at, not
-// run today, none running, none waiting after GitHub stopped it, no drain
+// run today, no learn job running (learnBusy: a retro, a notes curation, a
+// skill edit or gate), none waiting after GitHub stopped it, no drain
 // or infrastructure pause, the agent's CLI not paused at a usage limit or a
 // logout). `magnum pause` holds automatic
 // reviews only: the retro reviews nothing, and a pause kept overnight
@@ -196,15 +197,15 @@ func (e *Engine) maybeRetro(ctx context.Context) {
 	if day, _ := e.getKV(ctx, KVRetroDay); day == store.DayKey(now) || ctx.Err() != nil {
 		return
 	}
-	if e.retroBusy() || now.Before(e.retryRetroAt()) || e.holdReason(ctx) != "" || e.retroToolPause(ctx) != "" {
+	if e.learnBusy() != "" || now.Before(e.retryRetroAt()) || e.holdReason(ctx) != "" || e.retroToolPause(ctx) != "" {
 		return
 	}
 	e.startRetro(ctx, retroSpec{daily: true, lookback: lc.Lookback.Duration, settle: lc.Settle.Duration})
 }
 
 // requestRetro serves `magnum retro`: a retro now, unless a drain, an
-// infrastructure pause or a pause of the agent's CLI holds it or one is
-// running.
+// infrastructure pause or a pause of the agent's CLI holds it, one is
+// running, or another learn job runs (the answer names it).
 func (e *Engine) requestRetro(ctx context.Context, p RetroPayload) (string, error) {
 	lookback := e.cfg.Learn.Lookback.Duration
 	if p.Lookback != "" {
@@ -216,6 +217,11 @@ func (e *Engine) requestRetro(ctx context.Context, p RetroPayload) (string, erro
 	}
 	if reason := cmp.Or(e.holdReason(ctx), e.retroToolPause(ctx)); reason != "" {
 		return "", fmt.Errorf("no retro now: %s", reason)
+	}
+	if !e.retroBusy() {
+		if why := e.learnOneAtATime(); why != "" {
+			return "", fmt.Errorf("no retro now: %s", why)
+		}
 	}
 	if e.d.DryRun {
 		e.rec.Record(ctx, "", "retro", "a retro of the PRs closed within "+lookback.String())
@@ -268,17 +274,19 @@ func (e *Engine) retryRetroAt() time.Time {
 
 // startRetro runs a retro in its own goroutine on a child of ctx (the
 // daemon's: shutdown cancels it), unless the daemon is stopping or draining
-// (stopping: it reports false and a zero time) or one is running (false and
-// when that one started).
+// (stopping: it reports false and a zero time) or a learn job runs, a retro
+// or another (false and when that one started).
 func (e *Engine) startRetro(ctx context.Context, spec retroSpec) (bool, time.Time) {
 	if e.stopping(ctx) != "" {
 		return false, time.Time{}
 	}
+	e.learnMu.Lock()
+	defer e.learnMu.Unlock()
+	if job, since := e.learnRunning(); job != "" {
+		return false, since
+	}
 	e.retroMu.Lock()
 	defer e.retroMu.Unlock()
-	if e.retroCancel != nil {
-		return false, e.retroStarted
-	}
 	rctx, cancel := context.WithCancel(ctx)
 	e.retroCancel, e.retroStarted = cancel, e.now()
 	started := e.retroStarted
@@ -352,6 +360,9 @@ func (e *Engine) runRetro(ctx context.Context, spec retroSpec) {
 		// again on every tick.
 		sum.Stopped = "the due PRs cannot be read: " + oneLine(err.Error(), retroWhyRunes)
 	}
+	// The skill editor's inputs before the retro: those it adds wake the
+	// scheduled editor (learn_schedule.go).
+	inputsBefore, inputsErr := e.generalEvidence(ctx)
 	var cl Classifier
 	var clErr error
 	made := false
@@ -425,6 +436,15 @@ func (e *Engine) runRetro(ctx context.Context, spec retroSpec) {
 		run.ID, sum.PRs, sum.Classified, sum.Misses, sum.Caught, sum.Failed)
 	data = map[string]any{"run": run.ID, "prs": sum.PRs, "classified": sum.Classified, "misses": sum.Misses, "caught": sum.Caught,
 		"failed": sum.Failed}
+	if inputsErr == nil && !shutdown {
+		if after, err := e.generalEvidence(context.WithoutCancel(ctx)); err == nil {
+			if n := newEvidence(inputsBefore, after); n > 0 {
+				e.markEvidence(context.WithoutCancel(ctx), run.ID, n)
+				msg += fmt.Sprintf(", %s for the skill editor", textx.Count(n, "new general input", "new general inputs"))
+				data["learn_inputs"] = n
+			}
+		}
+	}
 	if sum.Declines > 0 {
 		msg += fmt.Sprintf(", %d answered finding(s), %d declined", sum.Declines, sum.Declined)
 		data["declines"], data["declined"] = sum.Declines, sum.Declined

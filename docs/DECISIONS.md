@@ -5542,3 +5542,42 @@ editing history. Code, config comments and prompts reference these by their head
   (a revert brings back an older hash, and a prompts-only version keeps its predecessor's) and counting
   the answers by when the retro stored them (they arrive days after the review, in the next version's
   window).
+- **Learn jobs run one at a time** (2026-10-09, stage 5 of the self-improving review loop). The retro, a
+  notes curation, a skill edit (or revert) and the gate of a skill proposal each run in a goroutine of
+  their own, and nothing kept the daily retro and a curation from driving their agents at once, or a
+  gate from replaying while an edit wrote. A start now holds `learnMu` while it checks that no learn job
+  runs (`learnRunning`, from each job's own state, which `learnBusy` names: "the retro", "the notes
+  curation of <repo>", "the skill edit", "the skill gate of proposal N") and marks its own running, so a
+  start never races another; the lock is taken before a job's own mutex, never after. The day's retro
+  and a due curation wait while another learn job runs (`maybeRetro`, `maybeCurate`,
+  `startQueuedCuration`), and so do the gate and the scheduled editor; `magnum retro` and `magnum learn
+  --propose` are refused naming the job and when it started, and `magnum notes --curate` is queued
+  behind it (`QueuedBusy` now means any learn job). A landing is not a learn job: it is a few git
+  commands on the tick's goroutine, and it already waits for a gate or an edit. Rejected: one goroutine
+  running the learn jobs from a queue (each job's start, stop, retry and background-work rules would
+  move into it) and serializing only the retro and the curation (the editor and the gate drive an agent
+  and the eval's agents, and the gate replays the checkout's prompts).
+- **The editor runs after a retro with new general evidence** (2026-10-09, stage 5 of the self-improving
+  review loop). With `[learn] editor = true` the skill editor runs on its own. A retro that stores an
+  input the editor did not have before (a `general` miss of P0 to P2 or a `general` finding declined as
+  `wrong` or `over_ranked`, still `new`; the retro compares the inputs before and after it) sets
+  `KVLearnEvidence` (`learn.evidence`) and counts them in `retro.done` (`learn_inputs`). Any retro that
+  finishes does, the daily one and `magnum retro` alike: the spec names the daily retro, but a manual
+  retro that took the day's PRs first would leave the daily one nothing new to find, and the editor
+  would never run on that evidence; the once-a-day bound holds either way. The loop's scan
+  (`maybeLearnScan`, every 10 minutes, none in a dry run or `--once`) starts the editor when nothing
+  holds it (`editWait`, in this order): `editor` on, a checkout and an agent to run it, the evidence
+  mark, not started today (`KVLearnEditDay`), no learn job running, no proposal `editing`, `gating`,
+  `passed` or `held`, no round of any repository in its judge stage (the judge is about to read its
+  skill copy), no drain or infrastructure pause, no `magnum pause`, no pause of the editor's CLI, and
+  `go version` running in the checkout's `mise` environment (`Deps.GoTest`, as the format gate runs `go
+  test`; logged once a while it fails). The start records the day and clears the mark, so the editor
+  runs at most once a day and only on evidence newer than its start; a scheduled run that stops short
+  with inputs left (a limit, a shutdown, an agent that cannot start) sets the mark again, so a later day
+  tries again, while one that found nothing to learn from does not. `magnum learn` says when the editor
+  runs next from the mark and the day, and `magnum doctor`'s `learn editor` check says why it is off:
+  `editor = false` (skipped, naming what would also stop `--propose`), no checkout of magnum (an
+  installed binary has none) or go that does not run in it (failed when `editor` is on). Rejected:
+  running the editor at the end of the retro's goroutine (a judge stage, a pause or a waiting proposal
+  must hold it, and the retro would hold the restart for 45 minutes more) and probing go when the daemon
+  starts (mise or the toolchain can change while it runs).

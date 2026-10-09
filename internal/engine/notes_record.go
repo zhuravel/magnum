@@ -364,10 +364,11 @@ func (e *Engine) syncNotes(ctx context.Context, startup bool) {
 	}
 }
 
-// notesJudging reports whether a round of repoID is between its judge's
-// prompt and the recording of what the judge wrote: a PR of it is reviewing
-// and its current round (runs created since last_round_started_at) has a
-// judge run. A registry error counts as judging: the caller waits.
+// notesJudging reports whether a round of repoID (0: of any repository) is
+// between its judge's prompt and the recording of what the judge wrote: a
+// PR of it is reviewing and its current round (runs created since
+// last_round_started_at) has a judge run. A registry error counts as
+// judging: the caller waits.
 func (e *Engine) notesJudging(ctx context.Context, repoID int64) bool {
 	prs, err := e.st.ListPRs(ctx, store.PRFilter{RepoID: repoID, States: []string{store.PRReviewing}})
 	if err != nil {

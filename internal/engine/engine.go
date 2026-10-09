@@ -396,17 +396,25 @@ type Engine struct {
 	curateTried   map[int64]time.Time // repositories whose last curation stored nothing, and when
 	curateChecked time.Time           // the last scan for a curation due (the tick's goroutine only)
 
-	editMu      sync.Mutex // the running skill edit (learn_edit.go)
-	editCancel  context.CancelFunc
-	editStarted time.Time
-	editWG      sync.WaitGroup
-	gateMu      sync.Mutex // the running gate of a skill proposal (learn_gate.go)
-	gateCancel  context.CancelFunc
-	gateStarted time.Time
-	gateRetry   time.Time // a gate that stopped short starts again after it
-	gateWG      sync.WaitGroup
-	landRetry   time.Time  // a landing that failed short of a hold tries again after it (the tick's goroutine only)
-	corpusMu    sync.Mutex // one rewrite of the learned corpus at a time (learn_corpus.go)
+	editMu       sync.Mutex // the running skill edit (learn_edit.go)
+	editCancel   context.CancelFunc
+	editStarted  time.Time
+	editWhat     string // what runs: the skill edit, or the revert of a version (learnRunning)
+	editWG       sync.WaitGroup
+	gateMu       sync.Mutex // the running gate of a skill proposal (learn_gate.go)
+	gateCancel   context.CancelFunc
+	gateStarted  time.Time
+	gateProposal int64     // the proposal the running gate decides
+	gateRetry    time.Time // a gate that stopped short starts again after it
+	gateWG       sync.WaitGroup
+	// learnMu serializes the starts of the learn jobs (the retro, a notes
+	// curation, a skill edit, a gate; learn_schedule.go): a start holds it
+	// while it checks that no other runs and marks its own running. It is
+	// taken before a job's own mutex, never after.
+	learnMu      sync.Mutex
+	learnChecked time.Time  // the loop's last scan (maybeLearnScan; the tick's goroutine only)
+	landRetry    time.Time  // a landing that failed short of a hold tries again after it (the tick's goroutine only)
+	corpusMu     sync.Mutex // one rewrite of the learned corpus at a time (learn_corpus.go)
 
 	usageMu   sync.Mutex // the Codex budget (budget.go)
 	usageRead time.Time
@@ -769,6 +777,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	e.maybeRetro(ctx)
 	e.noteRetroRunning(ctx) // inflight.go
 	e.maybeCurate(ctx)
+	e.maybeLearnScan(ctx) // learn_schedule.go: the scheduled editor
 	e.maybeGate(ctx)      // learn_gate.go
 	e.maybeLearnLand(ctx) // learn_land.go
 	e.autoApprove(ctx)    // before noteNeedsMe: a PR approved as the operator no longer needs them

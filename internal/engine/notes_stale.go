@@ -42,7 +42,7 @@ const (
 
 	// Why a curation waits (CurateQueued.Why).
 	QueuedJudge = "judge" // a round of the repository is in its judge stage
-	QueuedBusy  = "busy"  // another curation runs
+	QueuedBusy  = "busy"  // another learn job runs: a curation, the retro, a skill edit or gate
 )
 
 // CurateMark is the curation running now (KVNotesCurating).
@@ -213,7 +213,7 @@ func (e *Engine) writeCurateQueue(ctx context.Context, q []CurateQueued) {
 // queuedText says what a queued curation waits for.
 func queuedText(why string) string {
 	if why == QueuedBusy {
-		return "starts when the running curation ends"
+		return "starts when the learn job running now (a curation, the retro, a skill edit or gate) ends"
 	}
 	return "starts when the current round's judge stage ends"
 }
