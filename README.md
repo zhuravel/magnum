@@ -1720,7 +1720,8 @@ paused reviewing CLI (checked before each replay, so one that comes while it run
 background work for a restart. A replay of a target or of its baseline, or the second replay of a lost
 case, that ends without a score (herdr away, a GitHub read that failed, a judge that timed out) stops the
 gate instead of deciding without it: the proposal stays `gating` and the gate tries again 30 minutes later,
-and only the third gate of it that stops so holds it for you, naming the replay.
+and only the third gate of it that stops so holds it for you, naming the replay. A corpus or a list of
+flagged replays the gate cannot read stops it the same way, before any replay.
 
 A `passed` proposal lands at the next tick, at most `land_per_day` (1) a local day and not before the
 daemon restarted on the previous landed version, and never while a gate or an edit runs. The landing

@@ -38,24 +38,28 @@ type fakeLearnGit struct {
 	branch map[string]string // repository -> its branch
 	op     map[string]string // repository -> the operation in progress
 	dirty  map[string][]string
-	// parent is each commit's one parent (the history MergeBase walks and
-	// "<sha>^" names), patch a commit's patch id ("patch-<sha>" when none:
-	// RebaseOnto gives the new commit the old one's), worktree each
-	// worktree's checkout and branch (RebaseOnto moves the branch), and
-	// rebased counts the rebases.
-	parent   map[string]string
-	patch    map[string]string
-	worktree map[string][2]string
-	rebased  int
-	// rebaseErr and mergeErr fail RebaseOnto and MergeFFOnly; onRebase and
-	// onMerge run with the context of a rebase and of a fast-forward.
-	rebaseErr, mergeErr error
-	onRebase, onMerge   func(context.Context)
+	// parent is each commit's first parent (the history MergeBase walks and
+	// "<sha>^" names), second a merge's second ("<sha>^2"), patch a commit's
+	// patch id ("patch-<sha>" when none: RebaseOnto gives the new commit the
+	// old one's), worktree each worktree's checkout and branch (RebaseOnto
+	// moves the branch), and rebased counts the rebases.
+	parent, second map[string]string
+	patch          map[string]string
+	worktree       map[string][2]string
+	rebased        int
+	// rebaseErr and mergeErr fail RebaseOnto and MergeFFOnly, discardErr
+	// the next WorktreeDiscard of a directory and statusErr StatusPaths of
+	// one; onRebase and onMerge run with the context of a rebase and of a
+	// fast-forward.
+	rebaseErr, mergeErr   error
+	discardErr, statusErr map[string]error
+	onRebase, onMerge     func(context.Context)
 }
 
 func newFakeLearnGit() *fakeLearnGit {
 	return &fakeLearnGit{refs: map[string]string{}, branch: map[string]string{}, op: map[string]string{}, dirty: map[string][]string{},
-		parent: map[string]string{}, patch: map[string]string{}, worktree: map[string][2]string{}}
+		parent: map[string]string{}, second: map[string]string{}, patch: map[string]string{}, worktree: map[string][2]string{},
+		discardErr: map[string]error{}, statusErr: map[string]error{}}
 }
 
 func (g *fakeLearnGit) set(dir, ref, sha string) {
@@ -87,10 +91,13 @@ func (g *fakeLearnGit) RevParse(_ context.Context, dir, ref string) (string, err
 	if sha, ok := g.refs[dir+"|"+ref]; ok {
 		return sha, nil
 	}
+	if sha, ok := strings.CutSuffix(ref, "^2"); ok && g.second[sha] != "" {
+		return g.second[sha], nil
+	}
 	if sha, ok := strings.CutSuffix(ref, "^"); ok && g.parent[sha] != "" {
 		return g.parent[sha], nil
 	}
-	return "", fmt.Errorf("rev-parse %s: %w", ref, gitx.ErrNoSuchRef) // "<sha>^2" too: no merge commits
+	return "", fmt.Errorf("rev-parse %s: %w", ref, gitx.ErrNoSuchRef)
 }
 
 func (g *fakeLearnGit) PatchID(_ context.Context, _, rev string) (string, error) {
@@ -121,6 +128,10 @@ func (g *fakeLearnGit) WorktreeDiscard(_ context.Context, _, dir string) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.record("worktree discard %s", dir)
+	if err := g.discardErr[dir]; err != nil {
+		delete(g.discardErr, dir)
+		return err
+	}
 	delete(g.refs, dir+"|HEAD")
 	return os.RemoveAll(dir)
 }
@@ -128,6 +139,9 @@ func (g *fakeLearnGit) WorktreeDiscard(_ context.Context, _, dir string) error {
 func (g *fakeLearnGit) StatusPaths(_ context.Context, dir string) ([]gitx.StatusEntry, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if err := g.statusErr[dir]; err != nil {
+		return nil, err
+	}
 	var out []gitx.StatusEntry
 	for _, p := range g.dirty[dir] {
 		out = append(out, gitx.StatusEntry{X: ' ', Y: 'M', Path: p})
@@ -213,8 +227,8 @@ func (g *fakeLearnGit) DirtyPaths(_ context.Context, dir string, paths ...string
 }
 
 // MergeFFOnly moves the repository's master and HEAD to branch when branch
-// sits on master (nothing when master holds it), unless mergeErr says
-// otherwise.
+// sits on master (ErrNotFastForward otherwise, a branch master holds
+// included, as gitx's does), unless mergeErr says otherwise.
 func (g *fakeLearnGit) MergeFFOnly(ctx context.Context, repo, branch string) error {
 	g.mu.Lock()
 	g.record("merge --ff-only %s", branch)
@@ -229,10 +243,7 @@ func (g *fakeLearnGit) MergeFFOnly(ctx context.Context, repo, branch string) err
 		return g.mergeErr
 	}
 	head, master := g.refs[repo+"|refs/heads/"+branch], g.refs[repo+"|refs/heads/"+learnBase]
-	switch base, err := g.mergeBase(head, master); {
-	case err == nil && base == head:
-		return nil // already up to date
-	case err != nil || base != master:
+	if base, err := g.mergeBase(head, master); err != nil || base != master {
 		return fmt.Errorf("merge --ff-only %s: %w", branch, gitx.ErrNotFastForward)
 	}
 	g.refs[repo+"|refs/heads/"+learnBase], g.refs[repo+"|HEAD"] = head, head
@@ -258,13 +269,14 @@ func (g *fakeLearnGit) BranchDelete(_ context.Context, mainClone, branch string,
 // candidate directory and name, one per replay (the last repeats), or with
 // an outcome without a score; it records every replay.
 type fakeEval struct {
-	mu       sync.Mutex
-	scores   map[string][]*eval.Score // "<candidate>|<case>"
-	outcomes map[string]string        // "<candidate>|<case>" -> an outcome with no score
-	inputs   map[string][2]string     // candidate -> its inputs and reviewer inputs
-	root     string                   // the eval runs (Layout.Eval), where a judge-only replay finds its reports
-	corpus   *eval.Corpus
-	calls    []evalCall
+	mu        sync.Mutex
+	scores    map[string][]*eval.Score // "<candidate>|<case>"
+	outcomes  map[string]string        // "<candidate>|<case>" -> an outcome with no score
+	inputs    map[string][2]string     // candidate -> its inputs and reviewer inputs
+	root      string                   // the eval runs (Layout.Eval), where a judge-only replay finds its reports
+	corpus    *eval.Corpus
+	corpusErr error // the corpora cannot be read
+	calls     []evalCall
 	// entered and block hold a replay: entered is closed when one starts,
 	// and it returns when block closes or its context ends.
 	entered, block chan struct{}
@@ -413,7 +425,11 @@ func newGateFixture(t *testing.T, files []string, mods ...func(*harness)) *gateF
 		h.d.EvalCase, h.d.EvalInputs = f.ev.run, f.ev.inputsOf
 		h.d.EvalRuns = func() ([]eval.Run, error) { return eval.ListRuns(h.layout.Eval()) }
 		f.ev.root = h.layout.Eval()
-		h.d.EvalCorpus = func() (*eval.Corpus, string, error) { return f.ev.corpus, "", nil }
+		h.d.EvalCorpus = func() (*eval.Corpus, string, error) {
+			f.ev.mu.Lock()
+			defer f.ev.mu.Unlock()
+			return f.ev.corpus, "", f.ev.corpusErr
+		}
 	}}, mods...)...)
 	pr := corpusPR(f.h, "talkable/talkable", 11)
 	m := corpusMiss(f.h, pr, 1, store.MissScopeGeneral)
@@ -1083,5 +1099,87 @@ func TestTheGateIsBackgroundWorkForRestarts(t *testing.T) {
 	}
 	if _, ok := f.h.e.getKV(f.h.ctx, KVLearnGating); ok {
 		t.Fatal("the gate's mark outlived it")
+	}
+}
+
+// A corpus or a list of flagged replays the gate cannot read is no
+// verdict: it stops the gate, the proposal stays gating, and only the third
+// gate of it that stops so holds it, saying why. Nothing is replayed.
+func TestAnUnreadableCorpusOrFlagListStopsTheGate(t *testing.T) {
+	f := newGateFixture(t, gateFullFiles)
+	f.ev.corpusErr = errors.New("corpus.toml: line 3: expected a key")
+	f.h.tick()
+	if p := f.proposal(); p.State != store.LearnGating || len(f.ev.calls) != 0 {
+		t.Fatalf("proposal = %s %q after %d replays, want gating", p.State, p.Reason, len(f.ev.calls))
+	}
+	if evs := f.h.events("learn.gate_waiting"); len(evs) != 1 || !strings.Contains(evs[0].Message, "expected a key") {
+		t.Fatalf("waiting events = %+v", evs)
+	}
+	for range gateStopLimit - 1 {
+		f.h.advance(gateRetryAfter + time.Minute)
+		f.h.tick()
+	}
+	if p := f.proposal(); p.State != store.LearnHeld || !strings.Contains(p.Reason, "expected a key") {
+		t.Fatalf("proposal = %s %q after %d gates", p.State, p.Reason, gateStopLimit)
+	}
+
+	f2 := newGateFixture(t, gateFullFiles)
+	writeFile(t, f2.h.layout.Eval(), eval.FlaggedFile, "{not json")
+	f2.h.tick()
+	if p := f2.proposal(); p.State != store.LearnGating || len(f2.ev.calls) != 0 {
+		t.Fatalf("proposal = %s %q after %d replays with an unreadable flag list", p.State, p.Reason, len(f2.ev.calls))
+	}
+}
+
+// A gate-base directory git does not know as a worktree (a crash between
+// its making and its registration) is replaced, not a reason to wait.
+func TestAGateBaseGitDoesNotKnowIsReplaced(t *testing.T) {
+	f := newGateFixture(t, gateFullFiles)
+	writeFile(t, f.base, "left-behind.txt", "a crash's leftover\n")
+	f.git.discardErr[f.base] = errors.New("fatal: not a working tree")
+	f.baseline("20261001-120000", "rev-master", map[string]*eval.Score{f.target.Name: found(nil, f.target.Name),
+		f.other.Name: found([]string{"scope"})})
+	f.ev.script(f.wt, f.target.Name, found([]string{f.target.Name}))
+	f.ev.script(f.wt, f.other.Name, found([]string{"scope"}))
+	f.h.tick()
+	if p := f.proposal(); p.State != store.LearnPassed {
+		t.Fatalf("proposal = %s %q", p.State, p.Reason)
+	}
+	if got := f.git.called("worktree add " + f.base); len(got) != 1 {
+		t.Fatalf("worktree adds of the base = %q", got)
+	}
+}
+
+// A judge-only gate with no stored replay of a case replays the base in
+// full: that replay is the baseline and its reviewers' reports are the ones
+// the candidate's judge reads.
+func TestAJudgeOnlyGateWithNoStoredReplayMakesTheReportsWithTheBase(t *testing.T) {
+	f := newGateFixture(t, []string{learn.DecisionsFile, learn.SkillFile})
+	f.ev.script(f.base, f.target.Name, found(nil, f.target.Name))
+	f.ev.script(f.base, f.other.Name, found([]string{"scope"}))
+	f.ev.script(f.wt, f.target.Name, found([]string{f.target.Name}))
+	f.ev.script(f.wt, f.other.Name, found([]string{"scope"}))
+	f.h.tick()
+	if p := f.proposal(); p.State != store.LearnPassed {
+		t.Fatalf("proposal = %s %q", p.State, p.Reason)
+	}
+	base, cand := f.ev.callsFor(f.base), f.ev.callsFor(f.wt)
+	if len(base) != 2 || base[0].Opts.JudgeOnly || len(cand) != 2 || !cand[0].Opts.JudgeOnly {
+		t.Fatalf("base replays %+v, candidate replays %+v", base, cand)
+	}
+	for _, c := range f.gate().Cases {
+		if c.ReportsRun == "" || c.ReportsRun != c.BaselineRun {
+			t.Fatalf("row %+v, want the candidate's judge on the base's full replay", c)
+		}
+	}
+}
+
+// A tree whose status cannot be read is recorded dirty, so no later gate
+// reuses a replay of it as a baseline.
+func TestATreeWhoseStatusCannotBeReadIsRecordedDirty(t *testing.T) {
+	f := newGateFixture(t, gateFullFiles)
+	f.git.statusErr[f.wt] = errors.New("git status: index.lock exists")
+	if commit, dirty := f.h.e.treeState(f.h.ctx, f.wt); commit != learnShort(learnCandidate) || !dirty {
+		t.Fatalf("treeState = %s, %v, want the commit, dirty", commit, dirty)
 	}
 }

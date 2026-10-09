@@ -283,7 +283,8 @@ func (e *Engine) landProposal(ctx context.Context, p store.LearnProposal, reques
 // landedAlready reports whether master holds p's branch already, and its
 // commit: a landing a crash or a registry error cut short after the
 // fast-forward, which is recorded rather than landed again, rejected or
-// expired. False without a checkout or without the branch.
+// expired. False without a checkout, without the branch or when the branch
+// does not descend from p's base.
 func (e *Engine) landedAlready(ctx context.Context, p store.LearnProposal) (string, bool, error) {
 	if e.landUnavailable() != "" || !strings.HasPrefix(p.Branch, learnBranchPrefix) {
 		return "", false, nil
@@ -297,6 +298,10 @@ func (e *Engine) landedAlready(ctx context.Context, p store.LearnProposal) (stri
 	}
 	if head == p.BaseSHA { // nothing of its own
 		return "", false, nil
+	}
+	// A branch reset below its base holds nothing of the proposal's.
+	if above, err := e.holds(ctx, head, p.BaseSHA); err != nil || !above {
+		return "", false, err
 	}
 	master, err := git.RevParse(ctx, checkout, "refs/heads/"+learnBase)
 	if err != nil {
@@ -433,29 +438,39 @@ func learnHashes(dir string) (skill, prompts string) {
 // noteLearnRestarted marks the version the daemon was to restart on
 // restarted (this start, whatever caused it: an idle exit, a
 // `daemon-restart`, a new build), which starts its measurement window, and
-// clears KVLearnRestart; without the mark, the newest version when it was
-// never restarted on (a landing whose mark a crash or a registry error kept
-// from being written). A dry run marks nothing.
+// clears KVLearnRestart. Every other version never restarted on starts now
+// too: one whose landing wrote no mark (a crash or a registry error right
+// after its transaction; without a mark the newest of them is named), or
+// whose mark a later recorded landing replaced (it never ran alone, and its
+// window is empty). A dry run marks nothing.
 func (e *Engine) noteLearnRestarted(ctx context.Context) {
 	if e.d.DryRun {
 		return
 	}
 	m, ok := e.learnRestart(ctx)
-	if !ok {
-		e.delKV(ctx, KVLearnRestart)
-		vs, err := e.st.LearnVersions(ctx)
-		if err != nil || len(vs) == 0 || vs[0].RestartedAt != nil {
+	vs, err := e.st.LearnVersions(ctx)
+	if err != nil {
+		e.warnUnlessStopped(ctx, err, "skill versions: list them for the restart")
+		return // the mark waits for the next start
+	}
+	now := e.now()
+	for _, v := range vs { // newest first
+		if v.RestartedAt != nil {
+			continue
+		}
+		if err := e.st.MarkLearnRestarted(ctx, v.ID, now); err != nil {
+			e.warnUnlessStopped(ctx, err, "skill version: mark it restarted", "version", v.ID)
 			return
 		}
-		m = LearnRestartMark{Version: vs[0].ID, Proposal: vs[0].ProposalID}
-	}
-	if err := e.st.MarkLearnRestarted(ctx, m.Version, e.now()); err != nil && !errors.Is(err, store.ErrNotFound) {
-		e.warnUnlessStopped(ctx, err, "skill version: mark it restarted", "version", m.Version)
-		return
+		if !ok {
+			m, ok = LearnRestartMark{Version: v.ID, Proposal: v.ProposalID}, true
+		}
 	}
 	e.delKV(ctx, KVLearnRestart)
-	e.event(ctx, "info", learnSubject, "learn.restart", fmt.Sprintf("the daemon runs skill version %d (proposal %d) since this start", m.Version,
-		m.Proposal), map[string]any{"version": m.Version, "proposal": m.Proposal})
+	if ok {
+		e.event(ctx, "info", learnSubject, "learn.restart", fmt.Sprintf("the daemon runs skill version %d (proposal %d) since this start", m.Version,
+			m.Proposal), map[string]any{"version": m.Version, "proposal": m.Proposal})
+	}
 }
 
 // learnRestartDue is the landed version the daemon exits to restart on

@@ -5711,3 +5711,16 @@ editing history. Code, config comments and prompts reference these by their head
   rebase and before the fast-forward, every time (the build may also have changed since the edit), and
   holds the proposal when it fails. Rejected: checking only after a rebase (a daemon rebuilt since the edit
   renders with other data too).
+- **What the gate cannot read stops it, and a restart starts every version waiting for one** (2026-10-09,
+  review of the stage 4 fixes of the self-improving review loop). A corpus the gate could not read left
+  every target "not in the corpus" and a list of flagged replays it could not read flagged every pull
+  request, so a passing read error held the proposal for good, as a replay without a score did; both now
+  stop the gate before any replay and count toward the third stop that holds it. A branch was recorded
+  as a landing cut short whenever `master` held its head, a branch reset below its base included; it must
+  now also descend from the proposal's base. A start marked only the version its mark named (or the
+  newest without one), so a version whose mark a later recorded landing replaced never got a window;
+  every version not restarted on yet is now marked at the start (one that never ran alone has an empty
+  window). And a tree whose status cannot be read is recorded dirty in the gate's run, so no later gate
+  reuses an unverified baseline. Rejected: holding at once on an unreadable corpus (the operator's next
+  save of the file fixes it) and a registry error on a single pull request's Codex flag as a stop (it
+  counts as flagged: a pull request that may be flagged is never replayed).

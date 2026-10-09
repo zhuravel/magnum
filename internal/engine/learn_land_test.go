@@ -209,7 +209,9 @@ func TestTheLandingsRebaseAndMergeOutliveAStop(t *testing.T) {
 
 // A start marks the newest version restarted even when its landing wrote
 // no restart mark (a crash right after the landing's transaction): the
-// daemon that starts reads the landed prompts and skill.
+// daemon that starts reads the landed prompts and skill. And it marks every
+// version not restarted on yet, not only the mark's: one whose mark a
+// recorded landing replaced never ran alone, and its window is empty.
 func TestAStartMarksAVersionWhoseRestartMarkIsMissing(t *testing.T) {
 	f := newLandFixture(t)
 	f.h.tick()
@@ -218,6 +220,36 @@ func TestAStartMarksAVersionWhoseRestartMarkIsMissing(t *testing.T) {
 	f.h.startup()
 	if vs := f.versions(); len(vs) != 1 || vs[0].RestartedAt == nil || !vs[0].RestartedAt.Equal(f.h.clock.Now()) {
 		t.Fatalf("versions = %+v, want the newest restarted now", vs)
+	}
+
+	f2 := newLandFixture(t)
+	older, err := f2.h.st.CreateLearnVersion(f2.h.ctx, store.LearnVersion{LandedSHA: learnMaster, SkillSHA: "s", PromptsSHA: "p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f2.h.tick() // lands a newer version, whose mark names it alone
+	f2.h.advance(time.Minute)
+	f2.h.startup()
+	vs := f2.versions()
+	if len(vs) != 2 || vs[1].ID != older.ID || vs[0].RestartedAt == nil || vs[1].RestartedAt == nil || !vs[1].RestartedAt.Equal(*vs[0].RestartedAt) {
+		t.Fatalf("versions = %+v, want both restarted at this start", vs)
+	}
+}
+
+// A branch reset to a commit master holds below the proposal's base is no
+// landing: only a branch that descends from its base and that master holds
+// is recorded as landed.
+func TestABranchResetBelowItsBaseIsNotALanding(t *testing.T) {
+	f := newLandFixture(t)
+	older := strings.Repeat("a", 40)
+	f.git.mu.Lock()
+	f.git.parent[learnMaster] = older
+	f.git.mu.Unlock()
+	f.git.set(f.wt, "HEAD", older)
+	f.git.set(f.checkout, "refs/heads/learn/"+gateRunID, older)
+	f.h.tick()
+	if p := f.proposal(); p.State != store.LearnHeld || len(f.versions()) != 0 || !strings.Contains(p.Reason, "moved") {
+		t.Fatalf("proposal = %s %q, versions %+v", p.State, p.Reason, f.versions())
 	}
 }
 
@@ -387,13 +419,18 @@ func TestALandingRefusesACommitMadeInTheWorktree(t *testing.T) {
 		name   string
 		sha    string
 		parent string
+		merge  bool // a merge commit whose patch is the candidate's
 	}{
-		{"on top of the candidate", strings.Repeat("6", 40), learnCandidate},
-		{"an amended candidate", strings.Repeat("8", 40), learnMaster},
+		{"on top of the candidate", strings.Repeat("6", 40), learnCandidate, false},
+		{"an amended candidate", strings.Repeat("8", 40), learnMaster, false},
+		{"a merge", strings.Repeat("b", 40), learnMaster, true},
 	} {
 		f := newLandFixture(t)
 		f.git.mu.Lock()
 		f.git.parent[c.sha] = c.parent
+		if c.merge {
+			f.git.second[c.sha], f.git.patch[c.sha] = learnCandidate, f.git.patchOf(learnCandidate)
+		}
 		f.git.mu.Unlock()
 		f.git.set(f.wt, "HEAD", c.sha)
 		f.git.set(f.checkout, "refs/heads/learn/"+gateRunID, c.sha)

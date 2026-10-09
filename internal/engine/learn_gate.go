@@ -327,12 +327,20 @@ func (e *Engine) runGate(ctx context.Context, p store.LearnProposal) error {
 	if err != nil {
 		return g.waits("the proposal's inputs: " + oneLine(err.Error(), retroWhyRunes))
 	}
+	// A corpus or a flag list that cannot be read is no verdict (its targets
+	// would read as not in the corpus, or every PR as flagged): the gate
+	// stops as on a replay without a score.
 	corpus, corpusPath, err := e.d.EvalCorpus()
 	if err != nil {
-		g.res.CorpusError, corpus = oneLine(err.Error(), retroWhyRunes), nil
+		g.res.CorpusError = oneLine(err.Error(), retroWhyRunes)
+		return g.noScore("the corpus cannot be read: " + g.res.CorpusError)
+	}
+	flagged, err := e.gateFlagged(ctx)
+	if err != nil {
+		return g.noScore("the flagged replays cannot be read: " + oneLine(err.Error(), retroWhyRunes))
 	}
 	g.corpusPath = corpusPath
-	cases := learn.SelectCases(corpus, targets, e.gateWatched, e.gateFlagged(ctx), e.cfg.Learn.GateCases)
+	cases := learn.SelectCases(corpus, targets, e.gateWatched, flagged, e.cfg.Learn.GateCases)
 	if g.baseIn, g.baseRev, err = e.d.EvalInputs(baseDir); err != nil {
 		return g.waits("the base's inputs: " + oneLine(err.Error(), retroWhyRunes))
 	}
@@ -592,9 +600,6 @@ func (g *gateWork) decide() error {
 	}
 	v := learn.Judge(rows)
 	res.State, res.Rule = v.State, v.Rule
-	if res.CorpusError != "" && v.State == learn.GateHeld {
-		res.Rule += "; the corpus: " + res.CorpusError
-	}
 	if p.Reverts != 0 { // a revert lands only on the operator's y (learn_revert.go)
 		res.State, res.Rule = learn.GateHeld, fmt.Sprintf("a revert of skill version %d waits for the operator whatever the gate found "+
 			"(it would have %s it: %s)", p.Reverts, v.State, res.Rule)
@@ -699,15 +704,15 @@ func (e *Engine) gateWatched(pr string) bool {
 }
 
 // gateFlagged reports whether pr (owner/repo#N) must never be replayed:
-// an earlier replay of it was refused (eval.FlaggedFile, which cannot be
-// read refuses every PR), or the registry holds a Codex flag for it (one
-// it cannot read counts).
-func (e *Engine) gateFlagged(ctx context.Context) func(pr string) bool {
-	flagged, ferr := eval.LoadFlagged(e.d.Layout.Eval())
+// an earlier replay of it was refused (eval.FlaggedFile; an error when it
+// cannot be read, and the gate replays nothing), or the registry holds a
+// Codex flag for it (one it cannot read counts).
+func (e *Engine) gateFlagged(ctx context.Context) (func(pr string) bool, error) {
+	flagged, err := eval.LoadFlagged(e.d.Layout.Eval())
+	if err != nil {
+		return nil, err
+	}
 	return func(pr string) bool {
-		if ferr != nil {
-			return true
-		}
 		for _, f := range flagged {
 			if strings.EqualFold(strings.TrimSpace(f.PR), pr) {
 				return true
@@ -734,20 +739,21 @@ func (e *Engine) gateFlagged(ctx context.Context) func(pr string) bool {
 		}
 		_, ok := e.codexFlag(ctx, row.ID)
 		return ok
-	}
+	}, nil
 }
 
 // treeState is what a gate's eval run records of the tree whose prompts
 // and skill it replays (the worktree of the base, the proposal's), as
 // `magnum eval run` records its checkout: the short HEAD and whether it has
-// uncommitted changes (eval.Baselines reuses no dirty run).
+// uncommitted changes (eval.Baselines reuses no dirty run), which a status
+// that cannot be read counts as.
 func (e *Engine) treeState(ctx context.Context, dir string) (string, bool) {
 	sha, err := e.d.LearnGit.RevParse(ctx, dir, "HEAD")
 	if err != nil {
-		return "", false
+		return "", true
 	}
 	st, err := e.d.LearnGit.StatusPaths(ctx, dir)
-	return learnShort(sha), err == nil && len(st) > 0
+	return learnShort(sha), err != nil || len(st) > 0
 }
 
 // gateBaseDir is the gate's worktree of the base (gateBaseName).
