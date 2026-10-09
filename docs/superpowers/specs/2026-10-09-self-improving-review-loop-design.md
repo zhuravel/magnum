@@ -189,7 +189,13 @@ case, one that ended without a score (anything but a flagged PR) stops the gate 
 the proposal stays `gating` for a try 30 minutes later; only the third gate of the proposal that stops so
 holds it, with the replay named; a corpus or a list of flagged replays that cannot be read counts the
 same, before any replay. A drain or a pause is checked before each replay and stops a running gate the
-same way, and so does a verdict the registry did not take.
+same way, and so does a verdict the registry did not take. A gate that stops short keeps its replays: the
+next gate takes the candidate's stored replays of a case and a lost case's second replay (`eval.Baselines`
+over clean runs with the candidate's inputs hash; judge-only, `eval.JudgeBaselines` on the same reports)
+instead of replaying them. Every stop but a shutdown's counts in `learn.gate_stops` (`attempts`, with
+the last stop's reason), and the sixth holds the proposal; one still `gating` 3 days after it was made is
+held whether or not a gate could start. `magnum learn --review` shows the oldest `gating` proposal when
+none is held and rejects it on `y`, stopping its running gate first.
 
 The results are stored in `gate_json` (baseline run id, candidate run id, per-case before/after, the
 rule that decided) and the state becomes `passed`, `held` or `failed`, with what the gate made of each

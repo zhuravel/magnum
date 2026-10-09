@@ -970,6 +970,143 @@ func TestATargetReplayWithoutAScoreLeavesTheProposalGating(t *testing.T) {
 	}
 }
 
+// A gate that stops short keeps what it replayed: the next gate of the
+// proposal takes the candidate's stored replays (and a lost case's second
+// one) instead of replaying every case again, so a window's budget is not
+// spent on the same replays every time.
+func TestAGateThatStopsShortReusesTheCandidateReplaysItMade(t *testing.T) {
+	f := newGateFixture(t, gateFullFiles)
+	f.baseline("20261001-120000", "rev-master", map[string]*eval.Score{f.target.Name: found(nil, f.target.Name),
+		f.other.Name: found([]string{"scope"})})
+	f.ev.script(f.wt, f.target.Name, found([]string{f.target.Name}))
+	// The other case is lost at its first replay, and the budget stops the
+	// gate at its second.
+	f.ev.script(f.wt, f.other.Name, found(nil, "scope"), found(nil, "scope"), found([]string{"scope"}))
+	var once sync.Once
+	f.ev.after = func(c evalCall) {
+		if c.Case == f.other.Name {
+			once.Do(func() { f.ev.fail(f.wt, f.other.Name, eval.OutcomeBudget) })
+		}
+	}
+	f.h.tick()
+	if p, n := f.proposal(), len(f.ev.callsFor(f.wt)); p.State != store.LearnGating || n != 3 {
+		t.Fatalf("proposal %s after %d candidate replays, want gating after three", p.State, n)
+	}
+	f.ev.fail(f.wt, f.other.Name, "")
+	f.h.advance(gateRetryAfter + time.Minute)
+	f.h.tick()
+	p := f.proposal()
+	if p.State != store.LearnPassed {
+		t.Fatalf("proposal = %s %q, want passed", p.State, p.Reason)
+	}
+	var target, other int
+	for _, c := range f.ev.callsFor(f.wt) {
+		switch c.Case {
+		case f.target.Name:
+			target++
+		case f.other.Name:
+			other++
+		}
+	}
+	if target != 1 || other != 3 {
+		t.Fatalf("candidate replays: %d of the target, %d of the other case; want 1 and 3 (its first and lost one reused)", target, other)
+	}
+	g := f.gate()
+	if c := g.Cases[1]; c.Case != f.other.Name || !c.Retried || c.After == nil || c.After.Found != 1 {
+		t.Fatalf("the other case's row = %+v, want its second replay's score", c)
+	}
+}
+
+// Every gate of a proposal that stops short counts, whatever stopped it
+// (the budget, a usage limit, a drain, a pause, a replay without a score):
+// the gateAttemptLimit-th holds it for the operator, naming the last stop,
+// so a gate that never fits under the budget does not keep the loop
+// waiting for good.
+func TestAGateThatKeepsStoppingIsHeldForTheOperator(t *testing.T) {
+	f := newGateFixture(t, gateFullFiles)
+	f.baseline("20261001-120000", "rev-master", map[string]*eval.Score{f.target.Name: found(nil, f.target.Name),
+		f.other.Name: found([]string{"scope"})})
+	f.ev.fail(f.wt, f.target.Name, eval.OutcomeBudget)
+	for i := 1; i <= gateAttemptLimit; i++ {
+		f.h.tick()
+		if n := len(f.ev.callsFor(f.wt)); n != i {
+			t.Fatalf("gate %d: %d candidate replays", i, n)
+		}
+		f.h.advance(gateRetryAfter + time.Minute)
+	}
+	p := f.proposal()
+	if p.State != store.LearnHeld || !strings.Contains(p.Reason, fmt.Sprintf("%d gates", gateAttemptLimit)) || !strings.Contains(p.Reason, "budget") {
+		t.Fatalf("proposal = %s %q, want held after %d stopped gates", p.State, p.Reason, gateAttemptLimit)
+	}
+	if toasts := f.toasts(); !strings.Contains(toasts, "waits for review") {
+		t.Fatalf("toasts = %q", toasts)
+	}
+}
+
+// A proposal still gating gateMaxAge after it was made is held for the
+// operator whether or not a gate could start (the budget at the soft cap
+// for days): the editor waits behind a gating proposal.
+func TestAProposalGatingForDaysIsHeld(t *testing.T) {
+	u := &fakeUsage{}
+	f := newGateFixture(t, gateFullFiles, func(h *harness) { h.d.Usage, h.d.UsageAt = u.read, u.readAt })
+	u.set(85, f.h.clock.Now().Add(96*time.Hour))
+	f.h.tick()
+	f.h.advance(gateMaxAge - time.Minute)
+	f.h.tick()
+	if p := f.proposal(); p.State != store.LearnGating {
+		t.Fatalf("before %v: %s %q", gateMaxAge, p.State, p.Reason)
+	}
+	f.h.advance(2 * time.Minute)
+	f.h.tick()
+	p := f.proposal()
+	if p.State != store.LearnHeld || !strings.Contains(p.Reason, "3 days") || len(f.ev.callsFor(f.wt)) != 0 {
+		t.Fatalf("proposal = %s %q after %v gating, want held", p.State, p.Reason, gateMaxAge)
+	}
+}
+
+// The operator may reject a proposal while it is gating: a running gate is
+// stopped first, then the proposal is rejected and its worktree goes.
+func TestARejectionStopsTheGateOfAGatingProposal(t *testing.T) {
+	f := newGateFixture(t, gateFullFiles)
+	f.baseline("20261001-120000", "rev-master", map[string]*eval.Score{f.target.Name: found(nil, f.target.Name),
+		f.other.Name: found([]string{"scope"})})
+	f.ev.entered, f.ev.block = make(chan struct{}), make(chan struct{})
+	entered := f.ev.entered
+	if err := f.h.e.Tick(f.h.ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the tick started no gate")
+	}
+	if !f.h.e.gateBusy() {
+		t.Fatal("no gate runs")
+	}
+	msg, err := f.h.e.requestLearnReject(f.h.ctx, LearnDecisionPayload{ID: f.p.ID, Reason: "the rule is too broad"})
+	if err != nil || !strings.Contains(msg, "rejected proposal") {
+		t.Fatalf("reject = %q, %v", msg, err)
+	}
+	if f.h.e.gateBusy() {
+		t.Fatal("the gate still runs after the rejection")
+	}
+	p := f.proposal()
+	if p.State != store.LearnRejected || p.Reason != "the rule is too broad" {
+		t.Fatalf("proposal = %s %q", p.State, p.Reason)
+	}
+	if _, err := os.Stat(f.wt); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the worktree is still there: %v", err)
+	}
+	if _, ok := f.h.e.getKV(f.h.ctx, KVLearnGating); ok {
+		t.Fatal("the gate's mark outlived the rejection")
+	}
+	// One no gate runs for is rejected at once.
+	f2 := newGateFixture(t, gateFullFiles)
+	if _, err := f2.h.e.requestLearnReject(f2.h.ctx, LearnDecisionPayload{ID: f2.p.ID}); err != nil || f2.proposal().State != store.LearnRejected {
+		t.Fatalf("reject = %v, proposal %s", err, f2.proposal().State)
+	}
+}
+
 // A gate whose verdict the registry did not take (busy, a disk error)
 // stops short: it waits out its retry instead of replaying every case again
 // at the next tick.

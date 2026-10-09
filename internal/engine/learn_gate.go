@@ -70,8 +70,20 @@ const (
 	// would keep the oldest gating proposal, and the loop behind it, waiting
 	// for good.
 	gateStopLimit = 3
-	// kvLearnGateStops counts the gates of a proposal that stopped on a
-	// replay without a score since a gate last decided (gateStops as JSON).
+	// gateAttemptLimit is how many gates of a proposal may stop short for
+	// any reason but a shutdown (the Codex budget, a usage limit, a drain,
+	// a pause, a replay without a score, an error) before the next such
+	// stop holds it for the operator: a gate that never fits under the
+	// budget would keep the loop waiting for good.
+	gateAttemptLimit = 6
+	// gateMaxAge is how long a proposal may stay gating, from when the
+	// editor made it, before it is held for the operator whether or not a
+	// gate could start (the editor waits behind it).
+	gateMaxAge = 72 * time.Hour
+	// gateStopWait bounds the wait of a rejection for the gate it stops.
+	gateStopWait = 20 * time.Second
+	// kvLearnGateStops counts the gates of a proposal that stopped short
+	// since a gate last decided (gateStops as JSON).
 	kvLearnGateStops = "learn.gate_stops"
 	// gateReasonRunes clips the rule stored as a gated proposal's reason.
 	gateReasonRunes = 2000
@@ -97,11 +109,13 @@ type EvalGateOptions struct {
 	AgentTag  string
 }
 
-// gateStops is kvLearnGateStops: Stops gates of Proposal stopped on a
-// replay without a score.
+// gateStops is kvLearnGateStops: Attempts gates of Proposal stopped short
+// (Last says why the last did), Stops of them on a replay without a score.
 type gateStops struct {
-	Proposal int64 `json:"proposal"`
-	Stops    int   `json:"stops"`
+	Proposal int64  `json:"proposal"`
+	Stops    int    `json:"stops"`
+	Attempts int    `json:"attempts,omitempty"`
+	Last     string `json:"last,omitempty"`
 }
 
 // GateMark is the gate in flight (KVLearnGating).
@@ -186,14 +200,12 @@ func (e *Engine) gateHold(ctx context.Context) string {
 // unless a learn job runs (a gate, an edit, the retro or a notes curation:
 // learnBusy), a stopped gate waits out gateRetryAfter,
 // something holds it (gateHold) or the Codex budget is at the soft cap
-// (gateBudget). A gating proposal a crashed or restarted daemon left
-// behind is picked up the same way. A dry run and `magnum daemon --once`
-// never start one.
+// (gateBudget); one gating for gateMaxAge is held for the operator instead,
+// whatever holds its gate. A gating proposal a crashed or restarted daemon
+// left behind is picked up the same way. A dry run and `magnum daemon
+// --once` never start one.
 func (e *Engine) maybeGate(ctx context.Context) {
-	if e.d.DryRun || e.once || e.gateUnavailable() != "" || e.learnBusy() != "" || e.gateWaits() {
-		return
-	}
-	if e.gateHold(ctx) != "" {
+	if e.d.DryRun || e.once || e.gateUnavailable() != "" || e.learnBusy() != "" {
 		return
 	}
 	gating, err := e.st.LearnProposals(ctx, []string{store.LearnGating})
@@ -204,11 +216,33 @@ func (e *Engine) maybeGate(ctx context.Context) {
 		return
 	}
 	p := gating[len(gating)-1] // the oldest
+	if e.now().Sub(p.CreatedAt) >= gateMaxAge {
+		e.holdOldGate(ctx, p)
+		return
+	}
+	if e.gateWaits() || e.gateHold(ctx) != "" {
+		return
+	}
 	if level, snap := e.budgetLevel(); level >= usage.Soft {
 		e.gateBudget(ctx, p, snap)
 		return
 	}
 	e.startGate(ctx, p)
+}
+
+// holdOldGate holds proposal p, gating for gateMaxAge without a verdict,
+// for the operator, naming why its last gate stopped (kvLearnGateStops) or
+// that none could start; the result of its last gate, if any, stays.
+func (e *Engine) holdOldGate(ctx context.Context, p store.LearnProposal) {
+	why := "no gate of it could start (the Codex budget, a drain or a pause held every one)"
+	if s, ok := e.gateStopsOf(ctx, p.ID); ok && s.Last != "" {
+		why = fmt.Sprintf("%s stopped short, the last: %s", textx.Count(s.Attempts, "gate", "gates"), s.Last)
+	}
+	res := GateResult{State: learn.GateHeld, Mode: learn.Mode(p.Files), Rule: fmt.Sprintf("gating for %s without a verdict: %s",
+		textx.Count(int(gateMaxAge/(24*time.Hour)), "day", "days"), why)}
+	if err := e.gateDecide(context.WithoutCancel(ctx), p, res); err != nil {
+		e.warnUnlessStopped(ctx, err, "skill gate: hold a proposal gating too long", "proposal", p.ID)
+	}
 }
 
 // gateBudget says, once per budget window, that proposal p waits for the
@@ -251,7 +285,8 @@ func (e *Engine) startGate(ctx context.Context, p store.LearnProposal) bool {
 	e.gateMu.Lock()
 	defer e.gateMu.Unlock()
 	gctx, cancel := context.WithCancel(ctx)
-	e.gateCancel, e.gateStarted, e.gateProposal = cancel, e.now(), p.ID
+	done := make(chan struct{})
+	e.gateCancel, e.gateStarted, e.gateProposal, e.gateDone = cancel, e.now(), p.ID, done
 	if b, err := json.Marshal(GateMark{Proposal: p.ID, Started: e.gateStarted}); err == nil {
 		e.setKV(ctx, KVLearnGating, string(b))
 	}
@@ -262,6 +297,7 @@ func (e *Engine) startGate(ctx context.Context, p store.LearnProposal) bool {
 			e.gateCancel = nil
 			e.gateMu.Unlock()
 			cancel()
+			close(done)
 		}()
 		stopped := false
 		if e.safely(gctx, "skill gate", learnSubject, func() { stopped = e.runGate(gctx, p) != nil }, nil) || stopped {
@@ -280,6 +316,18 @@ func (e *Engine) stopGate() {
 	if e.gateCancel != nil {
 		e.gateCancel()
 	}
+}
+
+// stopGateOf cancels the gate of proposal id if it runs and returns what is
+// closed once it ended (nil when none runs for it).
+func (e *Engine) stopGateOf(id int64) <-chan struct{} {
+	e.gateMu.Lock()
+	defer e.gateMu.Unlock()
+	if e.gateCancel == nil || e.gateProposal != id {
+		return nil
+	}
+	e.gateCancel()
+	return e.gateDone
 }
 
 // gateReplay is one replay of the gate: its score, or why it has none:
@@ -394,8 +442,17 @@ type gateWork struct {
 }
 
 // waits ends the gate short with why, p staying gating: a
-// learn.gate_waiting event and the error runGate returns.
+// learn.gate_waiting event and the error runGate returns. Every such stop
+// but a shutdown's (or a rejection's) counts (countGateAttempt), and the
+// gateAttemptLimit-th holds p for the operator instead, naming why.
 func (g *gateWork) waits(why string) error {
+	if g.ctx.Err() == nil {
+		if n := g.e.countGateAttempt(g.octx, g.p.ID, why); n >= gateAttemptLimit {
+			g.res.State, g.res.Rule = learn.GateHeld, fmt.Sprintf("%d gates in a row stopped short without a verdict, the last: %s", n, why)
+			g.res.Mode = cmp.Or(g.res.Mode, learn.Mode(g.p.Files))
+			return g.e.gateDecide(g.octx, g.p, g.res)
+		}
+	}
 	g.e.event(g.octx, "info", learnSubject, "learn.gate_waiting", fmt.Sprintf("the gate of skill proposal %d stopped and waits: %s", g.p.ID, why),
 		map[string]any{"proposal": g.p.ID, "reason": why})
 	return errors.New(why)
@@ -462,7 +519,7 @@ func (g *gateWork) replay(slot **gateRun, label, dir string, judgeOnly bool, in,
 	why := cmp.Or(oneLine(cr.Error, retroWhyRunes), "no result to score")
 	switch {
 	case ctx.Err() != nil:
-		out.stop = "the daemon is stopping"
+		out.stop = "the gate was stopped (a shutdown or a rejection)"
 	case cr.Outcome == eval.OutcomeBudget, cr.Outcome == pipeline.OutcomeUsageLimit, cr.Outcome == pipeline.OutcomeLoginRequired:
 		out.stop = fmt.Sprintf("case %s: %s (%s)", c.Name, cr.Outcome, why)
 	case cr.Outcome == eval.OutcomeFlagged:
@@ -516,13 +573,17 @@ func (g *gateWork) caseRow(gc learn.GateCase) (GateCase, bool, error) {
 		return row, false, nil
 	}
 	if g.ctx.Err() != nil {
-		return row, true, g.waits("the daemon is stopping")
+		return row, true, g.waits("the gate was stopped (a shutdown or a rejection)")
 	}
 	if stop, err := g.baseline(gc, &row); stop {
 		return row, true, err
 	}
 	if why := learn.AtBaseline(row.Case, row.Before); gc.Target && row.Skip == "" && why != "" {
 		row.Skip = why
+		return row, false, nil
+	}
+	if b, ok := g.storedCandidate(gc.Case, row.ReportsRun, ""); ok && row.Skip == "" { // a gate that stopped short made it
+		row.After, row.CandidateRun = trimScore(b.Case.Score), b.Run
 		return row, false, nil
 	}
 	if row.Skip == "" {
@@ -582,8 +643,28 @@ func (g *gateWork) baseline(gc learn.GateCase, row *GateCase) (bool, error) {
 	return false, nil
 }
 
+// storedCandidate is the oldest stored replay of case c with the
+// candidate's inputs other than run skip's, which an earlier gate of the
+// proposal that stopped short made (or one of another with the same texts:
+// the inputs hash the content): eval.Baselines over clean runs, judge-only
+// eval.JudgeBaselines on the reviewer reports of run reports. ok is false
+// when there is none.
+func (g *gateWork) storedCandidate(c eval.Case, reports, skip string) (eval.Baseline, bool) {
+	bs := eval.Baselines(g.runs, g.candIn, c)
+	if g.judgeOnly {
+		bs = eval.JudgeBaselines(g.runs, g.candIn, c, reports)
+	}
+	for _, b := range slices.Backward(bs) { // newest first: the oldest is the first replay
+		if b.Run != skip {
+			return b, true
+		}
+	}
+	return eval.Baseline{}, false
+}
+
 // retryLost replays a case the candidate lost once more before the loss
-// counts; stop when the gate ends there, with what runGate returns.
+// counts (a stored second replay of an earlier gate's counts as one); stop
+// when the gate ends there, with what runGate returns.
 func (g *gateWork) retryLost(cases []learn.GateCase) (bool, error) {
 	for i := range g.res.Cases {
 		row := &g.res.Cases[i]
@@ -591,6 +672,10 @@ func (g *gateWork) retryLost(cases []learn.GateCase) (bool, error) {
 			continue
 		}
 		c := cases[slices.IndexFunc(cases, func(gc learn.GateCase) bool { return gc.Case.Name == row.Case })].Case
+		if b, ok := g.storedCandidate(c, row.ReportsRun, row.CandidateRun); ok { // a gate that stopped short made it
+			row.Retried, row.After, row.CandidateRun = true, trimScore(b.Case.Score), b.Run
+			continue
+		}
 		rp := g.replay(&g.retry, "second", g.p.Scratch, g.judgeOnly, g.candIn, g.candRev, c, row.ReportsRun)
 		if stop, err := g.halt(rp, true); stop { // without its score the loss would count
 			return true, err
@@ -625,15 +710,36 @@ func (g *gateWork) decide() error {
 // replay without a score (kvLearnGateStops) and returns how many did since
 // a gate last decided.
 func (e *Engine) countGateStop(ctx context.Context, id int64) int {
-	var s gateStops
-	if v, ok := e.getKV(ctx, kvLearnGateStops); !ok || json.Unmarshal([]byte(v), &s) != nil || s.Proposal != id {
+	return e.countGateStops(ctx, id, func(s *gateStops) int { s.Stops++; return s.Stops })
+}
+
+// countGateAttempt counts one more gate of proposal id that stopped short,
+// why, and returns how many did since a gate last decided.
+func (e *Engine) countGateAttempt(ctx context.Context, id int64, why string) int {
+	return e.countGateStops(ctx, id, func(s *gateStops) int { s.Attempts, s.Last = s.Attempts+1, oneLine(why, 300); return s.Attempts })
+}
+
+// countGateStops applies count to proposal id's kvLearnGateStops (a mark of
+// another proposal's starts over) and stores it.
+func (e *Engine) countGateStops(ctx context.Context, id int64, count func(*gateStops) int) int {
+	s, ok := e.gateStopsOf(ctx, id)
+	if !ok {
 		s = gateStops{Proposal: id}
 	}
-	s.Stops++
+	n := count(&s)
 	if b, err := json.Marshal(s); err == nil {
 		e.setKV(ctx, kvLearnGateStops, string(b))
 	}
-	return s.Stops
+	return n
+}
+
+// gateStopsOf reads kvLearnGateStops when it counts proposal id's gates.
+func (e *Engine) gateStopsOf(ctx context.Context, id int64) (gateStops, bool) {
+	var s gateStops
+	if v, ok := e.getKV(ctx, kvLearnGateStops); !ok || json.Unmarshal([]byte(v), &s) != nil || s.Proposal != id {
+		return gateStops{}, false
+	}
+	return s, true
 }
 
 // gateDecide stores the gate's result on p and moves it from gating to the

@@ -1108,14 +1108,17 @@ func (e *Engine) requestEdit(ctx context.Context, _ LearnProposePayload) (string
 		textx.Count(len(inputs.IDs()), "input", "inputs")), nil
 }
 
-// requestLearnReject serves the n of `magnum learn --review`: the held
-// proposal is rejected with the operator's reason, which the next edit
-// reads; its worktree and branch go, its inputs go back to new or, once in
-// two rejected proposals, are dismissed, and the learned corpus is
-// rewritten at once, so a dismissed input's case is not replayed until the
-// next retro (Amendment A3). One whose branch master holds already (a
-// landing the operator asked for, cut short after the fast-forward) is
-// recorded as landed instead (learn_land.go), and the answer says so.
+// requestLearnReject serves the n of `magnum learn --review` (the y of its
+// question on a gating proposal): the held or gating proposal is rejected
+// with the operator's reason, which the next edit reads; a gate running for
+// it is stopped first (gateStopWait at most: the answer says to ask again
+// when it has not ended by then); its worktree and branch go, its inputs go
+// back to new or, once in two rejected proposals, are dismissed, and the
+// learned corpus is rewritten at once, so a dismissed input's case is not
+// replayed until the next retro (Amendment A3). One whose branch master
+// holds already (a landing the operator asked for, cut short after the
+// fast-forward) is recorded as landed instead (learn_land.go), and the
+// answer says so.
 func (e *Engine) requestLearnReject(ctx context.Context, p LearnDecisionPayload) (string, error) {
 	prop, err := e.st.LearnProposalByID(ctx, p.ID)
 	if errors.Is(err, store.ErrNotFound) {
@@ -1124,8 +1127,19 @@ func (e *Engine) requestLearnReject(ctx context.Context, p LearnDecisionPayload)
 	if err != nil {
 		return "", err
 	}
-	if prop.State != store.LearnHeld {
-		return "", fmt.Errorf("proposal %d is %s: only a held proposal waits for review", p.ID, prop.State)
+	if prop.State != store.LearnHeld && prop.State != store.LearnGating {
+		return "", fmt.Errorf("proposal %d is %s: only a held or gating proposal can be rejected", p.ID, prop.State)
+	}
+	if done := e.stopGateOf(prop.ID); done != nil {
+		t := time.NewTimer(gateStopWait)
+		defer t.Stop()
+		select {
+		case <-done:
+		case <-t.C:
+			return "", fmt.Errorf("the gate of proposal %d is stopping; ask again in a minute to reject it", p.ID)
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
 	}
 	if landed, ok, err := e.landedAlready(ctx, prop); err != nil {
 		return "", err
@@ -1138,7 +1152,7 @@ func (e *Engine) requestLearnReject(ctx context.Context, p LearnDecisionPayload)
 		return "", fmt.Errorf("proposal %d was not rejected: it is on master already as %s (a landing cut short), now recorded as skill version %d",
 			p.ID, learnShort(landed), v.ID)
 	}
-	if _, err := e.st.DecideLearnProposal(ctx, p.ID, []string{store.LearnHeld}, store.LearnRejected, strings.TrimSpace(p.Reason), e.now(), nil); err != nil {
+	if _, err := e.st.DecideLearnProposal(ctx, p.ID, []string{prop.State}, store.LearnRejected, strings.TrimSpace(p.Reason), e.now(), nil); err != nil {
 		return "", err
 	}
 	octx := context.WithoutCancel(ctx)

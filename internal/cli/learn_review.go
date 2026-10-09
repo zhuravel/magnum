@@ -1,12 +1,14 @@
 package cli
 
 // `magnum learn --review`: the oldest held skill proposal (one the gate
-// could not decide) with its evidence (the inputs it answers, as the
-// retro recorded them, and what it did with each), the diff of every file
-// its commit changes against the master it started from (read from magnum's
-// checkout, which holds its learn/<run> branch), its design-log entry and
-// the gate's result, then y/N on a terminal. The daemon decides: y sends
-// engine.ReqLearnLand, n engine.ReqLearnReject with --reason.
+// could not decide or left to the operator), else the oldest gating one,
+// with its evidence (the inputs it answers, as the retro recorded them, and
+// what it did with each), the diff of every file its commit changes against
+// the master it started from (read from magnum's checkout, which holds its
+// learn/<run> branch), its design-log entry and the gate's result, then y/N
+// on a terminal. The daemon decides: on a held proposal y sends
+// engine.ReqLearnLand, n engine.ReqLearnReject with --reason; on a gating
+// one y sends engine.ReqLearnReject (the daemon stops its gate first).
 
 import (
 	"bytes"
@@ -61,13 +63,14 @@ type learnReviewData struct {
 	Unlisted []string `json:"unlisted,omitempty"`
 }
 
-// learnReview reviews the oldest held proposal.
+// learnReview reviews the oldest held proposal, else the oldest gating one
+// (which only a rejection decides here).
 func learnReview(ctx context.Context, c *Context, d *actDeps, f learnFlags) int {
-	held, err := d.Store.LearnProposals(ctx, []string{store.LearnHeld})
+	waiting, err := d.Store.LearnProposals(ctx, []string{store.LearnHeld, store.LearnGating})
 	if err != nil {
 		return cmdFail(c, "learn", err)
 	}
-	if len(held) == 0 {
+	if len(waiting) == 0 {
 		if f.json {
 			_ = writeJSON(c.Stdout, map[string]any{"proposal": nil})
 			return 0
@@ -75,7 +78,11 @@ func learnReview(ctx context.Context, c *Context, d *actDeps, f learnFlags) int 
 		fmt.Fprintln(c.Stderr, "no skill proposal waits for review (`magnum learn` lists the proposals)")
 		return 0
 	}
-	p := held[len(held)-1] // the oldest
+	// Newest first: the last of a state is its oldest.
+	p := waiting[len(waiting)-1]
+	if held := slices.DeleteFunc(slices.Clone(waiting), func(w store.LearnProposal) bool { return w.State != store.LearnHeld }); len(held) > 0 {
+		p = held[len(held)-1]
+	}
 	data, err := learnReviewOf(ctx, d, p)
 	if err != nil {
 		return cmdFail(c, "learn", err)
@@ -90,8 +97,13 @@ func learnReview(ctx context.Context, c *Context, d *actDeps, f learnFlags) int 
 		return inspUsage(c, "learn", "--review asks y/N on a terminal; --json prints the proposal for scripts", learnUsage)
 	}
 	learnPrintReview(c.Stdout, d.StdoutTTY, data)
-	fmt.Fprintf(c.Stdout, "Land proposal %d on master? y asks the daemon to land it, n rejects it (--reason says why; the next edit reads it), "+
-		"anything else leaves it for later [y/N] ", p.ID)
+	if p.State == store.LearnGating {
+		fmt.Fprintf(c.Stdout, "Reject proposal %d? The gate has not decided it; y asks the daemon to reject it (a gate that runs for it "+
+			"stops first; --reason says why, and the next edit reads it), anything else leaves it to the gate [y/N] ", p.ID)
+	} else {
+		fmt.Fprintf(c.Stdout, "Land proposal %d on master? y asks the daemon to land it, n rejects it (--reason says why; the next edit reads it), "+
+			"anything else leaves it for later [y/N] ", p.ID)
+	}
 	answer, err := d.readLine(ctx)
 	if err != nil {
 		fmt.Fprintln(c.Stdout)
@@ -100,7 +112,15 @@ func learnReview(ctx context.Context, c *Context, d *actDeps, f learnFlags) int 
 		}
 		answer = ""
 	}
-	switch a := strings.ToLower(strings.TrimSpace(answer)); a {
+	a := strings.ToLower(strings.TrimSpace(answer))
+	if p.State == store.LearnGating {
+		if a == "y" || a == "yes" {
+			return learnDecide(ctx, c, d, engine.ReqLearnReject, engine.LearnDecisionPayload{ID: p.ID, Reason: strings.TrimSpace(f.reason)})
+		}
+		fmt.Fprintln(c.Stdout, "left to the gate: `magnum learn --review` again rejects it")
+		return 0
+	}
+	switch a {
 	case "y", "yes":
 		return learnDecide(ctx, c, d, engine.ReqLearnLand, engine.LearnDecisionPayload{ID: p.ID})
 	case "n", "no":
@@ -250,6 +270,9 @@ func learnPrintReview(w io.Writer, color bool, data learnReviewData) {
 	var g engine.GateResult
 	var gate bytes.Buffer
 	switch {
+	case len(p.Gate) == 0 && p.State == store.LearnGating:
+		fmt.Fprintf(w, "  not decided yet: the proposal is gating since %s (a gate that stops short tries again; one gating 3 days is held)\n",
+			p.CreatedAt.Local().Format("2006-01-02 15:04"))
 	case len(p.Gate) == 0:
 		fmt.Fprintln(w, "  no result")
 	case json.Unmarshal(p.Gate, &g) == nil && (g.Rule != "" || len(g.Cases) > 0):

@@ -404,8 +404,9 @@ type Engine struct {
 	gateMu       sync.Mutex // the running gate of a skill proposal (learn_gate.go)
 	gateCancel   context.CancelFunc
 	gateStarted  time.Time
-	gateProposal int64     // the proposal the running gate decides
-	gateRetry    time.Time // a gate that stopped short starts again after it
+	gateProposal int64         // the proposal the running gate decides
+	gateDone     chan struct{} // closed when the running gate ended (stopGateOf)
+	gateRetry    time.Time     // a gate that stopped short starts again after it
 	gateWG       sync.WaitGroup
 	// learnMu serializes the starts of the learn jobs (the retro, a notes
 	// curation, a skill edit, a gate; learn_schedule.go): a start holds it

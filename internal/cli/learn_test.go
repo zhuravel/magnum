@@ -249,6 +249,58 @@ func TestLearnReviewNSendsARejectWithTheReason(t *testing.T) {
 	}
 }
 
+// With none held, --review shows the oldest gating proposal, which the gate
+// has not decided, and its y rejects it (the daemon stops a gate that runs
+// for it first): a proposal whose gate never decides does not hold the
+// loop for good. A held one comes first.
+func TestLearnReviewRejectsAGatingProposal(t *testing.T) {
+	h := newLearnHarness(t)
+	if _, err := h.st.DB().ExecContext(h.ctx, "UPDATE learn_proposals SET state = ?, gate_json = NULL WHERE id = ?", store.LearnGating,
+		h.proposal.ID); err != nil {
+		t.Fatal(err)
+	}
+	h.pid = 4242
+	h.onSleep = func(h *actHarness) {
+		h.completePending(store.RequestDone, "rejected proposal 1; the next edit reads why")
+	}
+	h.d.StdinTTY = true
+	h.stdin("y\n")
+	if code := h.cmd("learn", "--review", "--reason", "the rule is too broad"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.errb.String())
+	}
+	actContains(t, h.out.String(), "skill proposal "+itoa(h.proposal.ID), "gating", "+"+strings.TrimSuffix(learnRule, "\n"),
+		"not decided yet", "Reject proposal "+itoa(h.proposal.ID)+"?", "rejected proposal 1")
+	reqs := h.requests()
+	if len(reqs) != 1 || reqs[0].Kind != engine.ReqLearnReject {
+		t.Fatalf("requests = %+v", reqs)
+	}
+	if p := actDecode[engine.LearnDecisionPayload](t, reqs[0].Payload); p.ID != h.proposal.ID || p.Reason != "the rule is too broad" {
+		t.Fatalf("payload = %+v", p)
+	}
+	// n leaves it to the gate, and sends nothing.
+	h.out.Reset()
+	h.stdin("n\n")
+	if code := h.cmd("learn", "--review"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.errb.String())
+	}
+	actContains(t, h.out.String(), "left to the gate")
+	if len(h.requests()) != 1 {
+		t.Fatalf("requests = %+v", h.requests())
+	}
+	// A held proposal is reviewed before a gating one.
+	held, err := h.st.CreateLearnProposal(h.ctx, store.LearnProposalInput{Trigger: store.LearnTriggerRequest, BaseSHA: h.base,
+		Branch: "learn/" + learnRun, CandidateSHA: h.cand, Files: []string{learn.SkillFile}, State: store.LearnHeld, At: h.now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.out.Reset()
+	h.stdin("\n")
+	if code := h.cmd("learn", "--review"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.errb.String())
+	}
+	actContains(t, h.out.String(), "skill proposal "+itoa(held.ID), "Land proposal "+itoa(held.ID)+" on master?")
+}
+
 // The review shows every file the branch changes, git's word, not only the
 // proposal's list, and names one the list lacks: magnum checked only those.
 func TestLearnReviewNamesAFileTheBranchChangesBeyondTheProposal(t *testing.T) {

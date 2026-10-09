@@ -5,7 +5,8 @@ package cli
 // the proposals that wait (for the gate, the landing or the operator), the
 // last failed and invalid ones and when the editor runs next; --propose asks
 // the daemon for a skill edit now (engine.ReqLearnPropose); --review shows
-// the oldest held proposal and asks y/N (learn_review.go). Reading never
+// the oldest held proposal (else the oldest gating one, to reject) and asks
+// y/N (learn_review.go). Reading never
 // asks GitHub; the daemon does the deciding.
 
 import (
@@ -53,7 +54,9 @@ func newLearnCmd(c *Context) *cobra.Command {
 			"--review shows the oldest held proposal: the inputs it answers with what it did with each, the diff of every "+
 			"file it changes, its design-log entry and the gate's table, and asks y/N on a terminal: y asks the daemon to "+
 			"land it at once (the answer says why when it stays held), n rejects it (--reason says why, and the next edit reads it; an input in two rejected proposals is "+
-			"dismissed and leaves the learned eval corpus at once), anything else leaves it for later. --review --json "+
+			"dismissed and leaves the learned eval corpus at once), anything else leaves it for later. With none held it "+
+			"shows the oldest gating proposal, which the gate has not decided, and asks whether to reject it: y asks the "+
+			"daemon to (it stops a gate that runs for it first), anything else leaves it to the gate. --review --json "+
 			"prints the proposal and asks nothing.\n\n"+
 			"--revert <version> asks the daemon for a proposal that restores the skill and prompt files the version changed as "+
 			"they were before it (--reason says why, in the design log's entry; no pull request, link, login or repository name), through the "+
@@ -63,7 +66,7 @@ func newLearnCmd(c *Context) *cobra.Command {
 			"had their findings declined or argued [learn] regression_points more often than the version before.",
 		func(pos []string) int { return runLearn(c, f, pos) })
 	fs := cmd.Flags()
-	fs.BoolVar(&f.review, "review", false, "review the oldest held proposal and land (y) or reject (n) it")
+	fs.BoolVar(&f.review, "review", false, "review the oldest held proposal and land (y) or reject (n) it; with none held, reject (y) a gating one")
 	fs.StringVar(&f.reason, "reason", "", "with --review: why the proposal is rejected (the next edit reads it); with --revert: why the version is reverted")
 	fs.BoolVar(&f.propose, "propose", false, "ask the daemon for a skill edit now")
 	fs.StringVar(&f.revert, "revert", "", "ask the daemon for a proposal that restores the files of the version before this landed version")

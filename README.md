@@ -1743,7 +1743,14 @@ background work for a restart. A replay of a target or of its baseline, or the s
 case, that ends without a score (herdr away, a GitHub read that failed, a judge that timed out) stops the
 gate instead of deciding without it: the proposal stays `gating` and the gate tries again 30 minutes later,
 and only the third gate of it that stops so holds it for you, naming the replay. A corpus or a list of
-flagged replays the gate cannot read stops it the same way, before any replay.
+flagged replays the gate cannot read stops it the same way, before any replay. A gate that stops short
+keeps what it replayed: the next one takes the candidate's stored replays of the cases (and a lost case's
+second replay) instead of replaying them again. Every gate of a proposal that stops short, whatever
+stopped it (the budget, a usage limit, a drain, a pause, a replay without a score; a shutdown does not
+count), is counted, and the sixth holds it for you naming the last stop; a proposal still `gating` 3 days
+after the editor made it is held too, whether or not a gate could start. Until then `magnum learn
+--review` shows the oldest `gating` proposal when none is held, and its `y` rejects it (the daemon stops a
+gate that runs for it first).
 
 A `passed` proposal lands at the next tick, at most `land_per_day` (1) a local day and not before the
 daemon restarted on the previous landed version, and never while a gate or an edit runs. The landing

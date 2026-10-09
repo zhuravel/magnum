@@ -5973,6 +5973,20 @@ skill versions); people add theirs to the sections before it, at the end of the 
   (`store.LearnInputHistory`). The prompt asks the editor to change something else for such an input or
   to skip it. Rejected: the oldest first (the stale inputs the gate cannot improve took every run) and a
   cap per kind (a day of declines would crowd every miss out, or the other way round).
+- **A gating proposal always ends** (2026-10-10, the final review of the self-improving review loop). A
+  gate that stopped short replayed every candidate case again at its next try, stops for the budget, a
+  usage limit, a drain or a pause did not count, a gating proposal had no expiry, and the operator could
+  neither see nor reject one: a six-case gate with headroom for four rounds per window stopped at the
+  budget every window, started again from its first candidate, never decided, and kept the editor
+  waiting for good. Now a gate takes the candidate's replays a stopped gate stored (`eval.Baselines` over
+  clean runs with the candidate's inputs hash, judge-only `eval.JudgeBaselines`; a lost case's second
+  replay too), every stop but a shutdown's counts (`learn.gate_stops`' `attempts`, with the last reason)
+  and the sixth (`gateAttemptLimit`) holds the proposal naming it, a proposal still gating 3 days
+  (`gateMaxAge`) after it was made is held whether or not a gate could start, and `magnum learn --review`
+  shows the oldest gating proposal when none is held and rejects it on `y` (`requestLearnReject` stops a
+  gate that runs for it first, waiting up to 20 seconds). Rejected: a column for the attempts (the mark
+  already counts the stops of the one proposal gated at a time) and expiring a gating proposal (its
+  replays are evidence the operator may want to land).
 
 ## Learned rules
 
