@@ -208,8 +208,7 @@ func TestParseInputID(t *testing.T) {
 
 // The editor's decision becomes a design-log entry like every other: its
 // first sentence in bold as the headline, the day and the inputs, then the
-// rest, wrapped at 104 runes with two-space continuation lines, appended
-// after the log's last line.
+// rest, wrapped at 104 runes with two-space continuation lines.
 func TestDecisionEntryWrapsTheHeadlineAndTheRest(t *testing.T) {
 	if h, r := Headline("The judge checks e.g. the lock.  It matters."); h != "The judge checks e.g." || r != "the lock. It matters." {
 		t.Errorf("Headline = %q, %q (a stop followed by a space ends it)", h, r)
@@ -231,8 +230,42 @@ func TestDecisionEntryWrapsTheHeadlineAndTheRest(t *testing.T) {
 	if got := strings.Join(strings.Fields(entry), " "); !strings.Contains(got, "proposal for m12, d3). Because a lost update") {
 		t.Errorf("entry text = %q", got)
 	}
-	doc := AppendDecision([]byte("# Decisions\n- old"), entry)
-	if string(doc) != "# Decisions\n- old\n"+entry {
-		t.Errorf("appended = %q", doc)
+}
+
+// The loop's entries go to a last section of their own, Learned rules,
+// which the first one creates at the end of the log; the operators' own
+// entries go to the sections before it, so an operator's entry and a
+// candidate's never touch the same lines and a landing's rebase does not
+// conflict over them.
+func TestAppendLearnedKeepsTheLoopsEntriesInTheirOwnSection(t *testing.T) {
+	first := DecisionEntry("The judge checks the lock.", "2026-10-09", []string{"m1"})
+	second := RevertEntry("Reverts skill version 1: it regressed.", "2026-10-10")
+	doc := AppendLearned([]byte("# Decisions\n\n## Operations\n\n- **Old.** It says why.\n"), first)
+	want := "# Decisions\n\n## Operations\n\n- **Old.** It says why.\n\n" + LearnedHeading + "\n\n" + learnedIntro + first
+	if string(doc) != want {
+		t.Fatalf("first entry:\n%s\nwant:\n%s", doc, want)
+	}
+	for line := range strings.SplitSeq(learnedIntro, "\n") {
+		if n := len([]rune(line)); n > DecisionWidth {
+			t.Errorf("intro line of %d runes: %q", n, line)
+		}
+	}
+	doc = AppendLearned(doc, second)
+	if string(doc) != want+second {
+		t.Fatalf("second entry:\n%s", doc)
+	}
+
+	// An entry goes to the end of the section, before a section someone
+	// added after it, and a log without a final line break gets one.
+	later := string(doc) + "\n## Later\n\n- **Someone's.** Why.\n"
+	got := string(AppendLearned([]byte(later), first))
+	if want := want + second + first + "\n## Later\n\n- **Someone's.** Why.\n"; got != want {
+		t.Fatalf("before a later section:\n%s\nwant:\n%s", got, want)
+	}
+	if got := string(AppendLearned([]byte("# Decisions\n- old"), first)); got != "# Decisions\n- old\n\n"+LearnedHeading+"\n\n"+learnedIntro+first {
+		t.Fatalf("no final line break:\n%s", got)
+	}
+	if strings.Count(got, LearnedHeading) != 1 {
+		t.Fatalf("the heading twice:\n%s", got)
 	}
 }

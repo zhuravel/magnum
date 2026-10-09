@@ -9,12 +9,13 @@ package engine
 // The run directory (<data>/learn/skill/<run>/) gives it inputs.json and
 // pins.json (the sentences the skill must keep, with its cap), and it
 // writes the files and changes.json in the worktree. magnum checks the
-// answer (learn.ValidateEdit), renders the candidate's prompts and runs the
-// format gate (the golden files regenerated, the agents, pipeline and
-// config tests, `make check-private`), with one nudge for whatever fails;
-// it then appends the decision to the worktree's docs/DECISIONS.md,
-// commits on the branch and stores the proposal for the gate (gating), or
-// stores it invalid or stopped and removes the worktree and the branch.
+// answer (learn.ValidateEdit), renders the candidate's prompts, appends the
+// decision to the Learned rules section of the worktree's docs/DECISIONS.md
+// and runs the format gate (the golden files regenerated, the agents,
+// pipeline and config tests, `make check-private`, which so sees the
+// entry), with one nudge for whatever fails; it then commits on the branch
+// and stores the proposal for the gate (gating), or stores it invalid or
+// stopped and removes the worktree and the branch.
 // The checkout's own branch and files are never touched; nothing is pushed.
 
 import (
@@ -859,8 +860,8 @@ func (e *Engine) resetEditLog(ctx context.Context, wt, base string) error {
 	return e.d.LearnGit.RestoreFrom(ctx, wt, base, learn.DecisionsFile)
 }
 
-// appendDesignLog appends entry to the design log of the worktree wt,
-// keeping the file's mode.
+// appendDesignLog adds entry to the Learned rules section of the design
+// log of the worktree wt (learn.AppendLearned), keeping the file's mode.
 func appendDesignLog(wt, entry string) error {
 	logPath := filepath.Join(wt, filepath.FromSlash(learn.DecisionsFile))
 	doc, err := fsx.ReadRegular(logPath, 64<<20)
@@ -871,7 +872,7 @@ func appendDesignLog(wt, entry string) error {
 	if err != nil {
 		return err
 	}
-	return fsx.WriteFileAtomic(logPath, learn.AppendDecision(doc, entry), fi.Mode().Perm())
+	return fsx.WriteFileAtomic(logPath, learn.AppendLearned(doc, entry), fi.Mode().Perm())
 }
 
 // decisionInputs lists the inputs changes.json accounts for: their ids,

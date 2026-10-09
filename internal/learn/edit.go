@@ -458,18 +458,47 @@ func RevertEntry(decision, day string) string {
 	return wrap(text, DecisionWidth, "- ", "  ")
 }
 
-// AppendDecision appends entry to the design log doc, after a line break
-// when doc does not end with one.
-func AppendDecision(doc []byte, entry string) []byte {
-	out := slices.Clone(doc)
-	if len(out) > 0 && out[len(out)-1] != '\n' {
-		out = append(out, '\n')
-	}
-	out = append(out, entry...)
+// LearnedHeading heads the design log's last section, which holds the
+// entries of the self-improving loop (the editor's decisions and the
+// reverts of skill versions) and nobody else's: the operators append theirs
+// to the sections before it, so an entry of theirs on master and a
+// candidate's entry never touch the same lines, and a landing's rebase
+// does not conflict over them.
+const LearnedHeading = "## Learned rules"
+
+// learnedIntro is the paragraph under LearnedHeading when the loop's first
+// entry creates the section, and the blank line after it.
+var learnedIntro = wrap("The self-improving review loop appends these: the skill editor's decisions and the reverts of skill versions, "+
+	"newest last. People add their entries to the sections above, never here.", DecisionWidth, "", "") + "\n"
+
+// learnedHeadingRe finds LearnedHeading as a line of its own.
+var learnedHeadingRe = regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(LearnedHeading) + `[ \t]*\r?$`)
+
+// AppendLearned adds entry to the design log doc at the end of its Learned
+// rules section (LearnedHeading), before a section someone added after it;
+// a log without one gets the section at its end, with an introduction,
+// after a blank line.
+func AppendLearned(doc []byte, entry string) []byte {
+	text := string(doc)
 	if !strings.HasSuffix(entry, "\n") {
-		out = append(out, '\n')
+		entry += "\n"
 	}
-	return out
+	loc := learnedHeadingRe.FindStringIndex(text)
+	if loc == nil {
+		if text = strings.TrimRight(text, "\n"); text != "" {
+			text += "\n\n"
+		}
+		return []byte(text + LearnedHeading + "\n\n" + learnedIntro + entry)
+	}
+	end := len(text)
+	if i := strings.Index(text[loc[1]:], "\n## "); i >= 0 {
+		end = loc[1] + i + 1
+	}
+	out := strings.TrimRight(text[:end], "\n") + "\n" + entry
+	if rest := text[end:]; rest != "" {
+		out += "\n" + rest
+	}
+	return []byte(out)
 }
 
 // wrap fills text's words into lines of at most width runes (a longer word

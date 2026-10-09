@@ -9557,6 +9557,13 @@ const (
 const DecisionWidth = 104
     DecisionWidth is the design log's line width.
 
+const LearnedHeading = "## Learned rules"
+    LearnedHeading heads the design log's last section, which holds the entries
+    of the self-improving loop (the editor's decisions and the reverts of skill
+    versions) and nobody else's: the operators append theirs to the sections
+    before it, so an entry of theirs on master and a candidate's entry never
+    touch the same lines, and a landing's rebase does not conflict over them.
+
 const NearLines = 3
     NearLines is how far, in lines, a comment may be from one of magnum's
     findings on the same path and still be about it.
@@ -9588,9 +9595,11 @@ func AllowedEditFile(p string) bool
     AllowedEditFile reports whether p (slash-separated, relative to the
     checkout) is one of EditAllowedGlobs.
 
-func AppendDecision(doc []byte, entry string) []byte
-    AppendDecision appends entry to the design log doc, after a line break when
-    doc does not end with one.
+func AppendLearned(doc []byte, entry string) []byte
+    AppendLearned adds entry to the design log doc at the end of its Learned
+    rules section (LearnedHeading), before a section someone added after it;
+    a log without one gets the section at its end, with an introduction, after a
+    blank line.
 
 func CaseFromDecline(d store.Decline) (eval.Case, bool)
     CaseFromDecline is the learned case of decline d: ok when the author's

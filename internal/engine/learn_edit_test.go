@@ -636,9 +636,14 @@ func TestTheEditRunAppendsTheDecisionsEntryAndCommits(t *testing.T) {
 	p := f.edit()
 	m, d := f.ids()
 	doc := f.gitOut(f.checkout, "show", p.CandidateSHA+":"+learn.DecisionsFile)
-	entry, ok := strings.CutPrefix(doc+"\n", editDecisions)
+	// The first entry of the loop opens its section at the end of the log.
+	section, ok := strings.CutPrefix(doc+"\n", editDecisions+"\n"+learn.LearnedHeading+"\n\n")
 	if !ok {
-		t.Fatalf("the design log lost its text:\n%s", doc)
+		t.Fatalf("the design log lost its text or has no %s section at its end:\n%s", learn.LearnedHeading, doc)
+	}
+	_, entry, ok := strings.Cut(section, "\n\n- **")
+	if entry = "- **" + entry; !ok {
+		t.Fatalf("the section has no entry after its introduction:\n%s", section)
 	}
 	if !strings.HasPrefix(strings.ReplaceAll(entry, "\n  ", " "), "- **The judge checks the lock of a row two writers share** (2026-10-05, "+
 		"the skill editor's proposal for "+m+", "+d+"). A reviewer caught") {
@@ -662,6 +667,37 @@ func TestTheEditRunAppendsTheDecisionsEntryAndCommits(t *testing.T) {
 	}
 	if strings.Contains(msg, "receiver rule covers it") {
 		t.Errorf("the commit message carries the editor's reasons:\n%s", msg)
+	}
+}
+
+// The editor's entry goes to the end of the design log's last section,
+// Learned rules, and the operators' entries to the sections before it: an
+// entry the operator committed on master after the edit's base does not
+// hold the landing, whose rebase finds the two apart.
+func TestAnOperatorsDesignLogEntryDoesNotHoldTheLanding(t *testing.T) {
+	f := newEditFixture(t, goodTurn)
+	learned := editDecisions + "\n" + learn.LearnedHeading + "\n\n- **An earlier learned rule** (2026-10-01, the skill editor's proposal for m1).\n"
+	writeFile(t, f.checkout, learn.DecisionsFile, learned)
+	f.gitOut(f.checkout, "commit", "--quiet", "-am", "c2")
+	p := f.edit()
+	if p.State != store.LearnGating {
+		t.Fatalf("proposal = %+v", p)
+	}
+	mine := "- **An operator's entry** (2026-10-06). It says why.\n"
+	writeFile(t, f.checkout, learn.DecisionsFile, strings.Replace(learned, "\n"+learn.LearnedHeading, mine+"\n"+learn.LearnedHeading, 1))
+	f.gitOut(f.checkout, "commit", "--quiet", "-am", "c3")
+	p, err := f.h.st.DecideLearnProposal(f.h.ctx, p.ID, []string{store.LearnGating}, store.LearnPassed, "", f.h.clock.Now(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _, err := f.h.e.landProposal(f.h.ctx, p, false); err != nil || got.State != store.LearnLanded {
+		t.Fatalf("landProposal = %+v, %v", got, err)
+	}
+	doc := f.gitOut(f.checkout, "show", "master:"+learn.DecisionsFile)
+	ops, section, _ := strings.Cut(doc, learn.LearnedHeading)
+	earlier, mineAt := strings.Index(section, "An earlier learned rule"), strings.Index(section, "**The judge checks the lock of a row two writers share**")
+	if !strings.Contains(ops, "An operator's entry") || strings.Contains(ops, "The judge checks the lock") || earlier < 0 || mineAt < earlier {
+		t.Fatalf("the landed design log:\n%s", doc)
 	}
 }
 

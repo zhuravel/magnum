@@ -2,7 +2,9 @@
 
 Why Magnum works the way it does. One entry per decision, newest last, each with the
 alternative that was rejected. Change a decision by adding a new entry that supersedes it, not by
-editing history. Code, config comments and prompts reference these by their heading.
+editing history. Code, config comments and prompts reference these by their heading. The last
+section, Learned rules, is the self-improving loop's (the skill editor's entries and the reverts of
+skill versions, which its first entry creates); people add theirs to the sections before it.
 
 ## Runtime and scope (2026-10-02)
 
@@ -5635,3 +5637,16 @@ editing history. Code, config comments and prompts reference these by their head
   `commitEdit` commits what the gate saw. A revert appends its entry, which carries the operator's
   reason, before its checks too. Rejected: running `make check-private` once more after the append
   (a failure there would find the agent gone, with no nudge left to fix it).
+- **The loop's design-log entries have a last section of their own, Learned rules** (2026-10-09, a
+  review finding on stage 3 of the self-improving review loop). The editor and the reverts appended
+  their entry at the end of `docs/DECISIONS.md`, where the operators' entries go too, so any entry
+  committed to master between a proposal's base and its landing made the landing's rebase conflict over
+  the same last lines, and the proposal was held. `learn.AppendLearned` now writes the loop's entries
+  at the end of the `## Learned rules` section (`learn.LearnedHeading`), before any section someone
+  added after it; the loop's first entry creates the section at the end of the file, under a line that
+  says whose it is. People append their entries to the sections before it (AGENTS.md and the log's
+  preamble say so), so the two never touch the same lines and git merges them. Until the first
+  landing brings the section to master, an operator's entry at the end of the file still conflicts
+  with the candidate that creates it. Rejected: writing the entry at landing time, after rebasing a
+  commit without it (the entry would not be in the tree the format gate and `make check-private`
+  checked, which the entry before this one requires).

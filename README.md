@@ -1685,8 +1685,11 @@ the `decision`, a design-log entry whose first sentence is the change. Magnum ch
 accounted for once, no other file changed, the skill within its cap (shortening, never dropping a rule)
 and keeping every pinned sentence, no pull request reference, branch, secret or home directory path in
 what it adds, no login, link or repository in the decision. Then the candidate's prompts must render, the
-`decision` is appended to the worktree's `docs/DECISIONS.md` (put back as it was before each check, so a
-nudge does not add it twice), and the format gate must pass in the worktree: the golden files regenerated
+`decision` is appended to the worktree's `docs/DECISIONS.md`, at the end of its last section, `## Learned
+rules`, which the loop's first entry creates and which holds only the loop's entries (yours go to the
+sections before it, so an entry you commit to `master` meanwhile does not make the landing's rebase
+conflict), put back as it was before each check, so a nudge does not add it twice; and the format gate
+must pass in the worktree: the golden files regenerated
 from the prompts, `go test ./internal/agents ./internal/pipeline ./internal/config`, and `make
 check-private` with the checkout's `mise` environment (its `.mise.local.toml` holds the private patterns,
 and the login check reads your registry), which so checks the entry and the commit's headline too.
@@ -1773,8 +1776,8 @@ nobody decided within 7 days of its making expires at the loop's scan, as a note
 A landed version that made things worse is reverted only with you. `magnum learn --revert <version>`
 (`--reason` says why; it goes into the design log, so no pull request, link or login) asks the daemon for a
 revert proposal: in a worktree on a new `learn/<run>` branch from `master`, the skill and prompt files the
-version's commit changed are restored as the commit before it had them, the design log gets an entry
-"Reverts skill version N: <why>", and the candidate passes the same checks and format gate as an edit (the
+version's commit changed are restored as the commit before it had them, the design log's Learned rules
+section gets an entry "Reverts skill version N: <why>", and the candidate passes the same checks and format gate as an edit (the
 restored skill within today's cap and keeping today's pinned sentences, the prompts rendering, the goldens,
 the tests, `make check-private`). The gate then replays it like any proposal, but holds it for `magnum learn
 --review` whatever it found (its table shows what the revert would lose): a revert never lands on its own.
