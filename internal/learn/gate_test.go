@@ -150,6 +150,76 @@ func TestJudgeHoldsAProposalThatImprovesOnlyDeclinedFindings(t *testing.T) {
 	}
 }
 
+// A target its baseline already covers (a miss the baseline finds every
+// time, a declined finding it no longer reports) has nothing to improve:
+// it is no target. A proposal whose every target is so fails (its inputs
+// retire), and one with another target is judged on that one.
+func TestATargetTheBaselineCoversIsNoTarget(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		before *eval.Score
+		want   string
+	}{
+		{"miss-3", score([]string{"miss-3"}, nil), SkipFoundAtBaseline},
+		{"miss-3", score(nil, []string{"miss-3"}), ""},
+		{"miss-3", &eval.Score{}, ""}, // no defect: nothing it found
+		{"decline-4", score(nil, nil), SkipNotReportedAtBaseline},
+		{"decline-4", score(nil, nil, "decline-4"), ""},
+		{"coupon-scope", score([]string{"a"}, nil), ""}, // the operator's case is never a learned target
+		{"miss-3", nil, ""},
+	} {
+		if got := AtBaseline(c.name, c.before); got != c.want {
+			t.Errorf("AtBaseline(%s, %+v) = %q, want %q", c.name, c.before, got, c.want)
+		}
+	}
+	covered := GateRow{Case: "miss-3", Target: true, Before: score([]string{"miss-3"}, nil), Skip: SkipFoundAtBaseline}
+	declined := GateRow{Case: "decline-4", Target: true, Before: score(nil, nil), Skip: SkipNotReportedAtBaseline}
+	found := GateRow{Case: "miss-6", Target: true, Before: score(nil, []string{"miss-6"}), After: score([]string{"miss-6"}, nil)}
+	unmoved := GateRow{Case: "miss-6", Target: true, Before: score(nil, []string{"miss-6"}), After: score(nil, []string{"miss-6"})}
+	other := GateRow{Case: "coupon-scope", Before: score([]string{"a"}, nil), After: score([]string{"a"}, nil)}
+	if v := Judge([]GateRow{covered, declined, other}); v.State != GateFailed || !strings.Contains(v.Rule, "at the baseline") ||
+		!strings.Contains(v.Rule, "miss-3") || !strings.Contains(v.Rule, "decline-4") {
+		t.Fatalf("every target covered at the baseline: %+v, want failed naming them", v)
+	}
+	if v := Judge([]GateRow{covered, found, other}); v.State != GatePassed || !strings.Contains(v.Rule, "miss-6 found") {
+		t.Fatalf("a covered target and one found: %+v, want passed on miss-6", v)
+	}
+	if v := Judge([]GateRow{covered, unmoved}); v.State != GateFailed || !strings.Contains(v.Rule, "no target improved (miss-6") {
+		t.Fatalf("a covered target and one unmoved: %+v, want failed on miss-6", v)
+	}
+	if v := Judge([]GateRow{covered, {Case: "miss-7", Target: true, Skip: SkipNotInCorpus}}); v.State != GateHeld {
+		t.Fatalf("a covered target and one not replayed: %+v, want held", v)
+	}
+	for _, c := range []struct {
+		row  GateRow
+		want string
+	}{{covered, store.LearnTargetBaseline}, {declined, store.LearnTargetBaseline}, {found, store.LearnTargetImproved},
+		{unmoved, store.LearnTargetNotImproved}, {other, ""}, {GateRow{Case: "miss-7", Target: true, Skip: SkipNotInCorpus}, ""}} {
+		if got := c.row.TargetGate(); got != c.want {
+			t.Errorf("TargetGate(%s %q) = %q, want %q", c.row.Case, c.row.Skip, got, c.want)
+		}
+	}
+}
+
+// A target the baseline covers gives its place among the gate's cases to
+// the first target SelectCases left out over its cap.
+func TestPromoteTargetGivesACoveredTargetsPlaceToTheNext(t *testing.T) {
+	all, none := func(string) bool { return true }, func(string) bool { return false }
+	cases := SelectCases(gateCorpus(), []string{"miss-3", "decline-4", "miss-6"}, all, none, 1)
+	if got := names(cases); !slices.Equal(got, []string{"miss-3*", "decline-4* (" + skipOverCap(1) + ")", "miss-6* (" + skipOverCap(1) + ")"}) {
+		t.Fatalf("cases = %q", got)
+	}
+	if !PromoteTarget(cases, 0) || cases[1].Skip != "" || cases[2].Skip == "" {
+		t.Fatalf("after promoting: %q, want decline-4 runnable, miss-6 still over the cap", names(cases))
+	}
+	if !PromoteTarget(cases, 1) || cases[2].Skip != "" {
+		t.Fatalf("after a second promotion: %q", names(cases))
+	}
+	if PromoteTarget(cases, 2) {
+		t.Fatal("a promotion with no target over the cap left")
+	}
+}
+
 func TestJudgeFailsALostCaseOnlyAfterARetry(t *testing.T) {
 	target := GateRow{Case: "miss-3", Target: true, Before: score(nil, []string{"miss-3"}), After: score([]string{"miss-3"}, nil)}
 	lost := GateRow{Case: "coupon-scope", Before: score([]string{"a", "b"}, nil), After: score([]string{"a"}, []string{"b"})}

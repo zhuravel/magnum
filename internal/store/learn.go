@@ -151,6 +151,11 @@ type Miss struct {
 	// proposal that used it once it is used; Misses fills them.
 	ProposalID    *int64 `json:"proposal_id,omitempty"`
 	ProposalState string `json:"proposal_state,omitempty"`
+	// Dismissed says why the decision of skill proposal DismissedBy
+	// dismissed the miss (LearnDismissed*; learn_proposal_inputs.dismissed),
+	// "" and nil when none did; Misses fills them.
+	Dismissed   string `json:"dismissed,omitempty"`
+	DismissedBy *int64 `json:"dismissed_by,omitempty"`
 }
 
 var missColumns = []string{"id", "pr_id", "source_url", "source_kind", "reviewer", "path", "line", "reviewed_sha",
@@ -158,12 +163,27 @@ var missColumns = []string{"id", "pr_id", "source_url", "source_kind", "reviewer
 	"match_json", "state", "created_at", "updated_at"}
 
 // missListColumns follow missColumns in a listing (Misses): the PR's
-// repository and number, and the latest proposal the miss was given to
-// with its state.
-const missListColumns = `rp.owner || '/' || rp.name, p.number,
+// repository and number, the latest proposal the miss was given to with its
+// state, and why the latest skill proposal that dismissed it did so, with
+// its id (learnDismissal).
+var missListColumns = `rp.owner || '/' || rp.name, p.number,
   (SELECT l.proposal_id FROM notes_proposal_misses l WHERE l.miss_id = m.id ORDER BY l.proposal_id DESC LIMIT 1),
   (SELECT np.state FROM notes_proposal_misses l JOIN notes_proposals np ON np.id = l.proposal_id
-   WHERE l.miss_id = m.id ORDER BY l.proposal_id DESC LIMIT 1)`
+   WHERE l.miss_id = m.id ORDER BY l.proposal_id DESC LIMIT 1), ` + learnDismissalMiss
+
+// learnDismissal is the two columns that say why the latest skill proposal
+// that dismissed an input of kind did so and which one it was, for the
+// input whose id the SQL expression id names.
+func learnDismissal(kind, id string) string {
+	pick := "FROM learn_proposal_inputs ld WHERE ld.kind = '" + kind + "' AND ld.input_id = " + id +
+		" AND ld.dismissed IS NOT NULL ORDER BY ld.proposal_id DESC LIMIT 1"
+	return "(SELECT ld.dismissed " + pick + "), (SELECT ld.proposal_id " + pick + ")"
+}
+
+var (
+	learnDismissalMiss    = learnDismissal(LearnInputMiss, "m.id")
+	learnDismissalDecline = learnDismissal(LearnInputDecline, "d.id")
+)
 
 // scanMiss scans a row of missColumns, followed by missListColumns when
 // withPR is set.
@@ -176,7 +196,7 @@ func scanMiss(sc scanner, withPR bool) (Miss, error) {
 		textCol(&m.Lesson), textCol(&m.Scope), jsonCol(&m.Lines), jsonCol(&m.Match), &m.State,
 		timeCol(&m.CreatedAt), timeCol(&m.UpdatedAt)}
 	if withPR {
-		dest = append(dest, &m.Repo, &m.Number, &m.ProposalID, &proposalState)
+		dest = append(dest, &m.Repo, &m.Number, &m.ProposalID, &proposalState, textCol(&m.Dismissed), &m.DismissedBy)
 	}
 	if err := sc.Scan(dest...); err != nil {
 		return m, err

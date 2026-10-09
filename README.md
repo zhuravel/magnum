@@ -1644,9 +1644,10 @@ findings wait.
 defect to find at the miss's path, lines and patterns) and per finding an author declined as `wrong` or
 `over_ranked` for every repository (`decline-<id>`, an absent defect: reporting it again is a false
 positive; an over-ranked one only at the priority Magnum posted or stronger, and no case for one posted
-without a priority), each at the commit Magnum reviewed. A retro and the rejection of a skill proposal
-(`magnum learn --review`, which can dismiss a row) rewrite the file, so a case leaves it when the rejection
-dismisses its row, or at the first retro after its pull request leaves every watch or is flagged by Codex (a
+without a priority), each at the commit Magnum reviewed. A retro, the rejection of a skill proposal
+(`magnum learn --review`, which can dismiss a row) and a gate's decision that dismisses one rewrite the file,
+so a case leaves it when its row is dismissed (but for one a gate found covered at its baseline: that case
+stays, a check that no later candidate loses it), or at the first retro after its pull request leaves every watch or is flagged by Codex (a
 flagged pull request is not replayed meanwhile: `eval run` checks the flag before each case); the file is
 rewritten only when it changes, and removed when no case is left. The learned cases grow with every retro and
 each costs a review round: `magnum eval run` replays them after your default corpus and counts them on its
@@ -1709,9 +1710,14 @@ middle of a run) goes at the start of the next edit or revert. Nothing is pushed
 `magnum daemon-restart`, install, uninstall and daemon-stop, which refuse to cut it short.
 
 The gate then decides the proposal with the eval, in the daemon's process, one case at a time. Its cases
-are the learned cases of the inputs it noted (its targets: `miss-<n>`, `decline-<n>`), then the newest other
+are the learned cases of the inputs it noted (its targets: `miss-<n>`, `decline-<n>`; first those no gate
+compared yet, then the others, the misses first and the newest first), then the newest other
 cases of your corpus and the learned one, up to `gate_cases` (6); a case whose pull request is in no watch
-or Codex-flagged is never replayed. Only the judge replays when the change touches `SKILL.md` and
+or Codex-flagged is never replayed. A target whose baseline already finds its missed finding, or no longer
+reports its declined one, is no target: the candidate is not replayed on it, the next target past the cap
+takes its place, and the input is `dismissed` ("found at the baseline", "not reported at the baseline"), so
+the editor stops noting it; its case stays in the learned corpus, a check that no later candidate loses
+it. A proposal whose every target is so fails (nothing to improve). Only the judge replays when the change touches `SKILL.md` and
 `prompts/judge-*.md` alone (on the reviewers' reports of the newest full replay whose reviewers read the
 same prompts), every role otherwise; then both judges read the same reports, so the baseline is that full
 replay when the judge it compares against made it, else that judge replayed alone on those reports. A
@@ -1721,7 +1727,9 @@ goes after the gate (never the checkout: the branch you have checked out and you
 baseline); the candidate replays with the worktree, and a case it lost is replayed once more. It passes
 when a missed finding of its targets is found more often and nothing regressed (no defect the baseline
 found lost, no declined finding reported that the baseline did not), fails when something regressed or
-no target improved (its worktree and branch go, its inputs stay `new`), and is held for you when none of
+no target improved (its worktree and branch go, its inputs stay `new`, but an input whose case two failed
+gates compared without improving it is `dismissed`, "noted in 2 failed gates"; `magnum misses --all`
+shows why and which proposal), and is held for you when none of
 its targets could be replayed, or when the only targets it improved are declined findings no longer
 reported ("only declined findings improved: review the rule it adds": one author's reply and one
 classifier's answer would otherwise take a kind of finding out of every review without you seeing it). Its replays are stored like `magnum eval

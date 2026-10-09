@@ -4,10 +4,14 @@ package store
 // skill editor drafted to the judge skill and the prompts, the inputs it was
 // given (general misses and general declined findings) with what it did with
 // each, and every landed change as a version. The inputs follow the
-// proposal's decision (DecideLearnProposal) as the misses of a notes
-// curation follow theirs: landed, the noted ones are used; rejected, one in
-// MissDismissRejections rejected proposals is dismissed; anything else
-// leaves them new. None of these tables is pruned.
+// proposal's decision (DecideLearnProposal, GateLearnProposal) as the misses
+// of a notes curation follow theirs: landed, the noted ones are used;
+// rejected, one in MissDismissRejections rejected proposals is dismissed; a
+// gate's decision dismisses one its baseline already covered, and a failed
+// gate one LearnDismissFailures failed gates compared without improving it;
+// anything else leaves them new. A dismissal says why on the proposal's link
+// row (learn_proposal_inputs.dismissed), which Misses and Declines report.
+// None of these tables is pruned.
 
 import (
 	"context"
@@ -47,9 +51,33 @@ const (
 	LearnInputDecline = "decline" // declines.id
 )
 
+// What a proposal's gate made of the learned case of an input it noted
+// (learn_proposal_inputs.gate; "" = no gate compared it).
+const (
+	LearnTargetImproved    = "improved"     // the candidate found the miss more often, or no longer reported the declined finding
+	LearnTargetNotImproved = "not_improved" // compared, and no better than the baseline
+	// LearnTargetBaseline: the baseline already found the miss, or no
+	// longer reported the declined finding: no target, and the input is
+	// dismissed.
+	LearnTargetBaseline = "baseline"
+)
+
+// Why a proposal's decision dismissed an input
+// (learn_proposal_inputs.dismissed, LearnInput.Dismissed, Miss.Dismissed,
+// Decline.Dismissed).
+const (
+	LearnDismissedFound       = "found at the baseline"        // a miss its gate's baseline found
+	LearnDismissedNotReported = "not reported at the baseline" // a decline its gate's baseline no longer reported
+	LearnDismissedFailures    = "noted in 2 failed gates"      // LearnDismissFailures
+	LearnDismissedRejections  = "in 2 rejected proposals"      // MissDismissRejections
+)
+
 var (
 	learnTriggers = []string{LearnTriggerEvidence, LearnTriggerRequest, LearnTriggerRegression}
-	learnStates   = []string{LearnEditing, LearnInvalid, LearnStopped, LearnGating, LearnPassed, LearnHeld, LearnFailed,
+	learnTargets  = []string{LearnTargetImproved, LearnTargetNotImproved, LearnTargetBaseline}
+	// learnGated are the states a gate decides a proposal to.
+	learnGated  = []string{LearnPassed, LearnHeld, LearnFailed}
+	learnStates = []string{LearnEditing, LearnInvalid, LearnStopped, LearnGating, LearnPassed, LearnHeld, LearnFailed,
 		LearnLanded, LearnRejected, LearnExpired, LearnSuperseded}
 	// learnWaiting are the states a proposal can still leave on its own
 	// way (no decided_at); every other state is a decision.
@@ -96,6 +124,30 @@ type LearnInput struct {
 	// State is the input's state now (LearnProposalInputs fills it; ""
 	// when its row is gone).
 	State string `json:"state,omitempty"`
+	// Gate is what the proposal's gate made of the input's learned case
+	// (LearnTarget*; "" = it compared none), Dismissed why the proposal's
+	// decision dismissed the input ("" = it did not), and Gated how many
+	// gates of any proposal made something of that case
+	// (LearnProposalInputs fills them; CreateLearnProposal stores none).
+	Gate      string `json:"gate,omitempty"`
+	Dismissed string `json:"dismissed,omitempty"`
+	Gated     int    `json:"gated,omitempty"`
+}
+
+// LearnTarget is what a gate made of the learned case of an input its
+// proposal noted (GateLearnProposal).
+type LearnTarget struct {
+	Kind    string // LearnInputMiss | LearnInputDecline
+	InputID int64
+	Gate    string // LearnTarget*
+}
+
+// LearnInputGate is an earlier proposal that noted an input and failed at
+// its gate, with the gate's rule (LearnInputHistory).
+type LearnInputGate struct {
+	Proposal int64  `json:"proposal"`
+	State    string `json:"state"`
+	Rule     string `json:"rule"`
 }
 
 // LearnProposalInput is a proposal to store (CreateLearnProposal).
@@ -253,22 +305,47 @@ func (s *Store) CountLearnProposals(ctx context.Context, state string) (int, err
 }
 
 // LearnProposalInputs lists what proposal id did with its inputs, by kind
-// and id, each with the input's state now.
+// and id, each with the input's state now, what the proposal's gate made of
+// its case, why the proposal dismissed it and how many gates made something
+// of its case.
 func (s *Store) LearnProposalInputs(ctx context.Context, id int64) ([]LearnInput, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT l.kind, l.input_id, l.outcome, l.location, l.reason,
   CASE l.kind WHEN 'miss' THEN (SELECT m.state FROM misses m WHERE m.id = l.input_id)
-              ELSE (SELECT d.state FROM declines d WHERE d.id = l.input_id) END
+              ELSE (SELECT d.state FROM declines d WHERE d.id = l.input_id) END,
+  l.gate, l.dismissed,
+  (SELECT COUNT(*) FROM learn_proposal_inputs o WHERE o.kind = l.kind AND o.input_id = l.input_id AND o.gate IS NOT NULL)
 FROM learn_proposal_inputs l WHERE l.proposal_id = ? ORDER BY l.kind, l.input_id`, id)
 	if err != nil {
 		return nil, fmt.Errorf("learn proposal inputs: %w", err)
 	}
 	out, err := collect(rows, func(sc scanner) (LearnInput, error) {
 		var l LearnInput
-		err := sc.Scan(&l.Kind, &l.InputID, &l.Outcome, textCol(&l.Where), textCol(&l.Reason), textCol(&l.State))
+		err := sc.Scan(&l.Kind, &l.InputID, &l.Outcome, textCol(&l.Where), textCol(&l.Reason), textCol(&l.State), textCol(&l.Gate),
+			textCol(&l.Dismissed), &l.Gated)
 		return l, err
 	})
 	if err != nil {
 		return nil, fmt.Errorf("learn proposal inputs: %w", err)
+	}
+	return out, nil
+}
+
+// LearnInputHistory lists the proposals that noted the input (kind, id) and
+// failed at their gate, oldest first, each with the gate's rule (its
+// reason): what the editor tried for it that did not help.
+func (s *Store) LearnInputHistory(ctx context.Context, kind string, id int64) ([]LearnInputGate, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT p.id, p.state, p.reason FROM learn_proposal_inputs l JOIN learn_proposals p ON p.id = l.proposal_id
+WHERE l.kind = ? AND l.input_id = ? AND l.outcome = ? AND p.state = ? ORDER BY p.id`, kind, id, MissNoted, LearnFailed)
+	if err != nil {
+		return nil, fmt.Errorf("learn input history: %w", err)
+	}
+	out, err := collect(rows, func(sc scanner) (LearnInputGate, error) {
+		var g LearnInputGate
+		err := sc.Scan(&g.Proposal, &g.State, textCol(&g.Rule))
+		return g, err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("learn input history: %w", err)
 	}
 	return out, nil
 }
@@ -303,6 +380,33 @@ WHERE l.kind = ? AND l.input_id = ? AND p.state = ? AND p.reason IS NOT NULL AND
 // It never lands one: LandLearnProposal records a landing with its commit
 // and its version.
 func (s *Store) DecideLearnProposal(ctx context.Context, id int64, from []string, to, reason string, at time.Time, gate []byte) (LearnProposal, error) {
+	return s.decideLearnProposal(ctx, id, from, to, reason, at, gate, nil)
+}
+
+// GateLearnProposal is the gate's decision on proposal id: from gating to
+// passed, held or failed, as DecideLearnProposal moves it, with what the
+// gate made of the learned case of each input it noted (targets, stored on
+// the input's link row) in the same transaction: an input whose case the
+// baseline already covered is dismissed (LearnDismissedFound,
+// LearnDismissedNotReported) whatever the verdict, and a failed decision
+// dismisses an input LearnDismissFailures failed gates compared without
+// improving it (decideLearnInputs).
+func (s *Store) GateLearnProposal(ctx context.Context, id int64, to, reason string, at time.Time, gate []byte, targets []LearnTarget) (LearnProposal, error) {
+	if err := oneOf("gate verdict", to, learnGated); err != nil {
+		return LearnProposal{}, fmt.Errorf("gate learn proposal %d: %w", id, err)
+	}
+	for _, t := range targets {
+		if err := errors.Join(oneOf("learn input kind", t.Kind, learnKinds), oneOf("gate target", t.Gate, learnTargets)); err != nil {
+			return LearnProposal{}, fmt.Errorf("gate learn proposal %d: %w", id, err)
+		}
+	}
+	return s.decideLearnProposal(ctx, id, []string{LearnGating}, to, reason, at, gate, targets)
+}
+
+// decideLearnProposal is DecideLearnProposal with the gate's targets
+// (GateLearnProposal; nil for any other decision).
+func (s *Store) decideLearnProposal(ctx context.Context, id int64, from []string, to, reason string, at time.Time, gate []byte,
+	targets []LearnTarget) (LearnProposal, error) {
 	if err := oneOf("learn proposal state", to, learnStates); err != nil {
 		return LearnProposal{}, fmt.Errorf("decide learn proposal %d: %w", id, err)
 	}
@@ -339,6 +443,9 @@ func (s *Store) DecideLearnProposal(ctx context.Context, id int64, from []string
 			to, nullString(reason), gateArg, waiting, decided, id); err != nil {
 			return err
 		}
+		if err := gateLearnInputs(ctx, tx, id, targets, at); err != nil {
+			return err
+		}
 		if err := decideLearnInputs(ctx, tx, id, to, at); err != nil {
 			return err
 		}
@@ -349,6 +456,28 @@ func (s *Store) DecideLearnProposal(ctx context.Context, id int64, from []string
 		return LearnProposal{}, fmt.Errorf("decide learn proposal %d: %w", id, err)
 	}
 	return out, nil
+}
+
+// gateLearnInputs stores what proposal id's gate made of its inputs'
+// learned cases on their link rows, and dismisses the inputs whose case the
+// baseline already covered.
+func gateLearnInputs(ctx context.Context, tx *sql.Tx, id int64, targets []LearnTarget, at time.Time) error {
+	covered := map[string][]int64{}
+	for _, t := range targets {
+		if _, err := tx.ExecContext(ctx, "UPDATE learn_proposal_inputs SET gate = ? WHERE proposal_id = ? AND kind = ? AND input_id = ?",
+			t.Gate, id, t.Kind, t.InputID); err != nil {
+			return err
+		}
+		if t.Gate == LearnTargetBaseline {
+			covered[t.Kind] = append(covered[t.Kind], t.InputID)
+		}
+	}
+	return dismissLearnInputs(ctx, tx, id, covered, func(kind string) string {
+		if kind == LearnInputDecline {
+			return LearnDismissedNotReported
+		}
+		return LearnDismissedFound
+	}, at)
 }
 
 // LandLearnProposal records that proposal id landed, in one transaction:
@@ -400,47 +529,110 @@ func (s *Store) LandLearnProposal(ctx context.Context, id int64, from []string, 
 // decideLearnInputs moves the inputs of proposal id as its new state to
 // says: landed, the noted ones that are new become used (a skipped one stays
 // new for a later edit); rejected, a new one that is now in
-// MissDismissRejections rejected proposals is dismissed; any other state
-// moves nothing.
+// MissDismissRejections rejected proposals is dismissed; failed, a new one
+// whose case this gate compared without improving it and that is now in
+// LearnDismissFailures failed proposals so is dismissed; any other state
+// moves nothing. A dismissal says why on this proposal's link row.
 func decideLearnInputs(ctx context.Context, tx *sql.Tx, id int64, to string, at time.Time) error {
-	var ids map[string][]int64
-	var target string
+	var q, why string
+	var args []any
 	switch to {
 	case LearnLanded:
-		target = MissUsed
 		rows, err := tx.QueryContext(ctx, "SELECT kind, input_id FROM learn_proposal_inputs WHERE proposal_id = ? AND outcome = ?", id, MissNoted)
 		if err != nil {
 			return err
 		}
-		if ids, err = inputIDs(rows); err != nil {
-			return err
-		}
-	case LearnRejected:
-		target = MissDismissed
-		rows, err := tx.QueryContext(ctx, `SELECT l.kind, l.input_id FROM learn_proposal_inputs l WHERE l.proposal_id = ? AND
-  (SELECT COUNT(*) FROM learn_proposal_inputs o JOIN learn_proposals p ON p.id = o.proposal_id
-   WHERE o.kind = l.kind AND o.input_id = l.input_id AND p.state = ?) >= ?`, id, LearnRejected, MissDismissRejections)
+		ids, err := inputIDs(rows)
 		if err != nil {
 			return err
 		}
-		if ids, err = inputIDs(rows); err != nil {
-			return err
-		}
+		_, err = moveLearnInputs(ctx, tx, ids, MissUsed, at)
+		return err
+	case LearnRejected:
+		q, why, args = `SELECT l.kind, l.input_id FROM learn_proposal_inputs l WHERE l.proposal_id = ? AND
+  (SELECT COUNT(*) FROM learn_proposal_inputs o JOIN learn_proposals p ON p.id = o.proposal_id
+   WHERE o.kind = l.kind AND o.input_id = l.input_id AND p.state = ?) >= ?`, LearnDismissedRejections,
+			[]any{id, LearnRejected, MissDismissRejections}
+	case LearnFailed:
+		q, why, args = `SELECT l.kind, l.input_id FROM learn_proposal_inputs l WHERE l.proposal_id = ? AND l.gate = ? AND
+  (SELECT COUNT(*) FROM learn_proposal_inputs o JOIN learn_proposals p ON p.id = o.proposal_id
+   WHERE o.kind = l.kind AND o.input_id = l.input_id AND o.gate = ? AND p.state = ?) >= ?`, LearnDismissedFailures,
+			[]any{id, LearnTargetNotImproved, LearnTargetNotImproved, LearnFailed, LearnDismissFailures}
 	default:
 		return nil
 	}
-	if ms := ids[LearnInputMiss]; len(ms) > 0 {
-		args := []any{target, FormatTime(at)}
-		for _, m := range ms {
-			args = append(args, m)
-		}
-		if _, err := tx.ExecContext(ctx, "UPDATE misses SET state = ?, updated_at = ? WHERE state = '"+MissNew+"' AND id IN ("+
-			placeholders(len(ms))+")", args...); err != nil {
-			return err
-		}
+	rows, err := tx.QueryContext(ctx, q, args...)
+	if err != nil {
+		return err
 	}
-	if ds := ids[LearnInputDecline]; len(ds) > 0 {
-		if _, err := setDeclineState(ctx, tx, ds, []string{MissNew}, target, at); err != nil {
+	ids, err := inputIDs(rows)
+	if err != nil {
+		return err
+	}
+	return dismissLearnInputs(ctx, tx, id, ids, func(string) string { return why }, at)
+}
+
+// moveLearnInputs moves the inputs of ids (by kind) that are new to state
+// to and returns those it moved, by kind.
+func moveLearnInputs(ctx context.Context, tx *sql.Tx, ids map[string][]int64, to string, at time.Time) (map[string][]int64, error) {
+	moved := map[string][]int64{}
+	for kind, table := range map[string]string{LearnInputMiss: "misses", LearnInputDecline: "declines"} {
+		list := ids[kind]
+		if len(list) == 0 {
+			continue
+		}
+		args := []any{MissNew}
+		for _, n := range list {
+			args = append(args, n)
+		}
+		rows, err := tx.QueryContext(ctx, "SELECT id FROM "+table+" WHERE state = ? AND id IN ("+placeholders(len(list))+")", args...)
+		if err != nil {
+			return nil, err
+		}
+		fresh, err := collect(rows, func(sc scanner) (int64, error) {
+			var n int64
+			err := sc.Scan(&n)
+			return n, err
+		})
+		if err != nil || len(fresh) == 0 {
+			if err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if kind == LearnInputDecline {
+			if _, err := setDeclineState(ctx, tx, fresh, []string{MissNew}, to, at); err != nil {
+				return nil, err
+			}
+		} else {
+			args := []any{to, FormatTime(at)}
+			for _, n := range fresh {
+				args = append(args, n)
+			}
+			if _, err := tx.ExecContext(ctx, "UPDATE misses SET state = ?, updated_at = ? WHERE id IN ("+placeholders(len(fresh))+")",
+				args...); err != nil {
+				return nil, err
+			}
+		}
+		moved[kind] = fresh
+	}
+	return moved, nil
+}
+
+// dismissLearnInputs dismisses the inputs of ids (by kind) that are new,
+// and records why (by kind) on proposal id's link rows of those it moved.
+func dismissLearnInputs(ctx context.Context, tx *sql.Tx, id int64, ids map[string][]int64, why func(kind string) string, at time.Time) error {
+	moved, err := moveLearnInputs(ctx, tx, ids, MissDismissed, at)
+	if err != nil {
+		return err
+	}
+	for kind, list := range moved {
+		args := []any{why(kind), id, kind}
+		for _, n := range list {
+			args = append(args, n)
+		}
+		if _, err := tx.ExecContext(ctx, "UPDATE learn_proposal_inputs SET dismissed = ? WHERE proposal_id = ? AND kind = ? AND input_id IN ("+
+			placeholders(len(list))+")", args...); err != nil {
 			return err
 		}
 	}

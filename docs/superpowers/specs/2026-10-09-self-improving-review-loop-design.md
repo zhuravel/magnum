@@ -149,8 +149,14 @@ the run is `stopped`.
 ## 4. The gate
 
 For a proposal in `gating`, the daemon selects the cases: the learned cases of the inputs it noted
-(targets) plus every other case in both corpora whose head is in a watched, non-flagged PR, capped by
-`[learn] gate_cases` (default 6, targets first, then the newest). Mode: judge-only when only
+(targets: those no gate compared yet first, then the others, the misses first and the newest first) plus
+every other case in both corpora whose head is in a watched, non-flagged PR, capped by
+`[learn] gate_cases` (default 6, targets first, then the newest). A target whose baseline already covers
+it (a `miss-` case it finds, a `decline-` case it no longer hits: `learn.AtBaseline`) is no target: it
+is skipped as "found at the baseline" or "not reported at the baseline", gives its place to the next
+target past the cap (`learn.PromoteTarget`), and its input is dismissed by the gate's decision
+(`store.GateLearnProposal`, the link row's `gate` = `baseline` and `dismissed` saying why); its learned
+case stays in the corpus as a regression check. A proposal whose every target is so fails. Mode: judge-only when only
 `SKILL.md` and `prompts/judge-*.md` changed, else full. The baseline is the newest stored run with the
 same inputs hash as the proposal's `base_sha` (through `eval.Baselines`), else a baseline replay first.
 Both read a detached worktree at `base_sha` under the learn worktrees, never the checkout (its branch and
@@ -184,8 +190,12 @@ same, before any replay. A drain or a pause is checked before each replay and st
 same way, and so does a verdict the registry did not take.
 
 The results are stored in `gate_json` (baseline run id, candidate run id, per-case before/after, the
-rule that decided) and the state becomes `passed`, `held` or `failed`. `failed` proposals keep their
-inputs `new`. a `held` one waits for the operator. a `passed` one lands.
+rule that decided) and the state becomes `passed`, `held` or `failed`, with what the gate made of each
+target on its input's link row (`improved`, `not_improved`, `baseline`). `failed` proposals keep their
+inputs `new`, but an input whose case two failed gates compared without improving it
+(`store.LearnDismissFailures`) is dismissed ("noted in 2 failed gates"). a `held` one waits for the
+operator. a `passed` one lands. `magnum misses --all` (and `--declines --all`) shows why a skill proposal
+dismissed a row and which one.
 
 ## 5. Landing and restart
 
@@ -294,8 +304,8 @@ Migration 0023: `declines` (section 1) with indexes on `(pr_id)`, `(state, scope
 `base_sha`, `branch`, `candidate_sha`, `files_json`, `state` editing|invalid|stopped|gating|passed|held|
 failed|landed|rejected|expired|superseded, `gate_json`, `reason`, `model`, `prompt_sha256`, `scratch`,
 `run_dir`, `created_at`, `waiting_since`, `decided_at`, `landed_sha`, `landed_at`), `learn_proposal_inputs`
-(`proposal_id`, `kind` miss|decline, `input_id`, `outcome` noted|skipped, `where`, `reason`, primary key
-on the three), `learn_versions` (section 7). The `misses` and `declines` state transitions move through
+(`proposal_id`, `kind` miss|decline, `input_id`, `outcome` noted|skipped, `location`, `reason`, `gate`
+improved|not_improved|baseline, `dismissed`, primary key on the three), `learn_versions` (section 7). The `misses` and `declines` state transitions move through
 the proposal decision in one transaction, as `decideProposalMisses` does, and a `dismissed` input is
 removed from the learned corpus.
 

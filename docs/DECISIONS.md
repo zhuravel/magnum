@@ -5944,6 +5944,25 @@ skill versions); people add theirs to the sections before it, at the end of the 
   (it delays the evidence a correct decline brings, needs a matching of lessons the registry does not
   have, and two wrong answers still land unseen), and holding every proposal (the misses' gains are
   measured, a decline's is only an absence).
+- **An input the gate cannot improve retires** (2026-10-10, the final review of the self-improving review
+  loop). The gate's targets were the oldest noted inputs, a miss target improved only when the candidate
+  found it more often than the baseline, and a failed gate moved no input: six general misses whose
+  stored baseline already found each took every place of every gate, every proposal failed "no target
+  improved", and each day cost an edit and a gate with nothing ever landing or retiring. Now a target
+  the baseline already covers (its miss found, its declined finding no longer reported) is no target:
+  no candidate replays it, the next target past the cap takes its place (`learn.PromoteTarget`), the
+  gate's decision dismisses its input whatever the verdict ("found at the baseline", "not reported at
+  the baseline"), and a proposal whose every target is so fails. The decision records what it made of
+  each target on the input's link row (`learn_proposal_inputs.gate`: `improved`, `not_improved`,
+  `baseline`, migration 0024, which no released build applied), and an input two failed gates compared
+  without improving it (`store.LearnDismissFailures`, beside `MissDismissRejections`) is dismissed,
+  "noted in 2 failed gates". Targets go never-gated first, then the newest, the misses first. Each
+  dismissal says why on the link row (`dismissed`), which `magnum misses --all` and `--declines --all`
+  show with the proposal. A row dismissed as covered at the baseline keeps its learned case, a check
+  that a later candidate does not lose it; every other dismissal drops it as before. Rejected: a state
+  of its own for a retired input (`dismissed` with a reason says the same, and every consumer already
+  knows `dismissed`), and counting every failed gate that noted the input (one that never replayed its
+  case, a target past the cap, would retire it unseen).
 
 ## Learned rules
 

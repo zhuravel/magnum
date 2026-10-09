@@ -4,7 +4,8 @@ package engine
 // cases"), the self-improving loop's fourth stage. A proposal the editor
 // committed waits in gating; at a tick with nothing holding it the daemon
 // replays eval cases on it in its own goroutine, one at a time: the learned
-// cases of the inputs it noted (its targets) and the newest other cases of
+// cases of the inputs it noted (its targets, those no gate made anything of
+// yet first, then the newest: gateTargets) and the newest other cases of
 // both corpora, up to [learn] gate_cases (learn.SelectCases), the judge
 // alone when only the judge skill and the judge prompts changed
 // (learn.Mode). Each case's baseline is the newest stored replay with the
@@ -14,11 +15,15 @@ package engine
 // are the operator's); judge-only, both judges read the reviewer reports of
 // the case's newest full replay whose reviewers read the candidate's
 // prompts, so the baseline is that replay when the base's judge made it,
-// else the base's judge alone on its reports (eval.JudgeBaselines). The
-// candidate replays with the proposal's worktree, and a case it lost is
-// replayed once more. learn.Judge decides: passed (it lands,
-// learn_land.go), held (the operator decides) or failed (its worktree and
-// branch go, its inputs stay new); a revert (learn_revert.go) is held
+// else the base's judge alone on its reports (eval.JudgeBaselines). A
+// target the baseline covers already (learn.AtBaseline: its miss found, its
+// declined finding no longer reported) is no target: no candidate replays
+// it, the next target past the cap takes its place, and the decision
+// dismisses its input. The candidate replays with the proposal's worktree,
+// and a case it lost is replayed once more. learn.Judge decides: passed (it
+// lands, learn_land.go), held (the operator decides) or failed (its
+// worktree and branch go, its inputs stay new but for one two failed gates
+// did not improve, which is dismissed); a revert (learn_revert.go) is held
 // whatever it decides. Every replay is stored as `magnum eval
 // run` stores one, under runs of the gate's own (a baseline, a baseline
 // judge, a candidate and a retry run, each with its agent tag), so a later
@@ -355,10 +360,13 @@ func (e *Engine) runGate(ctx context.Context, p store.LearnProposal) error {
 		textx.Count(len(cases), "case", "cases"), strings.Join(targets, ", "), mode), map[string]any{"proposal": p.ID, "cases": len(cases), "mode": mode})
 
 	defer g.finishRuns()
-	for _, gc := range cases {
+	for i, gc := range cases {
 		row, stop, err := g.caseRow(gc)
 		if stop {
 			return err
+		}
+		if row.TargetGate() == store.LearnTargetBaseline { // no target: the next one past the cap takes its place
+			learn.PromoteTarget(cases, i)
 		}
 		g.res.Cases = append(g.res.Cases, row)
 	}
@@ -499,7 +507,9 @@ func (g *gateWork) halt(rp gateReplay, need bool) (bool, error) {
 const noFullReplay = "no full replay whose reviewers read the candidate's prompts, for the judge alone"
 
 // caseRow is case gc's row: its baseline (baseline), then the candidate's
-// replay; stop when the gate ends there, with what runGate returns.
+// replay, unless the baseline covers a target already (learn.AtBaseline:
+// it is no target, and its input retires); stop when the gate ends there,
+// with what runGate returns.
 func (g *gateWork) caseRow(gc learn.GateCase) (GateCase, bool, error) {
 	row := GateCase{GateRow: learn.GateRow{Case: gc.Case.Name, Target: gc.Target, Skip: gc.Skip}}
 	if row.Skip != "" {
@@ -510,6 +520,10 @@ func (g *gateWork) caseRow(gc learn.GateCase) (GateCase, bool, error) {
 	}
 	if stop, err := g.baseline(gc, &row); stop {
 		return row, true, err
+	}
+	if why := learn.AtBaseline(row.Case, row.Before); gc.Target && row.Skip == "" && why != "" {
+		row.Skip = why
+		return row, false, nil
 	}
 	if row.Skip == "" {
 		rp := g.replay(&g.cand, "candidate", g.p.Scratch, g.judgeOnly, g.candIn, g.candRev, gc.Case, row.ReportsRun)
@@ -623,10 +637,14 @@ func (e *Engine) countGateStop(ctx context.Context, id int64) int {
 }
 
 // gateDecide stores the gate's result on p and moves it from gating to the
-// verdict's state: a failed one loses its worktree and branch (its inputs
-// stay new), a held one waits for the operator with a toast, a passed one
-// for the landing. An error when the registry did not take it: p stays
-// gating, and the gate that stopped short waits out gateRetryAfter.
+// verdict's state, with what it made of each target it replayed or found
+// covered at the baseline (store.GateLearnProposal, which retires the
+// inputs the baseline covers and dismisses one two failed gates did not
+// improve, and the learned corpus follows): a failed one loses its worktree
+// and branch (its other inputs stay new), a held one waits for the operator
+// with a toast, a passed one for the landing. An error when the registry
+// did not take it: p stays gating, and the gate that stopped short waits
+// out gateRetryAfter.
 func (e *Engine) gateDecide(ctx context.Context, p store.LearnProposal, res GateResult) error {
 	if res.Cases == nil {
 		res.Cases = []GateCase{}
@@ -635,10 +653,19 @@ func (e *Engine) gateDecide(ctx context.Context, p store.LearnProposal, res Gate
 	if err != nil {
 		return fmt.Errorf("skill gate: encode the result of proposal %d: %w", p.ID, err)
 	}
-	got, err := e.st.DecideLearnProposal(ctx, p.ID, []string{store.LearnGating}, res.State, textx.Clip(res.Rule, gateReasonRunes), e.now(), b)
+	targets, err := e.gateTargetOutcomes(ctx, p, res.Cases)
+	if err != nil {
+		return fmt.Errorf("skill gate: the inputs of proposal %d: %w", p.ID, err)
+	}
+	got, err := e.st.GateLearnProposal(ctx, p.ID, res.State, textx.Clip(res.Rule, gateReasonRunes), e.now(), b, targets)
 	if err != nil {
 		e.log.Warn("skill gate: decide the proposal", "proposal", p.ID, "state", res.State, "err", err)
 		return fmt.Errorf("skill gate: decide proposal %d: %w", p.ID, err)
+	}
+	if res.State == store.LearnFailed || slices.ContainsFunc(targets, func(t store.LearnTarget) bool { return t.Gate == store.LearnTargetBaseline }) {
+		if err := e.syncLearnedCorpus(ctx); err != nil { // an input it dismissed leaves the corpus
+			e.log.Warn("skill gate: rewrite the learned corpus after a decision", "proposal", p.ID, "err", err)
+		}
 	}
 	e.delKV(ctx, kvLearnGateStops)
 	e.event(ctx, "info", learnSubject, "learn.gate_done", fmt.Sprintf("the gate %s skill proposal %d: %s", res.State, p.ID, oneLine(res.Rule, 300)),
@@ -650,6 +677,30 @@ func (e *Engine) gateDecide(ctx context.Context, p store.LearnProposal, res Gate
 		e.noteHeld(ctx, got, res.Rule, true)
 	}
 	return nil
+}
+
+// gateTargetOutcomes is what the gate made of the learned case of each
+// input p noted, from its rows (learn.GateRow.TargetGate): covered at the
+// baseline, improved or not; a target it did not compare is left out.
+func (e *Engine) gateTargetOutcomes(ctx context.Context, p store.LearnProposal, rows []GateCase) ([]store.LearnTarget, error) {
+	if !slices.ContainsFunc(rows, func(c GateCase) bool { return c.TargetGate() != "" }) {
+		return nil, nil
+	}
+	ins, err := e.st.LearnProposalInputs(ctx, p.ID)
+	if err != nil {
+		return nil, err
+	}
+	var out []store.LearnTarget
+	for _, c := range rows {
+		gate := c.TargetGate()
+		i := slices.IndexFunc(ins, func(in store.LearnInput) bool {
+			return in.Outcome == store.MissNoted && learn.TargetName(in.Kind, in.InputID) == c.Case
+		})
+		if gate != "" && i >= 0 {
+			out = append(out, store.LearnTarget{Kind: ins[i].Kind, InputID: ins[i].InputID, Gate: gate})
+		}
+	}
+	return out, nil
 }
 
 // noteHeld tells that proposal p waits for the operator, why: a
@@ -679,21 +730,34 @@ func trimScore(s *eval.Score) *eval.Score {
 }
 
 // gateTargets are the learned cases of the inputs p noted
-// (learn.TargetName), misses first.
+// (learn.TargetName): first those no gate made anything of yet
+// (store.LearnInput.Gated), then the others, each the misses first and the
+// newest first, so the oldest inputs, an earlier gate's included, do not
+// take every place of every gate (learn.SelectCases replays them in this
+// order, up to [learn] gate_cases).
 func (e *Engine) gateTargets(ctx context.Context, p store.LearnProposal) ([]string, error) {
 	ins, err := e.st.LearnProposalInputs(ctx, p.ID)
 	if err != nil {
 		return nil, err
 	}
-	var out []string
-	for _, kind := range []string{store.LearnInputMiss, store.LearnInputDecline} {
-		for _, in := range ins {
-			if in.Kind == kind && in.Outcome == store.MissNoted {
-				out = append(out, learn.TargetName(in.Kind, in.InputID))
-			}
-		}
+	ins = slices.DeleteFunc(ins, func(in store.LearnInput) bool { return in.Outcome != store.MissNoted })
+	slices.SortStableFunc(ins, func(a, b store.LearnInput) int {
+		return cmp.Or(cmp.Compare(min(a.Gated, 1), min(b.Gated, 1)), cmp.Compare(gateKindRank(a.Kind), gateKindRank(b.Kind)),
+			cmp.Compare(b.InputID, a.InputID))
+	})
+	out := make([]string, 0, len(ins))
+	for _, in := range ins {
+		out = append(out, learn.TargetName(in.Kind, in.InputID))
 	}
 	return out, nil
+}
+
+// gateKindRank orders the targets' kinds: the misses first.
+func gateKindRank(kind string) int {
+	if kind == store.LearnInputMiss {
+		return 0
+	}
+	return 1
 }
 
 // gateWatched reports whether a watch covers pr (owner/repo#N): a replay

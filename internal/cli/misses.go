@@ -58,7 +58,8 @@ func newMissesCmd(c *Context) *cobra.Command {
 			"--class picks another class and --all lists every class and every state (with --class: that class in "+
 			"every state). A <ref> shows one PR's.\n\n"+
 			"STATE (with --all) is new until a notes curation used the miss (a proposal accounting for it was applied) "+
-			"or it was dismissed (in two rejected proposals); a miss of class miss and scope repo goes to its "+
+			"or it was dismissed (in two rejected proposals; one a skill proposal dismissed says why and which, "+
+			"\"dismissed: found at the baseline (skill proposal 12)\", as a decline's does); a miss of class miss and scope repo goes to its "+
 			"repository's next notes curation. PROPOSAL, when one is, is the latest notes proposal a miss was given to "+
 			"and where that stands (`magnum notes <repo> --review`). RAISED says what magnum did with the point: rejected:<reason> when its judge "+
 			"raised a similar finding and rejected it, blank when it never raised it. WHERE is path:line, or - for a "+
@@ -224,7 +225,7 @@ func missesRender(w io.Writer, ms []store.Miss, defRepo string, width int, state
 			inspOrDash(statusSafe(m.Severity, 0)),
 		}
 		if states {
-			row = append(row, statusSafe(m.State, 0))
+			row = append(row, missesState(m.State, m.Dismissed, m.DismissedBy))
 		}
 		row = append(row, missesRaised(m))
 		if proposals {
@@ -234,6 +235,17 @@ func missesRender(w io.Writer, ms []store.Miss, defRepo string, width int, state
 		lessons = append(lessons, statusSafe(m.Lesson, 0))
 	}
 	missesTable(w, header, rows, lessons, width)
+}
+
+// missesState is a row's STATE: its state, and for one a skill proposal's
+// decision dismissed, why and which ("dismissed: found at the baseline
+// (skill proposal 12)").
+func missesState(state, dismissed string, by *int64) string {
+	s := statusSafe(state, 0)
+	if state != store.MissDismissed || dismissed == "" || by == nil {
+		return s
+	}
+	return fmt.Sprintf("%s: %s (skill proposal %d)", s, statusSafe(dismissed, 0), *by)
 }
 
 // missesProposal is the latest notes proposal the miss was given to and its
@@ -325,7 +337,7 @@ func declinesRender(w io.Writer, ds []store.Decline, defRepo string, width int) 
 			statusSafe(d.Outcome, 0),
 			inspOrDash(statusSafe(d.Verdict, 0)),
 			inspOrDash(statusSafe(d.Scope, 0)),
-			statusSafe(d.State, 0),
+			missesState(d.State, d.Dismissed, d.DismissedBy),
 			inspOrDash(statusSafe(d.Title, missesTitleRunes)),
 		})
 		lessons = append(lessons, statusSafe(d.Lesson, 0))

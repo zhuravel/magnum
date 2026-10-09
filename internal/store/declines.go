@@ -73,6 +73,11 @@ type Decline struct {
 	// them.
 	Repo   string `json:"repo,omitempty"`
 	Number int    `json:"number,omitempty"`
+	// Dismissed says why the decision of skill proposal DismissedBy
+	// dismissed the decline (LearnDismissed*), "" and nil when none did;
+	// Declines fills them.
+	Dismissed   string `json:"dismissed,omitempty"`
+	DismissedBy *int64 `json:"dismissed_by,omitempty"`
 }
 
 var declineColumns = []string{"id", "pr_id", "source_url", "comment_id", "review_id", "run_id", "finding_row_id",
@@ -80,7 +85,8 @@ var declineColumns = []string{"id", "pr_id", "source_url", "comment_id", "review
 	"match_json", "state", "created_at", "updated_at"}
 
 // scanDecline scans a row of declineColumns, followed by the PR's
-// repository and number when withPR is set.
+// repository and number and the skill proposal's dismissal
+// (learnDismissalDecline) when withPR is set.
 func scanDecline(sc scanner, withPR bool) (Decline, error) {
 	var d Decline
 	var reviewID, line sql.NullInt64
@@ -89,7 +95,7 @@ func scanDecline(sc scanner, withPR bool) (Decline, error) {
 		&d.Outcome, textCol(&d.Verdict), textCol(&d.Lesson), textCol(&d.Scope), jsonCol(&d.Match), &d.State,
 		timeCol(&d.CreatedAt), timeCol(&d.UpdatedAt)}
 	if withPR {
-		dest = append(dest, &d.Repo, &d.Number)
+		dest = append(dest, &d.Repo, &d.Number, textCol(&d.Dismissed), &d.DismissedBy)
 	}
 	if err := sc.Scan(dest...); err != nil {
 		return d, err
@@ -205,10 +211,10 @@ func (f DeclineFilter) where() (string, []any) {
 }
 
 // Declines returns the declines f selects, newest first, each with its PR's
-// repository and number.
+// repository and number and why a skill proposal dismissed it, if one did.
 func (s *Store) Declines(ctx context.Context, f DeclineFilter) ([]Decline, error) {
 	where, args := f.where()
-	rows, err := s.db.QueryContext(ctx, "SELECT "+cols("d", declineColumns)+", rp.owner || '/' || rp.name, p.number"+
+	rows, err := s.db.QueryContext(ctx, "SELECT "+cols("d", declineColumns)+", rp.owner || '/' || rp.name, p.number, "+learnDismissalDecline+
 		" FROM declines d JOIN prs p ON p.id = d.pr_id JOIN repos rp ON rp.id = p.repo_id"+where+
 		" ORDER BY d.created_at DESC, d.id DESC", args...)
 	if err != nil {

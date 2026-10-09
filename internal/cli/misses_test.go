@@ -449,3 +449,53 @@ func TestMissesDeclinesListsAnsweredFindings(t *testing.T) {
 		t.Errorf("--declines --class: exit %d: %s", code, f.Err.String())
 	}
 }
+
+// A miss or a decline a skill gate retired says why in STATE (with --all)
+// and in the JSON: the operator sees what the loop dismissed and which
+// proposal did.
+func TestMissesSayWhyASkillGateDismissedAnInput(t *testing.T) {
+	f := missesFixture(t)
+	st := f.store()
+	ctx := context.Background()
+	repo, err := st.RepoByFullName(ctx, "talkable/talkable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pr, err := st.PRByRepoNumber(ctx, repo.ID, 101)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := missSeed(t, st, pr, store.Miss{SourceURL: "https://example.com/c/9", Path: "app/x.rb", Line: 4, Class: store.MissMiss, Severity: "P1",
+		Scope: store.MissScopeGeneral, Title: "Covered race", Lesson: "When two writers share a row, check the lock."})
+	d := declineSeed(t, st, pr, 9, store.Decline{Path: "app/y.rb", Line: 5, Title: "Covered decline", Priority: "P2",
+		Outcome: store.DeclineDeclined, Verdict: store.VerdictWrong, Scope: store.MissScopeGeneral, Match: []string{"y"},
+		Lesson: "When the caller checks it, do not ask for a guard."})
+	p, err := st.CreateLearnProposal(ctx, store.LearnProposalInput{Trigger: store.LearnTriggerEvidence, BaseSHA: "b", Branch: "learn/x",
+		State: store.LearnGating, Inputs: []store.LearnInput{{Kind: store.LearnInputMiss, InputID: m.ID, Outcome: store.MissNoted, Where: "s4"},
+			{Kind: store.LearnInputDecline, InputID: d.ID, Outcome: store.MissNoted, Where: "s5"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.GateLearnProposal(ctx, p.ID, store.LearnFailed, "nothing to improve", time.Time{}, nil, []store.LearnTarget{
+		{Kind: store.LearnInputMiss, InputID: m.ID, Gate: store.LearnTargetBaseline},
+		{Kind: store.LearnInputDecline, InputID: d.ID, Gate: store.LearnTargetBaseline}}); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	want := "dismissed: found at the baseline (skill proposal " + strconv.FormatInt(p.ID, 10) + ")"
+	if out := missesRun(t, f, "--all"); !strings.Contains(out, want) {
+		t.Fatalf("misses --all lacks %q:\n%s", want, out)
+	}
+	want = "dismissed: not reported at the baseline (skill proposal " + strconv.FormatInt(p.ID, 10) + ")"
+	if out := missesRun(t, f, "--declines", "--all"); !strings.Contains(out, want) {
+		t.Fatalf("misses --declines --all lacks %q:\n%s", want, out)
+	}
+	var ms []store.Miss
+	if err := json.Unmarshal([]byte(missesRun(t, f, "--all", "--json")), &ms); err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(ms, func(x store.Miss) bool { return x.ID == m.ID })
+	if i < 0 || ms[i].Dismissed != store.LearnDismissedFound || ms[i].DismissedBy == nil || *ms[i].DismissedBy != p.ID {
+		t.Fatalf("--json = %+v", ms)
+	}
+}

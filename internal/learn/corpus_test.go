@@ -165,6 +165,31 @@ func TestCaseFromDeclineMakesAnAbsentDefect(t *testing.T) {
 	}
 }
 
+// A row a gate dismissed because its baseline covers it already keeps its
+// learned case: it checks that a later candidate does not lose what the
+// skill does. Any other dismissal drops it.
+func TestALearnedCaseOutlivesADismissalAtTheBaseline(t *testing.T) {
+	m := generalMiss()
+	m.State, m.Dismissed = store.MissDismissed, store.LearnDismissedFound
+	if _, ok := CaseFromMiss(m); !ok {
+		t.Error("a miss found at the baseline lost its case")
+	}
+	d := generalDecline()
+	d.State, d.Dismissed = store.MissDismissed, store.LearnDismissedNotReported
+	if _, ok := CaseFromDecline(d); !ok {
+		t.Error("a decline not reported at the baseline lost its case")
+	}
+	for _, why := range []string{store.LearnDismissedFailures, store.LearnDismissedRejections, ""} {
+		m.Dismissed, d.Dismissed = why, why
+		if _, ok := CaseFromMiss(m); ok {
+			t.Errorf("a miss dismissed %q kept its case", why)
+		}
+		if _, ok := CaseFromDecline(d); ok {
+			t.Errorf("a decline dismissed %q kept its case", why)
+		}
+	}
+}
+
 // stripped is c with its defects' compiled regexps dropped (Validate compiles them).
 func stripped(c eval.Case) eval.Case {
 	out := c

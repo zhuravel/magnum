@@ -70,6 +70,7 @@ func TestMigrationV23ToV24LearnProposals(t *testing.T) {
 		"state":   proposal(LearnTriggerEvidence, "pending"),
 		"kind":    input("comment", MissNoted),
 		"outcome": input(LearnInputMiss, "maybe"),
+		"gate":    `INSERT INTO learn_proposal_inputs (proposal_id, kind, input_id, outcome, gate) VALUES (1, 'miss', 10, 'noted', 'better')`,
 	} {
 		if _, err := st.DB().ExecContext(ctx, q); err == nil {
 			t.Errorf("%s: the CHECK accepted a bad value", name)
@@ -324,8 +325,8 @@ func TestAnInputRejectedTwiceIsDismissed(t *testing.T) {
 		t.Fatal("an expiry dismissed an input")
 	}
 	reject("", LearnInput{Kind: LearnInputMiss, InputID: m.ID, Outcome: MissSkipped, Reason: "covered"})
-	if s := missByID(t, st, m.ID).State; s != MissDismissed {
-		t.Fatalf("a miss in two rejected proposals = %s, want dismissed", s)
+	if mm := missByID(t, st, m.ID); mm.State != MissDismissed || mm.Dismissed != LearnDismissedRejections {
+		t.Fatalf("a miss in two rejected proposals = %s %q, want dismissed saying why", mm.State, mm.Dismissed)
 	}
 	if s := declineByID(t, st, d.ID).State; s != MissNew {
 		t.Fatalf("a decline in one rejected proposal = %s, want new", s)
@@ -374,5 +375,161 @@ func TestLearnVersionsNewestFirst(t *testing.T) {
 	if vs[1].ProposalID != p.ID || vs[1].RestartedAt == nil || !vs[1].RestartedAt.Equal(t0.Add(10*time.Minute)) || vs[1].LandedSHA != "aaa" ||
 		vs[0].ProposalID != 0 || vs[0].RestartedAt != nil || !strings.HasPrefix(vs[0].SkillSHA, "s2") {
 		t.Fatalf("versions = %+v", vs)
+	}
+}
+
+// gateLearn moves proposal p from gating to state as its gate would, with
+// what the gate made of its targets.
+func gateLearn(t *testing.T, st *Store, p LearnProposal, state, rule string, targets ...LearnTarget) LearnProposal {
+	t.Helper()
+	got, err := st.GateLearnProposal(context.Background(), p.ID, state, rule, time.Time{}, []byte(`{"state":"`+state+`"}`), targets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+// A target its baseline already covers (a miss the baseline finds, a
+// decline it no longer reports) is no target: the gate's decision
+// dismisses the input, whatever the verdict, and its link row and
+// `magnum misses` say why.
+func TestAGateRetiresAnInputItsBaselineAlreadyCovers(t *testing.T) {
+	st, _ := newStore(t)
+	ctx := context.Background()
+	repo := mustRepo(t, st)
+	pr := mustPR(t, st, repo.ID, 7, PRReviewed)
+	m, other := generalMiss(t, st, pr, 40), generalMiss(t, st, pr, 41)
+	d := generalDecline(t, st, pr, 1)
+	p := proposeLearn(t, st, LearnInput{Kind: LearnInputMiss, InputID: m.ID, Outcome: MissNoted, Where: "section 4"},
+		LearnInput{Kind: LearnInputMiss, InputID: other.ID, Outcome: MissNoted, Where: "section 4"},
+		LearnInput{Kind: LearnInputDecline, InputID: d.ID, Outcome: MissNoted, Where: "section 5"})
+	got := gateLearn(t, st, p, LearnHeld, "no target could be replayed", LearnTarget{Kind: LearnInputMiss, InputID: m.ID, Gate: LearnTargetBaseline},
+		LearnTarget{Kind: LearnInputDecline, InputID: d.ID, Gate: LearnTargetBaseline})
+	if got.State != LearnHeld || got.Reason != "no target could be replayed" || got.WaitingSince == nil {
+		t.Fatalf("proposal = %+v", got)
+	}
+	if mm := missByID(t, st, m.ID); mm.State != MissDismissed || mm.Dismissed != LearnDismissedFound || mm.DismissedBy == nil || *mm.DismissedBy != p.ID {
+		t.Fatalf("the miss found at the baseline = %s %q by %v, want dismissed by proposal %d", mm.State, mm.Dismissed, mm.DismissedBy, p.ID)
+	}
+	if dd := declineByID(t, st, d.ID); dd.State != MissDismissed || dd.Dismissed != LearnDismissedNotReported || dd.DismissedBy == nil {
+		t.Fatalf("the decline not reported at the baseline = %+v", dd)
+	}
+	if om := missByID(t, st, other.ID); om.State != MissNew || om.Dismissed != "" || om.DismissedBy != nil {
+		t.Fatalf("the other miss = %+v, want new", om)
+	}
+	ins, err := st.LearnProposalInputs(ctx, p.ID)
+	if err != nil || len(ins) != 3 {
+		t.Fatalf("inputs = %+v, %v", ins, err)
+	}
+	for _, in := range ins {
+		want := LearnInput{Kind: in.Kind, InputID: in.InputID, Outcome: MissNoted, Where: in.Where, State: MissNew}
+		switch {
+		case in.Kind == LearnInputMiss && in.InputID == m.ID:
+			want.Gate, want.Gated, want.Dismissed, want.State = LearnTargetBaseline, 1, LearnDismissedFound, MissDismissed
+		case in.Kind == LearnInputDecline && in.InputID == d.ID:
+			want.Gate, want.Gated, want.Dismissed, want.State = LearnTargetBaseline, 1, LearnDismissedNotReported, MissDismissed
+		}
+		if !reflect.DeepEqual(in, want) {
+			t.Errorf("input %s %d = %+v, want %+v", in.Kind, in.InputID, in, want)
+		}
+	}
+	// Only the gate decides from gating with targets, and only to a gate's
+	// state: anything else is refused and changes nothing.
+	q := proposeLearn(t, st, LearnInput{Kind: LearnInputMiss, InputID: other.ID, Outcome: MissNoted, Where: "section 4"})
+	for _, to := range []string{LearnRejected, LearnLanded, LearnGating} {
+		if _, err := st.GateLearnProposal(ctx, q.ID, to, "", time.Time{}, nil, nil); err == nil {
+			t.Errorf("a gate's decision to %s was taken", to)
+		}
+	}
+	if _, err := st.GateLearnProposal(ctx, q.ID, LearnFailed, "", time.Time{}, nil,
+		[]LearnTarget{{Kind: LearnInputMiss, InputID: other.ID, Gate: "better"}}); err == nil {
+		t.Error("an unknown target outcome was taken")
+	}
+	if cur, _ := st.LearnProposalByID(ctx, q.ID); cur.State != LearnGating {
+		t.Fatalf("a refused decision moved the proposal to %s", cur.State)
+	}
+}
+
+// An input whose case two failed gates compared and did not improve is
+// dismissed: the editor would note it again every run, and every gate of it
+// would fail the same way. A failed gate in which it improved (another case
+// regressed), a held one and a gate that never compared it do not count.
+func TestAnInputTwoFailedGatesDidNotImproveIsDismissed(t *testing.T) {
+	st, clk := newStore(t)
+	ctx := context.Background()
+	repo := mustRepo(t, st)
+	pr := mustPR(t, st, repo.ID, 7, PRReviewed)
+	m, better, never := generalMiss(t, st, pr, 40), generalMiss(t, st, pr, 41), generalMiss(t, st, pr, 42)
+	noted := func(ids ...int64) []LearnInput {
+		var out []LearnInput
+		for _, id := range ids {
+			out = append(out, LearnInput{Kind: LearnInputMiss, InputID: id, Outcome: MissNoted, Where: "section 4"})
+		}
+		return out
+	}
+	gate := func(state string, targets ...LearnTarget) LearnProposal {
+		t.Helper()
+		clk.Add(time.Minute)
+		return gateLearn(t, st, proposeLearn(t, st, noted(m.ID, better.ID, never.ID)...), state, "no target improved", targets...)
+	}
+	target := func(id int64, outcome string) LearnTarget {
+		return LearnTarget{Kind: LearnInputMiss, InputID: id, Gate: outcome}
+	}
+	gate(LearnFailed, target(m.ID, LearnTargetNotImproved), target(better.ID, LearnTargetImproved))
+	gate(LearnHeld, target(m.ID, LearnTargetNotImproved))
+	if mm := missByID(t, st, m.ID); mm.State != MissNew {
+		t.Fatalf("after one failed gate and a held one: %s, want new", mm.State)
+	}
+	last := gate(LearnFailed, target(m.ID, LearnTargetNotImproved), target(better.ID, LearnTargetImproved))
+	if mm := missByID(t, st, m.ID); mm.State != MissDismissed || mm.Dismissed != LearnDismissedFailures || mm.DismissedBy == nil || *mm.DismissedBy != last.ID {
+		t.Fatalf("after two failed gates = %s %q by %v, want dismissed by %d", mm.State, mm.Dismissed, mm.DismissedBy, last.ID)
+	}
+	for _, id := range []int64{better.ID, never.ID} {
+		if s := missByID(t, st, id).State; s != MissNew {
+			t.Errorf("miss %d = %s, want new", id, s)
+		}
+	}
+	if LearnDismissFailures != 2 || !strings.Contains(LearnDismissedFailures, "2") {
+		t.Fatalf("LearnDismissFailures = %d, said %q", LearnDismissFailures, LearnDismissedFailures)
+	}
+	ins, err := st.LearnProposalInputs(ctx, last.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gated := map[int64]int{}
+	for _, in := range ins {
+		gated[in.InputID] = in.Gated
+	}
+	if gated[m.ID] != 3 || gated[better.ID] != 2 || gated[never.ID] != 0 {
+		t.Fatalf("gates that compared each input = %v", gated)
+	}
+}
+
+// The editor reads the failed gates of the proposals that noted an input,
+// oldest first, with the gate's rule.
+func TestLearnInputHistoryListsTheFailedGatesThatNotedIt(t *testing.T) {
+	st, clk := newStore(t)
+	ctx := context.Background()
+	repo := mustRepo(t, st)
+	pr := mustPR(t, st, repo.ID, 7, PRReviewed)
+	m := generalMiss(t, st, pr, 40)
+	in := LearnInput{Kind: LearnInputMiss, InputID: m.ID, Outcome: MissNoted, Where: "section 4"}
+	first := gateLearn(t, st, proposeLearn(t, st, in), LearnFailed, "no target improved (miss-1 as at the baseline)")
+	clk.Add(time.Minute)
+	gateLearn(t, st, proposeLearn(t, st, in), LearnHeld, "no target could be replayed")
+	clk.Add(time.Minute)
+	skipped := in
+	skipped.Outcome, skipped.Where, skipped.Reason = MissSkipped, "", "covered"
+	gateLearn(t, st, proposeLearn(t, st, skipped), LearnFailed, "regressed: coupon-scope lost scope")
+	clk.Add(time.Minute)
+	second := gateLearn(t, st, proposeLearn(t, st, in), LearnFailed, "regressed: coupon-scope lost scope")
+	got, err := st.LearnInputHistory(ctx, LearnInputMiss, m.ID)
+	want := []LearnInputGate{{Proposal: first.ID, State: LearnFailed, Rule: "no target improved (miss-1 as at the baseline)"},
+		{Proposal: second.ID, State: LearnFailed, Rule: "regressed: coupon-scope lost scope"}}
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("history = %+v, %v\nwant %+v", got, err, want)
+	}
+	if got, err := st.LearnInputHistory(ctx, LearnInputDecline, m.ID); err != nil || len(got) != 0 {
+		t.Fatalf("another kind's history = %+v, %v", got, err)
 	}
 }

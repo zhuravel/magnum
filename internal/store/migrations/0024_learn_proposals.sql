@@ -8,9 +8,12 @@
 -- operator (waiting_since: passed or held, which its expiry counts from), decided and landed (landed_sha, the
 -- commit master moved to); a revert names the version whose files it restores as they were before it (reverts). learn_proposal_inputs links a proposal to every input it was given, a general miss
 -- (kind miss, misses.id) or a general declined finding (kind decline, declines.id), with what the editor did with
--- it: noted, with where the change covers it (location), or skipped, with a one-line reason. The inputs stay new
+-- it: noted, with where the change covers it (location), or skipped, with a one-line reason; what the proposal's gate
+-- made of the input's learned case (gate: improved, not_improved, or baseline when the baseline already covered it;
+-- NULL when no gate compared it) and why the proposal's decision dismissed the input (dismissed). The inputs stay new
 -- while a proposal waits; a landed proposal uses its noted ones, a rejected one dismisses an input that is in two
--- rejected proposals (misses.state, declines.state). learn_versions records every landed change: the proposal, the
+-- rejected proposals, a gate's decision one its baseline covered, and a failed one an input two failed gates compared
+-- without improving it (misses.state, declines.state). learn_versions records every landed change: the proposal, the
 -- commit, the hashes of the skill and the prompts it landed, when it landed and when the daemon first restarted on
 -- it, which starts its measurement window. No retention prunes these tables. Applied when PRAGMA user_version < 24.
 -- Only adds tables and indexes: no deployed table is rewritten.
@@ -46,6 +49,8 @@ CREATE TABLE learn_proposal_inputs (
   outcome     TEXT NOT NULL CHECK (outcome IN ('noted','skipped')),
   location    TEXT,
   reason      TEXT,
+  gate        TEXT CHECK (gate IN ('improved','not_improved','baseline')),
+  dismissed   TEXT,
   PRIMARY KEY (proposal_id, kind, input_id)
 );
 CREATE INDEX learn_proposal_inputs_input ON learn_proposal_inputs(kind, input_id);

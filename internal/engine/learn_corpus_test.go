@@ -47,6 +47,24 @@ func corpusMiss(h *harness, pr store.PR, n int, scope string) store.Miss {
 	return m
 }
 
+// corpusDecline stores a general decline of PR prID, declined as wrong at
+// P1 on the reviewed commit retroShaA, of comment n.
+func corpusDecline(h *harness, prID int64, n int) store.Decline {
+	h.t.Helper()
+	pr, err := h.st.PRByID(h.ctx, prID)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	d, err := h.st.UpsertDecline(h.ctx, store.Decline{PRID: pr.ID, SourceURL: pr.URL + "#discussion_d" + strconv.Itoa(n), CommentID: int64(n),
+		Path: "lib/token.rb", Line: 30, Title: "Token can be nil", Priority: "P1", ReviewedSHA: retroShaA,
+		Outcome: store.DeclineDeclined, Verdict: store.VerdictWrong, Lesson: "When the caller checks a value, do not ask for a guard.",
+		Scope: store.MissScopeGeneral, Match: []string{"nil"}})
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return d
+}
+
 // learnedCases are the case names of the learned corpus; nil when there is no file.
 func learnedCases(h *harness) []string {
 	h.t.Helper()

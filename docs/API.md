@@ -9582,8 +9582,13 @@ const (
 	SkipNotInCorpus = "not in the corpus"
 	SkipFlagged     = "flagged: never replayed"
 	SkipNotWatched  = "not watched"
+	// SkipFoundAtBaseline and SkipNotReportedAtBaseline are a target the
+	// baseline covers already: its input retires (store.LearnTargetBaseline).
+	SkipFoundAtBaseline       = store.LearnDismissedFound
+	SkipNotReportedAtBaseline = store.LearnDismissedNotReported
 )
-    Why SelectCases leaves a target out.
+    Why SelectCases leaves a target out, and why the gate does once it has the
+    target's baseline (AtBaseline).
 
 const (
 	CandidatesFile = "candidates.json" // what Build kept, for the classifier
@@ -9659,27 +9664,35 @@ func AppendLearned(doc []byte, entry string) []byte
     A log without the section gets it at its end, with the introduction, after a
     blank line.
 
+func AtBaseline(name string, before *eval.Score) string
+    AtBaseline is why target name is no target once before, its baseline's
+    score, is known ("" = it is one): a miss- case whose every defect the
+    baseline found (SkipFoundAtBaseline) or a decline- case whose declined
+    finding the baseline no longer reports (SkipNotReportedAtBaseline): nothing
+    is left to improve.
+
 func CaseFromDecline(d store.Decline) (eval.Case, bool)
     CaseFromDecline is the learned case of decline d: ok when the author's
     answer showed magnum's finding wrong or ranked too high (verdict wrong or
     over_ranked) for every repository (scope general), and d is still new or
-    used. The case is decline-<id> on d's PR at the reviewed commit, why the
-    finding's title, with one absent defect, decline-<id>, on the finding's path
-    (literally) and line with d's match expressions: a finding that reports it
-    again is a false positive. An over-ranked one is a hit only at the priority
-    magnum posted or stronger (eval.Defect.Severity), so the point ranked
-    lower is no hit; one whose posted priority is not P0 to P3 makes no case,
-    since every matching finding would be a hit and the point could stop being
-    one only by not being reported.
+    used (or dismissed as covered at a gate's baseline, learnedState). The case
+    is decline-<id> on d's PR at the reviewed commit, why the finding's title,
+    with one absent defect, decline-<id>, on the finding's path (literally) and
+    line with d's match expressions: a finding that reports it again is a false
+    positive. An over-ranked one is a hit only at the priority magnum posted or
+    stronger (eval.Defect.Severity), so the point ranked lower is no hit; one
+    whose posted priority is not P0 to P3 makes no case, since every matching
+    finding would be a hit and the point could stop being one only by not being
+    reported.
 
 func CaseFromMiss(m store.Miss) (eval.Case, bool)
     CaseFromMiss is the learned case of miss m: ok when m is a miss (class miss)
-    of scope general, P0 to P2, still new or used, on a reviewed commit the case
-    can pin. The case is miss-<id> on m's PR at that commit, why its title,
-    with one defect to find, miss-<id>: m's path (literally, not as a glob), its
-    lines (or its line), the match expressions that compile and its severity.
-    A row the corpus would refuse (no path nor match left, a PR it cannot name)
-    makes no case.
+    of scope general, P0 to P2, still new or used (or dismissed as covered at a
+    gate's baseline, learnedState), on a reviewed commit the case can pin. The
+    case is miss-<id> on m's PR at that commit, why its title, with one defect
+    to find, miss-<id>: m's path (literally, not as a glob), its lines (or its
+    line), the match expressions that compile and its severity. A row the corpus
+    would refuse (no path nor match left, a PR it cannot name) makes no case.
 
 func DecisionEntry(decision, day string, inputs []string) string
     DecisionEntry is the design log's entry for an editor's decision:
@@ -9735,6 +9748,11 @@ func ParseOutput(data []byte, cands []Candidate, rejected []Rejected, threads []
 func ParsePins(b []byte) ([]string, int, error)
     ParsePins reads a pins file: the pins and the skill's cap. A file without a
     cap line is an error.
+
+func PromoteTarget(cases []GateCase, after int) bool
+    PromoteTarget gives the place of the target at cases[after], which the
+    baseline covers, to the first target after it that SelectCases left out over
+    its cap, which becomes runnable; false when there is none.
 
 func RevertEntry(decision, day string) string
     RevertEntry is the design log's entry for a revert of a skill version:
@@ -9981,6 +9999,11 @@ func (r GateRow) NewHits() []string
     NewHits names the absent defects (findings authors declined) the candidate
     reported that the baseline did not.
 
+func (r GateRow) TargetGate() string
+    TargetGate is what target row r says of its input's learned case
+    (store.LearnTarget*): covered at the baseline, improved or not once
+    compared; "" for a row that is no target or was not compared.
+
 type Input struct {
 	// Author is the pull request's author in Account form
 	// (github.Account): its own comments are never candidates.
@@ -10187,8 +10210,10 @@ func Judge(rows []GateRow) Verdict
     else it passes one whose targets include a miss that improved (improved),
     and holds one whose improved targets are all declines (RuleOnlyDeclines:
     one author's reply and one classifier's answer would otherwise remove a
-    class of findings from every review unseen); else it holds one none of whose
-    targets could be compared, and fails the rest (no target improved).
+    class of findings from every review unseen); a target the baseline covers
+    (AtBaseline) is no target, so it fails one whose every target is so (nothing
+    to improve); else it holds one none of whose targets could be compared,
+    and fails the rest (no target improved).
 
 ```
 
@@ -13411,6 +13436,27 @@ const (
     The kinds of a proposal's input (learn_proposal_inputs.kind).
 
 const (
+	LearnTargetImproved    = "improved"     // the candidate found the miss more often, or no longer reported the declined finding
+	LearnTargetNotImproved = "not_improved" // compared, and no better than the baseline
+	// LearnTargetBaseline: the baseline already found the miss, or no
+	// longer reported the declined finding: no target, and the input is
+	// dismissed.
+	LearnTargetBaseline = "baseline"
+)
+    What a proposal's gate made of the learned case of an input it noted
+    (learn_proposal_inputs.gate; "" = no gate compared it).
+
+const (
+	LearnDismissedFound       = "found at the baseline"        // a miss its gate's baseline found
+	LearnDismissedNotReported = "not reported at the baseline" // a decline its gate's baseline no longer reported
+	LearnDismissedFailures    = "noted in 2 failed gates"      // LearnDismissFailures
+	LearnDismissedRejections  = "in 2 rejected proposals"      // MissDismissRejections
+)
+    Why a proposal's decision dismissed an input
+    (learn_proposal_inputs.dismissed, LearnInput.Dismissed, Miss.Dismissed,
+    Decline.Dismissed).
+
+const (
 	RepoModePool  = "pool"
 	RepoModePerPR = "per_pr"
 )
@@ -13593,6 +13639,12 @@ const (
 )
     Verdicts: what a review concluded, whatever its repository lets it post
     (ReviewSummary.Verdict).
+
+const LearnDismissFailures = 2
+    LearnDismissFailures is how many failed gates of skill proposals may compare
+    an input's learned case without improving it before the input is dismissed
+    (learn_proposal_inputs.gate not_improved): an editor that notes it again
+    would fail the same way.
 
 const MissDismissRejections = 2
     MissDismissRejections is how many rejected proposals a miss may be in before
@@ -14030,6 +14082,11 @@ type Decline struct {
 	// them.
 	Repo   string `json:"repo,omitempty"`
 	Number int    `json:"number,omitempty"`
+	// Dismissed says why the decision of skill proposal DismissedBy
+	// dismissed the decline (LearnDismissed*), "" and nil when none did;
+	// Declines fills them.
+	Dismissed   string `json:"dismissed,omitempty"`
+	DismissedBy *int64 `json:"dismissed_by,omitempty"`
 }
     Decline is how an author answered one of magnum's posted findings
     (declines).
@@ -14205,9 +14262,25 @@ type LearnInput struct {
 	// State is the input's state now (LearnProposalInputs fills it; ""
 	// when its row is gone).
 	State string `json:"state,omitempty"`
+	// Gate is what the proposal's gate made of the input's learned case
+	// (LearnTarget*; "" = it compared none), Dismissed why the proposal's
+	// decision dismissed the input ("" = it did not), and Gated how many
+	// gates of any proposal made something of that case
+	// (LearnProposalInputs fills them; CreateLearnProposal stores none).
+	Gate      string `json:"gate,omitempty"`
+	Dismissed string `json:"dismissed,omitempty"`
+	Gated     int    `json:"gated,omitempty"`
 }
     LearnInput is what a proposal did with one input it was given
     (learn_proposal_inputs).
+
+type LearnInputGate struct {
+	Proposal int64  `json:"proposal"`
+	State    string `json:"state"`
+	Rule     string `json:"rule"`
+}
+    LearnInputGate is an earlier proposal that noted an input and failed at its
+    gate, with the gate's rule (LearnInputHistory).
 
 type LearnProposal struct {
 	ID           int64           `json:"id"`
@@ -14256,6 +14329,14 @@ type LearnProposalInput struct {
 }
     LearnProposalInput is a proposal to store (CreateLearnProposal).
 
+type LearnTarget struct {
+	Kind    string // LearnInputMiss | LearnInputDecline
+	InputID int64
+	Gate    string // LearnTarget*
+}
+    LearnTarget is what a gate made of the learned case of an input its proposal
+    noted (GateLearnProposal).
+
 type LearnVersion struct {
 	ID          int64      `json:"id"`
 	ProposalID  int64      `json:"proposal_id,omitempty"` // 0 = none
@@ -14299,6 +14380,11 @@ type Miss struct {
 	// proposal that used it once it is used; Misses fills them.
 	ProposalID    *int64 `json:"proposal_id,omitempty"`
 	ProposalState string `json:"proposal_state,omitempty"`
+	// Dismissed says why the decision of skill proposal DismissedBy
+	// dismissed the miss (LearnDismissed*; learn_proposal_inputs.dismissed),
+	// "" and nil when none did; Misses fills them.
+	Dismissed   string `json:"dismissed,omitempty"`
+	DismissedBy *int64 `json:"dismissed_by,omitempty"`
 }
     Miss is a comment another reviewer made on a PR magnum reviewed, with what
     the retro made of it (misses).
@@ -15115,7 +15201,7 @@ func (s *Store) DecideNotesProposal(ctx context.Context, id int64, from []string
 
 func (s *Store) Declines(ctx context.Context, f DeclineFilter) ([]Decline, error)
     Declines returns the declines f selects, newest first, each with its PR's
-    repository and number.
+    repository and number and why a skill proposal dismissed it, if one did.
 
 func (s *Store) DeleteKV(ctx context.Context, key string) error
     DeleteKV removes key (no error when absent).
@@ -15161,6 +15247,16 @@ func (s *Store) FreeSlots(ctx context.Context, repoFullName string, preferPRID i
     FreeSlots returns the repository's claimable pool slots (state free,
     not pinned, no hold_reason): the slot that last held preferPRID first (0 =
     no preference), then least recently used.
+
+func (s *Store) GateLearnProposal(ctx context.Context, id int64, to, reason string, at time.Time, gate []byte, targets []LearnTarget) (LearnProposal, error)
+    GateLearnProposal is the gate's decision on proposal id: from gating
+    to passed, held or failed, as DecideLearnProposal moves it, with what
+    the gate made of the learned case of each input it noted (targets,
+    stored on the input's link row) in the same transaction: an input whose
+    case the baseline already covered is dismissed (LearnDismissedFound,
+    LearnDismissedNotReported) whatever the verdict, and a failed decision
+    dismisses an input LearnDismissFailures failed gates compared without
+    improving it (decideLearnInputs).
 
 func (s *Store) GetKV(ctx context.Context, key string) (string, bool, error)
     GetKV returns the value for key and whether it exists.
@@ -15208,6 +15304,11 @@ func (s *Store) LatestRoundRuns(ctx context.Context, prIDs ...int64) (map[int64]
     first. prIDs limits the PRs; empty means every PR with a run. A PR without
     runs has no entry.
 
+func (s *Store) LearnInputHistory(ctx context.Context, kind string, id int64) ([]LearnInputGate, error)
+    LearnInputHistory lists the proposals that noted the input (kind, id) and
+    failed at their gate, oldest first, each with the gate's rule (its reason):
+    what the editor tried for it that did not help.
+
 func (s *Store) LearnInputRejections(ctx context.Context, kind string, id int64) ([]string, error)
     LearnInputRejections returns the operator's reasons of the rejected
     proposals the input (kind, id) was in, oldest first; an empty reason is left
@@ -15218,7 +15319,9 @@ func (s *Store) LearnProposalByID(ctx context.Context, id int64) (LearnProposal,
 
 func (s *Store) LearnProposalInputs(ctx context.Context, id int64) ([]LearnInput, error)
     LearnProposalInputs lists what proposal id did with its inputs, by kind and
-    id, each with the input's state now.
+    id, each with the input's state now, what the proposal's gate made of its
+    case, why the proposal dismissed it and how many gates made something of its
+    case.
 
 func (s *Store) LearnProposals(ctx context.Context, states []string) ([]LearnProposal, error)
     LearnProposals lists the proposals in states (empty = every state), newest

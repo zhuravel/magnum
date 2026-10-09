@@ -31,14 +31,57 @@ const (
 	GateFull      = "full"       // every role
 )
 
-// Why SelectCases leaves a target out.
+// Why SelectCases leaves a target out, and why the gate does once it has
+// the target's baseline (AtBaseline).
 const (
 	SkipNotInCorpus = "not in the corpus"
 	SkipFlagged     = "flagged: never replayed"
 	SkipNotWatched  = "not watched"
+	// SkipFoundAtBaseline and SkipNotReportedAtBaseline are a target the
+	// baseline covers already: its input retires (store.LearnTargetBaseline).
+	SkipFoundAtBaseline       = store.LearnDismissedFound
+	SkipNotReportedAtBaseline = store.LearnDismissedNotReported
 )
 
-func skipOverCap(limit int) string { return fmt.Sprintf("past the gate's %d cases", limit) }
+// overCapPrefix opens skipOverCap's reason.
+const overCapPrefix = "past the gate's "
+
+func skipOverCap(limit int) string { return fmt.Sprintf(overCapPrefix+"%d cases", limit) }
+
+// AtBaseline is why target name is no target once before, its baseline's
+// score, is known ("" = it is one): a miss- case whose every defect the
+// baseline found (SkipFoundAtBaseline) or a decline- case whose declined
+// finding the baseline no longer reports (SkipNotReportedAtBaseline):
+// nothing is left to improve.
+func AtBaseline(name string, before *eval.Score) string {
+	switch {
+	case before == nil:
+		return ""
+	case strings.HasPrefix(name, store.LearnInputMiss+"-") && before.Total > 0 && before.Found == before.Total:
+		return SkipFoundAtBaseline
+	case strings.HasPrefix(name, store.LearnInputDecline+"-") && len(before.AbsentHits) == 0:
+		return SkipNotReportedAtBaseline
+	}
+	return ""
+}
+
+// atBaseline reports whether skip says the baseline covers the target.
+func atBaseline(skip string) bool {
+	return skip == SkipFoundAtBaseline || skip == SkipNotReportedAtBaseline
+}
+
+// PromoteTarget gives the place of the target at cases[after], which the
+// baseline covers, to the first target after it that SelectCases left out
+// over its cap, which becomes runnable; false when there is none.
+func PromoteTarget(cases []GateCase, after int) bool {
+	for i := after + 1; i < len(cases); i++ {
+		if cases[i].Target && strings.HasPrefix(cases[i].Skip, overCapPrefix) {
+			cases[i].Skip = ""
+			return true
+		}
+	}
+	return false
+}
 
 // TargetName is the learned case of a proposal's input of kind
 // (store.LearnInputMiss, store.LearnInputDecline) and id: miss-<id>
@@ -186,6 +229,23 @@ func (r GateRow) improved() string {
 	return ""
 }
 
+// TargetGate is what target row r says of its input's learned case
+// (store.LearnTarget*): covered at the baseline, improved or not once
+// compared; "" for a row that is no target or was not compared.
+func (r GateRow) TargetGate() string {
+	switch {
+	case !r.Target:
+		return ""
+	case atBaseline(r.Skip):
+		return store.LearnTargetBaseline
+	case !r.compared():
+		return ""
+	case r.improved() != "":
+		return store.LearnTargetImproved
+	}
+	return store.LearnTargetNotImproved
+}
+
 // Verdict is the gate's decision on a proposal: State (GatePassed,
 // GateHeld, GateFailed), the Rule that decided it, as a sentence, and the
 // rows it read.
@@ -205,15 +265,19 @@ const RuleOnlyDeclines = "only declined findings improved: review the rule it ad
 // did not; else it passes one whose targets include a miss that improved
 // (improved), and holds one whose improved targets are all declines
 // (RuleOnlyDeclines: one author's reply and one classifier's answer would
-// otherwise remove a class of findings from every review unseen); else it
-// holds one none of whose targets could be compared, and fails the rest
-// (no target improved).
+// otherwise remove a class of findings from every review unseen); a target
+// the baseline covers (AtBaseline) is no target, so it fails one whose every
+// target is so (nothing to improve); else it holds one none of whose targets
+// could be compared, and fails the rest (no target improved).
 func Judge(rows []GateRow) Verdict {
 	v := Verdict{Rows: rows}
-	var regressed, better, unchanged []string
+	var regressed, better, unchanged, covered []string
 	compared, targets, missBetter := 0, 0, false
 	for _, r := range rows {
-		if r.Target {
+		switch {
+		case r.Target && atBaseline(r.Skip):
+			covered = append(covered, r.Case+": "+r.Skip)
+		case r.Target:
 			targets++
 		}
 		if lost := r.Lost(); r.Retried && len(lost) > 0 {
@@ -240,6 +304,8 @@ func Judge(rows []GateRow) Verdict {
 		v.State, v.Rule = GateHeld, RuleOnlyDeclines+" ("+strings.Join(better, "; ")+"; nothing lost, no new hit)"
 	case len(better) > 0:
 		v.State, v.Rule = GatePassed, strings.Join(better, "; ")+"; nothing lost, no new hit"
+	case targets == 0 && len(covered) > 0:
+		v.State, v.Rule = GateFailed, "nothing to improve: every target is covered at the baseline already ("+strings.Join(covered, "; ")+")"
 	case targets == 0:
 		v.State, v.Rule = GateHeld, "no input the proposal noted has a learned case to replay, and nothing regressed"
 	case compared == 0:

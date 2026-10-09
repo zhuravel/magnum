@@ -789,7 +789,7 @@ func TestAJudgeOnlyGateComparesBothJudgesOnTheSameReports(t *testing.T) {
 	f.fullRun("20261002-120000", "in-other", "rev-master", map[string]*eval.Score{f.target.Name: found([]string{f.target.Name}),
 		f.other.Name: found([]string{"scope"})})
 	// On the newer reports the base's judge finds the target too: the
-	// candidate's judge changes nothing.
+	// candidate's judge has nothing to improve.
 	f.ev.script(f.base, f.target.Name, found([]string{f.target.Name}))
 	f.ev.script(f.base, f.other.Name, found([]string{"scope"}))
 	f.ev.script(f.wt, f.target.Name, found([]string{f.target.Name}))
@@ -797,8 +797,8 @@ func TestAJudgeOnlyGateComparesBothJudgesOnTheSameReports(t *testing.T) {
 	f.h.tick()
 
 	p := f.proposal()
-	if p.State != store.LearnFailed || !strings.Contains(p.Reason, "no target improved") {
-		t.Fatalf("proposal = %s %q, want failed: on the same reports the target is found either way", p.State, p.Reason)
+	if p.State != store.LearnFailed || !strings.Contains(p.Reason, f.target.Name+": "+learn.SkipFoundAtBaseline) {
+		t.Fatalf("proposal = %s %q, want failed: on the same reports the base's judge finds the target already", p.State, p.Reason)
 	}
 	base := f.ev.callsFor(f.base)
 	if len(base) != 2 || !base[0].Opts.JudgeOnly || base[0].Case != f.target.Name {
@@ -1062,8 +1062,11 @@ func TestAFailedProposalLosesItsWorktree(t *testing.T) {
 	if _, err := os.Stat(f.wt); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("the worktree is still there: %v", err)
 	}
+	// The first failed gate that did not improve it keeps the input new, and
+	// says so on its link row: the second dismisses it (store's
+	// LearnDismissFailures).
 	ins, err := f.h.st.LearnProposalInputs(f.h.ctx, p.ID)
-	if err != nil || len(ins) != 1 || ins[0].State != store.MissNew {
+	if err != nil || len(ins) != 1 || ins[0].State != store.MissNew || ins[0].Gate != store.LearnTargetNotImproved {
 		t.Fatalf("inputs = %+v, %v: a failed proposal keeps them new", ins, err)
 	}
 	// A proposal whose branch is gone fails at once.
@@ -1077,6 +1080,152 @@ func TestAFailedProposalLosesItsWorktree(t *testing.T) {
 	f2.h.tick()
 	if p := f2.proposal(); p.State != store.LearnFailed || !strings.Contains(p.Reason, "is gone") || len(f2.ev.callsFor(f2.wt)) != 0 {
 		t.Fatalf("proposal = %s %q", p.State, p.Reason)
+	}
+}
+
+// addTarget stores another general miss on PR n of talkable/talkable, its
+// learned case in the corpus, and links it to the fixture's proposal as an
+// input it noted.
+func (f *gateFixture) addTarget(n int) (store.Miss, eval.Case) {
+	f.h.t.Helper()
+	m := corpusMiss(f.h, corpusPR(f.h, "talkable/talkable", n), n, store.MissScopeGeneral)
+	ms, err := f.h.st.Misses(f.h.ctx, store.MissFilter{})
+	if err != nil {
+		f.h.t.Fatal(err)
+	}
+	m = ms[slices.IndexFunc(ms, func(x store.Miss) bool { return x.ID == m.ID })]
+	c, ok := learn.CaseFromMiss(m)
+	if !ok {
+		f.h.t.Fatal("the miss makes no case")
+	}
+	f.ev.mu.Lock()
+	f.ev.corpus.Cases = append(f.ev.corpus.Cases, c)
+	f.ev.mu.Unlock()
+	if _, err := f.h.st.DB().ExecContext(f.h.ctx, `INSERT INTO learn_proposal_inputs (proposal_id, kind, input_id, outcome, location)
+VALUES (?, ?, ?, ?, ?)`, f.p.ID, store.LearnInputMiss, m.ID, store.MissNoted, "SKILL.md section 4"); err != nil {
+		f.h.t.Fatal(err)
+	}
+	return m, c
+}
+
+// scored is a case of a stored run with its score.
+type scored struct {
+	c eval.Case
+	s *eval.Score
+}
+
+// storedRun stores a scored full replay of cases with master's inputs, as
+// an earlier `magnum eval run` would.
+func (f *gateFixture) storedRun(id string, cases ...scored) {
+	f.h.t.Helper()
+	r := eval.Run{ID: id, Inputs: "in-master", ReviewerInputs: "rev-master", Commit: "abc1234"}
+	for _, cs := range cases {
+		c, s := cs.c, cs.s
+		s.Case = c.Name
+		r.Cases = append(r.Cases, eval.CaseRun{Case: c.Name, PR: c.PR, Head: c.Head, Outcome: "dry_run", Score: s,
+			ReportDir: filepath.Join(f.h.layout.Eval(), id, "cases", c.Name)})
+	}
+	if err := eval.SaveRun(filepath.Join(f.h.layout.Eval(), id), r); err != nil {
+		f.h.t.Fatal(err)
+	}
+}
+
+// A target whose baseline already finds its miss is no target: the gate
+// replays no candidate on it, gives its place to the next target past the
+// cap, and its input retires, dismissed with why (the learned corpus keeps
+// its case, a check that a candidate does not lose it).
+func TestTheGateRetiresATargetItsBaselineAlreadyFinds(t *testing.T) {
+	f := newGateFixture(t, gateFullFiles)
+	f.h.cfg.Learn.GateCases = 1
+	m2, target2 := f.addTarget(21) // the newer input: the first target
+	f.storedRun("20261001-120000", scored{target2, found([]string{target2.Name})}, scored{f.target, found(nil, f.target.Name)})
+	f.ev.script(f.wt, f.target.Name, found([]string{f.target.Name}))
+	f.h.tick()
+
+	p := f.proposal()
+	if p.State != store.LearnPassed || !strings.Contains(p.Reason, f.target.Name+" found") {
+		t.Fatalf("proposal = %s %q, want passed on %s", p.State, p.Reason, f.target.Name)
+	}
+	if got := f.ev.callsFor(f.wt); len(got) != 1 || got[0].Case != f.target.Name {
+		t.Fatalf("candidate replays = %+v, want %s alone", got, f.target.Name)
+	}
+	g := f.gate()
+	if len(g.Cases) != 2 || g.Cases[0].Case != target2.Name || g.Cases[0].Skip != learn.SkipFoundAtBaseline || g.Cases[0].After != nil ||
+		g.Cases[1].Case != f.target.Name || g.Cases[1].Skip != "" {
+		t.Fatalf("gate cases = %+v", g.Cases)
+	}
+	ins, err := f.h.st.LearnProposalInputs(f.h.ctx, p.ID)
+	if err != nil || len(ins) != 2 {
+		t.Fatalf("inputs = %+v, %v", ins, err)
+	}
+	for _, in := range ins {
+		switch in.InputID {
+		case m2.ID:
+			if in.State != store.MissDismissed || in.Gate != store.LearnTargetBaseline || in.Dismissed != store.LearnDismissedFound {
+				t.Errorf("the covered input = %+v, want dismissed: found at the baseline", in)
+			}
+		case f.miss.ID:
+			if in.State != store.MissNew || in.Gate != store.LearnTargetImproved {
+				t.Errorf("the improved input = %+v, want new (it lands with the proposal)", in)
+			}
+		}
+	}
+	if got := learnedCases(f.h); !slices.Contains(got, f.target.Name) || !slices.Contains(got, target2.Name) {
+		t.Fatalf("learned corpus = %q, want both cases", got)
+	}
+
+	// A proposal whose every target its baseline covers has nothing to
+	// improve: it fails.
+	f2 := newGateFixture(t, gateFullFiles)
+	f2.storedRun("20261001-120000", scored{f2.target, found([]string{f2.target.Name})}, scored{f2.other, found([]string{"scope"})})
+	f2.ev.script(f2.wt, f2.other.Name, found([]string{"scope"}))
+	f2.h.tick()
+	if p := f2.proposal(); p.State != store.LearnFailed || !strings.Contains(p.Reason, "nothing to improve") {
+		t.Fatalf("every target covered: %s %q, want failed: nothing to improve", p.State, p.Reason)
+	}
+	if mm := f2.missNow(); mm.State != store.MissDismissed || mm.Dismissed != store.LearnDismissedFound {
+		t.Fatalf("the covered miss = %s %q", mm.State, mm.Dismissed)
+	}
+}
+
+// missNow reads the fixture's miss back.
+func (f *gateFixture) missNow() store.Miss {
+	f.h.t.Helper()
+	ms, err := f.h.st.Misses(f.h.ctx, store.MissFilter{})
+	if err != nil {
+		f.h.t.Fatal(err)
+	}
+	return ms[slices.IndexFunc(ms, func(m store.Miss) bool { return m.ID == f.miss.ID })]
+}
+
+// The gate tries first the targets no gate made anything of yet, then the
+// others, each the misses before the declines and the newest first: the
+// oldest inputs no longer take every place of every gate.
+func TestGateTargetsTryTheNeverGatedFirstThenTheNewest(t *testing.T) {
+	f := newGateFixture(t, gateFullFiles)
+	m2, _ := f.addTarget(21)
+	m3, _ := f.addTarget(22)
+	d := corpusDecline(f.h, f.miss.PRID, 1)
+	if _, err := f.h.st.DB().ExecContext(f.h.ctx, `INSERT INTO learn_proposal_inputs (proposal_id, kind, input_id, outcome, location)
+VALUES (?, ?, ?, ?, ?)`, f.p.ID, store.LearnInputDecline, d.ID, store.MissNoted, "SKILL.md section 5"); err != nil {
+		t.Fatal(err)
+	}
+	// An earlier proposal's gate compared m3's case.
+	old, err := f.h.st.CreateLearnProposal(f.h.ctx, store.LearnProposalInput{Trigger: store.LearnTriggerEvidence, BaseSHA: learnMaster,
+		Branch: "learn/20261001-090000", State: store.LearnGating, Inputs: []store.LearnInput{{Kind: store.LearnInputMiss, InputID: m3.ID,
+			Outcome: store.MissNoted, Where: "SKILL.md section 4"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.h.st.GateLearnProposal(f.h.ctx, old.ID, store.LearnFailed, "no target improved", time.Time{}, nil,
+		[]store.LearnTarget{{Kind: store.LearnInputMiss, InputID: m3.ID, Gate: store.LearnTargetNotImproved}}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.h.e.gateTargets(f.h.ctx, f.p)
+	want := []string{learn.TargetName(store.LearnInputMiss, m2.ID), learn.TargetName(store.LearnInputMiss, f.miss.ID),
+		learn.TargetName(store.LearnInputDecline, d.ID), learn.TargetName(store.LearnInputMiss, m3.ID)}
+	if err != nil || !slices.Equal(got, want) {
+		t.Fatalf("targets = %q, %v, want %q", got, err, want)
 	}
 }
 
