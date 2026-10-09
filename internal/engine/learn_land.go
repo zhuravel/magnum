@@ -137,6 +137,9 @@ func (e *Engine) maybeLearnLand(ctx context.Context) {
 		return
 	}
 	passed, err := e.st.LearnProposals(ctx, []string{store.LearnPassed})
+	// A revert lands only on the operator's y (learn_revert.go): the gate
+	// never passes one, and one passed anyway waits.
+	passed = slices.DeleteFunc(passed, func(p store.LearnProposal) bool { return p.Reverts != 0 })
 	if err != nil || len(passed) == 0 {
 		if err != nil {
 			e.warnUnlessStopped(ctx, err, "skill landing: list the passed proposals")

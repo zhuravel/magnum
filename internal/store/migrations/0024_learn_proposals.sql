@@ -5,7 +5,7 @@
 -- stopped, gating, passed, held, failed, landed, rejected, expired, superseded), the gate's result (gate_json), a
 -- reason (magnum's problems for an invalid one, the operator's for a rejection), the editor's model and the hash of
 -- its prompt, its scratch directory and run directory, and when it was made, decided and landed (landed_sha, the
--- commit master moved to). learn_proposal_inputs links a proposal to every input it was given, a general miss
+-- commit master moved to); a revert names the version whose files it restores as they were before it (reverts). learn_proposal_inputs links a proposal to every input it was given, a general miss
 -- (kind miss, misses.id) or a general declined finding (kind decline, declines.id), with what the editor did with
 -- it: noted, with where the change covers it (location), or skipped, with a one-line reason. The inputs stay new
 -- while a proposal waits; a landed proposal uses its noted ones, a rejected one dismisses an input that is in two
@@ -32,7 +32,8 @@ CREATE TABLE learn_proposals (
   created_at     TEXT NOT NULL,
   decided_at     TEXT,
   landed_sha     TEXT,
-  landed_at      TEXT
+  landed_at      TEXT,
+  reverts        INTEGER REFERENCES learn_versions(id)
 );
 CREATE INDEX learn_proposals_state ON learn_proposals(state);
 

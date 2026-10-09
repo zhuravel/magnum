@@ -79,6 +79,7 @@ func TestEveryKVKeyTheEngineWritesKeepsItsString(t *testing.T) {
 		{"KVLearnRestart", KVLearnRestart, "learn.restart"},
 		{"KVLearnEvidence", KVLearnEvidence, "learn.evidence"},
 		{"KVLearnEditDay", KVLearnEditDay, "learn.edit_day"},
+		{"KVLearnRegression", KVLearnRegression, "learn.regression"},
 		{"KVRetroDay", KVRetroDay, "learn.retro_day"},
 		{"KVRetroLast", KVRetroLast, "learn.retro_last"},
 		{"KVNotesCurating", KVNotesCurating, "notes.curating"},

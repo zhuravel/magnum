@@ -3496,10 +3496,12 @@ type Learn struct {
 	// GateCases bounds the eval cases the gate of a proposal replays,
 	// LandPerDay the proposals that land per local day; Restart is idle
 	// (the daemon restarts on a landed change once nothing is in flight) or
-	// manual (it asks for `magnum daemon-restart --when-idle`). A landed
-	// version whose declined and argued share of at least
-	// RegressionMinFindings posted findings grows by RegressionPoints over
-	// the previous version's gets a revert proposal.
+	// manual (it asks for `magnum daemon-restart --when-idle`). The newest
+	// landed version whose declined and argued share of its posted
+	// findings grows by RegressionPoints over the previous version's, both
+	// with at least RegressionMinFindings posted findings, gets one revert
+	// proposal, which the gate holds for review (internal/engine
+	// learn_revert.go).
 	GateCases             int    `toml:"gate_cases"`
 	LandPerDay            int    `toml:"land_per_day"`
 	Restart               string `toml:"restart"`
@@ -4643,6 +4645,10 @@ const (
 	ReqLearnPropose = "learn_propose"
 	ReqLearnLand    = "learn_land"
 	ReqLearnReject  = "learn_reject"
+	// ReqLearnRevert proposes a revert of a landed version
+	// (LearnRevertPayload, learn_revert.go), as `magnum learn --revert`
+	// asks.
+	ReqLearnRevert = "learn_revert"
 )
     Request kinds (requests.kind) the daemon consumes.
 
@@ -4764,6 +4770,10 @@ const KVLearnGating = "learn.gating"
     JSON), which the CLI reads before it stops the daemon: set when it starts,
     deleted when it ends and at every start of the daemon (the proposal stays
     gating, and its gate starts again).
+
+const KVLearnRegression = "learn.regression"
+    KVLearnRegression is the newest version a regression revert was proposed for
+    (its id): the scan proposes one revert per version, never two.
 
 const KVRetroRunning = "learn.retro_running"
     KVRetroRunning holds the start of the retro running now (store.FormatTime),
@@ -5471,8 +5481,10 @@ type EditMark struct {
 	Run     string    `json:"run"`
 	Trigger string    `json:"trigger"`
 	Started time.Time `json:"started"`
+	Revert  int64     `json:"revert,omitempty"`
 }
-    EditMark is the editor run in flight (KVLearnEditing).
+    EditMark is the editor run in flight (KVLearnEditing): Revert names the
+    version a revert restores the files before (0 = an edit).
 
 type EditResult struct {
 	Changes  learn.Changes
@@ -5725,6 +5737,7 @@ type LearnGit interface {
 	RebaseOnto(ctx context.Context, dir, onto string) error
 	DirtyPaths(ctx context.Context, dir string, paths ...string) ([]string, error)
 	MergeFFOnly(ctx context.Context, repo, branch string) error
+	RestoreFrom(ctx context.Context, dir, rev string, paths ...string) error
 }
     LearnGit is the git work of an editor run, its gate and its landing
     (learn_land.go) (*gitx.Client).
@@ -5741,6 +5754,14 @@ type LearnRestartMark struct {
     LearnRestartMark is the landed version the daemon waits to restart on
     (KVLearnRestart): Manual when the operator restarts it (learn restart
     manual, or no launchd to start it again).
+
+type LearnRevertPayload struct {
+	Version int64  `json:"version"`
+	Reason  string `json:"reason,omitempty"`
+}
+    LearnRevertPayload is a `magnum learn --revert <version>` request:
+    a proposal that restores the files of the version before Version, for Reason
+    (the design log's entry says it).
 
 type MachineGroup struct {
 	Repo string // owner/name
@@ -8115,6 +8136,14 @@ func (c *Client) ResetPlaceholder(ctx context.Context, dir, branch, base string)
     that already tracks something keeps it, so an existing upstream is unset
     afterwards (placeholders must not follow, or push to, a remote branch).
 
+func (c *Client) RestoreFrom(ctx context.Context, dir, rev string, paths ...string) error
+    RestoreFrom sets paths (relative to the top of the work tree at dir) in
+    the work tree to their content at rev, and removes a path rev does not have
+    (`git restore --source=<rev> --worktree`; the index stays, so CommitAll of
+    the same paths commits the change): a revert of a skill version restores its
+    files as the commit before it had them. At least one path; nothing else in
+    the work tree changes.
+
 func (c *Client) RevParse(ctx context.Context, dir, ref string) (string, error)
     RevParse resolves ref to a full commit sha (tags are peeled). A ref that
     does not exist yields an error wrapping ErrNoSuchRef.
@@ -9639,6 +9668,11 @@ func ParseOutput(data []byte, cands []Candidate, rejected []Rejected, threads []
 func ParsePins(b []byte) ([]string, int, error)
     ParsePins reads a pins file: the pins and the skill's cap. A file without a
     cap line is an error.
+
+func RevertEntry(decision, day string) string
+    RevertEntry is the design log's entry for a revert of a skill version:
+    its headline in bold without the final stop, the day and what made it,
+    then the rest, wrapped as DecisionEntry wraps.
 
 func ScrubLesson(lesson, scope string, people, own, repo []string) (string, string)
     ScrubLesson returns lesson when it teaches without retelling the pull
@@ -14118,6 +14152,9 @@ type LearnProposal struct {
 	DecidedAt    *time.Time      `json:"decided_at,omitempty"`
 	LandedSHA    string          `json:"landed_sha,omitempty"`
 	LandedAt     *time.Time      `json:"landed_at,omitempty"`
+	// Reverts is the version whose files a revert restores as they were
+	// before it (0 = not a revert): the gate holds it for the operator.
+	Reverts int64 `json:"reverts,omitempty"`
 }
     LearnProposal is a change the skill editor drafted (learn_proposals).
 
@@ -14136,6 +14173,7 @@ type LearnProposalInput struct {
 	RunDir       string
 	At           time.Time // zero = now
 	Inputs       []LearnInput
+	Reverts      int64 // the version a revert restores the files before (0 = none)
 }
     LearnProposalInput is a proposal to store (CreateLearnProposal).
 

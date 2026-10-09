@@ -12,7 +12,8 @@ package engine
 // checkout first; the candidate replays with the proposal's worktree, and a
 // case it lost is replayed once more. learn.Judge decides: passed (it lands,
 // learn_land.go), held (the operator decides) or failed (its worktree and
-// branch go, its inputs stay new). Every replay is stored as `magnum eval
+// branch go, its inputs stay new); a revert (learn_revert.go) is held
+// whatever it decides. Every replay is stored as `magnum eval
 // run` stores one, under runs of the gate's own (a baseline, a candidate
 // and a retry run, each with its agent tag), so a later gate and `magnum
 // eval` read them. The replays run in-process through Deps.EvalCase
@@ -412,6 +413,10 @@ func (e *Engine) runGate(ctx context.Context, p store.LearnProposal) error {
 	res.State, res.Rule = v.State, v.Rule
 	if res.CorpusError != "" && v.State == learn.GateHeld {
 		res.Rule += "; the corpus: " + res.CorpusError
+	}
+	if p.Reverts != 0 { // a revert lands only on the operator's y (learn_revert.go)
+		res.State, res.Rule = learn.GateHeld, fmt.Sprintf("a revert of skill version %d waits for the operator whatever the gate found "+
+			"(it would have %s it: %s)", p.Reverts, v.State, res.Rule)
 	}
 	e.gateDecide(octx, p, res)
 	return nil

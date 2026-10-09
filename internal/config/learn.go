@@ -68,10 +68,12 @@ type Learn struct {
 	// GateCases bounds the eval cases the gate of a proposal replays,
 	// LandPerDay the proposals that land per local day; Restart is idle
 	// (the daemon restarts on a landed change once nothing is in flight) or
-	// manual (it asks for `magnum daemon-restart --when-idle`). A landed
-	// version whose declined and argued share of at least
-	// RegressionMinFindings posted findings grows by RegressionPoints over
-	// the previous version's gets a revert proposal.
+	// manual (it asks for `magnum daemon-restart --when-idle`). The newest
+	// landed version whose declined and argued share of its posted
+	// findings grows by RegressionPoints over the previous version's, both
+	// with at least RegressionMinFindings posted findings, gets one revert
+	// proposal, which the gate holds for review (internal/engine
+	// learn_revert.go).
 	GateCases             int    `toml:"gate_cases"`
 	LandPerDay            int    `toml:"land_per_day"`
 	Restart               string `toml:"restart"`

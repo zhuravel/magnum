@@ -200,8 +200,8 @@ land_per_day = 1                  # proposals that land per local day; a later p
 restart = "idle"                  # after a landing: "idle" restarts the daemon once nothing is in flight, "manual"
                                   # asks for `magnum daemon-restart --when-idle`
 regression_points = 10            # a landed version whose declined and argued share of its posted findings grows by
-regression_min_findings = 20      #   this many points (1 to 100) over the previous version's, once it posted at least
-                                  #   this many findings, gets a revert proposal
+regression_min_findings = 20      #   this many points (1 to 100) over the previous version's, once each posted at least
+                                  #   this many findings, gets one revert proposal, which the gate holds for review
 
 # Repository notes (~/.local/share/magnum/notes/<owner>/<repo>.md and the harness directory of QA scripts
 # beside it): every review role reads them first, the judge rewrites them. Every version is kept in the

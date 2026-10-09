@@ -210,6 +210,13 @@ func (g *fakeLearnGit) MergeFFOnly(_ context.Context, repo, branch string) error
 	return nil
 }
 
+func (g *fakeLearnGit) RestoreFrom(_ context.Context, dir, rev string, paths ...string) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.record("restore %s %s %s", dir, rev, strings.Join(paths, " "))
+	return errors.New("fake git: no restore")
+}
+
 func (g *fakeLearnGit) BranchDelete(_ context.Context, mainClone, branch string, _ bool) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()

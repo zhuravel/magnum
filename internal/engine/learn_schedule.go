@@ -89,9 +89,10 @@ func (e *Engine) learnOneAtATime() string {
 	return fmt.Sprintf("%s runs (started %s), and learn jobs run one at a time; ask again once it ends", job, since.Local().Format("15:04"))
 }
 
-// maybeLearnScan is the loop's scan, at most every learnCheckEvery: the
-// scheduled editor (maybeEdit). A dry run and `magnum daemon --once` scan
-// nothing.
+// maybeLearnScan is the loop's scan, at most every learnCheckEvery: a
+// revert of a version that regressed (maybeRegression, learn_revert.go),
+// then the scheduled editor (maybeEdit). A dry run and `magnum daemon
+// --once` scan nothing.
 func (e *Engine) maybeLearnScan(ctx context.Context) {
 	if e.d.DryRun || e.once {
 		return
@@ -101,6 +102,7 @@ func (e *Engine) maybeLearnScan(ctx context.Context) {
 		return
 	}
 	e.learnChecked = now
+	e.maybeRegression(ctx)
 	e.maybeEdit(ctx)
 }
 

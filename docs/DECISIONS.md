@@ -5581,3 +5581,31 @@ editing history. Code, config comments and prompts reference these by their head
   running the editor at the end of the retro's goroutine (a judge stage, a pause or a waiting proposal
   must hold it, and the retro would hold the restart for 45 minutes more) and probing go when the daemon
   starts (mise or the toolchain can change while it runs).
+- **A regression proposes a revert, held for review** (2026-10-09, stage 5 of the self-improving review
+  loop). The operator decided the loop never reverts on its own: a revert is a candidate like an edit,
+  which only the operator lands. `engine.runRevert` makes one without an agent: in a worktree on a new
+  `learn/<run>` branch from master, the skill and prompt files (`learn.EditAllowedGlobs`) the version's
+  commit changed are restored as the commit before it had them (`gitx.RestoreFrom`, `git restore
+  --source --worktree`, a file that commit lacked removed), the design log gets "Reverts skill version
+  N: <why>" (`learn.RevertEntry`), and the candidate passes the edit's checks (the restored skill within
+  today's cap and keeping today's pins from the worktree, the prompts rendering) and the format gate,
+  then is committed (unsigned, its files exactly) and stored `gating` with `reverts` naming the version
+  (a column of migration 0024, still unlanded) and its `changes.json` in the run directory for
+  `--review`; a check that fails stores it `invalid`, and a toast says so whatever asked for it. The
+  gate replays it as any proposal (no targets: the newest cases) and holds it whatever `learn.Judge`
+  decided, the rule saying what it would have been, so the operator sees what the revert would lose;
+  `maybeLearnLand` skips a revert even if one were passed. The revert runs in the edit's slot, a learn
+  job counted as background work. `magnum learn --revert <version>` (`ReqLearnRevert`, with `--reason`,
+  checked for pull request references, links, logins, secrets and home paths since it goes into the
+  public log) asks for one; the daemon refuses it while another learn job runs, when a waiting proposal
+  already reverts that version, when the version is not on master, and when master changed one of its
+  files since it landed, since restoring the earlier text would undo that change too. At the loop's scan
+  `maybeRegression` looks at the newest version once the daemon restarted on it: when it and the version
+  before it each posted at least `regression_min_findings` findings and the share authors declined or
+  argued grew by `regression_points` or more, it records the version (`KVLearnRegression`, so it never
+  repeats), writes `learn.regression` and a toast, and starts the revert (or says why none is possible).
+  The version before the first is the skill before the loop, measured over a window as long as the first
+  version's. Rejected: a minimum only on the newer version (a share over a handful of findings is noise
+  on either side), `git revert` of the version's commit (a three-way merge whose conflicts need a
+  person; restoring the files and refusing when master changed them since is exact), and holding the
+  revert's proposal until no other proposal waits (a regression would wait out a held proposal's week).

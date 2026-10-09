@@ -76,6 +76,9 @@ type LearnProposal struct {
 	DecidedAt    *time.Time      `json:"decided_at,omitempty"`
 	LandedSHA    string          `json:"landed_sha,omitempty"`
 	LandedAt     *time.Time      `json:"landed_at,omitempty"`
+	// Reverts is the version whose files a revert restores as they were
+	// before it (0 = not a revert): the gate holds it for the operator.
+	Reverts int64 `json:"reverts,omitempty"`
 }
 
 // LearnInput is what a proposal did with one input it was given
@@ -107,16 +110,19 @@ type LearnProposalInput struct {
 	RunDir       string
 	At           time.Time // zero = now
 	Inputs       []LearnInput
+	Reverts      int64 // the version a revert restores the files before (0 = none)
 }
 
 const learnProposalColumns = `id, trigger_reason, base_sha, branch, candidate_sha, files_json, state, gate_json, reason, model,
-prompt_sha256, scratch, run_dir, created_at, decided_at, landed_sha, landed_at`
+prompt_sha256, scratch, run_dir, created_at, decided_at, landed_sha, landed_at, reverts`
 
 func scanLearnProposal(sc scanner) (LearnProposal, error) {
 	var p LearnProposal
+	var reverts sql.NullInt64
 	err := sc.Scan(&p.ID, &p.Trigger, &p.BaseSHA, &p.Branch, textCol(&p.CandidateSHA), jsonCol(&p.Files), &p.State, rawCol(&p.Gate),
 		textCol(&p.Reason), textCol(&p.Model), textCol(&p.PromptSHA256), textCol(&p.Scratch), textCol(&p.RunDir), timeCol(&p.CreatedAt),
-		nullTime(&p.DecidedAt), textCol(&p.LandedSHA), nullTime(&p.LandedAt))
+		nullTime(&p.DecidedAt), textCol(&p.LandedSHA), nullTime(&p.LandedAt), &reverts)
+	p.Reverts = reverts.Int64
 	if p.Files == nil {
 		p.Files = []string{}
 	}
@@ -167,9 +173,10 @@ func (s *Store) CreateLearnProposal(ctx context.Context, in LearnProposalInput) 
 			gate = string(in.Gate)
 		}
 		res, err := tx.ExecContext(ctx, `INSERT INTO learn_proposals (trigger_reason, base_sha, branch, candidate_sha, files_json, state,
-  gate_json, reason, model, prompt_sha256, scratch, run_dir, created_at, decided_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  gate_json, reason, model, prompt_sha256, scratch, run_dir, created_at, decided_at, reverts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			in.Trigger, in.BaseSHA, in.Branch, nullString(in.CandidateSHA), string(filesJSON), in.State, gate, nullString(in.Reason),
-			nullString(in.Model), nullString(in.PromptSHA), nullString(in.Scratch), nullString(in.RunDir), FormatTime(at), decided)
+			nullString(in.Model), nullString(in.PromptSHA), nullString(in.Scratch), nullString(in.RunDir), FormatTime(at), decided,
+			nullInt(in.Reverts))
 		if err != nil {
 			return err
 		}

@@ -27,12 +27,12 @@ import (
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
-const learnUsage = "[--review [--reason <text>] | --propose] [--json]"
+const learnUsage = "[--review [--reason <text>] | --propose | --revert <version> [--reason <text>]] [--json]"
 
 // learnFlags are the parsed `magnum learn` flags.
 type learnFlags struct {
 	review, propose, json bool
-	reason                string
+	reason, revert        string
 }
 
 func newLearnCmd(c *Context) *cobra.Command {
@@ -54,13 +54,20 @@ func newLearnCmd(c *Context) *cobra.Command {
 			"file it changes, its design-log entry and the gate's table, and asks y/N on a terminal: y asks the daemon to "+
 			"land it at once (the answer says why when it stays held), n rejects it (--reason says why, and the next edit reads it; an input in two rejected proposals is "+
 			"dismissed and leaves the learned eval corpus at once), anything else leaves it for later. --review --json "+
-			"prints the proposal and asks nothing.",
+			"prints the proposal and asks nothing.\n\n"+
+			"--revert <version> asks the daemon for a proposal that restores the skill and prompt files the version changed as "+
+			"they were before it (--reason says why, in the design log's entry; no pull request, link or login), through the "+
+			"format gate and the eval's gate, which holds it for --review: a revert never lands on its own. It is refused while "+
+			"another learn job runs, when a waiting proposal already reverts the version, and when master changed those files "+
+			"since the version landed. The daemon proposes one by itself, once per version, when the newest version's reviews "+
+			"had their findings declined or argued [learn] regression_points more often than the version before.",
 		func(pos []string) int { return runLearn(c, f, pos) })
 	fs := cmd.Flags()
 	fs.BoolVar(&f.review, "review", false, "review the oldest held proposal and land (y) or reject (n) it")
-	fs.StringVar(&f.reason, "reason", "", "with --review: why the proposal is rejected (the next edit reads it)")
+	fs.StringVar(&f.reason, "reason", "", "with --review: why the proposal is rejected (the next edit reads it); with --revert: why the version is reverted")
 	fs.BoolVar(&f.propose, "propose", false, "ask the daemon for a skill edit now")
-	fs.BoolVar(&f.json, "json", false, "print JSON (the list, --review, --propose)")
+	fs.StringVar(&f.revert, "revert", "", "ask the daemon for a proposal that restores the files of the version before this landed version")
+	fs.BoolVar(&f.json, "json", false, "print JSON (the list, --review, --propose, --revert)")
 	return cmd
 }
 
@@ -68,10 +75,18 @@ func runLearn(c *Context, f learnFlags, pos []string) int {
 	switch {
 	case len(pos) > 0:
 		return inspUsage(c, "learn", "it takes no arguments", learnUsage)
-	case f.review && f.propose:
-		return inspUsage(c, "learn", "--review and --propose go one at a time", learnUsage)
-	case f.reason != "" && !f.review:
-		return inspUsage(c, "learn", "--reason goes with --review", learnUsage)
+	case f.review && f.propose, f.revert != "" && (f.review || f.propose):
+		return inspUsage(c, "learn", "--review, --propose and --revert go one at a time", learnUsage)
+	case f.reason != "" && !f.review && f.revert == "":
+		return inspUsage(c, "learn", "--reason goes with --review or --revert", learnUsage)
+	}
+	var revert int64
+	if f.revert != "" {
+		n, err := strconv.ParseInt(f.revert, 10, 64)
+		if err != nil || n <= 0 {
+			return inspUsage(c, "learn", "--revert takes the number of a landed version (`magnum learn` lists them)", learnUsage)
+		}
+		revert = n
 	}
 	d, err := actNewDeps(c, actFull)
 	if err != nil {
@@ -85,8 +100,50 @@ func runLearn(c *Context, f learnFlags, pos []string) int {
 		return learnPropose(ctx, c, d, f)
 	case f.review:
 		return learnReview(ctx, c, d, f)
+	case revert > 0:
+		return learnRevert(ctx, c, d, f, revert)
 	}
 	return learnList(ctx, c, d, f)
+}
+
+// learnRevert asks the daemon for a revert of landed version id
+// (engine.ReqLearnRevert, with --reason), once the registry knows the
+// version; the daemon refuses what it cannot do, and says why.
+func learnRevert(ctx context.Context, c *Context, d *actDeps, f learnFlags, id int64) int {
+	var out learnProposeJSON
+	fail := func(err error) int {
+		if f.json {
+			out.Error = err.Error()
+			_ = writeJSON(c.Stdout, out)
+			return 1
+		}
+		return cmdFail(c, "learn", err)
+	}
+	vs, err := d.Store.LearnVersions(ctx)
+	if err != nil {
+		return fail(err)
+	}
+	if !slices.ContainsFunc(vs, func(v store.LearnVersion) bool { return v.ID == id }) {
+		return fail(fmt.Errorf("no skill version %d landed (`magnum learn` lists the versions)", id))
+	}
+	res, err := d.reqs().send(ctx, engine.ReqLearnRevert, engine.LearnRevertPayload{Version: id, Reason: strings.TrimSpace(f.reason)}, d.quick())
+	if err != nil {
+		return fail(err)
+	}
+	rv := res.view()
+	out.Request = &rv
+	switch {
+	case res.PID == 0 && res.Pending():
+		res.printNotes(c.Stderr)
+		return fail(fmt.Errorf("no daemon is running: request %d stays queued and starts the revert once one runs: %s", res.ID(), actDaemonFix))
+	case res.Failed():
+		res.printNotes(c.Stderr)
+		return fail(errors.New(res.Result()))
+	case f.json:
+		_ = writeJSON(c.Stdout, out)
+		return 0
+	}
+	return res.print(c.Stdout, c.Stderr)
 }
 
 // learnProposalRow is a proposal as the list shows it: with how many
@@ -257,7 +314,11 @@ func learnPrintList(w io.Writer, d *actDeps, data learnListData) {
 		tw := inspTable(w)
 		fmt.Fprintln(tw, "  ID\tSTATE\tCREATED\tTRIGGER\tBRANCH\tINPUTS")
 		for _, r := range data.Waiting {
-			fmt.Fprintf(tw, "  %d\t%s\t%s\t%s\t%s\t%d (%d noted)\n", r.ID, r.State, inspClock(now, r.CreatedAt), r.Trigger, r.Branch, r.Inputs, r.Noted)
+			trigger := r.Trigger
+			if r.Reverts != 0 {
+				trigger += fmt.Sprintf(" (reverts %d)", r.Reverts)
+			}
+			fmt.Fprintf(tw, "  %d\t%s\t%s\t%s\t%s\t%d (%d noted)\n", r.ID, r.State, inspClock(now, r.CreatedAt), trigger, r.Branch, r.Inputs, r.Noted)
 		}
 		_ = tw.Flush()
 	}
@@ -270,7 +331,11 @@ func learnPrintList(w io.Writer, d *actDeps, data learnListData) {
 		}
 	}
 	if m := data.Editing; m != nil {
-		fmt.Fprintf(w, "a skill edit runs (run %s, since %s)\n", m.Run, inspClock(now, m.Started))
+		what := "a skill edit"
+		if m.Revert != 0 {
+			what = fmt.Sprintf("the revert of skill version %d", m.Revert)
+		}
+		fmt.Fprintf(w, "%s runs (run %s, since %s)\n", what, m.Run, inspClock(now, m.Started))
 	}
 	fmt.Fprintln(w, "next edit: "+data.Next)
 	for _, r := range data.Waiting {

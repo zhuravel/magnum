@@ -446,6 +446,18 @@ func DecisionEntry(decision, day string, inputs []string) string {
 	return wrap(text, DecisionWidth, "- ", "  ")
 }
 
+// RevertEntry is the design log's entry for a revert of a skill version:
+// its headline in bold without the final stop, the day and what made it,
+// then the rest, wrapped as DecisionEntry wraps.
+func RevertEntry(decision, day string) string {
+	head, rest := Headline(decision)
+	text := "**" + strings.TrimRight(head, ".!?") + "** (" + day + ", a revert proposed by the self-improving loop)."
+	if rest != "" {
+		text += " " + rest
+	}
+	return wrap(text, DecisionWidth, "- ", "  ")
+}
+
 // AppendDecision appends entry to the design log doc, after a line break
 // when doc does not end with one.
 func AppendDecision(doc []byte, entry string) []byte {

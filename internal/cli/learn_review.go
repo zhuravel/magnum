@@ -204,7 +204,11 @@ func learnReviewOf(ctx context.Context, d *actDeps, p store.LearnProposal) (lear
 // inputs, the diffs (colored on a terminal), the decision and the gate.
 func learnPrintReview(w io.Writer, color bool, data learnReviewData) {
 	p := data.Proposal
-	fmt.Fprintf(w, "skill proposal %d (%s, by %s), %s, on %s from %s\n", p.ID, p.Trigger, p.Model, p.CreatedAt.Local().Format("2006-01-02 15:04"),
+	by := "by " + p.Model
+	if p.Reverts != 0 {
+		by = fmt.Sprintf("a revert of skill version %d", p.Reverts)
+	}
+	fmt.Fprintf(w, "skill proposal %d (%s, %s), %s, on %s from %s\n", p.ID, p.Trigger, by, p.CreatedAt.Local().Format("2006-01-02 15:04"),
 		p.Branch, learnShort(p.BaseSHA))
 	if len(data.Inputs) > 0 {
 		fmt.Fprintln(w, "\ninputs:")

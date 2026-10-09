@@ -122,15 +122,18 @@ type LearnGit interface {
 	RebaseOnto(ctx context.Context, dir, onto string) error
 	DirtyPaths(ctx context.Context, dir string, paths ...string) ([]string, error)
 	MergeFFOnly(ctx context.Context, repo, branch string) error
+	RestoreFrom(ctx context.Context, dir, rev string, paths ...string) error
 }
 
 var _ LearnGit = (*gitx.Client)(nil)
 
-// EditMark is the editor run in flight (KVLearnEditing).
+// EditMark is the editor run in flight (KVLearnEditing): Revert names the
+// version a revert restores the files before (0 = an edit).
 type EditMark struct {
 	Run     string    `json:"run"`
 	Trigger string    `json:"trigger"`
 	Started time.Time `json:"started"`
+	Revert  int64     `json:"revert,omitempty"`
 }
 
 // editPane is the skill editor's pane agent; it works in the run's worktree.

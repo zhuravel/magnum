@@ -220,3 +220,45 @@ func TestInProgressSeesARebase(t *testing.T) {
 		t.Fatalf("after the abort = %q, %v", p, err)
 	}
 }
+
+// A revert of a skill version restores its files in a worktree as an
+// earlier commit had them: a file it changed gets the earlier text, a file
+// the earlier commit did not have goes, and a commit of those paths
+// records exactly that; nothing else in the worktree changes.
+func TestRestoreFromBringsBackTheEarlierText(t *testing.T) {
+	fx := newFixture(t)
+	ctx := context.Background()
+	before := fx.commit(fx.clone, "skills/SKILL.md", "Prove five facts.\n", "the skill")
+	fx.write(fx.clone, "prompts/judge-new.md", "Review it.\n")
+	fx.git(fx.clone, "add", "--", "prompts/judge-new.md")
+	fx.commit(fx.clone, "skills/SKILL.md", "Prove five facts.\nCheck the lock.\n", "version 1")
+	const branch = "learn/20261010-070000"
+	dir := learnWorktree(t, fx, branch)
+	fx.write(dir, "README.md", "an edit the revert leaves alone\n")
+
+	if err := fx.c.RestoreFrom(ctx, dir, before, "skills/SKILL.md", "prompts/judge-new.md"); err != nil {
+		t.Fatalf("RestoreFrom: %v", err)
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, "skills", "SKILL.md")); err != nil || string(b) != "Prove five facts.\n" {
+		t.Fatalf("the restored skill = %q, %v", b, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "prompts", "judge-new.md")); !os.IsNotExist(err) {
+		t.Fatalf("a file the earlier commit lacks is still there: %v", err)
+	}
+	sha, err := fx.c.CommitAll(ctx, dir, "Reverts version 1.\n", "skills/SKILL.md", "prompts/judge-new.md")
+	if err != nil {
+		t.Fatalf("CommitAll: %v", err)
+	}
+	if got := fx.git(dir, "show", "--name-status", "--format=", sha); got != "D\tprompts/judge-new.md\nM\tskills/SKILL.md" {
+		t.Fatalf("the revert commit changes %q", got)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "README.md")); string(b) != "an edit the revert leaves alone\n" {
+		t.Fatalf("README.md = %q", b)
+	}
+	if err := fx.c.RestoreFrom(ctx, dir, "-x", "skills/SKILL.md"); err == nil {
+		t.Fatal("an option as the source was taken")
+	}
+	if err := fx.c.RestoreFrom(ctx, dir, before); err == nil {
+		t.Fatal("a restore of no path was taken")
+	}
+}

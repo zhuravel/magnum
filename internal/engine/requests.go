@@ -47,6 +47,10 @@ const (
 	ReqLearnPropose = "learn_propose"
 	ReqLearnLand    = "learn_land"
 	ReqLearnReject  = "learn_reject"
+	// ReqLearnRevert proposes a revert of a landed version
+	// (LearnRevertPayload, learn_revert.go), as `magnum learn --revert`
+	// asks.
+	ReqLearnRevert = "learn_revert"
 )
 
 // LearnProposePayload is a `magnum learn --propose` request.
@@ -252,6 +256,8 @@ func (e *Engine) handleRequest(ctx context.Context, req store.Request) {
 		answer(e, ctx, req, e.requestLearnReject)
 	case ReqLearnLand:
 		answer(e, ctx, req, e.requestLearnLand)
+	case ReqLearnRevert: // learn_revert.go
+		answer(e, ctx, req, e.requestLearnRevert)
 	case ReqRelease:
 		p, ok := payload[TargetPayload](e, ctx, req)
 		if !ok {

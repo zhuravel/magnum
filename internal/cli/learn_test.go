@@ -318,15 +318,16 @@ func TestLearnUsageLineNamesItsFlags(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cmd.Use != "learn [--review [--reason <text>] | --propose] [--json]" {
+	if cmd.Use != "learn [--review [--reason <text>] | --propose | --revert <version> [--reason <text>]] [--json]" {
 		t.Fatalf("usage = %q", cmd.Use)
 	}
-	for _, f := range []string{"review", "reason", "propose", "json"} {
+	for _, f := range []string{"review", "reason", "propose", "revert", "json"} {
 		if cmd.Flags().Lookup(f) == nil {
 			t.Errorf("no --%s", f)
 		}
 	}
-	for _, args := range [][]string{{"learn", "x"}, {"learn", "--review", "--propose"}, {"learn", "--reason", "why"}} {
+	for _, args := range [][]string{{"learn", "x"}, {"learn", "--review", "--propose"}, {"learn", "--reason", "why"},
+		{"learn", "--revert", "1", "--propose"}, {"learn", "--revert", "0"}} {
 		h.errb.Reset()
 		if code := h.cmd(args[0], args[1:]...); code != 2 || !strings.Contains(h.errb.String(), "usage: magnum learn [--review") {
 			t.Errorf("%v: exit %d, %s", args, code, h.errb.String())
@@ -334,6 +335,40 @@ func TestLearnUsageLineNamesItsFlags(t *testing.T) {
 	}
 	if reqs := h.requests(); len(reqs) != 0 {
 		t.Fatalf("a usage error queued %+v", reqs)
+	}
+}
+
+// `magnum learn --revert <version>` asks the daemon for a proposal that
+// restores the files of the version before it (engine.ReqLearnRevert, with
+// --reason) and prints its answer; a version that never landed is refused
+// before anything is queued.
+func TestLearnRevertProposesThePreviousVersion(t *testing.T) {
+	h := newActHarness(t)
+	v, err := h.st.CreateLearnVersion(h.ctx, store.LearnVersion{LandedSHA: "aaaaaaa1111", SkillSHA: "s", PromptsSHA: "p", LandedAt: h.now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.pid = 4242
+	h.onSleep = func(h *actHarness) {
+		h.completePending(store.RequestDone, "the revert of skill version 1 runs; the gate holds its proposal for `magnum learn --review`")
+	}
+	if code := h.cmd("learn", "--revert", itoa(v.ID), "--reason", "authors declined twice as much"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.errb.String())
+	}
+	actContains(t, h.out.String(), "the revert of skill version 1 runs")
+	reqs := h.requests()
+	if len(reqs) != 1 || reqs[0].Kind != engine.ReqLearnRevert {
+		t.Fatalf("requests = %+v", reqs)
+	}
+	if p := actDecode[engine.LearnRevertPayload](t, reqs[0].Payload); p.Version != v.ID || p.Reason != "authors declined twice as much" {
+		t.Fatalf("payload = %+v", p)
+	}
+	h.errb.Reset()
+	if code := h.cmd("learn", "--revert", "99"); code != 1 || !strings.Contains(h.errb.String(), "no skill version 99") {
+		t.Fatalf("an unknown version: exit %d, %s", code, h.errb.String())
+	}
+	if reqs := h.requests(); len(reqs) != 1 {
+		t.Fatalf("an unknown version queued %+v", reqs[1:])
 	}
 }
 

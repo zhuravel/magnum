@@ -1,10 +1,11 @@
 package gitx
 
 // The branch work of the skill editor and its landing (internal/engine
-// learn_edit.go): a commit of named paths on a worktree's branch, a
-// fast-forward of the checkout's branch, a rebase that aborts itself on a
-// conflict, which of some paths are dirty, the branch checked out and the
-// operation a repository is in the middle of. Like every gitx command they
+// learn_edit.go): a commit of named paths on a worktree's branch, paths
+// restored as an earlier commit had them (a revert), a fast-forward of the
+// checkout's branch, a rebase that aborts itself on a conflict, which of
+// some paths are dirty, the branch checked out and the operation a
+// repository is in the middle of. Like every gitx command they
 // run none of the clone's hooks (hooksOff).
 
 import (
@@ -61,6 +62,25 @@ func (c *Client) CommitAll(ctx context.Context, dir, message string, paths ...st
 		return "", err
 	}
 	return c.RevParse(ctx, dir, "HEAD")
+}
+
+// RestoreFrom sets paths (relative to the top of the work tree at dir) in
+// the work tree to their content at rev, and removes a path rev does not
+// have (`git restore --source=<rev> --worktree`; the index stays, so
+// CommitAll of the same paths commits the change): a revert of a skill
+// version restores its files as the commit before it had them. At least
+// one path; nothing else in the work tree changes.
+func (c *Client) RestoreFrom(ctx context.Context, dir, rev string, paths ...string) error {
+	if err := checkRev("source", rev); err != nil {
+		return err
+	}
+	specs, err := literal(paths)
+	if err != nil {
+		return fmt.Errorf("gitx: restore: %w", err)
+	}
+	_, err = c.git(ctx, dir, call{label: "restore --source " + rev, mutates: true, timeout: commitTimeout},
+		append([]string{"restore", "--source=" + rev, "--worktree", "--"}, specs...)...)
+	return err
 }
 
 // runStdin is git with stdin.
