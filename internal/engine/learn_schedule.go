@@ -109,12 +109,13 @@ func (e *Engine) maybeLearnScan(ctx context.Context) {
 }
 
 // expireLearnProposals expires the proposals held for the operator or
-// passed for the landing that nobody decided within ProposalTTL of their
-// making, as a notes proposal expires: learn.expired, the worktree and the
-// branch go, and the inputs stay as they are (new, for a later edit). A
-// gating one is the gate's to decide; the registry keeps them all. One
-// whose branch master holds already (a landing cut short after the
-// fast-forward) is recorded as landed instead (learn_land.go).
+// passed for the landing that nobody decided within ProposalTTL of when
+// they began to wait so (store.LearnProposal.WaitingSince; their making
+// when later or unknown), as a notes proposal expires: learn.expired, the
+// worktree and the branch go, and the inputs stay as they are (new, for a
+// later edit). A gating one is the gate's to decide; the registry keeps
+// them all. One whose branch master holds already (a landing cut short
+// after the fast-forward) is recorded as landed instead (learn_land.go).
 func (e *Engine) expireLearnProposals(ctx context.Context) {
 	waiting, err := e.st.LearnProposals(ctx, []string{store.LearnHeld, store.LearnPassed})
 	if err != nil {
@@ -123,7 +124,11 @@ func (e *Engine) expireLearnProposals(ctx context.Context) {
 	}
 	now := e.now()
 	for _, p := range waiting {
-		if now.Sub(p.CreatedAt) < ProposalTTL {
+		since := p.CreatedAt
+		if p.WaitingSince != nil && p.WaitingSince.After(since) {
+			since = *p.WaitingSince
+		}
+		if now.Sub(since) < ProposalTTL {
 			continue
 		}
 		if landed, ok, err := e.landedAlready(ctx, p); err != nil {

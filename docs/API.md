@@ -14188,9 +14188,13 @@ type LearnProposal struct {
 	Scratch      string          `json:"scratch,omitempty"` // the worktree
 	RunDir       string          `json:"run_dir,omitempty"` // inputs.json, pins.json, the changes.json copy
 	CreatedAt    time.Time       `json:"created_at"`
-	DecidedAt    *time.Time      `json:"decided_at,omitempty"`
-	LandedSHA    string          `json:"landed_sha,omitempty"`
-	LandedAt     *time.Time      `json:"landed_at,omitempty"`
+	// WaitingSince is when it last became passed or held, to wait for the
+	// landing or the operator (nil: it never did); its expiry counts from
+	// it.
+	WaitingSince *time.Time `json:"waiting_since,omitempty"`
+	DecidedAt    *time.Time `json:"decided_at,omitempty"`
+	LandedSHA    string     `json:"landed_sha,omitempty"`
+	LandedAt     *time.Time `json:"landed_at,omitempty"`
 	// Reverts is the version whose files a revert restores as they were
 	// before it (0 = not a revert): the gate holds it for the operator.
 	Reverts int64 `json:"reverts,omitempty"`
@@ -15022,7 +15026,8 @@ func (s *Store) CountNotesProposals(ctx context.Context, state string) (int, err
 func (s *Store) CreateLearnProposal(ctx context.Context, in LearnProposalInput) (LearnProposal, error)
     CreateLearnProposal stores a proposal and what it did with every input it
     was given, in one transaction. A proposal in a state that is a decision
-    (anything but editing, gating, passed or held) is decided at once. Trigger,
+    (anything but editing, gating, passed or held) is decided at once,
+    and one made passed or held waits since it is made (waiting_since). Trigger,
     BaseSHA, Branch and State are required; an input is in it once.
 
 func (s *Store) CreateLearnVersion(ctx context.Context, v LearnVersion) (LearnVersion, error)
@@ -15057,10 +15062,12 @@ func (s *Store) DB() *sql.DB
 func (s *Store) DecideLearnProposal(ctx context.Context, id int64, from []string, to, reason string, at time.Time, gate []byte) (LearnProposal, error)
     DecideLearnProposal moves proposal id from one of from to state to,
     compare-and-set (ErrConflict when it is in another state): reason replaces
-    the stored one when not empty, gate the gate's result when not nil, and a
-    state that is a decision stamps decided_at with at (zero = now). The inputs
-    follow it in the same transaction (decideLearnInputs). It never lands one:
-    LandLearnProposal records a landing with its commit and its version.
+    the stored one when not empty, gate the gate's result when not nil, a state
+    that is a decision stamps decided_at with at (zero = now) and passed or held
+    stamps waiting_since with it (a landing that holds a held proposal again
+    too). The inputs follow it in the same transaction (decideLearnInputs).
+    It never lands one: LandLearnProposal records a landing with its commit and
+    its version.
 
 func (s *Store) DecideNotesProposal(ctx context.Context, id int64, from []string, to, reason string, at time.Time, applied *NotesVersionInput) (NotesProposal, error)
     DecideNotesProposal moves proposal id from one of from to state to,

@@ -63,3 +63,39 @@ func TestAHeldOrPassedProposalExpiresAfterAWeek(t *testing.T) {
 		t.Fatalf("learn.expired events = %+v, %v", evs, err)
 	}
 }
+
+// The week before a proposal expires counts from when it began to wait for
+// the landing or the operator, not from its making: one whose gate waited
+// six days and more (the Codex cap, a pause) before it held it keeps its
+// worktree for a week after the hold.
+func TestAProposalExpiresAWeekAfterItBeganToWait(t *testing.T) {
+	f := newGateFixture(t, gateFullFiles)
+	if _, err := f.h.st.DecideLearnProposal(f.h.ctx, f.p.ID, []string{store.LearnGating}, store.LearnFailed, "", time.Time{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	run := "20260925-070000"
+	wt := filepath.Join(f.h.layout.LearnWorktrees(), run)
+	candidateFiles(t, wt)
+	p, err := f.h.st.CreateLearnProposal(f.h.ctx, store.LearnProposalInput{Trigger: store.LearnTriggerEvidence, BaseSHA: learnMaster,
+		Branch: "learn/" + run, CandidateSHA: strings.Repeat("6", 40), Files: gateFullFiles, State: store.LearnGating, Scratch: wt,
+		At: f.h.clock.Now().Add(-ProposalTTL - 24*time.Hour), RunDir: filepath.Join(f.h.layout.LearnSkill(), run)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.h.st.DecideLearnProposal(f.h.ctx, p.ID, []string{store.LearnGating}, store.LearnHeld, "targets could not be replayed",
+		f.h.clock.Now().Add(-time.Hour), nil); err != nil {
+		t.Fatal(err)
+	}
+	f.h.e.maybeLearnScan(f.h.ctx)
+	if got, err := f.h.st.LearnProposalByID(f.h.ctx, p.ID); err != nil || got.State != store.LearnHeld {
+		t.Fatalf("an hour after the hold = %+v, %v; want held", got, err)
+	}
+	if _, err := os.Stat(wt); err != nil {
+		t.Fatalf("the held proposal lost its worktree: %v", err)
+	}
+	f.h.advance(ProposalTTL)
+	f.h.e.maybeLearnScan(f.h.ctx)
+	if got, err := f.h.st.LearnProposalByID(f.h.ctx, p.ID); err != nil || got.State != store.LearnExpired {
+		t.Fatalf("a week after the hold = %+v, %v; want expired", got, err)
+	}
+}

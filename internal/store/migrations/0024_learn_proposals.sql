@@ -4,7 +4,8 @@
 -- was committed on and that commit (candidate_sha), the files it changed (files_json), its state (editing, invalid,
 -- stopped, gating, passed, held, failed, landed, rejected, expired, superseded), the gate's result (gate_json), a
 -- reason (magnum's problems for an invalid one, the operator's for a rejection), the editor's model and the hash of
--- its prompt, its scratch directory and run directory, and when it was made, decided and landed (landed_sha, the
+-- its prompt, its scratch directory and run directory, and when it was made, last began to wait for the landing or the
+-- operator (waiting_since: passed or held, which its expiry counts from), decided and landed (landed_sha, the
 -- commit master moved to); a revert names the version whose files it restores as they were before it (reverts). learn_proposal_inputs links a proposal to every input it was given, a general miss
 -- (kind miss, misses.id) or a general declined finding (kind decline, declines.id), with what the editor did with
 -- it: noted, with where the change covers it (location), or skipped, with a one-line reason. The inputs stay new
@@ -30,6 +31,7 @@ CREATE TABLE learn_proposals (
   scratch        TEXT,
   run_dir        TEXT,
   created_at     TEXT NOT NULL,
+  waiting_since  TEXT,
   decided_at     TEXT,
   landed_sha     TEXT,
   landed_at      TEXT,

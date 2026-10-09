@@ -227,6 +227,37 @@ func TestDecideLearnProposalIsCompareAndSet(t *testing.T) {
 	}
 }
 
+// A proposal records when it last began to wait for the landing or the
+// operator (passed or held), which the week before it expires counts from:
+// made so, or moved there by the gate or by a landing that held it.
+func TestALearnProposalRecordsWhenItBeganToWait(t *testing.T) {
+	st, clk := newStore(t)
+	ctx := context.Background()
+	p := proposeLearn(t, st)
+	if p.WaitingSince != nil {
+		t.Fatalf("a gating proposal waits since %v", p.WaitingSince)
+	}
+	clk.Add(6 * 24 * time.Hour)
+	passed, err := st.DecideLearnProposal(ctx, p.ID, []string{LearnGating}, LearnPassed, "", time.Time{}, nil)
+	if err != nil || passed.WaitingSince == nil || !passed.WaitingSince.Equal(clk.Now()) {
+		t.Fatalf("passed = %+v, %v; want waiting since %v", passed, err, clk.Now())
+	}
+	at := clk.Now().Add(3 * time.Hour)
+	held, err := st.DecideLearnProposal(ctx, p.ID, []string{LearnPassed}, LearnHeld, "the checkout is dirty", at, nil)
+	if err != nil || held.WaitingSince == nil || !held.WaitingSince.Equal(at) {
+		t.Fatalf("held by the landing = %+v, %v; want waiting since %v", held, err, at)
+	}
+	expired, err := st.DecideLearnProposal(ctx, p.ID, []string{LearnHeld}, LearnExpired, "", at.Add(time.Hour), nil)
+	if err != nil || expired.WaitingSince == nil || !expired.WaitingSince.Equal(at) {
+		t.Fatalf("expired = %+v, %v; the time it began to wait stays", expired, err)
+	}
+	made, err := st.CreateLearnProposal(ctx, LearnProposalInput{Trigger: LearnTriggerRequest, BaseSHA: "b", Branch: "learn/x", State: LearnHeld,
+		At: t0})
+	if err != nil || made.WaitingSince == nil || !made.WaitingSince.Equal(t0) {
+		t.Fatalf("made held = %+v, %v", made, err)
+	}
+}
+
 func TestALandedProposalMarksItsNotedInputsUsed(t *testing.T) {
 	st, _ := newStore(t)
 	ctx := context.Background()

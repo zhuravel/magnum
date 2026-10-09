@@ -5862,6 +5862,16 @@ skill versions); people add theirs to the sections before it, at the end of the 
   shutdown does not cancel); the rest of a cut-short retro stays as it was (no summary, no day).
   Rejected: comparing against the inputs at the editor's last start instead of per retro (a second
   record to keep for the same answer).
+- **A skill proposal's week counts from when it began to wait** (2026-10-09, a review finding on stage 5
+  of the self-improving review loop). The expiry counted from the proposal's making, so one whose gate
+  waited six days at the Codex budget's soft cap or under a pause expired minutes after the gate held
+  it, its worktree and branch deleted before the operator could review it; the entry that added the
+  expiry rejected counting from the gate's decision only because no column recorded it.
+  `learn_proposals.waiting_since` (migration 0024, which no released build applied) records when a
+  proposal last became `passed` or `held`, made so or moved there by the gate or by a landing that held
+  it, and `expireLearnProposals` expires a proposal 7 days after the later of that time and its making.
+  Rejected: the time of the `learn.gate_done` event (events are pruned, and a landing's hold writes
+  none), and keeping the week from the making (a slow gate takes the operator's time).
 
 ## Learned rules
 

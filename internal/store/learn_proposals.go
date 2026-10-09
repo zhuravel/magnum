@@ -73,9 +73,13 @@ type LearnProposal struct {
 	Scratch      string          `json:"scratch,omitempty"` // the worktree
 	RunDir       string          `json:"run_dir,omitempty"` // inputs.json, pins.json, the changes.json copy
 	CreatedAt    time.Time       `json:"created_at"`
-	DecidedAt    *time.Time      `json:"decided_at,omitempty"`
-	LandedSHA    string          `json:"landed_sha,omitempty"`
-	LandedAt     *time.Time      `json:"landed_at,omitempty"`
+	// WaitingSince is when it last became passed or held, to wait for the
+	// landing or the operator (nil: it never did); its expiry counts from
+	// it.
+	WaitingSince *time.Time `json:"waiting_since,omitempty"`
+	DecidedAt    *time.Time `json:"decided_at,omitempty"`
+	LandedSHA    string     `json:"landed_sha,omitempty"`
+	LandedAt     *time.Time `json:"landed_at,omitempty"`
 	// Reverts is the version whose files a revert restores as they were
 	// before it (0 = not a revert): the gate holds it for the operator.
 	Reverts int64 `json:"reverts,omitempty"`
@@ -114,14 +118,18 @@ type LearnProposalInput struct {
 }
 
 const learnProposalColumns = `id, trigger_reason, base_sha, branch, candidate_sha, files_json, state, gate_json, reason, model,
-prompt_sha256, scratch, run_dir, created_at, decided_at, landed_sha, landed_at, reverts`
+prompt_sha256, scratch, run_dir, created_at, waiting_since, decided_at, landed_sha, landed_at, reverts`
+
+// learnWaitsFor are the states a proposal waits in for the landing or the
+// operator, which stamp waiting_since.
+var learnWaitsFor = []string{LearnPassed, LearnHeld}
 
 func scanLearnProposal(sc scanner) (LearnProposal, error) {
 	var p LearnProposal
 	var reverts sql.NullInt64
 	err := sc.Scan(&p.ID, &p.Trigger, &p.BaseSHA, &p.Branch, textCol(&p.CandidateSHA), jsonCol(&p.Files), &p.State, rawCol(&p.Gate),
 		textCol(&p.Reason), textCol(&p.Model), textCol(&p.PromptSHA256), textCol(&p.Scratch), textCol(&p.RunDir), timeCol(&p.CreatedAt),
-		nullTime(&p.DecidedAt), textCol(&p.LandedSHA), nullTime(&p.LandedAt), &reverts)
+		nullTime(&p.WaitingSince), nullTime(&p.DecidedAt), textCol(&p.LandedSHA), nullTime(&p.LandedAt), &reverts)
 	p.Reverts = reverts.Int64
 	if p.Files == nil {
 		p.Files = []string{}
@@ -139,7 +147,8 @@ func learnProposalByID(ctx context.Context, q querier, id int64) (LearnProposal,
 
 // CreateLearnProposal stores a proposal and what it did with every input it
 // was given, in one transaction. A proposal in a state that is a decision
-// (anything but editing, gating, passed or held) is decided at once.
+// (anything but editing, gating, passed or held) is decided at once, and
+// one made passed or held waits since it is made (waiting_since).
 // Trigger, BaseSHA, Branch and State are required; an input is in it once.
 func (s *Store) CreateLearnProposal(ctx context.Context, in LearnProposalInput) (LearnProposal, error) {
 	if err := errors.Join(oneOf("learn trigger", in.Trigger, learnTriggers), oneOf("learn proposal state", in.State, learnStates)); err != nil {
@@ -165,17 +174,21 @@ func (s *Store) CreateLearnProposal(ctx context.Context, in LearnProposalInput) 
 	}
 	var out LearnProposal
 	err = s.tx(ctx, func(tx *sql.Tx) error {
-		var decided, gate any
+		var decided, waiting, gate any
 		if !slices.Contains(learnWaiting, in.State) {
 			decided = FormatTime(at)
+		}
+		if slices.Contains(learnWaitsFor, in.State) {
+			waiting = FormatTime(at)
 		}
 		if in.Gate != nil {
 			gate = string(in.Gate)
 		}
 		res, err := tx.ExecContext(ctx, `INSERT INTO learn_proposals (trigger_reason, base_sha, branch, candidate_sha, files_json, state,
-  gate_json, reason, model, prompt_sha256, scratch, run_dir, created_at, decided_at, reverts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  gate_json, reason, model, prompt_sha256, scratch, run_dir, created_at, waiting_since, decided_at, reverts)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			in.Trigger, in.BaseSHA, in.Branch, nullString(in.CandidateSHA), string(filesJSON), in.State, gate, nullString(in.Reason),
-			nullString(in.Model), nullString(in.PromptSHA), nullString(in.Scratch), nullString(in.RunDir), FormatTime(at), decided,
+			nullString(in.Model), nullString(in.PromptSHA), nullString(in.Scratch), nullString(in.RunDir), FormatTime(at), waiting, decided,
 			nullInt(in.Reverts))
 		if err != nil {
 			return err
@@ -283,8 +296,10 @@ WHERE l.kind = ? AND l.input_id = ? AND p.state = ? AND p.reason IS NOT NULL AND
 // DecideLearnProposal moves proposal id from one of from to state to,
 // compare-and-set (ErrConflict when it is in another state): reason
 // replaces the stored one when not empty, gate the gate's result when not
-// nil, and a state that is a decision stamps decided_at with at (zero =
-// now). The inputs follow it in the same transaction (decideLearnInputs).
+// nil, a state that is a decision stamps decided_at with at (zero = now)
+// and passed or held stamps waiting_since with it (a landing that holds a
+// held proposal again too). The inputs follow it in the same transaction
+// (decideLearnInputs).
 // It never lands one: LandLearnProposal records a landing with its commit
 // and its version.
 func (s *Store) DecideLearnProposal(ctx context.Context, id int64, from []string, to, reason string, at time.Time, gate []byte) (LearnProposal, error) {
@@ -309,15 +324,19 @@ func (s *Store) DecideLearnProposal(ctx context.Context, id int64, from []string
 		if !slices.Contains(from, p.State) {
 			return fmt.Errorf("%w: learn proposal %d is %s", ErrConflict, id, p.State)
 		}
-		var decided, gateArg any
+		var decided, waiting, gateArg any
 		if !slices.Contains(learnWaiting, to) {
 			decided = FormatTime(at)
+		}
+		if slices.Contains(learnWaitsFor, to) {
+			waiting = FormatTime(at)
 		}
 		if gate != nil {
 			gateArg = string(gate)
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE learn_proposals SET state = ?, reason = COALESCE(?, reason),
-  gate_json = COALESCE(?, gate_json), decided_at = COALESCE(?, decided_at) WHERE id = ?`, to, nullString(reason), gateArg, decided, id); err != nil {
+  gate_json = COALESCE(?, gate_json), waiting_since = COALESCE(?, waiting_since), decided_at = COALESCE(?, decided_at) WHERE id = ?`,
+			to, nullString(reason), gateArg, waiting, decided, id); err != nil {
 			return err
 		}
 		if err := decideLearnInputs(ctx, tx, id, to, at); err != nil {

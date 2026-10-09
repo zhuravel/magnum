@@ -229,7 +229,9 @@ lesson), the diff of the skill and prompts (`notes.Unified`, `notes.Printable`),
 gate table, and the question. `y` lands it through the landing path (the daemon does the landing. the CLI
 sends `ReqLearnLand` and reports the answer), `n` rejects it with the reason (the branch and worktree are
 removed, the inputs go back to `new`, or `dismissed` after a second rejection), anything else leaves it.
-`--json` prints the data. A proposal not decided within 7 days expires like a notes proposal.
+`--json` prints the data. A proposal not decided within 7 days of becoming `held` or `passed`
+(`waiting_since`, so a gate that waited days for the budget or a pause takes none of the week) expires
+like a notes proposal.
 
 `magnum learn --propose`: `ReqLearnPropose`, an editor run now (refused while one runs or a proposal is
 `gating`, `passed` or `held`. the refusal names it). `magnum learn --revert <version>`: a proposal that
@@ -287,7 +289,7 @@ Migration 0023: `declines` (section 1) with indexes on `(pr_id)`, `(state, scope
 `(skill_sha)`. Migration 0024: `learn_proposals` (`id`, `trigger` evidence|request|regression,
 `base_sha`, `branch`, `candidate_sha`, `files_json`, `state` editing|invalid|stopped|gating|passed|held|
 failed|landed|rejected|expired|superseded, `gate_json`, `reason`, `model`, `prompt_sha256`, `scratch`,
-`run_dir`, `created_at`, `decided_at`, `landed_sha`, `landed_at`), `learn_proposal_inputs`
+`run_dir`, `created_at`, `waiting_since`, `decided_at`, `landed_sha`, `landed_at`), `learn_proposal_inputs`
 (`proposal_id`, `kind` miss|decline, `input_id`, `outcome` noted|skipped, `where`, `reason`, primary key
 on the three), `learn_versions` (section 7). The `misses` and `declines` state transitions move through
 the proposal decision in one transaction, as `decideProposalMisses` does, and a `dismissed` input is

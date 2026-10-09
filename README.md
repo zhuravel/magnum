@@ -1794,8 +1794,9 @@ why when it stays held); `n` rejects it with `--reason`, which the next
 edit reads: the daemon removes its worktree and branch, its inputs go back to `new`, an input in two
 rejected proposals is `dismissed`, and the learned eval corpus is rewritten at once, so a dismissed input's
 case is gone from the next `magnum eval run`; anything else leaves it. A `held` or `passed` proposal
-nobody decided within 7 days of its making expires at the loop's scan, as a notes proposal does
-(`learn.expired`): its worktree and branch go, and its inputs stay `new` for a later edit.
+nobody decided within 7 days of becoming so (a gate that waited days for the budget does not shorten your
+week) expires at the loop's scan, as a notes proposal does (`learn.expired`): its worktree and branch go,
+and its inputs stay `new` for a later edit.
 
 A landed version that made things worse is reverted only with you. `magnum learn --revert <version>`
 (`--reason` says why; it goes into the design log and the commit's subject, so no pull request, link,
