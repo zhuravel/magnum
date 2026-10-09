@@ -5650,3 +5650,18 @@ skill versions, which its first entry creates); people add theirs to the section
   with the candidate that creates it. Rejected: writing the entry at landing time, after rebasing a
   commit without it (the entry would not be in the tree the format gate and `make check-private`
   checked, which the entry before this one requires).
+- **The format gate regenerates every golden file, and only it writes them** (2026-10-09, a review
+  finding on stage 3 of the self-improving review loop). The gate's first step, `go test
+  ./internal/agents -run TestRenderGolden -update`, left three goldens of two other tests stale
+  (`judge_rereview_former` and `judge_recovery_former` of `TestJudgePromptsNameTheFormerLogins`,
+  `judge_rereview_threads` of `TestRereviewPromptNamesTheThreadsFile`): a sentence added to
+  `prompts/judge-rereview.md` outside its template actions passed the first step and failed the second,
+  which the agent cannot fix, so any such edit ended invalid. The step now runs `-run
+  '^(TestRenderGolden|TestJudgePromptsNameTheFormerLogins|TestRereviewPromptNamesTheThreadsFile)$'`
+  (`engine.goldenTests`), and `TestTheFormatGateRegeneratesEveryGolden` parses internal/agents' tests
+  and fails when one that writes a golden (`checkGolden`, directly or through a helper) is not in it.
+  Each check also puts the goldens git status lists back as the base has them (`resetEditFiles`, with
+  the design log), so a golden the editor changed by hand is not committed: the changed-file check
+  exempts the goldens because the gate rewrites them. Rejected: `-update` over the whole package (it
+  rewrites `skill_pins.txt` from whatever pins the run recorded) and moving those cases into
+  `TestRenderGolden`'s table (they check more than the golden).

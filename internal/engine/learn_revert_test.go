@@ -109,7 +109,7 @@ func TestARevertRestoresTheFilesOfTheVersionBefore(t *testing.T) {
 		t.Fatal("the revert moved master")
 	}
 	calls := f.gt.all()
-	if len(calls) != len(formatGate) || !strings.HasSuffix(calls[0], "go test ./internal/agents -run TestRenderGolden -update") {
+	if len(calls) != len(formatGate) || !strings.HasSuffix(calls[0], ": "+strings.Join(formatGate[0], " ")) || !strings.Contains(calls[0], "-update") {
 		t.Fatalf("format gate = %q", calls)
 	}
 	b, err := os.ReadFile(filepath.Join(p.RunDir, learn.ChangesFile))

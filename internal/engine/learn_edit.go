@@ -729,8 +729,8 @@ func (e *Engine) editFingerprint(ctx context.Context, wt string) (string, error)
 }
 
 // editCheck reads and checks what the editor wrote: the worktree still on
-// its branch at the base (the agent commits nothing), the design log back
-// at the base (an earlier check appended to it), changes.json, the changed
+// its branch at the base (the agent commits nothing), the design log and
+// the golden files back at the base (resetEditFiles), changes.json, the changed
 // files (existing allowed files only, a prompt's template actions kept,
 // then learn.ValidateEdit against the inputs, the pins, the cap and the
 // leak rules), then the candidate's prompts (CheckPrompts on the config
@@ -751,8 +751,8 @@ func (e *Engine) editCheck(ctx context.Context, run EditRun, cand editCandidate,
 	if len(problems) > 0 {
 		return learn.Changes{}, problems
 	}
-	if err := e.resetEditLog(ctx, wt, cand.base); err != nil {
-		return learn.Changes{}, []string{learn.DecisionsFile + " cannot be put back as it was: " + oneLine(err.Error(), retroWhyRunes)}
+	if err := e.resetEditFiles(ctx, wt, cand.base); err != nil {
+		return learn.Changes{}, []string{"the design log and the golden files cannot be put back as they were: " + oneLine(err.Error(), retroWhyRunes)}
 	}
 	b, err := fsx.ReadRegular(filepath.Join(wt, learn.ChangesFile), learn.ChangesMaxBytes)
 	if errors.Is(err, os.ErrNotExist) {
@@ -827,10 +827,16 @@ func (e *Engine) editCheck(ctx context.Context, run EditRun, cand editCandidate,
 // golden files regenerated from its prompts, the tests that read the
 // prompts and the skill, and the private-name guard (Deps.GoTest).
 var formatGate = [][]string{
-	{"go", "test", "./internal/agents", "-run", "TestRenderGolden", "-update"},
+	{"go", "test", "./internal/agents", "-run", goldenTests, "-update"},
 	{"go", "test", "./internal/agents", "./internal/pipeline", "./internal/config"},
 	{"make", "check-private"},
 }
+
+// goldenTests are the tests of internal/agents that write golden files
+// (checkGolden), the format gate's first step with -update: every one, so
+// a prompt's edit leaves no golden stale, and no other, since -update over
+// the whole package rewrites the skill's pins from what the run recorded.
+const goldenTests = "^(TestRenderGolden|TestJudgePromptsNameTheFormerLogins|TestRereviewPromptNamesTheThreadsFile)$"
 
 // formatGateProblems runs the format gate in the worktree wt: the first
 // command that fails, with the end of its output (none: it passed).
@@ -844,20 +850,26 @@ func (e *Engine) formatGateProblems(ctx context.Context, wt string) []string {
 	return nil
 }
 
-// resetEditLog puts the worktree's design log back as the base has it
-// when it changed: a check appends the decision's entry before the format
-// gate, and the next check appends it again.
-func (e *Engine) resetEditLog(ctx context.Context, wt, base string) error {
+// resetEditFiles puts magnum's own files of the worktree back as the base
+// has them when they changed: the design log, to which a check appends the
+// decision's entry before the format gate (the next check appends it
+// again), and the golden files, which only the gate's first step writes (a
+// golden the editor changed by hand is not committed).
+func (e *Engine) resetEditFiles(ctx context.Context, wt, base string) error {
 	entries, err := e.d.LearnGit.StatusPaths(ctx, wt)
 	if err != nil {
 		return err
 	}
-	if !slices.ContainsFunc(entries, func(s gitx.StatusEntry) bool {
-		return s.Path == learn.DecisionsFile || s.OrigPath == learn.DecisionsFile
-	}) {
+	var paths []string
+	for _, s := range entries {
+		if s.Path == learn.DecisionsFile || regenerated(s) {
+			paths = append(paths, s.Path)
+		}
+	}
+	if len(paths) == 0 {
 		return nil
 	}
-	return e.d.LearnGit.RestoreFrom(ctx, wt, base, learn.DecisionsFile)
+	return e.d.LearnGit.RestoreFrom(ctx, wt, base, paths...)
 }
 
 // appendDesignLog adds entry to the Learned rules section of the design

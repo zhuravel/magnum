@@ -134,7 +134,10 @@ the DECISIONS entry to the worktree's `docs/DECISIONS.md` (put back to the base 
 nudge does not append twice, and part of the late-write fingerprint), so the format gate's
 `make check-private` sees the entry, whose first sentence is also the commit subject. Then the format gate
 runs in the worktree: `go test ./internal/agents ./internal/pipeline -update` is not used. instead
-`go test ./internal/agents -run 'TestRenderGolden' -update` regenerates goldens, then
+`go test ./internal/agents -run '^(TestRenderGolden|TestJudgePromptsNameTheFormerLogins|TestRereviewPromptNamesTheThreadsFile)$' -update`
+regenerates goldens (every test that writes one, `TestTheFormatGateRegeneratesEveryGolden` checks; never
+the whole package, whose `-update` rewrites the pins; the goldens go back to the base before each check,
+so a golden edited by hand is not committed), then
 `go test ./internal/agents ./internal/pipeline ./internal/config` must pass, and
 `mise -C <checkout> exec -- make check-private` must pass. One nudge with the problems, then the candidate
 is committed on its branch (message: the DECISIONS headline, the inputs it answers by id, the byte

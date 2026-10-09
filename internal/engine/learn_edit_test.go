@@ -4,8 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -569,7 +573,7 @@ func TestTheFormatGateRunsGoldensThenTheTestsThenCheckPrivate(t *testing.T) {
 	p := f.edit()
 	wt := p.Scratch
 	want := []string{
-		wt + ": go test ./internal/agents -run TestRenderGolden -update",
+		wt + ": go test ./internal/agents -run ^(TestRenderGolden|TestJudgePromptsNameTheFormerLogins|TestRereviewPromptNamesTheThreadsFile)$ -update",
 		wt + ": go test ./internal/agents ./internal/pipeline ./internal/config",
 		wt + ": make check-private",
 	}
@@ -628,6 +632,101 @@ func TestTheFormatGateChecksTheDecisionsEntry(t *testing.T) {
 	p2 := f2.edit()
 	if p2.State != store.LearnInvalid || !strings.Contains(p2.Reason, "make check-private") || p2.CandidateSHA != "" || f2.branchExists(p2.Branch) {
 		t.Fatalf("proposal = %+v", p2)
+	}
+}
+
+// The format gate's first step regenerates every golden file: its -run
+// pattern matches each test of internal/agents that writes one (through
+// checkGolden, directly or by a helper), so an edit of a prompt never
+// leaves a golden stale for the second step to fail on, and it never runs
+// the whole package with -update, which would rewrite the skill's pins
+// from whatever the run recorded.
+func TestTheFormatGateRegeneratesEveryGolden(t *testing.T) {
+	args := formatGate[0]
+	i := slices.Index(args, "-run")
+	if i < 0 || i+1 >= len(args) || !slices.Contains(args, "-update") {
+		t.Fatalf("the golden step = %q: it needs -run and -update", args)
+	}
+	run, err := regexp.Compile(args[i+1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := filepath.Glob(filepath.Join("..", "agents", "*_test.go"))
+	if err != nil || len(files) == 0 {
+		t.Fatalf("internal/agents' tests: %v", err)
+	}
+	fset := token.NewFileSet()
+	funcs := map[string]*ast.FuncDecl{}
+	for _, file := range files {
+		f, err := parser.ParseFile(fset, file, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, d := range f.Decls {
+			if fn, ok := d.(*ast.FuncDecl); ok && fn.Recv == nil && fn.Body != nil {
+				funcs[fn.Name.Name] = fn
+			}
+		}
+	}
+	calls := func(fn *ast.FuncDecl, names map[string]bool) bool {
+		found := false
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			if c, ok := n.(*ast.CallExpr); ok {
+				if id, ok := c.Fun.(*ast.Ident); ok && names[id.Name] {
+					found = true
+				}
+			}
+			return !found
+		})
+		return found
+	}
+	writes := map[string]bool{"checkGolden": true} // and the helpers that call it
+	for grew := true; grew; {
+		grew = false
+		for name, fn := range funcs {
+			if !writes[name] && !strings.HasPrefix(name, "Test") && calls(fn, writes) {
+				writes[name], grew = true, true
+			}
+		}
+	}
+	var writers []string
+	for name, fn := range funcs {
+		if strings.HasPrefix(name, "Test") && calls(fn, writes) {
+			writers = append(writers, name)
+		}
+	}
+	if len(writers) < 3 {
+		t.Fatalf("found %d tests that write goldens (%v): the scan is broken", len(writers), writers)
+	}
+	for _, w := range writers {
+		if !run.MatchString(w) {
+			t.Errorf("%s writes golden files, but the format gate's -run %q does not run it", w, args[i+1])
+		}
+	}
+	if run.MatchString("TestSkillPinsFileIsCurrent") {
+		t.Errorf("the golden step runs the pins test with -update")
+	}
+}
+
+// The golden files are magnum's: each check puts them back as the base has
+// them before the format gate regenerates them, so a golden the editor
+// changed by hand (here one the fake gate does not render) is not
+// committed.
+func TestAHandEditedGoldenIsNotCommitted(t *testing.T) {
+	const other = "internal/agents/testdata/judge_rereview.golden"
+	f := newEditFixture(t, func(f *editFixture, wt string) {
+		goodTurn(f, wt)
+		writeFile(f.h.t, wt, other, "edited by hand\n")
+	})
+	writeFile(t, f.checkout, other, "rendered\n")
+	f.gitOut(f.checkout, "add", other)
+	f.gitOut(f.checkout, "commit", "--quiet", "-m", "c2")
+	p := f.edit()
+	if p.State != store.LearnGating || slices.Contains(p.Files, other) {
+		t.Fatalf("proposal = %+v", p)
+	}
+	if got := f.gitOut(f.checkout, "show", p.CandidateSHA+":"+other); got != "rendered" {
+		t.Fatalf("the committed golden = %q", got)
 	}
 }
 

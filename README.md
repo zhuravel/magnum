@@ -1689,8 +1689,9 @@ what it adds, no login, link or repository in the decision. Then the candidate's
 rules`, which the loop's first entry creates and which holds only the loop's entries (yours go to the
 sections before it, so an entry you commit to `master` meanwhile does not make the landing's rebase
 conflict), put back as it was before each check, so a nudge does not add it twice; and the format gate
-must pass in the worktree: the golden files regenerated
-from the prompts, `go test ./internal/agents ./internal/pipeline ./internal/config`, and `make
+must pass in the worktree: the golden files regenerated from the prompts by every test that writes one
+(and put back as they were before each check, so a golden edited by hand is not committed), `go test
+./internal/agents ./internal/pipeline ./internal/config`, and `make
 check-private` with the checkout's `mise` environment (its `.mise.local.toml` holds the private patterns,
 and the login check reads your registry), which so checks the entry and the commit's headline too.
 Whatever fails gets one nudge with the problems. The agent edits the existing files in place (none
