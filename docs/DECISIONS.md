@@ -5882,6 +5882,17 @@ skill versions); people add theirs to the sections before it, at the end of the 
   (since 15:04)". An edit request that lost the race to another learn job says which job runs instead of
   calling it a skill edit. Rejected: a slot of its own for reverts (learn jobs run one at a time
   anyway).
+- **The improvement loop's landing keeps both sides above the Learned rules section** (2026-10-09,
+  completing the self-improving review loop). `land.sh` of `/magnum-improve` resolved a conflicted
+  `docs/DECISIONS.md` by itself only when the commit appended to the end of the file; with the log ending
+  in `## Learned rules`, entries go to the end of the section before it, so two landings that both added
+  one conflicted there and every such landing stopped for a resolution by hand. `keep_both_decisions`
+  now compares the files without that section (and without the blank lines before it): when the commit
+  only appends there and leaves the section as its parent had it, the result is master's file before the
+  section, the commit's entries, then master's section, whatever the loop appended to it meanwhile; a
+  log without the section is resolved as before. A commit that writes into the section is not merged by
+  itself. The skill's common rules and landing notes say where entries go; `scripts/selftest.sh` covers
+  both cases. Rejected: leaving the resolution to the operator (it is the common case).
 
 ## Learned rules
 

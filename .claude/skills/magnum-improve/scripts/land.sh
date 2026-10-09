@@ -4,8 +4,9 @@
 # Lands an agent's finished work on master in the main checkout: a
 # fast-forward when master is an ancestor, else a cherry-pick of the commits
 # master lacks. A conflicted docs/DECISIONS.md, where the commit only appends
-# entries, is resolved by keeping both sides: master's file, then the entries
-# the commit appends (none dropped, no markers). A conflict in any other file
+# entries (above the loop's `## Learned rules` section, which ends the log), is
+# resolved by keeping both sides: master's file, then the entries the commit
+# appends, then master's section (none dropped, no markers). A conflict in any other file
 # stops with what to do (DECISIONS.md already resolved and staged). Before
 # landing it dry-runs, on a copy of the live registry, every migration master
 # or the target has that the registry has not applied. Then the gate, a push,
@@ -74,28 +75,49 @@ if [[ -n $pending ]]; then
     done
 fi
 
+# learned_split <file> <out>: <out>.head is the file up to the self-improving
+# loop's `## Learned rules` section, which ends the log, without the blank
+# lines before it, and <out>.tail the section (empty without one).
+learned_split() {
+    awk -v head="$2.head" -v tail="$2.tail" '
+        /^## Learned rules[ \t]*$/ { t = 1 }
+        t { print >tail; next }
+        /^[ \t]*$/ { blank = blank $0 "\n"; next }
+        { printf "%s", blank >head; blank = ""; print >head }
+    ' "$1"
+    touch "$2.head" "$2.tail"
+}
+
 # keep_both_decisions resolves a conflicted docs/DECISIONS.md when the commit
-# only appends to it (its parent's file is a prefix of its own): master's file,
-# then the text the commit appends, unless master already has that text.
+# only appends to it, above the `## Learned rules` section when the log has
+# one (its parent's file before the section is a prefix of its own, and the
+# section is its parent's): master's file before the section, then the text
+# the commit appends, unless master already has that text, then master's
+# section. A commit that writes into the section is not merged by itself.
 keep_both_decisions() {
-    local size
+    local size side
     git show ":1:$decisions" >"$work/base" 2>/dev/null &&
         git show ":2:$decisions" >"$work/ours" 2>/dev/null &&
         git show ":3:$decisions" >"$work/theirs" 2>/dev/null || return 1
-    size=$(wc -c <"$work/base" | tr -d ' ')
-    head -c "$size" "$work/theirs" | cmp -s - "$work/base" || return 1
-    tail -c +"$((size + 1))" "$work/theirs" >"$work/added"
+    for side in base ours theirs; do
+        learned_split "$work/$side" "$work/$side"
+    done
+    cmp -s "$work/base.tail" "$work/theirs.tail" || return 1
+    size=$(wc -c <"$work/base.head" | tr -d ' ')
+    head -c "$size" "$work/theirs.head" | cmp -s - "$work/base.head" || return 1
+    tail -c +"$((size + 1))" "$work/theirs.head" >"$work/added"
     [[ -s $work/added ]] || return 1
     ! grep -qE '^(<<<<<<<|>>>>>>>)' "$work/ours" "$work/added" || return 1
-    if [[ $(<"$work/ours") == *"$(<"$work/added")"* ]]; then
-        cp "$work/ours" "$decisions"
-    else
-        {
-            cat "$work/ours"
-            [[ -z $(tail -c 1 "$work/ours") ]] || echo
+    {
+        cat "$work/ours.head"
+        if [[ $(<"$work/ours.head") != *"$(<"$work/added")"* ]]; then
             cat "$work/added"
-        } >"$decisions"
-    fi
+        fi
+        if [[ -s $work/ours.tail ]]; then
+            echo
+            cat "$work/ours.tail"
+        fi
+    } >"$decisions"
 }
 
 # stop explains a cherry-pick that did not go through and exits.
@@ -113,7 +135,7 @@ stop() {
     echo "land: conflict in $short ($subject):" >&2
     printf '  %s\n' $conflicted >&2
     if grep -qxF "$decisions" <<<"$conflicted"; then
-        echo "  ($decisions: the commit changes more than the end of the file, so it is not merged by itself)" >&2
+        echo "  ($decisions: the commit changes more than the end of the file, or of the part above its Learned rules section, so it is not merged by itself)" >&2
     fi
     echo "resolve it ($decisions: keep both entries; the config comments: keep both sides' keys; SKILL.md: keep both" \
         "rules and raise its size cap by the minimum), git add the files, git cherry-pick --continue, then" \
