@@ -135,7 +135,7 @@ func (rd *round) runStages(ctx context.Context, runs map[string]*store.Run, own 
 	defer cancel(nil)
 	rd.writeHistory(ctx)
 	rd.writeDocs(ctx)
-	if len(rd.stages) > 0 {
+	if len(rd.stages) > 0 || own != nil { // a judge's own pass alone (StoredReports) leaves the checkout as it found it too
 		rd.noteTree(ctx)
 	}
 	if rd.canRestart() {

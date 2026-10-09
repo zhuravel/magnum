@@ -136,6 +136,22 @@ func TestEvalRunCandidateFlagChangesTheInputsHash(t *testing.T) {
 	}
 }
 
+// `eval run --judge-only` replays the judge on a full replay's reports: a case that has none says
+// which run to make, and nothing starts for it.
+func TestEvalRunJudgeOnlyNeedsAFullReplay(t *testing.T) {
+	f := newInspFixture(t)
+	if code := execute(f.Ctx, []string{"eval", "run", "--judge-only", "--corpus", evalCorpusOf(t, "geo", "zhuravel/web#3")}); code != 0 {
+		t.Fatalf("exit %d; stderr %s", code, f.Err)
+	}
+	if out := f.Out.String(); !strings.Contains(out, "no full replay") || !strings.Contains(out, "magnum eval run --case geo") {
+		t.Fatalf("output:\n%s", out)
+	}
+	runs, err := eval.ListRuns(evalRunsRoot(f.Ctx.Layout))
+	if err != nil || len(runs) != 1 || runs[0].Cases[0].Outcome != "error" || runs[0].Cases[0].JudgeOnly {
+		t.Fatalf("runs %+v, %v", runs, err)
+	}
+}
+
 // evalCorpusOf writes a corpus of one case, name on pr, and returns its path.
 func evalCorpusOf(t *testing.T, name, pr string) string {
 	t.Helper()

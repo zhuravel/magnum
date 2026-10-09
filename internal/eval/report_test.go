@@ -590,6 +590,47 @@ func TestTheReportShowsAbsentHits(t *testing.T) {
 	}
 }
 
+// A judge-only replay takes its reviewers' reports from the newest full replay of the case at the
+// same head that ended a scored dry run: not a judge-only one, another head's, an unscored one or
+// another case's. A judge-only run says so in its report header and per case.
+func TestFullReplayForPicksTheNewestScoredFullRun(t *testing.T) {
+	scored := &Score{Found: 1, Total: 1}
+	full := func(id, name, head, outcome string, score *Score, judgeOnly bool) Run {
+		return Run{ID: id, Cases: []CaseRun{{Case: name, Head: head, Outcome: outcome, Score: score, JudgeOnly: judgeOnly, ReportDir: "/runs/" + id}}}
+	}
+	other := strings.Repeat("c", 40)
+	runs := []Run{
+		full("r1", "geo", sha, "dry_run", scored, false),
+		full("r2", "geo", sha, "dry_run", scored, true),
+		full("r3", "geo", other, "dry_run", scored, false),
+		full("r4", "geo", sha, "error", nil, false),
+		full("r5", "geo", sha, "dry_run", nil, false),
+		full("r6", "copy", sha, "dry_run", scored, false),
+		full("r7", "geo", sha, "usage_limit", scored, false),
+	}
+	if r, cr, ok := FullReplayFor(runs, "geo", sha); !ok || r.ID != "r1" || cr.ReportDir != "/runs/r1" {
+		t.Fatalf("FullReplayFor = %s %+v %v, want r1", r.ID, cr, ok)
+	}
+	runs = append(runs, full("r8", "geo", sha, "dry_run", scored, false))
+	if r, _, ok := FullReplayFor(runs, "geo", sha); !ok || r.ID != "r8" {
+		t.Fatalf("FullReplayFor = %s %v, want the newest, r8", r.ID, ok)
+	}
+	if _, _, ok := FullReplayFor(runs, "geo", strings.Repeat("d", 40)); ok {
+		t.Fatal("a full replay found at a head no run reviewed")
+	}
+
+	jo := Run{ID: "r9", Cases: []CaseRun{{Case: "geo", PR: "example/web#3", Head: sha, Outcome: "dry_run", JudgeOnly: true, ReportsRun: "r8",
+		Score: scored}}}
+	if first, _, _ := strings.Cut(text(jo, nil), "\n"); first != "run r9  judge-only" {
+		t.Errorf("header = %q", first)
+	}
+	var b bytes.Buffer
+	WriteMarkdown(&b, jo)
+	if !strings.Contains(b.String(), "example/web#3 at `0123456789ab`, outcome dry_run, the judge alone on the reviewers' reports of run r8\n") {
+		t.Errorf("markdown lacks the judge-only case line:\n%s", b.String())
+	}
+}
+
 func TestWriteMarkdownDescribesSeverityShortfallsAndUnscoredCases(t *testing.T) {
 	r := Run{ID: "r", Cases: []CaseRun{
 		{Case: "weak", PR: "example/a#1", Outcome: "dry_run", Score: &Score{Total: 3, Found: 2, Defects: []DefectResult{

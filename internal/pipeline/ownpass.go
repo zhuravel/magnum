@@ -44,12 +44,27 @@ import (
 // ownPassDue reports whether the round prompts its judge for its own pass
 // with the reviewers: the input asks for it, the judge has an own-pass
 // prompt, and a reviewer runs (runs: the reviewers' runs; none when every
-// reviewer was dropped or logged out). A judge alone gets one prompt: a
-// continued turn, a delta check, a re-review of the same head, a round of
-// the judge alone.
+// reviewer was dropped or logged out), or, in a round on stored reports
+// (StoredReports), a stored report is there: the judge replays a full
+// round's turns. A judge alone gets one prompt: a continued turn, a delta
+// check, a re-review of the same head, a round of the judge alone.
 func (rd *round) ownPassDue(runs map[string]*store.Run) bool {
+	reviewed := len(runs) > 0 || rd.in.StoredReports && rd.storedReport()
 	return rd.in.OwnPass && rd.in.Kind != KindContinue && rd.deltaCheck() == nil && !rd.sameHead() &&
-		rd.judge.PromptFile(config.PromptOwnPass) != "" && len(runs) > 0
+		rd.judge.PromptFile(config.PromptOwnPass) != "" && reviewed
+}
+
+// storedReport reports whether a reviewer's report was found
+// (existingReports) for a round on stored reports.
+func (rd *round) storedReport() bool {
+	rd.mu.Lock()
+	defer rd.mu.Unlock()
+	for _, rep := range rd.res.Reports {
+		if rep.Status == ReportOK {
+			return true
+		}
+	}
+	return false
 }
 
 // ownPass is the judge's own pass in flight (startOwnPass).

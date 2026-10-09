@@ -123,3 +123,17 @@ func TestBaselinesAreScoredReplaysWithTheSameInputsNewestFirst(t *testing.T) {
 		t.Errorf("unknown inputs reuse %+v", got)
 	}
 }
+
+// A judge-only replay scored the judge on another run's reviewer reports: a full run would not
+// repeat it, so it is no baseline.
+func TestBaselinesLeaveOutJudgeOnlyReplays(t *testing.T) {
+	c := Case{Name: "geo", Head: sha}
+	scored := &Score{Found: 1, Total: 2}
+	runs := []Run{
+		{ID: "1-full", Inputs: "aaa", Cases: []CaseRun{{Case: "geo", Head: sha, Score: scored}}},
+		{ID: "2-judge-only", Inputs: "aaa", Cases: []CaseRun{{Case: "geo", Head: sha, Score: scored, JudgeOnly: true, ReportsRun: "1-full"}}},
+	}
+	if got := Baselines(runs, "aaa", c); len(got) != 1 || got[0].Run != "1-full" {
+		t.Fatalf("Baselines = %+v, want the full replay alone", got)
+	}
+}

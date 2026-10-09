@@ -145,7 +145,8 @@ type Baseline struct {
 // Baselines lists, newest run first, the stored replays of c that a run with inputs (Run.Inputs:
 // the judge skill, the roles' prompts and the role config) may reuse instead of replaying c: runs
 // that recorded the same inputs from a clean checkout, whose case of c's name reviewed c's head
-// and has a score. Unknown inputs ("") reuse nothing. The inputs leave magnum's code out, so the
+// with every role (not a judge-only replay, CaseRun.JudgeOnly) and has a score. Unknown inputs ("")
+// reuse nothing. The inputs leave magnum's code out, so the
 // caller decides whether the code of Commit reviews as its own does (eval-at.sh compares the Go
 // files of the two commits).
 func Baselines(runs []Run, inputs string, c Case) []Baseline {
@@ -158,7 +159,7 @@ func Baselines(runs []Run, inputs string, c Case) []Baseline {
 			continue
 		}
 		for _, cr := range r.Cases {
-			if cr.Case == c.Name && cr.Head == c.Head && cr.Score != nil {
+			if cr.Case == c.Name && cr.Head == c.Head && cr.Score != nil && !cr.JudgeOnly {
 				out = append(out, Baseline{Run: r.ID, Commit: r.Commit, Case: cr})
 				break
 			}

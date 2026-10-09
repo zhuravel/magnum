@@ -5393,6 +5393,15 @@ type EvalCase struct {
 	// Notes gives the judge the scratch copy of the repository notes
 	// (paths.Layout.Notes under Scratch; the caller copies the live file).
 	Notes bool
+	// JudgeOnly runs the judge alone on Reports, the reviewer reports of an
+	// earlier full replay of the case, which the caller copied into the
+	// round's report directory (paths.Layout.ReviewDir of the scratch
+	// layout, each under its role's ReportFile): the reviewers' runs are
+	// seeded as round evalReportsRound's, verified with those files (a
+	// Missing one as a run that did not verify), and the judge reviews as
+	// in the full replay, its own pass included as configured.
+	JudgeOnly bool
+	Reports   []agents.Report
 }
     EvalCase is one replay of `magnum eval run`: a PR at a pinned head that the
     caller already checked out (detached) in Checkout, reviewed by the watch's
@@ -5929,6 +5938,12 @@ const FlaggedFile = "flagged.json"
 
 FUNCTIONS
 
+func FullReplayFor(runs []Run, caseName, head string) (Run, CaseRun, bool)
+    FullReplayFor finds the replay a judge-only replay of case caseName at head
+    takes its reviewers' reports from: the newest run whose case of that name
+    reviewed head with every role (not JudgeOnly) and ended a scored dry run.
+    runs are oldest first (ListRuns); ok is false when none did.
+
 func HashNotes(file, dir string) (map[string]string, error)
     HashNotes is the SHA-256 (hex) of each notes file a replay gives the judge:
     the repository's notes file, keyed by its base name ("" when there is none),
@@ -5978,10 +5993,11 @@ type Baseline struct {
     not repeat.
 
 func Baselines(runs []Run, inputs string, c Case) []Baseline
-    Baselines lists, newest run first, the stored replays of c that a run with
-    inputs (Run.Inputs: the judge skill, the roles' prompts and the role config)
-    may reuse instead of replaying c: runs that recorded the same inputs from a
-    clean checkout, whose case of c's name reviewed c's head and has a score.
+    Baselines lists, newest run first, the stored replays of c that a run
+    with inputs (Run.Inputs: the judge skill, the roles' prompts and the role
+    config) may reuse instead of replaying c: runs that recorded the same
+    inputs from a clean checkout, whose case of c's name reviewed c's head with
+    every role (not a judge-only replay, CaseRun.JudgeOnly) and has a score.
     Unknown inputs ("") reuse nothing. The inputs leave magnum's code out,
     so the caller decides whether the code of Commit reviews as its own does
     (eval-at.sh compares the Go files of the two commits).
@@ -6025,6 +6041,10 @@ type CaseRun struct {
 	// gauge counts every Codex session of the account, live rounds included.
 	CodexBefore *float64 `json:"codex_before,omitempty"`
 	CodexAfter  *float64 `json:"codex_after,omitempty"`
+	// JudgeOnly: the judge alone reviewed, on the reviewers' reports of the case in run ReportsRun,
+	// the newest full replay of it at the same head (FullReplayFor; `magnum eval run --judge-only`).
+	JudgeOnly  bool   `json:"judge_only,omitempty"`
+	ReportsRun string `json:"reports_run,omitempty"`
 }
     CaseRun is one case of a replay: what became of the review round and,
     when it left a result, the score.
@@ -6269,6 +6289,13 @@ const ReleaseTimeout = 2 * time.Minute
     ReleaseTimeout bounds closing a case's agents after its round.
 
 
+VARIABLES
+
+var ErrNoFullReplay = errors.New("no full replay to take the reviewers' reports from")
+    ErrNoFullReplay is a judge-only replay's error when it finds no scored full
+    replay of its case at the same head to take the reviewers' reports from.
+
+
 FUNCTIONS
 
 func Refused(ctx context.Context, d Deps, ec eval.Case) string
@@ -6335,6 +6362,11 @@ type Options struct {
 	// Candidate replays a candidate directory's prompts and skill
 	// (WithCandidate); "" = Config's.
 	Candidate string
+	// JudgeOnly runs the judge alone on the reviewers' reports of the
+	// case's newest full replay at the same head (eval.FullReplayFor),
+	// copied into the case's report directory (engine.EvalCase.JudgeOnly);
+	// a case without one fails with ErrNoFullReplay before anything starts.
+	JudgeOnly bool
 	// NoNotes withholds the repository notes from the judge; Keep leaves
 	// the case's worktree in place; Force runs past [usage] codex_soft.
 	NoNotes, Keep, Force bool
@@ -11135,6 +11167,14 @@ type RoundInput struct {
 	// judge takes the local diff, not GitHub's (the PR may have moved on or
 	// closed). Rendered as `blind: true` in the prompts.
 	Blind bool
+	// StoredReports (magnum eval --judge-only, with the Round of the stored
+	// runs): the reviewers do not run; their reports are the files in the
+	// round's report directory that their runs of Round on TargetSHA
+	// verified, read as a continued round reads its paused round's
+	// (existingReports), and the judge alone gets the round's prompts, its
+	// own pass first when OwnPass asks and a report is there. Roles still
+	// hold the reviewers, which name the reports.
+	StoredReports bool
 	// PostMerge: GitHub merged the PR before magnum reviewed it (the engine
 	// dispatched a `magnum review` of a merged PR). The judge reviews the
 	// commits magnum missed as usual but posts a COMMENT whatever the

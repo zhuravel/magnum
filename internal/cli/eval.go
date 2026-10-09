@@ -40,7 +40,7 @@ import (
 
 const (
 	evalUsage    = "run|score|list|show"
-	evalRunUsage = "[--corpus FILE] [--case NAME]... [--label TEXT] [--candidate DIR] [--no-notes] [--keep] [--force]"
+	evalRunUsage = "[--corpus FILE] [--case NAME]... [--label TEXT] [--candidate DIR] [--judge-only] [--no-notes] [--keep] [--force]"
 	// evalCorpusFile is the default corpus, in the user config's directory
 	// (~/.config/magnum); evalLegacyCorpusFile its old place in a checkout.
 	evalCorpusFile       = "eval.toml"
@@ -137,9 +137,9 @@ func newEvalCmd(c *Context) *cobra.Command {
 
 // evalRunFlags are the parsed `magnum eval run` flags.
 type evalRunFlags struct {
-	corpus, label, candidate string
-	cases                    []string
-	noNotes, keep, force     bool
+	corpus, label, candidate        string
+	cases                           []string
+	judgeOnly, noNotes, keep, force bool
 }
 
 func newEvalRunCmd(c *Context) *cobra.Command {
@@ -148,7 +148,9 @@ func newEvalRunCmd(c *Context) *cobra.Command {
 		"Replay every case of the corpus (or each --case) one after the other and print the report, compared "+
 			"with the previous run. --label names the run (for example the change it measures). --candidate replays "+
 			"a directory shaped like magnum's checkout (a worktree with a prompt or skill change): its prompts/ and "+
-			"skills/magnum-review/SKILL.md are read instead of the configured ones, and the run's inputs are theirs. --no-notes "+
+			"skills/magnum-review/SKILL.md are read instead of the configured ones, and the run's inputs are theirs. --judge-only "+
+			"runs the judge alone on the reviewers' reports of each case's newest full replay at the same head (a case without one "+
+			"fails before anything starts): a judge prompt or skill change costs one agent instead of a round. --no-notes "+
 			"withholds the repository notes (by default the judge reads a scratch copy of them). --keep leaves "+
 			"each case's worktree in place. --force runs past the Codex soft cap.",
 		func(pos []string) int {
@@ -162,6 +164,7 @@ func newEvalRunCmd(c *Context) *cobra.Command {
 	fs.StringArrayVar(&f.cases, "case", nil, "only this case (repeatable)")
 	fs.StringVar(&f.label, "label", "", "a name for this run")
 	fs.StringVar(&f.candidate, "candidate", "", "replay this directory's prompts/ and judge skill instead of the configured ones")
+	fs.BoolVar(&f.judgeOnly, "judge-only", false, "run the judge alone on the reviewers' reports of each case's newest full replay")
 	fs.BoolVar(&f.noNotes, "no-notes", false, "do not give the judge the repository notes")
 	fs.BoolVar(&f.keep, "keep", false, "keep each case's worktree")
 	fs.BoolVar(&f.force, "force", false, "run even when the Codex budget is past [usage] codex_soft")
@@ -273,7 +276,7 @@ func runEvalRun(c *Context, f evalRunFlags) int {
 		Logger:   app.NewLogger(nil, c.Stderr, slog.LevelWarn),
 		Progress: func(format string, args ...any) { fmt.Fprintf(c.Stdout, "      "+format+"\n", args...) },
 		Warn:     func(format string, args ...any) { fmt.Fprintf(c.Stderr, "magnum eval run: "+format+"\n", args...) }}
-	opts := evalrun.Options{Candidate: f.candidate, NoNotes: f.noNotes, Keep: f.keep, Force: f.force, AgentTag: evalAgentTag(run.ID), RunDir: dir}
+	opts := evalrun.Options{Candidate: f.candidate, JudgeOnly: f.judgeOnly, NoNotes: f.noNotes, Keep: f.keep, Force: f.force, AgentTag: evalAgentTag(run.ID), RunDir: dir}
 	run.Commit, run.Dirty = evalMagnumCommit(ctx, c)
 	fmt.Fprintf(c.Stdout, "eval run %s: %d case(s), corpus %s, results in %s\n", run.ID, len(cases), evalCorpusNames(path, learned), inspTilde(dir))
 	if _, err := eval.LoadFlagged(evalRunsRoot(c.Layout)); err != nil { // eval/flagged.go: refused replays are never run again

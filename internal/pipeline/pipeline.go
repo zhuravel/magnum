@@ -327,6 +327,14 @@ type RoundInput struct {
 	// judge takes the local diff, not GitHub's (the PR may have moved on or
 	// closed). Rendered as `blind: true` in the prompts.
 	Blind bool
+	// StoredReports (magnum eval --judge-only, with the Round of the stored
+	// runs): the reviewers do not run; their reports are the files in the
+	// round's report directory that their runs of Round on TargetSHA
+	// verified, read as a continued round reads its paused round's
+	// (existingReports), and the judge alone gets the round's prompts, its
+	// own pass first when OwnPass asks and a report is there. Roles still
+	// hold the reviewers, which name the reports.
+	StoredReports bool
 	// PostMerge: GitHub merged the PR before magnum reviewed it (the engine
 	// dispatched a `magnum review` of a merged PR). The judge reviews the
 	// commits magnum missed as usual but posts a COMMENT whatever the
@@ -659,6 +667,9 @@ func (r *Runner) newRound(ctx context.Context, in RoundInput) (*round, error) {
 		health:    map[string]*config.HealthRegexps{},
 		seenHead:  cmp.Or(in.DispatchedHead, in.PR.HeadSHA),
 	}
+	if in.StoredReports {
+		toRun = []config.Role{judge} // the reviewers' reports are stored: none of them runs
+	}
 	rd.plan(toRun)
 	rd.res = RoundResult{Round: in.Round, ReportDir: rd.dir, TargetSHA: in.TargetSHA, Reports: map[agents.Role]RoleReport{}}
 	return rd, nil
@@ -808,6 +819,9 @@ func (rd *round) run(ctx context.Context) (RoundResult, error) {
 	if err != nil {
 		return rd.failed(ctx, err)
 	}
+	if in.Kind == KindContinue || in.StoredReports {
+		rd.existingReports(ctx)
+	}
 	// The judge's own pass, created after its run: the run the review's
 	// marker names stays the judge's (ownpass.go).
 	var own *store.Run
@@ -817,9 +831,6 @@ func (rd *round) run(ctx context.Context) (RoundResult, error) {
 		}
 	}
 
-	if in.Kind == KindContinue {
-		rd.existingReports(ctx)
-	}
 	if err := rd.readiness(ctx); err != nil {
 		return rd.stopped(ctx)
 	}
@@ -920,14 +931,17 @@ func (rd *round) newRun(ctx context.Context, role config.Role, kind string) (*st
 // setAsideStale renames report files a previous attempt on the same head left
 // behind to <name>.prev, so they are never read as this round's output, the
 // judge's own-pass file included. A continued round keeps the other roles'
-// reports. A file it cannot move (or
+// reports, and so does a round on stored reports (StoredReports). A file it
+// cannot move (or
 // even stat) fails the round before anything is prompted: a role that then
 // wrote nothing would pass the old file off as its report.
 func (rd *round) setAsideStale() error {
 	files := []string{rd.judge.ReportFile()}
 	if rd.in.Kind != KindContinue {
-		for _, role := range rd.order {
-			files = append(files, role.ReportFile())
+		if !rd.in.StoredReports {
+			for _, role := range rd.order {
+				files = append(files, role.ReportFile())
+			}
 		}
 		files = append(files, agents.OwnFindingsFile) // the judge's own pass (ownpass.go)
 	}
@@ -947,9 +961,10 @@ func (rd *round) setAsideStale() error {
 	return nil
 }
 
-// existingReports fills Reports for a continued round from the files on
-// disk that the paused round verified (its role's latest run on this head
-// ended verified). A role the paused round ran (it has a run of the round on
+// existingReports fills Reports for a continued round, or a round on stored
+// reports (StoredReports), from the files on disk that the paused round, or
+// the stored runs, verified (its role's latest run on this head ended
+// verified). A role the paused round ran (it has a run of the round on
 // this head) is listed as missing when its file is absent or was not
 // verified, as is one the paused round's judge went without (the PR's
 // MissingReports of the round, with its status: a role skipped as logged

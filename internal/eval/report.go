@@ -43,6 +43,27 @@ type CaseRun struct {
 	// gauge counts every Codex session of the account, live rounds included.
 	CodexBefore *float64 `json:"codex_before,omitempty"`
 	CodexAfter  *float64 `json:"codex_after,omitempty"`
+	// JudgeOnly: the judge alone reviewed, on the reviewers' reports of the case in run ReportsRun,
+	// the newest full replay of it at the same head (FullReplayFor; `magnum eval run --judge-only`).
+	JudgeOnly  bool   `json:"judge_only,omitempty"`
+	ReportsRun string `json:"reports_run,omitempty"`
+}
+
+// outcomeDryRun is a replay's outcome when the judge wrote its planned review (pipeline.OutcomeDryRun).
+const outcomeDryRun = "dry_run"
+
+// FullReplayFor finds the replay a judge-only replay of case caseName at head takes its reviewers'
+// reports from: the newest run whose case of that name reviewed head with every role (not JudgeOnly)
+// and ended a scored dry run. runs are oldest first (ListRuns); ok is false when none did.
+func FullReplayFor(runs []Run, caseName, head string) (Run, CaseRun, bool) {
+	for _, r := range slices.Backward(runs) {
+		for _, cr := range r.Cases {
+			if cr.Case == caseName && cr.Head == head && cr.Score != nil && !cr.JudgeOnly && cr.Outcome == outcomeDryRun {
+				return r, cr, true
+			}
+		}
+	}
+	return Run{}, CaseRun{}, false
 }
 
 // Points is how far the Codex gauge moved while the case ran; ok is false when either reading is
@@ -369,7 +390,11 @@ func WriteMarkdown(w io.Writer, r Run) {
 		if c.Head != "" {
 			fmt.Fprintf(w, " at `%s`", head(c.Head, 12))
 		}
-		fmt.Fprintf(w, ", outcome %s\n", c.Outcome)
+		fmt.Fprintf(w, ", outcome %s", c.Outcome)
+		if c.JudgeOnly {
+			fmt.Fprintf(w, ", the judge alone on the reviewers' reports of run %s", c.ReportsRun)
+		}
+		fmt.Fprintln(w)
 		if c.Error != "" {
 			fmt.Fprintf(w, "\nError: %s\n", firstLine(c.Error, 100))
 		}
@@ -406,6 +431,9 @@ func runHeader(r Run) string {
 	}
 	if r.Candidate != "" {
 		h += "  candidate " + r.Candidate
+	}
+	if slices.ContainsFunc(r.Cases, func(c CaseRun) bool { return c.JudgeOnly }) {
+		h += "  judge-only"
 	}
 	return h
 }

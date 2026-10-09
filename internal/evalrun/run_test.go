@@ -83,6 +83,71 @@ func TestACaseWhosePRIsFlaggedIsRefused(t *testing.T) {
 	}
 }
 
+// A judge-only replay takes the reviewers' reports of the case's newest full replay at the same head;
+// a case without one fails before anything is checked out or started, naming the case, the head and
+// the run it needs. A full replay of another head, a judge-only one or one without a score is none.
+func TestAJudgeOnlyReplayWithoutAFullReplayIsRefusedBeforeAnyAgent(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Watches = []config.Watch{{Owner: "example", Include: []string{"*"}, Identity: "zhuravel", PollIdentity: "zhuravel"}}
+	l := paths.Layout{Home: t.TempDir()}
+	d := Deps{Layout: l, Config: cfg}
+	ec := widgetsCase()
+	scored := &eval.Score{Found: 1, Total: 1}
+	for _, r := range []eval.Run{
+		{ID: "20261008-100000", Cases: []eval.CaseRun{{Case: ec.Name, Head: strings.Repeat("cd", 20), Outcome: "dry_run", Score: scored, ReportDir: "/x"}}},
+		{ID: "20261008-110000", Cases: []eval.CaseRun{{Case: ec.Name, Head: ec.Head, Outcome: "dry_run", Score: scored, JudgeOnly: true, ReportDir: "/x"}}},
+		{ID: "20261008-120000", Cases: []eval.CaseRun{{Case: ec.Name, Head: ec.Head, Outcome: "error", ReportDir: "/x"}}},
+	} {
+		if err := eval.SaveRun(filepath.Join(RunsRoot(l), r.ID), r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	o := Options{JudgeOnly: true, RunDir: filepath.Join(RunsRoot(l), "20261009-100000")}
+	cr := RunCase(context.Background(), d, ec, o)
+	if cr.Outcome != OutcomeError || !strings.Contains(cr.Error, ErrNoFullReplay.Error()) || !strings.Contains(cr.Error, `"x"`) ||
+		!strings.Contains(cr.Error, ec.Head[:7]) || !strings.Contains(cr.Error, "--case x") {
+		t.Fatalf("case run %+v, want the no-full-replay error naming the case, the head and the run to make", cr)
+	}
+	if _, err := os.Stat(filepath.Join(o.RunDir, "cases")); !os.IsNotExist(err) {
+		t.Fatalf("a scratch tree was made: %v", err)
+	}
+}
+
+// A judge-only replay copies the full replay's reviewer reports into its own report directory, each
+// under its role's file, and lists a reviewer the full replay ran without a report as missing; a role
+// a replay never runs (runs = "manual") is not listed.
+func TestAJudgeOnlyReplayCopiesTheFullReplaysReports(t *testing.T) {
+	cfg := testConfig(t)
+	for i := range cfg.Roles {
+		if cfg.Roles[i].Name == "claude-simplify" {
+			cfg.Roles[i].Runs = config.RunsManual
+		}
+	}
+	from, to := t.TempDir(), filepath.Join(t.TempDir(), "reviews", "abababababab")
+	writeFile(t, filepath.Join(from, "claude-review.md"), "## stored claude\n")
+	writeFile(t, filepath.Join(from, "codex-judge.json"), `{"status":"dry_run"}`)
+	reports, err := copyReports(cfg, nil, from, to)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, r := range reports {
+		got[r.Role] = r.Status
+		if r.Status == "ok" && (r.Path != filepath.Join(to, r.Role+".md") || r.Missing) {
+			t.Errorf("%s: %+v, want its copy in %s", r.Role, r, to)
+		}
+	}
+	if len(got) != 2 || got["claude-review"] != "ok" || got["codex-review"] != "missing" {
+		t.Fatalf("reports %+v, want claude-review copied and codex-review missing", reports)
+	}
+	if b, err := os.ReadFile(filepath.Join(to, "claude-review.md")); err != nil || string(b) != "## stored claude\n" {
+		t.Errorf("the copy: %q, %v", b, err)
+	}
+	if _, err := os.Stat(filepath.Join(to, "codex-judge.json")); !os.IsNotExist(err) {
+		t.Errorf("the full replay's judge result was copied: %v", err)
+	}
+}
+
 // The judge gets a copy of the repository notes and their harness scripts in the scratch tree, so
 // its rewrite never reaches the live notes; a repository without notes is not an error.
 func TestEvalCopiesTheNotesIntoTheScratchTree(t *testing.T) {

@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zhuravel/magnum/internal/agents"
 	"github.com/zhuravel/magnum/internal/app"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/engine"
@@ -31,6 +32,7 @@ import (
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/textx"
 	"github.com/zhuravel/magnum/internal/usage"
 )
 
@@ -49,6 +51,11 @@ const (
 
 // ReleaseTimeout bounds closing a case's agents after its round.
 const ReleaseTimeout = 2 * time.Minute
+
+// ErrNoFullReplay is a judge-only replay's error when it finds no scored
+// full replay of its case at the same head to take the reviewers' reports
+// from.
+var ErrNoFullReplay = errors.New("no full replay to take the reviewers' reports from")
 
 // RunsRoot is where a layout's eval runs live: <state>/eval/<run id>/, with
 // the flagged cases (eval.FlaggedFile) and the cases' worktrees (wt/).
@@ -89,6 +96,11 @@ type Options struct {
 	// Candidate replays a candidate directory's prompts and skill
 	// (WithCandidate); "" = Config's.
 	Candidate string
+	// JudgeOnly runs the judge alone on the reviewers' reports of the
+	// case's newest full replay at the same head (eval.FullReplayFor),
+	// copied into the case's report directory (engine.EvalCase.JudgeOnly);
+	// a case without one fails with ErrNoFullReplay before anything starts.
+	JudgeOnly bool
 	// NoNotes withholds the repository notes from the judge; Keep leaves
 	// the case's worktree in place; Force runs past [usage] codex_soft.
 	NoNotes, Keep, Force bool
@@ -160,6 +172,19 @@ func RunCase(ctx context.Context, d Deps, ec eval.Case, o Options) (out eval.Cas
 	if w == nil {
 		return fail(OutcomeError, fmt.Errorf("%s is not watched: add it to a [[watch]] so magnum knows its roles and identity", full))
 	}
+	var stored eval.CaseRun // the full replay whose reviewer reports a judge-only replay takes
+	if o.JudgeOnly {
+		runs, err := eval.ListRuns(RunsRoot(d.Layout))
+		if err != nil {
+			return fail(OutcomeError, err)
+		}
+		r, fc, ok := eval.FullReplayFor(runs, ec.Name, ec.Head)
+		if !ok || fc.ReportDir == "" {
+			return fail(OutcomeError, fmt.Errorf("%w: case %q at %s has no scored full replay; run `magnum eval run --case %s` without --judge-only first",
+				ErrNoFullReplay, ec.Name, textx.ShortSHA(ec.Head), ec.Name))
+		}
+		stored, cr.JudgeOnly, cr.ReportsRun = fc, true, r.ID
+	}
 	if why := budget(ctx, cfg, o.Force); why != "" {
 		return fail(OutcomeBudget, errors.New(why))
 	}
@@ -178,6 +203,13 @@ func RunCase(ctx context.Context, d Deps, ec eval.Case, o Options) (out eval.Cas
 			return fail(OutcomeError, fmt.Errorf("copy the repository notes: %w", err))
 		}
 		cr.Notes = notesHashes(layout, ec.Owner, ec.Repo)
+	}
+	var reports []agents.Report
+	if o.JudgeOnly {
+		var err error
+		if reports, err = copyReports(cfg, w, stored.ReportDir, layout.ReviewDir(ec.Owner, ec.Repo, ec.Number, ec.Head)); err != nil {
+			return fail(OutcomeError, fmt.Errorf("copy the reviewers' reports of run %s: %w", cr.ReportsRun, err))
+		}
 	}
 	logger := d.Logger
 	if logger == nil {
@@ -240,6 +272,7 @@ func RunCase(ctx context.Context, d Deps, ec eval.Case, o Options) (out eval.Cas
 		Head: ec.Head, BaseRef: cmp.Or(ec.Base, pd.BaseRefName), DefaultBranch: cmp.Or(ec.Base, pd.BaseRefName),
 		Title: pd.Title, Author: pd.AuthorLogin, AuthorType: pd.AuthorType,
 		Checkout: wt, Worktrees: worktrees, MainClone: mainClone, Watch: *w, Identity: w.Identity, Notes: notes,
+		JudgeOnly: o.JudgeOnly, Reports: reports,
 	})
 	if pr.ID != 0 {
 		// A judge still at work is interrupted, then the workspace closed;
@@ -367,6 +400,35 @@ func copyNotes(live, scratch paths.Layout, owner, repo string) error {
 		}
 		return copyFile(p, filepath.Join(dstDir, rel))
 	})
+}
+
+// copyReports copies the reviewer reports of a full replay (its report
+// directory from) into a judge-only replay's (to) and lists them for the
+// round (engine.EvalCase.Reports): one per reviewer of the watch that a
+// replay's round runs (config.Role.ShouldRun of a first round), with the
+// copy when the full replay left its report, else missing, as the judge of
+// the full replay was told.
+func copyReports(cfg *config.Config, w *config.Watch, from, to string) ([]agents.Report, error) {
+	var out []agents.Report
+	for _, role := range cfg.RolesFor(w) {
+		if role.Judge || !role.ShouldRun(false, false) {
+			continue
+		}
+		src, dst := filepath.Join(from, role.ReportFile()), filepath.Join(to, role.ReportFile())
+		st, err := os.Stat(src)
+		switch {
+		case errors.Is(err, fs.ErrNotExist) || err == nil && st.Size() == 0:
+			out = append(out, agents.Report{Role: role.Name, Status: pipeline.ReportMissing, Missing: true})
+			continue
+		case err != nil:
+			return nil, err
+		}
+		if err := copyFile(src, dst); err != nil {
+			return nil, err
+		}
+		out = append(out, agents.Report{Role: role.Name, Path: dst, Status: pipeline.ReportOK})
+	}
+	return out, nil
 }
 
 func copyFile(src, dst string) error {

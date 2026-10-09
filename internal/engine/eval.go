@@ -46,7 +46,20 @@ type EvalCase struct {
 	// Notes gives the judge the scratch copy of the repository notes
 	// (paths.Layout.Notes under Scratch; the caller copies the live file).
 	Notes bool
+	// JudgeOnly runs the judge alone on Reports, the reviewer reports of an
+	// earlier full replay of the case, which the caller copied into the
+	// round's report directory (paths.Layout.ReviewDir of the scratch
+	// layout, each under its role's ReportFile): the reviewers' runs are
+	// seeded as round evalReportsRound's, verified with those files (a
+	// Missing one as a run that did not verify), and the judge reviews as
+	// in the full replay, its own pass included as configured.
+	JudgeOnly bool
+	Reports   []agents.Report
 }
+
+// evalReportsRound is the round of a judge-only replay: the seeded
+// reviewer runs' and its judge's (a scratch registry holds one replay).
+const evalReportsRound = 1
 
 // EvalObserveEvery is how often RunEval observes herdr during a replay.
 var EvalObserveEvery = 10 * time.Second
@@ -71,6 +84,9 @@ func (e *Engine) RunEval(ctx context.Context, c EvalCase) (pipeline.RoundResult,
 	}
 	if c.Head == "" || c.Checkout == "" || c.Number <= 0 || c.URL == "" {
 		return pipeline.RoundResult{}, store.PR{}, errors.New("engine: eval case needs a number, URL, head and checkout")
+	}
+	if err := e.checkEvalReports(c); err != nil {
+		return pipeline.RoundResult{}, store.PR{}, fmt.Errorf("engine: eval %s/%s#%d: %w", c.Owner, c.Repo, c.Number, err)
 	}
 	job, err := e.seedEval(ctx, c)
 	if err != nil {
@@ -368,10 +384,65 @@ func (e *Engine) seedEval(ctx context.Context, c EvalCase) (*roundJob, error) {
 	if err != nil {
 		return nil, fmt.Errorf("seed slot: %w", err)
 	}
+	if c.JudgeOnly {
+		if err := e.seedEvalReports(ctx, pr, c); err != nil {
+			return nil, err
+		}
+	}
 	return &roundJob{
 		pr: pr, repo: repo, watch: c.Watch, slot: sl, hasSlot: true, kind: pipeline.KindInitial,
-		evalHead: c.Head, evalNotes: c.Notes,
+		evalHead: c.Head, evalNotes: c.Notes, evalStored: c.JudgeOnly,
 	}, nil
+}
+
+// checkEvalReports refuses a judge-only replay whose reports the round
+// cannot read: none to read, a role the watch does not run as a reviewer,
+// or a file anywhere but the round's report directory under the role's
+// ReportFile (the round reads them there, pipeline.RoundInput.StoredReports).
+func (e *Engine) checkEvalReports(c EvalCase) error {
+	if !c.JudgeOnly {
+		return nil
+	}
+	dir := e.d.Layout.ReviewDir(c.Owner, c.Repo, c.Number, c.Head)
+	ok := 0
+	for _, rep := range c.Reports {
+		role, found := e.cfg.RoleByNameOrAlias(&c.Watch, rep.Role)
+		switch {
+		case !found || role.Judge:
+			return fmt.Errorf("the stored report of %q is not a reviewer's of the watch", rep.Role)
+		case rep.Missing || rep.Path == "":
+			continue
+		case rep.Path != filepath.Join(dir, role.ReportFile()):
+			return fmt.Errorf("the stored report of %s must be %s, not %s", rep.Role, filepath.Join(dir, role.ReportFile()), rep.Path)
+		}
+		ok++
+	}
+	if ok == 0 {
+		return errors.New("a judge-only replay needs the reviewers' reports of a full replay, and it has none")
+	}
+	return nil
+}
+
+// seedEvalReports records the reviewer reports of a judge-only replay as
+// the runs of round evalReportsRound on the pinned head, the way a
+// reviewer's run ends: verified with its report file, or failed with the
+// report's status when the full replay's reviewer left none (the judge is
+// told the report is missing, as it was then).
+func (e *Engine) seedEvalReports(ctx context.Context, pr store.PR, c EvalCase) error {
+	now := e.now()
+	for _, rep := range c.Reports {
+		role, _ := e.cfg.RoleByNameOrAlias(&c.Watch, rep.Role)
+		run := store.Run{PRID: pr.ID, Round: evalReportsRound, Role: role.Name, Kind: store.RunInitial, TargetSHA: c.Head,
+			Identity: c.Identity, State: store.RunVerified, Outcome: new(pipeline.ReportOK), ReportPath: new(rep.Path),
+			EndedAt: &now, VerifiedAt: &now}
+		if rep.Missing || rep.Path == "" {
+			run.State, run.Outcome, run.ReportPath, run.VerifiedAt = store.RunFailed, new(cmp.Or(rep.Status, pipeline.ReportMissing)), nil, nil
+		}
+		if _, err := e.st.CreateRun(ctx, run); err != nil {
+			return fmt.Errorf("seed the %s report: %w", role.Name, err)
+		}
+	}
+	return nil
 }
 
 // observeEvery observes herdr (observe) every interval until ctx ends.

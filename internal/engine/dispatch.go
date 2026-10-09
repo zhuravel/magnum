@@ -74,9 +74,12 @@ type roundJob struct {
 
 	// evalHead is set for a magnum eval replay (RunEval): the caller checked
 	// it out in the slot, the round is blind and never restarts. evalNotes
-	// gives that round the scratch layout's notes.
-	evalHead  string
-	evalNotes bool
+	// gives that round the scratch layout's notes. evalStored: a judge-only
+	// replay (EvalCase.JudgeOnly): the judge alone on the reviewers' stored
+	// reports of round evalReportsRound.
+	evalHead   string
+	evalNotes  bool
+	evalStored bool
 }
 
 // roundHandle tracks a round goroutine or a `magnum open` restore.

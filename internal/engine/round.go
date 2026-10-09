@@ -177,11 +177,17 @@ func (e *Engine) prepare(ctx context.Context, job *roundJob) (pipeline.RoundInpu
 	if len(rs.toRun) == 0 {
 		return fail(fmt.Errorf("watch %s has no judge among its roles", job.watch.Owner))
 	}
-	if rs.judgeOnly() {
+	switch {
+	case rs.judgeOnly():
 		// A delta check, or a re-review of the same head: the judge alone,
 		// no triage.
 		rs.roles, rs.toRun = judgeAlone(rs.roles), judgeAlone(rs.toRun)
-	} else {
+	case job.evalStored:
+		// A judge-only replay: the judge alone as in a same-head round, no
+		// triage, on the reviewers' stored reports, which the round's roles
+		// still name (pipeline.RoundInput.StoredReports).
+		rs.toRun = judgeAlone(rs.toRun)
+	default:
 		// A small diff may not need every reviewer ([triage]): what is
 		// dropped here is neither preflighted nor started.
 		e.triage(ctx, job, &rs)
@@ -476,6 +482,9 @@ func (e *Engine) roundInput(ctx context.Context, job *roundJob, rs roundSetup, w
 		in.Blind = true
 		if !job.evalNotes {
 			in.NotesPath = ""
+		}
+		if job.evalStored {
+			in.StoredReports, in.Round = true, evalReportsRound // the seeded reviewer runs' round (seedEvalReports)
 		}
 	}
 	if rs.kind != kindContinue {
