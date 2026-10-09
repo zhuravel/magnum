@@ -5963,6 +5963,16 @@ skill versions); people add theirs to the sections before it, at the end of the 
   of its own for a retired input (`dismissed` with a reason says the same, and every consumer already
   knows `dismissed`), and counting every failed gate that noted the input (one that never replayed its
   case, a target past the cap, would retire it unseen).
+- **The editor reads the newest 40 inputs and what failed for each** (2026-10-10, the final review of the
+  self-improving review loop). `inputs.json` listed every new input, oldest first, with no word of the
+  earlier gates: it grew without bound, and an editor that noted an input the gate kept failing wrote the
+  same rule again. It now holds the newest 40 (`editInputCap`; the misses and the declines merged by when
+  the retro stored them, each newest first), says how many older ones it leaves out (`left_out`; a later
+  run gets them once these are decided), and gives each input its `history`: the earlier proposals that
+  noted it and failed at the gate, with the proposal, its state and the gate's rule
+  (`store.LearnInputHistory`). The prompt asks the editor to change something else for such an input or
+  to skip it. Rejected: the oldest first (the stale inputs the gate cannot improve took every run) and a
+  cap per kind (a day of declines would crowd every miss out, or the other way round).
 
 ## Learned rules
 

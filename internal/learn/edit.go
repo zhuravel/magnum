@@ -75,14 +75,17 @@ func AllowedEditFile(p string) bool {
 	})
 }
 
-// EditInputs is inputs.json: the inputs to account for, the operator's
-// reasons for rejecting earlier proposals, what the last landed versions
-// did (newest first, store.VersionMeasure: a version whose reviews had
-// fewer of their findings declined than the one before measured a gain),
-// the skill's size and cap and the files the editor may change.
+// EditInputs is inputs.json: the inputs to account for (the newest, each
+// with the earlier proposals that noted it and failed at the gate), how many
+// older ones it leaves out (LeftOut), the operator's reasons for rejecting
+// earlier proposals, what the last landed versions did (newest first,
+// store.VersionMeasure: a version whose reviews had fewer of their findings
+// declined than the one before measured a gain), the skill's size and cap
+// and the files the editor may change.
 type EditInputs struct {
 	Misses     []EditMiss             `json:"misses"`
 	Declines   []EditDecline          `json:"declines"`
+	LeftOut    int                    `json:"left_out"`
 	Rejections []EditRejection        `json:"rejections"`
 	Versions   []store.VersionMeasure `json:"versions"`
 	SkillBytes int                    `json:"skill_bytes"`
@@ -98,6 +101,9 @@ type EditMiss struct {
 	Title    string   `json:"title,omitempty"`
 	Lesson   string   `json:"lesson,omitempty"`
 	Match    []string `json:"match"`
+	// History is the earlier proposals that noted it and failed at the
+	// gate, oldest first, with the gate's rule (store.LearnInputHistory).
+	History []store.LearnInputGate `json:"history,omitempty"`
 }
 
 // EditDecline is a general finding of magnum's an author declined: wrong,
@@ -109,6 +115,8 @@ type EditDecline struct {
 	Title    string   `json:"title,omitempty"`
 	Lesson   string   `json:"lesson,omitempty"`
 	Match    []string `json:"match"`
+	// History is as EditMiss's.
+	History []store.LearnInputGate `json:"history,omitempty"`
 }
 
 // EditRejection is the operator's reason for rejecting an earlier

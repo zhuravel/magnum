@@ -62,6 +62,10 @@ const (
 	editReasonRunes = 2000
 	// editRejections is how many rejected proposals' reasons the editor reads.
 	editRejections = 5
+	// editInputCap is how many inputs inputs.json holds at most, the newest:
+	// one turn accounts for each, and an input the gate keeps failing must
+	// not crowd the new ones out.
+	editInputCap = 40
 	// editVersions is how many landed versions' measures the editor reads.
 	editVersions = 3
 	// editGateLines is how much of a failing format gate command's output
@@ -324,13 +328,17 @@ func (e *Engine) editUnavailable() string {
 
 // editInputs gathers inputs.json's inputs: the general misses of severity
 // P0 to P2 and the general declines a lesson was not drawn from yet (state
-// new), oldest first, their titles, lessons and match patterns scrubbed of
+// new), the newest editInputCap of them (the misses and the declines each
+// newest first; LeftOut counts the older ones, which a later run gets once
+// these are decided), their titles, lessons and match patterns scrubbed of
 // their pull requests' logins and repositories again (learn.ScrubLesson;
-// a pattern that names one is dropped), the operator's reasons for the
-// latest rejected proposals and for each input, and the measures of the
-// last editVersions landed versions (counts only, no text). scrub is what the edit's
-// checks hold the result to: those logins and repositories, and the
-// branches of those pull requests.
+// a pattern that names one is dropped), each with the earlier proposals
+// that noted it and failed at the gate and the gate's rule
+// (store.LearnInputHistory), the operator's reasons for the latest rejected
+// proposals and for each input, and the measures of the last editVersions
+// landed versions (counts only, no text). scrub is what the edit's checks
+// hold the result to: those logins and repositories, and the branches of
+// those pull requests.
 func (e *Engine) editInputs(ctx context.Context) (learn.EditInputs, learn.EditCheck, error) {
 	in := learn.EditInputs{Misses: []learn.EditMiss{}, Declines: []learn.EditDecline{}, Rejections: []learn.EditRejection{},
 		Versions: []store.VersionMeasure{}, Files: slices.Clone(learn.EditAllowedGlobs)}
@@ -386,28 +394,45 @@ func (e *Engine) editInputs(ctx context.Context) (learn.EditInputs, learn.EditCh
 		}
 		return out
 	}
-	for _, m := range slices.Backward(misses) { // Misses is newest first
-		if !slices.Contains(editSeverities, m.Severity) {
-			continue
+	misses = slices.DeleteFunc(misses, func(m store.Miss) bool { return !slices.Contains(editSeverities, m.Severity) })
+	// Both lists are newest first: the oldest of their tails goes until
+	// editInputCap are left.
+	keepM, keepD := len(misses), len(declines)
+	for keepM+keepD > editInputCap {
+		if keepD == 0 || keepM > 0 && misses[keepM-1].CreatedAt.Before(declines[keepD-1].CreatedAt) {
+			keepM--
+		} else {
+			keepD--
 		}
+	}
+	in.LeftOut = len(misses) - keepM + len(declines) - keepD
+	for _, m := range misses[:keepM] {
 		id := learn.MissInputID(m.ID)
 		who, err := people(id, m.PRID, m.Reviewer)
 		if err != nil {
 			return in, check, err
 		}
+		history, err := e.st.LearnInputHistory(ctx, store.LearnInputMiss, m.ID)
+		if err != nil {
+			return in, check, err
+		}
 		repo := repoWords(m.Repo)
 		in.Misses = append(in.Misses, learn.EditMiss{ID: id, Severity: m.Severity, Title: scrub(m.Title, who, repo),
-			Lesson: scrub(m.Lesson, who, repo), Match: scrubAll(m.Match, who, repo)})
+			Lesson: scrub(m.Lesson, who, repo), Match: scrubAll(m.Match, who, repo), History: history})
 	}
-	for _, d := range slices.Backward(declines) {
+	for _, d := range declines[:keepD] {
 		id := learn.DeclineInputID(d.ID)
 		who, err := people(id, d.PRID)
 		if err != nil {
 			return in, check, err
 		}
+		history, err := e.st.LearnInputHistory(ctx, store.LearnInputDecline, d.ID)
+		if err != nil {
+			return in, check, err
+		}
 		repo := repoWords(d.Repo)
 		in.Declines = append(in.Declines, learn.EditDecline{ID: id, Priority: d.Priority, Verdict: d.Verdict,
-			Title: scrub(d.Title, who, repo), Lesson: scrub(d.Lesson, who, repo), Match: scrubAll(d.Match, who, repo)})
+			Title: scrub(d.Title, who, repo), Lesson: scrub(d.Lesson, who, repo), Match: scrubAll(d.Match, who, repo), History: history})
 	}
 	rejected, err := e.st.LearnProposals(ctx, []string{store.LearnRejected})
 	if err != nil {

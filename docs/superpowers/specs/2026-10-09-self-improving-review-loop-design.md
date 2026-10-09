@@ -107,7 +107,9 @@ editor_kind`, `editor_model` (default claude, sonnet), `editor_effort`, `editor_
 `<data>/learn/skill/<run>/` holds:
 
 - `inputs.json`: the general misses and the general `wrong`/`over_ranked` declines in state `new`
-  (ids prefixed `m` and `d`, severity, title, lesson, match), the operator's rejection reasons from the
+  (ids prefixed `m` and `d`, severity, title, lesson, match, and `history`: the earlier proposals that
+  noted the input and failed at the gate, with the gate's rule), the newest 40 of them (misses and
+  declines each newest first; `left_out` counts the older ones), the operator's rejection reasons from the
   last 5 rejected proposals and per input, the last 3 landed versions with their measurements, the size
   cap and the current size, and the list of files it may edit;
 - `pins.json`: the sentences the skill must keep, produced by a test helper

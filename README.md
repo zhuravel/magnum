@@ -1673,9 +1673,10 @@ checkout: an installed binary has none. Like the retro's agent it is an interact
 workspace, `learn skill`, tagged `learn`: `editor_kind` and `editor_model` (Claude sonnet by default,
 checked like a `[[role]]`), one prompt (`prompts/skill-edit.md`) with paths only, `editor_timeout` (45
 minutes) per turn. Its run directory, `~/.local/share/magnum/learn/skill/<run>/` (deleted after 30 days),
-gives it `inputs.json` (every such miss and decline still `new`, by id: `m<n>` and `d<n>`, with its
+gives it `inputs.json` (the newest 40 such misses and declines still `new`, by id: `m<n>` and `d<n>`, with its
 severity or posted priority, title, lesson and patterns, scrubbed of logins, pull request references,
-links and repository names again; your reasons for rejecting earlier proposals; the numbers of the last
+links and repository names again, and the rules of the gates that failed earlier proposals noting it;
+`left_out`, how many older ones wait; your reasons for rejecting earlier proposals; the numbers of the last
 three landed versions, as `magnum learn` shows them; the skill's size and cap)
 and `pins.json` (every phrase the skill tests want the skill to hold, the example result file of its
 section 8 included, from `internal/agents/testdata/skill_pins.txt`, which `go test ./internal/agents

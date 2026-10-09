@@ -1143,6 +1143,59 @@ func TestARejectionThatDismissesAnInputDropsItsLearnedCase(t *testing.T) {
 // The editor reads what the last three landed versions did, newest first,
 // each measured over its own window (store.VersionMeasure): an older
 // version is left out.
+// inputs.json holds the newest editInputCap inputs, the misses and the
+// declines each newest first, and says how many older ones it leaves out;
+// each input lists the earlier proposals that noted it and failed at the
+// gate, with the gate's rule, so the editor does not try the same rule
+// again.
+func TestTheEditorReadsTheNewestInputsWithTheirFailedGates(t *testing.T) {
+	h := newHarness(t)
+	pr := corpusPR(h, "talkable/talkable", 11)
+	var misses []store.Miss
+	var declines []store.Decline
+	for i := range editInputCap + 2 {
+		h.advance(time.Second)
+		if i == 0 || i == editInputCap/2 {
+			declines = append(declines, corpusDecline(h, pr.ID, 100+i))
+			continue
+		}
+		misses = append(misses, corpusMiss(h, pr, 1+i, store.MissScopeGeneral))
+	}
+	newest := misses[len(misses)-1]
+	p, err := h.st.CreateLearnProposal(h.ctx, store.LearnProposalInput{Trigger: store.LearnTriggerEvidence, BaseSHA: learnMaster,
+		Branch: "learn/20261001-090000", State: store.LearnGating, Inputs: []store.LearnInput{{Kind: store.LearnInputMiss, InputID: newest.ID,
+			Outcome: store.MissNoted, Where: "SKILL.md section 4"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rule := "no target improved (" + learn.TargetName(store.LearnInputMiss, newest.ID) + " as at the baseline)"
+	if _, err := h.st.GateLearnProposal(h.ctx, p.ID, store.LearnFailed, rule, time.Time{}, nil,
+		[]store.LearnTarget{{Kind: store.LearnInputMiss, InputID: newest.ID, Gate: store.LearnTargetNotImproved}}); err != nil {
+		t.Fatal(err)
+	}
+
+	in, _, err := h.e.editInputs(h.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(in.IDs()); n != editInputCap || in.LeftOut != 2 {
+		t.Fatalf("inputs = %d, left out %d; want %d and 2", n, in.LeftOut, editInputCap)
+	}
+	if len(in.Declines) != 1 || in.Declines[0].ID != learn.DeclineInputID(declines[1].ID) {
+		t.Fatalf("declines = %+v, want the newer one alone", in.Declines)
+	}
+	if in.Misses[0].ID != learn.MissInputID(newest.ID) || in.Misses[len(in.Misses)-1].ID != learn.MissInputID(misses[1].ID) {
+		t.Fatalf("misses run %s .. %s, want the newest first and the oldest left out", in.Misses[0].ID, in.Misses[len(in.Misses)-1].ID)
+	}
+	want := []store.LearnInputGate{{Proposal: p.ID, State: store.LearnFailed, Rule: rule}}
+	if got := in.Misses[0].History; !slices.Equal(got, want) {
+		t.Fatalf("the newest miss's history = %+v, want %+v", got, want)
+	}
+	if got := in.Misses[1].History; len(got) != 0 {
+		t.Fatalf("another miss's history = %+v, want none", got)
+	}
+}
+
 func TestTheEditorReadsTheLastVersionsMeasures(t *testing.T) {
 	f := newEditFixture(t, goodTurn)
 	now := f.h.clock.Now()
