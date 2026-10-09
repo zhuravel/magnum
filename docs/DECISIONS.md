@@ -5816,6 +5816,18 @@ skill versions); people add theirs to the sections before it, at the end of the 
   without one still gets it). `TestTheDesignLogEndsWithTheLearnedRulesSection` keeps the section last
   and its introduction the loop's. Rejected: leaving the section to the first landing (the conflict
   above, for as long as no proposal lands).
+- **A version is measured only over the rounds that ran its skill** (2026-10-09, a review finding on
+  stage 5 of the self-improving review loop). The measure took every posted judge run of the window and
+  counted only the answers of the rounds whose skill copy was the version's, so a skill changed outside
+  the loop (a hand edit and a restart) put its rounds' posted findings in the denominator of a share
+  whose declines it left out: a version that did worse looked better, and the regression scan could
+  propose reverting a later version that did better. `store.VersionMeasure` now keeps a posted judge run
+  only when a run of its review names the version's skill copy (`<state>/skill/<skill_sha>/` in its
+  prompt), so the reviews, the posted findings, the answers and the misses all come from the same
+  rounds; the skill before the first version, which no row names, counts every round. A review also
+  counts once (`COUNT(DISTINCT review_id)`): a nudged or model-fallback round stamps its review id on
+  each of its judge runs. Rejected: a `skill_sha` column on runs (a migration for what the prompt
+  already says).
 
 ## Learned rules
 

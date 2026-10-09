@@ -9,12 +9,13 @@ import (
 )
 
 // postedRun is a judge run of pr at t0+d whose review was posted (posted
-// false: a dry run's), on head sha, with posted findings of the given
+// false: a dry run's), on head sha, whose prompt names the judge skill copy
+// skill (<state>/skill/<skill>/SKILL.md), with posted findings of the given
 // priorities and one rejected finding.
-func postedRun(t *testing.T, st *Store, prID int64, d time.Duration, sha string, posted bool, priorities ...string) Run {
+func postedRun(t *testing.T, st *Store, prID int64, d time.Duration, sha, skill string, posted bool, priorities ...string) Run {
 	t.Helper()
 	r := Run{PRID: prID, Round: 1, Role: RoleJudge, Kind: RunInitial, State: RunVerified, TargetSHA: sha, Identity: "talkable-app",
-		ReviewerLogin: "talkable[bot]", PromptText: "p", CreatedAt: t0.Add(d)}
+		ReviewerLogin: "talkable[bot]", PromptText: skillPrompt(skill), CreatedAt: t0.Add(d)}
 	if posted {
 		r.Outcome, r.ReviewID = new("posted"), new(int64(1000+d/time.Minute))
 	} else {
@@ -33,6 +34,11 @@ func postedRun(t *testing.T, st *Store, prID int64, d time.Duration, sha string,
 		t.Fatal(err)
 	}
 	return run
+}
+
+// skillPrompt is a judge's prompt that names the skill copy skill.
+func skillPrompt(skill string) string {
+	return "Read /Users/alice/.local/state/magnum/skill/" + skill + "/SKILL.md first."
 }
 
 // measureVersion records version id, landed a minute before t0 plus ten
@@ -66,10 +72,10 @@ func TestVersionMeasureCountsOnlyItsWindow(t *testing.T) {
 	v1 := measureVersion(t, st, 1, "aaaaaaaaaaaa", &r1)
 	v2 := measureVersion(t, st, 2, "bbbbbbbbbbbb", &r2)
 
-	postedRun(t, st, pr.ID, -time.Hour, "h0", true, "P1") // before the restart on v1
-	in := postedRun(t, st, pr.ID, time.Hour, "h1", true, "P1", "P2", "")
-	postedRun(t, st, pr.ID, 2*time.Hour, "h2", false, "P0") // a dry run posts nothing
-	later := postedRun(t, st, pr.ID, 11*time.Hour, "h3", true, "P3")
+	postedRun(t, st, pr.ID, -time.Hour, "h0", v1.SkillSHA, true, "P1") // before the restart on v1
+	in := postedRun(t, st, pr.ID, time.Hour, "h1", v1.SkillSHA, true, "P1", "P2", "")
+	postedRun(t, st, pr.ID, 2*time.Hour, "h2", v1.SkillSHA, false, "P0") // a dry run posts nothing
+	later := postedRun(t, st, pr.ID, 11*time.Hour, "h3", v2.SkillSHA, true, "P3")
 	for i, m := range []struct{ sha, class, scope string }{{in.TargetSHA, MissMiss, MissScopeGeneral}, {in.TargetSHA, MissMiss, MissScopeRepo},
 		{in.TargetSHA, MissNotIssue, ""}, {later.TargetSHA, MissMiss, MissScopeGeneral}, {"elsewhere", MissMiss, MissScopeGeneral}} {
 		if _, err := st.UpsertMiss(ctx, Miss{PRID: pr.ID, SourceURL: pr.URL + "#r" + strconv.Itoa(i), SourceKind: MissSourceThread, Reviewer: "rev-ann",
@@ -124,8 +130,8 @@ func TestVersionMeasureJoinsDeclinesBySkillSHA(t *testing.T) {
 	pr := mustPR(t, st, repo.ID, 7, PRReviewed)
 	r1 := t0
 	v := measureVersion(t, st, 1, "aaaaaaaaaaaa", &r1)
-	run := postedRun(t, st, pr.ID, time.Hour, "h1", true, "P1", "P1", "P2", "P2")
-	before := postedRun(t, st, pr.ID, -time.Hour, "h0", true, "P1")
+	run := postedRun(t, st, pr.ID, time.Hour, "h1", v.SkillSHA, true, "P1", "P1", "P2", "P2")
+	before := postedRun(t, st, pr.ID, -time.Hour, "h0", v.SkillSHA, true, "P1")
 	for i, d := range []struct {
 		run, skill, outcome string
 	}{{run.ID, "aaaaaaaaaaaa", DeclineDeclined}, {run.ID, "aaaaaaaaaaaa", DeclineArgued}, {run.ID, "aaaaaaaaaaaa", DeclineFixed},
@@ -148,5 +154,72 @@ func TestVersionMeasureJoinsDeclinesBySkillSHA(t *testing.T) {
 	base, err := st.VersionMeasure(ctx, LearnVersion{LandedAt: t0.Add(-2 * time.Hour)}, &v)
 	if err != nil || base.VersionID != 0 || base.JudgeRuns != 1 || !maps.Equal(base.Outcomes, map[string]int{DeclineDeclined: 1}) {
 		t.Fatalf("the skill before = %+v, %v", base, err)
+	}
+}
+
+// A version's measure holds only the rounds that ran its skill: when the
+// skill changed outside the loop (a hand edit and a restart), the rounds on
+// the other skill count neither their reviews, their posted findings, their
+// answers nor their misses, so the declined share is the version's own
+// (here 1 of 2, not 5 of 10). The skill before the first version, which no
+// row names, counts every round.
+func TestVersionMeasureCountsOnlyTheRoundsOfItsSkill(t *testing.T) {
+	st, _ := newStore(t)
+	ctx := context.Background()
+	repo := mustRepo(t, st)
+	pr := mustPR(t, st, repo.ID, 7, PRReviewed)
+	r1 := t0
+	v := measureVersion(t, st, 1, "aaaaaaaaaaaa", &r1)
+	own := postedRun(t, st, pr.ID, time.Hour, "h1", v.SkillSHA, true, "P1", "P2")
+	hand := postedRun(t, st, pr.ID, 2*time.Hour, "h2", "cccccccccccc", true, "P1", "P1", "P1", "P2", "P2", "P2", "P2", "P2")
+	for i, d := range []struct {
+		run, skill, outcome string
+	}{{own.ID, v.SkillSHA, DeclineDeclined}, {hand.ID, "cccccccccccc", DeclineDeclined}, {hand.ID, "cccccccccccc", DeclineArgued},
+		{hand.ID, "cccccccccccc", DeclineDeclined}, {hand.ID, "cccccccccccc", DeclineArgued}} {
+		if _, err := st.UpsertDecline(ctx, Decline{PRID: pr.ID, SourceURL: pr.URL + "#d" + strconv.Itoa(i), CommentID: int64(i + 1), RunID: d.run,
+			ReviewedSHA: "h1", SkillSHA: d.skill, Outcome: d.outcome}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := st.UpsertMiss(ctx, Miss{PRID: pr.ID, SourceURL: pr.URL + "#m", SourceKind: MissSourceThread, Reviewer: "rev-ann",
+		ReviewedSHA: hand.TargetSHA, Class: MissMiss, Severity: "P1", Scope: MissScopeGeneral}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.VersionMeasure(ctx, v, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.JudgeRuns != 1 || got.Posted != 2 || got.Declined() != 1 || got.MissesGeneral != 0 {
+		t.Fatalf("the version's rounds = %+v", got)
+	}
+	if share, _ := got.DeclinedShare(); share != 50 {
+		t.Fatalf("share = %v, want 50", share)
+	}
+	before, err := st.VersionMeasure(ctx, LearnVersion{LandedAt: t0}, nil)
+	if err != nil || before.JudgeRuns != 2 || before.Posted != 10 || before.Declined() != 5 || before.MissesGeneral != 1 {
+		t.Fatalf("every round = %+v, %v", before, err)
+	}
+}
+
+// A round that was nudged or fell back to another model stamps its review
+// id on each of its judge runs, and only the first names the skill copy:
+// the review counts once, with the findings its first run recorded.
+func TestVersionMeasureCountsANudgedReviewOnce(t *testing.T) {
+	st, _ := newStore(t)
+	ctx := context.Background()
+	repo := mustRepo(t, st)
+	pr := mustPR(t, st, repo.ID, 7, PRReviewed)
+	r1 := t0
+	v := measureVersion(t, st, 1, "aaaaaaaaaaaa", &r1)
+	first := postedRun(t, st, pr.ID, time.Hour, "h1", v.SkillSHA, true, "P1")
+	if _, err := st.CreateRun(ctx, Run{PRID: pr.ID, Round: 1, Role: RoleJudge, Kind: RunInitial, State: RunVerified, TargetSHA: "h1",
+		Identity: "talkable-app", ReviewerLogin: "talkable[bot]", PromptText: "Your answer was cut; finish the review.",
+		Outcome: new("posted"), ReviewID: first.ReviewID, CreatedAt: t0.Add(time.Hour + time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range []LearnVersion{v, {LandedAt: t0}} {
+		if got, err := st.VersionMeasure(ctx, m, nil); err != nil || got.JudgeRuns != 1 || got.Posted != 1 {
+			t.Fatalf("the measure of %+v = %+v, %v", m, got, err)
+		}
 	}
 }

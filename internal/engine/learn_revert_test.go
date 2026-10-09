@@ -48,12 +48,13 @@ func (f *editFixture) noCases() {
 }
 
 // postedWith records a posted review of pr at at with n posted findings,
-// declined of which the author declined or argued, answered under skill.
+// declined of which the author declined or argued, by a round that ran the
+// skill copy skill.
 func postedWith(h *harness, pr store.PR, at time.Time, n, declined int, skill string) {
 	h.t.Helper()
 	run, err := h.st.CreateRun(h.ctx, store.Run{PRID: pr.ID, Round: 1, Role: store.RoleJudge, Kind: store.RunInitial, State: store.RunVerified,
-		TargetSHA: "head-" + at.Format("0102"), Identity: "zhuravel", ReviewerLogin: "zhuravel", PromptText: "p", Outcome: new("posted"),
-		ReviewID: new(at.Unix()), CreatedAt: at})
+		TargetSHA: "head-" + at.Format("0102"), Identity: "zhuravel", ReviewerLogin: "zhuravel", PromptText: "Read /state/skill/" + skill + "/SKILL.md.",
+		Outcome: new("posted"), ReviewID: new(at.Unix()), CreatedAt: at})
 	if err != nil {
 		h.t.Fatal(err)
 	}

@@ -399,7 +399,8 @@ func TestLearnShowsAVersionsNumbers(t *testing.T) {
 	for i, n := range []int{3, 2} {
 		run, err := h.st.CreateRun(h.ctx, store.Run{PRID: pr.ID, Round: i + 1, Role: store.RoleJudge, Kind: store.RunInitial,
 			State: store.RunVerified, TargetSHA: "head" + itoa(int64(i)), Identity: "talkable-app", ReviewerLogin: "talkable[bot]",
-			PromptText: "p", Outcome: new("posted"), ReviewID: new(int64(70 + i)), CreatedAt: h.now.Add(-time.Duration(i+1) * time.Hour)})
+			PromptText: "Read /state/skill/skill1/SKILL.md.", Outcome: new("posted"), ReviewID: new(int64(70 + i)),
+			CreatedAt: h.now.Add(-time.Duration(i+1) * time.Hour)})
 		if err != nil {
 			t.Fatal(err)
 		}

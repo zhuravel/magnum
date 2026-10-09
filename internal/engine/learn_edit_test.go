@@ -1159,8 +1159,8 @@ func TestTheEditorReadsTheLastVersionsMeasures(t *testing.T) {
 		}
 	}
 	run, err := f.h.st.CreateRun(f.h.ctx, store.Run{PRID: pr.ID, Round: 1, Role: store.RoleJudge, Kind: store.RunInitial, State: store.RunVerified,
-		TargetSHA: retroShaA, Identity: "zhuravel", ReviewerLogin: "zhuravel", PromptText: "p", Outcome: new("posted"), ReviewID: new(int64(9)),
-		CreatedAt: now.Add(-time.Hour)})
+		TargetSHA: retroShaA, Identity: "zhuravel", ReviewerLogin: "zhuravel", PromptText: "Read /state/skill/s/SKILL.md.", Outcome: new("posted"),
+		ReviewID: new(int64(9)), CreatedAt: now.Add(-time.Hour)})
 	if err != nil {
 		t.Fatal(err)
 	}

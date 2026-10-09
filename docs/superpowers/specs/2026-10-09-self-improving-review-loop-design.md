@@ -249,6 +249,10 @@ A `learn_versions` row: `id`, `proposal_id`, `landed_sha`, `skill_sha`, `prompts
 files), `landed_at`, `restarted_at`. A version's window is from its `restarted_at` to the next version's.
 `store.VersionMeasure(id)` counts, in the window: judge runs posted, findings posted by priority, declines
 by outcome (joined by `skill_sha`), misses by class and scope (by `reviewed_sha` of runs in the window).
+Each count takes only the rounds that ran the version's skill (a run of the review whose `prompt_text`
+names the copy `<state>/skill/<skill_sha>/`), so a skill changed outside the loop does not count toward
+the version that runs before or after it, and a review counts once however many judge runs a nudge or
+a model fallback stamped with its id; the skill before the first version counts every round.
 The editor's `inputs.json` carries the last 3 versions' measures. When a version with at least 20 posted
 findings has a `declined`+`argued` share higher by 10 points than the previous version's, the daemon
 creates one held revert proposal (`trigger = regression`) and toasts it. never twice for the same version.

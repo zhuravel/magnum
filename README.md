@@ -1775,8 +1775,9 @@ curation is queued behind it.
 `magnum learn` is the window: the landed versions newest first, each with what its reviews did from the
 daemon's restart on it to the restart on the next version (the reviews posted, their posted findings, how
 many of those the authors fixed and declined or argued, with the declined share, and the misses other
-reviewers caught on the commits they reviewed; the answers count only for rounds that ran that version's
-skill), the proposals that wait (`gating` for the gate, `passed` for the landing, `held` for you) with their
+reviewers caught on the commits they reviewed; all of it counts only the rounds that ran that version's
+skill, so a skill you changed by hand and restarted on is no version's, and a round that was nudged or fell
+back to another model counts as one review), the proposals that wait (`gating` for the gate, `passed` for the landing, `held` for you) with their
 inputs, the last failed and invalid proposals
 with their reasons, an edit in flight and when the editor runs next; `--json` prints the same. `magnum learn
 --propose` asks the daemon for an edit now, whatever `editor` says; it is refused while an edit runs or a
