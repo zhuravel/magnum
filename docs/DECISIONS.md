@@ -5349,3 +5349,42 @@ editing history. Code, config comments and prompts reference these by their head
   `WorktreeRemove` and `StatusPaths` already existed with other signatures (the slots use them), so the
   editor uses the existing `WorktreeAdd` with a branch and the new methods are named `WorktreeDiscard`
   and `DirtyPaths`.
+- **The editor proposes skill and prompt changes on a branch** (2026-10-09, stage 3 of the
+  self-improving review loop). A general miss or a general finding an author declined as wrong or
+  over-ranked teaches every repository, so its lesson belongs in the judge skill and the prompts, and
+  nobody turned those lessons into an edit. An editor run (`engine.runEdit`, `[learn] editor_*`,
+  `prompts/skill-edit.md`) is a pane agent like the notes curator, in a `learn skill` workspace, whose
+  working directory is a git worktree of the checkout the daemon runs from (`Deps.Checkout`,
+  `Layout.Home`; an installed binary has none, so no edit runs) at `<state>/learn/wt/<run>` on a new
+  branch `learn/<run>` from `master`: the operator's own branch and files are never touched. Its run
+  directory (`<data>/learn/skill/<run>/`) holds `inputs.json` (the general P0 to P2 misses and the
+  general wrong and over-ranked declines still new, as `m<id>` and `d<id>`, their titles, lessons and
+  patterns scrubbed of the pull requests' logins and repositories again, the operator's reasons of the
+  last 5 rejected proposals and per input, the skill's size and cap) and `pins.json` (from the
+  worktree's pins file). The agent may change the skill, `prompts/judge-*.md` and `prompts/claude-*.md`
+  only, and writes `changes.json` at the worktree's root. magnum checks each turn's result in order and
+  nudges once with whatever the first failing stage says: `learn.ValidateEdit`; the candidate's prompts
+  rendered (`engine.CheckPrompts` on `config.Config.WithCandidate`, which moves from evalrun into config
+  so the engine can call it); the format gate through `Deps.GoTest` (`go test ./internal/agents -run
+  TestRenderGolden -update`, `go test ./internal/agents ./internal/pipeline ./internal/config`, `make
+  check-private`, each as `mise -C <checkout> exec -- <tool> -C <worktree>`, since a worktree's mise
+  config is not trusted and the checkout's gitignored `.mise.local.toml` holds the private patterns,
+  with git's redirecting variables, the GitHub tokens and the identities' keys unset). The gate runs
+  inside the check, not after the agent is done, so a failing test gets the nudge too. A valid edit's
+  decision becomes an entry at the end of the worktree's `docs/DECISIONS.md` (`learn.DecisionEntry`: its
+  first sentence as the bold headline, the day and the inputs, 104 columns), `changes.json` moves to the
+  run directory, and the editor's files, the regenerated goldens and the log are committed on the branch
+  (the message: the headline, the inputs by id with what was done, the skill's bytes, "No new
+  dependencies."; never the agent's reasons, since the commit may be pushed later); the proposal is
+  stored `gating` with its inputs. An edit still invalid after the nudge is stored `invalid` with its
+  problems, one that stops (no agent or checkout, a limit, a shutdown) `stopped`; both lose their
+  worktree and branch, and a worktree no waiting proposal holds (a crash) is removed before the next
+  run. An edit in flight is `KVLearnEditing` (`learn.editing`), background work for a restart and for
+  the CLI's stops, cleared at startup and cancelled by shutdown; events `learn.edit_start`,
+  `learn.edit_ready`, `learn.edit_invalid`, `learn.edit_stopped`, and a toast for an invalid or stopped
+  one only when the operator asked for it. The agent works in the worktree, not in a directory shared by
+  every run as the retro's and the curator's do, so each run adds one folder-trust entry to the agent
+  CLI's config. Rejected: editing in the checkout itself (the operator's uncommitted work), validating
+  only after the agent finished (a failing golden test would make the proposal invalid without a chance
+  to fix it) and letting the agent write `changes.json` in the run directory (the CLIs confine an
+  agent's writes to its working directory).

@@ -1615,7 +1615,8 @@ become `used`; rejected, they go back to `new` and the next curation reads your 
 rejected proposals is `dismissed`; an expired proposal leaves its misses `new`. The turnaround: a pull
 request closes, 24 hours later the daily retro classifies what its other reviewers said, a repository miss
 triggers a curation whose proposal you approve, and the next review round of that repository reads the
-note. A `general` miss stays `new`: it is for the review skill, which a later stage edits.
+note. A `general` miss stays `new` for the review skill: the skill editor (Self-improving loop, below)
+takes it.
 
 **What authors answered.** A thread Magnum started with one of its findings and that someone else replied to
 (the author or another reviewer; a bot only with `include_bots`) goes to the same agent in the same prompt,
@@ -1652,6 +1653,51 @@ daily_at = "07:00"
 lookback = "7d"
 settle = "24h"          # a pull request waits this long after it closes (0 = at once)
 model = "sonnet"
+```
+
+### Self-improving loop
+
+What the retro learns for every repository, a `general` miss of severity P0 to P2 or a finding an author
+declined as `wrong` or `over_ranked` with scope `general`, belongs in the review skill and the prompts, not
+in one repository's notes. The skill editor drafts that change. It runs in a git worktree of the checkout
+Magnum runs from (`~/.local/state/magnum/learn/wt/<run>`, on a new branch `learn/<run>` from the
+checkout's `master`), so your own branch and files are never touched, and only when Magnum runs from a
+checkout: an installed binary has none. Like the retro's agent it is an interactive agent in a herdr
+workspace, `learn skill`, tagged `learn`: `editor_kind` and `editor_model` (Claude sonnet by default,
+checked like a `[[role]]`), one prompt (`prompts/skill-edit.md`) with paths only, `editor_timeout` (45
+minutes) per turn. Its run directory, `~/.local/share/magnum/learn/skill/<run>/` (deleted after 30 days),
+gives it `inputs.json` (every such miss and decline still `new`, by id: `m<n>` and `d<n>`, with its
+severity or posted priority, title, lesson and patterns, scrubbed of logins, pull request references,
+links and repository names again; your reasons for rejecting earlier proposals; the skill's size and cap)
+and `pins.json` (the sentences 41 skill tests pin, from `internal/agents/testdata/skill_pins.txt`, which
+`go test ./internal/agents -update` regenerates, and the skill's cap).
+
+It may change `skills/magnum-review/SKILL.md`, `prompts/judge-*.md` and `prompts/claude-*.md` only, and
+writes `changes.json` in the worktree: every input noted (where the change covers it) or skipped (why), and
+the `decision`, a design-log entry whose first sentence is the change. Magnum checks it: every input
+accounted for once, no other file changed, the skill within its cap (shortening, never dropping a rule)
+and keeping every pinned sentence, no pull request reference, branch, secret or home directory path in
+what it adds, no login, link or repository in the decision. Then the candidate's prompts must render, and
+the format gate must pass in the worktree: the golden files regenerated from the prompts, `go test
+./internal/agents ./internal/pipeline ./internal/config`, and `make check-private` with the checkout's
+`mise` environment (its `.mise.local.toml` holds the private patterns). Whatever fails gets one nudge with
+the problems. A valid edit gets its `decision` appended to the worktree's `docs/DECISIONS.md` and is
+committed on its branch (unsigned, only the files it changed, the regenerated goldens and the log; the
+message names the inputs by id and the skill's bytes, never the agent's reasons), and the proposal waits
+in the registry for the gate (`gating`). An edit still invalid after the nudge is kept as `invalid` with its
+problems, and one that stops (a limit, a shutdown, an agent that cannot start) as `stopped`; both lose their
+worktree and branch. Nothing is pushed. An edit in flight counts as background work for
+`magnum daemon-restart`, install, uninstall and daemon-stop, which refuse to cut it short. The gate that
+replays a proposal with the eval and the landing that fast-forwards `master` are the loop's next stages;
+until they arrive a proposal waits in `gating`, and `editor`, `gate_cases`, `land_per_day`, `restart`
+and the regression keys are checked but change nothing yet.
+
+```toml
+[learn]
+editor = false          # run the editor after a retro (`magnum learn --propose` runs it regardless)
+editor_kind = "claude"
+editor_model = "sonnet"
+editor_timeout = "45m"
 ```
 
 ### Repository notes

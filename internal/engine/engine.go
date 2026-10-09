@@ -211,6 +211,15 @@ type Deps struct {
 	// Curator sets up the notes curator for one curation ([notes],
 	// notes_curate.go); nil = no curation runs.
 	Curator func(ctx context.Context, run CurateRun) (Curator, error)
+	// Editor sets up the skill editor for one run ([learn] editor_*,
+	// learn_edit.go); nil = no edit runs. It works on Checkout, magnum's own
+	// checkout (Layout.Home; "" for an installed binary: no edit), through
+	// LearnGit, and GoTest runs the format gate's commands there: go or
+	// make (args[0]) on dir with the checkout's mise environment.
+	Editor   func(ctx context.Context, run EditRun) (Editor, error)
+	Checkout string
+	LearnGit LearnGit
+	GoTest   func(ctx context.Context, dir string, args ...string) (string, error)
 
 	// Usage reads Codex's rate-limit snapshot (usage.Codex, which FromApp
 	// sets); nil = no budget gauge and no caps.
@@ -372,6 +381,11 @@ type Engine struct {
 	curateTried   map[int64]time.Time // repositories whose last curation stored nothing, and when
 	curateChecked time.Time           // the last scan for a curation due (the tick's goroutine only)
 
+	editMu      sync.Mutex // the running skill edit (learn_edit.go)
+	editCancel  context.CancelFunc
+	editStarted time.Time
+	editWG      sync.WaitGroup
+
 	usageMu   sync.Mutex // the Codex budget (budget.go)
 	usageRead time.Time
 	usageSnap *usage.Snapshot
@@ -453,8 +467,21 @@ func FromApp(a *app.App) *Engine {
 			},
 		}
 		d.Classifier = paneClassifiers(pd)
-		// The notes curator (notes_curate.go) is the same kind of agent.
+		// The notes curator (notes_curate.go) and the skill editor
+		// (learn_edit.go) are the same kind of agent.
 		d.Curator = paneCurators(pd)
+		d.Editor = paneEditors(pd)
+	}
+	if a.Layout.Home != "" && !a.DryRun && a.AgentTag == "" && a.Git != nil && a.Runner != nil && a.Config != nil {
+		// The skill editor works on the checkout the daemon runs from.
+		d.Checkout, d.LearnGit = a.Layout.Home, a.Git
+		var keys []string
+		for _, id := range a.Config.Identities {
+			if id.PrivateKeyEnv != "" {
+				keys = append(keys, id.PrivateKeyEnv)
+			}
+		}
+		d.GoTest = goTestRunner(a.Runner, a.Mise, a.Layout.Home, keys)
 	}
 	if a.Git != nil {
 		d.Probe = gitProbe(a.Git)
@@ -619,7 +646,7 @@ func (e *Engine) lockHeld() error {
 }
 
 // shutdown stops rounds (their runs stay observed, never re-sent), a
-// running retro and a running notes curation, waits for them briefly,
+// running retro, notes curation and skill edit, waits for them briefly,
 // flushes pending toasts and gives urgent toasts still retrying a bounded
 // time before cancelling them.
 func (e *Engine) shutdown() {
@@ -630,12 +657,13 @@ func (e *Engine) shutdown() {
 	e.mu.Unlock()
 	e.stopRetro()
 	e.stopCurate()
+	e.stopEdit()
 	done := make(chan struct{})
-	go func() { e.roundWG.Wait(); e.retroWG.Wait(); e.curateWG.Wait(); close(done) }()
+	go func() { e.roundWG.Wait(); e.retroWG.Wait(); e.curateWG.Wait(); e.editWG.Wait(); close(done) }()
 	select {
 	case <-done:
 	case <-time.After(30 * time.Second):
-		e.log.Warn("rounds, the retro or the notes curation did not stop within 30s")
+		e.log.Warn("rounds, the retro, the notes curation or the skill edit did not stop within 30s")
 	}
 	e.noteRetroRunning(context.Background()) // a retro that stopped no longer holds the CLI
 	if e.batch != nil {
@@ -739,8 +767,9 @@ func (e *Engine) startup(ctx context.Context) {
 	e.recoverRows(ctx)
 	e.reclassifyIneligible(ctx)
 	e.syncNotes(ctx, true) // notes_record.go: the first start imports every repository's notes
-	// No curation or retro runs yet: a mark left behind is a crashed daemon's.
-	e.delKV(ctx, KVNotesCurating, KVRetroRunning)
+	// No curation, retro or skill edit runs yet: a mark left behind is a
+	// crashed daemon's.
+	e.delKV(ctx, KVNotesCurating, KVRetroRunning, KVLearnEditing)
 	e.lastReconcile = e.now()
 	e.enqueueHeavy("reconcile", e.reconcile)
 }

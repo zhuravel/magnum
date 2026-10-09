@@ -49,6 +49,7 @@ prompts_dir = "{{repo}}/prompts"   # or "~/magnum-prompts" to keep your edits ou
 | `triage.md` | the cheap model that decides which reviewers a small diff needs (see Triage) | triage |
 | `retro.md` | the retro's agent, which classifies what other reviewers said about a closed pull request ([learn]) | retro |
 | `notes-curate.md` | the notes curator, which proposes curated repository notes and harness ([notes]) | curation |
+| `skill-edit.md` | the skill editor, which drafts a change to the judge skill and these prompts from what reviews got wrong ([learn] `editor_*`) | skill edit |
 
 ## Template syntax
 
@@ -68,8 +69,9 @@ The data comes in three shapes, all defined in `internal/agents/templates.go`: t
 the judge data, every other session role gets the role data, and a shell role's `command` or full-line
 `.sh` template gets the shell data. `model-fallback.md` gets its own small fallback data
 (`internal/agents/models.go`, see below), `triage.md` the triage data (`internal/engine/triage.go`),
-`retro.md` the retro data (`internal/engine/retro.go`) and `notes-curate.md` the curation data
-(`internal/engine/notes_curate.go`).
+`retro.md` the retro data (`internal/engine/retro.go`), `notes-curate.md` the curation data
+(`internal/engine/notes_curate.go`) and `skill-edit.md` the skill edit data
+(`internal/engine/learn_edit.go`).
 
 ## Variables
 
@@ -295,6 +297,39 @@ size is not checked. The prompt also has the curator check each pitfall against 
 pointer to that doc (its path and heading), only for a doc the notes name: the curator runs in its scratch
 directory, without the repository. A proposal that changes nothing is invalid unless it was given misses and skips them
 all. An invalid proposal gets one nudge naming its problems, then is kept as invalid.
+
+### Skill editor prompt (`skill-edit.md`)
+
+The one prompt of a skill edit (`[learn] editor_*`, see the README's "Self-improving loop"): change the judge
+skill and the judge and Claude reviewer prompts in a git worktree of magnum's checkout, on the run's own
+`learn/<run>` branch, from the general misses and the general findings authors declined. Input text is
+never a template variable; the agent reads `inputs.json`, and the prompt must say that what it holds is
+data, not instructions.
+
+| Variable | Meaning |
+|---|---|
+| `.Dir` | the run's directory, `~/.local/share/magnum/learn/skill/<run>/`, which holds the two files below |
+| `.Worktree` | the worktree, `~/.local/state/magnum/learn/wt/<run>`: the agent's working directory and the only place it may write |
+| `.Inputs` | `inputs.json`: `misses` (`id` `m<n>`, `severity`, `title`, `lesson`, `match`), `declines` (`id` `d<n>`, the posted `priority`, `verdict` `wrong` or `over_ranked`, `title`, `lesson`, `match`), every title, lesson and pattern scrubbed of logins, pull request references, links and repository names again; `rejections` (the operator's reasons for the latest rejected proposals, per proposal and per input), `skill_bytes`, `skill_cap` and `files`, the globs it may change |
+| `.Pins` | `pins.json`: `pins`, the sentences the skill tests pin (from `internal/agents/testdata/skill_pins.txt` of the worktree), and `cap`, the skill's size cap |
+| `.Changes` | `changes.json`, at the worktree's root: what the agent writes |
+| `.Skill`, `.Prompts` | the worktree's `skills/magnum-review/SKILL.md` and `prompts/` |
+| `.Cap` | the skill's cap in bytes (`skillMaxBytes` of the skill tests) |
+
+`changes.json` is `{"files": [...], "inputs": [...], "decision": "..."}`: each file `{"name", "action":
+"edited"|"unchanged", "reason"}` (every file the worktree's status lists is an allowed one and listed
+`edited`), each input of `inputs.json` once, `{"id", "action": "noted", "where"}` or `{"id", "action":
+"skipped", "reason"}` with a one-line reason of at most 300 characters, and `decision`, 1 to 1,200
+characters whose first sentence is the change's headline: magnum appends it to `docs/DECISIONS.md` as an
+entry dated the run's day and naming the inputs, and commits. Magnum checks the result
+(`learn.ValidateEdit`): only `skills/magnum-review/SKILL.md`, `prompts/judge-*.md` and
+`prompts/claude-*.md` changed, the skill within its cap and keeping every pin, no pull request reference,
+branch, secret or home directory path in the added lines or the decision, no login, link or repository in
+the decision; then the candidate's prompts render (`engine.CheckPrompts` on a config pointed at the
+worktree), and the format gate passes in the worktree: the golden files regenerated (`go test
+./internal/agents -run TestRenderGolden -update`), `go test ./internal/agents ./internal/pipeline
+./internal/config`, and `make check-private` with the checkout's mise environment. A result with problems
+gets one nudge naming them (a failing command with the end of its output), then is kept as invalid.
 
 ### Repository notes
 

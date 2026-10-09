@@ -2382,6 +2382,12 @@ const (
     Kind.ProjectMCP values.
 
 const (
+	LearnRestartIdle   = "idle"
+	LearnRestartManual = "manual"
+)
+    The values of [learn] restart.
+
+const (
 	CurateOverLimit = "over_limit" // a repository past a limit, once its notes changed since the last curation
 	CurateWeekly    = "weekly"     // every repository with notes, once a week, once they changed
 	CurateMisses    = "misses"     // a retro recorded misses of the repository for its notes (class miss, scope repo)
@@ -2466,6 +2472,10 @@ const AutoApproveBodyMax = 500
 const BuiltinDefaults = "built-in defaults (config.defaults.toml)"
     BuiltinDefaults names the embedded base in messages and Sources.
 
+const CandidateSkill = "skills/magnum-review/SKILL.md"
+    CandidateSkill is where a candidate directory holds the judge skill,
+    as magnum's checkout does.
+
 const DatabaseSuffix = "__{slug}"
     DatabaseSuffix ends every pool database template ([[pool]] databases):
     the slot's slug follows the last "__", which is how magnum lists and guards
@@ -2479,6 +2489,9 @@ const DefaultAfterDenyPrompt = "magnum denied that command: review roles never r
 const DefaultAutoApproveBody = "Auto-approved: magnum's review of `{{.Short}}` found no blocking problems{{if .ReviewURL}} ([review]({{.ReviewURL}})){{end}}."
     DefaultAutoApproveBody is the body of an automatic approval when the watch
     sets no auto_approve_body.
+
+const DefaultEditorPrompt = "skill-edit.md"
+    DefaultEditorPrompt is the skill editor's prompt file.
 
 const DefaultIdleRemoveAfter = 168 * time.Hour
     DefaultIdleRemoveAfter is a pool's idle_remove_after when it sets none (or
@@ -2527,6 +2540,10 @@ const DefaultSkill = "{{repo}}/skills/magnum-review/SKILL.md"
 
 const DefaultTriagePrompt = "triage.md"
     DefaultTriagePrompt is the triage prompt file.
+
+const EditorRoleName = "skill"
+    EditorRoleName is the name of the role the skill editor runs as
+    (EditorRole).
 
 const EmbeddedSkill = "builtin:skills/magnum-review/SKILL.md"
     EmbeddedSkill names the binary's own copy of the judge skill (magnum.Skill)
@@ -2783,6 +2800,12 @@ func (c *Config) CommentsWhenClean(repo, identity string) bool
     a comment, not an approval, for a clean verdict on repository repo
     ("owner/name"): VerdictsFor's no-findings event is COMMENT.
 
+func (c *Config) EditorRole() Role
+    EditorRole is the role the skill editor runs as: EditorRoleName, the
+    [learn] editor_kind in session mode with its editor_model, editor_effort,
+    editor_args, editor_prompt and editor_timeout, writing changes.json,
+    normalized like a configured role.
+
 func (c *Config) IdentityByName(name string) *Identity
     IdentityByName returns the identity or nil.
 
@@ -2949,6 +2972,16 @@ func (c *Config) Warnings() []string
 
 func (c *Config) WatchFor(fullName string) *Watch
     WatchFor returns the watch that covers owner/name, or nil.
+
+func (c *Config) WithCandidate(dir string) (*Config, error)
+    WithCandidate is the config a replay or a check of candidate dir runs with:
+    a copy of c (WithoutSnapshot: read from disk, whatever the daemon loaded
+    at startup) whose prompts_dir is <dir>/prompts and whose every judge reads
+    <dir>/skills/magnum-review/SKILL.md, both absolute. dir is a checkout or
+    a worktree of magnum with a change to the prompts or the skill (an eval
+    candidate, the skill editor's worktree); a prompt it lacks resolves to the
+    embedded default, as in any checkout. An error when dir has no prompts
+    directory or no skill file; c is never changed.
 
 func (c *Config) WithoutSnapshot() *Config
     WithoutSnapshot is a copy of c that reads its prompts and judge skills from
@@ -3443,6 +3476,35 @@ type Learn struct {
 	Prompt string `toml:"prompt"`
 	// Timeout bounds the agent's turn on one PR.
 	Timeout Duration `toml:"timeout"`
+
+	// The self-improving loop (internal/engine/learn_edit.go, DECISIONS "The
+	// editor proposes skill and prompt changes on a branch"). Editor turns
+	// on the editor after a retro that found new general misses or
+	// declines (`magnum learn --propose` runs it regardless): a pane agent
+	// that drafts a change to the judge skill and the prompts on a branch
+	// of the checkout. EditorKind, EditorModel, EditorEffort and EditorArgs
+	// are its role's (EditorRole; editor_kind without editor_model gets
+	// DefaultLearnModel of that kind), EditorPrompt its template and
+	// EditorTimeout the bound of one turn.
+	Editor        bool     `toml:"editor"`
+	EditorKind    string   `toml:"editor_kind"`
+	EditorModel   string   `toml:"editor_model"`
+	EditorEffort  string   `toml:"editor_effort"`
+	EditorArgs    []string `toml:"editor_args"`
+	EditorPrompt  string   `toml:"editor_prompt"`
+	EditorTimeout Duration `toml:"editor_timeout"`
+	// GateCases bounds the eval cases the gate of a proposal replays,
+	// LandPerDay the proposals that land per local day; Restart is idle
+	// (the daemon restarts on a landed change once nothing is in flight) or
+	// manual (it asks for `magnum daemon-restart --when-idle`). A landed
+	// version whose declined and argued share of at least
+	// RegressionMinFindings posted findings grows by RegressionPoints over
+	// the previous version's gets a revert proposal.
+	GateCases             int    `toml:"gate_cases"`
+	LandPerDay            int    `toml:"land_per_day"`
+	Restart               string `toml:"restart"`
+	RegressionPoints      int    `toml:"regression_points"`
+	RegressionMinFindings int    `toml:"regression_min_findings"`
 }
     Learn is the [learn] section: the daily retro. After a PR closes,
     magnum collects what the other reviewers commented on it, drops what its own
@@ -3454,7 +3516,9 @@ type Learn struct {
 
 func DefaultLearn() Learn
     DefaultLearn returns the built-in [learn] values: off, a week of lookback,
-    a day to settle, Claude sonnet classifying.
+    a day to settle, Claude sonnet classifying; the editor off, Claude sonnet
+    editing for at most 45 minutes a turn, a gate of 6 cases, one landing a day,
+    an idle restart, a regression of 10 points over 20 findings.
 
 func (l Learn) DailyTime(day time.Time) (time.Time, error)
     DailyTime is the daily_at time on the local calendar day of day (in day's
@@ -4456,6 +4520,11 @@ const (
 	MachineToastRounds = 3
 )
 const (
+
+	// FormatGateTimeout bounds one command of the format gate.
+	FormatGateTimeout = 20 * time.Minute
+)
+const (
 	// ReqNotesCurate starts a curation of a repository's notes now
 	// (NotesCuratePayload).
 	ReqNotesCurate = "notes_curate"
@@ -4658,6 +4727,11 @@ const FormerDismissMessage = "magnum: superseded by the review of %s posted as %
     shows on GitHub; the arguments are the new review's commit (short) and the
     login it was posted as.
 
+const KVLearnEditing = "learn.editing"
+    KVLearnEditing holds the skill edit running now (EditMark as JSON), which
+    the CLI reads before it stops the daemon: set when it starts, deleted when
+    it ends and at every start of the daemon.
+
 const KVRetroRunning = "learn.retro_running"
     KVRetroRunning holds the start of the retro running now (store.FormatTime),
     which the CLI reads before it stops the daemon: set by the tick or the
@@ -4696,6 +4770,10 @@ var ErrClassifierDown = errors.New("engine: the retro's classifier is not availa
 
 var ErrCuratorDown = errors.New("engine: the notes curator is not available")
     ErrCuratorDown wraps a Curator's error that is not the proposal's: the agent
+    could not be set up or started, or went away.
+
+var ErrEditorDown = errors.New("engine: the skill editor is not available")
+    ErrEditorDown wraps an Editor's error that is not the edit's: the agent
     could not be set up or started, or went away.
 
 var ErrEvalLayout = errors.New("engine: magnum eval needs a scratch layout (paths.Layout.Scratch), never the live registry")
@@ -4748,13 +4826,14 @@ func CheckPrompts(cfg *config.Config) (int, error)
     every prompt file the configured roles name (judges with agents.JudgeData,
     other session roles with agents.RoleData in each mode, shell roles' command
     or full-line template through agents.ShellLine), the model-fallback prompt,
-    the triage prompt, the retro prompt and every identity's review footer
-    template (config.RenderFooter, which magnum renders after each verified
-    review). Each template is rendered twice, once with every field set and once
-    with the optional ones empty, so both sides of an {{if}} run. It returns
-    how many renders passed and every failure, joined: a template field this
-    binary's data lacks (a prompt edited for a newer build) fails here instead
-    of in a round.
+    the triage prompt, the retro prompt, the notes curation prompt,
+    the skill editor's prompt and every identity's review footer template
+    (config.RenderFooter, which magnum renders after each verified review).
+    Each template is rendered twice, once with every field set and once with
+    the optional ones empty, so both sides of an {{if}} run. It returns how many
+    renders passed and every failure, joined: a template field this binary's
+    data lacks (a prompt edited for a newer build) fails here instead of in a
+    round.
 
 func ClearModelLimits(ctx context.Context, st *store.Store, kind string) ([]string, error)
     ClearModelLimits deletes the per-model limits recorded for kind
@@ -5275,6 +5354,15 @@ type Deps struct {
 	// Curator sets up the notes curator for one curation ([notes],
 	// notes_curate.go); nil = no curation runs.
 	Curator func(ctx context.Context, run CurateRun) (Curator, error)
+	// Editor sets up the skill editor for one run ([learn] editor_*,
+	// learn_edit.go); nil = no edit runs. It works on Checkout, magnum's own
+	// checkout (Layout.Home; "" for an installed binary: no edit), through
+	// LearnGit, and GoTest runs the format gate's commands there: go or
+	// make (args[0]) on dir with the checkout's mise environment.
+	Editor   func(ctx context.Context, run EditRun) (Editor, error)
+	Checkout string
+	LearnGit LearnGit
+	GoTest   func(ctx context.Context, dir string, args ...string) (string, error)
 
 	// Usage reads Codex's rate-limit snapshot (usage.Codex, which FromApp
 	// sets); nil = no budget gauge and no caps.
@@ -5311,6 +5399,41 @@ func ParseDrain(v string) (Drain, bool)
 
 func (d Drain) Value() string
     Value is d as KVDaemonDraining stores it.
+
+type EditJob struct {
+	Run    EditRun
+	Prompt string
+	Check  func() (learn.Changes, []string)
+}
+    EditJob is what an Editor works on: the run, the rendered prompt
+    (prompts/skill-edit.md) and Check, which reads what the editor wrote and
+    returns its changes and every problem with it (none: a candidate).
+
+type EditMark struct {
+	Run     string    `json:"run"`
+	Trigger string    `json:"trigger"`
+	Started time.Time `json:"started"`
+}
+    EditMark is the editor run in flight (KVLearnEditing).
+
+type EditResult struct {
+	Changes  learn.Changes
+	Problems []string
+	Pause    *pipeline.Pause
+}
+    EditResult is how an editor's turns ended: its changes, valid when Problems
+    is empty, or a Pause (a limit the agent hit).
+
+type EditRun struct {
+	ID, Dir, Worktree string
+}
+    EditRun is one editor run: its id, its run directory and its worktree.
+
+type Editor interface {
+	Edit(ctx context.Context, job EditJob) (EditResult, error)
+	Close(ctx context.Context) error
+}
+    Editor drafts the skill change of one run; Close ends it.
 
 type Engine struct {
 	// Has unexported fields.
@@ -5471,6 +5594,16 @@ type Inventory interface {
 	UpsertSlotDatabases(ctx context.Context, inv inventory.Inventory) (inventory.SyncResult, error)
 }
     Inventory is the reconcile scanner (*inventory.Scanner).
+
+type LearnGit interface {
+	RevParse(ctx context.Context, dir, ref string) (string, error)
+	WorktreeAdd(ctx context.Context, mainClone, path, ref string, detach bool, branch string) error
+	WorktreeDiscard(ctx context.Context, repo, dir string) error
+	StatusPaths(ctx context.Context, dir string) ([]gitx.StatusEntry, error)
+	CommitAll(ctx context.Context, dir, message string, paths ...string) (string, error)
+	BranchDelete(ctx context.Context, mainClone, branch string, force bool) error
+}
+    LearnGit is the git work of an editor run (*gitx.Client).
 
 type MachineGroup struct {
 	Repo string // owner/name
@@ -6298,7 +6431,7 @@ const (
 )
     Case outcomes of RunCase besides the round's (pipeline.Outcome*).
 
-const CandidateSkill = "skills/magnum-review/SKILL.md"
+const CandidateSkill = config.CandidateSkill
     CandidateSkill is where a candidate directory holds the judge skill,
     as magnum's checkout does.
 
@@ -6352,7 +6485,8 @@ func RunsRoot(l paths.Layout) string
     with the flagged cases (eval.FlaggedFile) and the cases' worktrees (wt/).
 
 func WithCandidate(cfg *config.Config, dir string) (*config.Config, error)
-    WithCandidate is the config a replay of candidate dir reviews with:
+    WithCandidate is the config a replay of candidate dir reviews with
+    (config.Config.WithCandidate, which the skill editor's checks share):
     a copy of cfg (config.Config.WithoutSnapshot: read from disk, whatever the
     daemon loaded at startup) whose prompts_dir is <dir>/prompts and whose every
     judge reads <dir>/skills/magnum-review/SKILL.md, both absolute. dir is a
@@ -9198,6 +9332,9 @@ const (
 )
     Why ScrubLesson dropped a lesson (the reason of a lesson_rejected event).
 
+const DecisionWidth = 104
+    DecisionWidth is the design log's line width.
+
 const NearLines = 3
     NearLines is how far, in lines, a comment may be from one of magnum's
     findings on the same path and still be about it.
@@ -9229,6 +9366,10 @@ func AllowedEditFile(p string) bool
     AllowedEditFile reports whether p (slash-separated, relative to the
     checkout) is one of EditAllowedGlobs.
 
+func AppendDecision(doc []byte, entry string) []byte
+    AppendDecision appends entry to the design log doc, after a line break when
+    doc does not end with one.
+
 func CaseFromDecline(d store.Decline) (eval.Case, bool)
     CaseFromDecline is the learned case of decline d: ok when the author's
     answer showed magnum's finding wrong or ranked too high (verdict wrong or
@@ -9251,6 +9392,13 @@ func CaseFromMiss(m store.Miss) (eval.Case, bool)
     A row the corpus would refuse (no path nor match left, a PR it cannot name)
     makes no case.
 
+func DecisionEntry(decision, day string, inputs []string) string
+    DecisionEntry is the design log's entry for an editor's decision:
+    its headline in bold without the final stop, the day and the inputs the
+    proposal answers in parentheses, then the rest, one paragraph wrapped at
+    DecisionWidth runes with two-space continuation lines, as every entry of
+    docs/DECISIONS.md.
+
 func DeclineInputID(id int64) string
     DeclineInputID is a decline's id in inputs.json.
 
@@ -9261,6 +9409,10 @@ func FilePath(sha, p string) string
 func FormatPins(pins []string, limit int) []byte
     FormatPins renders the pins file (PinsSource): a comment, the skill's size
     cap, then one pinned sentence per line, sorted.
+
+func Headline(decision string) (headline, rest string)
+    Headline splits a decision into its first sentence (up to the first ".",
+    "!" or "?" that ends the text or is followed by a space) and the rest.
 
 func MissInputID(id int64) string
     MissInputID is a miss's id in inputs.json.
@@ -10758,6 +10910,15 @@ func (l Layout) Learn() string
 func (l Layout) LearnCorpus() string
     LearnCorpus is the learned eval corpus the daemon writes from the registry's
     misses and declines, which `magnum eval` reads after the operator's corpus.
+
+func (l Layout) LearnSkill() string
+    LearnSkill holds the skill editor's run directories, LearnSkill()/<run>/:
+    its inputs, the pins and a copy of its answer.
+
+func (l Layout) LearnWorktrees() string
+    LearnWorktrees holds the skill editor's git worktrees of the checkout,
+    LearnWorktrees()/<run>, each on its branch learn/<run> until the proposal
+    lands or goes.
 
 func (l Layout) Lock() string
     Lock is the daemon's lock file under State, held for the daemon's whole

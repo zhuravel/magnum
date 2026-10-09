@@ -185,3 +185,34 @@ func TestParseInputID(t *testing.T) {
 		t.Error("input ids")
 	}
 }
+
+// The editor's decision becomes a design-log entry like every other: its
+// first sentence in bold as the headline, the day and the inputs, then the
+// rest, wrapped at 104 runes with two-space continuation lines, appended
+// after the log's last line.
+func TestDecisionEntryWrapsTheHeadlineAndTheRest(t *testing.T) {
+	if h, r := Headline("The judge checks e.g. the lock.  It matters."); h != "The judge checks e.g." || r != "the lock. It matters." {
+		t.Errorf("Headline = %q, %q (a stop followed by a space ends it)", h, r)
+	}
+	if h, r := Headline("One sentence without a stop"); h != "One sentence without a stop" || r != "" {
+		t.Errorf("Headline = %q, %q", h, r)
+	}
+	long := "The judge checks the lock of a row two writers share. " + strings.Repeat("Because a lost update corrupts totals. ", 6)
+	entry := DecisionEntry(long, "2026-10-09", []string{"m12", "d3"})
+	lines := strings.Split(strings.TrimSuffix(entry, "\n"), "\n")
+	if !strings.HasPrefix(lines[0], "- **The judge checks the lock of a row two writers share** (2026-10-09, the skill editor's") || len(lines) < 3 {
+		t.Fatalf("entry = %q", entry)
+	}
+	for _, l := range lines {
+		if n := len([]rune(l)); n > DecisionWidth || (l != lines[0] && !strings.HasPrefix(l, "  ")) {
+			t.Errorf("line of %d runes: %q", n, l)
+		}
+	}
+	if got := strings.Join(strings.Fields(entry), " "); !strings.Contains(got, "proposal for m12, d3). Because a lost update") {
+		t.Errorf("entry text = %q", got)
+	}
+	doc := AppendDecision([]byte("# Decisions\n- old"), entry)
+	if string(doc) != "# Decisions\n- old\n"+entry {
+		t.Errorf("appended = %q", doc)
+	}
+}

@@ -175,6 +175,27 @@ effort = ""                       # passed through the kind's `effort` args ("" 
 # args = []                       # appended to the agent's launch args
 prompt = "retro.md"               # in prompts_dir; the embedded copy when absent
 timeout = "20m"                   # per PR: a turn that takes longer is abandoned
+# The self-improving loop: an editor agent drafts a change to the judge skill and the judge and Claude reviewer
+# prompts from the general misses and the findings authors declined, in a git worktree of the checkout on a
+# learn/<run> branch; magnum checks it, regenerates the golden files, runs the agents, pipeline and config tests
+# and `make check-private`, and commits it there. Nothing is pushed; `magnum learn` lists the proposals. Every key
+# is checked whether or not editor is on (`magnum learn --propose` runs one regardless). editor, the gate's and
+# the landing's keys and the regression keys take effect with the loop's gate, landing and measurement; until
+# then only `magnum learn --propose` runs the editor, and its proposals wait for the gate.
+editor = false                    # run the editor after a retro that stored new general misses or declines
+editor_kind = "claude"            # the editing agent: a [kinds.<name>] that drives a session; checked like a [[role]]
+editor_model = "sonnet"           # as model above: "sonnet" for kind "claude", "" (the kind's default) for another kind
+editor_effort = ""                # passed through the kind's `effort` args ("" = none)
+# editor_args = []                # appended to the editor's launch args
+editor_prompt = "skill-edit.md"   # in prompts_dir; the embedded copy when absent
+editor_timeout = "45m"            # per turn: a turn that takes longer is abandoned
+gate_cases = 6                    # eval cases the gate of a proposal replays at most (the inputs' own first)
+land_per_day = 1                  # proposals that land per local day; a later passed one waits for the next day
+restart = "idle"                  # after a landing: "idle" restarts the daemon once nothing is in flight, "manual"
+                                  # asks for `magnum daemon-restart --when-idle`
+regression_points = 10            # a landed version whose declined and argued share of its posted findings grows by
+regression_min_findings = 20      #   this many points (1 to 100) over the previous version's, once it posted at least
+                                  #   this many findings, gets a revert proposal
 
 # Repository notes (~/.local/share/magnum/notes/<owner>/<repo>.md and the harness directory of QA scripts
 # beside it): every review role reads them first, the judge rewrites them. Every version is kept in the

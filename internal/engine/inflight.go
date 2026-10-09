@@ -21,8 +21,14 @@ import (
 // at a restart for a new build, at shutdown and at every start of the daemon.
 const KVRetroRunning = "learn.retro_running"
 
+// KVLearnEditing holds the skill edit running now (EditMark as JSON), which
+// the CLI reads before it stops the daemon: set when it starts, deleted
+// when it ends and at every start of the daemon.
+const KVLearnEditing = "learn.editing"
+
 // backgroundBusy names the background work in flight that a restart would
-// cut short ("" = none): the notes curation running and the retro.
+// cut short ("" = none): the notes curation running, the retro and the
+// skill edit.
 func (e *Engine) backgroundBusy() string {
 	var busy []string
 	e.curateMu.Lock()
@@ -32,6 +38,9 @@ func (e *Engine) backgroundBusy() string {
 	e.curateMu.Unlock()
 	if e.retroBusy() {
 		busy = append(busy, "the retro")
+	}
+	if e.editBusy() {
+		busy = append(busy, "the skill edit")
 	}
 	return strings.Join(busy, " and ")
 }

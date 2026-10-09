@@ -25,7 +25,8 @@ import (
 // renderer, every prompt file the configured roles name (judges with
 // agents.JudgeData, other session roles with agents.RoleData in each mode,
 // shell roles' command or full-line template through agents.ShellLine), the
-// model-fallback prompt, the triage prompt, the retro prompt and every
+// model-fallback prompt, the triage prompt, the retro prompt, the notes
+// curation prompt, the skill editor's prompt and every
 // identity's review footer template (config.RenderFooter, which magnum
 // renders after each verified review). Each template is rendered twice,
 // once with every field set and once with the optional ones empty, so both
@@ -104,6 +105,12 @@ func CheckPrompts(cfg *config.Config) (int, error) {
 	} else {
 		render("notes curation prompt", p, sampleData[curateData](true))
 		render("notes curation prompt", p, curateData{})
+	}
+	if p, err := cfg.ResolvePrompt(cfg.Learn.EditorPrompt); err != nil {
+		errs = append(errs, fmt.Errorf("skill editor prompt: %w", err))
+	} else {
+		render("skill editor prompt", p, sampleData[editData](true))
+		render("skill editor prompt", p, editData{})
 	}
 	for _, id := range cfg.Identities {
 		tmpl := id.Footer()

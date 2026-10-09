@@ -15,6 +15,7 @@ package engine
 // paneSpec.
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -149,6 +150,9 @@ type paneAgent struct {
 	spec paneSpec
 	dir  string // the run's directory: the scratch registry is in it, the agent works in its parent
 	id   string // the run's id
+	// cwd, when set, is where the agent works instead of dir's parent (the
+	// skill editor: its worktree).
+	cwd string
 
 	scratch string // the scratch registry's directory
 	cfg     *config.Config
@@ -335,7 +339,7 @@ func (c *paneAgent) ensureAgent(ctx context.Context) (*pipeline.Pause, error) {
 	if err := c.clearLeftover(ctx); err != nil {
 		return nil, err
 	}
-	cwd := filepath.Dir(c.dir)
+	cwd := cmp.Or(c.cwd, filepath.Dir(c.dir))
 	ws, err := c.mgr.EnsureWorkspace(ctx, c.pr, cwd, nil, c.spec.workspace, []config.Role{c.role})
 	if err != nil {
 		return nil, err

@@ -395,6 +395,78 @@ func addedLines(diff string) string {
 	return b.String()
 }
 
+// DecisionWidth is the design log's line width.
+const DecisionWidth = 104
+
+// Headline splits a decision into its first sentence (up to the first ".",
+// "!" or "?" that ends the text or is followed by a space) and the rest.
+func Headline(decision string) (headline, rest string) {
+	text := strings.Join(strings.Fields(decision), " ")
+	for i := range len(text) {
+		if c := text[i]; (c == '.' || c == '!' || c == '?') && (i+1 == len(text) || text[i+1] == ' ') {
+			return text[:i+1], strings.TrimSpace(text[i+1:])
+		}
+	}
+	return text, ""
+}
+
+// DecisionEntry is the design log's entry for an editor's decision: its
+// headline in bold without the final stop, the day and the inputs the
+// proposal answers in parentheses, then the rest, one paragraph wrapped at
+// DecisionWidth runes with two-space continuation lines, as every entry of
+// docs/DECISIONS.md.
+func DecisionEntry(decision, day string, inputs []string) string {
+	head, rest := Headline(decision)
+	text := "**" + strings.TrimRight(head, ".!?") + "** (" + day + ", the skill editor's proposal"
+	if len(inputs) > 0 {
+		text += " for " + strings.Join(inputs, ", ")
+	}
+	text += ")."
+	if rest != "" {
+		text += " " + rest
+	}
+	return wrap(text, DecisionWidth, "- ", "  ")
+}
+
+// AppendDecision appends entry to the design log doc, after a line break
+// when doc does not end with one.
+func AppendDecision(doc []byte, entry string) []byte {
+	out := slices.Clone(doc)
+	if len(out) > 0 && out[len(out)-1] != '\n' {
+		out = append(out, '\n')
+	}
+	out = append(out, entry...)
+	if !strings.HasSuffix(entry, "\n") {
+		out = append(out, '\n')
+	}
+	return out
+}
+
+// wrap fills text's words into lines of at most width runes (a longer word
+// stays whole on its own line), the first after first and the others after
+// next.
+func wrap(text string, width int, first, next string) string {
+	var b strings.Builder
+	line, n := first, utf8.RuneCountInString(first)
+	empty := true
+	for w := range strings.FieldsSeq(text) {
+		wn := utf8.RuneCountInString(w)
+		if !empty && n+1+wn > width {
+			b.WriteString(line + "\n")
+			line, n, empty = next, utf8.RuneCountInString(next), true
+		}
+		if !empty {
+			line += " "
+			n++
+		}
+		line += w
+		n += wn
+		empty = false
+	}
+	b.WriteString(line + "\n")
+	return b.String()
+}
+
 // pinsCap starts the pins file's cap line.
 const pinsCap = "# cap: "
 

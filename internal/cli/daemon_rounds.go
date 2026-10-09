@@ -27,10 +27,11 @@ func registryReadOnlyDSN(path string) string {
 
 // inFlight is what stopping the daemon now would cut short: the review
 // rounds in flight and the background work running (the notes curation,
-// engine.KVNotesCurating, and the retro, engine.KVRetroRunning).
+// engine.KVNotesCurating, the retro, engine.KVRetroRunning, and the skill
+// edit, engine.KVLearnEditing).
 type inFlight struct {
 	rounds []string // "owner/repo#N (state)"
-	work   []string // "notes curation of owner/repo (since 15:04)", "retro (since 15:04)"
+	work   []string // "notes curation of owner/repo (since 15:04)", "retro (since 15:04)", "skill edit (since 15:04)"
 }
 
 func (f inFlight) none() bool { return len(f.rounds) == 0 && len(f.work) == 0 }
@@ -60,17 +61,18 @@ func (f inFlight) cutShort() string {
 		parts = append(parts, "abandons the rounds (their agents keep running, the rounds start over later)")
 	}
 	if len(f.work) > 0 {
-		parts = append(parts, "cuts the background work short (a notes curation proposes nothing, a retro runs again)")
+		parts = append(parts, "cuts the background work short (a notes curation or a skill edit proposes nothing, a retro runs again)")
 	}
 	return "stopping the daemon now " + strings.Join(parts, " and ")
 }
 
 // activeRounds reads what is in flight, read-only: the PRs whose review
 // round is claiming, reviewing or verifying, as "owner/repo#N (state)", and
-// the notes curation and the retro running (backgroundWork). Stopping the
-// daemon abandons the rounds (their agents keep working in herdr but nobody
-// collects the result, and the next daemon starts them over) and cuts the
-// curation and the retro short. No registry yet means nothing; any other
+// the notes curation, the retro and the skill edit running
+// (backgroundWork). Stopping the daemon abandons the rounds (their agents
+// keep working in herdr but nobody collects the result, and the next daemon
+// starts them over) and cuts the curation, the retro and the edit short.
+// No registry yet means nothing; any other
 // read failure is an error, so callers fail closed.
 func (c *Context) activeRounds(ctx context.Context) (inFlight, error) {
 	path := c.Layout.DB()
@@ -115,12 +117,13 @@ func (c *Context) activeRounds(ctx context.Context) (inFlight, error) {
 	return out, nil
 }
 
-// backgroundWork reads the notes curation and the retro running from their
-// kv marks: "notes curation of owner/repo (since 15:04)", "retro (since
-// 15:04)". A mark it cannot parse still counts.
+// backgroundWork reads the notes curation, the retro and the skill edit
+// running from their kv marks: "notes curation of owner/repo (since
+// 15:04)", "retro (since 15:04)", "skill edit (since 15:04)". A mark it
+// cannot parse still counts.
 func backgroundWork(ctx context.Context, db *sql.DB) ([]string, error) {
-	rows, err := db.QueryContext(ctx, `SELECT key, value FROM kv WHERE key IN (?, ?) AND value != '' ORDER BY key`,
-		engine.KVNotesCurating, engine.KVRetroRunning)
+	rows, err := db.QueryContext(ctx, `SELECT key, value FROM kv WHERE key IN (?, ?, ?) AND value != '' ORDER BY key`,
+		engine.KVNotesCurating, engine.KVRetroRunning, engine.KVLearnEditing)
 	if err != nil {
 		return nil, err
 	}
@@ -139,6 +142,12 @@ func backgroundWork(ctx context.Context, db *sql.DB) ([]string, error) {
 			var m engine.CurateMark
 			if json.Unmarshal([]byte(value), &m) == nil && m.Repo != "" {
 				what, since = "notes curation of "+m.Repo, m.Started
+			}
+		case engine.KVLearnEditing:
+			what = "skill edit"
+			var m engine.EditMark
+			if json.Unmarshal([]byte(value), &m) == nil {
+				since = m.Started
 			}
 		default:
 			if t, err := store.ParseTime(value); err == nil {

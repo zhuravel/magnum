@@ -1587,18 +1587,20 @@ func (h *harness) stop() {
 	e.mu.Unlock()
 	e.stopRetro()
 	e.stopCurate()
+	e.stopEdit()
 	done := make(chan struct{})
 	go func() {
 		e.roundWG.Wait()
 		e.retroWG.Wait()
 		e.curateWG.Wait()
+		e.editWG.Wait()
 		h.runs.Wait()
 		close(done)
 	}()
 	select {
 	case <-done:
 	case <-time.After(leakWait):
-		h.t.Errorf("rounds, a retro, a notes curation or a Run loop still ran %s after the test ended", leakWait)
+		h.t.Errorf("rounds, a retro, a notes curation, a skill edit or a Run loop still ran %s after the test ended", leakWait)
 		return
 	}
 	e.stopToasts()
@@ -1653,6 +1655,7 @@ func (h *harness) settle() {
 	h.e.roundWG.Wait()
 	h.e.retroWG.Wait()
 	h.e.curateWG.Wait()
+	h.e.editWG.Wait()
 	h.e.drainHeavy(h.ctx)
 	h.e.toastWG.Wait() // urgent toasts run in goroutines
 }

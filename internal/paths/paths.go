@@ -335,6 +335,15 @@ func (l Layout) Learn() string { return filepath.Join(l.data(), "learn") }
 // operator's corpus.
 func (l Layout) LearnCorpus() string { return filepath.Join(l.Learn(), "corpus.toml") }
 
+// LearnSkill holds the skill editor's run directories,
+// LearnSkill()/<run>/: its inputs, the pins and a copy of its answer.
+func (l Layout) LearnSkill() string { return filepath.Join(l.Learn(), "skill") }
+
+// LearnWorktrees holds the skill editor's git worktrees of the checkout,
+// LearnWorktrees()/<run>, each on its branch learn/<run> until the proposal
+// lands or goes.
+func (l Layout) LearnWorktrees() string { return filepath.Join(l.State(), "learn", "wt") }
+
 // ReviewDir is where one review round's reports live.
 func (l Layout) ReviewDir(owner, repo string, number int, sha string) string {
 	if len(sha) > 12 {
