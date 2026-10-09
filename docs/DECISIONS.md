@@ -123,6 +123,35 @@ editing history. Code, config comments and prompts reference these by their head
   have none, and `db:test:prepare` loads the test database only), counting the reset against
   `ready_timeout` (5 minutes: a slow reset was cut, or left `prepare` and `ready` skipped), and a key of
   its own for the reset's budget (the release's timeout already bounds `reset_db`).
+- **The daemon reads a pull request's files only as small regular files** (2026-10-09). The daemon read
+  the files a pull request controls with os.ReadFile, which follows a committed symlink and has no size
+  limit. A PR that committed Gemfile.lock, db/schema.rb, tmp/.worktree-db-slug or .codex/config.toml as a
+  symlink to /dev/zero made the daemon allocate memory until it was killed, and the resumable step that
+  read the file ran again after the restart. A FIFO left there by the PR's setup code blocked the
+  goroutine in its open for good, and a symlink to a file outside the checkout was read as the checkout's
+  own file. Now `fsx.ReadRegular(path, limit)` does an Lstat first and refuses a symlink or a special file
+  (`fsx.ErrNotRegular`) and a file past the limit (`fsx.ErrTooLarge`) before it opens anything. It opens
+  with O_NOFOLLOW|O_NONBLOCK and checks SameFile against the Lstat, so a file swapped in after the check
+  is refused and a FIFO is never waited on. It reads through `io.LimitReader(limit+1)` and passes a
+  missing file's error back unwrapped. These readers use it: lockHash (16 MiB per lockfile), schemaVersion
+  (16 MiB), the slug marker's readers through the new `slots.ReadMarker` (4 KiB: verifyMarker,
+  perPRDBSlug, inventory's readSlug) and checkoutHooks (1 MiB). A refused lockfile is an error, not a
+  hash: the deps step fails at once, post_checkout does not run, and lock_sha keeps its old value. A
+  refused schema.rb is an error, which the round's CheckSchema already treats as "reload". A refused
+  marker fails verify_marker, falls back to DBSlug for a per-PR worktree, and leaves inventory's ownership
+  discovery incomplete, so no orphans are computed. A refused config.toml means magnum cannot tell, so the
+  hooks review is declined. The curator's proposal.md and changes.json are capped at MaxFileBytes, and the
+  harness at MaxFileBytes per file and at MaxStateBytes together with the notes. These caps are checked
+  before any read; before, the files were read whole and then measured. Only the path's last element is
+  checked; parent directories resolve as usual, and the file they lead to must still be a regular file
+  under the cap. Kept: rubyPin's own root-confined read, which follows a symlink that stays inside the
+  checkout and parses the first 64 KiB of a longer file; ReadRegular would refuse both. Rejected: a fixed
+  "refused" token in lockHash (the next PR with a refused lockfile would skip post_checkout), and a token
+  that changes on every call (post_checkout would run bundle install against the /dev/zero link until
+  DepsTimeout); an os.Root per checkout for every read (the files sit at fixed names, and a
+  parent-directory symlink can only reach a regular file under the cap); 1 MiB caps for lockfiles and
+  schema.rb (large applications already have files of about 0.6 MiB, and a lockfile over the cap blocks
+  every checkout of the repository).
 
 ## Scheduling
 

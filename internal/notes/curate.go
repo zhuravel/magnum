@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"unicode/utf8"
 
 	"github.com/zhuravel/magnum/internal/execx"
@@ -163,30 +164,22 @@ func ReadProposal(s Scratch) (Proposal, []string) {
 	}
 	defer root.Close()
 	var problems []string
-	text, err := readRegular(root, scratchProposal)
+	text, err := readRegular(root, scratchProposal, MaxFileBytes)
 	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		problems = append(problems, scratchProposal+" was not written")
-	case errors.Is(err, errNotRegular):
-		problems = append(problems, scratchProposal+" is "+errNotRegular.Error())
 	case err != nil:
-		problems = append(problems, scratchProposal+" cannot be read: "+err.Error())
+		problems = append(problems, readProblem(scratchProposal, err))
 	case len(strings.TrimSpace(string(text))) == 0:
 		problems = append(problems, scratchProposal+" is empty")
 	default:
 		p.State.Exists, p.State.Notes = true, text
 	}
-	files, bad := readTree(s.Harness())
+	files, bad := readTree(s.Harness(), len(text))
 	problems = append(problems, bad...)
 	p.State.Files = files
-	b, err := readRegular(root, scratchChanges)
+	b, err := readRegular(root, scratchChanges, MaxFileBytes)
 	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		problems = append(problems, scratchChanges+" was not written")
-	case errors.Is(err, errNotRegular):
-		problems = append(problems, scratchChanges+" is "+errNotRegular.Error())
 	case err != nil:
-		problems = append(problems, scratchChanges+" cannot be read: "+err.Error())
+		problems = append(problems, readProblem(scratchChanges, err))
 	default:
 		dec := json.NewDecoder(strings.NewReader(string(b)))
 		dec.DisallowUnknownFields()
@@ -199,37 +192,64 @@ func ReadProposal(s Scratch) (Proposal, []string) {
 	return p, problems
 }
 
-// errNotRegular is readRegular's error for a symbolic link or a special
-// file.
-var errNotRegular = errors.New("not a regular file (no symbolic links or special files)")
+// readProblem words readRegular's error about the scratch file name for a
+// nudge.
+func readProblem(name string, err error) string {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return name + " was not written"
+	case errors.Is(err, fsx.ErrNotRegular):
+		return name + " is " + fsx.ErrNotRegular.Error()
+	case errors.Is(err, fsx.ErrTooLarge):
+		return fmt.Sprintf("%s is larger than %d bytes", name, MaxFileBytes)
+	}
+	return name + " cannot be read: " + err.Error()
+}
 
-// readRegular reads name, a regular file of root's directory. The curator
-// reads misses that quote other people's comments, so what it leaves is
-// not trusted: a symbolic link (even to a file inside the directory) or a
-// special file is errNotRegular and nothing it points to is read, and
-// root keeps every path inside the directory.
-func readRegular(root *os.Root, name string) ([]byte, error) {
+// readRegular reads name, a regular file of root's directory of at most limit
+// bytes. The curator reads misses that quote other people's comments, so
+// what it leaves is not trusted: a symbolic link (even to a file inside the
+// directory) or a special file is fsx.ErrNotRegular and nothing it points to
+// is read, a file past limit is fsx.ErrTooLarge and none of it is read, and
+// root keeps every path inside the directory. The open does not wait for a
+// FIFO put in the file's place since the Lstat (O_NONBLOCK; SameFile then
+// refuses it).
+func readRegular(root *os.Root, name string, limit int64) ([]byte, error) {
 	fi, err := root.Lstat(name)
 	if err != nil {
 		return nil, err
 	}
-	if !fi.Mode().IsRegular() {
-		return nil, errNotRegular
+	tooLarge := fmt.Errorf("%w: over %d bytes", fsx.ErrTooLarge, limit)
+	switch {
+	case !fi.Mode().IsRegular():
+		return nil, fsx.ErrNotRegular
+	case fi.Size() > limit:
+		return nil, tooLarge
 	}
-	f, err := root.Open(name)
+	f, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
 	if st, err := f.Stat(); err != nil || !os.SameFile(fi, st) {
-		return nil, errNotRegular // replaced since it was checked
+		return nil, fsx.ErrNotRegular // replaced since it was checked
 	}
-	return io.ReadAll(f)
+	b, err := io.ReadAll(io.LimitReader(f, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(b)) > limit {
+		return nil, tooLarge
+	}
+	return b, nil
 }
 
 // readTree reads every file under dir as harness blobs; symbolic links and
-// special files are problems (a proposal's harness is plain files).
-func readTree(dir string) ([]Blob, []string) {
+// special files are problems (a proposal's harness is plain files). total
+// is what the state holds already (its notes): a file past MaxFileBytes, or
+// files that take the state past MaxStateBytes, are ErrTooLarge, refused
+// before they are read.
+func readTree(dir string, total int) ([]Blob, []string) {
 	root, err := os.OpenRoot(dir)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
@@ -240,7 +260,6 @@ func readTree(dir string) ([]Blob, []string) {
 	defer root.Close()
 	var out []Blob
 	var problems []string
-	total := 0
 	err = fs.WalkDir(root.FS(), ".", func(p string, d fs.DirEntry, err error) error {
 		switch {
 		case err != nil:
@@ -254,13 +273,17 @@ func readTree(dir string) ([]Blob, []string) {
 			problems = append(problems, fmt.Sprintf("%s/%s has a name that is not a plain relative path", scratchHarness, p))
 			return nil
 		}
-		body, err := root.ReadFile(p)
+		if len(out) >= maxListed {
+			return ErrTooLarge
+		}
+		body, err := readRegular(root, p, int64(min(MaxFileBytes, MaxStateBytes-total)))
+		if errors.Is(err, fsx.ErrTooLarge) {
+			return ErrTooLarge
+		}
 		if err != nil {
 			return err
 		}
-		if total += len(body); len(body) > MaxFileBytes || total > MaxStateBytes || len(out) >= maxListed {
-			return ErrTooLarge
-		}
+		total += len(body)
 		out = append(out, Blob{Path: p, SHA256: TextSHA(body), Body: body})
 		return nil
 	})

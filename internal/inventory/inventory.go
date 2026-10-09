@@ -1069,13 +1069,14 @@ func (sc *scan) isDir(p string) (dir, conclusive bool) {
 
 // readSlug returns dir's slug marker (slots.MarkerFile), "" when there is none.
 // conclusive is false when the marker exists but could not be read
-// (permission, I/O): that is warned about and marks ownership discovery
-// incomplete.
+// (permission, I/O) or is not read (slots.ReadMarker: a symlink, a special
+// file or one past its cap, as the checkout's code may leave): that is warned
+// about and marks ownership discovery incomplete.
 func (sc *scan) readSlug(dir string) (slug string, conclusive bool) {
-	b, err := os.ReadFile(filepath.Join(dir, slots.MarkerFile))
+	slug, err := slots.ReadMarker(dir)
 	switch {
 	case err == nil:
-		return strings.TrimSpace(string(b)), true
+		return slug, true
 	case absent(err):
 		return "", true
 	}

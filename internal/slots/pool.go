@@ -267,11 +267,11 @@ func (m *Manager) ensurePoolWorktree(ctx context.Context, sl store.Slot, pool co
 }
 
 func verifyMarker(dir, want string) error {
-	b, err := os.ReadFile(filepath.Join(dir, MarkerFile))
+	got, err := ReadMarker(dir)
 	if err != nil {
 		return fmt.Errorf("%w: %s: %w", ErrVerify, MarkerFile, err)
 	}
-	if got := strings.TrimSpace(string(b)); got != want {
+	if got != want {
 		return fmt.Errorf("%w: %s says %q, want %q", ErrVerify, MarkerFile, got, want)
 	}
 	return nil

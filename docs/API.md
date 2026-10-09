@@ -42,7 +42,7 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 | [engine](#engine) | Package engine is magnum's daemon: one tick loop that polls GitHub, observes herdr, applies health pauses, consumes CLI requests, dispatches review rounds into slots (each round in its own goroutine), releases closed PRs after their grace and reconciles the registry with disk, MySQL and herdr. |
 | [eval](#eval) | Package eval scores an evaluation replay of magnum's pull request review against a corpus of pull requests with known ("seeded") defects. |
 | [execx](#execx) | Package execx is the single choke point for every subprocess magnum runs (git, gh, mysql, mise exec, launchctl, osascript, codex/claude probes). |
-| [fsx](#fsx) | Package fsx holds the file helpers several packages share: an atomic file write, plain or confined to an os.Root, an existence check and a canonical path. |
+| [fsx](#fsx) | Package fsx holds the file helpers several packages share: an atomic file write, plain or confined to an os.Root, a size-limited read of a regular file, an existence check and a canonical path. |
 | [github](#github) | Package github is magnum's GitHub access layer. |
 | [gitx](#gitx) | Package gitx holds every git operation magnum needs: fetching PR heads into refs/magnum/pr/N, detached switches and placeholder resets in review slots, worktree management, dirty/unpushed guards and the diff queries behind "did this PR touch db/". |
 | [herdr](#herdr) | Package herdr is magnum's client for the herdr terminal multiplexer's Unix-socket API (verified against herdr 0.9.x, protocol 22). |
@@ -6399,8 +6399,20 @@ type Runner interface {
 package fsx // import "github.com/zhuravel/magnum/internal/fsx"
 
 Package fsx holds the file helpers several packages share: an atomic file write,
-plain or confined to an os.Root, an existence check and a canonical path.
-It imports only the standard library.
+plain or confined to an os.Root, a size-limited read of a regular file,
+an existence check and a canonical path. It imports only the standard library.
+
+VARIABLES
+
+var (
+	// ErrNotRegular: the path is a symbolic link, a directory, a device, a
+	// FIFO or a socket.
+	ErrNotRegular = errors.New("not a regular file (no symbolic links or special files)")
+	// ErrTooLarge: the file holds more than the bytes the caller allows.
+	ErrTooLarge = errors.New("file too large")
+)
+    ReadRegular's errors, each inside an *fs.PathError naming the path.
+
 
 FUNCTIONS
 
@@ -6411,6 +6423,20 @@ func Canon(p string) string
 func Exists(path string) bool
     Exists reports whether path names something os.Stat can see (a symlink
     counts by its target).
+
+func ReadRegular(path string, limit int64) ([]byte, error)
+    ReadRegular reads the regular file at path, at most limit bytes: the read
+    for a file a pull request controls (a checkout's lockfiles, its schema,
+    the marker its setup writes, its project config). A symbolic link at path
+    is refused, not followed, so a file a checkout commits as a symlink never
+    leads the daemon out of the checkout, to /dev/zero or to anyone's file;
+    a directory, a device, a FIFO or a socket is refused before it is opened,
+    so no read runs without end and no open waits for a FIFO's writer. Both are
+    ErrNotRegular. Only path's last element is checked: its parent directories
+    resolve as usual, and what they lead to is held to the same rules. A file
+    over limit bytes, by its size or by what the read finds (it may grow),
+    is ErrTooLarge, and none of it is returned. A missing file is the error
+    os.Lstat returns, unwrapped (errors.Is fs.ErrNotExist).
 
 func WriteFileAtomic(path string, data []byte, perm fs.FileMode) error
     WriteFileAtomic replaces path with data, mode exactly perm whatever the
@@ -11523,6 +11549,12 @@ func PerPREnv(rc *config.Repo, number int, path, clone string) map[string]string
     PerPREnv is the environment of per-PR worktree number (path, main clone
     clone) for its hooks and its agents: WT_BRANCH=PRSlug(number), every
     WorkspaceNameVars entry blank, then the [[repo]] env (rc may be nil) on top.
+
+func ReadMarker(dir string) (string, error)
+    ReadMarker returns dir's MarkerFile, the database slug its setup wrote,
+    trimmed. The checkout's code writes it, so it is read with fsx.ReadRegular:
+    a symlink or a special file is fsx.ErrNotRegular, one past 4 KiB
+    fsx.ErrTooLarge, and a missing marker is fs.ErrNotExist.
 
 func RenderMiseLocal(src []byte, strip []string, set map[string]string) ([]byte, error)
     RenderMiseLocal renders a checkout's .mise.local.toml from the main clone's

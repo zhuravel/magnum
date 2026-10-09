@@ -399,16 +399,14 @@ func (m *Manager) preparePerPR(ctx context.Context, sl store.Slot, p perPRPlan) 
 }
 
 // perPRDBSlug is the database slug a per-PR worktree's setup used: the
-// marker bin/worktree-setup writes (tmp/.worktree-db-slug) when present,
-// else DBSlug(slug); "" when no setup command ran.
+// marker bin/worktree-setup writes (tmp/.worktree-db-slug) when ReadMarker
+// reads one, else DBSlug(slug); "" when no setup command ran.
 func perPRDBSlug(sl store.Slot, p perPRPlan) string {
 	if len(p.setup) == 0 {
 		return ""
 	}
-	if b, err := os.ReadFile(filepath.Join(sl.Path, MarkerFile)); err == nil {
-		if s := strings.TrimSpace(string(b)); s != "" {
-			return s
-		}
+	if s, err := ReadMarker(sl.Path); err == nil && s != "" {
+		return s
 	}
 	return DBSlug(p.slug)
 }

@@ -1,14 +1,20 @@
 // Package fsx holds the file helpers several packages share: an atomic file
-// write, plain or confined to an os.Root, an existence check and a canonical
-// path. It imports only the standard library.
+// write, plain or confined to an os.Root, a size-limited read of a regular
+// file, an existence check and a canonical path. It imports only the
+// standard library.
 package fsx
 
 import (
+	"bytes"
 	"crypto/rand"
 	"errors"
+	"fmt"
+	"io"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
+	"syscall"
 )
 
 // WriteFileAtomic replaces path with data, mode exactly perm whatever the
@@ -79,6 +85,69 @@ func WriteFileAtomicIn(root *os.Root, name string, data []byte, perm fs.FileMode
 		_ = d.Close()
 	}
 	return nil
+}
+
+// ReadRegular's errors, each inside an *fs.PathError naming the path.
+var (
+	// ErrNotRegular: the path is a symbolic link, a directory, a device, a
+	// FIFO or a socket.
+	ErrNotRegular = errors.New("not a regular file (no symbolic links or special files)")
+	// ErrTooLarge: the file holds more than the bytes the caller allows.
+	ErrTooLarge = errors.New("file too large")
+)
+
+// ReadRegular reads the regular file at path, at most limit bytes: the read
+// for a file a pull request controls (a checkout's lockfiles, its schema,
+// the marker its setup writes, its project config). A symbolic link at path
+// is refused, not followed, so a file a checkout commits as a symlink never
+// leads the daemon out of the checkout, to /dev/zero or to anyone's file;
+// a directory, a device, a FIFO or a socket is refused before it is opened,
+// so no read runs without end and no open waits for a FIFO's writer. Both
+// are ErrNotRegular. Only path's last element is checked: its parent
+// directories resolve as usual, and what they lead to is held to the same
+// rules. A file over limit bytes, by its size or by what the read finds
+// (it may grow), is ErrTooLarge, and none of it is returned. A missing file
+// is the error os.Lstat returns, unwrapped (errors.Is fs.ErrNotExist).
+func ReadRegular(path string, limit int64) ([]byte, error) {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	notRegular := &fs.PathError{Op: "read", Path: path, Err: ErrNotRegular}
+	tooLarge := &fs.PathError{Op: "read", Path: path, Err: fmt.Errorf("%w: over %d bytes", ErrTooLarge, limit)}
+	switch {
+	case !fi.Mode().IsRegular():
+		return nil, notRegular
+	case fi.Size() > limit:
+		return nil, tooLarge
+	}
+	// A symlink or a FIFO put in its place since the Lstat is neither
+	// followed (O_NOFOLLOW) nor waited on (O_NONBLOCK; a regular file's
+	// reads ignore it), and SameFile refuses whatever replaced the file.
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if errors.Is(err, syscall.ELOOP) {
+		return nil, notRegular
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !os.SameFile(fi, st) {
+		return nil, notRegular
+	}
+	var buf bytes.Buffer
+	buf.Grow(int(fi.Size()) + bytes.MinRead)
+	if _, err := buf.ReadFrom(io.LimitReader(f, min(limit, math.MaxInt64-1)+1)); err != nil {
+		return nil, err
+	}
+	if int64(buf.Len()) > limit {
+		return nil, tooLarge
+	}
+	return buf.Bytes(), nil
 }
 
 // Exists reports whether path names something os.Stat can see (a symlink

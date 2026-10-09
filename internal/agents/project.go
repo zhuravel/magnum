@@ -15,6 +15,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
+	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -567,7 +568,7 @@ func (pc projectConfig) logFile(path string) bool {
 // declares (declaredMCPServers); a file that cannot be read and a name that
 // is no bare key are logged without the path, and leave those servers on.
 func (m *Manager) projectServers(role config.Role, path string) []string {
-	data, err := os.ReadFile(path)
+	data, err := fsx.ReadRegular(path, codexConfigMax) // the PR's file: never a symlink, a FIFO or more than the cap
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}

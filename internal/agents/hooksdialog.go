@@ -2,7 +2,6 @@ package agents
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -13,8 +12,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/zhuravel/magnum/internal/config"
-	"github.com/zhuravel/magnum/internal/execx"
-	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/fsx"
 )
 
 // Codex's startup hooks review (Codex 0.160, tui/src/startup_hooks_review.rs)
@@ -183,14 +181,8 @@ func (m *Manager) answerHooks(ctx context.Context, prID int64, role Role, kind s
 		kindEv, msg = EventHooksDeclined, fmt.Sprintf("declined the Codex hooks review of %s in %s: %s; this session runs without the "+
 			"untrusted hooks; trust them once in your own Codex to stop the dialog (%s)", role, ref, why, strings.Join(keys, ", "))
 	}
-	m.logf("agents: %s", msg)
-	data, _ := json.Marshal(map[string]any{"role": string(role), "agent": ref.name, "pane": ref.pane, "keys": keys,
-		"option": hooksOptions[choice], "checkout": dir})
-	subject := m.prSubject(ctx, prID)
-	if _, err := m.d.Store.AppendEvent(context.WithoutCancel(ctx), store.Event{Level: "info", Subject: &subject,
-		Kind: kindEv, Message: execx.Redact(msg), Data: data}); err != nil {
-		m.logf("agents: event %s: %v", kindEv, err)
-	}
+	m.event(ctx, m.prSubject(ctx, prID), "info", kindEv, msg, map[string]any{"role": string(role), "agent": ref.name,
+		"pane": ref.pane, "keys": keys, "option": hooksOptions[choice], "checkout": dir})
 	m.waitTrustReady(ctx, ref)
 	return true, nil
 }
@@ -224,13 +216,18 @@ func (m *Manager) hooksCursorOn(ctx context.Context, ref paneRef, key string, op
 // plugins (and their marketplaces), which carry their own.
 var hooksKeys = []string{"hooks", "plugin_hooks", "plugins", "marketplaces"}
 
+// codexConfigMax caps the .codex/config.toml checkoutHooks reads: the PR
+// controls it, and a project config is a few KiB.
+const codexConfigMax = 1 << 20
+
 // checkoutHooks names the file through which the checkout at dir declares
 // Codex hooks of its own: .codex/hooks.json, or a hooksKeys key at any depth
 // of .codex/config.toml, in each project layer Codex reads (dir and its
 // parents up to the first one holding .git; dir alone outside a
 // repository). "" = none. An error means magnum cannot tell: dir unknown or
-// missing, a file unreadable or not TOML. Untracked files count: a previous round's
-// agent may have written them.
+// missing, a file unreadable or not TOML, or a config.toml it does not read
+// (fsx.ReadRegular: a symlink, a special file, past codexConfigMax).
+// Untracked files count: a previous round's agent may have written them.
 func checkoutHooks(dir string) (string, error) {
 	if dir == "" || !filepath.IsAbs(dir) {
 		return "", errors.New("the checkout is unknown")
@@ -260,11 +257,14 @@ func checkoutHooks(dir string) (string, error) {
 			return "", fmt.Errorf("cannot read %s: %w", p, err)
 		}
 		p = filepath.Join(d, ".codex", "config.toml")
-		b, err := os.ReadFile(p)
+		b, err := fsx.ReadRegular(p, codexConfigMax)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
 		if err != nil {
+			if pe, ok := errors.AsType[*fs.PathError](err); ok {
+				err = pe.Err // the path is named once
+			}
 			return "", fmt.Errorf("cannot read %s: %w", p, err)
 		}
 		var doc map[string]any

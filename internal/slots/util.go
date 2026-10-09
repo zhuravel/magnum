@@ -6,10 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
+	"maps"
 	"path/filepath"
 	"regexp"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -20,12 +20,7 @@ import (
 )
 
 func sortedKeys(m map[string]string) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
+	return slices.Sorted(maps.Keys(m))
 }
 
 // freeDiskBytes reports the bytes available to unprivileged users on the
@@ -46,11 +41,25 @@ func freeDiskBytes(path string) (uint64, error) {
 	return uint64(st.Bavail) * uint64(st.Bsize), nil //nolint:unconvert // field types differ per OS
 }
 
+// Caps on the checkout files a slot reads (fsx.ReadRegular): the pull
+// request controls them. A large application's Gemfile.lock, pnpm-lock.yaml
+// or db/schema.rb is under 1 MiB; the slug marker is one short line.
+const (
+	lockFileMax   = 16 << 20
+	schemaFileMax = 16 << 20
+	markerMax     = 4 << 10
+)
+
 // lockHash hashes the slot's LockFiles (a missing file hashes as missing).
+// A lockfile that is a symlink or a special file (fsx.ErrNotRegular) or past
+// lockFileMax (fsx.ErrTooLarge) is an error, never a hash: deps would
+// otherwise skip post_checkout for the next checkout refused the same way,
+// or run it against a file magnum would not read, and lock_sha would record
+// a hash of nothing the checkout holds.
 func lockHash(dir string) (string, error) {
 	h := sha256.New()
 	for _, name := range LockFiles {
-		b, err := os.ReadFile(filepath.Join(dir, name))
+		b, err := fsx.ReadRegular(filepath.Join(dir, name), lockFileMax)
 		switch {
 		case errors.Is(err, fs.ErrNotExist):
 			fmt.Fprintf(h, "%s\x00<missing>\x00", name)
@@ -76,9 +85,11 @@ func under(p, root string) bool {
 var schemaVersionRe = regexp.MustCompile(`define\(\s*version:\s*([0-9_]+)\s*\)`)
 
 // schemaVersion returns the version in db/schema.rb with underscores removed
-// (the form stored in schema_migrations). ok is false when there is none.
+// (the form stored in schema_migrations). ok is false when there is none. A
+// schema.rb that is a symlink or a special file, or past schemaFileMax, is
+// an error (fsx.ReadRegular).
 func schemaVersion(dir string) (version string, ok bool, err error) {
-	b, err := os.ReadFile(filepath.Join(dir, SchemaFile))
+	b, err := fsx.ReadRegular(filepath.Join(dir, SchemaFile), schemaFileMax)
 	if errors.Is(err, fs.ErrNotExist) {
 		return "", false, nil
 	}
@@ -90,6 +101,18 @@ func schemaVersion(dir string) (version string, ok bool, err error) {
 		return "", false, nil
 	}
 	return strings.ReplaceAll(string(m[1]), "_", ""), true, nil
+}
+
+// ReadMarker returns dir's MarkerFile, the database slug its setup wrote,
+// trimmed. The checkout's code writes it, so it is read with
+// fsx.ReadRegular: a symlink or a special file is fsx.ErrNotRegular, one past
+// 4 KiB fsx.ErrTooLarge, and a missing marker is fs.ErrNotExist.
+func ReadMarker(dir string) (string, error) {
+	b, err := fsx.ReadRegular(filepath.Join(dir, MarkerFile), markerMax)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(b)), nil
 }
 
 // slotNumberForPath returns n such that pool.Path(n) == path.
