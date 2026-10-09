@@ -26,9 +26,15 @@ const KVRetroRunning = "learn.retro_running"
 // when it ends and at every start of the daemon.
 const KVLearnEditing = "learn.editing"
 
+// KVLearnGating holds the gate of a skill proposal running now (GateMark
+// as JSON), which the CLI reads before it stops the daemon: set when it
+// starts, deleted when it ends and at every start of the daemon (the
+// proposal stays gating, and its gate starts again).
+const KVLearnGating = "learn.gating"
+
 // backgroundBusy names the background work in flight that a restart would
-// cut short ("" = none): the notes curation running, the retro and the
-// skill edit.
+// cut short ("" = none): the notes curation running, the retro, the skill
+// edit and the gate of a skill proposal.
 func (e *Engine) backgroundBusy() string {
 	var busy []string
 	e.curateMu.Lock()
@@ -41,6 +47,9 @@ func (e *Engine) backgroundBusy() string {
 	}
 	if e.editBusy() {
 		busy = append(busy, "the skill edit")
+	}
+	if e.gateBusy() {
+		busy = append(busy, "the skill gate")
 	}
 	return strings.Join(busy, " and ")
 }

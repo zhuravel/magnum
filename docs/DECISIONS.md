@@ -5456,3 +5456,40 @@ editing history. Code, config comments and prompts reference these by their head
   mutex). Rejected: giving the agent its own git and checking its commits after the fact (the branch
   must hold magnum's commit alone) and diffing the review against the proposal's file list only (`magnum
   learn --review` diffs every file the branch changes and names one the list lacks).
+- **The gate replays the learned cases** (2026-10-09, stage 4 of the self-improving review loop). A
+  proposal the editor committed waits in `gating` until the eval says whether it helps: at a tick with
+  no gate or edit running, no drain, infrastructure pause, `magnum pause` or pause of a reviewing CLI,
+  and the Codex budget below `[usage] codex_soft`, the daemon runs the gate of the oldest one in a
+  goroutine of its own (`KVLearnGating`, background work for restarts and `daemon-restart`, cancelled at
+  shutdown). `learn.SelectCases` takes the learned cases of the inputs the proposal noted first (its
+  targets; one the corpus lacks, whose PR is flagged or in no watch, or past the cap is listed as
+  skipped with why), then the newest other cases of both corpora that can run, up to `[learn]
+  gate_cases`; `learn.Mode` replays the judge alone when only `SKILL.md` and `prompts/judge-*.md` change
+  (the design log and the regenerated goldens change no review), else every role. A case's baseline is
+  the newest stored replay with master's inputs (`eval.Baselines` over the checkout's hash), else a full
+  replay of the checkout first; the candidate replays with the worktree, a judge-only one only on a full
+  replay whose reviewers read what its own would (`eval.FullReplayFor` with the candidate's reviewer
+  inputs, Amendment A2; without one the case is skipped), and a case it lost is replayed once more.
+  `learn.Judge` fails a proposal that lost a defect the baseline found after that second replay or
+  reports a declined finding the baseline did not, passes one with a target that improved (a `miss-`
+  case found more often, a `decline-` case reported less), holds one none of whose targets could be
+  compared, and fails the rest. The gate stores its replays as `magnum eval run` does, in runs of its
+  own under the eval root (a baseline, a candidate and a retry run, each with its `eval-` agent tag and
+  the inputs, reviewer inputs and notes setting it replayed with), so a later gate reuses a baseline and
+  `magnum eval list` shows them; `gate_json` holds the verdict, its rule, the mode, the inputs hashes,
+  every case with its scores (no unmatched finding text) and runs. A failed proposal loses its worktree
+  and branch and keeps its inputs `new`; a held one waits for `magnum learn --review` with a toast
+  (`learn-proposal:<id>`). The soft cap leaves the proposal `gating` with one `learn.gate_waiting` event
+  and toast per budget window (the registry reserves the window); a replay refused for the budget, a
+  usage limit or a login stops the gate (the run is kept) and it starts again after 30 minutes. A
+  worktree a restart left behind is reused at its commit; a missing one is added again from its branch,
+  and a branch that is gone or moved fails the proposal. The engine cannot import `internal/evalrun` (it
+  runs the engine), so the replay, the inputs hashes, the runs and the corpora are `engine.Deps` seams
+  (`EvalCase`, `EvalInputs`, `EvalRuns`, `EvalCorpus`) that the daemon's wiring (`cli.daemonGate`,
+  through `engine.FromApp`'s mods) sets to `evalrun.RunCase`, `evalrun.Inputs` and `ReviewerInputs` of
+  `evalrun.WithCandidate`, `eval.ListRuns` and the corpora `magnum eval run` reads; `eval.NewRunDir` and
+  `eval.AgentTag` moved from the CLI so the daemon names its runs as the CLI does. Rejected: replaying
+  in a `magnum eval run` subprocess (the daemon would need a binary and its output parsed), one run for
+  the baselines and the candidate together (`eval.Baselines` matches a run's inputs, so a later gate
+  could not reuse them) and holding a proposal whose targets did not move (the change is measured to do
+  nothing).

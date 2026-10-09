@@ -335,6 +335,11 @@ func (l Layout) Learn() string { return filepath.Join(l.data(), "learn") }
 // operator's corpus.
 func (l Layout) LearnCorpus() string { return filepath.Join(l.Learn(), "corpus.toml") }
 
+// Eval is where the eval runs live, Eval()/<run id>/ (`magnum eval run`
+// and the gate of a skill proposal), with the flagged cases and the cases'
+// worktrees (wt/).
+func (l Layout) Eval() string { return filepath.Join(l.State(), "eval") }
+
 // LearnSkill holds the skill editor's run directories,
 // LearnSkill()/<run>/: its inputs, the pins and a copy of its answer.
 func (l Layout) LearnSkill() string { return filepath.Join(l.Learn(), "skill") }

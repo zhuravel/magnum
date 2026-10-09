@@ -12,8 +12,6 @@ package cli
 import (
 	"cmp"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -67,46 +65,15 @@ type evalSystem struct {
 // evalSys is the real system; tests replace it.
 var evalSys = evalSystem{Now: time.Now}
 
-// evalRunIDFormat is a run id's time part: sortable, to the second.
-const evalRunIDFormat = "20060102-150405"
-
 // evalNewRunDir creates the directory of a run started at now under root
-// and returns the run's id and directory. The id is now to the second, with
-// "-2", "-3"... when a run started in the same second holds it (os.Mkdir
-// fails with ErrExist), so no two runs share a directory, a record or an
-// agent tag (evalAgentTag).
+// (eval.NewRunDir: a second run in the same second takes "<id>-2").
 func evalNewRunDir(root string, now time.Time) (id, dir string, err error) {
-	if err := os.MkdirAll(root, 0o700); err != nil {
-		return "", "", err
-	}
-	base := now.Format(evalRunIDFormat)
-	for n := 1; n <= 100; n++ {
-		id = base
-		if n > 1 {
-			id = fmt.Sprintf("%s-%d", base, n)
-		}
-		dir = filepath.Join(root, id)
-		mkErr := os.Mkdir(dir, 0o700)
-		if mkErr == nil {
-			return id, dir, nil
-		}
-		if !errors.Is(mkErr, fs.ErrExist) {
-			return "", "", mkErr
-		}
-	}
-	return "", "", fmt.Errorf("no free run id for %s under %s", base, inspTilde(root))
+	return eval.NewRunDir(root, now)
 }
 
-// evalAgentTag tags the agents of run id (agents.Deps.Tag): "eval-" and the
-// first 6 hex digits of the id's SHA-256, the same for all the run's cases.
-// The tag joins the agents' names' hash, so they are named apart from the
-// PR's own agents and from every other run's: StartAgent adopts an agent
-// that carries a role's name, and a run once adopted the agents the run
-// before it left behind. It also leads their titles and pane labels.
-func evalAgentTag(id string) string {
-	sum := sha256.Sum256([]byte(id))
-	return "eval-" + hex.EncodeToString(sum[:3])
-}
+// evalAgentTag tags the agents of run id (eval.AgentTag): named apart from
+// the PR's own agents and from every other run's.
+func evalAgentTag(id string) string { return eval.AgentTag(id) }
 
 func newEvalCmd(c *Context) *cobra.Command {
 	cmd := newCommand(groupAct, "eval "+evalUsage, "replay PRs with known defects and score the reviews (recall, noise)",

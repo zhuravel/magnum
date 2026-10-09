@@ -42,10 +42,10 @@ const (
 	// OutcomeFlagged: the case is not replayed: an earlier replay of it or
 	// of its PR was refused (eval.FlaggedCase), or the live registry holds
 	// a Codex flag for its PR (Refused).
-	OutcomeFlagged = "flagged"
+	OutcomeFlagged = eval.OutcomeFlagged
 	// OutcomeBudget: the Codex budget is at or past [usage] codex_soft
 	// (Options.Force runs anyway); no later case should start either.
-	OutcomeBudget = "budget"
+	OutcomeBudget = eval.OutcomeBudget
 	// OutcomeError: the case could not run (the round's error outcome).
 	OutcomeError = pipeline.OutcomeError
 )
@@ -59,8 +59,9 @@ const ReleaseTimeout = 2 * time.Minute
 var ErrNoFullReplay = errors.New("no full replay to take the reviewers' reports from")
 
 // RunsRoot is where a layout's eval runs live: <state>/eval/<run id>/, with
-// the flagged cases (eval.FlaggedFile) and the cases' worktrees (wt/).
-func RunsRoot(l paths.Layout) string { return filepath.Join(l.State(), "eval") }
+// the flagged cases (eval.FlaggedFile) and the cases' worktrees (wt/)
+// (paths.Layout.Eval).
+func RunsRoot(l paths.Layout) string { return l.Eval() }
 
 // Deps is what a replay works with.
 type Deps struct {

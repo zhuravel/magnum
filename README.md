@@ -1696,10 +1696,24 @@ message names the inputs by id and the skill's bytes, never the agent's reasons)
 in the registry for the gate (`gating`). An edit still invalid after the nudge is kept as `invalid` with its
 problems, and one that stops (a limit, a shutdown, an agent that cannot start) as `stopped`; both lose their
 worktree and branch. Nothing is pushed. An edit in flight counts as background work for
-`magnum daemon-restart`, install, uninstall and daemon-stop, which refuse to cut it short. The gate that
-replays a proposal with the eval and the landing that fast-forwards `master` are the loop's next stages;
-until they arrive a proposal waits in `gating`, and `editor`, `gate_cases`, `land_per_day`, `restart`
-and the regression keys are checked but change nothing yet.
+`magnum daemon-restart`, install, uninstall and daemon-stop, which refuse to cut it short.
+
+The gate then decides the proposal with the eval, in the daemon's process, one case at a time. Its cases
+are the learned cases of the inputs it noted (its targets: `miss-<n>`, `decline-<n>`), then the newest other
+cases of your corpus and the learned one, up to `gate_cases` (6); a case whose pull request is in no watch
+or Codex-flagged is never replayed. Only the judge replays when the change touches `SKILL.md` and
+`prompts/judge-*.md` alone (on the reviewers' reports of a full replay whose reviewers read the same
+prompts), every role otherwise. A case's baseline is the newest stored replay with `master`'s prompts and
+skill, else a replay of the checkout first; the candidate replays with the worktree, and a case it lost is
+replayed once more. It passes when a target improved (the missed finding found, the declined one no longer
+reported) and nothing regressed (no defect the baseline found lost, no declined finding reported that the
+baseline did not), fails when something regressed or no target improved (its worktree and branch go, its
+inputs stay `new`), and is held for you when none of its targets could be replayed. Its replays are stored
+like `magnum eval run`'s (`magnum eval list` shows them), and the result with the proposal. The gate waits
+while the Codex budget is at `[usage] codex_soft` (one toast per window), under a drain, `magnum pause` or a
+paused reviewing CLI, and counts as background work for a restart. The landing that fast-forwards `master`
+is the loop's next stage: until it arrives a `passed` proposal waits, and `editor`, `land_per_day`,
+`restart` and the regression keys are checked but change nothing yet.
 
 `magnum learn` is the window: the landed versions newest first, the proposals that wait (`gating` for the
 gate, `passed` for the landing, `held` for you) with their inputs, the last failed and invalid proposals

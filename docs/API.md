@@ -4738,6 +4738,12 @@ const KVLearnEditing = "learn.editing"
     the CLI reads before it stops the daemon: set when it starts, deleted when
     it ends and at every start of the daemon.
 
+const KVLearnGating = "learn.gating"
+    KVLearnGating holds the gate of a skill proposal running now (GateMark as
+    JSON), which the CLI reads before it stops the daemon: set when it starts,
+    deleted when it ends and at every start of the daemon (the proposal stays
+    gating, and its gate starts again).
+
 const KVRetroRunning = "learn.retro_running"
     KVRetroRunning holds the start of the retro running now (store.FormatTime),
     which the CLI reads before it stops the daemon: set by the tick or the
@@ -5369,6 +5375,20 @@ type Deps struct {
 	Checkout string
 	LearnGit LearnGit
 	GoTest   func(ctx context.Context, dir string, args ...string) (string, error)
+	// The gate of a skill proposal (learn_gate.go) replays eval cases
+	// in-process; the daemon's wiring sets these to internal/evalrun's (the
+	// engine cannot import it: evalrun runs the engine). EvalCase replays
+	// one case (evalrun.RunCase), EvalInputs hashes what the review reads
+	// with candidate's prompts and skill (evalrun.Inputs and ReviewerInputs
+	// of evalrun.WithCandidate; "" = the config itself), EvalRuns lists the
+	// stored runs, oldest first (eval.ListRuns of Layout.Eval), and
+	// EvalCorpus reads the corpora `magnum eval run` reads by default, with
+	// the operator's file ("" = none). Any of them nil: no gate runs and a
+	// proposal stays gating.
+	EvalCase   func(ctx context.Context, c eval.Case, o EvalGateOptions) eval.CaseRun
+	EvalInputs func(candidate string) (inputs, reviewerInputs string, err error)
+	EvalRuns   func() ([]eval.Run, error)
+	EvalCorpus func() (corpus *eval.Corpus, path string, err error)
 
 	// Usage reads Codex's rate-limit snapshot (usage.Codex, which FromApp
 	// sets); nil = no budget gauge and no caps.
@@ -5446,8 +5466,9 @@ type Engine struct {
 }
     Engine is the daemon. Create it with New or FromApp.
 
-func FromApp(a *app.App) *Engine
-    FromApp wires an engine to the App's real components.
+func FromApp(a *app.App, mods ...func(*Deps)) *Engine
+    FromApp wires an engine to the App's real components; mods then change its
+    Deps (the daemon's wiring sets the gate's eval seams there).
 
 func New(d Deps) *Engine
     New returns an engine over d.
@@ -5536,6 +5557,49 @@ type EvalCase struct {
     caller already checked out (detached) in Checkout, reviewed by the watch's
     roles as a blind dry run. The PR fields come from GitHub; nothing here is
     written to the live registry.
+
+type EvalGateOptions struct {
+	Candidate string
+	JudgeOnly bool
+	RunDir    string
+	AgentTag  string
+}
+    EvalGateOptions are one replay of the gate (evalrun.Options' part the gate
+    sets): the directory whose prompts and judge skill it reads (the checkout
+    for a baseline, the proposal's worktree for the candidate), whether the
+    judge alone reviews (on the reviewers' reports of the case's newest full
+    replay whose reviewers read what this one's would), and the run it belongs
+    to, its directory under Layout.Eval and its agent tag (eval.AgentTag),
+    both its own.
+
+type GateCase struct {
+	learn.GateRow
+	BaselineRun  string `json:"baseline_run,omitempty"`
+	CandidateRun string `json:"candidate_run,omitempty"` // a second replay's when Retried
+}
+    GateCase is one case of a gate's result: the row learn.Judge read and the
+    eval runs its two scores come from.
+
+type GateMark struct {
+	Proposal int64     `json:"proposal"`
+	Started  time.Time `json:"started"`
+}
+    GateMark is the gate in flight (KVLearnGating).
+
+type GateResult struct {
+	State          string     `json:"state"`
+	Rule           string     `json:"rule"`
+	Mode           string     `json:"mode"`
+	Inputs         string     `json:"inputs,omitempty"`
+	BaselineInputs string     `json:"baseline_inputs,omitempty"`
+	Cases          []GateCase `json:"cases"`
+	Runs           []string   `json:"runs,omitempty"`
+	CorpusError    string     `json:"corpus_error,omitempty"`
+}
+    GateResult is what a proposal's gate decided (learn_proposals.gate_json):
+    the verdict and its rule, the mode, the inputs hashes the candidate and the
+    baseline replayed with (eval.Run.Inputs), every case, the eval runs the gate
+    stored and why the corpus could not be read, if it could not.
 
 type Git interface {
 	MergeBase(ctx context.Context, dir, a, b string) (string, error)
@@ -6083,12 +6147,35 @@ const (
     the default, or not report it, a finding an author declined as wrong (a
     match is a false positive, Score.AbsentHits).
 
+const (
+	// OutcomeFlagged: the case is not replayed, since an earlier replay of
+	// it or of its PR was refused or the live registry holds a Codex flag
+	// for its PR.
+	OutcomeFlagged = "flagged"
+	// OutcomeBudget: the Codex budget is at or past [usage] codex_soft; no
+	// later case should start either.
+	OutcomeBudget = "budget"
+)
+    Case outcomes of a replay besides the round's (pipeline.Outcome*), which
+    evalrun.RunCase records and the daemon's gate of a skill proposal reads.
+
 const FlaggedFile = "flagged.json"
     FlaggedFile holds the flagged cases (Flagged by case name) under the runs'
     root.
 
+const RunIDFormat = "20060102-150405"
+    RunIDFormat is a run id's time part: sortable, to the second.
+
 
 FUNCTIONS
+
+func AgentTag(id string) string
+    AgentTag tags the agents of run id (agents.Deps.Tag): "eval-" and the
+    first 6 hex digits of the id's SHA-256, the same for all the run's cases.
+    The tag joins the agents' names' hash, so they are named apart from the
+    PR's own agents and from every other run's: StartAgent adopts an agent that
+    carries a role's name, and a run once adopted the agents the run before it
+    left behind. It also leads their titles and pane labels.
 
 func FullReplayFor(runs []Run, caseName, head string, like *Run) (Run, CaseRun, bool)
     FullReplayFor finds the replay a judge-only replay of case caseName at head
@@ -6113,6 +6200,13 @@ func LoadFlagged(root string) (map[string]Flagged, error)
 func MarkFlagged(root string, f Flagged) error
     MarkFlagged adds f to the flagged cases under root (the first record of a
     case stands).
+
+func NewRunDir(root string, now time.Time) (id, dir string, err error)
+    NewRunDir creates the directory of a run started at now under root and
+    returns the run's id and directory. The id is now to the second, with "-2",
+    "-3"... when a run started in the same second holds it (os.Mkdir fails
+    with ErrExist), so no two runs share a directory, a record or an agent tag
+    (AgentTag).
 
 func SaveRun(dir string, r Run) error
     SaveRun writes dir/run.json atomically (a temporary file in dir, then a
@@ -6446,10 +6540,10 @@ const (
 	// OutcomeFlagged: the case is not replayed: an earlier replay of it or
 	// of its PR was refused (eval.FlaggedCase), or the live registry holds
 	// a Codex flag for its PR (Refused).
-	OutcomeFlagged = "flagged"
+	OutcomeFlagged = eval.OutcomeFlagged
 	// OutcomeBudget: the Codex budget is at or past [usage] codex_soft
 	// (Options.Force runs anyway); no later case should start either.
-	OutcomeBudget = "budget"
+	OutcomeBudget = eval.OutcomeBudget
 	// OutcomeError: the case could not run (the round's error outcome).
 	OutcomeError = pipeline.OutcomeError
 )
@@ -6506,7 +6600,8 @@ func RunCase(ctx context.Context, d Deps, ec eval.Case, o Options) (out eval.Cas
 
 func RunsRoot(l paths.Layout) string
     RunsRoot is where a layout's eval runs live: <state>/eval/<run id>/,
-    with the flagged cases (eval.FlaggedFile) and the cases' worktrees (wt/).
+    with the flagged cases (eval.FlaggedFile) and the cases' worktrees (wt/)
+    (paths.Layout.Eval).
 
 func WithCandidate(cfg *config.Config, dir string) (*config.Config, error)
     WithCandidate is the config a replay of candidate dir reviews with
@@ -11015,6 +11110,11 @@ func (l Layout) EnsureDirs() error
     state tree that already exists with looser permissions (an older install,
     a manual mkdir) is tightened explicitly: it holds the database, logs and the
     per-identity gh credentials.
+
+func (l Layout) Eval() string
+    Eval is where the eval runs live, Eval()/<run id>/ (`magnum eval run`
+    and the gate of a skill proposal), with the flagged cases and the cases'
+    worktrees (wt/).
 
 func (l Layout) GhConfigDir(id string) string
     GhConfigDir is identity id's gh config directory in GhRoot.

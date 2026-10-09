@@ -179,9 +179,11 @@ timeout = "20m"                   # per PR: a turn that takes longer is abandone
 # prompts from the general misses and the findings authors declined, in a git worktree of the checkout on a
 # learn/<run> branch; magnum checks it, regenerates the golden files, runs the agents, pipeline and config tests
 # and `make check-private`, and commits it there. Nothing is pushed; `magnum learn` lists the proposals. Every key
-# is checked whether or not editor is on (`magnum learn --propose` runs one regardless). editor, the gate's and
-# the landing's keys and the regression keys take effect with the loop's gate, landing and measurement; until
-# then only `magnum learn --propose` runs the editor, and its proposals wait for the gate.
+# is checked whether or not editor is on (`magnum learn --propose` runs one regardless). The gate then replays
+# eval cases on the proposal (the learned cases of the inputs it answers first) against master's prompts and
+# skill, in-process and below [usage] codex_soft, and passes, holds (for `magnum learn --review`) or fails it.
+# editor, the landing's keys and the regression keys take effect with the loop's landing and measurement; until
+# then only `magnum learn --propose` runs the editor, and a passed proposal waits for the landing.
 editor = false                    # run the editor after a retro that stored new general misses or declines
 editor_kind = "claude"            # the editing agent: a [kinds.<name>] that drives a session; checked like a [[role]]
 editor_model = "sonnet"           # as model above: "sonnet" for kind "claude", "" (the kind's default) for another kind

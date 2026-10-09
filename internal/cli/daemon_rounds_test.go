@@ -122,3 +122,28 @@ func TestARunningSkillEditRefusesAStop(t *testing.T) {
 	}
 	actContains(t, errb.String(), "1 background job(s) in flight: skill edit (since "+clock+")", "a skill edit proposes nothing")
 }
+
+// The gate of a skill proposal is background work too: a stop is refused
+// and names it (the proposal stays gating and its gate starts again).
+func TestARunningSkillGateRefusesAStop(t *testing.T) {
+	c, _, errb := bareContext(t)
+	if err := c.Layout.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	st := storetest.Open(t, c.Layout.DB())
+	ctx := context.Background()
+	started := time.Now().Add(-5 * time.Minute)
+	mark, _ := json.Marshal(engine.GateMark{Proposal: 3, Started: started})
+	if err := st.SetKV(ctx, engine.KVLearnGating, string(mark)); err != nil {
+		t.Fatal(err)
+	}
+	running, err := c.activeRounds(ctx)
+	clock := inspClock(time.Now(), started)
+	if err != nil || running.String() != "skill gate of proposal 3 (since "+clock+")" {
+		t.Fatalf("in flight %q, err %v", running, err)
+	}
+	if c.refuseWhileRoundsRun("daemon-restart", false) {
+		t.Fatal("a skill gate in flight must refuse")
+	}
+	actContains(t, errb.String(), "1 background job(s) in flight: skill gate of proposal 3 (since "+clock+")", "a skill gate runs again")
+}
