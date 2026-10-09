@@ -6762,6 +6762,12 @@ type Options struct {
 	// the case's scratch tree is RunDir/cases/<case>, and a refused replay
 	// is flagged under the run's id, its base name.
 	RunDir string
+	// Worktrees is the directory the case's worktree goes in,
+	// Worktrees/<case> (caseWorktree); "" = RunsRoot/wt, `magnum eval
+	// run`'s. The daemon's gate gives its own
+	// (paths.Layout.LearnEvalWorktrees), so the two never replace each
+	// other's worktree of a case.
+	Worktrees string
 }
     Options are a case's settings, the run's.
 
@@ -11277,6 +11283,12 @@ func (l Layout) Learn() string
 func (l Layout) LearnCorpus() string
     LearnCorpus is the learned eval corpus the daemon writes from the registry's
     misses and declines, which `magnum eval` reads after the operator's corpus.
+
+func (l Layout) LearnEvalWorktrees() string
+    LearnEvalWorktrees holds the worktrees of the cases the gate of a skill
+    proposal replays, LearnEvalWorktrees()/<case> in the case's clone: its own,
+    so a `magnum eval run` of the same case (Eval()/wt/<case>) never removes the
+    gate's.
 
 func (l Layout) LearnSkill() string
     LearnSkill holds the skill editor's run directories, LearnSkill()/<run>/:

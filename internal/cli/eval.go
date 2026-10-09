@@ -258,6 +258,17 @@ func runEvalRun(c *Context, f evalRunFlags) int {
 	}
 	ctx, stop := signalContext()
 	defer stop()
+	// The daemon's skill gate replays eval cases in its own process (in
+	// worktrees of its own, on the same clones, budget and herdr): a run
+	// waits for it to end.
+	switch gate, err := c.gateRunning(ctx); {
+	case err != nil:
+		return cmdFail(c, "eval run", fmt.Errorf("cannot tell whether the daemon's skill gate runs (reading %s: %w)\nfix: retry in a moment",
+			inspTilde(c.Layout.DB()), err))
+	case gate != "":
+		return cmdFail(c, "eval run", fmt.Errorf("the %s replays eval cases now; a run would replay beside it\n"+
+			"fix: run it again once the gate ended (`magnum learn` lists the proposal it decides)", gate))
+	}
 
 	now := evalSys.Now
 	started := now()

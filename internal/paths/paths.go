@@ -349,6 +349,12 @@ func (l Layout) LearnSkill() string { return filepath.Join(l.Learn(), "skill") }
 // lands or goes.
 func (l Layout) LearnWorktrees() string { return filepath.Join(l.State(), "learn", "wt") }
 
+// LearnEvalWorktrees holds the worktrees of the cases the gate of a skill
+// proposal replays, LearnEvalWorktrees()/<case> in the case's clone: its
+// own, so a `magnum eval run` of the same case (Eval()/wt/<case>) never
+// removes the gate's.
+func (l Layout) LearnEvalWorktrees() string { return filepath.Join(l.State(), "learn", "eval", "wt") }
+
 // ReviewDir is where one review round's reports live.
 func (l Layout) ReviewDir(owner, repo string, number int, sha string) string {
 	if len(sha) > 12 {

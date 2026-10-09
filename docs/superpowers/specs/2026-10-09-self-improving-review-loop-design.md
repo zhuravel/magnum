@@ -302,7 +302,8 @@ KV: `learn.edit_day`, `learn.editing` (run id and start), `learn.gating` (propos
 
 Files: `<data>/learn/skill/<run>/` (inputs, pins, changes.json copy, log), pruned after 30 days with the
 retro runs. `<state>/learn/wt/<run>` (the worktree, removed at landing, rejection, expiry or stop);
-`<data>/learn/corpus.toml`.
+`<state>/learn/eval/wt/<case>` (the gate's case worktrees, never `magnum eval run`'s `<state>/eval/wt/<case>`;
+`eval run` refuses to start while `learn.gating` is set); `<data>/learn/corpus.toml`.
 
 ## 10. Testing
 

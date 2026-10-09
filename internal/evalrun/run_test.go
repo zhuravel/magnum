@@ -304,3 +304,21 @@ func TestEvalRecordsTheNotesAndTheCodexGauge(t *testing.T) {
 		t.Fatalf("gauge %v, want 31", p)
 	}
 }
+
+// A case's worktree is <Worktrees>/<case> when its options name a directory
+// (the daemon's gate: paths.Layout.LearnEvalWorktrees), else
+// RunsRoot/wt/<case> (`magnum eval run`'s): a gate's replay and the
+// operator's of the same case never share a worktree, which each removes
+// and adds again.
+func TestTheGatesCaseWorktreesAreNotEvalRunsOwn(t *testing.T) {
+	l := paths.Layout{Home: t.TempDir()}
+	d := Deps{Layout: l}
+	cli := caseWorktree(d, Options{}, "miss-12")
+	gate := caseWorktree(d, Options{Worktrees: l.LearnEvalWorktrees()}, "miss-12")
+	if cli != filepath.Join(RunsRoot(l), "wt", "miss-12") || gate != filepath.Join(l.LearnEvalWorktrees(), "miss-12") || cli == gate {
+		t.Fatalf("worktrees: eval run %s, the gate %s", cli, gate)
+	}
+	if strings.HasPrefix(gate, RunsRoot(l)+string(filepath.Separator)) || strings.HasPrefix(gate, l.LearnWorktrees()+string(filepath.Separator)) {
+		t.Fatalf("the gate's worktree %s is under the runs root or the editor's worktrees", gate)
+	}
+}

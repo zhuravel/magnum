@@ -34,7 +34,9 @@ func registryReadOnlyDSN(path string) string {
 // EvalInputs, EvalRuns, EvalCorpus) to the eval replays `magnum eval run`
 // makes, in the daemon's process (Amendment A1: the engine cannot import
 // evalrun, which runs it): a case replays with the daemon's layout, config,
-// registry (for the PR's Codex flag) and logger; the inputs are those of
+// registry (for the PR's Codex flag) and logger, in a worktree of the
+// gate's own (paths.Layout.LearnEvalWorktrees, never `magnum eval run`'s,
+// which refuses to run while a gate does); the inputs are those of
 // the config pointed at a candidate directory; the runs and the corpora are
 // the ones `magnum eval` reads. A dry run, an eval's own app and a config
 // that did not load wire none.
@@ -46,7 +48,8 @@ func daemonGate(c *Context, a *app.App) func(*engine.Deps) {
 		deps := evalrun.Deps{Layout: a.Layout, Config: a.Config, Store: a.Store, Logger: a.Logger, Stderr: io.Discard,
 			Warn: func(format string, args ...any) { a.Logger.Warn("skill gate: " + fmt.Sprintf(format, args...)) }}
 		d.EvalCase = func(ctx context.Context, ec eval.Case, o engine.EvalGateOptions) eval.CaseRun {
-			return evalrun.RunCase(ctx, deps, ec, evalrun.Options{Candidate: o.Candidate, JudgeOnly: o.JudgeOnly, RunDir: o.RunDir, AgentTag: o.AgentTag})
+			return evalrun.RunCase(ctx, deps, ec, evalrun.Options{Candidate: o.Candidate, JudgeOnly: o.JudgeOnly, RunDir: o.RunDir, AgentTag: o.AgentTag,
+				Worktrees: a.Layout.LearnEvalWorktrees()})
 		}
 		d.EvalInputs = func(candidate string) (string, string, error) {
 			cfg := a.Config
@@ -120,14 +123,8 @@ func (f inFlight) cutShort() string {
 // No registry yet means nothing; any other
 // read failure is an error, so callers fail closed.
 func (c *Context) activeRounds(ctx context.Context) (inFlight, error) {
-	path := c.Layout.DB()
-	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
-		return inFlight{}, nil
-	} else if err != nil {
-		return inFlight{}, err
-	}
-	db, err := sql.Open("sqlite", registryReadOnlyDSN(path))
-	if err != nil {
+	db, err := c.registryReadOnly()
+	if db == nil || err != nil {
 		return inFlight{}, err
 	}
 	defer db.Close()
@@ -160,6 +157,41 @@ func (c *Context) activeRounds(ctx context.Context) (inFlight, error) {
 		return inFlight{}, err
 	}
 	return out, nil
+}
+
+// registryReadOnly opens the registry read-only, never creating it: nil
+// (and no error) when there is none yet.
+func (c *Context) registryReadOnly() (*sql.DB, error) {
+	path := c.Layout.DB()
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+	return sql.Open("sqlite", registryReadOnlyDSN(path))
+}
+
+// gateRunning names the daemon's skill gate when one runs, as
+// backgroundWork does ("skill gate of proposal 3 (since 15:04)"; "" =
+// none, or no registry yet): its learn.gating mark, read-only.
+func (c *Context) gateRunning(ctx context.Context) (string, error) {
+	db, err := c.registryReadOnly()
+	if db == nil || err != nil {
+		return "", err
+	}
+	defer db.Close()
+	ctx, cancel := context.WithTimeout(ctx, completeTimeout)
+	defer cancel()
+	work, err := backgroundWork(ctx, db)
+	if err != nil {
+		return "", err
+	}
+	for _, w := range work {
+		if strings.HasPrefix(w, "skill gate") {
+			return w, nil
+		}
+	}
+	return "", nil
 }
 
 // backgroundWork reads the notes curation, the retro, the skill edit and

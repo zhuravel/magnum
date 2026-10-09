@@ -116,6 +116,18 @@ type Options struct {
 	// the case's scratch tree is RunDir/cases/<case>, and a refused replay
 	// is flagged under the run's id, its base name.
 	RunDir string
+	// Worktrees is the directory the case's worktree goes in,
+	// Worktrees/<case> (caseWorktree); "" = RunsRoot/wt, `magnum eval
+	// run`'s. The daemon's gate gives its own
+	// (paths.Layout.LearnEvalWorktrees), so the two never replace each
+	// other's worktree of a case.
+	Worktrees string
+}
+
+// caseWorktree is where case name's worktree goes: o.Worktrees/<name>, or
+// RunsRoot/wt/<name>.
+func caseWorktree(d Deps, o Options, name string) string {
+	return filepath.Join(cmp.Or(o.Worktrees, filepath.Join(RunsRoot(d.Layout), "wt")), name)
 }
 
 func (d Deps) now() time.Time {
@@ -262,12 +274,16 @@ func RunCase(ctx context.Context, d Deps, ec eval.Case, o Options) (out eval.Cas
 	if err := a.Git.FetchCommit(ctx, mainClone, ec.Head, ec.Number); err != nil {
 		return fail(OutcomeError, err)
 	}
-	// One path per case across runs: the agents trust the checkout they
-	// start in (Codex's and Claude's own config files), and a new path per
-	// run would add an entry there every time. A worktree left by Keep or
-	// an interrupted run is replaced.
-	worktrees := filepath.Join(RunsRoot(d.Layout), "wt")
-	wt := filepath.Join(worktrees, ec.Name)
+	// One path per case across runs (of `magnum eval run`, or of the
+	// gate's, Options.Worktrees): the agents trust the checkout they start
+	// in (Codex's and Claude's own config files), and a new path per run
+	// would add an entry there every time. A worktree left by Keep or an
+	// interrupted run is replaced.
+	wt := caseWorktree(d, o, ec.Name)
+	worktrees := filepath.Dir(wt)
+	if err := os.MkdirAll(worktrees, 0o700); err != nil {
+		return fail(OutcomeError, err)
+	}
 	if _, err := os.Stat(wt); err == nil {
 		if err := a.Git.WorktreeRemove(ctx, mainClone, wt, true); err != nil {
 			return fail(OutcomeError, fmt.Errorf("replace the previous worktree %s: %w", tilde(wt), err))

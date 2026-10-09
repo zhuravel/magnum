@@ -5921,6 +5921,16 @@ skill versions); people add theirs to the sections before it, at the end of the 
   one stays), the discarded one's included. The pools' `WorktreePrune` is unchanged: a pool's clone is
   magnum's alone. Rejected: forgetting the discarded worktree's registration alone (a run a crash cut
   short leaves registrations no later discard names) and deleting `.git/worktrees/<id>` by hand.
+- **The gate's replays and `magnum eval run` never share a case's worktree** (2026-10-10, the final
+  review of the self-improving review loop). Both replayed a case in `<state>/eval/wt/<case>`, and a
+  replay removes an existing worktree there first: an `eval run` of a case the gate was replaying removed
+  the gate's live worktree, and the gate's case ended without a score or with a partial review (and the
+  two closed each other's leftover herdr workspaces, which are matched by that directory). The gate's
+  replays now go to `<state>/learn/eval/wt/<case>` (`evalrun.Options.Worktrees`, which the daemon's wiring
+  sets to `paths.Layout.LearnEvalWorktrees`), and `magnum eval run` refuses to start while the
+  `learn.gating` mark is set, naming the proposal, as both replay on the same clones, Codex budget and
+  herdr. Rejected: a flock per case around the worktree's life in `RunCase` (with separate paths there is
+  nothing to share, and a run waiting on a lock the gate holds for an hour helps nobody).
 
 ## Learned rules
 
