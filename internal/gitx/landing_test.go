@@ -57,7 +57,7 @@ func TestALandingRebasesTheBranchFastForwardsAndDropsIt(t *testing.T) {
 		t.Fatalf("dirty = %q, %v", dirty, err)
 	}
 
-	if err := fx.c.MergeFFOnly(ctx, fx.clone, branch); err != nil {
+	if err := fx.c.MergeFFOnly(ctx, fx.clone, "main", branch); err != nil {
 		t.Fatalf("MergeFFOnly: %v", err)
 	}
 	if got := fx.git(fx.clone, "rev-parse", "main"); got != head {

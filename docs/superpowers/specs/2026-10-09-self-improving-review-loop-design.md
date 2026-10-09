@@ -196,8 +196,10 @@ worktree (`git rebase --onto master <base_sha>`, so a commit the operator droppe
 come back; a conflict holds the proposal with the reason). the tree that lands must render with the
 daemon's build (`CheckPrompts` on the worktree, as the restart on it checks first; else held). the files
 the commit touches must be clean in the checkout's working tree (else held, reason named). Then `git -C
-<checkout> merge --ff-only learn/<run>` (the rebase and the merge run on a context a shutdown does not
-cancel, with a timeout), the
+<checkout> merge --ff-only --no-autostash learn/<run>` (the rebase and the merge run on a context a shutdown
+does not cancel, with a timeout; `gitx.MergeFFOnly` checks that `HEAD` is `refs/heads/master` right before
+the merge and that `master` is at the branch's commit right after it, and the landing holds the proposal
+when either fails), the
 proposal becomes `landed` with `landed_sha` and a `learn_versions` row records the new skill and prompts
 hashes in one transaction (`store.LandLearnProposal`), then the branch is deleted and the worktree
 removed. A branch `master` already holds (a landing a crash cut short after the merge) is recorded as

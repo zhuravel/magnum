@@ -226,10 +226,12 @@ func (g *fakeLearnGit) DirtyPaths(_ context.Context, dir string, paths ...string
 	return out, nil
 }
 
-// MergeFFOnly moves the repository's master and HEAD to branch when branch
-// sits on master (ErrNotFastForward otherwise, a branch master holds
-// included, as gitx's does), unless mergeErr says otherwise.
-func (g *fakeLearnGit) MergeFFOnly(ctx context.Context, repo, branch string) error {
+// MergeFFOnly moves the repository's base and HEAD to branch when branch
+// sits on base (ErrNotFastForward otherwise, a branch base holds included,
+// as gitx's does) and base is the branch checked out (ErrNotOnBranch
+// otherwise, as gitx's says right before its merge), unless mergeErr says
+// otherwise.
+func (g *fakeLearnGit) MergeFFOnly(ctx context.Context, repo, base, branch string) error {
 	g.mu.Lock()
 	g.record("merge --ff-only %s", branch)
 	on := g.onMerge
@@ -242,11 +244,14 @@ func (g *fakeLearnGit) MergeFFOnly(ctx context.Context, repo, branch string) err
 	if g.mergeErr != nil {
 		return g.mergeErr
 	}
-	head, master := g.refs[repo+"|refs/heads/"+branch], g.refs[repo+"|refs/heads/"+learnBase]
-	if base, err := g.mergeBase(head, master); err != nil || base != master {
+	head, tip := g.refs[repo+"|refs/heads/"+branch], g.refs[repo+"|refs/heads/"+base]
+	if mb, err := g.mergeBase(head, tip); err != nil || mb != tip {
 		return fmt.Errorf("merge --ff-only %s: %w", branch, gitx.ErrNotFastForward)
 	}
-	g.refs[repo+"|refs/heads/"+learnBase], g.refs[repo+"|HEAD"] = head, head
+	if on := g.branch[repo]; on != base {
+		return fmt.Errorf("merge --ff-only %s: HEAD is refs/heads/%s, not refs/heads/%s: %w", branch, on, base, gitx.ErrNotOnBranch)
+	}
+	g.refs[repo+"|refs/heads/"+base], g.refs[repo+"|HEAD"] = head, head
 	return nil
 }
 

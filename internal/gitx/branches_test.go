@@ -107,7 +107,7 @@ func TestMergeFFOnlyRefusesADivergedMaster(t *testing.T) {
 	ctx := context.Background()
 	dir := learnWorktree(t, fx, "learn/a")
 	fx.commit(dir, "README.md", "hello, a\n", "a")
-	if err := fx.c.MergeFFOnly(ctx, fx.clone, "learn/a"); err != nil {
+	if err := fx.c.MergeFFOnly(ctx, fx.clone, "main", "learn/a"); err != nil {
 		t.Fatalf("a fast-forward: %v", err)
 	}
 	if fx.git(fx.clone, "rev-parse", "main") != fx.git(dir, "rev-parse", "HEAD") {
@@ -120,7 +120,7 @@ func TestMergeFFOnlyRefusesADivergedMaster(t *testing.T) {
 	other := learnWorktree(t, fx, "learn/b")
 	fx.commit(other, "docs/b.md", "b\n", "b")
 	head := fx.commit(fx.clone, "docs/main.md", "main moves\n", "main moves")
-	err := fx.c.MergeFFOnly(ctx, fx.clone, "learn/b")
+	err := fx.c.MergeFFOnly(ctx, fx.clone, "main", "learn/b")
 	if !errors.Is(err, ErrNotFastForward) {
 		t.Fatalf("a diverged main = %v, want ErrNotFastForward", err)
 	}
@@ -130,8 +130,73 @@ func TestMergeFFOnlyRefusesADivergedMaster(t *testing.T) {
 	if p, err := fx.c.InProgress(ctx, fx.clone); err != nil || p != "" {
 		t.Fatalf("after the refusal, in progress = %q, %v", p, err)
 	}
-	if err := fx.c.MergeFFOnly(ctx, fx.clone, "learn/none"); err == nil || errors.Is(err, ErrNotFastForward) {
+	if err := fx.c.MergeFFOnly(ctx, fx.clone, "main", "learn/none"); err == nil || errors.Is(err, ErrNotFastForward) {
 		t.Fatalf("an unknown branch = %v", err)
+	}
+}
+
+// The fast-forward moves only the branch it was asked to: a checkout that
+// has another branch checked out is refused with nothing moved, even when
+// the candidate would fast-forward that branch.
+func TestMergeFFOnlyRefusesACheckoutOnAnotherBranch(t *testing.T) {
+	fx := newFixture(t)
+	ctx := context.Background()
+	dir := learnWorktree(t, fx, "learn/a")
+	cand := fx.commit(dir, "docs/a.md", "the candidate\n", "a")
+	fx.git(fx.clone, "checkout", "--quiet", "-b", "experiment")
+	err := fx.c.MergeFFOnly(ctx, fx.clone, "main", "learn/a")
+	if !errors.Is(err, ErrNotOnBranch) {
+		t.Fatalf("a checkout on experiment = %v, want ErrNotOnBranch", err)
+	}
+	for _, b := range []string{"main", "experiment"} {
+		if got := fx.git(fx.clone, "rev-parse", b); got != fx.base || got == cand {
+			t.Fatalf("%s moved to %s", b, got)
+		}
+	}
+	fx.git(fx.clone, "checkout", "--quiet", "--detach")
+	if err := fx.c.MergeFFOnly(ctx, fx.clone, "main", "learn/a"); !errors.Is(err, ErrNotOnBranch) {
+		t.Fatalf("a detached checkout = %v, want ErrNotOnBranch", err)
+	}
+	if err := fx.c.MergeFFOnly(ctx, fx.clone, "-x", "learn/a"); err == nil {
+		t.Fatal("an option as the branch to fast-forward was taken")
+	}
+}
+
+// switchBefore runs `git checkout --quiet <branch>` in the repository a
+// command of verb names (git -C <repo> ... <verb> ...) right before that
+// command runs: a checkout that switches branch between the fast-forward's
+// check and its merge.
+type switchBefore struct {
+	execx.Runner
+	verb, branch string
+}
+
+func (s switchBefore) Run(ctx context.Context, cmd execx.Cmd) (execx.Result, error) {
+	if i := slices.Index(cmd.Args, s.verb); i >= 0 && cmd.Name == "git" && len(cmd.Args) > 1 && cmd.Args[0] == "-C" {
+		sw := execx.Cmd{Name: "git", Args: []string{"-C", cmd.Args[1], "checkout", "--quiet", s.branch}}
+		if _, err := s.Runner.Run(ctx, sw); err != nil {
+			return execx.Result{}, err
+		}
+	}
+	return s.Runner.Run(ctx, cmd)
+}
+
+// A checkout that switches branch while the fast-forward runs makes git move
+// the other branch: MergeFFOnly says the branch it was asked to move is not
+// at the candidate, so the landing records nothing.
+func TestMergeFFOnlyFailsWhenTheBranchIsNotAtTheCandidateAfterward(t *testing.T) {
+	fx := newFixture(t)
+	ctx := context.Background()
+	dir := learnWorktree(t, fx, "learn/a")
+	fx.commit(dir, "docs/a.md", "the candidate\n", "a")
+	fx.git(fx.clone, "branch", "experiment")
+	c := New(switchBefore{Runner: fx.r, verb: "merge", branch: "experiment"})
+	err := c.MergeFFOnly(ctx, fx.clone, "main", "learn/a")
+	if err == nil || !errors.Is(err, ErrNotOnBranch) || !strings.Contains(err.Error(), "main") {
+		t.Fatalf("a switch during the merge = %v, want ErrNotOnBranch naming main", err)
+	}
+	if got := fx.git(fx.clone, "rev-parse", "main"); got != fx.base {
+		t.Fatalf("main = %s, want it where it was (%s)", got, fx.base)
 	}
 }
 
@@ -147,7 +212,7 @@ func TestMergeFFOnlyLeavesStagedChangesStagedWhateverAutoStashSays(t *testing.T)
 	fx.commit(dir, "docs/a.md", "the candidate\n", "a")
 	fx.write(fx.clone, "README.md", "hello, staged by the operator\n")
 	fx.git(fx.clone, "add", "README.md")
-	if err := fx.c.MergeFFOnly(ctx, fx.clone, "learn/a"); err != nil {
+	if err := fx.c.MergeFFOnly(ctx, fx.clone, "main", "learn/a"); err != nil {
 		t.Fatalf("MergeFFOnly: %v", err)
 	}
 	if fx.git(fx.clone, "rev-parse", "main") != fx.git(dir, "rev-parse", "HEAD") {
@@ -215,7 +280,7 @@ func TestRebaseOntoLeavesOutACommitMainDropped(t *testing.T) {
 	if fx.git(dir, "rev-parse", "HEAD~1") != fx.git(fx.clone, "rev-parse", "main") {
 		t.Fatal("the branch is not a single commit on main after the rebase")
 	}
-	if err := fx.c.MergeFFOnly(ctx, fx.clone, "learn/a"); err != nil {
+	if err := fx.c.MergeFFOnly(ctx, fx.clone, "main", "learn/a"); err != nil {
 		t.Fatalf("MergeFFOnly: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(fx.clone, "docs", "dropped.md")); !errors.Is(err, os.ErrNotExist) {

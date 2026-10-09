@@ -1742,8 +1742,10 @@ proposal's base (one you reset below it holds it); when `master` moved past the 
 alone is rebased once in its worktree (`git rebase --onto master <base>`), and a conflict holds it; its
 prompts must render with the daemon's build, as the restart on it checks first (a commit of yours that
 renamed a template field the candidate still uses holds it); the files it changes must have no uncommitted
-change in the checkout (your edit of `SKILL.md` is never merged over). Then `master` fast-forwards to the branch (`git merge --ff-only`; the rebase and the
-fast-forward are not cut short by a daemon that stops), the proposal is `landed` with its commit, its
+change in the checkout (your edit of `SKILL.md` is never merged over). Then `master` fast-forwards to the branch (`git merge --ff-only
+--no-autostash`, so your `merge.autoStash` never stashes what you staged; the rebase and the
+fast-forward are not cut short by a daemon that stops); a checkout that left `master` right before the merge,
+or a `master` not at the branch's commit right after it (you switched branch meanwhile), holds it. The proposal is `landed` with its commit, its
 noted inputs become `used` and a skill version records the commit and the hashes of the skill and the
 prompts it landed, all in one registry transaction, and the branch and the worktree go. A landing a crash
 cut short after the fast-forward is recorded as landed at the next try, and so is a `held` one you answer

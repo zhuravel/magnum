@@ -5743,7 +5743,7 @@ type LearnGit interface {
 	RebaseOnto(ctx context.Context, dir, onto, upstream string) error
 	PatchID(ctx context.Context, dir, rev string) (string, error)
 	DirtyPaths(ctx context.Context, dir string, paths ...string) ([]string, error)
-	MergeFFOnly(ctx context.Context, repo, branch string) error
+	MergeFFOnly(ctx context.Context, repo, base, branch string) error
 	RestoreFrom(ctx context.Context, dir, rev string, paths ...string) error
 	BranchesUnder(ctx context.Context, repo, prefix string) ([]string, error)
 }
@@ -7889,6 +7889,10 @@ var (
 	// ErrRebaseConflict is RebaseOnto stopping on a conflict; the rebase
 	// was aborted and the branch is as it was.
 	ErrRebaseConflict = errors.New("gitx: the rebase conflicts")
+	// ErrNotOnBranch is MergeFFOnly finding another branch (or a detached
+	// HEAD) checked out than the one it is to fast-forward, right before
+	// its merge, or that branch not at the commit it merged right after.
+	ErrNotOnBranch = errors.New("gitx: the checkout is not on the branch to fast-forward")
 )
 var (
 	// ErrNoSuchRef is returned when a ref or revision does not resolve.
@@ -8117,11 +8121,17 @@ func (c *Client) Mentions(ctx context.Context, dir, rev string, words []string, 
 func (c *Client) MergeBase(ctx context.Context, dir, a, b string) (string, error)
     MergeBase returns the best common ancestor of a and b, or ErrNoMergeBase.
 
-func (c *Client) MergeFFOnly(ctx context.Context, repo, branch string) error
-    MergeFFOnly fast-forwards the branch checked out in repo to branch:
+func (c *Client) MergeFFOnly(ctx context.Context, repo, base, branch string) error
+    MergeFFOnly fast-forwards base, the branch checked out in repo, to branch:
     ErrNotFastForward, with nothing changed, when branch does not descend from
-    HEAD. Local changes the move would overwrite make git refuse, which is an
-    error too.
+    HEAD. git merges into whatever HEAD is, so HEAD must be refs/heads/<base>
+    right before the merge (symbolic-ref; ErrNotOnBranch, with nothing changed,
+    for another branch or a detached HEAD), and refs/heads/<base> must be
+    branch's commit right after it (ErrNotOnBranch too: a checkout that switched
+    branch in between had the other branch moved). Local changes the move would
+    overwrite make git refuse, which is an error too; the others stay as they
+    are, staged ones staged: the merge never stashes them (--no-autostash,
+    whatever merge.autoStash says, as RebaseOnto).
 
 func (c *Client) MergeTree(ctx context.Context, dir, ours, theirs string) (tree string, conflicts []string, err error)
     MergeTree merges commit theirs into commit ours as `git merge` would (the

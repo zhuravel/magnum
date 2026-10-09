@@ -123,7 +123,7 @@ type LearnGit interface {
 	RebaseOnto(ctx context.Context, dir, onto, upstream string) error
 	PatchID(ctx context.Context, dir, rev string) (string, error)
 	DirtyPaths(ctx context.Context, dir string, paths ...string) ([]string, error)
-	MergeFFOnly(ctx context.Context, repo, branch string) error
+	MergeFFOnly(ctx context.Context, repo, base, branch string) error
 	RestoreFrom(ctx context.Context, dir, rev string, paths ...string) error
 	BranchesUnder(ctx context.Context, repo, prefix string) ([]string, error)
 }

@@ -446,6 +446,32 @@ func TestALandingHoldsWhenMasterNoLongerHoldsItsBase(t *testing.T) {
 	}
 }
 
+// A checkout that leaves master between the landing's checks and its
+// fast-forward (git merges into whatever HEAD is) holds the proposal: the
+// other branch is not fast-forwarded, and nothing is recorded as landed.
+func TestALandingHoldsWhenTheCheckoutLeavesMasterBeforeTheMerge(t *testing.T) {
+	f := newLandFixture(t)
+	f.git.set(f.checkout, "refs/heads/experiment", learnMaster)
+	f.git.onMerge = func(context.Context) {
+		f.git.mu.Lock()
+		defer f.git.mu.Unlock()
+		f.git.branch[f.checkout] = "experiment"
+	}
+	f.h.tick()
+	p := f.proposal()
+	if p.State != store.LearnHeld || !strings.Contains(p.Reason, "fast-forward") || !strings.Contains(p.Reason, "experiment") {
+		t.Fatalf("proposal = %s %q, want held naming the branch checked out", p.State, p.Reason)
+	}
+	for _, b := range []string{"master", "experiment"} {
+		if got, _ := f.git.RevParse(f.h.ctx, f.checkout, "refs/heads/"+b); got != learnMaster {
+			t.Fatalf("%s = %s, want it where it was", b, got)
+		}
+	}
+	if vs := f.versions(); len(vs) != 0 {
+		t.Fatalf("versions = %+v, want none", vs)
+	}
+}
+
 // The branch of a proposal may have moved only by an earlier landing's
 // rebase: a commit made in its worktree on top of the candidate, or an
 // amended candidate, would land ungated and holds the proposal; the

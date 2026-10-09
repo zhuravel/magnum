@@ -268,8 +268,13 @@ func (e *Engine) landProposal(ctx context.Context, p store.LearnProposal, reques
 	}
 	e.event(octx, "info", learnSubject, "learn.land_begin", fmt.Sprintf("landing skill proposal %d: fast-forwarding master to %s", p.ID, p.Branch),
 		map[string]any{"proposal": p.ID, "branch": p.Branch})
-	if err := git.MergeFFOnly(lctx, checkout, p.Branch); errors.Is(err, gitx.ErrNotFastForward) {
+	// MergeFFOnly checks that master is checked out right before its merge
+	// (git merges into whatever HEAD is) and that master is at the branch's
+	// commit right after it.
+	if err := git.MergeFFOnly(lctx, checkout, learnBase, p.Branch); errors.Is(err, gitx.ErrNotFastForward) {
 		return hold("master moved during the landing")
+	} else if errors.Is(err, gitx.ErrNotOnBranch) {
+		return hold("the checkout left master during the fast-forward: " + oneLine(err.Error(), retroWhyRunes))
 	} else if err != nil {
 		return hold("the fast-forward of master failed: " + oneLine(err.Error(), retroWhyRunes))
 	}

@@ -5901,6 +5901,16 @@ skill versions); people add theirs to the sections before it, at the end of the 
   did; a change the move would overwrite still makes git refuse (the landing holds), and the others stay
   as they were, staged ones staged. Rejected: a clean checkout as a landing condition (the landing
   already checks the files it changes, and an operator works in the checkout).
+- **The landing fast-forwards master only while master is checked out** (2026-10-10, the final review
+  of the self-improving review loop). `git merge` moves whatever branch `HEAD` names, and the landing
+  checked the branch checked out at its start, minutes before its rebase and merge: an operator who
+  switched branch in between had that branch fast-forwarded, and the landing recorded master's old head
+  as the landed commit. `gitx.MergeFFOnly` now takes the branch to move and checks `git symbolic-ref
+  HEAD` is `refs/heads/<base>` right before the merge (`ErrNotOnBranch`, nothing moved, for another branch
+  or a detached `HEAD`) and that `refs/heads/<base>` is the candidate's commit right after it
+  (`ErrNotOnBranch` too); the landing holds the proposal with why on either, and records nothing.
+  Rejected: a lock on the checkout (the operator's git takes none of ours) and `git update-ref` of
+  master instead of a merge (it would leave the work tree and the index behind the branch).
 
 ## Learned rules
 
