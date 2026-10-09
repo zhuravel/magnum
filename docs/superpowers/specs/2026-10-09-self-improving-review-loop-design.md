@@ -35,8 +35,8 @@ daemon start, so an edit reaches rounds only after a restart.
 
 The retro already fetches every review thread of a closed PR. It no longer discards the threads whose
 root comment is magnum's. For each such thread with at least one reply by someone other than magnum, the
-classifier gets the finding (the root's first line, its path and line, the posted priority) and the
-replies, and answers with:
+classifier gets the finding (the root's first line, its path and line, the posted priority), a copy of
+its file at the reviewed commit and the replies, and answers with:
 
 - `outcome`: `fixed`, `declined`, `deferred`, `argued`, `question` or `unrelated`;
 - `verdict` for `declined` and `argued`: `wrong` (magnum's finding was wrong), `over_ranked` (right but
@@ -55,10 +55,13 @@ the same review within 3 lines on the same path, when one exists), `path`, `line
 `verdict`, `lesson`, `scope`, `match_json`, `state` (`new`, `used`, `dismissed`), `created_at`,
 `updated_at`. Reply text is never stored. The upsert keeps `state` on a re-run, as `UpsertMiss` does.
 
-Routing: a `missing_context` decline with scope `repo` marks the repository for a notes curation and goes
-to the curator in `misses.json` beside the repo misses (its id prefixed `d`), noted or skipped the same
-way. `wrong` and `over_ranked` declines with scope `general` are the editor's input. `fixed`, `right`,
-`question` and `unrelated` are kept for the measurements only.
+Routing: a `missing_context` decline with scope `repo` marks the repository for a notes curation and is
+upserted as a repo miss (class `miss`, scope `repo`, the same `source_url`, the posted priority as its
+severity), which the curation takes unchanged, noted or skipped like any other repo miss. A later retro
+that answers the thread otherwise withdraws that miss while it is still `new` (class `not_issue`), and one
+that answers it `missing_context` again makes it a miss again. `wrong` and `over_ranked` declines with
+scope `general` are the editor's input. `fixed`, `right`, `question` and `unrelated` are kept for the
+measurements only.
 
 `magnum misses` gains a `--declines` listing and `magnum stats` gains a per-source and per-priority table
 of outcomes. The retro's `retro.ok` event data counts `declines` and `declined`.

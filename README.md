@@ -1557,15 +1557,16 @@ whether or not a retro already did, like `--again` for those.
 For each one it reads the review threads and reviews from GitHub and keeps the root comment of every thread
 and the summary of every review written by someone other than the author, Magnum's own logins (every
 configured identity's, and the ones the PR's reviews were posted as) and, unless `include_bots`, bots.
-Replies are not candidates; only those under Magnum's own findings are read (below). A comment shorter than `min_comment_chars` (20) once quotes and code blocks are
-removed, or one that only approves ("LGTM, thanks!"), is dropped. A comment within three lines of a finding
-Magnum posted on the same file was caught and is only counted. A comment made on a commit Magnum reviewed
-applies to that commit; one made on a later commit applies to the newest commit Magnum reviewed before it
-only when that later commit descends from it and GitHub's comparison shows the file unchanged since, and
-is recorded as `outside` otherwise (about code Magnum never saw: a later change, an older commit, a history
-a force push replaced). A comment near a finding the judge rejected is marked as raised and rejected, with
-the judge's reason code, unless the agent below names another rejected finding as the one that reports the
-comment's problem. A comment on deleted lines keeps its file and hunk but no line.
+Replies are not candidates; only those under Magnum's own findings are read (below). A comment shorter than
+`min_comment_chars` (20) once quotes and code blocks are removed, or one that only approves
+("LGTM, thanks!"), is dropped. A comment within three lines of a finding Magnum posted on the same file was
+caught and is only counted. A comment made on a commit Magnum reviewed applies to that commit; one made on a
+later commit applies to the newest commit Magnum reviewed before it only when that later commit descends
+from it and GitHub's comparison shows the file unchanged since, and is recorded as `outside` otherwise
+(about code Magnum never saw: a later change, an older commit, a history a force push replaced). A comment
+near a finding the judge rejected is marked as raised and rejected, with the judge's reason code, unless the
+agent below names another rejected finding as the one that reports the comment's problem. A comment on
+deleted lines keeps its file and hunk but no line.
 
 The rest goes to an interactive agent in a herdr workspace named `learn retro`, tagged `learn` like eval's
 agents are tagged `eval`: `kind` and `model` (Claude sonnet by default; `sonnet` is the default of the

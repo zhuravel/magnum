@@ -5390,7 +5390,7 @@ type EvalCase struct {
 	// an earlier replay left open, closed before this one starts ("" =
 	// Checkout alone).
 	Worktrees string
-	// Notes gives the judge the scratch copy of the repository notes
+	// Notes gives every role the scratch copy of the repository notes
 	// (paths.Layout.Notes under Scratch; the caller copies the live file).
 	Notes bool
 	// JudgeOnly runs the judge alone on Reports, the reviewer reports of an
@@ -6411,7 +6411,7 @@ type Options struct {
 	// full replay left no reviewer report, fails with ErrNoFullReplay before
 	// it reads GitHub or checks anything out.
 	JudgeOnly bool
-	// NoNotes withholds the repository notes from the judge; Keep leaves
+	// NoNotes withholds the repository notes from every role; Keep leaves
 	// the case's worktree in place; Force runs past [usage] codex_soft.
 	NoNotes, Keep, Force bool
 	// AgentTag tags the case's agents (agents.Deps.Tag), the run's own;
