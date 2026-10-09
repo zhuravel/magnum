@@ -552,6 +552,43 @@ func TestWriteMarkdownGolden(t *testing.T) {
 	}
 }
 
+// The reports count the absent defects a review hit, in the totals and per case, and name each hit.
+func TestTheReportShowsAbsentHits(t *testing.T) {
+	r := Run{ID: "r", Cases: []CaseRun{
+		{Case: "decline-7", PR: "example/a#1", Outcome: "dry_run", Score: &Score{Absent: 2, AbsentHits: []DefectResult{
+			{ID: "decline-7", Title: "Nil guard the author declined", Want: "P1", Found: true, By: []int{0}, Severity: "P1"},
+		}}},
+		{Case: "plain", PR: "example/b#2", Outcome: "dry_run", Score: &Score{Found: 1, Total: 1, Defects: []DefectResult{{ID: "d", Title: "D", Found: true}}}},
+	}}
+	if tot := r.Totals(); tot.AbsentHits != 1 || tot.Absent != 2 || tot.Total != 1 {
+		t.Fatalf("totals %+v, want 1 of 2 absent defects hit and 1 defect", tot)
+	}
+	got := text(r, &Run{ID: "prev", Cases: []CaseRun{{Score: &Score{Absent: 2, AbsentHits: []DefectResult{{}, {}}}}}})
+	for _, want := range []string{
+		"absent defects: 1 of 2 hit\n",
+		"absent hit: decline-7/decline-7 \"Nil guard the author declined\" (P1)\n",
+		", absent hits 2 → 1\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("text lacks %q:\n%s", want, got)
+		}
+	}
+	if plain := text(sampleRun(), nil); strings.Contains(plain, "absent") {
+		t.Errorf("a run without absent defects mentions them:\n%s", plain)
+	}
+	var b bytes.Buffer
+	WriteMarkdown(&b, r)
+	for _, want := range []string{
+		"\nAbsent defects hit: 1 of 2 (each a false positive).\n",
+		"- hit `decline-7` Nil guard the author declined (P1, must be absent at P1 or stronger)\n",
+		"\nAbsent defects: 1 of 2 hit.\n",
+	} {
+		if !strings.Contains(b.String(), want) {
+			t.Errorf("markdown lacks %q:\n%s", want, b.String())
+		}
+	}
+}
+
 func TestWriteMarkdownDescribesSeverityShortfallsAndUnscoredCases(t *testing.T) {
 	r := Run{ID: "r", Cases: []CaseRun{
 		{Case: "weak", PR: "example/a#1", Outcome: "dry_run", Score: &Score{Total: 3, Found: 2, Defects: []DefectResult{

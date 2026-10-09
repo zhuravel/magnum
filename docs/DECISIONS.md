@@ -5197,3 +5197,15 @@ editing history. Code, config comments and prompts reference these by their head
   it is above 0. Rejected: a separate `magnum declines` command (the retro's evidence stays under one
   command); counting answers by when the finding was posted (a decline is stored when the retro reads
   the closed PR, and the window is what the daemon did in it).
+- **An eval defect can be absent: a finding that matches it is a false positive** (2026-10-09, the
+  self-improving loop's eval). A case could only say what a review must find, so a finding an author
+  declined as wrong could not be measured: it counted as noise, among every other unmatched comment.
+  A defect now takes `expect = "absent"` (`found`, the default, or `absent`; anything else is refused).
+  It is matched as a found defect is (paths, lines, match, body), but a finding that matches it is an
+  absent hit (`Score.AbsentHits`, `Totals.AbsentHits` of `Totals.Absent`), never noise, and the defect
+  is in neither `Found` nor `Total`. A `severity` on an absent defect is the weakest at which a matching
+  finding is a hit; a weaker finding is the point ranked as it should be and is neither hit nor noise.
+  The text report adds `absent defects: N of M hit`, one `absent hit:` line per hit and the change in
+  hits next to the previous run; the Markdown report adds the total and a `hit` line per case. Rejected:
+  counting an absent hit as noise (it is the one finding the case is about) and ignoring the severity
+  (a point that was right but ranked too high could only stop being a hit by not being reported).

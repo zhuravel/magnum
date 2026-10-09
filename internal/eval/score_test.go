@@ -389,3 +389,88 @@ func TestScoreCaseWithoutDefectsOrFindings(t *testing.T) {
 		t.Errorf("score = %+v", s)
 	}
 }
+
+// A defect with expect = "absent" is one a review must not report (an author declined the finding as
+// wrong): a finding that matches it is a false positive, listed in AbsentHits, and the defect counts
+// in neither Found nor Total. With a severity, only a finding at that severity or stronger (or one
+// without a label) is a hit: the finding was right but ranked too high.
+func TestAnAbsentDefectHitByAFindingCountsAsAFalsePositive(t *testing.T) {
+	c := caseOf(t, `[[case.defect]]
+id = "found"
+title = "Missing index"
+paths = ["a.rb"]
+
+[[case.defect]]
+id = "wrong"
+title = "Nil guard the author declined"
+expect = "absent"
+paths = ["b.rb"]
+lines = [10, 12]
+match = ["nil"]
+`)
+	s := ScoreCase(c, Result{Findings: []Finding{
+		inline("a.rb", 1, "add an index"),
+		{Path: "b.rb", Line: 11, Body: "this can be nil", Severity: "P2"},
+	}})
+	if s.Found != 1 || s.Total != 1 || len(s.Defects) != 1 || s.Defects[0].ID != "found" {
+		t.Errorf("found %d/%d defects %+v, want the found defect alone", s.Found, s.Total, s.Defects)
+	}
+	if s.Absent != 1 || len(s.AbsentHits) != 1 {
+		t.Fatalf("absent = %d hits = %+v, want one absent defect hit", s.Absent, s.AbsentHits)
+	}
+	if h := s.AbsentHits[0]; h.ID != "wrong" || h.Title != "Nil guard the author declined" || !h.Found ||
+		!slices.Equal(h.By, []int{1}) || h.Severity != "P2" {
+		t.Errorf("hit = %+v, want defect wrong found by finding 1 at P2", h)
+	}
+
+	ranked := caseOf(t, `[[case.defect]]
+id = "over"
+title = "Right, but no P1"
+expect = "absent"
+severity = "P1"
+paths = ["b.rb"]
+`)
+	for _, tt := range []struct {
+		severity string
+		hit      bool
+	}{{"P0", true}, {"P1", true}, {"P2", false}, {"P3", false}, {"", true}} {
+		s := ScoreCase(ranked, Result{Findings: []Finding{{Path: "b.rb", Line: 3, Body: "x", Severity: tt.severity}}})
+		if got := len(s.AbsentHits) == 1; got != tt.hit {
+			t.Errorf("a %q finding on a P1 absent defect: hit %v, want %v", tt.severity, got, tt.hit)
+		}
+		if s.Noise != 0 {
+			t.Errorf("a %q finding on a P1 absent defect counts as noise", tt.severity)
+		}
+	}
+}
+
+// An absent defect is never recall (it is not in Total, a miss of it is no miss) and the finding that
+// hits it is never noise: the false positive is counted once, as an absent hit.
+func TestAnAbsentDefectIsNeverNoiseNorRecall(t *testing.T) {
+	c := caseOf(t, `[[case.defect]]
+id = "wrong"
+title = "Declined finding"
+expect = "absent"
+match = ["retry"]
+
+[[case.defect]]
+id = "also-wrong"
+title = "Another declined finding"
+expect = "absent"
+paths = ["z.rb"]
+`)
+	s := ScoreCase(c, Result{Findings: []Finding{inline("a.rb", 1, "add a retry"), inline("c.rb", 2, "unrelated")}})
+	if s.Total != 0 || s.Found != 0 || len(s.Defects) != 0 {
+		t.Errorf("found %d/%d defects %+v, want no recall from absent defects", s.Found, s.Total, s.Defects)
+	}
+	if s.Noise != 1 || len(s.Unmatched) != 1 || s.Unmatched[0].Path != "c.rb" {
+		t.Errorf("noise %d unmatched %+v, want only the unrelated finding", s.Noise, s.Unmatched)
+	}
+	if s.Absent != 2 || len(s.AbsentHits) != 1 || s.AbsentHits[0].ID != "wrong" {
+		t.Errorf("absent %d hits %+v, want 2 absent defects and the retry one hit", s.Absent, s.AbsentHits)
+	}
+	clean := ScoreCase(c, Result{})
+	if clean.Absent != 2 || len(clean.AbsentHits) != 0 || clean.Total != 0 {
+		t.Errorf("no findings: %+v, want two absent defects and no hit", clean)
+	}
+}

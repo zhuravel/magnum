@@ -36,3 +36,17 @@ severity = "P2"
 paths = ["app/models/coupon*.rb", "app/services/**/refund*.rb"]
 match = ["reus", "twice", "again"]
 body = true
+
+# `expect = "absent"` turns a defect around: it is a finding the review must
+# not make (the author declined it as wrong). A finding that matches it is a
+# false positive, an "absent hit" in the report, and counts neither as noise
+# nor in recall. With `severity`, only a finding at that severity or stronger
+# is a hit: the point was right but ranked too high, and a weaker finding on
+# it is the review getting it right.
+[[case.defect]]
+id = "nil-guard"
+title = "The caller already checks the token: a nil guard is not needed"
+expect = "absent"
+paths = ["app/controllers/**/callbacks_controller.rb"]
+lines = [80, 84]
+match = ["nil", "guard"]

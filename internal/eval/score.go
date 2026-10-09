@@ -45,6 +45,11 @@ type Score struct {
 	Noise           int            `json:"noise"`               // inline findings that matched no defect, simplifications aside
 	Simplifications int            `json:"simplifications"`     // optional simplification suggestions, neither defect nor noise
 	Unmatched       []Finding      `json:"unmatched,omitempty"` // the noise findings
+	// Absent counts the case's absent defects (Defect.Expect ExpectAbsent), which Defects, Found and
+	// Total leave out; AbsentHits are the ones a finding reported, each a false positive (the
+	// findings that hit them are not noise).
+	Absent     int            `json:"absent,omitempty"`
+	AbsentHits []DefectResult `json:"absent_hits,omitempty"`
 }
 
 // SeverityOK counts the found defects that were reported at the wanted severity or stronger.
@@ -64,23 +69,39 @@ func (s Score) SeverityOK() int {
 // regexps (when set). A review body matches only a defect with body = true, by its regexps alone,
 // and only with its finding list and nearby block (bodyFindings).
 // Simplification suggestions match nothing and are not noise. One finding may match several defects.
+// An absent defect (expect = "absent") is matched the same way, but a finding that matches it is a
+// hit (Score.AbsentHits) when the defect has no severity or the finding is at it or stronger (or has
+// none to compare); a weaker one is the finding ranked as it should be. Neither is noise, and absent
+// defects count in neither Found nor Total.
 func ScoreCase(c Case, r Result) Score {
-	s := Score{Case: c.Name, Status: r.Status, Event: r.Event, Total: len(c.Defects)}
+	s := Score{Case: c.Name, Status: r.Status, Event: r.Event}
 	used := make([]bool, len(r.Findings))
 	for _, d := range c.Defects {
 		res := d.regexps()
 		dr := DefectResult{ID: d.ID, Title: d.Title, Want: d.Severity}
+		absent := d.absent()
 		for i, f := range r.Findings {
 			if !d.matches(res, f) {
 				continue
 			}
 			used[i] = true
+			if absent && !d.hitsAbsent(f) {
+				continue
+			}
 			dr.By = append(dr.By, i)
 			if !f.InBody && f.Severity != "" && (dr.Severity == "" || f.Severity < dr.Severity) {
 				dr.Severity = f.Severity
 			}
 		}
 		dr.Found = len(dr.By) > 0
+		if absent {
+			s.Absent++
+			if dr.Found {
+				s.AbsentHits = append(s.AbsentHits, dr)
+			}
+			continue
+		}
+		s.Total++
 		dr.SeverityOK = dr.Found && (dr.Want == "" || dr.Severity != "" && dr.Severity <= dr.Want)
 		if dr.Found {
 			s.Found++
@@ -98,6 +119,13 @@ func ScoreCase(c Case, r Result) Score {
 		}
 	}
 	return s
+}
+
+// hitsAbsent reports whether f, which matches the absent defect d, reports it: d has no severity,
+// or f is at d's severity or stronger, or f's severity is unknown (a review body mention, an
+// unlabelled comment).
+func (d *Defect) hitsAbsent(f Finding) bool {
+	return d.Severity == "" || f.InBody || f.Severity == "" || f.Severity <= d.Severity
 }
 
 func (d *Defect) matches(res []*regexp.Regexp, f Finding) bool {

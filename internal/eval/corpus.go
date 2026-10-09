@@ -32,20 +32,35 @@ type Case struct {
 	Number int    `toml:"-"`
 }
 
-// Defect is one thing a review must report. A finding matches it when its path matches one of Paths
-// (any path when empty), its range comes within three lines of Lines (any line when empty) and one
-// of Match matches its body (anything when empty). Paths and Match must not both be empty.
+// Defect is one thing a review must report, or with Expect ExpectAbsent one it must not. A finding
+// matches it when its path matches one of Paths (any path when empty), its range comes within three
+// lines of Lines (any line when empty) and one of Match matches its body (anything when empty).
+// Paths and Match must not both be empty.
 type Defect struct {
-	ID       string   `toml:"id"`       // unique within the case, same charset as a case name
-	Title    string   `toml:"title"`    // shown in reports
-	Severity string   `toml:"severity"` // weakest severity that still counts as right, P0..P3, optional
-	Paths    []string `toml:"paths"`    // globs on the slash path, "**" spans directories
-	Lines    []int    `toml:"lines"`    // inclusive head-side range [from, to]
-	Match    []string `toml:"match"`    // case-insensitive regexps on the finding body
-	Body     bool     `toml:"body"`     // a mention in the review body also counts; needs Match
+	ID    string `toml:"id"`    // unique within the case, same charset as a case name
+	Title string `toml:"title"` // shown in reports
+	// Severity is, for a defect to find, the weakest severity that still counts as right; for an
+	// absent one, the weakest at which a matching finding is a hit (a weaker one is neither a hit
+	// nor noise). P0..P3, optional.
+	Severity string   `toml:"severity"`
+	Paths    []string `toml:"paths"`  // globs on the slash path, "**" spans directories
+	Lines    []int    `toml:"lines"`  // inclusive head-side range [from, to]
+	Match    []string `toml:"match"`  // case-insensitive regexps on the finding body
+	Body     bool     `toml:"body"`   // a mention in the review body also counts; needs Match
+	Expect   string   `toml:"expect"` // ExpectFound ("" too) or ExpectAbsent
 
 	res []*regexp.Regexp // Match, compiled
 }
+
+// What a review is expected to do with a defect (Defect.Expect): report it, the default, or not
+// report it, a finding an author declined as wrong (a match is a false positive, Score.AbsentHits).
+const (
+	ExpectFound  = "found"
+	ExpectAbsent = "absent"
+)
+
+// absent reports whether the defect is one a review must not report.
+func (d *Defect) absent() bool { return d.Expect == ExpectAbsent }
 
 var (
 	idPattern   = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,47}$`)
@@ -255,6 +270,9 @@ func (d *Defect) validate(ctx string, p *problems) {
 	}
 	if d.Severity != "" && !validSeverity(d.Severity) {
 		p.add(ctx, "severity must be one of P0, P1, P2, P3, got %q", d.Severity)
+	}
+	if d.Expect != "" && d.Expect != ExpectFound && d.Expect != ExpectAbsent {
+		p.add(ctx, "expect must be %q or %q, got %q", ExpectFound, ExpectAbsent, d.Expect)
 	}
 	for _, g := range d.Paths {
 		if err := checkGlob(g); err != nil {

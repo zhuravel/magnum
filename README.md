@@ -1877,7 +1877,11 @@ and a case whose agent would run anywhere but its own workspace fails before the
 compares them with the previous run; `magnum eval score` re-applies the corpus after you fix a match
 rule (a case the corpus now pins to another head keeps its score and says so). A defect with `body = true`
 counts a mention in the review body's finding list or its "Found nearby" block, never one in a `Description: ✗`
-line or the Checks block. A case costs a whole review round, so `run` waits for real reviews: it refuses to start a case
+line or the Checks block. A defect with `expect = "absent"` is a finding the review must not make (one an
+author declined as wrong): a finding that matches it is a false positive, an `absent hit` in the report and
+its total (`absent defects: 1 of 2 hit`), never noise nor recall; with a `severity`, only a finding at that
+severity or stronger is a hit, so a point that was right but ranked too high counts as fixed once the review
+ranks it lower. A case costs a whole review round, so `run` waits for real reviews: it refuses to start a case
 past `[usage] codex_soft` unless `--force`. Each run's `run.json` records `inputs`, a hash of the judge skill, the
 roles' prompts and the role config, and per case the hash of each notes file its judge read and the Codex gauge
 before and after it: the report prints the points the cases used (`codex: +2 points (geo +1, copy +1)`) and,

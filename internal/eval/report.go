@@ -82,6 +82,8 @@ type Totals struct {
 	Simplifications int
 	SeverityOK      int
 	Recall          float64 // Found/Total, 0 when Total is 0
+	Absent          int     // absent defects of the scored cases (Score.Absent)
+	AbsentHits      int     // the ones a finding reported (Score.AbsentHits): false positives
 }
 
 // Totals adds up the scores of the run. Cases without a score count in Cases only.
@@ -97,6 +99,8 @@ func (r Run) Totals() Totals {
 		t.Noise += c.Score.Noise
 		t.Simplifications += c.Score.Simplifications
 		t.SeverityOK += c.Score.SeverityOK()
+		t.Absent += c.Score.Absent
+		t.AbsentHits += len(c.Score.AbsentHits)
 	}
 	if t.Total > 0 {
 		t.Recall = float64(t.Found) / float64(t.Total)
@@ -240,9 +244,10 @@ func codexLine(r Run) string {
 	return fmt.Sprintf("codex: %+g points (%s)", total, strings.Join(each, ", "))
 }
 
-// WriteText writes the human report of r: a table with one row per case and a total, the Codex
-// points the cases used, then, when prev is not nil, how the totals moved since it and which cases
-// read other notes than in prev, then one line per missed defect and per case error.
+// WriteText writes the human report of r: a table with one row per case and a total, how many
+// absent defects were hit (when the run has any), the Codex points the cases used, then, when prev
+// is not nil, how the totals moved since it and which cases read other notes than in prev, then one
+// line per missed defect, per absent defect hit and per case error.
 func WriteText(w io.Writer, r Run, prev *Run) {
 	fmt.Fprintln(w, runHeader(r))
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
@@ -259,13 +264,20 @@ func WriteText(w io.Writer, r Run, prev *Run) {
 	t := r.Totals()
 	fmt.Fprintf(tw, "total\t\t%s\t%d/%d\t%d\t%d\n", foundWithRecall(t), t.SeverityOK, t.Found, t.Noise, t.Simplifications)
 	tw.Flush()
+	if t.Absent > 0 {
+		fmt.Fprintf(w, "absent defects: %d of %d hit\n", t.AbsentHits, t.Absent)
+	}
 	if line := codexLine(r); line != "" {
 		fmt.Fprintln(w, line)
 	}
 	if prev != nil {
 		p := prev.Totals()
-		fmt.Fprintf(w, "vs %s: recall %d%% → %d%% (%+d pts), noise %d → %d\n",
+		fmt.Fprintf(w, "vs %s: recall %d%% → %d%% (%+d pts), noise %d → %d",
 			prev.ID, percent(p.Recall), percent(t.Recall), percent(t.Recall)-percent(p.Recall), p.Noise, t.Noise)
+		if t.Absent > 0 || p.Absent > 0 {
+			fmt.Fprintf(w, ", absent hits %d → %d", p.AbsentHits, t.AbsentHits)
+		}
+		fmt.Fprintln(w)
 		for _, d := range notesDiff(r, *prev) {
 			fmt.Fprintf(w, "notes differ from %s: %s\n", prev.ID, d)
 		}
@@ -278,6 +290,14 @@ func WriteText(w io.Writer, r Run, prev *Run) {
 			if !d.Found {
 				fmt.Fprintf(w, "missed: %s/%s %q\n", c.Case, d.ID, d.Title)
 			}
+		}
+	}
+	for _, c := range r.Cases {
+		if c.Score == nil {
+			continue
+		}
+		for _, d := range c.Score.AbsentHits {
+			fmt.Fprintf(w, "absent hit: %s/%s %q (%s)\n", c.Case, d.ID, d.Title, cmp.Or(d.Severity, "no severity"))
 		}
 	}
 	for _, c := range r.Cases {
@@ -335,6 +355,9 @@ func WriteMarkdown(w io.Writer, r Run) {
 	}
 	t := r.Totals()
 	fmt.Fprintf(w, "| **total** | | %s | %d/%d | %d | %d | |\n", foundWithRecall(t), t.SeverityOK, t.Found, t.Noise, t.Simplifications)
+	if t.Absent > 0 {
+		fmt.Fprintf(w, "\nAbsent defects hit: %d of %d (each a false positive).\n", t.AbsentHits, t.Absent)
+	}
 	for _, c := range r.Cases {
 		fmt.Fprintf(w, "\n## %s\n\n%s", c.Case, c.PR)
 		if c.Head != "" {
@@ -351,6 +374,12 @@ func WriteMarkdown(w io.Writer, r Run) {
 		fmt.Fprintln(w)
 		for _, d := range c.Score.Defects {
 			fmt.Fprintf(w, "- %s `%s` %s%s\n", defectVerdict(d), d.ID, d.Title, defectSeverity(d))
+		}
+		for _, d := range c.Score.AbsentHits {
+			fmt.Fprintf(w, "- hit `%s` %s (%s, %s)\n", d.ID, d.Title, cmp.Or(d.Severity, "no severity"), absentRule(d))
+		}
+		if c.Score.Absent > 0 {
+			fmt.Fprintf(w, "\nAbsent defects: %d of %d hit.\n", len(c.Score.AbsentHits), c.Score.Absent)
 		}
 		if len(c.Score.Unmatched) > 0 {
 			fmt.Fprintf(w, "\nUnmatched findings:\n\n")
@@ -420,6 +449,14 @@ func defectSeverity(d DefectResult) string {
 	default:
 		return " (" + got + ", below the wanted " + d.Want + ")"
 	}
+}
+
+// absentRule says what an absent defect that was hit asked for.
+func absentRule(d DefectResult) string {
+	if d.Want == "" {
+		return "must be absent"
+	}
+	return "must be absent at " + d.Want + " or stronger"
 }
 
 func findingPlace(f Finding) string {

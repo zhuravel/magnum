@@ -310,6 +310,23 @@ func TestSelect(t *testing.T) {
 	}
 }
 
+// expect is "found" (the default) or "absent"; anything else is refused, naming the defect.
+func TestCorpusRejectsAnUnknownExpect(t *testing.T) {
+	src := func(expect string) string {
+		return "[[case]]\nname = \"c\"\npr = \"example/repo#7\"\nhead = \"" + sha + "\"\n[[case.defect]]\nid = \"d\"\ntitle = \"t\"\nmatch = [\"x\"]\n" + expect
+	}
+	for _, ok := range []string{"", `expect = "found"`, `expect = "absent"`} {
+		if _, err := parseCorpus("", []byte(src(ok))); err != nil {
+			t.Errorf("%q: %v", ok, err)
+		}
+	}
+	_, err := parseCorpus("", []byte(src(`expect = "maybe"`)))
+	if err == nil || !strings.Contains(err.Error(), `defect "d"`) || !strings.Contains(err.Error(), "expect must be") ||
+		!strings.Contains(err.Error(), `"maybe"`) {
+		t.Fatalf("unknown expect: %v", err)
+	}
+}
+
 // The shipped example corpus is valid: a user copies it to start.
 func TestTheExampleCorpusLoads(t *testing.T) {
 	c, err := LoadCorpus(filepath.Join("..", "..", "eval.toml.example"))

@@ -5907,6 +5907,14 @@ it is told about.
 
 CONSTANTS
 
+const (
+	ExpectFound  = "found"
+	ExpectAbsent = "absent"
+)
+    What a review is expected to do with a defect (Defect.Expect): report it,
+    the default, or not report it, a finding an author declined as wrong (a
+    match is a false positive, Score.AbsentHits).
+
 const FlaggedFile = "flagged.json"
     FlaggedFile holds the flagged cases (Flagged by case name) under the runs'
     root.
@@ -5939,10 +5947,11 @@ func WriteMarkdown(w io.Writer, r Run)
     and the findings that matched no defect.
 
 func WriteText(w io.Writer, r Run, prev *Run)
-    WriteText writes the human report of r: a table with one row per case and
-    a total, the Codex points the cases used, then, when prev is not nil,
-    how the totals moved since it and which cases read other notes than in prev,
-    then one line per missed defect and per case error.
+    WriteText writes the human report of r: a table with one row per case
+    and a total, how many absent defects were hit (when the run has any),
+    the Codex points the cases used, then, when prev is not nil, how the totals
+    moved since it and which cases read other notes than in prev, then one line
+    per missed defect, per absent defect hit and per case error.
 
 
 TYPES
@@ -6021,20 +6030,25 @@ func (c *Corpus) Select(names []string) ([]Case, error)
     every case. A name the corpus does not know is an error.
 
 type Defect struct {
-	ID       string   `toml:"id"`       // unique within the case, same charset as a case name
-	Title    string   `toml:"title"`    // shown in reports
-	Severity string   `toml:"severity"` // weakest severity that still counts as right, P0..P3, optional
-	Paths    []string `toml:"paths"`    // globs on the slash path, "**" spans directories
-	Lines    []int    `toml:"lines"`    // inclusive head-side range [from, to]
-	Match    []string `toml:"match"`    // case-insensitive regexps on the finding body
-	Body     bool     `toml:"body"`     // a mention in the review body also counts; needs Match
+	ID    string `toml:"id"`    // unique within the case, same charset as a case name
+	Title string `toml:"title"` // shown in reports
+	// Severity is, for a defect to find, the weakest severity that still counts as right; for an
+	// absent one, the weakest at which a matching finding is a hit (a weaker one is neither a hit
+	// nor noise). P0..P3, optional.
+	Severity string   `toml:"severity"`
+	Paths    []string `toml:"paths"`  // globs on the slash path, "**" spans directories
+	Lines    []int    `toml:"lines"`  // inclusive head-side range [from, to]
+	Match    []string `toml:"match"`  // case-insensitive regexps on the finding body
+	Body     bool     `toml:"body"`   // a mention in the review body also counts; needs Match
+	Expect   string   `toml:"expect"` // ExpectFound ("" too) or ExpectAbsent
 
 	// Has unexported fields.
 }
-    Defect is one thing a review must report. A finding matches it when its
-    path matches one of Paths (any path when empty), its range comes within
-    three lines of Lines (any line when empty) and one of Match matches its body
-    (anything when empty). Paths and Match must not both be empty.
+    Defect is one thing a review must report, or with Expect ExpectAbsent one
+    it must not. A finding matches it when its path matches one of Paths (any
+    path when empty), its range comes within three lines of Lines (any line when
+    empty) and one of Match matches its body (anything when empty). Paths and
+    Match must not both be empty.
 
 type DefectResult struct {
 	ID         string `json:"id"`
@@ -6148,6 +6162,11 @@ type Score struct {
 	Noise           int            `json:"noise"`               // inline findings that matched no defect, simplifications aside
 	Simplifications int            `json:"simplifications"`     // optional simplification suggestions, neither defect nor noise
 	Unmatched       []Finding      `json:"unmatched,omitempty"` // the noise findings
+	// Absent counts the case's absent defects (Defect.Expect ExpectAbsent), which Defects, Found and
+	// Total leave out; AbsentHits are the ones a finding reported, each a false positive (the
+	// findings that hit them are not noise).
+	Absent     int            `json:"absent,omitempty"`
+	AbsentHits []DefectResult `json:"absent_hits,omitempty"`
 }
     Score is the outcome for one case.
 
@@ -6159,7 +6178,12 @@ func ScoreCase(c Case, r Result) Score
     regexps (when set). A review body matches only a defect with body = true,
     by its regexps alone, and only with its finding list and nearby block
     (bodyFindings). Simplification suggestions match nothing and are not noise.
-    One finding may match several defects.
+    One finding may match several defects. An absent defect (expect =
+    "absent") is matched the same way, but a finding that matches it is a hit
+    (Score.AbsentHits) when the defect has no severity or the finding is at it
+    or stronger (or has none to compare); a weaker one is the finding ranked as
+    it should be. Neither is noise, and absent defects count in neither Found
+    nor Total.
 
 func (s Score) SeverityOK() int
     SeverityOK counts the found defects that were reported at the wanted
@@ -6174,6 +6198,8 @@ type Totals struct {
 	Simplifications int
 	SeverityOK      int
 	Recall          float64 // Found/Total, 0 when Total is 0
+	Absent          int     // absent defects of the scored cases (Score.Absent)
+	AbsentHits      int     // the ones a finding reported (Score.AbsentHits): false positives
 }
     Totals sums the scored cases of a run.
 
