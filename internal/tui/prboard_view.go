@@ -152,10 +152,15 @@ func stateLabel(state string) string {
 	return strings.ReplaceAll(s, "_", " ")
 }
 
+// verdictSeparators turns a verdict's dashes and spaces into underscores;
+// built once, as normVerdict runs twice per comparison of the reviewers'
+// sort.
+var verdictSeparators = strings.NewReplacer("-", "_", " ", "_")
+
 // normVerdict folds GitHub's review events and magnum's verdicts into
 // approved, changes_requested, commented, dismissed or pending.
 func normVerdict(s string) string {
-	v := strings.NewReplacer("-", "_", " ", "_").Replace(strings.ToLower(strings.TrimSpace(s)))
+	v := verdictSeparators.Replace(strings.ToLower(strings.TrimSpace(s)))
 	switch v {
 	case "approved", "approve":
 		return "approved"
@@ -442,7 +447,7 @@ func newPRBPainter(st styles, pal prbPalette, g glyphs, now time.Time, self map[
 }
 
 // glyphW is the widest verdict glyph.
-func (p prbPainter) glyphW() int {
+func (p *prbPainter) glyphW() int {
 	w := 0
 	for _, g := range []string{p.g.approved, p.g.changes, p.g.commented, p.g.pending, p.g.dismissed, p.g.other} {
 		w = max(w, ansi.StringWidth(g))
@@ -450,20 +455,20 @@ func (p prbPainter) glyphW() int {
 	return w
 }
 
-func (p prbPainter) isMine(login string, mine bool) bool {
+func (p *prbPainter) isMine(login string, mine bool) bool {
 	return mine || p.self[textx.FoldLogin(login)]
 }
 
-func (p prbPainter) dash() cell { return cell{{p.g.dash, p.st.Dim}} }
+func (p *prbPainter) dash() cell { return cell{{p.g.dash, p.st.Dim}} }
 
-func (p prbPainter) arrow() string {
+func (p *prbPainter) arrow() string {
 	if p.desc {
 		return p.g.sortDesc
 	}
 	return p.g.sortAsc
 }
 
-func (p prbPainter) colTitle(c prbCol) string {
+func (p *prbPainter) colTitle(c prbCol) string {
 	if c == sortColumn(p.sort) {
 		return prbColTitles[c] + " " + p.arrow()
 	}
@@ -484,7 +489,7 @@ type prbCells struct {
 	lastAlt []cell
 }
 
-func (p prbPainter) cells(r PRBoardRow, since [3]int) prbCells {
+func (p *prbPainter) cells(r PRBoardRow, since [3]int) prbCells {
 	var cs prbCells
 	cs.c[colRef] = p.refCell(r)
 	cs.c[colNum] = p.numCell(r)
@@ -541,7 +546,7 @@ func (cs prbCells) lastFit(w int) cell {
 	return c.fit(w)
 }
 
-func (p prbPainter) refCell(r PRBoardRow) cell {
+func (p *prbPainter) refCell(r PRBoardRow) cell {
 	owner, repo, n := prRefParts(r)
 	if repo == "" || n <= 0 {
 		if ref := prRef(r); ref != "" {
@@ -558,7 +563,7 @@ func (p prbPainter) refCell(r PRBoardRow) cell {
 
 // numCell is the PR number, its own right-aligned column so a long
 // repository name can never hide it.
-func (p prbPainter) numCell(r PRBoardRow) cell {
+func (p *prbPainter) numCell(r PRBoardRow) cell {
 	_, repo, n := prRefParts(r)
 	if repo == "" || n <= 0 {
 		return p.dash()
@@ -569,7 +574,7 @@ func (p prbPainter) numCell(r PRBoardRow) cell {
 // titleCell is the title after the row's tags: 📌 pinned, ! failed or
 // stalemated (a thread magnum stopped arguing in), the label badges, draft, muted. The title is the last run (the cursor row
 // bolds it; titleFit cuts only it).
-func (p prbPainter) titleCell(r PRBoardRow) cell {
+func (p *prbPainter) titleCell(r PRBoardRow) cell {
 	var c cell
 	if r.Pinned {
 		c = append(c, seg{p.g.pin + " ", p.pinStyle()})
@@ -598,21 +603,21 @@ func (p prbPainter) titleCell(r PRBoardRow) cell {
 
 // pinStyle colors a pin that is a word or a monochrome icon; 📌 brings
 // its own colors.
-func (p prbPainter) pinStyle() lipgloss.Style {
+func (p *prbPainter) pinStyle() lipgloss.Style {
 	if p.g.pinAccent {
 		return p.st.Accent
 	}
 	return lipgloss.Style{}
 }
 
-func (p prbPainter) loginStyle(login string, mine bool) lipgloss.Style {
+func (p *prbPainter) loginStyle(login string, mine bool) lipgloss.Style {
 	if p.isMine(login, mine) {
 		return p.pal.mine
 	}
 	return lipgloss.Style{}
 }
 
-func (p prbPainter) loginCell(login string) cell {
+func (p *prbPainter) loginCell(login string) cell {
 	if strings.TrimSpace(login) == "" {
 		return p.dash()
 	}
@@ -622,7 +627,7 @@ func (p prbPainter) loginCell(login string) cell {
 // loginText is a login for the narrow columns: a bot's "[bot]" gives way to
 // the bot mark before the name ("🤖zhuravel"), so an App stays apart from the
 // user it is named after; without a mark (ASCII) the suffix stays.
-func (p prbPainter) loginText(login string) string {
+func (p *prbPainter) loginText(login string) string {
 	short := shortLogin(login)
 	switch {
 	case !strings.HasSuffix(strings.TrimSpace(login), "[bot]"):
@@ -633,7 +638,7 @@ func (p prbPainter) loginText(login string) string {
 	return p.g.bot + p.g.gap + short
 }
 
-func (p prbPainter) assigneeCell(as []string) cell {
+func (p *prbPainter) assigneeCell(as []string) cell {
 	if len(as) == 0 {
 		return p.dash()
 	}
@@ -651,7 +656,7 @@ func (p prbPainter) assigneeCell(as []string) cell {
 	return c
 }
 
-func (p prbPainter) ageCell(t time.Time) cell {
+func (p *prbPainter) ageCell(t time.Time) cell {
 	if t.IsZero() {
 		return p.dash()
 	}
@@ -667,7 +672,7 @@ func (p prbPainter) ageCell(t time.Time) cell {
 // the latest request to me ("★ 2h"), else the age of the latest request to
 // anyone, dimmed (and indented past the star when some other row has one, so
 // the ages line up); a dash when the PR shows none.
-func (p prbPainter) requestedCell(r PRBoardRow) cell {
+func (p *prbPainter) requestedCell(r PRBoardRow) cell {
 	q, ok := shownRequest(r)
 	if !ok {
 		return p.dash()
@@ -701,12 +706,12 @@ const (
 // delta check, waiting or in flight: "delta check · quiet → 14:09",
 // "delta check · judge · 4m". A snoozed PR with nothing else there says
 // until when: "snoozed → 18:00".
-func (p prbPainter) stateWaitCell(r PRBoardRow) cell { return p.stateWaitDetail(r, stateFull) }
+func (p *prbPainter) stateWaitCell(r PRBoardRow) cell { return p.stateWaitDetail(r, stateFull) }
 
 // stateWaitDetail is stateWaitCell with d of a running round's progress.
 // A PR Codex flagged (flagCell), magnum approved as the operator (autoCell)
 // or that needs them (needsMeCell) says so instead.
-func (p prbPainter) stateWaitDetail(r PRBoardRow, d stateDetail) cell {
+func (p *prbPainter) stateWaitDetail(r PRBoardRow, d stateDetail) cell {
 	if flagShown(r) {
 		return p.flagCell(r.CodexFlag)
 	}
@@ -753,12 +758,12 @@ func flagShown(r PRBoardRow) bool {
 
 // flagCell is the state cell of a PR Codex flagged, its one line in a red
 // pill: "Codex flagged · never reviewed again".
-func (p prbPainter) flagCell(text string) cell {
+func (p *prbPainter) flagCell(text string) cell {
 	return cell{{" " + text + " ", p.pal.pills["needs_attention"]}}
 }
 
 // flagNarrow is flagCell for a narrow state cell: "Codex flagged".
-func (p prbPainter) flagNarrow(text string) cell {
+func (p *prbPainter) flagNarrow(text string) cell {
 	short, _, _ := strings.Cut(text, " · ")
 	return p.flagCell(short)
 }
@@ -842,7 +847,7 @@ func autoShown(r PRBoardRow) bool {
 // autoCell is the state cell of a PR magnum approved as the operator,
 // "✔ auto" (the approved icon), in a pill of its own color (it does not shimmer: nothing waits
 // for the operator).
-func (p prbPainter) autoCell() cell { return cell{{" " + p.g.approved + " auto ", p.pal.auto}} }
+func (p *prbPainter) autoCell() cell { return cell{{" " + p.g.approved + " auto ", p.pal.auto}} }
 
 // shimmerSpan is how many cells each color of the shimmer covers;
 // shimmerCycle (the number of colors times shimmerSpan) is how many frames
@@ -857,7 +862,7 @@ func (pal prbPalette) shimmerCycle() int { return max(len(pal.rainbow)*shimmerSp
 // request is the only one blocking it, in bold with a rainbow that slides
 // one cell to the right every frame (p.shimmer), and in bold reverse video
 // on a terminal without colors.
-func (p prbPainter) needsMeCell(kind string) cell {
+func (p *prbPainter) needsMeCell(kind string) cell {
 	text := " " + p.g.approved + " needs you "
 	if kind == NeedsMeLift {
 		text = " " + p.g.approved + " lift your " + p.g.changes + " "
@@ -879,7 +884,7 @@ func (p prbPainter) needsMeCell(kind string) cell {
 	return c
 }
 
-func (p prbPainter) stateCell(state string) cell {
+func (p *prbPainter) stateCell(state string) cell {
 	s := normState(state)
 	if s == "" {
 		return p.dash()
@@ -912,7 +917,7 @@ func rowState(r PRBoardRow) string {
 
 // recentHeading is the line before the recently closed rows: "merged or
 // closed in the last 24h (3)" on a rule. window is [board] recent_closed.
-func (p prbPainter) recentHeading(width int, window time.Duration, n int) string {
+func (p *prbPainter) recentHeading(width int, window time.Duration, n int) string {
 	text := "merged or closed recently"
 	if window > 0 {
 		text = "merged or closed in the last " + recentWindow(window)
@@ -943,7 +948,7 @@ func recentWindow(d time.Duration) string {
 
 // stateIcon is a PR state's icon: the spinner's frame while a round runs
 // (glyphs.working), else the pill's icon ("" in modes without one).
-func (p prbPainter) stateIcon(s string) string {
+func (p *prbPainter) stateIcon(s string) string {
 	if workingState(s) && len(p.g.working) > 0 {
 		return p.g.working[p.frame%len(p.g.working)]
 	}
@@ -986,7 +991,7 @@ func workingState(s string) bool {
 // "3 open" when it posted none new but earlier ones stay open, and its
 // simplifications ("✂4"): what the review concluded, also where it could
 // only comment.
-func (p prbPainter) findingsCell(f *FindingsInfo) cell {
+func (p *prbPainter) findingsCell(f *FindingsInfo) cell {
 	if f == nil {
 		return p.dash()
 	}
@@ -1023,7 +1028,7 @@ func (p prbPainter) findingsCell(f *FindingsInfo) cell {
 
 // findingsVerdict is the glyph and the color of what a review concluded:
 // blocking, non-blocking or clean.
-func (p prbPainter) findingsVerdict(v string) (string, lipgloss.Style) {
+func (p *prbPainter) findingsVerdict(v string) (string, lipgloss.Style) {
 	switch v {
 	case "blocking":
 		return p.g.changes, p.pal.red
@@ -1036,14 +1041,14 @@ func (p prbPainter) findingsVerdict(v string) (string, lipgloss.Style) {
 // priorityStyle is the color of findings of priority P<i>.
 // priorityMark is the mark before "P<i>" and the gap after it; "" in the
 // modes without one.
-func (p prbPainter) priorityMark(i int) string {
+func (p *prbPainter) priorityMark(i int) string {
 	if m := p.g.priority[min(max(i, 0), 3)]; m != "" {
 		return m + p.g.gap
 	}
 	return ""
 }
 
-func (p prbPainter) priorityStyle(i int) lipgloss.Style {
+func (p *prbPainter) priorityStyle(i int) lipgloss.Style {
 	return [4]lipgloss.Style{p.pal.red, p.pal.red, p.pal.yellow, p.st.Dim}[min(max(i, 0), 3)]
 }
 
@@ -1053,7 +1058,7 @@ func (p prbPainter) priorityStyle(i int) lipgloss.Style {
 // skipped"); otherwise the counts ("✓ 65/65", "✗ 2 failed", "◌ 40/65"
 // done while pending, "– not run" when every check skipped). ⟳ marks a CI
 // of an older commit than the head.
-func (p prbPainter) ciCell(ci *CIInfo) cell {
+func (p *prbPainter) ciCell(ci *CIInfo) cell {
 	if ci == nil {
 		return p.dash()
 	}
@@ -1130,7 +1135,7 @@ type ciStyle struct {
 // ciLook is a check state's looks: failed red, pending and skipped
 // yellow, not run (missing: it never ran on the head) a yellow mark on
 // dim text, passed green; no glyph for anything else.
-func (p prbPainter) ciLook(state string) ciStyle {
+func (p *prbPainter) ciLook(state string) ciStyle {
 	switch s := normCI(state); s {
 	case "failed":
 		return ciStyle{p.g.ciFail, p.pal.red, p.pal.red, s}
@@ -1148,7 +1153,7 @@ func (p prbPainter) ciLook(state string) ciStyle {
 }
 
 // verdict is a verdict's glyph, its short and long names and its color.
-func (p prbPainter) verdict(v string) (glyph, short, long string, st lipgloss.Style) {
+func (p *prbPainter) verdict(v string) (glyph, short, long string, st lipgloss.Style) {
 	switch v {
 	case "approved":
 		return p.g.approved, "approved", "approved", p.pal.green
@@ -1167,13 +1172,13 @@ func (p prbPainter) verdict(v string) (glyph, short, long string, st lipgloss.St
 // lastReviewCell is "★ ✔ approved 2h": whose (★ mine), the verdict and its
 // age; a stale review (the head moved since) is dimmed and marked ⟳; replies
 // magnum's judge has not re-decided follow as "↩2" (see lastReviewForms).
-func (p prbPainter) lastReviewCell(r PRBoardRow) cell { return p.lastReviewForms(r)[0] }
+func (p *prbPainter) lastReviewCell(r PRBoardRow) cell { return p.lastReviewForms(r)[0] }
 
 // lastReviewForms are the LAST REVIEW cell's forms, widest first. A row with
 // replies waiting has the marker after everything else and gives up the age,
 // then the stale mark, before the marker when the column is too narrow; any
 // other row has one form, which the column cuts.
-func (p prbPainter) lastReviewForms(r PRBoardRow) []cell {
+func (p *prbPainter) lastReviewForms(r PRBoardRow) []cell {
 	li := r.LastReview
 	mark := p.repliesMark(r.Replies)
 	if li == nil {
@@ -1231,7 +1236,7 @@ func (p prbPainter) lastReviewForms(r PRBoardRow) []cell {
 
 // repliesMark is "↩2": n replies on magnum's review wait for its judge; ""
 // for none.
-func (p prbPainter) repliesMark(n int) string {
+func (p *prbPainter) repliesMark(n int) string {
 	if n <= 0 {
 		return ""
 	}
@@ -1239,7 +1244,7 @@ func (p prbPainter) repliesMark(n int) string {
 }
 
 // sinceParts are the commits, additions and deletions of a delta.
-func (p prbPainter) sinceParts(d *ReviewDelta) (commits, adds, dels string) {
+func (p *prbPainter) sinceParts(d *ReviewDelta) (commits, adds, dels string) {
 	commits = compactNum(d.Commits) + "c"
 	if d.Truncated {
 		commits = p.g.atLeast + commits
@@ -1249,7 +1254,7 @@ func (p prbPainter) sinceParts(d *ReviewDelta) (commits, adds, dels string) {
 
 // sinceWidths are the widest commits, additions and deletions parts, so
 // the numbers line up across rows.
-func (p prbPainter) sinceWidths(rows []PRBoardRow) [3]int {
+func (p *prbPainter) sinceWidths(rows []PRBoardRow) [3]int {
 	var w [3]int
 	for _, r := range rows {
 		if r.SinceReview == nil {
@@ -1263,7 +1268,7 @@ func (p prbPainter) sinceWidths(rows []PRBoardRow) [3]int {
 
 // sinceCell is "3c +41 −7" since the last review, right-aligned part by
 // part; against the base branch (no review yet) it is dimmed.
-func (p prbPainter) sinceCell(d *ReviewDelta, w [3]int) cell {
+func (p *prbPainter) sinceCell(d *ReviewDelta, w [3]int) cell {
 	if d == nil {
 		return p.dash()
 	}
@@ -1295,7 +1300,7 @@ func isBaseDelta(d *ReviewDelta) bool {
 
 // reviewerChips are "login✔" chips: mine first (★), then blockers,
 // approvals, comments, dismissals and requested reviews (◌).
-func (p prbPainter) reviewerChips(list []ReviewerInfo) []cell {
+func (p *prbPainter) reviewerChips(list []ReviewerInfo) []cell {
 	revs := slices.Clone(list)
 	slices.SortStableFunc(revs, func(a, b ReviewerInfo) int {
 		ma, mb := p.isMine(a.Login, a.Mine), p.isMine(b.Login, b.Mine)
@@ -1342,7 +1347,7 @@ func chipsWidth(chips []cell) int {
 
 // fitChips joins as many chips as fit in w cells and counts the rest as
 // "+N".
-func (p prbPainter) fitChips(chips []cell, w int) cell {
+func (p *prbPainter) fitChips(chips []cell, w int) cell {
 	if len(chips) == 0 {
 		return p.dash()
 	}
@@ -1430,7 +1435,7 @@ type prbNatural struct {
 }
 
 // natural measures rows; it is the costly part of a layout.
-func (p prbPainter) natural(rows []PRBoardRow) prbNatural {
+func (p *prbPainter) natural(rows []PRBoardRow) prbNatural {
 	n := prbNatural{since: p.sinceWidths(rows)}
 	for c := range prbNumCols {
 		n.nat[c] = ansi.StringWidth(p.colTitle(c))
@@ -1464,7 +1469,7 @@ func (p prbPainter) natural(rows []PRBoardRow) prbNatural {
 }
 
 // layout sizes the columns to rows' content (see fit).
-func (p prbPainter) layout(rows []PRBoardRow, width int) prbLayout {
+func (p *prbPainter) layout(rows []PRBoardRow, width int) prbLayout {
 	return p.fit(p.natural(rows), width, prbWidths{})
 }
 
@@ -1475,7 +1480,7 @@ func (p prbPainter) layout(rows []PRBoardRow, width int) prbLayout {
 // and the reviewers. A dragged width (over) replaces a column's content
 // width; the title, the reviewers and the stage still give way down to
 // their minimum on a narrow screen.
-func (p prbPainter) fit(n prbNatural, width int, over prbWidths) prbLayout {
+func (p *prbPainter) fit(n prbNatural, width int, over prbWidths) prbLayout {
 	lay := prbLayout{since: n.since}
 	nat := n.nat
 	for c, v := range over {
@@ -1557,7 +1562,7 @@ func (p prbPainter) fit(n prbNatural, width int, over prbWidths) prbLayout {
 // colAt is the column of lay at x on the heading line (see colAtWidths).
 func (l prbLayout) colAt(x int) (i int, gap bool) { return colAtWidths(l.widths, prbMarkW, x) }
 
-func (p prbPainter) headerLine(lay prbLayout, width int) string {
+func (p *prbPainter) headerLine(lay prbLayout, width int) string {
 	var b strings.Builder
 	b.WriteString(spaces(prbMarkW))
 	for i, c := range lay.cols {
@@ -1585,7 +1590,7 @@ func (p prbPainter) headerLine(lay prbLayout, width int) string {
 
 // overlay is the cursor row's background and a muted row's dim, laid over
 // every run of the row.
-func (p prbPainter) overlay(selected, muted bool) func(lipgloss.Style) lipgloss.Style {
+func (p *prbPainter) overlay(selected, muted bool) func(lipgloss.Style) lipgloss.Style {
 	if !selected && !muted {
 		return nil
 	}
@@ -1603,7 +1608,7 @@ func (p prbPainter) overlay(selected, muted bool) func(lipgloss.Style) lipgloss.
 // rowLine renders one PR; the cursor row gets the mark, a background to
 // the edge and a bold title, and a row whose action waits for the daemon's
 // answer (queued) the queued mark after the cursor's cell.
-func (p prbPainter) rowLine(r PRBoardRow, lay prbLayout, width int, selected, queued bool) string {
+func (p *prbPainter) rowLine(r PRBoardRow, lay prbLayout, width int, selected, queued bool) string {
 	cs := p.cells(r, lay.since)
 	line := cell{{spaces(prbMarkW), lipgloss.Style{}}}
 	if selected {
@@ -1676,7 +1681,7 @@ func (p prbPainter) rowLine(r PRBoardRow, lay prbLayout, width int, selected, qu
 
 // rule is a full-width separator; n > 0 marks "▲ n more" (up) or "▼ n
 // more" near its right end.
-func (p prbPainter) rule(width, n int, up bool) string {
+func (p *prbPainter) rule(width, n int, up bool) string {
 	if n <= 0 {
 		return p.pal.rule.Render(strings.Repeat(p.g.rule, max(width, 1)))
 	}
@@ -1692,7 +1697,7 @@ func (p prbPainter) rule(width, n int, up bool) string {
 
 // footerRule is the rule above the key hints, carrying msg (already
 // styled) on its left and the rows below the screen on its right.
-func (p prbPainter) footerRule(width int, msg string, below int) string {
+func (p *prbPainter) footerRule(width int, msg string, below int) string {
 	if msg == "" {
 		return p.rule(width, below, false)
 	}
@@ -1712,7 +1717,7 @@ func (p prbPainter) footerRule(width int, msg string, below int) string {
 // view (with inView, its row count), the sort and the filter, with the
 // daemon's facts (facts.go), spin (the spinner while loading) and clock (the
 // refresh time) on the right.
-func (p prbPainter) titleLine(width int, title, repo, owner string, view PRView, inView int, filter string, shown, hidden int,
+func (p *prbPainter) titleLine(width int, title, repo, owner string, view PRView, inView int, filter string, shown, hidden int,
 	spin, clock string, facts []fact) string {
 	scope := "all repos"
 	if repo != "" {
@@ -1785,7 +1790,7 @@ func (p prbPainter) titleLine(width int, title, repo, owner string, view PRView,
 // titleRights are the ways to draw the title's right side, from the
 // fullest to the barest: the facts whole, then short, then without the
 // refresh time (the spinner stays), then the least pressing facts left out.
-func (p prbPainter) titleRights(spin, clock string, facts []fact) []string {
+func (p *prbPainter) titleRights(spin, clock string, facts []fact) []string {
 	compose := func(f string, withClock bool) string {
 		var parts []string
 		for _, s := range []string{f, spin} {
@@ -1814,7 +1819,7 @@ func (p prbPainter) titleRights(spin, clock string, facts []fact) []string {
 
 // summaryLine counts the rows per state, most urgent first, with the
 // stale reviews, failures and pins on the right.
-func (p prbPainter) summaryLine(width int) string {
+func (p *prbPainter) summaryLine(width int) string {
 	if len(p.all) == 0 {
 		return " " + p.st.Dim.Render("no pull requests yet")
 	}

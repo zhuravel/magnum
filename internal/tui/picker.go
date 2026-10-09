@@ -80,6 +80,8 @@ type PickerOptions struct {
 // returns a Cancel outcome (and nil error) when the user cancels or ctx
 // ends.
 func RunPicker(ctx context.Context, entries []PickEntry, opts PickerOptions) (PickOutcome, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel() // stops a reload still in flight
 	m := newPickerModel(entries, opts)
 	m.ctx = ctx
 	final, err := runProgram(ctx, m)
@@ -91,6 +93,17 @@ func RunPicker(ctx context.Context, entries []PickEntry, opts PickerOptions) (Pi
 		q = pm.query()
 	}
 	return PickOutcome{Action: PickActionCancel, Query: q}, err
+}
+
+// sanitizePicks is a copy of entries with their text safe to draw: titles
+// and authors come from GitHub and may carry escape sequences or control
+// characters.
+func sanitizePicks(entries []PickEntry) []PickEntry {
+	return cleanEach(entries, func(e *PickEntry) {
+		e.Ref, e.Title, e.Author, e.State = cleanText(e.Ref), cleanText(e.Title), cleanText(e.Author), cleanText(e.State)
+		e.Age, e.URL, e.GHState = cleanText(e.Age), cleanText(e.URL), cleanText(e.GHState)
+		e.Review = cleanReviewFacts(e.Review)
+	})
 }
 
 // pickItem adapts a PickEntry to list.Item.
@@ -169,7 +182,7 @@ func newPickerModel(entries []PickEntry, opts PickerOptions) pickerModel {
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
-	entries = append([]PickEntry(nil), entries...)
+	entries = sanitizePicks(entries)
 	items := make([]list.Item, len(entries))
 	for i, e := range entries {
 		items[i] = pickItem{e}
@@ -248,7 +261,7 @@ func (m *pickerModel) lookupTyped() {
 		return
 	}
 	if e, ok := m.opts.Lookup(q); ok {
-		m.typed = &e
+		m.typed = &sanitizePicks([]PickEntry{e})[0]
 	}
 }
 
@@ -374,14 +387,14 @@ func (m pickerModel) reload() (tea.Model, tea.Cmd) {
 // still listed, the highlighted PR.
 func (m pickerModel) reloaded(msg pickReloadMsg) pickerModel {
 	if msg.err != nil {
-		m.note = "refresh failed: " + oneLine(msg.err.Error())
+		m.note = "refresh failed: " + errLine(msg.err)
 		return m
 	}
 	sel := ""
 	if it, ok := m.list.SelectedItem().(pickItem); ok {
 		sel = it.e.Ref
 	}
-	m.entries = append([]PickEntry(nil), msg.entries...)
+	m.entries = sanitizePicks(msg.entries)
 	items := make([]list.Item, len(m.entries))
 	for i, e := range m.entries {
 		items[i] = pickItem{e}
@@ -427,7 +440,12 @@ func (m pickerModel) choose(a PickAction) (tea.Model, tea.Cmd) {
 	if e == nil && m.typed != nil {
 		asked = m.typed
 	}
-	row, act := pickActRow(asked, q, m.opts.Now()), pickRowAct(a, asked)
+	act, ok := pickRowAct(a, asked)
+	if !ok {
+		m.note = a.String() + " is not an action on a PR"
+		return m, nil
+	}
+	row := pickActRow(asked, q, m.opts.Now())
 	if why := actionRefusal(act, row); why != "" { // refused before anything is asked, as on the board
 		m.note = why
 		return m, nil
@@ -440,24 +458,27 @@ func (m pickerModel) choose(a PickAction) (tea.Model, tea.Cmd) {
 }
 
 // pickRowAct is the row action a picker action is; e (nil: a typed
-// reference magnum does not know) says whether ctrl+p pins or unpins.
-func pickRowAct(a PickAction, e *PickEntry) rowAct {
+// reference magnum does not know) says whether ctrl+p pins or unpins. ok is
+// false for cancel and for an action it does not know.
+func pickRowAct(a PickAction, e *PickEntry) (act rowAct, ok bool) {
 	switch a {
 	case PickActionReview:
-		return actReview
+		return actReview, true
 	case PickActionFresh:
-		return actFresh
+		return actFresh, true
 	case PickActionOpen:
-		return actOpen
+		return actOpen, true
 	case PickActionBrowser:
-		return actBrowser
+		return actBrowser, true
 	case PickActionTogglePin:
 		if e != nil && e.Pinned {
-			return actUnpin
+			return actUnpin, true
 		}
-		return actPin
+		return actPin, true
+	case PickActionRelease:
+		return actRelease, true
 	}
-	return actRelease
+	return 0, false
 }
 
 // pickActRow is what the row actions know of e, or of the typed reference

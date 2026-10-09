@@ -76,7 +76,7 @@ func TestStatusDashData(t *testing.T) {
 	}
 
 	wantSlot := tui.SlotRow{Name: "review1", Folder: inspTilde(f.Home + "/talkable.review1"), PRRef: "talkable#11920", PRState: store.PRReviewed,
-		SlotState: "held [foreign_agent]", DBs: "1/2 300M", Disk: "1.0G", URL: "https://github.com/talkable/talkable/pull/11920", PRGHState: store.GHOpen}
+		SlotState: "held [foreign_agent]", State: store.SlotHeld, DBs: "1/2 300M", Disk: "1.0G", URL: "https://github.com/talkable/talkable/pull/11920", PRGHState: store.GHOpen}
 	if len(got.Slots) != 1 || got.Slots[0] != wantSlot {
 		t.Errorf("slots %+v\nwant %+v", got.Slots, wantSlot)
 	}
@@ -264,5 +264,24 @@ func TestReviewFactsOf(t *testing.T) {
 		case c.want >= 0 && (f.SinceReview == nil || f.SinceReview.Commits != c.want || f.SinceReview.Base != "reviewed"):
 			t.Errorf("%s: count %+v, want %d", c.name, f.SinceReview, c.want)
 		}
+	}
+}
+
+// The dashboard's slot rows carry the slot's own state and pin beside the
+// display string, so a hold reason that says "pinned" pins nothing.
+func TestStatusDashSlotsCarryTheirStateAndPin(t *testing.T) {
+	reason := "pinned branch moved"
+	d := statusDashData(statusReport{Slots: []inventory.SlotView{
+		{Slot: store.Slot{Name: "review1", State: store.SlotHeld, HoldReason: &reason}, Exists: true},
+		{Slot: store.Slot{Name: "review2", State: store.SlotFree, Pinned: true}, Exists: true},
+	}}, "talkable/talkable")
+	if len(d.Slots) != 2 {
+		t.Fatalf("slots %+v", d.Slots)
+	}
+	if s := d.Slots[0]; s.Pinned || s.State != store.SlotHeld || !strings.Contains(s.SlotState, "hold:pinned branch moved") {
+		t.Errorf("a slot held for %q: %+v, want held and not pinned", reason, s)
+	}
+	if s := d.Slots[1]; !s.Pinned || s.State != store.SlotFree {
+		t.Errorf("a pinned free slot: %+v", s)
 	}
 }

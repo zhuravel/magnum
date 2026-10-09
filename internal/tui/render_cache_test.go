@@ -166,15 +166,22 @@ func TestWheelEventsUpAndDownStayCheap(t *testing.T) {
 	}
 }
 
+// The frame benchmarks draw one frame before the loop, so they time the
+// frames after it (what a key storm costs); the Cold ones time a first frame,
+// every cache empty.
+
 func BenchmarkBoardFrameMoving(b *testing.B) {
 	m := stormBoard(b, 200)
+	_ = m.View()
 	up, down := keyMsg("k"), keyMsg("j")
-	b.ResetTimer()
-	for i := range b.N {
+	b.ReportAllocs()
+	i := 0
+	for b.Loop() {
 		k := down
 		if (i/150)%2 == 1 {
 			k = up
 		}
+		i++
 		n, _ := m.Update(k)
 		m = n.(prBoardModel)
 		_ = m.View()
@@ -185,24 +192,53 @@ func BenchmarkBoardFrameAtBottom(b *testing.B) {
 	m := stormBoard(b, 200)
 	n, _ := m.Update(keyMsg("G"))
 	m = n.(prBoardModel)
+	_ = m.View()
 	down := keyMsg("j")
-	b.ResetTimer()
-	for range b.N {
+	b.ReportAllocs()
+	for b.Loop() {
 		n, _ := m.Update(down)
 		m = n.(prBoardModel)
 		_ = m.View()
 	}
 }
 
+// BenchmarkBoardSpinnerFrame is one frame of the reviewing pills' spinner
+// on a board of 200 rows, some of them in review.
+func BenchmarkBoardSpinnerFrame(b *testing.B) {
+	m := stormBoard(b, 200)
+	if !m.working {
+		b.Fatal("no row of the board is in review")
+	}
+	_ = m.View()
+	b.ReportAllocs()
+	for b.Loop() {
+		n, _ := m.Update(prbAnimMsg{})
+		m = n.(prBoardModel)
+		_ = m.View()
+	}
+}
+
+func BenchmarkBoardFrameCold(b *testing.B) {
+	m := stormBoard(b, 200)
+	b.ReportAllocs()
+	for b.Loop() {
+		m.cache = &prbCache{}
+		_ = m.View()
+	}
+}
+
 func BenchmarkDashboardFrameMoving(b *testing.B) {
 	m := stormDash(b, 200)
+	_ = m.View()
 	up, down := keyMsg("k"), keyMsg("j")
-	b.ResetTimer()
-	for i := range b.N {
+	b.ReportAllocs()
+	i := 0
+	for b.Loop() {
 		k := down
 		if (i/150)%2 == 1 {
 			k = up
 		}
+		i++
 		n, _ := m.Update(k)
 		m = n.(dashboardModel)
 		_ = m.View()
@@ -213,11 +249,21 @@ func BenchmarkDashboardFrameAtBottom(b *testing.B) {
 	m := stormDash(b, 200)
 	n, _ := m.Update(keyMsg("end"))
 	m = n.(dashboardModel)
+	_ = m.View()
 	down := keyMsg("j")
-	b.ResetTimer()
-	for range b.N {
+	b.ReportAllocs()
+	for b.Loop() {
 		n, _ := m.Update(down)
 		m = n.(dashboardModel)
+		_ = m.View()
+	}
+}
+
+func BenchmarkDashboardFrameCold(b *testing.B) {
+	m := stormDash(b, 200)
+	b.ReportAllocs()
+	for b.Loop() {
+		m.cache = &dashCache{}
 		_ = m.View()
 	}
 }
@@ -355,4 +401,58 @@ func TestModelCopiesNeverShareFrames(t *testing.T) {
 	mustContain(t, viewOf(a), "first copy")
 	mustContain(t, viewOf(b), "second copy")
 	mustContain(t, viewOf(a), "first copy")
+}
+
+// A frame of the reviewing pills' spinner draws again only the rows on
+// screen whose pill spins, and the summary (whose reviewing count spins in
+// the nerd mode): the column widths, the layout and every other drawn row
+// are reused, and each frame is the one an uncached render draws.
+func TestASpinnerFrameRedrawsOnlyTheSpinningRows(t *testing.T) {
+	for _, mode := range []IconMode{IconsUnicode, IconsNerd} {
+		t.Run(string(mode), func(t *testing.T) {
+			m, src, _ := newBoard(t, 120, 40, PRBoardOptions{Icons: mode})
+			src.rows = synthBoardRows(200)
+			n, _ := m.Update(prbDataMsg{rows: src.rows})
+			m = n.(prBoardModel)
+			if !m.working {
+				t.Fatal("no row of the board is in review")
+			}
+			start := min(m.scroll, max(len(m.view)-1, 0))
+			end, _ := m.visible(start)
+			spinning := 0
+			for _, r := range m.view[start:end] {
+				if workingState(rowState(r)) {
+					spinning++
+				}
+			}
+			if spinning == 0 {
+				t.Fatal("no row on screen is in review")
+			}
+			prev := m.View().Content
+			first := measuresOf(m)
+			for i := range len(m.g.working) + 1 {
+				before := measuresOf(m)
+				n, _ := m.Update(prbAnimMsg{})
+				m = n.(prBoardModel)
+				got := m.View().Content
+				if want := uncachedBoard(m); got != want {
+					t.Fatalf("frame %d differs from a fresh one:\n%s\n---\n%s", i, got, want)
+				}
+				if got == prev {
+					t.Fatalf("frame %d: the spinner did not move", i)
+				}
+				prev = got
+				now := measuresOf(m)
+				if now.natural != first.natural || now.layout != first.layout {
+					t.Fatalf("frame %d measured the rows again: %+v, before %+v", i, now, first)
+				}
+				if now.rows.key != first.rows.key || now.rows.m != first.rows.m || now.summary.key != first.summary.key || now.summary.m != first.summary.m {
+					t.Fatalf("frame %d emptied the rows' or the summary's cache: %+v, before %+v", i, now, first)
+				}
+				if drawn := now.rows.n - before.rows.n; i < len(m.g.working)-1 && drawn != spinning {
+					t.Errorf("frame %d drew %d rows, want the %d whose pill spins", i, drawn, spinning)
+				}
+			}
+		})
+	}
 }

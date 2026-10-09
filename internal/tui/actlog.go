@@ -214,7 +214,7 @@ func (l *ActionLog) generation() int64 {
 
 // box is content in a bordered box centered in width x height, scrolled by
 // scroll lines; below counts the lines out of view (the help, the log).
-func (p prbPainter) box(content []string, width, height, scroll int) ([]string, int) {
+func (p *prbPainter) box(content []string, width, height, scroll int) ([]string, int) {
 	room := max(height-2, 1)
 	scroll = min(max(scroll, 0), max(len(content)-room, 0))
 	end := min(scroll+room, len(content))

@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -58,14 +59,18 @@ type (
 )
 
 // widthSaver loads and saves one screen's widths. Saves run as commands,
-// concurrently: each takes a number and a save older than the last one
-// written is skipped, so a quick reset after a drag is never undone.
+// concurrently: each takes a number when it is made, and a save older than
+// the last one written is skipped, so a quick reset after a drag is never
+// undone. Only the commands take mu, which they hold across the store
+// write: numbering a save never waits for a slow write, so the event loop
+// does not either.
 type widthSaver struct {
 	store  ColumnWidths
 	screen string
 
-	mu         sync.Mutex
-	seq, saved int64
+	seq   atomic.Int64
+	mu    sync.Mutex // serializes the writes and guards saved
+	saved int64
 }
 
 func newWidthSaver(store ColumnWidths, screen string) *widthSaver {
@@ -93,10 +98,7 @@ func (s *widthSaver) save(ctx context.Context, widths map[string]int) tea.Cmd {
 	if s == nil {
 		return nil
 	}
-	s.mu.Lock()
-	s.seq++
-	seq := s.seq
-	s.mu.Unlock()
+	seq := s.seq.Add(1)
 	widths = maps.Clone(widths)
 	if widths == nil {
 		widths = map[string]int{}

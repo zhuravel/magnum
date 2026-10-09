@@ -188,7 +188,7 @@ func statusDashData(r statusReport, defaultRepo string) tui.StatusData {
 
 	for _, v := range r.Slots {
 		row := tui.SlotRow{Name: v.Slot.Name, Folder: inspTilde(v.Slot.Path), SlotState: statusSlotState(v),
-			DBs: statusSlotDBs(v, r.Databases), Disk: statusSlotDisk(v)}
+			State: v.Slot.State, Pinned: v.Slot.Pinned, DBs: statusSlotDBs(v, r.Databases), Disk: statusSlotDisk(v)}
 		if v.PR != nil {
 			row.PRRef = actRefLabel(defaultRepo, v.Slot.RepoFullName, v.PR.Number)
 			row.PRState, row.URL, row.PRGHState = screenPRState(*v.PR), v.PR.URL, v.PR.GHState

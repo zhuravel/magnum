@@ -2,7 +2,6 @@ package tui
 
 import (
 	"context"
-	"io"
 	"strings"
 	"testing"
 	"time"
@@ -216,11 +215,7 @@ func TestPickerCancel(t *testing.T) {
 }
 
 func TestRunPickerEndToEnd(t *testing.T) {
-	r, w := io.Pipe()
-	t.Cleanup(func() { w.Close(); r.Close() })
-	old := extraProgramOptions
-	extraProgramOptions = []tea.ProgramOption{tea.WithInput(r), tea.WithOutput(io.Discard), tea.WithoutRenderer()}
-	t.Cleanup(func() { extraProgramOptions = old })
+	w := scriptedInput(t)
 
 	type result struct {
 		out PickOutcome
@@ -231,8 +226,7 @@ func TestRunPickerEndToEnd(t *testing.T) {
 		out, err := RunPicker(context.Background(), pickEntries(), PickerOptions{Query: "coupon"})
 		done <- result{out, err}
 	}()
-	time.Sleep(100 * time.Millisecond)                 // let the program start reading
-	if _, err := w.Write([]byte("\x0f")); err != nil { // ctrl+o
+	if _, err := w.Write([]byte("\x0f")); err != nil { // ctrl+o, once the program reads
 		t.Fatal(err)
 	}
 	select {

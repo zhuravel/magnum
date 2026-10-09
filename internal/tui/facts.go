@@ -87,6 +87,17 @@ func (w WatchFailing) fact(now time.Time) fact {
 	return fact{w.Text(now), cleanText(w.Watch) + " ✗ " + factAge(now.Sub(w.Since))}
 }
 
+// cleanWatchFailing makes w's text safe to draw.
+func cleanWatchFailing(w *WatchFailing) { w.Watch, w.Error = cleanText(w.Watch), cleanText(w.Error) }
+
+// cleanFacts is f with its text safe to draw (f's slices are copied, not
+// changed); the titles clean it again as they draw it.
+func cleanFacts(f DaemonFacts) DaemonFacts {
+	f.SkewOld, f.SkewNew = cleanText(f.SkewOld), cleanText(f.SkewNew)
+	f.PollsFailing = cleanEach(f.PollsFailing, cleanWatchFailing)
+	return f
+}
+
 // fact is one thing a title says, whole and short.
 type fact struct{ full, short string }
 

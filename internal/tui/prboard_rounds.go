@@ -217,7 +217,7 @@ func DeltaCheckPhrase(lines int) string {
 // the roles a change of their code added and the ones asked for. A continue
 // round and a delta check run the judge alone, which they say instead of
 // naming it.
-func (p prbPainter) roundWhyLines(w RoundWhy) []string {
+func (p *prbPainter) roundWhyLines(w RoundWhy) []string {
 	var out []string
 	roles := strings.Join(w.Roles, ", ")
 	if (w.Kind == "continue" || w.DeltaCheck) && len(w.Roles) <= 1 {
@@ -272,7 +272,7 @@ func (p prbPainter) roundWhyLines(w RoundWhy) []string {
 // in red and one without a run "not started yet"; the judge's own pass is
 // "<role> own pass" ("codex-judge own pass"). Times are the card's
 // StageDuration.
-func (p prbPainter) progressLines(g RoundProgress) []string {
+func (p *prbPainter) progressLines(g RoundProgress) []string {
 	clock := func(t time.Time) string { return t.Local().Format("15:04") }
 	sep := p.st.Dim.Render(" · ")
 	out := []string{p.st.Dim.Render("round started ") + clock(g.StartedAt) + sep +

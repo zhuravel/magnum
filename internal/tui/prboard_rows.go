@@ -659,6 +659,17 @@ func sanitizeRow(r PRBoardRow) PRBoardRow {
 	r.Stalemate = cleanAll(r.Stalemate)
 	r.Note, r.SkipReason, r.ProjectNote = cleanText(r.Note), cleanText(r.SkipReason), cleanText(r.ProjectNote)
 	r.AutoStopped, r.AutoRefused = cleanText(r.AutoStopped), cleanText(r.AutoRefused)
+	r.NeedsMe, r.ReviewDecision = cleanText(r.NeedsMe), cleanText(r.ReviewDecision)
+	if r.Findings != nil {
+		f := *r.Findings
+		f.Verdict, f.Posted, f.SHA = cleanText(f.Verdict), cleanText(f.Posted), cleanText(f.SHA)
+		r.Findings = &f
+	}
+	if r.AutoApproved != nil {
+		a := *r.AutoApproved
+		a.Head, a.URL = cleanText(a.Head), cleanText(a.URL)
+		r.AutoApproved = &a
+	}
 	if r.Badges != nil {
 		badges := make([]Badge, 0, len(r.Badges))
 		for _, b := range r.Badges {
@@ -702,12 +713,7 @@ func sanitizeRow(r PRBoardRow) PRBoardRow {
 		}
 		r.Requests = qs
 	}
-	if r.SinceReview != nil {
-		d := *r.SinceReview
-		d.Base, d.BaseSHA = cleanText(d.Base), cleanText(d.BaseSHA)
-		d.MergedBase, d.RawBase = cleanText(d.MergedBase), cleanText(d.RawBase)
-		r.SinceReview = &d
-	}
+	r.SinceReview = cleanDelta(r.SinceReview)
 	if r.CI != nil {
 		ci := *r.CI
 		ci.State, ci.RequiredSource, ci.Failing = cleanText(ci.State), cleanText(ci.RequiredSource), cleanAll(ci.Failing)
@@ -740,6 +746,28 @@ func sanitizeRow(r PRBoardRow) PRBoardRow {
 		r.Progress = &g
 	}
 	return r
+}
+
+// cleanDelta is a copy of d with its text safe to draw; nil for nil.
+func cleanDelta(d *ReviewDelta) *ReviewDelta {
+	if d == nil {
+		return nil
+	}
+	c := *d
+	c.Base, c.BaseSHA = cleanText(c.Base), cleanText(c.BaseSHA)
+	c.MergedBase, c.RawBase = cleanText(c.MergedBase), cleanText(c.RawBase)
+	return &c
+}
+
+// cleanReviewFacts is a copy of f with its text safe to draw; nil for nil.
+func cleanReviewFacts(f *ReviewFacts) *ReviewFacts {
+	if f == nil {
+		return nil
+	}
+	c := *f
+	c.HeadSHA, c.ReviewedSHA, c.ReviewedBy = cleanText(c.HeadSHA), cleanText(c.ReviewedSHA), cleanText(c.ReviewedBy)
+	c.SinceReview = cleanDelta(c.SinceReview)
+	return &c
 }
 
 func cleanRequest(q RequestInfo) RequestInfo {

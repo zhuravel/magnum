@@ -149,7 +149,8 @@ func TestSanitizeRowCleansRoundWhy(t *testing.T) {
 		t.Fatal("sanitizeRow changed the caller's row")
 	}
 	m, _, _ := newBoard(t, 160, 50, PRBoardOptions{})
-	card := strings.Join(m.painter().cardContent(sanitizeRow(row), 120), "\n")
+	p := m.painter()
+	card := strings.Join(p.cardContent(sanitizeRow(row), 120), "\n")
 	if strings.ContainsAny(strings.ReplaceAll(ansi.Strip(card), "\n", ""), "\x1b\x07\x00") {
 		t.Fatalf("the card holds a control character: %q", ansi.Strip(card))
 	}

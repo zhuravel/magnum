@@ -787,7 +787,7 @@ func TestPRBoardRepoScopeAndOwners(t *testing.T) {
 	out := ansi.Strip(RenderPRBoard(rows, 0, PRBoardOptions{Now: func() time.Time { return boardNow }}))
 	mustContain(t, out, "acme/widgets#7", "talkable/talkable#11920", "all repos", "7 open")
 	single := ansi.Strip(RenderPRBoard(boardRows(), 0, PRBoardOptions{Now: func() time.Time { return boardNow }}))
-	mustNotContain(t, single, "talkable/talkable#")
+	mustNotContain(t, single, "talkable/talkable")
 }
 
 func TestRenderPRBoard(t *testing.T) {

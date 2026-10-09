@@ -26,8 +26,8 @@ func dashData() StatusData {
 		Disk:     DiskInfo{FreeGB: 41.2, MinGB: 8},
 		Pauses:   []Pause{{Key: "codex", Reason: "rate limited until 13:00", Fix: "magnum resume --tool codex"}},
 		Slots: []SlotRow{
-			{Name: "review1", Folder: "~/Projects/talkable.review1", PRRef: "talkable#1", PRState: "reviewing", SlotState: "busy", DBs: "3 1.2G", Disk: "4.1G"},
-			{Name: "review2", Folder: "~/Projects/talkable.review2", SlotState: "free", DBs: "-", Disk: "3.9G"},
+			{Name: "review1", Folder: "~/Projects/talkable.review1", PRRef: "talkable#1", PRState: "reviewing", State: "busy", SlotState: "busy", DBs: "3 1.2G", Disk: "4.1G"},
+			{Name: "review2", Folder: "~/Projects/talkable.review2", State: "free", SlotState: "free", DBs: "-", Disk: "3.9G"},
 		},
 		Queue: []PRRow{
 			{Ref: "talkable#7", Title: "Fix the referral widget", Author: "@ann", State: "queued", Next: "review when quiet", Age: "5m", URL: "https://github.com/talkable/talkable/pull/7"},
@@ -326,7 +326,7 @@ func TestDashboardReleaseConfirms(t *testing.T) {
 	mustContain(t, viewOf(m), "talkable#1: round in progress (reviewing): no slot is released under a round; K kills it")
 	d := src.data
 	d.Slots = slices.Clone(d.Slots)
-	d.Slots[0].PRState, d.Slots[0].SlotState = "reviewed", "held"
+	d.Slots[0].PRState, d.Slots[0].State, d.Slots[0].SlotState = "reviewed", "held", "held"
 	d.Queue = d.Queue[:1] // talkable#1's round ended
 	m, _ = send(t, m, dashDataMsg{data: d})
 	m, _ = send(t, m, keys("x")...) // slot review1 holds talkable#1

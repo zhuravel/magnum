@@ -201,7 +201,7 @@ func TestPRBoardOwnerPersists(t *testing.T) {
 	now := func() time.Time { return boardNow }
 	out := ansi.Strip(RenderPRBoard(ownerRows(), 200, PRBoardOptions{Now: now, DefaultOwner: "example"}))
 	mustContain(t, out, "owner example", "widgets")
-	mustNotContain(t, out, "talkable#", "dotfiles")
+	mustNotContain(t, out, "talkable/", "dotfiles")
 	out = ansi.Strip(RenderPRBoard(ownerRows(), 200, PRBoardOptions{Now: now, DefaultOwner: "gone"}))
 	mustContain(t, out, "all owners", "dotfiles", "#11950")
 }

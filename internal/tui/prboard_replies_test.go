@@ -74,7 +74,8 @@ func TestLastReviewCellMarksTheRepliesWaitingForTheJudge(t *testing.T) {
 	// A row whose review the board does not show still shows the marker.
 	noReview := repliesRow(3)
 	noReview.LastReview = nil
-	if got := cellText(repliesPainter(IconsUnicode, noReview).lastReviewCell(noReview)); got != "↩3" {
+	p := repliesPainter(IconsUnicode, noReview)
+	if got := cellText(p.lastReviewCell(noReview)); got != "↩3" {
 		t.Errorf("no review: cell %q, want %q", got, "↩3")
 	}
 }
@@ -180,7 +181,8 @@ func TestCardCountsTheRepliesNotRedecidedYet(t *testing.T) {
 		}
 	}
 	row := repliesRow(0)
-	if card := ansi.Strip(strings.Join(repliesPainter(IconsUnicode, row).cardContent(sanitizeRow(row), 120), "\n")); strings.Contains(card, "not re-decided") {
+	p := repliesPainter(IconsUnicode, row)
+	if card := ansi.Strip(strings.Join(p.cardContent(sanitizeRow(row), 120), "\n")); strings.Contains(card, "not re-decided") {
 		t.Errorf("a row without replies says so:\n%s", card)
 	}
 }

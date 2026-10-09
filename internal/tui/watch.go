@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
@@ -195,7 +197,9 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.tickCmd()
 		}
 		m.fetchErr = nil
-		m.have, m.frame, m.lastOK = true, msg.frame, m.now()
+		f := msg.frame // the header draws its names: herdr's pane title may carry escapes too
+		f.Title, f.Role, f.Pane, f.Status = cleanText(f.Title), cleanText(f.Role), cleanText(f.Pane), cleanText(f.Status)
+		m.have, m.frame, m.lastOK = true, f, m.now()
 		if content := watchContent(msg.frame); content != m.content {
 			m.content = content
 			m.vp.SetContent(content)
@@ -235,20 +239,84 @@ func (m watchModel) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// watchContent is the text the viewport shows for f: styling stripped
-// unless f.ANSI, and a final reset so styling cannot leak past the pane.
+// watchContent is the text the viewport shows for f (paneText): styling
+// stripped unless f.ANSI, and a final reset so styling cannot leak past the
+// pane.
 func watchContent(f WatchFrame) string {
-	text := f.Text
-	if !f.ANSI {
-		text = ansi.Strip(text)
-	}
-	text = strings.ReplaceAll(text, "\r", "")
-	text = strings.ReplaceAll(text, "\t", "    ")
-	text = strings.TrimRight(text, "\n")
+	text := strings.TrimRight(paneText(f.Text, f.ANSI), "\n")
 	if f.ANSI {
 		text += "\x1b[0m"
 	}
 	return text
+}
+
+// paneText is a pane's text made safe to draw: every escape sequence is
+// dropped but, with sgr, the styling ones (SGR: CSI … m), so a pane can
+// neither write the clipboard (OSC 52), open a link (OSC 8), move the
+// cursor, erase or reset the screen; a tab is four spaces, a carriage
+// return goes and every other control character but the newline (a bell, a
+// backspace, a C1 control) is a space, as cleanText makes it. An unfinished
+// sequence at the end is dropped.
+func paneText(s string, sgr bool) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for len(s) > 0 {
+		if n := printableRun(s); n > 0 { // most of a pane: no need to decode it byte by byte
+			b.WriteString(s[:n])
+			s = s[n:]
+			continue
+		}
+		seq, _, n, state := ansi.DecodeSequence(s, ansi.NormalState, nil)
+		if n <= 0 { // never: DecodeSequence reads a byte at least
+			seq, n = s[:1], 1
+		}
+		s = s[n:]
+		if state != ansi.NormalState {
+			break // the rest is a sequence without its end
+		}
+		switch c := seq[0]; {
+		case len(seq) == 1 && c >= 0x20 && c < 0x7f, c == '\n':
+			b.WriteString(seq)
+		case c == '\t':
+			b.WriteString("    ")
+		case c == '\r':
+		case c == ansi.ESC && len(seq) > 1, c >= 0x80 && c < 0xc0 && len(seq) > 1:
+			if sgr && isSGR(seq) {
+				b.WriteString(seq)
+			}
+		case c < 0xc0: // C0 and C1 controls, DEL, a stray byte
+			b.WriteByte(' ')
+		case !utf8.ValidString(seq):
+			b.WriteRune(utf8.RuneError)
+		case strings.ContainsFunc(seq, unicode.IsControl): // a C1 control as a rune
+			b.WriteByte(' ')
+		default:
+			b.WriteString(seq)
+		}
+	}
+	return b.String()
+}
+
+// printableRun is the length of the printable ASCII and newlines s starts
+// with.
+func printableRun(s string) int {
+	for i := range len(s) {
+		if c := s[i]; (c < 0x20 || c >= 0x7f) && c != '\n' {
+			return i
+		}
+	}
+	return len(s)
+}
+
+// isSGR reports whether seq is a 7-bit SGR sequence: ESC [, parameters
+// (digits, ";" or ":") and m.
+func isSGR(seq string) bool {
+	params, ok := strings.CutPrefix(seq, "\x1b[")
+	if !ok {
+		return false
+	}
+	params, ok = strings.CutSuffix(params, "m")
+	return ok && strings.Trim(params, "0123456789;:") == ""
 }
 
 // View implements tea.Model.
@@ -292,7 +360,7 @@ func (m watchModel) header() string {
 	}
 	tail := age + sep + state
 	if m.fetchErr != nil {
-		msg := "fetch failed: " + strings.Join(strings.Fields(m.fetchErr.Error()), " ")
+		msg := "fetch failed: " + errLine(m.fetchErr)
 		if m.width > 0 {
 			// Under pressure the age goes before the failure notice does.
 			if ansi.StringWidth(tail)+watchMinIdent+2*3+watchMinErr > m.width {

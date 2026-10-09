@@ -76,7 +76,7 @@ func TestPRBoardSkippedRows(t *testing.T) {
 	m, _, _ := newBoard(t, 200, 30, PRBoardOptions{})
 	m, _ = send(t, m, prbDataMsg{rows: rows})
 	p := m.painter()
-	lay := m.tableLayout(p, 200)
+	lay := m.tableLayout(&p, 200)
 	dim := lipgloss.NewStyle().Foreground(p.pal.dim)
 	struck := func(raw string) bool { return strings.Contains(raw, "\x1b[9m") || strings.Contains(raw, ";9m") }
 	if raw := p.rowLine(skippedRow(), lay, 200, false, false); !hasStyled(raw, dim, "Bump rack from 3.0 to 3.1") || struck(raw) {
@@ -245,8 +245,8 @@ func TestPRBoardReviewingPillSpins(t *testing.T) {
 	if cmd != nil || m.animating {
 		t.Fatal("the spinner kept ticking with nothing reviewing")
 	}
-	if m.rowsKey(170).anim != 0 {
-		t.Fatal("a still board keys its rows by a spinner frame")
+	if m.frameKey().anim != 0 {
+		t.Fatal("a still board keys its frame by a spinner frame")
 	}
 
 	m, cmd = send(t, m, prbDataMsg{rows: []PRBoardRow{reviewing}})

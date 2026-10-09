@@ -196,6 +196,26 @@ editing history. Code, config comments and prompts reference these by their head
   an audit: `live+count > pool.Max` wrapped for a --count near the largest int, passed, and started a
   provisioning loop with no end). The flag now refuses a count below 1 or above 999 (slotsMaxCount, the
   slot numbers slotsNumber recognizes) as a usage error. The max check reads `count > pool.Max-live`.
+- **Every string a screen draws is cleaned once, where it comes in** (2026-10-09). sanitizeRow and
+  sanitizeStatus kept their fields in hand-written lists. Several fields reached the screens raw. On the
+  board: a PR's findings (Verdict, Posted, SHA), its standing approval (Head, URL), NeedsMe and
+  ReviewDecision. On the dashboard: the daemon's Skew, the failing watches, the queue's and the slots'
+  GitHub states, the queue's review facts, the notes and the title's facts (some of these were cleaned
+  where they were drawn). The picker drew PR titles and authors with oneLine, which keeps ESC and BEL. Now
+  all of them are cleaned (cleanFacts, cleanReviewFacts and cleanDelta; sanitizePicks for the picker's
+  entries, its reloads and its Lookup). TestSanitizersCleanEveryStringField puts "\x1b[31mX\x07" into
+  every string field reachable from PRBoardRow, StatusData and PickEntry, nested ones included, and fails
+  when any survives the sanitizers, so a new field needs no list. An enum field can be exempted by its
+  path (unsanitizedEnums). The list is empty: every string is drawn somewhere, GHState too, through the
+  refusals' "is merged". The footer cleans its text once: setFlash and failure run cleanText (the text may
+  be an action's output or the daemon's answer), and the load and save error lines go through errLine.
+  Rejected: cleaning at each draw site (the list of sites grows with every screen).
+- **The dashboard reads a slot's pin and state from their own fields** (2026-10-09). The dashboard read a
+  slot's pin from the display string SlotState ("held [pinned,hold:<reason>]"). A hold reason that
+  contained "pinned" therefore made x refuse ("is pinned: unpin first"), made p refuse ("already pinned"),
+  and made the review question say that the review unpins the slot. The slot's mark read the first word of
+  the same string. tui.SlotRow gains State and Pinned, which the `magnum status` screen sets from the
+  slot. SlotState is now for display only.
 
 ## Scheduling
 
@@ -743,6 +763,16 @@ editing history. Code, config comments and prompts reference these by their head
   results, and the text each match call sees, with a plain line splitter over long lines at the start,
   middle and end of a file, both file endings and several sizes; the old function passes the same test.
   match must not keep the line it is shown (the three callers decode it and keep only strings).
+- **The board's painter goes by pointer** (2026-10-09). prbPainter is 16.6 KB (styles, palette and glyphs
+  held by value). Its 68 methods had value receivers, and tableLayout, tableLines, detailLines and
+  statusRule took it by value, so every call copied it. The methods now take *prbPainter and the four
+  helpers take a pointer. A full frame of 200 rows (cold, or a spinner frame before the change above) is
+  52-54% faster in interleaved runs. normVerdict's strings.Replacer is now built once at package level; it
+  was built on every call, twice per comparison in the reviewers' sort. A cold frame makes 12% fewer
+  allocations. The frame benchmarks use b.Loop with ReportAllocs and draw one frame before the loop;
+  BenchmarkBoardFrameCold and BenchmarkDashboardFrameCold time the first frame alone. Rejected: making
+  newPRBPainter return a pointer (a 16 KB allocation per frame; the value lives in render's frame and the
+  helpers borrow it).
 - **A request whose heavy job panics ends as failed, once** (2026-10-09). The heavy worker recovered a
   panic in a request:<id> job (provision, repair, adopt, cleanup), but the request left the in-flight set
   uncompleted, so every tick ran it, and it panicked, again. Now heavyRequest runs the job under
@@ -910,6 +940,46 @@ editing history. Code, config comments and prompts reference these by their head
   errNoDaemon, with the request pending in the outcome. The withdrawal runs on context.WithoutCancel, so a
   ctrl-c during the kick still withdraws. Rejected: retrying the withdrawal in a loop (the CLI cannot
   outwait a broken registry; it says what happened instead).
+- **A reviewing pill's spinner redraws only the rows whose pill spins** (2026-10-09, amends "Finding
+  priorities are colored icons; a reviewing pill spins": the spinner's frame was part of the rows' cache
+  key). The frame was in prbRowsKey. So while any PR in scope was in review, each of the spinner's eight
+  frames a second emptied the board's natural-width, layout, summary and row caches, and every frame
+  measured and laid out all rows again. On 200 rows a frame cost 6.1 ms and 6.9 MB, as much as a cold
+  first frame. Now the frame is in the frame's key (prbFrameKey.anim) and in the summary's key (one entry
+  per frame: the nerd mode's reviewing count spins). It is also in prbRowKey, but only for a row whose
+  pill spins (workingState of rowState), as the shimmer is keyed. It is never in prbRowsKey, so the
+  widths, the layout and the other rows are reused. BenchmarkBoardSpinnerFrame (200 rows): -96% time, -99%
+  bytes (6.9 MB to 64 KB) and -96% allocations (13,312 to 547). Rejected: keeping the frame in the rows'
+  key and caching only the layout under a key without it (every row would still be drawn again on every
+  frame).
+- **A slow column-width save never freezes the screen** (2026-10-09). widthSaver.save numbered each save
+  under the mutex that a running save command holds across its SaveWidths store write. A drag or W while
+  the registry was slow therefore blocked Bubble Tea's event loop until the earlier write ended. Saves now
+  take their number from an atomic counter when they are made. Only the commands take the mutex: to write
+  one at a time and to skip a save older than the last one written. Rejected: dropping the mutex (two
+  writes could land out of order and undo a reset).
+- **The watch screen passes styling only** (2026-10-09). `magnum watch --ansi` forwarded every escape
+  sequence a pane printed: a clipboard write (OSC 52), a link (OSC 8), screen erases, cursor moves, a full
+  reset. The plain mode stripped the sequences but kept BEL, BS and C1 controls. The header drew the
+  pane's title, role, status and herdr's fetch error raw. Now paneText walks the text with
+  ansi.DecodeSequence. The ANSI mode keeps only 7-bit SGR (ESC [, digits, ';' or ':', then m) and drops
+  every other sequence, including an unfinished one at the end. In both modes every control character but
+  the newline becomes a space (a tab is four spaces; a carriage return is dropped). The header's fields
+  and the fetch error are cleaned. Rejected: allowing OSC 8 links (a pane's link can point anywhere);
+  passing SGR introduced by a C1 CSI byte (terminals read raw C1 bytes differently).
+- **A picker reload stops when the picker closes** (2026-10-09). Unlike RunDashboard, RunPRBoard and
+  RunWatch, RunPicker had no cancel scope. A ctrl+r reload still in flight when the picker closed ran on
+  until its 30 s timeout. RunPicker now cancels the context it gives Reload when it returns.
+- **Every row action has its own call; an action without one fails** (2026-10-09). actionRun had no case
+  for U (unmute): its catch-all ran Unmute, so an action added later without a case would have unmuted the
+  PR. The picker's pickRowAct fell back to release for any action it did not know. Now actionRun has an
+  explicit case for every action, and its default returns a call that fails ("row action N has no call");
+  an out-of-range action gets the same call. pickRowAct maps release explicitly and returns false for
+  cancel and for an unknown action; the picker then refuses with a note. TestEveryRowActionRunsItsOwnCall
+  walks every rowAct and checks its name and its DashboardActions call.
+- **The tui tests fail on a command that does not answer** (2026-10-09). execCmd treated a command still
+  running after 150 ms as a timer and dropped it. An action descheduled on a busy machine could then make
+  a test pass vacuously. Now execCmd(tb, cmd) waits up to 5 s and fails the test.
 
 ## Operations
 

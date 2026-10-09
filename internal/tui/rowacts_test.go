@@ -282,8 +282,8 @@ func TestDashboardRefusesAtTheKeypress(t *testing.T) {
 	data.Queue = append(data.Queue,
 		PRRow{Ref: "talkable#9", State: "closed", GHState: "MERGED", Review: &ReviewFacts{HeadSHA: "abcdef1234", ReviewedSHA: "abcdef1234"}},
 		PRRow{Ref: "talkable#10", State: "queued", GHState: "OPEN"})
-	data.Slots = append(data.Slots, SlotRow{Name: "review3", PRRef: "talkable#11", PRState: "ignored", SlotState: "held", PRGHState: "OPEN"},
-		SlotRow{Name: "review4", PRRef: "talkable#12", PRState: "reviewed", SlotState: "held [pinned]", PRGHState: "OPEN"})
+	data.Slots = append(data.Slots, SlotRow{Name: "review3", PRRef: "talkable#11", PRState: "ignored", State: "held", SlotState: "held", PRGHState: "OPEN"},
+		SlotRow{Name: "review4", PRRef: "talkable#12", PRState: "reviewed", State: "held", Pinned: true, SlotState: "held [pinned]", PRGHState: "OPEN"})
 	at := func(m dashboardModel, key string) int {
 		for i, r := range m.rows {
 			if r.key() == key {

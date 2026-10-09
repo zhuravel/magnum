@@ -122,11 +122,12 @@ func (c *dashCache) bodyFor(k dashBodyKey, draw func() dashBody) dashBody {
 	return c.body.get(k, struct{}{}, draw)
 }
 
-func (c *prbCache) summaryFor(k prbRowsKey, draw func() string) string {
+// summaryFor is the board's summary line for k at the spinner's frame anim.
+func (c *prbCache) summaryFor(k prbRowsKey, anim int, draw func() string) string {
 	if c == nil {
 		return draw()
 	}
-	return c.summary.get(k, struct{}{}, draw)
+	return c.summary.get(k, anim, draw)
 }
 
 func (c *dashCache) headerFor(k dashHeaderKey, draw func() []string) []string {

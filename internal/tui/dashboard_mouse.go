@@ -244,7 +244,7 @@ func (m dashboardModel) resetWidths() (dashboardModel, tea.Cmd) {
 // them this run.
 func (m dashboardModel) widthsLoaded(msg widthsLoadedMsg) (dashboardModel, tea.Cmd) {
 	if msg.err != nil {
-		return m.fail("could not read the kept column widths: " + oneLine(msg.err.Error()))
+		return m.fail("could not read the kept column widths: " + errLine(msg.err))
 	}
 	if !m.widthsSet {
 		m.setWidths(cleanWidths(msg.widths, dashKnownCol))

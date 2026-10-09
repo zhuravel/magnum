@@ -216,16 +216,17 @@ type prbCache struct {
 	frame   frameCache[prbFrameKey]
 	natural partCache[prbRowsKey, struct{}, prbNatural]
 	layout  partCache[prbRowsKey, struct{}, prbLayout]
-	summary partCache[prbRowsKey, struct{}, string]
+	summary partCache[prbRowsKey, int, string] // by the spinner's frame (its reviewing count spins)
 	rows    partCache[prbRowsKey, prbRowKey, string]
 }
 
 // prbRowsKey is what the layout and every drawn row depend on besides
-// the row itself.
+// the row itself. The reviewing spinner's frame is not in it: it would
+// measure and lay out every row again eight times a second while a round
+// runs; it keys the frame, the summary and the rows whose pill spins.
 type prbRowsKey struct {
 	gen        int64
 	width      int
-	anim       int // the reviewing spinner's frame; 0 while nothing spins
 	sort       PRSort
 	owner      string // the owner scope: the rows, their counts and refs follow it
 	hide       bool   // ignored and skipped rows hidden: the rows and counts follow it
@@ -237,12 +238,14 @@ type prbRowsKey struct {
 }
 
 // prbRowKey names one drawn row of a view. shimmer is the shimmer's frame
-// for a row whose state cell shimmers, 0 for every other: only those rows
-// are drawn again as it moves.
+// for a row whose state cell shimmers and anim the reviewing spinner's for
+// a row whose pill spins, 0 for every other: only those rows are drawn
+// again as they move.
 type prbRowKey struct {
 	index    int
 	selected bool
 	shimmer  int
+	anim     int
 }
 
 // prbFrameKey is everything a frame of the board shows.
@@ -268,10 +271,11 @@ type prbFrameKey struct {
 	mouseOn                  bool
 	menu                     ctxMenu
 	shimmer                  int // the shimmer's frame while a needs-you cell is on screen, else 0
+	anim                     int // the reviewing spinner's frame; 0 while nothing spins
 }
 
 func (m prBoardModel) rowsKey(w int) prbRowsKey {
-	return prbRowsKey{gen: m.gen, width: w, anim: m.animFrame(), sort: m.sort, owner: m.owner, hide: m.hide, desc: m.desc, dark: m.st.dark,
+	return prbRowsKey{gen: m.gen, width: w, sort: m.sort, owner: m.owner, hide: m.hide, desc: m.desc, dark: m.st.dark,
 		colorless: m.colorless, clock: clockKey(m.opts.Now), widths: m.widths, queued: strings.Join(m.log.pendingTargets(), "\n")}
 }
 
@@ -284,7 +288,7 @@ func (m prBoardModel) frameKey() prbFrameKey {
 		haveData: m.haveData, loading: m.loading, loadErr: errText(m.loadErr), refreshedAt: m.refreshedAt.UnixNano(),
 		busy: m.busy, leaving: m.leaving, switching: m.switching,
 		flash: m.flash, flashErr: m.flashErr, flashInfo: m.flashInfo,
-		mouseOn: m.mouseOn, menu: m.menu, shimmer: m.shimmerFrame(),
+		mouseOn: m.mouseOn, menu: m.menu, shimmer: m.shimmerFrame(), anim: m.animFrame(),
 	}
 	if m.loading || m.busy != "" || !m.haveData { // the spinner shows (drawing its frame costs)
 		k.spin = m.spin.View()
@@ -535,7 +539,7 @@ func (m prBoardModel) update(msg tea.Msg) (prBoardModel, tea.Cmd) {
 	case widthsLoadedMsg:
 		return m.widthsLoaded(msg)
 	case widthsSavedMsg:
-		return m.fail("could not keep the column widths: " + oneLine(msg.err.Error()))
+		return m.fail("could not keep the column widths: " + errLine(msg.err))
 	case tea.KeyPressMsg:
 		return m.updateKey(msg)
 	case tea.MouseMsg:
@@ -999,7 +1003,8 @@ func (m prBoardModel) maxScroll() int {
 // keeps the card's and the help's scroll within their content.
 func (m *prBoardModel) fixScroll() {
 	if m.mode == prbHelp {
-		n := len(m.painter().helpContent(m.viewWidth()))
+		p := m.painter()
+		n := len(p.helpContent(m.viewWidth()))
 		m.helpScroll = min(max(m.helpScroll, 0), max(n-(m.bodyHeight()-2), 0))
 	}
 	if m.mode == prbLog {
@@ -1012,7 +1017,8 @@ func (m *prBoardModel) fixScroll() {
 			m.detailScroll = 0
 			return
 		}
-		n := len(m.painter().cardContent(r, cardInner(m.viewWidth())))
+		p := m.painter()
+		n := len(p.cardContent(r, cardInner(m.viewWidth())))
 		m.detailScroll = min(max(m.detailScroll, 0), max(n-(m.bodyHeight()-2), 0))
 	}
 	avail := m.tableHeight()
@@ -1059,7 +1065,7 @@ func (m prBoardModel) render() string {
 	out := []string{
 		p.titleLine(w, m.opts.Title, m.opts.Repo, m.owner, m.boardView, m.inView, m.filter.Value(), len(m.view), m.hidden,
 			spin, clock, m.facts.list(m.opts.Now())),
-		m.cache.summaryFor(m.rowsKey(w), func() string { return p.summaryLine(w) }),
+		m.cache.summaryFor(m.rowsKey(w), p.frame, func() string { return p.summaryLine(w) }),
 	}
 
 	var body []string
@@ -1070,15 +1076,15 @@ func (m prBoardModel) render() string {
 	case prbLog:
 		body, below = p.box(m.logContent(w), w, m.bodyHeight(), m.logScroll)
 	case prbDetail:
-		body, below = m.detailLines(p, w)
+		body, below = m.detailLines(&p, w)
 	default:
-		body, below = m.tableLines(p, w)
+		body, below = m.tableLines(&p, w)
 	}
 	for len(body) < m.bodyHeight() {
 		body = append(body, "")
 	}
 	out = append(out, body[:m.bodyHeight()]...)
-	out = append(out, m.statusRule(p, w, below), m.hintLine(w))
+	out = append(out, m.statusRule(&p, w, below), m.hintLine(w))
 	if len(out) > h { // a tiny screen keeps the footer: it asks the y/n
 		out = out[len(out)-h:]
 	}
@@ -1093,13 +1099,13 @@ func (m prBoardModel) render() string {
 
 // tableLines are the column headings, a rule (marking the rows scrolled
 // above) and the visible rows; below counts the rows under the screen.
-func (m prBoardModel) tableLines(p prbPainter, w int) (lines []string, below int) {
+func (m prBoardModel) tableLines(p *prbPainter, w int) (lines []string, below int) {
 	rk := m.rowsKey(w)
 	lay := m.tableLayout(p, w)
 	queued := m.log.pendingTargets()
 	if !m.haveData {
 		if m.loadErr != nil {
-			return []string{"", "  " + m.st.Err.Render(truncate("could not load pull requests: "+oneLine(m.loadErr.Error()), w-2))}, 0
+			return []string{"", "  " + m.st.Err.Render(truncate("could not load pull requests: "+errLine(m.loadErr), w-2))}, 0
 		}
 		return []string{"", "  " + m.spin.View() + " " + m.st.Dim.Render("loading pull requests…")}, 0
 	}
@@ -1128,6 +1134,9 @@ func (m prBoardModel) tableLines(p prbPainter, w int) (lines []string, below int
 		if needsMeShown(m.view[i]) {
 			key.shimmer = p.shimmer
 		}
+		if workingState(rowState(m.view[i])) { // its pill spins (stateIcon)
+			key.anim = p.frame
+		}
 		lines = append(lines, m.cache.row(rk, key, func() string {
 			return p.rowLine(m.view[i], lay, w, sel, queuedFor(prRef(m.view[i]), queued))
 		}))
@@ -1140,7 +1149,7 @@ func (m prBoardModel) tableLines(p prbPainter, w int) (lines []string, below int
 
 // detailLines is the cursor row's card, scrolled; below counts the card
 // lines out of view.
-func (m prBoardModel) detailLines(p prbPainter, w int) ([]string, int) {
+func (m prBoardModel) detailLines(p *prbPainter, w int) ([]string, int) {
 	r, ok := m.selected()
 	if !ok {
 		return []string{"", "  " + m.st.Dim.Render("nothing selected · esc goes back")}, 0
@@ -1150,7 +1159,7 @@ func (m prBoardModel) detailLines(p prbPainter, w int) ([]string, int) {
 
 // statusRule is the rule above the key hints; it carries the action
 // result, the pending question, a load error or the scroll position.
-func (m prBoardModel) statusRule(p prbPainter, w, below int) string {
+func (m prBoardModel) statusRule(p *prbPainter, w, below int) string {
 	var msg string
 	switch {
 	case m.confirm != nil:
@@ -1177,7 +1186,7 @@ func (m prBoardModel) statusRule(p prbPainter, w, below int) string {
 	case m.busy != "":
 		msg = m.spin.View() + " " + m.busyText()
 	case m.loadErr != nil && m.haveData:
-		text := "refresh failed: " + oneLine(m.loadErr.Error())
+		text := "refresh failed: " + errLine(m.loadErr)
 		if !m.refreshedAt.IsZero() {
 			text += " (showing data from " + m.refreshedAt.Local().Format("15:04:05") + ")"
 		}

@@ -117,9 +117,14 @@ type Pause struct {
 }
 
 // SlotRow is one review slot. Actions on a slot row target PRRef, or the
-// slot Name for pin/unpin/release when it holds no PR.
+// slot Name for pin/unpin/release when it holds no PR. SlotState is the
+// slot's state as the table shows it, with its flags ("held [pinned,
+// hold:<reason>]"); the actions read State and Pinned, never SlotState,
+// whose hold reason is free text.
 type SlotRow struct {
 	Name, Folder, PRRef, PRState, SlotState, DBs, Disk string
+	State                                              string // the slot's state: free, busy, held, …
+	Pinned                                             bool   // the slot is pinned (magnum pin)
 	URL                                                string // PR URL for b; optional (looked up in Queue by PRRef)
 	PRGHState                                          string // GitHub's state of the slot's PR: OPEN, CLOSED or MERGED; "" when unknown
 	// PRMergedUnreviewed and PRFlagDismissed are PRRow's MergedUnreviewed and
@@ -510,7 +515,7 @@ func (m dashboardModel) update(msg tea.Msg) (dashboardModel, tea.Cmd) {
 	case widthsLoadedMsg:
 		return m.widthsLoaded(msg)
 	case widthsSavedMsg:
-		return m.fail("could not keep the column widths: " + oneLine(msg.err.Error()))
+		return m.fail("could not keep the column widths: " + errLine(msg.err))
 	case tea.KeyPressMsg:
 		return m.updateKey(msg)
 	case tea.MouseMsg:
@@ -644,7 +649,7 @@ func (m dashboardModel) actRow() actRow {
 	}
 	if s := m.slotRow(r); s != nil {
 		row.inSlot = true
-		row.pinned = strings.Contains(s.SlotState, "pinned")
+		row.pinned = s.Pinned
 		row.pinKnown = row.pinned || ref == ""
 	}
 	if ref == "" {
@@ -1070,7 +1075,7 @@ var (
 func (m dashboardModel) bodyLines(w int) ([]string, int) {
 	if !m.haveData {
 		if m.loadErr != nil {
-			return []string{m.st.Err.Render(truncate("could not load status: "+oneLine(m.loadErr.Error()), w))}, -1
+			return []string{m.st.Err.Render(truncate("could not load status: "+errLine(m.loadErr), w))}, -1
 		}
 		return []string{m.spin.View() + " loading status…"}, -1
 	}
@@ -1163,8 +1168,8 @@ func (m dashboardModel) drawBody(w int) dashBody {
 				pr = strings.TrimSpace(s.PRRef + " " + m.stateText(s.PRState))
 			}
 			state := orDash(s.SlotState)
-			if f := strings.Fields(s.SlotState); len(f) > 0 { // "busy [pinned]"
-				state = marked(slotMark(m.g, m.pal, f[0]), state)
+			if s.State != "" {
+				state = marked(slotMark(m.g, m.pal, s.State), state)
 			}
 			cells[i] = []string{s.Name, orDash(s.Folder), pr, state, orDash(s.DBs), orDash(s.Disk)}
 		}
@@ -1259,7 +1264,7 @@ func (m dashboardModel) statusLine(w int) string {
 	case busy != "":
 		return truncate(m.spin.View()+" "+busy, w)
 	case m.loadErr != nil && m.haveData:
-		msg := "refresh failed: " + oneLine(m.loadErr.Error())
+		msg := "refresh failed: " + errLine(m.loadErr)
 		if !m.data.GeneratedAt.IsZero() {
 			msg += " (showing data from " + m.data.GeneratedAt.Local().Format("15:04:05") + ")"
 		}
@@ -1399,7 +1404,8 @@ func (m dashboardModel) boxLines(content []string, what string, w, height, scrol
 // GitHub or agent output carrying escape sequences or control characters.
 // d's slices are copied, not changed.
 func sanitizeStatus(d StatusData) StatusData {
-	d.Daemon.Uptime, d.Daemon.Launchd = cleanText(d.Daemon.Uptime), cleanText(d.Daemon.Launchd)
+	d.Daemon.Uptime, d.Daemon.Launchd, d.Daemon.Skew = cleanText(d.Daemon.Uptime), cleanText(d.Daemon.Launchd), cleanText(d.Daemon.Skew)
+	d.Activity.PollsFailing = cleanEach(d.Activity.PollsFailing, cleanWatchFailing)
 	d.Rounds.ActivePRs = cleanAll(d.Rounds.ActivePRs)
 	d.Rounds.Progress = cleanEach(d.Rounds.Progress, func(g **RoundProgress) {
 		if *g != nil {
@@ -1415,10 +1421,12 @@ func sanitizeStatus(d StatusData) StatusData {
 	d.Slots = cleanEach(d.Slots, func(r *SlotRow) {
 		r.Name, r.Folder, r.PRRef, r.PRState = cleanText(r.Name), cleanText(r.Folder), cleanText(r.PRRef), cleanText(r.PRState)
 		r.SlotState, r.DBs, r.Disk, r.URL = cleanText(r.SlotState), cleanText(r.DBs), cleanText(r.Disk), cleanText(r.URL)
+		r.PRGHState, r.State = cleanText(r.PRGHState), cleanText(r.State)
 	})
 	d.Queue = cleanEach(d.Queue, func(r *PRRow) {
 		r.Ref, r.Title, r.Author, r.State = cleanText(r.Ref), cleanText(r.Title), cleanText(r.Author), cleanText(r.State)
-		r.Next, r.Age, r.URL = cleanText(r.Next), cleanText(r.Age), cleanText(r.URL)
+		r.Next, r.Age, r.URL, r.GHState = cleanText(r.Next), cleanText(r.Age), cleanText(r.URL), cleanText(r.GHState)
+		r.Review = cleanReviewFacts(r.Review)
 	})
 	d.Attention = cleanEach(d.Attention, func(a *AttentionRow) {
 		a.Subject, a.Kind, a.Message, a.Fix = cleanText(a.Subject), cleanText(a.Kind), cleanText(a.Message), cleanText(a.Fix)
@@ -1428,6 +1436,7 @@ func sanitizeStatus(d StatusData) StatusData {
 		r.DBs, r.Agents, r.Disk = cleanText(r.DBs), cleanText(r.Agents), cleanText(r.Disk)
 	})
 	d.Warnings = cleanAll(d.Warnings)
+	d.Notes, d.Facts = cleanText(d.Notes), cleanFacts(d.Facts)
 	return d
 }
 

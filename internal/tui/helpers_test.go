@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"io"
 	"reflect"
 	"regexp"
 	"strings"
@@ -77,6 +78,29 @@ func typed(s string) []tea.Msg {
 // timer sends, and execCmd drops it unrun like a timer still running.
 func instantTick(_ time.Duration, fn func(time.Time) tea.Msg) tea.Cmd {
 	return func() tea.Msg { return fn(time.Now()) }
+}
+
+// neverTick is the Tick of a test that waits for something else: the timer
+// never fires, so the screen asks for no further fetch or refresh.
+func neverTick(time.Duration, func(time.Time) tea.Msg) tea.Cmd { return nil }
+
+// scriptedInput makes the next program run with a pipe for its input and
+// no output, and returns the pipe's writer. The test writes the keys it
+// wants the program to read; a write waits until the program reads it, and
+// fails once the pipe is closed. It swaps the package variable
+// extraProgramOptions, so its tests stay serial. The cleanup restores the
+// options and closes the pipe.
+func scriptedInput(t *testing.T) *io.PipeWriter {
+	t.Helper()
+	r, w := io.Pipe()
+	old := extraProgramOptions
+	extraProgramOptions = []tea.ProgramOption{tea.WithInput(r), tea.WithOutput(io.Discard), tea.WithoutRenderer()}
+	t.Cleanup(func() {
+		extraProgramOptions = old
+		r.Close()
+		w.Close()
+	})
+	return w
 }
 
 // isInstantTick reports whether cmd is a timer instantTick scheduled: every
@@ -188,11 +212,12 @@ func containsSplitRef(view, want string) bool {
 
 var splitRefRe = regexp.MustCompile(`^((?:[> ]\s*)?[\w./-]+)(#[0-9]+)$`)
 
-// mustNotContain fails when any string appears in view.
+// mustNotContain fails when any string appears in view, also as a PR
+// reference the board draws in two columns (see containsSplitRef).
 func mustNotContain(t *testing.T, view string, unwanted ...string) {
 	t.Helper()
 	for _, w := range unwanted {
-		if strings.Contains(view, w) {
+		if strings.Contains(view, w) || containsSplitRef(view, w) {
 			t.Errorf("view has %q:\n%s", w, view)
 		}
 	}

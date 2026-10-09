@@ -66,7 +66,8 @@ func boardRowY(m prBoardModel, i int) int { return boardHeadingY + prbTableChrom
 // wide it is.
 func boardCol(t *testing.T, m prBoardModel, c prbCol) (start, width int) {
 	t.Helper()
-	lay := m.tableLayout(m.painter(), m.viewWidth())
+	p := m.painter()
+	lay := m.tableLayout(&p, m.viewWidth())
 	i := slices.Index(lay.cols, c)
 	if i < 0 {
 		t.Fatalf("column %s is not shown", prbColTitles[c])
@@ -236,7 +237,8 @@ func TestBoardDragResizesAndKeepsWidths(t *testing.T) {
 	m, _, _ := newBoard(t, 190, 30, PRBoardOptions{Widths: kept})
 	x, w := boardCol(t, m, colAuthor)
 	gap := x + w
-	cols := len(m.tableLayout(m.painter(), 190).cols)
+	p := m.painter()
+	cols := len(m.tableLayout(&p, 190).cols)
 	m, _ = send(t, m, leftClick(gap, boardHeadingY))
 	if m.sort != SortUpdated {
 		t.Fatal("a click on a gap sorted")
@@ -250,7 +252,8 @@ func TestBoardDragResizesAndKeepsWidths(t *testing.T) {
 		t.Fatalf("drag far left: author %d, want the minimum %d", got, minColWidth)
 	}
 	m, _ = send(t, m, motion(gap+1000, boardHeadingY))
-	lay := m.tableLayout(m.painter(), 190)
+	p = m.painter()
+	lay := m.tableLayout(&p, 190)
 	if len(lay.cols) != cols || lay.total() > 190 {
 		t.Fatalf("drag far right pushed columns off: %d of %d shown, %d cells", len(lay.cols), cols, lay.total())
 	}

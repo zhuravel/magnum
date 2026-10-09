@@ -18,7 +18,7 @@ import (
 
 // helpContent is the keys and the legend, at most width-6 cells wide (the
 // box adds a border and padding): two columns of keys when they fit.
-func (p prbPainter) helpContent(width int) []string {
+func (p *prbPainter) helpContent(width int) []string {
 	inner := max(width-6, 10)
 	section := func(title string, hs []hint) string {
 		keyW := 0
@@ -118,7 +118,7 @@ func (p prbPainter) helpContent(width int) []string {
 
 // help is the help box centered in width x height, its content scrolled
 // by scroll lines; below counts the lines out of view.
-func (p prbPainter) help(width, height, scroll int) ([]string, int) {
+func (p *prbPainter) help(width, height, scroll int) ([]string, int) {
 	return p.box(p.helpContent(width), width, height, scroll)
 }
 
@@ -127,7 +127,7 @@ func cardInner(width int) int { return max(width-4, 4) }
 
 // card is the details of r in a bordered box of width x height, its
 // content scrolled by scroll lines; below counts the lines out of view.
-func (p prbPainter) card(r PRBoardRow, width, height, scroll int) ([]string, int) {
+func (p *prbPainter) card(r PRBoardRow, width, height, scroll int) ([]string, int) {
 	lines := p.cardContent(r, cardInner(width))
 	room := max(height-2, 1)
 	scroll = min(max(scroll, 0), max(len(lines)-room, 0))
@@ -137,7 +137,7 @@ func (p prbPainter) card(r PRBoardRow, width, height, scroll int) ([]string, int
 }
 
 // cardContent is the card's lines, each at most inner cells wide.
-func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
+func (p *prbPainter) cardContent(r PRBoardRow, inner int) []string {
 	var lines []string
 	add := func(s ...string) {
 		for _, l := range s {
@@ -471,7 +471,7 @@ func (p prbPainter) cardContent(r PRBoardRow, inner int) []string {
 // snoozeSentence says until when r is snoozed, since when and by whom, and
 // how to lift it: "Snoozed until 18:00 · set 15:58 by the board: no
 // automatic review starts (z lifts it)".
-func (p prbPainter) snoozeSentence(r PRBoardRow) string {
+func (p *prbPainter) snoozeSentence(r PRBoardRow) string {
 	s := "Snoozed until " + untilClock(r.SnoozedUntil, p.now)
 	if !r.SnoozedAt.IsZero() || r.SnoozedBy != "" {
 		s += " · set"
@@ -504,7 +504,7 @@ func stalemateSentence(urls []string) string {
 
 // repliesSentence says that n replies on magnum's review wait for its judge
 // (the LAST REVIEW cell's "↩n").
-func (p prbPainter) repliesSentence(n int) string {
+func (p *prbPainter) repliesSentence(n int) string {
 	s := textx.Count(n, "reply", "replies") + " not re-decided yet"
 	if p.g.mode == IconsASCII {
 		return s
@@ -518,7 +518,7 @@ const flagDismissedNote = "merged-unreviewed flag dismissed (M restores it)"
 
 // mergedUnreviewedSentence says that GitHub merged r before magnum reviewed
 // its last push: when, the commit magnum reviewed last and the merged head.
-func (p prbPainter) mergedUnreviewedSentence(r PRBoardRow) string {
+func (p *prbPainter) mergedUnreviewedSentence(r PRBoardRow) string {
 	when := "on GitHub"
 	if !r.ClosedAt.IsZero() {
 		when = r.ClosedAt.Local().Format("Jan 2 15:04") + " (" + HumanAgo(max(p.now.Sub(r.ClosedAt), time.Second)) + ")"
@@ -532,7 +532,7 @@ func (p prbPainter) mergedUnreviewedSentence(r PRBoardRow) string {
 
 // sinceSentence says what changed since the review, with a second line
 // when the counts are lower bounds.
-func (p prbPainter) sinceSentence(r PRBoardRow) []string {
+func (p *prbPainter) sinceSentence(r PRBoardRow) []string {
 	d := r.SinceReview
 	if d == nil {
 		return []string{p.st.Dim.Render("unknown: no compare yet")}
@@ -564,7 +564,7 @@ func (p prbPainter) sinceSentence(r PRBoardRow) []string {
 
 // lastReviewSentence is who reviewed, the verdict, when and on which
 // commit, with a second line when the head moved since.
-func (p prbPainter) lastReviewSentence(r PRBoardRow) []string {
+func (p *prbPainter) lastReviewSentence(r PRBoardRow) []string {
 	li := r.LastReview
 	if li == nil {
 		return []string{p.st.Dim.Render("none yet")}
@@ -593,7 +593,7 @@ func (p prbPainter) lastReviewSentence(r PRBoardRow) []string {
 
 // reviewerTable lists every reviewer: login, verdict, when, on which
 // commit and whether it is stale or requested.
-func (p prbPainter) reviewerTable(r PRBoardRow, inner int) []string {
+func (p *prbPainter) reviewerTable(r PRBoardRow, inner int) []string {
 	chipsOrder := slices.Clone(r.Reviewers)
 	slices.SortStableFunc(chipsOrder, func(a, b ReviewerInfo) int {
 		ma, mb := p.isMine(a.Login, a.Mine), p.isMine(b.Login, b.Mine)
@@ -649,7 +649,7 @@ func (p prbPainter) reviewerTable(r PRBoardRow, inner int) []string {
 // whom, newest first, mine starred ("Requested: ★ zhuravel by alice 2h ago ·
 // bob by alice 3d ago"), wrapped under the label; none when the PR shows no
 // request.
-func (p prbPainter) requestLines(r PRBoardRow, inner int) []string {
+func (p *prbPainter) requestLines(r PRBoardRow, inner int) []string {
 	if len(r.Requests) == 0 {
 		return nil
 	}
@@ -690,7 +690,7 @@ func requestAgo(d time.Duration) string {
 
 // timingParts are the round's stages and its total, styled: a running
 // stage in the accent color, a failed one in red.
-func (p prbPainter) timingParts(t RoundTimings) []string {
+func (p *prbPainter) timingParts(t RoundTimings) []string {
 	part := func(name string, d time.Duration, running, failed bool) string {
 		v := StageDuration(d)
 		switch {
@@ -716,7 +716,7 @@ const notReviewedSentence = "Open before magnum began watching this repository, 
 // what was posted instead, when the repository only lets it comment), the
 // findings by priority with the simplifications, and the earlier findings.
 // The nerd mode marks the decision with its verdict and each priority.
-func (p prbPainter) findingsLines(f FindingsInfo) []string {
+func (p *prbPainter) findingsLines(f FindingsInfo) []string {
 	decision := map[string]string{
 		"blocking":     "request changes",
 		"non_blocking": "comment (nothing blocks the merge)",
@@ -764,7 +764,7 @@ func (p prbPainter) findingsLines(f FindingsInfo) []string {
 // the required checks' states, who requires them and, when one was
 // skipped, why that matters. The nerd mode marks each state with its
 // emoji.
-func (p prbPainter) ciLines(ci CIInfo) []string {
+func (p *prbPainter) ciLines(ci CIInfo) []string {
 	mark := func(state string) string {
 		if m := p.g.ciMark[normCI(state)]; m != "" {
 			return m

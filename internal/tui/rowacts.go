@@ -10,6 +10,7 @@ package tui
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -475,8 +476,12 @@ func actionLabel(a rowAct, r actRow) string {
 
 // actionRun is what runs a on r: its name ("review talkable#7") and the call.
 // M on a merged PR whose flag a mute dismissed restores it with an unmute.
+// An action it has no case for gets a call that fails (unknownAction).
 func actionRun(a rowAct, r actRow) (what string, fn actionFunc) {
 	target := r.target()
+	if a < 0 || int(a) >= len(rowActDefs) {
+		return "action " + strconv.Itoa(int(a)) + " " + target, unknownAction(a)
+	}
 	what = rowActDefs[a].what + " " + target
 	// on calls a DashboardActions method on target.
 	on := func(call func(DashboardActions, context.Context, string) (ActionResult, error)) actionFunc {
@@ -531,6 +536,8 @@ func actionRun(a rowAct, r actRow) (what string, fn actionFunc) {
 			return rowActDefs[actUnmute].what + " " + target, on(DashboardActions.Unmute)
 		}
 		return what, on(DashboardActions.Mute)
+	case actUnmute:
+		return what, on(DashboardActions.Unmute)
 	case actSnooze:
 		if r.snoozed() {
 			return "unsnooze " + target, on(DashboardActions.Unsnooze)
@@ -539,7 +546,15 @@ func actionRun(a rowAct, r actRow) (what string, fn actionFunc) {
 			return act.Snooze(ctx, target, boardSnooze)
 		}
 	}
-	return what, on(DashboardActions.Unmute)
+	return what, unknownAction(a)
+}
+
+// unknownAction is the call of a row action actionRun has no case for: it
+// fails, so a key never runs another action's call.
+func unknownAction(a rowAct) actionFunc {
+	return func(context.Context, DashboardActions) (ActionResult, error) {
+		return ActionResult{}, fmt.Errorf("row action %d has no call", a)
+	}
 }
 
 // rowAction runs a on the row r: a refusal flashes at once with its reason

@@ -84,7 +84,8 @@ func TestPRBoardCICell(t *testing.T) {
 	// Worst first: failed, then not run, skipped, pending and passed. A
 	// check that did not run is not dimmed away: its name stays dim, its
 	// mark yellow.
-	if c := p0(pal).ciCell(ciRows()[6].CI); c[1].st.GetForeground() != defaultStyles.Dim.GetForeground() {
+	p := p0(pal)
+	if c := p.ciCell(ciRows()[6].CI); c[1].st.GetForeground() != defaultStyles.Dim.GetForeground() {
 		t.Error("a required check that never ran: its name is not dim")
 	}
 	for _, tc := range []struct {
@@ -102,7 +103,7 @@ func TestPRBoardCICell(t *testing.T) {
 		{[]CheckState{{Name: "ci / *", Label: "ci", State: "failed", Done: 3, Total: 3}}, "✗ ci"},
 		{[]CheckState{{Name: "ci / *", Label: "ci", State: "missing"}}, "– ci not run"},
 	} {
-		if got := ansi.Strip(p0(pal).ciCell(&CIInfo{State: "passed", Required: tc.req}).render(nil)); got != tc.want {
+		if got := ansi.Strip(p.ciCell(&CIInfo{State: "passed", Required: tc.req}).render(nil)); got != tc.want {
 			t.Errorf("required %v: %q, want %q", tc.req, got, tc.want)
 		}
 	}

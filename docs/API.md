@@ -15317,14 +15317,19 @@ type RoundsInfo struct {
 
 type SlotRow struct {
 	Name, Folder, PRRef, PRState, SlotState, DBs, Disk string
+	State                                              string // the slot's state: free, busy, held, …
+	Pinned                                             bool   // the slot is pinned (magnum pin)
 	URL                                                string // PR URL for b; optional (looked up in Queue by PRRef)
 	PRGHState                                          string // GitHub's state of the slot's PR: OPEN, CLOSED or MERGED; "" when unknown
 	// PRMergedUnreviewed and PRFlagDismissed are PRRow's MergedUnreviewed and
 	// FlagDismissed for the slot's PR; read with PRGHState.
 	PRMergedUnreviewed, PRFlagDismissed bool
 }
-    SlotRow is one review slot. Actions on a slot row target PRRef, or the slot
-    Name for pin/unpin/release when it holds no PR.
+    SlotRow is one review slot. Actions on a slot row target PRRef,
+    or the slot Name for pin/unpin/release when it holds no PR. SlotState is
+    the slot's state as the table shows it, with its flags ("held [pinned,
+    hold:<reason>]"); the actions read State and Pinned, never SlotState,
+    whose hold reason is free text.
 
 type SourceFunc func(ctx context.Context) (StatusData, error)
     SourceFunc adapts a function to DashboardSource.

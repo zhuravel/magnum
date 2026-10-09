@@ -36,7 +36,8 @@ func TestTheAutoCellSaysMagnumApprovedAsYou(t *testing.T) {
 	if needsMeShown(rows[0]) {
 		t.Error("an auto-approved row still shimmers as needing you")
 	}
-	if c := cellText(needsMePainter(IconsASCII, rows).stateWaitCell(rows[0])); c != " + auto " {
+	ascii := needsMePainter(IconsASCII, rows)
+	if c := cellText(ascii.stateWaitCell(rows[0])); c != " + auto " {
 		t.Errorf("ASCII cell %q", c)
 	}
 	for _, state := range []string{"reviewing", "rereview_pending"} {

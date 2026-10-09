@@ -91,18 +91,21 @@ func newActionBar(ctx context.Context, act DashboardActions, log *ActionLog, now
 	return actionBar{ctx: ctx, act: act, log: log, now: now, tick: tick}
 }
 
-// setFlash shows text in the footer for flashFor.
+// setFlash shows text in the footer for flashFor. The text may quote a
+// command's output: its escape sequences and control characters are dropped
+// here, once for every footer line.
 func (b *actionBar) setFlash(text string, isErr bool) tea.Cmd {
-	b.flash, b.flashErr, b.flashInfo, b.flashStuck = text, isErr, false, false
+	b.flash, b.flashErr, b.flashInfo, b.flashStuck = cleanText(text), isErr, false, false
 	b.flashSeq++
 	seq := b.flashSeq
 	return b.tick(flashFor, func(time.Time) tea.Msg { return flashExpireMsg{seq: seq} })
 }
 
 // failure shows a failed action's text in red until a key is pressed: it
-// may not be read in flashFor (the action log keeps it after).
+// may not be read in flashFor (the action log keeps it after). Its text is
+// cleaned as setFlash's is.
 func (b *actionBar) failure(text string) tea.Cmd {
-	b.flash, b.flashErr, b.flashInfo, b.flashStuck = text, true, false, true
+	b.flash, b.flashErr, b.flashInfo, b.flashStuck = cleanText(text), true, false, true
 	b.flashSeq++
 	return nil
 }
@@ -330,13 +333,18 @@ func (b *actionBar) flashFit(room int) string {
 // actionText is the footer line for a finished action.
 func actionText(msg actionDoneMsg) string {
 	if msg.err != nil {
-		return msg.what + ": " + oneLine(msg.err.Error())
+		return msg.what + ": " + errLine(msg.err)
 	}
 	if t := lastLine(msg.text); t != "" {
 		return t
 	}
 	return msg.what + ": done"
 }
+
+// errLine is err's message as a screen's error line draws it: on one line,
+// without escape sequences or control characters (a load or save error may
+// quote a command's output).
+func errLine(err error) string { return cleanText(err.Error()) }
 
 // loadContext bounds one refresh of a screen's data by loadTimeout.
 func loadContext(ctx context.Context) (context.Context, context.CancelFunc) {

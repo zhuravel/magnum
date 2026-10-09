@@ -23,7 +23,7 @@ func colSort(c prbCol) (PRSort, bool) {
 
 // tableLayout is the table's column layout at width w, dragged widths
 // applied, from the cache.
-func (m prBoardModel) tableLayout(p prbPainter, w int) prbLayout {
+func (m prBoardModel) tableLayout(p *prbPainter, w int) prbLayout {
 	rk := m.rowsKey(w)
 	return m.cache.layoutFor(rk, func() prbLayout {
 		nk := rk
@@ -159,7 +159,8 @@ func (m prBoardModel) click(ev tea.Mouse) (prBoardModel, tea.Cmd) {
 // headingClick sorts by the column under x (again: reverses it), or
 // starts resizing the column left of the gap under x.
 func (m prBoardModel) headingClick(x int) (prBoardModel, tea.Cmd) {
-	lay := m.tableLayout(m.painter(), m.viewWidth())
+	p := m.painter()
+	lay := m.tableLayout(&p, m.viewWidth())
 	i, gap := lay.colAt(x)
 	switch {
 	case i < 0:
@@ -210,7 +211,7 @@ func (m prBoardModel) resetWidths() (prBoardModel, tea.Cmd) {
 // them this run.
 func (m prBoardModel) widthsLoaded(msg widthsLoadedMsg) (prBoardModel, tea.Cmd) {
 	if msg.err != nil {
-		return m.fail("could not read the kept column widths: " + oneLine(msg.err.Error()))
+		return m.fail("could not read the kept column widths: " + errLine(msg.err))
 	}
 	if !m.widthsSet {
 		m.widths = prbWidthsFrom(msg.widths)
