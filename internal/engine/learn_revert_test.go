@@ -184,6 +184,92 @@ func TestARegressionMakesOneHeldRevertProposal(t *testing.T) {
 	}
 }
 
+// regressed sets up a version whose reviews had 2 of their 4 posted
+// findings declined or argued, against none of 4 for the skill before it.
+func (f *editFixture) regressed() store.LearnVersion {
+	f.h.t.Helper()
+	f.h.cfg.Learn.RegressionMinFindings = 4
+	now := f.h.clock.Now()
+	v := f.landVersion(editSkillText+editAddedRule, now.Add(-48*time.Hour))
+	pr := corpusPR(f.h, "talkable/talkable", 30)
+	postedWith(f.h, pr, now.Add(-72*time.Hour), 4, 0, "older")
+	postedWith(f.h, pr, now.Add(-24*time.Hour), 4, 2, v.SkillSHA)
+	return v
+}
+
+// A version a waiting proposal reverts already (the operator's `magnum
+// learn --revert`) gets no second revert from the scan, which marks it as
+// proposed and says nothing.
+func TestTheScanDoesNotRevertAVersionAProposalRevertsAlready(t *testing.T) {
+	f := newEditFixture(t, goodTurn)
+	f.noCases()
+	v := f.regressed()
+	manual, err := f.h.st.CreateLearnProposal(f.h.ctx, store.LearnProposalInput{Trigger: store.LearnTriggerRequest, BaseSHA: f.master,
+		Branch: "learn/20261005-091500", CandidateSHA: strings.Repeat("4", 40), State: store.LearnHeld, Reverts: v.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.scan()
+	if ps := f.proposals(); len(ps) != 1 || ps[0].ID != manual.ID {
+		t.Fatalf("proposals after the scan = %+v", ps)
+	}
+	if got, _ := f.h.e.getKV(f.h.ctx, KVLearnRegression); got != strconv.FormatInt(v.ID, 10) {
+		t.Fatalf("regression mark = %q", got)
+	}
+	if toasts := f.toasts(); strings.Contains(toasts, "regressed") {
+		t.Fatalf("toasts:\n%s", toasts)
+	}
+}
+
+// mergeBaseHook runs before ahead of each MergeBase, the first git call of
+// revertPlan, which maybeRegression makes after its checks.
+type mergeBaseHook struct {
+	LearnGit
+	before func()
+}
+
+func (g mergeBaseHook) MergeBase(ctx context.Context, dir, a, b string) (string, error) {
+	g.before()
+	return g.LearnGit.MergeBase(ctx, dir, a, b)
+}
+
+// A regression's revert that does not start (a drain began between the
+// scan's checks and the start) leaves the version unmarked, so the next
+// scan proposes it; the toast comes with the revert that started.
+func TestARegressionsRevertThatDidNotStartIsProposedAtTheNextScan(t *testing.T) {
+	f := newEditFixture(t, goodTurn)
+	f.noCases()
+	v := f.regressed()
+	drained := false
+	f.h.e.d.LearnGit = mergeBaseHook{LearnGit: f.git, before: func() {
+		if !drained {
+			drained = true
+			f.h.e.setKV(f.h.ctx, KVDaemonDraining, "1")
+		}
+	}}
+	f.scan()
+	if ps := f.proposals(); len(ps) != 0 {
+		t.Fatalf("proposals during a drain = %+v", ps)
+	}
+	if got, _ := f.h.e.getKV(f.h.ctx, KVLearnRegression); got != "" {
+		t.Fatalf("regression mark = %q, want none", got)
+	}
+	if toasts := f.toasts(); strings.Contains(toasts, "regressed") {
+		t.Fatalf("toasts before the revert started:\n%s", toasts)
+	}
+	f.h.e.delKV(f.h.ctx, KVDaemonDraining)
+	f.scan()
+	if ps := f.proposals(); len(ps) != 1 || ps[0].Reverts != v.ID || ps[0].Trigger != store.LearnTriggerRegression {
+		t.Fatalf("proposals after the drain = %+v", ps)
+	}
+	if got, _ := f.h.e.getKV(f.h.ctx, KVLearnRegression); got != strconv.FormatInt(v.ID, 10) {
+		t.Fatalf("regression mark = %q", got)
+	}
+	if toasts := f.toasts(); !strings.Contains(toasts, "skill version "+strconv.FormatInt(v.ID, 10)+" regressed") {
+		t.Fatalf("toasts:\n%s", toasts)
+	}
+}
+
 // A revert never lands at a tick: the gate holds it whatever it found (a
 // regression too, keeping its worktree for the review), and a passed one
 // waits for the operator's y.

@@ -1810,7 +1810,9 @@ hand then). The daemon proposes one by itself at the loop's scan, once per versi
 remembers it), when the newest version the daemon restarted on and the version before it each posted at
 least `regression_min_findings` (20) findings and the share of them authors declined or argued grew by
 `regression_points` (10) or more; the version before the first is the skill before the loop, over a window
-as long as the first version's. A toast says the version regressed, and another when its revert waits for
+as long as the first version's. It proposes none for a version a waiting or landed proposal reverts already
+(your `--revert` came first), and a revert that could not start (another learn job or a drain came first)
+is proposed at a later scan. A toast says the version regressed, and another when its revert waits for
 you.
 
 ```toml

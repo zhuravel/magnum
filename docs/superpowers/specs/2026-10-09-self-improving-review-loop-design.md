@@ -256,6 +256,9 @@ a model fallback stamped with its id; the skill before the first version counts 
 The editor's `inputs.json` carries the last 3 versions' measures. When a version with at least 20 posted
 findings has a `declined`+`argued` share higher by 10 points than the previous version's, the daemon
 creates one held revert proposal (`trigger = regression`) and toasts it. never twice for the same version.
+It creates none when a waiting or landed proposal reverts that version already (the operator's
+`--revert`), and the version is remembered only once its revert started (or none is possible), so a
+revert another learn job or a drain kept from starting is proposed at a later scan.
 A revert's DECISIONS entry ("Reverts skill version N: <why>") goes to the `## Learned rules` section too.
 
 ## 8. Scheduling, cost and configuration

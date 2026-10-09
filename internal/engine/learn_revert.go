@@ -381,14 +381,21 @@ func (e *Engine) requestLearnRevert(ctx context.Context, p LearnRevertPayload) (
 // of them authors declined or argued grew by [learn] regression_points or
 // more. The version before the first is the skill before the loop, over a
 // window as long as the first version's. KVLearnRegression keeps the
-// version, so a later scan proposes nothing more for it; an event and a
-// toast say so, and why when no revert is possible. It waits while another
-// learn job runs or a drain or infrastructure pause holds it.
+// version once its revert started, or once no revert is possible, so a
+// later scan proposes nothing more for it; an event and a toast say so,
+// and why when no revert is possible. A version a waiting or landed
+// proposal reverts already (the operator's `magnum learn --revert`) is
+// marked without a word. It waits while another learn job runs or a drain
+// or infrastructure pause holds it, and a revert that does not start (one
+// came first) leaves the version for the next scan.
 func (e *Engine) maybeRegression(ctx context.Context) {
 	if e.revertUnavailable() != "" || e.learnBusy() != "" || e.holdReason(ctx) != "" {
 		return
 	}
 	vs, err := e.st.LearnVersions(ctx)
+	if err != nil {
+		e.warnUnlessStopped(ctx, err, "skill regression: list the versions")
+	}
 	if err != nil || len(vs) == 0 || vs[0].RestartedAt == nil {
 		return
 	}
@@ -399,6 +406,9 @@ func (e *Engine) maybeRegression(ctx context.Context) {
 	}
 	minFindings := e.cfg.Learn.RegressionMinFindings
 	cur, err := e.st.VersionMeasure(ctx, v, nil)
+	if err != nil {
+		e.warnUnlessStopped(ctx, err, "skill regression: measure the newest version", "version", v.ID)
+	}
 	if err != nil || cur.Posted < minFindings {
 		return
 	}
@@ -407,6 +417,9 @@ func (e *Engine) maybeRegression(ctx context.Context) {
 		before, label = vs[1], fmt.Sprintf("version %d", vs[1].ID)
 	}
 	prev, err := e.st.VersionMeasure(ctx, before, &v)
+	if err != nil {
+		e.warnUnlessStopped(ctx, err, "skill regression: measure the version before", "version", v.ID)
+	}
 	if err != nil || prev.Posted < minFindings {
 		return
 	}
@@ -415,20 +428,32 @@ func (e *Engine) maybeRegression(ctx context.Context) {
 	if now-was < float64(e.cfg.Learn.RegressionPoints) {
 		return
 	}
-	e.setKV(ctx, KVLearnRegression, id)
+	reverts, err := e.st.LearnProposals(ctx, []string{store.LearnGating, store.LearnPassed, store.LearnHeld, store.LearnLanded})
+	if err != nil {
+		e.warnUnlessStopped(ctx, err, "skill regression: list the proposals that revert", "version", v.ID)
+		return
+	}
+	if slices.ContainsFunc(reverts, func(p store.LearnProposal) bool { return p.Reverts == v.ID }) {
+		e.setKV(ctx, KVLearnRegression, id)
+		return
+	}
 	why := fmt.Sprintf("the authors declined or argued %.0f%% of its %d posted findings, against %.0f%% of %d for %s", now, cur.Posted, was,
 		prev.Posted, label)
 	data := map[string]any{"version": v.ID, "share": now, "posted": cur.Posted, "previous_share": was, "previous_posted": prev.Posted}
 	title := fmt.Sprintf("skill version %d regressed", v.ID)
 	if _, _, err := e.revertPlan(ctx, v); err != nil {
+		e.setKV(ctx, KVLearnRegression, id)
 		e.event(ctx, "warn", learnSubject, "learn.regression", fmt.Sprintf("skill version %d regressed: %s; no revert: %s", v.ID, why,
 			oneLine(err.Error(), retroWhyRunes)), data)
 		e.info(notify.Item{Key: "learn-regression:" + id, Title: title, Line: title,
 			Body: oneLine(why+"; no revert proposal: "+err.Error(), 240)})
 		return
 	}
+	if started, _ := e.startRevert(ctx, v, store.LearnTriggerRegression, why); !started {
+		return // a stop or another learn job came first: the next scan tries again
+	}
+	e.setKV(ctx, KVLearnRegression, id)
 	e.event(ctx, "warn", learnSubject, "learn.regression", fmt.Sprintf("skill version %d regressed: %s; a revert is proposed", v.ID, why), data)
 	e.info(notify.Item{Key: "learn-regression:" + id, Title: title, Line: title,
 		Body: oneLine(why, 200) + "; a revert goes through the gate and waits for `magnum learn --review`."})
-	e.startRevert(ctx, v, store.LearnTriggerRegression, why)
 }

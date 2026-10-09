@@ -5828,6 +5828,18 @@ skill versions); people add theirs to the sections before it, at the end of the 
   counts once (`COUNT(DISTINCT review_id)`): a nudged or model-fallback round stamps its review id on
   each of its judge runs. Rejected: a `skill_sha` column on runs (a migration for what the prompt
   already says).
+- **The regression scan proposes no second revert, and remembers a version only once its revert
+  started** (2026-10-09, a review finding on stage 5 of the self-improving review loop).
+  `maybeRegression` did not look for a proposal that already reverts the version, so the operator's
+  `magnum learn --revert` was followed by a revert of the scan's for the same version (the manual path
+  never sets `KVLearnRegression`), two held reverts of which landing one makes the other conflict; and
+  it set the mark before `startRevert`, so a revert that did not start (a drain or another learn job
+  between the scan's checks and the start) lost that version's one revert for good. Now a version that a
+  `gating`, `passed`, `held` or `landed` proposal reverts is marked without an event or a toast; the
+  mark, the `learn.regression` event and the toast follow a revert that started, and a version no revert
+  is possible for is still marked with its event and toast at once. The scan logs the registry errors it
+  used to drop. Rejected: clearing the mark when the revert does not start (a crash between the two
+  would still lose it).
 
 ## Learned rules
 
