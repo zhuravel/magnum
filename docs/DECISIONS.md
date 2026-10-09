@@ -5388,3 +5388,49 @@ editing history. Code, config comments and prompts reference these by their head
   only after the agent finished (a failing golden test would make the proposal invalid without a chance
   to fix it) and letting the agent write `changes.json` in the run directory (the CLIs confine an
   agent's writes to its working directory).
+- **magnum learn is the review window** (2026-10-09, stage 3 of the self-improving review loop). A skill
+  proposal waits in the registry for the gate, the landing or the operator, so the operator needs one
+  place to see what the loop did and to decide what the gate could not. `magnum learn` lists the landed
+  versions newest first (their measures come with the loop's measurement stage), the proposals that wait
+  (`gating`, `passed`, `held`, oldest first, with their inputs), the last `failed` and `invalid` ones
+  with their reasons, an edit in flight (`KVLearnEditing`) and when the editor runs next; `--json`
+  prints `learnListData`. `--propose` sends `engine.ReqLearnPropose`; the daemon (`engine.requestEdit`)
+  refuses it under a drain, an infrastructure pause or a pause of the editor's CLI, when no edit can run
+  (no agent, no checkout, no git, no format gate), while an edit runs, while a proposal is `gating`,
+  `passed` or `held` (naming it and what decides it first), and when nothing new is left to learn from;
+  the CLI names a waiting proposal or a running edit itself before it queues anything. `--review` shows
+  the oldest `held` proposal: its inputs with their titles and lessons and what the editor did with
+  each, the diff of each of its files from its base to its commit (`git diff` in the checkout, which
+  holds the branch, so the review needs no worktree), the decision from the run directory's copy of
+  `changes.json` and the gate's JSON, all through `notes.Printable`, then y/N on a terminal only. `y`
+  sends `ReqLearnLand`, which this build refuses (the landing comes with the gate); `n` sends
+  `ReqLearnReject` with `--reason`: the daemon rejects the proposal compare-and-set from `held`, removes
+  its worktree and branch (only a worktree under the loop's directory and a `learn/` branch, whatever
+  the registry says), and rewrites the learned corpus at once (Amendment A3), so an input the rejection
+  dismissed (its second rejected proposal) is not replayed by `magnum eval run` until the next retro;
+  `learn.rejected` records it. Rejected: deciding in the CLI (the worktree and the corpus are the
+  daemon's, and a land must go through the daemon's landing), reviewing a `gating` proposal (the gate
+  has not looked at it) and a herdr popup for the window (not in this stage).
+- **The skill editor's checks hold the agent to its worktree and to what was checked** (2026-10-09,
+  amends "The editor proposes skill and prompt changes on a branch"). The inputs quote other people's
+  comments, so the agent's work is checked as untrusted, and what reaches the branch must be what magnum
+  checked. A check first requires the worktree's HEAD at the base and on its `learn/<run>` branch: a
+  commit of the agent's own would carry files nobody checked beneath magnum's, so it is refused, and
+  after magnum's commit the commit must sit on the base and change exactly the files checked
+  (`gitx.ChangedPaths`). Only the existing skill and prompts may change, in place: a new prompt would be
+  outside `make check-private`'s `git grep`, which reads tracked files only, and a deleted one falls
+  back to the embedded copy. A changed prompt keeps its `{{...}}` actions in order
+  (`learn.TemplateActions`): the goldens are regenerated, so a dropped field or a new condition would
+  pass the gate, and the daemon renders the agent's templates itself (a nested template call could blow
+  up). The diff's added lines go through `learn.ScrubLesson`'s rules too (no login or repository of the
+  inputs, no link), less the words the base design log already holds as whole words (magnum's own name,
+  an example organization), which leak nothing new; the decision gets the same exemption. The editor is
+  closed as soon as its turns end, before anything is committed or removed, and a worktree whose
+  fingerprint (every changed file, regenerated golden and `changes.json`) differs from what the last
+  passing check saw is invalid: a turn that timed out may still be writing. The run directory keeps the
+  `changes.json` that check read. The format gate's commands get `MAGNUM_DB` (the registry the daemon
+  uses), since `scripts/check-logins.sh` run from a worktree finds no registry of its own and skipped
+  the login check. A rejection and a retro no longer rewrite the learned corpus at the same time (one
+  mutex). Rejected: giving the agent its own git and checking its commits after the fact (the branch
+  must hold magnum's commit alone) and diffing the review against the proposal's file list only (`magnum
+  learn --review` diffs every file the branch changes and names one the list lacks).

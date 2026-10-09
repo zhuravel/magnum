@@ -154,6 +154,26 @@ func TestValidateEditRefusesAPRNumberInTheDecision(t *testing.T) {
 	if slices.ContainsFunc(problems, func(p string) bool { return strings.Contains(p, "pull request or issue number") }) {
 		t.Errorf("a removed line was checked: %q", problems)
 	}
+	// The added lines may not name an input's people or repository, nor
+	// hold a link, either: the skill is public.
+	for line, want := range map[string]string{
+		"+Ask alice before a lock.\n":                "the change names a person's login",
+		"+In talkable, check the lock.\n":            "the change names a repository or its owner",
+		"+See https://example.com/locks for more.\n": "the change holds a link",
+	} {
+		c, ch := goodEdit()
+		c.Diff += line
+		hasProblem(t, ValidateEdit(c, ch), want)
+	}
+}
+
+// A prompt's template actions are its {{...}} tokens, in order.
+func TestTemplateActionsListsTheActionsInOrder(t *testing.T) {
+	got := TemplateActions("Review {{.URL}} at `{{.HeadSHA}}`.\n{{- if .ForcePushed}} History was rewritten.{{end}}\n{{range .Reports}}\n- {{.Label}}\n{{end}}")
+	want := []string{"{{.URL}}", "{{.HeadSHA}}", "{{- if .ForcePushed}}", "{{end}}", "{{range .Reports}}", "{{.Label}}", "{{end}}"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("TemplateActions = %q", got)
+	}
 }
 
 func TestPinsRoundTrip(t *testing.T) {

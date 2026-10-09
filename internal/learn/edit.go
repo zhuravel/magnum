@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -222,9 +223,9 @@ type EditCheck struct {
 // at most EditReasonRunes; every changed file is an allowed one and listed
 // edited, and a file listed edited changed; the skill is within its cap and
 // keeps every pin; the diff's added lines and the decision pass
-// notes.CheckLeaks; and the decision is 1 to DecisionMaxRunes runes that
-// ScrubLesson keeps as a general lesson (no pull request number, link,
-// login or repository).
+// notes.CheckLeaks and ScrubLesson's rules for a general lesson (no pull
+// request number, link, login or repository); and the decision is 1 to
+// DecisionMaxRunes runes.
 func ValidateEdit(c EditCheck, changes Changes) []string {
 	var problems []string
 	add := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
@@ -315,8 +316,12 @@ func ValidateEdit(c EditCheck, changes Changes) []string {
 		}
 	}
 
-	for _, leak := range notes.CheckLeaks(addedLines(c.Diff), c.Leaks) {
+	added := addedLines(c.Diff)
+	for _, leak := range notes.CheckLeaks(added, c.Leaks) {
 		add("the change %s", leak)
+	}
+	if _, why := ScrubLesson(added, store.MissScopeGeneral, c.People, c.Own, c.Repos); why != "" && why != LessonIssueRef {
+		add("the change %s", scrubProblem(why)) // an issue reference is CheckLeaks'
 	}
 	decision := strings.TrimSpace(changes.Decision)
 	if c.Decision != "" {
@@ -393,6 +398,16 @@ func addedLines(diff string) string {
 		}
 	}
 	return b.String()
+}
+
+// templateActionRe matches a Go template action, {{ ... }}.
+var templateActionRe = regexp.MustCompile(`(?s)\{\{.*?\}\}`)
+
+// TemplateActions lists the template actions of a prompt in order: an edit
+// of the prompts may change the text around them, never them (a dropped
+// field, a new define or template call, a changed condition).
+func TemplateActions(text string) []string {
+	return templateActionRe.FindAllString(text, -1)
 }
 
 // DecisionWidth is the design log's line width.

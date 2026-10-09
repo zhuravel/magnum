@@ -27,8 +27,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/zhuravel/magnum/internal/agents"
@@ -108,7 +110,9 @@ type LearnGit interface {
 	WorktreeAdd(ctx context.Context, mainClone, path, ref string, detach bool, branch string) error
 	WorktreeDiscard(ctx context.Context, repo, dir string) error
 	StatusPaths(ctx context.Context, dir string) ([]gitx.StatusEntry, error)
+	CurrentBranch(ctx context.Context, repo string) (string, error)
 	CommitAll(ctx context.Context, dir, message string, paths ...string) (string, error)
+	ChangedPaths(ctx context.Context, dir, base, head string, pathspecs ...string) ([]string, error)
 	BranchDelete(ctx context.Context, mainClone, branch string, force bool) error
 }
 
@@ -372,6 +376,15 @@ func (e *Engine) editInputs(ctx context.Context) (learn.EditInputs, learn.EditCh
 	return in, check, nil
 }
 
+// unpublished keeps the words of ws that doc does not hold as a whole word
+// (case-insensitively).
+func unpublished(ws []string, doc []byte) []string {
+	return slices.DeleteFunc(slices.Clone(ws), func(w string) bool {
+		rx, err := regexp.Compile(`(?i)(?:^|[^\pL\pN])` + regexp.QuoteMeta(w) + `(?:[^\pL\pN]|$)`)
+		return err == nil && rx.Match(doc)
+	})
+}
+
 // compactWords drops empty and repeated words.
 func compactWords(ws []string) []string {
 	out := slices.DeleteFunc(slices.Clone(ws), func(w string) bool { return strings.TrimSpace(w) == "" })
@@ -447,6 +460,7 @@ func (e *Engine) runEditAt(ctx context.Context, trigger string, start time.Time)
 	if err != nil {
 		return stop(oneLine(err.Error(), retroWhyRunes))
 	}
+	cand.base, cand.branch = base, branch
 	prompt, sum, err := e.editPrompt(run, inputs.SkillCap)
 	if err != nil {
 		return stop(oneLine(err.Error(), retroWhyRunes))
@@ -457,16 +471,25 @@ func (e *Engine) runEditAt(ctx context.Context, trigger string, start time.Time)
 	if err != nil {
 		return stop("the editor cannot start: " + oneLine(err.Error(), retroWhyRunes))
 	}
-	defer func() {
+	closeEditor := sync.OnceFunc(func() {
 		cctx, cancel := context.WithTimeout(octx, retroCloseTimeout)
 		defer cancel()
 		if err := ed.Close(cctx); err != nil {
 			e.event(cctx, "warn", learnSubject, "learn.edit_close", "skill edit: closing the editor: "+oneLine(err.Error(), retroWhyRunes), nil)
 		}
-	}()
+	})
+	defer closeEditor()
 	res, err := ed.Edit(ctx, EditJob{Run: run, Prompt: prompt, Check: func() (learn.Changes, []string) {
 		return e.editCheck(ctx, run, cand, inputs, check)
 	}})
+	// The agent writes nothing more: what is committed below is what the
+	// last check saw, or nothing.
+	closeEditor()
+	if err == nil && res.Pause == nil && len(res.Problems) == 0 && ctx.Err() == nil {
+		if fp, ferr := e.editFingerprint(octx, run.Worktree); ferr != nil || fp != cand.last.fp {
+			res.Problems = []string{"the worktree changed after its last check (the agent wrote on after its answer), so none of it is committed"}
+		}
+	}
 	switch {
 	case res.Pause != nil:
 		if res.Pause.Kind == string(agents.HealthUsageLimit) || res.Pause.Kind == string(agents.HealthLoginRequired) {
@@ -520,18 +543,28 @@ func (e *Engine) runEditAt(ctx context.Context, trigger string, start time.Time)
 }
 
 // editCandidate is what an editor run knows of its worktree before the
-// editor starts: the allowed files' text at the base (by path), and the
-// pins.
+// editor starts: the base commit and the branch the worktree must stay on,
+// the allowed files' text at the base (by path), and the pins; last is what
+// the last check that passed saw.
 type editCandidate struct {
-	orig map[string][]byte
-	pins []string
+	base, branch string
+	orig         map[string][]byte
+	pins         []string
+	last         *editSnapshot
+}
+
+// editSnapshot is the worktree as a check that passed saw it: its
+// fingerprint (editFingerprint) and changes.json as it was read.
+type editSnapshot struct {
+	fp      string
+	changes []byte
 }
 
 // prepareEdit reads the worktree's pins and skill, fills the inputs' size
 // and cap, keeps the allowed files' text at the base, and writes inputs.json
 // and pins.json into the run directory.
 func (e *Engine) prepareEdit(run EditRun, inputs *learn.EditInputs, check *learn.EditCheck) (editCandidate, error) {
-	cand := editCandidate{orig: map[string][]byte{}}
+	cand := editCandidate{orig: map[string][]byte{}, last: &editSnapshot{}}
 	b, err := fsx.ReadRegular(filepath.Join(run.Worktree, filepath.FromSlash(learn.PinsSource)), 1<<20)
 	if err != nil {
 		return cand, fmt.Errorf("the skill's pins (%s): %w", learn.PinsSource, err)
@@ -563,6 +596,11 @@ func (e *Engine) prepareEdit(run EditRun, inputs *learn.EditInputs, check *learn
 		return cand, fmt.Errorf("the worktree has no %s", learn.SkillFile)
 	}
 	inputs.SkillBytes = len(skill)
+	// A login or a repository's word the public design log already holds
+	// (magnum's own name, an example organization) leaks nothing new.
+	if doc, err := fsx.ReadRegular(filepath.Join(run.Worktree, filepath.FromSlash(learn.DecisionsFile)), 64<<20); err == nil {
+		check.People, check.Repos = unpublished(check.People, doc), unpublished(check.Repos, doc)
+	}
 	if err := os.MkdirAll(run.Dir, 0o700); err != nil {
 		return cand, err
 	}
@@ -602,7 +640,8 @@ func regenerated(s gitx.StatusEntry) bool {
 }
 
 // editChanged lists what the editor changed in the worktree: every status
-// entry but changes.json and the golden files the format gate rewrites.
+// entry but changes.json and the golden files the format gate rewrites (a
+// rename both its paths).
 func (e *Engine) editChanged(ctx context.Context, wt string) ([]string, []string, error) {
 	entries, err := e.d.LearnGit.StatusPaths(ctx, wt)
 	if err != nil {
@@ -616,20 +655,59 @@ func (e *Engine) editChanged(ctx context.Context, wt string) ([]string, []string
 			goldens = append(goldens, s.Path)
 		default:
 			changed = append(changed, s.Path)
+			if s.OrigPath != "" {
+				changed = append(changed, s.OrigPath)
+			}
 		}
 	}
 	slices.Sort(changed)
 	slices.Sort(goldens)
-	return changed, goldens, nil
+	return slices.Compact(changed), goldens, nil
 }
 
-// editCheck reads and checks what the editor wrote: changes.json, the
-// changed files (learn.ValidateEdit against the inputs, the pins, the cap
-// and the leak rules), then the candidate's prompts (CheckPrompts on the
-// config pointed at the worktree), then the format gate. The first stage
-// with problems returns them, for the nudge or the registry.
+// editFingerprint sums up the worktree as a check sees it: every changed
+// file and regenerated golden, by path, with its content, and changes.json.
+func (e *Engine) editFingerprint(ctx context.Context, wt string) (string, error) {
+	changed, goldens, err := e.editChanged(ctx, wt)
+	if err != nil {
+		return "", err
+	}
+	h := sha256.New()
+	for _, p := range slices.Concat([]string{learn.ChangesFile}, changed, goldens) {
+		body, err := fsx.ReadRegular(filepath.Join(wt, filepath.FromSlash(p)), notes.MaxFileBytes)
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+			body = []byte("\x00missing")
+		case err != nil:
+			return "", err
+		}
+		fmt.Fprintf(h, "%s\x00%d\x00", p, len(body))
+		h.Write(body)
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// editCheck reads and checks what the editor wrote: the worktree still on
+// its branch at the base (the agent commits nothing), changes.json, the
+// changed files (existing allowed files only, a prompt's template actions
+// kept, then learn.ValidateEdit against the inputs, the pins, the cap and
+// the leak rules), then the candidate's prompts (CheckPrompts on the config
+// pointed at the worktree), then the format gate. The first stage with
+// problems returns them, for the nudge or the registry; a check that
+// passes records what it saw (cand.last).
 func (e *Engine) editCheck(ctx context.Context, run EditRun, cand editCandidate, inputs learn.EditInputs, check learn.EditCheck) (learn.Changes, []string) {
 	wt := run.Worktree
+	var problems []string
+	if head, err := e.d.LearnGit.RevParse(ctx, wt, "HEAD"); err != nil || head != cand.base {
+		problems = append(problems, "the worktree's HEAD moved from the commit it started at: commit nothing, reset nothing and switch no branch "+
+			"(magnum commits the change)")
+	}
+	if b, err := e.d.LearnGit.CurrentBranch(ctx, wt); err != nil || b != cand.branch {
+		problems = append(problems, "the worktree is no longer on its branch "+cand.branch)
+	}
+	if len(problems) > 0 {
+		return learn.Changes{}, problems
+	}
 	b, err := fsx.ReadRegular(filepath.Join(wt, learn.ChangesFile), learn.ChangesMaxBytes)
 	if errors.Is(err, os.ErrNotExist) {
 		return learn.Changes{}, []string{learn.ChangesFile + " was not written"}
@@ -645,7 +723,6 @@ func (e *Engine) editCheck(ctx context.Context, run EditRun, cand editCandidate,
 	if err != nil {
 		return changes, []string{"the worktree's status: " + oneLine(err.Error(), retroWhyRunes)}
 	}
-	var problems []string
 	check.Inputs, check.Changed = inputs, changed
 	check.Skill = cand.orig[learn.SkillFile]
 	var diff strings.Builder
@@ -653,15 +730,26 @@ func (e *Engine) editCheck(ctx context.Context, run EditRun, cand editCandidate,
 		if !learn.AllowedEditFile(p) {
 			continue
 		}
+		orig, existed := cand.orig[p]
 		body, err := fsx.ReadRegular(filepath.Join(wt, filepath.FromSlash(p)), notes.MaxFileBytes)
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
+		switch {
+		case !existed:
+			problems = append(problems, p+" is a new file: change only the skill and the prompts that exist")
+			continue
+		case errors.Is(err, os.ErrNotExist):
+			problems = append(problems, p+" was deleted: change the skill and the prompts, delete none of them")
+			continue
+		case err != nil:
 			problems = append(problems, fmt.Sprintf("%s cannot be read: %s", p, oneLine(err.Error(), retroWhyRunes)))
 			continue
+		}
+		if strings.HasPrefix(p, "prompts/") && !slices.Equal(learn.TemplateActions(string(orig)), learn.TemplateActions(string(body))) {
+			problems = append(problems, p+" changes its template actions ({{...}}): keep every action as it is, and change only the text around them")
 		}
 		if p == learn.SkillFile {
 			check.Skill = body
 		}
-		diff.WriteString(notes.Unified("a/"+p, "b/"+p, string(cand.orig[p]), string(body), 0))
+		diff.WriteString(notes.Unified("a/"+p, "b/"+p, string(orig), string(body), 0))
 	}
 	check.Diff = diff.String()
 	if problems = append(problems, learn.ValidateEdit(check, changes)...); len(problems) > 0 {
@@ -680,6 +768,11 @@ func (e *Engine) editCheck(ctx context.Context, run EditRun, cand editCandidate,
 				oneLine(err.Error(), retroWhyRunes), lastLines(execx.Redact(out), editGateLines))}
 		}
 	}
+	fp, err := e.editFingerprint(ctx, wt)
+	if err != nil {
+		return changes, []string{"the worktree cannot be read: " + oneLine(err.Error(), retroWhyRunes)}
+	}
+	*cand.last = editSnapshot{fp: fp, changes: b}
 	return changes, nil
 }
 
@@ -701,22 +794,18 @@ func lastLines(s string, n int) string {
 	return strings.Join(lines, "\n")
 }
 
-// commitEdit keeps a copy of changes.json in the run directory and takes it
-// out of the worktree, appends the decision to the worktree's design log
-// and commits the editor's files, the regenerated goldens and the log on
-// the branch: the decision's headline, the inputs it answers by id, the
-// skill's byte accounting. It returns the commit and its files.
+// commitEdit keeps the changes.json the last check read in the run
+// directory and takes the file out of the worktree, appends the decision to
+// the worktree's design log and commits the editor's files, the regenerated
+// goldens and the log on the branch: the decision's headline, the inputs it
+// answers by id, the skill's byte accounting. The commit must sit on the
+// base and change exactly those files. It returns the commit and its files.
 func (e *Engine) commitEdit(ctx context.Context, run EditRun, cand editCandidate, inputs learn.EditInputs, changes learn.Changes, start time.Time) (string, []string, error) {
 	wt := run.Worktree
-	answer := filepath.Join(wt, learn.ChangesFile)
-	b, err := fsx.ReadRegular(answer, learn.ChangesMaxBytes)
-	if err != nil {
+	if err := fsx.WriteFileAtomic(filepath.Join(run.Dir, learn.ChangesFile), cand.last.changes, 0o600); err != nil {
 		return "", nil, err
 	}
-	if err := fsx.WriteFileAtomic(filepath.Join(run.Dir, learn.ChangesFile), b, 0o600); err != nil {
-		return "", nil, err
-	}
-	if err := os.Remove(answer); err != nil {
+	if err := os.Remove(filepath.Join(wt, learn.ChangesFile)); err != nil {
 		return "", nil, err
 	}
 	changed, goldens, err := e.editChanged(ctx, wt)
@@ -753,19 +842,173 @@ func (e *Engine) commitEdit(ctx context.Context, run EditRun, cand editCandidate
 	head, _ := learn.Headline(changes.Decision)
 	msg := fmt.Sprintf("%s\n\nThe skill editor's proposal (run %s) answers %s. SKILL.md %d to %d bytes (cap %d). Changed: %s. No new dependencies.\n",
 		head, run.ID, strings.Join(parts, ", "), len(cand.orig[learn.SkillFile]), len(skill), inputs.SkillCap, strings.Join(files, ", "))
-	sha, err := e.d.LearnGit.CommitAll(ctx, wt, msg, files...)
-	return sha, files, err
+	git := e.d.LearnGit
+	sha, err := git.CommitAll(ctx, wt, msg, files...)
+	if err != nil {
+		return "", nil, err
+	}
+	parent, err := git.RevParse(ctx, wt, sha+"^")
+	if err != nil || parent != cand.base {
+		return "", nil, errors.Join(fmt.Errorf("the commit %s does not sit on the base %s", learnShort(sha), learnShort(cand.base)), err)
+	}
+	got, err := git.ChangedPaths(ctx, wt, cand.base, sha)
+	if err != nil {
+		return "", nil, err
+	}
+	slices.Sort(got)
+	if !slices.Equal(got, files) {
+		return "", nil, fmt.Errorf("the commit changes %s, not the files checked (%s)", strings.Join(got, ", "), strings.Join(files, ", "))
+	}
+	return sha, files, nil
+}
+
+// learnShort is a commit's first 7 characters.
+func learnShort(sha string) string {
+	if len(sha) > 7 {
+		return sha[:7]
+	}
+	return sha
 }
 
 // dropCandidate removes an edit's worktree and its branch; what fails is
-// logged.
+// logged. Only a worktree under Layout.LearnWorktrees and a learn/ branch
+// are touched, whatever the registry says, and nothing without a checkout.
 func (e *Engine) dropCandidate(ctx context.Context, wt, branch string) {
-	if err := e.d.LearnGit.WorktreeDiscard(ctx, e.d.Checkout, wt); err != nil {
-		e.log.Warn("skill edit: remove the worktree", "worktree", wt, "err", err)
+	if e.d.LearnGit == nil || e.d.Checkout == "" {
+		return
+	}
+	if rel, err := filepath.Rel(e.d.Layout.LearnWorktrees(), wt); err == nil && rel != "." && !strings.HasPrefix(rel, "..") &&
+		!strings.Contains(rel, string(filepath.Separator)) {
+		if err := e.d.LearnGit.WorktreeDiscard(ctx, e.d.Checkout, wt); err != nil {
+			e.log.Warn("skill edit: remove the worktree", "worktree", wt, "err", err)
+		}
+	}
+	if !strings.HasPrefix(branch, learnBranchPrefix) {
+		return
 	}
 	if err := e.d.LearnGit.BranchDelete(ctx, e.d.Checkout, branch, true); err != nil {
 		e.log.Warn("skill edit: delete the branch", "branch", branch, "err", err)
 	}
+}
+
+// editToolPause is why the editor cannot work now ("" = it can): its CLI
+// is paused. Without an editor nothing needs the CLI.
+func (e *Engine) editToolPause(ctx context.Context) string {
+	if e.d.Editor == nil {
+		return ""
+	}
+	return e.kindPauseReason(ctx, []string{e.cfg.EditorRole().AgentKind()})
+}
+
+// requestEdit serves `magnum learn --propose`: a skill edit now, whatever
+// [learn] editor says, unless a drain, an infrastructure pause or a pause
+// of the editor's CLI holds it, nothing can run it (editUnavailable), one
+// runs, a proposal waits for the gate, the landing or the operator (the
+// refusal names it), or there is nothing to learn from.
+func (e *Engine) requestEdit(ctx context.Context, _ LearnProposePayload) (string, error) {
+	if reason := cmp.Or(e.holdReason(ctx), e.editToolPause(ctx)); reason != "" {
+		return "", fmt.Errorf("no skill edit now: %s", reason)
+	}
+	e.editMu.Lock()
+	running, since := e.editCancel != nil, e.editStarted
+	e.editMu.Unlock()
+	if running {
+		return "", fmt.Errorf("a skill edit is running (started %s); `magnum learn` lists it", since.Local().Format("15:04"))
+	}
+	waiting, err := e.st.LearnProposals(ctx, []string{store.LearnGating, store.LearnPassed, store.LearnHeld})
+	if err != nil {
+		return "", err
+	}
+	if len(waiting) > 0 {
+		p := waiting[len(waiting)-1] // the oldest
+		next := map[string]string{store.LearnGating: "the gate decides it first", store.LearnPassed: "it lands first",
+			store.LearnHeld: "`magnum learn --review` lands or rejects it first"}[p.State]
+		return "", fmt.Errorf("proposal %d is %s: %s", p.ID, p.State, next)
+	}
+	inputs, _, err := e.editInputs(ctx)
+	if err != nil {
+		return "", err
+	}
+	if len(inputs.IDs()) == 0 {
+		return "", errors.New("nothing to learn from: no general miss of P0 to P2 and no general finding declined as wrong or over-ranked is new " +
+			"(`magnum misses --all` and `magnum misses --declines --all` list them)")
+	}
+	if e.d.DryRun { // a dry run wires no editor: it records what it would do
+		e.rec.Record(ctx, learnSubject, "learn_edit", "a skill edit from "+textx.Count(len(inputs.IDs()), "input", "inputs"))
+		return "dry run: would run the skill editor", nil
+	}
+	if why := e.editUnavailable(); why != "" {
+		return "", fmt.Errorf("no skill edit: %s", why)
+	}
+	started, at := e.startEdit(ctx, store.LearnTriggerRequest)
+	switch {
+	case !started && at.IsZero():
+		return "", fmt.Errorf("no skill edit now: %s", cmp.Or(e.stopping(ctx), "the daemon is stopping"))
+	case !started:
+		return "", fmt.Errorf("a skill edit is running (started %s); `magnum learn` lists it", at.Local().Format("15:04"))
+	}
+	return fmt.Sprintf("skill edit started from %s; `magnum learn` lists its proposal, and a toast says if it stops or is invalid",
+		textx.Count(len(inputs.IDs()), "input", "inputs")), nil
+}
+
+// requestLearnReject serves the n of `magnum learn --review`: the held
+// proposal is rejected with the operator's reason, which the next edit
+// reads; its worktree and branch go, its inputs go back to new or, once in
+// two rejected proposals, are dismissed, and the learned corpus is
+// rewritten at once, so a dismissed input's case is not replayed until the
+// next retro (Amendment A3).
+func (e *Engine) requestLearnReject(ctx context.Context, p LearnDecisionPayload) (string, error) {
+	prop, err := e.st.LearnProposalByID(ctx, p.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		return "", fmt.Errorf("there is no skill proposal %d (`magnum learn` lists them)", p.ID)
+	}
+	if err != nil {
+		return "", err
+	}
+	if prop.State != store.LearnHeld {
+		return "", fmt.Errorf("proposal %d is %s: only a held proposal waits for review", p.ID, prop.State)
+	}
+	if _, err := e.st.DecideLearnProposal(ctx, p.ID, []string{store.LearnHeld}, store.LearnRejected, strings.TrimSpace(p.Reason), e.now(), nil); err != nil {
+		return "", err
+	}
+	octx := context.WithoutCancel(ctx)
+	e.dropCandidate(octx, prop.Scratch, prop.Branch)
+	if err := e.syncLearnedCorpus(octx); err != nil {
+		e.log.Warn("skill edit: rewrite the learned corpus after a rejection", "proposal", p.ID, "err", err)
+	}
+	moved := map[string]int{}
+	if ins, err := e.st.LearnProposalInputs(octx, p.ID); err == nil {
+		for _, in := range ins {
+			moved[in.State]++
+		}
+	}
+	e.event(octx, "info", learnSubject, "learn.rejected", fmt.Sprintf("skill proposal %d rejected by the operator", p.ID),
+		map[string]any{"proposal": p.ID, "new": moved[store.MissNew], "dismissed": moved[store.MissDismissed]})
+	msg := fmt.Sprintf("rejected proposal %d", p.ID)
+	if strings.TrimSpace(p.Reason) != "" {
+		msg += "; the next edit reads why"
+	}
+	if n := moved[store.MissNew]; n > 0 {
+		msg += "; " + textx.Count(n, "input", "inputs") + " back to new for the next edit"
+	}
+	if n := moved[store.MissDismissed]; n > 0 {
+		msg += fmt.Sprintf("; %s dismissed after %d rejected proposals", textx.Count(n, "input", "inputs"), store.MissDismissRejections)
+	}
+	return msg, nil
+}
+
+// requestLearnLand serves the y of `magnum learn --review`. The landing
+// (the fast-forward of the checkout's master, the version, the restart)
+// comes with the loop's gate; until then a held proposal is not landed.
+func (e *Engine) requestLearnLand(ctx context.Context, p LearnDecisionPayload) (string, error) {
+	prop, err := e.st.LearnProposalByID(ctx, p.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		return "", fmt.Errorf("there is no skill proposal %d (`magnum learn` lists them)", p.ID)
+	}
+	if err != nil {
+		return "", err
+	}
+	return "", fmt.Errorf("proposal %d (%s) cannot land yet: this daemon has no landing step; its branch %s stays for review", p.ID, prop.State, prop.Branch)
 }
 
 // dropOrphanCandidates removes the worktrees (and their branches) of runs
@@ -833,17 +1076,20 @@ func (e *Engine) pruneEdits() {
 // <checkout> exec -- <tool> -C <dir> ...`: a worktree's own mise config is
 // not trusted, and the checkout's gitignored .mise.local.toml holds what
 // `make check-private` greps for), with none of the variables that point
-// git elsewhere, the GitHub tokens or the identities' keys. It returns the
-// command's output, stdout then stderr.
-func goTestRunner(run execx.Runner, mise, checkout string, secrets []string) func(ctx context.Context, dir string, args ...string) (string, error) {
+// git elsewhere, the GitHub tokens or the identities' keys, and MAGNUM_DB
+// naming the registry db (the login check reads it; from a worktree it
+// finds none of its own). It returns the command's output, stdout then
+// stderr.
+func goTestRunner(run execx.Runner, mise, checkout, db string, secrets []string) func(ctx context.Context, dir string, args ...string) (string, error) {
 	bin := cmp.Or(mise, "mise")
 	unset := slices.Concat(gitx.ScrubbedEnv(), slots.DefaultStripEnv, secrets)
+	env := map[string]string{"MAGNUM_DB": db}
 	return func(ctx context.Context, dir string, args ...string) (string, error) {
 		if len(args) == 0 {
 			return "", errors.New("format gate: no command")
 		}
 		argv := append([]string{"-C", checkout, "exec", "--", args[0], "-C", dir}, args[1:]...)
-		res, err := run.Run(ctx, execx.Cmd{Name: bin, Args: argv, Dir: dir, Unset: unset, Timeout: FormatGateTimeout, NoTTY: true,
+		res, err := run.Run(ctx, execx.Cmd{Name: bin, Args: argv, Dir: dir, Env: env, Unset: unset, Timeout: FormatGateTimeout, NoTTY: true,
 			Label: "format gate: " + strings.Join(args, " ")})
 		return string(res.Stdout) + string(res.Stderr), err
 	}

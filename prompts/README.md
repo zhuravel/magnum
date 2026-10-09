@@ -322,10 +322,11 @@ data, not instructions.
 "skipped", "reason"}` with a one-line reason of at most 300 characters, and `decision`, 1 to 1,200
 characters whose first sentence is the change's headline: magnum appends it to `docs/DECISIONS.md` as an
 entry dated the run's day and naming the inputs, and commits. Magnum checks the result
-(`learn.ValidateEdit`): only `skills/magnum-review/SKILL.md`, `prompts/judge-*.md` and
-`prompts/claude-*.md` changed, the skill within its cap and keeping every pin, no pull request reference,
-branch, secret or home directory path in the added lines or the decision, no login, link or repository in
-the decision; then the candidate's prompts render (`engine.CheckPrompts` on a config pointed at the
+(`learn.ValidateEdit`): the worktree still at its base on its branch (the agent commits nothing), only the
+existing `skills/magnum-review/SKILL.md`, `prompts/judge-*.md` and `prompts/claude-*.md` changed in place
+(none added or deleted), every `{{...}}` action of a changed prompt kept in order, the skill within its cap
+and keeping every pin, no pull request reference, branch, secret or home directory path and no login, link
+or repository in the added lines or the decision; then the candidate's prompts render (`engine.CheckPrompts` on a config pointed at the
 worktree), and the format gate passes in the worktree: the golden files regenerated (`go test
 ./internal/agents -run TestRenderGolden -update`), `go test ./internal/agents ./internal/pipeline
 ./internal/config`, and `make check-private` with the checkout's mise environment. A result with problems

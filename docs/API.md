@@ -4616,6 +4616,12 @@ const (
 	ReqIdentityVerdict = "identity_verdict"
 	// ReqRetro starts a retro now (RetroPayload, retro.go).
 	ReqRetro = "retro"
+	// ReqLearnPropose starts a skill edit now (LearnProposePayload,
+	// learn_edit.go); ReqLearnLand lands a held proposal and ReqLearnReject
+	// rejects it (LearnDecisionPayload), as `magnum learn --review` asks.
+	ReqLearnPropose = "learn_propose"
+	ReqLearnLand    = "learn_land"
+	ReqLearnReject  = "learn_reject"
 )
     Request kinds (requests.kind) the daemon consumes.
 
@@ -5595,15 +5601,28 @@ type Inventory interface {
 }
     Inventory is the reconcile scanner (*inventory.Scanner).
 
+type LearnDecisionPayload struct {
+	ID     int64  `json:"id"`
+	Reason string `json:"reason,omitempty"`
+}
+    LearnDecisionPayload is the operator's answer to a held skill proposal
+    (`magnum learn --review`): land it (ReqLearnLand) or reject it
+    (ReqLearnReject) with Reason, which the next edit reads.
+
 type LearnGit interface {
 	RevParse(ctx context.Context, dir, ref string) (string, error)
 	WorktreeAdd(ctx context.Context, mainClone, path, ref string, detach bool, branch string) error
 	WorktreeDiscard(ctx context.Context, repo, dir string) error
 	StatusPaths(ctx context.Context, dir string) ([]gitx.StatusEntry, error)
+	CurrentBranch(ctx context.Context, repo string) (string, error)
 	CommitAll(ctx context.Context, dir, message string, paths ...string) (string, error)
+	ChangedPaths(ctx context.Context, dir, base, head string, pathspecs ...string) ([]string, error)
 	BranchDelete(ctx context.Context, mainClone, branch string, force bool) error
 }
     LearnGit is the git work of an editor run (*gitx.Client).
+
+type LearnProposePayload struct{}
+    LearnProposePayload is a `magnum learn --propose` request.
 
 type MachineGroup struct {
 	Repo string // owner/name
@@ -9452,15 +9471,20 @@ func ScrubLesson(lesson, scope string, people, own, repo []string) (string, stri
     a repo lesson goes to that repository's own notes and may. Words match whole
     and case-insensitively.
 
+func TemplateActions(text string) []string
+    TemplateActions lists the template actions of a prompt in order: an edit of
+    the prompts may change the text around them, never them (a dropped field,
+    a new define or template call, a changed condition).
+
 func ValidateEdit(c EditCheck, changes Changes) []string
     ValidateEdit returns what is wrong with an editor's answer (nil = valid),
     in words fit for a nudge and the registry: every input of c is accounted for
     exactly once, noted with where or skipped with a one-line reason of at most
     EditReasonRunes; every changed file is an allowed one and listed edited,
     and a file listed edited changed; the skill is within its cap and keeps
-    every pin; the diff's added lines and the decision pass notes.CheckLeaks;
-    and the decision is 1 to DecisionMaxRunes runes that ScrubLesson keeps as a
-    general lesson (no pull request number, link, login or repository).
+    every pin; the diff's added lines and the decision pass notes.CheckLeaks
+    and ScrubLesson's rules for a general lesson (no pull request number, link,
+    login or repository); and the decision is 1 to DecisionMaxRunes runes.
 
 func WriteFileAtomic(root *os.Root, name string, data []byte) error
     WriteFileAtomic writes data to name inside root: a temporary file next

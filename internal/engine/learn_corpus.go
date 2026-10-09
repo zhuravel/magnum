@@ -26,7 +26,11 @@ import (
 // covers (a replay would have no roles or identity) and one Codex flagged,
 // or whose flag cannot be read (never replayed). A row dismissed since drops
 // out. A file that would not change is left as it is; no case removes it.
+// One rewrite at a time (corpusMu): the retro's goroutine and a rejection
+// in the tick both write it, and the older read must not win.
 func (e *Engine) syncLearnedCorpus(ctx context.Context) error {
+	e.corpusMu.Lock()
+	defer e.corpusMu.Unlock()
 	misses, err := e.st.Misses(ctx, store.MissFilter{Classes: []string{store.MissMiss}, Scopes: []string{store.MissScopeGeneral},
 		States: []string{store.MissNew, store.MissUsed}})
 	if err != nil {

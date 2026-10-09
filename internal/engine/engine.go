@@ -385,6 +385,7 @@ type Engine struct {
 	editCancel  context.CancelFunc
 	editStarted time.Time
 	editWG      sync.WaitGroup
+	corpusMu    sync.Mutex // one rewrite of the learned corpus at a time (learn_corpus.go)
 
 	usageMu   sync.Mutex // the Codex budget (budget.go)
 	usageRead time.Time
@@ -481,7 +482,7 @@ func FromApp(a *app.App) *Engine {
 				keys = append(keys, id.PrivateKeyEnv)
 			}
 		}
-		d.GoTest = goTestRunner(a.Runner, a.Mise, a.Layout.Home, keys)
+		d.GoTest = goTestRunner(a.Runner, a.Mise, a.Layout.Home, a.Layout.DB(), keys)
 	}
 	if a.Git != nil {
 		d.Probe = gitProbe(a.Git)

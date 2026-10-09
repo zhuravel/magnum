@@ -166,6 +166,9 @@ type fakeEditor struct {
 	closed  int
 	entered chan struct{} // closed when Edit starts (block)
 	block   chan struct{} // when set, Edit waits for it or its context
+	// late, when set, writes into the worktree after a check passed, as an
+	// agent whose turn timed out may.
+	late func(f *editFixture, wt string)
 }
 
 func (e *fakeEditor) Edit(ctx context.Context, job EditJob) (EditResult, error) {
@@ -188,6 +191,9 @@ func (e *fakeEditor) Edit(ctx context.Context, job EditJob) (EditResult, error) 
 		write(e.f, job.Run.Worktree)
 		ch, problems := job.Check()
 		if len(problems) == 0 {
+			if e.late != nil {
+				e.late(e.f, job.Run.Worktree)
+			}
 			return EditResult{Changes: ch}, nil
 		}
 		if turn > 0 {
@@ -371,6 +377,115 @@ func TestAnEditThatLosesAPinGetsOneNudgeThenIsInvalid(t *testing.T) {
 	f2 := newEditFixture(t, lostPinTurn, goodTurn)
 	if p := f2.edit(); p.State != store.LearnGating || len(f2.ed.nudges) != 1 {
 		t.Fatalf("after a good nudged turn: %+v, %d nudges", p, len(f2.ed.nudges))
+	}
+}
+
+// The decision may not name an input's people or repository, unless the
+// public design log already does (magnum's own name, an example
+// organization): that leaks nothing new.
+func TestADecisionMayNameOnlyWhatTheDesignLogAlreadySays(t *testing.T) {
+	naming := func(word string) func(f *editFixture, wt string) {
+		return func(f *editFixture, wt string) {
+			goodTurn(f, wt)
+			b, _ := os.ReadFile(filepath.Join(wt, learn.ChangesFile))
+			var ch learn.Changes
+			_ = json.Unmarshal(b, &ch)
+			ch.Decision = "The judge checks the lock of a row two writers share. A reviewer of " + word + " caught a lost update."
+			b, _ = json.Marshal(ch)
+			writeFile(f.h.t, wt, learn.ChangesFile, string(b))
+		}
+	}
+	f := newEditFixture(t, naming("talkable"))
+	writeFile(t, f.checkout, learn.DecisionsFile, editDecisions+"- **Examples** (2026-10-02). Use `talkable` in examples.\n")
+	f.gitOut(f.checkout, "commit", "--quiet", "-am", "c2")
+	if p := f.edit(); p.State != store.LearnGating {
+		t.Fatalf("a word the log holds: %+v", p)
+	}
+
+	f2 := newEditFixture(t, naming("alice"))
+	if p := f2.edit(); p.State != store.LearnInvalid || !strings.Contains(p.Reason, "names a person's login") {
+		t.Fatalf("a login the log does not hold: %+v", p)
+	}
+}
+
+// The agent commits nothing: a worktree whose HEAD moved (a commit of its
+// own would carry files nobody checked into the branch) is invalid, and
+// nothing of it lands on the branch.
+func TestAnEditThatCommitsItselfIsInvalid(t *testing.T) {
+	f := newEditFixture(t, func(f *editFixture, wt string) {
+		goodTurn(f, wt)
+		writeFile(t, wt, "internal/engine/engine.go", "package engine\n\nconst x = 1\n")
+		// The nudged turn has nothing left to commit; the first one did.
+		_, _ = f.run.Run(context.Background(), execx.Cmd{Name: "git", Args: []string{"-C", wt, "commit", "--quiet", "-am", "mine"}})
+	})
+	p := f.edit()
+	if p.State != store.LearnInvalid || !strings.Contains(p.Reason, "HEAD moved") {
+		t.Fatalf("proposal = %+v", p)
+	}
+	if f.branchExists(p.Branch) {
+		t.Fatal("the branch with the agent's commit stays")
+	}
+}
+
+// The editor changes the skill and the prompts that exist, and a prompt's
+// text around its template actions only: a new file, a deleted one and a
+// changed action are invalid.
+func TestAnEditKeepsTheFilesAndTheTemplateActions(t *testing.T) {
+	for name, tc := range map[string]struct {
+		turn func(f *editFixture, wt string)
+		want string
+	}{
+		"a new prompt": {func(f *editFixture, wt string) {
+			goodTurn(f, wt)
+			writeFile(t, wt, "prompts/claude-new.md", "Review it.\n")
+			f.changes(wt, learn.FileChange{Name: "prompts/claude-new.md", Action: learn.FileEdited, Reason: "a new reviewer"})
+		}, "prompts/claude-new.md is a new file"},
+		"a deleted prompt": {func(f *editFixture, wt string) {
+			goodTurn(f, wt)
+			if err := os.RemoveAll(filepath.Join(wt, "prompts/judge-initial.md")); err != nil {
+				t.Error(err)
+			}
+			f.changes(wt, learn.FileChange{Name: "prompts/judge-initial.md", Action: learn.FileEdited, Reason: "not needed"})
+		}, "prompts/judge-initial.md was deleted"},
+		"a changed action": {func(f *editFixture, wt string) {
+			goodTurn(f, wt)
+			writeFile(t, wt, "prompts/judge-initial.md", "Review {{.HeadSHA}} carefully.\n")
+			f.changes(wt, learn.FileChange{Name: "prompts/judge-initial.md", Action: learn.FileEdited, Reason: "the head"})
+		}, "prompts/judge-initial.md changes its template actions"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newEditFixture(t, tc.turn)
+			if p := f.edit(); p.State != store.LearnInvalid || !strings.Contains(p.Reason, tc.want) {
+				t.Fatalf("proposal = %+v, want a reason with %q", p, tc.want)
+			}
+		})
+	}
+	// Text around the actions may change.
+	f := newEditFixture(t, func(f *editFixture, wt string) {
+		goodTurn(f, wt)
+		writeFile(t, wt, "prompts/judge-initial.md", "Review {{.URL}} with care.\n")
+		f.changes(wt, learn.FileChange{Name: "prompts/judge-initial.md", Action: learn.FileEdited, Reason: "care"})
+	})
+	if p := f.edit(); p.State != store.LearnGating || !slices.Contains(p.Files, "prompts/judge-initial.md") {
+		t.Fatalf("a prompt's text around its actions: %+v", p)
+	}
+}
+
+// What is committed is what the last check saw: the editor is closed when
+// its turns end, and a worktree that changed after its last check (an
+// agent writing on after a timed-out turn) is invalid, none of it
+// committed.
+func TestALateWriteAfterTheLastCheckIsNotCommitted(t *testing.T) {
+	f := newEditFixture(t, goodTurn)
+	f.ed.late = func(f *editFixture, wt string) {
+		writeFile(f.h.t, wt, learn.SkillFile, editSkillText+editAddedRule+"One more line nobody checked.\n")
+	}
+	p := f.edit()
+	if p.State != store.LearnInvalid || !strings.Contains(p.Reason, "changed after its last check") || f.branchExists(p.Branch) {
+		t.Fatalf("proposal = %+v", p)
+	}
+	if f.ed.closed != 1 {
+		t.Fatalf("editor closed %d times", f.ed.closed)
 	}
 }
 
@@ -573,7 +688,7 @@ func TestTheFormatGateRunsUnderTheCheckoutsMise(t *testing.T) {
 		{Prefix: []string{"mise", "-C", "/src/magnum", "exec", "--", "make"}, Result: execx.Result{Code: 2, Stdout: []byte("out\n"), Stderr: []byte("err\n")}},
 		{Prefix: []string{"mise"}, Result: execx.Result{Stdout: []byte("ok\n")}},
 	}}
-	gate := goTestRunner(run, "", "/src/magnum", []string{"MAGNUM_APP_KEY"})
+	gate := goTestRunner(run, "", "/src/magnum", "/data/magnum.db", []string{"MAGNUM_APP_KEY"})
 	if out, err := gate(t.Context(), "/wt/1", "go", "test", "./internal/agents"); err != nil || out != "ok\n" {
 		t.Fatalf("go test = %q, %v", out, err)
 	}
@@ -594,5 +709,106 @@ func TestTheFormatGateRunsUnderTheCheckoutsMise(t *testing.T) {
 	}
 	if c.Timeout != FormatGateTimeout || !c.NoTTY {
 		t.Errorf("timeout %s, no tty %v", c.Timeout, c.NoTTY)
+	}
+	if c.Env["MAGNUM_DB"] != "/data/magnum.db" {
+		t.Errorf("env = %v: the login check finds no registry of its own in a worktree", c.Env)
+	}
+}
+
+// hold moves a gating proposal to held, as the gate does when it cannot
+// decide.
+func (f *editFixture) hold(p store.LearnProposal) store.LearnProposal {
+	f.h.t.Helper()
+	p, err := f.h.st.DecideLearnProposal(f.h.ctx, p.ID, []string{store.LearnGating}, store.LearnHeld, "", time.Time{}, []byte(`{"rule":"no target replayed"}`))
+	if err != nil {
+		f.h.t.Fatal(err)
+	}
+	return p
+}
+
+// `magnum learn --propose` starts an edit now, unless one runs or a
+// proposal waits for the gate, the landing or the operator: the refusal
+// names it. Nothing to learn from is refused too.
+func TestARequestedEditIsRefusedWhileAProposalWaits(t *testing.T) {
+	f := newEditFixture(t, goodTurn)
+	got, err := f.h.e.requestEdit(f.h.ctx, LearnProposePayload{})
+	if err != nil || !strings.Contains(got, "skill edit started") {
+		t.Fatalf("requestEdit = %q, %v", got, err)
+	}
+	f.h.settle()
+	ps, _ := f.h.st.LearnProposals(f.h.ctx, []string{store.LearnGating})
+	if len(ps) != 1 || ps[0].Trigger != store.LearnTriggerRequest {
+		t.Fatalf("gating proposals = %+v", ps)
+	}
+	if _, err := f.h.e.requestEdit(f.h.ctx, LearnProposePayload{}); err == nil || !strings.Contains(err.Error(), "proposal "+itoa(ps[0].ID)+" is gating") {
+		t.Fatalf("with a gating proposal: %v", err)
+	}
+	f.hold(ps[0])
+	if _, err := f.h.e.requestEdit(f.h.ctx, LearnProposePayload{}); err == nil || !strings.Contains(err.Error(), "magnum learn --review") {
+		t.Fatalf("with a held proposal: %v", err)
+	}
+	if _, err := f.h.st.DecideLearnProposal(f.h.ctx, ps[0].ID, []string{store.LearnHeld}, store.LearnFailed, "", time.Time{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.h.st.SetDeclineState(f.h.ctx, []int64{f.decline.ID}, []string{store.MissNew}, store.MissUsed); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.h.st.DB().ExecContext(f.h.ctx, "UPDATE misses SET state = ? WHERE id = ?", store.MissUsed, f.miss.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.h.e.requestEdit(f.h.ctx, LearnProposePayload{}); err == nil || !strings.Contains(err.Error(), "nothing to learn from") {
+		t.Fatalf("without inputs: %v", err)
+	}
+}
+
+// A rejection is the operator's: the held proposal is rejected with the
+// reason, its worktree and branch go, and an input now in two rejected
+// proposals is dismissed and leaves the learned corpus at once (Amendment
+// A3), not at the next retro.
+func TestARejectionThatDismissesAnInputDropsItsLearnedCase(t *testing.T) {
+	f := newEditFixture(t, goodTurn)
+	m, _ := f.ids()
+	earlier, err := f.h.st.CreateLearnProposal(f.h.ctx, store.LearnProposalInput{Trigger: store.LearnTriggerRequest, BaseSHA: f.master,
+		Branch: "learn/earlier", State: store.LearnRejected, Reason: "too broad",
+		Inputs: []store.LearnInput{{Kind: store.LearnInputMiss, InputID: f.miss.ID, Outcome: store.MissNoted, Where: "section 4"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := f.hold(f.edit())
+	f.h.syncCorpus()
+	if got := learnedCases(f.h); !slices.Contains(got, "miss-"+itoa(f.miss.ID)) {
+		t.Fatalf("learned cases before the rejection: %v", got)
+	}
+	got, err := f.h.e.requestLearnReject(f.h.ctx, LearnDecisionPayload{ID: p.ID, Reason: "  the rule is too specific  "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "rejected proposal "+itoa(p.ID)) || !strings.Contains(got, "1 input dismissed") || !strings.Contains(got, "1 input back to new") {
+		t.Fatalf("answer = %q", got)
+	}
+	now, err := f.h.st.LearnProposalByID(f.h.ctx, p.ID)
+	if err != nil || now.State != store.LearnRejected || now.Reason != "the rule is too specific" {
+		t.Fatalf("proposal = %+v, %v", now, err)
+	}
+	if ms, _ := f.h.st.Misses(f.h.ctx, store.MissFilter{States: []string{store.MissDismissed}}); len(ms) != 1 || ms[0].ID != f.miss.ID {
+		t.Fatalf("dismissed misses = %+v (%s was in %d and this rejected proposal)", ms, m, earlier.ID)
+	}
+	if got := learnedCases(f.h); slices.Contains(got, "miss-"+itoa(f.miss.ID)) {
+		t.Fatalf("the dismissed miss is still a learned case: %v", got)
+	}
+	if _, err := os.Stat(p.Scratch); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the rejected proposal's worktree stays: %v", err)
+	}
+	if f.branchExists(p.Branch) {
+		t.Fatalf("the rejected proposal's branch stays")
+	}
+	if evs := f.h.events("learn.rejected"); len(evs) != 1 {
+		t.Fatalf("rejected events = %+v", evs)
+	}
+	if _, err := f.h.e.requestLearnReject(f.h.ctx, LearnDecisionPayload{ID: p.ID}); err == nil || !strings.Contains(err.Error(), "is rejected") {
+		t.Fatalf("a second rejection = %v", err)
+	}
+	if _, err := f.h.e.requestLearnLand(f.h.ctx, LearnDecisionPayload{ID: p.ID}); err == nil {
+		t.Fatal("a landing was accepted before the landing step exists")
 	}
 }
