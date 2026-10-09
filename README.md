@@ -1719,10 +1719,12 @@ case's baseline is the newest stored replay with the prompts and skill of
 the commit the proposal started from, else a replay of that commit first, from a worktree of its own that
 goes after the gate (never the checkout: the branch you have checked out and your uncommitted edits are no
 baseline); the candidate replays with the worktree, and a case it lost is replayed once more. It passes
-when a target improved (the missed finding found, the declined one no longer reported) and nothing
-regressed (no defect the baseline found lost, no declined finding reported that the baseline did not),
-fails when something regressed or no target improved (its worktree and branch go, its inputs stay `new`),
-and is held for you when none of its targets could be replayed. Its replays are stored like `magnum eval
+when a missed finding of its targets is found more often and nothing regressed (no defect the baseline
+found lost, no declined finding reported that the baseline did not), fails when something regressed or
+no target improved (its worktree and branch go, its inputs stay `new`), and is held for you when none of
+its targets could be replayed, or when the only targets it improved are declined findings no longer
+reported ("only declined findings improved: review the rule it adds": one author's reply and one
+classifier's answer would otherwise take a kind of finding out of every review without you seeing it). Its replays are stored like `magnum eval
 run`'s (`magnum eval list` shows them), and the result with the proposal; each case replays in a worktree of
 the gate's own (`~/.local/state/magnum/learn/eval/wt/<case>`, never the one `magnum eval run` replaces), and
 `magnum eval run` refuses to start while a gate runs (it names the proposal). The gate waits
@@ -1788,7 +1790,7 @@ with their reasons, an edit in flight and when the editor runs next; `--json` pr
 --propose` asks the daemon for an edit now, whatever `editor` says; it is refused while an edit runs or a
 proposal is `gating`, `passed` or `held` (the refusal names it, and the command checks first), when
 nothing new is left to learn from, and as a retro is (a drain, an infrastructure pause, the editor's CLI
-paused). `magnum learn --review` shows the oldest `held` proposal, one the gate could not decide: every
+paused). `magnum learn --review` shows the oldest `held` proposal, one the gate could not decide or left to you: every
 input with its title and lesson and what the editor did with it, the diff of each file its commit changes
 against the `master` it started from (from the checkout's `learn/<run>` branch), its design-log entry and
 the gate's table (each case's baseline and candidate scores, a target starred), and asks y/N on a terminal

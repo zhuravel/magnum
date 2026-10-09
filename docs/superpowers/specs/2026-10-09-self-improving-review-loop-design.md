@@ -167,11 +167,13 @@ window moves) and never on a flagged PR.
 
 Verdict (`learn.Judge`):
 
-- pass: at least one target found (a `miss-` case) or no longer hit (a `decline-` case). no case found at
-  the baseline is lost (a lost case is replayed once more before it counts as lost). no absent case gets a
-  hit that the baseline did not have;
+- pass: at least one `miss-` target found more often. no case found at the baseline is lost (a lost case
+  is replayed once more before it counts as lost). no absent case gets a hit that the baseline did not
+  have;
 - hold: the targets could not be replayed (no corpus case, a flagged PR, no stored full replay for
-  judge-only) but nothing regressed;
+  judge-only) but nothing regressed; or the only targets that improved are `decline-` cases no longer
+  hit ("only declined findings improved: review the rule it adds"), with nothing regressed: a rule that
+  stops a kind of finding lands only on the operator's `y`;
 - fail: anything regressed, or no target improved.
 
 A replay without a score is no verdict: on a target or its baseline, or on the second replay of a lost

@@ -118,15 +118,35 @@ func TestJudgePassesWhenATargetImprovesAndNothingIsLost(t *testing.T) {
 	if v.State != GatePassed || !strings.Contains(v.Rule, "miss-3") || len(v.Rows) != 2 {
 		t.Fatalf("verdict = %+v, want passed naming miss-3", v)
 	}
-	// A declined finding the candidate no longer reports improves too.
-	v = Judge([]GateRow{{Case: "decline-4", Target: true, Before: score(nil, nil, "decline-4"), After: score(nil, nil)}})
-	if v.State != GatePassed || !strings.Contains(v.Rule, "decline-4") {
-		t.Fatalf("verdict = %+v, want passed naming decline-4", v)
-	}
 	// A target that did not move improves nothing: the gate fails it.
 	v = Judge([]GateRow{{Case: "miss-3", Target: true, Before: score(nil, []string{"miss-3"}), After: score(nil, []string{"miss-3"})}})
 	if v.State != GateFailed || !strings.Contains(v.Rule, "no target improved") {
 		t.Fatalf("verdict = %+v, want failed: no target improved", v)
+	}
+}
+
+// A declined finding the candidate no longer reports is an improvement, but
+// one the operator reviews when it is the only kind: one author's reply and
+// one classifier's answer would otherwise remove a class of findings from
+// every review unseen. With a missed finding found too, the proposal passes.
+func TestJudgeHoldsAProposalThatImprovesOnlyDeclinedFindings(t *testing.T) {
+	decline := GateRow{Case: "decline-4", Target: true, Before: score(nil, nil, "decline-4"), After: score(nil, nil)}
+	unmoved := GateRow{Case: "miss-3", Target: true, Before: score(nil, []string{"miss-3"}), After: score(nil, []string{"miss-3"})}
+	for name, rows := range map[string][]GateRow{"a decline alone": {decline}, "with a miss that did not move": {decline, unmoved}} {
+		v := Judge(rows)
+		if v.State != GateHeld || !strings.HasPrefix(v.Rule, "only declined findings improved: review the rule it adds") ||
+			!strings.Contains(v.Rule, "decline-4 no longer reported") {
+			t.Errorf("%s: verdict = %+v, want held naming decline-4", name, v)
+		}
+	}
+	found := GateRow{Case: "miss-3", Target: true, Before: score(nil, []string{"miss-3"}), After: score([]string{"miss-3"}, nil)}
+	if v := Judge([]GateRow{decline, found}); v.State != GatePassed || !strings.Contains(v.Rule, "decline-4") || !strings.Contains(v.Rule, "miss-3") {
+		t.Fatalf("a miss found too: %+v, want passed naming both", v)
+	}
+	// A regression still fails it.
+	hit := GateRow{Case: "coupon-scope", Before: score(nil, nil), After: score(nil, nil, "decline-9")}
+	if v := Judge([]GateRow{decline, hit}); v.State != GateFailed {
+		t.Fatalf("a decline improved and a new hit: %+v, want failed", v)
 	}
 }
 

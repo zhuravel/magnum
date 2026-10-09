@@ -5931,6 +5931,19 @@ skill versions); people add theirs to the sections before it, at the end of the 
   `learn.gating` mark is set, naming the proposal, as both replay on the same clones, Codex budget and
   herdr. Rejected: a flock per case around the worktree's life in `RunCase` (with separate paths there is
   nothing to share, and a run waiting on a lock the gate holds for an hour helps nobody).
+- **A proposal that improves only declined findings waits for the operator** (2026-10-10, the final
+  review of the self-improving review loop, decided by the operator's delegate). The gate passed a
+  proposal on a `decline-` target the candidate no longer reports, and a passed proposal lands at the
+  next tick: an author who argued a correct finding away, a classifier that answered `wrong`/`general`
+  and an editor rule "do not flag Y when X" removed a kind of finding from every repository's reviews
+  with nothing lost on the gate's few cases and nobody looking. `learn.Judge` now holds a proposal whose
+  improved targets are all declines and no miss target improved, with the rule "only declined findings
+  improved: review the rule it adds" and what improved; one that also finds a missed finding more often
+  passes as before, and a regression fails it whatever improved. Rejected: requiring two independent
+  declines (other pull requests, other authors) with the same lesson before a decline becomes an input
+  (it delays the evidence a correct decline brings, needs a matching of lessons the registry does not
+  have, and two wrong answers still land unseen), and holding every proposal (the misses' gains are
+  measured, a decline's is only an absence).
 
 ## Learned rules
 

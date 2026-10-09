@@ -9632,6 +9632,10 @@ const RejectedMax = 40
     RejectedMax bounds the rejected findings the classifier gets: the newest of
     the pull request's.
 
+const RuleOnlyDeclines = "only declined findings improved: review the rule it adds"
+    RuleOnlyDeclines opens the rule of a proposal the gate holds because the
+    only targets it improved are declined findings (Judge).
+
 
 VARIABLES
 
@@ -10180,9 +10184,11 @@ func Judge(rows []GateRow) Verdict
     Judge decides a proposal on its rows. It fails one that regressed: a defect
     the baseline found and the candidate lost, once replayed again (Retried),
     or a declined finding the candidate reports and the baseline did not;
-    else it passes one whose targets include one that improved (improved);
-    else it holds one none of whose targets could be compared, and fails the
-    rest (no target improved).
+    else it passes one whose targets include a miss that improved (improved),
+    and holds one whose improved targets are all declines (RuleOnlyDeclines:
+    one author's reply and one classifier's answer would otherwise remove a
+    class of findings from every review unseen); else it holds one none of whose
+    targets could be compared, and fails the rest (no target improved).
 
 ```
 
