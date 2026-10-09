@@ -233,7 +233,10 @@ removed, the inputs go back to `new`, or `dismissed` after a second rejection), 
 
 `magnum learn --propose`: `ReqLearnPropose`, an editor run now (refused while one runs or a proposal is
 `gating`, `passed` or `held`. the refusal names it). `magnum learn --revert <version>`: a proposal that
-restores the files of the version before it, through the gate, held for review.
+restores the files of the version before it, through the gate, held for review; its `--reason` goes
+into the design log's entry and the commit's subject, so the daemon refuses one that names a pull
+request, a link, a login of the registry's pull requests (`store.PeopleLogins`) or a watched
+repository's owner or name, and the format gate's `make check-private` checks the entry.
 
 Counters and toasts: `tui.DaemonFacts.LearnProposals` counts `held` proposals ("N skill proposals to
 review", short "skill ×N") on the board and dashboard titles. the `magnum status` learn line shows the

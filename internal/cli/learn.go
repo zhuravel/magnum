@@ -56,7 +56,7 @@ func newLearnCmd(c *Context) *cobra.Command {
 			"dismissed and leaves the learned eval corpus at once), anything else leaves it for later. --review --json "+
 			"prints the proposal and asks nothing.\n\n"+
 			"--revert <version> asks the daemon for a proposal that restores the skill and prompt files the version changed as "+
-			"they were before it (--reason says why, in the design log's entry; no pull request, link or login), through the "+
+			"they were before it (--reason says why, in the design log's entry; no pull request, link, login or repository name), through the "+
 			"format gate and the eval's gate, which holds it for --review: a revert never lands on its own. It is refused while "+
 			"another learn job runs, when a waiting proposal already reverts the version, and when master changed those files "+
 			"since the version landed. The daemon proposes one by itself, once per version, when the newest version's reviews "+

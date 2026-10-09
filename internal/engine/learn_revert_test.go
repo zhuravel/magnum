@@ -184,6 +184,35 @@ func TestARegressionMakesOneHeldRevertProposal(t *testing.T) {
 	}
 }
 
+// The operator's reason for a revert goes into the public design log and
+// the commit's subject, so a reason that names a person of the registry's
+// pull requests or a watched repository's owner or name is refused before
+// any revert starts, as one naming a pull request is; a plain one starts
+// the revert.
+func TestARevertsReasonNamingAPersonOrARepositoryIsRefused(t *testing.T) {
+	f := newEditFixture(t, goodTurn)
+	v := f.landVersion(editSkillText+editAddedRule, f.h.clock.Now().Add(-48*time.Hour))
+	for reason, want := range map[string]string{
+		"Alice saw noise in the reviews": "a login", "noise on Talkable pull requests": "a repository", "see #12": "a pull request",
+	} {
+		if msg, err := f.h.e.requestLearnRevert(f.h.ctx, LearnRevertPayload{Version: v.ID, Reason: reason}); err == nil ||
+			!strings.Contains(err.Error(), "public design log") || !strings.Contains(err.Error(), want) {
+			t.Errorf("reason %q: %q, %v (want a refusal naming %s)", reason, msg, err, want)
+		}
+	}
+	f.h.settle()
+	if ps := f.proposals(); len(ps) != 0 {
+		t.Fatalf("proposals after the refusals = %+v", ps)
+	}
+	if _, err := f.h.e.requestLearnRevert(f.h.ctx, LearnRevertPayload{Version: v.ID, Reason: "authors declined twice as much"}); err != nil {
+		t.Fatal(err)
+	}
+	f.h.settle()
+	if ps := f.proposals(); len(ps) != 1 || ps[0].Reverts != v.ID || ps[0].State != store.LearnGating {
+		t.Fatalf("proposals = %+v", ps)
+	}
+}
+
 // regressed sets up a version whose reviews had 2 of their 4 posted
 // findings declined or argued, against none of 4 for the skill before it.
 func (f *editFixture) regressed() store.LearnVersion {

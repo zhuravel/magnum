@@ -1797,8 +1797,9 @@ nobody decided within 7 days of its making expires at the loop's scan, as a note
 (`learn.expired`): its worktree and branch go, and its inputs stay `new` for a later edit.
 
 A landed version that made things worse is reverted only with you. `magnum learn --revert <version>`
-(`--reason` says why; it goes into the design log, so no pull request, link or login) asks the daemon for a
-revert proposal: in a worktree on a new `learn/<run>` branch from `master`, the skill and prompt files the
+(`--reason` says why; it goes into the design log and the commit's subject, so no pull request, link,
+login of the registry's pull requests or watched repository's name: the daemon refuses one) asks the
+daemon for a revert proposal: in a worktree on a new `learn/<run>` branch from `master`, the skill and prompt files the
 version's commit changed are restored as the commit before it had them, the design log's Learned rules
 section gets an entry "Reverts skill version N: <why>", and the candidate passes the same checks and format gate as an edit (the
 restored skill within today's cap and keeping today's pinned sentences, the prompts rendering, the goldens,

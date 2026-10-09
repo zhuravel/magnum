@@ -9627,7 +9627,8 @@ func AllowedEditFile(p string) bool
 func AppendLearned(doc []byte, entry string) []byte
     AppendLearned adds entry to the design log doc at the end of its Learned
     rules section (LearnedHeading), before a section someone added after it;
-    a log without one gets the section at its end, with an introduction, after a
+    the section's first entry follows its introduction after a blank line.
+    A log without the section gets it at its end, with the introduction, after a
     blank line.
 
 func CaseFromDecline(d store.Decline) (eval.Case, bool)
@@ -15281,6 +15282,12 @@ func (s *Store) PendingRequests(ctx context.Context, limit int) ([]Request, erro
     0 = all), so a consumer can skip a request it already handed to a background
     worker.
 
+func (s *Store) PeopleLogins(ctx context.Context) ([]string, error)
+    PeopleLogins lists the human logins the pull requests name, as
+    scripts/check-logins.sh reads them for `make check-private`: the authors
+    that are users, the assignees and the requested reviewers (not teams),
+    without a "[bot]" suffix, once each and sorted.
+
 func (s *Store) PostedFindingPaths(ctx context.Context, prIDs []int64) (map[int64]map[string]int, error)
     PostedFindingPaths returns, per PR of prIDs that has any, how many findings
     magnum posted on each path over all its rounds (findings without a path and
@@ -15536,9 +15543,9 @@ func (s *Store) UpsertSlotDatabase(ctx context.Context, d SlotDatabase) (SlotDat
 func (s *Store) VersionMeasure(ctx context.Context, v LearnVersion, next *LearnVersion) (VersionMeasure, error)
     VersionMeasure measures v over its window: from v.RestartedAt (its LandedAt
     while the daemon has not restarted on it) to next.RestartedAt (open when
-    next is nil or has not restarted yet). A v without a SkillSHA (the skill
-    before the first version, which no row records) counts every decline of the
-    window's runs.
+    next is nil or has not restarted yet), over the rounds that ran v's skill
+    copy. A v without a SkillSHA (the skill before the first version, which no
+    row records) counts every round of the window and every decline of its runs.
 
 func (s *Store) VersionMeasures(ctx context.Context, vs []LearnVersion, n int) ([]VersionMeasure, error)
     VersionMeasures measures the newest n versions of vs (newest first,
@@ -15594,8 +15601,9 @@ type VersionMeasure struct {
 	Commit    string     `json:"commit,omitempty"`
 	From      time.Time  `json:"from"`
 	To        *time.Time `json:"to,omitempty"` // nil: the window is open (the version runs now)
-	// JudgeRuns counts the posted reviews, Posted the findings they posted
-	// and ByPriority those by priority ("" for none).
+	// JudgeRuns counts the posted reviews (a nudged round's once), Posted
+	// the findings they posted and ByPriority those by priority ("" for
+	// none).
 	JudgeRuns  int            `json:"judge_runs"`
 	Posted     int            `json:"posted"`
 	ByPriority map[string]int `json:"by_priority"`

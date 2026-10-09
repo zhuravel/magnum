@@ -333,14 +333,8 @@ func (e *Engine) requestLearnRevert(ctx context.Context, p LearnRevertPayload) (
 	v := vs[i]
 	reason := textx.Clip(strings.Join(strings.Fields(p.Reason), " "), revertWhyRunes)
 	if reason != "" {
-		var own []string
-		for _, id := range e.cfg.Identities {
-			own = append(own, id.Login)
-		}
-		_, why := learn.ScrubLesson(reason, store.MissScopeGeneral, nil, own, nil)
-		if leaks := notes.CheckLeaks(reason, notes.Check{}); why != "" || len(leaks) > 0 {
-			return "", errors.New("the reason goes into the public design log, and it names a pull request, a link, a login, a secret or a home " +
-				"directory: say why without them")
+		if err := e.checkRevertReason(ctx, reason); err != nil {
+			return "", err
 		}
 	}
 	if why := cmp.Or(e.holdReason(ctx), e.learnOneAtATime()); why != "" {
@@ -372,6 +366,42 @@ func (e *Engine) requestLearnRevert(ctx context.Context, p LearnRevertPayload) (
 	}
 	return fmt.Sprintf("the revert of skill version %d runs: the files it changed restored as they were before it, then the format gate and "+
 		"the eval's gate, which holds the proposal for `magnum learn --review` (a toast says so)", v.ID), nil
+}
+
+// checkRevertReason refuses an operator's reason for a revert that would
+// put what the public repository must not hold into the design log and
+// the commit's subject: a pull request reference, a link, a login of the
+// registry's pull requests (store.PeopleLogins, what `make check-private`
+// greps for) or an @mention of magnum's, a watched repository's owner or
+// name, a secret or a home directory. The format gate's `make
+// check-private` still checks the entry for the gitignored patterns.
+func (e *Engine) checkRevertReason(ctx context.Context, reason string) error {
+	people, err := e.st.PeopleLogins(ctx)
+	if err != nil {
+		return err
+	}
+	repos, err := e.st.ListRepos(ctx)
+	if err != nil {
+		return err
+	}
+	var own, names []string
+	for _, id := range e.cfg.Identities {
+		own = append(own, id.Login)
+	}
+	for _, r := range repos {
+		names = append(names, r.Owner, r.Name)
+	}
+	_, why := learn.ScrubLesson(reason, store.MissScopeGeneral, people, own, names)
+	what := map[string]string{learn.LessonIssueRef: "a pull request", learn.LessonURL: "a link", learn.LessonLogin: "a login",
+		learn.LessonNamesRepo: "a repository"}[why]
+	if what == "" && len(notes.CheckLeaks(reason, notes.Check{})) > 0 {
+		what = "a secret or a home directory"
+	}
+	if what != "" {
+		return fmt.Errorf("the reason goes into the public design log, and it names %s: say why without pull requests, links, logins, "+
+			"repositories, secrets or home directories", what)
+	}
+	return nil
 }
 
 // maybeRegression proposes a revert of the newest version, once (the

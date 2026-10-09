@@ -5840,6 +5840,18 @@ skill versions); people add theirs to the sections before it, at the end of the 
   is possible for is still marked with its event and toast at once. The scan logs the registry errors it
   used to drop. Rejected: clearing the mark when the revert does not start (a crash between the two
   would still lose it).
+- **A revert's reason may name no person and no repository the registry knows** (2026-10-09, a review
+  finding on stage 5 of the self-improving review loop). The operator's `--reason` goes into the
+  revert's design-log entry and its commit's subject, and its check knew only magnum's own logins, so a
+  reason naming a colleague's login or a client's repository passed, and only the format gate's `make
+  check-private` stood between it and the public log. `requestLearnRevert` now refuses a reason that
+  names a login of the registry's pull requests (`store.PeopleLogins`: the authors that are users, the
+  assignees and the requested reviewers, as `scripts/check-logins.sh` reads them) or a watched
+  repository's owner or name, and the answer says which kind it found; a pull request reference, a link,
+  an @mention of magnum's, a secret or a home directory is refused as before. The entry is appended
+  before the format gate (as the editor's is), so the gitignored `MAGNUM_PRIVATE_PATTERNS`, which the
+  daemon does not read, still make such a revert invalid. Rejected: reading the patterns into the daemon
+  (they belong to `make check-private`, which the gate runs on the entry).
 
 ## Learned rules
 

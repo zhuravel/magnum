@@ -100,6 +100,31 @@ func (s *Store) ListRepos(ctx context.Context) ([]Repo, error) {
 	return collect(rows, scanRepo)
 }
 
+// PeopleLogins lists the human logins the pull requests name, as
+// scripts/check-logins.sh reads them for `make check-private`: the authors
+// that are users, the assignees and the requested reviewers (not teams),
+// without a "[bot]" suffix, once each and sorted.
+func (s *Store) PeopleLogins(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT login FROM (
+  SELECT author_login AS login FROM prs WHERE author_login IS NOT NULL AND coalesce(author_type, 'User') = 'User'
+  UNION SELECT value FROM prs, json_each(prs.assignees_json)
+  UNION SELECT value FROM prs, json_each(prs.requested_reviewers_json) WHERE value NOT LIKE 'team:%')`)
+	if err != nil {
+		return nil, fmt.Errorf("people logins: %w", err)
+	}
+	logins, err := collect(rows, func(sc scanner) (string, error) {
+		var l string
+		err := sc.Scan(&l)
+		return strings.TrimSuffix(l, "[bot]"), err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("people logins: %w", err)
+	}
+	logins = slices.DeleteFunc(logins, func(l string) bool { return l == "" })
+	slices.Sort(logins)
+	return slices.Compact(logins), nil
+}
+
 // GitHubPR is what the poller knows about a PR. Pointer fields (and nil
 // Labels, empty GHState) mean "not fetched this time": the stored value is
 // kept. Number, URL, HeadSHA and IsDraft are always present in the radar.
