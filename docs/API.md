@@ -6063,11 +6063,13 @@ type Corpus struct {
     against.
 
 func LoadCorpora(user, learned string) (*Corpus, error)
-    LoadCorpora reads the operator's corpus at user ("" = none) and the learned
-    corpus the daemon writes at learned (paths.Layout.LearnCorpus; "" or a file
-    that does not exist adds nothing) and returns their cases, the user's first.
-    A case name in both files is an error that names it. Without a user corpus
-    and without learned cases the error is the learned file's.
+    LoadCorpora reads the operator's corpus at user ("" = none) and the
+    learned corpus the daemon writes at learned (paths.Layout.LearnCorpus;
+    "" or a file that does not exist adds nothing) and returns their cases,
+    the user's first. A case name in both files is an error that names it.
+    Without a user corpus and without learned cases the error is the learned
+    file's. One path given as both (a run given the learned corpus as --corpus,
+    scored again) is read once.
 
 func LoadCorpus(path string) (*Corpus, error)
     LoadCorpus reads and parses the corpus file at path.
@@ -6179,6 +6181,9 @@ type Run struct {
 	// Candidate is the directory whose prompts and judge skill the run replayed (--candidate,
 	// evalrun.WithCandidate); "" = the configured ones.
 	Candidate string `json:"candidate,omitempty"`
+	// CorpusAlone is set when the run read Corpus alone (--corpus FILE), without the learned corpus
+	// the daemon writes; `eval score` reads it alone again. Runs before it was recorded read both.
+	CorpusAlone bool `json:"corpus_alone,omitempty"`
 }
     Run is one replay of a corpus.
 

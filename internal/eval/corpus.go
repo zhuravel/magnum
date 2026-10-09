@@ -85,8 +85,12 @@ func LoadCorpus(path string) (*Corpus, error) {
 // LoadCorpora reads the operator's corpus at user ("" = none) and the learned corpus the daemon
 // writes at learned (paths.Layout.LearnCorpus; "" or a file that does not exist adds nothing) and
 // returns their cases, the user's first. A case name in both files is an error that names it.
-// Without a user corpus and without learned cases the error is the learned file's.
+// Without a user corpus and without learned cases the error is the learned file's. One path given
+// as both (a run given the learned corpus as --corpus, scored again) is read once.
 func LoadCorpora(user, learned string) (*Corpus, error) {
+	if user != "" && learned != "" && filepath.Clean(user) == filepath.Clean(learned) {
+		learned = ""
+	}
 	var out Corpus
 	if user != "" {
 		c, err := LoadCorpus(user)

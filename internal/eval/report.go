@@ -124,6 +124,9 @@ type Run struct {
 	// Candidate is the directory whose prompts and judge skill the run replayed (--candidate,
 	// evalrun.WithCandidate); "" = the configured ones.
 	Candidate string `json:"candidate,omitempty"`
+	// CorpusAlone is set when the run read Corpus alone (--corpus FILE), without the learned corpus
+	// the daemon writes; `eval score` reads it alone again. Runs before it was recorded read both.
+	CorpusAlone bool `json:"corpus_alone,omitempty"`
 }
 
 // Totals sums the scored cases of a run.

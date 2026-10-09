@@ -448,6 +448,24 @@ func TestLoadCorporaRefusesACaseNameInBothFiles(t *testing.T) {
 	}
 }
 
+// A run given the learned corpus with --corpus records that file as its corpus, and an `eval score`
+// that reads it as the operator's corpus and as the learned one reads it once: the same path,
+// cleaned, is one file, not two that share every case name.
+func TestLoadCorporaReadsAFileNamedTwiceOnce(t *testing.T) {
+	dir := t.TempDir()
+	learned := filepath.Join(dir, "learn", "corpus.toml")
+	one := Case{Name: "decline-4", PR: "example/sandbox#3", Head: sha, Defects: []Defect{{ID: "decline-4", Title: "t", Expect: ExpectAbsent, Match: []string{"x"}}}}
+	if err := WriteCorpus(learned, Corpus{Cases: []Case{one}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, user := range []string{learned, dir + "/learn/./corpus.toml", dir + "/learn/../learn/corpus.toml"} {
+		c, err := LoadCorpora(user, learned)
+		if err != nil || len(c.Cases) != 1 || c.Cases[0].Name != "decline-4" {
+			t.Fatalf("LoadCorpora(%s, %s) = %+v, %v; want the one case once", user, learned, c, err)
+		}
+	}
+}
+
 // The shipped example corpus is valid: a user copies it to start.
 func TestTheExampleCorpusLoads(t *testing.T) {
 	c, err := LoadCorpus(filepath.Join("..", "..", "eval.toml.example"))

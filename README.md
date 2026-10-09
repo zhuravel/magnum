@@ -1887,8 +1887,9 @@ commits, and nothing is posted. When a case ends, a judge still at work gets one
 workspace is closed (a message names any workspace that stays open); before a case starts, an `eval <repo>#<N>`
 workspace of the same PR whose panes all work in the eval worktrees, which an earlier run left open, is closed,
 and a case whose agent would run anywhere but its own workspace fails before the first prompt. The report gives recall of the seeded defects and the noise count, and
-compares them with the previous run; `magnum eval score` re-applies the corpus after you fix a match
-rule (a case the corpus now pins to another head keeps its score and says so). A defect with `body = true`
+compares them with the previous run; `magnum eval score` re-applies the corpus the run read after you fix a
+match rule (a run given `--corpus FILE` that file alone again; a case the corpus now pins to another head
+keeps its score and says so). A defect with `body = true`
 counts a mention in the review body's finding list or its "Found nearby" block, never one in a `Description: ✗`
 line or the Checks block. A defect with `expect = "absent"` is a finding the review must not make (one an
 author declined as wrong): a finding that matches it is a false positive, an `absent hit` in the report and
