@@ -169,8 +169,10 @@ func TestLearnReviewShowsTheDiffAndTheGateAndAsksYN(t *testing.T) {
 	h := newLearnHarness(t)
 	m, d := learn.MissInputID(h.miss.ID), learn.DeclineInputID(h.decline.ID)
 	h.pid = 4242
+	refusal := "proposal " + itoa(h.proposal.ID) + " stays held: skills/magnum-review/SKILL.md has uncommitted changes in the checkout: " +
+		"commit or stash them, then `magnum learn --review` lands it"
 	h.onSleep = func(h *actHarness) {
-		h.completePending(store.RequestFailed, "proposal 1 (held) cannot land yet: this daemon has no landing step")
+		h.completePending(store.RequestFailed, refusal)
 	}
 	h.d.StdinTTY = true
 	h.stdin("y\n")
@@ -187,7 +189,7 @@ func TestLearnReviewShowsTheDiffAndTheGateAndAsksYN(t *testing.T) {
 	if p := actDecode[engine.LearnDecisionPayload](t, reqs[0].Payload); p.ID != h.proposal.ID || p.Reason != "" {
 		t.Fatalf("payload = %+v", p)
 	}
-	if code != 1 || !strings.Contains(h.errb.String(), "cannot land yet") {
+	if code != 1 || !strings.Contains(h.errb.String(), refusal) {
 		t.Fatalf("exit %d, stderr %q: the daemon's refusal is the answer", code, h.errb.String())
 	}
 

@@ -1135,8 +1135,8 @@ func TestARejectionThatDismissesAnInputDropsItsLearnedCase(t *testing.T) {
 	if _, err := f.h.e.requestLearnReject(f.h.ctx, LearnDecisionPayload{ID: p.ID}); err == nil || !strings.Contains(err.Error(), "is rejected") {
 		t.Fatalf("a second rejection = %v", err)
 	}
-	if _, err := f.h.e.requestLearnLand(f.h.ctx, LearnDecisionPayload{ID: p.ID}); err == nil {
-		t.Fatal("a landing was accepted before the landing step exists")
+	if _, err := f.h.e.requestLearnLand(f.h.ctx, LearnDecisionPayload{ID: p.ID}); err == nil || !strings.Contains(err.Error(), "is rejected") {
+		t.Fatalf("a landing of the rejected proposal = %v", err)
 	}
 }
 
