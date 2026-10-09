@@ -1703,8 +1703,10 @@ The gate then decides the proposal with the eval, in the daemon's process, one c
 are the learned cases of the inputs it noted (its targets: `miss-<n>`, `decline-<n>`), then the newest other
 cases of your corpus and the learned one, up to `gate_cases` (6); a case whose pull request is in no watch
 or Codex-flagged is never replayed. Only the judge replays when the change touches `SKILL.md` and
-`prompts/judge-*.md` alone (on the reviewers' reports of a full replay whose reviewers read the same
-prompts), every role otherwise. A case's baseline is the newest stored replay with the prompts and skill of
+`prompts/judge-*.md` alone (on the reviewers' reports of the newest full replay whose reviewers read the
+same prompts), every role otherwise; then both judges read the same reports, so the baseline is that full
+replay when the judge it compares against made it, else that judge replayed alone on those reports. A
+case's baseline is the newest stored replay with the prompts and skill of
 the commit the proposal started from, else a replay of that commit first, from a worktree of its own that
 goes after the gate (never the checkout: the branch you have checked out and your uncommitted edits are no
 baseline); the candidate replays with the worktree, and a case it lost is replayed once more. It passes

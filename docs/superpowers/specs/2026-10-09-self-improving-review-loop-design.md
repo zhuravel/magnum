@@ -144,7 +144,12 @@ For a proposal in `gating`, the daemon selects the cases: the learned cases of t
 same inputs hash as the proposal's `base_sha` (through `eval.Baselines`), else a baseline replay first.
 Both read a detached worktree at `base_sha` under the learn worktrees, never the checkout (its branch and
 its uncommitted edits are the operator's), removed after the gate; each run of the gate records the
-commit of the tree it read and that tree's clean state, so a later gate reuses it. The candidate
+commit of the tree it read and that tree's clean state, so a later gate reuses it. In judge-only mode
+both judges read the reviewer reports of the case's newest full replay whose reviewers read the
+candidate's prompts (`eval.FullReplayFor`): the baseline is that replay itself when its judge read the
+base's inputs, else the base's judge alone on its reports (stored, `eval.JudgeBaselines`, or replayed
+then), and without such a replay the base's full replay is the baseline and gives the candidate's judge
+its reports. The candidate
 replay runs in-process with `--candidate` = the worktree, under the eval agent tag, one case at a time,
 refused above `codex_soft` (then the proposal waits in `gating` and is retried at the next tick after the
 window moves) and never on a flagged PR.

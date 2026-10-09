@@ -233,6 +233,7 @@ type fakeEval struct {
 	scores   map[string][]*eval.Score // "<candidate>|<case>"
 	outcomes map[string]string        // "<candidate>|<case>" -> an outcome with no score
 	inputs   map[string][2]string     // candidate -> its inputs and reviewer inputs
+	root     string                   // the eval runs (Layout.Eval), where a judge-only replay finds its reports
 	corpus   *eval.Corpus
 	calls    []evalCall
 	// entered and block hold a replay: entered is closed when one starts,
@@ -302,6 +303,19 @@ func (f *fakeEval) replay(ctx context.Context, c eval.Case, o EvalGateOptions) e
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	cr := eval.CaseRun{Case: c.Name, PR: c.PR, Head: c.Head, Outcome: "dry_run", ReportDir: filepath.Join(o.RunDir, "cases", c.Name), JudgeOnly: o.JudgeOnly}
+	if o.JudgeOnly { // the reports of the newest full replay whose reviewers read what this one's would, as evalrun.RunCase takes them
+		runs, err := eval.ListRuns(f.root)
+		if err != nil {
+			cr.Outcome, cr.Error, cr.ReportDir = "error", err.Error(), ""
+			return cr
+		}
+		r, fc, ok := eval.FullReplayFor(runs, c.Name, c.Head, &eval.Run{ReviewerInputs: f.inputs[o.Candidate][1]})
+		if !ok || fc.ReportDir == "" {
+			cr.Outcome, cr.Error, cr.ReportDir = "error", "no full replay for the judge alone", ""
+			return cr
+		}
+		cr.ReportsRun = r.ID
+	}
 	if out, ok := f.outcomes[key]; ok {
 		cr.Outcome, cr.Error, cr.ReportDir = out, "scripted "+out, ""
 		return cr
@@ -369,6 +383,7 @@ func newGateFixture(t *testing.T, files []string, mods ...func(*harness)) *gateF
 		h.d.Checkout, h.d.LearnGit = f.checkout, f.git
 		h.d.EvalCase, h.d.EvalInputs = f.ev.run, f.ev.inputsOf
 		h.d.EvalRuns = func() ([]eval.Run, error) { return eval.ListRuns(h.layout.Eval()) }
+		f.ev.root = h.layout.Eval()
 		h.d.EvalCorpus = func() (*eval.Corpus, string, error) { return f.ev.corpus, "", nil }
 	}}, mods...)...)
 	pr := corpusPR(f.h, "talkable/talkable", 11)
@@ -419,7 +434,14 @@ func newGateFixture(t *testing.T, files []string, mods ...func(*harness)) *gateF
 // earlier `magnum eval run` would (reviewer "" records no reviewer inputs).
 func (f *gateFixture) baseline(id, reviewer string, scores map[string]*eval.Score) {
 	f.h.t.Helper()
-	r := eval.Run{ID: id, Inputs: "in-master", ReviewerInputs: reviewer, Commit: "abc1234"}
+	f.fullRun(id, "in-master", reviewer, scores)
+}
+
+// fullRun stores a scored full replay of cases with inputs and reviewer
+// inputs.
+func (f *gateFixture) fullRun(id, inputs, reviewer string, scores map[string]*eval.Score) {
+	f.h.t.Helper()
+	r := eval.Run{ID: id, Inputs: inputs, ReviewerInputs: reviewer, Commit: "abc1234"}
 	for _, c := range []eval.Case{f.other, f.target} {
 		if s, ok := scores[c.Name]; ok {
 			s.Case = c.Name
@@ -694,6 +716,60 @@ func TestTheGateHoldsWhenTheTargetHasNoFullReplayForJudgeOnly(t *testing.T) {
 	got := f2.ev.callsFor(f2.wt)
 	if len(got) != 2 || !got[0].Opts.JudgeOnly || f2.proposal().State != store.LearnPassed {
 		t.Fatalf("judge-only replays = %+v, proposal %s", got, f2.proposal().State)
+	}
+}
+
+// In judge-only mode both judges read the same reviewer reports: those of
+// the case's newest full replay whose reviewers read the candidate's
+// prompts. When the base's judge did not make that replay, its baseline is
+// the base's judge replayed alone on those reports, not an older full
+// replay whose reviewers happened to find less.
+func TestAJudgeOnlyGateComparesBothJudgesOnTheSameReports(t *testing.T) {
+	f := newGateFixture(t, []string{learn.DecisionsFile, learn.SkillFile})
+	// An older full replay with the base's inputs, whose reviewers missed
+	// the target, and a newer one with the same reviewers and another judge
+	// (another proposal's), whose reviewers found it.
+	f.baseline("20261001-120000", "rev-master", map[string]*eval.Score{f.target.Name: found(nil, f.target.Name),
+		f.other.Name: found([]string{"scope"})})
+	f.fullRun("20261002-120000", "in-other", "rev-master", map[string]*eval.Score{f.target.Name: found([]string{f.target.Name}),
+		f.other.Name: found([]string{"scope"})})
+	// On the newer reports the base's judge finds the target too: the
+	// candidate's judge changes nothing.
+	f.ev.script(f.base, f.target.Name, found([]string{f.target.Name}))
+	f.ev.script(f.base, f.other.Name, found([]string{"scope"}))
+	f.ev.script(f.wt, f.target.Name, found([]string{f.target.Name}))
+	f.ev.script(f.wt, f.other.Name, found([]string{"scope"}))
+	f.h.tick()
+
+	p := f.proposal()
+	if p.State != store.LearnFailed || !strings.Contains(p.Reason, "no target improved") {
+		t.Fatalf("proposal = %s %q, want failed: on the same reports the target is found either way", p.State, p.Reason)
+	}
+	base := f.ev.callsFor(f.base)
+	if len(base) != 2 || !base[0].Opts.JudgeOnly || base[0].Case != f.target.Name {
+		t.Fatalf("baseline replays = %+v, want the base's judge alone on each case", base)
+	}
+	g := f.gate()
+	for _, c := range g.Cases {
+		if c.ReportsRun != "20261002-120000" || c.BaselineRun == "20261001-120000" || c.Before == nil || c.Before.Found != 1 {
+			t.Fatalf("row %+v, want both judges on the reports of 20261002-120000", c)
+		}
+	}
+
+	// A full replay the base's judge made is its own baseline: nothing of
+	// the base is replayed.
+	f2 := newGateFixture(t, []string{learn.DecisionsFile, learn.SkillFile})
+	f2.fullRun("20261001-120000", "in-other", "rev-master", map[string]*eval.Score{f2.target.Name: found([]string{f2.target.Name})})
+	f2.baseline("20261002-120000", "rev-master", map[string]*eval.Score{f2.target.Name: found(nil, f2.target.Name),
+		f2.other.Name: found([]string{"scope"})})
+	f2.ev.script(f2.wt, f2.target.Name, found([]string{f2.target.Name}))
+	f2.ev.script(f2.wt, f2.other.Name, found([]string{"scope"}))
+	f2.h.tick()
+	if p := f2.proposal(); p.State != store.LearnPassed || len(f2.ev.callsFor(f2.base)) != 0 {
+		t.Fatalf("proposal = %s %q, base replays %+v", p.State, p.Reason, f2.ev.callsFor(f2.base))
+	}
+	if c := f2.gate().Cases[0]; c.ReportsRun != "20261002-120000" || c.BaselineRun != "20261002-120000" {
+		t.Fatalf("the target's row = %+v", c)
 	}
 }
 

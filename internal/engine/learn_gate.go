@@ -11,14 +11,18 @@ package engine
 // prompts and skill of the proposal's base commit (eval.Baselines), else a
 // replay of a detached worktree at that commit first (gateBaseName, removed
 // after the gate: never the checkout, whose branch and uncommitted edits
-// are the operator's); the candidate replays with the proposal's worktree,
-// and a case it lost is replayed once more. learn.Judge decides: passed (it lands,
+// are the operator's); judge-only, both judges read the reviewer reports of
+// the case's newest full replay whose reviewers read the candidate's
+// prompts, so the baseline is that replay when the base's judge made it,
+// else the base's judge alone on its reports (eval.JudgeBaselines). The
+// candidate replays with the proposal's worktree, and a case it lost is
+// replayed once more. learn.Judge decides: passed (it lands,
 // learn_land.go), held (the operator decides) or failed (its worktree and
 // branch go, its inputs stay new); a revert (learn_revert.go) is held
 // whatever it decides. Every replay is stored as `magnum eval
-// run` stores one, under runs of the gate's own (a baseline, a candidate
-// and a retry run, each with its agent tag), so a later gate and `magnum
-// eval` read them. The replays run in-process through Deps.EvalCase
+// run` stores one, under runs of the gate's own (a baseline, a baseline
+// judge, a candidate and a retry run, each with its agent tag), so a later
+// gate and `magnum eval` read them. The replays run in-process through Deps.EvalCase
 // (evalrun.RunCase, which the daemon's wiring sets: the engine cannot
 // import evalrun, Amendment A1). The Codex soft cap, a usage limit, a
 // shutdown, a drain or a pause (checked before each replay), and a replay
@@ -101,12 +105,14 @@ type GateMark struct {
 	Started  time.Time `json:"started"`
 }
 
-// GateCase is one case of a gate's result: the row learn.Judge read and
-// the eval runs its two scores come from.
+// GateCase is one case of a gate's result: the row learn.Judge read, the
+// eval runs its two scores come from and, judge-only, the full replay
+// whose reviewer reports both judges read.
 type GateCase struct {
 	learn.GateRow
 	BaselineRun  string `json:"baseline_run,omitempty"`
 	CandidateRun string `json:"candidate_run,omitempty"` // a second replay's when Retried
+	ReportsRun   string `json:"reports_run,omitempty"`
 }
 
 // GateResult is what a proposal's gate decided (learn_proposals.gate_json):
@@ -271,6 +277,19 @@ func (e *Engine) stopGate() {
 	}
 }
 
+// gateReplay is one replay of the gate: its score, or why it has none:
+// skip (the case is left out: its PR is flagged), missing (it ended
+// without a score: herdr away, a GitHub read, a judge's timeout, a judge
+// that read other reviewer reports than the gate chose) or stop (the gate
+// must stop now: something holds it, gateHold, the budget, a usage limit,
+// a login, a shutdown); the eval run it is stored in and, judge-only, the
+// full replay whose reviewer reports its judge read.
+type gateReplay struct {
+	score               *eval.Score
+	run, reports        string
+	skip, missing, stop string
+}
+
 // gateRun is an eval run the gate stores, made on its first replay.
 type gateRun struct {
 	run  eval.Run
@@ -334,7 +353,7 @@ func (e *Engine) runGate(ctx context.Context, p store.LearnProposal) error {
 	e.event(ctx, "info", learnSubject, "learn.gate_start", fmt.Sprintf("the gate of skill proposal %d started: %s, %s (%s)", p.ID,
 		textx.Count(len(cases), "case", "cases"), strings.Join(targets, ", "), mode), map[string]any{"proposal": p.ID, "cases": len(cases), "mode": mode})
 
-	var base, cand, retry *gateRun
+	var base, baseJudge, cand, retry *gateRun
 	mkRun := func(slot **gateRun, label, dir string, judgeOnly bool, in, rev string) (*gateRun, error) {
 		if *slot != nil {
 			return *slot, nil
@@ -353,7 +372,7 @@ func (e *Engine) runGate(ctx context.Context, p store.LearnProposal) error {
 		return r, nil
 	}
 	defer func() { // every run the gate made is finished, whatever stopped it
-		for _, r := range []*gateRun{base, cand, retry} {
+		for _, r := range []*gateRun{base, baseJudge, cand, retry} {
 			if r != nil {
 				r.run.Finished = e.now()
 				if err := eval.SaveRun(r.dir, r.run); err != nil {
@@ -362,18 +381,16 @@ func (e *Engine) runGate(ctx context.Context, p store.LearnProposal) error {
 			}
 		}
 	}()
-	// replay replays c into the run in slot: its score, or why it has none:
-	// skip (the case is left out: its PR is flagged), missing (the replay
-	// ended without a score: herdr away, a GitHub read, a judge's timeout)
-	// or stop (the gate must stop now: something holds it, gateHold, the
-	// budget, a usage limit, a login, a shutdown).
-	replay := func(slot **gateRun, label, dir string, judgeOnly bool, in, rev string, c eval.Case) (score *eval.Score, run, skip, missing, stop string) {
+	// replay replays c into the run in slot (judge-only: on the reviewer
+	// reports of the run want names, "" = any; a judge that read others
+	// has no score).
+	replay := func(slot **gateRun, label, dir string, judgeOnly bool, in, rev string, c eval.Case, want string) gateReplay {
 		if why := e.gateHold(ctx); why != "" { // a drain or a pause since the gate started
-			return nil, "", "", "", why
+			return gateReplay{stop: why}
 		}
 		r, err := mkRun(slot, label, dir, judgeOnly, in, rev)
 		if err != nil {
-			return nil, "", "", "", "the eval run's directory: " + oneLine(err.Error(), retroWhyRunes)
+			return gateReplay{stop: "the eval run's directory: " + oneLine(err.Error(), retroWhyRunes)}
 		}
 		cr := e.d.EvalCase(ctx, c, r.opts)
 		cr.Finished = e.now()
@@ -384,18 +401,24 @@ func (e *Engine) runGate(ctx context.Context, p store.LearnProposal) error {
 		if rs, err := e.d.EvalRuns(); err == nil {
 			runs = rs
 		}
+		out := gateReplay{run: r.run.ID, reports: cr.ReportsRun}
 		why := cmp.Or(oneLine(cr.Error, retroWhyRunes), "no result to score")
 		switch {
 		case ctx.Err() != nil:
-			return nil, r.run.ID, "", "", "the daemon is stopping"
+			out.stop = "the daemon is stopping"
 		case cr.Outcome == eval.OutcomeBudget, cr.Outcome == pipeline.OutcomeUsageLimit, cr.Outcome == pipeline.OutcomeLoginRequired:
-			return nil, r.run.ID, "", "", fmt.Sprintf("case %s: %s (%s)", c.Name, cr.Outcome, why)
+			out.stop = fmt.Sprintf("case %s: %s (%s)", c.Name, cr.Outcome, why)
 		case cr.Outcome == eval.OutcomeFlagged:
-			return nil, r.run.ID, learn.SkipFlagged, "", ""
+			out.skip = learn.SkipFlagged
 		case cr.Score == nil:
-			return nil, r.run.ID, "", fmt.Sprintf("the %s replay of %s ended %s: %s", label, c.Name, cr.Outcome, why), ""
+			out.missing = fmt.Sprintf("the %s replay of %s ended %s: %s", label, c.Name, cr.Outcome, why)
+		case judgeOnly && want != "" && cr.ReportsRun != want: // a full replay newer than the gate's choice
+			out.missing = fmt.Sprintf("the %s replay of %s read the reviewer reports of run %s, not those of run %s", label, c.Name,
+				cmp.Or(cr.ReportsRun, "none"), want)
+		default:
+			out.score = trimScore(cr.Score)
 		}
-		return trimScore(cr.Score), r.run.ID, "", "", ""
+		return out
 	}
 	// noScore stops the gate on a replay that ended without a score where
 	// the verdict needs one (a target's or its baseline's, a lost case's
@@ -409,7 +432,19 @@ func (e *Engine) runGate(ctx context.Context, p store.LearnProposal) error {
 		res.State, res.Rule = learn.GateHeld, fmt.Sprintf("%d gates in a row stopped on a replay without a score, the last: %s", n, why)
 		return e.gateDecide(octx, p, res)
 	}
+	// halt is whether replay rp ends the gate, and with what: a stop, or
+	// one without a score where the verdict needs one (need).
+	halt := func(rp gateReplay, need bool) (bool, error) {
+		switch {
+		case rp.stop != "":
+			return true, waits(rp.stop)
+		case rp.missing != "" && need:
+			return true, noScore(rp.missing)
+		}
+		return false, nil
+	}
 
+	judgeOnly := mode == learn.GateJudgeOnly
 	for _, gc := range cases {
 		row := GateCase{GateRow: learn.GateRow{Case: gc.Case.Name, Target: gc.Target, Skip: gc.Skip}}
 		if row.Skip != "" {
@@ -419,32 +454,54 @@ func (e *Engine) runGate(ctx context.Context, p store.LearnProposal) error {
 		if ctx.Err() != nil {
 			return waits("the daemon is stopping")
 		}
-		if bs := eval.Baselines(runs, baseIn, gc.Case); len(bs) > 0 {
-			row.Before, row.BaselineRun = trimScore(bs[0].Case.Score), bs[0].Run
-		} else {
-			score, run, skip, missing, stop := replay(&base, "baseline", baseDir, false, baseIn, baseRev, gc.Case)
-			switch {
-			case stop != "":
-				return waits(stop)
-			case missing != "" && gc.Target:
-				return noScore(missing)
+		// The baseline: a stored replay with the base's inputs, else a
+		// replay of the base. Judge-only, both judges read the reviewer
+		// reports of the case's newest full replay whose reviewers read the
+		// candidate's prompts: the baseline is that replay itself when the
+		// base's judge made it, else the base's judge alone on its reports
+		// (stored, or replayed now); without one the base's full replay is
+		// the baseline and makes it, and a stored baseline that recorded no
+		// reviewer inputs is no full replay (the case is skipped).
+		fr, fc, full := eval.FullReplayFor(runs, gc.Case.Name, gc.Case.Head, &eval.Run{ReviewerInputs: candRev})
+		switch {
+		case judgeOnly && full && fc.ReportDir != "":
+			row.ReportsRun = fr.ID
+			if bs := eval.JudgeBaselines(runs, baseIn, gc.Case, fr.ID); len(bs) > 0 {
+				row.Before, row.BaselineRun = trimScore(bs[0].Case.Score), bs[0].Run
+				break
 			}
-			row.Before, row.BaselineRun, row.Skip = score, run, cmp.Or(skip, missing)
-		}
-		if row.Skip == "" && mode == learn.GateJudgeOnly {
-			if _, fc, ok := eval.FullReplayFor(runs, gc.Case.Name, gc.Case.Head, &eval.Run{ReviewerInputs: candRev}); !ok || fc.ReportDir == "" {
-				row.Skip = "no full replay whose reviewers read the candidate's prompts, for the judge alone"
+			rp := replay(&baseJudge, "baseline judge", baseDir, true, baseIn, baseRev, gc.Case, fr.ID)
+			if stop, err := halt(rp, gc.Target); stop {
+				return err
+			}
+			row.Before, row.BaselineRun, row.Skip = rp.score, rp.run, cmp.Or(rp.skip, rp.missing)
+		case judgeOnly && len(eval.Baselines(runs, baseIn, gc.Case)) > 0:
+			row.Skip = "no full replay whose reviewers read the candidate's prompts, for the judge alone"
+		default:
+			if bs := eval.Baselines(runs, baseIn, gc.Case); len(bs) > 0 {
+				row.Before, row.BaselineRun = trimScore(bs[0].Case.Score), bs[0].Run
+				break
+			}
+			rp := replay(&base, "baseline", baseDir, false, baseIn, baseRev, gc.Case, "")
+			if stop, err := halt(rp, gc.Target); stop {
+				return err
+			}
+			row.Before, row.BaselineRun, row.Skip = rp.score, rp.run, cmp.Or(rp.skip, rp.missing)
+			if judgeOnly && row.Skip == "" { // its reviewers' reports are the candidate's judge's
+				if fr, fc, ok := eval.FullReplayFor(runs, gc.Case.Name, gc.Case.Head, &eval.Run{ReviewerInputs: candRev}); ok && fc.ReportDir != "" &&
+					fr.ID == rp.run {
+					row.ReportsRun = fr.ID
+				} else {
+					row.Skip = "no full replay whose reviewers read the candidate's prompts, for the judge alone"
+				}
 			}
 		}
 		if row.Skip == "" {
-			score, run, skip, missing, stop := replay(&cand, "candidate", p.Scratch, mode == learn.GateJudgeOnly, candIn, candRev, gc.Case)
-			switch {
-			case stop != "":
-				return waits(stop)
-			case missing != "" && gc.Target:
-				return noScore(missing)
+			rp := replay(&cand, "candidate", p.Scratch, judgeOnly, candIn, candRev, gc.Case, row.ReportsRun)
+			if stop, err := halt(rp, gc.Target); stop {
+				return err
 			}
-			row.After, row.CandidateRun, row.Skip = score, run, cmp.Or(skip, missing)
+			row.After, row.CandidateRun, row.Skip = rp.score, rp.run, cmp.Or(rp.skip, rp.missing)
 		}
 		res.Cases = append(res.Cases, row)
 	}
@@ -455,17 +512,15 @@ func (e *Engine) runGate(ctx context.Context, p store.LearnProposal) error {
 			continue
 		}
 		c := cases[slices.IndexFunc(cases, func(gc learn.GateCase) bool { return gc.Case.Name == row.Case })].Case
-		score, run, skip, missing, stop := replay(&retry, "second", p.Scratch, mode == learn.GateJudgeOnly, candIn, candRev, c)
-		switch {
-		case stop != "":
-			return waits(stop)
-		case missing != "": // without it the loss would count
-			return noScore(missing)
-		case skip != "":
-			row.Skip = skip
+		rp := replay(&retry, "second", p.Scratch, judgeOnly, candIn, candRev, c, row.ReportsRun)
+		if stop, err := halt(rp, true); stop { // without its score the loss would count
+			return err
+		}
+		if rp.skip != "" {
+			row.Skip = rp.skip
 			continue
 		}
-		row.Retried, row.After, row.CandidateRun = true, score, run
+		row.Retried, row.After, row.CandidateRun = true, rp.score, rp.run
 	}
 	rows := make([]learn.GateRow, len(res.Cases))
 	for i, c := range res.Cases {

@@ -5654,3 +5654,16 @@ editing history. Code, config comments and prompts reference these by their head
   short too, so the next tick does not replay every case again. Rejected: holding at once, as the spec's
   hold reasons do (those are about the corpus, which a later try does not change), and retrying without a
   bound.
+- **A judge-only gate compares both judges on the same reports** (2026-10-09, review of stage 4 of the
+  self-improving review loop). In judge-only mode the candidate's judge read the reviewer reports of the
+  case's newest full replay whose reviewers read the candidate's prompts (`eval.FullReplayFor`), while its
+  baseline was the newest replay with the base's inputs (`eval.Baselines`), often another full replay
+  whose reviewers had found more or less: the reviewers' variance, not the judge change, decided the case.
+  Now both read the reports of that full replay (`GateCase.ReportsRun` in `gate_json`): the baseline is
+  that replay itself when its judge read the base's inputs, else a replay of the base's judge alone on
+  its reports, stored (`eval.JudgeBaselines` finds it, or a full replay's own case, for a later gate) or
+  made in a run of its own ("baseline judge"); a case with no such full replay gets the base's full
+  replay as its baseline, whose reports the candidate's judge then reads, and a judge that read another
+  run's reports (a full replay newer than the gate's choice) counts as a replay without a score. Rejected:
+  replaying the base in full whenever the stored baseline is another run (twice the cost of the judge
+  alone, and the reports would differ again).
