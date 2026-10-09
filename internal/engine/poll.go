@@ -47,7 +47,7 @@ func (e *Engine) poll(ctx context.Context) error {
 		return nil
 	}
 	now := e.now()
-	if until, ok := e.kvTime(ctx, kvGHPausedUntil); ok && now.Before(until) {
+	if until, ok := e.kvTime(ctx, store.KVGHPollPausedUntil); ok && now.Before(until) {
 		e.log.Debug("poll skipped: GitHub rate budget low", "until", until)
 		return nil
 	}
@@ -83,7 +83,7 @@ func (e *Engine) poll(ctx context.Context) error {
 	}
 	// The poll's attempt, whatever its radar calls did; each watch keeps
 	// its own last good poll (poll_health.go).
-	e.setKV(ctx, kvLastPoll, store.FormatTime(now))
+	e.setKV(ctx, store.KVDaemonLastPoll, store.FormatTime(now))
 	e.recordWatchPolls(ctx, radar, now)
 	return errors.Join(errs...)
 }
@@ -117,13 +117,13 @@ func (e *Engine) recordRateLimit(ctx context.Context, rl github.RateLimit, now t
 	if rl.Limit == 0 && rl.Remaining == 0 {
 		return
 	}
-	e.setKV(ctx, kvGHRemaining, strconv.Itoa(rl.Remaining))
-	e.setKV(ctx, kvGHLimit, strconv.Itoa(rl.Limit))
+	e.setKV(ctx, store.KVGHRemaining, strconv.Itoa(rl.Remaining))
+	e.setKV(ctx, store.KVGHLimit, strconv.Itoa(rl.Limit))
 	if !rl.ResetAt.IsZero() {
-		e.setKV(ctx, kvGHReset, store.FormatTime(rl.ResetAt))
+		e.setKV(ctx, store.KVGHReset, store.FormatTime(rl.ResetAt))
 	}
 	if rl.Remaining < rateFloor && rl.ResetAt.After(now) {
-		e.setKV(ctx, kvGHPausedUntil, store.FormatTime(rl.ResetAt))
+		e.setKV(ctx, store.KVGHPollPausedUntil, store.FormatTime(rl.ResetAt))
 		e.event(ctx, "warn", "", "poll.rate_limited", fmt.Sprintf("GitHub budget at %d points; polling paused until %s", rl.Remaining, rl.ResetAt.Local().Format("15:04")), nil)
 	}
 }

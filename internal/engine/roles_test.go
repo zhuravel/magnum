@@ -78,7 +78,7 @@ func TestRequestedRoleGetsAPaneForThatRound(t *testing.T) {
 	if !slices.Contains(h.ag.all(), start) || !slices.Contains(h.ag.all(), "preflight:droid") {
 		t.Fatalf("droid-simplify not started: %v", h.ag.all())
 	}
-	if v, ok := h.e.getKV(h.ctx, kvPRRequested(pr.ID)); ok {
+	if v, ok := h.e.getKV(h.ctx, store.KVPRRoles(pr.ID)); ok {
 		t.Fatalf("request kept after the review posted: %q", v)
 	}
 
@@ -127,7 +127,7 @@ func TestPauseByKindOmp(t *testing.T) {
 	if !slices.Contains(h.ag.all(), "start:"+itoa(pr.ID)+":omp-review:") || !slices.Contains(h.ag.all(), "preflight:omp") {
 		t.Fatalf("omp-review not started: %v", h.ag.all())
 	}
-	if until, ok := h.e.kvTime(h.ctx, KVToolPausedUntil(config.KindOMP)); !ok || !until.Equal(resetAt) {
+	if until, ok := h.e.kvTime(h.ctx, store.KVToolPausedUntil(config.KindOMP)); !ok || !until.Equal(resetAt) {
 		t.Fatalf("omp paused until %v (%v), want %v", until, ok, resetAt)
 	}
 	for _, kind := range []string{config.KindCodex, config.KindClaude} {

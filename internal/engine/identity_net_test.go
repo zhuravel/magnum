@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/identity"
+	"github.com/zhuravel/magnum/internal/store"
 )
 
 // What gh and the identity package report when GitHub cannot be reached.
@@ -54,7 +55,7 @@ func TestIdentityNetworkBlipOnFirstTickKeepsIdentitiesHealthy(t *testing.T) {
 	h.tick()
 	h.wantHealthy("zhuravel", "talkable-app")
 	h.wantToasts("identity", 0)
-	if v, _ := h.e.getKV(h.ctx, KVIdentityCheck("talkable-app")); v == "fail" {
+	if v, _ := h.e.getKV(h.ctx, store.KVIdentityCheck("talkable-app")); v == "fail" {
 		t.Fatal("a blip recorded a failed verdict")
 	}
 	ghChecks, _ := gh.counts()
@@ -82,7 +83,7 @@ func TestIdentityNetworkBlipOnFirstTickKeepsIdentitiesHealthy(t *testing.T) {
 		t.Fatalf("app checks, refreshes = %d, %d, want %d, %d", c, en, appChecks+1, ensures+1)
 	}
 	h.wantHealthy("zhuravel", "talkable-app")
-	if v, _ := h.e.getKV(h.ctx, KVIdentityCheck("talkable-app")); v != "pass" {
+	if v, _ := h.e.getKV(h.ctx, store.KVIdentityCheck("talkable-app")); v != "pass" {
 		t.Fatalf("verdict after the retry = %q, want pass", v)
 	}
 	h.wantToasts("identity", 0)

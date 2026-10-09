@@ -172,7 +172,7 @@ func (e *Engine) tabBar(ctx context.Context) string {
 	if prs, err := e.st.ListPRs(ctx, store.PRFilter{States: []string{store.PRNeedsAttention}}); err == nil && len(prs) > 0 {
 		parts = append(parts, fmt.Sprintf("%d attention", len(prs)))
 	}
-	if v, _ := e.getKV(ctx, KVDaemonPaused); v == "1" {
+	if v, _ := e.getKV(ctx, store.KVDaemonPaused); v == "1" {
 		parts = append(parts, e.pauseTabBar(ctx)...) // "paused 19h · 6 requests held"
 	}
 	if _, ok := e.infraPause(ctx); ok {

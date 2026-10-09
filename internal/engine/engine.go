@@ -684,7 +684,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	defer func() { e.tickEnded = e.now().Round(0) }()
 	var errs []error
 	e.compares.reset() // a comparison serves the tick that made it
-	e.setKV(ctx, kvLastTick, store.FormatTime(now))
+	e.setKV(ctx, store.KVDaemonLastTick, store.FormatTime(now))
 	e.heartbeat()
 	// Requests come first: the GitHub poll takes seconds (about 12 with
 	// several watches), and a CLI or screen waiting for an answer gave up
@@ -721,10 +721,10 @@ func (e *Engine) Tick(ctx context.Context) error {
 func (e *Engine) startup(ctx context.Context) {
 	// The previous daemon's last tick, before this one writes its own:
 	// requests queued after it were never seen by a daemon (expireRequests).
-	lastTick, _ := e.kvTime(ctx, kvLastTick)
-	e.setKV(ctx, kvStartedAt, store.FormatTime(e.now()))
+	lastTick, _ := e.kvTime(ctx, store.KVDaemonLastTick)
+	e.setKV(ctx, store.KVDaemonStartedAt, store.FormatTime(e.now()))
 	if !e.d.DryRun {
-		e.setKV(ctx, kvPid, strconv.Itoa(os.Getpid()))
+		e.setKV(ctx, store.KVDaemonPid, strconv.Itoa(os.Getpid()))
 	}
 	e.recordBuild(ctx)
 	e.expireRequests(ctx, lastTick)

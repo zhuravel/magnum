@@ -234,10 +234,10 @@ func TestIdentityVerdictRequest(t *testing.T) {
 	if r := h.request(pass); r.State != store.RequestDone || deref(r.Result) != "identities check: pass" {
 		t.Fatalf("pass request: %+v", r)
 	}
-	if v, _ := h.e.getKV(h.ctx, KVIdentityCheck("zhuravel")); v != "pass" {
+	if v, _ := h.e.getKV(h.ctx, store.KVIdentityCheck("zhuravel")); v != "pass" {
 		t.Fatalf("identity check kv = %q", v)
 	}
-	if v, ok := h.e.getKV(h.ctx, KVIdentityError("zhuravel")); ok {
+	if v, ok := h.e.getKV(h.ctx, store.KVIdentityError("zhuravel")); ok {
 		t.Fatalf("identity error kv kept: %q", v)
 	}
 	// fail → pass forgot the dedup record: the next failure notifies at once.
@@ -250,10 +250,10 @@ func TestIdentityVerdictRequest(t *testing.T) {
 	if r := h.request(fail); r.State != store.RequestDone || !strings.Contains(deref(r.Result), "no pull_requests write") {
 		t.Fatalf("fail request: %+v", r)
 	}
-	if v, _ := h.e.getKV(h.ctx, KVIdentityCheck("talkable-app")); v != "fail" {
+	if v, _ := h.e.getKV(h.ctx, store.KVIdentityCheck("talkable-app")); v != "fail" {
 		t.Fatalf("identity check kv = %q", v)
 	}
-	if v, _ := h.e.getKV(h.ctx, KVIdentityError("talkable-app")); v != "no pull_requests write" {
+	if v, _ := h.e.getKV(h.ctx, store.KVIdentityError("talkable-app")); v != "no pull_requests write" {
 		t.Fatalf("identity error kv = %q", v)
 	}
 
@@ -262,7 +262,7 @@ func TestIdentityVerdictRequest(t *testing.T) {
 	if r := h.request(unknown); r.State != store.RequestFailed || !strings.Contains(deref(r.Result), `unknown identity "nobody"`) {
 		t.Fatalf("unknown identity: %+v", r)
 	}
-	if _, ok := h.e.getKV(h.ctx, KVIdentityCheck("nobody")); ok {
+	if _, ok := h.e.getKV(h.ctx, store.KVIdentityCheck("nobody")); ok {
 		t.Fatal("an unknown identity got a verdict")
 	}
 }

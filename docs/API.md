@@ -4568,17 +4568,6 @@ const (
     Delta classes ([daemon] skip_trivial_deltas).
 
 const (
-
-	// KVDaemonPaused is "1" while automation is paused (magnum pause);
-	// KVDaemonPausedReason and KVDaemonPausedUntil (optional) explain it.
-	KVDaemonPaused       = store.KVDaemonPaused
-	KVDaemonPausedReason = store.KVDaemonPausedReason
-	KVDaemonPausedUntil  = store.KVDaemonPausedUntil
-)
-    kv keys the engine maintains (never secrets). The names live in store
-    (store.KV*) so the CLI reads exactly what the daemon writes.
-
-const (
 	// KVDaemonDraining is set (to the time it started) by `magnum
 	// daemon-restart --drain`: no new round starts; the restart, or the
 	// command giving up, deletes it.
@@ -4653,7 +4642,7 @@ const (
 const ApprovalDismissMessage = "magnum: new commits since this approval; a re-review follows"
     ApprovalDismissMessage is the reason a dismissed approval shows on GitHub.
 
-const EvPRMuted = evPRMuted
+const EvPRMuted = "pr.muted"
     EvPRMuted is the event a mute records, its reason in the data's "reason"
     (requestMute); the board's card shows the latest one's next to the flag.
 
@@ -4681,9 +4670,10 @@ const RequestReadyForReview = "(ready for review)"
     RequestReadyForReview is KVPRRequestBy for a draft that became ready for
     review.
 
-const SkipIgnored = skipIgnored
-    SkipIgnored is the skip_reason of a PR `magnum ignore` muted: the board
-    shows such a PR as ignored.
+const SkipIgnored = "ignored"
+    SkipIgnored is the skip_reason `magnum ignore` stores on a muted PR:
+    classify keeps it instead of the generic "muted", and the board shows such a
+    PR as ignored.
 
 
 VARIABLES
@@ -4790,16 +4780,6 @@ func DrainerAlive(pid int) bool
 func FileModTime(path string) (time.Time, bool)
     FileModTime is SkewNote's reader of a binary's mtime on disk.
 
-func KVIdentityCheck(name string) string
-    KVIdentityCheck is the kv key holding "pass" or "fail" from the
-    identity's last Check. A tick-time token refresh failure is kept under
-    identity.<name>.tick_error; an identity is healthy unless either says so.
-    Same as store.KVIdentityCheck.
-
-func KVIdentityError(name string) string
-    KVIdentityError is the kv key holding why the identity's Check failed.
-    Same as store.KVIdentityError.
-
 func KVNotesMisses(fullName string) string
     KVNotesMisses marks a repository whose retro recorded misses for its notes:
     the time of the retro that did (store.FormatTime). The misses trigger
@@ -4873,19 +4853,6 @@ func KVPRTrivial(prID int64) string
 
 func KVPRWait(prID int64) string
     KVPRWait holds why a waiting PR has no round yet (Wait as JSON).
-
-func KVToolPausedReason(tool string) string
-    KVToolPausedReason is the kv key holding why a tool is paused (usage_limit |
-    login_required). Same as store.KVToolPausedReason.
-
-func KVToolPausedUntil(tool string) string
-    KVToolPausedUntil is the kv key holding when a tool's pause ends ("codex",
-    "claude"; store.FormatTime). Same as store.KVToolPausedUntil.
-
-func KVWatchPaused(owner string) string
-    KVWatchPaused holds the reason a watch owner's automation was
-    paused (identity leak); magnum resume --watch clears it. Same as
-    store.KVWatchPaused.
 
 func KickDaemon(layout paths.Layout) (int, error)
     KickDaemon asks the running daemon for a tick now (SIGUSR1, `magnum kick`);
@@ -12212,7 +12179,10 @@ const (
 )
     kv keys shared by the daemon (which writes them) and the CLI (`magnum
     status`, `doctor`, `pause`, `resume`, `identities`), so neither side spells
-    them as string literals. Values are never secrets.
+    them as string literals, and keys that a package below the engine (agents,
+    pipeline) reads. Values are never secrets. A key only the engine gives a
+    meaning to stays in the engine (engine.KV*), beside the code that writes it,
+    and moves here once such a package reads it.
 
 const (
 	RetroNothing      = "nothing" // no candidate: nothing to classify
@@ -12526,6 +12496,7 @@ func IsMergedUnreviewed(ghState, prevState, headSHA, reviewedSHA string, muted, 
 
 func KVIdentityCheck(name string) string
     KVIdentityCheck holds "pass" or "fail" from an identity's last Check.
+    An identity is healthy unless it or KVIdentityTickError says otherwise.
 
 func KVIdentityError(name string) string
     KVIdentityError holds why an identity's Check failed.

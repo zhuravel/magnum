@@ -106,7 +106,7 @@ func (e *Engine) needsAttention(ctx context.Context, job *roundJob, pr store.PR,
 		e.log.Info("PR moved on during the round", "pr", pr.ID, "err", err)
 		return
 	}
-	e.delKV(ctx, kvPRDryRun(pr.ID), kvPRRedecide(pr.ID)) // the forced request ended with it
+	e.delKV(ctx, store.KVPRDryRun(pr.ID), kvPRRedecide(pr.ID)) // the forced request ended with it
 	e.setKV(ctx, KVPRAttention(pr.ID), why)
 	if job.hasSlot {
 		_ = e.st.TransitionSlot(ctx, job.slot.ID, []string{store.SlotClaimed, store.SlotBusy}, store.SlotHeld, nil)
@@ -130,7 +130,7 @@ func (e *Engine) finish(ctx context.Context, job *roundJob, in pipeline.RoundInp
 		// The next dispatch of the PR repairs a slot left busy (slotGate).
 		e.log.Warn("round finished: slot back to held", "slot", job.slot.Name, "err", err)
 	}
-	e.delKV(ctx, kvPRFresh(job.pr.ID))
+	e.delKV(ctx, store.KVPRFresh(job.pr.ID))
 	pr, err := e.st.PRByID(ctx, job.pr.ID)
 	if err != nil {
 		e.log.Warn("round finished and PR is gone", "pr", job.pr.ID, "err", err)
@@ -215,13 +215,13 @@ func (e *Engine) finish(ctx context.Context, job *roundJob, in pipeline.RoundInp
 		e.needsAttention(ctx, job, pr, from, outcome, msg, nil)
 	case pipeline.OutcomeIdentityError:
 		e.keptApprovalFailed(ctx, job.repo, pr, "its round ended "+outcome)
-		e.setKV(ctx, KVIdentityCheck(pr.Identity), "fail")
-		e.setKV(ctx, KVIdentityError(pr.Identity), "the judge's identity check failed: "+msg)
+		e.setKV(ctx, store.KVIdentityCheck(pr.Identity), "fail")
+		e.setKV(ctx, store.KVIdentityError(pr.Identity), "the judge's identity check failed: "+msg)
 		e.needsAttention(ctx, job, pr, from, outcome, msg, nil)
 	case pipeline.OutcomeIdentityLeak:
 		e.keptApprovalFailed(ctx, job.repo, pr, "its round ended "+outcome)
 		// msg is the pipeline's sentence: review N carrying the run's marker was posted as "x", not "y".
-		e.setKV(ctx, KVWatchPaused(job.repo.WatchOwner), fmt.Sprintf("identity leak on %s#%d: %s", job.repo.FullName(), pr.Number, msg))
+		e.setKV(ctx, store.KVWatchPaused(job.repo.WatchOwner), fmt.Sprintf("identity leak on %s#%d: %s", job.repo.FullName(), pr.Number, msg))
 		e.needsAttention(ctx, job, pr, from, outcome, msg, nil)
 		e.urgent(fmt.Sprintf("leak:%d", pr.ID), "magnum: IDENTITY LEAK on "+job.repo.Name+fmt.Sprintf("#%d", pr.Number),
 			msg+". Automation for "+job.repo.WatchOwner+" is paused (magnum resume --watch "+job.repo.WatchOwner+").", 0)
@@ -382,7 +382,7 @@ func (e *Engine) onPosted(ctx context.Context, job *roundJob, pr store.PR, in pi
 	}
 	e.settleKeptApproval(ctx, job.repo, pr, target, res)
 	e.dismissFormer(ctx, job, pr, target, res)
-	e.delKV(ctx, kvPRDryRun(pr.ID), kvPRRedecide(pr.ID)) // the forced request is served
+	e.delKV(ctx, store.KVPRDryRun(pr.ID), kvPRRedecide(pr.ID)) // the forced request is served
 	// The request is served; the kinds that just worked lose their backoff.
 	e.clearRequested(ctx, pr.ID)
 	if to == store.PRReviewed && err == nil { // replies that came after the judge read them
@@ -391,7 +391,7 @@ func (e *Engine) onPosted(ctx context.Context, job *roundJob, pr store.PR, in pi
 		}
 	}
 	if k := e.cfg.JudgeFor(&job.watch).AgentKind(); k != "" {
-		e.delKV(ctx, kvToolBackoff(k))
+		e.delKV(ctx, store.KVToolBackoff(k))
 	}
 	for _, role := range slices.Sorted(maps.Keys(res.Reports)) {
 		rep := res.Reports[role]
@@ -399,7 +399,7 @@ func (e *Engine) onPosted(ctx context.Context, job *roundJob, pr store.PR, in pi
 			continue
 		}
 		if k := e.reportKind(&job.watch, rep); k != "" {
-			e.delKV(ctx, kvToolBackoff(k))
+			e.delKV(ctx, store.KVToolBackoff(k))
 		}
 	}
 	switch {
@@ -604,8 +604,8 @@ func (e *Engine) reportKind(w *config.Watch, rep pipeline.RoleReport) string {
 // moved meanwhile, or reviewed no longer describes it). A post-merge dry run
 // returns to closed, released after a fresh close grace.
 func (e *Engine) onDryRun(ctx context.Context, job *roundJob, pr store.PR, in pipeline.RoundInput, res pipeline.RoundResult, from []string) {
-	to, _ := e.getKV(ctx, kvPRDryRun(pr.ID))
-	e.delKV(ctx, kvPRDryRun(pr.ID), kvPRRedecide(pr.ID)) // the forced request ended with it
+	to, _ := e.getKV(ctx, store.KVPRDryRun(pr.ID))
+	e.delKV(ctx, store.KVPRDryRun(pr.ID), kvPRRedecide(pr.ID)) // the forced request ended with it
 	switch {
 	case job.postMerge:
 		to = store.PRClosed

@@ -60,7 +60,7 @@ func TestAWatchWhosePollsFailIsRecordedAndToastedOncePerStreak(t *testing.T) {
 	if !p.FailingSince.Equal(since) || p.Error != "HTTP 502" || !p.LastOK.Equal(lastOK) || p.Failing(now) != 12*time.Minute {
 		t.Fatalf("12 minutes failing: %+v (failing %s)", p, p.Failing(now))
 	}
-	if last, _ := h.e.kvTime(h.ctx, kvLastPoll); !last.Equal(now) {
+	if last, _ := h.e.kvTime(h.ctx, store.KVDaemonLastPoll); !last.Equal(now) {
 		t.Errorf("the daemon's last poll = %s, want %s", last, now)
 	}
 	if z := watch("zhuravel"); !z.LastOK.Equal(now) || z.Failing(now) != 0 || z.Error != "" {

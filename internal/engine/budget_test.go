@@ -109,7 +109,7 @@ func TestBudgetSoftCapHoldsFullReReviews(t *testing.T) {
 	h.tick()
 	reqWantRounds(t, h, 1)
 	pr := h.wantState(2, store.PRRereviewPending)
-	if gate, _ := h.e.getKV(h.ctx, kvPRGate(pr.ID)); !strings.Contains(gate, "soft cap 80%") || !strings.Contains(gate, "full re-reviews wait") {
+	if gate, _ := h.e.getKV(h.ctx, store.KVPRGate(pr.ID)); !strings.Contains(gate, "soft cap 80%") || !strings.Contains(gate, "full re-reviews wait") {
 		t.Fatalf("gate = %q", gate)
 	}
 	w := waitOf(t, h, 2)

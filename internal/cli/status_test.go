@@ -55,21 +55,21 @@ func statusFixture(t *testing.T) (*inspFixture, *store.Store, statusDeps, time.T
 	inspSeedPR(t, st, "zhuravel/app", 3, store.PRClosed, func(u *store.PRUpdate) { u.Set("release_after", later) })
 
 	for k, v := range map[string]string{
-		"daemon.last_poll":                     store.FormatTime(now.Add(-40 * time.Second)),
-		"daemon.started_at":                    store.FormatTime(now.Add(-3 * time.Hour)),
-		"gh.remaining":                         "4890",
-		"gh.limit":                             "5000",
-		engine.KVToolPausedUntil("codex"):      store.FormatTime(now.Add(time.Hour)),
-		engine.KVToolPausedReason("codex"):     "usage_limit",
-		"codex.paused_detail":                  "You've hit your usage limit",
-		engine.KVDaemonPaused:                  "1",
-		engine.KVDaemonPausedReason:            "lunch",
-		engine.KVDaemonPausedAt:                store.FormatTime(now.Add(-19 * time.Hour)),
-		engine.KVDaemonPausedUntil:             store.FormatTime(now.Add(time.Hour)),
-		engine.KVDaemonPausedHeld:              "6",
-		engine.KVWatchPaused("talkable"):       "review 77 posted by zhuravel",
-		engine.KVIdentityCheck("talkable-app"): "fail",
-		engine.KVIdentityError("talkable-app"): "pull_requests permission is read",
+		"daemon.last_poll":                    store.FormatTime(now.Add(-40 * time.Second)),
+		"daemon.started_at":                   store.FormatTime(now.Add(-3 * time.Hour)),
+		"gh.remaining":                        "4890",
+		"gh.limit":                            "5000",
+		store.KVToolPausedUntil("codex"):      store.FormatTime(now.Add(time.Hour)),
+		store.KVToolPausedReason("codex"):     "usage_limit",
+		"codex.paused_detail":                 "You've hit your usage limit",
+		store.KVDaemonPaused:                  "1",
+		store.KVDaemonPausedReason:            "lunch",
+		engine.KVDaemonPausedAt:               store.FormatTime(now.Add(-19 * time.Hour)),
+		store.KVDaemonPausedUntil:             store.FormatTime(now.Add(time.Hour)),
+		engine.KVDaemonPausedHeld:             "6",
+		store.KVWatchPaused("talkable"):       "review 77 posted by zhuravel",
+		store.KVIdentityCheck("talkable-app"): "fail",
+		store.KVIdentityError("talkable-app"): "pull_requests permission is read",
 	} {
 		if err := st.SetKV(ctx, k, v); err != nil {
 			t.Fatal(err)

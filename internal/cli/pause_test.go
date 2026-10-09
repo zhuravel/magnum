@@ -29,14 +29,14 @@ func TestPauseRefusesADurationAsTheReason(t *testing.T) {
 		}
 		d := args[len(args)-1]
 		actContains(t, h.errb.String(), `"`+d+`" reads as a duration: use --for `+d)
-		if _, ok := h.kv(engine.KVDaemonPaused); ok {
+		if _, ok := h.kv(store.KVDaemonPaused); ok {
 			t.Fatalf("pause %v paused", args)
 		}
 	}
 	if code := h.cmd("pause", "lunch", "break"); code != 0 {
 		t.Fatalf("a worded reason: exit %d: %s", code, h.errb.String())
 	}
-	if v, _ := h.kv(engine.KVDaemonPausedReason); v != "lunch break" {
+	if v, _ := h.kv(store.KVDaemonPausedReason); v != "lunch break" {
 		t.Errorf("reason = %q", v)
 	}
 }
@@ -44,17 +44,17 @@ func TestPauseRefusesADurationAsTheReason(t *testing.T) {
 func TestPauseAndResumeWithoutDaemon(t *testing.T) {
 	h := newActHarness(t)
 	// An expired timed pause is left over: the new pause must replace it.
-	_ = h.st.SetKV(h.ctx, engine.KVDaemonPausedUntil, store.FormatTime(h.now.Add(-time.Hour)))
+	_ = h.st.SetKV(h.ctx, store.KVDaemonPausedUntil, store.FormatTime(h.now.Add(-time.Hour)))
 	if code := h.cmd("pause", "--for", "2h", "--reason", "lunch"); code != 0 {
 		t.Fatalf("exit %d: %s", code, h.errb.String())
 	}
-	if v, _ := h.kv(engine.KVDaemonPaused); v != "1" {
+	if v, _ := h.kv(store.KVDaemonPaused); v != "1" {
 		t.Errorf("paused = %q", v)
 	}
-	if v, _ := h.kv(engine.KVDaemonPausedReason); v != "lunch" {
+	if v, _ := h.kv(store.KVDaemonPausedReason); v != "lunch" {
 		t.Errorf("reason = %q", v)
 	}
-	if v, _ := h.kv(engine.KVDaemonPausedUntil); v != store.FormatTime(h.now.Add(2*time.Hour)) {
+	if v, _ := h.kv(store.KVDaemonPausedUntil); v != store.FormatTime(h.now.Add(2*time.Hour)) {
 		t.Errorf("until = %q", v)
 	}
 	if v, _ := h.kv(engine.KVDaemonPausedAt); v != store.FormatTime(h.now) {
@@ -73,7 +73,7 @@ func TestPauseAndResumeWithoutDaemon(t *testing.T) {
 	if code := h.cmd("pause"); code != 0 {
 		t.Fatalf("pause again: exit %d", code)
 	}
-	for _, k := range []string{engine.KVDaemonPausedReason, engine.KVDaemonPausedUntil} {
+	for _, k := range []string{store.KVDaemonPausedReason, store.KVDaemonPausedUntil} {
 		if v, ok := h.kv(k); ok {
 			t.Errorf("an indefinite pause kept %s = %q", k, v)
 		}
@@ -86,7 +86,7 @@ func TestPauseAndResumeWithoutDaemon(t *testing.T) {
 	if code := h.cmd("resume"); code != 0 {
 		t.Fatalf("resume exit %d", code)
 	}
-	for _, k := range []string{engine.KVDaemonPaused, engine.KVDaemonPausedReason, engine.KVDaemonPausedUntil,
+	for _, k := range []string{store.KVDaemonPaused, store.KVDaemonPausedReason, store.KVDaemonPausedUntil,
 		engine.KVDaemonPausedAt, engine.KVDaemonPausedHeld} {
 		if _, ok := h.kv(k); ok {
 			t.Errorf("%s still set", k)
@@ -99,8 +99,8 @@ func TestPauseAndResumeWithoutDaemon(t *testing.T) {
 
 	// Tool and watch pauses.
 	seedToolPause := func(tool string) {
-		_ = h.st.SetKV(h.ctx, engine.KVToolPausedUntil(tool), store.FormatTime(h.now.Add(time.Hour)))
-		_ = h.st.SetKV(h.ctx, engine.KVToolPausedReason(tool), "usage_limit")
+		_ = h.st.SetKV(h.ctx, store.KVToolPausedUntil(tool), store.FormatTime(h.now.Add(time.Hour)))
+		_ = h.st.SetKV(h.ctx, store.KVToolPausedReason(tool), "usage_limit")
 		_ = h.st.SetKV(h.ctx, store.KVToolPausedDetail(tool), "You've hit your usage limit")
 		// The pause toast was sent: it is deduplicated for an hour.
 		if ok, err := h.st.ShouldSend(h.ctx, "pause:"+tool+":usage_limit", time.Hour); err != nil || !ok {
@@ -112,7 +112,7 @@ func TestPauseAndResumeWithoutDaemon(t *testing.T) {
 	if code := h.cmd("resume", "--tool", "codex"); code != 0 || strings.TrimSpace(h.out.String()) != "resumed codex" {
 		t.Fatalf("resume codex: exit %d %q", code, h.out.String())
 	}
-	for _, k := range []string{engine.KVToolPausedUntil("codex"), engine.KVToolPausedReason("codex"), store.KVToolPausedDetail("codex")} {
+	for _, k := range []string{store.KVToolPausedUntil("codex"), store.KVToolPausedReason("codex"), store.KVToolPausedDetail("codex")} {
 		if _, ok := h.kv(k); ok {
 			t.Errorf("%s kept", k)
 		}
@@ -127,12 +127,12 @@ func TestPauseAndResumeWithoutDaemon(t *testing.T) {
 	}
 
 	seedToolPause("claude")
-	_ = h.st.SetKV(h.ctx, engine.KVWatchPaused("talkable"), "identity_leak")
+	_ = h.st.SetKV(h.ctx, store.KVWatchPaused("talkable"), "identity_leak")
 	h.out.Reset()
 	if code := h.cmd("resume", "--tool", "all"); code != 0 || !strings.Contains(h.out.String(), "resumed claude") {
 		t.Fatalf("resume tool: exit %d %q", code, h.out.String())
 	}
-	for _, k := range []string{engine.KVToolPausedUntil("claude"), engine.KVToolPausedReason("claude"), store.KVToolPausedDetail("claude")} {
+	for _, k := range []string{store.KVToolPausedUntil("claude"), store.KVToolPausedReason("claude"), store.KVToolPausedDetail("claude")} {
 		if _, ok := h.kv(k); ok {
 			t.Errorf("%s kept", k)
 		}
@@ -140,7 +140,7 @@ func TestPauseAndResumeWithoutDaemon(t *testing.T) {
 	if code := h.cmd("resume", "--watch", "Talkable"); code != 0 {
 		t.Fatalf("resume watch exit %d", code)
 	}
-	if _, ok := h.kv(engine.KVWatchPaused("talkable")); ok {
+	if _, ok := h.kv(store.KVWatchPaused("talkable")); ok {
 		t.Error("watch pause kept")
 	}
 	if code := h.cmd("resume", "--tool", "codex", "--watch", "talkable"); code != 2 {
@@ -158,7 +158,7 @@ func TestPauseAndResumeThroughTheDaemon(t *testing.T) {
 	if code := h.cmd("pause", "--for", "2h", "--reason", "lunch"); code != 0 {
 		t.Fatalf("exit %d: %s", code, h.errb.String())
 	}
-	if _, ok := h.kv(engine.KVDaemonPaused); ok {
+	if _, ok := h.kv(store.KVDaemonPaused); ok {
 		t.Error("the CLI wrote the pause although the daemon runs")
 	}
 	reqs := h.requests()

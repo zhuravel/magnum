@@ -293,7 +293,7 @@ func TestReviewDryRunRequestPostsNothing(t *testing.T) {
 	if deref(pr.LastReviewID) != deref(before.LastReviewID) || deref(pr.LastReviewEvent) != deref(before.LastReviewEvent) || pr.Forced {
 		t.Fatalf("a dry run must not record a review: %+v", pr)
 	}
-	if _, ok := h.e.getKV(h.ctx, kvPRDryRun(pr.ID)); ok {
+	if _, ok := h.e.getKV(h.ctx, store.KVPRDryRun(pr.ID)); ok {
 		t.Fatal("dry-run marker kept")
 	}
 	evs, _ := h.st.EventsBySubject(h.ctx, "pr:talkable/talkable#2", 0)
@@ -479,8 +479,8 @@ func TestPollPersistsTheDiscoveredClone(t *testing.T) {
 func TestForcedReviewRechecksAnUnhealthyIdentity(t *testing.T) {
 	h := newHarness(t)
 	pr := h.reviewedPR(2, "b1")
-	h.e.setKV(h.ctx, KVIdentityCheck(pr.Identity), "fail")
-	h.e.setKV(h.ctx, KVIdentityError(pr.Identity), "the judge's identity check failed: connection reset")
+	h.e.setKV(h.ctx, store.KVIdentityCheck(pr.Identity), "fail")
+	h.e.setKV(h.ctx, store.KVIdentityError(pr.Identity), "the judge's identity check failed: connection reset")
 	src := h.ids[pr.Identity]
 	src.mu.Lock()
 	checksBefore := src.checks
@@ -499,7 +499,7 @@ func TestForcedReviewRechecksAnUnhealthyIdentity(t *testing.T) {
 	if checks != checksBefore+1 {
 		t.Fatalf("identity checks = %d, want %d (one re-check on the forced review)", checks, checksBefore+1)
 	}
-	if v, _ := h.e.getKV(h.ctx, KVIdentityCheck(pr.Identity)); v != "pass" {
+	if v, _ := h.e.getKV(h.ctx, store.KVIdentityCheck(pr.Identity)); v != "pass" {
 		t.Fatalf("identity check kv = %q, want pass", v)
 	}
 	if ok, why := h.e.identityHealthy(h.ctx, pr.Identity); !ok {
@@ -513,7 +513,7 @@ func TestForcedReviewRechecksAnUnhealthyIdentity(t *testing.T) {
 func TestRoundParksSessionsWhenTheIdentityChanged(t *testing.T) {
 	h := newHarness(t)
 	pr := h.reviewedPR(2, "b1")
-	h.e.setKV(h.ctx, kvPRSessionsIdentity(pr.ID), "zhuravel")
+	h.e.setKV(h.ctx, store.KVPRSessionsIdentity(pr.ID), "zhuravel")
 	parksBefore := h.ag.count(fmt.Sprintf("park:%d", pr.ID))
 	h.rd.script = func(in pipeline.RoundInput) (pipeline.RoundResult, error) {
 		return pipeline.RoundResult{Outcome: pipeline.OutcomePosted, ReviewID: 1001, Event: "APPROVED"}, nil
@@ -526,7 +526,7 @@ func TestRoundParksSessionsWhenTheIdentityChanged(t *testing.T) {
 	if n := h.ag.count(fmt.Sprintf("park:%d", pr.ID)); n != parksBefore+1 {
 		t.Fatalf("parks = %d, want %d (fresh sessions for the new identity)", n, parksBefore+1)
 	}
-	if v, _ := h.e.getKV(h.ctx, kvPRSessionsIdentity(pr.ID)); v != "talkable-app" {
+	if v, _ := h.e.getKV(h.ctx, store.KVPRSessionsIdentity(pr.ID)); v != "talkable-app" {
 		t.Fatalf("sessions identity kv = %q, want talkable-app", v)
 	}
 	evs, _ := h.st.EventsBySubject(h.ctx, "pr:talkable/talkable#2", 0)

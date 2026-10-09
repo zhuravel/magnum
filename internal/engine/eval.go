@@ -358,7 +358,7 @@ func (e *Engine) seedEval(ctx context.Context, c EvalCase) (*roundJob, error) {
 	if pr, err = e.st.PRByID(ctx, pr.ID); err != nil {
 		return nil, err
 	}
-	if err := e.st.SetKV(ctx, kvPRDryRun(pr.ID), store.PRQueued); err != nil {
+	if err := e.st.SetKV(ctx, store.KVPRDryRun(pr.ID), store.PRQueued); err != nil {
 		return nil, fmt.Errorf("mark dry run: %w", err)
 	}
 	sl, err := e.st.CreateSlot(ctx, store.Slot{

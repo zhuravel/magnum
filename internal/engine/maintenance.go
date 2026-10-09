@@ -162,7 +162,7 @@ func (e *Engine) maybeReconcile(ctx context.Context) {
 // cleanups are skipped until the next reconcile.
 func (e *Engine) reconcile(ctx context.Context) error {
 	var errs []error
-	e.setKV(ctx, kvLastReconcile, store.FormatTime(e.now()))
+	e.setKV(ctx, store.KVDaemonLastReconcile, store.FormatTime(e.now()))
 	var inv *inventory.Inventory
 	if e.d.Inventory != nil {
 		scanned, err := e.d.Inventory.Scan(ctx, inventory.Options{})

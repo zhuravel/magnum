@@ -97,7 +97,7 @@ func TestRoundResultPausesByHealthKind(t *testing.T) {
 					t.Fatalf("%s paused = %v (%+v), want %v", kind, got, p, paused)
 				}
 				if !paused {
-					for _, key := range []string{KVToolPausedUntil(kind), KVToolPausedReason(kind), kvToolPausedDetail(kind), kvToolBackoff(kind)} {
+					for _, key := range []string{store.KVToolPausedUntil(kind), store.KVToolPausedReason(kind), store.KVToolPausedDetail(kind), store.KVToolBackoff(kind)} {
 						if v, ok := h.e.getKV(h.ctx, key); ok {
 							t.Errorf("%s left kv %s = %q although it is not paused", kind, key, v)
 						}

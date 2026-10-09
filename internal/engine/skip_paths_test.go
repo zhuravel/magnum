@@ -451,11 +451,11 @@ func TestClassifyIgnoredKeepsItsReason(t *testing.T) {
 	if dec := h.e.classify(h.ctx, w, h.pr(2), h.clock.Now()); dec.Eligible || dec.Reason != "muted" {
 		t.Fatalf("muted PR: %+v, want reason muted", dec)
 	}
-	if err := h.st.UpdatePR(h.ctx, pr.ID, func(u *store.PRUpdate) { u.Set("skip_reason", skipIgnored) }); err != nil {
+	if err := h.st.UpdatePR(h.ctx, pr.ID, func(u *store.PRUpdate) { u.Set("skip_reason", SkipIgnored) }); err != nil {
 		t.Fatal(err)
 	}
-	if dec := h.e.classify(h.ctx, w, h.pr(2), h.clock.Now()); dec.Eligible || dec.Reason != skipIgnored {
-		t.Fatalf("ignored PR: %+v, want reason %q", dec, skipIgnored)
+	if dec := h.e.classify(h.ctx, w, h.pr(2), h.clock.Now()); dec.Eligible || dec.Reason != SkipIgnored {
+		t.Fatalf("ignored PR: %+v, want reason %q", dec, SkipIgnored)
 	}
 
 	// A push to the ignored PR: ineligible with the reason "ignored".
@@ -463,7 +463,7 @@ func TestClassifyIgnoredKeepsItsReason(t *testing.T) {
 	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b2"})
 	h.tick()
 	pr = h.wantState(2, store.PRIneligible)
-	wantSkipReason(t, pr, skipIgnored)
+	wantSkipReason(t, pr, SkipIgnored)
 }
 
 func TestClassifyPlainMutedKeepsMuted(t *testing.T) {

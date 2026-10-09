@@ -27,7 +27,7 @@ func (e *Engine) sameHeadDue(ctx context.Context, pr store.PR) bool {
 	if pr.HeadSHA == "" || pr.HeadSHA != deref(pr.ReviewedSHA) || postMerge(pr) {
 		return false
 	}
-	if v, _ := e.getKV(ctx, kvPRFresh(pr.ID)); v == "1" {
+	if v, _ := e.getKV(ctx, store.KVPRFresh(pr.ID)); v == "1" {
 		return false
 	}
 	return len(e.requestedRoles(ctx, pr.ID)) == 0

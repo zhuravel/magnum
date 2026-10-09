@@ -49,7 +49,7 @@ func fdPush(h *harness, n int, head string) {
 
 // fdGate is the PR's recorded gate reason (store.KVPRGate).
 func fdGate(h *harness, prID int64) string {
-	v, _ := h.e.getKV(h.ctx, kvPRGate(prID))
+	v, _ := h.e.getKV(h.ctx, store.KVPRGate(prID))
 	return v
 }
 
@@ -337,7 +337,7 @@ func TestKindPauseHoldsOnlyRoundsUsingThatKind(t *testing.T) {
 	if n := len(h.rd.all()); n != 2 {
 		t.Fatalf("rounds = %d, want 2", n)
 	}
-	if v, ok := h.e.getKV(h.ctx, kvPRGate(pr.ID)); ok {
+	if v, ok := h.e.getKV(h.ctx, store.KVPRGate(pr.ID)); ok {
 		t.Fatalf("gate kept after the round started: %q", v)
 	}
 }
@@ -404,7 +404,7 @@ func TestWorkingCodexLimitCountsTheRoundsCodexRoles(t *testing.T) {
 	if n := len(h.rd.all()); n != 2 {
 		t.Fatalf("rounds = %d, want 2", n)
 	}
-	if v, ok := h.e.getKV(h.ctx, kvPRGate(pr.ID)); ok {
+	if v, ok := h.e.getKV(h.ctx, store.KVPRGate(pr.ID)); ok {
 		t.Fatalf("gate kept after the round started: %q", v)
 	}
 }

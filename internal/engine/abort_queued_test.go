@@ -49,7 +49,7 @@ func TestAbortTakesBackAQueuedForcedReview(t *testing.T) {
 	if cur.Forced || cur.Muted {
 		t.Errorf("after the abort: forced=%v muted=%v", cur.Forced, cur.Muted)
 	}
-	for _, key := range []string{kvPRFresh(pr.ID), kvPRDryRun(pr.ID)} {
+	for _, key := range []string{store.KVPRFresh(pr.ID), store.KVPRDryRun(pr.ID)} {
 		if v, ok := h.e.getKV(h.ctx, key); ok {
 			t.Errorf("%s still set: %q", key, v)
 		}

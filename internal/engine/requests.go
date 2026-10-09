@@ -404,7 +404,7 @@ func (e *Engine) requestReview(ctx context.Context, p ReviewPayload) (string, er
 	})
 	if err != nil {
 		if wroteMarker {
-			e.delKV(ctx, kvPRDryRun(pr.ID))
+			e.delKV(ctx, store.KVPRDryRun(pr.ID))
 		}
 		return "", fmt.Errorf("%s: %w", label, err)
 	}
@@ -413,7 +413,7 @@ func (e *Engine) requestReview(ctx context.Context, p ReviewPayload) (string, er
 		e.setKV(ctx, KVPRIdentityPinned(pr.ID), p.As) // never migrated to the watch's identity
 	}
 	if p.Fresh {
-		e.setKV(ctx, kvPRFresh(pr.ID), "1")
+		e.setKV(ctx, store.KVPRFresh(pr.ID), "1")
 	}
 	if p.Replies {
 		e.setKV(ctx, kvPRRedecide(pr.ID), "1")
@@ -480,7 +480,7 @@ func (e *Engine) requestReview(ctx context.Context, p ReviewPayload) (string, er
 // marker. It reports whether it wrote a new marker. Errors are returned, so
 // the request fails instead of running in the wrong mode.
 func (e *Engine) markDryRun(ctx context.Context, pr store.PR, dry bool) (bool, error) {
-	key := kvPRDryRun(pr.ID)
+	key := store.KVPRDryRun(pr.ID)
 	if !dry {
 		if err := e.st.DeleteKV(ctx, key); err != nil {
 			return false, fmt.Errorf("clear the dry-run marker: %w", err)
@@ -600,7 +600,7 @@ func (e *Engine) requestMute(ctx context.Context, p TargetPayload, mute bool) (s
 	}
 	if err := e.st.UpdatePR(ctx, pr.ID, func(u *store.PRUpdate) {
 		u.Set("muted", mute)
-		if !mute && deref(pr.SkipReason) == skipIgnored {
+		if !mute && deref(pr.SkipReason) == SkipIgnored {
 			u.Set("skip_reason", nil) // magnum ignore's mark goes with its mute
 		}
 	}); err != nil {
@@ -640,7 +640,7 @@ func (e *Engine) requestMute(ctx context.Context, p TargetPayload, mute bool) (s
 		if reason != "" {
 			msg, data["reason"] = "muted: "+reason, reason
 		}
-		e.event(ctx, "info", prSubject(repo, pr.Number), evPRMuted, msg, data)
+		e.event(ctx, "info", prSubject(repo, pr.Number), EvPRMuted, msg, data)
 		e.seeStalemates(ctx, pr.ID) // stalemate.go
 		if dismissed {
 			return "muted " + label + ": merged-unreviewed flag dismissed", nil
@@ -651,8 +651,6 @@ func (e *Engine) requestMute(ctx context.Context, p TargetPayload, mute bool) (s
 }
 
 const (
-	// evPRMuted records a mute and its reason (requestMute).
-	evPRMuted = "pr.muted"
 	// skipMuted is the skip reason of a muted PR: eligibility.Classify's.
 	skipMuted = "muted"
 	// muteReasonRunes bounds a mute's reason.
@@ -664,26 +662,26 @@ var waitingStates = []string{store.PRQueued, store.PRRereviewPending}
 
 func (e *Engine) requestPause(ctx context.Context, p PausePayload, pause bool) (string, error) {
 	if pause {
-		if v, _ := e.getKV(ctx, KVDaemonPaused); v != "1" { // a pause renewed keeps its start
+		if v, _ := e.getKV(ctx, store.KVDaemonPaused); v != "1" { // a pause renewed keeps its start
 			e.setKV(ctx, KVDaemonPausedAt, store.FormatTime(e.now()))
 		}
-		e.setKV(ctx, KVDaemonPaused, "1")
-		e.setKV(ctx, KVDaemonPausedReason, p.Reason)
+		e.setKV(ctx, store.KVDaemonPaused, "1")
+		e.setKV(ctx, store.KVDaemonPausedReason, p.Reason)
 		if p.Until != nil && !p.Until.IsZero() {
-			e.setKV(ctx, KVDaemonPausedUntil, store.FormatTime(*p.Until))
+			e.setKV(ctx, store.KVDaemonPausedUntil, store.FormatTime(*p.Until))
 		} else {
-			e.delKV(ctx, KVDaemonPausedUntil)
+			e.delKV(ctx, store.KVDaemonPausedUntil)
 		}
 		e.event(ctx, "info", "", "daemon.paused", strings.TrimSpace("automation paused "+p.Reason), nil)
 		return "paused", nil
 	}
 	switch {
 	case p.Watch != "":
-		_, paused := e.getKV(ctx, KVWatchPaused(p.Watch))
+		_, paused := e.getKV(ctx, store.KVWatchPaused(p.Watch))
 		if !paused && !slices.ContainsFunc(e.cfg.Watches, func(w config.Watch) bool { return strings.EqualFold(w.Owner, p.Watch) }) {
 			return "", fmt.Errorf("no [[watch]] for %q and no pause recorded for it", p.Watch)
 		}
-		e.delKV(ctx, KVWatchPaused(p.Watch))
+		e.delKV(ctx, store.KVWatchPaused(p.Watch))
 		return "resumed watch " + p.Watch, nil
 	case p.Tool == "all":
 		var cleared []string
@@ -699,7 +697,7 @@ func (e *Engine) requestPause(ctx context.Context, p PausePayload, pause bool) (
 		e.clearToolPause(ctx, p.Tool)
 		return "resumed " + p.Tool + modelLimitsNote(e.clearModelLimits(ctx, p.Tool)), nil
 	}
-	e.delKV(ctx, KVDaemonPaused, KVDaemonPausedReason, KVDaemonPausedUntil, KVDaemonPausedAt, KVDaemonPausedHeld)
+	e.delKV(ctx, store.KVDaemonPaused, store.KVDaemonPausedReason, store.KVDaemonPausedUntil, KVDaemonPausedAt, KVDaemonPausedHeld)
 	if _, ok := e.infraPause(ctx); ok {
 		e.clearInfraPause(ctx, false)
 		e.event(ctx, "info", "", "infra.resumed", "infrastructure pause lifted (magnum resume)", nil)

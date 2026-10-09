@@ -71,14 +71,14 @@ func TestMovedHeadNoteFollowsThePRsWait(t *testing.T) {
 		{name: "push inside its quiet period", want: afterQuiet},
 		{name: "magnum paused", meanwhile: func(h *harness) {
 			h.advance(6 * time.Minute)
-			if err := h.st.SetKV(h.ctx, KVDaemonPaused, "1"); err != nil {
+			if err := h.st.SetKV(h.ctx, store.KVDaemonPaused, "1"); err != nil {
 				h.t.Fatal(err)
 			}
 		}, want: notYet},
 		{name: "small delta, delta_check off", minLines: 30, noCheck: true, files: rubyMixed, want: notYet},
 		{name: "small delta: a delta check", minLines: 30, files: rubyMixed, want: checkQuiet},
 		{name: "small delta: a delta check, magnum paused", minLines: 30, files: rubyMixed, meanwhile: func(h *harness) {
-			if err := h.st.SetKV(h.ctx, KVDaemonPaused, "1"); err != nil {
+			if err := h.st.SetKV(h.ctx, store.KVDaemonPaused, "1"); err != nil {
 				h.t.Fatal(err)
 			}
 		}, want: notYet},

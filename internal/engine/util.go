@@ -16,25 +16,13 @@ import (
 	"github.com/zhuravel/magnum/internal/store"
 )
 
-// kv keys the engine maintains (never secrets). The names live in store
-// (store.KV*) so the CLI reads exactly what the daemon writes.
-const (
-	kvLastTick      = store.KVDaemonLastTick
-	kvLastPoll      = store.KVDaemonLastPoll
-	kvLastReconcile = store.KVDaemonLastReconcile
-	kvStartedAt     = store.KVDaemonStartedAt
-	kvPid           = store.KVDaemonPid
-	// KVDaemonPaused is "1" while automation is paused (magnum pause);
-	// KVDaemonPausedReason and KVDaemonPausedUntil (optional) explain it.
-	KVDaemonPaused       = store.KVDaemonPaused
-	KVDaemonPausedReason = store.KVDaemonPausedReason
-	KVDaemonPausedUntil  = store.KVDaemonPausedUntil
-	kvGHRemaining        = store.KVGHRemaining
-	kvGHLimit            = store.KVGHLimit
-	kvGHReset            = store.KVGHReset
-	kvGHPausedUntil      = store.KVGHPollPausedUntil
-	kvHerdrUp            = store.KVHerdrUp
-)
+// The engine's kv keys (never secrets) each have one name. A key in store
+// (store.KV*) is used under that name; a key moves there once a package
+// below the engine (agents, pipeline) reads it. A key only the engine gives
+// a meaning to is defined beside the code that writes it (KVPRWait in
+// wait.go, KVPromptsChanged in prompts.go, ...) or below, and the CLI reads
+// it as engine.KV*. TestEveryKVKeyTheEngineWritesKeepsItsString pins the
+// strings of both kinds.
 
 // kv keys of the daemon's own operations, read by `magnum status`.
 const (
@@ -70,39 +58,6 @@ const (
 	KVUsageCodexAt       = "usage.codex_at"
 	KVUsageCodexPace24h  = "usage.codex_pace_24h"
 )
-
-// KVToolPausedUntil is the kv key holding when a tool's pause ends ("codex",
-// "claude"; store.FormatTime). Same as store.KVToolPausedUntil.
-func KVToolPausedUntil(tool string) string { return store.KVToolPausedUntil(tool) }
-
-// KVToolPausedReason is the kv key holding why a tool is paused
-// (usage_limit | login_required). Same as store.KVToolPausedReason.
-func KVToolPausedReason(tool string) string { return store.KVToolPausedReason(tool) }
-func kvToolPausedDetail(tool string) string { return store.KVToolPausedDetail(tool) }
-func kvToolBackoff(tool string) string      { return store.KVToolBackoff(tool) }
-
-// KVIdentityCheck is the kv key holding "pass" or "fail" from the identity's
-// last Check. A tick-time token refresh failure is kept under
-// identity.<name>.tick_error; an identity is healthy unless either says so.
-// Same as store.KVIdentityCheck.
-func KVIdentityCheck(name string) string { return store.KVIdentityCheck(name) }
-
-// KVIdentityError is the kv key holding why the identity's Check failed.
-// Same as store.KVIdentityError.
-func KVIdentityError(name string) string     { return store.KVIdentityError(name) }
-func kvIdentityTickError(name string) string { return store.KVIdentityTickError(name) }
-func kvIdentityExpiry(name string) string    { return store.KVIdentityTokenExpiry(name) }
-
-// KVWatchPaused holds the reason a watch owner's automation was paused
-// (identity leak); magnum resume --watch clears it. Same as
-// store.KVWatchPaused.
-func KVWatchPaused(owner string) string { return store.KVWatchPaused(owner) }
-
-func kvPRSimplify(id int64) string         { return store.KVPRSimplify(id) }
-func kvPRFresh(id int64) string            { return store.KVPRFresh(id) }
-func kvPRSessionsIdentity(id int64) string { return store.KVPRSessionsIdentity(id) }
-func kvPRGate(id int64) string             { return store.KVPRGate(id) }
-func kvPRDryRun(id int64) string           { return store.KVPRDryRun(id) }
 
 // kvPRGateReason holds the code of the PR's dispatch gate (gateCode as
 // JSON) next to its sentence (store.KVPRGate): its wait is built from the

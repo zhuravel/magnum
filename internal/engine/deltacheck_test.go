@@ -328,7 +328,7 @@ func TestKeptApprovalIsDismissedAnHourAfterItsCheckWasDue(t *testing.T) {
 	verdictRounds(h, "APPROVED")
 	keptForCheck(t, h, liveDelta)
 	pushedAt := h.pr(2).HeadChangedAt
-	if err := h.st.SetKV(h.ctx, KVDaemonPaused, "1"); err != nil {
+	if err := h.st.SetKV(h.ctx, store.KVDaemonPaused, "1"); err != nil {
 		t.Fatal(err)
 	}
 	due := pushedAt.Add(5 * time.Minute) // push_quiet_period
@@ -551,7 +551,7 @@ func TestADeltaCheckWhoseJudgeLostItsSessionRunsWithAFreshOne(t *testing.T) {
 			h.ag.resumeIDs, h.ag.failResume = map[agents.Role]string{agents.RoleJudge: "uuid-judge"}, true
 			h.ag.mu.Unlock()
 		}},
-		{"fresh sessions requested", "fresh sessions were requested", func(h *harness) { h.e.setKV(h.ctx, kvPRFresh(h.pr(2).ID), "1") }},
+		{"fresh sessions requested", "fresh sessions were requested", func(h *harness) { h.e.setKV(h.ctx, store.KVPRFresh(h.pr(2).ID), "1") }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h, _, _ := deltaCheckHarness(t)

@@ -12,7 +12,7 @@ import (
 // muteEvents are the pr.muted events of PR #n, oldest first.
 func muteEvents(h *harness, n int) []store.Event {
 	h.t.Helper()
-	evs, err := h.st.EventsOfKindsSince(h.ctx, time.Time{}, evPRMuted)
+	evs, err := h.st.EventsOfKindsSince(h.ctx, time.Time{}, EvPRMuted)
 	if err != nil {
 		h.t.Fatal(err)
 	}

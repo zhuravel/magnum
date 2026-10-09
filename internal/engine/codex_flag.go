@@ -47,7 +47,7 @@ const ReqCodexFlag = "codex-flag"
 // EvPRMuted is the event a mute records, its reason in the data's
 // "reason" (requestMute); the board's card shows the latest one's next to
 // the flag.
-const EvPRMuted = evPRMuted
+const EvPRMuted = "pr.muted"
 
 // CodexFlagPayload is a `magnum codex-flag set|clear` request: flag the PR
 // (Reason: why, from the operator) or clear its flag. By says who asks
@@ -288,7 +288,7 @@ func (e *Engine) holdFlagged(ctx context.Context, pr store.PR, f CodexFlag) bool
 		e.log.Info("hold a flagged PR", "pr", pr.ID, "err", err)
 		return false
 	}
-	e.delKV(ctx, kvPRDryRun(pr.ID), kvPRFresh(pr.ID), kvPRRedecide(pr.ID), kvPRGate(pr.ID), kvPRGateReason(pr.ID), KVPRWait(pr.ID))
+	e.delKV(ctx, store.KVPRDryRun(pr.ID), store.KVPRFresh(pr.ID), kvPRRedecide(pr.ID), store.KVPRGate(pr.ID), kvPRGateReason(pr.ID), KVPRWait(pr.ID))
 	e.clearRequested(ctx, pr.ID)
 	repo, _ := e.st.RepoByID(ctx, pr.RepoID)
 	e.event(ctx, "info", prSubject(repo, pr.Number), "pr.codex_flag_held", fmt.Sprintf("%s → %s: %s", pr.State, to, f.SkipReason()),
@@ -344,7 +344,7 @@ func (e *Engine) onRefused(ctx context.Context, job *roundJob, pr store.PR, in p
 	if err != nil && !errors.Is(err, store.ErrConflict) {
 		e.log.Warn("refused round: PR state", "pr", pr.ID, "err", err)
 	}
-	e.delKV(ctx, kvPRDryRun(pr.ID), kvPRRedecide(pr.ID))
+	e.delKV(ctx, store.KVPRDryRun(pr.ID), kvPRRedecide(pr.ID))
 	e.clearRequested(ctx, pr.ID)
 	if job.hasSlot {
 		_ = e.st.TransitionSlot(ctx, job.slot.ID, []string{store.SlotClaimed, store.SlotBusy}, store.SlotHeld, nil)

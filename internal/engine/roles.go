@@ -54,21 +54,17 @@ func (e *Engine) judgeOf(ctx context.Context, prID int64) string {
 	return store.RoleJudge
 }
 
-// kvPRRequested holds the role names (a JSON list) requested for the PR's
-// next round (store.KVPRRoles).
-func kvPRRequested(id int64) string { return store.KVPRRoles(id) }
-
 // requestedRoles reads the roles requested for the PR's next round. A
-// "simplify" request an older daemon stored (kvPRSimplify) counts as the
+// "simplify" request an older daemon stored (store.KVPRSimplify) counts as the
 // role answering to "simplify".
 func (e *Engine) requestedRoles(ctx context.Context, prID int64) []string {
 	var out []string
-	if v, ok := e.getKV(ctx, kvPRRequested(prID)); ok && v != "" {
+	if v, ok := e.getKV(ctx, store.KVPRRoles(prID)); ok && v != "" {
 		if err := json.Unmarshal([]byte(v), &out); err != nil {
 			e.log.Warn("requested roles", "pr", prID, "value", v, "err", err)
 		}
 	}
-	if v, _ := e.getKV(ctx, kvPRSimplify(prID)); v == "1" && !slices.Contains(out, "simplify") {
+	if v, _ := e.getKV(ctx, store.KVPRSimplify(prID)); v == "1" && !slices.Contains(out, "simplify") {
 		out = append(out, "simplify")
 	}
 	return out
@@ -90,10 +86,10 @@ func (e *Engine) addRequested(ctx context.Context, prID int64, names ...string) 
 		e.log.Warn("requested roles", "pr", prID, "err", err)
 		return
 	}
-	e.setKV(ctx, kvPRRequested(prID), string(b))
+	e.setKV(ctx, store.KVPRRoles(prID), string(b))
 }
 
 // clearRequested forgets the PR's requested roles.
 func (e *Engine) clearRequested(ctx context.Context, prID int64) {
-	e.delKV(ctx, kvPRRequested(prID), kvPRSimplify(prID))
+	e.delKV(ctx, store.KVPRRoles(prID), store.KVPRSimplify(prID))
 }

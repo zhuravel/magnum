@@ -83,11 +83,11 @@ func (e *Engine) noteHerdr(ctx context.Context, err error) {
 	}
 	e.herdrUp = &up
 	if up {
-		e.setKV(ctx, kvHerdrUp, "1")
+		e.setKV(ctx, store.KVHerdrUp, "1")
 		e.log.Info("herdr reachable")
 		return
 	}
-	e.setKV(ctx, kvHerdrUp, "0")
+	e.setKV(ctx, store.KVHerdrUp, "0")
 	e.event(ctx, "warn", "", "herdr.down", fmt.Sprintf("herdr unreachable: %v; dispatch waits", err), nil)
 }
 
@@ -135,12 +135,12 @@ type toolPause struct {
 }
 
 func (e *Engine) toolPause(ctx context.Context, tool string) (toolPause, bool) {
-	until, ok := e.kvTime(ctx, KVToolPausedUntil(tool))
+	until, ok := e.kvTime(ctx, store.KVToolPausedUntil(tool))
 	if !ok {
 		return toolPause{}, false
 	}
-	reason, _ := e.getKV(ctx, KVToolPausedReason(tool))
-	detail, _ := e.getKV(ctx, kvToolPausedDetail(tool))
+	reason, _ := e.getKV(ctx, store.KVToolPausedReason(tool))
+	detail, _ := e.getKV(ctx, store.KVToolPausedDetail(tool))
 	return toolPause{Until: until, Reason: reason, Detail: detail}, true
 }
 
@@ -161,12 +161,12 @@ func (e *Engine) pauseTool(ctx context.Context, p pipeline.Pause) {
 	default:
 		if until.IsZero() || !until.After(now) {
 			d := usageFallback
-			if v, ok := e.getKV(ctx, kvToolBackoff(tool)); ok {
+			if v, ok := e.getKV(ctx, store.KVToolBackoff(tool)); ok {
 				if prev, err := time.ParseDuration(v); err == nil && prev > 0 {
 					d = min(prev*2, usageFallbackMax)
 				}
 			}
-			e.setKV(ctx, kvToolBackoff(tool), d.String())
+			e.setKV(ctx, store.KVToolBackoff(tool), d.String())
 			until = now.Add(d)
 		}
 	}
@@ -183,9 +183,9 @@ func (e *Engine) pauseTool(ctx context.Context, p pipeline.Pause) {
 // setToolPause records a tool's pause where dispatch reads it
 // (kindPauseReason) and status shows it.
 func (e *Engine) setToolPause(ctx context.Context, tool, reason, detail string, until time.Time) {
-	e.setKV(ctx, KVToolPausedUntil(tool), store.FormatTime(until))
-	e.setKV(ctx, KVToolPausedReason(tool), reason)
-	e.setKV(ctx, kvToolPausedDetail(tool), detail)
+	e.setKV(ctx, store.KVToolPausedUntil(tool), store.FormatTime(until))
+	e.setKV(ctx, store.KVToolPausedReason(tool), reason)
+	e.setKV(ctx, store.KVToolPausedDetail(tool), detail)
 }
 
 func toolToast(tool, kind string, until time.Time) (string, string) {
@@ -204,10 +204,10 @@ func toolToast(tool, kind string, until time.Time) (string, string) {
 }
 
 func (e *Engine) clearToolPause(ctx context.Context, tool string) {
-	if reason, ok := e.getKV(ctx, KVToolPausedReason(tool)); ok && reason != "" {
+	if reason, ok := e.getKV(ctx, store.KVToolPausedReason(tool)); ok && reason != "" {
 		e.forgetSend(ctx, "pause:"+tool+":"+reason) // the next pause toasts at once
 	}
-	e.delKV(ctx, KVToolPausedUntil(tool), KVToolPausedReason(tool), kvToolPausedDetail(tool))
+	e.delKV(ctx, store.KVToolPausedUntil(tool), store.KVToolPausedReason(tool), store.KVToolPausedDetail(tool))
 }
 
 // forgetSend drops a toast's dedup record once its condition cleared.
@@ -279,7 +279,7 @@ func (e *Engine) health(ctx context.Context) {
 		}
 		if p.Reason == string(agents.HealthLoginRequired) && e.d.Agents != nil {
 			if err := e.d.Agents.Preflight(ctx, tool); err != nil {
-				e.setKV(ctx, KVToolPausedUntil(tool), store.FormatTime(now.Add(loginRecheck)))
+				e.setKV(ctx, store.KVToolPausedUntil(tool), store.FormatTime(now.Add(loginRecheck)))
 				e.log.Info("still paused", "tool", tool, "reason", p.Reason, "err", err)
 				continue
 			}
@@ -287,8 +287,8 @@ func (e *Engine) health(ctx context.Context) {
 		e.clearToolPause(ctx, tool)
 		e.event(ctx, "info", "tool:"+tool, "tool.resumed", fmt.Sprintf("%s pause (%s) ended", tool, p.Reason), nil)
 	}
-	if until, ok := e.kvTime(ctx, KVDaemonPausedUntil); ok && !now.Before(until) {
-		e.delKV(ctx, KVDaemonPaused, KVDaemonPausedReason, KVDaemonPausedUntil, KVDaemonPausedAt, KVDaemonPausedHeld)
+	if until, ok := e.kvTime(ctx, store.KVDaemonPausedUntil); ok && !now.Before(until) {
+		e.delKV(ctx, store.KVDaemonPaused, store.KVDaemonPausedReason, store.KVDaemonPausedUntil, KVDaemonPausedAt, KVDaemonPausedHeld)
 		e.event(ctx, "info", "", "daemon.resumed", "automation pause ended", nil)
 	}
 	e.checkDrain(ctx)
@@ -300,8 +300,8 @@ func (e *Engine) health(ctx context.Context) {
 // while a review the user asks for (a forced PR: `magnum review`, the board,
 // the picker) still runs.
 func (e *Engine) userPause(ctx context.Context) string {
-	if v, ok := e.getKV(ctx, KVDaemonPaused); ok && v == "1" {
-		r, _ := e.getKV(ctx, KVDaemonPausedReason)
+	if v, ok := e.getKV(ctx, store.KVDaemonPaused); ok && v == "1" {
+		r, _ := e.getKV(ctx, store.KVDaemonPausedReason)
 		return strings.TrimSpace("daemon paused " + r)
 	}
 	return ""
@@ -359,27 +359,27 @@ func (e *Engine) warmIdentities(ctx context.Context, full bool) {
 }
 
 // recordIdentityVerdict stores an identity check's verdict where dispatch
-// reads it (KVIdentityCheck "pass" or "fail", KVIdentityError the reason).
-// A fail that turns into a pass forgets the "identity unhealthy" toast's
-// dedup record, so the next failure notifies at once; a new failure reason
-// is logged as identity.unhealthy. The daemon's own checks (checkIdentity,
-// from warmIdentities and retryIdentities) and `magnum identities check`
-// (ReqIdentityVerdict) both record through it.
+// reads it (store.KVIdentityCheck "pass" or "fail", store.KVIdentityError the
+// reason). A fail that turns into a pass forgets the "identity unhealthy"
+// toast's dedup record, so the next failure notifies at once; a new failure
+// reason is logged as identity.unhealthy. The daemon's own checks
+// (checkIdentity, from warmIdentities and retryIdentities) and `magnum
+// identities check` (ReqIdentityVerdict) both record through it.
 func (e *Engine) recordIdentityVerdict(ctx context.Context, name string, pass bool, reason string) {
 	if pass {
-		if prev, _ := e.getKV(ctx, KVIdentityCheck(name)); prev == "fail" {
+		if prev, _ := e.getKV(ctx, store.KVIdentityCheck(name)); prev == "fail" {
 			e.forgetSend(ctx, "identity:"+name)
 		}
-		e.setKV(ctx, KVIdentityCheck(name), "pass")
-		e.delKV(ctx, KVIdentityError(name))
+		e.setKV(ctx, store.KVIdentityCheck(name), "pass")
+		e.delKV(ctx, store.KVIdentityError(name))
 		return
 	}
 	if reason == "" {
 		reason = "check failed"
 	}
-	prev, _ := e.getKV(ctx, KVIdentityError(name))
-	e.setKV(ctx, KVIdentityCheck(name), "fail")
-	e.setKV(ctx, KVIdentityError(name), reason)
+	prev, _ := e.getKV(ctx, store.KVIdentityError(name))
+	e.setKV(ctx, store.KVIdentityCheck(name), "fail")
+	e.setKV(ctx, store.KVIdentityError(name), reason)
 	if prev != reason {
 		e.event(ctx, "warn", "identity:"+name, "identity.unhealthy", "identity "+name+" unhealthy: "+reason, nil)
 	}
@@ -419,24 +419,24 @@ func (e *Engine) refreshIdentities(ctx context.Context) {
 			continue
 		}
 		e.netEnded(netTokenKey(name))
-		if _, had := e.getKV(ctx, kvIdentityTickError(name)); had {
+		if _, had := e.getKV(ctx, store.KVIdentityTickError(name)); had {
 			e.forgetSend(ctx, "identity-token:"+name)
-			e.delKV(ctx, kvIdentityTickError(name))
+			e.delKV(ctx, store.KVIdentityTickError(name))
 		}
 		if x, ok := e.d.Identities[name].(expirer); ok && !x.Expiry().IsZero() {
-			e.setKV(ctx, kvIdentityExpiry(name), store.FormatTime(x.Expiry()))
+			e.setKV(ctx, store.KVIdentityTokenExpiry(name), store.FormatTime(x.Expiry()))
 		}
 	}
 }
 
 // tokenFailed records a failed token refresh of name where dispatch reads it
-// (kvIdentityTickError), with the "token refresh failed" toast: a real
+// (store.KVIdentityTickError), with the "token refresh failed" toast: a real
 // failure at once, a connection-class one only once it lasted
 // identityNetGrace (netRetrying).
 func (e *Engine) tokenFailed(ctx context.Context, name string, err error) {
 	msg := err.Error()
 	key := netTokenKey(name)
-	prev, had := e.getKV(ctx, kvIdentityTickError(name))
+	prev, had := e.getKV(ctx, store.KVIdentityTickError(name))
 	if cause := github.ConnectionCause(msg); cause != "" {
 		r, retried := e.netRetrying(ctx, name, "token refresh", key, cause, msg, had)
 		if retried {
@@ -447,7 +447,7 @@ func (e *Engine) tokenFailed(ctx context.Context, name string, err error) {
 		e.netEnded(key)
 	}
 	if prev != msg {
-		e.setKV(ctx, kvIdentityTickError(name), msg)
+		e.setKV(ctx, store.KVIdentityTickError(name), msg)
 		e.event(ctx, "warn", "identity:"+name, "identity.token_error", "token refresh failed: "+msg, nil)
 	}
 	e.urgent("identity-token:"+name, "magnum: identity "+name+" token refresh failed", msg, identityToastSpan)
@@ -468,11 +468,11 @@ func (e *Engine) identityHealthy(ctx context.Context, name string) (bool, string
 	if _, ok := e.d.Identities[name]; !ok && len(e.d.Identities) > 0 {
 		return false, "identity " + name + " is not configured"
 	}
-	if v, _ := e.getKV(ctx, KVIdentityCheck(name)); v == "fail" {
-		r, _ := e.getKV(ctx, KVIdentityError(name))
+	if v, _ := e.getKV(ctx, store.KVIdentityCheck(name)); v == "fail" {
+		r, _ := e.getKV(ctx, store.KVIdentityError(name))
 		return false, "identity " + name + " unhealthy: " + r
 	}
-	if v, ok := e.getKV(ctx, kvIdentityTickError(name)); ok {
+	if v, ok := e.getKV(ctx, store.KVIdentityTickError(name)); ok {
 		return false, "identity " + name + " token refresh failed: " + v
 	}
 	return true, ""

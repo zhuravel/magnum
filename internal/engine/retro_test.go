@@ -540,7 +540,7 @@ func TestDailyRetroRunsDuringAUserPause(t *testing.T) {
 			retroPR(h, 7, 24*time.Hour)
 			seedRetroGitHub(h, 7)
 			// The day's retro ran; the operator pauses for the night.
-			for key, v := range map[string]string{KVRetroDay: store.DayKey(h.clock.Now()), KVDaemonPaused: "1", KVDaemonPausedReason: "for the night"} {
+			for key, v := range map[string]string{KVRetroDay: store.DayKey(h.clock.Now()), store.KVDaemonPaused: "1", store.KVDaemonPausedReason: "for the night"} {
 				if err := h.st.SetKV(h.ctx, key, v); err != nil {
 					t.Fatal(err)
 				}
@@ -590,7 +590,7 @@ func TestRetroRequestRefusedWhileDrainingOrRunning(t *testing.T) {
 		t.Fatalf("while draining: %s %q", req.State, deref(req.Result))
 	}
 	_ = h.st.DeleteKV(h.ctx, KVDaemonDraining)
-	_ = h.st.SetKV(h.ctx, KVDaemonPaused, "1")
+	_ = h.st.SetKV(h.ctx, store.KVDaemonPaused, "1")
 
 	first, _ := h.st.EnqueueRequest(h.ctx, ReqRetro, RetroPayload{})
 	second, _ := h.st.EnqueueRequest(h.ctx, ReqRetro, RetroPayload{})

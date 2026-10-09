@@ -174,7 +174,7 @@ func TestDetailsFailureKeepsUnknownPRsFromDispatch(t *testing.T) {
 	if len(h.rd.all()) != 0 {
 		t.Fatalf("a round ran for a PR without details: %d", len(h.rd.all()))
 	}
-	if gate, _ := h.e.getKV(h.ctx, kvPRGate(pr.ID)); gate != "waiting for the PR's details from GitHub" {
+	if gate, _ := h.e.getKV(h.ctx, store.KVPRGate(pr.ID)); gate != "waiting for the PR's details from GitHub" {
 		t.Fatalf("gate = %q (state %s)", gate, pr.State)
 	}
 
@@ -273,8 +273,8 @@ func TestReviewAsRechecksTheRequestedIdentity(t *testing.T) {
 	if pr.Identity != "talkable-app" {
 		t.Fatalf("PR identity = %q, want talkable-app", pr.Identity)
 	}
-	h.e.setKV(h.ctx, KVIdentityCheck("zhuravel"), "fail")
-	h.e.setKV(h.ctx, KVIdentityError("zhuravel"), "token expired")
+	h.e.setKV(h.ctx, store.KVIdentityCheck("zhuravel"), "fail")
+	h.e.setKV(h.ctx, store.KVIdentityError("zhuravel"), "token expired")
 	if ok, _ := h.e.identityHealthy(h.ctx, "zhuravel"); ok {
 		t.Fatal("zhuravel should be unhealthy before the request")
 	}
@@ -312,12 +312,12 @@ func TestResumeWatchRequiresAKnownWatch(t *testing.T) {
 		t.Fatalf("resume of a configured watch: %q, %v", res, err)
 	}
 
-	h.e.setKV(h.ctx, KVWatchPaused("example"), "identity leak")
+	h.e.setKV(h.ctx, store.KVWatchPaused("example"), "identity leak")
 	res, err = h.e.requestPause(h.ctx, PausePayload{Watch: "example"}, false)
 	if err != nil || res != "resumed watch example" {
 		t.Fatalf("resume of a recorded pause: %q, %v", res, err)
 	}
-	if v, ok := h.e.getKV(h.ctx, KVWatchPaused("example")); ok {
+	if v, ok := h.e.getKV(h.ctx, store.KVWatchPaused("example")); ok {
 		t.Fatalf("pause record still there: %q", v)
 	}
 }

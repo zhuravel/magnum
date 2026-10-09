@@ -145,7 +145,7 @@ func TestWaitGlobalReasons(t *testing.T) {
 		reason string
 		hint   string
 	}{
-		{"daemon paused", func(h *harness) { h.e.setKV(h.ctx, KVDaemonPaused, "1") }, WaitPaused, "`magnum resume` lifts the pause"},
+		{"daemon paused", func(h *harness) { h.e.setKV(h.ctx, store.KVDaemonPaused, "1") }, WaitPaused, "`magnum resume` lifts the pause"},
 		{"draining", func(h *harness) { h.e.setKV(h.ctx, KVDaemonDraining, store.FormatTime(h.clock.Now())) }, WaitDraining, "the end of the rounds in flight"},
 		{"infra", func(h *harness) {
 			h.e.setKV(h.ctx, KVInfraPausedUntil, store.FormatTime(h.clock.Now().Add(4*time.Minute)))
@@ -181,8 +181,8 @@ func TestWaitDispatchGates(t *testing.T) {
 		pushedAfter(t, h, 40*time.Minute)
 		h.advance(10 * time.Minute)
 		until := h.clock.Now().Add(time.Hour)
-		h.e.setKV(h.ctx, KVToolPausedUntil("codex"), store.FormatTime(until))
-		h.e.setKV(h.ctx, KVToolPausedReason("codex"), "usage_limit")
+		h.e.setKV(h.ctx, store.KVToolPausedUntil("codex"), store.FormatTime(until))
+		h.e.setKV(h.ctx, store.KVToolPausedReason("codex"), "usage_limit")
 		h.tick()
 		w := waitOf(t, h, 2)
 		if w.Reason != WaitKind || w.Subject != "codex" || !w.Until.Equal(until) || w.Short(h.clock.Now()) != "re-review · codex paused → "+until.Format("15:04") {
@@ -196,8 +196,8 @@ func TestWaitDispatchGates(t *testing.T) {
 		h := newHarness(t)
 		pushedAfter(t, h, 40*time.Minute)
 		h.advance(10 * time.Minute)
-		h.e.setKV(h.ctx, KVIdentityCheck("talkable-app"), "fail")
-		h.e.setKV(h.ctx, KVIdentityError("talkable-app"), "installation token refused")
+		h.e.setKV(h.ctx, store.KVIdentityCheck("talkable-app"), "fail")
+		h.e.setKV(h.ctx, store.KVIdentityError("talkable-app"), "installation token refused")
 		h.tick()
 		if w := waitOf(t, h, 2); w.Reason != WaitIdentity || !strings.Contains(w.Detail, "installation token refused") {
 			t.Fatalf("wait = %+v", w)

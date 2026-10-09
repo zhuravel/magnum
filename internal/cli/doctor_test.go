@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/zhuravel/magnum/internal/config"
-	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/inventory"
@@ -91,7 +90,7 @@ func doctorFixture(t *testing.T) (*inspFixture, doctorDeps, *fakeDoctorHerdr, *f
 		t.Fatal(err)
 	}
 	inspSeedSlot(t, st, f.Home, "review1", store.SlotFree, nil)
-	if err := st.SetKV(context.Background(), engine.KVIdentityCheck("zhuravel"), "pass"); err != nil {
+	if err := st.SetKV(context.Background(), store.KVIdentityCheck("zhuravel"), "pass"); err != nil {
 		t.Fatal(err)
 	}
 	f.Runner.Rules = []execx.Rule{

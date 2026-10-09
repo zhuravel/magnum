@@ -22,9 +22,10 @@ const (
 	ReqIgnore = "ignore"
 )
 
-// SkipIgnored is the skip_reason of a PR `magnum ignore` muted: the board
-// shows such a PR as ignored.
-const SkipIgnored = skipIgnored
+// SkipIgnored is the skip_reason `magnum ignore` stores on a muted PR:
+// classify keeps it instead of the generic "muted", and the board shows
+// such a PR as ignored.
+const SkipIgnored = "ignored"
 
 // abortedBy is the error an aborted round's runs carry.
 const abortedBy = "aborted by user"
@@ -195,7 +196,7 @@ func (e *Engine) dropQueued(ctx context.Context, repo store.Repo, pr store.PR) (
 	if to == "" {
 		return "", fmt.Errorf("%s moved on meanwhile; `magnum status %s` says where it is", label, label)
 	}
-	e.delKV(ctx, kvPRDryRun(pr.ID), kvPRFresh(pr.ID), kvPRRedecide(pr.ID), kvPRGate(pr.ID), KVPRWait(pr.ID))
+	e.delKV(ctx, store.KVPRDryRun(pr.ID), store.KVPRFresh(pr.ID), kvPRRedecide(pr.ID), store.KVPRGate(pr.ID), KVPRWait(pr.ID))
 	e.clearRequested(ctx, pr.ID)
 	what := "queued review"
 	if pr.Forced {
@@ -308,7 +309,7 @@ func (e *Engine) stopPR(ctx context.Context, prID int64, ignore, roundRan bool) 
 	case to != "":
 		done = append(done, "PR "+to)
 	}
-	e.delKV(ctx, kvPRDryRun(pr.ID), kvPRFresh(pr.ID), kvPRRedecide(pr.ID), kvPRGate(pr.ID), kvPRGateReason(pr.ID), KVPRWait(pr.ID))
+	e.delKV(ctx, store.KVPRDryRun(pr.ID), store.KVPRFresh(pr.ID), kvPRRedecide(pr.ID), store.KVPRGate(pr.ID), kvPRGateReason(pr.ID), KVPRWait(pr.ID))
 	e.clearRequested(ctx, pr.ID)
 
 	if note, err := e.handBack(ctx, repo, pr, parked, label); err != nil {
@@ -550,7 +551,7 @@ func (e *Engine) settleStopped(ctx context.Context, pr store.PR, ignore bool) (s
 		u.Set("last_error", nil)
 		if ignore {
 			u.Set("muted", true)
-			u.Set("skip_reason", skipIgnored)
+			u.Set("skip_reason", SkipIgnored)
 		}
 		if merged {
 			u.Set("release_after", e.releaseAfter())
@@ -563,7 +564,7 @@ func (e *Engine) settleStopped(ctx context.Context, pr store.PR, ignore bool) (s
 		// Closing: mute it all the same, so a reopened PR stays ignored.
 		return "", e.st.UpdatePR(ctx, pr.ID, func(u *store.PRUpdate) {
 			u.Set("muted", true)
-			u.Set("skip_reason", skipIgnored)
+			u.Set("skip_reason", SkipIgnored)
 		})
 	}
 	if err := e.st.TransitionPR(ctx, pr.ID, []string{cur.State}, to, set); err != nil {

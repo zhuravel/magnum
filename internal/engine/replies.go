@@ -375,10 +375,10 @@ func (e *Engine) onReplied(ctx context.Context, job *roundJob, pr store.PR, in p
 	}
 	e.event(ctx, "info", subject, "pr.replied", msg,
 		map[string]any{"replies": len(res.Replies), "kinds": replyKindCounts(res.Replies), "target_sha": in.TargetSHA, "state": to})
-	e.delKV(ctx, kvPRDryRun(pr.ID), kvPRRedecide(pr.ID))
+	e.delKV(ctx, store.KVPRDryRun(pr.ID), kvPRRedecide(pr.ID))
 	e.clearRequested(ctx, pr.ID)
 	if k := e.cfg.JudgeFor(&job.watch).AgentKind(); k != "" {
-		e.delKV(ctx, kvToolBackoff(k))
+		e.delKV(ctx, store.KVToolBackoff(k))
 	}
 	if pr.Forced {
 		e.toastRequestedReplied(job, pr, res)

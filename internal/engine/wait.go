@@ -365,7 +365,7 @@ func (e *Engine) waitFor(ctx context.Context, pr store.PR, global *Wait, now tim
 	if why := e.userPause(ctx); why != "" && !pr.Forced {
 		return with(Wait{Reason: WaitPaused, Detail: "the " + why})
 	}
-	if gate, ok := e.getKV(ctx, kvPRGate(pr.ID)); ok && gate != "" {
+	if gate, ok := e.getKV(ctx, store.KVPRGate(pr.ID)); ok && gate != "" {
 		return with(e.gateWait(ctx, pr.ID, gate))
 	}
 	if req, ok := e.pendingRequest(ctx, pr); ok && !pr.Forced {

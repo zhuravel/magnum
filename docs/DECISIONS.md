@@ -5068,3 +5068,20 @@ editing history. Code, config comments and prompts reference these by their head
   and the exec transcript keep the Printf path anyway); mirroring every slot and cleanup event (new info
   volume, and slot.discarded lists file paths); a level argument at each logf site (the error sites need
   the stop rule, which logErr applies once).
+- **A kv key has one name** (2026-10-09, after a naming audit). The engine kept a second name for 28 of
+  store's kv keys, and the CLI read 8 of them as engine.KV* in its tests but as store.KV* in its code. 15
+  one-line functions (KVIdentityCheck, kvPRGate, kvPRRequested, ...) and 13 constants (kvLastTick =
+  store.KVDaemonLastTick, ...) forwarded to store, three under other words: kvGHPausedUntil for
+  gh.poll_paused_until, kvIdentityExpiry for identity.<name>.token_expiry and kvPRRequested for
+  pr.<id>.roles. SkipIgnored and EvPRMuted each had an unexported twin, and util.go said every engine key
+  lived in store, which held for none of the 53 keys only the engine gives a meaning to. Now the
+  forwarders, the aliases and the twins are gone: each was marked `//go:fix inline`, and `go fix -inline`
+  rewrote their 223 uses (183 in the engine, 40 in five CLI test files) to store.KV*, SkipIgnored and
+  EvPRMuted, a diff of names only. The engine's own keys stay beside the code that writes them, and
+  util.go and store's kv.go state the rule: a key moves to store once a package below the engine reads it,
+  as store.KVPRCodexFlag did for the pipeline. No stored key changed:
+  TestEveryKVKeyTheEngineWritesKeepsItsString pins the string of every key name the engine uses (its 53,
+  store's 30 and agents' 2) and fails when two names spell one key. Rejected: moving the 53 engine keys
+  into store (it exports 14 names only the engine uses, and parts each value format from the engine type
+  that encodes it, such as Wait and Stalemate); keeping engine.KV* aliases for the CLI (a second name for
+  one key is what had drifted).

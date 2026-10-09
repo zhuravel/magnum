@@ -46,7 +46,7 @@ func TestIdentitiesCheckRecordsVerdicts(t *testing.T) {
 	st := f.store()
 	ctx := context.Background()
 	gh, appID := identitiesFixture()
-	if err := st.SetKV(ctx, engine.KVIdentityCheck("zhuravel"), "fail"); err != nil {
+	if err := st.SetKV(ctx, store.KVIdentityCheck("zhuravel"), "fail"); err != nil {
 		t.Fatal(err)
 	}
 	// The daemon toasted zhuravel's failure; the toast is deduplicated.
@@ -73,13 +73,13 @@ func TestIdentitiesCheckRecordsVerdicts(t *testing.T) {
 			t.Errorf("lacks %q:\n%s", want, out)
 		}
 	}
-	if v, _, _ := st.GetKV(ctx, engine.KVIdentityCheck("zhuravel")); v != "pass" {
+	if v, _, _ := st.GetKV(ctx, store.KVIdentityCheck("zhuravel")); v != "pass" {
 		t.Fatalf("zhuravel kv = %q", v)
 	}
-	if v, _, _ := st.GetKV(ctx, engine.KVIdentityCheck("talkable-app")); v != "fail" {
+	if v, _, _ := st.GetKV(ctx, store.KVIdentityCheck("talkable-app")); v != "fail" {
 		t.Fatalf("app kv = %q", v)
 	}
-	if v, _, _ := st.GetKV(ctx, engine.KVIdentityError("talkable-app")); v != "pull_requests permission is read" {
+	if v, _, _ := st.GetKV(ctx, store.KVIdentityError("talkable-app")); v != "pull_requests permission is read" {
 		t.Fatalf("app error kv = %q", v)
 	}
 	evs, _ := st.EventsBySubject(ctx, "identity:talkable-app", 0)
@@ -119,7 +119,7 @@ func TestIdentitiesCheckNameAndJSON(t *testing.T) {
 		!strings.Contains(f.Out.String(), "could not finish: network down") {
 		t.Fatalf("code %d out %s", code, f.Out.String())
 	}
-	if v, _, _ := st.GetKV(ctx, engine.KVIdentityError("talkable-app")); v != "network down" {
+	if v, _, _ := st.GetKV(ctx, store.KVIdentityError("talkable-app")); v != "network down" {
 		t.Fatalf("error kv = %q", v)
 	}
 	if code := identitiesCheck(ctx, f.Ctx, st, []identity.Source{gh}, "nobody", false); code != 1 ||
@@ -151,7 +151,7 @@ func TestIdentitiesCheckWarningPassesAndIsCounted(t *testing.T) {
 			t.Errorf("lacks %q:\n%s", want, out)
 		}
 	}
-	if v, _, _ := st.GetKV(ctx, engine.KVIdentityCheck("talkable-app")); v != "pass" {
+	if v, _, _ := st.GetKV(ctx, store.KVIdentityCheck("talkable-app")); v != "pass" {
 		t.Fatalf("app kv = %q", v)
 	}
 }
@@ -159,7 +159,7 @@ func TestIdentitiesCheckWarningPassesAndIsCounted(t *testing.T) {
 func TestIdentitiesCommand(t *testing.T) {
 	f := newInspFixture(t)
 	st := f.store()
-	if err := st.SetKV(context.Background(), engine.KVIdentityCheck("talkable-app"), "fail"); err != nil {
+	if err := st.SetKV(context.Background(), store.KVIdentityCheck("talkable-app"), "fail"); err != nil {
 		t.Fatal(err)
 	}
 	st.Close()
@@ -226,7 +226,7 @@ func TestIdentitiesCheckHandsVerdictsToTheDaemon(t *testing.T) {
 	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("verdicts handed to the daemon = %+v, want %+v", got, want)
 	}
-	if v, ok, _ := st.GetKV(ctx, engine.KVIdentityCheck("zhuravel")); ok {
+	if v, ok, _ := st.GetKV(ctx, store.KVIdentityCheck("zhuravel")); ok {
 		t.Fatalf("the CLI wrote the verdict itself (%q) while a daemon runs", v)
 	}
 	if !strings.Contains(f.Out.String(), "(the daemon, pid 4242, recorded the new verdicts)") {
@@ -250,7 +250,7 @@ func TestIdentitiesCheckRecordsItselfWhenNoDaemonAnswers(t *testing.T) {
 	if code := identitiesCheck(ctx, f.Ctx, st, []identity.Source{gh}, "", false); code != 0 {
 		t.Fatalf("code %d err %s", code, f.Err.String())
 	}
-	if v, _, _ := st.GetKV(ctx, engine.KVIdentityCheck("zhuravel")); v != "pass" {
+	if v, _, _ := st.GetKV(ctx, store.KVIdentityCheck("zhuravel")); v != "pass" {
 		t.Fatalf("kv = %q, want the CLI's own record", v)
 	}
 	if reqs, err := st.PendingRequests(ctx, 10); err != nil || len(reqs) != 0 {

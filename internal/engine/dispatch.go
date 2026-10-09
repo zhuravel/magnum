@@ -247,7 +247,7 @@ func (e *Engine) dispatch(ctx context.Context, ts tickState) {
 			e.log.Debug("candidate skipped", "pr", pr.ID, "reason", g.text)
 			e.noteGate(ctx, pr.ID, g)
 		default:
-			e.delKV(ctx, kvPRGate(pr.ID), kvPRGateReason(pr.ID), KVPRWait(pr.ID))
+			e.delKV(ctx, store.KVPRGate(pr.ID), kvPRGateReason(pr.ID), KVPRWait(pr.ID))
 		}
 		if started {
 			working += codex
@@ -323,8 +323,8 @@ func arrivedDuringReview(pr store.PR) bool {
 // noteGate records why the PR waits when that changed: the gate's sentence
 // (store.KVPRGate) and its code (kvPRGateReason).
 func (e *Engine) noteGate(ctx context.Context, prID int64, g gate) {
-	if prev, _ := e.getKV(ctx, kvPRGate(prID)); prev != g.text {
-		e.setKV(ctx, kvPRGate(prID), g.text)
+	if prev, _ := e.getKV(ctx, store.KVPRGate(prID)); prev != g.text {
+		e.setKV(ctx, store.KVPRGate(prID), g.text)
 	}
 	b, err := json.Marshal(gateCode{Reason: g.reason, Kind: g.kind, By: g.by, At: g.at})
 	if err != nil {
@@ -395,7 +395,7 @@ func (e *Engine) prGate(ctx context.Context, pr store.PR, repo store.Repo, w *co
 		e.noteLastError(ctx, pr, why)
 		return gate{reason: WaitIdentity, text: why}
 	}
-	if v, ok := e.getKV(ctx, KVWatchPaused(repo.WatchOwner)); ok && v != "" {
+	if v, ok := e.getKV(ctx, store.KVWatchPaused(repo.WatchOwner)); ok && v != "" {
 		return otherGate("watch " + repo.WatchOwner + " paused: " + v)
 	}
 	return gate{}

@@ -336,7 +336,7 @@ func (e *Engine) startSessions(ctx context.Context, job *roundJob, rs *roundSetu
 	}
 	pr := job.pr
 	fresh, why := false, "" // why: what made the sessions fresh, for the events
-	if v, _ := e.getKV(ctx, kvPRFresh(pr.ID)); v == "1" {
+	if v, _ := e.getKV(ctx, store.KVPRFresh(pr.ID)); v == "1" {
 		fresh, why = true, "fresh sessions were requested"
 	}
 	// Sessions post as the identity their panes were created for; a PR whose
@@ -362,7 +362,7 @@ func (e *Engine) startSessions(ctx context.Context, job *roundJob, rs *roundSetu
 	if ws, err = e.d.Agents.EnsureWorkspace(ctx, pr, job.slot.Path, env, label, rs.toRun); err != nil {
 		return fail(fmt.Errorf("workspace: %w", err))
 	}
-	e.setKV(ctx, kvPRSessionsIdentity(pr.ID), pr.Identity)
+	e.setKV(ctx, store.KVPRSessionsIdentity(pr.ID), pr.Identity)
 	effort := effortOf(job.kind)
 	if rs.judgeOnly() && e.hasOwnReview(ctx, pr, rs.src.Login()) {
 		effort = effortCheck // a fresh judge checks the delta, or the same head, too (checkFresh)
@@ -1000,18 +1000,18 @@ func (e *Engine) checkoutFailed(err error, job *roundJob) *setupError {
 }
 
 // dryRunRound reports whether the PR's next round is a `magnum review
-// --dry-run` round: its marker (kvPRDryRun) is set and the forced request
+// --dry-run` round: its marker (store.KVPRDryRun) is set and the forced request
 // that set it is still pending. A marker without a pending forced request is
 // stale (its round ended) and is removed, so an automatic round never
 // inherits it. A read error is returned: the caller must not start a round
 // that might post.
 func (e *Engine) dryRunRound(ctx context.Context, pr store.PR) (bool, error) {
-	_, ok, err := e.st.GetKV(ctx, kvPRDryRun(pr.ID))
+	_, ok, err := e.st.GetKV(ctx, store.KVPRDryRun(pr.ID))
 	if err != nil {
 		return false, fmt.Errorf("read the dry-run marker: %w", err)
 	}
 	if ok && !pr.Forced {
-		e.delKV(ctx, kvPRDryRun(pr.ID))
+		e.delKV(ctx, store.KVPRDryRun(pr.ID))
 		return false, nil
 	}
 	return ok, nil
@@ -1031,7 +1031,7 @@ func (e *Engine) sidebar(ctx context.Context, workspaceID string, tokens map[str
 // kv written at workspace creation, else (sessions from before that key
 // existed) the identity of the PR's latest run.
 func (e *Engine) sessionsIdentity(ctx context.Context, prID int64) string {
-	if v, _ := e.getKV(ctx, kvPRSessionsIdentity(prID)); v != "" {
+	if v, _ := e.getKV(ctx, store.KVPRSessionsIdentity(prID)); v != "" {
 		return v
 	}
 	runs, err := e.st.RunsByPR(ctx, prID)

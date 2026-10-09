@@ -43,8 +43,8 @@ func TestWaitIsBuiltFromTheGateCode(t *testing.T) {
 	h.advance(10 * time.Minute)
 	pr := h.pr(2)
 	until := h.clock.Now().Add(time.Hour)
-	h.e.setKV(h.ctx, KVToolPausedUntil("codex"), store.FormatTime(until))
-	h.e.setKV(h.ctx, KVToolPausedReason("codex"), "usage_limit")
+	h.e.setKV(h.ctx, store.KVToolPausedUntil("codex"), store.FormatTime(until))
+	h.e.setKV(h.ctx, store.KVToolPausedReason("codex"), "usage_limit")
 	for _, tc := range []struct {
 		g      gate
 		reason string
@@ -59,7 +59,7 @@ func TestWaitIsBuiltFromTheGateCode(t *testing.T) {
 		{gate{reason: WaitKind, kind: "claude", text: "the Claude agents rest"}, WaitOther, time.Time{}},
 	} {
 		h.e.noteGate(h.ctx, pr.ID, tc.g)
-		if v, _ := h.e.getKV(h.ctx, kvPRGate(pr.ID)); v != tc.g.text {
+		if v, _ := h.e.getKV(h.ctx, store.KVPRGate(pr.ID)); v != tc.g.text {
 			t.Errorf("%+v: the gate's sentence for magnum status is %q", tc.g, v)
 		}
 		w := h.e.waitFor(h.ctx, pr, nil, h.clock.Now())
@@ -68,7 +68,7 @@ func TestWaitIsBuiltFromTheGateCode(t *testing.T) {
 		}
 	}
 	h.e.delKV(h.ctx, kvPRGateReason(pr.ID))
-	h.e.setKV(h.ctx, kvPRGate(pr.ID), "slot review1 is pinned (magnum unpin)")
+	h.e.setKV(h.ctx, store.KVPRGate(pr.ID), "slot review1 is pinned (magnum unpin)")
 	if w := h.e.waitFor(h.ctx, pr, nil, h.clock.Now()); w.Reason != WaitOther || w.Detail != "slot review1 is pinned (magnum unpin)" {
 		t.Errorf("a gate without its code: wait %+v", w)
 	}

@@ -18,16 +18,16 @@ func TestStatusShowsInfraPauseDrainAndCodexBudget(t *testing.T) {
 	_, st, d, now := statusFixture(t)
 	ctx := context.Background()
 	for k, v := range map[string]string{
-		engine.KVInfraPausedUntil:           store.FormatTime(now.Add(4 * time.Minute)),
-		engine.KVInfraPausedReason:          "SSH key refused",
-		engine.KVInfraPausedDetail:          "git@github.com: Permission denied (publickey).",
-		engine.KVDaemonDraining:             store.FormatTime(now.Add(-2 * time.Minute)),
-		engine.KVUsageCodexPercent:          "87",
-		engine.KVUsageCodexWindow:           "10080",
-		engine.KVUsageCodexPlan:             "pro",
-		engine.KVUsageCodexResetsAt:         store.FormatTime(now.Add(50 * time.Hour)),
-		engine.KVToolPausedUntil("claude"):  store.FormatTime(now.Add(time.Hour)),
-		engine.KVToolPausedReason("claude"): engine.BudgetPauseReason,
+		engine.KVInfraPausedUntil:          store.FormatTime(now.Add(4 * time.Minute)),
+		engine.KVInfraPausedReason:         "SSH key refused",
+		engine.KVInfraPausedDetail:         "git@github.com: Permission denied (publickey).",
+		engine.KVDaemonDraining:            store.FormatTime(now.Add(-2 * time.Minute)),
+		engine.KVUsageCodexPercent:         "87",
+		engine.KVUsageCodexWindow:          "10080",
+		engine.KVUsageCodexPlan:            "pro",
+		engine.KVUsageCodexResetsAt:        store.FormatTime(now.Add(50 * time.Hour)),
+		store.KVToolPausedUntil("claude"):  store.FormatTime(now.Add(time.Hour)),
+		store.KVToolPausedReason("claude"): engine.BudgetPauseReason,
 	} {
 		if err := st.SetKV(ctx, k, v); err != nil {
 			t.Fatal(err)

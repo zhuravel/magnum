@@ -77,7 +77,7 @@ func TestFromAppDryRunOnce(t *testing.T) {
 	if v, _, _ := real.GetKV(context.Background(), "probe"); v != "untouched" {
 		t.Fatalf("real registry changed: %q", v)
 	}
-	if _, ok, _ := real.GetKV(context.Background(), kvLastTick); ok {
+	if _, ok, _ := real.GetKV(context.Background(), store.KVDaemonLastTick); ok {
 		t.Fatal("dry run wrote daemon state into the real registry")
 	}
 	if !strings.Contains(logs.String(), "would provision") {

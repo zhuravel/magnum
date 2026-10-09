@@ -240,7 +240,7 @@ func TestIgnoreMutesAndNeverQueues(t *testing.T) {
 	want := func(when string) {
 		t.Helper()
 		cur := h.wantState(2, store.PRIneligible)
-		if !cur.Muted || deref(cur.SkipReason) != skipIgnored {
+		if !cur.Muted || deref(cur.SkipReason) != SkipIgnored {
 			t.Fatalf("%s: muted=%v skip_reason %q", when, cur.Muted, deref(cur.SkipReason))
 		}
 	}
@@ -270,7 +270,7 @@ func TestIgnoreMutesAndNeverQueues(t *testing.T) {
 		t.Fatalf("unmute: %s %q", r.State, deref(r.Result))
 	}
 	cur := h.pr(pr.Number)
-	if cur.Muted || deref(cur.SkipReason) == skipIgnored || deref(cur.ReviewedSHA) != "b2" || len(h.rd.all()) != rounds+1 {
+	if cur.Muted || deref(cur.SkipReason) == SkipIgnored || deref(cur.ReviewedSHA) != "b2" || len(h.rd.all()) != rounds+1 {
 		t.Fatalf("after unmute: state %s reviewed %q muted=%v skip_reason %q", cur.State, deref(cur.ReviewedSHA), cur.Muted, deref(cur.SkipReason))
 	}
 }
@@ -287,7 +287,7 @@ func TestIgnoreStopsARunningRound(t *testing.T) {
 		t.Fatalf("ignore: %s %q", r.State, deref(r.Result))
 	}
 	cur := h.wantState(7, store.PRIneligible)
-	if !cur.Muted || deref(cur.SkipReason) != skipIgnored {
+	if !cur.Muted || deref(cur.SkipReason) != SkipIgnored {
 		t.Fatalf("muted=%v skip_reason %q", cur.Muted, deref(cur.SkipReason))
 	}
 	if len(kh.all()) != 2 {
@@ -336,7 +336,7 @@ func TestIgnoreOfAClosedPRMutesIt(t *testing.T) {
 		t.Error("ignore touched a closed PR's sessions or slot (cleanup owns them)")
 	}
 	cur := h.pr(2)
-	if cur.State != store.PRClosed || !cur.Muted || deref(cur.SkipReason) != skipIgnored {
+	if cur.State != store.PRClosed || !cur.Muted || deref(cur.SkipReason) != SkipIgnored {
 		t.Fatalf("closed PR: state %s muted=%v skip_reason %q", cur.State, cur.Muted, deref(cur.SkipReason))
 	}
 }

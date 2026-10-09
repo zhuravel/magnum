@@ -319,7 +319,7 @@ func TestStartupKeepsOldRequestsADaemonSaw(t *testing.T) {
 	h.startup()
 	old := h.enqueue(ReqProvision, ProvisionPayload{Count: 1})
 	h.advance(time.Minute)
-	h.e.setKV(h.ctx, kvLastTick, store.FormatTime(h.clock.Now())) // a daemon ticked after it was queued
+	h.e.setKV(h.ctx, store.KVDaemonLastTick, store.FormatTime(h.clock.Now())) // a daemon ticked after it was queued
 	h.advance(3 * time.Hour)
 	h.e.expireRequests(h.ctx, h.clock.Now().Add(-3*time.Hour))
 	if r := h.request(old); r.State != store.RequestPending {

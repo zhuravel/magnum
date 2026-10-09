@@ -352,7 +352,7 @@ func TestUsageLimitPauseBlocksDispatchThenContinues(t *testing.T) {
 	h.advance(5 * time.Minute)
 	h.tick()
 	h.wantState(2, store.PRPaused)
-	if until, ok := h.e.kvTime(h.ctx, KVToolPausedUntil("codex")); !ok || !until.Equal(resetAt) {
+	if until, ok := h.e.kvTime(h.ctx, store.KVToolPausedUntil("codex")); !ok || !until.Equal(resetAt) {
 		t.Fatalf("codex paused until %v (%v)", until, ok)
 	}
 	if !strings.Contains(strings.Join(h.nh.all(), "\n"), "Codex usage limit") {
@@ -516,7 +516,7 @@ func TestForcedRequestBypassesThrottle(t *testing.T) {
 	if pr.Forced || pr.NextEligibleAt != nil {
 		t.Fatalf("forced flag not cleared: %+v", pr)
 	}
-	if v, ok := h.e.getKV(h.ctx, kvPRRequested(pr.ID)); ok {
+	if v, ok := h.e.getKV(h.ctx, store.KVPRRoles(pr.ID)); ok {
 		t.Fatalf("simplify request kept: %q", v)
 	}
 }
@@ -688,7 +688,7 @@ func TestIdentityLeakPausesWatch(t *testing.T) {
 		return pipeline.RoundResult{Outcome: pipeline.OutcomeIdentityLeak, Round: 1, ReviewID: 5, Error: "zhuravel"}, nil
 	}
 	h.reviewedPRExpect(2, "b1", store.PRNeedsAttention)
-	if v, ok := h.e.getKV(h.ctx, KVWatchPaused("talkable")); !ok || !strings.Contains(v, "identity leak") {
+	if v, ok := h.e.getKV(h.ctx, store.KVWatchPaused("talkable")); !ok || !strings.Contains(v, "identity leak") {
 		t.Fatalf("watch not paused: %q", v)
 	}
 	if !strings.Contains(strings.Join(h.nh.all(), "\n"), "IDENTITY LEAK") {
@@ -971,7 +971,7 @@ func TestWorkingCodexLimitBlocksDispatch(t *testing.T) {
 	h.advance(5 * time.Minute)
 	h.tick()
 	pr := h.wantState(2, store.PRQueued)
-	if v, _ := h.e.getKV(h.ctx, kvPRGate(pr.ID)); !strings.HasPrefix(v, "working Codex agents at the limit") || len(h.rd.all()) != 0 {
+	if v, _ := h.e.getKV(h.ctx, store.KVPRGate(pr.ID)); !strings.HasPrefix(v, "working Codex agents at the limit") || len(h.rd.all()) != 0 {
 		t.Fatalf("gate %q, rounds %d", v, len(h.rd.all()))
 	}
 }
@@ -1165,13 +1165,13 @@ func TestDispatchRecordsTheGateReason(t *testing.T) {
 	h.advance(5 * time.Minute)
 	h.tick()
 	h.wantState(2, store.PRQueued)
-	if v, _ := h.e.getKV(h.ctx, kvPRGate(pr.ID)); v != "human active in the PR's panes" {
+	if v, _ := h.e.getKV(h.ctx, store.KVPRGate(pr.ID)); v != "human active in the PR's panes" {
 		t.Fatalf("gate kv = %q", v)
 	}
 	h.advance(20 * time.Minute) // past daemon.human_cooldown
 	h.tick()
 	h.wantState(2, store.PRReviewed)
-	if v, ok := h.e.getKV(h.ctx, kvPRGate(pr.ID)); ok {
+	if v, ok := h.e.getKV(h.ctx, store.KVPRGate(pr.ID)); ok {
 		t.Fatalf("gate kv kept after the round started: %q", v)
 	}
 }

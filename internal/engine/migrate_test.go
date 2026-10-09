@@ -260,7 +260,7 @@ func TestMigrationLiveCaseKeepsTheOldAppsHistory(t *testing.T) {
 	if n := m.ag.count(fmt.Sprintf("park:%d", pr.ID)); n <= parksBefore {
 		t.Fatalf("parks of the PR = %d, was %d: the old identity's sessions must be parked", n, parksBefore)
 	}
-	if v, _ := m.e.getKV(m.ctx, kvPRSessionsIdentity(pr.ID)); v != "zhuravel-app" {
+	if v, _ := m.e.getKV(m.ctx, store.KVPRSessionsIdentity(pr.ID)); v != "zhuravel-app" {
 		t.Fatalf("sessions identity = %q, want zhuravel-app", v)
 	}
 

@@ -18,13 +18,8 @@ import (
 // later poll.
 const maxFileFetchesPerRepo = 20
 
-const (
-	// skipIgnored is the skip_reason `magnum ignore` stores on a muted PR:
-	// classify keeps it instead of the generic "muted".
-	skipIgnored = "ignored"
-	// mutedReason is what eligibility.Classify says about a muted PR.
-	mutedReason = "muted"
-)
+// mutedReason is what eligibility.Classify says about a muted PR.
+const mutedReason = "muted"
 
 // fileLister is the optional GitHub capability skip_paths needs: the files a
 // PR changes (*github.Client has it; a client without it never skips).
@@ -142,8 +137,8 @@ func (e *Engine) wantsFiles(ctx context.Context, w config.Watch, res store.PRUps
 func (e *Engine) classify(ctx context.Context, w config.Watch, pr store.PR, now time.Time) eligibility.Decision {
 	dec := eligibility.Classify(w, e.factsFor(ctx, pr, w, now))
 	if !dec.Eligible {
-		if dec.Reason == mutedReason && deref(pr.SkipReason) == skipIgnored {
-			dec.Reason = skipIgnored
+		if dec.Reason == mutedReason && deref(pr.SkipReason) == SkipIgnored {
+			dec.Reason = SkipIgnored
 		}
 		return dec
 	}

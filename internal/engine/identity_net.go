@@ -17,6 +17,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/identity"
+	"github.com/zhuravel/magnum/internal/store"
 )
 
 const (
@@ -154,7 +155,7 @@ func (e *Engine) checkIdentity(ctx context.Context, name string) {
 		reason = err.Error()
 	}
 	if cause := checkConnectionCause(rep, err); cause != "" {
-		prev, _ := e.getKV(ctx, KVIdentityCheck(name))
+		prev, _ := e.getKV(ctx, store.KVIdentityCheck(name))
 		r, retried := e.netRetrying(ctx, name, "check", key, cause, reason, prev == "fail")
 		if retried {
 			return
@@ -184,10 +185,10 @@ func (e *Engine) retryIdentities(ctx context.Context) {
 			}
 			continue
 		}
-		if v, _ := e.getKV(ctx, KVIdentityCheck(name)); v != "fail" {
+		if v, _ := e.getKV(ctx, store.KVIdentityCheck(name)); v != "fail" {
 			continue
 		}
-		if r, _ := e.getKV(ctx, KVIdentityError(name)); github.ConnectionCause(r) != "" {
+		if r, _ := e.getKV(ctx, store.KVIdentityError(name)); github.ConnectionCause(r) != "" {
 			e.checkIdentity(ctx, name)
 		}
 	}

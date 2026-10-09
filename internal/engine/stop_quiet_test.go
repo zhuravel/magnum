@@ -110,7 +110,7 @@ func TestAStoppingDaemonDoesNotNoteHerdrDown(t *testing.T) {
 	if n := downs(); n != 0 {
 		t.Fatalf("%d herdr.down events for a cancelled context", n)
 	}
-	if v, ok, _ := h.st.GetKV(h.ctx, kvHerdrUp); ok {
+	if v, ok, _ := h.st.GetKV(h.ctx, store.KVHerdrUp); ok {
 		t.Fatalf("herdr_up = %q after a cancelled snapshot", v)
 	}
 	if w := warnLines(buf); len(w) != 0 {
@@ -121,7 +121,7 @@ func TestAStoppingDaemonDoesNotNoteHerdrDown(t *testing.T) {
 	if n := downs(); n != 1 {
 		t.Fatalf("herdr really down: %d herdr.down events, want 1", n)
 	}
-	if v, _, _ := h.st.GetKV(h.ctx, kvHerdrUp); v != "0" {
+	if v, _, _ := h.st.GetKV(h.ctx, store.KVHerdrUp); v != "0" {
 		t.Fatalf("herdr_up = %q, want 0", v)
 	}
 }

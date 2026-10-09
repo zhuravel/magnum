@@ -59,7 +59,7 @@ func TestIdleAgentsOfAPRThatWaitsLongAreParked(t *testing.T) {
 		reason string
 		parked bool
 	}{
-		{"magnum pause", func(h *harness, _ store.PR) { h.e.setKV(h.ctx, KVDaemonPaused, "1") }, WaitPaused, true},
+		{"magnum pause", func(h *harness, _ store.PR) { h.e.setKV(h.ctx, store.KVDaemonPaused, "1") }, WaitPaused, true},
 		{"a drain", func(h *harness, _ store.PR) {
 			h.e.setKV(h.ctx, KVDaemonDraining, Drain{Since: h.clock.Now()}.Value())
 		}, WaitDraining, true},
@@ -88,7 +88,7 @@ func TestIdleAgentsOfAPRThatWaitsLongAreParked(t *testing.T) {
 			}
 		}, WaitRetry, false},
 		{"a pinned slot under a pause", func(h *harness, pr store.PR) {
-			h.e.setKV(h.ctx, KVDaemonPaused, "1")
+			h.e.setKV(h.ctx, store.KVDaemonPaused, "1")
 			sl, has, err := h.e.slotOf(h.ctx, pr.ID)
 			if err != nil || !has {
 				t.Fatalf("slot: %v %v", has, err)

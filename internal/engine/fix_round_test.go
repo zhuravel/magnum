@@ -133,7 +133,7 @@ func TestCrashRecoveryResumesOnlyAnUnfinishedJudgeTurn(t *testing.T) {
 func TestStaleDryRunMarkerIsNotInherited(t *testing.T) {
 	h := newHarness(t)
 	pr := h.reviewedPR(2, "b1")
-	h.e.setKV(h.ctx, kvPRDryRun(pr.ID), store.PRReviewed) // left behind; the PR is not forced
+	h.e.setKV(h.ctx, store.KVPRDryRun(pr.ID), store.PRReviewed) // left behind; the PR is not forced
 	h.advance(time.Minute)
 	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b2"})
 	h.tick()
@@ -146,7 +146,7 @@ func TestStaleDryRunMarkerIsNotInherited(t *testing.T) {
 	if p := h.wantState(2, store.PRReviewed); deref(p.ReviewedSHA) != "b2" {
 		t.Fatalf("reviewed_sha %q", deref(p.ReviewedSHA))
 	}
-	if _, ok := h.e.getKV(h.ctx, kvPRDryRun(pr.ID)); ok {
+	if _, ok := h.e.getKV(h.ctx, store.KVPRDryRun(pr.ID)); ok {
 		t.Fatal("stale dry-run marker kept")
 	}
 }
@@ -162,7 +162,7 @@ func TestReplayedDryRunRequestKeepsTheOriginalState(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if v, _ := h.e.getKV(h.ctx, kvPRDryRun(pr.ID)); v != store.PRReviewed {
+	if v, _ := h.e.getKV(h.ctx, store.KVPRDryRun(pr.ID)); v != store.PRReviewed {
 		t.Fatalf("marker = %q, want reviewed", v)
 	}
 	h.rd.script = func(in pipeline.RoundInput) (pipeline.RoundResult, error) {

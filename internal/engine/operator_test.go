@@ -140,7 +140,7 @@ func TestRequestedRoundHeldByTheOperatorToastsOnce(t *testing.T) {
 		{"identity unhealthy", func(h *harness) {
 			h.reviewedPR(2, "b1")
 			h.app.checkErr = "the App's key was revoked"
-			h.e.setKV(h.ctx, KVIdentityCheck("talkable-app"), "fail")
+			h.e.setKV(h.ctx, store.KVIdentityCheck("talkable-app"), "fail")
 		}, 2 * time.Minute, "identity talkable-app"},
 		{"slot kept by its guard", func(h *harness) {
 			h.openedPR()
@@ -247,7 +247,7 @@ func TestPauseStartIsTakenFromItsEventWhenUnrecorded(t *testing.T) {
 	h := newHarness(t, noEveryReview)
 	h.reviewedPR(2, "b1")
 	at := h.clock.Now()
-	h.e.setKV(h.ctx, KVDaemonPaused, "1")
+	h.e.setKV(h.ctx, store.KVDaemonPaused, "1")
 	h.e.event(h.ctx, "info", "", "daemon.paused", "automation paused", nil)
 	h.advance(90 * time.Minute)
 	h.tick()

@@ -10,7 +10,10 @@ import (
 
 // kv keys shared by the daemon (which writes them) and the CLI (`magnum
 // status`, `doctor`, `pause`, `resume`, `identities`), so neither side spells
-// them as string literals. Values are never secrets.
+// them as string literals, and keys that a package below the engine (agents,
+// pipeline) reads. Values are never secrets. A key only the engine gives a
+// meaning to stays in the engine (engine.KV*), beside the code that writes
+// it, and moves here once such a package reads it.
 const (
 	KVDaemonStartedAt     = "daemon.started_at"     // store.FormatTime
 	KVDaemonLastTick      = "daemon.last_tick"      // store.FormatTime
@@ -43,7 +46,8 @@ func KVToolPausedDetail(tool string) string { return tool + ".paused_detail" }
 // KVToolBackoff holds the last fallback pause of a tool (a Go duration).
 func KVToolBackoff(tool string) string { return tool + ".backoff" }
 
-// KVIdentityCheck holds "pass" or "fail" from an identity's last Check.
+// KVIdentityCheck holds "pass" or "fail" from an identity's last Check. An
+// identity is healthy unless it or KVIdentityTickError says otherwise.
 func KVIdentityCheck(name string) string { return "identity." + name + ".check" }
 
 // KVIdentityError holds why an identity's Check failed.
