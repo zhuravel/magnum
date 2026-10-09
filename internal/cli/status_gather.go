@@ -242,6 +242,9 @@ func statusGatherRetro(ctx context.Context, d statusDeps, kv statusKV, r *status
 	if n, err := d.Store.CountMisses(ctx, store.MissFilter{Classes: []string{store.MissMiss}, States: []string{store.MissNew}}); err == nil {
 		ro.NewMisses = &n
 	}
+	if n, err := d.Store.CountDeclines(ctx, declinesFilter(false, 0)); err == nil {
+		ro.Declined = &n
+	}
 	if d.Config != nil && d.Config.Learn.Settle.Duration > 0 {
 		lc, now := d.Config.Learn, r.GeneratedAt
 		q := store.RetroQuery{Since: now.Add(-lc.Lookback.Duration), Until: now.Add(-lc.Settle.Duration)}

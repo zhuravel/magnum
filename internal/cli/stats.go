@@ -80,6 +80,10 @@ func newStatsCmd(c *Context) *cobra.Command {
 			"it reads any report), and delta checks, which the judge runs alone. Each posted finding counts under the "+
 			"own pass, the own pass with reviewers, or the reviewers alone that raised it; REVIEWER-ONLY P0-P2 counts "+
 			"the latter's P0 to P2 findings, also per 10 rounds, next to each role's median turn (--json: value).\n\n"+
+			"FINDINGS ANSWERED BY SOURCE and BY PRIORITY count how the authors answered magnum's posted findings, as "+
+			"the retro classified their replies in the window (`magnum misses --declines` lists them): fixed, "+
+			"declined, deferred, argued, question or unrelated, under each source that raised the finding (unknown "+
+			"without its provenance) and under its priority (--json: answered).\n\n"+
 			"OPERATIONS counts model-limit switches, permission prompts magnum denied and round restarts (the PR "+
 			"head moved before the judge was prompted). The text report shows durations and sources over the "+
 			"whole window; --json has every day and repository.\n\n"+
@@ -191,6 +195,86 @@ type statsReport struct {
 	// Value is who found the posted findings, per kind of round
 	// (stats_value.go).
 	Value []statsValue `json:"value"`
+	// Answered is how authors answered magnum's posted findings (nil when
+	// the retro stored no answer in the window).
+	Answered *statsAnswered `json:"answered,omitempty"`
+}
+
+// statsUnknown is the source of an answered finding without a findings row
+// (a review posted before the provenance, or a round recorded again) and
+// the priority of one posted without a priority.
+const statsUnknown = "unknown"
+
+// statsOutcomes are the answers to a finding (store.Decline*), in the
+// order the tables show them.
+var statsOutcomes = []string{store.DeclineFixed, store.DeclineDeclined, store.DeclineDeferred, store.DeclineArgued,
+	store.DeclineQuestion, store.DeclineUnrelated}
+
+// statsAnswered counts the answers to magnum's posted findings the retro
+// stored in the window (store.Decline), by outcome under each source that
+// raised the finding and under the finding's priority.
+type statsAnswered struct {
+	BySource   map[string]map[string]int `json:"by_source"`   // source -> outcome -> n
+	ByPriority map[string]map[string]int `json:"by_priority"` // P0..P3 or statsUnknown -> outcome -> n
+}
+
+// statsAnsweredOf counts the declines of ds the retro stored at or after
+// since, of repo when it is set; findings are their findings rows by id.
+// Nil when none counts.
+func statsAnsweredOf(ds []store.Decline, findings map[int64]store.Finding, since time.Time, repo string) *statsAnswered {
+	a := &statsAnswered{BySource: map[string]map[string]int{}, ByPriority: map[string]map[string]int{}}
+	add := func(m map[string]map[string]int, key, outcome string) {
+		if m[key] == nil {
+			m[key] = map[string]int{}
+		}
+		m[key][outcome]++
+	}
+	n := 0
+	for _, d := range ds {
+		if d.CreatedAt.Before(since) || (repo != "" && d.Repo != repo) {
+			continue
+		}
+		n++
+		sources := []string{statsUnknown}
+		if d.FindingRowID != nil {
+			if f, ok := findings[*d.FindingRowID]; ok && len(f.Sources) > 0 {
+				sources = slices.Compact(slices.Sorted(slices.Values(f.Sources)))
+			}
+		}
+		for _, s := range sources {
+			add(a.BySource, s, d.Outcome)
+		}
+		add(a.ByPriority, cmp.Or(d.Priority, statsUnknown), d.Outcome)
+	}
+	if n == 0 {
+		return nil
+	}
+	return a
+}
+
+// statsGatherAnswered reads the declines and the findings rows they link
+// to (those of their PRs) and counts the answers of the window.
+func statsGatherAnswered(ctx context.Context, st *store.Store, since time.Time, repo string) (*statsAnswered, error) {
+	ds, err := st.Declines(ctx, store.DeclineFilter{})
+	if err != nil {
+		return nil, err
+	}
+	findings := map[int64]store.Finding{}
+	read := map[int64]bool{}
+	for _, d := range ds {
+		if d.FindingRowID == nil || read[d.PRID] || d.CreatedAt.Before(since) || (repo != "" && d.Repo != repo) {
+			continue
+		}
+		read[d.PRID] = true
+		fs, err := st.FindingsByPR(ctx, d.PRID)
+		if err != nil {
+			return nil, err
+		}
+		for _, f := range fs {
+			findings[f.ID] = f
+		}
+	}
+	return statsAnsweredOf(ds, findings, since, repo), nil
 }
 
 // statsTopLimit is how many PRs the top lists.
@@ -291,11 +375,16 @@ func statsGather(ctx context.Context, st *store.Store, cfg *config.Config, since
 	if err != nil {
 		return statsReport{}, err
 	}
+	answered, err := statsGatherAnswered(ctx, st, since, repo)
+	if err != nil {
+		return statsReport{}, err
+	}
 	isJudge := func(role string) bool { return actIsJudge(cfg, role) }
 	rep := statsCompute(runs, findings, events, isJudge, since, now, repo)
 	var total time.Duration
 	rep.TopPRs, total = statsTop(times, repo)
 	rep.AgentSeconds = statsSeconds(total)
+	rep.Answered = answered
 	return rep, nil
 }
 
@@ -757,6 +846,14 @@ func statsRender(w io.Writer, r statsReport) {
 	}
 	statsTable(w, "SOURCES", []string{"SOURCE", "JUDGED", "POSTED", "UNIQUE", "ACCEPTED", "REJECTED"}, srcs)
 	statsRenderValue(w, r.Value)
+	if a := r.Answered; a != nil {
+		outcomes := make([]string, 0, len(statsOutcomes))
+		for _, o := range statsOutcomes {
+			outcomes = append(outcomes, strings.ToUpper(o))
+		}
+		statsTable(w, "FINDINGS ANSWERED BY SOURCE", append([]string{"SOURCE"}, outcomes...), statsAnsweredRows(a.BySource, statsJudgeSource, statsUnknown))
+		statsTable(w, "FINDINGS ANSWERED BY PRIORITY", append([]string{"PRIORITY"}, outcomes...), statsAnsweredRows(a.ByPriority, statsUnknown))
+	}
 
 	statsTable(w, "OPERATIONS", []string{"DAY", "REPO", "MODEL SWITCHES", "DENIES", "RESTARTS"},
 		statsGroupRows(r, func(g statsGroup) []string {
@@ -765,6 +862,22 @@ func statsRender(w io.Writer, r statsReport) {
 			}
 			return []string{strconv.Itoa(g.ModelSwitches), strconv.Itoa(g.Denies), strconv.Itoa(g.Restarts)}
 		}))
+}
+
+// statsAnsweredRows is one row per key of m, sorted with the keys of last
+// at the end in their order, each with its counts in statsOutcomes' order.
+func statsAnsweredRows(m map[string]map[string]int, last ...string) [][]string {
+	rank := func(k string) int { return slices.Index(last, k) + 1 } // 0 for the rest
+	keys := slices.SortedFunc(maps.Keys(m), func(a, b string) int { return cmp.Or(cmp.Compare(rank(a), rank(b)), cmp.Compare(a, b)) })
+	rows := make([][]string, 0, len(keys))
+	for _, k := range keys {
+		row := []string{actClean(k)}
+		for _, o := range statsOutcomes {
+			row = append(row, strconv.Itoa(m[k][o]))
+		}
+		rows = append(rows, row)
+	}
+	return rows
 }
 
 // statsPercent is a share (a fraction) as a whole percent; "<1%" for a small

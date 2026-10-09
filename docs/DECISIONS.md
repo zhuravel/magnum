@@ -5168,3 +5168,17 @@ editing history. Code, config comments and prompts reference these by their head
   pane classifier's check and nudge cover the threads. Rejected: giving the curator the declines in
   `misses.json` under ids of their own (a second input format for the curator and its checks, for what
   is a repo miss in all but its source).
+- **The retro records how authors answered magnum's findings** (2026-10-09, the surfaces of the
+  declines). `magnum misses --declines` lists the declines newest first: by default the findings authors
+  declined or argued that no lesson was drawn from yet (outcomes `declined` and `argued`, state `new`,
+  the evidence a later skill edit reads), `--all` every outcome in every state, a `<ref>` one PR's,
+  `--json` the rows (`[]store.Decline`); the table shows PR, PRIO (the finding's priority as posted),
+  WHERE, OUTCOME, VERDICT, SCOPE, STATE, TITLE and LESSON through the misses' cleaning and width rules,
+  and `--class` with it is a usage error (classes are the misses'). `magnum stats` adds FINDINGS
+  ANSWERED BY SOURCE and BY PRIORITY: the declines the retro stored in the window counted by outcome
+  under every source that raised the finding (its findings row's `sources`, `unknown` without one) and
+  under its priority (`answered` in the JSON, absent when there is none, so the report keeps its shape).
+  `magnum status` adds `N declined` to the retro line, the same count as the default listing, only when
+  it is above 0. Rejected: a separate `magnum declines` command (the retro's evidence stays under one
+  command); counting answers by when the finding was posted (a decline is stored when the retro reads
+  the closed PR, and the window is what the daemon did in it).

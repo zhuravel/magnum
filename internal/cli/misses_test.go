@@ -6,8 +6,10 @@ import (
 	"io"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/zhuravel/magnum/internal/store"
@@ -351,5 +353,99 @@ func TestMissesIsRegisteredInTheInspectGroup(t *testing.T) {
 	if code := execute(c, []string{"misses", "--help"}); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
-	actContains(t, out.String(), "magnum misses [<ref>] [--all] [--class miss|not_issue|style|outside|unclassified] [--json]", "RAISED", "--all")
+	actContains(t, out.String(), "magnum misses [<ref>] [--all] [--class miss|not_issue|style|outside|unclassified] [--declines] [--json]",
+		"RAISED", "--all", "--declines", "VERDICT")
+}
+
+// declineSeed stores d on pr (CommentID from the URL's tail, ReviewedSHA
+// the usual one) at the store's clock and returns the stored row.
+func declineSeed(t *testing.T, st *store.Store, pr store.PR, id int64, d store.Decline) store.Decline {
+	t.Helper()
+	d.PRID, d.CommentID = pr.ID, id
+	d.SourceURL = pr.URL + "#discussion_r" + strconv.FormatInt(id, 10)
+	d.ReviewedSHA = "abcdef0123456789abcdef0123456789abcdef01"
+	got, err := st.UpsertDecline(context.Background(), d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+// TestMissesDeclinesListsAnsweredFindings: --declines lists how authors
+// answered magnum's findings, newest first: by default the findings they
+// declined or argued that no lesson was drawn from yet, --all every
+// answer in every state, a <ref> one PR's; --json prints the rows, and
+// --class has no meaning there.
+func TestMissesDeclinesListsAnsweredFindings(t *testing.T) {
+	f := missesFixture(t)
+	st := f.store()
+	ctx := context.Background()
+	repo, err := st.RepoByFullName(ctx, "talkable/talkable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := st.PRByRepoNumber(ctx, repo.ID, 101)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, b := inspSeedPR(t, st, "example/widgets", 8, store.PRReleased, func(u *store.PRUpdate) { u.Set("gh_state", store.GHMerged) })
+	clock := time.Date(2026, 10, 5, 9, 0, 0, 0, time.UTC)
+	st.Clock = func() time.Time { clock = clock.Add(time.Minute); return clock }
+	declineSeed(t, st, a, 1, store.Decline{Path: "app/models/gift.rb", Line: 12, Title: "Gift cards skip the balance check", Priority: "P2",
+		Outcome: store.DeclineDeclined, Verdict: store.VerdictWrong, Scope: store.MissScopeGeneral, Match: []string{"balance"},
+		Lesson: "When the caller holds the row lock, do not report a read after the write as a race."})
+	declineSeed(t, st, a, 2, store.Decline{Path: "app/a.rb", Line: 3, Title: "Fixed one", Priority: "P1", Outcome: store.DeclineFixed})
+	used := declineSeed(t, st, b, 3, store.Decline{Path: "lib/b.rb", Line: 9, Title: "Used one", Priority: "P3", Outcome: store.DeclineArgued,
+		Verdict: store.VerdictOverRanked, Scope: store.MissScopeGeneral, Lesson: "A used lesson.", Match: []string{"x"}})
+	declineSeed(t, st, b, 4, store.Decline{Path: "lib/c.rb", Title: "Ranked \x1b[31mright", Outcome: store.DeclineArgued, Verdict: store.VerdictRight})
+	if _, err := st.SetDeclineState(ctx, []int64{used.ID}, []string{store.MissNew}, store.MissUsed); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+
+	titles := func(out string) []string {
+		var got []string
+		for _, title := range []string{"Gift cards skip the balance check", "Fixed one", "Used one", "Ranked"} {
+			if strings.Contains(out, title) {
+				got = append(got, title)
+			}
+		}
+		return got
+	}
+	out := missesRun(t, f, "--declines")
+	statusNoControls(t, "misses --declines", out)
+	if got := titles(out); !slices.Equal(got, []string{"Gift cards skip the balance check", "Ranked"}) {
+		t.Fatalf("default titles = %v:\n%s", got, out)
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	norm := func(s string) string { return strings.Join(strings.Fields(s), " ") }
+	if len(lines) != 3 || norm(lines[0]) != "PR PRIO WHERE OUTCOME VERDICT SCOPE STATE TITLE LESSON" {
+		t.Fatalf("table:\n%s", out)
+	}
+	if got, want := norm(lines[2]), "talkable#101 P2 app/models/gift.rb:12 declined wrong general new Gift cards skip the balance check "+
+		"When the caller holds the row lock, do not report a read after the write as a race."; got != want {
+		t.Errorf("row = %q\nwant  %q", got, want)
+	}
+	if got, want := norm(lines[1]), "example/widgets#8 - lib/c.rb argued right - new Ranked [31mright -"; got != want {
+		t.Errorf("row = %q\nwant  %q", got, want)
+	}
+	if got := titles(missesRun(t, f, "--declines", "--all")); len(got) != 4 {
+		t.Errorf("--all titles = %v", got)
+	}
+	if got := titles(missesRun(t, f, "--declines", "--all", "example/widgets#8")); !slices.Equal(got, []string{"Used one", "Ranked"}) {
+		t.Errorf("--all example/widgets#8 = %v", got)
+	}
+	actContains(t, missesRun(t, f, "--declines", "example/widgets#7"), "no new declined or argued findings yet")
+
+	var ds []store.Decline
+	if err := json.Unmarshal([]byte(missesRun(t, f, "--declines", "--json")), &ds); err != nil {
+		t.Fatal(err)
+	}
+	if len(ds) != 2 || ds[1].Title != "Gift cards skip the balance check" || ds[1].Repo != "talkable/talkable" || ds[1].Number != 101 ||
+		ds[1].Verdict != store.VerdictWrong || !slices.Equal(ds[1].Match, []string{"balance"}) {
+		t.Fatalf("--json = %+v", ds)
+	}
+	if code := f.run("misses", "--declines", "--class", "miss"); code != 2 || !strings.Contains(f.Err.String(), "--class") {
+		t.Errorf("--declines --class: exit %d: %s", code, f.Err.String())
+	}
 }

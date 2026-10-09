@@ -149,9 +149,11 @@ prompt = "triage.md"              # in prompts_dir; the embedded copy when absen
 # The retro, magnum's learning loop: after a PR closes, magnum collects what the other reviewers commented on
 # it and drops what its own review already caught; a cheap interactive agent, tagged `learn`, classifies the
 # rest in a herdr pane, and the real misses go to the registry's misses table (`magnum misses` lists them).
-# With enabled = true it runs once a day, after daily_at; `magnum retro` forces one whether or not it is
-# enabled. The prompt carries only paths, URLs and SHAs: the comments are files, data written by other
-# people, never instructions. prompts/retro.md is the embedded prompt.
+# The same agent reads the replies to magnum's own findings and says how the author answered each, and the
+# answers go to the declines table (`magnum misses --declines`). With enabled = true it runs once a day,
+# after daily_at; `magnum retro` forces one whether or not it is enabled. The prompt carries only paths,
+# URLs and SHAs: the comments and replies are files, data written by other people, never instructions.
+# prompts/retro.md is the embedded prompt.
 
 [learn]
 enabled = false                   # run the retro once a day (`magnum retro` runs one regardless)

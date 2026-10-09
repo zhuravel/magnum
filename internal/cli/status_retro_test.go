@@ -97,6 +97,32 @@ func TestStatusRetroLineWordsOneAndFailures(t *testing.T) {
 	actContains(t, out, "retro:    1h ago, 1 PR, 0 classified, 1 failed · 0 new misses\n")
 }
 
+// TestStatusRetroLineCountsNewDeclinedFindings: the retro line adds the
+// findings authors declined or argued that no lesson was drawn from yet,
+// and leaves the count out when there is none.
+func TestStatusRetroLineCountsNewDeclinedFindings(t *testing.T) {
+	_, st, d, now := statusFixture(t)
+	statusRetroSeed(t, st)
+	statusRetroSet(t, st, engine.RetroSummary{At: now.Add(-3 * time.Hour), Finished: now.Add(-2 * time.Hour), PRs: 3, Classified: 1,
+		Declines: 4, Declined: 3})
+	_, out := statusRetroOut(t, d)
+	actContains(t, out, "retro:    2h ago, 3 PRs, 1 classified · 2 new misses\n")
+	_, pr := inspSeedPR(t, st, "talkable/talkable", 11801, store.PRReleased, func(u *store.PRUpdate) { u.Set("gh_state", store.GHMerged) })
+	for i, outcome := range []string{store.DeclineDeclined, store.DeclineArgued, store.DeclineFixed, store.DeclineDeclined} {
+		dl := declineSeed(t, st, pr, int64(i+1), store.Decline{Outcome: outcome, Verdict: store.VerdictRight})
+		if i == 3 {
+			if _, err := st.SetDeclineState(context.Background(), []int64{dl.ID}, []string{store.MissNew}, store.MissUsed); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	r, out := statusRetroOut(t, d)
+	actContains(t, out, "retro:    2h ago, 3 PRs, 1 classified · 2 new misses · 2 declined\n")
+	if r.Retro == nil || r.Retro.Declined == nil || *r.Retro.Declined != 2 {
+		t.Errorf("retro = %+v", r.Retro)
+	}
+}
+
 func TestStatusRetroLineSaysWhyARetroStoppedAndCleansIt(t *testing.T) {
 	_, st, d, now := statusFixture(t)
 	statusRetroSet(t, st, engine.RetroSummary{At: now.Add(-50 * time.Minute), Finished: now.Add(-45 * time.Minute), PRs: 2, Classified: 1,

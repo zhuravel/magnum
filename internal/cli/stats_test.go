@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -787,5 +788,113 @@ func TestStatsUsageErrors(t *testing.T) {
 	}
 	if code := f.run("stats", "--nope"); code != 2 {
 		t.Errorf("unknown flag: code %d, want 2", code)
+	}
+}
+
+// TestStatsCountsHowAuthorsAnsweredBySourceAndPriority: the declines the
+// retro stored in the window count by outcome under each source of their
+// finding (every source that raised it; "unknown" without a findings row)
+// and under its priority, in the JSON and in two text tables; one stored
+// before the window and, under --repo, another repository's are left out.
+func TestStatsCountsHowAuthorsAnsweredBySourceAndPriority(t *testing.T) {
+	f := statsFixture(t)
+	st := f.store()
+	ctx := context.Background()
+	pr := func(full string, number int) store.PR {
+		t.Helper()
+		repo, err := st.RepoByFullName(ctx, full)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p, err := st.PRByRepoNumber(ctx, repo.ID, number)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	pr101, pr7 := pr("talkable/talkable", 101), pr("example/widgets", 7)
+	rows := map[string]int64{} // finding id -> findings row
+	for _, p := range []store.PR{pr101, pr7} {
+		fs, err := st.FindingsByPR(ctx, p.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, fd := range fs {
+			rows[fd.FindingID] = fd.ID
+		}
+	}
+	add := func(p store.PR, id int64, at time.Time, finding, priority, outcome string) {
+		t.Helper()
+		st.Clock = func() time.Time { return at }
+		d := store.Decline{PRID: p.ID, SourceURL: p.URL + "#discussion_r" + strconv.FormatInt(id, 10), CommentID: id,
+			ReviewedSHA: "abcdef0123456789", Priority: priority, Outcome: outcome}
+		if finding != "" {
+			row := rows[finding]
+			d.FindingRowID = &row
+		}
+		if outcome == store.DeclineDeclined || outcome == store.DeclineArgued {
+			d.Verdict = store.VerdictRight
+		}
+		if _, err := st.UpsertDecline(ctx, d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add(pr101, 1, statsOct(3, 9, 0), "F2", "P1", store.DeclineDeclined) // claude-review and codex-review
+	add(pr101, 2, statsOct(3, 9, 0), "F1", "P2", store.DeclineFixed)    // claude-review
+	add(pr101, 3, statsOct(3, 9, 0), "F4", "P2", store.DeclineArgued)   // the judge's own pass
+	add(pr101, 4, statsOct(3, 9, 0), "", "", store.DeclineQuestion)     // no findings row, no priority
+	add(pr101, 5, statsAt(time.September, 20, 9, 0), "F1", "P2", store.DeclineDeclined)
+	add(pr7, 6, statsOct(3, 9, 0), "H1", "P2", store.DeclineDeferred) // claude-review
+	st.Close()
+
+	if code := f.run("stats", "--json"); code != 0 {
+		t.Fatalf("code %d, stderr %s", code, f.Err.String())
+	}
+	var doc struct {
+		Answered statsAnswered `json:"answered"`
+	}
+	if err := json.Unmarshal(f.Out.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	wantSource := map[string]map[string]int{
+		"claude-review": {store.DeclineDeclined: 1, store.DeclineFixed: 1, store.DeclineDeferred: 1},
+		"codex-review":  {store.DeclineDeclined: 1},
+		"judge":         {store.DeclineArgued: 1},
+		"unknown":       {store.DeclineQuestion: 1},
+	}
+	wantPriority := map[string]map[string]int{
+		"P1":      {store.DeclineDeclined: 1},
+		"P2":      {store.DeclineFixed: 1, store.DeclineArgued: 1, store.DeclineDeferred: 1},
+		"unknown": {store.DeclineQuestion: 1},
+	}
+	if !reflect.DeepEqual(doc.Answered.BySource, wantSource) || !reflect.DeepEqual(doc.Answered.ByPriority, wantPriority) {
+		t.Fatalf("answered = %+v\nwant by source %v, by priority %v", doc.Answered, wantSource, wantPriority)
+	}
+
+	if code := f.run("stats", "--repo", "talkable/talkable"); code != 0 {
+		t.Fatalf("code %d, stderr %s", code, f.Err.String())
+	}
+	out := f.Out.String()
+	lines := statsLines(out)
+	want := []string{
+		"FINDINGS ANSWERED BY SOURCE",
+		"SOURCE FIXED DECLINED DEFERRED ARGUED QUESTION UNRELATED",
+		"claude-review 1 1 0 0 0 0",
+		"codex-review 0 1 0 0 0 0",
+		"judge 0 0 0 1 0 0",
+		"unknown 0 0 0 0 1 0",
+		"FINDINGS ANSWERED BY PRIORITY",
+		"PRIORITY FIXED DECLINED DEFERRED ARGUED QUESTION UNRELATED",
+		"P1 0 1 0 0 0 0",
+		"P2 1 0 0 1 0 0",
+		"unknown 0 0 0 0 1 0",
+	}
+	at := 0
+	for _, w := range want {
+		i := slices.Index(lines[at:], w)
+		if i < 0 {
+			t.Fatalf("missing line %q (after line %d) in\n%s", w, at, out)
+		}
+		at += i + 1
 	}
 }

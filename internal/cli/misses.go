@@ -2,9 +2,12 @@ package cli
 
 // `magnum misses`: what the retro found other reviewers caught on PRs magnum
 // reviewed and its own review did not (the registry's misses table, written
-// by the daemon's retro). Read-only: it never asks GitHub or the daemon.
+// by the daemon's retro), and with --declines how the authors answered
+// magnum's own findings (declines). Read-only: it never asks GitHub or the
+// daemon.
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -20,7 +23,7 @@ import (
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
-const missesUsage = "[<ref>] [--all] [--class miss|not_issue|style|outside|unclassified] [--json]"
+const missesUsage = "[<ref>] [--all] [--class miss|not_issue|style|outside|unclassified] [--declines] [--json]"
 
 const (
 	// missesLessonRunes cuts the lesson when stdout is not a terminal.
@@ -59,11 +62,19 @@ func newMissesCmd(c *Context) *cobra.Command {
 			"repository's next notes curation. PROPOSAL, when one is, is the latest notes proposal a miss was given to "+
 			"and where that stands (`magnum notes <repo> --review`). RAISED says what magnum did with the point: rejected:<reason> when its judge "+
 			"raised a similar finding and rejected it, blank when it never raised it. WHERE is path:line, or - for a "+
-			"review summary. The lesson is cut to fit the terminal.",
+			"review summary. The lesson is cut to fit the terminal.\n\n"+
+			"--declines lists instead how the authors answered magnum's own findings, as the retro classified their "+
+			"replies: by default the findings they declined or argued that no lesson was drawn from yet (state new), "+
+			"with --all every answer in every state. PRIO is the finding's priority as posted; OUTCOME is fixed, "+
+			"declined, deferred, argued, question or unrelated; VERDICT, for a declined or argued finding, says whether "+
+			"magnum was wrong, ranked it too high (over_ranked), lacked the repository's context (missing_context, "+
+			"which with SCOPE repo also became a miss for the repository's notes) or was right; a wrong, over-ranked "+
+			"or missing-context finding has a lesson.",
 		func(pos []string) int { return runMisses(c, f, pos) })
 	fs := cmd.Flags()
-	fs.BoolVar(&f.all, "all", false, "every class and every state (not only new misses)")
+	fs.BoolVar(&f.all, "all", false, "every class and every state (not only new misses); with --declines, every answer")
 	fs.StringVar(&f.class, "class", "", "only this `class`: miss, not_issue, style, outside or unclassified (default: miss)")
+	fs.BoolVar(&f.declines, "declines", false, "how authors answered magnum's own findings (default: the declined and argued ones still new)")
 	fs.BoolVar(&f.json, "json", false, "print JSON")
 	_ = cmd.RegisterFlagCompletionFunc("class", completeFlag(completeMissClasses))
 	cmd.ValidArgsFunction = completeFirst(c.completeClosedPRs)
@@ -72,8 +83,8 @@ func newMissesCmd(c *Context) *cobra.Command {
 
 // missesFlags are the parsed `magnum misses` flags.
 type missesFlags struct {
-	all, json bool
-	class     string
+	all, json, declines bool
+	class               string
 }
 
 // completeMissClasses offers the --class values.
@@ -93,6 +104,9 @@ func runMisses(c *Context, f missesFlags, pos []string) int {
 	if class != "" && !slices.ContainsFunc(missesClasses, func(k missesClass) bool { return k.name == class }) {
 		return inspUsage(c, "misses", fmt.Sprintf("--class %q: want miss, not_issue, style, outside or unclassified", f.class), missesUsage)
 	}
+	if f.declines && f.class != "" {
+		return inspUsage(c, "misses", "--class picks misses; --declines lists answers to magnum's findings", missesUsage)
+	}
 	a, err := inspOpenApp(c, false)
 	if err != nil {
 		return cmdFail(c, "misses", err)
@@ -101,14 +115,19 @@ func runMisses(c *Context, f missesFlags, pos []string) int {
 	ctx, cancel := signalContext()
 	defer cancel()
 
-	filter := missesFilter(class, f.all)
+	var prID int64
 	if len(pos) == 1 {
 		pr, err := retroLookupPR(ctx, a.Store, a.Refs(), pos[0])
 		if err != nil {
 			return cmdFail(c, "misses", err)
 		}
-		filter.PRID = pr.ID
+		prID = pr.ID
 	}
+	if f.declines {
+		return runDeclines(ctx, c, f, a.Store, defaultRepo(a.Config), prID)
+	}
+	filter := missesFilter(class, f.all)
+	filter.PRID = prID
 	ms, err := a.Store.Misses(ctx, filter)
 	if err != nil {
 		return cmdFail(c, "misses", err)
@@ -214,25 +233,7 @@ func missesRender(w io.Writer, ms []store.Miss, defRepo string, width int, state
 		rows = append(rows, append(row, inspOrDash(statusSafe(m.Title, missesTitleRunes))))
 		lessons = append(lessons, statusSafe(m.Lesson, 0))
 	}
-	budget := missesLessonRunes
-	if width > 0 {
-		// tabwriter pads every column to its widest cell plus two.
-		used := 0
-		for i := range header {
-			cell := utf8.RuneCountInString(header[i])
-			for _, r := range rows {
-				cell = max(cell, utf8.RuneCountInString(r[i]))
-			}
-			used += cell + 2
-		}
-		budget = max(width-used, missesMinLesson)
-	}
-	tw := inspTable(w)
-	fmt.Fprintln(tw, strings.Join(header, "\t")+"\tLESSON")
-	for i, r := range rows {
-		fmt.Fprintln(tw, strings.Join(r, "\t")+"\t"+inspOrDash(textx.Clip(lessons[i], budget)))
-	}
-	_ = tw.Flush()
+	missesTable(w, header, rows, lessons, width)
 }
 
 // missesProposal is the latest notes proposal the miss was given to and its
@@ -267,6 +268,94 @@ func missesWhere(m store.Miss) string {
 		s = "…" + string(r[len(r)-missesWhereRunes+1:])
 	}
 	return s
+}
+
+// declinesFilter is the registry query of --declines: the findings authors
+// declined or argued that are still new, unless --all lifts both.
+func declinesFilter(all bool, prID int64) store.DeclineFilter {
+	f := store.DeclineFilter{PRID: prID}
+	if !all {
+		f.Outcomes = []string{store.DeclineDeclined, store.DeclineArgued}
+		f.States = []string{store.MissNew}
+	}
+	return f
+}
+
+// runDeclines is `magnum misses --declines`: the answers to magnum's own
+// findings (store.Declines), of one PR when prID is set.
+func runDeclines(ctx context.Context, c *Context, f missesFlags, st *store.Store, defRepo string, prID int64) int {
+	ds, err := st.Declines(ctx, declinesFilter(f.all, prID))
+	if err != nil {
+		return cmdFail(c, "misses", err)
+	}
+	if f.json {
+		if ds == nil {
+			ds = []store.Decline{}
+		}
+		if err := writeJSON(c.Stdout, ds); err != nil {
+			return cmdFail(c, "misses", err)
+		}
+		return 0
+	}
+	if len(ds) == 0 {
+		what, more := "no new declined or argued findings", "; --all lists every answer"
+		if f.all {
+			what, more = "no answers to magnum's findings recorded", ""
+		}
+		fmt.Fprintln(c.Stdout, what+" yet (`magnum retro` runs a retro now; [learn] enabled = true schedules one daily"+more+")")
+		return 0
+	}
+	declinesRender(c.Stdout, ds, defRepo, missesTermWidth(c.Stdout))
+	return 0
+}
+
+// declinesRender prints the --declines table, as missesRender does the
+// misses: every text through statusSafe, the lesson last and cut to the
+// terminal's width (width > 0) or to missesLessonRunes.
+func declinesRender(w io.Writer, ds []store.Decline, defRepo string, width int) {
+	header := []string{"PR", "PRIO", "WHERE", "OUTCOME", "VERDICT", "SCOPE", "STATE", "TITLE"}
+	rows := make([][]string, 0, len(ds))
+	lessons := make([]string, 0, len(ds))
+	for _, d := range ds {
+		where := missesWhere(store.Miss{Path: d.Path, Line: d.Line})
+		rows = append(rows, []string{
+			actRefLabel(defRepo, d.Repo, d.Number),
+			inspOrDash(statusSafe(d.Priority, 0)),
+			where,
+			statusSafe(d.Outcome, 0),
+			inspOrDash(statusSafe(d.Verdict, 0)),
+			inspOrDash(statusSafe(d.Scope, 0)),
+			statusSafe(d.State, 0),
+			inspOrDash(statusSafe(d.Title, missesTitleRunes)),
+		})
+		lessons = append(lessons, statusSafe(d.Lesson, 0))
+	}
+	missesTable(w, header, rows, lessons, width)
+}
+
+// missesTable prints header and rows with the lessons as a last LESSON
+// column, cut to what the terminal's width leaves (width > 0) or to
+// missesLessonRunes.
+func missesTable(w io.Writer, header []string, rows [][]string, lessons []string, width int) {
+	budget := missesLessonRunes
+	if width > 0 {
+		// tabwriter pads every column to its widest cell plus two.
+		used := 0
+		for i := range header {
+			cell := utf8.RuneCountInString(header[i])
+			for _, r := range rows {
+				cell = max(cell, utf8.RuneCountInString(r[i]))
+			}
+			used += cell + 2
+		}
+		budget = max(width-used, missesMinLesson)
+	}
+	tw := inspTable(w)
+	fmt.Fprintln(tw, strings.Join(header, "\t")+"\tLESSON")
+	for i, r := range rows {
+		fmt.Fprintln(tw, strings.Join(r, "\t")+"\t"+inspOrDash(textx.Clip(lessons[i], budget)))
+	}
+	_ = tw.Flush()
 }
 
 // missesRaised is what magnum did with the point: rejected:<reason>, or
