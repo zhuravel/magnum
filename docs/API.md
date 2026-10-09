@@ -9335,6 +9335,26 @@ const (
     What changes.json says of a file and of an input.
 
 const (
+	GatePassed = store.LearnPassed // it lands
+	GateHeld   = store.LearnHeld   // the operator decides
+	GateFailed = store.LearnFailed // it goes
+)
+    The gate's verdicts (Verdict.State), the proposal's next state.
+
+const (
+	GateJudgeOnly = "judge_only" // the judge alone, on a full replay's reviewer reports
+	GateFull      = "full"       // every role
+)
+    The gate's modes (Mode).
+
+const (
+	SkipNotInCorpus = "not in the corpus"
+	SkipFlagged     = "flagged: never replayed"
+	SkipNotWatched  = "not watched"
+)
+    Why SelectCases leaves a target out.
+
+const (
 	CandidatesFile = "candidates.json" // what Build kept, for the classifier
 	OutputFile     = "retro.json"      // the classifier's answer (ParseOutput)
 	FilesDir       = "files"           // the commented files: files/<sha12>/<path>
@@ -9441,6 +9461,13 @@ func Headline(decision string) (headline, rest string)
 func MissInputID(id int64) string
     MissInputID is a miss's id in inputs.json.
 
+func Mode(files []string) string
+    Mode is how the gate replays a proposal that changes files: the judge
+    alone (GateJudgeOnly) when the only files a review reads that it changes
+    are the judge skill and the judge prompts (prompts/judge-*.md), every role
+    (GateFull) when it changes anything else; the design log and the golden
+    files the format gate regenerated change no review.
+
 func ParseInputID(s string) (kind string, id int64, ok bool)
     ParseInputID reads an id of inputs.json: its kind (store.LearnInputMiss or
     store.LearnInputDecline) and row id.
@@ -9475,6 +9502,11 @@ func ScrubLesson(lesson, scope string, people, own, repo []string) (string, stri
     backticks or not, since general lessons can reach the public judge skill;
     a repo lesson goes to that repository's own notes and may. Words match whole
     and case-insensitively.
+
+func TargetName(kind string, id int64) string
+    TargetName is the learned case of a proposal's input of kind
+    (store.LearnInputMiss, store.LearnInputDecline) and id: miss-<id>
+    (CaseFromMiss) or decline-<id> (CaseFromDecline).
 
 func TemplateActions(text string) []string
     TemplateActions lists the template actions of a prompt in order: an edit of
@@ -9659,6 +9691,42 @@ type FileChange struct {
 	Reason string `json:"reason"`
 }
     FileChange is one file of Changes: edited or unchanged, and why.
+
+type GateCase struct {
+	Case   eval.Case
+	Target bool
+	Skip   string
+}
+    GateCase is a case the gate replays, or a target it cannot (Skip says why;
+    Case has the target's name alone when the corpus lacks it).
+
+func SelectCases(corpus *eval.Corpus, targets []string, watched func(pr string) bool, flagged func(pr string) bool, limit int) []GateCase
+    SelectCases picks a proposal's cases from corpus (nil = none): every target,
+    in its order, first (one the corpus lacks, whose PR is flagged or in no
+    watch is skipped with why, and one past limit too), then the newest other
+    cases (the corpus's last first: the learned ones come after the operator's,
+    oldest first) whose PR is watched and not flagged, until limit cases can
+    run. A flagged PR is never replayed, watched or not.
+
+type GateRow struct {
+	Case    string      `json:"case"`
+	Target  bool        `json:"target,omitempty"`
+	Before  *eval.Score `json:"before,omitempty"`
+	After   *eval.Score `json:"after,omitempty"`
+	Retried bool        `json:"retried,omitempty"`
+	Skip    string      `json:"skip,omitempty"`
+}
+    GateRow is a case of the gate: its score at the baseline (the newest replay
+    with master's prompts and skill) and with the candidate's, or why it was not
+    compared (Skip). Retried is set once the caller replayed a lost case again,
+    After then being the second replay's: only then does a loss count.
+
+func (r GateRow) Lost() []string
+    Lost names the defects the baseline found that the candidate did not.
+
+func (r GateRow) NewHits() []string
+    NewHits names the absent defects (findings authors declined) the candidate
+    reported that the baseline did not.
 
 type Input struct {
 	// Author is the pull request's author in Account form
@@ -9850,6 +9918,22 @@ type ThreadReply struct {
 }
     ThreadReply is one reply in an own thread: who wrote it (Account form,
     OwnAuthor for magnum) and what it says, data for the classifier only.
+
+type Verdict struct {
+	State string    `json:"state"`
+	Rule  string    `json:"rule"`
+	Rows  []GateRow `json:"rows"`
+}
+    Verdict is the gate's decision on a proposal: State (GatePassed, GateHeld,
+    GateFailed), the Rule that decided it, as a sentence, and the rows it read.
+
+func Judge(rows []GateRow) Verdict
+    Judge decides a proposal on its rows. It fails one that regressed: a defect
+    the baseline found and the candidate lost, once replayed again (Retried),
+    or a declined finding the candidate reports and the baseline did not;
+    else it passes one whose targets include one that improved (improved);
+    else it holds one none of whose targets could be compared, and fails the
+    rest (no target improved).
 
 ```
 
