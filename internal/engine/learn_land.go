@@ -166,8 +166,9 @@ func (e *Engine) maybeLearnLand(ctx context.Context) {
 // out and nothing in progress; the branch at p's commit or at that commit
 // rebased (ensureCandidate); master still holding p's base; p's commit
 // alone rebased once in its worktree when master moved past it (a conflict
-// holds it); the files it changes clean in the checkout; then master
-// fast-forwards to it and the landing is recorded (recordLanding). The
+// holds it); the tree that lands rendering with this build (CheckPrompts,
+// as the restart checks); the files it changes clean in the checkout; then
+// master fast-forwards to it and the landing is recorded (recordLanding). The
 // rebase, the fast-forward and what follows run on a context a shutdown
 // does not cancel, bounded by landGitTimeout. A check that fails holds p
 // with why (a landHold error); any other error leaves p as it was.
@@ -246,6 +247,16 @@ func (e *Engine) landProposal(ctx context.Context, p store.LearnProposal, reques
 			return hold("rebasing it onto master failed: " + oneLine(err.Error(), retroWhyRunes))
 		}
 		e.log.Info("skill landing: rebased onto master", "proposal", p.ID, "master", learnShort(master))
+	}
+	// The tree that lands must render with this build, as the restart on it
+	// checks first: an operator's commit that renamed a template field
+	// rebases cleanly under a candidate that still uses the old one.
+	cfg, err := e.cfg.WithCandidate(p.Scratch)
+	if err == nil {
+		_, err = CheckPrompts(cfg)
+	}
+	if err != nil {
+		return hold("its prompts do not render with this build once on master: " + oneLine(err.Error(), 600))
 	}
 	dirty, err := git.DirtyPaths(lctx, checkout, p.Files...)
 	if err != nil {
@@ -463,8 +474,10 @@ func (e *Engine) learnRestartDue(ctx context.Context) (LearnRestartMark, bool) {
 
 // requestLearnLand serves the y of `magnum learn --review`: the held
 // proposal lands at once (landProposal), whatever the day's count says, or
-// stays held and the answer says why. It is refused while a gate or an
-// edit runs (they add and remove worktrees of the checkout).
+// stays held and the answer says why. It is refused while the daemon has
+// not restarted on the version landed last (each version runs before the
+// next lands, as at a tick) and while a gate or an edit runs (they add and
+// remove worktrees of the checkout).
 func (e *Engine) requestLearnLand(ctx context.Context, p LearnDecisionPayload) (string, error) {
 	prop, err := e.st.LearnProposalByID(ctx, p.ID)
 	if errors.Is(err, store.ErrNotFound) {
@@ -480,9 +493,13 @@ func (e *Engine) requestLearnLand(ctx context.Context, p LearnDecisionPayload) (
 		e.rec.Record(ctx, learnSubject, "learn_land", fmt.Sprintf("land proposal %d (%s)", p.ID, prop.Branch))
 		return "dry run: would land proposal " + strconv.FormatInt(p.ID, 10), nil
 	}
+	m, pending := e.learnRestart(ctx)
 	switch {
 	case e.landUnavailable() != "":
 		return "", fmt.Errorf("proposal %d cannot land: %s", p.ID, e.landUnavailable())
+	case pending:
+		return "", fmt.Errorf("proposal %d cannot land before the daemon restarted on skill version %d (each version runs before the next "+
+			"lands); ask again after the restart", p.ID, m.Version)
 	case e.gateBusy():
 		return "", fmt.Errorf("proposal %d cannot land while a skill gate runs; ask again once it ends", p.ID)
 	case e.editBusy():

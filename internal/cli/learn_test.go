@@ -170,7 +170,8 @@ func TestLearnReviewShowsTheDiffAndTheGateAndAsksYN(t *testing.T) {
 	m, d := learn.MissInputID(h.miss.ID), learn.DeclineInputID(h.decline.ID)
 	h.pid = 4242
 	h.onSleep = func(h *actHarness) {
-		h.completePending(store.RequestFailed, "proposal 1 (held) cannot land yet: this daemon has no landing step")
+		h.completePending(store.RequestFailed, "proposal 1 cannot land before the daemon restarted on skill version 1 (each version runs "+
+			"before the next lands); ask again after the restart")
 	}
 	h.d.StdinTTY = true
 	h.stdin("y\n")
@@ -187,7 +188,7 @@ func TestLearnReviewShowsTheDiffAndTheGateAndAsksYN(t *testing.T) {
 	if p := actDecode[engine.LearnDecisionPayload](t, reqs[0].Payload); p.ID != h.proposal.ID || p.Reason != "" {
 		t.Fatalf("payload = %+v", p)
 	}
-	if code != 1 || !strings.Contains(h.errb.String(), "cannot land yet") {
+	if code != 1 || !strings.Contains(h.errb.String(), "ask again after the restart") {
 		t.Fatalf("exit %d, stderr %q: the daemon's refusal is the answer", code, h.errb.String())
 	}
 

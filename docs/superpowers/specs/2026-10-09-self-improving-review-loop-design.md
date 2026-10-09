@@ -181,15 +181,19 @@ single commit on a commit `master` holds, with the same `git patch-id`), else it
 the worktree would land ungated. `master` must hold the proposal's `base_sha` (else held: it was reset or
 rewritten since the edit); when it moved past it, the candidate's commit alone is rebased once in the
 worktree (`git rebase --onto master <base_sha>`, so a commit the operator dropped from `master` does not
-come back; a conflict holds the proposal with the reason). the files the commit touches must be clean in
-the checkout's working tree (else held, reason named). Then `git -C <checkout> merge --ff-only
-learn/<run>` (the rebase and the merge run on a context a shutdown does not cancel, with a timeout), the
+come back; a conflict holds the proposal with the reason). the tree that lands must render with the
+daemon's build (`CheckPrompts` on the worktree, as the restart on it checks first; else held). the files
+the commit touches must be clean in the checkout's working tree (else held, reason named). Then `git -C
+<checkout> merge --ff-only learn/<run>` (the rebase and the merge run on a context a shutdown does not
+cancel, with a timeout), the
 proposal becomes `landed` with `landed_sha` and a `learn_versions` row records the new skill and prompts
 hashes in one transaction (`store.LandLearnProposal`), then the branch is deleted and the worktree
 removed. A branch `master` already holds (a landing a crash cut short after the merge) is recorded as
 landed, at the next landing, at the operator's `n` (instead of the rejection) and at the expiry (instead
 of it). A toast says what landed. At most one landing per local day (`[learn] land_per_day`, default 1): a
-second passed proposal waits as `passed` until the next day.
+second passed proposal waits as `passed` until the next day. No proposal lands, at a tick or on the
+operator's `y` (which is refused: "ask again after the restart"), before the daemon restarted on the
+version landed last.
 
 Restart: the daemon sets `KVLearnRestart` and exits for launchd at the first tick with no round, retro,
 curation, editor or gate in flight (the `restartForBuild` path), unless `[learn] restart` is `manual`,

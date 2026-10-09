@@ -5699,3 +5699,15 @@ editing history. Code, config comments and prompts reference these by their head
   never was (a crash between the transaction and the key). Rejected: writing the restart mark in the same
   transaction (the store would encode the engine's mark) and scanning every waiting proposal at startup
   (the landing, the answer and the expiry already meet each one).
+- **The operator's y waits for the restart, and the tree that lands must render** (2026-10-09, review of
+  stage 4 of the self-improving review loop). The tick lands nothing before the daemon restarted on the
+  version landed last, and the landing's entry rejects landing two versions before a restart, but
+  `requestLearnLand` did not check it: the operator's `y` could land a second version the first would
+  never run without. It is now refused while `KVLearnRestart` names a version, with "ask again after the
+  restart". And the landing never checked the tree it fast-forwards to: an operator's commit that renamed
+  a template field rebased cleanly under a candidate that still used the old one, landed, and the idle
+  restart refused to start ("do not render with this build") with launchd starting it again and again.
+  The landing now runs `CheckPrompts` on the config pointed at the worktree (`WithCandidate`), after the
+  rebase and before the fast-forward, every time (the build may also have changed since the edit), and
+  holds the proposal when it fails. Rejected: checking only after a rebase (a daemon rebuilt since the edit
+  renders with other data too).

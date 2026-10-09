@@ -1729,9 +1729,10 @@ cannot go on: the checkout must have `master` checked out with no rebase, merge 
 the branch must hold the proposal's commit, or that commit as an earlier landing rebased it (one commit on
 `master` with the same patch id: a commit made in its worktree holds it); `master` must still hold the
 proposal's base (one you reset below it holds it); when `master` moved past the base, the proposal's commit
-alone is rebased once in its worktree (`git rebase --onto master <base>`), and a conflict holds it; the
-files it changes must have no uncommitted change in the checkout (your edit of `SKILL.md`
-is never merged over). Then `master` fast-forwards to the branch (`git merge --ff-only`; the rebase and the
+alone is rebased once in its worktree (`git rebase --onto master <base>`), and a conflict holds it; its
+prompts must render with the daemon's build, as the restart on it checks first (a commit of yours that
+renamed a template field the candidate still uses holds it); the files it changes must have no uncommitted
+change in the checkout (your edit of `SKILL.md` is never merged over). Then `master` fast-forwards to the branch (`git merge --ff-only`; the rebase and the
 fast-forward are not cut short by a daemon that stops), the proposal is `landed` with its commit, its
 noted inputs become `used` and a skill version records the commit and the hashes of the skill and the
 prompts it landed, all in one registry transaction, and the branch and the worktree go. A landing a crash
@@ -1775,8 +1776,9 @@ paused). `magnum learn --review` shows the oldest `held` proposal, one the gate 
 input with its title and lesson and what the editor did with it, the diff of each file its commit changes
 against the `master` it started from (from the checkout's `learn/<run>` branch), its design-log entry and
 the gate's table (each case's baseline and candidate scores, a target starred), and asks y/N on a terminal
-(`--json` prints it instead). `y` asks the daemon to land it at once, whatever the day's count says (the
-answer says why when it stays held); `n` rejects it with `--reason`, which the next
+(`--json` prints it instead). `y` asks the daemon to land it at once, whatever the day's count says, but
+not before the daemon restarted on the version landed last (ask again after the restart; the answer says
+why when it stays held); `n` rejects it with `--reason`, which the next
 edit reads: the daemon removes its worktree and branch, its inputs go back to `new`, an input in two
 rejected proposals is `dismissed`, and the learned eval corpus is rewritten at once, so a dismissed input's
 case is gone from the next `magnum eval run`; anything else leaves it. A `held` or `passed` proposal

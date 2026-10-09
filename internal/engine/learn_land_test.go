@@ -311,6 +311,52 @@ func TestLandingRebasesOnceAndHoldsOnAConflict(t *testing.T) {
 	}
 }
 
+// The rebased tree is checked as the restart would check it before
+// master moves: an operator's commit that renamed a template field rebases
+// cleanly under a candidate that still uses the old one, and the landing
+// holds instead of leaving a daemon that refuses to start.
+func TestALandingHoldsWhenTheRebasedPromptsDoNotRender(t *testing.T) {
+	f := newLandFixture(t)
+	f.moveMaster(strings.Repeat("7", 40))
+	f.git.onRebase = func(context.Context) {
+		writeFile(t, f.wt, "prompts/judge-initial.md", "Review {{.NoSuchField}}.\n")
+	}
+	f.h.tick()
+	p := f.proposal()
+	if p.State != store.LearnHeld || !strings.Contains(p.Reason, "do not render") || !strings.Contains(p.Reason, "NoSuchField") {
+		t.Fatalf("proposal = %s %q, want held: the prompts do not render", p.State, p.Reason)
+	}
+	if got := f.git.called("merge"); len(got) != 0 || len(f.versions()) != 0 {
+		t.Fatalf("merges = %q, versions %+v", got, f.versions())
+	}
+}
+
+// The operator's y does not land a version before the daemon restarted on
+// the one landed last: each version runs, and is measured, alone.
+func TestALandRequestWaitsForTheRestartOnTheLastVersion(t *testing.T) {
+	f := newLandFixture(t)
+	f.h.e.supervised = false // the restart is the operator's: the daemon keeps ticking
+	second := f.addPassed("20261005-093000", strings.Repeat("5", 40))
+	if _, err := f.h.st.DecideLearnProposal(f.h.ctx, second.ID, []string{store.LearnPassed}, store.LearnHeld, "held", time.Time{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	f.h.tick() // the first lands
+	if p := f.proposal(); p.State != store.LearnLanded {
+		t.Fatalf("the first = %s", p.State)
+	}
+	_, err := f.h.e.requestLearnLand(f.h.ctx, LearnDecisionPayload{ID: second.ID})
+	if err == nil || !strings.Contains(err.Error(), "ask again after the restart") || !strings.Contains(err.Error(), "skill version 1") {
+		t.Fatalf("requestLearnLand before the restart = %v", err)
+	}
+	if p, _ := f.h.st.LearnProposalByID(f.h.ctx, second.ID); p.State != store.LearnHeld || len(f.versions()) != 1 {
+		t.Fatalf("the second = %s, versions %d", p.State, len(f.versions()))
+	}
+	f.h.startup()
+	if got, err := f.h.e.requestLearnLand(f.h.ctx, LearnDecisionPayload{ID: second.ID}); err != nil || !strings.Contains(got, "landed") {
+		t.Fatalf("requestLearnLand after the restart = %q, %v", got, err)
+	}
+}
+
 // A master the operator reset below the proposal's base (a commit of his
 // dropped) holds the landing: the gate measured the candidate on that
 // base, and a fast-forward would bring the dropped commit back.
