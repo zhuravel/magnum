@@ -2,6 +2,7 @@ package engine
 
 import (
 	"encoding/json"
+	"log/slog"
 	"slices"
 	"strings"
 	"testing"
@@ -120,6 +121,50 @@ func TestTrivialPushClasses(t *testing.T) {
 			}
 			if _, ok := kvValue(h, KVPRTrivial(pr.ID)); ok {
 				t.Fatal("trivial note recorded for a push that is re-reviewed")
+			}
+		})
+	}
+}
+
+// A push that only edits what steers the review agents (an AGENTS.md or
+// CLAUDE.md at any depth, a page under .claude/ or .codex/) is not settled
+// as docs: the PR waits for its re-review, which is the round whose gates
+// can withdraw a standing approval of the operator's, and the log says why.
+// A page under docs/ still settles.
+func TestAPushOfTheAgentsInstructionsIsReReviewed(t *testing.T) {
+	for _, tc := range []struct {
+		path    string
+		trivial bool
+	}{
+		{"AGENTS.md", false},
+		{"services/api/CLAUDE.md", false},
+		{".claude/skills/review/SKILL.md", false},
+		{".codex/prompts/check.md", false},
+		{"docs/guide.md", true},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			var logs syncBuffer
+			h := newHarness(t, func(h *harness) {
+				h.d.Logger = slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			})
+			files := []github.FileDelta{{Path: tc.path, Status: "modified", Patch: "@@ -1,2 +1,2 @@\n # Notes\n-Review the specs.\n+Review the specs and the migrations."}}
+			pr := reviewedThenPushed(t, h, "", files)
+			const why = "the push changes the review agents' instructions"
+			said := strings.Contains(logs.String(), why)
+			if tc.trivial {
+				if pr.State != store.PRReviewed || deref(pr.ReviewedSHA) != "b2" || len(trivialEvents(t, h)) != 1 || said {
+					t.Fatalf("state %s reviewed_sha %q, logged %v; want the docs push settled", pr.State, deref(pr.ReviewedSHA), said)
+				}
+				return
+			}
+			if pr.State != store.PRRereviewPending || deref(pr.ReviewedSHA) != "b1" || len(trivialEvents(t, h)) != 0 {
+				t.Fatalf("state %s reviewed_sha %q, want a re-review of b2", pr.State, deref(pr.ReviewedSHA))
+			}
+			if _, ok := kvValue(h, KVPRTrivial(pr.ID)); ok {
+				t.Fatal("trivial note recorded for a push that is re-reviewed")
+			}
+			if !said || !strings.Contains(logs.String(), "path="+tc.path) {
+				t.Fatalf("log does not say why (%q, %s):\n%s", why, tc.path, logs.String())
 			}
 		})
 	}

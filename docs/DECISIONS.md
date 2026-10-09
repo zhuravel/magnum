@@ -232,6 +232,32 @@ editing history. Code, config comments and prompts reference these by their head
   keeps its agents whatever the PR waits for, since a person works there, so a wait on a pinned or held
   slot never parks. Rejected: parking every waiting PR after `park_idle_after` (a quiet period or the
   next dispatch ends within minutes, and a resume costs the round its warm agents).
+- **A push that edits the review agents' instructions is not docs, and a comment line that interpolates is
+  code** (2026-10-09, amends "A push of comments, whitespace or docs is not re-reviewed"). `docDeltaPath`
+  counted every `.md` file as docs. A push that only edited an `AGENTS.md`, a `CLAUDE.md`,
+  `CLAUDE.local.md` or a page under `.claude/` or `.codex/` therefore settled as reviewed with no round.
+  The gates of a standing automatic approval run only when magnum reviews a new head
+  (`standingGateRefusal`), so the operator's approval kept counting on a head that changed what steers the
+  review agents, which `agentConfigRefusal` exists to refuse. Also, the comments class keeps no string
+  state, so a `#` or `//` line inside a string counted as a comment although its interpolation runs: a
+  Ruby heredoc line `# #{...}`, a Python f-string line `# {...}`, a JavaScript template line `// ${...}`,
+  a GitHub Actions `run:` line `# ${{ ... }}`. Now (1) `checkDelta` hands `assessDelta` a predicate built
+  on `agentConfigPath` (the gate's own list: the instruction files at any depth and the project config of
+  the configured and built-in kinds), and a file it matches is never trivial. The push's size is unchanged
+  (a Markdown file counts no code lines). The log says "delta: the push changes the review agents'
+  instructions; the push is re-reviewed" with the path as the gate names it. `TrivialDelta` and
+  `MeasureDelta`, which know no agent kinds, are unchanged. (2) A comment-looking line that holds its file
+  type's interpolation token is code: `#{` for `.rb`, `.rake`, `.gemspec`, `.rbi`, `.erb`, `Gemfile` and
+  `Rakefile`; `{` for `.py`; `${` for `.js`, `.jsx`, `.ts`, `.tsx`, `.kt`, `.sh` and `.tf`; `{{` for
+  `.yml` and `.yaml` (it covers `${{ }}` and a Helm or Jinja `{{ }}`). Such a line leaves no block comment
+  open after it. The base-merge measure of the PR's own diff (`ownChangedLines`) shares the rule. Plain
+  comment lines stay trivial, and so does a Go comment that names `${HOME}`. Kept: such a push waits as a
+  small delta (0 lines) for its round, at most `rereview_max_wait`, and the standing approval stands until
+  that round decides. Rejected: tracking string state per language (heredoc terminators, triple quotes,
+  template literals: a parser per language for a check whose doubt already means a re-review). Also
+  rejected: a watch setting for the agents' files. The earlier rejection of docs that drive behaviour as a
+  built-in exception still holds for a repository's own prompts, but these files steer magnum's own agents
+  and its auto-approval gate, so they follow the gate's list.
 
 ## Agents in panes
 

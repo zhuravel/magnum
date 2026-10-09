@@ -271,6 +271,131 @@ func TestTrivialDelta(t *testing.T) {
 	}
 }
 
+// A comment-looking line that holds its file type's interpolation token
+// runs code: in a Ruby heredoc, a Python f-string, a JavaScript template
+// literal, a shell heredoc or a GitHub Actions run: block it is string text
+// whose interpolation is evaluated, so it is code and counts one; a plain
+// comment line of the same file stays a comment. A Go comment that names
+// "${HOME}" stays one too: Go has no interpolation.
+func TestAnInterpolatingCommentLineIsCode(t *testing.T) {
+	patch := func(before, after string) string {
+		return "@@ -1,3 +1,3 @@\n start\n-" + before + "\n+" + after + "\n finish"
+	}
+	cases := []struct {
+		name, path       string
+		oldCode, newCode string // comment-looking lines that interpolate
+		oldNote, newNote string // plain comment lines
+	}{
+		{"ruby heredoc", "app/models/notice.rb", "    # #{greeting}", "    # #{greeting_for(user)}", "  # Greets.", "  # Greets the user."},
+		{"rake task", "lib/tasks/sync.rake", "    # #{count}", "    # #{count + 1}", "  # Syncs.", "  # Syncs the rows."},
+		{"gemspec", "example.gemspec", "  # #{version}", "  # #{Example::VERSION}", "  # Packs.", "  # Packs the gem."},
+		{"gemfile", "Gemfile", "  # #{source}", "  # #{mirror}", "# Gems.", "# The gems."},
+		{"rakefile", "Rakefile", "  # #{task}", "  # #{default_task}", "# Tasks.", "# The tasks."},
+		{"erb", "app/views/notices/show.html.erb", "  <!-- #{note} -->", "  <!-- #{note_for(user)} -->", "  <!-- note -->", "  <!-- the note -->"},
+		{"python f-string", "scripts/report.py", "    # {total}", "    # {total_due}", "    # Totals.", "    # Totals the rows."},
+		{"javascript template", "app/javascript/banner.js", "  // ${greeting}", "  // ${greeting()}", "  // Shows it.", "  // Shows the banner."},
+		{"jsx template", "app/javascript/Banner.jsx", "  // ${title}", "  // ${title.trim()}", "  // Renders.", "  // Renders the banner."},
+		{"typescript template", "app/javascript/banner.ts", "  // ${name}", "  // ${name.trim()}", "  // Names.", "  // Names the banner."},
+		{"tsx template", "app/javascript/Banner.tsx", "  // ${label}", "  // ${label.trim()}", "  // Labels.", "  // Labels the banner."},
+		{"shell heredoc", "bin/deploy.sh", "  # ${TARGET}", "  # ${TARGET:-staging}", "# Deploys.", "# Deploys the app."},
+		{"terraform heredoc", "infra/main.tf", "  # ${var.region}", "  # ${var.zone}", "# Region.", "# The region."},
+		{"kotlin template", "app/src/Banner.kt", "  // ${title}", "  // ${title.trim()}", "  // Shows.", "  // Shows the banner."},
+		{"github actions run block", ".github/workflows/ci.yml", "      # ${{ github.ref }}", "      # ${{ github.head_ref }}", "      # Runs the specs.", "      # Runs every spec."},
+		{"yaml template", "deploy/chart/templates/config.yaml", "  # {{ .Values.region }}", "  # {{ .Values.zone }}", "  # Region.", "  # The region."},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			code := []github.FileDelta{modifiedFile(tc.path, patch(tc.oldCode, tc.newCode))}
+			if classes, ok := TrivialDelta(code, DeltaClasses); ok {
+				t.Errorf("TrivialDelta(%q → %q) = %v, true; want not trivial", tc.oldCode, tc.newCode, classes)
+			}
+			if got := MeasureDelta(code); got.Lines != 2 {
+				t.Errorf("MeasureDelta(%q → %q) = %d lines, want 2", tc.oldCode, tc.newCode, got.Lines)
+			}
+			plain := []github.FileDelta{modifiedFile(tc.path, patch(tc.oldNote, tc.newNote))}
+			if classes, ok := TrivialDelta(plain, DeltaClasses); !ok || !slices.Equal(classes, []string{DeltaComments}) {
+				t.Errorf("TrivialDelta(%q → %q) = %v, %v; want [comments], true", tc.oldNote, tc.newNote, classes, ok)
+			}
+		})
+	}
+	goNote := []github.FileDelta{modifiedFile("internal/example/env.go", patch("// reads ${HOME}", "// reads ${HOME} once"))}
+	if classes, ok := TrivialDelta(goNote, DeltaClasses); !ok || !slices.Equal(classes, []string{DeltaComments}) {
+		t.Errorf("a Go comment naming ${HOME}: TrivialDelta = %v, %v; want [comments], true", classes, ok)
+	}
+}
+
+// An interpolating line that looks like it opens a block comment opens
+// none: in a template literal the lines after it are text the program
+// uses, so they are judged as code.
+func TestAnInterpolatingLineOpensNoBlock(t *testing.T) {
+	files := []github.FileDelta{modifiedFile("app/javascript/style.js", `@@ -1,5 +1,5 @@
+ const css = `+"`"+`
+ /* ${theme}
+-color: red;
++color: blue;
+ `+"`"+`;`)}
+	if classes, ok := TrivialDelta(files, DeltaClasses); ok {
+		t.Fatalf("TrivialDelta = %v, true; want the line after the interpolating one judged as code", classes)
+	}
+}
+
+// A file that steers the review agents (an instruction file at any depth,
+// a file under .claude/ or .codex/, .mcp.json) is never trivial, although
+// it is Markdown: settled as reviewed it gets no round, and the gates of a
+// standing approval run only on a head magnum reviews. Its size counts as
+// before; a page under docs/ or a README stays docs.
+func TestAFileThatSteersTheReviewAgentsIsNeverTrivial(t *testing.T) {
+	steers := func(p string) bool {
+		_, hit := agentConfigPath(defaultKinds(), p)
+		return hit
+	}
+	docsPatch := `@@ -1,2 +1,2 @@
+ # Notes
+-Review the specs.
++Review the specs and the migrations.`
+	for _, tc := range []struct {
+		path    string
+		trivial bool
+	}{
+		{"AGENTS.md", false},
+		{"AGENTS.override.md", false},
+		{"services/api/CLAUDE.md", false},
+		{"CLAUDE.local.md", false},
+		{"lib/agents.md", false},
+		{".claude/skills/review/SKILL.md", false},
+		{".codex/prompts/check.md", false},
+		{"docs/guide.md", true},
+		{"README.md", true},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			files := []github.FileDelta{modifiedFile(tc.path, docsPatch)}
+			size, classes, trivial := assessDelta(files, DeltaClasses, steers)
+			if trivial != tc.trivial {
+				t.Fatalf("assessDelta(%s) = %v, %v; want trivial %v", tc.path, classes, trivial, tc.trivial)
+			}
+			if want := MeasureDelta(files); size.Lines != want.Lines || size.Complete != want.Complete || size.AddedFiles != want.AddedFiles {
+				t.Fatalf("size %+v, want MeasureDelta's %+v", size, want)
+			}
+			if _, plain := TrivialDelta(files, DeltaClasses); !plain {
+				t.Fatalf("TrivialDelta(%s), which knows no agent kinds, is not trivial", tc.path)
+			}
+		})
+	}
+	// A comment-only change under .claude/ is no more trivial.
+	hook := []github.FileDelta{modifiedFile(".claude/hooks/check.sh", `@@ -1,2 +1,3 @@
+ set -e
++# Checks the branch.
+ git status`)}
+	if _, classes, trivial := assessDelta(hook, DeltaClasses, steers); trivial {
+		t.Fatalf("a comment in a .claude/ hook: %v, trivial", classes)
+	}
+	// Beside a docs page it makes the whole push non-trivial.
+	two := []github.FileDelta{modifiedFile("docs/guide.md", docsPatch), modifiedFile("AGENTS.md", docsPatch)}
+	if _, classes, trivial := assessDelta(two, DeltaClasses, steers); trivial {
+		t.Fatalf("docs/guide.md and AGENTS.md: %v, trivial", classes)
+	}
+}
+
 func TestDeltaLabel(t *testing.T) {
 	cases := []struct {
 		classes []string

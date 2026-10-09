@@ -118,9 +118,14 @@ func (dc deltaCheck) change() string {
 // triage and the rerun share (measureRange): one GitHub call, and when the
 // push has a merge commit or diverged from the reviewed commit (a rebase, a
 // force push) two more that compare the PR's own diff against base before
-// and after it. A push trivial by its own files stands as it is; otherwise
-// an unchanged own diff is the class DeltaBase, a changed one gives the size
-// of that change, and an incomplete comparison keeps the size of from...to.
+// and after it. A file that steers the review agents (agentConfigPath: an
+// AGENTS.md or CLAUDE.md at any depth, .claude/, .codex/, .mcp.json) is
+// never trivial, though it is Markdown: settled as reviewed the push would
+// get no round, and the gates of a standing approval run only on a head
+// magnum reviews (standingGateRefusal); the log says so. A push trivial by
+// its own files stands as it is; otherwise an unchanged own diff is the
+// class DeltaBase, a changed one gives the size of that change, and an
+// incomplete comparison keeps the size of from...to.
 // A failure of the first call measures nothing, and nor does a head GitHub
 // finds behind the reviewed commit (a force push back to an ancestor: no
 // commit and no file to measure, while the review discusses code the push
@@ -148,14 +153,27 @@ func (e *Engine) checkDelta(ctx context.Context, repo store.Repo, w config.Watch
 			"from", textx.ShortSHA(from), "to", textx.ShortSHA(to), "status", pc.Status)
 		return deltaCheck{}
 	}
+	kinds := e.projectKinds()
+	var steering string // the first file of the push that steers the review agents, as agentConfigPath names it
+	steers := func(p string) bool {
+		name, hit := agentConfigPath(kinds, p)
+		if hit && steering == "" {
+			steering = name
+		}
+		return hit
+	}
 	dc := deltaCheck{measured: true, files: len(pc.Files), commits: pc.Commits}
-	dc.size, dc.classes, dc.trivial = assessDelta(pc.Files, allowed)
+	dc.size, dc.classes, dc.trivial = assessDelta(pc.Files, allowed, steers)
 	switch {
 	case dc.trivial || !m.ownOK:
 	case len(m.own.changed) > 0:
 		dc.size = m.own.size
 	case slices.Contains(allowed, DeltaBase):
 		dc.trivial, dc.classes, dc.base, dc.rebased = true, []string{DeltaBase}, base, pc.Status == "diverged"
+	}
+	if !dc.trivial && steering != "" {
+		e.log.Info("delta: the push changes the review agents' instructions; the push is re-reviewed", "repo", repo.FullName(),
+			"from", textx.ShortSHA(from), "to", textx.ShortSHA(to), "path", steering)
 	}
 	return dc
 }

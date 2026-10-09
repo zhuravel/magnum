@@ -5,8 +5,10 @@ package engine
 // TrivialDelta reads the per-file patches of reviewed...head and says no
 // whenever it cannot be sure: a missing or truncated patch, a file added,
 // removed or renamed, a file type without known comment syntax, a comment
-// that changes behaviour (a shebang, a magic comment, a build directive),
-// code commented out or back in, or a line that moved.
+// that changes behaviour (a shebang, a magic comment, a build directive), a
+// comment-looking line that interpolates code (in a heredoc or a template it
+// runs), code commented out or back in, or a line that moved. checkDelta
+// also holds back every file that steers the review agents.
 
 import (
 	"maps"
@@ -44,7 +46,7 @@ var DeltaClasses = config.TrivialDeltaClasses
 // A class missing from allowed makes the files that need it non-trivial, so
 // an empty allowed never skips.
 func TrivialDelta(files []github.FileDelta, allowed []string) (classes []string, trivial bool) {
-	_, classes, trivial = assessDelta(files, allowed)
+	_, classes, trivial = assessDelta(files, allowed, nil)
 	return classes, trivial
 }
 
@@ -54,8 +56,12 @@ func TrivialDelta(files []github.FileDelta, allowed []string) (classes []string,
 // (TrivialDelta; classes is nil when it is not). A documentation file counts
 // nothing and is docs without looking at its lines when docs is allowed;
 // otherwise its lines are judged like any other file's (a .md file has no
-// comment syntax, so only its whitespace changes pass).
-func assessDelta(files []github.FileDelta, allowed []string) (size DeltaSize, classes []string, trivial bool) {
+// comment syntax, so only its whitespace changes pass). steers, when not
+// nil, tells the files that steer the review agents (checkDelta's
+// agentConfigPath: an AGENTS.md, a CLAUDE.md, .claude/, .codex/): such a
+// file is never trivial, whatever its lines, and its size counts as any
+// other file's.
+func assessDelta(files []github.FileDelta, allowed []string, steers func(path string) bool) (size DeltaSize, classes []string, trivial bool) {
 	size = DeltaSize{Complete: true}
 	trivial = len(files) > 0
 	cut := len(files) >= github.CompareFileLimit // GitHub may have left files out: none is known as binary
@@ -77,6 +83,9 @@ func assessDelta(files []github.FileDelta, allowed []string) (size DeltaSize, cl
 		return true
 	}
 	for _, f := range files {
+		if steers != nil && steers(f.Path) {
+			trivial = false
+		}
 		switch {
 		case f.Status == "added" || f.Status == "renamed" || f.Status == "copied":
 			size.AddedFiles++
@@ -153,39 +162,64 @@ func docDeltaPath(p string) bool {
 	return false
 }
 
-// commentSyntax is the comment syntax of a file type.
-type commentSyntax int
+// commentKind is the comment tokens of a file type.
+type commentKind int
 
 const (
-	commentNone commentSyntax = iota // no comment syntax known: every line is code
-	commentHash                      // "# ..."
-	commentC                         // "// ..." and "/* ... */"
-	commentSQL                       // "-- ..."
-	commentHTML                      // "<!-- ... -->"
-	commentERB                       // "<!-- ... -->" and "<%# ... %>"
+	commentNone commentKind = iota // no comment syntax known: every line is code
+	commentHash                    // "# ..."
+	commentC                       // "// ..." and "/* ... */"
+	commentSQL                     // "-- ..."
+	commentHTML                    // "<!-- ... -->"
+	commentERB                     // "<!-- ... -->" and "<%# ... %>"
 )
 
+// commentSyntax is the comment syntax of a file type: its comment tokens
+// and the token that interpolates code into its strings ("" for none). A
+// comment-looking line can be string text that the program uses (a Ruby or
+// shell heredoc, a Python f-string, a template literal, a GitHub Actions
+// run: block, a Helm template), where what it interpolates runs.
+type commentSyntax struct {
+	kind   commentKind
+	interp string
+}
+
 // fileCommentSyntax picks the comment syntax by extension (any case) or by
-// base name (exact).
+// base name (exact). The interpolation tokens: "#{" for Ruby (and ERB), "{"
+// for a Python f-string, "${" for a JavaScript, TypeScript or Kotlin
+// template and a shell or Terraform heredoc, "{{" for YAML (GitHub
+// Actions' "${{ }}", a Helm or Jinja template).
 func fileCommentSyntax(p string) commentSyntax {
 	base := path.Base(p)
 	switch {
-	case base == "Gemfile", base == "Rakefile", base == "Dockerfile", strings.HasPrefix(base, "Dockerfile."):
-		return commentHash
+	case base == "Gemfile", base == "Rakefile":
+		return commentSyntax{commentHash, "#{"}
+	case base == "Dockerfile", strings.HasPrefix(base, "Dockerfile."):
+		return commentSyntax{kind: commentHash}
 	}
 	switch strings.ToLower(path.Ext(p)) {
-	case ".rb", ".rake", ".py", ".sh", ".yml", ".yaml", ".toml", ".tf", ".gemspec", ".rbi":
-		return commentHash
-	case ".go", ".js", ".jsx", ".ts", ".tsx", ".java", ".kt", ".swift", ".c", ".h", ".cpp", ".cs", ".scss":
-		return commentC
+	case ".rb", ".rake", ".gemspec", ".rbi":
+		return commentSyntax{commentHash, "#{"}
+	case ".py":
+		return commentSyntax{commentHash, "{"}
+	case ".sh", ".tf":
+		return commentSyntax{commentHash, "${"}
+	case ".yml", ".yaml":
+		return commentSyntax{commentHash, "{{"}
+	case ".toml":
+		return commentSyntax{kind: commentHash}
+	case ".js", ".jsx", ".ts", ".tsx", ".kt":
+		return commentSyntax{commentC, "${"}
+	case ".go", ".java", ".swift", ".c", ".h", ".cpp", ".cs", ".scss":
+		return commentSyntax{kind: commentC}
 	case ".sql":
-		return commentSQL
+		return commentSyntax{kind: commentSQL}
 	case ".html", ".vue":
-		return commentHTML
+		return commentSyntax{kind: commentHTML}
 	case ".erb":
-		return commentERB
+		return commentSyntax{commentERB, "#{"}
 	}
-	return commentNone
+	return commentSyntax{}
 }
 
 // indentSignificant reports whether leading whitespace is syntax in the file
@@ -357,8 +391,20 @@ func normalizeDeltaLine(text string, indent bool) string {
 // classify reports whether the trimmed line t is all comment, given the
 // block state before it, and returns the state after it. Only comment lines
 // open a block: a code line keeps the state (a "/*" in code may sit in a
-// string), so the lines after it count as code.
+// string), so the lines after it count as code. A comment-looking line
+// that holds the type's interpolation token is code: it may be string text
+// whose interpolation runs. In a string it neither opens nor closes a
+// block, so it leaves none open: what follows it is judged as code.
 func (s commentSyntax) classify(t string, state blockState) (bool, blockState) {
+	comment, next := s.kind.classify(t, state)
+	if comment && s.interp != "" && strings.Contains(t, s.interp) {
+		return false, blockOut
+	}
+	return comment, next
+}
+
+// classify is commentSyntax.classify by the comment tokens alone.
+func (s commentKind) classify(t string, state blockState) (bool, blockState) {
 	switch s {
 	case commentHash:
 		return strings.HasPrefix(t, "#") && !hashDirective(t), state
@@ -529,6 +575,6 @@ func binaryDeltaPath(p string) bool {
 // one side has inside a block comment and the other does not (code
 // commented out, or back in) counts one, like a line it cannot read.
 func MeasureDelta(files []github.FileDelta) DeltaSize {
-	s, _, _ := assessDelta(files, nil)
+	s, _, _ := assessDelta(files, nil, nil)
 	return s
 }

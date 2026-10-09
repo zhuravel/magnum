@@ -350,7 +350,11 @@ to the new head with its verdict, keeps an App's approval and records `pr.trivia
 commit arrived during the judge's turn, the note on the review says "(comments only), no re-review
 needed" instead. `[daemon] skip_trivial_deltas` (default `["comments", "whitespace", "docs", "base"]`,
 `[]` = re-review every push) picks the kinds, a `[[watch]]` can override it, and `magnum review` always
-runs.
+runs. A file that steers the review agents (an `AGENTS.md`, `CLAUDE.md` or `CLAUDE.local.md` in any
+directory, anything under `.claude/` or `.codex/`, `.mcp.json`) never counts as documentation for this. A
+comment line that holds its language's interpolation counts as code, because in a heredoc, a template or a
+`run:` block it runs: `#{` in Ruby and ERB, `{` in Python, `${` in JavaScript, TypeScript, Kotlin, shell and
+Terraform, `{{` in YAML.
 
 A push that merges the base branch into the PR (or rebases it onto the base) is judged by the PR's own
 diff, not by the commits it brings: when the comparison of the reviewed commit with the new head shows a
