@@ -139,9 +139,6 @@ func TestLandingFastForwardsMasterAndRecordsAVersion(t *testing.T) {
 func TestALandingCutShortAfterTheMergeIsRecorded(t *testing.T) {
 	f := newLandFixture(t)
 	f.git.set(f.checkout, "refs/heads/master", learnCandidate)
-	f.git.mu.Lock()
-	f.git.merged[learnCandidate] = true
-	f.git.mu.Unlock()
 	f.h.tick()
 	if p := f.proposal(); p.State != store.LearnLanded || p.LandedSHA != learnCandidate || len(f.git.called("merge")) != 0 ||
 		len(f.git.called("rebase")) != 0 || len(f.versions()) != 1 {
@@ -188,16 +185,24 @@ func TestLandingHoldsOnADirtySkillFile(t *testing.T) {
 	}
 }
 
+// moveMaster commits sha on the checkout's master, as the operator would.
+func (f *gateFixture) moveMaster(sha string) {
+	f.git.mu.Lock()
+	defer f.git.mu.Unlock()
+	f.git.parent[sha] = f.git.refs[f.checkout+"|refs/heads/"+learnBase]
+	f.git.refs[f.checkout+"|refs/heads/"+learnBase], f.git.refs[f.checkout+"|HEAD"] = sha, sha
+}
+
 func TestLandingRebasesOnceAndHoldsOnAConflict(t *testing.T) {
 	moved := strings.Repeat("7", 40)
 	f := newLandFixture(t)
-	f.git.set(f.checkout, "refs/heads/master", moved)
-	f.git.set(f.checkout, "HEAD", moved)
+	f.moveMaster(moved)
 	f.h.tick()
 
 	p := f.proposal()
-	if got := f.git.called("rebase"); !slices.Equal(got, []string{"rebase " + f.wt + " " + moved}) {
-		t.Fatalf("rebases = %q, want one onto the moved master", got)
+	// Only the candidate's commit is replayed: the commits after its base.
+	if got := f.git.called("rebase"); !slices.Equal(got, []string{"rebase " + f.wt + " " + moved + " " + learnMaster}) {
+		t.Fatalf("rebases = %q, want one of the candidate onto the moved master", got)
 	}
 	rebased, _ := f.git.RevParse(f.h.ctx, f.checkout, "refs/heads/master")
 	if p.State != store.LearnLanded || rebased == learnCandidate || rebased == moved || p.LandedSHA != rebased {
@@ -207,7 +212,7 @@ func TestLandingRebasesOnceAndHoldsOnAConflict(t *testing.T) {
 	// A landing held after its rebase (a dirty file) lands later without a
 	// second rebase: the branch is on master now.
 	f3 := newLandFixture(t)
-	f3.git.set(f3.checkout, "refs/heads/master", moved)
+	f3.moveMaster(moved)
 	f3.git.dirty[f3.checkout] = []string{learn.SkillFile}
 	f3.h.tick()
 	if p := f3.proposal(); p.State != store.LearnHeld || len(f3.git.called("rebase")) != 1 {
@@ -222,12 +227,73 @@ func TestLandingRebasesOnceAndHoldsOnAConflict(t *testing.T) {
 	}
 
 	f2 := newLandFixture(t)
-	f2.git.set(f2.checkout, "refs/heads/master", moved)
+	f2.moveMaster(moved)
 	f2.git.rebaseErr = fmt.Errorf("gitx: rebase: %w", gitx.ErrRebaseConflict)
 	f2.h.tick()
 	p2 := f2.proposal()
 	if p2.State != store.LearnHeld || !strings.Contains(p2.Reason, "conflicts") || len(f2.git.called("merge")) != 0 || len(f2.git.called("rebase")) != 1 {
 		t.Fatalf("proposal = %s %q, merges %q", p2.State, p2.Reason, f2.git.called("merge"))
+	}
+}
+
+// A master the operator reset below the proposal's base (a commit of his
+// dropped) holds the landing: the gate measured the candidate on that
+// base, and a fast-forward would bring the dropped commit back.
+func TestALandingHoldsWhenMasterNoLongerHoldsItsBase(t *testing.T) {
+	f := newLandFixture(t)
+	older := strings.Repeat("a", 40)
+	f.git.mu.Lock()
+	f.git.parent[learnMaster] = older
+	f.git.mu.Unlock()
+	f.git.set(f.checkout, "refs/heads/master", older)
+	f.git.set(f.checkout, "HEAD", older)
+	f.h.tick()
+	p := f.proposal()
+	if p.State != store.LearnHeld || !strings.Contains(p.Reason, "no longer holds") || !strings.Contains(p.Reason, learnShort(learnMaster)) {
+		t.Fatalf("proposal = %s %q, want held: master lost its base", p.State, p.Reason)
+	}
+	if got := slices.Concat(f.git.called("rebase"), f.git.called("merge")); len(got) != 0 {
+		t.Fatalf("git = %q, want no rebase and no merge", got)
+	}
+}
+
+// The branch of a proposal may have moved only by an earlier landing's
+// rebase: a commit made in its worktree on top of the candidate, or an
+// amended candidate, would land ungated and holds the proposal; the
+// candidate rebased onto master (one commit on master, its patch id) lands.
+func TestALandingRefusesACommitMadeInTheWorktree(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		sha    string
+		parent string
+	}{
+		{"on top of the candidate", strings.Repeat("6", 40), learnCandidate},
+		{"an amended candidate", strings.Repeat("8", 40), learnMaster},
+	} {
+		f := newLandFixture(t)
+		f.git.mu.Lock()
+		f.git.parent[c.sha] = c.parent
+		f.git.mu.Unlock()
+		f.git.set(f.wt, "HEAD", c.sha)
+		f.git.set(f.checkout, "refs/heads/learn/"+gateRunID, c.sha)
+		f.h.tick()
+		if p := f.proposal(); p.State != store.LearnHeld || !strings.Contains(p.Reason, "moved") || len(f.git.called("merge")) != 0 {
+			t.Fatalf("%s: proposal = %s %q, merges %q", c.name, p.State, p.Reason, f.git.called("merge"))
+		}
+	}
+
+	// The candidate as an earlier landing rebased it onto master.
+	moved, rebased := strings.Repeat("7", 40), strings.Repeat("9", 40)
+	f := newLandFixture(t)
+	f.moveMaster(moved)
+	f.git.mu.Lock()
+	f.git.parent[rebased], f.git.patch[rebased] = moved, f.git.patchOf(learnCandidate)
+	f.git.mu.Unlock()
+	f.git.set(f.wt, "HEAD", rebased)
+	f.git.set(f.checkout, "refs/heads/learn/"+gateRunID, rebased)
+	f.h.tick()
+	if p := f.proposal(); p.State != store.LearnLanded || p.LandedSHA != rebased || len(f.git.called("rebase")) != 0 {
+		t.Fatalf("the rebased candidate: proposal = %s %q landed %s, rebases %q", p.State, p.Reason, p.LandedSHA, f.git.called("rebase"))
 	}
 }
 
@@ -250,7 +316,7 @@ func TestOneLandingPerDay(t *testing.T) {
 		t.Fatalf("the second = %s the next day", p.State)
 	}
 	// It landed on the first: its branch was rebased onto the new master.
-	if got := f.git.called("rebase"); len(got) != 1 || !strings.HasSuffix(got[0], " "+learnCandidate) {
+	if got := f.git.called("rebase"); len(got) != 1 || !strings.HasSuffix(got[0], " "+learnCandidate+" "+learnMaster) {
 		t.Fatalf("rebases = %q", got)
 	}
 

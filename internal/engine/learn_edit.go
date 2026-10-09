@@ -119,7 +119,8 @@ type LearnGit interface {
 	BranchDelete(ctx context.Context, mainClone, branch string, force bool) error
 	InProgress(ctx context.Context, repo string) (string, error)
 	MergeBase(ctx context.Context, dir, a, b string) (string, error)
-	RebaseOnto(ctx context.Context, dir, onto string) error
+	RebaseOnto(ctx context.Context, dir, onto, upstream string) error
+	PatchID(ctx context.Context, dir, rev string) (string, error)
 	DirtyPaths(ctx context.Context, dir string, paths ...string) ([]string, error)
 	MergeFFOnly(ctx context.Context, repo, branch string) error
 	RestoreFrom(ctx context.Context, dir, rev string, paths ...string) error

@@ -2,6 +2,7 @@ package gitx
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -27,12 +28,24 @@ func TestALandingRebasesTheBranchFastForwardsAndDropsIt(t *testing.T) {
 		t.Fatalf("merge base = %s, %v, want the old main %s", base, err, fx.base)
 	}
 
-	if err := fx.c.RebaseOnto(ctx, dir, moved); err != nil {
+	if err := fx.c.RebaseOnto(ctx, dir, moved, fx.base); err != nil {
 		t.Fatalf("RebaseOnto: %v", err)
 	}
 	head, err := fx.c.RevParse(ctx, dir, "HEAD")
 	if err != nil || head == cand {
 		t.Fatalf("the worktree's HEAD = %s, %v after the rebase", head, err)
+	}
+	// The landing knows the rebased branch for the candidate: a single
+	// commit on main with the candidate's patch id.
+	if parent, err := fx.c.RevParse(ctx, fx.clone, head+"^"); err != nil || parent != moved {
+		t.Fatalf("the rebased commit's parent = %s, %v, want %s", parent, err, moved)
+	}
+	if _, err := fx.c.RevParse(ctx, fx.clone, head+"^2"); !errors.Is(err, ErrNoSuchRef) {
+		t.Fatalf("the rebased commit's second parent: %v, want ErrNoSuchRef", err)
+	}
+	want, err := fx.c.PatchID(ctx, fx.clone, cand)
+	if got, gerr := fx.c.PatchID(ctx, fx.clone, head); err != nil || gerr != nil || got != want {
+		t.Fatalf("patch ids = %s (%v), %s (%v)", want, err, got, gerr)
 	}
 	if got, _ := fx.c.RevParse(ctx, fx.clone, "refs/heads/"+branch); got != head {
 		t.Fatalf("the branch = %s, want the rebased %s", got, head)

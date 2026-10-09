@@ -176,8 +176,12 @@ inputs `new`. a `held` one waits for the operator. a `passed` one lands.
 ## 5. Landing and restart
 
 Landing (`engine.landProposal`): the checkout must be on `master` with no rebase or merge in progress;
-`master` must equal the proposal's `base_sha`, else the branch is rebased once in the worktree (a conflict
-holds the proposal with the reason). the files the commit touches must be clean in the checkout's working
+the branch must be at the proposal's `candidate_sha`, or at that commit as an earlier landing rebased it (a
+single commit on a commit `master` holds, with the same `git patch-id`), else it is held: a commit made in
+the worktree would land ungated. `master` must hold the proposal's `base_sha` (else held: it was reset or
+rewritten since the edit); when it moved past it, the candidate's commit alone is rebased once in the
+worktree (`git rebase --onto master <base_sha>`, so a commit the operator dropped from `master` does not
+come back; a conflict holds the proposal with the reason). the files the commit touches must be clean in the checkout's working
 tree (else held, reason named). Then `git -C <checkout> merge --ff-only learn/<run>`, the branch is
 deleted, the worktree removed, the proposal becomes `landed` with `landed_sha`, and a `learn_versions`
 row records the new skill and prompts hashes. A toast says what landed. At most one landing per local day

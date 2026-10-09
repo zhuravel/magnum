@@ -1726,8 +1726,11 @@ A `passed` proposal lands at the next tick, at most `land_per_day` (1) a local d
 daemon restarted on the previous landed version, and never while a gate or an edit runs. The landing
 works on the checkout's `master` and holds the proposal for you (a toast, `magnum learn --review`) when it
 cannot go on: the checkout must have `master` checked out with no rebase, merge or cherry-pick in progress;
-when `master` moved since the proposal's base, its branch is rebased once in its worktree, and a conflict
-holds it; the files it changes must have no uncommitted change in the checkout (your edit of `SKILL.md`
+the branch must hold the proposal's commit, or that commit as an earlier landing rebased it (one commit on
+`master` with the same patch id: a commit made in its worktree holds it); `master` must still hold the
+proposal's base (one you reset below it holds it); when `master` moved past the base, the proposal's commit
+alone is rebased once in its worktree (`git rebase --onto master <base>`), and a conflict holds it; the
+files it changes must have no uncommitted change in the checkout (your edit of `SKILL.md`
 is never merged over). Then `master` fast-forwards to the branch (`git merge --ff-only`), the branch and
 the worktree go, its noted inputs become `used`, and a skill version records the commit and the hashes of
 the skill and the prompts it landed. Nothing is pushed: `magnum learn` says how many landed versions

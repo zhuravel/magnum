@@ -5,10 +5,11 @@ package engine
 // self-improving loop's fourth stage. A proposal the gate passed lands at a
 // tick, at most [learn] land_per_day a local day, and one the operator
 // lands from `magnum learn --review` (ReqLearnLand) at once: the checkout
-// must have master checked out and nothing in progress, the branch is
-// rebased once in its worktree when master moved since its base (a
-// conflict holds the proposal), the files it changes must be clean in the
-// checkout, then master fast-forwards to it. Its branch and worktree go, the
+// must have master checked out and nothing in progress, master must still
+// hold the proposal's base, the proposal's commit alone is rebased once in
+// its worktree when master moved past it (`git rebase --onto`; a conflict
+// holds the proposal), the files it changes must be clean in the checkout,
+// then master fast-forwards to it. Its branch and worktree go, the
 // proposal is landed with the commit, and a learn_versions row records the
 // skill and the prompts it landed. The daemon reads its prompts and skill at
 // startup, so the landed text reaches rounds after a restart: with [learn]
@@ -157,8 +158,10 @@ func (e *Engine) maybeLearnLand(ctx context.Context) {
 
 // landProposal lands p, passed or held (requested: the operator asked), on
 // the checkout's master: master checked out and nothing in progress; the
-// branch rebased once in its worktree when it does not descend from master
-// (a conflict holds it); the files it changes clean in the checkout; then
+// branch at p's commit or at that commit rebased (ensureCandidate); master
+// still holding p's base; p's commit alone rebased once in its worktree
+// when master moved past it (a conflict holds it); the files it changes
+// clean in the checkout; then
 // master fast-forwards to it, its worktree and branch go, it becomes
 // landed with the commit and a version records what landed. A branch that
 // master already holds (a landing a crash cut short) is recorded without
@@ -205,14 +208,33 @@ func (e *Engine) landProposal(ctx context.Context, p store.LearnProposal, reques
 	if err != nil {
 		return p, store.LearnVersion{}, err
 	}
-	base, err := git.MergeBase(ctx, checkout, head, master)
-	if err != nil && !errors.Is(err, gitx.ErrNoMergeBase) {
+	onMaster, err := e.holds(ctx, master, head)
+	if err != nil {
 		return p, store.LearnVersion{}, err
 	}
 	landed := head // a branch master holds already landed as it is
-	if base != head {
-		if base != master {
-			if err := git.RebaseOnto(ctx, p.Scratch, master); errors.Is(err, gitx.ErrRebaseConflict) {
+	if !onMaster {
+		// The gate measured the candidate on its base: a master that no
+		// longer holds it was reset or rewritten, and a fast-forward would
+		// bring back what the operator dropped.
+		switch has, err := e.holds(ctx, master, p.BaseSHA); {
+		case err != nil:
+			return p, store.LearnVersion{}, err
+		case !has:
+			return hold(fmt.Sprintf("master (%s) no longer holds its base %s: it was reset or rewritten since the edit, so the gate's "+
+				"measure is not of this master", learnShort(master), learnShort(p.BaseSHA)))
+		}
+		// Only the candidate's commit is replayed onto master: the commits
+		// after its base, or after the master an earlier landing rebased it
+		// onto (ensureCandidate checked it is that one commit).
+		upstream := p.BaseSHA
+		if head != p.CandidateSHA {
+			if upstream, err = git.RevParse(ctx, checkout, head+"^"); err != nil {
+				return p, store.LearnVersion{}, err
+			}
+		}
+		if upstream != master {
+			if err := git.RebaseOnto(ctx, p.Scratch, master, upstream); errors.Is(err, gitx.ErrRebaseConflict) {
 				return hold(fmt.Sprintf("master moved to %s since its base %s, and rebasing it onto master conflicts", learnShort(master),
 					learnShort(p.BaseSHA)))
 			} else if err != nil {
@@ -283,6 +305,58 @@ func (e *Engine) landProposal(ctx context.Context, p store.LearnProposal, reques
 			Body: "`magnum daemon-restart --when-idle` restarts it once nothing is in flight; the rounds use the landed skill and prompts from then on."})
 	}
 	return got, v, nil
+}
+
+// holds reports whether commit tip holds commit c (c is tip or one of its
+// ancestors).
+func (e *Engine) holds(ctx context.Context, tip, c string) (bool, error) {
+	base, err := e.d.LearnGit.MergeBase(ctx, e.d.Checkout, c, tip)
+	if errors.Is(err, gitx.ErrNoMergeBase) {
+		return false, nil
+	}
+	return err == nil && base == c, err
+}
+
+// rebasedCandidate checks head, where p's branch moved from p's commit:
+// only an earlier landing moves it, rebasing the candidate onto master, so
+// head must be a single commit (no second parent) on a commit master holds,
+// with the candidate's patch id (gitx.PatchID); errCandidateGone for
+// anything else (a commit made in the worktree would land ungated).
+func (e *Engine) rebasedCandidate(ctx context.Context, p store.LearnProposal, head string) error {
+	git, checkout := e.d.LearnGit, e.d.Checkout
+	moved := fmt.Errorf("%w: its branch %s moved to %s, which is not its commit %s rebased onto master", errCandidateGone, p.Branch,
+		learnShort(head), learnShort(p.CandidateSHA))
+	switch _, err := git.RevParse(ctx, checkout, head+"^2"); {
+	case err == nil:
+		return moved // a merge
+	case !errors.Is(err, gitx.ErrNoSuchRef):
+		return err
+	}
+	parent, err := git.RevParse(ctx, checkout, head+"^")
+	if errors.Is(err, gitx.ErrNoSuchRef) {
+		return moved
+	} else if err != nil {
+		return err
+	}
+	master, err := git.RevParse(ctx, checkout, "refs/heads/"+learnBase)
+	if err != nil {
+		return err
+	}
+	if on, err := e.holds(ctx, master, parent); err != nil {
+		return err
+	} else if !on {
+		return moved
+	}
+	want, err := git.PatchID(ctx, checkout, p.CandidateSHA)
+	if err != nil {
+		return err
+	}
+	if got, err := git.PatchID(ctx, checkout, head); err != nil {
+		return err
+	} else if got != want {
+		return moved
+	}
+	return nil
 }
 
 // learnHashes are what a landed version records of dir (a checkout or a

@@ -5667,3 +5667,19 @@ editing history. Code, config comments and prompts reference these by their head
   run's reports (a full replay newer than the gate's choice) counts as a replay without a score. Rejected:
   replaying the base in full whenever the stored baseline is another run (twice the cost of the judge
   alone, and the reports would differ again).
+- **A landing replays the candidate alone, on a master that still holds its base** (2026-10-09, review
+  of stage 4 of the self-improving review loop). The landing rebased when `master` was not the merge base
+  and ran `git rebase master`, which replays every commit of `master..branch`: when the operator dropped a
+  commit from `master` after the branch was cut on it (`git reset --hard HEAD~1`), the merge base was the
+  new `master`, nothing was rebased, and the fast-forward brought the dropped commit back. Now `master`
+  must still hold the proposal's `base_sha` (else the proposal is held: the gate measured it on a base
+  `master` no longer has), and the rebase is `git rebase --onto master <upstream>` (`gitx.RebaseOnto`
+  takes the upstream), the upstream being the base, so only the candidate's commit is replayed. A branch
+  that moved from the candidate's commit was accepted whatever it held, so a commit made in its worktree
+  landed ungated; now a moved head is accepted only as the candidate an earlier landing rebased: a single
+  commit (no second parent) on a commit `master` holds whose patch id (`gitx.PatchID`, `git patch-id
+  --stable` over a diff with no context lines, so a `master` that changed lines near the candidate's does
+  not change it) is the candidate's, and its own parent is then the rebase's upstream. Rejected: requiring
+  `master` to equal `base_sha` (any commit of the operator's would hold every proposal) and patch ids over
+  the default three context lines (a clean rebase near the operator's edit would read as a foreign commit
+  and hold the proposal for good).

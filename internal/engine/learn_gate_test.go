@@ -38,22 +38,24 @@ type fakeLearnGit struct {
 	branch map[string]string // repository -> its branch
 	op     map[string]string // repository -> the operation in progress
 	dirty  map[string][]string
-	// merged are the commits master contains, parent each commit's base
-	// (MergeBase), worktree each worktree's checkout and branch (RebaseOnto
-	// moves the branch), and rebased counts the rebases.
-	merged   map[string]bool
+	// parent is each commit's one parent (the history MergeBase walks and
+	// "<sha>^" names), patch a commit's patch id ("patch-<sha>" when none:
+	// RebaseOnto gives the new commit the old one's), worktree each
+	// worktree's checkout and branch (RebaseOnto moves the branch), and
+	// rebased counts the rebases.
 	parent   map[string]string
+	patch    map[string]string
 	worktree map[string][2]string
 	rebased  int
-	// rebaseErr and mergeErr fail RebaseOnto and MergeFFOnly; onMerge runs
-	// when MergeFFOnly fast-forwards.
+	// rebaseErr and mergeErr fail RebaseOnto and MergeFFOnly; onRebase and
+	// onMerge run with the context of a rebase and of a fast-forward.
 	rebaseErr, mergeErr error
-	onMerge             func()
+	onRebase, onMerge   func(context.Context)
 }
 
 func newFakeLearnGit() *fakeLearnGit {
 	return &fakeLearnGit{refs: map[string]string{}, branch: map[string]string{}, op: map[string]string{}, dirty: map[string][]string{},
-		merged: map[string]bool{}, parent: map[string]string{}, worktree: map[string][2]string{}}
+		parent: map[string]string{}, patch: map[string]string{}, worktree: map[string][2]string{}}
 }
 
 func (g *fakeLearnGit) set(dir, ref, sha string) {
@@ -85,8 +87,19 @@ func (g *fakeLearnGit) RevParse(_ context.Context, dir, ref string) (string, err
 	if sha, ok := g.refs[dir+"|"+ref]; ok {
 		return sha, nil
 	}
-	return "", fmt.Errorf("rev-parse %s: %w", ref, gitx.ErrNoSuchRef)
+	if sha, ok := strings.CutSuffix(ref, "^"); ok && g.parent[sha] != "" {
+		return g.parent[sha], nil
+	}
+	return "", fmt.Errorf("rev-parse %s: %w", ref, gitx.ErrNoSuchRef) // "<sha>^2" too: no merge commits
 }
+
+func (g *fakeLearnGit) PatchID(_ context.Context, _, rev string) (string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.patchOf(rev), nil
+}
+
+func (g *fakeLearnGit) patchOf(sha string) string { return cmp.Or(g.patch[sha], "patch-"+sha) }
 
 func (g *fakeLearnGit) WorktreeAdd(_ context.Context, mainClone, path, ref string, _ bool, branch string) error {
 	g.mu.Lock()
@@ -148,28 +161,38 @@ func (g *fakeLearnGit) MergeBase(_ context.Context, _, a, b string) (string, err
 	return g.mergeBase(a, b)
 }
 
+// mergeBase is the first of a's ancestors (a included) that b has.
 func (g *fakeLearnGit) mergeBase(a, b string) (string, error) {
-	switch {
-	case a == b, g.merged[a]:
-		return a, nil
-	case g.parent[a] != "":
-		return g.parent[a], nil
+	var bs []string
+	for x := b; x != ""; x = g.parent[x] {
+		bs = append(bs, x)
+	}
+	for x := a; x != ""; x = g.parent[x] {
+		if slices.Contains(bs, x) {
+			return x, nil
+		}
 	}
 	return "", fmt.Errorf("merge-base %s %s: %w", a, b, gitx.ErrNoMergeBase)
 }
 
-// RebaseOnto puts the worktree's commit on onto as a new commit, moving
-// its branch, unless rebaseErr says otherwise.
-func (g *fakeLearnGit) RebaseOnto(_ context.Context, dir, onto string) error {
+// RebaseOnto puts the worktree's commit on onto as a new commit with its
+// patch id, moving its branch, unless rebaseErr says otherwise.
+func (g *fakeLearnGit) RebaseOnto(ctx context.Context, dir, onto, upstream string) error {
+	g.mu.Lock()
+	g.record("rebase %s %s %s", dir, onto, upstream)
+	on := g.onRebase
+	g.mu.Unlock()
+	if on != nil {
+		on(ctx)
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.record("rebase %s %s", dir, onto)
 	if g.rebaseErr != nil {
 		return g.rebaseErr
 	}
 	g.rebased++
 	sha := strings.Repeat(strconv.Itoa(2+g.rebased), 40)
-	g.parent[sha] = onto
+	g.parent[sha], g.patch[sha] = onto, g.patchOf(g.refs[dir+"|HEAD"])
 	g.refs[dir+"|HEAD"] = sha
 	if wt, ok := g.worktree[dir]; ok {
 		g.refs[wt[0]+"|refs/heads/"+wt[1]] = sha
@@ -190,23 +213,29 @@ func (g *fakeLearnGit) DirtyPaths(_ context.Context, dir string, paths ...string
 }
 
 // MergeFFOnly moves the repository's master and HEAD to branch when branch
-// sits on master, unless mergeErr says otherwise.
-func (g *fakeLearnGit) MergeFFOnly(_ context.Context, repo, branch string) error {
+// sits on master (nothing when master holds it), unless mergeErr says
+// otherwise.
+func (g *fakeLearnGit) MergeFFOnly(ctx context.Context, repo, branch string) error {
+	g.mu.Lock()
+	g.record("merge --ff-only %s", branch)
+	on := g.onMerge
+	g.mu.Unlock()
+	if on != nil {
+		on(ctx)
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.record("merge --ff-only %s", branch)
 	if g.mergeErr != nil {
 		return g.mergeErr
 	}
 	head, master := g.refs[repo+"|refs/heads/"+branch], g.refs[repo+"|refs/heads/"+learnBase]
-	if base, err := g.mergeBase(head, master); err != nil || base != master && base != head {
+	switch base, err := g.mergeBase(head, master); {
+	case err == nil && base == head:
+		return nil // already up to date
+	case err != nil || base != master:
 		return fmt.Errorf("merge --ff-only %s: %w", branch, gitx.ErrNotFastForward)
 	}
 	g.refs[repo+"|refs/heads/"+learnBase], g.refs[repo+"|HEAD"] = head, head
-	g.merged[head] = true
-	if g.onMerge != nil {
-		g.onMerge()
-	}
 	return nil
 }
 

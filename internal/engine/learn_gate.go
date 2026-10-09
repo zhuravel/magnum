@@ -740,7 +740,8 @@ func (e *Engine) ownWorktree(wt string) bool {
 // again from p's branch (a stale registration pruned first).
 // errCandidateGone when the branch is gone, the worktree holds another
 // commit than the branch, or the branch moved from p's commit: only the
-// landing may have moved it (rebased, when moved says so).
+// landing may have moved it, rebasing it onto master, and with moved such
+// a head is accepted (rebasedCandidate), nothing else.
 func (e *Engine) ensureCandidate(ctx context.Context, p store.LearnProposal, moved bool) error {
 	git, wt := e.d.LearnGit, p.Scratch
 	if !e.ownWorktree(wt) || p.CandidateSHA == "" || !strings.HasPrefix(p.Branch, learnBranchPrefix) {
@@ -754,6 +755,10 @@ func (e *Engine) ensureCandidate(ctx context.Context, p store.LearnProposal, mov
 		return err
 	case sha != p.CandidateSHA && !moved:
 		return fmt.Errorf("%w: its branch %s moved to %s from %s", errCandidateGone, p.Branch, learnShort(sha), learnShort(p.CandidateSHA))
+	case sha != p.CandidateSHA:
+		if err := e.rebasedCandidate(ctx, p, sha); err != nil {
+			return err
+		}
 	}
 	if _, err := os.Stat(wt); err == nil {
 		head, err := git.RevParse(ctx, wt, "HEAD")
