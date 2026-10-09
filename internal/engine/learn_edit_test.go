@@ -829,6 +829,31 @@ func TestTheOrphanCleanupDeletesBranchesNoProposalHolds(t *testing.T) {
 	}
 }
 
+// The inputs' pull requests name the logins and branches the edit's checks
+// hold the change to: one that cannot be read stops the run before the
+// editor starts, instead of leaving its author and branch out of the
+// scrub and the leak checks.
+func TestAnInputsPullRequestThatCannotBeReadStopsTheEdit(t *testing.T) {
+	f := newEditFixture(t, goodTurn)
+	if _, err := f.h.st.DB().ExecContext(f.h.ctx, "UPDATE prs SET labels_json = '{' WHERE id = ?", f.miss.PRID); err != nil {
+		t.Fatal(err)
+	}
+	m, _ := f.ids()
+	p, err := f.h.e.runEdit(f.h.ctx, store.LearnTriggerRequest)
+	if err == nil || !strings.Contains(err.Error(), "the inputs: the pull request of input "+m) || p.State == store.LearnGating {
+		t.Fatalf("runEdit = %+v, %v", p, err)
+	}
+	if evs := f.h.events("learn.edit_stopped"); len(evs) != 1 || len(f.ed.prompts) != 0 {
+		t.Fatalf("edit_stopped events = %+v; the editor was prompted %d times", evs, len(f.ed.prompts))
+	}
+	if n, _ := f.h.st.CountLearnProposals(f.h.ctx, store.LearnGating); n != 0 {
+		t.Fatalf("gating proposals = %d", n)
+	}
+	if _, err := f.h.e.requestEdit(f.h.ctx, LearnProposePayload{}); err == nil {
+		t.Fatal("a requested edit started with an input's pull request unreadable")
+	}
+}
+
 // BranchesUnder lists the fake's local branches of repo under prefix.
 func (g *fakeLearnGit) BranchesUnder(_ context.Context, repo, prefix string) ([]string, error) {
 	g.mu.Lock()

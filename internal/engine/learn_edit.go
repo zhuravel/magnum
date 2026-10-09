@@ -333,10 +333,16 @@ func (e *Engine) editInputs(ctx context.Context) (learn.EditInputs, learn.EditCh
 		return in, check, err
 	}
 	prs := map[int64]store.PR{}
-	people := func(prID int64, more ...string) []string {
+	// people reads an input's pull request once: its author and branch are
+	// what the scrub and the leak checks hold the change to, so one that
+	// cannot be read stops the run.
+	people := func(id string, prID int64, more ...string) ([]string, error) {
 		pr, ok := prs[prID]
 		if !ok {
-			pr, _ = e.st.PRByID(ctx, prID)
+			var err error
+			if pr, err = e.st.PRByID(ctx, prID); err != nil {
+				return nil, fmt.Errorf("the pull request of input %s: %w", id, err)
+			}
 			prs[prID] = pr
 			if b := deref(pr.HeadRef); b != "" {
 				check.Leaks.Branches = append(check.Leaks.Branches, b)
@@ -344,7 +350,7 @@ func (e *Engine) editInputs(ctx context.Context) (learn.EditInputs, learn.EditCh
 		}
 		out := append([]string{deref(pr.AuthorLogin)}, more...)
 		check.People = append(check.People, out...)
-		return out
+		return out, nil
 	}
 	repoWords := func(full string) []string {
 		owner, name, _ := strings.Cut(full, "/")
@@ -368,13 +374,23 @@ func (e *Engine) editInputs(ctx context.Context) (learn.EditInputs, learn.EditCh
 		if !slices.Contains(editSeverities, m.Severity) {
 			continue
 		}
-		who, repo := people(m.PRID, m.Reviewer), repoWords(m.Repo)
-		in.Misses = append(in.Misses, learn.EditMiss{ID: learn.MissInputID(m.ID), Severity: m.Severity, Title: scrub(m.Title, who, repo),
+		id := learn.MissInputID(m.ID)
+		who, err := people(id, m.PRID, m.Reviewer)
+		if err != nil {
+			return in, check, err
+		}
+		repo := repoWords(m.Repo)
+		in.Misses = append(in.Misses, learn.EditMiss{ID: id, Severity: m.Severity, Title: scrub(m.Title, who, repo),
 			Lesson: scrub(m.Lesson, who, repo), Match: scrubAll(m.Match, who, repo)})
 	}
 	for _, d := range slices.Backward(declines) {
-		who, repo := people(d.PRID), repoWords(d.Repo)
-		in.Declines = append(in.Declines, learn.EditDecline{ID: learn.DeclineInputID(d.ID), Priority: d.Priority, Verdict: d.Verdict,
+		id := learn.DeclineInputID(d.ID)
+		who, err := people(id, d.PRID)
+		if err != nil {
+			return in, check, err
+		}
+		repo := repoWords(d.Repo)
+		in.Declines = append(in.Declines, learn.EditDecline{ID: id, Priority: d.Priority, Verdict: d.Verdict,
 			Title: scrub(d.Title, who, repo), Lesson: scrub(d.Lesson, who, repo), Match: scrubAll(d.Match, who, repo)})
 	}
 	rejected, err := e.st.LearnProposals(ctx, []string{store.LearnRejected})

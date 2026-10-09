@@ -5686,3 +5686,11 @@ skill versions, which its first entry creates); people add theirs to the section
   one; a `learn/` branch whose name is no run's is someone's own and stays. Rejected: deleting every
   `learn/` branch (the prefix is a common one) and scanning at every tick (a run is the only thing
   that makes them, and it cleans up first).
+- **An input whose pull request cannot be read stops the skill edit** (2026-10-09, a review finding on
+  stage 3 of the self-improving review loop). `editInputs` read each input's pull request with its
+  error dropped, so on a read error the pull request's author and branch fell out of the inputs' scrub
+  and the edit's leak checks, and the run went on. Now the error stops the run before the editor
+  starts ("the inputs: the pull request of input m12: ..."), `magnum learn --propose` is refused with
+  it, and a scheduled run that stops this way marks the evidence again for a later day. Rejected:
+  leaving that input out of the run (a registry that fails one read is not one to trust for the
+  others, and the scheduled editor tries again on a later day anyway).
