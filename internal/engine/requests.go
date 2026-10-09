@@ -43,7 +43,8 @@ const (
 	ReqRetro = "retro"
 	// ReqLearnPropose starts a skill edit now (LearnProposePayload,
 	// learn_edit.go); ReqLearnLand lands a held proposal and ReqLearnReject
-	// rejects it (LearnDecisionPayload), as `magnum learn --review` asks.
+	// rejects a held or gating one, stopping its gate first
+	// (LearnDecisionPayload), as `magnum learn --review` asks.
 	ReqLearnPropose = "learn_propose"
 	ReqLearnLand    = "learn_land"
 	ReqLearnReject  = "learn_reject"
@@ -58,7 +59,8 @@ type LearnProposePayload struct{}
 
 // LearnDecisionPayload is the operator's answer to a held skill proposal
 // (`magnum learn --review`): land it (ReqLearnLand) or reject it
-// (ReqLearnReject) with Reason, which the next edit reads.
+// (ReqLearnReject, a gating one's only answer) with Reason, which the next
+// edit reads.
 type LearnDecisionPayload struct {
 	ID     int64  `json:"id"`
 	Reason string `json:"reason,omitempty"`
