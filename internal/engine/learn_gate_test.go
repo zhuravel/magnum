@@ -323,6 +323,7 @@ type gateFixture struct {
 	ev       *fakeEval
 	checkout string
 	wt       string
+	base     string // the gate's worktree of the proposal's base
 	miss     store.Miss
 	target   eval.Case
 	other    eval.Case
@@ -360,6 +361,7 @@ func newGateFixture(t *testing.T, files []string, mods ...func(*harness)) *gateF
 		Defects: []eval.Defect{{ID: "scope", Title: "the site scope", Paths: []string{"app/models/coupon.rb"}}}}
 	f.ev.corpus = &eval.Corpus{Cases: []eval.Case{f.other, f.target}}
 	f.wt = filepath.Join(f.h.layout.LearnWorktrees(), gateRunID)
+	f.base = filepath.Join(f.h.layout.LearnWorktrees(), gateBaseName)
 	if err := os.MkdirAll(f.wt, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -374,7 +376,9 @@ func newGateFixture(t *testing.T, files []string, mods ...func(*harness)) *gateF
 	if learn.Mode(files) == learn.GateJudgeOnly {
 		rev = "rev-master"
 	}
-	f.ev.inputs = map[string][2]string{f.checkout: {"in-master", "rev-master"}, f.wt: {"in-cand", rev}}
+	// The checkout's own prompts are not the base's: a baseline replays the
+	// gate's worktree of the base.
+	f.ev.inputs = map[string][2]string{f.base: {"in-master", "rev-master"}, f.checkout: {"in-checkout", "rev-checkout"}, f.wt: {"in-cand", rev}}
 	p, err := f.h.st.CreateLearnProposal(f.h.ctx, store.LearnProposalInput{Trigger: store.LearnTriggerRequest, BaseSHA: learnMaster,
 		Branch: "learn/" + gateRunID, CandidateSHA: learnCandidate, Files: files, State: store.LearnGating, Model: "sonnet",
 		Scratch: f.wt, RunDir: filepath.Join(f.h.layout.LearnSkill(), gateRunID),
@@ -423,6 +427,20 @@ func (f *gateFixture) gate() GateResult {
 	return g
 }
 
+// candidateGit lists the recorded git commands that start with one of
+// prefixes, leaving out those of the gate's base worktree.
+func (f *gateFixture) candidateGit(prefixes ...string) []string {
+	var out []string
+	for _, prefix := range prefixes {
+		for _, c := range f.git.called(prefix) {
+			if !strings.Contains(c, f.base) {
+				out = append(out, c)
+			}
+		}
+	}
+	return out
+}
+
 func (f *gateFixture) toasts() string {
 	f.h.t.Helper()
 	if _, err := f.h.e.batch.Flush(f.h.ctx); err != nil {
@@ -449,9 +467,9 @@ func found(ids []string, missed ...string) *eval.Score {
 func TestTheGatePassesACandidateThatFindsItsTarget(t *testing.T) {
 	f := newGateFixture(t, gateFullFiles)
 	// The target has a baseline; the operator's case has none, so the
-	// gate replays the checkout on it first.
+	// gate replays the base on it first.
 	f.baseline("20261001-120000", "rev-master", map[string]*eval.Score{f.target.Name: found(nil, f.target.Name)})
-	f.ev.script(f.checkout, f.other.Name, found([]string{"scope"}))
+	f.ev.script(f.base, f.other.Name, found([]string{"scope"}))
 	f.ev.script(f.wt, f.target.Name, found([]string{f.target.Name}))
 	f.ev.script(f.wt, f.other.Name, found([]string{"scope"}))
 	f.h.startup()
@@ -461,7 +479,7 @@ func TestTheGatePassesACandidateThatFindsItsTarget(t *testing.T) {
 	if p.State != store.LearnPassed || !strings.Contains(p.Reason, f.target.Name+" found (0 → 1 of 1)") || p.DecidedAt != nil {
 		t.Fatalf("proposal = %s %q decided %v, want passed naming its target", p.State, p.Reason, p.DecidedAt)
 	}
-	base, cand := f.ev.callsFor(f.checkout), f.ev.callsFor(f.wt)
+	base, cand := f.ev.callsFor(f.base), f.ev.callsFor(f.wt)
 	if len(base) != 1 || base[0].Case != f.other.Name || base[0].Opts.JudgeOnly {
 		t.Fatalf("baseline replays = %+v, want one full replay of %s", base, f.other.Name)
 	}
@@ -512,13 +530,74 @@ func TestTheGatePassesACandidateThatFindsItsTarget(t *testing.T) {
 	if _, ok := f.h.e.getKV(f.h.ctx, KVLearnGating); ok {
 		t.Fatal("the gate's mark outlived it")
 	}
-	if got := f.git.called("worktree"); len(got) != 0 {
+	if got := f.candidateGit("worktree"); len(got) != 0 {
 		t.Fatalf("a passed proposal's worktree was touched: %q", got)
 	}
 	// The next tick starts nothing more.
 	f.h.tick()
 	if n := len(f.ev.callsFor(f.wt)); n != 2 {
 		t.Fatalf("the gate ran again: %d candidate replays", n)
+	}
+}
+
+// The baseline is the proposal's base commit, replayed from a detached
+// worktree of its own, whatever branch the checkout has checked out and
+// whatever it left uncommitted: the worktree goes once the gate decided,
+// and the gate's runs record the commit they read, clean, so a later gate
+// reuses them.
+func TestTheBaselineReplaysTheProposalsBaseNotTheCheckout(t *testing.T) {
+	f := newGateFixture(t, gateFullFiles)
+	// The operator works on another branch, with an experiment in a judge
+	// prompt left uncommitted.
+	f.git.branch[f.checkout] = "experiment"
+	f.git.set(f.checkout, "HEAD", strings.Repeat("9", 40))
+	f.git.dirty[f.checkout] = []string{"prompts/judge-initial.md"}
+	f.baseline("20261001-120000", "rev-master", map[string]*eval.Score{f.target.Name: found(nil, f.target.Name)})
+	f.ev.script(f.base, f.other.Name, found([]string{"scope"}))
+	f.ev.script(f.wt, f.target.Name, found([]string{f.target.Name}))
+	f.ev.script(f.wt, f.other.Name, found([]string{"scope"}))
+	f.h.tick()
+
+	if p := f.proposal(); p.State != store.LearnPassed {
+		t.Fatalf("proposal = %s %q", p.State, p.Reason)
+	}
+	if got := f.ev.callsFor(f.checkout); len(got) != 0 {
+		t.Fatalf("the checkout was replayed as the baseline: %+v", got)
+	}
+	base := f.ev.callsFor(f.base)
+	if len(base) != 1 || base[0].Case != f.other.Name || base[0].Opts.JudgeOnly {
+		t.Fatalf("baseline replays = %+v, want one full replay of the base's worktree", base)
+	}
+	g := f.gate()
+	if g.BaselineInputs != "in-master" {
+		t.Fatalf("baseline inputs = %q, want the base's", g.BaselineInputs)
+	}
+	want := []string{"worktree discard " + f.base, "worktree add " + f.base + " " + learnMaster + " ", "worktree discard " + f.base}
+	if got := f.git.called("worktree"); !slices.Equal(got, want) {
+		t.Fatalf("worktree commands = %q, want %q", got, want)
+	}
+	if _, err := os.Stat(f.base); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the base's worktree outlived the gate: %v", err)
+	}
+	runs, err := eval.ListRuns(f.h.layout.Eval())
+	if err != nil || len(runs) != 3 {
+		t.Fatalf("runs = %+v, %v", runs, err)
+	}
+	baseRun, candRun := g.Cases[1].BaselineRun, g.Cases[0].CandidateRun
+	for _, r := range runs {
+		switch r.ID {
+		case baseRun:
+			if r.Commit != learnShort(learnMaster) || r.Dirty || r.Candidate != f.base {
+				t.Fatalf("the baseline run = %+v, want the base's commit, clean", r)
+			}
+		case candRun:
+			if r.Commit != learnShort(learnCandidate) || r.Dirty {
+				t.Fatalf("the candidate run = %+v, want the candidate's commit, clean", r)
+			}
+		}
+	}
+	if bs := eval.Baselines(runs, "in-master", f.other); len(bs) != 1 || bs[0].Run != baseRun {
+		t.Fatalf("a later gate cannot reuse the baseline: %+v", bs)
 	}
 }
 
@@ -575,7 +654,7 @@ func TestTheGateHoldsWhenTheTargetHasNoFullReplayForJudgeOnly(t *testing.T) {
 	if evs := f.h.events("learn.held"); len(evs) != 1 || !strings.Contains(f.toasts(), fmt.Sprintf("skill proposal %d waits for review", p.ID)) {
 		t.Fatalf("held events %+v, toasts %q", evs, f.toasts())
 	}
-	if got := f.git.called("worktree discard"); len(got) != 0 {
+	if got := f.candidateGit("worktree discard"); len(got) != 0 {
 		t.Fatalf("a held proposal lost its worktree: %q", got)
 	}
 
@@ -659,7 +738,7 @@ func TestAGatingProposalIsResumedAfterARestart(t *testing.T) {
 		t.Fatalf("proposal = %s %q", p.State, p.Reason)
 	}
 	// The worktree left behind is reused, not added again.
-	if got := f.git.called("worktree"); len(got) != 0 {
+	if got := f.candidateGit("worktree"); len(got) != 0 {
 		t.Fatalf("worktree commands = %q, want none", got)
 	}
 
@@ -675,7 +754,7 @@ func TestAGatingProposalIsResumedAfterARestart(t *testing.T) {
 	f2.h.startup()
 	f2.h.tick()
 	want := []string{"worktree discard " + f2.wt, "worktree add " + f2.wt + " learn/" + gateRunID + " "}
-	if got := f2.git.called("worktree"); !slices.Equal(got, want) || f2.proposal().State != store.LearnPassed {
+	if got := f2.candidateGit("worktree"); !slices.Equal(got, want) || f2.proposal().State != store.LearnPassed {
 		t.Fatalf("worktree commands = %q, want %q; proposal %s", got, want, f2.proposal().State)
 	}
 }
@@ -693,7 +772,7 @@ func TestAFailedProposalLosesItsWorktree(t *testing.T) {
 		t.Fatalf("proposal = %s %q, want failed: no target improved", p.State, p.Reason)
 	}
 	want := []string{"worktree discard " + f.wt, "branch delete learn/" + gateRunID}
-	if got := slices.Concat(f.git.called("worktree"), f.git.called("branch")); !slices.Equal(got, want) {
+	if got := f.candidateGit("worktree", "branch"); !slices.Equal(got, want) {
 		t.Fatalf("git = %q, want %q", got, want)
 	}
 	if _, err := os.Stat(f.wt); !errors.Is(err, os.ErrNotExist) {

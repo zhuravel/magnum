@@ -122,8 +122,8 @@ func (e *Engine) restartManual() bool {
 // maybeLearnLand lands the oldest passed proposal (every tick) unless the
 // day's landings reached [learn] land_per_day, the daemon has not
 // restarted on the last landed version yet (each version runs before the
-// next lands), a gate or an edit runs (the gate replays the checkout's
-// prompts), the daemon stops or drains, or a landing that failed waits
+// next lands), a gate or an edit runs (they add and remove worktrees of the
+// checkout), the daemon stops or drains, or a landing that failed waits
 // out landRetryAfter. A dry run and `magnum daemon --once` land nothing.
 func (e *Engine) maybeLearnLand(ctx context.Context) {
 	if e.d.DryRun || e.once || e.landUnavailable() != "" || e.gateBusy() || e.editBusy() || e.now().Before(e.landRetry) ||
@@ -351,7 +351,7 @@ func (e *Engine) learnRestartDue(ctx context.Context) (LearnRestartMark, bool) {
 // requestLearnLand serves the y of `magnum learn --review`: the held
 // proposal lands at once (landProposal), whatever the day's count says, or
 // stays held and the answer says why. It is refused while a gate or an
-// edit runs (the gate replays the checkout's prompts).
+// edit runs (they add and remove worktrees of the checkout).
 func (e *Engine) requestLearnLand(ctx context.Context, p LearnDecisionPayload) (string, error) {
 	prop, err := e.st.LearnProposalByID(ctx, p.ID)
 	if errors.Is(err, store.ErrNotFound) {
@@ -371,7 +371,7 @@ func (e *Engine) requestLearnLand(ctx context.Context, p LearnDecisionPayload) (
 	case e.landUnavailable() != "":
 		return "", fmt.Errorf("proposal %d cannot land: %s", p.ID, e.landUnavailable())
 	case e.gateBusy():
-		return "", fmt.Errorf("proposal %d cannot land while a skill gate runs (it replays the checkout's prompts); ask again once it ends", p.ID)
+		return "", fmt.Errorf("proposal %d cannot land while a skill gate runs; ask again once it ends", p.ID)
 	case e.editBusy():
 		return "", fmt.Errorf("proposal %d cannot land while a skill edit runs; ask again once it ends", p.ID)
 	}

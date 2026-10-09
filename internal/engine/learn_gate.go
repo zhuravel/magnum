@@ -7,10 +7,12 @@ package engine
 // cases of the inputs it noted (its targets) and the newest other cases of
 // both corpora, up to [learn] gate_cases (learn.SelectCases), the judge
 // alone when only the judge skill and the judge prompts changed
-// (learn.Mode). Each case's baseline is the newest stored replay with
-// master's prompts and skill (eval.Baselines), else a replay of the
-// checkout first; the candidate replays with the proposal's worktree, and a
-// case it lost is replayed once more. learn.Judge decides: passed (it lands,
+// (learn.Mode). Each case's baseline is the newest stored replay with the
+// prompts and skill of the proposal's base commit (eval.Baselines), else a
+// replay of a detached worktree at that commit first (gateBaseName, removed
+// after the gate: never the checkout, whose branch and uncommitted edits
+// are the operator's); the candidate replays with the proposal's worktree,
+// and a case it lost is replayed once more. learn.Judge decides: passed (it lands,
 // learn_land.go), held (the operator decides) or failed (its worktree and
 // branch go, its inputs stay new); a revert (learn_revert.go) is held
 // whatever it decides. Every replay is stored as `magnum eval
@@ -50,11 +52,17 @@ const (
 	gateRetryAfter = 30 * time.Minute
 	// gateReasonRunes clips the rule stored as a gated proposal's reason.
 	gateReasonRunes = 2000
+	// gateBaseName is the gate's detached worktree of the proposal's base
+	// commit under Layout.LearnWorktrees, whose prompts and skill the
+	// baseline replays (one gate runs at a time); no editor run is named
+	// so, so the orphan cleanup leaves it to the gate.
+	gateBaseName = "gate-base"
 )
 
 // EvalGateOptions are one replay of the gate (evalrun.Options' part the
 // gate sets): the directory whose prompts and judge skill it reads (the
-// checkout for a baseline, the proposal's worktree for the candidate),
+// gate's worktree of the base for a baseline, the proposal's worktree for
+// the candidate),
 // whether the judge alone reviews (on the reviewers' reports of the
 // case's newest full replay whose reviewers read what this one's would),
 // and the run it belongs to, its directory under Layout.Eval and its
@@ -251,11 +259,11 @@ type gateRun struct {
 }
 
 // runGate is the gate of proposal p: its worktree (reused, else added
-// again from its branch), the cases, a baseline and a candidate replay of
-// each (a second one of a lost case), the verdict and the proposal's next
-// state. It returns an error when the gate stopped short and p stays
-// gating: a replay at the soft cap or a usage limit, a shutdown, an
-// unreadable registry, inputs or runs.
+// again from its branch), a worktree of its base, the cases, a baseline
+// and a candidate replay of each (a second one of a lost case), the
+// verdict and the proposal's next state. It returns an error when the gate
+// stopped short and p stays gating: a replay at the soft cap or a usage
+// limit, a shutdown, an unreadable registry, inputs or runs.
 func (e *Engine) runGate(ctx context.Context, p store.LearnProposal) error {
 	octx := context.WithoutCancel(ctx)
 	waits := func(why string) error {
@@ -272,6 +280,11 @@ func (e *Engine) runGate(ctx context.Context, p store.LearnProposal) error {
 	} else if err != nil {
 		return waits("the worktree: " + oneLine(err.Error(), retroWhyRunes))
 	}
+	baseDir, err := e.addGateBase(ctx, p.BaseSHA)
+	defer e.dropGateBase(octx) // whatever ends the gate
+	if err != nil {
+		return waits("the worktree of its base: " + oneLine(err.Error(), retroWhyRunes))
+	}
 	mode := learn.Mode(p.Files)
 	res := GateResult{Mode: mode, Cases: []GateCase{}}
 	targets, err := e.gateTargets(ctx, p)
@@ -283,9 +296,9 @@ func (e *Engine) runGate(ctx context.Context, p store.LearnProposal) error {
 		res.CorpusError, corpus = oneLine(err.Error(), retroWhyRunes), nil
 	}
 	cases := learn.SelectCases(corpus, targets, e.gateWatched, e.gateFlagged(ctx), e.cfg.Learn.GateCases)
-	baseIn, baseRev, err := e.d.EvalInputs(e.d.Checkout)
+	baseIn, baseRev, err := e.d.EvalInputs(baseDir)
 	if err != nil {
-		return waits("master's inputs: " + oneLine(err.Error(), retroWhyRunes))
+		return waits("the base's inputs: " + oneLine(err.Error(), retroWhyRunes))
 	}
 	candIn, candRev, err := e.d.EvalInputs(p.Scratch)
 	if err != nil {
@@ -299,12 +312,12 @@ func (e *Engine) runGate(ctx context.Context, p store.LearnProposal) error {
 	e.event(ctx, "info", learnSubject, "learn.gate_start", fmt.Sprintf("the gate of skill proposal %d started: %s, %s (%s)", p.ID,
 		textx.Count(len(cases), "case", "cases"), strings.Join(targets, ", "), mode), map[string]any{"proposal": p.ID, "cases": len(cases), "mode": mode})
 
-	commit, dirty := e.gateCommit(ctx)
 	var base, cand, retry *gateRun
 	mkRun := func(slot **gateRun, label, dir string, judgeOnly bool, in, rev string) (*gateRun, error) {
 		if *slot != nil {
 			return *slot, nil
 		}
+		commit, dirty := e.treeState(ctx, dir)
 		id, rdir, err := eval.NewRunDir(e.d.Layout.Eval(), e.now())
 		if err != nil {
 			return nil, err
@@ -369,7 +382,7 @@ func (e *Engine) runGate(ctx context.Context, p store.LearnProposal) error {
 		if bs := eval.Baselines(runs, baseIn, gc.Case); len(bs) > 0 {
 			row.Before, row.BaselineRun = trimScore(bs[0].Case.Score), bs[0].Run
 		} else {
-			score, run, skip, stop := replay(&base, "baseline", e.d.Checkout, false, baseIn, baseRev, gc.Case)
+			score, run, skip, stop := replay(&base, "baseline", baseDir, false, baseIn, baseRev, gc.Case)
 			if stop != "" {
 				return waits(stop)
 			}
@@ -540,16 +553,59 @@ func (e *Engine) gateFlagged(ctx context.Context) func(pr string) bool {
 	}
 }
 
-// gateCommit is what the gate's eval runs record of magnum's code, as
-// `magnum eval run` does: the checkout's short HEAD and whether it has
-// uncommitted changes.
-func (e *Engine) gateCommit(ctx context.Context) (string, bool) {
-	sha, err := e.d.LearnGit.RevParse(ctx, e.d.Checkout, "HEAD")
+// treeState is what a gate's eval run records of the tree whose prompts
+// and skill it replays (the worktree of the base, the proposal's), as
+// `magnum eval run` records its checkout: the short HEAD and whether it has
+// uncommitted changes (eval.Baselines reuses no dirty run).
+func (e *Engine) treeState(ctx context.Context, dir string) (string, bool) {
+	sha, err := e.d.LearnGit.RevParse(ctx, dir, "HEAD")
 	if err != nil {
 		return "", false
 	}
-	st, err := e.d.LearnGit.StatusPaths(ctx, e.d.Checkout)
+	st, err := e.d.LearnGit.StatusPaths(ctx, dir)
 	return learnShort(sha), err == nil && len(st) > 0
+}
+
+// gateBaseDir is the gate's worktree of the base (gateBaseName).
+func (e *Engine) gateBaseDir() string {
+	return filepath.Join(e.d.Layout.LearnWorktrees(), gateBaseName)
+}
+
+// addGateBase adds the gate's worktree of the base at sha, detached, in
+// place of whatever a gate a crash cut short left there, and returns it.
+func (e *Engine) addGateBase(ctx context.Context, sha string) (string, error) {
+	git, dir := e.d.LearnGit, e.gateBaseDir()
+	if err := git.WorktreeDiscard(ctx, e.d.Checkout, dir); err != nil {
+		// A directory git does not know as a worktree: it is the gate's own.
+		if rerr := os.RemoveAll(dir); rerr != nil {
+			return "", errors.Join(err, rerr)
+		}
+		if err := git.WorktreeDiscard(ctx, e.d.Checkout, dir); err != nil {
+			return "", err
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(dir), 0o700); err != nil {
+		return "", err
+	}
+	if err := git.WorktreeAdd(ctx, e.d.Checkout, dir, sha, true, ""); err != nil {
+		return "", err
+	}
+	head, err := git.RevParse(ctx, dir, "HEAD")
+	if err != nil {
+		return "", err
+	}
+	if head != sha {
+		return "", fmt.Errorf("it is at %s, not at %s", learnShort(head), learnShort(sha))
+	}
+	return dir, nil
+}
+
+// dropGateBase removes the gate's worktree of the base; a failure is
+// logged (the next gate replaces it).
+func (e *Engine) dropGateBase(ctx context.Context) {
+	if err := e.d.LearnGit.WorktreeDiscard(ctx, e.d.Checkout, e.gateBaseDir()); err != nil {
+		e.log.Warn("skill gate: remove the worktree of the base", "err", err)
+	}
 }
 
 // ownWorktree reports whether wt is a worktree directory of the loop's

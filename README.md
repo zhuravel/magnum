@@ -1704,9 +1704,10 @@ are the learned cases of the inputs it noted (its targets: `miss-<n>`, `decline-
 cases of your corpus and the learned one, up to `gate_cases` (6); a case whose pull request is in no watch
 or Codex-flagged is never replayed. Only the judge replays when the change touches `SKILL.md` and
 `prompts/judge-*.md` alone (on the reviewers' reports of a full replay whose reviewers read the same
-prompts), every role otherwise. A case's baseline is the newest stored replay with `master`'s prompts and
-skill, else a replay of the checkout first; the candidate replays with the worktree, and a case it lost is
-replayed once more. It passes when a target improved (the missed finding found, the declined one no longer
+prompts), every role otherwise. A case's baseline is the newest stored replay with the prompts and skill of
+the commit the proposal started from, else a replay of that commit first, from a worktree of its own that
+goes after the gate (never the checkout: the branch you have checked out and your uncommitted edits are no
+baseline); the candidate replays with the worktree, and a case it lost is replayed once more. It passes when a target improved (the missed finding found, the declined one no longer
 reported) and nothing regressed (no defect the baseline found lost, no declined finding reported that the
 baseline did not), fails when something regressed or no target improved (its worktree and branch go, its
 inputs stay `new`), and is held for you when none of its targets could be replayed. Its replays are stored

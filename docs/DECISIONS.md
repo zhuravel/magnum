@@ -5623,3 +5623,17 @@ editing history. Code, config comments and prompts reference these by their head
   `gating` proposal is left to the gate, which always decides it. Rejected: counting the week from the
   gate's decision (no column records it, and the editor's run is the same day in practice) and expiring
   a gating proposal (its gate only waits for the budget or a pause).
+- **The gate's baseline is the proposal's base commit** (2026-10-09, review of stage 4 of the
+  self-improving review loop). The baseline read `prompts/` and `SKILL.md` from the checkout's working
+  tree (the inputs hash and the replay of the checkout), whatever branch the operator had checked out and
+  whatever he left uncommitted: a worse experiment in a judge prompt made the target look improved, and a
+  commit on `master` after the edit that finds a defect made the candidate lose it for a change it never
+  made. The gate now adds a detached worktree at the proposal's `base_sha` under the learn worktrees
+  (`gate-base`, in place of one a crash left), hashes the baseline's inputs and replays the baseline
+  there, and removes it whatever ends the gate. Each eval run of the gate records the commit and the dirty
+  state of the tree it read (the base's worktree, the proposal's), no longer the checkout's: since
+  `eval.Baselines` reuses no dirty run, any uncommitted file in the checkout kept every later gate from
+  reusing a baseline. Rejected: waiting while the checkout is not on `master` at the base or has dirty
+  prompts (the operator's own work would stall the loop) and comparing against `master`'s head (the gate
+  measures the change the editor made, on the tree it made it on; the landing checks what `master` became
+  since).

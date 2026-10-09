@@ -141,7 +141,10 @@ For a proposal in `gating`, the daemon selects the cases: the learned cases of t
 (targets) plus every other case in both corpora whose head is in a watched, non-flagged PR, capped by
 `[learn] gate_cases` (default 6, targets first, then the newest). Mode: judge-only when only
 `SKILL.md` and `prompts/judge-*.md` changed, else full. The baseline is the newest stored run with the
-same inputs hash as `master` (through `eval.Baselines`), else a baseline replay first. The candidate
+same inputs hash as the proposal's `base_sha` (through `eval.Baselines`), else a baseline replay first.
+Both read a detached worktree at `base_sha` under the learn worktrees, never the checkout (its branch and
+its uncommitted edits are the operator's), removed after the gate; each run of the gate records the
+commit of the tree it read and that tree's clean state, so a later gate reuses it. The candidate
 replay runs in-process with `--candidate` = the worktree, under the eval agent tag, one case at a time,
 refused above `codex_soft` (then the proposal waits in `gating` and is retried at the next tick after the
 window moves) and never on a flagged PR.
