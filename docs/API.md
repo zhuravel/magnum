@@ -4577,9 +4577,13 @@ const (
 	// (notes_proposals.trigger_reason).
 	CurateTriggerStale = "stale"
 
-	// Why a curation waits (CurateQueued.Why).
-	QueuedJudge = "judge" // a round of the repository is in its judge stage
-	QueuedBusy  = "busy"  // another learn job runs: a curation, the retro, a skill edit or gate
+	// QueuedJudge is why a curation waits (CurateQueued.Why) while a round
+	// of the repository is in its judge stage.
+	QueuedJudge = "judge"
+	// QueuedBusy is why a curation waits (CurateQueued.Why) while another
+	// learn job runs: a curation, the retro, a skill edit or revert, or a
+	// skill gate.
+	QueuedBusy = "busy"
 )
 const (
 	KVDaemonPausedAt   = "daemon.paused_at"
