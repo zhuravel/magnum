@@ -1,0 +1,24 @@
+# Dependabot: weekly update PRs for the Go modules and the CI workflow's actions. AGENTS.md asks for the
+# latest dependencies; each update still goes through CI and the gate (`make test`) before it lands.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      # Bubble Tea, Lip Gloss, Bubbles and their helpers move together (Charm v2: charm.land/*).
+      charm:
+        patterns:
+          - "charm.land/*"
+          - "github.com/charmbracelet/*"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ["*"]

@@ -9,3 +9,8 @@
 /config.toml
 /.claude/*
 !/.claude/skills/
+# go test -c binaries, profiles and coverage output, Finder metadata
+*.test
+*.out
+coverage.html
+.DS_Store

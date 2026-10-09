@@ -1,6 +1,8 @@
 [tools]
 go = "1.27"
 air = "latest"
+# `make lint`; CI pins the same version (.github/workflows/ci.yml), so both report the same issues.
+golangci-lint = "2.14.0"
 
 [env]
 # Real values live in the gitignored .mise.local.toml. App keys do not: an [[identity]] of kind "app"

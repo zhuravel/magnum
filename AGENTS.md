@@ -50,10 +50,16 @@ when you change a behaviour, do not rewrite old ones.
 ## Gate
 
 ```bash
-make test        # gofmt, check-private, go vet, go test (hermetic)
+make test        # gofmt, check-private, go mod verify and tidy, go vet, go test (hermetic)
 make build       # bin/magnum
-make api-doc     # regenerate docs/API.md after exported API changes
+make api-doc     # regenerate docs/API.md after exported API changes (make api-doc-check diffs it)
+make lint        # golangci-lint (.golangci.yml; mise pins 2.14.0); make lint-fix applies only the safe fixes
+make vuln        # govulncheck, after a dependency or Go update
 ```
+
+`make lint` is not in `make test` while the backlog it reports is cleared: run it before a change lands
+and fix what it reports in the lines you touched (CI fails a PR on new issues only), and never run a
+blanket `golangci-lint run --fix` (errorlint's fix breaks `internal/pipeline/restart.go`).
 
 Run `go test -count=1 -race` on the packages you touched before `make test`; go test's 10-minute
 default is enough (the whole suite took about 3 minutes under `-race` at a load of 50-70, the engine

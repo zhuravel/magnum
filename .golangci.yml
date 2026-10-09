@@ -1,0 +1,242 @@
+# golangci-lint configuration for magnum (golangci-lint v2.14, pinned in .mise.toml and the CI workflow;
+# Go 1.27). `make lint` runs it; CI reports only the issues a change adds.
+#
+# Tuned against a full run over this repository on 2026-10-09. Every linter that is off says why, and
+# every exclusion names the false positive it removes, so a new hit is worth reading.
+#
+# Adoption: 698 issues on 2026-10-09; `make lint-fix` (`golangci-lint run --fix --enable-only
+# modernize,intrange`, then `golangci-lint fmt`) clears 470 of them and the tree still builds and vets.
+# About 270 stay for hand fixes, mostly doc comments (revive exported, 57) and t.Helper() (44); until
+# they are done, `make lint` stays out of `make test` and CI lints with only-new-issues. Never run a
+# blanket --fix: errorlint's fix for internal/pipeline/restart.go shadows the refusedError type and
+# breaks the build. The complexity linters start as a ratchet (high thresholds, the current offenders
+# listed). The modernize sweep later that day (go fix, then lint-fix, then hand fixes) left 212, none of
+# them modernize or intrange; modernize's stringsbuilder and embedlit stay off (settings).
+version: "2"
+
+run:
+  timeout: 10m
+  tests: true
+  # concurrency defaults to the CPU count; lower it on a loaded machine with --concurrency.
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+linters:
+  default: none
+  enable:
+    # correctness
+    - govet            # go vet's analyzers, plus nilness and unusedwrite (see settings)
+    - staticcheck      # SA/S/QF/ST checks (see settings for the ones turned off)
+    - unused           # dead code; found evalHerdr.closedIDs
+    - errcheck         # unchecked errors; the std-error-handling preset drops fmt.Fprint*, Close, Flush, os.Remove
+    - errorlint        # errors.Is/As/AsType and %w; restart.go asserts on error causes directly
+    - nilerr           # returning nil while err != nil; 9 hits, 8 deliberate (nolint with a reason), 1 to decide
+    - nilnesserr       # returning a different, nil error after an err check
+    - ineffassign      # dead stores
+    - durationcheck    # Duration * Duration
+    - forcetypeassert  # unchecked x.(T); internal/engine/compare.go's memo is the only production user
+    - reassign         # package variables reassigned outside init (tests swap them under storetest.Serial)
+    - copyloopvar      # redundant `x := x` copies (Go 1.22+ semantics)
+    # security & resources
+    - gosec            # see the per-rule exclusions below; never nolint without a reason
+    - bodyclose        # unclosed *http.Response bodies (only the GitHub App client makes HTTP calls)
+    - sqlclosecheck    # unclosed sql.Rows/Stmt; store.collect closes them
+    - noctx            # calls without a context (database/sql, net, os/exec, net/http)
+    - fatcontext       # contexts nested in loops
+    - bidichk          # trojan-source Unicode in code (PR text is data, never code, but the code is public)
+    - asciicheck
+    # logging
+    - sloglint         # the daemon logs through log/slog; 0 hits today, keeps it that way
+    - loggercheck
+    # style that carries meaning
+    - revive           # curated rules in settings
+    - gocritic         # diagnostic and performance tags (see settings)
+    - misspell
+    - predeclared      # a parameter named max/clear/real shadows the builtin the codebase uses elsewhere
+    - unconvert
+    - usestdlibvars
+    - usetesting       # t.TempDir/t.Setenv over os.MkdirTemp/os.Setenv in tests
+    - thelper          # t.Helper() in test helpers, so failures point at the caller
+    # modernization (AGENTS.md: latest Go; slices, maps, min, max)
+    - modernize        # new(expr), errors.AsType, strings.SplitSeq, slices.Backward, WaitGroup.Go: all --fix
+    - intrange
+    - exptostd
+    # meta
+    - nolintlint       # every //nolint names its linter and says why
+    # complexity ratchet (thresholds in settings; lower them as functions are split)
+    - gocyclo
+    - nestif
+    - dupl
+
+  disable:
+    - paralleltest   # the fixtures call t.Parallel themselves (storetest.Parallel in newHarness/newEnv); 3,394 false hits
+    - tparallel      # same reason
+    - wsl_v5         # blank-line policy; 31,648 hits on a gofmt'd codebase, no defect class behind it
+    - wsl
+    - godot          # comment punctuation; not a rule here
+    - goconst        # 2,500 hits, most are SQL fragments, state names and test literals that read better inline
+    - funlen         # gocyclo + nestif cover the same risk with fewer false hits; 0 production hits at 120 lines anyway
+    - gocognit       # redundant with gocyclo
+    - cyclop         # redundant with gocyclo
+    - exhaustive     # 44 production hits, all deliberate partial switches over string enums (herdr.Status, tui modes)
+    - containedctx   # Bubble Tea models must keep the screen's context (Update has no ctx parameter); 5 deliberate fields
+    - contextcheck   # flags deliberate context.Background() in shutdown paths and terminal setup
+    - rowserrcheck   # cannot see through store.collect, which returns rows.Err(); 18/18 production hits false
+    - errchkjson     # json.Marshal of map[string]any built from plain values cannot fail
+    - perfsprint     # 29 production hits in non-hot paths (CLI and log text); taste
+    - prealloc       # 30 production hits on small loops; enable only after profiling
+    - dupword        # parameter names in prose ("at at", "to to") are deliberate in this codebase's comments
+    - errname        # renaming exitCode/migrateRefusal/ErrHold buys nothing inside internal/
+    - unparam        # useful as a one-off report (16 production hits), too many fake-interface hits in tests to gate
+    - recvcheck      # Bubble Tea models mix value receivers (Update/View) and pointer helpers by design
+    - iface
+    - lll
+    - mnd
+    - err113
+    - wrapcheck
+    - varnamelen
+    - exhaustruct
+    - gochecknoglobals
+    - gochecknoinits
+    - testpackage
+    - depguard       # no allow-list to enforce yet; AGENTS.md's dependency rule is reviewed by hand
+
+  settings:
+    errcheck:
+      check-type-assertions: false  # forcetypeassert covers production; tests assert on fixtures they built
+      check-blank: false
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment  # struct layout churn for no measured gain
+        - shadow          # 170 production hits, 158 of them `err`; noise without strict mode
+    staticcheck:
+      checks:
+        - all
+        - -ST1000   # package comments: every package has one already; the check adds nothing
+        - -ST1003   # initialisms: the codebase's names are consistent, the check fights KV/PR names
+        - -QF1001   # De Morgan rewrites: the negated forms are written deliberately for reading order
+        - -QF1008   # embedded-field selectors spelled out in tests for clarity
+    revive:
+      severity: warning
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+          arguments:
+            - allowTypesBefore: "*Engine,*testing.T"  # engine's generic helpers payload/answer take e first (no generic methods)
+        - name: context-keys-type
+        - name: dot-imports
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: errorf
+        - name: exported
+          arguments: [disableStutteringCheck]
+        - name: increment-decrement
+        - name: indent-error-flow
+        - name: range
+        - name: receiver-naming
+        - name: redefines-builtin-id
+        - name: superfluous-else
+        - name: time-naming
+        - name: unexported-return
+        - name: unreachable-code
+        - name: unused-parameter
+        - name: var-declaration
+        - name: empty-block
+    gocritic:
+      enabled-tags: [diagnostic, performance]
+      disabled-checks:
+        - hugeParam      # Bubble Tea models are passed by value on purpose
+        - rangeValCopy
+        - weakCond            # regexp FindStringSubmatch returns nil or a full slice; the nil checks are enough
+        - commentedOutCode
+        - sprintfQuotedString # "`%s`" reads better than %#q in operator-facing text
+        - sloppyReassign      # `err =` on a named result is deliberate in the deferred-cleanup writers
+        - ifElseChain         # taste
+    gosec:
+      excludes:
+        - G104  # unhandled errors: errcheck reports the same calls, with the std-error-handling preset applied
+        - G304  # file paths come from the layout, the config and the registry, never from a PR; root-confined writes use os.Root
+        - G602  # bounds-checked with min(len(a), len(b)); the analyzer does not follow min
+        - G703  # taint "path traversal" on paths built from the layout
+    gocyclo:
+      min-complexity: 50  # ratchet: lower to 40, then 30, as the functions excluded below are split
+    nestif:
+      min-complexity: 14  # ratchet, as gocyclo
+    dupl:
+      threshold: 150
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+      allow-unused: false
+    modernize:
+      disable:
+        - stringsbuilder  # short UI and SQL strings built with += read better than a strings.Builder; lint-fix would rewrite them
+        - embedlit        # keep explicit embedded type names and post-literal field assignments
+    sloglint:
+      kv-only: true
+      no-global: ""
+      context: ""
+    usetesting:
+      os-temp-dir: true
+    thelper:
+      test:
+        first: true
+        name: false   # `t` and `tb` both appear; naming is not the point
+        begin: true
+
+  exclusions:
+    generated: lax
+    presets:
+      - std-error-handling      # fmt.Fprint* to the command's writer, deferred Close on read handles, Flush, os.Remove
+      - common-false-positives  # gosec G103/G204/G301/G302/G304/G306/G307 patterns that are false in practice
+    rules:
+      # SQL built from the package's own column lists and placeholders(n), never from input.
+      - path: internal/store/
+        linters: [gosec]
+        text: "G202"
+      - path: internal/cli/daemon_rounds\.go
+        linters: [gosec]
+        text: "G202"
+      - path: internal/mysqlx/
+        linters: [gosec]
+        text: "G202"
+      # execx is the one place commands run; its callers pass argv, never a shell string.
+      - path: internal/execx/
+        linters: [gosec]
+        text: "G204"
+      # Tests: fakes implement interfaces (unused parameters), build fixtures with 0o755/0o644 and
+      # read paths they wrote, assert on values they constructed, and talk to in-memory servers.
+      - path: _test\.go
+        linters: [gosec, forcetypeassert, noctx, dupl, gocyclo, nestif, errcheck]
+      - path: _test\.go
+        linters: [revive]
+        text: "unused-parameter|redefines-builtin-id"
+      - path: _test\.go
+        linters: [bodyclose]
+        source: "RoundTrip\\(|parseGhInclude\\("
+      - path: _test\.go
+        linters: [gocritic]
+        text: "filepathJoin|stringXbytes|mapKey|unlambda"  # fixture paths and keys with spaces are the point of those tests
+      # Complexity ratchet: the functions above the thresholds on 2026-10-09. Split one, delete its line.
+      - linters: [gocyclo]
+        text: "observeOne|applySlot|\\(\\*Config\\)\\.Validate|validateRole|cardContent|actionRefusal"
+      - linters: [nestif]
+        path: internal/agents/lifecycle\.go
+        text: "isAgentSession"
+
+
+formatters:
+  enable:
+    - gofmt      # the gate already requires gofmt; gofumpt would rewrite 327 files for no defect class
+    - goimports
+  settings:
+    gofmt:
+      simplify: true
+    goimports:
+      local-prefixes: [github.com/zhuravel/magnum]
+  exclusions:
+    generated: lax

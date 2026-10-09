@@ -1,20 +1,134 @@
+# CI for magnum. Three jobs:
+#   - test:   on macOS (magnum is a macOS tool: launchd, AppleScript; its tests run where it runs), the gate
+#             `make test` under the race detector with shuffled order (GOFLAGS carries the flags into the
+#             gate, so the gate stays one definition), the build, a smoke run of the built binary, an Intel
+#             cross-compile and the landing scripts' selftest. The weekly run adds Go "stable" (Homebrew
+#             builds the formula with its own, newest Go).
+#   - stress: weekly and on demand, the scheduling-sensitive packages at GOMAXPROCS 1 and 3 (the runner has
+#             3 vCPUs; a 16-core workstation hides these failures).
+#   - static: on ubuntu (no macOS queue): modules verified and tidy, gofmt over every tracked .go file,
+#             golangci-lint (only the issues a change adds, until the backlog is cleared), govulncheck for
+#             darwin, and the docs/API.md drift check.
+# Read-only token, no persisted credentials, timeouts; a new push to a PR cancels its older run, and every
+# master commit keeps its own result.
 name: CI
 
 on:
   push:
     branches: [master]
   pull_request:
+  schedule:
+    - cron: "23 5 * * 1" # Mondays: a new Go release and vulnerabilities published since the last push
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # One group per PR (a new push replaces its run); any other event gets a group of its own.
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   test:
-    # macOS: magnum is a macOS tool (launchd, AppleScript); its tests run where it runs.
+    name: Test (Go ${{ matrix.go }})
     runs-on: macos-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ${{ fromJSON(github.event_name == 'schedule' && '["go.mod","stable"]' || '["go.mod"]') }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@v7
         with:
-          go-version-file: go.mod
-      - name: gate (gofmt, vet, tests; the private-name checks skip without local patterns and registry)
+          persist-credentials: false
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: ${{ matrix.go == 'go.mod' && 'go.mod' || '' }}
+          go-version: ${{ matrix.go != 'go.mod' && matrix.go || '' }}
+          check-latest: ${{ matrix.go != 'go.mod' }}
+          # The cache key is these files' hash: listing the workflow makes a change of test flags (-race)
+          # save a new build cache instead of rebuilding the race flavour of modernc.org/sqlite every run.
+          cache-dependency-path: |
+            go.sum
+            .github/workflows/ci.yml
+
+      - name: gate under the race detector (gofmt, modules, vet, tests; the private-name checks skip without local patterns and registry)
+        env:
+          GOFLAGS: -race -shuffle=on -timeout=20m
         run: make test
+
       - name: build
         run: make build
+
+      - name: smoke (what the Homebrew formula's test checks; a CI runner has no live daemon)
+        run: bin/magnum version | grep -E '^magnum [^ ]+$'
+
+      - name: cross-compile for Intel Macs (the formula builds on both architectures)
+        run: GOARCH=amd64 go build -o /dev/null ./cmd/magnum
+
+      - name: landing scripts selftest (throwaway repositories under $TMPDIR, fakes for go, mise and magnum)
+        run: .claude/skills/magnum-improve/scripts/selftest.sh
+
+  stress:
+    # Tests whose fakes race the round's goroutines pass on 16 cores and fail at GOMAXPROCS 1-3.
+    # Weekly and on demand only.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    name: Stress (GOMAXPROCS 1 and 3)
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: scheduling-sensitive packages, shuffled, twice
+        run: go test -count=2 -cpu 1,3 -shuffle=on -timeout=30m ./internal/pipeline ./internal/engine ./internal/agents
+
+  static:
+    name: Lint, vulnerabilities, modules, API doc
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: read # golangci-lint-action reads the PR's diff for only-new-issues
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: modules verified and tidy
+        run: |
+          go mod verify
+          go mod tidy -diff
+
+      - name: gofmt (every tracked .go file)
+        run: |
+          out=$(git ls-files -z '*.go' | xargs -0 gofmt -l)
+          if [ -n "$out" ]; then echo "gofmt needed:"; echo "$out"; exit 1; fi
+
+      - name: golangci-lint
+        # only-new-issues needs a diff, which the action gets only for a push or a PR; on the weekly and
+        # manual runs it would report the whole backlog, so they skip this step until the backlog is cleared.
+        if: github.event_name == 'push' || github.event_name == 'pull_request'
+        uses: golangci/golangci-lint-action@v9
+        env:
+          GOOS: darwin # lint the build magnum ships
+        with:
+          version: v2.14.0 # the version .mise.toml pins
+          only-new-issues: true
+
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+          GOOS=darwin "$(go env GOPATH)/bin/govulncheck" ./...
+
+      - name: docs/API.md matches the exported API
+        run: make api-doc-check

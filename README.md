@@ -1821,16 +1821,21 @@ the skill from the checkout when it starts, so a prompt edit needs the restart t
 the link; `brew install zhuravel/tap/magnum && magnum install --plugin` switches to the released build.
 
 ```bash
-make test        # gofmt, go vet, hermetic tests (fakes for git, gh, herdr, MySQL)
-make api-doc     # regenerate docs/API.md
+make test        # gofmt, go mod verify and tidy, go vet, hermetic tests (fakes for git, gh, herdr, MySQL)
+make lint        # golangci-lint with .golangci.yml (mise pins 2.14.0); make lint-fix applies only the safe fixes
+make vuln        # govulncheck: known vulnerabilities the code reaches
+make api-doc     # regenerate docs/API.md; make api-doc-check fails when it differs from the exported API
 mise run dev     # air: rebuild and restart the foreground daemon on save (`magnum install` hands it back)
 magnum daemon --once --dry-run   # one tick, every decision printed, no side effects
 ```
 
 Releasing: `make release VERSION=v0.2.0` on a pushed, clean master runs the gate, tags, publishes the
 GitHub release and points the tap's formula ([packaging/homebrew/magnum.rb](packaging/homebrew/magnum.rb),
-pushed to github.com/zhuravel/homebrew-tap) at the new tag. CI (`.github/workflows/ci.yml`) runs the gate on
-macOS for every push to master and every pull request.
+pushed to github.com/zhuravel/homebrew-tap) at the new tag. CI (`.github/workflows/ci.yml`) runs the gate under
+the race detector on macOS for every push to master and every pull request, and on ubuntu checks the modules,
+gofmt, golangci-lint (only the issues a change adds), govulncheck and docs/API.md; a weekly run adds Go stable
+and reruns the pipeline, engine and agents tests at GOMAXPROCS 1 and 3, and Dependabot opens weekly update PRs
+for the modules and the actions.
 
 To measure a change to the prompts, the skill or a model before the daemon picks it up, keep a corpus
 of PRs whose defects you know in `~/.config/magnum/eval.toml` (a checkout's gitignored `eval.local.toml` still

@@ -4633,3 +4633,28 @@ editing history. Code, config comments and prompts reference these by their head
   bound to a pane outside the replay's workspace fails the case before the first prompt, naming the pane. Kept:
   two runs of one PR at the same time are not supported (they share the label and the worktree). Rejected: a
   fresh worktree path per run (Codex and Claude add a trusted directory per path to their config).
+- **A lint and CI gate: golangci-lint, govulncheck, module and API-doc checks, and CI's tests under the
+  race detector** (2026-10-09, after an audit found that the gate checked gofmt only under cmd/ and
+  internal/ and that CI ran the tests without -race. Nothing checked go.sum, the tidiness of go.mod, known
+  vulnerabilities, or docs/API.md against the exported API, and a pipeline test that passes on the 16-core
+  workstation failed on the 3-vCPU runner). `.golangci.yml` targets golangci-lint v2.14.0, which
+  `.mise.toml` and the workflow both pin. It enables the correctness, security, resource, logging and
+  modernization linters, and it says why each other linter is off and which false positive each exclusion
+  removes. It reports 698 issues on this date. `make lint` runs it. `make lint-fix` applies only the
+  modernize and intrange fixes, then the formatters (698 down to 268; the tree still builds and vets).
+  `make vuln` runs govulncheck v1.8.0, and `make api-doc-check` diffs docs/API.md against what `make
+  api-doc` writes. `make test` now also runs `go mod verify` and `go mod tidy -diff`, and its gofmt check
+  covers every tracked .go file plus every new one git does not ignore (defaults.go and prompts/ were
+  outside it). In CI, the macOS job runs `make test` with GOFLAGS `-race -shuffle=on -timeout=20m`, so the
+  gate keeps one definition. It then builds, smoke-runs `magnum version`, cross-compiles for amd64 and
+  runs the landing scripts' selftest. An ubuntu job verifies the modules and gofmt, runs golangci-lint on
+  what a push or a PR adds (only-new-issues; the weekly and manual runs skip lint, because without a diff
+  the action reports the whole backlog), runs govulncheck for darwin, and checks the API doc. A weekly job
+  also runs Go stable, and reruns the pipeline, engine and agents tests at GOMAXPROCS 1 and 3. The token
+  is read-only, credentials are not persisted, and a new push to a PR cancels its older run while each
+  master commit keeps its own result. Dependabot opens weekly PRs for the modules (Charm grouped) and the
+  actions. `make lint` stays out of `make test` until the backlog is cleared. Rejected: a blanket `--fix`
+  (errorlint's fix for internal/pipeline/restart.go breaks the build); gofumpt (it would rewrite 327 files
+  for no defect class); wsl, paralleltest and goconst (thousands of hits with no defect class behind them;
+  the fixtures call t.Parallel themselves); a concurrency group per ref (a third master push would cancel
+  the queued second one). No new dependencies.
