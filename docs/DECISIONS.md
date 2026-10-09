@@ -5289,3 +5289,24 @@ editing history. Code, config comments and prompts reference these by their head
   a turn it never began), a separate judge prompt for replays (it would measure a prompt no round
   sends) and taking any full replay at the head (a master judge would be scored on the reports of a
   candidate that changed a reviewer's prompt, or of reviewers that never saw the notes it reads).
+- **The registry keeps every skill proposal, what it did with each input, and every landed version**
+  (2026-10-09, stage 3 of the self-improving review loop). The editor drafts changes to the judge skill
+  and the prompts from the general misses and the general declines, and the gate and the operator decide
+  them later, so a proposal must outlive the daemon that made it, as a notes curation does. Migration
+  0024 adds `learn_proposals` (why it ran: `evidence`, `request` or `regression`; the master commit it
+  started from, its `learn/<run>` branch and the commit on it, the files it changed, its state from
+  `editing` through `gating`, `passed` and `held` to `landed`, `rejected`, `failed`, `invalid`,
+  `stopped`, `expired` or `superseded`, the gate's result, magnum's or the operator's reason, the
+  editor's model and prompt hash, and its worktree and run directory), `learn_proposal_inputs` (per
+  input, a general miss or decline by id, `noted` with where the change covers it or `skipped` with a
+  reason) and `learn_versions` (per landed change, the commit, the skill's and the prompts' hashes, when
+  it landed and when the daemon first restarted on it). The inputs follow the decision in its
+  transaction (`store.DecideLearnProposal`, compare-and-set on explicit from-states), as a curation's
+  misses follow theirs: a landed proposal uses its noted inputs only, so a skipped one stays new for a
+  later edit; a rejected one dismisses an input that is in two rejected proposals
+  (`store.MissDismissRejections`); a gate result, an expiry or a stop moves nothing. `decided_at` is
+  stamped only for a state that ends the proposal's way; `editing`, `gating`, `passed` and `held` still
+  wait. `landed_sha` is left to the landing step. Rejected: one table for the notes' and the skill's
+  proposals (they share no column that matters: a repository, versions of notes and harness blobs
+  against a branch, a commit and a gate) and a foreign key on `input_id` (it names a row of `misses` or
+  of `declines`, by `kind`).

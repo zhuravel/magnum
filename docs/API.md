@@ -12618,6 +12618,34 @@ const (
     repository.
 
 const (
+	LearnTriggerEvidence   = "evidence"   // the daily retro stored new general misses or declines
+	LearnTriggerRequest    = "request"    // `magnum learn --propose`
+	LearnTriggerRegression = "regression" // a landed version measured worse: a revert
+)
+    Why the editor ran (learn_proposals.trigger_reason).
+
+const (
+	LearnEditing    = "editing"    // the editor works on it
+	LearnInvalid    = "invalid"    // its result failed magnum's checks after a nudge: Reason says how
+	LearnStopped    = "stopped"    // the editor stopped (a pause, a timeout, a shutdown)
+	LearnGating     = "gating"     // committed on its branch, waiting for the gate
+	LearnPassed     = "passed"     // the gate passed it: it lands
+	LearnHeld       = "held"       // the gate could not decide: the operator does
+	LearnFailed     = "failed"     // the gate failed it
+	LearnLanded     = "landed"     // fast-forwarded onto master
+	LearnRejected   = "rejected"   // the operator said no: Reason says why
+	LearnExpired    = "expired"    // nobody decided within a week
+	LearnSuperseded = "superseded" // a newer proposal replaced it
+)
+    Proposal states (learn_proposals.state).
+
+const (
+	LearnInputMiss    = "miss"    // misses.id
+	LearnInputDecline = "decline" // declines.id
+)
+    The kinds of a proposal's input (learn_proposal_inputs.kind).
+
+const (
 	RepoModePool  = "pool"
 	RepoModePerPR = "per_pr"
 )
@@ -13403,6 +13431,71 @@ type LatestReview struct {
     LatestReview is one entry of prs.latest_reviews_json: GitHub's latest review
     of one reviewer.
 
+type LearnInput struct {
+	Kind    string `json:"kind"`             // LearnInputMiss | LearnInputDecline
+	InputID int64  `json:"input_id"`         // misses.id or declines.id
+	Outcome string `json:"outcome"`          // MissNoted | MissSkipped
+	Where   string `json:"where,omitempty"`  // noted: the file and section that cover it now
+	Reason  string `json:"reason,omitempty"` // skipped: why; noted: optional
+	// State is the input's state now (LearnProposalInputs fills it; ""
+	// when its row is gone).
+	State string `json:"state,omitempty"`
+}
+    LearnInput is what a proposal did with one input it was given
+    (learn_proposal_inputs).
+
+type LearnProposal struct {
+	ID           int64           `json:"id"`
+	Trigger      string          `json:"trigger"`                 // LearnTrigger*
+	BaseSHA      string          `json:"base_sha"`                // master when the editor started
+	Branch       string          `json:"branch"`                  // learn/<run>
+	CandidateSHA string          `json:"candidate_sha,omitempty"` // the commit on Branch
+	Files        []string        `json:"files"`                   // the files the commit changes
+	State        string          `json:"state"`                   // Learn*
+	Gate         json.RawMessage `json:"gate,omitempty"`          // the gate's result
+	Reason       string          `json:"reason,omitempty"`        // invalid, stopped: magnum's; rejected: the operator's
+	Model        string          `json:"model,omitempty"`         // the editor's
+	PromptSHA256 string          `json:"prompt_sha256,omitempty"`
+	Scratch      string          `json:"scratch,omitempty"` // the worktree
+	RunDir       string          `json:"run_dir,omitempty"` // inputs.json, pins.json, the changes.json copy
+	CreatedAt    time.Time       `json:"created_at"`
+	DecidedAt    *time.Time      `json:"decided_at,omitempty"`
+	LandedSHA    string          `json:"landed_sha,omitempty"`
+	LandedAt     *time.Time      `json:"landed_at,omitempty"`
+}
+    LearnProposal is a change the skill editor drafted (learn_proposals).
+
+type LearnProposalInput struct {
+	Trigger      string
+	BaseSHA      string
+	Branch       string
+	CandidateSHA string
+	Files        []string
+	State        string
+	Gate         []byte // nil = none
+	Reason       string
+	Model        string
+	PromptSHA    string
+	Scratch      string
+	RunDir       string
+	At           time.Time // zero = now
+	Inputs       []LearnInput
+}
+    LearnProposalInput is a proposal to store (CreateLearnProposal).
+
+type LearnVersion struct {
+	ID          int64      `json:"id"`
+	ProposalID  int64      `json:"proposal_id,omitempty"` // 0 = none
+	LandedSHA   string     `json:"landed_sha"`
+	SkillSHA    string     `json:"skill_sha"`
+	PromptsSHA  string     `json:"prompts_sha"`
+	LandedAt    time.Time  `json:"landed_at"`
+	RestartedAt *time.Time `json:"restarted_at,omitempty"`
+}
+    LearnVersion is a landed change of the skill and the prompts
+    (learn_versions): its measurement window starts at RestartedAt and ends at
+    the next version's.
+
 type Miss struct {
 	ID          int64     `json:"id"`
 	PRID        int64     `json:"pr_id"`
@@ -14184,11 +14277,25 @@ func (s *Store) CountAutoApprovedSince(ctx context.Context, since time.Time) (in
 func (s *Store) CountDeclines(ctx context.Context, f DeclineFilter) (int, error)
     CountDeclines counts the declines f selects.
 
+func (s *Store) CountLearnProposals(ctx context.Context, state string) (int, error)
+    CountLearnProposals counts the proposals in state.
+
 func (s *Store) CountMisses(ctx context.Context, f MissFilter) (int, error)
     CountMisses counts the misses f selects.
 
 func (s *Store) CountNotesProposals(ctx context.Context, state string) (int, error)
     CountNotesProposals counts the proposals in state.
+
+func (s *Store) CreateLearnProposal(ctx context.Context, in LearnProposalInput) (LearnProposal, error)
+    CreateLearnProposal stores a proposal and what it did with every input it
+    was given, in one transaction. A proposal in a state that is a decision
+    (anything but editing, gating, passed or held) is decided at once. Trigger,
+    BaseSHA, Branch and State are required; an input is in it once.
+
+func (s *Store) CreateLearnVersion(ctx context.Context, v LearnVersion) (LearnVersion, error)
+    CreateLearnVersion records a landed change (a zero LandedAt is now;
+    RestartedAt is MarkLearnRestarted's). LandedSHA, SkillSHA and PromptsSHA are
+    required.
 
 func (s *Store) CreateNotesProposal(ctx context.Context, in NotesProposalInput) (NotesProposal, error)
     CreateNotesProposal stores a proposal (and a curation's proposed state
@@ -14213,6 +14320,14 @@ func (s *Store) CreateSlot(ctx context.Context, sl Slot) (Slot, error)
 func (s *Store) DB() *sql.DB
     DB exposes the underlying handle for ad hoc read-only queries (status views,
     tests). Writes should go through the typed methods.
+
+func (s *Store) DecideLearnProposal(ctx context.Context, id int64, from []string, to, reason string, at time.Time, gate []byte) (LearnProposal, error)
+    DecideLearnProposal moves proposal id from one of from to state to,
+    compare-and-set (ErrConflict when it is in another state): reason replaces
+    the stored one when not empty, gate the gate's result when not nil,
+    and a state that is a decision stamps decided_at with at (zero = now).
+    The inputs follow it in the same transaction (decideLearnInputs). Landing
+    sets nothing else: MarkLearnLanded records the commit.
 
 func (s *Store) DecideNotesProposal(ctx context.Context, id int64, from []string, to, reason string, at time.Time, applied *NotesVersionInput) (NotesProposal, error)
     DecideNotesProposal moves proposal id from one of from to state to,
@@ -14307,6 +14422,25 @@ func (s *Store) LatestRoundRuns(ctx context.Context, prIDs ...int64) (map[int64]
     first. prIDs limits the PRs; empty means every PR with a run. A PR without
     runs has no entry.
 
+func (s *Store) LearnInputRejections(ctx context.Context, kind string, id int64) ([]string, error)
+    LearnInputRejections returns the operator's reasons of the rejected
+    proposals the input (kind, id) was in, oldest first; an empty reason is left
+    out.
+
+func (s *Store) LearnProposalByID(ctx context.Context, id int64) (LearnProposal, error)
+    LearnProposalByID reads proposal id (ErrNotFound when there is none).
+
+func (s *Store) LearnProposalInputs(ctx context.Context, id int64) ([]LearnInput, error)
+    LearnProposalInputs lists what proposal id did with its inputs, by kind and
+    id, each with the input's state now.
+
+func (s *Store) LearnProposals(ctx context.Context, states []string) ([]LearnProposal, error)
+    LearnProposals lists the proposals in states (empty = every state), newest
+    first.
+
+func (s *Store) LearnVersions(ctx context.Context) ([]LearnVersion, error)
+    LearnVersions lists the landed versions, newest first.
+
 func (s *Store) ListPRs(ctx context.Context, f PRFilter) ([]PR, error)
     ListPRs returns PRs matching f ordered by repo and number.
 
@@ -14333,6 +14467,11 @@ func (s *Store) LiveSessionByPRRole(ctx context.Context, prID int64, role string
 
 func (s *Store) LiveSessions(ctx context.Context) ([]Session, error)
     LiveSessions returns every starting/live session, oldest first.
+
+func (s *Store) MarkLearnRestarted(ctx context.Context, id int64, at time.Time) error
+    MarkLearnRestarted records the first restart of the daemon on version id at
+    at, which starts its measurement window; a later restart changes nothing
+    (ErrNotFound when there is no such version).
 
 func (s *Store) MarkSlotDatabaseDropped(ctx context.Context, dbName, by string) error
     MarkSlotDatabaseDropped records that dbName was dropped (by = who: a cleanup
