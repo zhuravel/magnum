@@ -1684,14 +1684,16 @@ writes `changes.json` in the worktree: every input noted (where the change cover
 the `decision`, a design-log entry whose first sentence is the change. Magnum checks it: every input
 accounted for once, no other file changed, the skill within its cap (shortening, never dropping a rule)
 and keeping every pinned sentence, no pull request reference, branch, secret or home directory path in
-what it adds, no login, link or repository in the decision. Then the candidate's prompts must render, and
-the format gate must pass in the worktree: the golden files regenerated from the prompts, `go test
-./internal/agents ./internal/pipeline ./internal/config`, and `make check-private` with the checkout's
-`mise` environment (its `.mise.local.toml` holds the private patterns, and the login check reads your
-registry). Whatever fails gets one nudge with the problems. The agent edits the existing files in place
-(none created or deleted), keeps every `{{...}}` action of a prompt, adds no login, repository or link, and
+what it adds, no login, link or repository in the decision. Then the candidate's prompts must render, the
+`decision` is appended to the worktree's `docs/DECISIONS.md` (put back as it was before each check, so a
+nudge does not add it twice), and the format gate must pass in the worktree: the golden files regenerated
+from the prompts, `go test ./internal/agents ./internal/pipeline ./internal/config`, and `make
+check-private` with the checkout's `mise` environment (its `.mise.local.toml` holds the private patterns,
+and the login check reads your registry), which so checks the entry and the commit's headline too.
+Whatever fails gets one nudge with the problems. The agent edits the existing files in place (none
+created or deleted), keeps every `{{...}}` action of a prompt, adds no login, repository or link, and
 commits nothing: a worktree whose HEAD moved is refused. The agent is closed when its turns end, and a
-worktree that changed after its last check is not committed. A valid edit gets its `decision` appended to the worktree's `docs/DECISIONS.md` and is
+worktree that changed after its last check (the design log included) is not committed. A valid edit is
 committed on its branch (unsigned, only the files it changed, the regenerated goldens and the log; the
 message names the inputs by id and the skill's bytes, never the agent's reasons), and the proposal waits
 in the registry for the gate (`gating`). An edit still invalid after the nudge is kept as `invalid` with its

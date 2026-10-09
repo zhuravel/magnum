@@ -125,7 +125,10 @@ reason. do not weaken a rule a landed version added for a measured gain. keep se
 Magnum checks the result (`learn.Validate`): every input accounted for once. only allowed files changed
 (`git status` of the worktree). the skill size. no pinned sentence lost. `notes.Validate`'s leak rules
 (PR references, branches, secrets, home paths) on the diff. `learn.ScrubLesson` rules on the DECISIONS
-text. the prompts render (`engine.CheckPrompts` on a config pointed at the worktree). Then the format gate
+text. the prompts render (`engine.CheckPrompts` on a config pointed at the worktree). Then magnum appends
+the DECISIONS entry to the worktree's `docs/DECISIONS.md` (put back to the base before each check, so a
+nudge does not append twice, and part of the late-write fingerprint), so the format gate's
+`make check-private` sees the entry, whose first sentence is also the commit subject. Then the format gate
 runs in the worktree: `go test ./internal/agents ./internal/pipeline -update` is not used. instead
 `go test ./internal/agents -run 'TestRenderGolden' -update` regenerates goldens, then
 `go test ./internal/agents ./internal/pipeline ./internal/config` must pass, and

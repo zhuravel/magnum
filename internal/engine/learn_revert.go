@@ -28,7 +28,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/learn"
 	"github.com/zhuravel/magnum/internal/notes"
@@ -172,6 +171,13 @@ func (e *Engine) runRevertAt(ctx context.Context, v store.LearnVersion, trigger,
 	if err := git.RestoreFrom(ctx, run.Worktree, prev, files...); err != nil {
 		return stop("restore the files: " + oneLine(err.Error(), retroWhyRunes))
 	}
+	decision := fmt.Sprintf("Reverts skill version %d: %s. It restores %s as they were before the version landed (commit %s, the version's %s); "+
+		"the gate replays it, and the operator decides.", v.ID, why, strings.Join(files, ", "), learnShort(prev), learnShort(v.LandedSHA))
+	// The entry goes in before the checks, so the format gate's `make
+	// check-private` sees the reason it carries.
+	if err := appendDesignLog(run.Worktree, learn.RevertEntry(decision, start.Local().Format(time.DateOnly))); err != nil {
+		return stop("the design log: " + oneLine(err.Error(), retroWhyRunes))
+	}
 	if problems := e.revertCheck(ctx, run); len(problems) > 0 {
 		if ctx.Err() != nil {
 			return stop("the daemon is stopping")
@@ -185,9 +191,7 @@ func (e *Engine) runRevertAt(ctx context.Context, v store.LearnVersion, trigger,
 			textx.Count(len(problems), "problem", "problems")))
 		return p, nil
 	}
-	decision := fmt.Sprintf("Reverts skill version %d: %s. It restores %s as they were before the version landed (commit %s, the version's %s); "+
-		"the gate replays it, and the operator decides.", v.ID, why, strings.Join(files, ", "), learnShort(prev), learnShort(v.LandedSHA))
-	sha, committed, err := e.commitRevert(octx, run, base, v, prev, decision, start)
+	sha, committed, err := e.commitRevert(octx, run, base, v, prev, decision)
 	if err != nil {
 		return stop("commit the revert: " + oneLine(err.Error(), retroWhyRunes))
 	}
@@ -242,33 +246,15 @@ func (e *Engine) revertCheck(ctx context.Context, run EditRun) []string {
 	if err != nil {
 		return []string{"the restored prompts do not render: " + oneLine(err.Error(), 600)}
 	}
-	for _, args := range formatGate {
-		if out, err := e.d.GoTest(ctx, wt, args...); err != nil {
-			return []string{fmt.Sprintf("the format gate's `%s` failed (%s):\n%s", strings.Join(args, " "), oneLine(err.Error(), retroWhyRunes),
-				lastLines(execx.Redact(out), editGateLines))}
-		}
-	}
-	return nil
+	return e.formatGateProblems(ctx, wt)
 }
 
-// commitRevert appends the revert's entry to the worktree's design log and
-// commits the restored files, the regenerated goldens and the log on the
+// commitRevert commits the restored files, the regenerated goldens and the
+// design log with the revert's entry (appended before the checks) on the
 // branch; the commit must sit on base and change exactly those files. It
 // returns the commit and its files.
-func (e *Engine) commitRevert(ctx context.Context, run EditRun, base string, v store.LearnVersion, prev, decision string, start time.Time) (string, []string, error) {
+func (e *Engine) commitRevert(ctx context.Context, run EditRun, base string, v store.LearnVersion, prev, decision string) (string, []string, error) {
 	wt := run.Worktree
-	logPath := filepath.Join(wt, filepath.FromSlash(learn.DecisionsFile))
-	doc, err := fsx.ReadRegular(logPath, 64<<20)
-	if err != nil {
-		return "", nil, fmt.Errorf("%s: %w", learn.DecisionsFile, err)
-	}
-	fi, err := os.Stat(logPath)
-	if err != nil {
-		return "", nil, err
-	}
-	if err := fsx.WriteFileAtomic(logPath, learn.AppendDecision(doc, learn.RevertEntry(decision, start.Local().Format("2006-01-02"))), fi.Mode().Perm()); err != nil {
-		return "", nil, err
-	}
 	changed, goldens, err := e.editChanged(ctx, wt)
 	if err != nil {
 		return "", nil, err

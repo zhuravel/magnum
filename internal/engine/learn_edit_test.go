@@ -141,6 +141,23 @@ func (f *editFixture) changes(wt string, files ...learn.FileChange) {
 	writeFile(f.h.t, wt, learn.ChangesFile, string(b))
 }
 
+// decide rewrites the decision of the worktree's changes.json.
+func (f *editFixture) decide(wt, decision string) {
+	b, err := os.ReadFile(filepath.Join(wt, learn.ChangesFile))
+	if err != nil {
+		f.h.t.Fatal(err)
+	}
+	var ch learn.Changes
+	if err := json.Unmarshal(b, &ch); err != nil {
+		f.h.t.Fatal(err)
+	}
+	ch.Decision = decision
+	if b, err = json.Marshal(ch); err != nil {
+		f.h.t.Fatal(err)
+	}
+	writeFile(f.h.t, wt, learn.ChangesFile, string(b))
+}
+
 // goodTurn adds a rule to the skill and accounts for every input.
 func goodTurn(f *editFixture, wt string) {
 	writeFile(f.h.t, wt, learn.SkillFile, editSkillText+editAddedRule)
@@ -213,12 +230,15 @@ func (e *fakeEditor) Close(context.Context) error {
 }
 
 // fakeGoTest is the format gate's subprocess: it records each call, as
-// "<dir>: <args>", regenerates a golden file on -update, and fails the
-// calls whose args hold a key of fail with its output.
+// "<dir>: <args>", regenerates a golden file on -update, fails the calls
+// whose args hold a key of fail with its output, and fails `make
+// check-private` when a file of the worktree holds private, as the real
+// guard greps the tracked files.
 type fakeGoTest struct {
-	mu    sync.Mutex
-	calls []string
-	fail  map[string]string
+	mu      sync.Mutex
+	calls   []string
+	fail    map[string]string
+	private string
 }
 
 func (g *fakeGoTest) run(_ context.Context, dir string, args ...string) (string, error) {
@@ -234,6 +254,30 @@ func (g *fakeGoTest) run(_ context.Context, dir string, args ...string) (string,
 	for k, out := range g.fail {
 		if strings.Contains(call, k) {
 			return out, errors.New("exit status 1")
+		}
+	}
+	if g.private != "" && call == "make check-private" {
+		var hits []string
+		err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+			switch {
+			case err != nil:
+				return err
+			case d.IsDir() && d.Name() == ".git":
+				return filepath.SkipDir
+			case d.IsDir() || d.Name() == ".git" || path == filepath.Join(dir, learn.ChangesFile): // not tracked
+				return nil
+			}
+			if b, err := os.ReadFile(path); err == nil && strings.Contains(string(b), g.private) {
+				rel, _ := filepath.Rel(dir, path)
+				hits = append(hits, filepath.ToSlash(rel))
+			}
+			return nil
+		})
+		if err != nil {
+			return "", err
+		}
+		if len(hits) > 0 {
+			return "tracked files mention a private name:\n" + strings.Join(hits, "\n") + "\n", errors.New("exit status 1")
 		}
 	}
 	return "ok\n", nil
@@ -487,6 +531,20 @@ func TestALateWriteAfterTheLastCheckIsNotCommitted(t *testing.T) {
 	if f.ed.closed != 1 {
 		t.Fatalf("editor closed %d times", f.ed.closed)
 	}
+
+	// The design log is in the fingerprint: magnum wrote the entry there
+	// before the gate, and a write after the check is not committed.
+	f2 := newEditFixture(t, goodTurn)
+	f2.ed.late = func(f *editFixture, wt string) {
+		b, err := os.ReadFile(filepath.Join(wt, learn.DecisionsFile))
+		if err != nil {
+			f.h.t.Error(err)
+		}
+		writeFile(f.h.t, wt, learn.DecisionsFile, string(b)+"- **A rule nobody checked** (2026-10-05).\n")
+	}
+	if p := f2.edit(); p.State != store.LearnInvalid || !strings.Contains(p.Reason, "changed after its last check") {
+		t.Fatalf("a late write to the design log: %+v", p)
+	}
 }
 
 func TestAnEditThatTouchesCodeIsInvalid(t *testing.T) {
@@ -536,6 +594,40 @@ func TestTheFormatGateRunsGoldensThenTheTestsThenCheckPrivate(t *testing.T) {
 	}
 	if calls := f2.gt.all(); len(calls) != 6 {
 		t.Fatalf("the gate ran %d commands over two turns, want 6: %q", len(calls), calls)
+	}
+}
+
+// The design log's entry is in the tree the format gate checks: magnum
+// appends it before the gate runs, so `make check-private` (whose patterns
+// no other check knows) sees a private word only the decision holds, and
+// the log goes back to its base before each check, so a nudged edit
+// carries its entry once.
+func TestTheFormatGateChecksTheDecisionsEntry(t *testing.T) {
+	private := func(f *editFixture, wt string) {
+		goodTurn(f, wt)
+		f.decide(wt, editDecision+" It came up at Zorblax.")
+	}
+	f := newEditFixture(t, private, goodTurn)
+	f.gt.private = "Zorblax"
+	p := f.edit()
+	if p.State != store.LearnGating || len(f.ed.nudges) != 1 || !strings.Contains(f.ed.nudges[0], "make check-private") ||
+		!strings.Contains(f.ed.nudges[0], learn.DecisionsFile) {
+		t.Fatalf("proposal = %+v, nudges = %q", p, f.ed.nudges)
+	}
+	doc := f.gitOut(f.checkout, "show", p.CandidateSHA+":"+learn.DecisionsFile)
+	if strings.Contains(doc, "Zorblax") || strings.Count(doc, "**The judge checks the lock of a row two writers share**") != 1 {
+		t.Fatalf("the committed design log:\n%s", doc)
+	}
+	if msg := f.gitOut(f.checkout, "log", "-1", "--format=%B", p.CandidateSHA); strings.Contains(msg, "Zorblax") {
+		t.Fatalf("the commit message = %q", msg)
+	}
+
+	// Still private after the nudge: invalid, nothing committed.
+	f2 := newEditFixture(t, private)
+	f2.gt.private = "Zorblax"
+	p2 := f2.edit()
+	if p2.State != store.LearnInvalid || !strings.Contains(p2.Reason, "make check-private") || p2.CandidateSHA != "" || f2.branchExists(p2.Branch) {
+		t.Fatalf("proposal = %+v", p2)
 	}
 }
 

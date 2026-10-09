@@ -5623,3 +5623,15 @@ editing history. Code, config comments and prompts reference these by their head
   `gating` proposal is left to the gate, which always decides it. Rejected: counting the week from the
   gate's decision (no column records it, and the editor's run is the same day in practice) and expiring
   a gating proposal (its gate only waits for the budget or a pause).
+- **The format gate checks the design log's entry** (2026-10-09, a review finding on stage 3 of the
+  self-improving review loop). The editor's decision was appended to `docs/DECISIONS.md` after the
+  format gate ran, so `make check-private` never saw it, and its first sentence is the commit's subject
+  too: `learn.ValidateEdit` knows the inputs' logins and repositories but not the gitignored
+  `MAGNUM_PRIVATE_PATTERNS` nor the registry's logins, so a decision naming a private client none of the
+  inputs came from was committed, and published at the next push after its landing. `editCheck` now
+  puts the design log back as the base has it (`resetEditLog`, a `git restore` of the file when the
+  worktree's status lists it), then, once the change, the decision and the prompts pass, appends the
+  entry and runs the format gate, so the guard greps it; the late-write fingerprint covers the log, and
+  `commitEdit` commits what the gate saw. A revert appends its entry, which carries the operator's
+  reason, before its checks too. Rejected: running `make check-private` once more after the append
+  (a failure there would find the agent gone, with no nudge left to fix it).

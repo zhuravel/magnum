@@ -118,6 +118,22 @@ func TestARevertRestoresTheFilesOfTheVersionBefore(t *testing.T) {
 	}
 }
 
+// A revert's design-log entry, which carries the operator's reason, is in
+// the tree the format gate checks: a private word in it makes the revert
+// invalid, and nothing is committed.
+func TestARevertsEntryPassesTheFormatGate(t *testing.T) {
+	f := newEditFixture(t, goodTurn)
+	f.gt.private = "Zorblax"
+	v := f.landVersion(editSkillText+editAddedRule, f.h.clock.Now().Add(-48*time.Hour))
+	p, err := f.h.e.runRevert(f.h.ctx, v, store.LearnTriggerRequest, "Zorblax asked for it")
+	if err != nil {
+		t.Fatalf("runRevert: %v", err)
+	}
+	if p.State != store.LearnInvalid || !strings.Contains(p.Reason, "make check-private") || p.CandidateSHA != "" || f.branchExists(p.Branch) {
+		t.Fatalf("proposal = %+v", p)
+	}
+}
+
 // A version whose reviews had their findings declined or argued 10 points
 // more often than the version before (here the skill before the first
 // version, over a window as long) gets one revert proposal, which the gate

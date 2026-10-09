@@ -327,10 +327,12 @@ existing `skills/magnum-review/SKILL.md`, `prompts/judge-*.md` and `prompts/clau
 (none added or deleted), every `{{...}}` action of a changed prompt kept in order, the skill within its cap
 and keeping every pin, no pull request reference, branch, secret or home directory path and no login, link
 or repository in the added lines or the decision; then the candidate's prompts render (`engine.CheckPrompts` on a config pointed at the
-worktree), and the format gate passes in the worktree: the golden files regenerated (`go test
+worktree), the decision's entry is appended to the worktree's `docs/DECISIONS.md` (put back as it was
+before each check), and the format gate passes in the worktree: the golden files regenerated (`go test
 ./internal/agents -run TestRenderGolden -update`), `go test ./internal/agents ./internal/pipeline
-./internal/config`, and `make check-private` with the checkout's mise environment. A result with problems
-gets one nudge naming them (a failing command with the end of its output), then is kept as invalid.
+./internal/config`, and `make check-private` with the checkout's mise environment, which so checks the
+entry too. A result with problems gets one nudge naming them (a failing command with the end of its
+output), then is kept as invalid.
 
 ### Repository notes
 

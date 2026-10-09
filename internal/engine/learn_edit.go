@@ -496,7 +496,7 @@ func (e *Engine) runEditAt(ctx context.Context, trigger string, start time.Time)
 	if err != nil {
 		return stop(oneLine(err.Error(), retroWhyRunes))
 	}
-	cand.base, cand.branch = base, branch
+	cand.base, cand.branch, cand.day = base, branch, start.Local().Format(time.DateOnly)
 	prompt, sum, err := e.editPrompt(run, inputs.SkillCap)
 	if err != nil {
 		return stop(oneLine(err.Error(), retroWhyRunes))
@@ -552,7 +552,7 @@ func (e *Engine) runEditAt(ctx context.Context, trigger string, start time.Time)
 			"`magnum learn` lists it.", textx.Count(len(res.Problems), "problem", "problems")))
 		return p, nil
 	}
-	sha, files, err := e.commitEdit(octx, run, cand, inputs, res.Changes, start)
+	sha, files, err := e.commitEdit(octx, run, cand, inputs, res.Changes)
 	if err != nil {
 		return stop("commit the candidate: " + oneLine(err.Error(), retroWhyRunes))
 	}
@@ -580,13 +580,14 @@ func (e *Engine) runEditAt(ctx context.Context, trigger string, start time.Time)
 
 // editCandidate is what an editor run knows of its worktree before the
 // editor starts: the base commit and the branch the worktree must stay on,
-// the allowed files' text at the base (by path), and the pins; last is what
-// the last check that passed saw.
+// the run's day (its design-log entry's date), the allowed files' text at
+// the base (by path), and the pins; last is what the last check that
+// passed saw.
 type editCandidate struct {
-	base, branch string
-	orig         map[string][]byte
-	pins         []string
-	last         *editSnapshot
+	base, branch, day string
+	orig              map[string][]byte
+	pins              []string
+	last              *editSnapshot
 }
 
 // editSnapshot is the worktree as a check that passed saw it: its
@@ -702,14 +703,17 @@ func (e *Engine) editChanged(ctx context.Context, wt string) ([]string, []string
 }
 
 // editFingerprint sums up the worktree as a check sees it: every changed
-// file and regenerated golden, by path, with its content, and changes.json.
+// file and regenerated golden, by path, with its content, the design log
+// (the check wrote its entry there) and changes.json.
 func (e *Engine) editFingerprint(ctx context.Context, wt string) (string, error) {
 	changed, goldens, err := e.editChanged(ctx, wt)
 	if err != nil {
 		return "", err
 	}
+	files := slices.Concat(changed, goldens, []string{learn.DecisionsFile})
+	slices.Sort(files)
 	h := sha256.New()
-	for _, p := range slices.Concat([]string{learn.ChangesFile}, changed, goldens) {
+	for _, p := range slices.Concat([]string{learn.ChangesFile}, slices.Compact(files)) {
 		body, err := fsx.ReadRegular(filepath.Join(wt, filepath.FromSlash(p)), notes.MaxFileBytes)
 		switch {
 		case errors.Is(err, os.ErrNotExist):
@@ -724,13 +728,15 @@ func (e *Engine) editFingerprint(ctx context.Context, wt string) (string, error)
 }
 
 // editCheck reads and checks what the editor wrote: the worktree still on
-// its branch at the base (the agent commits nothing), changes.json, the
-// changed files (existing allowed files only, a prompt's template actions
-// kept, then learn.ValidateEdit against the inputs, the pins, the cap and
-// the leak rules), then the candidate's prompts (CheckPrompts on the config
-// pointed at the worktree), then the format gate. The first stage with
-// problems returns them, for the nudge or the registry; a check that
-// passes records what it saw (cand.last).
+// its branch at the base (the agent commits nothing), the design log back
+// at the base (an earlier check appended to it), changes.json, the changed
+// files (existing allowed files only, a prompt's template actions kept,
+// then learn.ValidateEdit against the inputs, the pins, the cap and the
+// leak rules), then the candidate's prompts (CheckPrompts on the config
+// pointed at the worktree), then the decision's entry appended to the
+// design log and the format gate, so `make check-private` sees the entry
+// too. The first stage with problems returns them, for the nudge or the
+// registry; a check that passes records what it saw (cand.last).
 func (e *Engine) editCheck(ctx context.Context, run EditRun, cand editCandidate, inputs learn.EditInputs, check learn.EditCheck) (learn.Changes, []string) {
 	wt := run.Worktree
 	var problems []string
@@ -743,6 +749,9 @@ func (e *Engine) editCheck(ctx context.Context, run EditRun, cand editCandidate,
 	}
 	if len(problems) > 0 {
 		return learn.Changes{}, problems
+	}
+	if err := e.resetEditLog(ctx, wt, cand.base); err != nil {
+		return learn.Changes{}, []string{learn.DecisionsFile + " cannot be put back as it was: " + oneLine(err.Error(), retroWhyRunes)}
 	}
 	b, err := fsx.ReadRegular(filepath.Join(wt, learn.ChangesFile), learn.ChangesMaxBytes)
 	if errors.Is(err, os.ErrNotExist) {
@@ -798,11 +807,12 @@ func (e *Engine) editCheck(ctx context.Context, run EditRun, cand editCandidate,
 	if err != nil {
 		return changes, []string{"the prompts do not render: " + oneLine(err.Error(), 600)}
 	}
-	for _, args := range formatGate {
-		if out, err := e.d.GoTest(ctx, wt, args...); err != nil {
-			return changes, []string{fmt.Sprintf("the format gate's `%s` failed (%s):\n%s", strings.Join(args, " "),
-				oneLine(err.Error(), retroWhyRunes), lastLines(execx.Redact(out), editGateLines))}
-		}
+	ids, _ := decisionInputs(changes)
+	if err := appendDesignLog(wt, learn.DecisionEntry(changes.Decision, cand.day, ids)); err != nil {
+		return changes, []string{"the decision cannot be added to " + learn.DecisionsFile + ": " + oneLine(err.Error(), retroWhyRunes)}
+	}
+	if problems := e.formatGateProblems(ctx, wt); len(problems) > 0 {
+		return changes, problems
 	}
 	fp, err := e.editFingerprint(ctx, wt)
 	if err != nil {
@@ -821,6 +831,60 @@ var formatGate = [][]string{
 	{"make", "check-private"},
 }
 
+// formatGateProblems runs the format gate in the worktree wt: the first
+// command that fails, with the end of its output (none: it passed).
+func (e *Engine) formatGateProblems(ctx context.Context, wt string) []string {
+	for _, args := range formatGate {
+		if out, err := e.d.GoTest(ctx, wt, args...); err != nil {
+			return []string{fmt.Sprintf("the format gate's `%s` failed (%s):\n%s", strings.Join(args, " "),
+				oneLine(err.Error(), retroWhyRunes), lastLines(execx.Redact(out), editGateLines))}
+		}
+	}
+	return nil
+}
+
+// resetEditLog puts the worktree's design log back as the base has it
+// when it changed: a check appends the decision's entry before the format
+// gate, and the next check appends it again.
+func (e *Engine) resetEditLog(ctx context.Context, wt, base string) error {
+	entries, err := e.d.LearnGit.StatusPaths(ctx, wt)
+	if err != nil {
+		return err
+	}
+	if !slices.ContainsFunc(entries, func(s gitx.StatusEntry) bool {
+		return s.Path == learn.DecisionsFile || s.OrigPath == learn.DecisionsFile
+	}) {
+		return nil
+	}
+	return e.d.LearnGit.RestoreFrom(ctx, wt, base, learn.DecisionsFile)
+}
+
+// appendDesignLog appends entry to the design log of the worktree wt,
+// keeping the file's mode.
+func appendDesignLog(wt, entry string) error {
+	logPath := filepath.Join(wt, filepath.FromSlash(learn.DecisionsFile))
+	doc, err := fsx.ReadRegular(logPath, 64<<20)
+	if err != nil {
+		return err
+	}
+	fi, err := os.Stat(logPath)
+	if err != nil {
+		return err
+	}
+	return fsx.WriteFileAtomic(logPath, learn.AppendDecision(doc, entry), fi.Mode().Perm())
+}
+
+// decisionInputs lists the inputs changes.json accounts for: their ids,
+// and each id with what the editor did with it ("m12 (noted)").
+func decisionInputs(changes learn.Changes) (ids, parts []string) {
+	for _, c := range changes.Inputs {
+		id := strings.TrimSpace(c.ID)
+		ids = append(ids, id)
+		parts = append(parts, id+" ("+c.Action+")")
+	}
+	return ids, parts
+}
+
 // lastLines is the last n lines of s.
 func lastLines(s string, n int) string {
 	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
@@ -831,12 +895,13 @@ func lastLines(s string, n int) string {
 }
 
 // commitEdit keeps the changes.json the last check read in the run
-// directory and takes the file out of the worktree, appends the decision to
-// the worktree's design log and commits the editor's files, the regenerated
-// goldens and the log on the branch: the decision's headline, the inputs it
-// answers by id, the skill's byte accounting. The commit must sit on the
-// base and change exactly those files. It returns the commit and its files.
-func (e *Engine) commitEdit(ctx context.Context, run EditRun, cand editCandidate, inputs learn.EditInputs, changes learn.Changes, start time.Time) (string, []string, error) {
+// directory and takes the file out of the worktree, then commits the
+// editor's files, the regenerated goldens and the design log with the
+// decision's entry (the last check appended it before the format gate) on
+// the branch: the decision's headline, the inputs it answers by id, the
+// skill's byte accounting. The commit must sit on the base and change
+// exactly those files. It returns the commit and its files.
+func (e *Engine) commitEdit(ctx context.Context, run EditRun, cand editCandidate, inputs learn.EditInputs, changes learn.Changes) (string, []string, error) {
 	wt := run.Worktree
 	if err := fsx.WriteFileAtomic(filepath.Join(run.Dir, learn.ChangesFile), cand.last.changes, 0o600); err != nil {
 		return "", nil, err
@@ -848,26 +913,7 @@ func (e *Engine) commitEdit(ctx context.Context, run EditRun, cand editCandidate
 	if err != nil {
 		return "", nil, err
 	}
-	ids := make([]string, 0, len(changes.Inputs))
-	var parts []string
-	for _, c := range changes.Inputs {
-		id := strings.TrimSpace(c.ID)
-		ids = append(ids, id)
-		parts = append(parts, id+" ("+c.Action+")")
-	}
-	logPath := filepath.Join(wt, filepath.FromSlash(learn.DecisionsFile))
-	doc, err := fsx.ReadRegular(logPath, 64<<20)
-	if err != nil {
-		return "", nil, fmt.Errorf("%s: %w", learn.DecisionsFile, err)
-	}
-	fi, err := os.Stat(logPath)
-	if err != nil {
-		return "", nil, err
-	}
-	entry := learn.DecisionEntry(changes.Decision, start.Local().Format("2006-01-02"), ids)
-	if err := fsx.WriteFileAtomic(logPath, learn.AppendDecision(doc, entry), fi.Mode().Perm()); err != nil {
-		return "", nil, err
-	}
+	_, parts := decisionInputs(changes)
 	files := slices.Concat(changed, goldens, []string{learn.DecisionsFile})
 	slices.Sort(files)
 	files = slices.Compact(files)
