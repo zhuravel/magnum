@@ -5694,3 +5694,13 @@ skill versions, which its first entry creates); people add theirs to the section
   it, and a scheduled run that stops this way marks the evidence again for a later day. Rejected:
   leaving that input out of the run (a registry that fails one read is not one to trust for the
   others, and the scheduled editor tries again on a later day anyway).
+- **A skill editor that times out twice stopped** (2026-10-09, a review finding on stage 3 of the
+  self-improving review loop). The spec has an editor whose turns time out twice end its run
+  `stopped`, yet `paneEditor.Edit` stored the result of a timed-out nudge as `invalid` with whatever
+  the check found ("changes.json was not written"), and a requested run's toast said the edit "is
+  invalid". A turn past `editor_timeout` is now marked (`paneTurn.timedOut`), and when the first turn
+  and the nudged one both timed out, `Edit` returns an error, so the run stops: the proposal is
+  `stopped`, the toast says so, and a scheduled run marks the evidence again for a later day. A
+  timed-out turn whose check passes is still a candidate, and one timeout of the two is still judged
+  by what the agent wrote. Rejected: stopping at the first timeout (the nudge often finishes the
+  work an interrupted turn started).

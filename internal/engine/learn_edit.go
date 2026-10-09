@@ -156,7 +156,9 @@ type paneEditor struct{ *paneAgent }
 // Edit prompts the agent with job's prompt and waits for its turn to end; a
 // result with problems gets one nudge listing them. A usage limit, a
 // logout, a per-model limit or an overload is a Pause; an agent that cannot
-// be set up or started, or went away, is ErrEditorDown.
+// be set up or started, or went away, is ErrEditorDown; a turn and a nudged
+// turn that both timed out are an error (the run stops: the agent never
+// answered, so its result says nothing about the edit).
 func (c *paneEditor) Edit(ctx context.Context, job EditJob) (EditResult, error) {
 	if err := c.setup(ctx); err != nil {
 		return EditResult{}, fmt.Errorf("%w: set up: %w", ErrEditorDown, err)
@@ -168,8 +170,10 @@ func (c *paneEditor) Edit(ctx context.Context, job EditJob) (EditResult, error) 
 		return EditResult{}, fmt.Errorf("%w: start: %w", ErrEditorDown, err)
 	}
 	text := job.Prompt
+	timedOut := true // every turn so far
 	for attempt := 0; ; attempt++ {
 		t := c.turn(ctx, attempt, text)
+		timedOut = timedOut && t.timedOut
 		ch, problems := job.Check()
 		if len(problems) == 0 {
 			return EditResult{Changes: ch}, nil
@@ -182,6 +186,8 @@ func (c *paneEditor) Edit(ctx context.Context, job EditJob) (EditResult, error) 
 			return EditResult{}, ctx.Err()
 		case t.down:
 			return EditResult{}, fmt.Errorf("%w: %w", ErrEditorDown, t.err)
+		case attempt > 0 && timedOut:
+			return EditResult{}, fmt.Errorf("the skill editor timed out twice: %w", t.err)
 		case attempt > 0:
 			return EditResult{Changes: ch, Problems: problems}, nil
 		}

@@ -174,6 +174,9 @@ type paneTurn struct {
 	// down: the turn never reached the agent (the prompt was refused
 	// before it was sent) or the agent went away (its session was lost).
 	down bool
+	// timedOut: the role's timeout passed before the turn ended (it was
+	// interrupted and its run abandoned).
+	timedOut bool
 }
 
 // Classify prompts the agent with job's paths (prompts/retro.md) and waits
@@ -476,7 +479,7 @@ func (c *paneAgent) wait(ctx context.Context, id string) paneTurn {
 			c.interrupt(ctx, run)
 			err := fmt.Errorf("no answer within %s", c.role.Timeout.Duration)
 			c.finish(ctx, run.ID, err)
-			return paneTurn{run: run, err: err}
+			return paneTurn{run: run, err: err, timedOut: true}
 		}
 		if err := c.d.Sleep(ctx, c.d.Poll); err != nil {
 			return paneTurn{run: run, err: err}

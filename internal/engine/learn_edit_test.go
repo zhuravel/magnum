@@ -931,20 +931,7 @@ func TestAnEditRunIsBackgroundWorkForRestarts(t *testing.T) {
 // corrected edit is committed for the gate, and the agent is parked.
 func TestThePaneEditorWorksInTheWorktreeAndNudgesOnce(t *testing.T) {
 	f := newEditFixture(t, goodTurn)
-	ag := &fakePaneAgents{}
-	f.h.e.d.Editor = paneEditors(paneDeps{
-		Config: f.h.cfg, Layout: f.h.layout, Logger: f.h.d.Logger, Herdr: f.h.hd, Now: f.h.clock.Now,
-		Sleep:        func(ctx context.Context, _ time.Duration) error { return sleepCtx(ctx, time.Millisecond) },
-		ObserveEvery: time.Millisecond, Poll: time.Millisecond, CloseWorkspace: f.h.hd.WorkspaceClose,
-		Agents: func(st *store.Store, cfg *config.Config, layout paths.Layout) paneAgents {
-			if len(cfg.Roles) != 1 || cfg.Roles[0].Name != config.EditorRoleName {
-				t.Errorf("the manager's roles = %v, want the editor's alone", cfg.Roles)
-			}
-			ag.fakeAgents = &fakeAgents{st: st}
-			ag.scratch = layout.Scratch
-			return ag
-		},
-	})
+	ag := f.usePaneEditor(0)
 	ag.reply = func(n int, _ string) bool {
 		wts, _ := filepath.Glob(filepath.Join(f.h.layout.LearnWorktrees(), "2*"))
 		wt := wts[len(wts)-1]
@@ -970,6 +957,51 @@ func TestThePaneEditorWorksInTheWorktreeAndNudgesOnce(t *testing.T) {
 	}
 	if ag.count("park:") != 1 {
 		t.Errorf("park calls: %v", calls)
+	}
+}
+
+// usePaneEditor makes the fixture's editor the pane agent over fake
+// agents, whose Sleep moves the harness clock by step (0: not at all).
+func (f *editFixture) usePaneEditor(step time.Duration) *fakePaneAgents {
+	t := f.h.t
+	ag := &fakePaneAgents{}
+	f.h.e.d.Editor = paneEditors(paneDeps{
+		Config: f.h.cfg, Layout: f.h.layout, Logger: f.h.d.Logger, Herdr: f.h.hd, Now: f.h.clock.Now,
+		Sleep: func(ctx context.Context, _ time.Duration) error {
+			f.h.advance(step)
+			return sleepCtx(ctx, time.Millisecond)
+		},
+		ObserveEvery: time.Millisecond, Poll: time.Millisecond, CloseWorkspace: f.h.hd.WorkspaceClose,
+		Agents: func(st *store.Store, cfg *config.Config, layout paths.Layout) paneAgents {
+			if len(cfg.Roles) != 1 || cfg.Roles[0].Name != config.EditorRoleName {
+				t.Errorf("the manager's roles = %v, want the editor's alone", cfg.Roles)
+			}
+			ag.fakeAgents = &fakeAgents{st: st}
+			ag.scratch = layout.Scratch
+			return ag
+		},
+	})
+	return ag
+}
+
+// A turn past [learn] editor_timeout is cut short, and an editor whose
+// turn and nudged turn both time out stopped (the spec's "timeout twice"),
+// not answered: its proposal is stopped, not invalid, and a scheduled
+// run tries again on a later day.
+func TestThePaneEditorStopsWhenBothTurnsTimeOut(t *testing.T) {
+	f := newEditFixture(t, goodTurn)
+	f.h.cfg.Learn.EditorTimeout = config.Duration{Duration: time.Minute}
+	ag := f.usePaneEditor(10 * time.Second)
+	ag.reply = func(int, string) bool { return false } // works on forever
+	p, err := f.h.e.runEdit(f.h.ctx, store.LearnTriggerRequest)
+	if err == nil || p.State != store.LearnStopped || !strings.Contains(p.Reason, "no answer within 1m0s") || !strings.Contains(p.Reason, "twice") {
+		t.Fatalf("runEdit = %+v, %v", p, err)
+	}
+	if len(ag.sent()) != 2 {
+		t.Fatalf("prompts = %q, want the prompt and one nudge", ag.sent())
+	}
+	if got := f.toasts(); !strings.Contains(got, "skill edit stopped") {
+		t.Fatalf("toasts = %q", got)
 	}
 }
 

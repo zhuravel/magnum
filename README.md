@@ -1702,7 +1702,8 @@ worktree that changed after its last check (the design log included) is not comm
 committed on its branch (unsigned, only the files it changed, the regenerated goldens and the log; the
 message names the inputs by id and the skill's bytes, never the agent's reasons), and the proposal waits
 in the registry for the gate (`gating`). An edit still invalid after the nudge is kept as `invalid` with its
-problems, and one that stops (a limit, a shutdown, an agent that cannot start) as `stopped`; both lose their
+problems, and one that stops (a limit, a shutdown, an agent that cannot start, a turn and its nudge that
+both ran past `editor_timeout`) as `stopped`; both lose their
 worktree and branch. A worktree or a `learn/<run>` branch no waiting proposal holds (a daemon killed in the
 middle of a run) goes at the start of the next edit or revert. Nothing is pushed. An edit in flight counts as background work for
 `magnum daemon-restart`, install, uninstall and daemon-stop, which refuse to cut it short.
