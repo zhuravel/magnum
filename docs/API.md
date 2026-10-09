@@ -12153,6 +12153,25 @@ const (
     Who withdrew an automatic approval (auto_approvals.ended_by).
 
 const (
+	DeclineFixed     = "fixed"     // changed the code as the finding asked
+	DeclineDeclined  = "declined"  // will not change it
+	DeclineDeferred  = "deferred"  // agreed, for later (a ticket, a follow-up PR)
+	DeclineArgued    = "argued"    // disputed the finding
+	DeclineQuestion  = "question"  // asked about it, no decision
+	DeclineUnrelated = "unrelated" // the replies are about something else
+)
+    What the author did with a finding (declines.outcome).
+
+const (
+	VerdictWrong          = "wrong"           // the finding was wrong
+	VerdictOverRanked     = "over_ranked"     // right, but its priority was too high
+	VerdictMissingContext = "missing_context" // right in general, wrong for this repository
+	VerdictRight          = "right"           // the finding stands
+)
+    Whether magnum was right, for a declined or argued finding
+    (declines.verdict).
+
+const (
 	FindingPosted   = "posted"
 	FindingRejected = "rejected"
 )
@@ -12816,6 +12835,52 @@ type CheckResult struct {
 	At time.Time `json:"at,omitzero"`
 }
     CheckResult is one check run or commit status of a CIStatus.
+
+type Decline struct {
+	ID        int64  `json:"id"`
+	PRID      int64  `json:"pr_id"`
+	SourceURL string `json:"source_url"` // GitHub's link to the finding's comment; the key UpsertDecline stores by
+	CommentID int64  `json:"comment_id"` // the finding's comment (REST id)
+	ReviewID  int64  `json:"review_id,omitempty"`
+	// RunID is the run that posted the review (runs.review_id), and
+	// FindingRowID the findings row of that run on the same path within 3
+	// lines (nil when none, or once the run's findings were recorded again).
+	RunID        string `json:"run_id,omitempty"`
+	FindingRowID *int64 `json:"finding_row_id,omitempty"`
+	Path         string `json:"path,omitempty"`
+	Line         int    `json:"line,omitempty"`
+	Title        string `json:"title,omitempty"`
+	Priority     string `json:"priority,omitempty"` // P0..P3 as the comment said
+	ReviewedSHA  string `json:"reviewed_sha"`       // the commit the review covered
+	// SkillSHA is the 12-hex hash of the judge skill copy the round ran with.
+	SkillSHA string   `json:"skill_sha,omitempty"`
+	Outcome  string   `json:"outcome"`           // Decline*
+	Verdict  string   `json:"verdict,omitempty"` // Verdict*: declined and argued only
+	Lesson   string   `json:"lesson,omitempty"`  // wrong, over_ranked and missing_context only
+	Scope    string   `json:"scope,omitempty"`   // MissScopeRepo | MissScopeGeneral, with a lesson
+	Match    []string `json:"match"`             // match_json
+	State    string   `json:"state"`             // MissNew | MissUsed | MissDismissed
+	// CreatedAt and UpdatedAt are when the row was first and last written.
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	// Repo ("owner/name") and Number name the decline's PR; Declines fills
+	// them.
+	Repo   string `json:"repo,omitempty"`
+	Number int    `json:"number,omitempty"`
+}
+    Decline is how an author answered one of magnum's posted findings
+    (declines).
+
+type DeclineFilter struct {
+	Outcomes []string // empty = every outcome
+	Verdicts []string // empty = any verdict, none included
+	Scopes   []string // empty = any scope, none included
+	States   []string // empty = every state
+	PRID     int64    // 0 = every PR
+	RepoID   int64    // 0 = every repository
+	SkillSHA string   // "" = any skill
+}
+    DeclineFilter selects declines; zero values select everything.
 
 type Event struct {
 	ID      int64           `json:"id"`
@@ -13746,6 +13811,9 @@ func (s *Store) CountAutoApprovedSince(ctx context.Context, since time.Time) (in
     CountAutoApprovedSince counts the approvals posted at or after since,
     withdrawn or not.
 
+func (s *Store) CountDeclines(ctx context.Context, f DeclineFilter) (int, error)
+    CountDeclines counts the declines f selects.
+
 func (s *Store) CountMisses(ctx context.Context, f MissFilter) (int, error)
     CountMisses counts the misses f selects.
 
@@ -13783,6 +13851,10 @@ func (s *Store) DecideNotesProposal(ctx context.Context, id int64, from []string
     as a version of the repository (applied.RepoID and ProposalID are set here)
     and linked as the proposal's applied_version_id. The misses the proposal was
     given follow it (decideProposalMisses).
+
+func (s *Store) Declines(ctx context.Context, f DeclineFilter) ([]Decline, error)
+    Declines returns the declines f selects, newest first, each with its PR's
+    repository and number.
 
 func (s *Store) DeleteKV(ctx context.Context, key string) error
     DeleteKV removes key (no error when absent).
@@ -14088,6 +14160,11 @@ func (s *Store) SessionsByPR(ctx context.Context, prID int64) ([]Session, error)
 func (s *Store) SetAutoApproveHold(ctx context.Context, h AutoApproveHold) error
     SetAutoApproveHold records h, replacing the PR's earlier hold.
 
+func (s *Store) SetDeclineState(ctx context.Context, ids []int64, from []string, to string) (int, error)
+    SetDeclineState moves each decline of ids that is in one of the states from
+    to state to (compare-and-set per row) and returns how many moved; a decline
+    in another state is left alone.
+
 func (s *Store) SetGitHubRequiredChecks(ctx context.Context, fullName string, g GitHubRequiredChecks) error
     SetGitHubRequiredChecks caches g for repository fullName.
 
@@ -14166,6 +14243,15 @@ func (s *Store) UpdateSession(ctx context.Context, id int64, set func(*SessionUp
 
 func (s *Store) UpdateSlotFields(ctx context.Context, id int64, set func(*SlotUpdate)) error
     UpdateSlotFields changes non-state columns of slot id.
+
+func (s *Store) UpsertDecline(ctx context.Context, d Decline) (Decline, error)
+    UpsertDecline stores d by SourceURL and returns the stored row. A new
+    decline is inserted (an empty State is MissNew); an existing one is updated
+    in place and keeps its id, state and created_at, so running the retro again
+    never brings back a dismissed or used decline. Every other column takes d's
+    value: each write carries the classifier's whole answer. A nil Match is an
+    empty list, and "", 0 or nil in an optional column is stored as NULL. PRID,
+    SourceURL, CommentID, ReviewedSHA and Outcome are required.
 
 func (s *Store) UpsertMiss(ctx context.Context, m Miss) (Miss, error)
     UpsertMiss stores m by SourceURL and returns the stored row. A new miss is

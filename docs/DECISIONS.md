@@ -5116,3 +5116,19 @@ editing history. Code, config comments and prompts reference these by their head
   as clean and still waits for the checks to pass. 181 bytes, skillMaxBytes 30,001 to 30,182. Rejected: a
   P2 "CI is red" finding for a failure the judge cannot tie to master (an unrelated flaky run would then
   block every re-review of the head, and the author cannot fix it in the PR).
+- **Declines: how authors answered magnum's findings, one row per thread** (2026-10-09, stage 1 of the
+  self-improving review loop). The registry kept no author reply to a magnum finding: the reply class
+  lived in a round's `review-threads.json`, which only re-review and recovery rounds write. Migration
+  0023 adds `declines`, one row per review thread whose root comment is magnum's, keyed by that
+  comment's link (`source_url`, unique): where the finding sat (comment, review, the run that posted it
+  through `runs.review_id`, the `findings` row of that run on the same path within 3 lines, path and
+  line), its title and priority, the reviewed commit, the 12-hex hash of the skill copy the round ran
+  with (`skill_sha`, so a later stage can measure a skill version), the classifier's outcome, verdict,
+  lesson, scope and match patterns, and a state that reuses the misses' (`new`, `used`, `dismissed`).
+  `store.UpsertDecline` keeps `id`, `state` and `created_at` on a re-run, as `UpsertMiss` does, and
+  replaces every other column: a write always carries the whole classification, so no class-keeping rule
+  is needed. `SetDeclineState` is compare-and-set per row on explicit from-states. Reply text is never
+  stored. `finding_row_id` is `ON DELETE SET NULL`: `RecordFindings` replaces a run's rows, so a strict
+  reference would have made recording a round's result again fail; the decline stays without the link.
+  Rejected: a column on `findings` (a finding recorded before migration 0005, or in a dry run, has no
+  row, and its decline must still count); storing the replies (PR text in the registry).
