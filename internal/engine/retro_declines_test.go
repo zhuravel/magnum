@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -171,6 +172,74 @@ func TestTheRetroStoresADeclineForEachAnsweredFinding(t *testing.T) {
 	h.requestRetro(RetroPayload{PRs: []int64{pr.ID}, Again: true})
 	if again := h.declinesOf(pr.ID)[301]; again.ID != d.ID || again.State != store.MissDismissed || again.Outcome != store.DeclineDeclined {
 		t.Fatalf("o301 after another retro = %+v", again)
+	}
+}
+
+// TestANudgedJudgesDeclineKeepsItsFirstRun: every judge run of a round
+// that was nudged (or fell back to another model) carries the round's
+// review id, while its findings are recorded under the first and only
+// that one's prompt names the skill copy. The decline binds to that run:
+// its findings row and skill hash, never the nudge's emptiness.
+func TestANudgedJudgesDeclineKeepsItsFirstRun(t *testing.T) {
+	fc := threadsClassifier(map[string]learn.ThreadItem{"o301": wrongDecline})
+	h := newHarness(t, withClassifier(fc))
+	pr := retroPR(h, 7, 24*time.Hour)
+	seedRetroGitHub(h, 7)
+	seedOwnThreads(h, 7)
+	withJudgePrompt(h, 7)
+	h.advance(time.Minute)
+	nudge, err := h.st.CreateRun(h.ctx, store.Run{ID: "r-7-nudge", PRID: pr.ID, Round: 1, Role: "codex-judge", Kind: store.RunNudge,
+		TargetSHA: retroShaA, Identity: "talkable-app", ReviewerLogin: "talkable[bot]", State: store.RunPending})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.UpdateRun(h.ctx, nudge.ID, func(u *store.RunUpdate) {
+		u.Set("review_id", int64(9007))
+		u.Set("review_commit", retroShaA)
+		u.Set("prompt_text", "The judge stopped without a result: finish the review.")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.RecordFindings(h.ctx, "r-7", pr.ID, 1, []store.Finding{
+		{FindingID: "F2", Title: "Gift cards skip the balance check", Severity: "P2", Path: "app/models/gift.rb", Line: 13, Verdict: store.FindingPosted},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fs, err := h.st.FindingsByPR(h.ctx, pr.ID)
+	if err != nil || len(fs) != 1 {
+		t.Fatalf("findings = %+v, %v", fs, err)
+	}
+	h.requestRetro(RetroPayload{})
+
+	d := h.declinesOf(pr.ID)[301]
+	if d.RunID != "r-7" || d.SkillSHA != retroSkill || d.FindingRowID == nil || *d.FindingRowID != fs[0].ID {
+		t.Fatalf("o301 = run %q, skill %q, findings row %v; want r-7, %s, %d", d.RunID, d.SkillSHA, d.FindingRowID, retroSkill, fs[0].ID)
+	}
+}
+
+// TestReviewRunsOfBindsAReviewToTheRunWithItsFindings: a review's run is
+// the first of its runs (oldest first) with findings rows, else its first,
+// so a recovery round that verified an earlier round's review binds to the
+// recovery's judge; the skill hash is that run's, else the first of the
+// review's runs whose prompt names a skill copy.
+func TestReviewRunsOfBindsAReviewToTheRunWithItsFindings(t *testing.T) {
+	review := func(id int64) *int64 { return &id }
+	skill := func(sha string) string { return "Read /state/skill/" + sha + "/SKILL.md first." }
+	runs := []store.Run{
+		{ID: "r-1", ReviewID: review(1), PromptText: skill(retroSkill)},
+		{ID: "r-1-nudge", ReviewID: review(1), PromptText: "nudge"},
+		{ID: "r-2", ReviewID: review(2), PromptText: skill("abcdefabcdef")}, // failed before it recorded findings
+		{ID: "r-3", ReviewID: review(2), PromptText: skill("0000000000ff")}, // the recovery: verified, recorded them
+		{ID: "r-4", ReviewID: review(4), PromptText: "Read /checkout/skills/magnum-review/SKILL.md first."},
+		{ID: "r-4b", ReviewID: review(4), PromptText: skill("111111111111")}, // a later run of the review that names a copy
+		{ID: "r-5"}, // posted nothing
+	}
+	findings := []store.Finding{{RunID: "r-1", FindingID: "F1"}, {RunID: "r-3", FindingID: "F1"}}
+	got := reviewRunsOf(runs, findings)
+	want := map[int64]reviewRun{1: {ID: "r-1", SkillSHA: retroSkill}, 2: {ID: "r-3", SkillSHA: "0000000000ff"},
+		4: {ID: "r-4", SkillSHA: "111111111111"}}
+	if !maps.Equal(got, want) {
+		t.Fatalf("reviewRunsOf = %+v, want %+v", got, want)
 	}
 }
 

@@ -5157,22 +5157,25 @@ editing history. Code, config comments and prompts reference these by their head
   declines, and his replies in magnum's threads never counted as an answer).
 - **A missing-context decline is a repo miss for the notes** (2026-10-09, amends "The retro's misses
   become notes proposals"). The retro stores the classifier's answer for each own thread as a decline
-  (`storeDeclines`): the run that posted the thread's review (`runs.review_id`), the skill hash read
-  from that run's `prompt_text` (`skillSHAOf`: the 12 hex of `/skill/<hash>/`, empty for a dry run or a
-  judge that reads the skill in place), the findings row the thread's finding names (none for a review
-  posted before migration 0005 or a run that recorded none, which is stored all the same), and the
-  lesson scrubbed of the PR's author, the repliers and magnum's logins (`learn.ScrubLesson`, a dropped
-  one a `retro.lesson_rejected` event). Only a classified answer is stored: an unclassified or failed PR
-  leaves its own threads for the next retro. A finding declined or argued with verdict `missing_context`
-  and scope `repo` is also upserted as a miss (class miss, scope repo, keyed by the same comment link,
-  its reviewer the first person who answered, its severity the posted priority), so the notes curation
-  takes it unchanged, noted or skipped like any other, and the retro marks the repository;
-  `notes.misses` says how many came from declined findings. A PR with no other reviewer's comment but an
-  answered finding now goes to the classifier, and counts toward `max_prs`. `retro.ok` counts `declines`
-  and `declined` (declined or argued), the summary (`KVRetroLast`) and `retro.done` add them up, and the
-  pane classifier's check and nudge cover the threads. Rejected: giving the curator the declines in
-  `misses.json` under ids of their own (a second input format for the curator and its checks, for what
-  is a repo miss in all but its source).
+  (`storeDeclines`): the run of the thread's review (`runs.review_id`; every judge run of a round that
+  was nudged or fell back to another model carries the round's review id, so `reviewRunsOf` takes the
+  review's first run with findings rows, else its first), the skill hash read from that run's
+  `prompt_text`, else from the first of the review's runs that names one (`skillSHAOf`: the 12 hex of
+  `/skill/<hash>/`, empty for a dry run or a judge that reads the skill in place), the findings row the
+  thread's finding names (none for a review posted before migration 0005 or a run that recorded none,
+  which is stored all the same), and the lesson scrubbed of the PR's author, the repliers and magnum's
+  logins (`learn.ScrubLesson`, a dropped one a `retro.lesson_rejected` event). Only a classified answer
+  is stored: an unclassified or failed PR leaves its own threads for the next retro. A finding declined
+  or argued with verdict `missing_context` and scope `repo` is also upserted as a miss (class miss,
+  scope repo, keyed by the same comment link, its reviewer the first person who answered, its severity
+  the posted priority), so the notes curation takes it unchanged, noted or skipped like any other, and
+  the retro marks the repository; `notes.misses` says how many came from declined findings. A PR with no
+  other reviewer's comment but an answered finding now goes to the classifier, and counts toward
+  `max_prs`. `retro.ok` counts `declines` and `declined` (declined or argued), the summary
+  (`KVRetroLast`) and `retro.done` add them up, and the pane classifier's check and nudge cover the
+  threads. Rejected: giving the curator the declines in `misses.json` under ids of their own (a second
+  input format for the curator and its checks, for what is a repo miss in all but its source); the last
+  run of a review id (a nudge's or a fallback's, with no findings rows and no skill copy in its prompt).
 - **The retro records how authors answered magnum's findings** (2026-10-09, the surfaces of the
   declines). `magnum misses --declines` lists the declines newest first: by default the findings authors
   declined or argued that no lesson was drawn from yet (outcomes `declined` and `argued`, state `new`,

@@ -549,7 +549,7 @@ func (e *Engine) retroPR(ctx context.Context, run RetroRun, pr store.PR, classif
 	}
 	e.event(ctx, "info", subject, "retro.begin", fmt.Sprintf("retro %s: reading what other reviewers said", run.ID), nil)
 
-	in, runs, gh, err := e.retroInput(ctx, repo, pr)
+	in, reviews, gh, err := e.retroInput(ctx, repo, pr)
 	if err != nil {
 		return readFail(retroOutcome{}, err)
 	}
@@ -624,7 +624,7 @@ func (e *Engine) retroPR(ctx context.Context, run RetroRun, pr store.PR, classif
 	}
 	// Only a classified answer is stored: a decline is the classifier's
 	// outcome, and an own thread has nothing to store without one.
-	stored, declined, derr := e.storeDeclines(ctx, pr, res.Threads, threadItems, runs)
+	stored, declined, derr := e.storeDeclines(ctx, pr, in, reviews, res.Threads, threadItems)
 	if derr != nil {
 		e.log.Warn("retro: store the declines", "subject", subject, "err", derr)
 	}
@@ -669,9 +669,10 @@ func (e *Engine) retroPR(ctx context.Context, run RetroRun, pr store.PR, classif
 
 // retroInput reads what learn.Build needs about pr: its threads and every
 // review (as the watch's poll identity), the commits magnum posted reviews
-// of and the run that posted each, magnum's logins and the judge's
-// findings. It returns pr's runs too (storeDeclines reads them).
-func (e *Engine) retroInput(ctx context.Context, repo store.Repo, pr store.PR) (learn.Input, []store.Run, RetroGitHub, error) {
+// of and the run each review's findings are under, magnum's logins and the
+// judge's findings. It returns each review's run with its skill hash too
+// (reviewRunsOf, for storeDeclines).
+func (e *Engine) retroInput(ctx context.Context, repo store.Repo, pr store.PR) (learn.Input, map[int64]reviewRun, RetroGitHub, error) {
 	w := e.cfg.WatchFor(repo.FullName())
 	if w == nil {
 		return learn.Input{}, nil, nil, fmt.Errorf("%s is not watched (no [[watch]] covers it)", repo.FullName())
@@ -689,17 +690,20 @@ func (e *Engine) retroInput(ctx context.Context, repo store.Repo, pr store.PR) (
 	if err != nil {
 		return learn.Input{}, nil, nil, err
 	}
+	reviews := reviewRunsOf(runs, findings)
 	in := learn.Input{
 		Author:   github.Account(deref(pr.AuthorLogin), deref(pr.AuthorType)),
 		Own:      e.retroOwnLogins(pr, runs),
 		Findings: findings, MinChars: e.cfg.Learn.MinCommentChars, IncludeBots: e.cfg.Learn.IncludeBots,
-		ReviewRuns: map[int64]string{},
+		ReviewRuns: make(map[int64]string, len(reviews)),
+	}
+	for id, rr := range reviews {
+		in.ReviewRuns[id] = rr.ID
 	}
 	for _, r := range runs {
 		if r.ReviewID == nil {
 			continue
 		}
-		in.ReviewRuns[*r.ReviewID] = r.ID
 		at := r.CreatedAt
 		for _, t := range []*time.Time{r.SubmittedAt, r.EndedAt, r.VerifiedAt} {
 			if t != nil {
@@ -733,7 +737,7 @@ func (e *Engine) retroInput(ctx context.Context, repo store.Repo, pr store.PR) (
 		}
 		return cmp, nil
 	}
-	return in, runs, rg, nil
+	return in, reviews, rg, nil
 }
 
 // retroOwnLogins are magnum's logins on pr in Account form, each once: every

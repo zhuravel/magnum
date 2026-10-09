@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/learn"
@@ -36,6 +37,49 @@ func skillSHAOf(promptText string) string {
 	return ""
 }
 
+// reviewRun is the run of magnum's behind one of its reviews, for the
+// declines: the run the review's findings were recorded under and the
+// skill copy the round ran with ("" when no run of the review names one).
+type reviewRun struct{ ID, SkillSHA string }
+
+// reviewRunsOf binds each review magnum posted (runs.review_id) to one of
+// runs (RunsByPR's order, oldest first). Every judge run of a round that
+// was nudged or fell back to another model carries the round's review id,
+// while the round's findings are recorded under its first judge run
+// (pipeline's finalizeJudge) and only that one's prompt names the skill
+// copy. So the run is the review's first with findings rows (a recovery
+// round's judge over an earlier round's that failed before recording
+// any), else its first; the skill hash is that run's, else the first of
+// the review's runs whose prompt names one.
+func reviewRunsOf(runs []store.Run, findings []store.Finding) map[int64]reviewRun {
+	recorded := map[string]bool{}
+	for _, f := range findings {
+		recorded[f.RunID] = true
+	}
+	byReview := map[int64][]store.Run{}
+	for _, r := range runs {
+		if r.ReviewID != nil {
+			byReview[*r.ReviewID] = append(byReview[*r.ReviewID], r)
+		}
+	}
+	out := make(map[int64]reviewRun, len(byReview))
+	for id, rs := range byReview {
+		pick := rs[0]
+		if i := slices.IndexFunc(rs, func(r store.Run) bool { return recorded[r.ID] }); i >= 0 {
+			pick = rs[i]
+		}
+		rr := reviewRun{ID: pick.ID, SkillSHA: skillSHAOf(pick.PromptText)}
+		for _, r := range rs {
+			if rr.SkillSHA != "" {
+				break
+			}
+			rr.SkillSHA = skillSHAOf(r.PromptText)
+		}
+		out[id] = rr
+	}
+	return out
+}
+
 // routesToNotes reports whether a thread item is also a miss for the
 // repository's notes: magnum was right in general, wrong for this
 // repository, and the lesson is the repository's.
@@ -45,17 +89,17 @@ func routesToNotes(it learn.ThreadItem) bool {
 
 // storeDeclines stores the classifier's answer for each of pr's own
 // threads as a decline (store.UpsertDecline, which keeps the state of an
-// earlier retro's row): the run that posted the thread's review (runs),
-// the skill hash of its prompt, the findings row the thread's finding
-// names (none when the run recorded no findings), and the lesson scrubbed
-// of the PR's author, the repliers and magnum's logins (learn.ScrubLesson;
-// a dropped lesson is a retro.lesson_rejected event, never its text). A
-// missing-context item of scope repo is also upserted as a miss for the
-// notes (routeDecline). It returns how many declines it stored and how
-// many of them the author declined or argued; the error joins the rows it
-// could not store.
-func (e *Engine) storeDeclines(ctx context.Context, pr store.PR, threads []learn.OwnThread, items map[string]learn.ThreadItem,
-	runs []store.Run) (stored, declined int, err error) {
+// earlier retro's row): the run of the thread's review and its skill hash
+// (reviews, reviewRunsOf), the findings row the thread's finding names
+// among in.Findings (none when the run recorded no findings), and the
+// lesson scrubbed of the PR's author, the repliers and magnum's logins
+// (in.Own, learn.ScrubLesson; a dropped lesson is a retro.lesson_rejected
+// event, never its text). A missing-context item of scope repo is also
+// upserted as a miss for the notes (routeDecline). It returns how many
+// declines it stored and how many of them the author declined or argued;
+// the error joins the rows it could not store.
+func (e *Engine) storeDeclines(ctx context.Context, pr store.PR, in learn.Input, reviews map[int64]reviewRun, threads []learn.OwnThread,
+	items map[string]learn.ThreadItem) (stored, declined int, err error) {
 	if len(threads) == 0 || len(items) == 0 {
 		return 0, 0, nil
 	}
@@ -64,22 +108,11 @@ func (e *Engine) storeDeclines(ctx context.Context, pr store.PR, threads []learn
 	if err != nil {
 		return 0, 0, err
 	}
-	findings, err := e.st.FindingsByPR(wctx, pr.ID)
-	if err != nil {
-		return 0, 0, err
-	}
 	subject := prSubject(repo, pr.Number)
 	rows := map[string]int64{} // "<run id>/<finding id>" -> findings row
-	for _, f := range findings {
+	for _, f := range in.Findings {
 		rows[f.RunID+"/"+f.FindingID] = f.ID
 	}
-	byReview := map[int64]store.Run{}
-	for _, r := range runs {
-		if r.ReviewID != nil {
-			byReview[*r.ReviewID] = r
-		}
-	}
-	own := e.retroOwnLogins(pr, runs)
 	repoWords := []string{repo.Owner, repo.Name}
 	var errs []error
 	for _, t := range threads {
@@ -95,7 +128,7 @@ func (e *Engine) storeDeclines(ctx context.Context, pr store.PR, threads []learn
 		}
 		if it.Lesson != "" {
 			var reason string
-			if it.Lesson, reason = learn.ScrubLesson(it.Lesson, it.Scope, people, own, repoWords); reason != "" {
+			if it.Lesson, reason = learn.ScrubLesson(it.Lesson, it.Scope, people, in.Own, repoWords); reason != "" {
 				e.event(wctx, "info", subject, "retro.lesson_rejected", fmt.Sprintf("retro: the lesson of %s was dropped (%s)", t.ID, reason),
 					map[string]any{"candidate": t.ID, "reason": reason})
 			}
@@ -103,8 +136,8 @@ func (e *Engine) storeDeclines(ctx context.Context, pr store.PR, threads []learn
 		d := store.Decline{PRID: pr.ID, SourceURL: t.URL, CommentID: t.CommentID, ReviewID: t.ReviewID, Path: t.Path, Line: t.Line,
 			Title: t.Title, Priority: t.Priority, ReviewedSHA: t.ReviewedSHA, Outcome: it.Outcome, Verdict: it.Verdict,
 			Lesson: it.Lesson, Scope: it.Scope, Match: it.Match}
-		if r, ok := byReview[t.ReviewID]; ok && t.ReviewID > 0 {
-			d.RunID, d.SkillSHA = r.ID, skillSHAOf(r.PromptText)
+		if r, ok := reviews[t.ReviewID]; ok && t.ReviewID > 0 {
+			d.RunID, d.SkillSHA = r.ID, r.SkillSHA
 		}
 		if id, ok := rows[t.FindingRef]; ok && t.FindingRef != "" {
 			d.FindingRowID = &id
