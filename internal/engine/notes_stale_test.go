@@ -22,7 +22,9 @@ func judging(t *testing.T, h *harness) func() {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	h.judgeRun(h.pr(1), store.RunInitial, "base1", store.RunWorking, "", "")
+	if _, err := h.judgeRun(h.pr(1), store.RunInitial, "base1", store.RunWorking, "", ""); err != nil {
+		t.Fatal(err)
+	}
 	if !h.e.notesJudging(h.ctx, pr.RepoID) {
 		t.Fatal("the round is not in its judge stage")
 	}

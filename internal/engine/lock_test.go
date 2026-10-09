@@ -14,34 +14,37 @@ import (
 // command line.
 func TestLooksLikeDaemon(t *testing.T) {
 	cases := []struct {
+		name       string
 		comm, args string
 		want       bool
 	}{
-		{"/Users/b/Projects/magnum/bin/magnum", "/Users/b/Projects/magnum/bin/magnum daemon", true},
-		{"/Users/b/Projects/magnum/bin/magnum", "/Users/b/Projects/magnum/bin/magnum daemon --once", true},
-		{"/Users/b/My Projects/magnum/bin/magnum", "/Users/b/My Projects/magnum/bin/magnum daemon", true},
-		{"magnum", "magnum --config /x/config.toml daemon", true},
-		{"magnum", "magnum --config=/x/config.toml daemon", true},
-		{"magnum", "/Users/b/bin/magnum daemon", true}, // a bare (Linux-style) comm
+		{"the daemon", "/Users/b/Projects/magnum/bin/magnum", "/Users/b/Projects/magnum/bin/magnum daemon", true},
+		{"the daemon with --once", "/Users/b/Projects/magnum/bin/magnum", "/Users/b/Projects/magnum/bin/magnum daemon --once", true},
+		{"a path with a space", "/Users/b/My Projects/magnum/bin/magnum", "/Users/b/My Projects/magnum/bin/magnum daemon", true},
+		{"--config before the subcommand", "magnum", "magnum --config /x/config.toml daemon", true},
+		{"--config= before the subcommand", "magnum", "magnum --config=/x/config.toml daemon", true},
+		{"a bare comm", "magnum", "/Users/b/bin/magnum daemon", true}, // a bare (Linux-style) comm
 		// An editor opening a file named magnum: the executable is vim.
-		{"/usr/bin/vim", "/usr/bin/vim /tmp/magnum daemon", false},
-		{"/usr/bin/vim", "/usr/bin/vim magnum daemon", false},
-		{"vim", "vim /tmp/magnum daemon", false},
-		{"/usr/bin/vim", "/usr/bin/vim notes.txt", false},
+		{"vim on a file named magnum", "/usr/bin/vim", "/usr/bin/vim /tmp/magnum daemon", false},
+		{"vim on a file named daemon", "/usr/bin/vim", "/usr/bin/vim magnum daemon", false},
+		{"a bare vim", "vim", "vim /tmp/magnum daemon", false},
+		{"vim on another file", "/usr/bin/vim", "/usr/bin/vim notes.txt", false},
 		// daemon must be the subcommand, not a later argument.
-		{"/Users/b/bin/magnum", "/Users/b/bin/magnum status", false},
-		{"/Users/b/bin/magnum", "/Users/b/bin/magnum logs daemon", false},
-		{"/Users/b/bin/magnum", "/Users/b/bin/magnum --config daemon", false},
-		{"/Users/b/bin/magnum-old", "/Users/b/bin/magnum-old daemon", false},
-		{"/Users/b/bin/magnum", "/Users/b/bin/magnumx daemon", false},
-		{"/Users/b/bin/magnum", "/Users/b/bin/magnum", false},
-		{"", "/Users/b/bin/magnum daemon", false},
-		{"", "", false},
+		{"another subcommand", "/Users/b/bin/magnum", "/Users/b/bin/magnum status", false},
+		{"daemon as a later argument", "/Users/b/bin/magnum", "/Users/b/bin/magnum logs daemon", false},
+		{"daemon as the value of --config", "/Users/b/bin/magnum", "/Users/b/bin/magnum --config daemon", false},
+		{"an executable named magnum-old", "/Users/b/bin/magnum-old", "/Users/b/bin/magnum-old daemon", false},
+		{"a command line naming magnumx", "/Users/b/bin/magnum", "/Users/b/bin/magnumx daemon", false},
+		{"no subcommand", "/Users/b/bin/magnum", "/Users/b/bin/magnum", false},
+		{"no comm", "", "/Users/b/bin/magnum daemon", false},
+		{"nothing", "", "", false},
 	}
 	for _, tc := range cases {
-		if got := LooksLikeDaemon(tc.comm, tc.args); got != tc.want {
-			t.Errorf("LooksLikeDaemon(%q, %q) = %v, want %v", tc.comm, tc.args, got, tc.want)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			if got := LooksLikeDaemon(tc.comm, tc.args); got != tc.want {
+				t.Errorf("LooksLikeDaemon(%q, %q) = %v, want %v", tc.comm, tc.args, got, tc.want)
+			}
+		})
 	}
 }
 

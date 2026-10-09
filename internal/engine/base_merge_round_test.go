@@ -150,7 +150,9 @@ func TestRestartOnAMergedHeadSaysThePushMergedTheBase(t *testing.T) {
 		if in.BaseMerged {
 			t.Errorf("the plain push p1 reads as a base merge")
 		}
-		h.pushed(2, mergedHead)
+		if err := h.pushed(2, mergedHead); err != nil {
+			return failRound(t, err)
+		}
 		sw, err := in.Switch(context.Background(), mergedHead)
 		if err != nil {
 			return pipeline.RoundResult{Outcome: pipeline.OutcomeError, Error: err.Error()}, err

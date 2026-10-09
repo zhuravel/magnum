@@ -57,8 +57,13 @@ func TestMigrationV1ToV2KeepsData(t *testing.T) {
 	}
 	for rows.Next() {
 		var c string
-		rows.Scan(&c)
+		if err := rows.Scan(&c); err != nil {
+			t.Fatal(err)
+		}
 		cols = append(cols, c)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
 	}
 	rows.Close()
 	if !reflect.DeepEqual(cols, prColumns) {

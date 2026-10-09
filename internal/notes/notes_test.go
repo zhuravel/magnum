@@ -114,10 +114,9 @@ func TestWriteStateReplacesNotesAndHarness(t *testing.T) {
 // ErrBusy; a lock older than ten minutes is taken over.
 func TestLockFollowsTheJudgesProtocol(t *testing.T) {
 	r := testRepo(t)
+	orig := lockSleep
+	t.Cleanup(func() { lockSleep = orig })
 	lockSleep = func(ctx context.Context, d time.Duration) error { return ctx.Err() }
-	t.Cleanup(func() {
-		lockSleep = func(ctx context.Context, d time.Duration) error { time.Sleep(d); return ctx.Err() }
-	})
 	unlock, err := Lock(context.Background(), r.Lock(), time.Second)
 	if err != nil {
 		t.Fatal(err)
@@ -200,6 +199,58 @@ func TestLockWaitsForAStaleLockItCannotRemove(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(r.Lock(), "owner")); err != nil {
 		t.Errorf("the stale lock's content is gone: %v", err)
+	}
+}
+
+// A context that ends while Lock sleeps between its attempts ends the sleep:
+// Lock returns context.Canceled at once, not after the poll interval.
+func TestLockStopsSleepingWhenTheContextEnds(t *testing.T) {
+	r := testRepo(t)
+	if err := os.MkdirAll(r.Lock(), 0o700); err != nil { // a live holder's
+		t.Fatal(err)
+	}
+	orig := lockSleep
+	t.Cleanup(func() { lockSleep = orig })
+	sleeping := make(chan struct{}, 1)
+	slept := make(chan error, 1)
+	lockSleep = func(ctx context.Context, d time.Duration) error {
+		select {
+		case sleeping <- struct{}{}:
+		default:
+		}
+		err := orig(ctx, d)
+		select {
+		case slept <- err:
+		default:
+		}
+		return err
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		unlock, err := Lock(ctx, r.Lock(), time.Hour)
+		if err == nil {
+			unlock()
+		}
+		done <- err
+	}()
+	select {
+	case <-sleeping:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Lock never slept on a held lock")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Lock = %v, want context.Canceled", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Lock did not return after its context ended")
+	}
+	if err := <-slept; !errors.Is(err, context.Canceled) {
+		t.Errorf("the sleep the cancel interrupted returned %v, want context.Canceled (it waited out the %s poll)", err, lockPoll)
 	}
 }
 

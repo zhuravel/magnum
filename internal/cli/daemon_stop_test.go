@@ -7,6 +7,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // seedRoundInFlight records talkable/talkable#42 as reviewing.
@@ -15,6 +16,7 @@ func seedRoundInFlight(t *testing.T, dt *daemonGroupTest) {
 	if err := dt.ctx.Layout.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
+	storetest.Seed(t, dt.ctx.Layout.DB())
 	st, err := store.Open(dt.ctx.Layout.DB())
 	if err != nil {
 		t.Fatal(err)

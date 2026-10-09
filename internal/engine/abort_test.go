@@ -112,7 +112,10 @@ func TestAbortStopsTheRunningRound(t *testing.T) {
 	h := newHarness(t, withKeys(&kh))
 	pr := h.runningRound(7, "h7", false)
 	h.working(7)
-	run := h.judgeRun(pr, "initial", "h7", store.RunSubmitted, "", "")
+	run, err := h.judgeRun(pr, "initial", "h7", store.RunSubmitted, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	id := h.enqueue(ReqAbort, TargetPayload{PRTarget: PRTarget{Ref: "7"}})
 	h.tick()

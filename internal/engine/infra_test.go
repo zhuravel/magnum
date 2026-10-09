@@ -16,18 +16,20 @@ import (
 )
 
 func TestInfraCauseClassifiesOutsideFailures(t *testing.T) {
-	for _, tc := range []struct{ msg, want string }{
-		{"git fetch origin: git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.", "SSH key refused"},
-		{"fatal: unable to access 'https://github.com/x/y.git/': Could not resolve host: github.com", "DNS lookup failed"},
-		{"ssh: connect to host github.com port 22: Operation timed out", "network timeout"},
-		{"ssh: connect to host github.com port 22: Connection refused", "connection refused"},
-		{"fatal: unable to access: SSL certificate problem: unable to get local issuer certificate", "TLS failure"},
-		{"fatal: couldn't find remote ref refs/pull/7/head", ""},
-		{"slots: deps review1: bin/setup: exit 1: Gemfile.lock out of date", ""},
+	for _, tc := range []struct{ name, msg, want string }{
+		{"a refused SSH key", "git fetch origin: git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.", "SSH key refused"},
+		{"a failed DNS lookup", "fatal: unable to access 'https://github.com/x/y.git/': Could not resolve host: github.com", "DNS lookup failed"},
+		{"a network timeout", "ssh: connect to host github.com port 22: Operation timed out", "network timeout"},
+		{"a refused connection", "ssh: connect to host github.com port 22: Connection refused", "connection refused"},
+		{"a TLS failure", "fatal: unable to access: SSL certificate problem: unable to get local issuer certificate", "TLS failure"},
+		{"a missing ref is the PR's", "fatal: couldn't find remote ref refs/pull/7/head", ""},
+		{"a failed setup is the PR's", "slots: deps review1: bin/setup: exit 1: Gemfile.lock out of date", ""},
 	} {
-		if got := infraCause(errors.New(tc.msg)); got != tc.want {
-			t.Errorf("infraCause(%q) = %q, want %q", tc.msg, got, tc.want)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			if got := infraCause(errors.New(tc.msg)); got != tc.want {
+				t.Errorf("infraCause(%q) = %q, want %q", tc.msg, got, tc.want)
+			}
+		})
 	}
 }
 

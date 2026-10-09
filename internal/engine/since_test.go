@@ -184,9 +184,11 @@ func TestOwnLineDelta(t *testing.T) {
 		{"copies count", []string{"+a"}, []string{"+a", "+a", "+a"}, 2, 0},
 		{"the no-newline marker counts nothing", []string{"+a"}, []string{"+a", `\ No newline at end of file`}, 0, 0},
 	} {
-		if add, del := ownLineDelta(tc.before, tc.after); add != tc.add || del != tc.del {
-			t.Errorf("%s: +%d -%d, want +%d -%d", tc.name, add, del, tc.add, tc.del)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			if add, del := ownLineDelta(tc.before, tc.after); add != tc.add || del != tc.del {
+				t.Errorf("+%d -%d, want +%d -%d", add, del, tc.add, tc.del)
+			}
+		})
 	}
 }
 

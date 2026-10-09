@@ -198,9 +198,11 @@ func TestModifiedBinaryFilesKeepADeltaReadable(t *testing.T) {
 		"a large text file": {Path: "app/models/schema_dump.rb", Status: "modified", Truncated: true},
 		"a removed image":   {Path: "app/assets/images/old.png", Status: "removed", Truncated: true},
 	} {
-		if s := MeasureDelta(append(slices.Clone(liveDelta), extra)); s.Unread != 1 || s.Readable() {
-			t.Errorf("%s: %+v, want it unread", name, s)
-		}
+		t.Run(name, func(t *testing.T) {
+			if s := MeasureDelta(append(slices.Clone(liveDelta), extra)); s.Unread != 1 || s.Readable() {
+				t.Errorf("%+v, want it unread", s)
+			}
+		})
 	}
 	capped := make([]github.FileDelta, github.CompareFileLimit)
 	for i := range capped {
@@ -231,12 +233,14 @@ func TestAPatchlessFileListedCompleteIsStillUnread(t *testing.T) {
 		"an empty file":    {Path: "app/assets/.keep", Status: "modified", BlobSHA: "b2"},
 		"a removed binary": {Path: "app/assets/old.png", Status: "removed", BlobSHA: "b3"},
 	} {
-		if s := MeasureDelta([]github.FileDelta{f}); s.Complete {
-			t.Errorf("%s: %+v, want it incomplete", name, s)
-		}
-		if _, trivial := TrivialDelta([]github.FileDelta{yamlComments[0], f}, DeltaClasses); trivial {
-			t.Errorf("%s: a push with it is trivial", name)
-		}
+		t.Run(name, func(t *testing.T) {
+			if s := MeasureDelta([]github.FileDelta{f}); s.Complete {
+				t.Errorf("%+v, want it incomplete", s)
+			}
+			if _, trivial := TrivialDelta([]github.FileDelta{yamlComments[0], f}, DeltaClasses); trivial {
+				t.Error("a push with it is trivial")
+			}
+		})
 	}
 }
 

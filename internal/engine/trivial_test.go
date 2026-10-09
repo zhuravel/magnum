@@ -398,27 +398,30 @@ func TestAFileThatSteersTheReviewAgentsIsNeverTrivial(t *testing.T) {
 
 func TestDeltaLabel(t *testing.T) {
 	cases := []struct {
+		name    string
 		classes []string
 		want    string
 	}{
-		{nil, ""},
-		{[]string{"unknown"}, ""},
-		{[]string{DeltaComments}, "comments only"},
-		{[]string{DeltaWhitespace}, "whitespace only"},
-		{[]string{DeltaDocs}, "docs only"},
-		{[]string{DeltaComments, DeltaWhitespace}, "comments and whitespace only"},
-		{[]string{DeltaWhitespace, DeltaComments}, "comments and whitespace only"},
-		{[]string{DeltaComments, DeltaDocs}, "comments and docs only"},
-		{[]string{DeltaDocs, DeltaComments}, "comments and docs only"},
-		{[]string{DeltaWhitespace, DeltaDocs}, "whitespace and docs only"},
-		{[]string{DeltaDocs, DeltaWhitespace}, "whitespace and docs only"},
-		{[]string{DeltaComments, DeltaWhitespace, DeltaDocs}, "comments, whitespace and docs only"},
-		{[]string{DeltaDocs, DeltaWhitespace, DeltaComments}, "comments, whitespace and docs only"},
-		{[]string{DeltaWhitespace, DeltaDocs, DeltaComments, DeltaDocs}, "comments, whitespace and docs only"},
+		{"nothing", nil, ""},
+		{"an unknown class", []string{"unknown"}, ""},
+		{"comments", []string{DeltaComments}, "comments only"},
+		{"whitespace", []string{DeltaWhitespace}, "whitespace only"},
+		{"docs", []string{DeltaDocs}, "docs only"},
+		{"comments and whitespace", []string{DeltaComments, DeltaWhitespace}, "comments and whitespace only"},
+		{"whitespace and comments", []string{DeltaWhitespace, DeltaComments}, "comments and whitespace only"},
+		{"comments and docs", []string{DeltaComments, DeltaDocs}, "comments and docs only"},
+		{"docs and comments", []string{DeltaDocs, DeltaComments}, "comments and docs only"},
+		{"whitespace and docs", []string{DeltaWhitespace, DeltaDocs}, "whitespace and docs only"},
+		{"docs and whitespace", []string{DeltaDocs, DeltaWhitespace}, "whitespace and docs only"},
+		{"all three", []string{DeltaComments, DeltaWhitespace, DeltaDocs}, "comments, whitespace and docs only"},
+		{"all three in reverse", []string{DeltaDocs, DeltaWhitespace, DeltaComments}, "comments, whitespace and docs only"},
+		{"all three with docs twice", []string{DeltaWhitespace, DeltaDocs, DeltaComments, DeltaDocs}, "comments, whitespace and docs only"},
 	}
 	for _, tc := range cases {
-		if got := DeltaLabel(tc.classes); got != tc.want {
-			t.Errorf("DeltaLabel(%v) = %q, want %q", tc.classes, got, tc.want)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			if got := DeltaLabel(tc.classes); got != tc.want {
+				t.Errorf("DeltaLabel(%v) = %q, want %q", tc.classes, got, tc.want)
+			}
+		})
 	}
 }

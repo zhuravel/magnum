@@ -14,11 +14,13 @@ import (
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // draining reads engine.KVDaemonDraining from the test registry.
 func draining(t *testing.T, dt *daemonGroupTest) (string, bool) {
 	t.Helper()
+	storetest.Seed(t, dt.ctx.Layout.DB())
 	st, err := store.Open(dt.ctx.Layout.DB())
 	if err != nil {
 		t.Fatal(err)
@@ -34,6 +36,7 @@ func draining(t *testing.T, dt *daemonGroupTest) (string, bool) {
 // finishRound moves talkable/talkable#42 from reviewing to reviewed.
 func finishRound(t *testing.T, dt *daemonGroupTest) {
 	t.Helper()
+	storetest.Seed(t, dt.ctx.Layout.DB())
 	st, err := store.Open(dt.ctx.Layout.DB())
 	if err != nil {
 		t.Fatal(err)
@@ -113,6 +116,7 @@ func TestDaemonRestartDrainWaitsForRoundsThenRestarts(t *testing.T) {
 // drainEvents are the kinds of the drain events in the test registry.
 func drainEvents(t *testing.T, dt *daemonGroupTest) []string {
 	t.Helper()
+	storetest.Seed(t, dt.ctx.Layout.DB())
 	st, err := store.Open(dt.ctx.Layout.DB())
 	if err != nil {
 		t.Fatal(err)
@@ -130,6 +134,9 @@ func drainEvents(t *testing.T, dt *daemonGroupTest) []string {
 			t.Fatal(err)
 		}
 		out = append(out, k)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
 	}
 	return out
 }

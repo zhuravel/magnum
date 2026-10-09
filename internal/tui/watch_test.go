@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -440,25 +440,35 @@ func TestWatchLongLinesAreCutToWidth(t *testing.T) {
 	mustContain(t, viewOf(m), "short")
 }
 
-// scriptedProgram feeds RunWatch an input pipe and discards its output.
-func scriptedProgram(t *testing.T) *io.PipeWriter {
-	t.Helper()
-	r, w := io.Pipe()
-	t.Cleanup(func() { r.Close(); w.Close() })
-	old := extraProgramOptions
-	extraProgramOptions = []tea.ProgramOption{tea.WithInput(r), tea.WithOutput(io.Discard), tea.WithoutRenderer()}
-	t.Cleanup(func() { extraProgramOptions = old })
-	return w
-}
-
 func runWatchAsync(ctx context.Context, fetch WatchFetch, opts WatchOptions) <-chan error {
 	done := make(chan error, 1)
 	go func() { done <- RunWatch(ctx, fetch, opts) }()
 	return done
 }
 
+// announced wraps fetch so that the returned channel closes when the
+// program first calls it: the program has run Init and reads its input.
+func announced(fetch WatchFetch) (WatchFetch, <-chan struct{}) {
+	started := make(chan struct{})
+	var once sync.Once
+	return func(ctx context.Context) (WatchFrame, error) {
+		once.Do(func() { close(started) })
+		return fetch(ctx)
+	}, started
+}
+
+// waitFor fails the test unless ch closes within five seconds.
+func waitFor(t *testing.T, ch <-chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("%s did not happen", what)
+	}
+}
+
 func TestWatchRunReturnsTheStopWatchError(t *testing.T) {
-	scriptedProgram(t)
+	scriptedInput(t)
 	var calls, inflight, overlap atomic.Int32
 	fetch := func(context.Context) (WatchFrame, error) {
 		if inflight.Add(1) > 1 {
@@ -471,7 +481,7 @@ func TestWatchRunReturnsTheStopWatchError(t *testing.T) {
 		return numberedFrame(3), nil
 	}
 	select {
-	case err := <-runWatchAsync(context.Background(), fetch, WatchOptions{Interval: 200 * time.Millisecond}):
+	case err := <-runWatchAsync(context.Background(), fetch, WatchOptions{Tick: instantTick}):
 		if !errors.Is(err, errSentinel) {
 			t.Fatalf("RunWatch = %v, want an error matching the sentinel", err)
 		}
@@ -484,13 +494,15 @@ func TestWatchRunReturnsTheStopWatchError(t *testing.T) {
 }
 
 func TestWatchRunQuitKeyReturnsNil(t *testing.T) {
-	w := scriptedProgram(t)
-	go func() {
-		time.Sleep(300 * time.Millisecond)
-		w.Write([]byte("q"))
-	}()
+	w := scriptedInput(t)
+	// The timer never fires: an instant one would fetch again and again
+	// until q arrives.
+	fetch, started := announced(okFetch(numberedFrame(3)))
+	done := runWatchAsync(context.Background(), fetch, WatchOptions{Tick: neverTick})
+	waitFor(t, started, "the first fetch")
+	go func() { _, _ = w.Write([]byte("q")) }() // waits until the program reads it
 	select {
-	case err := <-runWatchAsync(context.Background(), okFetch(numberedFrame(3)), WatchOptions{Interval: 200 * time.Millisecond}):
+	case err := <-done:
 		if err != nil {
 			t.Fatalf("RunWatch = %v, want nil after q", err)
 		}
@@ -500,10 +512,11 @@ func TestWatchRunQuitKeyReturnsNil(t *testing.T) {
 }
 
 func TestWatchRunEndsQuietlyWhenContextEnds(t *testing.T) {
-	scriptedProgram(t)
+	scriptedInput(t)
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	sawCancel := make(chan struct{})
-	fetch := func(ctx context.Context) (WatchFrame, error) {
+	fetch, started := announced(func(ctx context.Context) (WatchFrame, error) {
 		select {
 		case <-ctx.Done():
 			close(sawCancel)
@@ -511,9 +524,9 @@ func TestWatchRunEndsQuietlyWhenContextEnds(t *testing.T) {
 		case <-time.After(10 * time.Second):
 			return WatchFrame{}, errors.New("fetch was never cancelled")
 		}
-	}
-	done := runWatchAsync(ctx, fetch, WatchOptions{})
-	time.Sleep(200 * time.Millisecond)
+	})
+	done := runWatchAsync(ctx, fetch, WatchOptions{Tick: neverTick})
+	waitFor(t, started, "the first fetch")
 	cancel()
 	select {
 	case err := <-done:

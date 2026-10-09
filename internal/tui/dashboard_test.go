@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"slices"
 	"strings"
 	"sync"
@@ -476,11 +475,7 @@ func TestDashboardQuitKeys(t *testing.T) {
 }
 
 func TestRunDashboardEndsWithContext(t *testing.T) {
-	r, w := io.Pipe()
-	t.Cleanup(func() { w.Close(); r.Close() })
-	old := extraProgramOptions
-	extraProgramOptions = []tea.ProgramOption{tea.WithInput(r), tea.WithOutput(io.Discard), tea.WithoutRenderer()}
-	t.Cleanup(func() { extraProgramOptions = old })
+	scriptedInput(t)
 
 	src := &fakeSource{data: dashData()}
 	ctx, cancel := context.WithCancel(context.Background())

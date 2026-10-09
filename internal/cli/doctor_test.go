@@ -18,6 +18,7 @@ import (
 	"github.com/zhuravel/magnum/internal/launchd"
 	"github.com/zhuravel/magnum/internal/mysqlx"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 type fakeDoctorHerdr struct {
@@ -300,6 +301,7 @@ func doctorSandbox(t *testing.T, f *inspFixture) string {
 // with every source faked or unreachable, and checks named results.
 func TestDoctorCommandRuns(t *testing.T) {
 	f := newInspFixture(t)
+	storetest.Seed(t, f.Ctx.Layout.DB())
 	home := doctorSandbox(t, f)
 	staging := filepath.Join(home, ".codex", ".tmp", "marketplaces", ".staging")
 	skill := filepath.Join(f.Home, "skills", "magnum-review", "SKILL.md")

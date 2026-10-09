@@ -73,8 +73,11 @@ fixtures run them in parallel: `newHarness` (engine) and `newEnv` (pipeline, age
 `t.Setenv` calls `storetest.Serial(t)` (gitx: `keepSerial(t)`) before its fixture. A round's fakes
 share one clock that every fake Sleep moves at once: a pipeline role that must still be at work when
 another goroutine ends the round uses `fakeAgents.hangs` (its Submit returns when the round cancels
-it), not `hang()`, whose waits can run out its timeout first on a busy machine. The tui tests build
-screens with `testDashboard`, `testPRBoard` and `testWatch`, whose timers answer at once.
+it), not `hang()`, whose waits can run out its timeout first on a busy machine. Round scripts and fake
+hooks run on the engine's goroutines: they report with `t.Errorf` and return `failRound`'s error result,
+never `t.Fatal`; `newHarness` runs on `t.Context()` and its cleanup fails a test whose rounds, retro,
+curation, Run loop (`h.goRun`) or toasts outlive it. The tui tests build screens with `testDashboard`,
+`testPRBoard` and `testWatch`, whose timers answer at once.
 
 ## Layout
 

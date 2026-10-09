@@ -16,6 +16,7 @@ import (
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/slots"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 type fakeSlotOps struct {
@@ -275,6 +276,7 @@ func TestSlotsRemoveUsesCleanup(t *testing.T) {
 
 func TestSlotsCommandDispatch(t *testing.T) {
 	f := newInspFixture(t)
+	storetest.Seed(t, f.Ctx.Layout.DB())
 	if code := f.run("slots", "bogus"); code != 2 || !strings.Contains(f.Err.String(), "unknown slots subcommand") {
 		t.Fatalf("code %d err %s", code, f.Err.String())
 	}

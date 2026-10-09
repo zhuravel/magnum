@@ -3,7 +3,6 @@ package tui
 import (
 	"context"
 	"fmt"
-	"io"
 	"slices"
 	"strings"
 	"testing"
@@ -521,16 +520,11 @@ func TestCleanupSelectionIsNotSharedAcrossModels(t *testing.T) {
 // TestCleanupRunPlanScriptedInput drives the real program: enter to review,
 // y to apply.
 func TestCleanupRunPlanScriptedInput(t *testing.T) {
-	r, w := io.Pipe()
-	t.Cleanup(func() { r.Close(); w.Close() })
-	old := extraProgramOptions
-	extraProgramOptions = []tea.ProgramOption{tea.WithInput(r), tea.WithOutput(io.Discard), tea.WithoutRenderer()}
-	t.Cleanup(func() { extraProgramOptions = old })
+	w := scriptedInput(t)
 
 	go func() {
 		for _, k := range []string{"\r", "y"} {
-			time.Sleep(150 * time.Millisecond)
-			if _, err := w.Write([]byte(k)); err != nil {
+			if _, err := w.Write([]byte(k)); err != nil { // returns once the program read it
 				return
 			}
 		}
@@ -559,16 +553,16 @@ func TestCleanupRunPlanScriptedInput(t *testing.T) {
 }
 
 func TestCleanupRunPlanContextEndedMeansNoApply(t *testing.T) {
-	r, w := io.Pipe()
-	t.Cleanup(func() { r.Close(); w.Close() })
-	old := extraProgramOptions
-	extraProgramOptions = []tea.ProgramOption{tea.WithInput(r), tea.WithOutput(io.Discard), tea.WithoutRenderer()}
-	t.Cleanup(func() { extraProgramOptions = old })
+	w := scriptedInput(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	go func() {
-		time.Sleep(200 * time.Millisecond)
-		cancel()
+		// j only moves the cursor; the write returns once the running
+		// program read it, and the context ends then.
+		if _, err := w.Write([]byte("j")); err == nil {
+			cancel()
+		}
 	}()
 	done := make(chan CleanupOutcome, 1)
 	go func() {

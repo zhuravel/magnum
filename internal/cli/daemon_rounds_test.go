@@ -12,6 +12,7 @@ import (
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 func TestActiveRoundsReadsAnOddHome(t *testing.T) {
@@ -24,11 +25,7 @@ func TestActiveRoundsReadsAnOddHome(t *testing.T) {
 	if err := c.Layout.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
-	st, err := store.Open(c.Layout.DB())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
+	st := storetest.Open(t, c.Layout.DB())
 	inspSeedPR(t, st, "talkable/talkable", 7, store.PRReviewing, nil)
 	inspSeedPR(t, st, "talkable/talkable", 8, store.PRReviewed, nil)
 	rounds, err := c.activeRounds(context.Background())
@@ -51,11 +48,7 @@ func TestARunningCurationOrRetroRefusesAStop(t *testing.T) {
 	if err := c.Layout.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
-	st, err := store.Open(c.Layout.DB())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
+	st := storetest.Open(t, c.Layout.DB())
 	ctx := context.Background()
 	started := time.Now().Add(-3 * time.Minute)
 	mark, _ := json.Marshal(engine.CurateMark{Repo: "talkable/talkable", Trigger: "request", Started: started})

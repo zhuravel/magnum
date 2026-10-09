@@ -47,6 +47,9 @@ func indexNames(t *testing.T, st *Store, table string) []string {
 		}
 		names = append(names, n)
 	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
 	return names
 }
 

@@ -6,19 +6,13 @@ import (
 	"io"
 	"testing"
 	"time"
-
-	tea "charm.land/bubbletea/v2"
 )
 
 // runWithKeys runs a screen on a pipe that sends input once the screen
 // loaded, and returns what the screen returned.
 func runWithKeys(t *testing.T, input string, loaded func() bool, run func(ctx context.Context) error) error {
 	t.Helper()
-	r, w := io.Pipe()
-	t.Cleanup(func() { w.Close(); r.Close() })
-	old := extraProgramOptions
-	extraProgramOptions = []tea.ProgramOption{tea.WithInput(r), tea.WithOutput(io.Discard), tea.WithoutRenderer()}
-	t.Cleanup(func() { extraProgramOptions = old })
+	w := scriptedInput(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

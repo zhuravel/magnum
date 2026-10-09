@@ -18,6 +18,7 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 	"github.com/zhuravel/magnum/internal/tui"
 )
 
@@ -471,6 +472,7 @@ func prsRefs(rows []tui.PRBoardRow) []string {
 
 func TestPRsUsageErrors(t *testing.T) {
 	f := newInspFixture(t)
+	storetest.Seed(t, f.Ctx.Layout.DB())
 	for _, args := range [][]string{
 		{"--sort", "bogus"}, {"--limit", "-1"}, {"--repo", "talkable/"}, {"--repo", "a/b/c"}, {"extra"},
 	} {

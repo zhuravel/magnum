@@ -668,7 +668,10 @@ func TestMigrationWaitsForAPausedRoundToContinue(t *testing.T) {
 	m.rd.script = func(in pipeline.RoundInput) (pipeline.RoundResult, error) {
 		n := len(m.rd.all())
 		if pause.CompareAndSwap(true, false) {
-			run := m.judgeRun(in.PR, in.Kind, in.TargetSHA, store.RunFailed, pipeline.OutcomeUsageLimit, "judge pane: usage limit")
+			run, err := m.judgeRun(in.PR, in.Kind, in.TargetSHA, store.RunFailed, pipeline.OutcomeUsageLimit, "judge pane: usage limit")
+			if err != nil {
+				return failRound(t, err)
+			}
 			return pipeline.RoundResult{Outcome: pipeline.OutcomeUsageLimit, Round: 1, JudgeRunID: run.ID,
 				Pause: &pipeline.Pause{Kind: string(agents.HealthUsageLimit), Tool: agents.KindCodex, Until: m.clock.Now().Add(time.Hour)}}, nil
 		}

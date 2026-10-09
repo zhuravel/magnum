@@ -25,16 +25,27 @@ func reloadingClaude(h *harness) *[]string {
 	h.ag.mu.Lock()
 	h.ag.reloads = map[string]bool{store.RoleClaude: true}
 	h.ag.resumeIDs = map[agents.Role]string{agents.RoleClaude: "uuid-claude"}
-	h.ag.onQuit = func(s store.Session) {
-		at = append(at, s.Role+"@"+deref(h.slot("review1").CheckedOutSHA))
+	h.ag.onQuit = func(s store.Session) { // on the round's goroutine: no t.Fatal
+		sl, err := h.lookupSlot("review1")
+		if err != nil {
+			h.t.Error(err)
+		}
+		at = append(at, s.Role+"@"+deref(sl.CheckedOutSHA))
 	}
 	h.ag.mu.Unlock()
 	return &at
 }
 
+// liveRole reports whether PR #n's role has a live session. Round scripts
+// call it, so a PR it cannot read is an error, not the test's end.
 func liveRole(h *harness, n int, role string) bool {
 	h.t.Helper()
-	s, err := h.st.LiveSessionByPRRole(h.ctx, h.pr(n).ID, role)
+	pr, err := h.lookupPR(n)
+	if err != nil {
+		h.t.Error(err)
+		return false
+	}
+	s, err := h.st.LiveSessionByPRRole(h.ctx, pr.ID, role)
 	return err == nil && s.State == store.SessionLive
 }
 
@@ -127,7 +138,9 @@ func TestRoundRestartParksAReloadingSessionAcrossTheSwitch(t *testing.T) {
 		h.ag.mu.Lock()
 		h.ag.efforts = nil
 		h.ag.mu.Unlock()
-		h.pushed(2, "b2")
+		if err := h.pushed(2, "b2"); err != nil {
+			return failRound(t, err)
+		}
 		sw, err := in.Switch(context.Background(), "b2")
 		if err != nil {
 			return pipeline.RoundResult{Outcome: pipeline.OutcomeError, Error: err.Error()}, err
@@ -275,7 +288,9 @@ func TestRoundRestartDecidesByGitWithoutAListOfTheNewHead(t *testing.T) {
 	var during []string
 	h.rd.script = func(in pipeline.RoundInput) (pipeline.RoundResult, error) {
 		at = reloadingClaude(h)
-		h.pushed(2, "b2")
+		if err := h.pushed(2, "b2"); err != nil {
+			return failRound(t, err)
+		}
 		before := len(h.sl.all())
 		sw, err := in.Switch(context.Background(), "b2")
 		during = h.sl.all()[before:]

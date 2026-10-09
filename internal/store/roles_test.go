@@ -129,11 +129,16 @@ func TestMigrationV2ToV3FreeFormRoles(t *testing.T) {
 		for rows.Next() {
 			var name string
 			var x idx
-			rows.Scan(&name, &x.unique, &x.partial)
+			if err := rows.Scan(&name, &x.unique, &x.partial); err != nil {
+				t.Fatal(err)
+			}
 			if w, ok := wantIdx[name]; !ok || w != x {
 				t.Fatalf("index %s on %s = %+v, want %+v (known %v)", name, tbl, x, w, ok)
 			}
 			delete(wantIdx, name)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
 		}
 		rows.Close()
 	}
@@ -148,7 +153,11 @@ func TestMigrationV2ToV3FreeFormRoles(t *testing.T) {
 		t.Fatal(err)
 	} else {
 		bad := rows.Next()
+		err := rows.Err()
 		rows.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
 		if bad {
 			t.Fatal("foreign_key_check reports violations after 0003")
 		}

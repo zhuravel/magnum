@@ -31,6 +31,9 @@ func (h *harness) events(kind string) []store.Event {
 		}
 		out = append(out, ev)
 	}
+	if err := rows.Err(); err != nil {
+		h.t.Fatal(err)
+	}
 	return out
 }
 

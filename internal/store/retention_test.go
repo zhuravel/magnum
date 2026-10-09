@@ -73,8 +73,13 @@ func TestPruneEventsAndRequests(t *testing.T) {
 	}
 	for rows.Next() {
 		var id int64
-		rows.Scan(&id)
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
 		left = append(left, id)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
 	}
 	rows.Close()
 	gone := map[int64]bool{oldPlain: true, oldReset: true, oldStep: true, oldNote: true, otherOld: true, noResetStep: true}

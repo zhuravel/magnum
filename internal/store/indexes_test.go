@@ -91,6 +91,9 @@ func TestMigrationV3ToV4Indexes(t *testing.T) {
 			}
 			details = append(details, detail)
 		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
 		rows.Close()
 		if plan := strings.Join(details, "; "); !strings.Contains(plan, p.index) {
 			t.Errorf("%s\nplan: %s\nwant it to use %s", p.query, plan, p.index)

@@ -3,11 +3,13 @@ package cli
 import (
 	"context"
 	"encoding/json"
-	"github.com/zhuravel/magnum/internal/config"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // writeBareConfig writes a valid config.toml that declares no identity and no
@@ -98,6 +100,7 @@ func TestDoctorConfigWarnings(t *testing.T) {
 // check names the --config file and carries its warnings.
 func TestDoctorCommandJSONHasConfigFileAndWarnings(t *testing.T) {
 	f := newInspFixture(t)
+	storetest.Seed(t, f.Ctx.Layout.DB())
 	doctorSandbox(t, f)
 	custom := writeBareConfig(t)
 	code := f.run("doctor", "--json", "--config", custom)

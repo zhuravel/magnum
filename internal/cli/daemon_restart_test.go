@@ -9,6 +9,7 @@ import (
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // printSequence answers successive `launchctl print` calls with outs (the
@@ -151,6 +152,7 @@ func TestDaemonRestartRefusesWhileRoundsRun(t *testing.T) {
 		daemonRuleOK([]string{"launchctl", "kickstart", "-k", "gui/501/zhuravel.magnum"}, ""),
 	)
 	daemonSys.DaemonPID = func(paths.Layout) (int, error) { return 100, nil }
+	storetest.Seed(t, dt.ctx.Layout.DB())
 	st, err := store.Open(dt.ctx.Layout.DB())
 	if err != nil {
 		t.Fatal(err)

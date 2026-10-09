@@ -58,7 +58,7 @@ func TestRoundsMagnumCutShortAreRefunded(t *testing.T) {
 			before, after := secondRound(t, h, func(in pipeline.RoundInput) (pipeline.RoundResult, error) {
 				if tc.runs {
 					if err := promptedRun(h.ctx, h.st, in, 2); err != nil {
-						t.Fatal(err)
+						return failRound(t, err)
 					}
 				}
 				return tc.result, nil
@@ -101,7 +101,7 @@ func TestRoundsThatDidTheirWorkCount(t *testing.T) {
 			h := newHarness(t)
 			before, after := secondRound(t, h, func(in pipeline.RoundInput) (pipeline.RoundResult, error) {
 				if err := promptedRun(h.ctx, h.st, in, 2); err != nil {
-					t.Fatal(err)
+					return failRound(t, err)
 				}
 				return tc.result, nil
 			})

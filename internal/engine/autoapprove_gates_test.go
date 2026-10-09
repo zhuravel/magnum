@@ -370,9 +370,11 @@ func TestRoundBlocksReadsTheOpenFindingsByPriority(t *testing.T) {
 		"open, a clean line":    {store.ReviewSummary{Open: 1}, "No blocking problems.", false, true},
 		"nothing open or found": {store.ReviewSummary{}, "", false, true},
 	} {
-		if blocks, known := roundBlocks(tc.sum, tc.body); blocks != tc.blocks || known != tc.known {
-			t.Errorf("%s: blocks %v known %v, want %v %v", name, blocks, known, tc.blocks, tc.known)
-		}
+		t.Run(name, func(t *testing.T) {
+			if blocks, known := roundBlocks(tc.sum, tc.body); blocks != tc.blocks || known != tc.known {
+				t.Errorf("blocks %v known %v, want %v %v", blocks, known, tc.blocks, tc.known)
+			}
+		})
 	}
 }
 

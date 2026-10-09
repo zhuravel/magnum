@@ -11,6 +11,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/app"
 	"github.com/zhuravel/magnum/internal/engine"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 func TestDaemonParsesFlagsAndPrintsDryRunPlan(t *testing.T) {
@@ -135,6 +136,7 @@ func TestOnlyTheDaemonOwnsLogRotation(t *testing.T) {
 		t.Fatalf("daemon app options %+v", o)
 	}
 	f := newInspFixture(t)
+	storetest.Seed(t, f.Ctx.Layout.DB())
 	var seen []app.Options
 	prev := inspAppHook
 	inspAppHook = func(o *app.Options) { prev(o); seen = append(seen, *o) }

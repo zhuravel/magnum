@@ -881,9 +881,57 @@ func (f *fakeRounds) RunRound(ctx context.Context, in pipeline.RoundInput) (pipe
 		}
 	}
 	if script != nil {
-		return script(in)
+		return runScript(script, in)
 	}
 	return f.posted(ctx, in, n)
+}
+
+// errScriptExited is the error of a round whose script ended its goroutine
+// instead of returning.
+var errScriptExited = errors.New("the round script called t.Fatal or t.FailNow: a script reports with t.Errorf and returns an error result (failRound)")
+
+// runScript runs a round script on a goroutine of its own and returns what
+// it returned. A script runs off the test's goroutine, where t.Fatal ends
+// only the goroutine: on the round's own goroutine it would stop the round
+// half-way and fail the test later on unrelated state, so the round ends as
+// an error instead. A panic goes on on the round's goroutine, which the
+// engine recovers as a panicked round.
+func runScript(script func(pipeline.RoundInput) (pipeline.RoundResult, error), in pipeline.RoundInput) (pipeline.RoundResult, error) {
+	type outcome struct {
+		res      pipeline.RoundResult
+		err      error
+		returned bool
+		panicked any
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		var o outcome
+		defer func() {
+			if !o.returned {
+				o.panicked = recover() // nil after runtime.Goexit
+			}
+			done <- o
+		}()
+		o.res, o.err = script(in)
+		o.returned = true
+	}()
+	o := <-done
+	switch {
+	case o.returned:
+		return o.res, o.err
+	case o.panicked != nil:
+		panic(o.panicked)
+	}
+	return pipeline.RoundResult{Outcome: pipeline.OutcomeError, Error: errScriptExited.Error()}, errScriptExited
+}
+
+// failRound reports err and ends the round as an error: what a round script
+// or a fake's hook does where a test would call t.Fatal, since it runs on a
+// goroutine of the engine's.
+func failRound(t *testing.T, err error) (pipeline.RoundResult, error) {
+	t.Helper()
+	t.Error(err)
+	return pipeline.RoundResult{Outcome: pipeline.OutcomeError, Error: err.Error()}, err
 }
 
 // posted is the default round: every non-judge role pipeline.RolesToRun
@@ -1448,11 +1496,18 @@ type harness struct {
 	nh     *fakeNotifyHerdr
 	ids    map[string]*fakeIdentity
 	app    *fakeAppIdentity
+	runs   sync.WaitGroup // Run loops goRun started
 }
+
+// leakWait bounds how long a test's cleanup waits for what its engine still
+// runs once the test's context has ended.
+const leakWait = 20 * time.Second
 
 // newHarness builds a daemon on fakes with a registry and a config of its
 // own, and runs t in parallel with the other tests (storetest.Parallel;
-// storetest.Serial before it keeps a test serial).
+// storetest.Serial before it keeps a test serial). Its context is the
+// test's, and when the test ends stop checks that nothing the engine started
+// outlives it.
 func newHarness(t *testing.T, mods ...func(*harness)) *harness {
 	t.Helper()
 	storetest.Parallel(t)
@@ -1473,7 +1528,7 @@ func newHarness(t *testing.T, mods ...func(*harness)) *harness {
 	clock := storetest.NewClock(time.Date(2026, 10, 5, 10, 0, 0, 0, time.Local))
 	st.Clock = clock.Now
 
-	h := &harness{t: t, ctx: context.Background(), st: st, cfg: cfg, layout: layout, clock: clock,
+	h := &harness{t: t, ctx: t.Context(), st: st, cfg: cfg, layout: layout, clock: clock,
 		gh: newFakeGH(), hd: &fakeHerdr{}, ag: &fakeAgents{st: st}, rd: &fakeRounds{st: st}, sl: &fakeSlots{st: st},
 		nh: &fakeNotifyHerdr{}}
 	h.inv = &fakeInventory{now: clock.Now}
@@ -1511,7 +1566,57 @@ func newHarness(t *testing.T, mods ...func(*harness)) *harness {
 		m(h)
 	}
 	h.e = New(h.d)
+	t.Cleanup(h.stop) // after storetest.Open's: it runs before the registry closes
 	return h
+}
+
+// stop runs when the test ends, once the test's context (h.ctx) has ended,
+// which stops the rounds, the Run loops and the gates a test left waiting:
+// it cancels what still runs, waits up to leakWait for the rounds, the
+// retro, the notes curation and the Run loops, stops the toasts, and fails
+// the test on anything left, which would log after the test ended or write
+// to a closed registry. Queued heavy jobs only run on a Run loop's worker
+// or in settle, so none is left running. It checks the engine the test
+// ended with (h.e), not one a test replaced.
+func (h *harness) stop() {
+	e := h.e
+	e.mu.Lock()
+	for _, rh := range e.rounds {
+		rh.cancel()
+	}
+	e.mu.Unlock()
+	e.stopRetro()
+	e.stopCurate()
+	done := make(chan struct{})
+	go func() {
+		e.roundWG.Wait()
+		e.retroWG.Wait()
+		e.curateWG.Wait()
+		h.runs.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(leakWait):
+		h.t.Errorf("rounds, a retro, a notes curation or a Run loop still ran %s after the test ended", leakWait)
+		return
+	}
+	e.stopToasts()
+	toasts := make(chan struct{})
+	go func() { e.toastWG.Wait(); close(toasts) }()
+	select {
+	case <-toasts:
+	case <-time.After(leakWait):
+		h.t.Errorf("urgent toasts still ran %s after the test ended", leakWait)
+	}
+}
+
+// goRun runs the daemon loop on a goroutine of its own until ctx ends and
+// returns its result; the test's cleanup waits for it.
+func (h *harness) goRun(ctx context.Context, opts Options) <-chan error {
+	done := make(chan error, 1)
+	h.runs.Go(func() { done <- h.e.Run(ctx, opts) })
+	return done
 }
 
 type testWriter struct{ t *testing.T }
@@ -1560,26 +1665,48 @@ func (h *harness) startup() {
 
 func (h *harness) advance(d time.Duration) { h.clock.Add(d) }
 
+// pr is talkable/talkable#n, on the test's goroutine (a round script calls
+// lookupPR).
 func (h *harness) pr(n int) store.PR {
 	h.t.Helper()
-	repo, err := h.st.RepoByFullName(h.ctx, "talkable/talkable")
+	pr, err := h.lookupPR(n)
 	if err != nil {
 		h.t.Fatal(err)
-	}
-	pr, err := h.st.PRByRepoNumber(h.ctx, repo.ID, n)
-	if err != nil {
-		h.t.Fatalf("pr %d: %v", n, err)
 	}
 	return pr
 }
 
+// lookupPR is talkable/talkable#n.
+func (h *harness) lookupPR(n int) (store.PR, error) {
+	repo, err := h.st.RepoByFullName(h.ctx, "talkable/talkable")
+	if err != nil {
+		return store.PR{}, err
+	}
+	pr, err := h.st.PRByRepoNumber(h.ctx, repo.ID, n)
+	if err != nil {
+		return store.PR{}, fmt.Errorf("pr %d: %w", n, err)
+	}
+	return pr, nil
+}
+
+// slot is the slot named name, on the test's goroutine (a round script or a
+// fake's hook calls lookupSlot).
 func (h *harness) slot(name string) store.Slot {
 	h.t.Helper()
-	sl, err := h.st.SlotByName(h.ctx, name)
+	sl, err := h.lookupSlot(name)
 	if err != nil {
 		h.t.Fatal(err)
 	}
 	return sl
+}
+
+// lookupSlot is the slot named name.
+func (h *harness) lookupSlot(name string) (store.Slot, error) {
+	sl, err := h.st.SlotByName(h.ctx, name)
+	if err != nil {
+		return store.Slot{}, fmt.Errorf("slot %s: %w", name, err)
+	}
+	return sl, nil
 }
 
 func (h *harness) wantState(n int, state string) store.PR {

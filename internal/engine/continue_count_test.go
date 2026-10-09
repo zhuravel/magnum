@@ -2,6 +2,7 @@ package engine
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -11,42 +12,40 @@ import (
 )
 
 // nextRound is the round number a new round of the PR gets: one past the
-// latest of its runs.
-func nextRound(h *harness, prID int64) int {
-	h.t.Helper()
+// latest of its runs. Round scripts call it, so it returns its error.
+func nextRound(h *harness, prID int64) (int, error) {
 	runs, err := h.st.RunsByPR(h.ctx, prID)
 	if err != nil {
-		h.t.Fatal(err)
+		return 0, err
 	}
 	round := 1
 	for _, r := range runs {
 		round = max(round, r.Round+1)
 	}
-	return round
+	return round, nil
 }
 
 // sentJudge records the judge run of round the way the pipeline leaves a
 // turn in flight: prompted and submitted.
-func sentJudge(h *harness, in pipeline.RoundInput, round int) {
-	h.t.Helper()
+func sentJudge(h *harness, in pipeline.RoundInput, round int) error {
 	sent := h.clock.Now()
-	if _, err := h.st.CreateRun(h.ctx, store.Run{PRID: in.PR.ID, Round: round, Role: store.RoleJudge, Kind: in.Kind,
+	_, err := h.st.CreateRun(h.ctx, store.Run{PRID: in.PR.ID, Round: round, Role: store.RoleJudge, Kind: in.Kind,
 		TargetSHA: in.TargetSHA, Identity: in.PR.Identity, ReviewerLogin: "talkable[bot]", State: store.RunSubmitted,
-		PromptText: "judge", SubmittedAt: &sent}); err != nil {
-		h.t.Fatal(err)
-	}
+		PromptText: "judge", SubmittedAt: &sent})
+	return err
 }
 
 // shutDown cancels the PR's round as a daemon shutdown does: its context
 // ends, and no abort asked for it.
-func shutDown(h *harness, prID int64) {
+func shutDown(h *harness, prID int64) error {
 	h.e.mu.Lock()
 	rh := h.e.rounds[prID]
 	h.e.mu.Unlock()
 	if rh == nil {
-		h.t.Fatal("no round to shut down")
+		return errors.New("no round to shut down")
 	}
 	rh.cancel()
+	return nil
 }
 
 // A round a shutdown stopped once its judge was prompted is not over: the
@@ -63,9 +62,16 @@ func stoppedDuringTheJudgesTurn(t *testing.T, sessionLost bool) {
 	h := newHarness(t)
 	before := h.reviewedPR(2, "b1")
 	h.rd.script = func(in pipeline.RoundInput) (pipeline.RoundResult, error) {
-		round := nextRound(h, in.PR.ID)
-		sentJudge(h, in, round)
-		shutDown(h, in.PR.ID)
+		round, err := nextRound(h, in.PR.ID)
+		if err == nil {
+			err = sentJudge(h, in, round)
+		}
+		if err == nil {
+			err = shutDown(h, in.PR.ID)
+		}
+		if err != nil {
+			return failRound(t, err)
+		}
 		return pipeline.RoundResult{Outcome: pipeline.OutcomeStopped, Round: round, Error: "pipeline: round cancelled: context canceled"}, nil
 	}
 	pollPR(h, 40*time.Minute, 2, "b2")
@@ -119,12 +125,15 @@ func stoppedDuringTheJudgesTurn(t *testing.T, sessionLost bool) {
 func TestAJudgeTurnPausedOnModelLimitsIsNotRefunded(t *testing.T) {
 	h := newHarness(t)
 	before, after := secondRound(t, h, func(in pipeline.RoundInput) (pipeline.RoundResult, error) {
-		round := nextRound(h, in.PR.ID)
+		round, err := nextRound(h, in.PR.ID)
+		if err != nil {
+			return failRound(t, err)
+		}
 		sent := h.clock.Now()
 		if _, err := h.st.CreateRun(h.ctx, store.Run{PRID: in.PR.ID, Round: round, Role: store.RoleJudge, Kind: in.Kind,
 			TargetSHA: in.TargetSHA, Identity: in.PR.Identity, ReviewerLogin: "talkable[bot]", State: store.RunFailed,
-			Outcome: store.Ptr(pipeline.OutcomeUsageLimit), PromptText: "judge", SubmittedAt: &sent}); err != nil {
-			t.Fatal(err)
+			Outcome: new(pipeline.OutcomeUsageLimit), PromptText: "judge", SubmittedAt: &sent}); err != nil {
+			return failRound(t, err)
 		}
 		return pipeline.RoundResult{Outcome: pipeline.OutcomeUsageLimit, Round: round, Error: "judge pane",
 			Pause: &pipeline.Pause{Kind: "usage_limit", Tool: "claude", Detail: "You've reached your Fable limit · resets 6pm"}}, nil
@@ -143,8 +152,13 @@ func TestAnAbortedRoundIsRefundedAfterTheJudgeWasPrompted(t *testing.T) {
 	h := newHarness(t)
 	before := h.reviewedPR(2, "b1")
 	h.rd.script = func(in pipeline.RoundInput) (pipeline.RoundResult, error) {
-		round := nextRound(h, in.PR.ID)
-		sentJudge(h, in, round)
+		round, err := nextRound(h, in.PR.ID)
+		if err == nil {
+			err = sentJudge(h, in, round)
+		}
+		if err != nil {
+			return failRound(t, err)
+		}
 		h.e.mu.Lock()
 		rh := h.e.rounds[in.PR.ID]
 		rh.stop.reqs = append(rh.stop.reqs, stopOrder{id: 0})

@@ -340,7 +340,10 @@ func TestPostMergeRoundSurvivesADaemonRestart(t *testing.T) {
 		}
 		var run store.Run
 		if prompted {
-			run = h.judgeRun(h.pr(2), pipeline.KindRereview, muMergedHead, store.RunSubmitted, "", "")
+			var err error
+			if run, err = h.judgeRun(h.pr(2), pipeline.KindRereview, muMergedHead, store.RunSubmitted, "", ""); err != nil {
+				t.Fatal(err)
+			}
 		}
 
 		h.e = New(h.d) // a new daemon process

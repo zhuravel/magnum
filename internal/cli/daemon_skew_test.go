@@ -16,6 +16,7 @@ import (
 	"github.com/zhuravel/magnum/internal/launchd"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
+	"github.com/zhuravel/magnum/internal/store/storetest"
 )
 
 // recordBuild stores the build a daemon records at its start.
@@ -165,6 +166,7 @@ func TestDaemonRestartWhenIdleWaitsWithoutADrain(t *testing.T) {
 	daemonSys.DaemonPID = func(paths.Layout) (int, error) {
 		pidReads++
 		if pidReads == 1 { // read after the first wait: a round starts in between
+			storetest.Seed(t, dt.ctx.Layout.DB())
 			st, err := store.Open(dt.ctx.Layout.DB())
 			if err != nil {
 				t.Fatal(err)
@@ -185,6 +187,7 @@ func TestDaemonRestartWhenIdleWaitsWithoutADrain(t *testing.T) {
 		case 2:
 			finishRound(t, dt)
 		case 3:
+			storetest.Seed(t, dt.ctx.Layout.DB())
 			st, err := store.Open(dt.ctx.Layout.DB())
 			if err != nil {
 				t.Fatal(err)

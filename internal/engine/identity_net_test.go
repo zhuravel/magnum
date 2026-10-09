@@ -286,8 +286,10 @@ func TestCheckConnectionCauseNeedsEveryFailureToBeTheNetwork(t *testing.T) {
 		{"a real failure", identity.Report{Lines: []string{"FAIL GitHub rejected the App JWT: GET /app: 401 Bad credentials"}}, nil, ""},
 		{"no FAIL line", identity.Report{Lines: []string{"PASS x"}}, nil, ""},
 	} {
-		if got := checkConnectionCause(tc.rep, tc.err); got != tc.want {
-			t.Errorf("%s: checkConnectionCause = %q, want %q", tc.name, got, tc.want)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			if got := checkConnectionCause(tc.rep, tc.err); got != tc.want {
+				t.Errorf("checkConnectionCause = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

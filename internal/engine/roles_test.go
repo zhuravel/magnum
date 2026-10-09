@@ -175,7 +175,7 @@ func TestContinueWithLostJudgeLaysOutTheOtherRoles(t *testing.T) {
 			err = h.st.TransitionRun(h.ctx, run.ID, nil, store.RunFailed, func(u *store.RunUpdate) { u.Set("submitted_at", h.clock.Now()) })
 		}
 		if err != nil {
-			t.Fatal(err)
+			return failRound(t, err)
 		}
 		return pipeline.RoundResult{Outcome: pipeline.OutcomeUsageLimit, Round: 1, JudgeRunID: run.ID,
 			Pause: &pipeline.Pause{Kind: string(agents.HealthUsageLimit), Tool: config.KindCodex, Until: resetAt}}, nil

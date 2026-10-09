@@ -117,11 +117,16 @@ func TestMigrationV14ToV15AcceptsOwnPassRuns(t *testing.T) {
 		for rows.Next() {
 			var name string
 			var partial bool
-			rows.Scan(&name, &partial)
+			if err := rows.Scan(&name, &partial); err != nil {
+				t.Fatal(err)
+			}
 			if w, ok := wantIdx[name]; !ok || w != partial {
 				t.Fatalf("index %s on %s: partial %v (known %v)", name, tbl, partial, ok)
 			}
 			delete(wantIdx, name)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
 		}
 		rows.Close()
 	}

@@ -13,12 +13,12 @@ import (
 
 // judgeRun records a judge run of round 1 the way the pipeline leaves it:
 // prompted (submitted_at) and finished in state with outcome and error.
-func (h *harness) judgeRun(pr store.PR, kind, target, state, outcome, errMsg string) store.Run {
-	h.t.Helper()
+// Round scripts call it, so it returns its error.
+func (h *harness) judgeRun(pr store.PR, kind, target, state, outcome, errMsg string) (store.Run, error) {
 	run, err := h.st.CreateRun(h.ctx, store.Run{PRID: pr.ID, Round: 1, Role: store.RoleJudge, Kind: kind,
 		TargetSHA: target, Identity: pr.Identity, ReviewerLogin: "talkable[bot]", State: store.RunPending, PromptText: "judge"})
 	if err != nil {
-		h.t.Fatal(err)
+		return store.Run{}, err
 	}
 	now := h.clock.Now()
 	if err := h.st.TransitionRun(h.ctx, run.ID, nil, state, func(u *store.RunUpdate) {
@@ -30,9 +30,9 @@ func (h *harness) judgeRun(pr store.PR, kind, target, state, outcome, errMsg str
 			u.Set("error", errMsg)
 		}
 	}); err != nil {
-		h.t.Fatal(err)
+		return store.Run{}, err
 	}
-	return run
+	return run, nil
 }
 
 // A judge turn that pauses twice (and was nudged in between) keeps quoting
@@ -47,12 +47,18 @@ func TestSecondPauseKeepsTheOriginalMarker(t *testing.T) {
 			return pipeline.RoundResult{Outcome: pipeline.OutcomePosted, Round: 1, ReviewID: 7, Event: "COMMENTED"}, nil
 		}
 		pause := func(kind string) (pipeline.RoundResult, error) {
-			h.judgeRun(in.PR, kind, in.TargetSHA, store.RunFailed, pipeline.OutcomeUsageLimit, "judge pane: usage limit")
+			if _, err := h.judgeRun(in.PR, kind, in.TargetSHA, store.RunFailed, pipeline.OutcomeUsageLimit, "judge pane: usage limit"); err != nil {
+				return failRound(t, err)
+			}
 			return pipeline.RoundResult{Outcome: pipeline.OutcomeUsageLimit, Round: 1, JudgeRunID: marker,
 				Pause: &pipeline.Pause{Kind: string(agents.HealthUsageLimit), Tool: agents.KindCodex, Until: h.clock.Now().Add(time.Hour)}}, nil
 		}
 		if in.Kind != pipeline.KindContinue {
-			marker = h.judgeRun(in.PR, store.RunInitial, in.TargetSHA, store.RunFailed, pipeline.OutcomeUsageLimit, "judge pane: usage limit").ID
+			run, err := h.judgeRun(in.PR, store.RunInitial, in.TargetSHA, store.RunFailed, pipeline.OutcomeUsageLimit, "judge pane: usage limit")
+			if err != nil {
+				return failRound(t, err)
+			}
+			marker = run.ID
 			return pause(store.RunNudge) // the nudge of the same turn paused too
 		}
 		continued = append(continued, in)
@@ -94,12 +100,16 @@ func TestSecondPauseKeepsTheOriginalMarker(t *testing.T) {
 func TestCrashRecoveryResumesOnlyAnUnfinishedJudgeTurn(t *testing.T) {
 	h := newHarness(t)
 	p2 := h.reviewedPR(2, "b1")
-	h.judgeRun(p2, store.RunInitial, "b1", store.RunVerified, pipeline.OutcomePosted, "")
+	if _, err := h.judgeRun(p2, store.RunInitial, "b1", store.RunVerified, pipeline.OutcomePosted, ""); err != nil {
+		t.Fatal(err)
+	}
 	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "b2"}, prSpec{n: 3, head: "c1"})
 	h.advance(time.Minute)
 	h.tick()
 	p3 := h.pr(3)
-	h.judgeRun(p3, store.RunInitial, "c1", store.RunFailed, pipeline.OutcomeUsageLimit, "judge pane: usage limit")
+	if _, err := h.judgeRun(p3, store.RunInitial, "c1", store.RunFailed, pipeline.OutcomeUsageLimit, "judge pane: usage limit"); err != nil {
+		t.Fatal(err)
+	}
 
 	// The crash: #2's new round had moved it to reviewing, #3 was being
 	// claimed to continue its paused turn.

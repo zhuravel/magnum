@@ -329,7 +329,7 @@ func TestUsageLimitPauseBlocksDispatchThenContinues(t *testing.T) {
 		run, err := h.st.CreateRun(h.ctx, store.Run{PRID: in.PR.ID, Round: 1, Role: store.RoleJudge, Kind: in.Kind,
 			TargetSHA: in.TargetSHA, Identity: in.PR.Identity, ReviewerLogin: "talkable[bot]", State: store.RunPending, PromptText: "judge"})
 		if err != nil {
-			t.Fatal(err)
+			return failRound(t, err)
 		}
 		judgeRun = run.ID
 		now := h.clock.Now()
@@ -338,7 +338,7 @@ func TestUsageLimitPauseBlocksDispatchThenContinues(t *testing.T) {
 			u.Set("outcome", pipeline.OutcomeUsageLimit)
 			u.Set("error", "judge pane: usage limit") // as the pipeline finishes a paused run
 		}); err != nil {
-			t.Fatal(err)
+			return failRound(t, err)
 		}
 		return pipeline.RoundResult{Outcome: pipeline.OutcomeUsageLimit, Round: 1, JudgeRunID: run.ID,
 			Pause: &pipeline.Pause{Kind: string(agents.HealthUsageLimit), Tool: agents.KindCodex, Until: resetAt}}, nil
@@ -917,8 +917,7 @@ func TestRunStopsOnCancelAndKick(t *testing.T) {
 	h := newHarness(t)
 	h.open(prSpec{n: 1, head: "a1"})
 	ctx, cancel := context.WithCancel(h.ctx)
-	done := make(chan error, 1)
-	go func() { done <- h.e.Run(ctx, Options{NoSignals: true}) }()
+	done := h.goRun(ctx, Options{NoSignals: true})
 	deadline := time.Now().Add(5 * time.Second)
 	for h.gh.count("radar:talkable") < 1 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)

@@ -26,12 +26,13 @@ func (h *harness) queuedPR(n int, head string) store.PR {
 }
 
 // pushed records a new head of PR #n as the poller does (for a script that
-// runs inside a round, where no tick can).
-func (h *harness) pushed(n int, head string) {
-	h.t.Helper()
-	if err := h.st.UpdatePR(h.ctx, h.pr(n).ID, func(u *store.PRUpdate) { u.Set("head_sha", head) }); err != nil {
-		h.t.Fatal(err)
+// runs inside a round, where no tick can, so it returns its error).
+func (h *harness) pushed(n int, head string) error {
+	pr, err := h.lookupPR(n)
+	if err != nil {
+		return err
 	}
+	return h.st.UpdatePR(h.ctx, pr.ID, func(u *store.PRUpdate) { u.Set("head_sha", head) })
 }
 
 func posted(target string, restarts int) pipeline.RoundResult {
@@ -49,12 +50,16 @@ func TestRoundRestartChecksTheNewHeadOutInItsSlot(t *testing.T) {
 			t.Errorf("restart input: max %d dispatched %q switch %v", in.MaxRestarts, in.DispatchedHead, in.Switch != nil)
 			return pipeline.RoundResult{Outcome: pipeline.OutcomeError}, errors.New("no restart wiring")
 		}
-		h.pushed(2, "b2")
+		if err := h.pushed(2, "b2"); err != nil {
+			return failRound(t, err)
+		}
 		sw, err := in.Switch(context.Background(), "b2")
 		if err != nil {
 			return pipeline.RoundResult{Outcome: pipeline.OutcomeError, Error: err.Error()}, err
 		}
-		during = h.slot("review1")
+		if during, err = h.lookupSlot("review1"); err != nil {
+			return failRound(t, err)
+		}
 		if sw.TargetSHA != "b2" || sw.BaseSHA != "base0000" || sw.ForcePushed {
 			t.Errorf("switched = %+v", sw)
 		}
@@ -92,8 +97,8 @@ func TestRoundRestartSwitchFailureKeepsTheSlotBusy(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "checkout in review1") {
 			t.Errorf("switch error = %v", err)
 		}
-		if sl := h.slot("review1"); sl.State != store.SlotBusy {
-			t.Errorf("slot after a failed switch = %s, want busy (the round still runs)", sl.State)
+		if sl, lerr := h.lookupSlot("review1"); lerr != nil || sl.State != store.SlotBusy {
+			t.Errorf("slot after a failed switch = %s (%v), want busy (the round still runs)", sl.State, lerr)
 		}
 		return pipeline.RoundResult{Outcome: pipeline.OutcomeError, Error: "restart on b2: " + err.Error()}, err
 	}
@@ -132,7 +137,9 @@ func TestPushDuringTheJudgeNotesTheReview(t *testing.T) {
 			}
 			h.rd.appendErr = tc.appendErr
 			h.rd.script = func(in pipeline.RoundInput) (pipeline.RoundResult, error) {
-				h.pushed(2, "b3") // after the reviewers: the judge reviews b1
+				if err := h.pushed(2, "b3"); err != nil { // after the reviewers: the judge reviews b1
+					return failRound(t, err)
+				}
 				return posted(in.TargetSHA, 0), nil
 			}
 			h.tick()

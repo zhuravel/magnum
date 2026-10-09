@@ -46,8 +46,7 @@ func TestRunExitsNonZeroWhenTheSchemaWasMigrated(t *testing.T) {
 	h := newHarness(t)
 	h.open(prSpec{n: 1, head: "a1"})
 	bumpSchema(t, h.st)
-	done := make(chan error, 1)
-	go func() { done <- h.e.Run(h.ctx, Options{NoSignals: true}) }()
+	done := h.goRun(h.ctx, Options{NoSignals: true})
 	select {
 	case err := <-done:
 		if !errors.Is(err, ErrSchemaChanged) || err.Error() != "schema migrated under the daemon; exiting for launchd to restart" {
