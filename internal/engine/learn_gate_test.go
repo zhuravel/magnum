@@ -238,6 +238,8 @@ type fakeEval struct {
 	// entered and block hold a replay: entered is closed when one starts,
 	// and it returns when block closes or its context ends.
 	entered, block chan struct{}
+	// after runs once a replay ended, on the gate's goroutine.
+	after func(evalCall)
 }
 
 type evalCall struct {
@@ -251,7 +253,30 @@ func (f *fakeEval) script(candidate, name string, scores ...*eval.Score) {
 	f.scores[candidate+"|"+name] = scores
 }
 
+// fail scripts the replays of a case with candidate to end with outcome and
+// no score ("" = scored again).
+func (f *fakeEval) fail(candidate, name, outcome string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if outcome == "" {
+		delete(f.outcomes, candidate+"|"+name)
+		return
+	}
+	f.outcomes[candidate+"|"+name] = outcome
+}
+
 func (f *fakeEval) run(ctx context.Context, c eval.Case, o EvalGateOptions) eval.CaseRun {
+	cr := f.replay(ctx, c, o)
+	f.mu.Lock()
+	after := f.after
+	f.mu.Unlock()
+	if after != nil {
+		after(evalCall{Case: c.Name, Opts: o})
+	}
+	return cr
+}
+
+func (f *fakeEval) replay(ctx context.Context, c eval.Case, o EvalGateOptions) eval.CaseRun {
 	f.mu.Lock()
 	key := o.Candidate + "|" + c.Name
 	n := 0
@@ -714,6 +739,134 @@ func TestTheGateWaitsAboveTheSoftCap(t *testing.T) {
 	}
 	if evs := f2.h.events("learn.gate_waiting"); len(evs) != 1 || !strings.Contains(evs[0].Message, "budget") {
 		t.Fatalf("waiting events = %+v", evs)
+	}
+}
+
+// A running gate checks what holds it before each replay: a drain for a
+// restart or `magnum pause` that came after it started stops it, the
+// proposal stays gating, and the gate waits out its retry.
+func TestADrainOrAPauseStopsARunningGateBeforeItsNextReplay(t *testing.T) {
+	for _, c := range []struct{ name, key, want string }{
+		{"drain", KVDaemonDraining, "draining for a restart"},
+		{"pause", store.KVDaemonPaused, "daemon paused"},
+	} {
+		f := newGateFixture(t, gateFullFiles)
+		f.baseline("20261001-120000", "rev-master", map[string]*eval.Score{f.target.Name: found(nil, f.target.Name),
+			f.other.Name: found([]string{"scope"})})
+		f.ev.script(f.wt, f.target.Name, found([]string{f.target.Name}))
+		f.ev.script(f.wt, f.other.Name, found([]string{"scope"}))
+		f.ev.after = func(evalCall) {
+			if err := f.h.st.SetKV(context.WithoutCancel(f.h.ctx), c.key, "1"); err != nil {
+				t.Errorf("%s: %v", c.name, err)
+			}
+		}
+		f.h.tick()
+		if p, n := f.proposal(), len(f.ev.callsFor(f.wt)); p.State != store.LearnGating || n != 1 {
+			t.Fatalf("%s: proposal %s after %d candidate replays, want gating after one", c.name, p.State, n)
+		}
+		if evs := f.h.events("learn.gate_waiting"); len(evs) != 1 || !strings.Contains(evs[0].Message, c.want) {
+			t.Fatalf("%s: waiting events = %+v", c.name, evs)
+		}
+		if !f.h.e.gateWaits() {
+			t.Fatalf("%s: the stopped gate does not wait before its next try", c.name)
+		}
+	}
+}
+
+// A target whose replay ends without a score (herdr went away, a GitHub
+// read failed, the judge timed out) stops the gate and leaves the proposal
+// gating for a later try instead of holding it for good; only a third gate
+// in a row that stops so holds it, saying why. A baseline's replay counts
+// the same; a case that is no target is still left out of the verdict.
+func TestATargetReplayWithoutAScoreLeavesTheProposalGating(t *testing.T) {
+	f := newGateFixture(t, gateFullFiles)
+	f.baseline("20261001-120000", "rev-master", map[string]*eval.Score{f.target.Name: found(nil, f.target.Name),
+		f.other.Name: found([]string{"scope"})})
+	f.ev.fail(f.wt, f.target.Name, "needs_attention")
+	f.h.tick()
+	if p, n := f.proposal(), len(f.ev.callsFor(f.wt)); p.State != store.LearnGating || n != 1 {
+		t.Fatalf("proposal %s %q after %d candidate replays, want gating after one", p.State, p.Reason, n)
+	}
+	if evs := f.h.events("learn.gate_waiting"); len(evs) != 1 || !strings.Contains(evs[0].Message, f.target.Name) ||
+		!strings.Contains(evs[0].Message, "needs_attention") || !f.h.e.gateWaits() {
+		t.Fatalf("waiting events = %+v", evs)
+	}
+	for i := 2; i <= gateStopLimit; i++ {
+		f.h.advance(gateRetryAfter + time.Minute)
+		f.h.tick()
+		if n := len(f.ev.callsFor(f.wt)); n != i {
+			t.Fatalf("gate %d: %d candidate replays", i, n)
+		}
+	}
+	p := f.proposal()
+	if p.State != store.LearnHeld || !strings.Contains(p.Reason, fmt.Sprintf("%d gates", gateStopLimit)) || !strings.Contains(p.Reason, "needs_attention") {
+		t.Fatalf("proposal = %s %q, want held after %d stopped gates", p.State, p.Reason, gateStopLimit)
+	}
+
+	// A replay that scores again before then is judged as usual.
+	f2 := newGateFixture(t, gateFullFiles)
+	f2.baseline("20261001-120000", "rev-master", map[string]*eval.Score{f2.target.Name: found(nil, f2.target.Name),
+		f2.other.Name: found([]string{"scope"})})
+	f2.ev.script(f2.wt, f2.target.Name, found([]string{f2.target.Name}))
+	f2.ev.script(f2.wt, f2.other.Name, found([]string{"scope"}))
+	f2.ev.fail(f2.wt, f2.target.Name, "error")
+	f2.h.tick()
+	f2.ev.fail(f2.wt, f2.target.Name, "")
+	f2.h.advance(gateRetryAfter + time.Minute)
+	f2.h.tick()
+	if p := f2.proposal(); p.State != store.LearnPassed {
+		t.Fatalf("proposal = %s %q once the target scored", p.State, p.Reason)
+	}
+
+	// The target's baseline replay without a score stops it too, before
+	// any candidate replay.
+	f3 := newGateFixture(t, gateFullFiles)
+	f3.ev.fail(f3.base, f3.target.Name, "error")
+	f3.h.tick()
+	if p := f3.proposal(); p.State != store.LearnGating || len(f3.ev.callsFor(f3.wt)) != 0 {
+		t.Fatalf("proposal = %s %q after a baseline without a score", p.State, p.Reason)
+	}
+
+	// A case that is no target and ends without a score is left out.
+	f4 := newGateFixture(t, gateFullFiles)
+	f4.baseline("20261001-120000", "rev-master", map[string]*eval.Score{f4.target.Name: found(nil, f4.target.Name),
+		f4.other.Name: found([]string{"scope"})})
+	f4.ev.script(f4.wt, f4.target.Name, found([]string{f4.target.Name}))
+	f4.ev.fail(f4.wt, f4.other.Name, "error")
+	f4.h.tick()
+	if p := f4.proposal(); p.State != store.LearnPassed || f4.gate().Cases[1].Skip == "" {
+		t.Fatalf("proposal = %s %q, gate %+v", p.State, p.Reason, f4.gate().Cases)
+	}
+}
+
+// A gate whose verdict the registry did not take (busy, a disk error)
+// stops short: it waits out its retry instead of replaying every case again
+// at the next tick.
+func TestAGateWhoseVerdictIsNotStoredWaitsBeforeItRunsAgain(t *testing.T) {
+	f := newGateFixture(t, gateFullFiles)
+	f.baseline("20261001-120000", "rev-master", map[string]*eval.Score{f.target.Name: found(nil, f.target.Name),
+		f.other.Name: found([]string{"scope"})})
+	f.ev.script(f.wt, f.target.Name, found([]string{f.target.Name}))
+	f.ev.script(f.wt, f.other.Name, found([]string{"scope"}))
+	if _, err := f.h.st.DB().ExecContext(f.h.ctx, `CREATE TRIGGER fail_decide BEFORE UPDATE OF state ON learn_proposals
+BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END`); err != nil {
+		t.Fatal(err)
+	}
+	f.h.tick()
+	if p, n := f.proposal(), len(f.ev.callsFor(f.wt)); p.State != store.LearnGating || n != 2 || !f.h.e.gateWaits() {
+		t.Fatalf("proposal %s after %d candidate replays, waits %v", p.State, n, f.h.e.gateWaits())
+	}
+	f.h.tick()
+	if n := len(f.ev.callsFor(f.wt)); n != 2 {
+		t.Fatalf("the next tick replayed again: %d candidate replays", n)
+	}
+	if _, err := f.h.st.DB().ExecContext(f.h.ctx, "DROP TRIGGER fail_decide"); err != nil {
+		t.Fatal(err)
+	}
+	f.h.advance(gateRetryAfter + time.Minute)
+	f.h.tick()
+	if p := f.proposal(); p.State != store.LearnPassed {
+		t.Fatalf("proposal = %s %q after the retry", p.State, p.Reason)
 	}
 }
 

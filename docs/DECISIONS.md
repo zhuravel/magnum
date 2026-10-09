@@ -5637,3 +5637,20 @@ editing history. Code, config comments and prompts reference these by their head
   prompts (the operator's own work would stall the loop) and comparing against `master`'s head (the gate
   measures the change the editor made, on the tree it made it on; the landing checks what `master` became
   since).
+- **A gate that cannot score stops instead of deciding** (2026-10-09, review of stage 4 of the
+  self-improving review loop). A replay that ended without a score for any reason but the budget, a usage
+  limit or a login (herdr restarting, a GitHub read that failed, `needs_attention`, a judge's timeout)
+  became a skipped row, and a proposal none of whose targets was compared was held, which never goes back
+  to `gating`: a herdr restart settled a proposal for good. Now a target's replay or its baseline's, or
+  the second replay of a lost case (whose loss would otherwise count), that ends without a score stops the
+  gate like the soft cap does: the proposal stays `gating` and the gate waits out its 30 minutes. Only the
+  third gate of the proposal that stops so (`learn.gate_stops` counts them, cleared by a verdict) holds
+  it, naming the replay, since a replay that never scores (a pull request GitHub no longer serves) would
+  keep the oldest gating proposal, and the editor and the gates behind it, waiting for good. A case that
+  is no target and ends without a score is still left out of the verdict, as a flagged one is. The gate
+  also checks what holds it (`gateHold`: a drain, an infrastructure pause, `magnum pause`, a paused
+  reviewing CLI) before each replay, not only when it starts, so `daemon-restart --drain` no longer waits
+  for hours of replays, and a verdict the registry did not take (`gateDecide` failing) stops the gate
+  short too, so the next tick does not replay every case again. Rejected: holding at once, as the spec's
+  hold reasons do (those are about the corpus, which a later try does not change), and retrying without a
+  bound.

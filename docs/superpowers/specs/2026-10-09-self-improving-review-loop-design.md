@@ -158,6 +158,12 @@ Verdict (`learn.Judge`):
   judge-only) but nothing regressed;
 - fail: anything regressed, or no target improved.
 
+A replay without a score is no verdict: on a target or its baseline, or on the second replay of a lost
+case, one that ended without a score (anything but a flagged PR) stops the gate like the soft cap does, and
+the proposal stays `gating` for a try 30 minutes later; only the third gate of the proposal that stops so
+holds it, with the replay named. A drain or a pause is checked before each replay and stops a running
+gate the same way, and so does a verdict the registry did not take.
+
 The results are stored in `gate_json` (baseline run id, candidate run id, per-case before/after, the
 rule that decided) and the state becomes `passed`, `held` or `failed`. `failed` proposals keep their
 inputs `new`. a `held` one waits for the operator. a `passed` one lands.

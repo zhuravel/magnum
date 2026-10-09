@@ -1707,13 +1707,18 @@ or Codex-flagged is never replayed. Only the judge replays when the change touch
 prompts), every role otherwise. A case's baseline is the newest stored replay with the prompts and skill of
 the commit the proposal started from, else a replay of that commit first, from a worktree of its own that
 goes after the gate (never the checkout: the branch you have checked out and your uncommitted edits are no
-baseline); the candidate replays with the worktree, and a case it lost is replayed once more. It passes when a target improved (the missed finding found, the declined one no longer
-reported) and nothing regressed (no defect the baseline found lost, no declined finding reported that the
-baseline did not), fails when something regressed or no target improved (its worktree and branch go, its
-inputs stay `new`), and is held for you when none of its targets could be replayed. Its replays are stored
-like `magnum eval run`'s (`magnum eval list` shows them), and the result with the proposal. The gate waits
+baseline); the candidate replays with the worktree, and a case it lost is replayed once more. It passes
+when a target improved (the missed finding found, the declined one no longer reported) and nothing
+regressed (no defect the baseline found lost, no declined finding reported that the baseline did not),
+fails when something regressed or no target improved (its worktree and branch go, its inputs stay `new`),
+and is held for you when none of its targets could be replayed. Its replays are stored like `magnum eval
+run`'s (`magnum eval list` shows them), and the result with the proposal. The gate waits
 while the Codex budget is at `[usage] codex_soft` (one toast per window), under a drain, `magnum pause` or a
-paused reviewing CLI, and counts as background work for a restart.
+paused reviewing CLI (checked before each replay, so one that comes while it runs stops it), and counts as
+background work for a restart. A replay of a target or of its baseline, or the second replay of a lost
+case, that ends without a score (herdr away, a GitHub read that failed, a judge that timed out) stops the
+gate instead of deciding without it: the proposal stays `gating` and the gate tries again 30 minutes later,
+and only the third gate of it that stops so holds it for you, naming the replay.
 
 A `passed` proposal lands at the next tick, at most `land_per_day` (1) a local day and not before the
 daemon restarted on the previous landed version, and never while a gate or an edit runs. The landing
