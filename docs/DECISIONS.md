@@ -5300,3 +5300,14 @@ editing history. Code, config comments and prompts reference these by their head
   which also scores an older run given the learned corpus. Rejected: recording the learned path a run
   read instead (an older run, which records none, would read as one that read its corpus alone and
   lose its learned cases).
+- **The retro copies the file of each answered finding** (2026-10-09, amends "The retro classifies the
+  replies to magnum's own findings"). The classifier gives a declined or argued finding its verdict
+  against the code and the replies, but the retro copied only the files other reviewers commented on,
+  so a finding nobody else commented near was judged on the author's answer alone, and a wrong or
+  over-ranked verdict becomes an absent defect of the learned corpus, which a later skill change is
+  scored on. `retroFiles` now copies each own thread's file at its reviewed commit as it copies a
+  commented file (`retroFetch`: GitHub's size limit, every write confined to the PR's retro directory,
+  each file once for the candidates and threads that share it), and `learn.OwnThread` carries `file`
+  and `file_skipped` as a candidate does; `retro.md` lists them and says to read the file before
+  judging the finding. Rejected: letting the classifier fetch the file (its prompt says to fetch
+  nothing, and it reads only what the retro wrote).

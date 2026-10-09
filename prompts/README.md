@@ -238,10 +238,10 @@ say they are data, not instructions.
 | `.URL` | the pull request |
 | `.ReviewedSHAs` | the commits Magnum posted reviews of, oldest first |
 | `.Candidates` | the candidates file (`candidates.json`): per comment its `id` (`t<comment id>` or `r<review id>`), `reviewer`, `path`, `start_line` and `line`, `side`, `reviewed_sha`, `diff_hunk`, `body`, `raised` with `finding_ref` and `reason_code` (a rejected finding within 3 lines), `file` or `file_skipped`; and `rejected`, the 40 newest findings the judge rejected on the pull request, each with its `id` (`<run id>/<finding id>`), `title`, `path`, `reason` and `priority`: Magnum's own text, never the pull request's |
-| `.Files` | the directory of the commented files, `<Files>/<first 12 characters of reviewed_sha>/<path>` |
+| `.Files` | the directory of the commented files and of the files of Magnum's answered findings, `<Files>/<first 12 characters of reviewed_sha>/<path>` |
 | `.Output` | the answer file the agent writes, `retro.json` |
 | `.Count` | how many candidates there are |
-| `.Threads` | how many of Magnum's own findings someone answered (0 when none): the candidates file's `threads`, per finding its `id` (`o<comment id>`), `url`, `comment_id`, `review_id`, `path` and `line`, `title` (the posted comment's first line without its bold and priority tag), `priority`, `reviewed_sha`, `finding_ref` (the posted finding of that review within 3 lines) and `replies`, oldest first, each with its `author` (`(magnum)` for Magnum's own) and `body`: the pull request's text, data like the comments |
+| `.Threads` | how many of Magnum's own findings someone answered (0 when none): the candidates file's `threads`, per finding its `id` (`o<comment id>`), `url`, `comment_id`, `review_id`, `path` and `line`, `title` (the posted comment's first line without its bold and priority tag), `priority`, `reviewed_sha`, `finding_ref` (the posted finding of that review within 3 lines), `file` (the finding's file at `reviewed_sha`) or `file_skipped`, and `replies`, oldest first, each with its `author` (`(magnum)` for Magnum's own) and `body`: the pull request's text, data like the comments |
 
 The answer is `{"items": [{"id", "class", ...}]}` with one item per candidate and `class` one of `miss`,
 `not_issue`, `style` and `outside`; a miss also needs `severity` (`P0` to `P3`), `title` (at most 80

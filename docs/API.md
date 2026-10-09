@@ -9361,8 +9361,14 @@ type OwnThread struct {
 	ReviewedSHA string `json:"reviewed_sha"`
 	// FindingRef is the posted finding ("<run id>/<finding id>") of the
 	// root's review on the same path within NearLines; "" when none.
-	FindingRef string        `json:"finding_ref,omitempty"`
-	Replies    []ThreadReply `json:"replies"`
+	FindingRef string `json:"finding_ref,omitempty"`
+	// File is the finding's file at ReviewedSHA, relative to the
+	// candidates file's directory, which the classifier judges the finding
+	// against; FileSkipped says why there is no copy. The engine fills
+	// both, as for a Candidate.
+	File        string        `json:"file,omitempty"`
+	FileSkipped string        `json:"file_skipped,omitempty"`
+	Replies     []ThreadReply `json:"replies"`
 }
     OwnThread is a review thread magnum started that someone else answered, for
     the classifier ("o<comment id>"): the finding as magnum posted it (where,

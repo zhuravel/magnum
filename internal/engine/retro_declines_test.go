@@ -468,6 +468,71 @@ func TestARetroClassifiesAPRWithOnlyAnsweredFindings(t *testing.T) {
 	}
 }
 
+// TestTheRetroWritesTheFileOfAnAnsweredFinding: the classifier judges an
+// answered finding against the code, so the retro copies the finding's
+// file at its reviewed commit, as it does a commented file, even when no
+// other reviewer commented on it: a thread's file names the copy, fetched
+// once for the threads that share it, and one GitHub has no copy of says
+// why in file_skipped. A path that climbs out of the PR's directory is
+// never written outside it.
+func TestTheRetroWritesTheFileOfAnAnsweredFinding(t *testing.T) {
+	fc := threadsClassifier(nil)
+	h := newHarness(t, withClassifier(fc))
+	retroPR(h, 7, 24*time.Hour)
+	seedRetroGitHub(h, 7)
+	gone := ownRetroThread(7, 303, 5, 9007, [2]string{"alice", "Won't fix, the caller already checks it."})
+	gone.Path = "app/models/gone.rb"
+	escape := ownRetroThread(7, 304, 5, 9007, [2]string{"alice", "Won't fix."})
+	escape.Path = "../escape.rb"
+	h.gh.mu.Lock()
+	h.gh.threads[7], h.gh.allReviews[7] = nil, nil
+	h.gh.contents["app/models/gift.rb@"+retroShaA] = []byte("class Gift\nend\n")
+	h.gh.contents["../escape.rb@"+retroShaA] = []byte("x")
+	h.gh.mu.Unlock()
+	seedOwnThreads(h, 7, gone, escape)
+	h.requestRetro(RetroPayload{})
+
+	if len(fc.jobs) != 1 || len(fc.jobs[0].Threads) != 4 {
+		t.Fatalf("classifier jobs = %+v", fc.jobs)
+	}
+	job := fc.jobs[0]
+	cands, err := readCandidates(job.CandidatesPath)
+	if err != nil || len(cands.Threads) != 4 {
+		t.Fatalf("candidates file threads = %+v, %v", cands.Threads, err)
+	}
+	gift := learn.FilePath(retroShaA, "app/models/gift.rb")
+	for i, th := range cands.Threads {
+		wantFile, wantSkipped := gift, ""
+		switch th.ID {
+		case "o303":
+			wantFile, wantSkipped = "", "not on GitHub at the reviewed commit"
+		case "o304":
+			wantFile, wantSkipped = "", "GitHub could not be read"
+		}
+		if th.File != wantFile || th.FileSkipped != wantSkipped {
+			t.Errorf("%s (%s): file %q, skipped %q; want %q, %q", th.ID, th.Path, th.File, th.FileSkipped, wantFile, wantSkipped)
+		}
+		if j := job.Threads[i]; j.File != th.File || j.FileSkipped != th.FileSkipped {
+			t.Errorf("%s: the job's thread has file %q, skipped %q; the candidates file %q, %q", th.ID, j.File, j.FileSkipped, th.File, th.FileSkipped)
+		}
+	}
+	if b, err := os.ReadFile(filepath.Join(job.Dir, gift)); err != nil || string(b) != "class Gift\nend\n" {
+		t.Fatalf("the finding's file: %q, %v", b, err)
+	}
+	if n := h.gh.count("file:talkable/talkable:app/models/gift.rb@"); n != 1 {
+		t.Errorf("gift.rb read %d times, want once for the two threads on it", n)
+	}
+	err = filepath.WalkDir(h.layout.Home, func(p string, d os.DirEntry, err error) error {
+		if err == nil && d.Name() == "escape.rb" {
+			t.Errorf("escape.rb written: %s", p)
+		}
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestPaneClassifierChecksAndNudgesTheOwnThreads: the pane classifier's
 // answer must account for the job's own threads too, and its nudge names
 // their ids.

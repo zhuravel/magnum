@@ -765,8 +765,9 @@ func (e *Engine) retroOwnLogins(pr store.PR, runs []store.Run) []string {
 }
 
 // retroFiles writes the PR's retro directory, run/<owner>/<repo>/<N>/: each
-// commented file at its reviewed commit under files/ (skipped, and said so
-// in the candidate, when GitHub has no copy or it is above
+// commented file, and the file of each of magnum's own answered findings,
+// at its reviewed commit under files/ (each once; skipped, and said so in
+// the candidate or thread, when GitHub has no copy or it is above
 // github.FileAtLimit) and candidates.json with the rejected findings and
 // magnum's own answered threads (replies included), every write confined to
 // the directory (os.Root): the paths come from GitHub.
@@ -781,23 +782,29 @@ func (e *Engine) retroFiles(ctx context.Context, run RetroRun, repo store.Repo, 
 		return ClassifyJob{}, err
 	}
 	defer root.Close()
-	cands = append([]learn.Candidate{}, cands...) // a list, even when only own threads are classified
-	fetched := map[string]string{}                // FilePath -> why it was skipped ("" = written)
-	for i := range cands {
-		c := &cands[i]
-		if c.Path == "" {
-			continue
-		}
-		rel := learn.FilePath(c.ReviewedSHA, c.Path)
+	fetched := map[string]string{} // FilePath -> why it was skipped ("" = written)
+	fetch := func(path, sha string) (file, skipped string) {
+		rel := learn.FilePath(sha, path)
 		why, done := fetched[rel]
 		if !done {
-			why = e.retroFetch(ctx, root, repo, gh, rel, c.Path, c.ReviewedSHA)
+			why = e.retroFetch(ctx, root, repo, gh, rel, path, sha)
 			fetched[rel] = why
 		}
 		if why != "" {
-			c.FileSkipped = why
-		} else {
-			c.File = rel
+			return "", why
+		}
+		return rel, ""
+	}
+	cands = append([]learn.Candidate{}, cands...) // a list, even when only own threads are classified
+	for i := range cands {
+		if c := &cands[i]; c.Path != "" {
+			c.File, c.FileSkipped = fetch(c.Path, c.ReviewedSHA)
+		}
+	}
+	threads = slices.Clone(threads) // the classifier judges a finding against its code, not the author's claim alone
+	for i := range threads {
+		if th := &threads[i]; th.Path != "" && th.ReviewedSHA != "" {
+			th.File, th.FileSkipped = fetch(th.Path, th.ReviewedSHA)
 		}
 	}
 	shas := make([]string, 0, len(reviewed))
