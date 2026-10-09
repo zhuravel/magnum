@@ -5311,3 +5311,16 @@ editing history. Code, config comments and prompts reference these by their head
   and `file_skipped` as a candidate does; `retro.md` lists them and says to read the file before
   judging the finding. Rejected: letting the classifier fetch the file (its prompt says to fetch
   nothing, and it reads only what the retro wrote).
+- **A judge's probes are named after what they check, and a mutant removes one rule** (2026-10-09, amends "The
+  review rules the operator approved on 2026-10-08"). The Codex judge of talkable/talkable#11483 was refused by
+  Codex's cybersecurity classifier at the end of its own pass in round 15, on a session resumed across all fifteen
+  rounds (29 million tokens of history, 272 thousand in the refused turn). Nothing in the head's delta or in the
+  reviewer reports used attack vocabulary. The own pass had written files named `own-security-fix` and run a
+  mutant that turned a criteria check into `false` to prove a test gap, and the turn as a whole read like bypass
+  tooling to the classifier, which scores the request, not a sentence. The skill's section 4 now says: name a
+  probe file, overlay, mutant or log after what it checks (`own-probes_spec.rb`, `own-overlay.json`), never
+  `security`, `exploit`, `attack` or `bypass`, and a mutant removes one rule of the code under test to show which
+  example fails, nothing more. Mutation probes stay: they are how a missing test is proved. 254 bytes,
+  skillMaxBytes 30,182 to 30,436. The session's length is addressed apart (`max_session_rounds`). Rejected:
+  forbidding mutants (the 2026-10-08 rule needs the failing example a mutant names); a rule for the reviewers'
+  prompts (the refusals have come from the Codex judge, whose session carries every round).

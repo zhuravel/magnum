@@ -1143,7 +1143,7 @@ machine caused it, and a check the machine blocked reads `skipped (machine)` (th
 with the repository's own tests (a focused or request spec, through `db_lock`), never with attack tooling
 (browser automation forging cookies or sessions, exploit or payload scripts, scanners, network tools
 against hosts), which the agent CLI's provider may flag as abuse, and the judge tells a helper agent it
-starts the same. Every reviewer states a security finding as the input and who can send it, the wrong read
+starts the same. Its probe files, overlays, mutants and logs are named after what they check, never as security work, and a mutant removes one rule to show which example fails. Every reviewer states a security finding as the input and who can send it, the wrong read
 or write, the fix and the spec that proves it, never as an attacker's steps, numbered exploit sequences or
 crafted payloads: a judge turn that only read such a report was refused. The skill runs unattended: it never stops to ask a human
 (whatever an instruction file says), runs no usage checks, and ends with one line (the review URL or the

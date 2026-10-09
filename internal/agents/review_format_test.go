@@ -70,6 +70,19 @@ func TestARedHeadNeverReadsLGTM(t *testing.T) {
 	}, nil)
 }
 
+// The Codex judge of a fifteen-round session was refused by Codex's
+// cybersecurity classifier (2026-10-09) at the end of an own pass in which it
+// wrote files named own-security-fix and ran a mutant that turned a guard
+// off: nothing in the PR or the reports used attack vocabulary, the turn as a
+// whole read like bypass tooling. Probes, overlays, mutants and logs are
+// named after what they check, and a mutant removes one rule to show which
+// example fails.
+func TestOwnProbesAreNamedAfterWhatTheyCheck(t *testing.T) {
+	skillSays(t, []string{
+		"Name a probe file, overlay, mutant or log after what it checks (`own-probes_spec.rb`, `own-overlay.json`), never `security`, `exploit`, `attack` or `bypass`, and a mutant removes one rule of the code under test to show which example fails, nothing more.",
+	}, nil)
+}
+
 // The readiness facts are <magnum> fields; what to do about a check that did
 // not pass is the skill's (section 0), not a paragraph of every prompt.
 func TestJudgePromptsLeaveReadinessToTheSkill(t *testing.T) {
@@ -438,9 +451,11 @@ func TestSkillOwnPassOfAReReviewCoversTheNewCommits(t *testing.T) {
 // its section 2 rule (282), less 52 from listing `history` and `docs` on the
 // `related_prs` line and a shorter merge-duplicates sentence. Then 181 for
 // the red-head verdict line (2026-10-09): a failed check in `failing_checks`
-// takes LGTM off the clean line. Every rule added must replace or shorten
-// text.
-const skillMaxBytes = 30_182
+// takes LGTM off the clean line. Then 254 for neutral probe names and the
+// one-rule mutant (2026-10-09): a Codex judge was refused on a fifteen-round
+// session after it labelled its overlays a security fix. Every rule added must
+// replace or shorten text.
+const skillMaxBytes = 30_436
 
 func TestSkillStaysTight(t *testing.T) {
 	if n := len(magnum.Skill); n > skillMaxBytes {
