@@ -599,6 +599,29 @@ func TestAdopt(t *testing.T) {
 	}
 }
 
+// Adopt takes only "the repository is not registered" for a missing row: a
+// registry failure reading the repository fails the adoption, never a slot
+// registered without its repository.
+func TestAdoptReportsAFailedReadOfTheRepository(t *testing.T) {
+	h := newHarness(t)
+	repo := h.repo()
+	if _, err := h.st.DB().ExecContext(h.ctx, "UPDATE repos SET last_seen_at = 'garbage' WHERE id = ?", repo.ID); err != nil {
+		t.Fatal(err)
+	}
+	path := h.pool.Path(3)
+	gitT(t, h.main, "worktree", "add", "--quiet", "--no-track", "-b", "review3", path, "origin/master")
+	writeFile(t, filepath.Join(path, "tmp", ".worktree-db-slug"), "review3")
+	h.my.add("20260914085954", h.pool.DBNames("review3")...)
+
+	_, err := h.m.Adopt(h.ctx, h.pool, path)
+	if err == nil || errors.Is(err, store.ErrNotFound) || !strings.Contains(err.Error(), "adopt") {
+		t.Fatalf("Adopt after a failed read = %v, want the read's error", err)
+	}
+	if _, err := h.st.SlotByName(h.ctx, "review3"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("slot row after the failed adoption: %v, want none", err)
+	}
+}
+
 func TestPoolGuard(t *testing.T) {
 	h := newHarness(t)
 	g := DropGuard(h.pool)

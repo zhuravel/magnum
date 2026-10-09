@@ -542,3 +542,16 @@ func TestValidatePoolDatabaseTemplates(t *testing.T) {
 		wantError(t, err, `pool acme/big: database template "`+tmpl+`" must be <name>__{slug}`)
 	}
 }
+
+// TOML accepts nan and inf for a float: a usage threshold that is not a
+// number passes every range comparison, so it is refused by name.
+func TestUsageThresholdsRefuseNaNAndInf(t *testing.T) {
+	for _, v := range []string{"nan", "+nan", "inf", "-inf"} {
+		t.Run(v, func(t *testing.T) {
+			_, err := loadCommittedWithLocal(t, testLocalConfig+"\n[usage]\ncodex_hard = "+v+"\n")
+			wantError(t, err, "usage.codex_hard must be a percentage between 0 (off) and 100")
+		})
+	}
+	_, err := loadCommittedWithLocal(t, testLocalConfig+"\n[usage]\ncodex_soft = nan\n")
+	wantError(t, err, "usage.codex_soft must be a percentage between 0 (off) and 100, got NaN")
+}

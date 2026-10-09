@@ -262,3 +262,33 @@ func TestPreflightKindConfig(t *testing.T) {
 }
 
 var errAny = errors.New("any error")
+
+// A wait in pane text whose number is huge never wraps into a short (or
+// negative) one: each number is clamped, the sum too, and a usage limit
+// with such a wait still pauses for MaxReset.
+func TestAHugeWaitInPaneTextIsClamped(t *testing.T) {
+	const month = 30 * 24 * time.Hour
+	for _, text := range []string{
+		"106752 days",                 // just past time.Duration's range in days
+		"99999999999999999999 days",   // past int's range: Atoi gives the largest int
+		"9223372036854775807 seconds", // the largest int, in seconds
+		"20 days 20 days",             // a sum past the cap
+		"213503982 hours 1 minute",
+	} {
+		if d := parseDuration(text); d != month {
+			t.Errorf("parseDuration(%q) = %v, want the %v cap", text, d, month)
+		}
+	}
+	if d := parseDuration("2 days 3 hours"); d != 51*time.Hour {
+		t.Errorf("a real wait = %v, want 51h", d)
+	}
+	now := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+	for _, text := range []string{
+		"You've hit your usage limit. Try again in 106752 days.",
+		"You've hit your usage limit. Try again in 99999999999999999999 days.",
+	} {
+		if h := ClassifyAt(text, now); h.Kind != HealthUsageLimit || h.ResetAt == nil || !h.ResetAt.Equal(now.Add(MaxReset)) {
+			t.Errorf("%q: %+v, want usage_limit until %v", text, h, now.Add(MaxReset))
+		}
+	}
+}

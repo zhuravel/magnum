@@ -432,6 +432,8 @@ func (m *Manager) Adopt(ctx context.Context, pool config.Pool, path string) (sto
 	var repoID *int64
 	if r, err := m.d.Store.RepoByFullName(ctx, pool.Repo); err == nil {
 		repoID = &r.ID
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return store.Slot{}, fmt.Errorf("slots: adopt %s: %w", path, err)
 	}
 	sl, err := m.d.Store.CreateSlot(ctx, store.Slot{
 		Name: name, RepoID: repoID, RepoFullName: pool.Repo, Kind: store.SlotKindPool, Path: path,

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -26,9 +27,15 @@ type fakeSlotOps struct {
 	adopted     []string
 }
 
+// fakeSlotRunaway ends a provisioning loop that would run on without end.
+const fakeSlotRunaway = 50
+
 func (f *fakeSlotOps) ProvisionPool(ctx context.Context, pool config.Pool, n int) error {
 	if f.provErr != nil {
 		return f.provErr
+	}
+	if len(f.provisioned) >= fakeSlotRunaway {
+		return fmt.Errorf("fake: %d slots provisioned, a runaway loop", len(f.provisioned))
 	}
 	f.provisioned = append(f.provisioned, n)
 	return nil
@@ -276,5 +283,21 @@ func TestSlotsCommandDispatch(t *testing.T) {
 	}
 	if code := f.run("slots", "pin"); code != 2 {
 		t.Fatalf("pin without slot: code %d", code)
+	}
+}
+func TestSlotsProvisionRefusesAHugeCount(t *testing.T) {
+	f, e, ops, _ := slotsFixture(t)
+	inspSeedSlot(t, e.st, f.Home, "review1", store.SlotFree, nil)
+	pool, _ := e.pool("")
+	if code := e.provision(context.Background(), pool, math.MaxInt); code != 1 || !strings.Contains(f.Err.String(), "at most 3") {
+		t.Fatalf("huge count: code %d err %s", code, f.Err.String())
+	}
+	if len(ops.provisioned) != 0 {
+		t.Fatalf("provisioned %d slots", len(ops.provisioned))
+	}
+	for _, n := range []string{"1000", "9223372036854775807"} {
+		if code := f.run("slots", "provision", "--count", n); code != 2 || !strings.Contains(f.Err.String(), "N >= 1") {
+			t.Fatalf("--count %s: code %d err %s", n, code, f.Err.String())
+		}
 	}
 }

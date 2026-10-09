@@ -514,3 +514,34 @@ func TestRoundParksSessionsWhenTheIdentityChanged(t *testing.T) {
 		t.Fatal("no pr.identity_changed event")
 	}
 }
+
+// `magnum pin --slot` whose write of the PR's pinned flag fails fails the
+// request, naming the slot, and leaves the slot as it was: a slot pinned
+// under a PR the registry still shows unpinned (or the reverse) would hold
+// or free the slot against the PR's flag.
+func TestASlotPinWhosePRWriteFailsLeavesTheSlotAlone(t *testing.T) {
+	h := newHarness(t)
+	pr := h.reviewedPR(2, "b1")
+	sl := h.slot("review1")
+	if sl.PRID == nil || *sl.PRID != pr.ID {
+		if err := h.st.UpdateSlotFields(h.ctx, sl.ID, func(u *store.SlotUpdate) { u.Set("pr_id", pr.ID) }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := h.st.DB().ExecContext(h.ctx, `CREATE TRIGGER fail_pin BEFORE UPDATE OF pinned ON prs
+BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END`); err != nil {
+		t.Fatal(err)
+	}
+	id := h.enqueue(ReqPin, TargetPayload{Slot: "review1"})
+	h.tick()
+	r := h.request(id)
+	if r.State != store.RequestFailed || !strings.Contains(deref(r.Result), "review1") || !strings.Contains(deref(r.Result), "disk I/O error") {
+		t.Fatalf("pin with a failed PR write: %s %q, want failed naming review1 and the error", r.State, deref(r.Result))
+	}
+	if h.slot("review1").Pinned || slices.Contains(h.sl.all(), "pin:review1") {
+		t.Fatalf("the slot was pinned although the PR's flag was not written (calls %v)", h.sl.all())
+	}
+	if h.pr(2).Pinned {
+		t.Fatal("the PR shows pinned")
+	}
+}

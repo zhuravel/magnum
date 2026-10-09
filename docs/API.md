@@ -1012,7 +1012,8 @@ func (m *Manager) FallbackModel(ctx context.Context, s store.Session, tried []st
     FallbackModel is the model session s switches to next: the first of its
     kind's fallback_models that is not limited, not the session's current model
     and not among tried. ok is false when the kind cannot switch (switch_model
-    unset) or every fallback is used up.
+    unset), every fallback is used up, or the limits cannot be read (logged:
+    the session keeps its model).
 
 func (m *Manager) FallbackPrompt(d FallbackData) (string, error)
     FallbackPrompt renders FallbackPromptName from pipeline.prompts_dir or the
@@ -1035,9 +1036,11 @@ func (m *Manager) NoteModelLimit(ctx context.Context, s store.Session, h Health)
     NoteModelLimit records that the model of session s hit its own limit (h,
     a HealthModelLimit verdict on its pane): h.Model, else the session's current
     model, is limited until h.ResetAt, else for daemon.model_limit_cooldown,
-    never shortening a later recorded end. A session on its CLI's default model
-    also teaches magnum which model that default is (KVKindCLIModel). It appends
-    a kind.model_limited event.
+    never shortening a later recorded end. A session on its CLI's default
+    model also teaches magnum which model that default is (KVKindCLIModel).
+    It appends a kind.model_limited event. A recorded limit that cannot be read
+    is the error, before anything is written: the index rewritten from a partial
+    view would drop limits still active.
 
 func (m *Manager) Observe(ctx context.Context) ([]Observation, error)
     Observe takes one herdr snapshot and runs ObserveSnapshotAt with the time
@@ -1224,10 +1227,11 @@ func (m *Manager) StartAgent(ctx context.Context, pr store.PR, role config.Role,
 
       - An agent already carrying the role's name is adopted as is,
         when it is of the role's kind and its pane works in the PR's checkout
-        (the session's cwd, else paneID's); otherwise StartAgent fails,
-        since the name is taken. A fresh start (resume "") never adopts one
-        whose conversation magnum parked for the role (parkedConversation:
-        herdr still lists an agent Quit just stopped): ErrBusy.
+        (the session's cwd, else paneID's); otherwise StartAgent fails, since
+        the name is taken. A fresh start (resume "") never adopts one whose
+        conversation magnum parked for the role (parkedConversation: herdr still
+        lists an agent Quit just stopped): ErrBusy, as when the sessions cannot
+        be read to tell.
       - With resume set (ignored for a kind with session_source "none"),
         a pane whose agent_session.value equals resume (herdr restored it) is
         adopted instead of starting a second copy, and the agent is renamed to
@@ -1321,12 +1325,15 @@ func (m *Manager) SwitchModel(ctx context.Context, s store.Session, model, reaso
     screen's status line names the model ("Opus 5.5 | <cwd> | …"; for the
     kind's reset_model, the CLI's default model as a limit message named it,
     unverified when that is unknown). Not confirmed within SwitchModelTimeout
-    is ErrTimeout (a dialog still open is backed out of with Esc). A confirmed
-    switch records the session's model (KVSessionModel; removed when model is
-    the role's configured one, or the kind's reset_model for a role without
-    one) and appends an agent.model_switched event with reason (SwitchLimitHit,
-    SwitchLimited, SwitchExpired). A kind without switch_model returns
-    ErrNoModelSwitch, an agent that is not idle ErrBusy.
+    is ErrTimeout (a dialog still open is backed out of with Esc). A switch
+    whose ctx ends after the command was typed reads the screen once more:
+    it backs out of a dialog still open, or records the switch when the status
+    line names the model already. A confirmed switch records the session's
+    model (KVSessionModel; removed when model is the role's configured one,
+    or the kind's reset_model for a role without one) and appends an
+    agent.model_switched event with reason (SwitchLimitHit, SwitchLimited,
+    SwitchExpired). A kind without switch_model returns ErrNoModelSwitch,
+    an agent that is not idle ErrBusy.
 
     Claude Code also saves a /model choice as the default for new sessions:
     for a claude session SwitchModel snapshots the settings file's model before
@@ -1382,7 +1389,8 @@ type ModelLimit struct {
 func ModelLimits(ctx context.Context, st *store.Store, cfg *config.Config, kind string, now time.Time) []ModelLimit
     ModelLimits lists the per-model limits of kind recorded in st that end
     after now, by model name, each with the fallback a session uses meanwhile.
-    cfg may be nil (Using then stays empty).
+    cfg may be nil (Using then stays empty). It is for display: a limit whose
+    row cannot be read is left out.
 
 type Observation struct {
 	Kind    ObservationKind
@@ -9586,11 +9594,13 @@ func WriteSnapshot(dir string, s Snapshot) error
     WriteSnapshot writes s to dir/SnapshotFile.
 
 func WriteState(r Repo, s State) error
-    WriteState makes r's notes and harness s: the notes file is replaced
-    atomically (removed when s has none), and the harness by a complete new
-    directory renamed into place, the old one removed after. The caller holds
-    r's lock (Lock). A harness path that is not clean (cleanName) is refused
-    before anything is written.
+    WriteState makes r's notes and harness s: the harness by a complete new
+    directory renamed into place, then the notes file replaced atomically
+    (removed when s has none), the old harness removed after. A swap that fails,
+    or a notes write that fails after it, puts the old harness back, so the
+    notes and the harness stay one state; a restore that fails too is joined
+    to the error. The caller holds r's lock (Lock). A harness path that is not
+    clean (cleanName) is refused before anything is written.
 
 func WriteSuperseded(s Scratch, proposed State, changes []byte) error
     WriteSuperseded writes the stale proposal a curation follows up on into s's

@@ -329,20 +329,30 @@ func todayOrNext(now time.Time, loc *time.Location, h, mi int) *time.Time {
 	return &t
 }
 
+// maxParsedWait caps a wait parseDuration reads from pane text: no real
+// wait is that long, and the clamp keeps a huge number from wrapping into a
+// short or negative one.
+const maxParsedWait = 30 * 24 * time.Hour
+
+// parseDuration sums the "<n> <unit>" waits in s ("2 days 3 hours"), at
+// most maxParsedWait.
 func parseDuration(s string) time.Duration {
 	var d time.Duration
 	for _, m := range reDuration.FindAllStringSubmatch(s, -1) {
-		n, _ := strconv.Atoi(m[1])
+		n, _ := strconv.Atoi(m[1]) // \d+: never negative; out of range is the largest int
+		unit := time.Second
 		switch u := strings.ToLower(m[2]); {
 		case strings.HasPrefix(u, "d"):
-			d += time.Duration(n) * 24 * time.Hour
+			unit = 24 * time.Hour
 		case strings.HasPrefix(u, "h"):
-			d += time.Duration(n) * time.Hour
+			unit = time.Hour
 		case strings.HasPrefix(u, "m"):
-			d += time.Duration(n) * time.Minute
-		default:
-			d += time.Duration(n) * time.Second
+			unit = time.Minute
 		}
+		if n >= int(maxParsedWait/unit) {
+			return maxParsedWait
+		}
+		d = min(d+time.Duration(n)*unit, maxParsedWait)
 	}
 	return d
 }

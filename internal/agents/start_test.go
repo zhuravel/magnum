@@ -422,3 +422,30 @@ func TestStartAgentRetriesPaneBusyKeepingResume(t *testing.T) {
 		t.Fatalf("err = %v, want agent_pane_busy after %d retries", err, startBusyRetries)
 	}
 }
+
+// A fresh start that cannot read the PR's sessions cannot tell whether the
+// agent herdr lists carries a conversation magnum parked: it refuses
+// (ErrBusy: the round retries) rather than adopt it.
+func TestAFreshStartThatCannotReadTheSessionsAdoptsNothing(t *testing.T) {
+	name := AgentName("talkable/talkable", 11920, RoleJudge)
+	e := newEnv(t)
+	parked, err := e.st.CreateSession(e.ctx, store.Session{PRID: e.pr.ID, Role: string(RoleJudge), AgentName: &name,
+		AgentKind: new(KindCodex), SessionID: new("01a0-uuid"), State: store.SessionParked})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws := e.workspace()
+	if _, err := e.st.DB().ExecContext(e.ctx, "UPDATE sessions SET started_at = 'garbage' WHERE id = ?", parked.ID); err != nil {
+		t.Fatal(err)
+	}
+	e.h.addPane(herdr.Pane{ID: "w1:p9", WorkspaceID: "w1", Cwd: "/Users/x/Projects/talkable.review1"})
+	e.h.addAgent(herdr.AgentInfo{Name: name, PaneID: "w1:p9", WorkspaceID: "w1", Agent: "codex", AgentStatus: herdr.StatusIdle,
+		AgentSession: &herdr.AgentSession{Kind: "id", Value: "01a0-uuid"}})
+	err = e.m.StartAgent(e.ctx, e.pr, e.spec(RoleJudge), ws.Panes[RoleJudge], "")
+	if !errors.Is(err, ErrBusy) || len(e.h.starts) != 0 {
+		t.Fatalf("err %v, starts %+v: want ErrBusy and no start", err, e.h.starts)
+	}
+	if s, serr := e.st.LiveSessionByPRRole(e.ctx, e.pr.ID, string(RoleJudge)); serr == nil && store.Deref(s.HerdrPaneID) == "w1:p9" && s.State == store.SessionLive {
+		t.Fatalf("session = %+v: the agent was adopted", s)
+	}
+}

@@ -493,3 +493,46 @@ func TestDropGuardDerivation(t *testing.T) {
 		}
 	}
 }
+
+// Reserve takes only "the PR has no slot" for a missing row: a registry
+// failure reading the PR's slot is the error, never a second slot for the PR
+// or "no free slot".
+func TestReserveReportsAFailedReadOfThePRsSlot(t *testing.T) {
+	h := newHarness(t)
+	h.provisioned(1)
+	h.provisioned(2)
+	pr := h.pr(h.repo().ID, 7, h.shaPR7, store.PRReviewed)
+	sl, err := h.m.Reserve(h.ctx, pr, h.pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.st.DB().ExecContext(h.ctx, "UPDATE slots SET last_used_at = 'garbage' WHERE id = ?", sl.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, err = h.m.Reserve(h.ctx, pr, h.pool)
+	if err == nil || errors.Is(err, ErrNoFreeSlot) || errors.Is(err, store.ErrNotFound) || !strings.Contains(err.Error(), "PR #7") {
+		t.Fatalf("Reserve after a failed read = %v, want the read's error naming the PR", err)
+	}
+	if other := h.slot(h.pool.Slot(2)); other.State != store.SlotFree || other.PRID != nil {
+		t.Fatalf("the other slot = %s for %v, want free", other.State, other.PRID)
+	}
+}
+
+// The checkout's verify step takes only "no open assignment" for a missing
+// row: a registry failure reading the assignment fails the step, so the
+// assignment never silently keeps an older head.
+func TestCheckoutVerifyReportsAFailedReadOfTheAssignment(t *testing.T) {
+	h := newHarness(t)
+	sl, pr := h.claimedCheckout(8, h.shaPR8)
+	a, err := h.openAssignment(pr.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.st.DB().ExecContext(h.ctx, "UPDATE assignments SET db_names_json = '{' WHERE id = ?", a.ID); err != nil {
+		t.Fatal(err)
+	}
+	err = h.m.Checkout(h.ctx, h.slot(sl.Name), pr, h.pool, h.shaPR8)
+	if err == nil || errors.Is(err, store.ErrNotFound) || !strings.Contains(err.Error(), "assignment") {
+		t.Fatalf("Checkout with an unreadable assignment = %v, want the read's error", err)
+	}
+}

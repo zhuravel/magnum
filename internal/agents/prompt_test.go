@@ -4,6 +4,8 @@ import (
 	"errors"
 	"path/filepath"
 	"regexp"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -222,4 +224,56 @@ func TestRunShellHonoursHumanCooldown(t *testing.T) {
 	if len(e.h.runs) != 0 {
 		t.Fatal("nothing may be typed during the human cooldown")
 	}
+}
+
+// failSQL makes the registry refuse the statements trigger names (a
+// BEFORE trigger body's condition), for the rest of the test.
+func (e *env) failSQL(name, on string) {
+	e.t.Helper()
+	if _, err := e.st.DB().ExecContext(e.ctx, "CREATE TRIGGER "+name+" BEFORE "+on+
+		" BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END"); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+func (e *env) logged(t *testing.T, want ...string) {
+	t.Helper()
+	for _, l := range e.logs.all() {
+		if !slices.ContainsFunc(want, func(w string) bool { return !strings.Contains(l, w) }) {
+			return
+		}
+	}
+	t.Fatalf("logs = %q, want a line with %q", e.logs.all(), want)
+}
+
+// A refused prompt whose run cannot be marked abandoned says so in the log:
+// the run stays pending and counts as in flight.
+func TestARefusedPromptLogsAFailedAbandon(t *testing.T) {
+	e := newEnv(t)
+	e.workspace()
+	e.failSQL("fail_abandon", "UPDATE OF state ON runs WHEN NEW.state = 'abandoned'")
+	id, err := e.m.Prompt(e.ctx, e.pr, RoleJudge, store.RunInitial, "x")
+	if !errors.Is(err, ErrNoSession) {
+		t.Fatalf("Prompt = %v, want ErrNoSession", err)
+	}
+	e.logged(t, "abandon", id, "disk I/O error")
+}
+
+// A prompt whose session row cannot record it (last_prompt_at) is still
+// sent, and the failure is logged; so is a shell role's.
+func TestAPromptTheSessionCannotRecordIsLogged(t *testing.T) {
+	e := newEnv(t)
+	ws := e.started()
+	e.failSQL("fail_prompted", "UPDATE OF last_prompt_at ON sessions")
+	if _, err := e.m.Prompt(e.ctx, e.pr, RoleClaude, store.RunInitial, "x"); err != nil {
+		t.Fatal(err)
+	}
+	e.logged(t, "claude-review", "disk I/O error")
+
+	role := e.spec(RoleCodexReview)
+	e.h.waitLine = "MAGNUM_DONE_r-1 0"
+	if _, err := e.m.RunShell(e.ctx, e.pr, role, ws.Panes[RoleCodexReview], "x", DoneMarker("r-1"), time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	e.logged(t, "codex-review", "disk I/O error")
 }

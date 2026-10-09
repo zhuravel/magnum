@@ -262,9 +262,12 @@ func (m *Manager) observeOne(ctx context.Context, s store.Session, snap herdr.Sn
 		turn := false // magnum's prompt is what the agent works on
 		for _, r := range runs {
 			if r.State == store.RunSubmitted {
-				_ = m.d.Store.TransitionRun(ctx, r.ID, []string{store.RunSubmitted}, store.RunWorking, func(u *store.RunUpdate) {
+				err := m.d.Store.TransitionRun(ctx, r.ID, []string{store.RunSubmitted}, store.RunWorking, func(u *store.RunUpdate) {
 					u.Set("working_seen_at", now)
 				})
+				if err != nil && !errors.Is(err, store.ErrConflict) {
+					m.logErr(ctx, err, "agents: mark run %s working: %v", r.ID, err)
+				}
 			}
 			turn = turn || r.State == store.RunSubmitted || r.State == store.RunWorking
 		}

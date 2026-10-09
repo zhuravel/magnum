@@ -538,7 +538,11 @@ func (e *Engine) requestPin(ctx context.Context, p TargetPayload, pin bool) (str
 		}
 		slot, hasSlot = sl, true
 		if sl.PRID != nil {
-			_ = e.st.UpdatePR(ctx, *sl.PRID, func(u *store.PRUpdate) { u.Set("pinned", pin) })
+			// The PR's flag first: a slot changed under a PR whose flag
+			// stays as it was would hold or free the slot against it.
+			if err := e.st.UpdatePR(ctx, *sl.PRID, func(u *store.PRUpdate) { u.Set("pinned", pin) }); err != nil {
+				return "", fmt.Errorf("%s %s: write the PR's pinned flag: %w", verb, sl.Name, err)
+			}
 		}
 	} else {
 		repo, pr, err := e.resolve(ctx, p.PRTarget)

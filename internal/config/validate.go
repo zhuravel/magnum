@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"math"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -252,7 +253,7 @@ func (c *Config) validateUsage() []error {
 		key string
 		v   float64
 	}{{"usage.codex_soft", u.CodexSoft}, {"usage.codex_hard", u.CodexHard}} {
-		if x.v < 0 || x.v > 100 {
+		if math.IsNaN(x.v) || math.IsInf(x.v, 0) || x.v < 0 || x.v > 100 { // TOML accepts nan and inf
 			errs = append(errs, fmt.Errorf("%s must be a percentage between 0 (off) and 100, got %g", x.key, x.v))
 		}
 	}

@@ -166,7 +166,7 @@ nothing is in flight.
 To post as a GitHub App, answer 2 when init asks who posts: it asks for the App's ids and names the file
 to save its private key as, `~/.config/magnum/keys/<app>.pem` (it never asks for the key); `magnum
 identities check` verifies the App. A big repository with its own databases gets a pool of warm slots:
-add a `[[pool]]` (see below), then `magnum slots provision --count 6`.
+add a `[[pool]]` (see below), then `magnum slots provision --count 6`. `--count` takes 1 to 999; a count that would pass the pool's `max` is refused before anything is provisioned.
 
 ## FAQ
 

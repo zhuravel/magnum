@@ -24,7 +24,8 @@ import (
 //     session's cwd, else paneID's); otherwise StartAgent fails, since the
 //     name is taken. A fresh start (resume "") never adopts one whose
 //     conversation magnum parked for the role (parkedConversation: herdr
-//     still lists an agent Quit just stopped): ErrBusy.
+//     still lists an agent Quit just stopped): ErrBusy, as when the
+//     sessions cannot be read to tell.
 //   - With resume set (ignored for a kind with session_source "none"), a
 //     pane whose agent_session.value equals resume (herdr restored it) is
 //     adopted instead of starting a second copy, and the agent is renamed to
@@ -112,8 +113,14 @@ func (m *Manager) StartAgent(ctx context.Context, pr store.PR, role config.Role,
 		if err := adoptable(snap, a, kindName, checkout); err != nil {
 			return fmt.Errorf("agents: start %s: the name is taken: %w", name, err)
 		}
-		if resume == "" && m.parkedConversation(ctx, pr.ID, role.Name, a) {
-			return fmt.Errorf("agents: start %s: herdr still lists the agent of a conversation magnum parked (pane %s): %w", name, a.PaneID, ErrBusy)
+		if resume == "" {
+			switch parked, err := m.parkedConversation(ctx, pr.ID, role.Name, a); {
+			case err != nil: // fail closed: it may be the parked conversation
+				return fmt.Errorf("agents: start %s: cannot tell whether the agent in pane %s carries a conversation magnum parked: %w: %w",
+					name, a.PaneID, ErrBusy, err)
+			case parked:
+				return fmt.Errorf("agents: start %s: herdr still lists the agent of a conversation magnum parked (pane %s): %w", name, a.PaneID, ErrBusy)
+			}
 		}
 		if a.AgentStatus == herdr.StatusBlocked {
 			if b, ok := m.startAfterTrustDialog(ctx, pr.ID, r, kindName, paneRef{name: name, pane: a.PaneID}, checkout, sessionGate(sess)); ok {
@@ -223,18 +230,18 @@ func (m *Manager) StartAgent(ctx context.Context, pr store.PR, role config.Role,
 // conversation magnum parked for the PR's role (a parked session's
 // session_id): herdr may still list an agent Quit just stopped, and a fresh
 // start must not adopt it. An agent that reports no conversation cannot
-// tell (false).
-func (m *Manager) parkedConversation(ctx context.Context, prID int64, role string, a herdr.AgentInfo) bool {
+// tell (false). A failed read of the sessions is the error, never false.
+func (m *Manager) parkedConversation(ctx context.Context, prID int64, role string, a herdr.AgentInfo) (bool, error) {
 	if a.AgentSession == nil || a.AgentSession.Value == "" {
-		return false
+		return false, nil
 	}
 	sessions, err := m.d.Store.SessionsByPR(ctx, prID)
 	if err != nil {
-		return false
+		return false, err
 	}
 	return slices.ContainsFunc(sessions, func(s store.Session) bool {
 		return s.Role == role && s.State == store.SessionParked && store.Deref(s.SessionID) == a.AgentSession.Value
-	})
+	}), nil
 }
 
 // adoptable checks that running agent a may serve a role of kind in the PR's

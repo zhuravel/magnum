@@ -466,6 +466,55 @@ func TestAContinuedRoundReadsOnlyReportsItsRoundVerified(t *testing.T) {
 	}
 }
 
+// A continued round whose runs cannot be read keeps the reports on disk and
+// names the read failure, instead of dropping every report as written after
+// its run ended.
+func TestAContinuedRoundWhoseRunsCannotBeReadKeepsItsReports(t *testing.T) {
+	e := newEnv(t)
+	dir := e.reportDir()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "codex-review.md"), []byte("[P2] codex\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := store.Run{Role: config.RoleCodexReview, State: store.RunVerified, Outcome: new(ReportOK),
+		PRID: e.pr.ID, Round: 1, Kind: store.RunInitial, TargetSHA: target,
+		ReportPath: new(filepath.Join(dir, "codex-review.md"))}
+	run, err := e.st.CreateRun(e.ctx, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A row that fails to scan makes every read of the PR's runs fail.
+	if _, err := e.st.DB().ExecContext(e.ctx, "UPDATE runs SET verified_at = 'garbage' WHERE id = ?", run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.RunsByPR(e.ctx, e.pr.ID); err == nil {
+		t.Fatal("the corrupt row still scans")
+	}
+	e.ag.behaviors[agents.RoleJudge] = []behavior{e.judgePosts(609, "COMMENTED", "COMMENT").behavior(t)}
+	in := e.input(KindContinue)
+	in.ContinueRunID = "r-20261003T100000-8"
+
+	res, err := e.r.RunRound(e.ctx, in)
+	if err != nil {
+		t.Fatalf("RunRound: %v", err)
+	}
+	if rep := res.Reports[agents.RoleCodexReview]; rep.Status != ReportOK || rep.Path != filepath.Join(dir, "codex-review.md") {
+		t.Fatalf("codex report = %+v", rep)
+	}
+	found := false
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "is not round 1's report") {
+			t.Errorf("misleading warning %q", w)
+		}
+		found = found || strings.Contains(w, "runs of round 1 could not be read")
+	}
+	if !found {
+		t.Fatalf("warnings %q", res.Warnings)
+	}
+}
+
 // The reviewer's prompt names its time budget, rendered from the role's
 // timeout.
 func TestAReviewerPromptNamesTheRolesTimeBudget(t *testing.T) {

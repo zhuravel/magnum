@@ -108,11 +108,16 @@ func (s State) Size(maxLine int) Size {
 // Same reports whether s and o hold the same notes and harness.
 func (s State) Same(o State) bool { return s.Fingerprint() == o.Fingerprint() }
 
-// WriteState makes r's notes and harness s: the notes file is replaced
-// atomically (removed when s has none), and the harness by a complete new
-// directory renamed into place, the old one removed after. The caller holds
-// r's lock (Lock). A harness path that is not clean (cleanName) is refused
-// before anything is written.
+// renameDir renames the harness directories (a test makes it fail).
+var renameDir = os.Rename
+
+// WriteState makes r's notes and harness s: the harness by a complete new
+// directory renamed into place, then the notes file replaced atomically
+// (removed when s has none), the old harness removed after. A swap that
+// fails, or a notes write that fails after it, puts the old harness back, so
+// the notes and the harness stay one state; a restore that fails too is
+// joined to the error. The caller holds r's lock (Lock). A harness path that
+// is not clean (cleanName) is refused before anything is written.
 func WriteState(r Repo, s State) error {
 	for _, b := range s.Files {
 		if !cleanName(b.Path) {
@@ -135,29 +140,54 @@ func WriteState(r Repo, s State) error {
 	if err := writeTree(stage, s.Files); err != nil {
 		return err
 	}
-	if s.Exists {
-		if err := fsx.WriteFileAtomic(r.Notes(), s.Notes, 0o600); err != nil {
-			return err
-		}
-	} else if err := os.Remove(r.Notes()); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return err
-	}
 	old := r.Harness() + ".old-" + rand.Text()[:8]
-	switch err := os.Rename(r.Harness(), old); {
+	switch err := renameDir(r.Harness(), old); {
 	case errors.Is(err, fs.ErrNotExist):
 		old = ""
 	case err != nil:
 		return err
 	}
-	if err := os.Rename(stage, r.Harness()); err != nil {
-		if old != "" {
-			_ = os.Rename(old, r.Harness())
+	if err := renameDir(stage, r.Harness()); err != nil {
+		return errors.Join(err, restoreHarness(r, old))
+	}
+	if err := writeNotes(r, s); err != nil {
+		// The new harness goes back to the stage, removed on return.
+		if merr := renameDir(r.Harness(), stage); merr != nil {
+			err = errors.Join(err, fmt.Errorf("notes: move the new harness aside: %w", merr))
+			if old != "" {
+				err = errors.Join(err, fmt.Errorf("notes: the old harness stays at %s", old))
+			}
+			return err
 		}
-		return err
+		return errors.Join(err, restoreHarness(r, old))
 	}
 	staged = true
 	if old != "" {
 		return os.RemoveAll(old)
+	}
+	return nil
+}
+
+// restoreHarness renames the old harness (none when old is "") back into
+// place; its error names where the old harness stays.
+func restoreHarness(r Repo, old string) error {
+	if old == "" {
+		return nil
+	}
+	if err := renameDir(old, r.Harness()); err != nil {
+		return fmt.Errorf("notes: restore the old harness (it stays at %s): %w", old, err)
+	}
+	return nil
+}
+
+// writeNotes replaces r's notes file with s's notes, or removes it when s
+// has none.
+func writeNotes(r Repo, s State) error {
+	if s.Exists {
+		return fsx.WriteFileAtomic(r.Notes(), s.Notes, 0o600)
+	}
+	if err := os.Remove(r.Notes()); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
 	}
 	return nil
 }

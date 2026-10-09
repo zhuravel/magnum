@@ -57,8 +57,13 @@ func (m *Manager) Claim(ctx context.Context, pr store.PR, pool config.Pool) (sto
 // assignment with the pool's database names). A claimed or held slot the PR
 // already has is returned as is; no free slot left is ErrNoFreeSlot.
 func (m *Manager) Reserve(ctx context.Context, pr store.PR, pool config.Pool) (store.Slot, error) {
-	if sl, err := m.d.Store.SlotByPR(ctx, pr.ID); err == nil && slices.Contains([]string{store.SlotClaimed, store.SlotHeld}, sl.State) {
+	switch sl, err := m.d.Store.SlotByPR(ctx, pr.ID); {
+	case err == nil && slices.Contains([]string{store.SlotClaimed, store.SlotHeld}, sl.State):
 		return sl, nil
+	case err != nil && !errors.Is(err, store.ErrNotFound):
+		// A store failure is not "no slot": a second slot for the PR would
+		// follow.
+		return store.Slot{}, fmt.Errorf("slots: reserve for PR #%d: its slot: %w", pr.Number, err)
 	}
 	free, err := m.d.Store.FreeSlots(ctx, pool.Repo, pr.ID)
 	if err != nil {
@@ -268,7 +273,13 @@ func (m *Manager) checkoutSteps(ctx context.Context, subject string, sl store.Sl
 			return err
 		}
 		// The assignment records the head the PR's code is at in this slot.
-		if a, err := m.d.Store.OpenAssignmentBySlot(ctx, sl.ID); err == nil && a.PRID == pr.ID && store.Deref(a.HeadSHA) != sha {
+		a, err := m.d.Store.OpenAssignmentBySlot(ctx, sl.ID)
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			return nil
+		case err != nil:
+			return fmt.Errorf("slots: the assignment of %s: %w", sl.Name, err)
+		case a.PRID == pr.ID && store.Deref(a.HeadSHA) != sha:
 			return m.d.Store.UpdateAssignmentHead(ctx, a.ID, sha)
 		}
 		return nil

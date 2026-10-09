@@ -52,7 +52,8 @@ type reqSend struct {
 	// NeedDaemon is for work that must not run later, when nobody waits
 	// for it (a review that posts, a verdict, restoring a parked PR): with
 	// no daemon running nothing is queued, and a request no daemon answered
-	// is withdrawn. The send then fails with errNoDaemon.
+	// is withdrawn. The send then fails with errNoDaemon; a withdrawal the
+	// registry refuses fails it with another error, the request pending.
 	NeedDaemon bool
 	// Held: the daemon holds its lock (the caller found it), so it runs
 	// even when the kick found no usable pidfile; the send waits anyway.
@@ -90,7 +91,8 @@ func (o reqOutcome) Result() string { return strings.TrimSpace(store.Deref(o.Req
 // send queues kind with payload, wakes the daemon and waits for the answer
 // as o says (only when a daemon answered the kick, or holds its lock). The
 // error is only for a request that could not be queued, or for a NeedDaemon
-// send without a daemon; anything else is in the outcome.
+// send without a daemon (errNoDaemon, or the failed withdrawal of a request
+// that stays pending); anything else is in the outcome.
 func (rc reqClient) send(ctx context.Context, kind string, payload any, o reqSend) (out reqOutcome, err error) {
 	if o.NeedDaemon && rc.running != nil {
 		if pid, err := rc.running(); err == nil && pid == 0 {
@@ -108,14 +110,20 @@ func (rc reqClient) send(ctx context.Context, kind string, payload any, o reqSen
 	out.PID, out.KickErr = rc.kick()
 	if o.NeedDaemon && out.PID == 0 {
 		why := "no daemon answered, so nothing runs it"
-		if err := rc.st.CompleteRequest(ctx, id, store.RequestFailed, why); err == nil || !errors.Is(err, store.ErrConflict) {
+		// The withdrawal runs even when ctx ended while the kick looked:
+		// a request left pending runs when a daemon starts.
+		switch err := rc.st.CompleteRequest(context.WithoutCancel(ctx), id, store.RequestFailed, why); {
+		case err == nil:
 			out.Req.State, out.Req.Result = store.RequestFailed, &why
 			if out.KickErr != nil {
-				return out, fmt.Errorf("%w (waking it failed: %v)", errNoDaemon, out.KickErr)
+				return out, fmt.Errorf("%w (waking it failed: %w)", errNoDaemon, out.KickErr)
 			}
 			return out, errNoDaemon
+		case errors.Is(err, store.ErrConflict):
+			// A daemon took it meanwhile: report its answer.
+		default:
+			return out, fmt.Errorf("request %d may still run when a daemon starts: withdrawing it failed: %w", id, err)
 		}
-		// A daemon took it meanwhile: report its answer.
 	}
 	if req, err := rc.st.RequestByID(ctx, id); err == nil {
 		out.Req = req

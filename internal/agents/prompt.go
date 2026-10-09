@@ -117,10 +117,13 @@ func (m *Manager) Prompt(ctx context.Context, pr store.PR, role Role, kind, text
 	if errors.Is(err, ErrNoSession) || errors.Is(err, ErrHumanActive) || errors.Is(err, ErrBusy) {
 		// Refused before sending: the run this call created must not linger
 		// as pending (it would count as in flight).
-		_ = m.d.Store.TransitionRun(ctx, run.ID, []string{store.RunPending}, store.RunAbandoned, func(u *store.RunUpdate) {
+		aerr := m.d.Store.TransitionRun(ctx, run.ID, []string{store.RunPending}, store.RunAbandoned, func(u *store.RunUpdate) {
 			u.Set("error", err.Error())
 			u.Set("ended_at", m.now())
 		})
+		if aerr != nil && !errors.Is(aerr, store.ErrConflict) {
+			m.logErr(ctx, aerr, "agents: abandon run %s: %v", run.ID, aerr)
+		}
 	}
 	return run.ID, err
 }
@@ -308,9 +311,9 @@ func (m *Manager) awaitTail(ctx context.Context, s store.Session) error {
 }
 
 // promptedSession records a prompt on the session row (best effort: the run
-// row is the authority).
+// row is the authority; a failure is logged).
 func (m *Manager) promptedSession(ctx context.Context, sess store.Session, info herdr.AgentInfo, now time.Time) {
-	_ = m.d.Store.UpdateSession(ctx, sess.ID, func(u *store.SessionUpdate) {
+	err := m.d.Store.UpdateSession(ctx, sess.ID, func(u *store.SessionUpdate) {
 		u.Set("last_prompt_at", now)
 		u.Set("idle_ticks", 0)
 		if info.AgentStatus != "" {
@@ -321,6 +324,9 @@ func (m *Manager) promptedSession(ctx context.Context, sess store.Session, info 
 			u.Set("session_id", info.AgentSession.Value)
 		}
 	})
+	if err != nil && !errors.Is(err, store.ErrConflict) {
+		m.logErr(ctx, err, "agents: record the prompt on the %s session %d: %v", sess.Role, sess.ID, err)
+	}
 }
 
 // ShellStatusUnknown is RunShell's status when the done marker carried no
@@ -367,9 +373,12 @@ func (m *Manager) RunShell(ctx context.Context, pr store.PR, role config.Role, p
 		return fail(err)
 	}
 	if s, err := m.d.Store.LiveSessionByPRRole(ctx, pr.ID, role.Name); err == nil && store.Deref(s.HerdrPaneID) == paneID {
-		_ = m.d.Store.TransitionSession(ctx, s.ID, liveStates, store.SessionLive, func(u *store.SessionUpdate) {
+		err := m.d.Store.TransitionSession(ctx, s.ID, liveStates, store.SessionLive, func(u *store.SessionUpdate) {
 			u.Set("last_prompt_at", m.now())
 		})
+		if err != nil && !errors.Is(err, store.ErrConflict) {
+			m.logErr(ctx, err, "agents: record the run on the %s session %d: %v", role.Name, s.ID, err)
+		}
 	}
 	match, err := m.d.Herdr.PaneWaitOutput(ctx, paneID, herdr.WaitOutputOptions{
 		Match:   `(?m)^` + regexp.QuoteMeta(marker) + `(?:[ \t]+\d+)?[ \t]*$`,

@@ -918,18 +918,22 @@ func (rd *round) setAsideStale() error {
 // continue's judge is not told a report is missing that its round never
 // asked for. A file whose run did not verify it was written after that run
 // ended (a reviewer that kept working): it is not read, with a warning.
+// When the runs cannot be read, the files on disk are read unchecked, with
+// a warning that names the read failure.
 func (rd *round) existingReports(ctx context.Context) {
 	verified := map[string]bool{} // role -> its latest run of the paused round on this head is verified
 	ran := map[string]bool{}      // role -> the paused round ran it on this head
-	if runs, err := rd.r.Store.RunsByPR(ctx, rd.in.PR.ID); err == nil {
-		for _, r := range runs {
-			if r.Round == rd.in.Round && r.TargetSHA == rd.in.TargetSHA {
-				verified[r.Role] = r.State == store.RunVerified
-				ran[r.Role] = true
-			}
+	runs, err := rd.r.Store.RunsByPR(ctx, rd.in.PR.ID)
+	unchecked := err != nil
+	if unchecked {
+		rd.warn(ctx, "runs of round %d could not be read (%v); its reports on disk are read without checking that the round verified them",
+			rd.in.Round, err)
+	}
+	for _, r := range runs {
+		if r.Round == rd.in.Round && r.TargetSHA == rd.in.TargetSHA {
+			verified[r.Role] = r.State == store.RunVerified
+			ran[r.Role] = true
 		}
-	} else {
-		rd.logf("pipeline: runs of round %d: %v", rd.in.Round, err)
 	}
 	without := map[string]string{} // role -> why the paused round's judge went without its report
 	if rec, ok := ReadMissingReports(ctx, rd.r.Store, rd.in.PR.ID); ok && rec.Round == rd.in.Round {
@@ -941,7 +945,7 @@ func (rd *round) existingReports(ctx context.Context) {
 		p := filepath.Join(rd.dir, role.ReportFile())
 		st, err := os.Stat(p)
 		present := err == nil && st.Size() > 0
-		if present && !verified[role.Name] {
+		if present && !unchecked && !verified[role.Name] {
 			rd.warn(ctx, "%s: %s is not round %d's report (no run of the round verified it, so it was written after its run ended); not read",
 				role.Name, role.ReportFile(), rd.in.Round)
 			present = false

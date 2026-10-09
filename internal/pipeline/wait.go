@@ -58,7 +58,11 @@ func (rd *round) submitAndWait(ctx context.Context, run store.Run, text string, 
 		switch cur.State {
 		case store.RunPending:
 			rd.finishRun(ctx, cur.ID, store.RunAbandoned, refusedStatus(serr), serr.Error())
-			cur, _ = rd.r.Store.RunByID(context.WithoutCancel(ctx), run.ID)
+			if fresh, err := rd.r.Store.RunByID(context.WithoutCancel(ctx), run.ID); err == nil {
+				cur = fresh
+			} else { // keep the last row read rather than a zero run
+				rd.logErr(ctx, err, "pipeline: %s run %s: re-read after abandoning it: %v", run.Role, run.ID, err)
+			}
 			return turn{kind: waitRefused, run: cur, err: serr, unsent: true}
 		case store.RunFailed, store.RunAbandoned:
 			return turn{kind: waitFailed, run: cur, err: serr, unsent: true}

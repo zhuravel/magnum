@@ -82,13 +82,14 @@ func newSlotsListCmd(c *Context) *cobra.Command {
 
 func newSlotsProvisionCmd(c *Context) *cobra.Command {
 	count, repo := -1, ""
-	cmd := newCommand("", "provision [--count N] [--repo owner/name]", "create pool slots now",
+	const use = "provision [--count N] [--repo owner/name]"
+	cmd := newCommand("", use, "create pool slots now",
 		"Create pool slots now: up to pool.min, or --count more, for the pool of --repo (default "+
 			"daemon.default_repo, or the only pool). Each slot gets a worktree on origin/<base>, its databases and "+
 			"the pool's setup commands. While the daemon runs the request is handed to it.",
 		func(pos []string) int {
-			if len(pos) > 0 || count == 0 || count < -1 {
-				return inspUsage(c, "slots", "provision takes --count N (N >= 1) and --repo only", slotsUsage)
+			if len(pos) > 0 || count == 0 || count < -1 || count > slotsMaxCount {
+				return inspUsage(c, "slots", fmt.Sprintf("provision takes --count N (N >= 1, at most %d) and --repo only", slotsMaxCount), use)
 			}
 			return slotsRun(c, true, func(ctx context.Context, e *slotsEnv) int {
 				pool, err := e.pool(repo)
@@ -310,9 +311,13 @@ func (e *slotsEnv) pool(repo string) (config.Pool, error) {
 	return config.Pool{}, fmt.Errorf("no [[pool]] for %s in config.toml", repo)
 }
 
+// slotsMaxCount bounds --count: no pool holds more slots than slotsNumber
+// recognizes.
+const slotsMaxCount = 999
+
 // slotsNumber finds n with pool.Slot(n) == name.
 func slotsNumber(pool config.Pool, name string) (int, bool) {
-	for n := 1; n <= 999; n++ {
+	for n := 1; n <= slotsMaxCount; n++ {
 		if pool.Slot(n) == name {
 			return n, true
 		}
@@ -379,7 +384,7 @@ func (e *slotsEnv) provision(ctx context.Context, pool config.Pool, count int) i
 			return 0
 		}
 	}
-	if pool.Max > 0 && live+count > pool.Max {
+	if pool.Max > 0 && count > pool.Max-live { // never live+count: a huge --count wraps it
 		return cmdFail(e.c, cmd, fmt.Errorf("%s allows at most %d slots and has %d; lower --count or raise max in config.toml",
 			pool.Repo, pool.Max, live))
 	}

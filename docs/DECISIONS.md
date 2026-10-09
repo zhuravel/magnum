@@ -152,6 +152,22 @@ editing history. Code, config comments and prompts reference these by their head
   parent-directory symlink can only reach a regular file under the cap); 1 MiB caps for lockfiles and
   schema.rb (large applications already have files of about 0.6 MiB, and a lockfile over the cap blocks
   every checkout of the repository).
+- **`magnum pin/unpin --slot` writes the PR's pinned flag before it touches the slot** (2026-10-09, after
+  an audit: requestPin threw away the error from UpdatePR on the slot's PR, then pinned or unpinned the
+  slot and reported success, so a PR could stay pinned while its slot was unpinned, or the reverse). Now a
+  failed write fails the request with `pinned <slot>: write the PR's pinned flag: <err>`, and the slot
+  stays as it was. Rejected: changing the slot first and undoing it on failure (the slot is the side that
+  holds or frees work, so it goes last).
+- **The slots' registry lookups take only ErrNotFound for no row** (2026-10-09, after an audit: Reserve
+  took any SlotByPR failure as "the PR has no slot", so it could assign a second slot or report "no free
+  slot", and Checkout's verify step skipped the assignment's head update on any OpenAssignmentBySlot
+  failure, so the assignment kept an older head). Both now switch on errors.Is(err, store.ErrNotFound) and
+  return any other error, wrapped with the PR or the slot, as slotPR, ensureAssignment and poolRow already
+  do.
+- **`magnum slots provision --count` is at most 999 and never overflows the max check** (2026-10-09, after
+  an audit: `live+count > pool.Max` wrapped for a --count near the largest int, passed, and started a
+  provisioning loop with no end). The flag now refuses a count below 1 or above 999 (slotsMaxCount, the
+  slot numbers slotsNumber recognizes) as a usage error. The max check reads `count > pool.Max-live`.
 
 ## Scheduling
 
@@ -258,6 +274,14 @@ editing history. Code, config comments and prompts reference these by their head
   rejected: a watch setting for the agents' files. The earlier rejection of docs that drive behaviour as a
   built-in exception still holds for a repository's own prompts, but these files steer magnum's own agents
   and its auto-approval gate, so they follow the gate's list.
+- **A model switch cut short backs out of its own dialog** (2026-10-09, after an audit: SwitchModel
+  pressed Esc on Claude's "Switch model?" dialog only on its timeout path, so a switch whose ctx ended
+  during the poll left the dialog open, and the session's next prompt was refused as blocked). After the
+  `/model` command is typed, any return with ctx ended reads the screen once more on
+  context.WithoutCancel. It presses Esc when detectSwitchDialog shows the dialog. It records the switch
+  (switched) when the status line already names the new model, which needs that model's name to be known
+  (verify). The observer still leaves the pane alone until then. Rejected: polling until the dialog is
+  gone (the caller's ctx has ended; a single read and one key keep the exit short).
 
 ## Agents in panes
 
@@ -596,6 +620,34 @@ editing history. Code, config comments and prompts reference these by their head
   outside `.claude/` the PR changes, an agent that checks another commit out in the checkout while a
   Claude session with the project config loaded runs, and a declined session kept live across a later
   head, whose record names the head it started on.
+- **WriteState swaps the harness before it writes the notes, and puts the old harness back on any
+  failure** (2026-10-09, after an audit: the notes file was replaced first, and when the stage-to-harness
+  rename then failed, the restore's error was thrown away, so the new notes sat beside the old harness, or
+  beside no harness, with nothing said). Now the new harness is renamed into place first, then the notes
+  are written or removed. A failed swap renames the old harness back. A failed notes write moves the new
+  harness aside and renames the old one back. Each restore that fails too is joined to the error and names
+  the path where the old harness stays. Rejected: one atomic directory that holds both the notes and the
+  harness (it changes the on-disk layout that the judges' lock, ReadState and the curations read).
+- **A fresh start that cannot read the PR's sessions adopts nothing** (2026-10-09, after an audit:
+  parkedConversation returned false when SessionsByPR failed, so StartAgent adopted the very agent the
+  check exists to refuse, one that herdr still lists after Quit parked its conversation).
+  parkedConversation now returns (bool, error), and StartAgent fails closed with ErrBusy, naming the pane
+  and the read's error; the round retries as it does for a parked conversation.
+- **A model limit that cannot be read is not a limit that ended** (2026-10-09, after an audit:
+  activeLimits threw away GetKV errors, and NoteModelLimit then rewrote the kind's limits index from that
+  partial view, deleting the rows of limits still active). activeLimits now returns (map, error), keeping
+  the rows it could read. NoteModelLimit returns the error before any write, the CLI-default-model write
+  included. FallbackModel logs it and returns no fallback, so the pipeline treats the hit as a usage limit
+  and the kind pauses. ensureModel logs it and switches nothing, startModel logs it and starts the role's
+  own model, and the read-only ModelLimits lists what it could read. NoteModelLimit also logs, instead of
+  discarding, a failed re-read of the index and a failed delete of an expired row. Rejected: retrying the
+  reads (the next limit hit or the next prompt tries again).
+- **The prompt path logs the store writes it does not act on** (2026-10-09, after an audit: Prompt's
+  abandon of a refused run, promptedSession and RunShell's last_prompt_at threw their errors away with `_
+  =`, so a run could stay pending, and count as in flight, with nothing in the log). Each now logs a
+  failure other than store.ErrConflict, as pipeline.abandonPending does: `agents: abandon run <id>:
+  <err>`, and `agents: record the prompt (the run) on the <role> session <id>: <err>`. A lost race
+  (ErrConflict) stays silent, and nothing else changes.
 
 ## Screens and commands
 
@@ -749,6 +801,15 @@ editing history. Code, config comments and prompts reference these by their head
   that run to be working (`e.waitRun`), as `pushAfterCodex` already does. Rejected: dropping only the
   question on ctrl+c (a queued key that asks and its `y` would still start an action after q, esc or tab);
   a separate guard in each screen's key handler (`leavingKey` already is that guard).
+- **A NeedDaemon request whose withdrawal fails is reported as still able to run** (2026-10-09, after an
+  audit: when no daemon answered, the CLI treated any failure of CompleteRequest except a conflict as a
+  successful withdrawal and printed "nothing was queued", but the request stayed pending, and a daemon
+  started later would post the review or verdict). send now switches on the error. nil: withdrawn
+  (errNoDaemon). store.ErrConflict: a daemon took the request, and its answer is reported. Any other
+  error: `request <id> may still run when a daemon starts: withdrawing it failed: <err>`, without
+  errNoDaemon, with the request pending in the outcome. The withdrawal runs on context.WithoutCancel, so a
+  ctrl-c during the kick still withdraws. Rejected: retrying the withdrawal in a loop (the CLI cannot
+  outwait a broken registry; it says what happened instead).
 
 ## Operations
 
@@ -4658,6 +4719,16 @@ editing history. Code, config comments and prompts reference these by their head
   for no defect class); wsl, paralleltest and goconst (thousands of hits with no defect class behind them;
   the fixtures call t.Parallel themselves); a concurrency group per ref (a third master push would cancel
   the queued second one). No new dependencies.
+- **usage.codex_soft and codex_hard refuse nan** (2026-10-09, after an audit: TOML accepts `nan` for a
+  float, and NaN passes both `< 0` and `> 100`, so a threshold that is not a number loaded silently. inf
+  and -inf were already refused by the range check). validateUsage now refuses NaN and Inf with the range
+  error, `... got NaN`.
+- **A wait read from pane text is clamped to 30 days** (2026-10-09, after an audit: parseDuration
+  multiplied an unbounded number by its unit and summed with no overflow check, so "try again in 106752
+  days" wrapped to a negative wait, and the usage limit lost its reset time; strconv.Atoi turns a number
+  past int's range into the largest int, which wrapped too). Each number and the sum are now clamped to
+  maxParsedWait (30 days) before they can wrap. parseReset still caps a reset at MaxReset (24h), so such a
+  limit pauses the kind for 24h, as a far-off date does.
 - **The layers log at the level of what they report** (2026-10-09). The pipeline, agents, slots, cleanup
   and notify packages logged every line through app.Printf at Info, and 79% of daemon.log came through
   that bridge, so a round that ended in error, a model limit, a failed permission deny or a failed
