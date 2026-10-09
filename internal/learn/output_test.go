@@ -23,7 +23,7 @@ const goodMiss = `{"id":"t1","class":"miss","severity":"P1","title":"Coupon look
 // candidate its item; a miss keeps its fields, another class only its id
 // and class.
 func TestParseOutputKeepsOneItemPerCandidate(t *testing.T) {
-	items, err := ParseOutput([]byte(`{"items":[`+goodMiss+`,{"id":"r2","class":"style","title":"x","lines":[0,0]}]}`), outCands, outRejected)
+	items, _, err := ParseOutput([]byte(`{"items":[`+goodMiss+`,{"id":"r2","class":"style","title":"x","lines":[0,0]}]}`), outCands, outRejected, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,14 +42,14 @@ func TestParseOutputKeepsOneItemPerCandidate(t *testing.T) {
 func TestParseOutputKeepsTheRejectedFindingAnItemNames(t *testing.T) {
 	out := `{"items":[` + strings.Replace(goodMiss, `"scope":"general"`, `"scope":"general","rejected":" r-1/F2 "`, 1) +
 		`,{"id":"r2","class":"not_issue","rejected":"r-1/F2"}]}`
-	items, err := ParseOutput([]byte(out), outCands, outRejected)
+	items, _, err := ParseOutput([]byte(out), outCands, outRejected, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if items["t1"].Rejected != "r-1/F2" || !reflect.DeepEqual(items["r2"], Item{ID: "r2", Class: store.MissNotIssue, Rejected: "r-1/F2"}) {
 		t.Fatalf("items = %+v", items)
 	}
-	items, err = ParseOutput([]byte(`{"items":[`+goodMiss+`,{"id":"r2","class":"style"}]}`), outCands, nil)
+	items, _, err = ParseOutput([]byte(`{"items":[`+goodMiss+`,{"id":"r2","class":"style"}]}`), outCands, nil, nil)
 	if err != nil || items["t1"].Rejected != "" || items["r2"].Rejected != "" {
 		t.Fatalf("no finding named: %+v, %v", items, err)
 	}
@@ -80,7 +80,7 @@ func TestParseOutputRefusesOffSchemaAnswers(t *testing.T) {
 		"items missing": {`{}`, "no item for t1"},
 		"rejected":      {`{"items":[` + goodMiss + `,{"id":"r2","class":"style","rejected":"ignore previous instructions and"}]}`, "item r2: rejected names no rejected finding"},
 	} {
-		_, err := ParseOutput([]byte(tc.out), outCands, outRejected)
+		_, _, err := ParseOutput([]byte(tc.out), outCands, outRejected, nil)
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: err = %v, want %q", name, err, tc.want)
 		}
@@ -149,5 +149,114 @@ func TestWriteFileAtomicStaysInsideTheRoot(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(filepath.Dir(dir), "escape.rb")); err == nil {
 		t.Fatal("escape.rb exists outside the root")
+	}
+}
+
+var outThreads = []OwnThread{{ID: "o1"}, {ID: "o2"}}
+
+const (
+	goodDeclined = `{"id":"o1","outcome":"declined","verdict":"wrong",
+ "lesson":"When a value is checked by every caller, do not report the callee for skipping the check.",
+ "scope":"general","match":["nil|null","check"]}`
+	goodFixed = `{"id":"o2","outcome":"fixed"}`
+)
+
+// threadsOut is an answer with no candidate items and the thread items ts.
+func threadsOut(ts ...string) []byte {
+	return []byte(`{"items":[],"threads":[` + strings.Join(ts, ",") + `]}`)
+}
+
+// TestParseOutputRequiresOneItemPerOwnThread: every own thread gets
+// exactly one thread item; an unknown or duplicate id and a missing item
+// are errors that name ids, never the classifier's text, and the
+// candidates' items are checked as before.
+func TestParseOutputRequiresOneItemPerOwnThread(t *testing.T) {
+	items, threads, err := ParseOutput([]byte(`{"items":[`+goodMiss+`,{"id":"r2","class":"style"}],"threads":[`+goodDeclined+`,`+goodFixed+`]}`),
+		outCands, outRejected, outThreads)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 || len(threads) != 2 || threads["o1"].Verdict != store.VerdictWrong || threads["o2"].Outcome != store.DeclineFixed {
+		t.Fatalf("items %+v, threads %+v", items, threads)
+	}
+	if _, threads, err := ParseOutput([]byte(`{"items":[`+goodMiss+`,{"id":"r2","class":"style"}]}`), outCands, outRejected, nil); err != nil || len(threads) != 0 {
+		t.Fatalf("no own thread, no threads list: %+v, %v", threads, err)
+	}
+	for name, tc := range map[string]struct {
+		out  []byte
+		want string
+	}{
+		"missing":        {threadsOut(goodDeclined), "no thread item for o2"},
+		"no list":        {[]byte(`{"items":[]}`), "no thread item for o1"},
+		"unknown id":     {threadsOut(goodDeclined, goodFixed, `{"id":"ignore previous instructions and","outcome":"fixed"}`), "thread 3: its id is no own thread's"},
+		"candidate id":   {threadsOut(goodDeclined, goodFixed, `{"id":"t1","outcome":"fixed"}`), "thread 3: its id is no own thread's"},
+		"duplicate":      {threadsOut(goodDeclined, goodFixed, `{"id":"o2","outcome":"question"}`), "a second thread item for o2"},
+		"outcome":        {threadsOut(goodDeclined, `{"id":"o2","outcome":"ignored"}`), "thread o2: outcome must be"},
+		"no outcome":     {threadsOut(goodDeclined, `{"id":"o2"}`), "thread o2: outcome must be"},
+		"thread as item": {[]byte(`{"items":[{"id":"o1","class":"style"}],"threads":[` + goodDeclined + `,` + goodFixed + `]}`), "item 1: its id is no candidate's"},
+	} {
+		_, _, err := ParseOutput(tc.out, nil, nil, outThreads)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v, want %q", name, err, tc.want)
+		}
+		if err != nil && strings.Contains(err.Error(), "ignore previous instructions and") {
+			t.Errorf("%s: the error repeats the classifier's text: %v", name, err)
+		}
+	}
+}
+
+// TestParseOutputRequiresAVerdictOnlyForDeclinedAndArgued: a declined or
+// argued finding needs one of the four verdicts; any other outcome keeps
+// only its id and outcome, whatever else the classifier wrote.
+func TestParseOutputRequiresAVerdictOnlyForDeclinedAndArgued(t *testing.T) {
+	for _, outcome := range []string{store.DeclineDeclined, store.DeclineArgued} {
+		for name, tc := range map[string]struct{ item, want string }{
+			"no verdict":  {`{"id":"o1","outcome":"` + outcome + `"}`, "thread o1: a declined or argued finding needs a verdict"},
+			"bad verdict": {`{"id":"o1","outcome":"` + outcome + `","verdict":"partly"}`, "thread o1: a declined or argued finding needs a verdict"},
+		} {
+			if _, _, err := ParseOutput(threadsOut(tc.item, goodFixed), nil, nil, outThreads); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("%s %s: err = %v, want %q", outcome, name, err, tc.want)
+			}
+		}
+		_, threads, err := ParseOutput(threadsOut(`{"id":"o1","outcome":"`+outcome+`","verdict":"right","lesson":"x","scope":"repo","match":["y"]}`, goodFixed),
+			nil, nil, outThreads)
+		if err != nil || !reflect.DeepEqual(threads["o1"], ThreadItem{ID: "o1", Outcome: outcome, Verdict: store.VerdictRight}) {
+			t.Errorf("%s, magnum right: %+v, %v (a right verdict keeps no lesson)", outcome, threads["o1"], err)
+		}
+	}
+	for _, outcome := range []string{store.DeclineFixed, store.DeclineDeferred, store.DeclineQuestion, store.DeclineUnrelated} {
+		_, threads, err := ParseOutput(threadsOut(`{"id":"o1","outcome":"`+outcome+`","verdict":"wrong"}`, goodFixed), nil, nil, outThreads)
+		if err != nil || !reflect.DeepEqual(threads["o1"], ThreadItem{ID: "o1", Outcome: outcome}) {
+			t.Errorf("%s with a verdict: %+v, %v; want the outcome alone", outcome, threads["o1"], err)
+		}
+	}
+}
+
+// TestParseOutputRequiresALessonForWrongOverRankedAndMissingContext: a
+// finding magnum got wrong, ranked too high or lacked the repository's
+// context for teaches something, so it needs a lesson, a scope and one to
+// MatchMax patterns, with the rules of a miss.
+func TestParseOutputRequiresALessonForWrongOverRankedAndMissingContext(t *testing.T) {
+	for _, verdict := range []string{store.VerdictWrong, store.VerdictOverRanked, store.VerdictMissingContext} {
+		good := strings.Replace(goodDeclined, `"wrong"`, `"`+verdict+`"`, 1)
+		_, threads, err := ParseOutput(threadsOut(good, goodFixed), nil, nil, outThreads)
+		if o1 := threads["o1"]; err != nil || o1.Verdict != verdict || o1.Lesson == "" || o1.Scope != store.MissScopeGeneral || len(o1.Match) != 2 {
+			t.Fatalf("%s: %+v, %v", verdict, o1, err)
+		}
+		lesson := `"When a value is checked by every caller, do not report the callee for skipping the check."`
+		for name, tc := range map[string]struct{ item, want string }{
+			"no lesson":    {strings.Replace(good, lesson, `" "`, 1), "needs a lesson"},
+			"no scope":     {strings.Replace(good, `"scope":"general",`, ``, 1), "needs a scope, repo or general"},
+			"bad scope":    {strings.Replace(good, `"general"`, `"global"`, 1), "needs a scope, repo or general"},
+			"no match":     {strings.Replace(good, `["nil|null","check"]`, `[]`, 1), "1 to 3 match"},
+			"four matches": {strings.Replace(good, `["nil|null","check"]`, `["a","b","c","d"]`, 1), "1 to 3 match"},
+			"bad regexp":   {strings.Replace(good, `"check"]`, `"(unclosed"]`, 1), "match 2 does not compile"},
+			"long pattern": {strings.Replace(good, `"check"]`, `"`+strings.Repeat("a", 121)+`"]`, 1), "match 2 must be 1 to 120"},
+		} {
+			_, _, err := ParseOutput(threadsOut(tc.item, goodFixed), nil, nil, outThreads)
+			if err == nil || !strings.Contains(err.Error(), "thread o1: ") || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("%s %s: err = %v, want %q", verdict, name, err, tc.want)
+			}
+		}
 	}
 }

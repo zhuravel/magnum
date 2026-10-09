@@ -152,6 +152,7 @@ type retroFixture struct {
 	Files        string
 	Output       string
 	Count        int
+	Threads      int
 }
 
 func retroFixtureWith(shas ...string) retroFixture {
@@ -291,6 +292,10 @@ func TestRenderGolden(t *testing.T) {
 	// daemon) superseded reads it from its scratch directory.
 	curateSuperseded := curateFixtureWith("max_bytes")
 	curateSuperseded.Superseded, curateSuperseded.SupersededID = curateSuperseded.Dir+"/superseded", 12
+	// A retro whose pull request has findings of magnum's that people
+	// answered: the candidates file lists them under threads.
+	retroThreads := retroFixtureWith("a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0")
+	retroThreads.Threads = 2
 	// A re-review after a push that merged the base branch: the commits
 	// since the previous head carry the base branch's, so the prompts hand
 	// out the PR's own diff and compare it before and after.
@@ -481,6 +486,7 @@ func TestRenderGolden(t *testing.T) {
 		{"notes_curate_misses", "notes-curate.md", curateMisses},
 		{"notes_curate_superseded", "notes-curate.md", curateSuperseded},
 		{"retro_two_reviews", "retro.md", retroFixtureWith("a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0", "d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3")},
+		{"retro_threads", "retro.md", retroThreads},
 		{"model_fallback_no_report", FallbackPromptName, FallbackData{Model: "sonnet", Previous: "opus", Role: "claude-simplify",
 			URL: "https://github.com/talkable/talkable/pull/11920", HeadSHA: "d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3"}},
 	}

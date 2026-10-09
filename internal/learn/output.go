@@ -39,6 +39,10 @@ type Candidates struct {
 	Candidates   []Candidate `json:"candidates"`
 	// Rejected are the findings the judge rejected (Result.Rejected).
 	Rejected []Rejected `json:"rejected,omitempty"`
+	// Threads are magnum's own findings that someone answered
+	// (Result.Threads), with the replies' text: data for the classifier,
+	// pruned with the run.
+	Threads []OwnThread `json:"threads,omitempty"`
 }
 
 // FilePath is where the copy of path at sha lives under a retro
@@ -61,26 +65,31 @@ type Item struct {
 	Rejected string `json:"rejected,omitempty"`
 }
 
-// Output is the classifier's answer file.
+// Output is the classifier's answer file: an item per candidate and a
+// thread item per own thread.
 type Output struct {
-	Items []Item `json:"items"`
+	Items   []Item       `json:"items"`
+	Threads []ThreadItem `json:"threads,omitempty"`
 }
 
-// ParseOutput reads the classifier's answer for cands and the rejected
-// findings it was given: one item per candidate, no other id, a known
-// class, and a rejected finding it names one of rejected's; a miss also has
-// a severity (P0 to P3), a title of at most TitleMax runes, a lesson, a
-// scope (repo or general), lines [from, to] with 1 <= from <= to and one to
-// MatchMax patterns of at most PatternMax bytes that compile as
-// case-insensitive Go regular expressions. Only a miss keeps those fields:
-// the other classes keep their id, class and rejected finding. The error
-// names ids and fields, never the classifier's text, so it can go back into
-// a prompt.
-func ParseOutput(data []byte, cands []Candidate, rejected []Rejected) (map[string]Item, error) {
+// ParseOutput reads the classifier's answer for cands, the rejected
+// findings it was given and the own threads: one item per candidate, no
+// other id, a known class, and a rejected finding it names one of
+// rejected's; a miss also has a severity (P0 to P3), a title of at most
+// TitleMax runes, a lesson, a scope (repo or general), lines [from, to]
+// with 1 <= from <= to and one to MatchMax patterns of at most PatternMax
+// bytes that compile as case-insensitive Go regular expressions. Only a
+// miss keeps those fields: the other classes keep their id, class and
+// rejected finding. Likewise one thread item per own thread, no other id
+// and a known outcome; a declined or argued one also has a verdict, and a
+// wrong, over_ranked or missing_context verdict a lesson, a scope and
+// patterns as a miss has (checkThread). The error names ids and fields,
+// never the classifier's text, so it can go back into a prompt.
+func ParseOutput(data []byte, cands []Candidate, rejected []Rejected, threads []OwnThread) (map[string]Item, map[string]ThreadItem, error) {
 	var out Output
 	dec := json.NewDecoder(bytes.NewReader(data))
 	if err := dec.Decode(&out); err != nil {
-		return nil, fmt.Errorf("not a JSON object with an \"items\" list: %s", jsonProblem(err))
+		return nil, nil, fmt.Errorf("not a JSON object with an \"items\" list: %s", jsonProblem(err))
 	}
 	want := map[string]bool{}
 	for _, c := range cands {
@@ -118,10 +127,49 @@ func ParseOutput(data []byte, cands []Candidate, rejected []Rejected) (map[strin
 			errs = append(errs, fmt.Errorf("no item for %s", c.ID))
 		}
 	}
+	answers, terrs := parseThreads(out.Threads, threads)
+	errs = append(errs, terrs...)
 	if len(errs) > 0 {
-		return nil, errors.Join(errs...)
+		return nil, nil, errors.Join(errs...)
 	}
-	return items, nil
+	return items, answers, nil
+}
+
+// parseThreads checks an answer's thread items against the own threads:
+// one each and no other id, each valid (checkThread).
+func parseThreads(got []ThreadItem, threads []OwnThread) (map[string]ThreadItem, []error) {
+	want := map[string]bool{}
+	for _, t := range threads {
+		want[t.ID] = true
+	}
+	out := map[string]ThreadItem{}
+	seen := map[string]bool{}
+	var errs []error
+	for i, it := range got {
+		id := strings.TrimSpace(it.ID)
+		switch {
+		case !want[id]:
+			errs = append(errs, fmt.Errorf("thread %d: its id is no own thread's", i+1))
+			continue
+		case seen[id]:
+			errs = append(errs, fmt.Errorf("thread %d: a second thread item for %s", i+1, id))
+			continue
+		}
+		seen[id] = true
+		it.ID = id
+		v, err := checkThread(it)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("thread %s: %w", id, err))
+			continue
+		}
+		out[id] = v
+	}
+	for _, t := range threads {
+		if !seen[t.ID] {
+			errs = append(errs, fmt.Errorf("no thread item for %s", t.ID))
+		}
+	}
+	return out, errs
 }
 
 // checkItem validates one item and returns what is kept of it.
@@ -153,20 +201,29 @@ func checkItem(it Item) (Item, error) {
 	if len(it.Lines) != 2 || it.Lines[0] < 1 || it.Lines[0] > it.Lines[1] {
 		errs = append(errs, errors.New("a miss needs lines [from, to] with 1 <= from <= to"))
 	}
-	if n := len(it.Match); n < 1 || n > MatchMax {
-		errs = append(errs, fmt.Errorf("a miss needs 1 to %d match patterns", MatchMax))
+	errs = append(errs, checkMatch(it.Match, "a miss")...)
+	if len(errs) > 0 {
+		return Item{}, errors.Join(errs...)
 	}
-	for j, m := range it.Match {
+	return it, nil
+}
+
+// checkMatch checks the patterns of what (a miss, a verdict): one to
+// MatchMax, each of 1 to PatternMax bytes that compiles as a
+// case-insensitive Go regular expression.
+func checkMatch(match []string, what string) []error {
+	var errs []error
+	if n := len(match); n < 1 || n > MatchMax {
+		errs = append(errs, fmt.Errorf("%s needs 1 to %d match patterns", what, MatchMax))
+	}
+	for j, m := range match {
 		if len(m) == 0 || len(m) > PatternMax {
 			errs = append(errs, fmt.Errorf("match %d must be 1 to %d characters", j+1, PatternMax))
 		} else if _, err := regexp.Compile("(?i)" + m); err != nil {
 			errs = append(errs, fmt.Errorf("match %d does not compile as a Go regular expression", j+1))
 		}
 	}
-	if len(errs) > 0 {
-		return Item{}, errors.Join(errs...)
-	}
-	return it, nil
+	return errs
 }
 
 // jsonProblem is a decode error without the input's text.

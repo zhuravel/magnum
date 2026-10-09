@@ -8834,8 +8834,10 @@ daily retro"): after a pull request magnum reviewed closes, Build turns what
 other reviewers said about it into candidates for a classifier, after dropping
 what cannot be a miss (the author's and magnum's own comments, short approvals,
 comments on code magnum never saw, findings magnum already posted), and
-ParseOutput reads the classifier's answer back, refusing anything off schema and
-any lesson that retells the pull request instead of teaching (ScrubLesson).
+ParseOutput reads the classifier's answer back, refusing anything off schema
+and any lesson that retells the pull request instead of teaching (ScrubLesson).
+The threads magnum started that someone answered go to the classifier too
+(OwnThreads), which says what the author did with each finding.
 
 The package is pure: it starts no process and touches no network or registry.
 The engine reads GitHub and the registry and hands the data in; the one
@@ -8875,6 +8877,13 @@ const NearLines = 3
     NearLines is how far, in lines, a comment may be from one of magnum's
     findings on the same path and still be about it.
 
+const OwnAuthor = "(magnum)"
+    OwnAuthor is a reply's Author when magnum wrote it: no GitHub login has
+    parentheses, so it never names a person.
+
+const OwnTitleMax = 200
+    OwnTitleMax bounds an own thread's Title, in runes.
+
 const RejectedMax = 40
     RejectedMax bounds the rejected findings the classifier gets: the newest of
     the pull request's.
@@ -8886,16 +8895,20 @@ func FilePath(sha, p string) string
     FilePath is where the copy of path at sha lives under a retro directory's
     files: files/<sha12>/<path>, slash-separated.
 
-func ParseOutput(data []byte, cands []Candidate, rejected []Rejected) (map[string]Item, error)
-    ParseOutput reads the classifier's answer for cands and the rejected
-    findings it was given: one item per candidate, no other id, a known class,
-    and a rejected finding it names one of rejected's; a miss also has a
-    severity (P0 to P3), a title of at most TitleMax runes, a lesson, a scope
-    (repo or general), lines [from, to] with 1 <= from <= to and one to MatchMax
-    patterns of at most PatternMax bytes that compile as case-insensitive Go
-    regular expressions. Only a miss keeps those fields: the other classes
-    keep their id, class and rejected finding. The error names ids and fields,
-    never the classifier's text, so it can go back into a prompt.
+func ParseOutput(data []byte, cands []Candidate, rejected []Rejected, threads []OwnThread) (map[string]Item, map[string]ThreadItem, error)
+    ParseOutput reads the classifier's answer for cands, the rejected findings
+    it was given and the own threads: one item per candidate, no other id,
+    a known class, and a rejected finding it names one of rejected's;
+    a miss also has a severity (P0 to P3), a title of at most TitleMax runes,
+    a lesson, a scope (repo or general), lines [from, to] with 1 <= from <= to
+    and one to MatchMax patterns of at most PatternMax bytes that compile as
+    case-insensitive Go regular expressions. Only a miss keeps those fields:
+    the other classes keep their id, class and rejected finding. Likewise one
+    thread item per own thread, no other id and a known outcome; a declined or
+    argued one also has a verdict, and a wrong, over_ranked or missing_context
+    verdict a lesson, a scope and patterns as a miss has (checkThread).
+    The error names ids and fields, never the classifier's text, so it can go
+    back into a prompt.
 
 func ScrubLesson(lesson, scope string, people, own, repo []string) (string, string)
     ScrubLesson returns lesson when it teaches without retelling the pull
@@ -8973,6 +8986,10 @@ type Candidates struct {
 	Candidates   []Candidate `json:"candidates"`
 	// Rejected are the findings the judge rejected (Result.Rejected).
 	Rejected []Rejected `json:"rejected,omitempty"`
+	// Threads are magnum's own findings that someone answered
+	// (Result.Threads), with the replies' text: data for the classifier,
+	// pruned with the run.
+	Threads []OwnThread `json:"threads,omitempty"`
 }
     Candidates is the candidates file.
 
@@ -9007,6 +9024,10 @@ type Input struct {
 	// caught it; a rejected one, that magnum raised it and let it go. The
 	// rejected ones also go to the classifier (Result.Rejected).
 	Findings []store.Finding
+	// ReviewRuns names the run that posted each of magnum's reviews, by
+	// review id (runs.review_id): an own thread's finding is one of its
+	// review's run (OwnThreads).
+	ReviewRuns map[int64]string
 	// MinChars drops a comment whose text, without quotes and code blocks,
 	// is shorter.
 	MinChars int
@@ -9037,9 +9058,43 @@ type Item struct {
     Item is the classifier's verdict on one candidate.
 
 type Output struct {
-	Items []Item `json:"items"`
+	Items   []Item       `json:"items"`
+	Threads []ThreadItem `json:"threads,omitempty"`
 }
-    Output is the classifier's answer file.
+    Output is the classifier's answer file: an item per candidate and a thread
+    item per own thread.
+
+type OwnThread struct {
+	ID        string `json:"id"`
+	URL       string `json:"url"` // GitHub's link to the root comment
+	CommentID int64  `json:"comment_id"`
+	ReviewID  int64  `json:"review_id,omitempty"` // the review the root comment was posted in; 0 when unknown
+	// Path and Line are where the root comment sits (Line 0 for a file
+	// comment or a comment on deleted lines, as for a Candidate).
+	Path string `json:"path,omitempty"`
+	Line int    `json:"line,omitempty"`
+	// Title is the root comment's first line without its emphasis and
+	// priority tag, Priority the first P0 to P3 on that line ("" when none).
+	Title    string `json:"title"`
+	Priority string `json:"priority,omitempty"`
+	// ReviewedSHA is the commit the finding was about: the root comment's
+	// when magnum reviewed it, else the newest reviewed before the comment.
+	ReviewedSHA string `json:"reviewed_sha"`
+	// FindingRef is the posted finding ("<run id>/<finding id>") of the
+	// root's review on the same path within NearLines; "" when none.
+	FindingRef string        `json:"finding_ref,omitempty"`
+	Replies    []ThreadReply `json:"replies"`
+}
+    OwnThread is a review thread magnum started that someone else answered, for
+    the classifier ("o<comment id>"): the finding as magnum posted it (where,
+    its title and priority) and every reply after it.
+
+func OwnThreads(in Input) []OwnThread
+    OwnThreads returns the threads of in whose root comment is by one of in.Own
+    with at least one reply by someone else (the author or another reviewer; not
+    a ghost, not a bot unless in.IncludeBots), in the order GitHub listed them.
+    The finding binds to a posted one of the root's review (in.ReviewRuns) by
+    path and line, as Build's nearness does.
 
 type Rejected struct {
 	ID       string `json:"id"` // "<run id>/<finding id>", the miss's FindingRef
@@ -9066,6 +9121,9 @@ type Result struct {
 	// with a title, oldest first: the classifier names the one that
 	// reports a candidate's problem (Item.Rejected, LinkRejected).
 	Rejected []Rejected
+	// Threads are magnum's own findings that someone answered
+	// (OwnThreads), for the classifier beside the candidates.
+	Threads []OwnThread
 }
     Result is what Build made of a pull request.
 
@@ -9073,7 +9131,8 @@ func Build(in Input) (Result, error)
     Build makes the candidates of a pull request: the root comment of every
     review thread and the body of every review by another reviewer (not the
     author, not one of magnum's logins, not a bot unless IncludeBots). Replies
-    are never candidates.
+    are never candidates. A thread magnum started that someone answered is not a
+    candidate either: it goes to Result.Threads (OwnThreads).
 
     A comment shorter than MinChars without its quotes and code blocks,
     or that only approves, is dropped. One near a finding magnum posted on the
@@ -9093,6 +9152,27 @@ type Reviewed struct {
 	At  time.Time // when the review was posted
 }
     Reviewed is a commit magnum posted a review of.
+
+type ThreadItem struct {
+	ID      string   `json:"id"`
+	Outcome string   `json:"outcome"`
+	Verdict string   `json:"verdict,omitempty"`
+	Lesson  string   `json:"lesson,omitempty"`
+	Scope   string   `json:"scope,omitempty"`
+	Match   []string `json:"match,omitempty"`
+}
+    ThreadItem is the classifier's answer for one own thread: what the author
+    did with the finding (Outcome, store.Decline*), whether magnum was right
+    for a declined or argued one (Verdict, store.Verdict*), and for a wrong,
+    over-ranked or missing-context one a lesson with its scope and the patterns
+    that recognize the same finding again.
+
+type ThreadReply struct {
+	Author string `json:"author"`
+	Body   string `json:"body"`
+}
+    ThreadReply is one reply in an own thread: who wrote it (Account form,
+    OwnAuthor for magnum) and what it says, data for the classifier only.
 
 ```
 

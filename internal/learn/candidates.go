@@ -5,7 +5,9 @@
 // magnum's own comments, short approvals, comments on code magnum never
 // saw, findings magnum already posted), and ParseOutput reads the
 // classifier's answer back, refusing anything off schema and any lesson
-// that retells the pull request instead of teaching (ScrubLesson).
+// that retells the pull request instead of teaching (ScrubLesson). The
+// threads magnum started that someone answered go to the classifier too
+// (OwnThreads), which says what the author did with each finding.
 //
 // The package is pure: it starts no process and touches no network or
 // registry. The engine reads GitHub and the registry and hands the data in;
@@ -55,6 +57,10 @@ type Input struct {
 	// caught it; a rejected one, that magnum raised it and let it go. The
 	// rejected ones also go to the classifier (Result.Rejected).
 	Findings []store.Finding
+	// ReviewRuns names the run that posted each of magnum's reviews, by
+	// review id (runs.review_id): an own thread's finding is one of its
+	// review's run (OwnThreads).
+	ReviewRuns map[int64]string
 	// MinChars drops a comment whose text, without quotes and code blocks,
 	// is shorter.
 	MinChars int
@@ -146,12 +152,17 @@ type Result struct {
 	// with a title, oldest first: the classifier names the one that
 	// reports a candidate's problem (Item.Rejected, LinkRejected).
 	Rejected []Rejected
+	// Threads are magnum's own findings that someone answered
+	// (OwnThreads), for the classifier beside the candidates.
+	Threads []OwnThread
 }
 
 // Build makes the candidates of a pull request: the root comment of every
 // review thread and the body of every review by another reviewer (not the
 // author, not one of magnum's logins, not a bot unless IncludeBots).
-// Replies are never candidates.
+// Replies are never candidates. A thread magnum started that someone
+// answered is not a candidate either: it goes to Result.Threads
+// (OwnThreads).
 //
 // A comment shorter than MinChars without its quotes and code blocks, or
 // that only approves, is dropped. One near a finding magnum posted on the
@@ -166,7 +177,7 @@ type Result struct {
 // GitHub answers with a 404 (github.ErrNotFound: a commit it no longer has)
 // proves nothing, so the comment is outside and the build goes on.
 func Build(in Input) (Result, error) {
-	res := Result{Rejected: rejectedRows(in.Findings)}
+	res := Result{Rejected: rejectedRows(in.Findings), Threads: OwnThreads(in)}
 	reviewed := map[string]bool{}
 	for _, r := range in.Reviewed {
 		reviewed[r.SHA] = true
@@ -270,7 +281,7 @@ func (in Input) other(login, typename string) bool {
 	if login == "" || github.SameAccount(login, in.Author) {
 		return false
 	}
-	if slices.ContainsFunc(in.Own, func(o string) bool { return github.SameAccount(o, login) }) {
+	if in.own(login) {
 		return false
 	}
 	return in.IncludeBots || !github.IsBot(typename, login)

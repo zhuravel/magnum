@@ -5132,3 +5132,21 @@ editing history. Code, config comments and prompts reference these by their head
   reference would have made recording a round's result again fail; the decline stays without the link.
   Rejected: a column on `findings` (a finding recorded before migration 0005, or in a dry run, has no
   row, and its decline must still count); storing the replies (PR text in the registry).
+- **The retro classifies the replies to magnum's own findings** (2026-10-09, amends "Learning loop:
+  daily retro", which dropped every thread magnum started). A thread whose root comment is one of
+  magnum's logins and that someone else answered (the author or another reviewer, not a ghost, not a bot
+  unless `include_bots`) is an own thread (`learn.OwnThreads`, `o<comment id>`), listed under `threads`
+  in `candidates.json` beside the candidates: the finding as posted (the root's first line without its
+  bold and `[P2]` tag, the first P0 to P3 on it, path and line), the reviewed commit (the root's when
+  magnum reviewed it, else the newest reviewed before it), the posted finding of the same review's run
+  within 3 lines, and every reply, magnum's own marked `(magnum)`, which no GitHub login can be. The
+  classifier answers each with an outcome (`fixed`, `declined`, `deferred`, `argued`, `question`,
+  `unrelated`); a declined or argued one with a verdict (`wrong`, `over_ranked`, `missing_context`,
+  `right`); and a wrong, over-ranked or missing-context one with a lesson, scope and match patterns
+  under a miss's rules. `ParseOutput` wants exactly one thread item per own thread and, like a non-miss
+  class, drops the fields an outcome or verdict does not need, so an author who only quotes the finding
+  and says "fixed in abc1234" needs nothing but `fixed`. `retro.md` gets the section and the answer's
+  shape only when `{{.Threads}}` is above 0, so a pull request without answered findings renders the
+  prompt as before. Rejected: sending the whole root comment (the first line names the finding; the rest
+  restates the judge's evidence); requiring a verdict on every outcome (a fixed or deferred finding was
+  accepted, and a stricter schema costs nudges).

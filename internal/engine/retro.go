@@ -151,6 +151,7 @@ type retroData struct {
 	Files        string   // the commented files: <Files>/<sha12>/<path>
 	Output       string   // the answer file the agent writes (learn.Output)
 	Count        int      // the candidates to classify
+	Threads      int      // magnum's own findings someone answered (learn.OwnThread)
 }
 
 // retroSpec is what one retro looks at.
@@ -570,7 +571,7 @@ func (e *Engine) retroPR(ctx context.Context, run RetroRun, pr store.PR, classif
 				why = fmt.Errorf("the classifier wrote no %s", learn.OutputFile)
 				break
 			}
-			if items, rerr = learn.ParseOutput(data, res.Candidates, res.Rejected); rerr != nil {
+			if items, _, rerr = learn.ParseOutput(data, res.Candidates, res.Rejected, nil); rerr != nil {
 				why = fmt.Errorf("%s is invalid: %w", learn.OutputFile, rerr)
 				break
 			}

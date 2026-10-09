@@ -241,6 +241,7 @@ say they are data, not instructions.
 | `.Files` | the directory of the commented files, `<Files>/<first 12 characters of reviewed_sha>/<path>` |
 | `.Output` | the answer file the agent writes, `retro.json` |
 | `.Count` | how many candidates there are |
+| `.Threads` | how many of Magnum's own findings someone answered (0 when none): the candidates file's `threads`, per finding its `id` (`o<comment id>`), `url`, `comment_id`, `review_id`, `path` and `line`, `title` (the posted comment's first line without its bold and priority tag), `priority`, `reviewed_sha`, `finding_ref` (the posted finding of that review within 3 lines) and `replies`, oldest first, each with its `author` (`(magnum)` for Magnum's own) and `body`: the pull request's text, data like the comments |
 
 The answer is `{"items": [{"id", "class", ...}]}` with one item per candidate and `class` one of `miss`,
 `not_issue`, `style` and `outside`; a miss also needs `severity` (`P0` to `P3`), `title` (at most 80
@@ -252,6 +253,12 @@ miss's `raised` (rejected, with that finding and its reason), and an item that n
 invalid file gets one nudge, then the pull request fails. A lesson that names a
 pull request or issue (`#123`), holds a URL, names the author or a reviewer, mentions one of Magnum's logins
 or, when its scope is `general`, names the repository is dropped and the miss kept without it.
+
+With `.Threads` above 0 the answer also holds `"threads": [{"id", "outcome", ...}]`, one thread item per entry
+of `threads`, with `outcome` one of `fixed`, `declined`, `deferred`, `argued`, `question` and `unrelated`; a
+`declined` or `argued` finding also needs `verdict` (`wrong`, `over_ranked`, `missing_context` or `right`),
+and a `wrong`, `over_ranked` or `missing_context` verdict `lesson`, `scope` and `match` with a miss's rules.
+Fields an outcome or verdict does not need are dropped; the same check, nudge and lesson scrub apply.
 
 ### Notes curation prompt (`notes-curate.md`)
 

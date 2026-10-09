@@ -1,0 +1,163 @@
+package learn
+
+import (
+	"reflect"
+	"slices"
+	"strconv"
+	"testing"
+	"time"
+
+	"github.com/zhuravel/magnum/internal/github"
+	"github.com/zhuravel/magnum/internal/store"
+)
+
+// ownBody is a finding as magnum posts it: the priority and title in bold
+// on the first line, the explanation below.
+const ownBody = "**[P2] Coupon lookup ignores the site**\n\nThe finder takes the code from the request and never scopes it."
+
+// ownThread is a review thread magnum's App started on sha at line, an
+// hour after t0, in review reviewID, answered by replies (login, body) in
+// order, each a minute after the last.
+func ownThread(id int64, path string, line int, sha string, reviewID int64, replies ...[2]string) github.Thread {
+	th := thread(id, path, line, sha, ownBody)
+	root := &th.Comments[0]
+	root.AuthorLogin, root.AuthorType, root.ReviewID = "talkable", "Bot", reviewID
+	for i, r := range replies {
+		typ := "User"
+		if r[0] == "talkable" || r[0] == "lint-bot" {
+			typ = "Bot"
+		}
+		th.Comments = append(th.Comments, github.ThreadComment{ID: id*100 + int64(i), AuthorLogin: r[0], AuthorType: typ, Body: r[1],
+			CreatedAt: root.CreatedAt.Add(time.Duration(i+1) * time.Minute), ReviewID: reviewID*100 + int64(i),
+			URL: "https://github.com/talkable/widgets/pull/7#discussion_r" + strconv.FormatInt(id*100+int64(i), 10)})
+	}
+	return th
+}
+
+func threadIDs(ts []OwnThread) []string {
+	out := []string{}
+	for _, t := range ts {
+		out = append(out, t.ID)
+	}
+	return out
+}
+
+// TestOwnThreadsKeepOnlyMagnumsRootsWithOthersReplies: a thread is magnum's
+// when its root comment is one of Own's logins, and it is kept only when
+// someone other than magnum replied: the author or another reviewer, not a
+// ghost, not a bot unless IncludeBots. The replies come in order, magnum's
+// own marked OwnAuthor, and Build carries the threads beside the
+// candidates, never as candidates.
+func TestOwnThreadsKeepOnlyMagnumsRootsWithOthersReplies(t *testing.T) {
+	user := ownThread(7, "app/a.rb", 3, shaA, 501, [2]string{"rev-ann", "Is this reachable?"})
+	user.Comments[0].AuthorLogin, user.Comments[0].AuthorType = "ZHURAVEL", "User" // magnum's user identity, any case
+	threads := []github.Thread{
+		ownThread(1, "app/a.rb", 10, shaA, 501, [2]string{"alice", "Fixed, thanks."}),
+		ownThread(2, "app/a.rb", 20, shaA, 501, [2]string{"talkable", "Still open at the new head."}), // only magnum replied
+		ownThread(3, "app/a.rb", 30, shaA, 501),                                                       // nobody replied
+		thread(4, "app/a.rb", 40, shaA, longish),                                                      // rev-ann's own thread
+		ownThread(5, "app/a.rb", 50, shaA, 501, [2]string{"lint-bot", "Rule X fires here."}),          // only a bot replied
+		ownThread(6, "app/a.rb", 60, shaA, 501, [2]string{"", "A ghost's reply."}),
+		user,
+		ownThread(8, "app/a.rb", 80, shaA, 501, [2]string{"rev-ann", "Not a problem: the caller checks it."},
+			[2]string{"talkable", "The caller does not run on the import path."}, [2]string{"alice", "Won't fix."}),
+	}
+	in := input(threads, nil)
+	got := OwnThreads(in)
+	if ids := threadIDs(got); !slices.Equal(ids, []string{"o1", "o7", "o8"}) {
+		t.Fatalf("own threads = %v, want [o1 o7 o8]", ids)
+	}
+	want := []ThreadReply{{Author: "rev-ann", Body: "Not a problem: the caller checks it."},
+		{Author: OwnAuthor, Body: "The caller does not run on the import path."}, {Author: "alice", Body: "Won't fix."}}
+	if o8 := got[2]; !reflect.DeepEqual(o8.Replies, want) || o8.CommentID != 8 || o8.URL != threads[7].Comments[0].URL ||
+		o8.Path != "app/a.rb" || o8.Line != 80 || o8.ReviewID != 501 {
+		t.Fatalf("o8 = %+v", o8)
+	}
+
+	in.IncludeBots = true
+	if ids := threadIDs(OwnThreads(in)); !slices.Equal(ids, []string{"o1", "o5", "o7", "o8"}) {
+		t.Fatalf("with include_bots: %v", ids)
+	}
+
+	res, err := Build(input(threads, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ids := threadIDs(res.Threads); !slices.Equal(ids, []string{"o1", "o7", "o8"}) {
+		t.Fatalf("Build's threads = %v", ids)
+	}
+	if ids := ids(res.Candidates); !slices.Equal(ids, []string{"t4"}) {
+		t.Fatalf("Build's candidates = %v, want only rev-ann's own thread", ids)
+	}
+}
+
+// TestOwnThreadsBindTheReviewedCommitAndTheFinding: a thread's reviewed
+// commit is its root's when magnum reviewed that commit, else the newest
+// reviewed before the root; its finding is the posted one of the same
+// review's run (ReviewRuns) on the same path within NearLines, never a
+// rejected one or another review's; its title is the root's first line
+// without the bold and the priority tag, and its priority the first P0 to
+// P3 in it.
+func TestOwnThreadsBindTheReviewedCommitAndTheFinding(t *testing.T) {
+	reply := [2]string{"alice", "We never pass a foreign code here."}
+	onC := ownThread(1, "app/models/coupon.rb", 42, shaC, 502, reply)
+	onB := ownThread(2, "app/models/coupon.rb", 42, shaB, 0, reply) // a commit magnum did not review, review unknown
+	onB.Comments[0].CreatedAt = t0.Add(2 * time.Hour)
+	far := ownThread(3, "app/models/coupon.rb", 60, shaA, 501, reply)
+	plain := ownThread(4, "app/models/gift.rb", 5, shaA, 501, reply)
+	plain.Comments[0].Body = "\n  Gift cards skip the balance check  \nmore"
+	in := input([]github.Thread{onC, onB, far, plain}, nil)
+	in.Reviewed = []Reviewed{{SHA: shaA, At: t0}, {SHA: shaC, At: t0.Add(3 * time.Hour)}}
+	in.ReviewRuns = map[int64]string{501: "r-1", 502: "r-2"}
+	in.Findings = []store.Finding{
+		{RunID: "r-1", FindingID: "F1", Path: "app/models/coupon.rb", Line: 42, Verdict: store.FindingPosted},   // review 501's
+		{RunID: "r-2", FindingID: "F1", Path: "app/models/coupon.rb", Line: 44, Verdict: store.FindingPosted},   // review 502's
+		{RunID: "r-2", FindingID: "F2", Path: "app/models/coupon.rb", Line: 42, Verdict: store.FindingRejected}, // rejected
+		{RunID: "r-1", FindingID: "F3", Path: "app/models/coupon.rb", Line: 56, Verdict: store.FindingPosted},   // 4 lines from 60
+	}
+	got := OwnThreads(in)
+	if len(got) != 4 {
+		t.Fatalf("own threads = %v", threadIDs(got))
+	}
+	for i, want := range []struct{ sha, ref, title, priority string }{
+		{shaC, "r-2/F1", "Coupon lookup ignores the site", "P2"},
+		{shaA, "", "Coupon lookup ignores the site", "P2"},
+		{shaA, "", "Coupon lookup ignores the site", "P2"},
+		{shaA, "", "Gift cards skip the balance check", ""},
+	} {
+		o := got[i]
+		if o.ReviewedSHA != want.sha || o.FindingRef != want.ref || o.Title != want.title || o.Priority != want.priority {
+			t.Errorf("%s: reviewed %s, finding %q, title %q, priority %q; want %s, %q, %q, %q", o.ID, short(o.ReviewedSHA),
+				o.FindingRef, o.Title, o.Priority, short(want.sha), want.ref, want.title, want.priority)
+		}
+	}
+	// The same review's finding within NearLines binds.
+	near := ownThread(5, "app/models/coupon.rb", 45, shaA, 501, reply)
+	in.Threads = []github.Thread{near}
+	if got := OwnThreads(in); len(got) != 1 || got[0].FindingRef != "r-1/F1" {
+		t.Fatalf("a thread 3 lines from its review's finding: %+v", got)
+	}
+}
+
+// TestAFixedReplyNeedsNoLesson: an author who only quotes the finding and
+// says it is fixed answers with outcome fixed: no verdict, lesson, scope or
+// match is needed, and any the classifier adds is dropped.
+func TestAFixedReplyNeedsNoLesson(t *testing.T) {
+	th := ownThread(9, "app/a.rb", 10, shaA, 501, [2]string{"alice", "> **[P2] Coupon lookup ignores the site**\n\nfixed in abc1234"})
+	threads := OwnThreads(input([]github.Thread{th}, nil))
+	if len(threads) != 1 || threads[0].ID != "o9" {
+		t.Fatalf("own threads = %+v", threads)
+	}
+	for _, out := range []string{
+		`{"items":[],"threads":[{"id":"o9","outcome":"fixed"}]}`,
+		`{"items":[],"threads":[{"id":"o9","outcome":"fixed","verdict":"wrong","lesson":"When x, check y.","scope":"general","match":["x"]}]}`,
+	} {
+		items, got, err := ParseOutput([]byte(out), nil, nil, threads)
+		if err != nil {
+			t.Fatalf("%s: %v", out, err)
+		}
+		if len(items) != 0 || !reflect.DeepEqual(got, map[string]ThreadItem{"o9": {ID: "o9", Outcome: store.DeclineFixed}}) {
+			t.Fatalf("%s: items %+v, threads %+v", out, items, got)
+		}
+	}
+}
