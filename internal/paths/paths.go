@@ -330,6 +330,11 @@ func (l Layout) Data() string { return l.data() }
 // retro's runs live under Learn()/retro/<run>/.
 func (l Layout) Learn() string { return filepath.Join(l.data(), "learn") }
 
+// LearnCorpus is the learned eval corpus the daemon writes from the
+// registry's misses and declines, which `magnum eval` reads after the
+// operator's corpus.
+func (l Layout) LearnCorpus() string { return filepath.Join(l.Learn(), "corpus.toml") }
+
 // ReviewDir is where one review round's reports live.
 func (l Layout) ReviewDir(owner, repo string, number int, sha string) string {
 	if len(sha) > 12 {

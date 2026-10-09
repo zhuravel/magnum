@@ -5941,6 +5941,12 @@ func SaveRun(dir string, r Run) error
     SaveRun writes dir/run.json atomically (a temporary file in dir, then a
     rename), mode 0600; dir is created with mode 0700.
 
+func WriteCorpus(path string, c Corpus) error
+    WriteCorpus writes c to path as TOML that LoadCorpus reads back as c,
+    atomically (a temporary file, then a rename) with mode 0600, creating
+    the directory (0700). A corpus LoadCorpus would refuse is not written,
+    and a file that already holds the same text is left as it is.
+
 func WriteMarkdown(w io.Writer, r Run)
     WriteMarkdown writes the report of r as markdown (report.md): a summary
     table, then per case each defect as found or missed with its severity,
@@ -5974,11 +5980,11 @@ func Baselines(runs []Run, inputs string, c Case) []Baseline
     (eval-at.sh compares the Go files of the two commits).
 
 type Case struct {
-	Name    string   `toml:"name"` // unique, [a-z0-9][a-z0-9-]{0,47}
-	PR      string   `toml:"pr"`   // owner/repo#N
-	Head    string   `toml:"head"` // the reviewed head, 40 lower-case hex
-	Base    string   `toml:"base"` // base branch name, optional
-	Why     string   `toml:"why"`  // why the case is in the corpus, optional
+	Name    string   `toml:"name"`           // unique, [a-z0-9][a-z0-9-]{0,47}
+	PR      string   `toml:"pr"`             // owner/repo#N
+	Head    string   `toml:"head"`           // the reviewed head, 40 lower-case hex
+	Base    string   `toml:"base,omitempty"` // base branch name, optional
+	Why     string   `toml:"why,omitempty"`  // why the case is in the corpus, optional
 	Defects []Defect `toml:"defect"`
 
 	// Owner, Repo and Number are parsed from PR.
@@ -5988,6 +5994,10 @@ type Case struct {
 }
     Case is one pull request pinned to the head that is reviewed, with the
     defects a review must find.
+
+func (cs *Case) Validate() error
+    Validate reports every rule cs breaks, as LoadCorpus does for a corpus that
+    holds it, and fills Owner, Repo and Number from PR; nil when cs is valid.
 
 type CaseRun struct {
 	Case       string    `json:"case"`
@@ -6022,6 +6032,13 @@ type Corpus struct {
     Corpus is the set of pull requests with seeded defects a replay is scored
     against.
 
+func LoadCorpora(user, learned string) (*Corpus, error)
+    LoadCorpora reads the operator's corpus at user ("" = none) and the learned
+    corpus the daemon writes at learned (paths.Layout.LearnCorpus; "" or a file
+    that does not exist adds nothing) and returns their cases, the user's first.
+    A case name in both files is an error that names it. Without a user corpus
+    and without learned cases the error is the learned file's.
+
 func LoadCorpus(path string) (*Corpus, error)
     LoadCorpus reads and parses the corpus file at path.
 
@@ -6035,12 +6052,12 @@ type Defect struct {
 	// Severity is, for a defect to find, the weakest severity that still counts as right; for an
 	// absent one, the weakest at which a matching finding is a hit (a weaker one is neither a hit
 	// nor noise). P0..P3, optional.
-	Severity string   `toml:"severity"`
-	Paths    []string `toml:"paths"`  // globs on the slash path, "**" spans directories
-	Lines    []int    `toml:"lines"`  // inclusive head-side range [from, to]
-	Match    []string `toml:"match"`  // case-insensitive regexps on the finding body
-	Body     bool     `toml:"body"`   // a mention in the review body also counts; needs Match
-	Expect   string   `toml:"expect"` // ExpectFound ("" too) or ExpectAbsent
+	Severity string   `toml:"severity,omitempty"`
+	Paths    []string `toml:"paths,omitempty"`  // globs on the slash path, "**" spans directories
+	Lines    []int    `toml:"lines,omitempty"`  // inclusive head-side range [from, to]
+	Match    []string `toml:"match,omitempty"`  // case-insensitive regexps on the finding body
+	Body     bool     `toml:"body,omitempty"`   // a mention in the review body also counts; needs Match
+	Expect   string   `toml:"expect,omitempty"` // ExpectFound ("" too) or ExpectAbsent
 
 	// Has unexported fields.
 }
@@ -8923,6 +8940,26 @@ const RejectedMax = 40
 
 FUNCTIONS
 
+func CaseFromDecline(d store.Decline) (eval.Case, bool)
+    CaseFromDecline is the learned case of decline d: ok when the author's
+    answer showed magnum's finding wrong or ranked too high (verdict wrong or
+    over_ranked) for every repository (scope general), and d is still new or
+    used. The case is decline-<id> on d's PR at the reviewed commit, why the
+    finding's title, with one absent defect, decline-<id>, on the finding's path
+    (literally) and line with d's match expressions: a finding that reports it
+    again is a false positive. An over-ranked one is a hit only at the priority
+    magnum posted or stronger (eval.Defect.Severity), so the point ranked lower
+    is no hit.
+
+func CaseFromMiss(m store.Miss) (eval.Case, bool)
+    CaseFromMiss is the learned case of miss m: ok when m is a miss (class miss)
+    of scope general, P0 to P2, still new or used, on a reviewed commit the case
+    can pin. The case is miss-<id> on m's PR at that commit, why its title,
+    with one defect to find, miss-<id>: m's path (literally, not as a glob), its
+    lines (or its line), the match expressions that compile and its severity.
+    A row the corpus would refuse (no path nor match left, a PR it cannot name)
+    makes no case.
+
 func FilePath(sha, p string) string
     FilePath is where the copy of path at sha lives under a retro directory's
     files: files/<sha12>/<path>, slash-separated.
@@ -10297,6 +10334,10 @@ func (l Layout) GhRoot() string
 func (l Layout) Learn() string
     Learn is where the learning loop keeps its inputs and outputs: the retro's
     runs live under Learn()/retro/<run>/.
+
+func (l Layout) LearnCorpus() string
+    LearnCorpus is the learned eval corpus the daemon writes from the registry's
+    misses and declines, which `magnum eval` reads after the operator's corpus.
 
 func (l Layout) Lock() string
     Lock is the daemon's lock file under State, held for the daemon's whole

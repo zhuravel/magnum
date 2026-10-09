@@ -131,7 +131,7 @@ func runEvalBaseline(c *Context, corpusFlag string, names []string) int {
 	if err := c.LoadConfig(); err != nil {
 		return cmdFail(c, "eval baseline", fmt.Errorf("%w (fix config.toml; `magnum config` validates it)", err))
 	}
-	corpus, err := eval.LoadCorpus(evalCorpusPath(c, corpusFlag))
+	corpus, err := eval.LoadCorpora(evalCorpusPath(c, corpusFlag))
 	if err != nil {
 		return cmdFail(c, "eval baseline", err)
 	}

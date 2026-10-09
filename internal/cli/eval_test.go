@@ -52,6 +52,37 @@ func TestEvalRunRefusesAFlaggedCase(t *testing.T) {
 	}
 }
 
+// `eval run` reads the learned corpus the daemon writes after the operator's corpus, and alone when
+// the operator has none. Both cases here are on flagged PRs, so nothing replays.
+func TestEvalRunReadsTheLearnedCorpusAfterTheOperators(t *testing.T) {
+	f := newInspFixture(t)
+	learned := f.Ctx.Layout.LearnCorpus()
+	if err := eval.WriteCorpus(learned, eval.Corpus{Cases: []eval.Case{{Name: "decline-7", PR: "example/gadgets#5", Head: strings.Repeat("ab", 20),
+		Defects: []eval.Defect{{ID: "decline-7", Title: "t", Expect: eval.ExpectAbsent, Paths: []string{"a.rb"}}}}}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, pr := range []string{"example/widgets#3", "example/gadgets#5"} {
+		if err := eval.MarkFlagged(evalRunsRoot(f.Ctx.Layout), eval.Flagged{Case: "was-" + strings.NewReplacer("/", "-", "#", "-").Replace(pr), PR: pr, Run: "20261007-134000", Reason: "Codex refused"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if code := execute(f.Ctx, []string{"eval", "run"}); code != 0 {
+		t.Fatalf("learned corpus alone: exit %d; stderr %s", code, f.Err)
+	}
+	if out := f.Out.String(); !strings.Contains(out, "1 case(s)") || !strings.Contains(out, "decline-7 example/gadgets#5 refused") {
+		t.Fatalf("learned corpus alone:\n%s", out)
+	}
+	f.Out.Reset()
+	if code := execute(f.Ctx, []string{"eval", "run", "--corpus", evalCorpusOf(t, "oauth-session", "example/widgets#3")}); code != 0 {
+		t.Fatalf("both corpora: exit %d; stderr %s", code, f.Err)
+	}
+	out := f.Out.String()
+	first, second := strings.Index(out, "oauth-session example/widgets#3 refused"), strings.Index(out, "decline-7 example/gadgets#5 refused")
+	if !strings.Contains(out, "2 case(s)") || first < 0 || second < first {
+		t.Fatalf("both corpora, the operator's first:\n%s", out)
+	}
+}
+
 // evalCorpusOf writes a corpus of one case, name on pr, and returns its path.
 func evalCorpusOf(t *testing.T, name, pr string) string {
 	t.Helper()

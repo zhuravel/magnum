@@ -1,11 +1,15 @@
 package eval
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 const sha = "0123456789abcdef0123456789abcdef01234567"
@@ -324,6 +328,123 @@ func TestCorpusRejectsAnUnknownExpect(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), `defect "d"`) || !strings.Contains(err.Error(), "expect must be") ||
 		!strings.Contains(err.Error(), `"maybe"`) {
 		t.Fatalf("unknown expect: %v", err)
+	}
+}
+
+// withoutRegexps is c without the compiled match expressions, which two parses compile apart.
+func withoutRegexps(c *Corpus) Corpus {
+	out := Corpus{Cases: slices.Clone(c.Cases)}
+	for i := range out.Cases {
+		out.Cases[i].Defects = slices.Clone(out.Cases[i].Defects)
+		for j := range out.Cases[i].Defects {
+			out.Cases[i].Defects[j].res = nil
+		}
+	}
+	return out
+}
+
+// WriteCorpus writes TOML that LoadCorpus reads back as the same corpus (absent defects, regexps
+// with backslashes and quotes, optional fields left out), private, and leaves a file that already
+// holds the same text alone; a corpus LoadCorpus would refuse is not written.
+func TestWriteCorpusRoundTrips(t *testing.T) {
+	want, err := parseCorpus("", []byte(validCorpus+`
+[[case]]
+name = "decline-7"
+pr = "example/sandbox#2"
+head = "`+sha+`"
+why = "the author said the guard \"is not needed\""
+
+[[case.defect]]
+id = "decline-7"
+title = "Nil guard on a checked token"
+expect = "absent"
+severity = "P1"
+paths = ["app/\\[id\\]/page.tsx"]
+lines = [12, 12]
+match = ["\\bnil\\b", "guard (is|was) missing"]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "learn", "corpus.toml")
+	if err := WriteCorpus(path, *want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadCorpus(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(withoutRegexps(got), withoutRegexps(want)) {
+		t.Fatalf("round trip changed the corpus:\n got %+v\nwant %+v", got, want)
+	}
+	if st, err := os.Stat(path); err != nil || st.Mode().Perm() != 0o600 {
+		t.Errorf("corpus mode = %v (%v), want 0600", st.Mode().Perm(), err)
+	}
+	if b, _ := os.ReadFile(path); strings.Contains(string(b), "body = false") || strings.Contains(string(b), `base = ""`) {
+		t.Errorf("the file spells out the optional fields left empty:\n%s", b)
+	}
+
+	old := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteCorpus(path, *got); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := os.Stat(path); err != nil || !st.ModTime().Equal(old) {
+		t.Errorf("the same corpus was written again (mtime %v, %v)", st.ModTime(), err)
+	}
+
+	bad := *want
+	bad.Cases = []Case{{Name: "Bad", PR: "example/x#1", Head: sha, Defects: []Defect{{ID: "d", Title: "t", Match: []string{"x"}}}}}
+	if err := WriteCorpus(path, bad); err == nil || !strings.Contains(err.Error(), "name must match") {
+		t.Fatalf("invalid corpus: %v", err)
+	}
+	if got, err := LoadCorpus(path); err != nil || len(got.Cases) != len(want.Cases) {
+		t.Errorf("an invalid corpus replaced the file: %+v, %v", got, err)
+	}
+}
+
+// LoadCorpora reads the operator's corpus and then the learned one; a learned file that is not there
+// adds nothing, a user corpus may be left out, and a case name in both files is refused by name.
+func TestLoadCorporaRefusesACaseNameInBothFiles(t *testing.T) {
+	dir := t.TempDir()
+	user, learned := filepath.Join(dir, "eval.toml"), filepath.Join(dir, "learn", "corpus.toml")
+	if err := os.WriteFile(user, []byte(validCorpus), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	names := func(c *Corpus) []string {
+		var out []string
+		for _, cs := range c.Cases {
+			out = append(out, cs.Name)
+		}
+		return out
+	}
+	if c, err := LoadCorpora(user, learned); err != nil || !slices.Equal(names(c), []string{"oauth-hmac", "sandbox"}) {
+		t.Fatalf("no learned file: %v, %v", c, err)
+	}
+	one := func(name string) Case {
+		return Case{Name: name, PR: "example/sandbox#3", Head: sha, Defects: []Defect{{ID: name, Title: "t", Expect: ExpectAbsent, Match: []string{"x"}}}}
+	}
+	if err := WriteCorpus(learned, Corpus{Cases: []Case{one("miss-3"), one("decline-4")}}); err != nil {
+		t.Fatal(err)
+	}
+	if c, err := LoadCorpora(user, learned); err != nil || !slices.Equal(names(c), []string{"oauth-hmac", "sandbox", "miss-3", "decline-4"}) {
+		t.Fatalf("both files: %v, %v", c, err)
+	}
+	if c, err := LoadCorpora("", learned); err != nil || !slices.Equal(names(c), []string{"miss-3", "decline-4"}) || c.Cases[0].Owner != "example" {
+		t.Fatalf("the learned file alone: %v, %v", c, err)
+	}
+	if _, err := LoadCorpora("", filepath.Join(dir, "none.toml")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("no corpus at all: %v, want the learned file's not-exist error", err)
+	}
+	if err := WriteCorpus(learned, Corpus{Cases: []Case{one("sandbox"), one("miss-3")}}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadCorpora(user, learned)
+	if err == nil || !strings.Contains(err.Error(), `"sandbox"`) || strings.Contains(err.Error(), "miss-3") ||
+		!strings.Contains(err.Error(), user) || !strings.Contains(err.Error(), learned) {
+		t.Fatalf("a name in both: %v, want an error naming the case and both files", err)
 	}
 }
 

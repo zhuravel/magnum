@@ -1632,6 +1632,13 @@ declined for missing context with scope `repo` is also a repository miss, so the
 repository takes it like any other, until a later retro of the pull request answers it otherwise. `magnum misses --declines` lists the findings authors declined or argued
 that no lesson was drawn from yet (`--all` every answer, `--json` the rows), `magnum stats` counts the
 answers by source and by priority, and `magnum status` adds how many declined findings wait.
+**The learned eval corpus.** Each retro ends by rewriting `~/.local/share/magnum/learn/corpus.toml`, which
+`magnum eval` reads after your corpus: one case per `general` miss of severity P0 to P2 (`miss-<id>`, a
+defect to find at the miss's path, lines and patterns) and per finding an author declined as `wrong` or
+`over_ranked` for every repository (`decline-<id>`, an absent defect: reporting it again is a false
+positive; an over-ranked one only at the priority Magnum posted or stronger), each at the commit Magnum
+reviewed. A case leaves the file once its row is dismissed or its pull request is in no watch or was
+flagged by Codex; the file is rewritten only when it changes, and removed when no case is left.
 
 ```toml
 [learn]
@@ -1865,7 +1872,8 @@ for the modules and the actions.
 
 To measure a change to the prompts, the skill or a model before the daemon picks it up, keep a corpus
 of PRs whose defects you know in `~/.config/magnum/eval.toml` (a checkout's gitignored `eval.local.toml` still
-works; the format is in `eval.toml.example`)
+works; the format is in `eval.toml.example`; the learned corpus the retro writes is read after it, alone when
+you have none, and a case name in both is an error)
 and run `magnum eval run --label "<the change>"`. Each case replays the PR at its pinned head with the
 watch's roles, in a scratch registry and a detached worktree under `~/.local/state/magnum/eval/<run>/`, with agents
 named apart from the PR's own and from every other run's (tagged `eval-<6 hex digits of the run id>`), in a herdr

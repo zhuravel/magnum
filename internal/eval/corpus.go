@@ -1,15 +1,20 @@
 package eval
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/zhuravel/magnum/internal/fsx"
 )
 
 // Corpus is the set of pull requests with seeded defects a replay is scored against.
@@ -19,11 +24,11 @@ type Corpus struct {
 
 // Case is one pull request pinned to the head that is reviewed, with the defects a review must find.
 type Case struct {
-	Name    string   `toml:"name"` // unique, [a-z0-9][a-z0-9-]{0,47}
-	PR      string   `toml:"pr"`   // owner/repo#N
-	Head    string   `toml:"head"` // the reviewed head, 40 lower-case hex
-	Base    string   `toml:"base"` // base branch name, optional
-	Why     string   `toml:"why"`  // why the case is in the corpus, optional
+	Name    string   `toml:"name"`           // unique, [a-z0-9][a-z0-9-]{0,47}
+	PR      string   `toml:"pr"`             // owner/repo#N
+	Head    string   `toml:"head"`           // the reviewed head, 40 lower-case hex
+	Base    string   `toml:"base,omitempty"` // base branch name, optional
+	Why     string   `toml:"why,omitempty"`  // why the case is in the corpus, optional
 	Defects []Defect `toml:"defect"`
 
 	// Owner, Repo and Number are parsed from PR.
@@ -42,12 +47,12 @@ type Defect struct {
 	// Severity is, for a defect to find, the weakest severity that still counts as right; for an
 	// absent one, the weakest at which a matching finding is a hit (a weaker one is neither a hit
 	// nor noise). P0..P3, optional.
-	Severity string   `toml:"severity"`
-	Paths    []string `toml:"paths"`  // globs on the slash path, "**" spans directories
-	Lines    []int    `toml:"lines"`  // inclusive head-side range [from, to]
-	Match    []string `toml:"match"`  // case-insensitive regexps on the finding body
-	Body     bool     `toml:"body"`   // a mention in the review body also counts; needs Match
-	Expect   string   `toml:"expect"` // ExpectFound ("" too) or ExpectAbsent
+	Severity string   `toml:"severity,omitempty"`
+	Paths    []string `toml:"paths,omitempty"`  // globs on the slash path, "**" spans directories
+	Lines    []int    `toml:"lines,omitempty"`  // inclusive head-side range [from, to]
+	Match    []string `toml:"match,omitempty"`  // case-insensitive regexps on the finding body
+	Body     bool     `toml:"body,omitempty"`   // a mention in the review body also counts; needs Match
+	Expect   string   `toml:"expect,omitempty"` // ExpectFound ("" too) or ExpectAbsent
 
 	res []*regexp.Regexp // Match, compiled
 }
@@ -75,6 +80,69 @@ func LoadCorpus(path string) (*Corpus, error) {
 		return nil, fmt.Errorf("eval: corpus %s: %w", path, err)
 	}
 	return parseCorpus(path, data)
+}
+
+// LoadCorpora reads the operator's corpus at user ("" = none) and the learned corpus the daemon
+// writes at learned (paths.Layout.LearnCorpus; "" or a file that does not exist adds nothing) and
+// returns their cases, the user's first. A case name in both files is an error that names it.
+// Without a user corpus and without learned cases the error is the learned file's.
+func LoadCorpora(user, learned string) (*Corpus, error) {
+	var out Corpus
+	if user != "" {
+		c, err := LoadCorpus(user)
+		if err != nil {
+			return nil, err
+		}
+		out.Cases = c.Cases
+	}
+	if learned == "" {
+		if user == "" {
+			return nil, errors.New("eval: no corpus")
+		}
+		return &out, nil
+	}
+	lc, err := LoadCorpus(learned)
+	switch {
+	case errors.Is(err, fs.ErrNotExist) && user != "":
+		return &out, nil
+	case err != nil:
+		return nil, err
+	}
+	var both []string
+	for _, cs := range lc.Cases {
+		if slices.ContainsFunc(out.Cases, func(u Case) bool { return u.Name == cs.Name }) {
+			both = append(both, strconv.Quote(cs.Name))
+		}
+	}
+	if len(both) > 0 {
+		return nil, fmt.Errorf("eval: case %s is in both %s and the learned corpus %s: rename it in %s",
+			strings.Join(both, ", "), user, learned, user)
+	}
+	out.Cases = append(out.Cases, lc.Cases...)
+	return &out, nil
+}
+
+// WriteCorpus writes c to path as TOML that LoadCorpus reads back as c, atomically (a temporary file,
+// then a rename) with mode 0600, creating the directory (0700). A corpus LoadCorpus would refuse is
+// not written, and a file that already holds the same text is left as it is.
+func WriteCorpus(path string, c Corpus) error {
+	var b bytes.Buffer
+	if err := toml.NewEncoder(&b).Encode(c); err != nil {
+		return fmt.Errorf("eval: write corpus %s: %w", path, err)
+	}
+	if _, err := parseCorpus(path, b.Bytes()); err != nil {
+		return fmt.Errorf("eval: write corpus: %w", err)
+	}
+	if cur, err := os.ReadFile(path); err == nil && bytes.Equal(cur, b.Bytes()) {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("eval: write corpus %s: %w", path, err)
+	}
+	if err := fsx.WriteFileAtomic(path, b.Bytes(), 0o600); err != nil {
+		return fmt.Errorf("eval: write corpus %s: %w", path, err)
+	}
+	return nil
 }
 
 // parseCorpus parses and validates a corpus read from src ("" when it has no
@@ -207,41 +275,59 @@ func (c *Corpus) validate(p *problems) {
 	for i := range c.Cases {
 		cs := &c.Cases[i]
 		ctx := caseCtx(i, cs.Name)
-		switch {
-		case cs.Name == "":
-			p.add(ctx, "name is required")
-		case !idPattern.MatchString(cs.Name):
-			p.add(ctx, "name must match %s", idPattern)
-		default:
-			if first, dup := names[cs.Name]; dup {
-				p.add(ctx, "duplicate name (case #%d has it too)", first)
-			} else {
-				names[cs.Name] = i + 1
-			}
+		if !cs.validate(ctx, p) {
+			continue
 		}
-		cs.validatePR(ctx, p)
-		if !headPattern.MatchString(cs.Head) {
-			p.add(ctx, "head must be a full 40-character lower-case hex SHA, got %q", cs.Head)
-		}
-		if cs.Base != "" && (strings.HasPrefix(cs.Base, "-") || strings.ContainsFunc(cs.Base, func(r rune) bool { return r <= ' ' || r == 0x7f })) {
-			p.add(ctx, "base %q is not a branch name", cs.Base)
-		}
-		if len(cs.Defects) == 0 {
-			p.add(ctx, "needs at least one [[case.defect]]")
-		}
-		ids := map[string]bool{}
-		for j := range cs.Defects {
-			d := &cs.Defects[j]
-			dctx := defectCtx(ctx, j, d.ID)
-			if d.ID != "" && idPattern.MatchString(d.ID) {
-				if ids[d.ID] {
-					p.add(dctx, "duplicate id within the case")
-				}
-				ids[d.ID] = true
-			}
-			d.validate(dctx, p)
+		if first, dup := names[cs.Name]; dup {
+			p.add(ctx, "duplicate name (case #%d has it too)", first)
+		} else {
+			names[cs.Name] = i + 1
 		}
 	}
+}
+
+// Validate reports every rule cs breaks, as LoadCorpus does for a corpus that holds it, and fills
+// Owner, Repo and Number from PR; nil when cs is valid.
+func (cs *Case) Validate() error {
+	p := &problems{prefix: "eval"}
+	cs.validate(caseCtx(0, cs.Name), p)
+	return p.err()
+}
+
+// validate adds the rules cs breaks to p, each in ctx, and reports whether its name is valid (the
+// corpus then checks that no other case has it).
+func (cs *Case) validate(ctx string, p *problems) (named bool) {
+	switch {
+	case cs.Name == "":
+		p.add(ctx, "name is required")
+	case !idPattern.MatchString(cs.Name):
+		p.add(ctx, "name must match %s", idPattern)
+	default:
+		named = true
+	}
+	cs.validatePR(ctx, p)
+	if !headPattern.MatchString(cs.Head) {
+		p.add(ctx, "head must be a full 40-character lower-case hex SHA, got %q", cs.Head)
+	}
+	if cs.Base != "" && (strings.HasPrefix(cs.Base, "-") || strings.ContainsFunc(cs.Base, func(r rune) bool { return r <= ' ' || r == 0x7f })) {
+		p.add(ctx, "base %q is not a branch name", cs.Base)
+	}
+	if len(cs.Defects) == 0 {
+		p.add(ctx, "needs at least one [[case.defect]]")
+	}
+	ids := map[string]bool{}
+	for j := range cs.Defects {
+		d := &cs.Defects[j]
+		dctx := defectCtx(ctx, j, d.ID)
+		if d.ID != "" && idPattern.MatchString(d.ID) {
+			if ids[d.ID] {
+				p.add(dctx, "duplicate id within the case")
+			}
+			ids[d.ID] = true
+		}
+		d.validate(dctx, p)
+	}
+	return named
 }
 
 func (cs *Case) validatePR(ctx string, p *problems) {

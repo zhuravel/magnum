@@ -5209,3 +5209,22 @@ editing history. Code, config comments and prompts reference these by their head
   hits next to the previous run; the Markdown report adds the total and a `hit` line per case. Rejected:
   counting an absent hit as noise (it is the one finding the case is about) and ignoring the severity
   (a point that was right but ranked too high could only stop being a hit by not being reported).
+- **The daemon keeps a learned eval corpus** (2026-10-09, the self-improving loop's eval). General
+  misses had no consumer and the findings authors declined could not be replayed, so a skill change
+  could not be scored on what magnum learned. Each retro now ends by rewriting
+  `<data>/learn/corpus.toml` (`paths.Layout.LearnCorpus`, `engine.syncLearnedCorpus`): one case per
+  general miss of severity P0 to P2 (`learn.CaseFromMiss`: `miss-<id>`, a defect to find with the row's
+  path, lines, match and severity) and per general decline with verdict `wrong` or `over_ranked`
+  (`learn.CaseFromDecline`: `decline-<id>`, an absent defect on the finding's path and line; an
+  over-ranked one carries the posted priority, so the point ranked lower is no hit), new or used, at the
+  reviewed commit, oldest row first. A path is written literally (glob characters escaped), match
+  expressions that do not compile are left out, and a row the corpus would refuse makes no case
+  (`eval.Case.Validate`), so one row never blocks the file. A PR no watch covers (no roles, no identity)
+  or one Codex flagged, or whose flag cannot be read, is left out, and so is a dismissed row.
+  `eval.WriteCorpus` encodes TOML that LoadCorpus reads back as written, validates it first, writes
+  atomically and leaves an unchanged file alone; no case removes the file. `eval.LoadCorpora` reads the
+  operator's corpus, then the learned one: a learned file that is not there adds nothing, the learned
+  cases run alone when the operator has no corpus, and a case name in both is an error naming it.
+  `magnum eval run`, `score` and `baseline` read both. Rejected: writing the learned cases into the
+  operator's file (it is theirs, and a hand edit would be overwritten) and rewriting the file on every
+  tick (the rows change only with a retro or a decision on them).

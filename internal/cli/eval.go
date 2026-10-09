@@ -119,7 +119,9 @@ func newEvalCmd(c *Context) *cobra.Command {
 			"`magnum eval run` replays each case at its pinned head as a blind dry run (nothing is posted, the roles "+
 			"are told not to read the PR's reviews, comments or later commits) and reports, per case, how many of the "+
 			"seeded defects the planned review found, at what severity, and how many other findings it made.\n\n"+
-			"The corpus is ~/.config/magnum/"+evalCorpusFile+" (a checkout's eval.local.toml still works; see eval.toml.example). Each case runs "+
+			"The corpus is ~/.config/magnum/"+evalCorpusFile+" (a checkout's eval.local.toml still works; see eval.toml.example), "+
+			"then the learned corpus the daemon writes after each retro (learn/corpus.toml in the data directory: a case per general "+
+			"miss and per finding an author declined as wrong or ranked too high; a case name in both is an error). Each case runs "+
 			"in a scratch registry and report tree under state/eval/<run>/ and a detached worktree of the repository's "+
 			"clone, with agents named apart from the PR's own and from every other run's, in a herdr workspace "+
 			"\"eval <repo>#<N>\" that is closed when the case ends (a judge still at work is interrupted first) and "+
@@ -198,31 +200,50 @@ func newEvalShowCmd(c *Context) *cobra.Command {
 		func(pos []string) int { return runEvalShow(c, pos) })
 }
 
-// evalCorpusPath resolves --corpus.
-func evalCorpusPath(c *Context, flag string) string {
+// evalCorpusPath resolves --corpus to the operator's corpus and returns it
+// with the learned corpus the daemon writes (paths.Layout.LearnCorpus),
+// which eval reads after it (eval.LoadCorpora). user is "" when no flag
+// names one, the default file is not there and the learned one is: the
+// learned cases are the corpus then.
+func evalCorpusPath(c *Context, flag string) (user, learned string) {
+	learned = c.Layout.LearnCorpus()
 	if flag != "" {
-		return flag
+		return flag, learned
 	}
 	dir := c.Layout.ConfigDir()
 	if dir == "" {
 		dir = filepath.Join(paths.Expand("~"), ".config", "magnum")
 	}
-	user := filepath.Join(dir, evalCorpusFile)
+	user = filepath.Join(dir, evalCorpusFile)
 	if legacy := filepath.Join(c.Layout.Home, evalLegacyCorpusFile); c.Layout.Home != "" && !fsx.Exists(user) && fsx.Exists(legacy) {
-		return legacy
+		return legacy, learned
 	}
-	return user
+	if !fsx.Exists(user) && fsx.Exists(learned) {
+		return "", learned
+	}
+	return user, learned
+}
+
+// evalCorpusNames is how a run's start line names the corpus files it read.
+func evalCorpusNames(user, learned string) string {
+	switch {
+	case !fsx.Exists(learned):
+		return inspTilde(user)
+	case user == "":
+		return inspTilde(learned)
+	}
+	return inspTilde(user) + " and " + inspTilde(learned)
 }
 
 func runEvalRun(c *Context, f evalRunFlags) int {
 	if err := c.LoadConfig(); err != nil {
 		return cmdFail(c, "eval run", fmt.Errorf("%w (fix config.toml; `magnum config` validates it)", err))
 	}
-	path := evalCorpusPath(c, f.corpus)
-	corpus, err := eval.LoadCorpus(path)
+	path, learned := evalCorpusPath(c, f.corpus)
+	corpus, err := eval.LoadCorpora(path, learned)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return cmdFail(c, "eval run", fmt.Errorf("no corpus at %s\nfix: copy eval.toml.example to %s and describe PRs with known defects", inspTilde(path), inspTilde(path)))
+		if missing := cmp.Or(path, learned); errors.Is(err, fs.ErrNotExist) {
+			return cmdFail(c, "eval run", fmt.Errorf("no corpus at %s\nfix: copy eval.toml.example to %s and describe PRs with known defects", inspTilde(missing), inspTilde(missing)))
 		}
 		return cmdFail(c, "eval run", err)
 	}
@@ -245,7 +266,7 @@ func runEvalRun(c *Context, f evalRunFlags) int {
 	}
 	r := &evalRunner{c: c, cfg: c.Config, flags: f, out: c.Stdout, dir: dir, tag: evalAgentTag(run.ID)}
 	run.Commit, run.Dirty = evalMagnumCommit(ctx, c)
-	fmt.Fprintf(c.Stdout, "eval run %s: %d case(s), corpus %s, results in %s\n", run.ID, len(cases), inspTilde(path), inspTilde(r.dir))
+	fmt.Fprintf(c.Stdout, "eval run %s: %d case(s), corpus %s, results in %s\n", run.ID, len(cases), evalCorpusNames(path, learned), inspTilde(r.dir))
 	flagged, err := eval.LoadFlagged(evalRunsRoot(c.Layout)) // eval/flagged.go: refused replays are never run again
 	if err != nil {
 		return cmdFail(c, "eval run", err)
@@ -665,7 +686,8 @@ func runEvalScore(c *Context, corpusFlag string, pos []string) int {
 	if err != nil {
 		return cmdFail(c, "eval score", err)
 	}
-	corpus, err := eval.LoadCorpus(cmp.Or(corpusFlag, run.Corpus, evalCorpusPath(c, "")))
+	user, learned := evalCorpusPath(c, "")
+	corpus, err := eval.LoadCorpora(cmp.Or(corpusFlag, run.Corpus, user), learned)
 	if err != nil {
 		return cmdFail(c, "eval score", err)
 	}

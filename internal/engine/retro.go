@@ -417,6 +417,10 @@ func (e *Engine) runRetro(ctx context.Context, spec retroSpec) {
 		e.setKV(context.WithoutCancel(ctx), KVRetroLast, string(b))
 	}
 	e.markRepoMisses(context.WithoutCancel(ctx), run, repoMisses, repoDeclines)
+	if err := e.syncLearnedCorpus(context.WithoutCancel(ctx)); err != nil { // learn_corpus.go
+		e.event(context.WithoutCancel(ctx), "warn", "", "learn.corpus", "retro "+run.ID+": the learned eval corpus was not written: "+
+			oneLine(err.Error(), retroWhyRunes), map[string]any{"run": run.ID})
+	}
 	msg = fmt.Sprintf("retro %s: %d PR(s), %d classified, %d miss(es), %d already caught, %d failed",
 		run.ID, sum.PRs, sum.Classified, sum.Misses, sum.Caught, sum.Failed)
 	data = map[string]any{"run": run.ID, "prs": sum.PRs, "classified": sum.Classified, "misses": sum.Misses, "caught": sum.Caught,
