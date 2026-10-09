@@ -21,6 +21,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/zhuravel/magnum/internal/engine"
+	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/notes"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
@@ -41,15 +42,17 @@ func newLearnCmd(c *Context) *cobra.Command {
 			"[learn] editor_*) drafts a change from the general misses the retro found and the findings authors declined "+
 			"as wrong or ranked too high, in a git worktree of magnum's checkout on a branch learn/<run>; magnum checks it "+
 			"and runs the format gate (the golden files regenerated, the agents, pipeline and config tests, `make "+
-			"check-private`) and commits it on that branch as a proposal. Nothing is pushed.\n\n"+
-			"Without flags: the landed versions newest first, the proposals that wait (gating: for the eval's gate; passed: "+
-			"for the landing; held: for you), the last failed and invalid ones with their reasons, and when the editor runs "+
-			"next. --json prints the same.\n\n"+
+			"check-private`) and commits it on that branch as a proposal. The daemon's gate replays eval cases on it and "+
+			"passes, holds or fails it; a passed one lands on the checkout's master as a local commit and the daemon restarts "+
+			"on it ([learn] restart). Nothing is pushed.\n\n"+
+			"Without flags: the landed versions newest first (and how many origin/master does not hold yet), the proposals "+
+			"that wait (gating: for the eval's gate; passed: for the landing; held: for you), the last failed and invalid ones "+
+			"with their reasons, and when the editor runs next. --json prints the same.\n\n"+
 			"--propose asks the daemon for a skill edit now, whatever [learn] editor says; it is refused while one runs, "+
 			"while a proposal is gating, passed or held (the refusal names it), or when nothing new is left to learn from.\n\n"+
 			"--review shows the oldest held proposal: the inputs it answers with what it did with each, the diff of every "+
-			"file it changes, its design-log entry and the gate's result, and asks y/N on a terminal: y asks the daemon to "+
-			"land it, n rejects it (--reason says why, and the next edit reads it; an input in two rejected proposals is "+
+			"file it changes, its design-log entry and the gate's table, and asks y/N on a terminal: y asks the daemon to "+
+			"land it at once (the answer says why when it stays held), n rejects it (--reason says why, and the next edit reads it; an input in two rejected proposals is "+
 			"dismissed and leaves the learned eval corpus at once), anything else leaves it for later. --review --json "+
 			"prints the proposal and asks nothing.",
 		func(pos []string) int { return runLearn(c, f, pos) })
@@ -102,6 +105,9 @@ type learnListData struct {
 	LastInvalid *learnProposalRow    `json:"last_invalid,omitempty"`
 	Editing     *engine.EditMark     `json:"editing,omitempty"` // the skill edit running now
 	Next        string               `json:"next"`
+	// Ahead counts the landed versions origin/master does not hold yet
+	// (magnum pushes nothing); nil when the checkout cannot say.
+	Ahead *int `json:"ahead,omitempty"`
 }
 
 // learnRow counts proposal p's inputs.
@@ -154,11 +160,34 @@ func learnGather(ctx context.Context, d *actDeps) (learnListData, error) {
 			data.Editing = &m
 		}
 	}
+	data.Ahead = learnAhead(ctx, d, data.Versions)
 	data.Next = "on request: `magnum learn --propose` runs the editor now"
 	if d.Cfg != nil && d.Cfg.Learn.Editor {
 		data.Next = "on request (`magnum learn --propose`); [learn] editor's runs after a retro come with the loop's gate"
 	}
 	return data, nil
+}
+
+// learnAhead counts the landed versions whose commit origin/master does not
+// hold, read from magnum's checkout; nil without a checkout, without
+// origin/master or without versions.
+func learnAhead(ctx context.Context, d *actDeps, vs []store.LearnVersion) *int {
+	checkout := d.Layout.Home
+	if len(vs) == 0 || checkout == "" || !gitx.IsRepo(checkout) {
+		return nil
+	}
+	git := gitx.New(d.Run)
+	origin, err := git.RevParse(ctx, checkout, "refs/remotes/origin/master")
+	if err != nil {
+		return nil
+	}
+	n := 0
+	for _, v := range vs {
+		if base, err := git.MergeBase(ctx, checkout, v.LandedSHA, origin); err != nil || base != v.LandedSHA {
+			n++
+		}
+	}
+	return &n
 }
 
 func learnList(ctx context.Context, c *Context, d *actDeps, f learnFlags) int {
@@ -198,6 +227,10 @@ func learnPrintList(w io.Writer, d *actDeps, data learnListData) {
 			fmt.Fprintf(tw, "  %d\t%s\t%s\t%s\t%s\n", v.ID, inspClock(now, v.LandedAt), restarted, learnShort(v.LandedSHA), proposal)
 		}
 		_ = tw.Flush()
+		if n := data.Ahead; n != nil && *n > 0 {
+			fmt.Fprintf(w, "  %s not on origin/master: magnum pushes nothing, so push master when you want them there\n",
+				textx.Count(*n, "landed version is", "landed versions are"))
+		}
 	}
 	if len(data.Waiting) == 0 {
 		fmt.Fprintln(w, "proposals waiting: none")

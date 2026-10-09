@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/zhuravel/magnum/internal/engine"
+	"github.com/zhuravel/magnum/internal/eval"
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/learn"
@@ -242,13 +243,59 @@ func learnPrintReview(w io.Writer, color bool, data learnReviewData) {
 		fmt.Fprintln(w, "  "+notes.Printable(oneLineText(data.Decision)))
 	}
 	fmt.Fprintln(w, "\ngate:")
+	var g engine.GateResult
 	var gate bytes.Buffer
-	if len(p.Gate) == 0 || json.Indent(&gate, p.Gate, "  ", "  ") != nil {
+	switch {
+	case len(p.Gate) == 0:
 		fmt.Fprintln(w, "  no result")
-	} else {
+	case json.Unmarshal(p.Gate, &g) == nil && (g.Rule != "" || len(g.Cases) > 0):
+		learnPrintGate(w, g)
+	case json.Indent(&gate, p.Gate, "  ", "  ") != nil:
+		fmt.Fprintln(w, "  no result")
+	default:
 		fmt.Fprintln(w, "  "+notes.Printable(gate.String()))
 	}
 	fmt.Fprintln(w)
+}
+
+// learnPrintGate writes the gate's result as a table: the verdict, the mode
+// and the rule, then each case (a target starred) with what the baseline
+// and the candidate found of its defects, the declined findings each
+// reported, and why a case was not compared.
+func learnPrintGate(w io.Writer, g engine.GateResult) {
+	head := strings.TrimSpace(strings.Join([]string{g.State, map[string]string{"": "", learn.GateJudgeOnly: "(the judge alone)",
+		learn.GateFull: "(every role)"}[g.Mode]}, " "))
+	if head != "" {
+		head += ": "
+	}
+	fmt.Fprintln(w, "  "+notes.Printable(head+g.Rule))
+	if len(g.Cases) == 0 {
+		return
+	}
+	score := func(s *eval.Score) string {
+		if s == nil {
+			return "-"
+		}
+		out := fmt.Sprintf("%d/%d", s.Found, s.Total)
+		if n := len(s.AbsentHits); n > 0 {
+			out += fmt.Sprintf(", %d declined reported", n)
+		}
+		return out
+	}
+	tw := inspTable(w)
+	fmt.Fprintln(tw, "  CASE\tBASELINE\tCANDIDATE\tNOTE")
+	for _, c := range g.Cases {
+		name, note := c.Case, c.Skip
+		if c.Target {
+			name += "*"
+		}
+		if c.Retried && note == "" {
+			note = "replayed twice"
+		}
+		fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\n", notes.Printable(name), score(c.Before), score(c.After), notes.Printable(note))
+	}
+	_ = tw.Flush()
+	fmt.Fprintln(w, "  * a target: the learned case of an input the proposal noted")
 }
 
 // learnPrintDiff writes a git diff, colored on a terminal, its text made

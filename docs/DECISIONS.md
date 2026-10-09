@@ -5493,3 +5493,35 @@ editing history. Code, config comments and prompts reference these by their head
   the baselines and the candidate together (`eval.Baselines` matches a run's inputs, so a later gate
   could not reuse them) and holding a proposal whose targets did not move (the change is measured to do
   nothing).
+- **A passing candidate lands as a local commit and the daemon restarts when idle** (2026-10-09, stage 4
+  of the self-improving review loop). The operator decided the loop lands what the gate passes, and
+  nothing is pushed. At a tick with no gate or edit running and no drain, the oldest `passed` proposal
+  lands (`engine.landProposal`), at most `[learn] land_per_day` a local day (`KVLearnLandDay` counts
+  them) and not before the daemon restarted on the version landed last (each version runs, and is
+  measured, before the next lands); the operator's `y` in `magnum learn --review` (`ReqLearnLand`) lands
+  a `held` one at once, whatever the day's count, and is refused while a gate or an edit runs. The
+  checks run in the spec's order and hold the proposal with why (`learn.held`; a toast unless the
+  operator asked, who reads the answer): the checkout has `master` checked out and no rebase, merge,
+  cherry-pick or revert in progress; a branch that does not descend from `master` is rebased once in its
+  worktree (`gitx.RebaseOnto`, which aborts a conflict and holds); the files the commit changes have no
+  uncommitted change in the checkout (`gitx.DirtyPaths`: an operator's edit of `SKILL.md` is never
+  merged over); then `git merge --ff-only` (a `master` that moved meanwhile holds). A branch `master`
+  already holds (a landing a crash cut short after the merge) is recorded without a merge. Then the
+  worktree and the branch go, the proposal is `landed` (its noted inputs `used`) with `landed_sha` and
+  `landed_at` (`store.MarkLearnLanded`), and a `learn_versions` row records the commit, the skill's hash
+  as its copies are named (the first 12 hex digits of its SHA-256, which the declines record of the
+  rounds) and one over `prompts/*.md`, both read from the worktree at the landed commit;
+  `learn.land_begin` and `learn.landed` say so, with a toast. The daemon reads its prompts and skill at
+  startup, so the version reaches the rounds after a restart: `KVLearnRestart` names it, and with
+  `[learn] restart = "idle"` and launchd to start it again `restartForBuild` exits
+  (`ErrRestartForLearn`) at the first tick with no round, retro, curation, edit or gate in flight; with
+  `manual`, or a daemon launchd does not run, a toast and `magnum status` ask for `magnum daemon-restart
+  --when-idle`. Whatever restarts the daemon, its start marks the version `restarted_at` (its
+  measurement window) and clears the key (`learn.restart`). `magnum status` gets a `learn:` line (the
+  newest proposal, the held, passed and gating ones, a restart waiting), the titles count the held
+  proposals (`tui.DaemonFacts.LearnProposals`, "skill ×N" short), `magnum learn` says how many landed
+  versions `origin/master` does not hold, and `--review` prints the gate as a table. Rejected: landing
+  in a worktree of its own and pushing (the operator pushes), a merge commit (a fast-forward keeps
+  master's history the operator's plus one commit per version), landing two versions before a restart
+  (the first would never run alone) and letting the CLI land (the worktree, the branch and the restart
+  are the daemon's).

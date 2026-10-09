@@ -405,6 +405,7 @@ type Engine struct {
 	gateStarted time.Time
 	gateRetry   time.Time // a gate that stopped short starts again after it
 	gateWG      sync.WaitGroup
+	landRetry   time.Time  // a landing that failed short of a hold tries again after it (the tick's goroutine only)
 	corpusMu    sync.Mutex // one rewrite of the learned corpus at a time (learn_corpus.go)
 
 	usageMu   sync.Mutex // the Codex budget (budget.go)
@@ -641,7 +642,7 @@ func (e *Engine) Run(ctx context.Context, opts Options) error {
 		case <-e.kick:
 			timer.Stop()
 		}
-		if err := e.Tick(ctx); errors.Is(err, ErrSchemaChanged) || errors.Is(err, ErrRestartForBuild) {
+		if err := e.Tick(ctx); errors.Is(err, ErrSchemaChanged) || errors.Is(err, ErrRestartForBuild) || errors.Is(err, ErrRestartForLearn) {
 			return err
 		} else if err != nil && ctx.Err() == nil {
 			e.warnTick(err)
@@ -768,8 +769,9 @@ func (e *Engine) Tick(ctx context.Context) error {
 	e.maybeRetro(ctx)
 	e.noteRetroRunning(ctx) // inflight.go
 	e.maybeCurate(ctx)
-	e.maybeGate(ctx)   // learn_gate.go
-	e.autoApprove(ctx) // before noteNeedsMe: a PR approved as the operator no longer needs them
+	e.maybeGate(ctx)      // learn_gate.go
+	e.maybeLearnLand(ctx) // learn_land.go
+	e.autoApprove(ctx)    // before noteNeedsMe: a PR approved as the operator no longer needs them
 	e.noteNeedsMe(ctx)
 	e.noteMachine(ctx)
 	e.surface(ctx)
@@ -788,6 +790,7 @@ func (e *Engine) startup(ctx context.Context) {
 		e.setKV(ctx, store.KVDaemonPid, strconv.Itoa(os.Getpid()))
 	}
 	e.recordBuild(ctx)
+	e.noteLearnRestarted(ctx) // learn_land.go: this start runs the landed skill version
 	e.expireRequests(ctx, lastTick)
 	// A drain (daemon-restart --drain) ends with the restart: this daemon
 	// is the one that was waited for.

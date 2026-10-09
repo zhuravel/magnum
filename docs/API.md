@@ -4525,6 +4525,16 @@ const (
 	FormatGateTimeout = 20 * time.Minute
 )
 const (
+	// KVLearnLandDay counts the landings of a local day (LandDay as JSON),
+	// which [learn] land_per_day bounds.
+	KVLearnLandDay = "learn.land_day"
+	// KVLearnRestart is the landed version the daemon is to restart on
+	// (LearnRestartMark as JSON): set by a landing, read by restartForBuild
+	// and `magnum status`, and cleared by the next start of the daemon,
+	// which marks the version restarted.
+	KVLearnRestart = "learn.restart"
+)
+const (
 	// ReqNotesCurate starts a curation of a repository's notes now
 	// (NotesCuratePayload).
 	ReqNotesCurate = "notes_curate"
@@ -4800,6 +4810,12 @@ var ErrRestartForBuild = errors.New("a new build is on disk and nothing is in fl
     ErrRestartForBuild is what Tick and Run return when the daemon exits for a
     new build on disk ([daemon] restart_on_new_build): the exit is non-zero,
     so launchd starts the new binary.
+
+var ErrRestartForLearn = errors.New("a skill version landed and nothing is in flight; exiting for launchd to start the daemon on it")
+    ErrRestartForLearn is what Tick and Run return when the daemon exits
+    to restart on a landed skill version (learn restart idle): the exit is
+    non-zero, so launchd starts it again, and the new daemon reads the landed
+    prompts and skill.
 
 var ErrSchemaChanged = errors.New("schema migrated under the daemon; exiting for launchd to restart")
     ErrSchemaChanged is what Tick and Run return once another magnum binary
@@ -5665,6 +5681,12 @@ type Inventory interface {
 }
     Inventory is the reconcile scanner (*inventory.Scanner).
 
+type LandDay struct {
+	Day    string `json:"day"`
+	Landed int    `json:"landed"`
+}
+    LandDay is how many proposals landed on Day (store.DayKey).
+
 type LearnDecisionPayload struct {
 	ID     int64  `json:"id"`
 	Reason string `json:"reason,omitempty"`
@@ -5682,11 +5704,27 @@ type LearnGit interface {
 	CommitAll(ctx context.Context, dir, message string, paths ...string) (string, error)
 	ChangedPaths(ctx context.Context, dir, base, head string, pathspecs ...string) ([]string, error)
 	BranchDelete(ctx context.Context, mainClone, branch string, force bool) error
+	InProgress(ctx context.Context, repo string) (string, error)
+	MergeBase(ctx context.Context, dir, a, b string) (string, error)
+	RebaseOnto(ctx context.Context, dir, onto string) error
+	DirtyPaths(ctx context.Context, dir string, paths ...string) ([]string, error)
+	MergeFFOnly(ctx context.Context, repo, branch string) error
 }
-    LearnGit is the git work of an editor run (*gitx.Client).
+    LearnGit is the git work of an editor run, its gate and its landing
+    (learn_land.go) (*gitx.Client).
 
 type LearnProposePayload struct{}
     LearnProposePayload is a `magnum learn --propose` request.
+
+type LearnRestartMark struct {
+	Version  int64     `json:"version"`
+	Proposal int64     `json:"proposal"`
+	Landed   time.Time `json:"landed"`
+	Manual   bool      `json:"manual,omitempty"`
+}
+    LearnRestartMark is the landed version the daemon waits to restart on
+    (KVLearnRestart): Manual when the operator restarts it (learn restart
+    manual, or no launchd to start it again).
 
 type MachineGroup struct {
 	Repo string // owner/name
@@ -15067,6 +15105,11 @@ func (s *Store) LiveSessionByPRRole(ctx context.Context, prID int64, role string
 func (s *Store) LiveSessions(ctx context.Context) ([]Session, error)
     LiveSessions returns every starting/live session, oldest first.
 
+func (s *Store) MarkLearnLanded(ctx context.Context, id int64, sha string, at time.Time) error
+    MarkLearnLanded records the commit landed proposal id moved master to and
+    when (zero = now); ErrConflict when the proposal is not landed, and a second
+    mark changes nothing (the first landing stands).
+
 func (s *Store) MarkLearnRestarted(ctx context.Context, id int64, at time.Time) error
     MarkLearnRestarted records the first restart of the daemon on version id at
     at, which starts its measurement window; a later restart changes nothing
@@ -15843,6 +15886,9 @@ type DaemonFacts struct {
 	// NotesProposals counts the curation proposals for repository notes
 	// that wait for the operator (`magnum notes <repo> --review`).
 	NotesProposals int
+	// LearnProposals counts the skill proposals the gate held for the
+	// operator (`magnum learn --review`).
+	LearnProposals int
 }
     DaemonFacts are what the titles say of the daemon; the zero value says
     nothing.

@@ -261,7 +261,7 @@ func (e *Engine) runGate(ctx context.Context, p store.LearnProposal) error {
 	if why := e.gateUnavailable(); why != "" {
 		return errors.New(why)
 	}
-	if err := e.ensureCandidate(ctx, p); errors.Is(err, errCandidateGone) {
+	if err := e.ensureCandidate(ctx, p, false); errors.Is(err, errCandidateGone) {
 		e.gateDecide(octx, p, GateResult{State: learn.GateFailed, Rule: oneLine(err.Error(), retroWhyRunes), Mode: learn.Mode(p.Files)})
 		return nil
 	} else if err != nil {
@@ -437,16 +437,20 @@ func (e *Engine) gateDecide(ctx context.Context, p store.LearnProposal, res Gate
 	case store.LearnFailed:
 		e.dropCandidate(ctx, p.Scratch, p.Branch)
 	case store.LearnHeld:
-		e.noteHeld(ctx, got, res.Rule)
+		e.noteHeld(ctx, got, res.Rule, true)
 	}
 }
 
 // noteHeld tells that proposal p waits for the operator, why: a
-// learn.held event and a toast (learn-proposal:<id>) that names the
-// review.
-func (e *Engine) noteHeld(ctx context.Context, p store.LearnProposal, why string) {
+// learn.held event and, with toast, a toast (learn-proposal:<id>) that
+// names the review (the operator who asked for a landing reads the answer
+// instead).
+func (e *Engine) noteHeld(ctx context.Context, p store.LearnProposal, why string, toast bool) {
 	e.event(ctx, "info", learnSubject, "learn.held", fmt.Sprintf("skill proposal %d is held for review: %s", p.ID, oneLine(why, 300)),
 		map[string]any{"proposal": p.ID, "reason": oneLine(why, 300)})
+	if !toast {
+		return
+	}
 	title := fmt.Sprintf("skill proposal %d waits for review", p.ID)
 	e.info(notify.Item{Key: "learn-proposal:" + strconv.FormatInt(p.ID, 10), Title: title, Line: title,
 		Body: oneLine(why, 200) + ". `magnum learn --review` lands or rejects it."})
@@ -546,24 +550,16 @@ func (e *Engine) ownWorktree(wt string) bool {
 	return err == nil && rel != "." && !strings.HasPrefix(rel, "..") && !strings.Contains(rel, string(filepath.Separator))
 }
 
-// ensureCandidate makes sure p's worktree is there at its commit: one a
-// restart left behind is reused as it is; a missing one is added again
-// from p's branch (a stale registration pruned first). errCandidateGone
-// when the branch is gone or moved, or the worktree holds another commit.
-func (e *Engine) ensureCandidate(ctx context.Context, p store.LearnProposal) error {
+// ensureCandidate makes sure p's worktree is there at its branch's commit:
+// one a restart left behind is reused as it is; a missing one is added
+// again from p's branch (a stale registration pruned first).
+// errCandidateGone when the branch is gone, the worktree holds another
+// commit than the branch, or the branch moved from p's commit: only the
+// landing may have moved it (rebased, when moved says so).
+func (e *Engine) ensureCandidate(ctx context.Context, p store.LearnProposal, moved bool) error {
 	git, wt := e.d.LearnGit, p.Scratch
 	if !e.ownWorktree(wt) || p.CandidateSHA == "" || !strings.HasPrefix(p.Branch, learnBranchPrefix) {
 		return fmt.Errorf("%w: proposal %d has no worktree of its own or no commit", errCandidateGone, p.ID)
-	}
-	if _, err := os.Stat(wt); err == nil {
-		head, err := git.RevParse(ctx, wt, "HEAD")
-		if err != nil {
-			return err
-		}
-		if head != p.CandidateSHA {
-			return fmt.Errorf("%w: its worktree is at %s, not at its commit %s", errCandidateGone, learnShort(head), learnShort(p.CandidateSHA))
-		}
-		return nil
 	}
 	sha, err := git.RevParse(ctx, e.d.Checkout, "refs/heads/"+p.Branch)
 	switch {
@@ -571,8 +567,18 @@ func (e *Engine) ensureCandidate(ctx context.Context, p store.LearnProposal) err
 		return fmt.Errorf("%w: its branch %s is gone", errCandidateGone, p.Branch)
 	case err != nil:
 		return err
-	case sha != p.CandidateSHA:
+	case sha != p.CandidateSHA && !moved:
 		return fmt.Errorf("%w: its branch %s moved to %s from %s", errCandidateGone, p.Branch, learnShort(sha), learnShort(p.CandidateSHA))
+	}
+	if _, err := os.Stat(wt); err == nil {
+		head, err := git.RevParse(ctx, wt, "HEAD")
+		if err != nil {
+			return err
+		}
+		if head != sha {
+			return fmt.Errorf("%w: its worktree is at %s, not at its branch's commit %s", errCandidateGone, learnShort(head), learnShort(sha))
+		}
+		return nil
 	}
 	if err := git.WorktreeDiscard(ctx, e.d.Checkout, wt); err != nil {
 		return err

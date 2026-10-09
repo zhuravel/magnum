@@ -92,6 +92,9 @@ func statusRenderHeader(w io.Writer, r statusReport) {
 	if r.Retro != nil {
 		fmt.Fprintf(w, "retro:    %s\n", statusRetroText(*r.Retro, now))
 	}
+	if r.Learn != nil {
+		fmt.Fprintf(w, "learn:    %s\n", statusLearnText(*r.Learn, now))
+	}
 	if r.Notes != nil {
 		fmt.Fprintf(w, "notes:    %s\n", statusSafe(r.Notes.Line, 0))
 	}
@@ -248,6 +251,34 @@ func statusRetroText(ro statusRetro, now time.Time) string {
 		s += " · " + textx.Count(*ro.Settling, "PR waits", "PRs wait") + " for the " + ro.Settle + " settle delay"
 	}
 	return s
+}
+
+// statusLearnText is the learn line's value: the newest skill proposal and
+// what became of it, the proposals the gate holds for review, the passed
+// ones waiting to land, the ones waiting for the gate, and a landed version
+// the daemon still has to restart on.
+func statusLearnText(l statusLearn, now time.Time) string {
+	var parts []string
+	if p := l.Last; p != nil {
+		parts = append(parts, fmt.Sprintf("last proposal %d %s, made %s", p.ID, p.State, inspAgo(now, &p.Created)))
+	}
+	if l.Held > 0 {
+		parts = append(parts, fmt.Sprintf("%d held for review (`magnum learn --review`)", l.Held))
+	}
+	if l.Passed > 0 {
+		parts = append(parts, fmt.Sprintf("%d passed, waiting to land", l.Passed))
+	}
+	if l.Gating > 0 {
+		parts = append(parts, fmt.Sprintf("%d at the gate", l.Gating))
+	}
+	if m := l.Restart; m != nil {
+		if m.Manual {
+			parts = append(parts, fmt.Sprintf("restart needed for skill version %d: `magnum daemon-restart --when-idle`", m.Version))
+		} else {
+			parts = append(parts, fmt.Sprintf("restarts on skill version %d once nothing is in flight", m.Version))
+		}
+	}
+	return strings.Join(parts, " · ")
 }
 
 // statusRoundsText is the rounds line's value: rounds in flight and, when

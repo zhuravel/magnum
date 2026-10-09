@@ -175,6 +175,7 @@ type statusReport struct {
 	GitHub      statusGitHub      `json:"github"`
 	Codex       *statusCodexUsage `json:"codex_usage,omitempty"`
 	Retro       *statusRetro      `json:"retro,omitempty"`
+	Learn       *statusLearn      `json:"learn,omitempty"`
 	Notes       *statusNotes      `json:"notes,omitempty"`
 	// AutoApproved counts the approvals magnum posted as the operator
 	// ([[watch]] auto_approve); nil when no watch auto-approves and none
@@ -295,6 +296,27 @@ type statusRetro struct {
 	Declined  *int                 `json:"declined,omitempty"`   // nil when the registry could not be read
 	Settling  *int                 `json:"settling,omitempty"`   // nil when none wait (or no settle delay)
 	Settle    string               `json:"settle,omitempty"`     // [learn] settle, when PRs wait for it
+}
+
+// statusLearn is the self-improving loop (`magnum learn`): its newest skill
+// proposal (when the editor made it and what became of it), how many the
+// gate holds for the operator, how many it passed that wait for the
+// landing, how many wait for the gate, and the landed version the daemon
+// still has to restart on (engine.KVLearnRestart). It is left out when no
+// proposal was ever made and no restart waits.
+type statusLearn struct {
+	Last    *statusLearnLast         `json:"last,omitempty"`
+	Held    int                      `json:"held"`
+	Passed  int                      `json:"passed"`
+	Gating  int                      `json:"gating"`
+	Restart *engine.LearnRestartMark `json:"restart,omitempty"`
+}
+
+// statusLearnLast is the newest skill proposal.
+type statusLearnLast struct {
+	ID      int64     `json:"id"`
+	State   string    `json:"state"`
+	Created time.Time `json:"created"`
 }
 
 // statusNotes is the repository notes in sum: the repositories with notes

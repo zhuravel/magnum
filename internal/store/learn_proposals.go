@@ -321,6 +321,34 @@ func (s *Store) DecideLearnProposal(ctx context.Context, id int64, from []string
 	return out, nil
 }
 
+// MarkLearnLanded records the commit landed proposal id moved master to
+// and when (zero = now); ErrConflict when the proposal is not landed, and
+// a second mark changes nothing (the first landing stands).
+func (s *Store) MarkLearnLanded(ctx context.Context, id int64, sha string, at time.Time) error {
+	if sha == "" {
+		return fmt.Errorf("mark learn proposal %d landed: no commit", id)
+	}
+	if at.IsZero() {
+		at = s.now()
+	}
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		p, err := learnProposalByID(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if p.State != LearnLanded {
+			return fmt.Errorf("%w: learn proposal %d is %s", ErrConflict, id, p.State)
+		}
+		_, err = tx.ExecContext(ctx, "UPDATE learn_proposals SET landed_sha = ?, landed_at = ? WHERE id = ? AND landed_sha IS NULL",
+			sha, FormatTime(at), id)
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("mark learn proposal %d landed: %w", id, err)
+	}
+	return nil
+}
+
 // decideLearnInputs moves the inputs of proposal id as its new state to
 // says: landed, the noted ones that are new become used (a skipped one stays
 // new for a later edit); rejected, a new one that is now in

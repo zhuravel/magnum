@@ -1307,7 +1307,7 @@ Fix 1 problem before merging. 1 optional: 1 simplification.
 | `magnum merge-check <repo> --merged <commit\|#PR> --pr N [--slot NAME] [--keep] [--command CMD] [--timeout 1h] [--json]` | An experiment, run by hand (the daemon never runs it): do PR N's specs still pass once another PR is merged? It holds a free pool slot of `<repo>` (`--slot` names one; never a pinned or held slot or one holding a PR) with the hold reason `merge-check`, which `magnum slots` and `magnum status` show and the daemon, which may keep running, leaves alone. It merges N's head into the merged commit (`--merged`: its id, or `#M` for the merge commit GitHub reports for PR M); a textual conflict is the answer `conflict`. Otherwise it checks the merge out with the slot's checkout steps and readiness (the databases reloaded when they carry another schema, the prepare and ready commands) and runs, through the slot's db-lock line, the spec files N changes, those the merged commit changes and those of the Ruby files it changes (`app/models/a.rb` → `spec/models/a_spec.rb`), with `--command` (default `bin/rspec`) and its JSON formatter. The files of the failing examples run again at N's head alone: an example that does not fail there is a `clash`, one that does `already_failing`. It prints the failing examples with their verdicts and writes `result.json`, the runs' reports and output under `~/.local/state/magnum/merge-check/` and a `merge_check.result` event on the PR (`magnum logs <repo>#N`). The slot is then released as a round's release does, also after a failure or ctrl+c; `--keep` leaves it held (`magnum slots unpin <slot>` hands it back). It refuses a Codex-flagged PR, a draining daemon and another command's in-process slot work. |
 | `magnum retro [<ref>...] [--again] [--lookback 14d] [--json]` | Run the retro now (see Learning from other reviewers): classify what other reviewers said about the PRs closed within the lookback, whether or not `[learn] enabled`. `--again` looks again at PRs a retro already did; PRs named by `<ref>` are looked at again in any case. |
 | `magnum misses [<ref>] [--all] [--class miss\|not_issue\|style\|outside\|unclassified] [--declines] [--json]` | What other reviewers caught and Magnum did not: the retro's new misses, with the reviewer, where, severity, whether Magnum's judge had raised and rejected it, the title and the lesson. `--all` lists every class and state. `--declines` lists instead how authors answered Magnum's own findings: by default the ones they declined or argued that no lesson was drawn from yet, with the priority, where, outcome, verdict, scope, state, title and lesson (`--all` every answer). |
-| `magnum learn [--review [--reason …] \| --propose] [--json]` | The self-improving loop (see Self-improving loop): the landed skill versions, the proposals that wait for the gate, the landing or you, the last failed and invalid ones and when the editor runs next. `--propose` asks the daemon for a skill edit now (refused while one runs or a proposal waits, naming it); `--review` shows the oldest held proposal (its inputs, the diff of each file, its design-log entry, the gate's result) and lands (y) or rejects (n, `--reason` says why) it. |
+| `magnum learn [--review [--reason …] \| --propose] [--json]` | The self-improving loop (see Self-improving loop): the landed skill versions (and how many `origin/master` does not hold yet), the proposals that wait for the gate, the landing or you, the last failed and invalid ones and when the editor runs next. `--propose` asks the daemon for a skill edit now (refused while one runs or a proposal waits, naming it); `--review` shows the oldest held proposal (its inputs, the diff of each file, its design-log entry, the gate's table) and lands (y) or rejects (n, `--reason` says why) it. |
 | `magnum debt [<repo>] [--json]` | Bugs found next door: the P1 and P2 problems the judge proved at a PR's head in or near its changes but did not post because the PR did not bring them, across PRs, newest first and once per path and title, with the PR and day it was found (security ones appear only here). Rows recorded before findings had titles show the path and reason only. |
 | `magnum review <url\|owner/repo#N\|repo#N\|N> [--fresh] [--role <role>] [--simplify] [--replies] [--as <identity>] [--no-post] [--wait] [--timeout <duration>]` | Force a round now, bypassing throttles. `--replies` has the judge alone re-decide the replies on Magnum's review now, answering in the threads unless its verdict changes (a head Magnum reviewed; see the replies under Re-reviews). `--role` (repeatable) also runs an on-demand role this round; `--simplify` is its shorthand for the role aliased `simplify` (claude-simplify by default). `--wait` follows the round; `--timeout` stops following after that long while the round goes on. On a head Magnum already reviewed (no new commits) only the judge runs, to re-decide its earlier findings from the replies; `--role`, `--simplify` and `--fresh` keep the full round. On a PR GitHub merged it is a post-merge review: the commits Magnum missed since its last review (the whole PR when it never reviewed it), posted as a comment only, after which the PR is released again; a merged PR whose head was reviewed and a PR closed without merging are refused. A pinned PR (`magnum open`, `magnum pin`) is unpinned for it; its slot's guards still keep a person's changes or agent safe, and the answer names the guard that holds the round. |
 | `magnum open <ref> [--role <role>]` | Focus the PR's pane in herdr and reveal the herdr client of `[terminal] session` (default `default`) in `[terminal] app` (Terminal, iTerm2, Ghostty, WezTerm, or `custom` with a `launcher` template): focus the tab that runs it, or open a new one. When macOS refuses its AppleScript (the Automation permission, error -1743) it says so and where to allow it. With `[terminal] reveal_on_attention = true` the daemon does the same by itself for a PR that needs you (an agent waiting on a dialog, a round that needs attention), at most once in 30 minutes for the same agent or cause. |
@@ -1711,9 +1711,25 @@ baseline did not), fails when something regressed or no target improved (its wor
 inputs stay `new`), and is held for you when none of its targets could be replayed. Its replays are stored
 like `magnum eval run`'s (`magnum eval list` shows them), and the result with the proposal. The gate waits
 while the Codex budget is at `[usage] codex_soft` (one toast per window), under a drain, `magnum pause` or a
-paused reviewing CLI, and counts as background work for a restart. The landing that fast-forwards `master`
-is the loop's next stage: until it arrives a `passed` proposal waits, and `editor`, `land_per_day`,
-`restart` and the regression keys are checked but change nothing yet.
+paused reviewing CLI, and counts as background work for a restart.
+
+A `passed` proposal lands at the next tick, at most `land_per_day` (1) a local day and not before the
+daemon restarted on the previous landed version, and never while a gate or an edit runs. The landing
+works on the checkout's `master` and holds the proposal for you (a toast, `magnum learn --review`) when it
+cannot go on: the checkout must have `master` checked out with no rebase, merge or cherry-pick in progress;
+when `master` moved since the proposal's base, its branch is rebased once in its worktree, and a conflict
+holds it; the files it changes must have no uncommitted change in the checkout (your edit of `SKILL.md`
+is never merged over). Then `master` fast-forwards to the branch (`git merge --ff-only`), the branch and
+the worktree go, its noted inputs become `used`, and a skill version records the commit and the hashes of
+the skill and the prompts it landed. Nothing is pushed: `magnum learn` says how many landed versions
+`origin/master` does not hold yet. The daemon reads its prompts and skill when it starts, so with `restart
+= "idle"` it exits at the first tick with no round, retro, notes curation, edit or gate in flight, and
+launchd starts it on the landed version; with `restart = "manual"`, or a daemon launchd does not run, a
+toast and `magnum status` ask for `magnum daemon-restart --when-idle`. The next start marks the version
+restarted, which starts its measurement window. `magnum status` has a `learn:` line (the newest
+proposal, the held, passed and gating ones, a restart waiting), and the board's and the dashboard's titles
+count the held proposals ("2 skill proposals to review", "skill ×2" when space is short). `editor` and the
+regression keys are checked but change nothing yet: the editor runs on `magnum learn --propose`.
 
 `magnum learn` is the window: the landed versions newest first, the proposals that wait (`gating` for the
 gate, `passed` for the landing, `held` for you) with their inputs, the last failed and invalid proposals
@@ -1724,8 +1740,9 @@ nothing new is left to learn from, and as a retro is (a drain, an infrastructure
 paused). `magnum learn --review` shows the oldest `held` proposal, one the gate could not decide: every
 input with its title and lesson and what the editor did with it, the diff of each file its commit changes
 against the `master` it started from (from the checkout's `learn/<run>` branch), its design-log entry and
-the gate's result, and asks y/N on a terminal (`--json` prints it instead). `y` asks the daemon to land it
-(the landing comes with the gate: this build refuses it); `n` rejects it with `--reason`, which the next
+the gate's table (each case's baseline and candidate scores, a target starred), and asks y/N on a terminal
+(`--json` prints it instead). `y` asks the daemon to land it at once, whatever the day's count says (the
+answer says why when it stays held); `n` rejects it with `--reason`, which the next
 edit reads: the daemon removes its worktree and branch, its inputs go back to `new`, an input in two
 rejected proposals is `dismissed`, and the learned eval corpus is rewritten at once, so a dismissed input's
 case is gone from the next `magnum eval run`; anything else leaves it.
@@ -1736,6 +1753,10 @@ editor = false          # run the editor after a retro (`magnum learn --propose`
 editor_kind = "claude"
 editor_model = "sonnet"
 editor_timeout = "45m"
+gate_cases = 6          # eval cases the gate replays per proposal, its targets first
+land_per_day = 1        # passed proposals that land per local day
+restart = "idle"        # "idle": the daemon restarts on a landed version once nothing is in flight;
+                        # "manual": a toast and `magnum status` ask for `magnum daemon-restart --when-idle`
 ```
 
 ### Repository notes

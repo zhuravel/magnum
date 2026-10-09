@@ -133,6 +133,26 @@ func TestTitlesCountTheNotesProposalsToReview(t *testing.T) {
 	mustContain(t, title, "1 notes proposal to review")
 }
 
+// TestHeldProposalsCountOnTheTitles: a skill proposal the gate held for the
+// operator is the least pressing fact, after the notes proposals, "skill
+// ×N" when space is short.
+func TestHeldProposalsCountOnTheTitles(t *testing.T) {
+	f := allFacts()
+	f.NotesProposals, f.LearnProposals = 1, 2
+	facts := f.list(boardNow)
+	if last := facts[len(facts)-1]; last.full != "2 skill proposals to review" || last.short != "skill ×2" {
+		t.Fatalf("last fact = %+v", last)
+	}
+	if got := facts[len(facts)-2].full; got != "1 notes proposal to review" {
+		t.Errorf("the fact before it = %q", got)
+	}
+	if got := (DaemonFacts{LearnProposals: 1}).list(boardNow)[0].full; got != "1 skill proposal to review" {
+		t.Errorf("one proposal: %q", got)
+	}
+	title, _, _ := strings.Cut(viewOf(boardWithFacts(t, 400, 24, DaemonFacts{LearnProposals: 1})), "\n")
+	mustContain(t, title, "1 skill proposal to review")
+}
+
 // TestFactsGiveWayInOrder: the variants run from every fact whole to none,
 // the short forms before any fact is left out, the least pressing first.
 func TestFactsGiveWayInOrder(t *testing.T) {

@@ -56,6 +56,9 @@ func screenFacts(ctx context.Context, d statusDeps) tui.DaemonFacts {
 	if n, err := d.Store.CountNotesProposals(ctx, store.ProposalPending); err == nil {
 		f.NotesProposals = n
 	}
+	if n, err := d.Store.CountLearnProposals(ctx, store.LearnHeld); err == nil {
+		f.LearnProposals = n
+	}
 	approved := map[int64]bool{} // approved as the operator: they are not needed
 	if list, err := d.Store.StandingAutoApprovals(ctx); err == nil {
 		f.AutoApproved = len(list)

@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -36,8 +38,13 @@ type fakeLearnGit struct {
 	branch map[string]string // repository -> its branch
 	op     map[string]string // repository -> the operation in progress
 	dirty  map[string][]string
-	// merged are the commits master contains (MergeBase).
-	merged map[string]bool
+	// merged are the commits master contains, parent each commit's base
+	// (MergeBase), worktree each worktree's checkout and branch (RebaseOnto
+	// moves the branch), and rebased counts the rebases.
+	merged   map[string]bool
+	parent   map[string]string
+	worktree map[string][2]string
+	rebased  int
 	// rebaseErr and mergeErr fail RebaseOnto and MergeFFOnly; onMerge runs
 	// when MergeFFOnly fast-forwards.
 	rebaseErr, mergeErr error
@@ -46,7 +53,7 @@ type fakeLearnGit struct {
 
 func newFakeLearnGit() *fakeLearnGit {
 	return &fakeLearnGit{refs: map[string]string{}, branch: map[string]string{}, op: map[string]string{}, dirty: map[string][]string{},
-		merged: map[string]bool{}}
+		merged: map[string]bool{}, parent: map[string]string{}, worktree: map[string][2]string{}}
 }
 
 func (g *fakeLearnGit) set(dir, ref, sha string) {
@@ -90,6 +97,7 @@ func (g *fakeLearnGit) WorktreeAdd(_ context.Context, mainClone, path, ref strin
 		sha = ref
 	}
 	g.refs[path+"|HEAD"] = sha
+	g.worktree[path] = [2]string{mainClone, cmp.Or(branch, ref)}
 	if branch != "" {
 		g.refs[mainClone+"|refs/heads/"+branch] = sha
 	}
@@ -126,6 +134,80 @@ func (g *fakeLearnGit) CommitAll(context.Context, string, string, ...string) (st
 
 func (g *fakeLearnGit) ChangedPaths(context.Context, string, string, string, ...string) ([]string, error) {
 	return nil, errors.New("fake git: no diff")
+}
+
+func (g *fakeLearnGit) InProgress(_ context.Context, repo string) (string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.op[repo], nil
+}
+
+func (g *fakeLearnGit) MergeBase(_ context.Context, _, a, b string) (string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.mergeBase(a, b)
+}
+
+func (g *fakeLearnGit) mergeBase(a, b string) (string, error) {
+	switch {
+	case a == b, g.merged[a]:
+		return a, nil
+	case g.parent[a] != "":
+		return g.parent[a], nil
+	}
+	return "", fmt.Errorf("merge-base %s %s: %w", a, b, gitx.ErrNoMergeBase)
+}
+
+// RebaseOnto puts the worktree's commit on onto as a new commit, moving
+// its branch, unless rebaseErr says otherwise.
+func (g *fakeLearnGit) RebaseOnto(_ context.Context, dir, onto string) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.record("rebase %s %s", dir, onto)
+	if g.rebaseErr != nil {
+		return g.rebaseErr
+	}
+	g.rebased++
+	sha := strings.Repeat(strconv.Itoa(2+g.rebased), 40)
+	g.parent[sha] = onto
+	g.refs[dir+"|HEAD"] = sha
+	if wt, ok := g.worktree[dir]; ok {
+		g.refs[wt[0]+"|refs/heads/"+wt[1]] = sha
+	}
+	return nil
+}
+
+func (g *fakeLearnGit) DirtyPaths(_ context.Context, dir string, paths ...string) ([]string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	var out []string
+	for _, p := range g.dirty[dir] {
+		if slices.Contains(paths, p) {
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
+
+// MergeFFOnly moves the repository's master and HEAD to branch when branch
+// sits on master, unless mergeErr says otherwise.
+func (g *fakeLearnGit) MergeFFOnly(_ context.Context, repo, branch string) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.record("merge --ff-only %s", branch)
+	if g.mergeErr != nil {
+		return g.mergeErr
+	}
+	head, master := g.refs[repo+"|refs/heads/"+branch], g.refs[repo+"|refs/heads/"+learnBase]
+	if base, err := g.mergeBase(head, master); err != nil || base != master && base != head {
+		return fmt.Errorf("merge --ff-only %s: %w", branch, gitx.ErrNotFastForward)
+	}
+	g.refs[repo+"|refs/heads/"+learnBase], g.refs[repo+"|HEAD"] = head, head
+	g.merged[head] = true
+	if g.onMerge != nil {
+		g.onMerge()
+	}
+	return nil
 }
 
 func (g *fakeLearnGit) BranchDelete(_ context.Context, mainClone, branch string, _ bool) error {
@@ -275,6 +357,8 @@ func newGateFixture(t *testing.T, files []string, mods ...func(*harness)) *gateF
 		t.Fatal(err)
 	}
 	f.git.set(f.wt, "HEAD", learnCandidate)
+	f.git.parent[learnCandidate] = learnMaster
+	f.git.worktree[f.wt] = [2]string{f.checkout, "learn/" + gateRunID}
 	f.git.set(f.checkout, "refs/heads/learn/"+gateRunID, learnCandidate)
 	f.git.set(f.checkout, "refs/heads/"+learnBase, learnMaster)
 	f.git.set(f.checkout, "HEAD", learnMaster)

@@ -52,6 +52,9 @@ type DaemonFacts struct {
 	// NotesProposals counts the curation proposals for repository notes
 	// that wait for the operator (`magnum notes <repo> --review`).
 	NotesProposals int
+	// LearnProposals counts the skill proposals the gate held for the
+	// operator (`magnum learn --review`).
+	LearnProposals int
 }
 
 // CodexPace is the Codex budget used now and when, at the pace it has been
@@ -105,7 +108,7 @@ type fact struct{ full, short string }
 // refuse what this build offers), a drain and a pause (no round starts),
 // the watches whose polls fail (magnum sees none of their pushes), the PRs
 // that wait for the operator's approval, those magnum approved as them, the
-// Codex pace, then the notes proposals waiting for review.
+// Codex pace, then the notes and the skill proposals waiting for review.
 func (f DaemonFacts) list(now time.Time) []fact {
 	var out []fact
 	if f.SkewOld != "" {
@@ -149,6 +152,9 @@ func (f DaemonFacts) list(now time.Time) []fact {
 	}
 	if n := f.NotesProposals; n > 0 {
 		out = append(out, fact{textx.Count(n, "notes proposal to review", "notes proposals to review"), fmt.Sprintf("notes ×%d", n)})
+	}
+	if n := f.LearnProposals; n > 0 {
+		out = append(out, fact{textx.Count(n, "skill proposal to review", "skill proposals to review"), fmt.Sprintf("skill ×%d", n)})
 	}
 	return out
 }

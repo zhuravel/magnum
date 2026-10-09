@@ -46,6 +46,7 @@ func statusGather(ctx context.Context, d statusDeps, o statusOptions) (statusRep
 	statusGatherGitHub(kv, now, &r) // before the pauses: the budget pause comes first
 	statusGatherUsage(d, kv, &r)
 	statusGatherRetro(ctx, d, kv, &r)
+	statusGatherLearn(ctx, d, kv, &r)
 	statusGatherNotes(ctx, d, &r)
 	statusGatherAutoApproved(ctx, d, &r)
 	statusGatherMachine(ctx, d, &r)
@@ -253,6 +254,40 @@ func statusGatherRetro(ctx context.Context, d statusDeps, kv statusKV, r *status
 		}
 	}
 	r.Retro = ro
+}
+
+// statusGatherLearn fills the self-improving loop's line: the newest
+// proposal, the proposals waiting by state and a landed version waiting for
+// the restart. A registry that cannot be read is a warning.
+func statusGatherLearn(ctx context.Context, d statusDeps, kv statusKV, r *statusReport) {
+	l := &statusLearn{}
+	if v, ok := kv.get(engine.KVLearnRestart); ok {
+		var m engine.LearnRestartMark
+		if json.Unmarshal([]byte(v), &m) == nil && m.Version != 0 {
+			l.Restart = &m
+		}
+	}
+	ps, err := d.Store.LearnProposals(ctx, nil)
+	if err != nil {
+		r.Warnings = append(r.Warnings, "learn: "+err.Error())
+		return
+	}
+	if len(ps) > 0 {
+		l.Last = &statusLearnLast{ID: ps[0].ID, State: ps[0].State, Created: ps[0].CreatedAt}
+	}
+	for _, p := range ps {
+		switch p.State {
+		case store.LearnHeld:
+			l.Held++
+		case store.LearnPassed:
+			l.Passed++
+		case store.LearnGating:
+			l.Gating++
+		}
+	}
+	if l.Last != nil || l.Restart != nil {
+		r.Learn = l
+	}
 }
 
 // statusGatherNotes fills the repository notes in sum (notesOverview): left

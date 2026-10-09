@@ -104,7 +104,8 @@ type Editor interface {
 // could not be set up or started, or went away.
 var ErrEditorDown = errors.New("engine: the skill editor is not available")
 
-// LearnGit is the git work of an editor run (*gitx.Client).
+// LearnGit is the git work of an editor run, its gate and its landing
+// (learn_land.go) (*gitx.Client).
 type LearnGit interface {
 	RevParse(ctx context.Context, dir, ref string) (string, error)
 	WorktreeAdd(ctx context.Context, mainClone, path, ref string, detach bool, branch string) error
@@ -114,6 +115,11 @@ type LearnGit interface {
 	CommitAll(ctx context.Context, dir, message string, paths ...string) (string, error)
 	ChangedPaths(ctx context.Context, dir, base, head string, pathspecs ...string) ([]string, error)
 	BranchDelete(ctx context.Context, mainClone, branch string, force bool) error
+	InProgress(ctx context.Context, repo string) (string, error)
+	MergeBase(ctx context.Context, dir, a, b string) (string, error)
+	RebaseOnto(ctx context.Context, dir, onto string) error
+	DirtyPaths(ctx context.Context, dir string, paths ...string) ([]string, error)
+	MergeFFOnly(ctx context.Context, repo, branch string) error
 }
 
 var _ LearnGit = (*gitx.Client)(nil)
@@ -995,20 +1001,6 @@ func (e *Engine) requestLearnReject(ctx context.Context, p LearnDecisionPayload)
 		msg += fmt.Sprintf("; %s dismissed after %d rejected proposals", textx.Count(n, "input", "inputs"), store.MissDismissRejections)
 	}
 	return msg, nil
-}
-
-// requestLearnLand serves the y of `magnum learn --review`. The landing
-// (the fast-forward of the checkout's master, the version, the restart)
-// comes with the loop's gate; until then a held proposal is not landed.
-func (e *Engine) requestLearnLand(ctx context.Context, p LearnDecisionPayload) (string, error) {
-	prop, err := e.st.LearnProposalByID(ctx, p.ID)
-	if errors.Is(err, store.ErrNotFound) {
-		return "", fmt.Errorf("there is no skill proposal %d (`magnum learn` lists them)", p.ID)
-	}
-	if err != nil {
-		return "", err
-	}
-	return "", fmt.Errorf("proposal %d (%s) cannot land yet: this daemon has no landing step; its branch %s stays for review", p.ID, prop.State, prop.Branch)
 }
 
 // dropOrphanCandidates removes the worktrees (and their branches) of runs
