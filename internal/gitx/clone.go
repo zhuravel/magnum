@@ -42,7 +42,7 @@ type originEntry struct {
 // cloneRoot (an absolute, already expanded directory). Candidates are tried
 // in order: <root>/<name>, <root>/<owner>-<name>, <root>/<owner>_<name>; the
 // first that is a git repository whose `git remote get-url origin` is a
-// GitHub URL of <owner>/<name> wins (see originMatches; owner and name are
+// GitHub URL of <owner>/<name> wins (see OriginMatches; owner and name are
 // compared case-insensitively). Otherwise every directory directly under the
 // root (not recursively; names containing "__worktrees" are skipped) is
 // checked the same way, in name order. A directory is asked once however many
@@ -111,13 +111,14 @@ func badPathSegment(s string) bool {
 	return s == "" || s == "." || s == ".." || strings.ContainsAny(s, `/\`)
 }
 
-// originMatches reports whether remoteURL is a GitHub remote of owner/name:
-// https://github.com/o/r, git@github.com:o/r, ssh://git@github.com/o/r and the
-// other forms ParseRemote reads, with or without .git or a trailing slash. The
+// OriginMatches reports whether remoteURL is a GitHub remote of owner/name,
+// as FindClone and the per-PR clones of slots require: https://github.com/o/r,
+// git@github.com:o/r, ssh://git@github.com/o/r and the other forms
+// ParseRemote reads, with or without .git or a trailing slash. The
 // host must be exactly github.com, so github.com in a path or a longer host
 // name (evilgithub.com, notgithub.com) does not match; owner and name are
 // compared case-insensitively, as GitHub does.
-func originMatches(remoteURL, owner, name string) bool {
+func OriginMatches(remoteURL, owner, name string) bool {
 	r, ok := ParseRemote(remoteURL)
 	return ok && r.Host == "github.com" && strings.EqualFold(r.Owner, owner) && strings.EqualFold(r.Repo, name)
 }
@@ -133,7 +134,7 @@ func IsRepo(dir string) bool {
 // URL of owner/name.
 func (c *Client) originIs(ctx context.Context, dir, owner, name string) bool {
 	url, ok := c.cachedOrigin(ctx, dir)
-	return ok && originMatches(url, owner, name)
+	return ok && OriginMatches(url, owner, name)
 }
 
 // originStamps returns the stamps that decide dir's origin, from its .git

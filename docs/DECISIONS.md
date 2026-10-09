@@ -227,6 +227,32 @@ editing history. Code, config comments and prompts reference these by their head
   an audit: `live+count > pool.Max` wrapped for a --count near the largest int, passed, and started a
   provisioning loop with no end). The flag now refuses a count below 1 or above 999 (slotsMaxCount, the
   slot numbers slotsNumber recognizes) as a usage error. The max check reads `count > pool.Max-live`.
+- **No git command of magnum's runs the clone's hooks** (2026-10-09). Every git call ran with the clone's
+  hooks on. A PR's setup script (bundle install or npm install through the pool's scripts) can set a
+  relative core.hooksPath (husky's .husky/_, lefthook) or write .git/hooks. Every later checkout, fetch or
+  ref update then ran code from the PR's tree outside the sandbox. Now gitx's runner, CloneWith and the
+  pipeline's restore of an edited checkout set core.hooksPath=/dev/null. The setting goes in the
+  environment as GIT_CONFIG_COUNT=1, GIT_CONFIG_KEY_0 and GIT_CONFIG_VALUE_0 (git 2.31 or later ranks
+  these with `git -c`), and the git processes git starts inherit it. gitx.Env exports this environment for
+  code that runs git outside gitx. Magnum relies on no hook, and Git LFS content comes through the smudge
+  filter, which is not a hook. Rejected: `-c core.hooksPath=/dev/null` on the command line. The effect is
+  the same, but it changes the argv of every git command, and test fakes in about a dozen test files
+  across packages match that argv by prefix.
+- **A per-PR clone's origin must be the repository on github.com** (2026-10-09). slots.originMatches was a
+  looser copy of gitx's check. It compared ParseRemote's owner/name on any host and otherwise fell back to
+  a substring match. So a clone whose origin was on gitlab.com or evil-github.com, or a local path that
+  names owner/name, passed the clone step. Now ensureClone calls gitx.OriginMatches, the check FindClone
+  already used (now exported): the host must be exactly github.com, and owner and name are compared
+  case-insensitively. Any other origin fails with ErrOriginMismatch ("want github.com/<repo>").
+- **Heavy commands never inherit the daemon's secrets** (2026-10-09). Pool scripts and per-PR hooks run
+  code the PR controls (bundle install on the PR's Gemfile), and they ran with the daemon's whole
+  environment. DefaultStripEnv was removed only from the rendered .mise.local.toml, and an App's
+  private_key_env PEM was passed through. Now runLogged, which runs every heavy command (runHeavy's pool
+  scripts and shellCmd's per-PR hooks, through mise or /bin/sh), unsets gitx.ScrubbedEnv, DefaultStripEnv
+  and the new Deps.SecretEnv. A value that [pool] env or [[repo]] env sets on purpose is still passed.
+  Deps.SecretEnv takes the identities' private_key_env names from the app. Rejected: an allowlist
+  environment (mise, rbenv, bundler and pnpm need much of the user's environment: PATH, HOME,
+  SSH_AUTH_SOCK, proxies).
 - **Every string a screen draws is cleaned once, where it comes in** (2026-10-09). sanitizeRow and
   sanitizeStatus kept their fields in hand-written lists. Several fields reached the screens raw. On the
   board: a PR's findings (Verdict, Posted, SHA), its standing approval (Head, URL), NeedsMe and
@@ -247,6 +273,16 @@ editing history. Code, config comments and prompts reference these by their head
   and made the review question say that the review unpins the slot. The slot's mark read the first word of
   the same string. tui.SlotRow gains State and Pinned, which the `magnum status` screen sets from the
   slot. SlotState is now for display only.
+- **A queued provision request is held to the pool's room, as the CLI's --count is** (2026-10-09). The
+  daemon's provision handler checked live+count > pool.max. A huge count carried by a queued request wraps
+  that sum, so the check passed and the heavy worker provisioned slots without end. Now the handler
+  refuses a count above max minus the live slots, with the CLI's wording: "<repo> allows at most N slots
+  and has M; lower --count or raise max in config.toml".
+- **Pool scripts and per-PR hooks never inherit an App's private key** (2026-10-09). The app wiring never
+  set slots.Deps.SecretEnv, so the variables named by the identities' private_key_env reached the setup,
+  post-checkout and teardown scripts and the per-PR hooks, which run the PR's code outside the sandbox.
+  Now wire() passes every non-empty private_key_env, and the slots manager unsets them with the GitHub
+  tokens.
 
 ## Scheduling
 
@@ -374,6 +410,14 @@ editing history. Code, config comments and prompts reference these by their head
   (switched) when the status line already names the new model, which needs that model's name to be known
   (verify). The observer still leaves the pane alone until then. Rejected: polling until the dialog is
   gone (the caller's ctx has ended; a single read and one key keep the exit short).
+- **Triage keeps every role where magnum approves as the operator** (2026-10-09, amends "Triage of small
+  diffs"). Triage asks a model that reads the PR's untrusted diff which reviewers to drop, and the model
+  may drop every role but the judge. MissingReports lists only the roles the round ran, so the gate that
+  requires every reviewer to be heard found nothing missing. A small PR could then get the operator's
+  automatic approval after a round of the judge alone. Now, when AutoApproveFor gives an approver for the
+  PR's repository, triage asks no model, every role runs, and an Info log line says why. Elsewhere triage
+  is unchanged. Rejected: counting the roles triage dropped in MissingReports (the gate would then refuse
+  every triaged round, so on those repositories triage would only cost a model call).
 - **A poll reads only its repository's open rows and the rows its radar lists** (2026-10-09). pollRepo
   listed and decoded every PR row the repository ever had on each tick. It uses only the radar's rows and
   the open rows, which a PR missing from the radar is confirmed against. Now it reads `gh_state = 'OPEN'
@@ -782,6 +826,15 @@ editing history. Code, config comments and prompts reference these by their head
   failure other than store.ErrConflict, as pipeline.abandonPending does: `agents: abandon run <id>:
   <err>`, and `agents: record the prompt (the run) on the <role> session <id>: <err>`. A lost race
   (ErrConflict) stays silent, and nothing else changes.
+- **A judge prompt lists only plain harness file names** (2026-10-09). NotesHarness copied the names in
+  the harness directory into the notes_harness line of every later judge prompt's <magnum> block, just
+  above the notes_lock shell line. Judges write those names, and a PR can steer a judge. A name with a
+  newline added lines to magnum's trusted block for every PR of the repository, and an escape could drive
+  a terminal. Now only names that match ^[A-Za-z0-9._@+-]+$ are listed (a directory still gets its
+  trailing "/"). The other names are counted in "(+N more)" with the entries past NotesHarnessMax.
+  NotesHarnessLogged logs how many there are and never logs the names. Rejected: quoting or escaping the
+  names (a crafted name would still be text inside the block, and a harness script needs no other
+  characters).
 - **The observe tick's queries name their states as the partial indexes do** (2026-10-09). ActiveRuns,
   LiveSessions and LiveSessionByPRRole bound their constant state lists as `?` parameters. SQLite uses a
   partial index only when the query names the index's predicate as written, so every observe tick read the
@@ -4974,6 +5027,12 @@ editing history. Code, config comments and prompts reference these by their head
   past int's range into the largest int, which wrapped too). Each number and the sum are now clamped to
   maxParsedWait (30 days) before they can wrap. parseReset still caps a reset at MaxReset (24h), so such a
   limit pauses the kind for 24h, as a far-off date does.
+- **Printable replaces invalid UTF-8 too** (2026-10-09). Printable returned the text unchanged when it
+  held no control rune. So invalid UTF-8 passed through, including a raw C1 byte such as 0x9b (an 8-bit
+  CSI to a terminal that reads C1 controls). The same bytes became U+FFFD only when the text also held a
+  control character. Now the fast path also requires utf8.ValidString. FuzzPrintable checks that the
+  output is valid UTF-8 with no control character except newline and tab, and that text that is already
+  printable passes unchanged.
 - **An ExitError keeps an excerpt of its stderr, redacted once** (2026-10-09). An ExitError kept the whole
   stderr (up to 8 MiB) and redacted it again each time Error() ran. Every wrap therefore carried
   megabytes, and a redaction pass over them, into step fail rows, the PR's last_error and log lines.

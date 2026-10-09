@@ -48,6 +48,9 @@ func newPerPR(t *testing.T, clone bool) *perPRFixture {
 		t.Fatal(err)
 	}
 	f.pr = h.pr(f.repo.ID, 7, f.sha7, store.PRClaiming)
+	// The main clone, copied now or cloned by fakeClone later, is the
+	// repository's clone on github.com, as the clone step requires.
+	fakeOrigins(h, map[string]string{f.main: gitx.GitHubHTTPSURL("zhuravel", "widget")})
 	return f
 }
 
@@ -90,7 +93,8 @@ func (h *harness) cloneCalls() []execx.Cmd {
 func (f *perPRFixture) fakeClone(t *testing.T) {
 	t.Helper()
 	fx := fixtures(t).widget
-	f.h.run.fakeGit = isClone
+	prev := f.h.run.fakeGit
+	f.h.run.fakeGit = func(c execx.Cmd) bool { return isClone(c) || prev != nil && prev(c) }
 	clone := func(c execx.Cmd) (execx.Result, error) {
 		err := copyTree(fx.main, c.Args[len(c.Args)-1])
 		if err != nil {
@@ -414,15 +418,21 @@ func TestDiscardedEventListsTheFirstPaths(t *testing.T) {
 }
 
 // fakeOrigins answers `git remote get-url origin` for the given directories
-// (the fixture's real origins are local paths, which FindClone never
-// matches) and passes every other git command to the real runner.
+// (the fixture's real origins are local paths, which neither FindClone nor
+// the clone step takes for a github.com clone) and passes every other git
+// command on as before: to the fakes routed earlier (fakeClone's, an
+// earlier fakeOrigins'), else to the real runner. A later URL for a
+// directory wins.
 func fakeOrigins(h *harness, urls map[string]string) {
+	prev := h.run.fakeGit
 	h.run.fakeGit = func(c execx.Cmd) bool {
-		return len(c.Args) >= 4 && c.Args[0] == "-C" && c.Args[2] == "remote" && c.Args[3] == "get-url" && urls[c.Args[1]] != ""
+		return len(c.Args) >= 4 && c.Args[0] == "-C" && c.Args[2] == "remote" && c.Args[3] == "get-url" && urls[c.Args[1]] != "" ||
+			prev != nil && prev(c)
 	}
-	h.fake.Rules = append(h.fake.Rules, execx.Rule{Prefix: []string{"git", "-C"}, Fn: func(c execx.Cmd) (execx.Result, error) {
-		return execx.Result{Stdout: []byte(urls[c.Args[1]] + "\n")}, nil
-	}})
+	for dir, url := range urls {
+		h.fake.Rules = slices.Insert(h.fake.Rules, 0, execx.Rule{Prefix: []string{"git", "-C", dir, "remote", "get-url"},
+			Result: execx.Result{Stdout: []byte(url + "\n")}})
+	}
 }
 
 func TestCreatePRWorktreeFindsCloneUnderAnotherName(t *testing.T) {

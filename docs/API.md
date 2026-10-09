@@ -423,10 +423,15 @@ func NotesFiles(notesPath string) (dir, lock string)
     (engine.NotesDir and engine.NotesLockPath). Both are "" for "".
 
 func NotesHarness(dir string) (names []string, more int)
-    NotesHarness lists the harness directory dir for a judge prompt
+    NotesHarness is NotesHarnessLogged without a log.
+
+func NotesHarnessLogged(dir string, log execx.Logger) (names []string, more int)
+    NotesHarnessLogged lists the harness directory dir for a judge prompt
     (JudgeData.NotesHarness): entry names sorted, a directory with a trailing
-    "/", at most NotesHarnessMax, and how many more there are. A missing or
-    unreadable directory lists nothing.
+    "/", at most NotesHarnessMax, and how many more there are. A name with
+    anything but letters, digits and "._@+-" is never listed: it counts under
+    more, and log (optional) gets one line with how many such names there are,
+    never the names. A missing or unreadable directory lists nothing.
 
 func NotesLockLine(lock string) string
     NotesLockLine is the shell line a judge runs to take the notes lock (a
@@ -7286,7 +7291,8 @@ All commands go through an execx.Runner (never os/exec), run as `git -C <dir>
 prints them. Inputs that end up as git arguments (refs, branch names, worktree
 paths) are validated so a hostile branch name can never be parsed as an option.
 The variables that redirect git to another repository (GIT_DIR and friends,
-see ScrubbedEnv) are removed from the environment of every command.
+see ScrubbedEnv) are removed from the environment of every command, and none
+runs the clone's hooks (see Env).
 
 CONSTANTS
 
@@ -7330,6 +7336,12 @@ var ErrNoClone = errors.New("gitx: no clone of the repository")
 
 FUNCTIONS
 
+func Env(mutates bool) map[string]string
+    Env returns the environment gitx sets on its git commands: no credential
+    prompt, the clone's hooks off (core.hooksPath=/dev/null) and, for a command
+    that does not mutate, no optional locks. Code that runs git outside gitx
+    should put it in execx.Cmd.Env, with ScrubbedEnv in Unset.
+
 func GitHubHTTPSURL(owner, repo string) string
     GitHubHTTPSURL is the https clone URL of github.com/<owner>/<repo>.
 
@@ -7354,6 +7366,15 @@ func NetworkRemote(originURL string, https bool) (opts []string, target string)
     empty ssh-agent does not matter. Anything else (https off, an HTTPS origin,
     an SSH origin on another host, an unknown origin) names origin itself with
     no options.
+
+func OriginMatches(remoteURL, owner, name string) bool
+    OriginMatches reports whether remoteURL is a GitHub remote of owner/name,
+    as FindClone and the per-PR clones of slots require: https://github.com/o/r,
+    git@github.com:o/r, ssh://git@github.com/o/r and the other forms
+    ParseRemote reads, with or without .git or a trailing slash. The host
+    must be exactly github.com, so github.com in a path or a longer host name
+    (evilgithub.com, notgithub.com) does not match; owner and name are compared
+    case-insensitively, as GitHub does.
 
 func PRRef(number int) string
     PRRef is the local ref a PR head is fetched into.
@@ -7473,7 +7494,7 @@ func (c *Client) FindClone(ctx context.Context, cloneRoot, owner, name string) (
     cloneRoot (an absolute, already expanded directory). Candidates are tried
     in order: <root>/<name>, <root>/<owner>-<name>, <root>/<owner>_<name>; the
     first that is a git repository whose `git remote get-url origin` is a GitHub
-    URL of <owner>/<name> wins (see originMatches; owner and name are compared
+    URL of <owner>/<name> wins (see OriginMatches; owner and name are compared
     case-insensitively). Otherwise every directory directly under the root (not
     recursively; names containing "__worktrees" are skipped) is checked the same
     way, in name order. A directory is asked once however many names reach it
@@ -9558,8 +9579,10 @@ func Measure(r Repo, l Limits) (Size, []File, error)
     measures zero; any other read error is returned.
 
 func Printable(text string) string
-    Printable replaces the control characters other than newline and tab in text
-    written by an agent, so it cannot drive a terminal.
+    Printable replaces the control characters other than newline and tab in
+    text written by an agent with spaces, and its invalid UTF-8 with U+FFFD,
+    so it cannot drive a terminal: a raw byte 0x9b is an 8-bit CSI to a terminal
+    that reads C1 controls.
 
 func Sections(text []byte) []string
     Sections lists the "## " headings of notes text.
@@ -11674,6 +11697,10 @@ type Deps struct {
 	// Repos are the [[repo]] blocks (config.Config.Repos): setup, teardown,
 	// copy_files, strip_env and env of per-PR worktrees.
 	Repos []config.Repo
+	// SecretEnv names the variables of the daemon's environment that hold a
+	// secret of its own, the App identities' private_key_env: heavy commands
+	// never inherit them (heavyUnset).
+	SecretEnv []string
 	// FreeDiskBytes returns the free bytes of the filesystem holding path;
 	// nil uses statfs.
 	FreeDiskBytes func(path string) (uint64, error)

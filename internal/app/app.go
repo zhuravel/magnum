@@ -259,6 +259,18 @@ func (a *App) initLogger(opts Options) error {
 	return nil
 }
 
+// keyEnvs are the identities' private_key_env names: the variables of the
+// daemon's environment that hold an App's private key.
+func keyEnvs(ids []config.Identity) []string {
+	var out []string
+	for _, id := range ids {
+		if id.PrivateKeyEnv != "" {
+			out = append(out, id.PrivateKeyEnv)
+		}
+	}
+	return out
+}
+
 // wire builds the layers on top of the clients.
 func (a *App) wire() {
 	cfg := a.Config
@@ -272,7 +284,7 @@ func (a *App) wire() {
 		Store: a.Store, Run: a.Runner, Git: a.Git, MySQL: my,
 		Snapshot: a.Herdr.Snapshot, ProcessInfo: a.Herdr.PaneProcessInfo,
 		Layout: a.Layout, Log: Printf{Logger: a.Logger, Level: slog.LevelInfo, Src: "slots"},
-		Repos: cfg.Repos, DryRun: a.DryRun, Mise: a.Mise,
+		Repos: cfg.Repos, DryRun: a.DryRun, Mise: a.Mise, SecretEnv: keyEnvs(cfg.Identities),
 	})
 	var invGH inventory.GitHub
 	if c := a.pollClient(); c != nil {

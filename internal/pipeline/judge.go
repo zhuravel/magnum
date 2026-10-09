@@ -777,7 +777,7 @@ func (rd *round) judgeData(run store.Run, marker string) agents.JudgeData {
 	jd.EffortInPrompt = rd.effortInPrompt(rd.judge, jd.Effort)
 	if in.NotesPath != "" {
 		jd.NotesDir, jd.NotesLock = agents.NotesFiles(in.NotesPath)
-		jd.NotesHarness, jd.NotesHarnessMore = agents.NotesHarness(jd.NotesDir)
+		jd.NotesHarness, jd.NotesHarnessMore = agents.NotesHarnessLogged(jd.NotesDir, rd.r.Logger)
 	}
 	if p := in.Previous; p != nil {
 		jd.PreviousReviewID, jd.PreviousEvent = p.ID, p.Event

@@ -133,6 +133,48 @@ func TestNewWiresEverything(t *testing.T) {
 	}
 }
 
+// The slots manager gets the App identities' private_key_env names, so a
+// pool script, which runs the PR's code outside the sandbox, never inherits
+// an App's private key from the daemon's environment.
+func TestNewKeepsTheAppKeysFromPoolScripts(t *testing.T) {
+	root := t.TempDir()
+	main, path := filepath.Join(root, "talkable"), filepath.Join(root, "talkable.review1")
+	for _, d := range []string{main, path} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run := &execx.Fake{Rules: []execx.Rule{
+		{Prefix: []string{"git", "-C", main, "worktree", "list"}, Result: execx.Result{
+			Stdout: []byte("worktree " + main + "\nHEAD 1111111111111111111111111111111111111111\nbranch refs/heads/master\n\n" +
+				"worktree " + path + "\nHEAD 1111111111111111111111111111111111111111\nbranch refs/heads/review1\n\n")}},
+		{Prefix: []string{"mise"}},
+	}}
+	a, _ := testApp(t, Options{Runner: run})
+	pool := config.Pool{Repo: "talkable/talkable", MainClone: main, SlotPath: filepath.Join(root, "talkable.review{n}"),
+		SlotName: "review{n}", Base: "master", Setup: []string{"bin/setup"}}
+	sl, err := a.Store.CreateSlot(context.Background(), store.Slot{Name: "review1", RepoFullName: pool.Repo,
+		Kind: store.SlotKindPool, Path: path, MainClone: main, PlaceholderBranch: new("review1"),
+		DBSlug: new("review1"), State: store.SlotBroken})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = a.Slots.Repair(context.Background(), sl, pool) // fails at the marker check, after the setup ran
+
+	var setup *execx.Cmd
+	for i, c := range run.Calls {
+		if c.Name == "mise" && slices.Contains(c.Args, "bin/setup") {
+			setup = &run.Calls[i]
+		}
+	}
+	if setup == nil {
+		t.Fatalf("the setup never ran: %v", run.Calls)
+	}
+	if !slices.Contains(setup.Unset, "MAGNUM_TEST_KEY") {
+		t.Fatalf("the setup inherits the App key: unset %v", setup.Unset)
+	}
+}
+
 // The mise executable of Options.Mise reaches every round runner, which runs
 // the readiness step's reset_db commands through it as the slots manager runs
 // the release's; without one they use "mise" on PATH.

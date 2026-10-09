@@ -3,8 +3,11 @@ package agents
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/zhuravel/magnum/internal/execx"
 )
 
 // Repository notes (engine.NotesPath) are rewritten by the judge of every
@@ -54,11 +57,25 @@ func notesLockLine(lock string, tries, pollSeconds, staleMinutes int) string {
 // NotesUnlockLine is the shell line that releases the notes lock.
 func NotesUnlockLine(lock string) string { return "rmdir " + shellQuote(lock) }
 
-// NotesHarness lists the harness directory dir for a judge prompt
-// (JudgeData.NotesHarness): entry names sorted, a directory with a trailing
-// "/", at most NotesHarnessMax, and how many more there are. A missing or
-// unreadable directory lists nothing.
+// NotesHarness is NotesHarnessLogged without a log.
 func NotesHarness(dir string) (names []string, more int) {
+	return NotesHarnessLogged(dir, nil)
+}
+
+// harnessName matches the harness entry names a judge prompt lists. A judge,
+// whom a PR can steer, names the files, and the listing goes into the
+// <magnum> block of every later judge prompt of the repository: a newline in
+// a name would add a line to that block, an escape would drive a terminal,
+// and a comma would split one name into two.
+var harnessName = regexp.MustCompile(`^[A-Za-z0-9._@+-]+$`)
+
+// NotesHarnessLogged lists the harness directory dir for a judge prompt
+// (JudgeData.NotesHarness): entry names sorted, a directory with a trailing
+// "/", at most NotesHarnessMax, and how many more there are. A name with
+// anything but letters, digits and "._@+-" is never listed: it counts under
+// more, and log (optional) gets one line with how many such names there are,
+// never the names. A missing or unreadable directory lists nothing.
+func NotesHarnessLogged(dir string, log execx.Logger) (names []string, more int) {
 	if dir == "" {
 		return nil, 0
 	}
@@ -66,16 +83,24 @@ func NotesHarness(dir string) (names []string, more int) {
 	if err != nil {
 		return nil, 0
 	}
+	unlisted := 0
 	for _, e := range ents {
 		name := e.Name()
+		if !harnessName.MatchString(name) {
+			unlisted++
+			continue
+		}
 		if e.IsDir() {
 			name += "/"
 		}
 		names = append(names, name)
 	}
+	if unlisted > 0 && log != nil {
+		log.Printf("agents: notes harness %s: %d entry name(s) with characters outside [A-Za-z0-9._@+-] left out of the judge prompt", dir, unlisted)
+	}
 	slices.Sort(names)
 	if len(names) > NotesHarnessMax {
-		return names[:NotesHarnessMax], len(names) - NotesHarnessMax
+		return names[:NotesHarnessMax], len(names) - NotesHarnessMax + unlisted
 	}
-	return names, 0
+	return names, unlisted
 }

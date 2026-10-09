@@ -378,17 +378,10 @@ func (m *Manager) ensureClone(ctx context.Context, repo, mainClone string) error
 	if err != nil {
 		return err
 	}
-	if !originMatches(url, repo) {
-		return fmt.Errorf("%w: %s origin is %q, want %s", ErrOriginMismatch, mainClone, url, repo)
+	if owner, name, _ := strings.Cut(repo, "/"); !gitx.OriginMatches(url, owner, name) {
+		return fmt.Errorf("%w: %s origin is %q, want github.com/%s", ErrOriginMismatch, mainClone, url, repo)
 	}
 	return nil
-}
-
-func originMatches(url, repo string) bool {
-	if r, ok := gitx.ParseRemote(url); ok {
-		return strings.EqualFold(r.FullName(), repo)
-	}
-	return strings.Contains(strings.ToLower(url), strings.ToLower(repo))
 }
 
 // RemovePRWorktree removes a per-PR worktree: steps of subject

@@ -63,8 +63,8 @@ func (e *Engine) provisionSlots(ctx context.Context, pool config.Pool, count int
 			return fmt.Sprintf("%s already has %d slots (pool.min %d)", pool.Repo, live, pool.Min), nil
 		}
 	}
-	if pool.Max > 0 && live+count > pool.Max {
-		return "", fmt.Errorf("%s allows at most %d slots and has %d; lower the count or raise max in config.toml", pool.Repo, pool.Max, live)
+	if pool.Max > 0 && count > pool.Max-live { // never live+count: a huge queued count wraps it
+		return "", fmt.Errorf("%s allows at most %d slots and has %d; lower --count or raise max in config.toml", pool.Repo, pool.Max, live)
 	}
 	var done []string
 	for i := 0; i < count; i++ {

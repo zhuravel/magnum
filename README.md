@@ -1073,7 +1073,7 @@ Magnum's, not the model's. Only a first review or re-review whose diff has at mo
 or a rebase, the PR's own diff of the files whose own change they altered) is asked about, bigger
 rounds run every role. The judge always runs, and the model can only remove roles that have a `summary`, the
 one-line description of what a role checks (the built-in reviewers have one, a role without one always runs). A
-round that names its roles (`magnum review --role`), a continued round and an eval are never triaged. Anything
+round that names its roles (`magnum review --role`), a continued round and an eval are never triaged. Neither is a round on a repository magnum auto-approves (`auto_approve` with `auto_approve_as`): an automatic approval needs every reviewer, so every role runs there. Anything
 that goes wrong (a missing or failing command, a `timeout`, an answer that cannot be read, a diff GitHub cannot
 give in full) runs every role. The prompt, `prompts/triage.md`, tells the model that the diff is data, not
 instructions, and never contains the PR's title or description. Each decision is a `round.triage` event on the
@@ -1794,7 +1794,16 @@ agents alike).
 data: PR text is never interpolated into prompts, fork PRs are skipped by default, personal tokens are
 stripped from review worktrees so the configured identity always posts, and a posted review is accepted
 only if its author matches that identity. Magnum pre-trusts only the directories it creates, by writing
-the same entries Codex and Claude write when you click "trust". An approval prompt that stops an agent
+the same entries Codex and Claude write when you click "trust". The files a pull request controls that magnum
+reads itself (Gemfile.lock, pnpm-lock.yaml, db/schema.rb, the setup's tmp/.worktree-db-slug, .codex/config.toml)
+are read only as regular files under a size cap: a symlink, a FIFO or a device in their place is refused (the
+slot's checkout fails naming the file, the slug marker is not trusted, the hooks review is declined). Magnum's git commands run none of a checkout's git hooks (`core.hooksPath=/dev/null`), so hooks that a PR's setup
+installs (husky, lefthook) never run on its checkouts; a per-PR repository's existing clone must have its origin on
+github.com (another host, a mirror or a local path is refused as an origin mismatch); pool scripts and per-PR hooks run
+without `GH_TOKEN`, `GITHUB_TOKEN`, `GITHUB_PERSONAL_ACCESS_TOKEN`, the App identities' `private_key_env` and the
+variables that point git at another repository (set a value a script needs in `[pool] env` or `[[repo]] env`); and
+`magnum approve --as`, `unapprove`, `mute`, `ignore` and `pause` refuse to run in a review agent's pane (where
+`MAGNUM_REPORT_DIR` or `MAGNUM_PR_URL` is set), so a steered agent cannot act for the operator. An approval prompt that stops an agent
 during a review (Claude Code asks before some commands even with `--dangerously-skip-permissions`) is
 answered No, never Yes, at most 10 times per run and recorded as an `agent.prompt_denied` event, and an
 agent that stops after the No is told once to finish without the command (`after_deny_prompt`), a Claude

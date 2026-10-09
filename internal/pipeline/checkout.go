@@ -122,13 +122,16 @@ func (rd *round) restoreTree(ctx context.Context) error {
 	return nil
 }
 
-// git builds a `git -C <slot>` command. It unsets the variables that would
-// point git at another repository, as gitx does for its own commands.
+// git builds a `git -C <slot>` command with gitx's environment: no
+// credential prompt and the checkout's hooks off (a hook a PR's setup
+// script installed would run outside the sandbox on the reset). It unsets
+// the variables that would point git at another repository, as gitx does
+// for its own commands.
 func (rd *round) git(mutates bool, args ...string) execx.Cmd {
 	return execx.Cmd{
 		Name:    "git",
 		Args:    append([]string{"-C", rd.in.SlotPath}, args...),
-		Env:     map[string]string{"GIT_TERMINAL_PROMPT": "0"},
+		Env:     gitx.Env(mutates),
 		Unset:   gitx.ScrubbedEnv(),
 		Mutates: mutates,
 		Label:   "pipeline checkout",

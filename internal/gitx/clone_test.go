@@ -169,8 +169,8 @@ func TestOriginMatches(t *testing.T) {
 		"https://github.com/o/R",
 	}
 	for _, u := range match {
-		if !originMatches(u, "o", "r") {
-			t.Errorf("originMatches(%q, o, r) = false", u)
+		if !OriginMatches(u, "o", "r") {
+			t.Errorf("OriginMatches(%q, o, r) = false", u)
 		}
 	}
 	reject := []string{
@@ -183,6 +183,13 @@ func TestOriginMatches(t *testing.T) {
 		"https://github.com.evil.com/o/r",
 		"https://github.com@evil.com/o/r",
 		"https://gitlab.com/o/r",
+		"git@gitlab.com:o/r.git",
+		"https://evil-github.com/o/r.git",
+		"git@evil-github.com:o/r.git",
+		"/Users/alice/Projects/o/r",
+		"/srv/mirrors/o/r.git",
+		"file:///srv/mirrors/o/r.git",
+		"../o/r",
 		"https://github.com/o/r/tree/main", // a page, not a remote
 		"https://github.com/o/r2",
 		"https://github.com/xo/r",
@@ -191,8 +198,8 @@ func TestOriginMatches(t *testing.T) {
 		"",
 	}
 	for _, u := range reject {
-		if originMatches(u, "o", "r") {
-			t.Errorf("originMatches(%q, o, r) = true", u)
+		if OriginMatches(u, "o", "r") {
+			t.Errorf("OriginMatches(%q, o, r) = true", u)
 		}
 	}
 }

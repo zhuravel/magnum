@@ -9,13 +9,14 @@
 // branch names, worktree paths) are validated so a hostile branch name can
 // never be parsed as an option. The variables that redirect git to another
 // repository (GIT_DIR and friends, see ScrubbedEnv) are removed from the
-// environment of every command.
+// environment of every command, and none runs the clone's hooks (see Env).
 package gitx
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -132,11 +133,35 @@ func (c *Client) git(ctx context.Context, dir string, k call, args ...string) (e
 	return res, nil
 }
 
-// gitEnv never lets git prompt for credentials (the daemon has no tty) and
-// keeps read-only commands from taking the index lock, which would otherwise
-// race with a human running git in the same worktree.
+// hooksOff is the configuration every git command of magnum's runs with:
+// core.hooksPath=/dev/null, so git runs none of the clone's hooks. A PR's
+// setup script (bundle install, npm install through the pool's scripts) can
+// point core.hooksPath into the work tree (husky's .husky/_, lefthook) or
+// write .git/hooks, and every later checkout, fetch or ref update would run
+// that code outside the sandbox. Magnum relies on no hook; Git LFS content
+// comes through its smudge filter, which is not a hook. The setting goes in
+// the environment (GIT_CONFIG_COUNT and its pairs, which git ranks with
+// `git -c`), so every command line stays as it is, and the git processes
+// git starts (a submodule's, Git LFS's) inherit it.
+var hooksOff = map[string]string{
+	"GIT_CONFIG_COUNT":   "1",
+	"GIT_CONFIG_KEY_0":   "core.hooksPath",
+	"GIT_CONFIG_VALUE_0": "/dev/null",
+}
+
+// Env returns the environment gitx sets on its git commands: no credential
+// prompt, the clone's hooks off (core.hooksPath=/dev/null) and, for a
+// command that does not mutate, no optional locks. Code that runs git
+// outside gitx should put it in execx.Cmd.Env, with ScrubbedEnv in Unset.
+func Env(mutates bool) map[string]string { return gitEnv(mutates) }
+
+// gitEnv never lets git prompt for credentials (the daemon has no tty),
+// turns the clone's hooks off (hooksOff) and keeps read-only commands from
+// taking the index lock, which would otherwise race with a human running git
+// in the same worktree.
 func gitEnv(mutates bool) map[string]string {
-	env := map[string]string{"GIT_TERMINAL_PROMPT": "0"}
+	env := maps.Clone(hooksOff)
+	env["GIT_TERMINAL_PROMPT"] = "0"
 	if !mutates {
 		env["GIT_OPTIONAL_LOCKS"] = "0"
 	}

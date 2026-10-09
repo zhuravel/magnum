@@ -15,7 +15,6 @@
 package notes
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -275,9 +274,11 @@ func cleanName(name string) bool {
 }
 
 // Printable replaces the control characters other than newline and tab in
-// text written by an agent, so it cannot drive a terminal.
+// text written by an agent with spaces, and its invalid UTF-8 with U+FFFD,
+// so it cannot drive a terminal: a raw byte 0x9b is an 8-bit CSI to a
+// terminal that reads C1 controls.
 func Printable(text string) string {
-	if !bytes.ContainsFunc([]byte(text), isControl) {
+	if utf8.ValidString(text) && !strings.ContainsFunc(text, isControl) {
 		return text
 	}
 	return strings.Map(func(r rune) rune {

@@ -23,6 +23,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -140,6 +141,10 @@ type Deps struct {
 	// Repos are the [[repo]] blocks (config.Config.Repos): setup, teardown,
 	// copy_files, strip_env and env of per-PR worktrees.
 	Repos []config.Repo
+	// SecretEnv names the variables of the daemon's environment that hold a
+	// secret of its own, the App identities' private_key_env: heavy commands
+	// never inherit them (heavyUnset).
+	SecretEnv []string
 	// FreeDiskBytes returns the free bytes of the filesystem holding path;
 	// nil uses statfs.
 	FreeDiskBytes func(path string) (uint64, error)
@@ -301,19 +306,33 @@ func (m *Manager) runHeavy(ctx context.Context, dir string, env map[string]strin
 	}, logName)
 }
 
+// heavyUnset is what a heavy command removes from the environment it
+// inherits from the daemon: the variables that point git at another
+// repository (gitx.ScrubbedEnv), the GitHub tokens (DefaultStripEnv) and
+// Deps.SecretEnv. A pool script or a per-PR hook runs the PR's code (bundle
+// install on its Gemfile) outside the sandbox. A value the slot's env sets
+// on purpose ([pool] env, [[repo]] env) is still passed.
+func (m *Manager) heavyUnset() []string {
+	keys := slices.Concat(gitx.ScrubbedEnv(), DefaultStripEnv, m.d.SecretEnv)
+	slices.Sort(keys)
+	return slices.Compact(keys)
+}
+
 // runLogged runs a heavy command c, serialized with every other heavy
-// command, and appends a redacted transcript to layout.Logs()/<logName>: the
-// begin line when the command starts (`tail -f` shows which step runs), then
-// its output, each stream cut to its last logStreamTail bytes, and the end
-// line. The rotation is decided before the begin line for the largest block
-// a command can append, so a command's lines land in one file and a log stays
-// under SlotLogMax.
+// command and without the daemon's secrets (heavyUnset), and appends a
+// redacted transcript to layout.Logs()/<logName>: the begin line when the
+// command starts (`tail -f` shows which step runs), then its output, each
+// stream cut to its last logStreamTail bytes, and the end line. The rotation
+// is decided before the begin line for the largest block a command can
+// append, so a command's lines land in one file and a log stays under
+// SlotLogMax.
 func (m *Manager) runLogged(ctx context.Context, c execx.Cmd, logName string) error {
 	release, err := m.acquireHeavy(ctx)
 	if err != nil {
 		return err
 	}
 	defer release()
+	c.Unset = slices.Concat(c.Unset, m.heavyUnset())
 	label := c.Label
 	begin := fmt.Sprintf("== %s begin %s: %s\n", store.FormatTime(m.now()), label, c.String())
 	m.appendLog(logName, begin, len(begin)+2*logStreamTail+logBlockSlack)

@@ -87,3 +87,38 @@ func TestJudgePromptListsTheHarnessDirectory(t *testing.T) {
 		"\nnotes: "+notes+"\nnotes_dir: "+dir+"\nnotes_harness: fixtures/, jest-setup.js, run-spec.sh\n",
 		"\nnotes_lock: "+agents.NotesLockLine(dir+".lock")+"\n", "\nnotes_unlock: "+agents.NotesUnlockLine(dir+".lock")+"\n")
 }
+
+// A harness entry whose name the judge prompt cannot carry is left out, and
+// the round's log says how many were, never the names.
+func TestAHarnessNameLeftOutOfTheJudgePromptIsLogged(t *testing.T) {
+	e := newEnv(t)
+	notes := filepath.Join(e.layout.State(), "notes", "talkable", "talkable.md")
+	dir := strings.TrimSuffix(notes, ".md")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"run-spec.sh", "two words.sh"} {
+		if err := os.WriteFile(filepath.Join(dir, f), []byte("#!/bin/sh\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e.ag.behaviors[agents.RoleJudge] = []behavior{e.judgePosts(602, "COMMENTED", "COMMENT").behavior(t)}
+	in := e.input(KindInitial)
+	in.NotesPath = notes
+	if _, err := e.r.RunRound(e.ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	mustContain(t, "judge prompt", e.ag.submitsFor(agents.RoleJudge)[0].Text, "\nnotes_harness: run-spec.sh (+1 more)\n")
+	e.log.mu.Lock()
+	defer e.log.mu.Unlock()
+	found := false
+	for _, l := range e.log.lines {
+		if strings.Contains(l, "two words") {
+			t.Errorf("log line names the entry: %q", l)
+		}
+		found = found || strings.Contains(l, "1 entry name(s) with characters outside")
+	}
+	if !found {
+		t.Fatalf("log lines %q", e.log.lines)
+	}
+}

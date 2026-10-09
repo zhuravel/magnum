@@ -5,9 +5,10 @@ package engine
 // model reads the round's diff and says which of them the diff needs
 // ([triage]). The model's answer is advice that magnum bounds: only a diff of
 // at most max_lines changed lines is asked about, the judge always runs, the
-// answer can only remove roles that have a summary, and anything that goes
-// wrong runs every role. The diff is the PR's own text, so none of this
-// depends on the model reading it faithfully.
+// answer can only remove roles that have a summary, a repository magnum
+// auto-approves is never triaged, and anything that goes wrong runs every
+// role. The diff is the PR's own text, so none of this depends on the model
+// reading it faithfully.
 
 import (
 	"cmp"
@@ -66,11 +67,21 @@ type triageRole struct {
 // (`magnum review --role`, or a rerun of a role that earned one); only roles
 // RolesToRun picked and that carry a summary can be dropped, never the
 // judge. A diff above max_lines, one that cannot be read in full, and every
-// failure of the command run every role; a failure records why.
+// failure of the command run every role; a failure records why. Nor does
+// it apply where magnum approves the repository's PRs as the operator
+// (AutoApproveFor): the model reads the PR's own diff, and a round it cut
+// to the judge alone would leave the gate that requires every reviewer
+// nothing unheard, since a round's missing reports are those of the roles
+// it ran.
 func (e *Engine) triage(ctx context.Context, job *roundJob, rs *roundSetup) {
 	tc := e.cfg.Triage
 	if !tc.Enabled || job.evalHead != "" || len(rs.requested) > 0 ||
 		(job.kind != pipeline.KindInitial && job.kind != pipeline.KindRereview) {
+		return
+	}
+	if e.cfg.AutoApproveFor(job.repo.FullName()) != nil {
+		e.log.Info("triage: every role runs: magnum approves this repository's PRs as the operator, which needs every reviewer",
+			"subject", prSubject(job.repo, job.pr.Number))
 		return
 	}
 	var offered []triageRole

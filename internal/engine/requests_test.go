@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"sync"
@@ -247,6 +248,25 @@ func TestProvisionRepairAdoptRequestsRunOnTheHeavyWorker(t *testing.T) {
 	for _, want := range []string{"provision:2", "repair:review2", "adopt:" + pool.Path(3)} {
 		if !slices.Contains(h.sl.all(), want) {
 			t.Fatalf("slot calls %v lack %s", h.sl.all(), want)
+		}
+	}
+}
+
+// A queued provision request with a huge count is refused like the CLI's
+// --count: the pool's room is max minus the live slots, so live+count never
+// wraps past the check and provisions without end.
+func TestAProvisionRequestWithAHugeCountIsRefused(t *testing.T) {
+	h := newHarness(t, func(h *harness) { h.cfg.Pools[0].Max = 3 })
+	huge := h.enqueue(ReqProvision, ProvisionPayload{Pool: "talkable/talkable", Count: math.MaxInt})
+	h.tick()
+	h.settle()
+	r := h.request(huge)
+	if r.State != store.RequestFailed || !strings.Contains(deref(r.Result), "allows at most 3 slots and has 1; lower --count or raise max in config.toml") {
+		t.Fatalf("huge count: %+v %q", r, deref(r.Result))
+	}
+	for _, call := range h.sl.all() {
+		if strings.HasPrefix(call, "provision:") {
+			t.Fatalf("slot calls %v provision a slot", h.sl.all())
 		}
 	}
 }
