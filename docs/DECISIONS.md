@@ -5165,17 +5165,24 @@ editing history. Code, config comments and prompts reference these by their head
   thread's finding names (none for a review posted before migration 0005 or a run that recorded none,
   which is stored all the same), and the lesson scrubbed of the PR's author, the repliers and magnum's
   logins (`learn.ScrubLesson`, a dropped one a `retro.lesson_rejected` event). Only a classified answer
-  is stored: an unclassified or failed PR leaves its own threads for the next retro. A finding declined
-  or argued with verdict `missing_context` and scope `repo` is also upserted as a miss (class miss,
-  scope repo, keyed by the same comment link, its reviewer the first person who answered, its severity
-  the posted priority), so the notes curation takes it unchanged, noted or skipped like any other, and
-  the retro marks the repository; `notes.misses` says how many came from declined findings. A PR with no
-  other reviewer's comment but an answered finding now goes to the classifier, and counts toward
-  `max_prs`. `retro.ok` counts `declines` and `declined` (declined or argued), the summary
-  (`KVRetroLast`) and `retro.done` add them up, and the pane classifier's check and nudge cover the
-  threads. Rejected: giving the curator the declines in `misses.json` under ids of their own (a second
-  input format for the curator and its checks, for what is a repo miss in all but its source); the last
-  run of a review id (a nudge's or a fallback's, with no findings rows and no skill copy in its prompt).
+  is stored: a failed PR's own threads wait for the retro that takes it again (below `RetroMaxAttempts`
+  attempts), and an unclassified one's (no classifier set up: its candidates are stored unclassified,
+  its own threads nowhere) for `magnum retro <ref>` or `--again`. A finding declined or argued with
+  verdict `missing_context` and scope `repo` is also upserted as a miss (class miss, scope repo, keyed
+  by the same comment link, its reviewer the first person who answered, its severity the posted
+  priority), so the notes curation takes it unchanged, noted or skipped like any other, and the retro
+  marks the repository; `notes.misses` says how many came from declined findings. A later retro of the
+  PR that answers the thread otherwise withdraws that miss while it is still new (`unrouteDecline`:
+  class `not_issue`, without its lesson, so the curation no longer takes a lesson the classifier
+  dropped), and one that answers it missing-context again makes it a miss again; a used miss keeps its
+  class, its note being written. A PR with no other reviewer's comment but an answered finding now goes
+  to the classifier, and counts toward `max_prs`. `retro.ok` counts `declines` and `declined` (declined
+  or argued), the summary (`KVRetroLast`) and `retro.done` add them up, and the pane classifier's check
+  and nudge cover the threads. Rejected: giving the curator the declines in `misses.json` under ids of
+  their own (a second input format for the curator and its checks, for what is a repo miss in all but
+  its source); the last run of a review id (a nudge's or a fallback's, with no findings rows and no
+  skill copy in its prompt); dismissing a withdrawn miss (a dismissed miss never comes back on a re-run,
+  and it would read like one dismissed after two rejected proposals).
 - **The retro records how authors answered magnum's findings** (2026-10-09, the surfaces of the
   declines). `magnum misses --declines` lists the declines newest first: by default the findings authors
   declined or argued that no lesson was drawn from yet (outcomes `declined` and `argued`, state `new`,

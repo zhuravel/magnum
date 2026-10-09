@@ -295,6 +295,56 @@ func TestAMissingContextDeclineBecomesARepoMissForTheCuration(t *testing.T) {
 	}
 }
 
+// TestALaterRetroWithdrawsTheMissOfADeclineItNoLongerRoutes: when another
+// retro (`magnum retro <ref>`, --again) answers a thread an earlier one
+// routed to the notes with anything but missing_context and scope repo,
+// the miss it routed, still new, is withdrawn (class not_issue, without
+// the lesson), so the notes curation no longer takes the lesson the
+// classifier dropped; answered missing_context again, it is a miss again.
+func TestALaterRetroWithdrawsTheMissOfADeclineItNoLongerRoutes(t *testing.T) {
+	missingContext := learn.ThreadItem{Outcome: store.DeclineDeclined, Verdict: store.VerdictMissingContext,
+		Lesson: "Gift card charges run inside the ledger transaction, so a balance read after the charge is safe.",
+		Scope:  store.MissScopeRepo, Match: []string{"balance"}}
+	fc := threadsClassifier(map[string]learn.ThreadItem{"o301": missingContext})
+	cur := &fakeCurator{write: notedProposal}
+	h, _ := missesHarness(t, fc, cur)
+	pr := retroPR(h, 7, 25*time.Hour)
+	seedRetroGitHub(h, 7)
+	seedOwnThreads(h, 7)
+	h.requestRetro(RetroPayload{})
+	if m := h.misses(pr.ID)["301"]; m.Class != store.MissMiss || m.Scope != store.MissScopeRepo || m.State != store.MissNew {
+		t.Fatalf("o301's miss after the first retro = %+v", m)
+	}
+
+	answer := func(it learn.ThreadItem) {
+		next := threadsClassifier(map[string]learn.ThreadItem{"o301": it})
+		fc.mu.Lock()
+		fc.answer = next.answer
+		fc.mu.Unlock()
+	}
+	answer(wrongDecline)
+	h.requestRetro(RetroPayload{PRs: []int64{pr.ID}, Again: true})
+	m := h.misses(pr.ID)["301"]
+	if m.Class != store.MissNotIssue || m.Lesson != "" || m.Scope != "" || len(m.Match) != 0 || m.State != store.MissNew {
+		t.Fatalf("o301's miss after the verdict changed = %+v, want it withdrawn", m)
+	}
+	if d := h.declinesOf(pr.ID)[301]; d.Verdict != store.VerdictWrong || d.Scope != store.MissScopeGeneral {
+		t.Fatalf("o301's decline = %+v", d)
+	}
+	h.advance(curateCheckEvery)
+	h.tick()
+	if ps := proposals(t, h); len(ps) != 0 {
+		t.Fatalf("proposals = %+v, want none: the repository has no miss left for its notes", ps)
+	}
+
+	answer(missingContext)
+	h.requestRetro(RetroPayload{PRs: []int64{pr.ID}, Again: true})
+	if again := h.misses(pr.ID)["301"]; again.ID != m.ID || again.Class != store.MissMiss || again.Scope != store.MissScopeRepo ||
+		!strings.Contains(again.Lesson, "ledger transaction") || again.State != store.MissNew {
+		t.Fatalf("o301's miss answered missing_context again = %+v", again)
+	}
+}
+
 // TestADeclineWithoutAFindingsRowIsStoredWithoutOne: a finding posted
 // before the findings table (migration 0005), or by a run that recorded
 // none, has no findings row: its decline is stored without the link, and

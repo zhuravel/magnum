@@ -1629,7 +1629,7 @@ answers (Magnum's carry its reply marker). The agent says what the author did wi
 the registry's `declines` table, with the run that posted the review, the finding's provenance row and the
 hash of the review skill the round ran with, never a reply's text, and a re-run keeps its state. A finding
 declined for missing context with scope `repo` is also a repository miss, so the next notes curation of that
-repository takes it like any other. `magnum misses --declines` lists the findings authors declined or argued
+repository takes it like any other, until a later retro of the pull request answers it otherwise. `magnum misses --declines` lists the findings authors declined or argued
 that no lesson was drawn from yet (`--all` every answer, `--json` the rows), `magnum stats` counts the
 answers by source and by priority, and `magnum status` adds how many declined findings wait.
 

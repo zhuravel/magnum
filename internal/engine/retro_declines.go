@@ -95,9 +95,11 @@ func routesToNotes(it learn.ThreadItem) bool {
 // lesson scrubbed of the PR's author, the repliers and magnum's logins
 // (in.Own, learn.ScrubLesson; a dropped lesson is a retro.lesson_rejected
 // event, never its text). A missing-context item of scope repo is also
-// upserted as a miss for the notes (routeDecline). It returns how many
-// declines it stored and how many of them the author declined or argued;
-// the error joins the rows it could not store.
+// upserted as a miss for the notes (routeDecline); any other answer
+// withdraws the miss an earlier retro routed for the thread while it is
+// still new (unrouteDecline). It returns how many declines it stored and
+// how many of them the author declined or argued; the error joins the rows
+// it could not store.
 func (e *Engine) storeDeclines(ctx context.Context, pr store.PR, in learn.Input, reviews map[int64]reviewRun, threads []learn.OwnThread,
 	items map[string]learn.ThreadItem) (stored, declined int, err error) {
 	if len(threads) == 0 || len(items) == 0 {
@@ -115,6 +117,16 @@ func (e *Engine) storeDeclines(ctx context.Context, pr store.PR, in learn.Input,
 	}
 	repoWords := []string{repo.Owner, repo.Name}
 	var errs []error
+	// The PR's new misses by link: an own thread's is one an earlier retro
+	// routed (no candidate shares a root comment with an own thread).
+	routed := map[string]store.Miss{}
+	ms, err := e.st.Misses(wctx, store.MissFilter{PRID: pr.ID, Classes: []string{store.MissMiss}, States: []string{store.MissNew}})
+	if err != nil {
+		errs = append(errs, fmt.Errorf("the misses routed before: %w", err))
+	}
+	for _, m := range ms {
+		routed[m.SourceURL] = m
+	}
 	for _, t := range threads {
 		it, ok := items[t.ID]
 		if !ok {
@@ -155,9 +167,27 @@ func (e *Engine) storeDeclines(ctx context.Context, pr store.PR, in learn.Input,
 			if err := e.routeDecline(wctx, pr, t, it); err != nil {
 				errs = append(errs, fmt.Errorf("%s as a miss: %w", t.ID, err))
 			}
+		} else if m, ok := routed[t.URL]; ok {
+			if err := e.unrouteDecline(wctx, pr, t, m); err != nil {
+				errs = append(errs, fmt.Errorf("%s withdrawn as a miss: %w", t.ID, err))
+			}
 		}
 	}
 	return stored, declined, errors.Join(errs...)
+}
+
+// unrouteDecline withdraws m, the miss an earlier retro routed for own
+// thread t (routeDecline), now that the classifier answers t with anything
+// but missing_context and scope repo: m, still new, is upserted as
+// not_issue without its severity, title, lesson, scope, lines and patterns,
+// so the notes curation no longer takes a lesson the classifier dropped.
+// UpsertMiss keeps its state, so an answer of missing_context and scope
+// repo again makes it a miss again; a used miss is left alone (its note is
+// written), as is a dismissed one.
+func (e *Engine) unrouteDecline(ctx context.Context, pr store.PR, t learn.OwnThread, m store.Miss) error {
+	_, err := e.st.UpsertMiss(ctx, store.Miss{PRID: pr.ID, SourceURL: t.URL, SourceKind: store.MissSourceThread, Reviewer: m.Reviewer,
+		Path: t.Path, Line: t.Line, ReviewedSHA: t.ReviewedSHA, Class: store.MissNotIssue})
+	return err
 }
 
 // routeDecline upserts own thread t, answered missing_context with scope
