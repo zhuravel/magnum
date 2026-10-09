@@ -497,6 +497,7 @@ func TestWriteTextHeaderNamesWhatIsKnown(t *testing.T) {
 		{"no label", Run{ID: "r1", Commit: "abc1234"}, `run r1  magnum abc1234`},
 		{"unknown commit, dirty", Run{ID: "r1", Dirty: true}, `run r1  magnum (dirty)`},
 		{"nothing known", Run{ID: "r1"}, `run r1`},
+		{"a candidate", Run{ID: "r1", Commit: "abc1234", Candidate: "/wt/learn-1"}, `run r1  magnum abc1234  candidate /wt/learn-1`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

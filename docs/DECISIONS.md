@@ -5228,3 +5228,23 @@ editing history. Code, config comments and prompts reference these by their head
   `magnum eval run`, `score` and `baseline` read both. Rejected: writing the learned cases into the
   operator's file (it is theirs, and a hand edit would be overwritten) and rewriting the file on every
   tick (the rows change only with a retro or a decision on them).
+- **A replay is a package the daemon can call, and it can take a candidate directory** (2026-10-09, the
+  self-improving loop's eval). The case runner lived in the CLI (`evalRunner.runCase`), so the daemon
+  could not replay a case to gate a skill change, and a replay read the prompts and skill of the
+  binary's checkout only. It is now `evalrun.RunCase(ctx, Deps, eval.Case, Options) eval.CaseRun`, the
+  same body and the same output: `Deps` carries the install's layout, the config, the live registry for
+  the Codex flag check (nil: the registry file read-only, as `eval run` did), the logger, the clock, the
+  subprocess runner and the progress and warning lines; `Options` the candidate, `NoNotes`, `Keep`,
+  `Force`, the run's agent tag and directory. `RunCase` now checks the refusal itself
+  (`evalrun.Refused`: the flagged replays and the registry's flag, read again for each case) and flags a
+  refused replay under the run's id, so a daemon caller gets the same protection; `eval run` still
+  prints the refusal before the case starts. `evalrun.WithCandidate(cfg, dir)` is a copy of the config
+  (`config.Config.WithoutSnapshot`, so a daemon's startup copy of the prompts is not what a candidate
+  reads) with `prompts_dir` at `<dir>/prompts` and every judge's skill at
+  `<dir>/skills/magnum-review/SKILL.md`, refused when either is missing; `magnum eval run --candidate
+  <dir>` replays it and records `candidate` in `run.json` and the report's header. The inputs hash
+  leaves a judge's skill path out of its role config (the skill's text was hashed already), so a
+  candidate with the checkout's texts has the checkout's inputs and a landed candidate's replays are the
+  next baseline; runs stored before this have other inputs once. Rejected: building a binary from the
+  candidate (a build per proposal, and the daemon must not run `make build`) and pointing the live
+  config at the candidate (every round in flight would read it).

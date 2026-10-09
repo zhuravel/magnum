@@ -70,6 +70,9 @@ type Run struct {
 	// matches on it.
 	Inputs  string `json:"inputs,omitempty"`
 	NoNotes bool   `json:"no_notes,omitempty"` // the judge was given no notes (--no-notes)
+	// Candidate is the directory whose prompts and judge skill the run replayed (--candidate,
+	// evalrun.WithCandidate); "" = the configured ones.
+	Candidate string `json:"candidate,omitempty"`
 }
 
 // Totals sums the scored cases of a run.
@@ -320,6 +323,9 @@ func WriteMarkdown(w io.Writer, r Run) {
 	if r.Corpus != "" {
 		fmt.Fprintf(w, "- Corpus: `%s`\n", r.Corpus)
 	}
+	if r.Candidate != "" {
+		fmt.Fprintf(w, "- Candidate (prompts and skill): `%s`\n", r.Candidate)
+	}
 	if r.Inputs != "" {
 		fmt.Fprintf(w, "- Inputs (skill, prompts, roles): `%s`\n", r.Inputs)
 	}
@@ -397,6 +403,9 @@ func runHeader(r Run) string {
 	}
 	if m := magnumVersion(r); m != "" {
 		h += "  " + m
+	}
+	if r.Candidate != "" {
+		h += "  candidate " + r.Candidate
 	}
 	return h
 }

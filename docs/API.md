@@ -41,6 +41,7 @@ Module: `github.com/zhuravel/magnum` (Go 1.27). Import paths are `github.com/zhu
 | [eligibility](#eligibility) | Package eligibility is magnum's pure decision logic: which pull requests a watch picks up (Classify), when a picked-up PR may start its next review round (Throttle), whether the daemon is inside its quiet hours (QuietHours) and which rounds they hold (QuietHoursHold). |
 | [engine](#engine) | Package engine is magnum's daemon: one tick loop that polls GitHub, observes herdr, applies health pauses, consumes CLI requests, dispatches review rounds into slots (each round in its own goroutine), releases closed PRs after their grace and reconciles the registry with disk, MySQL and herdr. |
 | [eval](#eval) | Package eval scores an evaluation replay of magnum's pull request review against a corpus of pull requests with known ("seeded") defects. |
+| [evalrun](#evalrun) | Package evalrun replays one case of an eval corpus (internal/eval) as a blind dry-run round and scores it: what `magnum eval run` does for each case, in a package the daemon can call too. |
 | [execx](#execx) | Package execx is the single choke point for every subprocess magnum runs (git, gh, mysql, mise exec, launchctl, osascript, codex/claude probes). |
 | [fsx](#fsx) | Package fsx holds the file helpers several packages share: an atomic file write, plain or confined to an os.Root, a size-limited read of a regular file, an existence check and a canonical path. |
 | [github](#github) | Package github is magnum's GitHub access layer. |
@@ -2948,6 +2949,12 @@ func (c *Config) Warnings() []string
 
 func (c *Config) WatchFor(fullName string) *Watch
     WatchFor returns the watch that covers owner/name, or nil.
+
+func (c *Config) WithoutSnapshot() *Config
+    WithoutSnapshot is a copy of c that reads its prompts and judge skills from
+    disk, as the CLI does, whatever the daemon loaded at startup (a candidate
+    replay reads another directory's), with its own Roles slice (the normalized
+    roles, RolesFor(nil)) for the caller to change.
 
 type CurateTriggers []string
     CurateTriggers is [notes] curate: the triggers of a curation, written as
@@ -6142,6 +6149,9 @@ type Run struct {
 	// matches on it.
 	Inputs  string `json:"inputs,omitempty"`
 	NoNotes bool   `json:"no_notes,omitempty"` // the judge was given no notes (--no-notes)
+	// Candidate is the directory whose prompts and judge skill the run replayed (--candidate,
+	// evalrun.WithCandidate); "" = the configured ones.
+	Candidate string `json:"candidate,omitempty"`
 }
     Run is one replay of a corpus.
 
@@ -6219,6 +6229,123 @@ type Totals struct {
 	AbsentHits      int     // the ones a finding reported (Score.AbsentHits): false positives
 }
     Totals sums the scored cases of a run.
+
+```
+
+## evalrun
+
+```text
+package evalrun // import "github.com/zhuravel/magnum/internal/evalrun"
+
+Package evalrun replays one case of an eval corpus (internal/eval) as a blind
+dry-run round and scores it: what `magnum eval run` does for each case,
+in a package the daemon can call too. Each case runs in its own scratch layout
+(registry, reports, a copy of the notes) under the run's directory and in a
+detached worktree of the repository's clone, with agents tagged for the run,
+so the live registry, the PR's own agents, another run's agents and the PR's
+reports are never touched. A candidate directory (WithCandidate) replays another
+checkout's prompts and skill.
+
+CONSTANTS
+
+const (
+	// OutcomeFlagged: the case is not replayed: an earlier replay of it or
+	// of its PR was refused (eval.FlaggedCase), or the live registry holds
+	// a Codex flag for its PR (Refused).
+	OutcomeFlagged = "flagged"
+	// OutcomeBudget: the Codex budget is at or past [usage] codex_soft
+	// (Options.Force runs anyway); no later case should start either.
+	OutcomeBudget = "budget"
+	// OutcomeError: the case could not run (the round's error outcome).
+	OutcomeError = pipeline.OutcomeError
+)
+    Case outcomes of RunCase besides the round's (pipeline.Outcome*).
+
+const CandidateSkill = "skills/magnum-review/SKILL.md"
+    CandidateSkill is where a candidate directory holds the judge skill,
+    as magnum's checkout does.
+
+const ReleaseTimeout = 2 * time.Minute
+    ReleaseTimeout bounds closing a case's agents after its round.
+
+
+FUNCTIONS
+
+func Refused(ctx context.Context, d Deps, ec eval.Case) string
+    Refused says why case ec is not replayed ("" = it may be): an earlier
+    replay of it or of its PR, under any case name, was refused (the runs root's
+    eval.FlaggedFile, which cannot be read refuses too), or the live registry
+    holds a Codex flag for its PR (liveFlag).
+
+func RunCase(ctx context.Context, d Deps, ec eval.Case, o Options) (out eval.CaseRun)
+    RunCase replays case ec and scores it. Every failure becomes the case's
+    outcome (OutcomeError, OutcomeBudget, OutcomeFlagged or the round's);
+    a refused replay is flagged (eval.MarkFlagged) so that it never runs again.
+    It starts nothing for a case Refused names, of a repository no watch covers,
+    or whose candidate is no candidate.
+
+func RunsRoot(l paths.Layout) string
+    RunsRoot is where a layout's eval runs live: <state>/eval/<run id>/,
+    with the flagged cases (eval.FlaggedFile) and the cases' worktrees (wt/).
+
+func WithCandidate(cfg *config.Config, dir string) (*config.Config, error)
+    WithCandidate is the config a replay of candidate dir reviews with:
+    a copy of cfg (config.Config.WithoutSnapshot: read from disk, whatever the
+    daemon loaded at startup) whose prompts_dir is <dir>/prompts and whose every
+    judge reads <dir>/skills/magnum-review/SKILL.md, both absolute. dir is a
+    checkout or a worktree of magnum with a change to the prompts or the skill;
+    a prompt it lacks resolves to the embedded default, as in any checkout.
+    An error when dir has no prompts directory or no skill file; cfg is never
+    changed.
+
+
+TYPES
+
+type Deps struct {
+	// Layout is the install's: its logs, locks and gh config directories,
+	// the live notes a case copies and the runs root (RunsRoot). A case's
+	// scratch layout is a copy of it with Scratch set.
+	Layout paths.Layout
+	// Config is the config the case reviews with (WithCandidate's for
+	// Options.Candidate is applied by RunCase).
+	Config *config.Config
+	// Store is the live registry, read for the PR's Codex flag only; nil =
+	// the registry file at Layout.DB(), opened read-only for each check
+	// (never created).
+	Store *store.Store
+	// Logger is the case app's logger (nil = warnings and errors as text to
+	// Stderr).
+	Logger *slog.Logger
+	// Stderr receives the case app's human-readable logs (app.Options).
+	Stderr io.Writer
+	// Now is the case's clock (nil = time.Now).
+	Now func() time.Time
+	// Runner replaces the case app's subprocess runner (app.Options; nil =
+	// the real one).
+	Runner execx.Runner
+	// Progress reports a step of the case ("fetching ...", "reviewing in
+	// ..."), Warn a problem that does not end it (a worktree left behind,
+	// agents that stay open); nil = none.
+	Progress func(format string, args ...any)
+	Warn     func(format string, args ...any)
+}
+    Deps is what a replay works with.
+
+type Options struct {
+	// Candidate replays a candidate directory's prompts and skill
+	// (WithCandidate); "" = Config's.
+	Candidate string
+	// NoNotes withholds the repository notes from the judge; Keep leaves
+	// the case's worktree in place; Force runs past [usage] codex_soft.
+	NoNotes, Keep, Force bool
+	// AgentTag tags the case's agents (agents.Deps.Tag), the run's own.
+	AgentTag string
+	// RunDir is the run's directory (RunsRoot/<run id>): the case's scratch
+	// tree is RunDir/cases/<case>, and a refused replay is flagged under
+	// the run's id, its base name.
+	RunDir string
+}
+    Options are a case's settings, the run's.
 
 ```
 

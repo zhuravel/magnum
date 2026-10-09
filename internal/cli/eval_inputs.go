@@ -2,28 +2,24 @@ package cli
 
 // What a replay records besides its score, so that runs can be compared and
 // reused: the inputs it reviewed with (the judge skill, the roles' prompts
-// and the role config, as one hash), the notes its judge read (a hash per
-// file) and the Codex points it used (the gauge before and after the case).
-// `magnum eval baseline` lists the stored replays a new run with the same
-// inputs would repeat; it reads, it never replays.
+// and the role config, as one hash; a candidate's, evalrun.WithCandidate,
+// when it replays one). The notes its judge read and the Codex points it
+// used are recorded per case (internal/evalrun). `magnum eval baseline`
+// lists the stored replays a new run with the same inputs would repeat; it
+// reads, it never replays.
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
-	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/zhuravel/magnum"
 	"github.com/zhuravel/magnum/internal/config"
-	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/eval"
-	"github.com/zhuravel/magnum/internal/paths"
-	"github.com/zhuravel/magnum/internal/usage"
 )
 
 const evalBaselineUsage = "[--corpus FILE] [--case NAME]..."
@@ -32,8 +28,11 @@ const evalBaselineUsage = "[--corpus FILE] [--case NAME]..."
 // PR and the notes (eval.Run.Inputs): every role's config with the model it
 // resolves to and its kind's config, the prompt files the roles name as they
 // resolve now (the checkout's prompts_dir, else the embedded ones), and each
-// judge's skill file. magnum's own code is not part of it. "" without a
-// config.
+// judge's skill file. The texts count, not where they are: a judge's skill
+// path is left out of its role config, so a candidate directory with the
+// same texts as the checkout has its inputs (a landed candidate's replays
+// are the next baseline). magnum's own code is not part of it. "" without
+// a config.
 func evalInputs(cfg *config.Config) string {
 	if cfg == nil {
 		return ""
@@ -45,7 +44,9 @@ func evalInputs(cfg *config.Config) string {
 		}
 	}
 	for _, r := range cfg.RolesFor(nil) {
-		role, _ := json.Marshal(r)
+		at := r
+		at.Skill = "" // its text is hashed below
+		role, _ := json.Marshal(at)
 		kind, _ := json.Marshal(cfg.Kinds[r.Kind])
 		write("role", string(role), cfg.RoleModel(r), string(kind))
 		for _, k := range config.PromptKinds {
@@ -76,32 +77,6 @@ func evalSkillText(src string) string {
 		return "(unreadable)"
 	}
 	return string(b)
-}
-
-// evalNotesHashes is what notes a case's judge reads: the hashes of the
-// scratch copy of owner/repo's notes (eval.HashNotes), taken before the
-// round can rewrite them; nil when they cannot be read.
-func evalNotesHashes(scratch paths.Layout, owner, repo string) map[string]string {
-	file := engine.NotesPath(scratch, owner, repo)
-	if file == "" {
-		return nil
-	}
-	m, err := eval.HashNotes(file, engine.NotesDir(scratch, owner, repo))
-	if err != nil {
-		return nil
-	}
-	return m
-}
-
-// evalCodexUsed is the Codex budget used now (usage.Codex: the newest
-// snapshot of the account's sessions), nil when there is none to read.
-func evalCodexUsed(ctx context.Context, cfg *config.Config) *float64 {
-	snap, err := usage.Codex(ctx, cfg.Usage.CodexHome, time.Now())
-	if err != nil {
-		return nil
-	}
-	used := snap.Used()
-	return &used
 }
 
 func newEvalBaselineCmd(c *Context) *cobra.Command {

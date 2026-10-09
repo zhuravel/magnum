@@ -13,11 +13,9 @@ import (
 	"cmp"
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -30,35 +28,30 @@ import (
 
 	"github.com/zhuravel/magnum/internal/app"
 	"github.com/zhuravel/magnum/internal/config"
-	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/eval"
+	"github.com/zhuravel/magnum/internal/evalrun"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/pipeline"
-	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
-	"github.com/zhuravel/magnum/internal/usage"
 )
 
 const (
 	evalUsage    = "run|score|list|show"
-	evalRunUsage = "[--corpus FILE] [--case NAME]... [--label TEXT] [--no-notes] [--keep] [--force]"
+	evalRunUsage = "[--corpus FILE] [--case NAME]... [--label TEXT] [--candidate DIR] [--no-notes] [--keep] [--force]"
 	// evalCorpusFile is the default corpus, in the user config's directory
 	// (~/.config/magnum); evalLegacyCorpusFile its old place in a checkout.
 	evalCorpusFile       = "eval.toml"
 	evalLegacyCorpusFile = "eval.local.toml"
-	// evalReleaseTimeout bounds closing a case's agents after its round.
-	evalReleaseTimeout = 2 * time.Minute
-	// evalFlagged is the outcome of a case that is not replayed: an earlier
-	// replay of it or of its PR was refused (eval.FlaggedCase), or the live
-	// registry holds a Codex flag for its PR (evalLiveFlag).
-	evalFlagged = "flagged"
+	// evalFlagged is the outcome of a case that is not replayed
+	// (evalrun.Refused).
+	evalFlagged = evalrun.OutcomeFlagged
 )
 
-// evalRunsRoot is where runs live: state/eval/<run id>/.
-func evalRunsRoot(l paths.Layout) string { return filepath.Join(l.State(), "eval") }
+// evalRunsRoot is where runs live: state/eval/<run id>/ (evalrun.RunsRoot).
+func evalRunsRoot(l paths.Layout) string { return evalrun.RunsRoot(l) }
 
 // evalSystem holds the process-level seams of `magnum eval run`.
 type evalSystem struct {
@@ -144,16 +137,18 @@ func newEvalCmd(c *Context) *cobra.Command {
 
 // evalRunFlags are the parsed `magnum eval run` flags.
 type evalRunFlags struct {
-	corpus, label        string
-	cases                []string
-	noNotes, keep, force bool
+	corpus, label, candidate string
+	cases                    []string
+	noNotes, keep, force     bool
 }
 
 func newEvalRunCmd(c *Context) *cobra.Command {
 	var f evalRunFlags
 	cmd := newCommand("", "run "+evalRunUsage, "replay the corpus (or --case ones) and score it",
 		"Replay every case of the corpus (or each --case) one after the other and print the report, compared "+
-			"with the previous run. --label names the run (for example the change it measures). --no-notes "+
+			"with the previous run. --label names the run (for example the change it measures). --candidate replays "+
+			"a directory shaped like magnum's checkout (a worktree with a prompt or skill change): its prompts/ and "+
+			"skills/magnum-review/SKILL.md are read instead of the configured ones, and the run's inputs are theirs. --no-notes "+
 			"withholds the repository notes (by default the judge reads a scratch copy of them). --keep leaves "+
 			"each case's worktree in place. --force runs past the Codex soft cap.",
 		func(pos []string) int {
@@ -166,6 +161,7 @@ func newEvalRunCmd(c *Context) *cobra.Command {
 	fs.StringVar(&f.corpus, "corpus", "", "corpus file (default: "+evalCorpusFile+" next to config.toml)")
 	fs.StringArrayVar(&f.cases, "case", nil, "only this case (repeatable)")
 	fs.StringVar(&f.label, "label", "", "a name for this run")
+	fs.StringVar(&f.candidate, "candidate", "", "replay this directory's prompts/ and judge skill instead of the configured ones")
 	fs.BoolVar(&f.noNotes, "no-notes", false, "do not give the judge the repository notes")
 	fs.BoolVar(&f.keep, "keep", false, "keep each case's worktree")
 	fs.BoolVar(&f.force, "force", false, "run even when the Codex budget is past [usage] codex_soft")
@@ -251,6 +247,15 @@ func runEvalRun(c *Context, f evalRunFlags) int {
 	if err != nil {
 		return cmdFail(c, "eval run", err)
 	}
+	cfg := c.Config
+	if f.candidate != "" {
+		if cfg, err = evalrun.WithCandidate(c.Config, f.candidate); err != nil {
+			return cmdFail(c, "eval run", err)
+		}
+		if f.candidate, err = filepath.Abs(f.candidate); err != nil {
+			return cmdFail(c, "eval run", err)
+		}
+	}
 	ctx, stop := signalContext()
 	defer stop()
 
@@ -261,24 +266,25 @@ func runEvalRun(c *Context, f evalRunFlags) int {
 		return cmdFail(c, "eval run", err)
 	}
 	run := eval.Run{
-		ID: id, Label: f.label, Corpus: path, Started: started,
-		Models: evalModels(c.Config), Inputs: evalInputs(c.Config), NoNotes: f.noNotes, // eval_inputs.go
+		ID: id, Label: f.label, Corpus: path, Started: started, Candidate: f.candidate,
+		Models: evalModels(cfg), Inputs: evalInputs(cfg), NoNotes: f.noNotes, // eval_inputs.go
 	}
-	r := &evalRunner{c: c, cfg: c.Config, flags: f, out: c.Stdout, dir: dir, tag: evalAgentTag(run.ID)}
+	deps := evalrun.Deps{Layout: c.Layout, Config: c.Config, Now: now, Stderr: c.Stderr,
+		Logger:   app.NewLogger(nil, c.Stderr, slog.LevelWarn),
+		Progress: func(format string, args ...any) { fmt.Fprintf(c.Stdout, "      "+format+"\n", args...) },
+		Warn:     func(format string, args ...any) { fmt.Fprintf(c.Stderr, "magnum eval run: "+format+"\n", args...) }}
+	opts := evalrun.Options{Candidate: f.candidate, NoNotes: f.noNotes, Keep: f.keep, Force: f.force, AgentTag: evalAgentTag(run.ID), RunDir: dir}
 	run.Commit, run.Dirty = evalMagnumCommit(ctx, c)
-	fmt.Fprintf(c.Stdout, "eval run %s: %d case(s), corpus %s, results in %s\n", run.ID, len(cases), evalCorpusNames(path, learned), inspTilde(r.dir))
-	flagged, err := eval.LoadFlagged(evalRunsRoot(c.Layout)) // eval/flagged.go: refused replays are never run again
-	if err != nil {
+	fmt.Fprintf(c.Stdout, "eval run %s: %d case(s), corpus %s, results in %s\n", run.ID, len(cases), evalCorpusNames(path, learned), inspTilde(dir))
+	if _, err := eval.LoadFlagged(evalRunsRoot(c.Layout)); err != nil { // eval/flagged.go: refused replays are never run again
 		return cmdFail(c, "eval run", err)
 	}
 	stopped := ""
 	for i, ec := range cases {
 		cr := eval.CaseRun{Case: ec.Name, PR: ec.PR, Head: ec.Head, Started: now()}
 		refused := ""
-		if f, ok := eval.FlaggedCase(flagged, ec); ok {
-			refused = f.Refusal()
-		} else if stopped == "" && ctx.Err() == nil {
-			refused = evalLiveFlag(ctx, c, ec)
+		if stopped == "" && ctx.Err() == nil {
+			refused = evalrun.Refused(ctx, deps, ec)
 		}
 		switch {
 		case stopped != "":
@@ -290,23 +296,17 @@ func runEvalRun(c *Context, f evalRunFlags) int {
 			fmt.Fprintf(c.Stdout, "[%d/%d] %s %s refused: %s\n", i+1, len(cases), ec.Name, ec.PR, cr.Error)
 		default:
 			fmt.Fprintf(c.Stdout, "[%d/%d] %s %s at %s\n", i+1, len(cases), ec.Name, ec.PR, textx.ShortSHA(ec.Head))
-			cr = r.runCase(ctx, ec, cr)
-			if cr.Outcome == pipeline.OutcomeRefused {
-				if err := eval.MarkFlagged(evalRunsRoot(c.Layout), eval.Flagged{Case: ec.Name, PR: ec.PR, Head: ec.Head, Run: run.ID,
-					Reason: cr.Error, At: now()}); err != nil {
-					fmt.Fprintf(c.Stderr, "magnum eval run: %v\n", err)
-				}
-			}
+			cr = evalrun.RunCase(ctx, deps, ec, opts) // it flags a refused replay itself
 			if cr.Outcome == pipeline.OutcomeUsageLimit || cr.Outcome == pipeline.OutcomeLoginRequired {
 				stopped = "an earlier case hit " + cr.Outcome
 			}
-			if cr.Outcome == "budget" {
+			if cr.Outcome == evalrun.OutcomeBudget {
 				stopped = cr.Error
 			}
 		}
 		cr.Finished = now()
 		run.Cases = append(run.Cases, cr)
-		if err := eval.SaveRun(r.dir, run); err != nil {
+		if err := eval.SaveRun(dir, run); err != nil {
 			fmt.Fprintf(c.Stderr, "magnum eval run: saving the run: %v\n", err)
 		}
 		if cr.Outcome != "skipped" && cr.Outcome != evalFlagged {
@@ -314,51 +314,12 @@ func runEvalRun(c *Context, f evalRunFlags) int {
 		}
 	}
 	run.Finished = now()
-	if err := evalWriteReports(r.dir, run); err != nil {
+	if err := evalWriteReports(dir, run); err != nil {
 		return cmdFail(c, "eval run", err)
 	}
 	fmt.Fprintln(c.Stdout)
 	eval.WriteText(c.Stdout, run, evalPrevious(c.Layout, run.ID))
 	return 0
-}
-
-// evalLiveFlag is why case ec is not replayed when the live registry holds a
-// Codex flag for its PR (store.KVPRCodexFlag; "" = none): the flag's
-// sentence, or why the registry could not say, which refuses the case too
-// (a flag that cannot be read counts). The registry is opened read-only,
-// never created; a registry that is not there, or does not know the PR,
-// holds no flag.
-func evalLiveFlag(ctx context.Context, c *Context, ec eval.Case) string {
-	path := c.Layout.DB()
-	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
-		return ""
-	}
-	cannot := func(err error) string {
-		return "the registry cannot say whether Codex flagged " + ec.PR + " (" + err.Error() + "), so the case is not replayed"
-	}
-	db, err := sql.Open("sqlite", registryReadOnlyDSN(path))
-	if err != nil {
-		return cannot(err)
-	}
-	defer db.Close()
-	var id int64
-	err = db.QueryRowContext(ctx, `SELECT p.id FROM prs p JOIN repos r ON r.id = p.repo_id
-WHERE lower(r.owner) = lower(?) AND lower(r.name) = lower(?) AND p.number = ?`, ec.Owner, ec.Repo, ec.Number).Scan(&id)
-	if errors.Is(err, sql.ErrNoRows) {
-		return ""
-	}
-	if err != nil {
-		return cannot(err)
-	}
-	var v string
-	err = db.QueryRowContext(ctx, "SELECT value FROM kv WHERE key = ?", store.KVPRCodexFlag(id)).Scan(&v)
-	if errors.Is(err, sql.ErrNoRows) {
-		return ""
-	}
-	if err != nil {
-		return cannot(err)
-	}
-	return engine.ParseCodexFlag(v).Sentence(ec.PR)
 }
 
 // evalCaseLine is the one-line outcome of a case.
@@ -369,190 +330,6 @@ func evalCaseLine(cr eval.CaseRun) string {
 	}
 	s := cr.Score
 	return fmt.Sprintf("%s after %s: found %d/%d, noise %d, simplifications %d", cr.Outcome, took, s.Found, s.Total, s.Noise, s.Simplifications)
-}
-
-// evalRunner runs the cases of one run.
-type evalRunner struct {
-	c     *Context
-	cfg   *config.Config
-	flags evalRunFlags
-	out   io.Writer
-	dir   string
-	tag   string // the run's agent tag (evalAgentTag)
-}
-
-func (r *evalRunner) progress(format string, args ...any) {
-	fmt.Fprintf(r.out, "      "+format+"\n", args...)
-}
-
-// runCase replays one case and scores it. Every failure becomes the case's
-// outcome; the run goes on with the next case.
-func (r *evalRunner) runCase(ctx context.Context, ec eval.Case, cr eval.CaseRun) (out eval.CaseRun) {
-	fail := func(outcome string, err error) eval.CaseRun {
-		cr.Outcome, cr.Error = outcome, err.Error()
-		return cr
-	}
-	full := ec.Owner + "/" + ec.Repo
-	w := r.cfg.WatchFor(full)
-	if w == nil {
-		return fail("error", fmt.Errorf("%s is not watched: add it to a [[watch]] so magnum knows its roles and identity", full))
-	}
-	if why := r.budget(ctx); why != "" {
-		return fail("budget", errors.New(why))
-	}
-	cr.CodexBefore = evalCodexUsed(ctx, r.cfg) // the points the case uses (eval_inputs.go)
-	defer func() { out.CodexAfter = evalCodexUsed(context.WithoutCancel(ctx), r.cfg) }()
-
-	scratch := filepath.Join(r.dir, "cases", ec.Name)
-	layout := r.c.Layout // logs, locks and the gh config dirs stay the install's
-	layout.Scratch = scratch
-	if err := layout.EnsureDirs(); err != nil {
-		return fail("error", err)
-	}
-	notes := !r.flags.noNotes
-	if notes {
-		if err := evalCopyNotes(r.c.Layout, layout, ec.Owner, ec.Repo); err != nil {
-			return fail("error", fmt.Errorf("copy the repository notes: %w", err))
-		}
-		cr.Notes = evalNotesHashes(layout, ec.Owner, ec.Repo) // eval_inputs.go
-	}
-	a, err := app.New(r.cfg, layout, app.Options{
-		AgentTag: r.tag, Stderr: r.c.Stderr,
-		Logger: app.NewLogger(nil, r.c.Stderr, slog.LevelWarn),
-	})
-	if err != nil {
-		return fail("error", err)
-	}
-	defer a.Close()
-
-	mainClone, err := evalClone(ctx, a, r.cfg, w, ec)
-	if err != nil {
-		return fail("error", err)
-	}
-	gh := a.GitHub(w.PollIdentity)
-	if gh == nil {
-		return fail("error", fmt.Errorf("no GitHub client for poll identity %q", w.PollIdentity))
-	}
-	details, _, err := gh.Details(ctx, ec.Owner, ec.Repo, []int{ec.Number})
-	if err != nil {
-		return fail("error", fmt.Errorf("read %s from GitHub: %w", ec.PR, err))
-	}
-	d, ok := details[ec.Number]
-	if !ok {
-		return fail("error", fmt.Errorf("%s not found on GitHub", ec.PR))
-	}
-	r.progress("fetching %s into %s", ec.Head[:12], inspTilde(mainClone))
-	if err := a.Git.FetchCommit(ctx, mainClone, ec.Head, ec.Number); err != nil {
-		return fail("error", err)
-	}
-	// One path per case across runs: the agents trust the checkout they
-	// start in (Codex's and Claude's own config files), and a new path per
-	// run would add an entry there every time. A worktree left by --keep or
-	// an interrupted run is replaced.
-	worktrees := filepath.Join(evalRunsRoot(r.c.Layout), "wt")
-	wt := filepath.Join(worktrees, ec.Name)
-	if _, err := os.Stat(wt); err == nil {
-		if err := a.Git.WorktreeRemove(ctx, mainClone, wt, true); err != nil {
-			return fail("error", fmt.Errorf("replace the previous worktree %s: %w", inspTilde(wt), err))
-		}
-	}
-	if err := a.Git.WorktreeAdd(ctx, mainClone, wt, ec.Head, true, ""); err != nil {
-		return fail("error", err)
-	}
-	if !r.flags.keep {
-		defer func() {
-			cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
-			defer cancel()
-			if err := a.Git.WorktreeRemove(cctx, mainClone, wt, true); err != nil {
-				fmt.Fprintf(r.c.Stderr, "magnum eval run: removing worktree %s: %v\n", inspTilde(wt), err)
-			}
-		}()
-	}
-
-	e := engine.FromApp(a)
-	r.progress("reviewing in herdr workspace \"eval %s#%d\", agents tagged %s (blind, nothing is posted)", ec.Repo, ec.Number, a.AgentTag)
-	res, pr, runErr := e.RunEval(ctx, engine.EvalCase{
-		Owner: ec.Owner, Repo: ec.Repo, Number: ec.Number, URL: cmp.Or(d.URL, fmt.Sprintf("https://github.com/%s/pull/%d", full, ec.Number)),
-		Head: ec.Head, BaseRef: cmp.Or(ec.Base, d.BaseRefName), DefaultBranch: cmp.Or(ec.Base, d.BaseRefName),
-		Title: d.Title, Author: d.AuthorLogin, AuthorType: d.AuthorType,
-		Checkout: wt, Worktrees: worktrees, MainClone: mainClone, Watch: *w, Identity: w.Identity, Notes: notes,
-	})
-	if pr.ID != 0 {
-		// A judge still at work is interrupted, then the workspace closed;
-		// the error names each workspace that stays open.
-		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), evalReleaseTimeout)
-		if err := e.ReleaseEval(rctx, pr); err != nil {
-			fmt.Fprintf(r.c.Stderr, "magnum eval run: %s: closing the eval agents: %v (close the herdr workspace by hand)\n", ec.Name, err)
-		}
-		cancel()
-	}
-	cr.ReportDir = res.ReportDir
-	cr.Outcome = cmp.Or(res.Outcome, pipeline.OutcomeError)
-	if runErr != nil {
-		cr.Error = runErr.Error()
-	} else if res.Error != "" {
-		cr.Error = res.Error
-	}
-	if res.ReportDir == "" {
-		return cr
-	}
-	cr.ResultFile = filepath.Join(res.ReportDir, evalJudgeReport(r.cfg, w))
-	data, err := os.ReadFile(cr.ResultFile)
-	if err != nil {
-		cr.Error = cmp.Or(cr.Error, "no judge result: "+err.Error())
-		return cr
-	}
-	result, err := eval.ParseResult(data)
-	if err != nil {
-		cr.Error = cmp.Or(cr.Error, err.Error())
-		return cr
-	}
-	score := eval.ScoreCase(ec, result)
-	cr.Score = &score
-	return cr
-}
-
-// budget says why no case may start now ("" = it may): the Codex budget at
-// or past [usage] codex_soft, which real reviews need more, unless --force.
-func (r *evalRunner) budget(ctx context.Context) string {
-	soft := r.cfg.Usage.CodexSoft
-	if r.flags.force || soft <= 0 {
-		return ""
-	}
-	snap, err := usage.Codex(ctx, r.cfg.Usage.CodexHome, time.Now())
-	if err != nil {
-		return "" // no gauge: the round's own health checks stop at a limit
-	}
-	if used := snap.Used(); used >= soft {
-		return fmt.Sprintf("Codex budget at %.0f%%, past [usage] codex_soft %.0f%%: real reviews come first (--force to run anyway)", used, soft)
-	}
-	return ""
-}
-
-// evalClone is the clone a case's worktree is added to: the pool's main
-// clone, else the existing clone under the watch's clone_root. eval never
-// clones.
-func evalClone(ctx context.Context, a *app.App, cfg *config.Config, w *config.Watch, ec eval.Case) (string, error) {
-	full := ec.Owner + "/" + ec.Repo
-	if p := cfg.PoolFor(full); p != nil {
-		return p.MainClone, nil
-	}
-	dir, err := a.Git.FindClone(ctx, w.CloneRoot, ec.Owner, ec.Repo)
-	if err != nil {
-		return "", fmt.Errorf("no clone of %s under %s: %w\nfix: gh repo clone %s %s", full, inspTilde(w.CloneRoot), err,
-			full, filepath.Join(inspTilde(w.CloneRoot), ec.Repo))
-	}
-	return dir, nil
-}
-
-// evalJudgeReport is the file name of the watch's judge result.
-func evalJudgeReport(cfg *config.Config, w *config.Watch) string {
-	for _, role := range cfg.RolesFor(w) {
-		if role.Judge {
-			return role.ReportFile()
-		}
-	}
-	return "codex-judge.json"
 }
 
 // evalModels records each configured role's model ("" = its kind's default).
@@ -581,50 +358,6 @@ func evalMagnumCommit(ctx context.Context, c *Context) (string, bool) {
 	}
 	st, err := g.StatusPaths(ctx, c.Layout.Home)
 	return sha[:min(7, len(sha))], err == nil && len(st) > 0
-}
-
-// evalCopyNotes copies the live notes of owner/repo (the .md file and its
-// harness directory) into the scratch layout, so the judge reads what a real
-// round would and its rewrite stays in the scratch tree. No notes: nothing.
-func evalCopyNotes(live, scratch paths.Layout, owner, repo string) error {
-	src, dst := engine.NotesPath(live, owner, repo), engine.NotesPath(scratch, owner, repo)
-	if src == "" || dst == "" {
-		return nil
-	}
-	if err := evalCopyFile(src, dst); err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil
-		}
-		return err
-	}
-	srcDir, dstDir := engine.NotesDir(live, owner, repo), engine.NotesDir(scratch, owner, repo)
-	return filepath.WalkDir(srcDir, func(p string, de fs.DirEntry, err error) error {
-		if err != nil {
-			if errors.Is(err, fs.ErrNotExist) {
-				return nil
-			}
-			return err
-		}
-		rel, _ := filepath.Rel(srcDir, p)
-		if de.IsDir() {
-			return os.MkdirAll(filepath.Join(dstDir, rel), 0o700)
-		}
-		if !de.Type().IsRegular() {
-			return nil
-		}
-		return evalCopyFile(p, filepath.Join(dstDir, rel))
-	})
-}
-
-func evalCopyFile(src, dst string) error {
-	b, err := os.ReadFile(src)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
-		return err
-	}
-	return os.WriteFile(dst, b, 0o600)
 }
 
 // evalWriteReports saves run.json and report.md.

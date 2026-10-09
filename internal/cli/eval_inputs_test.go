@@ -1,14 +1,11 @@
 package cli
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 
 	"github.com/zhuravel/magnum/internal/config"
-	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/eval"
-	"github.com/zhuravel/magnum/internal/paths"
 )
 
 // The inputs a replay records name what its review read besides the PR and the notes: the judge
@@ -79,29 +76,5 @@ func TestEvalBaselineNamesTheStoredReplaysWithTheSameInputs(t *testing.T) {
 	}
 	if runs, err := eval.ListRuns(root); err != nil || len(runs) != 3 {
 		t.Fatalf("runs after eval baseline: %d, %v; want the 3 stored ones", len(runs), err)
-	}
-}
-
-// A case records the hashes of the notes its judge reads, from the scratch copy, and the Codex
-// gauge as the account's newest session reports it.
-func TestEvalRecordsTheNotesAndTheCodexGauge(t *testing.T) {
-	scratch := paths.Layout{Home: t.TempDir(), Scratch: t.TempDir()}
-	writeEvalFile(t, engine.NotesPath(scratch, "example", "web"), "# Notes")
-	writeEvalFile(t, filepath.Join(engine.NotesDir(scratch, "example", "web"), "qa.sh"), "echo qa")
-	got := evalNotesHashes(scratch, "example", "web")
-	if len(got) != 2 || got["web.md"] == "" || got["web/qa.sh"] == "" {
-		t.Fatalf("notes hashes %v", got)
-	}
-
-	cfg := &config.Config{}
-	cfg.Usage.CodexHome = t.TempDir()
-	if p := evalCodexUsed(context.Background(), cfg); p != nil {
-		t.Fatalf("no sessions: gauge %v", *p)
-	}
-	writeEvalFile(t, filepath.Join(cfg.Usage.CodexHome, "sessions", "2026", "10", "08", "rollout-2026-10-08T10-00-00-x.jsonl"),
-		`{"timestamp":"2026-10-08T07:00:00.000Z","type":"event_msg","payload":{"type":"token_count","rate_limits":`+
-			`{"primary":{"used_percent":31.0,"window_minutes":10080,"resets_at":4102444800},"secondary":null}}}`+"\n")
-	if p := evalCodexUsed(context.Background(), cfg); p == nil || *p != 31 {
-		t.Fatalf("gauge %v, want 31", p)
 	}
 }

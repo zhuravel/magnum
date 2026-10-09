@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,8 +8,9 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/agents"
-	"github.com/zhuravel/magnum/internal/engine"
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/eval"
+	"github.com/zhuravel/magnum/internal/evalrun"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -83,6 +83,59 @@ func TestEvalRunReadsTheLearnedCorpusAfterTheOperators(t *testing.T) {
 	}
 }
 
+// A candidate's prompts and skill are what its replay reads, so the inputs a run records are the
+// candidate's: other texts are another hash, the same texts in another directory the same one (a
+// baseline matches by content). `eval run --candidate` records the directory and those inputs, and
+// refuses a directory without the skill before any case.
+func TestEvalRunCandidateFlagChangesTheInputsHash(t *testing.T) {
+	f := newInspFixture(t)
+	if err := f.Ctx.LoadConfig(); err != nil {
+		t.Fatal(err)
+	}
+	cfg := f.Ctx.Config
+	judge := cfg.JudgeFor(nil).PromptFile(config.PromptInitial)
+	cand := func(skill string) string {
+		dir := t.TempDir()
+		writeEvalFile(t, filepath.Join(dir, "prompts", judge), "Review {{.URL}} as the candidate.\n")
+		writeEvalFile(t, filepath.Join(dir, evalrun.CandidateSkill), skill)
+		return dir
+	}
+	inputs := func(dir string) string {
+		c, err := evalrun.WithCandidate(cfg, dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return evalInputs(c)
+	}
+	a, b, sameAsA := cand("# Skill A\n"), cand("# Skill B\n"), cand("# Skill A\n")
+	if base := evalInputs(cfg); base == inputs(a) || inputs(a) == inputs(b) || inputs(a) != inputs(sameAsA) {
+		t.Fatalf("inputs: checkout %s, A %s, B %s, A elsewhere %s", base, inputs(a), inputs(b), inputs(sameAsA))
+	}
+	writeEvalFile(t, filepath.Join(cfg.Pipeline.PromptsDir, judge), "Review {{.URL}} as the candidate.\n")
+	writeEvalFile(t, f.Ctx.Layout.Skill(), "# Skill A\n")
+	if base := evalInputs(cfg); base != inputs(a) || base != inputs(f.Ctx.Layout.Home) {
+		t.Fatalf("the checkout with A's texts: %s, A %s, the checkout as a candidate %s", base, inputs(a), inputs(f.Ctx.Layout.Home))
+	}
+
+	corpus := evalCorpusOf(t, "oauth-session", "example/widgets#3")
+	if err := eval.MarkFlagged(evalRunsRoot(f.Ctx.Layout), eval.Flagged{Case: "oauth-session", PR: "example/widgets#3", Run: "20261007-134000",
+		Reason: "Codex refused"}); err != nil {
+		t.Fatal(err)
+	}
+	if code := execute(f.Ctx, []string{"eval", "run", "--corpus", corpus, "--candidate", a}); code != 0 {
+		t.Fatalf("exit %d; stderr %s", code, f.Err)
+	}
+	runs, err := eval.ListRuns(evalRunsRoot(f.Ctx.Layout))
+	if err != nil || len(runs) != 1 || runs[0].Candidate != a || runs[0].Inputs != inputs(a) {
+		t.Fatalf("runs %+v, %v; want the candidate %s with inputs %s", runs, err, a, inputs(a))
+	}
+	f.Err.Reset()
+	if code := execute(f.Ctx, []string{"eval", "run", "--corpus", corpus, "--candidate", t.TempDir()}); code != 1 ||
+		!strings.Contains(f.Err.String(), "prompts") {
+		t.Fatalf("a directory that is no candidate: exit %d; stderr %s", code, f.Err)
+	}
+}
+
 // evalCorpusOf writes a corpus of one case, name on pr, and returns its path.
 func evalCorpusOf(t *testing.T, name, pr string) string {
 	t.Helper()
@@ -127,56 +180,6 @@ func TestEvalRunRefusesACaseWhosePRIsFlagged(t *testing.T) {
 	if out := f.Out.String(); !strings.Contains(out, "session-renamed example/gadgets#5 refused: flagged in run 20261007-134000") ||
 		strings.Contains(out, "[[watch]]") {
 		t.Fatalf("output:\n%s", out)
-	}
-}
-
-// A case of an unwatched repository fails before anything is checked out or
-// started: magnum would not know its roles or identity.
-func TestEvalCaseOfAnUnwatchedRepoFailsFirst(t *testing.T) {
-	f := newInspFixture(t)
-	if err := f.Ctx.LoadConfig(); err != nil {
-		t.Fatal(err)
-	}
-	r := &evalRunner{c: f.Ctx, cfg: f.Ctx.Config, out: f.Out, dir: t.TempDir()}
-	ec := eval.Case{Name: "x", PR: "example/widgets#3", Owner: "example", Repo: "widgets", Number: 3, Head: strings.Repeat("ab", 20)}
-	cr := r.runCase(context.Background(), ec, eval.CaseRun{Case: "x"})
-	if cr.Outcome != "error" || !strings.Contains(cr.Error, "[[watch]]") {
-		t.Fatalf("case run %+v", cr)
-	}
-	if _, err := os.Stat(filepath.Join(r.dir, "cases")); !os.IsNotExist(err) {
-		t.Fatalf("scratch tree created for an unwatched case: %v", err)
-	}
-}
-
-// The judge gets a copy of the repository notes and their harness scripts in
-// the scratch tree, so its rewrite never reaches the live notes; a
-// repository without notes is not an error.
-func TestEvalCopiesTheNotesIntoTheScratchTree(t *testing.T) {
-	home := t.TempDir()
-	live, scratch := paths.Layout{Home: home}, paths.Layout{Home: home, Scratch: t.TempDir()}
-	if err := evalCopyNotes(live, scratch, "talkable", "talkable"); err != nil {
-		t.Fatalf("no notes: %v", err)
-	}
-	src, dir := engine.NotesPath(live, "talkable", "talkable"), engine.NotesDir(live, "talkable", "talkable")
-	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	for p, body := range map[string]string{src: "# Notes", filepath.Join(dir, "sub", "qa.sh"): "echo qa"} {
-		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := evalCopyNotes(live, scratch, "talkable", "talkable"); err != nil {
-		t.Fatal(err)
-	}
-	dst := engine.NotesPath(scratch, "talkable", "talkable")
-	if !strings.HasPrefix(dst, scratch.Scratch) {
-		t.Fatalf("scratch notes at %s", dst)
-	}
-	for p, want := range map[string]string{dst: "# Notes", filepath.Join(engine.NotesDir(scratch, "talkable", "talkable"), "sub", "qa.sh"): "echo qa"} {
-		if b, err := os.ReadFile(p); err != nil || string(b) != want {
-			t.Errorf("%s: %q, %v", p, b, err)
-		}
 	}
 }
 

@@ -236,6 +236,17 @@ func pruneSkillCopies(dir string, keep map[string]snapSkill, now time.Time) {
 // prompts are read from disk (every CLI command).
 func (c *Config) PromptSnapshot() *PromptSnapshot { return c.snapshot }
 
+// WithoutSnapshot is a copy of c that reads its prompts and judge skills
+// from disk, as the CLI does, whatever the daemon loaded at startup (a
+// candidate replay reads another directory's), with its own Roles slice
+// (the normalized roles, RolesFor(nil)) for the caller to change.
+func (c *Config) WithoutSnapshot() *Config {
+	cp := *c
+	cp.snapshot = nil
+	cp.Roles = c.RolesFor(nil)
+	return &cp
+}
+
 // SkillFile is the file a judge prompt names for the skill at src
 // (SkillPath): its startup copy when the daemon's snapshot holds one, else
 // src itself.
