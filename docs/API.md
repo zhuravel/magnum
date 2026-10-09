@@ -5031,9 +5031,11 @@ type ClassifyJob struct {
 	// ReviewedSHAs are the commits magnum reviewed, oldest first.
 	ReviewedSHAs []string
 	// Candidates are the candidates file's, for checking the answer, and
-	// Rejected its rejected findings, which the answer may name.
+	// Rejected its rejected findings, which the answer may name; Threads
+	// are its own threads, each of which the answer must classify.
 	Candidates []learn.Candidate
 	Rejected   []learn.Rejected
+	Threads    []learn.OwnThread
 }
     ClassifyJob is one PR's candidates for a Classifier: Dir holds
     CandidatesPath (learn.Candidates) and the commented files (learn.FilePath);
@@ -5632,6 +5634,10 @@ type RetroSummary struct {
 	Caught     int       `json:"caught"`     // comments magnum had already posted
 	Failed     int       `json:"failed"`     // PRs that failed
 	Stopped    string    `json:"stopped,omitempty"`
+	// Declines counts the answers to magnum's own findings it stored
+	// (store.Decline), Declined those the author declined or argued.
+	Declines int `json:"declines,omitempty"`
+	Declined int `json:"declined,omitempty"`
 }
     RetroSummary is what the last retro did (KVRetroLast).
 

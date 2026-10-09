@@ -4,14 +4,17 @@ package engine
 // magnum reviewed closes, the comments other reviewers made on it are
 // collected, what magnum already posted is dropped (internal/learn), the
 // rest is written to a directory with the commented files, a Classifier
-// sorts it, and every comment becomes a row of the misses table. It runs in
-// its own goroutine, one at a time, once a day after [learn] daily_at when
-// [learn] enabled, or whenever `magnum retro` asks (ReqRetro), and takes a PR
-// only once it closed [learn] settle ago (unless `magnum retro <ref>` names
-// it), so the reviews posted right after a merge are in. A miss for the
-// repository's notes (class miss, scope repo) marks the repository for its
-// next notes curation (KVNotesMisses, notes_curate.go). Comment text stays in
-// the retro's files and the registry: no event or log line carries it.
+// sorts it, and every comment becomes a row of the misses table, every
+// finding of magnum's that someone answered a row of declines
+// (retro_declines.go). It runs in its own goroutine, one at a time, once a
+// day after [learn] daily_at when [learn] enabled, or whenever `magnum
+// retro` asks (ReqRetro), and takes a PR only once it closed [learn] settle
+// ago (unless `magnum retro <ref>` names it), so the reviews posted right
+// after a merge are in. A miss for the repository's notes (class miss,
+// scope repo) marks the repository for its next notes curation
+// (KVNotesMisses, notes_curate.go). Comment text stays in the retro's files
+// and the registry, reply text in the files only: no event or log line
+// carries either.
 
 import (
 	"cmp"
@@ -80,6 +83,10 @@ type RetroSummary struct {
 	Caught     int       `json:"caught"`     // comments magnum had already posted
 	Failed     int       `json:"failed"`     // PRs that failed
 	Stopped    string    `json:"stopped,omitempty"`
+	// Declines counts the answers to magnum's own findings it stored
+	// (store.Decline), Declined those the author declined or argued.
+	Declines int `json:"declines,omitempty"`
+	Declined int `json:"declined,omitempty"`
 }
 
 // RetroRun is one retro: its id and directory (learn/retro/<id>).
@@ -101,9 +108,11 @@ type ClassifyJob struct {
 	// ReviewedSHAs are the commits magnum reviewed, oldest first.
 	ReviewedSHAs []string
 	// Candidates are the candidates file's, for checking the answer, and
-	// Rejected its rejected findings, which the answer may name.
+	// Rejected its rejected findings, which the answer may name; Threads
+	// are its own threads, each of which the answer must classify.
 	Candidates []learn.Candidate
 	Rejected   []learn.Rejected
+	Threads    []learn.OwnThread
 }
 
 // ClassifyResult is how a Classifier's turn ended, besides its error.
@@ -365,8 +374,9 @@ func (e *Engine) runRetro(ctx context.Context, spec retroSpec) {
 	}()
 
 	withCandidates := 0
-	offline := false               // GitHub could not be reached
-	repoMisses := map[string]int{} // repository -> its misses for the notes
+	offline := false                 // GitHub could not be reached
+	repoMisses := map[string]int{}   // repository -> its misses for the notes
+	repoDeclines := map[string]int{} // repository -> its declines routed to the notes
 	for _, pr := range prs {
 		if ctx.Err() != nil || withCandidates >= e.cfg.Learn.MaxPRs {
 			break
@@ -379,10 +389,15 @@ func (e *Engine) runRetro(ctx context.Context, spec retroSpec) {
 		sum.PRs++
 		sum.Misses += o.misses
 		sum.Caught += o.caught
+		sum.Declines += o.declines
+		sum.Declined += o.declined
 		if o.repoMisses > 0 {
 			repoMisses[o.repo] += o.repoMisses
 		}
-		if o.candidates > 0 {
+		if o.repoDeclines > 0 {
+			repoDeclines[o.repo] += o.repoDeclines
+		}
+		if o.candidates > 0 || o.threads > 0 {
 			withCandidates++
 		}
 		switch o.status {
@@ -401,9 +416,15 @@ func (e *Engine) runRetro(ctx context.Context, spec retroSpec) {
 	if b, err := json.Marshal(sum); err == nil && !shutdown {
 		e.setKV(context.WithoutCancel(ctx), KVRetroLast, string(b))
 	}
-	e.markRepoMisses(context.WithoutCancel(ctx), run, repoMisses)
+	e.markRepoMisses(context.WithoutCancel(ctx), run, repoMisses, repoDeclines)
 	msg = fmt.Sprintf("retro %s: %d PR(s), %d classified, %d miss(es), %d already caught, %d failed",
 		run.ID, sum.PRs, sum.Classified, sum.Misses, sum.Caught, sum.Failed)
+	data = map[string]any{"run": run.ID, "prs": sum.PRs, "classified": sum.Classified, "misses": sum.Misses, "caught": sum.Caught,
+		"failed": sum.Failed}
+	if sum.Declines > 0 {
+		msg += fmt.Sprintf(", %d answered finding(s), %d declined", sum.Declines, sum.Declined)
+		data["declines"], data["declined"] = sum.Declines, sum.Declined
+	}
 	switch {
 	case shutdown:
 		msg += "; stopped by the daemon's shutdown (neither done nor failed: the PRs not reached stay due)"
@@ -417,8 +438,7 @@ func (e *Engine) runRetro(ctx context.Context, spec retroSpec) {
 	if sum.Failed > 0 || (sum.Stopped != "" && !shutdown) {
 		level = "warn"
 	}
-	e.event(context.WithoutCancel(ctx), level, "", "retro.done", msg, map[string]any{"run": run.ID, "prs": sum.PRs,
-		"classified": sum.Classified, "misses": sum.Misses, "caught": sum.Caught, "failed": sum.Failed})
+	e.event(context.WithoutCancel(ctx), level, "", "retro.done", msg, data)
 	switch {
 	case !spec.daily || ctx.Err() != nil:
 	case offline:
@@ -440,22 +460,36 @@ type retroOutcome struct {
 	// offline: the stop is GitHub's (it could not be reached).
 	offline bool
 	// repoMisses counts the misses stored for the notes of repo (class
-	// miss, scope repo, still new).
-	repoMisses int
-	repo       string
+	// miss, scope repo, still new), repoDeclines the declines routed there
+	// (declinesForNotes).
+	repoMisses   int
+	repoDeclines int
+	repo         string
+	// threads counts magnum's own threads someone answered; declines the
+	// answers stored, declined those the author declined or argued.
+	threads, declines, declined int
 }
 
 // markRepoMisses marks every repository a retro stored misses for its
-// notes of (KVNotesMisses), once the retro is over, so the curation they
-// trigger starts after it and takes them all; a notes.misses event says
-// how many.
-func (e *Engine) markRepoMisses(ctx context.Context, run RetroRun, counts map[string]int) {
-	for _, full := range slices.Sorted(maps.Keys(counts)) {
-		n := counts[full]
+// notes of (KVNotesMisses), the comments' (misses) and the declined
+// findings' that need the repository's context (declines, routeDecline),
+// once the retro is over, so the curation they trigger starts after it and
+// takes them all; a notes.misses event says how many.
+func (e *Engine) markRepoMisses(ctx context.Context, run RetroRun, misses, declines map[string]int) {
+	repos := map[string]int{}
+	maps.Copy(repos, misses)
+	maps.Copy(repos, declines)
+	for _, full := range slices.Sorted(maps.Keys(repos)) {
+		n, d := misses[full]+declines[full], declines[full]
+		what := textx.Count(n, "miss", "misses")
+		data := map[string]any{"run": run.ID, "misses": n}
+		if d > 0 {
+			what += " (" + textx.Count(d, "from a declined finding", "from declined findings") + ")"
+			data["declines"] = d
+		}
 		e.setKV(ctx, KVNotesMisses(full), store.FormatTime(e.now()))
 		e.event(ctx, "info", notesSubjectOf(full), "notes.misses",
-			fmt.Sprintf("retro %s: %s for the notes of %s; its next notes curation takes them", run.ID, textx.Count(n, "miss", "misses"), full),
-			map[string]any{"run": run.ID, "misses": n})
+			fmt.Sprintf("retro %s: %s for the notes of %s; its next notes curation takes them", run.ID, what, full), data)
 	}
 }
 
@@ -515,7 +549,7 @@ func (e *Engine) retroPR(ctx context.Context, run RetroRun, pr store.PR, classif
 	}
 	e.event(ctx, "info", subject, "retro.begin", fmt.Sprintf("retro %s: reading what other reviewers said", run.ID), nil)
 
-	in, gh, err := e.retroInput(ctx, repo, pr)
+	in, runs, gh, err := e.retroInput(ctx, repo, pr)
 	if err != nil {
 		return readFail(retroOutcome{}, err)
 	}
@@ -523,26 +557,29 @@ func (e *Engine) retroPR(ctx context.Context, run RetroRun, pr store.PR, classif
 	if err != nil {
 		return readFail(retroOutcome{}, err)
 	}
-	o := retroOutcome{candidates: len(res.Candidates), caught: res.Caught, repo: repo.FullName()}
+	o := retroOutcome{candidates: len(res.Candidates), threads: len(res.Threads), caught: res.Caught, repo: repo.FullName()}
 	for _, c := range res.Outside {
 		e.storeMiss(ctx, subject, pr, c, learn.Item{Class: store.MissOutside})
 	}
 	counts := map[string]any{"candidates": len(res.Candidates), "outside": len(res.Outside), "caught": res.Caught, "dropped": res.Dropped}
-	if len(res.Candidates) == 0 {
+	if len(res.Threads) > 0 {
+		counts["threads"] = len(res.Threads)
+	}
+	if len(res.Candidates) == 0 && len(res.Threads) == 0 {
 		o.status = store.RetroNothing
 		e.event(ctx, "info", subject, "retro.ok", fmt.Sprintf("retro: nothing to classify (%d outside, %d caught, %d dropped)",
 			len(res.Outside), res.Caught, res.Dropped), counts)
 		return record(o, "")
 	}
 
-	job, err := e.retroFiles(ctx, run, repo, pr, gh, in.Reviewed, res.Candidates, res.Rejected)
+	job, err := e.retroFiles(ctx, run, repo, pr, gh, in.Reviewed, res.Candidates, res.Rejected, res.Threads)
 	if err != nil {
 		if ctx.Err() == nil {
 			e.storeCandidates(ctx, subject, repo, pr, in.Own, res.Candidates, nil)
 		}
 		return fail(o, err)
 	}
-	items, why := map[string]learn.Item(nil), error(nil)
+	items, threadItems, why := map[string]learn.Item(nil), map[string]learn.ThreadItem(nil), error(nil)
 	o.status = store.RetroUnclassified
 	cl, err := classifier()
 	switch {
@@ -571,7 +608,7 @@ func (e *Engine) retroPR(ctx context.Context, run RetroRun, pr store.PR, classif
 				why = fmt.Errorf("the classifier wrote no %s", learn.OutputFile)
 				break
 			}
-			if items, _, rerr = learn.ParseOutput(data, res.Candidates, res.Rejected, nil); rerr != nil {
+			if items, threadItems, rerr = learn.ParseOutput(data, res.Candidates, res.Rejected, res.Threads); rerr != nil {
 				why = fmt.Errorf("%s is invalid: %w", learn.OutputFile, rerr)
 				break
 			}
@@ -585,6 +622,14 @@ func (e *Engine) retroPR(ctx context.Context, run RetroRun, pr store.PR, classif
 			o.misses++
 		}
 	}
+	// Only a classified answer is stored: a decline is the classifier's
+	// outcome, and an own thread has nothing to store without one.
+	stored, declined, derr := e.storeDeclines(ctx, pr, res.Threads, threadItems, runs)
+	if derr != nil {
+		e.log.Warn("retro: store the declines", "subject", subject, "err", derr)
+	}
+	o.declines, o.declined = stored, declined
+	o.repoDeclines = e.declinesForNotes(ctx, pr, res.Threads, threadItems)
 	if why != nil {
 		return fail(o, why)
 	}
@@ -592,14 +637,28 @@ func (e *Engine) retroPR(ctx context.Context, run RetroRun, pr store.PR, classif
 	if o.repoMisses > 0 {
 		counts["repo_misses"] = o.repoMisses
 	}
+	if o.repoDeclines > 0 {
+		counts["repo_declines"] = o.repoDeclines
+	}
+	if len(res.Threads) > 0 {
+		counts["declines"], counts["declined"] = o.declines, o.declined
+	}
 	if len(rejected) > 0 {
 		counts["lesson_rejected"] = rejected
 	}
 	msg := fmt.Sprintf("retro: %d candidate(s) left unclassified (%d outside, %d caught, %d dropped)",
 		len(res.Candidates), len(res.Outside), res.Caught, res.Dropped)
+	if len(res.Threads) > 0 {
+		msg = fmt.Sprintf("retro: %d candidate(s) and %d answered finding(s) left unclassified (%d outside, %d caught, %d dropped)",
+			len(res.Candidates), len(res.Threads), len(res.Outside), res.Caught, res.Dropped)
+	}
 	if o.status == store.RetroClassified {
-		msg = fmt.Sprintf("retro: %d candidate(s) classified, %d miss(es) (%d outside, %d caught, %d dropped)",
-			len(res.Candidates), o.misses, len(res.Outside), res.Caught, res.Dropped)
+		answered := ""
+		if len(res.Threads) > 0 {
+			answered = fmt.Sprintf(", %d answered finding(s), %d declined", o.declines, o.declined)
+		}
+		msg = fmt.Sprintf("retro: %d candidate(s) classified, %d miss(es)%s (%d outside, %d caught, %d dropped)",
+			len(res.Candidates), o.misses, answered, len(res.Outside), res.Caught, res.Dropped)
 		if len(rejected) > 0 {
 			msg += fmt.Sprintf("; %d lesson(s) rejected (lesson_rejected)", len(rejected))
 		}
@@ -610,43 +669,37 @@ func (e *Engine) retroPR(ctx context.Context, run RetroRun, pr store.PR, classif
 
 // retroInput reads what learn.Build needs about pr: its threads and every
 // review (as the watch's poll identity), the commits magnum posted reviews
-// of, magnum's logins and the judge's findings.
-func (e *Engine) retroInput(ctx context.Context, repo store.Repo, pr store.PR) (learn.Input, RetroGitHub, error) {
+// of and the run that posted each, magnum's logins and the judge's
+// findings. It returns pr's runs too (storeDeclines reads them).
+func (e *Engine) retroInput(ctx context.Context, repo store.Repo, pr store.PR) (learn.Input, []store.Run, RetroGitHub, error) {
 	w := e.cfg.WatchFor(repo.FullName())
 	if w == nil {
-		return learn.Input{}, nil, fmt.Errorf("%s is not watched (no [[watch]] covers it)", repo.FullName())
+		return learn.Input{}, nil, nil, fmt.Errorf("%s is not watched (no [[watch]] covers it)", repo.FullName())
 	}
 	gh := e.gh(w.PollIdentity)
 	rg, ok := gh.(RetroGitHub)
 	if gh == nil || !ok {
-		return learn.Input{}, nil, fmt.Errorf("no GitHub client that reads reviews for poll identity %q", w.PollIdentity)
+		return learn.Input{}, nil, nil, fmt.Errorf("no GitHub client that reads reviews for poll identity %q", w.PollIdentity)
 	}
 	runs, err := e.st.RunsByPR(ctx, pr.ID)
 	if err != nil {
-		return learn.Input{}, nil, err
+		return learn.Input{}, nil, nil, err
 	}
 	findings, err := e.st.FindingsByPR(ctx, pr.ID)
 	if err != nil {
-		return learn.Input{}, nil, err
+		return learn.Input{}, nil, nil, err
 	}
 	in := learn.Input{
 		Author:   github.Account(deref(pr.AuthorLogin), deref(pr.AuthorType)),
+		Own:      e.retroOwnLogins(pr, runs),
 		Findings: findings, MinChars: e.cfg.Learn.MinCommentChars, IncludeBots: e.cfg.Learn.IncludeBots,
+		ReviewRuns: map[int64]string{},
 	}
-	own := func(l string) {
-		if l != "" && !slices.ContainsFunc(in.Own, func(o string) bool { return github.SameAccount(o, l) }) {
-			in.Own = append(in.Own, l)
-		}
-	}
-	for _, id := range e.cfg.Identities {
-		own(id.Login)
-	}
-	own(deref(pr.LastReviewLogin))
 	for _, r := range runs {
-		own(r.ReviewerLogin)
 		if r.ReviewID == nil {
 			continue
 		}
+		in.ReviewRuns[*r.ReviewID] = r.ID
 		at := r.CreatedAt
 		for _, t := range []*time.Time{r.SubmittedAt, r.EndedAt, r.VerifiedAt} {
 			if t != nil {
@@ -661,10 +714,10 @@ func (e *Engine) retroInput(ctx context.Context, repo store.Repo, pr store.PR) (
 	}
 	slices.SortStableFunc(in.Reviewed, func(a, b learn.Reviewed) int { return a.At.Compare(b.At) })
 	if in.Threads, err = rg.ReviewThreads(ctx, repo.Owner, repo.Name, pr.Number); err != nil {
-		return learn.Input{}, nil, err
+		return learn.Input{}, nil, nil, err
 	}
 	if in.Reviews, err = rg.Reviews(ctx, repo.Owner, repo.Name, pr.Number); err != nil {
-		return learn.Input{}, nil, err
+		return learn.Input{}, nil, nil, err
 	}
 	in.Compare = func(from, to string) (learn.Comparison, error) {
 		status, files, err := rg.CompareFilesStatus(ctx, repo.Owner, repo.Name, from, to)
@@ -680,16 +733,37 @@ func (e *Engine) retroInput(ctx context.Context, repo store.Repo, pr store.PR) (
 		}
 		return cmp, nil
 	}
-	return in, rg, nil
+	return in, runs, rg, nil
+}
+
+// retroOwnLogins are magnum's logins on pr in Account form, each once: every
+// configured identity's, the last review's and the ones pr's runs posted
+// as.
+func (e *Engine) retroOwnLogins(pr store.PR, runs []store.Run) []string {
+	var out []string
+	add := func(l string) {
+		if l != "" && !slices.ContainsFunc(out, func(o string) bool { return github.SameAccount(o, l) }) {
+			out = append(out, l)
+		}
+	}
+	for _, id := range e.cfg.Identities {
+		add(id.Login)
+	}
+	add(deref(pr.LastReviewLogin))
+	for _, r := range runs {
+		add(r.ReviewerLogin)
+	}
+	return out
 }
 
 // retroFiles writes the PR's retro directory, run/<owner>/<repo>/<N>/: each
 // commented file at its reviewed commit under files/ (skipped, and said so
 // in the candidate, when GitHub has no copy or it is above
-// github.FileAtLimit) and candidates.json with the rejected findings, every
-// write confined to the directory (os.Root): the paths come from GitHub.
+// github.FileAtLimit) and candidates.json with the rejected findings and
+// magnum's own answered threads (replies included), every write confined to
+// the directory (os.Root): the paths come from GitHub.
 func (e *Engine) retroFiles(ctx context.Context, run RetroRun, repo store.Repo, pr store.PR, gh RetroGitHub,
-	reviewed []learn.Reviewed, cands []learn.Candidate, rejected []learn.Rejected) (ClassifyJob, error) {
+	reviewed []learn.Reviewed, cands []learn.Candidate, rejected []learn.Rejected, threads []learn.OwnThread) (ClassifyJob, error) {
 	dir := filepath.Join(run.Dir, repo.Owner, repo.Name, strconv.Itoa(pr.Number))
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return ClassifyJob{}, err
@@ -699,8 +773,8 @@ func (e *Engine) retroFiles(ctx context.Context, run RetroRun, repo store.Repo, 
 		return ClassifyJob{}, err
 	}
 	defer root.Close()
-	cands = slices.Clone(cands)
-	fetched := map[string]string{} // FilePath -> why it was skipped ("" = written)
+	cands = append([]learn.Candidate{}, cands...) // a list, even when only own threads are classified
+	fetched := map[string]string{}                // FilePath -> why it was skipped ("" = written)
 	for i := range cands {
 		c := &cands[i]
 		if c.Path == "" {
@@ -723,7 +797,7 @@ func (e *Engine) retroFiles(ctx context.Context, run RetroRun, repo store.Repo, 
 		shas = append(shas, r.SHA)
 	}
 	b, err := json.MarshalIndent(learn.Candidates{PR: pr.URL, ReviewedSHAs: shas, FilesDir: learn.FilesDir, Candidates: cands,
-		Rejected: rejected}, "", "  ")
+		Rejected: rejected, Threads: threads}, "", "  ")
 	if err != nil {
 		return ClassifyJob{}, err
 	}
@@ -731,7 +805,7 @@ func (e *Engine) retroFiles(ctx context.Context, run RetroRun, repo store.Repo, 
 		return ClassifyJob{}, err
 	}
 	return ClassifyJob{Dir: dir, CandidatesPath: filepath.Join(dir, learn.CandidatesFile), OutputPath: filepath.Join(dir, learn.OutputFile),
-		PR: pr, Repo: repo, ReviewedSHAs: shas, Candidates: cands, Rejected: rejected}, nil
+		PR: pr, Repo: repo, ReviewedSHAs: shas, Candidates: cands, Rejected: rejected, Threads: threads}, nil
 }
 
 // retroFetch copies path at sha to rel inside root; it returns why it did

@@ -222,18 +222,19 @@ func (c *paneClassifier) Classify(ctx context.Context, job ClassifyJob) (Classif
 }
 
 // answered reads job's answer file: whether it is missing, and whether it
-// is a valid answer for job's candidates.
+// is a valid answer for job's candidates and own threads.
 func answered(job ClassifyJob) (missing, valid bool) {
 	data, err := os.ReadFile(job.OutputPath)
 	if err != nil {
 		return true, false
 	}
-	_, _, err = learn.ParseOutput(data, job.Candidates, job.Rejected, nil)
+	_, _, err = learn.ParseOutput(data, job.Candidates, job.Rejected, job.Threads)
 	return false, err == nil
 }
 
 // retroNudge is the one reminder after a turn without a valid answer: paths
-// and the candidates' ids only, never the classifier's text.
+// and the ids of the candidates and own threads only, never the
+// classifier's text.
 func retroNudge(job ClassifyJob, missing bool) string {
 	what := "does not follow the answer format of the first prompt"
 	if missing {
@@ -243,10 +244,20 @@ func retroNudge(job ClassifyJob, missing bool) string {
 	for _, c := range job.Candidates {
 		ids = append(ids, c.ID)
 	}
+	threads := ""
+	if len(job.Threads) > 0 {
+		tids := make([]string, 0, len(job.Threads))
+		for _, t := range job.Threads {
+			tids = append(tids, t.ID)
+		}
+		threads = fmt.Sprintf(" It also needs \"threads\": [...] with exactly one item per entry of its threads (%s), each with "+
+			"\"id\" and \"outcome\" (fixed, declined, deferred, argued, question or unrelated), a \"verdict\" for declined and "+
+			"argued, and \"lesson\", \"scope\" and \"match\" for a wrong, over_ranked or missing_context verdict.", strings.Join(tids, ", "))
+	}
 	return fmt.Sprintf("`%s` %s. Write it now: {\"items\": [...]} with exactly one item per candidate of `%s` (%s), "+
 		"each with \"id\" and \"class\" (miss, not_issue, style or outside), and for a miss \"severity\", \"title\", "+
-		"\"lesson\", \"scope\", \"lines\" and \"match\" as the first prompt describes. Write `%s.tmp`, move it to `%s`, then stop.",
-		job.OutputPath, what, job.CandidatesPath, strings.Join(ids, ", "), job.OutputPath, job.OutputPath)
+		"\"lesson\", \"scope\", \"lines\" and \"match\" as the first prompt describes.%s Write `%s.tmp`, move it to `%s`, then stop.",
+		job.OutputPath, what, job.CandidatesPath, strings.Join(ids, ", "), threads, job.OutputPath, job.OutputPath)
 }
 
 // prompt renders the retro prompt for job.
@@ -256,7 +267,7 @@ func (c *paneClassifier) prompt(job ClassifyJob) (string, error) {
 		return "", fmt.Errorf("the retro prompt cannot be read: %w", err)
 	}
 	return agents.RenderPrompt(p, retroData{URL: job.PR.URL, ReviewedSHAs: job.ReviewedSHAs, Candidates: job.CandidatesPath,
-		Files: filepath.Join(job.Dir, learn.FilesDir), Output: job.OutputPath, Count: len(job.Candidates)})
+		Files: filepath.Join(job.Dir, learn.FilesDir), Output: job.OutputPath, Count: len(job.Candidates), Threads: len(job.Threads)})
 }
 
 // setup makes, once, the scratch registry under the run directory with the
