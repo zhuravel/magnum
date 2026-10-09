@@ -5987,6 +5987,15 @@ skill versions); people add theirs to the sections before it, at the end of the 
   gate that runs for it first, waiting up to 20 seconds). Rejected: a column for the attempts (the mark
   already counts the stops of the one proposal gated at a time) and expiring a gating proposal (its
   replays are evidence the operator may want to land).
+- **A start removes the gate's base worktree, and a proposal has only the states it takes** (2026-10-10,
+  the final review of the self-improving review loop). The gate's detached worktree of the base
+  (`<state>/learn/wt/gate-base`) went when its gate ended, so a daemon killed mid-gate left it until the
+  next gate; a start now removes it with the learn marks it clears (`dropStaleGateBase`, only when the
+  directory is there). And migration 0024 (not applied by any released build) no longer allows the
+  `editing` and `superseded` states, which nothing wrote: a proposal row is made when its editor run ends
+  (an edit in flight is the `learn.editing` mark), and no proposal replaces another (an edit waits while
+  one waits). Rejected: keeping them documented as unused (a state the CHECK allows reads as one a
+  proposal can be in).
 
 ## Learned rules
 

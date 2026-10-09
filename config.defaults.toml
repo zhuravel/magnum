@@ -181,10 +181,12 @@ timeout = "20m"                   # per PR: a turn that takes longer is abandone
 # and `make check-private`, and commits it there. Nothing is pushed; `magnum learn` lists the proposals. Every key
 # is checked whether or not editor is on (`magnum learn --propose` runs one regardless). The gate then replays
 # eval cases on the proposal (the learned cases of the inputs it answers first) against master's prompts and
-# skill, in-process and below [usage] codex_soft, and passes, holds (for `magnum learn --review`) or fails it. A
-# passed proposal lands on the checkout's master as a local commit (fast-forward; held when master is not checked
-# out, an operation is in progress, a rebase conflicts or a file it changes has uncommitted edits), and the
-# daemon restarts on it. With editor on, the editor runs at most once a local day after a retro stored a new
+# skill, in-process and below [usage] codex_soft, and passes, holds (for `magnum learn --review`: one that improves
+# only declined findings too) or fails it. A passed proposal lands on the checkout's master as a local commit
+# (fast-forward; held when master is not checked out, an operation is in progress, master no longer holds the
+# base, the branch moved, the prompts do not render with the daemon's build, a rebase conflicts, a file it
+# changes has uncommitted edits or the checkout leaves master during the fast-forward), and the daemon restarts on
+# it. With editor on, the editor runs at most once a local day after a retro stored a new
 # general miss of P0 to P2 or a general finding declined as wrong or over-ranked, once no other learn job (the
 # retro, a notes curation, an edit, a gate) runs, no proposal waits, no round is in its judge stage, nothing
 # pauses it and go runs in the checkout (`magnum doctor` says why it is off).

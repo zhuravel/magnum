@@ -1,8 +1,8 @@
 -- The self-improving review loop's proposals (the skill editor, internal/engine/learn_edit.go). learn_proposals
 -- keeps every change the editor drafted to the judge skill and the prompts, whatever became of it: why it ran
 -- (trigger_reason: evidence, request, regression), the master commit it started from (base_sha), the branch it
--- was committed on and that commit (candidate_sha), the files it changed (files_json), its state (editing, invalid,
--- stopped, gating, passed, held, failed, landed, rejected, expired, superseded), the gate's result (gate_json), a
+-- was committed on and that commit (candidate_sha), the files it changed (files_json), its state (invalid, stopped,
+-- gating, passed, held, failed, landed, rejected, expired; a row is made when its editor run ends), the gate's result (gate_json), a
 -- reason (magnum's problems for an invalid one, the operator's for a rejection), the editor's model and the hash of
 -- its prompt, its scratch directory and run directory, and when it was made, last began to wait for the landing or the
 -- operator (waiting_since: passed or held, which its expiry counts from), decided and landed (landed_sha, the
@@ -25,8 +25,8 @@ CREATE TABLE learn_proposals (
   branch         TEXT NOT NULL,
   candidate_sha  TEXT,
   files_json     TEXT NOT NULL DEFAULT '[]',
-  state          TEXT NOT NULL CHECK (state IN ('editing','invalid','stopped','gating','passed','held','failed','landed',
-                   'rejected','expired','superseded')),
+  state          TEXT NOT NULL CHECK (state IN ('invalid','stopped','gating','passed','held','failed','landed',
+                   'rejected','expired')),
   gate_json      TEXT,
   reason         TEXT,
   model          TEXT,

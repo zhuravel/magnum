@@ -1366,6 +1366,32 @@ VALUES (?, ?, ?, ?, ?)`, f.p.ID, store.LearnInputDecline, d.ID, store.MissNoted,
 	}
 }
 
+// A start removes the gate's worktree of the base a crashed daemon left
+// behind, with the learn marks, instead of keeping it until the next gate.
+func TestAStartRemovesTheGateBaseACrashLeft(t *testing.T) {
+	f := newGateFixture(t, gateFullFiles)
+	if err := os.MkdirAll(f.base, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	f.h.e.setKV(f.h.ctx, KVLearnGating, `{"proposal":1}`)
+	f.h.startup()
+	if _, err := os.Stat(f.base); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the gate's base worktree survived the start: %v", err)
+	}
+	if got := f.git.called("worktree discard " + f.base); len(got) != 1 {
+		t.Fatalf("discards = %q", f.git.called("worktree"))
+	}
+	if _, ok := f.h.e.getKV(f.h.ctx, KVLearnGating); ok {
+		t.Fatal("the gate's mark survived the start")
+	}
+	// Without one, a start runs no git.
+	f2 := newGateFixture(t, gateFullFiles)
+	f2.h.startup()
+	if got := f2.git.called("worktree"); len(got) != 0 {
+		t.Fatalf("a start with no base worktree ran %q", got)
+	}
+}
+
 // A running gate is background work: a restart for a new build waits for
 // it, and shutdown cancels it, leaving the proposal gating.
 func TestTheGateIsBackgroundWorkForRestarts(t *testing.T) {

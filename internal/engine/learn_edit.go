@@ -1191,7 +1191,7 @@ func (e *Engine) dropOrphanCandidates(ctx context.Context) {
 	if e.d.LearnGit == nil || e.d.Checkout == "" {
 		return
 	}
-	waiting, err := e.st.LearnProposals(ctx, []string{store.LearnEditing, store.LearnGating, store.LearnPassed, store.LearnHeld})
+	waiting, err := e.st.LearnProposals(ctx, []string{store.LearnGating, store.LearnPassed, store.LearnHeld})
 	if err != nil {
 		return
 	}

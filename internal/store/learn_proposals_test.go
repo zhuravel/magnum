@@ -68,9 +68,13 @@ func TestMigrationV23ToV24LearnProposals(t *testing.T) {
 	for name, q := range map[string]string{
 		"trigger": proposal("whim", LearnGating),
 		"state":   proposal(LearnTriggerEvidence, "pending"),
-		"kind":    input("comment", MissNoted),
-		"outcome": input(LearnInputMiss, "maybe"),
-		"gate":    `INSERT INTO learn_proposal_inputs (proposal_id, kind, input_id, outcome, gate) VALUES (1, 'miss', 10, 'noted', 'better')`,
+		// Never written: a row is made when its editor run ends, and none
+		// replaces another.
+		"editing":    proposal(LearnTriggerEvidence, "editing"),
+		"superseded": proposal(LearnTriggerEvidence, "superseded"),
+		"kind":       input("comment", MissNoted),
+		"outcome":    input(LearnInputMiss, "maybe"),
+		"gate":       `INSERT INTO learn_proposal_inputs (proposal_id, kind, input_id, outcome, gate) VALUES (1, 'miss', 10, 'noted', 'better')`,
 	} {
 		if _, err := st.DB().ExecContext(ctx, q); err == nil {
 			t.Errorf("%s: the CHECK accepted a bad value", name)

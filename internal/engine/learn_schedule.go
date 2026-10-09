@@ -190,7 +190,7 @@ func (e *Engine) editWait(ctx context.Context) string {
 	if job := e.learnBusy(); job != "" {
 		return job + " runs"
 	}
-	waiting, err := e.st.LearnProposals(ctx, []string{store.LearnEditing, store.LearnGating, store.LearnPassed, store.LearnHeld})
+	waiting, err := e.st.LearnProposals(ctx, []string{store.LearnGating, store.LearnPassed, store.LearnHeld})
 	if err != nil {
 		return "the proposals cannot be read"
 	}

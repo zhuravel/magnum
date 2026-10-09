@@ -30,19 +30,20 @@ const (
 	LearnTriggerRegression = "regression" // a landed version measured worse: a revert
 )
 
-// Proposal states (learn_proposals.state).
+// Proposal states (learn_proposals.state). A proposal is stored when its
+// editor run ends (an edit in flight is the KV mark learn.editing, not a
+// row), and none replaces another (an edit waits while one waits), so there
+// is no editing or superseded state.
 const (
-	LearnEditing    = "editing"    // the editor works on it
-	LearnInvalid    = "invalid"    // its result failed magnum's checks after a nudge: Reason says how
-	LearnStopped    = "stopped"    // the editor stopped (a pause, a timeout, a shutdown)
-	LearnGating     = "gating"     // committed on its branch, waiting for the gate
-	LearnPassed     = "passed"     // the gate passed it: it lands
-	LearnHeld       = "held"       // the gate could not decide: the operator does
-	LearnFailed     = "failed"     // the gate failed it
-	LearnLanded     = "landed"     // fast-forwarded onto master
-	LearnRejected   = "rejected"   // the operator said no: Reason says why
-	LearnExpired    = "expired"    // nobody decided within a week
-	LearnSuperseded = "superseded" // a newer proposal replaced it
+	LearnInvalid  = "invalid"  // its result failed magnum's checks after a nudge: Reason says how
+	LearnStopped  = "stopped"  // the editor stopped (a pause, a timeout, a shutdown)
+	LearnGating   = "gating"   // committed on its branch, waiting for the gate
+	LearnPassed   = "passed"   // the gate passed it: it lands
+	LearnHeld     = "held"     // the gate could not decide, or left it to the operator: the operator does
+	LearnFailed   = "failed"   // the gate failed it
+	LearnLanded   = "landed"   // fast-forwarded onto master
+	LearnRejected = "rejected" // the operator said no: Reason says why
+	LearnExpired  = "expired"  // nobody decided within a week
 )
 
 // The kinds of a proposal's input (learn_proposal_inputs.kind).
@@ -77,11 +78,11 @@ var (
 	learnTargets  = []string{LearnTargetImproved, LearnTargetNotImproved, LearnTargetBaseline}
 	// learnGated are the states a gate decides a proposal to.
 	learnGated  = []string{LearnPassed, LearnHeld, LearnFailed}
-	learnStates = []string{LearnEditing, LearnInvalid, LearnStopped, LearnGating, LearnPassed, LearnHeld, LearnFailed,
-		LearnLanded, LearnRejected, LearnExpired, LearnSuperseded}
+	learnStates = []string{LearnInvalid, LearnStopped, LearnGating, LearnPassed, LearnHeld, LearnFailed, LearnLanded, LearnRejected,
+		LearnExpired}
 	// learnWaiting are the states a proposal can still leave on its own
 	// way (no decided_at); every other state is a decision.
-	learnWaiting = []string{LearnEditing, LearnGating, LearnPassed, LearnHeld}
+	learnWaiting = []string{LearnGating, LearnPassed, LearnHeld}
 	learnKinds   = []string{LearnInputMiss, LearnInputDecline}
 )
 
@@ -199,7 +200,7 @@ func learnProposalByID(ctx context.Context, q querier, id int64) (LearnProposal,
 
 // CreateLearnProposal stores a proposal and what it did with every input it
 // was given, in one transaction. A proposal in a state that is a decision
-// (anything but editing, gating, passed or held) is decided at once, and
+// (anything but gating, passed or held) is decided at once, and
 // one made passed or held waits since it is made (waiting_since).
 // Trigger, BaseSHA, Branch and State are required; an input is in it once.
 func (s *Store) CreateLearnProposal(ctx context.Context, in LearnProposalInput) (LearnProposal, error) {

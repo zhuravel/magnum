@@ -1,6 +1,7 @@
 # The self-improving review loop
 
-Date: 2026-10-09. Status: approved in conversation, implementation planned.
+Date: 2026-10-09. Status: approved in conversation on 2026-10-09 and implemented in five stages (branch
+`loop/final`), with the final review's findings applied on 2026-10-10.
 
 ## Goal
 
@@ -112,9 +113,9 @@ editor_kind`, `editor_model` (default claude, sonnet), `editor_effort`, `editor_
   declines each newest first; `left_out` counts the older ones), the operator's rejection reasons from the
   last 5 rejected proposals and per input, the last 3 landed versions with their measurements, the size
   cap and the current size, and the list of files it may edit;
-- `pins.json`: the sentences the skill must keep, produced by a test helper
-  (`go test ./internal/agents -run TestSkillPinsDump -args -pins <path>`), so the editor knows them before
-  it writes;
+- `pins.json`: the sentences the skill must keep and the skill's cap, read from the worktree's
+  `internal/agents/testdata/skill_pins.txt` (which `go test ./internal/agents -update` regenerates and
+  the skill tests check against), so the editor knows them before it writes;
 - the editor's outputs inside the worktree: the edited files, `changes.json` ({`files`: [{`name`,
   `action` edited|unchanged, `reason`}], `inputs`: [{`id`, `action` noted|skipped, `where`, `reason`}],
   `decision`: the DECISIONS entry text}), and the DECISIONS entry appended by magnum, not the agent, at
@@ -129,7 +130,7 @@ else. Rules in the prompt: keep the skill at or under the cap by shortening. kee
 general rules only, no PR number, login, URL, repository or person. one change per input or a skip with a
 reason. do not weaken a rule a landed version added for a measured gain. keep section numbers.
 
-Magnum checks the result (`learn.Validate`): every input accounted for once. only allowed files changed
+Magnum checks the result (`learn.ValidateEdit`): every input accounted for once. only allowed files changed
 (`git status` of the worktree). the skill size. no pinned sentence lost. `notes.Validate`'s leak rules
 (PR references, branches, secrets, home paths) on the diff. `learn.ScrubLesson` rules on the DECISIONS
 text. the prompts render (`engine.CheckPrompts` on a config pointed at the worktree). Then magnum appends
@@ -162,7 +163,7 @@ case stays in the corpus as a regression check. A proposal whose every target is
 `SKILL.md` and `prompts/judge-*.md` changed, else full. The baseline is the newest stored run with the
 same inputs hash as the proposal's `base_sha` (through `eval.Baselines`), else a baseline replay first.
 Both read a detached worktree at `base_sha` under the learn worktrees, never the checkout (its branch and
-its uncommitted edits are the operator's), removed after the gate; each run of the gate records the
+its uncommitted edits are the operator's), removed after the gate (and at the next start, when a crash left it); each run of the gate records the
 commit of the tree it read and that tree's clean state, so a later gate reuses it. In judge-only mode
 both judges read the reviewer reports of the case's newest full replay whose reviewers read the
 candidate's prompts (`eval.FullReplayFor`): the baseline is that replay itself when its judge read the
@@ -297,7 +298,7 @@ copy is about to be re-read), under a hold, a user pause, or a tool pause of its
 checkout is missing or `go` is not on PATH (`[learn] editor = false` is implied and `magnum doctor` says
 why). Learn-tagged jobs (retro, curation, editor, gate) are serialized by one mutex in the engine, which
 also removes the current retro/curation overlap. The gate and the editor count as background work for
-`daemon-restart` and `backgroundBusy`, their KV marks (`learn.editing`, `learn.gating`) are cleared at
+`daemon-restart` and `backgroundBusy`, their KV marks (`learn.editing`, `learn.gating`) are cleared (with the gate's worktree of the base) at
 startup, and shutdown cancels them.
 
 Configuration under `[learn]`: `editor` (bool, default false), `editor_kind`, `editor_model`,
@@ -308,17 +309,23 @@ Everything is validated whether or not enabled. `config.defaults.toml` documents
 ## 9. Data model
 
 Migration 0023: `declines` (section 1) with indexes on `(pr_id)`, `(state, scope, verdict)` and
-`(skill_sha)`. Migration 0024: `learn_proposals` (`id`, `trigger` evidence|request|regression,
-`base_sha`, `branch`, `candidate_sha`, `files_json`, `state` editing|invalid|stopped|gating|passed|held|
-failed|landed|rejected|expired|superseded, `gate_json`, `reason`, `model`, `prompt_sha256`, `scratch`,
-`run_dir`, `created_at`, `waiting_since`, `decided_at`, `landed_sha`, `landed_at`), `learn_proposal_inputs`
+`(skill_sha)`. Migration 0024: `learn_proposals` (`id`, `trigger_reason` evidence|request|regression,
+`base_sha`, `branch`, `candidate_sha`, `files_json`, `state` invalid|stopped|gating|passed|held|
+failed|landed|rejected|expired (a row is made when its editor run ends, and none replaces another, so
+there is no editing or superseded state), `gate_json`, `reason`, `model`, `prompt_sha256`, `scratch`,
+`run_dir`, `created_at`, `waiting_since`, `decided_at`, `landed_sha`, `landed_at`, `reverts`: the version
+a revert restores the files before), `learn_proposal_inputs`
 (`proposal_id`, `kind` miss|decline, `input_id`, `outcome` noted|skipped, `location`, `reason`, `gate`
 improved|not_improved|baseline, `dismissed`, primary key on the three), `learn_versions` (section 7). The `misses` and `declines` state transitions move through
 the proposal decision in one transaction, as `decideProposalMisses` does, and a `dismissed` input is
-removed from the learned corpus.
+removed from the learned corpus (but for one a gate found covered at its baseline). The proposals that
+wait are gating, passed and held; reverts are proposals too (`trigger_reason` regression, `reverts` set).
 
-KV: `learn.edit_day`, `learn.editing` (run id and start), `learn.gating` (proposal id and start),
-`learn.restart` (version id), `learn.land_day`. Every new key is added to `kvkeys_test.go`.
+KV: `learn.evidence` (the time of the retro that stored new general evidence), `learn.edit_day`,
+`learn.editing` (run id, start and the version a revert reverts), `learn.gating` (proposal id and start),
+`learn.gate_stops` (the gates of the proposal gated now that stopped short: on a replay without a score,
+in all, and why the last did), `learn.restart` (version id), `learn.land_day`, `learn.regression` (the
+newest version the regression scan proposed a revert for, or found none possible for). Every new key is added to `kvkeys_test.go`.
 
 Files: `<data>/learn/skill/<run>/` (inputs, pins, changes.json copy, log), pruned after 30 days with the
 retro runs. `<state>/learn/wt/<run>` (the worktree, removed at landing, rejection, expiry or stop);
@@ -328,8 +335,9 @@ retro runs. `<state>/learn/wt/<run>` (the worktree, removed at landing, rejectio
 ## 10. Testing
 
 Hermetic, as the retro and curation tests: a fake editor (`Deps.Editor`) that writes files into the
-worktree. a fake git for the worktree operations (`gitx` fake with `worktree add`, `merge --ff-only`,
-`rebase`, `status`). the gate's eval through a fake runner that returns stored scores. the store
+worktree. real git in temporary repositories for the worktree, commit, rebase, fast-forward and discard
+operations (`gitx`'s tests and the editor's fixture), and a fake `engine.LearnGit` over a map of refs for
+the gate's and the landing's decisions. the gate's eval through a fake runner that returns stored scores. the store
 transitions through `storetest`. The format gate's `go test` subprocess is behind a seam that the tests
 replace. The retro's decline classification is tested with the fake classifier and seeded threads. Every
 new behaviour has a named test. `docs/DECISIONS.md` gets one entry per decision above. the README gets a

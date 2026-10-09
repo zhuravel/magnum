@@ -90,7 +90,8 @@ const (
 	// gateBaseName is the gate's detached worktree of the proposal's base
 	// commit under Layout.LearnWorktrees, whose prompts and skill the
 	// baseline replays (one gate runs at a time); no editor run is named
-	// so, so the orphan cleanup leaves it to the gate.
+	// so, so the orphan cleanup leaves it to the gate, which removes it
+	// when it ends, and to the next start (dropStaleGateBase).
 	gateBaseName = "gate-base"
 )
 
@@ -965,6 +966,19 @@ func (e *Engine) addGateBase(ctx context.Context, sha string) (string, error) {
 func (e *Engine) dropGateBase(ctx context.Context) {
 	if err := e.d.LearnGit.WorktreeDiscard(ctx, e.d.Checkout, e.d.Layout.LearnWorktrees(), e.gateBaseDir()); err != nil {
 		e.log.Warn("skill gate: remove the worktree of the base", "err", err)
+	}
+}
+
+// dropStaleGateBase removes the gate's worktree of the base at startup,
+// when a daemon that crashed or was killed mid-gate left it (no gate runs
+// yet); a dry run and a daemon without a checkout touch nothing.
+func (e *Engine) dropStaleGateBase(ctx context.Context) {
+	if e.d.DryRun || e.d.LearnGit == nil || e.d.Checkout == "" || !e.d.Layout.Valid() {
+		return
+	}
+	if _, err := os.Lstat(e.gateBaseDir()); err == nil {
+		e.log.Info("skill gate: removing the worktree of the base a stopped daemon left", "worktree", e.gateBaseDir())
+		e.dropGateBase(ctx)
 	}
 }
 

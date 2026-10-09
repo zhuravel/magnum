@@ -816,8 +816,10 @@ func (e *Engine) startup(ctx context.Context) {
 	e.syncNotes(ctx, true) // notes_record.go: the first start imports every repository's notes
 	// No curation, retro, skill edit or gate runs yet: a mark left behind
 	// is a crashed daemon's (a gating proposal keeps its state and its gate
-	// starts again at a tick, maybeGate).
+	// starts again at a tick, maybeGate), and so is the gate's worktree of
+	// the base (learn_gate.go).
 	e.delKV(ctx, KVNotesCurating, KVRetroRunning, KVLearnEditing, KVLearnGating)
+	e.dropStaleGateBase(ctx)
 	e.lastReconcile = e.now()
 	e.enqueueHeavy("reconcile", e.reconcile)
 }
