@@ -213,6 +213,36 @@ func TestARevertsReasonNamingAPersonOrARepositoryIsRefused(t *testing.T) {
 	}
 }
 
+// While a revert runs in the edit's slot, the answers that it holds up and
+// the background work a restart would cut short name the revert, not a
+// skill edit.
+func TestWhileARevertRunsTheAnswersNameIt(t *testing.T) {
+	f := newEditFixture(t, goodTurn)
+	held, err := f.h.st.CreateLearnProposal(f.h.ctx, store.LearnProposalInput{Trigger: store.LearnTriggerRequest, BaseSHA: f.master,
+		Branch: "learn/20261005-091500", CandidateSHA: strings.Repeat("4", 40), State: store.LearnHeld})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.h.e.editMu.Lock()
+	f.h.e.editCancel, f.h.e.editStarted, f.h.e.editWhat = func() {}, f.h.clock.Now(), "the revert of skill version 3"
+	f.h.e.editMu.Unlock()
+	defer func() {
+		f.h.e.editMu.Lock()
+		f.h.e.editCancel = nil
+		f.h.e.editMu.Unlock()
+	}()
+	if busy := f.h.e.backgroundBusy(); busy != "the revert of skill version 3" {
+		t.Errorf("backgroundBusy = %q", busy)
+	}
+	if _, err := f.h.e.requestEdit(f.h.ctx, LearnProposePayload{}); err == nil || !strings.Contains(err.Error(), "the revert of skill version 3 is running") {
+		t.Errorf("requestEdit = %v", err)
+	}
+	if _, err := f.h.e.requestLearnLand(f.h.ctx, LearnDecisionPayload{ID: held.ID}); err == nil ||
+		!strings.Contains(err.Error(), "cannot land while the revert of skill version 3 runs") {
+		t.Errorf("requestLearnLand = %v", err)
+	}
+}
+
 // regressed sets up a version whose reviews had 2 of their 4 posted
 // findings declined or argued, against none of 4 for the skill before it.
 func (f *editFixture) regressed() store.LearnVersion {

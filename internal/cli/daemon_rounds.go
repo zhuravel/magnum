@@ -165,7 +165,8 @@ func (c *Context) activeRounds(ctx context.Context) (inFlight, error) {
 // backgroundWork reads the notes curation, the retro, the skill edit and
 // the skill gate running from their kv marks: "notes curation of
 // owner/repo (since 15:04)", "retro (since 15:04)", "skill edit (since
-// 15:04)", "skill gate of proposal 3 (since 15:04)". A mark it cannot
+// 15:04)" (or "revert of skill version 2 (since 15:04)", which runs in the
+// edit's slot), "skill gate of proposal 3 (since 15:04)". A mark it cannot
 // parse still counts.
 func backgroundWork(ctx context.Context, db *sql.DB) ([]string, error) {
 	rows, err := db.QueryContext(ctx, `SELECT key, value FROM kv WHERE key IN (?, ?, ?, ?) AND value != '' ORDER BY key`,
@@ -194,6 +195,9 @@ func backgroundWork(ctx context.Context, db *sql.DB) ([]string, error) {
 			var m engine.EditMark
 			if json.Unmarshal([]byte(value), &m) == nil {
 				since = m.Started
+				if m.Revert != 0 {
+					what = fmt.Sprintf("revert of skill version %d", m.Revert)
+				}
 			}
 		case engine.KVLearnGating:
 			what = "skill gate"

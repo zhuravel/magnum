@@ -123,6 +123,31 @@ func TestARunningSkillEditRefusesAStop(t *testing.T) {
 	actContains(t, errb.String(), "1 background job(s) in flight: skill edit (since "+clock+")", "a skill edit proposes nothing")
 }
 
+// A revert runs in the skill edit's slot and its mark: a stop is refused
+// and names the revert.
+func TestARunningRevertRefusesAStopAndIsNamed(t *testing.T) {
+	c, _, errb := bareContext(t)
+	if err := c.Layout.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	st := storetest.Open(t, c.Layout.DB())
+	ctx := context.Background()
+	started := time.Now().Add(-5 * time.Minute)
+	mark, _ := json.Marshal(engine.EditMark{Run: "20261009-070000", Trigger: "regression", Started: started, Revert: 3})
+	if err := st.SetKV(ctx, engine.KVLearnEditing, string(mark)); err != nil {
+		t.Fatal(err)
+	}
+	running, err := c.activeRounds(ctx)
+	clock := inspClock(time.Now(), started)
+	if err != nil || running.String() != "revert of skill version 3 (since "+clock+")" {
+		t.Fatalf("in flight %q, err %v", running, err)
+	}
+	if c.refuseWhileRoundsRun("daemon-restart", false) {
+		t.Fatal("a revert in flight must refuse")
+	}
+	actContains(t, errb.String(), "1 background job(s) in flight: revert of skill version 3 (since "+clock+")")
+}
+
 // The gate of a skill proposal is background work too: a stop is refused
 // and names it (the proposal stays gating and its gate starts again).
 func TestARunningSkillGateRefusesAStop(t *testing.T) {

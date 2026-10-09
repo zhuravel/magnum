@@ -509,6 +509,7 @@ func (e *Engine) requestLearnLand(ctx context.Context, p LearnDecisionPayload) (
 		return "dry run: would land proposal " + strconv.FormatInt(p.ID, 10), nil
 	}
 	m, pending := e.learnRestart(ctx)
+	editing := e.editRunning()
 	switch {
 	case e.landUnavailable() != "":
 		return "", fmt.Errorf("proposal %d cannot land: %s", p.ID, e.landUnavailable())
@@ -517,8 +518,8 @@ func (e *Engine) requestLearnLand(ctx context.Context, p LearnDecisionPayload) (
 			"lands); ask again after the restart", p.ID, m.Version)
 	case e.gateBusy():
 		return "", fmt.Errorf("proposal %d cannot land while a skill gate runs; ask again once it ends", p.ID)
-	case e.editBusy():
-		return "", fmt.Errorf("proposal %d cannot land while a skill edit runs; ask again once it ends", p.ID)
+	case editing != "":
+		return "", fmt.Errorf("proposal %d cannot land while %s runs; ask again once it ends", p.ID, editing)
 	}
 	_, v, err := e.landProposal(ctx, prop, true)
 	hold, held := errors.AsType[landHold](err)

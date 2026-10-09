@@ -331,11 +331,7 @@ func learnPrintList(w io.Writer, d *actDeps, data learnListData) {
 		}
 	}
 	if m := data.Editing; m != nil {
-		what := "a skill edit"
-		if m.Revert != 0 {
-			what = fmt.Sprintf("the revert of skill version %d", m.Revert)
-		}
-		fmt.Fprintf(w, "%s runs (run %s, since %s)\n", what, m.Run, inspClock(now, m.Started))
+		fmt.Fprintf(w, "%s runs (run %s, since %s)\n", editingWhat(*m), m.Run, inspClock(now, m.Started))
 	}
 	fmt.Fprintln(w, "next edit: "+data.Next)
 	for _, r := range data.Waiting {
@@ -344,6 +340,15 @@ func learnPrintList(w io.Writer, d *actDeps, data learnListData) {
 			break
 		}
 	}
+}
+
+// editingWhat names the job of the edit's slot that m marks: a skill edit,
+// or the revert of a version.
+func editingWhat(m engine.EditMark) string {
+	if m.Revert != 0 {
+		return fmt.Sprintf("the revert of skill version %d", m.Revert)
+	}
+	return "a skill edit"
 }
 
 // oneLineText folds s onto one line.
@@ -387,7 +392,7 @@ func learnPropose(ctx context.Context, c *Context, d *actDeps, f learnFlags) int
 		return fail(fmt.Errorf("proposal %d is %s: %s", p.ID, p.State, next))
 	}
 	if m := data.Editing; m != nil {
-		return fail(fmt.Errorf("a skill edit is running (run %s, since %s); `magnum learn` lists it", m.Run, inspClock(notesNow(d), m.Started)))
+		return fail(fmt.Errorf("%s is running (run %s, since %s); `magnum learn` lists it", editingWhat(*m), m.Run, inspClock(notesNow(d), m.Started)))
 	}
 	res, err := d.reqs().send(ctx, engine.ReqLearnPropose, engine.LearnProposePayload{}, d.quick())
 	if err != nil {

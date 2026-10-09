@@ -5872,6 +5872,16 @@ skill versions); people add theirs to the sections before it, at the end of the 
   it, and `expireLearnProposals` expires a proposal 7 days after the later of that time and its making.
   Rejected: the time of the `learn.gate_done` event (events are pruned, and a landing's hold writes
   none), and keeping the week from the making (a slow gate takes the operator's time).
+- **What runs in the skill edit's slot is named, a revert too** (2026-10-09, a review finding on stage 5
+  of the self-improving review loop). A revert runs in the edit's slot and its `KVLearnEditing` mark,
+  but `magnum learn --propose` (the daemon's answer and the CLI's own check), the y of `magnum learn
+  --review`, the background work a restart would cut short and the CLI's refusal to stop the daemon all
+  said "a skill edit" or "the skill edit" while a revert ran. They now name the job
+  (`Engine.editRunning`, the CLI's `editingWhat` and the mark's `revert`): "the revert of skill version
+  3 is running", "cannot land while the revert of skill version 3 runs", "revert of skill version 3
+  (since 15:04)". An edit request that lost the race to another learn job says which job runs instead of
+  calling it a skill edit. Rejected: a slot of its own for reverts (learn jobs run one at a time
+  anyway).
 
 ## Learned rules
 

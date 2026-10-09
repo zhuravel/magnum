@@ -314,6 +314,33 @@ func TestLearnProposeIsRefusedWhileAProposalWaits(t *testing.T) {
 	}
 }
 
+// --propose is refused while the edit's slot is busy, and the refusal
+// names what runs there: a skill edit, or a revert of a version.
+func TestLearnProposeNamesTheRevertThatRuns(t *testing.T) {
+	h := newLearnHarness(t)
+	if _, err := h.st.DecideLearnProposal(h.ctx, h.proposal.ID, []string{store.LearnHeld}, store.LearnRejected, "", time.Time{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		mark engine.EditMark
+		want string
+	}{{engine.EditMark{Run: learnRun, Trigger: "request"}, "a skill edit is running (run " + learnRun},
+		{engine.EditMark{Run: learnRun, Trigger: "regression", Revert: 3}, "the revert of skill version 3 is running (run " + learnRun}} {
+		c.mark.Started = h.now.Add(-time.Minute)
+		b, _ := json.Marshal(c.mark)
+		if err := h.st.SetKV(h.ctx, engine.KVLearnEditing, string(b)); err != nil {
+			t.Fatal(err)
+		}
+		h.errb.Reset()
+		if code := h.cmd("learn", "--propose"); code != 1 || !strings.Contains(h.errb.String(), c.want) {
+			t.Errorf("%+v: exit %d, %s", c.mark, code, h.errb.String())
+		}
+	}
+	if reqs := h.requests(); len(reqs) != 0 {
+		t.Fatalf("a refused edit queued %+v", reqs)
+	}
+}
+
 func TestLearnUsageLineNamesItsFlags(t *testing.T) {
 	h := newActHarness(t)
 	cmd, _, err := newRoot(h.c).Find([]string{"learn"})

@@ -233,9 +233,18 @@ type editPins struct {
 
 // editBusy reports whether an editor run is in flight.
 func (e *Engine) editBusy() bool {
+	return e.editRunning() != ""
+}
+
+// editRunning names the job in the edit's slot ("" = none): the skill
+// edit or a revert ("the revert of skill version 3").
+func (e *Engine) editRunning() string {
 	e.editMu.Lock()
 	defer e.editMu.Unlock()
-	return e.editCancel != nil
+	if e.editCancel == nil {
+		return ""
+	}
+	return cmp.Or(e.editWhat, "the skill edit")
 }
 
 // startEdit runs an editor run in its own goroutine on a child of ctx (the
@@ -1030,10 +1039,10 @@ func (e *Engine) requestEdit(ctx context.Context, _ LearnProposePayload) (string
 		return "", fmt.Errorf("no skill edit now: %s", reason)
 	}
 	e.editMu.Lock()
-	running, since := e.editCancel != nil, e.editStarted
+	since := e.editStarted
 	e.editMu.Unlock()
-	if running {
-		return "", fmt.Errorf("a skill edit is running (started %s); `magnum learn` lists it", since.Local().Format("15:04"))
+	if what := e.editRunning(); what != "" {
+		return "", fmt.Errorf("%s is running (started %s); `magnum learn` lists it", what, since.Local().Format("15:04"))
 	}
 	if why := e.learnOneAtATime(); why != "" {
 		return "", fmt.Errorf("no skill edit now: %s", why)
@@ -1067,8 +1076,8 @@ func (e *Engine) requestEdit(ctx context.Context, _ LearnProposePayload) (string
 	switch {
 	case !started && at.IsZero():
 		return "", fmt.Errorf("no skill edit now: %s", cmp.Or(e.stopping(ctx), "the daemon is stopping"))
-	case !started:
-		return "", fmt.Errorf("a skill edit is running (started %s); `magnum learn` lists it", at.Local().Format("15:04"))
+	case !started: // another learn job started since learnOneAtATime
+		return "", fmt.Errorf("no skill edit now: %s", cmp.Or(e.learnOneAtATime(), "a learn job runs (started "+at.Local().Format("15:04")+")"))
 	}
 	return fmt.Sprintf("skill edit started from %s; `magnum learn` lists its proposal, and a toast says if it stops or is invalid",
 		textx.Count(len(inputs.IDs()), "input", "inputs")), nil
