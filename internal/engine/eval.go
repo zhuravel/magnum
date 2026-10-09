@@ -43,7 +43,7 @@ type EvalCase struct {
 	// an earlier replay left open, closed before this one starts ("" =
 	// Checkout alone).
 	Worktrees string
-	// Notes gives the judge the scratch copy of the repository notes
+	// Notes gives every role the scratch copy of the repository notes
 	// (paths.Layout.Notes under Scratch; the caller copies the live file).
 	Notes bool
 	// JudgeOnly runs the judge alone on Reports, the reviewer reports of an

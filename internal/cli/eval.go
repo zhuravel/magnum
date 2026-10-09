@@ -155,7 +155,7 @@ func newEvalRunCmd(c *Context) *cobra.Command {
 			"runs the judge alone on the reviewers' reports of each case's newest full replay at the same head whose reviewers read "+
 			"what this run's would, the same reviewer prompts and roles and the same --no-notes (a case without one fails before "+
 			"anything starts): a judge prompt or skill change costs one agent instead of a round. --no-notes "+
-			"withholds the repository notes (by default the judge reads a scratch copy of them). --keep leaves "+
+			"withholds the repository notes from every role (by default each reads a scratch copy of them). --keep leaves "+
 			"each case's worktree in place. --force runs past the Codex soft cap.",
 		func(pos []string) int {
 			if len(pos) > 0 {
@@ -169,7 +169,7 @@ func newEvalRunCmd(c *Context) *cobra.Command {
 	fs.StringVar(&f.label, "label", "", "a name for this run")
 	fs.StringVar(&f.candidate, "candidate", "", "replay this directory's prompts/ and judge skill instead of the configured ones")
 	fs.BoolVar(&f.judgeOnly, "judge-only", false, "run the judge alone on the reviewers' reports of each case's newest full replay")
-	fs.BoolVar(&f.noNotes, "no-notes", false, "do not give the judge the repository notes")
+	fs.BoolVar(&f.noNotes, "no-notes", false, "withhold the repository notes from every role")
 	fs.BoolVar(&f.keep, "keep", false, "keep each case's worktree")
 	fs.BoolVar(&f.force, "force", false, "run even when the Codex budget is past [usage] codex_soft")
 	return cmd
@@ -179,8 +179,9 @@ func newEvalScoreCmd(c *Context) *cobra.Command {
 	var corpus string
 	cmd := newCommand("", "score [RUN] [--corpus FILE]", "re-score a run against the corpus as it is now",
 		"Re-read each case's result file of RUN (default: the latest run) and score it again with the corpus's "+
-			"current defects, so a match rule can be corrected without running the agents again. The run's "+
-			"report is rewritten.",
+			"current defects, so a match rule can be corrected without running the agents again. The corpus is "+
+			"the one the run read (a run given --corpus FILE: that file alone) unless --corpus names another. The "+
+			"run's report is rewritten.",
 		func(pos []string) int { return runEvalScore(c, corpus, pos) })
 	cmd.Flags().StringVar(&corpus, "corpus", "", evalCorpusFlagUsage)
 	return cmd
@@ -298,7 +299,7 @@ func runEvalRun(c *Context, f evalRunFlags) int {
 		return cmdFail(c, "eval run", err)
 	}
 	run := eval.Run{
-		ID: id, Label: f.label, Corpus: path, Started: started, Candidate: f.candidate,
+		ID: id, Label: f.label, Corpus: path, CorpusAlone: learned == "", Started: started, Candidate: f.candidate,
 		Models: evalModels(cfg), Inputs: evalrun.Inputs(cfg), ReviewerInputs: evalrun.ReviewerInputs(cfg), NoNotes: f.noNotes,
 	}
 	deps := evalrun.Deps{Layout: c.Layout, Config: c.Config, Now: now, Stderr: c.Stderr,
@@ -455,6 +456,9 @@ func runEvalScore(c *Context, corpusFlag string, pos []string) int {
 	user, learned := evalCorpusPath(c, corpusFlag)
 	if corpusFlag == "" {
 		user = cmp.Or(run.Corpus, user)
+		if run.CorpusAlone { // the run read its --corpus file alone, and so does its score
+			learned = ""
+		}
 	}
 	corpus, err := eval.LoadCorpora(user, learned)
 	if err != nil {

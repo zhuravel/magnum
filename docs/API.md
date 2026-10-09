@@ -5519,7 +5519,7 @@ type EvalCase struct {
 	// an earlier replay left open, closed before this one starts ("" =
 	// Checkout alone).
 	Worktrees string
-	// Notes gives the judge the scratch copy of the repository notes
+	// Notes gives every role the scratch copy of the repository notes
 	// (paths.Layout.Notes under Scratch; the caller copies the live file).
 	Notes bool
 	// JudgeOnly runs the judge alone on Reports, the reviewer reports of an
@@ -6215,11 +6215,13 @@ type Corpus struct {
     against.
 
 func LoadCorpora(user, learned string) (*Corpus, error)
-    LoadCorpora reads the operator's corpus at user ("" = none) and the learned
-    corpus the daemon writes at learned (paths.Layout.LearnCorpus; "" or a file
-    that does not exist adds nothing) and returns their cases, the user's first.
-    A case name in both files is an error that names it. Without a user corpus
-    and without learned cases the error is the learned file's.
+    LoadCorpora reads the operator's corpus at user ("" = none) and the
+    learned corpus the daemon writes at learned (paths.Layout.LearnCorpus;
+    "" or a file that does not exist adds nothing) and returns their cases,
+    the user's first. A case name in both files is an error that names it.
+    Without a user corpus and without learned cases the error is the learned
+    file's. One path given as both (a run given the learned corpus as --corpus,
+    scored again) is read once.
 
 func LoadCorpus(path string) (*Corpus, error)
     LoadCorpus reads and parses the corpus file at path.
@@ -6331,6 +6333,9 @@ type Run struct {
 	// Candidate is the directory whose prompts and judge skill the run replayed (--candidate,
 	// evalrun.WithCandidate); "" = the configured ones.
 	Candidate string `json:"candidate,omitempty"`
+	// CorpusAlone is set when the run read Corpus alone (--corpus FILE), without the learned corpus
+	// the daemon writes; `eval score` reads it alone again. Runs before it was recorded read both.
+	CorpusAlone bool `json:"corpus_alone,omitempty"`
 }
     Run is one replay of a corpus.
 
@@ -6559,7 +6564,7 @@ type Options struct {
 	// full replay left no reviewer report, fails with ErrNoFullReplay before
 	// it reads GitHub or checks anything out.
 	JudgeOnly bool
-	// NoNotes withholds the repository notes from the judge; Keep leaves
+	// NoNotes withholds the repository notes from every role; Keep leaves
 	// the case's worktree in place; Force runs past [usage] codex_soft.
 	NoNotes, Keep, Force bool
 	// AgentTag tags the case's agents (agents.Deps.Tag), the run's own;
@@ -9744,8 +9749,14 @@ type OwnThread struct {
 	ReviewedSHA string `json:"reviewed_sha"`
 	// FindingRef is the posted finding ("<run id>/<finding id>") of the
 	// root's review on the same path within NearLines; "" when none.
-	FindingRef string        `json:"finding_ref,omitempty"`
-	Replies    []ThreadReply `json:"replies"`
+	FindingRef string `json:"finding_ref,omitempty"`
+	// File is the finding's file at ReviewedSHA, relative to the
+	// candidates file's directory, which the classifier judges the finding
+	// against; FileSkipped says why there is no copy. The engine fills
+	// both, as for a Candidate.
+	File        string        `json:"file,omitempty"`
+	FileSkipped string        `json:"file_skipped,omitempty"`
+	Replies     []ThreadReply `json:"replies"`
 }
     OwnThread is a review thread magnum started that someone else answered, for
     the classifier ("o<comment id>"): the finding as magnum posted it (where,

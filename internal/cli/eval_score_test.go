@@ -56,3 +56,50 @@ func TestEvalScoreOfASavedReplayLeavesTheDescriptionLineOut(t *testing.T) {
 		t.Fatalf("saved run %+v, %v: want the description line's defect missed", run.Cases[0].Score, err)
 	}
 }
+
+// `eval run --corpus FILE` reads that file alone, and `eval score` of the run reads it alone again:
+// the learned corpus is not merged in, so a case name the file shares with it is no error, and a run
+// given the learned corpus itself is scored on it once. A run recorded before it said so, whose corpus
+// is the learned file, is scored on that file once too. Every case is on a flagged PR, so nothing
+// replays.
+func TestEvalScoreRereadsAnExplicitCorpusAlone(t *testing.T) {
+	f := newInspFixture(t)
+	learned := f.Ctx.Layout.LearnCorpus()
+	if err := eval.WriteCorpus(learned, eval.Corpus{Cases: []eval.Case{{Name: "decline-7", PR: "example/gadgets#5", Head: evalTestHead,
+		Defects: []eval.Defect{{ID: "decline-7", Title: "t", Expect: eval.ExpectAbsent, Paths: []string{"a.rb"}}}}}}); err != nil {
+		t.Fatal(err)
+	}
+	operators := filepath.Join(t.TempDir(), "eval.toml") // a case of the operator's that the learned corpus also names
+	writeEvalFile(t, operators, "[[case]]\nname = \"decline-7\"\npr = \"example/widgets#3\"\nhead = \""+evalTestHead+"\"\n\n"+
+		"[[case.defect]]\nid = \"d\"\ntitle = \"t\"\npaths = [\"a.rb\"]\nmatch = [\"x\"]\n")
+	for _, pr := range []string{"example/widgets#3", "example/gadgets#5"} {
+		if err := eval.MarkFlagged(evalRunsRoot(f.Ctx.Layout), eval.Flagged{Case: "was-" + strings.NewReplacer("/", "-", "#", "-").Replace(pr), PR: pr, Run: "20261007-134000", Reason: "Codex refused"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, corpus := range []string{learned, operators} {
+		f.Out.Reset()
+		if code := execute(f.Ctx, []string{"eval", "run", "--corpus", corpus}); code != 0 {
+			t.Fatalf("eval run --corpus %s: exit %d; stderr %s", corpus, code, f.Err)
+		}
+		runs, err := eval.ListRuns(evalRunsRoot(f.Ctx.Layout))
+		if err != nil || len(runs) == 0 {
+			t.Fatalf("runs = %+v, %v", runs, err)
+		}
+		run := runs[len(runs)-1]
+		if run.Corpus != corpus || !run.CorpusAlone {
+			t.Fatalf("eval run --corpus %s recorded corpus %q, alone %v; want the file alone", corpus, run.Corpus, run.CorpusAlone)
+		}
+		if code := execute(f.Ctx, []string{"eval", "score", run.ID}); code != 0 {
+			t.Fatalf("eval score of the run given %s: exit %d; stderr %s", corpus, code, f.Err)
+		}
+	}
+	dir := filepath.Join(evalRunsRoot(f.Ctx.Layout), "20261008-090000") // before runs recorded corpus_alone
+	if err := eval.SaveRun(dir, eval.Run{ID: "20261008-090000", Corpus: learned, Cases: []eval.CaseRun{{
+		Case: "decline-7", PR: "example/gadgets#5", Head: evalTestHead, Outcome: evalFlagged}}}); err != nil {
+		t.Fatal(err)
+	}
+	if code := execute(f.Ctx, []string{"eval", "score", "20261008-090000"}); code != 0 {
+		t.Fatalf("eval score of an older run given the learned corpus: exit %d; stderr %s", code, f.Err)
+	}
+}

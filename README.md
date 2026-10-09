@@ -1558,43 +1558,45 @@ whether or not a retro already did, like `--again` for those.
 For each one it reads the review threads and reviews from GitHub and keeps the root comment of every thread
 and the summary of every review written by someone other than the author, Magnum's own logins (every
 configured identity's, and the ones the PR's reviews were posted as) and, unless `include_bots`, bots.
-Replies are not candidates; only those under Magnum's own findings are read (below). A comment shorter than `min_comment_chars` (20) once quotes and code blocks are
-removed, or one that only approves ("LGTM, thanks!"), is dropped. A comment within three lines of a finding
-Magnum posted on the same file was caught and is only counted. A comment made on a commit Magnum reviewed
-applies to that commit; one made on a later commit applies to the newest commit Magnum reviewed before it
-only when that later commit descends from it and GitHub's comparison shows the file unchanged since, and
-is recorded as `outside` otherwise (about code Magnum never saw: a later change, an older commit, a history
-a force push replaced). A comment near a finding the judge rejected is marked as raised and rejected, with
-the judge's reason code, unless the agent below names another rejected finding as the one that reports the
-comment's problem. A comment on deleted lines keeps its file and hunk but no line.
+Replies are not candidates; only those under Magnum's own findings are read (below). A comment shorter than
+`min_comment_chars` (20) once quotes and code blocks are removed, or one that only approves
+("LGTM, thanks!"), is dropped. A comment within three lines of a finding Magnum posted on the same file was
+caught and is only counted. A comment made on a commit Magnum reviewed applies to that commit; one made on a
+later commit applies to the newest commit Magnum reviewed before it only when that later commit descends
+from it and GitHub's comparison shows the file unchanged since, and is recorded as `outside` otherwise
+(about code Magnum never saw: a later change, an older commit, a history a force push replaced). A comment
+near a finding the judge rejected is marked as raised and rejected, with the judge's reason code, unless the
+agent below names another rejected finding as the one that reports the comment's problem. A comment on
+deleted lines keeps its file and hunk but no line.
 
 The rest goes to an interactive agent in a herdr workspace named `learn retro`, tagged `learn` like eval's
 agents are tagged `eval`: `kind` and `model` (Claude sonnet by default; `sonnet` is the default of the
 `claude` kind only, so another `kind` without a `model` runs on its own default model, and the agent
 is checked like a `[[role]]`), one prompt per pull request
 (`prompts/retro.md`) that carries only file paths, the pull request's URL and the reviewed SHAs. The agent
-reads the comments from a file, with each commented file as it was at the reviewed commit (copied from
-GitHub, up to 512 KiB each), and writes its answer to another: `miss` (a real defect a careful reviewer
-should have reported), `not_issue`, `style` or `outside`, and for a miss a severity, a title, a one-line
-lesson ("When X, check Y because Z"), a scope (`general` or `repo`), the lines and patterns a finding of it
-would match. It also gets the 40 newest findings the judge rejected on the pull request (title, file, reason,
-priority) and names the one that reports a comment's problem, if any, by meaning rather than by line: a test
-gap the judge raised on the spec file is linked to a comment on the code it should test. Magnum checks the answer; a missing or invalid one gets one nudge, then the pull request is
-recorded as failed and the retro goes on; the next retros try a failed pull request again, three times
-in all. A lesson is dropped (a `retro.lesson_rejected` event says why, never what) when it names a pull
-request or issue, a URL, the author or a reviewer, mentions one of Magnum's logins, or, for a `general`
-lesson, the repository: general lessons can reach the public review skill, while a `repo` lesson stays
-with that repository's notes. A shutdown, an agent that cannot start or goes away, a limit on the
-agent (a usage limit or a logout, which also pause its CLI as a round's would, a per-model limit or an
-overload), or GitHub that cannot be reached (the network, a server error, a rate limit) ends the retro
-without recording the pull request it was on, so the next retro takes that one and the rest, and the
-pull request keeps its attempts. A daily retro that GitHub stopped is not the day's: it starts again 15
-minutes later. No retro starts while the agent's CLI is paused, nor while the daemon stops, drains for a
-restart or holds dispatch for an infrastructure pause, and one a shutdown cuts short counts as neither done nor failed (`magnum status` keeps the last
-finished retro, and the next start runs the day's again). Trust dialogs, permission prompts
-(answered No) and Codex's hooks review behave as in rounds. The agent works in
-`~/.local/share/magnum/learn/retro/` and is closed when the retro ends, quit if it is still busy; an
-agent an earlier retro left running is ended before a new one starts.
+reads the comments from a file, with each commented file, and the file of each of Magnum's answered
+findings, as it was at the reviewed commit (copied from GitHub, up to 512 KiB each, each once), and writes
+its answer to another: `miss` (a real defect a careful reviewer should have reported), `not_issue`, `style`
+or `outside`, and for a miss a severity, a title, a one-line lesson ("When X, check Y because Z"), a scope
+(`general` or `repo`), the lines and patterns a finding of it would match. It also gets the 40 newest
+findings the judge rejected on the pull request (title, file, reason, priority) and names the one that
+reports a comment's problem, if any, by meaning rather than by line: a test gap the judge raised on the spec
+file is linked to a comment on the code it should test. Magnum checks the answer; a missing or invalid one
+gets one nudge, then the pull request is recorded as failed and the retro goes on; the next retros try a
+failed pull request again, three times in all. A lesson is dropped (a `retro.lesson_rejected` event says
+why, never what) when it names a pull request or issue, a URL, the author or a reviewer, mentions one of
+Magnum's logins, or, for a `general` lesson, the repository: general lessons can reach the public review
+skill, while a `repo` lesson stays with that repository's notes. A shutdown, an agent that cannot start or
+goes away, a limit on the agent (a usage limit or a logout, which also pause its CLI as a round's would, a
+per-model limit or an overload), or GitHub that cannot be reached (the network, a server error, a rate
+limit) ends the retro without recording the pull request it was on, so the next retro takes that one and
+the rest, and the pull request keeps its attempts. A daily retro that GitHub stopped is not the day's: it
+starts again 15 minutes later. No retro starts while the agent's CLI is paused, nor while the daemon
+stops, drains for a restart or holds dispatch for an infrastructure pause, and one a shutdown cuts short
+counts as neither done nor failed (`magnum status` keeps the last finished retro, and the next start runs
+the day's again). Trust dialogs, permission prompts (answered No) and Codex's hooks review behave as in
+rounds. The agent works in `~/.local/share/magnum/learn/retro/` and is closed when the retro ends, quit if
+it is still busy; an agent an earlier retro left running is ended before a new one starts.
 
 The registry keeps one row per comment in its `misses` table: the comment's URL, reviewer, file and line,
 the reviewed commit, the class, whether Magnum had raised it and, for a miss, what the agent wrote. It never
@@ -1621,19 +1623,21 @@ takes it.
 
 **What authors answered.** A thread Magnum started with one of its findings and that someone else replied to
 (the author or another reviewer; a bot only with `include_bots`) goes to the same agent in the same prompt,
-listed under `threads` in `candidates.json` with the finding's first line, priority, file and line and every
-reply, Magnum's own marked `(magnum)`. Only a review Magnum posted holds its findings: with a `gh` identity
-the login is yours, so what you comment by hand is not one of them, and your own replies by hand count as
-answers (Magnum's carry its reply marker). The agent says what the author did with the finding: `fixed`,
-`declined`, `deferred`, `argued`, `question` or `unrelated`; for a declined or argued one whether Magnum was
-`wrong`, ranked it too high (`over_ranked`), lacked the repository's context (`missing_context`) or was
-`right`; and for the first three a lesson, its scope and patterns, as for a miss. Each answer is one row of
-the registry's `declines` table, with the run that posted the review, the finding's provenance row and the
-hash of the review skill the round ran with, never a reply's text, and a re-run keeps its state. A finding
-declined for missing context with scope `repo` is also a repository miss, so the next notes curation of that
-repository takes it like any other, until a later retro of the pull request answers it otherwise. `magnum misses --declines` lists the findings authors declined or argued
-that no lesson was drawn from yet (`--all` every answer, `--json` the rows), `magnum stats` counts the
-answers by source and by priority, and `magnum status` adds how many declined findings wait.
+listed under `threads` in `candidates.json` with the finding's first line, priority, file and line, a copy
+of that file at the commit Magnum reviewed and every reply, Magnum's own marked `(magnum)`. Only a review
+Magnum posted holds its findings: with a `gh` identity the login is yours, so what you comment by hand is
+not one of them, and your own replies by hand count as answers (Magnum's carry its reply marker). The agent
+says what the author did with the finding: `fixed`, `declined`, `deferred`, `argued`, `question` or
+`unrelated`; for a declined or argued one whether Magnum was `wrong`, ranked it too high (`over_ranked`),
+lacked the repository's context (`missing_context`) or was `right`; and for the first three a lesson, its
+scope and patterns, as for a miss. Each answer is one row of the registry's `declines` table, with the run
+that posted the review, the finding's provenance row and the hash of the review skill the round ran with,
+never a reply's text, and a re-run keeps its state. A finding declined for missing context with scope `repo`
+is also a repository miss, so the next notes curation of that repository takes it like any other, until a
+later retro of the pull request answers it otherwise. `magnum misses --declines` lists the findings authors
+declined or argued that no lesson was drawn from yet (`--all` every answer, `--json` the rows),
+`magnum stats` counts the answers by source and by priority, and `magnum status` adds how many declined
+findings wait.
 
 **The learned eval corpus.** Each retro ends by rewriting `~/.local/share/magnum/learn/corpus.toml`, which
 `magnum eval` reads after your corpus: one case per `general` miss of severity P0 to P2 (`miss-<id>`, a
@@ -1953,8 +1957,9 @@ commits, and nothing is posted. When a case ends, a judge still at work gets one
 workspace is closed (a message names any workspace that stays open); before a case starts, an `eval <repo>#<N>`
 workspace of the same PR whose panes all work in the eval worktrees, which an earlier run left open, is closed,
 and a case whose agent would run anywhere but its own workspace fails before the first prompt. The report gives recall of the seeded defects and the noise count, and
-compares them with the previous run; `magnum eval score` re-applies the corpus after you fix a match
-rule (a case the corpus now pins to another head keeps its score and says so). A defect with `body = true`
+compares them with the previous run; `magnum eval score` re-applies the corpus the run read after you fix a
+match rule (a run given `--corpus FILE` that file alone again; a case the corpus now pins to another head
+keeps its score and says so). A defect with `body = true`
 counts a mention in the review body's finding list or its "Found nearby" block, never one in a `Description: ✗`
 line or the Checks block. A defect with `expect = "absent"` is a finding the review must not make (one an
 author declined as wrong): a finding that matches it is a false positive, an `absent hit` in the report and

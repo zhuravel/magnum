@@ -5289,6 +5289,28 @@ editing history. Code, config comments and prompts reference these by their head
   a turn it never began), a separate judge prompt for replays (it would measure a prompt no round
   sends) and taking any full replay at the head (a master judge would be scored on the reports of a
   candidate that changed a reviewer's prompt, or of reviewers that never saw the notes it reads).
+- **`eval score` reads a run's corpus as the run read it** (2026-10-09, amends "The daemon keeps a
+  learned eval corpus"). `eval run --corpus FILE` reads that file alone, but `eval score` without
+  `--corpus` read the file the run recorded together with the learned corpus: a run given the learned
+  corpus itself could not be scored (every case name was in both files), and a run given another file
+  was scored with the learned cases merged in, and failed on a name the two files shared although the
+  run never read the learned one. `run.json` now records `corpus_alone` (`eval.Run.CorpusAlone`) for a
+  run given `--corpus`, and `score` reads that run's corpus alone again; a run recorded before reads
+  both, as it did. `eval.LoadCorpora` reads one path given as both corpora (compared cleaned) once,
+  which also scores an older run given the learned corpus. Rejected: recording the learned path a run
+  read instead (an older run, which records none, would read as one that read its corpus alone and
+  lose its learned cases).
+- **The retro copies the file of each answered finding** (2026-10-09, amends "The retro classifies the
+  replies to magnum's own findings"). The classifier gives a declined or argued finding its verdict
+  against the code and the replies, but the retro copied only the files other reviewers commented on,
+  so a finding nobody else commented near was judged on the author's answer alone, and a wrong or
+  over-ranked verdict becomes an absent defect of the learned corpus, which a later skill change is
+  scored on. `retroFiles` now copies each own thread's file at its reviewed commit as it copies a
+  commented file (`retroFetch`: GitHub's size limit, every write confined to the PR's retro directory,
+  each file once for the candidates and threads that share it), and `learn.OwnThread` carries `file`
+  and `file_skipped` as a candidate does; `retro.md` lists them and says to read the file before
+  judging the finding. Rejected: letting the classifier fetch the file (its prompt says to fetch
+  nothing, and it reads only what the retro wrote).
 - **The registry keeps every skill proposal, what it did with each input, and every landed version**
   (2026-10-09, stage 3 of the self-improving review loop). The editor drafts changes to the judge skill
   and the prompts from the general misses and the general declines, and the gate and the operator decide

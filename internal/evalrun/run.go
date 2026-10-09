@@ -105,7 +105,7 @@ type Options struct {
 	// full replay left no reviewer report, fails with ErrNoFullReplay before
 	// it reads GitHub or checks anything out.
 	JudgeOnly bool
-	// NoNotes withholds the repository notes from the judge; Keep leaves
+	// NoNotes withholds the repository notes from every role; Keep leaves
 	// the case's worktree in place; Force runs past [usage] codex_soft.
 	NoNotes, Keep, Force bool
 	// AgentTag tags the case's agents (agents.Deps.Tag), the run's own;
