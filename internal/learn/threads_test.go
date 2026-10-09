@@ -34,6 +34,13 @@ func ownThread(id int64, path string, line int, sha string, reviewID int64, repl
 	return th
 }
 
+// ownInput is input with review 501 one magnum posted, by run r-1.
+func ownInput(threads []github.Thread) Input {
+	in := input(threads, nil)
+	in.ReviewRuns = map[int64]string{501: "r-1"}
+	return in
+}
+
 func threadIDs(ts []OwnThread) []string {
 	out := []string{}
 	for _, t := range ts {
@@ -43,11 +50,12 @@ func threadIDs(ts []OwnThread) []string {
 }
 
 // TestOwnThreadsKeepOnlyMagnumsRootsWithOthersReplies: a thread is magnum's
-// when its root comment is one of Own's logins, and it is kept only when
-// someone other than magnum replied: the author or another reviewer, not a
-// ghost, not a bot unless IncludeBots. The replies come in order, magnum's
-// own marked OwnAuthor, and Build carries the threads beside the
-// candidates, never as candidates.
+// when its root comment is one of Own's logins in a review magnum posted
+// (ReviewRuns), and it is kept only when someone other than magnum
+// replied: the author or another reviewer, not a ghost, not a bot unless
+// IncludeBots. The replies come in order, magnum's App's marked OwnAuthor,
+// and Build carries the threads beside the candidates, never as
+// candidates.
 func TestOwnThreadsKeepOnlyMagnumsRootsWithOthersReplies(t *testing.T) {
 	user := ownThread(7, "app/a.rb", 3, shaA, 501, [2]string{"rev-ann", "Is this reachable?"})
 	user.Comments[0].AuthorLogin, user.Comments[0].AuthorType = "ZHURAVEL", "User" // magnum's user identity, any case
@@ -62,7 +70,7 @@ func TestOwnThreadsKeepOnlyMagnumsRootsWithOthersReplies(t *testing.T) {
 		ownThread(8, "app/a.rb", 80, shaA, 501, [2]string{"rev-ann", "Not a problem: the caller checks it."},
 			[2]string{"talkable", "The caller does not run on the import path."}, [2]string{"alice", "Won't fix."}),
 	}
-	in := input(threads, nil)
+	in := ownInput(threads)
 	got := OwnThreads(in)
 	if ids := threadIDs(got); !slices.Equal(ids, []string{"o1", "o7", "o8"}) {
 		t.Fatalf("own threads = %v, want [o1 o7 o8]", ids)
@@ -74,12 +82,7 @@ func TestOwnThreadsKeepOnlyMagnumsRootsWithOthersReplies(t *testing.T) {
 		t.Fatalf("o8 = %+v", o8)
 	}
 
-	in.IncludeBots = true
-	if ids := threadIDs(OwnThreads(in)); !slices.Equal(ids, []string{"o1", "o5", "o7", "o8"}) {
-		t.Fatalf("with include_bots: %v", ids)
-	}
-
-	res, err := Build(input(threads, nil))
+	res, err := Build(in)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,6 +91,61 @@ func TestOwnThreadsKeepOnlyMagnumsRootsWithOthersReplies(t *testing.T) {
 	}
 	if ids := ids(res.Candidates); !slices.Equal(ids, []string{"t4"}) {
 		t.Fatalf("Build's candidates = %v, want only rev-ann's own thread", ids)
+	}
+
+	in.IncludeBots = true
+	if ids := threadIDs(OwnThreads(in)); !slices.Equal(ids, []string{"o1", "o5", "o7", "o8"}) {
+		t.Fatalf("with include_bots: %v", ids)
+	}
+}
+
+// TestAThreadTheOperatorStartedByHandIsNotMagnums: a configured gh
+// identity is the operator's own login, so a root comment by it is
+// magnum's only in a review magnum posted (ReviewRuns). One the operator
+// wrote in a review of his own, or one whose review is unknown, is no own
+// thread (and, by one of magnum's logins, no candidate either), whoever
+// answered it.
+func TestAThreadTheOperatorStartedByHandIsNotMagnums(t *testing.T) {
+	byHand := ownThread(1, "app/a.rb", 10, shaA, 777, [2]string{"alice", "No, the caller handles it."})
+	byHand.Comments[0].AuthorLogin, byHand.Comments[0].AuthorType = "zhuravel", "User"
+	byHand.Comments[0].Body = "Could you rename this variable?"
+	posted := ownThread(2, "app/a.rb", 20, shaA, 501, [2]string{"alice", "No, the caller handles it."})
+	posted.Comments[0].AuthorLogin, posted.Comments[0].AuthorType = "zhuravel", "User" // magnum posting as the operator
+	unknown := ownThread(3, "app/a.rb", 30, shaA, 0, [2]string{"alice", "No, the caller handles it."})
+	in := ownInput([]github.Thread{byHand, posted, unknown})
+	if ids := threadIDs(OwnThreads(in)); !slices.Equal(ids, []string{"o2"}) {
+		t.Fatalf("own threads = %v, want only o2, magnum's review's", ids)
+	}
+	res, err := Build(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := threadIDs(res.Threads); !slices.Equal(got, []string{"o2"}) || len(res.Candidates) != 0 {
+		t.Fatalf("Build: threads %v, candidates %v", got, ids(res.Candidates))
+	}
+}
+
+// TestOnlyAMarkedOrAppReplyIsMagnums: a reply is magnum's (OwnAuthor) when
+// it carries magnum's reply marker or comes from one of magnum's Apps. The
+// operator's own login replying by hand is a person who answered: the
+// thread is kept with his reply under his login.
+func TestOnlyAMarkedOrAppReplyIsMagnums(t *testing.T) {
+	marked := "The caller does not run on the import path.\n\n<!-- magnum:reply run=r-1 kind=rebuttal -->"
+	threads := []github.Thread{
+		ownThread(1, "app/a.rb", 10, shaA, 501, [2]string{"zhuravel", "Agreed with the author, drop it."}),
+		ownThread(2, "app/a.rb", 20, shaA, 501, [2]string{"zhuravel", marked}),
+		ownThread(3, "app/a.rb", 30, shaA, 501, [2]string{"zhuravel", marked}, [2]string{"alice", "Won't fix."}),
+		ownThread(4, "app/a.rb", 40, shaA, 501, [2]string{"talkable", "Still open at the new head."}),
+	}
+	got := OwnThreads(ownInput(threads))
+	if ids := threadIDs(got); !slices.Equal(ids, []string{"o1", "o3"}) {
+		t.Fatalf("own threads = %v, want [o1 o3]", ids)
+	}
+	if want := []ThreadReply{{Author: "zhuravel", Body: "Agreed with the author, drop it."}}; !reflect.DeepEqual(got[0].Replies, want) {
+		t.Fatalf("o1's replies = %+v", got[0].Replies)
+	}
+	if want := []ThreadReply{{Author: OwnAuthor, Body: marked}, {Author: "alice", Body: "Won't fix."}}; !reflect.DeepEqual(got[1].Replies, want) {
+		t.Fatalf("o3's replies = %+v", got[1].Replies)
 	}
 }
 
@@ -101,14 +159,14 @@ func TestOwnThreadsKeepOnlyMagnumsRootsWithOthersReplies(t *testing.T) {
 func TestOwnThreadsBindTheReviewedCommitAndTheFinding(t *testing.T) {
 	reply := [2]string{"alice", "We never pass a foreign code here."}
 	onC := ownThread(1, "app/models/coupon.rb", 42, shaC, 502, reply)
-	onB := ownThread(2, "app/models/coupon.rb", 42, shaB, 0, reply) // a commit magnum did not review, review unknown
+	onB := ownThread(2, "app/models/coupon.rb", 42, shaB, 503, reply) // a commit magnum did not review, a run without findings
 	onB.Comments[0].CreatedAt = t0.Add(2 * time.Hour)
 	far := ownThread(3, "app/models/coupon.rb", 60, shaA, 501, reply)
 	plain := ownThread(4, "app/models/gift.rb", 5, shaA, 501, reply)
 	plain.Comments[0].Body = "\n  Gift cards skip the balance check  \nmore"
 	in := input([]github.Thread{onC, onB, far, plain}, nil)
 	in.Reviewed = []Reviewed{{SHA: shaA, At: t0}, {SHA: shaC, At: t0.Add(3 * time.Hour)}}
-	in.ReviewRuns = map[int64]string{501: "r-1", 502: "r-2"}
+	in.ReviewRuns = map[int64]string{501: "r-1", 502: "r-2", 503: "r-3"}
 	in.Findings = []store.Finding{
 		{RunID: "r-1", FindingID: "F1", Path: "app/models/coupon.rb", Line: 42, Verdict: store.FindingPosted},   // review 501's
 		{RunID: "r-2", FindingID: "F1", Path: "app/models/coupon.rb", Line: 44, Verdict: store.FindingPosted},   // review 502's
@@ -144,7 +202,7 @@ func TestOwnThreadsBindTheReviewedCommitAndTheFinding(t *testing.T) {
 // match is needed, and any the classifier adds is dropped.
 func TestAFixedReplyNeedsNoLesson(t *testing.T) {
 	th := ownThread(9, "app/a.rb", 10, shaA, 501, [2]string{"alice", "> **[P2] Coupon lookup ignores the site**\n\nfixed in abc1234"})
-	threads := OwnThreads(input([]github.Thread{th}, nil))
+	threads := OwnThreads(ownInput([]github.Thread{th}))
 	if len(threads) != 1 || threads[0].ID != "o9" {
 		t.Fatalf("own threads = %+v", threads)
 	}

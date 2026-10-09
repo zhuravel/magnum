@@ -1620,7 +1620,9 @@ note. A `general` miss stays `new`: it is for the review skill, which a later st
 **What authors answered.** A thread Magnum started with one of its findings and that someone else replied to
 (the author or another reviewer; a bot only with `include_bots`) goes to the same agent in the same prompt,
 listed under `threads` in `candidates.json` with the finding's first line, priority, file and line and every
-reply, Magnum's own marked `(magnum)`. The agent says what the author did with the finding: `fixed`,
+reply, Magnum's own marked `(magnum)`. Only a review Magnum posted holds its findings: with a `gh` identity
+the login is yours, so what you comment by hand is not one of them, and your own replies by hand count as
+answers (Magnum's carry its reply marker). The agent says what the author did with the finding: `fixed`,
 `declined`, `deferred`, `argued`, `question` or `unrelated`; for a declined or argued one whether Magnum was
 `wrong`, ranked it too high (`over_ranked`), lacked the repository's context (`missing_context`) or was
 `right`; and for the first three a lesson, its scope and patterns, as for a miss. Each answer is one row of

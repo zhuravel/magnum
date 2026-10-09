@@ -9019,7 +9019,10 @@ type Input struct {
 	// Reviewed are the commits magnum reviewed; their order does not matter.
 	Reviewed []Reviewed
 	// Own are magnum's logins in Account form: every configured identity's,
-	// and the ones the pull request's reviews were posted as.
+	// and the ones the pull request's reviews were posted as. A gh
+	// identity's is the operator's own, so a comment by one of them is
+	// never a candidate, and is magnum's finding only in one of magnum's
+	// reviews (ReviewRuns, OwnThreads).
 	Own []string
 	// Threads and Reviews are the pull request's review threads and
 	// reviews as GitHub reports them.
@@ -9030,9 +9033,10 @@ type Input struct {
 	// caught it; a rejected one, that magnum raised it and let it go. The
 	// rejected ones also go to the classifier (Result.Rejected).
 	Findings []store.Finding
-	// ReviewRuns names the run that posted each of magnum's reviews, by
-	// review id (runs.review_id): an own thread's finding is one of its
-	// review's run (OwnThreads).
+	// ReviewRuns names, by review id (runs.review_id), the run of each
+	// review magnum posted whose findings are the review's: a thread is
+	// magnum's only when its root is in one of these reviews, and its
+	// finding is one of that run's (OwnThreads).
 	ReviewRuns map[int64]string
 	// MinChars drops a comment whose text, without quotes and code blocks,
 	// is shorter.
@@ -9074,7 +9078,7 @@ type OwnThread struct {
 	ID        string `json:"id"`
 	URL       string `json:"url"` // GitHub's link to the root comment
 	CommentID int64  `json:"comment_id"`
-	ReviewID  int64  `json:"review_id,omitempty"` // the review the root comment was posted in; 0 when unknown
+	ReviewID  int64  `json:"review_id,omitempty"` // the review magnum posted the root comment in (Input.ReviewRuns)
 	// Path and Line are where the root comment sits (Line 0 for a file
 	// comment or a comment on deleted lines, as for a Candidate).
 	Path string `json:"path,omitempty"`
@@ -9097,10 +9101,14 @@ type OwnThread struct {
 
 func OwnThreads(in Input) []OwnThread
     OwnThreads returns the threads of in whose root comment is by one of in.Own
-    with at least one reply by someone else (the author or another reviewer; not
-    a ghost, not a bot unless in.IncludeBots), in the order GitHub listed them.
-    The finding binds to a posted one of the root's review (in.ReviewRuns) by
-    path and line, as Build's nearness does.
+    in a review magnum posted (in.ReviewRuns: a gh identity is the operator's
+    own login, and what he writes by hand is no finding of magnum's) with at
+    least one reply by someone else (the author or another reviewer; not a
+    ghost, not a bot unless in.IncludeBots), in the order GitHub listed them. A
+    reply is magnum's (OwnAuthor) when it carries magnum's reply marker or comes
+    from one of in.Own's Apps; the operator replying by hand is someone else.
+    The finding binds to a posted one of the root's review's run by path and
+    line, as Build's nearness does.
 
 type Rejected struct {
 	ID       string `json:"id"` // "<run id>/<finding id>", the miss's FindingRef

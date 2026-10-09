@@ -5134,22 +5134,27 @@ editing history. Code, config comments and prompts reference these by their head
   row, and its decline must still count); storing the replies (PR text in the registry).
 - **The retro classifies the replies to magnum's own findings** (2026-10-09, amends "Learning loop:
   daily retro", which dropped every thread magnum started). A thread whose root comment is one of
-  magnum's logins and that someone else answered (the author or another reviewer, not a ghost, not a bot
-  unless `include_bots`) is an own thread (`learn.OwnThreads`, `o<comment id>`), listed under `threads`
-  in `candidates.json` beside the candidates: the finding as posted (the root's first line without its
-  bold and `[P2]` tag, the first P0 to P3 on it, path and line), the reviewed commit (the root's when
-  magnum reviewed it, else the newest reviewed before it), the posted finding of the same review's run
-  within 3 lines, and every reply, magnum's own marked `(magnum)`, which no GitHub login can be. The
-  classifier answers each with an outcome (`fixed`, `declined`, `deferred`, `argued`, `question`,
-  `unrelated`); a declined or argued one with a verdict (`wrong`, `over_ranked`, `missing_context`,
-  `right`); and a wrong, over-ranked or missing-context one with a lesson, scope and match patterns
-  under a miss's rules. `ParseOutput` wants exactly one thread item per own thread and, like a non-miss
-  class, drops the fields an outcome or verdict does not need, so an author who only quotes the finding
-  and says "fixed in abc1234" needs nothing but `fixed`. `retro.md` gets the section and the answer's
-  shape only when `{{.Threads}}` is above 0, so a pull request without answered findings renders the
-  prompt as before. Rejected: sending the whole root comment (the first line names the finding; the rest
-  restates the judge's evidence); requiring a verdict on every outcome (a fixed or deferred finding was
-  accepted, and a stricter schema costs nudges).
+  magnum's logins in a review magnum posted (one a run's `review_id` names: a gh identity's login is the
+  operator's own, and what he writes by hand in a review of his own is no finding of magnum's) and that
+  someone else answered (the author or another reviewer, the operator replying by hand included; not a
+  ghost, not a bot unless `include_bots`) is an own thread (`learn.OwnThreads`, `o<comment id>`), listed
+  under `threads` in `candidates.json` beside the candidates: the finding as posted (the root's first
+  line without its bold and `[P2]` tag, the first P0 to P3 on it, path and line), the reviewed commit
+  (the root's when magnum reviewed it, else the newest reviewed before it), the posted finding of the
+  same review's run within 3 lines, and every reply, magnum's own (one of its Apps', or one of its
+  logins' that carries the reply marker post-review appends) marked `(magnum)`, which no GitHub login
+  can be. The classifier answers each with an outcome (`fixed`, `declined`, `deferred`, `argued`,
+  `question`, `unrelated`); a declined or argued one with a verdict (`wrong`, `over_ranked`,
+  `missing_context`, `right`); and a wrong, over-ranked or missing-context one with a lesson, scope and
+  match patterns under a miss's rules. `ParseOutput` wants exactly one thread item per own thread and,
+  like a non-miss class, drops the fields an outcome or verdict does not need, so an author who only
+  quotes the finding and says "fixed in abc1234" needs nothing but `fixed`. `retro.md` gets the section
+  and the answer's shape only when `{{.Threads}}` is above 0, so a pull request without answered
+  findings renders the prompt as before. Rejected: sending the whole root comment (the first line names
+  the finding; the rest restates the judge's evidence); requiring a verdict on every outcome (a fixed or
+  deferred finding was accepted, and a stricter schema costs nudges); taking every root and reply by one
+  of magnum's logins as magnum's (under a gh identity the operator's own review comments became
+  declines, and his replies in magnum's threads never counted as an answer).
 - **A missing-context decline is a repo miss for the notes** (2026-10-09, amends "The retro's misses
   become notes proposals"). The retro stores the classifier's answer for each own thread as a decline
   (`storeDeclines`): the run that posted the thread's review (`runs.review_id`), the skill hash read

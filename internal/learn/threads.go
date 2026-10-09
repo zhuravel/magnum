@@ -2,7 +2,7 @@ package learn
 
 // Magnum's own findings in the retro (DECISIONS "The retro classifies the
 // replies to magnum's own findings"): a review thread whose root comment is
-// one of magnum's logins and that someone else answered goes to the
+// in a review magnum posted and that someone else answered goes to the
 // classifier with the finding as posted and the replies, and comes back
 // with what the author did with it (ThreadItem), stored as a decline
 // (store.Decline). Reply text stays in the retro's files.
@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/zhuravel/magnum/internal/github"
+	"github.com/zhuravel/magnum/internal/postreview"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
 )
@@ -34,7 +35,7 @@ type OwnThread struct {
 	ID        string `json:"id"`
 	URL       string `json:"url"` // GitHub's link to the root comment
 	CommentID int64  `json:"comment_id"`
-	ReviewID  int64  `json:"review_id,omitempty"` // the review the root comment was posted in; 0 when unknown
+	ReviewID  int64  `json:"review_id,omitempty"` // the review magnum posted the root comment in (Input.ReviewRuns)
 	// Path and Line are where the root comment sits (Line 0 for a file
 	// comment or a comment on deleted lines, as for a Candidate).
 	Path string `json:"path,omitempty"`
@@ -63,10 +64,14 @@ type ThreadReply struct {
 var priorityRe = regexp.MustCompile(`\bP[0-3]\b`)
 
 // OwnThreads returns the threads of in whose root comment is by one of
-// in.Own with at least one reply by someone else (the author or another
+// in.Own in a review magnum posted (in.ReviewRuns: a gh identity is the
+// operator's own login, and what he writes by hand is no finding of
+// magnum's) with at least one reply by someone else (the author or another
 // reviewer; not a ghost, not a bot unless in.IncludeBots), in the order
-// GitHub listed them. The finding binds to a posted one of the root's
-// review (in.ReviewRuns) by path and line, as Build's nearness does.
+// GitHub listed them. A reply is magnum's (OwnAuthor) when it carries
+// magnum's reply marker or comes from one of in.Own's Apps; the operator
+// replying by hand is someone else. The finding binds to a posted one of
+// the root's review's run by path and line, as Build's nearness does.
 func OwnThreads(in Input) []OwnThread {
 	reviewed := map[string]bool{}
 	for _, r := range in.Reviewed {
@@ -78,7 +83,8 @@ func OwnThreads(in Input) []OwnThread {
 			continue
 		}
 		root := t.Comments[0]
-		if !in.own(github.Account(root.AuthorLogin, root.AuthorType)) || root.ID <= 0 || root.URL == "" {
+		run := in.ReviewRuns[root.ReviewID]
+		if !in.own(github.Account(root.AuthorLogin, root.AuthorType)) || root.ReviewID <= 0 || run == "" || root.ID <= 0 || root.URL == "" {
 			continue
 		}
 		var replies []ThreadReply
@@ -88,7 +94,7 @@ func OwnThreads(in Input) []OwnThread {
 			switch {
 			case who == "":
 				continue
-			case in.own(who):
+			case in.ownReply(who, c):
 				who = OwnAuthor
 			case in.IncludeBots || !github.IsBot(c.AuthorType, who):
 				answered = true
@@ -109,15 +115,13 @@ func OwnThreads(in Input) []OwnThread {
 		} else {
 			o.ReviewedSHA = cmp.Or(in.reviewedBefore(root.CreatedAt), root.OriginalCommitOid, in.newest())
 		}
-		if run := in.ReviewRuns[root.ReviewID]; run != "" && root.ReviewID > 0 {
-			c := Candidate{Path: o.Path, Line: o.Line}
-			if t.OriginalStartLine > 0 && t.OriginalStartLine < t.OriginalLine && o.Line > 0 {
-				c.StartLine = t.OriginalStartLine
-			}
-			fs := slices.DeleteFunc(slices.Clone(in.Findings), func(f store.Finding) bool { return f.RunID != run })
-			if f := near(fs, store.FindingPosted, c); f != nil {
-				o.FindingRef = findingRef(*f)
-			}
+		c := Candidate{Path: o.Path, Line: o.Line}
+		if t.OriginalStartLine > 0 && t.OriginalStartLine < t.OriginalLine && o.Line > 0 {
+			c.StartLine = t.OriginalStartLine
+		}
+		fs := slices.DeleteFunc(slices.Clone(in.Findings), func(f store.Finding) bool { return f.RunID != run })
+		if f := near(fs, store.FindingPosted, c); f != nil {
+			o.FindingRef = findingRef(*f)
 		}
 		out = append(out, o)
 	}
@@ -127,6 +131,19 @@ func OwnThreads(in Input) []OwnThread {
 // own reports whether login (Account form) is one of magnum's.
 func (in Input) own(login string) bool {
 	return login != "" && slices.ContainsFunc(in.Own, func(o string) bool { return github.SameAccount(o, login) })
+}
+
+// ownReply reports whether reply c by who (Account form) is magnum's: by
+// one of its logins, and either one of its Apps, which no person can write
+// as, or carrying the reply marker post-review appends
+// (postreview.ReplyMarker). A gh identity's login is the operator's own,
+// so what he replies by hand is someone else's answer.
+func (in Input) ownReply(who string, c github.ThreadComment) bool {
+	if !in.own(who) {
+		return false
+	}
+	_, _, marked := postreview.ParseReplyMarker(c.Body)
+	return marked || github.IsBot(c.AuthorType, who)
 }
 
 // findingTitle is a posted finding's title and priority from its comment:

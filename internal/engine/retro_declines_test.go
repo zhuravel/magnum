@@ -227,10 +227,10 @@ func TestAMissingContextDeclineBecomesARepoMissForTheCuration(t *testing.T) {
 }
 
 // TestADeclineWithoutAFindingsRowIsStoredWithoutOne: a finding posted
-// before the findings table (migration 0005) or by a review magnum has no
-// run of has no findings row: its decline is stored without the link (and
-// without a run and skill hash when the review is unknown), and the retro
-// goes on.
+// before the findings table (migration 0005), or by a run that recorded
+// none, has no findings row: its decline is stored without the link, and
+// the retro goes on. A thread of a review no run of magnum's posted is not
+// magnum's finding at all: no decline.
 func TestADeclineWithoutAFindingsRowIsStoredWithoutOne(t *testing.T) {
 	fc := threadsClassifier(map[string]learn.ThreadItem{"o301": wrongDecline, "o303": wrongDecline})
 	h := newHarness(t, withClassifier(fc))
@@ -239,18 +239,61 @@ func TestADeclineWithoutAFindingsRowIsStoredWithoutOne(t *testing.T) {
 	seedOwnThreads(h, 7, ownRetroThread(7, 303, 50, 0, [2]string{"alice", "Not an issue."}))
 	h.requestRetro(RetroPayload{})
 
+	if len(fc.jobs) != 1 || len(fc.jobs[0].Threads) != 2 {
+		t.Fatalf("classifier jobs = %d, want one with o301 and o302", len(fc.jobs))
+	}
 	ds := h.declinesOf(pr.ID)
-	if len(ds) != 3 {
-		t.Fatalf("declines = %+v", ds)
+	if len(ds) != 2 {
+		t.Fatalf("declines = %+v, want o301 and o302", ds)
 	}
 	if d := ds[301]; d.FindingRowID != nil || d.RunID != "r-7" || d.SkillSHA != "" || d.Outcome != store.DeclineDeclined {
 		t.Fatalf("o301 (its run recorded no findings, its prompt names no skill) = %+v", d)
 	}
-	if d := ds[303]; d.FindingRowID != nil || d.RunID != "" || d.ReviewID != 0 || d.Verdict != store.VerdictWrong || d.ReviewedSHA != retroShaA {
-		t.Fatalf("o303 (its review is unknown) = %+v", d)
+	if d, ok := ds[303]; ok {
+		t.Fatalf("o303 (its review is unknown) = %+v, want no decline", d)
 	}
 	if rp, err := h.retroRecord(pr.ID); err != nil || rp.Status != store.RetroClassified {
 		t.Fatalf("retro_prs = %+v, %v", rp, err)
+	}
+}
+
+// TestTheOperatorsOwnCommentIsNoDecline: a gh identity's login is the
+// operator's own. A comment he writes by hand in a review of his own that
+// someone answers is no finding of magnum's, so the retro stores no
+// decline for it, and his reply by hand in magnum's thread is an answer
+// (under his login), while magnum's marked reply is magnum's.
+func TestTheOperatorsOwnCommentIsNoDecline(t *testing.T) {
+	fc := threadsClassifier(map[string]learn.ThreadItem{"o301": wrongDecline, "o304": wrongDecline})
+	h := newHarness(t, withClassifier(fc))
+	pr := retroPR(h, 7, 24*time.Hour)
+	seedRetroGitHub(h, 7)
+	byHand := ownRetroThread(7, 304, 50, 5555, [2]string{"alice", "No, the caller handles it."})
+	byHand.Comments[0].AuthorLogin, byHand.Comments[0].AuthorType = "zhuravel", "User"
+	byHand.Comments[0].Body = "Could you rename this variable?"
+	answered := ownRetroThread(7, 305, 70, 9007, [2]string{"zhuravel", "Agreed with the author, drop it."})
+	marked := ownRetroThread(7, 306, 90, 9007, [2]string{"zhuravel", "The caller does not lock.\n\n<!-- magnum:reply run=r-7 kind=rebuttal -->"})
+	seedOwnThreads(h, 7, byHand, answered, marked)
+	h.requestRetro(RetroPayload{})
+
+	if len(fc.jobs) != 1 {
+		t.Fatalf("classifier jobs = %d", len(fc.jobs))
+	}
+	var got []string
+	for _, th := range fc.jobs[0].Threads {
+		got = append(got, th.ID)
+	}
+	if !slices.Equal(got, []string{"o301", "o302", "o305"}) {
+		t.Fatalf("own threads = %v, want o301, o302 and o305 (the operator answered it)", got)
+	}
+	if r := fc.jobs[0].Threads[2].Replies; len(r) != 1 || r[0].Author != "zhuravel" {
+		t.Fatalf("o305's replies = %+v", r)
+	}
+	ds := h.declinesOf(pr.ID)
+	if _, ok := ds[304]; ok || len(ds) != 3 {
+		t.Fatalf("declines = %+v, want none for the operator's own comment", ds)
+	}
+	if n, err := h.st.CountDeclines(h.ctx, store.DeclineFilter{Outcomes: []string{store.DeclineDeclined}}); err != nil || n != 1 {
+		t.Fatalf("declined = %d, %v; want o301's only", n, err)
 	}
 }
 
