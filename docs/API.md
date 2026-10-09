@@ -9787,16 +9787,19 @@ type EditDecline struct {
     or ranked too high.
 
 type EditInputs struct {
-	Misses     []EditMiss      `json:"misses"`
-	Declines   []EditDecline   `json:"declines"`
-	Rejections []EditRejection `json:"rejections"`
-	SkillBytes int             `json:"skill_bytes"`
-	SkillCap   int             `json:"skill_cap"`
-	Files      []string        `json:"files"`
+	Misses     []EditMiss             `json:"misses"`
+	Declines   []EditDecline          `json:"declines"`
+	Rejections []EditRejection        `json:"rejections"`
+	Versions   []store.VersionMeasure `json:"versions"`
+	SkillBytes int                    `json:"skill_bytes"`
+	SkillCap   int                    `json:"skill_cap"`
+	Files      []string               `json:"files"`
 }
     EditInputs is inputs.json: the inputs to account for, the operator's reasons
-    for rejecting earlier proposals, the skill's size and cap and the files the
-    editor may change.
+    for rejecting earlier proposals, what the last landed versions did (newest
+    first, store.VersionMeasure: a version whose reviews had fewer of their
+    findings declined than the one before measured a gain), the skill's size and
+    cap and the files the editor may change.
 
 func (in EditInputs) IDs() []string
     IDs lists every input's id, the misses first.
@@ -15433,6 +15436,18 @@ func (s *Store) UpsertSlotDatabase(ctx context.Context, d SlotDatabase) (SlotDat
     once, last_seen_at = now, a nil SlotID or SizeMB keeps the stored value,
     and a database seen again after a drop is no longer marked dropped.
 
+func (s *Store) VersionMeasure(ctx context.Context, v LearnVersion, next *LearnVersion) (VersionMeasure, error)
+    VersionMeasure measures v over its window: from v.RestartedAt (its LandedAt
+    while the daemon has not restarted on it) to next.RestartedAt (open when
+    next is nil or has not restarted yet). A v without a SkillSHA (the skill
+    before the first version, which no row records) counts every decline of the
+    window's runs.
+
+func (s *Store) VersionMeasures(ctx context.Context, vs []LearnVersion, n int) ([]VersionMeasure, error)
+    VersionMeasures measures the newest n versions of vs (newest first,
+    as LearnVersions lists them; n <= 0 = all), each up to the restart on the
+    version after it.
+
 type SubjectMatch struct {
 	Exact  string
 	Prefix string
@@ -15476,6 +15491,33 @@ func (u *Update) Where(col string, v any)
     like a state mismatch, so a caller can require that the row still describes
     what it decided on (for example head_sha == the target sha). col may be any
     column of the table; conditions combine with AND.
+
+type VersionMeasure struct {
+	VersionID int64      `json:"version"` // learn_versions.id; 0 for the skill before the first version
+	Commit    string     `json:"commit,omitempty"`
+	From      time.Time  `json:"from"`
+	To        *time.Time `json:"to,omitempty"` // nil: the window is open (the version runs now)
+	// JudgeRuns counts the posted reviews, Posted the findings they posted
+	// and ByPriority those by priority ("" for none).
+	JudgeRuns  int            `json:"judge_runs"`
+	Posted     int            `json:"posted"`
+	ByPriority map[string]int `json:"by_priority"`
+	// Outcomes counts how authors answered those findings (Decline*).
+	Outcomes map[string]int `json:"outcomes"`
+	// MissesGeneral and MissesRepo count what other reviewers caught on a
+	// commit those reviews covered, by the lesson's scope.
+	MissesGeneral int `json:"misses_general"`
+	MissesRepo    int `json:"misses_repo"`
+}
+    VersionMeasure is what the rounds of one landed version did in its window
+    (Store.VersionMeasure).
+
+func (m VersionMeasure) Declined() int
+    Declined is how many of the findings authors declined or argued.
+
+func (m VersionMeasure) DeclinedShare() (float64, bool)
+    DeclinedShare is the declined and argued findings' share of the posted ones,
+    in percent; false without a posted finding.
 
 ```
 

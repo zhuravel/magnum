@@ -5525,3 +5525,20 @@ editing history. Code, config comments and prompts reference these by their head
   master's history the operator's plus one commit per version), landing two versions before a restart
   (the first would never run alone) and letting the CLI land (the worktree, the branch and the restart
   are the daemon's).
+- **A landed version is measured over its window** (2026-10-09, stage 5 of the self-improving review
+  loop). The operator wanted the effect of every landed version in numbers. A version's window runs from
+  the daemon's restart on it (`restarted_at`, else its landing while the daemon has not restarted yet)
+  to the restart on the next version, open while it runs; `store.VersionMeasure` counts in it the posted
+  reviews (runs with outcome `posted` and a review id, by `runs.created_at`), their posted findings by
+  priority, how authors answered those findings (declines by outcome whose run is one of those reviews
+  and whose `skill_sha` is the version's, so a round that ran a hand-edited skill does not count, and a
+  version that changed only prompts, whose skill hash repeats the version before, does not take that
+  one's answers) and the misses other reviewers caught on a commit one of those reviews covered (class
+  `miss`, by scope). The skill before the first version has no row: measured with no skill hash, every
+  answer of its window's runs counts. `magnum learn` (and `--json`, a `measure` per version) shows each
+  version's reviews, findings, fixed, declined or argued (with their share) and misses, and the editor's
+  `inputs.json` carries the last three versions' measures (`versions`, counts only), so it does not
+  weaken a rule a version added for a measured gain. Rejected: joining the answers by skill hash alone
+  (a revert brings back an older hash, and a prompts-only version keeps its predecessor's) and counting
+  the answers by when the retro stored them (they arrive days after the review, in the next version's
+  window).

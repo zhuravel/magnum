@@ -97,14 +97,21 @@ type learnProposalRow struct {
 	Noted  int `json:"noted"`
 }
 
+// learnVersionRow is a landed version as the list shows it: with what its
+// reviews did in its window.
+type learnVersionRow struct {
+	store.LearnVersion
+	Measure store.VersionMeasure `json:"measure"`
+}
+
 // learnListData is what `magnum learn` shows (and --json prints).
 type learnListData struct {
-	Versions    []store.LearnVersion `json:"versions"`
-	Waiting     []learnProposalRow   `json:"waiting"` // gating, passed, held; oldest first
-	LastFailed  *learnProposalRow    `json:"last_failed,omitempty"`
-	LastInvalid *learnProposalRow    `json:"last_invalid,omitempty"`
-	Editing     *engine.EditMark     `json:"editing,omitempty"` // the skill edit running now
-	Next        string               `json:"next"`
+	Versions    []learnVersionRow  `json:"versions"` // newest first
+	Waiting     []learnProposalRow `json:"waiting"`  // gating, passed, held; oldest first
+	LastFailed  *learnProposalRow  `json:"last_failed,omitempty"`
+	LastInvalid *learnProposalRow  `json:"last_invalid,omitempty"`
+	Editing     *engine.EditMark   `json:"editing,omitempty"` // the skill edit running now
+	Next        string             `json:"next"`
 	// Ahead counts the landed versions origin/master does not hold yet
 	// (magnum pushes nothing); nil when the checkout cannot say.
 	Ahead *int `json:"ahead,omitempty"`
@@ -126,13 +133,17 @@ func learnRow(ctx context.Context, st *store.Store, p store.LearnProposal) learn
 
 // learnGather reads the list from the registry.
 func learnGather(ctx context.Context, d *actDeps) (learnListData, error) {
-	data := learnListData{Versions: []store.LearnVersion{}, Waiting: []learnProposalRow{}}
+	data := learnListData{Versions: []learnVersionRow{}, Waiting: []learnProposalRow{}}
 	vs, err := d.Store.LearnVersions(ctx)
 	if err != nil {
 		return data, err
 	}
-	if vs != nil {
-		data.Versions = vs
+	ms, err := d.Store.VersionMeasures(ctx, vs, 0)
+	if err != nil {
+		return data, err
+	}
+	for i, v := range vs {
+		data.Versions = append(data.Versions, learnVersionRow{LearnVersion: v, Measure: ms[i]})
 	}
 	all, err := d.Store.LearnProposals(ctx, nil)
 	if err != nil {
@@ -160,7 +171,7 @@ func learnGather(ctx context.Context, d *actDeps) (learnListData, error) {
 			data.Editing = &m
 		}
 	}
-	data.Ahead = learnAhead(ctx, d, data.Versions)
+	data.Ahead = learnAhead(ctx, d, vs)
 	data.Next = "on request: `magnum learn --propose` runs the editor now"
 	if d.Cfg != nil && d.Cfg.Learn.Editor {
 		data.Next = "on request (`magnum learn --propose`); [learn] editor's runs after a retro come with the loop's gate"
@@ -214,7 +225,7 @@ func learnPrintList(w io.Writer, d *actDeps, data learnListData) {
 	} else {
 		fmt.Fprintln(w, "skill versions, newest first:")
 		tw := inspTable(w)
-		fmt.Fprintln(tw, "  VERSION\tLANDED\tRESTARTED\tCOMMIT\tPROPOSAL")
+		fmt.Fprintln(tw, "  VERSION\tLANDED\tRESTARTED\tCOMMIT\tPROPOSAL\tROUNDS\tPOSTED\tFIXED\tDECLINED\tMISSES")
 		for _, v := range data.Versions {
 			restarted := "-"
 			if v.RestartedAt != nil {
@@ -224,9 +235,17 @@ func learnPrintList(w io.Writer, d *actDeps, data learnListData) {
 			if v.ProposalID != 0 {
 				proposal = strconv.FormatInt(v.ProposalID, 10)
 			}
-			fmt.Fprintf(tw, "  %d\t%s\t%s\t%s\t%s\n", v.ID, inspClock(now, v.LandedAt), restarted, learnShort(v.LandedSHA), proposal)
+			m := v.Measure
+			declined := strconv.Itoa(m.Declined())
+			if share, ok := m.DeclinedShare(); ok && m.Declined() > 0 {
+				declined += fmt.Sprintf(" (%.0f%%)", share)
+			}
+			fmt.Fprintf(tw, "  %d\t%s\t%s\t%s\t%s\t%d\t%d\t%d\t%s\t%d\n", v.ID, inspClock(now, v.LandedAt), restarted, learnShort(v.LandedSHA),
+				proposal, m.JudgeRuns, m.Posted, m.Outcomes[store.DeclineFixed], declined, m.MissesGeneral+m.MissesRepo)
 		}
 		_ = tw.Flush()
+		fmt.Fprintln(w, "  from the restart on a version to the next one's: ROUNDS the reviews posted, POSTED their findings, FIXED and "+
+			"DECLINED (or argued) the authors' answers, MISSES what other reviewers caught")
 		if n := data.Ahead; n != nil && *n > 0 {
 			fmt.Fprintf(w, "  %s not on origin/master: magnum pushes nothing, so push master when you want them there\n",
 				textx.Count(*n, "landed version is", "landed versions are"))

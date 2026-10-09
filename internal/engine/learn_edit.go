@@ -61,6 +61,8 @@ const (
 	editReasonRunes = 2000
 	// editRejections is how many rejected proposals' reasons the editor reads.
 	editRejections = 5
+	// editVersions is how many landed versions' measures the editor reads.
+	editVersions = 3
 	// editGateLines is how much of a failing format gate command's output
 	// a problem carries.
 	editGateLines = 40
@@ -287,13 +289,14 @@ func (e *Engine) editUnavailable() string {
 // P0 to P2 and the general declines a lesson was not drawn from yet (state
 // new), oldest first, their titles, lessons and match patterns scrubbed of
 // their pull requests' logins and repositories again (learn.ScrubLesson;
-// a pattern that names one is dropped), and the operator's reasons for the
-// latest rejected proposals and for each input. scrub is what the edit's
+// a pattern that names one is dropped), the operator's reasons for the
+// latest rejected proposals and for each input, and the measures of the
+// last editVersions landed versions (counts only, no text). scrub is what the edit's
 // checks hold the result to: those logins and repositories, and the
 // branches of those pull requests.
 func (e *Engine) editInputs(ctx context.Context) (learn.EditInputs, learn.EditCheck, error) {
 	in := learn.EditInputs{Misses: []learn.EditMiss{}, Declines: []learn.EditDecline{}, Rejections: []learn.EditRejection{},
-		Files: slices.Clone(learn.EditAllowedGlobs)}
+		Versions: []store.VersionMeasure{}, Files: slices.Clone(learn.EditAllowedGlobs)}
 	var check learn.EditCheck
 	for _, id := range e.cfg.Identities {
 		check.Own = append(check.Own, id.Login)
@@ -376,6 +379,13 @@ func (e *Engine) editInputs(ctx context.Context) (learn.EditInputs, learn.EditCh
 		for _, r := range reasons {
 			addRejection(learn.EditRejection{Input: id, Reason: r})
 		}
+	}
+	vs, err := e.st.LearnVersions(ctx)
+	if err != nil {
+		return in, check, err
+	}
+	if in.Versions, err = e.st.VersionMeasures(ctx, vs, editVersions); err != nil {
+		return in, check, err
 	}
 	check.People, check.Repos = compactWords(check.People), compactWords(check.Repos)
 	check.Leaks.Branches = compactWords(check.Leaks.Branches)

@@ -812,3 +812,42 @@ func TestARejectionThatDismissesAnInputDropsItsLearnedCase(t *testing.T) {
 		t.Fatal("a landing was accepted before the landing step exists")
 	}
 }
+
+// The editor reads what the last three landed versions did, newest first,
+// each measured over its own window (store.VersionMeasure): an older
+// version is left out.
+func TestTheEditorReadsTheLastVersionsMeasures(t *testing.T) {
+	f := newEditFixture(t, goodTurn)
+	now := f.h.clock.Now()
+	pr := corpusPR(f.h, "talkable/talkable", 12)
+	for i := range 4 {
+		restarted := now.Add(time.Duration(i-4) * 24 * time.Hour)
+		v, err := f.h.st.CreateLearnVersion(f.h.ctx, store.LearnVersion{LandedSHA: strings.Repeat(string(rune('a'+i)), 40), SkillSHA: "s",
+			PromptsSHA: "p", LandedAt: restarted.Add(-time.Minute)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := f.h.st.MarkLearnRestarted(f.h.ctx, v.ID, restarted); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run, err := f.h.st.CreateRun(f.h.ctx, store.Run{PRID: pr.ID, Round: 1, Role: store.RoleJudge, Kind: store.RunInitial, State: store.RunVerified,
+		TargetSHA: retroShaA, Identity: "zhuravel", ReviewerLogin: "zhuravel", PromptText: "p", Outcome: new("posted"), ReviewID: new(int64(9)),
+		CreatedAt: now.Add(-time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.h.st.RecordFindings(f.h.ctx, run.ID, pr.ID, 1, []store.Finding{{FindingID: "F1", Severity: "P1", Verdict: store.FindingPosted}}); err != nil {
+		t.Fatal(err)
+	}
+	p := f.edit()
+	var in learn.EditInputs
+	b, err := os.ReadFile(filepath.Join(p.RunDir, learn.InputsFile))
+	if err != nil || json.Unmarshal(b, &in) != nil {
+		t.Fatalf("inputs.json: %v", err)
+	}
+	if len(in.Versions) != 3 || in.Versions[0].VersionID != 4 || in.Versions[2].VersionID != 2 || in.Versions[0].To != nil ||
+		in.Versions[1].To == nil || in.Versions[0].Posted != 1 || in.Versions[0].ByPriority["P1"] != 1 || in.Versions[1].Posted != 0 {
+		t.Fatalf("versions = %+v", in.Versions)
+	}
+}

@@ -336,3 +336,89 @@ func TestLearnUsageLineNamesItsFlags(t *testing.T) {
 		t.Fatalf("a usage error queued %+v", reqs)
 	}
 }
+
+// The list shows what each landed version's reviews did since the daemon
+// restarted on it: the posted reviews, their posted findings, the authors'
+// fixes and declines (declined and argued, with their share) and the
+// misses other reviewers found; --json carries each version's measure.
+func TestLearnShowsAVersionsNumbers(t *testing.T) {
+	h := newActHarness(t)
+	pr := h.seedPR("talkable/talkable", 21, store.PRReviewed)
+	var vs []store.LearnVersion
+	for i, sha := range []string{"aaaaaaa1111", "bbbbbbb2222"} {
+		at := h.now.Add(time.Duration(i-2) * 24 * time.Hour)
+		v, err := h.st.CreateLearnVersion(h.ctx, store.LearnVersion{LandedSHA: sha, SkillSHA: "skill" + itoa(int64(i)), PromptsSHA: "p",
+			LandedAt: at.Add(-time.Minute)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := h.st.MarkLearnRestarted(h.ctx, v.ID, at); err != nil {
+			t.Fatal(err)
+		}
+		vs = append(vs, v)
+	}
+	// Version 2's window: two posted reviews, five posted findings, of
+	// which the authors fixed one and declined or argued two, and a miss.
+	for i, n := range []int{3, 2} {
+		run, err := h.st.CreateRun(h.ctx, store.Run{PRID: pr.ID, Round: i + 1, Role: store.RoleJudge, Kind: store.RunInitial,
+			State: store.RunVerified, TargetSHA: "head" + itoa(int64(i)), Identity: "talkable-app", ReviewerLogin: "talkable[bot]",
+			PromptText: "p", Outcome: new("posted"), ReviewID: new(int64(70 + i)), CreatedAt: h.now.Add(-time.Duration(i+1) * time.Hour)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var fs []store.Finding
+		for j := range n {
+			fs = append(fs, store.Finding{FindingID: "F" + itoa(int64(j)), Severity: "P2", Verdict: store.FindingPosted})
+		}
+		if err := h.st.RecordFindings(h.ctx, run.ID, pr.ID, i+1, fs); err != nil {
+			t.Fatal(err)
+		}
+		if i > 0 {
+			continue
+		}
+		for j, outcome := range []string{store.DeclineFixed, store.DeclineDeclined, store.DeclineArgued} {
+			if _, err := h.st.UpsertDecline(h.ctx, store.Decline{PRID: pr.ID, SourceURL: pr.URL + "#d" + itoa(int64(j)), CommentID: int64(j + 1),
+				RunID: run.ID, ReviewedSHA: run.TargetSHA, SkillSHA: "skill1", Outcome: outcome}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := h.st.UpsertMiss(h.ctx, store.Miss{PRID: pr.ID, SourceURL: pr.URL + "#m1", SourceKind: store.MissSourceThread,
+			Reviewer: "rev-ann", ReviewedSHA: run.TargetSHA, Class: store.MissMiss, Severity: "P1", Scope: store.MissScopeGeneral}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if code := h.cmd("learn"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.errb.String())
+	}
+	out := h.out.String()
+	actContains(t, out, "ROUNDS", "POSTED", "FIXED", "DECLINED", "MISSES")
+	rows := map[string][]string{}
+	for line := range strings.Lines(out) {
+		for _, sha := range []string{"aaaaaaa", "bbbbbbb"} {
+			if strings.Contains(line, sha) {
+				f := strings.Fields(line)
+				rows[sha] = f[max(0, len(f)-6):]
+			}
+		}
+	}
+	if got := strings.Join(rows["bbbbbbb"], " "); got != "2 5 1 2 (40%) 1" {
+		t.Errorf("version 2's numbers = %q\n%s", got, out)
+	}
+	if got := strings.Join(rows["aaaaaaa"], " "); !strings.HasSuffix(got, "0 0 0 0 0") {
+		t.Errorf("version 1's numbers = %q\n%s", got, out)
+	}
+
+	h.out.Reset()
+	if code := h.cmd("learn", "--json"); code != 0 {
+		t.Fatalf("--json exit %d: %s", code, h.errb.String())
+	}
+	var data learnListData
+	if err := json.Unmarshal(h.out.Bytes(), &data); err != nil {
+		t.Fatalf("--json: %v\n%s", err, h.out.String())
+	}
+	if len(data.Versions) != 2 || data.Versions[0].ID != vs[1].ID || data.Versions[0].Measure.JudgeRuns != 2 || data.Versions[0].Measure.Posted != 5 ||
+		data.Versions[0].Measure.Outcomes[store.DeclineArgued] != 1 || data.Versions[0].Measure.MissesGeneral != 1 ||
+		data.Versions[1].Measure.Posted != 0 || data.Versions[1].Measure.To == nil {
+		t.Fatalf("--json versions = %+v", data.Versions)
+	}
+}

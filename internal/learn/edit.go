@@ -76,15 +76,18 @@ func AllowedEditFile(p string) bool {
 }
 
 // EditInputs is inputs.json: the inputs to account for, the operator's
-// reasons for rejecting earlier proposals, the skill's size and cap and the
-// files the editor may change.
+// reasons for rejecting earlier proposals, what the last landed versions
+// did (newest first, store.VersionMeasure: a version whose reviews had
+// fewer of their findings declined than the one before measured a gain),
+// the skill's size and cap and the files the editor may change.
 type EditInputs struct {
-	Misses     []EditMiss      `json:"misses"`
-	Declines   []EditDecline   `json:"declines"`
-	Rejections []EditRejection `json:"rejections"`
-	SkillBytes int             `json:"skill_bytes"`
-	SkillCap   int             `json:"skill_cap"`
-	Files      []string        `json:"files"`
+	Misses     []EditMiss             `json:"misses"`
+	Declines   []EditDecline          `json:"declines"`
+	Rejections []EditRejection        `json:"rejections"`
+	Versions   []store.VersionMeasure `json:"versions"`
+	SkillBytes int                    `json:"skill_bytes"`
+	SkillCap   int                    `json:"skill_cap"`
+	Files      []string               `json:"files"`
 }
 
 // EditMiss is a general miss: what another reviewer caught that magnum did
