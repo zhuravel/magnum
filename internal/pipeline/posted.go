@@ -43,7 +43,7 @@ func (rd *round) handleDuplicates(ctx context.Context, p *postedReview) {
 			continue
 		}
 		if err := del.DeletePendingReview(ctx, rd.owner, rd.name, rd.in.PR.Number, id); err != nil {
-			rd.logf("pipeline: delete pending review %d: %v", id, err)
+			rd.logErr(ctx, err, "pipeline: delete pending review %d: %v", id, err)
 			failed = append(failed, id)
 			continue
 		}
@@ -285,7 +285,7 @@ func (rd *round) reviewComments(ctx context.Context, id int64) []commentText {
 	}
 	comments, err := lister.ReviewComments(ctx, rd.owner, rd.name, rd.in.PR.Number, id)
 	if err != nil {
-		rd.logf("pipeline: list the comments of review %d: %v", id, err)
+		rd.logErr(ctx, err, "pipeline: list the comments of review %d: %v", id, err)
 		return nil
 	}
 	out := make([]commentText, 0, len(comments))

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strconv"
 	"strings"
@@ -135,7 +136,7 @@ func (m *Manager) healthRules(kind string) []healthRule {
 	if k, ok := m.kindSpec(kind); ok {
 		rx, err := k.HealthPatterns.Compile()
 		if err != nil {
-			m.logf("agents: kinds.%s health_patterns: %v (using the defaults)", kind, err)
+			m.logAt(slog.LevelWarn, "agents: kinds.%s health_patterns: %v (using the defaults)", kind, err)
 		} else {
 			rules = rulesFor(rx)
 		}

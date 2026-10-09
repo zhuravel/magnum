@@ -84,12 +84,12 @@ func (m *Manager) nameAgent(ctx context.Context, s store.Session, paneID, curren
 	if title == "" {
 		pr, err := m.d.Store.PRByID(ctx, s.PRID)
 		if err != nil {
-			m.logf("agents: title of session %d: %v", s.ID, err)
+			m.logErr(ctx, err, "agents: title of session %d: %v", s.ID, err)
 			return
 		}
 		repo, err := m.repoName(ctx, pr)
 		if err != nil {
-			m.logf("agents: title of session %d: %v", s.ID, err)
+			m.logErr(ctx, err, "agents: title of session %d: %v", s.ID, err)
 			return
 		}
 		title = TaggedTitle(m.d.Tag, repo, pr.Number, Role(s.Role))
@@ -111,7 +111,7 @@ func (m *Manager) nameAgent(ctx context.Context, s store.Session, paneID, curren
 	n := st.attempts
 	m.mu.Unlock()
 	if err := m.d.Herdr.PaneRun(ctx, paneID, command); err != nil {
-		m.logf("agents: rename %s pane %s to %q (attempt %d/%d): %v", s.Role, paneID, title, n, TitleAttempts, err)
+		m.logErr(ctx, err, "agents: rename %s pane %s to %q (attempt %d/%d): %v", s.Role, paneID, title, n, TitleAttempts, err)
 	}
 }
 

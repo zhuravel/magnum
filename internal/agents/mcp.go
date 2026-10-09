@@ -3,6 +3,7 @@ package agents
 import (
 	"errors"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -53,7 +54,7 @@ func (m *Manager) mcpServers(role config.Role) []string {
 		if pe := (*fs.PathError)(nil); errors.As(err, &pe) {
 			err = pe.Err
 		}
-		m.logf("agents: %s: cannot read the Codex config, so its MCP servers stay on: %v", role.Name, err)
+		m.logAt(slog.LevelWarn, "agents: %s: cannot read the Codex config, so its MCP servers stay on: %v", role.Name, err)
 		return nil
 	}
 	for _, n := range skipped {

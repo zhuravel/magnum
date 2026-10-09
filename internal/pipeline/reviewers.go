@@ -273,7 +273,7 @@ func (rd *round) shellTurn(ctx context.Context, role config.Role, run store.Run,
 	case err == nil:
 		if terr := rd.r.Store.TransitionRun(context.WithoutCancel(ctx), run.ID, []string{store.RunSubmitted}, store.RunEnded,
 			func(u *store.RunUpdate) { u.Set("ended_at", rd.r.now()) }); terr != nil {
-			rd.logf("pipeline: end %s run %s: %v", role.Name, run.ID, terr)
+			rd.logErr(ctx, terr, "pipeline: end %s run %s: %v", role.Name, run.ID, terr)
 		}
 		if status != agents.ShellStatusUnknown && !role.StatusOK(status) {
 			return turn{kind: waitFailed, run: run, err: &exitError{role: role.Name, status: status}}, anchor, nil

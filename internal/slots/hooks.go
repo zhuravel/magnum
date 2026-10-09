@@ -433,7 +433,7 @@ func (m *Manager) teardownPerPR(ctx context.Context, sl store.Slot, number int, 
 		return nil
 	}
 	if err := m.runHooks(ctx, sl, p, p.teardown, TeardownTimeout, true); err != nil {
-		m.logf("slots: teardown of %s failed (removing it anyway): %v", sl.Name, err)
+		m.logErr(ctx, err, "slots: teardown of %s failed (removing it anyway): %v", sl.Name, err)
 	}
 	return ctx.Err()
 }

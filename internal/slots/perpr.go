@@ -150,7 +150,7 @@ func (m *Manager) CreatePRWorktree(ctx context.Context, watch config.Watch, repo
 		if errors.Is(err, ErrBroken) && ctx.Err() == nil {
 			if terr := m.d.Store.TransitionSlot(context.WithoutCancel(ctx), sl.ID, []string{store.SlotProvisioning}, store.SlotBroken,
 				func(u *store.SlotUpdate) { u.Set("last_error", redactErr(err)) }); terr != nil {
-				m.logf("slots: mark %s broken: %v", sl.Name, terr)
+				m.logErr(ctx, terr, "slots: mark %s broken: %v", sl.Name, terr)
 			}
 			return store.Slot{}, err
 		}

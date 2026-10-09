@@ -1874,6 +1874,10 @@ type Printf struct {
     loggers): each line becomes one record at level with the given message
     prefix as the "src" attribute.
 
+func (p Printf) LogAttrs(level slog.Level, msg string, attrs ...slog.Attr)
+    LogAttrs implements execx.AttrLogger: an audit event's mirror keeps its
+    subject and kind as attributes (execx.LogEvent), after "src".
+
 func (p Printf) Logf(level slog.Level, format string, args ...any)
     Logf implements execx.LevelLogger: the runner picks the level (successful
     commands at Debug, failures at Warn).
@@ -6219,6 +6223,30 @@ const TruncationMarker = "\n[execx: output truncated at 8 MiB]\n"
 
 FUNCTIONS
 
+func EventLevel(level string) slog.Level
+    EventLevel is the slog level of an audit event's level ("debug", "info",
+    "warn", "error"; anything else is info), for the line that mirrors the event
+    in the log.
+
+func FailLevel(ctx context.Context, err error) slog.Level
+    FailLevel is the level of a line that reports err, a failure the caller
+    tolerates: slog.LevelWarn, or slog.LevelInfo when err is the daemon stopping
+    (IsStop), which cuts short every call in flight and is no fault.
+
+func IsStop(ctx context.Context, err error) bool
+    IsStop reports whether a failure is the daemon stopping rather than a fault:
+    ctx ended (a shutdown cancels it, an abort cancels a round's) or err says
+    the work was canceled.
+
+func LogAt(l Logger, level slog.Level, format string, args ...any)
+    LogAt sends one line to l: at level through Logf when l is a LevelLogger,
+    else through Printf (a plain Logger has no levels). A nil l drops it.
+
+func LogEvent(l Logger, level, subject, kind, line string)
+    LogEvent mirrors an audit event to l as line: at the event's level
+    (EventLevel), with its subject and kind as attributes when l is an
+    AttrLogger, else as LogAt sends it. The caller redacts line.
+
 func MergeEnv(base []string, env map[string]string, unset []string) []string
     mergeEnv overlays env onto base: keys in env win (empty values are
     kept as KEY=), keys in unset that are not in env are dropped entirely.
@@ -6238,6 +6266,14 @@ func ShellQuote(s string) string
 
 
 TYPES
+
+type AttrLogger interface {
+	LevelLogger
+	LogAttrs(level slog.Level, msg string, attrs ...slog.Attr)
+}
+    AttrLogger is a LevelLogger that also takes slog attributes with a line:
+    the bridge to the daemon's slog.Logger (app.Printf) keeps an audit event's
+    subject and kind as attributes of its record (LogEvent).
 
 type Cmd struct {
 	Name string   // executable; resolved through PATH unless absolute

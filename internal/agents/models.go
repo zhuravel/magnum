@@ -243,7 +243,7 @@ func (m *Manager) NoteModelLimit(ctx context.Context, s store.Session, h Health)
 	}
 	if h.Model != "" && m.configuredModel(role) == "" && !switched {
 		if err := m.d.Store.SetKV(ctx, KVKindCLIModel(kind), model); err != nil {
-			m.logf("agents: %v", err)
+			m.logErr(ctx, err, "agents: %v", err)
 		}
 	}
 	now := m.now()
@@ -411,7 +411,7 @@ func (m *Manager) switched(ctx context.Context, s store.Session, role config.Rol
 		err = m.d.Store.SetKV(bctx, KVSessionModel(s.ID), model)
 	}
 	if err != nil {
-		m.logf("agents: %v", err)
+		m.logErr(ctx, err, "agents: %v", err)
 	}
 	m.event(bctx, m.prSubject(bctx, s.PRID), "info", EventModelSwitched,
 		fmt.Sprintf("%s switched from %s to %s (%s)", s.Role, orUnknown(from), model, reason),
@@ -588,7 +588,7 @@ func (m *Manager) startModel(ctx context.Context, role config.Role, k config.Kin
 func (m *Manager) startedOnFallback(ctx context.Context, s store.Session, role config.Role, model string) {
 	ctx = context.WithoutCancel(ctx)
 	if err := m.d.Store.SetKV(ctx, KVSessionModel(s.ID), model); err != nil {
-		m.logf("agents: %v", err)
+		m.logErr(ctx, err, "agents: %v", err)
 	}
 	from := orUnknown(m.roleModel(ctx, role))
 	m.event(ctx, m.prSubject(ctx, s.PRID), "info", EventModelSwitched,
@@ -635,7 +635,7 @@ func (m *Manager) ensureModel(ctx context.Context, s store.Session) {
 		return
 	}
 	if err := m.SwitchModel(ctx, s, target, reason); err != nil {
-		m.logf("agents: %s before a prompt: %v", s.Role, err)
+		m.logErr(ctx, err, "agents: %s before a prompt: %v", s.Role, err)
 	}
 }
 
@@ -661,10 +661,12 @@ func splitList(s string) []string {
 // event appends an audit row (best effort: failures are logged).
 func (m *Manager) event(ctx context.Context, subject, level, kind, msg string, data map[string]any) {
 	msg = execx.Redact(msg)
-	m.logf("agents: %s", msg)
+	if m.d.Log != nil {
+		execx.LogEvent(m.d.Log, level, subject, kind, execx.Redact("agents: "+msg))
+	}
 	raw, _ := json.Marshal(data)
 	if _, err := m.d.Store.AppendEvent(context.WithoutCancel(ctx), store.Event{Level: level, Subject: &subject,
 		Kind: kind, Message: msg, Data: raw}); err != nil {
-		m.logf("agents: event %s: %v", kind, err)
+		m.logErr(ctx, err, "agents: event %s: %v", kind, err)
 	}
 }

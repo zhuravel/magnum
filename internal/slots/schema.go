@@ -81,7 +81,7 @@ func (m *Manager) loadedSchema(ctx context.Context, sl store.Slot, pool config.P
 	}
 	c, err := m.checkoutSchema(ctx, sl, pool)
 	if err != nil {
-		m.logf("slots: schema of %s: %v", sl.Name, err)
+		m.logErr(ctx, err, "slots: schema of %s: %v", sl.Name, err)
 		return SchemaCheck{}
 	}
 	return c

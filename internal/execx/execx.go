@@ -152,14 +152,67 @@ type LevelLogger interface {
 	Logf(level slog.Level, format string, args ...any)
 }
 
-// logAt sends one transcript line to l: at level through Logf when l is a
-// LevelLogger, else through Printf.
-func logAt(l Logger, level slog.Level, format string, args ...any) {
-	if ll, ok := l.(LevelLogger); ok {
+// AttrLogger is a LevelLogger that also takes slog attributes with a line:
+// the bridge to the daemon's slog.Logger (app.Printf) keeps an audit
+// event's subject and kind as attributes of its record (LogEvent).
+type AttrLogger interface {
+	LevelLogger
+	LogAttrs(level slog.Level, msg string, attrs ...slog.Attr)
+}
+
+// LogAt sends one line to l: at level through Logf when l is a LevelLogger,
+// else through Printf (a plain Logger has no levels). A nil l drops it.
+func LogAt(l Logger, level slog.Level, format string, args ...any) {
+	switch ll := l.(type) {
+	case nil:
+	case LevelLogger:
 		ll.Logf(level, format, args...)
+	default:
+		l.Printf(format, args...)
+	}
+}
+
+// LogEvent mirrors an audit event to l as line: at the event's level
+// (EventLevel), with its subject and kind as attributes when l is an
+// AttrLogger, else as LogAt sends it. The caller redacts line.
+func LogEvent(l Logger, level, subject, kind, line string) {
+	if al, ok := l.(AttrLogger); ok {
+		al.LogAttrs(EventLevel(level), line, slog.String("subject", subject), slog.String("kind", kind))
 		return
 	}
-	l.Printf(format, args...)
+	LogAt(l, EventLevel(level), "%s", line)
+}
+
+// EventLevel is the slog level of an audit event's level ("debug", "info",
+// "warn", "error"; anything else is info), for the line that mirrors the
+// event in the log.
+func EventLevel(level string) slog.Level {
+	switch level {
+	case "debug":
+		return slog.LevelDebug
+	case "warn":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	}
+	return slog.LevelInfo
+}
+
+// IsStop reports whether a failure is the daemon stopping rather than a
+// fault: ctx ended (a shutdown cancels it, an abort cancels a round's) or
+// err says the work was canceled.
+func IsStop(ctx context.Context, err error) bool {
+	return ctx.Err() != nil || errors.Is(err, context.Canceled)
+}
+
+// FailLevel is the level of a line that reports err, a failure the caller
+// tolerates: slog.LevelWarn, or slog.LevelInfo when err is the daemon
+// stopping (IsStop), which cuts short every call in flight and is no fault.
+func FailLevel(ctx context.Context, err error) slog.Level {
+	if IsStop(ctx, err) {
+		return slog.LevelInfo
+	}
+	return slog.LevelWarn
 }
 
 // Real runs commands with os/exec.
@@ -205,7 +258,7 @@ func (r *Real) Run(ctx context.Context, c Cmd) (Result, error) {
 		if _, err := os.Stat(c.Dir); err != nil {
 			rerr := &RunError{Cmd: c, Err: fmt.Errorf("working directory: %w", err)}
 			if r.Log != nil {
-				logAt(r.Log, slog.LevelWarn, "exec %s dir=%s code=-1 dur=0s err=%v", Redact(c.String()), c.Dir, rerr.Err)
+				LogAt(r.Log, slog.LevelWarn, "exec %s dir=%s code=-1 dur=0s err=%v", Redact(c.String()), c.Dir, rerr.Err)
 			}
 			return Result{Code: -1}, rerr
 		}
@@ -260,7 +313,7 @@ func (r *Real) Run(ctx context.Context, c Cmd) (Result, error) {
 		if err != nil && !stopped && !answer {
 			level = slog.LevelWarn
 		}
-		logAt(r.Log, level, "exec %s dir=%s code=%d dur=%s%s err=%v", Redact(c.String()), c.Dir, res.Code, res.Duration.Round(time.Millisecond), trunc, err)
+		LogAt(r.Log, level, "exec %s dir=%s code=%d dur=%s%s err=%v", Redact(c.String()), c.Dir, res.Code, res.Duration.Round(time.Millisecond), trunc, err)
 	}
 	if err != nil {
 		if ctx.Err() != nil {

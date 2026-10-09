@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 	"unicode"
@@ -182,7 +183,7 @@ func (n *Notifier) release(ctx context.Context, key string) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
 	defer cancel()
 	if err := n.Store.ForgetSend(ctx, key); err != nil {
-		n.logf("notify: toast %q: releasing the dedupe key after a failed delivery: %v", key, err)
+		n.logAt(slog.LevelWarn, "notify: toast %q: releasing the dedupe key after a failed delivery: %v", key, err)
 	}
 }
 
@@ -216,7 +217,11 @@ func (n *Notifier) deliver(ctx context.Context, title, body string) (bool, error
 		return false, nil // herdr is up but nobody is watching, and there is no fallback
 	}
 	if reason != "" {
-		n.logf("notify: %s; falling back to osascript", reason)
+		level := slog.LevelInfo // herdr is up with no client watching: osascript is the way
+		if herdrErr != nil {
+			level = execx.FailLevel(ctx, herdrErr)
+		}
+		n.logAt(level, "notify: %s; falling back to osascript", reason)
 	}
 	if err := n.osascript(ctx, title, body); err != nil {
 		if herdrErr != nil {
@@ -271,7 +276,7 @@ func (n *Notifier) deliverUrgent(ctx context.Context, title, body string) (bool,
 		return false, fmt.Errorf("urgent toast not delivered, no osascript runner: %w", herdrErr)
 	}
 	if herdrErr != nil {
-		n.logf("notify: urgent %q: %v; falling back to osascript", title, herdrErr)
+		n.logErr(ctx, herdrErr, "notify: urgent %q: %v; falling back to osascript", title, herdrErr)
 	}
 	if err := n.osascript(ctx, title, body); err != nil {
 		if herdrErr != nil {
@@ -355,9 +360,19 @@ func (n *Notifier) Sidebar(ctx context.Context, workspaceID string, tokens map[s
 	return nil
 }
 
-func (n *Notifier) logf(format string, args ...any) {
+func (n *Notifier) logf(format string, args ...any) { n.logAt(slog.LevelInfo, format, args...) }
+
+// logErr logs a line that reports err, a failure the notifier goes on
+// after: at Warn, or at Info when err is the daemon stopping
+// (execx.FailLevel).
+func (n *Notifier) logErr(ctx context.Context, err error, format string, args ...any) {
+	n.logAt(execx.FailLevel(ctx, err), format, args...)
+}
+
+// logAt logs one redacted line at level (execx.LogAt).
+func (n *Notifier) logAt(level slog.Level, format string, args ...any) {
 	if n.Log != nil {
-		n.Log.Printf("%s", execx.Redact(fmt.Sprintf(format, args...)))
+		execx.LogAt(n.Log, level, "%s", execx.Redact(fmt.Sprintf(format, args...)))
 	}
 }
 

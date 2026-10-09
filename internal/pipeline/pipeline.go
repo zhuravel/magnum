@@ -32,6 +32,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"maps"
 	"os"
 	"path/filepath"
@@ -1010,7 +1011,7 @@ func (rd *round) abandonPending(ctx context.Context) {
 			u.Set("ended_at", rd.r.now())
 		})
 		if err != nil && !errors.Is(err, store.ErrConflict) {
-			rd.logf("pipeline: abandon run %s: %v", id, err)
+			rd.logErr(ctx, err, "pipeline: abandon run %s: %v", id, err)
 		}
 	}
 }
@@ -1079,7 +1080,9 @@ func (rd *round) warn(ctx context.Context, format string, args ...any) {
 // event appends an audit row (never fails the round).
 func (rd *round) event(ctx context.Context, level, kind, msg string, data map[string]any) {
 	msg = execx.Redact(msg)
-	rd.logf("pipeline: %s %s: %s", rd.subject, kind, msg)
+	if rd.r.Logger != nil {
+		execx.LogEvent(rd.r.Logger, level, rd.subject, kind, execx.Redact(fmt.Sprintf("pipeline: %s %s: %s", rd.subject, kind, msg)))
+	}
 	e := store.Event{Level: level, Subject: &rd.subject, Kind: kind, Message: msg}
 	if data != nil {
 		if b, err := json.Marshal(data); err == nil {
@@ -1087,13 +1090,23 @@ func (rd *round) event(ctx context.Context, level, kind, msg string, data map[st
 		}
 	}
 	if _, err := rd.r.Store.AppendEvent(context.WithoutCancel(ctx), e); err != nil {
-		rd.logf("pipeline: event %s %s: %v", rd.subject, kind, err)
+		rd.logErr(ctx, err, "pipeline: event %s %s: %v", rd.subject, kind, err)
 	}
 }
 
-func (rd *round) logf(format string, args ...any) {
+func (rd *round) logf(format string, args ...any) { rd.logAt(slog.LevelInfo, format, args...) }
+
+// logErr logs a line that reports err, a failure the round goes on after:
+// at Warn, or at Info when err is the round's context ending
+// (execx.FailLevel).
+func (rd *round) logErr(ctx context.Context, err error, format string, args ...any) {
+	rd.logAt(execx.FailLevel(ctx, err), format, args...)
+}
+
+// logAt logs one redacted line at level (execx.LogAt).
+func (rd *round) logAt(level slog.Level, format string, args ...any) {
 	if rd.r.Logger != nil {
-		rd.r.Logger.Printf("%s", execx.Redact(fmt.Sprintf(format, args...)))
+		execx.LogAt(rd.r.Logger, level, "%s", execx.Redact(fmt.Sprintf(format, args...)))
 	}
 }
 

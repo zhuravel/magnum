@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/zhuravel/magnum/internal/config"
@@ -257,9 +258,27 @@ func (p *Planner) now() time.Time {
 	return time.Now()
 }
 
-func (p *Planner) logf(format string, args ...any) {
+func (p *Planner) logf(format string, args ...any) { p.logAt(slog.LevelInfo, format, args...) }
+
+// logErr logs a line that reports err, a failure cleanup goes on after: at
+// Warn, or at Info when err is the daemon stopping (execx.FailLevel).
+func (p *Planner) logErr(ctx context.Context, err error, format string, args ...any) {
+	p.logAt(execx.FailLevel(ctx, err), format, args...)
+}
+
+// logAt logs one line at level (execx.LogAt).
+func (p *Planner) logAt(level slog.Level, format string, args ...any) {
 	if p.Log != nil {
-		p.Log.Printf(format, args...)
+		execx.LogAt(p.Log, level, format, args...)
+	}
+}
+
+// mirror logs an audit event cleanup recorded when it is a warn or error
+// one, at its level (execx.LogEvent); the others stay in the registry only,
+// as before.
+func (p *Planner) mirror(level, subject, kind, msg string) {
+	if p.Log != nil && execx.EventLevel(level) >= slog.LevelWarn {
+		execx.LogEvent(p.Log, level, subject, kind, fmt.Sprintf("cleanup: %s %s: %s", subject, kind, msg))
 	}
 }
 

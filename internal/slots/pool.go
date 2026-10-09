@@ -164,7 +164,7 @@ func (m *Manager) provision(ctx context.Context, sl store.Slot, pool config.Pool
 	if errors.Is(err, ErrVerify) && ctx.Err() == nil {
 		if terr := m.d.Store.TransitionSlot(context.WithoutCancel(ctx), sl.ID, []string{store.SlotProvisioning}, store.SlotBroken,
 			func(u *store.SlotUpdate) { u.Set("last_error", redactErr(err)) }); terr != nil {
-			m.logf("slots: mark %s broken: %v", sl.Name, terr)
+			m.logErr(ctx, terr, "slots: mark %s broken: %v", sl.Name, terr)
 		}
 		return err
 	}
@@ -711,7 +711,7 @@ func (m *Manager) removeWorktree(ctx context.Context, sl store.Slot, force bool)
 	case err != nil && !force:
 		return err
 	case err != nil:
-		m.logf("slots: list the changes in %s before a forced removal: %v", sl.Path, err)
+		m.logErr(ctx, err, "slots: list the changes in %s before a forced removal: %v", sl.Path, err)
 	}
 	return m.git.WorktreeRemove(ctx, sl.MainClone, sl.Path, force || dirty)
 }

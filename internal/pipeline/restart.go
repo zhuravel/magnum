@@ -414,7 +414,7 @@ func (rd *round) cut(ctx context.Context, turns []cutTurn, c cutBy) []string {
 	for _, t := range turns {
 		cur, err := rd.r.Store.RunByID(context.WithoutCancel(ctx), t.run.ID)
 		if err != nil {
-			rd.logf("pipeline: %s: run %s: %v", c.what, t.run.ID, err)
+			rd.logErr(ctx, err, "pipeline: %s: run %s: %v", c.what, t.run.ID, err)
 			continue
 		}
 		switch cur.State {

@@ -3,6 +3,7 @@ package pipeline
 import (
 	"errors"
 	"io/fs"
+	"log/slog"
 
 	"github.com/zhuravel/magnum/internal/notes"
 )
@@ -26,7 +27,7 @@ func (rd *round) snapshotNotes() {
 		if s, err := notes.ReadSnapshot(rd.dir); err == nil && s.Round == rd.in.Round {
 			return
 		} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
-			rd.logf("pipeline: read the notes snapshot: %v", err)
+			rd.logAt(slog.LevelWarn, "pipeline: read the notes snapshot: %v", err)
 		}
 	}
 	s, err := notes.Take(repo, rd.in.Round, rd.r.now())
@@ -34,6 +35,6 @@ func (rd *round) snapshotNotes() {
 		err = notes.WriteSnapshot(rd.dir, s)
 	}
 	if err != nil {
-		rd.logf("pipeline: snapshot the repository notes: %v", err)
+		rd.logAt(slog.LevelWarn, "pipeline: snapshot the repository notes: %v", err)
 	}
 }

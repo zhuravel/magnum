@@ -133,7 +133,7 @@ func (m *Manager) StartAgent(ctx context.Context, pr store.PR, role config.Role,
 				}
 			}
 			if err := adoptable(snap, a, kindName, checkout); err != nil {
-				m.logf("agents: start %s: not adopting conversation %s restored in pane %s: %v", name, resume, p.ID, err)
+				m.logErr(ctx, err, "agents: start %s: not adopting conversation %s restored in pane %s: %v", name, resume, p.ID, err)
 			} else {
 				agentName := name
 				if a.Name != name {
@@ -163,7 +163,7 @@ func (m *Manager) StartAgent(ctx context.Context, pr store.PR, role config.Role,
 	}
 	if dir != "" {
 		if err := m.EnsureTrust(ctx, kindName, dir); err != nil {
-			m.logf("%v (the trust dialog fallback still applies)", err)
+			m.logErr(ctx, err, "%v (the trust dialog fallback still applies)", err)
 		}
 	}
 	ref := paneRef{name: name, pane: paneID}

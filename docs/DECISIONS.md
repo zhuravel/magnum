@@ -4658,3 +4658,24 @@ editing history. Code, config comments and prompts reference these by their head
   for no defect class); wsl, paralleltest and goconst (thousands of hits with no defect class behind them;
   the fixtures call t.Parallel themselves); a concurrency group per ref (a third master push would cancel
   the queued second one). No new dependencies.
+- **The layers log at the level of what they report** (2026-10-09). The pipeline, agents, slots, cleanup
+  and notify packages logged every line through app.Printf at Info, and 79% of daemon.log came through
+  that bridge, so a round that ended in error, a model limit, a failed permission deny or a failed
+  registry write read like routine lines, and `magnum daemon --log-level warn` dropped all of them while
+  exec failures still showed; the slots' and cleanup's warn and error events never reached the log at all.
+  Now execx carries the shared rules: LogAt sends a line at a level through a LevelLogger, or through
+  Printf for a plain Logger; AttrLogger and LogEvent mirror an event at its level, with its subject and
+  kind as attributes; EventLevel is the engine's mapping, which the engine now uses; FailLevel is Warn, or
+  Info when IsStop (the engine's isStop rule) says the daemon is stopping. app.Printf implements LogAttrs.
+  The pipeline's and agents' event mirrors log at the event's level, and the trust and hooks dialogs'
+  records go through agents' event. Slots and cleanup mirror their warn and error events only (their info
+  events were never in the log, and `magnum logs <slot>` shows them). 89 lines that report a failure the
+  caller goes on after now log at Warn: 69 through logErr, which stays at Info when the context ended or
+  the error says canceled, and 19 with no context or a detached one (file reads and writes, a JSON encode,
+  a toast's dedupe release); the osascript fallback logs at Warn only when herdr failed; the pipeline's
+  three panic lines log at Error. No message text changed. RedactHandler renders a typed-nil error or
+  Stringer as "<nil>", and another panic as "!PANIC: …", as slog's own handlers do, instead of panicking.
+  Rejected: an injected *slog.Logger per package (it changes five Deps and every fake logger, and herdr
+  and the exec transcript keep the Printf path anyway); mirroring every slot and cleanup event (new info
+  volume, and slot.discarded lists file paths); a level argument at each logf site (the error sites need
+  the stop rule, which logErr applies once).

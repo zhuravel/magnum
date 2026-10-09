@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -252,7 +253,7 @@ func (m *Manager) Tell(ctx context.Context, run store.Run, text string) error {
 		u.Set("idle_ticks", 0)
 		u.Set("last_prompt_at", now)
 	}); err != nil {
-		m.logf("agents: tell %s: session %d: %v", run.ID, s.ID, err)
+		m.logErr(ctx, err, "agents: tell %s: session %d: %v", run.ID, s.ID, err)
 	}
 	return nil
 }
@@ -270,7 +271,7 @@ func (m *Manager) readTranscript(s store.Session, sid string, w *bgWatch) bool {
 	if err != nil {
 		if msg := err.Error(); msg != w.failed {
 			w.failed = msg
-			m.logf("agents: %s: cannot read its Claude transcript, so its turns end when herdr shows it idle and count as typed: %v", s.Role, err)
+			m.logAt(slog.LevelWarn, "agents: %s: cannot read its Claude transcript, so its turns end when herdr shows it idle and count as typed: %v", s.Role, err)
 		}
 		return false
 	}

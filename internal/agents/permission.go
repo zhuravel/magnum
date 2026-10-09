@@ -252,7 +252,7 @@ func (m *Manager) answerPermission(ctx context.Context, s store.Session, run sto
 	}
 	text, err := m.readVisible(ctx, ref)
 	if err != nil {
-		m.logf("agents: %s blocked: %v", ref, err)
+		m.logErr(ctx, err, "agents: %s blocked: %v", ref, err)
 		return ObsBlocked
 	}
 	if _, trust := detectTrustDialog(text); trust {
@@ -287,7 +287,7 @@ func (m *Manager) answerPermission(ctx context.Context, s store.Session, run sto
 	m.mu.Unlock()
 	keys, err := m.sendDeny(ctx, ref, p)
 	if err != nil {
-		m.logf("agents: deny %s permission prompt of %s in %s (keys sent: %s): %v", kind, s.Role, ref, strings.Join(keys, ", "), err)
+		m.logErr(ctx, err, "agents: deny %s permission prompt of %s in %s (keys sent: %s): %v", kind, s.Role, ref, strings.Join(keys, ", "), err)
 		if len(keys) == 0 { // nothing reached the agent: no deny to count or wait for
 			m.mu.Lock()
 			st.count--
@@ -378,7 +378,7 @@ func (m *Manager) continueAfterDeny(ctx context.Context, s store.Session, run st
 	}
 	text, err := m.readVisible(ctx, ref)
 	if err != nil {
-		m.logf("agents: continue %s after a deny: %v", ref, err)
+		m.logErr(ctx, err, "agents: continue %s after a deny: %v", ref, err)
 		return false
 	}
 	if _, trust := detectTrustDialog(text); trust {
@@ -406,7 +406,7 @@ func (m *Manager) continueAfterDeny(ctx context.Context, s store.Session, run st
 	n := st.count
 	m.mu.Unlock()
 	if _, err := m.d.Herdr.AgentPrompt(ctx, target(s), spec.AfterDenyPrompt, nil); err != nil {
-		m.logf("agents: continue %s after a deny: %v", ref, mapHerdr(err))
+		m.logErr(ctx, err, "agents: continue %s after a deny: %v", ref, mapHerdr(err))
 		return false
 	}
 	now := m.now()
@@ -414,7 +414,7 @@ func (m *Manager) continueAfterDeny(ctx context.Context, s store.Session, run st
 		u.Set("idle_ticks", 0)
 		u.Set("last_prompt_at", now)
 	}); err != nil {
-		m.logf("agents: continue %s after a deny: session %d: %v", ref, s.ID, err)
+		m.logErr(ctx, err, "agents: continue %s after a deny: session %d: %v", ref, s.ID, err)
 	}
 	msg := fmt.Sprintf("sent the after-deny continuation to the %s agent of %s in %s (%d/%d this run)", kind, s.Role, ref, n, MaxPromptDenies)
 	m.permissionEvent(ctx, s.PRID, "info", EventDenyContinued, msg, map[string]any{"role": s.Role, "kind": kind,

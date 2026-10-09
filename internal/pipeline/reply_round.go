@@ -97,7 +97,7 @@ func (rd *round) repliedVerdict(ctx context.Context, markers []string, res *judg
 			return verdict{final: true, outcome: OutcomeStopped, err: ctx.Err()}, true
 		}
 		if res == nil || res.Status != statusReplied {
-			rd.logf("pipeline: look for the round's replies: %v", err)
+			rd.logErr(ctx, err, "pipeline: look for the round's replies: %v", err)
 			return verdict{}, false
 		}
 		return verdict{final: true, outcome: OutcomeError, result: res, err: fmt.Errorf("%w: the replies: %w", errUnverified, err)}, true

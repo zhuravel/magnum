@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"sync"
 
@@ -198,9 +199,9 @@ func redactAttr(a slog.Attr) slog.Attr {
 	case slog.KindAny:
 		switch x := v.Any().(type) {
 		case error:
-			return slog.String(a.Key, execx.Redact(x.Error()))
+			return slog.String(a.Key, execx.Redact(safeText(x, func() string { return x.Error() })))
 		case fmt.Stringer:
-			return slog.String(a.Key, execx.Redact(x.String()))
+			return slog.String(a.Key, execx.Redact(safeText(x, func() string { return x.String() })))
 		case []byte:
 			return slog.String(a.Key, execx.Redact(string(x)))
 		default:
@@ -214,6 +215,24 @@ func redactAttr(a slog.Attr) slog.Attr {
 		}
 	}
 	return slog.Attr{Key: a.Key, Value: v}
+}
+
+// safeText renders v, an error or a Stringer, through text (a closure that
+// calls the method, so a method value bound to a nil pointer cannot panic
+// before the recover) the way slog's own handlers do: "<nil>" when it panics
+// on a nil pointer (a typed-nil error), "!PANIC: …" for another panic, so a
+// bad value never takes the logging goroutine down.
+func safeText(v any, text func() string) (s string) {
+	defer func() {
+		if r := recover(); r != nil {
+			if rv := reflect.ValueOf(v); rv.Kind() == reflect.Pointer && rv.IsNil() {
+				s = "<nil>"
+				return
+			}
+			s = fmt.Sprintf("!PANIC: %v", r)
+		}
+	}()
+	return text()
 }
 
 // anyText renders v the way the log sink would show it: its JSON encoding,
@@ -321,7 +340,17 @@ func (p Printf) Logf(level slog.Level, format string, args ...any) {
 	p.Logger.Log(context.Background(), level, fmt.Sprintf(format, args...), "src", p.Src)
 }
 
+// LogAttrs implements execx.AttrLogger: an audit event's mirror keeps its
+// subject and kind as attributes (execx.LogEvent), after "src".
+func (p Printf) LogAttrs(level slog.Level, msg string, attrs ...slog.Attr) {
+	if p.Logger == nil {
+		return
+	}
+	p.Logger.LogAttrs(context.Background(), level, msg, append([]slog.Attr{slog.String("src", p.Src)}, attrs...)...)
+}
+
 var (
 	_ execx.Logger      = Printf{}
 	_ execx.LevelLogger = Printf{}
+	_ execx.AttrLogger  = Printf{}
 )

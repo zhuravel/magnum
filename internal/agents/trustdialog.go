@@ -2,13 +2,11 @@ package agents
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
 	"time"
 
-	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -295,13 +293,8 @@ func (m *Manager) trustAnswered(ctx context.Context, prID int64, role Role, ref 
 		msg = fmt.Sprintf("answered the %s \"Folder access\" of %s in %s with \"Open restricted\": the session treats the checkout as "+
 			"untrusted and loads none of its .codex/ (%s)", kind, role, ref, strings.Join(keys, ", "))
 	}
-	m.logf("agents: %s", msg)
-	data, _ := json.Marshal(map[string]any{"role": string(role), "kind": kind, "agent": ref.name, "pane": ref.pane, "keys": keys, "restricted": d.restricted})
-	subject := m.prSubject(ctx, prID)
-	if _, err := m.d.Store.AppendEvent(context.WithoutCancel(ctx), store.Event{Level: "info", Subject: &subject,
-		Kind: EventTrustDialogAnswered, Message: execx.Redact(msg), Data: data}); err != nil {
-		m.logf("agents: event %s: %v", EventTrustDialogAnswered, err)
-	}
+	m.event(ctx, m.prSubject(ctx, prID), "info", EventTrustDialogAnswered, msg,
+		map[string]any{"role": string(role), "kind": kind, "agent": ref.name, "pane": ref.pane, "keys": keys, "restricted": d.restricted})
 }
 
 // prSubject is the audit subject of a PR: "pr:<owner>/<name>#<N>", or
@@ -410,12 +403,12 @@ func (m *Manager) openRestricted(ctx context.Context, prID int64, role Role, ref
 func (m *Manager) trustRetry(ctx context.Context, runID string, sess store.Session) bool {
 	ok, err := m.AnswerTrustDialog(ctx, sess)
 	if err != nil {
-		m.logf("agents: run %s: trust dialog fallback: %v", runID, err)
+		m.logErr(ctx, err, "agents: run %s: trust dialog fallback: %v", runID, err)
 	}
 	if kind := m.sessionKind(sess); !ok && kind == KindCodex {
 		ref := paneRef{name: store.Deref(sess.AgentName), pane: store.Deref(sess.HerdrPaneID)}
 		if ok, err = m.answerHooks(ctx, sess.PRID, Role(sess.Role), kind, ref, store.Deref(sess.Cwd)); err != nil {
-			m.logf("agents: run %s: hooks review: %v", runID, err)
+			m.logErr(ctx, err, "agents: run %s: hooks review: %v", runID, err)
 		}
 	}
 	return ok
@@ -427,12 +420,12 @@ func (m *Manager) trustRetry(ctx context.Context, runID string, sess store.Sessi
 func (m *Manager) startAfterTrustDialog(ctx context.Context, prID int64, role Role, kind string, ref paneRef, dir string, gate trustGate) (herdr.AgentInfo, bool) {
 	ok, err := m.answerTrust(ctx, prID, role, kind, ref, gate)
 	if err != nil {
-		m.logf("agents: start %s: trust dialog fallback: %v", ref, err)
+		m.logErr(ctx, err, "agents: start %s: trust dialog fallback: %v", ref, err)
 	}
 	if kind == KindCodex { // a resumed or fresh Codex may stop at its hooks review (after the trust dialog, too)
 		answered, err := m.answerHooks(ctx, prID, role, kind, ref, dir)
 		if err != nil {
-			m.logf("agents: start %s: hooks review: %v", ref, err)
+			m.logErr(ctx, err, "agents: start %s: hooks review: %v", ref, err)
 		}
 		ok = ok || answered
 	}

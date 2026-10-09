@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -261,7 +262,7 @@ func (m *Manager) checkoutProject(ctx context.Context, role config.Role, dir, ba
 		changed := pc.changed(files, disk.links)
 		if err != nil || len(changed) > 0 {
 			if err != nil {
-				m.logf("agents: %s: cannot compare %s with the merge base, so the session leaves them out: %v", role.Name, pc.labels(nil), err)
+				m.logErr(ctx, err, "agents: %s: cannot compare %s with the merge base, so the session leaves them out: %v", role.Name, pc.labels(nil), err)
 			}
 			s.declined, s.compared, s.files = true, err == nil, len(changed)
 			if err == nil {
@@ -457,7 +458,7 @@ func (m *Manager) noteSessionProject(ctx context.Context, id int64, kind string,
 		err = m.d.Store.DeleteKV(ctx, key)
 	}
 	if err != nil {
-		m.logf("agents: session %d: %s: %v", id, key, err)
+		m.logErr(ctx, err, "agents: session %d: %s: %v", id, key, err)
 	}
 }
 
@@ -580,7 +581,7 @@ func (m *Manager) projectServers(role config.Role, path string) []string {
 		if pe := (*fs.PathError)(nil); errors.As(err, &pe) {
 			err = pe.Err
 		}
-		m.logf("agents: %s: cannot read the checkout's Codex config, so its MCP servers stay on: %v", role.Name, err)
+		m.logAt(slog.LevelWarn, "agents: %s: cannot read the checkout's Codex config, so its MCP servers stay on: %v", role.Name, err)
 		return nil
 	}
 	for _, n := range skipped {
@@ -684,13 +685,13 @@ func (m *Manager) recordProject(ctx context.Context, prID int64, role config.Rol
 	key := store.KVPRProject(prID, s.kind)
 	if !s.declined {
 		if err := m.d.Store.DeleteKV(ctx, key); err != nil {
-			m.logf("agents: %s: clear %s: %v", role.Name, key, err)
+			m.logErr(ctx, err, "agents: %s: clear %s: %v", role.Name, key, err)
 		}
 		return
 	}
 	note, _ := json.Marshal(ProjectNote{Head: s.head, At: m.now().UTC(), Files: s.files, Compared: s.compared, Paths: s.names, DocsOnly: s.docsOff})
 	if err := m.d.Store.SetKV(ctx, key, string(note)); err != nil {
-		m.logf("agents: %s: record %s: %v", role.Name, key, err)
+		m.logErr(ctx, err, "agents: %s: record %s: %v", role.Name, key, err)
 	}
 	names := pc.labels(s.names)
 	why := fmt.Sprintf("%d files differ from the merge base", s.files)
@@ -710,6 +711,6 @@ func (m *Manager) recordProject(ctx context.Context, prID int64, role config.Rol
 	subject := m.prSubject(ctx, prID)
 	if _, err := m.d.Store.AppendEvent(ctx, store.Event{Level: "info", Subject: &subject, Kind: pc.event,
 		Message: execx.Redact(msg), Data: data}); err != nil {
-		m.logf("agents: event %s: %v", pc.event, err)
+		m.logErr(ctx, err, "agents: event %s: %v", pc.event, err)
 	}
 }

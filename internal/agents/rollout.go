@@ -27,6 +27,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -87,13 +88,13 @@ func (m *Manager) TurnError(ctx context.Context, run store.Run) (TurnError, bool
 	sid := store.Deref(s.SessionID)
 	path, err := m.rolloutPath(s, sid)
 	if err != nil {
-		m.logf("agents: %s: no Codex rollout to read the turn's error from: %v", s.Role, err)
+		m.logAt(slog.LevelWarn, "agents: %s: no Codex rollout to read the turn's error from: %v", s.Role, err)
 		return TurnError{}, false
 	}
 	since := run.CreatedAt.Add(-transcriptSkew)
 	te, ok, err := lastTurnError(path, since)
 	if err != nil {
-		m.logf("agents: %s: read the Codex rollout: %v", s.Role, err)
+		m.logAt(slog.LevelWarn, "agents: %s: read the Codex rollout: %v", s.Role, err)
 	}
 	if ok && te.Info == CodexCyberPolicy {
 		return te, true
@@ -146,13 +147,13 @@ func rolloutID(sid string) bool {
 func (m *Manager) helperTurnError(s store.Session, sid, path string, since time.Time) (te TurnError, found bool) {
 	helpers, err := spawnedHelpers(path)
 	if err != nil {
-		m.logf("agents: %s: read the helper agents from the Codex rollout: %v", s.Role, err)
+		m.logAt(slog.LevelWarn, "agents: %s: read the helper agents from the Codex rollout: %v", s.Role, err)
 	}
 	home := m.codexHome(s)
 	for _, id := range helpers {
 		hp, err := rolloutIn(home, id)
 		if err != nil {
-			m.logf("agents: %s: helper agent %s: %v", s.Role, id, err)
+			m.logAt(slog.LevelWarn, "agents: %s: helper agent %s: %v", s.Role, id, err)
 			continue
 		}
 		if st, err := os.Stat(hp); err == nil && st.ModTime().Before(since) {
@@ -160,7 +161,7 @@ func (m *Manager) helperTurnError(s store.Session, sid, path string, since time.
 		}
 		errs, err := helperTurnErrors(hp, sid, since)
 		if err != nil {
-			m.logf("agents: %s: helper agent %s: %v", s.Role, id, err)
+			m.logAt(slog.LevelWarn, "agents: %s: helper agent %s: %v", s.Role, id, err)
 		}
 		for _, e := range errs {
 			e.Helper = id

@@ -404,6 +404,6 @@ func (rd *round) recordFindings(ctx context.Context, runID string, res *judgeRes
 			Sources: f.Sources, Verdict: f.Verdict, ReasonCode: f.ReasonCode, Nearby: f.Nearby})
 	}
 	if err := rd.r.Store.RecordFindings(context.WithoutCancel(ctx), runID, rd.pr.ID, rd.in.Round, fs); err != nil {
-		rd.logf("pipeline: record findings: %v", err)
+		rd.logErr(ctx, err, "pipeline: record findings: %v", err)
 	}
 }

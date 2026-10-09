@@ -211,7 +211,7 @@ func (rd *round) judgeVerdict(ctx context.Context, t turn, resultFile string, ma
 		if out, err := rd.r.Agents.ReadRecent(context.WithoutCancel(ctx), s, judgeReadLines); err == nil {
 			text = out
 		} else {
-			rd.logf("pipeline: read judge pane: %v", err)
+			rd.logErr(ctx, err, "pipeline: read judge pane: %v", err)
 		}
 	}
 	res, hasRes := readResultFile(resultFile)
@@ -463,7 +463,7 @@ func (rd *round) findClaimed(ctx context.Context, markers []string, res judgeRes
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
-			rd.logf("pipeline: review %d from the result file: %v", res.ReviewID, err)
+			rd.logErr(ctx, err, "pipeline: review %d from the result file: %v", res.ReviewID, err)
 		case rd.isReviewer(rest.UserLogin, rest.UserType) && rest.CommitID == target &&
 			submitted(rest.State, rest.SubmittedAt) && !rest.SubmittedAt.Before(since):
 			rd.warn(ctx, "review %d has no magnum:run marker; accepted from the judge's result", rest.ID)
@@ -514,7 +514,7 @@ func (rd *round) listReviews(ctx context.Context, marker string) ([]github.Revie
 			errors.Is(err, github.ErrUnauthorized) || errors.Is(err, github.ErrForbidden) {
 			return nil, err
 		}
-		rd.logf("pipeline: list reviews (attempt %d): %v", attempt, err)
+		rd.logErr(ctx, err, "pipeline: list reviews (attempt %d): %v", attempt, err)
 		if serr := rd.r.sleep(ctx, rd.r.poll()); serr != nil {
 			return nil, serr
 		}

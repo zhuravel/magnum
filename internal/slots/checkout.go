@@ -280,7 +280,7 @@ func (m *Manager) checkoutSteps(ctx context.Context, subject string, sl store.Sl
 // failure to list them is logged, never blocks the step.
 func (m *Manager) discarding(ctx context.Context, sl store.Slot) {
 	if _, err := m.noteDiscard(ctx, sl, false); err != nil {
-		m.logf("slots: list the changes in %s before discarding them: %v", sl.Path, err)
+		m.logErr(ctx, err, "slots: list the changes in %s before discarding them: %v", sl.Path, err)
 	}
 }
 

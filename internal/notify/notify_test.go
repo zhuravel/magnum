@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -431,10 +432,18 @@ func TestSidebarRedactsTokenValues(t *testing.T) {
 	}
 }
 
-type logBuf struct{ lines []string }
+// logBuf collects log lines and, beside them, their levels
+// (execx.LevelLogger).
+type logBuf struct {
+	lines  []string
+	levels []slog.Level
+}
 
-func (l *logBuf) Printf(format string, args ...any) {
+func (l *logBuf) Printf(format string, args ...any) { l.Logf(slog.LevelInfo, format, args...) }
+
+func (l *logBuf) Logf(level slog.Level, format string, args ...any) {
 	l.lines = append(l.lines, fmt.Sprintf(format, args...))
+	l.levels = append(l.levels, level)
 }
 
 func TestToastDryRunPrintsInsteadOfShowing(t *testing.T) {

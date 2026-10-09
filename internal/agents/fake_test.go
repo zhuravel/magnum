@@ -3,6 +3,7 @@ package agents
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -571,16 +572,48 @@ func newEnv(t *testing.T) *env {
 	return e
 }
 
-// logSink collects Deps.Log lines.
+// logSink collects Deps.Log lines; recs keeps each with its level and
+// attributes (execx.AttrLogger).
 type logSink struct {
 	mu    sync.Mutex
 	lines []string
+	recs  []logRec
 }
 
-func (l *logSink) Printf(format string, args ...any) {
+type logRec struct {
+	level slog.Level
+	line  string
+	attrs map[string]string
+}
+
+func (l *logSink) Printf(format string, args ...any) { l.Logf(slog.LevelInfo, format, args...) }
+
+func (l *logSink) Logf(level slog.Level, format string, args ...any) {
+	l.LogAttrs(level, fmt.Sprintf(format, args...))
+}
+
+func (l *logSink) LogAttrs(level slog.Level, msg string, attrs ...slog.Attr) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.lines = append(l.lines, fmt.Sprintf(format, args...))
+	l.lines = append(l.lines, msg)
+	rec := logRec{level: level, line: msg, attrs: map[string]string{}}
+	for _, a := range attrs {
+		rec.attrs[a.Key] = a.Value.String()
+	}
+	l.recs = append(l.recs, rec)
+}
+
+// records returns the records whose line contains sub.
+func (l *logSink) records(sub string) []logRec {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var out []logRec
+	for _, r := range l.recs {
+		if strings.Contains(r.line, sub) {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 func (l *logSink) all() []string {

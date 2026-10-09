@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"os"
 	"path/filepath"
@@ -865,15 +866,47 @@ func (k *fakeKeys) busy(paneID string) bool {
 	return k.commands[paneID] > 0
 }
 
+// logSink collects Runner.Logger lines; recs keeps each with its level and
+// attributes (execx.AttrLogger).
 type logSink struct {
 	mu    sync.Mutex
 	lines []string
+	recs  []logRec
 }
 
-func (l *logSink) Printf(format string, args ...any) {
+type logRec struct {
+	level slog.Level
+	line  string
+	attrs map[string]string
+}
+
+func (l *logSink) Printf(format string, args ...any) { l.Logf(slog.LevelInfo, format, args...) }
+
+func (l *logSink) Logf(level slog.Level, format string, args ...any) {
+	l.LogAttrs(level, fmt.Sprintf(format, args...))
+}
+
+func (l *logSink) LogAttrs(level slog.Level, msg string, attrs ...slog.Attr) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.lines = append(l.lines, fmt.Sprintf(format, args...))
+	l.lines = append(l.lines, msg)
+	rec := logRec{level: level, line: msg, attrs: map[string]string{}}
+	for _, a := range attrs {
+		rec.attrs[a.Key] = a.Value.String()
+	}
+	l.recs = append(l.recs, rec)
+}
+
+// record is the first record whose kind attribute is kind.
+func (l *logSink) record(kind string) (logRec, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, r := range l.recs {
+		if r.attrs["kind"] == kind {
+			return r, true
+		}
+	}
+	return logRec{}, false
 }
 
 // env is everything a round test needs.

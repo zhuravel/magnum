@@ -113,9 +113,7 @@ func kvPRGateReason(id int64) string { return fmt.Sprintf("pr.%d.gate_reason", i
 // canceled. Every registry read then fails, so what it returned ("" for a
 // key, nothing for a list) says nothing; callers that decide on it check
 // ctx.Err() as well.
-func isStop(ctx context.Context, err error) bool {
-	return ctx.Err() != nil || errors.Is(err, context.Canceled)
-}
+func isStop(ctx context.Context, err error) bool { return execx.IsStop(ctx, err) }
 
 // warnUnlessStopped logs err under msg with args at Warn, or at Debug when
 // the failure is the daemon stopping (isStop): every stop used to log dozens
@@ -180,16 +178,7 @@ func (e *Engine) event(ctx context.Context, level, subject, kind, msg string, da
 	if _, err := e.st.AppendEvent(ctx, ev); err != nil {
 		e.warnUnlessStopped(ctx, err, "append event", "kind", kind)
 	}
-	lvl := slog.LevelInfo
-	switch level {
-	case "warn":
-		lvl = slog.LevelWarn
-	case "error":
-		lvl = slog.LevelError
-	case "debug":
-		lvl = slog.LevelDebug
-	}
-	e.log.Log(ctx, lvl, msg, "subject", subject, "kind", kind)
+	e.log.Log(ctx, execx.EventLevel(level), msg, "subject", subject, "kind", kind)
 }
 
 // prSubject is the audit subject of a PR, shared with the pipeline

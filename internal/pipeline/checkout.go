@@ -31,7 +31,7 @@ func (rd *round) noteTree(ctx context.Context) {
 		return
 	}
 	if t, err := rd.readTree(ctx); err != nil {
-		rd.logf("pipeline: %s: read the checkout before the reviewers: %v", rd.subject, err)
+		rd.logErr(ctx, err, "pipeline: %s: read the checkout before the reviewers: %v", rd.subject, err)
 	} else {
 		rd.tree = &t
 	}
@@ -60,7 +60,7 @@ func (rd *round) checkTree(ctx context.Context, roles []string) error {
 	}
 	now, err := rd.readTree(ctx)
 	if err != nil {
-		rd.logf("pipeline: %s: read the checkout after %s: %v", rd.subject, strings.Join(roles, ", "), err)
+		rd.logErr(ctx, err, "pipeline: %s: read the checkout after %s: %v", rd.subject, strings.Join(roles, ", "), err)
 		return nil
 	}
 	if now == *rd.tree {

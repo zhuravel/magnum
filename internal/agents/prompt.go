@@ -213,10 +213,10 @@ func (m *Manager) Submit(ctx context.Context, run store.Run, text string) error 
 	if kind := m.sessionKind(sess); kind == KindCodex {
 		ref := paneRef{name: store.Deref(sess.AgentName), pane: store.Deref(sess.HerdrPaneID)}
 		if _, err := m.openRestricted(ctx, run.PRID, role, ref); err != nil {
-			m.logf("agents: submit %s: restricted folder: %v", run.ID, err)
+			m.logErr(ctx, err, "agents: submit %s: restricted folder: %v", run.ID, err)
 		}
 		if _, err := m.answerHooks(ctx, run.PRID, role, kind, ref, store.Deref(sess.Cwd)); err != nil {
-			m.logf("agents: submit %s: hooks review: %v", run.ID, err)
+			m.logErr(ctx, err, "agents: submit %s: hooks review: %v", run.ID, err)
 		}
 	}
 	wait := &herdr.PromptWait{Until: []herdr.Status{herdr.StatusWorking, herdr.StatusBlocked}, Timeout: PromptAckTimeout}
@@ -429,7 +429,7 @@ func (m *Manager) rebindLost(ctx context.Context, prID int64, role string) (stor
 		u.Set("idle_ticks", 0)
 	})
 	if err != nil {
-		m.logf("agents: rebind %s session %d: %v", role, s.ID, err)
+		m.logErr(ctx, err, "agents: rebind %s session %d: %v", role, s.ID, err)
 		return store.Session{}, false
 	}
 	m.markedLive(s.ID, now)

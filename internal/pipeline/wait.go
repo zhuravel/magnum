@@ -147,7 +147,7 @@ func (rd *round) finishRun(ctx context.Context, id, to, outcome, errMsg string, 
 	now := rd.r.now()
 	cur, err := rd.r.Store.RunByID(ctx, id)
 	if err != nil {
-		rd.logf("pipeline: finish run %s: %v", id, err)
+		rd.logErr(ctx, err, "pipeline: finish run %s: %v", id, err)
 		return
 	}
 	set := func(u *store.RunUpdate) {
@@ -179,7 +179,7 @@ func (rd *round) finishRun(ctx context.Context, id, to, outcome, errMsg string, 
 		})
 	}
 	if err != nil {
-		rd.logf("pipeline: finish run %s as %s: %v", id, to, err)
+		rd.logErr(ctx, err, "pipeline: finish run %s as %s: %v", id, to, err)
 	}
 }
 
@@ -291,7 +291,7 @@ func (rd *round) stopShell(ctx context.Context, run store.Run) bool {
 		case err == nil:
 			return true
 		case !herdr.IsTimeout(err):
-			rd.logf("pipeline: %s: wait for an idle shell in pane %s: %v", run.Role, pane, err)
+			rd.logErr(ctx, err, "pipeline: %s: wait for an idle shell in pane %s: %v", run.Role, pane, err)
 			return true
 		case press == shellStopPresses:
 			return false

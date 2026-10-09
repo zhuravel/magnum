@@ -47,7 +47,7 @@ func (rd *round) findUnverified(ctx context.Context) *unverifiedRuns {
 	}
 	runs, err := rd.r.Store.RunsByPR(ctx, rd.in.PR.ID)
 	if err != nil {
-		rd.logf("pipeline: earlier judge runs of %s: %v", rd.subject, err)
+		rd.logErr(ctx, err, "pipeline: earlier judge runs of %s: %v", rd.subject, err)
 		return nil
 	}
 	u := &unverifiedRuns{}
@@ -163,7 +163,7 @@ func (rd *round) adoptUnverified(ctx context.Context) func() (RoundResult, error
 			})
 		}
 		if err != nil {
-			rd.logf("pipeline: adopt review %d on run %s: %v", found.id, id, err)
+			rd.logErr(ctx, err, "pipeline: adopt review %d on run %s: %v", found.id, id, err)
 		}
 	}
 	rd.event(ctx, "info", "round.adopted", fmt.Sprintf("review %d of judge run %s (round %d), which GitHub could not verify then, is on %s: "+

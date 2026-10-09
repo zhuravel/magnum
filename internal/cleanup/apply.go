@@ -378,12 +378,13 @@ func (p *Planner) noteResetDiscard(ctx context.Context, a Action) {
 		parts = append(parts, "could not read branch "+a.Branch+": "+err.Error())
 	}
 	subject := logSubject(a)
+	msg := execx.Redact(fmt.Sprintf("reset --force of %s discards: %s", a.Path, strings.Join(parts, "; ")))
+	p.mirror("warn", subject, "cleanup.discarded", msg)
 	_, e := p.Store.AppendEvent(context.WithoutCancel(ctx), store.Event{
-		Level: "warn", Subject: &subject, Kind: "cleanup.discarded",
-		Message: execx.Redact(fmt.Sprintf("reset --force of %s discards: %s", a.Path, strings.Join(parts, "; "))),
+		Level: "warn", Subject: &subject, Kind: "cleanup.discarded", Message: msg,
 	})
 	if e != nil {
-		p.logf("cleanup: event %s cleanup.discarded: %v", subject, e)
+		p.logErr(ctx, e, "cleanup: event %s cleanup.discarded: %v", subject, e)
 	}
 }
 
@@ -410,11 +411,13 @@ func (p *Planner) event(ctx context.Context, subject, kind string, a Action, err
 	if err != nil {
 		level, msg = "error", fmt.Sprintf("%s %s (%s) failed: %v", a.Kind, a.Subject, a.Why, err)
 	}
+	msg = execx.Redact(msg)
+	p.mirror(level, subject, kind, msg)
 	data, _ := json.Marshal(a)
 	_, e := p.Store.AppendEvent(context.WithoutCancel(ctx), store.Event{
-		Level: level, Subject: &subject, Kind: kind, Message: execx.Redact(msg), Data: data,
+		Level: level, Subject: &subject, Kind: kind, Message: msg, Data: data,
 	})
 	if e != nil {
-		p.logf("cleanup: event %s %s: %v", subject, kind, e)
+		p.logErr(ctx, e, "cleanup: event %s %s: %v", subject, kind, e)
 	}
 }

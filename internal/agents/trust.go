@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -549,8 +550,17 @@ func writeFileAtomic(path string, data []byte, perm fs.FileMode) (err error) {
 	return os.Rename(tmp, path)
 }
 
-func (m *Manager) logf(format string, args ...any) {
+func (m *Manager) logf(format string, args ...any) { m.logAt(slog.LevelInfo, format, args...) }
+
+// logErr logs a line that reports err, a failure the manager goes on after:
+// at Warn, or at Info when err is the daemon stopping (execx.FailLevel).
+func (m *Manager) logErr(ctx context.Context, err error, format string, args ...any) {
+	m.logAt(execx.FailLevel(ctx, err), format, args...)
+}
+
+// logAt logs one redacted line at level (execx.LogAt).
+func (m *Manager) logAt(level slog.Level, format string, args ...any) {
 	if m.d.Log != nil {
-		m.d.Log.Printf("%s", execx.Redact(fmt.Sprintf(format, args...)))
+		execx.LogAt(m.d.Log, level, "%s", execx.Redact(fmt.Sprintf(format, args...)))
 	}
 }

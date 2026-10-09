@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -74,7 +75,7 @@ func (m *Manager) holdDefaultModel(ctx context.Context, s store.Session, kind st
 	snap, err := readSettingsKey(path, claudeSettingsKey)
 	if err != nil {
 		unlock()
-		m.logf("agents: %s: cannot read the default model in %s, so a /model switch may change it: %v", s.Role, path, err)
+		m.logAt(slog.LevelWarn, "agents: %s: cannot read the default model in %s, so a /model switch may change it: %v", s.Role, path, err)
 		return noop, nil
 	}
 	return func() {
@@ -82,7 +83,7 @@ func (m *Manager) holdDefaultModel(ctx context.Context, s store.Session, kind st
 		found, changed, err := restoreSettingsKey(path, claudeSettingsKey, snap)
 		switch {
 		case err != nil:
-			m.logf("agents: %s: restore the default model in %s: %v", s.Role, path, err)
+			m.logAt(slog.LevelWarn, "agents: %s: restore the default model in %s: %v", s.Role, path, err)
 		case changed:
 			bctx := context.WithoutCancel(ctx)
 			m.event(bctx, m.prSubject(bctx, s.PRID), "info", EventDefaultModelRestored,

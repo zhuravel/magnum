@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -415,7 +416,7 @@ func (rd *round) addThreads(ctx context.Context, jd *agents.JudgeData) {
 	threads := rd.ownThreads(ts)
 	b, err := json.MarshalIndent(threads, "", "  ")
 	if err != nil {
-		rd.logf("pipeline: encode review threads: %v", err)
+		rd.logAt(slog.LevelWarn, "pipeline: encode review threads: %v", err)
 		return
 	}
 	path := filepath.Join(rd.dir, ThreadsFile)

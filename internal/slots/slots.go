@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -181,9 +182,18 @@ func New(d Deps) *Manager {
 
 func (m *Manager) now() time.Time { return m.d.Now() }
 
-func (m *Manager) logf(format string, args ...any) {
+func (m *Manager) logf(format string, args ...any) { m.logAt(slog.LevelInfo, format, args...) }
+
+// logErr logs a line that reports err, a failure the manager goes on after:
+// at Warn, or at Info when err is the daemon stopping (execx.FailLevel).
+func (m *Manager) logErr(ctx context.Context, err error, format string, args ...any) {
+	m.logAt(execx.FailLevel(ctx, err), format, args...)
+}
+
+// logAt logs one redacted line at level (execx.LogAt).
+func (m *Manager) logAt(level slog.Level, format string, args ...any) {
 	if m.d.Log != nil {
-		m.d.Log.Printf("%s", execx.Redact(fmt.Sprintf(format, args...)))
+		execx.LogAt(m.d.Log, level, "%s", execx.Redact(fmt.Sprintf(format, args...)))
 	}
 }
 
@@ -196,13 +206,19 @@ func (m *Manager) step(ctx context.Context, subject, name string, fn func(ctx co
 	return steps.Step(ctx, m.d.Store, subject, name, fn)
 }
 
-// event appends an audit row (message redacted).
+// event appends an audit row (message redacted). A warn or error event is
+// mirrored to the log at its level (execx.LogEvent); the others stay in the
+// registry only, as before (`magnum logs <slot>` shows them).
 func (m *Manager) event(ctx context.Context, subject, level, kind, msg string) {
+	msg = execx.Redact(msg)
+	if m.d.Log != nil && execx.EventLevel(level) >= slog.LevelWarn {
+		execx.LogEvent(m.d.Log, level, subject, kind, execx.Redact(fmt.Sprintf("slots: %s %s: %s", subject, kind, msg)))
+	}
 	_, err := m.d.Store.AppendEvent(context.WithoutCancel(ctx), store.Event{
-		Level: level, Subject: &subject, Kind: kind, Message: execx.Redact(msg),
+		Level: level, Subject: &subject, Kind: kind, Message: msg,
 	})
 	if err != nil {
-		m.logf("slots: event %s %s: %v", subject, kind, err)
+		m.logErr(ctx, err, "slots: event %s %s: %v", subject, kind, err)
 	}
 }
 
@@ -222,7 +238,7 @@ func (m *Manager) setLastError(ctx context.Context, id int64, err error) {
 		v = execx.Redact(err.Error())
 	}
 	if uerr := m.d.Store.UpdateSlotFields(context.WithoutCancel(ctx), id, func(u *store.SlotUpdate) { u.Set("last_error", v) }); uerr != nil {
-		m.logf("slots: record last_error on slot %d: %v", id, uerr)
+		m.logErr(ctx, uerr, "slots: record last_error on slot %d: %v", id, uerr)
 	}
 }
 
@@ -377,24 +393,24 @@ func (m *Manager) appendLog(logName, text string, reserve int) {
 	}
 	dir := m.d.Layout.Logs()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		m.logf("slots: log dir: %v", err)
+		m.logAt(slog.LevelWarn, "slots: log dir: %v", err)
 		return
 	}
 	text = execx.Redact(text)
 	path := filepath.Join(dir, logName)
 	if fi, err := os.Stat(path); err == nil && reserve > 0 && fi.Size() > 0 && fi.Size()+int64(reserve) > SlotLogMax {
 		if err := os.Rename(path, path+".1"); err != nil {
-			m.logf("slots: rotate log: %v", err)
+			m.logAt(slog.LevelWarn, "slots: rotate log: %v", err)
 		}
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
-		m.logf("slots: open log: %v", err)
+		m.logAt(slog.LevelWarn, "slots: open log: %v", err)
 		return
 	}
 	defer f.Close()
 	if _, err := f.WriteString(text); err != nil {
-		m.logf("slots: write log: %v", err)
+		m.logAt(slog.LevelWarn, "slots: write log: %v", err)
 	}
 }
 
