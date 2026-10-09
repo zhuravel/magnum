@@ -5938,11 +5938,14 @@ const FlaggedFile = "flagged.json"
 
 FUNCTIONS
 
-func FullReplayFor(runs []Run, caseName, head string) (Run, CaseRun, bool)
+func FullReplayFor(runs []Run, caseName, head string, like *Run) (Run, CaseRun, bool)
     FullReplayFor finds the replay a judge-only replay of case caseName at head
     takes its reviewers' reports from: the newest run whose case of that name
-    reviewed head with every role (not JudgeOnly) and ended a scored dry run.
-    runs are oldest first (ListRuns); ok is false when none did.
+    reviewed head with every role (not JudgeOnly), ended a scored dry run and,
+    unless like is nil, whose reviewers read what the judge-only replay's would,
+    like's (ReviewedOtherwise: the same reviewer inputs and notes setting).
+    A nil like takes any such run, so a refusal can name the newest. runs are
+    oldest first (ListRuns); ok is false when none did.
 
 func HashNotes(file, dir string) (map[string]string, error)
     HashNotes is the SHA-256 (hex) of each notes file a replay gives the judge:
@@ -6167,8 +6170,12 @@ type Run struct {
 	// Inputs identifies what the review read besides the PR and the notes: a hash of the judge
 	// skill, the roles' prompts and the role config ("" in runs before it was recorded). Baselines
 	// matches on it.
-	Inputs  string `json:"inputs,omitempty"`
-	NoNotes bool   `json:"no_notes,omitempty"` // the judge was given no notes (--no-notes)
+	Inputs string `json:"inputs,omitempty"`
+	// ReviewerInputs is the part of Inputs the reviewer roles read: their prompts and role config,
+	// the judges' left out ("" in runs before it was recorded). A judge-only replay takes the reports
+	// of a full replay whose reviewers read what its own would (FullReplayFor).
+	ReviewerInputs string `json:"reviewer_inputs,omitempty"`
+	NoNotes        bool   `json:"no_notes,omitempty"` // no role was given the notes (--no-notes)
 	// Candidate is the directory whose prompts and judge skill the run replayed (--candidate,
 	// evalrun.WithCandidate); "" = the configured ones.
 	Candidate string `json:"candidate,omitempty"`
@@ -6194,6 +6201,16 @@ func Rescore(r Run, c *Corpus, read func(path string) ([]byte, error)) Run
     result that cannot be read or parsed; either sets Error to say so when the
     case has a score or no other error. A rescore that succeeds clears an Error
     an earlier one set.
+
+func (r Run) ReviewedOtherwise(like Run) string
+    ReviewedOtherwise says how r's reviewers read other inputs than like's
+    would ("" = they read the same): other reviewer inputs (ReviewerInputs;
+    a run that recorded none, from before they were recorded, counts as other),
+    or the notes given where like withholds them or withheld where like gives
+    them (NoNotes: the reviewers' prompts point at the notes too). The notes'
+    content is not compared: it moves with every curation, and a judge-only
+    replay measures a judge change on the same reports, not on the notes the
+    reviewers read then.
 
 func (r Run) Totals() Totals
     Totals adds up the scores of the run. Cases without a score count in Cases
@@ -6293,16 +6310,34 @@ VARIABLES
 
 var ErrNoFullReplay = errors.New("no full replay to take the reviewers' reports from")
     ErrNoFullReplay is a judge-only replay's error when it finds no scored full
-    replay of its case at the same head to take the reviewers' reports from.
+    replay of its case at the same head whose reviewers read what its own would
+    to take the reviewers' reports from, or the one it finds left none.
 
 
 FUNCTIONS
+
+func Inputs(cfg *config.Config) string
+    Inputs is a hash (12 hex) of what a replay's review reads besides the PR and
+    the notes (eval.Run.Inputs): every role's config with the model it resolves
+    to and its kind's config, the prompt files the roles name as they resolve
+    now (the checkout's prompts_dir, else the embedded ones), and each judge's
+    skill file. The texts count, not where they are: a judge's skill path is
+    left out of its role config, so a candidate directory with the same texts
+    as the checkout has its inputs (a landed candidate's replays are the next
+    baseline). magnum's own code is not part of it. "" without a config.
 
 func Refused(ctx context.Context, d Deps, ec eval.Case) string
     Refused says why case ec is not replayed ("" = it may be): an earlier
     replay of it or of its PR, under any case name, was refused (the runs root's
     eval.FlaggedFile, which cannot be read refuses too), or the live registry
     holds a Codex flag for its PR (liveFlag).
+
+func ReviewerInputs(cfg *config.Config) string
+    ReviewerInputs is the part of Inputs the reviewer roles read
+    (eval.Run.ReviewerInputs): the same hash over the roles that are not judges,
+    so a change to a judge's prompts or skill leaves it alone and a judge-only
+    replay can take the reports of a full replay whose reviewers read what its
+    own would (eval.FullReplayFor). "" without a config.
 
 func RunCase(ctx context.Context, d Deps, ec eval.Case, o Options) (out eval.CaseRun)
     RunCase replays case ec and scores it. Every failure becomes the case's
@@ -6363,9 +6398,12 @@ type Options struct {
 	// (WithCandidate); "" = Config's.
 	Candidate string
 	// JudgeOnly runs the judge alone on the reviewers' reports of the
-	// case's newest full replay at the same head (eval.FullReplayFor),
-	// copied into the case's report directory (engine.EvalCase.JudgeOnly);
-	// a case without one fails with ErrNoFullReplay before anything starts.
+	// case's newest full replay at the same head whose reviewers read what
+	// this replay's would (eval.FullReplayFor: ReviewerInputs of the config
+	// the case reviews with, and NoNotes), copied into the case's report
+	// directory (engine.EvalCase.JudgeOnly); a case without one, or whose
+	// full replay left no reviewer report, fails with ErrNoFullReplay before
+	// it reads GitHub or checks anything out.
 	JudgeOnly bool
 	// NoNotes withholds the repository notes from the judge; Keep leaves
 	// the case's worktree in place; Force runs past [usage] codex_soft.

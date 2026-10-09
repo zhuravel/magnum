@@ -53,10 +53,16 @@ type CaseRun struct {
 const outcomeDryRun = "dry_run"
 
 // FullReplayFor finds the replay a judge-only replay of case caseName at head takes its reviewers'
-// reports from: the newest run whose case of that name reviewed head with every role (not JudgeOnly)
-// and ended a scored dry run. runs are oldest first (ListRuns); ok is false when none did.
-func FullReplayFor(runs []Run, caseName, head string) (Run, CaseRun, bool) {
+// reports from: the newest run whose case of that name reviewed head with every role (not JudgeOnly),
+// ended a scored dry run and, unless like is nil, whose reviewers read what the judge-only replay's
+// would, like's (ReviewedOtherwise: the same reviewer inputs and notes setting). A nil like takes any
+// such run, so a refusal can name the newest. runs are oldest first (ListRuns); ok is false when none
+// did.
+func FullReplayFor(runs []Run, caseName, head string, like *Run) (Run, CaseRun, bool) {
 	for _, r := range slices.Backward(runs) {
+		if like != nil && r.ReviewedOtherwise(*like) != "" {
+			continue
+		}
 		for _, cr := range r.Cases {
 			if cr.Case == caseName && cr.Head == head && cr.Score != nil && !cr.JudgeOnly && cr.Outcome == outcomeDryRun {
 				return r, cr, true
@@ -64,6 +70,26 @@ func FullReplayFor(runs []Run, caseName, head string) (Run, CaseRun, bool) {
 		}
 	}
 	return Run{}, CaseRun{}, false
+}
+
+// ReviewedOtherwise says how r's reviewers read other inputs than like's would ("" = they read the
+// same): other reviewer inputs (ReviewerInputs; a run that recorded none, from before they were
+// recorded, counts as other), or the notes given where like withholds them or withheld where like
+// gives them (NoNotes: the reviewers' prompts point at the notes too). The notes' content is not
+// compared: it moves with every curation, and a judge-only replay measures a judge change on the
+// same reports, not on the notes the reviewers read then.
+func (r Run) ReviewedOtherwise(like Run) string {
+	switch {
+	case r.ReviewerInputs == "":
+		return "it recorded no reviewer inputs"
+	case r.ReviewerInputs != like.ReviewerInputs:
+		return "its reviewers read other prompts or ran with another role config"
+	case r.NoNotes && !like.NoNotes:
+		return "its reviewers were given no notes (--no-notes)"
+	case !r.NoNotes && like.NoNotes:
+		return "its reviewers were given the notes"
+	}
+	return ""
 }
 
 // Points is how far the Codex gauge moved while the case ran; ok is false when either reading is
@@ -89,8 +115,12 @@ type Run struct {
 	// Inputs identifies what the review read besides the PR and the notes: a hash of the judge
 	// skill, the roles' prompts and the role config ("" in runs before it was recorded). Baselines
 	// matches on it.
-	Inputs  string `json:"inputs,omitempty"`
-	NoNotes bool   `json:"no_notes,omitempty"` // the judge was given no notes (--no-notes)
+	Inputs string `json:"inputs,omitempty"`
+	// ReviewerInputs is the part of Inputs the reviewer roles read: their prompts and role config,
+	// the judges' left out ("" in runs before it was recorded). A judge-only replay takes the reports
+	// of a full replay whose reviewers read what its own would (FullReplayFor).
+	ReviewerInputs string `json:"reviewer_inputs,omitempty"`
+	NoNotes        bool   `json:"no_notes,omitempty"` // no role was given the notes (--no-notes)
 	// Candidate is the directory whose prompts and judge skill the run replayed (--candidate,
 	// evalrun.WithCandidate); "" = the configured ones.
 	Candidate string `json:"candidate,omitempty"`

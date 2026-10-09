@@ -12,6 +12,7 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/eval"
+	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/store/storetest"
@@ -83,33 +84,98 @@ func TestACaseWhosePRIsFlaggedIsRefused(t *testing.T) {
 	}
 }
 
-// A judge-only replay takes the reviewers' reports of the case's newest full replay at the same head;
-// a case without one fails before anything is checked out or started, naming the case, the head and
-// the run it needs. A full replay of another head, a judge-only one or one without a score is none.
-func TestAJudgeOnlyReplayWithoutAFullReplayIsRefusedBeforeAnyAgent(t *testing.T) {
+// judgeOnlyFixture is a watched widgets case whose Codex gauge reads nothing, and the deps of a
+// layout whose eval runs are runs; the runner fails every command and records it.
+func judgeOnlyFixture(t *testing.T, runs ...eval.Run) (Deps, *execx.Fake) {
+	t.Helper()
 	cfg := testConfig(t)
 	cfg.Watches = []config.Watch{{Owner: "example", Include: []string{"*"}, Identity: "zhuravel", PollIdentity: "zhuravel"}}
+	cfg.Usage.CodexHome = t.TempDir()
 	l := paths.Layout{Home: t.TempDir()}
-	d := Deps{Layout: l, Config: cfg}
-	ec := widgetsCase()
-	scored := &eval.Score{Found: 1, Total: 1}
-	for _, r := range []eval.Run{
-		{ID: "20261008-100000", Cases: []eval.CaseRun{{Case: ec.Name, Head: strings.Repeat("cd", 20), Outcome: "dry_run", Score: scored, ReportDir: "/x"}}},
-		{ID: "20261008-110000", Cases: []eval.CaseRun{{Case: ec.Name, Head: ec.Head, Outcome: "dry_run", Score: scored, JudgeOnly: true, ReportDir: "/x"}}},
-		{ID: "20261008-120000", Cases: []eval.CaseRun{{Case: ec.Name, Head: ec.Head, Outcome: "error", ReportDir: "/x"}}},
-	} {
+	for _, r := range runs {
 		if err := eval.SaveRun(filepath.Join(RunsRoot(l), r.ID), r); err != nil {
 			t.Fatal(err)
 		}
 	}
-	o := Options{JudgeOnly: true, RunDir: filepath.Join(RunsRoot(l), "20261009-100000")}
+	run := &execx.Fake{}
+	return Deps{Layout: l, Config: cfg, Runner: run}, run
+}
+
+// A judge-only replay takes the reviewers' reports of the case's newest full replay at the same head;
+// a case without one fails before anything is checked out or started, naming the case, the head and
+// the run it needs. A full replay of another head, a judge-only one or one without a score is none,
+// and so is one whose reviewers read other inputs than this replay's would: given no notes when this
+// one gives them, or with other reviewer prompts (a candidate's that changed one). The refusal names
+// the newest full replay it left out and why.
+func TestAJudgeOnlyReplayWithoutAFullReplayIsRefusedBeforeAnyAgent(t *testing.T) {
+	ec := widgetsCase()
+	scored := &eval.Score{Found: 1, Total: 1}
+	d, run := judgeOnlyFixture(t)
+	reviewers := ReviewerInputs(d.Config)
+	for _, r := range []eval.Run{
+		{ID: "20261008-100000", ReviewerInputs: reviewers, Cases: []eval.CaseRun{{Case: ec.Name, Head: strings.Repeat("cd", 20), Outcome: "dry_run", Score: scored, ReportDir: "/x"}}},
+		{ID: "20261008-110000", ReviewerInputs: reviewers, Cases: []eval.CaseRun{{Case: ec.Name, Head: ec.Head, Outcome: "dry_run", Score: scored, JudgeOnly: true, ReportDir: "/x"}}},
+		{ID: "20261008-120000", ReviewerInputs: reviewers, Cases: []eval.CaseRun{{Case: ec.Name, Head: ec.Head, Outcome: "error", ReportDir: "/x"}}},
+	} {
+		if err := eval.SaveRun(filepath.Join(RunsRoot(d.Layout), r.ID), r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	o := Options{JudgeOnly: true, RunDir: filepath.Join(RunsRoot(d.Layout), "20261009-100000"), AgentTag: "eval-test"}
 	cr := RunCase(context.Background(), d, ec, o)
 	if cr.Outcome != OutcomeError || !strings.Contains(cr.Error, ErrNoFullReplay.Error()) || !strings.Contains(cr.Error, `"x"`) ||
 		!strings.Contains(cr.Error, ec.Head[:7]) || !strings.Contains(cr.Error, "--case x") {
 		t.Fatalf("case run %+v, want the no-full-replay error naming the case, the head and the run to make", cr)
 	}
+
+	for name, c := range map[string]struct {
+		stored eval.Run
+		why    string
+	}{
+		"notes withheld": {eval.Run{ReviewerInputs: reviewers, NoNotes: true}, "given no notes"},
+		"other prompts":  {eval.Run{ReviewerInputs: "0123456789ab"}, "other prompts"},
+		"not recorded":   {eval.Run{}, "recorded no reviewer inputs"},
+	} {
+		c.stored.ID = "20261008-130000"
+		c.stored.Cases = []eval.CaseRun{{Case: ec.Name, Head: ec.Head, Outcome: "dry_run", Score: scored, ReportDir: "/x"}}
+		d, run := judgeOnlyFixture(t, c.stored)
+		cr := RunCase(context.Background(), d, ec, o)
+		if cr.Outcome != OutcomeError || !strings.Contains(cr.Error, ErrNoFullReplay.Error()) ||
+			!strings.Contains(cr.Error, "run 20261008-130000") || !strings.Contains(cr.Error, c.why) || cr.ReportsRun != "" {
+			t.Errorf("%s: case run %+v, want the no-full-replay error naming run 20261008-130000 and %q", name, cr, c.why)
+		}
+		if len(run.Calls) > 0 {
+			t.Errorf("%s: commands ran: %v", name, run.Calls)
+		}
+	}
 	if _, err := os.Stat(filepath.Join(o.RunDir, "cases")); !os.IsNotExist(err) {
 		t.Fatalf("a scratch tree was made: %v", err)
+	}
+	if len(run.Calls) > 0 {
+		t.Fatalf("commands ran: %v", run.Calls)
+	}
+}
+
+// A judge-only replay whose full replay's reviewer reports are gone (its report directory pruned or
+// its run removed) fails before it reads GitHub, fetches the head or adds a worktree, naming the run
+// and the directory; a --no-notes replay takes the --no-notes full replay.
+func TestAJudgeOnlyReplayWhoseFullReplayLostItsReportsIsRefusedBeforeGitHub(t *testing.T) {
+	ec := widgetsCase()
+	gone := filepath.Join(t.TempDir(), "gone")
+	d, run := judgeOnlyFixture(t)
+	stored := eval.Run{ID: "20261008-130000", ReviewerInputs: ReviewerInputs(d.Config), NoNotes: true,
+		Cases: []eval.CaseRun{{Case: ec.Name, Head: ec.Head, Outcome: "dry_run", Score: &eval.Score{Found: 1, Total: 1}, ReportDir: gone}}}
+	if err := eval.SaveRun(filepath.Join(RunsRoot(d.Layout), stored.ID), stored); err != nil {
+		t.Fatal(err)
+	}
+	o := Options{JudgeOnly: true, NoNotes: true, RunDir: filepath.Join(RunsRoot(d.Layout), "20261009-100000"), AgentTag: "eval-test"}
+	cr := RunCase(context.Background(), d, ec, o)
+	if cr.Outcome != OutcomeError || !strings.Contains(cr.Error, ErrNoFullReplay.Error()) || !strings.Contains(cr.Error, "run 20261008-130000") ||
+		!strings.Contains(cr.Error, gone) || cr.ReportsRun != stored.ID {
+		t.Fatalf("case run %+v, want the no-full-replay error naming run %s and %s", cr, stored.ID, gone)
+	}
+	if len(run.Calls) > 0 {
+		t.Fatalf("commands ran before the refusal: %v", run.Calls)
 	}
 }
 

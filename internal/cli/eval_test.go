@@ -105,15 +105,15 @@ func TestEvalRunCandidateFlagChangesTheInputsHash(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return evalInputs(c)
+		return evalrun.Inputs(c)
 	}
 	a, b, sameAsA := cand("# Skill A\n"), cand("# Skill B\n"), cand("# Skill A\n")
-	if base := evalInputs(cfg); base == inputs(a) || inputs(a) == inputs(b) || inputs(a) != inputs(sameAsA) {
+	if base := evalrun.Inputs(cfg); base == inputs(a) || inputs(a) == inputs(b) || inputs(a) != inputs(sameAsA) {
 		t.Fatalf("inputs: checkout %s, A %s, B %s, A elsewhere %s", base, inputs(a), inputs(b), inputs(sameAsA))
 	}
 	writeEvalFile(t, filepath.Join(cfg.Pipeline.PromptsDir, judge), "Review {{.URL}} as the candidate.\n")
 	writeEvalFile(t, f.Ctx.Layout.Skill(), "# Skill A\n")
-	if base := evalInputs(cfg); base != inputs(a) || base != inputs(f.Ctx.Layout.Home) {
+	if base := evalrun.Inputs(cfg); base != inputs(a) || base != inputs(f.Ctx.Layout.Home) {
 		t.Fatalf("the checkout with A's texts: %s, A %s, the checkout as a candidate %s", base, inputs(a), inputs(f.Ctx.Layout.Home))
 	}
 
@@ -126,8 +126,8 @@ func TestEvalRunCandidateFlagChangesTheInputsHash(t *testing.T) {
 		t.Fatalf("exit %d; stderr %s", code, f.Err)
 	}
 	runs, err := eval.ListRuns(evalRunsRoot(f.Ctx.Layout))
-	if err != nil || len(runs) != 1 || runs[0].Candidate != a || runs[0].Inputs != inputs(a) {
-		t.Fatalf("runs %+v, %v; want the candidate %s with inputs %s", runs, err, a, inputs(a))
+	if err != nil || len(runs) != 1 || runs[0].Candidate != a || runs[0].Inputs != inputs(a) || runs[0].ReviewerInputs != evalrun.ReviewerInputs(cfg) {
+		t.Fatalf("runs %+v, %v; want the candidate %s with inputs %s and the checkout's reviewer inputs", runs, err, a, inputs(a))
 	}
 	f.Err.Reset()
 	if code := execute(f.Ctx, []string{"eval", "run", "--corpus", corpus, "--candidate", t.TempDir()}); code != 1 ||

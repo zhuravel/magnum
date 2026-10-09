@@ -595,8 +595,10 @@ func TestTheReportShowsAbsentHits(t *testing.T) {
 // another case's. A judge-only run says so in its report header and per case.
 func TestFullReplayForPicksTheNewestScoredFullRun(t *testing.T) {
 	scored := &Score{Found: 1, Total: 1}
+	like := &Run{ReviewerInputs: "aaaaaaaaaaaa"}
 	full := func(id, name, head, outcome string, score *Score, judgeOnly bool) Run {
-		return Run{ID: id, Cases: []CaseRun{{Case: name, Head: head, Outcome: outcome, Score: score, JudgeOnly: judgeOnly, ReportDir: "/runs/" + id}}}
+		return Run{ID: id, ReviewerInputs: like.ReviewerInputs,
+			Cases: []CaseRun{{Case: name, Head: head, Outcome: outcome, Score: score, JudgeOnly: judgeOnly, ReportDir: "/runs/" + id}}}
 	}
 	other := strings.Repeat("c", 40)
 	runs := []Run{
@@ -608,14 +610,14 @@ func TestFullReplayForPicksTheNewestScoredFullRun(t *testing.T) {
 		full("r6", "copy", sha, "dry_run", scored, false),
 		full("r7", "geo", sha, "usage_limit", scored, false),
 	}
-	if r, cr, ok := FullReplayFor(runs, "geo", sha); !ok || r.ID != "r1" || cr.ReportDir != "/runs/r1" {
+	if r, cr, ok := FullReplayFor(runs, "geo", sha, like); !ok || r.ID != "r1" || cr.ReportDir != "/runs/r1" {
 		t.Fatalf("FullReplayFor = %s %+v %v, want r1", r.ID, cr, ok)
 	}
 	runs = append(runs, full("r8", "geo", sha, "dry_run", scored, false))
-	if r, _, ok := FullReplayFor(runs, "geo", sha); !ok || r.ID != "r8" {
+	if r, _, ok := FullReplayFor(runs, "geo", sha, like); !ok || r.ID != "r8" {
 		t.Fatalf("FullReplayFor = %s %v, want the newest, r8", r.ID, ok)
 	}
-	if _, _, ok := FullReplayFor(runs, "geo", strings.Repeat("d", 40)); ok {
+	if _, _, ok := FullReplayFor(runs, "geo", strings.Repeat("d", 40), like); ok {
 		t.Fatal("a full replay found at a head no run reviewed")
 	}
 
@@ -628,6 +630,55 @@ func TestFullReplayForPicksTheNewestScoredFullRun(t *testing.T) {
 	WriteMarkdown(&b, jo)
 	if !strings.Contains(b.String(), "example/web#3 at `0123456789ab`, outcome dry_run, the judge alone on the reviewers' reports of run r8\n") {
 		t.Errorf("markdown lacks the judge-only case line:\n%s", b.String())
+	}
+}
+
+// The reviewers' reports a judge-only replay takes must come from reviewers that read what its own
+// would: a full replay with other reviewer prompts or roles (a candidate's that changed one), one
+// that withheld the notes from a replay that gives them or the other way round, and one that did not
+// record its reviewer inputs are not taken, however new; a nil like takes any, so a refusal can name
+// the newest and say why it does not count.
+func TestFullReplayForTakesOnlyARunWhoseReviewersReadTheSame(t *testing.T) {
+	scored := &Score{Found: 1, Total: 1}
+	full := func(id, reviewers string, noNotes bool) Run {
+		return Run{ID: id, ReviewerInputs: reviewers, NoNotes: noNotes,
+			Cases: []CaseRun{{Case: "geo", Head: sha, Outcome: "dry_run", Score: scored, ReportDir: "/runs/" + id}}}
+	}
+	runs := []Run{
+		full("r1", "aaaaaaaaaaaa", false),
+		full("r2", "bbbbbbbbbbbb", false),
+		full("r3", "aaaaaaaaaaaa", true),
+		full("r4", "", false),
+	}
+	like := Run{ReviewerInputs: "aaaaaaaaaaaa"}
+	if r, _, ok := FullReplayFor(runs, "geo", sha, &like); !ok || r.ID != "r1" {
+		t.Fatalf("with the notes: %s %v, want r1, the newest whose reviewers read the same", r.ID, ok)
+	}
+	withheld := Run{ReviewerInputs: "aaaaaaaaaaaa", NoNotes: true}
+	if r, _, ok := FullReplayFor(runs, "geo", sha, &withheld); !ok || r.ID != "r3" {
+		t.Fatalf("--no-notes: %s %v, want r3", r.ID, ok)
+	}
+	if r, _, ok := FullReplayFor(runs, "geo", sha, &Run{ReviewerInputs: "cccccccccccc"}); ok {
+		t.Fatalf("other reviewer inputs took %s", r.ID)
+	}
+	if r, _, ok := FullReplayFor(runs, "geo", sha, nil); !ok || r.ID != "r4" {
+		t.Fatalf("any run: %s %v, want the newest, r4", r.ID, ok)
+	}
+	for _, c := range []struct {
+		run  Run
+		want string
+	}{
+		{runs[0], ""},
+		{runs[1], "other prompts"},
+		{runs[2], "no notes"},
+		{runs[3], "recorded no reviewer inputs"},
+	} {
+		if got := c.run.ReviewedOtherwise(like); (c.want == "") != (got == "") || !strings.Contains(got, c.want) {
+			t.Errorf("%s: ReviewedOtherwise = %q, want %q", c.run.ID, got, c.want)
+		}
+	}
+	if got := runs[0].ReviewedOtherwise(withheld); !strings.Contains(got, "given the notes") {
+		t.Errorf("notes given, withheld wanted: %q", got)
 	}
 }
 

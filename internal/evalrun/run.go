@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -53,8 +54,8 @@ const (
 const ReleaseTimeout = 2 * time.Minute
 
 // ErrNoFullReplay is a judge-only replay's error when it finds no scored
-// full replay of its case at the same head to take the reviewers' reports
-// from.
+// full replay of its case at the same head whose reviewers read what its own
+// would to take the reviewers' reports from, or the one it finds left none.
 var ErrNoFullReplay = errors.New("no full replay to take the reviewers' reports from")
 
 // RunsRoot is where a layout's eval runs live: <state>/eval/<run id>/, with
@@ -97,9 +98,12 @@ type Options struct {
 	// (WithCandidate); "" = Config's.
 	Candidate string
 	// JudgeOnly runs the judge alone on the reviewers' reports of the
-	// case's newest full replay at the same head (eval.FullReplayFor),
-	// copied into the case's report directory (engine.EvalCase.JudgeOnly);
-	// a case without one fails with ErrNoFullReplay before anything starts.
+	// case's newest full replay at the same head whose reviewers read what
+	// this replay's would (eval.FullReplayFor: ReviewerInputs of the config
+	// the case reviews with, and NoNotes), copied into the case's report
+	// directory (engine.EvalCase.JudgeOnly); a case without one, or whose
+	// full replay left no reviewer report, fails with ErrNoFullReplay before
+	// it reads GitHub or checks anything out.
 	JudgeOnly bool
 	// NoNotes withholds the repository notes from the judge; Keep leaves
 	// the case's worktree in place; Force runs past [usage] codex_soft.
@@ -178,10 +182,14 @@ func RunCase(ctx context.Context, d Deps, ec eval.Case, o Options) (out eval.Cas
 		if err != nil {
 			return fail(OutcomeError, err)
 		}
-		r, fc, ok := eval.FullReplayFor(runs, ec.Name, ec.Head)
+		like := eval.Run{ReviewerInputs: ReviewerInputs(cfg), NoNotes: o.NoNotes}
+		r, fc, ok := eval.FullReplayFor(runs, ec.Name, ec.Head, &like)
 		if !ok || fc.ReportDir == "" {
-			return fail(OutcomeError, fmt.Errorf("%w: case %q at %s has no scored full replay; run `magnum eval run --case %s` without --judge-only first",
-				ErrNoFullReplay, ec.Name, textx.ShortSHA(ec.Head), ec.Name))
+			why := "has no scored full replay"
+			if other, _, ok := eval.FullReplayFor(runs, ec.Name, ec.Head, nil); ok && other.ReviewedOtherwise(like) != "" {
+				why += fmt.Sprintf(" whose reviewers read what this replay's would (the newest, run %s, does not count: %s)", other.ID, other.ReviewedOtherwise(like))
+			}
+			return fail(OutcomeError, fmt.Errorf("%w: case %q at %s %s; run `%s` first", ErrNoFullReplay, ec.Name, textx.ShortSHA(ec.Head), why, fullReplayCommand(ec, o)))
 		}
 		stored, cr.JudgeOnly, cr.ReportsRun = fc, true, r.ID
 	}
@@ -209,6 +217,10 @@ func RunCase(ctx context.Context, d Deps, ec eval.Case, o Options) (out eval.Cas
 		var err error
 		if reports, err = copyReports(cfg, w, stored.ReportDir, layout.ReviewDir(ec.Owner, ec.Repo, ec.Number, ec.Head)); err != nil {
 			return fail(OutcomeError, fmt.Errorf("copy the reviewers' reports of run %s: %w", cr.ReportsRun, err))
+		}
+		if !slices.ContainsFunc(reports, func(r agents.Report) bool { return r.Status == pipeline.ReportOK }) {
+			return fail(OutcomeError, fmt.Errorf("%w: run %s left no reviewer report in %s (removed since?); run `%s` first",
+				ErrNoFullReplay, cr.ReportsRun, tilde(stored.ReportDir), fullReplayCommand(ec, o)))
 		}
 	}
 	logger := d.Logger
@@ -313,6 +325,20 @@ func RunCase(ctx context.Context, d Deps, ec eval.Case, o Options) (out eval.Cas
 	score := eval.ScoreCase(ec, result)
 	cr.Score = &score
 	return cr
+}
+
+// fullReplayCommand is the `magnum eval run` that makes the full replay a
+// judge-only replay of ec with o's settings can take its reports from: the
+// same candidate and notes setting, without --judge-only.
+func fullReplayCommand(ec eval.Case, o Options) string {
+	cmd := "magnum eval run --case " + ec.Name
+	if o.Candidate != "" {
+		cmd += " --candidate " + tilde(o.Candidate)
+	}
+	if o.NoNotes {
+		cmd += " --no-notes"
+	}
+	return cmd
 }
 
 // budget says why no case may start now ("" = it may): the Codex budget at

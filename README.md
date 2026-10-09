@@ -1893,7 +1893,8 @@ its total (`absent defects: 1 of 2 hit`), never noise nor recall; with a `severi
 severity or stronger is a hit, so a point that was right but ranked too high counts as fixed once the review
 ranks it lower. A case costs a whole review round, so `run` waits for real reviews: it refuses to start a case
 past `[usage] codex_soft` unless `--force`. Each run's `run.json` records `inputs`, a hash of the judge skill, the
-roles' prompts and the role config, and per case the hash of each notes file its judge read and the Codex gauge
+roles' prompts and the role config, `reviewer_inputs`, the same hash over the roles that are not judges, and per
+case the hash of each notes file its judge read and the Codex gauge
 before and after it: the report prints the points the cases used (`codex: +2 points (geo +1, copy +1)`) and,
 next to the previous run, `notes differ from <run>: <case> (<file> changed)` when the judge read other notes, so a
 notes change is not taken for a skill change. `magnum eval baseline [--case NAME]...` lists, without replaying
@@ -1905,10 +1906,13 @@ the report's header) and `inputs` hash the candidate's texts; a judge's skill pa
 same texts in another directory are the same inputs. A directory without `prompts/` or the skill is refused
 before any case. `--judge-only` measures a change to the judge's prompts or skill for the price of one agent:
 each case's judge reviews alone on the reviewers' reports of the case's newest full replay at the same head
-that ended a scored dry run (copied into the case's scratch reports, a reviewer that left none shown to the
-judge as missing), with its own pass as configured; `run.json` records `judge_only` and `reports_run` per case,
-the report's header says `judge-only`, and a case without a full replay fails before anything starts, naming
-the run to make. A judge-only replay is never a baseline (`eval baseline` lists full replays only).
+that ended a scored dry run with the same `reviewer_inputs` and the same `--no-notes` (so a candidate that
+changed a reviewer's prompt, or a full replay that withheld the notes, lends its reports to no other run; copied
+into the case's scratch reports, a reviewer that left none shown to the judge as missing), with its own pass as
+configured; `run.json` records `judge_only` and `reports_run` per case, the report's header says `judge-only`,
+and a case without such a full replay, or whose full replay's reports are gone, fails before anything starts,
+naming the newest full replay it left out and why, and the run to make. A judge-only replay is never a
+baseline (`eval baseline` lists full replays only).
 
 Troubleshooting lives in `magnum doctor` (`--json` stays JSON even when the registry cannot be opened: a
 build with a new migration under a running daemon is a failed `registry` check whose fix is `magnum

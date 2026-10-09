@@ -4,39 +4,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/eval"
+	"github.com/zhuravel/magnum/internal/evalrun"
 )
-
-// The inputs a replay records name what its review read besides the PR and the notes: the judge
-// skill, the roles' prompts and the role config. Any of them changed is another baseline.
-func TestEvalInputsChangeWithTheSkillAPromptOrARole(t *testing.T) {
-	f := newInspFixture(t)
-	if err := f.Ctx.LoadConfig(); err != nil {
-		t.Fatal(err)
-	}
-	cfg := f.Ctx.Config
-	base := evalInputs(cfg)
-	if len(base) != 12 || evalInputs(cfg) != base {
-		t.Fatalf("inputs %q, then %q: want one 12-hex hash", base, evalInputs(cfg))
-	}
-	seen := map[string]string{base: "the start"}
-	changed := func(what string) {
-		t.Helper()
-		got := evalInputs(cfg)
-		if prev, ok := seen[got]; ok {
-			t.Fatalf("after %s the inputs are %s, as after %s", what, got, prev)
-		}
-		seen[got] = what
-	}
-	writeEvalFile(t, f.Ctx.Layout.Skill(), "# Review skill\n")
-	changed("writing the skill")
-	judge := cfg.JudgeFor(nil)
-	writeEvalFile(t, filepath.Join(cfg.Pipeline.PromptsDir, judge.PromptFile(config.PromptInitial)), "Review {{.URL}}.\n")
-	changed("writing the judge's prompt")
-	cfg.Roles[0].Effort = "low"
-	changed("changing a role's effort")
-}
 
 // `eval baseline` names, per case, the stored replays at the corpus's head whose inputs are the
 // ones a run would have now, newest first, and `run` for a case none covers. It writes nothing.
@@ -50,7 +20,7 @@ func TestEvalBaselineNamesTheStoredReplaysWithTheSameInputs(t *testing.T) {
 		"[[case.defect]]\nid = \"d\"\ntitle = \"t\"\nmatch = [\"x\"]\n\n"+
 		"[[case]]\nname = \"copy\"\npr = \"example/web#4\"\nhead = \""+evalTestHead+"\"\n"+
 		"[[case.defect]]\nid = \"d\"\ntitle = \"t\"\nmatch = [\"x\"]\n")
-	inputs := evalInputs(f.Ctx.Config)
+	inputs := evalrun.Inputs(f.Ctx.Config)
 	root := evalRunsRoot(f.Ctx.Layout)
 	geo := func(found int) []eval.CaseRun {
 		return []eval.CaseRun{{Case: "geo", Head: evalTestHead, Outcome: "dry_run", Score: &eval.Score{Found: found, Total: 2}}}

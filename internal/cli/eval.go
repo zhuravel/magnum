@@ -149,8 +149,9 @@ func newEvalRunCmd(c *Context) *cobra.Command {
 			"with the previous run. --label names the run (for example the change it measures). --candidate replays "+
 			"a directory shaped like magnum's checkout (a worktree with a prompt or skill change): its prompts/ and "+
 			"skills/magnum-review/SKILL.md are read instead of the configured ones, and the run's inputs are theirs. --judge-only "+
-			"runs the judge alone on the reviewers' reports of each case's newest full replay at the same head (a case without one "+
-			"fails before anything starts): a judge prompt or skill change costs one agent instead of a round. --no-notes "+
+			"runs the judge alone on the reviewers' reports of each case's newest full replay at the same head whose reviewers read "+
+			"what this run's would, the same reviewer prompts and roles and the same --no-notes (a case without one fails before "+
+			"anything starts): a judge prompt or skill change costs one agent instead of a round. --no-notes "+
 			"withholds the repository notes (by default the judge reads a scratch copy of them). --keep leaves "+
 			"each case's worktree in place. --force runs past the Codex soft cap.",
 		func(pos []string) int {
@@ -270,7 +271,7 @@ func runEvalRun(c *Context, f evalRunFlags) int {
 	}
 	run := eval.Run{
 		ID: id, Label: f.label, Corpus: path, Started: started, Candidate: f.candidate,
-		Models: evalModels(cfg), Inputs: evalInputs(cfg), NoNotes: f.noNotes, // eval_inputs.go
+		Models: evalModels(cfg), Inputs: evalrun.Inputs(cfg), ReviewerInputs: evalrun.ReviewerInputs(cfg), NoNotes: f.noNotes,
 	}
 	deps := evalrun.Deps{Layout: c.Layout, Config: c.Config, Now: now, Stderr: c.Stderr,
 		Logger:   app.NewLogger(nil, c.Stderr, slog.LevelWarn),

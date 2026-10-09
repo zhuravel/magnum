@@ -5252,19 +5252,28 @@ editing history. Code, config comments and prompts reference these by their head
   self-improving loop's eval). A change to the judge's prompts or skill cost a whole round per case,
   every reviewer included, although the reviewers' reports would be the same. `magnum eval run
   --judge-only` (`evalrun.Options.JudgeOnly`) takes, per case, the newest run whose case of that name
-  reviewed the same head with every role and ended a scored dry run (`eval.FullReplayFor`), copies the
-  reports of each reviewer a replay runs into the case's scratch report directory (one the full replay's
-  reviewer left none of is listed missing, as that judge was told) and calls `engine.RunEval` with
+  reviewed the same head with every role, ended a scored dry run and whose reviewers read what the
+  replay's would (`eval.FullReplayFor`, `eval.Run.ReviewedOtherwise`): the same `reviewer_inputs`
+  (`evalrun.ReviewerInputs`, the inputs hash over the roles that are not judges, which every run now
+  records next to `inputs`; a run without it is never taken) and the same `no_notes`, since the
+  reviewers' prompts point at the notes too. The notes' content is not compared: it moves with every
+  curation, and the replay measures the judge on the same reports. It copies the reports of each
+  reviewer a replay runs into the case's scratch report directory (one the full replay's reviewer left
+  none of is listed missing, as that judge was told) and calls `engine.RunEval` with
   `EvalCase.JudgeOnly` and `Reports`. The engine checks each report sits where the round reads it, seeds
   the reviewers' runs of round 1 on the pinned head (verified with the file, or failed for a missing
   one), starts the judge alone without triage, as a same-head round does, and runs the round with the
   reviewers still named and `pipeline.RoundInput.StoredReports`: no reviewer runs, none of their files
   is set aside, their reports are read from the verified runs as a continued round reads its paused
   round's, and the judge gets the full round's prompts, its own pass first when `judge_own_pass` asks
-  and a report is there. A case without a full replay fails with `evalrun.ErrNoFullReplay` before
-  anything starts, naming the case, the head and the run to make. `run.json` records `judge_only` and
+  and a report is there. A case without such a full replay fails with `evalrun.ErrNoFullReplay` before
+  anything starts, naming the case, the head, the newest full replay it left out and why, and the
+  command that makes one (with the run's `--candidate` and `--no-notes`); so does a case whose full
+  replay left no reviewer report (its directory pruned or its run removed), naming the run and the
+  directory, before GitHub is read or a worktree added. `run.json` records `judge_only` and
   `reports_run` per case, the text report's header says `judge-only` and the Markdown names the run the
   reports came from; a judge-only replay is never a baseline (`eval.Baselines`), since a full run would
   not repeat it. Rejected: a continued round on the stored reports (its prompt asks the judge to finish
-  a turn it never began) and a separate judge prompt for replays (it would measure a prompt no round
-  sends).
+  a turn it never began), a separate judge prompt for replays (it would measure a prompt no round
+  sends) and taking any full replay at the head (a master judge would be scored on the reports of a
+  candidate that changed a reviewer's prompt, or of reviewers that never saw the notes it reads).
