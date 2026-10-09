@@ -56,6 +56,20 @@ func TestSkillStatesTheCleanVerdictLines(t *testing.T) {
 	}, []string{"Looks good to merge", "🎉"})
 }
 
+// A re-review posted "No new problems since b72d3c0. LGTM :shipit:" on
+// talkable/talkable-integration#865 (2026-10-09) while the head's build
+// check had failed: the judge had read the log, found the failing spec
+// unrelated to the PR's one client file and said so only inside the
+// collapsed Checks block. Read on GitHub, that is an LGTM on a red PR. The
+// rule the operator chose that day: with a failed check in failing_checks,
+// the clean line names the red check instead of LGTM, and the auto-approval
+// still reads its prefix as clean while it waits for the checks to pass.
+func TestARedHeadNeverReadsLGTM(t *testing.T) {
+	skillSays(t, []string{
+		"A check that failed in `failing_checks` replaces the clean line's ` LGTM :shipit:` with `; CI is red: <check> failed, unrelated (<why, a few words>)`: a red head never reads LGTM.",
+	}, nil)
+}
+
 // The readiness facts are <magnum> fields; what to do about a check that did
 // not pass is the skill's (section 0), not a paragraph of every prompt.
 func TestJudgePromptsLeaveReadinessToTheSkill(t *testing.T) {
@@ -422,9 +436,11 @@ func TestSkillOwnPassOfAReReviewCoversTheNewCommits(t *testing.T) {
 // MCP sentence and shorter wording elsewhere). Then 230 for the base docs
 // that name the changed files (2026-10-08): `docs` in the block's list and
 // its section 2 rule (282), less 52 from listing `history` and `docs` on the
-// `related_prs` line and a shorter merge-duplicates sentence. Every rule
-// added must replace or shorten text.
-const skillMaxBytes = 30_001
+// `related_prs` line and a shorter merge-duplicates sentence. Then 181 for
+// the red-head verdict line (2026-10-09): a failed check in `failing_checks`
+// takes LGTM off the clean line. Every rule added must replace or shorten
+// text.
+const skillMaxBytes = 30_182
 
 func TestSkillStaysTight(t *testing.T) {
 	if n := len(magnum.Skill); n > skillMaxBytes {

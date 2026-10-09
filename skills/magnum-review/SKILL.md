@@ -175,6 +175,8 @@ Verdict: count the findings this review posts and the earlier ones still open; N
 - else, with optional ones: `No blocking problems.`; with a `P3`, `COMMENT` and `non_blocking`; with only simplifications, `no_findings_event` and `clean`.
 - else: `No problems found. LGTM :shipit:`; a re-review: `No new problems since <previous_head_sha, 7 chars>. LGTM :shipit:`; post-merge: `No problems found in the merged commits. :shipit:`; `no_findings_event`; `clean`.
 
+A check that failed in `failing_checks` replaces the clean line's ` LGTM :shipit:` with `; CI is red: <check> failed, unrelated (<why, a few words>)`: a red head never reads LGTM.
+
 Write `1 problem` or `2 problems`, then the optional ones, if any (`2 optional: 1 P3, 1 simplification.`).
 
 A `pre_existing` P1 or P2 you proved at `head_sha` in or near code the PR changes is `nearby`: list up to three in `<details><summary>Found nearby, not this PR's (N)</summary>`, one line each (`path:line`, the problem, its priority), never counted in the verdict line or the event. A security one (an authorization bypass, data exposure, injection) goes only to the result file.

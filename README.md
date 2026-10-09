@@ -1219,7 +1219,8 @@ What an author gets, every review alike:
 - **One verdict line** first: `Blocking: N problem(s) must be fixed before merging.` (a P0 or P1 among
   them), `Fix N problem(s) before merging.` (P2) or `No blocking problems.` (only optional ones), with the
   optional ones counted; with nothing at all, `No problems found. LGTM :shipit:` (a re-review: `No new
-  problems since a1b2c3d. LGTM :shipit:`; post-merge: `No problems found in the merged commits. :shipit:`).
+  problems since a1b2c3d. LGTM :shipit:`; post-merge: `No problems found in the merged commits. :shipit:`; with a failed check on the head, `No new problems since a1b2c3d; CI is red: build
+  failed, unrelated (a flaky spec)`, never LGTM).
   A re-review puts `Re-review a1b2c3d → d4e5f6a:` before it. No GitHub event names, no notes on
   the process. The event follows `no_findings_event` and `blocking_event`, except that a round where a
   reviewer left no report (a usage limit, a timeout) never approves: its no-findings event is `COMMENT`,

@@ -5104,3 +5104,15 @@ editing history. Code, config comments and prompts reference these by their head
   turns both off for every file. Test files keep os.IsNotExist. No behaviour changed; the one visible
   difference is that when both log handlers fail, Handle returns both errors joined, which slog.Logger
   discards.
+- **A red head never reads LGTM** (2026-10-09, amends "The judge sees the head's failing checks"). A
+  re-review on talkable/talkable-integration#865 posted `No new problems since b72d3c0. LGTM :shipit:`
+  while the head's build check had failed. The judge had read the job's log, found the failing spec
+  unrelated (the PR changes one client file the failing test group never loads, and master was green), and
+  said so only inside the collapsed Checks block, as the 2026-10-07 rule asks. Read on GitHub, that is an
+  LGTM on a red PR, and the judge cannot rerun CI with the App token to prove a flaky run. Now a check that
+  failed in `failing_checks` replaces the clean line's ` LGTM :shipit:` with `; CI is red: <check> failed,
+  unrelated (<why, a few words>)`, for an initial review and a re-review alike; the Checks line stays. The
+  line keeps its prefix (`No problems found`, `No new problems since`), so the auto-approval still reads it
+  as clean and still waits for the checks to pass. 181 bytes, skillMaxBytes 30,001 to 30,182. Rejected: a
+  P2 "CI is red" finding for a failure the judge cannot tie to master (an unrelated flaky run would then
+  block every re-review of the head, and the author cannot fix it in the PR).
