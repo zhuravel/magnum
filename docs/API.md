@@ -6343,7 +6343,8 @@ func RunCase(ctx context.Context, d Deps, ec eval.Case, o Options) (out eval.Cas
     RunCase replays case ec and scores it. Every failure becomes the case's
     outcome (OutcomeError, OutcomeBudget, OutcomeFlagged or the round's);
     a refused replay is flagged (eval.MarkFlagged) so that it never runs again.
-    It starts nothing for a case Refused names, of a repository no watch covers,
+    It starts nothing for options without an absolute RunDir or an AgentTag
+    (checked first), for a case Refused names, of a repository no watch covers,
     or whose candidate is no candidate.
 
 func RunsRoot(l paths.Layout) string
@@ -6408,11 +6409,12 @@ type Options struct {
 	// NoNotes withholds the repository notes from the judge; Keep leaves
 	// the case's worktree in place; Force runs past [usage] codex_soft.
 	NoNotes, Keep, Force bool
-	// AgentTag tags the case's agents (agents.Deps.Tag), the run's own.
+	// AgentTag tags the case's agents (agents.Deps.Tag), the run's own;
+	// required, so the agents are never named as the PR's own.
 	AgentTag string
-	// RunDir is the run's directory (RunsRoot/<run id>): the case's scratch
-	// tree is RunDir/cases/<case>, and a refused replay is flagged under
-	// the run's id, its base name.
+	// RunDir is the run's directory (RunsRoot/<run id>), an absolute path:
+	// the case's scratch tree is RunDir/cases/<case>, and a refused replay
+	// is flagged under the run's id, its base name.
 	RunDir string
 }
     Options are a case's settings, the run's.

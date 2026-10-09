@@ -22,11 +22,47 @@ func widgetsCase() eval.Case {
 	return eval.Case{Name: "x", PR: "example/widgets#3", Owner: "example", Repo: "widgets", Number: 3, Head: strings.Repeat("ab", 20)}
 }
 
+// A case needs its run's directory as an absolute path and its run's agent tag: without the first
+// its scratch registry and reports would land under the process's working directory and a refusal
+// would be flagged under run ".", without the second its agents would carry the PR's own agents'
+// names. Either missing fails the case before anything is read, flagged or created.
+func TestRunCaseNeedsAnAbsoluteRunDirAndAnAgentTag(t *testing.T) {
+	storetest.Serial(t) // t.Chdir: a case that runs anyway writes under the working directory
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+	d, run := judgeOnlyFixture(t)
+	for name, o := range map[string]Options{
+		"no run directory":        {AgentTag: "eval-test"},
+		"a relative run dir":      {RunDir: filepath.Join("eval", "20261009-100000"), AgentTag: "eval-test"},
+		"no agent tag":            {RunDir: t.TempDir()},
+		"neither, judge-only too": {JudgeOnly: true},
+	} {
+		cr := RunCase(context.Background(), d, widgetsCase(), o)
+		if cr.Outcome != OutcomeError || !strings.Contains(cr.Error, "Options.") || cr.Case != "x" {
+			t.Errorf("%s: case run %+v, want an error naming the missing option", name, cr)
+		}
+		if o.RunDir != "" {
+			if _, err := os.Stat(filepath.Join(o.RunDir, "cases")); !os.IsNotExist(err) {
+				t.Errorf("%s: a scratch tree was made: %v", name, err)
+			}
+		}
+	}
+	if entries, err := os.ReadDir(cwd); err != nil || len(entries) > 0 {
+		t.Errorf("the working directory holds %v (%v), want nothing", entries, err)
+	}
+	if _, err := os.Stat(RunsRoot(d.Layout)); !os.IsNotExist(err) {
+		t.Errorf("the runs root was written: %v", err)
+	}
+	if len(run.Calls) > 0 {
+		t.Errorf("commands ran: %v", run.Calls)
+	}
+}
+
 // A case of an unwatched repository fails before anything is checked out or started: magnum would
 // not know its roles or identity. So does a candidate that is no candidate.
 func TestEvalCaseOfAnUnwatchedRepoFailsFirst(t *testing.T) {
 	d := Deps{Layout: paths.Layout{Home: t.TempDir()}, Config: testConfig(t)}
-	o := Options{RunDir: t.TempDir()}
+	o := Options{RunDir: t.TempDir(), AgentTag: "eval-test"}
 	cr := RunCase(context.Background(), d, widgetsCase(), o)
 	if cr.Outcome != OutcomeError || !strings.Contains(cr.Error, "[[watch]]") || cr.Case != "x" || cr.Started.IsZero() {
 		t.Fatalf("case run %+v", cr)
@@ -71,7 +107,7 @@ func TestACaseWhosePRIsFlaggedIsRefused(t *testing.T) {
 		if why := Refused(ctx, d, widgetsCase()); !strings.Contains(why, "Codex flagged this PR") {
 			t.Errorf("%s: %q, want the flag's sentence", name, why)
 		}
-		if cr := RunCase(ctx, d, widgetsCase(), Options{RunDir: t.TempDir()}); cr.Outcome != OutcomeFlagged {
+		if cr := RunCase(ctx, d, widgetsCase(), Options{RunDir: t.TempDir(), AgentTag: "eval-test"}); cr.Outcome != OutcomeFlagged {
 			t.Errorf("%s: RunCase %+v", name, cr)
 		}
 	}

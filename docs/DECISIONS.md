@@ -5235,7 +5235,10 @@ editing history. Code, config comments and prompts reference these by their head
   same body and the same output: `Deps` carries the install's layout, the config, the live registry for
   the Codex flag check (nil: the registry file read-only, as `eval run` did), the logger, the clock, the
   subprocess runner and the progress and warning lines; `Options` the candidate, `NoNotes`, `Keep`,
-  `Force`, the run's agent tag and directory. `RunCase` now checks the refusal itself
+  `Force`, the run's agent tag and directory. The last two are required and checked first, before
+  anything is read or written: without a tag the agents would carry the PR's own agents' names, and a
+  directory that is not absolute would put the scratch registry and reports under the process's working
+  directory and flag a refusal under run `.`. `RunCase` now checks the refusal itself
   (`evalrun.Refused`: the flagged replays and the registry's flag, read again for each case) and flags a
   refused replay under the run's id, so a daemon caller gets the same protection; `eval run` still
   prints the refusal before the case starts. `evalrun.WithCandidate(cfg, dir)` is a copy of the config

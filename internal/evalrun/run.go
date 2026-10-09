@@ -108,11 +108,12 @@ type Options struct {
 	// NoNotes withholds the repository notes from the judge; Keep leaves
 	// the case's worktree in place; Force runs past [usage] codex_soft.
 	NoNotes, Keep, Force bool
-	// AgentTag tags the case's agents (agents.Deps.Tag), the run's own.
+	// AgentTag tags the case's agents (agents.Deps.Tag), the run's own;
+	// required, so the agents are never named as the PR's own.
 	AgentTag string
-	// RunDir is the run's directory (RunsRoot/<run id>): the case's scratch
-	// tree is RunDir/cases/<case>, and a refused replay is flagged under
-	// the run's id, its base name.
+	// RunDir is the run's directory (RunsRoot/<run id>), an absolute path:
+	// the case's scratch tree is RunDir/cases/<case>, and a refused replay
+	// is flagged under the run's id, its base name.
 	RunDir string
 }
 
@@ -153,13 +154,20 @@ func Refused(ctx context.Context, d Deps, ec eval.Case) string {
 // RunCase replays case ec and scores it. Every failure becomes the case's
 // outcome (OutcomeError, OutcomeBudget, OutcomeFlagged or the round's); a
 // refused replay is flagged (eval.MarkFlagged) so that it never runs again.
-// It starts nothing for a case Refused names, of a repository no watch
+// It starts nothing for options without an absolute RunDir or an AgentTag
+// (checked first), for a case Refused names, of a repository no watch
 // covers, or whose candidate is no candidate.
 func RunCase(ctx context.Context, d Deps, ec eval.Case, o Options) (out eval.CaseRun) {
 	cr := eval.CaseRun{Case: ec.Name, PR: ec.PR, Head: ec.Head, Started: d.now()}
 	fail := func(outcome string, err error) eval.CaseRun {
 		cr.Outcome, cr.Error = outcome, err.Error()
 		return cr
+	}
+	switch {
+	case !filepath.IsAbs(o.RunDir):
+		return fail(OutcomeError, fmt.Errorf("evalrun: case %q needs its run's directory as an absolute path (Options.RunDir), not %q", ec.Name, o.RunDir))
+	case o.AgentTag == "":
+		return fail(OutcomeError, fmt.Errorf("evalrun: case %q needs its run's agent tag (Options.AgentTag), so its agents are never the PR's own", ec.Name))
 	}
 	if why := Refused(ctx, d, ec); why != "" {
 		return fail(OutcomeFlagged, errors.New(why))
