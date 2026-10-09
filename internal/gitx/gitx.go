@@ -108,6 +108,16 @@ func (c *Client) git(ctx context.Context, dir string, k call, args ...string) (e
 	if err := checkDir(dir); err != nil {
 		return execx.Result{}, fmt.Errorf("gitx: %s: %w", k.label, err)
 	}
+	res, err := c.run.Run(ctx, gitCommand(dir, k, args))
+	if err != nil {
+		return res, fmt.Errorf("gitx: %s: %w", k.label, err)
+	}
+	return res, nil
+}
+
+// gitCommand is the command git runs as: `git -C dir args...` with gitx's
+// environment.
+func gitCommand(dir string, k call, args []string) execx.Cmd {
 	cmd := execx.Cmd{
 		Name:    "git",
 		Args:    append([]string{"-C", dir}, args...),
@@ -126,11 +136,7 @@ func (c *Client) git(ctx context.Context, dir string, k call, args ...string) (e
 	if filepath.IsAbs(dir) {
 		cmd.Dir = dir
 	}
-	res, err := c.run.Run(ctx, cmd)
-	if err != nil {
-		return res, fmt.Errorf("gitx: %s: %w", k.label, err)
-	}
-	return res, nil
+	return cmd
 }
 
 // hooksOff is the configuration every git command of magnum's runs with:

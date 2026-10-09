@@ -7537,6 +7537,14 @@ const WorktreesSuffix = "__worktrees"
 VARIABLES
 
 var (
+	// ErrNotFastForward is MergeFFOnly refusing a branch that does not
+	// descend from the checkout's HEAD.
+	ErrNotFastForward = errors.New("gitx: not a fast-forward")
+	// ErrRebaseConflict is RebaseOnto stopping on a conflict; the rebase
+	// was aborted and the branch is as it was.
+	ErrRebaseConflict = errors.New("gitx: the rebase conflicts")
+)
+var (
 	// ErrNoSuchRef is returned when a ref or revision does not resolve.
 	ErrNoSuchRef = errors.New("gitx: no such ref")
 	// ErrNoMergeBase is returned when two revisions share no history.
@@ -7656,10 +7664,25 @@ func (c *Client) Clone(ctx context.Context, repoURL, dest string) error
 func (c *Client) CloneWith(ctx context.Context, repoURL, dest string, opt CloneOptions) error
     CloneWith is Clone with options (see CloneOptions).
 
+func (c *Client) CommitAll(ctx context.Context, dir, message string, paths ...string) (string, error)
+    CommitAll commits paths of the work tree at dir (their changes, additions
+    and deletions; nothing else, whatever else is dirty) on its current branch
+    with message, unsigned (commit.gpgsign=false whatever the repository says),
+    and returns the new commit's id. Nothing to commit is an error.
+
 func (c *Client) CommitTree(ctx context.Context, dir, tree, message string, parents ...string) (string, error)
     CommitTree writes a commit object for tree with parents and message,
     moving no ref and touching no work tree (`git commit-tree`, unsigned,
     as "magnum" unless the environment names someone). It returns its id.
+
+func (c *Client) CurrentBranch(ctx context.Context, repo string) (string, error)
+    CurrentBranch is the branch checked out in repo, "" when its HEAD is
+    detached (a rebase in progress included).
+
+func (c *Client) DirtyPaths(ctx context.Context, dir string, paths ...string) ([]string, error)
+    DirtyPaths returns the paths among paths (relative to the top of the work
+    tree at dir) that differ from HEAD or are untracked, sorted, nil when none;
+    ignored files are not listed. At least one path.
 
 func (c *Client) FetchBranch(ctx context.Context, mainClone, base string) error
     FetchBranch updates refs/remotes/origin/<base> in mainClone from the remote.
@@ -7719,6 +7742,10 @@ func (c *Client) FindClone(ctx context.Context, cloneRoot, owner, name string) (
     lookups cost a directory listing and a few stats. ErrNoClone (wrapped) means
     nothing matched; any other error is an unreadable root.
 
+func (c *Client) InProgress(ctx context.Context, repo string) (string, error)
+    InProgress names the operation repo is in the middle of: "rebase", "merge",
+    "cherry-pick", "revert", or "" for none.
+
 func (c *Client) LsRemote(ctx context.Context, dir string, timeout time.Duration, patterns ...string) (string, error)
     LsRemote runs `git ls-remote <origin> patterns...` in dir, reaching origin
     the way fetches do (NetworkRemote with HTTPSFetch), and returns its output.
@@ -7739,6 +7766,12 @@ func (c *Client) Mentions(ctx context.Context, dir, rev string, words []string, 
 func (c *Client) MergeBase(ctx context.Context, dir, a, b string) (string, error)
     MergeBase returns the best common ancestor of a and b, or ErrNoMergeBase.
 
+func (c *Client) MergeFFOnly(ctx context.Context, repo, branch string) error
+    MergeFFOnly fast-forwards the branch checked out in repo to branch:
+    ErrNotFastForward, with nothing changed, when branch does not descend from
+    HEAD. Local changes the move would overwrite make git refuse, which is an
+    error too.
+
 func (c *Client) MergeTree(ctx context.Context, dir, ours, theirs string) (tree string, conflicts []string, err error)
     MergeTree merges commit theirs into commit ours as `git merge` would (the
     ort strategy), without a work tree, an index or a ref: `git merge-tree
@@ -7758,6 +7791,11 @@ func (c *Client) OwnerUsesSSH(ctx context.Context, cloneRoot, owner string) (boo
     FindClone reads them (".git" required, "__worktrees" skipped, origins cached
     until the clone's config changes), so right after a FindClone miss over the
     same root it costs no subprocess. A missing root is (false, nil).
+
+func (c *Client) RebaseOnto(ctx context.Context, dir, onto string) error
+    RebaseOnto rebases the branch checked out at dir onto onto, unsigned.
+    A rebase that stops (a conflict) is aborted, so the branch and its work tree
+    are as they were, and the error is ErrRebaseConflict.
 
 func (c *Client) RemoteURL(ctx context.Context, dir string) (string, error)
     RemoteURL returns the URL of origin in dir. Credentials embedded in the URL
@@ -7836,6 +7874,12 @@ func (c *Client) WorktreeAdd(ctx context.Context, mainClone, path, ref string, d
     branch at ref without upstream tracking; with neither, git decides (a branch
     name checks the branch out, anything else detaches). Callers that must be
     idempotent check WorktreeList first, since git refuses an existing path.
+
+func (c *Client) WorktreeDiscard(ctx context.Context, repo, dir string) error
+    WorktreeDiscard removes the worktree at dir of repo, modified and untracked
+    files included, then forgets every registration whose directory is gone
+    (WorktreePrune): a worktree someone removed already, or a second discard,
+    is fine.
 
 func (c *Client) WorktreeList(ctx context.Context, mainClone string) ([]Worktree, error)
     WorktreeList returns every worktree of the repository, the main one first.

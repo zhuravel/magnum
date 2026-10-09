@@ -5332,3 +5332,20 @@ editing history. Code, config comments and prompts reference these by their head
   idea: a `go test` run inside every editor run, before the agent starts) and moving `skillMaxBytes`
   into the package's code (the daemon's binary may be older than the checkout the editor works in; the
   worktree's file is what its gate enforces).
+- **The skill editor's branch work commits named paths, unsigned, and a rebase aborts itself**
+  (2026-10-09, stage 3 of the self-improving review loop). The editor works in a worktree of the
+  operator's checkout on its own `learn/<run>` branch and the landing (stage 4) fast-forwards the
+  checkout's `master`, so the git commands must never take what the operator left dirty, ask for a
+  passphrase or leave the checkout mid-operation. `gitx.CommitAll(dir, message, paths...)` stages and
+  commits only the paths it names (literal pathspecs: changes, additions and deletions), with
+  `commit.gpgsign=false` whatever the repository says (a daemon cannot answer a signing prompt) and the
+  operator's own git identity; `MergeFFOnly` checks that the branch descends from HEAD first and returns
+  `ErrNotFastForward` with nothing changed; `RebaseOnto` aborts a rebase that stops and returns
+  `ErrRebaseConflict` with the branch as it was; `DirtyPaths` names the dirty ones among some paths,
+  untracked included; `CurrentBranch` is "" for a detached HEAD; `InProgress` names a rebase, merge,
+  cherry-pick or revert the operator left waiting; `WorktreeDiscard` removes a worktree with `--force`
+  and prunes the registrations whose directory is gone, so a worktree someone removed by hand is no
+  error. Like every gitx command they run none of the clone's hooks. The plan's `WorktreeAdd`,
+  `WorktreeRemove` and `StatusPaths` already existed with other signatures (the slots use them), so the
+  editor uses the existing `WorktreeAdd` with a branch and the new methods are named `WorktreeDiscard`
+  and `DirtyPaths`.
