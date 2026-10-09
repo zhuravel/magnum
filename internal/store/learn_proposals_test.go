@@ -244,9 +244,9 @@ func TestALandedProposalMarksItsNotedInputsUsed(t *testing.T) {
 	if missByID(t, st, noted.ID).State != MissNew || declineByID(t, st, declined.ID).State != MissNew {
 		t.Fatal("a passed proposal moved its inputs")
 	}
-	landed, err := st.DecideLearnProposal(ctx, p.ID, []string{LearnPassed}, LearnLanded, "", time.Time{}, nil)
-	if err != nil || landed.State != LearnLanded || landed.LandedSHA != "" {
-		t.Fatalf("landed = %+v, %v (landed_sha is MarkLearnLanded's)", landed, err)
+	landed, _, err := st.LandLearnProposal(ctx, p.ID, []string{LearnPassed}, LearnVersion{LandedSHA: "abc123", SkillSHA: "s", PromptsSHA: "p"})
+	if err != nil || landed.State != LearnLanded || landed.LandedSHA != "abc123" {
+		t.Fatalf("landed = %+v, %v", landed, err)
 	}
 	if s := missByID(t, st, noted.ID).State; s != MissUsed {
 		t.Errorf("the noted miss = %s, want used", s)

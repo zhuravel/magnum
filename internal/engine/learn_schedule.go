@@ -112,7 +112,9 @@ func (e *Engine) maybeLearnScan(ctx context.Context) {
 // passed for the landing that nobody decided within ProposalTTL of their
 // making, as a notes proposal expires: learn.expired, the worktree and the
 // branch go, and the inputs stay as they are (new, for a later edit). A
-// gating one is the gate's to decide; the registry keeps them all.
+// gating one is the gate's to decide; the registry keeps them all. One
+// whose branch master holds already (a landing cut short after the
+// fast-forward) is recorded as landed instead (learn_land.go).
 func (e *Engine) expireLearnProposals(ctx context.Context) {
 	waiting, err := e.st.LearnProposals(ctx, []string{store.LearnHeld, store.LearnPassed})
 	if err != nil {
@@ -122,6 +124,15 @@ func (e *Engine) expireLearnProposals(ctx context.Context) {
 	now := e.now()
 	for _, p := range waiting {
 		if now.Sub(p.CreatedAt) < ProposalTTL {
+			continue
+		}
+		if landed, ok, err := e.landedAlready(ctx, p); err != nil {
+			e.warnUnlessStopped(ctx, err, "skill proposals: is an expiring one on master", "proposal", p.ID)
+			continue
+		} else if ok {
+			if _, _, err := e.recordLanding(context.WithoutCancel(ctx), p, landed, false); err != nil {
+				e.log.Warn("skill proposals: record a landing cut short", "proposal", p.ID, "err", err)
+			}
 			continue
 		}
 		got, err := e.st.DecideLearnProposal(ctx, p.ID, []string{store.LearnHeld, store.LearnPassed}, store.LearnExpired,

@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -135,14 +136,88 @@ func TestLandingFastForwardsMasterAndRecordsAVersion(t *testing.T) {
 }
 
 // A landing a crash cut short after the fast-forward: the next one finds
-// the branch on master and records it without merging again.
+// the branch on master and records it without merging again, whatever the
+// checkout has checked out since.
 func TestALandingCutShortAfterTheMergeIsRecorded(t *testing.T) {
 	f := newLandFixture(t)
 	f.git.set(f.checkout, "refs/heads/master", learnCandidate)
+	f.git.branch[f.checkout] = "feature"
 	f.h.tick()
 	if p := f.proposal(); p.State != store.LearnLanded || p.LandedSHA != learnCandidate || len(f.git.called("merge")) != 0 ||
 		len(f.git.called("rebase")) != 0 || len(f.versions()) != 1 {
 		t.Fatalf("proposal = %s landed %s, git %q", p.State, p.LandedSHA, f.git.calls)
+	}
+}
+
+// A landing the operator asked for, cut short after the fast-forward,
+// leaves the proposal held with its commit on master: the operator's n
+// then records the landing instead of rejecting it and dropping the
+// branch, and so does the expiry of a proposal nobody decided.
+func TestAProposalMasterHoldsIsRecordedAsLandedNotRejected(t *testing.T) {
+	f := newGateFixture(t, gateFullFiles)
+	candidateFiles(t, f.wt)
+	f.decide(store.LearnHeld)
+	f.git.set(f.checkout, "refs/heads/master", learnCandidate)
+	_, err := f.h.e.requestLearnReject(f.h.ctx, LearnDecisionPayload{ID: f.p.ID, Reason: "noise"})
+	if err == nil || !strings.Contains(err.Error(), "on master already") {
+		t.Fatalf("requestLearnReject = %v, want a refusal naming the landing", err)
+	}
+	p := f.proposal()
+	if p.State != store.LearnLanded || p.LandedSHA != learnCandidate || len(f.versions()) != 1 {
+		t.Fatalf("proposal = %s %q landed %s, versions %+v", p.State, p.Reason, p.LandedSHA, f.versions())
+	}
+	if ins, err := f.h.st.LearnProposalInputs(f.h.ctx, p.ID); err != nil || len(ins) != 1 || ins[0].State != store.MissUsed {
+		t.Fatalf("inputs = %+v, %v, want the noted miss used", ins, err)
+	}
+
+	f2 := newLandFixture(t)
+	f2.git.set(f2.checkout, "refs/heads/master", learnCandidate)
+	f2.h.advance(ProposalTTL + time.Hour)
+	f2.h.e.expireLearnProposals(f2.h.ctx)
+	if p := f2.proposal(); p.State != store.LearnLanded || len(f2.h.events("learn.expired")) != 0 {
+		t.Fatalf("an expiring proposal on master = %s %q", p.State, p.Reason)
+	}
+}
+
+// The rebase and the fast-forward run on a context a shutdown does not
+// cancel (with a timeout of their own), so a stop never cuts the landing
+// between them.
+func TestTheLandingsRebaseAndMergeOutliveAStop(t *testing.T) {
+	f := newLandFixture(t)
+	f.moveMaster(strings.Repeat("7", 40))
+	ctx, cancel := context.WithCancel(f.h.ctx)
+	defer cancel()
+	var rebaseErr, mergeErr error
+	f.git.onRebase = func(c context.Context) {
+		cancel() // the daemon stops during the rebase
+		rebaseErr = c.Err()
+		if _, ok := c.Deadline(); !ok {
+			rebaseErr = errors.New("no deadline")
+		}
+	}
+	f.git.onMerge = func(c context.Context) { mergeErr = c.Err() }
+	if _, _, err := f.h.e.landProposal(ctx, f.p, false); err != nil {
+		t.Fatalf("landProposal: %v", err)
+	}
+	if rebaseErr != nil || mergeErr != nil {
+		t.Fatalf("the rebase's context: %v, the merge's: %v", rebaseErr, mergeErr)
+	}
+	if p := f.proposal(); p.State != store.LearnLanded || len(f.git.called("merge")) != 1 {
+		t.Fatalf("proposal = %s %q", p.State, p.Reason)
+	}
+}
+
+// A start marks the newest version restarted even when its landing wrote
+// no restart mark (a crash right after the landing's transaction): the
+// daemon that starts reads the landed prompts and skill.
+func TestAStartMarksAVersionWhoseRestartMarkIsMissing(t *testing.T) {
+	f := newLandFixture(t)
+	f.h.tick()
+	f.h.e.delKV(f.h.ctx, KVLearnRestart)
+	f.h.advance(time.Minute)
+	f.h.startup()
+	if vs := f.versions(); len(vs) != 1 || vs[0].RestartedAt == nil || !vs[0].RestartedAt.Equal(f.h.clock.Now()) {
+		t.Fatalf("versions = %+v, want the newest restarted now", vs)
 	}
 }
 

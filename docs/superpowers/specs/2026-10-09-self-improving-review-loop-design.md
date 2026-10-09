@@ -181,16 +181,22 @@ single commit on a commit `master` holds, with the same `git patch-id`), else it
 the worktree would land ungated. `master` must hold the proposal's `base_sha` (else held: it was reset or
 rewritten since the edit); when it moved past it, the candidate's commit alone is rebased once in the
 worktree (`git rebase --onto master <base_sha>`, so a commit the operator dropped from `master` does not
-come back; a conflict holds the proposal with the reason). the files the commit touches must be clean in the checkout's working
-tree (else held, reason named). Then `git -C <checkout> merge --ff-only learn/<run>`, the branch is
-deleted, the worktree removed, the proposal becomes `landed` with `landed_sha`, and a `learn_versions`
-row records the new skill and prompts hashes. A toast says what landed. At most one landing per local day
-(`[learn] land_per_day`, default 1): a second passed proposal waits as `passed` until the next day.
+come back; a conflict holds the proposal with the reason). the files the commit touches must be clean in
+the checkout's working tree (else held, reason named). Then `git -C <checkout> merge --ff-only
+learn/<run>` (the rebase and the merge run on a context a shutdown does not cancel, with a timeout), the
+proposal becomes `landed` with `landed_sha` and a `learn_versions` row records the new skill and prompts
+hashes in one transaction (`store.LandLearnProposal`), then the branch is deleted and the worktree
+removed. A branch `master` already holds (a landing a crash cut short after the merge) is recorded as
+landed, at the next landing, at the operator's `n` (instead of the rejection) and at the expiry (instead
+of it). A toast says what landed. At most one landing per local day (`[learn] land_per_day`, default 1): a
+second passed proposal waits as `passed` until the next day.
 
 Restart: the daemon sets `KVLearnRestart` and exits for launchd at the first tick with no round, retro,
 curation, editor or gate in flight (the `restartForBuild` path), unless `[learn] restart` is `manual`,
 in which case `magnum status` and a toast ask for `daemon-restart --when-idle`. The restart is recorded on
-the version (`restarted_at`), which starts its measurement window.
+the version (`restarted_at`), which starts its measurement window; a start without `KVLearnRestart`
+records it on the newest version when that one was never restarted on (a crash between the landing's
+transaction and the key).
 
 Nothing is pushed. `magnum learn` says how many landed versions are ahead of `origin/master`.
 

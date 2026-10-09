@@ -1731,14 +1731,18 @@ the branch must hold the proposal's commit, or that commit as an earlier landing
 proposal's base (one you reset below it holds it); when `master` moved past the base, the proposal's commit
 alone is rebased once in its worktree (`git rebase --onto master <base>`), and a conflict holds it; the
 files it changes must have no uncommitted change in the checkout (your edit of `SKILL.md`
-is never merged over). Then `master` fast-forwards to the branch (`git merge --ff-only`), the branch and
-the worktree go, its noted inputs become `used`, and a skill version records the commit and the hashes of
-the skill and the prompts it landed. Nothing is pushed: `magnum learn` says how many landed versions
+is never merged over). Then `master` fast-forwards to the branch (`git merge --ff-only`; the rebase and the
+fast-forward are not cut short by a daemon that stops), the proposal is `landed` with its commit, its
+noted inputs become `used` and a skill version records the commit and the hashes of the skill and the
+prompts it landed, all in one registry transaction, and the branch and the worktree go. A landing a crash
+cut short after the fast-forward is recorded as landed at the next try, and so is a `held` one you answer
+`n` (the answer says so) or one that would expire. Nothing is pushed: `magnum learn` says how many landed versions
 `origin/master` does not hold yet. The daemon reads its prompts and skill when it starts, so with `restart
 = "idle"` it exits at the first tick with no round, retro, notes curation, edit or gate in flight, and
 launchd starts it on the landed version; with `restart = "manual"`, or a daemon launchd does not run, a
 toast and `magnum status` ask for `magnum daemon-restart --when-idle`. The next start marks the version
-restarted, which starts its measurement window. `magnum status` has a `learn:` line (the newest
+restarted (the newest version, when a crash kept the landing from noting the restart it waits for), which
+starts its measurement window. `magnum status` has a `learn:` line (the newest
 proposal, the held, passed and gating ones, a restart waiting), and the board's and the dashboard's titles
 count the held proposals ("2 skill proposals to review", "skill ×2" when space is short).
 

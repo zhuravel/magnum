@@ -56,6 +56,9 @@ const (
 	// landRetryAfter is how long a landing that failed short of a hold (a
 	// git error) waits before the next try.
 	landRetryAfter = 10 * time.Minute
+	// landGitTimeout bounds a landing's rebase, fast-forward and the git
+	// between them, which run on a context a shutdown does not cancel.
+	landGitTimeout = 5 * time.Minute
 )
 
 // ErrRestartForLearn is what Tick and Run return when the daemon exits to
@@ -157,16 +160,17 @@ func (e *Engine) maybeLearnLand(ctx context.Context) {
 }
 
 // landProposal lands p, passed or held (requested: the operator asked), on
-// the checkout's master: master checked out and nothing in progress; the
-// branch at p's commit or at that commit rebased (ensureCandidate); master
-// still holding p's base; p's commit alone rebased once in its worktree
-// when master moved past it (a conflict holds it); the files it changes
-// clean in the checkout; then
-// master fast-forwards to it, its worktree and branch go, it becomes
-// landed with the commit and a version records what landed. A branch that
-// master already holds (a landing a crash cut short) is recorded without
-// a merge. A check that fails holds p with why (a landHold error); any
-// other error leaves p as it was.
+// the checkout's master. A branch master holds already (a landing a crash
+// or a registry error cut short after the fast-forward) is recorded as it
+// is, whatever the checkout has checked out since. Else: master checked
+// out and nothing in progress; the branch at p's commit or at that commit
+// rebased (ensureCandidate); master still holding p's base; p's commit
+// alone rebased once in its worktree when master moved past it (a conflict
+// holds it); the files it changes clean in the checkout; then master
+// fast-forwards to it and the landing is recorded (recordLanding). The
+// rebase, the fast-forward and what follows run on a context a shutdown
+// does not cancel, bounded by landGitTimeout. A check that fails holds p
+// with why (a landHold error); any other error leaves p as it was.
 func (e *Engine) landProposal(ctx context.Context, p store.LearnProposal, requested bool) (store.LearnProposal, store.LearnVersion, error) {
 	if why := e.landUnavailable(); why != "" {
 		return p, store.LearnVersion{}, errors.New(why)
@@ -181,6 +185,11 @@ func (e *Engine) landProposal(ctx context.Context, p store.LearnProposal, reques
 		}
 		e.noteHeld(octx, got, "the landing stopped: "+why, !requested)
 		return got, store.LearnVersion{}, landHold(why)
+	}
+	if landed, ok, err := e.landedAlready(ctx, p); err != nil {
+		return p, store.LearnVersion{}, err
+	} else if ok {
+		return e.recordLanding(octx, p, landed, requested)
 	}
 	branch, err := git.CurrentBranch(ctx, checkout)
 	if err != nil {
@@ -208,98 +217,122 @@ func (e *Engine) landProposal(ctx context.Context, p store.LearnProposal, reques
 	if err != nil {
 		return p, store.LearnVersion{}, err
 	}
-	onMaster, err := e.holds(ctx, master, head)
+	// The gate measured the candidate on its base: a master that no longer
+	// holds it was reset or rewritten, and a fast-forward would bring back
+	// what the operator dropped.
+	switch has, err := e.holds(ctx, master, p.BaseSHA); {
+	case err != nil:
+		return p, store.LearnVersion{}, err
+	case !has:
+		return hold(fmt.Sprintf("master (%s) no longer holds its base %s: it was reset or rewritten since the edit, so the gate's "+
+			"measure is not of this master", learnShort(master), learnShort(p.BaseSHA)))
+	}
+	// Only the candidate's commit is replayed onto master: the commits after
+	// its base, or after the master an earlier landing rebased it onto
+	// (ensureCandidate checked it is that one commit).
+	upstream := p.BaseSHA
+	if head != p.CandidateSHA {
+		if upstream, err = git.RevParse(ctx, checkout, head+"^"); err != nil {
+			return p, store.LearnVersion{}, err
+		}
+	}
+	lctx, cancel := context.WithTimeout(octx, landGitTimeout) // a stop never cuts the rebase and the merge apart
+	defer cancel()
+	if upstream != master {
+		if err := git.RebaseOnto(lctx, p.Scratch, master, upstream); errors.Is(err, gitx.ErrRebaseConflict) {
+			return hold(fmt.Sprintf("master moved to %s since its base %s, and rebasing it onto master conflicts", learnShort(master),
+				learnShort(p.BaseSHA)))
+		} else if err != nil {
+			return hold("rebasing it onto master failed: " + oneLine(err.Error(), retroWhyRunes))
+		}
+		e.log.Info("skill landing: rebased onto master", "proposal", p.ID, "master", learnShort(master))
+	}
+	dirty, err := git.DirtyPaths(lctx, checkout, p.Files...)
 	if err != nil {
 		return p, store.LearnVersion{}, err
 	}
-	landed := head // a branch master holds already landed as it is
-	if !onMaster {
-		// The gate measured the candidate on its base: a master that no
-		// longer holds it was reset or rewritten, and a fast-forward would
-		// bring back what the operator dropped.
-		switch has, err := e.holds(ctx, master, p.BaseSHA); {
-		case err != nil:
-			return p, store.LearnVersion{}, err
-		case !has:
-			return hold(fmt.Sprintf("master (%s) no longer holds its base %s: it was reset or rewritten since the edit, so the gate's "+
-				"measure is not of this master", learnShort(master), learnShort(p.BaseSHA)))
-		}
-		// Only the candidate's commit is replayed onto master: the commits
-		// after its base, or after the master an earlier landing rebased it
-		// onto (ensureCandidate checked it is that one commit).
-		upstream := p.BaseSHA
-		if head != p.CandidateSHA {
-			if upstream, err = git.RevParse(ctx, checkout, head+"^"); err != nil {
-				return p, store.LearnVersion{}, err
-			}
-		}
-		if upstream != master {
-			if err := git.RebaseOnto(ctx, p.Scratch, master, upstream); errors.Is(err, gitx.ErrRebaseConflict) {
-				return hold(fmt.Sprintf("master moved to %s since its base %s, and rebasing it onto master conflicts", learnShort(master),
-					learnShort(p.BaseSHA)))
-			} else if err != nil {
-				return hold("rebasing it onto master failed: " + oneLine(err.Error(), retroWhyRunes))
-			}
-			e.log.Info("skill landing: rebased onto master", "proposal", p.ID, "master", learnShort(master))
-		}
-		dirty, err := git.DirtyPaths(ctx, checkout, p.Files...)
-		if err != nil {
-			return p, store.LearnVersion{}, err
-		}
-		if len(dirty) > 0 {
-			return hold(fmt.Sprintf("%s %s uncommitted changes in the checkout: commit or stash them, then `magnum learn --review` lands it",
-				strings.Join(dirty, ", "), map[bool]string{true: "has", false: "have"}[len(dirty) == 1]))
-		}
-		e.event(ctx, "info", learnSubject, "learn.land_begin", fmt.Sprintf("landing skill proposal %d: fast-forwarding master to %s", p.ID, p.Branch),
-			map[string]any{"proposal": p.ID, "branch": p.Branch})
-		if err := git.MergeFFOnly(ctx, checkout, p.Branch); errors.Is(err, gitx.ErrNotFastForward) {
-			return hold("master moved during the landing")
-		} else if err != nil {
-			return hold("the fast-forward of master failed: " + oneLine(err.Error(), retroWhyRunes))
-		}
-		if landed, err = git.RevParse(octx, checkout, "refs/heads/"+learnBase); err != nil {
-			return p, store.LearnVersion{}, err // the next landing finds the branch on master and records it
-		}
+	if len(dirty) > 0 {
+		return hold(fmt.Sprintf("%s %s uncommitted changes in the checkout: commit or stash them, then `magnum learn --review` lands it",
+			strings.Join(dirty, ", "), map[bool]string{true: "has", false: "have"}[len(dirty) == 1]))
 	}
+	e.event(octx, "info", learnSubject, "learn.land_begin", fmt.Sprintf("landing skill proposal %d: fast-forwarding master to %s", p.ID, p.Branch),
+		map[string]any{"proposal": p.ID, "branch": p.Branch})
+	if err := git.MergeFFOnly(lctx, checkout, p.Branch); errors.Is(err, gitx.ErrNotFastForward) {
+		return hold("master moved during the landing")
+	} else if err != nil {
+		return hold("the fast-forward of master failed: " + oneLine(err.Error(), retroWhyRunes))
+	}
+	landed, err := git.RevParse(lctx, checkout, "refs/heads/"+learnBase)
+	if err != nil {
+		return p, store.LearnVersion{}, err // the next landing finds the branch on master and records it
+	}
+	return e.recordLanding(octx, p, landed, requested)
+}
+
+// landedAlready reports whether master holds p's branch already, and its
+// commit: a landing a crash or a registry error cut short after the
+// fast-forward, which is recorded rather than landed again, rejected or
+// expired. False without a checkout or without the branch.
+func (e *Engine) landedAlready(ctx context.Context, p store.LearnProposal) (string, bool, error) {
+	if e.landUnavailable() != "" || !strings.HasPrefix(p.Branch, learnBranchPrefix) {
+		return "", false, nil
+	}
+	git, checkout := e.d.LearnGit, e.d.Checkout
+	head, err := git.RevParse(ctx, checkout, "refs/heads/"+p.Branch)
+	if errors.Is(err, gitx.ErrNoSuchRef) {
+		return "", false, nil
+	} else if err != nil {
+		return "", false, err
+	}
+	if head == p.BaseSHA { // nothing of its own
+		return "", false, nil
+	}
+	master, err := git.RevParse(ctx, checkout, "refs/heads/"+learnBase)
+	if err != nil {
+		return "", false, err
+	}
+	on, err := e.holds(ctx, master, head)
+	return head, on, err
+}
+
+// recordLanding records that p landed on master as commit landed: the
+// proposal landed with the commit and the version with the skill's and
+// the prompts' hashes, in one transaction (store.LandLearnProposal: a
+// failure leaves p as it was, and the next landing finds the branch on
+// master and records it), then its worktree and branch go, the day's
+// landing is counted, the restart is marked (KVLearnRestart) and a toast
+// says so.
+func (e *Engine) recordLanding(ctx context.Context, p store.LearnProposal, landed string, requested bool) (store.LearnProposal, store.LearnVersion, error) {
 	skill, prompts := learnHashes(p.Scratch)
 	if skill == "" || prompts == "" {
-		skill, prompts = learnHashes(checkout)
+		skill, prompts = learnHashes(e.d.Checkout)
 	}
 	now := e.now()
-	got, err := e.st.DecideLearnProposal(octx, p.ID, []string{store.LearnPassed, store.LearnHeld}, store.LearnLanded, "", now, nil)
+	got, v, err := e.st.LandLearnProposal(ctx, p.ID, []string{store.LearnPassed, store.LearnHeld}, store.LearnVersion{LandedSHA: landed,
+		SkillSHA: cmp.Or(skill, "unknown"), PromptsSHA: cmp.Or(prompts, "unknown"), LandedAt: now})
 	if err != nil {
 		return p, store.LearnVersion{}, err
 	}
-	if err := e.st.MarkLearnLanded(octx, p.ID, landed, now); err != nil {
-		e.log.Warn("skill landing: record the commit", "proposal", p.ID, "err", err)
-	}
-	v, err := e.st.CreateLearnVersion(octx, store.LearnVersion{ProposalID: p.ID, LandedSHA: landed, SkillSHA: cmp.Or(skill, "unknown"),
-		PromptsSHA: cmp.Or(prompts, "unknown"), LandedAt: now})
-	if err != nil {
-		e.log.Warn("skill landing: record the version", "proposal", p.ID, "err", err)
-	}
-	e.dropCandidate(octx, p.Scratch, p.Branch)
-	day := LandDay{Day: store.DayKey(now), Landed: e.landedToday(octx) + 1}
+	e.dropCandidate(ctx, p.Scratch, p.Branch)
+	day := LandDay{Day: store.DayKey(now), Landed: e.landedToday(ctx) + 1}
 	if b, err := json.Marshal(day); err == nil {
-		e.setKV(octx, KVLearnLandDay, string(b))
+		e.setKV(ctx, KVLearnLandDay, string(b))
 	}
 	manual := e.restartManual()
-	if v.ID != 0 {
-		if b, err := json.Marshal(LearnRestartMark{Version: v.ID, Proposal: p.ID, Landed: now, Manual: manual}); err == nil {
-			e.setKV(octx, KVLearnRestart, string(b))
-		}
+	if b, err := json.Marshal(LearnRestartMark{Version: v.ID, Proposal: p.ID, Landed: now, Manual: manual}); err == nil {
+		e.setKV(ctx, KVLearnRestart, string(b))
 	}
 	restart := "the daemon restarts on it once nothing is in flight"
 	if manual {
 		restart = "it reaches the rounds after `magnum daemon-restart --when-idle`"
 	}
-	e.event(octx, "info", learnSubject, "learn.landed", fmt.Sprintf("skill proposal %d landed on master as %s: skill version %d; %s", p.ID,
+	e.event(ctx, "info", learnSubject, "learn.landed", fmt.Sprintf("skill proposal %d landed on master as %s: skill version %d; %s", p.ID,
 		learnShort(landed), v.ID, restart), map[string]any{"proposal": p.ID, "version": v.ID, "commit": learnShort(landed), "manual": manual,
 		"requested": requested})
 	title := fmt.Sprintf("skill version %d landed", v.ID)
 	e.info(notify.Item{Key: "learn-landed:" + strconv.FormatInt(p.ID, 10), Title: title, Line: title,
 		Body: fmt.Sprintf("Proposal %d is on master as %s (not pushed); %s.", p.ID, learnShort(landed), restart)})
-	if manual && v.ID != 0 {
+	if manual {
 		title := fmt.Sprintf("restart magnum for skill version %d", v.ID)
 		e.info(notify.Item{Key: "learn-restart:" + strconv.FormatInt(v.ID, 10), Title: title, Line: title,
 			Body: "`magnum daemon-restart --when-idle` restarts it once nothing is in flight; the rounds use the landed skill and prompts from then on."})
@@ -389,7 +422,9 @@ func learnHashes(dir string) (skill, prompts string) {
 // noteLearnRestarted marks the version the daemon was to restart on
 // restarted (this start, whatever caused it: an idle exit, a
 // `daemon-restart`, a new build), which starts its measurement window, and
-// clears KVLearnRestart. A dry run marks nothing.
+// clears KVLearnRestart; without the mark, the newest version when it was
+// never restarted on (a landing whose mark a crash or a registry error kept
+// from being written). A dry run marks nothing.
 func (e *Engine) noteLearnRestarted(ctx context.Context) {
 	if e.d.DryRun {
 		return
@@ -397,7 +432,11 @@ func (e *Engine) noteLearnRestarted(ctx context.Context) {
 	m, ok := e.learnRestart(ctx)
 	if !ok {
 		e.delKV(ctx, KVLearnRestart)
-		return
+		vs, err := e.st.LearnVersions(ctx)
+		if err != nil || len(vs) == 0 || vs[0].RestartedAt != nil {
+			return
+		}
+		m = LearnRestartMark{Version: vs[0].ID, Proposal: vs[0].ProposalID}
 	}
 	if err := e.st.MarkLearnRestarted(ctx, m.Version, e.now()); err != nil && !errors.Is(err, store.ErrNotFound) {
 		e.warnUnlessStopped(ctx, err, "skill version: mark it restarted", "version", m.Version)

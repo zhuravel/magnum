@@ -5683,3 +5683,19 @@ editing history. Code, config comments and prompts reference these by their head
   `master` to equal `base_sha` (any commit of the operator's would hold every proposal) and patch ids over
   the default three context lines (a clean rebase near the operator's edit would read as a foreign commit
   and hold the proposal for good).
+- **A landing is recorded in one transaction, and a landing cut short is recorded wherever it is found**
+  (2026-10-09, review of stage 4 of the self-improving review loop). After the fast-forward the landing
+  wrote the state, the commit (`MarkLearnLanded`) and the version (`CreateLearnVersion`) separately, an
+  error of the last two only logged ("skill version 0"), and only a `passed` proposal found on `master`
+  was recovered: a crash after the merge of a landing the operator asked for left it `held` with its
+  commit on `master`, and his `n` then rejected it and deleted its branch; a crash after the state change
+  left a landed proposal without its commit or its version. Now `store.LandLearnProposal` writes the
+  state, `landed_sha`, `landed_at`, the inputs and the version in one transaction (`DecideLearnProposal`
+  refuses `landed`, and `MarkLearnLanded` is gone), and a proposal whose branch `master` holds is recorded
+  as landed by the landing before any check of the checkout, by the operator's `n` (refused, saying so)
+  and by the expiry (instead of expiring it). The rebase, the dirty check, the fast-forward and the read
+  of the new `master` run on `context.WithoutCancel` with a 5-minute timeout, so a stop no longer cuts the
+  landing between them. A start that finds no `KVLearnRestart` marks the newest version restarted when it
+  never was (a crash between the transaction and the key). Rejected: writing the restart mark in the same
+  transaction (the store would encode the engine's mark) and scanning every waiting proposal at startup
+  (the landing, the answer and the expiry already meet each one).
