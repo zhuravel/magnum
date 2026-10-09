@@ -5738,6 +5738,7 @@ type LearnGit interface {
 	DirtyPaths(ctx context.Context, dir string, paths ...string) ([]string, error)
 	MergeFFOnly(ctx context.Context, repo, branch string) error
 	RestoreFrom(ctx context.Context, dir, rev string, paths ...string) error
+	BranchesUnder(ctx context.Context, repo, prefix string) ([]string, error)
 }
     LearnGit is the git work of an editor run, its gate and its landing
     (learn_land.go) (*gitx.Client).
@@ -7970,6 +7971,11 @@ func (c *Client) BranchPR(ctx context.Context, dir, branch string) (number int, 
     BranchPR returns the PR number recorded in `git config branch.<b>.pr` (the
     convention of Bohdan's `pull` helper; a PR URL is accepted too). ok is false
     when the key is not set.
+
+func (c *Client) BranchesUnder(ctx context.Context, repo, prefix string) ([]string, error)
+    BranchesUnder lists the local branches of repo under prefix, one or more
+    path segments ending in "/" ("learn/"), by their short names, sorted:
+    the skill editor's orphan cleanup finds the branches no proposal holds.
 
 func (c *Client) ChangedPaths(ctx context.Context, dir, base, head string, pathspecs ...string) ([]string, error)
     ChangedPaths lists the files head changed relative to its merge base with

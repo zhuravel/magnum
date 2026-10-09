@@ -800,6 +800,49 @@ func TestAnOperatorsDesignLogEntryDoesNotHoldTheLanding(t *testing.T) {
 	}
 }
 
+// A run's orphan cleanup deletes the learn/<run> branches no waiting
+// proposal names, not only those of a worktree left behind: a daemon killed
+// between a candidate's worktree removal and its branch's (or a branch
+// deletion that failed) leaves one for good otherwise. A waiting
+// proposal's branch and a learn/ branch that is no run's stay.
+func TestTheOrphanCleanupDeletesBranchesNoProposalHolds(t *testing.T) {
+	f := newEditFixture(t, goodTurn)
+	const orphan, held, stopped, mine = "learn/20261001-070000", "learn/20261002-070000", "learn/20261003-070000", "learn/mine"
+	for _, b := range []string{orphan, held, stopped, mine} {
+		f.gitOut(f.checkout, "branch", b, "master")
+	}
+	for b, state := range map[string]string{held: store.LearnHeld, stopped: store.LearnStopped} {
+		run := strings.TrimPrefix(b, learnBranchPrefix)
+		if _, err := f.h.st.CreateLearnProposal(f.h.ctx, store.LearnProposalInput{Trigger: store.LearnTriggerEvidence, BaseSHA: f.master,
+			Branch: b, CandidateSHA: f.master, State: state, Scratch: filepath.Join(f.h.layout.LearnWorktrees(), run),
+			RunDir: filepath.Join(f.h.layout.LearnSkill(), run)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if p := f.edit(); p.State != store.LearnGating {
+		t.Fatalf("proposal = %+v", p)
+	}
+	for b, want := range map[string]bool{orphan: false, stopped: false, held: true, mine: true} {
+		if got := f.branchExists(b); got != want {
+			t.Errorf("branch %s exists = %v, want %v", b, got, want)
+		}
+	}
+}
+
+// BranchesUnder lists the fake's local branches of repo under prefix.
+func (g *fakeLearnGit) BranchesUnder(_ context.Context, repo, prefix string) ([]string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	var out []string
+	for k := range g.refs {
+		if name, ok := strings.CutPrefix(k, repo+"|refs/heads/"); ok && strings.HasPrefix(name, prefix) {
+			out = append(out, name)
+		}
+	}
+	slices.Sort(out)
+	return out, nil
+}
+
 func TestAnEditRunIsBackgroundWorkForRestarts(t *testing.T) {
 	f := newEditFixture(t, goodTurn)
 	f.ed.block, f.ed.entered = make(chan struct{}), make(chan struct{})

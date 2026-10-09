@@ -4,9 +4,9 @@ package gitx
 // learn_edit.go): a commit of named paths on a worktree's branch, paths
 // restored as an earlier commit had them (a revert), a fast-forward of the
 // checkout's branch, a rebase that aborts itself on a conflict, which of
-// some paths are dirty, the branch checked out and the operation a
-// repository is in the middle of. Like every gitx command they
-// run none of the clone's hooks (hooksOff).
+// some paths are dirty, the branches under a prefix, the branch checked
+// out and the operation a repository is in the middle of. Like every gitx
+// command they run none of the clone's hooks (hooksOff).
 
 import (
 	"context"
@@ -81,6 +81,31 @@ func (c *Client) RestoreFrom(ctx context.Context, dir, rev string, paths ...stri
 	_, err = c.git(ctx, dir, call{label: "restore --source " + rev, mutates: true, timeout: commitTimeout},
 		append([]string{"restore", "--source=" + rev, "--worktree", "--"}, specs...)...)
 	return err
+}
+
+// BranchesUnder lists the local branches of repo under prefix, one or more
+// path segments ending in "/" ("learn/"), by their short names, sorted: the
+// skill editor's orphan cleanup finds the branches no proposal holds.
+func (c *Client) BranchesUnder(ctx context.Context, repo, prefix string) ([]string, error) {
+	dir, ok := strings.CutSuffix(prefix, "/")
+	if !ok || dir == "" {
+		return nil, fmt.Errorf("gitx: branches under %q: the prefix must be a path ending in /", prefix)
+	}
+	if err := checkBranch("prefix", dir); err != nil {
+		return nil, err
+	}
+	res, err := c.git(ctx, repo, call{label: "for-each-ref refs/heads/" + prefix}, "for-each-ref", "--format=%(refname)", "refs/heads/"+prefix)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for line := range strings.SplitSeq(res.Out(), "\n") {
+		if name, ok := strings.CutPrefix(strings.TrimSpace(line), "refs/heads/"); ok && strings.HasPrefix(name, prefix) {
+			out = append(out, name)
+		}
+	}
+	slices.Sort(out)
+	return out, nil
 }
 
 // runStdin is git with stdin.

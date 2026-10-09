@@ -221,6 +221,31 @@ func TestInProgressSeesARebase(t *testing.T) {
 	}
 }
 
+// The skill editor's orphan cleanup lists its own branches: the local
+// branches under a prefix, by their short names, sorted; a branch whose
+// name only starts like the prefix, a remote one and a tag are not listed.
+func TestBranchesUnderListsTheLocalBranchesOfAPrefix(t *testing.T) {
+	fx := newFixture(t)
+	ctx := context.Background()
+	for _, b := range []string{"learn/20261010-070000", "learn/20261009-070000", "learnt", "feature/x"} {
+		fx.git(fx.clone, "branch", b, "main")
+	}
+	fx.git(fx.clone, "tag", "learn/v1", "main")
+	fx.git(fx.clone, "update-ref", "refs/remotes/origin/learn/20261011-070000", "main")
+	got, err := fx.c.BranchesUnder(ctx, fx.clone, "learn/")
+	if err != nil || !slices.Equal(got, []string{"learn/20261009-070000", "learn/20261010-070000"}) {
+		t.Fatalf("BranchesUnder = %q, %v", got, err)
+	}
+	if got, err := fx.c.BranchesUnder(ctx, fx.clone, "none/"); err != nil || len(got) != 0 {
+		t.Fatalf("an empty prefix's branches = %q, %v", got, err)
+	}
+	for _, bad := range []string{"", "learn", "-x/", "a b/"} {
+		if _, err := fx.c.BranchesUnder(ctx, fx.clone, bad); err == nil {
+			t.Errorf("prefix %q was taken", bad)
+		}
+	}
+}
+
 // A revert of a skill version restores its files in a worktree as an
 // earlier commit had them: a file it changed gets the earlier text, a file
 // the earlier commit did not have goes, and a commit of those paths

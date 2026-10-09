@@ -5676,3 +5676,13 @@ skill versions, which its first entry creates); people add theirs to the section
   A pin cannot start with "#", the pins file's comments, so the notes header is pinned without it and
   checked whole as before. Rejected: recording pins from internal/pipeline (each package's test binary
   has its own, and the pins file is one package's output).
+- **The orphan cleanup deletes the learn branches no proposal holds** (2026-10-09, a review finding on
+  stage 3 of the self-improving review loop). It looked only at the worktree directories, so a
+  `learn/<run>` branch stayed for good when the daemon was killed between `dropCandidate`'s worktree
+  removal and its branch deletion, or when the deletion failed and was only logged. At the start of
+  an edit or a revert, `dropOrphanCandidates` now also lists the checkout's branches under `learn/`
+  (`gitx.Client.BranchesUnder`, `git for-each-ref`) and drops each whose name is a run's and that no
+  editing, gating, passed or held proposal names, with its worktree's registration if git still has
+  one; a `learn/` branch whose name is no run's is someone's own and stays. Rejected: deleting every
+  `learn/` branch (the prefix is a common one) and scanning at every tick (a run is the only thing
+  that makes them, and it cleans up first).

@@ -1703,7 +1703,8 @@ committed on its branch (unsigned, only the files it changed, the regenerated go
 message names the inputs by id and the skill's bytes, never the agent's reasons), and the proposal waits
 in the registry for the gate (`gating`). An edit still invalid after the nudge is kept as `invalid` with its
 problems, and one that stops (a limit, a shutdown, an agent that cannot start) as `stopped`; both lose their
-worktree and branch. Nothing is pushed. An edit in flight counts as background work for
+worktree and branch. A worktree or a `learn/<run>` branch no waiting proposal holds (a daemon killed in the
+middle of a run) goes at the start of the next edit or revert. Nothing is pushed. An edit in flight counts as background work for
 `magnum daemon-restart`, install, uninstall and daemon-stop, which refuse to cut it short.
 
 The gate then decides the proposal with the eval, in the daemon's process, one case at a time. Its cases

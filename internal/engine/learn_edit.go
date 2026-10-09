@@ -124,6 +124,7 @@ type LearnGit interface {
 	DirtyPaths(ctx context.Context, dir string, paths ...string) ([]string, error)
 	MergeFFOnly(ctx context.Context, repo, branch string) error
 	RestoreFrom(ctx context.Context, dir, rev string, paths ...string) error
+	BranchesUnder(ctx context.Context, repo, prefix string) ([]string, error)
 }
 
 var _ LearnGit = (*gitx.Client)(nil)
@@ -1097,26 +1098,46 @@ func (e *Engine) requestLearnReject(ctx context.Context, p LearnDecisionPayload)
 }
 
 // dropOrphanCandidates removes the worktrees (and their branches) of runs
-// no waiting proposal holds: a run a crash cut short leaves one behind.
+// no waiting proposal holds, then the learn/<run> branches no waiting
+// proposal names: a run a crash cut short leaves a worktree behind, and a
+// daemon killed between a worktree's removal and its branch's, or a branch
+// deletion that failed, leaves a branch. A learn/ branch whose name is no
+// run's is not magnum's and stays.
 func (e *Engine) dropOrphanCandidates(ctx context.Context) {
-	ents, err := os.ReadDir(e.d.Layout.LearnWorktrees())
-	if err != nil {
+	if e.d.LearnGit == nil || e.d.Checkout == "" {
 		return
 	}
 	waiting, err := e.st.LearnProposals(ctx, []string{store.LearnEditing, store.LearnGating, store.LearnPassed, store.LearnHeld})
 	if err != nil {
 		return
 	}
-	for _, ent := range ents {
-		wt := filepath.Join(e.d.Layout.LearnWorktrees(), ent.Name())
-		if !ent.IsDir() || slices.ContainsFunc(waiting, func(p store.LearnProposal) bool { return p.Scratch == wt }) {
+	isRun := func(name string) bool {
+		_, err := time.ParseInLocation(editRunFormat, name, time.Local)
+		return err == nil
+	}
+	if ents, err := os.ReadDir(e.d.Layout.LearnWorktrees()); err == nil {
+		for _, ent := range ents {
+			wt := filepath.Join(e.d.Layout.LearnWorktrees(), ent.Name())
+			if !ent.IsDir() || !isRun(ent.Name()) || slices.ContainsFunc(waiting, func(p store.LearnProposal) bool { return p.Scratch == wt }) {
+				continue
+			}
+			e.log.Warn("skill edit: removing a worktree no proposal holds", "worktree", wt)
+			e.dropCandidate(ctx, wt, learnBranchPrefix+ent.Name())
+		}
+	}
+	branches, err := e.d.LearnGit.BranchesUnder(ctx, e.d.Checkout, learnBranchPrefix)
+	if err != nil {
+		e.warnUnlessStopped(ctx, err, "skill edit: list the learn branches")
+		return
+	}
+	for _, b := range branches {
+		run := strings.TrimPrefix(b, learnBranchPrefix)
+		wt := filepath.Join(e.d.Layout.LearnWorktrees(), run)
+		if !isRun(run) || slices.ContainsFunc(waiting, func(p store.LearnProposal) bool { return p.Branch == b || p.Scratch == wt }) {
 			continue
 		}
-		if _, err := time.ParseInLocation(editRunFormat, ent.Name(), time.Local); err != nil {
-			continue
-		}
-		e.log.Warn("skill edit: removing a worktree no proposal holds", "worktree", wt)
-		e.dropCandidate(ctx, wt, learnBranchPrefix+ent.Name())
+		e.log.Warn("skill edit: deleting a branch no proposal holds", "branch", b)
+		e.dropCandidate(ctx, wt, b) // its worktree's registration too, if git still has one
 	}
 }
 
