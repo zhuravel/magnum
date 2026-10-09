@@ -77,7 +77,7 @@ func TestWorktreeAddAndCommitAllOnABranch(t *testing.T) {
 		t.Fatal("a commit without paths succeeded")
 	}
 
-	if err := fx.c.WorktreeDiscard(ctx, fx.clone, dir); err != nil {
+	if err := fx.c.WorktreeDiscard(ctx, fx.clone, filepath.Dir(dir), dir); err != nil {
 		t.Fatalf("WorktreeDiscard: %v", err)
 	}
 	if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
@@ -93,12 +93,55 @@ func TestWorktreeAddAndCommitAllOnABranch(t *testing.T) {
 		t.Fatal(err)
 	}
 	for range 2 {
-		if err := fx.c.WorktreeDiscard(ctx, fx.clone, gone); err != nil {
+		if err := fx.c.WorktreeDiscard(ctx, fx.clone, filepath.Dir(gone), gone); err != nil {
 			t.Fatalf("WorktreeDiscard of a removed directory: %v", err)
 		}
 	}
 	if list, _ := fx.c.WorktreeList(ctx, fx.clone); len(list) != 1 {
 		t.Fatalf("worktrees after discarding a removed one = %+v", list)
+	}
+}
+
+// A discard forgets the stale registrations under the directory of
+// worktrees it is given (their directories gone), and never another of the
+// repository's: a worktree the operator keeps on a volume that is not
+// mounted now stays registered, and so does a live one under the directory.
+func TestWorktreeDiscardForgetsOnlyStaleWorktreesUnderItsRoot(t *testing.T) {
+	fx := newFixture(t)
+	ctx := context.Background()
+	root := filepath.Join(filepath.Dir(fx.clone), "wt")
+	mine := learnWorktree(t, fx, "learn/mine")   // root/learn-mine, discarded
+	stale := learnWorktree(t, fx, "learn/stale") // root/learn-stale, its directory gone
+	live := learnWorktree(t, fx, "learn/live")   // root/learn-live, stays
+	away := filepath.Join(filepath.Dir(fx.clone), "volume", "operator")
+	if err := os.MkdirAll(filepath.Dir(away), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.c.WorktreeAdd(ctx, fx.clone, away, "main", false, "operator"); err != nil {
+		t.Fatalf("WorktreeAdd: %v", err)
+	}
+	for _, d := range []string{stale, away} {
+		if err := os.RemoveAll(d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := fx.c.WorktreeDiscard(ctx, fx.clone, root, mine); err != nil {
+		t.Fatalf("WorktreeDiscard: %v", err)
+	}
+	list, err := fx.c.WorktreeList(ctx, fx.clone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []struct {
+		dir  string
+		kept bool
+	}{{mine, false}, {stale, false}, {live, true}, {away, true}} {
+		if _, ok := FindWorktree(list, want.dir); ok != want.kept {
+			t.Fatalf("%s registered = %v, want %v (list %+v)", want.dir, ok, want.kept, list)
+		}
+	}
+	if err := fx.c.WorktreeDiscard(ctx, fx.clone, root, away); err == nil {
+		t.Fatal("a discard of a directory outside its root was taken")
 	}
 }
 

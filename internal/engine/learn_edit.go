@@ -112,7 +112,7 @@ var ErrEditorDown = errors.New("engine: the skill editor is not available")
 type LearnGit interface {
 	RevParse(ctx context.Context, dir, ref string) (string, error)
 	WorktreeAdd(ctx context.Context, mainClone, path, ref string, detach bool, branch string) error
-	WorktreeDiscard(ctx context.Context, repo, dir string) error
+	WorktreeDiscard(ctx context.Context, repo, root, dir string) error
 	StatusPaths(ctx context.Context, dir string) ([]gitx.StatusEntry, error)
 	CurrentBranch(ctx context.Context, repo string) (string, error)
 	CommitAll(ctx context.Context, dir, message string, paths ...string) (string, error)
@@ -1007,7 +1007,7 @@ func (e *Engine) dropCandidate(ctx context.Context, wt, branch string) {
 	}
 	if rel, err := filepath.Rel(e.d.Layout.LearnWorktrees(), wt); err == nil && rel != "." && !strings.HasPrefix(rel, "..") &&
 		!strings.Contains(rel, string(filepath.Separator)) {
-		if err := e.d.LearnGit.WorktreeDiscard(ctx, e.d.Checkout, wt); err != nil {
+		if err := e.d.LearnGit.WorktreeDiscard(ctx, e.d.Checkout, e.d.Layout.LearnWorktrees(), wt); err != nil {
 			e.log.Warn("skill edit: remove the worktree", "worktree", wt, "err", err)
 		}
 	}

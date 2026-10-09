@@ -5732,7 +5732,7 @@ type LearnDecisionPayload struct {
 type LearnGit interface {
 	RevParse(ctx context.Context, dir, ref string) (string, error)
 	WorktreeAdd(ctx context.Context, mainClone, path, ref string, detach bool, branch string) error
-	WorktreeDiscard(ctx context.Context, repo, dir string) error
+	WorktreeDiscard(ctx context.Context, repo, root, dir string) error
 	StatusPaths(ctx context.Context, dir string) ([]gitx.StatusEntry, error)
 	CurrentBranch(ctx context.Context, repo string) (string, error)
 	CommitAll(ctx context.Context, dir, message string, paths ...string) (string, error)
@@ -8254,11 +8254,15 @@ func (c *Client) WorktreeAdd(ctx context.Context, mainClone, path, ref string, d
     name checks the branch out, anything else detaches). Callers that must be
     idempotent check WorktreeList first, since git refuses an existing path.
 
-func (c *Client) WorktreeDiscard(ctx context.Context, repo, dir string) error
-    WorktreeDiscard removes the worktree at dir of repo, modified and untracked
-    files included, then forgets every registration whose directory is gone
-    (WorktreePrune): a worktree someone removed already, or a second discard,
-    is fine.
+func (c *Client) WorktreeDiscard(ctx context.Context, repo, root, dir string) error
+    WorktreeDiscard removes the worktree at dir of repo, modified and
+    untracked files included, then forgets the stale registrations below root,
+    the directory of worktrees dir is in (the worktree list's prunable entries
+    there, whose directory is gone, dir's included; a locked one stays), and no
+    other: never WorktreePrune, which would forget every stale worktree of repo,
+    one the operator keeps on a volume that is not mounted now too. A worktree
+    someone removed already, or a second discard, is fine; a dir outside root is
+    an error.
 
 func (c *Client) WorktreeList(ctx context.Context, mainClone string) ([]Worktree, error)
     WorktreeList returns every worktree of the repository, the main one first.

@@ -5911,6 +5911,16 @@ skill versions); people add theirs to the sections before it, at the end of the 
   (`ErrNotOnBranch` too); the landing holds the proposal with why on either, and records nothing.
   Rejected: a lock on the checkout (the operator's git takes none of ours) and `git update-ref` of
   master instead of a merge (it would leave the work tree and the index behind the branch).
+- **The loop forgets only its own stale worktrees** (2026-10-10, the final review of the self-improving
+  review loop). `gitx.WorktreeDiscard`, which removes a candidate's, a revert's and the gate's base
+  worktree, ran `git worktree prune` in the checkout afterwards, which forgets every registration whose
+  directory is gone: an operator's worktree on a volume that is not mounted lost its admin directory, and
+  with it its link to the checkout. It now takes the directory of the loop's worktrees
+  (`Layout.LearnWorktrees`) and forgets only the worktree list's prunable entries below it (`git worktree
+  remove --force` of each, which deletes only the admin directory of one whose directory is gone; a locked
+  one stays), the discarded one's included. The pools' `WorktreePrune` is unchanged: a pool's clone is
+  magnum's alone. Rejected: forgetting the discarded worktree's registration alone (a run a crash cut
+  short leaves registrations no later discard names) and deleting `.git/worktrees/<id>` by hand.
 
 ## Learned rules
 

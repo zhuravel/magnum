@@ -765,12 +765,12 @@ func (e *Engine) gateBaseDir() string {
 // place of whatever a gate a crash cut short left there, and returns it.
 func (e *Engine) addGateBase(ctx context.Context, sha string) (string, error) {
 	git, dir := e.d.LearnGit, e.gateBaseDir()
-	if err := git.WorktreeDiscard(ctx, e.d.Checkout, dir); err != nil {
+	if err := git.WorktreeDiscard(ctx, e.d.Checkout, e.d.Layout.LearnWorktrees(), dir); err != nil {
 		// A directory git does not know as a worktree: it is the gate's own.
 		if rerr := os.RemoveAll(dir); rerr != nil {
 			return "", errors.Join(err, rerr)
 		}
-		if err := git.WorktreeDiscard(ctx, e.d.Checkout, dir); err != nil {
+		if err := git.WorktreeDiscard(ctx, e.d.Checkout, e.d.Layout.LearnWorktrees(), dir); err != nil {
 			return "", err
 		}
 	}
@@ -793,7 +793,7 @@ func (e *Engine) addGateBase(ctx context.Context, sha string) (string, error) {
 // dropGateBase removes the gate's worktree of the base; a failure is
 // logged (the next gate replaces it).
 func (e *Engine) dropGateBase(ctx context.Context) {
-	if err := e.d.LearnGit.WorktreeDiscard(ctx, e.d.Checkout, e.gateBaseDir()); err != nil {
+	if err := e.d.LearnGit.WorktreeDiscard(ctx, e.d.Checkout, e.d.Layout.LearnWorktrees(), e.gateBaseDir()); err != nil {
 		e.log.Warn("skill gate: remove the worktree of the base", "err", err)
 	}
 }
@@ -807,7 +807,8 @@ func (e *Engine) ownWorktree(wt string) bool {
 
 // ensureCandidate makes sure p's worktree is there at its branch's commit:
 // one a restart left behind is reused as it is; a missing one is added
-// again from p's branch (a stale registration pruned first).
+// again from p's branch (the stale registrations of the loop's worktrees
+// forgotten first, gitx.WorktreeDiscard).
 // errCandidateGone when the branch is gone, the worktree holds another
 // commit than the branch, or the branch moved from p's commit: only the
 // landing may have moved it, rebasing it onto master, and with moved such
@@ -840,7 +841,7 @@ func (e *Engine) ensureCandidate(ctx context.Context, p store.LearnProposal, mov
 		}
 		return nil
 	}
-	if err := git.WorktreeDiscard(ctx, e.d.Checkout, wt); err != nil {
+	if err := git.WorktreeDiscard(ctx, e.d.Checkout, e.d.Layout.LearnWorktrees(), wt); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(wt), 0o700); err != nil {

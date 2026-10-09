@@ -312,17 +312,45 @@ func (c *Client) InProgress(ctx context.Context, repo string) (string, error) {
 }
 
 // WorktreeDiscard removes the worktree at dir of repo, modified and
-// untracked files included, then forgets every registration whose
-// directory is gone (WorktreePrune): a worktree someone removed already,
-// or a second discard, is fine.
-func (c *Client) WorktreeDiscard(ctx context.Context, repo, dir string) error {
-	if err := checkAbsPath(dir); err != nil {
+// untracked files included, then forgets the stale registrations below
+// root, the directory of worktrees dir is in (the worktree list's prunable
+// entries there, whose directory is gone, dir's included; a locked one
+// stays), and no other: never WorktreePrune, which would forget every stale
+// worktree of repo, one the operator keeps on a volume that is not mounted
+// now too. A worktree someone removed already, or a second discard, is
+// fine; a dir outside root is an error.
+func (c *Client) WorktreeDiscard(ctx context.Context, repo, root, dir string) error {
+	if err := errors.Join(checkAbsPath(root), checkAbsPath(dir)); err != nil {
 		return err
+	}
+	if !below(root, dir) {
+		return fmt.Errorf("gitx: worktree %s is not below %s", dir, root)
 	}
 	if _, err := os.Lstat(dir); err == nil {
 		if err := c.WorktreeRemove(ctx, repo, dir, true); err != nil {
 			return err
 		}
 	}
-	return c.WorktreePrune(ctx, repo)
+	list, err := c.WorktreeList(ctx, repo)
+	if err != nil {
+		return err
+	}
+	for _, w := range list {
+		if !w.Prunable || w.Locked || !below(root, w.Path) {
+			continue
+		}
+		// git removes a registration whose directory is gone (it deletes only
+		// its admin directory then).
+		if err := c.WorktreeRemove(ctx, repo, w.Path, true); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// below reports whether path is below root (not root itself), both cleaned
+// and symlink-resolved as FindWorktree compares them.
+func below(root, path string) bool {
+	rel, err := filepath.Rel(canonPath(root), canonPath(path))
+	return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }

@@ -124,10 +124,15 @@ func (g *fakeLearnGit) WorktreeAdd(_ context.Context, mainClone, path, ref strin
 	return os.MkdirAll(path, 0o700)
 }
 
-func (g *fakeLearnGit) WorktreeDiscard(_ context.Context, _, dir string) error {
+// WorktreeDiscard removes dir, which must be a direct child of root, as
+// every discard of the loop's is (gitx's takes any dir below its root).
+func (g *fakeLearnGit) WorktreeDiscard(_ context.Context, _, root, dir string) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.record("worktree discard %s", dir)
+	if filepath.Dir(dir) != root {
+		return fmt.Errorf("fake git: worktree %s is not in %s", dir, root)
+	}
 	if err := g.discardErr[dir]; err != nil {
 		delete(g.discardErr, dir)
 		return err

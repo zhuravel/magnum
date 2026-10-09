@@ -70,7 +70,7 @@ func TestALandingRebasesTheBranchFastForwardsAndDropsIt(t *testing.T) {
 		t.Fatalf("a landed branch's merge base = %s, %v, want itself", base, err)
 	}
 
-	if err := fx.c.WorktreeDiscard(ctx, fx.clone, dir); err != nil {
+	if err := fx.c.WorktreeDiscard(ctx, fx.clone, filepath.Dir(dir), dir); err != nil {
 		t.Fatalf("WorktreeDiscard: %v", err)
 	}
 	if err := fx.c.BranchDelete(ctx, fx.clone, branch, false); err != nil {
