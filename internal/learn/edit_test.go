@@ -1,6 +1,8 @@
 package learn
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -269,3 +271,53 @@ func TestAppendLearnedKeepsTheLoopsEntriesInTheirOwnSection(t *testing.T) {
 		t.Fatalf("the heading twice:\n%s", got)
 	}
 }
+
+// The design log carries its Learned rules section, with the introduction
+// the loop would write, before the loop's first entry: the first entry
+// goes into it after a blank line, as into a section it creates, and an
+// operator's entry committed above the section meanwhile stays where it
+// is.
+func TestAppendLearnedFindsTheSectionBeforeItsFirstEntry(t *testing.T) {
+	entry := DecisionEntry("The judge checks the lock.", "2026-10-09", []string{"m1"})
+	bare := "# Decisions\n\n## Operations\n\n- **Old.** It says why.\n"
+	want := string(AppendLearned([]byte(bare), entry))
+	empty := bare + "\n" + LearnedHeading + "\n\n" + strings.TrimSuffix(learnedIntro, "\n")
+	if got := string(AppendLearned([]byte(empty), entry)); got != want {
+		t.Fatalf("the first entry into the empty section:\n%s\nwant:\n%s", got, want)
+	}
+	mine := "- **Mine.** It says why.\n"
+	above := func(doc string) string { return strings.Replace(doc, "\n"+LearnedHeading, mine+"\n"+LearnedHeading, 1) }
+	if got := string(AppendLearned([]byte(above(empty)), entry)); got != above(want) {
+		t.Fatalf("with an operator's entry above the section:\n%s\nwant:\n%s", got, above(want))
+	}
+	second := RevertEntry("Reverts skill version 1: it regressed.", "2026-10-10")
+	if got := string(AppendLearned(AppendLearned([]byte(empty), entry), second)); got != want+second {
+		t.Fatalf("the second entry:\n%s", got)
+	}
+}
+
+// The repository's design log ends with the Learned rules section, opened
+// with the introduction the loop writes, so no operator's entry appended
+// at the end of the file before the loop's first landing can conflict with
+// the candidate that would have created it.
+func TestTheDesignLogEndsWithTheLearnedRulesSection(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", filepath.FromSlash(DecisionsFile)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := string(b)
+	locs := learnedHeadingRe.FindAllStringIndex(doc, -1)
+	if len(locs) != 1 {
+		t.Fatalf("%s has %d %q headings, want 1", DecisionsFile, len(locs), LearnedHeading)
+	}
+	section := doc[locs[0][1]:]
+	if strings.Contains(section, "\n## ") {
+		t.Fatalf("%s has a section after %q", DecisionsFile, LearnedHeading)
+	}
+	if !strings.HasPrefix(section, "\n\n"+strings.TrimSuffix(learnedIntro, "\n")) {
+		t.Fatalf("%q does not open with the loop's introduction:\n%s", LearnedHeading, textOf(section, 400))
+	}
+}
+
+// textOf is the first n bytes of s.
+func textOf(s string, n int) string { return s[:min(n, len(s))] }

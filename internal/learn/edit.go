@@ -466,18 +466,23 @@ func RevertEntry(decision, day string) string {
 // does not conflict over them.
 const LearnedHeading = "## Learned rules"
 
-// learnedIntro is the paragraph under LearnedHeading when the loop's first
-// entry creates the section, and the blank line after it.
+// learnedIntro is the paragraph under LearnedHeading, and the blank line
+// after it: docs/DECISIONS.md opens the section with it, and a log without
+// the section gets it with the loop's first entry.
 var learnedIntro = wrap("The self-improving review loop appends these: the skill editor's decisions and the reverts of skill versions, "+
 	"newest last. People add their entries to the sections above, never here.", DecisionWidth, "", "") + "\n"
 
 // learnedHeadingRe finds LearnedHeading as a line of its own.
 var learnedHeadingRe = regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(LearnedHeading) + `[ \t]*\r?$`)
 
+// entryLineRe finds the first line of a design-log entry.
+var entryLineRe = regexp.MustCompile(`(?m)^- `)
+
 // AppendLearned adds entry to the design log doc at the end of its Learned
 // rules section (LearnedHeading), before a section someone added after it;
-// a log without one gets the section at its end, with an introduction,
-// after a blank line.
+// the section's first entry follows its introduction after a blank line. A
+// log without the section gets it at its end, with the introduction, after
+// a blank line.
 func AppendLearned(doc []byte, entry string) []byte {
 	text := string(doc)
 	if !strings.HasSuffix(entry, "\n") {
@@ -494,7 +499,11 @@ func AppendLearned(doc []byte, entry string) []byte {
 	if i := strings.Index(text[loc[1]:], "\n## "); i >= 0 {
 		end = loc[1] + i + 1
 	}
-	out := strings.TrimRight(text[:end], "\n") + "\n" + entry
+	sep := "\n"
+	if !entryLineRe.MatchString(text[loc[1]:end]) { // the introduction alone
+		sep = "\n\n"
+	}
+	out := strings.TrimRight(text[:end], "\n") + sep + entry
 	if rest := text[end:]; rest != "" {
 		out += "\n" + rest
 	}

@@ -4,7 +4,7 @@ Why Magnum works the way it does. One entry per decision, newest last, each with
 alternative that was rejected. Change a decision by adding a new entry that supersedes it, not by
 editing history. Code, config comments and prompts reference these by their heading. The last
 section, Learned rules, is the self-improving loop's (the skill editor's entries and the reverts of
-skill versions, which its first entry creates); people add theirs to the sections before it.
+skill versions); people add theirs to the sections before it, at the end of the one it belongs to.
 
 ## Runtime and scope (2026-10-02)
 
@@ -5805,3 +5805,19 @@ skill versions, which its first entry creates); people add theirs to the section
   reuses an unverified baseline. Rejected: holding at once on an unreadable corpus (the operator's next
   save of the file fixes it) and a registry error on a single pull request's Codex flag as a stop (it
   counts as flagged: a pull request that may be flagged is never replayed).
+- **The design log carries the Learned rules section from the start** (2026-10-09, completing the
+  self-improving review loop). The loop's first entry was to create `## Learned rules` at the end of
+  `docs/DECISIONS.md`, so until a first landing brought the section to master, an operator's entry
+  appended at the end of the file conflicted with the candidate that created it, and the landing's
+  rebase held the proposal. The section is now in the file, opened with the introduction
+  `learn.AppendLearned` writes, and every entry of people's goes to the end of the section it belongs
+  to, above it (the Operations section for most). `AppendLearned` finds the section without entries and
+  puts the first one after the introduction and a blank line, as it lays out a section it creates (a log
+  without one still gets it). `TestTheDesignLogEndsWithTheLearnedRulesSection` keeps the section last
+  and its introduction the loop's. Rejected: leaving the section to the first landing (the conflict
+  above, for as long as no proposal lands).
+
+## Learned rules
+
+The self-improving review loop appends these: the skill editor's decisions and the reverts of skill
+versions, newest last. People add their entries to the sections above, never here.

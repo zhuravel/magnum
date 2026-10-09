@@ -116,8 +116,9 @@ editor_kind`, `editor_model` (default claude, sonnet), `editor_effort`, `editor_
 - the editor's outputs inside the worktree: the edited files, `changes.json` ({`files`: [{`name`,
   `action` edited|unchanged, `reason`}], `inputs`: [{`id`, `action` noted|skipped, `where`, `reason`}],
   `decision`: the DECISIONS entry text}), and the DECISIONS entry appended by magnum, not the agent, at
-  the end of `docs/DECISIONS.md`'s last section, `## Learned rules`, which the loop's first entry
-  creates at the end of the file and which holds only the loop's entries (the editor's and the reverts'):
+  the end of `docs/DECISIONS.md`'s last section, `## Learned rules`, which the file carries from the
+  start (with an introduction that says whose it is) and which holds only the loop's entries (the
+  editor's and the reverts'):
   people append theirs to the sections before it, so an operator's entry on master and a candidate's
   never touch the same lines and the landing's rebase does not conflict over them.
 

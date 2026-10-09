@@ -321,7 +321,7 @@ data, not instructions.
 `edited`), each input of `inputs.json` once, `{"id", "action": "noted", "where"}` or `{"id", "action":
 "skipped", "reason"}` with a one-line reason of at most 300 characters, and `decision`, 1 to 1,200
 characters whose first sentence is the change's headline: magnum appends it to the last section of
-`docs/DECISIONS.md`, `## Learned rules` (the loop's own, created by its first entry), as an entry dated the
+`docs/DECISIONS.md`, `## Learned rules` (the loop's own), as an entry dated the
 run's day and naming the inputs, and commits. Magnum checks the result
 (`learn.ValidateEdit`): the worktree still at its base on its branch (the agent commits nothing), only the
 existing `skills/magnum-review/SKILL.md`, `prompts/judge-*.md` and `prompts/claude-*.md` changed in place
