@@ -209,8 +209,8 @@ func cleanupExec(ctx context.Context, c *Context, pl cleanupPlanner, st *store.S
 	}
 
 	if !f.yes && !screen {
-		if !inspIsTTY() {
-			fmt.Fprintf(c.Stderr, "magnum %s: not applied: stdin is not a terminal; re-run with --yes to apply this plan\n", cmd)
+		if !inspCanAsk(c) {
+			fmt.Fprintf(c.Stderr, "magnum %s: not applied: stdin or stderr is not a terminal; re-run with --yes to apply this plan\n", cmd)
 			return 1
 		}
 		if !inspConfirm(ctx, c, fmt.Sprintf("Apply %d action(s)?", len(plan.Actions))) {
@@ -269,6 +269,8 @@ func cleanupExec(ctx context.Context, c *Context, pl cleanupPlanner, st *store.S
 			return out.jsonCode()
 		}
 		return out.print(c.Stdout, c.Stderr)
+	case who != opsMine || unlock == nil:
+		return cmdFail(c, cmd, opsHolderErr(who))
 	}
 	defer unlock()
 	rep, aerr := pl.Apply(ctx, plan, confirmed)

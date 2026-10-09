@@ -19,15 +19,15 @@ type unapproveOpts struct {
 	resume, yes, json bool
 }
 
-const unapproveUsage = "<ref> [--resume] [--yes] [--json]"
+const unapproveUsage = "unapprove <ref> [--resume] [--yes] [--json]"
 
 func newUnapproveCmd(c *Context) *cobra.Command {
 	var o unapproveOpts
-	cmd := newCommand(groupAct, "unapprove "+unapproveUsage, "withdraw the approval magnum posted as you on a PR, and stop it approving that PR",
+	cmd := newCommand(groupAct, unapproveUsage, "withdraw the approval magnum posted as you on a PR, and stop it approving that PR",
 		"Dismiss the approval magnum posted as you (a [[watch]]'s auto_approve_as) on the PR, as you, and stop magnum approving "+
 			"that PR as you, as when you dismiss one of its approvals or review the PR by hand on GitHub. Without an approval "+
-			"standing it only stops it. A terminal asks y/N first (--yes does not). --resume lets magnum approve the PR as you "+
-			"again after a clean review; your reviews from before then no longer stop it.",
+			"standing it only stops it. A terminal asks y/N first (--yes does not; there --json needs --yes). --resume lets "+
+			"magnum approve the PR as you again after a clean review; your reviews from before then no longer stop it.",
 		func(pos []string) int { return runUnapprove(c, o, pos) })
 	fs := cmd.Flags()
 	fs.BoolVar(&o.resume, "resume", false, "let magnum approve the PR as you again (dismisses nothing)")
@@ -38,8 +38,14 @@ func newUnapproveCmd(c *Context) *cobra.Command {
 }
 
 func runUnapprove(c *Context, o unapproveOpts, pos []string) int {
-	if len(pos) != 1 {
+	switch {
+	case len(pos) == 0:
 		return actUsage(c, "unapprove", "which PR?", unapproveUsage)
+	case len(pos) > 1:
+		return actUsage(c, "unapprove", "one PR at a time", unapproveUsage)
+	}
+	if code, refused := refuseInAgentPane(c, "unapprove"); refused {
+		return code
 	}
 	d, err := actNewDeps(c, actFull)
 	if err != nil {
@@ -62,7 +68,10 @@ func unapproveMain(ctx context.Context, c *Context, d *actDeps, ref string, o un
 		return cmdFail(c, "unapprove", fmt.Errorf("%s names no PR", ref))
 	}
 	label := d.actLabel(t.full(), t.PR.Number)
-	if d.StdinTTY && d.StdoutTTY && !o.yes && !o.json {
+	if d.StdinTTY && d.StdoutTTY && !o.yes {
+		if o.json { // the question would land in the JSON; skipping it would withdraw unasked
+			return actUsage(c, "unapprove", "--json needs --yes to apply (a terminal asks y/N first); nothing withdrawn", unapproveUsage)
+		}
 		q := fmt.Sprintf("Let magnum approve %s as you again after a clean review?", label)
 		if !o.resume {
 			q = fmt.Sprintf("No automatic approval of %s stands. Stop magnum approving it as you?", label)

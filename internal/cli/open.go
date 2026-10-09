@@ -15,7 +15,7 @@ import (
 	"github.com/zhuravel/magnum/internal/store"
 )
 
-const openUsage = "open <ref> [--role <role>] [--no-reveal] [--new-window] [--json] [--timeout 5m]"
+const openUsage = "open <ref> [--role <role>] [--no-reveal] [--new-window] [--json] [--timeout 5m] [--workspace id] [--cwd path]"
 
 type openOpts struct {
 	role, workspace, cwd      string

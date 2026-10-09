@@ -166,8 +166,11 @@ func (c *Context) completeClosedPRs(toComplete string) []cobra.Completion {
 	return c.completePRsWhere(toComplete, "p.gh_state IN ('MERGED', 'CLOSED')", "COALESCE(p.closed_at, p.merged_at, p.updated_at)")
 }
 
-// completePRsWhere offers the PRs where (a SQL condition over prs p) selects,
-// ordered by order, newest first.
+// completePRsWhere offers the PRs where (a SQL condition over prs p) selects
+// whose candidate starts with toComplete (owner/repo#N, in any case, or the
+// bare N of a default-repo PR), ordered by order, newest first. The prefix
+// filters before the limit: the newest completeLimit PRs alone would never
+// offer an older one, whatever was typed.
 func (c *Context) completePRsWhere(toComplete, where, order string) []cobra.Completion {
 	defaultRepo := ""
 	if c.LoadConfig() == nil {
@@ -175,10 +178,17 @@ func (c *Context) completePRsWhere(toComplete, where, order string) []cobra.Comp
 	}
 	_, numErr := strconv.Atoi(toComplete)
 	numeric := toComplete != "" && numErr == nil
+	bareRepo := "" // the repository whose PRs complete as a bare N; "" matches none
+	if numeric {
+		bareRepo = defaultRepo
+	}
+	prefix := completeLikePrefix(toComplete)
 	var out []cobra.Completion
 	c.completeQuery(`SELECT r.owner, r.name, p.number, COALESCE(p.title, '')
 		FROM prs p JOIN repos r ON r.id = p.repo_id
 		WHERE (`+where+`)
+		AND (r.owner || '/' || r.name || '#' || p.number LIKE ? ESCAPE '\'
+			OR (lower(r.owner || '/' || r.name) = ? AND CAST(p.number AS TEXT) LIKE ? ESCAPE '\'))
 		ORDER BY `+order+` DESC LIMIT ?`, func(rows *sql.Rows) error {
 		var owner, name, title string
 		var n int
@@ -191,8 +201,14 @@ func (c *Context) completePRsWhere(toComplete, where, order string) []cobra.Comp
 		}
 		out = append(out, cobra.CompletionWithDesc(fmt.Sprintf("%s#%d", full, n), completeDesc(title)))
 		return nil
-	}, completeLimit)
+	}, prefix, bareRepo, prefix, completeLimit)
 	return out
+}
+
+// completeLikePrefix is a LIKE pattern (ESCAPE '\') for the values that
+// start with s: its wildcards and escapes match themselves.
+func completeLikePrefix(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s) + "%"
 }
 
 // completeSlots offers the registry's slots that are not removed, described

@@ -53,6 +53,9 @@ func runPause(c *Context, o pauseOpts, pos []string) int {
 	if o.dur < 0 || (o.dur > 0 && o.until != "") {
 		return actUsage(c, "pause", "use either --for (positive) or --until", pauseUsage)
 	}
+	if code, refused := refuseInAgentPane(c, "pause"); refused {
+		return code
+	}
 	d, err := actNewDeps(c, actFull)
 	if err != nil {
 		return cmdFail(c, "pause", err)

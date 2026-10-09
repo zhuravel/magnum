@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -100,7 +101,8 @@ func newInspFixture(t *testing.T) *inspFixture {
 	}
 	f := &inspFixture{t: t, Home: home, Out: &bytes.Buffer{}, Err: &bytes.Buffer{}, Runner: &execx.Fake{}}
 	f.Ctx = &Context{Version: "test", Layout: paths.Layout{Home: home}, Stdout: f.Out, Stderr: f.Err}
-	prevHook, prevStdin, prevTTY, prevPoll, prevWait := inspAppHook, inspStdin, inspIsTTY, inspPoll, inspHandoffWait
+	prevHook, prevStdin, prevTTY, prevErrTTY, prevPoll, prevWait := inspAppHook, inspStdin, inspIsTTY, inspStderrTTY, inspPoll, inspHandoffWait
+	prevEval := evalSys
 	inspAppHook = func(o *app.Options) {
 		o.Runner = f.Runner
 		o.MySQLDSN = "root:@tcp(127.0.0.1:1)/?timeout=1s"
@@ -109,10 +111,13 @@ func newInspFixture(t *testing.T) *inspFixture {
 	}
 	inspStdin = strings.NewReader("")
 	inspIsTTY = func() bool { return false }
+	inspStderrTTY = func(io.Writer) bool { return false }
 	inspPoll = 5 * time.Millisecond
 	inspHandoffWait = 50 * time.Millisecond
+	evalSys.Runner = f.Runner // magnum's own commit (evalMagnumCommit): never the real git
 	t.Cleanup(func() {
-		inspAppHook, inspStdin, inspIsTTY, inspPoll, inspHandoffWait = prevHook, prevStdin, prevTTY, prevPoll, prevWait
+		inspAppHook, inspStdin, inspIsTTY, inspStderrTTY, inspPoll, inspHandoffWait = prevHook, prevStdin, prevTTY, prevErrTTY, prevPoll, prevWait
+		evalSys = prevEval
 	})
 	return f
 }
@@ -126,9 +131,11 @@ func (f *inspFixture) store() *store.Store {
 	return storetest.Open(f.t, f.Ctx.Layout.DB())
 }
 
-// tty makes confirmations read answers from input.
+// tty makes stdin and stderr terminals: confirmations are asked on stderr
+// and read their answers from input.
 func (f *inspFixture) tty(input string) {
 	inspIsTTY = func() bool { return true }
+	inspStderrTTY = func(io.Writer) bool { return true }
 	inspStdin = strings.NewReader(input)
 }
 

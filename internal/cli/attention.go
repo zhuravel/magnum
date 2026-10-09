@@ -30,7 +30,7 @@ type attentionItem struct {
 	Role   string    `json:"role,omitempty"`
 	Agent  string    `json:"agent,omitempty"`
 	PaneID string    `json:"pane_id,omitempty"`
-	Since  time.Time `json:"since,omitempty"`
+	Since  time.Time `json:"since,omitzero"`
 	Detail string    `json:"detail,omitempty"`
 	// Fix is the next step for a PR in needs_attention (attention.Reason.Fix).
 	Fix string `json:"fix,omitempty"`

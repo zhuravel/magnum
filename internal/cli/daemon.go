@@ -155,6 +155,7 @@ func runDaemonEngine(ctx context.Context, c *Context, o daemonOptions) (daemonDr
 	if err != nil {
 		return daemonDryRunReport{}, err
 	}
+	defer a.Close() // before anything else can return: the registry, the log and the clients
 	// An installed binary's herdr plugin copy follows the binary: an upgrade
 	// brings new actions to a plugin `magnum install --plugin` wrote.
 	if dir := pluginDir(c.Layout); !o.DryRun && dir != c.Layout.Home && fsx.Exists(filepath.Join(dir, "herdr-plugin.toml")) {
@@ -162,7 +163,6 @@ func runDaemonEngine(ctx context.Context, c *Context, o daemonOptions) (daemonDr
 			fmt.Fprintf(c.Stderr, "magnum daemon: refresh the herdr plugin in %s: %v\n", dir, err)
 		}
 	}
-	defer a.Close()
 	e := engine.FromApp(a)
 	eo := o.Engine
 	eo.Once = o.Once

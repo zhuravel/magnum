@@ -285,6 +285,38 @@ func TestSlotsCommandDispatch(t *testing.T) {
 		t.Fatalf("pin without slot: code %d", code)
 	}
 }
+
+// In-process slot work runs only when both locks are ours (opsMine with an
+// unlock): a lock that answers anything else runs nothing here and hands
+// nothing to the daemon.
+func TestSlotsWorkWithAnUnknownLockHolderDoesNothing(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		lock func() (func(), opsHolder, error)
+	}{
+		{"unknown holder", func() (func(), opsHolder, error) { return nil, opsUnknown, nil }},
+		{"mine without an unlock", func() (func(), opsHolder, error) { return nil, opsMine, nil }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, e, ops, _ := slotsFixture(t)
+			e.lock = tc.lock
+			pool, _ := e.pool("")
+			if code := e.provision(context.Background(), pool, 1); code != 1 || !strings.Contains(f.Err.String(), "gave no usable answer") {
+				t.Fatalf("code %d err %s", code, f.Err.String())
+			}
+			if len(ops.provisioned) != 0 {
+				t.Fatalf("provisioned %v", ops.provisioned)
+			}
+			if reqs, err := e.st.PendingRequests(context.Background(), 10); err != nil || len(reqs) != 0 {
+				t.Fatalf("requests %v err %v", reqs, err)
+			}
+		})
+	}
+}
+
+// A --count near the largest int never wraps the pool's max check into a
+// pass (and a provisioning loop without end): it is refused as over max, and
+// the command line refuses a count above the slot numbers a pool can have.
 func TestSlotsProvisionRefusesAHugeCount(t *testing.T) {
 	f, e, ops, _ := slotsFixture(t)
 	inspSeedSlot(t, e.st, f.Home, "review1", store.SlotFree, nil)

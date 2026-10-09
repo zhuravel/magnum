@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 
 	"github.com/spf13/cobra"
 
@@ -25,9 +26,10 @@ type verdictOpts struct {
 	force, json bool
 }
 
+// The usage lines (cobra Use) of the verdict commands.
 const (
-	verdictUsage = "<ref> [-m TEXT] [--force] [--json]"
-	approveUsage = "<ref> [-m TEXT] [--as IDENTITY] [--force] [--json]"
+	requestChangesUsage = "request-changes <ref> [-m TEXT] [--force] [--json]"
+	approveUsage        = "approve <ref> [-m TEXT] [--as IDENTITY] [--force] [--json]"
 )
 
 func newApproveCmd(c *Context) *cobra.Command {
@@ -58,11 +60,11 @@ func newRequestChangesCmd(c *Context) *cobra.Command {
 
 func newVerdictCmd(c *Context, name, req, summary, long string) *cobra.Command {
 	var o verdictOpts
-	usage := verdictUsage
+	usage := requestChangesUsage
 	if req == engine.ReqApprove {
 		usage = approveUsage
 	}
-	cmd := newCommand(groupAct, name+" "+usage, summary, long, func(pos []string) int { return runVerdict(c, name, req, usage, o, pos) })
+	cmd := newCommand(groupAct, usage, summary, long, func(pos []string) int { return runVerdict(c, name, req, usage, o, pos) })
 	fs := cmd.Flags()
 	fs.StringVarP(&o.message, "message", "m", "", "your words, put before magnum's line in the review body")
 	if req == engine.ReqApprove {
@@ -76,8 +78,16 @@ func newVerdictCmd(c *Context, name, req, summary, long string) *cobra.Command {
 }
 
 func runVerdict(c *Context, name, req, usage string, o verdictOpts, pos []string) int {
-	if len(pos) != 1 {
+	switch {
+	case len(pos) == 0:
 		return actUsage(c, name, "which PR?", usage)
+	case len(pos) > 1:
+		return actUsage(c, name, "one PR at a time", usage)
+	}
+	if o.as != "" {
+		if code, refused := refuseInAgentPane(c, name); refused {
+			return code
+		}
 	}
 	d, err := actNewDeps(c, actFull)
 	if err != nil {
@@ -87,6 +97,26 @@ func runVerdict(c *Context, name, req, usage string, o verdictOpts, pos []string
 	ctx, stop := signalContext()
 	defer stop()
 	return verdictMain(ctx, c, d, name, req, pos[0], o)
+}
+
+// agentPaneEnv are variables magnum sets in the panes of a PR's review
+// workspace (engine paneEnv), where the review agents run, and nowhere else.
+var agentPaneEnv = []string{"MAGNUM_REPORT_DIR", "MAGNUM_PR_URL"}
+
+// refuseInAgentPane refuses (exit 1) a command that acts for the operator
+// (approve --as, unapprove, mute, ignore, pause) when it runs in a review
+// agent's pane, which carries agentPaneEnv: the agent reads the PR, whose
+// text may steer it to approve, unapprove, mute or pause for the operator.
+// It is defense in depth on top of the agents running with full
+// permissions, since an agent could unset the variables; the commands the
+// roles run (post-review, db-lock) are never refused.
+func refuseInAgentPane(c *Context, name string) (code int, refused bool) {
+	for _, k := range agentPaneEnv {
+		if os.Getenv(k) != "" {
+			return cmdFail(c, name, fmt.Errorf("run this from your own terminal: a review agent's shell cannot act for the operator (%s is set)", k)), true
+		}
+	}
+	return 0, false
 }
 
 // verdictMain resolves the PR and hands the verdict to the daemon.

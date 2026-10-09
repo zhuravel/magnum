@@ -67,12 +67,13 @@ func slotsListFlags(cmd *cobra.Command, all, asJSON *bool) {
 
 func newSlotsListCmd(c *Context) *cobra.Command {
 	var all, asJSON bool
-	cmd := newCommand("", "list [--all] [--json]", "list the slots (the default)",
+	const use = "list [--all] [--json]"
+	cmd := newCommand("", use, "list the slots (the default)",
 		"List the slots with their kind, state, the PR they hold, their databases and last use. --all includes "+
 			"removed slots.",
 		func(pos []string) int {
 			if len(pos) > 0 {
-				return inspUsage(c, "slots", "list takes no arguments", slotsUsage)
+				return inspUsage(c, "slots", "list takes no arguments", use)
 			}
 			return slotsRun(c, false, func(ctx context.Context, e *slotsEnv) int { return e.list(ctx, all, asJSON) })
 		})
@@ -107,13 +108,14 @@ func newSlotsProvisionCmd(c *Context) *cobra.Command {
 
 func newSlotsRemoveCmd(c *Context) *cobra.Command {
 	f := &cleanupFlags{cmd: "slots remove", remove: true}
-	cmd := newCommand("", "remove <slot> [--force] [--yes] [--dry-run] [--json] [--wait]", "remove a slot through the cleanup planner",
+	const use = "remove <slot> [--force] [--yes] [--dry-run] [--json] [--wait]"
+	cmd := newCommand("", use, "remove a slot through the cleanup planner",
 		"Remove a slot (worktree and databases) with the same guards, plan, confirmation and daemon hand-off as "+
 			"`magnum cleanup --slot <slot> --remove`. --force also removes a claimed or held slot and discards "+
 			"tracked changes.",
 		func(pos []string) int {
 			if len(pos) != 1 {
-				return inspUsage(c, "slots", "remove needs a slot name", slotsUsage)
+				return inspUsage(c, "slots", "remove needs a slot name", use)
 			}
 			return slotsRun(c, false, func(ctx context.Context, e *slotsEnv) int { return e.remove(ctx, f, pos[0]) })
 		})
@@ -141,9 +143,10 @@ func (e *slotsEnv) remove(ctx context.Context, f *cleanupFlags, slot string) int
 // <slot>` (targetMain): one code path, so both behave alike with or without
 // a daemon running.
 func newSlotsPinCmd(c *Context, sub, short, long string) *cobra.Command {
-	cmd := newCommand("", sub+" <slot>", short, long, func(pos []string) int {
+	use := sub + " <slot>"
+	cmd := newCommand("", use, short, long, func(pos []string) int {
 		if len(pos) != 1 {
-			return inspUsage(c, "slots", sub+" needs a slot name", slotsUsage)
+			return inspUsage(c, "slots", sub+" needs a slot name", use)
 		}
 		return runTarget(c, targetKindByName(sub), targetOpts{}, pos)
 	})
@@ -153,13 +156,14 @@ func newSlotsPinCmd(c *Context, sub, short, long string) *cobra.Command {
 
 // newSlotsTargetCmd is `slots repair|adopt <arg>`.
 func newSlotsTargetCmd(c *Context, sub, arg, short, long string) *cobra.Command {
-	cmd := newCommand("", sub+" "+arg, short, long, func(pos []string) int {
+	use := sub + " " + arg
+	cmd := newCommand("", use, short, long, func(pos []string) int {
 		if len(pos) != 1 {
 			what := "a slot name"
 			if sub == "adopt" {
 				what = "the checkout path"
 			}
-			return inspUsage(c, "slots", sub+" needs "+what, slotsUsage)
+			return inspUsage(c, "slots", sub+" needs "+what, use)
 		}
 		target := pos[0]
 		return slotsRun(c, true, func(ctx context.Context, e *slotsEnv) int {
@@ -211,6 +215,7 @@ type slotsEnv struct {
 	cfg     *config.Config
 	ops     slotsOps
 	cleaner cleanupPlanner
+	lock    func() (unlock func(), who opsHolder, err error) // nil: acquireOps(c.Layout)
 }
 
 // slotsRow is one `slots list` line (and its JSON form).
@@ -330,7 +335,11 @@ func slotsNumber(pool config.Pool, name string) (int, bool) {
 // payload; done then reports that the hand-off (or a failure) already
 // produced the exit code.
 func (e *slotsEnv) inProcess(ctx context.Context, cmd, kind string, payload any) (unlock func(), code int, done bool) {
-	unlock, who, err := acquireOps(e.c.Layout)
+	lock := e.lock
+	if lock == nil {
+		lock = func() (func(), opsHolder, error) { return acquireOps(e.c.Layout) }
+	}
+	unlock, who, err := lock()
 	switch {
 	case err != nil:
 		return nil, cmdFail(e.c, cmd, err), true
@@ -338,6 +347,8 @@ func (e *slotsEnv) inProcess(ctx context.Context, cmd, kind string, payload any)
 		return nil, cmdFail(e.c, cmd, opsBusyErr(e.c.Layout)), true
 	case who == opsDaemon:
 		return nil, e.handOff(ctx, cmd, kind, payload), true
+	case who != opsMine || unlock == nil:
+		return nil, cmdFail(e.c, cmd, opsHolderErr(who)), true
 	}
 	return unlock, 0, false
 }

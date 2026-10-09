@@ -64,6 +64,11 @@ func runStop(c *Context, k stopKind, o stopOpts, pos []string) int {
 	case len(pos) > 1:
 		return actUsage(c, k.name, "one PR at a time", stopUsage(k))
 	}
+	if k.req == engine.ReqIgnore {
+		if code, refused := refuseInAgentPane(c, k.name); refused {
+			return code
+		}
+	}
 	d, err := actNewDeps(c, actFull)
 	if err != nil {
 		return cmdFail(c, k.name, err)

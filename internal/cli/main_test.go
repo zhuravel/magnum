@@ -15,7 +15,10 @@ func TestMain(m *testing.M) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+	// MAGNUM_REPORT_DIR and MAGNUM_PR_URL mark a review agent's pane, where
+	// the commands that act for the operator refuse to run (refuseInAgentPane).
 	for _, k := range []string{"MAGNUM_CONFIG", "MAGNUM_HOME", "MAGNUM_MYSQL_DSN", "MAGNUM_PICK_QUERY", "MAGNUM_BIN",
+		"MAGNUM_REPORT_DIR", "MAGNUM_PR_URL",
 		"HERDR_SOCKET_PATH", "HERDR_BIN_PATH", "HERDR_PLUGIN_ID", "HERDR_PLUGIN_CONTEXT_JSON", "HERDR_ENV"} {
 		os.Unsetenv(k)
 	}

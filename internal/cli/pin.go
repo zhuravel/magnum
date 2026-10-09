@@ -29,7 +29,8 @@ var targetKinds = []targetKind{
 	{"release", engine.ReqRelease, "hand back a PR's slot now (sessions parked, worktree reset)", true,
 		"Hand back a PR's slot now: its sessions are parked and the worktree reset, so the slot is free for the " +
 			"next round. The daemon does it; without one the release runs here under the lock. --force discards " +
-			"tracked changes and releases inside the close grace, but never overrides pins or running agents."},
+			"tracked changes and releases inside the close grace, but never overrides pins or running agents. A " +
+			"terminal asks y/N first (--yes does not; there --json needs --yes)."},
 	{"mute", engine.ReqMute, "stop automatic reviews of a PR", false,
 		"Stop automatic reviews of a PR until `magnum unmute`; a forced `magnum review` still runs. A PR waiting " +
 			"for an automatic round leaves the queue at once. The words after the PR are the mute's reason, kept in " +
@@ -105,6 +106,11 @@ func runTarget(c *Context, k targetKind, o targetOpts, pos []string) int {
 	}
 	if ref == "" && o.workspace == "" && o.cwd == "" {
 		return actUsage(c, k.name, "which PR?", usage)
+	}
+	if k.req == engine.ReqMute {
+		if code, refused := refuseInAgentPane(c, k.name); refused {
+			return code
+		}
 	}
 	mode := actFull
 	if k.name == "release" {
@@ -208,7 +214,13 @@ func releaseMain(ctx context.Context, c *Context, d *actDeps, t actTarget, label
 	}
 	// Ask only on an interactive terminal: the herdr plugin captures the
 	// output of its `here release` action, so a prompt there would hang unseen.
-	if d.StdinTTY && d.StdoutTTY && !o.yes && !o.json {
+	// There --json needs --yes, as cleanup's does: the question would land in
+	// the JSON, and skipping it would reset the worktree unasked.
+	if d.StdinTTY && d.StdoutTTY && !o.yes {
+		if o.json {
+			return actUsage(c, "release", "--json needs --yes to apply (a terminal asks y/N first); nothing released",
+				targetUsage(targetKindByName("release")))
+		}
 		if !d.confirm(ctx, ew, fmt.Sprintf("release %s? its sessions are parked and the worktree is reset (tracked changes discarded)", what)) {
 			fmt.Fprintln(ew, "nothing released")
 			if ctx.Err() != nil {
@@ -225,6 +237,8 @@ func releaseMain(ctx context.Context, c *Context, d *actDeps, t actTarget, label
 		return cmdFail(c, "release", opsBusyErr(d.Layout))
 	case who == opsDaemon:
 		return releaseHandOff(ctx, c, d, t, label, what, payload, o)
+	case who != opsMine || unlock == nil:
+		return cmdFail(c, "release", opsHolderErr(who))
 	}
 	defer unlock()
 

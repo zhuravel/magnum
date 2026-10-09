@@ -180,6 +180,37 @@ editing history. Code, config comments and prompts reference these by their head
   and names no path. Rejected: re-raising after recording (that keeps the crash loop); recovering around
   Tick (it is not a goroutine boundary, and a lock held at the panic could hang the loop instead of
   restarting it).
+- **Usage errors name the command, and every usage line names exactly its command's flags** (2026-10-09).
+  `magnum approve`, `request-changes` and `unapprove` printed `usage: magnum <ref> [...]` without their
+  own name, and they said "which PR?" when given two PRs. `review` and `open` accepted --workspace and
+  --cwd (the plugin context) without listing them. Now their Use strings start with the name, actUsage
+  prints that whole line, more than one PR gets "one PR at a time", and review and open list `[--workspace
+  id] [--cwd path]`. Two tree-walking tests guard every command. First: a command whose usage line names a
+  <placeholder> outside [...] exits 2 when run without arguments and prints `usage: magnum <command> ...`.
+  Each slots subcommand prints its own line, built from its Use string (a same-day follow-up). Second: each
+  usage line names the flags its command defines, and no other. Rejected: printing cobra's UseLine in the
+  runs wrapper on every exit 2 (the commands print their own lines, so the line would appear twice).
+- **cleanup's questions go to stderr, and are asked only when stdin and stderr are terminals**
+  (2026-10-09). `magnum cleanup` and `magnum slots remove` asked their y/N and typed-slug questions on
+  stdout, whenever stdin alone was a terminal. `magnum cleanup > plan.txt` therefore wrote a destructive
+  question into the file and waited for an answer nobody could see. Now the questions go to stderr; the
+  plan and the report stay on stdout. They are asked only when stdin and stderr are both terminals
+  (inspCanAsk). Otherwise nothing is applied, and the command says "stdin or stderr is not a terminal;
+  re-run with --yes". Rejected: also requiring stdout to be a terminal (writing the plan to a file while
+  answering on the terminal is fair use).
+- **On a terminal, release --json and unapprove --json need --yes** (2026-10-09). On a terminal, `magnum
+  release` asks y/N before it parks the sessions and resets the worktree, and `magnum unapprove` asks
+  before it dismisses the operator's approval. --json skipped both questions, so the command applied
+  without asking. Now, on a terminal, --json without --yes is a usage error (exit 2, "--json needs --yes
+  to apply"), like cleanup's --json, which applies only with --yes. Nothing is released, queued or asked.
+  Off a terminal (scripts, the herdr plugin's `here release`), nothing changes. Rejected: asking on stderr
+  under --json (a JSON consumer on a terminal would block on a question it does not expect).
+- **An unset opsHolder runs nothing** (2026-10-09). opsHolder's zero value was opsMine ("both locks are
+  ours: run the work here"). cleanup and release went on to the in-process work, with a nil unlock, for
+  any holder other than busy or daemon. The zero value is now opsUnknown, and a failed acquireOps returns
+  it. cleanup, release and merge-check now test for opsMine explicitly and refuse any other holder
+  ("nothing was run"); merge-check also names its opsDaemon case (it works beside the daemon). slots.go's
+  inProcess still treats any other holder as its own (a follow-up).
 - **`magnum pin/unpin --slot` writes the PR's pinned flag before it touches the slot** (2026-10-09, after
   an audit: requestPin threw away the error from UpdatePR on the slot's PR, then pinned or unpinned the
   slot and reported success, so a PR could stay pinned while its slot was unpinned, or the reverse). Now a
@@ -322,6 +353,19 @@ editing history. Code, config comments and prompts reference these by their head
   rejected: a watch setting for the agents' files. The earlier rejection of docs that drive behaviour as a
   built-in exception still holds for a repository's own prompts, but these files steer magnum's own agents
   and its auto-approval gate, so they follow the gate's list.
+- **A review agent's pane cannot act for the operator** (2026-10-09). `magnum approve --as`, `unapprove`,
+  `mute`, `ignore` and `pause` act for the operator. A review agent reads the PR and runs any command it
+  chooses, so text in a PR could steer it to approve as the operator, withdraw the operator's approval, or
+  stop reviews of that PR or of every PR. These commands now refuse to run (exit 1, "run this from your
+  own terminal: a review agent's shell cannot act for the operator") when MAGNUM_REPORT_DIR or
+  MAGNUM_PR_URL is set. magnum sets these variables only in the panes of a PR's review workspace (engine
+  paneEnv). `magnum post-review` and `magnum db-lock`, which the roles run, are not refused. This is
+  defense in depth on top of the 2026-10-04 trade-off "Plain codex and claude binaries run without
+  approval prompts by default": an agent can unset the variables, and what limits it is still magnum's
+  design. Kept: approve without --as and request-changes post as the PR's posting identity and stay
+  allowed. Rejected: refusing every magnum command in a pane (the roles need post-review and db-lock, and
+  the read-only commands help them); detecting a pane through the process tree (herdr panes run ordinary
+  shells, which the operator uses too).
 - **A model switch cut short backs out of its own dialog** (2026-10-09, after an audit: SwitchModel
   pressed Esc on Claude's "Switch model?" dialog only on its timeout path, so a switch whose ctx ended
   during the poll left the dialog open, and the session's next prompt was refused as blocked). After the
@@ -700,6 +744,16 @@ editing history. Code, config comments and prompts reference these by their head
   launchd restart prints that it finishes even after ctrl+c, and the help text says so. A Signals seam on
   daemonGroupSys lets tests end the command's context. Rejected: ignoring SIGINT during the step (closing
   the terminal sends SIGHUP too, and the budget still bounds a hung launchctl).
+- **Every eval run gets an id of its own, and the eval tests never run git** (2026-10-09). A run id was
+  the start time to the second. Two runs started in the same second shared a run directory, a run.json
+  (the second run overwrote the first's) and an agent tag: evalAgentTag hashes the id, and the 2026-10-08
+  entry relies on that tag so no run adopts another run's agents. `eval run` now creates its directory
+  with os.Mkdir (evalNewRunDir), and when the id is taken it uses `<id>-2`, `<id>-3` and so on. `eval
+  show|score <id>` now prefers an exact id over a prefix. The run's clock and the runner evalMagnumCommit
+  uses are seams (evalSys), and the inspect fixture fakes the runner. Before this, two eval CLI tests ran
+  the real git binary in their temp home, the only accidental external call in the suite. Rejected: a
+  random suffix like the pipeline's run ids (runs from the same second would sort at random, and
+  evalPrevious compares ids).
 - **WriteState swaps the harness before it writes the notes, and puts the old harness back on any
   failure** (2026-10-09, after an audit: the notes file was replaced first, and when the stage-to-harness
   rename then failed, the restore's error was thrown away, so the new notes sat beside the old harness, or
@@ -931,6 +985,12 @@ editing history. Code, config comments and prompts reference these by their head
   that run to be working (`e.waitRun`), as `pushAfterCodex` already does. Rejected: dropping only the
   question on ctrl+c (a queued key that asks and its `y` would still start an action after q, esc or tab);
   a separate guard in each screen's key handler (`leavingKey` already is that guard).
+- **PR completion filters by the typed text before its limit** (2026-10-09). completePRsWhere took the 200
+  newest PRs (completeLimit) and left the filtering to the shell. Once more than 200 PRs were recorded, an
+  older PR never completed: with 205 merged PRs, `magnum misses talkable/talkable#1<TAB>` did not offer
+  #1. The query now keeps a PR when its owner/repo#N starts with the typed text (a case-insensitive LIKE,
+  with the text's wildcards escaped), or, for a typed number, when the PR is in daemon.default_repo and
+  its N starts with that number. The limit applies after this filter.
 - **A NeedDaemon request whose withdrawal fails is reported as still able to run** (2026-10-09, after an
   audit: when no daemon answered, the CLI treated any failure of CompleteRequest except a conflict as a
   successful withdrawal and printed "nothing was queued", but the request stayed pending, and a daemon
@@ -980,6 +1040,10 @@ editing history. Code, config comments and prompts reference these by their head
 - **The tui tests fail on a command that does not answer** (2026-10-09). execCmd treated a command still
   running after 150 ms as a timer and dropped it. An action descheduled on a busy machine could then make
   a test pass vacuously. Now execCmd(tb, cmd) waits up to 5 s and fails the test.
+- **Each slots subcommand prints its own usage line** (2026-10-09). `magnum slots list`, provision,
+  remove, repair, adopt, pin and unpin printed the family's line with every form of `magnum slots`. Now
+  each prints `usage: magnum slots <subcommand> ...` from its own Use string, and the usage-line test no
+  longer accepts a family line.
 
 ## Operations
 
@@ -4897,6 +4961,9 @@ editing history. Code, config comments and prompts reference these by their head
   longer, is kept. A DROP cut short may still finish on the server, and IF EXISTS makes the retry
   harmless. Rejected: a readTimeout/writeTimeout in the DSN (it would also cut a legitimately long DROP of
   a big schema, and the user's DSN would override it).
+- **attention --json omits a zero since** (2026-10-09). attentionItem.Since was tagged omitempty, which
+  never omits a time.Time, so an item without a time printed "since": "0001-01-01T00:00:00Z". The tag is
+  now omitzero, as in prs --json.
 - **usage.codex_soft and codex_hard refuse nan** (2026-10-09, after an audit: TOML accepts `nan` for a
   float, and NaN passes both `< 0` and `> 100`, so a threshold that is not a number loaded silently. inf
   and -inf were already refused by the range check). validateUsage now refuses NaN and Inf with the range

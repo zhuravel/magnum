@@ -60,6 +60,48 @@ const (
 // evalRunsRoot is where runs live: state/eval/<run id>/.
 func evalRunsRoot(l paths.Layout) string { return filepath.Join(l.State(), "eval") }
 
+// evalSystem holds the process-level seams of `magnum eval run`.
+type evalSystem struct {
+	// Runner runs git in magnum's own checkout (evalMagnumCommit); nil
+	// means execx.Real.
+	Runner execx.Runner
+	// Now is the run's clock: its id, its start and end, its cases' times.
+	Now func() time.Time
+}
+
+// evalSys is the real system; tests replace it.
+var evalSys = evalSystem{Now: time.Now}
+
+// evalRunIDFormat is a run id's time part: sortable, to the second.
+const evalRunIDFormat = "20060102-150405"
+
+// evalNewRunDir creates the directory of a run started at now under root
+// and returns the run's id and directory. The id is now to the second, with
+// "-2", "-3"... when a run started in the same second holds it (os.Mkdir
+// fails with ErrExist), so no two runs share a directory, a record or an
+// agent tag (evalAgentTag).
+func evalNewRunDir(root string, now time.Time) (id, dir string, err error) {
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return "", "", err
+	}
+	base := now.Format(evalRunIDFormat)
+	for n := 1; n <= 100; n++ {
+		id = base
+		if n > 1 {
+			id = fmt.Sprintf("%s-%d", base, n)
+		}
+		dir = filepath.Join(root, id)
+		mkErr := os.Mkdir(dir, 0o700)
+		if mkErr == nil {
+			return id, dir, nil
+		}
+		if !errors.Is(mkErr, fs.ErrExist) {
+			return "", "", mkErr
+		}
+	}
+	return "", "", fmt.Errorf("no free run id for %s under %s", base, inspTilde(root))
+}
+
 // evalAgentTag tags the agents of run id (agents.Deps.Tag): "eval-" and the
 // first 6 hex digits of the id's SHA-256, the same for all the run's cases.
 // The tag joins the agents' names' hash, so they are named apart from the
@@ -191,16 +233,18 @@ func runEvalRun(c *Context, f evalRunFlags) int {
 	ctx, stop := signalContext()
 	defer stop()
 
-	run := eval.Run{
-		ID: time.Now().Format("20060102-150405"), Label: f.label, Corpus: path, Started: time.Now(),
-		Models: evalModels(c.Config), Inputs: evalInputs(c.Config), NoNotes: f.noNotes, // eval_inputs.go
-	}
-	r := &evalRunner{c: c, cfg: c.Config, flags: f, out: c.Stdout, tag: evalAgentTag(run.ID)}
-	run.Commit, run.Dirty = evalMagnumCommit(ctx, c)
-	r.dir = filepath.Join(evalRunsRoot(c.Layout), run.ID)
-	if err := os.MkdirAll(r.dir, 0o700); err != nil {
+	now := evalSys.Now
+	started := now()
+	id, dir, err := evalNewRunDir(evalRunsRoot(c.Layout), started)
+	if err != nil {
 		return cmdFail(c, "eval run", err)
 	}
+	run := eval.Run{
+		ID: id, Label: f.label, Corpus: path, Started: started,
+		Models: evalModels(c.Config), Inputs: evalInputs(c.Config), NoNotes: f.noNotes, // eval_inputs.go
+	}
+	r := &evalRunner{c: c, cfg: c.Config, flags: f, out: c.Stdout, dir: dir, tag: evalAgentTag(run.ID)}
+	run.Commit, run.Dirty = evalMagnumCommit(ctx, c)
 	fmt.Fprintf(c.Stdout, "eval run %s: %d case(s), corpus %s, results in %s\n", run.ID, len(cases), inspTilde(path), inspTilde(r.dir))
 	flagged, err := eval.LoadFlagged(evalRunsRoot(c.Layout)) // eval/flagged.go: refused replays are never run again
 	if err != nil {
@@ -208,7 +252,7 @@ func runEvalRun(c *Context, f evalRunFlags) int {
 	}
 	stopped := ""
 	for i, ec := range cases {
-		cr := eval.CaseRun{Case: ec.Name, PR: ec.PR, Head: ec.Head, Started: time.Now()}
+		cr := eval.CaseRun{Case: ec.Name, PR: ec.PR, Head: ec.Head, Started: now()}
 		refused := ""
 		if f, ok := eval.FlaggedCase(flagged, ec); ok {
 			refused = f.Refusal()
@@ -228,7 +272,7 @@ func runEvalRun(c *Context, f evalRunFlags) int {
 			cr = r.runCase(ctx, ec, cr)
 			if cr.Outcome == pipeline.OutcomeRefused {
 				if err := eval.MarkFlagged(evalRunsRoot(c.Layout), eval.Flagged{Case: ec.Name, PR: ec.PR, Head: ec.Head, Run: run.ID,
-					Reason: cr.Error, At: time.Now()}); err != nil {
+					Reason: cr.Error, At: now()}); err != nil {
 					fmt.Fprintf(c.Stderr, "magnum eval run: %v\n", err)
 				}
 			}
@@ -239,7 +283,7 @@ func runEvalRun(c *Context, f evalRunFlags) int {
 				stopped = cr.Error
 			}
 		}
-		cr.Finished = time.Now()
+		cr.Finished = now()
 		run.Cases = append(run.Cases, cr)
 		if err := eval.SaveRun(r.dir, run); err != nil {
 			fmt.Fprintf(c.Stderr, "magnum eval run: saving the run: %v\n", err)
@@ -248,7 +292,7 @@ func runEvalRun(c *Context, f evalRunFlags) int {
 			fmt.Fprintf(c.Stdout, "      %s\n", evalCaseLine(cr))
 		}
 	}
-	run.Finished = time.Now()
+	run.Finished = now()
 	if err := evalWriteReports(r.dir, run); err != nil {
 		return cmdFail(c, "eval run", err)
 	}
@@ -505,7 +549,11 @@ func evalMagnumCommit(ctx context.Context, c *Context) (string, bool) {
 	if c.Layout.Home == "" {
 		return c.Version, false // an installed binary: its version names the prompts and skill it embeds
 	}
-	g := gitx.New(&execx.Real{})
+	run := evalSys.Runner
+	if run == nil {
+		run = &execx.Real{}
+	}
+	g := gitx.New(run)
 	sha, err := g.RevParse(ctx, c.Layout.Home, "HEAD")
 	if err != nil {
 		return "", false
@@ -595,6 +643,9 @@ func evalFindRun(l paths.Layout, pos []string) (eval.Run, error) {
 	}
 	if len(pos) == 0 {
 		return runs[len(runs)-1], nil
+	}
+	if i := slices.IndexFunc(runs, func(r eval.Run) bool { return r.ID == pos[0] }); i >= 0 {
+		return runs[i], nil // a whole id, which may also prefix a later run's of the same second
 	}
 	matches := slices.DeleteFunc(slices.Clone(runs), func(r eval.Run) bool { return !strings.HasPrefix(r.ID, pos[0]) })
 	switch len(matches) {

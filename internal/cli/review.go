@@ -22,7 +22,7 @@ import (
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
-const reviewUsage = "review <url|owner/repo#N|repo#N|N> [--fresh] [--role <role>]... [--simplify] [--replies] [--as <identity>] [--no-post] [--focus] [--wait] [--timeout <duration>] [--dry-run] [--json]"
+const reviewUsage = "review <url|owner/repo#N|repo#N|N> [--fresh] [--role <role>]... [--simplify] [--replies] [--as <identity>] [--no-post] [--focus] [--wait] [--timeout <duration>] [--dry-run] [--json] [--workspace id] [--cwd path]"
 
 const (
 	// reviewDefaultTimeout is how long --wait/--focus follow a round by default.

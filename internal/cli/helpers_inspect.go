@@ -30,8 +30,12 @@ var (
 	inspAppHook func(*app.Options)
 	// inspStdin is where confirmations are read from.
 	inspStdin io.Reader = os.Stdin
-	// inspIsTTY reports whether confirmations can be asked.
+	// inspIsTTY reports whether stdin, where confirmations are read, is a
+	// terminal.
 	inspIsTTY = func() bool { return app.Interactive(os.Stdin) }
+	// inspStderrTTY reports whether w, the command's stderr, where
+	// confirmations are asked, is a terminal.
+	inspStderrTTY = actIsTTY
 	// inspNow is the CLI clock.
 	inspNow = time.Now
 	// inspPoll is the interval for request polling and log following.
@@ -185,15 +189,22 @@ func inspPrompt() *promptIn {
 	return inspIn
 }
 
-// inspConfirm asks a y/N question on a terminal; false when not a terminal
-// (and on ctrl+c: callers check ctx.Err()).
+// inspCanAsk reports whether a confirmation can be asked: stdin and stderr
+// are terminals. Questions go to stderr, so a redirected stdout (the plan
+// written to a file) never hides one; a redirected stderr would, so then
+// nothing is asked.
+func inspCanAsk(c *Context) bool { return inspIsTTY() && inspStderrTTY(c.Stderr) }
+
+// inspConfirm asks a y/N question on stderr; false when it cannot ask
+// (inspCanAsk) and on ctrl+c (callers check ctx.Err()).
 func inspConfirm(ctx context.Context, c *Context, question string) bool {
-	return inspIsTTY() && inspPrompt().confirm(ctx, c.Stdout, question)
+	return inspCanAsk(c) && inspPrompt().confirm(ctx, c.Stderr, question)
 }
 
-// inspConfirmTyped asks the user to type want exactly (terminal only).
+// inspConfirmTyped asks the user, on stderr, to type want exactly (only when
+// inspCanAsk).
 func inspConfirmTyped(ctx context.Context, c *Context, question, want string) bool {
-	return inspIsTTY() && inspPrompt().confirmTyped(ctx, c.Stdout, question, want)
+	return inspCanAsk(c) && inspPrompt().confirmTyped(ctx, c.Stderr, question, want)
 }
 
 // inspRequests is the request client (request_client.go) of the inspect

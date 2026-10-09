@@ -262,6 +262,9 @@ func actTerminal(f *os.File) bool { return app.Interactive(f) }
 
 // --- flags and output ---
 
+// actUsage prints a usage error of command cmd and returns exit code 2.
+// usage is the command's whole usage line after "magnum " (its cobra Use,
+// which starts with the command's name).
 func actUsage(c *Context, cmd, msg, usage string) int {
 	fmt.Fprintf(c.Stderr, "magnum %s: %s\nusage: magnum %s\n", cmd, msg, usage)
 	return 2

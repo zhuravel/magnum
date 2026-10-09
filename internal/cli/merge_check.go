@@ -106,8 +106,11 @@ func runMergeCheck(c *Context, o mergeCheckOpts, pos []string) int {
 		return cmdFail(c, name, err)
 	case who == opsBusy:
 		return cmdFail(c, name, opsBusyErr(c.Layout))
-	case who == opsMine:
+	case who == opsMine && unlock != nil:
 		defer unlock()
+	case who == opsDaemon: // the daemon runs: the check works beside it, on a slot it holds in the registry
+	default:
+		return cmdFail(c, name, opsHolderErr(who))
 	}
 	if mergedPR > 0 {
 		if mergedSHA, err = mergeCommitOf(ctx, a, pool.Repo, mergedPR); err != nil {
