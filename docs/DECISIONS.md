@@ -5665,3 +5665,14 @@ skill versions, which its first entry creates); people add theirs to the section
   exempts the goldens because the gate rewrites them. Rejected: `-update` over the whole package (it
   rewrites `skill_pins.txt` from whatever pins the run recorded) and moving those cases into
   `TestRenderGolden`'s table (they check more than the golden).
+- **Every phrase a test wants SKILL.md to hold is a pin** (2026-10-09, a review finding on stage 3 of
+  the self-improving review loop). The pins the skill editor reads came only from `skillSays`, and five
+  checks of the skill went around it: the `<magnum>` fields of `TestSkillDescribesEveryMagnumField`,
+  the notes procedure (`notes_lock`, `notes_unlock`, the notes header line), the own pass, "first
+  clause", and internal/pipeline's parse of section 8's example result file. An editor that dropped
+  `notes_unlock` to fit under the cap passed `learn.ValidateEdit`, failed the gate's tests and spent its
+  one nudge on it. Those tests now call `skillSays`, and `TestSkillKeepsTheExampleResultOfSection8`
+  pins the section's heading and every line of its example (the pipeline package cannot record pins).
+  A pin cannot start with "#", the pins file's comments, so the notes header is pinned without it and
+  checked whole as before. Rejected: recording pins from internal/pipeline (each package's test binary
+  has its own, and the pins file is one package's output).

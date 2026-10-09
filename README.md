@@ -1676,8 +1676,9 @@ gives it `inputs.json` (every such miss and decline still `new`, by id: `m<n>` a
 severity or posted priority, title, lesson and patterns, scrubbed of logins, pull request references,
 links and repository names again; your reasons for rejecting earlier proposals; the numbers of the last
 three landed versions, as `magnum learn` shows them; the skill's size and cap)
-and `pins.json` (the sentences 41 skill tests pin, from `internal/agents/testdata/skill_pins.txt`, which
-`go test ./internal/agents -update` regenerates, and the skill's cap).
+and `pins.json` (every phrase the skill tests want the skill to hold, the example result file of its
+section 8 included, from `internal/agents/testdata/skill_pins.txt`, which `go test ./internal/agents
+-update` regenerates, and the skill's cap).
 
 It may change `skills/magnum-review/SKILL.md`, `prompts/judge-*.md` and `prompts/claude-*.md` only, and
 writes `changes.json` in the worktree: every input noted (where the change covers it) or skipped (why), and
