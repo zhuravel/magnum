@@ -72,11 +72,12 @@ them.
 
 A judge-only replay (`magnum eval run --judge-only`, `engine.RunEval` with `JudgeOnly`) runs the judge
 alone. It takes the reviewer reports of the newest full replay of the same case with the same head
-(`<run>/cases/<case>/reviews/...` of a run whose `outcome` was a scored dry run), copies them into the
-scratch report directory, seeds the reviewer runs in the scratch registry as verified with those report
-paths, and runs the judge the way a same-head judge-only round runs it (its own pass included). A case
-without a stored full replay is refused with a message that names the run needed. `run.json` records
-`judge_only` and the run the reports came from.
+(`<run>/cases/<case>/reviews/...` of a run whose `outcome` was a scored dry run and whose reviewers read
+what the replay's would: the same reviewer prompts and role config, `reviewer_inputs` in `run.json`, and
+the same notes setting), copies them into the scratch report directory, seeds the reviewer runs in the
+scratch registry as verified with those report paths, and runs the judge the way a same-head judge-only
+round runs it (its own pass included). A case without a stored full replay is refused with a message
+that names the run needed. `run.json` records `judge_only` and the run the reports came from.
 
 A candidate is selected with `--candidate <dir>`: a checkout or worktree whose `prompts/` and
 `skills/magnum-review/SKILL.md` are used in place of the binary's, through a config copy with
@@ -85,11 +86,14 @@ baselines match by content. The daemon runs the same code in-process (no build):
 takes the candidate directory.
 
 The learned corpus is `<data dir>/learn/corpus.toml`, written by the daemon and read by `eval` after the
-operator's corpus (a case name in both is an error). It holds one case per P0 to P2 general miss and per
-`wrong` or `over_ranked` general decline whose PR is in a watch and is not Codex-flagged: `miss-<id>` with
-a found defect, `decline-<id>` with an absent defect, head = the reviewed commit, paths = the path, lines,
-match and severity from the row, `why` = the title. A case is written when the row is stored and removed
-when the row is dismissed. `eval.WriteCorpus` encodes a corpus. `LoadCorpora` merges the two files.
+operator's default corpus (a case name in both is an error; `--corpus FILE` is read alone, and `eval
+run` counts the learned cases it replays on its start line). It holds one case per P0 to P2 general miss
+and per `wrong` or `over_ranked` general decline whose PR is in a watch and is not Codex-flagged:
+`miss-<id>` with a found defect, `decline-<id>` with an absent defect (an over-ranked one a hit only at
+the posted priority or stronger, and no case when that priority is unknown), head = the reviewed commit,
+paths = the path, lines, match and severity from the row, `why` = the title. A case is written when the
+retro that stored the row ends, and removed when the decision that dismissed the row rewrites the file
+(or at the next retro). `eval.WriteCorpus` encodes a corpus. `LoadCorpora` merges the two files.
 
 ## 3. The editor
 
