@@ -230,6 +230,8 @@ func (e *Engine) handleRequest(ctx context.Context, req store.Request) {
 		answer(e, ctx, req, e.requestSnooze)
 	case ReqCodexFlag: // codex_flag.go
 		answer(e, ctx, req, e.requestCodexFlag)
+	case ReqFix: // fix.go
+		answer(e, ctx, req, e.requestFix)
 	case ReqApprove, ReqRequestChanges:
 		event := map[string]string{ReqApprove: "APPROVE", ReqRequestChanges: "REQUEST_CHANGES"}[req.Kind]
 		answer(e, ctx, req, func(ctx context.Context, p VerdictPayload) (string, error) {
@@ -388,6 +390,12 @@ func (e *Engine) requestReview(ctx context.Context, p ReviewPayload) (string, er
 	if why := e.codexFlagRefusal(ctx, label, pr); why != "" { // codex_flag.go
 		return "", errors.New(why)
 	}
+	switch st, fixing, err := e.fixState(ctx, pr.ID); { // fix.go: the loop forces its own re-review
+	case err != nil:
+		return "", fmt.Errorf("%s: %w", label, err)
+	case fixing:
+		return "", fmt.Errorf("%s: %s", label, fixRunningSentence(st))
+	}
 	w := e.cfg.WatchFor(repo.FullName())
 	merged := postMerge(pr)
 	switch {
@@ -471,7 +479,9 @@ func (e *Engine) requestReview(ctx context.Context, p ReviewPayload) (string, er
 // rereview_pending), which Candidates then puts first, with what p asks for
 // it (a dry run, fresh sessions, the requested roles, a re-decision of the
 // replies, a posting identity). by names who asks in the pr.forced event
-// ("magnum review"). It returns the state the PR moved to.
+// ("magnum review"; "magnum fix" for the fix loop's re-review, which calls it
+// directly: the loop's own review is not refused while the loop runs). It
+// returns the state the PR moved to.
 func (e *Engine) forceReview(ctx context.Context, repo store.Repo, pr store.PR, p ReviewPayload, requested []string, by string) (string, error) {
 	// The dry-run marker is settled before the PR is forced: a forced PR
 	// must never run in the wrong mode because a kv write failed.

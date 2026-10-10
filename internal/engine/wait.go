@@ -58,6 +58,7 @@ const (
 	WaitSlot          = "slot"           // the PR's slot, or a free pool slot
 	WaitPinned        = "pinned"         // the PR's slot is pinned (magnum open, magnum pin): the round waits for the unpin
 	WaitCapacity      = "capacity"       // max_concurrent_reviews or max_total_working_codex
+	WaitFixing        = "fixing"         // the fix job's fixer works on the PR (fix.go): its re-review comes after
 	WaitOther         = "other"          // any other dispatch gate (details, a human, a paused watch, ...)
 	WaitNext          = "next"           // nothing holds it: the next dispatch starts it
 )
@@ -68,8 +69,8 @@ type Wait struct {
 	Rereview bool      `json:"rereview"`
 	Forced   bool      `json:"forced,omitempty"`
 	Until    time.Time `json:"until,omitzero"`  // when it ends, when known
-	Count    int       `json:"count,omitempty"` // WaitCap: automatic rounds today; WaitDelta: changed lines; WaitRetry: the attempt to come
-	Max      int       `json:"max,omitempty"`   // WaitCap: the cap; WaitDelta: rereview_min_lines; WaitRetry: the attempts allowed
+	Count    int       `json:"count,omitempty"` // WaitCap: automatic rounds today; WaitDelta: changed lines; WaitRetry: the attempt to come; WaitFixing: the fix cycle
+	Max      int       `json:"max,omitempty"`   // WaitCap: the cap; WaitDelta: rereview_min_lines; WaitRetry: the attempts allowed; WaitFixing: fix_cycles
 	// Subject is WaitKind's paused kind, WaitRequested's Request.Phrase,
 	// WaitRetry's cause in a word or two (retryCause) and WaitPinned's pin
 	// origin ("magnum open"; "" when unknown).
@@ -207,6 +208,8 @@ func (w Wait) short(now time.Time, cause bool) string {
 		what = "slot"
 	case WaitCapacity:
 		what = "capacity"
+	case WaitFixing:
+		what = "fixing"
 	case WaitNext:
 		what = "next tick"
 	default:
@@ -273,6 +276,8 @@ func (w Wait) Sentence(ref string, now time.Time) string {
 		s += "; `magnum unpin " + ref + "` lets it run (a pin never lapses by itself)"
 	case w.Reason == WaitPaused || w.Reason == WaitInfra || w.Reason == WaitKind:
 		s += "; `magnum resume` lifts the pause"
+	case w.Reason == WaitFixing && ref != "":
+		s += "; `magnum abort " + ref + "` stops the fixer"
 	}
 	return s
 }
@@ -321,7 +326,8 @@ func (e *Engine) globalWait(ctx context.Context, ts tickState, now time.Time) *W
 	return nil
 }
 
-// waitFor is why pr waits: its retry backoff, then the timing rules
+// waitFor is why pr waits: its fix loop's fixer at work (fixWaitOf), its
+// retry backoff, then the timing rules
 // (eligibility.Throttle, unless forced), then a mute, quiet hours (unless
 // the round runs the judge alone: a delta check, or a re-review of the same
 // head, a reply round's included; quietHoursGate), what holds every PR
@@ -343,6 +349,9 @@ func (e *Engine) waitFor(ctx context.Context, pr store.PR, global *Wait, now tim
 	with := func(w Wait) Wait {
 		w.Rereview, w.Forced, w.PostMerge, w.DeltaCheck, w.Replies = base.Rereview, base.Forced, base.PostMerge, base.DeltaCheck, base.Replies
 		return w
+	}
+	if fw, ok := e.fixWaitOf(ctx, pr.ID); ok {
+		return with(fw) // nothing starts while the fixer works (fixHolds)
 	}
 	if pr.NextAttemptAt != nil && pr.NextAttemptAt.After(now) {
 		return with(Wait{Reason: WaitRetry, Until: *pr.NextAttemptAt, Count: pr.Attempts + 1, Max: maxAttempts,

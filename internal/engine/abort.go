@@ -98,10 +98,13 @@ func (e *Engine) requestAbort(ctx context.Context, id int64, p TargetPayload, ig
 	case held && !h.open && !h.stop.ended && !h.stop.stopping:
 		h.stop.reqs = append(h.stop.reqs, stopOrder{id: id, ignore: ignore})
 		e.inflight[id] = true
-		cancel := h.cancel
+		cancel, what := h.cancel, "the running review"
+		if h.fix {
+			what = "the fixer" // the fix job serves the order (fix.go)
+		}
 		e.mu.Unlock()
 		cancel()
-		e.event(ctx, "info", prSubject(repo, pr.Number), "pr.abort_requested", fmt.Sprintf("magnum %s: stopping the running review", verb), nil)
+		e.event(ctx, "info", prSubject(repo, pr.Number), "pr.abort_requested", fmt.Sprintf("magnum %s: stopping %s", verb, what), nil)
 		return
 	case held:
 		why := "its round is ending"
@@ -123,6 +126,10 @@ func (e *Engine) requestAbort(ctx context.Context, id int64, p TargetPayload, ig
 	queued := pr.State == store.PRQueued || pr.State == store.PRRereviewPending
 	switch {
 	case !ignore && !stale && !queued:
+		if note := e.endFixLoop(ctx, repo, pr, "magnum abort"); note != "" { // a loop between its steps (fix_settle.go)
+			e.complete(ctx, id, nil, "aborted "+label+": "+note)
+			return
+		}
 		e.complete(ctx, id, fmt.Errorf("no review of %s is running or queued (state %s)", label, pr.State), "")
 		return
 	case e.d.DryRun:
@@ -138,6 +145,11 @@ func (e *Engine) requestAbort(ctx context.Context, id int64, p TargetPayload, ig
 	}
 	if queued && !ignore {
 		res, err := e.dropQueued(ctx, repo, pr)
+		if err == nil {
+			if note := e.endFixLoop(ctx, repo, pr, "magnum abort"); note != "" { // the loop's re-review taken back
+				res += "; " + note
+			}
+		}
 		e.unreserve(pr.ID)
 		cancel()
 		e.complete(ctx, id, err, res)
@@ -311,6 +323,9 @@ func (e *Engine) stopPR(ctx context.Context, prID int64, ignore, roundRan bool) 
 	}
 	e.delKV(ctx, store.KVPRDryRun(pr.ID), store.KVPRFresh(pr.ID), kvPRRedecide(pr.ID), store.KVPRGate(pr.ID), kvPRGateReason(pr.ID), KVPRWait(pr.ID))
 	e.clearRequested(ctx, pr.ID)
+	if note := e.endFixLoop(ctx, repo, pr, "magnum "+map[bool]string{false: "abort", true: "ignore"}[ignore]); note != "" {
+		done = append(done, note) // the loop whose re-review this was
+	}
 
 	if note, err := e.handBack(ctx, repo, pr, parked, label); err != nil {
 		problems = append(problems, err)
@@ -347,6 +362,12 @@ func (e *Engine) stopPR(ctx context.Context, prID int64, ignore, roundRan bool) 
 // alone: ctrl+c twice would quit it), and a shell role's pane gets ctrl+c.
 // It returns how many sessions it sent keys to.
 func (e *Engine) interruptPR(ctx context.Context, pr store.PR, w *config.Watch) int {
+	return e.interruptSessions(ctx, pr, w, "")
+}
+
+// interruptSessions is interruptPR for the sessions of role ("" = every
+// role's): the fix job interrupts its fixer alone.
+func (e *Engine) interruptSessions(ctx context.Context, pr store.PR, w *config.Watch, role string) int {
 	if e.d.Herdr == nil {
 		return 0
 	}
@@ -366,7 +387,7 @@ func (e *Engine) interruptPR(ctx context.Context, pr store.PR, w *config.Watch) 
 	}
 	n := 0
 	for _, s := range sessions {
-		if s.State != store.SessionLive && s.State != store.SessionStarting {
+		if s.State != store.SessionLive && s.State != store.SessionStarting || role != "" && s.Role != role {
 			continue
 		}
 		pane := deref(s.HerdrPaneID)

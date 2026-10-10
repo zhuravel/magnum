@@ -82,10 +82,12 @@ type roundJob struct {
 	evalStored bool
 }
 
-// roundHandle tracks a round goroutine or a `magnum open` restore.
+// roundHandle tracks a round goroutine, a `magnum open` restore or a fix
+// job.
 type roundHandle struct {
 	cancel context.CancelFunc
 	open   bool      // a magnum open restore, not a review round
+	fix    bool      // a fix job (fix.go), not a review round
 	stop   roundStop // magnum abort / ignore requests (abort.go)
 }
 
@@ -96,14 +98,14 @@ func (e *Engine) activeRounds() int {
 	return len(e.rounds)
 }
 
-// reviewRounds counts the review rounds (opens left out): what
+// reviewRounds counts the review rounds (opens and fix jobs left out): what
 // max_concurrent_reviews limits and the tab bar shows.
 func (e *Engine) reviewRounds() int {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	n := 0
 	for _, h := range e.rounds {
-		if !h.open {
+		if !h.open && !h.fix {
 			n++
 		}
 	}
@@ -174,6 +176,9 @@ func (e *Engine) heldReason(prID int64) string {
 	if why := e.evicting[prID]; why != "" {
 		return why
 	}
+	if h := e.rounds[prID]; h != nil && h.fix {
+		return "the fixer is at work (`magnum abort` stops it)"
+	}
 	return "round in progress"
 }
 
@@ -228,6 +233,9 @@ func (e *Engine) dispatch(ctx context.Context, ts tickState) {
 		}
 		if e.snoozeHolds(ctx, pr, now) {
 			continue // waitFor says why (snooze.go)
+		}
+		if e.fixHolds(ctx, pr) {
+			continue // waitFor says why (fix.go)
 		}
 		repo, err := e.st.RepoByID(ctx, pr.RepoID)
 		if err != nil {
@@ -377,7 +385,7 @@ func (e *Engine) plannedRounds() int {
 // prGate is why one PR may not start a round now (the zero gate = go).
 func (e *Engine) prGate(ctx context.Context, pr store.PR, repo store.Repo, w *config.Watch, ts tickState, now time.Time) gate {
 	if e.roundActive(pr.ID) {
-		return otherGate("round in progress")
+		return otherGate(e.heldReason(pr.ID)) // a round, or the fix job
 	}
 	if ts.busyPR[pr.ID] {
 		return otherGate("an agent of the PR is working or blocked")

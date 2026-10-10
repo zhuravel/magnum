@@ -1,0 +1,770 @@
+package engine
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/zhuravel/magnum/internal/agents"
+	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/herdr"
+	"github.com/zhuravel/magnum/internal/slots"
+	"github.com/zhuravel/magnum/internal/store"
+)
+
+const (
+	// fixHead is the head magnum reviewed, which the fixer starts from.
+	fixHead = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+	// fixPushed is the head the fixer pushes.
+	fixPushed = "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+	// fixReviewURL is the review the fixer fixes.
+	fixReviewURL = "https://github.com/talkable/talkable/pull/2#pullrequestreview-101"
+	// fixReplied is a report's "## Replied" line.
+	fixReplied = "3 threads (2 fixed, 0 already fixed, 1 not a bug, 0 won't fix)"
+)
+
+// fixGit is the engine's git for the fix job's tests: HEAD in the slot is
+// head (the reviewed head until the fake fixer commits), every other ref
+// fakeGit's.
+type fixGit struct {
+	fakeGit
+	mu   sync.Mutex
+	head string
+}
+
+func (g *fixGit) setHead(sha string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.head = sha
+}
+
+func (g *fixGit) RevParse(ctx context.Context, dir, ref string) (string, error) {
+	g.mu.Lock()
+	head := g.head
+	g.mu.Unlock()
+	if ref == "HEAD" && head != "" {
+		return head, nil
+	}
+	return g.fakeGit.RevParse(ctx, dir, ref)
+}
+
+// fixHarness is a harness whose configuration declares the fix role's
+// identity, me (the operator's gh login), and whose git knows the slot's
+// HEAD.
+func fixHarness(t *testing.T, mods ...func(*harness)) (*harness, *fixGit) {
+	t.Helper()
+	git := &fixGit{head: fixHead}
+	h := newHarness(t, append([]func(*harness){func(h *harness) {
+		h.cfg.Identities = append(h.cfg.Identities, config.Identity{Name: "me", Kind: "gh", Login: "zhuravel"})
+		me := &fakeIdentity{name: "me", login: "zhuravel", kind: "gh"}
+		h.ids["me"] = me
+		h.d.Identities["me"] = me
+		h.d.Git = git
+	}}, mods...)...)
+	return h, git
+}
+
+// realSleep makes the engine's waits take a real millisecond each: the fix
+// job's wait then polls its run until the fake fixer ends it, or the test
+// stops the job, without spinning.
+func realSleep(h *harness) {
+	h.d.Sleep = func(ctx context.Context, _ time.Duration) error {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Millisecond):
+			return nil
+		}
+	}
+}
+
+// fixablePR opens PR #2 by author at fixHead, has it reviewed and, with
+// findings (nil = none recorded), records the posted review's judge run with
+// those findings: the state `magnum fix` starts from.
+func fixablePR(h *harness, author string, findings map[string]int) store.PR {
+	h.t.Helper()
+	h.open(prSpec{n: 1, head: "base1"})
+	h.startup()
+	h.tick() // first sync: #1 baseline
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: fixHead, author: author})
+	h.tick() // #2 queued
+	h.advance(5 * time.Minute)
+	h.tick() // dispatched and reviewed
+	pr := h.wantState(2, store.PRReviewed)
+	if findings == nil {
+		return pr
+	}
+	result, err := json.Marshal(map[string]any{"event": "COMMENTED", "findings": findings})
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	if _, err := h.st.DB().ExecContext(h.ctx, `INSERT INTO runs (id, pr_id, round, role, kind, target_sha, identity, reviewer_login,
+  state, outcome, review_id, review_url, prompt_text, result_json, created_at)
+  VALUES ('run-review-2', ?, 1, 'codex-judge', 'initial', ?, ?, 'talkable[bot]', 'verified', 'posted', 101, ?, 'p', ?, ?)`,
+		pr.ID, pr.HeadSHA, pr.Identity, fixReviewURL, string(result), store.FormatTime(h.clock.Now())); err != nil {
+		h.t.Fatal(err)
+	}
+	return pr
+}
+
+// fixReport is a fixer's report of run runID.
+func fixReport(runID, pushed, replied, needs string) string {
+	return agents.ReportMarker(runID) + "\n## Pushed\n" + pushed + "\n## Replied\n" + replied + "\n## Needs you\n" + needs + "\n"
+}
+
+// fixer makes h's fake fixer: once its prompt is sent it writes report(run)
+// to the run's report path ("" = it writes none), moves the slot's HEAD to
+// head as its commits do ("" = it commits nothing) and ends its run, as the
+// observer does after two idle ticks.
+func fixer(h *harness, git *fixGit, head string, report func(run store.Run) string) {
+	h.ag.mu.Lock()
+	defer h.ag.mu.Unlock()
+	h.ag.onSubmit = func(run store.Run, _ string) {
+		if text := report(run); text != "" {
+			path := deref(run.ReportPath)
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				h.t.Error(err)
+				return
+			}
+			if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+				h.t.Error(err)
+				return
+			}
+		}
+		if head != "" {
+			git.setHead(head)
+		}
+		if err := h.st.TransitionRun(h.ctx, run.ID, []string{store.RunWorking}, store.RunEnded, func(u *store.RunUpdate) {
+			u.Set("ended_at", h.clock.Now())
+		}); err != nil {
+			h.t.Error(err)
+		}
+	}
+}
+
+// fixRuns are the PR's runs of kind fix, oldest first.
+func (h *harness) fixRuns(prID int64) []store.Run {
+	h.t.Helper()
+	runs, err := h.st.RunsByPR(h.ctx, prID)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return slices.DeleteFunc(runs, func(r store.Run) bool { return r.Kind != store.RunFix })
+}
+
+// fix asks for a fix loop on PR #2 and returns the request.
+func (h *harness) fix(p FixPayload) int64 {
+	h.t.Helper()
+	p.PRTarget = PRTarget{Ref: "2"}
+	return h.enqueue(ReqFix, p)
+}
+
+// wantDone fails unless request id is done and returns its answer.
+func (h *harness) wantDone(id int64) string {
+	h.t.Helper()
+	r := h.request(id)
+	if r.State != store.RequestDone {
+		h.t.Fatalf("request %d: %s %q", id, r.State, deref(r.Result))
+	}
+	return deref(r.Result)
+}
+
+// fixStateOf is PR #n's fix loop (ok false: none).
+func (h *harness) fixStateOf(n int) (FixState, bool) {
+	h.t.Helper()
+	st, ok, err := h.e.fixState(h.ctx, h.pr(n).ID)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return st, ok
+}
+
+// fixEvent is PR #2's newest event of kind (ok false: none).
+func (h *harness) fixEvent(kind string) (store.Event, bool) {
+	h.t.Helper()
+	evs, err := h.st.EventsBySubject(h.ctx, "pr:talkable/talkable#2", 0)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	for _, ev := range slices.Backward(evs) {
+		if ev.Kind == kind {
+			return ev, true
+		}
+	}
+	return store.Event{}, false
+}
+
+// wantReportInData fails unless PR #2's event kind names report in its data.
+func (h *harness) wantReportInData(kind, report string) {
+	h.t.Helper()
+	ev, ok := h.fixEvent(kind)
+	if !ok {
+		h.t.Fatalf("no %s event", kind)
+	}
+	var data map[string]any
+	if err := json.Unmarshal(ev.Data, &data); err != nil || data["report"] != report {
+		h.t.Errorf("%s data = %s, want report %s", kind, ev.Data, report)
+	}
+}
+
+// awaitSubmit waits until the fix job sent its prompt.
+func (h *harness) awaitSubmit() {
+	h.t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); h.ag.count("submit:claude-fix:") == 0; time.Sleep(2 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			h.t.Fatalf("the fixer's prompt was never sent: %v", h.ag.all())
+		}
+	}
+}
+
+// A `magnum fix` on the operator's reviewed PR starts the fix job: the loop's
+// row says fixing, cycle 1 of 3, the fixer's run of kind fix is submitted in
+// the review's round with the prompt's facts, the fixer's pane acts as the
+// operator (not as the posting App), dispatch holds a push to the PR with
+// WaitFixing, and `magnum review` and a second `magnum fix` are refused.
+func TestAFixRequestStartsTheJobAndHoldsThePR(t *testing.T) {
+	h, git := fixHarness(t, realSleep)
+	pr := fixablePR(h, "zhuravel", map[string]int{"P2": 2})
+	slot := h.slot("review1")
+
+	id := h.fix(FixPayload{})
+	h.e.handleRequests(h.ctx) // the job runs on: the fixer works
+	if res := h.wantDone(id); !strings.Contains(res, "cycle 1 of 3") || !strings.Contains(res, "claude-fix") {
+		t.Errorf("answer = %q", res)
+	}
+	h.awaitSubmit()
+
+	st, ok := h.fixStateOf(2)
+	if !ok || st.Cycle != 1 || st.Cap != 3 || st.Phase != FixPhaseFixing || st.By != "magnum fix" || st.Head != fixHead || st.Since != fixHead {
+		t.Fatalf("fix state = %+v, %v", st, ok)
+	}
+	runs := h.fixRuns(pr.ID)
+	if len(runs) != 1 {
+		t.Fatalf("fix runs = %+v", runs)
+	}
+	run := runs[0]
+	wantReport := filepath.Join(h.layout.ReviewDir("talkable", "talkable", 2, fixHead), "claude-fix.md")
+	if run.Role != "claude-fix" || run.Round != 1 || run.State != store.RunWorking || deref(run.ReportPath) != wantReport || st.Report != wantReport {
+		t.Errorf("fix run = %+v (report %s), state report %s", run, deref(run.ReportPath), st.Report)
+	}
+	reviewFile := filepath.Join(h.layout.ReviewDir("talkable", "talkable", 2, fixHead), "review.json")
+	wantPrompt := fmt.Sprintf("fix_prompt:claude-fix:%s|feature|%s|%s|talkable[bot]|%s", run.ID, fixReviewURL, reviewFile,
+		agents.DBLockLine(h.layout.Binary(), slot.Path, "claude-fix"))
+	if !slices.Contains(h.ag.all(), wantPrompt) {
+		t.Errorf("no %q in %v", wantPrompt, h.ag.all())
+	}
+	if !h.lastWorkspaceHas(pr.ID, "claude-fix") {
+		t.Error("the PR's workspace has no claude-fix pane")
+	}
+	if judge, fix := h.ag.paneEnv("codex-judge"), h.ag.paneEnv("claude-fix"); judge["GH_CONFIG_DIR"] != "/state/gh/talkable-app" || fix == nil {
+		t.Errorf("pane envs: judge %v, fixer %v", judge, fix)
+	} else if _, ok := fix["GH_CONFIG_DIR"]; ok || fix["WT_BRANCH"] != "review1" {
+		t.Errorf("the fixer's pane env %v acts as the posting App, or lost the slot's env", fix)
+	}
+	if !h.hasEvent("pr:talkable/talkable#2", "fix.start") {
+		t.Error("no fix.start event")
+	}
+	if got := deref(h.slot("review1").LastUsedAt); !got.Equal(h.clock.Now()) {
+		t.Errorf("slot last_used_at = %v, want the fix's start %v", got, h.clock.Now())
+	}
+
+	// Someone pushes meanwhile: the re-review waits for the fixer.
+	rounds := len(h.rd.all())
+	h.advance(time.Hour)
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: "c3c3c3c", author: "zhuravel"})
+	if err := h.e.Tick(h.ctx); err != nil {
+		t.Fatal(err)
+	}
+	h.wantState(2, store.PRRereviewPending)
+	if w := waitOf(t, h, 2); w.Reason != WaitFixing || !strings.Contains(w.Sentence("talkable/talkable#2", h.clock.Now()), "magnum abort") {
+		t.Errorf("wait = %+v", w)
+	}
+	if got := len(h.rd.all()); got != rounds {
+		t.Errorf("rounds = %d, want %d: a round started while the fixer works", got, rounds)
+	}
+
+	review := h.enqueue(ReqReview, ReviewPayload{PRTarget: PRTarget{Ref: "2"}})
+	again := h.fix(FixPayload{})
+	h.e.handleRequests(h.ctx)
+	for _, id := range []int64{review, again} {
+		if r := h.request(id); r.State != store.RequestFailed || !strings.Contains(deref(r.Result), "fixing, cycle 1 of 3; `magnum abort` stops it") {
+			t.Errorf("request %d: %s %q", id, r.State, deref(r.Result))
+		}
+	}
+
+	// The fixer ends without pushing: the loop ends and the PR is free.
+	git.setHead(fixHead)
+	if err := os.MkdirAll(filepath.Dir(wantReport), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(wantReport, []byte(fixReport(run.ID, "nothing", fixReplied, "none")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.TransitionRun(h.ctx, run.ID, []string{store.RunWorking}, store.RunEnded, nil); err != nil {
+		t.Fatal(err)
+	}
+	h.settle()
+	if _, ok := h.fixStateOf(2); ok {
+		t.Error("the loop's row outlived the job")
+	}
+}
+
+// The request names why it will not start a loop.
+func TestFixRefusals(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		author   string
+		findings map[string]int
+		noMe     bool
+		mod      func(h *harness, pr store.PR)
+		want     string
+	}{
+		{name: "no review", author: "zhuravel", want: "nothing to fix: no review on a1a1a1a"},
+		{name: "found nothing", author: "zhuravel", findings: map[string]int{}, want: "nothing to fix: the review on a1a1a1a found nothing"},
+		{name: "another author", author: "alice", findings: map[string]int{"P1": 1},
+			want: "PR #2 is alice's, not yours; the fixer pushes and replies as you"},
+		{name: "fork", author: "zhuravel", findings: map[string]int{"P1": 1}, mod: func(h *harness, pr store.PR) {
+			if err := h.st.UpdatePR(h.ctx, pr.ID, func(u *store.PRUpdate) { u.Set("is_cross_repo", true) }); err != nil {
+				h.t.Fatal(err)
+			}
+		}, want: "the head lives in a fork magnum cannot push to"},
+		{name: "running", author: "zhuravel", findings: map[string]int{"P1": 1}, mod: func(h *harness, pr store.PR) {
+			if err := h.e.setFixState(h.ctx, pr.ID, FixState{Cycle: 2, Cap: 3, Phase: FixPhaseReviewing}); err != nil {
+				h.t.Fatal(err)
+			}
+		}, want: "fixing, cycle 2 of 3; `magnum abort` stops it"},
+		{name: "no fix role", author: "zhuravel", findings: map[string]int{"P1": 1}, mod: func(h *harness, _ store.PR) {
+			h.cfg.Watches[0].FixRole = new("")
+		}, want: "no fix role for talkable/talkable"},
+		{name: "no identity", author: "zhuravel", findings: map[string]int{"P1": 1}, noMe: true, want: "no identity me for the fix role"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var h *harness
+			if tc.noMe {
+				h = newHarness(t)
+			} else {
+				h, _ = fixHarness(t)
+			}
+			pr := fixablePR(h, tc.author, tc.findings)
+			if tc.mod != nil {
+				tc.mod(h, pr)
+			}
+			id := h.fix(FixPayload{})
+			h.handle()
+			if r := h.request(id); r.State != store.RequestFailed || deref(r.Result) != tc.want {
+				t.Errorf("%s %q, want failed %q", r.State, deref(r.Result), tc.want)
+			}
+			if h.ag.count("submit:") != 0 {
+				t.Error("a refused request started the fixer")
+			}
+		})
+	}
+}
+
+// A fixer that pushed with nobody needed counts the cycle: the slot is put
+// back in order at the pushed head, the loop waits for the re-review
+// (reviewing, cycle 1), and a forced re-review of the pushed head runs.
+func TestAPushedReportForcesTheReReview(t *testing.T) {
+	h, git := fixHarness(t)
+	pr := fixablePR(h, "zhuravel", map[string]int{"P2": 2})
+	fixer(h, git, fixPushed, func(run store.Run) string {
+		return fixReport(run.ID, "b2b2b2b Guard the nil owner", fixReplied, "none")
+	})
+	id := h.fix(FixPayload{})
+	h.handle() // no dispatch yet: the fake slots fetch the head the poller recorded
+	h.wantDone(id)
+	if !slices.Contains(h.sl.all(), "resync:review1:"+fixPushed) {
+		t.Errorf("slot calls %v lack the resync to the pushed head", h.sl.all())
+	}
+	if sl := h.slot("review1"); deref(sl.CheckedOutSHA) != fixPushed {
+		t.Errorf("slot checked out %s", deref(sl.CheckedOutSHA))
+	}
+	st, ok := h.fixStateOf(2)
+	report := deref(h.fixRuns(pr.ID)[0].ReportPath)
+	if !ok || st.Phase != FixPhaseReviewing || st.Cycle != 1 || st.Head != fixPushed || st.Report != report {
+		t.Fatalf("fix state = %+v, %v", st, ok)
+	}
+	if cur := h.wantState(2, store.PRRereviewPending); !cur.Forced {
+		t.Error("the re-review is not forced")
+	}
+	if r := h.fixRuns(pr.ID)[0]; r.State != store.RunVerified {
+		t.Errorf("fix run %s", r.State)
+	}
+	h.wantReportInData("fix.pushed", report)
+	h.wantReportInData("fix.replied", report)
+
+	// The poller sees the push; the forced re-review runs on it.
+	h.advance(time.Minute)
+	reqPoll(h, prSpec{n: 2, head: fixPushed, author: "zhuravel"})
+	reqWantRounds(t, h, 2)
+	if in := h.rd.all()[1]; in.TargetSHA != fixPushed || !in.PR.Forced {
+		t.Errorf("the re-review: target %s forced %v", in.TargetSHA, in.PR.Forced)
+	}
+}
+
+// A fixer that pushed nothing and needs nobody answered every finding: the
+// slot goes back to the reviewed head, the loop ends and an info toast says
+// so.
+func TestAFixThatPushedNothingResyncsTheSlot(t *testing.T) {
+	h, git := fixHarness(t)
+	fixablePR(h, "zhuravel", map[string]int{"P2": 3})
+	fixer(h, git, "", func(run store.Run) string { return fixReport(run.ID, "nothing", fixReplied, "none") })
+	h.fix(FixPayload{})
+	h.tick()
+	if !slices.Contains(h.sl.all(), "resync:review1:"+fixHead) {
+		t.Errorf("slot calls %v lack the resync to the reviewed head", h.sl.all())
+	}
+	if _, ok := h.fixStateOf(2); ok {
+		t.Error("the loop goes on")
+	}
+	h.wantState(2, store.PRReviewed)
+	h.flush()
+	if got := toastsWith(h, "PR #2: claude-fix pushed nothing, replied to 3 findings"); len(got) != 1 {
+		t.Errorf("toasts = %v", h.nh.shown())
+	}
+	h.wantToasts("needs attention", 0)
+}
+
+// Findings the fixer leaves to the author end the loop as needs attention,
+// naming how many and the report; with a push, the slot moves to the pushed
+// head and the push is still re-reviewed once the poller sees it.
+func TestNeedsYouEndsTheLoopAsNeedsAttention(t *testing.T) {
+	for _, tc := range []struct {
+		name, head, pushed, needs, want string
+	}{
+		{name: "nothing pushed", head: "", pushed: "nothing",
+			needs: "- 2101 P1 app/models/offer.rb:42: wants a schema change\n- 2102 P2 app/lib/x.rb:7: contested", want: "fix: 2 findings need your call: "},
+		{name: "pushed", head: fixPushed, pushed: "b2b2b2b Guard the nil owner",
+			needs: "- 2102 P2 app/lib/x.rb:7: contested", want: "fix: 1 finding needs your call: "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, git := fixHarness(t)
+			pr := fixablePR(h, "zhuravel", map[string]int{"P1": 1, "P2": 2})
+			fixer(h, git, tc.head, func(run store.Run) string { return fixReport(run.ID, tc.pushed, fixReplied, tc.needs) })
+			h.fix(FixPayload{})
+			h.tick()
+			report := deref(h.fixRuns(pr.ID)[0].ReportPath)
+			cur := h.wantState(2, store.PRNeedsAttention)
+			if deref(cur.LastError) != tc.want+report {
+				t.Errorf("last_error = %q, want %q", deref(cur.LastError), tc.want+report)
+			}
+			if _, ok := h.fixStateOf(2); ok {
+				t.Error("the loop goes on")
+			}
+			if !slices.Contains(h.sl.all(), "resync:review1:"+cmpOr(tc.head, fixHead)) {
+				t.Errorf("slot calls %v", h.sl.all())
+			}
+			h.wantToasts("needs attention", 1)
+			h.wantReportInData("fix.needs_you", report)
+			if tc.head == "" {
+				return
+			}
+			h.advance(time.Minute)
+			reqPoll(h, prSpec{n: 2, head: fixPushed, author: "zhuravel"})
+			h.wantState(2, store.PRRereviewPending)
+		})
+	}
+}
+
+func cmpOr(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}
+
+// A run that ends without a report of its own fails the job: the loop ends
+// as needs attention, the slot goes back to the reviewed head.
+func TestAMissingFixReportFailsTheJob(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		report func(run store.Run) string
+		want   string
+	}{
+		{name: "no report", report: func(store.Run) string { return "" }, want: "wrote no report at "},
+		{name: "another run's", report: func(store.Run) string { return fixReport("r-older", "nothing", fixReplied, "none") },
+			want: "the first line is not the run's marker"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, git := fixHarness(t)
+			pr := fixablePR(h, "zhuravel", map[string]int{"P2": 1})
+			fixer(h, git, "", tc.report)
+			h.fix(FixPayload{})
+			h.tick()
+			cur := h.wantState(2, store.PRNeedsAttention)
+			if le := deref(cur.LastError); !strings.HasPrefix(le, "fix run failed: ") || !strings.Contains(le, tc.want) {
+				t.Errorf("last_error = %q", le)
+			}
+			if _, ok := h.fixStateOf(2); ok {
+				t.Error("the loop goes on")
+			}
+			if !slices.Contains(h.sl.all(), "resync:review1:"+fixHead) {
+				t.Errorf("slot calls %v", h.sl.all())
+			}
+			if r := h.fixRuns(pr.ID)[0]; r.State != store.RunFailed {
+				t.Errorf("fix run %s", r.State)
+			}
+			h.wantReportInData("fix.failed", deref(h.fixRuns(pr.ID)[0].ReportPath))
+		})
+	}
+}
+
+// A push the fixer reports failed (someone pushed meanwhile) is the failed
+// case: the fixer's local commits go, the slot is back at the reviewed head.
+func TestAFixWhosePushFailedEndsAsFailed(t *testing.T) {
+	h, git := fixHarness(t)
+	pr := fixablePR(h, "zhuravel", map[string]int{"P2": 1})
+	fixer(h, git, "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3", func(run store.Run) string {
+		return fixReport(run.ID, "push failed: ! [rejected] HEAD -> feature (non-fast-forward)", fixReplied, "- 2101 P2 a.rb:1: committed, not pushed")
+	})
+	h.fix(FixPayload{})
+	h.tick()
+	report := deref(h.fixRuns(pr.ID)[0].ReportPath)
+	cur := h.wantState(2, store.PRNeedsAttention)
+	if want := "fix run failed: the fixer's push failed: " + report; deref(cur.LastError) != want {
+		t.Errorf("last_error = %q, want %q", deref(cur.LastError), want)
+	}
+	if !slices.Contains(h.sl.all(), "resync:review1:"+fixHead) {
+		t.Errorf("slot calls %v", h.sl.all())
+	}
+	if _, ok := h.fixStateOf(2); ok {
+		t.Error("the loop goes on")
+	}
+	h.wantReportInData("fix.failed", report)
+}
+
+// `magnum abort` during the fixer's run interrupts the fixer, abandons its
+// run, puts the slot back and ends the loop quietly: no attention.
+func TestAbortEndsAFix(t *testing.T) {
+	var kh *keyHerdr
+	h, _ := fixHarness(t, realSleep, withKeys(&kh))
+	pr := fixablePR(h, "zhuravel", map[string]int{"P2": 1})
+	h.fix(FixPayload{})
+	h.e.handleRequests(h.ctx)
+	h.awaitSubmit()
+	h.hd.mu.Lock()
+	h.hd.agents = append(h.hd.agents, herdr.AgentInfo{PaneID: "p-claude-fix", Name: "mg-t-2-claude-fix", Agent: "claude",
+		AgentStatus: herdr.StatusWorking})
+	h.hd.mu.Unlock()
+
+	id := h.enqueue(ReqAbort, TargetPayload{PRTarget: PRTarget{Ref: "2"}})
+	h.e.handleRequests(h.ctx)
+	h.settle()
+	res := h.wantDone(id)
+	if !strings.Contains(res, "aborted the fix of talkable/talkable#2") || !strings.Contains(res, "fixer interrupted") {
+		t.Errorf("answer = %q", res)
+	}
+	if got, want := kh.all(), []string{"agent:mg-t-2-claude-fix:ctrl+c", "agent:mg-t-2-claude-fix:ctrl+c"}; !slices.Equal(got, want) {
+		t.Errorf("keys %v, want %v", got, want)
+	}
+	if r := h.fixRuns(pr.ID)[0]; r.State != store.RunAbandoned || deref(r.Error) != abortedBy {
+		t.Errorf("fix run %s %q", r.State, deref(r.Error))
+	}
+	if _, ok := h.fixStateOf(2); ok {
+		t.Error("the loop goes on")
+	}
+	if !slices.Contains(h.sl.all(), "resync:review1:"+fixHead) {
+		t.Errorf("slot calls %v", h.sl.all())
+	}
+	h.wantState(2, store.PRReviewed)
+	h.flush()
+	h.wantToasts("needs attention", 0)
+	if got := toastsWith(h, "fix stopped"); len(got) != 1 {
+		t.Errorf("toasts = %v", h.nh.shown())
+	}
+}
+
+// `magnum fix --off` switches autofix off for the PR and `--on` back on;
+// neither starts a loop, and a loop asked for by hand runs anyway, saying
+// so.
+func TestFixOffAndOnToggleTheFlag(t *testing.T) {
+	h, git := fixHarness(t)
+	pr := fixablePR(h, "zhuravel", map[string]int{"P2": 1})
+	off := h.fix(FixPayload{Off: true})
+	h.handle()
+	if res := h.wantDone(off); res != "fix is off for PR #2: autofix leaves it to you; `magnum fix --on` lifts it" {
+		t.Errorf("--off answer = %q", res)
+	}
+	o, ok, err := h.e.fixOff(h.ctx, pr.ID)
+	if err != nil || !ok || o.By != "magnum fix --off" || !o.Since.Equal(h.clock.Now()) {
+		t.Fatalf("fix off = %+v, %v, %v", o, ok, err)
+	}
+	if _, ok := h.fixStateOf(2); ok || h.ag.count("submit:") != 0 {
+		t.Fatal("--off started a loop")
+	}
+
+	fixer(h, git, "", func(run store.Run) string { return fixReport(run.ID, "nothing", fixReplied, "none") })
+	id := h.fix(FixPayload{})
+	h.tick()
+	if res := h.wantDone(id); !strings.Contains(res, "fix is off for this PR: this requested loop runs anyway") {
+		t.Errorf("answer = %q", res)
+	}
+	if h.ag.count("submit:claude-fix:") != 1 {
+		t.Error("the requested loop did not run")
+	}
+
+	on := h.fix(FixPayload{On: true})
+	h.handle()
+	if res := h.wantDone(on); res != "autofix is on again for PR #2" {
+		t.Errorf("--on answer = %q", res)
+	}
+	if _, ok, err := h.e.fixOff(h.ctx, pr.ID); ok || err != nil {
+		t.Errorf("fix off after --on: %v, %v", ok, err)
+	}
+	if h.ag.count("submit:claude-fix:") != 1 {
+		t.Error("--on started a loop")
+	}
+}
+
+// A dry run says what would happen and does nothing; on a watch that posts
+// as the operator it says that the re-review will not read the fixer's
+// replies as the author's.
+func TestAFixDryRunOnAWatchThatPostsAsYouSaysSo(t *testing.T) {
+	h, _ := fixHarness(t, func(h *harness) { h.cfg.Watches[0].Identity = "zhuravel" })
+	pr := fixablePR(h, "zhuravel", map[string]int{"P2": 1})
+	id := h.fix(FixPayload{DryRun: true})
+	h.handle()
+	res := h.wantDone(id)
+	if !strings.HasPrefix(res, "dry run: would") || !strings.Contains(res, "this watch posts as you: the re-review will not read the fixer's replies as yours") {
+		t.Errorf("answer = %q", res)
+	}
+	if _, ok := h.fixStateOf(2); ok || h.ag.count("submit:") != 0 || len(h.fixRuns(pr.ID)) != 0 {
+		t.Error("a dry run started the fixer")
+	}
+}
+
+// A failed guard (a person's agent in the slot) ends the job before the
+// fixer starts, as needs attention with the reason; the slot is not touched.
+func TestAFailedGuardEndsTheFixAsNeedsAttention(t *testing.T) {
+	h, _ := fixHarness(t)
+	fixablePR(h, "zhuravel", map[string]int{"P2": 1})
+	h.sl.mu.Lock()
+	h.sl.guardErr = slots.ErrHold{Reason: slots.HoldForeignAgent, Detail: `pane p9: claude agent "x" is idle in /tmp/review1`}
+	h.sl.mu.Unlock()
+	h.fix(FixPayload{})
+	h.tick()
+	cur := h.wantState(2, store.PRNeedsAttention)
+	if le := deref(cur.LastError); !strings.HasPrefix(le, "fix guard failed: ") || !strings.Contains(le, "pane p9") {
+		t.Errorf("last_error = %q", le)
+	}
+	if h.ag.count("submit:") != 0 || slices.ContainsFunc(h.sl.all(), func(c string) bool { return strings.HasPrefix(c, "resync:") }) {
+		t.Errorf("the fixer started or the slot was touched: %v, %v", h.ag.all(), h.sl.all())
+	}
+	if _, ok := h.fixStateOf(2); ok {
+		t.Error("the loop goes on")
+	}
+}
+
+// A resync that fails (herdr down) is the job's failure, never swallowed:
+// the loop ends as needs attention and no re-review is forced.
+func TestAResyncFailureEndsTheFixAsNeedsAttention(t *testing.T) {
+	h, git := fixHarness(t)
+	fixablePR(h, "zhuravel", map[string]int{"P2": 1})
+	h.sl.mu.Lock()
+	h.sl.resyncErr = errors.New("slots: guard review1: herdr snapshot: connection refused")
+	h.sl.mu.Unlock()
+	fixer(h, git, fixPushed, func(run store.Run) string { return fixReport(run.ID, "b2b2b2b Fix", fixReplied, "none") })
+	h.fix(FixPayload{})
+	h.tick()
+	cur := h.wantState(2, store.PRNeedsAttention)
+	if le := deref(cur.LastError); !strings.HasPrefix(le, "fix settle failed: ") || !strings.Contains(le, "connection refused") {
+		t.Errorf("last_error = %q", le)
+	}
+	if cur.Forced {
+		t.Error("a re-review was forced")
+	}
+	if _, ok := h.fixStateOf(2); ok {
+		t.Error("the loop goes on")
+	}
+}
+
+// A fixer whose time runs out is told to write its report now; one that
+// still writes none fails the job.
+func TestAFixThatTimesOutIsAskedForItsReportThenFails(t *testing.T) {
+	h, _ := fixHarness(t)
+	pr := fixablePR(h, "zhuravel", map[string]int{"P2": 1})
+	h.e.d.Sleep = func(ctx context.Context, d time.Duration) error { h.clock.Add(d); return ctx.Err() }
+	h.fix(FixPayload{})
+	h.tick()
+	report := deref(h.fixRuns(pr.ID)[0].ReportPath)
+	if !slices.ContainsFunc(h.ag.all(), func(c string) bool {
+		return strings.HasPrefix(c, "tell:claude-fix:Time is up") && strings.Contains(c, report)
+	}) {
+		t.Errorf("no time-up line in %v", h.ag.all())
+	}
+	cur := h.wantState(2, store.PRNeedsAttention)
+	if le := deref(cur.LastError); !strings.HasPrefix(le, "fix run failed: ") || !strings.Contains(le, "ran out of its 1h") {
+		t.Errorf("last_error = %q", le)
+	}
+	if r := h.fixRuns(pr.ID)[0]; r.State != store.RunFailed && r.State != store.RunAbandoned {
+		t.Errorf("fix run %s", r.State)
+	}
+	if _, ok := h.fixStateOf(2); ok {
+		t.Error("the loop goes on")
+	}
+}
+
+// `magnum abort` between the fixer's push and its re-review takes the
+// forced re-review back and ends the loop, so no row is left that would
+// refuse `magnum review` with no loop running.
+func TestAbortEndsALoopWaitingForItsReReview(t *testing.T) {
+	h, git := fixHarness(t)
+	fixablePR(h, "zhuravel", map[string]int{"P2": 1})
+	fixer(h, git, fixPushed, func(run store.Run) string { return fixReport(run.ID, "b2b2b2b Fix", fixReplied, "none") })
+	h.fix(FixPayload{})
+	h.handle()
+	if st, ok := h.fixStateOf(2); !ok || st.Phase != FixPhaseReviewing {
+		t.Fatalf("fix state = %+v, %v", st, ok)
+	}
+	id := h.enqueue(ReqAbort, TargetPayload{PRTarget: PRTarget{Ref: "2"}})
+	h.handle()
+	if res := h.wantDone(id); !strings.Contains(res, "took back the forced review") || !strings.Contains(res, "fix loop ended (cycle 1 of 3, reviewing)") {
+		t.Errorf("answer = %q", res)
+	}
+	if _, ok := h.fixStateOf(2); ok {
+		t.Error("the loop's row outlived the abort")
+	}
+	h.wantState(2, store.PRReviewed)
+	review := h.enqueue(ReqReview, ReviewPayload{PRTarget: PRTarget{Ref: "2"}})
+	h.handle()
+	h.wantDone(review)
+}
+
+// A loop's row holds the PR's rounds by itself, with or without its job:
+// in phase fixing, and when it cannot be read (no round starts over a loop
+// that may run); the wait says why.
+func TestAFixingRowHoldsDispatch(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		row  string
+	}{
+		{name: "fixing", row: `{"cycle":1,"cap":3,"phase":"fixing"}`},
+		{name: "unreadable", row: "not json"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _ := fixHarness(t)
+			pr := fixablePR(h, "zhuravel", map[string]int{"P2": 1})
+			h.e.setKV(h.ctx, KVPRFix(pr.ID), tc.row)
+			rounds := len(h.rd.all())
+			h.advance(time.Hour)
+			reqPoll(h, prSpec{n: 2, head: "c3c3c3c", author: "zhuravel"})
+			h.advance(time.Hour)
+			h.tick()
+			h.wantState(2, store.PRRereviewPending)
+			if got := len(h.rd.all()); got != rounds {
+				t.Errorf("rounds = %d, want %d", got, rounds)
+			}
+			if w := waitOf(t, h, 2); w.Reason != WaitFixing {
+				t.Errorf("wait = %+v", w)
+			}
+		})
+	}
+}

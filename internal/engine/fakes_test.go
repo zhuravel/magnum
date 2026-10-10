@@ -656,6 +656,27 @@ type fakeAgents struct {
 	// onStart, when set, runs as StartAgent starts, with the role and the
 	// conversation it resumes.
 	onStart func(role config.Role, resume string)
+
+	// layout and cfg give NewRun the report path agents.NewRun gives a run.
+	layout paths.Layout
+	cfg    *config.Config
+	runSeq int // NewRun's runs so far, for their ids
+	// identityEnv is the identities' env by name (agents.Deps.IdentityEnv):
+	// the pane of a role with an identity gets it in place of the posting
+	// identity's gh selection, as agents.Manager.paneEnv lays it; paneEnvs
+	// records each role's pane env as EnsureWorkspace and EnsurePane gave it.
+	identityEnv func(name string) (map[string]string, bool)
+	paneEnvs    map[string]map[string]string
+	// onSubmit, when set, runs once Submit sent a run's prompt (the run is
+	// working then), with that run: a test's fake fixer writes its report
+	// and ends the run there. submitErr, when set, is what Submit refuses
+	// with before sending (the run stays pending).
+	onSubmit  func(run store.Run, text string)
+	submitErr error
+	// onTell, when set, runs as Tell is called, with its run and text.
+	onTell func(run store.Run, text string)
+	// fixPromptErr, when set, is what FixPrompt fails with.
+	fixPromptErr error
 }
 
 func (f *fakeAgents) record(s string) {
@@ -718,12 +739,46 @@ func (f *fakeAgents) EnsureWorkspace(_ context.Context, pr store.PR, slotPath st
 	for _, r := range roles {
 		ws.Panes[agents.Role(r.Name)] = paneOf(r.Name)
 		ws.Roles = append(ws.Roles, agents.Role(r.Name))
+		f.notePaneEnv(env, r)
 	}
 	return ws, nil
 }
 
-func (f *fakeAgents) EnsurePane(_ context.Context, pr store.PR, ws agents.Workspace, _ string, _ map[string]string, role config.Role) (agents.Workspace, error) {
+// notePaneEnv records the env role's pane gets from env, as
+// agents.Manager.paneEnv lays it: a role whose identity identityEnv
+// resolves acts as that identity, without the posting identity's gh
+// selection.
+func (f *fakeAgents) notePaneEnv(env map[string]string, role config.Role) {
+	out := maps.Clone(env)
+	if out == nil {
+		out = map[string]string{}
+	}
+	if role.Identity != "" && f.identityEnv != nil {
+		if idEnv, ok := f.identityEnv(role.Identity); ok {
+			for _, k := range []string{"GH_CONFIG_DIR", "GH_TOKEN", "GITHUB_TOKEN"} {
+				delete(out, k)
+			}
+			maps.Copy(out, idEnv)
+		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.paneEnvs == nil {
+		f.paneEnvs = map[string]map[string]string{}
+	}
+	f.paneEnvs[role.Name] = out
+}
+
+// paneEnv is the env role's pane got last (nil when it got none).
+func (f *fakeAgents) paneEnv(role string) map[string]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return maps.Clone(f.paneEnvs[role])
+}
+
+func (f *fakeAgents) EnsurePane(_ context.Context, pr store.PR, ws agents.Workspace, _ string, env map[string]string, role config.Role) (agents.Workspace, error) {
 	f.record(fmt.Sprintf("pane:%d:%s", pr.ID, role.Name))
+	f.notePaneEnv(env, role)
 	out := ws
 	out.Panes = maps.Clone(ws.Panes)
 	if out.Panes == nil {
@@ -829,6 +884,94 @@ func (f *fakeAgents) Quit(ctx context.Context, s store.Session) error {
 func (f *fakeAgents) Recover(_ context.Context, pr store.PR) ([]agents.Recovered, error) {
 	f.record(fmt.Sprintf("recover:%d", pr.ID))
 	return nil, nil
+}
+
+// NewRun inserts a pending run of role on pr as agents.NewRun does: its
+// target the PR's head, its report the role's output in the head's review
+// directory, its session the role's live one.
+func (f *fakeAgents) NewRun(ctx context.Context, pr store.PR, role agents.Role, kind string, round int) (store.Run, error) {
+	f.record(fmt.Sprintf("new_run:%d:%s:%s:%d", pr.ID, role, kind, round))
+	spec, ok := f.cfg.RoleByNameOrAlias(nil, string(role))
+	if !ok {
+		return store.Run{}, fmt.Errorf("fake new run: unknown role %q", role)
+	}
+	repo, err := f.st.RepoByID(ctx, pr.RepoID)
+	if err != nil {
+		return store.Run{}, err
+	}
+	f.mu.Lock()
+	f.runSeq++
+	id := fmt.Sprintf("r-fake-%d-%d", pr.ID, f.runSeq)
+	f.mu.Unlock()
+	r := store.Run{ID: id, PRID: pr.ID, Round: max(round, 1), Role: spec.Name, Kind: kind, TargetSHA: pr.HeadSHA,
+		PrevReviewedSHA: pr.ReviewedSHA, Identity: pr.Identity, ReviewerLogin: "x", State: store.RunPending,
+		ReportPath: new(filepath.Join(f.layout.ReviewDir(repo.Owner, repo.Name, pr.Number, pr.HeadSHA), spec.ReportFile()))}
+	if s, err := f.st.LiveSessionByPRRole(ctx, pr.ID, spec.Name); err == nil {
+		r.SessionID = &s.ID
+	}
+	return f.st.CreateRun(ctx, r)
+}
+
+// Submit "sends" run's prompt to the live session of its role, as
+// agents.Manager.Submit does once herdr acks it working, then runs
+// onSubmit; submitErr refuses before sending.
+func (f *fakeAgents) Submit(ctx context.Context, run store.Run, text string) error {
+	f.record(fmt.Sprintf("submit:%s:%s:%s", run.Role, run.Kind, run.ID))
+	f.mu.Lock()
+	serr, hook := f.submitErr, f.onSubmit
+	f.mu.Unlock()
+	if serr != nil {
+		return serr
+	}
+	s, err := f.st.LiveSessionByPRRole(ctx, run.PRID, run.Role)
+	if err != nil {
+		return fmt.Errorf("fake submit %s: %w", run.ID, agents.ErrNoSession)
+	}
+	now := f.st.Clock()
+	if err := f.st.TransitionRun(ctx, run.ID, []string{store.RunPending}, store.RunWorking, func(u *store.RunUpdate) {
+		u.Set("session_id", s.ID)
+		u.Set("prompt_text", text)
+		u.Set("submitted_at", now)
+		u.Set("working_seen_at", now)
+	}); err != nil {
+		return err
+	}
+	if hook != nil {
+		if cur, err := f.st.RunByID(ctx, run.ID); err == nil {
+			run = cur
+		}
+		hook(run, text)
+	}
+	return nil
+}
+
+// Tell records the text typed into run's agent and runs onTell.
+func (f *fakeAgents) Tell(_ context.Context, run store.Run, text string) error {
+	f.record("tell:" + run.Role + ":" + text)
+	f.mu.Lock()
+	hook := f.onTell
+	f.mu.Unlock()
+	if hook != nil {
+		hook(run, text)
+	}
+	return nil
+}
+
+// FixPrompt records what the fix job gave it and renders a prompt that
+// names the run's report and marker; an empty input is an error, as the
+// real prompt would render a broken push or review line.
+func (f *fakeAgents) FixPrompt(pr store.PR, role agents.Role, run store.Run, in agents.FixPromptInput) (string, error) {
+	f.record(fmt.Sprintf("fix_prompt:%s:%s|%s|%s|%s|%s|%s", role, run.ID, in.HeadRef, in.ReviewURL, in.ReviewFile, in.ReviewerLogin, in.DBLockCommand))
+	f.mu.Lock()
+	ferr := f.fixPromptErr
+	f.mu.Unlock()
+	if ferr != nil {
+		return "", ferr
+	}
+	if in.HeadRef == "" || in.ReviewURL == "" || in.ReviewFile == "" || in.ReviewerLogin == "" || in.DBLockCommand == "" {
+		return "", fmt.Errorf("fake fix prompt of %s: an empty input %+v", run.ID, in)
+	}
+	return fmt.Sprintf("fix the findings of %s on %s; report to %s, first line %s", in.ReviewURL, pr.URL, deref(run.ReportPath), agents.ReportMarker(run.ID)), nil
 }
 
 func (f *fakeAgents) LatestRound(ctx context.Context, prID int64) (int, error) {
@@ -1561,6 +1704,16 @@ func newHarness(t *testing.T, mods ...func(*harness)) *harness {
 		Path: pool.Path(1), MainClone: pool.MainClone, PlaceholderBranch: new("review1"), DBSlug: new("review1"),
 		State: store.SlotFree}); err != nil {
 		t.Fatal(err)
+	}
+
+	h.ag.layout, h.ag.cfg = layout, cfg
+	h.ag.identityEnv = func(name string) (map[string]string, bool) { // app.App.identityEnv's
+		src, ok := h.d.Identities[name]
+		if !ok {
+			return nil, false
+		}
+		env, err := src.Env(context.Background())
+		return env, err == nil
 	}
 
 	notifier := &notify.Notifier{Herdr: h.nh, Store: st, Enabled: true}

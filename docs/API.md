@@ -4943,6 +4943,7 @@ const (
 	WaitSlot          = "slot"           // the PR's slot, or a free pool slot
 	WaitPinned        = "pinned"         // the PR's slot is pinned (magnum open, magnum pin): the round waits for the unpin
 	WaitCapacity      = "capacity"       // max_concurrent_reviews or max_total_working_codex
+	WaitFixing        = "fixing"         // the fix job's fixer works on the PR (fix.go): its re-review comes after
 	WaitOther         = "other"          // any other dispatch gate (details, a human, a paused watch, ...)
 	WaitNext          = "next"           // nothing holds it: the next dispatch starts it
 )
@@ -4983,6 +4984,10 @@ const KVRetroRunning = "learn.retro_running"
 
 const ReqCodexFlag = "codex-flag"
     ReqCodexFlag flags a PR or clears its flag (CodexFlagPayload).
+
+const ReqFix = "fix"
+    ReqFix starts a fix loop on a PR, or switches the fix job off or on for it
+    (FixPayload).
 
 const ReqSnooze = "snooze"
     ReqSnooze snoozes a PR or lifts its snooze (SnoozePayload).
@@ -5332,6 +5337,12 @@ type Agents interface {
 	// checkout's project config it loaded while it runs (parkReloading).
 	ReloadsProject(ctx context.Context, s store.Session) bool
 	Recover(ctx context.Context, pr store.PR) ([]agents.Recovered, error)
+	// NewRun, FixPrompt and Submit start the fix job's run (fix.go); Tell
+	// gives a fixer whose time ran out its last call within the run.
+	NewRun(ctx context.Context, pr store.PR, role agents.Role, kind string, round int) (store.Run, error)
+	FixPrompt(pr store.PR, role agents.Role, run store.Run, in agents.FixPromptInput) (string, error)
+	Submit(ctx context.Context, run store.Run, text string) error
+	Tell(ctx context.Context, run store.Run, text string) error
 }
     Agents is the part of *agents.Manager the engine drives.
 
@@ -5850,6 +5861,17 @@ type FixOff struct {
 }
     FixOff is a PR's opt-out of the fix job: when it was set and by whom
     ("magnum fix --off").
+
+type FixPayload struct {
+	PRTarget
+	DryRun bool `json:"dry_run,omitempty"`
+	Off    bool `json:"off,omitempty"`
+	On     bool `json:"on,omitempty"`
+}
+    FixPayload is a `magnum fix` request: start a fix loop on the PR (DryRun:
+    answer what would happen and do nothing), or switch the fix job off for it
+    (Off: autofix leaves it alone, KVPRFixOff) or on again (On). Neither Off nor
+    On starts a loop.
 
 type FixReport struct {
 	// Pushed are the commits on GitHub, none for "nothing".
@@ -6413,8 +6435,8 @@ type Wait struct {
 	Rereview bool      `json:"rereview"`
 	Forced   bool      `json:"forced,omitempty"`
 	Until    time.Time `json:"until,omitzero"`  // when it ends, when known
-	Count    int       `json:"count,omitempty"` // WaitCap: automatic rounds today; WaitDelta: changed lines; WaitRetry: the attempt to come
-	Max      int       `json:"max,omitempty"`   // WaitCap: the cap; WaitDelta: rereview_min_lines; WaitRetry: the attempts allowed
+	Count    int       `json:"count,omitempty"` // WaitCap: automatic rounds today; WaitDelta: changed lines; WaitRetry: the attempt to come; WaitFixing: the fix cycle
+	Max      int       `json:"max,omitempty"`   // WaitCap: the cap; WaitDelta: rereview_min_lines; WaitRetry: the attempts allowed; WaitFixing: fix_cycles
 	// Subject is WaitKind's paused kind, WaitRequested's Request.Phrase,
 	// WaitRetry's cause in a word or two (retryCause) and WaitPinned's pin
 	// origin ("magnum open"; "" when unknown).

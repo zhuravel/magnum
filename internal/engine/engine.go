@@ -97,6 +97,12 @@ type Agents interface {
 	// checkout's project config it loaded while it runs (parkReloading).
 	ReloadsProject(ctx context.Context, s store.Session) bool
 	Recover(ctx context.Context, pr store.PR) ([]agents.Recovered, error)
+	// NewRun, FixPrompt and Submit start the fix job's run (fix.go); Tell
+	// gives a fixer whose time ran out its last call within the run.
+	NewRun(ctx context.Context, pr store.PR, role agents.Role, kind string, round int) (store.Run, error)
+	FixPrompt(pr store.PR, role agents.Role, run store.Run, in agents.FixPromptInput) (string, error)
+	Submit(ctx context.Context, run store.Run, text string) error
+	Tell(ctx context.Context, run store.Run, text string) error
 }
 
 // Rounds runs one review round (*pipeline.Runner, one per identity) and
