@@ -90,6 +90,14 @@ func (e *Engine) retryOrAttention(ctx context.Context, job *roundJob, pr store.P
 // needsAttention parks the PR for a human and toasts. A post-merge round
 // puts its PR back in closed instead (postMergeFailed).
 func (e *Engine) needsAttention(ctx context.Context, job *roundJob, pr store.PR, from []string, why, msg string, extra func(*store.PRUpdate)) {
+	e.needsAttentionKeyed(ctx, job, pr, from, why, msg, extra, fmt.Sprintf("attention:%d:%s", pr.ID, why))
+}
+
+// needsAttentionKeyed is needsAttention with the urgent toast's dedupe key
+// (one toast per key within attentionWindow): the fix job gives each loop
+// its own, so a second loop's failure on a PR the first left in
+// needs_attention is toasted too.
+func (e *Engine) needsAttentionKeyed(ctx context.Context, job *roundJob, pr store.PR, from []string, why, msg string, extra func(*store.PRUpdate), key string) {
 	if job.postMerge {
 		e.postMergeFailed(ctx, job, pr, from, why, msg, extra)
 		return
@@ -112,7 +120,6 @@ func (e *Engine) needsAttention(ctx context.Context, job *roundJob, pr store.PR,
 		_ = e.st.TransitionSlot(ctx, job.slot.ID, []string{store.SlotClaimed, store.SlotBusy}, store.SlotHeld, nil)
 	}
 	label := fmt.Sprintf("%s#%d", job.repo.Name, pr.Number)
-	key := fmt.Sprintf("attention:%d:%s", pr.ID, why)
 	reason := attention.Explain(why, msg, label)
 	e.event(ctx, "warn", prSubject(job.repo, pr.Number), "pr.needs_attention", why+": "+msg,
 		map[string]any{"stage": reason.Stage, "cause": reason.Cause, "fix": reason.Fix})

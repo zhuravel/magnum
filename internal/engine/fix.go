@@ -344,13 +344,29 @@ func (e *Engine) runFix(ctx context.Context, job *fixJob) {
 		return
 	}
 	if err != nil {
+		msg := failed + err.Error()
 		if job.touched {
-			e.interruptSessions(fctx, job.pr, &job.watch, job.role.Name)
+			msg += e.putFixSlotBack(fctx, job)
 		}
-		e.failFix(fctx, job, failed+err.Error(), "")
+		e.failFix(fctx, job, msg, "")
 		return
 	}
 	e.settleFix(fctx, job)
+}
+
+// putFixSlotBack stops a fixer whose run failed or timed out and puts the
+// slot back at the reviewed head (spec 3.6: the fixer's local commits would
+// hold the slot for head drift at the next round's guard): the fixer is
+// interrupted, its agent waited for until quiet, and the slot resynced. It
+// returns what to add to the failure's message ("" when the slot is back).
+func (e *Engine) putFixSlotBack(ctx context.Context, job *fixJob) string {
+	if e.interruptSessions(ctx, job.pr, &job.watch, job.role.Name) > 0 && !e.waitAgentsQuiet(ctx, job.pr.ID) {
+		e.log.Info("the fixer still works after the interrupt", "subject", job.subject())
+	}
+	if err := e.resyncFixSlot(ctx, job, job.review.SHA); err != nil {
+		return fmt.Sprintf("; slot %s not put back: %v", job.slot.Name, err)
+	}
+	return ""
 }
 
 // closeFixHandle ends the job's part that an abort can stop (the

@@ -120,10 +120,13 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 
 // fixReReview takes the loop to its re-review after a push: the row in
 // phase reviewing (the cycle counted, the pushed head, needs the findings
-// the fixer left to the author, none after a clean push) and a forced
-// review of the PR (forceReview, as `magnum review` queues one: no
-// throttle, no daily cap, and the fixing hold does not apply to it). A PR
-// GitHub closed meanwhile ends the loop instead.
+// the fixer left to the author, none after a clean push), the push on the
+// PR row as the poller records one (recordFixPush), and a forced review of
+// the PR on it (forceReview, as `magnum review` queues one: no throttle, no
+// daily cap, and the fixing hold does not apply to it). The PR is forced
+// before onHeadChange sees the push, so the loop's re-review is never taken
+// for a push the review covers already (settlePush). A PR GitHub closed
+// meanwhile ends the loop instead.
 func (e *Engine) fixReReview(ctx context.Context, job *fixJob, head string, needs []string) {
 	pr, err := e.st.PRByID(ctx, job.pr.ID)
 	if err == nil && pr.GHState != store.GHOpen {
@@ -136,6 +139,10 @@ func (e *Engine) fixReReview(ctx context.Context, job *fixJob, head string, need
 	if err == nil {
 		err = e.setFixState(ctx, pr.ID, st)
 	}
+	moved := false
+	if err == nil {
+		pr, moved, err = e.recordFixPush(ctx, job, pr, head)
+	}
 	if err == nil {
 		_, err = e.forceReview(ctx, job.repo, pr, ReviewPayload{}, nil, fixBy)
 	}
@@ -144,6 +151,33 @@ func (e *Engine) fixReReview(ctx context.Context, job *fixJob, head string, need
 		return
 	}
 	job.state = st
+	if !moved {
+		return
+	}
+	if cur, err := e.st.PRByID(ctx, pr.ID); err != nil {
+		e.log.Warn("fix: the PR after its push", "subject", job.subject(), "err", err)
+	} else if err := e.onHeadChange(ctx, job.repo, job.watch, cur, e.now()); err != nil {
+		e.log.Warn("fix: the push's head change", "subject", job.subject(), "err", err)
+	}
+}
+
+// recordFixPush moves the PR row's head to the head the fixer pushed the way
+// the poller records a push (store.UpsertPRFromGitHub: head_sha,
+// head_changed_at and the activity time), so the forced re-review targets
+// it and the poller's own sight of it later changes nothing. A row whose
+// head is no longer the reviewed one (the poller saw this push already, or
+// a newer one) is left as it is. It returns the PR and whether its head
+// moved; the caller lets onHeadChange see the push.
+func (e *Engine) recordFixPush(ctx context.Context, job *fixJob, pr store.PR, head string) (store.PR, bool, error) {
+	if pr.HeadSHA != job.review.SHA || head == pr.HeadSHA {
+		return pr, false, nil
+	}
+	res, err := e.st.UpsertPRFromGitHub(ctx, store.GitHubPR{RepoID: pr.RepoID, NodeID: pr.NodeID, Number: pr.Number, URL: pr.URL,
+		HeadSHA: head, IsDraft: pr.IsDraft})
+	if err != nil {
+		return pr, false, err
+	}
+	return res.PR, res.HeadChanged, nil
 }
 
 // eventData is the data every fix event carries: the run, the role, the
@@ -243,10 +277,13 @@ func (e *Engine) endFixState(ctx context.Context, job *fixJob) {
 // fixAttention tells the operator that the job's loop needs them, with msg,
 // as the fix job's attention (attention.KindFix: the fixer, its report and
 // `magnum fix` or `magnum abort` as the next step). A reviewed PR goes to
-// needs_attention (needsAttention: its toast and attention key). A PR
-// waiting for a round keeps it, because a push came during the fix and
-// that re-review still runs: it gets the urgent toast alone. A PR
-// elsewhere (closed, ineligible) has the events only.
+// needs_attention (needsAttention: its toast and attention key), and so
+// does one already there, a second loop's (`magnum fix` once the author
+// answered the first): its message replaces the first loop's. A PR waiting
+// for a round keeps it, because a push came during the fix and that
+// re-review still runs: it gets the urgent toast alone. A PR elsewhere
+// (closed, ineligible) has the events only. The toast's dedupe key is the
+// loop's cycle's own, so each loop that needs the author toasts.
 func (e *Engine) fixAttention(ctx context.Context, job *fixJob, msg string) {
 	pr, err := e.st.PRByID(ctx, job.pr.ID)
 	if err != nil {
@@ -255,13 +292,13 @@ func (e *Engine) fixAttention(ctx context.Context, job *fixJob, msg string) {
 	}
 	rj := job.asRound()
 	rj.pr = pr
+	key := fmt.Sprintf("attention:%d:%s:%s:%d:%s", pr.ID, attention.KindFix, store.FormatTime(job.state.StartedAt), job.state.Cycle, job.run.ID)
 	switch {
-	case pr.State == store.PRReviewed:
-		e.needsAttention(ctx, rj, pr, []string{store.PRReviewed}, attention.KindFix, msg, nil)
+	case pr.State == store.PRReviewed || pr.State == store.PRNeedsAttention:
+		e.needsAttentionKeyed(ctx, rj, pr, []string{store.PRReviewed, store.PRNeedsAttention}, attention.KindFix, msg, nil, key)
 	case slices.Contains(waitingStates, pr.State):
 		label := fmt.Sprintf("%s#%d", job.repo.Name, pr.Number)
-		e.urgent(fmt.Sprintf("attention:%d:fix", pr.ID), "magnum: "+label+" needs attention",
-			attention.Explain(attention.KindFix, msg, label).Summary, attentionWindow)
+		e.urgent(key, "magnum: "+label+" needs attention", attention.Explain(attention.KindFix, msg, label).Summary, attentionWindow)
 	}
 }
 

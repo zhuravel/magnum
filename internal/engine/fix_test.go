@@ -371,8 +371,10 @@ func TestFixRefusals(t *testing.T) {
 }
 
 // A fixer that pushed with nobody needed counts the cycle: the slot is put
-// back in order at the pushed head, the loop waits for the re-review
-// (reviewing, cycle 1), and a forced re-review of the pushed head runs.
+// back in order at the pushed head, the push is recorded on the PR row as
+// the poller records one (so the poller's own sight of it changes nothing),
+// the loop waits for the re-review (reviewing, cycle 1), and a forced
+// re-review of the pushed head runs.
 func TestAPushedReportForcesTheReReview(t *testing.T) {
 	h, git := fixHarness(t)
 	pr := fixablePR(h, "zhuravel", map[string]int{"P2": 2})
@@ -401,10 +403,24 @@ func TestAPushedReportForcesTheReReview(t *testing.T) {
 	}
 	h.wantReportInData("fix.pushed", report)
 	h.wantReportInData("fix.replied", report)
+	// The push is on the PR row as the poller records one.
+	if cur := h.pr(2); cur.HeadSHA != fixPushed || !cur.HeadChangedAt.Equal(h.clock.Now()) {
+		t.Errorf("PR head %s changed at %v, want %s now", cur.HeadSHA, cur.HeadChangedAt, fixPushed)
+	}
+	if n := h.eventCount("pr:talkable/talkable#2", "pr.head_changed"); n != 1 {
+		t.Errorf("pr.head_changed events = %d, want 1", n)
+	}
+	if got := h.e.pushTimes(h.ctx, pr.ID); len(got) == 0 || !got[len(got)-1].Equal(h.clock.Now()) {
+		t.Errorf("recorded pushes %v lack the fixer's", got)
+	}
 
-	// The poller sees the push; the forced re-review runs on it.
+	// The poller's own sight of the push changes nothing; the forced
+	// re-review runs on the pushed head.
 	h.advance(time.Minute)
 	reqPoll(h, prSpec{n: 2, head: fixPushed, author: "zhuravel"})
+	if n := h.eventCount("pr:talkable/talkable#2", "pr.head_changed"); n != 1 {
+		t.Errorf("pr.head_changed events after the poll = %d, want 1", n)
+	}
 	reqWantRounds(t, h, 2)
 	if in := h.rd.all()[1]; in.TargetSHA != fixPushed || !in.PR.Forced {
 		t.Errorf("the re-review: target %s forced %v", in.TargetSHA, in.PR.Forced)
@@ -697,7 +713,8 @@ func TestAResyncFailureEndsTheFixAsNeedsAttention(t *testing.T) {
 }
 
 // A fixer whose time runs out is told to write its report now; one that
-// still writes none fails the job.
+// still writes none fails the job, and the slot goes back to the reviewed
+// head (the fixer's local commits would hold it for head drift).
 func TestAFixThatTimesOutIsAskedForItsReportThenFails(t *testing.T) {
 	h, _ := fixHarness(t)
 	pr := fixablePR(h, "zhuravel", map[string]int{"P2": 1})
@@ -713,6 +730,9 @@ func TestAFixThatTimesOutIsAskedForItsReportThenFails(t *testing.T) {
 	cur := h.wantState(2, store.PRNeedsAttention)
 	if le := deref(cur.LastError); !strings.HasPrefix(le, "fix run failed: ") || !strings.Contains(le, "ran out of its 1h") {
 		t.Errorf("last_error = %q", le)
+	}
+	if !slices.Contains(h.sl.all(), "resync:review1:"+fixHead) {
+		t.Errorf("slot calls %v lack the resync to the reviewed head: the fixer's commits stay in the slot", h.sl.all())
 	}
 	if r := h.fixRuns(pr.ID)[0]; r.State != store.RunFailed && r.State != store.RunAbandoned {
 		t.Errorf("fix run %s", r.State)
@@ -815,4 +835,34 @@ func TestAFixingRowHoldsDispatch(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A second loop on a PR the first one left in needs_attention says why again:
+// its failure replaces the PR's message and toasts, although the first
+// loop's attention toast was within the dedupe window.
+func TestASecondLoopOnANeedsAttentionPRSaysWhyAgain(t *testing.T) {
+	h, git := fixHarness(t)
+	pr := fixablePR(h, "zhuravel", map[string]int{"P1": 1})
+	fixer(h, git, "", func(run store.Run) string {
+		return fixReport(run.ID, "nothing", fixReplied, "- 2101 P1 app/models/offer.rb:42: wants a schema change")
+	})
+	h.fix(FixPayload{})
+	h.tick()
+	h.wantState(2, store.PRNeedsAttention)
+	h.wantToasts("needs attention", 1)
+
+	h.advance(10 * time.Minute)
+	fixer(h, git, "", func(store.Run) string { return "" }) // the second run writes no report of its own
+	id := h.fix(FixPayload{})
+	h.tick()
+	h.wantDone(id)
+	runs := h.fixRuns(pr.ID)
+	if len(runs) != 2 {
+		t.Fatalf("fix runs = %d, want 2", len(runs))
+	}
+	cur := h.wantState(2, store.PRNeedsAttention)
+	if le := deref(cur.LastError); !strings.HasPrefix(le, "fix run failed: ") || !strings.Contains(le, deref(runs[1].ReportPath)) {
+		t.Errorf("last_error = %q, want the second run's failure", le)
+	}
+	h.wantToasts("needs attention", 2)
 }
