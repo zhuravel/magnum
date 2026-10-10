@@ -13460,10 +13460,12 @@ func (m *Manager) Resync(ctx context.Context, slot store.Slot, sha string) error
     keeps them). It runs the steps guard, fetch and switch under the subject
     "slot:<name>:resync:<sha7>", a new generation on every call, and ends with a
     slot.resync event:
-      - guard is GuardLive, not Guard: the slot is refused when it is pinned or
-        held (ErrHold) or when a person's agent or process is in it, because
-        the switch drops the tracked changes; Guard would persist the very head
-        drift Resync repairs as the slot's hold;
+      - guard is guardDiscard, not Guard: the slot is refused (ErrHold) when it
+        is pinned or held, when a person's agent or process is in it, or when
+        someone typed into the PR's magnum panes since its checkout and the tree
+        has tracked changes (held as dirty_worktree), because the switch drops
+        those changes; Guard's head check would persist the very drift Resync
+        repairs as the slot's hold;
       - fetch looks sha up in the slot and fetches the commit by id into the
         main clone only when the slot lacks it (a head pushed from another
         clone);

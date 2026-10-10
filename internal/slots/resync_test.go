@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/store"
@@ -259,4 +260,64 @@ func TestResyncRefusesASlotAPersonHolds(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Someone typing into the PR's magnum panes after the slot's checkout makes
+// the tracked changes in its tree theirs, and Guard holds them. Resync's
+// switch would drop them for good, so it holds them the same way (the dirty
+// worktree hold, persisted) and leaves the tree and the record alone. Typing
+// before the checkout, or no changes to drop, lets it through.
+func TestResyncHoldsTrackedChangesAfterHumanActivity(t *testing.T) {
+	h := newHarness(t)
+	sl, pr := h.claimedCheckout(8, h.shaPR8)
+	local := fixerCommit(t, sl.Path, "one")
+	strayEdit(t, sl.Path)
+
+	h.humanTyped(pr.ID, h.now.Add(time.Minute))
+	h.run.reset()
+	hold := wantHold(t, h.m.Resync(h.ctx, sl, h.shaPR8), HoldDirtyWorktree)
+	if !strings.Contains(hold.Detail, "1 tracked change") || !strings.Contains(hold.Detail, "someone typed") {
+		t.Fatalf("detail %q names neither the changes nor the activity", hold.Detail)
+	}
+	got := h.slot(sl.Name)
+	if store.Deref(got.HoldReason) != HoldDirtyWorktree {
+		t.Fatalf("hold_reason = %q, want the dirty worktree hold persisted", store.Deref(got.HoldReason))
+	}
+	if store.Deref(got.CheckedOutSHA) != h.shaPR8 {
+		t.Fatalf("checked_out_sha = %s, want it untouched", store.Deref(got.CheckedOutSHA))
+	}
+	if head := gitT(t, sl.Path, "rev-parse", "HEAD"); head != local {
+		t.Fatalf("HEAD moved to %s", head)
+	}
+	if !strings.Contains(readFile(t, filepath.Join(sl.Path, "Gemfile.lock")), "stray") {
+		t.Fatal("the changes were discarded")
+	}
+	if sw := h.run.gitCalls("switch", "--quiet", "--discard-changes"); len(sw) != 0 {
+		t.Fatalf("switch calls = %v, want none", sw)
+	}
+	// The hold is persisted: a second call is refused as a held slot.
+	wantHold(t, h.m.Resync(h.ctx, sl, h.shaPR8), HoldDirtyWorktree)
+
+	// Without changes the activity is no reason to refuse.
+	h.clearHold(sl.ID)
+	gitT(t, sl.Path, "checkout", "--quiet", "--", "Gemfile.lock")
+	if err := h.m.Resync(h.ctx, h.slot(sl.Name), h.shaPR8); err != nil {
+		t.Fatalf("Resync of a clean tree after human activity: %v", err)
+	}
+	h.wantResynced(sl.Name, h.shaPR8)
+}
+
+// Typing before the slot's checkout is not evidence about the changes now in
+// its tree: they are the fixer's residue, and Resync drops them.
+func TestResyncDropsTrackedChangesWhenTheActivityPredatesTheCheckout(t *testing.T) {
+	h := newHarness(t)
+	sl, pr := h.claimedCheckout(8, h.shaPR8)
+	fixerCommit(t, sl.Path, "one")
+	strayEdit(t, sl.Path)
+	h.humanTyped(pr.ID, h.now.Add(-time.Minute))
+
+	if err := h.m.Resync(h.ctx, sl, h.shaPR8); err != nil {
+		t.Fatalf("Resync: %v", err)
+	}
+	h.wantResynced(sl.Name, h.shaPR8)
 }

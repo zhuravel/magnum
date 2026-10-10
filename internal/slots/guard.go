@@ -104,6 +104,28 @@ func (m *Manager) GuardLive(ctx context.Context, slot store.Slot) error {
 	return m.guardLive(ctx, sl, pr.ID)
 }
 
+// guardDiscard is the guard of a step that drops the slot's tracked changes
+// with no regard for HEAD (Resync, which runs after a fixer moved it): the
+// slot's pin and holds and a human's agent or process in it, as GuardLive,
+// then Guard's last check, a person's changes. When someone typed into the
+// PR's magnum panes after the slot's last checkout and the tree has tracked
+// changes, they are held as HoldDirtyWorktree and persisted, so the step
+// does not discard them. A head that moved is not a reason to refuse and
+// nothing is saved for it.
+func (m *Manager) guardDiscard(ctx context.Context, slot store.Slot) error {
+	sl, pr, err := m.guardStart(ctx, slot)
+	if err != nil {
+		return err
+	}
+	if err := m.guardLive(ctx, sl, pr.ID); err != nil {
+		return err
+	}
+	if why := humanActivity(sl, pr); why != "" {
+		return m.holdChanges(ctx, sl, false, why)
+	}
+	return nil
+}
+
 // guardStart reloads slot (unless it has no row yet), refuses it when it is
 // pinned or held, and returns it with its PR (guardPR).
 func (m *Manager) guardStart(ctx context.Context, slot store.Slot) (store.Slot, store.PR, error) {
