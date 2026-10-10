@@ -89,6 +89,42 @@ func TestParseFixReportIsLenientAboutWhitespaceAndWhatFollows(t *testing.T) {
 	}
 }
 
+// A loose Markdown list puts a blank line between its items, and every item
+// is a commit or a finding the author must hear about.
+func TestParseFixReportReadsEveryItemOfALooseList(t *testing.T) {
+	text := agents.ReportMarker(fixRun) + `
+## Pushed
+3fa9c1d Guard the nil owner
+
+abcdef0 Rename the helper
+
+## Replied
+2 threads (2 fixed, 0 already fixed, 0 not a bug, 0 won't fix)
+
+## Needs you
+
+- 2101 P1 a.rb:1: first
+
+- 2102 P2 b.rb:2: second
+- 2103 P3 c.rb:3: third
+
+Closing remark, not an entry.
+- 9 P1 z.rb:9: after the remark
+`
+	got, err := ParseFixReport(text, fixRun)
+	if err != nil {
+		t.Fatalf("ParseFixReport: %v", err)
+	}
+	wantPushed := []FixCommit{{SHA: "3fa9c1d", Message: "Guard the nil owner"}, {SHA: "abcdef0", Message: "Rename the helper"}}
+	if !reflect.DeepEqual(got.Pushed, wantPushed) {
+		t.Errorf("Pushed = %+v, want %+v", got.Pushed, wantPushed)
+	}
+	wantNeeds := []string{"2101 P1 a.rb:1: first", "2102 P2 b.rb:2: second", "2103 P3 c.rb:3: third"}
+	if !reflect.DeepEqual(got.NeedsYou, wantNeeds) {
+		t.Errorf("NeedsYou = %q, want %q", got.NeedsYou, wantNeeds)
+	}
+}
+
 func TestParseFixReportRefusesAPartialReport(t *testing.T) {
 	marker := agents.ReportMarker(fixRun)
 	cases := map[string]string{
@@ -146,6 +182,7 @@ func TestParseFixReportQuotesAMalformedLine(t *testing.T) {
 		"two replied lines":            {good("nothing", "1 threads (1 fixed)\nand a second line", "none"), "and a second line"},
 		"a needs-you line, no bullet":  {good("nothing", "0 threads", "- 7 P2 a.rb:1: why\n7 P2 a.rb:2: no bullet"), "7 P2 a.rb:2: no bullet"},
 		"none next to an entry":        {good("nothing", "0 threads", "none\n- 7 P2 a.rb:1: why"), "- 7 P2 a.rb:1: why"},
+		"none, a blank line, an entry": {good("nothing", "0 threads", "none\n\n- 7 P2 a.rb:1: why"), "- 7 P2 a.rb:1: why"},
 		"a bullet with nothing in it":  {good("nothing", "0 threads", "-"), "-"},
 		"an unknown heading in Pushed": {good("3fa9c1d A commit\n## Notes", "0 threads", "none"), "## Notes"},
 	}

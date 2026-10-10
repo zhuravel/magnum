@@ -83,10 +83,12 @@ const maxQuotedFixLine = 120
 // error is ErrFixReportMarker. The three sections must all follow, in
 // order, each with something under its heading, else the error is
 // ErrFixReportPartial; text before the first heading is ignored. The first
-// two sections run to the next heading. "## Needs you" runs to its first
-// blank line after its list begins, or to the next heading, so whatever
-// comes after the sections is ignored. Any other line that does not fit its
-// section is an error that quotes the line (not a sentinel).
+// two sections run to the next heading. "## Needs you" runs to the next
+// heading or, after a blank line, to the first line that is not a "- "
+// entry, so a loose list (a blank line between entries) keeps all of its
+// entries and a closing remark after the sections is ignored. Any other
+// line that does not fit its section is an error that quotes the line (not
+// a sentinel).
 func ParseFixReport(text string, runID string) (FixReport, error) {
 	got, rest := agents.ReportRun([]byte(text))
 	if runID == "" || got != runID {
@@ -118,10 +120,18 @@ func fixSectionBodies(rest string) ([fixSections][]string, error) {
 	var bodies [fixSections][]string
 	next := fixSectionPushed // the section whose heading is due
 	in := -1                 // the section being read, -1 before the first heading
+	gap := false             // a blank line follows the last section's list so far
 	for line := range strings.SplitSeq(rest, "\n") {
 		line = strings.TrimSpace(line)
-		if in == fixSectionNeedsYou && (strings.HasPrefix(line, "## ") || (line == "" && len(bodies[in]) > 0)) {
-			break // the last section ends; what follows is ignored
+		if in == fixSectionNeedsYou {
+			if strings.HasPrefix(line, "## ") || (gap && line != "" && !strings.HasPrefix(line, "- ")) {
+				break // the last section ends; what follows is ignored
+			}
+			if line == "" {
+				gap = len(bodies[in]) > 0
+				continue
+			}
+			gap = false
 		}
 		if i := slices.Index(fixHeadings[:], line); i >= 0 {
 			if i != next {
