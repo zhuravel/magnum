@@ -59,8 +59,8 @@ type Role struct {
 	RerunMinLines int `toml:"rerun_min_lines"`
 	// Identity: the [[identity]] whose GitHub env the role's pane gets;
 	// "" = the watch's identity. A fix role names a gh identity (the
-	// operator's own account), and an undeclared one is a warning, not an
-	// error (Config.Warnings).
+	// operator's own account), and an undeclared one is no error, a warning
+	// where autofix = "own" (Config.Warnings).
 	Identity string `toml:"identity"`
 	// Model and Effort are passed through the kind's model/effort args
 	// (Kind.Argv) and are template variables ({{.Model}}, {{.Effort}}; a

@@ -39,11 +39,6 @@ login = "zhuravel"
 no_findings_event = "APPROVE"
 
 [[identity]]
-name = "me" # the built-in fix role's identity: your own account, here the same login
-kind = "gh"
-login = "zhuravel"
-
-[[identity]]
 name = "talkable-app"
 kind = "app"
 login = "talkable[bot]"

@@ -212,9 +212,23 @@ func TestValidateFixRole(t *testing.T) {
 	}
 }
 
+// fixWarnings is the warnings of cfg that name the fix role.
+func fixWarnings(cfg *Config) []string {
+	var got []string
+	for _, w := range cfg.Warnings() {
+		if strings.Contains(w, "claude-fix") {
+			got = append(got, w)
+		}
+	}
+	return got
+}
+
 // The fixer's replies are told from magnum's own threads by login, so a
 // watch that posts as the identity the fix role uses draws a warning naming
-// the watch (not an error: the configuration still works).
+// the watch (not an error: the configuration still works), but only where
+// autofix = "own" starts the fix job by itself: a configuration that never
+// switches autofix on gets none, and `magnum fix` answers for a job asked by
+// hand.
 func TestValidateFixRoleWarnsWhenThePosterIsTheFixer(t *testing.T) {
 	cfg := validPipelineConfig() // watch acme posts as z; claude-fix fixes as me
 	if w := cfg.Warnings(); len(w) != 0 {
@@ -232,18 +246,34 @@ func TestValidateFixRoleWarnsWhenThePosterIsTheFixer(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate = %v, want a warning only", err)
 	}
-	var got []string
-	for _, w := range cfg.Warnings() {
-		if strings.Contains(w, "claude-fix") {
-			got = append(got, w)
-		}
+	if w := fixWarnings(cfg); len(w) != 0 {
+		t.Fatalf("Warnings with autofix never = %q, want none", w)
 	}
+
+	cfg.Watches[0].Autofix = AutofixOwn
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate = %v, want a warning only", err)
+	}
+	got := fixWarnings(cfg)
 	if len(got) != 1 || !strings.Contains(got[0], "watch acme") || !strings.Contains(got[0], `identity "z"`) {
 		t.Fatalf("Warnings about the fix role = %q, want one naming watch acme and identity z", got)
 	}
 
+	// The pipeline's autofix reaches a watch that sets none; a watch's own
+	// value wins over it.
+	cfg.Watches[0].Autofix = ""
+	cfg.Pipeline.Autofix = AutofixOwn
+	if got := fixWarnings(cfg); len(got) != 1 {
+		t.Errorf("Warnings with [pipeline] autofix = own = %q, want one", got)
+	}
+	cfg.Watches[0].Autofix = AutofixNever
+	if got := fixWarnings(cfg); len(got) != 0 {
+		t.Errorf("Warnings with the watch's autofix = never = %q, want none", got)
+	}
+
 	// A watch without a fix job has no one to confuse; so has a fix role of
 	// another identity.
+	cfg.Watches[0].Autofix = AutofixOwn
 	cfg.Watches[0].FixRole = new("")
 	if w := cfg.Warnings(); len(w) != 0 {
 		t.Errorf("Warnings with the fix job off for the watch = %q", w)
@@ -256,33 +286,33 @@ func TestValidateFixRoleWarnsWhenThePosterIsTheFixer(t *testing.T) {
 }
 
 // An undeclared identity cannot be an error (the built-in defaults carry no
-// identity and must validate), so it is a warning once the configuration
-// declares identities, and not before: then "no [[identity]] configured"
-// already says it.
+// identity and must validate), so it is a warning where autofix = "own"
+// starts the fix job, once the configuration declares identities: before,
+// "no [[identity]] configured" already says it.
 func TestAFixRoleWithAnUndeclaredIdentityWarns(t *testing.T) {
 	cfg := validPipelineConfig()
 	cfg.Identities = cfg.Identities[:1] // z only; claude-fix wants "me"
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate = %v", err)
 	}
-	var got []string
-	for _, w := range cfg.Warnings() {
-		if strings.Contains(w, "claude-fix") {
-			got = append(got, w)
-		}
+	if w := cfg.Warnings(); len(w) != 0 {
+		t.Fatalf("Warnings with autofix never = %q, want none", w)
 	}
+
+	cfg.Watches[0].Autofix = AutofixOwn
+	got := fixWarnings(cfg)
 	if len(got) != 1 || !strings.Contains(got[0], `identity "me" is not declared`) {
 		t.Fatalf("Warnings = %q, want one about the undeclared identity", got)
 	}
 
 	cfg.Watches[0].FixRole = new("")
-	cfg.Pipeline.FixRole = ""
 	if w := cfg.Warnings(); len(w) != 0 {
-		t.Errorf("Warnings without a fix job = %q", w)
+		t.Errorf("Warnings without a fix job for the watch = %q", w)
 	}
 
 	none := Defaults()
 	none.Herdr.Socket = "/tmp/herdr.sock"
+	none.Pipeline.Autofix = AutofixOwn
 	if err := none.Validate(); err != nil {
 		t.Fatalf("Validate without identities = %v", err)
 	}
@@ -416,8 +446,8 @@ func TestAFixRoleGetsTheSkillAndPromptDefaults(t *testing.T) {
 	if DefaultFixSkill != "{{repo}}/skills/magnum-fix/SKILL.md" {
 		t.Errorf("DefaultFixSkill = %q", DefaultFixSkill)
 	}
-	if w := cfg.Warnings(); len(w) != 1 || !strings.Contains(w[0], `identity "me" is not declared`) {
-		t.Errorf("Warnings = %q, want the one about the identity me (the user config declares z only)", w)
+	if w := cfg.Warnings(); len(w) != 0 {
+		t.Errorf("Warnings = %q, want none (the user config declares z only, and autofix is never)", w)
 	}
 
 	_, _, err = loadUser(t, snapTOML+`
