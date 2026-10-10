@@ -78,7 +78,9 @@ func roleNames(roles []config.Role) []Role {
 //     codex-judge | claude-review over codex-review), the third below the
 //     judge, the fourth down the right column again, and so on.
 //
-// Every pane gets env with the role's env (Config.RoleEnv) laid over it.
+// Every pane gets env with the role's env (Config.RoleEnv) laid over it; a
+// role with an identity gets that identity's env instead of env's gh selection
+// (see paneEnv).
 // Every newly assigned pane gets a sessions row (state starting, agent
 // name/kind or agent_kind "shell", pane/workspace/tab ids, cwd, env_json) and
 // is renamed "PR #N <role>" (TaggedPaneLabel); a new workspace whose root pane
@@ -245,11 +247,26 @@ func (m *Manager) EnsurePane(ctx context.Context, pr store.PR, ws Workspace, slo
 }
 
 // paneEnv is env with the role's env (Config.RoleEnv) laid over it; nil
-// when both are empty.
+// when both are empty. A role with an identity (config.Role.Identity, the
+// fix role's "me") acts as that identity, not as the one env was made for:
+// the posting identity's gh selection (GH_CONFIG_DIR, GH_TOKEN, GITHUB_TOKEN)
+// is dropped from env and the identity's own env (Deps.IdentityEnv) laid
+// over it first, so the slot's and MAGNUM_* variables stay. An identity that
+// does not resolve leaves env as it is.
 func (m *Manager) paneEnv(env map[string]string, role config.Role) map[string]string {
 	var extra map[string]string
 	if m.d.Config != nil {
 		extra = m.d.Config.RoleEnv(role)
+	}
+	if idEnv, ok := m.identityEnv(role); ok {
+		out := make(map[string]string, len(env)+len(idEnv)+len(extra))
+		maps.Copy(out, env)
+		for _, k := range ghSelection {
+			delete(out, k)
+		}
+		maps.Copy(out, idEnv)
+		maps.Copy(out, extra)
+		return out
 	}
 	if len(extra) == 0 {
 		return env
@@ -258,6 +275,19 @@ func (m *Manager) paneEnv(env map[string]string, role config.Role) map[string]st
 	maps.Copy(out, env)
 	maps.Copy(out, extra)
 	return out
+}
+
+// ghSelection are the variables that choose which account gh acts as: an
+// App identity's env sets GH_CONFIG_DIR and blanks the two tokens.
+var ghSelection = []string{"GH_CONFIG_DIR", "GH_TOKEN", "GITHUB_TOKEN"}
+
+// identityEnv is the env of role's identity, false for a role without one
+// or one Deps.IdentityEnv does not resolve.
+func (m *Manager) identityEnv(role config.Role) (map[string]string, bool) {
+	if role.Identity == "" || m.d.IdentityEnv == nil {
+		return nil, false
+	}
+	return m.d.IdentityEnv(role.Identity)
 }
 
 // Layout columns.

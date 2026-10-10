@@ -619,6 +619,12 @@ type Deps struct {
 	// magnum eval): it joins their names' hash (TaggedAgentName) and leads
 	// their titles and pane labels (TaggedTitle). "" = the PR's own agents.
 	Tag string
+	// IdentityEnv is the GitHub env (identity.Source.Env) of the configured
+	// identity name, false when it is not declared or cannot make its env.
+	// A pane of a role with an identity (config.Role.Identity) gets that env
+	// in place of the posting identity's (see paneEnv); nil = no identities,
+	// so such a pane keeps the env it was given.
+	IdentityEnv func(name string) (env map[string]string, ok bool)
 }
     Deps are the Manager's collaborators.
 
@@ -1021,14 +1027,15 @@ func (m *Manager) EnsureWorkspace(ctx context.Context, pr store.PR, slotPath str
         claude-review over codex-review), the third below the judge, the fourth
         down the right column again, and so on.
 
-    Every pane gets env with the role's env (Config.RoleEnv) laid over it. Every
-    newly assigned pane gets a sessions row (state starting, agent name/kind or
-    agent_kind "shell", pane/workspace/tab ids, cwd, env_json) and is renamed
-    "PR #N <role>" (TaggedPaneLabel); a new workspace whose root pane cannot
-    be recorded is closed again (nothing else would find it). Live rows whose
-    pane is gone are marked lost first, keeping their session_id for ResumeID.
-    Pane envs are stored in sessions.env_json, so they must not carry secrets
-    (identity.Source.Env never does).
+    Every pane gets env with the role's env (Config.RoleEnv) laid over it;
+    a role with an identity gets that identity's env instead of env's gh
+    selection (see paneEnv). Every newly assigned pane gets a sessions row
+    (state starting, agent name/kind or agent_kind "shell", pane/workspace/tab
+    ids, cwd, env_json) and is renamed "PR #N <role>" (TaggedPaneLabel); a new
+    workspace whose root pane cannot be recorded is closed again (nothing else
+    would find it). Live rows whose pane is gone are marked lost first, keeping
+    their session_id for ResumeID. Pane envs are stored in sessions.env_json,
+    so they must not carry secrets (identity.Source.Env never does).
 
 func (m *Manager) FallbackModel(ctx context.Context, s store.Session, tried []string) (string, bool)
     FallbackModel is the model session s switches to next: the first of its
@@ -4995,6 +5002,15 @@ const SkipIgnored = "ignored"
 
 VARIABLES
 
+var (
+	// ErrFixReportMarker is the error for a report whose first line is not the
+	// marker of the run asked for: another run wrote it, or none did.
+	ErrFixReportMarker = errors.New("fix report: the first line is not the run's marker")
+	// ErrFixReportPartial is the error for a report with a section missing,
+	// empty or out of order, as when the fixer ran out of time before it
+	// finished writing.
+	ErrFixReportPartial = errors.New("fix report: a section is missing")
+)
 var DeltaClasses = config.TrivialDeltaClasses
     DeltaClasses lists every class, the default of skip_trivial_deltas
     (config.TrivialDeltaClasses, the list the configuration accepts).
@@ -5822,12 +5838,46 @@ type EvalGateOptions struct {
     and the run it belongs to, its directory under Layout.Eval and its agent tag
     (eval.AgentTag), both its own.
 
+type FixCommit struct {
+	SHA     string // 7 to 40 hex digits, as the fixer wrote it
+	Message string
+}
+    FixCommit is a commit the fixer says it pushed.
+
 type FixOff struct {
 	Since time.Time `json:"since"`
 	By    string    `json:"by"`
 }
     FixOff is a PR's opt-out of the fix job: when it was set and by whom
     ("magnum fix --off").
+
+type FixReport struct {
+	// Pushed are the commits on GitHub, none for "nothing".
+	Pushed []FixCommit
+	// Replied is the line that counts the threads the fixer replied in, as
+	// written ("N threads (a fixed, b already fixed, c not a bug, d won't
+	// fix)").
+	Replied string
+	// NeedsYou are the findings that need the author, one entry per line
+	// without its "- " (`<comment id> <priority> <path>:<line>: <reason>`),
+	// none for "none".
+	NeedsYou []string
+	// PushFailed: the fixer says its push failed ("push failed: …").
+	PushFailed bool
+}
+    FixReport is what the fixer reports.
+
+func ParseFixReport(text string, runID string) (FixReport, error)
+    ParseFixReport reads the fixer's report of the run runID.
+
+    The first line must be the run's marker (agents.ReportMarker),
+    else the error is ErrFixReportMarker. The three sections must all follow,
+    in order, each with something under its heading, else the error is
+    ErrFixReportPartial; text before the first heading is ignored. The first
+    two sections run to the next heading. "## Needs you" runs to its first blank
+    line after its list begins, or to the next heading, so whatever comes after
+    the sections is ignored. Any other line that does not fit its section is an
+    error that quotes the line (not a sentinel).
 
 type FixState struct {
 	Cycle     int       `json:"cycle"`

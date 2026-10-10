@@ -183,6 +183,12 @@ type Deps struct {
 	// magnum eval): it joins their names' hash (TaggedAgentName) and leads
 	// their titles and pane labels (TaggedTitle). "" = the PR's own agents.
 	Tag string
+	// IdentityEnv is the GitHub env (identity.Source.Env) of the configured
+	// identity name, false when it is not declared or cannot make its env.
+	// A pane of a role with an identity (config.Role.Identity) gets that env
+	// in place of the posting identity's (see paneEnv); nil = no identities,
+	// so such a pane keeps the env it was given.
+	IdentityEnv func(name string) (env map[string]string, ok bool)
 }
 
 // Manager drives agent sessions. Safe for concurrent use: the daemon tick

@@ -133,6 +133,19 @@ func TestNewWiresEverything(t *testing.T) {
 	}
 }
 
+// The agents manager looks a role's identity up in the configured identities
+// (identity.Source.Env), so the fix role's pane acts as the operator.
+func TestNewGivesTheAgentsTheIdentitiesEnv(t *testing.T) {
+	a, _ := testApp(t, Options{})
+	env, ok := a.identityEnv("zhuravel")
+	if !ok || env["GH_HOST"] != "github.com" || env["GH_CONFIG_DIR"] != "" {
+		t.Errorf("identityEnv(zhuravel) = %v, %v, want the gh identity's env", env, ok)
+	}
+	if env, ok := a.identityEnv("nobody"); ok || env != nil {
+		t.Errorf("identityEnv(nobody) = %v, %v, want none", env, ok)
+	}
+}
+
 // The slots manager gets the App identities' private_key_env names, so a
 // pool script, which runs the PR's code outside the sandbox, never inherits
 // an App's private key from the daemon's environment.

@@ -296,7 +296,7 @@ func (a *App) wire() {
 	}
 	a.Agents = agents.New(agents.Deps{
 		Herdr: a.Herdr, Store: a.Store, Runner: a.Runner, Config: cfg, Layout: a.Layout, Tag: a.AgentTag,
-		Log: Printf{Logger: a.Logger, Level: slog.LevelInfo, Src: "agents"},
+		IdentityEnv: a.identityEnv, Log: Printf{Logger: a.Logger, Level: slog.LevelInfo, Src: "agents"},
 	})
 	a.Pipeline = map[string]*pipeline.Runner{}
 	for name, src := range a.Identities {
@@ -317,6 +317,23 @@ func (a *App) wire() {
 		Enabled: cfg.Herdr.Notify && !a.DryRun && a.AgentTag == "",
 		Log:     Printf{Logger: a.Logger, Level: slog.LevelInfo, Src: "notify"},
 	}
+}
+
+// identityEnv implements agents.Deps.IdentityEnv: the GitHub env of the
+// configured identity name, false for an identity that is not declared or
+// whose env cannot be made. A role's identity is a gh one (config validation
+// refuses an App for the fix role), whose env needs no token and no network.
+func (a *App) identityEnv(name string) (map[string]string, bool) {
+	src, ok := a.Identities[name]
+	if !ok {
+		return nil, false
+	}
+	env, err := src.Env(context.Background())
+	if err != nil {
+		a.Logger.Warn("identity env unavailable", "identity", name, "err", err)
+		return nil, false
+	}
+	return env, true
 }
 
 // githubFor implements App.GitHub.
