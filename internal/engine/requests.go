@@ -415,48 +415,10 @@ func (e *Engine) requestReview(ctx context.Context, p ReviewPayload) (string, er
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", label, err)
 	}
-	// The dry-run marker is settled before the PR is forced: a forced PR
-	// must never run in the wrong mode because a kv write failed.
-	wroteMarker, err := e.markDryRun(ctx, pr, p.DryRun)
+	to, err := e.forceReview(ctx, repo, pr, p, requested, "magnum review")
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", label, err)
 	}
-	to := claimableState(pr)
-	err = e.st.TransitionPR(ctx, pr.ID, []string{pr.State}, to, func(u *store.PRUpdate) {
-		u.Set("forced", true)
-		u.Set("next_eligible_at", nil)
-		u.Set("next_attempt_at", nil)
-		u.Set("attempts", 0)
-		u.Set("skip_reason", nil)
-		u.Set("last_error", nil)
-		if p.As != "" {
-			u.Set("identity", p.As)
-		}
-	})
-	if err != nil {
-		if wroteMarker {
-			e.delKV(ctx, store.KVPRDryRun(pr.ID))
-		}
-		return "", fmt.Errorf("%s: %w", label, err)
-	}
-	e.addRequested(ctx, pr.ID, requested...)
-	if p.As != "" {
-		e.setKV(ctx, KVPRIdentityPinned(pr.ID), p.As) // never migrated to the watch's identity
-	}
-	if p.Fresh {
-		e.setKV(ctx, store.KVPRFresh(pr.ID), "1")
-	}
-	if p.Replies {
-		e.setKV(ctx, kvPRRedecide(pr.ID), "1")
-	} else {
-		e.delKV(ctx, kvPRRedecide(pr.ID)) // this request is a review, whatever an earlier one asked
-	}
-	e.seeStalemates(ctx, pr.ID) // the operator acts on the PR: the threads magnum stopped arguing in are seen
-	forced := "forced"
-	if merged {
-		forced = "forced, post-merge"
-	}
-	e.event(ctx, "info", prSubject(repo, pr.Number), "pr.forced", fmt.Sprintf("magnum review: %s → %s (%s)", pr.State, to, forced), nil)
 	// A forced review should not wait for the periodic identity re-check when
 	// the identity it posts as (the one --as names, else the PR's) was marked
 	// unhealthy (for example by a judge whose own check hit a transient
@@ -502,6 +464,58 @@ func (e *Engine) requestReview(ctx context.Context, p ReviewPayload) (string, er
 		res += "; waiting: " + slotHeld
 	}
 	return res, nil
+}
+
+// forceReview forces pr's next round, as requestReview decided it may run:
+// forced=1, throttle and backoff cleared, the PR queued (or
+// rereview_pending), which Candidates then puts first, with what p asks for
+// it (a dry run, fresh sessions, the requested roles, a re-decision of the
+// replies, a posting identity). by names who asks in the pr.forced event
+// ("magnum review"). It returns the state the PR moved to.
+func (e *Engine) forceReview(ctx context.Context, repo store.Repo, pr store.PR, p ReviewPayload, requested []string, by string) (string, error) {
+	// The dry-run marker is settled before the PR is forced: a forced PR
+	// must never run in the wrong mode because a kv write failed.
+	wroteMarker, err := e.markDryRun(ctx, pr, p.DryRun)
+	if err != nil {
+		return "", err
+	}
+	to := claimableState(pr)
+	err = e.st.TransitionPR(ctx, pr.ID, []string{pr.State}, to, func(u *store.PRUpdate) {
+		u.Set("forced", true)
+		u.Set("next_eligible_at", nil)
+		u.Set("next_attempt_at", nil)
+		u.Set("attempts", 0)
+		u.Set("skip_reason", nil)
+		u.Set("last_error", nil)
+		if p.As != "" {
+			u.Set("identity", p.As)
+		}
+	})
+	if err != nil {
+		if wroteMarker {
+			e.delKV(ctx, store.KVPRDryRun(pr.ID))
+		}
+		return "", err
+	}
+	e.addRequested(ctx, pr.ID, requested...)
+	if p.As != "" {
+		e.setKV(ctx, KVPRIdentityPinned(pr.ID), p.As) // never migrated to the watch's identity
+	}
+	if p.Fresh {
+		e.setKV(ctx, store.KVPRFresh(pr.ID), "1")
+	}
+	if p.Replies {
+		e.setKV(ctx, kvPRRedecide(pr.ID), "1")
+	} else {
+		e.delKV(ctx, kvPRRedecide(pr.ID)) // this request is a review, whatever an earlier one asked
+	}
+	e.seeStalemates(ctx, pr.ID) // the operator acts on the PR: the threads magnum stopped arguing in are seen
+	forced := "forced"
+	if postMerge(pr) {
+		forced = "forced, post-merge"
+	}
+	e.event(ctx, "info", prSubject(repo, pr.Number), "pr.forced", fmt.Sprintf("%s: %s → %s (%s)", by, pr.State, to, forced), nil)
+	return to, nil
 }
 
 // markDryRun settles the PR's dry-run marker for a review request before the
