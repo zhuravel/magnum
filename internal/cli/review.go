@@ -185,7 +185,10 @@ func reviewMain(ctx context.Context, c *Context, d *actDeps, ref string, o revie
 	}
 	progress := reviewProgress(c, o)
 
-	if f, ok := codexFlagOf(ctx, d.Store, t.PR.ID); ok { // never reviewed again (codex_flag.go)
+	// Never reviewed again (codex_flag.go), unless a fallback judge took the
+	// PR over (engine judge_fallback.go; the daemon checks that the role is
+	// still a judge of another kind when it answers).
+	if f, ok := codexFlagOf(ctx, d.Store, t.PR.ID); ok && f.Fallback == "" {
 		return reviewFailJSON(c, o, out, fmt.Errorf("%s: %s", label, f.Sentence(label)))
 	}
 	merged := t.PR.GHState == store.GHMerged

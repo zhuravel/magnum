@@ -207,7 +207,7 @@ func mergeCheckFlagged(ctx context.Context, st *store.Store, defRepo, repo strin
 	if err != nil {
 		return err
 	}
-	if f, ok := codexFlagOf(ctx, st, pr.ID); ok {
+	if f, ok := codexFlagOf(ctx, st, pr.ID); ok && f.Fallback == "" { // a PR a fallback judge took over may be checked
 		label := actRefLabel(defRepo, repo, number)
 		return fmt.Errorf("%s: %s", label, f.Sentence(label))
 	}

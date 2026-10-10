@@ -162,6 +162,26 @@ func TestReviewRefusesAFlaggedPR(t *testing.T) {
 	if n := len(h.requests()); n != 0 {
 		t.Fatalf("requests queued: %d", n)
 	}
+
+	// A flag that names a fallback judge (engine judge_fallback.go) does not
+	// refuse the review: the request reaches the daemon, which decides.
+	f := engine.CodexFlag{Kind: "codex", Role: "codex-judge", Head: "abc1234def5678", At: h.now.Add(-time.Hour), Fallback: "claude-judge"}
+	b, err := json.Marshal(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.SetKV(context.Background(), store.KVPRCodexFlag(pr.ID), string(b)); err != nil {
+		t.Fatal(err)
+	}
+	h.out.Reset()
+	h.errb.Reset()
+	h.cmd("review", "talkable#5")
+	if strings.Contains(h.errb.String(), "Codex flagged this PR") {
+		t.Fatalf("review of a PR with a fallback judge refused by the CLI: %s", h.errb.String())
+	}
+	if n := len(h.requests()); n != 1 {
+		t.Fatalf("requests queued: %d, want the review request", n)
+	}
 }
 
 // A flag record the CLI cannot parse counts as a flag, as in the daemon:
