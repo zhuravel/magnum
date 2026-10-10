@@ -403,7 +403,7 @@ func TestStatusRenderCleansUntrustedText(t *testing.T) {
 func TestStatusResumeQuotesEveryWord(t *testing.T) {
 	id, cwd := "a b;rm -rf $HOME", "/tmp/it's here"
 	s := store.Session{Role: "codex-judge", SessionID: &id, AgentKind: new("codex"), Cwd: &cwd}
-	want := `cd '/tmp/it'\''s here' && codex resume 'a b;rm -rf $HOME'`
+	want := `cd '/tmp/it'\''s here' && codex resume 'a b;rm -rf $HOME' -c tui.resume_cwd=current`
 	if got := statusResume(config.Defaults(), s); got != want {
 		t.Fatalf("statusResume = %q\nwant         %q", got, want)
 	}
@@ -411,7 +411,7 @@ func TestStatusResumeQuotesEveryWord(t *testing.T) {
 	t.Setenv("HOME", "/Users/x")
 	id, cwd = "s-1", "/Users/x/talkable.review1"
 	s = store.Session{Role: "codex-judge", SessionID: &id, AgentKind: new("codex"), Cwd: &cwd}
-	if got := statusResume(config.Defaults(), s); got != "cd ~/talkable.review1 && codex resume s-1" {
+	if got := statusResume(config.Defaults(), s); got != "cd ~/talkable.review1 && codex resume s-1 -c tui.resume_cwd=current" {
 		t.Fatalf("statusResume = %q", got)
 	}
 }

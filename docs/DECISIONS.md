@@ -887,6 +887,16 @@ skill versions); people add theirs to the sections before it, at the end of the 
   uncompleted, so every tick ran it, and it panicked, again. Now heavyRequest runs the job under
   Engine.safely, and its settle completes the request as failed ("panicked: <value>") beside the
   engine.panic event.
+- **A resumed Codex session takes the slot's directory** (2026-10-10). Codex 0.162 resumes a session
+  from a directory other than the one the session recorded only after a "Working directory · resume"
+  dialog (use the session's directory, use the current one, or either as a saved preference), which
+  magnum does not answer: a parked session restored into another slot (a PR gets whichever slot is free)
+  waited on it until a person chose, seen on talkable#11966 restored into review9 from review7. The
+  built-in codex kind now resumes with `-c tui.resume_cwd=current` (the setting behind the dialog), so
+  the session runs in the slot it was restored into, the only directory the round's checkout lives in;
+  a fresh session passes nothing. Rejected: answering the dialog from the observer (one more prompt to
+  recognise, and the choice is never anything but the current directory) and the saved preference
+  (`tui.resume_cwd` in the user's config.toml would also decide their own `codex resume`).
 
 ## Screens and commands
 

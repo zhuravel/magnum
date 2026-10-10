@@ -939,7 +939,9 @@ see what Magnum will type.
 
 `[kinds.<name>]` tables describe how each agent CLI is started, resumed, named, given a model and
 effort, checked for login and classified for usage limits (`codex`, `claude`, `droid` and `omp` ship
-with defaults; any herdr-supported kind can be added). Prompts are files under `[pipeline]
+with defaults; any herdr-supported kind can be added). A resumed Codex session runs in the slot it was
+restored into (`-c tui.resume_cwd=current`): Codex 0.162 would otherwise ask which directory to use when
+the slot changed, and Magnum does not answer that dialog. Prompts are files under `[pipeline]
 prompts_dir` (default `prompts/`, falling back to copies built into the binary), so a prompt change is
 a file edit, not a rebuild. The daemon loads the prompts and a copy of the judge skill when it starts,
 right after checking that its build renders them, so an edit takes effect at the next

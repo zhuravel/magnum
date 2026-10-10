@@ -391,8 +391,13 @@ func DefaultKinds() map[string]Kind {
 	}
 	return map[string]Kind{
 		KindCodex: base(Kind{
-			Args:       []string{"--dangerously-bypass-approvals-and-sandbox"},
-			Resume:     []string{"resume", PlaceholderSession},
+			Args: []string{"--dangerously-bypass-approvals-and-sandbox"},
+			// Codex 0.162 resumes a session from a directory other than the
+			// one it recorded only after a "Working directory · resume"
+			// dialog (tui.resume_cwd: current | session), which magnum does
+			// not answer: a parked session restored into another slot takes
+			// the slot's directory.
+			Resume:     []string{"resume", PlaceholderSession, "-c", "tui.resume_cwd=current"},
 			Model:      []string{"--model", PlaceholderModel},
 			Effort:     []string{"-c", "model_reasoning_effort=" + PlaceholderEffort},
 			Rename:     "/rename " + PlaceholderTitle,

@@ -105,7 +105,7 @@ func TestJudgeOfAPRChangingCodexStartsWithTheCheckoutUntrusted(t *testing.T) {
 		}
 		want := slices.Concat(judgeLaunchArgs, untrustArgs(dir))
 		if resume != "" {
-			want = slices.Concat([]string{"resume", resume}, want)
+			want = slices.Concat(codexResumeArgs(resume), want)
 		}
 		if got := e.h.starts[0].Args; !slices.Equal(got, want) {
 			t.Fatalf("resume %q: args = %q\nwant %q", resume, got, want)

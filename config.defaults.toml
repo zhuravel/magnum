@@ -275,7 +275,8 @@ judge_fallback = ""               # a judge role of another kind that takes over
 #                                     # binary runs like the wrapper, without approval prompts or sandbox
 #                                     # (magnum answers prompts No; a sandboxed judge cannot post); doctor
 #                                     # fails a plain binary without it
-# resume = ["resume", "{session}"]
+# resume = ["resume", "{session}", "-c", "tui.resume_cwd=current"]   # the slot's directory, not the one the session
+#                                     # recorded (Codex 0.162 asks otherwise, and magnum does not answer)
 # model = ["--model", "{model}"]
 # default_model = ""                  # the model of every codex role without its own `model`, passed through
 #                                     # `model` args; e.g. "gpt-6.1-sol" makes the judge start with

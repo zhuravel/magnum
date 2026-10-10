@@ -373,7 +373,7 @@ func TestResumeArgvUsesTheKindsResumeArgs(t *testing.T) {
 		s    store.Session
 		want string
 	}{
-		{store.Session{Role: "codex-judge", SessionID: &id, AgentKind: kind("codex")}, "codex resume s-1"},
+		{store.Session{Role: "codex-judge", SessionID: &id, AgentKind: kind("codex")}, "codex resume s-1 -c tui.resume_cwd=current"},
 		{store.Session{Role: "claude-simplify", SessionID: &id}, "claude --resume s-1"},
 		{store.Session{Role: "x", SessionID: &id, AgentKind: kind("omp")}, "omp --resume=s-1"},
 		{store.Session{Role: "codex-review", SessionID: &id}, ""},

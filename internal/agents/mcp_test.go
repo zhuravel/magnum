@@ -30,6 +30,12 @@ enabled = false
 command = "dotted-mcp"
 `
 
+// codexResumeArgs are the args that resume a Codex session: the built-in
+// kind's, the slot's directory included (config.DefaultKinds).
+func codexResumeArgs(session string) []string {
+	return []string{"resume", session, "-c", "tui.resume_cwd=current"}
+}
+
 var mcpOffArgs = []string{"-c", "features.apps=false", "-c", "skills.include_instructions=false", "-c", "mcp_servers.browser.enabled=false", "-c", "mcp_servers.docs.enabled=false"}
 
 // Magnum's Codex sessions loaded every MCP server of the operator's Codex
@@ -47,7 +53,7 @@ func TestJudgeStartsWithoutTheOperatorsMCPServers(t *testing.T) {
 		}
 		want := slices.Concat([]string{"-c", "model_reasoning_effort=xhigh", "-c", "agents.max_concurrent_threads_per_session=2"}, mcpOffArgs)
 		if resume != "" {
-			want = slices.Concat([]string{"resume", resume}, want)
+			want = slices.Concat(codexResumeArgs(resume), want)
 		}
 		if got := e.h.starts[0].Args; !slices.Equal(got, want) {
 			t.Fatalf("resume %q: args = %q\nwant %q", resume, got, want)
@@ -166,7 +172,7 @@ func TestCodexRunsWithoutTheAppsConnector(t *testing.T) {
 		}
 		want := slices.Concat([]string{"-c", "model_reasoning_effort=xhigh", "-c", "agents.max_concurrent_threads_per_session=2"}, appsOff)
 		if resume != "" {
-			want = slices.Concat([]string{"resume", resume}, want)
+			want = slices.Concat(codexResumeArgs(resume), want)
 		}
 		if got := e.h.starts[0].Args; !slices.Equal(got, want) {
 			t.Fatalf("resume %q: args = %q\nwant %q", resume, got, want)

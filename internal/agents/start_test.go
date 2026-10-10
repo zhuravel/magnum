@@ -87,11 +87,11 @@ func TestStartAgentResumeArgs(t *testing.T) {
 		want        string
 		probeOutput string
 	}{
-		{"codex wrapper", "auto", RoleJudge, []string{"--x"}, "resume 01a0-uuid -c model_reasoning_effort=xhigh -c agents.max_concurrent_threads_per_session=2 -c features.apps=false -c skills.include_instructions=false", "codex: function"},
+		{"codex wrapper", "auto", RoleJudge, []string{"--x"}, "resume 01a0-uuid -c tui.resume_cwd=current -c model_reasoning_effort=xhigh -c agents.max_concurrent_threads_per_session=2 -c features.apps=false -c skills.include_instructions=false", "codex: function"},
 		{"claude wrapper", "true", RoleClaude, []string{"--x"}, "--resume c1d2-id --name PR #11920 claude-review - talkable --effort high --strict-mcp-config", ""},
-		{"codex plain", "false", RoleJudge, []string{"--dangerously-bypass-approvals-and-sandbox", "--search"}, "resume 01a0-uuid -c model_reasoning_effort=xhigh -c agents.max_concurrent_threads_per_session=2 -c features.apps=false -c skills.include_instructions=false --dangerously-bypass-approvals-and-sandbox --search", ""},
+		{"codex plain", "false", RoleJudge, []string{"--dangerously-bypass-approvals-and-sandbox", "--search"}, "resume 01a0-uuid -c tui.resume_cwd=current -c model_reasoning_effort=xhigh -c agents.max_concurrent_threads_per_session=2 -c features.apps=false -c skills.include_instructions=false --dangerously-bypass-approvals-and-sandbox --search", ""},
 		{"claude plain", "false", RoleClaude, []string{"--dangerously-skip-permissions"}, "--resume c1d2-id --name PR #11920 claude-review - talkable --effort high --strict-mcp-config --dangerously-skip-permissions", ""},
-		{"codex no function", "auto", RoleJudge, []string{"--search"}, "resume 01a0-uuid -c model_reasoning_effort=xhigh -c agents.max_concurrent_threads_per_session=2 -c features.apps=false -c skills.include_instructions=false --search", "codex: command"},
+		{"codex no function", "auto", RoleJudge, []string{"--search"}, "resume 01a0-uuid -c tui.resume_cwd=current -c model_reasoning_effort=xhigh -c agents.max_concurrent_threads_per_session=2 -c features.apps=false -c skills.include_instructions=false --search", "codex: command"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
