@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -35,7 +36,7 @@ type PromptSnapshot struct {
 
 	dir     string                // pipeline.prompts_dir when loaded
 	prompts map[string]snapPrompt // by prompt name
-	skills  map[string]snapSkill  // by the configured skill path (SkillPath)
+	skills  map[string]snapSkill  // by the configured skill path (RoleSkillPath)
 }
 
 type snapPrompt struct {
@@ -105,6 +106,29 @@ var skillCopyDirRe = regexp.MustCompile(`^[0-9a-f]{12}$`)
 // (magnum.Skill) as a skill source: what a judge gets without a checkout.
 const EmbeddedSkill = "builtin:skills/magnum-review/SKILL.md"
 
+// EmbeddedFixSkill names the binary's own copy of the fix skill
+// (magnum.FixSkill): what a fix role gets without a checkout.
+const EmbeddedFixSkill = "builtin:skills/magnum-fix/SKILL.md"
+
+// embeddedSkills holds the binary's own skill copies by the name a skill
+// source gives them (EmbeddedSkill, EmbeddedFixSkill).
+var embeddedSkills = map[string][]byte{EmbeddedSkill: magnum.Skill, EmbeddedFixSkill: magnum.FixSkill}
+
+// RoleSkillPath is the skill of r, a judge or a fix role, as SkillPath
+// names a judge's. A fix role's falls back to the fix skill instead: the
+// checkout's DefaultFixSkill when its skill is "" (Load leaves "" for a
+// {{repo}} path without a checkout), and EmbeddedFixSkill where a judge
+// gets EmbeddedSkill.
+func RoleSkillPath(r Role, layout paths.Layout) string {
+	if !r.Fix {
+		return SkillPath(r.Skill, layout)
+	}
+	if src := SkillPath(cmp.Or(r.Skill, DefaultFixSkill), layout); src != EmbeddedSkill {
+		return src
+	}
+	return EmbeddedFixSkill
+}
+
 // SkillPath is a judge's skill as a round names it: skill with {{repo}}
 // replaced by layout's checkout, or layout.Skill() when skill is ""; the
 // embedded skill (EmbeddedSkill) when either needs a checkout the layout
@@ -125,7 +149,7 @@ func SkillPath(skill string, layout paths.Layout) string {
 
 // SnapshotPrompts loads every prompt file the roles name (each prompt kind)
 // and the extra names (model-fallback.md), copies each judge's and each fix
-// role's skill file to skillDir/<hash>/SKILL.md ("" = no copies; the roles
+// role's skill file (RoleSkillPath) to skillDir/<hash>/SKILL.md ("" = no copies; the roles
 // keep their configured skill paths), removes copies older than a week that
 // no role uses, and installs the result: from now on ResolvePrompt answers
 // from it and SkillFile names the copies. A prompt that does not resolve is an
@@ -167,7 +191,7 @@ func (c *Config) SnapshotPrompts(skillDir string, now time.Time, extra ...string
 	if skillDir != "" {
 		warned := map[string]bool{} // one warning per skill path, whatever the roles that share it
 		for _, r := range c.Roles {
-			src := SkillPath(r.Skill, c.Layout)
+			src := RoleSkillPath(r, c.Layout)
 			if _, done := s.skills[src]; !(r.Judge || r.Fix) || done || warned[src] {
 				continue
 			}
@@ -189,15 +213,16 @@ func (c *Config) SnapshotPrompts(skillDir string, now time.Time, extra ...string
 	return s, nil
 }
 
-// copySkill copies the skill file src (EmbeddedSkill: the binary's copy) to
+// copySkill copies the skill file src (EmbeddedSkill or EmbeddedFixSkill:
+// the binary's copy) to
 // dir/<hash>/SkillCopyName (kept as is when that copy already holds the
 // same text).
 func copySkill(src, dir string) (snapSkill, error) {
 	var b []byte
 	var st fileStamp
 	var err error
-	if src == EmbeddedSkill {
-		b, st = magnum.Skill, fileStamp{embedded: true, sum: sha256.Sum256(magnum.Skill)}
+	if text, ok := embeddedSkills[src]; ok {
+		b, st = text, fileStamp{embedded: true, sum: sha256.Sum256(text)}
 	} else if b, st, err = readStamped(src); err != nil {
 		return snapSkill{}, err
 	}
@@ -253,9 +278,9 @@ func (c *Config) WithoutSnapshot() *Config {
 	return &cp
 }
 
-// SkillFile is the file a judge prompt names for the skill at src
-// (SkillPath): its startup copy when the daemon's snapshot holds one, else
-// src itself.
+// SkillFile is the file a judge or fix prompt names for the skill at src
+// (SkillPath, RoleSkillPath): its startup copy when the daemon's snapshot
+// holds one, else src itself.
 func (c *Config) SkillFile(src string) string {
 	if s := c.snapshot; s != nil {
 		if sk, ok := s.skills[src]; ok {

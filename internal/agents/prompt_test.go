@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum"
+	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -276,4 +278,90 @@ func TestAPromptTheSessionCannotRecordIsLogged(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.logged(t, "codex-review", "disk I/O error")
+}
+
+// The fix prompt is one paragraph of facts: it opens with the fix skill's
+// startup copy, then names the PR, its head and the branch to push to, the
+// posted review, its file and the login that posted it, the report path with
+// the run marker and the db-lock line. It carries no PR text: the title is
+// never in it.
+func TestFixPromptRendersTheSkillLinkAndFacts(t *testing.T) {
+	e := newEnv(t)
+	skill := filepath.Join(e.cfg.Layout.Home, "skills", "magnum-fix", "SKILL.md")
+	writeFile(t, skill, "# fix skill\n", 0o600)
+	if _, err := e.cfg.SnapshotPrompts(filepath.Join(t.TempDir(), "skill"), t0); err != nil {
+		t.Fatal(err)
+	}
+	skillCopy := e.cfg.SkillFile(skill)
+	if skillCopy == skill {
+		t.Fatalf("the snapshot holds no copy of %s", skill)
+	}
+	role := Role(config.RoleClaudeFix)
+	run, err := e.m.NewRun(e.ctx, e.pr, role, store.RunFix, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := FixPromptInput{
+		HeadRef:       "feature/coupon-expiry",
+		ReviewURL:     "https://github.com/talkable/talkable/pull/11920#pullrequestreview-4100000001",
+		ReviewFile:    "/state/reviews/talkable/talkable/11920/abc1234/review.json",
+		ReviewerLogin: "talkable[bot]",
+		DBLockCommand: "/opt/magnum/bin/magnum db-lock --checkout /p/talkable.review3 --role claude-fix --",
+	}
+	got, err := e.m.FixPrompt(e.pr, role, run, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "[$magnum-fix](" + skillCopy + ") Read " + skillCopy + " first"; !strings.HasPrefix(got, want) {
+		t.Errorf("the fix prompt does not start with %q:\n%s", want, got)
+	}
+	for _, want := range []string{e.pr.URL, "`" + e.pr.HeadSHA + "`", "HEAD:" + in.HeadRef, in.ReviewURL, in.ReviewFile,
+		"`" + in.ReviewerLogin + "`", store.Deref(run.ReportPath), ReportMarker(run.ID), "`" + in.DBLockCommand + " <command>`"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the fix prompt lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, store.Deref(e.pr.Title)) {
+		t.Errorf("the fix prompt carries the PR title:\n%s", got)
+	}
+	if strings.Contains(got, "\n") {
+		t.Errorf("the fix prompt is not one paragraph:\n%s", got)
+	}
+
+	if _, err := e.m.FixPrompt(e.pr, RoleClaude, run, in); err == nil {
+		t.Error("FixPrompt rendered the prompt of claude-review, which is no fix role")
+	}
+	noReport := run
+	noReport.ReportPath = nil
+	if _, err := e.m.FixPrompt(e.pr, role, noReport, in); err == nil {
+		t.Error("FixPrompt rendered a prompt for a run without a report path")
+	}
+	// The prompt puts the branch, unquoted, into the push the fixer runs:
+	// a branch name a shell would read is refused, and never quoted.
+	unsafe := in
+	unsafe.HeadRef = "fix$(touch x)"
+	if got, err := e.m.FixPrompt(e.pr, role, run, unsafe); !errors.Is(err, ErrUnsafeHeadRef) || strings.Contains(err.Error(), unsafe.HeadRef) {
+		t.Errorf("FixPrompt with branch %q = %q, %v; want ErrUnsafeHeadRef without the name", unsafe.HeadRef, got, err)
+	}
+}
+
+// The fix skill is never rendered, and magnum reads what the fixer writes:
+// the re-review classifies its replies (pipeline's classifyReply) by their
+// first words and the fix job parses its report by its headings. The skill
+// spells out each of them and carries no template action.
+func TestTheFixSkillNamesTheRepliesAndTheReportMagnumReads(t *testing.T) {
+	skill := string(magnum.FixSkill)
+	for _, want := range []string{
+		"name: magnum-fix",
+		`"Fixed in <sha7>: `, `"Already fixed in <sha7>"`, `"Not a bug: `, `"Won't fix: `,
+		"\n## Pushed\n", "\n## Replied\n", "\n## Needs you\n",
+		"resolveReviewThread", "pulls/{number}/comments/{comment_id}/replies",
+	} {
+		if !strings.Contains(skill, want) {
+			t.Errorf("the fix skill lacks %q", want)
+		}
+	}
+	if strings.Contains(skill, "{{.") {
+		t.Error("the fix skill carries a template action, but nothing renders it")
+	}
 }

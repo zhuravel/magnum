@@ -18,7 +18,7 @@ you delete falls back to the built-in copy. `magnum config` fails when a role na
 in neither place.
 
 The daemon loads every prompt its roles name, `model-fallback.md`, the triage, retro and notes curation prompts and a copy
-of each judge's skill (`~/.local/state/magnum/skill/<hash>/SKILL.md`, under the state directory) once, when it starts, right after checking that its build
+of each judge's and fix role's skill (`~/.local/state/magnum/skill/<hash>/SKILL.md`, under the state directory) once, when it starts, right after checking that its build
 renders them. An edit here therefore takes effect at the next `magnum daemon-restart`, which checks it again,
 without a rebuild; `magnum status` shows when the prompts were loaded and how many files changed on
 disk since. The CLI (`magnum config`, `magnum roles`, `magnum doctor`) reads the files as they are now.
@@ -45,6 +45,7 @@ prompts_dir = "{{repo}}/prompts"   # or "~/magnum-prompts" to keep your edits ou
 | `claude-rereview.md` | claude-review, new head | role |
 | `claude-restart.md` | claude-review, a push cut its review short and the round restarted on the new head | role |
 | `claude-simplify.md` | claude-simplify | role |
+| `fix.md` | the fix role (claude-fix), which fixes the findings of magnum's review of your own PR (the fix job) | role |
 | `codex-review.sh` | the full codex-review command line, for reference (see Shell roles) | shell |
 | `triage.md` | the cheap model that decides which reviewers a small diff needs (see Triage) | triage |
 | `retro.md` | the retro's agent, which classifies what other reviewers said about a closed pull request ([learn]) | retro |
@@ -148,7 +149,8 @@ working.
 ### Role prompts (every other session role)
 
 The prompts of claude-review, claude-simplify and any other non-judge session role (a droid or omp
-reviewer, ...), initial, rereview and restart alike.
+reviewer, ...), initial, rereview and restart alike, and the fix role's `fix.md`, which the fix job
+renders with the same data plus the fix rows at the end of the table.
 
 | Variable | Meaning |
 |---|---|
@@ -172,8 +174,12 @@ reviewer, ...), initial, rereview and restart alike.
 | `.PostMerge` | GitHub merged the PR before magnum reviewed `.HeadSHA` (a post-merge review); the prompts that name the PR say "The PR is already merged; review it anyway." only then |
 | `.Budget` | the role's `timeout` in words (`40 minutes`): the claude prompts give it as the time budget, within which the turn must end with the report written (background work only when it finishes well within it, waited for before the report) |
 | `.Magnum`, `.Checkout`, `.Role` | the magnum binary the daemon runs (absolute; empty: `magnum` on `PATH`), the checkout the role works in, and the role's name |
-| `.DBLockCommand` | the line the role runs each command that touches the checkout's databases through, as the judge's (`magnum db-lock --checkout .Checkout --role .Role --`, shell-quoted, always derived): the claude prompts (review, rereview, restart, simplify) name it in one sentence, `` `{{.DBLockCommand}} <command>` ``, with exit 75 meaning the check did not run |
+| `.DBLockCommand` | the line the role runs each command that touches the checkout's databases through, as the judge's (`magnum db-lock --checkout .Checkout --role .Role --`, shell-quoted; derived when empty, and the fix job passes its own): the claude prompts (review, rereview, restart, simplify) and the fix prompt name it in one sentence, `` `{{.DBLockCommand}} <command>` ``, with exit 75 meaning the check did not run |
 | `.RunID` | the run the prompt starts. The shipped prompts ask for `<!-- magnum:run={{.RunID}} -->` as the report's first line; a prompt that names this marker makes it required: a report without it, or with another run's, is stale (`missing`), since report paths are per head and an earlier run that kept working may write there. A prompt that does not name it needs none |
+| `.HeadRef` | the fix prompt only: the PR's branch, which the fixer pushes to (`git push origin HEAD:{{.HeadRef}}`); refused at render, like `.BaseRef`, when a shell would read it |
+| `.ReviewURL`, `.ReviewFile` | the fix prompt only: the review the fixer fixes, and its `review.json` (the review's event, body and comments with path, line, side and body, as the judge posted it) |
+| `.ReviewerLogin` | the fix prompt only: the login that posted the review, whose threads the fixer answers |
+| `.SkillPath` | the fix prompt only: the fix role's `skill` (`skills/magnum-fix/SKILL.md`; without a checkout, the copy built into the binary), absolute; in the daemon, the copy it took at startup. `fix.md` starts with its link and "Read <path> first, unless this session already read that file, and follow it; load no other skill." |
 
 When a session role's `timeout` passes, magnum types one fixed last call into its agent within the same
 run (not a prompt file): time is up, stop every background task with TaskStop, write the report to

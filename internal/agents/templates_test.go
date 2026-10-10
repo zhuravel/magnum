@@ -95,6 +95,20 @@ func roleFixture() RoleData {
 	}
 }
 
+// fixFixture is the fix job's data: the reviewer fields the fix prompt uses,
+// the fix skill's startup copy and the posted review it fixes.
+func fixFixture() RoleData {
+	d := roleFixture()
+	d.Role = "claude-fix"
+	d.ReportPath = "/Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/claude-fix.md"
+	d.SkillPath = "/Users/bohdan/.local/state/magnum/skill/4f1c2a9b7e3d/SKILL.md"
+	d.HeadRef = "feature/coupon-expiry"
+	d.ReviewURL = "https://github.com/talkable/talkable/pull/11920#pullrequestreview-4100000001"
+	d.ReviewFile = "/Users/bohdan/Projects/magnum/state/reviews/talkable/talkable/11920/d4e5f6a/review.json"
+	d.ReviewerLogin = "talkable[bot]"
+	return d
+}
+
 // triageFixture has the shape of the engine's triage data (internal/engine
 // triageData, which this package cannot import); the engine checks the
 // shipped prompt against the real type (CheckPrompts).
@@ -489,7 +503,7 @@ func TestRenderGolden(t *testing.T) {
 		{"claude_restart_rereview_forced", "claude-restart.md", restartedForced},
 		{"claude_rereview_no_base", "claude-rereview.md", noBase},
 		{"simplify", "claude-simplify.md", simplifyData(roleFixture())},
-		{"fix", "fix.md", roleFixture()},
+		{"fix", "fix.md", fixFixture()},
 		{"model_fallback", FallbackPromptName, FallbackData{Model: "opus", Previous: "fable", Role: "claude-review",
 			URL: "https://github.com/talkable/talkable/pull/11920", HeadSHA: "d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3",
 			ReportPath: "/state/reviews/talkable/talkable/11920/d4e5f6a/claude-review.md"}},

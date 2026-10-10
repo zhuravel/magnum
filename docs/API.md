@@ -346,6 +346,11 @@ var ErrUnsafeBaseRef = errors.New("base branch name has characters magnum does n
     branch name gitx.ShellSafeRef passes. The prompts put it, unquoted, into git
     commands the agent runs; the error never quotes it.
 
+var ErrUnsafeHeadRef = errors.New("head branch name has characters magnum does not pass to a shell")
+    ErrUnsafeHeadRef means the fix prompt's branch (RoleData.HeadRef) is not
+    a branch name gitx.ShellSafeRef passes: the prompt puts it, unquoted,
+    into the push the fixer runs. The error never quotes it.
+
 
 FUNCTIONS
 
@@ -497,10 +502,11 @@ func RenderPrompt(p config.Prompt, data any) (string, error)
     JudgeData is completed first: its Reports (see Report), the notes
     fields NotesPath implies (NotesDir, NotesLock and the lock commands;
     see NotesFiles) and the derived command lines; RoleData's DBLockCommand too.
-    ShellData values are shell-quoted when needed (see ShellLine; use it to
-    build a shell role's line). Trailing newlines are trimmed: a prompt or typed
-    command must not end with one (a shell line would submit an extra empty
-    command).
+    A judge or role prompt whose base ref, or a fix prompt whose head ref, a
+    shell would read is refused (ErrUnsafeBaseRef, ErrUnsafeHeadRef). ShellData
+    values are shell-quoted when needed (see ShellLine; use it to build a shell
+    role's line). Trailing newlines are trimmed: a prompt or typed command must
+    not end with one (a shell line would submit an extra empty command).
 
 func ReportMarker(runID string) string
     ReportMarker is the line a role's report starts with to say which run wrote
@@ -625,6 +631,15 @@ type FallbackData struct {
 	ReportPath string // the role's report or result file; "" = the prompt names none
 }
     FallbackData feeds the model-fallback prompt.
+
+type FixPromptInput struct {
+	HeadRef, ReviewURL, ReviewFile, ReviewerLogin, DBLockCommand string
+}
+    FixPromptInput is what the fix job knows beyond the PR, the role and the
+    run that FixPrompt reads: the PR's branch (HeadRef), the review it fixes
+    (ReviewURL, its review.json ReviewFile and ReviewerLogin, the login that
+    posted it) and the line the fixer runs its database commands through
+    (DBLockCommand, DBLockLine; "" = derived without a checkout).
 
 type Health struct {
 	Kind    HealthKind
@@ -1025,6 +1040,15 @@ func (m *Manager) FallbackModel(ctx context.Context, s store.Session, tried []st
 func (m *Manager) FallbackPrompt(d FallbackData) (string, error)
     FallbackPrompt renders FallbackPromptName from pipeline.prompts_dir or the
     embedded defaults.
+
+func (m *Manager) FixPrompt(pr store.PR, role Role, run store.Run, in FixPromptInput) (string, error)
+    FixPrompt renders the fix role's prompt (its initial prompt, fix.md by
+    default) for run, a run of that role on pr (NewRun, kind store.RunFix):
+    RoleData with the PR's URL and number, the run's target as HeadSHA,
+    its report path and id, in's fields and the fix skill's startup copy as
+    SkillPath (config.RoleSkillPath, Config.SkillFile). It never carries PR
+    text. A role that is not a fix role, or a run without a report path,
+    is an error.
 
 func (m *Manager) LatestRound(ctx context.Context, prID int64) (int, error)
     LatestRound is the highest run round of a PR (0 when it has no runs).
@@ -1638,9 +1662,17 @@ type RoleData struct {
 	// Magnum is the magnum executable (the daemon's own, absolute; "" =
 	// magnum on PATH), Checkout the checkout the role works in and Role its
 	// name (Manager.RolePrompt fills it when empty). DBLockCommand is the
-	// line the role runs its database commands through (DBLockLine; always
-	// derived): the prompts of the roles that run tests name it.
+	// line the role runs its database commands through (DBLockLine, derived
+	// from the three when empty; the fix job passes its own): the prompts
+	// of the roles that run tests name it.
 	Magnum, Checkout, Role, DBLockCommand string
+	// The fix prompt's (Manager.FixPrompt; empty for every other role):
+	// HeadRef is the PR's branch, which the fixer pushes to; ReviewURL the
+	// review it fixes and ReviewFile that review's review.json (its event,
+	// body and comments, as the judge posted it); ReviewerLogin the login
+	// that posted it, whose threads the fixer answers; SkillPath the fix
+	// skill's startup copy, absolute.
+	HeadRef, ReviewURL, ReviewFile, ReviewerLogin, SkillPath string
 }
     RoleData feeds the prompts of every non-judge session role (claude-review,
     claude-simplify, a droid or omp reviewer, ...): the union of what those
@@ -2398,6 +2430,12 @@ const (
     Curation triggers ([notes] curate).
 
 const (
+	AutofixNever = "never" // a fix loop starts only on request
+	AutofixOwn   = "own"   // and after a review with findings on the operator's own PRs
+)
+    Values of [pipeline] autofix.
+
+const (
 	OwnPassParallel = "parallel" // the judge's own pass runs with the reviewers
 	OwnPassAfter    = "after"    // one judge prompt after the reviewers
 )
@@ -2448,6 +2486,9 @@ const (
 	// [pipeline] judge_fallback (a watch runs its first judge unless its
 	// roles list names this one).
 	RoleClaudeJudge = "claude-judge"
+	// RoleClaudeFix is the built-in fix role, the fixer of the fix job
+	// (Role.Fix); [pipeline] fix_role names it by default.
+	RoleClaudeFix = "claude-fix"
 
 	KindCodex  = "codex"
 	KindClaude = "claude"
@@ -2470,6 +2511,13 @@ const (
 	PlaceholderProjects = "{projects}"
 )
     Placeholders substituted by Kind.Argv and in Kind.Rename.
+
+const (
+	DefaultFixSkill  = "{{repo}}/skills/magnum-fix/SKILL.md"
+	DefaultFixPrompt = "fix.md"
+)
+    DefaultFixSkill is a fix role's default skill path, as DefaultSkill is the
+    judge's; DefaultFixPrompt is its default prompt.
 
 const AutoApproveBodyMax = 500
     AutoApproveBodyMax bounds auto_approve_body, in characters.
@@ -2497,6 +2545,10 @@ const DefaultAutoApproveBody = "Auto-approved: magnum's review of `{{.Short}}` f
 
 const DefaultEditorPrompt = "skill-edit.md"
     DefaultEditorPrompt is the skill editor's prompt file.
+
+const DefaultFixCycles = 3
+    DefaultFixCycles is [pipeline] fix_cycles' default: three fix runs, each
+    followed by a re-review, before the PR is left to the operator.
 
 const DefaultIdleRemoveAfter = 168 * time.Hour
     DefaultIdleRemoveAfter is a pool's idle_remove_after when it sets none (or
@@ -2555,6 +2607,10 @@ const DefaultTriagePrompt = "triage.md"
 const EditorRoleName = "skill"
     EditorRoleName is the name of the role the skill editor runs as
     (EditorRole).
+
+const EmbeddedFixSkill = "builtin:skills/magnum-fix/SKILL.md"
+    EmbeddedFixSkill names the binary's own copy of the fix skill
+    (magnum.FixSkill): what a fix role gets without a checkout.
 
 const EmbeddedSkill = "builtin:skills/magnum-review/SKILL.md"
     EmbeddedSkill names the binary's own copy of the judge skill (magnum.Skill)
@@ -2676,6 +2732,12 @@ func RenderFooter(tmpl string, d FooterData) (string, error)
     RenderFooter renders footer template tmpl with d, trimmed ("" = the footer
     is left out).
 
+func RoleSkillPath(r Role, layout paths.Layout) string
+    RoleSkillPath is the skill of r, a judge or a fix role, as SkillPath names
+    a judge's. A fix role's falls back to the fix skill instead: the checkout's
+    DefaultFixSkill when its skill is "" (Load leaves "" for a {{repo}} path
+    without a checkout), and EmbeddedFixSkill where a judge gets EmbeddedSkill.
+
 func SkillPath(skill string, layout paths.Layout) string
     SkillPath is a judge's skill as a round names it: skill with {{repo}}
     replaced by layout's checkout, or layout.Skill() when skill is ""; the
@@ -2795,9 +2857,9 @@ func LoadWithOptions(layout paths.Layout, file string, opts LoadOptions) (*Confi
     cfg.Sources lists what was read.
 
 func (c *Config) AllRoles() []Role
-    AllRoles returns every declared role in [[role]] order, the judges held
-    in reserve included (RolesFor leaves them out): what names a role on the
-    command line, lists roles, or copies the configuration.
+    AllRoles returns every declared role in [[role]] order, the judges held in
+    reserve and the fix roles included (RolesFor leaves them out): what names a
+    role on the command line, lists roles, or copies the configuration.
 
 func (c *Config) AutoApproveBodyFor(fullName string) string
     AutoApproveBodyFor is the approval body template of repository fullName's
@@ -2811,6 +2873,10 @@ func (c *Config) AutoApproveFor(fullName string) *Identity
 func (c *Config) AutoApproves() bool
     AutoApproves reports whether any watch auto-approves a repository.
 
+func (c *Config) AutofixFor(w *Watch) string
+    AutofixFor is the autofix that applies to w's PRs: the watch's when it sets
+    one, else [pipeline]'s, else AutofixNever. A nil w is [pipeline]'s.
+
 func (c *Config) CommentsWhenClean(repo, identity string) bool
     CommentsWhenClean reports whether the identity named identity posts
     a comment, not an approval, for a clean verdict on repository repo
@@ -2821,6 +2887,22 @@ func (c *Config) EditorRole() Role
     [learn] editor_kind in session mode with its editor_model, editor_effort,
     editor_args, editor_prompt and editor_timeout, writing changes.json,
     normalized like a configured role.
+
+func (c *Config) FixCyclesFor(w *Watch) int
+    FixCyclesFor is the fix_cycles that apply to w's PRs: the watch's when it
+    sets one, else [pipeline]'s, else DefaultFixCycles. A nil w is [pipeline]'s.
+
+func (c *Config) FixRoleFor(w *Watch) (Role, bool)
+    FixRoleFor is the fix role of watch w: the watch's fix_role when it sets
+    one (an empty one switches the fix job off for the watch), else [pipeline]
+    fix_role, found among every declared role (not only the watch's). ok is
+    false when none is set or the name matches no fix role; Validate reports the
+    latter.
+
+func (c *Config) FixRoles() []Role
+    FixRoles returns every declared fix role in [[role]] order: the built-in
+    claude-fix, and the fix roles a configuration adds for the watches whose
+    fix_role names them (FixRoleFor).
 
 func (c *Config) IdentityByName(name string) *Identity
     IdentityByName returns the identity or nil.
@@ -2928,7 +3010,8 @@ func (c *Config) RolePrompt(r Role, kind string) (Prompt, error)
 func (c *Config) RolesFor(w *Watch) []Role
     RolesFor returns the roles a watch runs, in [[role]] order: every role
     when w is nil or w.Roles is empty, else the ones w.Roles names (names or
-    aliases).
+    aliases). A fix role is never one of them (FixRoleFor finds it), and when w
+    names no roles only the first judge is, the others standing in reserve.
 
 func (c *Config) SelfLogins() []string
     SelfLogins are the logins that count as the operator's own (the board's
@@ -2940,19 +3023,20 @@ func (c *Config) SelfMatch() func(login string) bool
     (textx.FoldLogin: case, "@" and "[bot]" do not matter).
 
 func (c *Config) SkillFile(src string) string
-    SkillFile is the file a judge prompt names for the skill at src (SkillPath):
-    its startup copy when the daemon's snapshot holds one, else src itself.
+    SkillFile is the file a judge or fix prompt names for the skill at src
+    (SkillPath, RoleSkillPath): its startup copy when the daemon's snapshot
+    holds one, else src itself.
 
 func (c *Config) SnapshotPrompts(skillDir string, now time.Time, extra ...string) (*PromptSnapshot, error)
-    SnapshotPrompts loads every prompt file the roles name (each prompt kind)
-    and the extra names (model-fallback.md), copies each judge's skill file to
-    skillDir/<hash>/SKILL.md ("" = no copies; the judges keep their configured
-    skill paths), removes copies older than a week that no judge uses,
-    and installs the result: from now on ResolvePrompt answers from it and
-    SkillFile names the copies. A prompt that does not resolve is an error
-    and nothing is installed; a skill that cannot be copied is a warning
-    (PromptSnapshot.Warnings). Call it once, before the goroutines that resolve
-    prompts start.
+    SnapshotPrompts loads every prompt file the roles name (each prompt
+    kind) and the extra names (model-fallback.md), copies each judge's and
+    each fix role's skill file (RoleSkillPath) to skillDir/<hash>/SKILL.md
+    ("" = no copies; the roles keep their configured skill paths), removes
+    copies older than a week that no role uses, and installs the result:
+    from now on ResolvePrompt answers from it and SkillFile names the copies.
+    A prompt that does not resolve is an error and nothing is installed; a skill
+    that cannot be copied is a warning (PromptSnapshot.Warnings). Call it once,
+    before the goroutines that resolve prompts start.
 
 func (c *Config) Stages(w *Watch) [][]Role
     Stages orders the watch's roles for a round: non-judge roles layered by
@@ -2995,8 +3079,9 @@ func (c *Config) Warnings() []string
     have neither; they live in the user's ~/.config/magnum/config.toml),
     but magnum then cannot post or reviews nothing; a [daemon] reviewer_timeout
     or judge_timeout set while every role it would be the fallback of sets its
-    own timeout changes nothing. Print them from `magnum doctor` and `magnum
-    config`.
+    own timeout changes nothing; a watch with autofix = "own" whose fix role has
+    no declared identity, or posts as the fix role's identity. Print them from
+    `magnum doctor` and `magnum config`.
 
 func (c *Config) WatchFor(fullName string) *Watch
     WatchFor returns the watch that covers owner/name, or nil.
@@ -3012,10 +3097,10 @@ func (c *Config) WithCandidate(dir string) (*Config, error)
     directory or no skill file; c is never changed.
 
 func (c *Config) WithoutSnapshot() *Config
-    WithoutSnapshot is a copy of c that reads its prompts and judge skills from
-    disk, as the CLI does, whatever the daemon loaded at startup (a candidate
-    replay reads another directory's), with its own Roles slice (the normalized
-    roles, RolesFor(nil)) for the caller to change.
+    WithoutSnapshot is a copy of c that reads its prompts and judge skills
+    from disk, as the CLI does, whatever the daemon loaded at startup (a
+    candidate replay reads another directory's), with its own Roles slice (every
+    normalized role, AllRoles) for the caller to change.
 
 type CurateTriggers []string
     CurateTriggers is [notes] curate: the triggers of a curation, written as
@@ -3637,6 +3722,21 @@ type Pipeline struct {
 	// Config.JudgeFallbackFor. The role never runs otherwise: RolesFor gives
 	// a watch without roles its first judge only.
 	JudgeFallback string `toml:"judge_fallback"`
+	// FixRole names the fix role that fixes magnum's findings on the
+	// operator's own PRs (the fix job; `magnum fix`): a [[role]] with
+	// fix = true. "" = no fix job. A [[watch]] may override it
+	// (Watch.FixRole); see Config.FixRoleFor.
+	FixRole string `toml:"fix_role"`
+	// FixCycles caps the fix runs of one fix loop (a fix run, the re-review
+	// it forces, and so on) before the PR needs the operator; at least 1,
+	// default DefaultFixCycles. A [[watch]] may override it; see
+	// Config.FixCyclesFor.
+	FixCycles int `toml:"fix_cycles"`
+	// Autofix: AutofixNever (default) starts a fix loop only when asked
+	// (`magnum fix`, the board); AutofixOwn starts it by itself after a
+	// review with findings on a PR whose author is one of the operator's
+	// logins. A [[watch]] may override it; see Config.AutofixFor.
+	Autofix string `toml:"autofix"`
 }
     Pipeline is the [pipeline] section.
 
@@ -3830,11 +3930,20 @@ type Role struct {
 	// judge is a session role with runs = "always", capture = "file" and no
 	// After (it always runs last).
 	Judge bool `toml:"judge"`
+	// Fix: the role that fixes the findings of magnum's review on the
+	// operator's own PR (the fix job): a session role that
+	// never takes part in a round, so RolesFor, Stages and a watch's roles
+	// leave it out; Config.FixRoleFor finds it by [pipeline] fix_role. It
+	// takes no runs, after, own_pass or judge, its Identity is a gh
+	// identity (the account it pushes and replies as), and its Skill is the
+	// fix skill (DefaultFixSkill) the way a judge's is the review skill.
+	Fix bool `toml:"fix"`
 	// Summary is a one-line description of what the role checks, shown to the
 	// triage model ([triage]; Removable). A role without one is never
 	// removed from a round, and neither is the judge.
 	Summary string `toml:"summary"`
 	// Runs: "always" (default), "first", "manual" or "never" (see RunsAlways).
+	// A fix role has none: it stays "" and validation refuses a value.
 	Runs string `toml:"runs"`
 	// RerunMinLines, for runs = "first": the role runs again once the code
 	// lines changed since the head of its last completed run reach this
@@ -3843,7 +3952,9 @@ type Role struct {
 	// round, then on request. Ignored for the other runs values.
 	RerunMinLines int `toml:"rerun_min_lines"`
 	// Identity: the [[identity]] whose GitHub env the role's pane gets;
-	// "" = the watch's identity.
+	// "" = the watch's identity. A fix role names a gh identity (the
+	// operator's own account), and an undeclared one is no error, a warning
+	// where autofix = "own" (Config.Warnings).
 	Identity string `toml:"identity"`
 	// Model and Effort are passed through the kind's model/effort args
 	// (Kind.Argv) and are template variables ({{.Model}}, {{.Effort}}; a
@@ -3901,7 +4012,8 @@ type Role struct {
 	Stop string `toml:"stop"`
 
 	// Skill: the judge's skill file (template variable {{.SkillPath}});
-	// default DefaultSkill, expanded by Load. Judges only.
+	// default DefaultSkill, expanded by Load. A fix role's is the fix skill,
+	// default DefaultFixSkill. Judges and fix roles only.
 	Skill string `toml:"skill"`
 
 	// Command: shell roles only; a Go text/template over the round's
@@ -3983,9 +4095,14 @@ func DefaultRoles() []Role
         the same judge-*.md prompts; a second judge held in reserve for
         [pipeline] judge_fallback (RolesFor gives a watch without roles its
         first judge only), no aliases.
+      - claude-fix: claude, fix, identity me (a gh identity: the account
+        the fixer pushes and replies as), model opus, effort high, skill
+        DefaultFixSkill, prompt fix.md, timeout 60m, no runs; the fixer of the
+        fix job, never part of a round, its session kept like a reviewer's (no
+        max_session_rounds).
 
     Each non-judge role carries a Summary, which makes it a candidate for triage
-    ([triage]).
+    ([triage]); the fix role has none, it is never in a round.
 
 func (r Role) AgentKind() string
     AgentKind is the agent CLI whose login preflight, pauses and health patterns
@@ -3998,6 +4115,10 @@ func (r Role) EffortFor(rereview bool) string
 
 func (r Role) IsAgent() bool
     IsAgent reports whether the role runs an interactive agent session.
+
+func (r Role) IsFix() bool
+    IsFix reports whether the role is a fix role (Fix): the fixer of the fix
+    job, never part of a round.
 
 func (r Role) IsShell() bool
     IsShell reports whether the role runs a shell command (kind "shell").
@@ -4162,6 +4283,13 @@ type Watch struct {
 	// JudgeFallback overrides [pipeline] judge_fallback for this watch's
 	// PRs ("" keeps the pipeline's; see Config.JudgeFallbackFor).
 	JudgeFallback string `toml:"judge_fallback"`
+	// FixRole, FixCycles and Autofix override [pipeline] fix_role,
+	// fix_cycles and autofix for this watch's PRs: unset keeps the
+	// pipeline's, a fix_role of "" switches the fix job off for the watch
+	// (see Config.FixRoleFor, FixCyclesFor, AutofixFor).
+	FixRole   *string `toml:"fix_role"`
+	FixCycles *int    `toml:"fix_cycles"`
+	Autofix   string  `toml:"autofix"`
 	// RelatedLookback and RelatedIgnore override [pipeline]
 	// related_lookback and related_ignore for this watch's PRs: unset keeps
 	// the pipeline's, a related_lookback of "0s" turns the lookback off (open
@@ -4573,6 +4701,14 @@ const (
 	// fails in within MachineWindow before the operator gets a toast.
 	MachineToastRounds = 3
 )
+const (
+	// FixPhaseFixing: the fixer works on the head the cycle fixes.
+	FixPhaseFixing = "fixing"
+	// FixPhaseReviewing: the fixer pushed, and a review round runs on the new head.
+	FixPhaseReviewing = "reviewing"
+)
+    Phases of a fix loop (FixState.Phase).
+
 const (
 
 	// FormatGateTimeout bounds one command of the format gate.
@@ -5006,6 +5142,12 @@ func KVPRDeltaCheck(prID int64) string
     KVPRDeltaCheck holds the delta check a PR's round in flight runs
     (DeltaCheckRound as JSON), which `magnum status` reads while the PR is in
     flight; the round's end deletes it.
+
+func KVPRFix(prID int64) string
+    KVPRFix holds a PR's fix loop (FixState as JSON).
+
+func KVPRFixOff(prID int64) string
+    KVPRFixOff holds a PR's opt-out of the fix job (FixOff as JSON).
 
 func KVPRFormerIdentities(prID int64) string
     KVPRFormerIdentities holds the identities a PR posted as before it migrated
@@ -5679,6 +5821,28 @@ type EvalGateOptions struct {
     the case's newest full replay whose reviewers read what this one's would),
     and the run it belongs to, its directory under Layout.Eval and its agent tag
     (eval.AgentTag), both its own.
+
+type FixOff struct {
+	Since time.Time `json:"since"`
+	By    string    `json:"by"`
+}
+    FixOff is a PR's opt-out of the fix job: when it was set and by whom
+    ("magnum fix --off").
+
+type FixState struct {
+	Cycle     int       `json:"cycle"`
+	Cap       int       `json:"cap"`
+	Phase     string    `json:"phase"`
+	Since     string    `json:"since"`
+	Head      string    `json:"head"`
+	By        string    `json:"by"`
+	Report    string    `json:"report"`
+	StartedAt time.Time `json:"started_at"`
+}
+    FixState is where a PR's fix loop is: cycle Cycle of at most Cap, in Phase.
+    Since is the head the loop started from and Head the head the current cycle
+    fixes. By says who started it ("magnum fix", "autofix"), Report is the path
+    of the report the fixer writes, and StartedAt is when the loop started.
 
 type GateCase struct {
 	learn.GateRow
@@ -13610,6 +13774,9 @@ const (
 	// RunOwnPass is the judge's own pass, prompted with the reviewers
 	// (pipeline); its continuations on a fallback model keep the kind.
 	RunOwnPass = "own_pass"
+	// RunFix is the fix job's run: the fixer's agent prompted to fix magnum's
+	// findings on its author's PR (engine), a run of the fix role.
+	RunFix = "fix"
 )
     Run kinds.
 

@@ -23,8 +23,8 @@ entries and the reverts of skill versions), and keeping out of it keeps its land
   environment variable (`MAGNUM_LIVE_GITHUB`, `MAGNUM_LIVE_HERDR`, `MAGNUM_LIVE_MYSQL`,
   `MAGNUM_LIVE_INVENTORY`, `MAGNUM_LIVE_ENGINE`, each `=1`), never set in the gate.
 - **Prompts are loaded at daemon startup.** The daemon reads `prompts/*.md` and copies
-  `skills/magnum-review/SKILL.md` (to `<state dir>/skill/<hash>/`; a binary without a checkout uses the
-  prompts and skill it embeds) once, when it starts, right after
+  `skills/magnum-review/SKILL.md` and `skills/magnum-fix/SKILL.md` (to `<state dir>/skill/<hash>/`; a
+  binary without a checkout uses the prompts and skills it embeds) once, when it starts, right after
   checking that its build renders them; an edit reaches rounds only after
   `make build && bin/magnum daemon-restart`, and `magnum status` counts the files changed on disk
   since. Restart when no round is in flight (the command refuses otherwise; `--drain` waits, `--now`

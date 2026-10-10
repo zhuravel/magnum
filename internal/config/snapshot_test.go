@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhuravel/magnum"
 	"github.com/zhuravel/magnum/internal/paths"
 )
 
@@ -699,5 +700,67 @@ keep_approvals = true
 	cfg.Repos = []Repo{{Repo: "example/app", RequiredChecks: []string{"completion", "rspec (?)", "lint-*", "workflow:CI", "workflow:Deploy *"}}}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("well-formed globs: %v", err)
+	}
+}
+
+// A fix role reads the fix skill and a judge the review skill: the
+// checkout's files when there is a checkout, else (an installed binary) the
+// copies the binary embeds. The daemon copies each at startup to
+// <skill dir>/<hash>/SKILL.md, and a fix role never gets the judge's skill.
+func TestTheFixSkillIsEmbeddedAndCopiedAtStartup(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "config.toml")
+	snapWrite(t, file, snapTOML)
+	cfg, err := Load(paths.Layout{UserConfig: filepath.Join(dir, "user.toml")}, file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fix, ok := cfg.FixRoleFor(nil)
+	if !ok {
+		t.Fatal("no fix role")
+	}
+	judge := cfg.JudgeFor(nil)
+	if got := RoleSkillPath(fix, cfg.Layout); got != EmbeddedFixSkill {
+		t.Fatalf("a fix role's skill without a checkout = %q, want %q", got, EmbeddedFixSkill)
+	}
+	if got := RoleSkillPath(judge, cfg.Layout); got != EmbeddedSkill {
+		t.Fatalf("a judge's skill without a checkout = %q, want %q", got, EmbeddedSkill)
+	}
+	skillDir := filepath.Join(t.TempDir(), "copies")
+	snap, err := cfg.SnapshotPrompts(skillDir, snapNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.Warnings) != 0 {
+		t.Fatalf("Warnings = %q", snap.Warnings)
+	}
+	for name, tc := range map[string]struct {
+		r    Role
+		text []byte
+	}{"fix role": {fix, magnum.FixSkill}, "judge": {judge, magnum.Skill}} {
+		copied := cfg.SkillFile(RoleSkillPath(tc.r, cfg.Layout))
+		if want := snapCopyPath(skillDir, string(tc.text)); copied != want {
+			t.Errorf("%s: skill copy = %q, want %q", name, copied, want)
+		}
+		if got := snapRead(t, copied); got != string(tc.text) {
+			t.Errorf("%s: the copy is not the embedded skill:\n%s", name, got)
+		}
+	}
+
+	cfg, home := snapLoad(t, map[string]string{"skills/magnum-fix/SKILL.md": "fix skill v1"})
+	fix, _ = cfg.FixRoleFor(nil)
+	src := RoleSkillPath(fix, cfg.Layout)
+	if want := filepath.Join(home, "skills", "magnum-fix", "SKILL.md"); src != want {
+		t.Fatalf("a fix role's skill in a checkout = %q, want %q", src, want)
+	}
+	if _, err := cfg.SnapshotPrompts(skillDir, snapNow); err != nil {
+		t.Fatal(err)
+	}
+	copied := cfg.SkillFile(src)
+	if copied == src || filepath.Dir(filepath.Dir(copied)) != skillDir {
+		t.Fatalf("SkillFile(%s) = %q, want a copy under %s", src, copied, skillDir)
+	}
+	if got := snapRead(t, copied); got != "fix skill v1" {
+		t.Fatalf("the copy = %q, want the checkout's file", got)
 	}
 }

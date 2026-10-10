@@ -14,6 +14,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/gitx"
+	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
@@ -24,10 +25,12 @@ import (
 // the template needs but data lacks is an error. JudgeData is completed
 // first: its Reports (see Report), the notes fields NotesPath implies
 // (NotesDir, NotesLock and the lock commands; see NotesFiles) and the
-// derived command lines; RoleData's DBLockCommand too. ShellData values are shell-quoted when needed
-// (see ShellLine; use it to build a shell role's line). Trailing newlines are
-// trimmed: a prompt or typed command must not end with one (a shell line
-// would submit an extra empty command).
+// derived command lines; RoleData's DBLockCommand too. A judge or role
+// prompt whose base ref, or a fix prompt whose head ref, a shell would read
+// is refused (ErrUnsafeBaseRef, ErrUnsafeHeadRef). ShellData values are
+// shell-quoted when needed (see ShellLine; use it to build a shell role's
+// line). Trailing newlines are trimmed: a prompt or typed command must not
+// end with one (a shell line would submit an extra empty command).
 func RenderPrompt(p config.Prompt, data any) (string, error) {
 	name := cmp.Or(p.Name, "prompt")
 	ok := true
@@ -42,12 +45,12 @@ func RenderPrompt(p config.Prompt, data any) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("agents: render %s: nil data", name)
 	}
-	base := ""
+	base, head := "", ""
 	switch d := data.(type) {
 	case JudgeData:
 		base, data = d.BaseRef, d.completed()
 	case RoleData:
-		base, data = d.BaseRef, d.completed()
+		base, head, data = d.BaseRef, d.HeadRef, d.completed()
 	case ShellData:
 		q, err := d.shellSafe()
 		if err != nil {
@@ -57,6 +60,9 @@ func RenderPrompt(p config.Prompt, data any) (string, error) {
 	}
 	if err := checkBaseRef(name, base); err != nil {
 		return "", err
+	}
+	if head != "" && !gitx.ShellSafeRef(head) {
+		return "", fmt.Errorf("agents: render %s: %w", name, ErrUnsafeHeadRef)
 	}
 	return render(name, p.Text, data)
 }
@@ -73,6 +79,11 @@ func pointee[T any](p *T) (any, bool) {
 // branch name gitx.ShellSafeRef passes. The prompts put it, unquoted, into
 // git commands the agent runs; the error never quotes it.
 var ErrUnsafeBaseRef = errors.New("base branch name has characters magnum does not pass to a shell")
+
+// ErrUnsafeHeadRef means the fix prompt's branch (RoleData.HeadRef) is not a
+// branch name gitx.ShellSafeRef passes: the prompt puts it, unquoted, into
+// the push the fixer runs. The error never quotes it.
+var ErrUnsafeHeadRef = errors.New("head branch name has characters magnum does not pass to a shell")
 
 // checkBaseRef refuses a judge or reviewer prompt's base ref that is set and
 // not shell-safe (ErrUnsafeBaseRef). A shell role's line quotes its values
@@ -556,15 +567,55 @@ type RoleData struct {
 	// Magnum is the magnum executable (the daemon's own, absolute; "" =
 	// magnum on PATH), Checkout the checkout the role works in and Role its
 	// name (Manager.RolePrompt fills it when empty). DBLockCommand is the
-	// line the role runs its database commands through (DBLockLine; always
-	// derived): the prompts of the roles that run tests name it.
+	// line the role runs its database commands through (DBLockLine, derived
+	// from the three when empty; the fix job passes its own): the prompts
+	// of the roles that run tests name it.
 	Magnum, Checkout, Role, DBLockCommand string
+	// The fix prompt's (Manager.FixPrompt; empty for every other role):
+	// HeadRef is the PR's branch, which the fixer pushes to; ReviewURL the
+	// review it fixes and ReviewFile that review's review.json (its event,
+	// body and comments, as the judge posted it); ReviewerLogin the login
+	// that posted it, whose threads the fixer answers; SkillPath the fix
+	// skill's startup copy, absolute.
+	HeadRef, ReviewURL, ReviewFile, ReviewerLogin, SkillPath string
 }
 
-// completed is d with DBLockCommand derived (a copy).
+// completed is d with DBLockCommand derived when empty (a copy).
 func (d RoleData) completed() RoleData {
-	d.DBLockCommand = DBLockLine(d.Magnum, d.Checkout, d.Role)
+	d.DBLockCommand = cmp.Or(d.DBLockCommand, DBLockLine(d.Magnum, d.Checkout, d.Role))
 	return d
+}
+
+// FixPromptInput is what the fix job knows beyond the PR, the role and the
+// run that FixPrompt reads: the PR's branch (HeadRef), the review it fixes
+// (ReviewURL, its review.json ReviewFile and ReviewerLogin, the login that
+// posted it) and the line the fixer runs its database commands through
+// (DBLockCommand, DBLockLine; "" = derived without a checkout).
+type FixPromptInput struct {
+	HeadRef, ReviewURL, ReviewFile, ReviewerLogin, DBLockCommand string
+}
+
+// FixPrompt renders the fix role's prompt (its initial prompt, fix.md by
+// default) for run, a run of that role on pr (NewRun, kind store.RunFix):
+// RoleData with the PR's URL and number, the run's target as HeadSHA, its
+// report path and id, in's fields and the fix skill's startup copy as
+// SkillPath (config.RoleSkillPath, Config.SkillFile). It never carries PR
+// text. A role that is not a fix role, or a run without a report path, is
+// an error.
+func (m *Manager) FixPrompt(pr store.PR, role Role, run store.Run, in FixPromptInput) (string, error) {
+	spec, ok := m.roleSpec(role)
+	if !ok || !spec.Fix {
+		return "", fmt.Errorf("agents: fix prompt pr %d: %q is not a fix role", pr.Number, role)
+	}
+	report := store.Deref(run.ReportPath)
+	if report == "" {
+		return "", fmt.Errorf("agents: fix prompt pr %d: run %s has no report path", pr.Number, run.ID)
+	}
+	return m.RolePrompt(spec, config.PromptInitial, RoleData{
+		URL: pr.URL, Number: pr.Number, HeadSHA: cmp.Or(run.TargetSHA, pr.HeadSHA), ReportPath: report, RunID: run.ID,
+		HeadRef: in.HeadRef, ReviewURL: in.ReviewURL, ReviewFile: in.ReviewFile, ReviewerLogin: in.ReviewerLogin,
+		DBLockCommand: in.DBLockCommand, SkillPath: m.d.Config.SkillFile(config.RoleSkillPath(spec, m.d.Layout)),
+	})
 }
 
 // ShellData feeds a shell role's line (ShellLine): the role's command

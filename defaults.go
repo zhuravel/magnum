@@ -17,6 +17,12 @@ var DefaultConfig []byte
 //go:embed skills/magnum-review/SKILL.md
 var Skill []byte
 
+// FixSkill is skills/magnum-fix/SKILL.md: the fix role's skill, which an
+// installed binary hands to its fixer the same way (config.EmbeddedFixSkill).
+//
+//go:embed skills/magnum-fix/SKILL.md
+var FixSkill []byte
+
 // PluginManifest and PluginScript are the herdr plugin (herdr-plugin.toml,
 // scripts/magnum-ctl.sh), which `magnum install --plugin` writes out for an
 // installed binary to link (a checkout links itself).
