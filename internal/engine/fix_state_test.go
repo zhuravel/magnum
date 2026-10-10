@@ -148,3 +148,31 @@ func TestFixOffRoundTrips(t *testing.T) {
 		t.Errorf("clearing an opt-out that is gone = %v", err)
 	}
 }
+
+// The CLI reads the loop's rows with ParseFixState and ParseFixOff: a value
+// that is no loop or no opt-out reads as none, and the board's cell for a
+// fixer at work names the cycle, the cap and the role.
+func TestParseFixStateAndItsShortForm(t *testing.T) {
+	for _, raw := range []string{"", "not json", `{"cycle":0,"cap":3,"phase":"fixing"}`, `{"cycle":1,"cap":3}`} {
+		if st, ok := ParseFixState(raw); ok {
+			t.Errorf("ParseFixState(%q) = %+v, want none", raw, st)
+		}
+	}
+	st, ok := ParseFixState(`{"cycle":2,"cap":3,"phase":"fixing","role":"claude-fix","by":"autofix"}`)
+	if !ok || st.Cycle != 2 || st.Phase != FixPhaseFixing || st.By != "autofix" {
+		t.Fatalf("ParseFixState = %+v, %v", st, ok)
+	}
+	if got := st.Short(); got != "fixing 2/3 · claude-fix" {
+		t.Errorf("Short = %q", got)
+	}
+	st.Role = ""
+	if got := st.Short(); got != "fixing 2/3" {
+		t.Errorf("Short without a role = %q", got)
+	}
+	if o, ok := ParseFixOff(`{"since":"2026-10-10T09:30:15Z","by":"magnum fix --off"}`); !ok || o.By != "magnum fix --off" || o.Since.IsZero() {
+		t.Errorf("ParseFixOff = %+v, %v", o, ok)
+	}
+	if _, ok := ParseFixOff("not json"); ok {
+		t.Error("ParseFixOff read junk as an opt-out")
+	}
+}

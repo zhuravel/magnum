@@ -360,6 +360,7 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 					row.SnoozedUntil, row.SnoozedAt, row.SnoozedBy = s.Until, s.At, s.By
 				}
 			}
+			row.Fixing, row.FixOff = boardFix(ctx, st, r.PRID)
 			if f, ok := codexFlagOf(ctx, st, r.PRID); ok { // codex_flag.go
 				row.CodexFlag, row.CodexFlagSentence = f.Short(), f.Sentence(actRefLabel(defaultRepo(cfg), full, r.Number))
 			}
@@ -414,6 +415,20 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 		_ = boardRoundProgress(ctx, st, cfg, ids, out)
 		return out, nil
 	}
+}
+
+// boardFix is the PR's fix loop as the board shows it: fixing is its state
+// cell while the fixer works ("fixing 1/3 · claude-fix", engine.FixState.Short;
+// "" otherwise), and off whether it was switched out of autofix (its
+// engine.KVPRFixOff row exists). A registry that cannot say shows neither.
+func boardFix(ctx context.Context, st *store.Store, prID int64) (fixing string, off bool) {
+	if v, ok, err := st.GetKV(ctx, engine.KVPRFix(prID)); err == nil && ok {
+		if f, ok := engine.ParseFixState(v); ok && f.Phase == engine.FixPhaseFixing {
+			fixing = f.Short()
+		}
+	}
+	_, off, err := st.GetKV(ctx, engine.KVPRFixOff(prID))
+	return fixing, off && err == nil
 }
 
 // prsMuteReason is the reason of the PR's latest mute (`magnum mute`'s, in
@@ -728,8 +743,10 @@ func prsRequestedCell(r tui.PRBoardRow, now time.Time) string {
 
 // prsStateCell is the magnum state with the flags that matter
 // ("reviewed,pinned,draft"; "closed,merged,unreviewed" for a PR GitHub
-// merged before magnum reviewed its last push), and a snooze that holds at
-// now while no round runs ("reviewed,snoozed→18:00", as the board's cell).
+// merged before magnum reviewed its last push; "reviewed,fixing" while its
+// fixer works, "fix-off" when it was switched out of autofix), and a snooze
+// that holds at now while no round runs ("reviewed,snoozed→18:00", as the
+// board's cell).
 func prsStateCell(r tui.PRBoardRow, now time.Time) string {
 	s := inspOrDash(r.State)
 	if g := strings.ToUpper(r.GHState); g == "MERGED" || g == "CLOSED" {
@@ -750,8 +767,8 @@ func prsStateCell(r tui.PRBoardRow, now time.Time) string {
 	for _, f := range []struct {
 		on   bool
 		name string
-	}{{r.Draft, "draft"}, {r.Pinned, "pinned"}, {r.Muted, "muted"}, {r.CodexFlag != "", "codex-flagged"}, {r.LastError != "", "error"},
-		{len(r.Stalemate) > 0, "stalemate"}} {
+	}{{r.Fixing != "", "fixing"}, {r.Draft, "draft"}, {r.Pinned, "pinned"}, {r.Muted, "muted"}, {r.FixOff, "fix-off"},
+		{r.CodexFlag != "", "codex-flagged"}, {r.LastError != "", "error"}, {len(r.Stalemate) > 0, "stalemate"}} {
 		if f.on {
 			s += "," + f.name
 		}

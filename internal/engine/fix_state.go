@@ -61,6 +61,36 @@ type FixOff struct {
 	By    string    `json:"by"`
 }
 
+// ParseFixState reads a KVPRFix value; ok is false for one that is not a
+// fix loop.
+func ParseFixState(s string) (FixState, bool) {
+	var st FixState
+	if s == "" || json.Unmarshal([]byte(s), &st) != nil || st.Cycle < 1 || st.Phase == "" {
+		return FixState{}, false
+	}
+	return st, true
+}
+
+// Short is the loop while its fixer works, as the board's state cell shows
+// it: "fixing 1/3 · claude-fix" ("fixing 1/3" when the role is not known).
+func (s FixState) Short() string {
+	short := fmt.Sprintf("fixing %d/%d", s.Cycle, s.Cap)
+	if s.Role == "" {
+		return short
+	}
+	return short + " · " + s.Role
+}
+
+// ParseFixOff reads a KVPRFixOff value; ok is false for one that is not an
+// opt-out.
+func ParseFixOff(s string) (FixOff, bool) {
+	var o FixOff
+	if s == "" || json.Unmarshal([]byte(s), &o) != nil {
+		return FixOff{}, false
+	}
+	return o, true
+}
+
 // fixState reads the PR's fix loop; ok is false when it has none.
 func (e *Engine) fixState(ctx context.Context, prID int64) (FixState, bool, error) {
 	return readKVJSON[FixState](ctx, e, KVPRFix(prID), "fix state")

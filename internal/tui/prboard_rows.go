@@ -175,6 +175,13 @@ type PRBoardRow struct {
 	// MuteReason is why the PR was muted (the latest `magnum mute`'s
 	// reason), for the card; "" when it was muted without one or is not.
 	MuteReason string
+	// Fixing is the PR's fix loop while its fixer works, as the state cell
+	// shows it ("fixing 1/3 · claude-fix", engine.FixState.Short); "" when
+	// no fixer works on it (a loop waiting for its re-review shows the PR's
+	// state). FixOff: the PR was switched out of autofix (`magnum fix
+	// --off`); its tags and the card say "fix off".
+	Fixing string
+	FixOff bool
 	// Note is a one-line remark about the last review shown under LAST REVIEW
 	// on the card (e.g. "comment-only push skipped (a7b3f8c → 602da9d)").
 	Note string
@@ -656,6 +663,7 @@ func sanitizeRow(r PRBoardRow) PRBoardRow {
 	r.Wait, r.WaitDetail, r.SnoozedBy = cleanText(r.Wait), cleanText(r.WaitDetail), cleanText(r.SnoozedBy)
 	r.WaitNarrow, r.PinnedBy = cleanText(r.WaitNarrow), cleanText(r.PinnedBy)
 	r.CodexFlag, r.CodexFlagSentence, r.MuteReason = cleanText(r.CodexFlag), cleanText(r.CodexFlagSentence), cleanText(r.MuteReason)
+	r.Fixing = cleanText(r.Fixing)
 	r.Stalemate = cleanAll(r.Stalemate)
 	r.Note, r.SkipReason, r.ProjectNote = cleanText(r.Note), cleanText(r.SkipReason), cleanText(r.ProjectNote)
 	r.AutoStopped, r.AutoRefused = cleanText(r.AutoStopped), cleanText(r.AutoRefused)

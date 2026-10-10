@@ -426,6 +426,10 @@ type statusDetail struct {
 	Findings *store.ReviewSummary `json:"findings,omitempty"`
 	// Snooze is the PR's snooze while it holds (magnum snooze, the board's z).
 	Snooze *engine.Snooze `json:"snooze,omitempty"`
+	// Fix is the PR's fix loop while it runs (magnum fix, autofix), and
+	// FixOff its opt-out of autofix (magnum fix --off); nil when it has none.
+	Fix    *engine.FixState `json:"fix,omitempty"`
+	FixOff *engine.FixOff   `json:"fix_off,omitempty"`
 
 	isJudge func(role string) bool // a configured judge's role name (actIsJudge)
 }

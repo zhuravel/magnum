@@ -537,6 +537,41 @@ func inspDedupe(ss []string) []string {
 	return out
 }
 
+// statusRenderFix prints the card's fix line: the PR's fix loop ("cycle 1
+// of 3 · claude-fix · started by magnum fix 12:30 · report <path>") and its
+// opt-out of autofix ("off since 12:30 (magnum fix --off)"), the second on a
+// line of its own when it has both; nothing when it has neither.
+func statusRenderFix(w io.Writer, loop *engine.FixState, off *engine.FixOff, now time.Time) {
+	label := "  fix:       "
+	if f := loop; f != nil {
+		s := fmt.Sprintf("cycle %d of %d", f.Cycle, f.Cap)
+		if f.Role != "" {
+			s += " · " + f.Role
+		}
+		if f.By != "" {
+			s += " · started by " + f.By
+			if !f.StartedAt.IsZero() {
+				s += " " + inspClock(now, f.StartedAt)
+			}
+		}
+		if f.Report != "" {
+			s += " · report " + inspTilde(f.Report)
+		}
+		fmt.Fprintf(w, "%s%s\n", label, statusSafe(s, 0))
+		label = "             "
+	}
+	if o := off; o != nil {
+		s := "off"
+		if !o.Since.IsZero() {
+			s += " since " + inspClock(now, o.Since)
+		}
+		if o.By != "" {
+			s += " (" + o.By + ")"
+		}
+		fmt.Fprintf(w, "%s%s\n", label, statusSafe(s, 0))
+	}
+}
+
 // statusRenderDetail prints one PR's (or slot's) card.
 func statusRenderDetail(w io.Writer, d statusDetail, now time.Time) {
 	if d.PR == nil {
@@ -569,6 +604,7 @@ func statusRenderDetail(w io.Writer, d statusDetail, now time.Time) {
 	}
 	fmt.Fprintf(w, "  state:     %s\n", state)
 	fmt.Fprintf(w, "  next:      %s\n", statusSafe(d.Next, 0))
+	statusRenderFix(w, d.Fix, d.FixOff, now)
 	if a := d.Attention; a != nil {
 		fmt.Fprintf(w, "  why:       %s\n", statusSafe(a.Cause, 0))
 		if a.Step != "" {

@@ -697,6 +697,24 @@ func statusSnooze(ctx context.Context, st *store.Store, prID int64, now time.Tim
 	return z, ok && z.Active(now)
 }
 
+// statusFix is the PR's fix loop and its opt-out of autofix (an opt-out
+// whose row cannot be read is still one, with no time or author); nil when
+// it has none or the registry cannot say.
+func statusFix(ctx context.Context, st *store.Store, prID int64) (*engine.FixState, *engine.FixOff) {
+	var loop *engine.FixState
+	var off *engine.FixOff
+	if v, ok, err := st.GetKV(ctx, engine.KVPRFix(prID)); err == nil && ok {
+		if f, ok := engine.ParseFixState(v); ok {
+			loop = &f
+		}
+	}
+	if v, ok, err := st.GetKV(ctx, engine.KVPRFixOff(prID)); err == nil && ok {
+		o, _ := engine.ParseFixOff(v)
+		off = &o
+	}
+	return loop, off
+}
+
 // statusWait is the daemon's account of why a PR waiting for a round
 // (queued, rereview_pending) has none yet (engine.KVPRWait); ok is false
 // for other states or when no daemon recorded one.
@@ -852,6 +870,7 @@ func statusGatherDetail(ctx context.Context, d statusDeps, r statusReport, ref s
 	if z, ok := statusSnooze(ctx, d.Store, pr.ID, now); ok {
 		det.Snooze = &z
 	}
+	det.Fix, det.FixOff = statusFix(ctx, d.Store, pr.ID)
 	det.Next = statusNextWithGate(ctx, d.Store, pr, now)
 	if w, ok := statusWait(ctx, d.Store, pr); ok && t.Repo != nil {
 		det.Next = w.Sentence(actRefLabel(defRepo, t.Repo.FullName(), pr.Number), now)

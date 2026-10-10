@@ -5869,6 +5869,10 @@ type FixOff struct {
     FixOff is a PR's opt-out of the fix job: when it was set and by whom
     ("magnum fix --off").
 
+func ParseFixOff(s string) (FixOff, bool)
+    ParseFixOff reads a KVPRFixOff value; ok is false for one that is not an
+    opt-out.
+
 type FixPayload struct {
 	PRTarget
 	DryRun bool `json:"dry_run,omitempty"`
@@ -5930,6 +5934,14 @@ type FixState struct {
     pushed left to the author (its report's "## Needs you" entries, in its own
     words, so never put in an event or a log): the push is re-reviewed first,
     and the loop ends after that round as needs attention.
+
+func ParseFixState(s string) (FixState, bool)
+    ParseFixState reads a KVPRFix value; ok is false for one that is not a fix
+    loop.
+
+func (s FixState) Short() string
+    Short is the loop while its fixer works, as the board's state cell shows it:
+    "fixing 1/3 · claude-fix" ("fixing 1/3" when the role is not known).
 
 type GateCase struct {
 	learn.GateRow
@@ -16840,6 +16852,13 @@ type PRBoardRow struct {
 	// MuteReason is why the PR was muted (the latest `magnum mute`'s
 	// reason), for the card; "" when it was muted without one or is not.
 	MuteReason string
+	// Fixing is the PR's fix loop while its fixer works, as the state cell
+	// shows it ("fixing 1/3 · claude-fix", engine.FixState.Short); "" when
+	// no fixer works on it (a loop waiting for its re-review shows the PR's
+	// state). FixOff: the PR was switched out of autofix (`magnum fix
+	// --off`); its tags and the card say "fix off".
+	Fixing string
+	FixOff bool
 	// Note is a one-line remark about the last review shown under LAST REVIEW
 	// on the card (e.g. "comment-only push skipped (a7b3f8c → 602da9d)").
 	Note string

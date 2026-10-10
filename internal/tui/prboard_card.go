@@ -153,6 +153,9 @@ func (p *prbPainter) cardContent(r PRBoardRow, inner int) []string {
 	}
 
 	head := p.st.Title.Render(orDim(prRef(r))) + "  " + p.stateCell(rowState(r)).render(nil)
+	if fixingShown(r) {
+		head += " " + p.fixingCell(r.Fixing).render(nil)
+	}
 	if flagShown(r) {
 		head += " " + p.flagCell(r.CodexFlag).render(nil)
 	}
@@ -181,6 +184,9 @@ func (p *prbPainter) cardContent(r PRBoardRow, inner int) []string {
 	}
 	if r.Muted {
 		flags = append(flags, p.pal.tag.Render("muted"))
+	}
+	if r.FixOff {
+		flags = append(flags, p.pal.tag.Render("fix off"))
 	}
 	if gh := strings.ToUpper(strings.TrimSpace(r.GHState)); gh != "" && gh != "OPEN" {
 		flags = append(flags, p.st.Warn.Render(strings.ToLower(gh)))

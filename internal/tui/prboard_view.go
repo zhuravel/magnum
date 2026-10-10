@@ -500,6 +500,8 @@ func (p *prbPainter) cells(r PRBoardRow, since [3]int) prbCells {
 	cs.c[colRequested] = p.requestedCell(r)
 	cs.c[colState] = p.stateWaitCell(r)
 	switch {
+	case fixingShown(r):
+		cs.stateAlt = []cell{p.fixingNarrow(r.Fixing)}
 	case flagShown(r):
 		cs.stateAlt = []cell{p.flagNarrow(r.CodexFlag)}
 	case roundProgress(r) != nil:
@@ -572,8 +574,9 @@ func (p *prbPainter) numCell(r PRBoardRow) cell {
 }
 
 // titleCell is the title after the row's tags: 📌 pinned, ! failed or
-// stalemated (a thread magnum stopped arguing in), the label badges, draft, muted. The title is the last run (the cursor row
-// bolds it; titleFit cuts only it).
+// stalemated (a thread magnum stopped arguing in), the label badges, draft,
+// muted, fix off (switched out of autofix). The title is the last run (the
+// cursor row bolds it; titleFit cuts only it).
 func (p *prbPainter) titleCell(r PRBoardRow) cell {
 	var c cell
 	if r.Pinned {
@@ -590,6 +593,9 @@ func (p *prbPainter) titleCell(r PRBoardRow) cell {
 	}
 	if r.Muted && normState(r.State) != "ignored" { // the state column says ignored
 		c = append(c, seg{"muted", p.pal.tag}, seg{" ", lipgloss.Style{}})
+	}
+	if r.FixOff {
+		c = append(c, seg{"fix off", p.pal.tag}, seg{" ", lipgloss.Style{}})
 	}
 	title := oneLine(r.Title)
 	if title == "" {
@@ -709,9 +715,13 @@ const (
 func (p *prbPainter) stateWaitCell(r PRBoardRow) cell { return p.stateWaitDetail(r, stateFull) }
 
 // stateWaitDetail is stateWaitCell with d of a running round's progress.
-// A PR Codex flagged (flagCell), magnum approved as the operator (autoCell)
-// or that needs them (needsMeCell) says so instead.
+// A PR whose fixer works (fixingCell), Codex flagged (flagCell), magnum
+// approved as the operator (autoCell) or that needs them (needsMeCell) says
+// so instead.
 func (p *prbPainter) stateWaitDetail(r PRBoardRow, d stateDetail) cell {
+	if fixingShown(r) {
+		return p.fixingCell(r.Fixing)
+	}
 	if flagShown(r) {
 		return p.flagCell(r.CodexFlag)
 	}
@@ -747,6 +757,24 @@ func (p *prbPainter) stateWaitDetail(r PRBoardRow, d stateDetail) cell {
 		c = append(c, seg{"· " + why, p.st.Dim})
 	}
 	return c
+}
+
+// fixingShown reports whether r's state cell says that its fixer works
+// (PRBoardRow.Fixing): on a PR GitHub has not merged or closed.
+func fixingShown(r PRBoardRow) bool {
+	return r.Fixing != "" && !mergedOnGitHub(r) && !closedUnmerged(r)
+}
+
+// fixingCell is the state cell of a PR whose fixer works, its loop in the
+// pill of a round at work: "fixing 1/3 · claude-fix".
+func (p *prbPainter) fixingCell(text string) cell {
+	return cell{{" " + text + " ", p.pal.pills["reviewing"]}}
+}
+
+// fixingNarrow is fixingCell for a narrow state cell: "fixing 1/3".
+func (p *prbPainter) fixingNarrow(text string) cell {
+	short, _, _ := strings.Cut(text, " · ")
+	return p.fixingCell(short)
 }
 
 // flagShown reports whether r's state cell says that Codex flagged it
