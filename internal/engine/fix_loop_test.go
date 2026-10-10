@@ -130,6 +130,56 @@ func TestACleanReReviewEndsTheLoop(t *testing.T) {
 	h.wantToasts("needs attention", 0)
 }
 
+// A re-review that requests changes with no new findings is not clean: the
+// earlier findings it keeps open remain. Below the cap the next cycle runs
+// (here its fixer answers and pushes nothing, which ends the loop with its
+// info toast); at the cap the loop ends as needs attention, saying the
+// earlier findings are still open.
+func TestAChangesRequestedReReviewWithNoNewFindingsIsNotClean(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		cycles int
+	}{{name: "below the cap", cycles: 3}, {name: "at the cap", cycles: 1}} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, git := fixHarness(t, func(h *harness) { h.cfg.Pipeline.FixCycles = tc.cycles })
+			pr := loopToReReview(t, h, git, findings(map[string]int{}, "CHANGES_REQUESTED"))
+			fixer(h, git, "", func(run store.Run) string { return fixReport(run.ID, "nothing", fixReplied, "none") })
+			reqPoll(h, prSpec{n: 2, head: fixPushed, author: "zhuravel"})
+
+			if _, ok := h.fixEvent("fix.done"); ok {
+				t.Error("the loop ended as clean")
+			}
+			if _, ok := h.fixStateOf(2); ok {
+				t.Error("the loop goes on")
+			}
+			runs := h.fixRuns(pr.ID)
+			h.flush()
+			if got := toastsWith(h, "clean after"); len(got) != 0 {
+				t.Errorf("toasted %v", got)
+			}
+			if tc.cycles > 1 {
+				if len(runs) != 2 {
+					t.Fatalf("fix runs = %d, want the second cycle", len(runs))
+				}
+				if ev, _ := h.fixEvent("fix.start"); !strings.Contains(ev.Message, "fixes the open earlier findings of the review on b2b2b2b") {
+					t.Errorf("fix.start = %q", ev.Message)
+				}
+				if got := toastsWith(h, "PR #2: claude-fix pushed nothing, replied to 3 findings"); len(got) != 1 {
+					t.Errorf("toasts = %v", h.nh.shown())
+				}
+				return
+			}
+			if len(runs) != 1 {
+				t.Fatalf("fix runs = %d, want 1 at the cap", len(runs))
+			}
+			cur := h.wantState(2, store.PRNeedsAttention)
+			if want := "1 fix cycle, earlier findings still open: " + deref(runs[0].ReportPath); deref(cur.LastError) != want {
+				t.Errorf("last_error = %q, want %q", deref(cur.LastError), want)
+			}
+		})
+	}
+}
+
 // Findings in the re-review of the fixer's push start the next cycle of the
 // same loop: the fixer runs again on the re-reviewed head with the
 // re-review's URL, the loop keeps who started it, from which head and when,

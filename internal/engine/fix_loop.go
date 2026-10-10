@@ -74,10 +74,16 @@ func (e *Engine) fixAfterRound(ctx context.Context, pr store.PR, res pipeline.Ro
 // author when it pushed, end it as needs attention; a review that found
 // nothing ends it as done; findings start the next cycle (startFix) while
 // cycles are left, and end it as needs attention at the cap; a next cycle
-// that cannot start ends it as needs attention with why.
+// that cannot start ends it as needs attention with why. A review that
+// requests changes with no new findings found something: the earlier
+// findings it keeps open (fixRemains).
 func (e *Engine) continueFixLoop(ctx context.Context, job *fixJob, res pipeline.RoundResult) {
 	st := job.state
 	found := roundFindings(res)
+	left := textx.Count(found, "finding", "findings") + " left"
+	if found == 0 {
+		left = "earlier findings still open"
+	}
 	switch {
 	case res.Outcome != pipeline.OutcomePosted:
 		msg := fmt.Sprintf("fix loop ended: the re-review did not post (%s)", cmp.Or(res.Outcome, pipeline.OutcomeError))
@@ -87,11 +93,10 @@ func (e *Engine) continueFixLoop(ctx context.Context, job *fixJob, res pipeline.
 		e.endLoopForAttention(ctx, job, "fix.failed", msg)
 	case len(st.NeedsYou) > 0:
 		e.endLoopForAttention(ctx, job, "fix.needs_you", "fix: "+needsYourCall(st.NeedsYou, st.Report))
-	case found == 0:
+	case !fixRemains(res):
 		e.fixLoopDone(ctx, job, cmp.Or(res.TargetSHA, st.Head))
 	case st.Cycle >= st.Cap:
-		e.endLoopForAttention(ctx, job, "fix.capped", fmt.Sprintf("%s, %s left: %s",
-			textx.Count(st.Cycle, "fix cycle", "fix cycles"), textx.Count(found, "finding", "findings"), st.Report))
+		e.endLoopForAttention(ctx, job, "fix.capped", fmt.Sprintf("%s, %s: %s", textx.Count(st.Cycle, "fix cycle", "fix cycles"), left, st.Report))
 	default:
 		if _, err := e.startFix(ctx, job.pr, st.By, st); err != nil {
 			e.endLoopForAttention(ctx, job, "fix.failed", fmt.Sprintf("fix loop ended: cycle %d did not start: %v", st.Cycle+1, err))
@@ -203,6 +208,13 @@ func (j *fixJob) loopData() map[string]any {
 		data["role"] = j.state.Role
 	}
 	return data
+}
+
+// fixRemains reports whether a posted re-review leaves something to fix:
+// new findings, or a changes request with none, which keeps earlier
+// findings open.
+func fixRemains(res pipeline.RoundResult) bool {
+	return roundFindings(res) > 0 || res.Event == "CHANGES_REQUESTED"
 }
 
 // roundFindings is how many findings (P0 to P3) a round's review posted.

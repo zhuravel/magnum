@@ -96,8 +96,15 @@ func (j *fixJob) asRound() *roundJob {
 	return &roundJob{pr: j.pr, repo: j.repo, watch: j.watch, pool: j.pool, slot: j.slot, hasSlot: j.slot.ID != 0}
 }
 
-// findings is the review's findings in words: "2 findings".
-func (j *fixJob) findings() string { return textx.Count(j.review.Findings(), "finding", "findings") }
+// findings is the review's findings in words, "2 findings", or "open
+// earlier findings" for a next cycle's review that requests changes with no
+// new one (fixRemains).
+func (j *fixJob) findings() string {
+	if n := j.review.Findings(); n > 0 {
+		return textx.Count(n, "finding", "findings")
+	}
+	return "open earlier findings"
+}
 
 // fixRunningSentence is the refusal while a loop runs on the PR.
 func fixRunningSentence(st FixState) string {
@@ -223,7 +230,7 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState) (*f
 	switch {
 	case !ok || sum.SHA != pr.HeadSHA || deref(pr.ReviewedSHA) != pr.HeadSHA:
 		return nil, fmt.Errorf("nothing to fix: no review on %s", head)
-	case sum.Findings() == 0:
+	case sum.Findings() == 0 && prev.Cycle == 0: // a next cycle's review may keep earlier findings open with no new one (fixRemains)
 		return nil, fmt.Errorf("nothing to fix: the review on %s found nothing", head)
 	case sum.URL == "":
 		return nil, fmt.Errorf("%s: the review on %s has no URL to fix from", label, head)
