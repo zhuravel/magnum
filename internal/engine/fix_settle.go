@@ -3,10 +3,12 @@ package engine
 // The fix job's end (fix.go runs it): the settle reads the fixer's report,
 // puts the slot back in order (Slots.Resync at the pushed head, or at the
 // reviewed one when nothing was pushed, so the next round's guard sees no
-// drift) and ends the cycle: a push with nobody needed goes on to a forced
-// re-review (phase reviewing), anything else ends the loop, with an info
-// toast when the fixer answered everything without a push and as needs
-// attention otherwise. A stop (`magnum abort`) ends the loop quietly.
+// drift) and ends the cycle: a push goes on to a forced re-review (phase
+// reviewing; findings the fixer left to the author wait in the loop's row
+// for that round's end), anything else ends the loop, with an info toast
+// when the fixer answered everything without a push and as needs attention
+// (attention.KindFix) otherwise. A stop (`magnum abort`) ends the loop
+// quietly.
 
 import (
 	"context"
@@ -39,11 +41,12 @@ var fixThreadsRe = regexp.MustCompile(`^(\d+)\s+threads?\b`)
 // when its report lists commits, else (or when that head cannot be
 // confirmed, which fails the job) at the reviewed head; a slot that cannot
 // be put back fails the job. Then the report decides: none, one of
-// another run or a broken one, or a failed push, fails the job; findings
-// left to the author end the loop as needs attention; a push goes on to
-// the re-review (fixReReview); replies alone end the loop with an info
-// toast. The events name counts, SHAs, the role and the report, never what
-// the fixer wrote.
+// another run or a broken one, or a failed push, fails the job; a push goes
+// on to the re-review (fixReReview), with the findings left to the author
+// kept for that round's end (spec: the push deserves its re-review);
+// findings left to the author without a push end the loop as needs
+// attention; replies alone end the loop with an info toast. The events name
+// counts, SHAs, the role and the report, never what the fixer wrote.
 func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 	subject, report := job.subject(), deref(job.run.ReportPath)
 	rep, rerr := e.readFixReport(job)
@@ -84,17 +87,24 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 		replied, data["threads"] = "replied in "+textx.Count(threads, "thread", "threads"), threads
 	}
 	e.event(ctx, "info", subject, "fix.replied", job.role.Name+" "+replied, data)
-	switch n := len(rep.NeedsYou); {
-	case n > 0:
-		msg := fmt.Sprintf("fix: %s %s your call: %s", textx.Count(n, "finding", "findings"), textx.Plural(n, "needs", "need"), report)
-		e.finishFixRun(ctx, job.run, store.RunVerified, "needs_you", "")
-		e.endFixState(ctx, job)
+	n := len(rep.NeedsYou)
+	needs := fmt.Sprintf("fix: %s %s your call: %s", textx.Count(n, "finding", "findings"), textx.Plural(n, "needs", "need"), report)
+	if n > 0 {
 		data["needs_you"] = n
-		e.event(ctx, "warn", subject, "fix.needs_you", msg, data)
-		e.fixAttention(ctx, job, msg)
+	}
+	switch {
+	case pushed && n > 0:
+		e.event(ctx, "warn", subject, "fix.needs_you", needs+"; the re-review of "+textx.ShortSHA(target)+" runs first", data)
+		e.finishFixRun(ctx, job.run, store.RunVerified, "pushed", "")
+		e.fixReReview(ctx, job, target, rep.NeedsYou)
 	case pushed:
 		e.finishFixRun(ctx, job.run, store.RunVerified, "pushed", "")
-		e.fixReReview(ctx, job, target)
+		e.fixReReview(ctx, job, target, nil)
+	case n > 0:
+		e.finishFixRun(ctx, job.run, store.RunVerified, "needs_you", "")
+		e.endFixState(ctx, job)
+		e.event(ctx, "warn", subject, "fix.needs_you", needs, data)
+		e.fixAttention(ctx, job, needs)
 	default:
 		e.finishFixRun(ctx, job.run, store.RunVerified, "replied", "")
 		e.endFixState(ctx, job)
@@ -109,11 +119,12 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 }
 
 // fixReReview takes the loop to its re-review after a push: the row in
-// phase reviewing (the cycle counted, the pushed head) and a forced review
-// of the PR (forceReview, as `magnum review` queues one: no throttle, no
-// daily cap, and the fixing hold does not apply to it). A PR GitHub closed
-// meanwhile ends the loop instead.
-func (e *Engine) fixReReview(ctx context.Context, job *fixJob, head string) {
+// phase reviewing (the cycle counted, the pushed head, needs the findings
+// the fixer left to the author, none after a clean push) and a forced
+// review of the PR (forceReview, as `magnum review` queues one: no
+// throttle, no daily cap, and the fixing hold does not apply to it). A PR
+// GitHub closed meanwhile ends the loop instead.
+func (e *Engine) fixReReview(ctx context.Context, job *fixJob, head string, needs []string) {
 	pr, err := e.st.PRByID(ctx, job.pr.ID)
 	if err == nil && pr.GHState != store.GHOpen {
 		e.endFixState(ctx, job)
@@ -121,7 +132,7 @@ func (e *Engine) fixReReview(ctx context.Context, job *fixJob, head string) {
 		return
 	}
 	st := job.state
-	st.Phase, st.Head = FixPhaseReviewing, head
+	st.Phase, st.Head, st.NeedsYou = FixPhaseReviewing, head, needs
 	if err == nil {
 		err = e.setFixState(ctx, pr.ID, st)
 	}
@@ -229,11 +240,13 @@ func (e *Engine) endFixState(ctx context.Context, job *fixJob) {
 	}
 }
 
-// fixAttention tells the operator that the job's loop needs them, with msg.
-// A reviewed PR goes to needs_attention (needsAttention: its toast and
-// attention key). A PR waiting for a round keeps it, because a push came
-// during the fix and that re-review still runs: it gets the urgent toast
-// alone. A PR elsewhere (closed, ineligible) has the events only.
+// fixAttention tells the operator that the job's loop needs them, with msg,
+// as the fix job's attention (attention.KindFix: the fixer, its report and
+// `magnum fix` or `magnum abort` as the next step). A reviewed PR goes to
+// needs_attention (needsAttention: its toast and attention key). A PR
+// waiting for a round keeps it, because a push came during the fix and
+// that re-review still runs: it gets the urgent toast alone. A PR
+// elsewhere (closed, ineligible) has the events only.
 func (e *Engine) fixAttention(ctx context.Context, job *fixJob, msg string) {
 	pr, err := e.st.PRByID(ctx, job.pr.ID)
 	if err != nil {
@@ -244,11 +257,11 @@ func (e *Engine) fixAttention(ctx context.Context, job *fixJob, msg string) {
 	rj.pr = pr
 	switch {
 	case pr.State == store.PRReviewed:
-		e.needsAttention(ctx, rj, pr, []string{store.PRReviewed}, attention.KindNoReview, msg, nil)
+		e.needsAttention(ctx, rj, pr, []string{store.PRReviewed}, attention.KindFix, msg, nil)
 	case slices.Contains(waitingStates, pr.State):
 		label := fmt.Sprintf("%s#%d", job.repo.Name, pr.Number)
 		e.urgent(fmt.Sprintf("attention:%d:fix", pr.ID), "magnum: "+label+" needs attention",
-			attention.Explain(attention.KindNoReview, msg, label).Summary, attentionWindow)
+			attention.Explain(attention.KindFix, msg, label).Summary, attentionWindow)
 	}
 }
 

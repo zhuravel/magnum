@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/agents"
+	"github.com/zhuravel/magnum/internal/attention"
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/slots"
@@ -389,7 +390,7 @@ func TestAPushedReportForcesTheReReview(t *testing.T) {
 	}
 	st, ok := h.fixStateOf(2)
 	report := deref(h.fixRuns(pr.ID)[0].ReportPath)
-	if !ok || st.Phase != FixPhaseReviewing || st.Cycle != 1 || st.Head != fixPushed || st.Report != report {
+	if !ok || st.Phase != FixPhaseReviewing || st.Cycle != 1 || st.Head != fixPushed || st.Report != report || len(st.NeedsYou) != 0 {
 		t.Fatalf("fix state = %+v, %v", st, ok)
 	}
 	if cur := h.wantState(2, store.PRRereviewPending); !cur.Forced {
@@ -433,52 +434,61 @@ func TestAFixThatPushedNothingResyncsTheSlot(t *testing.T) {
 	h.wantToasts("needs attention", 0)
 }
 
-// Findings the fixer leaves to the author end the loop as needs attention,
-// naming how many and the report; with a push, the slot moves to the pushed
-// head and the push is still re-reviewed once the poller sees it.
+// Findings the fixer leaves to the author without a push end the loop as
+// needs attention, the fix job's kind, naming how many and the report; the
+// slot goes back to the reviewed head.
 func TestNeedsYouEndsTheLoopAsNeedsAttention(t *testing.T) {
-	for _, tc := range []struct {
-		name, head, pushed, needs, want string
-	}{
-		{name: "nothing pushed", head: "", pushed: "nothing",
-			needs: "- 2101 P1 app/models/offer.rb:42: wants a schema change\n- 2102 P2 app/lib/x.rb:7: contested", want: "fix: 2 findings need your call: "},
-		{name: "pushed", head: fixPushed, pushed: "b2b2b2b Guard the nil owner",
-			needs: "- 2102 P2 app/lib/x.rb:7: contested", want: "fix: 1 finding needs your call: "},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			h, git := fixHarness(t)
-			pr := fixablePR(h, "zhuravel", map[string]int{"P1": 1, "P2": 2})
-			fixer(h, git, tc.head, func(run store.Run) string { return fixReport(run.ID, tc.pushed, fixReplied, tc.needs) })
-			h.fix(FixPayload{})
-			h.tick()
-			report := deref(h.fixRuns(pr.ID)[0].ReportPath)
-			cur := h.wantState(2, store.PRNeedsAttention)
-			if deref(cur.LastError) != tc.want+report {
-				t.Errorf("last_error = %q, want %q", deref(cur.LastError), tc.want+report)
-			}
-			if _, ok := h.fixStateOf(2); ok {
-				t.Error("the loop goes on")
-			}
-			if !slices.Contains(h.sl.all(), "resync:review1:"+cmpOr(tc.head, fixHead)) {
-				t.Errorf("slot calls %v", h.sl.all())
-			}
-			h.wantToasts("needs attention", 1)
-			h.wantReportInData("fix.needs_you", report)
-			if tc.head == "" {
-				return
-			}
-			h.advance(time.Minute)
-			reqPoll(h, prSpec{n: 2, head: fixPushed, author: "zhuravel"})
-			h.wantState(2, store.PRRereviewPending)
-		})
+	h, git := fixHarness(t)
+	pr := fixablePR(h, "zhuravel", map[string]int{"P1": 1, "P2": 2})
+	fixer(h, git, "", func(run store.Run) string {
+		return fixReport(run.ID, "nothing", fixReplied, "- 2101 P1 app/models/offer.rb:42: wants a schema change\n- 2102 P2 app/lib/x.rb:7: contested")
+	})
+	h.fix(FixPayload{})
+	h.tick()
+	report := deref(h.fixRuns(pr.ID)[0].ReportPath)
+	cur := h.wantState(2, store.PRNeedsAttention)
+	if want := "fix: 2 findings need your call: " + report; deref(cur.LastError) != want {
+		t.Errorf("last_error = %q, want %q", deref(cur.LastError), want)
 	}
+	if kind, _ := h.e.getKV(h.ctx, KVPRAttention(pr.ID)); kind != attention.KindFix {
+		t.Errorf("attention kind = %q", kind)
+	}
+	if _, ok := h.fixStateOf(2); ok {
+		t.Error("the loop goes on")
+	}
+	if !slices.Contains(h.sl.all(), "resync:review1:"+fixHead) {
+		t.Errorf("slot calls %v", h.sl.all())
+	}
+	h.wantToasts("needs attention", 1)
+	h.wantReportInData("fix.needs_you", report)
 }
 
-func cmpOr(a, b string) string {
-	if a != "" {
-		return a
+// Findings the fixer leaves to the author after a push wait for the push's
+// re-review: the slot moves to the pushed head, the cycle counts, the loop
+// waits in phase reviewing with the entries kept for the round's end, and
+// the re-review is forced; nobody is asked yet.
+func TestAPushWithNeedsYouIsReReviewedFirst(t *testing.T) {
+	h, git := fixHarness(t)
+	pr := fixablePR(h, "zhuravel", map[string]int{"P1": 1, "P2": 2})
+	fixer(h, git, fixPushed, func(run store.Run) string {
+		return fixReport(run.ID, "b2b2b2b Guard the nil owner", fixReplied, "- 2102 P2 app/lib/x.rb:7: contested")
+	})
+	h.fix(FixPayload{})
+	h.handle()
+	report := deref(h.fixRuns(pr.ID)[0].ReportPath)
+	st, ok := h.fixStateOf(2)
+	if !ok || st.Phase != FixPhaseReviewing || st.Cycle != 1 || st.Head != fixPushed ||
+		!slices.Equal(st.NeedsYou, []string{"2102 P2 app/lib/x.rb:7: contested"}) {
+		t.Fatalf("fix state = %+v, %v", st, ok)
 	}
-	return b
+	if cur := h.wantState(2, store.PRRereviewPending); !cur.Forced || deref(cur.LastError) != "" {
+		t.Errorf("the re-review: forced %v, last_error %q", cur.Forced, deref(cur.LastError))
+	}
+	if !slices.Contains(h.sl.all(), "resync:review1:"+fixPushed) {
+		t.Errorf("slot calls %v", h.sl.all())
+	}
+	h.wantReportInData("fix.needs_you", report)
+	h.wantToasts("needs attention", 0)
 }
 
 // A run that ends without a report of its own fails the job: the loop ends

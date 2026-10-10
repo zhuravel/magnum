@@ -2010,6 +2010,12 @@ const (
 	KindNoReview      = "needs_attention" // the judge posted nothing after a nudge, or its result was inconsistent
 	KindIdentityError = "identity_error"  // the judge's identity check failed
 	KindIdentityLeak  = "identity_leak"   // a review with the run's marker came from another login
+	// KindFix: the fix job (a fixer fixing magnum's findings on the
+	// operator's PR) needs the author: findings it left to them, or a fix
+	// run that failed. Its message is the job's sentence ("fix: 2 findings
+	// need your call: <report>", "fix run failed: …", "fix guard failed: …",
+	// "fix settle failed: …"), with the fixer's report path when it has one.
+	KindFix = "fix"
 )
     Kinds: why the engine parked the PR (engine needsAttention's why).
 
@@ -2022,6 +2028,7 @@ const (
 	StageJudge        = "judge"
 	StageIdentity     = "identity"
 	StageReview       = "review"
+	StageFix          = "fix"
 )
     Stages: where the failure happened.
 
@@ -5911,11 +5918,16 @@ type FixState struct {
 	By        string    `json:"by"`
 	Report    string    `json:"report"`
 	StartedAt time.Time `json:"started_at"`
+	NeedsYou  []string  `json:"needs_you,omitempty"`
 }
     FixState is where a PR's fix loop is: cycle Cycle of at most Cap, in Phase.
     Since is the head the loop started from and Head the head the current cycle
-    fixes. By says who started it ("magnum fix", "autofix"), Report is the path
-    of the report the fixer writes, and StartedAt is when the loop started.
+    fixes (in phase reviewing, the head the fixer pushed). By says who started
+    it ("magnum fix", "autofix"), Report is the path of the report the fixer
+    writes, and StartedAt is when the loop started. NeedsYou are the findings a
+    fixer that pushed left to the author (its report's "## Needs you" entries,
+    in its own words, so never put in an event or a log): the push is
+    re-reviewed first, and the loop ends after that round as needs attention.
 
 type GateCase struct {
 	learn.GateRow

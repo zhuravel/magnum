@@ -104,3 +104,40 @@ func TestExplainKeepsTheSummaryOneShortLine(t *testing.T) {
 		t.Fatalf("cause %d runes", n)
 	}
 }
+
+// A fix job's attention names the fixer (its report's file name says which
+// role), the report path its message carries and the two remedies, `magnum
+// fix` and `magnum abort`; its summary keeps the job's own sentence. A
+// message without a report names the fixer alone, and a row stored without
+// its kind is still read as the fix job's.
+func TestExplainNamesTheFixerItsReportAndTheRemedies(t *testing.T) {
+	const report = "/state/reviews/talkable/talkable/2/a1a1a1a1a1a1/claude-fix.md"
+	for _, tc := range []struct {
+		name, kind, msg         string
+		summary, cause, fixWith string
+	}{
+		{"needs you", KindFix, "fix: 2 findings need your call: " + report,
+			"fix: 2 findings need your call: " + report, "2 findings need your call", "read claude-fix's report " + report},
+		{"failed run", KindFix, "fix run failed: the fixer's push failed: " + report,
+			"fix run failed: the fixer's push failed: " + report, "the fixer's push failed", "read claude-fix's report " + report},
+		{"no report", KindFix, "fix guard failed: slot review1 holds c3c3c3c, not the reviewed head a1a1a1a",
+			"fix guard failed: slot review1 holds c3c3c3c", "slot review1 holds c3c3c3c", "`magnum open talkable#2` shows the fixer's pane"},
+		{"kind inferred", "", "fix run failed: claude-fix run r-1 is failed: agent blocked",
+			"fix run failed: claude-fix run r-1 is failed", "agent blocked", "`magnum fix talkable#2`"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := Explain(tc.kind, tc.msg, "talkable#2")
+			if r.Kind != KindFix || r.Stage != StageFix || !strings.HasPrefix(r.Summary, tc.summary) || !strings.Contains(r.Cause, tc.cause) {
+				t.Errorf("reason kind %q stage %q\n summary %q\n cause   %q", r.Kind, r.Stage, r.Summary, r.Cause)
+			}
+			for _, want := range []string{tc.fixWith, "`magnum fix talkable#2`", "`magnum abort talkable#2`"} {
+				if !strings.Contains(r.Fix, want) {
+					t.Errorf("fix %q lacks %q", r.Fix, want)
+				}
+			}
+			if strings.Contains(r.Fix, "judge") {
+				t.Errorf("fix %q names the judge", r.Fix)
+			}
+		})
+	}
+}

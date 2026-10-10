@@ -3,7 +3,9 @@ package engine
 import (
 	"encoding/json"
 	"maps"
+	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -11,7 +13,8 @@ import (
 // TestFixStateRoundTrips: the fix loop's row is a PR's KVPRFix JSON: absent
 // until the job starts, read back as it was written (the times by instant),
 // replaced by the next write and gone once cleared. The stored fields are
-// the ones the CLI reads, in snake case.
+// the ones the CLI reads, in snake case; needs_you only when the fixer left
+// findings to the author.
 func TestFixStateRoundTrips(t *testing.T) {
 	h := newHarness(t)
 	const id = int64(7)
@@ -34,7 +37,7 @@ func TestFixStateRoundTrips(t *testing.T) {
 		t.Errorf("StartedAt = %s, want %s", got.StartedAt, started)
 	}
 	got.StartedAt = want.StartedAt
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("fixState = %+v, want %+v", got, want)
 	}
 
@@ -52,11 +55,16 @@ func TestFixStateRoundTrips(t *testing.T) {
 	}
 
 	want.Cycle, want.Phase, want.Head, want.By = 2, FixPhaseReviewing, "ccc3333", "autofix"
+	want.NeedsYou = []string{"2102 P2 app/lib/x.rb:7: contested"}
 	if err := h.e.setFixState(h.ctx, id, want); err != nil {
 		t.Fatal(err)
 	}
-	if got, _, _ = h.e.fixState(h.ctx, id); got.Cycle != 2 || got.Phase != "reviewing" || got.Head != "ccc3333" || got.By != "autofix" || got.Since != "aaa1111" {
+	if got, _, _ = h.e.fixState(h.ctx, id); got.Cycle != 2 || got.Phase != "reviewing" || got.Head != "ccc3333" || got.By != "autofix" || got.Since != "aaa1111" ||
+		!slices.Equal(got.NeedsYou, want.NeedsYou) {
 		t.Errorf("fixState after a second write = %+v", got)
+	}
+	if raw, _ := h.e.getKV(h.ctx, KVPRFix(id)); !strings.Contains(raw, `"needs_you":["2102 P2 app/lib/x.rb:7: contested"]`) {
+		t.Errorf("the stored value %s lacks needs_you", raw)
 	}
 	if _, ok, _ := h.e.fixState(h.ctx, id+1); ok {
 		t.Error("another PR reads a loop it never started")

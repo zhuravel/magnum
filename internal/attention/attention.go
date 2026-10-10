@@ -10,6 +10,7 @@ package attention
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -25,6 +26,12 @@ const (
 	KindNoReview      = "needs_attention" // the judge posted nothing after a nudge, or its result was inconsistent
 	KindIdentityError = "identity_error"  // the judge's identity check failed
 	KindIdentityLeak  = "identity_leak"   // a review with the run's marker came from another login
+	// KindFix: the fix job (a fixer fixing magnum's findings on the
+	// operator's PR) needs the author: findings it left to them, or a fix
+	// run that failed. Its message is the job's sentence ("fix: 2 findings
+	// need your call: <report>", "fix run failed: …", "fix guard failed: …",
+	// "fix settle failed: …"), with the fixer's report path when it has one.
+	KindFix = "fix"
 )
 
 // Stages: where the failure happened.
@@ -37,6 +44,7 @@ const (
 	StageJudge        = "judge"
 	StageIdentity     = "identity"
 	StageReview       = "review"
+	StageFix          = "fix"
 )
 
 // SummaryMax bounds Summary and Cause (runes).
@@ -80,6 +88,9 @@ var (
 	toolVerRe  = regexp.MustCompile(`(?m)^mise ([A-Za-z0-9_-]+)@([0-9][0-9A-Za-z.\-]*) `)
 	jemallocRe = regexp.MustCompile(`jemalloc requested but not found`)
 	sshKeyRe   = regexp.MustCompile(`Permission denied \(publickey\)`)
+	// fixReportRe finds the fixer's report in a fix job's message: an
+	// absolute path to a .md file.
+	fixReportRe = regexp.MustCompile(`/[^\s:;,]+\.md\b`)
 )
 
 // Explain reads why a PR needs the user from the stored error msg (the PR's
@@ -98,7 +109,7 @@ func Explain(kind, msg, ref string) Reason {
 		}
 	}
 	// "identity_error: …": the engine's event form, and older rows, lead with the kind.
-	for _, k := range []string{KindFailed, KindOverloaded, KindBlocked, KindNoReview, KindIdentityError, KindIdentityLeak} {
+	for _, k := range []string{KindFailed, KindOverloaded, KindBlocked, KindNoReview, KindIdentityError, KindIdentityLeak, KindFix} {
 		if rest, ok := strings.CutPrefix(text, k+": "); ok {
 			text = rest
 			if r.Kind == "" {
@@ -132,6 +143,8 @@ func Explain(kind, msg, ref string) Reason {
 func inferKind(chain string) string {
 	l := strings.ToLower(chain)
 	switch {
+	case strings.HasPrefix(l, "fix run "), strings.HasPrefix(l, "fix guard "), strings.HasPrefix(l, "fix settle "):
+		return KindFix // before "blocked": a fixer's run can fail on a blocked agent
 	case strings.Contains(l, "identity check failed"):
 		return KindIdentityError
 	case strings.Contains(l, "carrying the run's marker was posted as"):
@@ -156,6 +169,8 @@ func stageOf(kind, chain string) string {
 		return StageJudge
 	case KindNoReview, KindOverloaded:
 		return StageReview
+	case KindFix:
+		return StageFix
 	}
 	l := strings.ToLower(chain)
 	switch {
@@ -189,6 +204,8 @@ func cause(r Reason, chain, output string, lines []string, ref string) (string, 
 			"`magnum identities check` shows what fails; then " + retry
 	case KindIdentityLeak:
 		return textx.FirstLine(chain), "check that review on GitHub and the identity's token; automation for the watch is paused until `magnum resume`"
+	case KindFix:
+		return textx.FirstLine(chain), fixRemedy(chain, ref)
 	}
 
 	all := chain + "\n" + output
@@ -269,6 +286,11 @@ func summary(r Reason) string {
 		return "identity check failed: " + r.Cause
 	case KindIdentityLeak:
 		return "identity leak: " + r.Cause
+	case KindFix:
+		if strings.HasPrefix(r.Cause, "fix ") { // "fix run failed: …"
+			return r.Cause
+		}
+		return "fix: " + r.Cause // the "fix: " Explain took off "fix: 2 findings need your call: …"
 	}
 	s := r.Stage + " failed"
 	if l := stepLabel(r.Step); l != "" {
@@ -278,6 +300,24 @@ func summary(r Reason) string {
 		s += fmt.Sprintf(" %d× on %s", r.Attempts, r.Head)
 	}
 	return s + ": " + r.Cause
+}
+
+// fixRemedy is the next step of a fix job's attention: the fixer's report
+// when chain names one, with the fixer named by the report's file name (a
+// role's report is <role>.md unless the role sets another output), else
+// the fixer's pane; then `magnum fix` for another loop once the author
+// answered what it left, and `magnum abort` for a loop still running.
+func fixRemedy(chain, ref string) string {
+	who, report := "the fixer", ""
+	if m := fixReportRe.FindAllString(chain, -1); len(m) > 0 {
+		report = m[len(m)-1]
+		who = strings.TrimSuffix(filepath.Base(report), ".md")
+	}
+	again := "`magnum fix " + ref + "` runs " + who + " again once you answered what it left; `magnum abort " + ref + "` stops a loop still running"
+	if report == "" {
+		return "`magnum open " + ref + "` shows " + who + "'s pane; " + again
+	}
+	return "read " + who + "'s report " + report + "; " + again
 }
 
 // stepLabel names a step command by its last alternative's first two words:
