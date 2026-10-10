@@ -41,17 +41,34 @@ func backoff(attempts int) time.Duration {
 }
 
 // launch starts the round goroutine for job under the PR's reservation
-// (reserve, whose context ctx is), which it drops when the round ends. A
-// round that panics is a failed round (roundPanicked); the daemon goes on.
-func (e *Engine) launch(ctx context.Context, job *roundJob) {
+// (reserve, whose context rctx is), which it drops when the round ends; ctx
+// is the daemon's. A round that panics is a failed round (roundPanicked);
+// the daemon goes on. Once the reservation is gone, the round's end goes on
+// to the PR's fix loop (fixAfterRound, on ctx: a next fix cycle reserves the
+// PR itself), unless an abort, an ignore or a shutdown stopped the round.
+func (e *Engine) launch(ctx, rctx context.Context, job *roundJob) {
 	subject := prSubject(job.repo, job.pr.Number)
 	e.roundWG.Go(func() {
-		defer e.unreserve(job.pr.ID)
-		e.safely(ctx, "round", subject, func() { e.runRound(ctx, job) },
-			func(ctx context.Context, msg string) { e.roundPanicked(ctx, job, msg) })
-		e.safely(ctx, "round", subject, func() { e.afterRound(ctx, job.pr.ID) }, // magnum abort / ignore (abort.go)
-			func(ctx context.Context, msg string) { e.stopsPanicked(ctx, e.roundStops(job.pr.ID), msg) })
+		res, stopped := e.reservedRound(rctx, job, subject)
+		if stopped {
+			return
+		}
+		e.safely(ctx, "fix", subject, func() { e.fixAfterRound(ctx, job.pr, res) }, nil)
 	})
+}
+
+// reservedRound runs the round and the stops it was given (afterRound)
+// under the PR's reservation, whose context ctx is, and drops the
+// reservation at the end. It returns the round's result and whether the
+// round's context was cancelled before (stopped: an abort, an ignore or a
+// shutdown).
+func (e *Engine) reservedRound(ctx context.Context, job *roundJob, subject string) (res pipeline.RoundResult, stopped bool) {
+	defer e.unreserve(job.pr.ID)
+	e.safely(ctx, "round", subject, func() { res = e.runRound(ctx, job) },
+		func(ctx context.Context, msg string) { e.roundPanicked(ctx, job, msg) })
+	e.safely(ctx, "round", subject, func() { e.afterRound(ctx, job.pr.ID) }, // magnum abort / ignore (abort.go)
+		func(ctx context.Context, msg string) { e.stopsPanicked(ctx, e.roundStops(job.pr.ID), msg) })
+	return res, ctx.Err() != nil
 }
 
 // roundPanicked settles the PR of a round that panicked as a failed round:
@@ -97,17 +114,18 @@ func (s *setupError) Error() string { return s.err.Error() }
 
 // runRound prepares the slot and sessions, runs the pipeline and maps the
 // result onto the PR state machine; a posted review goes straight on to
-// auto-approval (autoApproveRound).
-func (e *Engine) runRound(ctx context.Context, job *roundJob) {
+// auto-approval (autoApproveRound). It returns the round's result: an error
+// one when the setup failed, a stopped one when it was interrupted.
+func (e *Engine) runRound(ctx context.Context, job *roundJob) pipeline.RoundResult {
 	fctx := context.WithoutCancel(ctx)
 	in, ws, serr := e.prepare(ctx, job)
 	if serr != nil {
 		if ctx.Err() != nil {
 			e.log.Info("round setup interrupted", "pr", job.pr.ID)
-			return // recovery on the next start re-evaluates the claiming row
+			return pipeline.RoundResult{Outcome: pipeline.OutcomeStopped} // recovery on the next start re-evaluates the claiming row
 		}
 		e.setupFailed(fctx, job, serr)
-		return
+		return pipeline.RoundResult{Outcome: pipeline.OutcomeError, Error: serr.Error()}
 	}
 	res, err := e.d.Rounds(job.pr.Identity).RunRound(ctx, in)
 	e.finish(fctx, job, in, ws, res, err, ctx.Err() != nil)
@@ -116,6 +134,7 @@ func (e *Engine) runRound(ctx context.Context, job *roundJob) {
 		// tick (an abort or a shutdown cancelled ctx: the tick decides).
 		e.autoApproveRound(ctx, job.pr.ID)
 	}
+	return res
 }
 
 // prepare checks the PR out, starts or resumes its agents and moves the PR

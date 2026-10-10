@@ -557,7 +557,7 @@ func (e *Engine) startRound(ctx context.Context, pr store.PR, repo store.Repo, w
 		e.event(ctx, "info", subject, "slot.claimed", "claimed "+sl.Name, nil)
 	}
 	launched = true
-	e.launch(rctx, job)
+	e.launch(ctx, rctx, job)
 	return true, codex, gate{}
 }
 

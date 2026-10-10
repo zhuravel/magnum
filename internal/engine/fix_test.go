@@ -126,10 +126,16 @@ func fixReport(runID, pushed, replied, needs string) string {
 // head as its commits do ("" = it commits nothing) and ends its run, as the
 // observer does after two idle ticks.
 func fixer(h *harness, git *fixGit, head string, report func(run store.Run) string) {
+	fixerBy(h, git, func(run store.Run) (string, string) { return head, report(run) })
+}
+
+// fixerBy is fixer with the head and the report of each run from work.
+func fixerBy(h *harness, git *fixGit, work func(run store.Run) (head, report string)) {
 	h.ag.mu.Lock()
 	defer h.ag.mu.Unlock()
 	h.ag.onSubmit = func(run store.Run, _ string) {
-		if text := report(run); text != "" {
+		head, text := work(run)
+		if text != "" {
 			path := deref(run.ReportPath)
 			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 				h.t.Error(err)

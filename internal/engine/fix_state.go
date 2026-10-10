@@ -35,11 +35,12 @@ func KVPRFixOff(prID int64) string { return fmt.Sprintf("pr.%d.fix_off", prID) }
 // FixState is where a PR's fix loop is: cycle Cycle of at most Cap, in Phase.
 // Since is the head the loop started from and Head the head the current cycle
 // fixes (in phase reviewing, the head the fixer pushed). By says who started
-// it ("magnum fix", "autofix"), Report is the path of the report the fixer
-// writes, and StartedAt is when the loop started. NeedsYou are the findings a
-// fixer that pushed left to the author (its report's "## Needs you" entries,
-// in its own words, so never put in an event or a log): the push is
-// re-reviewed first, and the loop ends after that round as needs attention.
+// it ("magnum fix", "autofix"), Role is the fix role whose fixer runs the
+// current cycle, Report is the path of the report the fixer writes, and
+// StartedAt is when the loop started. NeedsYou are the findings a fixer that
+// pushed left to the author (its report's "## Needs you" entries, in its own
+// words, so never put in an event or a log): the push is re-reviewed first,
+// and the loop ends after that round as needs attention.
 type FixState struct {
 	Cycle     int       `json:"cycle"`
 	Cap       int       `json:"cap"`
@@ -50,6 +51,7 @@ type FixState struct {
 	Report    string    `json:"report"`
 	StartedAt time.Time `json:"started_at"`
 	NeedsYou  []string  `json:"needs_you,omitempty"`
+	Role      string    `json:"role,omitempty"`
 }
 
 // FixOff is a PR's opt-out of the fix job: when it was set and by whom

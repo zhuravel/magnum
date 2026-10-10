@@ -301,6 +301,9 @@ type Engine struct {
 	mu       sync.Mutex
 	rounds   map[int64]*roundHandle // PRs reserved by a round or an open (reserve)
 	evicting map[int64]string       // PRs under slot work (an eviction, a park) and why (reserveSlotWork)
+	// autofixNoRole are the PRs autofix found no fix role for, logged once
+	// each (fix_loop.go).
+	autofixNoRole map[int64]bool
 	// inflight are the requests answered asynchronously, which handleRequests
 	// skips until they complete: those handed to the heavy worker
 	// (heavyRequest), an open's (open.go) and an abort's or an ignore's
@@ -453,18 +456,19 @@ func New(d Deps) *Engine {
 	}
 	e := &Engine{
 		d: d, cfg: d.Config, st: d.Store, log: d.Logger,
-		rounds:       map[int64]*roundHandle{},
-		evicting:     map[int64]string{},
-		heavy:        make(chan heavyJob, 64),
-		heavyKeys:    map[string]bool{},
-		inflight:     map[int64]bool{},
-		lastSeen:     map[string]string{},
-		logged:       map[string]time.Time{},
-		cleanupTried: map[int64]time.Time{},
-		curateTried:  map[int64]time.Time{},
-		netRuns:      map[string]netRun{},
-		kick:         make(chan struct{}, 1),
-		starts:       starter{codex: make(chan struct{}, maxCodexStarts)},
+		rounds:        map[int64]*roundHandle{},
+		evicting:      map[int64]string{},
+		autofixNoRole: map[int64]bool{},
+		heavy:         make(chan heavyJob, 64),
+		heavyKeys:     map[string]bool{},
+		inflight:      map[int64]bool{},
+		lastSeen:      map[string]string{},
+		logged:        map[string]time.Time{},
+		cleanupTried:  map[int64]time.Time{},
+		curateTried:   map[int64]time.Time{},
+		netRuns:       map[string]netRun{},
+		kick:          make(chan struct{}, 1),
+		starts:        starter{codex: make(chan struct{}, maxCodexStarts)},
 	}
 	e.rec = &Recorder{log: d.Logger, st: d.Store, now: d.Now}
 	e.toastCtx, e.toastStop = context.WithCancel(context.Background())

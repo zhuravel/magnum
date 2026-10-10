@@ -294,7 +294,7 @@ func (e *Engine) startFix(ctx context.Context, pr store.PR, by string, prev FixS
 	} else {
 		st.Cycle++
 	}
-	st.Phase, st.Head, st.Report = FixPhaseFixing, job.review.SHA, ""
+	st.Phase, st.Head, st.Report, st.Role, st.NeedsYou = FixPhaseFixing, job.review.SHA, "", job.role.Name, nil
 	job.state = st
 	rctx, cancel := context.WithCancel(ctx)
 	if !e.reserve(pr.ID, &roundHandle{cancel: cancel, fix: true}) {
@@ -652,13 +652,7 @@ func (e *Engine) recoverFixes(ctx context.Context) {
 		if err != nil {
 			continue
 		}
-		job := &fixJob{repo: repo, pr: pr, state: st}
-		if w := e.cfg.WatchFor(repo.FullName()); w != nil {
-			job.watch, job.pool = *w, e.cfg.PoolFor(repo.FullName())
-		}
-		if slot, has, err := e.slotOf(ctx, pr.ID); err == nil && has {
-			job.slot = slot
-		}
+		job := e.loopJob(ctx, repo, pr, st)
 		if runs, err := e.st.RunsByPR(ctx, pr.ID); err == nil {
 			for _, r := range runs {
 				if r.Kind == store.RunFix {

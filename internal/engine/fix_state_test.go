@@ -25,7 +25,7 @@ func TestFixStateRoundTrips(t *testing.T) {
 
 	started := time.Date(2026, 10, 10, 9, 30, 15, 0, time.FixedZone("EEST", 3*3600))
 	want := FixState{Cycle: 1, Cap: 3, Phase: FixPhaseFixing, Since: "aaa1111", Head: "bbb2222", By: "magnum fix",
-		Report: "/state/reports/fix-1.md", StartedAt: started}
+		Report: "/state/reports/fix-1.md", StartedAt: started, Role: "claude-fix"}
 	if err := h.e.setFixState(h.ctx, id, want); err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func TestFixStateRoundTrips(t *testing.T) {
 		t.Fatalf("the stored value %q is no JSON object: %v", raw, err)
 	}
 	if keys := slices.Sorted(maps.Keys(fields)); !slices.Equal(keys,
-		[]string{"by", "cap", "cycle", "head", "phase", "report", "since", "started_at"}) {
+		[]string{"by", "cap", "cycle", "head", "phase", "report", "role", "since", "started_at"}) {
 		t.Errorf("stored fields = %v in %s", keys, raw)
 	}
 	if fields["phase"] != "fixing" || fields["started_at"] != "2026-10-10T09:30:15+03:00" {
