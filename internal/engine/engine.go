@@ -823,6 +823,7 @@ func (e *Engine) startup(ctx context.Context) {
 	e.noteRepliesSince(ctx)
 	e.warmIdentities(ctx, true)
 	e.recoverRows(ctx)
+	e.recoverFixes(ctx) // fix.go: a fixer at work never survives a restart
 	e.reclassifyIneligible(ctx)
 	e.syncNotes(ctx, true) // notes_record.go: the first start imports every repository's notes
 	// No curation, retro, skill edit or gate runs yet: a mark left behind

@@ -132,6 +132,28 @@ func (s *Store) CodexFlaggedPRs(ctx context.Context) (map[int64]bool, error) {
 	return out, nil
 }
 
+// KVKeys returns the keys that match glob (SQLite GLOB: * and ? are
+// wildcards, case-sensitive), in key order.
+func (s *Store) KVKeys(ctx context.Context, glob string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT key FROM kv WHERE key GLOB ? ORDER BY key", glob)
+	if err != nil {
+		return nil, fmt.Errorf("kv keys %s: %w", glob, err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return nil, fmt.Errorf("kv keys %s: %w", glob, err)
+		}
+		out = append(out, key)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("kv keys %s: %w", glob, err)
+	}
+	return out, nil
+}
+
 // KVScreenWidths holds the column widths dragged with the mouse on a
 // screen ("board", "dashboard") as a JSON object of column name to cells;
 // written by the CLI's screens, absent until a column is dragged.

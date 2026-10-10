@@ -15610,6 +15610,10 @@ func (s *Store) InsertAutoApproval(ctx context.Context, a AutoApproval) (AutoApp
     InsertAutoApproval records a post about to be tried (state posting,
     one attempt). It returns ErrConflict when the PR already has a live one.
 
+func (s *Store) KVKeys(ctx context.Context, glob string) ([]string, error)
+    KVKeys returns the keys that match glob (SQLite GLOB: * and ? are wildcards,
+    case-sensitive), in key order.
+
 func (s *Store) LandLearnProposal(ctx context.Context, id int64, from []string, v LearnVersion) (LearnProposal, LearnVersion, error)
     LandLearnProposal records that proposal id landed, in one transaction: it
     moves from one of from to landed (compare-and-set, ErrConflict when it is in

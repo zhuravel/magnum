@@ -712,6 +712,44 @@ func TestAFixThatTimesOutIsAskedForItsReportThenFails(t *testing.T) {
 	}
 }
 
+// After a restart no fixer run survives: a loop whose fixer was at work ends
+// as needs attention and its run fails; a loop waiting for its re-review
+// stays (the round's own recovery re-reviews).
+func TestAFixRunLostInARestartEndsTheLoop(t *testing.T) {
+	h, _ := fixHarness(t)
+	pr := fixablePR(h, "zhuravel", map[string]int{"P2": 1})
+	run, err := h.st.CreateRun(h.ctx, store.Run{ID: "r-fix-lost", PRID: pr.ID, Round: 1, Role: "claude-fix", Kind: store.RunFix,
+		TargetSHA: fixHead, Identity: pr.Identity, ReviewerLogin: "x", State: store.RunPending})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.TransitionRun(h.ctx, run.ID, []string{store.RunPending}, store.RunWorking, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.e.setFixState(h.ctx, pr.ID, FixState{Cycle: 1, Cap: 3, Phase: FixPhaseFixing, Head: fixHead}); err != nil {
+		t.Fatal(err)
+	}
+	other := h.pr(1)
+	if err := h.e.setFixState(h.ctx, other.ID, FixState{Cycle: 2, Cap: 3, Phase: FixPhaseReviewing}); err != nil {
+		t.Fatal(err)
+	}
+
+	h.startup()
+	cur := h.wantState(2, store.PRNeedsAttention)
+	if deref(cur.LastError) != "fix run lost in a daemon restart" {
+		t.Errorf("last_error = %q", deref(cur.LastError))
+	}
+	if _, ok := h.fixStateOf(2); ok {
+		t.Error("the lost loop goes on")
+	}
+	if r, err := h.st.RunByID(h.ctx, run.ID); err != nil || r.State != store.RunFailed {
+		t.Errorf("the lost run: %+v, %v", r, err)
+	}
+	if st, ok := h.fixStateOf(1); !ok || st.Phase != FixPhaseReviewing {
+		t.Errorf("the reviewing loop = %+v, %v", st, ok)
+	}
+}
+
 // `magnum abort` between the fixer's push and its re-review takes the
 // forced re-review back and ends the loop, so no row is left that would
 // refuse `magnum review` with no loop running.

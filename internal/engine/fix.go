@@ -13,7 +13,9 @@ package engine
 // holds the reviewed head), start (the fixer's session in the PR's
 // workspace, a run of kind fix, its prompt) and wait (the run's end; the
 // time-up line on timeout); the settle (fix_settle.go) reads the report,
-// puts the slot back in order and ends the cycle.
+// puts the slot back in order and ends the cycle. A daemon that stops while
+// the fixer works leaves the row in phase fixing, and the next start ends
+// that loop (recoverFixes).
 
 import (
 	"context"
@@ -316,7 +318,8 @@ func (e *Engine) startFix(ctx context.Context, pr store.PR, by string, prev FixS
 // then the settle (fix_settle.go). `magnum abort` cancels ctx and leaves
 // its orders on the reservation: the fixer is stopped and the loop ends
 // quietly (stopFix). A daemon shutdown cancels ctx with no order: the
-// loop's row stays in phase fixing.
+// loop's row stays in phase fixing, which the next start ends
+// (recoverFixes).
 func (e *Engine) runFix(ctx context.Context, job *fixJob) {
 	subject := job.subject()
 	if err := steps.ResetSubject(ctx, e.st, subject); err != nil {
@@ -337,7 +340,7 @@ func (e *Engine) runFix(ctx context.Context, job *fixJob) {
 		return
 	}
 	if ctx.Err() != nil {
-		e.log.Info("fix interrupted by a shutdown", "subject", subject)
+		e.log.Info("fix interrupted by a shutdown; the next start ends its loop", "subject", subject)
 		return
 	}
 	if err != nil {
@@ -596,4 +599,57 @@ func (e *Engine) fixPanicked(ctx context.Context, job *fixJob, msg string) {
 		e.abandonFixRun(ctx, job.run, "the fix job panicked")
 	}
 	e.failFix(ctx, job, "fix run failed: panic: "+msg, "")
+}
+
+// recoverFixes ends the fix loops a stopped daemon left with the fixer at
+// work (phase fixing): no fixer run survives a restart, so its run fails
+// and the loop ends as needs attention. A loop waiting for its re-review
+// (phase reviewing) stays: the round's own recovery re-reviews.
+func (e *Engine) recoverFixes(ctx context.Context) {
+	if e.d.DryRun {
+		return
+	}
+	keys, err := e.st.KVKeys(ctx, "pr.*.fix")
+	if err != nil {
+		e.log.Warn("recovery: fix loops", "err", err)
+		return
+	}
+	const why = "fix run lost in a daemon restart"
+	for _, key := range keys {
+		var id int64
+		if _, err := fmt.Sscanf(key, "pr.%d.fix", &id); err != nil || KVPRFix(id) != key {
+			continue
+		}
+		st, ok, err := e.fixState(ctx, id)
+		if err != nil {
+			e.log.Warn("recovery: a fix loop that cannot be read stays for magnum abort", "key", key, "err", err)
+			continue
+		}
+		if !ok || st.Phase != FixPhaseFixing {
+			continue
+		}
+		pr, err := e.st.PRByID(ctx, id)
+		if err != nil {
+			continue
+		}
+		repo, err := e.st.RepoByID(ctx, pr.RepoID)
+		if err != nil {
+			continue
+		}
+		job := &fixJob{repo: repo, pr: pr, state: st}
+		if w := e.cfg.WatchFor(repo.FullName()); w != nil {
+			job.watch, job.pool = *w, e.cfg.PoolFor(repo.FullName())
+		}
+		if slot, has, err := e.slotOf(ctx, pr.ID); err == nil && has {
+			job.slot = slot
+		}
+		if runs, err := e.st.RunsByPR(ctx, pr.ID); err == nil {
+			for _, r := range runs {
+				if r.Kind == store.RunFix {
+					e.finishFixRun(ctx, r, store.RunFailed, "lost", why)
+				}
+			}
+		}
+		e.failFix(ctx, job, why, st.Report)
+	}
 }
