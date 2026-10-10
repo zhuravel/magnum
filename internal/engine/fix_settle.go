@@ -125,8 +125,11 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 // the PR on it (forceReview, as `magnum review` queues one: no throttle, no
 // daily cap, and the fixing hold does not apply to it). The PR is forced
 // before onHeadChange sees the push, so the loop's re-review is never taken
-// for a push the review covers already (settlePush). A PR GitHub closed
-// meanwhile ends the loop instead.
+// for a push the review covers already (settlePush). A force that fails
+// after the head moved still lets onHeadChange see the push before the
+// loop ends, so the push is recorded and its re-review queued the normal
+// way (the poller, which finds the head already moved, would never queue
+// it). A PR GitHub closed meanwhile ends the loop instead.
 func (e *Engine) fixReReview(ctx context.Context, job *fixJob, head string, needs []string) {
 	pr, err := e.st.PRByID(ctx, job.pr.ID)
 	if err == nil && pr.GHState != store.GHOpen {
@@ -146,15 +149,22 @@ func (e *Engine) fixReReview(ctx context.Context, job *fixJob, head string, need
 	if err == nil {
 		_, err = e.forceReview(ctx, job.repo, pr, ReviewPayload{}, nil, fixBy)
 	}
+	if moved {
+		e.seeFixPush(ctx, job, pr.ID)
+	}
 	if err != nil {
 		e.failFix(ctx, job, "fix settle failed: the re-review could not be queued: "+err.Error(), "")
 		return
 	}
 	job.state = st
-	if !moved {
-		return
-	}
-	if cur, err := e.st.PRByID(ctx, pr.ID); err != nil {
+}
+
+// seeFixPush lets onHeadChange see the push recordFixPush put on the PR row,
+// as the poller would have: the push recorded for the burst rules,
+// pr.head_changed, the approval followed, the PR requeued (a forced one due
+// now, else as the throttle says).
+func (e *Engine) seeFixPush(ctx context.Context, job *fixJob, prID int64) {
+	if cur, err := e.st.PRByID(ctx, prID); err != nil {
 		e.log.Warn("fix: the PR after its push", "subject", job.subject(), "err", err)
 	} else if err := e.onHeadChange(ctx, job.repo, job.watch, cur, e.now()); err != nil {
 		e.log.Warn("fix: the push's head change", "subject", job.subject(), "err", err)

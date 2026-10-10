@@ -866,3 +866,48 @@ func TestASecondLoopOnANeedsAttentionPRSaysWhyAgain(t *testing.T) {
 	}
 	h.wantToasts("needs attention", 2)
 }
+
+// A re-review that cannot be forced after the fixer's push moved the PR's
+// head still leaves the push seen: the head change is recorded as the
+// poller records one and the normal re-review path takes over (the PR waits
+// for its re-review, the loop ends), so the poller's later sight of the
+// head changes nothing and the push is not lost unreviewed.
+func TestAFailedForceAfterAPushStillQueuesItsReReview(t *testing.T) {
+	h, git := fixHarness(t)
+	pr := fixablePR(h, "zhuravel", map[string]int{"P2": 1})
+	// The force's compare-and-set fails: the registry refuses forced = 1 on the PR.
+	if _, err := h.st.DB().ExecContext(h.ctx, fmt.Sprintf(`CREATE TRIGGER refuse_force BEFORE UPDATE OF forced ON prs
+  WHEN NEW.id = %d AND NEW.forced = 1 BEGIN SELECT RAISE(ABORT, 'the force is refused'); END`, pr.ID)); err != nil {
+		t.Fatal(err)
+	}
+	fixer(h, git, fixPushed, func(run store.Run) string { return fixReport(run.ID, "b2b2b2b Fix", fixReplied, "none") })
+	h.fix(FixPayload{})
+	h.handle()
+	if _, err := h.st.DB().ExecContext(h.ctx, "DROP TRIGGER refuse_force"); err != nil {
+		t.Fatal(err)
+	}
+
+	cur := h.pr(2)
+	if cur.HeadSHA != fixPushed || cur.Forced || (cur.State != store.PRRereviewPending && cur.State != store.PRNeedsAttention) {
+		t.Fatalf("PR = state %s head %s forced %v, want waiting for the re-review of %s", cur.State, cur.HeadSHA, cur.Forced, fixPushed)
+	}
+	if n := h.eventCount("pr:talkable/talkable#2", "pr.head_changed"); n != 1 {
+		t.Errorf("pr.head_changed events = %d, want 1", n)
+	}
+	if got := h.e.pushTimes(h.ctx, pr.ID); len(got) == 0 || !got[len(got)-1].Equal(h.clock.Now()) {
+		t.Errorf("recorded pushes %v lack the fixer's", got)
+	}
+	if ev, ok := h.fixEvent("fix.failed"); !ok || !strings.Contains(ev.Message, "the re-review could not be queued") {
+		t.Errorf("fix.failed = %+v, %v", ev, ok)
+	}
+	if _, ok := h.fixStateOf(2); ok {
+		t.Error("the loop goes on")
+	}
+
+	h.advance(time.Minute)
+	reqPollNoSettle(h, prSpec{n: 2, head: fixPushed, author: "zhuravel"})
+	h.settle()
+	if n := h.eventCount("pr:talkable/talkable#2", "pr.head_changed"); n != 1 {
+		t.Errorf("pr.head_changed events after the poll = %d, want 1", n)
+	}
+}
