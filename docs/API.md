@@ -6288,6 +6288,10 @@ type Slots interface {
 	// (review_unpin.go): the pin goes, the guard's holds stay and are named.
 	ClearPin(ctx context.Context, slot store.Slot) error
 	Guard(ctx context.Context, slot store.Slot) error
+	// Resync puts the slot back in order after the fix job's fixer committed
+	// in it: detached at sha (the pushed head, or the old one), recorded as
+	// checked out.
+	Resync(ctx context.Context, slot store.Slot, sha string) error
 	// Reserve, Repair and Adopt serve the open, repair and adopt requests.
 	Reserve(ctx context.Context, pr store.PR, pool config.Pool) (store.Slot, error)
 	Repair(ctx context.Context, slot store.Slot, pool config.Pool) error
@@ -13445,6 +13449,30 @@ func (m *Manager) Reserve(ctx context.Context, pr store.PR, pool config.Pool) (s
     like Claim but through store.AssignSlot (slot → claimed with pr_id,
     open assignment with the pool's database names). A claimed or held slot the
     PR already has is returned as is; no free slot left is ErrNoFreeSlot.
+
+func (m *Manager) Resync(ctx context.Context, slot store.Slot, sha string) error
+    Resync puts a slot back in order after a run that committed in it (the
+    fix job's fixer): it switches the slot, detached, to sha and records
+    sha as checked_out_sha, so Guard sees no head drift and the next round's
+    checkout starts clean. sha is the head the job settled on, a commit id:
+    the one the fixer pushed, or the head the review ran on when nothing was
+    pushed, in which case the fixer's local commits are left behind (the reflog
+    keeps them). It runs the steps guard, fetch and switch under the subject
+    "slot:<name>:resync:<sha7>", a new generation on every call, and ends with a
+    slot.resync event:
+      - guard is GuardLive, not Guard: the slot is refused when it is pinned or
+        held (ErrHold) or when a person's agent or process is in it, because
+        the switch drops the tracked changes; Guard would persist the very head
+        drift Resync repairs as the slot's hold;
+      - fetch looks sha up in the slot and fetches the commit by id into the
+        main clone only when the slot lacks it (a head pushed from another
+        clone);
+      - switch notes the tracked changes it drops (a slot.discarded event) and
+        records the resulting HEAD as checked_out_sha through the pending-switch
+        key, as a checkout does. A HEAD that already is sha with no tracked
+        changes is only recorded, with no switch.
+
+    Resync can run again after any failure, and again for the same sha.
 
 func (m *Manager) Unpin(ctx context.Context, slot store.Slot) error
     Unpin hands the slot back to automation: pinned and hold_reason are cleared,

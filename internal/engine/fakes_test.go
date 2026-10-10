@@ -1005,6 +1005,8 @@ type fakeSlots struct {
 	schemaChange bool
 	// ensureNote is what EnsureSchema answers (magnum open).
 	ensureNote string
+	// resyncErr is what Resync fails with, after recording the call.
+	resyncErr error
 }
 
 func (f *fakeSlots) record(s string) {
@@ -1163,6 +1165,23 @@ func (f *fakeSlots) Guard(ctx context.Context, slot store.Slot) error {
 
 // GuardLive is Guard: the fake saves nothing either way.
 func (f *fakeSlots) GuardLive(ctx context.Context, slot store.Slot) error { return f.Guard(ctx, slot) }
+
+// Resync records "resync:<slot>:<sha>" and, like slots.Resync, refuses a
+// slot GuardLive refuses (a pin set meanwhile) before it records sha as the
+// slot's checked-out head; resyncErr makes it fail after the record.
+func (f *fakeSlots) Resync(ctx context.Context, slot store.Slot, sha string) error {
+	f.record(fmt.Sprintf("resync:%s:%s", slot.Name, sha))
+	if err := f.GuardLive(ctx, slot); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	rerr := f.resyncErr
+	f.mu.Unlock()
+	if rerr != nil {
+		return rerr
+	}
+	return f.st.UpdateSlotFields(ctx, slot.ID, func(u *store.SlotUpdate) { u.Set("checked_out_sha", sha) })
+}
 
 func (f *fakeSlots) ClearPin(ctx context.Context, slot store.Slot) error {
 	f.record("clear_pin:" + slot.Name)

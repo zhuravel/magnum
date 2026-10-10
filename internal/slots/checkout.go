@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/gitx"
@@ -311,6 +312,89 @@ func (m *Manager) switchTo(ctx context.Context, sl store.Slot, ref, sha string) 
 		return err
 	}
 	return m.recordSwitch(ctx, sl, head)
+}
+
+// Resync puts a slot back in order after a run that committed in it (the fix
+// job's fixer): it switches the slot, detached, to sha and records sha as
+// checked_out_sha, so Guard sees no head drift and the next round's checkout
+// starts clean. sha is the head the job settled on, a commit id: the one the
+// fixer pushed, or the head the review ran on when nothing was pushed, in
+// which case the fixer's local commits are left behind (the reflog keeps
+// them). It runs the steps guard, fetch and switch under the subject
+// "slot:<name>:resync:<sha7>", a new generation on every call, and ends with
+// a slot.resync event:
+//   - guard is GuardLive, not Guard: the slot is refused when it is pinned or
+//     held (ErrHold) or when a person's agent or process is in it, because the
+//     switch drops the tracked changes; Guard would persist the very head
+//     drift Resync repairs as the slot's hold;
+//   - fetch looks sha up in the slot and fetches the commit by id into the
+//     main clone only when the slot lacks it (a head pushed from another
+//     clone);
+//   - switch notes the tracked changes it drops (a slot.discarded event) and
+//     records the resulting HEAD as checked_out_sha through the pending-switch
+//     key, as a checkout does. A HEAD that already is sha with no tracked
+//     changes is only recorded, with no switch.
+//
+// Resync can run again after any failure, and again for the same sha.
+func (m *Manager) Resync(ctx context.Context, slot store.Slot, sha string) error {
+	if !isCommitID(sha) {
+		return fmt.Errorf("slots: resync %s: %q is not a commit id", slot.Name, sha)
+	}
+	if m.d.DryRun {
+		m.dryRun("resync %s to %s", slot.Name, textx.ShortSHA(sha))
+		return nil
+	}
+	sl, err := m.reload(ctx, slot)
+	if err != nil {
+		return err
+	}
+	subject := fmt.Sprintf("slot:%s:resync:%s", sl.Name, textx.ShortSHA(sha))
+	if err := steps.ResetSubject(ctx, m.d.Store, subject); err != nil {
+		return err
+	}
+	var full, was string
+	if err := m.step(ctx, subject, "guard", func(ctx context.Context) error {
+		return m.GuardLive(ctx, sl)
+	}); err != nil {
+		return err
+	}
+	if err := m.step(ctx, subject, "fetch", func(ctx context.Context) error {
+		var err error
+		if full, err = m.git.RevParse(ctx, sl.Path, sha); errors.Is(err, gitx.ErrNoSuchRef) {
+			if err = m.git.FetchCommit(ctx, sl.MainClone, sha, 0); err != nil {
+				return err
+			}
+			full, err = m.git.RevParse(ctx, sl.Path, sha)
+		}
+		return err
+	}); err != nil {
+		return err
+	}
+	if err := m.step(ctx, subject, "switch", func(ctx context.Context) error {
+		var err error
+		if was, err = m.git.RevParse(ctx, sl.Path, "HEAD"); err != nil {
+			return err
+		}
+		dropped, err := m.noteDiscard(ctx, sl, false)
+		if err != nil {
+			return err
+		}
+		if was == full && !dropped {
+			return m.recordSwitch(ctx, sl, full)
+		}
+		return m.switchTo(ctx, sl, full, full)
+	}); err != nil {
+		return err
+	}
+	m.event(ctx, "slot:"+sl.Name, "info", "slot.resync",
+		fmt.Sprintf("%s resynced to %s (HEAD was %s)", sl.Name, textx.ShortSHA(full), textx.ShortSHA(was)))
+	return nil
+}
+
+// isCommitID reports whether s can be a commit id or its abbreviation: 7 to
+// 64 lowercase hex digits, so a branch name or an option never reaches git.
+func isCommitID(s string) bool {
+	return len(s) >= 7 && len(s) <= 64 && strings.Trim(s, "0123456789abcdef") == ""
 }
 
 // deps reruns pool.post_checkout when the lockfile hash differs from lock_sha.

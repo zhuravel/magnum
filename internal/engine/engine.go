@@ -125,6 +125,10 @@ type Slots interface {
 	// (review_unpin.go): the pin goes, the guard's holds stay and are named.
 	ClearPin(ctx context.Context, slot store.Slot) error
 	Guard(ctx context.Context, slot store.Slot) error
+	// Resync puts the slot back in order after the fix job's fixer committed
+	// in it: detached at sha (the pushed head, or the old one), recorded as
+	// checked out.
+	Resync(ctx context.Context, slot store.Slot, sha string) error
 	// Reserve, Repair and Adopt serve the open, repair and adopt requests.
 	Reserve(ctx context.Context, pr store.PR, pool config.Pool) (store.Slot, error)
 	Repair(ctx context.Context, slot store.Slot, pool config.Pool) error
