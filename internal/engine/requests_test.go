@@ -366,7 +366,7 @@ func TestRevealOnAttention(t *testing.T) {
 		t.Fatalf("focused %v, reveals %d; want the judge once", got, n)
 	}
 	// The same attention again inside the window does not steal focus.
-	h.e.revealAttention(h.ctx, pr.ID, nil, "attention:"+itoa(pr.ID)+":"+pipeline.OutcomeBlocked)
+	h.e.revealAttention(h.ctx, pr.ID, nil, pipeline.OutcomeBlocked, "attention:"+itoa(pr.ID)+":"+pipeline.OutcomeBlocked)
 	mu.Lock()
 	defer mu.Unlock()
 	if len(focused) != 1 {
@@ -386,6 +386,34 @@ func TestRevealOnAttentionOffByDefault(t *testing.T) {
 	h.wantState(2, store.PRNeedsAttention)
 	if called {
 		t.Fatal("focused although reveal_on_attention is off")
+	}
+}
+
+// The fix job's attention brings the fixer's pane to the front, not the
+// judge's: that is where the operator reads what the fixer did.
+func TestAFixAttentionRevealsTheFixersPane(t *testing.T) {
+	var mu sync.Mutex
+	var focused []string
+	h, git := fixHarness(t, func(h *harness) {
+		h.cfg.Terminal.RevealOnAttention = true
+		h.d.Focus = func(_ context.Context, target string) error {
+			mu.Lock()
+			defer mu.Unlock()
+			focused = append(focused, target)
+			return nil
+		}
+	})
+	fixablePR(h, "zhuravel", map[string]int{"P1": 1})
+	fixer(h, git, "", func(run store.Run) string {
+		return fixReport(run.ID, "nothing", fixReplied, "- 2101 P1 app/models/offer.rb:42: wants a schema change")
+	})
+	h.fix(FixPayload{})
+	h.tick()
+	h.wantState(2, store.PRNeedsAttention)
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Equal(focused, []string{"mg-t-2-claude-fix"}) {
+		t.Errorf("focused %v, want the fixer's pane", focused)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/zhuravel/magnum/internal/agents"
+	"github.com/zhuravel/magnum/internal/attention"
 	"github.com/zhuravel/magnum/internal/github"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/identity"
@@ -110,7 +111,7 @@ func (e *Engine) onObservation(ctx context.Context, o agents.Observation) {
 		e.urgent(key, "magnum: "+label+" "+o.Role.Label()+" needs you",
 			"The agent waits on a dialog in herdr (magnum open "+label+").", attentionWindow)
 		sess := o.Session
-		e.revealAttention(ctx, o.PRID, &sess, key)
+		e.revealAttention(ctx, o.PRID, &sess, "", key)
 	case agents.ObsLost:
 		e.event(ctx, "warn", subject, "agent.lost", fmt.Sprintf("%s session lost (pane or agent gone)", o.Role.Label()), nil)
 	case agents.ObsHumanActive:
@@ -222,16 +223,17 @@ func (e *Engine) forgetSend(ctx context.Context, key string) {
 
 // revealAttention brings a PR that needs a human to the front when
 // [terminal] reveal_on_attention is on: it focuses the session's agent (sess,
-// else the PR's live judge) in herdr and reveals the herdr client in the
-// terminal, at most once per key and attentionWindow (the daemon must not
-// keep stealing focus). Dry runs, a missing herdr client and a PR without a
-// live session do nothing.
-func (e *Engine) revealAttention(ctx context.Context, prID int64, sess *store.Session, key string) {
+// else the PR's live agent of the role the attention's kind names,
+// attentionRole) in herdr and reveals the herdr client in the terminal, at
+// most once per key and attentionWindow (the daemon must not keep stealing
+// focus). Dry runs, a missing herdr client and a PR without a live session
+// do nothing.
+func (e *Engine) revealAttention(ctx context.Context, prID int64, sess *store.Session, kind, key string) {
 	if !e.cfg.Terminal.RevealOnAttention || e.d.DryRun || e.d.Focus == nil {
 		return
 	}
 	if sess == nil {
-		s, err := e.st.LiveSessionByPRRole(ctx, prID, e.judgeOf(ctx, prID))
+		s, err := e.st.LiveSessionByPRRole(ctx, prID, e.attentionRole(ctx, prID, kind))
 		if err != nil {
 			return
 		}
@@ -258,6 +260,22 @@ func (e *Engine) revealAttention(ctx context.Context, prID int64, sess *store.Se
 		}
 	}
 	e.log.Info("revealed a PR that needs attention", "pr", prID, "target", target)
+}
+
+// attentionRole is the role whose pane shows why the PR needs the operator,
+// by the attention's kind: the fix role of the PR's watch for the fix job's
+// (attention.KindFix: the fixer's report and work), else the PR's judge.
+func (e *Engine) attentionRole(ctx context.Context, prID int64, kind string) string {
+	if kind == attention.KindFix {
+		if pr, err := e.st.PRByID(ctx, prID); err == nil {
+			if repo, err := e.st.RepoByID(ctx, pr.RepoID); err == nil {
+				if role, ok := e.cfg.FixRoleFor(e.cfg.WatchFor(repo.FullName())); ok {
+					return role.Name
+				}
+			}
+		}
+	}
+	return e.judgeOf(ctx, prID)
 }
 
 // health ends expired pauses: a logged-out CLI must pass its preflight
