@@ -268,6 +268,11 @@ func (r Role) ShouldRun(ranBefore, requested bool) bool {
 //     DefaultSimplifyRerunLines, prompt claude-simplify.md (read-only: it
 //     writes its proposals to claude-simplify.md), no after, so it runs in
 //     parallel with the reviewers; aliases simplify.
+//   - claude-judge: claude, judge, model opus, effort xhigh,
+//     rereview_effort high, max_session_rounds DefaultJudgeSessionRounds,
+//     skill DefaultSkill, the same judge-*.md prompts; a second judge held
+//     in reserve for [pipeline] judge_fallback (RolesFor gives a watch
+//     without roles its first judge only), no aliases.
 //
 // Each non-judge role carries a Summary, which makes it a candidate for
 // triage ([triage]).
@@ -284,6 +289,10 @@ func DefaultRoles() []Role {
 			OKStatus: []int{0}, Capture: CaptureStdout, Aliases: []string{"codex", "codex_review"}},
 		{Name: RoleClaudeSimplify, Kind: KindClaude, Runs: RunsFirst, RerunMinLines: DefaultSimplifyRerunLines, Prompt: "claude-simplify.md",
 			Summary: "simplifications and refactors of the changed code", Aliases: []string{"simplify"}},
+		{Name: RoleClaudeJudge, Kind: KindClaude, Judge: true, Model: "opus", Effort: "xhigh", RereviewEffort: "high",
+			MaxSessionRounds: DefaultJudgeSessionRounds, Skill: DefaultSkill,
+			Prompt: "judge-initial.md", Rereview: "judge-rereview.md", ContinuePrompt: "judge-continue.md",
+			Recovery: "judge-recovery.md", Nudge: "judge-nudge.md"},
 	}
 }
 
@@ -327,16 +336,57 @@ func (c *Config) roles() []Role {
 // aliases).
 func (c *Config) RolesFor(w *Watch) []Role {
 	all := c.roles()
-	if w == nil || len(w.Roles) == 0 {
-		return slices.Clone(all)
-	}
 	var out []Role
+	if w == nil || len(w.Roles) == 0 {
+		// Every role, but one judge: the first declared. The others are
+		// held in reserve (JudgeFallbackFor) or named by a roles list.
+		judged := false
+		for _, r := range all {
+			if r.Judge {
+				if judged {
+					continue
+				}
+				judged = true
+			}
+			out = append(out, r)
+		}
+		return out
+	}
 	for _, r := range all {
 		if slices.ContainsFunc(w.Roles, r.Matches) {
 			out = append(out, r)
 		}
 	}
 	return out
+}
+
+// AllRoles returns every declared role in [[role]] order, the judges held in
+// reserve included (RolesFor leaves them out): what names a role on the
+// command line, lists roles, or copies the configuration.
+func (c *Config) AllRoles() []Role { return slices.Clone(c.roles()) }
+
+// Judges returns every declared judge role in [[role]] order: the first is
+// the judge of a watch without a roles list, the others stand in reserve
+// (JudgeFallbackFor) or serve the watches whose roles name them.
+func (c *Config) Judges() []Role {
+	var out []Role
+	for _, r := range c.roles() {
+		if r.Judge {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// roleNamed finds a declared role by name or alias (case and surrounding
+// space ignored), among every role, not only a watch's.
+func (c *Config) roleNamed(s string) (Role, bool) {
+	for _, r := range c.roles() {
+		if r.Matches(s) {
+			return r, true
+		}
+	}
+	return Role{}, false
 }
 
 // JudgeFor returns the watch's judge (validation guarantees exactly one);

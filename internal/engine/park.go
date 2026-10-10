@@ -218,6 +218,11 @@ func (e *Engine) releaseFlagged(ctx context.Context, ts tickState) {
 		if holds[prID] == 0 || ts.busyPR[prID] || e.roundActive(prID) || !ts.herdrUp {
 			continue
 		}
+		if f, ok := e.codexFlag(ctx, prID); ok {
+			if _, ok := e.fallbackRole(f); ok {
+				continue // its rounds go on with the fallback judge: it keeps its slot and agents (judge_fallback.go)
+			}
+		}
 		pr, _, _, ok := e.flagReleasable(ctx, prID, now)
 		if !ok {
 			continue
@@ -269,8 +274,12 @@ func (e *Engine) flagReleaseJob(prID int64) func(ctx context.Context) error {
 			return nil
 		}
 		defer e.endEviction(prID)
-		if _, flagged := e.codexFlag(ctx, prID); !flagged {
+		f, flagged := e.codexFlag(ctx, prID)
+		if !flagged {
 			return nil
+		}
+		if _, ok := e.fallbackRole(f); ok {
+			return nil // its rounds go on with the fallback judge (judge_fallback.go)
 		}
 		pr, sl, has, ok := e.flagReleasable(ctx, prID, e.now())
 		if !ok {

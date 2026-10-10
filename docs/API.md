@@ -2444,6 +2444,10 @@ const (
 	RoleClaudeReview   = "claude-review"
 	RoleCodexReview    = "codex-review"
 	RoleClaudeSimplify = "claude-simplify"
+	// RoleClaudeJudge is the built-in second judge, held in reserve for
+	// [pipeline] judge_fallback (a watch runs its first judge unless its
+	// roles list names this one).
+	RoleClaudeJudge = "claude-judge"
 
 	KindCodex  = "codex"
 	KindClaude = "claude"
@@ -2790,6 +2794,11 @@ func LoadWithOptions(layout paths.Layout, file string, opts LoadOptions) (*Confi
     [[watch]], [[pool]] and [[repo]], and overrides keys (see applyOverlay).
     cfg.Sources lists what was read.
 
+func (c *Config) AllRoles() []Role
+    AllRoles returns every declared role in [[role]] order, the judges held
+    in reserve included (RolesFor leaves them out): what names a role on the
+    command line, lists roles, or copies the configuration.
+
 func (c *Config) AutoApproveBodyFor(fullName string) string
     AutoApproveBodyFor is the approval body template of repository fullName's
     PRs: its watch's auto_approve_body, trimmed, else DefaultAutoApproveBody.
@@ -2816,6 +2825,13 @@ func (c *Config) EditorRole() Role
 func (c *Config) IdentityByName(name string) *Identity
     IdentityByName returns the identity or nil.
 
+func (c *Config) JudgeFallbackFor(w *Watch) (Role, bool)
+    JudgeFallbackFor is the judge role that takes over a PR of watch w after its
+    judge's kind refused a round: the watch's judge_fallback, else [pipeline]
+    judge_fallback, found among every declared role (not only the watch's).
+    ok is false when none is set or the name matches no judge role; Validate
+    reports the latter.
+
 func (c *Config) JudgeFor(w *Watch) Role
     JudgeFor returns the watch's judge (validation guarantees exactly one);
     the zero Role when there is none.
@@ -2823,6 +2839,11 @@ func (c *Config) JudgeFor(w *Watch) Role
 func (c *Config) JudgeOwnPassFor(w *Watch) string
     JudgeOwnPassFor is the judge_own_pass that applies to w's PRs: the watch's
     when it sets one, else [pipeline]'s, else OwnPassParallel.
+
+func (c *Config) Judges() []Role
+    Judges returns every declared judge role in [[role]] order: the first is
+    the judge of a watch without a roles list, the others stand in reserve
+    (JudgeFallbackFor) or serve the watches whose roles name them.
 
 func (c *Config) KeepApprovals(fullName string) bool
     KeepApprovals reports whether an App identity's approval on a PR of
@@ -3607,6 +3628,15 @@ type Pipeline struct {
 	// whole conversation uncached. Default 90m; 0 = always resume. Only the
 	// judge; a continue of a paused turn keeps its conversation.
 	JudgeFreshAfter Duration `toml:"judge_fresh_after"`
+	// JudgeFallback names a judge role of another kind that takes over a
+	// PR's rounds after the judge's kind refused one of them (Codex's
+	// cybersecurity classifier; engine codex_flag.go): the PR is flagged
+	// for that kind, its roles of that kind are dropped and this role
+	// judges from then on. "" = a refused PR is never reviewed again. A
+	// [[watch]] may override it (Watch.JudgeFallback); see
+	// Config.JudgeFallbackFor. The role never runs otherwise: RolesFor gives
+	// a watch without roles its first judge only.
+	JudgeFallback string `toml:"judge_fallback"`
 }
     Pipeline is the [pipeline] section.
 
@@ -3948,6 +3978,11 @@ func DefaultRoles() []Role
         DefaultSimplifyRerunLines, prompt claude-simplify.md (read-only:
         it writes its proposals to claude-simplify.md), no after, so it runs in
         parallel with the reviewers; aliases simplify.
+      - claude-judge: claude, judge, model opus, effort xhigh, rereview_effort
+        high, max_session_rounds DefaultJudgeSessionRounds, skill DefaultSkill,
+        the same judge-*.md prompts; a second judge held in reserve for
+        [pipeline] judge_fallback (RolesFor gives a watch without roles its
+        first judge only), no aliases.
 
     Each non-judge role carries a Summary, which makes it a candidate for triage
     ([triage]).
@@ -4124,6 +4159,9 @@ type Watch struct {
 	// JudgeOwnPass overrides [pipeline] judge_own_pass for this watch's PRs
 	// ("" keeps the pipeline's; see Config.JudgeOwnPassFor).
 	JudgeOwnPass string `toml:"judge_own_pass"`
+	// JudgeFallback overrides [pipeline] judge_fallback for this watch's
+	// PRs ("" keeps the pipeline's; see Config.JudgeFallbackFor).
+	JudgeFallback string `toml:"judge_fallback"`
 	// RelatedLookback and RelatedIgnore override [pipeline]
 	// related_lookback and related_ignore for this watch's PRs: unset keeps
 	// the pipeline's, a related_lookback of "0s" turns the lookback off (open
@@ -5238,6 +5276,10 @@ type CodexFlag struct {
 	Detail string    `json:"detail,omitempty"`
 	At     time.Time `json:"at"`
 	By     string    `json:"by,omitempty"`
+	// Fallback is the judge role the PR's rounds run with since the flag,
+	// without the flagged kind's roles ([pipeline] judge_fallback;
+	// judge_fallback.go); "" = the PR is never reviewed again.
+	Fallback string `json:"fallback,omitempty"`
 
 	// Has unexported fields.
 }
@@ -5261,7 +5303,9 @@ func (f CodexFlag) Sentence(ref string) string
     (ref names the PR on the command line).
 
 func (f CodexFlag) Short() string
-    Short is the flag in one cell: "Codex flagged · never reviewed again".
+    Short is the flag in one cell: "Codex flagged · never reviewed again", or
+    "Codex flagged · judge claude-judge" for a PR that goes on with a fallback
+    judge.
 
 func (f CodexFlag) SkipReason() string
     SkipReason is the flagged PR's skip_reason.

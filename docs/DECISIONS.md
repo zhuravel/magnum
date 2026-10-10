@@ -6035,6 +6035,30 @@ skill versions); people add theirs to the sections before it, at the end of the 
   one waits). Rejected: keeping them documented as unused (a state the CHECK allows reads as one a
   proposal can be in).
 
+- **A refused PR goes on with the fallback judge** (2026-10-10, amends "A Codex safety warning ends the
+  round and flags the PR"). A second refusal in a day, in the re-review of a DNS daemon PR whose own pass
+  wrote up a crash input that got past the author's fix, parked a PR whose other roles had done their work,
+  and the operator asked for the judge to switch to a Claude model, whose classifier does not read a
+  review's probes as an attack. `[pipeline] judge_fallback` (a `[[watch]]` may set its own) names a judge
+  role of another kind; a watch without `roles = [...]` now runs every role and its first judge, so the
+  built-in `claude-judge` (Claude Opus at xhigh, the judge's prompts and skill) stands in reserve until that
+  key, or a watch's roles, names it (`Config.RolesFor`, `Judges`, `JudgeFallbackFor`). A round the judge's
+  kind refuses still flags the PR for that kind (`CodexFlag.Fallback` names the judge that took over): the
+  PR goes back in line instead of ineligible (a reviewed one as rereview_pending, an unreviewed one queued),
+  and every place that picks a round's roles asks the PR (`rolesForPR`): the flagged kind's roles go, the
+  judge included and Codex's own review too, the fallback takes the judge's place, and its first round
+  finds no conversation to resume, so it starts fresh through the recovery prompt. The PR keeps its slot
+  and agents, `magnum review` is allowed, the board's cell reads `Codex flagged · judge claude-judge`, and a
+  refusal by the fallback's kind too flags the PR for good as before, as does a flag whose fallback is no
+  longer a declared judge of another kind. `magnum codex-flag set` attaches the fallback the same way,
+  `clear` gives the watch's judge back. A refusal by `codex-review` goes the same way: the round ends and
+  the next one runs without Codex. Rejected: carrying the round on after a reviewer's refusal (the Codex
+  judge's own pass is already on the same content, and the account risk is the rule's reason); the forced
+  mark on the PR to skip the re-review interval (a forced round runs under a pause and is toasted as the
+  operator's: the PR waits the interval like any re-review); a `fallback_only` role key (the first-judge
+  rule and the reserve judge need none); two warnings for one missing skill file shared by both judges (one
+  per path).
+
 ## Learned rules
 
 The self-improving review loop appends these: the skill editor's decisions and the reverts of skill

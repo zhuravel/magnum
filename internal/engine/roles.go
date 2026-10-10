@@ -36,16 +36,20 @@ func agentKinds(roles []config.Role) []string {
 // isJudge reports whether role (a sessions.role or runs.role value) names a
 // configured judge.
 func (e *Engine) isJudge(role string) bool {
-	return slices.ContainsFunc(e.cfg.RolesFor(nil), func(r config.Role) bool { return r.Judge && r.Name == role })
+	return slices.ContainsFunc(e.cfg.Judges(), func(r config.Role) bool { return r.Name == role })
 }
 
-// judgeOf is the name of the judge of the watch covering the PR (the first
-// configured judge when the PR or its watch is gone).
+// judgeOf is the name of the judge of the watch covering the PR, or of the
+// fallback judge its flag names (judge_fallback.go); the first configured
+// judge when the PR or its watch is gone.
 func (e *Engine) judgeOf(ctx context.Context, prID int64) string {
 	var w *config.Watch
 	if pr, err := e.st.PRByID(ctx, prID); err == nil {
 		if repo, err := e.st.RepoByID(ctx, pr.RepoID); err == nil {
 			w = e.cfg.WatchFor(repo.FullName())
+		}
+		if j := e.judgeForPR(ctx, w, prID); j.Name != "" {
+			return j.Name
 		}
 	}
 	if j := e.cfg.JudgeFor(w); j.Name != "" {

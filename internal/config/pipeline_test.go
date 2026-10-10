@@ -106,6 +106,7 @@ func TestDefaultsEqualExplicitConfig(t *testing.T) {
 		"claude-review":   {"claude", "session", "always", "file", "claude-review.md", "claude-review.md", "claude-rereview.md", "claude", 40 * time.Minute},
 		"codex-review":    {"shell", "shell", "always", "stdout", "codex-review.md", "", "", "codex", 40 * time.Minute},
 		"claude-simplify": {"claude", "session", "first", "file", "claude-simplify.md", "claude-simplify.md", "claude-simplify.md", "claude", 40 * time.Minute},
+		"claude-judge":    {"claude", "session", "always", "file", "claude-judge.json", "judge-initial.md", "judge-rereview.md", "claude", 90 * time.Minute},
 	}
 	for _, r := range explicit.Roles {
 		x := want[r.Name]
@@ -140,7 +141,7 @@ func TestDefaultsValidate(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if got := roleNames(Defaults().Roles); !slices.Equal(got, []string{"codex-judge", "claude-review", "codex-review", "claude-simplify"}) {
+	if got := roleNames(Defaults().Roles); !slices.Equal(got, []string{"codex-judge", "claude-review", "codex-review", "claude-simplify", "claude-judge"}) {
 		t.Fatalf("Defaults roles = %v", got)
 	}
 	// A Config built without Kinds/Roles falls back to the defaults.
@@ -175,14 +176,19 @@ func TestValidatePipeline(t *testing.T) {
 		edit func(*Config)
 		want string
 	}{
-		"duplicate name":     {add(Role{Name: "claude-review", Kind: "claude"}), `alias "claude-review" is already used`},
-		"alias collision":    {add(Role{Name: "x-review", Kind: "claude", Prompt: "claude-review.md", Aliases: []string{"claude"}}), `alias "claude" is already used`},
-		"bad name":           {func(c *Config) { role(c, "claude-review").Name = "Claude" }, "name must match"},
-		"long name":          {func(c *Config) { role(c, "claude-review").Name = strings.Repeat("a", 25) }, "name must match"},
-		"undeclared kind":    {add(Role{Name: "gem", Kind: "gemini", Prompt: "claude-review.md"}), `kind "gemini" is not declared`},
-		"shell as session":   {func(c *Config) { role(c, "codex-review").Mode = ModeSession }, "kind shell needs mode shell"},
-		"agent as shell":     {func(c *Config) { role(c, "claude-review").Mode = ModeShell }, "needs mode session"},
-		"two judges":         {add(Role{Name: "omp-judge", Kind: "omp", Judge: true}), "needs exactly one judge among its roles, has 2"},
+		"duplicate name":   {add(Role{Name: "claude-review", Kind: "claude"}), `alias "claude-review" is already used`},
+		"alias collision":  {add(Role{Name: "x-review", Kind: "claude", Prompt: "claude-review.md", Aliases: []string{"claude"}}), `alias "claude" is already used`},
+		"bad name":         {func(c *Config) { role(c, "claude-review").Name = "Claude" }, "name must match"},
+		"long name":        {func(c *Config) { role(c, "claude-review").Name = strings.Repeat("a", 25) }, "name must match"},
+		"undeclared kind":  {add(Role{Name: "gem", Kind: "gemini", Prompt: "claude-review.md"}), `kind "gemini" is not declared`},
+		"shell as session": {func(c *Config) { role(c, "codex-review").Mode = ModeSession }, "kind shell needs mode shell"},
+		"agent as shell":   {func(c *Config) { role(c, "claude-review").Mode = ModeShell }, "needs mode session"},
+		// A second declared judge stands in reserve (RolesFor runs the first);
+		// a roles list naming two is the error.
+		"two judges": {func(c *Config) {
+			add(Role{Name: "omp-judge", Kind: "omp", Judge: true})(c)
+			c.Watches[0].Roles = []string{"codex-judge", "omp-judge", "claude-review"}
+		}, "needs exactly one judge among its roles, has 2"},
 		"no judge":           {func(c *Config) { c.Watches[0].Roles = []string{"claude-review"} }, "has 0"},
 		"watch unknown role": {func(c *Config) { c.Watches[0].Roles = []string{"judge", "nope"} }, `unknown role "nope"`},
 		"watch role twice":   {func(c *Config) { c.Watches[0].Roles = []string{"judge", "codex-judge"} }, "listed twice"},
@@ -494,8 +500,12 @@ judge = true
 	if got := roleNames(cfg.RolesFor(b)); !slices.Equal(got, []string{"omp-review", "droid-simplify", "omp-judge"}) {
 		t.Fatalf("RolesFor(other) = %v", got)
 	}
-	if got := roleNames(cfg.RolesFor(nil)); len(got) != 5 {
+	// No watch: every role but the second judge, which stands in reserve.
+	if got := roleNames(cfg.RolesFor(nil)); !slices.Equal(got, []string{"codex-judge", "claude-review", "omp-review", "droid-simplify"}) {
 		t.Fatalf("RolesFor(nil) = %v", got)
+	}
+	if got := roleNames(cfg.Judges()); !slices.Equal(got, []string{"codex-judge", "omp-judge"}) {
+		t.Fatalf("Judges() = %v", got)
 	}
 	if cfg.JudgeFor(a).Name != "codex-judge" || cfg.JudgeFor(b).Name != "omp-judge" {
 		t.Fatalf("judges = %s, %s", cfg.JudgeFor(a).Name, cfg.JudgeFor(b).Name)
@@ -760,7 +770,7 @@ identity = "z"
 roles = ["judge", "droid-review"]
 `,
 	})
-	if got := roleNames(cfg.Roles); !slices.Equal(got, []string{"codex-judge", "claude-review", "codex-review", "claude-simplify", "droid-review"}) {
+	if got := roleNames(cfg.Roles); !slices.Equal(got, []string{"codex-judge", "claude-review", "codex-review", "claude-simplify", "claude-judge", "droid-review"}) {
 		t.Fatalf("roles = %v", got)
 	}
 	cr, _ := cfg.RoleByNameOrAlias(nil, "claude-review")

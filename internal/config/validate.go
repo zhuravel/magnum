@@ -546,9 +546,48 @@ func (c *Config) validatePipeline() []error {
 	if d := c.Pipeline.JudgeFreshAfter.Duration; d < 0 {
 		errs = append(errs, fmt.Errorf("pipeline: judge_fresh_after must be 0 (always resume) or positive, got %s", d))
 	}
-	for _, w := range c.Watches {
+	// judge_fallback names a judge role of another kind than the watch's
+	// judge, outside the watch's roles (it stands in for the judge, never
+	// beside it).
+	fallback := func(where, name string, w *Watch) {
+		if strings.TrimSpace(name) == "" {
+			return
+		}
+		r, ok := c.roleNamed(name)
+		switch {
+		case !ok:
+			errs = append(errs, fmt.Errorf("%s: judge_fallback names unknown role %q", where, name))
+			return
+		case !r.Judge:
+			errs = append(errs, fmt.Errorf("%s: judge_fallback role %s is not a judge (judge = true)", where, r.Name))
+			return
+		case r.IsShell():
+			errs = append(errs, fmt.Errorf("%s: judge_fallback role %s must be an agent session, not a shell command", where, r.Name))
+			return
+		}
+		if w == nil {
+			return
+		}
+		if slices.ContainsFunc(w.Roles, r.Matches) {
+			errs = append(errs, fmt.Errorf("%s: judge_fallback role %s is also in roles; it stands in for the judge, not beside it", where, r.Name))
+		}
+		switch j := c.JudgeFor(w); {
+		case j.Name == r.Name:
+			errs = append(errs, fmt.Errorf("%s: judge_fallback role %s is the watch's own judge; name a judge of another kind", where, r.Name))
+		case j.Name != "" && j.AgentKind() == r.AgentKind():
+			errs = append(errs, fmt.Errorf("%s: judge_fallback role %s is of the same kind (%s) as judge %s; a fallback takes over when that kind refused, so it must be another kind",
+				where, r.Name, r.AgentKind(), j.Name))
+		}
+	}
+	fallback("pipeline", c.Pipeline.JudgeFallback, nil)
+	for i := range c.Watches {
+		w := &c.Watches[i]
 		ownPass("watch "+w.Owner, w.JudgeOwnPass, true)
 		related("watch "+w.Owner, w.RelatedLookback, w.RelatedIgnore)
+		fallback("watch "+w.Owner, w.JudgeFallback, w)
+		if w.JudgeFallback == "" {
+			fallback("watch "+w.Owner, c.Pipeline.JudgeFallback, w)
+		}
 	}
 	kinds := c.kinds()
 	for _, name := range c.KindNames() {

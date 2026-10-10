@@ -390,7 +390,7 @@ func (e *Engine) onPosted(ctx context.Context, job *roundJob, pr store.PR, in pi
 			e.log.Info("replies after the round", "pr", pr.ID, "err", err)
 		}
 	}
-	if k := e.cfg.JudgeFor(&job.watch).AgentKind(); k != "" {
+	if k := e.judgeForPR(ctx, &job.watch, pr.ID).AgentKind(); k != "" {
 		e.delKV(ctx, store.KVToolBackoff(k))
 	}
 	for _, role := range slices.Sorted(maps.Keys(res.Reports)) {
@@ -554,7 +554,7 @@ func (e *Engine) rereviewFollows(ctx context.Context, w config.Watch, prID int64
 		at = wait.Until
 	}
 	// The roles dispatch would run (their kinds' pauses hold the round).
-	roles := e.cfg.RolesFor(&w)
+	roles := e.rolesForPR(ctx, &w, pr.ID)
 	if toRun, err := pipeline.RolesToRun(ctx, e.st, e.cfg, pr, roles, e.requestedRoles(ctx, pr.ID), kindFor(pr)); err == nil {
 		roles = toRun
 	}

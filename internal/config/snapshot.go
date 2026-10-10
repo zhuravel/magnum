@@ -165,14 +165,16 @@ func (c *Config) SnapshotPrompts(skillDir string, now time.Time, extra ...string
 		return nil, fmt.Errorf("config: load prompts: %w", err)
 	}
 	if skillDir != "" {
+		warned := map[string]bool{} // one warning per skill path, whatever the judges that share it
 		for _, r := range c.Roles {
 			src := SkillPath(r.Skill, c.Layout)
-			if _, done := s.skills[src]; !r.Judge || done {
+			if _, done := s.skills[src]; !r.Judge || done || warned[src] {
 				continue
 			}
 			sk, err := copySkill(src, skillDir)
 			if err != nil {
 				s.Warnings = append(s.Warnings, fmt.Sprintf("judge %s: skill %s: %v", r.Name, src, err))
+				warned[src] = true
 				continue
 			}
 			s.skills[src] = sk
@@ -243,7 +245,7 @@ func (c *Config) PromptSnapshot() *PromptSnapshot { return c.snapshot }
 func (c *Config) WithoutSnapshot() *Config {
 	cp := *c
 	cp.snapshot = nil
-	cp.Roles = c.RolesFor(nil)
+	cp.Roles = c.AllRoles() // every role, the judges in reserve included
 	return &cp
 }
 

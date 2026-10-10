@@ -549,7 +549,7 @@ func (d *actDeps) targetByPRID(ctx context.Context, id int64) (actTarget, error)
 // judge) or a role name or alias of any watch (config.Role.Matches).
 func actKnownRole(cfg *config.Config, s string) error {
 	if strings.TrimSpace(s) == "" || slices.ContainsFunc(cfg.RolesFor(nil), func(r config.Role) bool { return r.Matches(s) }) {
-		return nil
+		return nil // the roles a round can run: a judge in reserve is never requested by name
 	}
 	return fmt.Errorf("unknown role %q: use %s", s, actRoleChoices(cfg.RolesFor(nil)))
 }
@@ -607,7 +607,7 @@ func actIsJudge(cfg *config.Config, role string) bool {
 	if cfg == nil {
 		return role == store.RoleJudge
 	}
-	return slices.ContainsFunc(cfg.RolesFor(nil), func(r config.Role) bool { return r.Judge && r.Matches(role) })
+	return slices.ContainsFunc(cfg.Judges(), func(r config.Role) bool { return r.Matches(role) })
 }
 
 // actResumeArgv is the command that resumes a session's conversation by

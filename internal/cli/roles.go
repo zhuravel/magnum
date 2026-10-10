@@ -239,7 +239,7 @@ func rolesJSON(c *Context, cfg *config.Config, groups []rolesGroup) int {
 // (config.Role.AgentKind; a shell role's tool counts), in [[role]] order.
 func rolesKindNames(cfg *config.Config) []string {
 	var out []string
-	for _, r := range cfg.RolesFor(nil) {
+	for _, r := range cfg.AllRoles() { // the judge in reserve too: its kind must work when it takes over
 		if k := r.AgentKind(); k != "" && k != config.KindShell && !slices.Contains(out, k) {
 			out = append(out, k)
 		}
@@ -296,7 +296,7 @@ func rolesLoginCommand(kind string) string {
 // rolesUsers lists the roles that run an agent kind.
 func rolesUsers(cfg *config.Config, kind string) []string {
 	var out []string
-	for _, r := range cfg.RolesFor(nil) {
+	for _, r := range cfg.AllRoles() {
 		if r.AgentKind() == kind {
 			out = append(out, r.Name)
 		}
@@ -399,7 +399,7 @@ func rolesKinds(c *Context, cfg *config.Config, o rolesOpts) int {
 		fmt.Fprintf(tw, "  session:\t%s\n", k.SessionSource)
 		fmt.Fprintf(tw, "  permission prompts:\t%s\n", inspOrDash(k.OnPermissionPrompt))
 		fmt.Fprintf(tw, "  model switch:\t%s\n", rolesModelSwitch(k))
-		for _, r := range cfg.RolesFor(nil) {
+		for _, r := range cfg.AllRoles() {
 			if r.IsShell() || r.Kind != name {
 				continue
 			}

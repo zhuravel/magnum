@@ -486,8 +486,9 @@ func statusGatherPRs(ctx context.Context, d statusDeps, now time.Time, r *status
 			r.Queue = append(r.Queue, line)
 		case slices.Contains(statusClosing, pr.State):
 			r.Closing = append(r.Closing, line)
-		case pr.GHState == store.GHOpen && statusFlagged(ctx, st, pr):
-			// Codex flagged it: never reviewed again, so it waits for a review by hand (codex_flag.go).
+		case pr.GHState == store.GHOpen && statusFlaggedHeld(ctx, st, pr):
+			// Codex flagged it and no fallback judge took over: never reviewed again, so it waits for a
+			// review by hand (codex_flag.go).
 			ref := inspPRLabel(repo, pr.Number)
 			f, _ := codexFlagOf(ctx, st, pr.ID)
 			msg := f.Short()
@@ -523,6 +524,14 @@ func statusGatherPRs(ctx context.Context, d statusDeps, now time.Time, r *status
 func statusFlagged(ctx context.Context, st *store.Store, pr store.PR) bool {
 	_, ok := codexFlagOf(ctx, st, pr.ID)
 	return ok
+}
+
+// statusFlaggedHeld reports whether Codex flagged pr and no fallback judge
+// took its rounds over (engine.CodexFlag.Fallback), so it waits for a
+// review by hand.
+func statusFlaggedHeld(ctx context.Context, st *store.Store, pr store.PR) bool {
+	f, ok := codexFlagOf(ctx, st, pr.ID)
+	return ok && f.Fallback == ""
 }
 
 // statusMergedUnreviewed lists the PRs GitHub merged before magnum reviewed

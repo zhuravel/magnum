@@ -71,6 +71,10 @@ type CodexFlag struct {
 	Detail string    `json:"detail,omitempty"`
 	At     time.Time `json:"at"`
 	By     string    `json:"by,omitempty"`
+	// Fallback is the judge role the PR's rounds run with since the flag,
+	// without the flagged kind's roles ([pipeline] judge_fallback;
+	// judge_fallback.go); "" = the PR is never reviewed again.
+	Fallback string `json:"fallback,omitempty"`
 	// unread: the registry could not say whether the PR is flagged (the
 	// read failed). It counts as flagged, but holdFlagged leaves the PR's
 	// state alone: the next tick reads again.
@@ -97,8 +101,15 @@ func UnreadableCodexFlag(why string) CodexFlag {
 // Who names the provider that flagged the PR: "Codex".
 func (f CodexFlag) Who() string { return agents.KindName(cmp.Or(f.Kind, config.KindCodex)) }
 
-// Short is the flag in one cell: "Codex flagged · never reviewed again".
-func (f CodexFlag) Short() string { return f.Who() + " flagged · never reviewed again" }
+// Short is the flag in one cell: "Codex flagged · never reviewed again",
+// or "Codex flagged · judge claude-judge" for a PR that goes on with a
+// fallback judge.
+func (f CodexFlag) Short() string {
+	if f.Fallback != "" {
+		return f.Who() + " flagged · judge " + f.Fallback
+	}
+	return f.Who() + " flagged · never reviewed again"
+}
 
 // SkipReason is the flagged PR's skip_reason.
 func (f CodexFlag) SkipReason() string {
@@ -134,6 +145,10 @@ func (f CodexFlag) Sentence(ref string) string {
 	}
 	if f.Detail != "" {
 		s += ": " + textx.Clip(f.Detail, 160)
+	}
+	if f.Fallback != "" {
+		return s + ". magnum reviews it without " + f.Who() + " from now on, with " + f.Fallback + " as judge; `magnum codex-flag clear " + ref +
+			"` lifts the flag (" + f.Who() + " may block an account it flags)"
 	}
 	return s + ". magnum never reviews it again, not even `magnum review`: review it by hand; `magnum codex-flag clear " + ref +
 		"` lifts the flag (" + f.Who() + " may block an account it flags)"
@@ -240,14 +255,22 @@ func (e *Engine) codexFlagRefusal(ctx context.Context, label string, pr store.PR
 	if !ok {
 		return ""
 	}
+	if _, ok := e.fallbackRole(f); ok {
+		return "" // the PR goes on with its fallback judge (judge_fallback.go)
+	}
 	return label + ": " + f.Sentence(label)
 }
 
 // flagHolds takes a flagged candidate out of dispatch (holdFlagged) and
-// reports whether it was flagged (or its flag could not be read).
+// reports whether it was flagged (or its flag could not be read). A PR
+// whose flag names a fallback judge is not held: its rounds go on without
+// the flagged kind (judge_fallback.go).
 func (e *Engine) flagHolds(ctx context.Context, pr store.PR) bool {
 	f, ok := e.codexFlag(ctx, pr.ID)
 	if !ok {
+		return false
+	}
+	if _, ok := e.fallbackRole(f); ok {
 		return false
 	}
 	e.holdFlagged(ctx, pr, f)
@@ -314,7 +337,7 @@ func (e *Engine) onRefused(ctx context.Context, job *roundJob, pr store.PR, in p
 	}
 	msg := cmp.Or(res.Error, ref.Sentence())
 	f := CodexFlag{Kind: ref.Kind, Role: ref.Role, Run: ref.RunID, Head: in.TargetSHA, Detail: ref.Detail, At: now.UTC(),
-		By: fmt.Sprintf("round %d", res.Round)}
+		By: fmt.Sprintf("round %d", res.Round), Fallback: e.refusalFallback(&job.watch, ref.Kind)}
 	if err := e.setCodexFlag(context.WithoutCancel(ctx), pr.ID, f); err != nil {
 		e.keepUnwritten(pr.ID, f)
 		e.log.Warn("flag a refused PR: the write failed; the flag holds the PR and is written again every tick", "pr", pr.ID, "err", err)
@@ -325,15 +348,26 @@ func (e *Engine) onRefused(ctx context.Context, job *roundJob, pr store.PR, in p
 		e.log.Info("refused round: agents interrupted", "subject", subject, "agents", n)
 	}
 	e.keptApprovalFailed(ctx, job.repo, pr, f.Who()+" refused its round")
+	// With a fallback judge the PR goes back in line (judge_fallback.go):
+	// a reviewed PR for a re-review, which the fallback starts fresh as a
+	// recovery, an unreviewed one for its first round. Else it is held.
 	to := store.PRIneligible
-	if job.postMerge {
+	switch {
+	case job.postMerge:
 		to = store.PRClosed
+	case f.Fallback != "" && deref(pr.ReviewedSHA) != "":
+		to = store.PRRereviewPending
+	case f.Fallback != "":
+		to = store.PRQueued
 	}
 	err := e.st.TransitionPR(ctx, pr.ID, from, to, func(u *store.PRUpdate) {
-		if to == store.PRClosed {
+		switch to {
+		case store.PRClosed:
 			u.Set("release_after", e.releaseAfter())
-		} else {
+		case store.PRIneligible:
 			u.Set("skip_reason", f.SkipReason())
+		default:
+			u.Set("skip_reason", nil)
 		}
 		u.Set("last_error", msg)
 		u.Set("forced", false)
@@ -350,6 +384,14 @@ func (e *Engine) onRefused(ctx context.Context, job *roundJob, pr store.PR, in p
 		_ = e.st.TransitionSlot(ctx, job.slot.ID, []string{store.SlotClaimed, store.SlotBusy}, store.SlotHeld, nil)
 	}
 	label := fmt.Sprintf("%s#%d", job.repo.FullName(), pr.Number)
+	if f.Fallback != "" {
+		e.event(ctx, "warn", subject, "pr.codex_flagged",
+			fmt.Sprintf("%s; flagged: never reviewed by %s again; %s judges it from the next round on, without %s's roles", msg, f.Who(), f.Fallback, f.Who()),
+			map[string]any{"kind": f.Kind, "role": f.Role, "run": f.Run, "head": f.Head, "by": f.By, "fallback": f.Fallback})
+		e.urgent(fmt.Sprintf("codex-flag:%d", pr.ID), fmt.Sprintf("magnum: %s#%d: %s", job.repo.Name, pr.Number, f.Short()),
+			msg+". Its rounds go on without "+f.Who()+", with "+f.Fallback+" as judge; `magnum codex-flag clear "+label+"` lifts the flag.", attentionWindow)
+		return
+	}
 	e.event(ctx, "error", subject, "pr.codex_flagged", msg+"; flagged: never reviewed again",
 		map[string]any{"kind": f.Kind, "role": f.Role, "run": f.Run, "head": f.Head, "by": f.By})
 	e.urgent(fmt.Sprintf("codex-flag:%d", pr.ID), fmt.Sprintf("magnum: %s#%d: %s", job.repo.Name, pr.Number, f.Short()),
@@ -390,7 +432,8 @@ func (e *Engine) requestCodexFlag(ctx context.Context, p CodexFlagPayload) (stri
 		return fmt.Sprintf("cleared the Codex flag of %s: magnum reviews it again (now %s)", label, cmp.Or(cur.State, pr.State)), nil
 	}
 	reason := clipRunes(strings.Join(strings.Fields(p.Reason), " "), muteReasonRunes)
-	f := CodexFlag{Kind: config.KindCodex, Head: pr.HeadSHA, Detail: reason, At: now.UTC(), By: by}
+	f := CodexFlag{Kind: config.KindCodex, Head: pr.HeadSHA, Detail: reason, At: now.UTC(), By: by,
+		Fallback: e.refusalFallback(e.cfg.WatchFor(repo.FullName()), config.KindCodex)}
 	if prev, ok := e.codexFlag(ctx, pr.ID); ok && !prev.unread {
 		f = prev // the first flag stands
 	} else if err := e.setCodexFlag(ctx, pr.ID, f); err != nil {
@@ -400,7 +443,14 @@ func (e *Engine) requestCodexFlag(ctx context.Context, p CodexFlagPayload) (stri
 	if reason != "" {
 		msg += ": " + reason
 	}
-	e.event(ctx, "warn", subject, "pr.codex_flagged", msg, map[string]any{"by": by, "head": f.Head})
+	e.event(ctx, "warn", subject, "pr.codex_flagged", msg, map[string]any{"by": by, "head": f.Head, "fallback": f.Fallback})
+	if _, ok := e.fallbackRole(f); ok {
+		res := "flagged " + label + ": magnum reviews it without " + f.Who() + " from now on, with " + f.Fallback + " as judge (`magnum codex-flag clear " + label + "` lifts it)"
+		if e.roundActive(pr.ID) || slices.Contains(store.InFlightStates, pr.State) {
+			res += "; the round in flight finishes, `magnum abort " + label + "` stops it now"
+		}
+		return res, nil
+	}
 	res := "flagged " + label + ": magnum never reviews it again, not even `magnum review` (`magnum codex-flag clear " + label + "` lifts it)"
 	switch {
 	case e.roundActive(pr.ID) || slices.Contains(store.InFlightStates, pr.State):

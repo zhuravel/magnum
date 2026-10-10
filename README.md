@@ -317,7 +317,16 @@ roles are interrupted (the turns of the refused kind first), and the round's out
 the PR's last error say "Codex refused the review: content flagged as a cybersecurity risk (codex-judge,
 run r-…)". The PR is flagged for good (the refused head, role, run and time) and one toast says so:
 magnum never reviews it again, on any head, by itself or when asked (no retry, continue, reply round or
-delta check; `magnum review` and the board's `r`/`R` refuse with the reason). The board's state cell and
+delta check; `magnum review` and the board's `r`/`R` refuse with the reason). With
+`[pipeline] judge_fallback = "claude-judge"` (a `[[watch]]` may set its own) the PR goes on instead: it is
+flagged for Codex, which never sees it again, its roles of that kind (`codex-judge`, `codex-review`) are
+dropped, and `claude-judge`, the second built-in judge held in reserve (Claude Opus at xhigh, the judge's
+prompts and skill), judges it from the next round on, starting fresh through the recovery prompt that
+reads the earlier reviews and threads from GitHub. The PR goes back in line (a reviewed one as
+`rereview_pending`, an unreviewed one `queued`) and waits the usual re-review interval, keeps its slot
+and agents, and `magnum review` works; the board's cell reads `Codex flagged · judge claude-judge`. A
+refusal by the fallback's kind too, or a fallback no longer declared as a judge of another kind, holds
+the PR as below. Without the key, the board's state cell and
 card read `Codex flagged · never reviewed again`, the card says when and where and how to lift it,
 `magnum status` lists the PR among what needs you, `magnum prs` prints `codex-flagged` in STATE and
 `prs --json` has `codex_flag` and `codex_flag_detail`; `magnum stats` counts such rounds as `refused`.
@@ -788,6 +797,13 @@ reviewers (a daemon restart during it starts the round again), and a usage limit
 at the candidates prompt, whose turn the paused round then continues. A judge alone (a delta check, a re-review of the same head, a continued
 turn, a round whose reviewers were all dropped) gets one prompt, and `judge_own_pass = "after"` keeps one
 prompt after the reviewers.
+
+A watch without `roles = [...]` runs every role and its first judge. A second judge stands in reserve: the
+built-in `claude-judge` (kind claude, model opus, effort xhigh, the same `judge-*.md` prompts and skill,
+output `claude-judge.json`) runs for no watch until `[pipeline] judge_fallback = "claude-judge"` (or a
+`[[watch]]`'s) names it as the judge that takes a PR over after a Codex refusal, or a watch's `roles`
+names it as its judge. Validation refuses a `judge_fallback` that names no judge, a shell role, the
+watch's own judge, a judge of the same kind, or a role the watch's `roles` already list.
 
 What the reviewers add is measured, not guessed: in a round with the own pass, `judge` among a posted
 finding's sources means the own pass found it before any report was read. `magnum stats` (WHO FOUND THE
@@ -1334,7 +1350,7 @@ Fix 1 problem before merging. 1 optional: 1 simplification.
 | `magnum ui open picker\|status\|cleanup\|doctor [--workspace id] [--width 90%] [--height 60%]` | Open one of the herdr plugin's popup panes over the herdr socket (what the plugin's keys run); the sizes come from the `[[panes]]` of `herdr-plugin.toml` unless given, the workspace from the plugin's context. |
 | `magnum pin\|unpin\|release\|mute\|unmute <ref>`, `magnum mute <ref> [reason…]` | Hold a PR's slot and sessions, hand them back, stop automation for a PR (on a merged PR `mute` dismisses its merged-unreviewed flag and `unmute` restores it). The words after a muted PR are the mute's reason, kept in the request, its answer and the `pr.muted` event, and shown under the head of the board's card (`muted: <reason>`; `mute_reason` in `prs --json`); a mute takes a PR waiting for an automatic round out of the queue at once (ineligible, `muted`), and `unmute` decides its eligibility again. |
 | `magnum snooze <ref> [--for 2h \| --until 18:00 \| --off]` | Hold a PR's automatic reviews until then (default 2h): no push, re-review, reply round or delta check starts a round, while `magnum review`, the board and a GitHub review request still do; it ends on its own and survives restarts, `--off` lifts it (see Configuration). Board key `z`. |
-| `magnum codex-flag set <ref> [reason...]`, `magnum codex-flag clear <ref>` | Flag a PR Codex warned about (a round Codex refuses flags its PR by itself, a refused helper agent of a role too): magnum never reviews it again, not even `magnum review` or the board's `r`/`R`, parks its agents and releases its pool slot unless `magnum open` pinned it, and names it in no other PR's `related.json`. `clear` lifts the flag after a y/N question on a terminal that names the account risk; the PR is then judged by its watch again (see Configuration). |
+| `magnum codex-flag set <ref> [reason...]`, `magnum codex-flag clear <ref>` | Flag a PR Codex warned about (a round Codex refuses flags its PR by itself, a refused helper agent of a role too): magnum never reviews it again, not even `magnum review` or the board's `r`/`R`, parks its agents and releases its pool slot unless `magnum open` pinned it, and names it in no other PR's `related.json`; with `[pipeline] judge_fallback` set, the PR goes on without Codex, with that judge (see "Codex may block an account" above). `clear` lifts the flag after a y/N question on a terminal that names the account risk; the PR is then judged by its watch again (see Configuration). |
 | `magnum abort <ref>` | Kill a PR's running (or paused) review: its agents are interrupted, its runs abandoned, its sessions parked and a pool slot handed back. A review that waits in line (one `magnum review` asked for, or an automatic one) is taken back before it starts: its forced mark and what it asked for go, and nothing else is touched. The PR returns to reviewed (or baseline) until the next push. |
 | `magnum approve <ref> [-m TEXT] [--as IDENTITY] [--force]`, `magnum request-changes <ref> [-m TEXT] [--force]` | Your own verdict on the head magnum reviewed, posted by the daemon as the PR's posting identity with a body that names magnum's review and its findings: for repositories where magnum only comments, or when you decide differently. The head must still be the reviewed one unless `--force`. A manual approval follows the head like magnum's own; magnum's later rounds never dismiss a manual verdict as their own stale review. `--as` the watch's `auto_approve_as` posts your own approval, which GitHub counts (an App's never does), followed like an automatic one (PRs that need you, below); `--as` the PR's posting identity is the approval without it. Board keys `A` and `C`. |
 | `magnum unapprove <ref> [--resume] [--yes] [--json]` | Withdraw the approval Magnum posted as you on the PR (Approving as you), dismissing it as you, and stop it approving that PR as you; without one standing it only stops it. Asks y/N on a terminal. `--resume` lets Magnum approve the PR as you again; your reviews from before then no longer stop it. Board key `D`. On a terminal `--json` needs `--yes`: without it the command refuses (exit 2) instead of skipping the question. |

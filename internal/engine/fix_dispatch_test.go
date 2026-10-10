@@ -346,8 +346,8 @@ func TestKindPauseHoldsOnlyRoundsUsingThatKind(t *testing.T) {
 // a round whose roles run no Codex agent is not held by the limit.
 func TestWorkingCodexLimitCountsTheRoundsCodexRoles(t *testing.T) {
 	h := newHarness(t, func(h *harness) {
-		addRole(h, config.Role{Name: "claude-judge", Kind: config.KindClaude, Judge: true})
-		// talkable: codex-judge and codex-review (both Codex); zhuravel: no Codex role.
+		// talkable: codex-judge and codex-review (both Codex); zhuravel: the
+		// built-in claude-judge (held in reserve otherwise), no Codex role.
 		h.cfg.Watches[0].Roles = []string{"codex-judge", "claude-review", "codex-review"}
 		h.cfg.Watches[1].Roles = []string{"claude-judge", "claude-review"}
 		if err := h.cfg.Validate(); err != nil {

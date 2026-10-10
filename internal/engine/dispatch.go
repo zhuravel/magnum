@@ -215,7 +215,7 @@ func (e *Engine) dispatch(ctx context.Context, ts tickState) {
 	working := ts.workingCodex
 	for _, pr := range cands {
 		if e.flagHolds(ctx, pr) {
-			continue // Codex flagged it: no round of any kind (codex_flag.go)
+			continue // Codex flagged it and no fallback judge takes over: no round of any kind (codex_flag.go)
 		}
 		if paused != "" && !pr.Forced {
 			continue // waitFor says why
@@ -498,7 +498,7 @@ func (e *Engine) startRound(ctx context.Context, pr store.PR, repo store.Repo, w
 
 	// The roles the round runs decide which pauses and Codex limit apply
 	// (the judge alone of a delta check or a re-review of the same head).
-	toRun, err := pipeline.RolesToRun(ctx, e.st, e.cfg, pr, e.cfg.RolesFor(w), e.requestedRoles(ctx, pr.ID), job.kind)
+	toRun, err := pipeline.RolesToRun(ctx, e.st, e.cfg, pr, e.rolesForPR(ctx, w, pr.ID), e.requestedRoles(ctx, pr.ID), job.kind)
 	if err != nil {
 		e.log.Warn("dispatch: roles", "subject", subject, "err", err)
 		return false, 0, gate{}

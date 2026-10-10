@@ -52,6 +52,35 @@ type Pipeline struct {
 	// whole conversation uncached. Default 90m; 0 = always resume. Only the
 	// judge; a continue of a paused turn keeps its conversation.
 	JudgeFreshAfter Duration `toml:"judge_fresh_after"`
+	// JudgeFallback names a judge role of another kind that takes over a
+	// PR's rounds after the judge's kind refused one of them (Codex's
+	// cybersecurity classifier; engine codex_flag.go): the PR is flagged
+	// for that kind, its roles of that kind are dropped and this role
+	// judges from then on. "" = a refused PR is never reviewed again. A
+	// [[watch]] may override it (Watch.JudgeFallback); see
+	// Config.JudgeFallbackFor. The role never runs otherwise: RolesFor gives
+	// a watch without roles its first judge only.
+	JudgeFallback string `toml:"judge_fallback"`
+}
+
+// JudgeFallbackFor is the judge role that takes over a PR of watch w after
+// its judge's kind refused a round: the watch's judge_fallback, else
+// [pipeline] judge_fallback, found among every declared role (not only the
+// watch's). ok is false when none is set or the name matches no judge
+// role; Validate reports the latter.
+func (c *Config) JudgeFallbackFor(w *Watch) (Role, bool) {
+	name := c.Pipeline.JudgeFallback
+	if w != nil && w.JudgeFallback != "" {
+		name = w.JudgeFallback
+	}
+	if strings.TrimSpace(name) == "" {
+		return Role{}, false
+	}
+	r, ok := c.roleNamed(name)
+	if !ok || !r.Judge {
+		return Role{}, false
+	}
+	return r, true
 }
 
 // DefaultRelatedIgnore is [pipeline] related_ignore's default: lockfiles,
@@ -147,6 +176,10 @@ const (
 	RoleClaudeReview   = "claude-review"
 	RoleCodexReview    = "codex-review"
 	RoleClaudeSimplify = "claude-simplify"
+	// RoleClaudeJudge is the built-in second judge, held in reserve for
+	// [pipeline] judge_fallback (a watch runs its first judge unless its
+	// roles list names this one).
+	RoleClaudeJudge = "claude-judge"
 
 	KindCodex  = "codex"
 	KindClaude = "claude"

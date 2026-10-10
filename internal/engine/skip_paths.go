@@ -143,7 +143,9 @@ func (e *Engine) classify(ctx context.Context, w config.Watch, pr store.PR, now 
 		return dec
 	}
 	if f, ok := e.codexFlag(ctx, pr.ID); ok { // codex_flag.go
-		return eligibility.Decision{Reason: f.SkipReason()}
+		if _, ok := e.fallbackRole(f); !ok { // a fallback judge keeps it eligible (judge_fallback.go)
+			return eligibility.Decision{Reason: f.SkipReason()}
+		}
 	}
 	if !safeBase(deref(pr.BaseRef)) {
 		return eligibility.Decision{Reason: reasonUnsafeBase}

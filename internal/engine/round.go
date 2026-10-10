@@ -160,7 +160,7 @@ func (e *Engine) prepare(ctx context.Context, job *roundJob) (pipeline.RoundInpu
 	// 2. The roles this round runs (the watch's, per their runs and this
 	// round's requests, then the ones triage keeps), then a preflight of
 	// their agent kinds before starting or prompting anything.
-	rs.roles = e.cfg.RolesFor(&job.watch)
+	rs.roles = e.rolesForPR(ctx, &job.watch, pr.ID) // judge_fallback.go
 	rs.requested = e.requestedRoles(ctx, pr.ID)
 	if job.deltaCheck && job.kind == pipeline.KindRereview {
 		rs.delta = e.confirmDeltaCheck(ctx, job, rs.target) // nil: the round runs in full
@@ -409,7 +409,7 @@ func (e *Engine) startSessions(ctx context.Context, job *roundJob, rs *roundSetu
 	}
 	full := job.kind == kindContinue && rs.kind != kindContinue
 	if rs.judgeOnly() && rs.kind != pipeline.KindRereview && !e.checkFresh(ctx, job, rs, effort, cmp.Or(why, "the judge's session is gone")) {
-		rs.delta, rs.sameHead, rs.roles, full = nil, false, e.cfg.RolesFor(&job.watch), true
+		rs.delta, rs.sameHead, rs.roles, full = nil, false, e.rolesForPR(ctx, &job.watch, pr.ID), true
 	}
 	if full {
 		// The continued round (or the judge alone) became a full one: the

@@ -346,6 +346,9 @@ type Watch struct {
 	// JudgeOwnPass overrides [pipeline] judge_own_pass for this watch's PRs
 	// ("" keeps the pipeline's; see Config.JudgeOwnPassFor).
 	JudgeOwnPass string `toml:"judge_own_pass"`
+	// JudgeFallback overrides [pipeline] judge_fallback for this watch's
+	// PRs ("" keeps the pipeline's; see Config.JudgeFallbackFor).
+	JudgeFallback string `toml:"judge_fallback"`
 	// RelatedLookback and RelatedIgnore override [pipeline]
 	// related_lookback and related_ignore for this watch's PRs: unset keeps
 	// the pipeline's, a related_lookback of "0s" turns the lookback off (open

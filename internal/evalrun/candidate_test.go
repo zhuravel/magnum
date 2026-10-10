@@ -53,7 +53,7 @@ func TestWithCandidatePointsPromptsAndEveryJudgeSkillAtTheDirectory(t *testing.T
 	name := cfg.JudgeFor(nil).PromptFile(config.PromptInitial)
 	writeFile(t, filepath.Join(cfg.Pipeline.PromptsDir, name), "the live judge prompt\n")
 	livePrompts, liveSkills := cfg.Pipeline.PromptsDir, map[string]string{}
-	for _, r := range cfg.RolesFor(nil) {
+	for _, r := range cfg.Roles { // every role, the reserve judge included
 		liveSkills[r.Name] = r.Skill
 	}
 	if _, err := cfg.SnapshotPrompts("", time.Now()); err != nil {
@@ -69,7 +69,7 @@ func TestWithCandidatePointsPromptsAndEveryJudgeSkillAtTheDirectory(t *testing.T
 		t.Errorf("prompts_dir = %s, want %s/prompts", cand.Pipeline.PromptsDir, dir)
 	}
 	judges := 0
-	for _, r := range cand.RolesFor(nil) {
+	for _, r := range cand.Roles { // every judge, not only the one a watch runs
 		switch {
 		case r.Judge:
 			judges++
@@ -83,8 +83,8 @@ func TestWithCandidatePointsPromptsAndEveryJudgeSkillAtTheDirectory(t *testing.T
 			t.Errorf("reviewer %s: skill %q changed", r.Name, r.Skill)
 		}
 	}
-	if judges != 2 {
-		t.Fatalf("%d judges in the copy, want 2", judges)
+	if want := len(cand.Judges()); judges != want || want < 2 {
+		t.Fatalf("%d judges in the copy, want %d (at least 2)", judges, want)
 	}
 	if p, err := cand.ResolvePrompt(name); err != nil || p.Text != "the candidate's judge prompt\n" {
 		t.Errorf("the candidate's %s: %q, %v", name, p.Text, err)

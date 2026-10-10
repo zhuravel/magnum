@@ -257,6 +257,12 @@ judge_fresh_after = "90m"         # a judge whose last turn on the PR ended long
                                   # GitHub): Codex's prompt cache lasts about 1.5 h, so resuming re-reads the whole
                                   # conversation uncached. A live judge is quit first (parked, history kept); the
                                   # other roles keep their sessions; a continue resumes. "0" = always resume
+judge_fallback = ""               # a judge role of another kind that takes over a PR's rounds once the judge's
+                                  # kind refused one (Codex's cybersecurity classifier): the PR is flagged for
+                                  # that kind, its roles of that kind are dropped, and this role judges from
+                                  # then on, starting fresh through the recovery prompt. "" = a refused PR is
+                                  # never reviewed again. "claude-judge" names the second judge below, which
+                                  # runs for no watch otherwise. [[watch]] may override
 
 # Agent CLIs: codex, claude, droid and omp are built in (values below are their defaults); every key is
 # optional and overrides only itself. Any other herdr agent kind (pi, gemini, ...) can be declared too.
@@ -442,6 +448,24 @@ prompt = "claude-simplify.md"           # read-only: four parallel angle reviews
 output = "claude-simplify.md"         # the proposals; no `after`, so it runs alongside the reviewers
 timeout = "40m"
 aliases = ["simplify"]
+
+[[role]]
+name = "claude-judge"                 # a second judge, held in reserve: a watch without roles = [...] runs its first
+kind = "claude"                       # judge (codex-judge); [pipeline] judge_fallback = "claude-judge" switches a PR
+judge = true                          # to this one after a Codex refusal, and a watch's roles may name it instead
+model = "opus"                        # Claude's safety classifier is not Codex's; "fable" for the strongest model
+effort = "xhigh"
+rereview_effort = "high"
+max_session_rounds = 6
+skill = "{{repo}}/skills/magnum-review/SKILL.md"
+prompt = "judge-initial.md"
+rereview = "judge-rereview.md"
+continue_prompt = "judge-continue.md"
+recovery = "judge-recovery.md"
+nudge = "judge-nudge.md"
+own_pass = "judge-own-pass.md"
+output = "claude-judge.json"
+timeout = "90m"
 
 # Identities, watches and pools are personal: declare them in ~/.config/magnum/config.toml (its
 # blocks are appended to this file). The examples below show every key.
