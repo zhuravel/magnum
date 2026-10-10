@@ -97,6 +97,9 @@ const (
 	// RunOwnPass is the judge's own pass, prompted with the reviewers
 	// (pipeline); its continuations on a fallback model keep the kind.
 	RunOwnPass = "own_pass"
+	// RunFix is the fix job's run: the fixer's agent prompted to fix magnum's
+	// findings on its author's PR (engine), a run of the fix role.
+	RunFix = "fix"
 )
 
 // Run states.
