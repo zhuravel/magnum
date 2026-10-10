@@ -47,6 +47,14 @@ func TestASecondJudgeStandsInReserve(t *testing.T) {
 	if j := cfg.JudgeFor(w); j.Name != RoleClaudeJudge {
 		t.Errorf("JudgeFor(roles with claude-judge) = %s", j.Name)
 	}
+	// A stored role name (no watch) resolves the reserve judge too: the agents
+	// manager and the pipeline name the roles a flagged PR's rounds run.
+	if r, ok := cfg.RoleByNameOrAlias(nil, "claude-judge"); !ok || r.Name != RoleClaudeJudge {
+		t.Errorf("RoleByNameOrAlias(nil, claude-judge) = %+v, %v", r, ok)
+	}
+	if _, ok := cfg.RoleByNameOrAlias(&Watch{Owner: "example"}, "claude-judge"); ok {
+		t.Error("a watch without a roles list resolved the reserve judge as one of its roles")
+	}
 }
 
 // judge_fallback resolves per watch: the watch's value, else the

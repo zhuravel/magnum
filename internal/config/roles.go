@@ -408,7 +408,14 @@ func (c *Config) RoleByNameOrAlias(w *Watch, s string) (Role, bool) {
 		j := c.JudgeFor(w)
 		return j, j.Name != ""
 	}
-	for _, r := range c.RolesFor(w) {
+	// Without a watch the name is a stored one (a session's or run's role, a
+	// result file's): any declared role answers, the judge in reserve
+	// included, which a flagged PR's rounds run (engine judge_fallback.go).
+	roles := c.RolesFor(w)
+	if w == nil {
+		roles = c.AllRoles()
+	}
+	for _, r := range roles {
 		if r.Matches(s) {
 			return r, true
 		}
