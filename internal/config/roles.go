@@ -36,11 +36,20 @@ type Role struct {
 	// judge is a session role with runs = "always", capture = "file" and no
 	// After (it always runs last).
 	Judge bool `toml:"judge"`
+	// Fix: the role that fixes the findings of magnum's review on the
+	// operator's own PR (the fix job): a session role that
+	// never takes part in a round, so RolesFor, Stages and a watch's roles
+	// leave it out; Config.FixRoleFor finds it by [pipeline] fix_role. It
+	// takes no runs, after, own_pass or judge, its Identity is a gh
+	// identity (the account it pushes and replies as), and its Skill is the
+	// fix skill (DefaultFixSkill) the way a judge's is the review skill.
+	Fix bool `toml:"fix"`
 	// Summary is a one-line description of what the role checks, shown to the
 	// triage model ([triage]; Removable). A role without one is never
 	// removed from a round, and neither is the judge.
 	Summary string `toml:"summary"`
 	// Runs: "always" (default), "first", "manual" or "never" (see RunsAlways).
+	// A fix role has none: it stays "" and validation refuses a value.
 	Runs string `toml:"runs"`
 	// RerunMinLines, for runs = "first": the role runs again once the code
 	// lines changed since the head of its last completed run reach this
@@ -49,7 +58,9 @@ type Role struct {
 	// round, then on request. Ignored for the other runs values.
 	RerunMinLines int `toml:"rerun_min_lines"`
 	// Identity: the [[identity]] whose GitHub env the role's pane gets;
-	// "" = the watch's identity.
+	// "" = the watch's identity. A fix role names a gh identity (the
+	// operator's own account), and an undeclared one is a warning, not an
+	// error (Config.Warnings).
 	Identity string `toml:"identity"`
 	// Model and Effort are passed through the kind's model/effort args
 	// (Kind.Argv) and are template variables ({{.Model}}, {{.Effort}}; a
@@ -107,7 +118,8 @@ type Role struct {
 	Stop string `toml:"stop"`
 
 	// Skill: the judge's skill file (template variable {{.SkillPath}});
-	// default DefaultSkill, expanded by Load. Judges only.
+	// default DefaultSkill, expanded by Load. A fix role's is the fix skill,
+	// default DefaultFixSkill. Judges and fix roles only.
 	Skill string `toml:"skill"`
 
 	// Command: shell roles only; a Go text/template over the round's
@@ -149,6 +161,10 @@ type Role struct {
 	// claude, codex, simplify and the store ids such as codex_review).
 	Aliases []string `toml:"aliases"`
 }
+
+// IsFix reports whether the role is a fix role (Fix): the fixer of the fix
+// job, never part of a round.
+func (r Role) IsFix() bool { return r.Fix }
 
 // IsShell reports whether the role runs a shell command (kind "shell").
 func (r Role) IsShell() bool { return r.Kind == KindShell || r.Mode == ModeShell }
@@ -273,9 +289,14 @@ func (r Role) ShouldRun(ranBefore, requested bool) bool {
 //     skill DefaultSkill, the same judge-*.md prompts; a second judge held
 //     in reserve for [pipeline] judge_fallback (RolesFor gives a watch
 //     without roles its first judge only), no aliases.
+//   - claude-fix: claude, fix, identity me (a gh identity: the account the
+//     fixer pushes and replies as), model opus, effort high, skill
+//     DefaultFixSkill, prompt fix.md, timeout 60m, no runs; the fixer of
+//     the fix job, never part of a round, its session kept like a
+//     reviewer's (no max_session_rounds).
 //
 // Each non-judge role carries a Summary, which makes it a candidate for
-// triage ([triage]).
+// triage ([triage]); the fix role has none, it is never in a round.
 func DefaultRoles() []Role {
 	return []Role{
 		{Name: RoleCodexJudge, Kind: KindCodex, Judge: true, Effort: "xhigh", RereviewEffort: "high", MaxSubagents: new(DefaultJudgeSubagents),
@@ -293,6 +314,8 @@ func DefaultRoles() []Role {
 			MaxSessionRounds: DefaultJudgeSessionRounds, Skill: DefaultSkill,
 			Prompt: "judge-initial.md", Rereview: "judge-rereview.md", ContinuePrompt: "judge-continue.md",
 			Recovery: "judge-recovery.md", Nudge: "judge-nudge.md"},
+		{Name: RoleClaudeFix, Kind: KindClaude, Fix: true, Identity: "me", Model: "opus", Effort: "high",
+			Skill: DefaultFixSkill, Prompt: DefaultFixPrompt, Output: "claude-fix.md", Capture: CaptureFile, Timeout: Duration{60 * time.Minute}},
 	}
 }
 
@@ -333,7 +356,8 @@ func (c *Config) roles() []Role {
 
 // RolesFor returns the roles a watch runs, in [[role]] order: every role
 // when w is nil or w.Roles is empty, else the ones w.Roles names (names or
-// aliases).
+// aliases). A fix role is never one of them (FixRoleFor finds it), and when
+// w names no roles only the first judge is, the others standing in reserve.
 func (c *Config) RolesFor(w *Watch) []Role {
 	all := c.roles()
 	var out []Role
@@ -342,6 +366,9 @@ func (c *Config) RolesFor(w *Watch) []Role {
 		// held in reserve (JudgeFallbackFor) or named by a roles list.
 		judged := false
 		for _, r := range all {
+			if r.Fix {
+				continue
+			}
 			if r.Judge {
 				if judged {
 					continue
@@ -353,7 +380,7 @@ func (c *Config) RolesFor(w *Watch) []Role {
 		return out
 	}
 	for _, r := range all {
-		if slices.ContainsFunc(w.Roles, r.Matches) {
+		if !r.Fix && slices.ContainsFunc(w.Roles, r.Matches) {
 			out = append(out, r)
 		}
 	}
@@ -361,8 +388,8 @@ func (c *Config) RolesFor(w *Watch) []Role {
 }
 
 // AllRoles returns every declared role in [[role]] order, the judges held in
-// reserve included (RolesFor leaves them out): what names a role on the
-// command line, lists roles, or copies the configuration.
+// reserve and the fix roles included (RolesFor leaves them out): what names
+// a role on the command line, lists roles, or copies the configuration.
 func (c *Config) AllRoles() []Role { return slices.Clone(c.roles()) }
 
 // Judges returns every declared judge role in [[role]] order: the first is
@@ -371,7 +398,20 @@ func (c *Config) AllRoles() []Role { return slices.Clone(c.roles()) }
 func (c *Config) Judges() []Role {
 	var out []Role
 	for _, r := range c.roles() {
-		if r.Judge {
+		if r.Judge && !r.Fix {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// FixRoles returns every declared fix role in [[role]] order: the built-in
+// claude-fix, and the fix roles a configuration adds for the watches whose
+// fix_role names them (FixRoleFor).
+func (c *Config) FixRoles() []Role {
+	var out []Role
+	for _, r := range c.roles() {
+		if r.Fix {
 			out = append(out, r)
 		}
 	}
@@ -410,7 +450,8 @@ func (c *Config) RoleByNameOrAlias(w *Watch, s string) (Role, bool) {
 	}
 	// Without a watch the name is a stored one (a session's or run's role, a
 	// result file's): any declared role answers, the judge in reserve
-	// included, which a flagged PR's rounds run (engine judge_fallback.go).
+	// included, which a flagged PR's rounds run (engine judge_fallback.go),
+	// and the fix role, whose fix runs are stored under its name.
 	roles := c.RolesFor(w)
 	if w == nil {
 		roles = c.AllRoles()
@@ -513,7 +554,7 @@ func (c *Config) normalizedRoles(in []Role) []Role {
 				r.Mode = ModeShell
 			}
 		}
-		if r.Runs == "" {
+		if r.Runs == "" && !r.Fix { // a fix role has no runs; validation refuses one
 			r.Runs = RunsAlways
 		}
 		if r.Capture == "" {
@@ -552,6 +593,13 @@ func (c *Config) normalizedRoles(in []Role) []Role {
 			fill(&r.OwnPass, "judge-own-pass.md")
 			if r.Skill == "" {
 				r.Skill = DefaultSkill
+			}
+		case r.Fix && !r.IsShell():
+			if r.Prompt == "" {
+				r.Prompt = DefaultFixPrompt
+			}
+			if r.Skill == "" {
+				r.Skill = DefaultFixSkill
 			}
 		case !r.IsShell():
 			if r.Prompt == "" {

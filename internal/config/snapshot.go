@@ -124,11 +124,11 @@ func SkillPath(skill string, layout paths.Layout) string {
 }
 
 // SnapshotPrompts loads every prompt file the roles name (each prompt kind)
-// and the extra names (model-fallback.md), copies each judge's skill file
-// to skillDir/<hash>/SKILL.md ("" = no copies; the judges keep their
-// configured skill paths), removes copies older than a week that no judge
-// uses, and installs the result: from now on ResolvePrompt answers from it
-// and SkillFile names the copies. A prompt that does not resolve is an
+// and the extra names (model-fallback.md), copies each judge's and each fix
+// role's skill file to skillDir/<hash>/SKILL.md ("" = no copies; the roles
+// keep their configured skill paths), removes copies older than a week that
+// no role uses, and installs the result: from now on ResolvePrompt answers
+// from it and SkillFile names the copies. A prompt that does not resolve is an
 // error and nothing is installed; a skill that cannot be copied is a
 // warning (PromptSnapshot.Warnings). Call it once, before the goroutines
 // that resolve prompts start.
@@ -165,15 +165,19 @@ func (c *Config) SnapshotPrompts(skillDir string, now time.Time, extra ...string
 		return nil, fmt.Errorf("config: load prompts: %w", err)
 	}
 	if skillDir != "" {
-		warned := map[string]bool{} // one warning per skill path, whatever the judges that share it
+		warned := map[string]bool{} // one warning per skill path, whatever the roles that share it
 		for _, r := range c.Roles {
 			src := SkillPath(r.Skill, c.Layout)
-			if _, done := s.skills[src]; !r.Judge || done || warned[src] {
+			if _, done := s.skills[src]; !(r.Judge || r.Fix) || done || warned[src] {
 				continue
 			}
 			sk, err := copySkill(src, skillDir)
 			if err != nil {
-				s.Warnings = append(s.Warnings, fmt.Sprintf("judge %s: skill %s: %v", r.Name, src, err))
+				label := "judge"
+				if r.Fix {
+					label = "fix role"
+				}
+				s.Warnings = append(s.Warnings, fmt.Sprintf("%s %s: skill %s: %v", label, r.Name, src, err))
 				warned[src] = true
 				continue
 			}
@@ -241,11 +245,11 @@ func (c *Config) PromptSnapshot() *PromptSnapshot { return c.snapshot }
 // WithoutSnapshot is a copy of c that reads its prompts and judge skills
 // from disk, as the CLI does, whatever the daemon loaded at startup (a
 // candidate replay reads another directory's), with its own Roles slice
-// (the normalized roles, RolesFor(nil)) for the caller to change.
+// (every normalized role, AllRoles) for the caller to change.
 func (c *Config) WithoutSnapshot() *Config {
 	cp := *c
 	cp.snapshot = nil
-	cp.Roles = c.AllRoles() // every role, the judges in reserve included
+	cp.Roles = c.AllRoles() // every role, the judges in reserve and the fix roles included
 	return &cp
 }
 

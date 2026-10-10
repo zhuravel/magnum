@@ -349,6 +349,13 @@ type Watch struct {
 	// JudgeFallback overrides [pipeline] judge_fallback for this watch's
 	// PRs ("" keeps the pipeline's; see Config.JudgeFallbackFor).
 	JudgeFallback string `toml:"judge_fallback"`
+	// FixRole, FixCycles and Autofix override [pipeline] fix_role,
+	// fix_cycles and autofix for this watch's PRs: unset keeps the
+	// pipeline's, a fix_role of "" switches the fix job off for the watch
+	// (see Config.FixRoleFor, FixCyclesFor, AutofixFor).
+	FixRole   *string `toml:"fix_role"`
+	FixCycles *int    `toml:"fix_cycles"`
+	Autofix   string  `toml:"autofix"`
 	// RelatedLookback and RelatedIgnore override [pipeline]
 	// related_lookback and related_ignore for this watch's PRs: unset keeps
 	// the pipeline's, a related_lookback of "0s" turns the lookback off (open
@@ -798,7 +805,7 @@ func Defaults() *Config {
 		Herdr:    Herdr{Socket: "~/.config/herdr/herdr.sock", Notify: true},
 		Terminal: Terminal{App: "Terminal", Session: "default", Mouse: true, Icons: "unicode"},
 		GitHub:   GitHub{Transport: "gh"},
-		Pipeline: Pipeline{PromptsDir: "{{repo}}/prompts", JudgeOwnPass: OwnPassParallel, RelatedLookback: Duration{14 * 24 * time.Hour}, RelatedIgnore: DefaultRelatedIgnore(), JudgeFreshAfter: Duration{90 * time.Minute}},
+		Pipeline: Pipeline{PromptsDir: "{{repo}}/prompts", JudgeOwnPass: OwnPassParallel, RelatedLookback: Duration{14 * 24 * time.Hour}, RelatedIgnore: DefaultRelatedIgnore(), JudgeFreshAfter: Duration{90 * time.Minute}, FixRole: RoleClaudeFix, FixCycles: DefaultFixCycles, Autofix: AutofixNever},
 		Usage:    Usage{CodexSoft: 80, CodexHard: 95},
 		Triage:   DefaultTriage(),
 		Learn:    DefaultLearn(),

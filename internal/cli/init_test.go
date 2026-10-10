@@ -207,7 +207,17 @@ func TestConfigExampleLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cfg.Identities) != 1 || len(cfg.Watches) != 1 || len(cfg.Pools) != 0 || len(cfg.Warnings()) != 0 {
+	// Its one identity posts the reviews, and is also the account the built-in
+	// fix role fixes as, which the configuration says once (the fix job wants
+	// an identity of its own: config.full.example.toml's App posts); no other
+	// warning.
+	var other []string
+	for _, w := range cfg.Warnings() {
+		if !strings.Contains(w, "fix role claude-fix") {
+			other = append(other, w)
+		}
+	}
+	if len(cfg.Identities) != 1 || len(cfg.Watches) != 1 || len(cfg.Pools) != 0 || len(other) != 0 || len(cfg.Warnings()) > 1 {
 		t.Fatalf("example: %d identities, %d watches, %d pools, warnings %v", len(cfg.Identities), len(cfg.Watches), len(cfg.Pools), cfg.Warnings())
 	}
 }

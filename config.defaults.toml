@@ -263,6 +263,15 @@ judge_fallback = ""               # a judge role of another kind that takes over
                                   # then on, starting fresh through the recovery prompt. "" = a refused PR is
                                   # never reviewed again. "claude-judge" names the second judge below, which
                                   # runs for no watch otherwise. [[watch]] may override
+fix_role = "claude-fix"           # the fix role (fix = true) that fixes magnum's findings on your own PRs: the
+                                  # fix job `magnum fix` runs it, in the PR's slot, as a role of its own that
+                                  # takes no part in a review round. "" = no fix job. [[watch]] may override
+                                  # (fix_role = "" there switches the job off for that watch)
+fix_cycles = 3                    # fix runs one fix loop may take (a fix, then the re-review it forces) before
+                                  # the PR needs you; at least 1. [[watch]] may override
+autofix = "never"                 # never: a fix loop starts only when you ask for it; own: it also starts by
+                                  # itself after a review with findings on a PR one of your logins authored.
+                                  # [[watch]] may override
 
 # Agent CLIs: codex, claude, droid and omp are built in (values below are their defaults); every key is
 # optional and overrides only itself. Any other herdr agent kind (pi, gemini, ...) can be declared too.
@@ -467,6 +476,20 @@ nudge = "judge-nudge.md"
 own_pass = "judge-own-pass.md"
 output = "claude-judge.json"
 timeout = "90m"
+
+[[role]]
+name = "claude-fix"                   # the fixer of the fix job (`fix_role` above): never part of a review round,
+kind = "claude"                       # so a watch's roles do not list it. Its session is kept across fix runs like
+fix = true                            # a reviewer's (max_session_rounds = N starts a fresh conversation every N)
+identity = "me"                       # a gh [[identity]] of your own account: the fixer's pane gets that GitHub env,
+                                      # so it pushes to the PR's branch and answers the review's threads as you,
+                                      # not as the App that posted the review. Declare it in your config
+model = "opus"
+effort = "high"
+skill = "{{repo}}/skills/magnum-fix/SKILL.md"   # the fix skill; an absolute path points at your own
+prompt = "fix.md"
+output = "claude-fix.md"
+timeout = "60m"
 
 # Identities, watches and pools are personal: declare them in ~/.config/magnum/config.toml (its
 # blocks are appended to this file). The examples below show every key.

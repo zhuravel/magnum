@@ -101,6 +101,9 @@ func TestLoadPromptsSnapshotsPromptsAndCopiesTheJudgeSkill(t *testing.T) {
 	h := newHarness(t)
 	skill := judgeSkill(t, h)
 	promptsFile(t, skill, "# skill v1\n")
+	for _, r := range h.cfg.FixRoles() { // the fix role's skill is copied too, and warns when it is missing
+		promptsFile(t, config.SkillPath(r.Skill, h.layout), "# fix skill\n")
+	}
 	// What an earlier run left behind: this load starts the count again.
 	h.e.setKV(h.ctx, KVPromptsChanged, "3")
 	h.e.setKV(h.ctx, KVPromptsChangedFiles, "judge-nudge.md,"+skill)

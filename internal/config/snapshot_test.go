@@ -85,10 +85,10 @@ func snapExists(path string) bool {
 	return err == nil
 }
 
-// snapSetSkill points every judge role at the skill file src.
+// snapSetSkill points every judge and fix role at the skill file src.
 func snapSetSkill(cfg *Config, src string) {
 	for i := range cfg.Roles {
-		if cfg.Roles[i].Judge {
+		if cfg.Roles[i].Judge || cfg.Roles[i].Fix {
 			cfg.Roles[i].Skill = src
 		}
 	}

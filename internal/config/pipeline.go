@@ -61,6 +61,21 @@ type Pipeline struct {
 	// Config.JudgeFallbackFor. The role never runs otherwise: RolesFor gives
 	// a watch without roles its first judge only.
 	JudgeFallback string `toml:"judge_fallback"`
+	// FixRole names the fix role that fixes magnum's findings on the
+	// operator's own PRs (the fix job; `magnum fix`): a [[role]] with
+	// fix = true. "" = no fix job. A [[watch]] may override it
+	// (Watch.FixRole); see Config.FixRoleFor.
+	FixRole string `toml:"fix_role"`
+	// FixCycles caps the fix runs of one fix loop (a fix run, the re-review
+	// it forces, and so on) before the PR needs the operator; at least 1,
+	// default DefaultFixCycles. A [[watch]] may override it; see
+	// Config.FixCyclesFor.
+	FixCycles int `toml:"fix_cycles"`
+	// Autofix: AutofixNever (default) starts a fix loop only when asked
+	// (`magnum fix`, the board); AutofixOwn starts it by itself after a
+	// review with findings on a PR whose author is one of the operator's
+	// logins. A [[watch]] may override it; see Config.AutofixFor.
+	Autofix string `toml:"autofix"`
 }
 
 // JudgeFallbackFor is the judge role that takes over a PR of watch w after
@@ -81,6 +96,62 @@ func (c *Config) JudgeFallbackFor(w *Watch) (Role, bool) {
 		return Role{}, false
 	}
 	return r, true
+}
+
+// FixRoleFor is the fix role of watch w: the watch's fix_role when it sets
+// one (an empty one switches the fix job off for the watch), else [pipeline]
+// fix_role, found among every declared role (not only the watch's). ok is
+// false when none is set or the name matches no fix role; Validate reports
+// the latter.
+func (c *Config) FixRoleFor(w *Watch) (Role, bool) {
+	name := c.Pipeline.FixRole
+	if w != nil && w.FixRole != nil {
+		name = *w.FixRole
+	}
+	if strings.TrimSpace(name) == "" {
+		return Role{}, false
+	}
+	r, ok := c.roleNamed(name)
+	if !ok || !r.Fix {
+		return Role{}, false
+	}
+	return r, true
+}
+
+// Values of [pipeline] autofix.
+const (
+	AutofixNever = "never" // a fix loop starts only on request
+	AutofixOwn   = "own"   // and after a review with findings on the operator's own PRs
+)
+
+// DefaultFixCycles is [pipeline] fix_cycles' default: three fix runs, each
+// followed by a re-review, before the PR is left to the operator.
+const DefaultFixCycles = 3
+
+// FixCyclesFor is the fix_cycles that apply to w's PRs: the watch's when it
+// sets one, else [pipeline]'s, else DefaultFixCycles. A nil w is
+// [pipeline]'s.
+func (c *Config) FixCyclesFor(w *Watch) int {
+	n := c.Pipeline.FixCycles
+	if w != nil && w.FixCycles != nil {
+		n = *w.FixCycles
+	}
+	if n < 1 {
+		return DefaultFixCycles
+	}
+	return n
+}
+
+// AutofixFor is the autofix that applies to w's PRs: the watch's when it
+// sets one, else [pipeline]'s, else AutofixNever. A nil w is [pipeline]'s.
+func (c *Config) AutofixFor(w *Watch) string {
+	if w != nil && w.Autofix != "" {
+		return w.Autofix
+	}
+	if c.Pipeline.Autofix != "" {
+		return c.Pipeline.Autofix
+	}
+	return AutofixNever
 }
 
 // DefaultRelatedIgnore is [pipeline] related_ignore's default: lockfiles,
@@ -180,6 +251,9 @@ const (
 	// [pipeline] judge_fallback (a watch runs its first judge unless its
 	// roles list names this one).
 	RoleClaudeJudge = "claude-judge"
+	// RoleClaudeFix is the built-in fix role, the fixer of the fix job
+	// (Role.Fix); [pipeline] fix_role names it by default.
+	RoleClaudeFix = "claude-fix"
 
 	KindCodex  = "codex"
 	KindClaude = "claude"
@@ -205,6 +279,13 @@ const (
 // DefaultSkill is the judge's default skill path ({{repo}} = magnum's home).
 const DefaultSkill = "{{repo}}/skills/magnum-review/SKILL.md"
 
+// DefaultFixSkill is a fix role's default skill path, as DefaultSkill is the
+// judge's; DefaultFixPrompt is its default prompt.
+const (
+	DefaultFixSkill  = "{{repo}}/skills/magnum-fix/SKILL.md"
+	DefaultFixPrompt = "fix.md"
+)
+
 // Normalize fills the defaulted fields of Kinds and Roles in place (Load
 // and Defaults call it; call it again after editing either in code). It is
 // idempotent and never overrides a value that is set.
@@ -228,7 +309,7 @@ func cloneOrNil[E any](s []E) []E {
 	return slices.Clone(s)
 }
 
-// expandPipeline resolves {{repo}} and ~ in the judges' skills (Load only;
+// expandPipeline resolves {{repo}} and ~ in the judges' and fix roles' skills (Load only;
 // Defaults keeps them unexpanded). prompts_dir is expanded earlier, by
 // expand, because Normalize looks prompts up in it.
 func (c *Config) expandPipeline() {

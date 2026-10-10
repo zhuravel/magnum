@@ -32,6 +32,48 @@ func (c *Config) Warnings() []string {
 	if w := c.idleFallbackWarning(); w != "" {
 		out = append(out, w)
 	}
+	out = append(out, c.fixRoleWarnings()...)
+	return out
+}
+
+// fixRoleWarnings lists the problems of the fix roles in use (the
+// pipeline's and each watch's, FixRoleFor) that do not make the
+// configuration invalid: an identity the configuration does not declare
+// (the built-in claude-fix names "me", which the built-in defaults, with no
+// identity at all, cannot declare), so the fix job cannot run; and a watch
+// that posts as the fix role's identity, whose threads the fixer could then
+// not tell from its own replies. Nothing is said while no identity is
+// declared: "no [[identity]] configured" already is.
+func (c *Config) fixRoleWarnings() []string {
+	if len(c.Identities) == 0 {
+		return nil
+	}
+	var out []string
+	seen := map[string]bool{}
+	undeclared := func(r Role) {
+		if !seen[r.Name] && r.Identity != "" && c.IdentityByName(r.Identity) == nil {
+			out = append(out, fmt.Sprintf("fix role %s: identity %q is not declared, so the fix job cannot run "+
+				"(declare a gh [[identity]] named %q for your own account, or set identity in a [[role]] named %s)",
+				r.Name, r.Identity, r.Identity, r.Name))
+		}
+		seen[r.Name] = true
+	}
+	if r, ok := c.FixRoleFor(nil); ok {
+		undeclared(r)
+	}
+	for i := range c.Watches {
+		w := &c.Watches[i]
+		r, ok := c.FixRoleFor(w)
+		if !ok {
+			continue
+		}
+		undeclared(r)
+		if r.Identity != "" && r.Identity == w.Identity {
+			out = append(out, fmt.Sprintf("watch %s posts as identity %q, the identity fix role %s fixes as: "+
+				"the fixer could not tell magnum's review threads from its own replies; give one of them another identity",
+				w.Owner, w.Identity, r.Name))
+		}
+	}
 	return out
 }
 
@@ -580,6 +622,43 @@ func (c *Config) validatePipeline() []error {
 		}
 	}
 	fallback("pipeline", c.Pipeline.JudgeFallback, nil)
+	// fix_role names a fix role (fix = true): an agent session that takes
+	// no part in a round, so a judge, a shell command and a reviewer are
+	// refused. The watch's roles never list it (validateWatchRoles). The
+	// pipeline's default, the built-in claude-fix, may be missing: a base
+	// configuration that declares its own [[role]] list replaces the
+	// built-in roles and has no fix job then.
+	fixRole := func(where, name string) {
+		if strings.TrimSpace(name) == "" {
+			return
+		}
+		switch r, ok := c.roleNamed(name); {
+		case !ok && where == "pipeline" && strings.EqualFold(strings.TrimSpace(name), RoleClaudeFix):
+		case !ok:
+			errs = append(errs, fmt.Errorf("%s: fix_role names unknown role %q", where, name))
+		case r.Judge:
+			errs = append(errs, fmt.Errorf("%s: fix_role role %s is a judge; name a role with fix = true", where, r.Name))
+		case r.IsShell():
+			errs = append(errs, fmt.Errorf("%s: fix_role role %s must be an agent session, not a shell command", where, r.Name))
+		case !r.Fix:
+			errs = append(errs, fmt.Errorf("%s: fix_role role %s is not a fix role (fix = true)", where, r.Name))
+		}
+	}
+	fixCycles := func(where string, n int) {
+		if n < 1 {
+			errs = append(errs, fmt.Errorf("%s: fix_cycles must be at least 1, got %d", where, n))
+		}
+	}
+	autofix := func(where, v string) {
+		switch v {
+		case "", AutofixNever, AutofixOwn:
+		default:
+			errs = append(errs, fmt.Errorf("%s: autofix must be %s or %s, got %q", where, AutofixNever, AutofixOwn, v))
+		}
+	}
+	fixRole("pipeline", c.Pipeline.FixRole)
+	fixCycles("pipeline", c.Pipeline.FixCycles)
+	autofix("pipeline", c.Pipeline.Autofix)
 	for i := range c.Watches {
 		w := &c.Watches[i]
 		ownPass("watch "+w.Owner, w.JudgeOwnPass, true)
@@ -588,6 +667,13 @@ func (c *Config) validatePipeline() []error {
 		if w.JudgeFallback == "" {
 			fallback("watch "+w.Owner, c.Pipeline.JudgeFallback, w)
 		}
+		if w.FixRole != nil {
+			fixRole("watch "+w.Owner, *w.FixRole)
+		}
+		if w.FixCycles != nil {
+			fixCycles("watch "+w.Owner, *w.FixCycles)
+		}
+		autofix("watch "+w.Owner, w.Autofix)
 	}
 	kinds := c.kinds()
 	for _, name := range c.KindNames() {
@@ -742,8 +828,12 @@ func (c *Config) validateRole(r Role, kinds map[string]Kind, ids map[string]bool
 	case r.Mode != ModeSession:
 		bad("kind %s needs mode session, got %q", r.Kind, r.Mode)
 	}
-	switch r.Runs {
-	case RunsAlways, RunsFirst, RunsManual, RunsNever:
+	switch {
+	case r.Fix: // never part of a round, so nothing to run (Normalize leaves it empty)
+		if r.Runs != "" {
+			bad("a fix role has no runs (it never takes part in a round), got %q", r.Runs)
+		}
+	case r.Runs == RunsAlways, r.Runs == RunsFirst, r.Runs == RunsManual, r.Runs == RunsNever:
 	default:
 		bad("runs must be always, first, manual or never, got %q", r.Runs)
 	}
@@ -772,8 +862,11 @@ func (c *Config) validateRole(r Role, kinds map[string]Kind, ids map[string]bool
 		if len(r.After) > 0 {
 			bad("a judge takes no after (it always runs last)")
 		}
-	} else if r.Skill != "" {
-		bad("skill is for judges only")
+	} else if r.Skill != "" && !r.Fix {
+		bad("skill is for judges and fix roles only")
+	}
+	if r.Fix {
+		c.validateFixRole(r, bad)
 	}
 	if r.IsShell() {
 		switch {
@@ -809,7 +902,9 @@ func (c *Config) validateRole(r Role, kinds map[string]Kind, ids map[string]bool
 			bad("ok_status %d must be 0..255", status)
 		}
 	}
-	if r.Identity != "" && !ids[r.Identity] {
+	// A fix role's undeclared identity is a warning (fixRoleWarnings): the
+	// built-in claude-fix names "me", and the defaults declare no identity.
+	if r.Identity != "" && !ids[r.Identity] && !r.Fix {
 		bad("unknown identity %q", r.Identity)
 	}
 	if out := r.ReportFile(); out == "." || out == ".." || strings.ContainsAny(out, `/\`) {
@@ -859,6 +954,33 @@ func (c *Config) validateRole(r Role, kinds map[string]Kind, ids map[string]bool
 	return errs
 }
 
+// validateFixRole checks what makes a fix role fit the fix job: an agent
+// session that is no judge and takes no after or own_pass (it is not part of
+// a round), acting as a gh identity: the operator's own account, which
+// pushes to the PR's branch and answers its review threads. An identity the
+// configuration does not declare is no error here (Config.Warnings says it).
+func (c *Config) validateFixRole(r Role, bad func(string, ...any)) {
+	if r.Judge {
+		bad("a fix role cannot also be a judge")
+	}
+	if r.IsShell() {
+		bad("a fix role must be an agent session, not a shell command")
+	}
+	if len(r.After) > 0 {
+		bad("a fix role takes no after (it never takes part in a round)")
+	}
+	if r.OwnPass != "" {
+		bad("a fix role takes no own_pass (that is the judge's)")
+	}
+	switch id := c.IdentityByName(r.Identity); {
+	case r.Identity == "":
+		bad("a fix role needs identity: the gh identity of your own account, which it pushes and replies as")
+	case id != nil && id.Kind != "gh":
+		bad("identity %s must be a gh identity (your own account), not kind %q: the fixer pushes to the PR's branch and "+
+			"answers its threads as you, which an App cannot", id.Name, id.Kind)
+	}
+}
+
 // parseTemplate checks that text is a valid Go template the way
 // internal/agents renders prompts and commands (no funcs, missingkey=error),
 // without executing it.
@@ -885,6 +1007,8 @@ func validateAfter(roles []Role) []error {
 				errs = append(errs, fmt.Errorf("role %s: after names itself", r.Name))
 			case dep.Judge:
 				errs = append(errs, fmt.Errorf("role %s: after names judge %s (the judge always runs last)", r.Name, a))
+			case dep.Fix:
+				errs = append(errs, fmt.Errorf("role %s: after names fix role %s (a fix role takes no part in a round)", r.Name, a))
 			}
 		}
 	}
@@ -930,6 +1054,10 @@ func (c *Config) validateWatchRoles(w Watch, roles []Role) []error {
 		}
 		if seen[roles[i].Name] {
 			errs = append(errs, fmt.Errorf("watch %s: role %s listed twice", w.Owner, roles[i].Name))
+		}
+		if roles[i].Fix {
+			errs = append(errs, fmt.Errorf("watch %s: role %s is a fix role, which takes no part in a round; "+
+				"fix_role names it, roles must not list it", w.Owner, roles[i].Name))
 		}
 		seen[roles[i].Name] = true
 	}

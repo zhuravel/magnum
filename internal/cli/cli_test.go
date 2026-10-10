@@ -198,7 +198,7 @@ func TestCompletionFromRegistryAndConfig(t *testing.T) {
 	if got := strings.Join(complete(t, f.Ctx, "cleanup", "--slot", ""), "\n"); !strings.Contains(got, "review1") {
 		t.Errorf("cleanup --slot completions = %q", got)
 	}
-	if got := strings.Join(complete(t, f.Ctx, "review", "5", "--as", ""), "\n"); got != "zhuravel\tgh zhuravel\ntalkable-app\tapp talkable[bot]" {
+	if got := strings.Join(complete(t, f.Ctx, "review", "5", "--as", ""), "\n"); got != "zhuravel\tgh zhuravel\nme\tgh zhuravel\ntalkable-app\tapp talkable[bot]" {
 		t.Errorf("--as completions = %q", got)
 	}
 	if got := strings.Join(complete(t, f.Ctx, "identities", "check", "--name", ""), "\n"); !strings.Contains(got, "talkable-app") {

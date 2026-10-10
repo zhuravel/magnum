@@ -489,6 +489,7 @@ func TestRenderGolden(t *testing.T) {
 		{"claude_restart_rereview_forced", "claude-restart.md", restartedForced},
 		{"claude_rereview_no_base", "claude-rereview.md", noBase},
 		{"simplify", "claude-simplify.md", simplifyData(roleFixture())},
+		{"fix", "fix.md", roleFixture()},
 		{"model_fallback", FallbackPromptName, FallbackData{Model: "opus", Previous: "fable", Role: "claude-review",
 			URL: "https://github.com/talkable/talkable/pull/11920", HeadSHA: "d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3",
 			ReportPath: "/state/reviews/talkable/talkable/11920/d4e5f6a/claude-review.md"}},
@@ -576,7 +577,7 @@ func checkGolden(t *testing.T, golden, got string) {
 }
 
 func TestEveryDefaultPromptHasAGolden(t *testing.T) {
-	want := []string{"claude-rereview.md", "claude-restart.md", "claude-review.md", "claude-simplify.md", "codex-review.sh", "judge-continue.md",
+	want := []string{"claude-rereview.md", "claude-restart.md", "claude-review.md", "claude-simplify.md", "codex-review.sh", "fix.md", "judge-continue.md",
 		"judge-initial.md", "judge-nudge.md", "judge-own-pass.md", "judge-recovery.md", "judge-rereview.md", "model-fallback.md", "notes-curate.md", "retro.md",
 		"skill-edit.md", "triage.md"}
 	if got := prompts.Names(); !slices.Equal(got, want) {

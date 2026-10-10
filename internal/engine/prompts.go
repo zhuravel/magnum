@@ -52,7 +52,7 @@ func PromptsLine(loadedAt time.Time, changed int) string {
 
 // loadPrompts takes the prompt snapshot rounds render from
 // (config.Config.SnapshotPrompts: every prompt the roles name,
-// model-fallback.md, the triage, retro and notes curation prompts and a copy of each judge's skill) and renders it once
+// model-fallback.md, the triage, retro and notes curation prompts and a copy of each judge's and fix role's skill) and renders it once
 // more with this build (CheckPrompts): the start check read the files a
 // moment earlier, and an edit in between must not reach a round unchecked.
 // A dry run copies no skill (it writes nothing outside its store).
@@ -70,7 +70,7 @@ func (e *Engine) loadPrompts(ctx context.Context) error {
 			"(fix them, check with `magnum config`, then `magnum daemon-restart`):\n%w", err)
 	}
 	for _, w := range snap.Warnings {
-		e.log.Warn("judge skill not copied; the judge reads the file as it is on disk", "warning", w)
+		e.log.Warn("skill not copied; the role reads the file as it is on disk", "warning", w)
 	}
 	e.setKV(ctx, KVPromptsLoadedAt, store.FormatTime(snap.LoadedAt))
 	e.delKV(ctx, KVPromptsChanged, KVPromptsChangedFiles)

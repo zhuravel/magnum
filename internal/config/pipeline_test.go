@@ -60,7 +60,7 @@ func roleNames(roles []Role) []string {
 	return out
 }
 
-// The four [[role]] blocks written out in config.defaults.toml are exactly
+// The [[role]] blocks written out in config.defaults.toml are exactly
 // the built-in defaults: loading that file and a config without any
 // pipeline keys (same home) yields the same kinds and roles.
 func TestDefaultsEqualExplicitConfig(t *testing.T) {
@@ -107,6 +107,8 @@ func TestDefaultsEqualExplicitConfig(t *testing.T) {
 		"codex-review":    {"shell", "shell", "always", "stdout", "codex-review.md", "", "", "codex", 40 * time.Minute},
 		"claude-simplify": {"claude", "session", "first", "file", "claude-simplify.md", "claude-simplify.md", "claude-simplify.md", "claude", 40 * time.Minute},
 		"claude-judge":    {"claude", "session", "always", "file", "claude-judge.json", "judge-initial.md", "judge-rereview.md", "claude", 90 * time.Minute},
+		// A fix role has no runs and no re-review prompt (its prompt serves both).
+		"claude-fix": {"claude", "session", "", "file", "claude-fix.md", "fix.md", "fix.md", "claude", 60 * time.Minute},
 	}
 	for _, r := range explicit.Roles {
 		x := want[r.Name]
@@ -141,7 +143,7 @@ func TestDefaultsValidate(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if got := roleNames(Defaults().Roles); !slices.Equal(got, []string{"codex-judge", "claude-review", "codex-review", "claude-simplify", "claude-judge"}) {
+	if got := roleNames(Defaults().Roles); !slices.Equal(got, []string{"codex-judge", "claude-review", "codex-review", "claude-simplify", "claude-judge", "claude-fix"}) {
 		t.Fatalf("Defaults roles = %v", got)
 	}
 	// A Config built without Kinds/Roles falls back to the defaults.
@@ -157,7 +159,7 @@ func TestDefaultsValidate(t *testing.T) {
 func validPipelineConfig() *Config {
 	cfg := Defaults()
 	cfg.Herdr.Socket = "/tmp/herdr.sock"
-	cfg.Identities = []Identity{{Name: "z", Kind: "gh", Login: "z"}}
+	cfg.Identities = []Identity{{Name: "z", Kind: "gh", Login: "z"}, {Name: "me", Kind: "gh", Login: "me"}} // me: the built-in claude-fix's
 	cfg.Watches = []Watch{{Owner: "acme", Include: []string{"*"}, Identity: "z", PollIdentity: "z"}}
 	return cfg
 }
@@ -218,7 +220,7 @@ func TestValidatePipeline(t *testing.T) {
 		"agent command":      {func(c *Config) { role(c, "claude-review").Command = "ls" }, "command is for shell roles only"},
 		"agent tool":         {func(c *Config) { role(c, "claude-review").Tool = "codex" }, "tool is for shell roles only"},
 		"model without args": {add(Role{Name: "droid-review", Kind: "droid", Prompt: "claude-review.md", Model: "x"}), "has no model args"},
-		"skill on reviewer":  {func(c *Config) { role(c, "claude-review").Skill = "/s.md" }, "skill is for judges only"},
+		"skill on reviewer":  {func(c *Config) { role(c, "claude-review").Skill = "/s.md" }, "skill is for judges and fix roles only"},
 		"output path":        {func(c *Config) { role(c, "claude-review").Output = "a/b.md" }, "plain file name"},
 		"duplicate output":   {func(c *Config) { role(c, "claude-review").Output = "codex-review.md" }, "already written by"},
 		"zero timeout":       {func(c *Config) { role(c, "claude-review").Timeout = Duration{-time.Second} }, "timeout must be positive"},
@@ -770,7 +772,7 @@ identity = "z"
 roles = ["judge", "droid-review"]
 `,
 	})
-	if got := roleNames(cfg.Roles); !slices.Equal(got, []string{"codex-judge", "claude-review", "codex-review", "claude-simplify", "claude-judge", "droid-review"}) {
+	if got := roleNames(cfg.Roles); !slices.Equal(got, []string{"codex-judge", "claude-review", "codex-review", "claude-simplify", "claude-judge", "claude-fix", "droid-review"}) {
 		t.Fatalf("roles = %v", got)
 	}
 	cr, _ := cfg.RoleByNameOrAlias(nil, "claude-review")

@@ -1,6 +1,6 @@
 // Package prompts embeds magnum's default prompt templates: the files of
 // this directory that config.Role prompt names refer to (judge-*.md,
-// claude-*.md, codex-*.sh), model-fallback.md, the continuation after a
+// claude-*.md, codex-*.sh, fix.md, the fix role's), model-fallback.md, the continuation after a
 // session switched models on a per-model limit, triage.md, the question a
 // cheap model answers about which reviewers a small diff needs, retro.md,
 // the classification of other reviewers' comments a retro asks for
@@ -21,7 +21,7 @@ import (
 	"sort"
 )
 
-//go:embed judge-*.md claude-*.md codex-*.sh model-fallback.md triage.md retro.md notes-curate.md skill-edit.md
+//go:embed judge-*.md claude-*.md codex-*.sh fix.md model-fallback.md triage.md retro.md notes-curate.md skill-edit.md
 var embedded embed.FS
 
 // Names lists the embedded default prompts, sorted.
