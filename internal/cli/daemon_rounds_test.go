@@ -172,3 +172,44 @@ func TestARunningSkillGateRefusesAStop(t *testing.T) {
 	}
 	actContains(t, errb.String(), "1 background job(s) in flight: skill gate of proposal 3 (since "+clock+")", "a skill gate runs again")
 }
+
+// A fix loop whose fixer works is background work too: the PR stays
+// reviewed while it runs, so a stop counted nothing and a drain restarted
+// mid-fix, losing the loop. A stop is refused and names it; a loop waiting
+// for its re-review is not counted (the round is, once it runs).
+func TestARunningFixRefusesAStop(t *testing.T) {
+	c, _, errb := bareContext(t)
+	if err := c.Layout.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	st := storetest.Open(t, c.Layout.DB())
+	ctx := context.Background()
+	started := time.Now().Add(-4 * time.Minute)
+	_, fixing := inspSeedPR(t, st, "talkable/talkable", 7, store.PRReviewed, nil)
+	_, reviewing := inspSeedPR(t, st, "talkable/talkable", 8, store.PRRereviewPending, nil)
+	for pr, s := range map[int64]engine.FixState{
+		fixing.ID:    {Cycle: 2, Cap: 3, Phase: engine.FixPhaseFixing, StartedAt: started},
+		reviewing.ID: {Cycle: 1, Cap: 3, Phase: engine.FixPhaseReviewing, StartedAt: started},
+	} {
+		b, _ := json.Marshal(s)
+		if err := st.SetKV(ctx, engine.KVPRFix(pr), string(b)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	running, err := c.activeRounds(ctx)
+	clock := inspClock(time.Now(), started)
+	if err != nil || running.String() != "fix of talkable/talkable#7 (cycle 2, since "+clock+")" {
+		t.Fatalf("in flight %q, err %v", running, err)
+	}
+	if c.refuseWhileRoundsRun("daemon-restart", false) {
+		t.Fatal("a fix in flight must refuse")
+	}
+	actContains(t, errb.String(), "1 background job(s) in flight: fix of talkable/talkable#7 (cycle 2, since "+clock+")",
+		"a fix loop ends and needs you", "--drain")
+	if err := st.DeleteKV(ctx, engine.KVPRFix(fixing.ID)); err != nil {
+		t.Fatal(err)
+	}
+	if running, err := c.activeRounds(ctx); err != nil || !running.none() {
+		t.Fatalf("after the fix ended: %q, %v", running, err)
+	}
+}

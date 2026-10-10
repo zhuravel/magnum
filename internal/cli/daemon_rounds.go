@@ -75,11 +75,12 @@ func daemonGate(c *Context, a *app.App) func(*engine.Deps) {
 
 // inFlight is what stopping the daemon now would cut short: the review
 // rounds in flight and the background work running (the notes curation,
-// engine.KVNotesCurating, the retro, engine.KVRetroRunning, and the skill
-// edit, engine.KVLearnEditing).
+// engine.KVNotesCurating, the retro, engine.KVRetroRunning, the skill
+// edit, engine.KVLearnEditing, and the fix jobs whose fixer works,
+// engine.KVPRFix).
 type inFlight struct {
 	rounds []string // "owner/repo#N (state)"
-	work   []string // "notes curation of owner/repo (since 15:04)", "retro (since 15:04)", "skill edit (since 15:04)"
+	work   []string // "notes curation of owner/repo (since 15:04)", "retro (since 15:04)", "skill edit (since 15:04)", "fix of owner/repo#N (cycle 1, since 15:04)"
 }
 
 func (f inFlight) none() bool { return len(f.rounds) == 0 && len(f.work) == 0 }
@@ -109,7 +110,8 @@ func (f inFlight) cutShort() string {
 		parts = append(parts, "abandons the rounds (their agents keep running, the rounds start over later)")
 	}
 	if len(f.work) > 0 {
-		parts = append(parts, "cuts the background work short (a notes curation or a skill edit proposes nothing, a retro or a skill gate runs again)")
+		parts = append(parts, "cuts the background work short (a notes curation or a skill edit proposes nothing, a retro or a skill gate runs again, "+
+			"a fix loop ends and needs you)")
 	}
 	return "stopping the daemon now " + strings.Join(parts, " and ")
 }
@@ -198,8 +200,8 @@ func (c *Context) gateRunning(ctx context.Context) (string, error) {
 // the skill gate running from their kv marks: "notes curation of
 // owner/repo (since 15:04)", "retro (since 15:04)", "skill edit (since
 // 15:04)" (or "revert of skill version 2 (since 15:04)", which runs in the
-// edit's slot), "skill gate of proposal 3 (since 15:04)". A mark it cannot
-// parse still counts.
+// edit's slot), "skill gate of proposal 3 (since 15:04)"; then the fix jobs
+// whose fixer works (fixesAtWork). A mark it cannot parse still counts.
 func backgroundWork(ctx context.Context, db *sql.DB) ([]string, error) {
 	rows, err := db.QueryContext(ctx, `SELECT key, value FROM kv WHERE key IN (?, ?, ?, ?) AND value != '' ORDER BY key`,
 		engine.KVNotesCurating, engine.KVRetroRunning, engine.KVLearnEditing, engine.KVLearnGating)
@@ -244,6 +246,48 @@ func backgroundWork(ctx context.Context, db *sql.DB) ([]string, error) {
 		}
 		if !since.IsZero() {
 			what += " (since " + inspClock(now, since) + ")"
+		}
+		out = append(out, what)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	fixes, err := fixesAtWork(ctx, db, now)
+	return append(out, fixes...), err
+}
+
+// fixesAtWork lists the fix loops whose fixer works, from their
+// engine.KVPRFix rows in phase fixing: "fix of owner/repo#N (cycle 2, since
+// 15:04)", since the loop's start. The fix job keeps the PR reviewed, so no
+// round state shows it, and a daemon stopped meanwhile ends the loop as
+// needs attention. A loop waiting for its re-review is not listed (its
+// round is, once it runs), and a row that cannot be read still counts.
+func fixesAtWork(ctx context.Context, db *sql.DB, now time.Time) ([]string, error) {
+	rows, err := db.QueryContext(ctx, `SELECT k.value, r.owner, r.name, p.number FROM kv k
+		JOIN prs p ON k.key = 'pr.' || p.id || '.fix' JOIN repos r ON r.id = p.repo_id
+		WHERE k.key GLOB 'pr.*.fix' ORDER BY r.owner, r.name, p.number`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var value, owner, name string
+		var n int
+		if err := rows.Scan(&value, &owner, &name, &n); err != nil {
+			return nil, err
+		}
+		what := fmt.Sprintf("fix of %s/%s#%d", owner, name, n)
+		var st engine.FixState
+		if json.Unmarshal([]byte(value), &st) == nil {
+			if st.Phase != engine.FixPhaseFixing {
+				continue
+			}
+			what += fmt.Sprintf(" (cycle %d", st.Cycle)
+			if !st.StartedAt.IsZero() {
+				what += ", since " + inspClock(now, st.StartedAt)
+			}
+			what += ")"
 		}
 		out = append(out, what)
 	}
