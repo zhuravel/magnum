@@ -466,7 +466,7 @@ func verbFix(verb string, err error) error {
 		fix = "nothing to release: magnum holds no slot for it"
 	case "abort":
 		fix = "nothing to abort: magnum has no review of it"
-	case "approve", "request-changes":
+	case "approve", "request-changes", "fix":
 		fix = fmt.Sprintf("magnum has not reviewed it: `magnum review %s` reviews it first (a forced round)", nir.ref)
 	case "open", "watch":
 		fix = fmt.Sprintf("magnum has no panes for it: `magnum review %s` starts a review (a forced round) that opens them", nir.ref)

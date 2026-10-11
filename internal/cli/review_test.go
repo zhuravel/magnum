@@ -804,6 +804,7 @@ func TestVerbsOnAPRNotInTheRegistryNameTheirOwnFix(t *testing.T) {
 		"abort":           "fix: nothing to abort: magnum has no review of it",
 		"approve":         "fix: magnum has not reviewed it: `magnum review 9` reviews it first (a forced round)",
 		"request-changes": "fix: magnum has not reviewed it: `magnum review 9` reviews it first (a forced round)",
+		"fix":             "fix: magnum has not reviewed it: `magnum review 9` reviews it first (a forced round)",
 		"open":            "fix: magnum has no panes for it: `magnum review 9` starts a review (a forced round) that opens them",
 	} {
 		h.errb.Reset()

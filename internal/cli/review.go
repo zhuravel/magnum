@@ -643,6 +643,29 @@ type reviewFollower struct {
 	judgeRun   bool // the followed round created its judge run
 	focused    bool
 	focusTries int
+
+	// The follower of a fix loop (fix.go) is this one with its own end: verb
+	// names its command in errors ("" = review), goesOn what it says when it
+	// stops following ("" = the round goes on), and end replaces completion.
+	verb, goesOn string
+	end          func(ctx context.Context, pr store.PR) (code int, done bool)
+}
+
+// cmd is the command the follower serves.
+func (f *reviewFollower) cmd() string { return cmp.Or(f.verb, "review") }
+
+// stopSentence is what the follower says it leaves running when it stops
+// following: the round (`magnum review --wait` follows it again).
+func (f *reviewFollower) stopSentence() string {
+	return cmp.Or(f.goesOn, fmt.Sprintf("the round goes on (`magnum review %s --wait` follows it again)", f.label))
+}
+
+// complete checks whether what the follower follows is over.
+func (f *reviewFollower) complete(ctx context.Context, pr store.PR) (code int, done bool) {
+	if f.end != nil {
+		return f.end(ctx, pr)
+	}
+	return f.completion(ctx, pr)
 }
 
 // reviewFollow follows a round: the request reqID just queued (start is its
@@ -665,7 +688,7 @@ func (f *reviewFollower) run(ctx context.Context) int {
 		}
 		pr, err := f.d.Store.PRByID(ctx, f.t.PR.ID)
 		if err != nil {
-			return cmdFail(f.c, "review", err)
+			return cmdFail(f.c, f.cmd(), err)
 		}
 		f.printState(pr)
 		f.printGate(ctx, pr)
@@ -673,16 +696,16 @@ func (f *reviewFollower) run(ctx context.Context) int {
 		if code, done := f.focusStep(ctx, pr); done {
 			return code
 		}
-		if code, done := f.completion(ctx, pr); done {
+		if code, done := f.complete(ctx, pr); done {
 			return f.finish(code, pr)
 		}
 		if !deadline.IsZero() && !f.d.now().Before(deadline) {
 			f.out.Error = fmt.Sprintf("still following %s after %s", f.label, f.o.timeout)
-			fmt.Fprintf(f.c.Stderr, "%s: stopped following after %s; the round goes on (`magnum review %s --wait` follows it again)\n", f.label, f.o.timeout, f.label)
+			fmt.Fprintf(f.c.Stderr, "%s: stopped following after %s; %s\n", f.label, f.o.timeout, f.stopSentence())
 			return f.finish(1, pr)
 		}
 		if err := f.d.sleep(ctx, f.d.Poll); err != nil {
-			fmt.Fprintf(f.c.Stderr, "stopped following; the round goes on (`magnum review %s --wait` follows it again)\n", f.label)
+			fmt.Fprintf(f.c.Stderr, "stopped following; %s\n", f.stopSentence())
 			return f.finish(130, pr)
 		}
 	}
@@ -718,7 +741,7 @@ func (f *reviewFollower) pollRequest(ctx context.Context) (code int, done bool) 
 	}
 	req, err := f.d.Store.RequestByID(ctx, f.reqID)
 	if err != nil {
-		return cmdFail(f.c, "review", err), true
+		return cmdFail(f.c, f.cmd(), err), true
 	}
 	switch req.State {
 	case store.RequestFailed:
