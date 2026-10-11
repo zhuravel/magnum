@@ -43,6 +43,8 @@ const (
 	actUnmute
 	actUnapprove
 	actSnooze
+	actFix
+	actFixOff
 )
 
 // boardSnooze is how long the board's z snoozes a PR.
@@ -74,14 +76,16 @@ var rowActDefs = [...]rowActDef{
 	actUnmute:         {"U", "unmute", "unmute", "unmute"},
 	actUnapprove:      {"D", "withdraw approval", "withdraw", "unapprove"},
 	actSnooze:         {"z", "snooze 2h", "snooze", "snooze"},
+	actFix:            {"f", "fix findings", "fix", "fix"},
+	actFixOff:         {"F", "fix off", "fix off", "fix --off"},
 }
 
 // The actions each screen offers, in the order its menu (and the card) lists
 // them.
 var (
-	boardActs = []rowAct{actReview, actFresh, actSimplify, actAbort, actIgnore, actApprove, actRequestChanges, actUnapprove,
+	boardActs = []rowAct{actReview, actFresh, actSimplify, actFix, actFixOff, actAbort, actIgnore, actApprove, actRequestChanges, actUnapprove,
 		actOpen, actBrowser, actTracker, actPin, actUnpin, actRelease, actMute, actUnmute, actSnooze}
-	dashActs = []rowAct{actReview, actFresh, actSimplify, actAbort, actIgnore,
+	dashActs = []rowAct{actReview, actFresh, actSimplify, actFix, actFixOff, actAbort, actIgnore,
 		actOpen, actBrowser, actPin, actUnpin, actRelease, actMute, actUnmute}
 )
 
@@ -156,6 +160,10 @@ type actRow struct {
 	// flagged, or the screen does not know): the review keys refuse it, as
 	// `magnum review` does.
 	flag string
+	// fixOff is the PR's opt-out of autofix (PRBoardRow.FixOff; false: not
+	// switched out, or the screen does not know: only the board does), which
+	// F toggles.
+	fixOff bool
 
 	// keys are the screen's keys where they differ from rowActDefs (the
 	// picker's); an action missing from it there has no key.
@@ -275,6 +283,20 @@ func actionRefusal(a rowAct, r actRow) string {
 			return l + " is already ignored" + r.orKey(actUnmute, " (%k stops ignoring it)")
 		case r.merged() && !r.running() && !r.queued() && !r.paused():
 			return l + " is merged: nothing to ignore"
+		}
+	case actFix: // the daemon decides the rest: whose PR it is, a loop already running, the slot
+		switch f := r.findings; {
+		case !r.verdicts:
+		case f == nil:
+			return "magnum has not reviewed this PR: nothing to fix"
+		case r.merged() || r.closed() || r.ended():
+			return l + " is " + cmp.Or(r.ghWord(), r.state) + ": nothing to fix"
+		case f.SHA != "" && r.head != "" && !sameSHA(r.head, f.SHA):
+			return l + ": the head moved since magnum reviewed " + textx.ShortSHA(f.SHA) + r.orKey(actReview, ": review again first (%k)")
+		case f.Counts[0]+f.Counts[1]+f.Counts[2]+f.Counts[3] == 0:
+			return l + ": magnum's review of " + textx.ShortSHA(f.SHA) + " found nothing to fix"
+		case r.running():
+			return l + ": round in progress (" + stateLabel(r.state) + ")" + r.orKey(actAbort, "; %k kills it")
 		}
 	case actApprove, actRequestChanges:
 		verb := map[bool]string{true: "approve on", false: "request changes on"}[a == actApprove]
@@ -400,6 +422,13 @@ func actionQuestion(a rowAct, r actRow) string {
 			return unmuteIgnoredQuestion(l)
 		}
 		return muteQuestion(l, false)
+	case actFix:
+		return "Fix the findings of " + l + " as you?"
+	case actFixOff:
+		if r.fixOff {
+			return "Autofix " + l + " again?"
+		}
+		return "Leave " + l + "'s findings to you (no autofix)?"
 	case actSnooze:
 		if r.snoozed() {
 			return "Lift the snooze of " + l + " (until " + untilClock(r.snoozedUntil, r.now) + "): automatic reviews start again?"
@@ -469,6 +498,10 @@ func actionLabel(a rowAct, r actRow) string {
 	case actSnooze:
 		if r.snoozed() {
 			return "lift snooze"
+		}
+	case actFixOff:
+		if r.fixOff {
+			return "fix on"
 		}
 	}
 	return rowActDefs[a].label
@@ -544,6 +577,16 @@ func actionRun(a rowAct, r actRow) (what string, fn actionFunc) {
 		}
 		return what, func(ctx context.Context, act DashboardActions) (ActionResult, error) {
 			return act.Snooze(ctx, target, boardSnooze)
+		}
+	case actFix:
+		return what, on(DashboardActions.Fix)
+	case actFixOff:
+		off := !r.fixOff
+		if !off {
+			what = "fix --on " + target
+		}
+		return what, func(ctx context.Context, act DashboardActions) (ActionResult, error) {
+			return act.FixOff(ctx, target, off)
 		}
 	}
 	return what, unknownAction(a)
@@ -700,7 +743,7 @@ func boardActRow(r PRBoardRow, label string, now time.Time) actRow {
 		pinned: r.Pinned, pinKnown: true, muted: r.Muted || normState(r.State) == "ignored", mutedKnown: true,
 		inSlot: r.Slot != "", slotKnown: true, mergedUnreviewed: r.MergedUnreviewed, flagDismissed: r.FlagDismissed,
 		auto: r.AutoApproved, autoKnown: true, snoozedUntil: r.SnoozedUntil, releaseAfter: r.ReleaseAfter, now: now,
-		needsMe: r.NeedsMe, approveAs: r.ApproveAs, flag: r.CodexFlag}
+		needsMe: r.NeedsMe, approveAs: r.ApproveAs, flag: r.CodexFlag, fixOff: r.FixOff}
 	if r.LastReview != nil {
 		row.reviewed = r.LastReview.CommitSHA
 	}

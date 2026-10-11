@@ -127,6 +127,15 @@ func (f *fakeActions) RequestChanges(_ context.Context, ref string) (ActionResul
 func (f *fakeActions) Unapprove(_ context.Context, ref string) (ActionResult, error) {
 	return f.record("unapprove " + ref)
 }
+func (f *fakeActions) Fix(_ context.Context, ref string) (ActionResult, error) {
+	return f.record("fix " + ref)
+}
+func (f *fakeActions) FixOff(_ context.Context, ref string, off bool) (ActionResult, error) {
+	if off {
+		return f.record("fix --off " + ref)
+	}
+	return f.record("fix --on " + ref)
+}
 func (f *fakeActions) Ignore(_ context.Context, ref string) (ActionResult, error) {
 	return f.record("ignore " + ref)
 }

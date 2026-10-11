@@ -358,11 +358,13 @@ func TestBoardRightClickMenu(t *testing.T) {
 		"approve": false, "request changes": false, // the fixture has no findings for #11920
 		"withdraw approval": false, // nor an approval magnum posted as the operator
 		"snooze 2h":         true,
+		"fix findings":      false, // nor a review to fix
+		"fix off":           true,
 	}
 	if got := menuState(m.menuItems()); !maps.Equal(got, want) {
 		t.Errorf("menu of #11920:\n got %v\nwant %v", got, want)
 	}
-	if len(m.menuItems()) != 19 {
+	if len(m.menuItems()) != 21 {
 		t.Errorf("%d items", len(m.menuItems()))
 	}
 
@@ -608,7 +610,7 @@ func TestDashboardMouse(t *testing.T) {
 	want := map[string]bool{
 		"review": false, "fresh review": false, "simplify review": false, "kill review": false, "ignore": false,
 		"open pane": false, "browser": false, "pin": true, "unpin": false, "release": true,
-		"mute": false, "unmute": false, "reset column widths": false,
+		"mute": false, "unmute": false, "reset column widths": false, "fix findings": false, "fix off": false,
 	}
 	if !m.menu.open || m.cursor != 1 || !maps.Equal(got, want) {
 		t.Fatalf("empty slot menu (open %v cursor %d):\n got %v\nwant %v", m.menu.open, m.cursor, got, want)

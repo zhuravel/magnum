@@ -18,10 +18,10 @@ import (
 )
 
 // screenActions runs the keys of the dashboard and the PR board through the
-// act commands' code paths (reviewMain, openMain, targetMain, stopMain, attentionMain). What they print is
-// captured and returned as text, with the daemon requests they queued:
-// nothing may write to the terminal while the screen owns it. The act
-// dependencies are built on the first action.
+// act commands' code paths (reviewMain, openMain, targetMain, stopMain,
+// fixMain, attentionMain). What they print is captured and returned as text,
+// with the daemon requests they queued: nothing may write to the terminal
+// while the screen owns it. The act dependencies are built on the first action.
 type screenActions struct {
 	mu   sync.Mutex // one action at a time
 	c    *Context   // the caller's Context printing into all and errs
@@ -211,6 +211,24 @@ func (s *screenActions) RequestChanges(ctx context.Context, ref string) (tui.Act
 func (s *screenActions) Unapprove(ctx context.Context, ref string) (tui.ActionResult, error) {
 	return s.do(ctx, "unapprove", func(ctx context.Context, c *Context, d *actDeps) int {
 		return unapproveMain(ctx, c, d, ref, unapproveOpts{yes: true})
+	})
+}
+
+// Fix has the PR's findings fixed as the operator (magnum fix): the daemon
+// starts the loop and answers with its first line, and the loop's request goes
+// back for the screen to follow, since the screen never waits for a loop; the
+// screen asked first.
+func (s *screenActions) Fix(ctx context.Context, ref string) (tui.ActionResult, error) {
+	return s.do(ctx, "fix", func(ctx context.Context, c *Context, d *actDeps) int {
+		return fixMain(ctx, c, d, ref, fixOpts{yes: true})
+	})
+}
+
+// FixOff takes the PR out of autofix (off) or puts it back (magnum fix --off
+// and --on); the screen asked first.
+func (s *screenActions) FixOff(ctx context.Context, ref string, off bool) (tui.ActionResult, error) {
+	return s.do(ctx, "fix", func(ctx context.Context, c *Context, d *actDeps) int {
+		return fixMain(ctx, c, d, ref, fixOpts{yes: true, off: off, on: !off})
 	})
 }
 

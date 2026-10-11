@@ -209,6 +209,13 @@ type DashboardActions interface {
 	// Unapprove withdraws the approval magnum posted as the operator and
 	// stops it approving the PR as them (magnum unapprove).
 	Unapprove(ctx context.Context, ref string) (ActionResult, error)
+	// Fix starts a fix loop on the operator's own PR: a fixer agent fixes
+	// the findings of magnum's review and pushes as them (magnum fix); the
+	// request is followed on the screen, not waited for. FixOff takes the PR
+	// out of autofix (off) or puts it back (magnum fix --off / --on); both
+	// start no loop.
+	Fix(ctx context.Context, ref string) (ActionResult, error)
+	FixOff(ctx context.Context, ref string, off bool) (ActionResult, error)
 	Attention(ctx context.Context) (ActionResult, error)
 	OpenBrowser(ctx context.Context, url string) error
 	// Requests re-reads the requests ids name; one the registry no longer
@@ -1306,6 +1313,8 @@ func dashboardKeys(judge string) []hint {
 		{"r", "review now (asks y/N)"},
 		{"R", "fresh review in new agent sessions (asks y/N)"},
 		{"i", "review with /simplify (asks y/N)"},
+		{"f", "fix the PR's findings as you (asks y/N)"},
+		{"F", "leave its findings to you: no autofix (asks y/N)"},
 		{"y", "answer yes; any other key, enter too, cancels"},
 		{"p / u", "pin / unpin (the slot when it holds no PR)"},
 		{"x", "release (asks y/N)"},

@@ -41,6 +41,15 @@ func TestActionRefusalSaysWhyBeforeAsking(t *testing.T) {
 			"talkable#5: the head moved since magnum reviewed abcdef1: review again first (r)"},
 		{"approve unreviewed", actApprove, func(r *PRBoardRow) { r.Findings = nil }, "magnum has not reviewed this PR: nothing to approve on"},
 		{"approve merged", actApprove, func(r *PRBoardRow) { r.GHState, r.State = "MERGED", "closed" }, "talkable#5 is merged: nothing to approve on"},
+		{"fix unreviewed", actFix, func(r *PRBoardRow) { r.Findings = nil }, "magnum has not reviewed this PR: nothing to fix"},
+		{"fix merged", actFix, func(r *PRBoardRow) { r.GHState, r.State = "MERGED", "closed" }, "talkable#5 is merged: nothing to fix"},
+		{"fix closed", actFix, func(r *PRBoardRow) { r.GHState, r.State = "CLOSED", "released" }, "talkable#5 is closed: nothing to fix"},
+		{"fix after the head moved", actFix, func(r *PRBoardRow) { r.HeadSHA = "9999999aaa" },
+			"talkable#5: the head moved since magnum reviewed abcdef1: review again first (r)"},
+		{"fix a review without findings", actFix, func(r *PRBoardRow) {
+			r.Findings = &FindingsInfo{Verdict: "clean", Posted: "APPROVE", SHA: "abcdef1234"}
+		}, "talkable#5: magnum's review of abcdef1 found nothing to fix"},
+		{"fix while a round runs", actFix, func(r *PRBoardRow) { r.State = "reviewing" }, "talkable#5: round in progress (reviewing); K kills it"},
 		{"review while a round runs", actReview, func(r *PRBoardRow) { r.State = "reviewing" }, "talkable#5: round in progress (reviewing); K kills it"},
 		{"fresh review while claiming", actFresh, func(r *PRBoardRow) { r.State = "claiming" }, "talkable#5: round in progress (claiming); K kills it"},
 		{"simplify while verifying", actSimplify, func(r *PRBoardRow) { r.State = "verifying" }, "talkable#5: round in progress (verifying); K kills it"},
@@ -82,6 +91,10 @@ func TestActionRefusalSaysWhyBeforeAsking(t *testing.T) {
 		{actUnmute, func(r *PRBoardRow) { r.GHState, r.State, r.Muted, r.FlagDismissed = "MERGED", "released", true, true }},
 		{actIgnore, func(r *PRBoardRow) { r.GHState, r.State = "MERGED", "queued" }}, // its post-merge review waits
 		{actApprove, nil},
+		{actFix, nil},
+		{actFixOff, nil},
+		{actFixOff, func(r *PRBoardRow) { r.FixOff = true }},
+		{actFixOff, func(r *PRBoardRow) { r.Findings = nil }}, // the opt-out needs no review
 		{actRelease, nil},
 		{actReview, func(r *PRBoardRow) { r.GHState, r.State, r.HeadSHA = "MERGED", "closed", "fedcba9876" }}, // post-merge
 	} {
@@ -394,7 +407,7 @@ func TestMenusCardAndHintsComeFromTheTable(t *testing.T) {
 		t.Errorf("hints %v", got)
 	}
 	m, _, _ := newBoard(t, 220, 24, PRBoardOptions{})
-	mustContain(t, viewOf(m), "r review · R fresh · i simplify · o open · b browser · t tracker · p/u pin · x release")
+	mustContain(t, viewOf(m), "r review · R fresh · i simplify · f fix · o open · b browser · t tracker · p/u pin · x release")
 	d, _, _ := newDash(t, 220, 50)
 	mustContain(t, viewOf(d), "enter open · r review · p/u pin · x release · a attention · b browser")
 }

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -47,4 +48,151 @@ func TestTheBoardCellReadsFixing(t *testing.T) {
 	if title := ansi.Strip(p.titleCell(fixing).render(nil)); strings.Contains(title, "fix off") {
 		t.Errorf("a PR with autofix on: title cell = %q", title)
 	}
+}
+
+// fixBoard is a board of one reviewed PR (talkable#5, one finding) edited by
+// edit, with the cursor on it.
+func fixBoard(t *testing.T, edit func(r *PRBoardRow)) (prBoardModel, *fakeActions) {
+	t.Helper()
+	m, _, act := newBoard(t, 170, 40, PRBoardOptions{})
+	m, _ = send(t, m, prbDataMsg{rows: []PRBoardRow{actPR(edit)}})
+	return m, act
+}
+
+// f asks before it has the PR's findings fixed, as you; only y sends the
+// request, and any other key (enter too) cancels.
+func TestFAsksBeforeFixing(t *testing.T) {
+	const want = "Fix the findings of talkable#5 as you?"
+	m, act := fixBoard(t, nil)
+	m, cmd := send(t, m, keyMsg("f"))
+	if hasMsg[actionDoneMsg](execCmd(t, cmd)) || len(act.calls) != 0 {
+		t.Fatalf("f alone ran %v", act.calls)
+	}
+	if m.confirm == nil || m.confirm.question != want {
+		t.Fatalf("f asked %+v, want %q", m.confirm, want)
+	}
+	mustContain(t, viewOf(m), want+" y/N", "y confirms, any other key cancels")
+	for _, no := range []string{"n", "esc", "enter", "x"} {
+		if c, _ := send(t, m, keyMsg(no)); len(act.calls) != 0 || c.confirm != nil {
+			t.Errorf("%s acted or left the question up: %v", no, act.calls)
+		}
+	}
+	m, follow := boardAct(t, m, "y")
+	if !slices.Equal(act.calls, []string{"fix talkable/talkable#5"}) || !hasMsg[prbDataMsg](follow) {
+		t.Errorf("y called %v (refresh %v), want the fix of the row's ref", act.calls, hasMsg[prbDataMsg](follow))
+	}
+}
+
+// f says, before asking anything, why there is nothing to fix; the daemon's
+// refusal is not the first the user sees.
+func TestFRefusesBeforeAsking(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		edit func(r *PRBoardRow)
+		want string
+	}{
+		{"unreviewed", func(r *PRBoardRow) { r.Findings = nil }, "magnum has not reviewed this PR: nothing to fix"},
+		{"no findings", func(r *PRBoardRow) {
+			r.Findings = &FindingsInfo{Verdict: "clean", Posted: "APPROVE", SHA: "abcdef1234"}
+		},
+			"talkable#5: magnum's review of abcdef1 found nothing to fix"},
+	} {
+		m, act := fixBoard(t, c.edit)
+		m, _ = send(t, m, keyMsg("f"))
+		if m.confirm != nil || len(act.calls) != 0 {
+			t.Errorf("%s: f asked %+v, ran %v", c.name, m.confirm, act.calls)
+		}
+		mustContain(t, viewOf(m), c.want)
+	}
+}
+
+// F takes a PR out of autofix and puts it back: the label, the question and
+// the call follow the row's flag, and only y sends it.
+func TestShiftFTogglesFixOff(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		edit  func(r *PRBoardRow)
+		label string
+		ask   string
+		call  string
+	}{
+		{"autofix on", nil, "fix off", "Leave talkable#5's findings to you (no autofix)?", "fix --off talkable/talkable#5"},
+		{"autofix off", func(r *PRBoardRow) { r.FixOff = true }, "fix on", "Autofix talkable#5 again?", "fix --on talkable/talkable#5"},
+		{"autofix on, unreviewed", func(r *PRBoardRow) { r.Findings = nil }, "fix off", "Leave talkable#5's findings to you (no autofix)?",
+			"fix --off talkable/talkable#5"},
+	} {
+		m, act := fixBoard(t, c.edit)
+		var label string
+		for _, it := range m.menuItems() {
+			if it.key == "F" {
+				label = it.label
+				if !it.ok {
+					t.Errorf("%s: the menu dims F", c.name)
+				}
+			}
+		}
+		if label != c.label {
+			t.Errorf("%s: the menu entry of F reads %q, want %q", c.name, label, c.label)
+		}
+		m, cmd := send(t, m, keyMsg("F"))
+		if hasMsg[actionDoneMsg](execCmd(t, cmd)) || len(act.calls) != 0 {
+			t.Fatalf("%s: F alone ran %v", c.name, act.calls)
+		}
+		if m.confirm == nil || m.confirm.question != c.ask {
+			t.Fatalf("%s: F asked %+v, want %q", c.name, m.confirm, c.ask)
+		}
+		if want := c.call; m.confirm.what != want {
+			t.Errorf("%s: the action is named %q, want %q", c.name, m.confirm.what, want)
+		}
+		mustContain(t, viewOf(m), c.ask+" y/N")
+		if n, _ := send(t, m, keyMsg("enter")); n.confirm != nil || len(act.calls) != 0 {
+			t.Errorf("%s: enter acted or left the question up: %v", c.name, act.calls)
+		}
+		if _, follow := boardAct(t, m, "y"); !slices.Equal(act.calls, []string{c.call}) || !hasMsg[prbDataMsg](follow) {
+			t.Errorf("%s: y called %v, want %q", c.name, act.calls, c.call)
+		}
+	}
+}
+
+// The help, the card's actions and the right-click menu name both keys.
+func TestTheBoardNamesTheFixKeys(t *testing.T) {
+	m, _ := fixBoard(t, nil)
+	card, _ := send(t, m, keyMsg("enter"))
+	mustContain(t, viewOf(card), "f fix findings", "F fix off")
+	help, _ := send(t, m, keyMsg("?"))
+	mustContain(t, viewOf(help), "f / F", "fix findings as you / fix off or on (asks y/N)")
+	off, _ := fixBoard(t, func(r *PRBoardRow) { r.FixOff = true })
+	card, _ = send(t, off, keyMsg("enter"))
+	mustContain(t, viewOf(card), "F fix on")
+}
+
+// The dashboard asks the same questions and calls the same actions; it does
+// not know a PR's flag, so F there only takes a PR out of autofix.
+func TestDashboardFixKeysAsk(t *testing.T) {
+	data := dashData()
+	data.Queue[0].State, data.Queue[0].Next = "reviewed", "watching for new pushes"
+	for _, c := range []struct {
+		key, ask, call string
+	}{
+		{"f", "Fix the findings of talkable#7 as you?", "fix talkable#7"},
+		{"F", "Leave talkable#7's findings to you (no autofix)?", "fix --off talkable#7"},
+	} {
+		m, src, act := newDash(t, 220, 50)
+		m, _ = send(t, m, dashDataMsg{data: data})
+		m, cmd := send(t, m, keys("j", "j", c.key)...) // talkable#7, reviewed
+		if len(execCmd(t, cmd)) != 0 || len(act.calls) != 0 || m.confirm == nil || m.confirm.question != c.ask {
+			t.Fatalf("%s asked %+v (calls %v), want %q", c.key, m.confirm, act.calls, c.ask)
+		}
+		mustContain(t, viewOf(m), c.ask+" y/N")
+		if n, _ := send(t, m, keyMsg("enter")); n.confirm != nil || len(act.calls) != 0 {
+			t.Errorf("%s then enter acted or kept asking: %v", c.key, act.calls)
+		}
+		before := src.count()
+		if _, follow := dashAct(t, m, "y"); !slices.Equal(act.calls, []string{c.call}) || !hasMsg[dashDataMsg](follow) || src.count() != before+1 {
+			t.Errorf("%s then y called %v, want %q and a refresh", c.key, act.calls, c.call)
+		}
+	}
+	m, _, _ := newDash(t, 220, 50)
+	m, _ = send(t, m, keyMsg("?"))
+	mustContain(t, viewOf(m), "fix the PR's findings as you (asks y/N)", "no autofix (asks y/N)")
 }

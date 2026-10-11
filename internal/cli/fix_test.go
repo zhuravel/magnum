@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -9,6 +10,7 @@ import (
 	"github.com/zhuravel/magnum/internal/engine"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/store/storetest"
+	"github.com/zhuravel/magnum/internal/tui"
 )
 
 // fixAnswer is what the daemon answers a request that starts a loop.
@@ -748,5 +750,52 @@ func TestFixMainTakesTheScreensOptions(t *testing.T) {
 		if p.Off != o.off || p.On != o.on || p.Number != 5 {
 			t.Errorf("%+v: payload %+v", o, p)
 		}
+	}
+}
+
+// The board's f asks the daemon for a fix loop as the command does, without
+// asking again and without waiting for the loop: the answer and the queued
+// request go back to the screen, and F sends the opt-out or its undoing, the
+// daemon's refusal coming back as the error, without the command's prefix.
+func TestScreenFixAndFixOff(t *testing.T) {
+	h := newActHarness(t)
+	h.pid = 4242
+	h.seedPR("talkable/talkable", 5, store.PRReviewed)
+	h.onSleep = func(h *actHarness) { h.completePending(store.RequestDone, fixAnswer) }
+	acts := newScreenActions(h.c)
+	defer acts.Close()
+	ctx := context.Background()
+
+	res, err := acts.Fix(ctx, "talkable#5")
+	if err != nil {
+		t.Fatalf("fix: %v (%s)", err, h.errb.String())
+	}
+	if !strings.Contains(res.Text, fixAnswer) || len(res.Requests) != 1 || res.Requests[0].Kind != "fix" {
+		t.Errorf("fix returned %q with requests %+v, want the daemon's answer and the fix request", res.Text, res.Requests)
+	}
+	if _, err := acts.FixOff(ctx, "talkable#5", true); err != nil {
+		t.Fatalf("fix off: %v", err)
+	}
+	if _, err := acts.FixOff(ctx, "talkable#5", false); err != nil {
+		t.Fatalf("fix on: %v", err)
+	}
+	reqs := h.requests()
+	if len(reqs) != 3 {
+		t.Fatalf("%d requests queued, want 3: %+v", len(reqs), reqs)
+	}
+	for i, want := range []engine.FixPayload{{}, {Off: true}, {On: true}} {
+		p := actDecode[engine.FixPayload](t, reqs[i].Payload)
+		if reqs[i].Kind != engine.ReqFix || p.Off != want.Off || p.On != want.On || p.DryRun || p.Number != 5 {
+			t.Errorf("request %d: %s %+v, want the fix request with off=%v on=%v", i, reqs[i].Kind, p, want.Off, want.On)
+		}
+	}
+
+	h.onSleep = func(h *actHarness) { h.completePending(store.RequestFailed, "nothing to fix: no review on abc1234") }
+	res, err = acts.Fix(ctx, "talkable#5")
+	if err == nil || err.Error() != "nothing to fix: no review on abc1234" {
+		t.Fatalf("a refused fix returned %v, want the daemon's sentence", err)
+	}
+	if len(res.Requests) != 1 || res.Requests[0].State != tui.RequestFailed {
+		t.Errorf("a refused fix reported %+v, want the failed request", res.Requests)
 	}
 }

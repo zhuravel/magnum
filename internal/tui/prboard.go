@@ -1228,9 +1228,9 @@ func (m prBoardModel) hintLine(w int) string {
 	case prbDetail:
 		back, help := []hint{{"esc", "back"}}, []hint{{"?", "help"}}
 		left = m.st.fitHints(w,
-			withHints(back, []hint{{"j/k", "scroll"}}, actionHints(actReview, actFresh, actSimplify, actOpen, actBrowser, actTracker,
+			withHints(back, []hint{{"j/k", "scroll"}}, actionHints(actReview, actFresh, actSimplify, actFix, actOpen, actBrowser, actTracker,
 				actPin, actUnpin, actMute, actUnmute, actRelease, actAbort, actIgnore), help),
-			withHints(back, actionHints(actReview, actFresh, actSimplify, actOpen, actBrowser, actPin, actUnpin, actMute, actUnmute, actRelease), help),
+			withHints(back, actionHints(actReview, actFresh, actSimplify, actFix, actOpen, actBrowser, actPin, actUnpin, actMute, actUnmute, actRelease), help),
 			withHints(back, actionHints(actReview, actOpen, actBrowser), help),
 			withHints(back, help))
 	default:
@@ -1244,9 +1244,9 @@ func (m prBoardModel) hintLine(w int) string {
 		room := max(w-ansi.StringWidth(pos)-2, 10)
 		details := []hint{{"enter", "details"}}
 		sets := [][]hint{
-			withHints(details, actionHints(actReview, actFresh, actSimplify, actOpen, actBrowser, actTracker, actPin, actUnpin, actRelease),
+			withHints(details, actionHints(actReview, actFresh, actSimplify, actFix, actOpen, actBrowser, actTracker, actPin, actUnpin, actRelease),
 				[]hint{{"/", "filter"}, {"v", "view"}, {"O", "owner"}, {"s/S", "sort"}, {"tab", "overview"}, {logKey, "log"}, {"?", "help"}, {"q", "quit"}}),
-			withHints(details, actionHints(actReview, actFresh, actSimplify, actOpen, actBrowser, actPin, actUnpin, actRelease),
+			withHints(details, actionHints(actReview, actFresh, actSimplify, actFix, actOpen, actBrowser, actPin, actUnpin, actRelease),
 				[]hint{{"/", "filter"}, {"v", "view"}, {"s/S", "sort"}, {"tab", "overview"}, {"?", "help"}, {"q", "quit"}}),
 			withHints(details, actionHints(actReview, actOpen, actBrowser),
 				[]hint{{"/", "filter"}, {"v", "view"}, {"s", "sort"}, {"tab", "overview"}, {"?", "help"}, {"q", "quit"}}),

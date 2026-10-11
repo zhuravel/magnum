@@ -29,6 +29,8 @@ func TestEveryRowActionRunsItsOwnCall(t *testing.T) {
 		actUnmute:         "unmute talkable#7",
 		actUnapprove:      "unapprove talkable#7",
 		actSnooze:         "snooze talkable#7 2h0m0s",
+		actFix:            "fix talkable#7",
+		actFixOff:         "fix --off talkable#7",
 	}
 	if len(want) != len(rowActDefs) {
 		t.Fatalf("the test knows %d row actions, rowActDefs %d", len(want), len(rowActDefs))

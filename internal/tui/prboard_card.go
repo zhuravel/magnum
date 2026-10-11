@@ -41,7 +41,8 @@ func (p *prbPainter) helpContent(width int) []string {
 	})
 	acts := section("Act on the PR", []hint{
 		{"r", "review now (asks y/N); post-merge if merged"}, {"R", "fresh review in new agent sessions (asks y/N)"},
-		{"i", "review with /simplify (asks y/N)"}, {"o", "open the " + judgeName(p.judge) + " pane"},
+		{"i", "review with /simplify (asks y/N)"}, {"f / F", "fix findings as you / fix off or on (asks y/N)"},
+		{"o", "open the " + judgeName(p.judge) + " pane"},
 		{"b / t", "open the PR / its issue in the browser"}, {"p / u", "pin / unpin"}, {"M / U", "mute / unmute (asks y/N); merged: dismiss flag"},
 		{"x / z", "release (asks y/N) / snooze 2h or lift it"}, {"K", "kill the running or queued review (asks y/N)"},
 		{"I", "ignore: kill, mute, free slot; U undoes"}, {"A / C", "approve / request changes (asks y/N)"},
