@@ -232,8 +232,9 @@ timeout = "30m"                   # a curator turn that takes longer is abandone
 
 # The review pipeline ("a Procfile of agents"): [kinds.<name>] says how to drive an agent CLI, each
 # [[role]] is one agent (or shell command) of a review round, a [[watch]]'s `roles` picks the roles it
-# runs. Prompts are files in prompts_dir, loaded when the daemon starts (an edit takes effect at the next
-# `magnum daemon-restart`). prompts/README.md documents every key, the template variables
+# runs. Prompts are files in prompts_dir, loaded when the daemon starts, and so are the judge and fix skills,
+# which it copies (an edit takes effect at the next `magnum daemon-restart`). The fix role is the one role
+# that is no part of a round: the fix job runs it. prompts/README.md documents every key, the template variables
 # and examples (a droid or omp role, a watch with two roles). `magnum roles` prints the effective roles per
 # watch and `magnum roles --kinds` the kinds.
 
@@ -269,8 +270,11 @@ fix_role = "claude-fix"           # the fix role (fix = true) that fixes magnum'
                                   # (fix_role = "" there switches the job off for that watch)
 fix_cycles = 3                    # fix runs one fix loop may take (a fix, then the re-review it forces) before
                                   # the PR needs you; at least 1. [[watch]] may override
-autofix = "never"                 # never: a fix loop starts only when you ask for it; own: it also starts by
-                                  # itself after a review with findings on a PR one of your logins authored.
+autofix = "never"                 # never: a fix loop starts only when you ask for it (`magnum fix`, the board's f);
+                                  # own: it also starts by itself after a review with findings on a PR one of
+                                  # your logins authored, unless `magnum fix --off` took the PR out. Start by
+                                  # hand for a first week, then switch. Post the reviews as an App identity
+                                  # with own: the fixer's replies must not look like the reviewer's.
                                   # [[watch]] may override
 
 # Agent CLIs: codex, claude, droid and omp are built in (values below are their defaults); every key is
@@ -480,13 +484,19 @@ timeout = "90m"
 [[role]]
 name = "claude-fix"                   # the fixer of the fix job (`fix_role` above): never part of a review round,
 kind = "claude"                       # so a watch's roles do not list it. Its session is kept across fix runs like
-fix = true                            # a reviewer's (max_session_rounds = N starts a fresh conversation every N)
-identity = "me"                       # a gh [[identity]] of your own account: the fixer's pane gets that GitHub env,
-                                      # so it pushes to the PR's branch and answers the review's threads as you,
-                                      # not as the App that posted the review. Declare it in your config
+fix = true                            # a reviewer's, and has no max_session_rounds: a fix job is no round, so
+                                      # nothing counts rounds for it
+identity = "me"                       # the name of a kind = "gh" [[identity]] of your own account (an App is
+                                      # refused): the fixer's pane gets that GitHub env, so it pushes to the PR's
+                                      # branch and answers the review's threads as you, not as the App that posted
+                                      # the review. Declare an identity of that name in your config (`magnum init`
+                                      # names yours after your login), or set identity in a [[role]] block named
+                                      # claude-fix
 model = "opus"
 effort = "high"
-skill = "{{repo}}/skills/magnum-fix/SKILL.md"   # the fix skill; an absolute path points at your own
+skill = "{{repo}}/skills/magnum-fix/SKILL.md"   # the fix skill, copied at startup and embedded in the binary like the
+                                      # judge's (without a checkout: the binary's built-in copy). An absolute
+                                      # path points at your own
 prompt = "fix.md"
 output = "claude-fix.md"
 timeout = "60m"

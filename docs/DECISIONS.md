@@ -897,6 +897,37 @@ skill versions); people add theirs to the sections before it, at the end of the 
   a fresh session passes nothing. Rejected: answering the dialog from the observer (one more prompt to
   recognise, and the choice is never anything but the current directory) and the saved preference
   (`tui.resume_cwd` in the user's config.toml would also decide their own `codex resume`).
+- **The fix loop: magnum fixes its own findings on your PRs** (2026-10-11). Reviewing your own PR was a relay
+  with you as the only link between two agents that could talk through GitHub: a review, you typing a fix
+  skill into an agent's pane in your checkout, a push, the next review, for several cycles. `magnum fix
+  <pr>` (board key `f`) now starts a loop that magnum runs to its end. The fix job is not a pipeline role.
+  It reserves the PR, as a snooze or `magnum open` holds one, and runs the built-in role `claude-fix` in the
+  PR's own slot, which already holds the reviewed head, the gems and the databases. The role is a class
+  beside the judge (`fix = true`). Every round leaves it out and `[pipeline] fix_role` names it (a
+  `[[watch]]` may override). Its `identity` key, declared before but never read, now sets the GitHub
+  environment of its pane, and validation requires a `gh` identity there, so the fixer pushes and replies as
+  the operator and not as the App that posted the review. The fixer follows `skills/magnum-fix/SKILL.md`,
+  which ships in the repository and in the binary, is copied at startup like the judge's, and is never
+  edited by the skill editor. The skill fixes a finding that nets 3 or more (pros minus cons on an open
+  scale), replies to the optional ones it declines, and leaves the blocking ones it declines, and any it
+  cannot decide, to the operator under `Needs you` with no reply. A push gets a forced re-review, which
+  skips the throttle and the daily cap. A loop ends clean, with replies only, or as needs attention: findings
+  left to the operator, the cap `fix_cycles` (3), or a failed run. The loop's state is a registry row, so the
+  PR stays `reviewed` and dispatch, `magnum review` and a second loop see the row and wait or refuse. Migration
+  0025 only teaches `runs.kind` the value `fix`. The operator starts loops by hand for a first week, then
+  `[pipeline] autofix = "own"` starts one after a review with findings on a PR one of their logins wrote, and
+  `magnum fix --off` (key `F`) takes one PR out of it. Rejected: the operator's own `/resolve-review-2`, which is
+  interactive, private to one plugin and tied to paths that do not exist on this machine, so a tool meant for
+  other machines carries its own skill, as the judge does. A pipeline role, because the pipeline restores
+  the checkout after every stage and treats a report as a review. A separate author worktree per PR, which
+  costs a full database setup per PR and a second checkout of the branch, where the slot has both and never
+  touches the operator's checkouts. A PR state `fixing`, which every screen and gate would have to learn, where a
+  registry row and a reservation hold the PR as a snooze does. Scripts in the skill, because the fixer's needs
+  are a few `gh api` calls the skill spells out. Any PR by default, because the fixer pushes and replies in
+  the operator's name, which on another author's PR is their call. Codex as the fixer, since Codex is the
+  judge's kind and a second model catches the judge's errors. Fixing CI in the fixer, because the judge
+  already reads failing checks, the next cycle's findings carry them and the cap bounds the rest. A loop
+  without a cap, because two agents can disagree forever and three cycles cover the relays seen so far.
 
 ## Screens and commands
 
