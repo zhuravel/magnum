@@ -84,6 +84,30 @@ func (h *actHarness) fixDaemon(pr store.PR, end func(h *actHarness)) {
 	}
 }
 
+// fixRunEnded records how the PR's latest fix run ended, as the settle does
+// before the loop's row goes (finishFixRun): the run verified, with outcome
+// "pushed", "replied" or "needs_you". It returns the run's id.
+func (h *actHarness) fixRunEnded(pr store.PR, outcome string) string {
+	h.t.Helper()
+	runs, err := h.st.RunsByPR(h.ctx, pr.ID)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	var id string
+	for _, r := range runs {
+		if r.Kind == store.RunFix {
+			id = r.ID
+		}
+	}
+	if id == "" {
+		h.t.Fatal("the PR has no fix run")
+	}
+	if err := h.st.UpdateRun(h.ctx, id, func(u *store.RunUpdate) { u.Set("outcome", outcome) }); err != nil {
+		h.t.Fatal(err)
+	}
+	return id
+}
+
 // fixLoopGone is the loop's row going away, which is its end.
 func (h *actHarness) fixLoopGone(pr store.PR) {
 	h.t.Helper()
@@ -431,8 +455,26 @@ func TestFixWaitSaysHowTheLoopEnded(t *testing.T) {
 			h.fixEvent("fix.done", "the fix loop ends clean", nil)
 		}},
 		{name: "pushed nothing", code: 0, out: []string{"talkable#5: pushed nothing: claude-fix replied in 2 threads"}, end: func(h *actHarness, pr store.PR) {
-			h.fixEvent("fix.replied", "claude-fix replied in 2 threads", map[string]any{"cycle": 1})
+			run := h.fixRunEnded(pr, "replied")
+			h.fixEvent("fix.replied", "claude-fix replied in 2 threads", map[string]any{"cycle": 1, "run": run})
 		}},
+		// settle records fix.replied, then the run's outcome, then the row goes, then fix.needs_you:
+		// a loop whose fixer left findings to the author is no success while that last event is missing.
+		{name: "replies and findings left to the author, the needs-you event not written yet", code: 1,
+			err: []string{"talkable#5: the fix loop is gone, but magnum recorded no end for it"}, end: func(h *actHarness, pr store.PR) {
+				run := h.fixRunEnded(pr, "needs_you")
+				h.fixEvent("fix.replied", "claude-fix replied in 2 threads", map[string]any{"cycle": 1, "run": run})
+			}},
+		{name: "replies of a run that recorded no outcome are no success", code: 1,
+			err: []string{"talkable#5: the fix loop is gone, but magnum recorded no end for it"}, end: func(h *actHarness, pr store.PR) {
+				run := h.fixRunEnded(pr, "")
+				h.fixEvent("fix.replied", "claude-fix replied in 2 threads", map[string]any{"cycle": 1, "run": run})
+			}},
+		{name: "replies that name no run are no success", code: 1,
+			err: []string{"talkable#5: the fix loop is gone, but magnum recorded no end for it"}, end: func(h *actHarness, pr store.PR) {
+				h.fixRunEnded(pr, "replied")
+				h.fixEvent("fix.replied", "claude-fix replied in 2 threads", map[string]any{"cycle": 1})
+			}},
 		{name: "the fixer left findings to the author", code: 1,
 			err: []string{"talkable#5: needs you: 2 findings need your call (2101 P1 app/models/offer.rb:42): " + report, "fix: read claude-fix's report " + report}, end: func(h *actHarness, pr store.PR) {
 				msg := "fix: 2 findings need your call (2101 P1 app/models/offer.rb:42): " + report
@@ -489,6 +531,86 @@ func TestFixWaitSaysHowTheLoopEnded(t *testing.T) {
 			actContains(t, h.out.String(), tc.out...)
 			actContains(t, h.errb.String(), tc.err...)
 		})
+	}
+}
+
+// The fix job's abort while the fixer works (stopFix) records pr.aborted, or
+// pr.ignored for an ignore, with fix: true, and no fix.stopped (that one is
+// the reviewing phase's): both are the loop's abort. The abort of a review
+// round is no end of the loop.
+func TestFixWaitSeesAnAbortWhileTheFixerWorks(t *testing.T) {
+	for _, tc := range []struct {
+		name, kind, msg string
+		data            map[string]any
+		code            int
+		kindOut, text   string
+	}{
+		{name: "abort", kind: "pr.aborted", msg: "aborted the fix of talkable/talkable#5: fixer interrupted, slot review1 back at abc1234",
+			data: map[string]any{"fix": true, "cycle": 1}, code: 1, kindOut: "aborted", text: "aborted"},
+		{name: "ignore", kind: "pr.ignored", msg: "ignored the fix of talkable/talkable#5: fixer interrupted; muted until `magnum unmute talkable#5`",
+			data: map[string]any{"fix": true, "cycle": 1}, code: 1, kindOut: "aborted", text: "aborted: the PR was ignored"},
+		{name: "the abort of a review round", kind: "pr.aborted", msg: "aborted talkable/talkable#5: round abandoned",
+			data: map[string]any{"queued": true}, code: 1, kindOut: "gone", text: "the fix loop is gone, but magnum recorded no end for it"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newActHarness(t)
+			h.pid = 1
+			pr := h.seedPR("talkable/talkable", 5, store.PRReviewed)
+			step := 0
+			h.onSleep = func(h *actHarness) {
+				step++
+				switch step {
+				case 1:
+					h.completePending(store.RequestDone, fixAnswer)
+					h.setFixRow(pr, engine.FixPhaseFixing, 1)
+					h.fixRunOf(pr, 1, store.RunWorking)
+				case 3: // the fixer still works when the abort ends the loop
+					h.fixLoopGone(pr)
+					h.fixEvent(tc.kind, tc.msg, tc.data)
+				}
+			}
+			if code := h.cmd("fix", "5", "--wait", "--yes", "--json"); code != tc.code {
+				t.Fatalf("exit %d, want %d: %s%s", code, tc.code, h.out.String(), h.errb.String())
+			}
+			var doc fixJSON
+			if err := json.Unmarshal(h.out.Bytes(), &doc); err != nil {
+				t.Fatalf("%v\n%s", err, h.out.String())
+			}
+			if doc.End == nil || doc.End.Kind != tc.kindOut || !strings.Contains(doc.End.Text, tc.text) || doc.Error == "" {
+				t.Fatalf("json = %+v end %+v", doc, doc.End)
+			}
+		})
+	}
+}
+
+// A fixer that left findings to the author without a push is no success while
+// its needs-you event is still to come: the follower waits for it, and the end
+// it reports is the needs-you one.
+func TestFixWaitDoesNotCallUnpushedRepliesASuccessWhenFindingsAreLeftToYou(t *testing.T) {
+	h := newActHarness(t)
+	h.pid = 1
+	pr := h.seedPR("talkable/talkable", 5, store.PRReviewed)
+	msg := "fix: 2 findings need your call (2101 P1 app/models/offer.rb:42): /state/claude-fix.md"
+	late := false
+	h.fixDaemon(pr, func(h *actHarness) {
+		h.fixLoopGone(pr)
+		run := h.fixRunEnded(pr, "needs_you")
+		h.fixEvent("fix.replied", "claude-fix replied in 2 threads", map[string]any{"cycle": 1, "run": run})
+		late = true
+	})
+	daemon := h.onSleep
+	h.onSleep = func(h *actHarness) {
+		daemon(h)
+		if late && !h.hasEvent("fix.needs_you") && h.sleeps > 8 { // a poll later
+			h.fixEvent("fix.needs_you", msg, map[string]any{"cycle": 1})
+		}
+	}
+	if code := h.cmd("fix", "5", "--wait", "--yes"); code != 1 {
+		t.Fatalf("exit %d: %s%s", code, h.out.String(), h.errb.String())
+	}
+	actContains(t, h.errb.String(), "talkable#5: needs you: 2 findings need your call")
+	if strings.Contains(h.out.String(), "pushed nothing") {
+		t.Errorf("a loop that needs you was called a success:\n%s", h.out.String())
 	}
 }
 

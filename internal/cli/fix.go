@@ -298,7 +298,14 @@ func (w *fixWatch) done(ctx context.Context, pr store.PR) (code int, done bool) 
 // fixEndOf reads how the PR's loop ended from the events at or after start:
 // the latest of the loop's own end events. A fixer that pushed nothing ends
 // the loop after its replies (fix.replied), and a cycle that pushed does not,
-// its replies come before the re-review.
+// its replies come before the re-review. Replies are the end "pushed nothing"
+// only when the cycle's fix run recorded the outcome "replied": settle writes
+// fix.replied first, and a fixer that left findings to the author without a
+// push records "needs_you" and then writes fix.needs_you after the loop's
+// row is gone, so the replies alone are no success. A fixer stopped while it
+// works ends with pr.aborted (an abort) or pr.ignored (magnum ignore) whose
+// data says fix: the abort of a review round has no such flag and is no end
+// of the loop.
 func fixEndOf(ctx context.Context, d *actDeps, t actTarget, start time.Time) (fixEnding, bool) {
 	evs, err := d.Store.EventsBySubject(ctx, fmt.Sprintf("pr:%s#%d", t.full(), t.PR.Number), fixEventWindow)
 	if err != nil {
@@ -312,7 +319,9 @@ func fixEndOf(ctx context.Context, d *actDeps, t actTarget, start time.Time) (fi
 			continue
 		}
 		var data struct {
-			Cycle int `json:"cycle"`
+			Cycle int    `json:"cycle"`
+			Run   string `json:"run"`
+			Fix   bool   `json:"fix"`
 		}
 		_ = json.Unmarshal(ev.Data, &data)
 		msg := actClean(ev.Message)
@@ -322,7 +331,7 @@ func fixEndOf(ctx context.Context, d *actDeps, t actTarget, start time.Time) (fi
 			pushed[data.Cycle] = true
 			continue
 		case "fix.replied":
-			if pushed[data.Cycle] {
+			if pushed[data.Cycle] || !fixRunReplied(ctx, d, data.Run) {
 				continue
 			}
 			e = fixEnding{fixEndNothing, "pushed nothing: " + msg}
@@ -340,10 +349,29 @@ func fixEndOf(ctx context.Context, d *actDeps, t actTarget, start time.Time) (fi
 			e = fixEnding{fixEndEnded, "ended: " + msg}
 		case "fix.stopped":
 			e = fixEnding{fixEndAborted, "aborted"}
+		case "pr.aborted", "pr.ignored":
+			if !data.Fix {
+				continue
+			}
+			e = fixEnding{fixEndAborted, "aborted"}
+			if ev.Kind == "pr.ignored" {
+				e.Text += ": the PR was ignored"
+			}
 		default:
 			continue
 		}
 		end, found = e, true
 	}
 	return end, found
+}
+
+// fixRunReplied reports whether the fix run runID ended with the outcome
+// "replied": the fixer pushed nothing and left nothing to the author. A run
+// that cannot be read, or that recorded no outcome yet, is not that.
+func fixRunReplied(ctx context.Context, d *actDeps, runID string) bool {
+	if runID == "" {
+		return false
+	}
+	r, err := d.Store.RunByID(ctx, runID)
+	return err == nil && r.Kind == store.RunFix && store.Deref(r.Outcome) == "replied"
 }
