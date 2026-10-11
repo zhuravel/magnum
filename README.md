@@ -598,11 +598,18 @@ Repositories without a pool get a worktree per PR (`<clone>__worktrees/pr-<N>`).
 [worktrunk](https://worktrunk.dev) hooks in `.config/wt.toml`, Magnum runs them with
 `WT_BRANCH=magnum-pr-<N>` on create and before removal, so apps that derive databases from the
 workspace name get isolated ones. A `[[repo]]` block can declare `setup`, `teardown`, `copy_files` and
-`env` explicitly instead. The main clone's `.mise.local.toml` is rendered into the worktree (GitHub
+`env` explicitly instead. The main clone's local mise file is rendered into the worktree (GitHub
 tokens and the `[[repo]]` `strip_env` keys dropped, its `env` set) and its `copy_files` copied when the
 worktree is created and again at each round's checkout, as a pool slot's are, so a `strip_env` name or
 `env` key added since reaches the next round's panes once the daemon runs with it; the rendered file is
-rewritten each time. Its `no_findings_event` and `blocking_event` override the posting identity's
+rewritten each time. The rendered file keeps the main clone's spelling, `mise.local.toml` or
+`.mise.local.toml` (the dotted one when both exist, as mise lets it override the other); a pool slot
+whose main clone has neither gets `mise.local.toml`. A file magnum rendered under the other spelling
+is removed, so renaming the main clone's file leaves none behind; a file magnum did not write is kept,
+and `copy_files` never copies either spelling. The guard that keeps a slot or worktree with a person's
+untracked files from removal does not count the file magnum rendered (its first line is magnum's
+marker), even where the PR's `.gitignore` names only the other spelling; a file of that name without the
+marker still counts. Its `no_findings_event` and `blocking_event` override the posting identity's
 verdicts for that repository, pooled or not. When a PR an App identity approved gets new commits,
 Magnum dismisses that approval before the re-review is queued (a small delta keeps it until its delta
 check posts, at most an hour); `keep_approvals = true` on the `[[repo]]` (or the `[[watch]]`) keeps it. `prepare` (such as `["bin/rails db:test:prepare"]`) and
@@ -612,7 +619,7 @@ check that the login shell runs the Ruby the checkout pins; a failure never stop
 the judge what will not work. When the files under a pool's `schema_paths` (such as `["db/"]`) differ
 from those the slot's databases were last loaded from, or the development database's
 `schema_migrations` no longer match them, the pool's `reset_db` commands run first, as a release runs
-them (through `mise exec` in the slot, not `zsh -lc`, so the checkout's `.mise.local.toml` does not
+them (through `mise exec` in the slot, not `zsh -lc`, so the checkout's local mise file does not
 override the pool's env) within 30 minutes of their own (with `ready_timeout` starting after them), so the slot's databases
 carry the PR's tables and columns. Another round of the same PR, or a PR on the same schema, reloads
 nothing ("schema unchanged since <commit>: no reset"), and a release keeps the databases as they are

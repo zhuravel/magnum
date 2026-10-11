@@ -326,7 +326,7 @@ func TestReadinessSchemaResetHasItsOwnBudget(t *testing.T) {
 // open` run the pool's scripts: `mise -C <slot> exec -- env K=V... /bin/sh -c
 // <script>`, the slot's env as arguments. In a login zsh mise's shims come
 // first on PATH, and a bin/rails that starts Ruby through one has the slot's
-// .mise.local.toml [env] applied over the command's own variables (the copied
+// local mise file's [env] applied over the command's own variables (the copied
 // FAKE_AWS="0" beat the pool's FAKE_AWS=1, db:seed called an empty host and
 // failed in every slot). prepare, ready and the Ruby check stay `zsh -lc`:
 // they must see what the agents see.
@@ -536,6 +536,11 @@ func TestRubyPin(t *testing.T) {
 		{"mise wins over ruby-version", map[string]string{".mise.toml": "[tools]\nruby = \"3.4.1\"\n", ".ruby-version": "3.3.4"}, rubyPinned{".mise.toml", "3.4.1"}, true},
 		{"mise without ruby", map[string]string{".mise.toml": "[tools]\nnode = \"22\"\n", ".ruby-version": "3.3.4"}, rubyPinned{".ruby-version", "3.3.4"}, true},
 		{"mise broken", map[string]string{".mise.toml": "[tools\n", ".ruby-version": "3.3.4"}, rubyPinned{".ruby-version", "3.3.4"}, true},
+		{"undotted mise", map[string]string{"mise.toml": "[tools]\nruby = \"3.4.2\"\n"}, rubyPinned{"mise.toml", "3.4.2"}, true},
+		{"undotted mise wins over ruby-version", map[string]string{"mise.toml": "[tools]\nruby = \"3.4.2\"\n", ".ruby-version": "3.3.4"}, rubyPinned{"mise.toml", "3.4.2"}, true},
+		{"undotted mise without ruby", map[string]string{"mise.toml": "[tools]\nnode = \"22\"\n", ".ruby-version": "3.3.4"}, rubyPinned{".ruby-version", "3.3.4"}, true},
+		{"dotted mise wins over undotted", map[string]string{".mise.toml": "[tools]\nruby = \"3.4.1\"\n", "mise.toml": "[tools]\nruby = \"3.3.6\"\n"}, rubyPinned{".mise.toml", "3.4.1"}, true},
+		{"dotted mise without ruby", map[string]string{".mise.toml": "[tools]\nnode = \"22\"\n", "mise.toml": "[tools]\nruby = \"3.3.6\"\n", ".ruby-version": "3.3.4"}, rubyPinned{"mise.toml", "3.3.6"}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, ok := rubyPin(readinessCheckout(t, tc.files))

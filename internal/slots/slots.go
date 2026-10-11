@@ -287,7 +287,7 @@ func (m *Manager) acquireHeavy(ctx context.Context) (release func(), err error) 
 // sorted; blank values blank the variable): the arguments of the mise
 // executable that run a pool script as the release, the provisioning and
 // `magnum open` do, with the real Ruby first on PATH (no shim that would
-// re-apply the checkout's .mise.local.toml [env] over env).
+// re-apply the checkout's local mise file's [env] over env).
 func MiseExecArgs(dir string, env map[string]string, script string) []string {
 	args := []string{"-C", dir, "exec", "--", "env"}
 	for _, k := range sortedKeys(env) {

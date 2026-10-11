@@ -556,7 +556,7 @@ type Repo struct {
 	Teardown  []string          `toml:"teardown"`   // before the worktree is removed (failures are logged)
 	WTHooks   *bool             `toml:"wt_hooks"`   // default true: use .config/wt.toml when setup/teardown are empty
 	CopyFiles []string          `toml:"copy_files"` // relative to the main clone, copied when present
-	StripEnv  []string          `toml:"strip_env"`  // keys dropped from the rendered .mise.local.toml
+	StripEnv  []string          `toml:"strip_env"`  // keys dropped from the rendered local mise file
 	Env       map[string]string `toml:"env"`        // {slug} {path} {clone}
 
 	// The repository's verdicts, overriding the posting identity's (see

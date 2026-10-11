@@ -1,4 +1,4 @@
-# magnum: rendered from the main clone's .mise.local.toml (secret keys stripped, slot env set); rewritten on every render
+# magnum: rendered from the main clone's local mise file (secret keys stripped, slot env set); rewritten on every render
 min_version = "2024.9.5"
 
 [env]

@@ -11,7 +11,7 @@ package pipeline
 // slot's databases carry another schema than the checkout's
 // (slots.CheckSchema), the pool's reset_db commands run first, the way the
 // release runs them (mise exec, not the login shell: its shims would put
-// the slot's .mise.local.toml [env] over the command's own variables) and
+// the slot's local mise file's [env] over the command's own variables) and
 // within the release's reset_db budget, and ready_timeout starts after them (4 of 9 rounds of a pool repository skipped DB specs on a table or
 // column the PR added, because the slot's databases had the base schema).
 
@@ -89,7 +89,7 @@ const (
 	RubyCheckCommand = "ruby -v"
 
 	readinessLineMax = 200      // runes kept of a command's last output line
-	pinFileMax       = 64 << 10 // bytes read of .ruby-version or .mise.toml
+	pinFileMax       = 64 << 10 // bytes read of .ruby-version, .mise.toml or mise.toml
 )
 
 // readinessFile is the JSON the step writes (ReadinessFile).
@@ -222,7 +222,7 @@ func (rd *round) runPhase(ctx context.Context, cmds []readinessCmd, env map[stri
 // `mise -C <checkout> exec -- env K=V... /bin/sh -c <script>`
 // (slots.MiseExecArgs, env carried by the arguments). In a login zsh mise's
 // shims come first on PATH, and the Ruby a shim starts has the checkout's
-// .mise.local.toml [env] applied over the command's own variables (the
+// local mise file's [env] applied over the command's own variables (the
 // main clone's FAKE_AWS="0" over the pool's FAKE_AWS=1, so db:seed failed in
 // every slot); mise exec puts the real Ruby first, so no shim runs.
 func (rd *round) runReadiness(ctx context.Context, c readinessCmd, env map[string]string, left time.Duration, budget readinessBudget) agents.ReadinessCheck {
@@ -332,7 +332,7 @@ func oneLine(s string) string {
 
 // rubyPinned is the Ruby version a checkout pins.
 type rubyPinned struct {
-	source  string // the file: .mise.toml or .ruby-version
+	source  string // the file: .mise.toml, mise.toml or .ruby-version
 	version string // digits and dots ("3.3.4", "3.3"); "" when the pin names no version this check can compare ("latest", a path)
 }
 
@@ -351,10 +351,12 @@ var (
 	rubyVersionRe = regexp.MustCompile(`^ruby (\d+\.\d+\.\d+)`)
 )
 
-// rubyPin reads the Ruby version the checkout pins: .mise.toml's [tools]
-// ruby, else .ruby-version. Both files belong to the PR, so they are read
-// through an os.Root confined to the checkout, size-limited, and only a
-// dotted version ever leaves this function.
+// rubyPin reads the Ruby version the checkout pins: the [tools] ruby of
+// .mise.toml, else of mise.toml (mise loads .mise.toml after mise.toml, so
+// its pin wins: https://mise.jdx.dev/configuration.html), else
+// .ruby-version. These files belong to the PR, so they are read through an
+// os.Root confined to the checkout, size-limited, and only a dotted version
+// ever leaves this function.
 func rubyPin(checkout string) (rubyPinned, bool) {
 	root, err := os.OpenRoot(checkout)
 	if err != nil {
@@ -373,9 +375,11 @@ func rubyPin(checkout string) (rubyPinned, bool) {
 		b, err := io.ReadAll(io.LimitReader(f, pinFileMax))
 		return b, err == nil
 	}
-	if b, ok := read(".mise.toml"); ok {
-		if v, ok := miseRuby(b); ok {
-			return rubyPinned{source: ".mise.toml", version: pinVersion(v)}, true
+	for _, name := range []string{".mise.toml", "mise.toml"} {
+		if b, ok := read(name); ok {
+			if v, ok := miseRuby(b); ok {
+				return rubyPinned{source: name, version: pinVersion(v)}, true
+			}
 		}
 	}
 	if b, ok := read(".ruby-version"); ok {
@@ -385,7 +389,7 @@ func rubyPin(checkout string) (rubyPinned, bool) {
 	return rubyPinned{}, false
 }
 
-// miseRuby is the ruby entry of a .mise.toml's [tools]: a string, the first
+// miseRuby is the ruby entry of a mise config file's [tools]: a string, the first
 // of a list, or a table's version.
 func miseRuby(b []byte) (string, bool) {
 	var doc struct {

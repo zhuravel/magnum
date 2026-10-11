@@ -306,7 +306,7 @@ func TestPerPRCheckoutAndRemove(t *testing.T) {
 	}
 }
 
-// A per-PR worktree renders its .mise.local.toml again at each round's
+// A per-PR worktree renders its local mise file again at each round's
 // checkout, as a pool slot does: a strip_env name or [repo.env] key added
 // since the worktree was created reaches the next round's panes (a step
 // render_mise with its events, the file trusted again).
@@ -354,6 +354,57 @@ func TestPerPRCheckoutRendersTheMiseFileAgain(t *testing.T) {
 	}
 	if n := len(h.scriptCalls("")); n != 0 {
 		t.Fatalf("per-PR checkout ran a script through mise (%d)", n)
+	}
+}
+
+// A per-PR worktree's local mise file has the name the main clone's has
+// (rendered, then trusted under it); when the main clone renames its file,
+// the next round's render writes the new name and removes the file magnum
+// rendered under the old one.
+func TestPerPRRendersTheMiseFileUnderTheMainClonesName(t *testing.T) {
+	f := newPerPR(t, true)
+	h := f.h
+	work := f.ownOrigin(t)
+	writeFile(t, filepath.Join(f.main, MiseLocalDotted), "[env]\nGH_TOKEN = \"gho_x\"\nKEEP = \"k\"\n")
+	h.m = h.newManager(Deps{Repos: []config.Repo{{Repo: "zhuravel/widget"}}})
+	sl, err := h.m.CreatePRWorktree(h.ctx, f.watch, "zhuravel/widget", f.pr, f.sha7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dotted, undotted := filepath.Join(sl.Path, MiseLocalDotted), filepath.Join(sl.Path, MiseLocal)
+	if got := readFile(t, dotted); strings.Contains(got, "GH_TOKEN") || !strings.Contains(got, `KEEP = "k"`) {
+		t.Fatalf("first render:\n%s", got)
+	}
+	if fsx.Exists(undotted) {
+		t.Fatalf("%s rendered beside %s", MiseLocal, MiseLocalDotted)
+	}
+	trusted := func() [][]string {
+		var args [][]string
+		for _, c := range h.fake.CallsWithPrefix("mise", "-C", sl.Path, "trust") {
+			args = append(args, c.Args)
+		}
+		return args
+	}
+	if got := trusted(); !slices.EqualFunc(got, [][]string{{"-C", sl.Path, "trust", dotted}}, slices.Equal) {
+		t.Fatalf("trust calls = %q", got)
+	}
+
+	if err := os.Rename(filepath.Join(f.main, MiseLocalDotted), filepath.Join(f.main, MiseLocal)); err != nil {
+		t.Fatal(err)
+	}
+	gitT(t, work, "commit", "--quiet", "--allow-empty", "-m", "more")
+	gitT(t, work, "push", "--quiet", "--force", "origin", "HEAD:refs/pull/7/head")
+	if err := h.m.Checkout(h.ctx, h.slot(sl.Name), f.pr, config.Pool{}, gitT(t, work, "rev-parse", "HEAD")); err != nil {
+		t.Fatalf("Checkout: %v", err)
+	}
+	if got := readFile(t, undotted); strings.Contains(got, "GH_TOKEN") || !strings.Contains(got, `KEEP = "k"`) {
+		t.Fatalf("second render:\n%s", got)
+	}
+	if fsx.Exists(dotted) {
+		t.Fatalf("magnum's %s kept after the main clone renamed its file", MiseLocalDotted)
+	}
+	if got := trusted(); len(got) != 2 || !slices.Equal(got[1], []string{"-C", sl.Path, "trust", undotted}) {
+		t.Fatalf("trust calls = %q", got)
 	}
 }
 

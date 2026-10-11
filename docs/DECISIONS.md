@@ -285,6 +285,27 @@ skill versions); people add theirs to the sections before it, at the end of the 
   post-checkout and teardown scripts and the per-PR hooks, which run the PR's code outside the sandbox.
   Now wire() passes every non-empty private_key_env, and the slots manager unsets them with the GitHub
   tokens.
+- **The rendered local mise file keeps the main clone's spelling** (2026-10-11). Magnum read and rendered
+  only `.mise.local.toml`, but mise reads `mise.local.toml` too. A main clone with only the undotted file
+  got nothing rendered into a per-PR worktree, and a pool slot got a `.mise.local.toml` with the pool's
+  env alone, which showed up as untracked in a repository whose `.gitignore` names only `mise.local.toml`;
+  a copy_files entry naming the undotted file copied it with its secrets, strip_env never applied. Now
+  slots.MiseLocalName picks the main clone's file: `.mise.local.toml` when it exists, because mise loads
+  it after the undotted one ("`.mise.local.toml` overrides `mise.local.toml`",
+  https://mise.jdx.dev/configuration.html), else `mise.local.toml`, which is also what a pool slot gets
+  when the main clone has neither (the undotted name is the default). The file is rendered, trusted and
+  copied by cleanup's manual-worktree reset under that name, and copy_files skips both spellings. A render
+  removes the other spelling when its first line is magnum's marker (the marker now says "local mise
+  file"; the old `.mise.local.toml` wording still counts), so a clone that renames its file leaves no
+  rendered file behind; a file without the marker, or a symlink, is kept. The removal guard (holdChanges,
+  which counts untracked files once a human was in the slot) skips the rendered file: a main clone renamed
+  its file to the undotted name while PR branches still carried a `.gitignore` that ignores only the
+  dotted one, so magnum's own file held removals as dirty. Only a file with the marker is skipped, and
+  only in the hold: the removal still counts it, since `git worktree remove` needs `--force` to delete an
+  untracked file. The readiness Ruby check reads `.mise.toml`, then `mise.toml` (the same precedence),
+  then `.ruby-version`, and names the file it read. Rejected: keeping the dotted name for every render
+  (untracked in a repository that ignores only `mise.local.toml`, and it hides the clone's own undotted
+  file).
 
 ## Scheduling
 

@@ -68,9 +68,9 @@ var WorkspaceNameVars = []string{
 	"COMMANDER_CONTEXT_NAME", "CLAUDE_CODE_WORKTREE_NAME", "WM_HANDLE",
 }
 
-// DefaultStripEnv is always dropped from a checkout's rendered
-// .mise.local.toml, a pool slot's (in addition to [pool] strip_env) as well
-// as a per-PR worktree's (in addition to [[repo]] strip_env): a GitHub token
+// DefaultStripEnv is always dropped from a checkout's rendered local mise
+// file, a pool slot's (in addition to [pool] strip_env) as well as a per-PR
+// worktree's (in addition to [[repo]] strip_env): a GitHub token
 // there would override the reviewing identity's gh selection in the agents'
 // panes, and the checkout runs PR-controlled code.
 var DefaultStripEnv = []string{"GITHUB_PERSONAL_ACCESS_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"}
@@ -366,29 +366,31 @@ func (m *Manager) runHooks(ctx context.Context, sl store.Slot, p perPRPlan, hook
 	return errors.Join(errs...)
 }
 
-// preparePerPR renders the main clone's .mise.local.toml into the worktree
-// (strip list removed, the per-PR env set; trusted with mise when it is
-// available) and copies the [[repo]] copy_files that exist, at the
-// worktree's creation and at each round's checkout (render_mise), every write
-// confined to the worktree (WriteCheckoutFile). Without a main
-// .mise.local.toml nothing is rendered.
+// preparePerPR renders the main clone's local mise file into the worktree
+// under its name (MiseLocalName; strip list removed, the per-PR env set;
+// trusted with mise when it is available) and copies the [[repo]]
+// copy_files that exist, at the worktree's creation and at each round's
+// checkout (render_mise), every write confined to the worktree
+// (WriteCheckoutFile). Without a local mise file in the main clone nothing
+// is rendered.
 func (m *Manager) preparePerPR(ctx context.Context, sl store.Slot, p perPRPlan) error {
-	src, err := os.ReadFile(filepath.Join(sl.MainClone, MiseLocal))
+	name := MiseLocalName(sl.MainClone)
+	src, err := os.ReadFile(filepath.Join(sl.MainClone, name))
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 	case err != nil:
-		return fmt.Errorf("slots: read main %s: %w", MiseLocal, err)
+		return fmt.Errorf("slots: read main %s: %w", name, err)
 	default:
 		out, err := RenderMiseLocal(src, p.strip, p.env)
 		if err != nil {
 			return err
 		}
-		if err := WriteCheckoutFile(sl.Path, MiseLocal, out, 0o600); err != nil {
+		if err := writeMiseLocal(sl.Path, name, out); err != nil {
 			return err
 		}
 		if m.miseAvailable() {
 			if _, err := m.d.Run.Run(ctx, execx.Cmd{
-				Name: m.mise, Args: []string{"-C", sl.Path, "trust", filepath.Join(sl.Path, MiseLocal)}, Dir: sl.Path,
+				Name: m.mise, Args: []string{"-C", sl.Path, "trust", filepath.Join(sl.Path, name)}, Dir: sl.Path,
 				Mutates: true, Label: "mise trust " + sl.Name,
 			}); err != nil {
 				return fmt.Errorf("slots: mise trust %s: %w", sl.Name, err)

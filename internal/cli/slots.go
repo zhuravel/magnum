@@ -437,7 +437,7 @@ func slotsProvisionFix(err error, name, logPath string) string {
 	case errors.Is(err, slots.ErrVerify):
 		return fmt.Sprintf("read %s, fix the setup, then `magnum slots repair %s`", inspTilde(logPath), name)
 	case errors.Is(err, slots.ErrMiseLocal):
-		return "fix the main clone's .mise.local.toml (no root-level env table), then run `magnum slots provision` again"
+		return "fix the main clone's mise.local.toml or .mise.local.toml (no root-level env table), then run `magnum slots provision` again"
 	case errors.Is(err, context.Canceled):
 		return "interrupted; `magnum slots provision` resumes from the failed step"
 	}

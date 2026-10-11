@@ -189,7 +189,7 @@ func TestCopyIntoCheckout(t *testing.T) {
 }
 
 // TestPreparePerPRConfinedToCheckout: a per-PR worktree whose tracked files
-// turn copy_files' parent and .mise.local.toml into symlinks out of the
+// turn copy_files' parent and its local mise file into symlinks out of the
 // worktree cannot make magnum write there.
 func TestPreparePerPRConfinedToCheckout(t *testing.T) {
 	t.Parallel()

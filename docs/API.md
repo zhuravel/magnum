@@ -3761,7 +3761,7 @@ type Repo struct {
 	Teardown  []string          `toml:"teardown"`   // before the worktree is removed (failures are logged)
 	WTHooks   *bool             `toml:"wt_hooks"`   // default true: use .config/wt.toml when setup/teardown are empty
 	CopyFiles []string          `toml:"copy_files"` // relative to the main clone, copied when present
-	StripEnv  []string          `toml:"strip_env"`  // keys dropped from the rendered .mise.local.toml
+	StripEnv  []string          `toml:"strip_env"`  // keys dropped from the rendered local mise file
 	Env       map[string]string `toml:"env"`        // {slug} {path} {clone}
 
 	// The repository's verdicts, overriding the posting identity's (see
@@ -12626,6 +12626,14 @@ const (
     Worktrunk hook types magnum runs (other tables in wt.toml are ignored).
 
 const (
+	MiseLocal       = "mise.local.toml"
+	MiseLocalDotted = ".mise.local.toml"
+)
+    The two spellings of the per-checkout local mise file, both read by mise.
+    magnum renders a checkout's under the name the main clone's file has
+    (MiseLocalName), MiseLocal when the main clone has none.
+
+const (
 	SetupTimeout    = 45 * time.Minute
 	DepsTimeout     = 30 * time.Minute
 	ResetDBTimeout  = 30 * time.Minute
@@ -12655,9 +12663,6 @@ const DefaultCloneRoot = "~/Projects"
 
 const MarkerFile = "tmp/.worktree-db-slug"
     MarkerFile is written by bin/worktree-setup with the slot's database slug.
-
-const MiseLocal = ".mise.local.toml"
-    MiseLocal is the per-checkout mise file magnum renders into every slot.
 
 const SchemaFile = "db/schema.rb"
     SchemaFile is read for the `define(version: …)` the slot's dev database must
@@ -12706,17 +12711,18 @@ var (
     Callers that extend one must slices.Clone it first.
 
 var DefaultStripEnv = []string{"GITHUB_PERSONAL_ACCESS_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"}
-    DefaultStripEnv is always dropped from a checkout's rendered
-    .mise.local.toml, a pool slot's (in addition to [pool] strip_env) as well
-    as a per-PR worktree's (in addition to [[repo]] strip_env): a GitHub token
-    there would override the reviewing identity's gh selection in the agents'
-    panes, and the checkout runs PR-controlled code.
+    DefaultStripEnv is always dropped from a checkout's rendered local mise
+    file, a pool slot's (in addition to [pool] strip_env) as well as a per-PR
+    worktree's (in addition to [[repo]] strip_env): a GitHub token there would
+    override the reviewing identity's gh selection in the agents' panes, and the
+    checkout runs PR-controlled code.
 
 var ErrHook = errors.New("slots: per-PR hooks")
     ErrHook: a per-PR worktree's hook file or template cannot be used.
 
-var ErrMiseLocal = errors.New("slots: cannot render .mise.local.toml")
-    ErrMiseLocal: the main clone's .mise.local.toml cannot be rendered safely.
+var ErrMiseLocal = errors.New("slots: cannot render the main clone's mise.local.toml or .mise.local.toml")
+    ErrMiseLocal means the main clone's local mise file cannot be rendered
+    safely.
 
 var LockFiles = []string{"Gemfile.lock", "pnpm-lock.yaml"}
     LockFiles are hashed into slots.lock_sha; a change reruns pool.PostCheckout.
@@ -12797,7 +12803,14 @@ func MiseExecArgs(dir string, env map[string]string, script string) []string
     sorted; blank values blank the variable): the arguments of the mise
     executable that run a pool script as the release, the provisioning and
     `magnum open` do, with the real Ruby first on PATH (no shim that would
-    re-apply the checkout's .mise.local.toml [env] over env).
+    re-apply the checkout's local mise file's [env] over env).
+
+func MiseLocalName(mainClone string) string
+    MiseLocalName is the name of the main clone's local mise file:
+    the spelling that exists there, MiseLocalDotted when both do (mise loads
+    it after MiseLocal, so its values win: "`.mise.local.toml` overrides
+    `mise.local.toml`", https://mise.jdx.dev/configuration.html), MiseLocal when
+    neither does.
 
 func PRSlotName(repo string, number int) string
     PRSlotName is the slot name of a per-PR worktree: "owner/name#N".
@@ -12828,18 +12841,19 @@ func ReadMarker(dir string) (string, error)
     fsx.ErrTooLarge, and a missing marker is fs.ErrNotExist.
 
 func RenderMiseLocal(src []byte, strip []string, set map[string]string) ([]byte, error)
-    RenderMiseLocal renders a checkout's .mise.local.toml from the main clone's
-    file src. src is parsed as TOML: its `env` value must be absent or a table,
-    however it is spelled ([env], [env.KEY] sub-tables, dotted keys,
-    a root-level `env = { … }` inline table); every key in strip and every
-    key in set is deleted from that table whatever its value (a string,
-    an inline table, a sub-table such as { value = "…" }), then each key of set
-    is set to its string value. The whole tree is encoded back after miseMarker
-    with sorted keys, so the output is deterministic and rendering it again
-    with the same arguments yields the same bytes. Comments of src are dropped,
-    commented-out secrets with them, and so is the order of its keys. A src
-    that does not parse, or whose `env` is not a table ([[env]], a string), is
-    ErrMiseLocal. An empty src renders the marker and an [env] table with set.
+    RenderMiseLocal renders a checkout's local mise file (MiseLocal or
+    MiseLocalDotted) from the main clone's file src. src is parsed as TOML:
+    its `env` value must be absent or a table, however it is spelled ([env],
+    [env.KEY] sub-tables, dotted keys, a root-level `env = { … }` inline table);
+    every key in strip and every key in set is deleted from that table whatever
+    its value (a string, an inline table, a sub-table such as { value = "…" }),
+    then each key of set is set to its string value. The whole tree is encoded
+    back after miseMarker with sorted keys, so the output is deterministic and
+    rendering it again with the same arguments yields the same bytes. Comments
+    of src are dropped, commented-out secrets with them, and so is the order of
+    its keys. A src that does not parse, or whose `env` is not a table ([[env]],
+    a string), is ErrMiseLocal. An empty src renders the marker and an [env]
+    table with set.
 
 func SlotDBSlug(sl store.Slot) string
     SlotDBSlug is the database slug of a slot: slots.db_slug, else the slot name
@@ -12971,7 +12985,7 @@ func (m *Manager) Checkout(ctx context.Context, slot store.Slot, pr store.PR, po
     when the Gemfile.lock/pnpm-lock.yaml hash differs from lock_sha) and schema
     (dirty_schema = 1 when the PR changes pool.schema_paths since its merge
     base with origin/<base>), for per-PR slots render_mise alone (preparePerPR,
-    as at the worktree's creation: the main clone's .mise.local.toml with the
+    as at the worktree's creation: the main clone's local mise file with the
     [[repo]] strip_env and env as the daemon has them now, its copy_files);
     finally verify (HEAD == fetched head → checked_out_sha, last_used_at).
     The slot state is left as it was: moving claimed → busy after the prompt is
@@ -13023,7 +13037,7 @@ func (m *Manager) CreatePRWorktree(ctx context.Context, watch config.Watch, repo
     worktree_add (--detach at refs/magnum/pr/N, skipped when listed at the
     fetched head; a listed worktree at another commit, left by an earlier
     attempt, is switched to it after Guard), verify (HEAD == fetched head),
-    render_mise (the main clone's .mise.local.toml rendered with the per-PR env,
+    render_mise (the main clone's local mise file rendered with the per-PR env,
     [[repo]] copy_files), setup (the [[repo]] setup commands or the main clone's
     .config/wt.toml [post-create]/[post-start] hooks as WT_BRANCH=magnum-pr-<N>,
     see hooks.go; a failure moves the slot to broken and returns ErrBroken) and

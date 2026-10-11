@@ -103,7 +103,7 @@ func (m *Manager) Reserve(ctx context.Context, pr store.PR, pool config.Pool) (s
 // from lock_sha) and schema (dirty_schema = 1 when the PR changes
 // pool.schema_paths since its merge base with origin/<base>), for per-PR
 // slots render_mise alone (preparePerPR, as at the worktree's creation: the
-// main clone's .mise.local.toml with the [[repo]] strip_env and env as the
+// main clone's local mise file with the [[repo]] strip_env and env as the
 // daemon has them now, its copy_files); finally verify
 // (HEAD == fetched head → checked_out_sha, last_used_at). The slot state is
 // left as it was: moving claimed → busy after the prompt is acked is the

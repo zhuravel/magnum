@@ -42,7 +42,7 @@ func (m *Manager) ProvisionPool(ctx context.Context, pool config.Pool, n int) er
 	}
 	name, path := pool.Slot(n), pool.Path(n)
 	if m.d.DryRun {
-		m.dryRun("provision %s at %s (worktree add, render %s, %s)", name, path, MiseLocal, strings.Join(pool.Setup, "; "))
+		m.dryRun("provision %s at %s (worktree add, render %s, %s)", name, path, MiseLocalName(pool.MainClone), strings.Join(pool.Setup, "; "))
 		return nil
 	}
 	sl, fresh, err := m.poolRow(ctx, pool, name, path)
