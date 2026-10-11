@@ -196,6 +196,11 @@ type statusReport struct {
 	Drift        []inventory.Finding      `json:"drift"`
 	Warnings     []string                 `json:"warnings,omitempty"`
 	Detail       *statusDetail            `json:"detail,omitempty"`
+
+	// fixLoops and fixOffs are the PRs (by id) with a fix loop in either
+	// phase and the PRs switched out of autofix, for the dashboard's K and F
+	// (not printed); nil when the registry cannot say.
+	fixLoops, fixOffs map[int64]bool
 }
 
 // statusMachine is one command failing on the review machine in the rounds

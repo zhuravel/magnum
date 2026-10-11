@@ -928,6 +928,15 @@ skill versions); people add theirs to the sections before it, at the end of the 
   judge's kind and a second model catches the judge's errors. Fixing CI in the fixer, because the judge
   already reads failing checks, the next cycle's findings carry them and the cap bounds the rest. A loop
   without a cap, because two agents can disagree forever and three cycles cover the relays seen so far.
+- **`magnum abort` reaches a fix loop in both phases** (2026-10-11). The PR stays `reviewed` while its fixer
+  works, and a loop waiting for its next cycle can leave it `reviewed` too, so the CLI's check of the PR's
+  state refused, before any request, the very abort that every refusal, `magnum fix --wait` and the README
+  name as the stop; the board's and the dashboard's `K` refused the same way. A PR whose loop row exists is
+  now a target in any state: the CLI reads the row, and the board's and the dashboard's rows carry a loop
+  flag beside `Fixing`, which names only the fixing phase. The dashboard reads both flags from two queries
+  in the status gather, on a slot's row (a PR whose fixer works is in no queue) and on a queue row, so its
+  `F` reads `fix on` on a PR switched out of autofix and sends `--on`, where it could only switch autofix
+  off before.
 
 ## Screens and commands
 

@@ -160,10 +160,12 @@ type actRow struct {
 	// flagged, or the screen does not know): the review keys refuse it, as
 	// `magnum review` does.
 	flag string
-	// fixOff is the PR's opt-out of autofix (PRBoardRow.FixOff; false: not
-	// switched out, or the screen does not know: only the board does), which
-	// F toggles.
-	fixOff bool
+	// fixOff is the PR's opt-out of autofix (PRBoardRow.FixOff, PRRow.FixOff;
+	// false: not switched out, or the screen does not know), which F
+	// toggles; fixLoop says the PR has a fix loop in either phase
+	// (PRBoardRow.FixLoop, PRRow.FixLoop), which K aborts although the PR
+	// stays reviewed while its fixer works.
+	fixOff, fixLoop bool
 
 	// keys are the screen's keys where they differ from rowActDefs (the
 	// picker's); an action missing from it there has no key.
@@ -274,7 +276,7 @@ func actionRefusal(a rowAct, r actRow) string {
 			return l + ": round in progress (" + stateLabel(r.state) + ")" + r.orKey(actAbort, "; %k kills it")
 		}
 	case actAbort:
-		if r.state != "" && !r.running() && !r.queued() && !r.paused() {
+		if r.state != "" && !r.running() && !r.queued() && !r.paused() && !r.fixLoop {
 			return "no review of " + l + " is running or queued (" + stateLabel(r.state) + ")"
 		}
 	case actIgnore:
@@ -743,7 +745,7 @@ func boardActRow(r PRBoardRow, label string, now time.Time) actRow {
 		pinned: r.Pinned, pinKnown: true, muted: r.Muted || normState(r.State) == "ignored", mutedKnown: true,
 		inSlot: r.Slot != "", slotKnown: true, mergedUnreviewed: r.MergedUnreviewed, flagDismissed: r.FlagDismissed,
 		auto: r.AutoApproved, autoKnown: true, snoozedUntil: r.SnoozedUntil, releaseAfter: r.ReleaseAfter, now: now,
-		needsMe: r.NeedsMe, approveAs: r.ApproveAs, flag: r.CodexFlag, fixOff: r.FixOff}
+		needsMe: r.NeedsMe, approveAs: r.ApproveAs, flag: r.CodexFlag, fixOff: r.FixOff, fixLoop: r.FixLoop || r.Fixing != ""}
 	if r.LastReview != nil {
 		row.reviewed = r.LastReview.CommitSHA
 	}

@@ -44,6 +44,30 @@ func TestAbortWithoutARunningReviewFailsAtOnce(t *testing.T) {
 	}
 }
 
+// A PR with a fix loop is a target of abort in both phases: while the fixer
+// works the PR stays reviewed, and a loop waiting for its next cycle can
+// leave it reviewed too, so the PR's state alone would refuse the stop that
+// every refusal and `magnum fix --wait` name. The request goes to the daemon,
+// which stops the fixer or ends the loop.
+func TestAbortReachesAFixLoopInEitherPhase(t *testing.T) {
+	for _, phase := range []string{engine.FixPhaseFixing, engine.FixPhaseReviewing} {
+		h := newActHarness(t)
+		pr := h.seedPR("talkable/talkable", 5, store.PRReviewed)
+		h.setFixRow(pr, phase, 1)
+		h.pid = 7
+		h.onSleep = func(h *actHarness) {
+			h.completePending(store.RequestDone, "aborted the fix of talkable/talkable#5: fixer interrupted")
+		}
+		if code := h.cmd("abort", "5"); code != 0 {
+			t.Fatalf("%s: exit %d: %s", phase, code, h.errb.String())
+		}
+		if reqs := h.requests(); len(reqs) != 1 || reqs[0].Kind != engine.ReqAbort {
+			t.Fatalf("%s: requests %+v", phase, reqs)
+		}
+		actContains(t, h.out.String(), "aborted the fix of talkable/talkable#5")
+	}
+}
+
 // A review that waits in line (a forced one `magnum review` asked for, or an
 // automatic one) and a paused round can be taken back: the abort goes to the
 // daemon as for a running round. Only the daemon can take it back, so without

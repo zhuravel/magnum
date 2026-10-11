@@ -114,6 +114,46 @@ func TestStatusDashData(t *testing.T) {
 	}
 }
 
+// The dashboard's rows carry a PR's fix loop (either phase) and its opt-out
+// of autofix from the registry: the slot row of a reviewed PR whose fixer
+// works (it is in no queue) and a queue row, so the dashboard's K aborts the
+// loop and its F reads "fix on" where the PR was switched out.
+func TestStatusDashDataCarriesTheFixLoopAndTheOptOut(t *testing.T) {
+	_, st, d, _ := statusFixture(t)
+	ctx := context.Background()
+	repo, err := st.RepoByFullName(ctx, "talkable/talkable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pr := func(n int) store.PR {
+		p, err := st.PRByRepoNumber(ctx, repo.ID, n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	held, queued := pr(11920), pr(11931)
+	for key, v := range map[string]string{engine.KVPRFix(held.ID): `{"cycle":1,"cap":3,"phase":"fixing"}`,
+		engine.KVPRFixOff(held.ID): "{}", engine.KVPRFix(queued.ID): `{"cycle":2,"cap":3,"phase":"reviewing"}`} {
+		if err := st.SetKV(ctx, key, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r, err := statusGather(ctx, d, statusOptions{All: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := statusDashData(r, "talkable/talkable")
+	if len(got.Slots) != 1 || !got.Slots[0].PRFixLoop || !got.Slots[0].PRFixOff {
+		t.Errorf("the slot row of the PR whose fixer works: %+v", got.Slots)
+	}
+	for _, q := range got.Queue {
+		if want := q.Ref == "talkable#11931"; q.FixLoop != want || q.FixOff {
+			t.Errorf("queue row %s: fix loop %v, fix off %v", q.Ref, q.FixLoop, q.FixOff)
+		}
+	}
+}
+
 func TestStatusDashSourceNeverAsksGitHub(t *testing.T) {
 	_, _, d, _ := statusFixture(t)
 	scanner := d.Inventory.(*fakeScanner)

@@ -360,7 +360,7 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 					row.SnoozedUntil, row.SnoozedAt, row.SnoozedBy = s.Until, s.At, s.By
 				}
 			}
-			row.Fixing, row.FixOff = boardFix(ctx, st, r.PRID)
+			row.Fixing, row.FixLoop, row.FixOff = boardFix(ctx, st, r.PRID)
 			if f, ok := codexFlagOf(ctx, st, r.PRID); ok { // codex_flag.go
 				row.CodexFlag, row.CodexFlagSentence = f.Short(), f.Sentence(actRefLabel(defaultRepo(cfg), full, r.Number))
 			}
@@ -419,16 +419,19 @@ func prsSource(st *store.Store, cfg *config.Config, f store.BoardFilter, self []
 
 // boardFix is the PR's fix loop as the board shows it: fixing is its state
 // cell while the fixer works ("fixing 1/3 · claude-fix", engine.FixState.Short;
-// "" otherwise), and off whether it was switched out of autofix (its
-// engine.KVPRFixOff row exists). A registry that cannot say shows neither.
-func boardFix(ctx context.Context, st *store.Store, prID int64) (fixing string, off bool) {
+// "" otherwise), loop whether it has a loop in either phase (its
+// engine.KVPRFix row exists, so K aborts it), and off whether it was switched
+// out of autofix (its engine.KVPRFixOff row exists). A registry that cannot
+// say shows none of them.
+func boardFix(ctx context.Context, st *store.Store, prID int64) (fixing string, loop, off bool) {
 	if v, ok, err := st.GetKV(ctx, engine.KVPRFix(prID)); err == nil && ok {
+		loop = true
 		if f, ok := engine.ParseFixState(v); ok && f.Phase == engine.FixPhaseFixing {
 			fixing = f.Short()
 		}
 	}
 	_, off, err := st.GetKV(ctx, engine.KVPRFixOff(prID))
-	return fixing, off && err == nil
+	return fixing, loop, off && err == nil
 }
 
 // prsMuteReason is the reason of the PR's latest mute (`magnum mute`'s, in

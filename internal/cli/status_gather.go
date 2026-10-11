@@ -514,6 +514,7 @@ func statusGatherPRs(ctx context.Context, d statusDeps, now time.Time, r *status
 	}
 	statusQueueMarks(ctx, st, r.Queue, now)
 	statusSortQueue(r.Queue)
+	r.fixLoops, r.fixOffs = statusFixMarks(ctx, st)
 	if d.Config != nil {
 		r.Attention = append(r.Attention, statusMergedUnreviewed(prs, repoByID, d.Config.Board.RecentClosed.Duration, now)...)
 	}
@@ -685,6 +686,28 @@ func statusQueueMarks(ctx context.Context, st *store.Store, queue []statusPRLine
 			q.Open = s.Open
 		}
 	}
+}
+
+// statusFixMarks are the PRs (by id) with a fix loop in either phase (an
+// engine.KVPRFix row, readable or not) and the PRs switched out of autofix
+// (an engine.KVPRFixOff row): two queries, whatever the number of PRs. A
+// registry that cannot say leaves both nil.
+func statusFixMarks(ctx context.Context, st *store.Store) (loops, offs map[int64]bool) {
+	read := func(glob string, key func(int64) string) map[int64]bool {
+		keys, err := st.KVKeys(ctx, glob)
+		if err != nil {
+			return nil
+		}
+		out := map[int64]bool{}
+		for _, k := range keys {
+			var id int64
+			if _, err := fmt.Sscanf(k, "pr.%d.", &id); err == nil && key(id) == k {
+				out[id] = true
+			}
+		}
+		return out
+	}
+	return read("pr.*.fix", engine.KVPRFix), read("pr.*.fix_off", engine.KVPRFixOff)
 }
 
 // statusSnooze is the PR's snooze when it holds at now.

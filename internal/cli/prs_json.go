@@ -70,6 +70,7 @@ type prsJSONRow struct {
 	CodexFlagDetail  string            `json:"codex_flag_detail"`      // when and where it was flagged, and how to lift the flag
 	MuteReason       string            `json:"mute_reason"`            // the latest mute's reason; "" when none was given
 	Fixing           string            `json:"fixing"`                 // "fixing 1/3 · claude-fix" while its fixer works (magnum fix, autofix); "" otherwise
+	FixLoop          bool              `json:"fix_loop"`               // has a fix loop in either phase, the fixer at work or waiting for its re-review (magnum abort ends it)
 	FixOff           bool              `json:"fix_off"`                // switched out of autofix (magnum fix --off)
 	Note             string            `json:"note"`
 	ProjectNote      string            `json:"project_note"` // the agents ran without the PR's own agent config changes
@@ -290,7 +291,7 @@ func prsJSONOf(r tui.PRBoardRow) prsJSONRow {
 		Progress: mapPtr(r.Progress, prsJSONProgressOf), Spend: mapPtr(r.Spend, prsJSONSpendOf), Wait: r.Wait, WaitDetail: r.WaitDetail,
 		WaitNarrow: r.WaitNarrow, PinWait: r.PinWait, PinnedBy: r.PinnedBy, ReleaseAfter: r.ReleaseAfter, DeltaCheck: r.DeltaCheck, Note: r.Note, ProjectNote: r.ProjectNote,
 		SnoozedUntil: r.SnoozedUntil, SnoozedAt: r.SnoozedAt, SnoozedBy: r.SnoozedBy,
-		CodexFlag: r.CodexFlag, CodexFlagDetail: r.CodexFlagSentence, MuteReason: r.MuteReason, Fixing: r.Fixing, FixOff: r.FixOff,
+		CodexFlag: r.CodexFlag, CodexFlagDetail: r.CodexFlagSentence, MuteReason: r.MuteReason, Fixing: r.Fixing, FixLoop: r.FixLoop, FixOff: r.FixOff,
 		RequestedToMe: mapPtr(r.RequestedToMe, prsJSONRequestOf), LastRequest: mapPtr(r.LastRequest, prsJSONRequestOf),
 		Requests: mapList(r.Requests, prsJSONRequestOf), ClosedAt: r.ClosedAt, Recent: r.Recent, MergedUnreviewed: r.MergedUnreviewed, FlagDismissed: r.FlagDismissed,
 		NeedsMe: r.NeedsMe, ReviewDecision: r.ReviewDecision, AutoApproveStopped: r.AutoStopped, AutoApproveRefused: r.AutoRefused,

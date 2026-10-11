@@ -193,6 +193,7 @@ func statusDashData(r statusReport, defaultRepo string) tui.StatusData {
 			row.PRRef = actRefLabel(defaultRepo, v.Slot.RepoFullName, v.PR.Number)
 			row.PRState, row.URL, row.PRGHState = screenPRState(*v.PR), v.PR.URL, v.PR.GHState
 			row.PRMergedUnreviewed, row.PRFlagDismissed = v.PR.MergedUnreviewed(), v.PR.FlagDismissed()
+			row.PRFixLoop, row.PRFixOff = r.fixLoops[v.PR.ID], r.fixOffs[v.PR.ID]
 		}
 		out.Slots = append(out.Slots, row)
 	}
@@ -208,6 +209,7 @@ func statusDashData(r statusReport, defaultRepo string) tui.StatusData {
 		if q.rec != nil {
 			row.Review, row.GHState = reviewFactsOf(*q.rec), q.rec.GHState
 			row.MergedUnreviewed, row.FlagDismissed = q.rec.MergedUnreviewed(), q.rec.FlagDismissed()
+			row.FixLoop, row.FixOff = r.fixLoops[q.rec.ID], r.fixOffs[q.rec.ID]
 		}
 		return row
 	}

@@ -44,7 +44,9 @@ func newAbortCmd(c *Context) *cobra.Command {
 			"asked for, or an automatic one) is taken back before it starts: its forced mark and what it asked for "+
 			"(fresh sessions, roles, a dry run) go, and nothing else is touched. Either way the PR goes back to "+
 			"reviewed, or baseline when it was never reviewed (a merged PR's post-merge review: back to closed), "+
-			"and the next push queues it again. Exits 1 when no review of the PR runs or waits.")
+			"and the next push queues it again. A fix loop (`magnum fix`) is stopped too, whether its fixer works (the PR "+
+			"stays reviewed meanwhile) or the loop waits for its re-review or next cycle: the fixer is interrupted, its "+
+			"slot put back and the loop ended. Exits 1 when no review of the PR runs or waits and it has no fix loop.")
 }
 
 func newStopCmd(c *Context, k stopKind, short, long string) *cobra.Command {
@@ -81,12 +83,25 @@ func runStop(c *Context, k stopKind, o stopOpts, pos []string) int {
 
 // abortable are the PR states abort takes a review from: a round running
 // (claiming, reviewing, verifying) or paused, and a review waiting in line
-// (queued, rereview_pending).
+// (queued, rereview_pending). A PR in any state with a fix loop is a target
+// too (hasFixLoop).
 var abortable = []string{store.PRClaiming, store.PRReviewing, store.PRVerifying, store.PRPaused, store.PRQueued, store.PRRereviewPending}
 
+// hasFixLoop reports whether the PR has a fix loop in either phase: its
+// engine.KVPRFix row exists (an unreadable one too, which the daemon's abort
+// clears). The PR stays reviewed while the fixer works, so its state alone
+// would refuse the abort that stops the loop.
+func hasFixLoop(ctx context.Context, st *store.Store, prID int64) bool {
+	if st == nil {
+		return false
+	}
+	_, ok, err := st.GetKV(ctx, engine.KVPRFix(prID))
+	return ok && err == nil
+}
+
 // stopMain hands an abort or ignore of ref to the daemon and waits for it.
-// An abort of a PR with no review running or waiting fails here, before any
-// request; without a daemon nothing runs, so an abort fails, and an ignore is
+// An abort of a PR with no review running or waiting and no fix loop fails
+// here, before any request; without a daemon nothing runs, so an abort fails, and an ignore is
 // queued for the next start (like mute).
 func stopMain(ctx context.Context, c *Context, d *actDeps, k stopKind, ref string, o stopOpts) int {
 	t, err := d.resolve(ctx, ref, "", "")
@@ -94,7 +109,7 @@ func stopMain(ctx context.Context, c *Context, d *actDeps, k stopKind, ref strin
 		return cmdFail(c, k.name, verbFix(k.name, err))
 	}
 	label := d.actLabel(t.full(), t.PR.Number)
-	if k.running && !slices.Contains(abortable, t.PR.State) {
+	if k.running && !slices.Contains(abortable, t.PR.State) && !hasFixLoop(ctx, d.Store, t.PR.ID) {
 		return cmdFail(c, k.name, fmt.Errorf("no review of %s is running or queued (state %s)", label, t.PR.State))
 	}
 	// Nothing runs without a daemon: an abort is refused then (the next

@@ -58,14 +58,14 @@ func TestBoardRowsAndTheStatusCardCarryTheFixLoop(t *testing.T) {
 	for _, r := range rows {
 		byNum[r.Number] = r
 	}
-	if r := byNum[11920]; r.Fixing != "fixing 1/3 · claude-fix" || r.FixOff {
-		t.Errorf("the fixing row: Fixing %q, FixOff %v", r.Fixing, r.FixOff)
+	if r := byNum[11920]; r.Fixing != "fixing 1/3 · claude-fix" || !r.FixLoop || r.FixOff {
+		t.Errorf("the fixing row: Fixing %q, FixLoop %v, FixOff %v", r.Fixing, r.FixLoop, r.FixOff)
 	}
-	if r := byNum[11930]; r.Fixing != "" || !r.FixOff {
-		t.Errorf("the fix-off row: Fixing %q, FixOff %v", r.Fixing, r.FixOff)
+	if r := byNum[11930]; r.Fixing != "" || r.FixLoop || !r.FixOff {
+		t.Errorf("the fix-off row: Fixing %q, FixLoop %v, FixOff %v", r.Fixing, r.FixLoop, r.FixOff)
 	}
-	if r := byNum[11931]; r.Fixing != "" {
-		t.Errorf("a loop waiting for its re-review: Fixing %q", r.Fixing)
+	if r := byNum[11931]; r.Fixing != "" || !r.FixLoop {
+		t.Errorf("a loop waiting for its re-review: Fixing %q, FixLoop %v", r.Fixing, r.FixLoop)
 	}
 	if s := prsStateCell(byNum[11920], now); !strings.Contains(s, ",fixing") {
 		t.Errorf("STATE of the fixing row = %q", s)
@@ -73,7 +73,7 @@ func TestBoardRowsAndTheStatusCardCarryTheFixLoop(t *testing.T) {
 	if s := prsStateCell(byNum[11930], now); !strings.Contains(s, ",fix-off") {
 		t.Errorf("STATE of the fix-off row = %q", s)
 	}
-	for n, want := range map[int]string{11920: `"fixing": "fixing 1/3 · claude-fix"`, 11930: `"fix_off": true`} {
+	for n, want := range map[int]string{11920: `"fixing": "fixing 1/3 · claude-fix"`, 11930: `"fix_off": true`, 11931: `"fix_loop": true`} {
 		var js bytes.Buffer
 		if err := writeJSON(&js, prsJSONOf(byNum[n])); err != nil {
 			t.Fatal(err)

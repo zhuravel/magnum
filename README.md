@@ -1444,8 +1444,8 @@ on one `[[watch]]` first if you like. The switch is config only.
 to you. Autofix never starts a loop on it. A `magnum fix` you ask for still runs, with the note "fix is off
 for this PR: this requested loop runs anyway", as a forced review runs on a muted PR. `magnum fix --on <pr>`
 (the board's `F` again) puts the PR back. Muting a PR stops every automatic round, and `fix off` stops only
-autofix. The status dashboard has the same `f` and `F` keys, but it cannot see the flag, so its `F` only
-takes a PR out of autofix. The board's `F` and the command switch it back on.
+autofix. The status dashboard has the same `f` and `F` keys, and its `F` reads `fix on` on a PR you took
+out, as the board's does.
 
 **What you see.**
 
@@ -1453,7 +1453,7 @@ takes a PR out of autofix. The board's `F` and the command switch it back on.
   cell), then the usual `reviewing` for the re-review. A PR taken out of autofix carries `fix off` in its
   flags and on its card. The dashboard shows the fixer's pane like any agent's.
 - `magnum status <pr>` prints a `fix:` line with the cycle, the cap, who started the loop and the report's
-  path, or `off since 12:30 (magnum fix --off)`. `magnum prs --json` has `fixing` and `fix_off`.
+  path, or `off since 12:30 (magnum fix --off)`. `magnum prs --json` has `fixing`, `fix_loop` (a loop in either phase) and `fix_off`.
 - `magnum logs <ref>` shows `fix.start`, `fix.pushed`, `fix.replied`, `fix.needs_you`, `fix.capped`,
   `fix.done`, `fix.failed`, `fix.stopped` and `fix.ended`.
 - `magnum stats` counts fix cycles per day and repository in a FIX CYCLES table. They are not rounds.
@@ -1462,7 +1462,9 @@ takes a PR out of autofix. The board's `F` and the command switch it back on.
 
 **Good to know.**
 
-- `magnum abort <pr>` interrupts the fixer, abandons its run, puts the slot back and ends the loop.
+- `magnum abort <pr>` interrupts the fixer, abandons its run, puts the slot back and ends the loop. It
+  reaches the loop in both phases, although the PR stays `reviewed` while the fixer works, and so does the
+  `K` key of the board and the dashboard.
   `magnum review <pr>` refuses while the PR has a loop.
 - A fix job is no review round, so it does not count toward `[daemon] max_concurrent_reviews`.
 - `magnum daemon-restart` refuses while a fixer works. `--drain` waits for it and starts no new cycle
@@ -1494,7 +1496,7 @@ takes a PR out of autofix. The board's `F` and the command switch it back on.
 | `magnum pin\|unpin\|release\|mute\|unmute <ref>`, `magnum mute <ref> [reason…]` | Hold a PR's slot and sessions, hand them back, stop automation for a PR (on a merged PR `mute` dismisses its merged-unreviewed flag and `unmute` restores it). The words after a muted PR are the mute's reason, kept in the request, its answer and the `pr.muted` event, and shown under the head of the board's card (`muted: <reason>`; `mute_reason` in `prs --json`); a mute takes a PR waiting for an automatic round out of the queue at once (ineligible, `muted`), and `unmute` decides its eligibility again. A mute stops every automatic round. To leave only autofix alone, use `magnum fix --off`, which the board shows as `fix off` where it shows `muted`. |
 | `magnum snooze <ref> [--for 2h \| --until 18:00 \| --off]` | Hold a PR's automatic reviews until then (default 2h): no push, re-review, reply round or delta check starts a round, while `magnum review`, the board and a GitHub review request still do; it ends on its own and survives restarts, `--off` lifts it (see Configuration). Board key `z`. |
 | `magnum codex-flag set <ref> [reason...]`, `magnum codex-flag clear <ref>` | Flag a PR Codex warned about (a round Codex refuses flags its PR by itself, a refused helper agent of a role too): magnum never reviews it again, not even `magnum review` or the board's `r`/`R`, parks its agents and releases its pool slot unless `magnum open` pinned it, and names it in no other PR's `related.json`; with `[pipeline] judge_fallback` set, the PR goes on without Codex, with that judge (see "Codex may block an account" above). `clear` lifts the flag after a y/N question on a terminal that names the account risk; the PR is then judged by its watch again (see Configuration). |
-| `magnum abort <ref>` | Kill a PR's running (or paused) review: its agents are interrupted, its runs abandoned, its sessions parked and a pool slot handed back. A review that waits in line (one `magnum review` asked for, or an automatic one) is taken back before it starts: its forced mark and what it asked for go, and nothing else is touched. The PR returns to reviewed (or baseline) until the next push. It also ends a PR's fix loop: the fixer is interrupted, its run abandoned and the slot put back. |
+| `magnum abort <ref>` | Kill a PR's running (or paused) review: its agents are interrupted, its runs abandoned, its sessions parked and a pool slot handed back. A review that waits in line (one `magnum review` asked for, or an automatic one) is taken back before it starts: its forced mark and what it asked for go, and nothing else is touched. The PR returns to reviewed (or baseline) until the next push. It also ends a PR's fix loop, whether its fixer works (the PR stays reviewed meanwhile) or the loop waits for its re-review or next cycle: the fixer is interrupted, its run abandoned and the slot put back. |
 | `magnum approve <ref> [-m TEXT] [--as IDENTITY] [--force]`, `magnum request-changes <ref> [-m TEXT] [--force]` | Your own verdict on the head magnum reviewed, posted by the daemon as the PR's posting identity with a body that names magnum's review and its findings: for repositories where magnum only comments, or when you decide differently. The head must still be the reviewed one unless `--force`. A manual approval follows the head like magnum's own; magnum's later rounds never dismiss a manual verdict as their own stale review. `--as` the watch's `auto_approve_as` posts your own approval, which GitHub counts (an App's never does), followed like an automatic one (PRs that need you, below); `--as` the PR's posting identity is the approval without it. Board keys `A` and `C`. |
 | `magnum unapprove <ref> [--resume] [--yes] [--json]` | Withdraw the approval Magnum posted as you on the PR (Approving as you), dismissing it as you, and stop it approving that PR as you; without one standing it only stops it. Asks y/N on a terminal. `--resume` lets Magnum approve the PR as you again; your reviews from before then no longer stop it. Board key `D`. On a terminal `--json` needs `--yes`: without it the command refuses (exit 2) instead of skipping the question. |
 | `magnum ignore <ref>` | Abort, then mute the PR as ignored and free its slot: the daemon never queues it again until `magnum unmute <ref>`, which undoes the ignore. |

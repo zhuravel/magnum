@@ -178,10 +178,14 @@ type PRBoardRow struct {
 	// Fixing is the PR's fix loop while its fixer works, as the state cell
 	// shows it ("fixing 1/3 · claude-fix", engine.FixState.Short); "" when
 	// no fixer works on it (a loop waiting for its re-review shows the PR's
-	// state). FixOff: the PR was switched out of autofix (`magnum fix
+	// state). FixLoop: the PR has a fix loop in either phase, the fixer at
+	// work or the loop waiting for its re-review or next cycle (its
+	// engine.KVPRFix row exists): K aborts it, although the PR may be
+	// reviewed. FixOff: the PR was switched out of autofix (`magnum fix
 	// --off`); its tags and the card say "fix off".
-	Fixing string
-	FixOff bool
+	Fixing  string
+	FixLoop bool
+	FixOff  bool
 	// Note is a one-line remark about the last review shown under LAST REVIEW
 	// on the card (e.g. "comment-only push skipped (a7b3f8c → 602da9d)").
 	Note string

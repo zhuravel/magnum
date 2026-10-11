@@ -196,3 +196,97 @@ func TestDashboardFixKeysAsk(t *testing.T) {
 	m, _ = send(t, m, keyMsg("?"))
 	mustContain(t, viewOf(m), "fix the PR's findings as you (asks y/N)", "no autofix (asks y/N)")
 }
+
+// K reaches a PR with a fix loop in either phase although the PR stays
+// reviewed while the fixer works (PRBoardRow.FixLoop; Fixing names only the
+// fixing phase): it asks, and y sends the abort that stops the fixer or ends
+// the loop. A reviewed PR without a loop is still refused before asking.
+func TestKAbortsAFixLoop(t *testing.T) {
+	for _, edit := range []func(r *PRBoardRow){
+		func(r *PRBoardRow) { r.FixLoop, r.Fixing = true, "fixing 1/3 · claude-fix" },
+		func(r *PRBoardRow) { r.FixLoop = true }, // waiting for its next cycle
+	} {
+		m, act := fixBoard(t, edit)
+		m, _ = send(t, m, keyMsg("K"))
+		if m.confirm == nil || len(act.calls) != 0 {
+			t.Fatalf("K on a PR with a fix loop asked %+v, ran %v", m.confirm, act.calls)
+		}
+		if _, _ = boardAct(t, m, "y"); !slices.Equal(act.calls, []string{"abort talkable/talkable#5"}) {
+			t.Errorf("y called %v, want the abort of the row's ref", act.calls)
+		}
+	}
+	m, act := fixBoard(t, nil)
+	m, _ = send(t, m, keyMsg("K"))
+	if m.confirm != nil || len(act.calls) != 0 {
+		t.Errorf("K on a reviewed PR without a loop asked %+v, ran %v", m.confirm, act.calls)
+	}
+	mustContain(t, viewOf(m), "no review of talkable#5 is running or queued (reviewed)")
+}
+
+// The dashboard knows a PR's fix loop from the status gather, on its slot's
+// row (where a PR whose fixer works shows: it is reviewed, so in no queue)
+// and on a queue row: K asks there and y sends the abort.
+func TestDashboardKAbortsAFixLoop(t *testing.T) {
+	data := dashData()
+	data.Slots = []SlotRow{{Name: "review3", Folder: "~/Projects/talkable.review3", PRRef: "talkable#5", PRState: "reviewed",
+		State: "busy", SlotState: "busy", DBs: "-", Disk: "4.0G", PRFixLoop: true}}
+	data.Queue = []PRRow{{Ref: "talkable#7", Title: "Fix the referral widget", State: "reviewed", Next: "watching for new pushes", FixLoop: true}}
+	for _, c := range []struct {
+		keys []string
+		call string
+	}{
+		{[]string{"K", "y"}, "abort talkable#5"},
+		{[]string{"j", "K", "y"}, "abort talkable#7"},
+	} {
+		m, src, act := newDash(t, 220, 50)
+		src.data = data
+		m, _ = send(t, m, dashDataMsg{data: data})
+		if _, _ = dashAct(t, m, c.keys...); !slices.Equal(act.calls, []string{c.call}) {
+			t.Errorf("%v called %v, want %q", c.keys, act.calls, c.call)
+		}
+	}
+	data.Slots[0].PRFixLoop = false
+	m, _, act := newDash(t, 220, 50)
+	m, _ = send(t, m, dashDataMsg{data: data}, keyMsg("K"))
+	if m.confirm != nil || len(act.calls) != 0 {
+		t.Errorf("K on a reviewed PR without a loop asked %+v, ran %v", m.confirm, act.calls)
+	}
+}
+
+// The dashboard's F follows the PR's opt-out of autofix as the board's does:
+// on a row switched out it reads "fix on", asks to autofix the PR again and
+// sends --on.
+func TestDashboardFTogglesFixOff(t *testing.T) {
+	data := dashData()
+	data.Slots = []SlotRow{{Name: "review3", Folder: "~/Projects/talkable.review3", PRRef: "talkable#5", PRState: "reviewed",
+		State: "busy", SlotState: "busy", DBs: "-", Disk: "4.0G", PRFixOff: true}}
+	data.Queue = []PRRow{{Ref: "talkable#7", Title: "Fix the referral widget", State: "reviewed", Next: "watching for new pushes"}}
+	for _, c := range []struct {
+		keys             []string
+		label, ask, call string
+	}{
+		{nil, "fix on", "Autofix talkable#5 again?", "fix --on talkable#5"},
+		{[]string{"j"}, "fix off", "Leave talkable#7's findings to you (no autofix)?", "fix --off talkable#7"},
+	} {
+		m, src, act := newDash(t, 220, 50)
+		src.data = data
+		m, _ = send(t, m, dashDataMsg{data: data})
+		m, _ = send(t, m, keys(c.keys...)...)
+		label := ""
+		for _, it := range m.menuItems() {
+			if it.key == "F" {
+				label = it.label
+			}
+		}
+		if label != c.label {
+			t.Errorf("%v: the menu entry of F reads %q, want %q", c.keys, label, c.label)
+		}
+		m, _ = send(t, m, keyMsg("F"))
+		if m.confirm == nil || m.confirm.question != c.ask {
+			t.Fatalf("%v: F asked %+v, want %q", c.keys, m.confirm, c.ask)
+		}
+		if _, _ = dashAct(t, m, "y"); !slices.Equal(act.calls, []string{c.call}) {
+			t.Errorf("%v: y called %v, want %q", c.keys, act.calls, c.call)
+		}
+	}
+}

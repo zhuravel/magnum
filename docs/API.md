@@ -16871,10 +16871,14 @@ type PRBoardRow struct {
 	// Fixing is the PR's fix loop while its fixer works, as the state cell
 	// shows it ("fixing 1/3 · claude-fix", engine.FixState.Short); "" when
 	// no fixer works on it (a loop waiting for its re-review shows the PR's
-	// state). FixOff: the PR was switched out of autofix (`magnum fix
+	// state). FixLoop: the PR has a fix loop in either phase, the fixer at
+	// work or the loop waiting for its re-review or next cycle (its
+	// engine.KVPRFix row exists): K aborts it, although the PR may be
+	// reviewed. FixOff: the PR was switched out of autofix (`magnum fix
 	// --off`); its tags and the card say "fix off".
-	Fixing string
-	FixOff bool
+	Fixing  string
+	FixLoop bool
+	FixOff  bool
 	// Note is a one-line remark about the last review shown under LAST REVIEW
 	// on the card (e.g. "comment-only push skipped (a7b3f8c → 602da9d)").
 	Note string
@@ -16978,6 +16982,10 @@ type PRRow struct {
 	// (store.IsMergedUnreviewed, store.IsFlagDismissed). M dismisses the one
 	// and restores the other.
 	MergedUnreviewed, FlagDismissed bool
+	// FixLoop: the PR has a fix loop in either phase (its engine.KVPRFix row
+	// exists), which K aborts although the PR may be reviewed; FixOff: it
+	// was switched out of autofix (`magnum fix --off`), so F reads "fix on".
+	FixLoop, FixOff bool
 }
     PRRow is one queued (or closing) PR; Ref is what actions receive.
 
@@ -17255,6 +17263,10 @@ type SlotRow struct {
 	// PRMergedUnreviewed and PRFlagDismissed are PRRow's MergedUnreviewed and
 	// FlagDismissed for the slot's PR; read with PRGHState.
 	PRMergedUnreviewed, PRFlagDismissed bool
+	// PRFixLoop and PRFixOff are PRRow's FixLoop and FixOff for the slot's
+	// PR: a PR whose fixer works is reviewed, so it shows on its slot's row
+	// and in no queue.
+	PRFixLoop, PRFixOff bool
 }
     SlotRow is one review slot. Actions on a slot row target PRRef,
     or the slot Name for pin/unpin/release when it holds no PR. SlotState is

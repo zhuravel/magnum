@@ -130,6 +130,10 @@ type SlotRow struct {
 	// PRMergedUnreviewed and PRFlagDismissed are PRRow's MergedUnreviewed and
 	// FlagDismissed for the slot's PR; read with PRGHState.
 	PRMergedUnreviewed, PRFlagDismissed bool
+	// PRFixLoop and PRFixOff are PRRow's FixLoop and FixOff for the slot's
+	// PR: a PR whose fixer works is reviewed, so it shows on its slot's row
+	// and in no queue.
+	PRFixLoop, PRFixOff bool
 }
 
 // PRRow is one queued (or closing) PR; Ref is what actions receive.
@@ -142,6 +146,10 @@ type PRRow struct {
 	// (store.IsMergedUnreviewed, store.IsFlagDismissed). M dismisses the one
 	// and restores the other.
 	MergedUnreviewed, FlagDismissed bool
+	// FixLoop: the PR has a fix loop in either phase (its engine.KVPRFix row
+	// exists), which K aborts although the PR may be reviewed; FixOff: it
+	// was switched out of autofix (`magnum fix --off`), so F reads "fix on".
+	FixLoop, FixOff bool
 }
 
 // AttentionRow is something that needs the user.
@@ -658,6 +666,10 @@ func (m dashboardModel) actRow() actRow {
 		row.inSlot = true
 		row.pinned = s.Pinned
 		row.pinKnown = row.pinned || ref == ""
+		row.fixLoop, row.fixOff = s.PRFixLoop, s.PRFixOff
+	}
+	if q, ok := m.queueRow(ref); ok {
+		row.fixLoop, row.fixOff = row.fixLoop || q.FixLoop, row.fixOff || q.FixOff
 	}
 	if ref == "" {
 		row.slot, row.label, row.none = r.slot.Name, "slot "+r.slot.Name, "slot "+r.slot.Name+" holds no PR"
