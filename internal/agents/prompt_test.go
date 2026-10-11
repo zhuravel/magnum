@@ -354,7 +354,7 @@ func TestTheFixSkillNamesTheRepliesAndTheReportMagnumReads(t *testing.T) {
 	for _, want := range []string{
 		"name: magnum-fix",
 		`"Fixed in <sha7>: `, `"Already fixed in <sha7>"`, `"Fixed: the description now `, `"Not a bug: `, `"Won't fix: `,
-		"\n## Pushed\n", "\n## Replied\n", "\n## Needs you\n",
+		"\n## Pushed\n", "\n## Replied\n", "\n## Needs you\n", "\n- <review id> description: <reason>\n",
 		"resolveReviewThread", "pulls/{number}/comments/{comment_id}/replies",
 	} {
 		if !strings.Contains(skill, want) {

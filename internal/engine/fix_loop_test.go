@@ -1052,10 +1052,18 @@ func TestNeedsYourCallNamesOnlyWhatItCanRead(t *testing.T) {
 }
 
 // A finding about the PR description has no path and line: its place is the
-// word "description", which the message names like a path.
+// word "description", which the message names like a path. The judge posts
+// it as a "Description: ✗" line of the review body, so the fixer names it
+// by the review's id without a priority (a live loop on 2026-10-12 wrote
+// such an entry and the message counted it as one it could not read).
 func TestNeedsYourCallReadsADescriptionEntry(t *testing.T) {
-	got := needsYourCall([]string{"5485002407 P2 description: the body names two migrations, the head has four"}, "/state/claude-fix.md")
-	if want := "1 finding needs your call (5485002407 P2 description): /state/claude-fix.md"; got != want {
-		t.Errorf("needsYourCall = %q, want %q", got, want)
+	for entry, want := range map[string]string{
+		"5485002407 P2 description: the body names two migrations, the head has four": "1 finding needs your call (5485002407 P2 description): /state/claude-fix.md",
+		"5485002407 description: the Deploy section still says two migrations":        "1 finding needs your call (5485002407 description): /state/claude-fix.md",
+		"5485002407 description PR body, Deploy section: two migrations":              "1 finding needs your call (5485002407 description): /state/claude-fix.md",
+	} {
+		if got := needsYourCall([]string{entry}, "/state/claude-fix.md"); got != want {
+			t.Errorf("needsYourCall(%q) = %q, want %q", entry, got, want)
+		}
 	}
 }

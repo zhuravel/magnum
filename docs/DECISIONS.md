@@ -1055,6 +1055,18 @@ skill versions); people add theirs to the sections before it, at the end of the 
   name `description` in place of a path and line. A description change alone forces no re-review: the
   next round verifies the description's claims as it always did. Rejected: a re-review on a description
   change (a forced round for a sentence the next round checks anyway).
+- 2026-10-12: The judge posts a stale description as a `Description: ✗` line of the review body, not as
+  a comment, so that finding has no comment id and no priority; the fix skill now reads that line as one
+  more finding of the review (section 2), named in the report by the review's id without a priority
+  (`- <review id> description: <reason>`), and the "needs you" parser (`needsYouEntryRe`) makes the
+  priority optional. Before, the fixer wrote such an entry and the attention message counted it as "1
+  entry magnum could not read", twice on one PR. The skill also says whose findings a run's are: this
+  review's comments, its `Description: ✗` line and the threads its body names as still open; a finding
+  the fixer remembers from an earlier run that this review does not name is left and not reported, because
+  the re-review checks it again. Before, a fixer carried a description finding of an earlier review into
+  a run whose review did not name it, refused to edit the body for it (a finding of this run names what
+  may change) and put it under "needs you", which ended the loop after the re-review with two new fixable
+  findings left for the operator.
 
 ## Screens and commands
 

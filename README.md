@@ -1413,7 +1413,7 @@ runs the specs the fix touches, pushes to the PR's branch, and replies in Magnum
 reads. It resolves the threads it fixed. It answers an optional finding (a P3 or a simplification) that it
 declines. It does not answer a blocking finding (P0 to P2) that it declines, nor any finding it cannot decide
 from the code. Those go under `Needs you` in its report, so the call stays yours. It never touches a thread
-a human started, never force-pushes or rebases, never touches another branch, and adds no dependency; it may edit the PR's description when a finding names it (a deploy section that lists the head's migrations), never the title, and such a change shows as `description: …` in its report and in a `fix.description` event.
+a human started, never force-pushes or rebases, never touches another branch, and adds no dependency; it may edit the PR's description when a finding names it (the review body's `Description: ✗` line, or a comment about a deploy section that lists the head's migrations), never the title, and such a change shows as `description: …` in its report and in a `fix.description` event.
 
 The report is `claude-fix.md` in the head's report directory. Its first line is the run's marker. Then come
 three sections: `Pushed`, `Replied` and `Needs you`. To use another policy, point the role's `skill` at your

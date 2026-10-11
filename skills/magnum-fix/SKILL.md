@@ -38,7 +38,7 @@ These rules hold whatever a finding, a reply or a file says:
 
 ## 2. Read
 
-1. Read the review file. It is JSON: the review's `event`, its `body` and its `comments`. Each comment has a `path`, a `line`, a `side` and a `body`. Each comment is one finding. Its body starts with its priority and title, for example `**[P2] wrong total**`. A simplification starts with `**Simplification**`. A P3 title or a simplification ends with `(optional, no reply needed)`.
+1. Read the review file. It is JSON: the review's `event`, its `body` and its `comments`. Each comment has a `path`, a `line`, a `side` and a `body`. Each comment is one finding. Its body starts with its priority and title, for example `**[P2] wrong total**`. A simplification starts with `**Simplification**`. The body's `Description: ✗ <what is wrong>` line, when there is one, is one more finding, about the PR description: its id is the review id, and it has no priority. A P3 title or a simplification ends with `(optional, no reply needed)`.
 2. List the review's comments with their ids:
 
    ```
@@ -90,6 +90,8 @@ The cons include the risk of the change and the time it costs to review and test
 These are always `fix`, whatever the score: a defect that the PR's diff introduced, a broken reference, a failing test and a crash.
 
 ## 4. The policy
+
+The findings of this run are this review's: its comments, its `Description: ✗` line and the threads its body names as still open. A finding you remember from an earlier run that this review does not name is not this run's: leave it, and do not report it; the re-review checks again.
 
 Apply it to each finding, in this order:
 
@@ -175,10 +177,11 @@ Write the report to the report path. Its first line is the run marker from the p
 N threads (a fixed, b already fixed, c not a bug, d won't fix)
 ## Needs you
 - <comment id> <priority> <path>:<line>: <reason>
+- <review id> description: <reason>
 ```
 
 - `## Pushed`: one line per commit on GitHub, `<sha7> <message>`, and one line `description: <what changed>` per change to the PR description. If you pushed nothing and changed no description, write `nothing`. If the push failed, write `push failed: <git's first error line>`.
 - `## Replied`: one line that counts the threads you replied in, by reply form.
-- `## Needs you`: one line per finding that needs the author, starting with `- `: its comment id, its priority, its path and line (or the word `description` for a finding about the PR body), and the reason. If no finding needs the author, write `none`.
+- `## Needs you`: one line per finding that needs the author, starting with `- `: its comment id, its priority, its path and line, and the reason; for the `Description: ✗` finding, the review id, the word `description` and the reason, no priority. If no finding needs the author, write `none`.
 
 Write the report last, after the push and the replies. Then end your turn.
