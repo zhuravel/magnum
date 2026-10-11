@@ -161,7 +161,7 @@ func doctorPrint(c *Context, cs []doctorCheck, asJSON bool) int {
 // a fixed order.
 func doctorRun(ctx context.Context, d doctorDeps) []doctorCheck {
 	groups := []func(context.Context, doctorDeps) []doctorCheck{
-		doctorConfig, doctorHerdrChecks, doctorAgentChecks, doctorSkill, doctorPrompts, doctorGH, doctorIdentities, doctorMySQLCheck,
+		doctorConfig, doctorHerdrChecks, doctorAgentChecks, doctorSkill, doctorFixRole, doctorPrompts, doctorGH, doctorIdentities, doctorMySQLCheck,
 		doctorClones, doctorSchemaReset, doctorMise, doctorLoginShell, doctorDisk, doctorStaging, doctorLaunchd, doctorLaunchdMise, doctorTerminal, doctorPluginCheck,
 		doctorLearnEditor, doctorRegistry,
 	}

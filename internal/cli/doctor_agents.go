@@ -12,6 +12,7 @@ import (
 	"github.com/zhuravel/magnum/internal/config"
 	"github.com/zhuravel/magnum/internal/execx"
 	"github.com/zhuravel/magnum/internal/gitx"
+	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/textx"
 )
 
@@ -239,6 +240,105 @@ func doctorSkill(_ context.Context, d doctorDeps) []doctorCheck {
 			continue
 		}
 		out = append(out, doctorOK("skill", "judge skill at "+inspTilde(p)))
+	}
+	return out
+}
+
+// doctorFixRole checks the fix role of every watch (Config.FixRoleFor), the
+// fixer of `magnum fix` and of autofix: its skill and prompt resolve (the
+// checkout's files, else the binary's own copy), and its identity is a gh
+// identity whose login check passes, since the fixer pushes and replies as
+// the operator's own account. A configuration that uses no fix job gets a
+// SKIP: no fix role, or an identity it never declared where no watch's
+// autofix = "own" would start the job by itself.
+func doctorFixRole(ctx context.Context, d doctorDeps) []doctorCheck {
+	cfg := d.Config
+	var roles []config.Role
+	autofix := map[string]bool{} // the roles a watch with autofix = "own" starts by itself
+	add := func(w *config.Watch) {
+		r, ok := cfg.FixRoleFor(w)
+		if !ok {
+			return
+		}
+		if !slices.ContainsFunc(roles, func(x config.Role) bool { return x.Name == r.Name }) {
+			roles = append(roles, r)
+		}
+		autofix[r.Name] = autofix[r.Name] || cfg.AutofixFor(w) == config.AutofixOwn
+	}
+	if len(cfg.Watches) == 0 {
+		add(nil)
+	}
+	for i := range cfg.Watches {
+		add(&cfg.Watches[i])
+	}
+	if len(roles) == 0 {
+		return []doctorCheck{doctorSkipped("fix role", "no fix role: [pipeline] fix_role names none, so `magnum fix` is refused (claude-fix is the built-in one)")}
+	}
+	var out []doctorCheck
+	for _, r := range roles {
+		out = append(out, doctorFixRoleCheck(ctx, d, r, autofix[r.Name])...)
+	}
+	return out
+}
+
+// doctorFixRoleCheck is doctorFixRole for one role; autofix says that a watch
+// starts its job by itself, so a job that cannot run fails instead of being
+// skipped.
+func doctorFixRoleCheck(ctx context.Context, d doctorDeps, r config.Role, autofix bool) []doctorCheck {
+	const name = "fix role"
+	head := "fix role " + r.Name
+	id := d.Config.IdentityByName(r.Identity)
+	if id == nil {
+		why := fmt.Sprintf("%s: identity %q is not declared, so the fix job cannot run", head, r.Identity)
+		if autofix {
+			return []doctorCheck{doctorFailed(name, why+`, and autofix = "own" would start it`,
+				fmt.Sprintf("declare a gh [[identity]] named %q for your own account, or set identity in a [[role]] named %s", r.Identity, r.Name))}
+		}
+		return []doctorCheck{doctorSkipped(name, why+"; `magnum fix` is refused until it is declared")}
+	}
+	var out []doctorCheck
+	var ok []string
+	src := config.RoleSkillPath(r, d.Layout)
+	fi, statErr := os.Stat(src)
+	switch {
+	case src == config.EmbeddedFixSkill:
+		ok = append(ok, "skill is the binary's own copy")
+	case statErr != nil || fi.IsDir():
+		out = append(out, doctorFailed(name, head+": fix skill missing at "+inspTilde(src),
+			"restore skills/magnum-fix/SKILL.md (`git checkout -- skills`) or fix the fix role's skill in config.toml"))
+	default:
+		ok = append(ok, "skill at "+inspTilde(src))
+	}
+	if p, err := d.Config.RolePrompt(r, config.PromptInitial); err != nil {
+		out = append(out, doctorFailed(name, fmt.Sprintf("%s: prompt does not resolve: %v", head, err),
+			"add the prompt to prompts_dir (`git checkout -- prompts`), or fix the [[role]] "+r.Name+" prompt in config.toml"))
+	} else if p.Embedded {
+		ok = append(ok, "prompt "+p.Name+" (embedded)")
+	} else {
+		ok = append(ok, "prompt "+p.Name+" (prompts_dir)")
+	}
+	who := fmt.Sprintf("identity %s (%s, %s)", id.Name, id.Kind, id.Login)
+	kv := func(key string) string {
+		if d.Store == nil {
+			return ""
+		}
+		v, _, _ := d.Store.GetKV(ctx, key)
+		return v
+	}
+	switch {
+	case id.Kind != "gh":
+		out = append(out, doctorFailed(name, fmt.Sprintf("%s: identity %s is an %s identity: the fixer pushes and replies as your own account", head, id.Name, id.Kind),
+			"point the fix role at a gh [[identity]] for your account (identity in the [[role]] named "+r.Name+")"))
+	case kv(store.KVIdentityCheck(id.Name)) == "pass":
+		ok = append(ok, who+": last check passed")
+	case kv(store.KVIdentityCheck(id.Name)) == "fail":
+		out = append(out, doctorFailed(name, fmt.Sprintf("%s: %s: last check failed: %s", head, who, kv(store.KVIdentityError(id.Name))),
+			"fix it, then `magnum identities check --name "+id.Name+"`"))
+	default:
+		out = append(out, doctorWarned(name, head+": "+who+": never checked", "magnum identities check --name "+id.Name))
+	}
+	if len(out) == 0 {
+		return []doctorCheck{doctorOK(name, head+": "+strings.Join(ok, ", "))}
 	}
 	return out
 }

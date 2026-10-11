@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/zhuravel/magnum/internal/inventory"
 	"github.com/zhuravel/magnum/internal/launchd"
 	"github.com/zhuravel/magnum/internal/mysqlx"
+	"github.com/zhuravel/magnum/internal/paths"
 	"github.com/zhuravel/magnum/internal/store"
 	"github.com/zhuravel/magnum/internal/store/storetest"
 )
@@ -657,5 +659,135 @@ func TestDoctorSaysWhyTheEditorIsOff(t *testing.T) {
 	if c := check(true); c.Status != doctorFail || !strings.Contains(c.Detail, "go does not run") || !strings.Contains(c.Detail, "go not found") ||
 		!strings.Contains(c.Fix, "mise") {
 		t.Fatalf("on, no go = %+v", c)
+	}
+}
+
+// doctorWithFixIdentity returns d with a gh identity named "me" declared, the
+// one the built-in claude-fix runs as, and the fix skill in place.
+func doctorWithFixIdentity(t *testing.T, d doctorDeps, check string) doctorDeps {
+	t.Helper()
+	cfg := *d.Config
+	cfg.Identities = append(slices.Clone(cfg.Identities), config.Identity{Name: "me", Kind: "gh", Login: "zhuravel", NoFindingsEvent: "APPROVE"})
+	d.Config = &cfg
+	fix, ok := cfg.FixRoleFor(nil)
+	if !ok {
+		t.Fatal("no fix role")
+	}
+	skill := config.RoleSkillPath(fix, d.Layout)
+	if err := os.MkdirAll(filepath.Dir(skill), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(skill, []byte("skill"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if check != "" {
+		if err := d.Store.SetKV(context.Background(), store.KVIdentityCheck("me"), check); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return d
+}
+
+// The fix role line says whether the fix job can run: the role's skill and
+// prompt resolve (a checkout's file, else the binary's own copy), and its
+// identity is a gh identity whose login check passes. A configuration that
+// does not use the fix job (no fix role, or an identity it never declared,
+// with no autofix to start the job by itself) gets a SKIP, not a failure.
+func TestDoctorChecksTheFixRole(t *testing.T) {
+	_, d, _, _ := doctorFixture(t)
+	fixCheck := func(d doctorDeps) doctorCheck {
+		t.Helper()
+		var found []doctorCheck
+		for _, c := range doctorRun(context.Background(), d) {
+			if c.Name == "fix role" {
+				found = append(found, c)
+			}
+		}
+		if len(found) != 1 {
+			t.Fatalf("%d fix role checks: %+v", len(found), found)
+		}
+		return found[0]
+	}
+
+	// The built-in claude-fix runs as "me", which the fixture never declared.
+	if c := fixCheck(d); c.Status != doctorSkip || !strings.Contains(c.Detail, `fix role claude-fix: identity "me" is not declared`) ||
+		!strings.Contains(c.Detail, "`magnum fix` is refused") {
+		t.Fatalf("undeclared identity = %+v", c)
+	}
+	// With autofix = "own" the job would start by itself and cannot: that fails.
+	own := d
+	cfg := *d.Config
+	cfg.Watches = slices.Clone(cfg.Watches)
+	cfg.Watches[0].Autofix = config.AutofixOwn
+	own.Config = &cfg
+	if c := fixCheck(own); c.Status != doctorFail || !strings.Contains(c.Detail, `identity "me" is not declared`) || !strings.Contains(c.Fix, `a gh [[identity]] named "me"`) {
+		t.Fatalf("undeclared identity under autofix = %+v", c)
+	}
+
+	// A gh identity whose login check passed, and a skill: the job can run.
+	ok := doctorWithFixIdentity(t, d, "pass")
+	c := fixCheck(ok)
+	fix, _ := ok.Config.FixRoleFor(nil)
+	if c.Status != doctorPass || !strings.Contains(c.Detail, "fix role claude-fix") || !strings.Contains(c.Detail, inspTilde(config.RoleSkillPath(fix, ok.Layout))) ||
+		!strings.Contains(c.Detail, "identity me (gh, zhuravel): last check passed") {
+		t.Fatalf("healthy = %+v", c)
+	}
+
+	// A checkout without the skill file fails, as a missing judge skill does.
+	missing := doctorWithFixIdentity(t, d, "pass")
+	if err := os.Remove(config.RoleSkillPath(fix, missing.Layout)); err != nil {
+		t.Fatal(err)
+	}
+	if c := fixCheck(missing); c.Status != doctorFail || !strings.Contains(c.Detail, "fix skill missing at") || !strings.Contains(c.Fix, "skills/magnum-fix/SKILL.md") {
+		t.Fatalf("missing skill = %+v", c)
+	}
+
+	// An installed binary has no checkout: the skill is its own copy.
+	bare := doctorWithFixIdentity(t, d, "pass")
+	bare.Layout = paths.Layout{}
+	bcfg := *bare.Config
+	bcfg.Roles = bcfg.AllRoles()
+	for i := range bcfg.Roles {
+		if bcfg.Roles[i].Fix {
+			bcfg.Roles[i].Skill = ""
+		}
+	}
+	bare.Config = &bcfg
+	if c := fixCheck(bare); c.Status != doctorPass || !strings.Contains(c.Detail, "skill is the binary's own copy") {
+		t.Fatalf("no checkout = %+v", c)
+	}
+
+	// The identity must be a gh identity: the fixer pushes and replies as the operator's own account.
+	app := doctorWithFixIdentity(t, d, "pass")
+	acfg := *app.Config
+	acfg.Identities = slices.Clone(acfg.Identities)
+	acfg.Identities[len(acfg.Identities)-1].Kind = "app"
+	app.Config = &acfg
+	if c := fixCheck(app); c.Status != doctorFail || !strings.Contains(c.Detail, "identity me is an app identity") || !strings.Contains(c.Fix, "gh [[identity]]") {
+		t.Fatalf("app identity = %+v", c)
+	}
+
+	// Its login check: failed fails with the error, never run warns.
+	failed := doctorWithFixIdentity(t, d, "fail")
+	if err := failed.Store.SetKV(context.Background(), store.KVIdentityError("me"), "gh: bad credentials"); err != nil {
+		t.Fatal(err)
+	}
+	if c := fixCheck(failed); c.Status != doctorFail || !strings.Contains(c.Detail, "last check failed: gh: bad credentials") || !strings.Contains(c.Fix, "magnum identities check --name me") {
+		t.Fatalf("failed login = %+v", c)
+	}
+	if err := failed.Store.DeleteKV(context.Background(), store.KVIdentityCheck("me")); err != nil {
+		t.Fatal(err)
+	}
+	if c := fixCheck(doctorWithFixIdentity(t, d, "")); c.Status != doctorWarn || !strings.Contains(c.Detail, "never checked") || !strings.Contains(c.Fix, "magnum identities check --name me") {
+		t.Fatalf("unchecked login = %+v", c)
+	}
+
+	// The pipeline resolves no fix role: nothing to check.
+	none := doctorWithFixIdentity(t, d, "pass")
+	ncfg := *none.Config
+	ncfg.Pipeline.FixRole = ""
+	none.Config = &ncfg
+	if c := fixCheck(none); c.Status != doctorSkip || !strings.Contains(c.Detail, "no fix role") {
+		t.Fatalf("no fix role = %+v", c)
 	}
 }

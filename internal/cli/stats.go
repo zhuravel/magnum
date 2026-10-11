@@ -66,7 +66,9 @@ func newStatsCmd(c *Context) *cobra.Command {
 			"Durations count only work that has finished: a role's turn once its runs ended and a whole round once "+
 			"no run is still going.\n\n"+
 			"ROUNDS counts the review rounds that began in the window and how each one ended (posted, stopped, "+
-			"error, ..., or running while a run is still going). FINDINGS POSTED adds up the P0 to P3 counts in "+
+			"error, ..., or running while a run is still going). FIX CYCLES counts the fixer's runs of the fix job "+
+			"(`magnum fix`, autofix) that began in the window (--json: fix_cycles); the fixer is no round of its own. "+
+			"FINDINGS POSTED adds up the P0 to P3 counts in "+
 			"the judge's result of every posted round: the new findings it posted (a re-review's earlier findings "+
 			"still open count in the round that first posted them).\n\n"+
 			"DURATIONS gives the median and the 90th percentile of each role's turn (the judge's own pass apart "+
@@ -323,6 +325,7 @@ type statsGroup struct {
 	Day            string                   `json:"day,omitempty"`
 	Repo           string                   `json:"repo,omitempty"`
 	Rounds         statsRounds              `json:"rounds"`
+	FixCycles      int                      `json:"fix_cycles"`
 	Durations      map[string]statsDuration `json:"durations,omitempty"`
 	FindingsPosted map[string]int           `json:"findings_posted,omitempty"`
 	Sources        map[string]*statsSource  `json:"sources,omitempty"`
@@ -471,8 +474,21 @@ func statsCompute(runs []store.RoundRun, findings []store.Finding, events []stor
 	ends := statsRoundEnds(events)
 	valued := map[statsValueKey]statsValueRound{}
 
+	// The fix job's runs are fix cycles, counted apart. The fixer runs in the
+	// round of the review it fixes, so left in that round it would stretch the
+	// round's duration, hold its outcome back and appear under its role.
+	var reviewRuns []store.RoundRun
+	for _, rr := range runs {
+		switch {
+		case rr.Kind != store.RunFix:
+			reviewRuns = append(reviewRuns, rr)
+		case (repo == "" || rr.Repo == repo) && !rr.CreatedAt.Before(since):
+			accs.do(store.DayKey(rr.CreatedAt), rr.Repo, func(a *statsAcc) { a.g.FixCycles++ })
+		}
+	}
+
 	// Rounds: outcomes, findings posted, durations.
-	for _, rd := range statsGroupRounds(runs) {
+	for _, rd := range statsGroupRounds(reviewRuns) {
 		if (repo != "" && rd.repo != repo) || rd.start.Before(since) {
 			continue
 		}
@@ -801,6 +817,13 @@ func statsRender(w io.Writer, r statsReport) {
 				return nil
 			}
 			return []string{strconv.Itoa(g.Rounds.Started), strconv.Itoa(g.Rounds.Posted), statsCounts(g.Rounds.Outcomes, "posted")}
+		}))
+	statsTable(w, "FIX CYCLES", []string{"DAY", "REPO", "CYCLES"},
+		statsGroupRows(r, func(g statsGroup) []string {
+			if g.FixCycles == 0 {
+				return nil
+			}
+			return []string{strconv.Itoa(g.FixCycles)}
 		}))
 	statsTable(w, "FINDINGS POSTED", append([]string{"DAY", "REPO"}, statsSeverities...),
 		statsGroupRows(r, func(g statsGroup) []string {

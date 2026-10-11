@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"reflect"
@@ -29,7 +30,7 @@ func statsOct(day, hour, min int) time.Time { return statsAt(time.October, day, 
 type statsRunSpec struct {
 	pr                         store.PR
 	round                      int
-	role, state                string
+	role, state, kind          string // kind "" = initial
 	created                    time.Time
 	submitted, ended, verified time.Time
 	outcome, result            string
@@ -51,7 +52,7 @@ func statsStrOpt(s string) *string {
 
 func statsMkRun(t *testing.T, st *store.Store, s statsRunSpec) store.Run {
 	t.Helper()
-	r, err := st.CreateRun(context.Background(), store.Run{PRID: s.pr.ID, Round: s.round, Role: s.role, Kind: store.RunInitial,
+	r, err := st.CreateRun(context.Background(), store.Run{PRID: s.pr.ID, Round: s.round, Role: s.role, Kind: cmp.Or(s.kind, store.RunInitial),
 		State: s.state, TargetSHA: "abcdef0123456789", Identity: "talkable-app", ReviewerLogin: "talkable[bot]", PromptText: "x",
 		CreatedAt: s.created, SubmittedAt: statsOpt(s.submitted), EndedAt: statsOpt(s.ended), VerifiedAt: statsOpt(s.verified),
 		Outcome: statsStrOpt(s.outcome), ResultJSON: statsStrOpt(s.result)})
@@ -598,7 +599,7 @@ func TestStatsCommandJSON(t *testing.T) {
 	if g1["day"] != d1 || g1["repo"] != "talkable/talkable" {
 		t.Fatalf("group 1 = %v", g1)
 	}
-	want := []string{"day", "denies", "durations", "findings_posted", "model_switches", "repo", "restarts", "rounds", "sources"}
+	want := []string{"day", "denies", "durations", "findings_posted", "fix_cycles", "model_switches", "repo", "restarts", "rounds", "sources"}
 	if got := statsKeys(g1); !slices.Equal(got, want) {
 		t.Fatalf("group keys = %v, want %v", got, want)
 	}
@@ -618,7 +619,7 @@ func TestStatsCommandJSON(t *testing.T) {
 	}
 	// A group with operations only keeps the counts and drops the empty maps.
 	g3 := statsObj(t, groups[3])
-	if got := statsKeys(g3); !slices.Equal(got, []string{"day", "denies", "model_switches", "repo", "restarts", "rounds"}) {
+	if got := statsKeys(g3); !slices.Equal(got, []string{"day", "denies", "fix_cycles", "model_switches", "repo", "restarts", "rounds"}) {
 		t.Errorf("operations-only group keys = %v", got)
 	}
 	if got := statsObj(t, g3["rounds"]); got["started"] != 0.0 || got["posted"] != 0.0 || len(got) != 2 {
@@ -626,7 +627,7 @@ func TestStatsCommandJSON(t *testing.T) {
 	}
 	// The total has no day or repository.
 	tot := statsObj(t, doc["total"])
-	want = []string{"denies", "durations", "findings_posted", "model_switches", "restarts", "rounds", "sources"}
+	want = []string{"denies", "durations", "findings_posted", "fix_cycles", "model_switches", "restarts", "rounds", "sources"}
 	if got := statsKeys(tot); !slices.Equal(got, want) {
 		t.Errorf("total keys = %v, want %v", got, want)
 	}
@@ -896,5 +897,108 @@ func TestStatsCountsHowAuthorsAnsweredBySourceAndPriority(t *testing.T) {
 			t.Fatalf("missing line %q (after line %d) in\n%s", w, at, out)
 		}
 		at += i + 1
+	}
+}
+
+// statsFixRound seeds a PR's review round and the fix cycle that follows it:
+// the review (reviewer and judge) at 12:00 on day, the fixer's run (round
+// round, kind fix, as the fix job records it: in the round of the review it
+// fixes) an hour after the judge ended.
+func statsFixRound(t *testing.T, st *store.Store, pr store.PR, round int, day time.Time, judgeKind string) {
+	t.Helper()
+	statsMkRun(t, st, statsRunSpec{pr: pr, round: round, role: store.RoleClaude, state: store.RunVerified, outcome: "ok",
+		created: day, submitted: day, ended: day.Add(10 * time.Minute), verified: day.Add(11 * time.Minute)})
+	statsMkRun(t, st, statsRunSpec{pr: pr, round: round, role: store.RoleJudge, kind: judgeKind, state: store.RunVerified, outcome: "posted",
+		created: day.Add(12 * time.Minute), submitted: day.Add(12 * time.Minute), ended: day.Add(29 * time.Minute), verified: day.Add(30 * time.Minute),
+		result: `{"findings":{"P2":2}}`})
+	statsMkRun(t, st, statsRunSpec{pr: pr, round: round, role: "claude-fix", kind: store.RunFix, state: store.RunVerified, outcome: "pushed",
+		created: day.Add(90 * time.Minute), submitted: day.Add(90 * time.Minute), ended: day.Add(130 * time.Minute), verified: day.Add(131 * time.Minute)})
+}
+
+// The fix job's runs (kind fix) are fix cycles, counted per day and
+// repository beside the rounds: the fixer runs in the round of the review it
+// fixes, so a cycle is no round of its own and does not stretch the round it
+// follows, add a duration under its role or hold its outcome back.
+func TestStatsCountsFixCycles(t *testing.T) {
+	f := newInspFixture(t)
+	prev := inspNow
+	inspNow = func() time.Time { return statsNow }
+	t.Cleanup(func() { inspNow = prev })
+	st := f.store()
+	st.Clock = func() time.Time { return statsNow }
+	_, pr301 := inspSeedPR(t, st, "talkable/talkable", 301, store.PRReviewed, nil)
+	_, pr7 := inspSeedPR(t, st, "example/widgets", 7, store.PRReviewed, nil)
+	_, pr302 := inspSeedPR(t, st, "talkable/talkable", 302, store.PRReviewed, nil)
+	// Day 2: PR 301's review and a cycle; its re-review follows the next morning, with a second cycle.
+	statsFixRound(t, st, pr301, 1, statsOct(2, 12, 0), store.RunInitial)
+	statsFixRound(t, st, pr301, 2, statsOct(3, 9, 0), store.RunRereview)
+	// Day 3: example/widgets#7 has one cycle.
+	statsFixRound(t, st, pr7, 1, statsOct(3, 12, 0), store.RunInitial)
+	// A cycle before the window, in a round that went on after it began: not counted,
+	// and the round (it began before the window) is left out whole.
+	early := statsAt(time.September, 25, 12, 0)
+	statsMkRun(t, st, statsRunSpec{pr: pr302, round: 1, role: store.RoleClaude, state: store.RunVerified, outcome: "ok",
+		created: early, submitted: early, ended: early.Add(10 * time.Minute)})
+	statsMkRun(t, st, statsRunSpec{pr: pr302, round: 1, role: "claude-fix", kind: store.RunFix, state: store.RunVerified, outcome: "pushed",
+		created: early.Add(time.Hour), submitted: early.Add(time.Hour), ended: early.Add(2 * time.Hour)})
+	statsMkRun(t, st, statsRunSpec{pr: pr302, round: 1, role: store.RoleJudge, state: store.RunVerified, outcome: "posted",
+		created: statsOct(1, 12, 0), submitted: statsOct(1, 12, 0), ended: statsOct(1, 12, 10)})
+	st.Close()
+
+	if err := f.Ctx.LoadConfig(); err != nil {
+		t.Fatal(err)
+	}
+	r, err := statsGather(context.Background(), f.store(), f.Ctx.Config, statsNow.Add(-7*24*time.Hour), statsNow, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d1, d2, _ := statsDays()
+	type cell struct {
+		day, repo string
+		cycles    int
+	}
+	var got []cell
+	for _, g := range r.Groups {
+		got = append(got, cell{g.Day, g.Repo, g.FixCycles})
+	}
+	want := []cell{{d1, "talkable/talkable", 1}, {d2, "example/widgets", 1}, {d2, "talkable/talkable", 1}}
+	if !reflect.DeepEqual(got, want) || r.Total.FixCycles != 3 {
+		t.Fatalf("cycles per day and repo = %+v, total %d; want %+v, 3", got, r.Total.FixCycles, want)
+	}
+	// The rounds are the three reviews', as before; the fixer is no round and no duration of its own.
+	if r.Total.Rounds.Started != 3 || r.Total.Rounds.Posted != 3 {
+		t.Errorf("rounds = %+v, want 3 started and posted", r.Total.Rounds)
+	}
+	if d, ok := r.Total.Durations["claude-fix"]; ok {
+		t.Errorf("the fixer has a duration: %+v", d)
+	}
+	// Each round runs from its first run to its judge's verification (30 minutes), not to the end of the fix.
+	if d := r.Total.Durations[statsRoundRole]; d.N != 3 || d.P90Seconds != 30*60 {
+		t.Errorf("round durations = %+v, want 3 of at most 30m", d)
+	}
+
+	// The text report shows the cycles beside the rounds, and --json counts them in every group.
+	if code := f.run("stats"); code != 0 {
+		t.Fatalf("code %d, stderr %s", code, f.Err.String())
+	}
+	lines := statsLines(f.Out.String())
+	for _, w := range []string{"FIX CYCLES", "DAY REPO CYCLES", d1 + " talkable/talkable 1", d2 + " example/widgets 1", d2 + " talkable/talkable 1", "all 3"} {
+		if !slices.Contains(lines, w) {
+			t.Errorf("missing line %q in\n%s", w, f.Out.String())
+		}
+	}
+	if i, j := slices.Index(lines, "ROUNDS"), slices.Index(lines, "FIX CYCLES"); i < 0 || j < i {
+		t.Errorf("FIX CYCLES does not follow ROUNDS (lines %d, %d)", i, j)
+	}
+	f.Out.Reset()
+	if code := f.run("stats", "--json", "--repo", "example/widgets"); code != 0 {
+		t.Fatalf("code %d, stderr %s", code, f.Err.String())
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(f.Out.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if statsObj(t, doc["total"])["fix_cycles"] != 1.0 || statsObj(t, doc["groups"].([]any)[0])["fix_cycles"] != 1.0 {
+		t.Errorf("--repo example/widgets: %s", f.Out.String())
 	}
 }
