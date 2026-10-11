@@ -403,15 +403,21 @@ func (e *Engine) stopFix(ctx context.Context, job *fixJob, orders []stopOrder) {
 }
 
 // endFixLoop ends a fix loop that no fix job holds (one waiting for its
-// re-review, or the row of a stopped daemon) for a stop of the PR: its row
-// goes, with an event and an info toast. A stop without the PR's
-// reservation (`magnum abort` on a reviewed PR) can meet the hook after a
-// round starting the loop's next cycle, so the row goes only while it is
-// the one read here (Store.DeleteKVIf; claimFixRow is the other side). It
-// returns what it did for the stop's answer ("" = the PR had no loop, or a
-// cycle took it on meanwhile).
+// re-review, or the row of a stopped daemon) for a stop of the PR that holds
+// its reservation: its row goes, with an event and an info toast. The row
+// goes only while it is the one read here (Store.DeleteKVIf; claimFixRow is
+// the other side), and an abort without the reservation goes through
+// abortFixLoop, which hands a fix job that claimed the PR meanwhile the
+// stop instead. It returns what it did for the stop's answer ("" = the PR
+// had no loop, or a cycle took it on meanwhile).
 func (e *Engine) endFixLoop(ctx context.Context, repo store.Repo, pr store.PR, by string) string {
 	st, raw, _, err := e.fixRow(ctx, pr.ID)
+	return e.endFixLoopRow(ctx, repo, pr, st, raw, err, by)
+}
+
+// endFixLoopRow is endFixLoop for the row the caller read: st, raw as stored
+// ("" = none) and readErr, the error of a row that cannot be read.
+func (e *Engine) endFixLoopRow(ctx context.Context, repo store.Repo, pr store.PR, st FixState, raw string, readErr error, by string) string {
 	if raw == "" {
 		return ""
 	}
@@ -422,12 +428,45 @@ func (e *Engine) endFixLoop(ctx context.Context, repo store.Repo, pr store.PR, b
 		return ""
 	}
 	note := fmt.Sprintf("fix loop ended (cycle %d of %d, %s)", st.Cycle, st.Cap, st.Phase)
-	if err != nil {
+	if readErr != nil {
 		note = "the fix loop's unreadable row cleared"
 	}
 	e.event(ctx, "info", prSubject(repo, pr.Number), "fix.stopped", note+" by "+by, map[string]any{"by": by, "report": st.Report})
 	e.toastFixStopped(repo, pr, st, note)
 	return note
+}
+
+// abortFixLoopTries bounds how often abortFixLoop looks at a loop that keeps
+// changing under it.
+const abortFixLoopTries = 3
+
+// abortFixLoop serves `magnum abort` (request id) for the fix loop of a PR
+// no reservation held when the abort looked. The hook after a round can
+// reserve the PR and claim the loop's next cycle meanwhile, so the abort
+// reads the row, then looks at the reservation again: a fix job holding the
+// PR gets the abort as its stop order (stopHeld: its fixer interrupted, the
+// loop ended quietly by stopFix), never a bare delete of the row the job
+// works under; with no reservation, the row read goes (endFixLoopRow, a
+// compare-and-set), and a row that changed since it was read (a cycle took
+// the loop on) is looked at again. It reports whether it answered the
+// request (false: the PR has no loop).
+func (e *Engine) abortFixLoop(ctx context.Context, id int64, repo store.Repo, pr store.PR) bool {
+	label := fmt.Sprintf("%s#%d", repo.FullName(), pr.Number)
+	for range abortFixLoopTries {
+		st, raw, _, err := e.fixRow(ctx, pr.ID)
+		if raw == "" {
+			return false
+		}
+		if e.stopHeld(ctx, id, repo, pr, false) {
+			return true
+		}
+		if note := e.endFixLoopRow(ctx, repo, pr, st, raw, err, "magnum abort"); note != "" {
+			e.complete(ctx, id, nil, "aborted "+label+": "+note)
+			return true
+		}
+	}
+	e.complete(ctx, id, fmt.Errorf("%s: its fix loop changed while the abort looked at it; run `magnum abort %s` again", label, label), "")
+	return true
 }
 
 // toastFixStopped is the info toast of a fix loop a stop ended (st: its

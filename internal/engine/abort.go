@@ -92,33 +92,9 @@ func (e *Engine) requestAbort(ctx context.Context, id int64, p TargetPayload, ig
 	label := fmt.Sprintf("%s#%d", repo.FullName(), pr.Number)
 	verb := map[bool]string{false: "abort", true: "ignore"}[ignore]
 
-	e.mu.Lock()
-	h, held := e.rounds[pr.ID]
-	switch {
-	case held && !h.open && !h.stop.ended && !h.stop.stopping:
-		h.stop.reqs = append(h.stop.reqs, stopOrder{id: id, ignore: ignore})
-		e.inflight[id] = true
-		cancel, what := h.cancel, "the running review"
-		if h.fix {
-			what = "the fixer" // the fix job serves the order (fix.go)
-		}
-		e.mu.Unlock()
-		cancel()
-		e.event(ctx, "info", prSubject(repo, pr.Number), "pr.abort_requested", fmt.Sprintf("magnum %s: stopping %s", verb, what), nil)
-		return
-	case held:
-		why := "its round is ending"
-		switch {
-		case h.open:
-			why = "a `magnum open` restore is in progress"
-		case h.stop.stopping:
-			why = "an earlier abort or ignore is stopping it"
-		}
-		e.mu.Unlock()
-		e.complete(ctx, id, fmt.Errorf("%s: %s; run `magnum %s %s` again shortly", label, why, verb, label), "")
+	if e.stopHeld(ctx, id, repo, pr, ignore) {
 		return
 	}
-	e.mu.Unlock()
 
 	// A round's state without its round, or a round paused mid-way: stopped
 	// as a running one is. A review waiting in line is taken back.
@@ -126,11 +102,9 @@ func (e *Engine) requestAbort(ctx context.Context, id int64, p TargetPayload, ig
 	queued := pr.State == store.PRQueued || pr.State == store.PRRereviewPending
 	switch {
 	case !ignore && !stale && !queued:
-		if note := e.endFixLoop(ctx, repo, pr, "magnum abort"); note != "" { // a loop between its steps (fix_settle.go)
-			e.complete(ctx, id, nil, "aborted "+label+": "+note)
-			return
+		if !e.abortFixLoop(ctx, id, repo, pr) { // a loop between its steps (fix_settle.go)
+			e.complete(ctx, id, fmt.Errorf("no review of %s is running or queued (state %s)", label, pr.State), "")
 		}
-		e.complete(ctx, id, fmt.Errorf("no review of %s is running or queued (state %s)", label, pr.State), "")
 		return
 	case e.d.DryRun:
 		e.rec.Record(ctx, prSubject(repo, pr.Number), verb, "stop the PR's agents, park its sessions and hand back its slot")
@@ -164,6 +138,45 @@ func (e *Engine) requestAbort(ctx context.Context, id int64, p TargetPayload, ig
 		e.safely(rctx, verb, prSubject(repo, pr.Number), func() { e.serveStop(rctx, pr.ID, orders, false) },
 			func(ctx context.Context, msg string) { e.stopsPanicked(ctx, orders, msg) })
 	})
+}
+
+// stopHeld serves the stop request id (an abort, or an ignore) of a PR that
+// a reservation holds, and reports whether one did: a running round or fix
+// job gets the order (its context is cancelled; the round's afterRound or
+// the fix job's stopFix completes the request), and anything else holding
+// the PR (an open, a round already ending, an earlier stop) answers that
+// the stop should be asked again shortly.
+func (e *Engine) stopHeld(ctx context.Context, id int64, repo store.Repo, pr store.PR, ignore bool) bool {
+	label := fmt.Sprintf("%s#%d", repo.FullName(), pr.Number)
+	verb := map[bool]string{false: "abort", true: "ignore"}[ignore]
+	e.mu.Lock()
+	h, held := e.rounds[pr.ID]
+	switch {
+	case held && !h.open && !h.stop.ended && !h.stop.stopping:
+		h.stop.reqs = append(h.stop.reqs, stopOrder{id: id, ignore: ignore})
+		e.inflight[id] = true
+		cancel, what := h.cancel, "the running review"
+		if h.fix {
+			what = "the fixer" // the fix job serves the order (fix.go)
+		}
+		e.mu.Unlock()
+		cancel()
+		e.event(ctx, "info", prSubject(repo, pr.Number), "pr.abort_requested", fmt.Sprintf("magnum %s: stopping %s", verb, what), nil)
+		return true
+	case held:
+		why := "its round is ending"
+		switch {
+		case h.open:
+			why = "a `magnum open` restore is in progress"
+		case h.stop.stopping:
+			why = "an earlier abort or ignore is stopping it"
+		}
+		e.mu.Unlock()
+		e.complete(ctx, id, fmt.Errorf("%s: %s; run `magnum %s %s` again shortly", label, why, verb, label), "")
+		return true
+	}
+	e.mu.Unlock()
+	return false
 }
 
 // stopsPanicked fails the stop requests of orders (magnum abort / ignore)

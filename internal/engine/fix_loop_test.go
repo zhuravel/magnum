@@ -15,6 +15,7 @@ import (
 
 	"github.com/zhuravel/magnum/internal/attention"
 	"github.com/zhuravel/magnum/internal/config"
+	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/pipeline"
 	"github.com/zhuravel/magnum/internal/store"
 )
@@ -718,6 +719,59 @@ func TestAnAbortAfterTheReCheckStartsNoFixer(t *testing.T) {
 		t.Fatal("the clock was never read after the row's check")
 	}
 	h.wantNoLoopEnd(pr.ID)
+}
+
+// An abort that found the PR without a reservation, then read the loop's
+// row after the hook claimed the next cycle, stops that cycle's fixer
+// through the job that holds the PR: the fixer is interrupted, its run
+// abandoned, no row survives, and the answer says the fixer was stopped. A
+// bare delete of the cycle's row would leave the fixer pushing as the
+// operator.
+func TestAnAbortThatReadsAClaimedCycleStopsItsFixer(t *testing.T) {
+	var kh *keyHerdr
+	h, _ := fixHarness(t, realSleep, withKeys(&kh))
+	pr := waitingLoop(h, map[string]int{"P2": 1}, nil)
+	st, raw := h.fixRowOf(2)
+	res := pipeline.RoundResult{Outcome: pipeline.OutcomePosted, Event: "COMMENTED", Findings: map[string]int{"P2": 1}, TargetSHA: fixHead}
+	h.e.continueFixLoop(h.ctx, h.e.loopJob(h.ctx, h.repo(), h.pr(2), st), raw, res) // the hook claims cycle 2
+	h.awaitSubmit()
+	if cur, ok := h.fixStateOf(2); !ok || cur.Phase != FixPhaseFixing || cur.Cycle != 2 {
+		t.Fatalf("fix state = %+v, %v; want cycle 2 at work", cur, ok)
+	}
+	h.hd.mu.Lock()
+	h.hd.agents = append(h.hd.agents, herdr.AgentInfo{PaneID: "p-claude-fix", Name: "mg-t-2-claude-fix", Agent: "claude",
+		AgentStatus: herdr.StatusWorking})
+	h.hd.mu.Unlock()
+
+	// The abort looked before the claim (no reservation) and reads the row now.
+	id := h.enqueue(ReqAbort, TargetPayload{PRTarget: PRTarget{Ref: "2"}})
+	if !h.e.abortFixLoop(h.ctx, id, h.repo(), h.pr(2)) {
+		t.Fatal("the abort found no loop")
+	}
+	for deadline := time.Now().Add(10 * time.Second); h.e.roundActive(pr.ID) && time.Now().Before(deadline); {
+		time.Sleep(2 * time.Millisecond)
+	}
+	if h.e.roundActive(pr.ID) {
+		t.Error("the fixer still works after the abort")
+		h.e.mu.Lock()
+		h.e.rounds[pr.ID].cancel()
+		h.e.mu.Unlock()
+	}
+	h.settle()
+	if res := h.wantDone(id); !strings.Contains(res, "aborted the fix of talkable/talkable#2") || !strings.Contains(res, "fixer interrupted") {
+		t.Errorf("answer = %q", res)
+	}
+	if got, want := kh.all(), []string{"agent:mg-t-2-claude-fix:ctrl+c", "agent:mg-t-2-claude-fix:ctrl+c"}; !slices.Equal(got, want) {
+		t.Errorf("keys %v, want %v", got, want)
+	}
+	if runs := h.fixRuns(pr.ID); len(runs) != 1 || runs[0].State != store.RunAbandoned {
+		t.Errorf("fix runs = %+v, want cycle 2's abandoned", runs)
+	}
+	if cur, ok := h.fixStateOf(2); ok {
+		t.Errorf("the loop's row survived the abort: %+v", cur)
+	}
+	h.flush()
+	h.wantToasts("needs attention", 0)
 }
 
 // A drain for a restart starts no fixer: the loop whose re-review posts
