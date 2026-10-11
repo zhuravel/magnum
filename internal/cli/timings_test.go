@@ -106,7 +106,9 @@ func TestLastCheckoutPicksTheRoundsCheckout(t *testing.T) {
 }
 
 // The board's rows and `magnum status <ref>` read the timings from the
-// registry: the latest round's runs and the PR's checkout steps.
+// registry: the latest round's runs and the PR's checkout steps. The fixer's
+// run shares the round of the review it fixes but is no part of that round
+// (as in `magnum stats`): it adds no stage and does not stretch the total.
 func TestTimingsFromTheRegistry(t *testing.T) {
 	h := newActHarness(t)
 	pr := h.seedPR("talkable/talkable", 7, store.PRReviewed)
@@ -130,7 +132,9 @@ func TestTimingsFromTheRegistry(t *testing.T) {
 	if _, err := h.st.OpenAssignment(ctx, store.Assignment{PRID: pr.ID, SlotID: slot.ID, Path: slot.Path}); err != nil {
 		t.Fatal(err)
 	}
-	for _, r := range runs {
+	fix := store.Run{ID: "f", Round: 1, Role: "claude-fix", Kind: store.RunFix, State: store.RunVerified, CreatedAt: timingT0.Add(40 * time.Minute),
+		SubmittedAt: timingAt(40 * time.Minute), EndedAt: timingAt(95 * time.Minute), VerifiedAt: timingAt(95 * time.Minute)}
+	for _, r := range append(runs, fix) {
 		created := r.CreatedAt
 		h.st.Clock = func() time.Time { return created }
 		r.PRID, r.TargetSHA, r.Identity, r.ReviewerLogin, r.PromptText, r.ID = pr.ID, "abcdef1", "i", "l", "p", ""
@@ -151,6 +155,13 @@ func TestTimingsFromTheRegistry(t *testing.T) {
 	got, err := roundTimingsFor(ctx, h.st, nil, pr.ID, nil, timingT0.Add(5*time.Hour))
 	if err != nil || got == nil || tui.TimingsText(*got) != want {
 		t.Fatalf("roundTimingsFor = %+v, %v", got, err)
+	}
+	all, err := h.st.RunsByPR(ctx, pr.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fromRuns, err := roundTimingsFor(ctx, h.st, nil, pr.ID, all, timingT0.Add(5*time.Hour)); err != nil || fromRuns == nil || tui.TimingsText(*fromRuns) != want {
+		t.Fatalf("roundTimingsFor(the PR's runs) = %+v, %v", fromRuns, err)
 	}
 	src := prsSource(h.st, nil, store.BoardFilter{}, nil, h.c.Layout)
 	for range 2 { // the second load takes the checkout from the cache

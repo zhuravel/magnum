@@ -149,8 +149,12 @@ working.
 ### Role prompts (every other session role)
 
 The prompts of claude-review, claude-simplify and any other non-judge session role (a droid or omp
-reviewer, ...), initial, rereview and restart alike, and the fix role's `fix.md`, which the fix job
-renders with the same data plus the fix rows at the end of the table.
+reviewer, ...), initial, rereview and restart alike, and the fix role's `fix.md`. The fix job renders
+`fix.md` with only some of these variables: `.URL`, `.Number`, `.Role`, `.HeadSHA` (the reviewed head the
+fixer starts from), `.ReportPath`, `.RunID` and `.DBLockCommand`, plus the fix rows at the end of the
+table (`.HeadRef`, `.ReviewURL`, `.ReviewFile`, `.ReviewerLogin` and `.SkillPath`). Every other variable,
+`.Owner`, `.Repo`, `.BaseSHA`, `.BaseRef`, `.Budget`, `.Effort` and `.NotesPath` among them, renders empty
+in `fix.md`.
 
 | Variable | Meaning |
 |---|---|

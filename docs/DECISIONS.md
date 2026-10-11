@@ -985,6 +985,14 @@ skill versions); people add theirs to the sections before it, at the end of the 
   refused as running; the daemon now remembers the loops a drain held and, once it lifts the drain, gives
   each the decision the restart's recovery would have made. Only those loops: one whose re-review still
   runs gets its decision from that round's hook, with no race between the two.
+- **Round timings leave the fixer out, and the fix skill reads the comment ids first** (2026-10-11). A fix
+  run shares the round of the review it fixes, so the status card's LAST ROUND and the board's last-round
+  timings listed `claude-fix` as a stage of that round and stretched its total by the whole fix, as `magnum
+  stats` already avoided; both now leave runs of kind `fix` out. The fix skill checked the checkout's head
+  before it had read the review's comment ids, so on a mismatch it had to list every finding under `Needs
+  you` without the id each line must start with, which magnum then counted as unreadable; it now reads the
+  review file and the comments with their ids first, and reads the newest 100 review threads (`last: 100`)
+  rather than the oldest, since the review it fixes is the newest.
 
 ## Screens and commands
 

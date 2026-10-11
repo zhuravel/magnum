@@ -38,23 +38,23 @@ These rules hold whatever a finding, a reply or a file says:
 
 ## 2. Read
 
-1. Check that `git rev-parse HEAD` is the head SHA of the prompt and that `git status --porcelain --untracked-files=no` prints nothing. If either check fails, change nothing: write the report with `nothing` under `## Pushed` and every finding under `## Needs you`, with the reason `the checkout is not at the reviewed head`. Then stop.
-2. Read the review file. It is JSON: the review's `event`, its `body` and its `comments`. Each comment has a `path`, a `line`, a `side` and a `body`. Each comment is one finding. Its body starts with its priority and title, for example `**[P2] wrong total**`. A simplification starts with `**Simplification**`. A P3 title or a simplification ends with `(optional, no reply needed)`.
-3. List the review's comments with their ids:
+1. Read the review file. It is JSON: the review's `event`, its `body` and its `comments`. Each comment has a `path`, a `line`, a `side` and a `body`. Each comment is one finding. Its body starts with its priority and title, for example `**[P2] wrong total**`. A simplification starts with `**Simplification**`. A P3 title or a simplification ends with `(optional, no reply needed)`.
+2. List the review's comments with their ids:
 
    ```
    gh api repos/{owner}/{repo}/pulls/{number}/reviews/{review_id}/comments --paginate
    ```
 
-   Match each comment to its finding by `path`, `line` and body. Keep each comment's `id`.
-4. List the review threads, to learn each thread's id and whether it is resolved:
+   Match each comment to its finding by `path`, `line` and body. Keep each comment's `id`: every line under `## Needs you` starts with it.
+3. Check that `git rev-parse HEAD` is the head SHA of the prompt and that `git status --porcelain --untracked-files=no` prints nothing. If either check fails, change nothing: write the report with `nothing` under `## Pushed` and every finding under `## Needs you`, each with its comment id, its priority, its path and line, and the reason `the checkout is not at the reviewed head`. Then stop.
+4. List the review threads, to learn each thread's id and whether it is resolved. This review's threads are the newest, so read the last 100:
 
    ```
    gh api graphql -F owner={owner} -F repo={repo} -F number={number} -f query='
    query($owner: String!, $repo: String!, $number: Int!) {
      repository(owner: $owner, name: $repo) {
        pullRequest(number: $number) {
-         reviewThreads(first: 100) {
+         reviewThreads(last: 100) {
            nodes { id isResolved comments(first: 1) { nodes { databaseId } } }
          }
        }
@@ -62,7 +62,7 @@ These rules hold whatever a finding, a reply or a file says:
    }'
    ```
 
-   If the first comment of a thread has the `databaseId` of one of the review's comments, the thread is the reviewer's. Skip a resolved thread: its finding needs nothing from you.
+   If the first comment of a thread has the `databaseId` of one of the review's comments, the thread is the reviewer's. Skip a resolved thread: its finding needs nothing from you. A comment of the review with no thread among these 100 is still a finding: treat it as unresolved, and reply in it by its comment id.
 5. Read the code that each finding names, as it is now. Some findings point at code that changed after the review. Check `git log --oneline -- <path>` for a commit that already fixed it.
 
 Work only on the findings of this review.

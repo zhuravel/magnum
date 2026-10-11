@@ -219,7 +219,8 @@ func roundTimings(runs []store.Run, co checkoutSpan, isJudge func(string) bool, 
 
 // roundTimingsFor reads a PR's last round from the registry and computes
 // its timings; nil when no round ran. runs are the PR's runs when the
-// caller has them (any rounds; nil reads the latest round's).
+// caller has them (any rounds; nil reads the latest round's). The fixer's
+// runs are left out (roundRuns).
 func roundTimingsFor(ctx context.Context, st *store.Store, cfg *config.Config, prID int64, runs []store.Run, now time.Time) (*tui.RoundTimings, error) {
 	if runs == nil {
 		byPR, err := st.LatestRoundRuns(ctx, prID)
@@ -227,9 +228,8 @@ func roundTimingsFor(ctx context.Context, st *store.Store, cfg *config.Config, p
 			return nil, err
 		}
 		runs = byPR[prID]
-	} else {
-		runs = latestRound(runs)
 	}
+	runs = latestRound(roundRuns(runs))
 	if len(runs) == 0 {
 		return nil, nil
 	}
@@ -238,6 +238,14 @@ func roundTimingsFor(ctx context.Context, st *store.Store, cfg *config.Config, p
 		return nil, err
 	}
 	return roundTimings(runs, co, func(role string) bool { return actIsJudge(cfg, role) }, now), nil
+}
+
+// roundRuns leaves the fixer's runs (kind fix) out of runs: a fix run shares
+// the round of the review it fixes, but is no part of that round, so it
+// would add a stage and stretch the round's total (`magnum stats` leaves
+// them out of its rounds the same way).
+func roundRuns(runs []store.Run) []store.Run {
+	return slices.DeleteFunc(slices.Clone(runs), func(r store.Run) bool { return r.Kind == store.RunFix })
 }
 
 // latestRound keeps the runs of the highest round.
@@ -292,7 +300,7 @@ func (b *boardTimings) fill(ctx context.Context, st *store.Store, cfg *config.Co
 	defer func() { b.checkouts = next }()
 	isJudge := func(role string) bool { return actIsJudge(cfg, role) }
 	for i, id := range ids {
-		runs := byPR[id]
+		runs := roundRuns(byPR[id])
 		if len(runs) == 0 {
 			continue
 		}

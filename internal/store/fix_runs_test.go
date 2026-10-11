@@ -142,7 +142,9 @@ func TestMigrationV24ToV25AcceptsFixRuns(t *testing.T) {
 		t.Fatalf("decline 5 link after its finding was deleted = %v, %v", link, err)
 	}
 	var violations int
-	st.DB().QueryRowContext(ctx, "SELECT COUNT(*) FROM pragma_foreign_key_check").Scan(&violations)
+	if err := st.DB().QueryRowContext(ctx, "SELECT COUNT(*) FROM pragma_foreign_key_check").Scan(&violations); err != nil {
+		t.Fatalf("foreign_key_check: %v", err) // a failing query must not pass as no violation
+	}
 	if violations != 0 {
 		t.Fatalf("foreign_key_check reports %d violations after 0025", violations)
 	}
