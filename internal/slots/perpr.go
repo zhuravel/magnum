@@ -102,7 +102,7 @@ func perPRNumber(name string) int {
 // listed at the fetched head; a listed worktree at another commit, left by
 // an earlier attempt, is switched to it after Guard), verify (HEAD ==
 // fetched head), render_mise (the main clone's
-// .mise.local.toml rendered with the per-PR env, [[repo]] copy_files),
+// local mise file rendered with the per-PR env, [[repo]] copy_files),
 // setup (the [[repo]] setup commands or the main clone's .config/wt.toml
 // [post-create]/[post-start] hooks as WT_BRANCH=magnum-pr-<N>, see
 // hooks.go; a failure moves the slot to broken and returns ErrBroken) and

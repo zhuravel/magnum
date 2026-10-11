@@ -599,7 +599,11 @@ timeout = "60m"
 # repo = "your-org/your-app"
 # main_clone = "~/Projects/your-app"
 # slot_name = "review{n}"                 # slot names and paths are unique: two pools must not render the same
-# slot_path = "~/Projects/your-app.review{n}"   # one (review1 in both), so give each pool its own prefix
+# slot_path = "~/Projects/your-app.review{n}"   # one (review1 in both), so give each pool its own prefix;
+#                                         # a slot's database {slug}, which its setup writes to the
+#                                         # tmp/.worktree-db-slug marker, is its name sanitized (every character
+#                                         # but letters, digits and _ as _, at most 30): example-review1 →
+#                                         # example_review1
 # base = "master"
 # min = 6
 # max = 8
@@ -607,8 +611,12 @@ timeout = "60m"
 #                                         # or 0; never negative; each removal is about 1 GB the next provision
 #                                         # writes again)
 # min_free_disk_gb = 15
-# copy_files = [".mise.local.toml", "config/initializers/local.rb"]
-# strip_env = ["GITHUB_PERSONAL_ACCESS_TOKEN"]
+# copy_files = [".mise.local.toml", "config/initializers/local.rb"]   # the local mise file is rendered, not
+#                                         # copied: under the main clone's spelling, mise.local.toml or
+#                                         # .mise.local.toml (dotted when both exist, as mise prefers it;
+#                                         # mise.local.toml when there is none); a file magnum rendered under
+#                                         # the other spelling is removed
+# strip_env = ["GITHUB_PERSONAL_ACCESS_TOKEN"]  # dropped from the rendered local mise file (GitHub tokens always are)
 # setup = ["bin/worktree-setup"]           # runs once per slot with the [pool.env] below
 # teardown = ["bin/worktree-archive"]
 # schema_paths = ["db/"]                 # a PR that changes these changes the databases' schema
@@ -621,7 +629,7 @@ timeout = "60m"
 #                                         # reviewers of a PR that changes the schema run against the base one);
 #                                         # before the reviewers it runs as the first readiness commands, through
 #                                         # `mise exec` as on release (not the login shell, whose mise shims put the
-#                                         # checkout's .mise.local.toml env over the pool's), within 30m of its
+#                                         # checkout's local mise file's env over the pool's), within 30m of its
 #                                         # own, and ready_timeout starts after it
 # post_checkout = ["bundle check >/dev/null || bundle install --jobs 4", "pnpm install --frozen-lockfile"]
 # databases = ["your_app_development__{slug}", "your_app_test__{slug}"]   # each must end in __{slug}
@@ -636,7 +644,7 @@ timeout = "60m"
 
 # Per-PR worktrees (repos without a [[pool]]) run as workspace "magnum-pr-<N>": WT_BRANCH is exported to
 # their hooks and agents, the outranking workspace-name variables are blanked, and the main clone's
-# .mise.local.toml is rendered into them with GitHub tokens stripped. Without a [[repo]] block the main
+# local mise file is rendered into them with GitHub tokens stripped. Without a [[repo]] block the main
 # clone's .config/wt.toml hooks run ([post-create]/[post-start] after creation, [pre-remove] before
 # removal). A [[repo]] block (the repo must be watched) supplies commands instead; see the README.
 # Its no_findings_event and blocking_event override the posting identity's verdicts for the repo, and a
@@ -661,7 +669,7 @@ timeout = "60m"
 # setup = ["bin/setup --database"]        # replaces wt.toml's post-create/post-start hooks
 # teardown = ["bin/drop-database"]        # replaces wt.toml's pre-remove hooks; failures are logged
 # copy_files = ["config/master.key"]      # copied from the main clone when present
-# strip_env = ["STRIPE_SECRET_KEY"]       # dropped from the rendered .mise.local.toml
+# strip_env = ["STRIPE_SECRET_KEY"]       # dropped from the rendered local mise file
 # wt_hooks = true                         # false: ignore .config/wt.toml without replacing it
 #
 #   [repo.env]                            # {slug} = magnum-pr-<N>, {path} = worktree, {clone} = main clone

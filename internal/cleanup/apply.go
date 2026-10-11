@@ -336,9 +336,10 @@ func (p *Planner) applyReset(ctx context.Context, a Action, ext **inventory.Inve
 	if err := p.Git.ResetPlaceholder(ctx, a.Path, a.Branch, a.Base); err != nil {
 		return err
 	}
-	// The main clone's .mise.local.toml (it holds secrets: its permissions
-	// are kept), written inside the worktree only.
-	return slots.CopyIntoCheckout(filepath.Join(a.MainClone, slots.MiseLocal), a.Path, slots.MiseLocal)
+	// The main clone's local mise file, under its name (it holds secrets: its
+	// permissions are kept), written inside the worktree only.
+	name := slots.MiseLocalName(a.MainClone)
+	return slots.CopyIntoCheckout(filepath.Join(a.MainClone, name), a.Path, name)
 }
 
 // maxListed caps the paths a cleanup.discarded event names.

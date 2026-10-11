@@ -47,7 +47,8 @@ func newSlotsCmd(c *Context) *cobra.Command {
 				"missing worktree is added again. The slot ends free."),
 		newSlotsTargetCmd(c, "adopt", "<path>", "register an existing checkout as a pool slot",
 			"Register an existing checkout at <path> as a free pool slot. The path must be the pool's slot path "+
-				"for some N, a worktree of the main clone whose tmp/.worktree-db-slug names that slot, and all its "+
+				"for some N, a worktree of the main clone whose tmp/.worktree-db-slug holds that slot's database slug "+
+				"(its name, every character but letters, digits and _ as _), and all its "+
 				"databases must exist. A removed, lost or broken row of that name is revived."),
 		newSlotsPinCmd(c, "pin", "keep a slot for you (no automatic claim, checkout, release or removal); same as `magnum pin <slot>`",
 			"Pin a slot: automation does not claim, check out, release or remove it until `magnum slots unpin`. "+
@@ -437,7 +438,7 @@ func slotsProvisionFix(err error, name, logPath string) string {
 	case errors.Is(err, slots.ErrVerify):
 		return fmt.Sprintf("read %s, fix the setup, then `magnum slots repair %s`", inspTilde(logPath), name)
 	case errors.Is(err, slots.ErrMiseLocal):
-		return "fix the main clone's .mise.local.toml (no root-level env table), then run `magnum slots provision` again"
+		return "fix the main clone's mise.local.toml or .mise.local.toml (no root-level env table), then run `magnum slots provision` again"
 	case errors.Is(err, context.Canceled):
 		return "interrupted; `magnum slots provision` resumes from the failed step"
 	}

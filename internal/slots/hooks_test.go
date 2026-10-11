@@ -298,7 +298,8 @@ func TestPerPRWorktreeRunsWorktrunkHooks(t *testing.T) {
 		t.Fatalf("hooks ran before worktree add (add %d, first hook %d)", add, first)
 	}
 
-	// .mise.local.toml rendered with the slug, tokens stripped, and trusted.
+	// The main clone's mise.local.toml rendered under its name with the slug,
+	// tokens stripped, and trusted.
 	local := readFile(t, filepath.Join(path, MiseLocal))
 	for _, want := range []string{`WT_BRANCH = "magnum-pr-7"`, `CONDUCTOR_WORKSPACE_NAME = ""`, `FAKE_AWS = "1"`} {
 		if !strings.Contains(local, want) {
@@ -313,8 +314,12 @@ func TestPerPRWorktreeRunsWorktrunkHooks(t *testing.T) {
 	if fi, err := os.Stat(filepath.Join(path, MiseLocal)); err != nil || fi.Mode().Perm() != 0o600 {
 		t.Fatalf("mode: %v %v", fi, err)
 	}
-	if trust := h.fake.CallsWithPrefix("mise", "-C", path, "trust"); len(trust) != 1 {
+	if trust := h.fake.CallsWithPrefix("mise", "-C", path, "trust"); len(trust) != 1 ||
+		!slices.Equal(trust[0].Args, []string{"-C", path, "trust", filepath.Join(path, MiseLocal)}) {
 		t.Fatalf("mise trust calls = %+v", trust)
+	}
+	if fsx.Exists(filepath.Join(path, MiseLocalDotted)) {
+		t.Fatalf("%s rendered beside %s", MiseLocalDotted, MiseLocal)
 	}
 	if evs := eventKinds(t, h.st, "slot:zhuravel/widget#7", "slot.hook_ran"); len(evs) != 3 ||
 		!strings.Contains(evs[0].Message+evs[1].Message+evs[2].Message, "post-start hook \"setup\" (.config/wt.toml) ran as magnum-pr-7") {

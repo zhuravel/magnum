@@ -2,11 +2,14 @@ package slots
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/zhuravel/magnum/internal/fsx"
 	"github.com/zhuravel/magnum/internal/gitx"
 	"github.com/zhuravel/magnum/internal/herdr"
 	"github.com/zhuravel/magnum/internal/store"
@@ -450,5 +453,78 @@ func TestWorktreeChangesReal(t *testing.T) {
 	if len(calls) != 1 || calls[0].Env["GIT_OPTIONAL_LOCKS"] != "0" || calls[0].Env["GIT_TERMINAL_PROMPT"] != "0" ||
 		!slices.Equal(calls[0].Unset, gitx.ScrubbedEnv()) {
 		t.Fatalf("status calls = %+v, want one read-only call with the scrubbed env", calls)
+	}
+}
+
+// The local mise file magnum renders is its own: untracked when the PR's
+// .gitignore names only the other spelling, it does not hold a per-PR
+// worktree's removal after a human typed into the PR's panes. A file of the
+// same name without magnum's marker does.
+func TestRemovePRWorktreeGuardSkipsTheRenderedMiseFile(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		content string // "" = as magnum rendered it
+		held    bool
+	}{
+		{"rendered by magnum", "", false},
+		{"without the marker", "[env]\nMINE = \"1\"\n", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newPerPR(t, true)
+			h := f.h
+			writeFile(t, filepath.Join(f.main, MiseLocal), "[env]\nA = \"1\"\n")
+			sl, err := h.m.CreatePRWorktree(h.ctx, f.watch, "zhuravel/widget", f.pr, f.sha7)
+			if err != nil {
+				t.Fatal(err)
+			}
+			local := filepath.Join(sl.Path, MiseLocal)
+			if tc.content != "" {
+				writeFile(t, local, tc.content)
+			}
+			if ch, err := h.m.worktreeChanges(h.ctx, sl.Path); err != nil || !slices.Equal(ch.untracked, []string{MiseLocal}) {
+				t.Fatalf("untracked = %q, %v; want only %s (the fixture's .gitignore names only %s)", ch.untracked, err, MiseLocal, MiseLocalDotted)
+			}
+			h.humanTyped(f.pr.ID, h.now.Add(time.Minute))
+			err = h.m.RemovePRWorktree(h.ctx, h.slot(sl.Name), false)
+			if tc.held {
+				wantHold(t, err, HoldDirtyWorktree)
+				if readFile(t, local) != tc.content {
+					t.Fatal("the person's file was changed")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("RemovePRWorktree: %v", err)
+			}
+			if got := h.slot(sl.Name); got.State != store.SlotRemoved || fsx.Exists(sl.Path) {
+				t.Fatalf("state %s, directory left %v; want removed", got.State, fsx.Exists(sl.Path))
+			}
+		})
+	}
+}
+
+// A pool slot's removal guard (untracked files counted) skips the local mise
+// file magnum rendered under a spelling the checkout does not ignore, and
+// still counts a file of that name without magnum's marker.
+func TestRemoveGuardSkipsTheRenderedMiseFile(t *testing.T) {
+	h := newHarness(t)
+	sl, pr := h.claimedCheckout(8, h.shaPR8)
+	if err := os.Rename(filepath.Join(h.main, MiseLocalDotted), filepath.Join(h.main, MiseLocal)); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.m.renderMise(h.ctx, sl, h.pool); err != nil {
+		t.Fatal(err)
+	}
+	if ch, err := h.m.worktreeChanges(h.ctx, sl.Path); err != nil || !slices.Equal(ch.untracked, []string{MiseLocal}) {
+		t.Fatalf("untracked = %q, %v; want only %s", ch.untracked, err, MiseLocal)
+	}
+	h.humanTyped(pr.ID, h.now.Add(time.Minute))
+	if err := h.m.removeGuard(h.ctx, h.slot(sl.Name), false); err != nil {
+		t.Fatalf("removeGuard with magnum's rendered file: %v", err)
+	}
+	writeFile(t, filepath.Join(sl.Path, MiseLocal), "[env]\nMINE = \"1\"\n")
+	hold := wantHold(t, h.m.removeGuard(h.ctx, h.slot(sl.Name), false), HoldDirtyWorktree)
+	if !strings.Contains(hold.Detail, "1 untracked file(s)") {
+		t.Fatalf("hold = %+v", hold)
 	}
 }

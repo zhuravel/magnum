@@ -68,11 +68,14 @@ func hasDBPrefix(name string, prefixes []string) bool {
 }
 
 // SlotDBSlug is the database slug of a slot: slots.db_slug, else the slot
-// name sanitized like a workspace name (DBSlug: review3 stays review3,
-// owner/name#7 becomes owner_name_7). Slots, inventory and cleanup all use it.
+// name, sanitized like a workspace name (DBSlug: review3 stays review3,
+// example-review1 becomes example_review1, owner/name#7 owner_name_7), the
+// slug the setup's database.yml derives from WT_BRANCH and writes to
+// MarkerFile. A row that stored a raw slot name resolves to it too. Slots,
+// inventory and cleanup all use it.
 func SlotDBSlug(sl store.Slot) string {
 	if s := strings.TrimSpace(store.Deref(sl.DBSlug)); s != "" {
-		return s
+		return DBSlug(s)
 	}
 	return DBSlug(sl.Name)
 }
@@ -81,8 +84,10 @@ func SlotDBSlug(sl store.Slot) string {
 // slots, inventory and cleanup: Prefix is the common start of the pool's
 // database templates before "{" (talkable_ for talkable_development__{slug}
 // and talkable_test__{slug}; a single template's text before "{"), and
-// AllowRegexp is slot_name with {n} as [0-9]+ (^review[0-9]+$), so only
-// magnum's own slot slugs are ever droppable. A pool without database
+// AllowRegexp is slot_name sanitized as SlotDBSlug sanitizes a slot's name,
+// with {n} as [0-9]+ (^review[0-9]+$; example-review{n} gives
+// ^example_review[0-9]+$), so only magnum's own slot slugs are ever
+// droppable. A pool without database
 // templates, with no common prefix or with a slot_name lacking {n} gets the
 // zero Guard, which refuses everything.
 func DropGuard(pool config.Pool) mysqlx.Guard {
@@ -90,7 +95,17 @@ func DropGuard(pool config.Pool) mysqlx.Guard {
 	if prefix == "" || !strings.Contains(pool.SlotName, "{n}") {
 		return mysqlx.Guard{}
 	}
-	return mysqlx.Guard{Prefix: prefix, AllowRegexp: TemplateRegexp(pool.SlotName)}
+	return mysqlx.Guard{Prefix: prefix, AllowRegexp: TemplateRegexp(slugTemplate(pool.SlotName))}
+}
+
+// slugTemplate is a slot_name template with the text around each {n}
+// sanitized as DBSlug sanitizes it.
+func slugTemplate(tmpl string) string {
+	parts := strings.Split(tmpl, "{n}")
+	for i, p := range parts {
+		parts[i] = dbSlugRe.ReplaceAllString(p, "_")
+	}
+	return strings.Join(parts, "{n}")
 }
 
 // DBPrefix is the common start of the pool's database templates before "{"

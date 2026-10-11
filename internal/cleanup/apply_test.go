@@ -479,6 +479,43 @@ func TestApplyResetExternal(t *testing.T) {
 	}
 }
 
+// The reset copies the main clone's local mise file under the name it has
+// there (the dotted one when it has both, as mise prefers it), and none
+// when it has neither.
+func TestApplyResetExternalCopiesTheMiseFileUnderItsName(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		main []string
+		want string // "" = no mise file copied
+	}{
+		{"undotted", []string{slots.MiseLocal}, slots.MiseLocal},
+		{"dotted", []string{slots.MiseLocalDotted}, slots.MiseLocalDotted},
+		{"both", []string{slots.MiseLocal, slots.MiseLocalDotted}, slots.MiseLocalDotted},
+		{"neither", nil, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			ev := f.external("repo3", nil)
+			for _, name := range tc.main {
+				mustWrite(t, filepath.Join(ev.MainClone, name), "[env]\nFROM = \""+name+"\"\n", 0o600)
+			}
+			mustWrite(t, filepath.Join(ev.Path, "README"), "x\n", 0o644)
+			if rep, err := f.apply(f.plan(Options{External: true, Slot: "repo3"}), false); err != nil || rep.Done != 1 {
+				t.Fatalf("rep = %+v err = %v", rep, err)
+			}
+			for _, name := range []string{slots.MiseLocal, slots.MiseLocalDotted} {
+				b, err := os.ReadFile(filepath.Join(ev.Path, name))
+				switch {
+				case name != tc.want && err == nil:
+					t.Fatalf("%s copied, want %q", name, tc.want)
+				case name == tc.want && (err != nil || string(b) != "[env]\nFROM = \""+name+"\"\n"):
+					t.Fatalf("%s = %q, %v", name, b, err)
+				}
+			}
+		})
+	}
+}
+
 // A forced reset writes what it discards before the reset: the tracked paths
 // (untracked files stay) and the commits HEAD and the placeholder branch were
 // at, so work the force dropped can be found again (git branch <name> <sha>).

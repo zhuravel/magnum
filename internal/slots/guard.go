@@ -408,7 +408,8 @@ func humanActivity(sl store.Slot, pr store.PR) string {
 }
 
 // holdChanges persists HoldDirtyWorktree when the slot's tree has changes
-// (untracked files only with untracked); why names the human evidence.
+// (untracked files only with untracked, never the local mise file magnum
+// rendered: withoutRenderedMiseLocal); why names the human evidence.
 func (m *Manager) holdChanges(ctx context.Context, sl store.Slot, untracked bool, why string) error {
 	if sl.Path == "" || !fsx.Exists(sl.Path) {
 		return nil
@@ -417,6 +418,7 @@ func (m *Manager) holdChanges(ctx context.Context, sl store.Slot, untracked bool
 	if err != nil {
 		return fmt.Errorf("slots: guard %s: %w", sl.Name, err)
 	}
+	ch.untracked = withoutRenderedMiseLocal(sl.Path, ch.untracked)
 	if len(ch.paths(untracked)) == 0 {
 		return nil
 	}

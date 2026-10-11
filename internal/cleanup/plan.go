@@ -733,8 +733,8 @@ func allPass(g mysqlx.Guard, dbs []mysqlx.Database) bool {
 }
 
 // external plans the reset of a manual worktree (the user's worktree-reset):
-// placeholder branch <name> at origin/<base>, the main clone's
-// .mise.local.toml copied in, databases untouched.
+// placeholder branch <name> at origin/<base>, the main clone's local mise
+// file copied in under its name, databases untouched.
 func (b *builder) external(ctx context.Context, name string) error {
 	if b.p.Git == nil {
 		return errors.New("cleanup: Planner.Git is required for --external")
