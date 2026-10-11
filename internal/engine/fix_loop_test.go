@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os/exec"
 	"slices"
 	"strings"
 	"sync"
@@ -215,6 +216,55 @@ func TestFindingsAfterAFixStartTheNextCycle(t *testing.T) {
 		t.Errorf("the second re-review: forced %v, head %s", cur.Forced, cur.HeadSHA)
 	}
 	h.wantToasts("needs attention", 0)
+}
+
+// A head the operator moves, or a PR GitHub closes, between the re-review
+// and the next cycle ends the loop quietly with fix.ended, as the push's
+// settle does for a closed PR: nobody asked for a cycle on a head magnum has
+// not reviewed, and the operator's push gets its own review. No fixer
+// starts, nothing is toasted as urgent and no fix.failed is recorded.
+func TestALoopWhosePRMovedOnBeforeItsNextCycleEndsQuietly(t *testing.T) {
+	const operator = "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3"
+	for _, tc := range []struct {
+		name string
+		move func(h *harness, pr store.PR) error
+		want string
+	}{
+		{name: "the head moved", move: func(h *harness, pr store.PR) error {
+			_, err := h.st.UpsertPRFromGitHub(h.ctx, store.GitHubPR{RepoID: pr.RepoID, NodeID: pr.NodeID, Number: pr.Number, URL: pr.URL, HeadSHA: operator})
+			return err
+		}, want: "the head moved to c3c3c3c"},
+		{name: "the PR closed", move: func(h *harness, pr store.PR) error {
+			return h.st.UpdatePR(h.ctx, pr.ID, func(u *store.PRUpdate) { u.Set("gh_state", store.GHClosed) })
+		}, want: "closed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, git := fixHarness(t)
+			pr := loopToReReview(t, h, git, func(in pipeline.RoundInput) (map[string]int, string) {
+				if err := tc.move(h, in.PR); err != nil {
+					h.t.Errorf("move the PR on: %v", err)
+				}
+				return map[string]int{"P2": 1}, "COMMENTED"
+			})
+			reqPoll(h, prSpec{n: 2, head: fixPushed, author: "zhuravel"})
+			h.settle()
+
+			if _, ok := h.fixStateOf(2); ok {
+				t.Error("the loop goes on")
+			}
+			if ev, ok := h.fixEvent("fix.ended"); !ok || !strings.Contains(ev.Message, tc.want) {
+				t.Errorf("fix.ended = %+v, %v; want it to say %q", ev, ok, tc.want)
+			}
+			if ev, ok := h.fixEvent("fix.failed"); ok {
+				t.Errorf("fix.failed recorded: %s", ev.Message)
+			}
+			if n := len(h.fixRuns(pr.ID)); n != 1 {
+				t.Errorf("fix runs = %d, want 1", n)
+			}
+			h.flush()
+			h.wantToasts("needs attention", 0)
+		})
+	}
 }
 
 // The loop stops at fix_cycles: findings in the re-review of the last
@@ -817,6 +867,45 @@ func TestADrainStartsNoFixCycle(t *testing.T) {
 	}
 	if st, ok := h.fixStateOf(2); !ok || st.Cycle != 2 || st.Phase != FixPhaseReviewing || st.Head != fixPushed2 {
 		t.Errorf("fix state after the restart = %+v, %v", st, ok)
+	}
+}
+
+// A drain that is lifted without a restart (its drainer is gone) gives the
+// loop it held its next cycle at once, as the restart's recovery would have:
+// the held loop is not stranded in phase reviewing until the next start.
+func TestALiftedDrainContinuesTheLoopItHeld(t *testing.T) {
+	h, git := fixHarness(t)
+	pr := loopToReReview(t, h, git, findings(map[string]int{"P2": 1}, "COMMENTED"), fixPushed2)
+	h.rd.mu.Lock()
+	h.rd.gate = make(chan struct{})
+	h.rd.mu.Unlock()
+	before := len(h.rd.all())
+	reqPollNoSettle(h, prSpec{n: 2, head: fixPushed, author: "zhuravel"})
+	h.awaitRound(before)
+	dead := exec.Command("true")
+	if err := dead.Run(); err != nil {
+		t.Skip("cannot run true:", err)
+	}
+	h.e.setKV(h.ctx, KVDaemonDraining, Drain{Since: h.clock.Now(), PID: dead.Process.Pid}.Value())
+	close(h.rd.gate)
+	h.settle()
+	if n := len(h.fixRuns(pr.ID)); n != 1 {
+		t.Fatalf("fix runs = %d, want 1: a fixer started during the drain", n)
+	}
+
+	h.tick() // the drainer is gone: the drain is lifted
+	if v, ok := kvValue(h, KVDaemonDraining); ok {
+		t.Fatalf("the drain stays: %q", v)
+	}
+	runs := h.fixRuns(pr.ID)
+	if len(runs) != 2 || runs[1].TargetSHA != fixPushed {
+		t.Fatalf("fix runs after the lifted drain = %+v, want cycle 2 on %s", runs, fixPushed)
+	}
+	if st, ok := h.fixStateOf(2); !ok || st.Cycle != 2 {
+		t.Errorf("fix state after the lifted drain = %+v, %v", st, ok)
+	}
+	if ev, ok := h.fixEvent("fix.failed"); ok {
+		t.Errorf("fix.failed recorded: %s", ev.Message)
 	}
 }
 

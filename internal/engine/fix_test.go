@@ -465,6 +465,28 @@ func TestAPushedReportForcesTheReReview(t *testing.T) {
 	}
 }
 
+// The loop's forced re-review is no act of the operator: the threads magnum
+// stopped arguing in (KVPRStalemate) stay flagged for them, where a
+// `magnum review` they ask for marks them seen.
+func TestTheLoopsReReviewLeavesStalematesFlagged(t *testing.T) {
+	h, git := fixHarness(t)
+	pr := fixablePR(h, "zhuravel", map[string]int{"P2": 1})
+	const flagged = `{"threads":[{"id":"PRRT_A","url":"https://github.com/talkable/talkable/pull/2#discussion_r206","last_reply":206}]}`
+	h.e.setKV(h.ctx, KVPRStalemate(pr.ID), flagged)
+	pushingFixer(h, git, fixPushed)
+	h.fix(FixPayload{})
+	h.handle()
+	if cur := h.wantState(2, store.PRRereviewPending); !cur.Forced {
+		t.Fatal("no forced re-review")
+	}
+	if v, ok := kvValue(h, KVPRStalemate(pr.ID)); !ok || v != flagged {
+		t.Errorf("stalemate = %q, %v: the loop's force marked the operator's threads seen", v, ok)
+	}
+	if v, ok := kvValue(h, kvPRStalemateSeen(pr.ID)); ok {
+		t.Errorf("stalemate_seen = %q, want none", v)
+	}
+}
+
 // A fixer that pushed nothing and needs nobody answered every finding: the
 // slot goes back to the reviewed head, the loop ends and an info toast says
 // so.
@@ -1147,8 +1169,8 @@ func TestAFailedForceAfterAPushStillQueuesItsReReview(t *testing.T) {
 	}
 
 	cur := h.pr(2)
-	if cur.HeadSHA != fixPushed || cur.Forced || (cur.State != store.PRRereviewPending && cur.State != store.PRNeedsAttention) {
-		t.Fatalf("PR = state %s head %s forced %v, want waiting for the re-review of %s", cur.State, cur.HeadSHA, cur.Forced, fixPushed)
+	if cur.HeadSHA != fixPushed || cur.Forced || cur.State != store.PRRereviewPending {
+		t.Fatalf("PR = state %s head %s forced %v, want rereview_pending, waiting for the re-review of %s", cur.State, cur.HeadSHA, cur.Forced, fixPushed)
 	}
 	if n := h.eventCount("pr:talkable/talkable#2", "pr.head_changed"); n != 1 {
 		t.Errorf("pr.head_changed events = %d, want 1", n)

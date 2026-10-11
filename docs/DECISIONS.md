@@ -974,6 +974,17 @@ skill versions); people add theirs to the sections before it, at the end of the 
   never applied. Validation now refuses it there ("a fix role takes no max_session_rounds"). The fixer's
   session persists across cycles and loops until the operator parks it, which keeps what it declined and
   why in its conversation; a fresh conversation is a park away.
+- **The loop between its cycles: quiet ends, the operator's stalemates, a lifted drain** (2026-10-11).
+  The loop's forced re-review went through the same `forceReview` as `magnum review`, which marks the
+  threads magnum stopped arguing in as seen by the operator; the loop's force is no act of theirs, so it
+  now leaves them flagged. A next cycle that could not start because the operator pushed a newer head, or
+  GitHub closed the PR, after the re-review ended the loop with an urgent "cycle 2 did not start"; it now
+  ends quietly with `fix.ended`, as the settle does for a closed PR, since nobody asked for a cycle on a
+  head magnum has not reviewed and the push gets its own review. A drain lifted without a restart (its
+  command gone) left the loop it had held in phase reviewing until the next start, where `magnum fix` was
+  refused as running; the daemon now remembers the loops a drain held and, once it lifts the drain, gives
+  each the decision the restart's recovery would have made. Only those loops: one whose re-review still
+  runs gets its decision from that round's hook, with no race between the two.
 
 ## Screens and commands
 

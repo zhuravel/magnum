@@ -16,6 +16,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -80,7 +81,9 @@ func (e *Engine) fixAfterRound(ctx context.Context, pr store.PR, res pipeline.Ro
 // author when it pushed, end it as needs attention; a review that found
 // nothing ends it as done; findings start the next cycle (startFix) while
 // cycles are left, and end it as needs attention at the cap; a next cycle
-// that cannot start ends it as needs attention with why. A review that
+// that cannot start ends it as needs attention with why, unless the PR moved
+// on since the re-review (closed, or a newer head the operator pushed:
+// loopMovedOn), which ends it quietly with fix.ended. A review that
 // requests changes with no new findings found something: the earlier
 // findings it keeps open (fixRemains). raw is the loop's row as read: every
 // end acts only while the row is still that (endFixRowIf), and the next
@@ -116,10 +119,36 @@ func (e *Engine) continueFixLoop(ctx context.Context, job *fixJob, raw string, r
 			e.log.Info("fix: the loop ended before its next cycle started", "subject", job.subject(), "why", err.Error())
 		case errors.Is(err, errFixDraining):
 			e.log.Info("fix: the daemon is draining; the next cycle waits for the restart", "subject", job.subject(), "cycle", st.Cycle+1)
+			e.mu.Lock()
+			e.drainHeld[job.pr.ID] = true // a drain lifted without a restart goes on with it
+			e.mu.Unlock()
 		default:
+			if why, moved := e.loopMovedOn(ctx, job.pr.ID, cmp.Or(res.TargetSHA, st.Head)); moved {
+				if e.endFixRowIf(ctx, job, raw) {
+					e.event(ctx, "info", job.subject(), "fix.ended", fmt.Sprintf("the fix loop ends before cycle %d: %s", st.Cycle+1, why), job.loopData())
+				}
+				return
+			}
 			e.endLoopForAttention(ctx, job, raw, "fix.failed", fmt.Sprintf("fix loop ended: cycle %d did not start: %v", st.Cycle+1, err))
 		}
 	}
+}
+
+// loopMovedOn says why a loop's PR moved on after the re-review of head,
+// which a next cycle that could not start may be because of: GitHub closed
+// it, or its head is no longer head (the operator pushed meanwhile, and the
+// push gets a review of its own). ok is false when it did not move on.
+func (e *Engine) loopMovedOn(ctx context.Context, prID int64, head string) (string, bool) {
+	pr, err := e.st.PRByID(ctx, prID)
+	switch {
+	case err != nil:
+		return "", false
+	case pr.GHState != store.GHOpen:
+		return fmt.Sprintf("the PR is %s on GitHub", strings.ToLower(pr.GHState)), true
+	case head != "" && pr.HeadSHA != head:
+		return fmt.Sprintf("the head moved to %s after the re-review of %s", textx.ShortSHA(pr.HeadSHA), textx.ShortSHA(head)), true
+	}
+	return "", false
 }
 
 // fixLoopDone ends a loop whose re-review of head found nothing: its row
@@ -168,15 +197,44 @@ func (e *Engine) endFixRowIf(ctx context.Context, job *fixJob, raw string) bool 
 	return gone
 }
 
-// recoverReviewingLoop goes on at startup with a loop a stopped daemon left
-// in phase reviewing (raw: its row as read). A PR whose re-review still has
-// to run (waiting, in flight or paused) keeps the loop: the round's recovery
-// re-reviews and the hook decides after it. A PR reviewed at the loop's head
-// had its re-review post while a stop or a drain kept the hook from
-// deciding: the hook's decision is made now, on that review's result. Any
-// other PR has moved on (a newer head, closed, needing attention): the loop
-// ends quietly with fix.ended.
-func (e *Engine) recoverReviewingLoop(ctx context.Context, job *fixJob, raw string) {
+// continueDrainHeldLoops goes on with the loops a drain held before their
+// next cycle (drainHeld), once checkDrain lifted that drain without a
+// restart: each gets the decision the restart's recovery would have made
+// (recoverReviewingLoop), so none is stranded in phase reviewing until the
+// next start. Only the loops the drain held are looked at: a loop whose
+// re-review is still running gets its decision from that round's hook.
+func (e *Engine) continueDrainHeldLoops(ctx context.Context) {
+	e.mu.Lock()
+	held := slices.Sorted(maps.Keys(e.drainHeld))
+	clear(e.drainHeld)
+	e.mu.Unlock()
+	for _, id := range held {
+		st, raw, ok, err := e.fixRow(ctx, id)
+		if err != nil || !ok || st.Phase != FixPhaseReviewing {
+			continue
+		}
+		pr, err := e.st.PRByID(ctx, id)
+		if err != nil {
+			continue
+		}
+		repo, err := e.st.RepoByID(ctx, pr.RepoID)
+		if err != nil {
+			continue
+		}
+		e.recoverReviewingLoop(ctx, e.loopJob(ctx, repo, pr, st), raw, "while a drain held it")
+	}
+}
+
+// recoverReviewingLoop goes on with a loop left in phase reviewing (raw: its
+// row as read) by a stopped daemon (at startup) or by a drain lifted without
+// a restart (continueDrainHeldLoops); while says when ("while the daemon was
+// stopped"). A PR whose re-review still has to run (waiting, in flight or
+// paused) keeps the loop: the round's recovery re-reviews and the hook
+// decides after it. A PR reviewed at the loop's head had its re-review post
+// while a stop or a drain kept the hook from deciding: the hook's decision
+// is made now, on that review's result. Any other PR has moved on (a newer
+// head, closed, needing attention): the loop ends quietly with fix.ended.
+func (e *Engine) recoverReviewingLoop(ctx context.Context, job *fixJob, raw, while string) {
 	pr, st := job.pr, job.state
 	switch {
 	case slices.Contains(waitingStates, pr.State), slices.Contains(store.InFlightStates, pr.State), pr.State == store.PRPaused:
@@ -190,8 +248,8 @@ func (e *Engine) recoverReviewingLoop(ctx context.Context, job *fixJob, raw stri
 	if !e.endFixRowIf(ctx, job, raw) {
 		return
 	}
-	e.event(ctx, "info", job.subject(), "fix.ended", fmt.Sprintf("the fix loop ends: its PR moved on while the daemon was stopped (%s at %s, the loop waited at %s)",
-		pr.State, textx.ShortSHA(pr.HeadSHA), textx.ShortSHA(st.Head)), job.loopData())
+	e.event(ctx, "info", job.subject(), "fix.ended", fmt.Sprintf("the fix loop ends: its PR moved on %s (%s at %s, the loop waited at %s)",
+		while, pr.State, textx.ShortSHA(pr.HeadSHA), textx.ShortSHA(st.Head)), job.loopData())
 }
 
 // postedReReview is the result of the review magnum posted on the PR at head,

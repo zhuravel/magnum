@@ -480,8 +480,9 @@ func (e *Engine) requestReview(ctx context.Context, p ReviewPayload) (string, er
 // it (a dry run, fresh sessions, the requested roles, a re-decision of the
 // replies, a posting identity). by names who asks in the pr.forced event
 // ("magnum review"; "magnum fix" for the fix loop's re-review, which calls it
-// directly: the loop's own review is not refused while the loop runs). It
-// returns the state the PR moved to.
+// directly: the loop's own review is not refused while the loop runs, and,
+// being no act of the operator's, leaves the stalemate threads flagged for
+// them). It returns the state the PR moved to.
 func (e *Engine) forceReview(ctx context.Context, repo store.Repo, pr store.PR, p ReviewPayload, requested []string, by string) (string, error) {
 	// The dry-run marker is settled before the PR is forced: a forced PR
 	// must never run in the wrong mode because a kv write failed.
@@ -519,7 +520,9 @@ func (e *Engine) forceReview(ctx context.Context, repo store.Repo, pr store.PR, 
 	} else {
 		e.delKV(ctx, kvPRRedecide(pr.ID)) // this request is a review, whatever an earlier one asked
 	}
-	e.seeStalemates(ctx, pr.ID) // the operator acts on the PR: the threads magnum stopped arguing in are seen
+	if by != fixBy { // the fix loop's own re-review is no act of the operator's
+		e.seeStalemates(ctx, pr.ID) // the operator acts on the PR: the threads magnum stopped arguing in are seen
+	}
 	forced := "forced"
 	if postMerge(pr) {
 		forced = "forced, post-merge"

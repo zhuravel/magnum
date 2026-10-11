@@ -712,6 +712,9 @@ func (e *Engine) recoverFixes(ctx context.Context) {
 	if e.d.DryRun {
 		return
 	}
+	e.mu.Lock()
+	clear(e.drainHeld) // this start decides every loop a drain held
+	e.mu.Unlock()
 	keys, err := e.st.KVKeys(ctx, "pr.*.fix")
 	if err != nil {
 		e.log.Warn("recovery: fix loops", "err", err)
@@ -741,7 +744,7 @@ func (e *Engine) recoverFixes(ctx context.Context) {
 		}
 		job := e.loopJob(ctx, repo, pr, st)
 		if st.Phase == FixPhaseReviewing {
-			e.recoverReviewingLoop(ctx, job, raw) // fix_loop.go
+			e.recoverReviewingLoop(ctx, job, raw, "while the daemon was stopped") // fix_loop.go
 			continue
 		}
 		if job.role.Name == "" {

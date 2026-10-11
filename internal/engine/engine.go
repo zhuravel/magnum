@@ -304,6 +304,10 @@ type Engine struct {
 	// autofixNoRole are the PRs autofix found no fix role for, logged once
 	// each (fix_loop.go).
 	autofixNoRole map[int64]bool
+	// drainHeld are the PRs whose fix loop a drain held before its next
+	// cycle (guarded by mu): a drain lifted without a restart continues
+	// them (continueDrainHeldLoops), as the restart's recovery would.
+	drainHeld map[int64]bool
 	// inflight are the requests answered asynchronously, which handleRequests
 	// skips until they complete: those handed to the heavy worker
 	// (heavyRequest), an open's (open.go) and an abort's or an ignore's
@@ -459,6 +463,7 @@ func New(d Deps) *Engine {
 		rounds:        map[int64]*roundHandle{},
 		evicting:      map[int64]string{},
 		autofixNoRole: map[int64]bool{},
+		drainHeld:     map[int64]bool{},
 		heavy:         make(chan heavyJob, 64),
 		heavyKeys:     map[string]bool{},
 		inflight:      map[int64]bool{},

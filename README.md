@@ -1370,7 +1370,8 @@ One cycle of a loop has four steps.
    branch). Magnum then puts the slot on the pushed head, or back on the reviewed head when nothing was
    pushed. The fixer's local commits survive only on GitHub.
 3. **Re-review.** A push gets a forced re-review. It skips the throttle and does not count against the daily
-   cap, because the loop has its own cap.
+   cap, because the loop has its own cap. Unlike a `magnum review` you ask for, it is no act of yours, so
+   the threads Magnum stopped arguing in stay flagged for you.
 4. **Decide.** When that review posts, the loop either starts the next cycle or ends (see below).
 
 **Who the fixer is.** The fixer's pane acts as one GitHub identity. The built-in `claude-fix` names none, so
@@ -1434,6 +1435,8 @@ skill = "/Users/you/.config/magnum/skills/my-fix/SKILL.md"
   report's path, the attention key opens the fixer's pane, and `magnum status` and `magnum attention` list
   the PR. When the fixer pushed and also left findings, the push still gets its re-review first, and the loop
   ends after it.
+- **Ended.** GitHub closed the PR, or you pushed a newer head, before the next cycle started. The loop ends
+  quietly with a `fix.ended` event, and your push gets its own review.
 
 **Configuration.** Three `[pipeline]` keys set the job, and a `[[watch]]` may set its own of each.
 
@@ -1479,7 +1482,8 @@ out, as the board's does.
   `magnum review <pr>` refuses while the PR has a loop.
 - A fix job is no review round, so it does not count toward `[daemon] max_concurrent_reviews`.
 - `magnum daemon-restart` refuses while a fixer works. `--drain` waits for it and starts no new cycle
-  meanwhile, and the new daemon goes on with a loop that was waiting for its next cycle. `--now` stops the
+  meanwhile, and the new daemon goes on with a loop that was waiting for its next cycle. A drain lifted
+  without a restart, because its command is gone, goes on with that loop at once. `--now` stops the
   daemon under the fixer, and the next start ends that loop as "fix run lost in a daemon restart". herdr
   keeps the fixer's pane, so that start first interrupts a fixer still at work and puts the slot back on
   the reviewed head: nothing pushes or replies as you after Magnum said the run was lost.
