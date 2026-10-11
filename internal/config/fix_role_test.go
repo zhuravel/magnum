@@ -163,11 +163,12 @@ func TestValidateFixRole(t *testing.T) {
 			c.Identities = append(c.Identities, app)
 			role(c, RoleClaudeFix).Identity = "app"
 		}, "role claude-fix: identity app must be a gh identity"},
-		"fix role runs always": {func(c *Config) { role(c, RoleClaudeFix).Runs = RunsAlways }, "role claude-fix: a fix role has no runs"},
-		"fix role runs first":  {func(c *Config) { role(c, RoleClaudeFix).Runs = RunsFirst }, "role claude-fix: a fix role has no runs"},
-		"fix role after":       {func(c *Config) { role(c, RoleClaudeFix).After = []string{"claude-review"} }, "role claude-fix: a fix role takes no after"},
-		"fix role own_pass":    {func(c *Config) { role(c, RoleClaudeFix).OwnPass = "judge-own-pass.md" }, "role claude-fix: a fix role takes no own_pass"},
-		"fix role judge":       {func(c *Config) { role(c, RoleClaudeFix).Judge = true }, "role claude-fix: a fix role cannot also be a judge"},
+		"fix role runs always":        {func(c *Config) { role(c, RoleClaudeFix).Runs = RunsAlways }, "role claude-fix: a fix role has no runs"},
+		"fix role runs first":         {func(c *Config) { role(c, RoleClaudeFix).Runs = RunsFirst }, "role claude-fix: a fix role has no runs"},
+		"fix role after":              {func(c *Config) { role(c, RoleClaudeFix).After = []string{"claude-review"} }, "role claude-fix: a fix role takes no after"},
+		"fix role own_pass":           {func(c *Config) { role(c, RoleClaudeFix).OwnPass = "judge-own-pass.md" }, "role claude-fix: a fix role takes no own_pass"},
+		"fix role judge":              {func(c *Config) { role(c, RoleClaudeFix).Judge = true }, "role claude-fix: a fix role cannot also be a judge"},
+		"fix role max_session_rounds": {func(c *Config) { role(c, RoleClaudeFix).MaxSessionRounds = 4 }, "role claude-fix: a fix role takes no max_session_rounds"},
 		"fix role shell": {func(c *Config) {
 			r := role(c, RoleClaudeFix)
 			r.Kind, r.Mode, r.Model, r.Command, r.Prompt = KindShell, ModeShell, "", "true", ""

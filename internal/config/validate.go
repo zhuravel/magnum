@@ -977,8 +977,9 @@ func (c *Config) validateRole(r Role, kinds map[string]Kind, ids map[string]bool
 }
 
 // validateFixRole checks what makes a fix role fit the fix job: an agent
-// session that is no judge and takes no after or own_pass (it is not part of
-// a round), acting as a gh identity when it names one: the operator's own
+// session that is no judge and takes no after, own_pass or
+// max_session_rounds (it is not part of a round, so nothing counts rounds
+// for its session, which persists until the operator parks it), acting as a gh identity when it names one: the operator's own
 // account, which pushes to the PR's branch and answers its review threads.
 // A role that names none takes each watch's poll identity (FixRoleFor); an
 // identity the configuration does not declare, or a poll identity that is
@@ -996,6 +997,9 @@ func (c *Config) validateFixRole(r Role, bad func(string, ...any)) {
 	}
 	if r.OwnPass != "" {
 		bad("a fix role takes no own_pass (that is the judge's)")
+	}
+	if r.MaxSessionRounds > 0 {
+		bad("a fix role takes no max_session_rounds (a fix job is no round: its session persists until you park it)")
 	}
 	switch id := c.IdentityByName(r.Identity); {
 	case id != nil && id.Kind != "gh":

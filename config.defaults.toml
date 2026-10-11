@@ -484,8 +484,8 @@ timeout = "90m"
 [[role]]
 name = "claude-fix"                   # the fixer of the fix job (`fix_role` above): never part of a review round,
 kind = "claude"                       # so a watch's roles do not list it. Its session is kept across fix runs like
-fix = true                            # a reviewer's, and has no max_session_rounds: a fix job is no round, so
-                                      # nothing counts rounds for it
+fix = true                            # a reviewer's until you park it; max_session_rounds is refused on a fix role,
+                                      # since a fix job is no round and nothing counts rounds for it
 # identity = "me"                     # unset: the fixer acts as each watch's poll identity, your gh login in a
                                       # `magnum init` config. Its pane gets that GitHub env, so it pushes to the
                                       # PR's branch and answers the review's threads as you, not as the App that

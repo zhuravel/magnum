@@ -969,6 +969,11 @@ skill versions); people add theirs to the sections before it, at the end of the 
   out the built-in) now draws a warning and fails `magnum doctor`, where it was silent; `fix_role = ""` stays
   the quiet way to switch the job off. Doctor checks one line per role and identity, since one role can act
   as several.
+- **A fix role takes no `max_session_rounds`** (2026-10-11). The knob counts review rounds per session, and
+  a fix job is no round, so nothing would ever count against it: set on the fixer it read as a limit that
+  never applied. Validation now refuses it there ("a fix role takes no max_session_rounds"). The fixer's
+  session persists across cycles and loops until the operator parks it, which keeps what it declined and
+  why in its conversation; a fresh conversation is a park away.
 
 ## Screens and commands
 

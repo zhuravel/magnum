@@ -1362,8 +1362,9 @@ One cycle of a loop has four steps.
 1. **Fix.** The fixer works in the PR's own slot. That is the pool slot or per-PR worktree that already holds
    the reviewed head, the gems and the databases, so the fixer runs specs through `magnum db-lock` like a
    reviewer. Magnum holds the PR for the whole run, so no round, release or `magnum open` touches the checkout
-   meanwhile. The PR stays `reviewed`. The fixer's conversation persists across cycles, so it remembers what
-   it declined and why.
+   meanwhile. The PR stays `reviewed`. The fixer's conversation persists across cycles and loops until you
+   park it, so it remembers what it declined and why. A fix role takes no `max_session_rounds`: a fix job is
+   no review round, and the configuration refuses the key there.
 2. **Settle.** When the fixer's turn ends, Magnum reads its report. A push the report lists counts only once
    GitHub shows that commit as the PR's head (the poll identity's view of the PR, else `git ls-remote` of the
    branch). Magnum then puts the slot on the pushed head, or back on the reviewed head when nothing was
