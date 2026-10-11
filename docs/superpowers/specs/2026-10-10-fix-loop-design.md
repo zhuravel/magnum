@@ -61,8 +61,8 @@ in the repository and in the binary, as the judge skill does.
 `t:resolve-review-2` (your plugin) gives each review comment a verdict with a net score, stops for
 your confirmation, then fixes, runs the touched specs, pushes, replies with a `(Claude)` prefix and
 resolves bot threads. It is the model for the fix skill's policy. Magnum does not run it: it is
-interactive, it lives in a private plugin, its script paths point at a directory that does not exist
-on this machine, and it records to mempalace, which is gone. The fix skill below carries the same
+interactive, it lives in a private plugin, and its script paths point at a directory that does not exist
+on this machine. The fix skill below carries the same
 judgement as a document in magnum's repository, with no scripts, so it works wherever gh works.
 
 ## 3. The fix job
