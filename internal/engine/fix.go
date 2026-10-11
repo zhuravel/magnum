@@ -18,6 +18,7 @@ package engine
 // that loop (recoverFixes).
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -415,16 +416,27 @@ func (e *Engine) runFix(ctx context.Context, job *fixJob) {
 	e.settleFix(fctx, job)
 }
 
-// putFixSlotBack stops a fixer whose run failed or timed out and puts the
-// slot back at the reviewed head (spec 3.6: the fixer's local commits would
-// hold the slot for head drift at the next round's guard): the fixer is
-// interrupted, its agent waited for until quiet, and the slot resynced. It
+// putFixSlotBack stops a fixer whose run failed, timed out or panicked and
+// puts the slot back at the reviewed head (spec 3.6: the fixer's local
+// commits would hold the slot for head drift at the next round's guard). It
 // returns what to add to the failure's message ("" when the slot is back).
 func (e *Engine) putFixSlotBack(ctx context.Context, job *fixJob) string {
-	if e.interruptSessions(ctx, job.pr, &job.watch, job.role.Name) > 0 && !e.waitAgentsQuiet(ctx, job.pr.ID) {
+	return e.stopFixerAt(ctx, job, job.review.SHA)
+}
+
+// stopFixerAt stops the job's fixer and puts its slot back at sha: the fix
+// role's working agents are interrupted and waited for until quiet (a fixer
+// left at work would go on pushing and replying as the operator after magnum
+// ended its loop), then the slot is resynced. It returns what to add to the
+// failure's message ("" when the slot is back, or the PR has no slot).
+func (e *Engine) stopFixerAt(ctx context.Context, job *fixJob, sha string) string {
+	if job.role.Name != "" && e.interruptSessions(ctx, job.pr, &job.watch, job.role.Name) > 0 && !e.waitAgentsQuiet(ctx, job.pr.ID) {
 		e.log.Info("the fixer still works after the interrupt", "subject", job.subject())
 	}
-	if err := e.resyncFixSlot(ctx, job, job.review.SHA); err != nil {
+	if job.slot.ID == 0 || sha == "" {
+		return ""
+	}
+	if err := e.resyncFixSlot(ctx, job, sha); err != nil {
 		return fmt.Sprintf("; slot %s not put back: %v", job.slot.Name, err)
 	}
 	return ""
@@ -667,7 +679,9 @@ func (e *Engine) fixWaitOf(ctx context.Context, prID int64) (Wait, bool) {
 }
 
 // fixPanicked settles a fix job that panicked as a failed one; the abort
-// and ignore orders it held hear why (stopsPanicked).
+// and ignore orders it held hear why (stopsPanicked). A fixer that may have
+// touched the slot is stopped and the slot put back first, as after a failed
+// run (putFixSlotBack).
 func (e *Engine) fixPanicked(ctx context.Context, job *fixJob, msg string) {
 	if orders := e.closeFixHandle(job.pr.ID); len(orders) > 0 {
 		e.stopsPanicked(ctx, orders, msg)
@@ -675,15 +689,22 @@ func (e *Engine) fixPanicked(ctx context.Context, job *fixJob, msg string) {
 	if job.run.ID != "" {
 		e.abandonFixRun(ctx, job.run, "the fix job panicked")
 	}
-	e.failFix(ctx, job, "fix run failed: panic: "+msg, "")
+	why := "fix run failed: panic: " + msg
+	if job.touched {
+		why += e.putFixSlotBack(ctx, job)
+	}
+	e.failFix(ctx, job, why, "")
 }
 
 // recoverFixes ends the fix loops a stopped daemon left with the fixer at
 // work (phase fixing): no fixer run survives a restart, so its run fails
-// and the loop ends as needs attention. A loop in phase reviewing goes on
-// (recoverReviewingLoop): one whose re-review is still to run waits for it
-// (the round's own recovery re-reviews), one whose re-review posted gets
-// the decision the stop kept the hook from making.
+// and the loop ends as needs attention. herdr keeps the fixer's pane across
+// a crash or `daemon-restart --now`, so a fixer still at work is
+// interrupted until quiet and the slot is put back at the loop's head first
+// (stopFixerAt), before magnum tells the operator the run was lost. A loop
+// in phase reviewing goes on (recoverReviewingLoop): one whose re-review is
+// still to run waits for it (the round's own recovery re-reviews), one whose
+// re-review posted gets the decision the stop kept the hook from making.
 func (e *Engine) recoverFixes(ctx context.Context) {
 	if e.d.DryRun {
 		return
@@ -720,6 +741,10 @@ func (e *Engine) recoverFixes(ctx context.Context) {
 			e.recoverReviewingLoop(ctx, job, raw) // fix_loop.go
 			continue
 		}
+		if job.role.Name == "" {
+			job.role.Name = st.Role // the role the loop ran, though the config no longer names it
+		}
+		msg := why + e.stopFixerAt(ctx, job, cmp.Or(st.Head, deref(pr.ReviewedSHA)))
 		if runs, err := e.st.RunsByPR(ctx, pr.ID); err == nil {
 			for _, r := range runs {
 				if r.Kind == store.RunFix {
@@ -727,6 +752,6 @@ func (e *Engine) recoverFixes(ctx context.Context) {
 				}
 			}
 		}
-		e.failFix(ctx, job, why, st.Report)
+		e.failFix(ctx, job, msg, st.Report)
 	}
 }

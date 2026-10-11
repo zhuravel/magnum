@@ -1469,7 +1469,9 @@ out, as the board's does.
 - A fix job is no review round, so it does not count toward `[daemon] max_concurrent_reviews`.
 - `magnum daemon-restart` refuses while a fixer works. `--drain` waits for it and starts no new cycle
   meanwhile, and the new daemon goes on with a loop that was waiting for its next cycle. `--now` stops the
-  daemon under the fixer, and the next start ends that loop as "fix run lost in a daemon restart".
+  daemon under the fixer, and the next start ends that loop as "fix run lost in a daemon restart". herdr
+  keeps the fixer's pane, so that start first interrupts a fixer still at work and puts the slot back on
+  the reviewed head: nothing pushes or replies as you after Magnum said the run was lost.
 
 ## Daily use
 

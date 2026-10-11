@@ -937,6 +937,13 @@ skill versions); people add theirs to the sections before it, at the end of the 
   in the status gather, on a slot's row (a PR whose fixer works is in no queue) and on a queue row, so its
   `F` reads `fix on` on a PR switched out of autofix and sends `--on`, where it could only switch autofix
   off before.
+- **A fixer that outlives its job is stopped before the loop is declared lost** (2026-10-11). herdr keeps a
+  pane across a daemon crash or `daemon-restart --now`, so the startup recovery that ended a loop in phase
+  fixing as "fix run lost in a daemon restart" left a fixer that could still push and reply in the
+  operator's name, and its local commits held the slot for head drift at the next round's guard. The
+  recovery now interrupts the fix role's working agents of the PR, waits for them to go quiet and resyncs
+  the slot to the loop's head before it fails the loop, as a failed or timed-out run already did; a fix job
+  that panics after its prompt was sent does the same.
 
 ## Screens and commands
 

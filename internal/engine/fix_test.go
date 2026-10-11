@@ -789,6 +789,86 @@ func TestAFixRunLostInARestartEndsTheLoop(t *testing.T) {
 	}
 }
 
+// liveFixer gives PR pr a live session of the fix role whose agent herdr
+// shows working: a fixer the engine did not start, as one that outlived a
+// daemon (herdr keeps its pane after a crash or `daemon-restart --now`).
+func liveFixer(h *harness, pr store.PR) {
+	h.t.Helper()
+	name := "mg-t-2-claude-fix"
+	if _, err := h.st.CreateSession(h.ctx, store.Session{PRID: pr.ID, Role: "claude-fix", AgentName: &name, AgentKind: new("claude"),
+		HerdrPaneID: new("p-claude-fix"), HerdrWorkspaceID: new("w1"), State: store.SessionLive}); err != nil {
+		h.t.Fatal(err)
+	}
+	h.hd.mu.Lock()
+	h.hd.agents = append(h.hd.agents, herdr.AgentInfo{PaneID: "p-claude-fix", Name: name, Agent: "claude", AgentStatus: herdr.StatusWorking})
+	h.hd.mu.Unlock()
+}
+
+// A fixer that outlived its daemon is stopped before the loop is declared
+// lost: it is interrupted until quiet and the slot goes back to the reviewed
+// head, so it cannot push or reply as the operator after magnum said "fix
+// run lost", and the next round's guard finds no drift.
+func TestARestartStopsAFixerThatSurvivedIt(t *testing.T) {
+	var kh *keyHerdr
+	h, _ := fixHarness(t, withKeys(&kh))
+	pr := fixablePR(h, "zhuravel", map[string]int{"P2": 1})
+	liveFixer(h, pr)
+	if err := h.e.setFixState(h.ctx, pr.ID, FixState{Cycle: 1, Cap: 3, Phase: FixPhaseFixing, Head: fixHead, Role: "claude-fix"}); err != nil {
+		t.Fatal(err)
+	}
+
+	h.startup()
+	if got, want := kh.all(), []string{"agent:mg-t-2-claude-fix:ctrl+c", "agent:mg-t-2-claude-fix:ctrl+c"}; !slices.Equal(got, want) {
+		t.Errorf("keys %v, want %v: the surviving fixer was not interrupted", got, want)
+	}
+	if !slices.Contains(h.sl.all(), "resync:review1:"+fixHead) {
+		t.Errorf("slot calls %v lack the resync to the reviewed head", h.sl.all())
+	}
+	if cur := h.wantState(2, store.PRNeedsAttention); deref(cur.LastError) != "fix run lost in a daemon restart" {
+		t.Errorf("last_error = %q", deref(cur.LastError))
+	}
+	if _, ok := h.fixStateOf(2); ok {
+		t.Error("the lost loop goes on")
+	}
+}
+
+// A fix job that panics after the fixer got its prompt stops the fixer and
+// puts the slot back at the reviewed head before it fails the loop, as a
+// failed run does: the fixer must not go on acting as the operator.
+func TestAFixJobThatPanicsStopsTheFixer(t *testing.T) {
+	var kh *keyHerdr
+	h, git := fixHarness(t, withKeys(&kh))
+	pr := fixablePR(h, "zhuravel", map[string]int{"P2": 1})
+	h.ag.mu.Lock()
+	h.ag.onSubmit = func(store.Run, string) {
+		h.hd.mu.Lock()
+		h.hd.agents = append(h.hd.agents, herdr.AgentInfo{PaneID: "p-claude-fix", Name: "mg-t-2-claude-fix", Agent: "claude",
+			AgentStatus: herdr.StatusWorking})
+		h.hd.mu.Unlock()
+		git.setHead("c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3") // the fixer committed
+		panic("boom in the fix job")
+	}
+	h.ag.mu.Unlock()
+	h.fix(FixPayload{})
+	h.tick()
+
+	if got := kh.all(); !slices.Contains(got, "agent:mg-t-2-claude-fix:ctrl+c") {
+		t.Errorf("keys %v: the fixer was not interrupted", got)
+	}
+	if !slices.Contains(h.sl.all(), "resync:review1:"+fixHead) {
+		t.Errorf("slot calls %v lack the resync to the reviewed head", h.sl.all())
+	}
+	if cur := h.wantState(2, store.PRNeedsAttention); !strings.Contains(deref(cur.LastError), "panic: boom in the fix job") {
+		t.Errorf("last_error = %q", deref(cur.LastError))
+	}
+	if r := h.fixRuns(pr.ID)[0]; r.State != store.RunAbandoned && r.State != store.RunFailed {
+		t.Errorf("fix run %s", r.State)
+	}
+	if _, ok := h.fixStateOf(2); ok {
+		t.Error("the loop goes on")
+	}
+}
+
 // `magnum abort` between the fixer's push and its re-review takes the
 // forced re-review back and ends the loop, so no row is left that would
 // refuse `magnum review` with no loop running.
