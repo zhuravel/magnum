@@ -195,7 +195,7 @@ func rolesRender(w io.Writer, cfg *config.Config, groups []rolesGroup) {
 			if r.MaxSessionRounds > 0 {
 				session = textx.Count(r.MaxSessionRounds, "round", "rounds")
 			}
-			fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", r.Name, kind, r.Runs, inspOrDash(r.Model), inspOrDash(r.Effort),
+			fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", r.Name, kind, inspOrDash(r.Runs), inspOrDash(r.Model), inspOrDash(r.Effort),
 				inspOrDash(session), r.Capture, r.ReportFile(), prompt, inspOrDash(strings.Join(r.After, ",")), inspOrDash(judge), inspOrDash(strings.Join(r.Aliases, ",")))
 			if r.IsShell() && r.Command != "" {
 				commands = append(commands, fmt.Sprintf("  %s runs: %s", r.Name, strings.Join(append([]string{r.Command}, r.Args...), " ")))

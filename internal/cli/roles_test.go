@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"maps"
 	"os"
@@ -391,4 +392,25 @@ func TestResumeArgvUsesTheKindsResumeArgs(t *testing.T) {
 	if got := openResumeHint(cfg, &s); got != "\nresume by hand: cd /tmp/x && claude --resume s-1" {
 		t.Errorf("openResumeHint = %q", got)
 	}
+}
+
+// A fix role has no runs setting (it runs when the fix job asks for it, never
+// in a round), so its RUNS cell is a dash, as the other empty cells are.
+func TestRolesPrintsADashForTheRunsOfAFixRole(t *testing.T) {
+	cfg := config.Defaults()
+	fix, ok := cfg.FixRoleFor(nil)
+	if !ok {
+		t.Fatal("the built-in defaults have no fix role")
+	}
+	var buf bytes.Buffer
+	rolesRender(&buf, cfg, []rolesGroup{{Roles: []config.Role{fix}}})
+	for line := range strings.SplitSeq(buf.String(), "\n") {
+		if f := strings.Fields(line); len(f) > 3 && f[0] == fix.Name {
+			if f[2] != "-" {
+				t.Errorf("RUNS of %s = %q, want a dash:\n%s", fix.Name, f[2], buf.String())
+			}
+			return
+		}
+	}
+	t.Fatalf("no row for %s:\n%s", fix.Name, buf.String())
 }
