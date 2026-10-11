@@ -944,6 +944,15 @@ skill versions); people add theirs to the sections before it, at the end of the 
   recovery now interrupts the fix role's working agents of the PR, waits for them to go quiet and resyncs
   the slot to the loop's head before it fails the loop, as a failed or timed-out run already did; a fix job
   that panics after its prompt was sent does the same.
+- **The settle confirms the fixer's push on GitHub** (2026-10-11). It took the slot's HEAD as the pushed
+  head once it was one of the commits the report listed, wrote it on the PR row as if the poller had seen
+  it, and forced a review of it: a push the fixer reported but GitHub never got gave a review of a commit
+  GitHub lacks, then a phantom head change back at the next poll. The pushed head now counts only once
+  GitHub shows it as the PR's head, read through the poll identity's client (Details), or through `git
+  ls-remote` of the branch in the slot when that client cannot answer; GitHub moves a PR's head a moment
+  after the push, so a different head is looked at three times, five seconds apart. Otherwise the loop
+  fails with "push not confirmed on GitHub" and the slot goes back to the reviewed head, and a push that
+  did land is seen by the poller as any push is.
 
 ## Screens and commands
 

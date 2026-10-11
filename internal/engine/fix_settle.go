@@ -20,6 +20,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/zhuravel/magnum/internal/attention"
 	"github.com/zhuravel/magnum/internal/notify"
@@ -220,7 +221,9 @@ func (e *Engine) readFixReport(job *fixJob) (FixReport, error) {
 
 // pushedHead is the head the fixer pushed: the slot's HEAD, which `git push
 // origin HEAD:<branch>` sent, once it is one of the commits the report lists
-// (the report gives short shas; Resync needs the whole one).
+// (the report gives short shas; Resync needs the whole one) and GitHub shows
+// it as the PR's head (confirmPush): the fixer's word alone would record a
+// head GitHub lacks on the PR row and force a review of it.
 func (e *Engine) pushedHead(ctx context.Context, job *fixJob, rep FixReport) (string, error) {
 	if e.d.Git == nil {
 		return "", errors.New("no git to read the checkout's HEAD")
@@ -229,11 +232,92 @@ func (e *Engine) pushedHead(ctx context.Context, job *fixJob, rep FixReport) (st
 	if err != nil {
 		return "", fmt.Errorf("the checkout's HEAD: %w", err)
 	}
-	if slices.ContainsFunc(rep.Pushed, func(c FixCommit) bool { return strings.HasPrefix(head, c.SHA) }) {
-		return head, nil
+	if !slices.ContainsFunc(rep.Pushed, func(c FixCommit) bool { return strings.HasPrefix(head, c.SHA) }) {
+		return "", fmt.Errorf("the checkout's HEAD %s is none of the %s the report lists", textx.ShortSHA(head),
+			textx.Count(len(rep.Pushed), "commit", "commits"))
 	}
-	return "", fmt.Errorf("the checkout's HEAD %s is none of the %s the report lists", textx.ShortSHA(head),
-		textx.Count(len(rep.Pushed), "commit", "commits"))
+	if err := e.confirmPush(ctx, job, head); err != nil {
+		return "", err
+	}
+	return head, nil
+}
+
+const (
+	// fixPushLooks bounds how often confirmPush looks at the PR's head on
+	// GitHub, fixPushWait apart: GitHub moves a PR's head a moment after
+	// the push to its branch.
+	fixPushLooks = 3
+	fixPushWait  = 5 * time.Second
+	// fixLsRemoteTimeout bounds the `git ls-remote` confirmPush falls back on.
+	fixLsRemoteTimeout = 30 * time.Second
+)
+
+// remoteLister is the git capability confirmPush falls back on
+// (*gitx.Client has it): `git ls-remote origin` in a checkout.
+type remoteLister interface {
+	LsRemote(ctx context.Context, dir string, timeout time.Duration, patterns ...string) (string, error)
+}
+
+// confirmPush checks that GitHub has head, the commit the fixer says it
+// pushed, as the head of the PR's branch: the PR's head as the poll
+// identity's client reads it (Details), else, when that client cannot say,
+// the branch on origin (`git ls-remote` in the slot). A head GitHub shows
+// otherwise is looked at again fixPushWait later, up to fixPushLooks times.
+// The error ("push not confirmed on GitHub: ...") names the shas, never the
+// fixer's words.
+func (e *Engine) confirmPush(ctx context.Context, job *fixJob, head string) error {
+	var last string
+	var lastErr error
+	for i := range fixPushLooks {
+		if i > 0 {
+			if err := e.d.Sleep(ctx, fixPushWait); err != nil {
+				return err
+			}
+		}
+		got, err := e.remoteHead(ctx, job)
+		switch {
+		case err != nil:
+			lastErr = err
+			continue
+		case got == head:
+			return nil
+		}
+		last, lastErr = got, nil
+	}
+	if lastErr != nil {
+		return fmt.Errorf("push not confirmed on GitHub: %w", lastErr)
+	}
+	return fmt.Errorf("push not confirmed on GitHub: the PR's head is %s, not the pushed %s", textx.ShortSHA(last), textx.ShortSHA(head))
+}
+
+// remoteHead is the head of the job's PR on GitHub: the poll identity's
+// client's answer, else the branch's tip on origin.
+func (e *Engine) remoteHead(ctx context.Context, job *fixJob) (string, error) {
+	var why error
+	if gh := e.gh(job.watch.PollIdentity); gh == nil {
+		why = fmt.Errorf("no GitHub client for poll identity %q", job.watch.PollIdentity)
+	} else if det, _, err := gh.Details(ctx, job.repo.Owner, job.repo.Name, []int{job.pr.Number}); err != nil {
+		why = err
+	} else if d, ok := det[job.pr.Number]; !ok || d.HeadRefOid == "" {
+		why = errors.New("GitHub does not say where the PR's head is")
+	} else {
+		return d.HeadRefOid, nil
+	}
+	branch := deref(job.pr.HeadRef)
+	git, ok := e.d.Git.(remoteLister)
+	if !ok || branch == "" {
+		return "", why
+	}
+	out, err := git.LsRemote(ctx, job.slot.Path, fixLsRemoteTimeout, "refs/heads/"+branch)
+	if err != nil {
+		return "", errors.Join(why, fmt.Errorf("git ls-remote: %w", err))
+	}
+	for line := range strings.Lines(out) {
+		if sha, ref, ok := strings.Cut(strings.TrimSpace(line), "\t"); ok && ref == "refs/heads/"+branch {
+			return sha, nil
+		}
+	}
+	return "", errors.Join(why, fmt.Errorf("origin has no branch %s", branch))
 }
 
 // resyncFixSlot puts the job's slot back in order at sha (Slots.Resync:

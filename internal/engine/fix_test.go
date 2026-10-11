@@ -34,11 +34,30 @@ const (
 
 // fixGit is the engine's git for the fix job's tests: HEAD in the slot is
 // head (the reviewed head until the fake fixer commits), every other ref
-// fakeGit's.
+// fakeGit's. lostPush makes the pushes the fake fixer reports never reach
+// GitHub; LsRemote answers remote (lsErr fails it) and records its calls.
 type fixGit struct {
 	fakeGit
-	mu   sync.Mutex
-	head string
+	mu       sync.Mutex
+	head     string
+	lostPush bool
+	remote   string
+	lsErr    error
+	lsCalls  []string
+}
+
+// LsRemote answers `git ls-remote origin patterns...` in dir.
+func (g *fixGit) LsRemote(_ context.Context, dir string, _ time.Duration, patterns ...string) (string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.lsCalls = append(g.lsCalls, dir+":"+strings.Join(patterns, " "))
+	return g.remote, g.lsErr
+}
+
+func (g *fixGit) pushLost() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.lostPush
 }
 
 func (g *fixGit) setHead(sha string) {
@@ -123,8 +142,10 @@ func fixReport(runID, pushed, replied, needs string) string {
 
 // fixer makes h's fake fixer: once its prompt is sent it writes report(run)
 // to the run's report path ("" = it writes none), moves the slot's HEAD to
-// head as its commits do ("" = it commits nothing) and ends its run, as the
-// observer does after two idle ticks.
+// head as its commits do ("" = it commits nothing), puts head on GitHub
+// when the report lists pushed commits (its push; never with
+// fixGit.lostPush) and ends its run, as the observer does after two idle
+// ticks.
 func fixer(h *harness, git *fixGit, head string, report func(run store.Run) string) {
 	fixerBy(h, git, func(run store.Run) (string, string) { return head, report(run) })
 }
@@ -148,6 +169,11 @@ func fixerBy(h *harness, git *fixGit, work func(run store.Run) (head, report str
 		}
 		if head != "" {
 			git.setHead(head)
+			if rep, err := ParseFixReport(text, run.ID); err == nil && len(rep.Pushed) > 0 && !rep.PushFailed && !git.pushLost() {
+				if pr, err := h.st.PRByID(h.ctx, run.PRID); err == nil {
+					h.gh.setHead("talkable/talkable", pr.Number, head)
+				}
+			}
 		}
 		if err := h.st.TransitionRun(h.ctx, run.ID, []string{store.RunWorking}, store.RunEnded, func(u *store.RunUpdate) {
 			u.Set("ended_at", h.clock.Now())
@@ -571,6 +597,144 @@ func TestAFixWhosePushFailedEndsAsFailed(t *testing.T) {
 		t.Error("the loop goes on")
 	}
 	h.wantReportInData("fix.failed", report)
+}
+
+// A push the fixer reports but GitHub does not show (the branch's head is
+// still the reviewed one) is no push: the settle fails with "push not
+// confirmed on GitHub", the PR row keeps GitHub's head, no re-review of a
+// commit GitHub lacks is forced, and the slot goes back to the reviewed head.
+func TestAPushGitHubDoesNotShowFailsTheFix(t *testing.T) {
+	h, git := fixHarness(t)
+	fixablePR(h, "zhuravel", map[string]int{"P2": 1})
+	git.lostPush = true
+	git.lsErr = errors.New("git ls-remote: not reached")
+	fixer(h, git, fixPushed, func(run store.Run) string { return fixReport(run.ID, "b2b2b2b Fix", fixReplied, "none") })
+	h.fix(FixPayload{})
+	h.handle()
+
+	cur := h.wantState(2, store.PRNeedsAttention)
+	if le := deref(cur.LastError); !strings.Contains(le, "push not confirmed on GitHub") || !strings.Contains(le, "a1a1a1a") {
+		t.Errorf("last_error = %q", le)
+	}
+	if cur.HeadSHA != fixHead || cur.Forced {
+		t.Errorf("PR head %s forced %v, want GitHub's %s and no re-review", cur.HeadSHA, cur.Forced, fixHead)
+	}
+	if n := h.eventCount("pr:talkable/talkable#2", "pr.head_changed"); n != 0 {
+		t.Errorf("pr.head_changed events = %d, want none", n)
+	}
+	if !slices.Contains(h.sl.all(), "resync:review1:"+fixHead) || slices.Contains(h.sl.all(), "resync:review1:"+fixPushed) {
+		t.Errorf("slot calls %v, want the slot back at the reviewed head only", h.sl.all())
+	}
+	if _, ok := h.fixStateOf(2); ok {
+		t.Error("the loop goes on")
+	}
+	if _, ok := h.fixEvent("fix.pushed"); ok {
+		t.Error("fix.pushed recorded for a push GitHub does not show")
+	}
+}
+
+// When the poll identity's GitHub client cannot say where the PR's head is,
+// the branch on origin answers (git ls-remote): a push it shows is
+// confirmed and re-reviewed; with neither answering, the push is not
+// confirmed and the loop fails.
+func TestAPushIsConfirmedOnTheBranchWhenGitHubCannotSay(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		remote string
+		lsErr  error
+		want   string // the PR's state after the settle
+	}{
+		{name: "the branch shows it", remote: fixPushed + "\trefs/heads/feature\n", want: store.PRRereviewPending},
+		{name: "nothing answers", lsErr: errors.New("git ls-remote: not reached"), want: store.PRNeedsAttention},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, git := fixHarness(t)
+			fixablePR(h, "zhuravel", map[string]int{"P2": 1})
+			h.gh.fail(errors.New("graphql: 502 Bad Gateway"), nil)
+			git.lostPush, git.remote, git.lsErr = true, tc.remote, tc.lsErr
+			fixer(h, git, fixPushed, func(run store.Run) string { return fixReport(run.ID, "b2b2b2b Fix", fixReplied, "none") })
+			h.fix(FixPayload{})
+			h.handle()
+
+			cur := h.wantState(2, tc.want)
+			git.mu.Lock()
+			calls := slices.Clone(git.lsCalls)
+			git.mu.Unlock()
+			if len(calls) == 0 || calls[0] != h.slot("review1").Path+":refs/heads/feature" {
+				t.Errorf("ls-remote calls %v", calls)
+			}
+			if tc.want == store.PRRereviewPending {
+				if cur.HeadSHA != fixPushed || !cur.Forced {
+					t.Errorf("PR head %s forced %v, want the confirmed push re-reviewed", cur.HeadSHA, cur.Forced)
+				}
+				return
+			}
+			if le := deref(cur.LastError); !strings.Contains(le, "push not confirmed on GitHub") {
+				t.Errorf("last_error = %q", le)
+			}
+		})
+	}
+}
+
+// A push by the operator while the fixer works makes the fixer's push fail.
+// The poller records the operator's head, so the PR waits for its re-review
+// (the fixer holds it); the failed push then ends the loop with the urgent
+// toast alone, no needs_attention (the re-review of the operator's head
+// still runs), the slot back at the reviewed head and the loop's row gone;
+// the operator's head is re-reviewed next.
+func TestAnOperatorPushDuringTheFixIsReviewedAfterTheFixersFailedPush(t *testing.T) {
+	const operator = "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3"
+	h, git := fixHarness(t, realSleep)
+	pr := fixablePR(h, "zhuravel", map[string]int{"P2": 1})
+	h.fix(FixPayload{})
+	h.e.handleRequests(h.ctx)
+	h.awaitSubmit()
+
+	h.advance(time.Hour)
+	h.open(prSpec{n: 1, head: "base1"}, prSpec{n: 2, head: operator, author: "zhuravel"})
+	if err := h.e.Tick(h.ctx); err != nil {
+		t.Fatal(err)
+	}
+	h.wantState(2, store.PRRereviewPending)
+	rounds := len(h.rd.all())
+
+	run := h.fixRuns(pr.ID)[0]
+	if err := os.MkdirAll(filepath.Dir(deref(run.ReportPath)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	report := fixReport(run.ID, "push failed: ! [rejected] HEAD -> feature (fetch first)", fixReplied, "- 2101 P2 a.rb:1: committed, not pushed")
+	if err := os.WriteFile(deref(run.ReportPath), []byte(report), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	git.setHead(fixPushed) // the fixer's local commit
+	if err := h.st.TransitionRun(h.ctx, run.ID, []string{store.RunWorking}, store.RunEnded, nil); err != nil {
+		t.Fatal(err)
+	}
+	h.settle()
+
+	cur := h.wantState(2, store.PRRereviewPending)
+	if cur.HeadSHA != operator || deref(cur.LastError) != "" {
+		t.Errorf("PR head %s, last_error %q: want the operator's head waiting for its re-review", cur.HeadSHA, deref(cur.LastError))
+	}
+	if got := toastsWith(h, "talkable#2 needs attention"); len(got) != 1 {
+		t.Errorf("urgent toasts = %v, want one", h.nh.shown())
+	}
+	if !slices.Contains(h.sl.all(), "resync:review1:"+fixHead) {
+		t.Errorf("slot calls %v lack the resync to the reviewed head", h.sl.all())
+	}
+	if _, ok := h.fixStateOf(2); ok {
+		t.Error("the loop's row outlived the failed push")
+	}
+	if ev, ok := h.fixEvent("fix.failed"); !ok || !strings.Contains(ev.Message, "the fixer's push failed") {
+		t.Errorf("fix.failed = %+v, %v", ev, ok)
+	}
+
+	h.advance(time.Hour)
+	h.tick()
+	if got := h.rd.all(); len(got) != rounds+1 || got[len(got)-1].TargetSHA != operator {
+		t.Fatalf("rounds after the fix: %d (want %d), the last one's target %v", len(got), rounds+1, got[len(got)-1].TargetSHA)
+	}
+	h.wantState(2, store.PRReviewed)
 }
 
 // `magnum abort` during the fixer's run interrupts the fixer, abandons its

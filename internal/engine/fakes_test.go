@@ -314,6 +314,20 @@ func (g *fakeGH) set(full string, prs ...prSpec) {
 	g.repos[full] = prs
 }
 
+// setHead moves PR #n of full to head on GitHub, keeping the rest of its
+// spec, as a push does.
+func (g *fakeGH) setHead(full string, n int, head string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	prs := slices.Clone(g.repos[full])
+	for i := range prs {
+		if prs[i].n == n {
+			prs[i].head = head
+		}
+	}
+	g.repos[full] = prs
+}
+
 func (g *fakeGH) record(s string) {
 	g.mu.Lock()
 	g.calls = append(g.calls, s)

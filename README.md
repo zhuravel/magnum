@@ -1364,8 +1364,10 @@ One cycle of a loop has four steps.
    reviewer. Magnum holds the PR for the whole run, so no round, release or `magnum open` touches the checkout
    meanwhile. The PR stays `reviewed`. The fixer's conversation persists across cycles, so it remembers what
    it declined and why.
-2. **Settle.** When the fixer's turn ends, Magnum reads its report. It puts the slot on the pushed head, or
-   back on the reviewed head when nothing was pushed. The fixer's local commits survive only on GitHub.
+2. **Settle.** When the fixer's turn ends, Magnum reads its report. A push the report lists counts only once
+   GitHub shows that commit as the PR's head (the poll identity's view of the PR, else `git ls-remote` of the
+   branch). Magnum then puts the slot on the pushed head, or back on the reviewed head when nothing was
+   pushed. The fixer's local commits survive only on GitHub.
 3. **Re-review.** A push gets a forced re-review. It skips the throttle and does not count against the daily
    cap, because the loop has its own cap.
 4. **Decide.** When that review posts, the loop either starts the next cycle or ends (see below).
@@ -1418,8 +1420,10 @@ skill = "/Users/you/.config/magnum/skills/my-fix/SKILL.md"
   replies in its usual reply round.
 - **Needs you.** The fixer left findings under `Needs you`, or the cap was reached with findings left, or a
   run failed. A failed run is no report, a report of another run, a failed push (yours, made while the
-  fixer worked, makes its push fail), a timeout, or a daemon restart in the middle of the run ("fix run
-  lost in a daemon restart"). The PR then needs attention. An urgent toast names the reason and the
+  fixer worked, makes its push fail), a push GitHub does not show ("push not confirmed on GitHub"), a
+  timeout, or a daemon restart in the middle of the run ("fix run lost in a daemon restart"). When your own
+  push came in while the fixer worked, the PR keeps waiting for the re-review of your head: the urgent
+  toast tells you about the fixer, and the PR does not go to needs attention. The PR then needs attention. An urgent toast names the reason and the
   report's path, the attention key opens the fixer's pane, and `magnum status` and `magnum attention` list
   the PR. When the fixer pushed and also left findings, the push still gets its re-review first, and the loop
   ends after it.
