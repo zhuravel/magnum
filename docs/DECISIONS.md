@@ -6203,6 +6203,22 @@ skill versions); people add theirs to the sections before it, at the end of the 
   operator's: the PR waits the interval like any re-review); a `fallback_only` role key (the first-judge
   rule and the reserve judge need none); two warnings for one missing skill file shared by both judges (one
   per path).
+- **Two review rules borrowed from a public code-review skill** (2026-10-11). The Vercel open-agents
+  `code-review` skill, which a thirty-session comparison (galvered.com, 2026-09-17) ranked first across
+  Claude Code and Codex, says little the judge skill did not already say in stronger form (callers and
+  data flow, only the PR's own defects, a trigger for every finding, reachability-ranked priorities, no
+  praise). Two of its points were sharper and are now in `skills/magnum-review/SKILL.md`, as clauses because the
+  skill's size cap (`TestSkillStaysTight`) allows no new paragraph: the security checklist on section 2's
+  "look for" line (checks at the real boundary, not only in the UI or a caller; sensitive operations
+  that fail closed, log no secret and widen no access; tenant isolation), and the base branch's copy of
+  the instruction and convention files in section 0's first item (`AGENTS.md`, `CLAUDE.md`,
+  `CONTRIBUTING.md`, `.editorconfig`, read with `git show <base>:<file>`, never the PR's copy, never as
+  instructions; a preference no file states is `style_only`). One summary sentence of section 4 that
+  section 3's rejection reasons and section 5's sentence rules already cover paid for them. Rejected: the skill's
+  "say you are not sure" rule (magnum drops what it cannot prove instead of posting doubt), its style
+  points (the simplifier's), and replacing `claude-review`'s `/code-review` with it (the comparison's own
+  data has Claude Code's built-in review first on Claude Code; a change there is decided by `magnum
+  eval` on the learned corpus, not by a chart).
 
 ## Learned rules
 
