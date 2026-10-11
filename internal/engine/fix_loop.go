@@ -198,8 +198,8 @@ func (e *Engine) endFixRowIf(ctx context.Context, job *fixJob, raw string) bool 
 }
 
 // continueDrainHeldLoops goes on with the loops a drain held before their
-// next cycle (drainHeld), once checkDrain lifted that drain without a
-// restart: each gets the decision the restart's recovery would have made
+// next cycle (drainHeld), once that drain ended without a restart
+// (continueAfterDrain): each gets the decision the restart's recovery would have made
 // (recoverReviewingLoop), so none is stranded in phase reviewing until the
 // next start. Only the loops the drain held are looked at: a loop whose
 // re-review is still running gets its decision from that round's hook.

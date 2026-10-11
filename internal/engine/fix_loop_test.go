@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"os/exec"
 	"slices"
 	"strings"
@@ -903,6 +904,42 @@ func TestALiftedDrainContinuesTheLoopItHeld(t *testing.T) {
 	}
 	if st, ok := h.fixStateOf(2); !ok || st.Cycle != 2 {
 		t.Errorf("fix state after the lifted drain = %+v, %v", st, ok)
+	}
+	if ev, ok := h.fixEvent("fix.failed"); ok {
+		t.Errorf("fix.failed recorded: %s", ev.Message)
+	}
+}
+
+// A drain the CLI ends itself without a restart (`daemon-restart --drain`
+// interrupted or timed out: its endDrain removes the key, so checkDrain has
+// nothing to lift) also gives the loop it held its next cycle at the next
+// tick, rather than leaving it in phase reviewing until the next start.
+func TestADrainEndedWithoutARestartContinuesTheLoopItHeld(t *testing.T) {
+	h, git := fixHarness(t)
+	pr := loopToReReview(t, h, git, findings(map[string]int{"P2": 1}, "COMMENTED"), fixPushed2)
+	h.rd.mu.Lock()
+	h.rd.gate = make(chan struct{})
+	h.rd.mu.Unlock()
+	before := len(h.rd.all())
+	reqPollNoSettle(h, prSpec{n: 2, head: fixPushed, author: "zhuravel"})
+	h.awaitRound(before)
+	h.e.setKV(h.ctx, KVDaemonDraining, Drain{Since: h.clock.Now(), PID: os.Getpid()}.Value())
+	close(h.rd.gate)
+	h.settle()
+	if n := len(h.fixRuns(pr.ID)); n != 1 {
+		t.Fatalf("fix runs = %d, want 1: a fixer started during the drain", n)
+	}
+
+	if err := h.st.DeleteKV(h.ctx, KVDaemonDraining); err != nil { // the CLI's endDrain
+		t.Fatal(err)
+	}
+	h.tick()
+	runs := h.fixRuns(pr.ID)
+	if len(runs) != 2 || runs[1].TargetSHA != fixPushed {
+		t.Fatalf("fix runs after the drain ended = %+v, want cycle 2 on %s", runs, fixPushed)
+	}
+	if st, ok := h.fixStateOf(2); !ok || st.Cycle != 2 {
+		t.Errorf("fix state after the drain ended = %+v, %v", st, ok)
 	}
 	if ev, ok := h.fixEvent("fix.failed"); ok {
 		t.Errorf("fix.failed recorded: %s", ev.Message)

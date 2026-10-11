@@ -803,12 +803,17 @@ func TestDoctorChecksTheFixRole(t *testing.T) {
 	}
 
 	// The identity must be a gh identity: a watch polling as the App gives the
-	// role the App, which the job refuses.
+	// role the App, which the job refuses. Polling as an App is a valid config,
+	// so that is a SKIP, and a FAIL only where autofix = "own" would start the
+	// job by itself.
 	app := doctorWithFixSkill(t, d, "pass")
 	app.Config.Watches = app.Config.Watches[:1]
 	app.Config.Watches[0].PollIdentity = "talkable-app"
-	if c := fixCheck(app); c.Status != doctorFail || !strings.Contains(c.Detail, "identity talkable-app is an app identity") || !strings.Contains(c.Fix, "poll_identity") {
-		t.Fatalf("app identity = %+v", c)
+	if c := fixCheck(app); c.Status != doctorSkip || !strings.Contains(c.Detail, "`magnum fix` refuses: watch talkable polls as an App") {
+		t.Fatalf("app identity, autofix never = %+v", c)
+	}
+	if c := fixCheck(own(app)); c.Status != doctorFail || !strings.Contains(c.Detail, "identity talkable-app is an app identity") || !strings.Contains(c.Fix, "poll_identity") {
+		t.Fatalf("app identity under autofix = %+v", c)
 	}
 
 	// Its login check: failed fails with the error, never run warns.
@@ -837,7 +842,8 @@ func TestDoctorChecksTheFixRole(t *testing.T) {
 	// start the job by itself.
 	gone := doctorWithFixSkill(t, d, "pass")
 	gone.Config.Roles = slices.DeleteFunc(gone.Config.AllRoles(), func(r config.Role) bool { return r.Fix })
-	if c := fixCheck(gone); c.Status != doctorSkip {
+	if c := fixCheck(gone); c.Status != doctorSkip || !strings.Contains(c.Detail, `fix_role "claude-fix" names no declared fix role`) ||
+		strings.Contains(c.Detail, "names none") {
 		t.Fatalf("a fix role left out, autofix never = %+v", c)
 	}
 	gone = own(gone)

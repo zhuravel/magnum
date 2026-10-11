@@ -90,10 +90,10 @@ func (e *Engine) draining(ctx context.Context) bool {
 }
 
 // checkDrain lifts a drain whose drainer is gone (each tick, with the other
-// pauses): the drain stays only while the command that holds it runs, and
-// the fix loops it held before their next cycle go on (no restart's
-// recovery will). A drain an older CLI started names no pid and lasts until
-// the restart.
+// pauses): the drain stays only while the command that holds it runs. A
+// drain an older CLI started names no pid and lasts until the restart. The
+// fix loops a drain held go on once it is gone however it ended
+// (continueAfterDrain).
 func (e *Engine) checkDrain(ctx context.Context) {
 	v, ok := e.getKV(ctx, KVDaemonDraining)
 	if !ok || v == "" {
@@ -110,5 +110,20 @@ func (e *Engine) checkDrain(ctx context.Context) {
 	e.event(ctx, "warn", "", "daemon.drain_lifted",
 		fmt.Sprintf("drain lifted: the command that started it at %s (pid %d) is gone, so no restart follows; rounds start again",
 			d.Since.Local().Format("15:04:05"), d.PID), map[string]any{"pid": d.PID})
+}
+
+// continueAfterDrain goes on with the fix loops a drain held before their
+// next cycle (drainHeld) once no drain holds the daemon any more and no
+// restart followed: checkDrain lifted it (its drainer is gone), or the CLI
+// lifted its own (`daemon-restart --drain` interrupted or timed out). It
+// runs each tick, with the other pauses, and does nothing while none is
+// held or a drain still holds.
+func (e *Engine) continueAfterDrain(ctx context.Context) {
+	e.mu.Lock()
+	held := len(e.drainHeld)
+	e.mu.Unlock()
+	if held == 0 || e.draining(ctx) {
+		return
+	}
 	e.continueDrainHeldLoops(ctx) // fix_loop.go: no restart decides the fix loops the drain held
 }

@@ -993,6 +993,15 @@ skill versions); people add theirs to the sections before it, at the end of the 
   you` without the id each line must start with, which magnum then counted as unreadable; it now reads the
   review file and the comments with their ids first, and reads the newest 100 review threads (`last: 100`)
   rather than the oldest, since the review it fixes is the newest.
+- **Doctor fails a fix job only where autofix would start it; any drain's end continues a held loop**
+  (2026-10-11). The fix role takes each watch's poll identity, so `magnum doctor` failed every valid config
+  that polls as an App, though only `magnum fix` by hand would refuse there. It now skips such a watch
+  ("`magnum fix` refuses: watch <owner> polls as an App") and fails only where `autofix = "own"` would start
+  the job, as it already did for an undeclared identity. A `fix_role` that names no declared fix role is
+  skipped with that reason, not with "fix_role names none". The loops a drain held went on only when the
+  daemon itself lifted the drain of a vanished command; `daemon-restart --drain` interrupted or timed out
+  lifts its own drain and left them waiting for the next start. Each tick now goes on with them once no
+  drain holds the daemon, however the drain ended.
 
 ## Screens and commands
 

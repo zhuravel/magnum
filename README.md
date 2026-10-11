@@ -1427,14 +1427,14 @@ skill = "/Users/you/.config/magnum/skills/my-fix/SKILL.md"
   threads. An info toast says "PR #N: claude-fix pushed nothing, replied to 3 findings". The judge reads the
   replies in its usual reply round.
 - **Needs you.** The fixer left findings under `Needs you`, or the cap was reached with findings left, or a
-  run failed. A failed run is no report, a report of another run, a failed push (yours, made while the
-  fixer worked, makes its push fail), a push GitHub does not show ("push not confirmed on GitHub"), a
-  timeout, or a daemon restart in the middle of the run ("fix run lost in a daemon restart"). When your own
-  push came in while the fixer worked, the PR keeps waiting for the re-review of your head: the urgent
-  toast tells you about the fixer, and the PR does not go to needs attention. The PR then needs attention. An urgent toast names the reason and the
-  report's path, the attention key opens the fixer's pane, and `magnum status` and `magnum attention` list
-  the PR. When the fixer pushed and also left findings, the push still gets its re-review first, and the loop
-  ends after it.
+  run failed. A failed run is no report, a report of another run, a failed push (yours, made while the fixer
+  worked, makes its push fail), a push GitHub does not show ("push not confirmed on GitHub"), a timeout, or a
+  daemon restart in the middle of the run ("fix run lost in a daemon restart"). When your own push came in
+  while the fixer worked, the PR keeps waiting for the re-review of your head: the urgent toast tells you
+  about the fixer, and the PR does not go to needs attention. An urgent toast names the reason and the
+  report's path, the attention key opens the fixer's pane, and `magnum status` and `magnum attention` list the
+  PR. When the fixer pushed and also left findings, the push still gets its re-review first, and the loop ends
+  after it.
 - **Ended.** GitHub closed the PR, or you pushed a newer head, before the next cycle started. The loop ends
   quietly with a `fix.ended` event, and your push gets its own review.
 
@@ -1482,8 +1482,8 @@ out, as the board's does.
   `magnum review <pr>` refuses while the PR has a loop.
 - A fix job is no review round, so it does not count toward `[daemon] max_concurrent_reviews`.
 - `magnum daemon-restart` refuses while a fixer works. `--drain` waits for it and starts no new cycle
-  meanwhile, and the new daemon goes on with a loop that was waiting for its next cycle. A drain lifted
-  without a restart, because its command is gone, goes on with that loop at once. `--now` stops the
+  meanwhile, and the new daemon goes on with a loop that was waiting for its next cycle. A drain that ends
+  without a restart (its command interrupted, timed out or gone) goes on with that loop at the next tick. `--now` stops the
   daemon under the fixer, and the next start ends that loop as "fix run lost in a daemon restart". herdr
   keeps the fixer's pane, so that start first interrupts a fixer still at work and puts the slot back on
   the reviewed head: nothing pushes or replies as you after Magnum said the run was lost.

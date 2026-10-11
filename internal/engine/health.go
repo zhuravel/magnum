@@ -310,6 +310,7 @@ func (e *Engine) health(ctx context.Context) {
 		e.event(ctx, "info", "", "daemon.resumed", "automation pause ended", nil)
 	}
 	e.checkDrain(ctx)
+	e.continueAfterDrain(ctx)
 	e.probeInfra(ctx)
 	e.checkBudget(ctx)
 }

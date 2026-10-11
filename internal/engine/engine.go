@@ -305,8 +305,8 @@ type Engine struct {
 	// each (fix_loop.go).
 	autofixNoRole map[int64]bool
 	// drainHeld are the PRs whose fix loop a drain held before its next
-	// cycle (guarded by mu): a drain lifted without a restart continues
-	// them (continueDrainHeldLoops), as the restart's recovery would.
+	// cycle (guarded by mu): a drain that ends without a restart continues
+	// them (continueAfterDrain), as the restart's recovery would.
 	drainHeld map[int64]bool
 	// inflight are the requests answered asynchronously, which handleRequests
 	// skips until they complete: those handed to the heavy worker
