@@ -306,6 +306,15 @@ skill versions); people add theirs to the sections before it, at the end of the 
   then `.ruby-version`, and names the file it read. Rejected: keeping the dotted name for every render
   (untracked in a repository that ignores only `mise.local.toml`, and it hides the clone's own undotted
   file).
+- **A pool slot's database slug is its name sanitized** (2026-10-11). A pool row stored its raw name as
+  db_slug and SlotDBSlug returned the stored value as it was, while the setup derives its databases' slug
+  from WT_BRANCH the way talkable's database.yml does (DBSlug: every character but letters, digits and `_`
+  as `_`, at most 30) and writes that slug to tmp/.worktree-db-slug, so a pool with slot_name
+  `example-review{n}` failed verify_marker (`example_review1` against `example-review1`). Now SlotDBSlug
+  sanitizes the stored value (else the name), so a row that stored a raw dashed name resolves to the same
+  slug; provisioning, its revival and adopt store and compare the sanitized slug; and the drop guard's
+  AllowRegexp is slot_name sanitized the same way (`^example_review[0-9]+$`), so a removal can drop those
+  databases. A name that already is a slug (`review3`) gives the same value everywhere.
 
 ## Scheduling
 

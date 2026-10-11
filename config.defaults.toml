@@ -566,7 +566,11 @@ timeout = "90m"
 # repo = "your-org/your-app"
 # main_clone = "~/Projects/your-app"
 # slot_name = "review{n}"                 # slot names and paths are unique: two pools must not render the same
-# slot_path = "~/Projects/your-app.review{n}"   # one (review1 in both), so give each pool its own prefix
+# slot_path = "~/Projects/your-app.review{n}"   # one (review1 in both), so give each pool its own prefix;
+#                                         # a slot's database {slug}, which its setup writes to the
+#                                         # tmp/.worktree-db-slug marker, is its name sanitized (every character
+#                                         # but letters, digits and _ as _, at most 30): example-review1 →
+#                                         # example_review1
 # base = "master"
 # min = 6
 # max = 8

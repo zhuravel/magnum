@@ -170,6 +170,43 @@ func TestProvisionPoolCrashResume(t *testing.T) {
 	}
 }
 
+// A slot name with characters a database name cannot hold provisions with
+// the sanitized slug: its setup derives example_review1 from
+// WT_BRANCH=example-review1 and writes it to the marker, verify_marker and
+// verify_dbs compare with it, and the removal drops those databases.
+func TestProvisionPoolSanitizesADashedSlotNamesDBSlug(t *testing.T) {
+	h := newHarness(t)
+	h.pool.SlotName = "example-review{n}"
+	h.setupSlug = func(string) string { return "example_review1" }
+	if err := h.m.ProvisionPool(h.ctx, h.pool, 1); err != nil {
+		t.Fatalf("ProvisionPool: %v", err)
+	}
+	sl := h.slot("example-review1")
+	if sl.State != store.SlotFree || store.Deref(sl.DBSlug) != "example_review1" || SlotDBSlug(sl) != "example_review1" {
+		t.Fatalf("slot = %s, db_slug %q", sl.State, store.Deref(sl.DBSlug))
+	}
+	if setup := h.scriptCalls("bin/worktree-setup"); len(setup) != 1 || setup[0].Env["WT_BRANCH"] != "example-review1" {
+		t.Fatalf("setup calls = %+v, want WT_BRANCH=example-review1", setup)
+	}
+	dbs := h.pool.DBNames("example_review1")
+	for _, n := range dbs {
+		if !h.my.has(n) {
+			t.Fatalf("%s missing", n)
+		}
+	}
+	if err := h.m.Remove(h.ctx, sl, h.pool, false); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	for _, n := range dbs {
+		if h.my.has(n) {
+			t.Fatalf("%s not dropped", n)
+		}
+	}
+	if got := h.slot(sl.Name); got.State != store.SlotRemoved {
+		t.Fatalf("state = %s", got.State)
+	}
+}
+
 func TestProvisionPoolVerifyFailuresBreakSlot(t *testing.T) {
 	t.Run("marker", func(t *testing.T) {
 		h := newHarness(t)

@@ -67,9 +67,10 @@ func (m *Manager) poolRow(ctx context.Context, pool config.Pool, name, path stri
 	if _, err := m.d.Store.SlotByName(ctx, name); errors.Is(err, store.ErrNotFound) && !missing(path) {
 		return store.Slot{}, false, errPathTaken(name, path)
 	}
+	slug := DBSlug(name)
 	sl, err := m.d.Store.CreateSlot(ctx, store.Slot{
 		Name: name, RepoID: repoID, RepoFullName: pool.Repo, Kind: store.SlotKindPool, Path: path,
-		MainClone: pool.MainClone, PlaceholderBranch: &name, DBSlug: &name, State: store.SlotProvisioning,
+		MainClone: pool.MainClone, PlaceholderBranch: &name, DBSlug: &slug, State: store.SlotProvisioning,
 	})
 	if err == nil {
 		return sl, true, nil
@@ -96,7 +97,7 @@ func (m *Manager) poolRow(ctx context.Context, pool config.Pool, name, path stri
 			u.Set("path", path)
 			u.Set("main_clone", pool.MainClone)
 			u.Set("placeholder_branch", name)
-			u.Set("db_slug", name)
+			u.Set("db_slug", slug)
 		})
 		if err != nil {
 			return store.Slot{}, false, fmt.Errorf("slots: provision %s: %w", name, err)
@@ -396,8 +397,8 @@ func (m *Manager) Repair(ctx context.Context, slot store.Slot, pool config.Pool)
 
 // Adopt registers an existing checkout at path as a free pool slot: path must
 // be pool.Path(n) for some n, a worktree of the main clone, its
-// tmp/.worktree-db-slug must say pool.Slot(n), and all its databases must
-// exist (ErrVerify otherwise). An already registered live slot is ErrConflict;
+// tmp/.worktree-db-slug must say DBSlug(pool.Slot(n)), and all its databases
+// must exist (ErrVerify otherwise). An already registered live slot is ErrConflict;
 // a removed, lost or broken row with that name is revived (its PR and open
 // assignment released with reason "adopted").
 func (m *Manager) Adopt(ctx context.Context, pool config.Pool, path string) (store.Slot, error) {
@@ -418,10 +419,11 @@ func (m *Manager) Adopt(ctx context.Context, pool config.Pool, path string) (sto
 	if _, ok := gitx.FindWorktree(list, path); !ok {
 		return store.Slot{}, fmt.Errorf("%w: %s is not a worktree of %s", ErrVerify, path, pool.MainClone)
 	}
-	if err := verifyMarker(path, name); err != nil {
+	slug := DBSlug(name)
+	if err := verifyMarker(path, slug); err != nil {
 		return store.Slot{}, err
 	}
-	dbs, err := m.verifyDatabases(ctx, pool, name)
+	dbs, err := m.verifyDatabases(ctx, pool, slug)
 	if err != nil {
 		return store.Slot{}, err
 	}
@@ -437,7 +439,7 @@ func (m *Manager) Adopt(ctx context.Context, pool config.Pool, path string) (sto
 	}
 	sl, err := m.d.Store.CreateSlot(ctx, store.Slot{
 		Name: name, RepoID: repoID, RepoFullName: pool.Repo, Kind: store.SlotKindPool, Path: path,
-		MainClone: pool.MainClone, PlaceholderBranch: &name, DBSlug: &name, State: store.SlotFree, LockSHA: &lock,
+		MainClone: pool.MainClone, PlaceholderBranch: &name, DBSlug: &slug, State: store.SlotFree, LockSHA: &lock,
 	})
 	if errors.Is(err, store.ErrConflict) {
 		existing, gerr := m.d.Store.SlotByName(ctx, name)
@@ -448,7 +450,7 @@ func (m *Manager) Adopt(ctx context.Context, pool config.Pool, path string) (sto
 			u.Set("path", path)
 			u.Set("main_clone", pool.MainClone)
 			u.Set("placeholder_branch", name)
-			u.Set("db_slug", name)
+			u.Set("db_slug", slug)
 		})
 		if err == nil { // after the revive: it clears lock_sha with the other per-use columns
 			err = m.d.Store.UpdateSlotFields(ctx, existing.ID, func(u *store.SlotUpdate) { u.Set("lock_sha", lock) })

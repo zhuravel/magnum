@@ -479,6 +479,15 @@ func TestDropGuardDerivation(t *testing.T) {
 			t.Errorf("%s allowed", n)
 		}
 	}
+	dashed := DropGuard(config.Pool{SlotName: "example-review{n}", Databases: []string{"talkable_test__{slug}"}})
+	if err := dashed.Check("talkable_test__example_review3"); err != nil {
+		t.Errorf("a dashed slot name's sanitized slug refused: %v", err)
+	}
+	for _, n := range []string{"talkable_test__example-review3", "talkable_test__exampleXreview3", "talkable_test__review3"} {
+		if dashed.Check(n) == nil {
+			t.Errorf("%s allowed by the example-review{n} guard", n)
+		}
+	}
 	one := DropGuard(config.Pool{SlotName: "review{n}", Databases: []string{"app_dev__{slug}"}})
 	if one.Prefix != "app_dev__" || one.Check("app_dev__review4") != nil || one.Check("app_test__review4") == nil {
 		t.Fatalf("single template guard = %+v", one)

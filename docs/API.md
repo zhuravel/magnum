@@ -12768,10 +12768,11 @@ func DropGuard(pool config.Pool) mysqlx.Guard
     inventory and cleanup: Prefix is the common start of the pool's database
     templates before "{" (talkable_ for talkable_development__{slug} and
     talkable_test__{slug}; a single template's text before "{"), and AllowRegexp
-    is slot_name with {n} as [0-9]+ (^review[0-9]+$), so only magnum's own slot
-    slugs are ever droppable. A pool without database templates, with no common
-    prefix or with a slot_name lacking {n} gets the zero Guard, which refuses
-    everything.
+    is slot_name sanitized as SlotDBSlug sanitizes a slot's name, with {n} as
+    [0-9]+ (^review[0-9]+$; example-review{n} gives ^example_review[0-9]+$),
+    so only magnum's own slot slugs are ever droppable. A pool without database
+    templates, with no common prefix or with a slot_name lacking {n} gets the
+    zero Guard, which refuses everything.
 
 func LazySchema(pool config.Pool) bool
     LazySchema reports whether pool's slots reload their databases only when a
@@ -12856,9 +12857,12 @@ func RenderMiseLocal(src []byte, strip []string, set map[string]string) ([]byte,
     table with set.
 
 func SlotDBSlug(sl store.Slot) string
-    SlotDBSlug is the database slug of a slot: slots.db_slug, else the slot name
-    sanitized like a workspace name (DBSlug: review3 stays review3, owner/name#7
-    becomes owner_name_7). Slots, inventory and cleanup all use it.
+    SlotDBSlug is the database slug of a slot: slots.db_slug, else the slot
+    name, sanitized like a workspace name (DBSlug: review3 stays review3,
+    example-review1 becomes example_review1, owner/name#7 owner_name_7),
+    the slug the setup's database.yml derives from WT_BRANCH and writes to
+    MarkerFile. A row that stored a raw slot name resolves to it too. Slots,
+    inventory and cleanup all use it.
 
 func TemplateRegexp(tmpl string) *regexp.Regexp
     TemplateRegexp matches what a slot template renders to (slot_name review{n},
@@ -12957,10 +12961,10 @@ func New(d Deps) *Manager
 func (m *Manager) Adopt(ctx context.Context, pool config.Pool, path string) (store.Slot, error)
     Adopt registers an existing checkout at path as a free pool slot:
     path must be pool.Path(n) for some n, a worktree of the main clone,
-    its tmp/.worktree-db-slug must say pool.Slot(n), and all its databases must
-    exist (ErrVerify otherwise). An already registered live slot is ErrConflict;
-    a removed, lost or broken row with that name is revived (its PR and open
-    assignment released with reason "adopted").
+    its tmp/.worktree-db-slug must say DBSlug(pool.Slot(n)), and all its
+    databases must exist (ErrVerify otherwise). An already registered live slot
+    is ErrConflict; a removed, lost or broken row with that name is revived (its
+    PR and open assignment released with reason "adopted").
 
 func (m *Manager) CheckSchema(ctx context.Context, slot store.Slot, pool config.Pool) (SchemaCheck, error)
     CheckSchema compares the schema a pool slot's checkout needs with the one

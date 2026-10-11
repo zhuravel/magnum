@@ -90,6 +90,11 @@ func TestSlotDBSlug(t *testing.T) {
 		{store.Slot{Name: "review3"}, "review3"},
 		{store.Slot{Name: "zhuravel/widget#7"}, "zhuravel_widget_7"},
 		{store.Slot{Name: "zhuravel/widget#7", DBSlug: new(" magnum_pr_7 ")}, "magnum_pr_7"},
+		// A dashed slot name resolves to the slug its setup writes, also from a
+		// row that stored the raw name.
+		{store.Slot{Name: "example-review1"}, "example_review1"},
+		{store.Slot{Name: "example-review1", DBSlug: new("example_review1")}, "example_review1"},
+		{store.Slot{Name: "example-review1", DBSlug: new("example-review1")}, "example_review1"},
 	}
 	for _, c := range cases {
 		if got := SlotDBSlug(c.sl); got != c.want {
