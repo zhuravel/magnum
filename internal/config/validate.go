@@ -1001,8 +1001,7 @@ func (c *Config) validateFixRole(r Role, bad func(string, ...any)) {
 	if r.MaxSessionRounds > 0 {
 		bad("a fix role takes no max_session_rounds (a fix job is no round: its session persists until you park it)")
 	}
-	switch id := c.IdentityByName(r.Identity); {
-	case id != nil && id.Kind != "gh":
+	if id := c.IdentityByName(r.Identity); id != nil && id.Kind != "gh" {
 		bad("identity %s must be a gh identity (your own account), not kind %q: the fixer pushes to the PR's branch and "+
 			"answers its threads as you, which an App cannot", id.Name, id.Kind)
 	}
