@@ -26,7 +26,7 @@ type openOpts struct {
 func newOpenCmd(c *Context) *cobra.Command {
 	var o openOpts
 	cmd := newCommand(groupAct, openUsage, "focus a PR's agent pane in herdr and bring herdr to the front",
-		"Focus a PR's agent pane (its watch's judge by default, or any role of the watch with --role; "+
+		"Focus a PR's agent pane (its watch's judge by default, the fixer's while a fix loop's fixer works, or any role of the watch with --role; "+
 			"`magnum roles` lists them) in herdr and bring the terminal to the front; without a herdr client a "+
 			"new terminal tab (or --new-window) is opened. A parked PR is restored by the daemon first: a slot "+
 			"is claimed, reviewed_sha checked out, the judge resumed, and the PR and slot pinned to you.",
@@ -76,6 +76,13 @@ func openMain(ctx context.Context, c *Context, d *actDeps, ref string, o openOpt
 	}
 	if !t.hasPR() {
 		return cmdFail(c, "open", fmt.Errorf("slot %s holds no PR", t.Slot.Name))
+	}
+	if strings.TrimSpace(o.role) == "" {
+		// While a fix loop's fixer works in the slot, its pane is the one to
+		// see: the judge's may be parked, or laid out and never started.
+		if fs, _ := statusFix(ctx, d.Store, t.PR.ID); fs != nil && fs.Phase == engine.FixPhaseFixing && fs.Role != "" {
+			o.role = fs.Role
+		}
 	}
 	spec, err := actRoleFor(d.Cfg, t.full(), o.role)
 	if err != nil {

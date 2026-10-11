@@ -521,13 +521,11 @@ func (e *Engine) fixStart(ctx context.Context, job *fixJob) error {
 	if err != nil {
 		return err
 	}
-	var layout []config.Role
-	for _, r := range e.cfg.RolesFor(&job.watch) {
-		if r.Judge || r.Runs == config.RunsAlways {
-			layout = append(layout, r)
-		}
-	}
-	layout = append(layout, job.role)
+	// Only the fixer's pane: a pane laid out for a round role nobody starts
+	// leaves a "starting" session row that `magnum open` would try to focus.
+	// The round's roles stay parked, or get their panes from the next
+	// round's prepare, which reuses this workspace.
+	layout := []config.Role{job.role}
 	ws, err := e.d.Agents.EnsureWorkspace(ctx, pr, job.slot.Path, env, fmt.Sprintf("%s#%d", job.repo.Name, pr.Number), layout)
 	if err != nil {
 		return fmt.Errorf("workspace: %w", err)

@@ -1032,6 +1032,17 @@ skill versions); people add theirs to the sections before it, at the end of the 
   daemon itself lifted the drain of a vanished command; `daemon-restart --drain` interrupted or timed out
   lifts its own drain and left them waiting for the next start. Each tick now goes on with them once no
   drain holds the daemon, however the drain ended.
+- **The fix job lays out only the fixer's pane, and `o` opens it while the fixer works** (2026-10-11).
+  The job gave the PR's workspace a pane for the judge and every always-on role beside the fixer's, to
+  look like a round's; each such pane got a "starting" session row for an agent nobody started, and
+  `magnum open` (the board's `o`), which targets the judge, asked herdr to focus that agent and got
+  agent_not_found (a live loop's first cycle, 2026-10-11). Now the job's workspace call names the fix
+  role alone (the next round's prepare reuses the workspace and adds the round's panes, resuming the
+  parked sessions), and `magnum open` without `--role` focuses the fix role's pane while the PR's loop
+  is in its fixing phase (the status row the card and the board read); `--role` names the fixer too.
+  Rejected: starting the judge beside the fixer (two agents in one slot, one of them idle), and leaving
+  `o` on the judge with the fixer reachable only by `--role` (the pane the operator wants during a fix
+  is the fixer's).
 
 ## Screens and commands
 

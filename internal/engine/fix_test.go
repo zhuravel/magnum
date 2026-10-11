@@ -1192,3 +1192,26 @@ func TestAFailedForceAfterAPushStillQueuesItsReReview(t *testing.T) {
 		t.Errorf("pr.head_changed events after the poll = %d, want 1", n)
 	}
 }
+
+// The fix job lays out only the fixer's pane: the round's roles stay parked
+// (or get their panes from the next round's prepare), so no "starting"
+// session rows exist for agents nobody started, which `magnum open` would
+// try to focus (a live loop on 2026-10-11: agent_not_found on the judge's pane).
+func TestTheFixJobLaysOutOnlyTheFixersPane(t *testing.T) {
+	h, _ := fixHarness(t, realSleep)
+	pr := fixablePR(h, "zhuravel", map[string]int{"P2": 1})
+	h.slot("review1")
+	id := h.fix(FixPayload{})
+	h.e.handleRequests(h.ctx) // the job runs on: the fixer works
+	h.wantDone(id)
+	h.awaitSubmit()
+	last := "" // the round's own workspace call comes first; the job's is the last
+	for _, c := range h.ag.all() {
+		if strings.HasPrefix(c, fmt.Sprintf("ensure_workspace:%d:", pr.ID)) {
+			last = c
+		}
+	}
+	if layout := last[strings.LastIndex(last, ":")+1:]; last == "" || layout != "claude-fix" {
+		t.Errorf("the fix job's workspace layout = %q, want only the fixer's pane", layout)
+	}
+}

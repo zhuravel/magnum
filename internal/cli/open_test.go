@@ -189,3 +189,30 @@ func TestOpenNamesTheAutomationPermission(t *testing.T) {
 		t.Fatal("brought iTerm forward anyway")
 	}
 }
+
+// While a fix loop's fixer works, `o` and `magnum open` without --role
+// focus the fixer's pane, not the judge's (which may be parked or not even
+// started); --role still picks any role, the fixer included.
+func TestOpenFocusesTheFixerWhileItWorks(t *testing.T) {
+	h := newActHarness(t)
+	pr := h.seedPR("talkable/talkable", 5, store.PRReviewed)
+	h.session(pr.ID, store.RoleJudge, store.SessionLive, "mg-talkable-5-judge", "p_1", "w_1")
+	h.session(pr.ID, "claude-fix", store.SessionLive, "mg-talkable-5-fix", "p_4", "w_1")
+	b, _ := json.Marshal(engine.FixState{Cycle: 1, Cap: 3, Phase: engine.FixPhaseFixing, Role: "claude-fix", Head: "abc1234", Since: "abc1234", By: "magnum fix"})
+	if err := h.st.SetKV(context.Background(), engine.KVPRFix(pr.ID), string(b)); err != nil {
+		t.Fatal(err)
+	}
+	if code := h.cmd("open", "5", "--no-reveal"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.errb.String())
+	}
+	actContains(t, h.out.String(), "claude-fix: focused mg-talkable-5-fix")
+	if code := h.cmd("open", "5", "--role", "codex-judge", "--no-reveal"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.errb.String())
+	}
+	if code := h.cmd("open", "5", "--role", "claude-fix", "--no-reveal"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.errb.String())
+	}
+	if got := strings.Join(h.hd.focused, ","); got != "mg-talkable-5-fix,mg-talkable-5-judge,mg-talkable-5-fix" {
+		t.Fatalf("focused %v", h.hd.focused)
+	}
+}

@@ -548,8 +548,9 @@ func (d *actDeps) targetByPRID(ctx context.Context, id int64) (actTarget, error)
 // actKnownRole checks a --role value before the PR is known: "" (the
 // judge) or a role name or alias of any watch (config.Role.Matches).
 func actKnownRole(cfg *config.Config, s string) error {
-	if strings.TrimSpace(s) == "" || slices.ContainsFunc(cfg.RolesFor(nil), func(r config.Role) bool { return r.Matches(s) }) {
-		return nil // the roles a round can run: a judge in reserve is never requested by name
+	if strings.TrimSpace(s) == "" || slices.ContainsFunc(cfg.RolesFor(nil), func(r config.Role) bool { return r.Matches(s) }) ||
+		slices.ContainsFunc(cfg.FixRoles(), func(r config.Role) bool { return r.Matches(s) }) {
+		return nil // the roles a round can run, and the fixer (`magnum open --role claude-fix`): a judge in reserve is never requested by name
 	}
 	return fmt.Errorf("unknown role %q: use %s", s, actRoleChoices(cfg.RolesFor(nil)))
 }
@@ -561,6 +562,9 @@ func actRoleFor(cfg *config.Config, full, s string) (config.Role, error) {
 	w := cfg.WatchFor(full)
 	if r, ok := cfg.RoleByNameOrAlias(w, s); ok {
 		return r, nil
+	}
+	if r, ok := cfg.FixRoleFor(w); ok && strings.TrimSpace(s) != "" && r.Matches(s) {
+		return r, nil // the fixer's pane while its loop works
 	}
 	if strings.TrimSpace(s) == "" {
 		return config.Role{}, fmt.Errorf("the watch of %s has no judge role (`magnum config` validates config.toml)", full)
