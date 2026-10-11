@@ -1050,3 +1050,12 @@ func TestNeedsYourCallNamesOnlyWhatItCanRead(t *testing.T) {
 		t.Errorf("needsYourCall = %q, want %q", got, want)
 	}
 }
+
+// A finding about the PR description has no path and line: its place is the
+// word "description", which the message names like a path.
+func TestNeedsYourCallReadsADescriptionEntry(t *testing.T) {
+	got := needsYourCall([]string{"5485002407 P2 description: the body names two migrations, the head has four"}, "/state/claude-fix.md")
+	if want := "1 finding needs your call (5485002407 P2 description): /state/claude-fix.md"; got != want {
+		t.Errorf("needsYourCall = %q, want %q", got, want)
+	}
+}

@@ -1043,6 +1043,18 @@ skill versions); people add theirs to the sections before it, at the end of the 
   Rejected: starting the judge beside the fixer (two agents in one slot, one of them idle), and leaving
   `o` on the judge with the fixer reachable only by `--role` (the pane the operator wants during a fix
   is the fixer's).
+- **The fixer may edit the PR description when a finding names it** (2026-10-12). The fix skill's rule
+  "change only what a finding names" knew code alone, so a review finding about the PR body (a deploy
+  section naming two migrations where the head had four) went to "needs you" although the fixer acts as
+  the author and the change follows from the code it pushed. Now the skill reads the body (`gh pr view
+  --json body`), changes only the lines the finding names, writes it back (`gh pr edit --body-file`),
+  never the title, replies "Fixed: the description now …" (read as fixed by the reply classifier without
+  a commit), and reports `description: <what changed>` under `## Pushed`; the parser keeps those lines
+  (`FixReport.Description`), a description-only cycle ends the loop with "updated the description,
+  replied to N" and a `fix.description` event instead of "pushed nothing", and a "needs you" entry may
+  name `description` in place of a path and line. A description change alone forces no re-review: the
+  next round verifies the description's claims as it always did. Rejected: a re-review on a description
+  change (a forced round for a sentence the next round checks anyway).
 
 ## Screens and commands
 

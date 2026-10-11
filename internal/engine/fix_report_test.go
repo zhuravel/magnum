@@ -3,6 +3,7 @@ package engine
 import (
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -207,5 +208,26 @@ func TestParseFixReportClipsALongMalformedLine(t *testing.T) {
 	_, err := ParseFixReport(fixReportText(long, "0 threads", "none"), fixRun)
 	if err == nil || len(err.Error()) > 300 {
 		t.Errorf("err = %v (%d bytes), want a short error", err, len(err.Error()))
+	}
+}
+
+// A "## Pushed" line "description: <what changed>" records a change to the
+// PR description, beside the commits or alone; "nothing" still means nothing
+// at all.
+func TestParseFixReportReadsADescriptionChange(t *testing.T) {
+	marker := agents.ReportMarker("r-1")
+	rep, err := ParseFixReport(marker+"\n## Pushed\n1a2b3c4 Fix the total\ndescription: the Deploy section lists the four migrations\n## Replied\n2 threads (2 fixed, 0 already fixed, 0 not a bug, 0 won't fix)\n## Needs you\nnone\n", "r-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Pushed) != 1 || !slices.Equal(rep.Description, []string{"the Deploy section lists the four migrations"}) {
+		t.Errorf("report = %+v", rep)
+	}
+	rep, err = ParseFixReport(marker+"\n## Pushed\ndescription: the Deploy section lists the four migrations\n## Replied\n1 threads (1 fixed, 0 already fixed, 0 not a bug, 0 won't fix)\n## Needs you\nnone\n", "r-1")
+	if err != nil || len(rep.Pushed) != 0 || len(rep.Description) != 1 {
+		t.Errorf("description alone: %+v, %v", rep, err)
+	}
+	if _, err = ParseFixReport(marker+"\n## Pushed\nnothing\ndescription: x\n## Replied\nnone\n## Needs you\nnone\n", "r-1"); err == nil {
+		t.Error("nothing followed by a description line is not an error")
 	}
 }

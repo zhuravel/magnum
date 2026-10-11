@@ -32,11 +32,11 @@ import (
 const autofixBy = "autofix"
 
 // needsYouEntryRe reads a "## Needs you" entry's comment id, priority and
-// place ("2101 P1 app/models/offer.rb:42: <reason>"), the place in plain
-// path characters only, so no control character or other text of the
-// fixer's reaches a message. The reason is the fixer's own words about the
-// PR, so it is never read.
-var needsYouEntryRe = regexp.MustCompile(`^(\d{1,20}) +(P[0-3]) +([A-Za-z0-9._/@+-]+:\d{1,9})(?::|\s|$)`)
+// place ("2101 P1 app/models/offer.rb:42: <reason>", or "description" for a
+// finding about the PR body), the place in plain path characters only, so
+// no control character or other text of the fixer's reaches a message. The
+// reason is the fixer's own words about the PR, so it is never read.
+var needsYouEntryRe = regexp.MustCompile(`^(\d{1,20}) +(P[0-3]) +([A-Za-z0-9._/@+-]+:\d{1,9}|description)(?::|\s|$)`)
 
 // fixAfterRound decides what the end of a review round means for the PR's
 // fix loop: a loop waiting for this re-review goes on or ends

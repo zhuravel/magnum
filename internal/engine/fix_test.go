@@ -1215,3 +1215,31 @@ func TestTheFixJobLaysOutOnlyTheFixersPane(t *testing.T) {
 		t.Errorf("the fix job's workspace layout = %q, want only the fixer's pane", layout)
 	}
 }
+
+// A change to the PR description with no commit ends the loop like a cycle
+// that pushed nothing, and the toast and the event say the description
+// changed: nothing to re-review, the next round verifies the description.
+func TestADescriptionChangeAloneEndsTheLoopWithItsToast(t *testing.T) {
+	h, git := fixHarness(t)
+	pr := fixablePR(h, "zhuravel", map[string]int{"P2": 3})
+	fixer(h, git, "", func(run store.Run) string {
+		return fixReport(run.ID, "description: the Deploy section lists the four migrations", fixReplied, "none")
+	})
+	h.fix(FixPayload{})
+	h.tick()
+	if !slices.Contains(h.sl.all(), "resync:review1:"+fixHead) {
+		t.Errorf("slot calls %v lack the resync to the reviewed head", h.sl.all())
+	}
+	if _, ok := h.fixStateOf(2); ok {
+		t.Error("the loop goes on")
+	}
+	h.wantState(2, store.PRReviewed)
+	if !h.hasEvent(fmt.Sprintf("pr:talkable/talkable#%d", pr.Number), "fix.description") {
+		t.Error("no fix.description event")
+	}
+	h.flush()
+	if got := toastsWith(h, "PR #2: claude-fix updated the description, replied to 3 findings"); len(got) != 1 {
+		t.Errorf("toasts = %v", h.nh.shown())
+	}
+	h.wantToasts("needs attention", 0)
+}

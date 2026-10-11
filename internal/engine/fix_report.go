@@ -7,7 +7,9 @@ package engine
 //	<!-- magnum:run=<run id> -->
 //	## Pushed
 //	<sha7> <message>              one line per commit on GitHub; or "nothing";
-//	                              or "push failed: <git's first error line>"
+//	                              or "push failed: <git's first error line>";
+//	description: <what changed>   a change to the PR description, beside the
+//	                              commits or alone
 //	## Replied
 //	N threads (a fixed, b already fixed, c not a bug, d won't fix)
 //	## Needs you
@@ -57,6 +59,9 @@ type FixReport struct {
 	NeedsYou []string
 	// PushFailed: the fixer says its push failed ("push failed: …").
 	PushFailed bool
+	// Description are the changes to the PR description ("description:
+	// <what changed>" lines under "## Pushed"), what changed per line.
+	Description []string
 }
 
 // The report's sections, in the order they come.
@@ -155,8 +160,8 @@ func fixSectionBodies(rest string) ([fixSections][]string, error) {
 	return bodies, nil
 }
 
-// readPushed reads the "## Pushed" lines: commits, a failed push, or the one
-// line "nothing".
+// readPushed reads the "## Pushed" lines: commits, a failed push,
+// description changes, or the one line "nothing".
 func (r *FixReport) readPushed(lines []string) error {
 	nothing := false
 	for i, line := range lines {
@@ -168,6 +173,8 @@ func (r *FixReport) readPushed(lines []string) error {
 			nothing = true
 		case strings.HasPrefix(strings.ToLower(line), "push failed"):
 			r.PushFailed = true
+		case strings.HasPrefix(strings.ToLower(line), "description:") && strings.TrimSpace(line[len("description:"):]) != "":
+			r.Description = append(r.Description, strings.TrimSpace(line[len("description:"):]))
 		case m != nil:
 			r.Pushed = append(r.Pushed, FixCommit{SHA: m[1], Message: strings.TrimSpace(m[2])})
 		default:

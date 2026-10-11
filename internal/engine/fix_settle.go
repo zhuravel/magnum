@@ -77,6 +77,12 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 		return
 	}
 	data := job.eventData()
+	described := len(rep.Description) > 0 // rerr is nil here
+	if described {
+		data["description"] = len(rep.Description)
+		e.event(ctx, "info", subject, "fix.description", fmt.Sprintf("%s updated the PR description (%s)", job.role.Name,
+			textx.Count(len(rep.Description), "change", "changes")), data)
+	}
 	if pushed {
 		data["head"], data["commits"] = target, len(rep.Pushed)
 		e.event(ctx, "info", subject, "fix.pushed", fmt.Sprintf("%s pushed %s: the head is %s", job.role.Name,
@@ -113,7 +119,11 @@ func (e *Engine) settleFix(ctx context.Context, job *fixJob) {
 		if counted {
 			answered = textx.Count(threads, "finding", "findings")
 		}
-		what := fmt.Sprintf("PR #%d: %s pushed nothing, replied to %s", job.pr.Number, job.role.Name, answered)
+		did := "pushed nothing"
+		if described {
+			did = "updated the description"
+		}
+		what := fmt.Sprintf("PR #%d: %s %s, replied to %s", job.pr.Number, job.role.Name, did, answered)
 		e.info(notify.Item{Key: "fix-replied:" + job.run.ID, Title: "magnum: " + what,
 			Body: job.pr.URL + "\nthe fix loop ends; the report: " + report, Line: what + " " + job.pr.URL, Kind: kindFixEnded})
 	}

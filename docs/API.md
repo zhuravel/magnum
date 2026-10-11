@@ -5906,6 +5906,9 @@ type FixReport struct {
 	NeedsYou []string
 	// PushFailed: the fixer says its push failed ("push failed: …").
 	PushFailed bool
+	// Description are the changes to the PR description ("description:
+	// <what changed>" lines under "## Pushed"), what changed per line.
+	Description []string
 }
     FixReport is what the fixer reports.
 
