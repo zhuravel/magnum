@@ -289,8 +289,9 @@ func (r Role) ShouldRun(ranBefore, requested bool) bool {
 //     skill DefaultSkill, the same judge-*.md prompts; a second judge held
 //     in reserve for [pipeline] judge_fallback (RolesFor gives a watch
 //     without roles its first judge only), no aliases.
-//   - claude-fix: claude, fix, identity me (a gh identity: the account the
-//     fixer pushes and replies as), model opus, effort high, skill
+//   - claude-fix: claude, fix, no identity (FixRoleFor gives it each
+//     watch's poll identity: the operator's gh login, the account the fixer
+//     pushes and replies as), model opus, effort high, skill
 //     DefaultFixSkill, prompt fix.md, timeout 60m, no runs; the fixer of
 //     the fix job, never part of a round, its session kept like a
 //     reviewer's (no max_session_rounds).
@@ -314,7 +315,7 @@ func DefaultRoles() []Role {
 			MaxSessionRounds: DefaultJudgeSessionRounds, Skill: DefaultSkill,
 			Prompt: "judge-initial.md", Rereview: "judge-rereview.md", ContinuePrompt: "judge-continue.md",
 			Recovery: "judge-recovery.md", Nudge: "judge-nudge.md"},
-		{Name: RoleClaudeFix, Kind: KindClaude, Fix: true, Identity: "me", Model: "opus", Effort: "high",
+		{Name: RoleClaudeFix, Kind: KindClaude, Fix: true, Model: "opus", Effort: "high",
 			Skill: DefaultFixSkill, Prompt: DefaultFixPrompt, Output: "claude-fix.md", Capture: CaptureFile, Timeout: Duration{60 * time.Minute}},
 	}
 }

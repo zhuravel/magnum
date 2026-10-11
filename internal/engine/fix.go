@@ -209,8 +209,11 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState) (*f
 		return nil, fmt.Errorf("no fix role for %s", full)
 	}
 	fixer := e.cfg.IdentityByName(role.Identity)
-	if fixer == nil {
+	switch {
+	case fixer == nil:
 		return nil, fmt.Errorf("no identity %s for the fix role", role.Identity)
+	case fixer.Kind != "gh": // a poll identity the role took (an explicit App is a config error)
+		return nil, fmt.Errorf("the fix role's identity %s is an App; name a gh identity", fixer.Name)
 	}
 	cur, running, err := e.fixState(ctx, pr.ID)
 	switch {

@@ -76,20 +76,27 @@ func (g *fixGit) RevParse(ctx context.Context, dir, ref string) (string, error) 
 	return g.fakeGit.RevParse(ctx, dir, ref)
 }
 
-// fixHarness is a harness whose configuration declares the fix role's
-// identity, me (the operator's gh login), and whose git knows the slot's
-// HEAD.
+// fixHarness is a harness whose git knows the slot's HEAD. Its watch is
+// shaped as `magnum init` writes one, posting as the App and polling as the
+// operator's gh login, which the built-in claude-fix, naming no identity,
+// acts as.
 func fixHarness(t *testing.T, mods ...func(*harness)) (*harness, *fixGit) {
 	t.Helper()
 	git := &fixGit{head: fixHead}
-	h := newHarness(t, append([]func(*harness){func(h *harness) {
-		h.cfg.Identities = append(h.cfg.Identities, config.Identity{Name: "me", Kind: "gh", Login: "zhuravel"})
-		me := &fakeIdentity{name: "me", login: "zhuravel", kind: "gh"}
-		h.ids["me"] = me
-		h.d.Identities["me"] = me
-		h.d.Git = git
-	}}, mods...)...)
+	h := newHarness(t, append([]func(*harness){func(h *harness) { h.d.Git = git }}, mods...)...)
 	return h, git
+}
+
+// fixRole is the configured claude-fix role of h, to edit.
+func (h *harness) fixRole() *config.Role {
+	h.t.Helper()
+	for i := range h.cfg.Roles {
+		if h.cfg.Roles[i].Fix {
+			return &h.cfg.Roles[i]
+		}
+	}
+	h.t.Fatal("no fix role declared")
+	return nil
 }
 
 // realSleep makes the engine's waits take a real millisecond each: the fix
@@ -356,7 +363,6 @@ func TestFixRefusals(t *testing.T) {
 		name     string
 		author   string
 		findings map[string]int
-		noMe     bool
 		mod      func(h *harness, pr store.PR)
 		want     string
 	}{
@@ -377,15 +383,15 @@ func TestFixRefusals(t *testing.T) {
 		{name: "no fix role", author: "zhuravel", findings: map[string]int{"P1": 1}, mod: func(h *harness, _ store.PR) {
 			h.cfg.Watches[0].FixRole = new("")
 		}, want: "no fix role for talkable/talkable"},
-		{name: "no identity", author: "zhuravel", findings: map[string]int{"P1": 1}, noMe: true, want: "no identity me for the fix role"},
+		{name: "an undeclared identity", author: "zhuravel", findings: map[string]int{"P1": 1}, mod: func(h *harness, _ store.PR) {
+			h.fixRole().Identity = "me"
+		}, want: "no identity me for the fix role"},
+		{name: "a poll identity that is an App", author: "zhuravel", findings: map[string]int{"P1": 1}, mod: func(h *harness, _ store.PR) {
+			h.cfg.Watches[0].PollIdentity = "talkable-app"
+		}, want: "the fix role's identity talkable-app is an App; name a gh identity"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			var h *harness
-			if tc.noMe {
-				h = newHarness(t)
-			} else {
-				h, _ = fixHarness(t)
-			}
+			h, _ := fixHarness(t)
 			pr := fixablePR(h, tc.author, tc.findings)
 			if tc.mod != nil {
 				tc.mod(h, pr)

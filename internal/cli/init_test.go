@@ -88,6 +88,9 @@ func TestInitWritesAMinimalConfigForTheGHLogin(t *testing.T) {
 	if len(cfg.Pools) != 0 || cfg.Daemon.DefaultRepo != "example/widgets" {
 		t.Errorf("pools %d, default_repo %q", len(cfg.Pools), cfg.Daemon.DefaultRepo)
 	}
+	if fix, ok := cfg.FixRoleFor(&cfg.Watches[0]); !ok || fix.Identity != "octo-cat" {
+		t.Errorf("the fix role = %+v, %v; want it acting as the login, with no identity renamed", fix, ok)
+	}
 	for _, want := range []string{"config is valid", "  bin/magnum doctor ", "  bin/magnum daemon ", "  bin/magnum review example/widgets#<N> --wait ", "make install"} {
 		if !strings.Contains(it.out.String(), want) {
 			t.Errorf("report lacks %q:\n%s", want, it.out.String())
@@ -150,6 +153,17 @@ func TestInitAppIdentity(t *testing.T) {
 	}
 	if w := cfg.Watches[0]; w.Identity != "example-reviewer-app" || w.PollIdentity != "octo-cat" {
 		t.Fatalf("watch posts as %q, polls as %q", w.Identity, w.PollIdentity)
+	}
+	// `magnum fix` runs on this config as written: the fixer acts as the
+	// login, not as the App that posts, and autofix = "own" draws no warning.
+	if fix, ok := cfg.FixRoleFor(&cfg.Watches[0]); !ok || fix.Identity != "octo-cat" {
+		t.Fatalf("the fix role = %+v, %v; want it acting as octo-cat", fix, ok)
+	}
+	cfg.Watches[0].Autofix = config.AutofixOwn
+	for _, w := range cfg.Warnings() {
+		if strings.Contains(w, "fix") {
+			t.Errorf("a warning about the fix job: %s", w)
+		}
 	}
 	if b, _ := os.ReadFile(it.local()); strings.Contains(string(b), "BEGIN") {
 		t.Fatal("a key reached the config")

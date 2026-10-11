@@ -12,6 +12,8 @@ import (
 	"text/template"
 	"time"
 	"unicode"
+
+	"github.com/zhuravel/magnum/internal/github"
 )
 
 // Warnings lists human-readable problems that do not make the config
@@ -19,9 +21,9 @@ import (
 // built-in defaults have neither; they live in the user's ~/.config/magnum/config.toml), but
 // magnum then cannot post or reviews nothing; a [daemon] reviewer_timeout or
 // judge_timeout set while every role it would be the fallback of sets its
-// own timeout changes nothing; a watch with autofix = "own" whose fix role
-// has no declared identity, or posts as the fix role's identity. Print them
-// from `magnum doctor` and `magnum config`.
+// own timeout changes nothing; a watch with autofix = "own" whose fix job
+// cannot run as it should (fixRoleWarnings). Print them from `magnum
+// doctor` and `magnum config`.
 func (c *Config) Warnings() []string {
 	var out []string
 	if len(c.Identities) == 0 {
@@ -37,16 +39,19 @@ func (c *Config) Warnings() []string {
 	return out
 }
 
-// fixRoleWarnings lists the problems of the fix role of each watch whose
-// autofix is "own" (AutofixFor), the only watches where the fix job starts
-// by itself: a configuration that never switches autofix on gets none, and
+// fixRoleWarnings lists the problems of the fix job of each watch whose
+// autofix is "own" (AutofixFor), the only watches where it starts by
+// itself: a configuration that never switches autofix on gets none, and
 // `magnum fix` answers for a job asked by hand. The problems do not make
-// the configuration invalid: an identity the configuration does not declare
-// (the built-in claude-fix names "me", which the built-in defaults, with no
-// identity at all, cannot declare), so the fix job cannot run; and a watch
-// that posts as the fix role's identity, whose threads the fixer could then
-// not tell from its own replies. Nothing is said while no identity is
-// declared: "no [[identity]] configured" already is.
+// the configuration invalid: the watch's fix_role names no declared fix
+// role (a [[role]] list of the operator's own replaces the built-in
+// claude-fix), so autofix never starts the job (fix_role = "" switches it
+// off on purpose and says nothing); the fix role's own identity is not declared, or the
+// poll identity it takes when it names none is an App, so the job cannot
+// run (an explicit identity of another kind is Validate's error); and the
+// watch posts as the login the fixer acts as, so the fixer could not tell
+// magnum's review threads from its own replies. Nothing is said while no
+// identity is declared: "no [[identity]] configured" already is.
 func (c *Config) fixRoleWarnings() []string {
 	if len(c.Identities) == 0 {
 		return nil
@@ -55,20 +60,40 @@ func (c *Config) fixRoleWarnings() []string {
 	seen := map[string]bool{}
 	for i := range c.Watches {
 		w := &c.Watches[i]
-		r, ok := c.FixRoleFor(w)
-		if !ok || c.AutofixFor(w) != AutofixOwn {
+		if c.AutofixFor(w) != AutofixOwn {
 			continue
 		}
-		if !seen[r.Name] && r.Identity != "" && c.IdentityByName(r.Identity) == nil {
-			out = append(out, fmt.Sprintf("fix role %s: identity %q is not declared, so autofix = \"own\" cannot start the fix job "+
-				"(declare a gh [[identity]] named %q for your own account, or set identity in a [[role]] named %s)",
-				r.Name, r.Identity, r.Identity, r.Name))
+		r, ok := c.FixRoleFor(w)
+		switch name := strings.TrimSpace(c.FixRoleName(w)); {
+		case !ok && name != "":
+			out = append(out, fmt.Sprintf("watch %s: autofix = \"own\" but no fix role resolves for it (fix_role %q names no "+
+				"declared role with fix = true; a [[role]] list of your own replaces the built-in claude-fix), so the fix job "+
+				"never starts by itself", w.Owner, name))
+			continue
+		case !ok: // fix_role = "": the fix job is off for the watch on purpose
+			continue
 		}
-		seen[r.Name] = true
-		if r.Identity != "" && r.Identity == w.Identity {
-			out = append(out, fmt.Sprintf("watch %s posts as identity %q, the identity fix role %s fixes as, and autofix = \"own\" "+
+		raw, _ := c.roleNamed(r.Name)
+		fixer := c.IdentityByName(r.Identity)
+		switch {
+		case raw.Identity != "" && fixer == nil:
+			if !seen[r.Name] {
+				out = append(out, fmt.Sprintf("fix role %s: identity %q is not declared, so autofix = \"own\" cannot start the fix job "+
+					"(declare a gh [[identity]] named %q for your own account, or set identity in a [[role]] named %s)",
+					r.Name, r.Identity, r.Identity, r.Name))
+			}
+			seen[r.Name] = true
+			continue
+		case raw.Identity == "" && fixer != nil && fixer.Kind != "gh":
+			out = append(out, fmt.Sprintf("fix role %s takes watch %s's poll identity %q, an App, as the account it pushes and replies "+
+				"as, so the fix job refuses to start; poll as your gh identity (poll_identity), or set identity in a [[role]] named %s",
+				r.Name, w.Owner, r.Identity, r.Name))
+			continue
+		}
+		if post := c.IdentityByName(w.Identity); post != nil && fixer != nil && github.SameAccount(post.Login, fixer.Login) {
+			out = append(out, fmt.Sprintf("watch %s posts as login %q (identity %q), the login fix role %s fixes as, and autofix = \"own\" "+
 				"starts the fix job on its reviews: the fixer could not tell magnum's review threads from its own replies; "+
-				"give one of them another identity", w.Owner, w.Identity, r.Name))
+				"post the reviews as an App identity, or give the fixer another identity", w.Owner, post.Login, w.Identity, r.Name))
 		}
 	}
 	return out
@@ -899,8 +924,8 @@ func (c *Config) validateRole(r Role, kinds map[string]Kind, ids map[string]bool
 			bad("ok_status %d must be 0..255", status)
 		}
 	}
-	// A fix role's undeclared identity is no error (fixRoleWarnings): the
-	// built-in claude-fix names "me", and the defaults declare no identity.
+	// A fix role's undeclared identity is no error (fixRoleWarnings warns
+	// under autofix = "own", and the fix job refuses it).
 	if r.Identity != "" && !ids[r.Identity] && !r.Fix {
 		bad("unknown identity %q", r.Identity)
 	}
@@ -953,10 +978,12 @@ func (c *Config) validateRole(r Role, kinds map[string]Kind, ids map[string]bool
 
 // validateFixRole checks what makes a fix role fit the fix job: an agent
 // session that is no judge and takes no after or own_pass (it is not part of
-// a round), acting as a gh identity: the operator's own account, which
-// pushes to the PR's branch and answers its review threads. An identity the
-// configuration does not declare is no error here (Config.Warnings says it
-// where autofix = "own").
+// a round), acting as a gh identity when it names one: the operator's own
+// account, which pushes to the PR's branch and answers its review threads.
+// A role that names none takes each watch's poll identity (FixRoleFor); an
+// identity the configuration does not declare, or a poll identity that is
+// an App, is no error here (Config.Warnings says it where autofix = "own",
+// and the fix job refuses it).
 func (c *Config) validateFixRole(r Role, bad func(string, ...any)) {
 	if r.Judge {
 		bad("a fix role cannot also be a judge")
@@ -971,8 +998,6 @@ func (c *Config) validateFixRole(r Role, bad func(string, ...any)) {
 		bad("a fix role takes no own_pass (that is the judge's)")
 	}
 	switch id := c.IdentityByName(r.Identity); {
-	case r.Identity == "":
-		bad("a fix role needs identity: the gh identity of your own account, which it pushes and replies as")
 	case id != nil && id.Kind != "gh":
 		bad("identity %s must be a gh identity (your own account), not kind %q: the fixer pushes to the PR's branch and "+
 			"answers its threads as you, which an App cannot", id.Name, id.Kind)

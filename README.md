@@ -1372,17 +1372,23 @@ One cycle of a loop has four steps.
    cap, because the loop has its own cap.
 4. **Decide.** When that review posts, the loop either starts the next cycle or ends (see below).
 
-**Who the fixer is.** The fix role's `identity` sets the GitHub environment of the fixer's pane. The built-in
-`claude-fix` names `me`. That identity must be a `gh` one, your own account, and the configuration refuses an
-App there, since an App cannot push to your branch as you. So `gh` and `git` in the fixer's pane act as your
-gh login, with your git config and your SSH agent (the daemon's `SSH_AUTH_SOCK`), and the pushes and replies
-show in the PR's history as yours. `magnum init` names your gh identity after your login. Name it `me`, or
-set `identity` in a `[[role]]` block named `claude-fix`. With no such identity declared, `magnum fix` refuses
-("no identity me for the fix role") and `magnum doctor` says the same.
+**Who the fixer is.** The fixer's pane acts as one GitHub identity. The built-in `claude-fix` names none, so
+it acts as the watch's poll identity, which is your own gh login in the config `magnum init` writes. A
+freshly initialised config therefore runs `magnum fix` without renaming anything. That identity must be a
+`gh` one, your own account, since an App cannot push to your branch as you. A watch that polls as an App
+makes `magnum fix` refuse ("the fix role's identity ... is an App; name a gh identity"), and under `autofix =
+"own"` the configuration warns about it. So `gh` and `git` in the fixer's pane act as your gh login, with your
+git config and your SSH agent (the daemon's `SSH_AUTH_SOCK`), and the pushes and replies show in the PR's
+history as yours. To act as another account, set `identity` in a `[[role]]` block named `claude-fix` to a
+`gh` identity; the configuration refuses an App there. An identity it names but nobody declared makes
+`magnum fix` refuse ("no identity me for the fix role"), and `magnum doctor` says the same.
 
 A watch that posts as your own login cannot tell the fixer's replies from its own. The re-review then does
 not read them as the author's answers, and `magnum fix` says so in a note. Post the reviews as an App
-identity when autofix is on. The configuration warns about this only under `autofix = "own"`.
+identity when autofix is on. The configuration warns about this only under `autofix = "own"`, comparing
+logins, so two identities of the same account count as one. It also warns when a watch's `fix_role` names
+no declared fix role under `autofix = "own"`, since the loop would never start, and `magnum doctor` fails
+that watch.
 
 **The fix skill.** `skills/magnum-fix/SKILL.md` is the fixer's method. It is a document with no scripts, so it
 works wherever `gh` works. The binary embeds it and the daemon copies it at startup under the state
@@ -1461,8 +1467,8 @@ out, as the board's does.
 - `magnum logs <ref>` shows `fix.start`, `fix.pushed`, `fix.replied`, `fix.needs_you`, `fix.capped`,
   `fix.done`, `fix.failed`, `fix.stopped` and `fix.ended`.
 - `magnum stats` counts fix cycles per day and repository in a FIX CYCLES table. They are not rounds.
-  `magnum doctor` checks that the fix skill and prompt resolve and that the fix role's identity is a `gh`
-  identity whose login works.
+  `magnum doctor` checks that the fix skill and prompt resolve and that the identity the fix role acts as is
+  a `gh` identity whose login works, one line per identity when watches poll as different ones.
 
 **Good to know.**
 

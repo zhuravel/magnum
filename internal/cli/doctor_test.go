@@ -81,15 +81,20 @@ func doctorFixture(t *testing.T) (*inspFixture, doctorDeps, *fakeDoctorHerdr, *f
 	}
 	cfg := f.Ctx.Config
 	skill := cfg.JudgeFor(nil).Skill
-	// Main clone, skill, one provisioned slot, the user's codex staging dir.
+	fix, _ := cfg.FixRoleFor(&cfg.Watches[0])
+	fixSkill := config.RoleSkillPath(fix, f.Ctx.Layout)
+	// Main clone, the judge's and the fixer's skills, one provisioned slot,
+	// the user's codex staging dir.
 	for _, d := range []string{cfg.Pools[0].MainClone + "/.git", f.Home + "/talkable.review1", f.Home + "/user/.codex/.tmp/marketplaces/.staging",
-		filepath.Dir(skill)} {
+		filepath.Dir(skill), filepath.Dir(fixSkill)} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(skill, []byte("skill"), 0o600); err != nil {
-		t.Fatal(err)
+	for _, p := range []string{skill, fixSkill} {
+		if err := os.WriteFile(p, []byte("skill"), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	inspSeedSlot(t, st, f.Home, "review1", store.SlotFree, nil)
 	if err := st.SetKV(context.Background(), store.KVIdentityCheck("zhuravel"), "pass"); err != nil {
@@ -662,14 +667,16 @@ func TestDoctorSaysWhyTheEditorIsOff(t *testing.T) {
 	}
 }
 
-// doctorWithFixIdentity returns d with a gh identity named "me" declared, the
-// one the built-in claude-fix runs as, and the fix skill in place.
-func doctorWithFixIdentity(t *testing.T, d doctorDeps, check string) doctorDeps {
+// doctorWithFixSkill is d with the fix skill in the checkout and the login
+// check of the operator's gh identity (zhuravel, the watches' poll identity,
+// which the built-in claude-fix acts as) set to check ("" = never run).
+func doctorWithFixSkill(t *testing.T, d doctorDeps, check string) doctorDeps {
 	t.Helper()
 	cfg := *d.Config
-	cfg.Identities = append(slices.Clone(cfg.Identities), config.Identity{Name: "me", Kind: "gh", Login: "zhuravel", NoFindingsEvent: "APPROVE"})
+	cfg.Watches = slices.Clone(cfg.Watches)
+	cfg.Identities = slices.Clone(cfg.Identities)
 	d.Config = &cfg
-	fix, ok := cfg.FixRoleFor(nil)
+	fix, ok := cfg.FixRoleFor(&cfg.Watches[0])
 	if !ok {
 		t.Fatal("no fix role")
 	}
@@ -680,22 +687,41 @@ func doctorWithFixIdentity(t *testing.T, d doctorDeps, check string) doctorDeps 
 	if err := os.WriteFile(skill, []byte("skill"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if check != "" {
-		if err := d.Store.SetKV(context.Background(), store.KVIdentityCheck("me"), check); err != nil {
+	ctx := context.Background()
+	if check == "" {
+		if err := d.Store.DeleteKV(ctx, store.KVIdentityCheck("zhuravel")); err != nil {
 			t.Fatal(err)
 		}
+	} else if err := d.Store.SetKV(ctx, store.KVIdentityCheck("zhuravel"), check); err != nil {
+		t.Fatal(err)
 	}
 	return d
 }
 
+// withFixRoleIdentity is d with the claude-fix role naming identity id.
+func withFixRoleIdentity(d doctorDeps, id string) doctorDeps {
+	cfg := *d.Config
+	cfg.Roles = cfg.AllRoles()
+	for i := range cfg.Roles {
+		if cfg.Roles[i].Fix {
+			cfg.Roles[i].Identity = id
+		}
+	}
+	d.Config = &cfg
+	return d
+}
+
 // The fix role line says whether the fix job can run: the role's skill and
-// prompt resolve (a checkout's file, else the binary's own copy), and its
-// identity is a gh identity whose login check passes. A configuration that
-// does not use the fix job (no fix role, or an identity it never declared,
-// with no autofix to start the job by itself) gets a SKIP, not a failure.
+// prompt resolve (a checkout's file, else the binary's own copy), and the
+// identity it acts as (each watch's poll identity unless the role names one)
+// is a gh identity whose login check passes; a role that acts as two
+// identities gets a line for each. A configuration that does not use the fix
+// job (no fix role, or an identity it never declared, with no autofix to
+// start the job by itself) gets a SKIP, not a failure; a watch whose autofix
+// = "own" names a fix role that does not resolve fails.
 func TestDoctorChecksTheFixRole(t *testing.T) {
 	_, d, _, _ := doctorFixture(t)
-	fixCheck := func(d doctorDeps) doctorCheck {
+	fixChecks := func(d doctorDeps) []doctorCheck {
 		t.Helper()
 		var found []doctorCheck
 		for _, c := range doctorRun(context.Background(), d) {
@@ -703,38 +729,57 @@ func TestDoctorChecksTheFixRole(t *testing.T) {
 				found = append(found, c)
 			}
 		}
+		return found
+	}
+	fixCheck := func(d doctorDeps) doctorCheck {
+		t.Helper()
+		found := fixChecks(d)
 		if len(found) != 1 {
 			t.Fatalf("%d fix role checks: %+v", len(found), found)
 		}
 		return found[0]
 	}
-
-	// The built-in claude-fix runs as "me", which the fixture never declared.
-	if c := fixCheck(d); c.Status != doctorSkip || !strings.Contains(c.Detail, `fix role claude-fix: identity "me" is not declared`) ||
-		!strings.Contains(c.Detail, "`magnum fix` is refused") {
-		t.Fatalf("undeclared identity = %+v", c)
-	}
-	// With autofix = "own" the job would start by itself and cannot: that fails.
-	own := d
-	cfg := *d.Config
-	cfg.Watches = slices.Clone(cfg.Watches)
-	cfg.Watches[0].Autofix = config.AutofixOwn
-	own.Config = &cfg
-	if c := fixCheck(own); c.Status != doctorFail || !strings.Contains(c.Detail, `identity "me" is not declared`) || !strings.Contains(c.Fix, `a gh [[identity]] named "me"`) {
-		t.Fatalf("undeclared identity under autofix = %+v", c)
+	own := func(d doctorDeps) doctorDeps {
+		cfg := *d.Config
+		cfg.Watches = slices.Clone(cfg.Watches)
+		for i := range cfg.Watches {
+			cfg.Watches[i].Autofix = config.AutofixOwn
+		}
+		d.Config = &cfg
+		return d
 	}
 
-	// A gh identity whose login check passed, and a skill: the job can run.
-	ok := doctorWithFixIdentity(t, d, "pass")
+	// The built-in claude-fix acts as the watches' poll identity, zhuravel,
+	// whose login check passed: with the skill in the checkout the job can run.
+	ok := doctorWithFixSkill(t, d, "pass")
 	c := fixCheck(ok)
-	fix, _ := ok.Config.FixRoleFor(nil)
+	fix, _ := ok.Config.FixRoleFor(&ok.Config.Watches[0])
 	if c.Status != doctorPass || !strings.Contains(c.Detail, "fix role claude-fix") || !strings.Contains(c.Detail, inspTilde(config.RoleSkillPath(fix, ok.Layout))) ||
-		!strings.Contains(c.Detail, "identity me (gh, zhuravel): last check passed") {
+		!strings.Contains(c.Detail, "identity zhuravel (gh, zhuravel): last check passed") {
 		t.Fatalf("healthy = %+v", c)
 	}
 
+	// A role naming an identity the configuration never declared is skipped;
+	// with autofix = "own" the job would start by itself and cannot: that fails.
+	ghost := withFixRoleIdentity(ok, "me")
+	if c := fixCheck(ghost); c.Status != doctorSkip || !strings.Contains(c.Detail, `fix role claude-fix: identity "me" is not declared`) ||
+		!strings.Contains(c.Detail, "`magnum fix` is refused") {
+		t.Fatalf("undeclared identity = %+v", c)
+	}
+	if c := fixCheck(own(ghost)); c.Status != doctorFail || !strings.Contains(c.Detail, `identity "me" is not declared`) || !strings.Contains(c.Fix, `a gh [[identity]] named "me"`) {
+		t.Fatalf("undeclared identity under autofix = %+v", c)
+	}
+
+	// A watch that polls as another gh identity gives the role a second line.
+	two := doctorWithFixSkill(t, d, "pass")
+	two.Config.Identities = append(two.Config.Identities, config.Identity{Name: "me", Kind: "gh", Login: "zhuravel", NoFindingsEvent: "APPROVE"})
+	two.Config.Watches[1].PollIdentity = "me"
+	if got := fixChecks(two); len(got) != 2 || !strings.Contains(got[0].Detail, "identity zhuravel") || !strings.Contains(got[1].Detail, "identity me") {
+		t.Fatalf("two identities = %+v", got)
+	}
+
 	// A checkout without the skill file fails, as a missing judge skill does.
-	missing := doctorWithFixIdentity(t, d, "pass")
+	missing := doctorWithFixSkill(t, d, "pass")
 	if err := os.Remove(config.RoleSkillPath(fix, missing.Layout)); err != nil {
 		t.Fatal(err)
 	}
@@ -743,7 +788,7 @@ func TestDoctorChecksTheFixRole(t *testing.T) {
 	}
 
 	// An installed binary has no checkout: the skill is its own copy.
-	bare := doctorWithFixIdentity(t, d, "pass")
+	bare := doctorWithFixSkill(t, d, "pass")
 	bare.Layout = paths.Layout{}
 	bcfg := *bare.Config
 	bcfg.Roles = bcfg.AllRoles()
@@ -757,37 +802,48 @@ func TestDoctorChecksTheFixRole(t *testing.T) {
 		t.Fatalf("no checkout = %+v", c)
 	}
 
-	// The identity must be a gh identity: the fixer pushes and replies as the operator's own account.
-	app := doctorWithFixIdentity(t, d, "pass")
-	acfg := *app.Config
-	acfg.Identities = slices.Clone(acfg.Identities)
-	acfg.Identities[len(acfg.Identities)-1].Kind = "app"
-	app.Config = &acfg
-	if c := fixCheck(app); c.Status != doctorFail || !strings.Contains(c.Detail, "identity me is an app identity") || !strings.Contains(c.Fix, "gh [[identity]]") {
+	// The identity must be a gh identity: a watch polling as the App gives the
+	// role the App, which the job refuses.
+	app := doctorWithFixSkill(t, d, "pass")
+	app.Config.Watches = app.Config.Watches[:1]
+	app.Config.Watches[0].PollIdentity = "talkable-app"
+	if c := fixCheck(app); c.Status != doctorFail || !strings.Contains(c.Detail, "identity talkable-app is an app identity") || !strings.Contains(c.Fix, "poll_identity") {
 		t.Fatalf("app identity = %+v", c)
 	}
 
 	// Its login check: failed fails with the error, never run warns.
-	failed := doctorWithFixIdentity(t, d, "fail")
-	if err := failed.Store.SetKV(context.Background(), store.KVIdentityError("me"), "gh: bad credentials"); err != nil {
+	failed := doctorWithFixSkill(t, d, "fail")
+	if err := failed.Store.SetKV(context.Background(), store.KVIdentityError("zhuravel"), "gh: bad credentials"); err != nil {
 		t.Fatal(err)
 	}
-	if c := fixCheck(failed); c.Status != doctorFail || !strings.Contains(c.Detail, "last check failed: gh: bad credentials") || !strings.Contains(c.Fix, "magnum identities check --name me") {
+	if c := fixCheck(failed); c.Status != doctorFail || !strings.Contains(c.Detail, "last check failed: gh: bad credentials") || !strings.Contains(c.Fix, "magnum identities check --name zhuravel") {
 		t.Fatalf("failed login = %+v", c)
 	}
-	if err := failed.Store.DeleteKV(context.Background(), store.KVIdentityCheck("me")); err != nil {
-		t.Fatal(err)
-	}
-	if c := fixCheck(doctorWithFixIdentity(t, d, "")); c.Status != doctorWarn || !strings.Contains(c.Detail, "never checked") || !strings.Contains(c.Fix, "magnum identities check --name me") {
+	if c := fixCheck(doctorWithFixSkill(t, d, "")); c.Status != doctorWarn || !strings.Contains(c.Detail, "never checked") || !strings.Contains(c.Fix, "magnum identities check --name zhuravel") {
 		t.Fatalf("unchecked login = %+v", c)
 	}
 
-	// The pipeline resolves no fix role: nothing to check.
-	none := doctorWithFixIdentity(t, d, "pass")
-	ncfg := *none.Config
-	ncfg.Pipeline.FixRole = ""
-	none.Config = &ncfg
-	if c := fixCheck(none); c.Status != doctorSkip || !strings.Contains(c.Detail, "no fix role") {
-		t.Fatalf("no fix role = %+v", c)
+	// The pipeline resolves no fix role: nothing to check, with autofix too,
+	// since fix_role = "" switches the job off on purpose.
+	none := doctorWithFixSkill(t, d, "pass")
+	none.Config.Pipeline.FixRole = ""
+	for _, dd := range []doctorDeps{none, own(none)} {
+		if c := fixCheck(dd); c.Status != doctorSkip || !strings.Contains(c.Detail, "no fix role") {
+			t.Fatalf("no fix role = %+v", c)
+		}
+	}
+	// A fix_role that names no declared fix role (a [[role]] list of one's own
+	// leaves claude-fix out) is skipped, and fails where autofix = "own" would
+	// start the job by itself.
+	gone := doctorWithFixSkill(t, d, "pass")
+	gone.Config.Roles = slices.DeleteFunc(gone.Config.AllRoles(), func(r config.Role) bool { return r.Fix })
+	if c := fixCheck(gone); c.Status != doctorSkip {
+		t.Fatalf("a fix role left out, autofix never = %+v", c)
+	}
+	gone = own(gone)
+	gone.Config.Watches = gone.Config.Watches[:1]
+	if c := fixCheck(gone); c.Status != doctorFail || !strings.Contains(c.Detail, `watch talkable: autofix = "own" but fix_role "claude-fix" names no declared fix role`) ||
+		!strings.Contains(c.Fix, "fix = true") {
+		t.Fatalf("a fix role left out under autofix = %+v", c)
 	}
 }

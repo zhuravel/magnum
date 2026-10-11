@@ -486,12 +486,12 @@ name = "claude-fix"                   # the fixer of the fix job (`fix_role` abo
 kind = "claude"                       # so a watch's roles do not list it. Its session is kept across fix runs like
 fix = true                            # a reviewer's, and has no max_session_rounds: a fix job is no round, so
                                       # nothing counts rounds for it
-identity = "me"                       # the name of a kind = "gh" [[identity]] of your own account (an App is
-                                      # refused): the fixer's pane gets that GitHub env, so it pushes to the PR's
-                                      # branch and answers the review's threads as you, not as the App that posted
-                                      # the review. Declare an identity of that name in your config (`magnum init`
-                                      # names yours after your login), or set identity in a [[role]] block named
-                                      # claude-fix
+# identity = "me"                     # unset: the fixer acts as each watch's poll identity, your gh login in a
+                                      # `magnum init` config. Its pane gets that GitHub env, so it pushes to the
+                                      # PR's branch and answers the review's threads as you, not as the App that
+                                      # posted the review. Set it in a [[role]] block named claude-fix to act as
+                                      # another kind = "gh" [[identity]] (an App is refused; a poll identity that
+                                      # is an App makes the fix job refuse to start)
 model = "opus"
 effort = "high"
 skill = "{{repo}}/skills/magnum-fix/SKILL.md"   # the fix skill, copied at startup and embedded in the binary like the

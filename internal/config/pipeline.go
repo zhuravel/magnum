@@ -1,6 +1,7 @@
 package config
 
 import (
+	"cmp"
 	"encoding"
 	"fmt"
 	"reflect"
@@ -102,12 +103,12 @@ func (c *Config) JudgeFallbackFor(w *Watch) (Role, bool) {
 // one (an empty one switches the fix job off for the watch), else [pipeline]
 // fix_role, found among every declared role (not only the watch's). ok is
 // false when none is set or the name matches no fix role; Validate reports
-// the latter.
+// the latter. A fix role that names no identity acts as w's poll identity
+// (its identity when it has no poll_identity, as Normalize sets it): the
+// operator's own gh login in a `magnum init` config, which polls as it.
+// Without a watch the identity stays empty.
 func (c *Config) FixRoleFor(w *Watch) (Role, bool) {
-	name := c.Pipeline.FixRole
-	if w != nil && w.FixRole != nil {
-		name = *w.FixRole
-	}
+	name := c.FixRoleName(w)
 	if strings.TrimSpace(name) == "" {
 		return Role{}, false
 	}
@@ -115,7 +116,19 @@ func (c *Config) FixRoleFor(w *Watch) (Role, bool) {
 	if !ok || !r.Fix {
 		return Role{}, false
 	}
+	if r.Identity == "" && w != nil {
+		r.Identity = cmp.Or(w.PollIdentity, w.Identity)
+	}
 	return r, true
+}
+
+// FixRoleName is the fix_role that applies to w: the watch's when it sets
+// one, else [pipeline]'s ("" = no fix job). FixRoleFor resolves it.
+func (c *Config) FixRoleName(w *Watch) string {
+	if w != nil && w.FixRole != nil {
+		return *w.FixRole
+	}
+	return c.Pipeline.FixRole
 }
 
 // Values of [pipeline] autofix.

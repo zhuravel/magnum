@@ -1029,13 +1029,15 @@ func (m *Manager) EnsureWorkspace(ctx context.Context, pr store.PR, slotPath str
 
     Every pane gets env with the role's env (Config.RoleEnv) laid over it;
     a role with an identity gets that identity's env instead of env's gh
-    selection (see paneEnv). Every newly assigned pane gets a sessions row
-    (state starting, agent name/kind or agent_kind "shell", pane/workspace/tab
-    ids, cwd, env_json) and is renamed "PR #N <role>" (TaggedPaneLabel); a new
-    workspace whose root pane cannot be recorded is closed again (nothing else
-    would find it). Live rows whose pane is gone are marked lost first, keeping
-    their session_id for ResumeID. Pane envs are stored in sessions.env_json,
-    so they must not carry secrets (identity.Source.Env never does).
+    selection, and a fix role whose identity does not resolve fails the call
+    before herdr is touched (see paneEnv). Every newly assigned pane gets
+    a sessions row (state starting, agent name/kind or agent_kind "shell",
+    pane/workspace/tab ids, cwd, env_json) and is renamed "PR #N <role>"
+    (TaggedPaneLabel); a new workspace whose root pane cannot be recorded
+    is closed again (nothing else would find it). Live rows whose pane is
+    gone are marked lost first, keeping their session_id for ResumeID.
+    Pane envs are stored in sessions.env_json, so they must not carry secrets
+    (identity.Source.Env never does).
 
 func (m *Manager) FallbackModel(ctx context.Context, s store.Session, tried []string) (string, bool)
     FallbackModel is the model session s switches to next: the first of its
@@ -2909,9 +2911,16 @@ func (c *Config) FixCyclesFor(w *Watch) int
 func (c *Config) FixRoleFor(w *Watch) (Role, bool)
     FixRoleFor is the fix role of watch w: the watch's fix_role when it sets
     one (an empty one switches the fix job off for the watch), else [pipeline]
-    fix_role, found among every declared role (not only the watch's). ok is
-    false when none is set or the name matches no fix role; Validate reports the
-    latter.
+    fix_role, found among every declared role (not only the watch's).
+    ok is false when none is set or the name matches no fix role; Validate
+    reports the latter. A fix role that names no identity acts as w's poll
+    identity (its identity when it has no poll_identity, as Normalize sets it):
+    the operator's own gh login in a `magnum init` config, which polls as it.
+    Without a watch the identity stays empty.
+
+func (c *Config) FixRoleName(w *Watch) string
+    FixRoleName is the fix_role that applies to w: the watch's when it sets one,
+    else [pipeline]'s ("" = no fix job). FixRoleFor resolves it.
 
 func (c *Config) FixRoles() []Role
     FixRoles returns every declared fix role in [[role]] order: the built-in
@@ -3093,9 +3102,9 @@ func (c *Config) Warnings() []string
     have neither; they live in the user's ~/.config/magnum/config.toml),
     but magnum then cannot post or reviews nothing; a [daemon] reviewer_timeout
     or judge_timeout set while every role it would be the fallback of sets its
-    own timeout changes nothing; a watch with autofix = "own" whose fix role has
-    no declared identity, or posts as the fix role's identity. Print them from
-    `magnum doctor` and `magnum config`.
+    own timeout changes nothing; a watch with autofix = "own" whose fix job
+    cannot run as it should (fixRoleWarnings). Print them from `magnum doctor`
+    and `magnum config`.
 
 func (c *Config) WatchFor(fullName string) *Watch
     WatchFor returns the watch that covers owner/name, or nil.
@@ -4109,11 +4118,11 @@ func DefaultRoles() []Role
         the same judge-*.md prompts; a second judge held in reserve for
         [pipeline] judge_fallback (RolesFor gives a watch without roles its
         first judge only), no aliases.
-      - claude-fix: claude, fix, identity me (a gh identity: the account
-        the fixer pushes and replies as), model opus, effort high, skill
-        DefaultFixSkill, prompt fix.md, timeout 60m, no runs; the fixer of the
-        fix job, never part of a round, its session kept like a reviewer's (no
-        max_session_rounds).
+      - claude-fix: claude, fix, no identity (FixRoleFor gives it each watch's
+        poll identity: the operator's gh login, the account the fixer pushes
+        and replies as), model opus, effort high, skill DefaultFixSkill, prompt
+        fix.md, timeout 60m, no runs; the fixer of the fix job, never part of a
+        round, its session kept like a reviewer's (no max_session_rounds).
 
     Each non-judge role carries a Summary, which makes it a candidate for triage
     ([triage]); the fix role has none, it is never in a round.

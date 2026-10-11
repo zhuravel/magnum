@@ -79,8 +79,9 @@ func roleNames(roles []config.Role) []Role {
 //     judge, the fourth down the right column again, and so on.
 //
 // Every pane gets env with the role's env (Config.RoleEnv) laid over it; a
-// role with an identity gets that identity's env instead of env's gh selection
-// (see paneEnv).
+// role with an identity gets that identity's env instead of env's gh selection,
+// and a fix role whose identity does not resolve fails the call before herdr
+// is touched (see paneEnv).
 // Every newly assigned pane gets a sessions row (state starting, agent
 // name/kind or agent_kind "shell", pane/workspace/tab ids, cwd, env_json) and
 // is renamed "PR #N <role>" (TaggedPaneLabel); a new workspace whose root pane
@@ -94,6 +95,14 @@ func (m *Manager) EnsureWorkspace(ctx context.Context, pr store.PR, slotPath str
 		return Workspace{}, fmt.Errorf("agents: workspace pr %d: no roles", pr.Number)
 	}
 	roles = layoutOrder(roles)
+	envs := make(map[Role]map[string]string, len(roles))
+	for _, role := range roles {
+		penv, err := m.paneEnv(env, role)
+		if err != nil { // before herdr is touched: no workspace is left half made
+			return Workspace{}, fmt.Errorf("agents: workspace pr %d: %w", pr.Number, err)
+		}
+		envs[Role(role.Name)] = penv
+	}
 	snap, err := m.d.Herdr.Snapshot(ctx)
 	if err != nil {
 		return Workspace{}, fmt.Errorf("agents: workspace pr %d: %w", pr.Number, err)
@@ -148,7 +157,7 @@ func (m *Manager) EnsureWorkspace(ctx context.Context, pr store.PR, slotPath str
 		}
 		root := roles[0]
 		created, err := m.d.Herdr.WorkspaceCreate(ctx, herdr.WorkspaceCreateOptions{Cwd: slotPath, Label: label,
-			Env: m.paneEnv(env, root), Focus: false})
+			Env: envs[Role(root.Name)], Focus: false})
 		if err != nil {
 			return Workspace{}, fmt.Errorf("agents: create workspace pr %d: %w", pr.Number, err)
 		}
@@ -156,7 +165,7 @@ func (m *Manager) EnsureWorkspace(ctx context.Context, pr store.PR, slotPath str
 		if ws.TabID == "" {
 			ws.TabID = created.RootPane.TabID
 		}
-		if err := m.recordPane(ctx, pr, ws, root, created.RootPane.ID, slotPath, m.paneEnv(env, root)); err != nil {
+		if err := m.recordPane(ctx, pr, ws, root, created.RootPane.ID, slotPath, envs[Role(root.Name)]); err != nil {
 			// No session row points at the new workspace, so nothing would
 			// ever find (and close) it.
 			cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), workspaceCloseTimeout)
@@ -187,7 +196,7 @@ func (m *Manager) EnsureWorkspace(ctx context.Context, pr store.PR, slotPath str
 				}
 			}
 		}
-		penv := m.paneEnv(env, role)
+		penv := envs[r]
 		if paneID == "" {
 			paneID, err = m.split(ctx, snap, ws, r, slotPath, penv)
 			if err != nil {
@@ -210,6 +219,10 @@ func (m *Manager) EnsureWorkspace(ctx context.Context, pr store.PR, slotPath str
 // copy of ws with the pane (ws itself is not modified).
 func (m *Manager) EnsurePane(ctx context.Context, pr store.PR, ws Workspace, slotPath string, env map[string]string, role config.Role) (Workspace, error) {
 	r := Role(role.Name)
+	penv, err := m.paneEnv(env, role)
+	if err != nil {
+		return ws, fmt.Errorf("agents: %s pane pr %d: %w", r, pr.Number, err)
+	}
 	out := ws
 	out.Panes = make(map[Role]string, len(ws.Panes)+1)
 	maps.Copy(out.Panes, ws.Panes)
@@ -235,7 +248,6 @@ func (m *Manager) EnsurePane(ctx context.Context, pr store.PR, ws Workspace, slo
 		return ws, fmt.Errorf("agents: %s pane pr %d: %w", r, pr.Number, err)
 	}
 	delete(out.Panes, r)
-	penv := m.paneEnv(env, role)
 	paneID, err := m.split(ctx, snap, out, r, slotPath, penv)
 	if err != nil {
 		return ws, fmt.Errorf("agents: %s pane pr %d: %w", r, pr.Number, err)
@@ -247,18 +259,24 @@ func (m *Manager) EnsurePane(ctx context.Context, pr store.PR, ws Workspace, slo
 }
 
 // paneEnv is env with the role's env (Config.RoleEnv) laid over it; nil
-// when both are empty. A role with an identity (config.Role.Identity, the
-// fix role's "me") acts as that identity, not as the one env was made for:
-// the posting identity's gh selection (GH_CONFIG_DIR, GH_TOKEN, GITHUB_TOKEN)
-// is dropped from env and the identity's own env (Deps.IdentityEnv) laid
-// over it first, so the slot's and MAGNUM_* variables stay. An identity that
-// does not resolve leaves env as it is.
-func (m *Manager) paneEnv(env map[string]string, role config.Role) map[string]string {
+// when both are empty. A role with an identity (config.Role.Identity: the
+// fix role's, Config.FixRoleFor's poll identity unless it names one) acts as
+// that identity, not as the one env was made for: the posting identity's gh
+// selection (GH_CONFIG_DIR, GH_TOKEN, GITHUB_TOKEN) is dropped from env and
+// the identity's own env (Deps.IdentityEnv) laid over it first, so the
+// slot's and MAGNUM_* variables stay. A fix role whose identity does not
+// resolve (none, or one Deps.IdentityEnv cannot make) is an error: its pane
+// would keep the posting identity's env and push and reply as the App
+// rather than as the operator. Another role's unresolved identity leaves
+// env as it is.
+func (m *Manager) paneEnv(env map[string]string, role config.Role) (map[string]string, error) {
 	var extra map[string]string
 	if m.d.Config != nil {
 		extra = m.d.Config.RoleEnv(role)
 	}
-	if idEnv, ok := m.identityEnv(role); ok {
+	idEnv, ok := m.identityEnv(role)
+	switch {
+	case ok:
 		out := make(map[string]string, len(env)+len(idEnv)+len(extra))
 		maps.Copy(out, env)
 		for _, k := range ghSelection {
@@ -266,15 +284,18 @@ func (m *Manager) paneEnv(env map[string]string, role config.Role) map[string]st
 		}
 		maps.Copy(out, idEnv)
 		maps.Copy(out, extra)
-		return out
-	}
-	if len(extra) == 0 {
-		return env
+		return out, nil
+	case role.Fix && role.Identity == "":
+		return nil, fmt.Errorf("fix role %s has no identity to act as", role.Name)
+	case role.Fix:
+		return nil, fmt.Errorf("fix role %s: identity %s does not resolve, so its pane would act as the posting identity", role.Name, role.Identity)
+	case len(extra) == 0:
+		return env, nil
 	}
 	out := make(map[string]string, len(env)+len(extra))
 	maps.Copy(out, env)
 	maps.Copy(out, extra)
-	return out
+	return out, nil
 }
 
 // ghSelection are the variables that choose which account gh acts as: an

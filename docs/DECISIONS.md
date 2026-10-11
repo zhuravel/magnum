@@ -953,6 +953,22 @@ skill versions); people add theirs to the sections before it, at the end of the 
   after the push, so a different head is looked at three times, five seconds apart. Otherwise the loop
   fails with "push not confirmed on GitHub" and the slot goes back to the reviewed head, and a push that
   did land is seen by the poller as any push is.
+- **The fixer acts as the watch's poll identity unless its role names one** (2026-10-11). The built-in
+  `claude-fix` named `identity = "me"`, which no configuration declares: `magnum init` names the operator's
+  gh identity after their login, so a fresh config could not run `magnum fix` until the identity was renamed
+  or a `[[role]]` block added. The role now names none and `Config.FixRoleFor` fills in each watch's poll
+  identity, the account magnum polls as (the posting identity when the watch names no other), which in an
+  init-shaped config is the operator's gh login while the reviews post as an App. An identity a role names
+  must still be a `gh` one (a validation error otherwise). A poll identity that is an App is no error,
+  since polling as an App is legitimate: `magnum fix` refuses it ("the fix role's identity ... is an App;
+  name a gh identity"), and `autofix = "own"` warns about it. The fixer's pane refuses to be made at all when
+  its identity does not resolve, where it used to keep the posting identity's env and would have pushed and
+  replied as the App. The warning about a watch posting as the fixer compares logins
+  (`github.SameAccount`) rather than identity names, so two identities of one account count as one. A watch
+  with `autofix = "own"` whose `fix_role` names no declared fix role (a `[[role]]` list of one's own leaves
+  out the built-in) now draws a warning and fails `magnum doctor`, where it was silent; `fix_role = ""` stays
+  the quiet way to switch the job off. Doctor checks one line per role and identity, since one role can act
+  as several.
 
 ## Screens and commands
 

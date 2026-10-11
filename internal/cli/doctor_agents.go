@@ -244,26 +244,39 @@ func doctorSkill(_ context.Context, d doctorDeps) []doctorCheck {
 	return out
 }
 
-// doctorFixRole checks the fix role of every watch (Config.FixRoleFor), the
-// fixer of `magnum fix` and of autofix: its skill and prompt resolve (the
-// checkout's files, else the binary's own copy), and its identity is a gh
-// identity whose login check passes, since the fixer pushes and replies as
-// the operator's own account. A configuration that uses no fix job gets a
-// SKIP: no fix role, or an identity it never declared where no watch's
-// autofix = "own" would start the job by itself.
+// doctorFixRole checks the fix role of every watch (Config.FixRoleFor, the
+// watch's poll identity when the role names none) and prints one "fix role"
+// line per role and identity that says whether the fix job can run: its
+// skill resolves (the checkout's files, else the binary's own copy), and its
+// identity is a gh identity whose login check passes, since the fixer pushes
+// and replies as the operator's own account. A watch whose autofix = "own"
+// cannot start the job by itself fails: its fix_role names no declared fix
+// role (a [[role]] list of the operator's own replaces the built-in
+// claude-fix). A configuration that uses no fix job gets a SKIP: no fix role
+// (fix_role = "" switches it off on purpose), or an identity it never
+// declared where no watch's autofix = "own" would start the job.
 func doctorFixRole(ctx context.Context, d doctorDeps) []doctorCheck {
+	const name = "fix role"
 	cfg := d.Config
 	var roles []config.Role
-	autofix := map[string]bool{} // the roles a watch with autofix = "own" starts by itself
+	var out []doctorCheck
+	same := func(a, b config.Role) bool { return a.Name == b.Name && a.Identity == b.Identity }
+	autofix := map[[2]string]bool{} // by role and identity: a watch with autofix = "own" starts that job by itself
 	add := func(w *config.Watch) {
+		own := w != nil && cfg.AutofixFor(w) == config.AutofixOwn
 		r, ok := cfg.FixRoleFor(w)
 		if !ok {
+			if n := strings.TrimSpace(cfg.FixRoleName(w)); own && n != "" {
+				out = append(out, doctorFailed(name, fmt.Sprintf(`watch %s: autofix = "own" but fix_role %q names no declared fix role, so the fix job never starts by itself`, w.Owner, n),
+					fmt.Sprintf("declare a [[role]] named %s with fix = true (a [[role]] list of your own replaces the built-in claude-fix), or set fix_role", n)))
+			}
 			return
 		}
-		if !slices.ContainsFunc(roles, func(x config.Role) bool { return x.Name == r.Name }) {
+		if !slices.ContainsFunc(roles, func(x config.Role) bool { return same(x, r) }) {
 			roles = append(roles, r)
 		}
-		autofix[r.Name] = autofix[r.Name] || cfg.AutofixFor(w) == config.AutofixOwn
+		k := [2]string{r.Name, r.Identity}
+		autofix[k] = autofix[k] || own
 	}
 	if len(cfg.Watches) == 0 {
 		add(nil)
@@ -271,12 +284,11 @@ func doctorFixRole(ctx context.Context, d doctorDeps) []doctorCheck {
 	for i := range cfg.Watches {
 		add(&cfg.Watches[i])
 	}
-	if len(roles) == 0 {
-		return []doctorCheck{doctorSkipped("fix role", "no fix role: [pipeline] fix_role names none, so `magnum fix` is refused (claude-fix is the built-in one)")}
+	if len(roles) == 0 && len(out) == 0 {
+		return []doctorCheck{doctorSkipped(name, "no fix role: [pipeline] fix_role names none, so `magnum fix` is refused (claude-fix is the built-in one)")}
 	}
-	var out []doctorCheck
 	for _, r := range roles {
-		out = append(out, doctorFixRoleCheck(ctx, d, r, autofix[r.Name])...)
+		out = append(out, doctorFixRoleCheck(ctx, d, r, autofix[[2]string{r.Name, r.Identity}])...)
 	}
 	return out
 }
@@ -287,6 +299,9 @@ func doctorFixRole(ctx context.Context, d doctorDeps) []doctorCheck {
 func doctorFixRoleCheck(ctx context.Context, d doctorDeps, r config.Role, autofix bool) []doctorCheck {
 	const name = "fix role"
 	head := "fix role " + r.Name
+	if r.Identity == "" {
+		return []doctorCheck{doctorSkipped(name, head+": no watch, so no poll identity to act as; `magnum fix` needs a [[watch]]")}
+	}
 	id := d.Config.IdentityByName(r.Identity)
 	if id == nil {
 		why := fmt.Sprintf("%s: identity %q is not declared, so the fix job cannot run", head, r.Identity)
@@ -328,7 +343,7 @@ func doctorFixRoleCheck(ctx context.Context, d doctorDeps, r config.Role, autofi
 	switch {
 	case id.Kind != "gh":
 		out = append(out, doctorFailed(name, fmt.Sprintf("%s: identity %s is an %s identity: the fixer pushes and replies as your own account", head, id.Name, id.Kind),
-			"point the fix role at a gh [[identity]] for your account (identity in the [[role]] named "+r.Name+")"))
+			"poll as a gh [[identity]] for your account (the watch's poll_identity, which the fix role takes), or set identity in the [[role]] named "+r.Name))
 	case kv(store.KVIdentityCheck(id.Name)) == "pass":
 		ok = append(ok, who+": last check passed")
 	case kv(store.KVIdentityCheck(id.Name)) == "fail":
