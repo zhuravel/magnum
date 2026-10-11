@@ -82,6 +82,13 @@ func DrainerAlive(pid int) bool {
 	return filepath.Base(strings.TrimSpace(comm)) == "magnum"
 }
 
+// draining reports whether the daemon drains for a restart
+// (KVDaemonDraining, which `magnum daemon-restart --drain` sets).
+func (e *Engine) draining(ctx context.Context) bool {
+	v, ok := e.getKV(ctx, KVDaemonDraining)
+	return ok && v != ""
+}
+
 // checkDrain lifts a drain whose drainer is gone (each tick, with the other
 // pauses): the drain stays only while the command that holds it runs. A drain
 // an older CLI started names no pid and lasts until the restart.

@@ -52,3 +52,38 @@ func TestSetKVSkipsAnUnchangedValue(t *testing.T) {
 		t.Fatalf("a changed value = %q at %s", v, updatedAt("pr.7.gate"))
 	}
 }
+
+// SetKVIf and DeleteKVIf act only while the key still holds the value the
+// caller read: a writer that lost the race (the key changed or went) learns
+// it and changes nothing.
+func TestSetKVIfAndDeleteKVIfCompareTheValue(t *testing.T) {
+	st, _ := newStore(t)
+	ctx := context.Background()
+	if ok, err := st.SetKVIf(ctx, "pr.7.fix", "a", "b"); ok || err != nil {
+		t.Fatalf("SetKVIf on a missing key = %v, %v", ok, err)
+	}
+	if err := st.SetKV(ctx, "pr.7.fix", "a"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := st.SetKVIf(ctx, "pr.7.fix", "x", "b"); ok || err != nil {
+		t.Fatalf("SetKVIf from a stale value = %v, %v", ok, err)
+	}
+	if ok, err := st.SetKVIf(ctx, "pr.7.fix", "a", "b"); !ok || err != nil {
+		t.Fatalf("SetKVIf from the current value = %v, %v", ok, err)
+	}
+	if v, _, _ := st.GetKV(ctx, "pr.7.fix"); v != "b" {
+		t.Fatalf("value = %q, want b", v)
+	}
+	if ok, err := st.DeleteKVIf(ctx, "pr.7.fix", "a"); ok || err != nil {
+		t.Fatalf("DeleteKVIf of a stale value = %v, %v", ok, err)
+	}
+	if _, found, _ := st.GetKV(ctx, "pr.7.fix"); !found {
+		t.Fatal("a stale DeleteKVIf removed the key")
+	}
+	if ok, err := st.DeleteKVIf(ctx, "pr.7.fix", "b"); !ok || err != nil {
+		t.Fatalf("DeleteKVIf of the current value = %v, %v", ok, err)
+	}
+	if _, found, _ := st.GetKV(ctx, "pr.7.fix"); found {
+		t.Fatal("the key outlived DeleteKVIf")
+	}
+}

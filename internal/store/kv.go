@@ -186,6 +186,29 @@ WHERE kv.value IS NOT excluded.value`, key, value, FormatTime(s.now()))
 	return nil
 }
 
+// SetKVIf replaces key's value with value only while it still holds old,
+// and reports whether it did: a writer that read old learns that another
+// changed or removed the key since, and changes nothing.
+func (s *Store) SetKVIf(ctx context.Context, key, old, value string) (bool, error) {
+	res, err := s.db.ExecContext(ctx, "UPDATE kv SET value = ?, updated_at = ? WHERE key = ? AND value = ?", value, FormatTime(s.now()), key, old)
+	if err != nil {
+		return false, fmt.Errorf("set kv %s: %w", key, err)
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
+// DeleteKVIf removes key only while it still holds value, and reports
+// whether it did (SetKVIf's counterpart).
+func (s *Store) DeleteKVIf(ctx context.Context, key, value string) (bool, error) {
+	res, err := s.db.ExecContext(ctx, "DELETE FROM kv WHERE key = ? AND value = ?", key, value)
+	if err != nil {
+		return false, fmt.Errorf("delete kv %s: %w", key, err)
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
 // DeleteKV removes key (no error when absent).
 func (s *Store) DeleteKV(ctx context.Context, key string) error {
 	if _, err := s.db.ExecContext(ctx, "DELETE FROM kv WHERE key = ?", key); err != nil {

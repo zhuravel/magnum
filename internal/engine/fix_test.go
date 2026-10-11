@@ -765,8 +765,11 @@ func TestAFixRunLostInARestartEndsTheLoop(t *testing.T) {
 	if err := h.e.setFixState(h.ctx, pr.ID, FixState{Cycle: 1, Cap: 3, Phase: FixPhaseFixing, Head: fixHead}); err != nil {
 		t.Fatal(err)
 	}
-	other := h.pr(1)
-	if err := h.e.setFixState(h.ctx, other.ID, FixState{Cycle: 2, Cap: 3, Phase: FixPhaseReviewing}); err != nil {
+	other := h.pr(1) // waiting for its loop's re-review
+	if err := h.st.TransitionPR(h.ctx, other.ID, nil, store.PRQueued, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.e.setFixState(h.ctx, other.ID, FixState{Cycle: 2, Cap: 3, Phase: FixPhaseReviewing, Head: other.HeadSHA}); err != nil {
 		t.Fatal(err)
 	}
 

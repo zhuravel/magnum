@@ -19,6 +19,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -66,6 +67,16 @@ const fixTimeUpText = "Time is up: this fix had %s. Stop every background task y
 
 // errFixTimeout is a fix run that did not end within its time.
 var errFixTimeout = errors.New("fix run timed out")
+
+// errFixLoopGone refuses a next cycle whose loop is no longer the one waiting
+// for its re-review (a stop ended it, or another cycle took it on): nobody
+// asked for that cycle any more, so the hook lets it go quietly.
+var errFixLoopGone = errors.New("the fix loop is no longer waiting for its re-review")
+
+// errFixDraining refuses a fix cycle while the daemon drains for a restart,
+// which would end its fixer ("fix run lost in a daemon restart"); a loop
+// waiting for its next cycle keeps its row for the restart's recovery.
+var errFixDraining = errors.New("the daemon is draining; try after the restart")
 
 // fixJob is one cycle of a fix loop: the PR, its watch and slot, the fix
 // role, the review the fixer fixes and the loop's row.
@@ -185,6 +196,9 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState) (*f
 	}
 	full := repo.FullName()
 	label := fmt.Sprintf("%s#%d", full, pr.Number)
+	if e.draining(ctx) {
+		return nil, errFixDraining
+	}
 	w := e.cfg.WatchFor(full)
 	if w == nil {
 		return nil, fmt.Errorf("%s is not watched (no [[watch]] covers it)", full)
@@ -203,8 +217,8 @@ func (e *Engine) prepareFix(ctx context.Context, pr store.PR, prev FixState) (*f
 		return nil, err // unreadable: never a second loop over it
 	case running && prev.Cycle == 0:
 		return nil, errors.New(fixRunningSentence(cur))
-	case prev.Cycle > 0 && (!running || cur.Phase != FixPhaseReviewing):
-		return nil, fmt.Errorf("the fix loop of %s is no longer waiting for its re-review", label)
+	case prev.Cycle > 0 && !(running && sameWaitingLoop(cur, prev)):
+		return nil, fmt.Errorf("%s: %w", label, errFixLoopGone)
 	}
 	switch author := deref(pr.AuthorLogin); {
 	case author == "":
@@ -308,7 +322,7 @@ func (e *Engine) startFix(ctx context.Context, pr store.PR, by string, prev FixS
 		cancel()
 		return nil, fmt.Errorf("%s: %s; run `magnum fix %s` again shortly", job.label(), e.heldReason(pr.ID), job.label())
 	}
-	if err := e.setFixState(ctx, pr.ID, st); err != nil {
+	if err := e.claimFixRow(ctx, job, prev, st); err != nil {
 		e.unreserve(pr.ID)
 		return nil, err
 	}
@@ -319,6 +333,46 @@ func (e *Engine) startFix(ctx context.Context, pr store.PR, by string, prev FixS
 			func(ctx context.Context, msg string) { e.fixPanicked(ctx, job, msg) })
 	})
 	return &started, nil
+}
+
+// claimFixRow writes the cycle's row (st, phase fixing) once the PR is
+// reserved, compare-and-set against what a writer without the reservation
+// may have done since prepareFix looked: `magnum abort` on a reviewed PR
+// ends a loop waiting for its re-review without one (endFixLoop). A new loop
+// needs the PR still without a row; a next cycle needs the row still to be
+// prev's loop waiting at prev's cycle, and replaces that very row
+// (Store.SetKVIf), or it is refused with errFixLoopGone. From the
+// reservation on, a stop goes to the job instead.
+func (e *Engine) claimFixRow(ctx context.Context, job *fixJob, prev, st FixState) error {
+	cur, raw, ok, err := e.fixRow(ctx, job.pr.ID)
+	switch {
+	case err != nil:
+		return err
+	case prev.Cycle == 0 && ok:
+		return errors.New(fixRunningSentence(cur))
+	case prev.Cycle == 0:
+		return e.setFixState(ctx, job.pr.ID, st)
+	case !ok || !sameWaitingLoop(cur, prev):
+		return fmt.Errorf("%s: %w", job.label(), errFixLoopGone)
+	}
+	b, err := json.Marshal(st)
+	if err != nil {
+		return err
+	}
+	swapped, err := e.st.SetKVIf(ctx, KVPRFix(job.pr.ID), raw, string(b))
+	switch {
+	case err != nil:
+		return err
+	case !swapped:
+		return fmt.Errorf("%s: %w", job.label(), errFixLoopGone)
+	}
+	return nil
+}
+
+// sameWaitingLoop reports whether cur is still the loop prev was read as,
+// waiting for its re-review at the same cycle.
+func sameWaitingLoop(cur, prev FixState) bool {
+	return cur.Phase == FixPhaseReviewing && cur.Cycle == prev.Cycle && cur.StartedAt.Equal(prev.StartedAt)
 }
 
 // runFix runs one fix cycle under its reservation: guard, start and wait,
@@ -626,8 +680,10 @@ func (e *Engine) fixPanicked(ctx context.Context, job *fixJob, msg string) {
 
 // recoverFixes ends the fix loops a stopped daemon left with the fixer at
 // work (phase fixing): no fixer run survives a restart, so its run fails
-// and the loop ends as needs attention. A loop waiting for its re-review
-// (phase reviewing) stays: the round's own recovery re-reviews.
+// and the loop ends as needs attention. A loop in phase reviewing goes on
+// (recoverReviewingLoop): one whose re-review is still to run waits for it
+// (the round's own recovery re-reviews), one whose re-review posted gets
+// the decision the stop kept the hook from making.
 func (e *Engine) recoverFixes(ctx context.Context) {
 	if e.d.DryRun {
 		return
@@ -643,12 +699,12 @@ func (e *Engine) recoverFixes(ctx context.Context) {
 		if _, err := fmt.Sscanf(key, "pr.%d.fix", &id); err != nil || KVPRFix(id) != key {
 			continue
 		}
-		st, ok, err := e.fixState(ctx, id)
+		st, raw, ok, err := e.fixRow(ctx, id)
 		if err != nil {
 			e.log.Warn("recovery: a fix loop that cannot be read stays for magnum abort", "key", key, "err", err)
 			continue
 		}
-		if !ok || st.Phase != FixPhaseFixing {
+		if !ok || (st.Phase != FixPhaseFixing && st.Phase != FixPhaseReviewing) {
 			continue
 		}
 		pr, err := e.st.PRByID(ctx, id)
@@ -660,6 +716,10 @@ func (e *Engine) recoverFixes(ctx context.Context) {
 			continue
 		}
 		job := e.loopJob(ctx, repo, pr, st)
+		if st.Phase == FixPhaseReviewing {
+			e.recoverReviewingLoop(ctx, job, raw) // fix_loop.go
+			continue
+		}
 		if runs, err := e.st.RunsByPR(ctx, pr.ID); err == nil {
 			for _, r := range runs {
 				if r.Kind == store.RunFix {

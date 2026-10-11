@@ -15573,6 +15573,10 @@ func (s *Store) Declines(ctx context.Context, f DeclineFilter) ([]Decline, error
 func (s *Store) DeleteKV(ctx context.Context, key string) error
     DeleteKV removes key (no error when absent).
 
+func (s *Store) DeleteKVIf(ctx context.Context, key, value string) (bool, error)
+    DeleteKVIf removes key only while it still holds value, and reports whether
+    it did (SetKVIf's counterpart).
+
 func (s *Store) EnqueueRequest(ctx context.Context, kind string, payload any) (int64, error)
     EnqueueRequest inserts a pending request with payload marshalled as JSON
     (nil = {}) and returns its id.
@@ -15948,6 +15952,11 @@ func (s *Store) SetKV(ctx context.Context, key, value string) error
     updated_at included: the daemon sets the same keys every tick, and nothing
     reads updated_at (a heartbeat such as daemon.last_tick carries its time in
     the value, so it is written every time). Never store secrets here.
+
+func (s *Store) SetKVIf(ctx context.Context, key, old, value string) (bool, error)
+    SetKVIf replaces key's value with value only while it still holds old, and
+    reports whether it did: a writer that read old learns that another changed
+    or removed the key since, and changes nothing.
 
 func (s *Store) SetRepoClonePath(ctx context.Context, repoID int64, path string) error
     SetRepoClonePath records where the repository's main clone lives; "" clears

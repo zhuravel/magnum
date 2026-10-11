@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -583,5 +585,288 @@ func TestAnUnreadableFixRowStartsNoAutofix(t *testing.T) {
 	}
 	if raw, _ := h.e.getKV(h.ctx, KVPRFix(h.pr(2).ID)); raw != "not json" {
 		t.Errorf("the unreadable row became %q", raw)
+	}
+}
+
+// fixRowOf is PR #n's loop row as stored, for a test that plays the hook.
+func (h *harness) fixRowOf(n int) (FixState, string) {
+	h.t.Helper()
+	st, raw, ok, err := h.e.fixRow(h.ctx, h.pr(n).ID)
+	if err != nil || !ok {
+		h.t.Fatalf("fix row = %+v, %v, %v", st, ok, err)
+	}
+	return st, raw
+}
+
+// repo is talkable/talkable as the registry has it.
+func (h *harness) repo() store.Repo {
+	h.t.Helper()
+	repo, err := h.st.RepoByFullName(h.ctx, "talkable/talkable")
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return repo
+}
+
+// waitingLoop gives the operator's PR #2, reviewed at fixHead with findings,
+// a loop in phase reviewing whose re-review is that review (mod changes the
+// row first): where the hook stands once the re-review posted.
+func waitingLoop(h *harness, findings map[string]int, mod func(st *FixState)) store.PR {
+	h.t.Helper()
+	pr := fixablePR(h, "zhuravel", findings)
+	st := FixState{Cycle: 1, Cap: 3, Phase: FixPhaseReviewing, Since: "f0f0f0f", Head: fixHead, By: "magnum fix",
+		Report: "/state/reviews/talkable/talkable/2/a1a1a1a1a1a1/claude-fix.md", StartedAt: h.clock.Now().UTC(), Role: "claude-fix"}
+	if mod != nil {
+		mod(&st)
+	}
+	if err := h.e.setFixState(h.ctx, pr.ID, st); err != nil {
+		h.t.Fatal(err)
+	}
+	return pr
+}
+
+// wantNoLoopEnd fails if PR #2's loop was ended by anything but the stop:
+// an event of the hook's ends, an attention, a toast about the loop, or a
+// fixer.
+func (h *harness) wantNoLoopEnd(prID int64) {
+	h.t.Helper()
+	for _, kind := range []string{"fix.done", "fix.failed", "fix.capped", "fix.needs_you", "fix.start"} {
+		if ev, ok := h.fixEvent(kind); ok {
+			h.t.Errorf("%s after the abort: %s", kind, ev.Message)
+		}
+	}
+	if n := len(h.fixRuns(prID)); n != 0 {
+		h.t.Errorf("fix runs = %d, want none", n)
+	}
+	if _, ok := h.fixStateOf(2); ok {
+		h.t.Error("the loop's row came back")
+	}
+	if h.e.roundActive(prID) {
+		h.t.Error("the PR is still reserved")
+	}
+	if cur := h.pr(2); cur.State == store.PRNeedsAttention {
+		h.t.Errorf("the PR needs attention: %q", deref(cur.LastError))
+	}
+	h.flush()
+	h.wantToasts("needs attention", 0)
+	if got := toastsWith(h, "clean after"); len(got) != 0 {
+		h.t.Errorf("toasted %v", got)
+	}
+}
+
+// An abort that ends the loop after its re-review posted, before the hook
+// looked at the row again, leaves the hook nothing to do: whatever the
+// re-review said (more to fix, nothing, the cap, the author's findings, a
+// failure), no fixer starts and nobody is asked.
+func TestAnAbortBeforeTheNextCycleEndsTheLoopQuietly(t *testing.T) {
+	more := pipeline.RoundResult{Outcome: pipeline.OutcomePosted, Event: "COMMENTED", Findings: map[string]int{"P2": 1}, TargetSHA: fixHead}
+	for _, tc := range []struct {
+		name string
+		res  pipeline.RoundResult
+		mod  func(st *FixState)
+	}{
+		{name: "next cycle", res: more},
+		{name: "clean", res: pipeline.RoundResult{Outcome: pipeline.OutcomePosted, Event: "COMMENTED", TargetSHA: fixHead}},
+		{name: "cap", res: more, mod: func(st *FixState) { st.Cap = 1 }},
+		{name: "needs you", res: more, mod: func(st *FixState) { st.NeedsYou = []string{"2102 P2 app/lib/x.rb:7: contested"} }},
+		{name: "not posted", res: pipeline.RoundResult{Outcome: pipeline.OutcomeTimeout}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, git := fixHarness(t)
+			pr := waitingLoop(h, map[string]int{"P2": 1}, tc.mod)
+			fixer(h, git, fixPushed, func(run store.Run) string { return fixReport(run.ID, "b2b2b2b Fix", fixReplied, "none") })
+			st, raw := h.fixRowOf(2)
+			id := h.enqueue(ReqAbort, TargetPayload{PRTarget: PRTarget{Ref: "2"}})
+			h.handle()
+			if res := h.wantDone(id); !strings.Contains(res, "fix loop ended") {
+				t.Fatalf("abort = %q", res)
+			}
+			h.e.continueFixLoop(h.ctx, h.e.loopJob(h.ctx, h.repo(), h.pr(2), st), raw, tc.res)
+			h.settle()
+			h.wantNoLoopEnd(pr.ID)
+		})
+	}
+}
+
+// An abort whose clear lands after the hook's next cycle passed its checks
+// but before it wrote the cycle's row starts no fixer: the cycle's write is
+// compare-and-set against the row the hook read, so the stop wins.
+func TestAnAbortAfterTheReCheckStartsNoFixer(t *testing.T) {
+	var abort atomic.Pointer[func()]
+	h, git := fixHarness(t, func(h *harness) {
+		now := h.d.Now
+		h.d.Now = func() time.Time {
+			if f := abort.Swap(nil); f != nil {
+				(*f)() // prepareFix's first clock read follows its look at the row
+			}
+			return now()
+		}
+	})
+	pr := waitingLoop(h, map[string]int{"P2": 1}, nil)
+	fixer(h, git, fixPushed, func(run store.Run) string { return fixReport(run.ID, "b2b2b2b Fix", fixReplied, "none") })
+	st, raw := h.fixRowOf(2)
+	stop := func() { // what `magnum abort` does to a reviewed PR's loop with no reservation
+		if note := h.e.endFixLoop(context.Background(), h.repo(), h.pr(2), "magnum abort"); note == "" {
+			t.Error("the abort ended no loop")
+		}
+	}
+	abort.Store(&stop)
+	res := pipeline.RoundResult{Outcome: pipeline.OutcomePosted, Event: "COMMENTED", Findings: map[string]int{"P2": 1}, TargetSHA: fixHead}
+	h.e.continueFixLoop(h.ctx, h.e.loopJob(h.ctx, h.repo(), h.pr(2), st), raw, res)
+	h.settle()
+	if abort.Load() != nil {
+		t.Fatal("the clock was never read after the row's check")
+	}
+	h.wantNoLoopEnd(pr.ID)
+}
+
+// A drain for a restart starts no fixer: the loop whose re-review posts
+// during it waits in phase reviewing (the restart's recovery goes on with
+// it), and `magnum fix` is refused until the restart.
+func TestADrainStartsNoFixCycle(t *testing.T) {
+	logs := &syncBuffer{}
+	h, git := fixHarness(t, func(h *harness) { h.d.Logger = newTeeLogger(h.t, logs) })
+	pr := loopToReReview(t, h, git, findings(map[string]int{"P2": 1}, "COMMENTED"), fixPushed2)
+	h.rd.mu.Lock()
+	h.rd.gate = make(chan struct{})
+	h.rd.mu.Unlock()
+	before := len(h.rd.all())
+	reqPollNoSettle(h, prSpec{n: 2, head: fixPushed, author: "zhuravel"})
+	h.awaitRound(before)
+	h.e.setKV(h.ctx, KVDaemonDraining, store.FormatTime(h.clock.Now()))
+	close(h.rd.gate)
+	h.settle()
+
+	if n := len(h.fixRuns(pr.ID)); n != 1 {
+		t.Errorf("fix runs = %d, want 1: a fixer started during the drain", n)
+	}
+	if st, ok := h.fixStateOf(2); !ok || st.Phase != FixPhaseReviewing || st.Cycle != 1 {
+		t.Errorf("fix state = %+v, %v; want the loop waiting", st, ok)
+	}
+	h.wantState(2, store.PRReviewed)
+	if !strings.Contains(logs.String(), "the daemon is draining") {
+		t.Errorf("the held cycle is not logged:\n%s", logs.String())
+	}
+	h.wantToasts("needs attention", 0)
+
+	id := h.fix(FixPayload{})
+	h.handle()
+	if r := h.request(id); r.State != store.RequestFailed || !strings.Contains(deref(r.Result), "the daemon is draining; try after the restart") {
+		t.Errorf("magnum fix during the drain: %s %q", r.State, deref(r.Result))
+	}
+
+	// The restart's recovery goes on with the loop where the hook left it.
+	h.startup()
+	runs := h.fixRuns(pr.ID)
+	if len(runs) != 2 || runs[1].TargetSHA != fixPushed {
+		t.Fatalf("fix runs after the restart = %+v, want cycle 2 on %s", runs, fixPushed)
+	}
+	if st, ok := h.fixStateOf(2); !ok || st.Cycle != 2 || st.Phase != FixPhaseReviewing || st.Head != fixPushed2 {
+		t.Errorf("fix state after the restart = %+v, %v", st, ok)
+	}
+}
+
+// At startup, a loop left in phase reviewing after its re-review posted
+// (a stop in the hook's window) gets the hook's decision on that review; a
+// loop whose PR moved on ends quietly, and one whose re-review is still to
+// run waits for it.
+func TestALoopStrandedInReviewingIsDecidedAtStartup(t *testing.T) {
+	report := "/state/reviews/talkable/talkable/2/a1a1a1a1a1a1/claude-fix.md"
+	for _, tc := range []struct {
+		name     string
+		findings map[string]int
+		row      func(st *FixState)
+		pr       func(h *harness, pr store.PR)
+		check    func(t *testing.T, h *harness, pr store.PR)
+	}{
+		{name: "clean", findings: map[string]int{}, check: func(t *testing.T, h *harness, _ store.PR) {
+			t.Helper()
+			if _, ok := h.fixEvent("fix.done"); !ok {
+				t.Error("no fix.done")
+			}
+			h.flush()
+			if got := toastsWith(h, "PR #2: clean after 1 fix cycle"); len(got) != 1 {
+				t.Errorf("toasts = %v", h.nh.shown())
+			}
+		}},
+		{name: "needs you", findings: map[string]int{"P2": 1}, row: func(st *FixState) { st.NeedsYou = []string{"2102 P2 app/lib/x.rb:7: contested"} },
+			check: func(t *testing.T, h *harness, _ store.PR) {
+				t.Helper()
+				cur := h.wantState(2, store.PRNeedsAttention)
+				if want := "fix: 1 finding needs your call (2102 P2 app/lib/x.rb:7): " + report; deref(cur.LastError) != want {
+					t.Errorf("last_error = %q, want %q", deref(cur.LastError), want)
+				}
+			}},
+		{name: "next cycle", findings: map[string]int{"P2": 1}, check: func(t *testing.T, h *harness, pr store.PR) {
+			t.Helper()
+			if runs := h.fixRuns(pr.ID); len(runs) != 1 || runs[0].TargetSHA != fixHead {
+				t.Errorf("fix runs = %+v, want cycle 2 on the reviewed head", runs)
+			}
+			if st, ok := h.fixStateOf(2); !ok || st.Cycle != 2 || st.Phase != FixPhaseReviewing {
+				t.Errorf("fix state = %+v, %v", st, ok)
+			}
+		}},
+		{name: "moved on", findings: map[string]int{"P2": 1}, row: func(st *FixState) { st.Head = fixPushed2 },
+			check: func(t *testing.T, h *harness, pr store.PR) {
+				t.Helper()
+				if _, ok := h.fixEvent("fix.ended"); !ok {
+					t.Error("no fix.ended")
+				}
+				if n := len(h.fixRuns(pr.ID)); n != 0 {
+					t.Errorf("fix runs = %d", n)
+				}
+				h.wantState(2, store.PRReviewed)
+				h.flush()
+				h.wantToasts("needs attention", 0)
+			}},
+		{name: "waiting", findings: map[string]int{"P2": 1}, pr: func(h *harness, pr store.PR) {
+			if err := h.st.TransitionPR(h.ctx, pr.ID, nil, store.PRRereviewPending, nil); err != nil {
+				h.t.Fatal(err)
+			}
+		}, check: func(t *testing.T, h *harness, pr store.PR) {
+			t.Helper()
+			if st, ok := h.fixStateOf(2); !ok || st.Phase != FixPhaseReviewing || st.Cycle != 1 {
+				t.Errorf("fix state = %+v, %v; want the loop waiting for its re-review", st, ok)
+			}
+			if _, ok := h.fixEvent("fix.ended"); ok {
+				t.Error("a loop waiting for its re-review ended")
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, git := fixHarness(t)
+			pr := fixablePR(h, "zhuravel", tc.findings)
+			fixer(h, git, fixPushed, func(run store.Run) string { return fixReport(run.ID, "b2b2b2b Fix", fixReplied, "none") })
+			st := FixState{Cycle: 1, Cap: 3, Phase: FixPhaseReviewing, Since: "f0f0f0f", Head: fixHead, By: "magnum fix",
+				Report: report, StartedAt: h.clock.Now().UTC(), Role: "claude-fix"}
+			if tc.row != nil {
+				tc.row(&st)
+			}
+			if err := h.e.setFixState(h.ctx, pr.ID, st); err != nil {
+				t.Fatal(err)
+			}
+			if tc.pr != nil {
+				tc.pr(h, pr)
+			}
+			h.startup()
+			tc.check(t, h, pr)
+		})
+	}
+}
+
+// The author's findings are named by what magnum can read of them, the
+// comment id, the priority and a plain path:line; an entry with anything
+// else there (a control character, a space) is only counted, so nothing the
+// fixer wrote reaches a message unread.
+func TestNeedsYourCallNamesOnlyWhatItCanRead(t *testing.T) {
+	got := needsYourCall([]string{
+		"2101 P1 app/models/offer.rb:42: wants a schema change",
+		"2102 P2 app/\x1b]8;;https://example.com\x1b\\x.rb:7: contested",
+		"2103 P3 my file.rb:3: spaces",
+		"see the thread",
+	}, "/state/claude-fix.md")
+	want := "4 findings need your call (2101 P1 app/models/offer.rb:42, 3 entries magnum could not read): /state/claude-fix.md"
+	if got != want {
+		t.Errorf("needsYourCall = %q, want %q", got, want)
 	}
 }

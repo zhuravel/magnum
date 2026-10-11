@@ -14,8 +14,10 @@ package engine
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/zhuravel/magnum/internal/config"
@@ -29,9 +31,11 @@ import (
 const autofixBy = "autofix"
 
 // needsYouEntryRe reads a "## Needs you" entry's comment id, priority and
-// place ("2101 P1 app/models/offer.rb:42: <reason>"). The reason is the
-// fixer's own words about the PR, so it is never read.
-var needsYouEntryRe = regexp.MustCompile(`^(\d+)\s+(P[0-3])\s+(\S+?:\d+)\b`)
+// place ("2101 P1 app/models/offer.rb:42: <reason>"), the place in plain
+// path characters only, so no control character or other text of the
+// fixer's reaches a message. The reason is the fixer's own words about the
+// PR, so it is never read.
+var needsYouEntryRe = regexp.MustCompile(`^(\d{1,20}) +(P[0-3]) +([A-Za-z0-9._/@+-]+:\d{1,9})(?::|\s|$)`)
 
 // fixAfterRound decides what the end of a review round means for the PR's
 // fix loop: a loop waiting for this re-review goes on or ends
@@ -43,7 +47,9 @@ var needsYouEntryRe = regexp.MustCompile(`^(\d+)\s+(P[0-3])\s+(\S+?:\d+)\b`)
 // a shutdown stopped never comes here: the stop ended the loop (stopPR,
 // endFixLoop), or the next start re-reviews and the loop goes on after it.
 // A row that cannot be read is logged and left alone: never a second loop
-// over it.
+// over it. The loop's ends and its next cycle act only on the row read here
+// (compare-and-set): a `magnum abort` that ended the loop meanwhile, with no
+// reservation to stop, leaves the hook nothing to do.
 func (e *Engine) fixAfterRound(ctx context.Context, pr store.PR, res pipeline.RoundResult) {
 	if ctx.Err() != nil || e.d.DryRun {
 		return
@@ -58,14 +64,14 @@ func (e *Engine) fixAfterRound(ctx context.Context, pr store.PR, res pipeline.Ro
 		e.log.Warn("fix: the PR's repository", "pr", pr.ID, "err", err)
 		return
 	}
-	st, ok, err := e.fixState(ctx, cur.ID)
+	st, raw, ok, err := e.fixRow(ctx, cur.ID)
 	switch {
 	case err != nil:
 		e.log.Warn("fix: the loop's row cannot be read; nothing starts over it", "subject", prSubject(repo, cur.Number), "err", err)
 	case !ok:
 		e.autofix(ctx, repo, cur, res)
 	case st.Phase == FixPhaseReviewing:
-		e.continueFixLoop(ctx, e.loopJob(ctx, repo, cur, st), res)
+		e.continueFixLoop(ctx, e.loopJob(ctx, repo, cur, st), raw, res)
 	}
 }
 
@@ -76,8 +82,13 @@ func (e *Engine) fixAfterRound(ctx context.Context, pr store.PR, res pipeline.Ro
 // cycles are left, and end it as needs attention at the cap; a next cycle
 // that cannot start ends it as needs attention with why. A review that
 // requests changes with no new findings found something: the earlier
-// findings it keeps open (fixRemains).
-func (e *Engine) continueFixLoop(ctx context.Context, job *fixJob, res pipeline.RoundResult) {
+// findings it keeps open (fixRemains). raw is the loop's row as read: every
+// end acts only while the row is still that (endFixRowIf), and the next
+// cycle replaces only that row (claimFixRow), so a stop that ended the loop
+// meanwhile wins quietly (errFixLoopGone). A daemon that drains for a
+// restart holds the next cycle: the row stays in phase reviewing, and the
+// restart's recovery goes on with it (recoverReviewingLoop).
+func (e *Engine) continueFixLoop(ctx context.Context, job *fixJob, raw string, res pipeline.RoundResult) {
 	st := job.state
 	found := roundFindings(res)
 	left := textx.Count(found, "finding", "findings") + " left"
@@ -90,25 +101,35 @@ func (e *Engine) continueFixLoop(ctx context.Context, job *fixJob, res pipeline.
 		if len(st.NeedsYou) > 0 {
 			msg += "; " + needsYourCall(st.NeedsYou, st.Report)
 		}
-		e.endLoopForAttention(ctx, job, "fix.failed", msg)
+		e.endLoopForAttention(ctx, job, raw, "fix.failed", msg)
 	case len(st.NeedsYou) > 0:
-		e.endLoopForAttention(ctx, job, "fix.needs_you", "fix: "+needsYourCall(st.NeedsYou, st.Report))
+		e.endLoopForAttention(ctx, job, raw, "fix.needs_you", "fix: "+needsYourCall(st.NeedsYou, st.Report))
 	case !fixRemains(res):
-		e.fixLoopDone(ctx, job, cmp.Or(res.TargetSHA, st.Head))
+		e.fixLoopDone(ctx, job, raw, cmp.Or(res.TargetSHA, st.Head))
 	case st.Cycle >= st.Cap:
-		e.endLoopForAttention(ctx, job, "fix.capped", fmt.Sprintf("%s, %s: %s", textx.Count(st.Cycle, "fix cycle", "fix cycles"), left, st.Report))
+		e.endLoopForAttention(ctx, job, raw, "fix.capped", fmt.Sprintf("%s, %s: %s", textx.Count(st.Cycle, "fix cycle", "fix cycles"), left, st.Report))
 	default:
-		if _, err := e.startFix(ctx, job.pr, st.By, st); err != nil {
-			e.endLoopForAttention(ctx, job, "fix.failed", fmt.Sprintf("fix loop ended: cycle %d did not start: %v", st.Cycle+1, err))
+		_, err := e.startFix(ctx, job.pr, st.By, st)
+		switch {
+		case err == nil:
+		case errors.Is(err, errFixLoopGone):
+			e.log.Info("fix: the loop ended before its next cycle started", "subject", job.subject(), "why", err.Error())
+		case errors.Is(err, errFixDraining):
+			e.log.Info("fix: the daemon is draining; the next cycle waits for the restart", "subject", job.subject(), "cycle", st.Cycle+1)
+		default:
+			e.endLoopForAttention(ctx, job, raw, "fix.failed", fmt.Sprintf("fix loop ended: cycle %d did not start: %v", st.Cycle+1, err))
 		}
 	}
 }
 
 // fixLoopDone ends a loop whose re-review of head found nothing: its row
-// goes, fix.done is recorded and an info toast says how many cycles it took.
-func (e *Engine) fixLoopDone(ctx context.Context, job *fixJob, head string) {
+// goes (while it is still raw, endFixRowIf), fix.done is recorded and an
+// info toast says how many cycles it took.
+func (e *Engine) fixLoopDone(ctx context.Context, job *fixJob, raw, head string) {
 	st, pr := job.state, job.pr
-	e.endFixState(ctx, job)
+	if !e.endFixRowIf(ctx, job, raw) {
+		return
+	}
 	cycles := textx.Count(st.Cycle, "fix cycle", "fix cycles")
 	e.event(ctx, "info", job.subject(), "fix.done", fmt.Sprintf("the fix loop ends clean after %s: the re-review of %s found nothing",
 		cycles, textx.ShortSHA(head)), job.loopData())
@@ -118,17 +139,81 @@ func (e *Engine) fixLoopDone(ctx context.Context, job *fixJob, head string) {
 }
 
 // endLoopForAttention ends a loop after its re-review as needs attention
-// with msg: its row goes, an event of kind names msg and the last report,
-// and the operator is told as the fix job's attention (fixAttention), unless
-// the round itself left the PR needing attention, whose account of why
-// stays.
-func (e *Engine) endLoopForAttention(ctx context.Context, job *fixJob, kind, msg string) {
-	e.endFixState(ctx, job)
+// with msg: its row goes (while it is still raw, endFixRowIf; a loop a stop
+// ended meanwhile is left to the stop), an event of kind names msg and the
+// last report, and the operator is told as the fix job's attention
+// (fixAttention), unless the round itself left the PR needing attention,
+// whose account of why stays.
+func (e *Engine) endLoopForAttention(ctx context.Context, job *fixJob, raw, kind, msg string) {
+	if !e.endFixRowIf(ctx, job, raw) {
+		return
+	}
 	e.event(ctx, "warn", job.subject(), kind, msg, job.loopData())
 	if pr, err := e.st.PRByID(ctx, job.pr.ID); err == nil && pr.State == store.PRNeedsAttention {
 		return
 	}
 	e.fixAttention(ctx, job, msg)
+}
+
+// endFixRowIf ends the job's loop by removing its row while the row is still
+// raw, as read (Store.DeleteKVIf), and reports whether it did: false when a
+// stop ended the loop or a cycle took it on meanwhile, which then owns it.
+func (e *Engine) endFixRowIf(ctx context.Context, job *fixJob, raw string) bool {
+	gone, err := e.st.DeleteKVIf(ctx, KVPRFix(job.pr.ID), raw)
+	if err != nil {
+		e.log.Warn("fix: end the loop's row", "subject", job.subject(), "err", err)
+	} else if !gone {
+		e.log.Info("fix: the loop's row changed before its end; nothing to end", "subject", job.subject())
+	}
+	return gone
+}
+
+// recoverReviewingLoop goes on at startup with a loop a stopped daemon left
+// in phase reviewing (raw: its row as read). A PR whose re-review still has
+// to run (waiting, in flight or paused) keeps the loop: the round's recovery
+// re-reviews and the hook decides after it. A PR reviewed at the loop's head
+// had its re-review post while a stop or a drain kept the hook from
+// deciding: the hook's decision is made now, on that review's result. Any
+// other PR has moved on (a newer head, closed, needing attention): the loop
+// ends quietly with fix.ended.
+func (e *Engine) recoverReviewingLoop(ctx context.Context, job *fixJob, raw string) {
+	pr, st := job.pr, job.state
+	switch {
+	case slices.Contains(waitingStates, pr.State), slices.Contains(store.InFlightStates, pr.State), pr.State == store.PRPaused:
+		return
+	case pr.State == store.PRReviewed && pr.HeadSHA == st.Head && deref(pr.ReviewedSHA) == st.Head:
+		if res, ok := e.postedReReview(ctx, pr, st.Head); ok {
+			e.continueFixLoop(ctx, job, raw, res)
+			return
+		}
+	}
+	if !e.endFixRowIf(ctx, job, raw) {
+		return
+	}
+	e.event(ctx, "info", job.subject(), "fix.ended", fmt.Sprintf("the fix loop ends: its PR moved on while the daemon was stopped (%s at %s, the loop waited at %s)",
+		pr.State, textx.ShortSHA(pr.HeadSHA), textx.ShortSHA(st.Head)), job.loopData())
+}
+
+// postedReReview is the result of the review magnum posted on the PR at head,
+// as the round that posted it reported it: its findings and event, read back
+// from its stored result (ok false when there is none at head).
+func (e *Engine) postedReReview(ctx context.Context, pr store.PR, head string) (pipeline.RoundResult, bool) {
+	sums, err := e.st.LastReviewSummaries(ctx, []int64{pr.ID})
+	sum, ok := sums[pr.ID]
+	if err != nil || !ok || sum.SHA != head {
+		return pipeline.RoundResult{}, false
+	}
+	event := strings.ToUpper(sum.Event)
+	switch event {
+	case "REQUEST_CHANGES":
+		event = "CHANGES_REQUESTED"
+	case "APPROVE":
+		event = "APPROVED"
+	case "COMMENT":
+		event = "COMMENTED"
+	}
+	return pipeline.RoundResult{Outcome: pipeline.OutcomePosted, TargetSHA: head, ReviewURL: sum.URL, ReviewID: sum.ReviewID, Event: event,
+		Findings: map[string]int{"P0": sum.Counts[0], "P1": sum.Counts[1], "P2": sum.Counts[2], "P3": sum.Counts[3]}}, true
 }
 
 // autofix starts a fix loop by itself after a round that posted a review
@@ -225,7 +310,8 @@ func roundFindings(res pipeline.RoundResult) int {
 // needsYourCall says which findings the fixer left to the author and where
 // its report is: "2 findings need your call (2101 P1 app/a.rb:42, 2102 P2
 // app/b.rb:7): <report>". Each entry is named by its comment id, priority
-// and place alone; an entry in another form is only counted.
+// and place alone (needsYouEntryRe); an entry magnum cannot read so is only
+// counted ("1 entry magnum could not read").
 func needsYourCall(entries []string, report string) string {
 	var named []string
 	other := 0
@@ -238,7 +324,7 @@ func needsYourCall(entries []string, report string) string {
 		named = append(named, m[1]+" "+m[2]+" "+m[3])
 	}
 	if other > 0 {
-		named = append(named, textx.Count(other, "entry", "entries")+" in another form")
+		named = append(named, textx.Count(other, "entry", "entries")+" magnum could not read")
 	}
 	n := len(entries)
 	s := textx.Count(n, "finding", "findings") + " " + textx.Plural(n, "needs", "need") + " your call"

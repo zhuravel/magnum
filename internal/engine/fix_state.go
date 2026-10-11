@@ -93,7 +93,24 @@ func ParseFixOff(s string) (FixOff, bool) {
 
 // fixState reads the PR's fix loop; ok is false when it has none.
 func (e *Engine) fixState(ctx context.Context, prID int64) (FixState, bool, error) {
-	return readKVJSON[FixState](ctx, e, KVPRFix(prID), "fix state")
+	st, _, ok, err := e.fixRow(ctx, prID)
+	return st, ok, err
+}
+
+// fixRow is fixState with the row as stored (raw, also for a row that
+// cannot be read), for a compare-and-set of the loop (Store.SetKVIf,
+// Store.DeleteKVIf): a writer without the PR's reservation, such as `magnum
+// abort` or the hook after a round, acts only on the row it read.
+func (e *Engine) fixRow(ctx context.Context, prID int64) (st FixState, raw string, ok bool, err error) {
+	key := KVPRFix(prID)
+	raw, found, err := e.st.GetKV(ctx, key)
+	if err != nil || !found {
+		return st, "", false, err
+	}
+	if err := json.Unmarshal([]byte(raw), &st); err != nil {
+		return FixState{}, raw, false, fmt.Errorf("fix state %s: %w", key, err)
+	}
+	return st, raw, true, nil
 }
 
 // setFixState records the PR's fix loop, replacing the one it had.

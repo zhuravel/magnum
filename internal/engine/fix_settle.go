@@ -404,15 +404,21 @@ func (e *Engine) stopFix(ctx context.Context, job *fixJob, orders []stopOrder) {
 
 // endFixLoop ends a fix loop that no fix job holds (one waiting for its
 // re-review, or the row of a stopped daemon) for a stop of the PR: its row
-// goes, with an event and an info toast. It returns what it did for the
-// stop's answer ("" = the PR had no loop).
+// goes, with an event and an info toast. A stop without the PR's
+// reservation (`magnum abort` on a reviewed PR) can meet the hook after a
+// round starting the loop's next cycle, so the row goes only while it is
+// the one read here (Store.DeleteKVIf; claimFixRow is the other side). It
+// returns what it did for the stop's answer ("" = the PR had no loop, or a
+// cycle took it on meanwhile).
 func (e *Engine) endFixLoop(ctx context.Context, repo store.Repo, pr store.PR, by string) string {
-	st, ok, err := e.fixState(ctx, pr.ID)
-	if !ok && err == nil {
+	st, raw, _, err := e.fixRow(ctx, pr.ID)
+	if raw == "" {
 		return ""
 	}
-	if cerr := e.clearFixState(ctx, pr.ID); cerr != nil {
-		e.log.Warn("stop: clear the fix loop's row", "pr", pr.ID, "err", cerr)
+	if gone, cerr := e.st.DeleteKVIf(ctx, KVPRFix(pr.ID), raw); cerr != nil || !gone {
+		if cerr != nil {
+			e.log.Warn("stop: clear the fix loop's row", "pr", pr.ID, "err", cerr)
+		}
 		return ""
 	}
 	note := fmt.Sprintf("fix loop ended (cycle %d of %d, %s)", st.Cycle, st.Cap, st.Phase)
